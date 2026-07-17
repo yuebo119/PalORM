@@ -6,7 +6,7 @@
 
   <!-- ADO.NET Providers -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-preview.6.26359.118" />
     <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.3.6" />
     <PackageVersion Include="Npgsql" Version="9.0.3" />
     <PackageVersion Include="MySqlConnector" Version="2.4.0" />
