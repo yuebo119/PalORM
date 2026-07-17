@@ -116,6 +116,9 @@ public static class QueryBuilderExtensions
         paged._take = pageSize;
         paged._skip = null;
         DbTransaction? existingTransaction = paged.GetActiveTransaction();
+        // 注意：此处直接在会话主连接上开启事务而不经 PublishTransaction 登记——
+        // 全程持有操作租约、事务只赋给克隆体并在 finally 自行提交/回滚/释放，自包含成立。
+        // 若未来门禁逻辑依赖 SessionOperationState 的事务登记状态，此路径需改走 BeginTransactionCoreAsync。
         DbTransaction transaction = existingTransaction
             ?? await paged._conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         bool ownsTransaction = existingTransaction is null;

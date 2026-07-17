@@ -66,6 +66,13 @@ public sealed class ResilienceExecutor
                 {
                     await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException timeoutException) when (!ct.IsCancellationRequested)
+                {
+                    // 内部命令超时且重试耗尽：包装为 TimeoutException，调用方可与"我被取消"区分。
+                    throw new TimeoutException(
+                        $"Command timed out after {_timeout} (attempt {attempt + 1}/{_maxRetries + 1}).",
+                        timeoutException);
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -122,7 +129,10 @@ public sealed class ResilienceExecutor
             _failureCount = isHalfOpenProbe
                 ? _circuitBreakerThreshold
                 : _failureCount + 1;
-            _halfOpenProbeActive = false;
+            // 仅探针自身失败释放探针占用：熔断前进入的旧操作失败不得清掉在飞探针的标志，
+            // 否则 resetAfter 过后会放行第二个并发探针，打破半开单探针不变式。
+            if (isHalfOpenProbe)
+                _halfOpenProbeActive = false;
 
             if (_circuitBreakerThreshold > 0 && _failureCount >= _circuitBreakerThreshold)
             {
@@ -137,12 +147,17 @@ public sealed class ResilienceExecutor
     {
         lock (_lock)
         {
-            if (!entry.IsHalfOpenProbe && entry.Generation != _circuitGeneration)
+            // 探针无论新旧都先释放占用标志，避免陈旧探针提前返回导致半开态永久无探针可进。
+            if (entry.IsHalfOpenProbe)
+                _halfOpenProbeActive = false;
+
+            // generation 防陈旧对探针同样生效：gen N 的探针成功不得关闭 gen N+1 的熔断
+            //（其成功证明的是重开前的数据库状态）。新熔断周期由新探针验证。
+            if (entry.Generation != _circuitGeneration)
                 return;
 
             _failureCount = 0;
             _circuitOpen = false;
-            _halfOpenProbeActive = false;
             _circuitOpenUntil = default;
         }
     }

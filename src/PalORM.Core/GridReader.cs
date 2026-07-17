@@ -92,6 +92,10 @@ public sealed class GridReader : IAsyncDisposable
         }
     }
 
+    /// <summary>等待活动读取完成后逐级释放 reader/command/connection/session 租约。
+    /// <para><b>调用方契约</b>: 必须释放（推荐 await using）。非事务流中忘记释放时，
+    /// 操作租约永不退出——会话后续操作明确失败，读路由自有连接依赖 GC 终结器兜底回收。</para>
+    /// <para>等待活动读取时不传递取消：活动 ReadAsync 因网络阻塞时以其自身 ct 为准（文档化设计取舍）。</para></summary>
     public ValueTask DisposeAsync()
     {
         TaskCompletionSource? completion = null;

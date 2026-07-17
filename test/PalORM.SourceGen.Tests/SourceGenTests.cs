@@ -377,8 +377,9 @@ internal sealed class SourceGenIntegrationTests
     public async Task ConcurrencyUpdate_UsesAtomicIncrementAndSingleOldVersionParameter()
     {
         var metadata = PalORM_Runtime.CrudMetadatas[typeof(VersionedUser)];
-        await Assert.That(metadata.Sqls.Update).Contains("version=version + 1");
-        await Assert.That(metadata.Sqls.Update).Contains("WHERE Id=@p1 AND version=@p2");
+        // ITM-137 后 legacy/方言双实现统一为单方法（无方言 = 不 quote），格式为 "col = expr"
+        await Assert.That(metadata.Sqls.Update).Contains("version = version + 1");
+        await Assert.That(metadata.Sqls.Update).Contains("WHERE Id = @p1 AND version = @p2");
         await Assert.That(metadata.IncrementVersion).IsNotNull();
         var entity = new VersionedUser { Id = 7, Name = "B", Version = 3 };
         metadata.IncrementVersion!(entity);
@@ -427,10 +428,11 @@ internal sealed class SourceGenIntegrationTests
         await Assert.That(mapping["Email"]).IsEqualTo("email");
     }
 
-    // ─── Verify 快照测试 ────────────────────────────────
+    // ─── 生成物结构断言（非 Verify 快照——无 .verified 基线，为结构性 Contains 断言；
+    //     逐字符快照守护见 ITM-139，需引入 Verify 基线后再改名回 Snapshot） ─────
 
     [Test]
-    public async Task RowFactory_VerifySnapshot()
+    public async Task RowFactory_GeneratedTypeStructure()
     {
         var factory = PalORM_Runtime.RowFactories[typeof(TestUser)];
         await Assert.That(factory).IsNotNull();
@@ -442,7 +444,7 @@ internal sealed class SourceGenIntegrationTests
     }
 
     [Test]
-    public async Task CommandFactory_VerifySnapshot()
+    public async Task CommandFactory_GeneratedSqlStructure()
     {
         var sqls = PalORM_Runtime.CommandSqls[typeof(TestUser)];
         // Verify SQL patterns match expected structure
