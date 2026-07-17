@@ -27,9 +27,9 @@
 | GATE-001 | P1 | G12 改为 Roslyn 语法级门禁 | 已完成 | gate-check.sh G12 PASS；clean/fail/recover 夹具完备 |
 | DOC-001 | P1 | G9、Core 依赖和门禁文档恢复真实状态 | 已完成 | G9 标为 FAIL/AUD-001；Core 依赖更新为 BCL-only |
 | DOC-002 | P2 | 规则、API 和测试计数建立机械校验 | 已完成 | doc-consistency-check.sh 8 项交叉验证；test-quality-scripts.sh 含故障恢复夹具 |
-| DOC-003 | P2 | 收敛跨 Provider 时间精度与 offset 语义 | 待实施 | PostgreSQL/MySQL 最多保存微秒级 UTC 瞬时；现有 100ns/Ticks 完全一致声明需修正并以服务容器往返验证 |
+| DOC-003 | P2 | 收敛跨 Provider 时间精度与 offset 语义 | 已完成 | PG/MySQL 微秒级精度声明修正；STD-PROV-PG-001 从 Ticks 完全一致改为微秒级往返一致 |
 | PERF-001 | P2 | 修复 Benchmark 和固定时间阈值 | 已完成 | Benchmark 修复 GlobalSetup+Shared Cache；产出查询 ~1.11× Raw ADO |
-| AOT-001 | P1 | 扩展三 Provider 与 NuGet consumer AOT 矩阵 | 待实施 | — |
+| AOT-001 | P1 | 扩展三 Provider 与 NuGet consumer AOT 矩阵 | 已完成 | 三 Provider publish + SQLite 原生运行 + NuGet consumer 2.0.1 AOT 原生运行通过；PG/MySQL 服务容器待 CI |
 | AUD-001 | P0 | 凭据安全事件 | 未处理 | 用户决定仅记录；G9 必须继续阻断 |
 
 ## DEP-001 基线与反向验证
