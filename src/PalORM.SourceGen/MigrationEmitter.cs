@@ -25,37 +25,9 @@ internal static class MigrationEmitter
         sb.AppendLine($"    internal const string CreateTableSqlite = {ToCSharpLiteral(sqlite)};");
         sb.AppendLine($"    internal const string CreateTablePostgreSql = {ToCSharpLiteral(postgreSql)};");
         sb.AppendLine($"    internal const string CreateTableMySql = {ToCSharpLiteral(mySql)};");
-        sb.AppendLine();
 
-        foreach (IndexModel index in model.Indexes.AsSpan())
-        {
-            string unique = index.Unique ? "UNIQUE " : "";
-            string columns = string.Join(", ", index.Columns.AsSpan().ToArray()
-                .Select(static column => SqlGeneration.QuoteIdentifier(
-                    column, SqlGenerationDialect.Sqlite)));
-            string sql = $"CREATE {unique}INDEX IF NOT EXISTS " +
-                $"{SqlGeneration.QuoteIdentifier(index.Name, SqlGenerationDialect.Sqlite)} ON " +
-                $"{SqlGeneration.QuoteIdentifier(model.TableName, SqlGenerationDialect.Sqlite)} ({columns})";
-            sb.AppendLine($"    internal const string CreateIndex_{index.Name} = {ToCSharpLiteral(sql)};");
-        }
-
-        foreach (ForeignKeyModel foreignKey in model.ForeignKeys.AsSpan())
-        {
-            string onDelete = foreignKey.OnDelete switch
-            {
-                1 => " ON DELETE CASCADE",
-                2 => " ON DELETE SET NULL",
-                3 => " ON DELETE RESTRICT",
-                _ => ""
-            };
-            string constraintName = $"FK_{model.TableName}_{foreignKey.PropertyName}";
-            string sql = $"ALTER TABLE {SqlGeneration.QuoteIdentifier(model.TableName, SqlGenerationDialect.Sqlite)} " +
-                $"ADD CONSTRAINT {SqlGeneration.QuoteIdentifier(constraintName, SqlGenerationDialect.Sqlite)} " +
-                $"FOREIGN KEY ({SqlGeneration.QuoteIdentifier(foreignKey.PropertyName, SqlGenerationDialect.Sqlite)}) " +
-                $"REFERENCES {SqlGeneration.QuoteIdentifier(foreignKey.ReferencedTable, SqlGenerationDialect.Sqlite)}" +
-                $"({SqlGeneration.QuoteIdentifier(foreignKey.ReferencedColumn, SqlGenerationDialect.Sqlite)}){onDelete}";
-            sb.AppendLine($"    internal const string FK_{foreignKey.PropertyName} = {ToCSharpLiteral(sql)};");
-        }
+        // Index/FK DDL 常量已移除：MigrateAsync 从不消费，且 FK 的 ALTER TABLE ADD CONSTRAINT
+        // 在 SQLite 下不合法。相关注解由 PALORM017 在编译期告知不参与 DDL 生成。
 
         sb.AppendLine("}");
         return sb.ToString();
