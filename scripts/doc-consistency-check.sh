@@ -36,11 +36,11 @@ else
     fail "D2 Core 计数: 架构=$core_arch, API=$core_api, 日志=$core_changelog"
 fi
 
-# ── D3: G9 编码规范标记为 FAIL ──
-if grep -q "G9.*FAIL.*AUD-001" docs/编码规范.md; then
-    pass "D3 G9 标注为 FAIL/AUD-001"
+# ── D3: G9 文档状态与整改事实一致（仓库侧已整改，数据库轮换留 AUD-001）──
+if grep -q "G9.*仓库侧已整改.*AUD-001" docs/编码规范.md; then
+    pass "D3 G9 标注为仓库侧已整改/AUD-001 在案"
 else
-    fail "D3 G9 状态不符合预期（应为 FAIL — AUD-001 未处理）"
+    fail "D3 G9 状态不符合预期（应标注仓库侧已整改并引用 AUD-001）"
 fi
 
 # ── D4: 所有文档不含已过期的当前计数陈述 ──

@@ -115,6 +115,9 @@ jobs:
             - name: Run quality script fixtures
               run: bash scripts/test-quality-scripts.sh
 
+            - name: Run AI system consistency check
+              run: bash scripts/verify-ai-system.sh
+
             - name: Run stub gate
               run: bash scripts/stub-check.sh
 
