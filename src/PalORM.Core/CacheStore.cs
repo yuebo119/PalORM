@@ -2,13 +2,38 @@ using System.Collections.Concurrent;
 
 namespace PalORM;
 
-/// <summary>查询缓存存储——ConcurrentDictionary + TTL 自动失效。</summary>
-public static class CacheStore
+/// <summary>查询缓存抽象（ADR-C）。经 <see cref="DbOptions.QueryCache"/> 注入到会话，
+/// 替代进程级静态状态；未注入时各会话使用进程级共享的 <see cref="BoundedQueryCache"/> 默认实例。</summary>
+public interface IQueryCache
 {
-    private static readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
+    /// <summary>尝试获取缓存值。实现应在读取时清理过期条目。</summary>
+    bool TryGet<T>(string key, out T? value) where T : class;
 
-    /// <summary>尝试获取缓存值。过期条目在读取时移除，避免无界驻留。</summary>
-    public static bool TryGet<T>(string key, out T? value) where T : class
+    /// <summary>设置缓存值。</summary>
+    void Set<T>(string key, T value, TimeSpan? ttl = null) where T : class;
+
+    /// <summary>清除所有缓存。</summary>
+    void Clear();
+}
+
+/// <summary>默认查询缓存——ConcurrentDictionary + TTL + 容量上限（默认 1024 条）。
+/// 超出容量时先剔除全部过期条目；仍满则拒绝新条目（缓存未命中是正确性中性的，
+/// 拒绝写入优于无界增长或引入 LRU 锁开销）。</summary>
+public sealed class BoundedQueryCache : IQueryCache
+{
+    private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
+    private readonly int _maxEntries;
+
+    /// <summary>创建有界缓存。</summary>
+    /// <param name="maxEntries">容量上限（默认 1024 条）。</param>
+    public BoundedQueryCache(int maxEntries = 1024)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEntries);
+        _maxEntries = maxEntries;
+    }
+
+    /// <inheritdoc />
+    public bool TryGet<T>(string key, out T? value) where T : class
     {
         if (_cache.TryGetValue(key, out CacheEntry? entry))
         {
@@ -23,14 +48,28 @@ public static class CacheStore
         return false;
     }
 
-    /// <summary>设置缓存值。</summary>
-    public static void Set<T>(string key, T value, TimeSpan? ttl = null) where T : class
+    /// <inheritdoc />
+    public void Set<T>(string key, T value, TimeSpan? ttl = null) where T : class
     {
+        if (_cache.Count >= _maxEntries && !_cache.ContainsKey(key))
+        {
+            EvictExpired();
+            if (_cache.Count >= _maxEntries) return;
+        }
         _cache[key] = new CacheEntry(value, ttl ?? TimeSpan.FromMinutes(5));
     }
 
-    /// <summary>清除所有缓存。</summary>
-    public static void Clear() => _cache.Clear();
+    /// <inheritdoc />
+    public void Clear() => _cache.Clear();
+
+    private void EvictExpired()
+    {
+        foreach (var pair in _cache)
+        {
+            if (pair.Value.IsExpired())
+                _cache.TryRemove(pair);
+        }
+    }
 
     private sealed class CacheEntry(object value, TimeSpan ttl)
     {
@@ -38,4 +77,24 @@ public static class CacheStore
         private DateTime ExpiresAt { get; } = DateTime.UtcNow.Add(ttl);
         public bool IsExpired() => DateTime.UtcNow > ExpiresAt;
     }
+}
+
+/// <summary>进程级静态缓存外观——兼容既有 <c>CacheStore.Clear()</c> 调用方。
+/// 内部委托给默认 <see cref="BoundedQueryCache"/> 实例；新代码请使用
+/// <see cref="DbOptions.QueryCache"/> 注入会话级缓存（ADR-C）。</summary>
+public static class CacheStore
+{
+    /// <summary>未注入 QueryCache 的会话共享的默认实例（容量 1024）。</summary>
+    internal static BoundedQueryCache Default { get; } = new();
+
+    /// <summary>尝试获取缓存值。过期条目在读取时移除，避免无界驻留。</summary>
+    public static bool TryGet<T>(string key, out T? value) where T : class
+        => Default.TryGet(key, out value);
+
+    /// <summary>设置缓存值。</summary>
+    public static void Set<T>(string key, T value, TimeSpan? ttl = null) where T : class
+        => Default.Set(key, value, ttl);
+
+    /// <summary>清除所有缓存。</summary>
+    public static void Clear() => Default.Clear();
 }

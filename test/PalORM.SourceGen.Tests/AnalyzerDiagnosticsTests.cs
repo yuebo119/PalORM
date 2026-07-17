@@ -163,8 +163,9 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
-    public async Task IndexAttribute_ReportsPalorm017_WithoutCascadingErrors()
+    public async Task IndexAndUnique_AfterAdrB_DoNotReportPalorm017()
     {
+        // ADR-B 后 [Index]/[Unique] 参与索引 DDL 生成，PALORM017 停报
         const string source = """
             using PalORM;
             [Table("entities")]
@@ -172,19 +173,21 @@ public sealed class AnalyzerDiagnosticsTests
             public sealed class Entity
             {
                 [Key] public long Id { get; set; }
-                [Column("name")] public string Name { get; set; } = "";
+                [Column("name")]
+                [Unique]
+                public string Name { get; set; } = "";
             }
             """;
 
         (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
             await AnalyzeAsync(source);
 
-        await Assert.That(diagnostics.Any(d => d.Id == "PALORM017")).IsTrue();
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM017")).IsFalse();
         await Assert.That(compileErrors).IsEmpty();
     }
 
     [Test]
-    public async Task UniqueAndDefaultValueAndColumnSchemaArgs_ReportPalorm017()
+    public async Task DefaultValueAndColumnSchemaArgs_ReportPalorm017()
     {
         const string source = """
             using PalORM;
@@ -193,7 +196,6 @@ public sealed class AnalyzerDiagnosticsTests
             {
                 [Key] public long Id { get; set; }
                 [Column("name", Length = 128)]
-                [Unique]
                 public string Name { get; set; } = "";
                 [Column("created_at")]
                 [DefaultValue("NOW()")]
@@ -204,8 +206,8 @@ public sealed class AnalyzerDiagnosticsTests
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
 
         int count = diagnostics.Count(d => d.Id == "PALORM017");
-        // [Unique] + [Column(Length=…)] + [DefaultValue] = 3 处独立告警
-        await Assert.That(count).IsEqualTo(3);
+        // [Column(Length=…)] + [DefaultValue] = 2 处独立告警（[Unique] 已由 ADR-B 落地停报）
+        await Assert.That(count).IsEqualTo(2);
     }
 
     [Test]

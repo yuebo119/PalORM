@@ -76,7 +76,7 @@ fi
 # ── D6: SourceGen 计数五处一致 ──
 sg_header=$(grep -oP 'SourceGen \K\d+/\d+' docs/架构设计.md | head -1)
 sg_table=$(grep -oP 'SourceGen\.Tests\s*\|\s*\K\d+/\d+' docs/架构设计.md)
-if [ "$sg_header" = "$sg_table" ] && [ "$sg_header" = "62/62" ]; then
+if [ "$sg_header" = "$sg_table" ] && [ "$sg_header" = "64/64" ]; then
     pass "D6 SourceGen 计数一致: $sg_header"
 else
     fail "D6 SourceGen: 页眉=$sg_header, 表格=$sg_table"
@@ -86,7 +86,7 @@ fi
 # 表头 "无外部服务集成 X/X" vs 表格 "Integration.Tests | X/123 | 4 项外部..."
 int_header_pass=$(grep -oP '无外部服务集成 \K\d+(?=/\d+)' docs/架构设计.md | head -1)
 int_table_pass=$(grep -oP 'Integration\.Tests\s*\|\s*\K\d+(?=/\d+)' docs/架构设计.md)
-if [ "$int_header_pass" = "$int_table_pass" ] && [ "$int_header_pass" = "122" ]; then
+if [ "$int_header_pass" = "$int_table_pass" ] && [ "$int_header_pass" = "125" ]; then
     pass "D7 Integration 本地通过数一致: $int_header_pass"
 else
     fail "D7 Integration: 表头=$int_header_pass, 表格=$int_table_pass"

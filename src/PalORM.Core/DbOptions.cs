@@ -63,6 +63,16 @@ public sealed record DbOptions
     /// <summary>查询拦截器列表。</summary>
     public IReadOnlyList<IQueryInterceptor>? Interceptors { get; init; }
 
+    /// <summary>原生 SQL 查询（QueryAsync 家族）首行列名校验（默认开启，ADR-A）。
+    /// 结果集按 ordinal 映射实体，列序错位会静默交换同型列数据；开启后首行比对
+    /// 结果列名与实体声明序列名，不匹配抛异常。仅校验首行，热路径零额外开销。
+    /// 使用列别名/表达式列的查询需关闭此项并自行保证列序。</summary>
+    public bool ValidateQueryColumnOrder { get; init; } = true;
+
+    /// <summary>查询缓存实现（ADR-C）。未设置时使用进程级共享的有界默认缓存（1024 条）。
+    /// 注入独立实例可实现会话/租户级缓存隔离；实现需线程安全。</summary>
+    public IQueryCache? QueryCache { get; init; }
+
     /// <summary>连接池配置入口。所有数值必须为正数。</summary>
     public DbOptions WithPool(int maxSize, int idleTimeoutSeconds = 30, int lifetimeMinutes = 60)
     {

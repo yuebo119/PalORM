@@ -936,6 +936,68 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(setIdDelegates).Contains("global::GeneratedEntity");
     }
 
+    [Test]
+    public async Task IndexAnnotations_GenerateDialectIndexDdlAndRegistryEntry()
+    {
+        const string source = """
+            using PalORM;
+            [Table("idx_items")]
+            [Index("idx_items_status_total", "status", "total")]
+            public sealed partial class IndexedItem
+            {
+                [Key] public long Id { get; set; }
+                [Column("status")] public string Status { get; set; } = "";
+                [Column("total")] public long Total { get; set; }
+                [Column("code")]
+                [Unique]
+                public string Code { get; set; } = "";
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        string migration = result.GeneratedSources.Single(pair =>
+            pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
+        string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // 复合索引三方言：SQLite/PG 带 IF NOT EXISTS，MySQL 不带（幂等由运行时兜底）
+        await Assert.That(migration).Contains(
+            "CREATE INDEX IF NOT EXISTS \\\"idx_items_status_total\\\" ON \\\"idx_items\\\" (\\\"status\\\", \\\"total\\\")");
+        await Assert.That(migration).Contains(
+            "CREATE INDEX `idx_items_status_total` ON `idx_items` (`status`, `total`)");
+        await Assert.That(migration).DoesNotContain("CREATE INDEX IF NOT EXISTS `");
+        // [Unique] 升为单列唯一索引
+        await Assert.That(migration).Contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS \\\"ux_idx_items_code\\\" ON \\\"idx_items\\\" (\\\"code\\\")");
+        // 注册链接入
+        await Assert.That(registry).Contains("CreateIndexSqlByDialect");
+        await Assert.That(registry).Contains("CreateIndexesSqlite");
+    }
+
+    [Test]
+    public async Task EntityWithoutIndexes_GeneratesEmptyIndexArraysAndNoRegistryEntry()
+    {
+        const string source = """
+            using PalORM;
+            [Table("plain_items")]
+            public sealed partial class PlainItem
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        string migration = result.GeneratedSources.Single(pair =>
+            pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
+        string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(migration).Contains("CreateIndexesSqlite = global::System.Array.Empty<string>()");
+        // 无索引实体不进入 CreateIndexSqlByDialect 字典（可选键）
+        await Assert.That(registry).DoesNotContain("[typeof(global::PlainItem)] = new global::PalORM.CreateIndexSqlSet");
+    }
+
     private static GeneratorResult RunGenerator(string source)
         => RunGenerator(CreateCompilation(source));
 

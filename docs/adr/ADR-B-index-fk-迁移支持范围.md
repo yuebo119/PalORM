@@ -1,6 +1,6 @@
 # ADR-B：Index/FK 迁移 DDL 支持范围
 
-> 状态：提议（2026-07-17）· 来源：评审 ITM-104/151（GEN-03）
+> 状态：已实施（2026-07-17 批准并实施）· 来源：评审 ITM-104/151（GEN-03）
 
 ## 背景
 
@@ -31,3 +31,14 @@
 
 - 采纳 B2 还是 B1/B3/B4？
 - 若 B2：`[Unique]`（属性级）是否自动升为单列唯一索引？
+
+
+## 实施记录（2026-07-17 · 已实施）
+
+按用户批准的推荐方案 **B2 先实现 Index/Unique，FK 留待迁移系统整体设计** 落地：
+
+- `TableModel` 解析 `[Index("name", cols…, Unique=…)]`（类级复合索引）与 `[Unique]`（属性级，升为 `ux_<table>_<column>` 单列唯一索引）。
+- `MigrationEmitter.BuildCreateIndex` 生成三方言 DDL：SQLite/PG 带 `IF NOT EXISTS`；MySQL 不支持该语法，幂等由运行时 `IDbProvider.IsDuplicateSchemaObject`（MySqlProvider 识别 1061 DuplicateKeyName）兜底跳过。
+- 注册链新增 `CreateIndexSqlSet` / `PalORM_Runtime.CreateIndexSqlByDialect`（可选键）；`MigrateAsync` 建表后按 Provider 方言执行索引 DDL。
+- PALORM017 对 `[Index]`/`[Unique]` 停报（已参与 DDL）；`[ForeignKey]`/`[DefaultValue]`/`[Column]` 架构参数继续告警。
+- 测试：生成端 2 用例（三方言 DDL 形状、无索引实体空数组且不入注册字典）+ SQLite 集成 3 用例（真实建索引、二次迁移幂等、唯一索引数据库强制生效）。
