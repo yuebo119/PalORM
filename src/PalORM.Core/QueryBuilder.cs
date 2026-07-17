@@ -21,8 +21,8 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly IReadOnlyList<string> _columnNames;
     internal readonly SessionOperationState _operationState;
     internal TimeSpan _commandTimeout;
-    internal readonly List<QueryClause> _clauses;
-    internal readonly List<DbParameter> _parameters;
+    internal List<QueryClause> _clauses;
+    internal List<DbParameter> _parameters;
     internal string? _selectColumns;
     internal int? _take;
     internal int? _skip;
@@ -35,6 +35,7 @@ public struct QueryBuilder<T> where T : class, new()
     internal bool _splitQuery;
     internal bool _useReadRoute;
     internal DbTransaction? _transaction;
+    private bool _writable;
 
     internal QueryBuilder(DbConnection conn, SqlDialect dialect, IRowFactory<T> factory,
         List<IQueryInterceptor> interceptors, Func<string, object?, DbParameter> paramFactory,
@@ -561,9 +562,18 @@ public struct QueryBuilder<T> where T : class, new()
     private void AddClause(QueryClauseKind kind, string sql,
         IReadOnlyList<DbParameter>? parameters = null)
     {
+        EnsureWritable();
         IReadOnlyList<DbParameter> ownedParameters = parameters ?? Array.Empty<DbParameter>();
         _clauses.Add(new QueryClause(kind, sql, ownedParameters));
         foreach (DbParameter parameter in ownedParameters) _parameters.Add(parameter);
+    }
+
+    private void EnsureWritable()
+    {
+        if (_writable) return;
+        _clauses = new List<QueryClause>(_clauses);
+        _parameters = new List<DbParameter>(_parameters);
+        _writable = true;
     }
 
     private bool HasClause(QueryClauseKind kind)

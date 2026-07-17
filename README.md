@@ -2,7 +2,7 @@
 <p align="center"><strong>面向严格 Native AOT 的 .NET 微 ORM</strong></p>
 <p align="center">
   <img src="https://img.shields.io/badge/.NET-11-512BD4?logo=dotnet">
-  <img src="https://img.shields.io/badge/tests-276%2F280-yellow">
+  <img src="https://img.shields.io/badge/tests-281%2F285-yellow">
   <img src="https://img.shields.io/badge/AOT-SQLite%20%2B%20NuGet%20verified-yellow">
   <img src="https://img.shields.io/badge/IL%20suppressions-0-success">
   <img src="https://img.shields.io/badge/license-AGPL%20v3-blue">

@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 服务容器运行待 CI。
-> 当前测试: Core 106/106、SourceGen 51/51、无外部服务集成 119/119；PostgreSQL/MySQL 的 4 项待 CI 验证
+> 当前测试: Core 111/111、SourceGen 51/51、无外部服务集成 119/119；PostgreSQL/MySQL 的 4 项待 CI 验证
 > 构建: 全解决方案 Release 严格构建 0 warning / 0 error · Native AOT: 三 Provider publish 通过，SQLite 与 NuGet consumer 原生运行通过
 > QueryBuilder: struct（零堆分配）· 113 API 中 112 个已实现，1 个因设计冲突移除
 
