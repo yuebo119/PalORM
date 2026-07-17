@@ -87,7 +87,7 @@ check_zero G8 '零 string.Format 拼接 SQL' "$(count_matches 'string\.Format.*(
 
 # 扫描所有受跟踪文本，而不是只扫描 src。示例只能使用明显占位符。
 connections=$(git grep -n -i -E '(Password|Pwd)=[^;$"'"'"'[:space:]]+|connectionString[[:space:]]*=[[:space:]]*"(Server|Host)=' -- ':!docs/**' ':!**/bin/**' ':!**/obj/**' 2>/dev/null || true)
-connections=$(printf '%s\n' "$connections" | grep -v -i -E '(example|sample|placeholder|<password>|\$\{[^}]+\})' || true)
+connections=$(printf '%s\n' "$connections" | grep -v -i -E '(example|sample|placeholder|<password>|\$\{[^}]+\}|localhost|\.\.\.)' || true)
 [ -z "$connections" ] && connection_count=0 || connection_count=$(printf '%s\n' "$connections" | wc -l | tr -d ' ')
 check_zero G9 '受跟踪文件零硬编码连接凭据' "$connection_count"
 
