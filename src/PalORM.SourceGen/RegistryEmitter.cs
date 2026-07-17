@@ -175,6 +175,18 @@ internal static class RegistryEmitter
         }
         sb.AppendLine("        },");
         sb.AppendLine();
+        sb.AppendLine("            CreateIndexSqlByDialect = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateIndexSqlSet>");
+        sb.AppendLine("        {");
+        foreach (var m in models.AsSpan())
+        {
+            if (m.Indexes.AsSpan().Length == 0) continue;
+            sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::PalORM.CreateIndexSqlSet(");
+            sb.AppendLine($"                Migration_{m.GeneratedTypeSuffix}.CreateIndexesSqlite,");
+            sb.AppendLine($"                Migration_{m.GeneratedTypeSuffix}.CreateIndexesPostgreSql,");
+            sb.AppendLine($"                Migration_{m.GeneratedTypeSuffix}.CreateIndexesMySql),");
+        }
+        sb.AppendLine("        },");
+        sb.AppendLine();
         sb.AppendLine("            SetIdDelegates = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<object, long>>");
         sb.AppendLine("        {");
         foreach (var m in models.AsSpan())

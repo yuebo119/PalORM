@@ -1,6 +1,6 @@
 # ADR-A：QueryAsync 原生 SQL 列序契约
 
-> 状态：提议（2026-07-17）· 来源：评审 ITM-117/150（GEN-06）
+> 状态：已实施（2026-07-17 批准并实施）· 来源：评审 ITM-117/150（GEN-06）
 
 ## 背景
 
@@ -29,3 +29,12 @@ QueryBuilder 路径（`From<T>()`）不受影响：SELECT 列序由编译期元�
 
 - 采纳 A4 还是维持 A1（仅文档契约）？
 - 若 A4：校验失败是抛异常还是 `ILogger` 警告？
+
+
+## 实施记录（2026-07-17 · 已实施）
+
+按用户批准的推荐方案 **A3 首行列名校验** 落地：
+
+- `DbOptions.ValidateQueryColumnOrder`（默认 `true`）：`QueryAsync`/`QueryAsyncEnumerable`（及经其实现的 First/Single）首行比对结果列名与实体声明序列名（OrdinalIgnoreCase），不匹配抛 `InvalidOperationException`，异常消息含错位位置、期望/实际列名与关闭开关指引。
+- 仅校验首行——热路径零额外开销；使用列别名/表达式列的调用方可显式关闭开关并自行保证列序。
+- 测试：`QueryColumnOrderValidationTests` 5 用例——声明序通过、同型列交换抛异常（修复前静默换数据场景）、关闭开关放行、流式入口同样拦截、`SELECT *` 与建表序一致时通过。

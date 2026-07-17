@@ -21,6 +21,8 @@ public sealed class RegistryFragment
     public required IReadOnlyDictionary<Type, string> CreateTableSql { get; init; }
     public IReadOnlyDictionary<Type, CreateTableSqlSet> CreateTableSqlByDialect { get; init; }
         = FrozenDictionary<Type, CreateTableSqlSet>.Empty;
+    public IReadOnlyDictionary<Type, CreateIndexSqlSet> CreateIndexSqlByDialect { get; init; }
+        = FrozenDictionary<Type, CreateIndexSqlSet>.Empty;
     public required IReadOnlyDictionary<Type, Action<object, long>> SetIdDelegates { get; init; }
     public required IReadOnlyDictionary<Type, CrudMetadata> CrudMetadatas { get; init; }
     public required IReadOnlyDictionary<Type, EntityFeatures> EntityFeatures { get; init; }
@@ -74,6 +76,10 @@ public static class PalORM_Runtime
     public static FrozenDictionary<Type, CreateTableSqlSet> CreateTableSqlByDialect
         => Volatile.Read(ref _state).CreateTableSqlByDialect;
 
+    /// <summary>类型 → 三方言索引 DDL（ADR-B）。</summary>
+    public static FrozenDictionary<Type, CreateIndexSqlSet> CreateIndexSqlByDialect
+        => Volatile.Read(ref _state).CreateIndexSqlByDialect;
+
     /// <summary>类型 → 设置自增主键委托（MySQL LAST_INSERT_ID 用，零反射）。</summary>
     public static FrozenDictionary<Type, Action<object, long>> SetIdDelegates => Volatile.Read(ref _state).SetIdDelegates;
 
@@ -106,6 +112,8 @@ public static class PalORM_Runtime
             ValidateRequiredKeys(entityTypes, fragment.CreateTableSql.Keys, nameof(fragment.CreateTableSql));
             ValidateOptionalKeys(entityTypes, fragment.CreateTableSqlByDialect.Keys,
                 nameof(fragment.CreateTableSqlByDialect));
+            ValidateOptionalKeys(entityTypes, fragment.CreateIndexSqlByDialect.Keys,
+                nameof(fragment.CreateIndexSqlByDialect));
             ValidateRequiredKeys(entityTypes, fragment.CrudMetadatas.Keys, nameof(fragment.CrudMetadatas));
             ValidateRequiredKeys(entityTypes, fragment.EntityFeatures.Keys, nameof(fragment.EntityFeatures));
             ValidateOptionalKeys(entityTypes, fragment.SetIdDelegates.Keys, nameof(fragment.SetIdDelegates));
@@ -145,6 +153,8 @@ public static class PalORM_Runtime
                 CreateTableSql = Merge(current.CreateTableSql, fragment.CreateTableSql),
                 CreateTableSqlByDialect = Merge(
                     current.CreateTableSqlByDialect, fragment.CreateTableSqlByDialect),
+                CreateIndexSqlByDialect = Merge(
+                    current.CreateIndexSqlByDialect, fragment.CreateIndexSqlByDialect),
                 SetIdDelegates = Merge(current.SetIdDelegates, fragment.SetIdDelegates),
                 CrudMetadatas = crudMetadatas.ToFrozenDictionary(),
                 EntityFeatures = Merge(current.EntityFeatures, fragment.EntityFeatures)
@@ -199,6 +209,7 @@ public static class PalORM_Runtime
         internal FrozenDictionary<Type, FrozenDictionary<string, string>> PropertyToColumn { get; init; } = FrozenDictionary<Type, FrozenDictionary<string, string>>.Empty;
         internal FrozenDictionary<Type, string> CreateTableSql { get; init; } = FrozenDictionary<Type, string>.Empty;
         internal FrozenDictionary<Type, CreateTableSqlSet> CreateTableSqlByDialect { get; init; } = FrozenDictionary<Type, CreateTableSqlSet>.Empty;
+        internal FrozenDictionary<Type, CreateIndexSqlSet> CreateIndexSqlByDialect { get; init; } = FrozenDictionary<Type, CreateIndexSqlSet>.Empty;
         internal FrozenDictionary<Type, Action<object, long>> SetIdDelegates { get; init; } = FrozenDictionary<Type, Action<object, long>>.Empty;
         internal FrozenDictionary<Type, CrudMetadata> CrudMetadatas { get; init; } = FrozenDictionary<Type, CrudMetadata>.Empty;
         internal FrozenDictionary<Type, EntityFeatures> EntityFeatures { get; init; } = FrozenDictionary<Type, EntityFeatures>.Empty;
@@ -232,6 +243,23 @@ public readonly record struct CreateTableSqlSet(
 {
     /// <summary>按 Provider 方言选择对应 DDL。</summary>
     public string Get(SqlDialect dialect)
+        => dialect switch
+        {
+            SqlDialect.Sqlite => Sqlite,
+            SqlDialect.PostgreSql => PostgreSql,
+            SqlDialect.MySql => MySql,
+            _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null)
+        };
+}
+
+/// <summary>编译期生成的三数据库方言索引 DDL（ADR-B：[Index]/[Unique] 注解产物）。</summary>
+public readonly record struct CreateIndexSqlSet(
+    IReadOnlyList<string> Sqlite,
+    IReadOnlyList<string> PostgreSql,
+    IReadOnlyList<string> MySql)
+{
+    /// <summary>按 Provider 方言选择对应索引 DDL 组。</summary>
+    public IReadOnlyList<string> Get(SqlDialect dialect)
         => dialect switch
         {
             SqlDialect.Sqlite => Sqlite,

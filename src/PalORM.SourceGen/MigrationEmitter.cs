@@ -26,11 +26,43 @@ internal static class MigrationEmitter
         sb.AppendLine($"    internal const string CreateTablePostgreSql = {ToCSharpLiteral(postgreSql)};");
         sb.AppendLine($"    internal const string CreateTableMySql = {ToCSharpLiteral(mySql)};");
 
-        // Index/FK DDL 常量已移除：MigrateAsync 从不消费，且 FK 的 ALTER TABLE ADD CONSTRAINT
-        // 在 SQLite 下不合法。相关注解由 PALORM017 在编译期告知不参与 DDL 生成。
+        // 索引 DDL（ADR-B）：三方言各一组，MigrateAsync 按 Provider 方言执行。
+        // FK 约束仍不生成（SQLite 需内联 CREATE TABLE，留待迁移系统整体设计）——由 PALORM017 告警。
+        sb.AppendLine();
+        AppendIndexArray(sb, model, "CreateIndexesSqlite", SqlGenerationDialect.Sqlite);
+        AppendIndexArray(sb, model, "CreateIndexesPostgreSql", SqlGenerationDialect.PostgreSql);
+        AppendIndexArray(sb, model, "CreateIndexesMySql", SqlGenerationDialect.MySql);
 
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    private static void AppendIndexArray(
+        StringBuilder sb, TableModel model, string fieldName, SqlGenerationDialect dialect)
+    {
+        if (model.Indexes.AsSpan().Length == 0)
+        {
+            sb.AppendLine($"    internal static readonly string[] {fieldName} = global::System.Array.Empty<string>();");
+            return;
+        }
+        sb.AppendLine($"    internal static readonly string[] {fieldName} =");
+        sb.AppendLine("    [");
+        foreach (IndexModel index in model.Indexes.AsSpan())
+            sb.AppendLine($"        {ToCSharpLiteral(BuildCreateIndex(model, index, dialect))},");
+        sb.AppendLine("    ];");
+    }
+
+    internal static string BuildCreateIndex(
+        TableModel model, IndexModel index, SqlGenerationDialect dialect)
+    {
+        string unique = index.Unique ? "UNIQUE " : "";
+        // MySQL 不支持 CREATE INDEX IF NOT EXISTS——幂等由运行时 IsDuplicateSchemaObject 兜底
+        string ifNotExists = dialect == SqlGenerationDialect.MySql ? "" : "IF NOT EXISTS ";
+        string columns = string.Join(", ", index.Columns.AsSpan().ToArray()
+            .Select(column => SqlGeneration.QuoteIdentifier(column, dialect)));
+        return $"CREATE {unique}INDEX {ifNotExists}" +
+            $"{SqlGeneration.QuoteIdentifier(index.Name, dialect)} ON " +
+            $"{SqlGeneration.QuoteIdentifier(model.TableName, dialect)} ({columns})";
     }
 
     internal static string ToCSharpLiteral(string value)

@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 服务容器运行待 CI。
-> 当前测试: Core 127/127、SourceGen 62/62、无外部服务集成 122/122；PostgreSQL/MySQL 的 4 项待 CI 验证
+> 当前测试: Core 137/137、SourceGen 64/64、无外部服务集成 125/125；PostgreSQL/MySQL 的 4 项待 CI 验证
 > 构建: 全解决方案 Release 严格构建 0 warning / 0 error · Native AOT: 三 Provider publish 通过，SQLite 与 NuGet consumer 原生运行通过
 > QueryBuilder: struct（值类型）· 113 API 中 112 个已实现，1 个因设计冲突移除
 
@@ -14,9 +14,9 @@
 | M1 | `MigrateAsync()` | `DataSession.cs` | 优先从 `CreateTableSqlByDialect` 选择 SQLite/PostgreSQL/MySQL 编译期 DDL；旧片段回退 `CreateTableSql` |
 | M2 | `SeedAsync<T>(IEnumerable<T>)` | `DataSession_Bulk.cs` | 要求非默认稳定主键，事务内复用源生成 Upsert，重复执行更新原行 |
 | M3 | `ValidateSchemaAsync<T>()` → `List<string>` | `DataSession.cs:314` | `TProvider.ConfigureSchemaCommand()` 配置安全命令及列名序号 |
-| M4 | `[Unique]` / `[Index]` | `Annotations.cs:115-123` | 注解可声明；当前版本不参与迁移 DDL，编译期报 PALORM017 |
+| M4 | `[Unique]` / `[Index]` | `Annotations.cs:115-123` | MigrateAsync 生成三方言索引 DDL（ADR-B）；SQLite/PG IF NOT EXISTS，MySQL 运行时幂等 |
 | M5 | `DiffAsync<T>()` → `List<string>` | `DataSession.cs:342` | CI 检查用，格式化差异 |
-| M6 | `[Index(name,cols,unique)]` | `Annotations.cs:113` | 复合索引声明；同 M4，PALORM017 告知不生成 DDL |
+| M6 | `[Index(name,cols,unique)]` | `Annotations.cs:113` | 复合索引，MigrateAsync 建索引（ADR-B）；Unique 属性生成 UNIQUE INDEX |
 
 ### 编译时验证 (6/6)
 

@@ -48,6 +48,15 @@ internal sealed record TableModel(
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? prop.Name;
 
+            // [Unique] → 单列唯一索引（ADR-B：属性级 Unique 升为唯一索引）
+            if (prop.GetAttributes().Any(a => a.AttributeClass?.Name is "UniqueAttribute" or "Unique"))
+            {
+                indexes.Add(new IndexModel(
+                    $"ux_{tableName}_{columnName}",
+                    new EquatableArray<string>(new[] { columnName }),
+                    Unique: true));
+            }
+
             bool isKey = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "KeyAttribute" or "Key");
             // [Key(AutoIncrement = false)] 关闭数值主键的自增推断（雪花 ID 等应用侧赋值主键）
             bool autoIncrementEnabled = prop.GetAttributes()
@@ -110,6 +119,23 @@ internal sealed record TableModel(
             a.AttributeClass?.Name is "SoftDeleteAttribute" or "SoftDelete");
         bool isTenantAware = typeSymbol.GetAttributes().Any(a =>
             a.AttributeClass?.Name is "TenantAwareAttribute" or "TenantAware");
+
+        // [Index("name", "col1", "col2", Unique = ...)] → 复合索引（ADR-B）
+        foreach (var indexAttr in typeSymbol.GetAttributes().Where(a =>
+            a.AttributeClass?.Name is "IndexAttribute" or "Index"))
+        {
+            if (indexAttr.ConstructorArguments.Length < 2) continue;
+            if (indexAttr.ConstructorArguments[0].Value is not string indexName) continue;
+            string[] indexColumns = indexAttr.ConstructorArguments[1].Values
+                .Select(static v => v.Value as string)
+                .Where(static v => v is not null)
+                .Cast<string>()
+                .ToArray();
+            if (indexColumns.Length == 0) continue;
+            bool unique = indexAttr.NamedArguments
+                .FirstOrDefault(static na => na.Key == "Unique").Value.Value is true;
+            indexes.Add(new IndexModel(indexName, new EquatableArray<string>(indexColumns), unique));
+        }
 
         string entityTypeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         return new TableModel(
