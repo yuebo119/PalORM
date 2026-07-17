@@ -221,7 +221,7 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Include<TChild>(Expression<Func<T, object?>> fk,
         Expression<Func<TChild, object?>> pk) where TChild : class, new()
     {
-        string childTable = PalORM_Runtime.TableNames[typeof(TChild)];
+        string childTable = GetRegisteredTableName(typeof(TChild));
         AddClause(QueryClauseKind.Join,
             $"INNER JOIN {_quoteIdentifier(childTable)} ON " +
             $"({_quoteIdentifier(childTable)}.{_quoteIdentifier(GetColumnName(pk))} = " +
@@ -241,8 +241,8 @@ public struct QueryBuilder<T> where T : class, new()
         where TGrandChild : class, new()
         where TParent : class, new()
     {
-        string grandChildTable = PalORM_Runtime.TableNames[typeof(TGrandChild)];
-        string parentTable = PalORM_Runtime.TableNames[typeof(TParent)];
+        string grandChildTable = GetRegisteredTableName(typeof(TGrandChild));
+        string parentTable = GetRegisteredTableName(typeof(TParent));
         AddClause(QueryClauseKind.Join,
             $"INNER JOIN {_quoteIdentifier(grandChildTable)} ON " +
             $"({_quoteIdentifier(grandChildTable)}.{_quoteIdentifier(GetColumnName(grandChildKey))} = " +
@@ -301,6 +301,9 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>以调用方源码位置为 Tag。注意：[CallerFilePath] 是编译机绝对路径，
+    /// 会随 SQL 注释发送到数据库服务器（可见于 DB 日志/pg_stat_activity），泄露内部目录结构。
+    /// 生产环境建议使用 Tag(name) 传业务标识，或配置 PathMap 规范化编译路径。</summary>
     public QueryBuilder<T> TagWithCaller([CallerMemberName] string? member = null,
         [CallerFilePath] string? file = null, [CallerLineNumber] int line = 0)
         => Tag($"{file}:{line} {member}");
@@ -446,17 +449,21 @@ public struct QueryBuilder<T> where T : class, new()
     internal string BuildCountSql()
     {
         var sb = new ValueStringBuilder(384);
-        AppendComments(ref sb);
-        AppendCtes(ref sb);
-        sb.Append("SELECT COUNT(*) FROM (SELECT 1 FROM ");
-        sb.Append(_quoteIdentifier(_cteName ?? _tableName));
-        sb.Append(' ');
-        if (!_splitQuery) AppendClauses(ref sb, QueryClauseKind.Join);
-        AppendClauses(ref sb, QueryClauseKind.Where);
-        AppendClauses(ref sb, QueryClauseKind.GroupBy);
-        AppendClauses(ref sb, QueryClauseKind.Having);
-        sb.Append(") AS count_source");
-        return sb.ToString().TrimEnd();
+        try
+        {
+            AppendComments(ref sb);
+            AppendCtes(ref sb);
+            sb.Append("SELECT COUNT(*) FROM (SELECT 1 FROM ");
+            sb.Append(_quoteIdentifier(_cteName ?? _tableName));
+            sb.Append(' ');
+            if (!_splitQuery) AppendClauses(ref sb, QueryClauseKind.Join);
+            AppendClauses(ref sb, QueryClauseKind.Where);
+            AppendClauses(ref sb, QueryClauseKind.GroupBy);
+            AppendClauses(ref sb, QueryClauseKind.Having);
+            sb.Append(") AS count_source");
+            return sb.ToString().TrimEnd();
+        }
+        finally { sb.Dispose(); }  // 构建中途异常时归还池数组；ToString 已释放则为幂等 no-op
     }
 
     internal string BuildUpdateSql()
@@ -466,14 +473,18 @@ public struct QueryBuilder<T> where T : class, new()
         if (HasClause(QueryClauseKind.CommonTableExpression))
             throw new NotSupportedException("CTE is not supported by the current UPDATE builder.");
         var sb = new ValueStringBuilder(256);
-        AppendComments(ref sb);
-        sb.Append("UPDATE ");
-        sb.Append(_quoteIdentifier(_tableName));
-        sb.Append(' ');
-        AppendClauses(ref sb, QueryClauseKind.Set);
-        AppendClauses(ref sb, QueryClauseKind.Where);
-        AppendClauses(ref sb, QueryClauseKind.Raw);
-        return sb.ToString().TrimEnd();
+        try
+        {
+            AppendComments(ref sb);
+            sb.Append("UPDATE ");
+            sb.Append(_quoteIdentifier(_tableName));
+            sb.Append(' ');
+            AppendClauses(ref sb, QueryClauseKind.Set);
+            AppendClauses(ref sb, QueryClauseKind.Where);
+            AppendClauses(ref sb, QueryClauseKind.Raw);
+            return sb.ToString().TrimEnd();
+        }
+        finally { sb.Dispose(); }
     }
 
     /// <summary>构建 SQL 预览（含参数）。等同于 AsDryRun().Sql，但不创建 DryRunResult。</summary>
@@ -484,46 +495,50 @@ public struct QueryBuilder<T> where T : class, new()
     internal string BuildSql()
     {
         var sb = new ValueStringBuilder(512);
-        AppendComments(ref sb);
-        AppendCtes(ref sb);
-        sb.Append("SELECT ");
-        string sourceName = _cteName ?? _tableName;
-        if (_selectColumns is not null)
+        try
         {
-            sb.Append(_selectColumns);
-        }
-        else
-        {
-            for (int index = 0; index < _columnNames.Count; index++)
+            AppendComments(ref sb);
+            AppendCtes(ref sb);
+            sb.Append("SELECT ");
+            string sourceName = _cteName ?? _tableName;
+            if (_selectColumns is not null)
             {
-                if (index > 0) sb.Append(", ");
-                sb.Append(_quoteIdentifier(sourceName));
-                sb.Append('.');
-                sb.Append(_quoteIdentifier(_columnNames[index]));
+                sb.Append(_selectColumns);
             }
-        }
-        foreach (QueryClause window in _clauses.Where(clause => clause.Kind == QueryClauseKind.Window))
-        {
-            sb.Append(", ");
-            sb.Append(window.Sql);
-        }
-        sb.Append(" FROM ");
-        sb.Append(_quoteIdentifier(sourceName));
-        sb.Append(' ');
-        if (!_splitQuery) AppendClauses(ref sb, QueryClauseKind.Join);
-        AppendClauses(ref sb, QueryClauseKind.Where);
-        AppendClauses(ref sb, QueryClauseKind.GroupBy);
-        AppendClauses(ref sb, QueryClauseKind.Having);
-        AppendClauses(ref sb, QueryClauseKind.OrderBy);
-        AppendClauses(ref sb, QueryClauseKind.Raw);
-        string? limitClause = BuildLimitClause();
-        if (limitClause is not null)
-        {
-            sb.Append(limitClause);
+            else
+            {
+                for (int index = 0; index < _columnNames.Count; index++)
+                {
+                    if (index > 0) sb.Append(", ");
+                    sb.Append(_quoteIdentifier(sourceName));
+                    sb.Append('.');
+                    sb.Append(_quoteIdentifier(_columnNames[index]));
+                }
+            }
+            foreach (QueryClause window in _clauses.Where(clause => clause.Kind == QueryClauseKind.Window))
+            {
+                sb.Append(", ");
+                sb.Append(window.Sql);
+            }
+            sb.Append(" FROM ");
+            sb.Append(_quoteIdentifier(sourceName));
             sb.Append(' ');
+            if (!_splitQuery) AppendClauses(ref sb, QueryClauseKind.Join);
+            AppendClauses(ref sb, QueryClauseKind.Where);
+            AppendClauses(ref sb, QueryClauseKind.GroupBy);
+            AppendClauses(ref sb, QueryClauseKind.Having);
+            AppendClauses(ref sb, QueryClauseKind.OrderBy);
+            AppendClauses(ref sb, QueryClauseKind.Raw);
+            string? limitClause = BuildLimitClause();
+            if (limitClause is not null)
+            {
+                sb.Append(limitClause);
+                sb.Append(' ');
+            }
+            AppendClauses(ref sb, QueryClauseKind.Lock);
+            return sb.ToString().TrimEnd();
         }
-        AppendClauses(ref sb, QueryClauseKind.Lock);
-        return sb.ToString().TrimEnd();
+        finally { sb.Dispose(); }
     }
 
     internal static string FormatFormattableSql(FormattableString sql, int baseIndex)
@@ -532,7 +547,7 @@ public struct QueryBuilder<T> where T : class, new()
     private QueryBuilder<T> AddJoin<TJoin>(string joinType, FormattableString onClause)
         where TJoin : class, new()
     {
-        string joinTable = PalORM_Runtime.TableNames[typeof(TJoin)];
+        string joinTable = GetRegisteredTableName(typeof(TJoin));
         var (sql, parameters) = BindFormattableString(onClause);
         AddClause(QueryClauseKind.Join,
             $"{joinType} JOIN {_quoteIdentifier(joinTable)} ON ({sql})", parameters);
@@ -633,11 +648,22 @@ public struct QueryBuilder<T> where T : class, new()
         };
     }
 
+    private static string GetRegisteredTableName(Type entityType)
+        => PalORM_Runtime.TableNames.TryGetValue(entityType, out string? tableName)
+            ? tableName
+            : throw new InvalidOperationException(
+                $"Type '{entityType.Name}' is not registered; ensure it has [Table] and the source generator ran.");
+
     private static string ValidateSqlComment(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        if (value.Contains("*/", StringComparison.Ordinal) || value.Contains('\0'))
-            throw new ArgumentException("SQL 注释不能包含注释终止符或 NUL 字符。", nameof(value));
+        // 同时拒绝 /*：PostgreSQL 块注释支持嵌套，未配对的 /* 会让整条语句解析失败。
+        if (value.Contains("*/", StringComparison.Ordinal)
+            || value.Contains("/*", StringComparison.Ordinal)
+            || value.Contains('\0'))
+        {
+            throw new ArgumentException("SQL 注释不能包含注释定界符（/* 或 */）或 NUL 字符。", nameof(value));
+        }
         return value;
     }
 

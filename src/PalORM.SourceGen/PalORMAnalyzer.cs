@@ -89,12 +89,18 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "{0} on '{1}' does not participate in migration DDL generation in the current version; MigrateAsync will not create the corresponding schema object",
         "PalORM", DiagnosticSeverity.Warning, true);
 
+    public static readonly DiagnosticDescriptor MissingTenantColumn = new(
+        "PALORM018", "Tenant-aware entity requires a tenant_id column",
+        "Type '{0}' uses [TenantAware] but does not map a property to column 'tenant_id'; WithTenant filtering would reference a non-existent column",
+        "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, SqlFileNotFound, SchemaMismatch, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
-         UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl];
+         UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl,
+         MissingTenantColumn];
 
     public override void Initialize(AnalysisContext context)
     {
@@ -148,6 +154,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                     && attribute.ConstructorArguments.FirstOrDefault().Value is "deleted_at"));
             if (isSoftDelete && !hasSoftDeleteColumn)
                 ctx.ReportDiagnostic(Diagnostic.Create(MissingSoftDeleteColumn, type.Locations[0], type.Name));
+
+            // PALORM018: [TenantAware] 必须映射 tenant_id 列（与 PALORM014 对齐）
+            bool isTenantAware = type.GetAttributes().Any(attribute =>
+                attribute.AttributeClass?.Name is "TenantAwareAttribute" or "TenantAware");
+            bool hasTenantColumn = type.GetMembers().OfType<IPropertySymbol>()
+                .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
+                .Any(static property => property.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.Name is "ColumnAttribute" or "Column"
+                    && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));
+            if (isTenantAware && !hasTenantColumn)
+                ctx.ReportDiagnostic(Diagnostic.Create(MissingTenantColumn, type.Locations[0], type.Name));
 
             var concurrencyTokens = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(static property => !SourceGenerationValidation.IsNotMapped(property))

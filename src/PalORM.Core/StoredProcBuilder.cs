@@ -14,6 +14,7 @@ public sealed class StoredProcBuilder
     private readonly SessionOperationState _operationState;
     private readonly List<DbParameter> _parameters = [];
     private readonly List<DbParameter> _outputParams = [];
+    private bool _executed;
 
     private readonly Func<string, object?, DbParameter> _paramFactory;
 
@@ -22,10 +23,28 @@ public sealed class StoredProcBuilder
         SessionOperationState operationState)
     {
         _conn = conn;
-        _name = name;
+        _name = ValidateProcedureName(name);
         _timeout = timeout;
         _paramFactory = paramFactory;
         _operationState = operationState;
+    }
+
+    /// <summary>过程名白名单：字母/下划线开头，仅含字母数字、下划线和点分限定符。
+    /// 过程名直接进入 CommandText（CommandType.StoredProcedure），纵深防御拒绝特殊字符。</summary>
+    private static string ValidateProcedureName(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        foreach (string segment in name.Split('.'))
+        {
+            if (segment.Length == 0 || (!char.IsLetter(segment[0]) && segment[0] != '_'))
+                throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
+            foreach (char c in segment)
+            {
+                if (!char.IsLetterOrDigit(c) && c != '_')
+                    throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
+            }
+        }
+        return name;
     }
 
     /// <summary>绑定输入参数。</summary>
@@ -64,6 +83,7 @@ public sealed class StoredProcBuilder
     /// <summary>执行并返回结果集。</summary>
     public async ValueTask<List<T>> QueryAsync<T>(CancellationToken ct = default) where T : class, new()
     {
+        MarkExecuted();
         using SessionOperationState.SessionOperationLease operation =
             _operationState.Enter();
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
@@ -86,6 +106,7 @@ public sealed class StoredProcBuilder
     /// <summary>执行不返回结果集。</summary>
     public async ValueTask<int> ExecuteAsync(CancellationToken ct = default)
     {
+        MarkExecuted();
         using SessionOperationState.SessionOperationLease operation =
             _operationState.Enter();
         await using DbCommand cmd = _conn.CreateCommand();
@@ -96,5 +117,18 @@ public sealed class StoredProcBuilder
         foreach (var p in _parameters) cmd.Parameters.Add(p);
         int result = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return result;
+    }
+
+    /// <summary>builder 一次性契约：DbParameter 实例归属首个执行命令（provider 跟踪归属），
+    /// 二次执行会以 provider 特定异常失败——这里改为提前明确失败。</summary>
+    private void MarkExecuted()
+    {
+        if (_executed)
+        {
+            throw new InvalidOperationException(
+                "StoredProcBuilder is single-use: its parameters belong to the first executed command. " +
+                "Create a new builder via StoredProc(name) for another execution.");
+        }
+        _executed = true;
     }
 }

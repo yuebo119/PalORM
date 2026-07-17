@@ -223,7 +223,6 @@ public sealed class PalORM_RuntimeTests
             TableNames = fragment.TableNames,
             CommandSqls = fragment.CommandSqls,
             BindInsert = fragment.BindInsert,
-            BindInsertValues = fragment.BindInsertValues,
             BindUpdate = fragment.BindUpdate,
             BindDelete = fragment.BindDelete,
             PkColumns = fragment.PkColumns,
@@ -282,7 +281,6 @@ public sealed class PalORM_RuntimeTests
         insertColumns ??= [columnName];
         upsertColumns ??= [columnName];
         static void Bind(System.Data.Common.DbCommand command, object entity) { }
-        static void BindValues(List<(string Name, object? Value)> values, object entity) { }
 
         return new RegistryFragment
         {
@@ -290,7 +288,6 @@ public sealed class PalORM_RuntimeTests
             TableNames = new Dictionary<Type, string> { [entityType] = tableName },
             CommandSqls = new Dictionary<Type, CommandSqlSet> { [entityType] = new("I", "U", "D", "IR") },
             BindInsert = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
-            BindInsertValues = new Dictionary<Type, Action<List<(string Name, object? Value)>, object>> { [entityType] = BindValues },
             BindUpdate = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
             BindDelete = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
             PkColumns = new Dictionary<Type, string> { [entityType] = "id" },
@@ -538,7 +535,8 @@ public sealed class ResilienceTests
         };
         var executor = new ResilienceExecutor(opts);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        // ITM-131 后：重试耗尽的内部超时包装为 TimeoutException（不再是裸 OCE）
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
             await executor.ExecuteAsync<int>(async ct =>
             {
@@ -675,6 +673,97 @@ public sealed class ResilienceTests
 
         await Assert.ThrowsAsync<CircuitBreakerOpenException>(async () =>
             await session.ExecuteWithResilience(_ => Task.FromResult(42)));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_InternalTimeoutExhausted_ThrowsTimeoutException_NotBareOce()
+    {
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            MaxRetries = 1,
+            RetryBackoff = _ => TimeSpan.Zero,
+            CommandTimeout = TimeSpan.FromMilliseconds(30),
+            CircuitBreakerThreshold = 0
+        };
+        var executor = new ResilienceExecutor(opts);
+
+        // 操作只响应内部超时 token，调用方 ct 未取消 → 耗尽后应为 TimeoutException 而非裸 OCE
+        var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await executor.ExecuteAsync<int>(async innerCt =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, innerCt);
+                return 0;
+            }));
+        await Assert.That(ex!.InnerException).IsTypeOf<TaskCanceledException>();
+    }
+
+    [Test]
+    public async Task ExecuteAsync_CallerCancellation_StillThrowsOce()
+    {
+        var opts = new DbOptions { ConnectionString = "dummy", MaxRetries = 3, CircuitBreakerThreshold = 0 };
+        var executor = new ResilienceExecutor(opts);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await executor.ExecuteAsync<int>(async ct =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return 0;
+            }, cts.Token));
+    }
+
+    [Test]
+    public async Task HalfOpen_StaleOperationFailure_DoesNotReleaseActiveProbe()
+    {
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            MaxRetries = 0,
+            RetryBackoff = _ => TimeSpan.Zero,
+            CircuitBreakerThreshold = 1,
+            CircuitBreakerResetAfter = TimeSpan.Zero
+        };
+        var executor = new ResilienceExecutor(opts, static _ => true);
+
+        // 旧操作 A：熔断关闭时进入，挂起待命
+        var staleGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var staleStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int> stale = executor.ExecuteAsync<int>(async _ =>
+        {
+            staleStarted.SetResult();
+            await staleGate.Task;
+            throw new InvalidOperationException("stale-failure");
+        }).AsTask();
+        await staleStarted.Task;
+
+        // 操作 B 失败 → 打开熔断（threshold=1）；resetAfter=0 → 立即半开
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await executor.ExecuteAsync<int>(_ => throw new InvalidOperationException("open")));
+
+        // 探针 P 进入半开态并挂起
+        var probeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int> probe = executor.ExecuteAsync<int>(async _ =>
+        {
+            probeStarted.SetResult();
+            await probeGate.Task;
+            return 1;
+        }).AsTask();
+        await probeStarted.Task;
+
+        // 旧操作 A 此刻最终失败——修复前会无条件清 _halfOpenProbeActive
+        staleGate.SetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await stale);
+
+        // 探针 P 仍在飞：不得放行第二个并发探针（半开单探针不变式）
+        await Assert.ThrowsAsync<CircuitBreakerOpenException>(async () =>
+            await executor.ExecuteAsync<int>(_ => Task.FromResult(2)));
+
+        probeGate.SetResult();
+        int result = await probe;
+        await Assert.That(result).IsEqualTo(1);
     }
 }
 

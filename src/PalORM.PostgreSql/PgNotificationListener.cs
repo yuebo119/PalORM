@@ -141,15 +141,21 @@ public sealed class PgNotificationListener : IAsyncDisposable
         finally
         {
             started.TrySetCanceled(owner.Token);
+            bool ownsDispose;
             lock (_lock)
             {
-                if (ReferenceEquals(_cts, owner))
+                // 引用仍指向 owner = 自然退出（无 Stop 在飞），本方法负责释放；
+                // 引用已被 StopCoreAsync 清空 = Stop 已接管释放权——其 CancelAsync 可能未完成，
+                // 此处 Dispose 会与之并发（CTS 不支持），改由 Stop 在 runTask 结束后释放。
+                ownsDispose = ReferenceEquals(_cts, owner);
+                if (ownsDispose)
                 {
                     _cts = null;
                     _runTask = null;
                 }
             }
-            owner.Dispose();
+            if (ownsDispose)
+                owner.Dispose();
         }
     }
 
@@ -202,7 +208,11 @@ public sealed class PgNotificationListener : IAsyncDisposable
         {
             if (!ReferenceEquals(_cts, owner))
                 return;
+            // 先清引用声明释放权：RunAsync 的 finally 看到引用非 owner 即不再 Dispose，
+            // 消除 Dispose 与未完成 CancelAsync 的并发（CTS 不支持该并发）。
+            _cts = null;
             runTask = _runTask;
+            _runTask = null;
             cancellation = owner.CancelAsync();
         }
 
@@ -213,14 +223,8 @@ public sealed class PgNotificationListener : IAsyncDisposable
             catch (OperationCanceledException) { }
         }
 
-        lock (_lock)
-        {
-            if (ReferenceEquals(_cts, owner))
-            {
-                _cts = null;
-                _runTask = null;
-            }
-        }
+        // CancelAsync 已完成、runTask 已结束——此刻 Dispose 无并发窗口。
+        owner.Dispose();
     }
 
     /// <summary>发送 NOTIFY（参数化 pg_notify()，零 SQL 注入风险）。</summary>

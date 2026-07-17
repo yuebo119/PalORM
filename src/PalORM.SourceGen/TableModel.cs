@@ -49,7 +49,12 @@ internal sealed record TableModel(
                 ?? prop.Name;
 
             bool isKey = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "KeyAttribute" or "Key");
-            bool isAutoIncrement = isKey && prop.Type.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32;
+            // [Key(AutoIncrement = false)] 关闭数值主键的自增推断（雪花 ID 等应用侧赋值主键）
+            bool autoIncrementEnabled = prop.GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.Name is "KeyAttribute" or "Key")?
+                .NamedArguments.FirstOrDefault(na => na.Key == "AutoIncrement").Value.Value is not false;
+            bool isAutoIncrement = isKey && autoIncrementEnabled
+                && prop.Type.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32;
             bool ignoreOnInsert = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "IgnoreOnInsertAttribute" or "IgnoreOnInsert");
             bool isConcurrencyToken = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "ConcurrencyCheckAttribute" or "ConcurrencyCheck");
             bool isTimestamp = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "TimestampAttribute" or "Timestamp");

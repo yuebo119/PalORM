@@ -13,7 +13,6 @@ public sealed class RegistryFragment
     public IReadOnlyDictionary<Type, CommandSqlByDialect> CommandSqlsByDialect { get; init; }
         = FrozenDictionary<Type, CommandSqlByDialect>.Empty;
     public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindInsert { get; init; }
-    public required IReadOnlyDictionary<Type, Action<List<(string Name, object? Value)>, object>> BindInsertValues { get; init; }
     public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindUpdate { get; init; }
     public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindDelete { get; init; }
     public required IReadOnlyDictionary<Type, string> PkColumns { get; init; }
@@ -52,9 +51,6 @@ public static class PalORM_Runtime
 
     /// <summary>类型到 Insert 绑定委托。</summary>
     public static FrozenDictionary<Type, Action<DbCommand, object>> BindInsert => Volatile.Read(ref _state).BindInsert;
-
-    /// <summary>类型 → Insert 值提取委托（零 DbCommand 创建，BulkInsert 高性能路径）。</summary>
-    public static FrozenDictionary<Type, Action<List<(string Name, object? Value)>, object>> BindInsertValues => Volatile.Read(ref _state).BindInsertValues;
 
     /// <summary>类型 → Update 绑定委托。</summary>
     public static FrozenDictionary<Type, Action<DbCommand, object>> BindUpdate => Volatile.Read(ref _state).BindUpdate;
@@ -102,7 +98,6 @@ public static class PalORM_Runtime
             ValidateOptionalKeys(entityTypes, fragment.CommandSqlsByDialect.Keys,
                 nameof(fragment.CommandSqlsByDialect));
             ValidateRequiredKeys(entityTypes, fragment.BindInsert.Keys, nameof(fragment.BindInsert));
-            ValidateRequiredKeys(entityTypes, fragment.BindInsertValues.Keys, nameof(fragment.BindInsertValues));
             ValidateRequiredKeys(entityTypes, fragment.BindUpdate.Keys, nameof(fragment.BindUpdate));
             ValidateRequiredKeys(entityTypes, fragment.BindDelete.Keys, nameof(fragment.BindDelete));
             ValidateRequiredKeys(entityTypes, fragment.PkColumns.Keys, nameof(fragment.PkColumns));
@@ -142,7 +137,6 @@ public static class PalORM_Runtime
                 CommandSqlsByDialect = Merge(
                     current.CommandSqlsByDialect, fragment.CommandSqlsByDialect),
                 BindInsert = Merge(current.BindInsert, fragment.BindInsert),
-                BindInsertValues = Merge(current.BindInsertValues, fragment.BindInsertValues),
                 BindUpdate = Merge(current.BindUpdate, fragment.BindUpdate),
                 BindDelete = Merge(current.BindDelete, fragment.BindDelete),
                 PkColumns = Merge(current.PkColumns, fragment.PkColumns),
@@ -198,7 +192,6 @@ public static class PalORM_Runtime
         internal FrozenDictionary<Type, CommandSqlSet> CommandSqls { get; init; } = FrozenDictionary<Type, CommandSqlSet>.Empty;
         internal FrozenDictionary<Type, CommandSqlByDialect> CommandSqlsByDialect { get; init; } = FrozenDictionary<Type, CommandSqlByDialect>.Empty;
         internal FrozenDictionary<Type, Action<DbCommand, object>> BindInsert { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
-        internal FrozenDictionary<Type, Action<List<(string Name, object? Value)>, object>> BindInsertValues { get; init; } = FrozenDictionary<Type, Action<List<(string Name, object? Value)>, object>>.Empty;
         internal FrozenDictionary<Type, Action<DbCommand, object>> BindUpdate { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
         internal FrozenDictionary<Type, Action<DbCommand, object>> BindDelete { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
         internal FrozenDictionary<Type, string> PkColumns { get; init; } = FrozenDictionary<Type, string>.Empty;

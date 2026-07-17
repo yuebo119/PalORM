@@ -48,12 +48,6 @@ internal static class CommandFactoryEmitter
         GenerateBindDeleteBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
-        // BindInsertValues: 零 DbCommand 路径，BulkInsert 用
-        sb.AppendLine($"    internal static void BindInsertValues(global::System.Collections.Generic.List<(string Name, object? Value)> list, {model.EntityTypeName} entity)");
-        sb.AppendLine("    {");
-        GenerateBindInsertValuesBody(model, sb);
-        sb.AppendLine("    }");
-        sb.AppendLine();
         // SetId: 编译时安全设置自增主键（零反射，替代 MySQL LAST_INSERT_ID 后 Type.GetProperties()）
         sb.AppendLine($"    internal static void SetId({model.EntityTypeName} entity, long id)");
         sb.AppendLine("    {");
@@ -96,18 +90,6 @@ internal static class CommandFactoryEmitter
                 ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
                 : $"(object){providerValueExpr}";
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
-            pi++;
-        }
-    }
-
-    private static void GenerateBindInsertValuesBody(TableModel model, StringBuilder sb)
-    {
-        int pi = 0;
-        foreach (var col in model.Columns.AsSpan())
-        {
-            if (!col.IsInsertable) continue;
-            string valueExpr = GetParameterValueExpression(col);
-            sb.AppendLine($"        list.Add((\"@p{pi}\", {valueExpr}));");
             pi++;
         }
     }
@@ -177,28 +159,7 @@ internal static class CommandFactoryEmitter
     }
 
     internal static string BuildUpdateSql(TableModel model)
-    {
-        ColumnModel[] columns = model.Columns.AsSpan().ToArray();
-        ColumnModel[] primaryKeys = columns.Where(static column => column.IsPrimaryKey).ToArray();
-        ColumnModel[] setColumns = columns.Where(static column =>
-            !column.IsPrimaryKey && !column.IsConcurrencyToken &&
-            !column.IsTimestamp && column.ComputedExpression is null).ToArray();
-        ColumnModel? concurrency = columns.FirstOrDefault(static column => column.IsConcurrencyToken);
-        int parameterIndex = 0;
-        var sets = setColumns.Select(column =>
-            $"{column.ColumnName}=@p{parameterIndex++}").ToList();
-        if (concurrency is not null)
-            sets.Add($"{concurrency.ColumnName}={concurrency.ColumnName} + 1");
-        if (sets.Count == 0)
-            return string.Empty;
-
-        var conditions = primaryKeys.Select(column =>
-            $"{column.ColumnName}=@p{parameterIndex++}").ToList();
-        if (concurrency is not null)
-            conditions.Add($"{concurrency.ColumnName}=@p{parameterIndex}");
-        return $"UPDATE {model.TableName} SET {string.Join(", ", sets)} " +
-            $"WHERE {string.Join(" AND ", conditions)}";
-    }
+        => BuildUpdateSql(model, null);
 
     internal static string BuildUpdateSql(TableModel model, SqlGenerationDialect? dialect)
     {
@@ -249,6 +210,10 @@ internal static class CommandFactoryEmitter
     internal static string BuildInsertReturningSql(
         TableModel model, SqlGenerationDialect? dialect)
     {
+        // MySQL 无 RETURNING：生成空串而非无效 SQL——绕过 SupportsReturningClause 守卫的
+        // 误用会以"空 CommandText"明确失败，不会把非法语句发给服务器。
+        if (dialect == SqlGenerationDialect.MySql)
+            return string.Empty;
         string Quote(string value) => dialect is null
             ? value
             : SqlGeneration.QuoteIdentifier(value, dialect.Value);

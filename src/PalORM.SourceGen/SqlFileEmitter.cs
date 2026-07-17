@@ -72,6 +72,12 @@ internal static class SqlFileEmitter
         {
             return GenerateError(method, $"SQL file not found: {EscapeForCSharp(fullPath)}");
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 文件被占用/无权限：友好诊断而非源生成器崩溃
+            return GenerateError(method,
+                $"SQL file could not be read ({ex.GetType().Name}): {EscapeForCSharp(fullPath)}");
+        }
 
         // ── V_SQL: 条件分支解析 ──
         sqlContent = ResolveProviderSections(sqlContent, targetProvider);
