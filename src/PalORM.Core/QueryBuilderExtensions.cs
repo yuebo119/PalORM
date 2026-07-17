@@ -11,8 +11,9 @@ public static class QueryBuilderExtensions
     {
         using SessionOperationState.SessionOperationLease operationLease =
             builder._operationState.Enter();
+        // 缓存命中返回快照副本：缓存内实例绝不外泄，避免多调用方共享可变列表互相污染。
         if (builder._cacheKey is not null && CacheStore.TryGet(builder._cacheKey, out List<T>? cached) && cached is not null)
-            return cached;
+            return new List<T>(cached);
 
         return await ExecuteQueryAsync(
             builder, ct, operationLease.Owner).ConfigureAwait(false);
@@ -49,7 +50,8 @@ public static class QueryBuilderExtensions
             var list = builder._take.HasValue ? new List<T>(builder._take.Value) : new List<T>();
             while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(builder._factory.Read(reader));
             foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnAfter(context, sw.Elapsed, list.Count);
-            if (builder._cacheKey is not null) CacheStore.Set(builder._cacheKey, list, builder._cacheTtl);
+            // 缓存存入快照副本：返回给调用方的列表与缓存内实例隔离。
+            if (builder._cacheKey is not null) CacheStore.Set(builder._cacheKey, new List<T>(list), builder._cacheTtl);
             outcome = "success";
             return list;
         }

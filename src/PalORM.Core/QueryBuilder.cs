@@ -7,7 +7,7 @@ namespace PalORM;
 /// <summary>类型安全链式查询构建器——struct（值类型）。
 /// <para><b>为什么是 struct</b>: class 方案每次 From&lt;T&gt;() 都会分配堆内存，高 QPS 下增加 GC 压力。</para>
 /// <para><b>为什么执行方法在扩展类</b>: struct 的 async 实例方法会装箱，静态扩展方法可避免该分配。</para>
-/// <para><b>写时复制</b>: struct 复制后共享子句/参数列表；首次修改时自动创建独立副本，隔离后续变更。</para></summary>
+/// <para><b>写时复制</b>: struct 复制后共享子句/参数列表；每次追加子句都创建独立副本，任意时点复制的分支互不污染。</para></summary>
 public struct QueryBuilder<T> where T : class, new()
 {
     internal DbConnection _conn;
@@ -35,7 +35,6 @@ public struct QueryBuilder<T> where T : class, new()
     internal bool _splitQuery;
     internal bool _useReadRoute;
     internal DbTransaction? _transaction;
-    private bool _writable;
 
     internal QueryBuilder(DbConnection conn, SqlDialect dialect, IRowFactory<T> factory,
         List<IQueryInterceptor> interceptors, Func<string, object?, DbParameter> paramFactory,
@@ -562,18 +561,13 @@ public struct QueryBuilder<T> where T : class, new()
     private void AddClause(QueryClauseKind kind, string sql,
         IReadOnlyList<DbParameter>? parameters = null)
     {
-        EnsureWritable();
+        // 无条件写时复制：struct 副本共享列表引用，任何一次性"已复制"标志都会随副本
+        // 一起被拷贝而失效（QUERY-001 场景 B/C）。每次写入先复制，保证副本间完全隔离。
+        _clauses = new List<QueryClause>(_clauses);
+        _parameters = new List<DbParameter>(_parameters);
         IReadOnlyList<DbParameter> ownedParameters = parameters ?? Array.Empty<DbParameter>();
         _clauses.Add(new QueryClause(kind, sql, ownedParameters));
         foreach (DbParameter parameter in ownedParameters) _parameters.Add(parameter);
-    }
-
-    private void EnsureWritable()
-    {
-        if (_writable) return;
-        _clauses = new List<QueryClause>(_clauses);
-        _parameters = new List<DbParameter>(_parameters);
-        _writable = true;
     }
 
     private bool HasClause(QueryClauseKind kind)

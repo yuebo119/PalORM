@@ -75,6 +75,33 @@ public sealed class DbOptionsTests
             return Task.CompletedTask;
         });
     }
+
+    [Test]
+    public async Task ToString_MasksConnectionStrings()
+    {
+        var opts = new DbOptions
+        {
+            ConnectionString = "Host=db;Username=admin;Password=example-primary",
+            ReadConnectionString = "Host=replica;Password=example-replica"
+        };
+
+        string text = opts.ToString();
+
+        await Assert.That(text).DoesNotContain("example-primary");
+        await Assert.That(text).DoesNotContain("example-replica");
+        await Assert.That(text).Contains("***MASKED***");
+    }
+
+    [Test]
+    public async Task ToString_NullReadConnectionString_PrintsNull()
+    {
+        var opts = new DbOptions { ConnectionString = "Host=db;Password=example-pw" };
+
+        string text = opts.ToString();
+
+        await Assert.That(text).DoesNotContain("example-pw");
+        await Assert.That(text).Contains("ReadConnectionString = null");
+    }
 }
 
 public sealed class AnnotationsTests

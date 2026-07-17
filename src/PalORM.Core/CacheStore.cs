@@ -7,13 +7,17 @@ public static class CacheStore
 {
     private static readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
 
-    /// <summary>尝试获取缓存值。</summary>
+    /// <summary>尝试获取缓存值。过期条目在读取时移除，避免无界驻留。</summary>
     public static bool TryGet<T>(string key, out T? value) where T : class
     {
-        if (_cache.TryGetValue(key, out CacheEntry? entry) && !entry.IsExpired())
+        if (_cache.TryGetValue(key, out CacheEntry? entry))
         {
-            value = (T)entry.Value;
-            return true;
+            if (!entry.IsExpired())
+            {
+                value = (T)entry.Value;
+                return true;
+            }
+            _cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry));
         }
         value = default;
         return false;

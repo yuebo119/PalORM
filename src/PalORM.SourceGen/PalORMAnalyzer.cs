@@ -84,12 +84,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Property '{0}' has unsupported type '{1}' or an invalid [Converter]; use a supported provider type and an accessible parameterless converter implementing IValueConverter<{1}, TProvider>",
         "PalORM", DiagnosticSeverity.Error, true);
 
+    public static readonly DiagnosticDescriptor AnnotationNotAppliedToDdl = new(
+        "PALORM017", "Annotation does not participate in DDL generation",
+        "{0} on '{1}' does not participate in migration DDL generation in the current version; MigrateAsync will not create the corresponding schema object",
+        "PalORM", DiagnosticSeverity.Warning, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, SqlFileNotFound, SchemaMismatch, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
-         UnsupportedEntityDeclaration, InvalidValueMapping];
+         UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl];
 
     public override void Initialize(AnalysisContext context)
     {
@@ -165,10 +170,30 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // 收集当前程序集中所有 [Table] 类名
             var assemblyTables = GetAssemblyTableNames(type.ContainingAssembly);
 
+            // PALORM017: [Index] 不参与迁移 DDL（当前版本 MigrateAsync 只执行 CREATE TABLE）
+            foreach (var indexAttr in type.GetAttributes().Where(a =>
+                a.AttributeClass?.Name is "IndexAttribute" or "Index"))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl,
+                    type.Locations[0], "[Index]", type.Name));
+            }
+
             foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
             {
                 if (SourceGenerationValidation.IsNotMapped(member))
                     continue;
+
+                // PALORM017: 不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"
+                var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
+                if (member.GetAttributes().Any(a => a.AttributeClass?.Name is "UniqueAttribute" or "Unique"))
+                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Unique]", member.Name));
+                if (member.GetAttributes().Any(a => a.AttributeClass?.Name is "DefaultValueAttribute" or "DefaultValue"))
+                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[DefaultValue]", member.Name));
+                var columnWithSchemaArgs = member.GetAttributes().FirstOrDefault(a =>
+                    a.AttributeClass?.Name is "ColumnAttribute" or "Column"
+                    && a.NamedArguments.Any(na => na.Key is "Length" or "Precision" or "Scale" or "TypeName" or "StoreAs"));
+                if (columnWithSchemaArgs is not null)
+                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column] schema arguments (Length/Precision/Scale/TypeName/StoreAs)", member.Name));
 
                 // PALORM002: 属性无 [Column] 注解时建议添加
                 bool hasColumn = member.GetAttributes().Any(a =>
@@ -222,6 +247,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 // PALORM003: [ForeignKey] 引用不存在的表
                 var fkAttr = member.GetAttributes().FirstOrDefault(a =>
                     a.AttributeClass?.Name is "ForeignKeyAttribute" or "ForeignKey");
+                if (fkAttr is not null)
+                {
+                    // PALORM017: FK 约束 DDL 当前不被 MigrateAsync 执行
+                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl,
+                        memberLocation, "[ForeignKey]", member.Name));
+                }
                 if (fkAttr?.ConstructorArguments.Length >= 2)
                 {
                     string? refTable = fkAttr.ConstructorArguments[0].Value as string;

@@ -1,4 +1,5 @@
 using PalORM.PostgreSql;
+using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
@@ -17,6 +18,33 @@ public sealed class PostgreSqlIntegrationTests
         ConnectionString = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
             ?? "Host=localhost;Username=postgres;Password=;Database=postgres"
     };
+
+    [Test]
+    public async Task WhereJson_GeneratesQuotedColumnWithBoundPathAndValue()
+    {
+        // SQL 生成不依赖 PG 连接：扩展方法只操作 builder，DryRun 即可验证。
+        await using var db = await TestDb.SqliteAsync();
+        var dry = db.From<Product>()
+            .WhereJson("payload", "name", "Alice")
+            .AsDryRun();
+
+        await Assert.That(dry.Sql).Contains("\"payload\"->>@p0 = @p1");
+        await Assert.That(dry.Parameters.Count).IsEqualTo(2);
+        await Assert.That(dry.Parameters[0].Value).IsEqualTo("name");
+        await Assert.That(dry.Parameters[1].Value).IsEqualTo("Alice");
+    }
+
+    [Test]
+    public async Task WhereJson_QuotesColumnIdentifier_DoubleQuoteEscaped()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        var dry = db.From<Product>()
+            .WhereJson("payload\"x", "k", 1)
+            .AsDryRun();
+
+        // 双写转义：嵌入的 " 不能提前闭合标识符
+        await Assert.That(dry.Sql).Contains("\"payload\"\"x\"->>@p0");
+    }
 
     [Test]
     [Property("Category", "ExternalDatabase")]
