@@ -15,15 +15,23 @@
 
 ## P1：评分可复现 · P2：零bug≠满分(无论证最高8) · P3：自适应视角选择
 
-**P3 自适应规则**——从历史审计中读取各视角发现率，动态分配：
-- 读取最近 3 份审计报告 → 提取每个视角"是否发现" → 计算发现率
+**P3 自适应规则**——数据载体为 [`perspective-stats.md`](perspective-stats.md)（本目录），每轮审计后必须更新，否则下轮无数据可读：
+- 读取 `perspective-stats.md` 最近 3 轮记录 → 每个视角"是否发现" → 计算发现率
 - 高发现率(≥50%)视角 → 本轮必选(最多3个)
 - 零发现率(连续3轮)视角 → 降为"可选"·本轮不强制
-- 保留至少 1 个"探索性"视角——来自最近 3 轮未使用的类别
+- 保留至少 1 个"探索性"视角——来自最近 3 轮未使用的类别（账本已列候选）
+- 已证伪的虚高轮次（如 2026-07-10）"零发现"不计入分母
 
 ## 三层评估
 
-### 层1(30%): 6流 + N0视角池(36个·6类)
+### 层1(30%): 7流 + N0视角池(36个·6类)
+
+> 第七流「生成语义流」为 PalORM 专属：本项目最大的独特风险面是**编译期生成物与运行时假设的一致性**——普通六流都以"手写代码"为对象，覆盖不到这条缝。
+
+| 流 | 检查焦点 | 方法 |
+|------|---------|------|
+| 架构流·安全流·资源流·并发流·错误流·AOT流 | 同通用定义（见下表） | 逐方法读取 |
+| **生成语义流（第七流）** | ① 生成 SQL 列序 = RowFactory 读取序号 = BindInsert 参数序（三序一致）② 三方言 CommandSqlsByDialect 语义等价（LIMIT/引用符/RETURNING 差异是否被 DataSession 正确消费）③ Emitter 变更后 Verify 快照是否同步 ④ RegistryFragment 键集 = PalORM_Runtime.ValidateRequiredKeys 要求集 ⑤ 生成代码对 SoftDelete/TenantAware/Converter/OwnedJson 特性组合的笛卡尔覆盖 | 对每个 Emitter：Read 模板 → 找一个真实生成的 `*.g.cs`（obj/Generated）比对 → 与消费点（DataSession/Provider）交叉验证 |
 
 | 类别 | 视角 | 选择规则 |
 |------|------|---------|
@@ -37,17 +45,19 @@
 ### 层2(40%): 10维度×可计数证据
 每维度含具体数字证据+取舍论证。评分封顶：层1发现→层2降分。
 
-### 层3(30%): PalORM 专项检查（7项）
+### 层3(30%): PalORM 专项检查（9项）
 
 | # | 检查项 | 说明 |
 |---|--------|------|
 | 1 | Provider 插件依赖方向 | Core→零外部依赖 · Providers→只依赖Core接口+ADO.NET · SourceGen→只依赖Core |
 | 2 | API 完整性 | 对照 `docs/API参考.md`（113 API，112 实现 + 1 设计移除）· 公共API是否有XML文档注释 |
 | 3 | AOT 兼容 | IsAotCompatible=true · STJ源生成 · 零反射 · 零MakeGenericType · 零Expression.Compile() |
-| 4 | 源生成器正确性 | RowFactory生成完整 · TypeMapper生成完整 · Migration生成完整 |
+| 4 | 源生成器正确性 | RowFactory生成完整 · TypeMapper生成完整 · Migration生成完整 · **生成语义流（第七流）的发现在此计分** |
 | 5 | FormattableString 参数化 | 所有SQL使用 FormattableString · 零字符串拼接SQL · 零SQL注入风险 |
 | 6 | 302 坑防御 | 对照 `docs/踩坑目录.md` 逐坑验证 |
 | 7 | 文档-代码-注释三方一致 | 公共API变更是否同步更新 docs/ + XML doc + 行内注释 |
+| 8 | **struct 值语义** | QueryBuilder/ValueStringBuilder 等 struct 类型：复制后共享可变引用字段是否有写时复制或防御（QUERY-001 教训）· struct 内 lambda 捕获模式（CS1673，见误判 P5）· `in`/`ref readonly` 参数传递避免防御性复制 |
+| 9 | **会话状态机完整性** | SessionOperationState 门禁覆盖所有新增公共入口（新 API 是否接入 operation state）· 事务归属 AsyncLocal 流转 · Dispose 路径主异常保留 |
 
 ## 风险评分引擎(四维加权)
 

@@ -110,6 +110,25 @@ else
     fail 7 '误判知识库模式数不足' "仅 $kb_count 条，预期 ≥14"
 fi
 
+# V8 视角发现率账本存在且含六流记录（P3 自适应的数据载体）
+if [ -f .ai/audit-system/perspective-stats.md ] \
+    && [ "$(grep -cE '^\| (架构|安全|资源|并发|错误|AOT) ?流' .ai/audit-system/perspective-stats.md)" -eq 6 ]; then
+    pass 8 '视角发现率账本存在且六流记录完整'
+else
+    fail 8 '视角发现率账本缺失或六流记录不全' '.ai/audit-system/perspective-stats.md'
+fi
+
+# V9 README 文件地图与实际目录一致（地图里列出的文件必须存在）
+missing=""
+for f in $(grep -oE '(audit-system|gate-system|refine-system|review-system-v2)[a-z0-9/-]*\.md' .ai/README.md | sort -u); do
+    [ -f ".ai/$f" ] || missing="$missing .ai/$f"
+done
+if [ -z "$missing" ]; then
+    pass 9 'README 文件地图与实际一致'
+else
+    fail 9 'README 文件地图指向不存在的文件' "$missing"
+fi
+
 printf '\n通过：%s  失败：%s  总计：%s\n' "$PASSED" "$FAILED" "$((PASSED + FAILED))"
 printf '═══════ 校验完成 ═══════\n'
 

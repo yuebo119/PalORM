@@ -129,6 +129,44 @@ aot_generated=$(grep -rn -E 'Compile[[:space:]]+(Include|Remove)=.*\.g\.cs' test
 [ -z "$aot_generated" ] && aot_generated_count=0 || aot_generated_count=$(printf '%s\n' "$aot_generated" | wc -l | tr -d ' ')
 check_zero G23 'AOT 项目不得手工编译生成文件' "$aot_generated_count"
 
+# G24：库代码每个 await 必须 ConfigureAwait(false)。跨行统计（await 与 ConfigureAwait 可能不同行）。
+# 例外：await using / await foreach（作用于资源与流，无 ConfigureAwait 位点）、await Task.Yield()（YieldAwaitable 无该重载）。
+ca_missing=0
+while IFS= read -r file; do
+    diff=$(perl -0777 -ne '
+        $c += () = /\bawait\s+(?!using\b|foreach\b|Task\.Yield\(\))/gs;
+        $cf += () = /ConfigureAwait\(false\)/g;
+        END { print $c - $cf }
+    ' "$file")
+    if [ "$diff" -gt 0 ]; then
+        printf 'ConfigureAwait 缺失 %s 处：%s\n' "$diff" "$file"
+        ca_missing=$((ca_missing + diff))
+    fi
+done < <(git ls-files 'src/**/*.cs')
+check_zero G24 '库代码 await 必须 ConfigureAwait(false)' "$ca_missing"
+
+# G25：公共 async API 必须带 CancellationToken 参数（跨行签名，Dispose 系与显式接口实现豁免）。
+ct_missing=0
+while IFS= read -r file; do
+    matches=$(perl -0777 -ne '
+        while (/\bpublic\s+(?:static\s+)?(?:async\s+)?(?:Task|ValueTask)(?:<[^;{()]*>)?\s+([A-Za-z_]\w*)\s*(?:<[^()]*>)?\s*\(([^)]*)\)/gs) {
+            my ($name, $params) = ($1, $2);
+            next if $name =~ /^(DisposeAsync|DisposeAsyncCore)$/;
+            # StopAsync：2.0.1 已发布签名，加可选 ct 为 binary-breaking；3.0 对齐 IHostedService 惯例（见整改账本 API-001）
+            next if $name eq "StopAsync";
+            next if $params =~ /CancellationToken/;
+            print "$name\n";
+        }
+    ' "$file")
+    if [ -n "$matches" ]; then
+        while IFS= read -r m; do
+            printf 'CancellationToken 缺失：%s 中的 %s\n' "$file" "$m"
+            ct_missing=$((ct_missing + 1))
+        done <<< "$matches"
+    fi
+done < <(git ls-files 'src/**/*.cs')
+check_zero G25 '公共 async API 必须带 CancellationToken' "$ct_missing"
+
 printf '\n通过：%s  警告：%s  失败：%s  总计：%s\n' "$PASSED" "$WARNED" "$FAILED" "$((PASSED + WARNED + FAILED))"
 printf '═══════ 扫描完成 ═══════\n'
 
