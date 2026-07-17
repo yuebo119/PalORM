@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>PalORM.Integration.Tests</RootNamespace>
+    <AssemblyName>PalORM.Integration.Tests</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.Sqlite\PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.MySql\PalORM.MySql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.PostgreSql\PalORM.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.Testing\PalORM.Testing.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="TUnit.Assertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+
+  <!-- 显示源生成器产物（调试用） -->
+  <PropertyGroup>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+</Project>

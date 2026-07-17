@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>PalORM.Core.Tests</RootNamespace>
+    <AssemblyName>PalORM.Core.Tests</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.Sqlite\PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.PostgreSql\PalORM.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.MySql\PalORM.MySql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="TUnit.Assertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+</Project>

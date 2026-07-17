@@ -1,0 +1,47 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <!-- ADO.NET Providers -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.10" />
+    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.3.6" />
+    <PackageVersion Include="Npgsql" Version="9.0.3" />
+    <PackageVersion Include="MySqlConnector" Version="2.4.0" />
+  </ItemGroup>
+
+  <!-- 基础依赖 (BCL 自带，无需 NuGet 引用) -->
+  <!-- Microsoft.Extensions.Logging.Abstractions 已包含在 .NET 11 共享框架中 -->
+
+  <!-- 源生成器 -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.3.0" />
+  </ItemGroup>
+
+  <!-- 测试 -->
+  <ItemGroup>
+    <PackageVersion Include="TUnit" Version="0.19.24" />
+    <PackageVersion Include="TUnit.Assertions" Version="0.7.9" />
+    <PackageVersion Include="Verify.TUnit" Version="29.1.0" />
+    <PackageVersion Include="Verify.SourceGenerators" Version="2.5.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+  </ItemGroup>
+
+  <!-- 基准 -->
+  <ItemGroup>
+    <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
+    <PackageVersion Include="Dapper" Version="2.1.66" />
+    <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
+  </ItemGroup>
+
+  <!-- 源生成器测试（Phase 2 启用） -->
+  <!--
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.SourceGenerators.Testing" Version="1.1.2" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" Version="1.1.2" />
+  </ItemGroup>
+  -->
+</Project>

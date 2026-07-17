@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalORM.AotTest</RootNamespace>
+    <AssemblyName>PalORM.AotTest</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.Sqlite\PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\PalORM.AotModels.First\PalORM.AotModels.First.csproj" />
+    <ProjectReference Include="..\PalORM.AotModels.Second\PalORM.AotModels.Second.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

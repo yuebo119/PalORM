@@ -1,0 +1,64 @@
+# PalORM EditorConfig
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{csproj,props,targets,xml,config,json}]
+indent_size = 2
+
+[*.cs]
+# 命名规则
+dotnet_naming_rule.private_fields_camel_case.severity = warning
+dotnet_naming_rule.private_fields_camel_case.symbols = private_fields
+dotnet_naming_rule.private_fields_camel_case.style = camel_case_underscore
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.camel_case_underscore.capitalization = camel_case
+dotnet_naming_style.camel_case_underscore.required_prefix = _
+
+# 代码风格
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+csharp_prefer_braces = true:suggestion
+dotnet_diagnostic.IDE0011.severity = suggestion
+dotnet_diagnostic.IDE0008.severity = suggestion
+dotnet_diagnostic.IDE0046.severity = suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:silent
+csharp_style_expression_bodied_properties = when_on_single_line:silent
+csharp_style_pattern_matching_over_as_with_null_check = true:suggestion
+csharp_style_prefer_switch_expression = true:suggestion
+csharp_style_prefer_null_check_over_type_check = true:suggestion
+
+# 性能
+csharp_style_prefer_extended_property_pattern = true:suggestion
+csharp_style_prefer_range_operator = true:suggestion
+csharp_style_prefer_tuple_swap = true:suggestion
+
+# 分析器
+dotnet_diagnostic.CA2007.severity = warning    # ConfigureAwait
+dotnet_diagnostic.CA1849.severity = error       # async void
+dotnet_diagnostic.IDE0058.severity = silent     # 未使用的表达式值
+
+# 文件范围命名空间 (C# 10+)
+csharp_style_namespace_declarations = file_scoped:warning
+
+[test/**/*.cs]
+# 测试名使用 Method_Scenario_Expectation，夹具保留紧凑布局；不影响生产代码。
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.IDE0055.severity = none
+
+[bench/**/*.cs]
+# Benchmark 名称包含场景分隔符，基准夹具保留紧凑布局。
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.IDE0055.severity = none
+
+[*.g.cs]
+generated_code = true
+dotnet_analyzer_diagnostic.severity = none

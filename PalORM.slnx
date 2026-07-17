@@ -1,0 +1,26 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PalORM.Core/PalORM.Core.csproj" />
+    <Project Path="src/PalORM.MySql/PalORM.MySql.csproj" />
+    <Project Path="src/PalORM.PostgreSql/PalORM.PostgreSql.csproj" />
+    <Project Path="src/PalORM.SourceGen/PalORM.SourceGen.csproj" />
+    <Project Path="src/PalORM.Sqlite/PalORM.Sqlite.csproj" />
+    <Project Path="src/PalORM.Testing/PalORM.Testing.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/PalORM.AotModels.First/PalORM.AotModels.First.csproj" />
+    <Project Path="test/PalORM.AotModels.Second/PalORM.AotModels.Second.csproj" />
+    <Project Path="test/PalORM.AotTest.MySql/PalORM.AotTest.MySql.csproj" />
+    <Project Path="test/PalORM.AotTest.Pg/PalORM.AotTest.Pg.csproj" />
+    <Project Path="test/PalORM.AotTest/PalORM.AotTest.csproj" />
+    <Project Path="test/PalORM.Core.Tests/PalORM.Core.Tests.csproj" />
+    <Project Path="test/PalORM.Integration.Tests/PalORM.Integration.Tests.csproj" />
+    <Project Path="test/PalORM.SourceGen.Tests/PalORM.SourceGen.Tests.csproj" />
+  </Folder>
+  <Folder Name="/bench/">
+    <Project Path="bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/PalORM.Scaffold/PalORM.Scaffold.csproj" />
+  </Folder>
+</Solution>

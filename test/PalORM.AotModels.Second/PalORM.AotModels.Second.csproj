@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>PalORM.AotModels.Second</RootNamespace>
+    <AssemblyName>PalORM.AotModels.Second</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

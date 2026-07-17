@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalORM.PackageConsumer.Aot</RootNamespace>
+    <AssemblyName>PalORM.PackageConsumer.Aot</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PalORM.Core" Version="2.0.0" />
+    <PackageReference Include="PalORM.Sqlite" Version="2.0.0" />
+    <PackageReference Include="PalORM.SourceGen" Version="2.0.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

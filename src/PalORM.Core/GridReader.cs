@@ -1,0 +1,186 @@
+using System.Data.Common;
+using System.Runtime.ExceptionServices;
+
+namespace PalORM;
+
+/// <summary>多结果集读取器——QueryMultipleAsync 返回。
+/// <para><b>为什么自己管理生命周期</b>: DbDataReader 在使用期间必须保持连接打开。
+/// GridReader 同时拥有 DbCommand 和 DbDataReader——DisposeAsync 时先关 reader 再关 command。</para>
+/// <para>同一实例仅允许一个活动读取；释放会等待活动读取完成，并拒绝后续读取。</para></summary>
+public sealed class GridReader : IAsyncDisposable
+{
+    private readonly DbDataReader _reader;
+    private readonly DbCommand _command;
+    private readonly ConnectionLease _lease;
+    private readonly SessionOperationState.SessionOperationLease _operation;
+    private readonly QueryObservation? _observation;
+    private readonly object _sync = new();
+    private TaskCompletionSource? _activeRead;
+    private Task? _disposeTask;
+    private int _state;
+
+    internal GridReader(DbDataReader reader, DbCommand command, ConnectionLease lease,
+        QueryObservation? observation = null,
+        SessionOperationState.SessionOperationLease operation = default)
+    {
+        _reader = reader;
+        _command = command;
+        _lease = lease;
+        _operation = operation;
+        _observation = observation;
+    }
+
+    /// <summary>读取当前结果集。</summary>
+    public async ValueTask<List<T>> ReadAsync<T>(CancellationToken ct = default) where T : class, new()
+    {
+        EnterRead();
+        try
+        {
+            if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
+                throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
+
+            var list = new List<T>();
+            IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
+            while (await _reader.ReadAsync(ct).ConfigureAwait(false))
+                list.Add(typedFactory.Read(_reader));
+
+            await _reader.NextResultAsync(ct).ConfigureAwait(false);
+            return list;
+        }
+        catch (Exception exception)
+        {
+            _observation?.Complete(exception is OperationCanceledException && ct.IsCancellationRequested
+                ? "cancelled"
+                : "error");
+            throw;
+        }
+        finally
+        {
+            ExitRead();
+        }
+    }
+
+    /// <summary>读取当前结果集第一行（不物化全量）。</summary>
+    public async ValueTask<T?> ReadFirstAsync<T>(CancellationToken ct = default) where T : class, new()
+    {
+        EnterRead();
+        try
+        {
+            if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
+                throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
+
+            IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
+            if (await _reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                T result = typedFactory.Read(_reader);
+                await _reader.NextResultAsync(ct).ConfigureAwait(false);
+                return result;
+            }
+            await _reader.NextResultAsync(ct).ConfigureAwait(false);
+            return default;
+        }
+        catch (Exception exception)
+        {
+            _observation?.Complete(exception is OperationCanceledException && ct.IsCancellationRequested
+                ? "cancelled"
+                : "error");
+            throw;
+        }
+        finally
+        {
+            ExitRead();
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        TaskCompletionSource? completion = null;
+        Task activeRead = Task.CompletedTask;
+        lock (_sync)
+        {
+            if (_disposeTask is not null) return new ValueTask(_disposeTask);
+            _state = 1;
+            activeRead = _activeRead?.Task ?? Task.CompletedTask;
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _disposeTask = completion.Task;
+        }
+
+        _ = DisposeAndCompleteAsync(activeRead, completion);
+        return new ValueTask(completion.Task);
+    }
+
+    private void EnterRead()
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_state != 0, this);
+            if (_activeRead is not null)
+                throw new InvalidOperationException("GridReader already has an active read operation.");
+            _activeRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
+    private void ExitRead()
+    {
+        TaskCompletionSource? completion;
+        lock (_sync)
+        {
+            completion = _activeRead;
+            _activeRead = null;
+        }
+        completion?.TrySetResult();
+    }
+
+    private async Task DisposeAndCompleteAsync(
+        Task activeRead,
+        TaskCompletionSource completion)
+    {
+        try
+        {
+            await DisposeCoreAsync(activeRead).ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
+        }
+    }
+
+    private async Task DisposeCoreAsync(Task activeRead)
+    {
+        await activeRead.ConfigureAwait(false);
+        Exception? cleanupException = null;
+        try { await _reader.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception exception) { cleanupException = exception; }
+
+        try { await _command.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception exception)
+        {
+            if (cleanupException is null) cleanupException = exception;
+            else cleanupException.Data["PalORM.CommandCleanupException"] = exception;
+        }
+
+        try { await _lease.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception exception)
+        {
+            if (cleanupException is null) cleanupException = exception;
+            else cleanupException.Data["PalORM.ConnectionCleanupException"] = exception;
+        }
+
+        try { await _operation.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception exception)
+        {
+            if (cleanupException is null) cleanupException = exception;
+            else cleanupException.Data["PalORM.OperationCleanupException"] = exception;
+        }
+
+        lock (_sync) _state = 2;
+        if (cleanupException is not null)
+        {
+            _observation?.Complete("error");
+            ExceptionDispatchInfo.Capture(cleanupException).Throw();
+        }
+
+        _observation?.Complete("success");
+    }
+}

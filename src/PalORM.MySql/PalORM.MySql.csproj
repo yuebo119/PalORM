@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>PalORM.MySql</RootNamespace>
+    <AssemblyName>PalORM.MySql</AssemblyName>
+    <Description>PalORM MySQL Provider — MySqlConnector 适配</Description>
+    <PackageTags>ORM;MySQL;MySqlConnector;AOT;micro-ORM</PackageTags>
+    <Version>2.0.0</Version>
+    <NoWarn>$(NoWarn);CA2100;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalORM.Core\PalORM.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MySqlConnector" />
+  </ItemGroup>
+</Project>

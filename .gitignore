@@ -1,0 +1,42 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.vs/
+.vscode/
+.idea/
+*.DotSettings.user
+
+## NuGet
+*.nupkg
+**/packages/*
+
+## Test results
+TestResults/
+*.coverage
+.coverage/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Build artifacts
+BenchmarkDotNet.Artifacts/
+nupkgs/
+
+## Source generator output
+**/Generated/
+*.g.cs
+
+## Local tool data / AI assistants
+.ai/
+.cortex/
+.github/*
+!.github/workflows/
+!.github/workflows/**
+.trellis/
+.zcode/
+.serena/
+data/

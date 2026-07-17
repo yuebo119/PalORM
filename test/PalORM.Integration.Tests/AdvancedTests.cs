@@ -1,0 +1,48 @@
+using PalORM.Sqlite;
+using PalORM.Testing;
+
+namespace PalORM.Integration.Tests;
+
+[Table("versioned")] public partial class VersionedEntity { [Key] public long Id { get; set; } [Column("name")] public string Name { get; set; } = ""; [Column("version")] [ConcurrencyCheck] public long Version { get; set; } }
+[SoftDelete] [Table("soft_deletable")] public partial class SoftDeletableEntity { [Key] public long Id { get; set; } [Column("name")] public string Name { get; set; } = ""; [Column("deleted_at")] public string? DeletedAt { get; set; } }
+[TenantAware] [Table("tenant_data")] public partial class TenantEntity { [Key] public long Id { get; set; } [Column("tenant_id")] public long TenantId { get; set; } [Column("value")] public string Value { get; set; } = ""; }
+
+public sealed class AdvancedFeatureTests
+{
+    [Test] public async Task ConcurrencyCheck_UpdateSucceeds() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var e=await db.InsertAsync(new VersionedEntity{Name="V1",Version=0}); e.Name="V2"; int rows=await db.UpdateAsync(e); await Assert.That(rows).IsEqualTo(1); await Assert.That(e.Version).IsEqualTo(1); }
+    [Test] public async Task ConcurrencyCheck_StaleVersionThrows() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var inserted=await db.InsertAsync(new VersionedEntity{Name="V1",Version=0}); var first=await db.GetAsync<VersionedEntity>(inserted.Id); var stale=await db.GetAsync<VersionedEntity>(inserted.Id); first!.Name="First"; await db.UpdateAsync(first); stale!.Name="Stale"; await Assert.That(async()=>await db.UpdateAsync(stale)).Throws<ConcurrencyConflictException>(); await Assert.That(stale.Version).IsEqualTo(0); }
+    [Test] public async Task SoftDelete_DefaultQueriesHideRowAndIgnoreFiltersRevealsIt() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var e=await db.InsertAsync(new SoftDeletableEntity{Name="SD"}); await db.DeleteAsync<SoftDeletableEntity>(e.Id); await Assert.That(await db.GetAsync<SoftDeletableEntity>(e.Id)).IsNull(); await Assert.That((await db.From<SoftDeletableEntity>().ToListAsync()).Count).IsEqualTo(0); await Assert.That(await db.CountAsync<SoftDeletableEntity>()).IsEqualTo(0); db.IgnoreFilters(); var found=await db.GetAsync<SoftDeletableEntity>(e.Id); await Assert.That(found).IsNotNull(); await Assert.That(found!.DeletedAt).IsNotNull(); }
+    [Test] public async Task SoftDelete_DefaultAggregatesExcludeDeletedRows() { await using var db=await TestDb.SqliteAsync(); await db.MigrateAsync(); var kept=await db.InsertAsync(new SoftDeletableEntity{Name="Kept"}); var deleted=await db.InsertAsync(new SoftDeletableEntity{Name="Deleted"}); await db.DeleteAsync<SoftDeletableEntity>(deleted.Id); await Assert.That(await db.SumAsync<SoftDeletableEntity>($"Id")).IsEqualTo(kept.Id); await Assert.That(await db.MaxAsync<SoftDeletableEntity,long>($"Id")).IsEqualTo(kept.Id); await Assert.That(await db.MinAsync<SoftDeletableEntity,long>($"Id")).IsEqualTo(kept.Id); await Assert.That(await db.AvgAsync<SoftDeletableEntity>($"Id")).IsEqualTo(kept.Id); }
+    [Test] public async Task TenantAware_Filters() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); db.WithTenant(1L); await db.InsertAsync(new TenantEntity{TenantId=1,Value="T1"}); await Assert.That((await db.From<TenantEntity>().ToListAsync()).Count).IsEqualTo(1); }
+    [Test] public async Task BulkInsertAsync_UsesAmbientTransaction() { await using var db=await TestDb.SqliteAsync(); await db.MigrateAsync(); await using var transaction=await db.BeginTransactionAsync(); await db.BulkInsertAsync([new Product{Name="Rollback",Price=1m,Stock=1}]); await transaction.RollbackAsync(); await Assert.That(await db.CountAsync<Product>()).IsEqualTo(0); }
+    [Test] public async Task BulkMergeAsync_RepeatedKeysUpdateWithoutAddingRows() { await using var db=await TestDb.SqliteAsync(); await db.MigrateAsync(); Product[] items=[new Product{Id=101,Name="A",Price=1m,Stock=1},new Product{Id=102,Name="B",Price=2m,Stock=2}]; await db.BulkMergeAsync(items); items[0].Name="Updated"; await db.BulkMergeAsync(items); await Assert.That(await db.CountAsync<Product>()).IsEqualTo(2); await Assert.That((await db.GetAsync<Product>(101L))!.Name).IsEqualTo("Updated"); }
+    [Test] public async Task SeedAsync_IsIdempotentAndRequiresStableKeys() { await using var db=await TestDb.SqliteAsync(); await db.MigrateAsync(); Product[] items=[new Product{Id=201,Name="Seed",Price=1m,Stock=1}]; await db.SeedAsync(items); items[0].Name="SeedUpdated"; await db.SeedAsync(items); await Assert.That(await db.CountAsync<Product>()).IsEqualTo(1); await Assert.That((await db.GetAsync<Product>(201L))!.Name).IsEqualTo("SeedUpdated"); await Assert.That(async()=>await db.SeedAsync([new Product{Name="Invalid",Price=1m}])).Throws<InvalidOperationException>(); }
+    [Test] public async Task Savepoint_Rollback() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); using var t=await db.BeginTransactionAsync(); await db.InsertAsync(new Product{Name="SP1",Price=1m,Stock=0}); await db.SavepointAsync(t,"sp1"); await db.InsertAsync(new Product{Name="SP2",Price=2m,Stock=0}); await db.RollbackToAsync(t,"sp1"); await t.CommitAsync(); }
+    [Test] public async Task StoredProc_Builder() { await using var db = await TestDb.SqliteAsync(); await Assert.That(db.StoredProc("test").WithParam("@p0","hello")).IsNotNull(); }
+    [Test] public async Task GetRawConnection_Open() { await using var db = await TestDb.SqliteAsync(); await Assert.That(db.GetRawConnection().State).IsEqualTo(System.Data.ConnectionState.Open); }
+    [Test] public async Task QueryAsyncEnumerable_Streams() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="ST",Price=1m,Stock=0}); int c=0; await foreach(var p in db.QueryAsyncEnumerable<Product>($"SELECT * FROM products")) c++; await Assert.That(c).IsGreaterThanOrEqualTo(1); }
+    [Test] public async Task WithCache_CachesResults() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="C1",Price=1m,Stock=0}); var r1=await db.From<Product>().WithCache("t1",TimeSpan.FromMinutes(1)).ToListAsync(); var r2=await db.From<Product>().WithCache("t1",TimeSpan.FromMinutes(1)).ToListAsync(); await Assert.That(r1.Count).IsEqualTo(r2.Count); }
+    [Test] public async Task Raw_LiteralInjection() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="R1",Price=1m,Stock=0}); var r=await db.From<Product>().Where($"name = {"R1"}").Raw("LIMIT 1").ToListAsync(); await Assert.That(r.Count).IsEqualTo(1); }
+    [Test] public async Task AsPrepared_MarksQuery() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var r=await db.From<Product>().AsPrepared().ToListAsync(); await Assert.That(r).IsNotNull(); }
+    [Test] public async Task Interceptor_FiresCallbacks() { int b=0,a=0; var opt=new DbOptions{ConnectionString="Data Source=:memory:",Interceptors=[new TestInterceptor(()=>b++,()=>a++)]}; await using var db=await DataSession<SqliteProvider>.CreateAsync(opt); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="I1",Price=1m,Stock=0}); await db.From<Product>().ToListAsync(); await Assert.That(b).IsEqualTo(1); await Assert.That(a).IsEqualTo(1); }
+    [Test] public async Task AddInterceptor_OrdersDynamicInterceptorsByPriority() { var order=new List<int>(); await using var db=await TestDb.SqliteAsync(); await db.MigrateAsync(); db.AddInterceptor(new OrderedInterceptor(200,order)).AddInterceptor(new OrderedInterceptor(10,order)); await db.From<Product>().ToListAsync(); await Assert.That(order).IsEquivalentTo([10,200]); }
+
+
+    [Test] public async Task CountAsync_ReturnsCount() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="C1",Price=1m,Stock=0}); await db.InsertAsync(new Product{Name="C2",Price=2m,Stock=0}); long c=await db.CountAsync<Product>(); await Assert.That(c).IsEqualTo(2); }
+    [Test] public async Task WindowOver_DryRun_GeneratesSQL() { await using var db = await TestDb.SqliteAsync(); var dry=db.From<Product>().UnsafeWindowOver("ROW_NUMBER()","PARTITION BY stock ORDER BY price DESC").AsDryRun(); await Assert.That(dry.Sql).Contains("ROW_NUMBER"); await Assert.That(dry.Sql).Contains("OVER"); }
+}
+
+internal sealed class TestInterceptor(Action onBefore, Action onAfter) : IQueryInterceptor
+{
+    public void OnBefore(QueryContext ctx) => onBefore();
+    public void OnAfter(QueryContext ctx, TimeSpan elapsed, int count) => onAfter();
+    public void OnError(QueryContext ctx, Exception ex) { }
+}
+
+internal sealed class OrderedInterceptor(int priority, List<int> order) : IQueryInterceptor
+{
+    public int Priority => priority;
+    public void OnBefore(QueryContext context) => order.Add(priority);
+    public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) { }
+    public void OnError(QueryContext context, Exception exception) { }
+}
