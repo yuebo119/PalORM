@@ -298,7 +298,7 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 | [架构设计](docs/架构设计.md) | 源生成器 · 数据流 · 17 项决策 |
 | [踩坑目录](docs/踩坑目录.md) | 302 项跨语言 ORM 陷阱 |
 | [AOT 部署指南](docs/AOT部署指南.md) | 发布配置与验证 |
-| [编码规范](docs/编码规范.md) | 116 条可执行规则 |
+| [编码规范](docs/编码规范.md) | 167 条 STD 规则 × 17 类 |
 | [变更日志](docs/变更日志.md) | 版本交付记录 |
 
 ---
