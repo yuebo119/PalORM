@@ -31,6 +31,7 @@
 | PERF-001 | P2 | 修复 Benchmark 和固定时间阈值 | 已完成 | Benchmark 修复 GlobalSetup+Shared Cache；产出查询 ~1.11× Raw ADO |
 | AOT-001 | P1 | 扩展三 Provider 与 NuGet consumer AOT 矩阵 | 已完成 | 三 Provider publish + SQLite 原生运行 + NuGet consumer 2.0.1 AOT 原生运行通过；PG/MySQL 服务容器待 CI |
 | AUD-001 | P0 | 凭据安全事件 | 未处理 | 用户决定仅记录；G9 必须继续阻断 |
+| API-001 | P3 | `PgNotificationListener.StopAsync()` 无 CancellationToken 参数 | 已记录·待 3.0 | G25 门禁豁免在案：2.0.1 已发布签名，追加可选参数属 binary-breaking（同 2.0.0 变更先例）；3.0 对齐 `IHostedService.StopAsync(CancellationToken)` 惯例时移除豁免 |
 
 > **AUD-001 追加（2026-07-17 晚）**：7-17 的 Git 仓库重建（f0df771）把含真实凭据的旧版 `scripts/set-test-env.sh` 重新带入了全部历史提交——此前审计声称的"历史已重写清除"在重建仓库中不再成立。本轮已完成仓库侧再整改：脚本改为从未跟踪的 `.env.test` 加载且不回显值，新增 `scripts/.env.test.example` 占位模板，`.gitignore` 排除 `.env.test`，G9 转绿并经故障注入负向验证。**历史提交中的凭据仍在**（8 个提交全部含旧脚本），需要用户决策：历史重写（无 remote，影响面为本地 8 提交）+ 数据库侧凭据轮换（192.168.x.x 的 PG/MySQL 账号）。
 

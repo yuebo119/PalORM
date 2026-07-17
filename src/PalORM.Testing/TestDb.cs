@@ -12,7 +12,7 @@ public static class TestDb
     public static async Task<DataSession<SqliteProvider>> SqliteAsync(CancellationToken ct = default)
     {
         var options = new DbOptions { ConnectionString = "Data Source=:memory:" };
-        return await DataSession<SqliteProvider>.CreateAsync(options, ct);
+        return await DataSession<SqliteProvider>.CreateAsync(options, ct).ConfigureAwait(false);
     }
 
     /// <summary>创建 PostgreSQL 数据会话。
@@ -21,7 +21,7 @@ public static class TestDb
     {
         string cs = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
             ?? "Host=localhost;Username=postgres;Password=;Database=postgres";
-        return await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct);
+        return await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct).ConfigureAwait(false);
     }
 
     /// <summary>创建 MySQL 数据会话。
@@ -30,7 +30,7 @@ public static class TestDb
     {
         string cs = Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
             ?? "Server=localhost;User=root;Password=;Database=mysql";
-        return await DataSession<MySqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct);
+        return await DataSession<MySqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct).ConfigureAwait(false);
     }
 
     /// <summary>从内存行创建测试数据源——使用真实 RowFactory 物化，避免 Mock 假绿。</summary>

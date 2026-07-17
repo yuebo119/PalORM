@@ -107,6 +107,23 @@ P0→P1→P2 顺序。每项执行后 `dotnet build` 验证。每批完成后 `d
 
 ## 精炼效果追踪
 
+### 当前热点基线（2026-07-17 · refine-scan.sh 实测 · 供下轮精炼定位）
+
+| 项 | 命中 | 精炼态度 |
+|:--:|:--:|------|
+| O3 .ToArray/.ToList | 47 处 | 热路径（DataSession 查询链）逐个评估 Span 化；冷路径（初始化）不动 |
+| M9 lock 语句 | 33 处 | SessionOperationState/Resilience/CacheStore 集中——`Lock` 类型迁移需并发测试全绿，🟡 |
+| O9 .ToString | 24 处 | 仅 Enum→字符串场景改 switch/nameof；诊断消息里的 ToString 不动 |
+| M1 new List<> | 22 处 | 集合表达式 `[]` 直改，🟢 |
+| A6 SuppressMessage | 19 处 | 逐项核对 Justification 是否仍必要（历史上 WithPool 修复曾自动消除 1 项） |
+| M8 struct 声明 | 16 处 | QueryBuilder 已是 struct+写时复制；其余 readonly record struct 评估必须过 QueryBuilderValueSemanticsTests |
+| O8 object 参数 | 10 处 | BulkDeleteAsync(object[]) 是公共 API——泛型化属重构不属精炼，跳过 |
+| O1 new Dictionary | 4 处 | 只读场景才 Frozen 化；RegistryFragment 构造期字典是发布前中间态，不动 |
+
+基线刷新方式：`bash scripts/refine-scan.sh` 后更新本表。命中数明显变化（±30%）说明代码有大规模演化，先跑 /audit 再精炼。
+
+### 单项记录格式
+
 每个操作执行后记录：
 ```
 操作: M2 (主构造函数)

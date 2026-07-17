@@ -80,18 +80,29 @@ bash scripts/review-snapshot.sh
 
 **输出**：项目结构脑图（此阶段**不产出结论**）。
 
-### 阶段 2：逐行审计（6 流）
+### 阶段 2：逐行审计（7 流）
 
 | 审计流 | 检查项 | PalORM 专项 |
 |--------|--------|-----------|
 | **架构流** | Provider 依赖方向·命名空间一致性·循环依赖检查 | 对照 docs/架构设计.md |
 | **安全流** | SQL 注入·输入校验·密钥泄露 | FormattableString 参数化查询 |
 | **资源流** | IDisposable/IAsyncDisposable·DbConnection释放·连接池 | ADO.NET 连接管理 |
-| **并发流** | lock/共享状态·竞态条件·async void | Provider 线程安全 |
-| **错误流** | catch(Exception) 是否过滤 OCE·异常类型正确 | AOT 兼容异常 |
+| **并发流** | lock/共享状态·竞态条件·async void | Provider 线程安全·SessionOperationState 门禁覆盖 |
+| **错误流** | catch(Exception) 是否过滤 OCE·异常类型正确 | AOT 兼容异常·主异常保留（清理异常挂 Exception.Data） |
 | **AOT流** | IsAotCompatible·STJ源生成·零反射·零Expression.Compile() | 源生成器覆盖完整性 |
+| **生成语义流** | 仅当 diff 涉及 `src/PalORM.SourceGen/` 时激活（见下方专项路径） | Emitter↔生成物↔消费点三点一线 |
 
 **每个流完成后，产出**：发现清单（ID + 位置 + 可信度标注）+ 明确标注**未覆盖盲区**。
+
+### 源生成器变更专项评审路径（diff 触及 SourceGen 时强制）
+
+> 教训来源：Emitter 一行改动会同时改变 N 个实体 × 3 方言的生成物，diff 本身看不出爆炸半径。
+
+1. **快照先行**：`dotnet test test/PalORM.SourceGen.Tests` —— Verify 快照未同步 = 评审直接 REQUEST_CHANGES；快照 diff 本身是评审对象（逐个 `.received/.verified` 对比）。
+2. **三序一致核对**：改动涉及列集合逻辑（IsInsertable/列序/predicate）时，对同一实体核对三处生成物顺序一致：CREATE/INSERT SQL 列序 = RowFactory `GetXxx(n)` 序号 = BindInsert 参数序。任何一处独立演化即 P0（静默错列数据）。
+3. **三方言核对**：改动 SQL 生成时，对照 `CommandSqlsByDialect` 三份产物核对方言差异点（引用符 `"` vs `` ` ``、RETURNING 有无、LIMIT 语法）是否仍被 DataSession/Provider 消费端正确处理。
+4. **特性组合抽样**：SoftDelete × TenantAware × Converter × OwnedJson 至少抽 2 个组合实体核对生成物（AotTest 宿主中有现成组合实体）。
+5. **诊断不退化**：PALORM0xx 诊断触发条件改动必须有对应负向测试（报告诊断且不级联生成错误）。
 
 ### 阶段 3：交叉验证
 
