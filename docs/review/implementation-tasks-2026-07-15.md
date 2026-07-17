@@ -59,7 +59,7 @@
 ## 阶段 5 基线与反向验证
 
 - S1：阶段开始时 Core 71/71、无外部服务集成 119/119。GridReader 新增用例先得到 72/74，复现 Dispose 未等待读取和重复 Dispose 未共享异常；DataSession 新增用例得到 77/81，复现同会话重叠操作、事务 sibling flow、嵌套事务和 Dispose 竞态。
-- S2：新增共享 `SessionOperationState`，直接 CRUD、QueryBuilder、Bulk、StoredProc 与 GridReader 共用单消费者门禁和事务状态；GridReader 持有 lease 到释放。`WithTransaction` 使用逻辑 owner 和 flow 完成信号，拒绝 sibling/nested，允许 callback 内顺序操作；Dispose 等待活动命令、GridReader 和事务 flow。事务发布、UseTransaction、执行时解析与 Dispose 状态切换在同一把锁内协调；Bulk 内部事务绑定 operation capability；缓存命中也进入 operation gate；StoredProc 加入当前事务；函数式事务在 commit/rollback 前自动收口遗留 GridReader；事务 rollback/resource/dispose 清理异常不覆盖 action/commit 主异常。Core 104/104、SourceGen 51/51、无外部服务集成 119/119。
+- S2：新增共享 `SessionOperationState`，直接 CRUD、QueryBuilder、Bulk、StoredProc 与 GridReader 共用单消费者门禁和事务状态；GridReader 持有 lease 到释放。`WithTransaction` 使用逻辑 owner 和 flow 完成信号，拒绝 sibling/nested，允许 callback 内顺序操作；Dispose 等待活动命令、GridReader 和事务 flow。事务发布、UseTransaction、执行时解析与 Dispose 状态切换在同一把锁内协调；Bulk 内部事务绑定 operation capability；缓存命中也进入 operation gate；StoredProc 加入当前事务；函数式事务在 commit/rollback 前自动收口遗留 GridReader；事务 rollback/resource/dispose 清理异常不覆盖 action/commit 主异常。Core 106/106、SourceGen 51/51、无外部服务集成 119/119。
 - S3：撤回 operation fail-fast 后同会话、QueryBuilder、child flow 和 GridReader 路径退化；撤回事务 flow 等待后 Dispose 提前关闭连接；撤回 GridReader active-read 等待后释放提前完成；撤回 disposal task 共享后第二次 Dispose 丢失首次异常；撤回事务 cleanup 保护后 action 主异常被覆盖；撤回事务发布协调后事务建立与 Dispose 竞态返回失效事务；撤回缓存 gate 后已释放会话仍返回缓存；撤回事务 callback 在 Disposing 的续行许可后后续操作失败；撤回 Bulk operation-owned 事务许可后批量操作被 Dispose 中断；撤回 UseTransaction 状态门禁后已释放会话仍可改事务；撤回 StoredProc 事务解析后命令脱离当前事务；撤回 QueryBuilder 执行时事务解析后事务前创建的 builder 不加入后续事务；撤回 transaction flow 资源登记后遗留 GridReader 在 commit gate 失败。十三项均恢复正式实现。
 
 ## 未完成阻断
