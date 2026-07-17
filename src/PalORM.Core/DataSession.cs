@@ -97,7 +97,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             ? !callerToken.IsCancellationRequested
             : TProvider.IsTransient(exception);
 
-    /// <summary>创建查询构建器——每次调用创建新的 struct QueryBuilder(零堆分配)。
+    /// <summary>创建查询构建器——每次调用创建新的 struct QueryBuilder（值类型）。
     /// <para><b>为什么是 struct</b>: 避免每次查询的堆分配。高 QPS 场景(10K+)每秒省 ~2MB 堆分配。</para>
     /// <para><b>为什么每次新建</b>: GORM #7437——条件残留在构建器实例上导致数据错误。全新构建器保证条件隔离。</para>
     /// <para>自动附加: 租户过滤([TenantAware])、软删除过滤([SoftDelete])；会话事务在执行时解析。</para></summary>

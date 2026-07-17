@@ -4,10 +4,10 @@ using System.Runtime.CompilerServices;
 
 namespace PalORM;
 
-/// <summary>类型安全链式查询构建器——struct（零堆分配）。
+/// <summary>类型安全链式查询构建器——struct（值类型）。
 /// <para><b>为什么是 struct</b>: class 方案每次 From&lt;T&gt;() 都会分配堆内存，高 QPS 下增加 GC 压力。</para>
 /// <para><b>为什么执行方法在扩展类</b>: struct 的 async 实例方法会装箱，静态扩展方法可避免该分配。</para>
-/// <para><b>List 共享</b>: struct 复制时查询子句列表仍共享；执行期克隆会创建独立列表，避免分页修改原查询。</para></summary>
+/// <para><b>写时复制</b>: struct 复制后共享子句/参数列表；首次修改时自动创建独立副本，隔离后续变更。</para></summary>
 public struct QueryBuilder<T> where T : class, new()
 {
     internal DbConnection _conn;

@@ -20,7 +20,7 @@ PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运�
 |------|------|
 | **编译时安全** | `FormattableString` 参数化 — 编译时提取参数值，杜绝 SQL 注入 |
 | **原子元数据注册** | SourceGen 生成 `RegistryFragment`；运行时一次发布不可变快照，外部只读 |
-| **struct QueryBuilder** | 值类型 — `From<T>()` 零堆分配 |
+| **struct QueryBuilder** | 值类型 — `From<T>()` 返回 stack-allocated struct |
 | **真 AOT** | 零 IL 抑制 — 三 Provider publish 通过；SQLite 已原生运行，PostgreSQL/MySQL 待 CI |
 | **Provider 原生优化** | PG Binary COPY · MySQL/SQLite batched INSERT |
 | **UPSERT 单次往返** | `INSERT ON CONFLICT DO UPDATE` / `ON DUPLICATE KEY UPDATE` |

@@ -3,7 +3,7 @@
 > 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 服务容器运行待 CI。
 > 当前测试: Core 111/111、SourceGen 51/51、无外部服务集成 119/119；PostgreSQL/MySQL 的 4 项待 CI 验证
 > 构建: 全解决方案 Release 严格构建 0 warning / 0 error · Native AOT: 三 Provider publish 通过，SQLite 与 NuGet consumer 原生运行通过
-> QueryBuilder: struct（零堆分配）· 113 API 中 112 个已实现，1 个因设计冲突移除
+> QueryBuilder: struct（值类型）· 113 API 中 112 个已实现，1 个因设计冲突移除
 
 ## P0 — 核心功能 (92 项，1 项因设计冲突移除)
 
@@ -53,7 +53,7 @@
 
 | # | API | 实现 |
 |---|------|------|
-| QB1 | `From<T>()` → `QueryBuilder<T>` | `DataSession.cs:77` — 返回 struct（零堆分配） |
+| QB1 | `From<T>()` → `QueryBuilder<T>` | `DataSession.cs` — 返回 struct（值类型） |
 | QB2 | `.ToListAsync(ct)` | `QueryBuilderExtensions.cs` — 扩展方法 |
 | QB3 | `.FirstAsync(ct)`/`.SingleAsync(ct)` | `QueryBuilderExtensions.cs` — 通过 LIMIT 走统一租约执行管线 |
 | QB4 | `.FirstOrDefaultAsync(ct)`/`.SingleOrDefaultAsync(ct)` | `QueryBuilderExtensions.cs` |
@@ -220,7 +220,7 @@ Source Generator 会为每个模型程序集生成 `RegistryFragment`，并通�
 
 | 决策 | 说明 |
 |------|------|
-| `QueryBuilder<T>` 为 struct | 零堆分配，执行方法分离为扩展方法 |
+| `QueryBuilder<T>` 为 struct | 值类型，执行方法分离为扩展方法 |
 | `ValueStringBuilder` | 栈分配替代 StringBuilder，ArrayPool 兜底 |
 | `CrudMetadata` 字典合并 | 单次 `TryGetValue` 替代三次独立查找 |
 | UPSERT 单次往返 | `ON CONFLICT DO UPDATE` / `ON DUPLICATE KEY UPDATE` |
