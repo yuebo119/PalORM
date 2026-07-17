@@ -96,6 +96,16 @@ public sealed record DbOptions
         return Environment.GetEnvironmentVariable(envName)
             ?? throw new InvalidOperationException($"Environment variable '{envName}' not set.");
     }
+
+    /// <summary>脱敏输出——连接串含凭据，record 合成的 ToString 会打印全部属性明文。
+    /// 覆写后连接串以掩码代替，日志/异常/调试器场景不泄露密码。</summary>
+    public override string ToString()
+        => $"DbOptions {{ ConnectionString = ***MASKED***, " +
+           $"ReadConnectionString = {(ReadConnectionString is null ? "null" : "***MASKED***")}, " +
+           $"ConnectionTimeout = {ConnectionTimeout}, CommandTimeout = {CommandTimeout}, " +
+           $"MaxRetries = {MaxRetries}, MaxPoolSize = {MaxPoolSize}, " +
+           $"CircuitBreakerThreshold = {CircuitBreakerThreshold}, " +
+           $"NamingConvention = {NamingConvention} }}";
 }
 
 /// <summary>命名策略。</summary>

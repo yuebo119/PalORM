@@ -709,7 +709,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             : throw new InvalidOperationException($"QuerySingleAsync: expected 1 row, got {results.Count}.");
     }
 
-    /// <summary>直查标量。</summary>
+    /// <summary>直查标量。数据库返回类型与 <typeparamref name="T"/> 不同时按 Convert.ChangeType 转换
+    /// （PG COUNT 返回 long、MySQL SUM 返回 decimal 等常见情形）；无法转换时抛 InvalidCastException 而非静默返回 default。</summary>
     public async ValueTask<T?> ScalarAsync<T>(FormattableString sql, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
@@ -718,7 +719,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
         BindFormattableParameters(cmd, sql);
         object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
-        return result is T t ? t : default;
+        if (result is null or DBNull) return default;
+        if (result is T t) return t;
+        return (T)Convert.ChangeType(result, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>执行任意 DDL/DML。</summary>
@@ -980,8 +983,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     [Obsolete("返回值具有独立连接所有权。请使用 From<T>().ForRead() 让查询执行管线管理连接。")]
     public async ValueTask<DataSession<TProvider>> ForRead(CancellationToken ct = default)
     {
-        string? readConnectionString = _options.ResolveReadConnectionString();
-        readConnectionString ??= _options.ResolveConnectionString();
+        // 保留 $ENV: 间接引用原样传递，不物化为明文——CreateAsync 内部按需解析。
+        // 物化会让刻意用环境变量避免明文驻留的配置在新 DbOptions 实例中出现明文密码。
+        string? readConnectionString = _options.ReadConnectionString ?? _options.ConnectionString;
         DbOptions readOptions = _options with { ConnectionString = readConnectionString, ReadConnectionString = null };
         return await CreateAsync(readOptions, ct).ConfigureAwait(false);
     }

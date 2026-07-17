@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 服务容器运行待 CI。
-> 当前测试: Core 111/111、SourceGen 51/51、无外部服务集成 119/119；PostgreSQL/MySQL 的 4 项待 CI 验证
+> 当前测试: Core 124/124、SourceGen 62/62、无外部服务集成 122/122；PostgreSQL/MySQL 的 4 项待 CI 验证
 > 构建: 全解决方案 Release 严格构建 0 warning / 0 error · Native AOT: 三 Provider publish 通过，SQLite 与 NuGet consumer 原生运行通过
 > QueryBuilder: struct（值类型）· 113 API 中 112 个已实现，1 个因设计冲突移除
 
@@ -14,9 +14,9 @@
 | M1 | `MigrateAsync()` | `DataSession.cs` | 优先从 `CreateTableSqlByDialect` 选择 SQLite/PostgreSQL/MySQL 编译期 DDL；旧片段回退 `CreateTableSql` |
 | M2 | `SeedAsync<T>(IEnumerable<T>)` | `DataSession_Bulk.cs` | 要求非默认稳定主键，事务内复用源生成 Upsert，重复执行更新原行 |
 | M3 | `ValidateSchemaAsync<T>()` → `List<string>` | `DataSession.cs:314` | `TProvider.ConfigureSchemaCommand()` 配置安全命令及列名序号 |
-| M4 | `[Unique]` / `[Index]` | `Annotations.cs:115-123` | 单列索引 + 复合索引 |
+| M4 | `[Unique]` / `[Index]` | `Annotations.cs:115-123` | 注解可声明；当前版本不参与迁移 DDL，编译期报 PALORM017 |
 | M5 | `DiffAsync<T>()` → `List<string>` | `DataSession.cs:342` | CI 检查用，格式化差异 |
-| M6 | `[Index(name,cols,unique)]` | `Annotations.cs:113` | 复合索引，`Unique` 属性 |
+| M6 | `[Index(name,cols,unique)]` | `Annotations.cs:113` | 复合索引声明；同 M4，PALORM017 告知不生成 DDL |
 
 ### 编译时验证 (6/6)
 
@@ -45,7 +45,7 @@
 | BA8 | `[Column(Length=128)]` | `ColumnAttribute.Length` |
 | BA9 | `[Column(Precision=10,Scale=2)]` | `ColumnAttribute.Precision`/`Scale` |
 | BA10 | `[Required]` | `Annotations.cs:59` |
-| BA11 | `[DefaultValue("NOW()")]` | `Annotations.cs:63` |
+| BA11 | `[DefaultValue("NOW()")]` | `Annotations.cs:63`——注解可声明；不参与 DDL，编译期报 PALORM017 |
 | BA12 | `[Timestamp]`/`[RowVersion]` | `Annotations.cs:70` |
 | BA13 | `[Column(TypeName="varchar")]` | `ColumnAttribute.TypeName` |
 
@@ -198,7 +198,7 @@ Source Generator 会为每个模型程序集生成 `RegistryFragment`，并通�
 
 | # | API | 实现 |
 |---|------|------|
-| PG1 | `WhereJson("key->>'name'={v}")` | `PostgreSqlExtensions.cs` |
+| PG1 | `WhereJson(column, path, value)` | `PostgreSqlExtensions.cs`——列名经 QuoteIdentifier，path/value 绑定参数，生成 `"col"->>@p0 = @p1` |
 | PG2 | `PgNotificationListener` / `NotifyAsync()` | 瞬态断线创建新连接并重新 LISTEN；`OnError` 报告后台终止；null payload 以显式 text 参数发送 |
 | PR1 | `IDbProvider.IsTransient(Exception)` | Provider 强类型瞬时故障判定；SQLite 仅接受 `BUSY/LOCKED` |
 

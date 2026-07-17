@@ -23,7 +23,7 @@
 | LIFE-001 | P2 | 三 Provider 保留批量写主异常 | 已完成 | SQLite/MySQL 真实 Provider 矩阵覆盖 probe 无主异常、row/main 双清理、执行+rollback+transaction cleanup；异常按资源独立附加；PG probe/rowCommand 同步保护 |
 | GRID-001 | P2 | GridReader 单消费者和幂等释放 | 已完成 | 单活动读取；Dispose 等待读取并拒绝新读；reader/command/connection/session lease 全部尝试；重复 Dispose 共享 Task 和异常 |
 | TX-001 | P2 | DataSession 并发操作和事务串扰 fail-fast | 已完成 | DataSession、QueryBuilder、Bulk、StoredProc 共用 operation state；重叠操作与派生 child flow fail-fast；事务拒绝 sibling/nested；Dispose 等待事务 scope；主异常保留 |
-| QUERY-001 | P1 | QueryBuilder struct 分支形成隔离快照 | 已完成 | EnsureWritable 写时复制；S3 撤回后 4/5 退化；Core 111/111 +5 |
+| QUERY-001 | P1 | QueryBuilder struct 分支形成隔离快照 | 已完成（二次修复） | ~~EnsureWritable 写时复制~~ 2026-07-17 评审（ITM-101）证实一次性 `_writable` 标志随 struct 复制被拷贝，场景 B（复制已写入 builder）与场景 C（SoftDelete/TenantAware 实体出生即可写）仍污染。二次修复：AddClause 无条件写时复制；补 4 个场景 B/C 用例并反向验证（撤回修复 → 用例确定性失败）；Core 124/124 |
 | GATE-001 | P1 | G12 改为 Roslyn 语法级门禁 | 已完成 | gate-check.sh G12 PASS；clean/fail/recover 夹具完备 |
 | DOC-001 | P1 | G9、Core 依赖和门禁文档恢复真实状态 | 已完成 | G9 标为 FAIL/AUD-001；Core 依赖更新为 BCL-only |
 | DOC-002 | P2 | 规则、API 和测试计数建立机械校验 | 已完成 | doc-consistency-check.sh 8 项交叉验证；test-quality-scripts.sh 含故障恢复夹具 |
