@@ -117,7 +117,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             : null;
         var builder = new QueryBuilder<T>(_conn, TProvider.Dialect, (IRowFactory<T>)factory!,
             _interceptors, TProvider.CreateParameter, TProvider.QuoteIdentifier, tableName,
-            columnNames, _options.CommandTimeout, _operationState, readConnFactory);
+            columnNames, _options.CommandTimeout, _operationState, readConnFactory,
+            _options.QueryCache);
 
         // 自动附加租户过滤
         EntityFeatures features = GetEntityFeatures<T>();
@@ -545,7 +546,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     // ─── 迁移 ────────────────────────────────────────────
 
-    /// <summary>从编译时生成的 DDL 执行迁移——零运行时反射。</summary>
+    /// <summary>从编译时生成的 DDL 执行迁移——零运行时反射。
+    /// 建表后执行 [Index]/[Unique] 索引 DDL（ADR-B）；SQLite/PG 走 IF NOT EXISTS，
+    /// MySQL 靠 IsDuplicateSchemaObject 识别重名索引实现幂等。</summary>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
@@ -559,6 +562,26 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             cmd.CommandText = ddl;
             cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+            if (!PalORM_Runtime.CreateIndexSqlByDialect.TryGetValue(
+                    kv.Key, out CreateIndexSqlSet indexSqls))
+            {
+                continue;
+            }
+            foreach (string indexDdl in indexSqls.Get(TProvider.Dialect))
+            {
+                await using DbCommand indexCmd = CreateCommand();
+                indexCmd.CommandText = indexDdl;
+                indexCmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+                try
+                {
+                    await indexCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+                catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
+                {
+                    // MySQL 重名索引（1061）= 已建过，幂等跳过
+                }
+            }
         }
     }
 
@@ -671,8 +694,16 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         IRowFactory<T> tf = (IRowFactory<T>)factory;
+        bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (firstRow)
+            {
+                ValidateColumnOrder<T>(reader);
+                firstRow = false;
+            }
             yield return tf.Read(reader);
+        }
     }
 
     // ─── 查询缓存 ────────────────────────────────────────
@@ -718,9 +749,39 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<T>();
         IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
+        bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (firstRow)
+            {
+                ValidateColumnOrder<T>(reader);
+                firstRow = false;
+            }
             list.Add(typedFactory.Read(reader));
+        }
         return list;
+    }
+
+    /// <summary>ADR-A 首行列名校验：结果列名与实体声明序列名不匹配即抛异常，
+    /// 把"同型列静默交换数据"变为明确失败。仅首行执行，热路径零开销。</summary>
+    private void ValidateColumnOrder<T>(DbDataReader reader) where T : class, new()
+    {
+        if (!_options.ValidateQueryColumnOrder) return;
+        if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? expected))
+            return;
+        int count = Math.Min(reader.FieldCount, expected.Count);
+        for (int i = 0; i < count; i++)
+        {
+            string actual = reader.GetName(i);
+            if (!string.Equals(actual, expected[i], StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Query column order mismatch for '{typeof(T).Name}': result column {i} is '{actual}' " +
+                    $"but entity declaration order expects '{expected[i]}'. Ordinal mapping would silently " +
+                    "misassign data. List columns explicitly in entity declaration order, or set " +
+                    "DbOptions.ValidateQueryColumnOrder = false if you use aliases and guarantee order yourself.");
+            }
+        }
     }
 
     /// <summary>直查首行——无结果抛 InvalidOperationException。</summary>

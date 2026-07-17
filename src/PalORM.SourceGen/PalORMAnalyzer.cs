@@ -187,23 +187,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // 收集当前程序集中所有 [Table] 类名
             var assemblyTables = GetAssemblyTableNames(type.ContainingAssembly);
 
-            // PALORM017: [Index] 不参与迁移 DDL（当前版本 MigrateAsync 只执行 CREATE TABLE）
-            foreach (var indexAttr in type.GetAttributes().Where(a =>
-                a.AttributeClass?.Name is "IndexAttribute" or "Index"))
-            {
-                ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl,
-                    type.Locations[0], "[Index]", type.Name));
-            }
-
             foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
             {
                 if (SourceGenerationValidation.IsNotMapped(member))
                     continue;
 
                 // PALORM017: 不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"
+                // （ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；FK/DefaultValue/Column 架构参数仍告警）
                 var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
-                if (member.GetAttributes().Any(a => a.AttributeClass?.Name is "UniqueAttribute" or "Unique"))
-                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Unique]", member.Name));
                 if (member.GetAttributes().Any(a => a.AttributeClass?.Name is "DefaultValueAttribute" or "DefaultValue"))
                     ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[DefaultValue]", member.Name));
                 var columnWithSchemaArgs = member.GetAttributes().FirstOrDefault(a =>

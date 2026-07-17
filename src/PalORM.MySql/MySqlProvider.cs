@@ -46,6 +46,10 @@ public sealed class MySqlProvider : IDbProvider
     public static bool SupportsReturningClause => false;
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
+    /// <summary>MySQL 无 CREATE INDEX IF NOT EXISTS：迁移幂等靠识别 1061 重名索引错误。</summary>
+    public static bool IsDuplicateSchemaObject(Exception exception)
+        => exception is MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyName };
+
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
         ArgumentNullException.ThrowIfNull(command);

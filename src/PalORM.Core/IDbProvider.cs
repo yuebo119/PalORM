@@ -56,6 +56,10 @@ public interface IDbProvider
     static virtual Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
         => Task.CompletedTask;
 
+    /// <summary>判断 DDL 异常是否为"架构对象已存在"（迁移幂等兜底）。
+    /// 默认 false；无 CREATE INDEX IF NOT EXISTS 语法的方言（MySQL）覆盖为真实判定。</summary>
+    static virtual bool IsDuplicateSchemaObject(Exception exception) => false;
+
     /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。</summary>
     static virtual Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
         IReadOnlyList<T> entities, int batchSize, CancellationToken ct)

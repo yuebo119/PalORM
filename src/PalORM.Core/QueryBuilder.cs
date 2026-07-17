@@ -35,16 +35,19 @@ public struct QueryBuilder<T> where T : class, new()
     internal bool _splitQuery;
     internal bool _useReadRoute;
     internal DbTransaction? _transaction;
+    internal readonly IQueryCache _queryCache;
 
     internal QueryBuilder(DbConnection conn, SqlDialect dialect, IRowFactory<T> factory,
         List<IQueryInterceptor> interceptors, Func<string, object?, DbParameter> paramFactory,
         Func<string, string> quoteIdentifier, string tableName,
         IReadOnlyList<string> columnNames, TimeSpan commandTimeout,
         SessionOperationState operationState,
-        Func<DbConnection>? readConnFactory = null)
+        Func<DbConnection>? readConnFactory = null,
+        IQueryCache? queryCache = null)
     {
         _conn = conn;
         _readConnFactory = readConnFactory;
+        _queryCache = queryCache ?? CacheStore.Default;
         _dialect = dialect;
         _quoteIdentifier = quoteIdentifier;
         _factory = factory;
@@ -385,7 +388,7 @@ public struct QueryBuilder<T> where T : class, new()
     {
         var clone = new QueryBuilder<T>(_conn, _dialect, _factory, _interceptors, _paramFactory,
             _quoteIdentifier, _tableName, _columnNames, _commandTimeout,
-            _operationState, _readConnFactory)
+            _operationState, _readConnFactory, _queryCache)
         {
             _selectColumns = _selectColumns,
             _take = _take,
