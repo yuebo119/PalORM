@@ -146,4 +146,26 @@ if [ "$setup_count" -ne "$global_json_count" ]; then
 fi
 printf 'PASS SDK 固定与 CI 一致性\n'
 
+printf '\n─── doc-consistency ───\n'
+if bash scripts/doc-consistency-check.sh > "$TMP/doc-pass.log"; then
+    printf 'PASS doc-consistency 8/8\n'
+else
+    printf 'FAIL doc-consistency 未通过\n'
+    exit 1
+fi
+# 制造一个故障夹具：临时写入过期计数
+cp docs/架构设计.md "$TMP/faulty-arch.md"
+sed -i 's/Core 111\/111/Core 71\/71/' docs/架构设计.md
+if bash scripts/doc-consistency-check.sh > "$TMP/doc-fail.log" 2>&1; then
+    cp "$TMP/faulty-arch.md" docs/架构设计.md
+    printf 'FAIL doc-consistency 过期计数未导致失败\n'
+    exit 1
+fi
+cp "$TMP/faulty-arch.md" docs/架构设计.md
+if ! bash scripts/doc-consistency-check.sh > "$TMP/doc-recover.log"; then
+    printf 'FAIL doc-consistency 恢复后未通过\n'
+    exit 1
+fi
+printf 'PASS doc-consistency 故障与恢复\n'
+
 printf '\n质量脚本回归夹具全部通过。\n'

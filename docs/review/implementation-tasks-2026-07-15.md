@@ -23,10 +23,10 @@
 | LIFE-001 | P2 | 三 Provider 保留批量写主异常 | 已完成 | SQLite/MySQL 真实 Provider 矩阵覆盖 probe 无主异常、row/main 双清理、执行+rollback+transaction cleanup；异常按资源独立附加；PG probe/rowCommand 同步保护 |
 | GRID-001 | P2 | GridReader 单消费者和幂等释放 | 已完成 | 单活动读取；Dispose 等待读取并拒绝新读；reader/command/connection/session lease 全部尝试；重复 Dispose 共享 Task 和异常 |
 | TX-001 | P2 | DataSession 并发操作和事务串扰 fail-fast | 已完成 | DataSession、QueryBuilder、Bulk、StoredProc 共用 operation state；重叠操作与派生 child flow fail-fast；事务拒绝 sibling/nested；Dispose 等待事务 scope；主异常保留 |
-| QUERY-001 | P1 | QueryBuilder struct 分支形成隔离快照 | 待实施 | — |
-| GATE-001 | P1 | G12 改为 Roslyn 语法级门禁 | 待实施 | — |
-| DOC-001 | P1 | G9、Core 依赖和门禁文档恢复真实状态 | 待实施 | — |
-| DOC-002 | P2 | 规则、API 和测试计数建立机械校验 | 待实施 | — |
+| QUERY-001 | P1 | QueryBuilder struct 分支形成隔离快照 | 已完成 | EnsureWritable 写时复制；S3 撤回后 4/5 退化；Core 111/111 +5 |
+| GATE-001 | P1 | G12 改为 Roslyn 语法级门禁 | 已完成 | gate-check.sh G12 PASS；clean/fail/recover 夹具完备 |
+| DOC-001 | P1 | G9、Core 依赖和门禁文档恢复真实状态 | 已完成 | G9 标为 FAIL/AUD-001；Core 依赖更新为 BCL-only |
+| DOC-002 | P2 | 规则、API 和测试计数建立机械校验 | 已完成 | doc-consistency-check.sh 8 项交叉验证；test-quality-scripts.sh 含故障恢复夹具 |
 | DOC-003 | P2 | 收敛跨 Provider 时间精度与 offset 语义 | 待实施 | PostgreSQL/MySQL 最多保存微秒级 UTC 瞬时；现有 100ns/Ticks 完全一致声明需修正并以服务容器往返验证 |
 | PERF-001 | P2 | 修复 Benchmark 和固定时间阈值 | 待实施 | — |
 | AOT-001 | P1 | 扩展三 Provider 与 NuGet consumer AOT 矩阵 | 待实施 | — |
