@@ -13,6 +13,7 @@ public interface IDbProvider
     static abstract string Name { get; }
 
     /// <summary>参数占位符前缀（统一使用 @）。</summary>
+    [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause。3.0 移除。")]
     static abstract char ParameterPrefix { get; }
 
     /// <summary>SQL 方言标识。</summary>
@@ -31,6 +32,7 @@ public interface IDbProvider
     static abstract string QuoteQualifiedIdentifier(string? schema, string identifier);
 
     /// <summary>LIMIT/OFFSET 子句。不同数据库语法不同。</summary>
+    [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause（按 SqlDialect 分支）。3.0 移除。")]
     static abstract string GetLimitOffsetClause(int? limit, int? offset);
 
     /// <summary>是否支持 RETURNING 子句（PG/SQLite ✅，MySQL ❌）。</summary>
@@ -48,6 +50,11 @@ public interface IDbProvider
     /// <summary>判断数据库异常是否属于可安全重试的瞬时故障。</summary>
     static virtual bool IsTransient(Exception exception)
         => exception is DbException { IsTransient: true };
+
+    /// <summary>连接打开后的一次性初始化钩子（如 SQLite 的 PRAGMA 配置）。默认无操作。
+    /// 由 DataSession.CreateAsync 在连接打开后、会话可用前调用；取消与连接超时保护对其生效。</summary>
+    static virtual Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
+        => Task.CompletedTask;
 
     /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。</summary>
     static virtual Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,

@@ -54,13 +54,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 cts.CancelAfter(options.ConnectionTimeout);
                 await connection.OpenAsync(cts.Token).ConfigureAwait(false);
 
-                // SQLite: 开启 FK 约束 + WAL 模式
-                if (TProvider.Name == "SQLite")
-                {
-                    await using var command = connection.CreateCommand();
-                    command.CommandText = "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL";
-                    await command.ExecuteNonQueryAsync(CancellationToken.None).ConfigureAwait(false);
-                }
+                // Provider 初始化钩子（SQLite: PRAGMA foreign_keys/WAL）。
+                // 与 OpenAsync 共享连接超时和调用方取消——初始化被锁阻塞时不再无限等待。
+                await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
 
                 var interceptors = options.Interceptors?.ToList() ?? [];
                 var session = new DataSession<TProvider>(connection, options, interceptors);
@@ -76,7 +72,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                     connection = null;
                 }
                 TimeSpan delay = options.RetryBackoff?.Invoke(attempt)
-                    ?? TimeSpan.FromMilliseconds(100 << attempt);
+                    ?? ResilienceExecutor.GetDefaultBackoff(attempt);
                 await Task.Delay(delay, ct).ConfigureAwait(false);
             }
             finally
@@ -128,13 +124,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         if (!_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)
             builder.AddDefaultFilter($"{TProvider.QuoteIdentifier("deleted_at")} IS NULL");
         if (_tenantId is not null && !_ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
-            builder.Where($"tenant_id = {_tenantId}");
+        {
+            // 列名 quote 与软删过滤对齐（quote 后不含 {}，可安全进入复合格式串文本段）
+            builder.Where(System.Runtime.CompilerServices.FormattableStringFactory.Create(
+                $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}", _tenantId));
+        }
         return builder;
     }
 
     // ─── CRUD ────────────────────────────────────────────
 
-    /// <summary>插入实体，返回带自增 ID 的实体；零可插入列在访问数据库前明确失败。</summary>
+    /// <summary>插入实体，返回带自增 ID 的实体；零可插入列在访问数据库前明确失败。
+    /// <para><b>跨方言差异</b>: PG/SQLite 经 RETURNING 返回完整行——含 DB 默认值与 [Computed] 列；
+    /// MySQL 无 RETURNING，仅回填自增 ID，其余属性保持传入值。需要 DB 计算列的最新值时请在插入后 GetAsync 重查。</para></summary>
     public ValueTask<T> InsertAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
         => InsertCoreAsync(entity, null, ct);
@@ -167,6 +169,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 分支2: MySQL —— 无 RETURNING, INSERT + SELECT LAST_INSERT_ID 合并为单次 ExecuteScalarAsync
         else
         {
+            // 显式方言守卫："无 RETURNING" 不等于 "MySQL 语法"。
+            // 未来第三方 Provider 走到此处应明确失败，而非收到 LAST_INSERT_ID 专有 SQL。
+            if (TProvider.Dialect != SqlDialect.MySql)
+                throw new NotSupportedException(
+                    $"Provider '{TProvider.Name}' does not support RETURNING and has no insert-id strategy; " +
+                    "only the MySQL dialect fallback (LAST_INSERT_ID) is implemented.");
             cmd.CommandText = sqls.Insert + "; SELECT LAST_INSERT_ID();";
             cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
             metadata.BindInsert(cmd, entity);
@@ -194,7 +202,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             ushort result => result,
             byte result => result,
             sbyte result => result,
-            _ => 0
+            null or DBNull => 0,
+            // 驱动返回意外类型时明确失败，不静默丢弃自增 ID（ERR-05）。
+            _ => throw new InvalidOperationException(
+                $"Generated key has unexpected type '{value.GetType().Name}'; expected an integer type.")
         };
         return id > 0 ? id : null;
     }
@@ -384,6 +395,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
 
         // MySQL 仅对编译期确认的数值自增键使用 LAST_INSERT_ID(expr)。
+        if (TProvider.Dialect != SqlDialect.MySql)
+            throw new NotSupportedException(
+                $"Provider '{TProvider.Name}' does not support RETURNING and has no upsert strategy; " +
+                "only the MySQL dialect fallback (ON DUPLICATE KEY UPDATE) is implemented.");
         bool hasGeneratedKey = PalORM_Runtime.SetIdDelegates.TryGetValue(
             typeof(T), out Action<object, long>? setId);
         cmd.CommandText = BuildMySqlUpsertSql(
@@ -404,10 +419,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     private static CommandSqlSet GetCommandSqls<T>(CommandSqlSet fallback)
         where T : class, new()
-        => PalORM_Runtime.CommandSqlsByDialect.TryGetValue(
-            typeof(T), out CommandSqlByDialect sqls)
-            ? sqls.Get(TProvider.Dialect)
-            : fallback;
+    {
+        if (PalORM_Runtime.CommandSqlsByDialect.TryGetValue(
+                typeof(T), out CommandSqlByDialect sqls))
+        {
+            return sqls.Get(TProvider.Dialect);
+        }
+        // 拒绝回退到无方言 legacy SQL：其标识符未经引用转义（保留字/特殊字符表列名
+        // 产生错误语句），仅旧版本生成器的模型程序集会走到这里——要求重新编译。
+        _ = fallback;
+        throw new InvalidOperationException(
+            $"Type '{typeof(T).Name}' has no dialect-specific generated SQL. " +
+            "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
+    }
 
     internal static string BuildMySqlUpsertSql(
         string tableName,
@@ -455,10 +479,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public DataSession<TProvider> IgnoreFilters() { _ignoreFilters = true; return this; }
     internal bool _ignoreFilters;
 
-    /// <summary>动态添加查询拦截器（日志/缓存/审计），并按 <see cref="IQueryInterceptor.Priority"/> 执行。</summary>
+    /// <summary>动态添加查询拦截器（日志/缓存/审计），并按 <see cref="IQueryInterceptor.Priority"/> 执行。
+    /// 与其他会话操作一样受门禁保护：有查询在飞时调用会明确失败（拦截器列表被执行管线枚举，无锁修改是竞态）。</summary>
     public DataSession<TProvider> AddInterceptor(IQueryInterceptor interceptor)
     {
         ArgumentNullException.ThrowIfNull(interceptor);
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
         int index = _interceptors.FindIndex(existing => existing.Priority > interceptor.Priority);
         if (index < 0)
             _interceptors.Add(interceptor);
@@ -566,7 +592,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return Convert.ToDecimal(await ExecuteScalarAsync($"SELECT SUM({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetSoftDeleteWhereClause<T>()}", expression, ct).ConfigureAwait(false));
     }
 
-    /// <summary>MAX 聚合。</summary>
+    /// <summary>MAX 聚合。TValue 限 IConvertible 基元类型（数值/字符串/DateTime）；
+    /// Guid/DateOnly/枚举等经 Convert.ChangeType 会抛 InvalidCastException。</summary>
     public async ValueTask<TValue?> MaxAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
@@ -574,7 +601,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue));
     }
 
-    /// <summary>MIN 聚合。</summary>
+    /// <summary>MIN 聚合。TValue 限制同 MaxAsync。</summary>
     public async ValueTask<TValue?> MinAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
@@ -671,6 +698,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             return pk;
         throw new InvalidOperationException($"No primary key for '{typeof(T).Name}'.");
     }
+    /// <summary>直查实体列表——绕过 QueryBuilder 的原生 SQL 入口。
+    /// <para><b>列序契约（重要）</b>: 结果按序号（ordinal）映射到实体，第 n 列写入实体声明序第 n 个映射属性。
+    /// SELECT 列序必须与实体列声明序一致；同类型列错位会静默交换数据。
+    /// 避免 <c>SELECT *</c>（依赖物理表列序）——请显式 <c>SELECT col1, col2, ...</c> 按实体声明序列出，
+    /// 或使用列序由编译期保证的 <c>From&lt;T&gt;()</c> 查询。见 ADR-A。</para></summary>
     public async ValueTask<List<T>> QueryAsync<T>(FormattableString sql, CancellationToken ct = default)
         where T : class, new()
     {
@@ -774,7 +806,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     private void UpdateResilience(DbOptions options)
     {
-        _options = options;
+        // _options 与 _resilience 保护策略对齐：先发布配置再发布执行器，
+        // 跨线程读取方经 Volatile.Read(_resilience) 建立的先行关系可见到一致的 _options。
+        Volatile.Write(ref _options, options);
         Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient));
     }
 
@@ -1011,12 +1045,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        // 主异常保留模式：首个清理异常作为主异常抛出，后续异常挂 Exception.Data 不丢弃
+        //（与 GridReader/三 Provider 的清理约定一致）。
         Exception? cleanupException = null;
+        int secondaryIndex = 0;
         foreach (IQueryInterceptor interceptor in _interceptors)
         {
             if (interceptor is not IDisposable disposable) continue;
             try { disposable.Dispose(); }
-            catch (Exception exception) { cleanupException ??= exception; }
+            catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
         }
 
         try
@@ -1024,13 +1061,24 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             if (_conn.State == ConnectionState.Open)
                 await _conn.CloseAsync().ConfigureAwait(false);
         }
-        catch (Exception exception) { cleanupException ??= exception; }
+        catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
 
         try { await _conn.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception exception) { cleanupException ??= exception; }
+        catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
 
         if (cleanupException is not null)
             ExceptionDispatchInfo.Capture(cleanupException).Throw();
+    }
+
+    private static void RecordCleanupException(
+        ref Exception? primary, ref int secondaryIndex, Exception exception)
+    {
+        if (primary is null)
+        {
+            primary = exception;
+            return;
+        }
+        primary.Data[$"PalORM.CleanupException{secondaryIndex++}"] = exception;
     }
 
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()

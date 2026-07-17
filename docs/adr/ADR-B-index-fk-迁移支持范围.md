@@ -1,0 +1,33 @@
+# ADR-B：Index/FK 迁移 DDL 支持范围
+
+> 状态：提议（2026-07-17）· 来源：评审 ITM-104/151（GEN-03）
+
+## 背景
+
+`[Index]`/`[Unique]`/`[ForeignKey]`/`[DefaultValue]`/`[Column(Length/Precision/Scale/TypeName/StoreAs)]` 注解可声明但不参与迁移 DDL：
+- MigrationEmitter 曾生成 `CreateIndex_*`/`FK_*` 常量但 `MigrateAsync` 从不执行（零消费者死代码，已删除）；
+- FK DDL 用 `ALTER TABLE ADD CONSTRAINT`——SQLite 不支持该语法（FK 必须内联在 CREATE TABLE）；
+- FK 列名取属性名而非 `[Column]` 映射名（错列引用）；
+- TableModel 对 Length/Precision/Scale/StoreAs 传 null 占位，Indexes 恒空。
+
+## 现状（2026-07-17 已实施的缓解）
+
+新增 **PALORM017** 编译期警告：标注上述注解即告知"不参与 DDL 生成"，静默失效改为编译期显式。文档 M4/M6/BA11 已同步标注。
+
+## 选项
+
+| 选项 | 范围 | 工作量 | 风险 |
+|------|------|--------|------|
+| B1 完整实现 | Index/Unique DDL 三方言 + FK（SQLite 内联进 CREATE TABLE、PG/MySQL 走 ALTER）+ Length→VARCHAR(n) 等类型细化 | 大（TableModel 解析补全 + 三方言 Emitter + MigrateAsync 执行顺序 + 组合测试） | SQLite FK 内联意味着 CREATE TABLE 生成逻辑重构；已建表的增量迁移不支持会产生新的"静默不生效"面 |
+| B2 仅实现 Index/Unique | 索引 DDL 三方言语法差异小（CREATE [UNIQUE] INDEX IF NOT EXISTS 通用） | 中 | FK/DefaultValue/Length 保持 PALORM017 告警 |
+| B3 移除注解 | 删除上述注解，用户自管 DDL | 小 | binary-breaking（3.0）；损失声明式表达 |
+| B4 维持现状 | PALORM017 告警 + 注解保留为元数据 | 零 | 注解语义"仅文档化"需长期维持一致 |
+
+## 推荐
+
+**B2**：索引是最高频需求且三方言实现代价低；FK 的 SQLite 内联重构与增量迁移问题留待迁移系统整体设计（当前 MigrateAsync 本就只支持 CREATE IF NOT EXISTS 级别）。实施后 PALORM017 对 `[Index]`/`[Unique]` 停报，其余注解维持告警。
+
+## 待用户决策
+
+- 采纳 B2 还是 B1/B3/B4？
+- 若 B2：`[Unique]`（属性级）是否自动升为单列唯一索引？

@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 服务容器运行待 CI。
-> 当前测试: Core 124/124、SourceGen 62/62、无外部服务集成 122/122；PostgreSQL/MySQL 的 4 项待 CI 验证
+> 当前测试: Core 127/127、SourceGen 62/62、无外部服务集成 122/122；PostgreSQL/MySQL 的 4 项待 CI 验证
 > 构建: 全解决方案 Release 严格构建 0 warning / 0 error · Native AOT: 三 Provider publish 通过，SQLite 与 NuGet consumer 原生运行通过
 > QueryBuilder: struct（值类型）· 113 API 中 112 个已实现，1 个因设计冲突移除
 
@@ -96,7 +96,7 @@
 |---|------|------|------|
 | W1 | `ExecuteAsync(FormattableString)`→`int` | `DataSession.cs:511` | |
 | W2 | `SaveAsync<T>(T)` | `DataSession.cs` | 默认自增键走 Insert；非默认键走源生成 Upsert；key-only 实体使用幂等冲突分支 |
-| W3 | `UpdateColumnsAsync<T>(id,partial)` | `DataSession.cs:251` | → `From<T>().Set().ExecuteNonQueryAsync()` |
+| W3 | 部分列更新 | `DataSession.UpdateColumns<T>()` → QueryBuilder | 无 `UpdateColumnsAsync(id,partial)` 直达签名；实际路径 `db.UpdateColumns<T>().Set(...).Where(...).ExecuteNonQueryAsync()` |
 | B1 | `BulkInsertAsync<T>(IReadOnlyList<T>)` | `DataSession_Bulk.cs` | 三 Provider 统一使用源生成 InsertColumns/BindInsert，执行前校验列数与参数数；零列明确失败 |
 | B2 | `BulkUpdateAsync<T>(IReadOnlyList<T>)` | `DataSession_Bulk.cs` | 单事务复用源生成 Update 和乐观锁语义 |
 | B3 | `BulkMergeAsync<T>(IReadOnlyList<T>)` | `DataSession_Bulk.cs` | 单事务逐项复用源生成 Save/Upsert |

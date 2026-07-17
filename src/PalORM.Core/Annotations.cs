@@ -28,9 +28,15 @@ public sealed class ColumnAttribute(string name) : Attribute
 /// <summary>列存储策略。</summary>
 public enum StoreAs { Default, AsInt32, AsInt64, AsString }
 
-/// <summary>标记主键属性。支持 long、Guid、string；Ulid 必须配置编译期值转换器。</summary>
+/// <summary>标记主键属性。支持 long、Guid、string；Ulid 必须配置编译期值转换器。
+/// int/long 主键默认视为数据库自增（排除出 INSERT 列）；
+/// 雪花 ID 等应用侧赋值的数值主键设置 <c>AutoIncrement = false</c> 关闭。</summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
-public sealed class KeyAttribute : Attribute { }
+public sealed class KeyAttribute : Attribute
+{
+    /// <summary>数值主键是否由数据库自增生成（默认 true）。false = 应用侧赋值，进入 INSERT 列。</summary>
+    public bool AutoIncrement { get; init; } = true;
+}
 
 /// <summary>排除非 DB 属性。</summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]

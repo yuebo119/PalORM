@@ -36,7 +36,12 @@ public sealed class MySqlProvider : IDbProvider
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
     public static string GetLimitOffsetClause(int? limit, int? offset)
-        => $"LIMIT {offset ?? 0}, {limit ?? -1}";
+    {
+        // 无 limit 时 MySQL 需极大值哨兵（LIMIT offset, -1 是非法语法）——与 BuildLimitClause 对齐
+        string take = limit?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ?? "18446744073709551615";
+        return $"LIMIT {offset ?? 0}, {take}";
+    }
 
     public static bool SupportsReturningClause => false;
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";

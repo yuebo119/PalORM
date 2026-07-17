@@ -37,6 +37,15 @@ public sealed class SqliteProvider : IDbProvider
     public static bool SupportsReturningClause => true;
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
+    /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式。数据库文件被其他进程锁定时受调用方取消/超时约束。</summary>
+    public static async Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL";
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
         ArgumentNullException.ThrowIfNull(command);

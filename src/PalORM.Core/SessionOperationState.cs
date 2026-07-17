@@ -5,6 +5,10 @@ namespace PalORM;
 /// <summary>协调单个 DataSession 的数据库操作、事务逻辑流与释放生命周期。</summary>
 internal sealed class SessionOperationState
 {
+    /// <summary>Dispose 等待活动操作的上限。正常操作受 CommandTimeout 约束远早于此完成；
+    /// 触发即说明存在永不完成的租约（如被放弃的枚举器）。internal 可写供测试缩短。</summary>
+    internal static TimeSpan DisposeWaitTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
     private readonly object _sync = new();
     private readonly AsyncLocal<object?> _currentOperationOwner = new();
     private readonly AsyncLocal<object?> _currentTransactionOwner = new();
@@ -144,12 +148,18 @@ internal sealed class SessionOperationState
         }
 
         Exception? cleanupException = null;
+        int secondaryIndex = 0;
         if (resources is not null)
         {
             foreach (IAsyncDisposable resource in resources)
             {
                 try { await resource.DisposeAsync().ConfigureAwait(false); }
-                catch (Exception exception) { cleanupException ??= exception; }
+                catch (Exception exception)
+                {
+                    // 首异常保留为主异常，后续异常挂 Data 不丢弃（与 GridReader 清理约定一致）
+                    if (cleanupException is null) cleanupException = exception;
+                    else cleanupException.Data[$"PalORM.CleanupException{secondaryIndex++}"] = exception;
+                }
             }
         }
 
@@ -328,8 +338,21 @@ internal sealed class SessionOperationState
     {
         try
         {
-            await activeOperation.ConfigureAwait(false);
-            await activeTransaction.ConfigureAwait(false);
+            // 有界等待：被放弃的 QueryAsyncEnumerable 枚举器（未 DisposeAsync）会让操作租约
+            // 永不完成——无诊断的无限挂起改为明确失败，指向泄漏原因。
+            try
+            {
+                await Task.WhenAll(activeOperation, activeTransaction)
+                    .WaitAsync(DisposeWaitTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException timeoutException)
+            {
+                throw new InvalidOperationException(
+                    $"DataSession dispose timed out after {DisposeWaitTimeout} waiting for an active operation. " +
+                    "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed; " +
+                    "always consume it with 'await foreach' or dispose the enumerator explicitly.",
+                    timeoutException);
+            }
             await disposeCore().ConfigureAwait(false);
             lock (_sync) _state = 2;
             completion.TrySetResult();

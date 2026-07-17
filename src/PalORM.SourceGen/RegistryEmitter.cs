@@ -74,14 +74,6 @@ internal static class RegistryEmitter
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = (cmd, key) => CommandFactory_{m.GeneratedTypeSuffix}.BindDelete(cmd, key),");
         sb.AppendLine("        },");
         sb.AppendLine();
-        sb.AppendLine("            BindInsertValues = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Collections.Generic.List<(string, object?)>, object>>");
-        sb.AppendLine("        {");
-        foreach (var m in models.AsSpan())
-        {
-            sb.AppendLine($"            [typeof({m.EntityTypeName})] = (list, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(list, ({m.EntityTypeName})obj),");
-        }
-        sb.AppendLine("        },");
-        sb.AppendLine();
         sb.AppendLine("            CrudMetadatas = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CrudMetadata>");
         sb.AppendLine("        {");
         foreach (var m in models.AsSpan())
