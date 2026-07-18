@@ -3,7 +3,10 @@ namespace PalORM;
 /// <summary>数据库配置——record 类型(值相等+with 表达式)。
 /// <para><b>为什么是 record</b>: init-only 属性+with 表达式——修改配置返回新实例, 原实例不变。
 /// 符合"零全局可变状态"原则——每个测试创建独立 DbOptions, 互不干扰。</para>
-/// <para><b>为什么不是 IConfiguration</b>: 配置值在编译时已知。不需要运行时从 JSON/环境变量解析的灵活性。</para></summary>
+/// <para><b>为什么不是 IConfiguration</b>: 配置值在编译时已知。不需要运行时从 JSON/环境变量解析的灵活性。</para>
+/// <para><b>凭据卫生（重要）</b>: ToString() 已脱敏连接串，但按属性解构的路径不受保护——
+/// 请勿将本对象整体序列化（STJ/Newtonsoft）或以结构化日志解构（Serilog <c>{@Options}</c>），
+/// 这些路径会输出 ConnectionString/ReadConnectionString 明文。日志请使用 <c>{Options}</c>（走 ToString）。</para></summary>
 public sealed record DbOptions
 {
     /// <summary>主库连接串（必需）。支持环境变量引用：$ENV:VAR_NAME。</summary>

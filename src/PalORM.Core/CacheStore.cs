@@ -18,7 +18,11 @@ public interface IQueryCache
 
 /// <summary>默认查询缓存——ConcurrentDictionary + TTL + 容量上限（默认 1024 条）。
 /// 超出容量时先剔除全部过期条目；仍满则拒绝新条目（缓存未命中是正确性中性的，
-/// 拒绝写入优于无界增长或引入 LRU 锁开销）。</summary>
+/// 拒绝写入优于无界增长或引入 LRU 锁开销）。
+/// <para><b>软上限</b>：容量检查与写入非原子（check-then-act），并发 Set 可短暂超出上限
+/// （幅度 ≤ 并发写入者数，有界且随 TTL 回落）——刻意不加锁换取写入路径无阻塞。
+/// 另注：ConcurrentDictionary.Count 为全分段锁操作，每次 Set 付一次；查询缓存写频率低可接受，
+/// 若未来成为热点可改 Interlocked 近似计数。</para></summary>
 public sealed class BoundedQueryCache : IQueryCache
 {
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();

@@ -47,6 +47,27 @@ public sealed class PostgreSqlIntegrationTests
     }
 
     [Test]
+    public async Task WhereJson_NonStringValue_NormalizedToInvariantString()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        var dry = db.From<Product>()
+            .WhereJson("payload", "count", 42)
+            .AsDryRun();
+
+        // ->> 返回 text：int 值归一为字符串绑定，避免 PG 端 text = integer 类型错误
+        await Assert.That(dry.Parameters[1].Value).IsEqualTo("42");
+    }
+
+    [Test]
+    public async Task WhereJson_NulInColumn_ThrowsArgumentException()
+    {
+        await using var db = await TestDb.SqliteAsync();
+
+        await Assert.That(() => db.From<Product>().WhereJson("pay\0load", "k", "v"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task PG_HealthCheck_Succeeds() { await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(Opts); await Assert.That((await db.HealthCheckAsync()).IsHealthy).IsTrue(); }
 

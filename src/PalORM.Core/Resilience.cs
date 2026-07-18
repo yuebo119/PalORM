@@ -156,6 +156,9 @@ public sealed class ResilienceExecutor
 
             // generation 防陈旧对探针同样生效：gen N 的探针成功不得关闭 gen N+1 的熔断
             //（其成功证明的是重开前的数据库状态）。新熔断周期由新探针验证。
+            // 已知活性取舍（ITM-209）：探针在飞期间陈旧操作失败推进 generation，
+            // 该探针随后的真实成功会因代不匹配被丢弃，熔断多保持一个周期——
+            // 保守方向（宁多熔断不误关），下一轮探针会正确裁决。
             if (entry.Generation != _circuitGeneration)
                 return;
 

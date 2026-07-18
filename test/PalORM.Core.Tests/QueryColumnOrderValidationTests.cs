@@ -139,4 +139,32 @@ public sealed class QueryColumnOrderValidationTests
 
         await Assert.That(rows[0].FirstName).IsEqualTo("Lovelace");
     }
+
+    [Test]
+    public async Task QueryAsync_FewerColumnsThanEntity_ThrowsWithDiagnosticMessage()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await SeedAsync(session);
+
+        // ITM-211：列数不足在校验层明确失败（含可诊断消息），而非 RowFactory 的裸 IndexOutOfRange
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await session.QueryAsync<ColumnOrderEntity>(
+                $"SELECT Id, first_name FROM colorder"));
+
+        await Assert.That(ex!.Message).Contains("returned 2 columns");
+        await Assert.That(ex.Message).Contains("declares 3 mapped columns");
+    }
+
+    [Test]
+    public async Task QueryAsync_ExtraTrailingColumns_PassValidation()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await SeedAsync(session);
+
+        // 多余尾列不校验：RowFactory 只读前 N 列
+        var rows = await session.QueryAsync<ColumnOrderEntity>(
+            $"SELECT Id, first_name, last_name, 1 AS extra FROM colorder");
+
+        await Assert.That(rows[0].FirstName).IsEqualTo("Ada");
+    }
 }

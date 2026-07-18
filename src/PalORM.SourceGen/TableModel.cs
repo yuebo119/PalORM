@@ -121,6 +121,7 @@ internal sealed record TableModel(
             a.AttributeClass?.Name is "TenantAwareAttribute" or "TenantAware");
 
         // [Index("name", "col1", "col2", Unique = ...)] → 复合索引（ADR-B）
+        // 无名/空列声明跳过生成——PALORM020 已在编译期报错，此处跳过防级联生成错误
         foreach (var indexAttr in typeSymbol.GetAttributes().Where(a =>
             a.AttributeClass?.Name is "IndexAttribute" or "Index"))
         {
