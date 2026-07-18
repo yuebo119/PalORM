@@ -131,14 +131,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             _options.QueryCache, _options.ValidateQueryColumnOrder,
             static (conn, ct) => TProvider.InitializeConnectionAsync(conn, ct));
 
-        // 自动附加租户过滤
+        // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
+        // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）
         EntityFeatures features = GetEntityFeatures<T>();
         if (!_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)
             builder.AddDefaultFilter($"{TProvider.QuoteIdentifier("deleted_at")} IS NULL");
         if (_tenantId is not null && !_ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
         {
             // 列名 quote 与软删过滤对齐（quote 后不含 {}，可安全进入复合格式串文本段）
-            builder.Where(System.Runtime.CompilerServices.FormattableStringFactory.Create(
+            builder.AddDefaultFilter(System.Runtime.CompilerServices.FormattableStringFactory.Create(
                 $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}", _tenantId));
         }
         builder._defaultClauseCount = builder._clauses.Count;

@@ -82,6 +82,12 @@ internal sealed class SnapshotTests
             [Column("uniq_token")]
             [Unique]
             public string UniqueToken { get; set; } = "";
+            [Column("row_updated_at")]
+            [Timestamp]
+            public System.DateTime RowUpdatedAt { get; set; }
+            [Column("total_display")]
+            [Computed("code || '-' || kind")]
+            public string TotalDisplay { get; set; } = "";
             [Column("deleted_at")] public string? DeletedAt { get; set; }
             [Column("tenant_id")] public string TenantId { get; set; } = "";
         }

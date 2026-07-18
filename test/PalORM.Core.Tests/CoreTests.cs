@@ -778,9 +778,16 @@ public sealed class ProviderTests
         await Assert.That(PalORM.Sqlite.SqliteProvider.Name).IsEqualTo("SQLite");
         await Assert.That(PalORM.Sqlite.SqliteProvider.SupportsReturningClause).IsTrue();
         await Assert.That(PalORM.Sqlite.SqliteProvider.QuoteIdentifier("test")).IsEqualTo("\"test\"");
-        // ITM-314: 唯一约束冲突统一判定（SQLITE_CONSTRAINT=19）
+        // ITM-403: 仅扩展码 2067(UNIQUE)/1555(PK) 判定为唯一冲突——真库触发见
+        // Integration.Tests SqliteErrorCodeMatrixTests（手工构造异常无扩展码，此处只验负例）
         await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
-            new Microsoft.Data.Sqlite.SqliteException("constraint", 19))).IsTrue();
+            new Microsoft.Data.Sqlite.SqliteException("constraint", 19))).IsFalse();
+        await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
+            new Microsoft.Data.Sqlite.SqliteException("constraint", 19, 2067))).IsTrue();
+        await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
+            new Microsoft.Data.Sqlite.SqliteException("constraint", 19, 1555))).IsTrue();
+        await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
+            new Microsoft.Data.Sqlite.SqliteException("not null", 19, 1299))).IsFalse();
         await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
             new Microsoft.Data.Sqlite.SqliteException("busy", 5))).IsFalse();
     }

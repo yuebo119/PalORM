@@ -54,6 +54,12 @@ internal ref struct ValueStringBuilder
         _buffer = newPooled;
     }
 
+    /// <summary>去除尾随空格——括组闭合前对齐（"cond ) " 而非 "cond  )"）。</summary>
+    public void TrimEnd()
+    {
+        while (_pos > 0 && _buffer[_pos - 1] == ' ') _pos--;
+    }
+
     public override string ToString()
     {
         string result = _buffer.Slice(0, _pos).ToString();
