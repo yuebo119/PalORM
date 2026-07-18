@@ -41,11 +41,28 @@ internal sealed partial class AotJsonContext : JsonSerializerContext;
 
 internal static class Program
 {
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1303",
-        Justification = "固定英文文本是 Native AOT smoke test 的机器可读成功标记。")]
     internal static async Task Main()
     {
-        var options = new DbOptions { ConnectionString = "Data Source=:memory:" };
+        // 文件型数据库而非 :memory:（ITM-317）——WAL journal_mode 仅对文件库生效，
+        // native sqlite3mc 加载 + PRAGMA 初始化钩子在 AOT 下的完整路径只有文件库能验证
+        string dbPath = Path.Combine(Path.GetTempPath(), $"palorm-aot-{Environment.ProcessId}.db");
+        var options = new DbOptions { ConnectionString = $"Data Source={dbPath}" };
+        try
+        {
+            await RunAsync(options).ConfigureAwait(false);
+        }
+        finally
+        {
+            File.Delete(dbPath);
+            File.Delete(dbPath + "-wal");
+            File.Delete(dbPath + "-shm");
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1303",
+        Justification = "固定英文文本是 Native AOT smoke test 的机器可读成功标记。")]
+    private static async Task RunAsync(DbOptions options)
+    {
         DataSession<SqliteProvider> db = await DataSession<SqliteProvider>.CreateAsync(options).ConfigureAwait(false);
         await using (db.ConfigureAwait(false))
         {

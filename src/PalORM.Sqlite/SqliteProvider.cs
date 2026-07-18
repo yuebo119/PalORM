@@ -6,6 +6,14 @@ namespace PalORM.Sqlite;
 /// <summary>SQLite Provider —— Microsoft.Data.Sqlite 适配。</summary>
 public sealed class SqliteProvider : IDbProvider
 {
+    static SqliteProvider()
+    {
+        // SQLite3MC.PCLRaw.bundle 要求显式初始化（其 README 明示）；Microsoft.Data.Sqlite.Core
+        // 不含自动 bundle 探测，NativeAOT/裁剪下更不能依赖反射发现（ITM-317）。
+        // Init 幂等，静态构造保证首次使用前恰好执行一次。
+        SQLitePCL.Batteries_V2.Init();
+    }
+
     public static string Name => "SQLite";
     public static SqlDialect Dialect => SqlDialect.Sqlite;
 
