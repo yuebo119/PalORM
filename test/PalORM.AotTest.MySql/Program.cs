@@ -55,7 +55,7 @@ internal static class Program
             await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_test").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_test (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL, version BIGINT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_json_test (id BIGINT AUTO_INCREMENT PRIMARY KEY, details TEXT NOT NULL)").ConfigureAwait(false);
-            await db.ExecuteAsync($"CREATE TABLE aot_mysql_bulk_test (Id VARCHAR(255) PRIMARY KEY, name TEXT NOT NULL, created_by TEXT NOT NULL DEFAULT 'database', deleted_at DATETIME(6))").ConfigureAwait(false);
+            await db.ExecuteAsync($"CREATE TABLE aot_mysql_bulk_test (Id VARCHAR(255) PRIMARY KEY, name TEXT NOT NULL, created_by VARCHAR(64) NOT NULL DEFAULT 'database', deleted_at DATETIME(6))").ConfigureAwait(false);
 
             AotMySqlEntity inserted = await db.InsertAsync(new AotMySqlEntity
             {

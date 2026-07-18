@@ -53,8 +53,8 @@ internal static class Program
             await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_pg_bulk_test").ConfigureAwait(false);
             await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_pg_json_test").ConfigureAwait(false);
             await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_pg_test").ConfigureAwait(false);
-            await db.ExecuteAsync($"CREATE TABLE aot_pg_test (id BIGSERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL, version BIGINT NOT NULL)").ConfigureAwait(false);
-            await db.ExecuteAsync($"CREATE TABLE aot_pg_json_test (id BIGSERIAL PRIMARY KEY, details TEXT NOT NULL)").ConfigureAwait(false);
+            await db.ExecuteAsync($"CREATE TABLE aot_pg_test (\"Id\" BIGSERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL, version BIGINT NOT NULL)").ConfigureAwait(false);
+            await db.ExecuteAsync($"CREATE TABLE aot_pg_json_test (\"Id\" BIGSERIAL PRIMARY KEY, details TEXT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_pg_bulk_test (\"Id\" TEXT PRIMARY KEY, name TEXT NOT NULL, created_by TEXT NOT NULL DEFAULT 'database', deleted_at TIMESTAMPTZ)").ConfigureAwait(false);
 
             AotPgEntity inserted = await db.InsertAsync(new AotPgEntity
@@ -66,7 +66,7 @@ internal static class Program
             if (inserted.Id <= 0)
                 throw new InvalidOperationException("PostgreSQL INSERT failed");
             if (await db.ScalarAsync<long>(
-                    $"SELECT COUNT(*) FROM aot_pg_test WHERE id = {inserted.Id:N0}")
+                    $"SELECT COUNT(*) FROM aot_pg_test WHERE \"Id\" = {inserted.Id:N0}")
                     .ConfigureAwait(false) != 1)
                 throw new InvalidOperationException("PostgreSQL composite format parameterization failed");
 
