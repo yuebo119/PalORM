@@ -156,9 +156,10 @@ public struct QueryBuilder<T> where T : class, new()
             return this;
         }
 
-        List<string> batches = [];
-        List<DbParameter> parameters = [];
         const int maxBatch = 500;
+        // O2 预分配：批次数与参数总量在进循环前已知
+        List<string> batches = new((items.Count + maxBatch - 1) / maxBatch);
+        List<DbParameter> parameters = new(items.Count);
         for (int start = 0; start < items.Count; start += maxBatch)
         {
             int end = Math.Min(start + maxBatch, items.Count);
@@ -185,9 +186,10 @@ public struct QueryBuilder<T> where T : class, new()
         var items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0) return this;
 
-        List<string> batches = [];
-        List<DbParameter> parameters = [];
         const int maxBatch = 500;
+        // O2 预分配：批次数与参数总量在进循环前已知
+        List<string> batches = new((items.Count + maxBatch - 1) / maxBatch);
+        List<DbParameter> parameters = new(items.Count);
         for (int start = 0; start < items.Count; start += maxBatch)
         {
             int end = Math.Min(start + maxBatch, items.Count);
@@ -623,7 +625,8 @@ public struct QueryBuilder<T> where T : class, new()
 
     private System.Collections.ObjectModel.ReadOnlyCollection<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
-        List<DbParameter> parameters = [];
+        // 预分配至全参数量上限——绝大多数查询全部子句类别都被选中，扩容为零
+        List<DbParameter> parameters = new(_parameters.Count);
         foreach (QueryClause clause in _clauses)
         {
             if (!kinds.Contains(clause.Kind)) continue;
