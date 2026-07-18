@@ -432,6 +432,7 @@ public sealed class SessionConcurrencyTests
     }
 
     [Test]
+    [NotInParallel("CacheStore")]
     public async Task CachedQuery_AfterSessionDispose_IsRejected()
     {
         CacheStore.Clear();

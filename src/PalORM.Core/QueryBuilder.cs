@@ -14,6 +14,9 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly Func<DbConnection>? _readConnFactory;
     internal readonly SqlDialect _dialect;
     internal readonly bool _validateColumnOrder;
+    // From<T>() 注入默认过滤（软删/租户）后的基准子句数——QueryMultipleAsync 据此
+    // 区分"默认注入"与"用户显式子句"（仅后者应触发误用守卫）
+    internal int _defaultClauseCount;
     internal readonly Func<string, string> _quoteIdentifier;
     internal readonly IRowFactory<T> _factory;
     internal readonly List<IQueryInterceptor> _interceptors;
@@ -464,7 +467,7 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal string BuildCountSql()
     {
-        var sb = new ValueStringBuilder(384);
+        var sb = new ValueStringBuilder(stackalloc char[384]);
         try
         {
             AppendComments(ref sb);
@@ -488,7 +491,7 @@ public struct QueryBuilder<T> where T : class, new()
             throw new InvalidOperationException("ExecuteNonQueryAsync requires at least one Set clause.");
         if (HasClause(QueryClauseKind.CommonTableExpression))
             throw new NotSupportedException("CTE is not supported by the current UPDATE builder.");
-        var sb = new ValueStringBuilder(256);
+        var sb = new ValueStringBuilder(stackalloc char[256]);
         try
         {
             AppendComments(ref sb);
@@ -510,7 +513,7 @@ public struct QueryBuilder<T> where T : class, new()
     /// <para>SplitQuery 当前只构建根查询并移除 JOIN，不执行导航对象装配。</para></summary>
     internal string BuildSql()
     {
-        var sb = new ValueStringBuilder(512);
+        var sb = new ValueStringBuilder(stackalloc char[512]);
         try
         {
             AppendComments(ref sb);

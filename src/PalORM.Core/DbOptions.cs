@@ -92,7 +92,11 @@ public sealed record DbOptions
         };
     }
 
-    /// <summary>日志级别（默认 Warning）。</summary>
+    /// <summary>日志工厂。设置后 DataSession 经其创建 ILogger（ITM-323：此前公共入口
+    /// 拿不到 logger，MinimumLogLevel 是死配置）。未设置时使用 NullLogger。</summary>
+    public Microsoft.Extensions.Logging.ILoggerFactory? LoggerFactory { get; init; }
+
+    /// <summary>会话日志级别下限——过滤 LoggerFactory 产出的日志（默认 Warning）。</summary>
     public LogLevel MinimumLogLevel { get; init; } = LogLevel.Warning;
 
     /// <summary>解析主库连接串中的环境变量引用。</summary>

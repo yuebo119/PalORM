@@ -162,8 +162,14 @@ public static class QueryBuilderExtensions
         }
     }
 
+    /// <summary>多结果集查询——执行调用方提供的完整 SQL。builder 仅供连接/方言/参数工厂，
+    /// 已构建的 Where/OrderBy 等子句不参与执行；含子句时明确失败防误用（ITM-332）。</summary>
     public static async ValueTask<GridReader> QueryMultipleAsync<T>(this QueryBuilder<T> builder, FormattableString sql, CancellationToken ct = default) where T : class, new()
     {
+        if (builder._clauses.Count > builder._defaultClauseCount)
+            throw new InvalidOperationException(
+                "QueryMultipleAsync executes the provided SQL verbatim and ignores builder clauses. " +
+                "Call it on a bare From<T>() (no Where/OrderBy/etc.), or embed conditions in the SQL itself.");
         const string operation = "query_multiple";
         string provider = builder._dialect.ToString();
         QueryObservation? observation = builder._tracing || builder._metrics

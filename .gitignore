@@ -44,3 +44,4 @@ data/
 
 ## Test credentials (never commit)
 .env.test
+mydatabase.db

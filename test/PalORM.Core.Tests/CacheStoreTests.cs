@@ -1,5 +1,6 @@
 namespace PalORM.Core.Tests;
 
+[NotInParallel("CacheStore")]
 public sealed class CacheStoreTests
 {
     [Test]
