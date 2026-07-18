@@ -91,7 +91,7 @@ public partial class DataSession<TProvider>
         {
             primaryException = exception;
             if (ownsTransaction)
-                await RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
             throw;
         }
         finally
@@ -99,7 +99,7 @@ public partial class DataSession<TProvider>
             _operationState.RestoreTransaction(
                 tran, previousTransaction);
             if (ownsTransaction)
-                await DisposeTransactionPreservingAsync(tran, primaryException).ConfigureAwait(false);
+                await TransactionCleanup.DisposeTransactionPreservingAsync(tran, primaryException).ConfigureAwait(false);
         }
         return total;
     }
@@ -134,7 +134,7 @@ public partial class DataSession<TProvider>
         {
             primaryException = exception;
             if (ownsTransaction)
-                await RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
             throw;
         }
         finally
@@ -142,7 +142,7 @@ public partial class DataSession<TProvider>
             _operationState.RestoreTransaction(
                 transaction, previousTransaction);
             if (ownsTransaction)
-                await DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
+                await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
         }
     }
 
@@ -175,7 +175,7 @@ public partial class DataSession<TProvider>
         {
             primaryException = exception;
             if (ownsTransaction)
-                await RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
             throw;
         }
         finally
@@ -183,7 +183,7 @@ public partial class DataSession<TProvider>
             _operationState.RestoreTransaction(
                 transaction, previousTransaction);
             if (ownsTransaction)
-                await DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
+                await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
         }
     }
 
