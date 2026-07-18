@@ -1,204 +1,61 @@
-# PalORM 代码评审系统 v1.1（PalORM 适配版）
+# PalORM 评审 Profile（review-system v2.1 — 深检引擎前端）
 
-> 基于 review-system 框架 · 多轮审计累计经验
-> 核心设计原则：**把纪律转化为基础设施——让正确的事比错误的事更容易做**
-> **评审依据**：[`docs/编码规范.md`](../docs/编码规范.md) — 167 条 STD 规则 × 17 类，源自 [`docs/踩坑目录.md`](../docs/踩坑目录.md) 302 项陷阱
-
----
-
-## 系统架构
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    评审系统 4 层架构                               │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  第 1 层：执行前强制门禁（不可跳过）                               │
-│  ├── review-snapshot.sh → 锚定 commit + 基线数据                   │
-│  └── git status 检查 → 确保工作区干净                              │
-│                                                                  │
-│  第 2 层：评审执行引擎（提示词驱动，4 阶段）                        │
-│  ├── 阶段 1：结构发现（工具链组合）                                │
-│  ├── 阶段 2：逐行审计（逐方法/逐文件，非抽样）                      │
-│  ├── 阶段 3：交叉验证（每项发现至少 2 个独立信息源）                 │
-│  └── 阶段 4：影响判定（危害 × 复杂度矩阵）                         │
-│                                                                  │
-│  第 3 层：产出质量控制（模板强制）                                 │
-│  ├── 评审报告 → .ai/review-system-v2/template.md（8 段，不可省略）  │
-│  └── 任务清单 → .ai/review-system-v2/action-items-template.md      │
-│                                                                  │
-│  第 4 层：事后验证回路（脚本自动化）                               │
-│  ├── verify-action-items.sh → 标识符存在性校验                     │
-│  ├── dotnet build → 分析器行为断言验证                             │
-│  └── git diff --stat → 影响范围回溯                                │
-└──────────────────────────────────────────────────────────────────┘
-```
+> **检查方法统一定义在 [`deep-check-engine.md`](deep-check-engine.md)**（七流·误判库·[推断]零容忍·危害×复杂度·下沉审查·质量指标）。
+> 本文件只定义 review profile 特有的：触发、范围策略、产出格式、验证回路。
+> 回答的问题：**这次提交行不行？**
 
 ---
 
-## 第 1 层：执行前强制门禁
+## 触发与分级（按 diff 触及面决定深度）
 
-### 规则 1.1 — 评审前必须运行 snapshot
+| diff 触及面 | 评审深度 | 说明 |
+|------------|---------|------|
+| 仅 docs/·*.md·注释 | **轻量**：doc-consistency-check.sh + 口径数字复核 | 不跑七流 |
+| 仅 test/（不含测试基建） | **轻量**：assertion-strength-check.sh + 断言强度抽读 | 弱断言不得新增 |
+| src/PalORM.Core 或 Provider | **标准**：七流 diff 范围逐行 + 交叉验证 | 引擎全规则 |
+| src/PalORM.SourceGen | **标准 + 专项**：快照/对称性测试先行（见下） | 生成物 diff 是评审对象 |
+| DataSession/SessionOperationState/Resilience | **标准 + 全量**：改动方法所在类全量逐行 | 状态机/并发面爆炸半径大 |
+| scripts/·.github/·门禁 | **标准**：test-quality-scripts.sh 故障夹具 + 三方同步核对 | G 表/脚本/规范文档 |
 
-```bash
-# 无例外。禁止跳过。输出粘贴到报告段 2
-bash scripts/review-snapshot.sh
-```
+逃逸率驱动修正：某流上一轮出现逃逸（metrics.md 账本），该流本轮升一级深度。
 
-**违反后果**：评审视为草稿，不予合并。
+## 执行门禁（不可跳过）
 
-### 规则 1.2 — 明确评审范围声明
+1. `bash scripts/review-snapshot.sh` → 输出粘贴到报告段 2。违反 = 评审视为草稿。
+2. 范围声明三项（必须评审 / 明确不评审 / 抽样策略）——见引擎「执行前强制项」。
 
-```
-我必须评审的范围: [具体目录/文件列表]
-我明确不评审的范围: [排除的目录/文件 —— 必须声明]
-我的抽样策略: [全量逐行 / 按模块抽样 xx% —— 必须选择并声明]
-```
+## 源生成器变更专项路径（diff 触及 SourceGen 时强制）
 
----
+> 机械化状态见引擎「生成语义流机械化状态」表。评审职责 = 审阅机械防线的 diff，不是重做机械检查。
 
-## 第 2 层：评审执行引擎
+1. **快照先行**：`dotnet run`（test/PalORM.SourceGen.Tests）——快照测试失败 = 生成物变化未刷新基线 = REQUEST_CHANGES；`PALORM_UPDATE_SNAPSHOTS=1` 刷新后的 `Snapshots/*.snap` diff 逐文件评审。
+2. **三序一致**：列集合逻辑改动时，快照 diff 中 CREATE/INSERT SQL 列序、RowFactory `GetXxx(n)` 序号、BindInsert 参数序三处必须同步变化——不同步即 P0（静默错列数据）。
+3. **三方言核对**：DialectSymmetryTests 通过 = 无未登记方言差异；评审只核对差异表变更是否有文档化依据。
+4. **特性组合**：快照基线已含全特性同体实体；新增特性先扩快照实体再改 Emitter。
+5. **诊断不退化**：PALORM0xx 触发条件改动必须有负向测试。
 
-### 核心原则
+## 产出（模板强制）
 
-```
-1. 先发现，后判断 —— 禁止在信息不完整时下结论
-2. 证据驱动 —— 每项发现标注可信度（✅⚠❓）和至少 1 个信息源
-3. 逐行优于抽样 —— 抽样发现的结论必须标注 ⚠
-4. 实现质量 ≥ 架构设计 —— 不因"架构清晰"而忽略"配置缺失"
-5. 有害度驱动优先级 —— 危害 × 复杂度，不是"容不容易修"
-```
+- 评审报告 → [`review-system-v2/template.md`](review-system-v2/template.md)（8 段不可省略；段 8 为四指标记录，不是评分）
+- 行动项 → [`review-system-v2/action-items-template.md`](review-system-v2/action-items-template.md)（含下沉审查段）
 
-### 阶段 1：结构发现
-
-| 步骤 | 命令/工具 | 产出 |
-|:----:|-----------|------|
-| 1.1 | `find src -name "*.csproj"` | 项目结构清单 |
-| 1.2 | `find src -name "*.cs" ! -path "*/obj/*" ! -name "*.g.cs"` | 源文件分布（排除生成代码） |
-| 1.3 | `git log --oneline -20` | 近期变更热点 |
-| 1.4 | 对照 `docs/架构设计.md` | 插件架构完整性 |
-
-**输出**：项目结构脑图（此阶段**不产出结论**）。
-
-### 阶段 2：逐行审计（7 流）
-
-| 审计流 | 检查项 | PalORM 专项 |
-|--------|--------|-----------|
-| **架构流** | Provider 依赖方向·命名空间一致性·循环依赖检查 | 对照 docs/架构设计.md |
-| **安全流** | SQL 注入·输入校验·密钥泄露 | FormattableString 参数化查询 |
-| **资源流** | IDisposable/IAsyncDisposable·DbConnection释放·连接池 | ADO.NET 连接管理 |
-| **并发流** | lock/共享状态·竞态条件·async void | Provider 线程安全·SessionOperationState 门禁覆盖 |
-| **错误流** | catch(Exception) 是否过滤 OCE·异常类型正确 | AOT 兼容异常·主异常保留（清理异常挂 Exception.Data） |
-| **AOT流** | IsAotCompatible·STJ源生成·零反射·零Expression.Compile() | 源生成器覆盖完整性 |
-| **生成语义流** | 仅当 diff 涉及 `src/PalORM.SourceGen/` 时激活（见下方专项路径） | Emitter↔生成物↔消费点三点一线 |
-
-**每个流完成后，产出**：发现清单（ID + 位置 + 可信度标注）+ 明确标注**未覆盖盲区**。
-
-### 源生成器变更专项评审路径（diff 触及 SourceGen 时强制）
-
-> 教训来源：Emitter 一行改动会同时改变 N 个实体 × 3 方言的生成物，diff 本身看不出爆炸半径。
-
-1. **快照先行**：`dotnet test test/PalORM.SourceGen.Tests` —— Verify 快照未同步 = 评审直接 REQUEST_CHANGES；快照 diff 本身是评审对象（逐个 `.received/.verified` 对比）。
-2. **三序一致核对**：改动涉及列集合逻辑（IsInsertable/列序/predicate）时，对同一实体核对三处生成物顺序一致：CREATE/INSERT SQL 列序 = RowFactory `GetXxx(n)` 序号 = BindInsert 参数序。任何一处独立演化即 P0（静默错列数据）。
-3. **三方言核对**：改动 SQL 生成时，对照 `CommandSqlsByDialect` 三份产物核对方言差异点（引用符 `"` vs `` ` ``、RETURNING 有无、LIMIT 语法）是否仍被 DataSession/Provider 消费端正确处理。
-4. **特性组合抽样**：SoftDelete × TenantAware × Converter × OwnedJson 至少抽 2 个组合实体核对生成物（AotTest 宿主中有现成组合实体）。
-5. **诊断不退化**：PALORM0xx 诊断触发条件改动必须有对应负向测试（报告诊断且不级联生成错误）。
-
-### 阶段 3：交叉验证
-
-| 发现级别 | 最低验证要求 |
-|:--------:|-------------|
-| P0/P1 | Read 源码 + `dotnet build` 验证（若涉及分析器） |
-| P2 | Read 源码 + grep 交叉验证 |
-| P3 | 至少 1 个信息源（标注为 ⚠ 基于抽样） |
-
-### 阶段 4：影响判定
-
-使用危害 × 复杂度矩阵：
-
-| | 高危害 | 中危害 | 低危害 |
-|------|:------:|:------:|:------:|
-| **易修复**（< 1h） | P0 紧急 | P1 近期 | P2 |
-| **中等**（1-4h） | P1 近期 | P2 | P3 |
-| **难修复**（> 4h） | P2 | P3 | 评估（产出 ADR） |
-
----
-
-## 第 3 层：产出质量控制
-
-### 3.1 评审报告（必须按 `.ai/review-system-v2/template.md` 格式）
-
-强制段落（缺一不可）：
-1. 段 1：范围与方法（**必须**声明盲区）
-2. 段 2：评审基线（**必须**粘贴 snapshot 输出）
-3. 段 3：准确性分析（**必须**每项标注 ✅⚠❓）
-4. 段 4：优先级判定（**必须**使用危害 × 复杂度矩阵）
-5. 段 5：方法论自省（**必须**填写工具选择和已知局限）
-6. 段 6：跨报告一致性（如有前序评审）
-7. 段 7：建议与修复方案（**必须**按 P0→P1→P2→评估 排列）
-8. 段 8：自我局限声明（**必须**填写）
-
-### 3.2 任务清单（必须按 `.ai/review-system-v2/action-items-template.md` 格式）
-
----
-
-## 第 4 层：事后验证回路
+## 事后验证回路
 
 ```
-评审报告完成 → 运行以下验证 → 全部通过 → 评审完成
+报告完成 → 以下全部通过 → 评审完成
 ```
 
-### 4.1 标识符验证
-```bash
-bash scripts/verify-action-items.sh docs/review/action-items-XXXX.md
-```
+1. `bash scripts/verify-action-items.sh <行动项文件>` — 标识符存在性
+2. 涉及分析器规则 → `dotnet build` 验证触发条件
+3. `git diff HEAD~1 --stat` — 影响范围回溯
+4. [`metrics.md`](metrics.md) 追加本轮指标行（发现数按流、探针数、下沉数）
 
-### 4.2 分析器断言验证
-涉及分析器规则（CA/IDE），**必须**运行 `dotnet build` 验证触发条件。
-
-### 4.3 影响范围验证
-```bash
-git diff HEAD~1 --stat
-grep -rn "修复涉及的方法名" src/
-```
-
----
-
-## PalORM 专项：阶段适配评审
+## PalORM 阶段适配
 
 | 阶段 | 评审重点 |
 |:----:|---------|
 | 0 (筑基) | Core 接口完整性·AOT 配置·源生成器基础·113 API 覆盖（对照 docs/API参考.md） |
 | 1 (凝脉) | Provider 实现正确性·FormattableString 参数化·类型映射 |
-| 2 (结丹) | 关系映射·缓存·批量操作·AOT 全链路验证·302 坑防御 |
+| 2 (结丹) | 关系映射·缓存·批量操作·AOT 全链路·302 坑防御 |
 | 3 (元婴) | 多数据库适配·事务·分布式追踪·性能基准 |
 | 4 (化神) | NuGet 发布·文档·社区·CI/CD |
-
-### 阶段 0 评审清单
-
-```
-□ Core 层: DataSession/QueryBuilder/DbOptions/注解定义是否完整 · 零外部 ORM 依赖
-□ Provider 占位: 是否实现 IDbProvider 完整 9 成员 · 是否独立不跨引用
-□ AOT: IsAotCompatible=true · STJ源生成 · 零反射 · 零Expression.Compile()
-□ 源生成器: RowFactory/TypeMapper/CommandFactory/Migration/Registry 生成完整
-□ 构建: dotnet build -c Release → 0 warnings, 0 errors
-□ 文档: docs/架构设计.md 与实际目录一致
-□ API: 113 API（112 实现 + 1 设计移除）是否全部有 XML 文档注释
-```
-
----
-
-## 附录：历史教训速查卡（通用 + PalORM 新增）
-
-| 如果评审中遇到… | 记住… |
-|-----------------|--------|
-| "grep 显示有 N 处 X" | grep 做定位，不做计数判断。逐行读后再下结论 |
-| "这个分析器应该会在 X 时报错" | dotnet build 验证。不许猜分析器行为 |
-| "代码看起来有并发竞态" | 读完整 lock 块。不许读半截下结论 |
-| "这段代码缺异常过滤" | 检查上下文。可能有前置 catch(OCE){throw;} |
-| "这个修复很简单，P2 吧" | 判断危害，不是复杂度。连接泄漏不是 P2 |
-| "Core 层应该加个 Helper" | Core 只放接口+record+enum。Helper 放 Provider 或独立工具类 |
-| "这个文件可以移到其他 Provider" | 检查是否破坏 Provider 独立性 |
-| "架构分层很清晰，9/10" | 检查配置完整度和资源释放。评分不等于实现质量 |
-| "Provider 间代码重复" | 检查是否是数据库方言差异导致的刻意独立 |
-| "*.g.cs 文件有问题" | 排除源生成器生成文件。审计只覆盖手写代码 |

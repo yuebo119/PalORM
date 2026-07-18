@@ -124,6 +124,9 @@ jobs:
             - name: Run repository gate
               run: bash scripts/gate-check.sh
 
+            - name: Run assertion strength gate
+              run: bash scripts/assertion-strength-check.sh
+
     aot-sqlite:
         name: SQLite Native AOT
         runs-on: ubuntu-latest
