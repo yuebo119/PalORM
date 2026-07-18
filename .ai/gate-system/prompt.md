@@ -65,7 +65,7 @@
 |:--:|------|---------|
 | C1 | QueryBuilder 为 struct | `grep "struct QueryBuilder" src/PalORM.Core/QueryBuilder.cs` |
 | C2 | 三 Provider 实现完整 IDbProvider 成员 | grep 各 Provider 的接口成员实现 |
-| C3 | 公共 API 有 XML 文档注释 | 构建时 CS1591（TreatWarningsAsErrors 兜底） |
+| C3 | 公共 API 有 XML 文档注释 | 编译期强制：src/ 全域 CS1591 + TreatWarningsAsErrors（2026-07-19 摘除 Phase 1 豁免；测试与 AotModels 项目豁免在案见 Directory.Build.props） |
 
 ---
 

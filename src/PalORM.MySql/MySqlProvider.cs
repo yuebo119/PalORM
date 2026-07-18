@@ -6,11 +6,18 @@ namespace PalORM.MySql;
 /// <summary>MySQL Provider —— MySqlConnector 适配。</summary>
 public sealed class MySqlProvider : IDbProvider
 {
+    /// <summary>Provider 名称:MySql。</summary>
     public static string Name => "MySql";
+
+    /// <summary>SQL 方言标识:<see cref="SqlDialect.MySql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.MySql;
 
+    /// <summary>创建 MySqlConnection,连接池配置沿用连接串默认值。</summary>
     public static DbConnection CreateConnection(string connectionString) => new MySqlConnection(connectionString);
 
+    /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 MySqlConnector 连接串:
+    /// MaximumPoolSize / ConnectionIdleTimeout(秒)/ ConnectionLifeTime(分钟换算为秒);
+    /// MySqlConnector 池参数为 uint,checked 转换防负值/溢出静默截断。</summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -23,17 +30,20 @@ public sealed class MySqlProvider : IDbProvider
         return new MySqlConnection(builder.ConnectionString);
     }
 
+    /// <summary>反引号引用标识符(MySQL 方言,非 SQL 标准双引号),内部反引号以 `` 转义。</summary>
     public static string QuoteIdentifier(string identifier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
         return $"`{identifier.Replace("`", "``", StringComparison.Ordinal)}`";
     }
 
+    /// <summary>schema 与表名分别反引号引用后以点连接;MySQL 中 schema 即数据库名。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
+    /// <summary>MySQL 的 LIMIT offset, count 语法;无 limit 时用 uint64 极大值哨兵(LIMIT offset, -1 非法)。</summary>
     [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause。3.0 随接口成员一并移除。")]
     public static string GetLimitOffsetClause(int? limit, int? offset)
     {
@@ -43,7 +53,10 @@ public sealed class MySqlProvider : IDbProvider
         return $"LIMIT {offset ?? 0}, {take}";
     }
 
+    /// <summary>MySQL 不支持 RETURNING 子句(自增主键回读走 LAST_INSERT_ID 路径)。</summary>
     public static bool SupportsReturningClause => false;
+
+    /// <summary>CURRENT_TIMESTAMP——注意 MySQL 返回会话时区时间(与 SQLite 的恒 UTC 语义不同,ITM-326)。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
     /// <summary>MySQL 无 CREATE INDEX IF NOT EXISTS：迁移幂等靠识别 1061 重名索引错误。</summary>
@@ -54,6 +67,7 @@ public sealed class MySqlProvider : IDbProvider
     public static bool IsUniqueViolation(Exception exception)
         => exception is MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyEntry };
 
+    /// <summary>用 SHOW COLUMNS 查询列信息(表名/库名经反引号引用内联),列名位于结果集序号 0。</summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -61,8 +75,10 @@ public sealed class MySqlProvider : IDbProvider
         return 0;
     }
 
+    /// <summary>参数占位符,形如 @p0。</summary>
     public static string GetParameterPlaceholder(int index) => $"@p{index}";
 
+    /// <summary>创建 MySqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。</summary>
     public static DbParameter CreateParameter(string name, object? value)
         => new MySqlParameter(name, value ?? DBNull.Value);
 

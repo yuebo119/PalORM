@@ -9,6 +9,10 @@ namespace PalORM;
 /// <para>命令、回滚或事务释放失败附加到主异常，不替换原始执行失败。</para></summary>
 public static class MultiValueBulkInsert
 {
+    /// <summary>多值 INSERT 分批写入实体列表，返回受影响总行数。批次大小取
+    /// <paramref name="batchSize"/> 与参数上限 <paramref name="maxParametersPerStatement"/>/列数的较小者；
+    /// <paramref name="transaction"/> 为 null 时自建事务并在全部批次成功后提交，
+    /// 传入外部事务时提交/回滚由调用方负责。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100", Justification = "表名/列名来自源生成器")]
     public static async Task<long> ExecuteAsync<T>(
         DbConnection conn,

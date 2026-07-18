@@ -91,6 +91,8 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>链式追加 OR 条件——仅与既有用户条件 OR 组合；默认过滤（软删/租户）恒以 AND 前置，不受影响。
+    /// <para>首个用户子句使用 OrWhere 时无既有条件可 OR，语义等价 <see cref="Where"/>。</para></summary>
     public QueryBuilder<T> OrWhere(FormattableString clause)
     {
         // 用户子句在独立分组内组合，默认过滤恒以 AND 前置（AppendWhereSection）——
@@ -113,6 +115,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>在既有排序上追加次级排序键。无前置 <see cref="OrderBy{TKey}"/> 时抛 <see cref="InvalidOperationException"/>。</summary>
     public QueryBuilder<T> ThenBy<TKey>(Expression<Func<T, TKey>> member, bool descending = false)
     {
         if (!HasClause(QueryClauseKind.OrderBy))
@@ -131,6 +134,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>限制返回行数（LIMIT）。n 必须为正数。</summary>
     public QueryBuilder<T> Take(int n)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(n);
@@ -138,6 +142,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>跳过前 n 行（OFFSET）。n 不能为负；裸 OFFSET 的方言差异（SQLite/MySQL）由构建器自动处理。</summary>
     public QueryBuilder<T> Skip(int n)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(n);
@@ -145,6 +150,8 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>追加参数化 IN 条件，与既有条件 AND 组合。
+    /// <para>空集合生成恒假条件 1=0（IN () 是非法 SQL）；超过 500 个值按批次切分为多个 IN 片段 OR 组合，规避各数据库参数上限。</para></summary>
     public QueryBuilder<T> WhereIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -179,6 +186,8 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>追加参数化 NOT IN 条件，与既有条件 AND 组合。
+    /// <para>空集合为 no-op（排除空集等于不过滤）；超过 500 个值按批次切分为多个 NOT IN 片段 AND 组合。</para></summary>
     public QueryBuilder<T> WhereNotIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -209,15 +218,19 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>INNER JOIN 已注册实体 TJoin 的表，ON 条件参数化绑定。TJoin 需有 [Table] 且经源生成器注册。</summary>
     public QueryBuilder<T> InnerJoin<TJoin>(FormattableString onClause) where TJoin : class, new()
         => AddJoin<TJoin>("INNER", onClause);
 
+    /// <summary>LEFT JOIN 已注册实体 TJoin 的表，ON 条件参数化绑定。TJoin 需有 [Table] 且经源生成器注册。</summary>
     public QueryBuilder<T> LeftJoin<TJoin>(FormattableString onClause) where TJoin : class, new()
         => AddJoin<TJoin>("LEFT", onClause);
 
+    /// <summary>RIGHT JOIN 已注册实体 TJoin 的表，ON 条件参数化绑定。TJoin 需有 [Table] 且经源生成器注册。</summary>
     public QueryBuilder<T> RightJoin<TJoin>(FormattableString onClause) where TJoin : class, new()
         => AddJoin<TJoin>("RIGHT", onClause);
 
+    /// <summary>追加 GROUP BY 分组列。重复调用追加多列；列名带表限定，JOIN 下不产生 ambiguous column。</summary>
     public QueryBuilder<T> GroupBy(Expression<Func<T, object?>> member)
     {
         string prefix = HasClause(QueryClauseKind.GroupBy) ? ", " : "GROUP BY ";
@@ -226,6 +239,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>追加 HAVING 条件（作用于分组后），参数化绑定；重复调用以 AND 组合。</summary>
     public QueryBuilder<T> Having(FormattableString clause)
     {
         AddFormattableClause(QueryClauseKind.Having,
@@ -233,6 +247,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>追加 UPDATE 的 SET 赋值项，值参数化绑定。至少一个 Set 才能执行 ExecuteNonQueryAsync。</summary>
     public QueryBuilder<T> Set<TValue>(Expression<Func<T, TValue>> member, TValue value)
     {
         DbParameter parameter = CreateParameter(value);
@@ -242,6 +257,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>按外键/主键 INNER JOIN 已注册子实体 TChild 的表。仅生成 JOIN 子句，不装配导航对象。</summary>
     public QueryBuilder<T> Include<TChild>(Expression<Func<T, object?>> fk,
         Expression<Func<TChild, object?>> pk) where TChild : class, new()
     {
@@ -253,12 +269,16 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>已废弃：单键无法表达 JOIN 两端，调用即抛 <see cref="NotSupportedException"/>。
+    /// 请使用 ThenInclude&lt;TGrandChild, TParent&gt;(grandChildKey, parentKey)。</summary>
     [Obsolete("此重载无法表达 JOIN 两端。请使用 ThenInclude<TGrandChild, TParent>(grandChildKey, parentKey)。")]
     public QueryBuilder<T> ThenInclude<TGrandChild>(Expression<Func<TGrandChild, object?>> fk)
         where TGrandChild : class, new()
         => throw new NotSupportedException(
             "ThenInclude requires both join keys. Use ThenInclude<TGrandChild, TParent>(grandChildKey, parentKey).");
 
+    /// <summary>在 <see cref="Include{TChild}"/> 基础上按两端键继续 INNER JOIN 孙实体 TGrandChild 的表。
+    /// 两实体均需已注册；仅生成 JOIN 子句，不装配导航对象。</summary>
     public QueryBuilder<T> ThenInclude<TGrandChild, TParent>(
         Expression<Func<TGrandChild, object?>> grandChildKey,
         Expression<Func<TParent, object?>> parentKey)
@@ -283,6 +303,8 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>定义 CTE（WITH cteName AS (subquery)），子查询参数化绑定；后续主查询 FROM 该 CTE 而非实体表。
+    /// <para>列名限定与 OrderBy/GroupBy 也切换为 CTE 名——子查询需输出实体全部列。</para></summary>
     public QueryBuilder<T> With(string cteName, FormattableString subquery)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cteName);
@@ -293,18 +315,22 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>标记为拆分查询：构建 SQL 时移除 JOIN 只查根实体，JOIN 参数同步排除。
+    /// <para>当前不执行导航对象装配，仅影响根查询构建。</para></summary>
     public QueryBuilder<T> AsSplitQuery()
     {
         _splitQuery = true;
         return this;
     }
 
+    /// <summary>追加 FOR UPDATE 行锁；skipLocked 为 true 时附加 SKIP LOCKED 跳过已锁行。需在事务内使用才有意义。</summary>
     public QueryBuilder<T> ForUpdate(bool skipLocked = false)
     {
         AddClause(QueryClauseKind.Lock, $"FOR UPDATE{(skipLocked ? " SKIP LOCKED" : "")}");
         return this;
     }
 
+    /// <summary>追加 FOR SHARE 共享锁——允许并发读、阻止并发写。需在事务内使用才有意义。</summary>
     public QueryBuilder<T> ForShare()
     {
         AddClause(QueryClauseKind.Lock, "FOR SHARE");
@@ -319,6 +345,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>为 SQL 附加块注释标记（业务标识/排查关联）。拒绝注释定界符与 NUL 字符。</summary>
     public QueryBuilder<T> Tag(string name)
     {
         AddClause(QueryClauseKind.Comment, $"/* {ValidateSqlComment(name)} */");
@@ -332,9 +359,13 @@ public struct QueryBuilder<T> where T : class, new()
         [CallerFilePath] string? file = null, [CallerLineNumber] int line = 0)
         => Tag($"{file}:{line} {member}");
 
+    /// <summary>路由到只读连接（若配置了读连接工厂）。活跃事务或写操作时自动回退主连接。</summary>
     public QueryBuilder<T> ForRead() { _useReadRoute = true; return this; }
+
+    /// <summary>强制路由回主（写）连接，撤销 <see cref="ForRead"/> 的读路由。</summary>
     public QueryBuilder<T> ForWrite() { _useReadRoute = false; return this; }
 
+    /// <summary>覆盖本查询的命令超时（秒）。必须为正数；仅影响当前构建器。</summary>
     public QueryBuilder<T> WithCommandTimeout(int seconds)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(seconds);
@@ -358,6 +389,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>绑定既有事务。事务必须属于本构建器的主连接，否则抛 <see cref="ArgumentException"/>。</summary>
     public QueryBuilder<T> WithTransaction(DbTransaction tran)
     {
         ArgumentNullException.ThrowIfNull(tran);
@@ -384,6 +416,7 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>不执行查询，返回构建好的 SQL 与参数快照（<see cref="DryRunResult"/>），用于预览/测试断言。</summary>
     public DryRunResult AsDryRun() => new(BuildSql(), GetQueryParameters());
 
     internal ValueTask<ConnectionLease> AcquireConnectionLeaseAsync(bool writeOperation,

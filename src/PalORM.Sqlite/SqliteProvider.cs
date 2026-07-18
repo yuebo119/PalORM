@@ -14,11 +14,17 @@ public sealed class SqliteProvider : IDbProvider
         SQLitePCL.Batteries_V2.Init();
     }
 
+    /// <summary>Provider 名称:SQLite。</summary>
     public static string Name => "SQLite";
+
+    /// <summary>SQL 方言标识:<see cref="SqlDialect.Sqlite"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.Sqlite;
 
+    /// <summary>创建 SqliteConnection。静态构造已保证 SQLitePCL bundle 在首次使用前初始化。</summary>
     public static DbConnection CreateConnection(string connectionString) => new SqliteConnection(connectionString);
 
+    /// <summary>创建连接。SQLite 为进程内嵌入式库,无服务端连接池——
+    /// 显式配置池参数时抛 <see cref="NotSupportedException"/>,而非静默忽略。</summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -28,17 +34,20 @@ public sealed class SqliteProvider : IDbProvider
         return new SqliteConnection(connectionString);
     }
 
+    /// <summary>双引号引用标识符(SQL 标准风格),内部双引号以 "" 转义。</summary>
     public static string QuoteIdentifier(string identifier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
         return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
     }
 
+    /// <summary>schema 与表名分别引用后以点连接;SQLite 中 schema 对应 ATTACH 数据库别名(main/temp/自定义)。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
+    /// <summary>SQLite 3.35+ 支持 RETURNING 子句。</summary>
     public static bool SupportsReturningClause => true;
 
     /// <summary>SQLite 的 CURRENT_TIMESTAMP 恒为 UTC；MySQL/PG 为会话时区——
@@ -54,6 +63,8 @@ public sealed class SqliteProvider : IDbProvider
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>用 PRAGMA table_info 查询列信息,列名位于结果集序号 1。
+    /// SQLite 不支持实体 Schema——schema 非空时抛 <see cref="NotSupportedException"/>。</summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -63,11 +74,14 @@ public sealed class SqliteProvider : IDbProvider
         return 1;
     }
 
+    /// <summary>参数占位符,形如 @p0。</summary>
     public static string GetParameterPlaceholder(int index) => $"@p{index}";
 
+    /// <summary>创建 SqliteParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。</summary>
     public static DbParameter CreateParameter(string name, object? value)
         => new SqliteParameter(name, value ?? DBNull.Value);
 
+    /// <summary>SQLITE_BUSY (5) / SQLITE_LOCKED (6)——数据库或表被其他连接锁定,属可重试瞬时故障。</summary>
     public static bool IsTransient(Exception exception)
         => exception is SqliteException { SqliteErrorCode: 5 or 6 };
 
