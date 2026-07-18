@@ -88,10 +88,13 @@ internal static class MigrationEmitter
             // 否则外部写入 NULL 后读取直接抛异常
             string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
                 ? " NOT NULL" : "";
+            // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）
+            string defaultClause = column.IsTimestamp
+                ? " DEFAULT CURRENT_TIMESTAMP" : "";
             string primaryKey = column.IsPrimaryKey && column.IsAutoIncrement
                 ? " PRIMARY KEY AUTOINCREMENT"
                 : column.IsPrimaryKey ? " PRIMARY KEY" : "";
-            columns.Add($"    {name} {dbType}{generated}{nullable}{primaryKey}");
+            columns.Add($"    {name} {dbType}{generated}{nullable}{defaultClause}{primaryKey}");
         }
 
         return $"CREATE TABLE IF NOT EXISTS {SqlGeneration.QuoteIdentifier(model.TableName, SqlGenerationDialect.Sqlite)} (\n" +
@@ -115,8 +118,15 @@ internal static class MigrationEmitter
             // 否则外部写入 NULL 后读取直接抛异常
             string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
                 ? " NOT NULL" : "";
+            // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）。
+            // MySQL 分秒精度列要求 DEFAULT 表达式精度一致（DATETIME(6) 需 CURRENT_TIMESTAMP(6)）
+            string defaultClause = column.IsTimestamp
+                ? dialect == SqlGenerationDialect.MySql && dbType.EndsWith("(6)", StringComparison.Ordinal)
+                    ? " DEFAULT CURRENT_TIMESTAMP(6)"
+                    : " DEFAULT CURRENT_TIMESTAMP"
+                : "";
             string primaryKey = GetPrimaryKeyClause(column, dialect);
-            columns.Add($"    {name} {dbType}{generated}{primaryKey}{nullable}");
+            columns.Add($"    {name} {dbType}{generated}{primaryKey}{nullable}{defaultClause}");
         }
 
         string tableName = SqlGeneration.QuoteIdentifier(model.TableName, dialect);

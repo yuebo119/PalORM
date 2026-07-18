@@ -29,7 +29,7 @@ internal static class PalORM_RegistryInitializer
             [typeof(global::AllTypesEntity)] = new global::PalORM.CommandSqlSet(
                 "INSERT INTO all_types (int_value, short_value, byte_value, string_value, char_value, bool_value, decimal_value, double_value, float_value, datetime_value, guid_value, dto_value, date_value, time_value, nullable_int, nullable_string, nullable_guid, nullable_time) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17)", "UPDATE all_types SET int_value = @p0, short_value = @p1, byte_value = @p2, string_value = @p3, char_value = @p4, bool_value = @p5, decimal_value = @p6, double_value = @p7, float_value = @p8, datetime_value = @p9, guid_value = @p10, dto_value = @p11, date_value = @p12, time_value = @p13, nullable_int = @p14, nullable_string = @p15, nullable_guid = @p16, nullable_time = @p17 WHERE Id = @p18", "DELETE FROM all_types WHERE Id = @p0", "INSERT INTO all_types (int_value, short_value, byte_value, string_value, char_value, bool_value, decimal_value, double_value, float_value, datetime_value, guid_value, dto_value, date_value, time_value, nullable_int, nullable_string, nullable_guid, nullable_time) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17) RETURNING Id, int_value, short_value, byte_value, string_value, char_value, bool_value, decimal_value, double_value, float_value, datetime_value, guid_value, dto_value, date_value, time_value, nullable_int, nullable_string, nullable_guid, nullable_time"),
             [typeof(global::FullFeatureEntity)] = new global::PalORM.CommandSqlSet(
-                "INSERT INTO full_feature (code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)", "UPDATE full_feature SET code = @p0, kind = @p1, external_id = @p2, payload = @p3, raw_json = @p4, uniq_token = @p5, deleted_at = @p6, tenant_id = @p7 WHERE Id = @p8", "DELETE FROM full_feature WHERE Id = @p0", "INSERT INTO full_feature (code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7) RETURNING Id, code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id"),
+                "INSERT INTO full_feature (code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)", "UPDATE full_feature SET code = @p0, kind = @p1, external_id = @p2, payload = @p3, raw_json = @p4, uniq_token = @p5, deleted_at = @p6, tenant_id = @p7 WHERE Id = @p8", "DELETE FROM full_feature WHERE Id = @p0", "INSERT INTO full_feature (code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7) RETURNING Id, code, kind, external_id, payload, raw_json, uniq_token, row_updated_at, total_display, deleted_at, tenant_id"),
             [typeof(global::ReservedWordEntity)] = new global::PalORM.CommandSqlSet(
                 "INSERT INTO order (Id, select) VALUES (@p0, @p1)", "UPDATE order SET select = @p0 WHERE Id = @p1", "DELETE FROM order WHERE Id = @p0", "INSERT INTO order (Id, select) VALUES (@p0, @p1) RETURNING Id, select"),
         },
@@ -58,12 +58,12 @@ internal static class PalORM_RegistryInitializer
                     "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)",
                     "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7 WHERE \"Id\" = @p8",
                     "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\""),
+                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\""),
                 new global::PalORM.CommandSqlSet(
                     "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)",
                     "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7 WHERE \"Id\" = @p8",
                     "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\""),
+                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\""),
                 new global::PalORM.CommandSqlSet(
                     "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)",
                     "UPDATE `full_feature` SET `code` = @p0, `kind` = @p1, `external_id` = @p2, `payload` = @p3, `raw_json` = @p4, `uniq_token` = @p5, `deleted_at` = @p6, `tenant_id` = @p7 WHERE `Id` = @p8",
@@ -173,7 +173,7 @@ internal static class PalORM_RegistryInitializer
             ColumnNames = new global::System.Collections.Generic.Dictionary<global::System.Type, string[]>
         {
             [typeof(global::AllTypesEntity)] = new[] { "Id", "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time" },
-            [typeof(global::FullFeatureEntity)] = new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id" },
+            [typeof(global::FullFeatureEntity)] = new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "row_updated_at", "total_display", "deleted_at", "tenant_id" },
             [typeof(global::ReservedWordEntity)] = new[] { "Id", "select" },
         },
 
@@ -210,6 +210,8 @@ internal static class PalORM_RegistryInitializer
                 ["Payload"] = "payload",
                 ["RawJson"] = "raw_json",
                 ["UniqueToken"] = "uniq_token",
+                ["RowUpdatedAt"] = "row_updated_at",
+                ["TotalDisplay"] = "total_display",
                 ["DeletedAt"] = "deleted_at",
                 ["TenantId"] = "tenant_id",
             },
@@ -223,7 +225,7 @@ internal static class PalORM_RegistryInitializer
             CreateTableSql = new global::System.Collections.Generic.Dictionary<global::System.Type, string>
         {
             [typeof(global::AllTypesEntity)] = "CREATE TABLE IF NOT EXISTS \"all_types\" (\n    \"Id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n    \"int_value\" INTEGER NOT NULL,\n    \"short_value\" SMALLINT NOT NULL,\n    \"byte_value\" SMALLINT NOT NULL,\n    \"string_value\" TEXT NOT NULL,\n    \"char_value\" TEXT NOT NULL,\n    \"bool_value\" BOOLEAN NOT NULL,\n    \"decimal_value\" DECIMAL NOT NULL,\n    \"double_value\" DOUBLE NOT NULL,\n    \"float_value\" FLOAT NOT NULL,\n    \"datetime_value\" TIMESTAMP NOT NULL,\n    \"guid_value\" UUID NOT NULL,\n    \"dto_value\" TIMESTAMPTZ NOT NULL,\n    \"date_value\" DATE NOT NULL,\n    \"time_value\" TIME NOT NULL,\n    \"nullable_int\" INTEGER,\n    \"nullable_string\" TEXT,\n    \"nullable_guid\" UUID,\n    \"nullable_time\" TIME\n)",
-            [typeof(global::FullFeatureEntity)] = "CREATE TABLE IF NOT EXISTS \"full_feature\" (\n    \"Id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n    \"code\" TEXT NOT NULL,\n    \"kind\" TEXT NOT NULL,\n    \"external_id\" TEXT NOT NULL,\n    \"payload\" TEXT NOT NULL,\n    \"raw_json\" TEXT NOT NULL,\n    \"uniq_token\" TEXT NOT NULL,\n    \"deleted_at\" TEXT,\n    \"tenant_id\" TEXT NOT NULL\n)",
+            [typeof(global::FullFeatureEntity)] = "CREATE TABLE IF NOT EXISTS \"full_feature\" (\n    \"Id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n    \"code\" TEXT NOT NULL,\n    \"kind\" TEXT NOT NULL,\n    \"external_id\" TEXT NOT NULL,\n    \"payload\" TEXT NOT NULL,\n    \"raw_json\" TEXT NOT NULL,\n    \"uniq_token\" TEXT NOT NULL,\n    \"row_updated_at\" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"total_display\" TEXT GENERATED ALWAYS AS (code || '-' || kind) STORED NOT NULL,\n    \"deleted_at\" TEXT,\n    \"tenant_id\" TEXT NOT NULL\n)",
             [typeof(global::ReservedWordEntity)] = "CREATE TABLE IF NOT EXISTS \"order\" (\n    \"Id\" TEXT PRIMARY KEY,\n    \"select\" TEXT NOT NULL\n)",
         },
 

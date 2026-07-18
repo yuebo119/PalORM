@@ -33,6 +33,10 @@ public partial class DataSession<TProvider>
             (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
         string quotedTable = TProvider.QuoteIdentifier(tableName);
         string quotedPrimaryKey = TProvider.QuoteIdentifier(pkCol);
+        // 租户过滤与单条 DeleteAsync 对齐（ITM-404）：跨租户主键命中 0 行
+        string tenantFilter = HasTenantFilter<T>()
+            ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
+            : "";
         const int batchSize = 500;
         long total = 0;
         DbTransaction? previousTransaction = GetActiveTransaction();
@@ -58,8 +62,8 @@ public partial class DataSession<TProvider>
                 cmd.CommandText = isSoftDelete
                     ? $"UPDATE {quotedTable} SET {TProvider.QuoteIdentifier("deleted_at")} = " +
                       $"{TProvider.CurrentTimestampExpression} WHERE {predicate} AND " +
-                      $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL"
-                    : $"DELETE FROM {quotedTable} WHERE {predicate}";
+                      $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}"
+                    : $"DELETE FROM {quotedTable} WHERE {predicate}{tenantFilter}";
 
                 // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
                 // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
@@ -76,6 +80,7 @@ public partial class DataSession<TProvider>
                     cmd.Parameters.Add(TProvider.CreateParameter(
                         placeholders[index], scratch.Parameters[0].Value));
                 }
+                BindDefaultFilterParameters<T>(cmd);
 
                 total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
