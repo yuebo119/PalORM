@@ -55,7 +55,9 @@ public interface IDbProvider
         => exception is DbException { IsTransient: true };
 
     /// <summary>连接打开后的一次性初始化钩子（如 SQLite 的 PRAGMA 配置）。默认无操作。
-    /// 由 DataSession.CreateAsync 在连接打开后、会话可用前调用；取消与连接超时保护对其生效。</summary>
+    /// 主连接由 DataSession.CreateAsync 在连接打开后、会话可用前调用；
+    /// 读路由（ForRead）连接由 ConnectionLease.OpenOwnedAsync 在打开后调用——
+    /// 两类连接均经初始化，取消与超时保护对其生效。</summary>
     static virtual Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
         => Task.CompletedTask;
 

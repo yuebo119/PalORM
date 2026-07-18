@@ -261,6 +261,99 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(analyzer.SupportedDiagnostics.Any(d => d.Id == "PALORM007")).IsTrue();
     }
 
+    // ─── PALORM020：索引声明有效性（ITM-203）───
+
+    [Test]
+    public async Task EmptyColumnsIndex_ReportsPalorm020_WithoutCascadingErrors()
+    {
+        const string source = """
+            using PalORM;
+            [Table("entities")]
+            [Index("idx_orphan")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM020")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task DuplicateIndexName_SameEntity_ReportsPalorm020()
+    {
+        const string source = """
+            using PalORM;
+            [Table("entities")]
+            [Index("idx_x", "name")]
+            [Index("idx_x", "value")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("value")] public long Value { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Count(d => d.Id == "PALORM020")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ExplicitIndexCollidingWithDerivedUniqueName_ReportsPalorm020()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            [Index("ux_t_code", "name")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("code")]
+                [Unique]
+                public string Code { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        // [Unique] 派生 ux_t_code 与显式 [Index("ux_t_code")] 冲突
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM020")).IsTrue();
+    }
+
+    [Test]
+    public async Task ValidIndexDeclarations_DoNotReportPalorm020()
+    {
+        const string source = """
+            using PalORM;
+            [Table("entities")]
+            [Index("idx_name", "name")]
+            [Index("idx_value", "value")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("value")] public long Value { get; set; }
+                [Column("code")]
+                [Unique]
+                public string Code { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM020")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
     private static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
         AnalyzeAsync(string source)
     {

@@ -137,6 +137,18 @@ public static class PalORM_Runtime
             foreach (var pair in fragment.CrudMetadatas)
                 crudMetadatas.Add(pair.Key, pair.Value.Copy());
 
+            // 防御性拷贝（ITM-204，与 ColumnNames 纪律对齐）：片段传入的是生成代码
+            // static readonly string[] 的裸引用，Get() 返回值可被向下转型修改——
+            // 注册时包装为只读快照，保证注册表"完整不可变"声明成立。
+            var createIndexSql = new Dictionary<Type, CreateIndexSqlSet>(current.CreateIndexSqlByDialect);
+            foreach (var pair in fragment.CreateIndexSqlByDialect)
+            {
+                createIndexSql.Add(pair.Key, new CreateIndexSqlSet(
+                    Array.AsReadOnly(pair.Value.Sqlite.ToArray()),
+                    Array.AsReadOnly(pair.Value.PostgreSql.ToArray()),
+                    Array.AsReadOnly(pair.Value.MySql.ToArray())));
+            }
+
             var next = new RuntimeRegistryState
             {
                 RowFactories = Merge(current.RowFactories, fragment.RowFactories),
@@ -153,8 +165,7 @@ public static class PalORM_Runtime
                 CreateTableSql = Merge(current.CreateTableSql, fragment.CreateTableSql),
                 CreateTableSqlByDialect = Merge(
                     current.CreateTableSqlByDialect, fragment.CreateTableSqlByDialect),
-                CreateIndexSqlByDialect = Merge(
-                    current.CreateIndexSqlByDialect, fragment.CreateIndexSqlByDialect),
+                CreateIndexSqlByDialect = createIndexSql.ToFrozenDictionary(),
                 SetIdDelegates = Merge(current.SetIdDelegates, fragment.SetIdDelegates),
                 CrudMetadatas = crudMetadatas.ToFrozenDictionary(),
                 EntityFeatures = Merge(current.EntityFeatures, fragment.EntityFeatures)

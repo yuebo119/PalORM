@@ -99,13 +99,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Type '{0}' declares {1} [Key] properties; PalORM supports exactly one primary key per entity",
         "PalORM", DiagnosticSeverity.Error, true);
 
+    public static readonly DiagnosticDescriptor InvalidIndexDeclaration = new(
+        "PALORM020", "Index declaration is invalid or conflicting",
+        "{0}", "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, SqlFileNotFound, SchemaMismatch, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
          UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl,
-         MissingTenantColumn, CompositePrimaryKey];
+         MissingTenantColumn, CompositePrimaryKey, InvalidIndexDeclaration];
 
     public override void Initialize(AnalysisContext context)
     {
@@ -173,6 +177,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                     && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));
             if (isTenantAware && !hasTenantColumn)
                 ctx.ReportDiagnostic(Diagnostic.Create(MissingTenantColumn, type.Locations[0], type.Name));
+
+            // PALORM020: 索引声明有效性——消除 TableModel 静默丢弃与 IF NOT EXISTS/1061 掩蔽（ITM-203）
+            ValidateIndexDeclarations(ctx, type);
 
             var concurrencyTokens = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
@@ -315,6 +322,68 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 }
             }
         }, SyntaxKind.InvocationExpression);
+    }
+
+    /// <summary>PALORM020：空列 [Index]、同实体重名索引、[Unique] 派生名 ux_ 与显式 [Index] 名冲突。
+    /// 跨实体同名索引（SQLite/PG schema 级命名空间下 IF NOT EXISTS 静默跳过）由运行时
+    /// MigrateAsync 的重复告警日志兜底——Analyzer 按类型增量执行，跨实体聚合不可靠。</summary>
+    private static void ValidateIndexDeclarations(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        var tableAttr = type.GetAttributes().FirstOrDefault(a =>
+            a.AttributeClass?.Name is "TableAttribute" or "Table");
+        string tableName = tableAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? type.Name;
+
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+
+        // [Unique] 派生索引名先占位（与 TableModel 的 ux_{table}_{column} 命名一致）
+        foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
+        {
+            if (SourceGenerationValidation.IsNotMapped(member)) continue;
+            if (!member.GetAttributes().Any(a => a.AttributeClass?.Name is "UniqueAttribute" or "Unique"))
+                continue;
+            var columnAttr = member.GetAttributes().FirstOrDefault(a =>
+                a.AttributeClass?.Name is "ColumnAttribute" or "Column");
+            string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
+            string derivedName = $"ux_{tableName}_{columnName}";
+            if (!seenNames.Add(derivedName))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration,
+                    member.Locations.FirstOrDefault() ?? type.Locations[0],
+                    $"[Unique] on '{member.Name}' derives index name '{derivedName}' which is already used on this entity"));
+            }
+        }
+
+        foreach (var indexAttr in type.GetAttributes().Where(a =>
+            a.AttributeClass?.Name is "IndexAttribute" or "Index"))
+        {
+            var location = indexAttr.ApplicationSyntaxReference?.GetSyntax(ctx.CancellationToken).GetLocation()
+                ?? type.Locations[0];
+            if (indexAttr.ConstructorArguments.Length < 2
+                || indexAttr.ConstructorArguments[0].Value is not string indexName
+                || string.IsNullOrWhiteSpace(indexName))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
+                    $"[Index] on '{type.Name}' has no valid name; declare [Index(\"name\", \"col1\", ...)]"));
+                continue;
+            }
+            string[] columns = indexAttr.ConstructorArguments[1].Values
+                .Select(static v => v.Value as string)
+                .Where(static v => !string.IsNullOrWhiteSpace(v))
+                .Cast<string>()
+                .ToArray();
+            if (columns.Length == 0)
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
+                    $"[Index(\"{indexName}\")] on '{type.Name}' declares no columns; it would be silently dropped"));
+                continue;
+            }
+            if (!seenNames.Add(indexName))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
+                    $"Index name '{indexName}' is declared more than once on '{type.Name}'"));
+            }
+        }
     }
 
     private static HashSet<string> GetAssemblyTableNames(IAssemblySymbol assembly)
