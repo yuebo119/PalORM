@@ -76,7 +76,7 @@ fi
 # ── D6: SourceGen 计数五处一致 ──
 sg_header=$(grep -oP 'SourceGen \K\d+/\d+' docs/架构设计.md | head -1)
 sg_table=$(grep -oP 'SourceGen\.Tests\s*\|\s*\K\d+/\d+' docs/架构设计.md)
-if [ "$sg_header" = "$sg_table" ] && [ "$sg_header" = "73/73" ]; then
+if [ "$sg_header" = "$sg_table" ] && [ "$sg_header" = "80/80" ]; then
     pass "D6 SourceGen 计数一致: $sg_header"
 else
     fail "D6 SourceGen: 页眉=$sg_header, 表格=$sg_table"

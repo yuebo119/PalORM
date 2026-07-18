@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # .ai 系统机械校验：提示词引用可解析、口径数字与事实一致、配套脚本存在。
-# 7 项检查全部通过退出 0，任一失败退出 1。
+# 11 项检查全部通过退出 0，任一失败退出 1。
 
 set -uo pipefail
 
@@ -22,9 +22,11 @@ fail() {
 printf '═══════ .ai 系统一致性校验 ═══════\n'
 printf '时间：%s\n\n' "$(date '+%Y-%m-%d %H:%M:%S')"
 
-# V1 四子系统提示词与模板齐全
+# V1 引擎 + 双 profile + 工具提示词与模板齐全
 missing=""
 for f in \
+    .ai/deep-check-engine.md \
+    .ai/metrics.md \
     .ai/audit-system/prompt.md \
     .ai/audit-system/known-false-positives.md \
     .ai/gate-system/prompt.md \
@@ -35,7 +37,7 @@ for f in \
     [ -f "$f" ] || missing="$missing $f"
 done
 if [ -z "$missing" ]; then
-    pass 1 '四子系统提示词与模板齐全'
+    pass 1 '引擎/双profile/工具提示词与模板齐全'
 else
     fail 1 '提示词/模板缺失' "$missing"
 fi
@@ -51,7 +53,8 @@ for f in \
     scripts/verify-action-items.sh \
     scripts/gate-check.sh \
     scripts/refine-scan.sh \
-    scripts/stub-check.sh; do
+    scripts/stub-check.sh \
+    scripts/assertion-strength-check.sh; do
     [ -f "$f" ] || missing="$missing $f"
 done
 if [ -z "$missing" ]; then
@@ -127,6 +130,25 @@ if [ -z "$missing" ]; then
     pass 9 'README 文件地图与实际一致'
 else
     fail 9 'README 文件地图指向不存在的文件' "$missing"
+fi
+
+# V10 机械防线存在：快照基线非空 + 对称性测试 + 断言强度脚本（README 防线清单的账实一致）
+defense_ok=true
+[ -f test/PalORM.SourceGen.Tests/SnapshotTests.cs ] || defense_ok=false
+[ -f test/PalORM.SourceGen.Tests/DialectSymmetryTests.cs ] || defense_ok=false
+snap_count=$(ls test/PalORM.SourceGen.Tests/Snapshots/*.snap 2>/dev/null | wc -l | tr -d ' ')
+[ "$snap_count" -ge 10 ] || defense_ok=false
+if $defense_ok; then
+    pass 10 "机械防线齐全（快照基线 $snap_count 份 + 对称性测试 + 断言强度门禁）"
+else
+    fail 10 '机械防线缺失' "SnapshotTests/DialectSymmetryTests/Snapshots（$snap_count 份，需 ≥10）"
+fi
+
+# V11 metrics 账本存在且逃逸账本结构完整
+if [ -f .ai/metrics.md ] && grep -q '## 缺陷逃逸账本' .ai/metrics.md && grep -q '## 轮次记录' .ai/metrics.md; then
+    pass 11 'metrics 账本存在且结构完整'
+else
+    fail 11 'metrics 账本缺失或结构不完整' '.ai/metrics.md 需含「轮次记录」与「缺陷逃逸账本」'
 fi
 
 printf '\n通过：%s  失败：%s  总计：%s\n' "$PASSED" "$FAILED" "$((PASSED + FAILED))"

@@ -18,6 +18,8 @@ public struct QueryBuilder<T> where T : class, new()
     // From<T>() 注入默认过滤（软删/租户）后的基准子句数——QueryMultipleAsync 据此
     // 区分"默认注入"与"用户显式子句"（仅后者应触发误用守卫）
     internal int _defaultClauseCount;
+    // 默认过滤中 WHERE 类子句数——OrWhere 据此区分"与用户条件 OR"和"与默认过滤 OR"（后者禁止）
+    internal int _defaultWhereCount;
     internal readonly Func<string, string> _quoteIdentifier;
     internal readonly IRowFactory<T> _factory;
     internal readonly List<IQueryInterceptor> _interceptors;
@@ -93,8 +95,13 @@ public struct QueryBuilder<T> where T : class, new()
 
     public QueryBuilder<T> OrWhere(FormattableString clause)
     {
+        // OR 只与既有"用户"条件结合；首个用户子句若用 OrWhere，与默认过滤（软删/租户）
+        // 同层 OR 会使过滤被用户条件绕过（性质测试发现的 ITM-307 残留变体）——退化为 AND
         AddParenthesizedClause(
-            HasClause(QueryClauseKind.Where) ? "OR " : "WHERE ", clause);
+            CountClauses(QueryClauseKind.Where) > _defaultWhereCount
+                ? "OR "
+                : HasClause(QueryClauseKind.Where) ? "AND " : "WHERE ",
+            clause);
         return this;
     }
 
@@ -400,6 +407,7 @@ public struct QueryBuilder<T> where T : class, new()
     {
         AddClause(QueryClauseKind.Where,
             $"{(HasClause(QueryClauseKind.Where) ? "AND" : "WHERE")} {condition}");
+        _defaultWhereCount++;
     }
 
     internal QueryBuilder<T> CloneForExecution()
@@ -419,7 +427,9 @@ public struct QueryBuilder<T> where T : class, new()
             _metrics = _metrics,
             _splitQuery = _splitQuery,
             _useReadRoute = _useReadRoute,
-            _transaction = _transaction
+            _transaction = _transaction,
+            _defaultClauseCount = _defaultClauseCount,
+            _defaultWhereCount = _defaultWhereCount
         };
         foreach (QueryClause clause in _clauses)
         {
@@ -609,6 +619,16 @@ public struct QueryBuilder<T> where T : class, new()
 
     private bool HasClause(QueryClauseKind kind)
         => _clauses.Exists(clause => clause.Kind == kind);
+
+    private int CountClauses(QueryClauseKind kind)
+    {
+        int count = 0;
+        foreach (QueryClause clause in _clauses)
+        {
+            if (clause.Kind == kind) count++;
+        }
+        return count;
+    }
 
     private System.Collections.ObjectModel.ReadOnlyCollection<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
