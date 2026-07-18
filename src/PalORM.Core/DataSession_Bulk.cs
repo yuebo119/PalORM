@@ -61,15 +61,20 @@ public partial class DataSession<TProvider>
                       $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL"
                     : $"DELETE FROM {quotedTable} WHERE {predicate}";
 
+                // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
+                // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
+                // 经暂存命令中转取值，按批内序号重建参数。
+                await using DbCommand scratch = CreateCommand();
                 for (int index = 0; index < batchLen; index++)
                 {
-                    int parameterCount = cmd.Parameters.Count;
-                    bindKey(cmd, keys[start + index]);
-                    if (cmd.Parameters.Count != parameterCount + 1)
+                    scratch.Parameters.Clear();
+                    bindKey(scratch, keys[start + index]);
+                    if (scratch.Parameters.Count != 1)
                         throw new InvalidOperationException(
                             $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
 
-                    cmd.Parameters[parameterCount].ParameterName = placeholders[index];
+                    cmd.Parameters.Add(TProvider.CreateParameter(
+                        placeholders[index], scratch.Parameters[0].Value));
                 }
 
                 total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
