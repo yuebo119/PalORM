@@ -68,11 +68,15 @@ internal static class MigrationEmitter
     internal static string ToCSharpLiteral(string value)
         => SymbolDisplay.FormatLiteral(value, quote: true);
 
+    /// <summary>legacy 单方言 DDL——填充注册表 CreateTableSql（MigrateAsync 在
+    /// CreateTableSqlByDialect 缺键时的回退）。标识符引用与方言重载对齐（SQLite/PG
+    /// 风格双引号）；列型走 DbTypeName 原值，与方言重载的类型映射刻意不同。</summary>
     internal static string BuildCreateTable(TableModel model)
     {
         var columns = new List<string>();
         foreach (ColumnModel column in model.Columns.AsSpan())
         {
+            string name = SqlGeneration.QuoteIdentifier(column.ColumnName, SqlGenerationDialect.Sqlite);
             string dbType = column.IsPrimaryKey && column.IsAutoIncrement
                 ? "INTEGER"
                 : column.DbTypeName;
@@ -87,10 +91,10 @@ internal static class MigrationEmitter
             string primaryKey = column.IsPrimaryKey && column.IsAutoIncrement
                 ? " PRIMARY KEY AUTOINCREMENT"
                 : column.IsPrimaryKey ? " PRIMARY KEY" : "";
-            columns.Add($"    {column.ColumnName} {dbType}{generated}{nullable}{primaryKey}");
+            columns.Add($"    {name} {dbType}{generated}{nullable}{primaryKey}");
         }
 
-        return $"CREATE TABLE IF NOT EXISTS {model.TableName} (\n" +
+        return $"CREATE TABLE IF NOT EXISTS {SqlGeneration.QuoteIdentifier(model.TableName, SqlGenerationDialect.Sqlite)} (\n" +
             $"{string.Join(",\n", columns)}\n)";
     }
 

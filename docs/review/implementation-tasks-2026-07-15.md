@@ -32,6 +32,10 @@
 | AOT-001 | P1 | 扩展三 Provider 与 NuGet consumer AOT 矩阵 | 已完成（真库收口） | 三 Provider 原生运行全部通过：SQLite 本机 + PG/MySQL 本机 Docker（CI 同配置 postgres:17/mysql:8.4 容器）实测 PASSED（2026-07-18）；7 项真库集成用例 146/146 全绿；远端 CI 待 push 触发 |
 | AUD-001 | P0 | 凭据安全事件 | 未处理 | 用户决定仅记录；G9 必须继续阻断 |
 | API-001 | P3 | `PgNotificationListener.StopAsync()` 无 CancellationToken 参数 | 已记录·待 3.0 | G25 门禁豁免在案：2.0.1 已发布签名，追加可选参数属 binary-breaking（同 2.0.0 变更先例）；3.0 对齐 `IHostedService.StopAsync(CancellationToken)` 惯例时移除豁免 |
+| SEC-001 | P2 | MigrationEmitter legacy BuildCreateTable 标识符未引用 | 已完成 | 审计 2026-07-17 SEC-01：legacy 重载（注册表 CreateTableSql 回退路径）表名/列名补 QuoteIdentifier（SQLite/PG 双引号风格），与方言重载对齐；5 个受影响断言同步；SourceGen 73/73；反向验证撤回修复 → CreateTableSql_IsGenerated 确定性失败 |
+| ERR-001 | P3 | FormattableSqlFormatter 泛型 FormatException 缺索引值 | 已完成 | 审计 2026-07-17 ERR-01：异常消息补实际越界索引与 ArgumentCount；既有 Throws<FormatException> 断言不受影响 |
+| ERR-002 | P3 | PgNotificationListener 无 OnError 订阅者时静默终止 | 已完成 | 审计 2026-07-17 ERR-02：新增可选 `Logger` 属性 + LoggerMessage 源生成兜底（CA1848 合规）；RaiseError 无订阅者时经 Logger 留痕；新用例 BackgroundFailure_WithoutOnErrorSubscriber_LogsTermination 反向验证（静默化 → 确定性超时失败）；Core 143/143 |
+| DOC-004 | P3 | Core 依赖口径与 Logging 抽象失真（审计 ARCH-01） | 已完成 | 架构设计.md 依赖节 + README 最小依赖行明确"BCL + ADO.NET + 共享框架日志抽象（M.E.Logging.Abstractions，零第三方传递、AOT 安全）"，与 DataSession/DbOptions 实际引用一致 |
 
 > **AUD-001 追加（2026-07-17 晚）**：7-17 的 Git 仓库重建（f0df771）把含真实凭据的旧版 `scripts/set-test-env.sh` 重新带入了全部历史提交——此前审计声称的"历史已重写清除"在重建仓库中不再成立。本轮已完成仓库侧再整改：脚本改为从未跟踪的 `.env.test` 加载且不回显值，新增 `scripts/.env.test.example` 占位模板，`.gitignore` 排除 `.env.test`，G9 转绿并经故障注入负向验证。**历史提交中的凭据仍在**（8 个提交全部含旧脚本），需要用户决策：历史重写（无 remote，影响面为本地 8 提交）+ 数据库侧凭据轮换（192.168.x.x 的 PG/MySQL 账号）。
 
