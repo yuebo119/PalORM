@@ -998,6 +998,86 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(registry).DoesNotContain("[typeof(global::PlainItem)] = new global::PalORM.CreateIndexSqlSet");
     }
 
+    [Test]
+    public async Task DecimalColumn_EmitsExplicitPrecision_AllDialects()
+    {
+        // ITM-303：MySQL 裸 DECIMAL 即 DECIMAL(10,0)，小数静默截断
+        const string source = """
+            using PalORM;
+
+            [Table("prices")]
+            public sealed partial class Price
+            {
+                [Key] public long Id { get; set; }
+                [Column("amount")] public decimal Amount { get; set; }
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        string migration = result.GeneratedSources.Single(pair =>
+            pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // 三方言（列名带引用符）统一显式精度；legacy CreateTable 走 DbTypeName 不在断言范围
+        string dialectSection = ExtractMethod(migration, "CreateTableSqlite", "CreateIndexesSqlite");
+        await Assert.That(dialectSection).Contains("DECIMAL(18,6)");
+        await Assert.That(dialectSection).DoesNotContain("DECIMAL ");
+    }
+
+    [Test]
+    public async Task MySqlIndexedStringColumn_EmitsVarchar_NotText()
+    {
+        // ITM-201：MySQL 对 TEXT 列建索引报 1170（非 1061，不被幂等兜底吞）
+        const string source = """
+            using PalORM;
+
+            [Table("indexed_items")]
+            [Index("ux_indexed_items_sku", "sku", Unique = true)]
+            public sealed partial class IndexedItem
+            {
+                [Key] public long Id { get; set; }
+                [Column("sku")] [Required] public string Sku { get; set; } = "";
+                [Column("note")] public string? Note { get; set; }
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        string migration = result.GeneratedSources.Single(pair =>
+            pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // MySQL 方言：被索引列 VARCHAR(255)，未被索引列保持 TEXT（MySQL 列名用反引号引用）
+        string mysqlSection = ExtractMethod(migration, "CreateTableMySql", "CreateIndexesSqlite");
+        await Assert.That(mysqlSection).Contains("`sku` VARCHAR(255)");
+        await Assert.That(mysqlSection).Contains("`note` TEXT");
+    }
+
+    [Test]
+    public async Task NonNullableAnnotatedColumn_EmitsNotNull_WithoutRequired()
+    {
+        // ITM-312：DDL NOT NULL 与 RowFactory 的 IsDBNull 守卫必须共用可空性语义源——
+        // 非空注解列若建成可空，外部写入 NULL 后物化直接抛异常
+        const string source = """
+            using PalORM;
+
+            [Table("annotated_items")]
+            public sealed partial class AnnotatedItem
+            {
+                [Key] public long Id { get; set; }
+                [Column("plain_name")] public string PlainName { get; set; } = "";
+                [Column("optional_note")] public string? OptionalNote { get; set; }
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        string migration = result.GeneratedSources.Single(pair =>
+            pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(migration).Contains("plain_name TEXT NOT NULL");
+        await Assert.That(migration).DoesNotContain("optional_note TEXT NOT NULL");
+    }
+
     private static GeneratorResult RunGenerator(string source)
         => RunGenerator(CreateCompilation(source));
 

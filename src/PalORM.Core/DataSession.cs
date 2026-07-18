@@ -232,11 +232,16 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         if (updateSql.Length == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
+        // 生成的 UPDATE 以 "WHERE pk = @pN [AND version = @pM]" 结尾，可安全追加租户过滤；
+        // 跨租户主键的更新命中 0 行（并发实体表现为 ConcurrencyConflictException，失败关闭）
+        if (HasTenantFilter<T>())
+            updateSql += $" AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}";
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = updateSql;
         cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
         metadata.BindUpdate(cmd, entity);
+        BindDefaultFilterParameters<T>(cmd);
         int affectedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         if (metadata.IncrementVersion is not null)
         {
@@ -266,16 +271,24 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         if (isSoftDelete && PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
         {
             await using DbCommand cmd = CreateCommand();
-            cmd.CommandText = $"UPDATE {TProvider.QuoteIdentifier(tn)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0";
+            // AND deleted_at IS NULL：与 BulkDeleteAsync 幂等语义对齐——重复删除不刷新时间戳且返回 0
+            string tenantFilter = HasTenantFilter<T>()
+                ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
+                : "";
+            cmd.CommandText = $"UPDATE {TProvider.QuoteIdentifier(tn)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
             cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters<T>(cmd);
             return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         await using DbCommand delCmd = CreateCommand();
-        delCmd.CommandText = sqls.Delete;
+        delCmd.CommandText = HasTenantFilter<T>()
+            ? $"{sqls.Delete} AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
+            : sqls.Delete;
         delCmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
         BindGeneratedKeyParameter<T>(delCmd, key);
+        BindDefaultFilterParameters<T>(delCmd);
         return await delCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -290,11 +303,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
         await using DbCommand cmd = CreateCommand();
-        string filter = GetSoftDeleteFilter<T>();
+        string filter = GetDefaultFilterFragment<T>();
         string selectColumns = string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier));
         cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0{filter}";
         cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
         BindGeneratedKeyParameter<T>(cmd, key);
+        BindDefaultFilterParameters<T>(cmd);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false)
@@ -313,8 +327,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbCommand cmd = CreateCommand();
         string selectColumns = string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier));
-        cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetSoftDeleteWhereClause<T>()}";
+        cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
         cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        BindDefaultFilterParameters<T>(cmd);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<T>();
@@ -593,17 +608,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
-        string softDeleteCondition = GetSoftDeleteCondition<T>();
+        string defaultFilter = GetDefaultFilterCondition<T>();
         string sql = $"SELECT COUNT(*) FROM {TProvider.QuoteIdentifier(tn)}";
         if (where is not null)
-            sql += " WHERE " + (softDeleteCondition.Length == 0 ? "" : softDeleteCondition + " AND ")
-                + FormatSqlWithParameters(where);
-        else if (softDeleteCondition.Length > 0)
-            sql += " WHERE " + softDeleteCondition;
+            // 用户条件必须整体括号包裹：含 OR 时 AND 优先级会使默认过滤对 OR 分支失效
+            sql += " WHERE " + (defaultFilter.Length == 0 ? "" : defaultFilter + " AND ")
+                + "(" + FormatSqlWithParameters(where) + ")";
+        else if (defaultFilter.Length > 0)
+            sql += " WHERE " + defaultFilter;
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = sql;
         cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
         if (where is not null) BindFormattableParameters(cmd, where);
+        BindDefaultFilterParameters<T>(cmd);
         object? r = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         return r is long l ? l : Convert.ToInt64(r);
     }
@@ -612,7 +629,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public async ValueTask<decimal> SumAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        return Convert.ToDecimal(await ExecuteScalarAsync($"SELECT SUM({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetSoftDeleteWhereClause<T>()}", expression, ct).ConfigureAwait(false));
+        return Convert.ToDecimal(await ExecuteScalarAsync<T>($"SELECT SUM({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false));
     }
 
     /// <summary>MAX 聚合。TValue 限 IConvertible 基元类型（数值/字符串/DateTime）；
@@ -620,7 +637,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public async ValueTask<TValue?> MaxAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        object? r = await ExecuteScalarAsync($"SELECT MAX({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetSoftDeleteWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        object? r = await ExecuteScalarAsync<T>($"SELECT MAX({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue));
     }
 
@@ -628,7 +645,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public async ValueTask<TValue?> MinAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        object? r = await ExecuteScalarAsync($"SELECT MIN({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetSoftDeleteWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        object? r = await ExecuteScalarAsync<T>($"SELECT MIN({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue));
     }
 
@@ -636,16 +653,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public async ValueTask<double> AvgAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        return Convert.ToDouble(await ExecuteScalarAsync($"SELECT AVG({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetSoftDeleteWhereClause<T>()}", expression, ct).ConfigureAwait(false));
+        return Convert.ToDouble(await ExecuteScalarAsync<T>($"SELECT AVG({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false));
     }
 
-    private async ValueTask<object?> ExecuteScalarAsync(string sql, FormattableString original, CancellationToken ct)
+    private async ValueTask<object?> ExecuteScalarAsync<T>(string sql, FormattableString original, CancellationToken ct)
+        where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = sql;
         cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
         BindFormattableParameters(cmd, original);
+        BindDefaultFilterParameters<T>(cmd);
         return await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
     }
 
@@ -1145,21 +1164,48 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()
         => PalORM_Runtime.EntityFeatures.GetValueOrDefault(typeof(T), EntityFeatures.None);
 
-    private string GetSoftDeleteCondition<T>() where T : class, new()
-        => !_ignoreFilters && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0
+    // ─── 默认过滤（软删除 + 租户）────────────────────────
+    // 三个 Get* 形态 + Bind 必须共用同一判定谓词：条件里引用了 @__tenant0 而 Bind 未绑（或反之）
+    // 都会直接产生运行时错误。租户过滤覆盖所有直连读写入口（ITM-302）；
+    // Insert/Save 不做租户过滤——实体自带 tenant_id 列值，由调用方负责。
+
+    private bool HasTenantFilter<T>() where T : class, new()
+        => _tenantId is not null && !_ignoreFilters
+            && (GetEntityFeatures<T>() & EntityFeatures.TenantAware) != 0;
+
+    /// <summary>默认过滤条件的参数名——避开生成 SQL 的 @p{N} 命名空间。</summary>
+    private const string TenantParameterName = "@__tenant0";
+
+    private string GetDefaultFilterCondition<T>() where T : class, new()
+    {
+        string softDelete = !_ignoreFilters && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0
             ? $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL"
             : "";
+        if (!HasTenantFilter<T>())
+            return softDelete;
+        string tenant = $"{TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}";
+        return softDelete.Length == 0 ? tenant : $"{softDelete} AND {tenant}";
+    }
 
-    private string GetSoftDeleteFilter<T>() where T : class, new()
+    /// <summary>已有 WHERE 时的追加片段：" AND cond" 或空。</summary>
+    private string GetDefaultFilterFragment<T>() where T : class, new()
     {
-        string condition = GetSoftDeleteCondition<T>();
+        string condition = GetDefaultFilterCondition<T>();
         return condition.Length == 0 ? "" : $" AND {condition}";
     }
 
-    private string GetSoftDeleteWhereClause<T>() where T : class, new()
+    /// <summary>独立 WHERE 子句：" WHERE cond" 或空。</summary>
+    private string GetDefaultFilterWhereClause<T>() where T : class, new()
     {
-        string condition = GetSoftDeleteCondition<T>();
+        string condition = GetDefaultFilterCondition<T>();
         return condition.Length == 0 ? "" : $" WHERE {condition}";
+    }
+
+    /// <summary>为默认过滤条件绑定参数。任何拼接了 GetDefaultFilter* 结果的命令都必须调用。</summary>
+    private void BindDefaultFilterParameters<T>(DbCommand cmd) where T : class, new()
+    {
+        if (HasTenantFilter<T>())
+            cmd.Parameters.Add(TProvider.CreateParameter(TenantParameterName, _tenantId));
     }
 
     private SessionOperationState.SessionOperationLease EnterOperation(
