@@ -49,7 +49,7 @@ internal static class SqlTemplateEmitter
 namespace {ns};
 
 /// <summary>编译期 SQL 模板——与 QueryBuilder.AsPrepared() 配合调用 DbCommand.PrepareAsync。</summary>
-public static class SqlTemplates
+public static partial class SqlTemplates
 {{
     /// <summary>模板: {templateName}</summary>
     public static readonly global::System.FormattableString {templateName} = $@""{escaped}"";
@@ -68,7 +68,8 @@ public static class SqlTemplates
         int end = FindClosingQuote(methodBody, start);
         if (end < 0) return null;
 
-        return methodBody.Substring(dollar + 1, end - dollar); // 包含 $"..."
+        // 只取引号内内容——首尾引号若混入会成为 SQL 常量的字面字符（ITM-305）
+        return methodBody.Substring(start, end - start);
     }
 
     private static int FindClosingQuote(string text, int start)
