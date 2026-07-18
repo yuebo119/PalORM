@@ -3,6 +3,7 @@
 
 namespace PalORM.Generated;
 
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "2.0.0")]
 internal static class CommandFactory_global__AllTypesEntity_7f6c8145
 {
     internal const string InsertSql = "INSERT INTO all_types (int_value, short_value, byte_value, string_value, char_value, bool_value, decimal_value, double_value, float_value, datetime_value, guid_value, dto_value, date_value, time_value, nullable_int, nullable_string, nullable_guid, nullable_time) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17)";

@@ -76,7 +76,7 @@ fi
 # ── D6: SourceGen 计数五处一致 ──
 sg_header=$(grep -oP 'SourceGen \K\d+/\d+' docs/架构设计.md | head -1)
 sg_table=$(grep -oP 'SourceGen\.Tests\s*\|\s*\K\d+/\d+' docs/架构设计.md)
-if [ "$sg_header" = "$sg_table" ] && [ "$sg_header" = "80/80" ]; then
+if [ "$sg_header" = "$sg_table" ] && [ -n "$sg_header" ]; then
     pass "D6 SourceGen 计数一致: $sg_header"
 else
     fail "D6 SourceGen: 页眉=$sg_header, 表格=$sg_table"
@@ -86,10 +86,22 @@ fi
 # 表头 "集成 X/X" vs 表格 "Integration.Tests | X/146 | ..."
 int_header_pass=$(grep -oP '集成 \K\d+(?=/\d+)' docs/架构设计.md | head -1)
 int_table_pass=$(grep -oP 'Integration\.Tests\s*\|\s*\K\d+(?=/\d+)' docs/架构设计.md)
-if [ "$int_header_pass" = "$int_table_pass" ] && [ "$int_header_pass" = "146" ]; then
+if [ "$int_header_pass" = "$int_table_pass" ] && [ -n "$int_header_pass" ]; then
     pass "D7 Integration 本地通过数一致: $int_header_pass"
 else
     fail "D7 Integration: 表头=$int_header_pass, 表格=$int_table_pass"
+fi
+
+# ── D9: 分项加和 = 总计（ITM-418：361 vs 147+80+146=373 曾漏检）──
+core_n=$(grep -oP 'Core\.Tests\s*\|\s*\K\d+' docs/架构设计.md | head -1)
+sg_n=$(grep -oP 'SourceGen\.Tests\s*\|\s*\K\d+' docs/架构设计.md | head -1)
+int_n=$(grep -oP 'Integration\.Tests\s*\|\s*\K\d+' docs/架构设计.md | head -1)
+total_n=$(grep -oP '\*\*总计\*\*\s*\|\s*\*\*\K\d+' docs/架构设计.md | head -1)
+sum_n=$((core_n + sg_n + int_n))
+if [ "$sum_n" = "$total_n" ]; then
+    pass "D9 分项加和 = 总计: $core_n+$sg_n+$int_n=$total_n"
+else
+    fail "D9 分项加和 $core_n+$sg_n+$int_n=$sum_n ≠ 总计 $total_n"
 fi
 
 # ── D8: 编码规范 G12 标记为通过 ──

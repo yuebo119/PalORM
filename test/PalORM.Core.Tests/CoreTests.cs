@@ -15,7 +15,9 @@ public sealed class DbOptionsTests
         await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(5);
         await Assert.That(opts.CircuitBreakerResetAfter).IsEqualTo(TimeSpan.FromSeconds(30));
         await Assert.That(opts.NamingConvention).IsEqualTo(NamingConvention.None);
+#pragma warning disable CS0618 // 死配置已 Obsolete（ITM-423），3.0 移除前默认值仍固化
         await Assert.That(opts.MinimumLogLevel).IsEqualTo(LogLevel.Warning);
+#pragma warning restore CS0618
     }
 
     [Test]

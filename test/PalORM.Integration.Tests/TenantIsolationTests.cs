@@ -90,7 +90,8 @@ public sealed class TenantIsolationTests
         await Assert.That(rows).IsEqualTo(0);
 
         db.IgnoreFilters();
-        await Assert.That(await db.GetAsync<TenantEntity>(otherId)).IsNotNull();
+        var survivor = await db.GetAsync<TenantEntity>(otherId);
+        await Assert.That(survivor!.Value).IsEqualTo("theirs");
     }
 
     // ITM-401 回归：OrWhere 不得绕过租户过滤——首个用户子句 OrWhere 与 Where+OrWhere

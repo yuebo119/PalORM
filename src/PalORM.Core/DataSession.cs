@@ -656,11 +656,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return r is long l ? l : Convert.ToInt64(r);
     }
 
-    /// <summary>SUM 聚合。</summary>
+    /// <summary>SUM 聚合。空表/全过滤时 SUM 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
     public async ValueTask<decimal> SumAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        return Convert.ToDecimal(await ExecuteScalarAsync<T>($"SELECT SUM({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false));
+        object? r = await ExecuteScalarAsync<T>($"SELECT SUM({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        return r is null or DBNull ? 0m : Convert.ToDecimal(r, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>MAX 聚合。TValue 限 IConvertible 基元类型（数值/字符串/DateTime）；
@@ -680,11 +681,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue));
     }
 
-    /// <summary>AVG 聚合。</summary>
+    /// <summary>AVG 聚合。空表/全过滤时 AVG 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
     public async ValueTask<double> AvgAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        return Convert.ToDouble(await ExecuteScalarAsync<T>($"SELECT AVG({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false));
+        object? r = await ExecuteScalarAsync<T>($"SELECT AVG({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        return r is null or DBNull ? 0d : Convert.ToDouble(r, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private async ValueTask<object?> ExecuteScalarAsync<T>(string sql, FormattableString original, CancellationToken ct)

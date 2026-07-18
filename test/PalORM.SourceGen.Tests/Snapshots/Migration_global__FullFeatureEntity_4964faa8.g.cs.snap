@@ -3,6 +3,7 @@
 
 namespace PalORM.Generated;
 
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "2.0.0")]
 internal static class Migration_global__FullFeatureEntity_4964faa8
 {
     internal const string CreateTable = "CREATE TABLE IF NOT EXISTS \"full_feature\" (\n    \"Id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n    \"code\" TEXT NOT NULL,\n    \"kind\" TEXT NOT NULL,\n    \"external_id\" TEXT NOT NULL,\n    \"payload\" TEXT NOT NULL,\n    \"raw_json\" TEXT NOT NULL,\n    \"uniq_token\" TEXT NOT NULL,\n    \"row_updated_at\" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"total_display\" TEXT GENERATED ALWAYS AS (code || '-' || kind) STORED NOT NULL,\n    \"deleted_at\" TEXT,\n    \"tenant_id\" TEXT NOT NULL\n)";

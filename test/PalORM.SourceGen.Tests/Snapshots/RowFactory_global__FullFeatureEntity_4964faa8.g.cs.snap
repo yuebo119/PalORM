@@ -3,6 +3,7 @@
 
 namespace PalORM.Generated;
 
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "2.0.0")]
 internal sealed class RowFactory_global__FullFeatureEntity_4964faa8 : global::PalORM.IRowFactory<global::FullFeatureEntity>
 {
     internal static readonly RowFactory_global__FullFeatureEntity_4964faa8 Instance = new();

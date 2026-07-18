@@ -13,6 +13,7 @@ internal static class RowFactoryEmitter
         sb.AppendLine();
         sb.AppendLine($"namespace PalORM.Generated;");
         sb.AppendLine();
+        sb.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"PalORM.SourceGen\", \"2.0.0\")]");
         sb.AppendLine($"internal sealed class RowFactory_{model.GeneratedTypeSuffix} : global::PalORM.IRowFactory<{model.EntityTypeName}>");
         sb.AppendLine("{");
         sb.AppendLine($"    internal static readonly RowFactory_{model.GeneratedTypeSuffix} Instance = new();");

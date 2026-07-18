@@ -194,6 +194,10 @@ public sealed class PostgreSqlProvider : IDbProvider
         }
     }
 
+    // ITM-412 防漂移锚点：以下两个清理助手与 Core 的 DataSession.RollbackPreservingAsync /
+    // DisposeTransactionPreservingAsync 是同一"主异常保留"骨架的复制体（Provider 不得反向
+    // 依赖 Core 内部实现，故刻意复制）。修改任一侧语义（异常挂载键、CancellationToken.None、
+    // when 过滤条件）时必须同步核对另一侧——两侧分叉即 ITM-304 同型温床。
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "回滚是清理路径；异常附加到主异常，不能替换原始 COPY 失败。")]
     private static async ValueTask RollbackPreservingAsync(DbTransaction transaction, Exception primaryException)

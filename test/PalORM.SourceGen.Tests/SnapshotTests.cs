@@ -113,7 +113,17 @@ internal sealed class SnapshotTests
         string snapshotDir = GetSnapshotDirectory();
         bool update = Environment.GetEnvironmentVariable("PALORM_UPDATE_SNAPSHOTS") == "1";
         if (update)
+        {
+            // ITM-415：更新模式跳过全部比对断言——shell 残留导出会让快照防线整体静默关闭。
+            // CI 上禁止（ci.yml 显式置空该变量并由本守卫兜底）；本地显眼输出警示。
+            if (Environment.GetEnvironmentVariable("CI") is not null)
+                throw new InvalidOperationException(
+                    "PALORM_UPDATE_SNAPSHOTS=1 must never be set in CI — snapshot baseline would be silently rewritten instead of verified.");
+#pragma warning disable CA1303 // 本地开发者警示输出，非本地化面
+            Console.WriteLine("⚠⚠⚠ PALORM_UPDATE_SNAPSHOTS=1：快照基线正在被重写，本轮不做任何比对断言。评审 git diff 后提交，并 unset 该变量。⚠⚠⚠");
+#pragma warning restore CA1303
             Directory.CreateDirectory(snapshotDir);
+        }
 
         var mismatches = new List<string>();
         foreach ((string hintName, string content) in result.GeneratedSources.OrderBy(
