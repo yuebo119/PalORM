@@ -17,6 +17,7 @@ internal static class TypeMapperEmitter
         sb.AppendLine("#nullable enable");
         sb.AppendLine($"namespace PalORM.Generated;");
         sb.AppendLine();
+        sb.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"PalORM.SourceGen\", \"2.0.0\")]");
         sb.AppendLine($"internal static class TypeMapper_{model.GeneratedTypeSuffix}");
         sb.AppendLine("{");
         sb.AppendLine("    internal static global::System.DateTimeOffset ReadDateTimeOffset(global::System.Data.Common.DbDataReader r, int ord)");

@@ -153,16 +153,20 @@ else
     printf 'FAIL doc-consistency 未通过\n'
     exit 1
 fi
-# 制造一个故障夹具：临时写入过期计数（动态取当前值再破坏，避免硬编码过期后夹具空转）
-cp docs/架构设计.md "$TMP/faulty-arch.md"
+# 故障夹具（ITM-427：不就地改 tracked 文件——异常中断会留下损坏态；
+# 恒等替换防护——破坏值与当前值相同时换备选值，避免假失败）
+cp docs/架构设计.md "$TMP/pristine-arch.md"
+trap 'cp "$TMP/pristine-arch.md" docs/架构设计.md' EXIT
 current_core=$(grep -oP 'Core\.Tests\s*\|\s*\K\d+/\d+' docs/架构设计.md)
-sed -i "s|${current_core}|71/71|g" docs/架构设计.md
+broken="71/71"
+[ "$current_core" = "$broken" ] && broken="72/72"
+sed -i "s|${current_core}|${broken}|g" docs/架构设计.md
 if bash scripts/doc-consistency-check.sh > "$TMP/doc-fail.log" 2>&1; then
-    cp "$TMP/faulty-arch.md" docs/架构设计.md
     printf 'FAIL doc-consistency 过期计数未导致失败\n'
     exit 1
 fi
-cp "$TMP/faulty-arch.md" docs/架构设计.md
+cp "$TMP/pristine-arch.md" docs/架构设计.md
+trap - EXIT
 if ! bash scripts/doc-consistency-check.sh > "$TMP/doc-recover.log"; then
     printf 'FAIL doc-consistency 恢复后未通过\n'
     exit 1

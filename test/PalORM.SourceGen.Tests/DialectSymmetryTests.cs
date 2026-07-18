@@ -148,6 +148,36 @@ internal sealed class DialectSymmetryTests
         => await AssertSymmetric(dialect =>
             MigrationEmitter.BuildCreateIndex(_model, _model.Indexes.AsSpan()[0], dialect));
 
+    [Test]
+    public async Task AllDialectSqls_QuoteIdentifiers()
+    {
+        // ITM-416：归一化把引用符整串删除——某方言漏引用标识符时归一化产物仍一致，
+        // 对"引用符存在性"失明。此断言独立验证每个方言产物确实引用了标识符。
+        // Upsert SQL 由运行时构建（DataSession.BuildMySqlUpsertSql/SaveCoreAsync 经
+        // QuoteIdentifier），不在 Emitter 对称面内。
+        var builds = new (string Name, Func<SqlGenerationDialect, string> Build)[]
+        {
+            ("Insert", d => CommandFactoryEmitter.BuildInsertSql(_model, d)),
+            ("Update", d => CommandFactoryEmitter.BuildUpdateSql(_model, d)),
+            ("Delete", d => CommandFactoryEmitter.BuildDeleteSql(_model, d)),
+            ("CreateTable", d => MigrationEmitter.BuildCreateTable(_model, d)),
+            ("CreateIndex", d => MigrationEmitter.BuildCreateIndex(_model, _model.Indexes.AsSpan()[0], d)),
+        };
+        var violations = new List<string>();
+        foreach ((string name, Func<SqlGenerationDialect, string> build) in builds)
+        {
+            foreach (SqlGenerationDialect dialect in _dialects)
+            {
+                string sql = build(dialect);
+                char quote = dialect == SqlGenerationDialect.MySql ? '`' : '"';
+                // 表名必须以引用形式出现（symmetry_items 被引用符包裹）
+                if (!sql.Contains($"{quote}symmetry_items{quote}", StringComparison.Ordinal))
+                    violations.Add($"{name}/{dialect}: 表名未被 {quote} 引用\n  SQL: {sql}");
+            }
+        }
+        await Assert.That(string.Join("\n", violations)).IsEmpty();
+    }
+
     /// <summary>归一化后三方言产物必须逐字符一致；不一致 = 未登记的方言差异。</summary>
     private static async Task AssertSymmetric(Func<SqlGenerationDialect, string> build)
     {

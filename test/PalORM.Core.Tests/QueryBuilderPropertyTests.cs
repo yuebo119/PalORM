@@ -202,17 +202,42 @@ public sealed class QueryBuilderPropertyTests
         return count;
     }
 
-    /// <summary>确定性 LCG 序列——固定种子可复现；非安全场景。</summary>
+    /// <summary>确定性 xorshift32 序列——固定种子可复现；非安全场景。
+    /// ITM-414：LCG 低位周期退化使 Next(2) 严格 0/1 交替，"连续两次 OrWhere"零覆盖——
+    /// xorshift 全位混合后按高位取模，序列分布由 SequenceGenerator_CoversConsecutiveChoices 断言。</summary>
     private sealed class DeterministicSequence(int seed)
     {
-        private uint _state = (uint)((seed * 2654435761u) + 1);
+        private uint _state = (uint)((seed * 2654435761u) + 1) | 1u;
 
         public int Next(int maxExclusive) => Next(0, maxExclusive);
 
         public int Next(int minInclusive, int maxExclusive)
         {
-            _state = (_state * 1664525u) + 1013904223u;
-            return minInclusive + (int)(_state % (uint)(maxExclusive - minInclusive));
+            _state ^= _state << 13;
+            _state ^= _state >> 17;
+            _state ^= _state << 5;
+            // 乘法-移位取高位，避免低位偏差
+            uint range = (uint)(maxExclusive - minInclusive);
+            return minInclusive + (int)(((ulong)_state * range) >> 32);
         }
+    }
+
+    [Test]
+    public async Task SequenceGenerator_CoversConsecutiveChoices()
+    {
+        // ITM-414 分布断言：100 个种子内必须出现"连续两次相同二元选择"（旧 LCG 恒交替，永不出现）
+        bool consecutiveSame = false;
+        for (int seed = 0; seed < 100 && !consecutiveSame; seed++)
+        {
+            var random = new DeterministicSequence(seed);
+            int previous = random.Next(2);
+            for (int i = 0; i < 10; i++)
+            {
+                int current = random.Next(2);
+                if (current == previous) { consecutiveSame = true; break; }
+                previous = current;
+            }
+        }
+        await Assert.That(consecutiveSame).IsTrue();
     }
 }

@@ -1106,9 +1106,78 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(templates.Count).IsEqualTo(2);
         string combined = string.Join("\n", templates.Select(pair => pair.Value));
         await Assert.That(combined).Contains("public static partial class SqlTemplates");
-        // SQL 常量不得含边界引号字符
-        await Assert.That(combined).Contains(@"ActiveUsers = $@""SELECT * FROM users WHERE active = 1"";");
-        await Assert.That(combined).Contains(@"RecentOrders = $@""SELECT * FROM orders ORDER BY id DESC"";");
+        // SQL 常量不得含边界引号字符（ITM-411 后生成物原样搬运插值表达式语法）
+        await Assert.That(combined).Contains(@"ActiveUsers = $""SELECT * FROM users WHERE active = 1"";");
+        await Assert.That(combined).Contains(@"RecentOrders = $""SELECT * FROM orders ORDER BY id DESC"";");
+    }
+
+    [Test]
+    public async Task SqlTemplate_CommentContainingDollarQuote_DoesNotConfuseExtraction()
+    {
+        // ITM-411 负向：方法前注释含 $" 时文本扫描会取错内容——语法树提取免疫
+        const string source = """
+            using PalORM;
+
+            public static class Queries
+            {
+                // 旧格式示例: $"SELECT wrong FROM comment"
+                [SqlTemplate("RealQuery")]
+                public static System.FormattableString RealQueryTemplate()
+                    => $"SELECT id FROM real_table";
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        string combined = string.Join("\n", result.GeneratedSources
+            .Where(pair => pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))
+            .Select(pair => pair.Value));
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(combined).Contains("real_table");
+        await Assert.That(combined).DoesNotContain("comment");
+    }
+
+    [Test]
+    public async Task SqlTemplate_EscapedQuoteInSql_GeneratesValidCode()
+    {
+        // ITM-411 负向：SQL 含转义引号时文本扫描按 \" 截断——语法树原样搬运保持合法
+        const string source = """
+            using PalORM;
+
+            public static class Queries
+            {
+                [SqlTemplate("Quoted")]
+                public static System.FormattableString QuotedTemplate()
+                    => $"SELECT \"col\" FROM t";
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
+    public async Task SqlTemplate_ReferencingMethodParameter_IsSkippedInsteadOfCs0103()
+    {
+        // ITM-411 负向：插值洞引用方法参数——提升为静态字段会 CS0103，正确行为是跳过生成
+        const string source = """
+            using PalORM;
+
+            public static class Queries
+            {
+                [SqlTemplate("ByStatus")]
+                public static System.FormattableString ByStatusTemplate(string status)
+                    => $"SELECT * FROM orders WHERE status = {status}";
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(result.GeneratedSources.Any(pair =>
+            pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal)
+            && pair.Value.Contains("ByStatus", StringComparison.Ordinal))).IsFalse();
     }
 
     private static GeneratorResult RunGenerator(string source)

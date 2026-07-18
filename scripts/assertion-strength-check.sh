@@ -31,16 +31,21 @@ for path in pathlib.Path('test').rglob('*.cs'):
     if '/obj/' in str(path) or '/bin/' in str(path):
         continue
     text = path.read_text(encoding='utf-8')
-    # 按 [Test] 切块，块 = 到下一个 [Test] 或文件尾
-    blocks = re.split(r'(?=\[Test\])', text)
-    for block in blocks:
-        if not block.startswith('[Test]'):
-            continue
-        method = re.search(r'(?:async\s+)?(?:Task|void|ValueTask)\s+(\w+)\s*\(', block)
-        if not method:
-            continue
-        if not re.search(r'\bAssert\w*[.(]|Throws|\.Verify\(', block):
-            hits.append(f'{path}:{method.group(1)}')
+    # 按 [Test] 定位方法，块 = 方法签名起花括号配对到闭合（ITM-426：
+    # 之前切到下一个 [Test]，尾随辅助方法的断言会被计入本块）
+    for m in re.finditer(r'\[Test\][^{]*?(?:async\s+)?(?:Task|void|ValueTask)\s+(\w+)\s*\([^)]*\)\s*(\{)', text, re.S):
+        name = m.group(1)
+        depth, i = 0, m.start(2)
+        while i < len(text):
+            if text[i] == '{': depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0: break
+            i += 1
+        block = text[m.start():i + 1]
+        # Throws 用调用形态匹配（\bThrows 词边界 + 后随 ( 或 <），方法名含 Throws 不再满足
+        if not re.search(r'\bAssert\w*[.(]|\bThrows(Async)?\s*[<(]|\.Verify\(', block):
+            hits.append(f'{path}:{name}')
 print('\n'.join(hits))
 PYEOF
 )

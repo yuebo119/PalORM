@@ -3,6 +3,7 @@
 
 namespace PalORM.Generated;
 
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "2.0.0")]
 internal static class CommandFactory_global__FullFeatureEntity_4964faa8
 {
     internal static readonly global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<global::Payload> JsonTypeInfo_Payload = (global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<global::Payload>)(global::SnapshotJsonContext.Default.GetTypeInfo(typeof(global::Payload)) ?? throw new global::System.InvalidOperationException("OwnedJson type metadata was not generated."));

@@ -14,6 +14,7 @@ internal static class MigrationEmitter
         sb.AppendLine();
         sb.AppendLine("namespace PalORM.Generated;");
         sb.AppendLine();
+        sb.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"PalORM.SourceGen\", \"2.0.0\")]");
         sb.AppendLine($"internal static class Migration_{model.GeneratedTypeSuffix}");
         sb.AppendLine("{");
 

@@ -99,7 +99,9 @@ public sealed record DbOptions
     /// 拿不到 logger，MinimumLogLevel 是死配置）。未设置时使用 NullLogger。</summary>
     public Microsoft.Extensions.Logging.ILoggerFactory? LoggerFactory { get; init; }
 
-    /// <summary>会话日志级别下限——过滤 LoggerFactory 产出的日志（默认 Warning）。</summary>
+    /// <summary>会话日志级别下限。零消费点的死配置（ITM-423）——级别过滤请在
+    /// LoggerFactory 配置（AddFilter/appsettings Logging 节），那里的过滤对全部日志出口生效。</summary>
+    [Obsolete("此配置从未被消费。请在 LoggerFactory 上配置级别过滤（AddFilter）。3.0 移除。")]
     public LogLevel MinimumLogLevel { get; init; } = LogLevel.Warning;
 
     /// <summary>解析主库连接串中的环境变量引用。</summary>

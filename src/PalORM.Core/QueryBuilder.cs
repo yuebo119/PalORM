@@ -219,7 +219,8 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> GroupBy(Expression<Func<T, object?>> member)
     {
         string prefix = HasClause(QueryClauseKind.GroupBy) ? ", " : "GROUP BY ";
-        AddClause(QueryClauseKind.GroupBy, prefix + _quoteIdentifier(GetColumnName(member)));
+        // 表限定与其余子句对齐（ITM-425）：JOIN 下裸列名产生 ambiguous column
+        AddClause(QueryClauseKind.GroupBy, prefix + GetQualifiedColumnName(member));
         return this;
     }
 
@@ -700,9 +701,12 @@ public struct QueryBuilder<T> where T : class, new()
         if (!_take.HasValue && !_skip.HasValue) return null;
         if (!_take.HasValue)
         {
+            // SQLite 的 OFFSET 必须伴随 LIMIT（裸 OFFSET 是语法错误）——LIMIT -1 表示无上限；
+            // PG 支持裸 OFFSET；MySQL 用极大值哨兵（ITM-407）
             return _dialect switch
             {
                 SqlDialect.MySql => $"LIMIT {_skip!.Value}, 18446744073709551615",
+                SqlDialect.Sqlite => $"LIMIT -1 OFFSET {_skip!.Value}",
                 _ => $"OFFSET {_skip!.Value}"
             };
         }

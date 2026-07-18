@@ -16,20 +16,23 @@ public static class TestDb
     }
 
     /// <summary>创建 PostgreSQL 数据会话。
-    /// 连接串从环境变量 PALORM_PG_CONNECTION 读取。</summary>
+    /// 连接串从环境变量 PALORM_PG_CONNECTION 读取；未设置时明确失败——
+    /// 缺省回退系统库（postgres）会让测试 DDL 写进系统库（ITM-428）。</summary>
     public static async Task<DataSession<PostgreSqlProvider>> PostgreSqlAsync(CancellationToken ct = default)
     {
         string cs = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
-            ?? "Host=localhost;Username=postgres;Password=;Database=postgres";
+            ?? throw new InvalidOperationException(
+                "PALORM_PG_CONNECTION is not set. Run scripts/set-test-env.sh or point it at a disposable test database.");
         return await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct).ConfigureAwait(false);
     }
 
     /// <summary>创建 MySQL 数据会话。
-    /// 连接串从环境变量 PALORM_MYSQL_CONNECTION 读取。</summary>
+    /// 连接串从环境变量 PALORM_MYSQL_CONNECTION 读取；未设置时明确失败（同 PG，ITM-428）。</summary>
     public static async Task<DataSession<MySqlProvider>> MySqlAsync(CancellationToken ct = default)
     {
         string cs = Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
-            ?? "Server=localhost;User=root;Password=;Database=mysql";
+            ?? throw new InvalidOperationException(
+                "PALORM_MYSQL_CONNECTION is not set. Run scripts/set-test-env.sh or point it at a disposable test database.");
         return await DataSession<MySqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct).ConfigureAwait(false);
     }
 

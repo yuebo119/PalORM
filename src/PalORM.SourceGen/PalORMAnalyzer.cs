@@ -103,13 +103,18 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM020", "Index declaration is invalid or conflicting",
         "{0}", "PalORM", DiagnosticSeverity.Error, true);
 
+    public static readonly DiagnosticDescriptor DuplicateColumnName = new(
+        "PALORM021", "Multiple properties map to the same column name",
+        "Properties '{0}' and '{1}' on type '{2}' both map to column '{3}'; generated INSERT/UPDATE would reference the column twice and fail at runtime",
+        "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, SqlFileNotFound, SchemaMismatch, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
          UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl,
-         MissingTenantColumn, CompositePrimaryKey, InvalidIndexDeclaration];
+         MissingTenantColumn, CompositePrimaryKey, InvalidIndexDeclaration, DuplicateColumnName];
 
     public override void Initialize(AnalysisContext context)
     {
@@ -180,6 +185,26 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
             // PALORM020: 索引声明有效性——消除 TableModel 静默丢弃与 IF NOT EXISTS/1061 掩蔽（ITM-203）
             ValidateIndexDeclarations(ctx, type);
+
+            // PALORM021: 列名唯一性——重复 [Column] 生成 INSERT INTO t (x, x) 运行期才炸（ITM-409）
+            var columnOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
+            {
+                if (SourceGenerationValidation.IsNotMapped(member)) continue;
+                var colAttr = member.GetAttributes().FirstOrDefault(a =>
+                    a.AttributeClass?.Name is "ColumnAttribute" or "Column");
+                string columnName = colAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
+                if (columnOwners.TryGetValue(columnName, out string? firstOwner))
+                {
+                    ctx.ReportDiagnostic(Diagnostic.Create(DuplicateColumnName,
+                        member.Locations.FirstOrDefault() ?? type.Locations[0],
+                        firstOwner, member.Name, type.Name, columnName));
+                }
+                else
+                {
+                    columnOwners.Add(columnName, member.Name);
+                }
+            }
 
             var concurrencyTokens = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(static property => !SourceGenerationValidation.IsNotMapped(property))

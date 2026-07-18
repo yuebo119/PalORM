@@ -86,6 +86,9 @@ public static class QueryBuilderExtensions
     {
         var limited = builder;
         limited._take = 1;
+        // First/Single 族的 _take 截断列表不得写入用户缓存键——后续同键 ToListAsync
+        // 会命中截断数据静默丢行（ITM-406）
+        limited._cacheKey = null;
         List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
         return results.Count == 0 ? default : results[0];
     }
@@ -94,6 +97,7 @@ public static class QueryBuilderExtensions
     {
         var limited = builder;
         limited._take = 2;
+        limited._cacheKey = null;
         List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
         return results.Count == 1 ? results[0] : throw new InvalidOperationException(results.Count == 0 ? "Empty." : "More than one.");
     }
@@ -102,6 +106,7 @@ public static class QueryBuilderExtensions
     {
         var limited = builder;
         limited._take = 2;
+        limited._cacheKey = null;
         List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
         return results.Count <= 1 ? results.FirstOrDefault() : throw new InvalidOperationException("More than one.");
     }

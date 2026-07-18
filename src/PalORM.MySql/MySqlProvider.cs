@@ -34,6 +34,7 @@ public sealed class MySqlProvider : IDbProvider
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
+    [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause。3.0 随接口成员一并移除。")]
     public static string GetLimitOffsetClause(int? limit, int? offset)
     {
         // 无 limit 时 MySQL 需极大值哨兵（LIMIT offset, -1 是非法语法）——与 BuildLimitClause 对齐

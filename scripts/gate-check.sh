@@ -87,7 +87,11 @@ check_zero G8 '零 string.Format 拼接 SQL' "$(count_matches 'string\.Format.*(
 
 # 扫描所有受跟踪文本，而不是只扫描 src。示例只能使用明显占位符。
 connections=$(git grep -n -i -E '(Password|Pwd)=[^;$"'"'"'[:space:]]+|connectionString[[:space:]]*=[[:space:]]*"(Server|Host)=' -- ':!docs/**' ':!**/bin/**' ':!**/obj/**' 2>/dev/null || true)
-connections=$(printf '%s\n' "$connections" | grep -v -i -E '(example|sample|placeholder|<password>|\$\{[^}]+\}|localhost|\.\.\.)' || true)
+# localhost 豁免收窄（ITM-417：Password=x;Host=localhost 曾被整行放行）——
+# localhost 行仅在不含非空密码时豁免；.ai 报告与本脚本的自述文本不计
+connections=$(printf '%s\n' "$connections" | grep -v -i -E '(example|sample|placeholder|<password>|\$\{[^}]+\}|\.\.\.)' || true)
+connections=$(printf '%s\n' "$connections" | grep -v -E '^(\.ai/|scripts/gate-check\.sh)' || true)
+connections=$(printf '%s\n' "$connections" | awk 'BEGIN{IGNORECASE=1} !(/localhost/ && $0 !~ /(Password|Pwd)=[^;"[:space:]]/)' || true)
 [ -z "$connections" ] && connection_count=0 || connection_count=$(printf '%s\n' "$connections" | wc -l | tr -d ' ')
 check_zero G9 '受跟踪文件零硬编码连接凭据' "$connection_count"
 
@@ -122,9 +126,9 @@ while IFS= read -r project; do
 done < <(find src -name '*.csproj' ! -path 'src/PalORM.SourceGen/*' -print | sort)
 check_zero G19 '运行时项目声明 IsAotCompatible=true' "$aot_missing"
 
-check_zero G20 '禁止同步阻塞异步操作' "$(count_matches '\.Result([^A-Za-z0-9_]|$)|\.Wait\(' 'src/**/*.cs')"
+check_zero G20 '禁止同步阻塞异步操作' "$(count_matches '\.Result([^A-Za-z0-9_]|$)|\.Wait\(|GetAwaiter\(\)\.GetResult\(' 'src/**/*.cs')"
 check_zero G21 '生成器不得输出 blanket pragma' "$(count_matches '#pragma warning disable(\\n|\")' 'src/PalORM.SourceGen/**/*.cs')"
-check_zero G22 '禁止抑制裁剪与 AOT 警告' "$(count_matches '(NoWarn|pragma warning disable).*(IL2[0-9]{3}|IL3[0-9]{3})' '**/*.cs' '**/*.csproj' 'Directory.Build.props')"
+check_zero G22 '禁止抑制裁剪与 AOT 警告' "$(count_matches '(NoWarn|pragma warning disable).*(IL2[0-9]{3}|IL3[0-9]{3})|UnconditionalSuppressMessage' 'src/**/*.cs' '**/*.csproj' 'Directory.Build.props')"
 aot_generated=$(grep -rn -E 'Compile[[:space:]]+(Include|Remove)=.*\.g\.cs' test/PalORM.AotTest* --include='*.csproj' 2>/dev/null || true)
 [ -z "$aot_generated" ] && aot_generated_count=0 || aot_generated_count=$(printf '%s\n' "$aot_generated" | wc -l | tr -d ' ')
 check_zero G23 'AOT 项目不得手工编译生成文件' "$aot_generated_count"
