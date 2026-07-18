@@ -137,7 +137,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     /// <summary>插入实体，返回带自增 ID 的实体；零可插入列在访问数据库前明确失败。
     /// <para><b>跨方言差异</b>: PG/SQLite 经 RETURNING 返回完整行——含 DB 默认值与 [Computed] 列；
-    /// MySQL 无 RETURNING，仅回填自增 ID，其余属性保持传入值。需要 DB 计算列的最新值时请在插入后 GetAsync 重查。</para></summary>
+    /// MySQL 无 RETURNING，仅回填自增 ID，其余属性保持传入值。需要 DB 计算列的最新值时请在插入后 GetAsync 重查。</para>
+    /// <para><b>回填契约</b>: 三方言下传入实体的自增 ID 均被回填（可安全继续使用原引用）；
+    /// 但 DB 默认值/[Computed] 列只存在于返回实例（PG/SQLite）——两者不是同一对象。</para></summary>
     public ValueTask<T> InsertAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
         => InsertCoreAsync(entity, null, ct);
@@ -165,7 +167,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             metadata.BindInsert(cmd, entity);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (await reader.ReadAsync(ct).ConfigureAwait(false))
-                return ((IRowFactory<T>)metadata.RowFactory).Read(reader);
+            {
+                T materialized = ((IRowFactory<T>)metadata.RowFactory).Read(reader);
+                // 回填对齐 MySQL 路径（ITM-325）：调用方继续持有传入实体引用时，
+                // 两方言下至少自增 ID 一致可见；完整 DB 计算列仍以返回实例为准
+                if (PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
+                    && PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pkColumn))
+                {
+                    int pkOrdinal = reader.GetOrdinal(pkColumn);
+                    if (!await reader.IsDBNullAsync(pkOrdinal, ct).ConfigureAwait(false))
+                        backfill(entity, reader.GetInt64(pkOrdinal));
+                }
+                return materialized;
+            }
         }
         // 分支2: MySQL —— 无 RETURNING, INSERT + SELECT LAST_INSERT_ID 合并为单次 ExecuteScalarAsync
         else

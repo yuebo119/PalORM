@@ -6,7 +6,9 @@ namespace PalORM;
 /// <para><b>为什么用 static abstract</b>: 编译时分发，零虚调用开销。泛型 DataSession&lt;TProvider&gt; 的每个 Provider
 /// 实例在 JIT 编译时独立特化，运行时零分支判断、零接口查找。</para>
 /// <para><b>为什么不是 DI 注册</b>: Provider 是编译时常量——一个项目只用一种数据库。DI 容器注册增加启动开销和复杂度。</para>
-/// <para><b>扩展方式</b>: 实现此接口即可新增 Provider，Provider 之间零引用、零耦合。</para></summary>
+/// <para><b>扩展方式</b>: Provider 之间零引用、零耦合；但新增 SQL 方言还需同步扩展
+/// Core 的 SqlDialect 枚举、CommandSqlByDialect 等按方言展开的类型以及 SourceGen 的
+/// SqlGenerationDialect——"实现本接口"只覆盖连接/参数/批量层（ITM-331，ADR 待裁决）。</para></summary>
 public interface IDbProvider
 {
     /// <summary>Provider 名称（PostgreSql / MySql / SQLite）。</summary>
@@ -14,7 +16,7 @@ public interface IDbProvider
 
     /// <summary>参数占位符前缀（统一使用 @）。</summary>
     [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause。3.0 移除。")]
-    static abstract char ParameterPrefix { get; }
+    static virtual char ParameterPrefix => '@';
 
     /// <summary>SQL 方言标识。</summary>
     static abstract SqlDialect Dialect { get; }
@@ -33,7 +35,8 @@ public interface IDbProvider
 
     /// <summary>LIMIT/OFFSET 子句。不同数据库语法不同。</summary>
     [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause（按 SqlDialect 分支）。3.0 移除。")]
-    static abstract string GetLimitOffsetClause(int? limit, int? offset);
+    static virtual string GetLimitOffsetClause(int? limit, int? offset)
+        => $"LIMIT {limit ?? long.MaxValue} OFFSET {offset ?? 0}";
 
     /// <summary>是否支持 RETURNING 子句（PG/SQLite ✅，MySQL ❌）。</summary>
     static abstract bool SupportsReturningClause { get; }
@@ -55,6 +58,10 @@ public interface IDbProvider
     /// 由 DataSession.CreateAsync 在连接打开后、会话可用前调用；取消与连接超时保护对其生效。</summary>
     static virtual Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
         => Task.CompletedTask;
+
+    /// <summary>判断异常是否为唯一约束冲突——调用方无需分别 catch 三驱动的专有异常
+    /// （SqliteException 19 / MySqlException 1062 / PostgresException 23505，ITM-314）。默认 false。</summary>
+    static virtual bool IsUniqueViolation(Exception exception) => false;
 
     /// <summary>判断 DDL 异常是否为"架构对象已存在"（迁移幂等兜底）。
     /// 默认 false；无 CREATE INDEX IF NOT EXISTS 语法的方言（MySQL）覆盖为真实判定。</summary>

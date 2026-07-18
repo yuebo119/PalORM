@@ -290,6 +290,21 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 
 ---
 
+## 运行测试
+
+测试项目使用 TUnit（Microsoft.Testing.Platform 模式）：**`dotnet test` 会静默零输出**（MTP 与经典 test 管道不桥接），必须用 `dotnet run`：
+
+```bash
+dotnet run --project test/PalORM.Core.Tests            # 137 用例
+dotnet run --project test/PalORM.SourceGen.Tests       # 生成器/分析器
+dotnet run --project test/PalORM.Integration.Tests -- \
+  --treenode-filter "/*/*/*/*[Category!=ExternalDatabase]"   # 本地（无 MySQL/PG 服务）
+```
+
+CI 中请校验输出含 `Test run summary` 行——无摘要即视为未运行，不是通过。
+
+---
+
 ## 文档
 
 | | |
