@@ -83,10 +83,10 @@ else
 fi
 
 # ── D7: Integration 本地通过数 = 表头断言一致 ──
-# 表头 "无外部服务集成 X/X" vs 表格 "Integration.Tests | X/123 | 4 项外部..."
-int_header_pass=$(grep -oP '无外部服务集成 \K\d+(?=/\d+)' docs/架构设计.md | head -1)
+# 表头 "集成 X/X" vs 表格 "Integration.Tests | X/146 | ..."
+int_header_pass=$(grep -oP '集成 \K\d+(?=/\d+)' docs/架构设计.md | head -1)
 int_table_pass=$(grep -oP 'Integration\.Tests\s*\|\s*\K\d+(?=/\d+)' docs/架构设计.md)
-if [ "$int_header_pass" = "$int_table_pass" ] && [ "$int_header_pass" = "139" ]; then
+if [ "$int_header_pass" = "$int_table_pass" ] && [ "$int_header_pass" = "146" ]; then
     pass "D7 Integration 本地通过数一致: $int_header_pass"
 else
     fail "D7 Integration: 表头=$int_header_pass, 表格=$int_table_pass"

@@ -1,7 +1,7 @@
 # PalORM API 参考
 
-> 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 服务容器运行待 CI。
-> 当前测试: Core 142/142、SourceGen 73/73、无外部服务集成 139/139；PostgreSQL/MySQL 的 7 项待 CI 验证
+> 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 已在本机 Docker（CI 同配置容器）实测通过，远端 CI 待 push 触发。
+> 当前测试: Core 142/142、SourceGen 73/73、集成 146/146（含 7 项 PG/MySQL 真库用例——本机 Docker 复现 CI 服务容器配置实测通过）
 > 构建: 全解决方案 Release 严格构建 0 warning / 0 error · Native AOT: 三 Provider publish 通过，SQLite 与 NuGet consumer 原生运行通过
 > QueryBuilder: struct（值类型）· 113 API 中 112 个已实现，1 个因设计冲突移除
 

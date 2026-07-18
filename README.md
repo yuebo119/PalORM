@@ -2,13 +2,13 @@
 <p align="center"><strong>面向严格 Native AOT 的 .NET 微 ORM</strong></p>
 <p align="center">
   <img src="https://img.shields.io/badge/.NET-11-512BD4?logo=dotnet">
-  <img src="https://img.shields.io/badge/tests-354%2F361-yellow">
-  <img src="https://img.shields.io/badge/AOT-SQLite%20%2B%20NuGet%20verified-yellow">
+  <img src="https://img.shields.io/badge/tests-361%2F361-success">
+  <img src="https://img.shields.io/badge/AOT-3%20providers%20verified-success">
   <img src="https://img.shields.io/badge/IL%20suppressions-0-success">
   <img src="https://img.shields.io/badge/license-AGPL%20v3-blue">
 </p>
 
-PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运行时生产路径禁止反射和 IL/AOT 警告抑制。SQLite 完整 CRUD、OwnedJson、并发、跨程序集与 NuGet consumer 原生运行已验证；PostgreSQL/MySQL 原生 publish 已通过，数据库运行将在 CI 服务容器中验证，完成前不标记通过。
+PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运行时生产路径禁止反射和 IL/AOT 警告抑制。三 Provider（SQLite/PostgreSQL/MySQL）完整 CRUD、OwnedJson、并发、跨程序集与 NuGet consumer 原生运行均已验证——PG/MySQL 经本机 Docker（CI 同配置服务容器）实测，远端 CI 待 push 触发。
 
 > 2.0.0 收紧了 `PalORM_Runtime` 注册 API，属于 binary-breaking 变更；从 1.x 升级的已编译消费者必须重新编译。
 
@@ -21,7 +21,7 @@ PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运�
 | **编译时安全** | `FormattableString` 参数化 — 编译时提取参数值，杜绝 SQL 注入 |
 | **原子元数据注册** | SourceGen 生成 `RegistryFragment`；运行时一次发布不可变快照，外部只读 |
 | **struct QueryBuilder** | 值类型 — `From<T>()` 返回 stack-allocated struct |
-| **真 AOT** | 零 IL 抑制 — 三 Provider publish 通过；SQLite 已原生运行，PostgreSQL/MySQL 待 CI |
+| **真 AOT** | 零 IL 抑制 — 三 Provider 原生运行通过（SQLite 本机 + PG/MySQL 本机 Docker CI 同配置容器实测） |
 | **Provider 原生优化** | PG Binary COPY · MySQL/SQLite batched INSERT |
 | **UPSERT 单次往返** | `INSERT ON CONFLICT DO UPDATE` / `ON DUPLICATE KEY UPDATE` |
 | **最小依赖** | Core 仅使用 BCL 与 ADO.NET；可观测性基于 BCL `ActivitySource` / `Meter` |
@@ -285,8 +285,8 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 | Provider | 验证状态 | IL 抑制 |
 |----------|----------|:--:|
 | SQLite | 本机原生运行通过 | 0 |
-| PostgreSQL | 原生 publish 通过，CI 运行待验证 | 0 |
-| MySQL | 原生 publish 通过，CI 运行待验证 | 0 |
+| PostgreSQL | 原生运行通过（本机 Docker CI 同配置容器） | 0 |
+| MySQL | 原生运行通过（本机 Docker CI 同配置容器） | 0 |
 
 ---
 

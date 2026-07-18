@@ -29,7 +29,7 @@
 | DOC-002 | P2 | 规则、API 和测试计数建立机械校验 | 已完成 | doc-consistency-check.sh 8 项交叉验证；test-quality-scripts.sh 含故障恢复夹具 |
 | DOC-003 | P2 | 收敛跨 Provider 时间精度与 offset 语义 | 已完成 | PG/MySQL 微秒级精度声明修正；STD-PROV-PG-001 从 Ticks 完全一致改为微秒级往返一致 |
 | PERF-001 | P2 | 修复 Benchmark 和固定时间阈值 | 已完成 | Benchmark 修复 GlobalSetup+Shared Cache；产出查询 ~1.11× Raw ADO |
-| AOT-001 | P1 | 扩展三 Provider 与 NuGet consumer AOT 矩阵 | 已完成 | 三 Provider publish + SQLite 原生运行 + NuGet consumer 2.0.1 AOT 原生运行通过；PG/MySQL 服务容器待 CI |
+| AOT-001 | P1 | 扩展三 Provider 与 NuGet consumer AOT 矩阵 | 已完成（真库收口） | 三 Provider 原生运行全部通过：SQLite 本机 + PG/MySQL 本机 Docker（CI 同配置 postgres:17/mysql:8.4 容器）实测 PASSED（2026-07-18）；7 项真库集成用例 146/146 全绿；远端 CI 待 push 触发 |
 | AUD-001 | P0 | 凭据安全事件 | 未处理 | 用户决定仅记录；G9 必须继续阻断 |
 | API-001 | P3 | `PgNotificationListener.StopAsync()` 无 CancellationToken 参数 | 已记录·待 3.0 | G25 门禁豁免在案：2.0.1 已发布签名，追加可选参数属 binary-breaking（同 2.0.0 变更先例）；3.0 对齐 `IHostedService.StopAsync(CancellationToken)` 惯例时移除豁免 |
 
