@@ -59,7 +59,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
 
                 var interceptors = options.Interceptors?.ToList() ?? [];
-                var session = new DataSession<TProvider>(connection, options, interceptors);
+                ILogger? logger = options.LoggerFactory?.CreateLogger($"PalORM.{TProvider.Name}");
+                var session = new DataSession<TProvider>(connection, options, interceptors, logger);
                 connection = null;
                 return session;
             }
@@ -130,6 +131,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             builder.Where(System.Runtime.CompilerServices.FormattableStringFactory.Create(
                 $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}", _tenantId));
         }
+        builder._defaultClauseCount = builder._clauses.Count;
         return builder;
     }
 
