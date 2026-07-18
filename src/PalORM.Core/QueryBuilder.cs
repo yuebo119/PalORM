@@ -76,25 +76,32 @@ public struct QueryBuilder<T> where T : class, new()
         _transaction = null;
     }
 
-    /// <summary>链式追加 WHERE/AND 条件。</summary>
+    /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹——含 OR 时
+    /// AND 优先级会使默认过滤（软删/租户）对 OR 分支失效（ITM-307，纪律同 WhereIn）。</summary>
     public QueryBuilder<T> Where(FormattableString clause)
     {
-        AddFormattableClause(QueryClauseKind.Where,
+        AddParenthesizedClause(
             HasClause(QueryClauseKind.Where) ? "AND " : "WHERE ", clause);
         return this;
     }
 
     public QueryBuilder<T> OrWhere(FormattableString clause)
     {
-        AddFormattableClause(QueryClauseKind.Where,
+        AddParenthesizedClause(
             HasClause(QueryClauseKind.Where) ? "OR " : "WHERE ", clause);
         return this;
     }
 
+    private void AddParenthesizedClause(string prefix, FormattableString clause)
+    {
+        var (sql, parameters) = BindFormattableString(clause);
+        AddClause(QueryClauseKind.Where, $"{prefix}({sql})", parameters);
+    }
+
+    /// <summary>排序。重复调用退化为多键续排（等价 ThenBy）——避免生成双 ORDER BY 非法 SQL（ITM-306）。</summary>
     public QueryBuilder<T> OrderBy<TKey>(Expression<Func<T, TKey>> member, bool descending = false)
     {
-        AddClause(QueryClauseKind.OrderBy,
-            $"ORDER BY {GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
+        AddOrderBy(member, descending);
         return this;
     }
 
@@ -324,6 +331,8 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>结果缓存。<b>浅拷贝契约</b>：命中返回新 List，但元素为共享实体实例——
+    /// 命中实体应视为只读；需要修改时先自行深拷贝，否则会污染缓存与其他调用方（ITM-308）。</summary>
     public QueryBuilder<T> WithCache(string cacheKey, TimeSpan? ttl = null)
     {
         _cacheKey = cacheKey;
@@ -431,7 +440,8 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal void AddOrderBy<TKey>(Expression<Func<T, TKey>> member, bool descending)
         => AddClause(QueryClauseKind.OrderBy,
-            $"ORDER BY {GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
+            $"{(HasClause(QueryClauseKind.OrderBy) ? ", " : "ORDER BY ")}" +
+            $"{GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
 
     internal IReadOnlyList<DbParameter> GetQueryParameters()
         => GetParametersForKinds(_splitQuery

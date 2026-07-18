@@ -31,6 +31,16 @@ internal static class SourceGenerationValidation
         if (!IsSupportedEntity(type))
             return false;
 
+        // 恰好一个 [Key]（ITM-311）：无主键会生成 "DELETE FROM t WHERE " 畸形 SQL；
+        // 复合主键的 BindDelete 会把同一 key 绑到所有参数——两者都不能只依赖可被
+        // .editorconfig 降级的 PALORM001/019，生成器必须自守卫
+        int keyCount = type.GetMembers().OfType<IPropertySymbol>()
+            .Where(static property => !IsNotMapped(property))
+            .Count(static property => property.GetAttributes().Any(static attribute =>
+                attribute.AttributeClass?.Name is "KeyAttribute" or "Key"));
+        if (keyCount != 1)
+            return false;
+
         foreach (IPropertySymbol property in type.GetMembers().OfType<IPropertySymbol>())
         {
             if (IsNotMapped(property))

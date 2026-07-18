@@ -114,6 +114,14 @@ public sealed class QueryTests
 
     [Test] public async Task ThenBy_SecondarySort() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Order{Status="A",Total=10m,CreatedAt=0}); await db.InsertAsync(new Order{Status="A",Total=5m,CreatedAt=0}); await db.InsertAsync(new Order{Status="B",Total=20m,CreatedAt=0}); var r=await db.From<Order>().OrderBy(o=>o.Status).ThenBy(o=>o.Total).ToListAsync(); await Assert.That(r[0].Status).IsEqualTo("A"); await Assert.That(r[0].Total).IsEqualTo(5m); await Assert.That(r[1].Total).IsEqualTo(10m); }
 
+    // ITM-306 回归：已有 OrderBy 的查询再分页/再排序不得生成双 ORDER BY 非法 SQL
+    [Test] public async Task ToPageAsync_AfterOrderBy_DoesNotEmitDoubleOrderBy() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await InsertOrdersAsync(db,6,i=>new Order{Status=$"S{i}",Total=i*10m,CreatedAt=0}); var (rows,total)=await db.From<Order>().OrderBy(o=>o.Status).ToPageAsync(3,o=>o.Id); await Assert.That(rows.Count).IsEqualTo(3); await Assert.That(total).IsEqualTo(6); }
+
+    [Test] public async Task OrderBy_CalledTwice_DegradesToMultiKeySort() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Order{Status="A",Total=10m,CreatedAt=0}); await db.InsertAsync(new Order{Status="A",Total=5m,CreatedAt=0}); var r=await db.From<Order>().OrderBy(o=>o.Status).OrderBy(o=>o.Total).ToListAsync(); await Assert.That(r[0].Total).IsEqualTo(5m); }
+
+    // ITM-307 回归：含 OR 的用户条件必须括号包裹，不得穿透软删过滤
+    [Test] public async Task Where_WithOr_DoesNotBypassSoftDeleteFilter() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var keep=await db.InsertAsync(new SoftDeletableEntity{Name="keep"}); var gone=await db.InsertAsync(new SoftDeletableEntity{Name="gone"}); await db.DeleteAsync<SoftDeletableEntity>(gone.Id); _=keep; var r=await db.From<SoftDeletableEntity>().Where($"name = {"keep"} OR name = {"gone"}").ToListAsync(); await Assert.That(r.Count).IsEqualTo(1); await Assert.That(r[0].Name).IsEqualTo("keep"); }
+
     // ─── Phase 2: Bulk/事务 ─────────────────────────────
 
     [Test] public async Task BulkDeleteAsync_RemovesBatch() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var items=await InsertOrdersAsync(db,5,i=>new Order{Status="D",Total=i*10m,CreatedAt=0}); var keys=items.Select(x=>(object)x.Id).ToList(); var n=await db.BulkDeleteAsync<Order>(keys); await Assert.That(n).IsEqualTo(5); await Assert.That(await db.CountAsync<Order>()).IsEqualTo(0); }
