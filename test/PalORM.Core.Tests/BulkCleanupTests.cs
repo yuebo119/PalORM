@@ -178,8 +178,9 @@ internal sealed class BulkFailureCommand(
     BulkFailureScenario scenario,
     BulkFailureSet failures) : DbCommand
 {
+    // 命令创建顺序（MultiValueBulkInsert 骨架）：probe=1、复用行命令=2、主命令=3（每批一个）
     private readonly BulkFailureParameterCollection _parameters = new(
-        commandIndex == 3 && scenario == BulkFailureScenario.RowAndMainCleanup
+        commandIndex == 2 && scenario == BulkFailureScenario.RowAndMainCleanup
             ? failures.RowOperation
             : null);
 
@@ -202,7 +203,7 @@ internal sealed class BulkFailureCommand(
     protected override DbParameter CreateDbParameter() => new BulkFailureParameter();
 
     public override Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
-        => commandIndex == 2
+        => commandIndex == 3
             && scenario == BulkFailureScenario.MainAndTransactionCleanup
                 ? Task.FromException<int>(failures.Execution)
                 : Task.FromResult(1);
@@ -212,11 +213,11 @@ internal sealed class BulkFailureCommand(
         await base.DisposeAsync().ConfigureAwait(false);
         if (commandIndex == 1 && scenario == BulkFailureScenario.ProbeCleanup)
             throw failures.ProbeCleanup;
-        if (commandIndex == 2
+        if (commandIndex == 3
             && scenario is BulkFailureScenario.MainAndTransactionCleanup
                 or BulkFailureScenario.RowAndMainCleanup)
             throw failures.MainCleanup;
-        if (commandIndex == 3 && scenario == BulkFailureScenario.RowAndMainCleanup)
+        if (commandIndex == 2 && scenario == BulkFailureScenario.RowAndMainCleanup)
             throw failures.RowCleanup;
     }
 }

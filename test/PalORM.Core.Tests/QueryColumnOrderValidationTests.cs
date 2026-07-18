@@ -97,4 +97,46 @@ public sealed class QueryColumnOrderValidationTests
 
         await Assert.That(rows[0].LastName).IsEqualTo("Lovelace");
     }
+
+    // ITM-202 回归：ADR-A 校验必须覆盖 GridReader 与 StoredProcBuilder——
+    // 它们同为"调用方原生 SQL + ordinal 映射"路径，之前只堵了 QueryAsync 一族。
+
+    [Test]
+    public async Task GridReader_SwappedColumns_Throws()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await SeedAsync(session);
+
+        await using GridReader grid = await session.From<ColumnOrderEntity>()
+            .QueryMultipleAsync($"SELECT Id, last_name, first_name FROM colorder");
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await grid.ReadAsync<ColumnOrderEntity>());
+
+        await Assert.That(ex!.Message).Contains("column order mismatch");
+    }
+
+    [Test]
+    public async Task GridReader_ReadFirst_SwappedColumns_Throws()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await SeedAsync(session);
+
+        await using GridReader grid = await session.From<ColumnOrderEntity>()
+            .QueryMultipleAsync($"SELECT Id, last_name, first_name FROM colorder");
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await grid.ReadFirstAsync<ColumnOrderEntity>());
+    }
+
+    [Test]
+    public async Task GridReader_ValidationDisabled_AllowsCustomOrder()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync(validate: false);
+        await SeedAsync(session);
+
+        await using GridReader grid = await session.From<ColumnOrderEntity>()
+            .QueryMultipleAsync($"SELECT Id, last_name, first_name FROM colorder");
+        var rows = await grid.ReadAsync<ColumnOrderEntity>();
+
+        await Assert.That(rows[0].FirstName).IsEqualTo("Lovelace");
+    }
 }

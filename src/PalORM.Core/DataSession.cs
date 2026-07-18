@@ -118,7 +118,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         var builder = new QueryBuilder<T>(_conn, TProvider.Dialect, (IRowFactory<T>)factory!,
             _interceptors, TProvider.CreateParameter, TProvider.QuoteIdentifier, tableName,
             columnNames, _options.CommandTimeout, _operationState, readConnFactory,
-            _options.QueryCache);
+            _options.QueryCache, _options.ValidateQueryColumnOrder);
 
         // 自动附加租户过滤
         EntityFeatures features = GetEntityFeatures<T>();
@@ -697,7 +697,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>存储过程入口。</summary>
     public StoredProcBuilder StoredProc(string name) => new(
         _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
-        _operationState);
+        _operationState, _options.ValidateQueryColumnOrder);
 
     /// <summary>流式查询——IAsyncEnumerable 恒定内存。</summary>
     public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
@@ -784,24 +784,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>ADR-A 首行列名校验：结果列名与实体声明序列名不匹配即抛异常，
     /// 把"同型列静默交换数据"变为明确失败。仅首行执行，热路径零开销。</summary>
     private void ValidateColumnOrder<T>(DbDataReader reader) where T : class, new()
-    {
-        if (!_options.ValidateQueryColumnOrder) return;
-        if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? expected))
-            return;
-        int count = Math.Min(reader.FieldCount, expected.Count);
-        for (int i = 0; i < count; i++)
-        {
-            string actual = reader.GetName(i);
-            if (!string.Equals(actual, expected[i], StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException(
-                    $"Query column order mismatch for '{typeof(T).Name}': result column {i} is '{actual}' " +
-                    $"but entity declaration order expects '{expected[i]}'. Ordinal mapping would silently " +
-                    "misassign data. List columns explicitly in entity declaration order, or set " +
-                    "DbOptions.ValidateQueryColumnOrder = false if you use aliases and guarantee order yourself.");
-            }
-        }
-    }
+        => ColumnOrderValidator.Validate<T>(reader, _options.ValidateQueryColumnOrder);
 
     /// <summary>直查首行——无结果抛 InvalidOperationException。</summary>
     public async ValueTask<T> QueryFirstAsync<T>(FormattableString sql, CancellationToken ct = default)
