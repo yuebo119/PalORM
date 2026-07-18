@@ -448,7 +448,7 @@ public sealed class MultiEntityTests
         var rows = await query.ToListAsync();
 
         await Assert.That(dryRun.Sql).DoesNotContain("JOIN");
-        await Assert.That(dryRun.Sql).Contains("WHERE quantity = @p0");
+        await Assert.That(dryRun.Sql).Contains("WHERE (quantity = @p0)");
         await Assert.That(dryRun.Parameters.Count).IsEqualTo(1);
         await Assert.That(rows.Count).IsEqualTo(1);
     }

@@ -1078,6 +1078,39 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(migration).DoesNotContain("optional_note TEXT NOT NULL");
     }
 
+    [Test]
+    public async Task SqlTemplate_MultipleTemplates_PartialClassAndCleanSqlConstant()
+    {
+        // ITM-305：① 非 partial 固定类名使第二个模板 CS0101；② SQL 提取混入边界引号
+        const string source = """
+            using PalORM;
+
+            public static class Queries
+            {
+                [SqlTemplate("ActiveUsers")]
+                public static System.FormattableString ActiveUsersTemplate()
+                    => $"SELECT * FROM users WHERE active = 1";
+
+                [SqlTemplate("RecentOrders")]
+                public static System.FormattableString RecentOrdersTemplate()
+                    => $"SELECT * FROM orders ORDER BY id DESC";
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        var templates = result.GeneratedSources
+            .Where(pair => pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))
+            .ToList();
+
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(templates.Count).IsEqualTo(2);
+        string combined = string.Join("\n", templates.Select(pair => pair.Value));
+        await Assert.That(combined).Contains("public static partial class SqlTemplates");
+        // SQL 常量不得含边界引号字符
+        await Assert.That(combined).Contains(@"ActiveUsers = $@""SELECT * FROM users WHERE active = 1"";");
+        await Assert.That(combined).Contains(@"RecentOrders = $@""SELECT * FROM orders ORDER BY id DESC"";");
+    }
+
     private static GeneratorResult RunGenerator(string source)
         => RunGenerator(CreateCompilation(source));
 
