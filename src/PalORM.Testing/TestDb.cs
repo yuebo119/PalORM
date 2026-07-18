@@ -33,7 +33,8 @@ public static class TestDb
         return await DataSession<MySqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct).ConfigureAwait(false);
     }
 
-    /// <summary>从内存行创建测试数据源——使用真实 RowFactory 物化，避免 Mock 假绿。</summary>
+    /// <summary>从内存行创建测试数据源。<b>不经过 RowFactory 物化</b>——原样返回传入实例，
+    /// 仅用于构造集合输入；需要验证读写往返时请写入 :memory: SQLite 再读出（ITM-327）。</summary>
     public static IReadOnlyList<T> FromRows<T>(params T[] rows) where T : class, new()
         => rows;
 }

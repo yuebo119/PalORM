@@ -11,6 +11,7 @@ internal sealed partial class QueryCacheEntity
     public string Name { get; set; } = "";
 }
 
+[NotInParallel("CacheStore")]
 public sealed class QueryCacheInjectionTests
 {
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync(IQueryCache? cache = null)

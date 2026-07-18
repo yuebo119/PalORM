@@ -4,7 +4,8 @@ using System.Runtime.CompilerServices;
 namespace PalORM;
 
 /// <summary>栈分配字符串构建器——BuildSql 用, 替代 StringBuilder 消除堆分配。
-/// <para><b>设计</b>: ref struct(仅栈上存在)。初始 512B stackalloc buffer, 超出时 ArrayPool 兜底。</para>
+/// <para><b>设计</b>: ref struct(仅栈上存在)。调用点以 stackalloc 提供初始缓冲（256-512B），
+/// 超出时 Grow 切换到 ArrayPool 兜底（ITM-322：声明与调用点实现一致，勿改回 int 构造）。</para>
 /// <para><b>为什么不用 StringBuilder</b>: StringBuilder 始终在堆上分配→高 QPS 场景 Gen0 GC 压力。
 /// 小查询(≤512B)零分配, 大查询用 ArrayPool 减少 GC。</para></summary>
 internal ref struct ValueStringBuilder
