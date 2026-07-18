@@ -9,7 +9,7 @@ internal sealed class SessionOperationState
     /// 触发即说明存在永不完成的租约（如被放弃的枚举器）。internal 可写供测试缩短。</summary>
     internal static TimeSpan DisposeWaitTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private readonly AsyncLocal<object?> _currentOperationOwner = new();
     private readonly AsyncLocal<object?> _currentTransactionOwner = new();
     private TaskCompletionSource? _activeOperation;

@@ -74,7 +74,7 @@ internal static class MigrationEmitter
     /// 风格双引号）；列型走 DbTypeName 原值，与方言重载的类型映射刻意不同。</summary>
     internal static string BuildCreateTable(TableModel model)
     {
-        var columns = new List<string>();
+        List<string> columns = [];
         foreach (ColumnModel column in model.Columns.AsSpan())
         {
             string name = SqlGeneration.QuoteIdentifier(column.ColumnName, SqlGenerationDialect.Sqlite);
@@ -106,7 +106,7 @@ internal static class MigrationEmitter
         TableModel model,
         SqlGenerationDialect dialect)
     {
-        var columns = new List<string>();
+        List<string> columns = [];
         foreach (ColumnModel column in model.Columns.AsSpan())
         {
             string name = SqlGeneration.QuoteIdentifier(column.ColumnName, dialect);

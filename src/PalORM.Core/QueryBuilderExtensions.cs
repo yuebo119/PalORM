@@ -31,7 +31,7 @@ public static class QueryBuilderExtensions
         IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
         var context = new QueryContext(sql, parameters);
         const string operation = "select";
-        string provider = builder._dialect.ToString();
+        string provider = builder._dialect.GetName();
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         var sw = Stopwatch.StartNew();
         string outcome = "error";
@@ -48,7 +48,7 @@ public static class QueryBuilderExtensions
             foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnBefore(context);
             await PrepareCommandAsync(cmd, builder._prepared, ct).ConfigureAwait(false);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            var list = builder._take.HasValue ? new List<T>(builder._take.Value) : new List<T>();
+            List<T> list = builder._take.HasValue ? new(builder._take.Value) : [];
             while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(builder._factory.Read(reader));
             foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnAfter(context, sw.Elapsed, list.Count);
             // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
@@ -176,7 +176,7 @@ public static class QueryBuilderExtensions
                 "QueryMultipleAsync executes the provided SQL verbatim and ignores builder clauses. " +
                 "Call it on a bare From<T>() (no Where/OrderBy/etc.), or embed conditions in the SQL itself.");
         const string operation = "query_multiple";
-        string provider = builder._dialect.ToString();
+        string provider = builder._dialect.GetName();
         QueryObservation? observation = builder._tracing || builder._metrics
             ? new QueryObservation(builder._tracing, builder._metrics, operation, provider)
             : null;
@@ -243,7 +243,7 @@ public static class QueryBuilderExtensions
     public static async ValueTask<int> ExecuteNonQueryAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         const string operation = "update";
-        string provider = builder._dialect.ToString();
+        string provider = builder._dialect.GetName();
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         var stopwatch = Stopwatch.StartNew();
         string outcome = "error";
@@ -305,7 +305,7 @@ public static class QueryBuilderExtensions
         CancellationToken cancellationToken)
         where T : class, new()
     {
-        string provider = builder._dialect.ToString();
+        string provider = builder._dialect.GetName();
         QueryObservation? observation = builder._tracing || builder._metrics
             ? new QueryObservation(builder._tracing, builder._metrics, operation, provider)
             : null;
