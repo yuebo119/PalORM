@@ -109,6 +109,12 @@
 
 **如何避免**：检查是否有 `[ModuleInitializer]` 方法填充了这些属性。如果有，`null!` 是合规模式——不是缺陷。
 
+**机械核验**（已下沉，审计时直接执行，不再逐个推理）：
+```bash
+# 该文件存在 ModuleInitializer 或 Volatile.Write 发布路径 → 文件内全部 null! 视为合规
+grep -l 'null!' src/PalORM.Core/*.cs | xargs grep -l 'ModuleInitializer\|Volatile.Write'
+```
+
 ### 模式 P5：struct 方法中的 lambda 捕获 this
 
 **反例**：审计建议 lambda 改为捕获局部变量以避免装箱。实际 struct 中 lambda 无法捕获 `this`（CS1673），必须提前捕获到局部变量。这是 C# 语言约束，不是性能问题。
@@ -126,6 +132,13 @@
 **反例**：审计标记 `catch(DbException){}` 为静默异常吞噬。实际 DDL 已使用 `IF NOT EXISTS` 保证幂等，catch 为兜底安全网。DDL 如果已含 `IF NOT EXISTS`，catch 可以安全移除——但不能仅凭"catch 为空"就判定为缺陷。
 
 **如何避免**：检查对应的 SQL/DDL 是否已有幂等保护。如果已有（如 `IF NOT EXISTS`），catch 是冗余的可以安全移除——但不能标记为"异常吞噬"。
+
+**机械核验**（已下沉）：
+```bash
+# 空 catch(DbException) 所在方法若消费 CreateTableSql*/CreateIndexSql*（IF NOT EXISTS 家族）
+# 或前后 10 行内出现 IsDuplicateSchemaObject → 合规兜底，不标记
+grep -rn -B10 'catch (DbException)' src/ --include='*.cs' | grep -c 'IsDuplicateSchemaObject\|IF NOT EXISTS\|CreateTableSql\|CreateIndexSql'
+```
 
 ### 模式 P8：账本"已完成"≠ 文件当前存在（仓库重建/回滚后失真）
 

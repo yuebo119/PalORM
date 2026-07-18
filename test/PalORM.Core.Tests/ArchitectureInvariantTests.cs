@@ -1,0 +1,118 @@
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
+
+namespace PalORM.Core.Tests;
+
+/// <summary>
+/// 架构不变式测试（ITM-302 类缺陷的机械防线——"过滤覆盖断裂"根因类）。
+/// 不变式：DataSession 所有触及实体表的公共入口，方法体必须经过默认过滤路由
+/// （GetDefaultFilter* 或 内联 TenantParameterName 过滤 + BindDefaultFilterParameters）。
+/// 背景：租户过滤曾仅覆盖 From&lt;T&gt;()，直连 CRUD/聚合全部绕过（跨租户数据泄露）；
+/// 软删在同入口做了而租户没做。新增公共入口漏接过滤时，本测试在提交时失败。
+/// </summary>
+public sealed class ArchitectureInvariantTests
+{
+    /// <summary>必须经过默认过滤路由的实体表入口（新增触表入口时在此登记）。</summary>
+    private static readonly string[] _filteredEntryPoints =
+    [
+        "GetAsync",
+        "GetAllAsync",
+        "UpdateCoreAsync",   // UpdateAsync 的实现体
+        "DeleteAsync",
+        "CountAsync",
+        "SumAsync",
+        "MaxAsync",
+        "MinAsync",
+        "AvgAsync",
+    ];
+
+    /// <summary>豁免清单：触表但按契约不加默认过滤的入口（每项必须给依据）。</summary>
+    private static readonly Dictionary<string, string> _exemptEntryPoints = new()
+    {
+        // 原始 SQL 家族：用户自带完整 SQL，框架不知道目标表——契约文档已声明过滤不适用
+        ["QueryAsync"] = "原始 SQL 契约：用户 SQL 不可注入过滤（文档已声明）",
+        ["QueryFirstAsync"] = "同 QueryAsync",
+        ["QuerySingleAsync"] = "同 QueryAsync",
+        ["ScalarAsync"] = "同 QueryAsync",
+        ["ExecuteAsync"] = "同 QueryAsync",
+        ["InsertAsync"] = "INSERT 无过滤语义（租户列值由实体携带）",
+        ["SaveAsync"] = "UPSERT 委托 Insert/Update 路径",
+    };
+
+    [Test]
+    public async Task AllEntityTableEntryPoints_RouteThroughDefaultFilter()
+    {
+        string source = await File.ReadAllTextAsync(GetDataSessionPath());
+        var violations = new List<string>();
+
+        foreach (string method in _filteredEntryPoints)
+        {
+            string? body = ExtractMethodBody(source, method);
+            if (body is null)
+            {
+                violations.Add($"{method}: 在 DataSession.cs 中未找到——若已改名/移除，同步更新本测试登记表");
+                continue;
+            }
+            bool routed =
+                body.Contains("GetDefaultFilter", StringComparison.Ordinal)
+                || (body.Contains("TenantParameterName", StringComparison.Ordinal)
+                    && body.Contains("BindDefaultFilterParameters", StringComparison.Ordinal))
+                // 聚合家族经 ExecuteScalarAsync 集中绑定，方法体只需出现过滤子句构造
+                || body.Contains("GetDefaultFilterWhereClause", StringComparison.Ordinal);
+            if (!routed)
+                violations.Add($"{method}: 方法体未经过默认过滤路由（GetDefaultFilter*/TenantParameterName+BindDefaultFilterParameters）");
+        }
+
+        await Assert.That(string.Join("\n", violations)).IsEmpty();
+    }
+
+    [Test]
+    public async Task NewPublicEntryPoints_AreRegisteredInThisTest()
+    {
+        // 反向守卫：DataSession 出现新的 public *Async<T> 泛型触表入口而两张表都没登记 → 失败。
+        string source = await File.ReadAllTextAsync(GetDataSessionPath());
+        var known = _filteredEntryPoints
+            .Concat(_exemptEntryPoints.Keys)
+            .Concat(
+            [
+                // 非触表或非实体泛型入口（会话/事务/迁移/健康检查/生命周期）
+                "UpdateAsync", "ValidateSchemaAsync", "DiffAsync", "MigrateAsync",
+                "SavepointAsync", "RollbackToAsync", "ExecuteWithResilience",
+                "BeginTransactionAsync", "WithTransaction", "HealthCheckAsync",
+                "ForRead", "DisposeAsync", "QueryAsyncEnumerable", "QueryMultipleAsync",
+                "CreateAsync",
+            ])
+            .ToHashSet(StringComparer.Ordinal);
+
+        var unregistered = Regex.Matches(
+                source,
+                @"public\s+(?:async\s+)?(?:ValueTask|Task|IAsyncEnumerable)[^\n(]*?\s(\w+)(?:<[^>(]+>)?\s*\(",
+                RegexOptions.Multiline)
+            .Select(static match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .Where(name => !known.Contains(name))
+            .ToArray();
+
+        await Assert.That(string.Join(", ", unregistered))
+            .IsEmpty()
+            .Because("DataSession 新增公共入口必须在 ArchitectureInvariantTests 登记：" +
+                "触表入口进 _filteredEntryPoints（接过滤路由），豁免进 _exemptEntryPoints（给依据）");
+    }
+
+    /// <summary>提取方法体：从签名行到同缩进级 '}'（DataSession 方法体统一 4 空格缩进）。</summary>
+    private static string? ExtractMethodBody(string source, string methodName)
+    {
+        Match signature = Regex.Match(
+            source,
+            $@"^\s{{4}}(?:public|private|internal)[^\n]*\s{Regex.Escape(methodName)}(?:<[^>(]+>)?\s*\(",
+            RegexOptions.Multiline);
+        if (!signature.Success)
+            return null;
+        int close = source.IndexOf("\n    }", signature.Index, StringComparison.Ordinal);
+        return close < 0 ? null : source[signature.Index..close];
+    }
+
+    private static string GetDataSessionPath([CallerFilePath] string testPath = "")
+        => Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(testPath)!, "..", "..", "src", "PalORM.Core", "DataSession.cs"));
+}
