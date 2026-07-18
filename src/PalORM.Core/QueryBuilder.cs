@@ -12,6 +12,7 @@ public struct QueryBuilder<T> where T : class, new()
 {
     internal DbConnection _conn;
     internal readonly Func<DbConnection>? _readConnFactory;
+    internal readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
     internal readonly SqlDialect _dialect;
     internal readonly bool _validateColumnOrder;
     // From<T>() 注入默认过滤（软删/租户）后的基准子句数——QueryMultipleAsync 据此
@@ -48,11 +49,13 @@ public struct QueryBuilder<T> where T : class, new()
         SessionOperationState operationState,
         Func<DbConnection>? readConnFactory = null,
         IQueryCache? queryCache = null,
-        bool validateColumnOrder = false)
+        bool validateColumnOrder = false,
+        Func<DbConnection, CancellationToken, Task>? readConnInitializer = null)
     {
         _validateColumnOrder = validateColumnOrder;
         _conn = conn;
         _readConnFactory = readConnFactory;
+        _readConnInitializer = readConnInitializer;
         _queryCache = queryCache ?? CacheStore.Default;
         _dialect = dialect;
         _quoteIdentifier = quoteIdentifier;
@@ -385,7 +388,7 @@ public struct QueryBuilder<T> where T : class, new()
             || !_useReadRoute || _readConnFactory is null)
             return ValueTask.FromResult(ConnectionLease.Borrow(_conn));
 
-        return ConnectionLease.OpenOwnedAsync(_readConnFactory, cancellationToken);
+        return ConnectionLease.OpenOwnedAsync(_readConnFactory, cancellationToken, _readConnInitializer);
     }
 
     internal DbTransaction? GetActiveTransaction()
@@ -403,7 +406,7 @@ public struct QueryBuilder<T> where T : class, new()
     {
         var clone = new QueryBuilder<T>(_conn, _dialect, _factory, _interceptors, _paramFactory,
             _quoteIdentifier, _tableName, _columnNames, _commandTimeout,
-            _operationState, _readConnFactory, _queryCache)
+            _operationState, _readConnFactory, _queryCache, _validateColumnOrder, _readConnInitializer)
         {
             _selectColumns = _selectColumns,
             _take = _take,

@@ -76,6 +76,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                     ?? ResilienceExecutor.GetDefaultBackoff(attempt);
                 await Task.Delay(delay, ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException timeoutException) when (!ct.IsCancellationRequested)
+            {
+                // 连接超时且重试耗尽：包装为 TimeoutException，与命令路径
+                // （ResilienceExecutor）对称——调用方可与"我被取消"区分（ITM-206）。
+                throw new TimeoutException(
+                    $"Connection open timed out after {options.ConnectionTimeout} " +
+                    $"(attempt {attempt + 1}/{maxRetries + 1}).",
+                    timeoutException);
+            }
             finally
             {
                 if (connection is not null)
@@ -119,7 +128,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         var builder = new QueryBuilder<T>(_conn, TProvider.Dialect, (IRowFactory<T>)factory!,
             _interceptors, TProvider.CreateParameter, TProvider.QuoteIdentifier, tableName,
             columnNames, _options.CommandTimeout, _operationState, readConnFactory,
-            _options.QueryCache, _options.ValidateQueryColumnOrder);
+            _options.QueryCache, _options.ValidateQueryColumnOrder,
+            static (conn, ct) => TProvider.InitializeConnectionAsync(conn, ct));
 
         // 自动附加租户过滤
         EntityFeatures features = GetEntityFeatures<T>();
@@ -610,7 +620,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 }
                 catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
                 {
-                    // MySQL 重名索引（1061）= 已建过，幂等跳过
+                    // MySQL 重名索引（1061）通常 = 已建过（幂等跳过）；但同名异构索引（另一实体
+                    // 占用同名）也触发 1061——记录警告以免唯一约束静默缺失（ITM-203）
+                    _logger.LogWarning(
+                        "Index DDL skipped as duplicate; verify no cross-entity index name collision: {IndexDdl}",
+                        indexDdl);
                 }
             }
         }
@@ -821,7 +835,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>直查标量。数据库返回类型与 <typeparamref name="T"/> 不同时按 Convert.ChangeType 转换
-    /// （PG COUNT 返回 long、MySQL SUM 返回 decimal 等常见情形）；无法转换时抛 InvalidCastException 而非静默返回 default。</summary>
+    /// （PG COUNT 返回 long、MySQL SUM 返回 decimal 等常见情形）；无法转换时抛 InvalidCastException 而非静默返回 default。
+    /// <para><b>类型支持范围</b>（与 MaxAsync/MinAsync 一致）：<typeparamref name="T"/> 限 IConvertible 基元类型
+    /// （数值/bool/string/DateTime）及其 Nullable；Guid/枚举/DateOnly 等非 IConvertible 目标在类型不完全匹配时
+    /// 抛 InvalidCastException——此类值请以 string 取回后自行 Parse。</para></summary>
     public async ValueTask<T?> ScalarAsync<T>(FormattableString sql, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();

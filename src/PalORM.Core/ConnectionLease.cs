@@ -21,13 +21,18 @@ internal sealed class ConnectionLease : IAsyncDisposable
 
     internal static async ValueTask<ConnectionLease> OpenOwnedAsync(
         Func<DbConnection> connectionFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<DbConnection, CancellationToken, Task>? initializeConnection = null)
     {
         DbConnection connection = connectionFactory();
         try
         {
             if (connection.State != ConnectionState.Open)
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            // Provider 初始化钩子对读路由连接同样生效（ITM-207）——
+            // 主连接在 CreateAsync 初始化，读连接在此处补齐同一契约。
+            if (initializeConnection is not null)
+                await initializeConnection(connection, cancellationToken).ConfigureAwait(false);
             return new ConnectionLease(connection, true);
         }
         catch (Exception exception)
