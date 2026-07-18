@@ -15,7 +15,7 @@
 | [deep-check-engine.md](deep-check-engine.md) | **引擎**：七流·误判库·[推断]零容忍·下沉审查·四指标 | 怎么查 | 被两 profile 引用 |
 | [review-system-v2.md](review-system-v2.md) | **review profile**：分级触发·diff 范围·8 段报告 | 这次提交行不行？ | 每次实质提交 |
 | [audit-system/prompt.md](audit-system/prompt.md) | **audit profile**：全量·视角池·趋势·风险预判 | 整体有什么缺陷？走向如何？ | 里程碑 `/audit` |
-| [gate-system/prompt.md](gate-system/prompt.md) | 门禁：G1-G25 机械检查 | 遵守规范了吗？ | 每次提交前 + CI |
+| [gate-system/prompt.md](gate-system/prompt.md) | 门禁：G1-G27 机械检查 | 遵守规范了吗？ | 每次提交前 + CI |
 | [refine-system/prompt.md](refine-system/prompt.md) | 精炼：24 项操作矩阵 | 如何更优实现？ | `refine-scan.sh` 起步 |
 
 裁决顺序：**gate 阻断 > 深检缺陷（audit/review） > refine 优化**。同一发现只归属一个系统。
@@ -27,7 +27,7 @@
 | test/PalORM.SourceGen.Tests/SnapshotTests | 生成物基线（16 类型 × 全特性 × 三方言）+ 编译探针 | ITM-301/139/328 |
 | test/PalORM.SourceGen.Tests/DialectSymmetryTests | 三方言差异登记表（未登记差异即失败） | ITM-303/304/315/326 |
 | scripts/assertion-strength-check.sh | 弱断言基线（19 只减不增） | ITM-319/327 |
-| scripts/gate-check.sh | G1-G25 | 302 坑 |
+| scripts/gate-check.sh | G1-G27 | 302 坑 |
 | scripts/verify-ai-system.sh | .ai 系统自身一致性 | 模式 P8 |
 | scripts/doc-consistency-check.sh | 文档口径 | DOC 系列 |
 
@@ -58,7 +58,7 @@
 ```
 docs/踩坑目录.md (302 项陷阱)
     → docs/编码规范.md (167 条 STD 规则 × 17 类)
-        → scripts/gate-check.sh (G1-G25 机械门禁)
+        → scripts/gate-check.sh (G1-G27 机械门禁)
         → 深检引擎 + 两 profile（审计/评审依据）
 docs/API参考.md (113 API = 112 实现 + 1 移除)   ← audit 专项 #2 的对照基准
 docs/架构设计.md (18 项设计决策)                 ← 架构流对照基准

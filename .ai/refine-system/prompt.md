@@ -107,20 +107,37 @@ P0→P1→P2 顺序。每项执行后 `dotnet build` 验证。每批完成后 `d
 
 ## 精炼效果追踪
 
-### 当前热点基线（2026-07-17 · refine-scan.sh 实测 · 供下轮精炼定位）
+### 当前热点基线（2026-07-19 · 两轮精炼收口后 · refine-scan.sh v1.2 精度修正版实测）
 
-| 项 | 命中 | 精炼态度 |
+> 扫描器 v1.2 修正（源自二轮误报实证）：M1 排除带容量/拷贝构造；M9 改检测 object 锁字段
+> （lock 语句本体在 Lock 类型迁移后无需改动）；O6 只报循环体内累加；O9 收窄到枚举词干。
+
+| 项 | 命中 | 状态 |
 |:--:|:--:|------|
-| O3 .ToArray/.ToList | 47 处 | 热路径（DataSession 查询链）逐个评估 Span 化；冷路径（初始化）不动 |
-| M9 lock 语句 | 33 处 | SessionOperationState/Resilience/CacheStore 集中——`Lock` 类型迁移需并发测试全绿，🟡 |
-| O9 .ToString | 24 处 | 仅 Enum→字符串场景改 switch/nameof；诊断消息里的 ToString 不动 |
-| M1 new List<> | 22 处 | 集合表达式 `[]` 直改，🟢 |
-| A6 SuppressMessage | 19 处 | 逐项核对 Justification 是否仍必要（历史上 WithPool 修复曾自动消除 1 项） |
-| M8 struct 声明 | 16 处 | QueryBuilder 已是 struct+写时复制；其余 readonly record struct 评估必须过 QueryBuilderValueSemanticsTests |
-| O8 object 参数 | 10 处 | BulkDeleteAsync(object[]) 是公共 API——泛型化属重构不属精炼，跳过 |
-| O1 new Dictionary | 4 处 | 只读场景才 Frozen 化；RegistryFragment 构造期字典是发布前中间态，不动 |
+| M1 裸 new List<> | 0 | 已出清（18 处→[]，容量/拷贝构造 6 处合规保留） |
+| M9 object 锁字段 | 0 | 已出清（4 类迁移 Lock，Pg 监听器原生 Lock） |
+| O6 循环内字符串累加 | 0 | 旧口径 2 处证实为单次条件追加误报 |
+| O9 枚举词干 ToString | 1 | GetName 自身 default 分支，合规 |
+| O3 .ToArray/.ToList | ~45 | 已逐点定性：写路径 SQL 构建每类型一次+送 Join，Span 化不成比例；其余冷路径。**除非新增热路径，不再重评** |
+| A6 SuppressMessage | 13 | Justification 全在案（2026-07-19 逐项核对） |
+| M8 struct 声明 | 4 非 record | 全部有据保留（QueryBuilder 写时复制/自定义相等释放语义） |
+| O8 object 参数 | ~9 | 公共 API 签名红线，永久跳过 |
+| [人工] 7 项 | 出清 | A2 已收敛 TransactionCleanup；A1 十候选全证伪（误判库 P9）；余 5 项有据关闭见 refine-2026-07-19.md |
 
 基线刷新方式：`bash scripts/refine-scan.sh` 后更新本表。命中数明显变化（±30%）说明代码有大规模演化，先跑 /audit 再精炼。
+
+### 性能项实证规则（v1.2 新增）
+
+O 类操作声称显著性能收益（>10% 或"零分配"级别）时，执行前后须 BenchmarkDotNet 对比实证
+（bench/PalORM.Benchmarks 已有基建）；无基准数据时，报告效果栏只写**机制**（"省 N 次分配"），
+禁止写未实测的倍数或百分比。微量收益（单次分配级）可凭机制推理执行，不强制基准。
+
+### 工具纪律（v1.2 新增）
+
+1. **行尾红线**：批量文本替换前 `file` 或 git diff 核对行尾；CRLF 文件禁止 python 全文重写
+   （TableModel ±454 行假 diff 教训）——用二进制模式替换或 Edit 工具精确修改。
+2. **A1 判死代码四类排除**：生成物类名（Emitter 字符串模板）/公共注解（docs 承诺）/工厂
+   lambda 单点引用/扩展方法调用形态——四类全排除后才可提删除（误判库 P9）。
 
 ### 单项记录格式
 

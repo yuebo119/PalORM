@@ -171,6 +171,26 @@ while IFS= read -r file; do
 done < <(git ls-files 'src/**/*.cs')
 check_zero G25 '公共 async API 必须带 CancellationToken' "$ct_missing"
 
+# G26：QueryBuilder 必须保持 struct（候补 C1 脚本化——class 化即高 QPS 堆分配回退，
+# 写时复制语义随之失效）。声明形态改变（class/record class）计为违规。
+qb_struct=$(grep -cE '^public struct QueryBuilder<T>' src/PalORM.Core/QueryBuilder.cs 2>/dev/null || true)
+# 文件缺失（最小化测试夹具仓库）不计违规；文件存在但非 struct 声明才违规
+if [ -f src/PalORM.Core/QueryBuilder.cs ]; then
+    check_zero G26 'QueryBuilder 保持 struct 声明' "$((1 - qb_struct))"
+else
+    check_zero G26 'QueryBuilder 保持 struct 声明' 0
+fi
+
+# G27：CS1591 豁免防回退（C3 编译期强制的守卫）——src/ 生效的全局 NoWarn 不得
+# 重新纳入 CS1591；豁免仅允许出现在测试/AotModels/Benchmarks 的条件 PropertyGroup。
+# 文件缺失（最小化测试夹具仓库）按 0 处理。
+if [ -f Directory.Build.props ]; then
+    cs1591_global=$(awk '/<PropertyGroup>/,/<\/PropertyGroup>/' Directory.Build.props | grep -c 'CS1591' || true)
+else
+    cs1591_global=0
+fi
+check_zero G27 'src/ 全域 CS1591 强制不回退' "$cs1591_global"
+
 printf '\n通过：%s  警告：%s  失败：%s  总计：%s\n' "$PASSED" "$WARNED" "$FAILED" "$((PASSED + WARNED + FAILED))"
 printf '═══════ 扫描完成 ═══════\n'
 
