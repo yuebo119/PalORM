@@ -5,6 +5,27 @@
 
 ---
 
+## 速版（子代理提示词内嵌用——每模式一行；完整版在下方，主线程定稿门用完整版）
+
+1. lock 只读前半段→读完整 lock 块再下并发结论
+2. grep 计数差异≠语义差异→逐行读每个命中点
+3. catch(Exception) 前可能有 catch(OCE){throw;}→查前置 catch
+4. 分析器行为必须 dotnet build 验证→不许猜
+5. "X 缺失"必须当前 commit ls/grep 验证→不采信记忆或旧报告
+6. 评分/观感与实现质量脱节→先查覆盖度
+7. grep 表面 ✅ 不算查过→Read 验证后才可 ✅
+8. 外部任务的方法名/类名先 grep 存在性
+P1. *.g.cs 生成文件不评→只评手写代码
+P2. Provider 间相似=方言刻意独立≠DRY 违规
+P4. null!+ModuleInitializer/Volatile.Write 发布=合规
+P5. struct 内 lambda 捕获局部变量=CS1673 语言约束
+P6. FrozenDictionary+ModuleInitializer 静态属性≠全局可变状态
+P7. 空 catch(DbException)+IF NOT EXISTS/IsDuplicateSchemaObject=幂等兜底
+P8. 账本"已完成"≠文件存在→仓库重建/回滚后全部重验
+P9. grep 引用计数四类盲区：生成物类名/公共注解/工厂 lambda/扩展方法
+
+---
+
 ## 通用模式（跨项目适用）
 
 ### 模式 1：lock 块只读前半段 → "并发竞态"

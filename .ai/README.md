@@ -33,20 +33,21 @@
 | scripts/gate-check.sh | G1-G27（含 G26 struct 守卫、G27 CS1591 防回退） | 302 坑 |
 | scripts/verify-ai-system.sh | .ai 系统自身一致性 | 模式 P8 |
 | scripts/doc-consistency-check.sh | 文档口径（含 D9 加和校验） | DOC 系列 + ITM-418 |
-| scripts/probe-template.sh | 探针骨架生成（probe-first 基建，~30 秒出最小工程） | ITM-401/403 探针实践 |
+| scripts/probe-template.sh | 探针骨架生成（~30 秒出最小工程，定稿实证基建） | ITM-401/403 探针实践 |
+| scripts/review-scope.sh | 应读清单+分片+覆盖度账本（地毯完整性机械可查） | 质量为先宗旨配套 |
 
 ## 文件地图
 
 ```
 .ai/
 ├── README.md                        ← 本文件（总入口）
-├── deep-check-engine.md             深检引擎 v2.0（probe-first + 定稿门）
+├── deep-check-engine.md             深检引擎 v2.2（地毯×探针并用 + 并行地毯协议 + 七流问题卡 + 定稿门三问）
 ├── metrics.md                       五指标账本（逃逸/复发/证伪/密度/时延）+ 逃逸账本（只增不删）
 ├── review-system/
-│   ├── prompt.md                    review 系统 v3.0（单入口五档位：轻量×2/标准/全量/里程碑）
+│   ├── prompt.md                    review 系统 v3.1（单入口五档位 + 并行执行编排）
 │   ├── template.md                  报告模板（8 段强制；段 3 含误判对照列；段 8 = 指标）
 │   ├── action-items-template.md     行动项模板（单维度 P0-P3 + 下沉审查段）
-│   ├── known-false-positives.md     误判知识库（定稿门强制对照）
+│   ├── known-false-positives.md     误判知识库（速版内嵌子代理 + 完整版定稿门对照）
 │   ├── perspective-stats.md         探索性视角命中史（里程碑档更新）
 │   └── reports/                     历史报告（含原 audit-*.md，不可再生，勿删）
 ├── gate-system/prompt.md            门禁提示词（与 scripts/gate-check.sh 一一对应）
