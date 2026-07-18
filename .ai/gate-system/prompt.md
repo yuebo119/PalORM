@@ -23,11 +23,11 @@
 |----|---------|----------------|
 | 编译期 | TreatWarningsAsErrors · IsAotCompatible · STJ源生成关闭反射 | — |
 | 架构 | Directory.Build.props 统一配置 · 中央包管理 | — |
-| **门禁（新增）** | **—** | **G1-G25：由 scripts/gate-check.sh 机械执行** |
+| **门禁（新增）** | **—** | **G1-G27：由 scripts/gate-check.sh 机械执行** |
 
 ---
 
-## G1-G25 检查项（与 scripts/gate-check.sh 一一对应）
+## G1-G27 检查项（与 scripts/gate-check.sh 一一对应）
 
 > 本表描述脚本已实现的检查。编号、名称、判定级别（阻断/警告）与脚本保持一致；修改脚本时必须同步本表和 `docs/编码规范.md` 门禁清单章节。
 
@@ -58,14 +58,16 @@
 | G23 | AOT 测试项目不得手工编译 `*.g.cs` 生成文件 | 本系统 | 阻断 |
 | G24 | 库代码每个 await 必须 `ConfigureAwait(false)`（跨行 perl 统计；`await using`/`await foreach`/`Task.Yield()` 豁免） | STD-ASYNC | 阻断 |
 | G25 | 公共 async API 必须带 `CancellationToken` 参数（Dispose 系豁免；`StopAsync` 豁免在案见账本 API-001） | STD-ASYNC | 阻断 |
+| G26 | QueryBuilder 保持 struct 声明（class 化即高 QPS 堆分配回退，写时复制语义失效；原候补 C1 脚本化） | STD-PERF | 阻断 |
+| G27 | src/ 全域 CS1591 强制不回退（全局 NoWarn 不得重新纳入 CS1591；测试/AotModels/Benchmarks 条件豁免在案；原候补 C3 的守卫） | STD-ARCH | 阻断 |
 
 ### 候补检查（未脚本化，需 AI 人工核验）
 
 | 项 | 约束 | 检查方式 |
 |:--:|------|---------|
-| C1 | QueryBuilder 为 struct | `grep "struct QueryBuilder" src/PalORM.Core/QueryBuilder.cs` |
-| C2 | 三 Provider 实现完整 IDbProvider 成员 | grep 各 Provider 的接口成员实现 |
-| C3 | 公共 API 有 XML 文档注释 | 编译期强制：src/ 全域 CS1591 + TreatWarningsAsErrors（2026-07-19 摘除 Phase 1 豁免；测试与 AotModels 项目豁免在案见 Directory.Build.props） |
+| C2 | 三 Provider 实现完整 IDbProvider 成员 | static abstract 编译期强制；virtual 成员覆盖 grep 核验 |
+
+> C1 已下沉为 G26、C3 已下沉为 G27（2026-07-19，均经负向探针验证）。
 
 ---
 
@@ -127,9 +129,9 @@ bash scripts/gate-check.sh
 PASS G1: 具体异常类型 sealed
 PASS G2: Core 零外部 ORM 依赖
 ...
-PASS G25: 公共 async API 必须带 CancellationToken
+PASS G27: src/ 全域 CS1591 强制不回退
 
-通过：N  警告：N  失败：N  总计：25
+通过：N  警告：N  失败：N  总计：27
 ═══════ 扫描完成 ═══════
 ```
 
