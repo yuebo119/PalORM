@@ -66,8 +66,8 @@ public struct QueryBuilder<T> where T : class, new()
         _columnNames = columnNames;
         _operationState = operationState;
         _commandTimeout = commandTimeout;
-        _clauses = new List<QueryClause>();
-        _parameters = new List<DbParameter>();
+        _clauses = [];
+        _parameters = [];
         _selectColumns = null;
         _take = null;
         _skip = null;
@@ -156,8 +156,8 @@ public struct QueryBuilder<T> where T : class, new()
             return this;
         }
 
-        var batches = new List<string>();
-        var parameters = new List<DbParameter>();
+        List<string> batches = [];
+        List<DbParameter> parameters = [];
         const int maxBatch = 500;
         for (int start = 0; start < items.Count; start += maxBatch)
         {
@@ -185,8 +185,8 @@ public struct QueryBuilder<T> where T : class, new()
         var items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0) return this;
 
-        var batches = new List<string>();
-        var parameters = new List<DbParameter>();
+        List<string> batches = [];
+        List<DbParameter> parameters = [];
         const int maxBatch = 500;
         for (int start = 0; start < items.Count; start += maxBatch)
         {
@@ -547,8 +547,9 @@ public struct QueryBuilder<T> where T : class, new()
                     sb.Append(_quoteIdentifier(_columnNames[index]));
                 }
             }
-            foreach (QueryClause window in _clauses.Where(clause => clause.Kind == QueryClauseKind.Window))
+            foreach (QueryClause window in _clauses)
             {
+                if (window.Kind != QueryClauseKind.Window) continue;
                 sb.Append(", ");
                 sb.Append(window.Sql);
             }
@@ -622,7 +623,7 @@ public struct QueryBuilder<T> where T : class, new()
 
     private System.Collections.ObjectModel.ReadOnlyCollection<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
-        var parameters = new List<DbParameter>();
+        List<DbParameter> parameters = [];
         foreach (QueryClause clause in _clauses)
         {
             if (!kinds.Contains(clause.Kind)) continue;
@@ -633,8 +634,10 @@ public struct QueryBuilder<T> where T : class, new()
 
     private void AppendComments(ref ValueStringBuilder builder)
     {
-        foreach (QueryClause clause in _clauses.Where(clause => clause.Kind == QueryClauseKind.Comment))
+        // BuildSql 热路径：手写循环替代 LINQ Where（每次查询省委托+迭代器分配）
+        foreach (QueryClause clause in _clauses)
         {
+            if (clause.Kind != QueryClauseKind.Comment) continue;
             builder.Append(clause.Sql);
             builder.Append(' ');
         }
@@ -642,15 +645,15 @@ public struct QueryBuilder<T> where T : class, new()
 
     private void AppendCtes(ref ValueStringBuilder builder)
     {
-        QueryClause[] ctes = _clauses.Where(clause => clause.Kind == QueryClauseKind.CommonTableExpression).ToArray();
-        if (ctes.Length == 0) return;
-        builder.Append("WITH ");
-        for (int i = 0; i < ctes.Length; i++)
+        bool first = true;
+        foreach (QueryClause clause in _clauses)
         {
-            if (i > 0) builder.Append(", ");
-            builder.Append(ctes[i].Sql);
+            if (clause.Kind != QueryClauseKind.CommonTableExpression) continue;
+            builder.Append(first ? "WITH " : ", ");
+            builder.Append(clause.Sql);
+            first = false;
         }
-        builder.Append(' ');
+        if (!first) builder.Append(' ');
     }
 
     /// <summary>组装 WHERE 段：默认过滤（软删/租户）与用户子句组恒以 AND 组合——
@@ -689,8 +692,9 @@ public struct QueryBuilder<T> where T : class, new()
 
     private void AppendClauses(ref ValueStringBuilder builder, QueryClauseKind kind)
     {
-        foreach (QueryClause clause in _clauses.Where(clause => clause.Kind == kind))
+        foreach (QueryClause clause in _clauses)
         {
+            if (clause.Kind != kind) continue;
             builder.Append(clause.Sql);
             builder.Append(' ');
         }

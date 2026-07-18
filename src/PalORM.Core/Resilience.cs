@@ -18,7 +18,7 @@ public sealed class ResilienceExecutor
     private bool _circuitOpen;
     private bool _halfOpenProbeActive;
     private long _circuitGeneration;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
     public ResilienceExecutor(DbOptions options)
         : this(options, static exception => exception is System.Data.Common.DbException { IsTransient: true })
