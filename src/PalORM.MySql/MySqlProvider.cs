@@ -7,7 +7,6 @@ namespace PalORM.MySql;
 public sealed class MySqlProvider : IDbProvider
 {
     public static string Name => "MySql";
-    public static char ParameterPrefix => '@';
     public static SqlDialect Dialect => SqlDialect.MySql;
 
     public static DbConnection CreateConnection(string connectionString) => new MySqlConnection(connectionString);
@@ -49,6 +48,10 @@ public sealed class MySqlProvider : IDbProvider
     /// <summary>MySQL 无 CREATE INDEX IF NOT EXISTS：迁移幂等靠识别 1061 重名索引错误。</summary>
     public static bool IsDuplicateSchemaObject(Exception exception)
         => exception is MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyName };
+
+    /// <summary>1062 Duplicate entry——唯一约束冲突。</summary>
+    public static bool IsUniqueViolation(Exception exception)
+        => exception is MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyEntry };
 
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {

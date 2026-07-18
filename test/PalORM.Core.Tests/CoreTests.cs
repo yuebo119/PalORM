@@ -776,10 +776,13 @@ public sealed class ProviderTests
     [Test] public async Task SqliteProvider_AllMembers_Defined()
     {
         await Assert.That(PalORM.Sqlite.SqliteProvider.Name).IsEqualTo("SQLite");
-        await Assert.That(PalORM.Sqlite.SqliteProvider.ParameterPrefix).IsEqualTo('@');
         await Assert.That(PalORM.Sqlite.SqliteProvider.SupportsReturningClause).IsTrue();
         await Assert.That(PalORM.Sqlite.SqliteProvider.QuoteIdentifier("test")).IsEqualTo("\"test\"");
-        await Assert.That(PalORM.Sqlite.SqliteProvider.GetLimitOffsetClause(10, 0)).Contains("LIMIT");
+        // ITM-314: 唯一约束冲突统一判定（SQLITE_CONSTRAINT=19）
+        await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
+            new Microsoft.Data.Sqlite.SqliteException("constraint", 19))).IsTrue();
+        await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
+            new Microsoft.Data.Sqlite.SqliteException("busy", 5))).IsFalse();
     }
 
     [Test] public async Task SqliteProvider_CreateParameter_Works()
@@ -825,7 +828,6 @@ public sealed class ProviderTests
     [Test] public async Task PostgreSqlProvider_AllMembers_Compiled()
     {
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.Name).IsEqualTo("PostgreSql");
-        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.ParameterPrefix).IsEqualTo('@');
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.SupportsReturningClause).IsTrue();
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.QuoteIdentifier("t")).IsEqualTo("\"t\"");
     }

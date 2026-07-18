@@ -7,7 +7,6 @@ namespace PalORM.Sqlite;
 public sealed class SqliteProvider : IDbProvider
 {
     public static string Name => "SQLite";
-    public static char ParameterPrefix => '@';
     public static SqlDialect Dialect => SqlDialect.Sqlite;
 
     public static DbConnection CreateConnection(string connectionString) => new SqliteConnection(connectionString);
@@ -15,7 +14,8 @@ public sealed class SqliteProvider : IDbProvider
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        if (options.MaxPoolSize != 100 || options.PoolIdleTimeoutSeconds != 30 || options.PoolLifetimeMinutes != 60)
+        // 以显式标记位判定，而非与 DbOptions 默认值比对——魔法数字随默认值漂移（ITM-315）
+        if (options.PoolExplicitlyConfigured)
             throw new NotSupportedException("SQLite Provider 不支持连接池大小、空闲超时或生命周期配置。");
         return new SqliteConnection(connectionString);
     }
@@ -31,10 +31,10 @@ public sealed class SqliteProvider : IDbProvider
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
-    public static string GetLimitOffsetClause(int? limit, int? offset)
-        => $"LIMIT {limit ?? -1} OFFSET {offset ?? 0}";
-
     public static bool SupportsReturningClause => true;
+
+    /// <summary>SQLite 的 CURRENT_TIMESTAMP 恒为 UTC；MySQL/PG 为会话时区——
+    /// 软删除 deleted_at 跨库混用时语义不同（ITM-326）。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
     /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式。数据库文件被其他进程锁定时受调用方取消/超时约束。</summary>
@@ -62,6 +62,10 @@ public sealed class SqliteProvider : IDbProvider
 
     public static bool IsTransient(Exception exception)
         => exception is SqliteException { SqliteErrorCode: 5 or 6 };
+
+    /// <summary>SQLITE_CONSTRAINT (19)——含唯一约束冲突。</summary>
+    public static bool IsUniqueViolation(Exception exception)
+        => exception is SqliteException { SqliteErrorCode: 19 };
 
     /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 999。</summary>
     public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
