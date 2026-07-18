@@ -152,3 +152,11 @@ grep -rn -B10 'catch (DbException)' src/ --include='*.cs' | grep -c 'IsDuplicate
 **反例**：具体案例
 **如何避免**：预防方法
 -->
+
+### 模式 P9：grep 引用计数把"字符串引用"的类型误判为死代码
+
+**来源**：PalORM 2026-07-19 精炼二轮 A1 扫描
+
+**反例**：A1 引用计数扫描报 RegistryEmitter/PalORM_RegistryInitializer/SqlDialectExtensions 等 10 个"零/低引用"候选。逐个 Read 证伪：生成器类经 `spc.AddSource("...", RegistryEmitter.Generate(...))` 调用（类名在同文件）；PalORM_RegistryInitializer 是**生成物类名**（只存在于 Emitter 的字符串模板里）；SensitiveDataAttribute 是文档承诺的公共注解（消费方是用户代码）；工厂 lambda `() => new NpgsqlNotificationConnection(...)` 单点引用。真零引用为 0。
+
+**如何避免**：判死代码前按四类逐一排除——① 生成物类名（grep Emitter 字符串模板）；② 公共注解/接口（消费方在库外，查 docs/API参考.md 是否承诺）；③ lambda/委托工厂内的单点引用；④ 扩展方法（调用形态 `x.Method()` 不含类名）。四类全排除后才可提删除，且删除必须过全量测试 + AOT。
