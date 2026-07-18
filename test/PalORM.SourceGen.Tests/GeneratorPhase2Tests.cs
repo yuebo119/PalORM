@@ -184,7 +184,7 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
         await Assert.That(migration).Contains(
-            "computed TEXT GENERATED ALWAYS AS (\\\"name\\\" || '-computed') STORED");
+            "\\\"computed\\\" TEXT GENERATED ALWAYS AS (\\\"name\\\" || '-computed') STORED");
     }
 
     [Test]
@@ -225,7 +225,7 @@ internal sealed class GeneratorPhase2Tests
             "IValueConverter<global::Ulid, string>)new global::UlidConverter()).ToProvider(entity.ExternalId)");
         await Assert.That(rowFactory).Contains(
             "IValueConverter<global::Ulid, string>)new global::UlidConverter()).FromProvider(r.GetString(1))");
-        await Assert.That(migration).Contains("external_id TEXT");
+        await Assert.That(migration).Contains("\\\"external_id\\\" TEXT");
         await Assert.That(generated).DoesNotContain("ReadUlidFromBlob");
         await Assert.That(generated).DoesNotContain("ReadGuidFromBlob");
     }
@@ -468,10 +468,10 @@ internal sealed class GeneratorPhase2Tests
             pair.Key.StartsWith("RowFactory_", StringComparison.Ordinal)).Value;
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
-        await Assert.That(migration).Contains("optional_count INTEGER");
-        await Assert.That(migration).Contains("small_value SMALLINT");
-        await Assert.That(migration).Contains("byte_value SMALLINT");
-        await Assert.That(migration).Contains("character TEXT");
+        await Assert.That(migration).Contains("\\\"optional_count\\\" INTEGER");
+        await Assert.That(migration).Contains("\\\"small_value\\\" SMALLINT");
+        await Assert.That(migration).Contains("\\\"byte_value\\\" SMALLINT");
+        await Assert.That(migration).Contains("\\\"character\\\" TEXT");
         await Assert.That(rowFactory).Contains(
             "r.IsDBNull(1) ? null : r.GetInt32(1)");
     }
@@ -1074,8 +1074,8 @@ internal sealed class GeneratorPhase2Tests
             pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
-        await Assert.That(migration).Contains("plain_name TEXT NOT NULL");
-        await Assert.That(migration).DoesNotContain("optional_note TEXT NOT NULL");
+        await Assert.That(migration).Contains("\\\"plain_name\\\" TEXT NOT NULL");
+        await Assert.That(migration).DoesNotContain("\\\"optional_note\\\" TEXT NOT NULL");
     }
 
     [Test]

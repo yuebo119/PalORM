@@ -24,7 +24,7 @@ PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运�
 | **真 AOT** | 零 IL 抑制 — 三 Provider 原生运行通过（SQLite 本机 + PG/MySQL 本机 Docker CI 同配置容器实测） |
 | **Provider 原生优化** | PG Binary COPY · MySQL/SQLite batched INSERT |
 | **UPSERT 单次往返** | `INSERT ON CONFLICT DO UPDATE` / `ON DUPLICATE KEY UPDATE` |
-| **最小依赖** | Core 仅使用 BCL 与 ADO.NET；可观测性基于 BCL `ActivitySource` / `Meter` |
+| **最小依赖** | Core 零第三方 NuGet 依赖：BCL + ADO.NET + 共享框架日志抽象（`Microsoft.Extensions.Logging.Abstractions`）；可观测性基于 BCL `ActivitySource` / `Meter` |
 
 ---
 

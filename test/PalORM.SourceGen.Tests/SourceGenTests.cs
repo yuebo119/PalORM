@@ -414,7 +414,7 @@ internal sealed class SourceGenIntegrationTests
     public async Task CreateTableSql_IsGenerated()
     {
         var ddl = PalORM_Runtime.CreateTableSql[typeof(TestUser)];
-        await Assert.That(ddl).Contains("CREATE TABLE IF NOT EXISTS test_users");
+        await Assert.That(ddl).Contains("CREATE TABLE IF NOT EXISTS \"test_users\"");
         await Assert.That(ddl).Contains("NOT NULL");
         await Assert.That(ddl).Contains("PRIMARY KEY AUTOINCREMENT");
     }
