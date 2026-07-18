@@ -79,7 +79,11 @@ internal static class MigrationEmitter
             string generated = column.ComputedExpression is null
                 ? ""
                 : $" GENERATED ALWAYS AS ({column.ComputedExpression}) STORED";
-            string nullable = column.IsRequired ? " NOT NULL" : "";
+            // NOT NULL 语义源与 RowFactory 的 IsDBNull 守卫合一（ITM-312）：
+            // 非可空注解列（IsNullable=false）物化时不做 DBNull 检查，DDL 必须同步 NOT NULL，
+            // 否则外部写入 NULL 后读取直接抛异常
+            string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
+                ? " NOT NULL" : "";
             string primaryKey = column.IsPrimaryKey && column.IsAutoIncrement
                 ? " PRIMARY KEY AUTOINCREMENT"
                 : column.IsPrimaryKey ? " PRIMARY KEY" : "";
@@ -98,11 +102,15 @@ internal static class MigrationEmitter
         foreach (ColumnModel column in model.Columns.AsSpan())
         {
             string name = SqlGeneration.QuoteIdentifier(column.ColumnName, dialect);
-            string dbType = GetDbType(column, dialect);
+            string dbType = GetDbType(column, dialect, IsIndexed(model, column));
             string generated = column.ComputedExpression is null
                 ? ""
                 : $" GENERATED ALWAYS AS ({column.ComputedExpression}) STORED";
-            string nullable = column.IsRequired ? " NOT NULL" : "";
+            // NOT NULL 语义源与 RowFactory 的 IsDBNull 守卫合一（ITM-312）：
+            // 非可空注解列（IsNullable=false）物化时不做 DBNull 检查，DDL 必须同步 NOT NULL，
+            // 否则外部写入 NULL 后读取直接抛异常
+            string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
+                ? " NOT NULL" : "";
             string primaryKey = GetPrimaryKeyClause(column, dialect);
             columns.Add($"    {name} {dbType}{generated}{primaryKey}{nullable}");
         }
@@ -128,9 +136,24 @@ internal static class MigrationEmitter
         };
     }
 
+    /// <summary>列是否被任何 [Index]/[Unique] 索引引用——决定 MySQL 下 string 列型。</summary>
+    private static bool IsIndexed(TableModel model, ColumnModel column)
+    {
+        foreach (IndexModel index in model.Indexes.AsSpan())
+        {
+            foreach (string indexColumn in index.Columns.AsSpan())
+            {
+                if (string.Equals(indexColumn, column.ColumnName, StringComparison.Ordinal))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     private static string GetDbType(
         ColumnModel column,
-        SqlGenerationDialect dialect)
+        SqlGenerationDialect dialect,
+        bool isIndexed = false)
     {
         if (column.IsAutoIncrement && dialect == SqlGenerationDialect.Sqlite)
             return "INTEGER";
@@ -141,7 +164,8 @@ internal static class MigrationEmitter
         if (typeName is "short" or "global::System.Int16" or
             "byte" or "global::System.Byte") return "SMALLINT";
         if (typeName is "bool" or "global::System.Boolean") return "BOOLEAN";
-        if (typeName is "decimal" or "global::System.Decimal") return "DECIMAL";
+        // 裸 DECIMAL 在 MySQL 即 DECIMAL(10,0)——小数静默截断；三方言统一显式精度
+        if (typeName is "decimal" or "global::System.Decimal") return "DECIMAL(18,6)";
         if (typeName is "double" or "global::System.Double")
             return dialect == SqlGenerationDialect.PostgreSql ? "DOUBLE PRECISION" : "DOUBLE";
         if (typeName is "float" or "global::System.Single") return "REAL";
@@ -168,7 +192,9 @@ internal static class MigrationEmitter
             };
         if (typeName is "char" or "global::System.Char") return "TEXT";
         if (typeName is "string" or "global::System.String")
-            return dialect == SqlGenerationDialect.MySql && column.IsPrimaryKey
+            // MySQL 对 TEXT/BLOB 建索引必须指定前缀长度（错误 1170，不被 1061 幂等兜底吞）——
+            // 主键列与被索引列一律 VARCHAR(255)（ITM-201）
+            return dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
                 ? "VARCHAR(255)"
                 : "TEXT";
         return column.DbTypeName;
