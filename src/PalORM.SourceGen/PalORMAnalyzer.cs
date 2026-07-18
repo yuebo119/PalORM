@@ -20,12 +20,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Property '{0}' column name does not match table schema", "PalORM", DiagnosticSeverity.Warning, true);
 
     public static readonly DiagnosticDescriptor UnknownTable = new(
-        "PALORM003", "Type referenced in query but not registered",
-        "Type '{0}' is used in a query but is not registered with [Table] attribute", "PalORM", DiagnosticSeverity.Error, true);
+        "PALORM003", "Foreign key references unknown table",
+        "[ForeignKey] references table '{0}' but no [Table] attribute found for it", "PalORM", DiagnosticSeverity.Error, true);
 
     public static readonly DiagnosticDescriptor MissingForeignKey = new(
-        "PALORM004", "Foreign key references unknown table",
-        "[ForeignKey] references table '{0}' but no [Table] attribute found for it", "PalORM", DiagnosticSeverity.Warning, true);
+        "PALORM004", "Foreign key does not declare OnDelete behavior",
+        "[ForeignKey] on '{0}' (type '{1}') does not explicitly set OnDelete; declare the delete behavior to avoid dialect-dependent defaults", "PalORM", DiagnosticSeverity.Warning, true);
 
     public static readonly DiagnosticDescriptor NPlusOneDetected = new(
         "PALORM005", "Potential N+1 query pattern detected",
@@ -94,13 +94,18 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Type '{0}' uses [TenantAware] but does not map a property to column 'tenant_id'; WithTenant filtering would reference a non-existent column",
         "PalORM", DiagnosticSeverity.Error, true);
 
+    public static readonly DiagnosticDescriptor CompositePrimaryKey = new(
+        "PALORM019", "Composite primary keys are not supported",
+        "Type '{0}' declares {1} [Key] properties; PalORM supports exactly one primary key per entity",
+        "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, SqlFileNotFound, SchemaMismatch, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
          UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl,
-         MissingTenantColumn];
+         MissingTenantColumn, CompositePrimaryKey];
 
     public override void Initialize(AnalysisContext context)
     {
@@ -110,16 +115,19 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // PALORM001: Missing primary key
         context.RegisterSymbolAction(ctx =>
         {
-            if (ctx.Symbol is INamedTypeSymbol { TypeKind: TypeKind.Class } type
-                && SourceGenerationValidation.IsSupportedEntity(type)
-                && type.GetAttributes().Any(a => a.AttributeClass?.Name is "TableAttribute" or "Table")
-                && !type.GetMembers().OfType<IPropertySymbol>()
-                    .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
-                    .Any(static property => property.GetAttributes().Any(attribute =>
-                        attribute.AttributeClass?.Name is "KeyAttribute" or "Key")))
-            {
+            if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
+                || !SourceGenerationValidation.IsSupportedEntity(type)
+                || !type.GetAttributes().Any(a => a.AttributeClass?.Name is "TableAttribute" or "Table"))
+                return;
+            int keyCount = type.GetMembers().OfType<IPropertySymbol>()
+                .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
+                .Count(static property => property.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.Name is "KeyAttribute" or "Key"));
+            if (keyCount == 0)
                 ctx.ReportDiagnostic(Diagnostic.Create(MissingPrimaryKey, type.Locations[0], type.Name));
-            }
+            // PALORM019: 复合主键——BindDelete 单 key 语义无法表达，明确拒绝（ITM-311）
+            else if (keyCount > 1)
+                ctx.ReportDiagnostic(Diagnostic.Create(CompositePrimaryKey, type.Locations[0], type.Name, keyCount));
         }, SymbolKind.NamedType);
 
         // PALORM002 + PALORM003 + PALORM004: 表级验证
@@ -184,8 +192,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 }
             }
 
-            // 收集当前程序集中所有 [Table] 类名
-            var assemblyTables = GetAssemblyTableNames(type.ContainingAssembly);
+            // 表名集合按需惰性收集：全程序集遍历是 O(类型数) 的，若对每个 [Table] 实体
+            // 无条件执行即 O(N²)（ITM-321）；仅在实体确有 [ForeignKey] 引用校验需求时触发
+            HashSet<string>? assemblyTables = null;
 
             foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
             {
@@ -264,6 +273,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 if (fkAttr?.ConstructorArguments.Length >= 2)
                 {
                     string? refTable = fkAttr.ConstructorArguments[0].Value as string;
+                    assemblyTables ??= GetAssemblyTableNames(type.ContainingAssembly);
                     if (refTable is not null && !assemblyTables.Contains(refTable))
                     {
                         ctx.ReportDiagnostic(Diagnostic.Create(UnknownTable,

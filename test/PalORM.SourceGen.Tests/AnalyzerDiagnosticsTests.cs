@@ -119,6 +119,27 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task CompositePrimaryKey_ReportsPalorm019()
+    {
+        // ITM-311：复合主键的 BindDelete 单 key 语义无法表达，必须明确拒绝
+        const string source = """
+            using PalORM;
+            [Table("order_lines")]
+            public sealed class OrderLine
+            {
+                [Key] public long OrderId { get; set; }
+                [Key] public long LineNo { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM019")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
     public async Task OrmCallInsideLoop_ReportsPalorm005_WithoutCascadingErrors()
     {
         const string source = """
