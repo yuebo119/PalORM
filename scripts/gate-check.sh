@@ -95,7 +95,8 @@ connections=$(printf '%s\n' "$connections" | awk 'BEGIN{IGNORECASE=1} !(/localho
 [ -z "$connections" ] && connection_count=0 || connection_count=$(printf '%s\n' "$connections" | wc -l | tr -d ' ')
 check_zero G9 '受跟踪文件零硬编码连接凭据' "$connection_count"
 
-warn_zero G10 'DataSession 生命周期需人工复核' "$(count_matches 'DataSession.*(_db|field|property)' 'src/**/*.cs')"
+# G10/G15/G16 由警告级升为阻断（2026-07-19：警告级从未产生行动=门禁死项；当前全 0，升级零成本）
+check_zero G10 'DataSession 不得长期持有（字段/属性缓存会话）' "$(count_matches 'DataSession.*(_db|field|property)' 'src/**/*.cs')"
 check_zero G11 '零 virtual 导航属性' "$(count_matches 'public.*virtual|virtual.*public' 'src/**/*.cs')"
 check_zero G12 '禁止公开 static 可写状态' "$(count_public_static_state)"
 
@@ -110,8 +111,8 @@ done
 check_zero G13 'Provider 不跨引用' "$cross_provider"
 
 check_zero G14 'SourceGen 不引用运行时 Provider' "$(count_matches 'using[[:space:]]+PalORM\.(Sqlite|PostgreSql|MySql|Testing)' 'src/PalORM.SourceGen/**/*.cs')"
-warn_zero G15 '实体优先使用 DateTimeOffset' "$(count_matches 'public[[:space:]]+DateTime[?[:space:]]' 'src/**/*.cs')"
-warn_zero G16 '级联删除必须显式启用' "$(count_matches 'OnDelete.*Cascade|Cascade.*Delete' 'src/**/*.cs')"
+check_zero G15 '实体禁用裸 DateTime（用 DateTimeOffset）' "$(count_matches 'public[[:space:]]+DateTime[?[:space:]]' 'src/**/*.cs')"
+check_zero G16 '级联删除必须显式启用（默认 NO ACTION）' "$(count_matches 'OnDelete.*Cascade|Cascade.*Delete' 'src/**/*.cs')"
 check_zero G17 '禁止 async void' "$(count_matches 'async[[:space:]]+void' 'src/**/*.cs')"
 check_zero G18 '禁止 TransactionScope' "$(count_matches 'TransactionScope' 'src/**/*.cs')"
 

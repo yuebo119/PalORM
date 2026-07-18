@@ -27,13 +27,13 @@ missing=""
 for f in \
     .ai/deep-check-engine.md \
     .ai/metrics.md \
-    .ai/audit-system/prompt.md \
-    .ai/audit-system/known-false-positives.md \
+    .ai/review-system/prompt.md \
+    .ai/review-system/known-false-positives.md \
     .ai/gate-system/prompt.md \
     .ai/refine-system/prompt.md \
-    .ai/review-system-v2.md \
-    .ai/review-system-v2/template.md \
-    .ai/review-system-v2/action-items-template.md; do
+    .ai/review-system/prompt.md \
+    .ai/review-system/template.md \
+    .ai/review-system/action-items-template.md; do
     [ -f "$f" ] || missing="$missing $f"
 done
 if [ -z "$missing" ]; then
@@ -66,8 +66,8 @@ fi
 # V3 STD 规则数：提示词口径 = 编码规范实际去重计数
 actual_std=$(grep -oE 'STD-[A-Z]+-[0-9]+' docs/编码规范.md | sort -u | wc -l | tr -d ' ')
 claimed=$(grep -hoE '[0-9]+ 条 STD 规则' \
-    .ai/audit-system/prompt.md .ai/gate-system/prompt.md \
-    .ai/refine-system/prompt.md .ai/review-system-v2.md 2>/dev/null \
+    .ai/review-system/prompt.md .ai/gate-system/prompt.md \
+    .ai/refine-system/prompt.md .ai/review-system/prompt.md 2>/dev/null \
     | grep -oE '[0-9]+' | sort -u)
 if [ "$(printf '%s\n' "$claimed" | wc -l | tr -d ' ')" = "1" ] && [ "$claimed" = "$actual_std" ]; then
     pass 3 "STD 规则数口径一致（$actual_std 条）"
@@ -78,7 +78,7 @@ fi
 # V4 踩坑目录口径：提示词声称数 = 目录标题数 = 表内条目数
 pit_title=$(grep -m1 -oE '[0-9]+ 项跨语言 ORM 陷阱' docs/踩坑目录.md | grep -oE '[0-9]+')
 pit_rows=$(grep -cE '^\| ?[0-9]+' docs/踩坑目录.md)
-pit_claimed=$(grep -hoE '[0-9]+ 项陷阱' .ai/audit-system/prompt.md .ai/gate-system/prompt.md .ai/review-system-v2.md 2>/dev/null | grep -oE '[0-9]+' | sort -u)
+pit_claimed=$(grep -hoE '[0-9]+ 项陷阱' .ai/review-system/prompt.md .ai/gate-system/prompt.md .ai/review-system/prompt.md 2>/dev/null | grep -oE '[0-9]+' | sort -u)
 if [ "$pit_title" = "$pit_rows" ] && [ "$(printf '%s\n' "$pit_claimed" | sort -u)" = "$pit_title" ]; then
     pass 4 "踩坑目录口径一致（$pit_title 项）"
 else
@@ -98,7 +98,7 @@ fi
 # V6 API 口径：提示词 113/112 与 API参考.md 自述一致
 api_ok=true
 grep -q '113 API 中 112 个已实现' docs/API参考.md || api_ok=false
-grep -q '113 API，112 实现' .ai/audit-system/prompt.md || api_ok=false
+grep -q '113 API 覆盖' .ai/review-system/prompt.md || api_ok=false
 if $api_ok; then
     pass 6 'API 口径一致（113 = 112 实现 + 1 移除）'
 else
@@ -106,7 +106,7 @@ else
 fi
 
 # V7 误判知识库可加载且模式数达标（排除 HTML 注释中的模板行）
-kb_count=$(grep -cE '^### 模式 (P?[0-9]+)：' .ai/audit-system/known-false-positives.md)
+kb_count=$(grep -cE '^### 模式 (P?[0-9]+)：' .ai/review-system/known-false-positives.md)
 if [ "$kb_count" -ge 14 ]; then
     pass 7 "误判知识库加载正常（$kb_count 条模式）"
 else
@@ -114,16 +114,16 @@ else
 fi
 
 # V8 视角发现率账本存在且含六流记录（P3 自适应的数据载体）
-if [ -f .ai/audit-system/perspective-stats.md ] \
-    && [ "$(grep -cE '^\| (架构|安全|资源|并发|错误|AOT) ?流' .ai/audit-system/perspective-stats.md)" -eq 6 ]; then
+if [ -f .ai/review-system/perspective-stats.md ] \
+    && [ "$(grep -cE '^\| (架构|安全|资源|并发|错误|AOT) ?流' .ai/review-system/perspective-stats.md)" -eq 6 ]; then
     pass 8 '视角发现率账本存在且六流记录完整'
 else
-    fail 8 '视角发现率账本缺失或六流记录不全' '.ai/audit-system/perspective-stats.md'
+    fail 8 '视角发现率账本缺失或六流记录不全' '.ai/review-system/perspective-stats.md'
 fi
 
 # V9 README 文件地图与实际目录一致（地图里列出的文件必须存在）
 missing=""
-for f in $(grep -oE '(audit-system|gate-system|refine-system|review-system-v2)[a-z0-9/-]*\.md' .ai/README.md | sort -u); do
+for f in $(grep -oE '(gate-system|refine-system|review-system)[a-z0-9/-]*\.md' .ai/README.md | sort -u); do
     [ -f ".ai/$f" ] || missing="$missing .ai/$f"
 done
 if [ -z "$missing" ]; then
