@@ -79,6 +79,41 @@ public sealed class TenantIsolationTests
         db.IgnoreFilters();
         await Assert.That((await db.GetAllAsync<TenantEntity>()).Count).IsEqualTo(2);
     }
+
+    // ITM-404 回归：BulkDeleteAsync 与单条 DeleteAsync 同语义——跨租户主键命中 0 行。
+    [Test]
+    public async Task BulkDeleteAsync_CrossTenantKeys_AffectsZeroRows()
+    {
+        var (db, otherId) = await SetupTwoTenantsAsync();
+        await using var _ = db;
+        long rows = await db.BulkDeleteAsync<TenantEntity>([otherId]);
+        await Assert.That(rows).IsEqualTo(0);
+
+        db.IgnoreFilters();
+        await Assert.That(await db.GetAsync<TenantEntity>(otherId)).IsNotNull();
+    }
+
+    // ITM-401 回归：OrWhere 不得绕过租户过滤——首个用户子句 OrWhere 与 Where+OrWhere
+    // 组合均生成 WHERE tenant AND ((...) OR (...))，OR 分支被括组隔离。
+    [Test]
+    public async Task OrWhere_AsFirstUserClause_CannotEscapeTenantFilter()
+    {
+        var (db, _) = await SetupTwoTenantsAsync();
+        await using var __ = db;
+        var rows = await db.From<TenantEntity>().OrWhere($"value = {"theirs"}").ToListAsync();
+        await Assert.That(rows.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task OrWhere_AfterWhere_CannotEscapeTenantFilter()
+    {
+        var (db, _) = await SetupTwoTenantsAsync();
+        await using var __ = db;
+        var rows = await db.From<TenantEntity>()
+            .Where($"value = {"mine"}").OrWhere($"value = {"theirs"}").ToListAsync();
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(rows[0].Value).IsEqualTo("mine");
+    }
 }
 
 // ITM-324 回归：单条软删除与 BulkDelete 幂等语义一致——重复删除返回 0 且不刷新时间戳。
@@ -99,5 +134,22 @@ public sealed class SoftDeleteIdempotencyTests
         await Assert.That(await db.DeleteAsync<SoftDeletableEntity>(e.Id)).IsEqualTo(0);
         var afterSecond = await db.GetAsync<SoftDeletableEntity>(e.Id);
         await Assert.That(afterSecond!.DeletedAt).IsEqualTo(firstDeletedAt);
+    }
+
+    // ITM-401 回归：OrWhere 不得复活软删行。
+    [Test]
+    public async Task OrWhere_CannotResurrectSoftDeletedRow()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var alive = await db.InsertAsync(new SoftDeletableEntity { Name = "alive" });
+        var dead = await db.InsertAsync(new SoftDeletableEntity { Name = "dead" });
+        await db.DeleteAsync<SoftDeletableEntity>(dead.Id);
+        _ = alive;
+
+        var rows = await db.From<SoftDeletableEntity>()
+            .Where($"name = {"alive"}").OrWhere($"name = {"dead"}").ToListAsync();
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(rows[0].Name).IsEqualTo("alive");
     }
 }

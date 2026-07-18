@@ -19,8 +19,10 @@ internal sealed class RowFactory_global__FullFeatureEntity_4964faa8 : global::Pa
             Payload = global::System.Text.Json.JsonSerializer.Deserialize(r.GetString(4), CommandFactory_global__FullFeatureEntity_4964faa8.JsonTypeInfo_Payload)!,
             RawJson = r.GetString(5),
             UniqueToken = r.GetString(6),
-            DeletedAt = r.IsDBNull(7) ? null : r.GetString(7),
-            TenantId = r.GetString(8),
+            RowUpdatedAt = r.GetDateTime(7),
+            TotalDisplay = r.GetString(8),
+            DeletedAt = r.IsDBNull(9) ? null : r.GetString(9),
+            TenantId = r.GetString(10),
         };
     }
 }

@@ -18,8 +18,6 @@ public struct QueryBuilder<T> where T : class, new()
     // From<T>() 注入默认过滤（软删/租户）后的基准子句数——QueryMultipleAsync 据此
     // 区分"默认注入"与"用户显式子句"（仅后者应触发误用守卫）
     internal int _defaultClauseCount;
-    // 默认过滤中 WHERE 类子句数——OrWhere 据此区分"与用户条件 OR"和"与默认过滤 OR"（后者禁止）
-    internal int _defaultWhereCount;
     internal readonly Func<string, string> _quoteIdentifier;
     internal readonly IRowFactory<T> _factory;
     internal readonly List<IQueryInterceptor> _interceptors;
@@ -84,24 +82,21 @@ public struct QueryBuilder<T> where T : class, new()
         _transaction = null;
     }
 
-    /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹——含 OR 时
-    /// AND 优先级会使默认过滤（软删/租户）对 OR 分支失效（ITM-307，纪律同 WhereIn）。</summary>
+    /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
+    /// 分组组合：WHERE defaults AND ((A) OR (B))——用户 OR 无法绕过默认过滤（ITM-401 根治）。</summary>
     public QueryBuilder<T> Where(FormattableString clause)
     {
         AddParenthesizedClause(
-            HasClause(QueryClauseKind.Where) ? "AND " : "WHERE ", clause);
+            HasClause(QueryClauseKind.Where) ? "AND " : "", clause);
         return this;
     }
 
     public QueryBuilder<T> OrWhere(FormattableString clause)
     {
-        // OR 只与既有"用户"条件结合；首个用户子句若用 OrWhere，与默认过滤（软删/租户）
-        // 同层 OR 会使过滤被用户条件绕过（性质测试发现的 ITM-307 残留变体）——退化为 AND
+        // 用户子句在独立分组内组合，默认过滤恒以 AND 前置（AppendWhereSection）——
+        // 首个用户子句用 OrWhere 时无既有条件可 OR，语义等价 Where。
         AddParenthesizedClause(
-            CountClauses(QueryClauseKind.Where) > _defaultWhereCount
-                ? "OR "
-                : HasClause(QueryClauseKind.Where) ? "AND " : "WHERE ",
-            clause);
+            HasClause(QueryClauseKind.Where) ? "OR " : "", clause);
         return this;
     }
 
@@ -157,7 +152,7 @@ public struct QueryBuilder<T> where T : class, new()
         var items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0)
         {
-            AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "WHERE 1=0");
+            AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
             return this;
         }
 
@@ -178,7 +173,7 @@ public struct QueryBuilder<T> where T : class, new()
         }
 
         AddClause(QueryClauseKind.Where,
-            $"{(HasClause(QueryClauseKind.Where) ? "AND" : "WHERE")} ({string.Join(" OR ", batches)})",
+            $"{(HasClause(QueryClauseKind.Where) ? "AND " : "")}({string.Join(" OR ", batches)})",
             parameters);
         return this;
     }
@@ -207,7 +202,7 @@ public struct QueryBuilder<T> where T : class, new()
         }
 
         AddClause(QueryClauseKind.Where,
-            $"{(HasClause(QueryClauseKind.Where) ? "AND" : "WHERE")} ({string.Join(" AND ", batches)})",
+            $"{(HasClause(QueryClauseKind.Where) ? "AND " : "")}({string.Join(" AND ", batches)})",
             parameters);
         return this;
     }
@@ -404,10 +399,14 @@ public struct QueryBuilder<T> where T : class, new()
             : _operationState.GetActiveTransaction();
 
     internal void AddDefaultFilter(string condition)
+        => AddClause(QueryClauseKind.DefaultFilter, condition);
+
+    /// <summary>带参数的默认过滤（租户）——参数编号进入统一 @p{N} 空间（ITM-401：
+    /// 走 DefaultFilter 类别，与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过）。</summary>
+    internal void AddDefaultFilter(FormattableString condition)
     {
-        AddClause(QueryClauseKind.Where,
-            $"{(HasClause(QueryClauseKind.Where) ? "AND" : "WHERE")} {condition}");
-        _defaultWhereCount++;
+        var (sql, parameters) = BindFormattableString(condition);
+        AddClause(QueryClauseKind.DefaultFilter, sql, parameters);
     }
 
     internal QueryBuilder<T> CloneForExecution()
@@ -428,8 +427,7 @@ public struct QueryBuilder<T> where T : class, new()
             _splitQuery = _splitQuery,
             _useReadRoute = _useReadRoute,
             _transaction = _transaction,
-            _defaultClauseCount = _defaultClauseCount,
-            _defaultWhereCount = _defaultWhereCount
+            _defaultClauseCount = _defaultClauseCount
         };
         foreach (QueryClause clause in _clauses)
         {
@@ -450,7 +448,7 @@ public struct QueryBuilder<T> where T : class, new()
     {
         DbParameter parameter = CreateParameter(value);
         AddClause(QueryClauseKind.Where,
-            $"{(HasClause(QueryClauseKind.Where) ? "AND" : "WHERE")} " +
+            $"{(HasClause(QueryClauseKind.Where) ? "AND " : "")}" +
             $"{GetQualifiedColumnName(member)} {operation} {parameter.ParameterName}", [parameter]);
     }
 
@@ -461,22 +459,23 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal IReadOnlyList<DbParameter> GetQueryParameters()
         => GetParametersForKinds(_splitQuery
-            ? [QueryClauseKind.CommonTableExpression, QueryClauseKind.Where,
+            ? [QueryClauseKind.CommonTableExpression, QueryClauseKind.DefaultFilter, QueryClauseKind.Where,
                 QueryClauseKind.GroupBy, QueryClauseKind.Having, QueryClauseKind.OrderBy,
                 QueryClauseKind.Raw, QueryClauseKind.Lock]
-            : [QueryClauseKind.CommonTableExpression, QueryClauseKind.Join, QueryClauseKind.Where,
-                QueryClauseKind.GroupBy, QueryClauseKind.Having, QueryClauseKind.OrderBy,
+            : [QueryClauseKind.CommonTableExpression, QueryClauseKind.Join, QueryClauseKind.DefaultFilter,
+                QueryClauseKind.Where, QueryClauseKind.GroupBy, QueryClauseKind.Having, QueryClauseKind.OrderBy,
                 QueryClauseKind.Raw, QueryClauseKind.Lock]);
 
     internal IReadOnlyList<DbParameter> GetCountParameters()
         => GetParametersForKinds(_splitQuery
-            ? [QueryClauseKind.CommonTableExpression, QueryClauseKind.Where,
+            ? [QueryClauseKind.CommonTableExpression, QueryClauseKind.DefaultFilter, QueryClauseKind.Where,
                 QueryClauseKind.GroupBy, QueryClauseKind.Having]
-            : [QueryClauseKind.CommonTableExpression, QueryClauseKind.Join, QueryClauseKind.Where,
-                QueryClauseKind.GroupBy, QueryClauseKind.Having]);
+            : [QueryClauseKind.CommonTableExpression, QueryClauseKind.Join, QueryClauseKind.DefaultFilter,
+                QueryClauseKind.Where, QueryClauseKind.GroupBy, QueryClauseKind.Having]);
 
     internal IReadOnlyList<DbParameter> GetUpdateParameters()
-        => GetParametersForKinds([QueryClauseKind.Set, QueryClauseKind.Where, QueryClauseKind.Raw]);
+        => GetParametersForKinds([QueryClauseKind.Set, QueryClauseKind.DefaultFilter,
+            QueryClauseKind.Where, QueryClauseKind.Raw]);
 
     internal string BuildCountSql()
     {
@@ -489,7 +488,7 @@ public struct QueryBuilder<T> where T : class, new()
             sb.Append(_quoteIdentifier(_cteName ?? _tableName));
             sb.Append(' ');
             if (!_splitQuery) AppendClauses(ref sb, QueryClauseKind.Join);
-            AppendClauses(ref sb, QueryClauseKind.Where);
+            AppendWhereSection(ref sb);
             AppendClauses(ref sb, QueryClauseKind.GroupBy);
             AppendClauses(ref sb, QueryClauseKind.Having);
             sb.Append(") AS count_source");
@@ -512,7 +511,7 @@ public struct QueryBuilder<T> where T : class, new()
             sb.Append(_quoteIdentifier(_tableName));
             sb.Append(' ');
             AppendClauses(ref sb, QueryClauseKind.Set);
-            AppendClauses(ref sb, QueryClauseKind.Where);
+            AppendWhereSection(ref sb);
             AppendClauses(ref sb, QueryClauseKind.Raw);
             return sb.ToString().TrimEnd();
         }
@@ -556,7 +555,7 @@ public struct QueryBuilder<T> where T : class, new()
             sb.Append(_quoteIdentifier(sourceName));
             sb.Append(' ');
             if (!_splitQuery) AppendClauses(ref sb, QueryClauseKind.Join);
-            AppendClauses(ref sb, QueryClauseKind.Where);
+            AppendWhereSection(ref sb);
             AppendClauses(ref sb, QueryClauseKind.GroupBy);
             AppendClauses(ref sb, QueryClauseKind.Having);
             AppendClauses(ref sb, QueryClauseKind.OrderBy);
@@ -620,16 +619,6 @@ public struct QueryBuilder<T> where T : class, new()
     private bool HasClause(QueryClauseKind kind)
         => _clauses.Exists(clause => clause.Kind == kind);
 
-    private int CountClauses(QueryClauseKind kind)
-    {
-        int count = 0;
-        foreach (QueryClause clause in _clauses)
-        {
-            if (clause.Kind == kind) count++;
-        }
-        return count;
-    }
-
     private System.Collections.ObjectModel.ReadOnlyCollection<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
         var parameters = new List<DbParameter>();
@@ -661,6 +650,40 @@ public struct QueryBuilder<T> where T : class, new()
             builder.Append(ctes[i].Sql);
         }
         builder.Append(' ');
+    }
+
+    /// <summary>组装 WHERE 段：默认过滤（软删/租户）与用户子句组恒以 AND 组合——
+    /// <c>WHERE d1 AND d2 AND ((A) OR (B))</c>。用户 OR 被括组隔离，无法绕过默认过滤（ITM-401）。</summary>
+    private void AppendWhereSection(ref ValueStringBuilder builder)
+    {
+        bool hasDefault = HasClause(QueryClauseKind.DefaultFilter);
+        bool hasUser = HasClause(QueryClauseKind.Where);
+        if (!hasDefault && !hasUser) return;
+        builder.Append("WHERE ");
+        bool first = true;
+        foreach (QueryClause clause in _clauses)
+        {
+            if (clause.Kind != QueryClauseKind.DefaultFilter) continue;
+            if (!first) builder.Append("AND ");
+            builder.Append(clause.Sql);
+            builder.Append(' ');
+            first = false;
+        }
+        if (hasUser)
+        {
+            if (hasDefault) builder.Append("AND (");
+            foreach (QueryClause clause in _clauses)
+            {
+                if (clause.Kind != QueryClauseKind.Where) continue;
+                builder.Append(clause.Sql);
+                builder.Append(' ');
+            }
+            if (hasDefault)
+            {
+                builder.TrimEnd();
+                builder.Append(") ");
+            }
+        }
     }
 
     private void AppendClauses(ref ValueStringBuilder builder, QueryClauseKind kind)
