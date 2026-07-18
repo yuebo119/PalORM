@@ -33,6 +33,10 @@ public sealed record DbOptions
     /// <summary>连接最大生命周期（默认 60 分钟）。</summary>
     public int PoolLifetimeMinutes { get; init; } = 60;
 
+    /// <summary>池配置是否被显式设置（WithPool 置位）。SQLite Provider 据此拒绝
+    /// 不支持的池配置——不与默认值比对，避免默认值漂移时误判（ITM-315）。</summary>
+    public bool PoolExplicitlyConfigured { get; init; }
+
     /// <summary>断路器：连续失败次数阈值（0 = 禁用）。</summary>
     public int CircuitBreakerThreshold { get; init; } = 5;
 
@@ -83,7 +87,8 @@ public sealed record DbOptions
         {
             MaxPoolSize = maxSize,
             PoolIdleTimeoutSeconds = idleTimeoutSeconds,
-            PoolLifetimeMinutes = lifetimeMinutes
+            PoolLifetimeMinutes = lifetimeMinutes,
+            PoolExplicitlyConfigured = true
         };
     }
 

@@ -7,7 +7,6 @@ namespace PalORM.PostgreSql;
 public sealed class PostgreSqlProvider : IDbProvider
 {
     public static string Name => "PostgreSql";
-    public static char ParameterPrefix => '@';
     public static SqlDialect Dialect => SqlDialect.PostgreSql;
 
     public static DbConnection CreateConnection(string connectionString) => new NpgsqlConnection(connectionString);
@@ -35,11 +34,12 @@ public sealed class PostgreSqlProvider : IDbProvider
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
-    public static string GetLimitOffsetClause(int? limit, int? offset)
-        => $"LIMIT {limit ?? -1} OFFSET {offset ?? 0}";
-
     public static bool SupportsReturningClause => true;
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
+
+    /// <summary>SQLSTATE 23505 unique_violation——唯一约束冲突。</summary>
+    public static bool IsUniqueViolation(Exception exception)
+        => exception is PostgresException { SqlState: "23505" };
 
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {

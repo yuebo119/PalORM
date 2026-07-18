@@ -142,7 +142,9 @@ public sealed class IndexAttribute(string name, params string[] columns) : Attri
 public sealed class UniqueAttribute : Attribute { }
 
 /// <summary>外置 SQL 文件标记。源生成器读取 .sql 文件生成静态 SQL 常量。
-/// 文件内可使用 -- @pg / -- @mysql / -- @sqlite / -- @all 条件分支。</summary>
+/// 文件内可使用 -- @pg / -- @mysql / -- @sqlite / -- @all 条件分支。
+/// <para><b>增量编译限制（ITM-313）</b>: .sql 文件内容不参与增量比较——只改 .sql 不改 .cs 时
+/// 生成物复用缓存（陈旧 SQL），需 Rebuild 或触碰标记特性的 .cs 文件强制重新生成。</para></summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
 public sealed class SqlFileAttribute : Attribute
 {
