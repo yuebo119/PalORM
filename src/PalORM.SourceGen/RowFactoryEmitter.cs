@@ -94,11 +94,13 @@ internal static class RowFactoryEmitter
             "System.DateTimeOffset"
                 => $"TypeMapper_{generatedTypeSuffix}.ReadDateTimeOffset(r, {ordinal})",
             "System.DateOnly" => $"global::System.DateOnly.FromDateTime(r.GetDateTime({ordinal}))",
-            "System.TimeOnly" => $"global::System.TimeOnly.FromTimeSpan(r.GetTimeSpan({ordinal}))",
-            "System.TimeSpan" => $"r.GetTimeSpan({ordinal})",
+            // DbDataReader 无 GetTimeSpan 实例方法（仅部分驱动子类提供），必须走泛型 GetFieldValue
+            "System.TimeOnly" => $"global::System.TimeOnly.FromTimeSpan(r.GetFieldValue<global::System.TimeSpan>({ordinal}))",
+            "System.TimeSpan" => $"r.GetFieldValue<global::System.TimeSpan>({ordinal})",
             "short" or "System.Int16" => $"r.GetInt16({ordinal})",
             "byte" or "System.Byte" => $"r.GetByte({ordinal})",
-            "char" or "System.Char" => $"r.GetChar({ordinal})",
+            // Microsoft.Data.Sqlite/Npgsql 的 GetChar 抛 NotSupportedException，经字符串读取
+            "char" or "System.Char" => $"r.GetString({ordinal})[0]",
             "byte[]" or "System.Byte[]" => $"(byte[])r.GetValue({ordinal})",
             _ => $"({clrTypeName})r.GetValue({ordinal})"
         };
