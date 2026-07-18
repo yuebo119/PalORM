@@ -14,7 +14,7 @@ public sealed class GridReader : IAsyncDisposable
     private readonly ConnectionLease _lease;
     private readonly SessionOperationState.SessionOperationLease _operation;
     private readonly QueryObservation? _observation;
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private TaskCompletionSource? _activeRead;
     private Task? _disposeTask;
     private int _state;
@@ -43,7 +43,7 @@ public sealed class GridReader : IAsyncDisposable
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
-            var list = new List<T>();
+            List<T> list = [];
             IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
             while (await _reader.ReadAsync(ct).ConfigureAwait(false))
                 list.Add(typedFactory.Read(_reader));
@@ -103,8 +103,8 @@ public sealed class GridReader : IAsyncDisposable
     /// <para>等待活动读取时不传递取消：活动 ReadAsync 因网络阻塞时以其自身 ct 为准（文档化设计取舍）。</para></summary>
     public ValueTask DisposeAsync()
     {
-        TaskCompletionSource? completion = null;
-        Task activeRead = Task.CompletedTask;
+        TaskCompletionSource completion;
+        Task activeRead;
         lock (_sync)
         {
             if (_disposeTask is not null) return new ValueTask(_disposeTask);

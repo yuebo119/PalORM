@@ -33,9 +33,9 @@ internal sealed record TableModel(
         string tableName = tableAttr.ConstructorArguments.FirstOrDefault().Value as string
             ?? typeSymbol.Name;
 
-        var columns = new List<ColumnModel>();
-        var indexes = new List<IndexModel>();
-        var foreignKeys = new List<ForeignKeyModel>();
+        List<ColumnModel> columns = [];
+        List<IndexModel> indexes = [];
+        List<ForeignKeyModel> foreignKeys = [];
 
         foreach (var member in typeSymbol.GetMembers())
         {

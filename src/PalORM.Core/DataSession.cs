@@ -24,8 +24,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
     {
-        _conn = conn ?? throw new ArgumentNullException(nameof(conn));
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        ArgumentNullException.ThrowIfNull(conn);
+        ArgumentNullException.ThrowIfNull(options);
+        _conn = conn;
+        _options = options;
         _resilience = new ResilienceExecutor(options, TProvider.IsTransient);
         _interceptors = interceptors.OrderBy(i => i.Priority).ToList();
         _logger = logger ?? NullLogger.Instance;
@@ -359,7 +361,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         BindDefaultFilterParameters<T>(cmd);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        var list = new List<T>();
+        List<T> list = [];
         IRowFactory<T> tf = (IRowFactory<T>)factory;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             list.Add(tf.Read(reader));
@@ -556,7 +558,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public async ValueTask<List<string>> ValidateSchemaAsync<T>(CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        var issues = new List<string>();
+        List<string> issues = [];
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName))
             return issues;
         if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? expectedColumns))
@@ -799,7 +801,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        var list = new List<T>();
+        List<T> list = [];
         IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
         bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))

@@ -40,7 +40,7 @@ public enum EntityFeatures
 /// <remarks>注册在锁内构造完整不可变状态，并通过一次引用交换发布；外部调用方只能读取快照。</remarks>
 public static class PalORM_Runtime
 {
-    private static readonly object _registrationLock = new();
+    private static readonly Lock _registrationLock = new();
     private static RuntimeRegistryState _state = RuntimeRegistryState.Empty;
 
     public static FrozenDictionary<Type, object> RowFactories => Volatile.Read(ref _state).RowFactories;

@@ -7,3 +7,17 @@ public enum SqlDialect
     MySql,
     Sqlite
 }
+
+/// <summary>方言辅助——热路径上替代 Enum.ToString()（每次调用分配新串）。</summary>
+internal static class SqlDialectExtensions
+{
+    /// <summary>方言名常量。查询执行管线每次观测（tracing/metrics 标签）都取名——
+    /// switch 到 interned 常量为零分配。</summary>
+    internal static string GetName(this SqlDialect dialect) => dialect switch
+    {
+        SqlDialect.PostgreSql => nameof(SqlDialect.PostgreSql),
+        SqlDialect.MySql => nameof(SqlDialect.MySql),
+        SqlDialect.Sqlite => nameof(SqlDialect.Sqlite),
+        _ => dialect.ToString()
+    };
+}
