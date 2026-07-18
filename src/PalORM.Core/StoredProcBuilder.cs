@@ -15,13 +15,16 @@ public sealed class StoredProcBuilder
     private readonly List<DbParameter> _parameters = [];
     private readonly List<DbParameter> _outputParams = [];
     private bool _executed;
+    private readonly bool _validateColumnOrder;
 
     private readonly Func<string, object?, DbParameter> _paramFactory;
 
     internal StoredProcBuilder(DbConnection conn, string name, TimeSpan timeout,
         Func<string, object?, DbParameter> paramFactory,
-        SessionOperationState operationState)
+        SessionOperationState operationState,
+        bool validateColumnOrder = false)
     {
+        _validateColumnOrder = validateColumnOrder;
         _conn = conn;
         _name = ValidateProcedureName(name);
         _timeout = timeout;
@@ -97,6 +100,7 @@ public sealed class StoredProcBuilder
         foreach (var p in _parameters) cmd.Parameters.Add(p);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        ColumnOrderValidator.Validate<T>(reader, _validateColumnOrder);
         var list = new List<T>();
         IRowFactory<T> tf = (IRowFactory<T>)factory;
         while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(tf.Read(reader));

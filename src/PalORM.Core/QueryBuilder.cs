@@ -13,6 +13,7 @@ public struct QueryBuilder<T> where T : class, new()
     internal DbConnection _conn;
     internal readonly Func<DbConnection>? _readConnFactory;
     internal readonly SqlDialect _dialect;
+    internal readonly bool _validateColumnOrder;
     internal readonly Func<string, string> _quoteIdentifier;
     internal readonly IRowFactory<T> _factory;
     internal readonly List<IQueryInterceptor> _interceptors;
@@ -43,8 +44,10 @@ public struct QueryBuilder<T> where T : class, new()
         IReadOnlyList<string> columnNames, TimeSpan commandTimeout,
         SessionOperationState operationState,
         Func<DbConnection>? readConnFactory = null,
-        IQueryCache? queryCache = null)
+        IQueryCache? queryCache = null,
+        bool validateColumnOrder = false)
     {
+        _validateColumnOrder = validateColumnOrder;
         _conn = conn;
         _readConnFactory = readConnFactory;
         _queryCache = queryCache ?? CacheStore.Default;

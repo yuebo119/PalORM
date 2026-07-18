@@ -18,11 +18,14 @@ public sealed class GridReader : IAsyncDisposable
     private TaskCompletionSource? _activeRead;
     private Task? _disposeTask;
     private int _state;
+    private readonly bool _validateColumnOrder;
 
     internal GridReader(DbDataReader reader, DbCommand command, ConnectionLease lease,
         QueryObservation? observation = null,
-        SessionOperationState.SessionOperationLease operation = default)
+        SessionOperationState.SessionOperationLease operation = default,
+        bool validateColumnOrder = false)
     {
+        _validateColumnOrder = validateColumnOrder;
         _reader = reader;
         _command = command;
         _lease = lease;
@@ -39,6 +42,7 @@ public sealed class GridReader : IAsyncDisposable
             if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
+            ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             var list = new List<T>();
             IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
             while (await _reader.ReadAsync(ct).ConfigureAwait(false))
@@ -69,6 +73,7 @@ public sealed class GridReader : IAsyncDisposable
             if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
+            ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
             if (await _reader.ReadAsync(ct).ConfigureAwait(false))
             {

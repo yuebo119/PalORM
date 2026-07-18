@@ -186,7 +186,8 @@ public static class QueryBuilderExtensions
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             grid = new GridReader(
-                reader, command, lease, observation, operationLease);
+                reader, command, lease, observation, operationLease,
+                builder._validateColumnOrder);
             operationTransferred = true;
             builder._operationState.RegisterTransactionResource(grid);
             return grid;
