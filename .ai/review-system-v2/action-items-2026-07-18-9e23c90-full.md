@@ -46,14 +46,20 @@
 | ITM-331 | 死成员降级 static virtual + 接口扩展文档如实收窄 | ✅ 49d2ccc（ADR 部分见挂账） |
 | ITM-332 | QueryMultipleAsync 用户子句守卫（区分默认注入）+ 删 mydatabase.db + .gitignore | ✅ cd6a38f |
 
-## 挂账（需用户/环境决策，未实施）
-| ID | 描述 | 需要 |
+## 挂账处置（2026-07-18 用户裁决）
+| ID | 描述 | 裁决/结果 |
 |---|---|---|
-| ITM-316 | net11.0 单目标 + 预览驱动 + NU5104 压制——多目标 net10.0 还是声明预览状态 | ADR 决策 |
-| ITM-331b | 方言扩展模型（SqlDialect 封闭枚举 → Provider 携带方言描述对象？） | ADR 决策（推荐维持现状+文档已收窄） |
-| ITM-317 | SQLitePCL 显式 Init 的 AOT 验证 | 需 AOT publish 实测 |
-| ITM-318 | PG Binary COPY 可空列/UTC DateTime 集成测试 | 需真实 PG 服务 |
-| ITM-108 | 凭据历史重写 + 数据库轮换 | 用户决策（前轮遗留） |
+| ITM-316 | 目标框架策略 | ✅ 用户裁决：维持 net11.0 单目标，不做多目标 |
+| ITM-331b | 方言扩展模型 | ✅ 用户裁决：确有第四 Provider 需求时再议（文档已收窄） |
+| ITM-317 | SQLitePCL AOT 初始化 | ✅ 25b9aea：SqliteProvider 静态构造显式 Batteries_V2.Init()；AotTest 改文件库覆盖 WAL 路径；NativeAOT publish + 运行实测 PASSED |
+| ITM-318 | PG COPY 可空列/UTC DateTime | ✅ 25b9aea：真库回归 ExternalDatabaseBulkTests（可空列 null 行 COPY 往返、DECIMAL(18,6) 精度、MySQL 索引迁移无 1170、双库 IsUniqueViolation）7/7 通过；PG/MySQL NativeAOT smoke 真库运行 PASSED。**推断证伪**：Npgsql 9 的 COPY 对 DBNull/UTC DateTime 均正确处理，原 [推断] 风险不成立 |
+| ITM-108 | 凭据历史重写 | ⬜ 用户裁决：暂不处理 |
+
+## 真库实测意外收获（评审未发现，实测暴露）
+| 缺陷 | 修复 |
+|---|---|
+| BulkDeleteAsync 绑参后改名在 MySqlConnector 下抛"Parameter @p0 already defined"（Add 时即拒绝集合内重名；SQLite 容忍瞬时重名掩盖了此缺陷） | 25b9aea：暂存命令取值 + 按批内序号重建参数 |
+| AOT smoke DDL 与生成 SQL 引用大小写不一致（PG 42703）、MySQL TEXT DEFAULT（1101） | 25b9aea：smoke DDL 修正 |
 
 ## 验证锚点（cd6a38f 实测）
 - build：0 警告 0 错误
