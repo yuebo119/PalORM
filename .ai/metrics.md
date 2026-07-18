@@ -21,7 +21,8 @@
 | 2026-07-17 | 90c2039 | 全量 review | 2 | 6 | ~15 | ~16 | 0 | QUERY-001 残留 ×1 | 当日（ec9d436） |
 | 2026-07-17 | c80f983 | audit | 0 | 1 | 3 | 3 | 0 | 0 | 当日 |
 | 2026-07-18 | 70fc6ec | 增量 review | 0 | 2 | 5 | 6 | 0 | 0 | 次轮收口 |
-| 2026-07-18 | 9e23c90 | 全量 review | 1 | 6 | 13 | 11 | **2**（见逃逸账本 E1/E2） | ITM-308（QUERY-001 同类下移） | 当日（ecb61b3→cd6a38f） |
+| 2026-07-18 | 9e23c90 | 全量 review | 1 | 6 | 13 | 11 | **2**（见逃逸账本 E1/E2） | ITM-308（QUERY-001 同类下移) | 当日（ecb61b3→cd6a38f） |
+| 2026-07-18 | 45c476b | 全量 review（深检引擎 v1 首轮） | 0 | 5 | 14 | 12 | 0 新增 | 2（ITM-401/404 ← 过滤覆盖断裂）+ 1 验证方法缺陷（ITM-403 ← ITM-314 手工构造异常未触发真扩展码） | 待整改 |
 
 ## 缺陷逃逸账本（只增不删——每条都是深检方法论的改进输入）
 
@@ -35,7 +36,8 @@
 | 根因类 | 已知成员 | 机械防线 |
 |--------|---------|---------|
 | struct/集合值语义逃逸 | QUERY-001、ITM-308（缓存浅拷贝） | QueryBuilderValueSemanticsTests |
-| 生成物-消费端断裂 | ITM-301（TimeOnly）、ITM-311、ITM-312 | SnapshotTests 编译探针 |
-| 三方言不对称 | ITM-303/304/315/326、ITM-201 | DialectSymmetryTests + 真库回归 |
-| 过滤覆盖断裂 | ITM-302（租户）、ITM-324（软删幂等） | 架构测试（入口必经 GetDefaultFilterCondition） |
+| 生成物-消费端断裂 | ITM-301（TimeOnly）、ITM-311、ITM-312、ITM-402（[Timestamp] DDL） | SnapshotTests 编译探针（需扩特性实体） |
+| 三方言不对称 | ITM-303/304/315/326、ITM-201、ITM-403（SQLite 错误码）、ITM-412（COPY 骨架分叉） | DialectSymmetryTests + 真库回归（需扩错误码矩阵） |
+| 过滤覆盖断裂 | ITM-302（租户）、ITM-324（软删幂等）、**ITM-401（OrWhere 前缀）、ITM-404（Bulk 无租户）** | 架构测试（需扩 partial 扫描 ITM-405）+ 性质测试 |
 | 弱断言假绿 | ITM-319、ITM-327 | assertion-strength-check.sh |
+| **防线自身失明**（新增 2026-07-18） | ITM-405（partial 盲区）、ITM-413（正则定界）、ITM-414（LCG 退化）、ITM-415（更新模式静默）、ITM-416（引用符删除归一） | 防线代码按业务标准评审（review profile 固定项） |
