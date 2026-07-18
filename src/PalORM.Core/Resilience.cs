@@ -20,6 +20,8 @@ public sealed class ResilienceExecutor
     private long _circuitGeneration;
     private readonly Lock _lock = new();
 
+    /// <summary>按配置创建执行器——重试/超时/熔断参数取自 <paramref name="options"/>，
+    /// 瞬时异常判定默认为 <see cref="System.Data.Common.DbException.IsTransient"/>。</summary>
     public ResilienceExecutor(DbOptions options)
         : this(options, static exception => exception is System.Data.Common.DbException { IsTransient: true })
     {
@@ -186,18 +188,23 @@ public sealed class ResilienceExecutor
 /// <summary>熔断器打开异常。</summary>
 public sealed class CircuitBreakerOpenException : PalORMException
 {
+    /// <summary>以熔断状态描述（含恢复时间点）创建异常。</summary>
     public CircuitBreakerOpenException(string message) : base(message) { }
 }
 
 /// <summary>PalORM 基础异常。</summary>
 public class PalORMException : Exception
 {
+    /// <summary>以错误描述创建异常。</summary>
     public PalORMException(string message) : base(message) { }
+
+    /// <summary>以错误描述和原始异常创建异常——保留底层失败原因供调用方追溯。</summary>
     public PalORMException(string message, Exception inner) : base(message, inner) { }
 }
 
 /// <summary>并发冲突异常（乐观锁）。</summary>
 public sealed class ConcurrencyConflictException : PalORMException
 {
+    /// <summary>以冲突描述（实体/版本信息）创建异常。</summary>
     public ConcurrencyConflictException(string message) : base(message) { }
 }

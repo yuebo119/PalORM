@@ -6,11 +6,17 @@ namespace PalORM.PostgreSql;
 /// <summary>PostgreSQL Provider —— Npgsql 适配 + JSONB/NOTIFY/Binary COPY。</summary>
 public sealed class PostgreSqlProvider : IDbProvider
 {
+    /// <summary>Provider 名称:PostgreSql。</summary>
     public static string Name => "PostgreSql";
+
+    /// <summary>SQL 方言标识:<see cref="SqlDialect.PostgreSql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.PostgreSql;
 
+    /// <summary>创建 NpgsqlConnection,连接池配置沿用连接串默认值。</summary>
     public static DbConnection CreateConnection(string connectionString) => new NpgsqlConnection(connectionString);
 
+    /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 Npgsql 连接串:
+    /// MaxPoolSize / ConnectionIdleLifetime(秒)/ ConnectionLifetime(分钟换算为秒,checked 防溢出)。</summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -23,24 +29,30 @@ public sealed class PostgreSqlProvider : IDbProvider
         return new NpgsqlConnection(builder.ConnectionString);
     }
 
+    /// <summary>双引号引用标识符(PG 标准),内部双引号以 "" 转义;引用后保留大小写敏感。</summary>
     public static string QuoteIdentifier(string identifier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
         return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
     }
 
+    /// <summary>schema 与表名分别引用后以点连接;schema 为空时省略,落到 search_path 解析。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
+    /// <summary>PostgreSQL 原生支持 RETURNING 子句。</summary>
     public static bool SupportsReturningClause => true;
+
+    /// <summary>CURRENT_TIMESTAMP——注意 PG 返回会话时区时间(与 SQLite 的恒 UTC 语义不同,ITM-326)。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
     /// <summary>SQLSTATE 23505 unique_violation——唯一约束冲突。</summary>
     public static bool IsUniqueViolation(Exception exception)
         => exception is PostgresException { SqlState: "23505" };
 
+    /// <summary>用 information_schema.columns 查询列名(参数化,schema 为空时回退 current_schema()),列名位于结果集序号 0。</summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -50,8 +62,10 @@ public sealed class PostgreSqlProvider : IDbProvider
         return 0;
     }
 
+    /// <summary>参数占位符,形如 @p0(Npgsql 支持命名参数)。</summary>
     public static string GetParameterPlaceholder(int index) => $"@p{index}";
 
+    /// <summary>创建 NpgsqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。</summary>
     public static DbParameter CreateParameter(string name, object? value)
         => new NpgsqlParameter(name, value ?? DBNull.Value);
 

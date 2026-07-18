@@ -7,32 +7,67 @@ namespace PalORM;
 /// <remarks>片段仅包含显式构造的类型键和委托，不执行反射或程序集扫描。</remarks>
 public sealed class RegistryFragment
 {
+    /// <summary>类型 → 行读取工厂委托（装箱为 object，调用方按实体类型还原泛型）。</summary>
     public required IReadOnlyDictionary<Type, object> RowFactories { get; init; }
+
+    /// <summary>类型 → 数据库表名。其键集是片段的实体全集，其余字典的键以此校验。</summary>
     public required IReadOnlyDictionary<Type, string> TableNames { get; init; }
+
+    /// <summary>类型 → CRUD SQL 集。</summary>
     public required IReadOnlyDictionary<Type, CommandSqlSet> CommandSqls { get; init; }
+
+    /// <summary>类型 → 按数据库方言生成的 CRUD SQL。可选，旧片段可缺省。</summary>
     public IReadOnlyDictionary<Type, CommandSqlByDialect> CommandSqlsByDialect { get; init; }
         = FrozenDictionary<Type, CommandSqlByDialect>.Empty;
+
+    /// <summary>类型 → Insert 参数绑定委托。</summary>
     public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindInsert { get; init; }
+
+    /// <summary>类型 → Update 参数绑定委托。</summary>
     public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindUpdate { get; init; }
+
+    /// <summary>类型 → Delete 参数绑定委托（接收主键值 object）。</summary>
     public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindDelete { get; init; }
+
+    /// <summary>类型 → 主键列名。</summary>
     public required IReadOnlyDictionary<Type, string> PkColumns { get; init; }
+
+    /// <summary>类型 → 列名数组。注册时做只读快照，片段可安全复用生成代码的静态数组。</summary>
     public required IReadOnlyDictionary<Type, string[]> ColumnNames { get; init; }
+
+    /// <summary>类型 → (属性名→列名) 映射（用于 Include JOIN ON 子句翻译）。</summary>
     public required IReadOnlyDictionary<Type, IReadOnlyDictionary<string, string>> PropertyToColumn { get; init; }
+
+    /// <summary>类型 → CREATE TABLE DDL。</summary>
     public required IReadOnlyDictionary<Type, string> CreateTableSql { get; init; }
+
+    /// <summary>类型 → 按数据库方言生成的 CREATE TABLE DDL。可选，旧片段可缺省。</summary>
     public IReadOnlyDictionary<Type, CreateTableSqlSet> CreateTableSqlByDialect { get; init; }
         = FrozenDictionary<Type, CreateTableSqlSet>.Empty;
+
+    /// <summary>类型 → 三方言索引 DDL（ADR-B）。可选，无索引注解的片段可缺省。</summary>
     public IReadOnlyDictionary<Type, CreateIndexSqlSet> CreateIndexSqlByDialect { get; init; }
         = FrozenDictionary<Type, CreateIndexSqlSet>.Empty;
+
+    /// <summary>类型 → 设置自增主键委托（MySQL LAST_INSERT_ID 回填用）。键集允许为实体子集。</summary>
     public required IReadOnlyDictionary<Type, Action<object, long>> SetIdDelegates { get; init; }
+
+    /// <summary>类型 → 聚合 CRUD 元数据。</summary>
     public required IReadOnlyDictionary<Type, CrudMetadata> CrudMetadatas { get; init; }
+
+    /// <summary>类型 → 编译期实体能力标志。</summary>
     public required IReadOnlyDictionary<Type, EntityFeatures> EntityFeatures { get; init; }
 }
 
+/// <summary>编译期确定的实体能力标志，运行时据此启用软删除、多租户等行为。</summary>
 [Flags]
 public enum EntityFeatures
 {
+    /// <summary>无附加能力。</summary>
     None = 0,
+    /// <summary>软删除（实体标注 <see cref="SoftDeleteAttribute"/>）。</summary>
     SoftDelete = 1,
+    /// <summary>多租户感知（实体标注 <see cref="TenantAwareAttribute"/>）。</summary>
     TenantAware = 2
 }
 
@@ -43,8 +78,13 @@ public static class PalORM_Runtime
     private static readonly Lock _registrationLock = new();
     private static RuntimeRegistryState _state = RuntimeRegistryState.Empty;
 
+    /// <summary>类型 → 行读取工厂委托（装箱为 object，调用方按实体类型还原泛型）。</summary>
     public static FrozenDictionary<Type, object> RowFactories => Volatile.Read(ref _state).RowFactories;
+
+    /// <summary>类型 → 数据库表名。</summary>
     public static FrozenDictionary<Type, string> TableNames => Volatile.Read(ref _state).TableNames;
+
+    /// <summary>类型 → CRUD SQL 集。</summary>
     public static FrozenDictionary<Type, CommandSqlSet> CommandSqls => Volatile.Read(ref _state).CommandSqls;
 
     /// <summary>类型 → 按数据库方言生成的 CRUD SQL。</summary>
@@ -227,9 +267,17 @@ public static class PalORM_Runtime
     }
 }
 
+/// <summary>编译期生成的单方言 CRUD SQL 集。</summary>
+/// <param name="Insert">INSERT 语句（不含主键回填）。</param>
+/// <param name="Update">按主键 UPDATE 语句。</param>
+/// <param name="Delete">按主键 DELETE 语句。</param>
+/// <param name="InsertReturning">带主键回填的 INSERT 语句（如 RETURNING/LAST_INSERT_ID）。</param>
 public readonly record struct CommandSqlSet(string Insert, string Update, string Delete, string InsertReturning);
 
 /// <summary>编译期生成的三数据库方言 CRUD SQL。</summary>
+/// <param name="Sqlite">SQLite 方言 SQL 集。</param>
+/// <param name="PostgreSql">PostgreSQL 方言 SQL 集。</param>
+/// <param name="MySql">MySQL 方言 SQL 集。</param>
 public readonly record struct CommandSqlByDialect(
     CommandSqlSet Sqlite,
     CommandSqlSet PostgreSql,
@@ -247,6 +295,9 @@ public readonly record struct CommandSqlByDialect(
 }
 
 /// <summary>编译期生成的三数据库方言建表 DDL。</summary>
+/// <param name="Sqlite">SQLite 方言 CREATE TABLE。</param>
+/// <param name="PostgreSql">PostgreSQL 方言 CREATE TABLE。</param>
+/// <param name="MySql">MySQL 方言 CREATE TABLE。</param>
 public readonly record struct CreateTableSqlSet(
     string Sqlite,
     string PostgreSql,
@@ -264,6 +315,9 @@ public readonly record struct CreateTableSqlSet(
 }
 
 /// <summary>编译期生成的三数据库方言索引 DDL（ADR-B：[Index]/[Unique] 注解产物）。</summary>
+/// <param name="Sqlite">SQLite 方言 CREATE INDEX 语句组。</param>
+/// <param name="PostgreSql">PostgreSQL 方言 CREATE INDEX 语句组。</param>
+/// <param name="MySql">MySQL 方言 CREATE INDEX 语句组。</param>
 public readonly record struct CreateIndexSqlSet(
     IReadOnlyList<string> Sqlite,
     IReadOnlyList<string> PostgreSql,
@@ -283,16 +337,35 @@ public readonly record struct CreateIndexSqlSet(
 /// <summary>CRUD 元数据聚合——单次字典查找替代四次独立查找。</summary>
 public readonly struct CrudMetadata
 {
+    /// <summary>CRUD SQL 集（当前方言）。</summary>
     public readonly CommandSqlSet Sqls;
+    /// <summary>Insert 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindInsert;
+    /// <summary>Upsert 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpsert;
+    /// <summary>Update 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpdate;
+    /// <summary>行读取工厂委托（装箱为 object）。</summary>
     public readonly object RowFactory;
+    /// <summary>INSERT 涉及的列名（排除自增主键与计算列）。</summary>
     public readonly IReadOnlyList<string> InsertColumns;
+    /// <summary>UPSERT 涉及的列名。</summary>
     public readonly IReadOnlyList<string> UpsertColumns;
+    /// <summary>递增并发令牌委托；实体无 [ConcurrencyCheck] 时为 null。</summary>
     public readonly Action<object>? IncrementVersion;
+    /// <summary>判断实体主键是否仍为默认值（用于 Save 区分 Insert/Update）。</summary>
     public readonly Func<object, bool> HasDefaultKey;
 
+    /// <summary>构造聚合元数据。列名列表做只读快照，调用方可安全复用生成代码的静态数组。</summary>
+    /// <param name="sqls">CRUD SQL 集。</param>
+    /// <param name="bindInsert">Insert 参数绑定委托。</param>
+    /// <param name="bindUpsert">Upsert 参数绑定委托。</param>
+    /// <param name="bindUpdate">Update 参数绑定委托。</param>
+    /// <param name="rowFactory">行读取工厂委托（装箱为 object）。</param>
+    /// <param name="insertColumns">INSERT 涉及的列名。</param>
+    /// <param name="upsertColumns">UPSERT 涉及的列名。</param>
+    /// <param name="incrementVersion">递增并发令牌委托，无并发列时传 null。</param>
+    /// <param name="hasDefaultKey">主键默认值判断委托。</param>
     public CrudMetadata(
         CommandSqlSet sqls,
         Action<DbCommand, object> bindInsert,

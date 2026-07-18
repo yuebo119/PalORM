@@ -7,6 +7,9 @@ namespace PalORM;
 /// <summary>QueryBuilder 执行扩展方法——从 struct 分离避免装箱。</summary>
 public static class QueryBuilderExtensions
 {
+    /// <summary>执行查询并返回全部实体列表。
+    /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
+    /// 未命中则执行查询并将副本写入缓存。</para></summary>
     public static async ValueTask<List<T>> ToListAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operationLease =
@@ -76,12 +79,16 @@ public static class QueryBuilderExtensions
         }
     }
 
+    /// <summary>返回第一行实体；无结果抛 <see cref="InvalidOperationException"/>。
+    /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para></summary>
     public static async ValueTask<T> FirstAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         T? result = await FirstOrDefaultAsync(builder, ct).ConfigureAwait(false);
         return result ?? throw new InvalidOperationException("Sequence contains no elements.");
     }
 
+    /// <summary>返回第一行实体，无结果返回 null。
+    /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para></summary>
     public static async ValueTask<T?> FirstOrDefaultAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         var limited = builder;
@@ -93,6 +100,8 @@ public static class QueryBuilderExtensions
         return results.Count == 0 ? default : results[0];
     }
 
+    /// <summary>返回恰好一行实体；无结果或多于一行均抛 <see cref="InvalidOperationException"/>。
+    /// <para>内部限制 Take(2) 检测多行并跳过缓存写入（同 FirstOrDefaultAsync 的截断防护）。</para></summary>
     public static async ValueTask<T> SingleAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         var limited = builder;
@@ -102,6 +111,8 @@ public static class QueryBuilderExtensions
         return results.Count == 1 ? results[0] : throw new InvalidOperationException(results.Count == 0 ? "Empty." : "More than one.");
     }
 
+    /// <summary>返回至多一行实体：无结果返回 null，多于一行抛 <see cref="InvalidOperationException"/>。
+    /// <para>内部限制 Take(2) 检测多行并跳过缓存写入（同 FirstOrDefaultAsync 的截断防护）。</para></summary>
     public static async ValueTask<T?> SingleOrDefaultAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         var limited = builder;
@@ -111,6 +122,10 @@ public static class QueryBuilderExtensions
         return results.Count <= 1 ? results.FirstOrDefault() : throw new InvalidOperationException("More than one.");
     }
 
+    /// <summary>键集（keyset）分页：返回一页数据与总行数。
+    /// <para>COUNT 与页查询在同一事务内执行保证一致性快照——无外部事务时自动开启并提交/回滚。</para>
+    /// <para>lastValue 为上一页末行的 orderBy 键值：非默认值时生成 <c>orderBy &lt; lastValue</c>（降序）
+    /// 或 <c>&gt;</c>（升序）续页条件；首页传 default。键值为 default 的行无法作为续页锚点。</para></summary>
     public static async ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue = default, bool descending = true, CancellationToken ct = default) where T : class, new()
     {
@@ -240,6 +255,8 @@ public static class QueryBuilderExtensions
         }
     }
 
+    /// <summary>构建并执行 UPDATE 语句，返回受影响行数。
+    /// <para>要求至少一个 <c>Set</c> 子句；WHERE 段含默认过滤（软删/租户）。写操作恒走主连接，不受 ForRead 影响。</para></summary>
     public static async ValueTask<int> ExecuteNonQueryAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         const string operation = "update";
