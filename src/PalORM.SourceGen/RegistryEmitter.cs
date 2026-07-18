@@ -12,6 +12,7 @@ internal static class RegistryEmitter
         sb.AppendLine();
         sb.AppendLine("namespace PalORM.Generated;");
         sb.AppendLine();
+        sb.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"PalORM.SourceGen\", \"2.0.0\")]");
         sb.AppendLine("internal static class PalORM_RegistryInitializer");
         sb.AppendLine("{");
         sb.AppendLine("    [global::System.Runtime.CompilerServices.ModuleInitializer]");

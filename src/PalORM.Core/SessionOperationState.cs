@@ -72,12 +72,15 @@ internal sealed class SessionOperationState
     {
         lock (_sync)
         {
-            ObjectDisposedException.ThrowIf(
-                _state == 2
-                || _transactionOwner is null
+            ObjectDisposedException.ThrowIf(_state == 2, this);
+            // 无活动事务流/事务归属其他异步流是调用序错误，不是释放后使用（ITM-431）
+            if (_transactionOwner is null
                 || !ReferenceEquals(
-                    _transactionOwner, _currentTransactionOwner.Value),
-                this);
+                    _transactionOwner, _currentTransactionOwner.Value))
+            {
+                throw new InvalidOperationException(
+                    "EnterTransactionOperation requires an active transaction flow owned by the current asynchronous flow.");
+            }
             if (_activeOperation is not null)
             {
                 throw new InvalidOperationException(

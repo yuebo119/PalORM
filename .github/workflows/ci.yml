@@ -9,6 +9,8 @@ on:
 env:
     DOTNET_CLI_TELEMETRY_OPTOUT: true
     DOTNET_NOLOGO: true
+    # ITM-415：快照防线不得在 CI 进入更新模式（SnapshotTests 另有 CI 环境守卫兜底）
+    PALORM_UPDATE_SNAPSHOTS: ""
 
 jobs:
     build:

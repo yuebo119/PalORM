@@ -38,6 +38,18 @@ internal sealed class AotMySqlDetails
 [JsonSerializable(typeof(AotMySqlDetails), TypeInfoPropertyName = "AotMySqlDetailsInfo")]
 internal sealed partial class AotMySqlJsonContext : JsonSerializerContext;
 
+// ITM-419：经 MigrateAsync（源生成 CreateTableSqlByDialect MySQL 产物）建表的实体——
+// 此前 MySQL 宿主全部手写 DDL，源生成 MySQL DDL 在 AOT 原生路径零真库验证（E1 残留敞口）
+[Table("aot_mysql_migrated")]
+[Index("ix_aot_mysql_migrated_label", "label")]
+internal sealed partial class AotMySqlMigratedEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("label")] public string Label { get; set; } = "";
+    [Column("amount")] public decimal Amount { get; set; }
+    [Column("created_at")] public DateTimeOffset CreatedAt { get; set; }
+}
+
 internal static class Program
 {
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1303",
@@ -53,6 +65,7 @@ internal static class Program
             await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_bulk_test").ConfigureAwait(false);
             await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_json_test").ConfigureAwait(false);
             await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_test").ConfigureAwait(false);
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_migrated").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_test (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL, version BIGINT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_json_test (id BIGINT AUTO_INCREMENT PRIMARY KEY, details TEXT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_bulk_test (Id VARCHAR(255) PRIMARY KEY, name TEXT NOT NULL, created_by VARCHAR(64) NOT NULL DEFAULT 'database', deleted_at DATETIME(6))").ConfigureAwait(false);
@@ -118,6 +131,20 @@ internal static class Program
             if (await db.DeleteAsync<AotMySqlEntity>(inserted.Id).ConfigureAwait(false) != 1)
                 throw new InvalidOperationException("MySQL DELETE failed");
             await db.DeleteAsync<AotMySqlJsonEntity>(json.Id).ConfigureAwait(false);
+
+            // ITM-419：源生成 MySQL DDL（表 + 索引）经 MigrateAsync 真库执行 + CRUD 往返
+            await db.MigrateAsync().ConfigureAwait(false);
+            await db.MigrateAsync().ConfigureAwait(false); // 幂等：重名索引 1061 由 IsDuplicateSchemaObject 兜底
+            AotMySqlMigratedEntity migrated = await db.InsertAsync(new AotMySqlMigratedEntity
+            {
+                Label = "migrated",
+                Amount = 12.5m,
+                CreatedAt = DateTimeOffset.UtcNow
+            }).ConfigureAwait(false);
+            AotMySqlMigratedEntity migratedBack = await db.GetAsync<AotMySqlMigratedEntity>(migrated.Id).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("MySQL migrated-table GET failed");
+            if (migratedBack.Label != "migrated" || migratedBack.Amount != 12.5m)
+                throw new InvalidOperationException("MySQL migrated-table round trip failed");
         }
 
         Console.WriteLine("PalORM AOT MySQL verification PASSED");

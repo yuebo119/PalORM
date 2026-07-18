@@ -354,6 +354,68 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(compileErrors).IsEmpty();
     }
 
+    // ─── PALORM021：列名唯一性（ITM-409）───
+
+    [Test]
+    public async Task DuplicateColumnName_ReportsPalorm021()
+    {
+        const string source = """
+            using PalORM;
+            [Table("entities")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("name")] public string DisplayName { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Count(d => d.Id == "PALORM021")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DuplicateColumnName_CaseInsensitive_ReportsPalorm021()
+    {
+        // 三方言标识符默认大小写不敏感（PG 折叠小写/MySQL 依 OS/SQLite 不敏感）——统一按不敏感判定
+        const string source = """
+            using PalORM;
+            [Table("entities")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("Name")] public string Name { get; set; } = "";
+                [Column("name")] public string DisplayName { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM021")).IsTrue();
+    }
+
+    [Test]
+    public async Task DistinctColumnNames_DoNotReportPalorm021()
+    {
+        const string source = """
+            using PalORM;
+            [Table("entities")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("display_name")] public string DisplayName { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM021")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
     private static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
         AnalyzeAsync(string source)
     {

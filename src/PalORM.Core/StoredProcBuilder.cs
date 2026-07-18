@@ -86,9 +86,10 @@ public sealed class StoredProcBuilder
     /// <summary>执行并返回结果集。</summary>
     public async ValueTask<List<T>> QueryAsync<T>(CancellationToken ct = default) where T : class, new()
     {
-        MarkExecuted();
+        // 先取门禁租约再置"已执行"标志（ITM-424）：门禁拒绝时 builder 不得永久假"已执行"
         using SessionOperationState.SessionOperationLease operation =
             _operationState.Enter();
+        MarkExecuted();
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
@@ -110,9 +111,9 @@ public sealed class StoredProcBuilder
     /// <summary>执行不返回结果集。</summary>
     public async ValueTask<int> ExecuteAsync(CancellationToken ct = default)
     {
-        MarkExecuted();
         using SessionOperationState.SessionOperationLease operation =
             _operationState.Enter();
+        MarkExecuted();
         await using DbCommand cmd = _conn.CreateCommand();
         cmd.CommandText = _name;
         cmd.CommandType = CommandType.StoredProcedure;
