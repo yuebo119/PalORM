@@ -27,6 +27,8 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     private Task? _runTask;
     private bool _disposed;
 
+    /// <summary>收到 NOTIFY 时触发。回调在后台监听任务线程上执行——耗时处理请自行转移到其他线程。
+    /// 单个订阅者抛出的异常被吞掉,不会阻断其他订阅者,也不会终止监听循环。</summary>
     public event EventHandler<PgNotificationEventArgs>? OnNotification;
 
     /// <summary>首次启动成功后，后台监听因非取消异常终止时触发。</summary>
@@ -36,6 +38,8 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     /// 经此记录，避免监听器静默死亡后 NOTIFY 丢失无痕。</summary>
     public Microsoft.Extensions.Logging.ILogger? Logger { get; set; }
 
+    /// <summary>创建监听器,重连退避为线性递增(第 n 次重连等待 n 秒,上限 5 次)。
+    /// 构造不建立连接;调用 <see cref="StartAsync"/> 后才连接并 LISTEN。</summary>
     public PgNotificationListener(string connectionString, params string[] channels)
         : this(() => new NpgsqlNotificationConnection(connectionString),
             channels,
@@ -60,6 +64,9 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         _reconnectDelay = reconnectDelay ?? (attempt => TimeSpan.FromSeconds(attempt));
     }
 
+    /// <summary>启动后台监听:首次连接成功并对全部 channel 执行 LISTEN 后返回;
+    /// 首次连接失败时异常直接抛出(不进入重连)。非幂等——已启动时再次调用抛
+    /// <see cref="InvalidOperationException"/>;<see cref="StopAsync"/> 之后可再次启动。</summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
         CancellationTokenSource cts;
@@ -208,6 +215,8 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         }
     }
 
+    /// <summary>停止后台监听并等待监听任务结束(取消异常被吞)。幂等——未启动或已停止时直接返回;
+    /// 并发调用由释放权移交保证只有一方执行清理。</summary>
     public async Task StopAsync()
     {
         CancellationTokenSource? cts;
@@ -260,6 +269,7 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         command.Parameters.AddWithValue("@payload", NpgsqlDbType.Text, (object?)payload ?? DBNull.Value);
     }
 
+    /// <summary>停止监听并标记已释放。幂等;释放后 <see cref="StartAsync"/> 抛 <see cref="ObjectDisposedException"/>。</summary>
     public async ValueTask DisposeAsync()
     {
         lock (_lock) { if (_disposed) return; _disposed = true; }
@@ -339,12 +349,16 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
 /// <summary>PG 通知监听后台错误事件参数。</summary>
 public sealed class PgNotificationErrorEventArgs(Exception exception) : EventArgs
 {
+    /// <summary>导致后台监听终止的异常。</summary>
     public Exception Exception { get; } = exception;
 }
 
 /// <summary>PG 通知事件参数。</summary>
 public sealed class PgNotificationEventArgs(string channel, string payload) : EventArgs
 {
+    /// <summary>触发通知的 channel 名。</summary>
     public string Channel { get; } = channel;
+
+    /// <summary>NOTIFY 携带的 payload;未指定时为空字符串。</summary>
     public string Payload { get; } = payload;
 }

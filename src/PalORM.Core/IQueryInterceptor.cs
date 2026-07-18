@@ -11,8 +11,13 @@ public interface IQueryInterceptor
     /// <summary>拦截器优先级——数值越小越先执行（默认 100）。</summary>
     int Priority => 100;
 
+    /// <summary>查询执行前调用。<paramref name="context"/> 携带即将执行的 SQL 与参数，可用于日志/审计。</summary>
     void OnBefore(QueryContext context);
+
+    /// <summary>查询成功完成后调用。<paramref name="elapsed"/> 为执行耗时，<paramref name="rowCount"/> 为返回行数。</summary>
     void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount);
+
+    /// <summary>查询抛出异常时调用（此时不调用 OnAfter）。<paramref name="exception"/> 为原始执行异常，方法返回后照常向调用方抛出。</summary>
     void OnError(QueryContext context, Exception exception);
 }
 

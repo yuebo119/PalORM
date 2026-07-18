@@ -3,9 +3,11 @@ namespace PalORM;
 /// <summary>数据库实体映射注解。所有注解均为编译时元数据，源生成器在编译期读取，零运行时开销。</summary>
 
 /// <summary>标记实体类对应的数据库表名。</summary>
+/// <param name="name">数据库表名，原样进入生成 SQL。</param>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class TableAttribute(string name) : Attribute
 {
+    /// <summary>数据库表名。</summary>
     public string Name { get; } = name;
     /// <summary>保留的 Schema 配置。当前源生成器通过 PALORM011 拒绝使用。</summary>
     public string? Schema { get; init; }
@@ -14,19 +16,36 @@ public sealed class TableAttribute(string name) : Attribute
 }
 
 /// <summary>标记属性对应的数据库列名。</summary>
+/// <param name="name">数据库列名。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class ColumnAttribute(string name) : Attribute
 {
+    /// <summary>数据库列名。</summary>
     public string Name { get; } = name;
+    /// <summary>字符串列最大长度，映射为 VARCHAR(n) 等定长类型。</summary>
     public int? Length { get; init; }
+    /// <summary>数值列精度（总位数），与 <see cref="Scale"/> 配合映射 DECIMAL(p,s)。</summary>
     public int? Precision { get; init; }
+    /// <summary>数值列小数位数。</summary>
     public int? Scale { get; init; }
+    /// <summary>显式指定数据库列类型，覆盖默认类型映射。</summary>
     public string? TypeName { get; init; }
+    /// <summary>列存储策略（如枚举按整数或字符串存储）。</summary>
     public StoreAs StoreAs { get; init; }
 }
 
 /// <summary>列存储策略。</summary>
-public enum StoreAs { Default, AsInt32, AsInt64, AsString }
+public enum StoreAs
+{
+    /// <summary>按类型默认映射存储。</summary>
+    Default,
+    /// <summary>按 32 位整数存储。</summary>
+    AsInt32,
+    /// <summary>按 64 位整数存储。</summary>
+    AsInt64,
+    /// <summary>按字符串存储。</summary>
+    AsString
+}
 
 /// <summary>标记主键属性。支持 long、Guid、string；Ulid 必须配置编译期值转换器。
 /// int/long 主键默认视为数据库自增（排除出 INSERT 列）；
@@ -43,16 +62,31 @@ public sealed class KeyAttribute : Attribute
 public sealed class NotMappedAttribute : Attribute { }
 
 /// <summary>外键约束定义。OnDelete 默认 NO ACTION。</summary>
+/// <param name="referencedTable">被引用的表名。</param>
+/// <param name="referencedColumn">被引用表中的列名。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class ForeignKeyAttribute(string referencedTable, string referencedColumn) : Attribute
 {
+    /// <summary>被引用的表名。</summary>
     public string ReferencedTable { get; } = referencedTable;
+    /// <summary>被引用表中的列名。</summary>
     public string ReferencedColumn { get; } = referencedColumn;
+    /// <summary>被引用行删除时的行为，默认 <see cref="DeleteAction.NoAction"/>。</summary>
     public DeleteAction OnDelete { get; init; }
 }
 
 /// <summary>外键删除行为。</summary>
-public enum DeleteAction { NoAction, Cascade, SetNull, Restrict }
+public enum DeleteAction
+{
+    /// <summary>不做处理（NO ACTION）。</summary>
+    NoAction,
+    /// <summary>级联删除引用行（CASCADE）。</summary>
+    Cascade,
+    /// <summary>将引用列置为 NULL（SET NULL）。</summary>
+    SetNull,
+    /// <summary>存在引用时禁止删除（RESTRICT）。</summary>
+    Restrict
+}
 
 /// <summary>乐观锁并发令牌。</summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
@@ -67,9 +101,11 @@ public sealed class IgnoreOnInsertAttribute : Attribute { }
 public sealed class RequiredAttribute : Attribute { }
 
 /// <summary>DB 端默认值表达式。</summary>
+/// <param name="expression">SQL 默认值表达式（如 <c>CURRENT_TIMESTAMP</c>），原样进入 DDL。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class DefaultValueAttribute(string expression) : Attribute
 {
+    /// <summary>SQL 默认值表达式。</summary>
     public string Expression { get; } = expression;
 }
 
@@ -85,27 +121,34 @@ public sealed class SoftDeleteAttribute : Attribute { }
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class SensitiveDataAttribute : Attribute
 {
+    /// <summary>日志中替换真实值的掩码文本。</summary>
     public string Mask { get; init; } = "***MASKED***";
 }
 
 /// <summary>标记由数据库维护的计算列；生成写入命令会排除该列，完整读取仍会回填。</summary>
+/// <param name="expression">列的 SQL 计算表达式，原样进入 DDL。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class ComputedAttribute(string expression) : Attribute
 {
+    /// <summary>列的 SQL 计算表达式。</summary>
     public string Expression { get; } = expression;
 }
 
 /// <summary>配置编译期值转换器；不得与 <see cref="OwnedJsonAttribute"/> 同用。转换器须为顶级非泛型类型，具有无参构造，并实现 Provider 类型非 nullable 的匹配 <see cref="IValueConverter{TModel, TProvider}"/>；跨程序集使用时类型和构造函数必须为 public。</summary>
+/// <param name="converterType">实现 <see cref="IValueConverter{TModel, TProvider}"/> 的转换器类型。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class ConverterAttribute(Type converterType) : Attribute
 {
+    /// <summary>值转换器类型。</summary>
     public Type ConverterType { get; } = converterType;
 }
 
 /// <summary>自定义类型与 DB 类型间的编译时安全转换。</summary>
 public interface IValueConverter<TModel, TProvider>
 {
+    /// <summary>将模型值转换为数据库存储值。</summary>
     TProvider ToProvider(TModel value);
+    /// <summary>将数据库存储值还原为模型值。</summary>
     TModel FromProvider(TProvider value);
 }
 
@@ -129,11 +172,16 @@ public sealed class OwnedJsonAttribute : Attribute
 }
 
 /// <summary>复合索引定义（可标注多次）。</summary>
+/// <param name="name">索引名。</param>
+/// <param name="columns">按顺序参与索引的列名。</param>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
 public sealed class IndexAttribute(string name, params string[] columns) : Attribute
 {
+    /// <summary>索引名。</summary>
     public string Name { get; } = name;
+    /// <summary>按顺序参与索引的列名。</summary>
     public string[] Columns { get; } = columns;
+    /// <summary>是否为唯一索引。</summary>
     public bool Unique { get; init; }
 }
 
@@ -148,9 +196,12 @@ public sealed class UniqueAttribute : Attribute { }
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
 public sealed class SqlFileAttribute : Attribute
 {
+    /// <summary>.sql 文件路径（相对项目根，需以 AdditionalFiles 加入编译）。</summary>
     public string Path { get; }
     /// <summary>可选：指定 Provider 名称（PostgreSql/MySql/Sqlite）。省略则使用 -- @all 段。</summary>
     public string? Provider { get; init; }
+    /// <summary>初始化外置 SQL 文件标记。</summary>
+    /// <param name="path">.sql 文件路径。</param>
     public SqlFileAttribute(string path) => Path = path;
 }
 
@@ -158,7 +209,10 @@ public sealed class SqlFileAttribute : Attribute
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class SchemaAttribute : Attribute
 {
+    /// <summary>Schema 名。</summary>
     public string Name { get; }
+    /// <summary>初始化 Schema 注解。</summary>
+    /// <param name="name">Schema 名。</param>
     public SchemaAttribute(string name) => Name = name;
 }
 
@@ -166,7 +220,10 @@ public sealed class SchemaAttribute : Attribute
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class DatabaseAttribute : Attribute
 {
+    /// <summary>数据库名。</summary>
     public string Name { get; }
+    /// <summary>初始化数据库名称注解。</summary>
+    /// <param name="name">数据库名。</param>
     public DatabaseAttribute(string name) => Name = name;
 }
 
@@ -174,6 +231,9 @@ public sealed class DatabaseAttribute : Attribute
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
 public sealed class SqlTemplateAttribute : Attribute
 {
+    /// <summary>模板名。</summary>
     public string Name { get; }
+    /// <summary>初始化 SQL 模板预编译标记。</summary>
+    /// <param name="name">模板名。</param>
     public SqlTemplateAttribute(string name) => Name = name;
 }

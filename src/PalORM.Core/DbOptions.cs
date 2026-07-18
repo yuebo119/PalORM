@@ -133,7 +133,36 @@ public sealed record DbOptions
 }
 
 /// <summary>命名策略。</summary>
-public enum NamingConvention { None, SnakeCase, LowerCase }
+public enum NamingConvention
+{
+    /// <summary>保持原样，不做转换。</summary>
+    None,
+
+    /// <summary>转为下划线命名（UserName → user_name）。</summary>
+    SnakeCase,
+
+    /// <summary>转为全小写（UserName → username）。</summary>
+    LowerCase
+}
 
 /// <summary>日志级别简化版。</summary>
-public enum LogLevel { Trace = 0, Debug = 1, Information = 2, Warning = 3, Error = 4, Critical = 5 }
+public enum LogLevel
+{
+    /// <summary>最详细级别——逐步执行细节。</summary>
+    Trace = 0,
+
+    /// <summary>调试信息——开发期诊断。</summary>
+    Debug = 1,
+
+    /// <summary>常规信息——正常流程事件。</summary>
+    Information = 2,
+
+    /// <summary>警告——异常但不中断执行的情况。</summary>
+    Warning = 3,
+
+    /// <summary>错误——当前操作失败。</summary>
+    Error = 4,
+
+    /// <summary>严重错误——进程级不可恢复故障。</summary>
+    Critical = 5
+}
