@@ -45,7 +45,9 @@ internal static class FormattableSqlFormatter
                 || parsedIndex < 0
                 || parsedIndex >= sql.ArgumentCount)
             {
-                throw new FormatException("Formattable SQL contains an invalid argument index.");
+                throw new FormatException(
+                    $"Formattable SQL contains an invalid argument index '{argumentIndex}' " +
+                    $"(argument count: {sql.ArgumentCount}).");
             }
 
             result.Append("@p");

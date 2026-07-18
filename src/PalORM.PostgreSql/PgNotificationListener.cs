@@ -7,9 +7,15 @@ namespace PalORM.PostgreSql;
 /// 每次断线后创建新连接并重新执行全部 LISTEN；不复用已损坏的会话。
 /// <para>注意: <see cref="OnNotification"/> 事件在监听后台任务上触发。
 /// 订阅者异常会被隔离，不会终止后续订阅者或重连循环。</para></summary>
-public sealed class PgNotificationListener : IAsyncDisposable
+public sealed partial class PgNotificationListener : IAsyncDisposable
 {
     private const int _maxReconnectAttempts = 5;
+
+    [Microsoft.Extensions.Logging.LoggerMessage(
+        Level = Microsoft.Extensions.Logging.LogLevel.Error,
+        Message = "PgNotificationListener background loop terminated; notifications will no longer be delivered.")]
+    private static partial void LogListenerTerminated(
+        Microsoft.Extensions.Logging.ILogger logger, Exception exception);
 
     private readonly Func<IPgNotificationConnection> _connectionFactory;
     private readonly Func<int, TimeSpan> _reconnectDelay;
@@ -25,6 +31,10 @@ public sealed class PgNotificationListener : IAsyncDisposable
 
     /// <summary>首次启动成功后，后台监听因非取消异常终止时触发。</summary>
     public event EventHandler<PgNotificationErrorEventArgs>? OnError;
+
+    /// <summary>可选兜底日志。未订阅 <see cref="OnError"/> 时，后台监听终止原因
+    /// 经此记录，避免监听器静默死亡后 NOTIFY 丢失无痕。</summary>
+    public Microsoft.Extensions.Logging.ILogger? Logger { get; set; }
 
     public PgNotificationListener(string connectionString, params string[] channels)
         : this(() => new NpgsqlNotificationConnection(connectionString),
@@ -166,7 +176,13 @@ public sealed class PgNotificationListener : IAsyncDisposable
     {
         EventHandler<PgNotificationErrorEventArgs>? handlers = OnError;
         if (handlers is null)
+        {
+            // 无订阅者时后台监听终止必须留痕——否则 NOTIFY 静默丢失（审计 ERR-02）
+            LogListenerTerminated(
+                Logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                exception);
             return;
+        }
 
         var args = new PgNotificationErrorEventArgs(exception);
         foreach (Delegate candidate in handlers.GetInvocationList())
