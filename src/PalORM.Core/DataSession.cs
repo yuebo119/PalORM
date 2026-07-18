@@ -938,7 +938,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            await DisposeTransactionPreservingAsync(
+            await TransactionCleanup.DisposeTransactionPreservingAsync(
                 transaction, exception).ConfigureAwait(false);
             throw;
         }
@@ -986,7 +986,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             {
                 if (transaction is not null)
                 {
-                    await DisposeTransactionPreservingAsync(
+                    await TransactionCleanup.DisposeTransactionPreservingAsync(
                         transaction, primaryException).ConfigureAwait(false);
                 }
             }
@@ -1040,7 +1040,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             {
                 if (transaction is not null)
                 {
-                    await DisposeTransactionPreservingAsync(
+                    await TransactionCleanup.DisposeTransactionPreservingAsync(
                         transaction, primaryException).ConfigureAwait(false);
                 }
             }
@@ -1066,25 +1066,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         {
             primaryException.Data["PalORM.RollbackException"] =
                 rollbackException;
-        }
-    }
-
-    private static async ValueTask RollbackPreservingAsync(DbTransaction transaction, Exception primaryException)
-    {
-        try { await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
-        catch (Exception rollbackException) { primaryException.Data["PalORM.RollbackException"] = rollbackException; }
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "事务释放是清理路径；异常附加到主异常，不能替换原始执行失败。")]
-    private static async ValueTask DisposeTransactionPreservingAsync(
-        DbTransaction transaction,
-        Exception? primaryException)
-    {
-        try { await transaction.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception cleanupException) when (primaryException is not null)
-        {
-            primaryException.Data["PalORM.TransactionCleanupException"] = cleanupException;
         }
     }
 

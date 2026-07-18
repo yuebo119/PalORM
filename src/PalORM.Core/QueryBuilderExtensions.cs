@@ -157,13 +157,13 @@ public static class QueryBuilderExtensions
         {
             primaryException = exception;
             if (ownsTransaction)
-                await RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
             throw;
         }
         finally
         {
             if (ownsTransaction)
-                await DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
+                await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
         }
     }
 
@@ -274,27 +274,6 @@ public static class QueryBuilderExtensions
             PalORMMetrics.CompleteActivity(activity, outcome);
             if (builder._metrics)
                 PalORMMetrics.Record(operation, provider, outcome, stopwatch.Elapsed);
-        }
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "回滚是清理路径；异常附加到主异常，不能替换原始执行失败。")]
-    private static async ValueTask RollbackPreservingAsync(DbTransaction transaction, Exception primaryException)
-    {
-        try { await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
-        catch (Exception rollbackException) { primaryException.Data["PalORM.RollbackException"] = rollbackException; }
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "事务释放是清理路径；异常附加到主异常，不能替换原始执行失败。")]
-    private static async ValueTask DisposeTransactionPreservingAsync(
-        DbTransaction transaction,
-        Exception? primaryException)
-    {
-        try { await transaction.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception cleanupException) when (primaryException is not null)
-        {
-            primaryException.Data["PalORM.TransactionCleanupException"] = cleanupException;
         }
     }
 

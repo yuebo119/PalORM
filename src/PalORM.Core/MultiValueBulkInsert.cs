@@ -150,24 +150,16 @@ public static class MultiValueBulkInsert
         {
             primaryException = exception;
             if (ownsTransaction)
-                await RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
             throw;
         }
         finally
         {
             if (ownsTransaction)
-                await DisposeTransactionPreservingAsync(tran, primaryException,
+                await TransactionCleanup.DisposeTransactionPreservingAsync(tran, primaryException,
                     "PalORM.TransactionCleanupException").ConfigureAwait(false);
         }
         return total;
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "回滚是清理路径；异常附加到主异常，不能替换原始执行失败。")]
-    private static async ValueTask RollbackPreservingAsync(DbTransaction transaction, Exception primaryException)
-    {
-        try { await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
-        catch (Exception rollbackException) { primaryException.Data["PalORM.RollbackException"] = rollbackException; }
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
@@ -178,20 +170,6 @@ public static class MultiValueBulkInsert
         string exceptionDataKey)
     {
         try { await command.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception cleanupException) when (primaryException is not null)
-        {
-            primaryException.Data[exceptionDataKey] = cleanupException;
-        }
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "释放是清理路径；异常附加到主异常，不能替换原始批量写失败。")]
-    private static async ValueTask DisposeTransactionPreservingAsync(
-        DbTransaction transaction,
-        Exception? primaryException,
-        string exceptionDataKey)
-    {
-        try { await transaction.DisposeAsync().ConfigureAwait(false); }
         catch (Exception cleanupException) when (primaryException is not null)
         {
             primaryException.Data[exceptionDataKey] = cleanupException;
