@@ -80,7 +80,7 @@ public sealed class QueryTests
 
     [Test] public async Task AsSplitQuery_Works() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Order{Status="S1",Total=1m,CreatedAt=0}); await db.InsertAsync(new Order{Status="S2",Total=2m,CreatedAt=0}); var r=await db.From<Order>().AsSplitQuery().ToListAsync(); await Assert.That(r.Count).IsEqualTo(2); }
 
-    [Test] public async Task Select_DryRun_UsesGeneratedColumnMapping() { await using var db = await TestDb.SqliteAsync(); var dry=db.From<Order>().Select(o=>o.Status).AsDryRun(); await Assert.That(dry.Sql).Contains("SELECT \"status\""); }
+    [Test] public async Task Select_DryRun_UsesGeneratedColumnMapping() { await using var db = await TestDb.SqliteAsync(); var dry=db.From<Order>().Select(o=>o.Status).AsDryRun(); await Assert.That(dry.Sql).Contains("\"orders\".\"status\""); }
 
     [Test] public async Task Performance_Query1000Rows_Under50ms() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var items=Enumerable.Range(0,1000).Select(i=>new Order{Status="T",Total=i*10m,CreatedAt=0}).ToList(); await db.BulkInsertAsync(items); await db.From<Order>().ToListAsync(); await db.From<Order>().ToListAsync(); var sw=System.Diagnostics.Stopwatch.StartNew(); var r=await db.From<Order>().ToListAsync(); sw.Stop(); await Assert.That(r.Count).IsEqualTo(1000); await Assert.That(sw.ElapsedMilliseconds).IsLessThan(100); }
 

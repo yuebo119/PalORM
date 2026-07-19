@@ -23,9 +23,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM003", "Foreign key references unknown table",
         "[ForeignKey] references table '{0}' but no [Table] attribute found for it", "PalORM", DiagnosticSeverity.Error, true);
 
+    // ITM-525：FK 约束 DDL 当前不由 MigrateAsync 生成（ForeignKeys 收集为未来兼容保留），
+    // 故本诊断只提示 OnDelete 声明是为未来 FK DDL 预留，当前不产生任何运行时约束效果。
     public static readonly DiagnosticDescriptor MissingForeignKey = new(
         "PALORM004", "Foreign key does not declare OnDelete behavior",
-        "[ForeignKey] on '{0}' (type '{1}') does not explicitly set OnDelete; declare the delete behavior to avoid dialect-dependent defaults", "PalORM", DiagnosticSeverity.Warning, true);
+        "[ForeignKey] on '{0}' (type '{1}') does not set OnDelete; note FK constraint DDL is not generated in the current version, so OnDelete is recorded for future compatibility only and has no runtime effect yet", "PalORM", DiagnosticSeverity.Warning, true);
 
     public static readonly DiagnosticDescriptor NPlusOneDetected = new(
         "PALORM005", "Potential N+1 query pattern detected",
@@ -126,12 +128,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         {
             if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
                 || !SourceGenerationValidation.IsSupportedEntity(type)
-                || !type.GetAttributes().Any(a => a.AttributeClass?.Name is "TableAttribute" or "Table"))
+                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))  // ITM-512
                 return;
             int keyCount = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
                 .Count(static property => property.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.Name is "KeyAttribute" or "Key"));
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Key")));  // ITM-512
             if (keyCount == 0)
                 ctx.ReportDiagnostic(Diagnostic.Create(MissingPrimaryKey, type.Locations[0], type.Name));
             // PALORM019: 复合主键——BindDelete 单 key 语义无法表达，明确拒绝（ITM-311）
@@ -143,7 +145,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         context.RegisterSymbolAction(ctx =>
         {
             if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type) return;
-            var tableAttribute = type.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name is "TableAttribute" or "Table");
+            var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
             if (tableAttribute is null) return;
 
             if (!SourceGenerationValidation.IsSupportedEntity(type))
@@ -158,28 +160,29 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             bool hasQualifiedTable = tableAttribute.NamedArguments.Any(argument =>
                     argument.Key is "Schema" or "Database" && argument.Value.Value is string)
                 || type.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.Name is "SchemaAttribute" or "Schema" or "DatabaseAttribute" or "Database");
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Schema")
+                    || SourceGenerationValidation.IsPalORMAttribute(attribute, "Database"));  // ITM-512
             if (hasQualifiedTable)
                 ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedQualifiedTable, type.Locations[0], type.Name));
 
             bool isSoftDelete = type.GetAttributes().Any(attribute =>
-                attribute.AttributeClass?.Name is "SoftDeleteAttribute" or "SoftDelete");
+                SourceGenerationValidation.IsPalORMAttribute(attribute, "SoftDelete"));  // ITM-512
             bool hasSoftDeleteColumn = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
                 .Any(static property => property.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.Name is "ColumnAttribute" or "Column"
-                    && attribute.ConstructorArguments.FirstOrDefault().Value is "deleted_at"));
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
+                    && attribute.ConstructorArguments.FirstOrDefault().Value is "deleted_at"));  // ITM-512
             if (isSoftDelete && !hasSoftDeleteColumn)
                 ctx.ReportDiagnostic(Diagnostic.Create(MissingSoftDeleteColumn, type.Locations[0], type.Name));
 
             // PALORM018: [TenantAware] 必须映射 tenant_id 列（与 PALORM014 对齐）
             bool isTenantAware = type.GetAttributes().Any(attribute =>
-                attribute.AttributeClass?.Name is "TenantAwareAttribute" or "TenantAware");
+                SourceGenerationValidation.IsPalORMAttribute(attribute, "TenantAware"));  // ITM-512
             bool hasTenantColumn = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
                 .Any(static property => property.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.Name is "ColumnAttribute" or "Column"
-                    && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
+                    && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));  // ITM-512
             if (isTenantAware && !hasTenantColumn)
                 ctx.ReportDiagnostic(Diagnostic.Create(MissingTenantColumn, type.Locations[0], type.Name));
 
@@ -192,7 +195,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             {
                 if (SourceGenerationValidation.IsNotMapped(member)) continue;
                 var colAttr = member.GetAttributes().FirstOrDefault(a =>
-                    a.AttributeClass?.Name is "ColumnAttribute" or "Column");
+                    SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
                 string columnName = colAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
                 if (columnOwners.TryGetValue(columnName, out string? firstOwner))
                 {
@@ -209,7 +212,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             var concurrencyTokens = type.GetMembers().OfType<IPropertySymbol>()
                 .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
                 .Where(member => member.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.Name is "ConcurrencyCheckAttribute" or "ConcurrencyCheck"))
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "ConcurrencyCheck")))  // ITM-512
                 .ToArray();
             if (concurrencyTokens.Length > 1)
                 ctx.ReportDiagnostic(Diagnostic.Create(MultipleConcurrencyTokens, type.Locations[0], type.Name));
@@ -236,19 +239,19 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 // PALORM017: 不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"
                 // （ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；FK/DefaultValue/Column 架构参数仍告警）
                 var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
-                if (member.GetAttributes().Any(a => a.AttributeClass?.Name is "DefaultValueAttribute" or "DefaultValue"))
+                if (member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue")))  // ITM-512
                     ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[DefaultValue]", member.Name));
                 var columnWithSchemaArgs = member.GetAttributes().FirstOrDefault(a =>
-                    a.AttributeClass?.Name is "ColumnAttribute" or "Column"
+                    SourceGenerationValidation.IsPalORMAttribute(a, "Column")  // ITM-512
                     && a.NamedArguments.Any(na => na.Key is "Length" or "Precision" or "Scale" or "TypeName" or "StoreAs"));
                 if (columnWithSchemaArgs is not null)
                     ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column] schema arguments (Length/Precision/Scale/TypeName/StoreAs)", member.Name));
 
                 // PALORM002: 属性无 [Column] 注解时建议添加
                 bool hasColumn = member.GetAttributes().Any(a =>
-                    a.AttributeClass?.Name is "ColumnAttribute" or "Column");
+                    SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
                 var ownedJsonAttr = member.GetAttributes().FirstOrDefault(a =>
-                    a.AttributeClass?.Name is "OwnedJsonAttribute" or "OwnedJson");
+                    SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));  // ITM-512
                 if (ownedJsonAttr is not null
                     && member.Type.SpecialType != SpecialType.System_String)
                 {
@@ -295,7 +298,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
                 // PALORM003: [ForeignKey] 引用不存在的表
                 var fkAttr = member.GetAttributes().FirstOrDefault(a =>
-                    a.AttributeClass?.Name is "ForeignKeyAttribute" or "ForeignKey");
+                    SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
                 if (fkAttr is not null)
                 {
                     // PALORM017: FK 约束 DDL 当前不被 MigrateAsync 执行
@@ -356,7 +359,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         var tableAttr = type.GetAttributes().FirstOrDefault(a =>
-            a.AttributeClass?.Name is "TableAttribute" or "Table");
+            SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
         string tableName = tableAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? type.Name;
 
         // 索引名冲突按大小写不敏感判定（ITM-510）：MySQL 索引名大小写不敏感，
@@ -368,10 +371,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
         {
             if (SourceGenerationValidation.IsNotMapped(member)) continue;
-            if (!member.GetAttributes().Any(a => a.AttributeClass?.Name is "UniqueAttribute" or "Unique"))
+            if (!member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Unique")))  // ITM-512
                 continue;
             var columnAttr = member.GetAttributes().FirstOrDefault(a =>
-                a.AttributeClass?.Name is "ColumnAttribute" or "Column");
+                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
             string derivedName = $"ux_{tableName}_{columnName}";
             if (!seenNames.Add(derivedName))
@@ -383,7 +386,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
 
         foreach (var indexAttr in type.GetAttributes().Where(a =>
-            a.AttributeClass?.Name is "IndexAttribute" or "Index"))
+            SourceGenerationValidation.IsPalORMAttribute(a, "Index")))  // ITM-512
         {
             var location = indexAttr.ApplicationSyntaxReference?.GetSyntax(ctx.CancellationToken).GetLocation()
                 ?? type.Locations[0];
@@ -422,7 +425,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             foreach (var type in GetAllTypes(module.GlobalNamespace))
             {
                 var tableAttr = type.GetAttributes().FirstOrDefault(a =>
-                    a.AttributeClass?.Name is "TableAttribute" or "Table");
+                    SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
                 if (tableAttr?.ConstructorArguments.FirstOrDefault().Value is string name)
                     names.Add(name);
             }

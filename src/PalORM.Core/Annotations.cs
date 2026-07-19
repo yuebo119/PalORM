@@ -126,7 +126,9 @@ public sealed class SensitiveDataAttribute : Attribute
 }
 
 /// <summary>标记由数据库维护的计算列；生成写入命令会排除该列，完整读取仍会回填。</summary>
-/// <param name="expression">列的 SQL 计算表达式，原样进入 DDL。</param>
+/// <param name="expression">列的 SQL 计算表达式，<b>原样进入三方言 DDL（ITM-541）</b>——不经
+/// 引用转义、不做方言翻译。表达式内的列名/函数须在目标数据库合法；跨方言部署时注意
+/// 同一表达式可能仅在部分方言有效（如字符串拼接 SQLite/PG 用 <c>||</c>、MySQL 用 <c>CONCAT</c>）。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class ComputedAttribute(string expression) : Attribute
 {

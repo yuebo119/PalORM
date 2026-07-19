@@ -129,8 +129,12 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Select(params Expression<Func<T, object?>>[] members)
     {
         ArgumentNullException.ThrowIfNull(members);
+        // ITM-537: 投影列带表限定（_cteName ?? _tableName），与 GetQualifiedColumnName 一致——
+        // JOIN/Include 下裸列名产生 ambiguous column 错误。
+        string source = _quoteIdentifier(_cteName ?? _tableName);
         Func<string, string> quoteIdentifier = _quoteIdentifier;
-        _selectColumns = string.Join(", ", members.Select(member => quoteIdentifier(GetColumnName(member))));
+        _selectColumns = string.Join(", ",
+            members.Select(member => $"{source}.{quoteIdentifier(GetColumnName(member))}"));
         return this;
     }
 
@@ -162,6 +166,12 @@ public struct QueryBuilder<T> where T : class, new()
             AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
             return this;
         }
+        // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超 65535（PG 协议 int16 上限，
+        // 最严方言）应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
+        if (items.Count > 65535)
+            throw new ArgumentException(
+                $"WhereIn received {items.Count} values; the total exceeds the 65535 bind-parameter limit " +
+                "(PostgreSQL protocol max). Use a temp table join or split the query into batches.", nameof(values));
 
         const int maxBatch = 500;
         // O2 预分配：批次数与参数总量在进循环前已知
@@ -194,6 +204,11 @@ public struct QueryBuilder<T> where T : class, new()
         string column = _quoteIdentifier(GetColumnName(member));
         var items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0) return this;
+        // ITM-514: 同 WhereIn——参数总量不封顶会生成越界 SQL；超 65535 明确失败并提示改用临时表/分批。
+        if (items.Count > 65535)
+            throw new ArgumentException(
+                $"WhereNotIn received {items.Count} values; the total exceeds the 65535 bind-parameter limit " +
+                "(PostgreSQL protocol max). Use a temp table join or split the query into batches.", nameof(values));
 
         const int maxBatch = 500;
         // O2 预分配：批次数与参数总量在进循环前已知
@@ -262,10 +277,13 @@ public struct QueryBuilder<T> where T : class, new()
         Expression<Func<TChild, object?>> pk) where TChild : class, new()
     {
         string childTable = GetRegisteredTableName(typeof(TChild));
+        // ITM-515: With(CTE) 后 FROM 已切 CTE 名，JOIN ON 右端须与 GetQualifiedColumnName 一致用
+        // _cteName ?? _tableName，否则 ON 引用了不在 FROM 中的实体表名，SQL 报未知表别名。
+        string leftSource = _cteName ?? _tableName;
         AddClause(QueryClauseKind.Join,
             $"INNER JOIN {_quoteIdentifier(childTable)} ON " +
             $"({_quoteIdentifier(childTable)}.{_quoteIdentifier(GetColumnName(pk))} = " +
-            $"{_quoteIdentifier(_tableName)}.{_quoteIdentifier(GetColumnName(fk))})");
+            $"{_quoteIdentifier(leftSource)}.{_quoteIdentifier(GetColumnName(fk))})");
         return this;
     }
 
@@ -438,9 +456,17 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     internal DbTransaction? GetActiveTransaction()
-        => _transaction?.Connection is not null
+    {
+        // ITM-524: 用户经 WithTransaction 显式绑定的事务若已释放（Connection 置空），不得静默回退到
+        // 会话事务或无事务执行——那会让本应在指定事务内的写操作脱离事务。显式失效应显式失败。
+        if (_transaction is not null && _transaction.Connection is null)
+            throw new InvalidOperationException(
+                "The transaction bound via WithTransaction has been disposed (its Connection is null); " +
+                "the query would silently execute outside the intended transaction. Bind a live transaction.");
+        return _transaction is not null
             ? _transaction
             : _operationState.GetActiveTransaction();
+    }
 
     internal void AddDefaultFilter(string condition)
         => AddClause(QueryClauseKind.DefaultFilter, condition);
@@ -547,6 +573,13 @@ public struct QueryBuilder<T> where T : class, new()
             throw new InvalidOperationException("ExecuteNonQueryAsync requires at least one Set clause.");
         if (HasClause(QueryClauseKind.CommonTableExpression))
             throw new NotSupportedException("CTE is not supported by the current UPDATE builder.");
+        // ITM-522: UPDATE 构建只消费 Set/Where/Raw——Join/OrderBy/Lock/Window 会被静默丢弃，
+        // 让调用方误以为已生效。与 CTE 守卫并列，显式拒绝这些不受支持的子句。
+        if (HasClause(QueryClauseKind.Join) || HasClause(QueryClauseKind.OrderBy)
+            || HasClause(QueryClauseKind.Lock) || HasClause(QueryClauseKind.Window))
+            throw new NotSupportedException(
+                "UPDATE does not support Join/OrderBy/Lock/Window clauses; they would be silently dropped. " +
+                "Remove them, or express the filter via Where.");
         var sb = new ValueStringBuilder(stackalloc char[256]);
         try
         {
@@ -663,6 +696,20 @@ public struct QueryBuilder<T> where T : class, new()
 
     private bool HasClause(QueryClauseKind kind)
         => _clauses.Exists(clause => clause.Kind == kind);
+
+    /// <summary>统计"用户实质子句"数——排除 Comment（Tag/TagWithCaller）与 DefaultFilter
+    /// （From&lt;T&gt;() 注入的软删/租户过滤）。QueryMultipleAsync 误用守卫据此判断，
+    /// 避免加个 Tag 就误触异常（ITM-523）。</summary>
+    internal int CountUserSubstantiveClauses()
+    {
+        int count = 0;
+        foreach (QueryClause clause in _clauses)
+        {
+            if (clause.Kind is QueryClauseKind.Comment or QueryClauseKind.DefaultFilter) continue;
+            count++;
+        }
+        return count;
+    }
 
     private System.Collections.ObjectModel.ReadOnlyCollection<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {

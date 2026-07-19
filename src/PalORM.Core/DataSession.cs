@@ -41,6 +41,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public static async Task<DataSession<TProvider>> CreateAsync(DbOptions options, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
 
         string cs = options.ResolveConnectionString();
         int maxRetries = options.MaxRetries;
@@ -559,7 +560,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>设置当前租户 ID。标注 [TenantAware] 的实体自动附加 WHERE tenant_id = @value。</summary>
-    public DataSession<TProvider> WithTenant(object tenantId) { _tenantId = tenantId; return this; }
+    public DataSession<TProvider> WithTenant(object tenantId)
+    {
+        // 拒绝 null（ITM-532）：null 使 HasTenantFilter 恒 false 静默关闭租户过滤，
+        // 上游 tenantId 缺失时全部查询跨租户返回——失败开放。宁可明确失败。
+        ArgumentNullException.ThrowIfNull(tenantId);
+        _tenantId = tenantId;
+        return this;
+    }
     internal object? _tenantId;
 
     // ─── Schema 验证 ────────────────────────────────────
@@ -590,7 +598,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { issues.Add($"Validation failed: {ex.Message}"); }
+        // ITM-542: 只透出异常类型名，不透传 ex.Message——Message 常含主机/端口/库名等拓扑信息，
+        // 会顺 issues 列表泄露到调用方/日志。
+        catch (Exception ex) { issues.Add($"Validation failed: {ex.GetType().Name}"); }
         return issues;
     }
 
@@ -682,7 +692,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
         object? r = await ExecuteScalarAsync<T>($"SELECT MAX({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
-        return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue));
+        // ITM-533: 补 InvariantCulture，与 ScalarAsync 一致——避免线程区域性影响数值/日期转换。
+        return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>MIN 聚合。TValue 限制同 MaxAsync。</summary>
@@ -690,7 +701,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
         object? r = await ExecuteScalarAsync<T>($"SELECT MIN({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
-        return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue));
+        // ITM-533: 补 InvariantCulture，与 ScalarAsync 一致。
+        return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>AVG 聚合。空表/全过滤时 AVG 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
@@ -1098,7 +1110,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            return new HealthResult(false, sw.Elapsed, ex.Message);
+            // ITM-542: 只透出异常类型名，不透传 ex.Message（避免泄露主机/端口/库名等拓扑信息）。
+            return new HealthResult(false, sw.Elapsed, ex.GetType().Name);
         }
     }
 
@@ -1147,9 +1160,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         int secondaryIndex = 0;
         foreach (IQueryInterceptor interceptor in _interceptors)
         {
-            if (interceptor is not IDisposable disposable) continue;
-            try { disposable.Dispose(); }
-            catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
+            // ITM-534: 优先同步 Dispose；仅实现 IAsyncDisposable 的拦截器走异步释放，不再漏释放。
+            if (interceptor is IDisposable disposable)
+            {
+                try { disposable.Dispose(); }
+                catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
+            }
+            else if (interceptor is IAsyncDisposable asyncDisposable)
+            {
+                try { await asyncDisposable.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
+            }
         }
 
         try

@@ -168,7 +168,7 @@ public sealed class FinalTests
     }
 
     [Test]
-    public async Task LegacyMetrics_StartAndDuration_DoNotDoubleCount()
+    public async Task LegacyMetrics_AreNoOp_DoNotPolluteMetrics()
     {
         long counterSamples = 0;
         long durationSamples = 0;
@@ -191,10 +191,12 @@ public sealed class FinalTests
 #pragma warning disable CS0618 // 验证旧公开 API 的兼容语义。
         PalORMMetrics.RecordQueryStart("legacy");
         PalORMMetrics.RecordQueryDuration("legacy", TimeSpan.FromMilliseconds(10));
+        PalORMMetrics.LogQuery("legacy");
 #pragma warning restore CS0618
 
-        await Assert.That(counterSamples).IsEqualTo(1);
-        await Assert.That(durationSamples).IsEqualTo(1);
+        // ITM-531：兼容入口改为 no-op，不再伪造 success 样本污染指标。
+        await Assert.That(counterSamples).IsEqualTo(0);
+        await Assert.That(durationSamples).IsEqualTo(0);
     }
 
     [Test]

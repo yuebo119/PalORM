@@ -416,6 +416,58 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(compileErrors).IsEmpty();
     }
 
+    // ITM-510：索引名大小写碰撞（MySQL 大小写不敏感）——ix_Foo/ix_foo 应报 PALORM020。
+    [Test]
+    public async Task IndexNames_DifferingOnlyByCase_ReportsPalorm020()
+    {
+        const string source = """
+            using PalORM;
+            [Table("entities")]
+            [Index("ix_Foo", "name")]
+            [Index("ix_foo", "value")]
+            public sealed class Entity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("value")] public long Value { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Count(d => d.Id == "PALORM020")).IsEqualTo(1);
+    }
+
+    // ITM-512：命名空间校验——非 PalORM 命名空间的同名注解不得被当 PalORM 注解处理。
+    [Test]
+    public async Task NonPalORMTableAttribute_DoesNotTriggerDiagnostics()
+    {
+        const string source = """
+            namespace Other
+            {
+                [System.AttributeUsage(System.AttributeTargets.Class)]
+                public sealed class TableAttribute : System.Attribute
+                {
+                    public TableAttribute(string name) { }
+                }
+            }
+            namespace Consumer
+            {
+                // 挂的是 Other.TableAttribute（非 PalORM）——不应触发 PALORM001（缺主键）等
+                [Other.Table("plain")]
+                public sealed class PlainPoco
+                {
+                    public long Id { get; set; }
+                    public string Name { get; set; } = "";
+                }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PALORM", System.StringComparison.Ordinal))).IsFalse();
+    }
+
     private static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
         AnalyzeAsync(string source)
     {

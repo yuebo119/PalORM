@@ -37,7 +37,7 @@ internal static class SourceGenerationValidation
         int keyCount = type.GetMembers().OfType<IPropertySymbol>()
             .Where(static property => !IsNotMapped(property))
             .Count(static property => property.GetAttributes().Any(static attribute =>
-                attribute.AttributeClass?.Name is "KeyAttribute" or "Key"));
+                IsPalORMAttribute(attribute, "Key")));  // ITM-512
         if (keyCount != 1)
             return false;
 
@@ -46,7 +46,7 @@ internal static class SourceGenerationValidation
         IPropertySymbol? keyProperty = type.GetMembers().OfType<IPropertySymbol>()
             .FirstOrDefault(static property => !IsNotMapped(property)
                 && property.GetAttributes().Any(static attribute =>
-                    attribute.AttributeClass?.Name is "KeyAttribute" or "Key"));
+                    IsPalORMAttribute(attribute, "Key")));  // ITM-512
         if (keyProperty is null || keyProperty.SetMethod is null || keyProperty.SetMethod.IsInitOnly)
             return false;
 
@@ -158,10 +158,17 @@ internal static class SourceGenerationValidation
                 ? namedType.TypeArguments[0]
                 : type;
 
+    // ITM-512：注解匹配必须校验命名空间为 PalORM，否则混挂 EF Core/DataAnnotations 的
+    // 同名 [Table]/[Column]/[Key]/[ForeignKey]/[Required] 等会被误判为 PalORM 注解。
+    // shortName 传短名（如 "Table"）——同时接受 "Table" 与 "TableAttribute" 两种写法。
+    internal static bool IsPalORMAttribute(AttributeData? attribute, string shortName)
+        => attribute?.AttributeClass is { } cls
+            && (cls.Name == shortName || cls.Name == shortName + "Attribute")
+            && cls.ContainingNamespace?.ToDisplayString() == "PalORM";
+
     internal static bool IsNotMapped(IPropertySymbol property)
         => property.GetAttributes().Any(static attribute =>
-            attribute.AttributeClass?.Name
-                is "NotMappedAttribute" or "NotMapped");
+            IsPalORMAttribute(attribute, "NotMapped"));
 
     private static bool IsSupportedProviderType(ITypeSymbol type)
     {

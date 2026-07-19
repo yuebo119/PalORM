@@ -14,6 +14,9 @@ public sealed class ResilienceExecutor
     private readonly TimeSpan _circuitBreakerResetAfter;
 
     private int _failureCount;
+    // ITM-538: 熔断恢复时点用 DateTime.UtcNow 墙钟，已知取舍——对系统时钟回拨/NTP 校时敏感
+    // （回拨可能延长或缩短熔断窗口）。改用 Environment.TickCount64/Stopwatch 单调时钟可根治，
+    // 但与已提交的熔断逻辑耦合，留待确有需要时统一改造，当前不动逻辑。
     private DateTime _circuitOpenUntil;
     private bool _circuitOpen;
     private bool _halfOpenProbeActive;
