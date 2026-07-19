@@ -170,6 +170,12 @@ internal static class CommandFactoryEmitter
             $"VALUES ({string.Join(", ", parameterNames)})";
     }
 
+    // ITM-552：UPDATE 的 SET 列谓词——BuildUpdateSql（生成 SQL）与 GenerateBindUpdateBody（绑定参数）
+    // 曾各自内联复制此条件，二者必须逐字一致否则参数序与占位符错位。提取为单一真源防漂移。
+    private static bool IsUpdatableColumn(ColumnModel col)
+        => !col.IsPrimaryKey && !col.IsConcurrencyToken
+            && !col.IsTimestamp && col.ComputedExpression is null;
+
     internal static string BuildUpdateSql(TableModel model)
         => BuildUpdateSql(model, null);
 
@@ -181,8 +187,7 @@ internal static class CommandFactoryEmitter
         ColumnModel[] columns = model.Columns.AsSpan().ToArray();
         ColumnModel[] primaryKeys = columns.Where(static column => column.IsPrimaryKey).ToArray();
         ColumnModel[] setColumns = columns.Where(static column =>
-            !column.IsPrimaryKey && !column.IsConcurrencyToken &&
-            !column.IsTimestamp && column.ComputedExpression is null).ToArray();
+            IsUpdatableColumn(column)).ToArray();
         ColumnModel? concurrency = columns.FirstOrDefault(static column => column.IsConcurrencyToken);
         int parameterIndex = 0;
         var sets = setColumns.Select(column =>
@@ -249,8 +254,7 @@ internal static class CommandFactoryEmitter
     private static void GenerateBindUpdateBody(TableModel model, StringBuilder sb)
     {
         var cols = model.Columns.AsSpan().ToArray();
-        var setCols = cols.Where(c => !c.IsPrimaryKey && !c.IsConcurrencyToken
-            && !c.IsTimestamp && c.ComputedExpression is null).ToArray();
+        var setCols = cols.Where(c => IsUpdatableColumn(c)).ToArray();
         var pkCols = cols.Where(c => c.IsPrimaryKey).ToArray();
         var cc = cols.FirstOrDefault(c => c.IsConcurrencyToken);
 

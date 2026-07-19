@@ -60,7 +60,10 @@ internal static class RowFactoryEmitter
         foreach (var col in model.Columns)
         {
             string tn = col.ProviderClrTypeName;
-            if (tn is "char" or "global::System.Char") return true;
+            // ITM-550：与 GetRawReadExpression 的读表达式 switch 对称——该 switch 剥掉 global:: 前缀后
+            // 对 "char"/"System.Char" 都产 ReadChar。此处补 "System.Char"：若 ProviderClrTypeName 出现
+            // 裸 "System.Char"（如 converter 的 provider 类型），避免 HasCharColumn 漏判导致 ReadChar 不生成 → CS0103。
+            if (tn is "char" or "global::System.Char" or "System.Char") return true;
         }
         return false;
     }

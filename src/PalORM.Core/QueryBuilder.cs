@@ -305,10 +305,14 @@ public struct QueryBuilder<T> where T : class, new()
     {
         string grandChildTable = GetRegisteredTableName(typeof(TGrandChild));
         string parentTable = GetRegisteredTableName(typeof(TParent));
+        // ITM-551: 与 Include（ITM-515）对称——若 TParent 恰为根实体（parentTable == _tableName）且已 With(CTE)，
+        // FROM 已切 CTE 名，JOIN ON 右端须用 _cteName 否则引用了不在 FROM 中的实体表名。
+        // 但 TParent 可为任意祖先类型（不一定是根 T），故仅在等于根表名时重映射，其余祖先保持真实表名。
+        string parentSource = parentTable == _tableName ? _cteName ?? _tableName : parentTable;
         AddClause(QueryClauseKind.Join,
             $"INNER JOIN {_quoteIdentifier(grandChildTable)} ON " +
             $"({_quoteIdentifier(grandChildTable)}.{_quoteIdentifier(GetColumnName(grandChildKey))} = " +
-            $"{_quoteIdentifier(parentTable)}.{_quoteIdentifier(GetColumnName(parentKey))})");
+            $"{_quoteIdentifier(parentSource)}.{_quoteIdentifier(GetColumnName(parentKey))})");
         return this;
     }
 
