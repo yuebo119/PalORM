@@ -184,8 +184,9 @@ public static class QueryBuilderExtensions
 
     /// <summary>多结果集查询——执行调用方提供的完整 SQL。builder 仅供连接/方言/参数工厂，
     /// 已构建的 Where/OrderBy 等子句不参与执行；含子句时明确失败防误用（ITM-332）。
-    /// <para>ITM-513: 仅调用拦截器 OnBefore——GridReader 为流式多结果集，无单一 rowCount，
-    /// 且异常可能发生在调用方逐集读取阶段（本方法已返回），故 OnAfter/OnError 不适用流式路径。</para></summary>
+    /// <para>ITM-548: 流式多结果集<b>不经过</b> IQueryInterceptor——GridReader 无单一 rowCount，
+    /// 异常发生在调用方逐集读取阶段（本方法已返回），单端 OnBefore 会让 begin/end 配对型
+    /// 拦截器泄漏。可观测性用 WithTracing/WithMetrics（QueryObservation 随 GridReader.DisposeAsync 收尾）。</para></summary>
     public static async ValueTask<GridReader> QueryMultipleAsync<T>(this QueryBuilder<T> builder, FormattableString sql, CancellationToken ct = default) where T : class, new()
     {
         // ITM-523: 守卫只统计"用户实质子句"——Tag/TagWithCaller 产生的 Comment 类别与
@@ -212,19 +213,8 @@ public static class QueryBuilderExtensions
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0);
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            var boundParameters = new DbParameter[sql.ArgumentCount];
             for (int i = 0; i < sql.ArgumentCount; i++)
-            {
-                DbParameter p = builder._paramFactory($"@p{i}", sql.GetArgument(i));
-                boundParameters[i] = p;
-                command.Parameters.Add(p);
-            }
-            // ITM-513: 流式多结果集仅通知 OnBefore（无单一 rowCount、异常在调用方读取阶段发生，见方法文档）
-            if (builder._interceptors.Count > 0)
-            {
-                var context = new QueryContext(command.CommandText, Array.AsReadOnly(boundParameters));
-                foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnBefore(context);
-            }
+                command.Parameters.Add(builder._paramFactory($"@p{i}", sql.GetArgument(i)));
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             grid = new GridReader(

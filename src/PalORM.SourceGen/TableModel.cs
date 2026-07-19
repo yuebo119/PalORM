@@ -52,6 +52,10 @@ internal sealed record TableModel(
                 SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? prop.Name;
+            // ITM-553 待实现：[Column(StoreAs=...)] 的枚举存储策略（AsInt32/AsInt64/AsString）在此未被读取，
+            // enum 列恒走默认 TEXT 存储。用户已由 PALORM017（PalORMAnalyzer.cs AnnotationNotAppliedToDdl，
+            // 谓词含 "StoreAs"）在编译期告警"标注但静默无效"，故无静默错误风险。完整接入需扩展类型映射
+            // （provider 类型选择 + 读/写表达式 + DDL 列类型）面较大，留待专门迭代，此处仅记录限制。
 
             // [Unique] → 单列唯一索引（ADR-B：属性级 Unique 升为唯一索引）
             if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Unique")))
@@ -73,9 +77,10 @@ internal sealed record TableModel(
             bool isConcurrencyToken = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck"));
             bool isTimestamp = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
             bool isRequired = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
+            // ITM-554：改用本文件 helper（ITM-512 引入），与其余注解判定一致，避免裸串命名空间比对
             string? computedExpression = prop.GetAttributes()
                 .FirstOrDefault(static attribute =>
-                    attribute.AttributeClass?.ToDisplayString() == "PalORM.ComputedAttribute")?
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Computed"))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));

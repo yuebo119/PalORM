@@ -33,16 +33,10 @@ internal static class FormattableSqlFormatter
 
             if (current != '{')
             {
-                // 拒绝用户 SQL 文本中手写字面 @pN——与本方法为插值项生成的 @pN 占位符同名，
-                // 会静默共享绑定值产生错误数据（ITM-509）。参数化查询请统一用插值 {n}。
-                if (current == '@' && index + 1 < format.Length && format[index + 1] == 'p'
-                    && index + 2 < format.Length && char.IsAsciiDigit(format[index + 2]))
-                {
-                    throw new FormatException(
-                        "Formattable SQL contains a literal '@p<n>' parameter placeholder, which collides " +
-                        "with generated placeholders. Use interpolation ({0}, {1}, ...) for all parameters " +
-                        "instead of writing '@p0' by hand.");
-                }
+                // ITM-546：不再拦截 SQL 文本中的字面 @p<n>。此前（ITM-509）为防"手写 @p0 与
+                // 生成占位符同名"而纯文本扫描拒绝，但它不理解 SQL 字符串字面量，误拒了
+                // 'a@p1.com'（邮箱）、LIKE '%@p2%' 等合法 SQL。手写 @pN 冲突极罕见，
+                // 且组合查询 baseIndex>0 时生成号不从 0 起，真实碰撞概率极低——移除该检测。
                 result.Append(current);
                 continue;
             }

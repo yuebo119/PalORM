@@ -60,6 +60,21 @@ public sealed class QueryExecutionTests
             .IsEqualTo("{json} {@p3} = @p3 AND value = @p13");
     }
 
+    // ITM-546：SQL 文本中的字面 @p<n>（邮箱/LIKE 模式等）不得被误拒——原样透传。
+    [Test]
+    [Arguments("SELECT * FROM t WHERE email = 'a@p1.com'")]
+    [Arguments("SELECT * FROM t WHERE note LIKE '%@p2%'")]
+    [Arguments("SELECT * FROM t WHERE x = '@p0'")]
+    public async Task FormatFormattableSql_LiteralAtPInText_IsPreservedNotRejected(string format)
+    {
+        FormattableString sql = FormattableStringFactory.Create(format);
+
+        string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 0);
+
+        // 无插值项 → 原样返回，字面 @pN 保留
+        await Assert.That(formatted).IsEqualTo(format);
+    }
+
     [Test]
     [Arguments("SELECT {0,abc}")]
     [Arguments("SELECT {0:format")]

@@ -468,6 +468,27 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PALORM", System.StringComparison.Ordinal))).IsFalse();
     }
 
+    // ITM-512 下沉：DataAnnotations 的同名 [Table]/[Key]/[Column] 混挂不得被 PalORM 误判。
+    [Test]
+    public async Task DataAnnotationsAttributes_AreNotTreatedAsPalORM()
+    {
+        const string source = """
+            using System.ComponentModel.DataAnnotations;
+            using System.ComponentModel.DataAnnotations.Schema;
+            [Table("da_table")]
+            public sealed class DaPoco
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        // 挂的全是 DataAnnotations（非 PalORM 命名空间）——不应触发任何 PALORM 诊断
+        await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PALORM", System.StringComparison.Ordinal))).IsFalse();
+    }
+
     private static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
         AnalyzeAsync(string source)
     {
