@@ -450,6 +450,29 @@ public sealed class ResilienceTests
     }
 
     [Test]
+    public async Task ExecuteAsync_NegativeRetryBackoff_ReportsBackoffConfig()
+    {
+        // ITM-605：自定义 RetryBackoff 返回负值时，ResilienceExecutor 包装守卫应抛
+        // InvalidOperationException 指向 RetryBackoff 配置（带 attempt=N），
+        // 不应让 Task.Delay 抛 AOORE("delay") 不指向配置。
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            MaxRetries = 1,
+            RetryBackoff = _ => TimeSpan.FromSeconds(-1),
+            CircuitBreakerThreshold = 0
+        };
+        var executor = new ResilienceExecutor(opts, static _ => true);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await executor.ExecuteAsync<int>(_ => throw new InvalidOperationException("trigger retry"));
+        });
+        await Assert.That(ex.Message).Contains("RetryBackoff");
+        await Assert.That(ex.Message).Contains("attempt=0");
+    }
+
+    [Test]
     public async Task ExecuteAsync_CircuitBreaker_CountsEachFinalFailureOnce()
     {
         var opts = new DbOptions

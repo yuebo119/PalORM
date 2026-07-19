@@ -262,8 +262,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 }
             }
 
-            var concurrencyTokens = type.GetMembers().OfType<IPropertySymbol>()
-                .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
+            // ITM-607: 走基类链（同 PALORM001/002/014/018/021）——派生类继承 AuditBase.Version
+            // （基类 [ConcurrencyCheck]）+ 自身 RowVer 时，type.GetMembers() 只查声明类型会漏掉
+            // 基类令牌，与 TableModel.GetMappableProperties（基类链）口径不一致。
+            var concurrencyTokens = SourceGenerationValidation.EnumerateMappedProperties(type)
                 .Where(member => member.GetAttributes().Any(attribute =>
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "ConcurrencyCheck")))  // ITM-512
                 .ToArray();
@@ -285,11 +287,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // ITM-590: assemblyTables 由 CompilationStartAction 闭包持有——首次 FK 检查时填充，
             // 后续所有类型共享同一份缓存（O(N) 而非 O(N²)）。
 
-            foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
+            // ITM-607: 走基类链（同 PALORM001/002/013/014/018/021）——派生类继承基类属性的
+            // [Column]/[ForeignKey]/[DefaultValue] 等注解同样需被检查。
+            foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
             {
-                if (SourceGenerationValidation.IsNotMapped(member))
-                    continue;
-
                 // PALORM017: 不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"
                 // （ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；FK/DefaultValue/Column 架构参数仍告警）
                 var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
@@ -449,9 +450,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
 
         // [Unique] 派生索引名先占位（与 TableModel 的 ux_{table}_{column} 命名一致）
-        foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
+        // ITM-607: 走基类链（同其他 PALORM 检查）——基类 [Unique] 属性同样需占位检查。
+        foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
-            if (SourceGenerationValidation.IsNotMapped(member)) continue;
             if (!member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Unique")))  // ITM-512
                 continue;
             var columnAttr = member.GetAttributes().FirstOrDefault(a =>

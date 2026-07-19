@@ -513,6 +513,22 @@ public sealed class SessionConcurrencyTests
     }
 
     [Test]
+    public async Task UseTransaction_DisposedTransaction_ReportsDisposedNotBelonging()
+    {
+        // ITM-606：传入已 dispose 的事务（Connection == null）应抛"disposed transaction"消息，
+        // 不应被 ReferenceEquals(null, _conn) 遮蔽为"事务必须属于当前 DataSession 的主连接"。
+        await using var resources = new ConcurrencyResources();
+        await using var tran = await resources.Session.BeginTransactionAsync();
+        await tran.DisposeAsync();  // Connection 变 null
+
+        var ex = await Assert.That(() => resources.Session.UseTransaction(tran))
+            .Throws<ArgumentException>();
+        await Assert.That(ex!.Message).Contains("disposed transaction");
+        // 确保未被遮蔽为"事务必须属于主连接"消息
+        await Assert.That(ex!.Message.Contains("主连接", StringComparison.Ordinal)).IsFalse();
+    }
+
+    [Test]
     public async Task StoredProc_UsesCurrentSessionTransaction()
     {
         await using var resources = new ConcurrencyResources();

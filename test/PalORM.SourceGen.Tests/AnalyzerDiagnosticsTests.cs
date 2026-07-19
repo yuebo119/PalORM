@@ -745,6 +745,65 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(compileErrors).IsEmpty();
     }
 
+    [Test]
+    public async Task ConcurrencyTokenInBase_ReportsPalorm013()
+    {
+        // ITM-607：派生类继承 AuditBase.Version（基类 [ConcurrencyCheck]）+ 自身 RowVer——
+        // 走 EnumerateMappedProperties 后看到 2 个令牌应报 PALORM013。
+        // 此前 type.GetMembers() 只查声明类型漏掉基类令牌，与 TableModel 列收集口径不一致。
+        const string source = """
+            using PalORM;
+            public abstract class AuditVersioned
+            {
+                [ConcurrencyCheck] public long Version { get; set; }
+            }
+            [Table("double_versioned")]
+            public sealed class DoubleVersioned : AuditVersioned
+            {
+                [Key] public long Id { get; set; }
+                [ConcurrencyCheck] public long RowVer { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM013")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task ForeignKeyInBase_ReportsPalorm003_WithBaseChain()
+    {
+        // ITM-607（290 行块）：基类属性的 [ForeignKey] 同样需被 PALORM003 检查。
+        // 基类声明 FK 引用未知表，派生类继承应触发——此前 type.GetMembers() 漏掉基类 FK。
+        const string source = """
+            using PalORM;
+            [Table("known_target")]
+            public sealed class KnownTarget
+            {
+                [Key] public long Id { get; set; }
+            }
+            public abstract class FkBase
+            {
+                [Column("parent_id")]
+                [ForeignKey("no_such_table", "id")]
+                public long ParentId { get; set; }
+            }
+            [Table("derived_fk")]
+            public sealed class DerivedFk : FkBase
+            {
+                [Key] public long Id { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM003")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
     // ITM-510：索引名大小写碰撞（MySQL 大小写不敏感）——ix_Foo/ix_foo 应报 PALORM020。
     [Test]
     public async Task IndexNames_DifferingOnlyByCase_ReportsPalorm020()
