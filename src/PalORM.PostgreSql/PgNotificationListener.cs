@@ -119,11 +119,14 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                         initialConnection = false;
                         started.TrySetResult();
                     }
+                    // ITM-567：重连成功（Open+LISTEN 全通过）即清零——此前仅收到 NOTIFY 才清零，
+                    // 静默通道 + 周期性断连（LB 空闲切断）下每次成功重连仍累加计数，
+                    // 第 N+1 次断开监听器永久死亡。上限语义 = 连续失败次数，与文档直觉一致。
+                    reconnectAttempt = 0;
 
                     while (!owner.IsCancellationRequested)
                     {
                         await connection.WaitAsync(owner.Token).ConfigureAwait(false);
-                        reconnectAttempt = 0;
                     }
                 }
                 catch (OperationCanceledException) when (owner.IsCancellationRequested)

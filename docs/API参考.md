@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > 基于 25+ ORM 调研，按严格 Native AOT 约束实现。SQLite 完整矩阵与 NuGet consumer 本机原生运行通过；PostgreSQL/MySQL 已在本机 Docker（CI 同配置容器）实测通过，远端 CI 待 push 触发。
-> 当前测试: Core 148/148、SourceGen 87/87、集成 154/154（含 7 项 PG/MySQL 真库用例——本机 Docker 复现 CI 服务容器配置实测通过）
+> 当前测试: Core 154/154、SourceGen 96/96、集成 157/157（含 7 项 PG/MySQL 真库用例——本机 Docker 复现 CI 服务容器配置实测通过）
 > 构建: 全解决方案 Release 严格构建 0 warning / 0 error · Native AOT: 三 Provider publish 通过，SQLite 与 NuGet consumer 原生运行通过
 > QueryBuilder: struct（值类型）· 113 API 中 112 个已实现，1 个因设计冲突移除
 
@@ -71,7 +71,7 @@
 | QB16 | `.LeftJoin<TJoin>(FormattableString)` | `QueryBuilder.cs:165` |
 | QB17 | `.RightJoin<TJoin>(FormattableString)` | `QueryBuilder.cs:169` |
 | QB18 | `.Set(Expression,value)` | `QueryBuilder.cs:173` |
-| QB19 | `.QueryMultipleAsync(sql)`→`GridReader` | `QueryBuilderExtensions.cs` — 单活动读取；GridReader 释放前持续占用会话 operation lease；重复释放共享同一结果；函数式事务结束前自动收口遗留实例 |
+| QB19 | `.QueryMultipleAsync(sql)`→`GridReader` | `QueryBuilderExtensions.cs` — 单活动读取；GridReader 释放前持续占用会话 operation lease；重复释放共享同一结果；函数式事务结束前自动收口遗留实例；**SQL 逐字执行，默认过滤（软删/租户）不适用（ITM-572）——多租户条件须自行携带** |
 | QB20 | `.UnsafeWindowOver(func,over)` | `QueryBuilder.cs:181`，仅接受可信原始 SQL 结构 |
 | QB21 | `.With("cte",subquery)` | `QueryBuilder.cs:184` |
 | QB22 | `.AsSplitQuery()` | `QueryBuilder.cs` — 只构建根查询并移除 JOIN，不执行导航对象装配 |

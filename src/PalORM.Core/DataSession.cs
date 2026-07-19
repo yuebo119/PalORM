@@ -538,8 +538,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public QueryBuilder<T> UpdateColumns<T>() where T : class, new()
         => From<T>();
 
-    /// <summary>忽略全局过滤器（[SoftDelete]/[TenantAware]）。设置后本次会话所有查询跳过自动过滤。</summary>
-    public DataSession<TProvider> IgnoreFilters() { _ignoreFilters = true; return this; }
+    /// <summary>忽略全局过滤器（[SoftDelete]/[TenantAware]）。设置后本次会话所有查询跳过自动过滤。
+    /// <para>ITM-568: 与 AddInterceptor 同受门禁保护——有查询在飞时调用会明确失败，
+    /// 防止飞行查询与过滤状态变更竞态产生跨租户/含软删数据。</para></summary>
+    public DataSession<TProvider> IgnoreFilters()
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        _ignoreFilters = true;
+        return this;
+    }
     internal bool _ignoreFilters;
 
     /// <summary>动态添加查询拦截器（日志/缓存/审计），并按 <see cref="IQueryInterceptor.Priority"/> 执行。
@@ -572,6 +579,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 拒绝 null（ITM-532）：null 使 HasTenantFilter 恒 false 静默关闭租户过滤，
         // 上游 tenantId 缺失时全部查询跨租户返回——失败开放。宁可明确失败。
         ArgumentNullException.ThrowIfNull(tenantId);
+        // ITM-568: 门禁保护（同 AddInterceptor）——飞行查询期间切换租户是竞态
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
         _tenantId = tenantId;
         return this;
     }
@@ -625,10 +634,16 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         foreach (var kv in PalORM_Runtime.CreateTableSql)
         {
-            string ddl = PalORM_Runtime.CreateTableSqlByDialect.TryGetValue(
-                kv.Key, out CreateTableSqlSet sqls)
-                ? sqls.Get(TProvider.Dialect)
-                : kv.Value;
+            // ITM-569：拒绝回退 legacy 单方言 DDL（与 GetCommandSqls 对称）——旧生成器片段的
+            // CreateTableSql 恒为 SQLite 风格双引号，MySQL 上报语法错而非清晰的"请重新编译"。
+            if (!PalORM_Runtime.CreateTableSqlByDialect.TryGetValue(
+                    kv.Key, out CreateTableSqlSet sqls))
+            {
+                throw new InvalidOperationException(
+                    $"Type '{kv.Key.Name}' has no dialect-specific generated DDL. " +
+                    "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
+            }
+            string ddl = sqls.Get(TProvider.Dialect);
             await using DbCommand cmd = CreateCommand();
             cmd.CommandText = ddl;
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -903,8 +918,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>设置会话默认隔离级别。</summary>
-    public DataSession<TProvider> WithIsolationLevel(IsolationLevel level) { _isolationLevel = level; return this; }
+    /// <summary>设置会话默认隔离级别。ITM-568: 受操作门禁保护。</summary>
+    public DataSession<TProvider> WithIsolationLevel(IsolationLevel level)
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        _isolationLevel = level;
+        return this;
+    }
     private IsolationLevel _isolationLevel = IsolationLevel.ReadCommitted;
 
     /// <summary>设置会话默认命令超时，并重置当前弹性策略状态。</summary>
@@ -942,8 +962,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     private void UpdateResilience(DbOptions options)
     {
-        // _options 与 _resilience 保护策略对齐：先发布配置再发布执行器，
-        // 跨线程读取方经 Volatile.Read(_resilience) 建立的先行关系可见到一致的 _options。
+        // ITM-568: 配置发布与飞行查询互斥（门禁），消除"读到新旧混合配置"窗口；
+        // ITM-577: 注释同步——一致性由门禁保证（单活动操作），不再依赖 Volatile.Read 配对协议。
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        UpdateResilienceCore(options);
+    }
+
+    private void UpdateResilienceCore(DbOptions options)
+    {
+        // ITM-577: 此前注释声称"读取方经 Volatile.Read(_resilience) 可见一致 _options"，但
+        // CRUD 路径全部普通读、只有 ExecuteWithResilience 遵守该配对——声明与读方不符。
+        // 现一致性由 UpdateResilience 的操作门禁保证（配置变更与飞行查询互斥）；
+        // Volatile.Write 保留为跨线程发布的最低保障。
         Volatile.Write(ref _options, options);
         Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient));
     }
