@@ -797,30 +797,35 @@ public struct QueryBuilder<T> where T : class, new()
         bool hasDefault = HasClause(QueryClauseKind.DefaultFilter);
         bool hasUser = HasClause(QueryClauseKind.Where);
         if (!hasDefault && !hasUser) return;
+
         builder.Append("WHERE ");
-        bool first = true;
-        foreach (QueryClause clause in _clauses)
-        {
-            if (clause.Kind != QueryClauseKind.DefaultFilter) continue;
-            if (!first) builder.Append("AND ");
-            builder.Append(clause.Sql);
-            builder.Append(' ');
-            first = false;
-        }
+        // 默认过滤（软删/租户）恒以 AND 前置；用户 OR 无法绕过默认过滤（ITM-401 根治）。
+        AppendClauseKind(ref builder, QueryClauseKind.DefaultFilter, separator: "AND ");
         if (hasUser)
         {
             if (hasDefault) builder.Append("AND (");
-            foreach (QueryClause clause in _clauses)
-            {
-                if (clause.Kind != QueryClauseKind.Where) continue;
-                builder.Append(clause.Sql);
-                builder.Append(' ');
-            }
+            AppendClauseKind(ref builder, QueryClauseKind.Where, separator: null);
             if (hasDefault)
             {
                 builder.TrimEnd();
                 builder.Append(") ");
             }
+        }
+    }
+
+    /// <summary>追加指定类别的全部子句。separator 用于条目间分隔（如 "AND "）。
+    /// 同一调用负责遍历 _clauses 内的全部目标类别子句，避免重复循环。</summary>
+    private void AppendClauseKind(
+        ref ValueStringBuilder builder, QueryClauseKind kind, string? separator)
+    {
+        bool first = true;
+        foreach (QueryClause clause in _clauses)
+        {
+            if (clause.Kind != kind) continue;
+            if (!first && separator is not null) builder.Append(separator);
+            builder.Append(clause.Sql);
+            builder.Append(' ');
+            first = false;
         }
     }
 

@@ -152,25 +152,43 @@ internal sealed class SessionOperationState
 
         Exception? cleanupException = null;
         if (resources is not null)
+            cleanupException = await DisposeAllPreservingAsync(resources).ConfigureAwait(false);
+
+        cleanupException = await WaitForActiveOperationPreservingAsync(cleanupException).ConfigureAwait(false);
+
+        if (cleanupException is null) return;
+        if (primaryException is null) throw cleanupException;
+        primaryException.Data["PalORM.TransactionResourceCleanupException"] =
+            cleanupException;
+    }
+
+    /// <summary>顺序释放全部事务资源，首异常保留为主异常，后续异常挂 Data 不丢弃
+    /// （与 GridReader 清理约定一致）。</summary>
+    private static async ValueTask<Exception?> DisposeAllPreservingAsync(
+        List<IAsyncDisposable> resources)
+    {
+        Exception? cleanupException = null;
+        foreach (IAsyncDisposable resource in resources)
         {
-            foreach (IAsyncDisposable resource in resources)
+            try { await resource.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception)
             {
-                try { await resource.DisposeAsync().ConfigureAwait(false); }
-                catch (Exception exception)
-                {
-                    // 首异常保留为主异常，后续异常挂 Data 不丢弃（与 GridReader 清理约定一致）；
-                    // 用 Data.Count 推导索引避免外部 ref 计数器（IDE0059 死赋值）。
-                    if (cleanupException is null) cleanupException = exception;
-                    else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = exception;
-                }
+                if (cleanupException is null) cleanupException = exception;
+                else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = exception;
             }
         }
+        return cleanupException;
+    }
 
+    /// <summary>等待活动操作完成的有界等待——ITM-570：与 DisposeAsync 对称——
+    /// WithTransaction 回调内被放弃的枚举器租约（只走 EnterOperation，不注册为事务资源）
+    /// 会让此等待永久挂起，事务收口死锁。</summary>
+    private async ValueTask<Exception?> WaitForActiveOperationPreservingAsync(Exception? cleanupException)
+    {
         Task activeOperation;
         lock (_sync)
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
-        // ITM-570：与 DisposeAsync 对称的有界等待——WithTransaction 回调内被放弃的枚举器租约
-        // （只走 EnterOperation，不注册为事务资源）会让此等待永久挂起，事务收口死锁。
+
         try
         {
             await activeOperation.WaitAsync(DisposeWaitTimeout).ConfigureAwait(false);
@@ -185,10 +203,7 @@ internal sealed class SessionOperationState
             if (cleanupException is null) cleanupException = hangException;
             else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = hangException;
         }
-        if (cleanupException is null) return;
-        if (primaryException is null) throw cleanupException;
-        primaryException.Data["PalORM.TransactionResourceCleanupException"] =
-            cleanupException;
+        return cleanupException;
     }
 
     internal void ExitTransactionFlow(object owner)
