@@ -90,7 +90,7 @@ public static partial class SqlTemplates
     private static InterpolatedStringExpressionSyntax? FindReturnedInterpolatedString(
         MethodDeclarationSyntax methodSyntax)
     {
-        // 表达式体方法：public static FormattableString Foo() => $"SELECT ...";
+        // 表达式体方法（箭头语法）——优先从箭头表达式提取插值串
         if (methodSyntax.ExpressionBody is { } arrow)
         {
             return arrow.Expression

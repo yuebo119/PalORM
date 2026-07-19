@@ -6,10 +6,10 @@ namespace PalORM;
 internal static class FormattableSqlFormatter
 {
     // S1994/S127（for 循环体内修改 stop 变量）在此抑制：
-    //   - `{{`/`}}` 转义符需跳过第二个字符（line 23/30）
-    //   - `{N}` 占位符解析后需把游标直接跳到结束 `}` 位置（line 61）
+    //   - `{{`/`}}` 转义符需跳过第二个字符
+    //   - `{N}` 占位符解析后需把游标直接跳到结束花括号位置
     // 这些是单遍扫描复合格式串的标准实现（与 BCL StringBuilder.AppendFormat 内部模式一致），
-    // `for (index++)` 末尾的自增不会破坏正确性——每次循环内已先调整 index 到目标位置。
+    // 末尾的自增不会破坏正确性——每次循环内已先调整 index 到目标位置。
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S127:DoNotUpdateLoopVariableInLoopBody",
         Justification = "Composite format scan requires cursor adjustment for escapes and placeholders.")]

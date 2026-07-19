@@ -119,5 +119,5 @@ internal sealed class LifecycleConnection(bool? openResult) : DbConnection
     }
     protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) => throw new NotSupportedException();
     protected override DbCommand CreateDbCommand() => throw new NotSupportedException();
-    protected override void Dispose(bool disposing) { if (disposing) DisposeCount++; base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if (disposing) { DisposeCount++; } base.Dispose(disposing); }
 }

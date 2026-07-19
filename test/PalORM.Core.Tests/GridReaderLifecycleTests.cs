@@ -34,7 +34,9 @@ public sealed class GridReaderLifecycleTests
     {
         var resources = new GridFailureResources();
         GridReader grid = await resources.CreateGridReaderAsync();
+#pragma warning disable S5034 // ValueTask 经 .AsTask() 显式转 Task 后多次 await Task 是合法的，非双消费
         Task<List<GridLifecycleEntity>> read = grid.ReadAsync<GridLifecycleEntity>().AsTask();
+#pragma warning restore S5034
         await resources.Reader.ReadStarted.Task;
 
         Task dispose = grid.DisposeAsync().AsTask();
@@ -55,6 +57,7 @@ public sealed class GridReaderLifecycleTests
     {
         var resources = new GridFailureResources(failReaderDispose: true);
         GridReader grid = await resources.CreateGridReaderAsync();
+#pragma warning disable S5034 // ValueTask 经 .AsTask() 显式转 Task 后多次 await Task 是合法的
 
         Task first = grid.DisposeAsync().AsTask();
         Task second = grid.DisposeAsync().AsTask();
