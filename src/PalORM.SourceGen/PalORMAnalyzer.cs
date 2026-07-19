@@ -359,7 +359,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             a.AttributeClass?.Name is "TableAttribute" or "Table");
         string tableName = tableAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? type.Name;
 
-        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        // 索引名冲突按大小写不敏感判定（ITM-510）：MySQL 索引名大小写不敏感，
+        // ix_Foo/ix_foo 迁移时报 1061 被 IsDuplicateSchemaObject 幂等吞掉→第二索引静默丢失。
+        // 用最严格的方言口径统一，保证三方言下均无碰撞。
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // [Unique] 派生索引名先占位（与 TableModel 的 ux_{table}_{column} 命名一致）
         foreach (var member in type.GetMembers().OfType<IPropertySymbol>())

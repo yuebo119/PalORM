@@ -178,7 +178,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         if (TProvider.SupportsReturningClause)
         {
             cmd.CommandText = sqls.InsertReturning;
-            cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             metadata.BindInsert(cmd, entity);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -206,7 +206,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                     $"Provider '{TProvider.Name}' does not support RETURNING and has no insert-id strategy; " +
                     "only the MySQL dialect fallback (LAST_INSERT_ID) is implemented.");
             cmd.CommandText = sqls.Insert + "; SELECT LAST_INSERT_ID();";
-            cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             metadata.BindInsert(cmd, entity);
             long? generatedId = NormalizeGeneratedId(
                 await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
@@ -268,7 +268,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = updateSql;
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         metadata.BindUpdate(cmd, entity);
         BindDefaultFilterParameters<T>(cmd);
         int affectedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -305,7 +305,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
                 : "";
             cmd.CommandText = $"UPDATE {TProvider.QuoteIdentifier(tn)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
-            cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
             BindDefaultFilterParameters<T>(cmd);
             return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -315,7 +315,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         delCmd.CommandText = HasTenantFilter<T>()
             ? $"{sqls.Delete} AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
             : sqls.Delete;
-        delCmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        delCmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(delCmd, key);
         BindDefaultFilterParameters<T>(delCmd);
         return await delCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -335,7 +335,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         string filter = GetDefaultFilterFragment<T>();
         string selectColumns = string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier));
         cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0{filter}";
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(cmd, key);
         BindDefaultFilterParameters<T>(cmd);
 
@@ -357,7 +357,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         await using DbCommand cmd = CreateCommand();
         string selectColumns = string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier));
         cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindDefaultFilterParameters<T>(cmd);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -392,8 +392,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 entity, effectiveOperationOwner, ct).ConfigureAwait(false);
         }
 
+        // UPSERT 与乐观锁语义冲突（ITM-503）：ON CONFLICT DO UPDATE 无条件覆盖，
+        // 无法表达 "仅当 version 匹配才更新"。带 [ConcurrencyCheck] 的实体若走 UPSERT
+        // 会静默 last-write-wins，绕过 UpdateAsync 强制的并发保护——明确失败，引导用
+        // InsertAsync（新增）或 UpdateAsync（带乐观锁的更新）。
+        if (metadata.IncrementVersion is not null)
+            throw new NotSupportedException(
+                $"SaveAsync (UPSERT) cannot honor [ConcurrencyCheck] on '{typeof(T).Name}'; " +
+                "UPSERT overwrites unconditionally and would bypass optimistic locking. " +
+                "Use InsertAsync for new rows or UpdateAsync (which enforces the version check) for updates.");
+
         await using DbCommand cmd = CreateCommand();
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         metadata.BindUpsert(cmd, entity);
 
         IReadOnlyList<string> upsertColumns = metadata.UpsertColumns;
@@ -604,7 +614,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 : kv.Value;
             await using DbCommand cmd = CreateCommand();
             cmd.CommandText = ddl;
-            cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
             if (!PalORM_Runtime.CreateIndexSqlByDialect.TryGetValue(
@@ -616,7 +626,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             {
                 await using DbCommand indexCmd = CreateCommand();
                 indexCmd.CommandText = indexDdl;
-                indexCmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+                indexCmd.CommandTimeout = _options.CommandTimeoutSeconds;
                 try
                 {
                     await indexCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -651,7 +661,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             sql += " WHERE " + defaultFilter;
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = sql;
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         if (where is not null) BindFormattableParameters(cmd, where);
         BindDefaultFilterParameters<T>(cmd);
         object? r = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
@@ -697,7 +707,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = sql;
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, original);
         BindDefaultFilterParameters<T>(cmd);
         return await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
@@ -734,7 +744,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
         _operationState, _options.ValidateQueryColumnOrder);
 
-    /// <summary>流式查询——IAsyncEnumerable 恒定内存。</summary>
+    /// <summary>流式查询——IAsyncEnumerable 恒定内存。
+    /// <para><b>枚举器必须释放（ITM-508）</b>：操作租约在枚举期间持有，到枚举器 DisposeAsync 才归还。
+    /// 用 <c>await foreach</c> 消费（自动释放）；手写 <c>GetAsyncEnumerator</c> 时必须 <c>await using</c>
+    /// 或在 break/异常路径显式 DisposeAsync——否则租约永不归还，会话后续操作被门禁拒绝，
+    /// 且 DataSession.DisposeAsync 会挂起至 DisposeWaitTimeout 后抛诊断异常。</para></summary>
     public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
@@ -743,7 +757,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = FormatSqlWithParameters(sql);
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -797,7 +811,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = FormatSqlWithParameters(sql);
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -849,7 +863,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = FormatSqlWithParameters(sql);
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
         object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         if (result is null or DBNull) return default;
@@ -863,7 +877,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = FormatSqlWithParameters(sql);
-        cmd.CommandTimeout = (int)_options.CommandTimeout.TotalSeconds;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
