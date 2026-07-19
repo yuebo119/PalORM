@@ -148,37 +148,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 || !SourceGenerationValidation.IsSupportedEntity(type)
                 || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))  // ITM-512
                 return;
-            // ITM-559: 计数走基类链——只查声明成员会对"基类声明 [Key]"的实体误报"无 [Key]"，
-            // 与列收集（GetMappableProperties 基类链）不一致
-            List<IPropertySymbol> keyProperties = SourceGenerationValidation
-                .EnumerateMappedProperties(type)
-                .Where(static property => property.GetAttributes().Any(attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Key")))  // ITM-512
-                .ToList();
-            if (keyProperties.Count == 0)
-                ctx.ReportDiagnostic(Diagnostic.Create(MissingPrimaryKey, type.Locations[0], type.Name));
-            // PALORM019: 复合主键——BindDelete 单 key 语义无法表达，明确拒绝（ITM-311）
-            else if (keyProperties.Count > 1)
-                ctx.ReportDiagnostic(Diagnostic.Create(CompositePrimaryKey, type.Locations[0], type.Name, keyProperties.Count));
-            else
-            {
-                // PALORM022（ITM-560/561）: 生成器 CanGenerateEntity 会静默跳过的主键形态在此定位报错。
-                // ITM-614: reason 链按 init-only → nullable value type → 非整型+AutoIncrement 三分支
-                // 首中即报——同时具备多问题的主键（如 init-only + Guid+AutoIncrement）只报第一条，
-                // 用户修复后第二轮编译才看到下一条。复合多问题主键在实际代码极罕见；保持单分支
-                // 简化诊断消息。如未来需求增多，可改为聚合多原因的换行列表。
-                IPropertySymbol key = keyProperties[0];
-                // ITM-589: [Key(AutoIncrement = true)] 配合非整型主键（Guid/string 等）时，
-                // TableModel.isAutoIncrement 仅识别 Int64/Int32（TableModel.cs:74），用户意图被静默
-                // 忽略——编译期无诊断，运行时 InsertAsync 会失败或抛奇怪错误。在此显式拒绝。
-                bool autoIncrementEnabled = key.GetAttributes()
-                    .FirstOrDefault(static a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"))?
-                    .NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is not false;
-                string? reason = ClassifyKeyValidity(key, autoIncrementEnabled);
-                if (reason is not null)
-                    ctx.ReportDiagnostic(Diagnostic.Create(InvalidKeyDeclaration,
-                        key.Locations.FirstOrDefault() ?? type.Locations[0], key.Name, type.Name, reason));
-            }
+            AnalyzePrimaryKey(ctx, type);
         }, SymbolKind.NamedType);
 
         // PALORM002 + PALORM003 + PALORM004: 表级验证
@@ -189,201 +159,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             HashSet<string>? assemblyTables = null;
             startContext.RegisterSymbolAction(ctx =>
             {
-            if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type) return;
-            var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
-            if (tableAttribute is null) return;
-
-            if (!SourceGenerationValidation.IsSupportedEntity(type))
-            {
-                ctx.ReportDiagnostic(Diagnostic.Create(
-                    UnsupportedEntityDeclaration,
-                    type.Locations[0],
-                    type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
-                return;
-            }
-
-            bool hasQualifiedTable = tableAttribute.NamedArguments.Any(argument =>
-                    argument.Key is "Schema" or "Database" && argument.Value.Value is string)
-                || type.GetAttributes().Any(attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Schema")
-                    || SourceGenerationValidation.IsPalORMAttribute(attribute, "Database"));  // ITM-512
-            if (hasQualifiedTable)
-                ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedQualifiedTable, type.Locations[0], type.Name));
-
-            bool isSoftDelete = type.GetAttributes().Any(attribute =>
-                SourceGenerationValidation.IsPalORMAttribute(attribute, "SoftDelete"));  // ITM-512
-            // ITM-587: 走基类链（与 TableModel.GetMappableProperties 口径一致）——派生类继承
-            // AuditBase 把 deleted_at 放基类时，type.GetMembers() 只查声明类型会误报 PALORM014。
-            bool hasSoftDeleteColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
-                .Any(static property => property.GetAttributes().Any(attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
-                    && attribute.ConstructorArguments.FirstOrDefault().Value is "deleted_at"));  // ITM-512
-            if (isSoftDelete && !hasSoftDeleteColumn)
-                ctx.ReportDiagnostic(Diagnostic.Create(MissingSoftDeleteColumn, type.Locations[0], type.Name));
-
-            // PALORM018: [TenantAware] 必须映射 tenant_id 列（与 PALORM014 对齐）
-            bool isTenantAware = type.GetAttributes().Any(attribute =>
-                SourceGenerationValidation.IsPalORMAttribute(attribute, "TenantAware"));  // ITM-512
-            // ITM-588: 同 ITM-587——走基类链覆盖 TenantBase 放 tenant_id 的派生类。
-            bool hasTenantColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
-                .Any(static property => property.GetAttributes().Any(attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
-                    && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));  // ITM-512
-            if (isTenantAware && !hasTenantColumn)
-                ctx.ReportDiagnostic(Diagnostic.Create(MissingTenantColumn, type.Locations[0], type.Name));
-
-            // PALORM020: 索引声明有效性——消除 TableModel 静默丢弃与 IF NOT EXISTS/1061 掩蔽（ITM-203）
-            ValidateIndexDeclarations(ctx, type);
-
-            // PALORM021: 列名唯一性——重复 [Column] 生成 INSERT INTO t (x, x) 运行期才炸（ITM-409）。
-            // ITM-585 决策登记：大小写不敏感取最严方言口径（同 ITM-510 索引名）——MySQL 列名
-            // 大小写不敏感，"Name"/"name" 两列在 MySQL 建表即冲突；PG 引号标识符虽区分大小写,
-            // 但依赖大小写区分的两列是跨方言可移植性陷阱，统一拒绝。
-            // ITM-601: 走基类链（同 PALORM014/018）——派生类用 new 隐藏基类同名属性时,
-            // EnumerateMappedProperties 的 seen HashSet 会按"派生优先"自动跳过基类版本,
-            // 与 TableModel 列收集口径一致。
-            var columnOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
-            {
-                var colAttr = member.GetAttributes().FirstOrDefault(a =>
-                    SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
-                string columnName = colAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
-                if (columnOwners.TryGetValue(columnName, out string? firstOwner))
-                {
-                    ctx.ReportDiagnostic(Diagnostic.Create(DuplicateColumnName,
-                        member.Locations.FirstOrDefault() ?? type.Locations[0],
-                        firstOwner, member.Name, type.Name, columnName));
-                }
-                else
-                {
-                    columnOwners.Add(columnName, member.Name);
-                }
-            }
-
-            // ITM-607: 走基类链（同 PALORM001/002/014/018/021）——派生类继承 AuditBase.Version
-            // （基类 [ConcurrencyCheck]）+ 自身 RowVer 时，type.GetMembers() 只查声明类型会漏掉
-            // 基类令牌，与 TableModel.GetMappableProperties（基类链）口径不一致。
-            var concurrencyTokens = SourceGenerationValidation.EnumerateMappedProperties(type)
-                .Where(member => member.GetAttributes().Any(attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "ConcurrencyCheck")))  // ITM-512
-                .ToArray();
-            if (concurrencyTokens.Length > 1)
-                ctx.ReportDiagnostic(Diagnostic.Create(MultipleConcurrencyTokens, type.Locations[0], type.Name));
-            foreach (IPropertySymbol concurrencyToken in concurrencyTokens)
-            {
-                if (concurrencyToken.NullableAnnotation == NullableAnnotation.Annotated
-                    || concurrencyToken.Type.SpecialType is not SpecialType.System_Int32
-                        and not SpecialType.System_Int64)
-                {
-                    ctx.ReportDiagnostic(Diagnostic.Create(InvalidConcurrencyTokenType,
-                        concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0], concurrencyToken.Name));
-                }
-            }
-
-            // 表名集合按需惰性收集：全程序集遍历是 O(类型数) 的，若对每个 [Table] 实体
-            // 无条件执行即 O(N²)（ITM-321）；仅在实体确有 [ForeignKey] 引用校验需求时触发。
-            // ITM-590: assemblyTables 由 CompilationStartAction 闭包持有——首次 FK 检查时填充，
-            // 后续所有类型共享同一份缓存（O(N) 而非 O(N²)）。
-
-            // ITM-607: 走基类链（同 PALORM001/002/013/014/018/021）——派生类继承基类属性的
-            // [Column]/[ForeignKey]/[DefaultValue] 等注解同样需被检查。
-            foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
-            {
-                // PALORM017: 不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"
-                // （ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；FK/DefaultValue/Column 架构参数仍告警）
-                var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
-                if (member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue")))  // ITM-512
-                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[DefaultValue]", member.Name));
-                var columnWithSchemaArgs = member.GetAttributes().FirstOrDefault(a =>
-                    SourceGenerationValidation.IsPalORMAttribute(a, "Column")  // ITM-512
-                    && a.NamedArguments.Any(na => na.Key is "Length" or "Precision" or "Scale" or "TypeName" or "StoreAs"));
-                if (columnWithSchemaArgs is not null)
-                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column] schema arguments (Length/Precision/Scale/TypeName/StoreAs)", member.Name));
-
-                // PALORM002: 属性无 [Column] 注解时建议添加
-                bool hasColumn = member.GetAttributes().Any(a =>
-                    SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
-                var ownedJsonAttr = member.GetAttributes().FirstOrDefault(a =>
-                    SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));  // ITM-512
-                if (ownedJsonAttr is not null
-                    && member.Type.SpecialType != SpecialType.System_String)
-                {
-                    var location = member.Locations.FirstOrDefault() ?? type.Locations[0];
-                    var contextType = ownedJsonAttr.ConstructorArguments.FirstOrDefault().Value as INamedTypeSymbol;
-                    if (type.IsGenericType || type.ContainingType is not null
-                        || contextType is { IsGenericType: true }
-                        || contextType?.ContainingType is not null)
-                    {
-                        ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedOwnedJsonDeclaration,
-                            location, member.Name, type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
-                    }
-                    else if (contextType is null)
-                    {
-                        ctx.ReportDiagnostic(Diagnostic.Create(MissingOwnedJsonContext,
-                            location, member.Name,
-                            member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
-                    }
-                    else if (!SourceGenerationValidation.IsValidOwnedJsonContext(
-                        contextType, member.Type))
-                    {
-                        ctx.ReportDiagnostic(Diagnostic.Create(InvalidOwnedJsonContext,
-                            location,
-                            contextType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
-                            member.Name,
-                            member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
-                    }
-                }
-
-                if (!SourceGenerationValidation.HasValidValueMapping(member))
-                {
-                    ctx.ReportDiagnostic(Diagnostic.Create(
-                        InvalidValueMapping,
-                        member.Locations.FirstOrDefault() ?? type.Locations[0],
-                        member.Name,
-                        member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
-                }
-
-                if (!hasColumn && member.Name != "Id")
-                {
-                    var loc = member.Locations.FirstOrDefault() ?? type.Locations[0];
-                    ctx.ReportDiagnostic(Diagnostic.Create(ColumnNameMismatch, loc, member.Name));
-                }
-
-                // PALORM003: [ForeignKey] 引用不存在的表
-                var fkAttr = member.GetAttributes().FirstOrDefault(a =>
-                    SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
-                if (fkAttr is not null)
-                {
-                    // PALORM017: FK 约束 DDL 当前不被 MigrateAsync 执行
-                    ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl,
-                        memberLocation, "[ForeignKey]", member.Name));
-                }
-                if (fkAttr?.ConstructorArguments.Length >= 2)
-                {
-                    string? refTable = fkAttr.ConstructorArguments[0].Value as string;
-                    // ITM-612: Interlocked.CompareExchange 避免并发下 BuildAssemblyTableNames
-                    // 被多个 Roslyn 工作线程重复调用（EnableConcurrentExecution 下 ??= 有 torn-read 窗口）。
-                    if (assemblyTables is null)
-                        Interlocked.CompareExchange(
-                            ref assemblyTables,
-                            BuildAssemblyTableNames(type.ContainingAssembly),
-                            null);
-                    if (refTable is not null && !assemblyTables!.Contains(refTable))
-                    {
-                        ctx.ReportDiagnostic(Diagnostic.Create(UnknownTable,
-                            member.Locations.FirstOrDefault() ?? type.Locations[0], refTable));
-                    }
-                }
-
-                // PALORM004: [ForeignKey] 但 OnDelete 未显式设置
-                if (fkAttr is not null && fkAttr.NamedArguments.All(na => na.Key != "OnDelete"))
-                {
-                    ctx.ReportDiagnostic(Diagnostic.Create(MissingForeignKey,
-                        member.Locations.FirstOrDefault() ?? type.Locations[0],
-                        member.Name, type.Name));
-                }
-            }
-        }, SymbolKind.NamedType);
+                if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type) return;
+                var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
+                if (tableAttribute is null) return;
+                AnalyzeEntityDiagnostics(ctx, type, ref assemblyTables);
+            }, SymbolKind.NamedType);
         });
 
         // PALORM005: N+1 检测 — 循环中 From<T>() / ORM 调用
@@ -392,39 +172,47 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(ctx =>
         {
             var invocation = (InvocationExpressionSyntax)ctx.Node;
-            if (invocation.Expression is MemberAccessExpressionSyntax ma)
-            {
-                string methodName = ma.Name.Identifier.Text;
-                if (methodName is "From" or "InsertAsync" or "UpdateAsync" or "DeleteAsync"
-                    or "ToListAsync" or "FirstAsync" or "SingleAsync")
-                {
-                    if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
-                            is not IMethodSymbol methodSymbol
-                        || methodSymbol.ContainingNamespace?.ToDisplayString() is not { } containingNs
-                        || (containingNs != "PalORM"
-                            && !containingNs.StartsWith("PalORM.", StringComparison.Ordinal)))
-                    {
-                        return;
-                    }
-                    var parent = invocation.Parent;
-                    while (parent is not null)
-                    {
-                        // ITM-574：循环体内定义、循环外执行的 lambda/局部函数不是 N+1——
-                        // 遇到函数边界即停止向上找循环
-                        if (parent is LambdaExpressionSyntax or LocalFunctionStatementSyntax
-                            or AnonymousMethodExpressionSyntax)
-                            break;
-                        if (parent is ForStatementSyntax or ForEachStatementSyntax
-                            or WhileStatementSyntax or DoStatementSyntax)
-                        {
-                            ctx.ReportDiagnostic(Diagnostic.Create(NPlusOneDetected, invocation.GetLocation()));
-                            break;
-                        }
-                        parent = parent.Parent;
-                    }
-                }
-            }
+            if (invocation.Expression is not MemberAccessExpressionSyntax ma) return;
+            if (!IsPalORMQueryMethod(ma.Name.Identifier.Text)) return;
+            if (!IsPalORMInvocation(ctx, invocation)) return;
+            if (TryFindEnclosingLoop(invocation) is { } loopLocation)
+                ctx.ReportDiagnostic(Diagnostic.Create(NPlusOneDetected, loopLocation));
         }, SyntaxKind.InvocationExpression);
+    }
+
+    /// <summary>判断方法名是否为 PalORM N+1 检测目标的查询方法。</summary>
+    private static bool IsPalORMQueryMethod(string methodName)
+        => methodName is "From" or "InsertAsync" or "UpdateAsync" or "DeleteAsync"
+            or "ToListAsync" or "FirstAsync" or "SingleAsync";
+
+    /// <summary>语义模型确认方法归属 PalORM 命名空间（ITM-574：避免误报 EF Core/MongoDB 等同名方法）。</summary>
+    private static bool IsPalORMInvocation(SyntaxNodeAnalysisContext ctx, InvocationExpressionSyntax invocation)
+    {
+        if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
+                is not IMethodSymbol methodSymbol
+            || methodSymbol.ContainingNamespace?.ToDisplayString() is not { } containingNs)
+            return false;
+        return containingNs == "PalORM"
+            || containingNs.StartsWith("PalORM.", StringComparison.Ordinal);
+    }
+
+    /// <summary>向上查找最近的循环语法节点；遇到函数边界（lambda/局部函数/匿名方法）停止。
+    /// 返回循环内首次调用点的 Location；不在循环内返回 null。
+    /// ITM-574：循环体内定义、循环外执行的 lambda/局部函数不是 N+1。</summary>
+    private static Location? TryFindEnclosingLoop(InvocationExpressionSyntax invocation)
+    {
+        SyntaxNode? parent = invocation.Parent;
+        while (parent is not null)
+        {
+            if (parent is LambdaExpressionSyntax or LocalFunctionStatementSyntax
+                or AnonymousMethodExpressionSyntax)
+                return null;  // 函数边界——非 N+1
+            if (parent is ForStatementSyntax or ForEachStatementSyntax
+                or WhileStatementSyntax or DoStatementSyntax)
+                return invocation.GetLocation();
+            parent = parent.Parent;
+        }
+        return null;
     }
 
     /// <summary>分类主键声明的合法性。返回 null 表示通过；否则返回诊断 reason（ITM-589）。
@@ -446,6 +234,296 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
 
         return null;
+    }
+
+    /// <summary>PALORM001/019/022 主键诊断调度。
+    /// ITM-559：计数走基类链——只查声明成员会对"基类声明 [Key]"的实体误报"无 [Key]"。
+    /// ITM-614：reason 链按 init-only → nullable value type → 非整型+AutoIncrement 三分支首中即报。</summary>
+    private static void AnalyzePrimaryKey(SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        List<IPropertySymbol> keyProperties = SourceGenerationValidation
+            .EnumerateMappedProperties(type)
+            .Where(static property => property.GetAttributes().Any(attribute =>
+                SourceGenerationValidation.IsPalORMAttribute(attribute, "Key")))  // ITM-512
+            .ToList();
+
+        if (keyProperties.Count == 0)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(MissingPrimaryKey, type.Locations[0], type.Name));
+            return;
+        }
+
+        // PALORM019: 复合主键——BindDelete 单 key 语义无法表达，明确拒绝（ITM-311）
+        if (keyProperties.Count > 1)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(CompositePrimaryKey, type.Locations[0], type.Name, keyProperties.Count));
+            return;
+        }
+
+        // PALORM022（ITM-560/561）: 生成器 CanGenerateEntity 会静默跳过的主键形态在此定位报错。
+        IPropertySymbol key = keyProperties[0];
+        // ITM-589: [Key(AutoIncrement = true)] 配合非整型主键（Guid/string 等）时，
+        // TableModel.isAutoIncrement 仅识别 Int64/Int32（TableModel.cs:74），用户意图被静默
+        // 忽略——编译期无诊断，运行时 InsertAsync 会失败或抛奇怪错误。在此显式拒绝。
+        bool autoIncrementEnabled = key.GetAttributes()
+            .FirstOrDefault(static a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"))?
+            .NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is not false;
+        string? reason = ClassifyKeyValidity(key, autoIncrementEnabled);
+        if (reason is not null)
+            ctx.ReportDiagnostic(Diagnostic.Create(InvalidKeyDeclaration,
+                key.Locations.FirstOrDefault() ?? type.Locations[0], key.Name, type.Name, reason));
+    }
+
+    /// <summary>实体级诊断调度器——把原 CC 153 的巨型 lambda 拆分为按诊断规则分组的子方法。
+    /// 子方法均为 static、各自处理一类诊断（PALORM002/003/004/014/017/018/019/020/021/022），
+    /// 主方法只负责按"实体级 → 属性级"顺序调度。</summary>
+    private static void AnalyzeEntityDiagnostics(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, ref HashSet<string>? assemblyTables)
+    {
+        if (!SourceGenerationValidation.IsSupportedEntity(type))
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(
+                UnsupportedEntityDeclaration,
+                type.Locations[0],
+                type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+            return;
+        }
+
+        CheckQualifiedTable(ctx, type);
+        CheckSoftDeleteColumn(ctx, type);     // PALORM014
+        CheckTenantColumn(ctx, type);         // PALORM018
+        ValidateIndexDeclarations(ctx, type); // PALORM020
+        CheckColumnUniqueness(ctx, type);     // PALORM021
+        CheckConcurrencyTokens(ctx, type);    // PALORM022
+        CheckPropertyLevelDiagnostics(ctx, type, ref assemblyTables); // PALORM002/003/004/017/019
+    }
+
+    /// <summary>PALORM013：带 Schema/Database 限定符的 [Table] 不被支持。</summary>
+    private static void CheckQualifiedTable(SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
+        bool hasQualifiedTable = tableAttribute!.NamedArguments.Any(argument =>
+                argument.Key is "Schema" or "Database" && argument.Value.Value is string)
+            || type.GetAttributes().Any(attribute =>
+                SourceGenerationValidation.IsPalORMAttribute(attribute, "Schema")
+                || SourceGenerationValidation.IsPalORMAttribute(attribute, "Database"));  // ITM-512
+        if (hasQualifiedTable)
+            ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedQualifiedTable, type.Locations[0], type.Name));
+    }
+
+    /// <summary>PALORM014：[SoftDelete] 实体必须映射 deleted_at 列。
+    /// ITM-587：走基类链（与 TableModel.GetMappableProperties 口径一致）——派生类继承
+    /// AuditBase 把 deleted_at 放基类时，type.GetMembers() 只查声明类型会误报。</summary>
+    private static void CheckSoftDeleteColumn(SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        bool isSoftDelete = type.GetAttributes().Any(attribute =>
+            SourceGenerationValidation.IsPalORMAttribute(attribute, "SoftDelete"));  // ITM-512
+        if (!isSoftDelete) return;
+
+        bool hasSoftDeleteColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
+            .Any(static property => property.GetAttributes().Any(attribute =>
+                SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
+                && attribute.ConstructorArguments.FirstOrDefault().Value is "deleted_at"));  // ITM-512
+        if (!hasSoftDeleteColumn)
+            ctx.ReportDiagnostic(Diagnostic.Create(MissingSoftDeleteColumn, type.Locations[0], type.Name));
+    }
+
+    /// <summary>PALORM018：[TenantAware] 实体必须映射 tenant_id 列。
+    /// ITM-588：同 ITM-587——走基类链覆盖 TenantBase 放 tenant_id 的派生类。</summary>
+    private static void CheckTenantColumn(SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        bool isTenantAware = type.GetAttributes().Any(attribute =>
+            SourceGenerationValidation.IsPalORMAttribute(attribute, "TenantAware"));  // ITM-512
+        if (!isTenantAware) return;
+
+        bool hasTenantColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
+            .Any(static property => property.GetAttributes().Any(attribute =>
+                SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
+                && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));  // ITM-512
+        if (!hasTenantColumn)
+            ctx.ReportDiagnostic(Diagnostic.Create(MissingTenantColumn, type.Locations[0], type.Name));
+    }
+
+    /// <summary>PALORM021：列名大小写不敏感唯一性——重复 [Column] 生成 INSERT INTO t (x, x) 运行期才炸（ITM-409）。
+    /// ITM-585 决策登记：大小写不敏感取最严方言口径（同 ITM-510 索引名）。
+    /// ITM-601：走基类链（同 PALORM014/018）——派生类用 new 隐藏基类同名属性时，
+    /// EnumerateMappedProperties 的 seen HashSet 会按"派生优先"自动跳过基类版本。</summary>
+    private static void CheckColumnUniqueness(SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        var columnOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
+        {
+            var colAttr = member.GetAttributes().FirstOrDefault(a =>
+                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+            string columnName = colAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
+            if (columnOwners.TryGetValue(columnName, out string? firstOwner))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(DuplicateColumnName,
+                    member.Locations.FirstOrDefault() ?? type.Locations[0],
+                    firstOwner, member.Name, type.Name, columnName));
+            }
+            else
+            {
+                columnOwners.Add(columnName, member.Name);
+            }
+        }
+    }
+
+    /// <summary>PALORM022：[ConcurrencyCheck] 多令牌拒绝 + 类型/可空性校验。
+    /// ITM-607：走基类链——派生类继承 AuditBase.Version（基类 [ConcurrencyCheck]）+ 自身
+    /// RowVer 时，type.GetMembers() 只查声明类型会漏掉基类令牌。</summary>
+    private static void CheckConcurrencyTokens(SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        var concurrencyTokens = SourceGenerationValidation.EnumerateMappedProperties(type)
+            .Where(member => member.GetAttributes().Any(attribute =>
+                SourceGenerationValidation.IsPalORMAttribute(attribute, "ConcurrencyCheck")))  // ITM-512
+            .ToArray();
+        if (concurrencyTokens.Length > 1)
+            ctx.ReportDiagnostic(Diagnostic.Create(MultipleConcurrencyTokens, type.Locations[0], type.Name));
+
+        foreach (IPropertySymbol concurrencyToken in concurrencyTokens)
+        {
+            if (concurrencyToken.NullableAnnotation == NullableAnnotation.Annotated
+                || concurrencyToken.Type.SpecialType is not SpecialType.System_Int32
+                    and not SpecialType.System_Int64)
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(InvalidConcurrencyTokenType,
+                    concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0], concurrencyToken.Name));
+            }
+        }
+    }
+
+    /// <summary>属性级诊断集合——PALORM002/003/004/017/019 单遍遍历检查。
+    /// 表名集合按需惰性收集：全程序集遍历是 O(类型数)，对每个 [Table] 无条件执行即 O(N²)（ITM-321）；
+    /// 仅在实体确有 [ForeignKey] 引用校验需求时触发。
+    /// ITM-590：assemblyTables 由 CompilationStartAction 闭包持有——首次 FK 检查时填充，
+    /// 后续所有类型共享同一份缓存（O(N) 而非 O(N²)）。
+    /// ITM-607：走基类链（同 PALORM001/002/013/014/018/021）。</summary>
+    private static void CheckPropertyLevelDiagnostics(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, ref HashSet<string>? assemblyTables)
+    {
+        foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
+        {
+            var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
+
+            CheckAnnotationNotApplied(ctx, member, memberLocation);              // PALORM017
+            CheckOwnedJson(ctx, type, member);                                    // PALORM019
+            CheckValueMapping(ctx, member);                                       // 值映射
+            CheckColumnNameMismatch(ctx, member, type);                           // PALORM002
+            CheckForeignKey(ctx, member, type, memberLocation, ref assemblyTables); // PALORM003/004
+        }
+    }
+
+    /// <summary>PALORM017：不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"。
+    /// ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；FK/DefaultValue/Column 架构参数仍告警。</summary>
+    private static void CheckAnnotationNotApplied(
+        SymbolAnalysisContext ctx, IPropertySymbol member, Location memberLocation)
+    {
+        if (member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue")))  // ITM-512
+            ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[DefaultValue]", member.Name));
+
+        var columnWithSchemaArgs = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Column")  // ITM-512
+            && a.NamedArguments.Any(na => na.Key is "Length" or "Precision" or "Scale" or "TypeName" or "StoreAs"));
+        if (columnWithSchemaArgs is not null)
+            ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column] schema arguments (Length/Precision/Scale/TypeName/StoreAs)", member.Name));
+    }
+
+    /// <summary>PALORM019：[OwnedJson] 必须是 string 属性 + 有效的 JsonSerializerContext。
+    /// 三种失败：声明位置不合法（泛型/嵌套）、缺少上下文、上下文无效。</summary>
+    private static void CheckOwnedJson(SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        var ownedJsonAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));  // ITM-512
+        if (ownedJsonAttr is null || member.Type.SpecialType == SpecialType.System_String) return;
+
+        var location = member.Locations.FirstOrDefault() ?? type.Locations[0];
+        var contextType = ownedJsonAttr.ConstructorArguments.FirstOrDefault().Value as INamedTypeSymbol;
+
+        if (type.IsGenericType || type.ContainingType is not null
+            || contextType is { IsGenericType: true }
+            || contextType?.ContainingType is not null)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedOwnedJsonDeclaration,
+                location, member.Name, type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+        }
+        else if (contextType is null)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(MissingOwnedJsonContext,
+                location, member.Name,
+                member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+        }
+        else if (!SourceGenerationValidation.IsValidOwnedJsonContext(contextType, member.Type))
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(InvalidOwnedJsonContext,
+                location,
+                contextType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                member.Name,
+                member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+        }
+    }
+
+    /// <summary>值映射校验：CLR 类型到 provider 类型的映射必须合法。</summary>
+    private static void CheckValueMapping(SymbolAnalysisContext ctx, IPropertySymbol member)
+    {
+        if (SourceGenerationValidation.HasValidValueMapping(member)) return;
+
+        ctx.ReportDiagnostic(Diagnostic.Create(
+            InvalidValueMapping,
+            member.Locations.FirstOrDefault() ?? member.ContainingType.Locations[0],
+            member.Name,
+            member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+    }
+
+    /// <summary>PALORM002：属性无 [Column] 注解时建议添加（除 Id 主键外）。</summary>
+    private static void CheckColumnNameMismatch(SymbolAnalysisContext ctx, IPropertySymbol member, INamedTypeSymbol type)
+    {
+        bool hasColumn = member.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+        if (!hasColumn && member.Name != "Id")
+        {
+            var loc = member.Locations.FirstOrDefault() ?? type.Locations[0];
+            ctx.ReportDiagnostic(Diagnostic.Create(ColumnNameMismatch, loc, member.Name));
+        }
+    }
+
+    /// <summary>PALORM003/004：[ForeignKey] 引用合法性 + OnDelete 必填。
+    /// PALORM017：FK 约束 DDL 当前不被 MigrateAsync 执行。
+    /// ITM-612：Interlocked.CompareExchange 避免并发下 BuildAssemblyTableNames 被多线程重复调用。</summary>
+    private static void CheckForeignKey(
+        SymbolAnalysisContext ctx, IPropertySymbol member, INamedTypeSymbol type,
+        Location memberLocation, ref HashSet<string>? assemblyTables)
+    {
+        var fkAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
+        if (fkAttr is null) return;
+
+        ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl,
+            memberLocation, "[ForeignKey]", member.Name));
+
+        // PALORM003：引用不存在的表
+        if (fkAttr.ConstructorArguments.Length >= 2)
+        {
+            string? refTable = fkAttr.ConstructorArguments[0].Value as string;
+            if (assemblyTables is null)
+                Interlocked.CompareExchange(
+                    ref assemblyTables,
+                    BuildAssemblyTableNames(type.ContainingAssembly),
+                    null);
+            if (refTable is not null && !assemblyTables!.Contains(refTable))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(UnknownTable,
+                    member.Locations.FirstOrDefault() ?? type.Locations[0], refTable));
+            }
+        }
+
+        // PALORM004：OnDelete 未显式设置
+        if (fkAttr.NamedArguments.All(na => na.Key != "OnDelete"))
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(MissingForeignKey,
+                member.Locations.FirstOrDefault() ?? type.Locations[0],
+                member.Name, type.Name));
+        }
     }
 
     /// <summary>PALORM020：空列 [Index]、同实体重名索引、[Unique] 派生名 ux_ 与显式 [Index] 名冲突。
