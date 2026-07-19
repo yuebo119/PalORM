@@ -38,7 +38,20 @@ public sealed class ResilienceExecutor
         ArgumentOutOfRangeException.ThrowIfNegative(options.CircuitBreakerThreshold);
 
         _maxRetries = options.MaxRetries;
-        _backoff = options.RetryBackoff ?? GetDefaultBackoff;
+        // ITM-605: 包装 _backoff 统一覆盖两路径（DataSession.CreateAsync 连接重试 +
+        // ResilienceExecutor.ExecuteAsync 命令重试）——此前 ITM-603 只在 CreateAsync 调用点
+        // 加守卫，命令路径 Task.Delay(_backoff(attempt)) 抛 AOORE("delay") 不指向 RetryBackoff 配置。
+        // 包装到构造函数后，所有走 ResilienceExecutor 的路径共享同一校验逻辑。
+        Func<int, TimeSpan> sourceBackoff = options.RetryBackoff ?? GetDefaultBackoff;
+        _backoff = attempt =>
+        {
+            TimeSpan delay = sourceBackoff(attempt);
+            if (delay < TimeSpan.Zero)
+                throw new InvalidOperationException(
+                    $"DbOptions.RetryBackoff(attempt={attempt}) returned a negative TimeSpan ({delay}). "
+                    + "The delegate must return a non-negative delay.");
+            return delay;
+        };
         _timeout = options.CommandTimeout;
         _isTransient = isTransient;
         _circuitBreakerThreshold = options.CircuitBreakerThreshold;

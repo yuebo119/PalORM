@@ -63,6 +63,8 @@
 | G26 | QueryBuilder 保持 struct 声明（class 化即高 QPS 堆分配回退，写时复制语义失效；原候补 C1 脚本化） | STD-PERF | 阻断 |
 | G27 | src/ 全域 CS1591 强制不回退（全局 NoWarn 不得重新纳入 CS1591；测试/AotModels/Benchmarks 条件豁免在案；原候补 C3 的守卫） | STD-ARCH | 阻断 |
 | G28 | 禁止裸 `(int)…CommandTimeout.TotalSeconds` 截断（亚秒塌缩为 0=ADO 无限等待；须走 CommandTimeoutSeconds 向上取整，ITM-501 下沉） | STD-ASYNC | 阻断 |
+| G29 | 绕过 CreateCommand 工厂的执行型命令必须设 CommandTimeout（DataSession.CreateCommand 工厂已集中；探测/暂存命令豁免；ITM-557 下沉） | STD-ASYNC | 阻断 |
+| G30 | PalORMAnalyzer 基类链口径统一——属性枚举必须用 `SourceGenerationValidation.EnumerateMappedProperties`，不得 `type.GetMembers().OfType<IPropertySymbol>()`（与 TableModel.GetMappableProperties 口径一致；ITM-607 下沉） | STD-ARCH | 阻断 |
 
 ### 候补检查（未脚本化，需 AI 人工核验）
 
