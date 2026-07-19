@@ -77,12 +77,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 }
                 TimeSpan delay = options.RetryBackoff?.Invoke(attempt)
                     ?? ResilienceExecutor.GetDefaultBackoff(attempt);
-                // ITM-603: 自定义 RetryBackoff 委托返回负值会让 Task.Delay 抛
+                // ITM-603/605: 自定义 RetryBackoff 委托返回负值会让 Task.Delay 抛
                 // ArgumentOutOfRangeException（参数名"delay"），错误消息不指向 RetryBackoff 配置。
-                // 显式拒绝，提示调用方修正委托实现。
+                // 显式拒绝，消息与 ResilienceExecutor 构造函数包装守卫对齐（两路径共享口径）。
                 if (delay < TimeSpan.Zero)
                     throw new InvalidOperationException(
-                        $"DbOptions.RetryBackoff delegate returned a negative TimeSpan ({delay}). " +
+                        $"DbOptions.RetryBackoff(attempt={attempt}) returned a negative TimeSpan ({delay}). " +
                         "The delegate must return a non-negative delay.");
                 await Task.Delay(delay, ct).ConfigureAwait(false);
             }
@@ -577,6 +577,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 调用 CommitAsync()/RollbackAsync() 后需再次设置或清空 (UseTransaction(null))。</summary>
     public DataSession<TProvider> UseTransaction(DbTransaction? tran)
     {
+        // ITM-606: 先查 disposed——tran.Connection == null 时下方 ReferenceEquals 永远 false，
+        // 会遮蔽 SessionOperationState.UseTransaction 中"Cannot use a disposed transaction"的精确消息。
+        if (tran is not null && tran.Connection is null)
+            throw new ArgumentException("Cannot use a disposed transaction (its Connection is null). "
+                + "Pass a transaction from an open DbConnection, or null to clear.", nameof(tran));
         if (tran is not null && !ReferenceEquals(tran.Connection, _conn))
             throw new ArgumentException("事务必须属于当前 DataSession 的主连接。", nameof(tran));
         _operationState.UseTransaction(tran);

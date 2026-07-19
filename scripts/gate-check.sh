@@ -212,6 +212,15 @@ for f in src/PalORM.Core/*.cs src/PalORM.Sqlite/*.cs src/PalORM.MySql/*.cs src/P
 done
 check_zero G29 '绕过 CreateCommand 工厂的执行型命令必须设 CommandTimeout（ITM-557）' "$timeout_missing"
 
+# G30：PalORMAnalyzer 基类链口径统一（ITM-607 下沉）——所有需走基类链的属性枚举必须用
+# SourceGenerationValidation.EnumerateMappedProperties，不得用 type.GetMembers().OfType<IPropertySymbol>()。
+# ITM-587/588/601/607 同根因类四例：分析器与 TableModel.GetMappableProperties 口径漂移致派生类
+# 继承基类列时误报或漏报。
+base_chain_violations=$(grep -c 'type\.GetMembers()\.OfType<IPropertySymbol>' \
+    src/PalORM.SourceGen/PalORMAnalyzer.cs 2>/dev/null)
+[ -z "$base_chain_violations" ] && base_chain_violations=0
+check_zero G30 'PalORMAnalyzer 基类链口径统一（用 EnumerateMappedProperties，ITM-607）' "$base_chain_violations"
+
 printf '\n通过：%s  警告：%s  失败：%s  总计：%s\n' "$PASSED" "$WARNED" "$FAILED" "$((PASSED + WARNED + FAILED))"
 printf '═══════ 扫描完成 ═══════\n'
 
