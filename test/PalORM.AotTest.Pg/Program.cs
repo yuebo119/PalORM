@@ -57,7 +57,10 @@ internal static class Program
     internal static async Task Main()
     {
         string connectionString = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
-            ?? throw new InvalidOperationException("PALORM_PG_CONNECTION is required");
+            ?? throw new InvalidOperationException(
+                "PALORM_PG_CONNECTION is required. "
+                + "Run 'source scripts/set-test-env.sh' after creating .env.test, "
+                + "or set PALORM_PG_* variables for appsettings.test.json template expansion.");
         var options = new DbOptions { ConnectionString = connectionString };
         DataSession<PostgreSqlProvider> db = await DataSession<PostgreSqlProvider>.CreateAsync(options).ConfigureAwait(false);
         await using (db.ConfigureAwait(false))

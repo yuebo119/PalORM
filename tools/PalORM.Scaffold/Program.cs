@@ -5,11 +5,16 @@ if (args.Length < 1)
 {
     Console.WriteLine("PalORM Scaffold — SQLite schema → C# entity generator");
     Console.WriteLine("Usage: dotnet run -- <connection-string> [namespace]");
+    Console.WriteLine("  connection-string  SQLite 连接串（如 Data Source=my.db）");
+    Console.WriteLine("  namespace          生成的命名空间（默认 Models，或读 PALORM_SCAFFOLD_NAMESPACE 环境变量）");
     return 1;
 }
 
 string connectionString = args[0];
-string targetNamespace = args.Length > 1 ? args[1] : "Models";
+// 命令行参数优先；其次 PALORM_SCAFFOLD_NAMESPACE 环境变量；最后内置默认值。
+string targetNamespace = args.Length > 1
+    ? args[1]
+    : Environment.GetEnvironmentVariable("PALORM_SCAFFOLD_NAMESPACE") ?? "Models";
 
 using var connection = new SqliteConnection(connectionString);
 connection.Open();
