@@ -520,9 +520,12 @@ public struct QueryBuilder<T> where T : class, new()
     internal void AddWhereComparison<TKey>(Expression<Func<T, TKey>> member,
         string operation, TKey value)
     {
+        // ITM-555：键集续页条件走 DefaultFilter 类别而非 Where——AppendWhereSection 对
+        // DefaultFilter 恒以 AND 拼在用户子句组括号之外（WHERE keyset AND ((A) OR (B))）。
+        // 若并入 Where 组，用户 OrWhere 的 OR 优先级会使续页条件仅约束末分支，
+        // 页间重复、分页不推进（ITM-401 括组根因的新入口，真库探针实测）。
         DbParameter parameter = CreateParameter(value);
-        AddClause(QueryClauseKind.Where,
-            $"{(HasClause(QueryClauseKind.Where) ? "AND " : "")}" +
+        AddClause(QueryClauseKind.DefaultFilter,
             $"{GetQualifiedColumnName(member)} {operation} {parameter.ParameterName}", [parameter]);
     }
 

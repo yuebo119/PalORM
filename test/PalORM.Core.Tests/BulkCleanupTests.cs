@@ -91,9 +91,9 @@ public sealed class BulkCleanupTests
         return provider switch
         {
             "sqlite" => SqliteProvider.BulkInsertAsync(
-                connection, null, entities, 100, CancellationToken.None),
+                connection, null, entities, 100, 30, CancellationToken.None),
             "mysql" => MySqlProvider.BulkInsertAsync(
-                connection, null, entities, 100, CancellationToken.None),
+                connection, null, entities, 100, 30, CancellationToken.None),
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
     }

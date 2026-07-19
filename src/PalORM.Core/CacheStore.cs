@@ -43,8 +43,14 @@ public sealed class BoundedQueryCache : IQueryCache
         {
             if (!entry.IsExpired())
             {
-                value = (T)entry.Value;
-                return true;
+                // ITM-558：两个实体类型误用同一 WithCache key 时，硬强转会抛不含 key 的
+                // InvalidCastException。类型不匹配按 miss 处理并移除旧条目——后写者胜，
+                // 与"缓存未命中是正确性中性的"设计一致。
+                if (entry.Value is T typed)
+                {
+                    value = typed;
+                    return true;
+                }
             }
             _cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry));
         }
@@ -78,6 +84,9 @@ public sealed class BoundedQueryCache : IQueryCache
     private sealed class CacheEntry(object value, TimeSpan ttl)
     {
         public object Value { get; } = value;
+        // ITM-586：与 Resilience（ITM-538）同款已知取舍——UtcNow 墙钟受 NTP 回拨影响，
+        // 回拨仅延长条目存活（正确性中性：缓存多活≠错误数据，写路径会覆盖）。
+        // 换 Environment.TickCount64 需处理 49.7 天回绕，不值得为缓存 TTL 引入。
         private DateTime ExpiresAt { get; } = DateTime.UtcNow.Add(ttl);
         public bool IsExpired() => DateTime.UtcNow > ExpiresAt;
     }
