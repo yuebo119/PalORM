@@ -641,29 +641,10 @@ public struct QueryBuilder<T> where T : class, new()
             AppendComments(ref sb);
             AppendCtes(ref sb);
             sb.Append("SELECT ");
-            string sourceName = _cteName ?? _tableName;
-            if (_selectColumns is not null)
-            {
-                sb.Append(_selectColumns);
-            }
-            else
-            {
-                for (int index = 0; index < _columnNames.Count; index++)
-                {
-                    if (index > 0) sb.Append(", ");
-                    sb.Append(_quoteIdentifier(sourceName));
-                    sb.Append('.');
-                    sb.Append(_quoteIdentifier(_columnNames[index]));
-                }
-            }
-            foreach (QueryClause window in _clauses)
-            {
-                if (window.Kind != QueryClauseKind.Window) continue;
-                sb.Append(", ");
-                sb.Append(window.Sql);
-            }
+            AppendSelectColumns(ref sb);
+            AppendWindowClauses(ref sb);
             sb.Append(" FROM ");
-            sb.Append(_quoteIdentifier(sourceName));
+            sb.Append(_quoteIdentifier(_cteName ?? _tableName));
             sb.Append(' ');
             if (!_splitQuery) AppendClauses(ref sb, QueryClauseKind.Join);
             AppendWhereSection(ref sb);
@@ -681,6 +662,35 @@ public struct QueryBuilder<T> where T : class, new()
             return sb.ToString().TrimEnd();
         }
         finally { sb.Dispose(); }
+    }
+
+    /// <summary>追加 SELECT 子句的列列表：显式列 vs 全列（带表名前缀）。</summary>
+    private void AppendSelectColumns(ref ValueStringBuilder sb)
+    {
+        string sourceName = _cteName ?? _tableName;
+        if (_selectColumns is not null)
+        {
+            sb.Append(_selectColumns);
+            return;
+        }
+        for (int index = 0; index < _columnNames.Count; index++)
+        {
+            if (index > 0) sb.Append(", ");
+            sb.Append(_quoteIdentifier(sourceName));
+            sb.Append('.');
+            sb.Append(_quoteIdentifier(_columnNames[index]));
+        }
+    }
+
+    /// <summary>追加窗口函数列——出现在 SELECT 列表后段（与普通列以逗号分隔）。</summary>
+    private void AppendWindowClauses(ref ValueStringBuilder sb)
+    {
+        foreach (QueryClause window in _clauses)
+        {
+            if (window.Kind != QueryClauseKind.Window) continue;
+            sb.Append(", ");
+            sb.Append(window.Sql);
+        }
     }
 
     internal static string FormatFormattableSql(FormattableString sql, int baseIndex)

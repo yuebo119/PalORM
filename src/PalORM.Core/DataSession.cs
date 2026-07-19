@@ -189,50 +189,61 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbCommand cmd = CreateCommand();
         CommandSqlSet sqls = GetCommandSqls<T>(metadata.Sqls);
-        // 分支1: PG/SQLite —— RETURNING 子句, INSERT 同时返回完整行(含自增ID), 单次往返
-        if (TProvider.SupportsReturningClause)
+
+        // 双路径分发：PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID。
+        // 未来第三方 Provider 无 RETURNING 且非 MySQL 方言，在 LAST_INSERT_ID 分支被显式拒绝。
+        return TProvider.SupportsReturningClause
+            ? await InsertWithReturningAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false)
+            : await InsertWithLastInsertIdAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>PG/SQLite 路径——INSERT ... RETURNING 单次往返物化完整行（含自增 ID）。
+    /// ITM-325：调用方持有的传入实体引用同步回填自增 ID（DB 计算列仍以返回实例为准）。</summary>
+    private async ValueTask<T> InsertWithReturningAsync<T>(
+        DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, CancellationToken ct)
+        where T : class, new()
+    {
+        cmd.CommandText = sqls.InsertReturning;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        metadata.BindInsert(cmd, entity);
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
+
+        T materialized = ((IRowFactory<T>)metadata.RowFactory).Read(reader);
+        // 回填对齐 MySQL 路径（ITM-325）
+        if (PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
+            && PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pkColumn))
         {
-            cmd.CommandText = sqls.InsertReturning;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            metadata.BindInsert(cmd, entity);
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            if (await reader.ReadAsync(ct).ConfigureAwait(false))
-            {
-                T materialized = ((IRowFactory<T>)metadata.RowFactory).Read(reader);
-                // 回填对齐 MySQL 路径（ITM-325）：调用方继续持有传入实体引用时，
-                // 两方言下至少自增 ID 一致可见；完整 DB 计算列仍以返回实例为准
-                if (PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
-                    && PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pkColumn))
-                {
-                    int pkOrdinal = reader.GetOrdinal(pkColumn);
-                    if (!await reader.IsDBNullAsync(pkOrdinal, ct).ConfigureAwait(false))
-                        backfill(entity, reader.GetInt64(pkOrdinal));
-                }
-                return materialized;
-            }
+            int pkOrdinal = reader.GetOrdinal(pkColumn);
+            if (!await reader.IsDBNullAsync(pkOrdinal, ct).ConfigureAwait(false))
+                backfill(entity, reader.GetInt64(pkOrdinal));
         }
-        // 分支2: MySQL —— 无 RETURNING, INSERT + SELECT LAST_INSERT_ID 合并为单次 ExecuteScalarAsync
-        else
+        return materialized;
+    }
+
+    /// <summary>MySQL 路径——INSERT + SELECT LAST_INSERT_ID() 合并为单次 ExecuteScalarAsync。
+    /// 显式方言守卫：未来第三方 Provider 走到此处应明确失败，而非收到 LAST_INSERT_ID 专有 SQL。</summary>
+    private async ValueTask<T> InsertWithLastInsertIdAsync<T>(
+        DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, CancellationToken ct)
+        where T : class, new()
+    {
+        if (TProvider.Dialect != SqlDialect.MySql)
+            throw new NotSupportedException(
+                $"Provider '{TProvider.Name}' does not support RETURNING and has no insert-id strategy; " +
+                "only the MySQL dialect fallback (LAST_INSERT_ID) is implemented.");
+
+        cmd.CommandText = sqls.Insert + "; SELECT LAST_INSERT_ID();";
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        metadata.BindInsert(cmd, entity);
+        long? generatedId = NormalizeGeneratedId(
+            await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
+        if (generatedId is long id &&
+            PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? setId))
         {
-            // 显式方言守卫："无 RETURNING" 不等于 "MySQL 语法"。
-            // 未来第三方 Provider 走到此处应明确失败，而非收到 LAST_INSERT_ID 专有 SQL。
-            if (TProvider.Dialect != SqlDialect.MySql)
-                throw new NotSupportedException(
-                    $"Provider '{TProvider.Name}' does not support RETURNING and has no insert-id strategy; " +
-                    "only the MySQL dialect fallback (LAST_INSERT_ID) is implemented.");
-            cmd.CommandText = sqls.Insert + "; SELECT LAST_INSERT_ID();";
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            metadata.BindInsert(cmd, entity);
-            long? generatedId = NormalizeGeneratedId(
-                await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
-            if (generatedId is long id &&
-                PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? setId))
-            {
-                setId(entity, id);
-            }
-            return entity;
+            setId(entity, id);
         }
-        throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
+        return entity;
     }
 
     internal static long? NormalizeGeneratedId(object? value)
