@@ -577,6 +577,87 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(compileErrors).IsEmpty();
     }
 
+    // ─── 基类链判定口径漂移（ITM-587/588/601）───
+    // 派生类继承 AuditBase/TenantBase 放列、用 new 隐藏基类同名属性时，
+    // PALORM014/018/021 必须走 EnumerateMappedProperties（同 TableModel）——不得误报。
+
+    [Test]
+    public async Task SoftDeleteColumnInBase_DoesNotReportPalorm014()
+    {
+        // ITM-587：派生类继承 AuditBase（基类含 deleted_at）+ [SoftDelete] ——不得误报 PALORM014。
+        const string source = """
+            using PalORM;
+            public abstract class AuditBase
+            {
+                [Column("deleted_at")] public System.DateTime? DeletedAt { get; set; }
+            }
+            [Table("orders_softdelete_base")]
+            [SoftDelete]
+            public sealed class OrderSoftDeleteBase : AuditBase
+            {
+                [Key] public long Id { get; set; }
+                [Column("status")] public string Status { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM014")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task TenantColumnInBase_DoesNotReportPalorm018()
+    {
+        // ITM-588：派生类继承 TenantBase（基类含 tenant_id）+ [TenantAware] ——不得误报 PALORM018。
+        const string source = """
+            using PalORM;
+            public abstract class TenantBase
+            {
+                [Column("tenant_id")] public string TenantId { get; set; } = "";
+            }
+            [Table("docs_tenant_base")]
+            [TenantAware]
+            public sealed class DocTenantBase : TenantBase
+            {
+                [Key] public long Id { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM018")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task NewHiddenBaseColumn_DoesNotReportPalorm021()
+    {
+        // ITM-601：派生类用 new 隐藏基类同名属性——EnumerateMappedProperties 的 seen 集合
+        // 按派生优先跳过基类版本，与 TableModel 列收集口径一致，不得误报 PALORM021。
+        const string source = """
+            using PalORM;
+            public abstract class NamedBase
+            {
+                [Column("name")] public virtual string Name { get; set; } = "";
+            }
+            [Table("derived_named")]
+            public sealed class DerivedNamed : NamedBase
+            {
+                [Column("name")] public override string Name { get; set; } = "";
+                [Key] public long Id { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM021")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
     // ITM-510：索引名大小写碰撞（MySQL 大小写不敏感）——ix_Foo/ix_foo 应报 PALORM020。
     [Test]
     public async Task IndexNames_DifferingOnlyByCase_ReportsPalorm020()
