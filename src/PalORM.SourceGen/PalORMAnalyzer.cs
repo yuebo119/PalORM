@@ -162,7 +162,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 ctx.ReportDiagnostic(Diagnostic.Create(CompositePrimaryKey, type.Locations[0], type.Name, keyProperties.Count));
             else
             {
-                // PALORM022（ITM-560/561）: 生成器 CanGenerateEntity 会静默跳过的主键形态在此定位报错
+                // PALORM022（ITM-560/561）: 生成器 CanGenerateEntity 会静默跳过的主键形态在此定位报错。
+                // ITM-614: reason 链按 init-only → nullable value type → 非整型+AutoIncrement 三分支
+                // 首中即报——同时具备多问题的主键（如 init-only + Guid+AutoIncrement）只报第一条，
+                // 用户修复后第二轮编译才看到下一条。复合多问题主键在实际代码极罕见；保持单分支
+                // 简化诊断消息。如未来需求增多，可改为聚合多原因的换行列表。
                 IPropertySymbol key = keyProperties[0];
                 // ITM-589: [Key(AutoIncrement = true)] 配合非整型主键（Guid/string 等）时，
                 // TableModel.isAutoIncrement 仅识别 Int64/Int32（TableModel.cs:74），用户意图被静默
@@ -363,8 +367,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 if (fkAttr?.ConstructorArguments.Length >= 2)
                 {
                     string? refTable = fkAttr.ConstructorArguments[0].Value as string;
-                    assemblyTables ??= BuildAssemblyTableNames(type.ContainingAssembly);
-                    if (refTable is not null && !assemblyTables.Contains(refTable))
+                    // ITM-612: Interlocked.CompareExchange 避免并发下 BuildAssemblyTableNames
+                    // 被多个 Roslyn 工作线程重复调用（EnableConcurrentExecution 下 ??= 有 torn-read 窗口）。
+                    if (assemblyTables is null)
+                        Interlocked.CompareExchange(
+                            ref assemblyTables,
+                            BuildAssemblyTableNames(type.ContainingAssembly),
+                            null);
+                    if (refTable is not null && !assemblyTables!.Contains(refTable))
                     {
                         ctx.ReportDiagnostic(Diagnostic.Create(UnknownTable,
                             member.Locations.FirstOrDefault() ?? type.Locations[0], refTable));
