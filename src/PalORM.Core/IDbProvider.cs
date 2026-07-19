@@ -69,9 +69,11 @@ public interface IDbProvider
     /// 默认 false；无 CREATE INDEX IF NOT EXISTS 语法的方言（MySQL）覆盖为真实判定。</summary>
     static virtual bool IsDuplicateSchemaObject(Exception exception) => false;
 
-    /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。</summary>
+    /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。
+    /// <para>ITM-557: <paramref name="commandTimeoutSeconds"/> 为会话 CommandTimeout——
+    /// 批量命令必须应用，否则慢库上按驱动默认（约 30s）超时，与配置意图相反。</para></summary>
     static virtual Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int batchSize, CancellationToken ct)
+        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
     {
         throw new NotSupportedException("Override BulkInsertAsync in your provider for optimized bulk insert.");

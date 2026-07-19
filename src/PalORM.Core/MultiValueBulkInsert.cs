@@ -12,7 +12,8 @@ public static class MultiValueBulkInsert
     /// <summary>多值 INSERT 分批写入实体列表，返回受影响总行数。批次大小取
     /// <paramref name="batchSize"/> 与参数上限 <paramref name="maxParametersPerStatement"/>/列数的较小者；
     /// <paramref name="transaction"/> 为 null 时自建事务并在全部批次成功后提交，
-    /// 传入外部事务时提交/回滚由调用方负责。</summary>
+    /// 传入外部事务时提交/回滚由调用方负责。
+    /// <paramref name="commandTimeoutSeconds"/> 应用到每个批量命令（ITM-557）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100", Justification = "表名/列名来自源生成器")]
     public static async Task<long> ExecuteAsync<T>(
         DbConnection conn,
@@ -22,9 +23,11 @@ public static class MultiValueBulkInsert
         int maxParametersPerStatement,
         Func<string, string> quoteIdentifier,
         Func<string, object?, DbParameter> createParameter,
+        int commandTimeoutSeconds,
         CancellationToken ct)
         where T : class, new()
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(commandTimeoutSeconds);
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);
         ArgumentNullException.ThrowIfNull(quoteIdentifier);
@@ -101,6 +104,7 @@ public static class MultiValueBulkInsert
                     try
                     {
                         cmd.Transaction = tran;
+                        cmd.CommandTimeout = commandTimeoutSeconds;
                         cmd.CommandText =
                             $"INSERT INTO {quotedTable} ({quotedColumns}) VALUES " +
                             string.Join(", ", rowPlaceholders);

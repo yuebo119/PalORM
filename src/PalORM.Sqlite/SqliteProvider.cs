@@ -93,10 +93,10 @@ public sealed class SqliteProvider : IDbProvider
 
     /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 999。</summary>
     public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int batchSize, CancellationToken ct)
+        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
         => MultiValueBulkInsert.ExecuteAsync(
             conn, transaction, entities, batchSize,
             maxParametersPerStatement: 999,
-            QuoteIdentifier, CreateParameter, ct);
+            QuoteIdentifier, CreateParameter, commandTimeoutSeconds, ct);
 }

@@ -82,9 +82,12 @@ public sealed class PostgreSqlProvider : IDbProvider
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1062", Justification = "conn 在外层已有验证")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100", Justification = "表名/列名来自源生成器")]
     public static async Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int batchSize, CancellationToken ct)
+        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
     {
+        // ITM-557 注记：COPY 路径经 NpgsqlBinaryImporter 而非 DbCommand，无 CommandTimeout 挂点；
+        // 写入超时由 Npgsql 连接串 CommandTimeout/取消令牌治理。参数保留以维持接口对称。
+        _ = commandTimeoutSeconds;
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);

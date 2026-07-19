@@ -150,6 +150,62 @@ public sealed class QueryTests
 
     [Test] public async Task PartialEntityProjection_ExecutionIsRejected() { await using var db=await TestDb.SqliteAsync(); await db.MigrateAsync(); await Assert.That(async()=>await db.From<Order>().Select(item=>item.Status).ToListAsync()).Throws<NotSupportedException>(); }
 
+    // ITM-555 下沉：键集续页条件必须约束用户 OR 组的全部分支——页间无重复、可推进到穷尽
+    [Test] public async Task ToPageAsync_KeysetConditionConstrainsAllOrBranches()
+    {
+        await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync();
+        await InsertOrdersAsync(db, 6, i => new Order { Status = i % 2 == 0 ? "A" : "B", Total = i * 10m, CreatedAt = 0 });
+        var seen = new HashSet<long>();
+        long? last = null; long total = 0;
+#pragma warning disable PALORM005 // 分页循环本质就是逐页查询，非 N+1（ITM-574 已登记该误报形态）
+        for (int page = 0; page < 10; page++)
+        {
+            var query = db.From<Order>().Where($"status = {"A"}").OrWhere($"status = {"B"}");
+            var (rows, pageTotal) = last is null
+                ? await query.ToPageAsync(2, o => o.Id)
+                : await query.ToPageAsync(2, o => o.Id, last.Value);
+            total = pageTotal;
+            if (rows.Count == 0) break;
+            foreach (var row in rows)
+                await Assert.That(seen.Add(row.Id)).IsTrue();  // 页间重复 = ITM-555 回归
+            last = rows[^1].Id;
+        }
+#pragma warning restore PALORM005
+        await Assert.That(seen.Count).IsEqualTo(6);
+        await Assert.That(total).IsEqualTo(6);
+    }
+
+    // ITM-556 下沉：BulkUpdate 中途冲突整批回滚后，已成功条目重试不得假冲突
+    [Test] public async Task BulkUpdate_RollbackKeepsInMemoryVersionInSync()
+    {
+        await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync();
+        var a = await db.InsertAsync(new VersionedEntity { Name = "A", Version = 0 });
+        var b = await db.InsertAsync(new VersionedEntity { Name = "B", Version = 0 });
+        var bFresh = await db.GetAsync<VersionedEntity>(b.Id);
+        bFresh!.Name = "B-bump";
+        await db.UpdateAsync(bFresh);  // DB: B.version=1，b 成为 stale
+        a.Name = "A-bulk"; b.Name = "B-bulk";
+        await Assert.That(async () => await db.BulkUpdateAsync([a, b])).Throws<ConcurrencyConflictException>();
+        await Assert.That(a.Version).IsEqualTo(0);  // 回滚后内存 version 未被抬高
+        a.Name = "A-retry";
+        int rows = await db.UpdateAsync(a);  // 修复前此处抛假 ConcurrencyConflictException
+        await Assert.That(rows).IsEqualTo(1);
+        await Assert.That(a.Version).IsEqualTo(1);
+    }
+
+    // ITM-556 对照：全部成功时 version 正常回填
+    [Test] public async Task BulkUpdate_SuccessBackfillsVersions()
+    {
+        await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync();
+        var a = await db.InsertAsync(new VersionedEntity { Name = "A", Version = 0 });
+        var b = await db.InsertAsync(new VersionedEntity { Name = "B", Version = 0 });
+        a.Name = "A2"; b.Name = "B2";
+        long total = await db.BulkUpdateAsync([a, b]);
+        await Assert.That(total).IsEqualTo(2);
+        await Assert.That(a.Version).IsEqualTo(1);
+        await Assert.That(b.Version).IsEqualTo(1);
+    }
+
     private static async Task<List<Order>> InsertOrdersAsync(DataSession<SqliteProvider> db, int count, Func<int, Order> create)
     {
         var orders = new List<Order>(count);
