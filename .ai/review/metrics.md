@@ -27,6 +27,7 @@
 | 2026-07-19 | 8f289f7 | 全量 review（v3.1 并行地毯首战） | 2 | 9 | 20 | 14 | 0 新增 | 1（ITM-510 ← 三方言不对称） | 2（DataSession:144 租户格式串 + ITM-529 位置参数序） | 当日收口（44 修复+1 误报） |
 | 2026-07-19 | bdf4504 | 全量 review（整改回归验证轮） | 0 | 1 | 3 | 5 | 0 新增 | 0 | 1（ITM-529 二次确认误报）+ 2 疑点探针降级 | 当日收口（9 项全修） |
 | 2026-07-19 | 0937e7f | 全量 review（4 片并行地毯 + 6 探针） | 0 | 4 | 16 | 12 | 0 新增 | **1**（ITM-555 ← 括组根因类，ITM-401 补丁的新入口 AddWhereComparison） | 1（BulkDelete binder 元数据丢失——跨片反证销案） | 当日收口（32 项全修：3d7b625/aa83fe6/6f70e4a/ec63bac；三探针复验证伪） |
+| 2026-07-19 | 835591f | 全量 review（v2.3 引擎·10 轮） | 0 | 2 | 3 | 13 | 0 新增 | 0 | 5（QueryBuilder struct 值拷贝 + probeCommand 时序 + ToPageAsync Begin 异常路径 + CacheStore 设计取舍 + PgNotification 订阅者异常隔离） | 待收口（ITM-587/588 基类链口径漂移·2 编译探针证实） |
 
 ## 缺陷逃逸账本（只增不删——每条都是深检方法论的改进输入）
 
@@ -45,3 +46,4 @@
 | 过滤覆盖断裂 | ITM-302（租户）、ITM-324（软删幂等）、**ITM-401（OrWhere 前缀）、ITM-404（Bulk 无租户）** | 架构测试（需扩 partial 扫描 ITM-405）+ 性质测试 |
 | 弱断言假绿 | ITM-319、ITM-327 | assertion-strength-check.sh |
 | **防线自身失明**（新增 2026-07-18） | ITM-405（partial 盲区）、ITM-413（正则定界）、ITM-414（LCG 退化）、ITM-415（更新模式静默）、ITM-416（引用符删除归一） | 防线代码按业务标准评审（review profile 固定项） |
+| **基类链判定口径漂移**（新增 2026-07-19） | ITM-587（PALORM014）、ITM-588（PALORM018）、ITM-601（PALORM021） | BaseClassEntityFixture 快照/分析器测试（待建，ITM-587/588/601 收口后下沉） |

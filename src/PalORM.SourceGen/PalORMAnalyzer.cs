@@ -197,8 +197,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
             bool isSoftDelete = type.GetAttributes().Any(attribute =>
                 SourceGenerationValidation.IsPalORMAttribute(attribute, "SoftDelete"));  // ITM-512
-            bool hasSoftDeleteColumn = type.GetMembers().OfType<IPropertySymbol>()
-                .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
+            // ITM-587: 走基类链（与 TableModel.GetMappableProperties 口径一致）——派生类继承
+            // AuditBase 把 deleted_at 放基类时，type.GetMembers() 只查声明类型会误报 PALORM014。
+            bool hasSoftDeleteColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
                 .Any(static property => property.GetAttributes().Any(attribute =>
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
                     && attribute.ConstructorArguments.FirstOrDefault().Value is "deleted_at"));  // ITM-512
@@ -208,8 +209,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // PALORM018: [TenantAware] 必须映射 tenant_id 列（与 PALORM014 对齐）
             bool isTenantAware = type.GetAttributes().Any(attribute =>
                 SourceGenerationValidation.IsPalORMAttribute(attribute, "TenantAware"));  // ITM-512
-            bool hasTenantColumn = type.GetMembers().OfType<IPropertySymbol>()
-                .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
+            // ITM-588: 同 ITM-587——走基类链覆盖 TenantBase 放 tenant_id 的派生类。
+            bool hasTenantColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
                 .Any(static property => property.GetAttributes().Any(attribute =>
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
                     && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));  // ITM-512
@@ -221,12 +222,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
             // PALORM021: 列名唯一性——重复 [Column] 生成 INSERT INTO t (x, x) 运行期才炸（ITM-409）。
             // ITM-585 决策登记：大小写不敏感取最严方言口径（同 ITM-510 索引名）——MySQL 列名
-            // 大小写不敏感，"Name"/"name" 两列在 MySQL 建表即冲突；PG 引号标识符虽区分大小写，
+            // 大小写不敏感，"Name"/"name" 两列在 MySQL 建表即冲突；PG 引号标识符虽区分大小写,
             // 但依赖大小写区分的两列是跨方言可移植性陷阱，统一拒绝。
+            // ITM-601: 走基类链（同 PALORM014/018）——派生类用 new 隐藏基类同名属性时,
+            // EnumerateMappedProperties 的 seen HashSet 会按"派生优先"自动跳过基类版本,
+            // 与 TableModel 列收集口径一致。
             var columnOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
+            foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
             {
-                if (SourceGenerationValidation.IsNotMapped(member)) continue;
                 var colAttr = member.GetAttributes().FirstOrDefault(a =>
                     SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
                 string columnName = colAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
