@@ -57,7 +57,10 @@ internal static class Program
     internal static async Task Main()
     {
         string connectionString = Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
-            ?? throw new InvalidOperationException("PALORM_MYSQL_CONNECTION is required");
+            ?? throw new InvalidOperationException(
+                "PALORM_MYSQL_CONNECTION is required. "
+                + "Run 'source scripts/set-test-env.sh' after creating .env.test, "
+                + "or set PALORM_MYSQL_* variables for appsettings.test.json template expansion.");
         var options = new DbOptions { ConnectionString = connectionString };
         DataSession<MySqlProvider> db = await DataSession<MySqlProvider>.CreateAsync(options).ConfigureAwait(false);
         await using (db.ConfigureAwait(false))

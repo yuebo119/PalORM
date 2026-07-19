@@ -305,6 +305,33 @@ CI 中请校验输出含 `Test run summary` 行——无摘要即视为未运行
 
 ---
 
+## 测试配置（连接串）
+
+测试 / 工具链的连接串由**双层覆盖**机制管理（生产库 PalORM.Core 不引入配置依赖）：
+
+| 文件 | 跟踪 | 用途 |
+|------|------|------|
+| `appsettings.test.json` | ✅ git 跟踪 | 结构化模板（端口/超时/host 占位符） |
+| `.env.test.example` | ✅ git 跟踪 | 凭据示例 |
+| `.env.test` | ❌ gitignored | 本地凭据（从 .example 复制后填入） |
+
+**优先级**：`PALORM_*_CONNECTION` 整串环境变量 > `appsettings.test.json` 模板 `${VAR}` 占位符替换 > 显式失败（不静默回退 localhost，避免误写系统库——ITM-428 凭据卫生）。
+
+首次使用：
+
+```bash
+cp .env.test.example .env.test
+# 编辑 .env.test 填入本地 PG/MySQL 凭据
+source scripts/set-test-env.sh
+dotnet run --project test/PalORM.Integration.Tests
+```
+
+CI 通过 secret 注入 `PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION` 即可，无需 .env.test 文件。
+
+`PalORM.Testing.TestEnvironment` 从 `AppContext.BaseDirectory` 向上回溯查找 `appsettings.test.json`，集成测试项目 csproj 已配置 `<CopyToOutputDirectory>` 自动复制。
+
+---
+
 ## 文档
 
 | | |

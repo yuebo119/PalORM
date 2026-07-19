@@ -1,4 +1,5 @@
 using PalORM.MySql;
+using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
@@ -14,8 +15,7 @@ public sealed class MySqlIntegrationTests
 {
     private static DbOptions Opts => new()
     {
-        ConnectionString = Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
-            ?? "Server=localhost;User=root;Password=;Database=mysql"
+        ConnectionString = TestEnvironment.ResolveMySqlConnectionString()
     };
 
     [Test]

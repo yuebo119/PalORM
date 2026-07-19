@@ -28,4 +28,13 @@
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
+
+  <!-- 测试配置：appsettings.test.json 从仓库根目录复制到输出目录。
+       PalORM.Testing.TestEnvironment 从 BaseDirectory 向上回溯查找，会先找到输出目录的副本；
+       避免测试运行时工作目录不可控的问题。-->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../appsettings.test.json"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="appsettings.test.json" />
+  </ItemGroup>
 </Project>

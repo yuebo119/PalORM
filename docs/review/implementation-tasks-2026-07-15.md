@@ -39,6 +39,8 @@
 
 > **AUD-001 追加（2026-07-17 晚）**：7-17 的 Git 仓库重建（f0df771）把含真实凭据的旧版 `scripts/set-test-env.sh` 重新带入了全部历史提交——此前审计声称的"历史已重写清除"在重建仓库中不再成立。本轮已完成仓库侧再整改：脚本改为从未跟踪的 `.env.test` 加载且不回显值，新增 `scripts/.env.test.example` 占位模板，`.gitignore` 排除 `.env.test`，G9 转绿并经故障注入负向验证。**历史提交中的凭据仍在**（8 个提交全部含旧脚本），需要用户决策：历史重写（无 remote，影响面为本地 8 提交）+ 数据库侧凭据轮换（192.168.x.x 的 PG/MySQL 账号）。
 
+> **配置体系演进（2026-07-19）**：凭据卫生从单一 `.env.test` 升级为双层覆盖：仓库根 `appsettings.test.json`（git 跟踪的模板，含 `${VAR}` 占位符）+ `.env.test.example`（从 `scripts/` 迁到仓库根）+ `.env.test`（本地覆盖）。新增 `src/PalORM.Testing/TestEnvironment.cs` 作为统一读取器，AOT 安全（STJ 源生成）。旧的 `scripts/.env.test.example` 已删除。
+
 ## DEP-001 基线与反向验证
 
 - S1：`OpenTelemetry.Api 1.11.0` 触发两个 NU1902；`SQLitePCLRaw.lib.e_sqlite3 2.1.10` 触发一个 NU1903，严格测试还原失败。
