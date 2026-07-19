@@ -1,18 +1,18 @@
-# PalORM 深检引擎（deep-check-engine v2.2）
+# PalORM Review 检查引擎（review/engine v2.2）
 
 > **review 系统的检查引擎**——审计与评审已彻底合并为单一 review 系统（2026-07-19），
-> 入口与触发档位见 [`review-system/prompt.md`](review-system/prompt.md)；本文件只定义"怎么查"。
+> 入口与触发档位见 [`prompt.md`](prompt.md)；本文件只定义"怎么查"。
 > **宗旨：质量为先**（2026-07-19 裁决）。所有优化都在保持最高质量的前提下进行——
 > 默认执行方式是**地毯式逐行、逐文件阅读全部范围内代码**；探针、机械防线、档位分级
 > 都是在此之上叠加的证据强化与流程编排，**不是阅读的替代品**。
-> **检查依据**：[`docs/编码规范.md`](../docs/编码规范.md)（167 条 STD 规则 × 17 类）← [`docs/踩坑目录.md`](../docs/踩坑目录.md)（302 项陷阱）
+> **检查依据**：[`docs/编码规范.md`](../../docs/编码规范.md)（167 条 STD 规则 × 17 类）← [`docs/踩坑目录.md`](../../docs/踩坑目录.md)（302 项陷阱）
 
 ---
 
 ## 执行前强制项
 
 1. `bash scripts/gate-check.sh` 全绿（门禁是前置，引擎不重复门禁已覆盖的检查）
-2. 加载 [`review-system/known-false-positives.md`](review-system/known-false-positives.md)（误判知识库，只增不删）
+2. 加载 [`known-false-positives.md`](known-false-positives.md)（误判知识库，只增不删）
 3. `bash scripts/review-snapshot.sh` → 锚定 commit + 基线数据
 4. 声明范围：必须检查 / 明确不检查 / 抽样策略——三项缺一不可
 
@@ -167,7 +167,7 @@ Quote 转义覆盖内嵌引用符吗？用户条件括组了吗——OR 能穿�
 P0/P1 收口的附加动作：该发现所属根因类若是新类，向对应**七流问题卡**追加一问——
 问题卡是逐行的发现率杠杆，每个真缺陷都应让下一轮逐行多一双眼睛。
 
-下沉结果记录在行动项账本的「下沉审查」段（模板见 action-items-template.md）。
+下沉结果记录在行动项账本的「下沉审查」段（模板见 templates/action-items.md）。
 
 ## 质量指标（替代主观评分）
 
