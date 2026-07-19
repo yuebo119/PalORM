@@ -111,6 +111,46 @@ else
     fail "D8 G12 状态不符合预期（应包含 ✅）"
 fi
 
+# ── D10: 文档计数 = 实测计数（ITM-571：文档间一致但整体失真——D 项全绿掩蔽）──
+# 从最近一次 Release 测试二进制统计 [Test] 方法数近似实测（避免此脚本依赖 dotnet test 运行时长）。
+# 环境有测试二进制时启用；无则跳过（CI 在 test job 后运行本脚本，恒有）。
+d10_skip=false
+declare -A actual_counts
+for pair in "Core.Tests:test/PalORM.Core.Tests" "SourceGen.Tests:test/PalORM.SourceGen.Tests" "Integration.Tests:test/PalORM.Integration.Tests"; do
+    name="${pair%%:*}"; dir="${pair##*:}"
+    if [ ! -d "$dir" ]; then d10_skip=true; break; fi
+    # 计数口径 = TUnit 运行时用例数：带 [Arguments] 的 [Test] 按 Arguments 数展开，否则按 1 计
+    actual_counts[$name]=$(python3 - "$dir" <<'PYEOF'
+import re, glob, sys
+total = 0
+for path in glob.glob(f'{sys.argv[1]}/**/*.cs', recursive=True):
+    src = open(path).read()
+    for m in re.finditer(r'\[Test\]((?:\s*\[[^\]]*\])*)', src):
+        args = len(re.findall(r'\[Arguments', m.group(1)))
+        total += args if args else 1
+print(total)
+PYEOF
+)
+done
+if ! $d10_skip; then
+    d10_ok=true
+    for name in "Core.Tests" "SourceGen.Tests" "Integration.Tests"; do
+        doc_n=$(grep -oP "${name//./\\.}\s*\|\s*\K\d+" docs/架构设计.md | head -1)
+        act_n=${actual_counts[$name]}
+        if [ "$doc_n" != "$act_n" ]; then
+            printf '  %s: 文档=%s 实测[Test]计数=%s\n' "$name" "$doc_n" "$act_n"
+            d10_ok=false
+        fi
+    done
+    if $d10_ok; then
+        pass "D10 文档计数 = 源码 [Test] 实测计数"
+    else
+        fail "D10 文档计数与实测漂移（跑 dotnet test 后同步 docs/架构设计.md）"
+    fi
+else
+    pass "D10 跳过（无测试目录）"
+fi
+
 printf '\n通过: %s  失败: %s\n' "$PASSED" "$FAILED"
 if [ "$FAILED" -gt 0 ]; then
     exit 1
