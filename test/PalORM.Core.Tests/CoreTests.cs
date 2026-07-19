@@ -561,7 +561,7 @@ public sealed class ResilienceTests
             CircuitBreakerThreshold = 1,
             CircuitBreakerResetAfter = TimeSpan.Zero
         };
-        var executor = new ResilienceExecutor(opts);
+        var executor = new ResilienceExecutor(opts, static _ => true);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -593,7 +593,7 @@ public sealed class ResilienceTests
             CircuitBreakerThreshold = 1,
             CircuitBreakerResetAfter = TimeSpan.FromMinutes(1)
         };
-        var executor = new ResilienceExecutor(opts);
+        var executor = new ResilienceExecutor(opts, static _ => true);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -667,14 +667,74 @@ public sealed class ResilienceTests
         };
         await using var session = await DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(opts);
 
-        for (int i = 0; i < 2; i++)
+        // ITM-506：SqliteProvider.IsTransient 只认 SQLITE_BUSY/LOCKED，InvalidOperationException
+        // 是确定性异常 → 不计入熔断。连续失败后熔断仍关闭，弹性状态跨调用持续（_resilience 复用）。
+        for (int i = 0; i < 3; i++)
         {
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await session.ExecuteWithResilience<int>(_ => throw new InvalidOperationException("fail")));
+                await session.ExecuteWithResilience<int>(_ => throw new InvalidOperationException("deterministic")));
         }
 
-        await Assert.ThrowsAsync<CircuitBreakerOpenException>(async () =>
-            await session.ExecuteWithResilience(_ => Task.FromResult(42)));
+        // 确定性失败不熔断——后续正常操作照常返回（证明弹性状态跨调用持续且未误熔断）
+        await Assert.That(await session.ExecuteWithResilience(_ => Task.FromResult(42))).IsEqualTo(42);
+    }
+
+    /// <summary>瞬时 DbException 测试替身——IsTransient=true 使弹性执行器判为可熔断故障。</summary>
+    private sealed class TransientTestException : System.Data.Common.DbException
+    {
+        public TransientTestException() : base("transient") { }
+        public TransientTestException(string message) : base(message) { }
+        public TransientTestException(string message, Exception innerException) : base(message, innerException) { }
+        public override bool IsTransient => true;
+    }
+
+    // ITM-506：确定性异常（唯一约束冲突、语法错误等）不得熔断整个执行器。
+    [Test]
+    public async Task ExecuteAsync_DeterministicException_DoesNotOpenCircuit()
+    {
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 1,
+            CircuitBreakerResetAfter = TimeSpan.FromMinutes(1)
+        };
+        // 默认瞬时判定 = DbException.IsTransient；InvalidOperationException 非瞬时
+        var executor = new ResilienceExecutor(opts);
+
+        for (int i = 0; i < 5; i++)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await executor.ExecuteAsync<int>(_ => throw new InvalidOperationException("deterministic")));
+        }
+        // 5 次确定性失败后熔断仍关闭——后续正常操作照常执行，不抛 CircuitBreakerOpenException
+        await Assert.That(await executor.ExecuteAsync(_ => Task.FromResult(42))).IsEqualTo(42);
+    }
+
+    // ITM-507：熔断打开期间，在飞旧失败不得反复顺延恢复时间点。
+    [Test]
+    public async Task ExecuteAsync_InFlightFailuresAfterOpen_DoNotExtendWindow()
+    {
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 1,
+            CircuitBreakerResetAfter = TimeSpan.Zero
+        };
+        var executor = new ResilienceExecutor(opts, static _ => true);
+
+        // 首次瞬时失败即打开熔断（阈值 1）
+        await Assert.ThrowsAsync<TransientTestException>(async () =>
+            await executor.ExecuteAsync<int>(_ => throw new TransientTestException()));
+        // 再多次在飞失败——resetAfter=Zero，若被顺延则半开探针永远进不去
+        for (int i = 0; i < 3; i++)
+        {
+            await Assert.ThrowsAsync<TransientTestException>(async () =>
+                await executor.ExecuteAsync<int>(_ => throw new TransientTestException()));
+        }
+        // resetAfter=Zero 且未被顺延 → 半开探针可进入并成功关闭熔断
+        await Assert.That(await executor.ExecuteAsync(_ => Task.FromResult(7))).IsEqualTo(7);
     }
 
     [Test]

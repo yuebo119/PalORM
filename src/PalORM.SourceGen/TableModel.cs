@@ -37,7 +37,7 @@ internal sealed record TableModel(
         List<IndexModel> indexes = [];
         List<ForeignKeyModel> foreignKeys = [];
 
-        foreach (var member in typeSymbol.GetMembers())
+        foreach (var member in GetMappableProperties(typeSymbol))
         {
             if (member is not IPropertySymbol prop) continue;
             if (prop.GetAttributes().Any(a => a.AttributeClass?.Name is "NotMappedAttribute" or "NotMapped"))
@@ -149,6 +149,31 @@ internal sealed record TableModel(
             new EquatableArray<IndexModel>(indexes.ToArray()),
             new EquatableArray<ForeignKeyModel>(foreignKeys.ToArray()),
             null, null);
+    }
+
+    /// <summary>收集实体自身及基类链上的可映射属性（ITM-502：GetMembers 不含继承成员，
+    /// 继承 AuditBase 的实体基类列会静默丢失）。派生类同名属性覆盖基类（override/new）；
+    /// 从最派生类向基类遍历，声明序保持"派生优先、同层原序"以稳定 ordinal 映射。</summary>
+    private static IEnumerable<ISymbol> GetMappableProperties(INamedTypeSymbol type)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var ordered = new List<ISymbol>();
+        for (INamedTypeSymbol? current = type;
+             current is not null && current.SpecialType != SpecialType.System_Object;
+             current = current.BaseType)
+        {
+            var layer = new List<ISymbol>();
+            foreach (ISymbol member in current.GetMembers())
+            {
+                if (member is not IPropertySymbol prop) continue;
+                if (prop.IsStatic || prop.IsImplicitlyDeclared || !prop.CanBeReferencedByName) continue;
+                if (!seen.Add(prop.Name)) continue; // 派生类已声明同名属性 → 基类版本被隐藏
+                layer.Add(member);
+            }
+            // 基类属性排在派生属性之后（声明序：派生类先声明的列在前，符合"子类扩展基类"直觉）
+            ordered.AddRange(layer);
+        }
+        return ordered;
     }
 
     private static string MapToDbType(ITypeSymbol type)

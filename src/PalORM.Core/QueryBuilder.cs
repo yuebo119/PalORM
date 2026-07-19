@@ -416,8 +416,16 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
-    /// <summary>不执行查询，返回构建好的 SQL 与参数快照（<see cref="DryRunResult"/>），用于预览/测试断言。</summary>
-    public DryRunResult AsDryRun() => new(BuildSql(), GetQueryParameters());
+    /// <summary>不执行查询，返回构建好的 SQL 与参数快照（<see cref="DryRunResult"/>），用于预览/测试断言。
+    /// 参数为防御性副本——修改快照参数不影响后续对同一 builder 的真实执行（ITM-511）。</summary>
+    public DryRunResult AsDryRun()
+    {
+        IReadOnlyList<DbParameter> live = GetQueryParameters();
+        var snapshot = new DbParameter[live.Count];
+        for (int i = 0; i < live.Count; i++)
+            snapshot[i] = _paramFactory(live[i].ParameterName, live[i].Value);
+        return new(BuildSql(), Array.AsReadOnly(snapshot));
+    }
 
     internal ValueTask<ConnectionLease> AcquireConnectionLeaseAsync(bool writeOperation,
         CancellationToken cancellationToken)

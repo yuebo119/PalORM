@@ -21,6 +21,20 @@ public sealed record DbOptions
     /// <summary>命令默认超时（默认 30 秒）。</summary>
     public TimeSpan CommandTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>命令超时的 ADO.NET 秒值——向上取整，保证亚秒超时不塌缩为 0（ADO.NET 中
+    /// CommandTimeout=0 语义是"无限等待"，与调用方设置亚秒超时的意图正相反，ITM-501）。
+    /// 显式 <see cref="TimeSpan.Zero"/> 表示无限等待，原样透传 0。</summary>
+    internal int CommandTimeoutSeconds => ToCommandTimeoutSeconds(CommandTimeout);
+
+    /// <summary>TimeSpan → ADO.NET 命令超时秒值：正的亚秒值向上取整为 1 秒，
+    /// Zero 透传为 0（无限），负值按 0 处理。</summary>
+    internal static int ToCommandTimeoutSeconds(TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero) return 0;
+        double seconds = Math.Ceiling(timeout.TotalSeconds);
+        return seconds >= int.MaxValue ? int.MaxValue : (int)seconds;
+    }
+
     /// <summary>最大重试次数（默认 3 次）。</summary>
     public int MaxRetries { get; init; } = 3;
 

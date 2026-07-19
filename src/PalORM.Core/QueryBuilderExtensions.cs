@@ -45,7 +45,7 @@ public static class QueryBuilderExtensions
             await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(false, ct).ConfigureAwait(false);
             await using DbCommand cmd = lease.Connection.CreateCommand();
             cmd.CommandText = sql;
-            cmd.CommandTimeout = (int)builder._commandTimeout.TotalSeconds;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             cmd.Transaction = builder.GetActiveTransaction();
             AddParameters(cmd, builder, parameters);
             foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnBefore(context);
@@ -152,7 +152,7 @@ public static class QueryBuilderExtensions
             await using var countCommand = paged._conn.CreateCommand();
             countCommand.Transaction = transaction;
             countCommand.CommandText = countSql;
-            countCommand.CommandTimeout = (int)paged._commandTimeout.TotalSeconds;
+            countCommand.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
             AddParameters(countCommand, paged, paged.GetCountParameters());
             object? countResult = await ExecuteScalarObservedAsync(
                 countCommand, paged, "count", ct).ConfigureAwait(false);
@@ -207,7 +207,7 @@ public static class QueryBuilderExtensions
             command = lease.Connection.CreateCommand();
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0);
-            command.CommandTimeout = (int)builder._commandTimeout.TotalSeconds;
+            command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             for (int i = 0; i < sql.ArgumentCount; i++)
                 command.Parameters.Add(builder._paramFactory($"@p{i}", sql.GetArgument(i)));
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
@@ -273,7 +273,7 @@ public static class QueryBuilderExtensions
             await using DbCommand command = lease.Connection.CreateCommand();
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = sql;
-            command.CommandTimeout = (int)builder._commandTimeout.TotalSeconds;
+            command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             AddParameters(command, builder, builder.GetUpdateParameters());
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
