@@ -22,6 +22,7 @@ public interface IDbProvider
     static abstract SqlDialect Dialect { get; }
 
     /// <summary>创建数据库连接。</summary>
+    [Obsolete("零调用点的死接口成员（本库恒走双参重载应用池配置）；且 static abstract 强迫第三方 Provider 实现死代码。3.0 移除。")]
     static abstract DbConnection CreateConnection(string connectionString);
 
     /// <summary>创建应用连接池配置的数据库连接。</summary>

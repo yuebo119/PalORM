@@ -19,6 +19,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM002", "Column name does not match table schema",
         "Property '{0}' column name does not match table schema", "PalORM", DiagnosticSeverity.Warning, true);
 
+    // ITM-585: 表名扫描仅覆盖本程序集（GetAssemblyTableNames）——多程序集实体布局下
+    // 引用他程序集表会误报。Analyzer 按类型增量执行、跨编译引用聚合不可靠，多程序集
+    // 场景可 .editorconfig 降级本诊断（dotnet_diagnostic.PALORM003.severity = suggestion）。
     public static readonly DiagnosticDescriptor UnknownTable = new(
         "PALORM003", "Foreign key references unknown table",
         "[ForeignKey] references table '{0}' but no [Table] attribute found for it", "PalORM", DiagnosticSeverity.Error, true);
@@ -33,6 +36,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM005", "Potential N+1 query pattern detected",
         "From<T>() called inside a loop may cause N+1 queries. Consider using JOIN or WhereIn.", "PalORM", DiagnosticSeverity.Warning, true);
 
+    // ITM-581: PALORM006/007 为零报告点的占位描述符——006 由 SqlFileEmitter 的
+    // Obsolete-error 机制实际承担，007 无 schema 对照数据源。保留占位防编号复用歧义；
+    // 3.0 与其它死成员一并裁决（AnalyzerDiagnosticsTests 已固化现状）。
     public static readonly DiagnosticDescriptor SqlFileNotFound = new(
         "PALORM006", "Referenced SQL file does not exist",
         "[SqlFile] references '{0}' but the file was not found", "PalORM", DiagnosticSeverity.Error, true);
@@ -213,7 +219,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // PALORM020: 索引声明有效性——消除 TableModel 静默丢弃与 IF NOT EXISTS/1061 掩蔽（ITM-203）
             ValidateIndexDeclarations(ctx, type);
 
-            // PALORM021: 列名唯一性——重复 [Column] 生成 INSERT INTO t (x, x) 运行期才炸（ITM-409）
+            // PALORM021: 列名唯一性——重复 [Column] 生成 INSERT INTO t (x, x) 运行期才炸（ITM-409）。
+            // ITM-585 决策登记：大小写不敏感取最严方言口径（同 ITM-510 索引名）——MySQL 列名
+            // 大小写不敏感，"Name"/"name" 两列在 MySQL 建表即冲突；PG 引号标识符虽区分大小写，
+            // 但依赖大小写区分的两列是跨方言可移植性陷阱，统一拒绝。
             var columnOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
             {

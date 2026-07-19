@@ -21,13 +21,6 @@ internal ref struct ValueStringBuilder
         _pos = 0;
     }
 
-    public ValueStringBuilder(int capacity)
-    {
-        _pooled = ArrayPool<char>.Shared.Rent(capacity);
-        _buffer = _pooled;
-        _pos = 0;
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Append(char c)
     {

@@ -127,7 +127,11 @@ internal static class RegistryEmitter
         foreach (var m in models.AsSpan())
         {
             var pk = m.Columns.AsSpan().ToArray().FirstOrDefault(c => c.IsPrimaryKey);
-            string pkName = pk?.ColumnName ?? "id";
+            // ITM-581: CanGenerateEntity 契约保证恰一个 [Key]——此处缺 PK 是上游破坏，
+            // 静默兜底 "id" 会让错误列名进注册表，改为立即失败暴露契约破坏点
+            string pkName = pk?.ColumnName ?? throw new InvalidOperationException(
+                $"Entity '{m.EntityTypeName}' reached RegistryEmitter without a primary key column; " +
+                "CanGenerateEntity should have rejected it.");
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = {MigrationEmitter.ToCSharpLiteral(pkName)},");
         }
         sb.AppendLine("        },");
