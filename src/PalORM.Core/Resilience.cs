@@ -194,6 +194,11 @@ public sealed class ResilienceExecutor
         }
     }
 
+    // ITM-598: 调用方取消（ct.IsCancellationRequested）不算数据库失败，不应推进熔断 failureCount。
+    // 把 _circuitOpenUntil 重置为当前时间让熔断窗口"立即到期"——下次请求进入半开探针裁决，
+    // 由真实请求结果决定熔断是否真正关闭。频繁取消时熔断器确实会多次进入探针路径，
+    // 但每次探针是"尝试建立真实数据库连接"的轻量操作，且仅在 isHalfOpenProbe=true 时进入此分支。
+    // 与"连续失败 N 次后开闸 resetAfter 秒"的契约一致：取消不是失败，不延长熔断时间。
     private void ReleaseCancelledProbe(bool isHalfOpenProbe)
     {
         if (!isHalfOpenProbe)
