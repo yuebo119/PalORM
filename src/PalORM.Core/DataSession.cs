@@ -77,6 +77,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 }
                 TimeSpan delay = options.RetryBackoff?.Invoke(attempt)
                     ?? ResilienceExecutor.GetDefaultBackoff(attempt);
+                // ITM-603: 自定义 RetryBackoff 委托返回负值会让 Task.Delay 抛
+                // ArgumentOutOfRangeException（参数名"delay"），错误消息不指向 RetryBackoff 配置。
+                // 显式拒绝，提示调用方修正委托实现。
+                if (delay < TimeSpan.Zero)
+                    throw new InvalidOperationException(
+                        $"DbOptions.RetryBackoff delegate returned a negative TimeSpan ({delay}). " +
+                        "The delegate must return a non-negative delay.");
                 await Task.Delay(delay, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException timeoutException) when (!ct.IsCancellationRequested)
@@ -154,7 +161,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <para><b>跨方言差异</b>: PG/SQLite 经 RETURNING 返回完整行——含 DB 默认值与 [Computed] 列；
     /// MySQL 无 RETURNING，仅回填自增 ID，其余属性保持传入值。需要 DB 计算列的最新值时请在插入后 GetAsync 重查。</para>
     /// <para><b>回填契约</b>: 三方言下传入实体的自增 ID 均被回填（可安全继续使用原引用）；
-    /// 但 DB 默认值/[Computed] 列只存在于返回实例（PG/SQLite）——两者不是同一对象。</para></summary>
+    /// 但 DB 默认值/[Computed] 列只存在于返回实例（PG/SQLite）——两者不是同一对象。</para>
+    /// <para><b>租户契约</b>（ITM-599）：Insert/BulkInsert/BulkMerge 路径<b>不附加租户 WHERE</b>
+    /// （写入路径不需要过滤——租户隔离在写入时由实体的 <c>tenant_id</c> 列值承载）。
+    /// 调用方必须确保 [TenantAware] 实体的 <c>tenant_id</c> 属性已赋值——NOT NULL 列约束在
+    /// DB 层兜底拒绝未赋值写入，但应用层应通过 WithTenant 设置会话上下文并在构造实体时填值。</para></summary>
     public ValueTask<T> InsertAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
         => InsertCoreAsync(entity, null, ct);
@@ -1140,7 +1151,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
     }
 
-    /// <summary>健康检查 —— SELECT 1 返回延迟和状态。</summary>
+    /// <summary>健康检查 —— SELECT 1 返回延迟和状态。
+    /// <para><b>异常语义</b>（ITM-594）：调用方主动取消（ct.IsCancellationRequested）抛 OCE；
+    /// 数据库不可达/超时（含连接超时触发的 OCE 但 !ct.IsCancellationRequested）返回
+    /// <c>HealthResult(Healthy=false, ExceptionTypeName=...)</c>——健康检查的语义即"是否可达"，
+    /// 任何失败都归为 Unhealthy。异常消息不透出（避免主机/端口/库名拓扑泄漏，ITM-542）。</para></summary>
     public async ValueTask<HealthResult> HealthCheckAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
@@ -1170,7 +1185,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>创建独立的只读会话。调用方必须释放返回的会话；新代码请使用 <c>From&lt;T&gt;().ForRead()</c>。</summary>
-    [Obsolete("返回值具有独立连接所有权。请使用 From<T>().ForRead() 让查询执行管线管理连接。")]
+    [Obsolete("返回值具有独立连接所有权。请使用 From<T>().ForRead() 让查询执行管线管理连接。3.0 移除。")]
     public async ValueTask<DataSession<TProvider>> ForRead(CancellationToken ct = default)
     {
         // 保留 $ENV: 间接引用原样传递，不物化为明文——CreateAsync 内部按需解析。
@@ -1181,7 +1196,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>返回当前主库会话。新代码请使用 <c>From&lt;T&gt;().ForWrite()</c> 明确查询路由。</summary>
-    [Obsolete("DataSession 始终持有主连接。请使用 From<T>().ForWrite() 明确查询路由。")]
+    [Obsolete("DataSession 始终持有主连接。请使用 From<T>().ForWrite() 明确查询路由。3.0 移除。")]
     public DataSession<TProvider> ForWrite()
     {
         return this;
@@ -1300,8 +1315,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         DbCommand command = _conn.CreateCommand();
         command.Transaction = GetActiveTransaction();
-        // ITM-557 根治：超时在工厂集中设置——新调用点在结构上不可能漏（逐点补写是补丁式，
-        // ValidateSchemaAsync 即漏网实例）。个别路径重复赋同值无害。
+        // ITM-557 根治：超时在工厂集中设置——新调用点在结构上不可能漏（ValidateSchemaAsync 即漏网实例）。
+        // ITM-597: 部分路径（HealthCheck/Scalar/Execute/Migrate/Bulk 等）显式重复赋同值——
+        // 这是<b>防御冗余</b>而非死代码：万一未来 CreateCommand 被重构不再设超时，这些路径仍自洽。
+        // 删除冗余会削弱回归防御；保留并在此声明 CreateCommand 是<b>权威源</b>。
         command.CommandTimeout = _options.CommandTimeoutSeconds;
         return command;
     }

@@ -270,6 +270,14 @@ internal sealed class SessionOperationState
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation or transaction flow.");
             }
+            // ITM-596: 传入已 dispose 的事务（Connection == null）会让 GetActiveTransaction
+            // 静默清空 _transaction——调用方"我设了事务"的期望与实际"命令不带事务执行"不符，
+            // 数据可能在非事务上下文写入。明确拒绝并提示正确用法。
+            if (transaction is not null && transaction.Connection is null)
+                throw new ArgumentException(
+                    "Cannot use a disposed transaction (its Connection is null). " +
+                    "Pass a transaction from an open DbConnection, or null to clear.",
+                    nameof(transaction));
             _transaction = transaction;
             _transactionOperationOwner = null;
         }
