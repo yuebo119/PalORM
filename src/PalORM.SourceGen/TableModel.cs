@@ -244,7 +244,11 @@ internal sealed record IndexModel(string Name, EquatableArray<string> Columns, b
 internal sealed record ForeignKeyModel(
     string PropertyName, string ReferencedTable, string ReferencedColumn, int OnDelete);
 
-/// <summary>外键删除行为（与 Core 中 DeleteAction 枚举值对齐）。</summary>
+/// <summary>外键删除行为（与 Core 中 DeleteAction 枚举值对齐）。
+/// ITM-613: SourceGen 是 netstandard2.0 不能引用 Core，故两侧数值靠约定对齐——
+/// 任一侧改顺序必须同步另一侧：<c>src/PalORM.Core/Annotations.cs</c> 的
+/// <c>DeleteAction</c> 与本枚举。当前 FK 不生成 DDL（ITM-525），运行时无影响；
+/// 3.0 启用 FK DDL 前必须改为强约束（如代码生成器直接消费 Core enum 类型符号）。</summary>
 internal enum DeleteAction { NoAction = 0, Cascade = 1, SetNull = 2, Restrict = 3 }
 
 /// <summary>值相等数组——支持 foreach 和 record 的 Equals/GetHashCode。</summary>

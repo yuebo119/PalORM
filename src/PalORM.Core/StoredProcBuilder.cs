@@ -7,7 +7,10 @@ namespace PalORM;
 /// <para><b>参数工厂</b>: 构造时注入 TProvider.CreateParameter——不再为每个参数创建临时 DbCommand。</para>
 /// <para>WithOutputParam: 输出参数在 ExecuteAsync 后通过 GetOutputValue&lt;T&gt;() 读取。</para>
 /// <para>ITM-582: 存储过程执行<b>不经过</b> IQueryInterceptor 与 WithTracing/WithMetrics
-/// （与 QueryMultipleAsync 的 ITM-548 同类边界）——完整审计请用数据库层审计。</para></summary>
+/// （与 QueryMultipleAsync 的 ITM-548 同类边界）——完整审计请用数据库层审计。</para>
+/// <para><b>线程安全</b>（ITM-610）：<c>StoredProcBuilder</c> 实例<b>非线程安全</b>——
+/// <c>_executed</c> 标志是裸 bool 无锁保护，同实例并发调用 <c>QueryAsync</c> 有竞态。
+/// 使用契约是"一个 builder 一次异步链"：构造→绑定→执行→读取→丢弃。跨异步流复用请构造新实例。</para></summary>
 public sealed class StoredProcBuilder
 {
     private readonly DbConnection _conn;
