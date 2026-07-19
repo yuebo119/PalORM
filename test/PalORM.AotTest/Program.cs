@@ -17,7 +17,7 @@ internal sealed partial class AotEntity
 [Table("aot_bulk_test")]
 internal sealed partial class AotBulkEntity
 {
-    [Key] public string Id { get; set; } = "";
+    [Key(AutoIncrement = false)] public string Id { get; set; } = "";
     [Column("name")] public string Name { get; set; } = "";
     [Column("created_by")][IgnoreOnInsert] public string CreatedBy { get; set; } = "client";
     [Column("deleted_at")] public string? DeletedAt { get; set; }

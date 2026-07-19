@@ -160,11 +160,19 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             {
                 // PALORM022（ITM-560/561）: 生成器 CanGenerateEntity 会静默跳过的主键形态在此定位报错
                 IPropertySymbol key = keyProperties[0];
+                // ITM-589: [Key(AutoIncrement = true)] 配合非整型主键（Guid/string 等）时，
+                // TableModel.isAutoIncrement 仅识别 Int64/Int32（TableModel.cs:74），用户意图被静默
+                // 忽略——编译期无诊断，运行时 InsertAsync 会失败或抛奇怪错误。在此显式拒绝。
+                bool autoIncrementEnabled = key.GetAttributes()
+                    .FirstOrDefault(static a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"))?
+                    .NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is not false;
                 string? reason = key.SetMethod is null or { IsInitOnly: true }
                     ? "has an init-only or missing setter (generated ID backfill requires a writable setter)"
                     : key.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
                         ? "is a nullable value type (generated key binding cannot compile)"
-                        : null;
+                        : autoIncrementEnabled && key.Type.SpecialType is not (SpecialType.System_Int64 or SpecialType.System_Int32)
+                            ? $"declares [Key(AutoIncrement = true)] but type is '{key.Type.Name}' — only int/long keys support auto-increment; use [Key(AutoIncrement = false)] for application-assigned keys (snowflake/Guid/string)"
+                            : null;
                 if (reason is not null)
                     ctx.ReportDiagnostic(Diagnostic.Create(InvalidKeyDeclaration,
                         key.Locations.FirstOrDefault() ?? type.Locations[0], key.Name, type.Name, reason));
@@ -172,8 +180,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }, SymbolKind.NamedType);
 
         // PALORM002 + PALORM003 + PALORM004: 表级验证
-        context.RegisterSymbolAction(ctx =>
+        // ITM-590: 通过 CompilationStartAction 注册，让 assemblyTables 缓存跨类型复用
+        // （此前每类型 SymbolAction 各自 lazy 收集一次，O(N) 实体 × O(N) 扫描 = O(N²)）。
+        context.RegisterCompilationStartAction(startContext =>
         {
+            HashSet<string>? assemblyTables = null;
+            startContext.RegisterSymbolAction(ctx =>
+            {
             if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type) return;
             var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
             if (tableAttribute is null) return;
@@ -264,8 +277,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             }
 
             // 表名集合按需惰性收集：全程序集遍历是 O(类型数) 的，若对每个 [Table] 实体
-            // 无条件执行即 O(N²)（ITM-321）；仅在实体确有 [ForeignKey] 引用校验需求时触发
-            HashSet<string>? assemblyTables = null;
+            // 无条件执行即 O(N²)（ITM-321）；仅在实体确有 [ForeignKey] 引用校验需求时触发。
+            // ITM-590: assemblyTables 由 CompilationStartAction 闭包持有——首次 FK 检查时填充，
+            // 后续所有类型共享同一份缓存（O(N) 而非 O(N²)）。
 
             foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
             {
@@ -344,7 +358,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 if (fkAttr?.ConstructorArguments.Length >= 2)
                 {
                     string? refTable = fkAttr.ConstructorArguments[0].Value as string;
-                    assemblyTables ??= GetAssemblyTableNames(type.ContainingAssembly);
+                    assemblyTables ??= BuildAssemblyTableNames(type.ContainingAssembly);
                     if (refTable is not null && !assemblyTables.Contains(refTable))
                     {
                         ctx.ReportDiagnostic(Diagnostic.Create(UnknownTable,
@@ -361,6 +375,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 }
             }
         }, SymbolKind.NamedType);
+        });
 
         // PALORM005: N+1 检测 — 循环中 From<T>() / ORM 调用
         // ITM-574：语法名匹配会误报 EF Core/MongoDB 等第三方库的同名方法（ToListAsync 等），
@@ -488,7 +503,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static HashSet<string> GetAssemblyTableNames(IAssemblySymbol assembly)
+    // ITM-590: 跨类型共享程序集表名缓存——此前 GetAssemblyTableNames 每类型独立扫描整个
+    // 程序集（O(N×M)），大型项目编译期可感知。改为编译期内通过 CompilationStartAction
+    // 注册的局部缓存（由 Roslyn 管理生命周期，符合 RS1008：不存储编译期符号到分析器字段）。
+    private static HashSet<string> BuildAssemblyTableNames(IAssemblySymbol assembly)
     {
         var names = new HashSet<string>();
         foreach (var module in assembly.Modules)
