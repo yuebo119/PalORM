@@ -17,6 +17,30 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     private static partial void LogListenerTerminated(
         Microsoft.Extensions.Logging.ILogger logger, Exception exception);
 
+    [Microsoft.Extensions.Logging.LoggerMessage(
+        Level = Microsoft.Extensions.Logging.LogLevel.Debug,
+        Message = "PgNotificationListener: failed disposing damaged connection (swallowed).")]
+    private static partial void LogDisposeFailed(
+        Microsoft.Extensions.Logging.ILogger logger, Exception exception);
+
+    [Microsoft.Extensions.Logging.LoggerMessage(
+        Level = Microsoft.Extensions.Logging.LogLevel.Debug,
+        Message = "PgNotificationListener: OnError subscriber threw an exception (swallowed).")]
+    private static partial void LogOnErrorSubscriberThrew(
+        Microsoft.Extensions.Logging.ILogger logger, Exception exception);
+
+    [Microsoft.Extensions.Logging.LoggerMessage(
+        Level = Microsoft.Extensions.Logging.LogLevel.Debug,
+        Message = "PgNotificationListener: OnNotification subscriber threw an exception (swallowed).")]
+    private static partial void LogOnNotificationSubscriberThrew(
+        Microsoft.Extensions.Logging.ILogger logger, Exception exception);
+
+    [Microsoft.Extensions.Logging.LoggerMessage(
+        Level = Microsoft.Extensions.Logging.LogLevel.Debug,
+        Message = "PgNotificationListener: run task was canceled while stopping.")]
+    private static partial void LogRunTaskCanceled(
+        Microsoft.Extensions.Logging.ILogger logger);
+
     private readonly Func<IPgNotificationConnection> _connectionFactory;
     private readonly Func<int, TimeSpan> _reconnectDelay;
     private readonly string[] _channels;
@@ -150,6 +174,8 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                     catch (Exception disposeException) when (disposeException is not OperationCanceledException)
                     {
                         // 损坏连接的 Dispose 失败不改变控制流（重连/终止由上方 catch 决定）
+                        if (Logger is { } logger1)
+                            LogDisposeFailed(logger1, disposeException);
                     }
                 }
             }
@@ -207,7 +233,12 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         {
             var handler = (EventHandler<PgNotificationErrorEventArgs>)candidate;
             try { handler(this, args); }
-            catch { /* 错误订阅者不能替换原始后台故障。 */ }
+            catch (Exception ex)
+            {
+                // 记录但不传播订阅者异常，确保其他订阅者和监听循环不受影响
+                if (Logger is { } logger1)
+                    LogOnErrorSubscriberThrew(logger1, ex);
+            }
         }
     }
 
@@ -222,7 +253,12 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         {
             var handler = (EventHandler<PgNotificationEventArgs>)candidate;
             try { handler(this, args); }
-            catch { /* 一个订阅者不能阻断其他订阅者或监听循环。 */ }
+            catch (Exception ex)
+            {
+                // 记录但不传播订阅者异常，确保其他订阅者和监听循环不受影响
+                if (Logger is { } logger1)
+                    LogOnNotificationSubscriberThrew(logger1, ex);
+            }
         }
     }
 
@@ -256,7 +292,12 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         if (runTask is not null)
         {
             try { await runTask.ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // 正常的取消路径，记录以便诊断但不抛出
+                if (Logger is { } logger1)
+                    LogRunTaskCanceled(logger1);
+            }
         }
 
         // CancelAsync 已完成、runTask 已结束——此刻 Dispose 无并发窗口。
