@@ -69,12 +69,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             }
             catch (Exception exception) when (attempt < maxRetries && IsRetryable(exception, ct))
             {
-                if (connection is not null)
-                {
-                    try { await connection.DisposeAsync().ConfigureAwait(false); }
-                    catch { /* 清理失败不能覆盖连接或初始化异常。 */ }
-                    connection = null;
-                }
+                await DisposeConnectionSafelyAsync(connection).ConfigureAwait(false);
+                connection = null;
                 TimeSpan delay = options.RetryBackoff?.Invoke(attempt)
                     ?? ResilienceExecutor.GetDefaultBackoff(attempt);
                 // ITM-603/605: 自定义 RetryBackoff 委托返回负值会让 Task.Delay 抛
@@ -97,15 +93,20 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             }
             finally
             {
-                if (connection is not null)
-                {
-                    try { await connection.DisposeAsync().ConfigureAwait(false); }
-                    catch { /* 清理失败不能覆盖连接或初始化异常。 */ }
-                }
+                await DisposeConnectionSafelyAsync(connection).ConfigureAwait(false);
             }
         }
 
         throw new InvalidOperationException("Unreachable");
+    }
+
+    /// <summary>连接清理——清理失败不能覆盖连接或初始化异常。
+    /// 重试 catch 与 finally 共享，消除 try/catch 重复（G-4 重构）。</summary>
+    private static async ValueTask DisposeConnectionSafelyAsync(DbConnection? connection)
+    {
+        if (connection is null) return;
+        try { await connection.DisposeAsync().ConfigureAwait(false); }
+        catch { /* 清理失败不能覆盖连接或初始化异常。 */ }
     }
 
     private static bool IsRetryable(Exception exception, CancellationToken callerToken)
@@ -438,60 +439,65 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         await using DbCommand cmd = CreateCommand();
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         metadata.BindUpsert(cmd, entity);
-
-        IReadOnlyList<string> upsertColumns = metadata.UpsertColumns;
-        if (upsertColumns.Count != cmd.Parameters.Count)
+        if (metadata.UpsertColumns.Count != cmd.Parameters.Count)
             throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' generated {upsertColumns.Count} upsert columns but " +
+                $"Type '{typeof(T).Name}' generated {metadata.UpsertColumns.Count} upsert columns but " +
                 $"{cmd.Parameters.Count} parameters.");
 
-        string[] updateColumns = upsertColumns
-            .Where(column => !string.Equals(
-                column, primaryKeyColumn, StringComparison.Ordinal))
+        return TProvider.SupportsReturningClause
+            ? await UpsertWithReturningAsync(cmd, metadata, entity, tableName, primaryKeyColumn, ct).ConfigureAwait(false)
+            : await UpsertWithMySqlAsync(cmd, entity, tableName, primaryKeyColumn, metadata.UpsertColumns, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>PG/SQLite UPSERT——ON CONFLICT ... DO UPDATE/NOTHING + RETURNING 物化完整行。</summary>
+    private static async ValueTask<T> UpsertWithReturningAsync<T>(
+        DbCommand cmd, CrudMetadata metadata, T entity,
+        string tableName, string primaryKeyColumn, CancellationToken ct) where T : class, new()
+    {
+        if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? returningColumns))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated column metadata.");
+
+        string[] updateColumns = metadata.UpsertColumns
+            .Where(column => !string.Equals(column, primaryKeyColumn, StringComparison.Ordinal))
             .ToArray();
-        string columnList = string.Join(", ",
-            upsertColumns.Select(TProvider.QuoteIdentifier));
+        string conflictAction = updateColumns.Length == 0
+            ? "DO NOTHING"
+            : "DO UPDATE SET " + string.Join(", ", updateColumns.Select(column =>
+                $"{TProvider.QuoteIdentifier(column)} = excluded.{TProvider.QuoteIdentifier(column)}"));
+
+        string columnList = string.Join(", ", metadata.UpsertColumns.Select(TProvider.QuoteIdentifier));
         string valueList = string.Join(", ",
             Enumerable.Range(0, cmd.Parameters.Count).Select(static index => $"@p{index}"));
+        string returningList = string.Join(", ", returningColumns.Select(TProvider.QuoteIdentifier));
 
-        if (TProvider.SupportsReturningClause)
-        {
-            if (!PalORM_Runtime.ColumnNames.TryGetValue(
-                    typeof(T), out IReadOnlyList<string>? returningColumns))
-            {
-                throw new InvalidOperationException(
-                    $"Type '{typeof(T).Name}' has no generated column metadata.");
-            }
+        cmd.CommandText =
+            $"INSERT INTO {TProvider.QuoteIdentifier(tableName)} ({columnList}) " +
+            $"VALUES ({valueList}) ON CONFLICT " +
+            $"({TProvider.QuoteIdentifier(primaryKeyColumn)}) {conflictAction} " +
+            $"RETURNING {returningList}";
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (await reader.ReadAsync(ct).ConfigureAwait(false))
+            return ((IRowFactory<T>)metadata.RowFactory).Read(reader);
+        return entity;
+    }
 
-            string conflictAction = updateColumns.Length == 0
-                ? "DO NOTHING"
-                : "DO UPDATE SET " + string.Join(", ", updateColumns.Select(column =>
-                    $"{TProvider.QuoteIdentifier(column)} = " +
-                    $"excluded.{TProvider.QuoteIdentifier(column)}"));
-            string returningList = string.Join(", ",
-                returningColumns.Select(TProvider.QuoteIdentifier));
-            cmd.CommandText =
-                $"INSERT INTO {TProvider.QuoteIdentifier(tableName)} ({columnList}) " +
-                $"VALUES ({valueList}) ON CONFLICT " +
-                $"({TProvider.QuoteIdentifier(primaryKeyColumn)}) {conflictAction} " +
-                $"RETURNING {returningList}";
-            await using DbDataReader reader =
-                await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            if (await reader.ReadAsync(ct).ConfigureAwait(false))
-                return ((IRowFactory<T>)metadata.RowFactory).Read(reader);
-            return entity;
-        }
-
-        // MySQL 仅对编译期确认的数值自增键使用 LAST_INSERT_ID(expr)。
+    /// <summary>MySQL UPSERT——ON DUPLICATE KEY UPDATE，自增键用 LAST_INSERT_ID(expr) 回填。</summary>
+    private static async ValueTask<T> UpsertWithMySqlAsync<T>(
+        DbCommand cmd, T entity,
+        string tableName, string primaryKeyColumn,
+        IReadOnlyList<string> upsertColumns, CancellationToken ct) where T : class, new()
+    {
         if (TProvider.Dialect != SqlDialect.MySql)
             throw new NotSupportedException(
                 $"Provider '{TProvider.Name}' does not support RETURNING and has no upsert strategy; " +
                 "only the MySQL dialect fallback (ON DUPLICATE KEY UPDATE) is implemented.");
+
         bool hasGeneratedKey = PalORM_Runtime.SetIdDelegates.TryGetValue(
             typeof(T), out Action<object, long>? setId);
         cmd.CommandText = BuildMySqlUpsertSql(
             tableName, primaryKeyColumn, upsertColumns,
             cmd.Parameters.Count, hasGeneratedKey);
+
         if (!hasGeneratedKey)
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
