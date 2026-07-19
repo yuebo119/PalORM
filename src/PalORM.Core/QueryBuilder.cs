@@ -74,6 +74,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>遗留 14 参构造——内部已迁移到 QueryBuilderContext。
     /// 保留供测试/反射代码兼容；新代码请用 <see cref="QueryBuilder(QueryBuilderContext{T})"/>。</summary>
     [Obsolete("Use QueryBuilder(QueryBuilderContext<T>). Kept for compat.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:MethodsShouldNotHaveTooManyParameters",
+        Justification = "遗留 ctor 保留向后兼容，参数多于 7 但不能改签名。新代码请用聚合 ctor。")]
     internal QueryBuilder(DbConnection conn, SqlDialect dialect, IRowFactory<T> factory,
         List<IQueryInterceptor> interceptors, Func<string, object?, DbParameter> paramFactory,
         Func<string, string> quoteIdentifier, string tableName,

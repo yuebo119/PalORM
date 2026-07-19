@@ -40,10 +40,7 @@ internal static class SqlFileEmitter
         // 安全: 拒绝绝对路径和路径遍历
         // ITM-584: '..' 按路径段判定——子串判定误拒 `my..queries.sql` 等合法文件名；
         // 真正的遍历（`../x` / `a/../b`）仍被拒绝，且 ITM-545 的解析后前缀校验仍在下游兜底。
-        bool hasTraversalSegment = relativePath
-            .Split('/', '\\')
-            .Any(static segment => segment == "..");
-        if (Path.IsPathRooted(relativePath) || hasTraversalSegment)
+        if (Path.IsPathRooted(relativePath) || HasTraversalSegment(relativePath))
             return GenerateError(method, $"SqlFile 路径必须为相对路径，不允许 '..' 或绝对路径: {EscapeForCSharp(relativePath)}");
 
         ct.ThrowIfCancellationRequested();
@@ -59,16 +56,7 @@ internal static class SqlFileEmitter
 
         ct.ThrowIfCancellationRequested();
 
-        // 向上查找 .csproj, 最多 10 层 (避免无限循环)
-        string? currentDir = projectDir;
-        for (int depth = 0; depth < 10 && currentDir is not null; depth++)
-        {
-            if (Directory.GetFiles(currentDir, "*.csproj").Length > 0) break;
-            string? parent = Path.GetDirectoryName(currentDir);
-            if (parent == currentDir) { currentDir = null; break; }
-            currentDir = parent;
-        }
-        string rootDir = currentDir ?? projectDir;
+        string rootDir = ResolveProjectRoot(projectDir);
         string fullPath = Path.GetFullPath(Path.Combine(rootDir, relativePath));
 
         // 确保解析后路径仍在项目目录内。前缀比较带尾分隔符（ITM-545 纵深防御）：
@@ -78,21 +66,9 @@ internal static class SqlFileEmitter
         if (!fullPath.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
             return GenerateError(method, $"SqlFile 路径越界: {EscapeForCSharp(relativePath)}");
 
-        string sqlContent;
-        try
-        {
-            sqlContent = File.ReadAllText(fullPath);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return GenerateError(method, $"SQL file not found: {EscapeForCSharp(fullPath)}");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // 文件被占用/无权限：友好诊断而非源生成器崩溃
-            return GenerateError(method,
-                $"SQL file could not be read ({ex.GetType().Name}): {EscapeForCSharp(fullPath)}");
-        }
+        string? sqlContent = TryReadSqlFile(fullPath);
+        if (sqlContent is null)
+            return GenerateError(method, $"SQL file not found or unreadable: {EscapeForCSharp(fullPath)}");
 #pragma warning restore RS1035
 
         // ── V_SQL: 条件分支解析 ──
@@ -146,6 +122,38 @@ internal static class SqlFileEmitter
 
         return sb.ToString();
     }
+
+    /// <summary>路径遍历检测——'..' 按路径段判定，避免误拒 my..file.sql 等合法文件名（ITM-584）。</summary>
+    private static bool HasTraversalSegment(string relativePath)
+        => relativePath.Split('/', '\\').Any(static segment => segment == "..");
+
+    /// <summary>从当前目录向上查找含 .csproj 的项目根目录；最多 10 层避免无限循环。</summary>
+#pragma warning disable RS1035 // ITM-530：源生成器读取磁盘 .sql 文件是本特性的核心设计
+    private static string ResolveProjectRoot(string projectDir)
+    {
+        string? currentDir = projectDir;
+        for (int depth = 0; depth < 10 && currentDir is not null; depth++)
+        {
+            if (Directory.GetFiles(currentDir, "*.csproj").Length > 0) return currentDir;
+            string? parent = Path.GetDirectoryName(currentDir);
+            if (parent == currentDir) break;
+            currentDir = parent;
+        }
+        return currentDir ?? projectDir;
+    }
+
+    /// <summary>读 SQL 文件内容；文件不存在或被占用时返回 null（调用方决定诊断消息）。</summary>
+    /// <returns>文件内容；失败时返回 null。</returns>
+    private static string? TryReadSqlFile(string fullPath)
+    {
+        try { return File.ReadAllText(fullPath); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException
+            or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+#pragma warning restore RS1035
 
     private static string GenerateError(IMethodSymbol method, string error)
     {

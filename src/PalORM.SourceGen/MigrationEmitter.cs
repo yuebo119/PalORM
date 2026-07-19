@@ -191,6 +191,15 @@ internal static class MigrationEmitter
             return "INTEGER";
 
         string typeName = column.ProviderClrTypeName;
+        return GetNumericDbType(typeName, dialect)
+            ?? GetTemporalDbType(typeName, dialect)
+            ?? GetMiscDbType(typeName, dialect, column, isIndexed)
+            ?? ResolveFallbackDbType(column, dialect, isIndexed);
+    }
+
+    /// <summary>数值类型映射——BIGINT/INTEGER/SMALLINT/BOOLEAN/DECIMAL/DOUBLE/REAL。</summary>
+    private static string? GetNumericDbType(string typeName, SqlGenerationDialect dialect)
+    {
         if (typeName is "long" or "global::System.Int64") return "BIGINT";
         if (typeName is "int" or "global::System.Int32") return "INTEGER";
         if (typeName is "short" or "global::System.Int16" or
@@ -201,6 +210,12 @@ internal static class MigrationEmitter
         if (typeName is "double" or "global::System.Double")
             return dialect == SqlGenerationDialect.PostgreSql ? "DOUBLE PRECISION" : "DOUBLE";
         if (typeName is "float" or "global::System.Single") return "REAL";
+        return null;
+    }
+
+    /// <summary>时间类型映射——DATE/TIME/DATETIME/TIMESTAMP/TIMESTAMPTZ。</summary>
+    private static string? GetTemporalDbType(string typeName, SqlGenerationDialect dialect)
+    {
         if (typeName is "global::System.DateOnly") return "DATE";
         if (typeName is "global::System.TimeOnly")
             return dialect == SqlGenerationDialect.MySql ? "TIME(6)" : "TIME";
@@ -214,6 +229,15 @@ internal static class MigrationEmitter
                 SqlGenerationDialect.MySql => "DATETIME(6)",
                 _ => throw new ArgumentOutOfRangeException(nameof(dialect))
             };
+        return null;
+    }
+
+    /// <summary>其他已知类型（Guid/char/string）映射。
+    /// ITM-566/201：MySQL 对 TEXT/BLOB 建索引必须指定前缀长度（错误 1170，不被 1061 幂等兜底吞）——
+    /// 主键列与被索引列一律 VARCHAR(255)；char 同 string 处理（ITM-566 统一）。</summary>
+    private static string? GetMiscDbType(
+        string typeName, SqlGenerationDialect dialect, ColumnModel column, bool isIndexed)
+    {
         if (typeName is "global::System.Guid")
             return dialect switch
             {
@@ -222,19 +246,22 @@ internal static class MigrationEmitter
                 SqlGenerationDialect.MySql => "CHAR(36)",
                 _ => throw new ArgumentOutOfRangeException(nameof(dialect))
             };
-        if (typeName is "char" or "global::System.Char")
-            // ITM-566：1170 规避对所有落 TEXT 的类型统一——char 被索引/主键时同 string 处理
-            return dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
-                ? "VARCHAR(255)"
-                : "TEXT";
-        if (typeName is "string" or "global::System.String")
-            // MySQL 对 TEXT/BLOB 建索引必须指定前缀长度（错误 1170，不被 1061 幂等兜底吞）——
-            // 主键列与被索引列一律 VARCHAR(255)（ITM-201）
-            return dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
-                ? "VARCHAR(255)"
-                : "TEXT";
-        // ITM-566：兜底 TEXT（enum/未识别类型）同受 1170 约束——被索引时 VARCHAR(255)
-        if (dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
+
+        bool needsVarchar = typeName is "char" or "global::System.Char"
+            or "string" or "global::System.String";
+        if (!needsVarchar) return null;
+
+        return dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
+            ? "VARCHAR(255)"
+            : "TEXT";
+    }
+
+    /// <summary>兜底（enum/未识别类型）——MySQL + 索引/主键的 TEXT 列同样受 1170 约束。</summary>
+    private static string ResolveFallbackDbType(
+        ColumnModel column, SqlGenerationDialect dialect, bool isIndexed)
+    {
+        if (dialect == SqlGenerationDialect.MySql
+            && (column.IsPrimaryKey || isIndexed)
             && column.DbTypeName == "TEXT")
             return "VARCHAR(255)";
         return column.DbTypeName;

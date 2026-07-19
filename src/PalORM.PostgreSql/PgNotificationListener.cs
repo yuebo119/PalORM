@@ -117,6 +117,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "RunAsync 是后台监听主循环：双层 while + 多层 try/catch 是异步生命周期管理的必然形态。"
+            + "finally 块的 CTS 所有权判定与 StopCoreAsync 存在显式并发契约（见注释 line 195-205），"
+            + "严禁拆分——拆分会破坏 dispose 权移交语义。")]
     private async Task RunAsync(CancellationTokenSource owner, TaskCompletionSource started)
     {
         // 先完成 _runTask 发布，避免同步 Open 失败的 finally 被随后赋值覆盖。

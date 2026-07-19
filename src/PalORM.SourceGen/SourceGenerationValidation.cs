@@ -175,6 +175,10 @@ internal static class SourceGenerationValidation
 
     /// <summary>沿基类链枚举可映射属性（ITM-559，与 TableModel.GetMappableProperties 同一
     /// 隐藏语义：派生类同名属性覆盖基类）。排除 static/索引器/[NotMapped]。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "EnumerateMappedProperties 走基类链 + 派生类覆盖语义，循环内多分支是必要的"
+            + "（跳过 static/索引器/[NotMapping]/覆盖同名属性）。复杂度源于 Roslyn 符号模型遍历本身。")]
     internal static IEnumerable<IPropertySymbol> EnumerateMappedProperties(INamedTypeSymbol type)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
