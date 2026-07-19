@@ -77,9 +77,17 @@ public sealed class StoredProcBuilder
         return this;
     }
 
-    /// <summary>执行后读取输出参数值。</summary>
+    /// <summary>执行后读取输出参数值。
+    /// <para>ITM-592: 必须在 <see cref="QueryAsync{T}"/> / <see cref="ExecuteAsync"/> 之后调用——
+    /// 执行前调用会读到 <see cref="DBNull"/> 初始值并静默返回 default(T)，掩盖调用方 bug。</para></summary>
     public T? GetOutputValue<T>(string name)
     {
+        // ITM-592: 未执行时 _outputParams 内 Value 恒为 DBNull.Value（WithOutputParam 初始化），
+        // 走到下面 default 分支会返回 default(T) 无异常——调用方无法察觉。明确拒绝。
+        if (!_executed)
+            throw new InvalidOperationException(
+                $"Cannot read output parameter '{name}' before executing the stored procedure. " +
+                "Call QueryAsync<T>() or ExecuteAsync() first.");
         var p = _outputParams.Find(x => x.ParameterName == name)
             ?? throw new InvalidOperationException($"Output parameter '{name}' not found.");
         // ITM-540: 宽容拆箱，参照 ScalarAsync——provider 返回的装箱类型可能与 T 不完全一致

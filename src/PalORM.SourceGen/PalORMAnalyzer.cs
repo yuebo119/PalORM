@@ -7,6 +7,10 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace PalORM.SourceGen;
 
 /// <summary>PalORM 编译时验证——V1-V6 诊断规则。</summary>
+/// <remarks><b>占位描述符</b>（ITM-581/600）：PALORM006/007 已注册但无 RegisterSymbolAction
+/// 触发——006 由 <c>SqlFileEmitter</c> 的 <c>[Obsolete(error:true)]</c> 机制实际承担，
+/// 007 无 schema 对照数据源。用户在 <c>.editorconfig</c> 配置这两项 severity 无效
+/// （诊断永远不报告）；保留占位防编号复用歧义，3.0 与其它死成员一并裁决。</remarks>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 {

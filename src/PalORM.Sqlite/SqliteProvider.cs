@@ -38,9 +38,9 @@ public sealed class SqliteProvider : IDbProvider
     public static string QuoteIdentifier(string identifier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
-        // ITM-584: NUL 会在驱动/服务端 C 层截断语句——三方言对称拒绝（引用符转义不覆盖 NUL）
-        if (identifier.Contains('\0', StringComparison.Ordinal))
-            throw new ArgumentException("标识符不能包含 NUL 字符。", nameof(identifier));
+        // ITM-584/593: NUL 会截断驱动/服务端 C 层语句；C0 控制字符族 + DEL 同样不稳。
+        // 三方言共享 IdentifierSafety 守卫（替换 ITM-584 仅查 NUL 的补丁式实现）。
+        IdentifierSafety.ThrowIfUnsafe(identifier);
         return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
     }
 

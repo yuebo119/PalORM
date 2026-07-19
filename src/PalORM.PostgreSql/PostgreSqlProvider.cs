@@ -33,9 +33,8 @@ public sealed class PostgreSqlProvider : IDbProvider
     public static string QuoteIdentifier(string identifier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
-        // ITM-584: NUL 会在驱动/服务端 C 层截断语句——三方言对称拒绝（引用符转义不覆盖 NUL）
-        if (identifier.Contains('\0', StringComparison.Ordinal))
-            throw new ArgumentException("标识符不能包含 NUL 字符。", nameof(identifier));
+        // ITM-584/593: 三方言共享 IdentifierSafety 守卫（C0 控制字符族 + DEL）。
+        IdentifierSafety.ThrowIfUnsafe(identifier);
         return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
     }
 
