@@ -203,6 +203,93 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(compileErrors).IsEmpty();
     }
 
+    // ─── PALORM022：非整型主键 + AutoIncrement（ITM-589）───
+
+    [Test]
+    public async Task GuidKeyWithDefaultAutoIncrement_ReportsPalorm022()
+    {
+        // ITM-589：Guid 主键 + 默认 AutoIncrement=true（[Key] 无参）静默忽略，
+        // 运行时 InsertAsync 才失败——编译期必须明确拒绝。
+        const string source = """
+            using PalORM;
+            [Table("guid_default")]
+            public sealed class GuidDefault
+            {
+                [Key] public System.Guid Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM022")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task StringKeyWithExplicitAutoIncrement_ReportsPalorm022()
+    {
+        // ITM-589：string 主键 + 显式 [Key(AutoIncrement = true)] 同样拒绝。
+        const string source = """
+            using PalORM;
+            [Table("string_explicit")]
+            public sealed class StringExplicit
+            {
+                [Key(AutoIncrement = true)] public string Id { get; set; } = "";
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM022")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task StringKeyWithAutoIncrementFalse_DoesNotReportPalorm022()
+    {
+        // ITM-589 正向：string 主键 + AutoIncrement=false（应用侧赋值，如雪花 ID/外部 ID）合法。
+        const string source = """
+            using PalORM;
+            [Table("string_app_assigned")]
+            public sealed class StringAppAssigned
+            {
+                [Key(AutoIncrement = false)] public string Id { get; set; } = "";
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM022")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task LongKeyWithAutoIncrement_DoesNotReportPalorm022()
+    {
+        // ITM-589 正向：long 主键 + AutoIncrement=true 是合法默认（数据库自增）。
+        const string source = """
+            using PalORM;
+            [Table("long_autoinc")]
+            public sealed class LongAutoInc
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM022")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
     [Test]
     public async Task IndexOnUnknownColumn_ReportsPalorm020()
     {

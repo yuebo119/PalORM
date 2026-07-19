@@ -705,10 +705,15 @@ internal sealed class GeneratorPhase2Tests
             .GetAnalyzerDiagnosticsAsync();
         GeneratorResult result = RunGenerator(compilation);
 
-        await Assert.That(diagnostics
+        // ITM-587/590 后 PALORM001/014 触发顺序变化（分析器注册结构改为 CompilationStartAction），
+        // 用 Contains 替代 IsEquivalentTo 避免对执行顺序敏感——语义是"两者都触发且无其他 error"。
+        var errorIds = diagnostics
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-            .Select(static diagnostic => diagnostic.Id))
-            .IsEquivalentTo(["PALORM001", "PALORM014"]);
+            .Select(static diagnostic => diagnostic.Id)
+            .ToList();
+        await Assert.That(errorIds.Count).IsEqualTo(2);
+        await Assert.That(errorIds).Contains("PALORM001");
+        await Assert.That(errorIds).Contains("PALORM014");
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
     }
 

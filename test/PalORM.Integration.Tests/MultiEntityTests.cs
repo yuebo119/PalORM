@@ -77,7 +77,7 @@ public partial class ComputedConvertedEntity
 [Table("converted_key_entities")]
 public partial class ConvertedKeyEntity
 {
-    [Key]
+    [Key(AutoIncrement = false)]
     [Converter(typeof(BinaryIdConverter))]
     public BinaryId Id { get; set; }
 
@@ -89,7 +89,7 @@ public partial class ConvertedKeyEntity
 [Table("converted_soft_delete_entities")]
 public partial class ConvertedSoftDeleteEntity
 {
-    [Key]
+    [Key(AutoIncrement = false)]
     [Converter(typeof(BinaryIdConverter))]
     public BinaryId Id { get; set; }
 
@@ -103,7 +103,7 @@ public partial class ConvertedSoftDeleteEntity
 [Table("upsert_shape_entities")]
 public partial class UpsertShapeEntity
 {
-    [Key]
+    [Key(AutoIncrement = false)]
     public string Id { get; set; } = "";
 
     [Column("name")]
