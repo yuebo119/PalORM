@@ -170,7 +170,7 @@ internal sealed class SessionOperationState
         lock (_sync)
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
         // ITM-570：与 DisposeAsync 对称的有界等待——WithTransaction 回调内被放弃的枚举器租约
-        // （只走 EnterOperation，不注册为事务资源）会让此 await 永久挂起，事务收口死锁。
+        // （只走 EnterOperation，不注册为事务资源）会让此等待永久挂起，事务收口死锁。
         try
         {
             await activeOperation.WaitAsync(DisposeWaitTimeout).ConfigureAwait(false);
