@@ -92,11 +92,8 @@ internal static class MigrationEmitter
             // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）。
             // ITM-519：DEFAULT CURRENT_TIMESTAMP 仅对 DateTime/DateTimeOffset 合法；
             // TimeOnly/DateOnly/数值等类型上会生成 MySQL 非法 DDL，这些类型不加 DEFAULT。
-            string defaultClause = column.IsTimestamp && IsTemporalTimestampType(column)
-                ? " DEFAULT CURRENT_TIMESTAMP" : "";
-            string primaryKey = column.IsPrimaryKey && column.IsAutoIncrement
-                ? " PRIMARY KEY AUTOINCREMENT"
-                : column.IsPrimaryKey ? " PRIMARY KEY" : "";
+            string defaultClause = GetDefaultClause(column, SqlGenerationDialect.Sqlite, dbType);
+            string primaryKey = GetPrimaryKeyClause(column, SqlGenerationDialect.Sqlite);
             columns.Add($"    {name} {dbType}{generated}{nullable}{defaultClause}{primaryKey}");
         }
 
@@ -125,11 +122,7 @@ internal static class MigrationEmitter
             // MySQL 分秒精度列要求 DEFAULT 表达式精度一致（DATETIME(6) 需 CURRENT_TIMESTAMP(6)）。
             // ITM-519：DEFAULT CURRENT_TIMESTAMP 仅对 DateTime/DateTimeOffset 合法——
             // TimeOnly/DateOnly 上 MySQL 会拒绝该 DEFAULT，非时间戳类型一律不加。
-            string defaultClause = column.IsTimestamp && IsTemporalTimestampType(column)
-                ? dialect == SqlGenerationDialect.MySql && dbType.EndsWith("(6)", StringComparison.Ordinal)
-                    ? " DEFAULT CURRENT_TIMESTAMP(6)"
-                    : " DEFAULT CURRENT_TIMESTAMP"
-                : "";
+            string defaultClause = GetDefaultClause(column, dialect, dbType);
             string primaryKey = GetPrimaryKeyClause(column, dialect);
             columns.Add($"    {name} {dbType}{generated}{primaryKey}{nullable}{defaultClause}");
         }
@@ -161,6 +154,19 @@ internal static class MigrationEmitter
     private static bool IsTemporalTimestampType(ColumnModel column)
         => column.ProviderClrTypeName is
             "global::System.DateTime" or "global::System.DateTimeOffset";
+
+    /// <summary>非 SQLite 方言（PG/MySQL）的 DEFAULT CURRENT_TIMESTAMP 子句。
+    /// MySQL 分秒精度列（dbType 以 "(6)" 结尾）要求 DEFAULT 表达式精度一致。</summary>
+    private static string GetDefaultClause(ColumnModel column, SqlGenerationDialect dialect, string dbType)
+    {
+        if (!column.IsTimestamp || !IsTemporalTimestampType(column))
+            return "";
+
+        if (dialect == SqlGenerationDialect.MySql && dbType.EndsWith("(6)", StringComparison.Ordinal))
+            return " DEFAULT CURRENT_TIMESTAMP(6)";
+
+        return " DEFAULT CURRENT_TIMESTAMP";
+    }
 
     /// <summary>列是否被任何 [Index]/[Unique] 索引引用——决定 MySQL 下 string 列型。</summary>
     private static bool IsIndexed(TableModel model, ColumnModel column)

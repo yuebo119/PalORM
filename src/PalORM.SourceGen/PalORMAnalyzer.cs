@@ -174,13 +174,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 bool autoIncrementEnabled = key.GetAttributes()
                     .FirstOrDefault(static a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"))?
                     .NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is not false;
-                string? reason = key.SetMethod is null or { IsInitOnly: true }
-                    ? "has an init-only or missing setter (generated ID backfill requires a writable setter)"
-                    : key.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
-                        ? "is a nullable value type (generated key binding cannot compile)"
-                        : autoIncrementEnabled && key.Type.SpecialType is not (SpecialType.System_Int64 or SpecialType.System_Int32)
-                            ? $"declares [Key(AutoIncrement = true)] but type is '{key.Type.Name}' — only int/long keys support auto-increment; use [Key(AutoIncrement = false)] for application-assigned keys (snowflake/Guid/string)"
-                            : null;
+                string? reason = ClassifyKeyValidity(key, autoIncrementEnabled);
                 if (reason is not null)
                     ctx.ReportDiagnostic(Diagnostic.Create(InvalidKeyDeclaration,
                         key.Locations.FirstOrDefault() ?? type.Locations[0], key.Name, type.Name, reason));
@@ -431,6 +425,27 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 }
             }
         }, SyntaxKind.InvocationExpression);
+    }
+
+    /// <summary>分类主键声明的合法性。返回 null 表示通过；否则返回诊断 reason（ITM-589）。
+    /// 顺序优先级：setter 可写性 &gt; 类型非 Nullable &gt; AutoIncrement 类型匹配。</summary>
+    private static string? ClassifyKeyValidity(IPropertySymbol key, bool autoIncrementEnabled)
+    {
+        if (key.SetMethod is null or { IsInitOnly: true })
+            return "has an init-only or missing setter (generated ID backfill requires a writable setter)";
+
+        if (key.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T })
+            return "is a nullable value type (generated key binding cannot compile)";
+
+        if (autoIncrementEnabled
+            && key.Type.SpecialType is not (SpecialType.System_Int64 or SpecialType.System_Int32))
+        {
+            return $"declares [Key(AutoIncrement = true)] but type is '{key.Type.Name}' — "
+                + "only int/long keys support auto-increment; "
+                + "use [Key(AutoIncrement = false)] for application-assigned keys (snowflake/Guid/string)";
+        }
+
+        return null;
     }
 
     /// <summary>PALORM020：空列 [Index]、同实体重名索引、[Unique] 派生名 ux_ 与显式 [Index] 名冲突。

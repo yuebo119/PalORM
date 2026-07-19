@@ -93,7 +93,7 @@ static string MapDbType(string dbType)
 static string ToPascalCase(string name)
 {
     string[] parts = name.Split('_');
-    char[] result = new char[name.Length];
+    var result = new char[name.Length];
     int index = 0;
     for (int i = 0; i < parts.Length; i++)
     {

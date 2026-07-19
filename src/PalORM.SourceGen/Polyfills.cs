@@ -2,7 +2,6 @@
 // C# 9+ record/init → IsExternalInit
 // （ITM-429：RequiredMember/CompilerFeatureRequired/StringSyntax 三个零使用 polyfill 已删）
 
-namespace System.Runtime.CompilerServices
-{
-    internal static class IsExternalInit { }
-}
+namespace System.Runtime.CompilerServices;
+
+internal static class IsExternalInit { }
