@@ -13,6 +13,9 @@ internal static class ColumnOrderValidator
     internal static void Validate<T>(DbDataReader reader, bool enabled) where T : class, new()
     {
         if (!enabled) return;
+        // ITM-543: ColumnNames 缺键时静默返回是安全的——所有调用点（DataSession/GridReader/StoredProcBuilder）
+        // 均先经 RowFactories.TryGetValue 守卫，未注册类型在取 RowFactory 时已明确失败；而源生成器对
+        // 已注册实体同时产出 RowFactory 与 ColumnNames，故"有 RowFactory 却无 ColumnNames"不可达。
         if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? expected))
             return;
         if (reader.FieldCount < expected.Count)

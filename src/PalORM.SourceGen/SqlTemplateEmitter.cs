@@ -30,11 +30,10 @@ internal static class SqlTemplateEmitter
         if (syntaxRef?.GetSyntax(ct) is not MethodDeclarationSyntax methodSyntax)
             return null;
 
-        // 语法树内查找首个插值字符串——注释/属性文本不再干扰
-        InterpolatedStringExpressionSyntax? interpolated = methodSyntax
-            .DescendantNodes()
-            .OfType<InterpolatedStringExpressionSyntax>()
-            .FirstOrDefault();
+        // ITM-521：取 return 语句（含表达式体箭头 =>）中的插值串，而非方法体首个插值串。
+        // 方法体前置日志/诊断的插值（如 logger.LogDebug($"...")）会污染"首个"选择，
+        // 提升为模板常量后语义错误。以 return/箭头表达式的插值为准。
+        InterpolatedStringExpressionSyntax? interpolated = FindReturnedInterpolatedString(methodSyntax);
         if (interpolated is null)
             return null;
 
@@ -66,5 +65,34 @@ public static partial class SqlTemplates
     public static readonly global::System.FormattableString {templateName} = {literal};
 }}
 ";
+    }
+
+    /// <summary>取方法返回值中的插值串（ITM-521）：优先表达式体 `=> $"..."`，
+    /// 否则取 return 语句内的插值串；两者皆无则 null（方法保持手写实现）。
+    /// 只在 return/箭头子树内查找，规避前置日志插值被误取。</summary>
+    private static InterpolatedStringExpressionSyntax? FindReturnedInterpolatedString(
+        MethodDeclarationSyntax methodSyntax)
+    {
+        // 表达式体方法：public static FormattableString Foo() => $"SELECT ...";
+        if (methodSyntax.ExpressionBody is { } arrow)
+        {
+            return arrow.Expression
+                .DescendantNodesAndSelf()
+                .OfType<InterpolatedStringExpressionSyntax>()
+                .FirstOrDefault();
+        }
+
+        // 块体方法：取首个 return 语句内的插值串
+        foreach (var returnStatement in methodSyntax.DescendantNodes().OfType<ReturnStatementSyntax>())
+        {
+            var interpolated = returnStatement
+                .DescendantNodesAndSelf()
+                .OfType<InterpolatedStringExpressionSyntax>()
+                .FirstOrDefault();
+            if (interpolated is not null)
+                return interpolated;
+        }
+
+        return null;
     }
 }

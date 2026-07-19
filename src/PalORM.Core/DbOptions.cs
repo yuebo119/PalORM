@@ -60,7 +60,10 @@ public sealed record DbOptions
     /// <summary>断路器：熔断后恢复等待时间（默认 30 秒）。</summary>
     public TimeSpan CircuitBreakerResetAfter { get; init; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>命名策略（默认保持原样）。</summary>
+    /// <summary>命名策略（默认保持原样）。
+    /// <para><b>作用域限制（ITM-516）</b>：列名/表名映射在**编译期**由源生成器按 [Table]/[Column]
+    /// 注解确定，本运行时选项不参与该映射——设置本项不会改变已生成的列名。仅供调用方在
+    /// 自定义 SQL 中手动调用 <see cref="ApplyNaming"/> 归一标识符。要改列名请用 [Column("...")]。</para></summary>
     public NamingConvention NamingConvention { get; init; } = NamingConvention.None;
     /// <summary>应用命名策略（None=原样, SnakeCase=下划线, LowerCase=全小写）。</summary>
     public string ApplyNaming(string name) => NamingConvention switch
@@ -93,6 +96,20 @@ public sealed record DbOptions
     /// <summary>查询缓存实现（ADR-C）。未设置时使用进程级共享的有界默认缓存（1024 条）。
     /// 注入独立实例可实现会话/租户级缓存隔离；实现需线程安全。</summary>
     public IQueryCache? QueryCache { get; init; }
+
+    /// <summary>校验配置数值合法性（ITM-517）——init 属性可绕过 WithPool 的构造校验直接设非法值，
+    /// 在会话创建入口统一兜底。CommandTimeout=Zero 是合法的"无限等待"，此处不拒绝。</summary>
+    internal void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(CommandTimeout.Ticks, nameof(CommandTimeout));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
+        ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PoolIdleTimeoutSeconds, nameof(PoolIdleTimeoutSeconds));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PoolLifetimeMinutes, nameof(PoolLifetimeMinutes));
+        ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerThreshold, nameof(CircuitBreakerThreshold));
+        ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerResetAfter.Ticks, nameof(CircuitBreakerResetAfter));
+    }
 
     /// <summary>连接池配置入口。所有数值必须为正数。</summary>
     public DbOptions WithPool(int maxSize, int idleTimeoutSeconds = 30, int lifetimeMinutes = 60)

@@ -15,7 +15,9 @@
 
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <AnalysisLevel>none</AnalysisLevel>
-    <NoWarn>$(NoWarn);CS1591;RS2008;RS1035</NoWarn>
+    <!-- ITM-530：RS1035（源生成器禁用 IO API）不再全局抑制，改为 SqlFileEmitter 里
+         File.ReadAllText 处局部 #pragma，避免掩蔽其它意外的 IO 使用 -->
+    <NoWarn>$(NoWarn);CS1591;RS2008</NoWarn>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <DevelopmentDependency>true</DevelopmentDependency>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>

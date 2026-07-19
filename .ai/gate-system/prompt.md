@@ -25,11 +25,11 @@
 |----|---------|----------------|
 | 编译期 | TreatWarningsAsErrors · IsAotCompatible · STJ源生成关闭反射 | — |
 | 架构 | Directory.Build.props 统一配置 · 中央包管理 | — |
-| **门禁（新增）** | **—** | **G1-G27：由 scripts/gate-check.sh 机械执行** |
+| **门禁（新增）** | **—** | **G1-G28：由 scripts/gate-check.sh 机械执行** |
 
 ---
 
-## G1-G27 检查项（与 scripts/gate-check.sh 一一对应）
+## G1-G28 检查项（与 scripts/gate-check.sh 一一对应）
 
 > 本表描述脚本已实现的检查。编号、名称、判定级别（阻断/警告）与脚本保持一致；修改脚本时必须同步本表和 `docs/编码规范.md` 门禁清单章节。
 
@@ -62,6 +62,7 @@
 | G25 | 公共 async API 必须带 `CancellationToken` 参数（Dispose 系豁免；`StopAsync` 豁免在案见账本 API-001） | STD-ASYNC | 阻断 |
 | G26 | QueryBuilder 保持 struct 声明（class 化即高 QPS 堆分配回退，写时复制语义失效；原候补 C1 脚本化） | STD-PERF | 阻断 |
 | G27 | src/ 全域 CS1591 强制不回退（全局 NoWarn 不得重新纳入 CS1591；测试/AotModels/Benchmarks 条件豁免在案；原候补 C3 的守卫） | STD-ARCH | 阻断 |
+| G28 | 禁止裸 `(int)…CommandTimeout.TotalSeconds` 截断（亚秒塌缩为 0=ADO 无限等待；须走 CommandTimeoutSeconds 向上取整，ITM-501 下沉） | STD-ASYNC | 阻断 |
 
 ### 候补检查（未脚本化，需 AI 人工核验）
 
@@ -133,7 +134,7 @@ PASS G2: Core 零外部 ORM 依赖
 ...
 PASS G27: src/ 全域 CS1591 强制不回退
 
-通过：N  警告：N  失败：N  总计：27
+通过：N  警告：N  失败：N  总计：28
 ═══════ 扫描完成 ═══════
 ```
 

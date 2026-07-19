@@ -183,10 +183,14 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>多结果集查询——执行调用方提供的完整 SQL。builder 仅供连接/方言/参数工厂，
-    /// 已构建的 Where/OrderBy 等子句不参与执行；含子句时明确失败防误用（ITM-332）。</summary>
+    /// 已构建的 Where/OrderBy 等子句不参与执行；含子句时明确失败防误用（ITM-332）。
+    /// <para>ITM-513: 仅调用拦截器 OnBefore——GridReader 为流式多结果集，无单一 rowCount，
+    /// 且异常可能发生在调用方逐集读取阶段（本方法已返回），故 OnAfter/OnError 不适用流式路径。</para></summary>
     public static async ValueTask<GridReader> QueryMultipleAsync<T>(this QueryBuilder<T> builder, FormattableString sql, CancellationToken ct = default) where T : class, new()
     {
-        if (builder._clauses.Count > builder._defaultClauseCount)
+        // ITM-523: 守卫只统计"用户实质子句"——Tag/TagWithCaller 产生的 Comment 类别与
+        // From<T>() 注入的 DefaultFilter 均应豁免，否则加个 Tag 就误触误用异常。
+        if (builder.CountUserSubstantiveClauses() > 0)
             throw new InvalidOperationException(
                 "QueryMultipleAsync executes the provided SQL verbatim and ignores builder clauses. " +
                 "Call it on a bare From<T>() (no Where/OrderBy/etc.), or embed conditions in the SQL itself.");
@@ -208,8 +212,19 @@ public static class QueryBuilderExtensions
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0);
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+            var boundParameters = new DbParameter[sql.ArgumentCount];
             for (int i = 0; i < sql.ArgumentCount; i++)
-                command.Parameters.Add(builder._paramFactory($"@p{i}", sql.GetArgument(i)));
+            {
+                DbParameter p = builder._paramFactory($"@p{i}", sql.GetArgument(i));
+                boundParameters[i] = p;
+                command.Parameters.Add(p);
+            }
+            // ITM-513: 流式多结果集仅通知 OnBefore（无单一 rowCount、异常在调用方读取阶段发生，见方法文档）
+            if (builder._interceptors.Count > 0)
+            {
+                var context = new QueryContext(command.CommandText, Array.AsReadOnly(boundParameters));
+                foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnBefore(context);
+            }
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             grid = new GridReader(
@@ -264,25 +279,37 @@ public static class QueryBuilderExtensions
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         var stopwatch = Stopwatch.StartNew();
         string outcome = "error";
+        // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
+        string sql = builder.BuildUpdateSql();
+        IReadOnlyList<DbParameter> updateParameters = builder.GetUpdateParameters();
+        var context = new QueryContext(sql, updateParameters);
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =
                 builder._operationState.Enter();
-            string sql = builder.BuildUpdateSql();
             await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(true, ct).ConfigureAwait(false);
             await using DbCommand command = lease.Connection.CreateCommand();
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = sql;
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            AddParameters(command, builder, builder.GetUpdateParameters());
+            AddParameters(command, builder, updateParameters);
+            foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnBefore(context);
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnAfter(context, stopwatch.Elapsed, affectedRows);
             outcome = "success";
             return affectedRows;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (Exception exception)
         {
-            outcome = "cancelled";
+            // ITM-513: 与 SELECT 管线一致——取消归类 cancelled，任何异常都通知拦截器 OnError
+            if (exception is OperationCanceledException && ct.IsCancellationRequested)
+                outcome = "cancelled";
+            foreach (IQueryInterceptor interceptor in builder._interceptors)
+            {
+                try { interceptor.OnError(context, exception); }
+                catch { /* 拦截器不能覆盖原始执行异常，也不能阻断资源清理。 */ }
+            }
             throw;
         }
         finally

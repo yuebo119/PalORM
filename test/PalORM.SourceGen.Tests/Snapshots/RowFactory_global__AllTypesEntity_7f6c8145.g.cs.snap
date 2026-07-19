@@ -18,7 +18,7 @@ internal sealed class RowFactory_global__AllTypesEntity_7f6c8145 : global::PalOR
             ShortValue = r.GetInt16(2),
             ByteValue = r.GetByte(3),
             StringValue = r.GetString(4),
-            CharValue = r.GetString(5)[0],
+            CharValue = ReadChar(r, 5, "char_value"),
             BoolValue = r.GetBoolean(6),
             DecimalValue = r.GetDecimal(7),
             DoubleValue = r.GetDouble(8),
@@ -33,5 +33,14 @@ internal sealed class RowFactory_global__AllTypesEntity_7f6c8145 : global::PalOR
             NullableGuid = r.IsDBNull(17) ? null : r.GetGuid(17),
             NullableTimeOnly = r.IsDBNull(18) ? null : global::System.TimeOnly.FromTimeSpan(r.GetFieldValue<global::System.TimeSpan>(18)),
         };
+    }
+
+    private static char ReadChar(global::System.Data.Common.DbDataReader r, int ordinal, string column)
+    {
+        string s = r.GetString(ordinal);
+        if (s.Length == 0)
+            throw new global::System.InvalidOperationException(
+                $"Column '{column}' maps to char but contained an empty string.");
+        return s[0];
     }
 }

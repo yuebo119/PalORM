@@ -16,7 +16,7 @@
 |------|------|-----------|------|
 | [deep-check-engine.md](deep-check-engine.md) | **引擎**：七流·probe-first·误判库·[推断]零容忍·定稿门·下沉审查 | 怎么查 | 被 review 系统引用 |
 | [review-system/prompt.md](review-system/prompt.md) | **review 系统**（原审计+评审已彻底合并，2026-07-19）：单入口五档位 | diff 档=这次提交行不行？里程碑档=整体健康+走向？ | `/review` 按档位 |
-| [gate-system/prompt.md](gate-system/prompt.md) | 门禁：G1-G27 机械检查（全阻断，零警告级死项） | 遵守规范了吗？ | 每次提交前 + CI |
+| [gate-system/prompt.md](gate-system/prompt.md) | 门禁：G1-G28 机械检查（全阻断，零警告级死项） | 遵守规范了吗？ | 每次提交前 + CI |
 | [refine-system/prompt.md](refine-system/prompt.md) | 精炼：24 项操作矩阵 | 如何更优实现？ | `refine-scan.sh` 起步 |
 
 裁决顺序：**gate 阻断 > review 缺陷 > refine 优化**。同一发现只归属一个系统。
@@ -30,7 +30,7 @@
 | test/PalORM.Core.Tests/ArchitectureInvariantTests | 触表入口必经默认过滤（含 partial 扫描） | ITM-302/404/405 |
 | test/PalORM.Core.Tests/QueryBuilderPropertyTests | SQL 结构性质（500 种子 + xorshift） | ITM-306/307/401/414 |
 | scripts/assertion-strength-check.sh | 弱断言基线（19 只减不增） | ITM-319/327 |
-| scripts/gate-check.sh | G1-G27（含 G26 struct 守卫、G27 CS1591 防回退） | 302 坑 |
+| scripts/gate-check.sh | G1-G28（含 G26 struct 守卫、G27 CS1591 防回退） | 302 坑 |
 | scripts/verify-ai-system.sh | .ai 系统自身一致性 | 模式 P8 |
 | scripts/doc-consistency-check.sh | 文档口径（含 D9 加和校验） | DOC 系列 + ITM-418 |
 | scripts/probe-template.sh | 探针骨架生成（~30 秒出最小工程，定稿实证基建） | ITM-401/403 探针实践 |
@@ -60,7 +60,7 @@
 ```
 docs/踩坑目录.md (302 项陷阱 · 新坑登记入口，非逐轮检查清单)
     → docs/编码规范.md (167 条 STD 规则 × 17 类)
-        → scripts/gate-check.sh (G1-G27 机械门禁)
+        → scripts/gate-check.sh (G1-G28 机械门禁)
         → 深检引擎 + review 系统（检查依据）
 docs/API参考.md (113 API = 112 实现 + 1 移除)   ← review 阶段适配的对照基准
 docs/架构设计.md (18 项设计决策)                 ← 架构流对照基准
@@ -77,4 +77,4 @@ docs/架构设计.md (18 项设计决策)                 ← 架构流对照基
 7. **逃逸账本只增不删**：metrics.md 逃逸账本每条必须附下沉动作；逃逸是深检方法论的改进输入，不是耻辱柱。
 8. **快照基线刷新必须评审**：`PALORM_UPDATE_SNAPSHOTS=1` 产生的 snap diff 未经人工评审不得提交。
 9. **对称性差异表先登记后实现**：新增方言差异必须先在 DialectSymmetryTests 差异表登记（含依据），再改 Emitter。
-10. **review 不重复门禁**：门禁已覆盖的检查（G1-G27）review 只消费结果不重新定义命令；改门禁按规则 2 三方同步。
+10. **review 不重复门禁**：门禁已覆盖的检查（G1-G28）review 只消费结果不重新定义命令；改门禁按规则 2 三方同步。

@@ -89,8 +89,10 @@ internal static class MigrationEmitter
             // 否则外部写入 NULL 后读取直接抛异常
             string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
                 ? " NOT NULL" : "";
-            // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）
-            string defaultClause = column.IsTimestamp
+            // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）。
+            // ITM-519：DEFAULT CURRENT_TIMESTAMP 仅对 DateTime/DateTimeOffset 合法；
+            // TimeOnly/DateOnly/数值等类型上会生成 MySQL 非法 DDL，这些类型不加 DEFAULT。
+            string defaultClause = column.IsTimestamp && IsTemporalTimestampType(column)
                 ? " DEFAULT CURRENT_TIMESTAMP" : "";
             string primaryKey = column.IsPrimaryKey && column.IsAutoIncrement
                 ? " PRIMARY KEY AUTOINCREMENT"
@@ -120,8 +122,10 @@ internal static class MigrationEmitter
             string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
                 ? " NOT NULL" : "";
             // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）。
-            // MySQL 分秒精度列要求 DEFAULT 表达式精度一致（DATETIME(6) 需 CURRENT_TIMESTAMP(6)）
-            string defaultClause = column.IsTimestamp
+            // MySQL 分秒精度列要求 DEFAULT 表达式精度一致（DATETIME(6) 需 CURRENT_TIMESTAMP(6)）。
+            // ITM-519：DEFAULT CURRENT_TIMESTAMP 仅对 DateTime/DateTimeOffset 合法——
+            // TimeOnly/DateOnly 上 MySQL 会拒绝该 DEFAULT，非时间戳类型一律不加。
+            string defaultClause = column.IsTimestamp && IsTemporalTimestampType(column)
                 ? dialect == SqlGenerationDialect.MySql && dbType.EndsWith("(6)", StringComparison.Ordinal)
                     ? " DEFAULT CURRENT_TIMESTAMP(6)"
                     : " DEFAULT CURRENT_TIMESTAMP"
@@ -150,6 +154,13 @@ internal static class MigrationEmitter
             _ => throw new ArgumentOutOfRangeException(nameof(dialect))
         };
     }
+
+    /// <summary>[Timestamp] 列的 CLR 类型是否为可承载 CURRENT_TIMESTAMP 的时间戳类型（ITM-519）。
+    /// 仅 DateTime/DateTimeOffset 在三方言下均接受 DEFAULT CURRENT_TIMESTAMP；
+    /// TimeOnly/DateOnly 等在 MySQL 上会产出非法 DDL，故这些类型不生成该 DEFAULT。</summary>
+    private static bool IsTemporalTimestampType(ColumnModel column)
+        => column.ProviderClrTypeName is
+            "global::System.DateTime" or "global::System.DateTimeOffset";
 
     /// <summary>列是否被任何 [Index]/[Unique] 索引引用——决定 MySQL 下 string 列型。</summary>
     private static bool IsIndexed(TableModel model, ColumnModel column)

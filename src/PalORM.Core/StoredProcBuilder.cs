@@ -80,7 +80,12 @@ public sealed class StoredProcBuilder
     {
         var p = _outputParams.Find(x => x.ParameterName == name)
             ?? throw new InvalidOperationException($"Output parameter '{name}' not found.");
-        return p.Value is DBNull ? default : (T?)p.Value;
+        // ITM-540: 宽容拆箱，参照 ScalarAsync——provider 返回的装箱类型可能与 T 不完全一致
+        // （如 int 输出参数回填 long/decimal），直接 (T?) 强转会抛 InvalidCastException。
+        if (p.Value is null or DBNull) return default;
+        if (p.Value is T t) return t;
+        Type target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        return (T?)Convert.ChangeType(p.Value, target, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>执行并返回结果集。</summary>
