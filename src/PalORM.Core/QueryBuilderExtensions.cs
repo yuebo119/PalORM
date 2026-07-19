@@ -184,6 +184,9 @@ public static class QueryBuilderExtensions
 
     /// <summary>多结果集查询——执行调用方提供的完整 SQL。builder 仅供连接/方言/参数工厂，
     /// 已构建的 Where/OrderBy 等子句不参与执行；含子句时明确失败防误用（ITM-332）。
+    /// <para><b>ITM-572 警告</b>: SQL 逐字执行，<b>默认过滤（[SoftDelete]/[TenantAware]）不适用</b>——
+    /// 租户会话经此入口可读到全部租户与已软删数据。多租户场景必须在 SQL 中自行携带
+    /// tenant_id/deleted_at 条件，或改用受过滤保护的常规查询入口。</para>
     /// <para>ITM-548: 流式多结果集<b>不经过</b> IQueryInterceptor——GridReader 无单一 rowCount，
     /// 异常发生在调用方逐集读取阶段（本方法已返回），单端 OnBefore 会让 begin/end 配对型
     /// 拦截器泄漏。可观测性用 WithTracing/WithMetrics（QueryObservation 随 GridReader.DisposeAsync 收尾）。</para></summary>

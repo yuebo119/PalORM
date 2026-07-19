@@ -168,10 +168,13 @@ public struct QueryBuilder<T> where T : class, new()
         }
         // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超 65535（PG 协议 int16 上限，
         // 最严方言）应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
-        if (items.Count > 65535)
+        // ITM-562: 判定按"存量 + 增量"累计——两次 40k 的 WhereIn 各自增量合规但总量越界，
+        // 只查增量会静默通过、运行期 PG 协议层才报错。
+        if (_parameters.Count + items.Count > 65535)
             throw new ArgumentException(
-                $"WhereIn received {items.Count} values; the total exceeds the 65535 bind-parameter limit " +
-                "(PostgreSQL protocol max). Use a temp table join or split the query into batches.", nameof(values));
+                $"WhereIn received {items.Count} values on a builder holding {_parameters.Count} parameters; " +
+                "the total exceeds the 65535 bind-parameter limit (PostgreSQL protocol max). " +
+                "Use a temp table join or split the query into batches.", nameof(values));
 
         const int maxBatch = 500;
         // O2 预分配：批次数与参数总量在进循环前已知
@@ -204,11 +207,12 @@ public struct QueryBuilder<T> where T : class, new()
         string column = _quoteIdentifier(GetColumnName(member));
         var items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0) return this;
-        // ITM-514: 同 WhereIn——参数总量不封顶会生成越界 SQL；超 65535 明确失败并提示改用临时表/分批。
-        if (items.Count > 65535)
+        // ITM-514: 同 WhereIn——参数总量不封顶会生成越界 SQL；ITM-562: 存量+增量累计判定。
+        if (_parameters.Count + items.Count > 65535)
             throw new ArgumentException(
-                $"WhereNotIn received {items.Count} values; the total exceeds the 65535 bind-parameter limit " +
-                "(PostgreSQL protocol max). Use a temp table join or split the query into batches.", nameof(values));
+                $"WhereNotIn received {items.Count} values on a builder holding {_parameters.Count} parameters; " +
+                "the total exceeds the 65535 bind-parameter limit (PostgreSQL protocol max). " +
+                "Use a temp table join or split the query into batches.", nameof(values));
 
         const int maxBatch = 500;
         // O2 预分配：批次数与参数总量在进循环前已知
@@ -439,14 +443,17 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>不执行查询，返回构建好的 SQL 与参数快照（<see cref="DryRunResult"/>），用于预览/测试断言。
-    /// 参数为防御性副本——修改快照参数不影响后续对同一 builder 的真实执行（ITM-511）。</summary>
+    /// 参数为防御性副本——修改快照参数不影响后续对同一 builder 的真实执行（ITM-511）。
+    /// <para>ITM-563: 含 Set 子句时返回 UPDATE 预览（与 ExecuteNonQueryAsync 实际执行一致），
+    /// 不再返回丢弃 Set 的 SELECT 误导预览。</para></summary>
     public DryRunResult AsDryRun()
     {
-        IReadOnlyList<DbParameter> live = GetQueryParameters();
+        bool isUpdate = HasClause(QueryClauseKind.Set);
+        IReadOnlyList<DbParameter> live = isUpdate ? GetUpdateParameters() : GetQueryParameters();
         var snapshot = new DbParameter[live.Count];
         for (int i = 0; i < live.Count; i++)
             snapshot[i] = _paramFactory(live[i].ParameterName, live[i].Value);
-        return new(BuildSql(), Array.AsReadOnly(snapshot));
+        return new(isUpdate ? BuildUpdateSql() : BuildSql(), Array.AsReadOnly(snapshot));
     }
 
     internal ValueTask<ConnectionLease> AcquireConnectionLeaseAsync(bool writeOperation,
@@ -602,13 +609,21 @@ public struct QueryBuilder<T> where T : class, new()
         finally { sb.Dispose(); }
     }
 
-    /// <summary>构建 SQL 预览（含参数）。等同于 AsDryRun().Sql，但不创建 DryRunResult。</summary>
-    public string ToSql() => BuildSql();
+    /// <summary>构建 SQL 预览（含参数）。等同于 AsDryRun().Sql，但不创建 DryRunResult。
+    /// 含 Set 子句时返回 UPDATE 预览（ITM-563）。</summary>
+    public string ToSql() => HasClause(QueryClauseKind.Set) ? BuildUpdateSql() : BuildSql();
 
     /// <summary>按 QueryClauseKind 构建完整 SQL，调用顺序不再决定 SQL 语法顺序。
     /// <para>SplitQuery 当前只构建根查询并移除 JOIN，不执行导航对象装配。</para></summary>
     internal string BuildSql()
     {
+        // ITM-563：SELECT 构建拒绝 Set 子句（ITM-522 的反向对称）——`Set(...).ToListAsync()`
+        // 静默丢 Set 误导；`Set+Where` 的 AsDryRun/ToSql 会返回 SELECT 预览而非 UPDATE。
+        // UPDATE 请走 ExecuteNonQueryAsync（BuildUpdateSql 独立路径，不受此守卫影响）。
+        if (HasClause(QueryClauseKind.Set))
+            throw new InvalidOperationException(
+                "This builder has Set() clauses; SELECT execution/preview would silently discard them. " +
+                "Use ExecuteNonQueryAsync for UPDATE, or remove Set() for SELECT.");
         var sb = new ValueStringBuilder(stackalloc char[512]);
         try
         {

@@ -169,7 +169,22 @@ internal sealed class SessionOperationState
         Task activeOperation;
         lock (_sync)
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
-        await activeOperation.ConfigureAwait(false);
+        // ITM-570：与 DisposeAsync 对称的有界等待——WithTransaction 回调内被放弃的枚举器租约
+        // （只走 EnterOperation，不注册为事务资源）会让此 await 永久挂起，事务收口死锁。
+        try
+        {
+            await activeOperation.WaitAsync(DisposeWaitTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException timeoutException)
+        {
+            var hangException = new InvalidOperationException(
+                $"Transaction completion timed out after {DisposeWaitTimeout} waiting for an active operation. " +
+                "A likely cause is an abandoned QueryAsyncEnumerable enumerator inside the transaction callback; " +
+                "always consume it with 'await foreach' or dispose the enumerator explicitly.",
+                timeoutException);
+            if (cleanupException is null) cleanupException = hangException;
+            else cleanupException.Data[$"PalORM.CleanupException{secondaryIndex++}"] = hangException;
+        }
         if (cleanupException is null) return;
         if (primaryException is null) throw cleanupException;
         primaryException.Data["PalORM.TransactionResourceCleanupException"] =
