@@ -251,7 +251,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private async ValueTask<int> UpdateCoreAsync<T>(
         T entity,
         object? operationOwner,
-        CancellationToken ct) where T : class, new()
+        CancellationToken ct,
+        List<Action>? deferredVersionIncrements = null) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation =
             EnterOperation(operationOwner);
@@ -281,7 +282,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             if (affectedRows != 1)
                 throw new InvalidOperationException(
                     $"Concurrency update for '{typeof(T).Name}' affected {affectedRows} rows.");
-            metadata.IncrementVersion(entity);
+            // ITM-556：批量路径下语句成功 ≠ 事务提交——立即抬内存 version 会在整批回滚后
+            // 与 DB 失同步（重试假 ConcurrencyConflictException）。批量调用方传入暂存清单，
+            // 提交成功后统一回放；单条 UpdateAsync 保持原语义（语句成功即回填）。
+            if (deferredVersionIncrements is null)
+                metadata.IncrementVersion(entity);
+            else
+                deferredVersionIncrements.Add(() => metadata.IncrementVersion(entity));
         }
         return affectedRows;
     }
@@ -734,6 +741,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(tran);
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         cmd.CommandText = $"SAVEPOINT {TProvider.QuoteIdentifier(name)}";
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -745,6 +753,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(tran);
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         cmd.CommandText = $"ROLLBACK TO SAVEPOINT {TProvider.QuoteIdentifier(name)}";
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -1104,6 +1113,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         {
             await using DbCommand cmd = CreateCommand();
             cmd.CommandText = "SELECT 1";
+            // ITM-557：健康检查最需快速失败——不设超时会按驱动默认（约 30s）挂起
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return new HealthResult(true, sw.Elapsed, null);
         }
@@ -1253,6 +1264,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         DbCommand command = _conn.CreateCommand();
         command.Transaction = GetActiveTransaction();
+        // ITM-557 根治：超时在工厂集中设置——新调用点在结构上不可能漏（逐点补写是补丁式，
+        // ValidateSchemaAsync 即漏网实例）。个别路径重复赋同值无害。
+        command.CommandTimeout = _options.CommandTimeoutSeconds;
         return command;
     }
 

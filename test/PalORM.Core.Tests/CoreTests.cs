@@ -953,11 +953,11 @@ public sealed class ProviderTests
         await using var sqlite = PalORM.Sqlite.SqliteProvider.CreateConnection("Data Source=:memory:");
 
         await Assert.That(async () => await PalORM.PostgreSql.PostgreSqlProvider.BulkInsertAsync(
-            postgres, null, Array.Empty<ProviderBatchEntity>(), 0, default)).Throws<ArgumentOutOfRangeException>();
+            postgres, null, Array.Empty<ProviderBatchEntity>(), 0, 30, default)).Throws<ArgumentOutOfRangeException>();
         await Assert.That(async () => await PalORM.MySql.MySqlProvider.BulkInsertAsync(
-            mysql, null, Array.Empty<ProviderBatchEntity>(), 0, default)).Throws<ArgumentOutOfRangeException>();
+            mysql, null, Array.Empty<ProviderBatchEntity>(), 0, 30, default)).Throws<ArgumentOutOfRangeException>();
         await Assert.That(async () => await PalORM.Sqlite.SqliteProvider.BulkInsertAsync(
-            sqlite, null, Array.Empty<ProviderBatchEntity>(), 0, default)).Throws<ArgumentOutOfRangeException>();
+            sqlite, null, Array.Empty<ProviderBatchEntity>(), 0, 30, default)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]

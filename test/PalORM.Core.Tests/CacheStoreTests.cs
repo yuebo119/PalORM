@@ -31,4 +31,21 @@ public sealed class CacheStoreTests
         await Assert.That(value!.Count).IsEqualTo(2);
         CacheStore.Clear();
     }
+
+    // ITM-558 下沉：同 key 不同类型按 miss 处理并移除旧条目——不抛 InvalidCastException
+    [Test]
+    public async Task TryGet_TypeMismatch_TreatedAsMissAndEvicts()
+    {
+        var cache = new BoundedQueryCache();
+        cache.Set("shared-key", new List<string> { "a" });
+
+        bool hit = cache.TryGet("shared-key", out List<int>? wrongType);
+
+        await Assert.That(hit).IsFalse();
+        await Assert.That(wrongType).IsNull();
+        // 旧条目已被移除：原类型再读也 miss（后写者胜语义）
+        bool originalHit = cache.TryGet("shared-key", out List<string>? original);
+        await Assert.That(originalHit).IsFalse();
+        await Assert.That(original).IsNull();
+    }
 }

@@ -13,7 +13,8 @@ public partial class DataSession<TProvider>
         ArgumentNullException.ThrowIfNull(entities);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         if (entities.Count == 0) return 0;
-        return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize, ct).ConfigureAwait(false);
+        return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
+            _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
     }
 
     /// <summary>批量删除——每 500 个生成主键 IN 批次；软删除实体更新 deleted_at，其他实体物理删除。</summary>
@@ -104,7 +105,11 @@ public partial class DataSession<TProvider>
         return total;
     }
 
-    /// <summary>批量更新。复用源生成 UPDATE 与并发语义，整个输入在同一事务内执行。</summary>
+    /// <summary>批量更新。复用源生成 UPDATE 与并发语义，整个输入在同一事务内执行。
+    /// <para>ITM-556: [ConcurrencyCheck] 实体的内存 version 回填延迟到事务提交成功后统一执行——
+    /// 中途冲突整批回滚时，已成功条目的内存状态与 DB 保持一致，重试不产生假冲突。
+    /// 复用外部事务时回填发生在本方法返回前；若调用方随后回滚该外部事务，
+    /// 内存 version 需重新查询同步（与单条 UpdateAsync 在外部事务中回滚的既有语义一致）。</para></summary>
     public async ValueTask<long> BulkUpdateAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {
@@ -119,15 +124,17 @@ public partial class DataSession<TProvider>
         bool ownsTransaction = previousTransaction is null;
         long total = 0;
         Exception? primaryException = null;
+        List<Action> deferredVersionIncrements = [];
         try
         {
             foreach (T entity in entities)
             {
                 total += await UpdateCoreAsync(
-                    entity, operation.Owner, ct).ConfigureAwait(false);
+                    entity, operation.Owner, ct, deferredVersionIncrements).ConfigureAwait(false);
             }
             if (ownsTransaction)
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
+            foreach (Action increment in deferredVersionIncrements) increment();
             return total;
         }
         catch (Exception exception)
@@ -146,7 +153,10 @@ public partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。</summary>
+    /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。
+    /// <para>ITM-556 注记: 自增 ID 回填随每条 UPSERT 立即发生；中途失败整批回滚时，
+    /// 已回填的内存 ID 对应的行不存在于 DB——异常路径下不要继续使用输入实体的 ID，
+    /// 重试应重新走 BulkMergeAsync（UPSERT 幂等）。</para></summary>
     public async ValueTask<long> BulkMergeAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {

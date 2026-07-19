@@ -199,6 +199,19 @@ timeout_trunc=$(grep -rnE '\(int\)[^;]*(CommandTimeout|_commandTimeout|_timeout)
     src --include='*.cs' 2>/dev/null | grep -v '/obj/' | grep -vc 'ToCommandTimeoutSeconds' || true)
 check_zero G28 '禁止裸 CommandTimeout.TotalSeconds 截断（用 CommandTimeoutSeconds）' "$timeout_trunc"
 
+# G29：执行型命令必须有 CommandTimeout（ITM-557 下沉）——DataSession.CreateCommand 工厂已集中
+# 设置；本检查守护"绕过工厂直接 conn.CreateCommand() 并执行"的路径（暂存/探测命令不执行，豁免）。
+# 检测：conn.CreateCommand() 后 20 行内出现 Execute*Async 且其前无 CommandTimeout 赋值。
+timeout_missing=0
+for f in src/PalORM.Core/*.cs src/PalORM.Sqlite/*.cs src/PalORM.MySql/*.cs src/PalORM.PostgreSql/*.cs; do
+    misses=$(awk '/conn\.CreateCommand\(\)|Connection\.CreateCommand\(\)/{ln=FNR; found=0}
+        ln && FNR<=ln+20 && /CommandTimeout/{found=1; ln=0}
+        ln && FNR<=ln+20 && /Execute(Reader|Scalar|NonQuery)Async/ && !found{cnt++; ln=0}
+        END{print cnt+0}' "$f" 2>/dev/null || echo 0)
+    timeout_missing=$((timeout_missing + misses))
+done
+check_zero G29 '绕过 CreateCommand 工厂的执行型命令必须设 CommandTimeout（ITM-557）' "$timeout_missing"
+
 printf '\n通过：%s  警告：%s  失败：%s  总计：%s\n' "$PASSED" "$WARNED" "$FAILED" "$((PASSED + WARNED + FAILED))"
 printf '═══════ 扫描完成 ═══════\n'
 

@@ -91,10 +91,10 @@ public sealed class MySqlProvider : IDbProvider
     /// <para>MySQL 协议单语句占位符上限 65535（2 字节计数）；宽表大批次经骨架按列数钳制，
     /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para></summary>
     public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int batchSize, CancellationToken ct)
+        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
         => MultiValueBulkInsert.ExecuteAsync(
             conn, transaction, entities, batchSize,
             maxParametersPerStatement: 65535,
-            QuoteIdentifier, CreateParameter, ct);
+            QuoteIdentifier, CreateParameter, commandTimeoutSeconds, ct);
 }
