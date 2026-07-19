@@ -543,6 +543,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
         // ITM-565：索引列必须存在于实体列集（含 [Column] 重命名与基类链）——列名拼错
         // 此前编译期静默，MigrateAsync 运行期才报"列不存在"（1170 类错误不被幂等兜底吞）。
+        var knownColumns = BuildKnownColumnNames(type);
+
+        // [Unique] 派生索引名先占位（与 TableModel 的 ux_{table}_{column} 命名一致）
+        ReserveUniqueDerivedIndexNames(ctx, type, tableName, seenNames);
+
+        ValidateIndexAttributes(ctx, type, seenNames, knownColumns);
+    }
+
+    /// <summary>构建实体已知列名集（含 [Column] 重命名与基类链，ITM-607）。</summary>
+    private static HashSet<string> BuildKnownColumnNames(INamedTypeSymbol type)
+    {
         var knownColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
@@ -551,9 +562,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             knownColumns.Add(propColumnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? property.Name);
         }
+        return knownColumns;
+    }
 
-        // [Unique] 派生索引名先占位（与 TableModel 的 ux_{table}_{column} 命名一致）
-        // ITM-607: 走基类链（同其他 PALORM 检查）——基类 [Unique] 属性同样需占位检查。
+    /// <summary>[Unique] 派生索引名占位——与 TableModel 的 ux_{table}_{column} 命名一致。
+    /// ITM-607: 走基类链（同其他 PALORM 检查）——基类 [Unique] 属性同样需占位检查。</summary>
+    private static void ReserveUniqueDerivedIndexNames(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, string tableName, HashSet<string> seenNames)
+    {
         foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             if (!member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Unique")))  // ITM-512
@@ -569,12 +585,19 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                     $"[Unique] on '{member.Name}' derives index name '{derivedName}' which is already used on this entity"));
             }
         }
+    }
 
+    /// <summary>验证所有 [Index] 属性——名称/列/已知列引用/同名冲突。</summary>
+    private static void ValidateIndexAttributes(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type,
+        HashSet<string> seenNames, HashSet<string> knownColumns)
+    {
         foreach (var indexAttr in type.GetAttributes().Where(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Index")))  // ITM-512
         {
             var location = indexAttr.ApplicationSyntaxReference?.GetSyntax(ctx.CancellationToken).GetLocation()
                 ?? type.Locations[0];
+
             if (indexAttr.ConstructorArguments.Length < 2
                 || indexAttr.ConstructorArguments[0].Value is not string indexName
                 || string.IsNullOrWhiteSpace(indexName))
@@ -583,30 +606,47 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                     $"[Index] on '{type.Name}' has no valid name; declare [Index(\"name\", \"col1\", ...)]"));
                 continue;
             }
-            string[] columns = indexAttr.ConstructorArguments[1].Values
-                .Select(static v => v.Value as string)
-                .Where(static v => !string.IsNullOrWhiteSpace(v))
-                .Cast<string>()
-                .ToArray();
-            if (columns.Length == 0)
+
+            if (!TryGetIndexColumns(indexAttr, out string[] columns))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
                     $"[Index(\"{indexName}\")] on '{type.Name}' declares no columns; it would be silently dropped"));
                 continue;
             }
-            foreach (string column in columns)
-            {
-                if (!knownColumns.Contains(column))
-                {
-                    ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
-                        $"[Index(\"{indexName}\")] on '{type.Name}' references column '{column}' " +
-                        "which does not exist on the entity; CREATE INDEX would fail at MigrateAsync"));
-                }
-            }
+
+            CheckIndexColumnReferences(ctx, type, location, indexName, columns, knownColumns);
+
             if (!seenNames.Add(indexName))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
                     $"Index name '{indexName}' is declared more than once on '{type.Name}'"));
+            }
+        }
+    }
+
+    /// <summary>提取 [Index] 的列名数组；返回 false 表示列名为空。</summary>
+    private static bool TryGetIndexColumns(AttributeData indexAttr, out string[] columns)
+    {
+        columns = indexAttr.ConstructorArguments[1].Values
+            .Select(static v => v.Value as string)
+            .Where(static v => !string.IsNullOrWhiteSpace(v))
+            .Cast<string>()
+            .ToArray();
+        return columns.Length > 0;
+    }
+
+    /// <summary>校验索引引用的列都在 knownColumns 中（ITM-565）。</summary>
+    private static void CheckIndexColumnReferences(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, Location location,
+        string indexName, string[] columns, HashSet<string> knownColumns)
+    {
+        foreach (string column in columns)
+        {
+            if (!knownColumns.Contains(column))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
+                    $"[Index(\"{indexName}\")] on '{type.Name}' references column '{column}' " +
+                    "which does not exist on the entity; CREATE INDEX would fail at MigrateAsync"));
             }
         }
     }
