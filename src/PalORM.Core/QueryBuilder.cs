@@ -39,30 +39,22 @@ public struct QueryBuilder<T> where T : class, new()
     internal DbTransaction? _transaction;
     internal readonly IQueryCache _queryCache;
 
-    internal QueryBuilder(DbConnection conn, SqlDialect dialect, IRowFactory<T> factory,
-        List<IQueryInterceptor> interceptors, Func<string, object?, DbParameter> paramFactory,
-        Func<string, string> quoteIdentifier, string tableName,
-        IReadOnlyList<string> columnNames, TimeSpan commandTimeout,
-        SessionOperationState operationState,
-        Func<DbConnection>? readConnFactory = null,
-        IQueryCache? queryCache = null,
-        bool validateColumnOrder = false,
-        Func<DbConnection, CancellationToken, Task>? readConnInitializer = null)
+    internal QueryBuilder(QueryBuilderContext<T> ctx)
     {
-        _validateColumnOrder = validateColumnOrder;
-        _conn = conn;
-        _readConnFactory = readConnFactory;
-        _readConnInitializer = readConnInitializer;
-        _queryCache = queryCache ?? CacheStore.Default;
-        _dialect = dialect;
-        _quoteIdentifier = quoteIdentifier;
-        _factory = factory;
-        _interceptors = interceptors;
-        _paramFactory = paramFactory;
-        _tableName = tableName;
-        _columnNames = columnNames;
-        _operationState = operationState;
-        _commandTimeout = commandTimeout;
+        _validateColumnOrder = ctx.ValidateColumnOrder;
+        _conn = ctx.Connection;
+        _readConnFactory = ctx.ReadConnFactory;
+        _readConnInitializer = ctx.ReadConnInitializer;
+        _queryCache = ctx.QueryCache ?? CacheStore.Default;
+        _dialect = ctx.Services.Dialect;
+        _quoteIdentifier = ctx.Services.QuoteIdentifier;
+        _factory = ctx.Services.Factory;
+        _interceptors = ctx.Services.Interceptors;
+        _paramFactory = ctx.Services.ParamFactory;
+        _tableName = ctx.TableName;
+        _columnNames = ctx.ColumnNames;
+        _operationState = ctx.Services.OperationState;
+        _commandTimeout = ctx.Services.CommandTimeout;
         _clauses = [];
         _parameters = [];
         _selectColumns = null;
@@ -77,6 +69,27 @@ public struct QueryBuilder<T> where T : class, new()
         _splitQuery = false;
         _useReadRoute = false;
         _transaction = null;
+    }
+
+    /// <summary>遗留 14 参构造——内部已迁移到 QueryBuilderContext。
+    /// 保留供测试/反射代码兼容；新代码请用 <see cref="QueryBuilder(QueryBuilderContext{T})"/>。</summary>
+    [Obsolete("Use QueryBuilder(QueryBuilderContext<T>). Kept for compat.")]
+    internal QueryBuilder(DbConnection conn, SqlDialect dialect, IRowFactory<T> factory,
+        List<IQueryInterceptor> interceptors, Func<string, object?, DbParameter> paramFactory,
+        Func<string, string> quoteIdentifier, string tableName,
+        IReadOnlyList<string> columnNames, TimeSpan commandTimeout,
+        SessionOperationState operationState,
+        Func<DbConnection>? readConnFactory = null,
+        IQueryCache? queryCache = null,
+        bool validateColumnOrder = false,
+        Func<DbConnection, CancellationToken, Task>? readConnInitializer = null)
+        : this(new QueryBuilderContext<T>(
+            conn,
+            new QueryBuilderServices<T>(dialect, factory, interceptors, paramFactory,
+                quoteIdentifier, operationState, commandTimeout),
+            tableName, columnNames,
+            readConnFactory, queryCache, validateColumnOrder, readConnInitializer))
+    {
     }
 
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
@@ -489,9 +502,11 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal QueryBuilder<T> CloneForExecution()
     {
-        var clone = new QueryBuilder<T>(_conn, _dialect, _factory, _interceptors, _paramFactory,
-            _quoteIdentifier, _tableName, _columnNames, _commandTimeout,
-            _operationState, _readConnFactory, _queryCache, _validateColumnOrder, _readConnInitializer)
+        var clone = new QueryBuilder<T>(new QueryBuilderContext<T>(
+            _conn,
+            new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
+                _quoteIdentifier, _operationState, _commandTimeout),
+            _tableName, _columnNames, _readConnFactory, _queryCache, _validateColumnOrder, _readConnInitializer))
         {
             _selectColumns = _selectColumns,
             _take = _take,
@@ -869,3 +884,28 @@ public struct QueryBuilder<T> where T : class, new()
         throw new InvalidOperationException($"Cannot resolve member name from {member.Body}");
     }
 }
+
+/// <summary>Provider 能力聚合——把 dialect/factory/interceptors/paramFactory/quoteIdentifier/
+/// operationState/commandTimeout 七项打包为单参数，消除 QueryBuilder 14 参 ctor 的 S107 警告。
+/// 一次构造，多个 QueryBuilder 实例共享。</summary>
+internal sealed record QueryBuilderServices<T>(
+    SqlDialect Dialect,
+    IRowFactory<T> Factory,
+    List<IQueryInterceptor> Interceptors,
+    Func<string, object?, DbParameter> ParamFactory,
+    Func<string, string> QuoteIdentifier,
+    SessionOperationState OperationState,
+    TimeSpan CommandTimeout) where T : class, new();
+
+/// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。
+/// 用 record 而非 struct：成员复杂、生命周期跨多个 QueryBuilder 实例（每次查询从 DataSession 派生），
+/// 引用语义更自然。</summary>
+internal sealed record QueryBuilderContext<T>(
+    DbConnection Connection,
+    QueryBuilderServices<T> Services,
+    string TableName,
+    IReadOnlyList<string> ColumnNames,
+    Func<DbConnection>? ReadConnFactory = null,
+    IQueryCache? QueryCache = null,
+    bool ValidateColumnOrder = false,
+    Func<DbConnection, CancellationToken, Task>? ReadConnInitializer = null) where T : class, new();

@@ -10,30 +10,32 @@ namespace PalORM;
 public static class MultiValueBulkInsert
 {
     /// <summary>多值 INSERT 分批写入实体列表，返回受影响总行数。批次大小取
-    /// <paramref name="batchSize"/> 与参数上限 <paramref name="maxParametersPerStatement"/>/列数的较小者；
+    /// <paramref name="ctx"/>.<see cref="BulkContext.BatchSize"/> 与参数上限
+    /// <see cref="BulkContext.MaxParametersPerStatement"/>/列数的较小者；
     /// <paramref name="transaction"/> 为 null 时自建事务并在全部批次成功后提交，
     /// 传入外部事务时提交/回滚由调用方负责。
-    /// <paramref name="commandTimeoutSeconds"/> 应用到每个批量命令（ITM-557）。</summary>
+    /// <see cref="BulkContext.CommandTimeoutSeconds"/> 应用到每个批量命令（ITM-557）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100", Justification = "表名/列名来自源生成器")]
     public static async Task<long> ExecuteAsync<T>(
         DbConnection conn,
         DbTransaction? transaction,
         IReadOnlyList<T> entities,
-        int batchSize,
-        int maxParametersPerStatement,
-        Func<string, string> quoteIdentifier,
-        Func<string, object?, DbParameter> createParameter,
-        int commandTimeoutSeconds,
+        BulkContext ctx,
         CancellationToken ct)
         where T : class, new()
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(commandTimeoutSeconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ctx.BatchSize);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ctx.MaxParametersPerStatement);
+        ArgumentOutOfRangeException.ThrowIfNegative(ctx.CommandTimeoutSeconds);
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);
-        ArgumentNullException.ThrowIfNull(quoteIdentifier);
-        ArgumentNullException.ThrowIfNull(createParameter);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxParametersPerStatement);
+        ArgumentNullException.ThrowIfNull(ctx.QuoteIdentifier);
+        ArgumentNullException.ThrowIfNull(ctx.CreateParameter);
+        int batchSize = ctx.BatchSize;
+        int maxParametersPerStatement = ctx.MaxParametersPerStatement;
+        Func<string, string> quoteIdentifier = ctx.QuoteIdentifier;
+        Func<string, object?, DbParameter> createParameter = ctx.CreateParameter;
+        int commandTimeoutSeconds = ctx.CommandTimeoutSeconds;
         if (entities.Count == 0) return 0;
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
             || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
@@ -184,3 +186,12 @@ public static class MultiValueBulkInsert
         }
     }
 }
+
+/// <summary>多值 INSERT 批量骨架的 provider 能力 + 批次配置聚合——消除 9 参参数列表（S107）。
+/// 每次调用 new 一个；批量内部多次复用。</summary>
+public readonly record struct BulkContext(
+    int BatchSize,
+    int MaxParametersPerStatement,
+    Func<string, string> QuoteIdentifier,
+    Func<string, object?, DbParameter> CreateParameter,
+    int CommandTimeoutSeconds);
