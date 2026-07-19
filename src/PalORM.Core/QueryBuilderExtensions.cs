@@ -108,7 +108,8 @@ public static class QueryBuilderExtensions
         limited._take = 2;
         limited._cacheKey = null;
         List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
-        return results.Count == 1 ? results[0] : throw new InvalidOperationException(results.Count == 0 ? "Empty." : "More than one.");
+        if (results.Count == 1) return results[0];
+        throw new InvalidOperationException(results.Count == 0 ? "Empty." : "More than one.");
     }
 
     /// <summary>返回至多一行实体：无结果返回 null，多于一行抛 <see cref="InvalidOperationException"/>。

@@ -61,15 +61,14 @@ internal static class SourceGenerationValidation
 
             AttributeData? ownedJson = property.GetAttributes().FirstOrDefault(static attribute =>
                 attribute.AttributeClass?.ToDisplayString() == "PalORM.OwnedJsonAttribute");
-            if (ownedJson is not null && property.Type.SpecialType != SpecialType.System_String)
-            {
-                if (ownedJson.ConstructorArguments.FirstOrDefault().Value is not INamedTypeSymbol contextType
+            if (ownedJson is not null
+                && property.Type.SpecialType != SpecialType.System_String
+                && (ownedJson.ConstructorArguments.FirstOrDefault().Value is not INamedTypeSymbol contextType
                     || contextType.IsGenericType
                     || contextType.ContainingType is not null
-                    || !IsValidOwnedJsonContext(contextType, property.Type))
-                {
-                    return false;
-                }
+                    || !IsValidOwnedJsonContext(contextType, property.Type)))
+            {
+                return false;
             }
 
             if (!HasValidValueMapping(property))

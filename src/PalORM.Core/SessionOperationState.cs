@@ -151,7 +151,6 @@ internal sealed class SessionOperationState
         }
 
         Exception? cleanupException = null;
-        int secondaryIndex = 0;
         if (resources is not null)
         {
             foreach (IAsyncDisposable resource in resources)
@@ -159,9 +158,10 @@ internal sealed class SessionOperationState
                 try { await resource.DisposeAsync().ConfigureAwait(false); }
                 catch (Exception exception)
                 {
-                    // 首异常保留为主异常，后续异常挂 Data 不丢弃（与 GridReader 清理约定一致）
+                    // 首异常保留为主异常，后续异常挂 Data 不丢弃（与 GridReader 清理约定一致）；
+                    // 用 Data.Count 推导索引避免外部 ref 计数器（IDE0059 死赋值）。
                     if (cleanupException is null) cleanupException = exception;
-                    else cleanupException.Data[$"PalORM.CleanupException{secondaryIndex++}"] = exception;
+                    else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = exception;
                 }
             }
         }
@@ -183,7 +183,7 @@ internal sealed class SessionOperationState
                 "always consume it with 'await foreach' or dispose the enumerator explicitly.",
                 timeoutException);
             if (cleanupException is null) cleanupException = hangException;
-            else cleanupException.Data[$"PalORM.CleanupException{secondaryIndex++}"] = hangException;
+            else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = hangException;
         }
         if (cleanupException is null) return;
         if (primaryException is null) throw cleanupException;

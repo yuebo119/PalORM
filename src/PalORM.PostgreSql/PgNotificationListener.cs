@@ -95,7 +95,7 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     {
         CancellationTokenSource cts;
         Task runTask;
-        TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_lock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);

@@ -36,7 +36,7 @@ public partial class DataSession<TProvider>
         string quotedPrimaryKey = TProvider.QuoteIdentifier(pkCol);
         // 租户过滤与单条 DeleteAsync 对齐（ITM-404）：跨租户主键命中 0 行
         string tenantFilter = HasTenantFilter<T>()
-            ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
+            ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
             : "";
         const int batchSize = 500;
         long total = 0;

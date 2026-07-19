@@ -194,7 +194,6 @@ internal static class SqlFileEmitter
         var result = new StringBuilder(sql.Length);
         bool inSection = true; // 默认包含 @all 段
         bool hasDirectives = false;
-        string? currentSection = null;
 
         foreach (var rawLine in lines)
         {
@@ -210,18 +209,14 @@ internal static class SqlFileEmitter
                 int space = directive.IndexOf(' ');
                 string sectionName = space > 0 ? directive.Substring(0, space) : directive;
 
-                currentSection = sectionName;
                 // 匹配当前 provider 或 @all 段
                 inSection = sectionName == "all"
                     || (target is not null && sectionName == target);
                 continue;
             }
 
-            if (inSection)
-            {
-                if (result.Length > 0 || !string.IsNullOrWhiteSpace(line))
-                    result.AppendLine(line);
-            }
+            if (inSection && (result.Length > 0 || !string.IsNullOrWhiteSpace(line)))
+                result.AppendLine(line);
         }
 
         string resolved = result.ToString().TrimEnd('\r', '\n');
