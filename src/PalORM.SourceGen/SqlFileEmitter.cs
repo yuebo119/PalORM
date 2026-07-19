@@ -88,7 +88,19 @@ internal static class SqlFileEmitter
 #pragma warning restore RS1035
 
         // ── V_SQL: 条件分支解析 ──
-        sqlContent = ResolveProviderSections(sqlContent, targetProvider);
+        // ITM-564：段全不匹配时此前静默回退整份原文（含全部异方言语句），运行期才炸；
+        // 未识别的 provider 别名（如 "postgres"）也静默落入同路径——两者都转为编译期明确失败。
+        SqlSectionResolution resolution = ResolveProviderSections(sqlContent, targetProvider);
+        if (resolution.UnrecognizedProvider is not null)
+            return GenerateError(method,
+                $"SqlFile Provider '{EscapeForCSharp(resolution.UnrecognizedProvider)}' 不是有效的 provider 名；" +
+                "支持: postgresql/pg, mysql/my, sqlite/sq");
+        if (resolution.HasDirectives && string.IsNullOrWhiteSpace(resolution.Resolved))
+            return GenerateError(method,
+                $"SqlFile '{EscapeForCSharp(relativePath)}' 声明了 provider 段但没有任何段匹配 " +
+                $"'{EscapeForCSharp(targetProvider ?? "(未指定)")}'（也无 @all 段）；" +
+                "嵌入整份原文会在运行期执行异方言 SQL，已拒绝");
+        sqlContent = resolution.Resolved;
 
         INamedTypeSymbol? containingType = method.ContainingType;
         string typeName = containingType?.Name ?? "Unknown";
@@ -153,20 +165,26 @@ internal static class SqlFileEmitter
         return sb.ToString();
     }
 
-    private static string ResolveProviderSections(string sql, string? targetProvider)
+    private readonly record struct SqlSectionResolution(
+        string Resolved, bool HasDirectives, string? UnrecognizedProvider);
+
+    private static SqlSectionResolution ResolveProviderSections(string sql, string? targetProvider)
     {
-        // 将 provider 名标准化为短前缀
+        // 将 provider 名标准化为短前缀；不在白名单的显式 Provider 视为拼写错误（ITM-564）
+        string? unrecognized = null;
         string? target = targetProvider?.ToLowerInvariant() switch
         {
+            null => null,
             "postgresql" or "pg" => "pg",
             "mysql" or "my" => "mysql",
             "sqlite" or "sq" => "sqlite",
-            _ => targetProvider?.ToLowerInvariant()
+            var other => Unrecognized(other, ref unrecognized)
         };
 
         var lines = sql.Split('\n');
         var result = new StringBuilder(sql.Length);
         bool inSection = true; // 默认包含 @all 段
+        bool hasDirectives = false;
         string? currentSection = null;
 
         foreach (var rawLine in lines)
@@ -177,6 +195,7 @@ internal static class SqlFileEmitter
             var trimmed = line.TrimStart();
             if (trimmed.StartsWith("-- @", StringComparison.Ordinal))
             {
+                hasDirectives = true;
                 string directive = trimmed.Substring(4).Trim().ToLowerInvariant();
                 // 提取 provider 名（去掉 -- @ 前缀后的单词）
                 int space = directive.IndexOf(' ');
@@ -197,7 +216,16 @@ internal static class SqlFileEmitter
         }
 
         string resolved = result.ToString().TrimEnd('\r', '\n');
-        return string.IsNullOrWhiteSpace(resolved) ? sql : resolved;
+        // 无任何指令的普通文件：原样返回（ITM-564 只拦"有段但全不匹配"）
+        if (!hasDirectives)
+            return new SqlSectionResolution(sql, false, unrecognized);
+        return new SqlSectionResolution(resolved, true, unrecognized);
+
+        static string? Unrecognized(string value, ref string? slot)
+        {
+            slot = value;
+            return value;
+        }
     }
 
     /// <summary>将路径/错误信息转义为合法的 C# 字符串字面量。</summary>

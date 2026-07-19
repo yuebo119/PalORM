@@ -110,13 +110,21 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Properties '{0}' and '{1}' on type '{2}' both map to column '{3}'; generated INSERT/UPDATE would reference the column twice and fail at runtime",
         "PalORM", DiagnosticSeverity.Error, true);
 
+    // PALORM022（ITM-560/561）：主键声明形态生成器无法支持——init-only setter 生成 CS8852，
+    // 可空值类型生成 CS0037/CS8117；此前生成器静默跳过、运行期才报 not registered。
+    public static readonly DiagnosticDescriptor InvalidKeyDeclaration = new(
+        "PALORM022", "Primary key declaration is not supported by source generation",
+        "[Key] property '{0}' on type '{1}' {2}; the entity would be silently skipped by source generation",
+        "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, SqlFileNotFound, SchemaMismatch, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
          UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl,
-         MissingTenantColumn, CompositePrimaryKey, InvalidIndexDeclaration, DuplicateColumnName];
+         MissingTenantColumn, CompositePrimaryKey, InvalidIndexDeclaration, DuplicateColumnName,
+         InvalidKeyDeclaration];
 
     public override void Initialize(AnalysisContext context)
     {
@@ -130,15 +138,31 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 || !SourceGenerationValidation.IsSupportedEntity(type)
                 || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))  // ITM-512
                 return;
-            int keyCount = type.GetMembers().OfType<IPropertySymbol>()
-                .Where(static property => !SourceGenerationValidation.IsNotMapped(property))
-                .Count(static property => property.GetAttributes().Any(attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Key")));  // ITM-512
-            if (keyCount == 0)
+            // ITM-559: 计数走基类链——只查声明成员会对"基类声明 [Key]"的实体误报"无 [Key]"，
+            // 与列收集（GetMappableProperties 基类链）不一致
+            List<IPropertySymbol> keyProperties = SourceGenerationValidation
+                .EnumerateMappedProperties(type)
+                .Where(static property => property.GetAttributes().Any(attribute =>
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Key")))  // ITM-512
+                .ToList();
+            if (keyProperties.Count == 0)
                 ctx.ReportDiagnostic(Diagnostic.Create(MissingPrimaryKey, type.Locations[0], type.Name));
             // PALORM019: 复合主键——BindDelete 单 key 语义无法表达，明确拒绝（ITM-311）
-            else if (keyCount > 1)
-                ctx.ReportDiagnostic(Diagnostic.Create(CompositePrimaryKey, type.Locations[0], type.Name, keyCount));
+            else if (keyProperties.Count > 1)
+                ctx.ReportDiagnostic(Diagnostic.Create(CompositePrimaryKey, type.Locations[0], type.Name, keyProperties.Count));
+            else
+            {
+                // PALORM022（ITM-560/561）: 生成器 CanGenerateEntity 会静默跳过的主键形态在此定位报错
+                IPropertySymbol key = keyProperties[0];
+                string? reason = key.SetMethod is null or { IsInitOnly: true }
+                    ? "has an init-only or missing setter (generated ID backfill requires a writable setter)"
+                    : key.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+                        ? "is a nullable value type (generated key binding cannot compile)"
+                        : null;
+                if (reason is not null)
+                    ctx.ReportDiagnostic(Diagnostic.Create(InvalidKeyDeclaration,
+                        key.Locations.FirstOrDefault() ?? type.Locations[0], key.Name, type.Name, reason));
+            }
         }, SymbolKind.NamedType);
 
         // PALORM002 + PALORM003 + PALORM004: 表级验证
@@ -327,6 +351,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }, SymbolKind.NamedType);
 
         // PALORM005: N+1 检测 — 循环中 From<T>() / ORM 调用
+        // ITM-574：语法名匹配会误报 EF Core/MongoDB 等第三方库的同名方法（ToListAsync 等），
+        // TreatWarningsAsErrors 项目直接阻断——语义模型确认接收者/方法归属 PalORM 后才报。
         context.RegisterSyntaxNodeAction(ctx =>
         {
             var invocation = (InvocationExpressionSyntax)ctx.Node;
@@ -336,9 +362,22 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 if (methodName is "From" or "InsertAsync" or "UpdateAsync" or "DeleteAsync"
                     or "ToListAsync" or "FirstAsync" or "SingleAsync")
                 {
+                    if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
+                            is not IMethodSymbol methodSymbol
+                        || methodSymbol.ContainingNamespace?.ToDisplayString() is not { } containingNs
+                        || (containingNs != "PalORM"
+                            && !containingNs.StartsWith("PalORM.", StringComparison.Ordinal)))
+                    {
+                        return;
+                    }
                     var parent = invocation.Parent;
                     while (parent is not null)
                     {
+                        // ITM-574：循环体内定义、循环外执行的 lambda/局部函数不是 N+1——
+                        // 遇到函数边界即停止向上找循环
+                        if (parent is LambdaExpressionSyntax or LocalFunctionStatementSyntax
+                            or AnonymousMethodExpressionSyntax)
+                            break;
                         if (parent is ForStatementSyntax or ForEachStatementSyntax
                             or WhileStatementSyntax or DoStatementSyntax)
                         {
@@ -366,6 +405,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // ix_Foo/ix_foo 迁移时报 1061 被 IsDuplicateSchemaObject 幂等吞掉→第二索引静默丢失。
         // 用最严格的方言口径统一，保证三方言下均无碰撞。
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // ITM-565：索引列必须存在于实体列集（含 [Column] 重命名与基类链）——列名拼错
+        // 此前编译期静默，MigrateAsync 运行期才报"列不存在"（1170 类错误不被幂等兜底吞）。
+        var knownColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
+        {
+            var propColumnAttr = property.GetAttributes().FirstOrDefault(a =>
+                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+            knownColumns.Add(propColumnAttr?.ConstructorArguments.FirstOrDefault().Value as string
+                ?? property.Name);
+        }
 
         // [Unique] 派生索引名先占位（与 TableModel 的 ux_{table}_{column} 命名一致）
         foreach (var member in type.GetMembers().OfType<IPropertySymbol>())
@@ -408,6 +458,15 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
                     $"[Index(\"{indexName}\")] on '{type.Name}' declares no columns; it would be silently dropped"));
                 continue;
+            }
+            foreach (string column in columns)
+            {
+                if (!knownColumns.Contains(column))
+                {
+                    ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
+                        $"[Index(\"{indexName}\")] on '{type.Name}' references column '{column}' " +
+                        "which does not exist on the entity; CREATE INDEX would fail at MigrateAsync"));
+                }
             }
             if (!seenNames.Add(indexName))
             {

@@ -33,21 +33,25 @@ internal static class SourceGenerationValidation
 
         // 恰好一个 [Key]（ITM-311）：无主键会生成 "DELETE FROM t WHERE " 畸形 SQL；
         // 复合主键的 BindDelete 会把同一 key 绑到所有参数——两者都不能只依赖可被
-        // .editorconfig 降级的 PALORM001/019，生成器必须自守卫
-        int keyCount = type.GetMembers().OfType<IPropertySymbol>()
-            .Where(static property => !IsNotMapped(property))
-            .Count(static property => property.GetAttributes().Any(static attribute =>
-                IsPalORMAttribute(attribute, "Key")));  // ITM-512
-        if (keyCount != 1)
+        // .editorconfig 降级的 PALORM001/019，生成器必须自守卫。
+        // ITM-559：计数走基类链（与 TableModel.GetMappableProperties 的列收集一致）——
+        // 只查声明成员会让基类 [Key] 实体被跳过且 PALORM001 误报"无 [Key]"。
+        List<IPropertySymbol> keyProperties = EnumerateMappedProperties(type)
+            .Where(static property => property.GetAttributes().Any(static attribute =>
+                IsPalORMAttribute(attribute, "Key")))  // ITM-512
+            .ToList();
+        if (keyProperties.Count != 1)
             return false;
 
         // 主键属性必须可被生成代码正常赋值（ITM-504）：自增主键 SetId 生成 `entity.Id = id`，
         // init-only setter 会产生 CS8852（生成物编译失败，用户难定位）。要求 PK setter 非 init。
-        IPropertySymbol? keyProperty = type.GetMembers().OfType<IPropertySymbol>()
-            .FirstOrDefault(static property => !IsNotMapped(property)
-                && property.GetAttributes().Any(static attribute =>
-                    IsPalORMAttribute(attribute, "Key")));  // ITM-512
-        if (keyProperty is null || keyProperty.SetMethod is null || keyProperty.SetMethod.IsInitOnly)
+        // ITM-560：可空值类型主键（long?/Guid?）会让 BindDelete 的精确拆箱分支生成
+        // `((long)key) is null` 等不编译代码（CS0037/CS8117）——一并拒绝。
+        // 两种形态均由 PALORM022 在编译期给出定位诊断（此前静默跳过，运行期才报 not registered）。
+        IPropertySymbol keyProperty = keyProperties[0];
+        if (keyProperty.SetMethod is null || keyProperty.SetMethod.IsInitOnly)
+            return false;
+        if (keyProperty.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T })
             return false;
 
         foreach (IPropertySymbol property in type.GetMembers().OfType<IPropertySymbol>())
@@ -169,6 +173,26 @@ internal static class SourceGenerationValidation
     internal static bool IsNotMapped(IPropertySymbol property)
         => property.GetAttributes().Any(static attribute =>
             IsPalORMAttribute(attribute, "NotMapped"));
+
+    /// <summary>沿基类链枚举可映射属性（ITM-559，与 TableModel.GetMappableProperties 同一
+    /// 隐藏语义：派生类同名属性覆盖基类）。排除 static/索引器/[NotMapped]。</summary>
+    internal static IEnumerable<IPropertySymbol> EnumerateMappedProperties(INamedTypeSymbol type)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (INamedTypeSymbol? current = type;
+             current is not null && current.SpecialType != SpecialType.System_Object;
+             current = current.BaseType)
+        {
+            foreach (ISymbol member in current.GetMembers())
+            {
+                if (member is not IPropertySymbol property) continue;
+                if (property.IsStatic || property.IsIndexer || property.IsImplicitlyDeclared) continue;
+                if (!seen.Add(property.Name)) continue;
+                if (IsNotMapped(property)) continue;
+                yield return property;
+            }
+        }
+    }
 
     private static bool IsSupportedProviderType(ITypeSymbol type)
     {

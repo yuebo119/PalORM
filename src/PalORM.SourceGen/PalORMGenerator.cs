@@ -71,16 +71,30 @@ public sealed class PalORMGenerator : IIncrementalGenerator
         });
 
         // ── SqlTemplate: [SqlTemplate("name")] → 预编译 SQL 常量 (Phase 5) ──
+        // ITM-573：Collect 后按 (Namespace, TemplateName) 去重——两个方法挂同名模板此前
+        // 各自生成同名字段（双 partial class → CS0102，错误指向 .g.cs 难定位）。
+        // 重复时保留方法标识序最小者，其余静默丢弃（模板名冲突属用户错误，但生成物必须合法）。
         var sqlTemplates = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 "PalORM.SqlTemplateAttribute",
                 predicate: static (node, _) => node is MethodDeclarationSyntax,
-                transform: static (ctx, ct) => CreateGeneratedSource("SqlTemplate", ctx, SqlTemplateEmitter.Generate(ctx, ct)))
-            .Where(static s => s is not null);
+                transform: static (ctx, ct) => SqlTemplateEmitter.Generate(ctx, ct))
+            .Where(static m => m is not null)
+            .Collect();
 
-        context.RegisterSourceOutput(sqlTemplates, static (spc, source) =>
+        context.RegisterSourceOutput(sqlTemplates, static (spc, models) =>
         {
-            spc.AddSource(source!.Value.HintName, source.Value.Source);
+            var emitted = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var model in models
+                .OfType<SqlTemplateEmitter.SqlTemplateModel>()
+                .OrderBy(static m => m.MethodIdentity, StringComparer.Ordinal))
+            {
+                if (!emitted.Add($"{model.Namespace}.{model.TemplateName}"))
+                    continue;
+                spc.AddSource(
+                    CreateStableHintName("SqlTemplate", model.MethodIdentity),
+                    SqlTemplateEmitter.Render(model));
+            }
         });
     }
 

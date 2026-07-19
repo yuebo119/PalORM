@@ -216,13 +216,21 @@ internal static class MigrationEmitter
                 SqlGenerationDialect.MySql => "CHAR(36)",
                 _ => throw new ArgumentOutOfRangeException(nameof(dialect))
             };
-        if (typeName is "char" or "global::System.Char") return "TEXT";
+        if (typeName is "char" or "global::System.Char")
+            // ITM-566：1170 规避对所有落 TEXT 的类型统一——char 被索引/主键时同 string 处理
+            return dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
+                ? "VARCHAR(255)"
+                : "TEXT";
         if (typeName is "string" or "global::System.String")
             // MySQL 对 TEXT/BLOB 建索引必须指定前缀长度（错误 1170，不被 1061 幂等兜底吞）——
             // 主键列与被索引列一律 VARCHAR(255)（ITM-201）
             return dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
                 ? "VARCHAR(255)"
                 : "TEXT";
+        // ITM-566：兜底 TEXT（enum/未识别类型）同受 1170 约束——被索引时 VARCHAR(255)
+        if (dialect == SqlGenerationDialect.MySql && (column.IsPrimaryKey || isIndexed)
+            && column.DbTypeName == "TEXT")
+            return "VARCHAR(255)";
         return column.DbTypeName;
     }
 }

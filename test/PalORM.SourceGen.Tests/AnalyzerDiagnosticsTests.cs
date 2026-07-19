@@ -140,8 +140,132 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task InheritedKey_DoesNotReportPalorm001()
+    {
+        // ITM-559：[Key] 在基类时，计数走基类链——不得误报"无 [Key]"
+        const string source = """
+            using PalORM;
+            public abstract class AuditBase
+            {
+                [Key] public long Id { get; set; }
+            }
+            [Table("audited")]
+            public sealed class Audited : AuditBase
+            {
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM001")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task NullableValueTypeKey_ReportsPalorm022()
+    {
+        // ITM-560：long? 主键生成 CS0037 不编译代码——编译期明确拒绝
+        const string source = """
+            using PalORM;
+            [Table("nullable_keyed")]
+            public sealed class NullableKeyed
+            {
+                [Key] public long? Id { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM022")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task InitOnlyKey_ReportsPalorm022()
+    {
+        // ITM-561：init-only 主键此前零诊断静默跳过，运行期才报 not registered
+        const string source = """
+            using PalORM;
+            [Table("init_keyed")]
+            public sealed class InitKeyed
+            {
+                [Key] public long Id { get; init; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM022")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task IndexOnUnknownColumn_ReportsPalorm020()
+    {
+        // ITM-565：索引列拼错此前编译期静默，MigrateAsync 运行期才报列不存在
+        const string source = """
+            using PalORM;
+            [Table("indexed_entities")]
+            [Index("ix_typo", "typo_col")]
+            public sealed class IndexedEntity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d =>
+            d.Id == "PALORM020" && d.GetMessage(null).Contains("typo_col", System.StringComparison.Ordinal))).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
     public async Task OrmCallInsideLoop_ReportsPalorm005_WithoutCascadingErrors()
     {
+        // ITM-574：语义判定后仅 PalORM 命名空间的方法参与 N+1 检测——测试方法置于 PalORM 命名空间
+        const string source = """
+            using System.Collections.Generic;
+            using PalORM.TestSupport;
+            namespace PalORM.TestSupport
+            {
+                public static class RepoExtensions
+                {
+                    public static object From<T>(this object receiver) => new();
+                }
+            }
+            namespace PalORM.TestSupport.Consumer
+            {
+                public sealed class Repo
+                {
+                    public void LoadAll(List<long> ids)
+                    {
+                        foreach (long id in ids)
+                        {
+                            _ = this.From<object>();
+                        }
+                    }
+                }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM005")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task NonPalormOrmLikeCallInsideLoop_DoesNotReportPalorm005()
+    {
+        // ITM-574 负向：EF Core 等第三方库的同名方法（非 PalORM 命名空间）循环内调用不误报
         const string source = """
             using System.Collections.Generic;
             public sealed class Repo
@@ -160,7 +284,44 @@ public sealed class AnalyzerDiagnosticsTests
         (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
             await AnalyzeAsync(source);
 
-        await Assert.That(diagnostics.Any(d => d.Id == "PALORM005")).IsTrue();
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM005")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task PalormCallInLambdaInsideLoop_DoesNotReportPalorm005()
+    {
+        // ITM-574 负向：循环体内定义、循环外执行的 lambda 不是 N+1
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+            using PalORM.TestSupport;
+            namespace PalORM.TestSupport
+            {
+                public static class RepoExtensions
+                {
+                    public static object From<T>(this object receiver) => new();
+                }
+            }
+            namespace PalORM.TestSupport.Consumer
+            {
+                public sealed class Repo
+                {
+                    public void BuildLoaders(List<long> ids, List<Func<object>> loaders)
+                    {
+                        foreach (long id in ids)
+                        {
+                            loaders.Add(() => this.From<object>());
+                        }
+                    }
+                }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM005")).IsFalse();
         await Assert.That(compileErrors).IsEmpty();
     }
 
