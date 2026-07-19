@@ -22,15 +22,17 @@ public sealed class ColumnAttribute(string name) : Attribute
 {
     /// <summary>数据库列名。</summary>
     public string Name { get; } = name;
-    /// <summary>字符串列最大长度，映射为 VARCHAR(n) 等定长类型。</summary>
+    /// <summary>字符串列最大长度。<b>ITM-549：当前迁移 DDL 未实现</b>——设置会触发 PALORM017 告警，
+    /// string 列恒生成 TEXT/VARCHAR(255)。需定长时用原生 DDL 或等待实现。</summary>
     public int? Length { get; init; }
-    /// <summary>数值列精度（总位数），与 <see cref="Scale"/> 配合映射 DECIMAL(p,s)。</summary>
+    /// <summary>数值列精度（总位数）。<b>ITM-549：当前未实现</b>（PALORM017 告警）——decimal 恒 DECIMAL(18,6)。</summary>
     public int? Precision { get; init; }
-    /// <summary>数值列小数位数。</summary>
+    /// <summary>数值列小数位数。<b>ITM-549：当前未实现</b>（PALORM017 告警），随 <see cref="Precision"/>。</summary>
     public int? Scale { get; init; }
-    /// <summary>显式指定数据库列类型，覆盖默认类型映射。</summary>
+    /// <summary>显式指定数据库列类型。<b>ITM-549：当前未实现</b>（PALORM017 告警），默认类型映射不被覆盖。</summary>
     public string? TypeName { get; init; }
-    /// <summary>列存储策略（如枚举按整数或字符串存储）。</summary>
+    /// <summary>列存储策略（枚举按整数/字符串存储）。<b>ITM-553：当前未实现</b>（PALORM017 告警）——
+    /// 枚举恒按默认映射存储（TEXT）。</summary>
     public StoreAs StoreAs { get; init; }
 }
 
