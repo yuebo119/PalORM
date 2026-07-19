@@ -41,6 +41,15 @@ internal static class SourceGenerationValidation
         if (keyCount != 1)
             return false;
 
+        // 主键属性必须可被生成代码正常赋值（ITM-504）：自增主键 SetId 生成 `entity.Id = id`，
+        // init-only setter 会产生 CS8852（生成物编译失败，用户难定位）。要求 PK setter 非 init。
+        IPropertySymbol? keyProperty = type.GetMembers().OfType<IPropertySymbol>()
+            .FirstOrDefault(static property => !IsNotMapped(property)
+                && property.GetAttributes().Any(static attribute =>
+                    attribute.AttributeClass?.Name is "KeyAttribute" or "Key"));
+        if (keyProperty is null || keyProperty.SetMethod is null || keyProperty.SetMethod.IsInitOnly)
+            return false;
+
         foreach (IPropertySymbol property in type.GetMembers().OfType<IPropertySymbol>())
         {
             if (IsNotMapped(property))

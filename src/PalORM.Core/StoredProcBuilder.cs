@@ -96,7 +96,7 @@ public sealed class StoredProcBuilder
         await using DbCommand cmd = _conn.CreateCommand();
         cmd.CommandText = _name;
         cmd.CommandType = CommandType.StoredProcedure;
-        cmd.CommandTimeout = (int)_timeout.TotalSeconds;
+        cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(_timeout);
         cmd.Transaction = _operationState.GetActiveTransaction();
         foreach (var p in _parameters) cmd.Parameters.Add(p);
 
@@ -117,7 +117,7 @@ public sealed class StoredProcBuilder
         await using DbCommand cmd = _conn.CreateCommand();
         cmd.CommandText = _name;
         cmd.CommandType = CommandType.StoredProcedure;
-        cmd.CommandTimeout = (int)_timeout.TotalSeconds;
+        cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(_timeout);
         cmd.Transaction = _operationState.GetActiveTransaction();
         foreach (var p in _parameters) cmd.Parameters.Add(p);
         int result = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);

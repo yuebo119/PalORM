@@ -85,9 +85,13 @@ public sealed class ResilienceExecutor
             ReleaseCancelledProbe(entry.IsHalfOpenProbe);
             throw;
         }
-        catch
+        catch (Exception exception)
         {
-            RecordFinalFailure(entry.IsHalfOpenProbe);
+            // 仅瞬时故障与超时计入熔断（ITM-506）：唯一约束冲突/SQL 语法错误等确定性
+            // 失败是应用层问题，不应熔断整个执行器。TimeoutException 是内部命令超时的包装，
+            // 属基础设施信号，计入。
+            bool countsTowardCircuit = exception is TimeoutException || _isTransient(exception);
+            RecordFinalFailure(entry.IsHalfOpenProbe, countsTowardCircuit);
             throw;
         }
     }
@@ -127,17 +131,34 @@ public sealed class ResilienceExecutor
         }
     }
 
-    private void RecordFinalFailure(bool isHalfOpenProbe)
+    private void RecordFinalFailure(bool isHalfOpenProbe, bool countsTowardCircuit)
     {
         lock (_lock)
         {
-            _failureCount = isHalfOpenProbe
-                ? _circuitBreakerThreshold
-                : _failureCount + 1;
-            // 仅探针自身失败释放探针占用：熔断前进入的旧操作失败不得清掉在飞探针的标志，
-            // 否则 resetAfter 过后会放行第二个并发探针，打破半开单探针不变式。
+            // 仅探针自身失败释放探针占用（无论是否计数）：旧操作失败不得清掉在飞探针标志。
             if (isHalfOpenProbe)
                 _halfOpenProbeActive = false;
+
+            // 确定性异常不推进熔断状态（ITM-506）。
+            if (!countsTowardCircuit)
+                return;
+
+            // 半开探针失败：重新武装熔断（顺延恢复时间点并推进 generation）——这是探针的职责。
+            if (isHalfOpenProbe)
+            {
+                _failureCount = _circuitBreakerThreshold;
+                _circuitOpen = true;
+                _circuitGeneration++;
+                _circuitOpenUntil = DateTime.UtcNow.Add(_circuitBreakerResetAfter);
+                return;
+            }
+
+            // 熔断已打开期间，在飞旧的非探针失败不再重复顺延恢复时间点（ITM-507）——否则多个
+            // 慢操作先后失败可无限延长熔断窗口。仅从关闭态首次跨阈值时开启熔断。
+            if (_circuitOpen)
+                return;
+
+            _failureCount += 1;
 
             if (_circuitBreakerThreshold > 0 && _failureCount >= _circuitBreakerThreshold)
             {

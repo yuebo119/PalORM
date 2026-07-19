@@ -76,13 +76,17 @@ internal static class CommandFactoryEmitter
         {
             string castExpr = col.ConverterTypeName is not null
                 ? $"({col.ClrTypeName})key"
-                : col.ClrTypeName switch
+                : NormalizeClrType(col.ClrTypeName) switch
             {
-                _ when col.ClrTypeName.EndsWith("Int64") || col.ClrTypeName.EndsWith("long") => $"((long)key)",
-                _ when col.ClrTypeName.EndsWith("Int32") || col.ClrTypeName.EndsWith("int") => $"((int)key)",
-                _ when col.ClrTypeName.EndsWith("String") || col.ClrTypeName.EndsWith("string") => $"((string)key)",
-                _ when col.ClrTypeName.EndsWith("Guid") => $"((global::System.Guid)key)",
-                _ => $"key"
+                // 精确类型匹配——EndsWith 会把 "ulong".EndsWith("long")/"uint".EndsWith("int")
+                // 误判为有符号型，生成错误拆箱 (long)key 运行期抛 InvalidCastException（ITM-505）。
+                "long" or "global::System.Int64" => "((long)key)",
+                "int" or "global::System.Int32" => "((int)key)",
+                "short" or "global::System.Int16" => "((short)key)",
+                "byte" or "global::System.Byte" => "((byte)key)",
+                "string" or "global::System.String" => "((string)key)",
+                "global::System.Guid" => "((global::System.Guid)key)",
+                _ => "key"
             };
             string providerValueExpr = col.ConverterTypeName is null
                 ? castExpr
@@ -133,15 +137,22 @@ internal static class CommandFactoryEmitter
             sb.AppendLine("        // 仅自增 int/long 主键需要数据库 ID 回填");
             return;
         }
-        // 生成的代码: entity.Id = id; 或 entity.UserId = (int)id;
-        string cast = pkCol.ClrTypeName switch
+        // 生成的代码: entity.Id = id; 或 entity.UserId = (int)id;（IsAutoIncrement 已限定 int/long）
+        string cast = NormalizeClrType(pkCol.ClrTypeName) switch
         {
-            _ when pkCol.ClrTypeName.EndsWith("Int32") || pkCol.ClrTypeName.EndsWith("int") => "(int)",
-            _ when pkCol.ClrTypeName.EndsWith("Int64") || pkCol.ClrTypeName.EndsWith("long") => "",
+            "int" or "global::System.Int32" => "(int)",
+            "long" or "global::System.Int64" => "",
             _ => "(long)" // 默认转为 long 再写入
         };
         sb.AppendLine($"        entity.{pkCol.PropertyName} = {cast}id;");
     }
+
+    /// <summary>去除可空标注（string? → string），供主键类型精确匹配——EndsWith 匹配
+    /// 会误伤 uint/ulong（ITM-505）。主键不会是可空引用类型，此处仅剥可能的尾随 '?'。</summary>
+    private static string NormalizeClrType(string clrTypeName)
+        => clrTypeName.EndsWith("?", System.StringComparison.Ordinal)
+            ? clrTypeName.Substring(0, clrTypeName.Length - 1)
+            : clrTypeName;
 
     internal static string BuildInsertSql(TableModel model)
         => BuildInsertSql(model, null);

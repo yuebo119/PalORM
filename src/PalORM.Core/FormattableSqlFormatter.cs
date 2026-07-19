@@ -33,11 +33,23 @@ internal static class FormattableSqlFormatter
 
             if (current != '{')
             {
+                // 拒绝用户 SQL 文本中手写字面 @pN——与本方法为插值项生成的 @pN 占位符同名，
+                // 会静默共享绑定值产生错误数据（ITM-509）。参数化查询请统一用插值 {n}。
+                if (current == '@' && index + 1 < format.Length && format[index + 1] == 'p'
+                    && index + 2 < format.Length && char.IsAsciiDigit(format[index + 2]))
+                {
+                    throw new FormatException(
+                        "Formattable SQL contains a literal '@p<n>' parameter placeholder, which collides " +
+                        "with generated placeholders. Use interpolation ({0}, {1}, ...) for all parameters " +
+                        "instead of writing '@p0' by hand.");
+                }
                 result.Append(current);
                 continue;
             }
 
             int close = format.IndexOf('}', index + 1);
+            if (close < 0)
+                throw new FormatException("Formattable SQL has an unclosed '{' in its format string.");
             ReadOnlySpan<char> item = format.AsSpan(index + 1, close - index - 1);
             int separator = item.IndexOfAny(',', ':');
             ReadOnlySpan<char> argumentIndex = separator < 0 ? item : item[..separator];
