@@ -15,8 +15,7 @@ public sealed class PostgreSqlIntegrationTests
 {
     private static DbOptions Opts => new()
     {
-        ConnectionString = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
-            ?? "Host=localhost;Username=postgres;Password=;Database=postgres"
+        ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString()
     };
 
     [Test]

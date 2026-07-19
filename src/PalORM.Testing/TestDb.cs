@@ -5,34 +5,31 @@ using PalORM.Sqlite;
 namespace PalORM.Testing;
 
 /// <summary>测试数据库 Fixture——三行代码写集成测试，零 Docker。
-/// PG/MySQL 连接串从环境变量读取，未设置时使用默认值。</summary>
+/// <para>PG/MySQL 连接串通过 <see cref="TestEnvironment"/> 双层解析：
+/// 环境变量 <c>PALORM_*_CONNECTION</c> &gt; appsettings.test.json 模板占位符。
+/// 配置缺失时显式失败，不静默回退 localhost（ITM-428 凭据卫生）。</para></summary>
 public static class TestDb
 {
     /// <summary>创建 SQLite :memory: 数据会话。</summary>
     public static async Task<DataSession<SqliteProvider>> SqliteAsync(CancellationToken ct = default)
     {
-        var options = new DbOptions { ConnectionString = "Data Source=:memory:" };
+        var options = new DbOptions { ConnectionString = TestEnvironment.ResolveSqliteConnectionString() };
         return await DataSession<SqliteProvider>.CreateAsync(options, ct).ConfigureAwait(false);
     }
 
     /// <summary>创建 PostgreSQL 数据会话。
-    /// 连接串从环境变量 PALORM_PG_CONNECTION 读取；未设置时明确失败——
-    /// 缺省回退系统库（postgres）会让测试 DDL 写进系统库（ITM-428）。</summary>
+    /// 连接串从 <see cref="TestEnvironment.ResolvePostgreSqlConnectionString"/> 解析；
+    /// 配置缺失时显式失败——缺省回退系统库（postgres）会让测试 DDL 写进系统库（ITM-428）。</summary>
     public static async Task<DataSession<PostgreSqlProvider>> PostgreSqlAsync(CancellationToken ct = default)
     {
-        string cs = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
-            ?? throw new InvalidOperationException(
-                "PALORM_PG_CONNECTION is not set. Run scripts/set-test-env.sh or point it at a disposable test database.");
+        string cs = TestEnvironment.ResolvePostgreSqlConnectionString();
         return await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct).ConfigureAwait(false);
     }
 
-    /// <summary>创建 MySQL 数据会话。
-    /// 连接串从环境变量 PALORM_MYSQL_CONNECTION 读取；未设置时明确失败（同 PG，ITM-428）。</summary>
+    /// <summary>创建 MySQL 数据会话。同 PG 的配置解析规则（ITM-428）。</summary>
     public static async Task<DataSession<MySqlProvider>> MySqlAsync(CancellationToken ct = default)
     {
-        string cs = Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
-            ?? throw new InvalidOperationException(
-                "PALORM_MYSQL_CONNECTION is not set. Run scripts/set-test-env.sh or point it at a disposable test database.");
+        string cs = TestEnvironment.ResolveMySqlConnectionString();
         return await DataSession<MySqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs }, ct).ConfigureAwait(false);
     }
 

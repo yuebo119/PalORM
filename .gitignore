@@ -42,8 +42,11 @@ nupkgs/
 .serena/
 data/
 
-## Test credentials (never commit)
+## Test credentials & user overrides (never commit)
+## appsettings.test.json 是模板（git 跟踪）；个人覆盖用以下文件名（gitignored）
 .env.test
+appsettings.test.*.json
+appsettings.Local.json
 mydatabase.db
 
 ## Local tool caches / review artifacts

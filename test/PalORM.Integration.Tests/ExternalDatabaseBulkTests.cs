@@ -1,5 +1,6 @@
 using PalORM.MySql;
 using PalORM.PostgreSql;
+using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
@@ -24,14 +25,12 @@ public sealed class ExternalDatabaseBulkTests
 {
     private static DbOptions PgOpts => new()
     {
-        ConnectionString = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
-            ?? "Host=localhost;Username=postgres;Password=;Database=postgres"
+        ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString()
     };
 
     private static DbOptions MySqlOpts => new()
     {
-        ConnectionString = Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
-            ?? "Server=localhost;User=root;Password=;Database=mysql"
+        ConnectionString = TestEnvironment.ResolveMySqlConnectionString()
     };
 
     private static ExtBulkEntity[] SampleRows() =>
