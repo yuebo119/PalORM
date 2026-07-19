@@ -5,7 +5,9 @@ namespace PalORM;
 
 /// <summary>存储过程构建器——链式绑定参数+执行。
 /// <para><b>参数工厂</b>: 构造时注入 TProvider.CreateParameter——不再为每个参数创建临时 DbCommand。</para>
-/// <para>WithOutputParam: 输出参数在 ExecuteAsync 后通过 GetOutputValue&lt;T&gt;() 读取。</para></summary>
+/// <para>WithOutputParam: 输出参数在 ExecuteAsync 后通过 GetOutputValue&lt;T&gt;() 读取。</para>
+/// <para>ITM-582: 存储过程执行<b>不经过</b> IQueryInterceptor 与 WithTracing/WithMetrics
+/// （与 QueryMultipleAsync 的 ITM-548 同类边界）——完整审计请用数据库层审计。</para></summary>
 public sealed class StoredProcBuilder
 {
     private readonly DbConnection _conn;

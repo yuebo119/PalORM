@@ -337,7 +337,9 @@ public readonly record struct CreateIndexSqlSet(
 /// <summary>CRUD 元数据聚合——单次字典查找替代四次独立查找。</summary>
 public readonly struct CrudMetadata
 {
-    /// <summary>CRUD SQL 集（当前方言）。</summary>
+    /// <summary>legacy 无方言 CRUD SQL 集（标识符未经引用转义）。ITM-580: 仅作
+    /// GetCommandSqls 的 fallback 形参传递并被其拒绝——不要直接消费；
+    /// 按方言 SQL 走 PalORM_Runtime.CommandSqlsByDialect。</summary>
     public readonly CommandSqlSet Sqls;
     /// <summary>Insert 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindInsert;

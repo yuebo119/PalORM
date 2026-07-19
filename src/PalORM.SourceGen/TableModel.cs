@@ -82,6 +82,13 @@ internal sealed record TableModel(
                 .FirstOrDefault(static attribute =>
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "Computed"))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
+            // ITM-584：[Computed] 表达式是编译期常量（Raw 同级信任），但 NUL/未配对括号会生成
+    // 非法 DDL 延迟到 MigrateAsync 才炸——快检拒绝，实体整体跳过（PALORM015 兜底提示）
+            if (computedExpression is not null
+                && (computedExpression.Contains('\0')
+                    || computedExpression.Count(static c => c == '(')
+                        != computedExpression.Count(static c => c == ')')))
+                return null;
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
             bool isOwnedJson = ownedJsonAttr is not null;

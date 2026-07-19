@@ -15,9 +15,6 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
     internal readonly SqlDialect _dialect;
     internal readonly bool _validateColumnOrder;
-    // From<T>() 注入默认过滤（软删/租户）后的基准子句数——QueryMultipleAsync 据此
-    // 区分"默认注入"与"用户显式子句"（仅后者应触发误用守卫）
-    internal int _defaultClauseCount;
     internal readonly Func<string, string> _quoteIdentifier;
     internal readonly IRowFactory<T> _factory;
     internal readonly List<IQueryInterceptor> _interceptors;
@@ -507,8 +504,7 @@ public struct QueryBuilder<T> where T : class, new()
             _metrics = _metrics,
             _splitQuery = _splitQuery,
             _useReadRoute = _useReadRoute,
-            _transaction = _transaction,
-            _defaultClauseCount = _defaultClauseCount
+            _transaction = _transaction
         };
         foreach (QueryClause clause in _clauses)
         {

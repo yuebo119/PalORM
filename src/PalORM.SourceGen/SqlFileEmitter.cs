@@ -8,7 +8,10 @@ namespace PalORM.SourceGen;
 /// 使用 ForAttributeWithMetadataName 从特性参数获取文件路径——任何 Roslyn 版本通用。</para>
 /// <para>Provider 条件分支: .sql 文件中 -- @pg/@mysql/@sqlite/@all 指令→根据 [SqlFile(Provider="xx")]
 /// 编译时只提取匹配段。</para>
-/// <para>安全: 拒绝绝对路径和 .. 遍历, Path.GetFullPath 前缀校验防越界。</para></summary>
+/// <para>安全: 拒绝绝对路径和 .. 遍历, Path.GetFullPath 前缀校验防越界。</para>
+/// <para><b>ITM-585 已知限制</b>: 文件读取发生在 transform 内、增量缓存键只含语法/符号——
+/// 仅编辑 .sql 不改 C# 源时，IDE/增量构建沿用旧缓存，嵌入 SQL 陈旧直至相关源文件变动
+/// 或全量重建（dotnet build 冷构建恒新鲜；改 .sql 后请连带 touch 声明方法所在文件）。</para></summary>
 internal static class SqlFileEmitter
 {
     internal static string? Generate(GeneratorAttributeSyntaxContext ctx, CancellationToken ct)
@@ -35,7 +38,12 @@ internal static class SqlFileEmitter
         }
 
         // 安全: 拒绝绝对路径和路径遍历
-        if (Path.IsPathRooted(relativePath) || relativePath.Contains(".."))
+        // ITM-584: '..' 按路径段判定——子串判定误拒 `my..queries.sql` 等合法文件名；
+        // 真正的遍历（`../x` / `a/../b`）仍被拒绝，且 ITM-545 的解析后前缀校验仍在下游兜底。
+        bool hasTraversalSegment = relativePath
+            .Split('/', '\\')
+            .Any(static segment => segment == "..");
+        if (Path.IsPathRooted(relativePath) || hasTraversalSegment)
             return GenerateError(method, $"SqlFile 路径必须为相对路径，不允许 '..' 或绝对路径: {EscapeForCSharp(relativePath)}");
 
         ct.ThrowIfCancellationRequested();
@@ -129,7 +137,8 @@ internal static class SqlFileEmitter
         sb.AppendLine();
         sb.AppendLine($"partial class {typeName}");
         sb.AppendLine("{");
-        sb.AppendLine($"    /// <summary>编译时嵌入 SQL (来源: {EscapeForCSharp(sourcePath)})</summary>");
+        // ITM-584: 路径含 &/< 时 XML doc 畸形（CS1570，TreatWarningsAsErrors 下变错误）——XML 实体转义
+        sb.AppendLine($"    /// <summary>编译时嵌入 SQL (来源: {EscapeForXmlDoc(sourcePath)})</summary>");
         sb.Append("    public static partial string ").Append(methodName).Append("() => ").AppendLine(delimiter);
         sb.AppendLine(sqlContent);
         sb.Append(delimiter).AppendLine(";");
@@ -232,5 +241,11 @@ internal static class SqlFileEmitter
     private static string EscapeForCSharp(string text)
     {
         return text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    /// <summary>XML doc 注释内容转义（ITM-584）：&amp;/&lt;/&gt; 实体化防 CS1570。</summary>
+    private static string EscapeForXmlDoc(string text)
+    {
+        return text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
     }
 }

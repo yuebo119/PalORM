@@ -358,15 +358,17 @@ internal sealed class SessionOperationState
         {
             // 有界等待：被放弃的 QueryAsyncEnumerable 枚举器（未 DisposeAsync）会让操作租约
             // 永不完成——无诊断的无限挂起改为明确失败，指向泄漏原因。
+            // ITM-581: 读一次入局部——测试并发修改该可变静态时，等待值与诊断消息保持一致
+            TimeSpan disposeWaitTimeout = DisposeWaitTimeout;
             try
             {
                 await Task.WhenAll(activeOperation, activeTransaction)
-                    .WaitAsync(DisposeWaitTimeout).ConfigureAwait(false);
+                    .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
             }
             catch (TimeoutException timeoutException)
             {
                 throw new InvalidOperationException(
-                    $"DataSession dispose timed out after {DisposeWaitTimeout} waiting for an active operation. " +
+                    $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
                     "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed; " +
                     "always consume it with 'await foreach' or dispose the enumerator explicitly.",
                     timeoutException);

@@ -3,7 +3,8 @@ namespace PalORM;
 /// <summary>数据库实体映射注解。所有注解均为编译时元数据，源生成器在编译期读取，零运行时开销。</summary>
 
 /// <summary>标记实体类对应的数据库表名。</summary>
-/// <param name="name">数据库表名，原样进入生成 SQL。</param>
+/// <param name="name">数据库表名。方言 Emitter 生成 SQL 时做标识符引用转义（ITM-580：
+/// 仅已被运行时拒绝的 legacy 路径为原样）。</param>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class TableAttribute(string name) : Attribute
 {
@@ -49,8 +50,8 @@ public enum StoreAs
     AsString
 }
 
-/// <summary>标记主键属性。支持 long、Guid、string；Ulid 必须配置编译期值转换器。
-/// int/long 主键默认视为数据库自增（排除出 INSERT 列）；
+/// <summary>标记主键属性。支持 long/int/short/byte、Guid、string；Ulid 必须配置编译期值转换器。
+/// 数值主键（long/int/short/byte）默认视为数据库自增（排除出 INSERT 列）；
 /// 雪花 ID 等应用侧赋值的数值主键设置 <c>AutoIncrement = false</c> 关闭。</summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class KeyAttribute : Attribute
@@ -102,8 +103,10 @@ public sealed class IgnoreOnInsertAttribute : Attribute { }
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class RequiredAttribute : Attribute { }
 
-/// <summary>DB 端默认值表达式。</summary>
-/// <param name="expression">SQL 默认值表达式（如 <c>CURRENT_TIMESTAMP</c>），原样进入 DDL。</param>
+/// <summary>DB 端默认值表达式。
+/// <para><b>当前未实现</b>（ITM-580）: 表达式不参与 DDL 生成（MigrationEmitter 不读取本注解），
+/// 标注后 PALORM017 编译期告警。列默认值请直接写入 [SqlFile] 迁移脚本或建表后 ALTER。</para></summary>
+/// <param name="expression">SQL 默认值表达式（如 <c>CURRENT_TIMESTAMP</c>）。当前仅作元数据保留。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class DefaultValueAttribute(string expression) : Attribute
 {
