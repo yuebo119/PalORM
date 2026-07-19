@@ -4,6 +4,11 @@ namespace PalORM.SourceGen;
 
 internal static class RegistryEmitter
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "Registry 注册代码生成器：每个注册字典（RowFactories/TableNames/...）按顺序 "
+            + "Append 到 StringBuilder。线性结构清晰，按字典拆分 Append* 方法会复制 14 次 foreach "
+            + "样板，反而损害可读性。快照测试已覆盖字节级输出正确性。")]
     internal static string Generate(EquatableArray<TableModel> models)
     {
         var sb = new StringBuilder();

@@ -106,26 +106,7 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         Action<DbCommand, object> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
-        DbCommand probeCommand = conn.CreateCommand();
-        Exception? probeException = null;
-        try
-        {
-            binder(probeCommand, entities[0]);
-            if (probeCommand.Parameters.Count != columnCount)
-                throw new InvalidOperationException(
-                    $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                    $"{probeCommand.Parameters.Count} parameters.");
-        }
-        catch (Exception exception)
-        {
-            probeException = exception;
-            throw;
-        }
-        finally
-        {
-            await DisposePreservingAsync(probeCommand, probeException,
-                "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
-        }
+        await ProbeBinderAsync(conn, binder, entities[0], columnCount, typeof(T).Name).ConfigureAwait(false);
 
         string quotedColumns = string.Join(", ",
             metadata.InsertColumns.Select(QuoteIdentifier));
@@ -160,19 +141,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                                     $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
                                     $"{rowCommand.Parameters.Count} parameters.");
 
-                            await importer.StartRowAsync(ct).ConfigureAwait(false);
-                            for (int parameterIndex = 0;
-                                 parameterIndex < columnCount;
-                                 parameterIndex++)
-                            {
-                                var parameter = (NpgsqlParameter)
-                                    rowCommand.Parameters[parameterIndex];
-                                object? value = parameter.Value is DBNull
-                                    ? null
-                                    : parameter.Value;
-                                await importer.WriteAsync(
-                                    value, parameter.NpgsqlDbType, ct).ConfigureAwait(false);
-                            }
+                            await WriteRowAsync(importer, rowCommand, columnCount, ct).ConfigureAwait(false);
                             total++;
                         }
                         await importer.CompleteAsync(ct).ConfigureAwait(false);
@@ -216,6 +185,49 @@ public sealed class PostgreSqlProvider : IDbProvider
             if (ownsTransaction)
                 await DisposePreservingAsync(bulkTransaction, primaryException,
                     "PalORM.TransactionCleanupException").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>探测 binder 生成的参数数量与列数一致——不一致即抛 InvalidOperationException。
+    /// 探测命令独立释放，cleanup 异常挂 Data 不替换原始失败（ITM-412 与 MultiValueBulkInsert 同骨架）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
+        Justification = "释放是清理路径；异常附加到主异常，不能替换原始批量写失败。")]
+    private static async ValueTask ProbeBinderAsync(
+        DbConnection conn, Action<DbCommand, object> binder, object first,
+        int columnCount, string typeName)
+    {
+        DbCommand probeCommand = conn.CreateCommand();
+        Exception? probeException = null;
+        try
+        {
+            binder(probeCommand, first);
+            if (probeCommand.Parameters.Count != columnCount)
+                throw new InvalidOperationException(
+                    $"Type '{typeName}' generated {columnCount} insert columns but " +
+                    $"{probeCommand.Parameters.Count} parameters.");
+        }
+        catch (Exception exception)
+        {
+            probeException = exception;
+            throw;
+        }
+        finally
+        {
+            await DisposePreservingAsync(probeCommand, probeException,
+                "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>把单行参数写入 PG Binary importer——DBNull 转换为 null 让 importer 用列默认类型。</summary>
+    private static async ValueTask WriteRowAsync(
+        NpgsqlBinaryImporter importer, DbCommand rowCommand, int columnCount, CancellationToken ct)
+    {
+        await importer.StartRowAsync(ct).ConfigureAwait(false);
+        for (int parameterIndex = 0; parameterIndex < columnCount; parameterIndex++)
+        {
+            var parameter = (NpgsqlParameter)rowCommand.Parameters[parameterIndex];
+            object? value = parameter.Value is DBNull ? null : parameter.Value;
+            await importer.WriteAsync(value, parameter.NpgsqlDbType, ct).ConfigureAwait(false);
         }
     }
 

@@ -16,6 +16,10 @@ internal static class FormattableSqlFormatter
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S1994:ForLoopConditionChanged",
         Justification = "Same as S127 — composite format scan requires index manipulation.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "单遍扫描复合格式串——三种分支（{{}} 转义/{N} 占位符/普通字符）+ 校验逻辑，"
+            + "结构紧凑；拆分会破坏单遍扫描的局部性。")]
     internal static string Format(FormattableString sql, int baseIndex = 0)
     {
         ArgumentNullException.ThrowIfNull(sql);

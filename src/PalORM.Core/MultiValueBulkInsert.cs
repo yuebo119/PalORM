@@ -45,26 +45,7 @@ public static class MultiValueBulkInsert
 
         Action<DbCommand, object> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
-        DbCommand probeCommand = conn.CreateCommand();
-        Exception? probeException = null;
-        try
-        {
-            binder(probeCommand, entities[0]);
-            if (probeCommand.Parameters.Count != columnCount)
-                throw new InvalidOperationException(
-                    $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                    $"{probeCommand.Parameters.Count} parameters.");
-        }
-        catch (Exception exception)
-        {
-            probeException = exception;
-            throw;
-        }
-        finally
-        {
-            await DisposeCommandPreservingAsync(probeCommand, probeException,
-                "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
-        }
+        await ProbeBinderAsync(conn, binder, entities[0], columnCount, typeof(T).Name).ConfigureAwait(false);
 
         if (columnCount > maxParametersPerStatement)
             throw new InvalidOperationException(
@@ -88,60 +69,10 @@ public static class MultiValueBulkInsert
             Exception? rowCommandException = null;
             try
             {
-                for (int start = 0; start < entities.Count; start += effectiveBatchSize)
-                {
-                    int end = Math.Min(start + effectiveBatchSize, entities.Count);
-                    int batchLength = end - start;
-                    var rowPlaceholders = new string[batchLength];
-                    for (int row = 0; row < batchLength; row++)
-                    {
-                        int parameterOffset = row * columnCount;
-                        rowPlaceholders[row] = "(" + string.Join(", ",
-                            Enumerable.Range(0, columnCount)
-                                .Select(column => $"@p{parameterOffset + column}")) + ")";
-                    }
-
-                    DbCommand cmd = conn.CreateCommand();
-                    Exception? commandException = null;
-                    try
-                    {
-                        cmd.Transaction = tran;
-                        cmd.CommandTimeout = commandTimeoutSeconds;
-                        cmd.CommandText =
-                            $"INSERT INTO {quotedTable} ({quotedColumns}) VALUES " +
-                            string.Join(", ", rowPlaceholders);
-
-                        for (int row = 0; row < batchLength; row++)
-                        {
-                            int parameterOffset = row * columnCount;
-                            rowCommand.Parameters.Clear();
-                            binder(rowCommand, entities[start + row]);
-                            if (rowCommand.Parameters.Count != columnCount)
-                                throw new InvalidOperationException(
-                                    $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                                    $"{rowCommand.Parameters.Count} parameters.");
-
-                            for (int column = 0; column < columnCount; column++)
-                            {
-                                DbParameter source = rowCommand.Parameters[column];
-                                cmd.Parameters.Add(createParameter(
-                                    $"@p{parameterOffset + column}", source.Value));
-                            }
-                        }
-
-                        total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-                    }
-                    catch (Exception exception)
-                    {
-                        commandException = exception;
-                        throw;
-                    }
-                    finally
-                    {
-                        await DisposeCommandPreservingAsync(cmd, commandException,
-                            "PalORM.CommandCleanupException").ConfigureAwait(false);
-                    }
-                }
+                total = await ExecuteBatchesAsync(
+                    conn, tran, rowCommand, entities, effectiveBatchSize, columnCount,
+                    quotedTable, quotedColumns, binder, createParameter, commandTimeoutSeconds,
+                    typeof(T).Name, ct).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -172,8 +103,111 @@ public static class MultiValueBulkInsert
         return total;
     }
 
+    /// <summary>探测 binder 生成的参数数量与列数一致——不一致即抛 InvalidOperationException。
+    /// 探测命令独立释放，cleanup 异常挂 Data 不替换原始失败。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "释放是清理路径；异常附加到主异常，不能替换原始批量写失败。")]
+    private static async ValueTask ProbeBinderAsync(
+        DbConnection conn, Action<DbCommand, object> binder, object first,
+        int columnCount, string typeName)
+    {
+        DbCommand probeCommand = conn.CreateCommand();
+        Exception? probeException = null;
+        try
+        {
+            binder(probeCommand, first);
+            if (probeCommand.Parameters.Count != columnCount)
+                throw new InvalidOperationException(
+                    $"Type '{typeName}' generated {columnCount} insert columns but " +
+                    $"{probeCommand.Parameters.Count} parameters.");
+        }
+        catch (Exception exception)
+        {
+            probeException = exception;
+            throw;
+        }
+        finally
+        {
+            await DisposeCommandPreservingAsync(probeCommand, probeException,
+                "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>构建每行 (?,?,?,?,?) 占位符组——批内每行一组，逗号分隔。</summary>
+    private static string[] BuildRowPlaceholders(int batchLength, int columnCount)
+    {
+        var rowPlaceholders = new string[batchLength];
+        for (int row = 0; row < batchLength; row++)
+        {
+            int parameterOffset = row * columnCount;
+            rowPlaceholders[row] = "(" + string.Join(", ",
+                Enumerable.Range(0, columnCount)
+                    .Select(column => $"@p{parameterOffset + column}")) + ")";
+        }
+        return rowPlaceholders;
+    }
+
+    /// <summary>分批执行 INSERT——批大小受 effectiveBatchSize 与参数上限钳制。
+    /// 行参数暂存命令在批间复用（原实现每行新建一个 DbCommand，1 万行即 1 万次分配）。</summary>
+    private static async Task<long> ExecuteBatchesAsync<T>(
+        DbConnection conn, DbTransaction tran, DbCommand rowCommand,
+        IReadOnlyList<T> entities, int effectiveBatchSize, int columnCount,
+        string quotedTable, string quotedColumns,
+        Action<DbCommand, object> binder,
+        Func<string, object?, DbParameter> createParameter,
+        int commandTimeoutSeconds, string typeName, CancellationToken ct) where T : class, new()
+    {
+        long total = 0;
+        for (int start = 0; start < entities.Count; start += effectiveBatchSize)
+        {
+            int end = Math.Min(start + effectiveBatchSize, entities.Count);
+            int batchLength = end - start;
+            string[] rowPlaceholders = BuildRowPlaceholders(batchLength, columnCount);
+
+            DbCommand cmd = conn.CreateCommand();
+            Exception? commandException = null;
+            try
+            {
+                cmd.Transaction = tran;
+                cmd.CommandTimeout = commandTimeoutSeconds;
+                cmd.CommandText =
+                    $"INSERT INTO {quotedTable} ({quotedColumns}) VALUES " +
+                    string.Join(", ", rowPlaceholders);
+
+                for (int row = 0; row < batchLength; row++)
+                {
+                    int parameterOffset = row * columnCount;
+                    rowCommand.Parameters.Clear();
+                    binder(rowCommand, entities[start + row]);
+                    if (rowCommand.Parameters.Count != columnCount)
+                        throw new InvalidOperationException(
+                            $"Type '{typeName}' generated {columnCount} insert columns but " +
+                            $"{rowCommand.Parameters.Count} parameters.");
+
+                    for (int column = 0; column < columnCount; column++)
+                    {
+                        DbParameter source = rowCommand.Parameters[column];
+                        cmd.Parameters.Add(createParameter(
+                            $"@p{parameterOffset + column}", source.Value));
+                    }
+                }
+
+                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                commandException = exception;
+                throw;
+            }
+            finally
+            {
+                await DisposeCommandPreservingAsync(cmd, commandException,
+                    "PalORM.CommandCleanupException").ConfigureAwait(false);
+            }
+        }
+        return total;
+    }
+
     private static async ValueTask DisposeCommandPreservingAsync(
         DbCommand command,
         Exception? primaryException,

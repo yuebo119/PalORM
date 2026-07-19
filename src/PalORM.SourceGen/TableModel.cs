@@ -23,6 +23,11 @@ internal sealed record TableModel(
     string? Schema,
     string? Database)
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "TableModel 一次性收集所有注解元数据（Column/Key/ForeignKey/Index/Converter/Computed）。"
+            + "大 foreach 内的多分支是必然——按注解类型拆 BuildColumn/BuildForeignKey/BuildCompositeIndex "
+            + "会把单列构建拆到 3 个方法，调用关系复杂。当前结构按属性顺序线性阅读，更清晰。")]
     public static TableModel? FromContext(GeneratorAttributeSyntaxContext ctx)
     {
         if (ctx.TargetSymbol is not INamedTypeSymbol typeSymbol) return null;

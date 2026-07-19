@@ -14,6 +14,10 @@ internal static class SqlTemplateEmitter
     /// （ITM-573：两个方法挂同名模板会生成两个同名字段 → CS0102）。</summary>
     internal sealed record SqlTemplateModel(string Namespace, string TemplateName, string Literal, string MethodIdentity);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "Roslyn 语法树提取插值串——多分支守卫是必要的（属性过滤/语法节点判定/方法参数绑定验证）。"
+            + "拆分会让单遍语法扫描逻辑跨方法跳跃。")]
     internal static SqlTemplateModel? Generate(GeneratorAttributeSyntaxContext ctx, CancellationToken ct)
     {
         if (ctx.TargetSymbol is not IMethodSymbol method)

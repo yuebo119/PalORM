@@ -23,6 +23,10 @@ public static class QueryBuilderExtensions
             builder, ct, operationLease.Owner).ConfigureAwait(false);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "查询执行管线的 try/catch/finally 三段式（执行/拦截器错误通知/观测性收尾）"
+            + "是异步 IO 资源管理的必然形态。已抽出 NotifyInterceptorsOnError，余下分支是观测性收尾本身。")]
     private static async ValueTask<List<T>> ExecuteQueryAsync<T>(
         QueryBuilder<T> builder,
         CancellationToken ct,
@@ -63,11 +67,7 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
-            foreach (IQueryInterceptor interceptor in builder._interceptors)
-            {
-                try { interceptor.OnError(context, exception); }
-                catch { /* 拦截器不能覆盖原始执行异常，也不能阻断资源清理。 */ }
-            }
+            NotifyInterceptorsOnError(builder._interceptors, context, exception);
             throw;
         }
         finally
@@ -76,6 +76,18 @@ public static class QueryBuilderExtensions
             PalORMMetrics.CompleteActivity(activity, outcome);
             if (builder._metrics)
                 PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
+        }
+    }
+
+    /// <summary>通知所有拦截器 OnError——单个拦截器抛出的异常被吞掉，
+    /// 不覆盖原始执行异常、不阻断其他拦截器或后续资源清理。</summary>
+    private static void NotifyInterceptorsOnError(
+        List<IQueryInterceptor> interceptors, QueryContext context, Exception exception)
+    {
+        foreach (IQueryInterceptor interceptor in interceptors)
+        {
+            try { interceptor.OnError(context, exception); }
+            catch { /* 拦截器不能覆盖原始执行异常，也不能阻断资源清理。 */ }
         }
     }
 
@@ -203,10 +215,7 @@ public static class QueryBuilderExtensions
                 "QueryMultipleAsync executes the provided SQL verbatim and ignores builder clauses. " +
                 "Call it on a bare From<T>() (no Where/OrderBy/etc.), or embed conditions in the SQL itself.");
         const string operation = "query_multiple";
-        string provider = builder._dialect.GetName();
-        QueryObservation? observation = builder._tracing || builder._metrics
-            ? new QueryObservation(builder._tracing, builder._metrics, operation, provider)
-            : null;
+        QueryObservation? observation = StartObservation(builder, operation);
         ConnectionLease? lease = null;
         DbCommand? command = null;
         GridReader? grid = null;
@@ -236,34 +245,46 @@ public static class QueryBuilderExtensions
             observation?.Complete(exception is OperationCanceledException && ct.IsCancellationRequested
                 ? "cancelled"
                 : "error");
-            if (grid is not null)
-            {
-                try { await grid.DisposeAsync().ConfigureAwait(false); }
-                catch (Exception cleanupException)
-                {
-                    exception.Data["PalORM.GridCleanupException"] =
-                        cleanupException;
-                }
-            }
-            else
-            {
-                if (command is not null)
-                {
-                    try { await command.DisposeAsync().ConfigureAwait(false); }
-                    catch (Exception cleanupException) { exception.Data["PalORM.CommandCleanupException"] = cleanupException; }
-                }
-                if (lease is not null)
-                {
-                    try { await lease.DisposeAsync().ConfigureAwait(false); }
-                    catch (Exception cleanupException) { exception.Data["PalORM.ConnectionCleanupException"] = cleanupException; }
-                }
-            }
+            await CleanupQueryResourcesAsync(grid, command, lease, exception).ConfigureAwait(false);
             throw;
         }
         finally
         {
             if (!operationTransferred)
                 await operationLease.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>构建可观测性追踪点——仅当 tracing 或 metrics 任一启用时创建。</summary>
+    private static QueryObservation? StartObservation<T>(QueryBuilder<T> builder, string operation) where T : class, new()
+        => builder._tracing || builder._metrics
+            ? new QueryObservation(builder._tracing, builder._metrics, operation, builder._dialect.GetName())
+            : null;
+
+    /// <summary>查询失败时的资源清理——按"grid 已建/未建"两路径释放。
+    /// 异常挂 Data 键不替换原始失败：GridCleanupException / CommandCleanupException / ConnectionCleanupException。
+    /// grid 已建时其 DisposeAsync 内部级联释放 command + lease。</summary>
+    private static async ValueTask CleanupQueryResourcesAsync(
+        GridReader? grid, DbCommand? command, ConnectionLease? lease, Exception primaryException)
+    {
+        if (grid is not null)
+        {
+            try { await grid.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException)
+            {
+                primaryException.Data["PalORM.GridCleanupException"] = cleanupException;
+            }
+            return;
+        }
+        if (command is not null)
+        {
+            try { await command.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { primaryException.Data["PalORM.CommandCleanupException"] = cleanupException; }
+        }
+        if (lease is not null)
+        {
+            try { await lease.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { primaryException.Data["PalORM.ConnectionCleanupException"] = cleanupException; }
         }
     }
 

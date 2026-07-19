@@ -100,6 +100,10 @@ internal sealed class DialectSymmetryTests
         Schema: null,
         Database: null);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:MethodsShouldNotHaveTooManyParameters",
+        Justification = "测试工厂方法——所有参数都是 ColumnModel 的可调旋钮，参数多于 7 是必然。"
+            + "聚合为对象会损害测试用例内联可读性。")]
     private static ColumnModel Column(
         string property, string column, string clrType, string dbType,
         bool isPrimaryKey = false, bool isAutoIncrement = false, bool isNullable = false,

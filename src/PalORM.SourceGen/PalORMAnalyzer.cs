@@ -136,6 +136,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          MissingTenantColumn, CompositePrimaryKey, InvalidIndexDeclaration, DuplicateColumnName,
          InvalidKeyDeclaration];
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "Roslyn 分析器的 Initialize 是注册调度中心——多个 RegisterSymbolAction/SyntaxNodeAction "
+            + "串行注册不可避免。每个 lambda 已被拆到独立静态方法（AnalyzeEntityDiagnostics 等）；"
+            + "Initialize 体的复杂度来自诊断注册数量本身，进一步拆分会损害可读性。")]
     public override void Initialize(AnalysisContext context)
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
