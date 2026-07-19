@@ -239,6 +239,7 @@ public sealed class FinalTests
         }
         catch (OperationCanceledException)
         {
+            // S108: 测试期望取消——WithMetrics 必须把取消路径记为 cancelled/error。
         }
 
         await Assert.That(outcomes).Contains("error");

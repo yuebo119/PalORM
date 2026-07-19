@@ -102,6 +102,7 @@ internal static class Program
             }
             catch (ConcurrencyConflictException)
             {
+                // S108: 测试期望此异常——stale row 必须被并发控制拒绝。
             }
 
             AotPgJsonEntity json = await db.InsertAsync(new AotPgJsonEntity

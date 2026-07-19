@@ -462,7 +462,7 @@ internal sealed class SourceGenIntegrationTests
         // TypeMapper 按需生成：TestUser 无自定义类型，应无 TypeMapper 生成
         string suffix = PalORMGenerator.CreateGeneratedTypeSuffix(
             "global::PalORM.SourceGen.Tests.TestUser");
-        Type? generatedType = Type.GetType(
+        var generatedType = Type.GetType(
             $"PalORM.Generated.TypeMapper_{suffix}, PalORM.SourceGen.Tests");
         // 无自定义类型映射时 TypeMapper 不生成
         await Assert.That(generatedType).IsNull();

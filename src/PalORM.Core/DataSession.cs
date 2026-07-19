@@ -396,7 +396,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         List<T> list = [];
-        IRowFactory<T> tf = (IRowFactory<T>)factory;
+        var tf = (IRowFactory<T>)factory;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             list.Add(tf.Read(reader));
         return list;
@@ -832,7 +832,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        IRowFactory<T> tf = (IRowFactory<T>)factory;
+        var tf = (IRowFactory<T>)factory;
         bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -887,7 +887,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         List<T> list = [];
-        IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
+        var typedFactory = (IRowFactory<T>)factory;
         bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {

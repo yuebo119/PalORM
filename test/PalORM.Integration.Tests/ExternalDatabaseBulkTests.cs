@@ -64,7 +64,7 @@ public sealed class ExternalDatabaseBulkTests
             await Assert.That(rows.Count).IsEqualTo(2);
             await Assert.That(rows[0].Note).IsEqualTo("note-a");
             await Assert.That(rows[0].Amount).IsEqualTo(12.345678m);
-            await Assert.That(rows[0].CreatedAt).IsEqualTo(new DateTime(2026, 7, 18, 10, 0, 0));
+            await Assert.That(rows[0].CreatedAt).IsEqualTo(new DateTime(2026, 7, 18, 10, 0, 0, DateTimeKind.Utc));
             await Assert.That(rows[1].Note).IsNull();
             await Assert.That(rows[1].OptionalCount).IsNull();
             await Assert.That(rows[1].Amount).IsEqualTo(0.000001m);

@@ -25,10 +25,11 @@ public sealed class AdvancedFeatureTests
         Assert.Throws<InvalidOperationException>(() => sp.GetOutputValue<long>("@missing"));
         // 单次使用契约：首次执行失败（SQLite 不支持 CommandType.StoredProcedure，ArgumentException 属预期）
         // 后二次执行被 MarkExecuted 明确拒绝——契约不依赖首次执行成功
+        // S108: 首次执行预期抛 ArgumentException（SQLite 不支持 StoredProcedure）——空 catch 即断言。
         try { await sp.ExecuteAsync(); } catch (ArgumentException) { }
         await Assert.That(async () => await sp.ExecuteAsync()).Throws<InvalidOperationException>(); }
     [Test] public async Task GetRawConnection_Open() { await using var db = await TestDb.SqliteAsync(); await Assert.That(db.GetRawConnection().State).IsEqualTo(System.Data.ConnectionState.Open); }
-    [Test] public async Task QueryAsyncEnumerable_Streams() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="ST",Price=1m,Stock=0}); int c=0; await foreach(var p in db.QueryAsyncEnumerable<Product>($"SELECT * FROM products")) c++; await Assert.That(c).IsGreaterThanOrEqualTo(1); }
+    [Test] public async Task QueryAsyncEnumerable_Streams() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="ST",Price=1m,Stock=0}); int c=0; await foreach(var p in db.QueryAsyncEnumerable<Product>($"SELECT * FROM products")){ c++; } await Assert.That(c).IsGreaterThanOrEqualTo(1); }
     [Test] public async Task WithCache_CachesResults() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="C1",Price=1m,Stock=0}); var r1=await db.From<Product>().WithCache("t1",TimeSpan.FromMinutes(1)).ToListAsync(); var r2=await db.From<Product>().WithCache("t1",TimeSpan.FromMinutes(1)).ToListAsync(); await Assert.That(r1.Count).IsEqualTo(r2.Count); }
     [Test] public async Task WithCache_ReturnsSnapshotCopies_CallerMutationDoesNotPolluteCache() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="S1",Price=1m,Stock=0}); var r1=await db.From<Product>().WithCache("snap1",TimeSpan.FromMinutes(1)).ToListAsync(); r1.Clear(); var r2=await db.From<Product>().WithCache("snap1",TimeSpan.FromMinutes(1)).ToListAsync(); r2.Add(new Product{Name="X",Price=9m,Stock=0}); var r3=await db.From<Product>().WithCache("snap1",TimeSpan.FromMinutes(1)).ToListAsync(); await Assert.That(r2.Count).IsEqualTo(2); await Assert.That(r3.Count).IsEqualTo(1); await Assert.That(ReferenceEquals(r2,r3)).IsFalse(); }
     [Test] public async Task Raw_LiteralInjection() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="R1",Price=1m,Stock=0}); var r=await db.From<Product>().Where($"name = {"R1"}").Raw("LIMIT 1").ToListAsync(); await Assert.That(r.Count).IsEqualTo(1); }
@@ -43,9 +44,9 @@ public sealed class AdvancedFeatureTests
 
 internal sealed class TestInterceptor(Action onBefore, Action onAfter) : IQueryInterceptor
 {
-    public void OnBefore(QueryContext ctx) => onBefore();
-    public void OnAfter(QueryContext ctx, TimeSpan elapsed, int count) => onAfter();
-    public void OnError(QueryContext ctx, Exception ex) { }
+    public void OnBefore(QueryContext context) => onBefore();
+    public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) => onAfter();
+    public void OnError(QueryContext context, Exception exception) { /* S108: 测试 interceptor 不关心错误路径 */ }
 }
 
 internal sealed class OrderedInterceptor(int priority, List<int> order) : IQueryInterceptor

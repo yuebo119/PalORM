@@ -44,7 +44,7 @@ public sealed class GridReader : IAsyncDisposable
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             List<T> list = [];
-            IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
+            var typedFactory = (IRowFactory<T>)factory;
             while (await _reader.ReadAsync(ct).ConfigureAwait(false))
                 list.Add(typedFactory.Read(_reader));
 
@@ -74,7 +74,7 @@ public sealed class GridReader : IAsyncDisposable
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
-            IRowFactory<T> typedFactory = (IRowFactory<T>)factory;
+            var typedFactory = (IRowFactory<T>)factory;
             if (await _reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 T result = typedFactory.Read(_reader);

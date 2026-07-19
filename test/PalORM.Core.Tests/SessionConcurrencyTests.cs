@@ -185,6 +185,7 @@ public sealed class SessionConcurrencyTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
+#pragma warning disable S5034 // ValueTask 经 .AsTask() 显式转 Task 后多次 await Task 是合法的
             Task transaction = session.WithTransaction(async _ =>
             {
                 callbackEntered.TrySetResult();
@@ -261,7 +262,7 @@ public sealed class SessionConcurrencyTests
         await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
         var startSibling = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        Task sibling = Task.Run(async () =>
+        var sibling = Task.Run(async () =>
         {
             await startSibling.Task;
             await session.ExecuteAsync($"SELECT 1");
@@ -464,6 +465,7 @@ public sealed class SessionConcurrencyTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
+#pragma warning disable S5034 // ValueTask 经 .AsTask() 显式转 Task 后多次 await Task 是合法的
             Task transaction = session.WithTransaction(async ct =>
             {
                 callbackEntered.TrySetResult();
@@ -947,6 +949,7 @@ internal sealed class ConcurrencyTransaction(
         _completed = true;
         return Task.CompletedTask;
     }
+    // S4144: 测试 mock 故意让 Rollback 与 Commit 同体——验证 _completed 标记在两种路径下都被设置。
     public override Task RollbackAsync(CancellationToken cancellationToken = default)
     {
         _completed = true;

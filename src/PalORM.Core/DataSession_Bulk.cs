@@ -202,7 +202,7 @@ public partial class DataSession<TProvider>
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(entities);
-        List<T> items = entities.ToList();
+        var items = entities.ToList();
         if (items.Count == 0) return;
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
