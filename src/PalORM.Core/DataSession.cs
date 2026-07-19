@@ -135,11 +135,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         Func<DbConnection>? readConnFactory = readConnectionString is not null
             ? () => TProvider.CreateConnection(readConnectionString, _options)
             : null;
-        var builder = new QueryBuilder<T>(_conn, TProvider.Dialect, (IRowFactory<T>)factory!,
-            _interceptors, TProvider.CreateParameter, TProvider.QuoteIdentifier, tableName,
-            columnNames, _options.CommandTimeout, _operationState, readConnFactory,
+        var builder = new QueryBuilder<T>(new QueryBuilderContext<T>(
+            _conn,
+            new QueryBuilderServices<T>(
+                TProvider.Dialect, (IRowFactory<T>)factory!, _interceptors,
+                TProvider.CreateParameter, TProvider.QuoteIdentifier,
+                _operationState, _options.CommandTimeout),
+            tableName, columnNames, readConnFactory,
             _options.QueryCache, _options.ValidateQueryColumnOrder,
-            static (conn, ct) => TProvider.InitializeConnectionAsync(conn, ct));
+            static (conn, ct) => TProvider.InitializeConnectionAsync(conn, ct)));
 
         // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）
