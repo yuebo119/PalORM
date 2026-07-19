@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─── PalORM 精炼扫描 ───
-# 对 .ai/refine-system/prompt.md 的 24 项操作矩阵输出机械命中数。
+# 对 .ai/refine/prompt.md 的 24 项操作矩阵输出机械命中数。
 # 可 grep 的 17 项输出命中量级；7 项需 Roslyn/IDE 分析，明确标注 [人工]。
 # 命中数是候选量级，不是执行清单——逐项评估后才可执行。
 

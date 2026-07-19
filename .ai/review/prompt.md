@@ -3,7 +3,7 @@
 > **审计系统与评审系统已彻底合并为本系统**（2026-07-19 裁决）。单入口 `/review`，按触发档位决定**范围**。
 > **宗旨：质量为先**——档位只划定范围边界，范围内一律地毯式逐行、逐文件读完全部手写代码；
 > 不因档位低而抽样、跳读（见引擎核心原则 0/3）。
-> 检查方法统一定义在 [`../deep-check-engine.md`](../deep-check-engine.md)（七流·地毯式逐行×探针并用·误判库·[推断]零容忍·危害×复杂度·下沉审查·五指标）。
+> 检查方法统一定义在 [`engine.md`](engine.md)（七流·地毯式逐行×探针并用·误判库·[推断]零容忍·危害×复杂度·下沉审查·五指标）。
 > 本文件定义：触发档位、范围策略、产出格式、验证回路。
 > 回答的问题：**diff 档 = 这次提交行不行？ 里程碑档 = 整体有什么缺陷、走向如何？**
 
@@ -24,7 +24,7 @@
 
 ## 执行门禁（不可跳过）
 
-1. `bash scripts/gate-check.sh` 全绿是 review 前置——门禁失败先修门禁，review 不重复门禁已覆盖的检查（G 项清单见 [`../gate-system/prompt.md`](../gate-system/prompt.md)）。
+1. `bash scripts/gate-check.sh` 全绿是 review 前置——门禁失败先修门禁，review 不重复门禁已覆盖的检查（G 项清单见 [`../gate/prompt.md`](../gate/prompt.md)）。
 2. `bash scripts/review-snapshot.sh` → 输出粘贴到报告段 2。违反 = 视为草稿。
 3. `bash scripts/review-scope.sh [--diff]` → 应读清单+覆盖度账本进报告段 1；账本逐文件勾销，
    未勾销文件出现 = 报告视为草稿（"没找到"与"不存在"的区分由账本承载）。
@@ -45,12 +45,12 @@ gate + 机械防线全跑（分钟级，给出重点区域）
 ## 里程碑档增量产出
 
 ### 趋势
-[`../metrics.md`](../metrics.md) 四指标（逃逸/复发/密度/时延 + 证伪数）轮次对比一行 + 退化原因一句。不输出综合分（已废止，误判模式 6）。
+[`metrics.md`](metrics.md) 四指标（逃逸/复发/密度/时延 + 证伪数）轮次对比一行 + 退化原因一句。不输出综合分（已废止，误判模式 6）。
 
 ### 热点表（替代已废止的四维加权风险评分）
 ```bash
 git log --oneline -30 --name-only --pretty=format: | grep '\.cs$' | sort | uniq -c | sort -rn | head   # 变更频率
-grep -oh "ITM-[0-9]*" .ai/review-system/action-items-*.md | sort | uniq -c | sort -rn | head          # 缺陷密度
+grep -oh "ITM-[0-9]*" .ai/review/history/action-items/action-items-*.md | sort | uniq -c | sort -rn | head          # 缺陷密度
 ```
 两列交集即热点。只列事实，不加权评分——评分无预测力（未预判到 OrWhere 复发）。
 
@@ -72,8 +72,8 @@ grep -oh "ITM-[0-9]*" .ai/review-system/action-items-*.md | sort | uniq -c | sor
 
 ## 产出（模板强制）
 
-- 报告 → [`template.md`](template.md)（8 段不可省略；段 6 引用 metrics 不重述；段 8 为四指标记录）
-- 行动项 → [`action-items-template.md`](action-items-template.md)（单维度 P0-P3 + 下沉审查段）
+- 报告 → [`templates/report.md`](templates/report.md)（8 段不可省略；段 6 引用 metrics 不重述；段 8 为四指标记录）
+- 行动项 → [`templates/action-items.md`](templates/action-items.md)（单维度 P0-P3 + 下沉审查段）
 
 ## 事后验证回路
 
@@ -84,7 +84,7 @@ grep -oh "ITM-[0-9]*" .ai/review-system/action-items-*.md | sort | uniq -c | sor
 1. `bash scripts/verify-action-items.sh <行动项文件>` — 标识符存在性
 2. 涉及分析器规则 → `dotnet build` 验证触发条件
 3. `git diff HEAD~1 --stat` — 影响范围回溯
-4. [`../metrics.md`](../metrics.md) 追加本轮指标行（发现数按流、探针数、**证伪数**、下沉数）
+4. [`metrics.md`](metrics.md) 追加本轮指标行（发现数按流、探针数、**证伪数**、下沉数）
 5. 里程碑档 → 更新 [`perspective-stats.md`](perspective-stats.md) 探索性视角命中史
 
 ## PalORM 阶段适配
@@ -101,4 +101,4 @@ grep -oh "ITM-[0-9]*" .ai/review-system/action-items-*.md | sort | uniq -c | sor
 
 - 原 `/audit` 与 `/review` 统一为 `/review`（档位见上）；`audit-system/` 目录已并入本目录。
 - 已废止并有据：四维加权风险评分（无预测力）、36 视角池 P3 自适应（产出恒来自七流+探针）、三层综合分/十维小数分（误判模式 6）、双维度行动项优先级（37 项实测与 P0-P3 完全同向）、逐轮 302 坑抽样（零产出）。
-- 历史 audit 报告在 `reports/audit-*.md` 原地保留。
+- 历史 audit 报告在 `history/reports/audit-*.md` 原地保留。
