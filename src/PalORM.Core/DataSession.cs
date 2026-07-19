@@ -145,7 +145,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             builder.AddDefaultFilter(System.Runtime.CompilerServices.FormattableStringFactory.Create(
                 $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}", _tenantId));
         }
-        builder._defaultClauseCount = builder._clauses.Count;
         return builder;
     }
 
@@ -754,6 +753,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(tran);
+        // ITM-575: 与 UseTransaction 对称——异连接事务在驱动层的错误形态不可控，库内明确失败
+        if (!ReferenceEquals(tran.Connection, _conn))
+            throw new ArgumentException("事务必须属于当前 DataSession 的主连接。", nameof(tran));
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -766,6 +768,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(tran);
+        if (!ReferenceEquals(tran.Connection, _conn))
+            throw new ArgumentException("事务必须属于当前 DataSession 的主连接。", nameof(tran));
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -943,7 +947,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return this;
     }
 
-    /// <summary>启用熔断器——连续最终失败达到阈值后快速失败，并重置当前弹性策略状态。</summary>
+    /// <summary>启用熔断器——连续最终失败达到阈值后快速失败，并重置当前弹性策略状态。
+    /// <para>ITM-582: <paramref name="failureThreshold"/> = 0 表示<b>禁用熔断</b>（非"零容忍
+    /// 立即熔断"）——与 DbOptions.CircuitBreakerThreshold 默认值语义一致。</para></summary>
     public DataSession<TProvider> WithCircuitBreaker(int failureThreshold, TimeSpan resetAfter)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(failureThreshold);

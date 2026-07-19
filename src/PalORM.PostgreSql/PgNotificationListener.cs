@@ -103,7 +103,10 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         {
             while (!owner.IsCancellationRequested)
             {
-                await using IPgNotificationConnection connection = _connectionFactory();
+                // ITM-583：连接释放显式管理——断线后 NpgsqlConnection.DisposeAsync 若抛出，
+                // `await using` 的隐式 Dispose 会绕过 transient 重连逻辑直达外层终止监听。
+                // 已损坏连接的清理失败无诊断价值，吞掉后按原路径继续重连。
+                IPgNotificationConnection connection = _connectionFactory();
                 connection.Notification += OnConnectionNotification;
                 try
                 {
@@ -143,6 +146,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                 finally
                 {
                     connection.Notification -= OnConnectionNotification;
+                    try { await connection.DisposeAsync().ConfigureAwait(false); }
+                    catch (Exception disposeException) when (disposeException is not OperationCanceledException)
+                    {
+                        // 损坏连接的 Dispose 失败不改变控制流（重连/终止由上方 catch 决定）
+                    }
                 }
             }
         }

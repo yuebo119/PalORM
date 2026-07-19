@@ -125,7 +125,10 @@ public static class QueryBuilderExtensions
     /// <summary>键集（keyset）分页：返回一页数据与总行数。
     /// <para>COUNT 与页查询在同一事务内执行保证一致性快照——无外部事务时自动开启并提交/回滚。</para>
     /// <para>lastValue 为上一页末行的 orderBy 键值：非默认值时生成 <c>orderBy &lt; lastValue</c>（降序）
-    /// 或 <c>&gt;</c>（升序）续页条件；首页传 default。键值为 default 的行无法作为续页锚点。</para></summary>
+    /// 或 <c>&gt;</c>（升序）续页条件；首页传 default。键值为 default 的行无法作为续页锚点。</para>
+    /// <para>ITM-582: ① COUNT 查询走 Tracing/Metrics 但<b>不经过</b> IQueryInterceptor（页查询经过）——
+    /// 审计型拦截器不会看到 COUNT SQL；② builder 上已设的 <c>Skip()</c> 被忽略（键集分页以
+    /// lastValue 锚点续页，OFFSET 语义不适用）。</para></summary>
     public static async ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue = default, bool descending = true, CancellationToken ct = default) where T : class, new()
     {
