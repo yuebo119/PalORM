@@ -62,6 +62,10 @@ public sealed class ResilienceExecutor
     /// <para><b>幂等性约束（ITM-310）</b>: 命令超时被判为可重试，而超时不代表服务器未执行——
     /// INSERT 可能已提交，重试会重复写入。仅将幂等操作（查询/带唯一键的 upsert/条件更新）
     /// 交给本方法；非幂等写入请自行处理重试或依赖唯一约束去重。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S2189:LoopStopIncrementerNotTested",
+        Justification = "for(;;) 退出靠 return（成功路径）和 throw（取消/超时/重试耗尽）；"
+            + "attempt 仅作为 when 子句重试上限裁断与日志计数器，不进入 stop 条件是有意为之。")]
     public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);

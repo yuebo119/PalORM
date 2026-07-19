@@ -276,7 +276,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 生成的 UPDATE 以 "WHERE pk = @pN [AND version = @pM]" 结尾，可安全追加租户过滤；
         // 跨租户主键的更新命中 0 行（并发实体表现为 ConcurrencyConflictException，失败关闭）
         if (HasTenantFilter<T>())
-            updateSql += $" AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}";
+            updateSql += $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = updateSql;
@@ -320,7 +320,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             await using DbCommand cmd = CreateCommand();
             // AND deleted_at IS NULL：与 BulkDeleteAsync 幂等语义对齐——重复删除不刷新时间戳且返回 0
             string tenantFilter = HasTenantFilter<T>()
-                ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
+                ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
                 : "";
             cmd.CommandText = $"UPDATE {TProvider.QuoteIdentifier(tn)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -331,7 +331,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         await using DbCommand delCmd = CreateCommand();
         delCmd.CommandText = HasTenantFilter<T>()
-            ? $"{sqls.Delete} AND {TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}"
+            ? $"{sqls.Delete} AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
             : sqls.Delete;
         delCmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(delCmd, key);
@@ -528,13 +528,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             Enumerable.Range(0, parameterCount)
                 .Select(static index => $"@p{index}"));
         string quotedPrimaryKey = TProvider.QuoteIdentifier(primaryKeyColumn);
-        string setClause = updateColumns.Length == 0
-            ? hasGeneratedKey
-                ? $"{quotedPrimaryKey} = LAST_INSERT_ID({quotedPrimaryKey})"
-                : $"{quotedPrimaryKey} = VALUES({quotedPrimaryKey})"
-            : string.Join(", ", updateColumns.Select(column =>
-                $"{TProvider.QuoteIdentifier(column)} = " +
-                $"VALUES({TProvider.QuoteIdentifier(column)})"));
+        string setClause = BuildMySqlUpsertSetClause(updateColumns, quotedPrimaryKey, hasGeneratedKey, TProvider.QuoteIdentifier);
         if (hasGeneratedKey && updateColumns.Length > 0)
             setClause += $", {quotedPrimaryKey} = LAST_INSERT_ID({quotedPrimaryKey})";
 
@@ -1224,19 +1218,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 主异常保留模式：首个清理异常作为主异常抛出，后续异常挂 Exception.Data 不丢弃
         //（与 GridReader/三 Provider 的清理约定一致）。
         Exception? cleanupException = null;
-        int secondaryIndex = 0;
         foreach (IQueryInterceptor interceptor in _interceptors)
         {
             // ITM-534: 优先同步 Dispose；仅实现 IAsyncDisposable 的拦截器走异步释放，不再漏释放。
             if (interceptor is IDisposable disposable)
             {
                 try { disposable.Dispose(); }
-                catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
+                catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
             }
             else if (interceptor is IAsyncDisposable asyncDisposable)
             {
                 try { await asyncDisposable.DisposeAsync().ConfigureAwait(false); }
-                catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
+                catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
             }
         }
 
@@ -1245,24 +1238,45 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             if (_conn.State == ConnectionState.Open)
                 await _conn.CloseAsync().ConfigureAwait(false);
         }
-        catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
+        catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
 
         try { await _conn.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception exception) { RecordCleanupException(ref cleanupException, ref secondaryIndex, exception); }
+        catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
 
         if (cleanupException is not null)
             ExceptionDispatchInfo.Capture(cleanupException).Throw();
     }
 
-    private static void RecordCleanupException(
-        ref Exception? primary, ref int secondaryIndex, Exception exception)
+    private static void RecordCleanupException(ref Exception? primary, Exception exception)
     {
         if (primary is null)
         {
             primary = exception;
             return;
         }
-        primary.Data[$"PalORM.CleanupException{secondaryIndex++}"] = exception;
+        // 后续异常挂 Data 不丢弃（与 GridReader 清理约定一致）；用 Data.Count 推导索引避免外部 ref 计数器
+        primary.Data[$"PalORM.CleanupException{primary.Data.Count}"] = exception;
+    }
+
+    /// <summary>MySQL UPSERT 的 SET 子句（ON DUPLICATE KEY UPDATE 后的部分）。
+    /// updateColumns 为空时：依赖 MySQL 行为——主键自增场景用 LAST_INSERT_ID(expr) 回填新主键，
+    /// 否则用 VALUES(col) 回写（MySQL 8 起被 VALUES() 弃用警告，但仍是兼容路径）。
+    /// updateColumns 非空时：显式列出每列的 VALUES(col)。</summary>
+    private static string BuildMySqlUpsertSetClause(
+        string[] updateColumns,
+        string quotedPrimaryKey,
+        bool hasGeneratedKey,
+        Func<string, string> quoteIdentifier)
+    {
+        if (updateColumns.Length == 0)
+        {
+            return hasGeneratedKey
+                ? $"{quotedPrimaryKey} = LAST_INSERT_ID({quotedPrimaryKey})"
+                : $"{quotedPrimaryKey} = VALUES({quotedPrimaryKey})";
+        }
+
+        return string.Join(", ", updateColumns.Select(column =>
+            $"{quoteIdentifier(column)} = VALUES({quoteIdentifier(column)})"));
     }
 
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()
@@ -1278,7 +1292,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             && (GetEntityFeatures<T>() & EntityFeatures.TenantAware) != 0;
 
     /// <summary>默认过滤条件的参数名——避开生成 SQL 的 @p{N} 命名空间。</summary>
-    private const string TenantParameterName = "@__tenant0";
+    private const string _tenantParameterName = "@__tenant0";
 
     private string GetDefaultFilterCondition<T>() where T : class, new()
     {
@@ -1287,7 +1301,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             : "";
         if (!HasTenantFilter<T>())
             return softDelete;
-        string tenant = $"{TProvider.QuoteIdentifier("tenant_id")} = {TenantParameterName}";
+        string tenant = $"{TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
         return softDelete.Length == 0 ? tenant : $"{softDelete} AND {tenant}";
     }
 
@@ -1309,7 +1323,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private void BindDefaultFilterParameters<T>(DbCommand cmd) where T : class, new()
     {
         if (HasTenantFilter<T>())
-            cmd.Parameters.Add(TProvider.CreateParameter(TenantParameterName, _tenantId));
+            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
     }
 
     private SessionOperationState.SessionOperationLease EnterOperation(
