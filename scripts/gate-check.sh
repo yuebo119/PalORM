@@ -192,6 +192,13 @@ else
 fi
 check_zero G27 'src/ 全域 CS1591 强制不回退' "$cs1591_global"
 
+# G28：禁止裸 (int)…CommandTimeout/TotalSeconds 截断（ITM-501 下沉）——亚秒超时会塌缩为 0，
+# ADO.NET CommandTimeout=0 语义是无限等待。必须走 DbOptions.CommandTimeoutSeconds /
+# ToCommandTimeoutSeconds（向上取整）。
+timeout_trunc=$(grep -rnE '\(int\)[^;]*(CommandTimeout|_commandTimeout|_timeout)\.TotalSeconds' \
+    src --include='*.cs' 2>/dev/null | grep -v '/obj/' | grep -vc 'ToCommandTimeoutSeconds' || true)
+check_zero G28 '禁止裸 CommandTimeout.TotalSeconds 截断（用 CommandTimeoutSeconds）' "$timeout_trunc"
+
 printf '\n通过：%s  警告：%s  失败：%s  总计：%s\n' "$PASSED" "$WARNED" "$FAILED" "$((PASSED + WARNED + FAILED))"
 printf '═══════ 扫描完成 ═══════\n'
 

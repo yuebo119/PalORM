@@ -99,6 +99,19 @@ internal sealed class SnapshotTests
             [Key] public string Id { get; set; } = "";
             [Column("select")] public string Value { get; set; } = "";
         }
+
+        // 实体 4：继承基类映射属性（ITM-502 防线——基类列不得静默丢失）
+        public abstract class AuditBase
+        {
+            [Column("created_by")] public string CreatedBy { get; set; } = "";
+            [Column("created_at")] public System.DateTimeOffset CreatedAt { get; set; }
+        }
+        [Table("inherited")]
+        public sealed partial class InheritedEntity : AuditBase
+        {
+            [Key] public long Id { get; set; }
+            [Column("name")] public string Name { get; set; } = "";
+        }
         """;
 
     [Test]

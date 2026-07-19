@@ -40,6 +40,10 @@ internal static class SqlFileEmitter
 
         ct.ThrowIfCancellationRequested();
 
+        // ITM-530：源生成器读取磁盘 .sql 文件是本特性的核心设计（见类型注释——RS1041 下
+        // 无法用 AdditionalTexts），此处按需读盘属刻意为之，故局部抑制 RS1035（分析器禁用 IO API）
+        // 而非全局 NoWarn，保证其它意外 IO 仍被诊断。
+#pragma warning disable RS1035
         // 编译时读取文件: 相对于项目根目录
         string? projectDir = Path.GetDirectoryName(
             ctx.TargetSymbol.Locations.FirstOrDefault()?.SourceTree?.FilePath);
@@ -59,8 +63,11 @@ internal static class SqlFileEmitter
         string rootDir = currentDir ?? projectDir;
         string fullPath = Path.GetFullPath(Path.Combine(rootDir, relativePath));
 
-        // 确保解析后路径仍在项目目录内
-        if (!fullPath.StartsWith(rootDir, StringComparison.OrdinalIgnoreCase))
+        // 确保解析后路径仍在项目目录内。前缀比较带尾分隔符（ITM-545 纵深防御）：
+        // 否则 rootDir="/proj/app" 时 "/proj/app-evil/x" 会误判为在内（虽当前被 .. 拒绝挡住）。
+        string rootWithSep = rootDir.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+            ? rootDir : rootDir + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
             return GenerateError(method, $"SqlFile 路径越界: {EscapeForCSharp(relativePath)}");
 
         string sqlContent;
@@ -78,6 +85,7 @@ internal static class SqlFileEmitter
             return GenerateError(method,
                 $"SQL file could not be read ({ex.GetType().Name}): {EscapeForCSharp(fullPath)}");
         }
+#pragma warning restore RS1035
 
         // ── V_SQL: 条件分支解析 ──
         sqlContent = ResolveProviderSections(sqlContent, targetProvider);
@@ -196,24 +204,5 @@ internal static class SqlFileEmitter
     private static string EscapeForCSharp(string text)
     {
         return text.Replace("\\", "\\\\").Replace("\"", "\\\"");
-    }
-
-    internal static string SanitizeIdentifier(string name)
-    {
-        var sb = new StringBuilder(name.Length);
-        for (int i = 0; i < name.Length; i++)
-        {
-            char c = name[i];
-            if (char.IsLetterOrDigit(c) || c == '_')
-                sb.Append(c);
-            else
-                sb.Append('_');
-        }
-        string result = sb.ToString();
-        if (result.Length > 0 && char.IsDigit(result[0]))
-            result = "_" + result;
-        if (result.Length == 0)
-            result = "_Empty";
-        return result;
     }
 }

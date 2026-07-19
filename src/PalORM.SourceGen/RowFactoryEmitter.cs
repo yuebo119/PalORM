@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace PalORM.SourceGen;
 
@@ -34,12 +35,43 @@ internal static class RowFactoryEmitter
 
         sb.AppendLine("        };");
         sb.AppendLine("    }");
+
+        // ITM-520：char 列经 GetString(o)[0] 读取，空串会抛 IndexOutOfRange 且无列名可诊断。
+        // 统一走辅助方法，空串时抛带列名的 InvalidOperationException。仅在存在 char 列时生成。
+        if (HasCharColumn(model))
+        {
+            sb.AppendLine();
+            sb.AppendLine("    private static char ReadChar(global::System.Data.Common.DbDataReader r, int ordinal, string column)");
+            sb.AppendLine("    {");
+            sb.AppendLine("        string s = r.GetString(ordinal);");
+            sb.AppendLine("        if (s.Length == 0)");
+            sb.AppendLine("            throw new global::System.InvalidOperationException(");
+            sb.AppendLine("                $\"Column '{column}' maps to char but contained an empty string.\");");
+            sb.AppendLine("        return s[0];");
+            sb.AppendLine("    }");
+        }
         sb.AppendLine("}");
         return sb.ToString();
     }
 
+    /// <summary>模型是否含 char 列——决定是否生成 ReadChar 辅助方法（ITM-520）。</summary>
+    private static bool HasCharColumn(TableModel model)
+    {
+        foreach (var col in model.Columns)
+        {
+            string tn = col.ProviderClrTypeName;
+            if (tn is "char" or "global::System.Char") return true;
+        }
+        return false;
+    }
+
     private static string GetReadExpression(ColumnModel col, int ordinal, string generatedTypeSuffix)
     {
+        // ITM-536 已知限制：可空判定依赖 NRT 注解（IsNullable ← NullableAnnotation.Annotated）。
+        // 在 `#nullable disable` 上下文里，引用类型（string 等）无 Annotated 注解，会被当作非空、
+        // 不生成 IsDBNull 守卫；若该列在 DB 里为 NULL，GetString 会抛 SqlNullValueException。
+        // 规避方法：实体所在文件启用 `#nullable enable`，把真正可空的列显式标为 `string?`。
+        // 此处不改可空推断逻辑——放宽会波及所有列的守卫生成，影响面过大。
         // 可空类型处理
         if (col.IsNullable)
         {
@@ -58,7 +90,8 @@ internal static class RowFactoryEmitter
             string providerRead = GetRawReadExpression(
                 col.ProviderClrTypeName,
                 ordinal,
-                generatedTypeSuffix);
+                generatedTypeSuffix,
+                col.ColumnName);
             return $"((global::PalORM.IValueConverter<{col.ClrTypeName}, {col.ProviderClrTypeName}>)new {col.ConverterTypeName}()).FromProvider({providerRead})";
         }
 
@@ -69,13 +102,15 @@ internal static class RowFactoryEmitter
         return GetRawReadExpression(
             col.ProviderClrTypeName,
             ordinal,
-            generatedTypeSuffix);
+            generatedTypeSuffix,
+            col.ColumnName);
     }
 
     private static string GetRawReadExpression(
         string clrTypeName,
         int ordinal,
-        string generatedTypeSuffix)
+        string generatedTypeSuffix,
+        string columnName)
     {
         string tn = clrTypeName;
         if (tn.StartsWith("global::", StringComparison.Ordinal))
@@ -100,8 +135,9 @@ internal static class RowFactoryEmitter
             "System.TimeSpan" => $"r.GetFieldValue<global::System.TimeSpan>({ordinal})",
             "short" or "System.Int16" => $"r.GetInt16({ordinal})",
             "byte" or "System.Byte" => $"r.GetByte({ordinal})",
-            // Microsoft.Data.Sqlite/Npgsql 的 GetChar 抛 NotSupportedException，经字符串读取
-            "char" or "System.Char" => $"r.GetString({ordinal})[0]",
+            // ITM-520：Microsoft.Data.Sqlite/Npgsql 的 GetChar 抛 NotSupportedException，
+            // 经字符串读取；空串守卫走 ReadChar，抛带列名异常而非裸 IndexOutOfRange
+            "char" or "System.Char" => $"ReadChar(r, {ordinal}, {SymbolDisplay.FormatLiteral(columnName, quote: true)})",
             "byte[]" or "System.Byte[]" => $"(byte[])r.GetValue({ordinal})",
             _ => $"({clrTypeName})r.GetValue({ordinal})"
         };

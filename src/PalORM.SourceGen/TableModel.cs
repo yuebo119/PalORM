@@ -5,6 +5,9 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace PalORM.SourceGen;
 
 /// <summary>源生成器数据模型——从 [Table] 注解提取的编译时元数据。</summary>
+// ITM-539：IsView / Schema / Database 目前恒为 false/null（FromContext 未填充，无 DDL 消费），
+// 属预留字段。保留而非删除——它们是 record 位置参数，测试（DialectSymmetryTests）显式构造引用，
+// 删除会破坏构造签名与 EquatableArray 增量缓存键；待 Schema 限定表功能落地后再填充。
 internal sealed record TableModel(
     string Namespace,
     string ClassName,
@@ -26,8 +29,10 @@ internal sealed record TableModel(
         if (typeSymbol.TypeKind != TypeKind.Class) return null;
         if (!SourceGenerationValidation.CanGenerateEntity(typeSymbol)) return null;
 
+        // ITM-512：注解匹配全程校验命名空间为 PalORM（IsPalORMAttribute），
+        // 避免混挂 EF Core/System.ComponentModel.DataAnnotations 同名注解时误判。
         var tableAttr = typeSymbol.GetAttributes().FirstOrDefault(a =>
-            a.AttributeClass?.Name is "TableAttribute" or "Table");
+            SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
         if (tableAttr is null) return null;
 
         string tableName = tableAttr.ConstructorArguments.FirstOrDefault().Value as string
@@ -40,16 +45,16 @@ internal sealed record TableModel(
         foreach (var member in GetMappableProperties(typeSymbol))
         {
             if (member is not IPropertySymbol prop) continue;
-            if (prop.GetAttributes().Any(a => a.AttributeClass?.Name is "NotMappedAttribute" or "NotMapped"))
+            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "NotMapped")))
                 continue;
 
             var columnAttr = prop.GetAttributes().FirstOrDefault(a =>
-                a.AttributeClass?.Name is "ColumnAttribute" or "Column");
+                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? prop.Name;
 
             // [Unique] → 单列唯一索引（ADR-B：属性级 Unique 升为唯一索引）
-            if (prop.GetAttributes().Any(a => a.AttributeClass?.Name is "UniqueAttribute" or "Unique"))
+            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Unique")))
             {
                 indexes.Add(new IndexModel(
                     $"ux_{tableName}_{columnName}",
@@ -57,23 +62,23 @@ internal sealed record TableModel(
                     Unique: true));
             }
 
-            bool isKey = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "KeyAttribute" or "Key");
+            bool isKey = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
             // [Key(AutoIncrement = false)] 关闭数值主键的自增推断（雪花 ID 等应用侧赋值主键）
             bool autoIncrementEnabled = prop.GetAttributes()
-                .FirstOrDefault(a => a.AttributeClass?.Name is "KeyAttribute" or "Key")?
+                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"))?
                 .NamedArguments.FirstOrDefault(na => na.Key == "AutoIncrement").Value.Value is not false;
             bool isAutoIncrement = isKey && autoIncrementEnabled
                 && prop.Type.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32;
-            bool ignoreOnInsert = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "IgnoreOnInsertAttribute" or "IgnoreOnInsert");
-            bool isConcurrencyToken = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "ConcurrencyCheckAttribute" or "ConcurrencyCheck");
-            bool isTimestamp = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "TimestampAttribute" or "Timestamp");
-            bool isRequired = prop.GetAttributes().Any(a => a.AttributeClass?.Name is "RequiredAttribute" or "Required");
+            bool ignoreOnInsert = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "IgnoreOnInsert"));
+            bool isConcurrencyToken = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck"));
+            bool isTimestamp = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
+            bool isRequired = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
             string? computedExpression = prop.GetAttributes()
                 .FirstOrDefault(static attribute =>
                     attribute.AttributeClass?.ToDisplayString() == "PalORM.ComputedAttribute")?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
-                a.AttributeClass?.Name is "OwnedJsonAttribute" or "OwnedJson");
+                SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
             bool isOwnedJson = ownedJsonAttr is not null;
             string? ownedJsonContextTypeName = ownedJsonAttr?.ConstructorArguments.FirstOrDefault().Value is INamedTypeSymbol contextType
                 ? contextType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) : null;
@@ -93,7 +98,7 @@ internal sealed record TableModel(
             }
 
             var fkAttr = prop.GetAttributes().FirstOrDefault(a =>
-                a.AttributeClass?.Name is "ForeignKeyAttribute" or "ForeignKey");
+                SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
             if (fkAttr is not null && fkAttr.ConstructorArguments.Length >= 2)
             {
                 foreignKeys.Add(new ForeignKeyModel(
@@ -116,14 +121,14 @@ internal sealed record TableModel(
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
-            a.AttributeClass?.Name is "SoftDeleteAttribute" or "SoftDelete");
+            SourceGenerationValidation.IsPalORMAttribute(a, "SoftDelete"));  // ITM-512
         bool isTenantAware = typeSymbol.GetAttributes().Any(a =>
-            a.AttributeClass?.Name is "TenantAwareAttribute" or "TenantAware");
+            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));  // ITM-512
 
         // [Index("name", "col1", "col2", Unique = ...)] → 复合索引（ADR-B）
         // 无名/空列声明跳过生成——PALORM020 已在编译期报错，此处跳过防级联生成错误
         foreach (var indexAttr in typeSymbol.GetAttributes().Where(a =>
-            a.AttributeClass?.Name is "IndexAttribute" or "Index"))
+            SourceGenerationValidation.IsPalORMAttribute(a, "Index")))  // ITM-512
         {
             if (indexAttr.ConstructorArguments.Length < 2) continue;
             if (indexAttr.ConstructorArguments[0].Value is not string indexName) continue;
@@ -235,11 +240,13 @@ internal readonly struct EquatableArray<T> : IEquatable<EquatableArray<T>> where
     public override bool Equals(object? obj) => obj is EquatableArray<T> other && Equals(other);
     public override int GetHashCode()
     {
+        // ITM-544：default(EquatableArray<T>) 的 _items 为 null，直接 foreach 会 NRE——归一化空数组
         int hash = 17;
-        foreach (var item in _items) hash = hash * 31 + (item?.GetHashCode() ?? 0);
+        foreach (var item in _items ?? Array.Empty<T>()) hash = hash * 31 + (item?.GetHashCode() ?? 0);
         return hash;
     }
-    public Enumerator GetEnumerator() => new(_items);
+    // ITM-544：default 实例枚举同样归一化，避免 _items 为 null 时 MoveNext/Current 抛 NRE
+    public Enumerator GetEnumerator() => new(_items ?? Array.Empty<T>());
     public ref struct Enumerator
     {
         private readonly T[] _items;
