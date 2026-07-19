@@ -96,7 +96,10 @@ public sealed class MySqlProvider : IDbProvider
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
         => MultiValueBulkInsert.ExecuteAsync(
-            conn, transaction, entities, batchSize,
-            maxParametersPerStatement: 65535,
-            QuoteIdentifier, CreateParameter, commandTimeoutSeconds, ct);
+            conn, transaction, entities,
+            new BulkContext(
+                batchSize,
+                MaxParametersPerStatement: 65535,
+                QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
+            ct);
 }

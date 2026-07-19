@@ -99,7 +99,10 @@ public sealed class SqliteProvider : IDbProvider
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
         => MultiValueBulkInsert.ExecuteAsync(
-            conn, transaction, entities, batchSize,
-            maxParametersPerStatement: 999,
-            QuoteIdentifier, CreateParameter, commandTimeoutSeconds, ct);
+            conn, transaction, entities,
+            new BulkContext(
+                batchSize,
+                MaxParametersPerStatement: 999,
+                QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
+            ct);
 }

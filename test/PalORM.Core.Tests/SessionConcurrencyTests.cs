@@ -695,17 +695,15 @@ public sealed class SessionConcurrencyTests
             var factory = (IRowFactory<SessionConcurrencyEntity>)
                 PalORM_Runtime.RowFactories[typeof(SessionConcurrencyEntity)];
             var builder = new QueryBuilder<SessionConcurrencyEntity>(
-                connection,
-                SqlDialect.Sqlite,
-                factory,
-                [],
-                ConcurrencyProvider.CreateParameter,
-                ConcurrencyProvider.QuoteIdentifier,
-                "session_concurrency",
-                ["id", "name"],
-                TimeSpan.FromSeconds(30),
-                state,
-                () => connection).ForRead();
+                new QueryBuilderContext<SessionConcurrencyEntity>(
+                    connection,
+                    new QueryBuilderServices<SessionConcurrencyEntity>(
+                        SqlDialect.Sqlite, factory, [],
+                        ConcurrencyProvider.CreateParameter,
+                        ConcurrencyProvider.QuoteIdentifier,
+                        state, TimeSpan.FromSeconds(30)),
+                    "session_concurrency", ["id", "name"],
+                    () => connection)).ForRead();
 
             Task<GridReader> query = builder
                 .QueryMultipleAsync($"SELECT 1").AsTask();

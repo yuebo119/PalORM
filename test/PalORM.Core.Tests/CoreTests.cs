@@ -302,8 +302,11 @@ public sealed class PalORM_RuntimeTests
             SetIdDelegates = new Dictionary<Type, Action<object, long>> { [entityType] = static (_, _) => { } },
             CrudMetadatas = new Dictionary<Type, CrudMetadata>
             {
-                [entityType] = new(new("I", "U", "D", "IR"), Bind, Bind, Bind,
-                    new object(), insertColumns, upsertColumns, null, static _ => false)
+                [entityType] = new(
+                    new("I", "U", "D", "IR"),
+                    new CrudBindings(Bind, Bind, Bind, new object()),
+                    new CrudColumns(insertColumns, upsertColumns),
+                    null, static _ => false)
             },
             EntityFeatures = new Dictionary<Type, EntityFeatures>
             {

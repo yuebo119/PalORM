@@ -79,26 +79,29 @@ internal static class RegistryEmitter
         sb.AppendLine("        {");
         foreach (var m in models.AsSpan())
         {
+            // CrudMetadata 用聚合 ctor（CrudBindings + CrudColumns）避免 9 参参数列表（S107）。
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::PalORM.CrudMetadata(");
             sb.AppendLine($"                new global::PalORM.CommandSqlSet(");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertSql,");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpdateSql,");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.DeleteSql,");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertReturningSql),");
-            sb.AppendLine($"                (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsert(cmd, ({m.EntityTypeName})obj),");
-            sb.AppendLine($"                (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
-            sb.AppendLine($"                (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
-            sb.AppendLine($"                RowFactory_{m.GeneratedTypeSuffix}.Instance,");
+            sb.AppendLine($"                new global::PalORM.CrudBindings(");
+            sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsert(cmd, ({m.EntityTypeName})obj),");
+            sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
+            sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
+            sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Instance),");
             string insertColumns = BuildStringArrayLiteral(
                 m.Columns.AsSpan().ToArray()
                     .Where(static column => column.IsInsertable)
                     .Select(static column => column.ColumnName));
-            sb.AppendLine($"                {insertColumns},");
             string upsertColumns = BuildStringArrayLiteral(
                 m.Columns.AsSpan().ToArray()
                     .Where(static column => column.IsUpsertable)
                     .Select(static column => column.ColumnName));
-            sb.AppendLine($"                {upsertColumns},");
+            sb.AppendLine($"                new global::PalORM.CrudColumns(");
+            sb.AppendLine($"                    {insertColumns},");
+            sb.AppendLine($"                    {upsertColumns}),");
             bool hasConcurrency = m.Columns.AsSpan().ToArray().Any(c => c.IsConcurrencyToken);
             sb.AppendLine(hasConcurrency
                 ? $"                obj => CommandFactory_{m.GeneratedTypeSuffix}.IncrementVersion(({m.EntityTypeName})obj),"
