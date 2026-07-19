@@ -5,7 +5,7 @@ namespace PalORM.Integration.Tests;
 [Table("bulk_insert_defaults")]
 public partial class BulkInsertDefaultEntity
 {
-    [Key]
+    [Key(AutoIncrement = false)]
     public string Id { get; set; } = "";
 
     [Column("name")]
@@ -26,7 +26,7 @@ public partial class BulkGeneratedOnlyEntity
 [Table("bulk_key_only")]
 public partial class BulkKeyOnlyEntity
 {
-    [Key]
+    [Key(AutoIncrement = false)]
     public string Id { get; set; } = "";
 }
 

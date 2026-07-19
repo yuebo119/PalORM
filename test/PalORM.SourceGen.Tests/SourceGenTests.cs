@@ -18,7 +18,8 @@ internal sealed partial class TestUser
 [Table("external_users")]
 internal sealed partial class ExternalUser
 {
-    [Key] public string Id { get; set; } = "";
+    // ITM-589：string 主键须显式 AutoIncrement = false（应用侧赋值，如雪花 ID/外部系统 ID）
+    [Key(AutoIncrement = false)] public string Id { get; set; } = "";
     [Column("name")] public string Name { get; set; } = "";
 }
 

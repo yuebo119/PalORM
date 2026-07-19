@@ -10,7 +10,7 @@ namespace PalORM.Core.Tests;
 [Table("bulk_cleanup")]
 internal sealed partial class BulkCleanupEntity
 {
-    [Key]
+    [Key(AutoIncrement = false)]
     public string Id { get; set; } = string.Empty;
 
     [Column("name")]
