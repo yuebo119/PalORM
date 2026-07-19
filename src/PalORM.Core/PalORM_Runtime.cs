@@ -79,55 +79,55 @@ public static class PalORM_Runtime
     private static RuntimeRegistryState _state = RuntimeRegistryState.Empty;
 
     /// <summary>类型 → 行读取工厂委托（装箱为 object，调用方按实体类型还原泛型）。</summary>
-    public static FrozenDictionary<Type, object> RowFactories => Volatile.Read(ref _state).RowFactories;
+    public static FrozenDictionary<Type, object> RowFactories => Volatile.Read(ref _state)._rowFactories;
 
     /// <summary>类型 → 数据库表名。</summary>
-    public static FrozenDictionary<Type, string> TableNames => Volatile.Read(ref _state).TableNames;
+    public static FrozenDictionary<Type, string> TableNames => Volatile.Read(ref _state)._tableNames;
 
     /// <summary>类型 → CRUD SQL 集。</summary>
-    public static FrozenDictionary<Type, CommandSqlSet> CommandSqls => Volatile.Read(ref _state).CommandSqls;
+    public static FrozenDictionary<Type, CommandSqlSet> CommandSqls => Volatile.Read(ref _state)._commandSqls;
 
     /// <summary>类型 → 按数据库方言生成的 CRUD SQL。</summary>
     public static FrozenDictionary<Type, CommandSqlByDialect> CommandSqlsByDialect
-        => Volatile.Read(ref _state).CommandSqlsByDialect;
+        => Volatile.Read(ref _state)._commandSqlsByDialect;
 
     /// <summary>类型到 Insert 绑定委托。</summary>
-    public static FrozenDictionary<Type, Action<DbCommand, object>> BindInsert => Volatile.Read(ref _state).BindInsert;
+    public static FrozenDictionary<Type, Action<DbCommand, object>> BindInsert => Volatile.Read(ref _state)._bindInsert;
 
     /// <summary>类型 → Update 绑定委托。</summary>
-    public static FrozenDictionary<Type, Action<DbCommand, object>> BindUpdate => Volatile.Read(ref _state).BindUpdate;
+    public static FrozenDictionary<Type, Action<DbCommand, object>> BindUpdate => Volatile.Read(ref _state)._bindUpdate;
 
     /// <summary>类型 → Delete 绑定委托（接收主键值 object）。</summary>
-    public static FrozenDictionary<Type, Action<DbCommand, object>> BindDelete => Volatile.Read(ref _state).BindDelete;
+    public static FrozenDictionary<Type, Action<DbCommand, object>> BindDelete => Volatile.Read(ref _state)._bindDelete;
 
     /// <summary>类型 → 主键列名。</summary>
-    public static FrozenDictionary<Type, string> PkColumns => Volatile.Read(ref _state).PkColumns;
+    public static FrozenDictionary<Type, string> PkColumns => Volatile.Read(ref _state)._pkColumns;
 
     /// <summary>类型 → 只读列名列表（编译时确定，零反射）。</summary>
-    public static FrozenDictionary<Type, IReadOnlyList<string>> ColumnNames => Volatile.Read(ref _state).ColumnNames;
+    public static FrozenDictionary<Type, IReadOnlyList<string>> ColumnNames => Volatile.Read(ref _state)._columnNames;
 
     /// <summary>类型 → (属性名→列名) 映射 (用于 Include JOIN ON 子句翻译)。</summary>
-    public static FrozenDictionary<Type, FrozenDictionary<string, string>> PropertyToColumn => Volatile.Read(ref _state).PropertyToColumn;
+    public static FrozenDictionary<Type, FrozenDictionary<string, string>> PropertyToColumn => Volatile.Read(ref _state)._propertyToColumn;
 
     /// <summary>类型 → CREATE TABLE DDL（编译时生成，零反射）。</summary>
-    public static FrozenDictionary<Type, string> CreateTableSql => Volatile.Read(ref _state).CreateTableSql;
+    public static FrozenDictionary<Type, string> CreateTableSql => Volatile.Read(ref _state)._createTableSql;
 
     /// <summary>类型 → 按数据库方言生成的 CREATE TABLE DDL。</summary>
     public static FrozenDictionary<Type, CreateTableSqlSet> CreateTableSqlByDialect
-        => Volatile.Read(ref _state).CreateTableSqlByDialect;
+        => Volatile.Read(ref _state)._createTableSqlByDialect;
 
     /// <summary>类型 → 三方言索引 DDL（ADR-B）。</summary>
     public static FrozenDictionary<Type, CreateIndexSqlSet> CreateIndexSqlByDialect
-        => Volatile.Read(ref _state).CreateIndexSqlByDialect;
+        => Volatile.Read(ref _state)._createIndexSqlByDialect;
 
     /// <summary>类型 → 设置自增主键委托（MySQL LAST_INSERT_ID 用，零反射）。</summary>
-    public static FrozenDictionary<Type, Action<object, long>> SetIdDelegates => Volatile.Read(ref _state).SetIdDelegates;
+    public static FrozenDictionary<Type, Action<object, long>> SetIdDelegates => Volatile.Read(ref _state)._setIdDelegates;
 
     /// <summary>类型 → 聚合 CRUD 元数据——单次查找替代四次独立查找。</summary>
-    public static FrozenDictionary<Type, CrudMetadata> CrudMetadatas => Volatile.Read(ref _state).CrudMetadatas;
+    public static FrozenDictionary<Type, CrudMetadata> CrudMetadatas => Volatile.Read(ref _state)._crudMetadatas;
 
     /// <summary>类型 → 编译期实体能力标志。</summary>
-    public static FrozenDictionary<Type, EntityFeatures> EntityFeatures => Volatile.Read(ref _state).EntityFeatures;
+    public static FrozenDictionary<Type, EntityFeatures> EntityFeatures => Volatile.Read(ref _state)._entityFeatures;
 
     /// <summary>原子验证并合并一个模型程序集生成的实体元数据片段。</summary>
     /// <exception cref="InvalidOperationException">同一实体类型已由另一个片段注册。</exception>
@@ -159,28 +159,28 @@ public static class PalORM_Runtime
             ValidateOptionalKeys(entityTypes, fragment.SetIdDelegates.Keys, nameof(fragment.SetIdDelegates));
 
             Type? duplicate = entityTypes
-                .Where(current.TableNames.ContainsKey)
+                .Where(current._tableNames.ContainsKey)
                 .OrderBy(static type => type.FullName, StringComparer.Ordinal)
                 .FirstOrDefault();
             if (duplicate is not null)
                 throw new InvalidOperationException($"Entity type '{duplicate.FullName}' is already registered in PalORM runtime metadata.");
 
-            var propertyMappings = new Dictionary<Type, FrozenDictionary<string, string>>(current.PropertyToColumn);
+            var propertyMappings = new Dictionary<Type, FrozenDictionary<string, string>>(current._propertyToColumn);
             foreach (var pair in fragment.PropertyToColumn)
                 propertyMappings.Add(pair.Key, pair.Value.ToFrozenDictionary(StringComparer.Ordinal));
 
-            var columnNames = new Dictionary<Type, IReadOnlyList<string>>(current.ColumnNames);
+            var columnNames = new Dictionary<Type, IReadOnlyList<string>>(current._columnNames);
             foreach (var pair in fragment.ColumnNames)
                 columnNames.Add(pair.Key, Array.AsReadOnly((string[])pair.Value.Clone()));
 
-            var crudMetadatas = new Dictionary<Type, CrudMetadata>(current.CrudMetadatas);
+            var crudMetadatas = new Dictionary<Type, CrudMetadata>(current._crudMetadatas);
             foreach (var pair in fragment.CrudMetadatas)
                 crudMetadatas.Add(pair.Key, pair.Value.Copy());
 
             // 防御性拷贝（ITM-204，与 ColumnNames 纪律对齐）：片段传入的是生成代码
             // static readonly string[] 的裸引用，Get() 返回值可被向下转型修改——
             // 注册时包装为只读快照，保证注册表"完整不可变"声明成立。
-            var createIndexSql = new Dictionary<Type, CreateIndexSqlSet>(current.CreateIndexSqlByDialect);
+            var createIndexSql = new Dictionary<Type, CreateIndexSqlSet>(current._createIndexSqlByDialect);
             foreach (var pair in fragment.CreateIndexSqlByDialect)
             {
                 createIndexSql.Add(pair.Key, new CreateIndexSqlSet(
@@ -191,24 +191,24 @@ public static class PalORM_Runtime
 
             var next = new RuntimeRegistryState
             {
-                RowFactories = Merge(current.RowFactories, fragment.RowFactories),
-                TableNames = Merge(current.TableNames, fragment.TableNames),
-                CommandSqls = Merge(current.CommandSqls, fragment.CommandSqls),
-                CommandSqlsByDialect = Merge(
-                    current.CommandSqlsByDialect, fragment.CommandSqlsByDialect),
-                BindInsert = Merge(current.BindInsert, fragment.BindInsert),
-                BindUpdate = Merge(current.BindUpdate, fragment.BindUpdate),
-                BindDelete = Merge(current.BindDelete, fragment.BindDelete),
-                PkColumns = Merge(current.PkColumns, fragment.PkColumns),
-                ColumnNames = columnNames.ToFrozenDictionary(),
-                PropertyToColumn = propertyMappings.ToFrozenDictionary(),
-                CreateTableSql = Merge(current.CreateTableSql, fragment.CreateTableSql),
-                CreateTableSqlByDialect = Merge(
-                    current.CreateTableSqlByDialect, fragment.CreateTableSqlByDialect),
-                CreateIndexSqlByDialect = createIndexSql.ToFrozenDictionary(),
-                SetIdDelegates = Merge(current.SetIdDelegates, fragment.SetIdDelegates),
-                CrudMetadatas = crudMetadatas.ToFrozenDictionary(),
-                EntityFeatures = Merge(current.EntityFeatures, fragment.EntityFeatures)
+                _rowFactories = Merge(current._rowFactories, fragment.RowFactories),
+                _tableNames = Merge(current._tableNames, fragment.TableNames),
+                _commandSqls = Merge(current._commandSqls, fragment.CommandSqls),
+                _commandSqlsByDialect = Merge(
+                    current._commandSqlsByDialect, fragment.CommandSqlsByDialect),
+                _bindInsert = Merge(current._bindInsert, fragment.BindInsert),
+                _bindUpdate = Merge(current._bindUpdate, fragment.BindUpdate),
+                _bindDelete = Merge(current._bindDelete, fragment.BindDelete),
+                _pkColumns = Merge(current._pkColumns, fragment.PkColumns),
+                _columnNames = columnNames.ToFrozenDictionary(),
+                _propertyToColumn = propertyMappings.ToFrozenDictionary(),
+                _createTableSql = Merge(current._createTableSql, fragment.CreateTableSql),
+                _createTableSqlByDialect = Merge(
+                    current._createTableSqlByDialect, fragment.CreateTableSqlByDialect),
+                _createIndexSqlByDialect = createIndexSql.ToFrozenDictionary(),
+                _setIdDelegates = Merge(current._setIdDelegates, fragment.SetIdDelegates),
+                _crudMetadatas = crudMetadatas.ToFrozenDictionary(),
+                _entityFeatures = Merge(current._entityFeatures, fragment.EntityFeatures)
             };
 
             Volatile.Write(ref _state, next);
@@ -248,22 +248,23 @@ public static class PalORM_Runtime
     {
         internal static readonly RuntimeRegistryState Empty = new();
 
-        internal FrozenDictionary<Type, object> RowFactories { get; init; } = FrozenDictionary<Type, object>.Empty;
-        internal FrozenDictionary<Type, string> TableNames { get; init; } = FrozenDictionary<Type, string>.Empty;
-        internal FrozenDictionary<Type, CommandSqlSet> CommandSqls { get; init; } = FrozenDictionary<Type, CommandSqlSet>.Empty;
-        internal FrozenDictionary<Type, CommandSqlByDialect> CommandSqlsByDialect { get; init; } = FrozenDictionary<Type, CommandSqlByDialect>.Empty;
-        internal FrozenDictionary<Type, Action<DbCommand, object>> BindInsert { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
-        internal FrozenDictionary<Type, Action<DbCommand, object>> BindUpdate { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
-        internal FrozenDictionary<Type, Action<DbCommand, object>> BindDelete { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
-        internal FrozenDictionary<Type, string> PkColumns { get; init; } = FrozenDictionary<Type, string>.Empty;
-        internal FrozenDictionary<Type, IReadOnlyList<string>> ColumnNames { get; init; } = FrozenDictionary<Type, IReadOnlyList<string>>.Empty;
-        internal FrozenDictionary<Type, FrozenDictionary<string, string>> PropertyToColumn { get; init; } = FrozenDictionary<Type, FrozenDictionary<string, string>>.Empty;
-        internal FrozenDictionary<Type, string> CreateTableSql { get; init; } = FrozenDictionary<Type, string>.Empty;
-        internal FrozenDictionary<Type, CreateTableSqlSet> CreateTableSqlByDialect { get; init; } = FrozenDictionary<Type, CreateTableSqlSet>.Empty;
-        internal FrozenDictionary<Type, CreateIndexSqlSet> CreateIndexSqlByDialect { get; init; } = FrozenDictionary<Type, CreateIndexSqlSet>.Empty;
-        internal FrozenDictionary<Type, Action<object, long>> SetIdDelegates { get; init; } = FrozenDictionary<Type, Action<object, long>>.Empty;
-        internal FrozenDictionary<Type, CrudMetadata> CrudMetadatas { get; init; } = FrozenDictionary<Type, CrudMetadata>.Empty;
-        internal FrozenDictionary<Type, EntityFeatures> EntityFeatures { get; init; } = FrozenDictionary<Type, EntityFeatures>.Empty;
+        // 字段名加 _ 前缀：避免与外部类 PalORM_Runtime 的同名 public 属性构成 Sonar S3218 遮蔽。
+        internal FrozenDictionary<Type, object> _rowFactories { get; init; } = FrozenDictionary<Type, object>.Empty;
+        internal FrozenDictionary<Type, string> _tableNames { get; init; } = FrozenDictionary<Type, string>.Empty;
+        internal FrozenDictionary<Type, CommandSqlSet> _commandSqls { get; init; } = FrozenDictionary<Type, CommandSqlSet>.Empty;
+        internal FrozenDictionary<Type, CommandSqlByDialect> _commandSqlsByDialect { get; init; } = FrozenDictionary<Type, CommandSqlByDialect>.Empty;
+        internal FrozenDictionary<Type, Action<DbCommand, object>> _bindInsert { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
+        internal FrozenDictionary<Type, Action<DbCommand, object>> _bindUpdate { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
+        internal FrozenDictionary<Type, Action<DbCommand, object>> _bindDelete { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
+        internal FrozenDictionary<Type, string> _pkColumns { get; init; } = FrozenDictionary<Type, string>.Empty;
+        internal FrozenDictionary<Type, IReadOnlyList<string>> _columnNames { get; init; } = FrozenDictionary<Type, IReadOnlyList<string>>.Empty;
+        internal FrozenDictionary<Type, FrozenDictionary<string, string>> _propertyToColumn { get; init; } = FrozenDictionary<Type, FrozenDictionary<string, string>>.Empty;
+        internal FrozenDictionary<Type, string> _createTableSql { get; init; } = FrozenDictionary<Type, string>.Empty;
+        internal FrozenDictionary<Type, CreateTableSqlSet> _createTableSqlByDialect { get; init; } = FrozenDictionary<Type, CreateTableSqlSet>.Empty;
+        internal FrozenDictionary<Type, CreateIndexSqlSet> _createIndexSqlByDialect { get; init; } = FrozenDictionary<Type, CreateIndexSqlSet>.Empty;
+        internal FrozenDictionary<Type, Action<object, long>> _setIdDelegates { get; init; } = FrozenDictionary<Type, Action<object, long>>.Empty;
+        internal FrozenDictionary<Type, CrudMetadata> _crudMetadatas { get; init; } = FrozenDictionary<Type, CrudMetadata>.Empty;
+        internal FrozenDictionary<Type, EntityFeatures> _entityFeatures { get; init; } = FrozenDictionary<Type, EntityFeatures>.Empty;
     }
 }
 
