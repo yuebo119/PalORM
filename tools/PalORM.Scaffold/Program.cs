@@ -16,14 +16,15 @@ string targetNamespace = args.Length > 1
     ? args[1]
     : Environment.GetEnvironmentVariable("PALORM_SCAFFOLD_NAMESPACE") ?? "Models";
 
+// S6966：ADO.NET 异步 API 优先——同步 Open/ExecuteReader 在 top-level 程序中也会阻塞线程池。
 using var connection = new SqliteConnection(connectionString);
-connection.Open();
+await connection.OpenAsync().ConfigureAwait(false);
 
 using var tablesCommand = connection.CreateCommand();
 tablesCommand.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'";
-using var tableReader = tablesCommand.ExecuteReader();
+using var tableReader = await tablesCommand.ExecuteReaderAsync().ConfigureAwait(false);
 
-while (tableReader.Read())
+while (await tableReader.ReadAsync().ConfigureAwait(false))
 {
     string tableName = tableReader.GetString(0);
     string className = ToPascalCase(tableName);
@@ -36,10 +37,10 @@ while (tableReader.Read())
 
     using var columnCommand = connection.CreateCommand();
     columnCommand.CommandText = $"PRAGMA table_info({tableName})";
-    using var columnReader = columnCommand.ExecuteReader();
+    using var columnReader = await columnCommand.ExecuteReaderAsync().ConfigureAwait(false);
 
     bool isFirstColumn = true;
-    while (columnReader.Read())
+    while (await columnReader.ReadAsync().ConfigureAwait(false))
     {
         string columnName = columnReader.GetString(1);
         string dbType = columnReader.GetString(2).ToUpper(CultureInfo.InvariantCulture);

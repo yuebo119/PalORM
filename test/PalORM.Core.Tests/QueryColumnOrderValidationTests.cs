@@ -82,6 +82,7 @@ public sealed class QueryColumnOrderValidationTests
             await foreach (ColumnOrderEntity _ in session.QueryAsyncEnumerable<ColumnOrderEntity>(
                 $"SELECT Id, last_name, first_name FROM colorder"))
             {
+                // S108: 列顺序校验在 ReadAsync 内部完成——这里只需消费枚举器触发物化。
             }
         });
     }

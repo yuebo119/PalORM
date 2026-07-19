@@ -324,7 +324,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     /// <summary>停止监听并标记已释放。幂等;释放后 <see cref="StartAsync"/> 抛 <see cref="ObjectDisposedException"/>。</summary>
     public async ValueTask DisposeAsync()
     {
-        lock (_lock) { if (_disposed) return; _disposed = true; }
+        lock (_lock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
         await StopAsync().ConfigureAwait(false);
     }
 }

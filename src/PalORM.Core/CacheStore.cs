@@ -41,6 +41,9 @@ public sealed class BoundedQueryCache : IQueryCache
     {
         if (_cache.TryGetValue(key, out CacheEntry? entry))
         {
+            // S1066: 内层 if 不能与外层合并——TryRemove 必须在"条目存在但过期/类型不符"时执行，
+            // 合并到外层条件会跳过 TryRemove。
+#pragma warning disable S1066
             if (!entry.IsExpired())
             {
                 // ITM-558：两个实体类型误用同一 WithCache key 时，硬强转会抛不含 key 的
@@ -52,6 +55,7 @@ public sealed class BoundedQueryCache : IQueryCache
                     return true;
                 }
             }
+#pragma warning restore S1066
             _cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry));
         }
         value = default;
