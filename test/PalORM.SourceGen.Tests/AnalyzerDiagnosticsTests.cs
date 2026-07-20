@@ -497,17 +497,8 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM017")).IsFalse();
     }
 
-    [Test]
-    public async Task DiagnosticDescriptors_006And007_RemainRegisteredWithoutAnalyzerTrigger()
-    {
-        // 现状固化：PALORM006（SqlFile 缺失）由 SqlFileEmitter 的 Obsolete-error 机制承担，
-        // PALORM007（列类型不匹配）无运行时 schema 对照数据源——两者在 Analyzer 中仅有描述符。
-        // 若未来接入报告点，此测试提醒同步补触发测试。
-        var analyzer = new PalORMAnalyzer();
-
-        await Assert.That(analyzer.SupportedDiagnostics.Any(d => d.Id == "PALORM006")).IsTrue();
-        await Assert.That(analyzer.SupportedDiagnostics.Any(d => d.Id == "PALORM007")).IsTrue();
-    }
+    // PALORM006/007 已删除（v2.1.0）——006 由 SqlFileEmitter Obsolete-error 承担，
+    // 007 无 schema 对照数据源。编号不复用。原测试 DiagnosticDescriptors_006And007_RemainRegisteredWithoutAnalyzerTrigger 已删。
 
     // ─── PALORM020：索引声明有效性（ITM-203）───
 
