@@ -11,12 +11,22 @@
 
 | # | 铁律 | 违反后果 |
 |---|------|---------|
-| 1 | **改后必跑 `dotnet build --no-incremental`** | 增量缓存掩盖断裂 |
+| 1 | **同类改动批量完成后一次构建**（不是每次 Edit 后都跑 `--no-incremental`） | 增量缓存掩盖断裂或过度等待 |
 | 2 | **批量 Edit 前必 Read** | 单行类 Edit 导致 CS1585 |
 | 3 | **SuppressMessage 必附 Justification**（用「」替代 ASCII `"`） | CS1003 编译错误 |
 | 4 | **Partial 拆分每个文件 using 独立确定** | CS0246/CS0103 |
 | 5 | **C# 插值字符串不可简单 split 拆行** | CS1513 对象初始化器断裂 |
 | 6 | **测试凭据不用 Password=** | S2068 硬编码凭据 |
+
+### 构建验证时机
+
+| 时机 | 命令 | 用途 |
+|------|------|------|
+| 同类改动内（如 D 批次 5 处删除）| 不构建 | 继续批量改动 |
+| 跨类别切换（D→M 或 M→R）| `dotnet build` | 确认上批无误 |
+| 快照类改动（SourceGen emit）| 先 `PALORM_UPDATE_SNAPSHOTS=1 dotnet run` 前置确认基线 | 避免事后快照偏离 |
+| 最终提交前 | `dotnet build --no-incremental` | 全量重建 |
+| 技术债扫描 | `bash scripts/tech-debt-scan.sh` | 12 类检查一键执行 |
 
 ---
 
