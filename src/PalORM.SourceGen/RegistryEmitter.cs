@@ -120,15 +120,12 @@ internal static class RegistryEmitter
         foreach (var m in models.AsSpan())
         {
             // 按位组合 SoftDelete/TenantAware 特性；两者皆无则 None。
-            string features =
-                (m.IsSoftDelete ? "global::PalORM.EntityFeatures.SoftDelete" : null,
-                 m.IsTenantAware ? "global::PalORM.EntityFeatures.TenantAware" : null) switch
-                {
-                    (null, null) => "global::PalORM.EntityFeatures.None",
-                    (var sd, null) => sd!,
-                    (null, var ta) => ta!,
-                    var (sd, ta) => $"{sd} | {ta}"
-                };
+            var parts = new List<string>(2);
+            if (m.IsSoftDelete) parts.Add("global::PalORM.EntityFeatures.SoftDelete");
+            if (m.IsTenantAware) parts.Add("global::PalORM.EntityFeatures.TenantAware");
+            string features = parts.Count == 0
+                ? "global::PalORM.EntityFeatures.None"
+                : string.Join(" | ", parts);
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = {features},");
         }
         sb.AppendLine("        },");
