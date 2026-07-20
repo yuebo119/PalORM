@@ -8,7 +8,7 @@
 ## 测试验证
 - [ ] `PalORM.Core.Tests` 全绿（156+ 用例）
 - [ ] `PalORM.SourceGen.Tests` 全绿（105+ 用例，含快照比对）
-- [ ] `PalORM.Integration.Tests` SQLite 部分全绿（150+ 用例）
+- [ ] `PalORM.Integration.Tests` SQLite 部分全绿（149+ 用例）
 - [ ] 如改 emit 模板，`PALORM_UPDATE_SNAPSHOTS=1` 重生成并评审 diff
 
 ## SonarAnalyzer 守护
@@ -27,3 +27,12 @@
 - [ ] 未引入硬编码凭据（Password=xxx）
 - [ ] 未引入同步 ADO.NET 调用
 - [ ] 未引入空块 / 空 catch（用 `Assert.ThrowsAsync` 或 `=> _ = (...)`）
+
+## 架构精炼守护（v5.0 新增）
+- [ ] 未引入 `[Obsolete]` 而无明确移除版本的公共 API
+- [ ] 未引入恒 null/false 预留字段（TableModel/DbOptions 等）
+- [ ] 未引入逐字复制 ≥ 3 处的重复代码（抽到 helper 或上提接口）
+- [ ] 未引入单文件 > 800 行的 God Object（考虑 partial 拆分）
+- [ ] 未引入零消费点的死代码（grep 全仓库验证）
+- [ ] partial 拆分时每个文件 using 列表按自身依赖独立确定
+- [ ] partial 拆分时检查首方法 XML 注释（CS1591）和末尾悬空注释（CS1587）
