@@ -2,7 +2,7 @@ namespace PalORM;
 
 /// <summary>弹性执行器——重试+退避+超时+熔断。
 /// <para><b>重试策略</b>: 默认3次，指数退避(100ms→200ms→400ms)。仅重试 Provider 判定的瞬时异常和内部命令超时；调用方取消与确定性异常不重试。</para>
-/// <para><b>熔断器</b>: 连续失败≥阈值→快速失败(抛 CircuitBreakerOpenException)→resetAfter 后恢复。</para>
+/// <para><b>熔断器</b>: 连续失败≥阈值→快速失败(抛 CircuitBreakerOpenException)→resetAfter 后恢复。熔断状态机抽到独立的 <see cref="CircuitBreaker"/> 类。</para>
 /// <para><b>为什么不是 Polly</b>: 零外部依赖。核心弹性逻辑~100行, 引入 Polly(500K+)过度。</para></summary>
 public sealed class ResilienceExecutor
 {
@@ -10,18 +10,7 @@ public sealed class ResilienceExecutor
     private readonly Func<int, TimeSpan> _backoff;
     private readonly TimeSpan _timeout;
     private readonly Func<Exception, bool> _isTransient;
-    private readonly int _circuitBreakerThreshold;
-    private readonly TimeSpan _circuitBreakerResetAfter;
-
-    private int _failureCount;
-    // ITM-538: 熔断恢复时点用 DateTime.UtcNow 墙钟，已知取舍——对系统时钟回拨/NTP 校时敏感
-    // （回拨可能延长或缩短熔断窗口）。改用 Environment.TickCount64/Stopwatch 单调时钟可根治，
-    // 但与已提交的熔断逻辑耦合，留待确有需要时统一改造，当前不动逻辑。
-    private DateTime _circuitOpenUntil;
-    private bool _circuitOpen;
-    private bool _halfOpenProbeActive;
-    private long _circuitGeneration;
-    private readonly Lock _lock = new();
+    private readonly CircuitBreaker _circuitBreaker;
 
     /// <summary>按配置创建执行器——重试/超时/熔断参数取自 <paramref name="options"/>，
     /// 瞬时异常判定默认为 <see cref="System.Data.Common.DbException.IsTransient"/>。</summary>
@@ -54,8 +43,7 @@ public sealed class ResilienceExecutor
         };
         _timeout = options.CommandTimeout;
         _isTransient = isTransient;
-        _circuitBreakerThreshold = options.CircuitBreakerThreshold;
-        _circuitBreakerResetAfter = options.CircuitBreakerResetAfter;
+        _circuitBreaker = new CircuitBreaker(options.CircuitBreakerThreshold, options.CircuitBreakerResetAfter);
     }
 
     /// <summary>执行带重试和熔断的异步操作。
@@ -72,7 +60,7 @@ public sealed class ResilienceExecutor
     public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        CircuitEntry entry = EnterCircuit();
+        var (isHalfOpenProbe, generation) = _circuitBreaker.Enter();
 
         try
         {
@@ -83,7 +71,7 @@ public sealed class ResilienceExecutor
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     timeout.CancelAfter(_timeout);
                     T result = await operation(timeout.Token).ConfigureAwait(false);
-                    RecordSuccess(entry);
+                    _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
                     return result;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -105,7 +93,7 @@ public sealed class ResilienceExecutor
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            ReleaseCancelledProbe(entry.IsHalfOpenProbe);
+            _circuitBreaker.ReleaseCancelledProbe(isHalfOpenProbe);
             throw;
         }
         catch (Exception exception)
@@ -114,7 +102,7 @@ public sealed class ResilienceExecutor
             // 失败是应用层问题，不应熔断整个执行器。TimeoutException 是内部命令超时的包装，
             // 属基础设施信号，计入。
             bool countsTowardCircuit = exception is TimeoutException || _isTransient(exception);
-            RecordFinalFailure(entry.IsHalfOpenProbe, countsTowardCircuit);
+            _circuitBreaker.RecordFinalFailure(isHalfOpenProbe, countsTowardCircuit);
             throw;
         }
     }
@@ -138,122 +126,4 @@ public sealed class ResilienceExecutor
         => exception is OperationCanceledException
             ? !callerToken.IsCancellationRequested
             : _isTransient(exception);
-
-    private CircuitEntry EnterCircuit()
-    {
-        lock (_lock)
-        {
-            if (_circuitBreakerThreshold <= 0 || !_circuitOpen)
-                return new CircuitEntry(false, _circuitGeneration);
-
-            if (DateTime.UtcNow < _circuitOpenUntil || _halfOpenProbeActive)
-                throw new CircuitBreakerOpenException($"Circuit breaker open until {_circuitOpenUntil:O}");
-
-            _halfOpenProbeActive = true;
-            return new CircuitEntry(true, _circuitGeneration);
-        }
-    }
-
-    private void RecordFinalFailure(bool isHalfOpenProbe, bool countsTowardCircuit)
-    {
-        lock (_lock)
-        {
-            // 仅探针自身失败释放探针占用（无论是否计数）：旧操作失败不得清掉在飞探针标志。
-            if (isHalfOpenProbe)
-                _halfOpenProbeActive = false;
-
-            // 确定性异常不推进熔断状态（ITM-506）。
-            if (!countsTowardCircuit)
-                return;
-
-            // 半开探针失败：重新武装熔断（顺延恢复时间点并推进 generation）——这是探针的职责。
-            if (isHalfOpenProbe)
-            {
-                _failureCount = _circuitBreakerThreshold;
-                _circuitOpen = true;
-                _circuitGeneration++;
-                _circuitOpenUntil = DateTime.UtcNow.Add(_circuitBreakerResetAfter);
-                return;
-            }
-
-            // 熔断已打开期间，在飞旧的非探针失败不再重复顺延恢复时间点（ITM-507）——否则多个
-            // 慢操作先后失败可无限延长熔断窗口。仅从关闭态首次跨阈值时开启熔断。
-            if (_circuitOpen)
-                return;
-
-            _failureCount += 1;
-
-            if (_circuitBreakerThreshold > 0 && _failureCount >= _circuitBreakerThreshold)
-            {
-                _circuitOpen = true;
-                _circuitGeneration++;
-                _circuitOpenUntil = DateTime.UtcNow.Add(_circuitBreakerResetAfter);
-            }
-        }
-    }
-
-    private void RecordSuccess(CircuitEntry entry)
-    {
-        lock (_lock)
-        {
-            // 探针无论新旧都先释放占用标志，避免陈旧探针提前返回导致半开态永久无探针可进。
-            if (entry.IsHalfOpenProbe)
-                _halfOpenProbeActive = false;
-
-            // generation 防陈旧对探针同样生效：gen N 的探针成功不得关闭 gen N+1 的熔断
-            //（其成功证明的是重开前的数据库状态）。新熔断周期由新探针验证。
-            // 已知活性取舍（ITM-209）：探针在飞期间陈旧操作失败推进 generation，
-            // 该探针随后的真实成功会因代不匹配被丢弃，熔断多保持一个周期——
-            // 保守方向（宁多熔断不误关），下一轮探针会正确裁决。
-            if (entry.Generation != _circuitGeneration)
-                return;
-
-            _failureCount = 0;
-            _circuitOpen = false;
-            _circuitOpenUntil = default;
-        }
-    }
-
-    // ITM-598: 调用方取消（ct.IsCancellationRequested）不算数据库失败，不应推进熔断 failureCount。
-    // 把 _circuitOpenUntil 重置为当前时间让熔断窗口"立即到期"——下次请求进入半开探针裁决，
-    // 由真实请求结果决定熔断是否真正关闭。频繁取消时熔断器确实会多次进入探针路径，
-    // 但每次探针是"尝试建立真实数据库连接"的轻量操作，且仅在 isHalfOpenProbe=true 时进入此分支。
-    // 与"连续失败 N 次后开闸 resetAfter 秒"的契约一致：取消不是失败，不延长熔断时间。
-    private void ReleaseCancelledProbe(bool isHalfOpenProbe)
-    {
-        if (!isHalfOpenProbe)
-            return;
-
-        lock (_lock)
-        {
-            _halfOpenProbeActive = false;
-            _circuitOpenUntil = DateTime.UtcNow;
-        }
-    }
-
-    private readonly record struct CircuitEntry(bool IsHalfOpenProbe, long Generation);
-}
-
-/// <summary>熔断器打开异常。</summary>
-public sealed class CircuitBreakerOpenException : PalORMException
-{
-    /// <summary>以熔断状态描述（含恢复时间点）创建异常。</summary>
-    public CircuitBreakerOpenException(string message) : base(message) { }
-}
-
-/// <summary>PalORM 基础异常。</summary>
-public class PalORMException : Exception
-{
-    /// <summary>以错误描述创建异常。</summary>
-    public PalORMException(string message) : base(message) { }
-
-    /// <summary>以错误描述和原始异常创建异常——保留底层失败原因供调用方追溯。</summary>
-    public PalORMException(string message, Exception inner) : base(message, inner) { }
-}
-
-/// <summary>并发冲突异常（乐观锁）。</summary>
-public sealed class ConcurrencyConflictException : PalORMException
-{
-    /// <summary>以冲突描述（实体/版本信息）创建异常。</summary>
-    public ConcurrencyConflictException(string message) : base(message) { }
 }
