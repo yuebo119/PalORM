@@ -69,14 +69,14 @@ dotnet_diagnostic.S6667.severity = none    # LoggerMessage 源生成器已用，
 
 # P1 设计/可读性 → 警告（warning，不阻断但有信号）
 # 注：本批次已完成系统性拆分，残留项加 SuppressMessage。
-dotnet_diagnostic.S3776.severity = warning  # 认知复杂度
-dotnet_diagnostic.S107.severity = warning   # 参数过多
-dotnet_diagnostic.S927.severity = warning   # 参数名匹配接口
-dotnet_diagnostic.S2681.severity = warning  # 单行 if/foreach
-dotnet_diagnostic.S125.severity = warning   # 注释代码
-dotnet_diagnostic.S1066.severity = warning  # 合并 if
-dotnet_diagnostic.S1994.severity = warning  # for 循环 stop 变量
-dotnet_diagnostic.S2189.severity = warning  # incrementer 不被测试
+dotnet_diagnostic.S3776.severity = error  # 认知复杂度
+dotnet_diagnostic.S107.severity = error   # 参数过多
+dotnet_diagnostic.S927.severity = error   # 参数名匹配接口
+dotnet_diagnostic.S2681.severity = error  # 单行 if/foreach
+dotnet_diagnostic.S125.severity = error   # 注释代码
+dotnet_diagnostic.S1066.severity = error  # 合并 if
+dotnet_diagnostic.S1994.severity = error  # for 循环 stop 变量
+dotnet_diagnostic.S2189.severity = error  # incrementer 不被测试
 
 # P2 风格 → 建议（suggestion，IDE 提示但不显著）
 dotnet_diagnostic.IDE0007.severity = suggestion  # var 替代
