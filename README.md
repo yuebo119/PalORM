@@ -336,7 +336,7 @@ CI 通过 secret 注入 `PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION` 即�
 
 | | |
 |---|---|
-| [API 参考](docs/API参考.md) | 113 项清单：112 项实现，1 项移除 |
+| [API 参考](docs/API参考.md) | 100+ 项 QueryBuilder/DataSession/StoredProc API 清单 |
 | [架构设计](docs/架构设计.md) | 源生成器 · 数据流 · 17 项决策 |
 | [踩坑目录](docs/踩坑目录.md) | 302 项跨语言 ORM 陷阱 |
 | [AOT 部署指南](docs/AOT部署指南.md) | 发布配置与验证 |
