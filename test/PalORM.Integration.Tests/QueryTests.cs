@@ -140,7 +140,14 @@ public sealed class QueryTests
 
     [Test] public async Task IQueryInterceptor_FiresCallbacks() { var interceptor=new TestInterceptor(); var opts=new DbOptions{ConnectionString="Data Source=:memory:"}; opts=opts with{Interceptors=[interceptor]}; await using var db=await DataSession<SqliteProvider>.CreateAsync(opts); await db.MigrateAsync(); await db.InsertAsync(new Order{Status="I",Total=1m,CreatedAt=0}); await db.From<Order>().ToListAsync(); await Assert.That(interceptor.BeforeCount).IsGreaterThan(0); await Assert.That(interceptor.AfterCount).IsGreaterThan(0); }
 
-    private sealed class TestInterceptor:IQueryInterceptor{public int BeforeCount;public int AfterCount;public void OnBefore(QueryContext context){BeforeCount++;}public void OnAfter(QueryContext context,TimeSpan elapsed,int rowCount){AfterCount++;}public void OnError(QueryContext context,Exception exception){/* S108: 测试 interceptor 不消费错误路径 */}}
+    private sealed class TestInterceptor : IQueryInterceptor
+    {
+        public int BeforeCount;
+        public int AfterCount;
+        public void OnBefore(QueryContext context) => BeforeCount++;
+        public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) => AfterCount++;
+        public void OnError(QueryContext context, Exception exception) { /* S108: 测试 interceptor 不消费错误路径 */ }
+    }
 
     [Test] public async Task ForUpdate_AppearsAfterLimit() { await using var db = await TestDb.SqliteAsync(); var sql=db.From<Order>().Take(1).ForUpdate().ToSql(); await Assert.That(sql.IndexOf("LIMIT",StringComparison.Ordinal)).IsLessThan(sql.IndexOf("FOR UPDATE",StringComparison.Ordinal)); }
 
