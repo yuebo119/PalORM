@@ -45,7 +45,9 @@ public static class MultiValueBulkInsert
 
         Action<DbCommand, object> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
-        await ProbeBinderAsync(conn, binder, entities[0], columnCount, typeof(T).Name).ConfigureAwait(false);
+        await BulkOperationFramework.ProbeBinderAsync(
+            conn, binder, entities[0], columnCount, typeof(T).Name,
+            "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
 
         if (columnCount > maxParametersPerStatement)
             throw new InvalidOperationException(
@@ -81,7 +83,7 @@ public static class MultiValueBulkInsert
             }
             finally
             {
-                await DisposeCommandPreservingAsync(rowCommand, rowCommandException,
+                await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
                     "PalORM.RowCommandCleanupException").ConfigureAwait(false);
             }
             if (ownsTransaction)
@@ -101,36 +103,6 @@ public static class MultiValueBulkInsert
                     "PalORM.TransactionCleanupException").ConfigureAwait(false);
         }
         return total;
-    }
-
-    /// <summary>探测 binder 生成的参数数量与列数一致——不一致即抛 InvalidOperationException。
-    /// 探测命令独立释放，cleanup 异常挂 Data 不替换原始失败。</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "释放是清理路径；异常附加到主异常，不能替换原始批量写失败。")]
-    private static async ValueTask ProbeBinderAsync(
-        DbConnection conn, Action<DbCommand, object> binder, object first,
-        int columnCount, string typeName)
-    {
-        DbCommand probeCommand = conn.CreateCommand();
-        Exception? probeException = null;
-        try
-        {
-            binder(probeCommand, first);
-            if (probeCommand.Parameters.Count != columnCount)
-                throw new InvalidOperationException(
-                    $"Type '{typeName}' generated {columnCount} insert columns but " +
-                    $"{probeCommand.Parameters.Count} parameters.");
-        }
-        catch (Exception exception)
-        {
-            probeException = exception;
-            throw;
-        }
-        finally
-        {
-            await DisposeCommandPreservingAsync(probeCommand, probeException,
-                "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
-        }
     }
 
     /// <summary>构建每行 (?,?,?,?,?) 占位符组——批内每行一组，逗号分隔。</summary>
@@ -206,23 +178,11 @@ public static class MultiValueBulkInsert
             }
             finally
             {
-                await DisposeCommandPreservingAsync(cmd, commandException,
+                await BulkOperationFramework.DisposePreservingAsync(cmd, commandException,
                     "PalORM.CommandCleanupException").ConfigureAwait(false);
             }
         }
         return total;
-    }
-
-    private static async ValueTask DisposeCommandPreservingAsync(
-        DbCommand command,
-        Exception? primaryException,
-        string exceptionDataKey)
-    {
-        try { await command.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception cleanupException) when (primaryException is not null)
-        {
-            primaryException.Data[exceptionDataKey] = cleanupException;
-        }
     }
 }
 

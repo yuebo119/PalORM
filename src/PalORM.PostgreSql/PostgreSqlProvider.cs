@@ -111,7 +111,9 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         Action<DbCommand, object> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
-        await ProbeBinderAsync(conn, binder, entities[0], columnCount, typeof(T).Name).ConfigureAwait(false);
+        await BulkOperationFramework.ProbeBinderAsync(
+            conn, binder, entities[0], columnCount, typeof(T).Name,
+            "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
 
         string quotedColumns = string.Join(", ",
             metadata.InsertColumns.Select(QuoteIdentifier));
@@ -158,7 +160,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                     }
                     finally
                     {
-                        await DisposePreservingAsync(rowCommand, rowCommandException,
+                        await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
                             "PalORM.RowCommandCleanupException").ConfigureAwait(false);
                     }
                 }
@@ -169,7 +171,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                 }
                 finally
                 {
-                    await DisposePreservingAsync(importer, importerException,
+                    await BulkOperationFramework.DisposePreservingAsync(importer, importerException,
                         "PalORM.ImporterCleanupException").ConfigureAwait(false);
                 }
             }
@@ -188,38 +190,8 @@ public sealed class PostgreSqlProvider : IDbProvider
         finally
         {
             if (ownsTransaction)
-                await DisposePreservingAsync(bulkTransaction, primaryException,
+                await BulkOperationFramework.DisposePreservingAsync(bulkTransaction, primaryException,
                     "PalORM.TransactionCleanupException").ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>探测 binder 生成的参数数量与列数一致——不一致即抛 InvalidOperationException。
-    /// 探测命令独立释放，cleanup 异常挂 Data 不替换原始失败（ITM-412 与 MultiValueBulkInsert 同骨架）。</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "释放是清理路径；异常附加到主异常，不能替换原始批量写失败。")]
-    private static async ValueTask ProbeBinderAsync(
-        DbConnection conn, Action<DbCommand, object> binder, object first,
-        int columnCount, string typeName)
-    {
-        DbCommand probeCommand = conn.CreateCommand();
-        Exception? probeException = null;
-        try
-        {
-            binder(probeCommand, first);
-            if (probeCommand.Parameters.Count != columnCount)
-                throw new InvalidOperationException(
-                    $"Type '{typeName}' generated {columnCount} insert columns but " +
-                    $"{probeCommand.Parameters.Count} parameters.");
-        }
-        catch (Exception exception)
-        {
-            probeException = exception;
-            throw;
-        }
-        finally
-        {
-            await DisposePreservingAsync(probeCommand, probeException,
-                "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
         }
     }
 
@@ -236,29 +208,15 @@ public sealed class PostgreSqlProvider : IDbProvider
         }
     }
 
-    // ITM-412 防漂移锚点：以下两个清理助手与 Core 的 DataSession.RollbackPreservingAsync /
-    // DisposeTransactionPreservingAsync 是同一"主异常保留"骨架的复制体（Provider 不得反向
-    // 依赖 Core 内部实现，故刻意复制）。修改任一侧语义（异常挂载键、CancellationToken.None、
-    // when 过滤条件）时必须同步核对另一侧——两侧分叉即 ITM-304 同型温床。
+    // ITM-412 防漂移锚点：以下清理助手与 Core 的 DataSession.RollbackPreservingAsync 是同一
+    // "主异常保留"骨架的复制体（Provider 不得反向依赖 Core 内部实现，故刻意复制）。
+    // 修改任一侧语义（异常挂载键、CancellationToken.None）时必须同步核对另一侧——两侧分叉即 ITM-304 同型温床。
+    // 注：DisposePreservingAsync 已抽到 BulkOperationFramework（v3.0），三 Provider 共享同一实现。
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "回滚是清理路径；异常附加到主异常，不能替换原始 COPY 失败。")]
     private static async ValueTask RollbackPreservingAsync(DbTransaction transaction, Exception primaryException)
     {
         try { await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
         catch (Exception rollbackException) { primaryException.Data["PalORM.RollbackException"] = rollbackException; }
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "释放是清理路径；异常附加到主异常，不能替换原始 COPY 失败。")]
-    private static async ValueTask DisposePreservingAsync(
-        IAsyncDisposable resource,
-        Exception? primaryException,
-        string exceptionDataKey)
-    {
-        try { await resource.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception cleanupException) when (primaryException is not null)
-        {
-            primaryException.Data[exceptionDataKey] = cleanupException;
-        }
     }
 }
