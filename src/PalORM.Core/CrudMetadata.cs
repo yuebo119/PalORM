@@ -95,28 +95,6 @@ public readonly struct CrudMetadata
         HasDefaultKey = hasDefaultKey;
     }
 
-    /// <summary>遗留 9 参构造——源生成器内部调用点已迁移到聚合 ctor。
-    /// 保留供外部手写调用方兼容；新代码请用聚合 ctor。</summary>
-    [Obsolete("Use the aggregate ctor (CrudBindings + CrudColumns). Kept for binary compat.")]
-    public CrudMetadata(
-        CommandSqlSet sqls,
-        Action<DbCommand, object> bindInsert,
-        Action<DbCommand, object> bindUpsert,
-        Action<DbCommand, object> bindUpdate,
-        object rowFactory,
-        IReadOnlyList<string> insertColumns,
-        IReadOnlyList<string> upsertColumns,
-        Action<object>? incrementVersion,
-        Func<object, bool> hasDefaultKey)
-        : this(
-            sqls,
-            new CrudBindings(bindInsert, bindUpsert, bindUpdate, rowFactory),
-            new CrudColumns(insertColumns, upsertColumns),
-            incrementVersion,
-            hasDefaultKey)
-    {
-    }
-
     internal CrudMetadata Copy()
         => new(Sqls,
             new CrudBindings(BindInsert, BindUpsert, BindUpdate, RowFactory),
