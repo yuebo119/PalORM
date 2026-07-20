@@ -149,6 +149,11 @@ public static class MultiValueBulkInsert
 
     /// <summary>分批执行 INSERT——批大小受 effectiveBatchSize 与参数上限钳制。
     /// 行参数暂存命令在批间复用（原实现每行新建一个 DbCommand，1 万行即 1 万次分配）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:MethodsShouldNotHaveTooManyParameters",
+        Justification = "批量执行参数多但全是必要——连接/事务/命令/实体集合/binder/quoter/cancellationToken "
+            + "都是 ADO.NET 批量骨架的必然组件，聚合成对象会引入跨方法状态传递。已抽出 ProbeBinderAsync "
+            + "+ BuildRowPlaceholders 减少方法主体复杂度。")]
     private static async Task<long> ExecuteBatchesAsync<T>(
         DbConnection conn, DbTransaction tran, DbCommand rowCommand,
         IReadOnlyList<T> entities, int effectiveBatchSize, int columnCount,

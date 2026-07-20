@@ -25,8 +25,8 @@ public sealed class AdvancedFeatureTests
         Assert.Throws<InvalidOperationException>(() => sp.GetOutputValue<long>("@missing"));
         // 单次使用契约：首次执行失败（SQLite 不支持 CommandType.StoredProcedure，ArgumentException 属预期）
         // 后二次执行被 MarkExecuted 明确拒绝——契约不依赖首次执行成功
-        // S108: 首次执行预期抛 ArgumentException（SQLite 不支持 StoredProcedure）——空 catch 即断言。
-        try { await sp.ExecuteAsync(); } catch (ArgumentException) { }
+        // S108: 用 Assert.ThrowsAsync 显式断言预期异常，避免空 catch
+        await Assert.ThrowsAsync<ArgumentException>(async () => await sp.ExecuteAsync());
         await Assert.That(async () => await sp.ExecuteAsync()).Throws<InvalidOperationException>(); }
     [Test] public async Task GetRawConnection_Open() { await using var db = await TestDb.SqliteAsync(); await Assert.That(db.GetRawConnection().State).IsEqualTo(System.Data.ConnectionState.Open); }
     [Test] public async Task QueryAsyncEnumerable_Streams() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="ST",Price=1m,Stock=0}); int c=0; await foreach(var p in db.QueryAsyncEnumerable<Product>($"SELECT * FROM products")){ c++; } await Assert.That(c).IsGreaterThanOrEqualTo(1); }
