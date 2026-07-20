@@ -146,7 +146,8 @@ public sealed class QueryTests
         public int AfterCount;
         public void OnBefore(QueryContext context) => BeforeCount++;
         public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) => AfterCount++;
-        public void OnError(QueryContext context, Exception exception) { /* S108: 测试 interceptor 不消费错误路径 */ }
+        // S108: 测试 interceptor 不消费错误路径——表达式主体显式 discard 参数。
+        public void OnError(QueryContext context, Exception exception) => _ = (context, exception);
     }
 
     [Test] public async Task ForUpdate_AppearsAfterLimit() { await using var db = await TestDb.SqliteAsync(); var sql=db.From<Order>().Take(1).ForUpdate().ToSql(); await Assert.That(sql.IndexOf("LIMIT",StringComparison.Ordinal)).IsLessThan(sql.IndexOf("FOR UPDATE",StringComparison.Ordinal)); }
