@@ -66,6 +66,9 @@ public sealed class ResilienceExecutor
         "S2189:LoopStopIncrementerNotTested",
         Justification = "for(;;) 退出靠 return（成功路径）和 throw（取消/超时/重试耗尽）；"
             + "attempt 仅作为 when 子句重试上限裁断与日志计数器，不进入 stop 条件是有意为之。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S1994:ForLoopConditionChanged",
+        Justification = "同 S2189——for(;;) 退出靠 return/throw，attempt 不进入 stop 条件。")]
     public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);

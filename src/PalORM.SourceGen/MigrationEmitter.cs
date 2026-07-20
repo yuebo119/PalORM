@@ -198,6 +198,10 @@ internal static class MigrationEmitter
     }
 
     /// <summary>数值类型映射——BIGINT/INTEGER/SMALLINT/BOOLEAN/DECIMAL/DOUBLE/REAL。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "数值类型映射的 7 个 if-is 模式匹配 + double 方言分支是必然——"
+            + "拆分到 switch 表达式或字典会丢失可读性（每类型需附方言分支）。")]
     private static string? GetNumericDbType(string typeName, SqlGenerationDialect dialect)
     {
         if (typeName is "long" or "global::System.Int64") return "BIGINT";

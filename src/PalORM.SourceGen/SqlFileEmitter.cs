@@ -14,6 +14,11 @@ namespace PalORM.SourceGen;
 /// 或全量重建（dotnet build 冷构建恒新鲜；改 .sql 后请连带 touch 声明方法所在文件）。</para></summary>
 internal static class SqlFileEmitter
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "SqlFile 源生成器主入口：路径安全检查 + 项目根解析 + 文件读取 + Provider 段解析 "
+            + "四阶段顺序执行。已抽出 HasTraversalSegment/ResolveProjectRoot/TryReadSqlFile；"
+            + "余下复杂度来自多分支诊断（ITM-564 未识别 Provider/段全不匹配）。")]
     internal static string? Generate(GeneratorAttributeSyntaxContext ctx, CancellationToken ct)
     {
         if (ctx.TargetSymbol is not IMethodSymbol method)
@@ -185,6 +190,10 @@ internal static class SqlFileEmitter
     private readonly record struct SqlSectionResolution(
         string Resolved, bool HasDirectives, string? UnrecognizedProvider);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "Provider 段解析：@pg/@mysql/@sqlite/@all 指令按 Provider 白名单匹配；"
+            + "未识别 Provider 与「段全不匹配」两类诊断需独立分支。拆分会破坏单遍扫描语义。")]
     private static SqlSectionResolution ResolveProviderSections(string sql, string? targetProvider)
     {
         // 将 provider 名标准化为短前缀；不在白名单的显式 Provider 视为拼写错误（ITM-564）
