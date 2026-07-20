@@ -123,22 +123,4 @@ public sealed partial class DataSession<TProvider>
         _operationState.EnsureAvailable();
         return _conn;
     }
-
-    /// <summary>创建独立的只读会话。调用方必须释放返回的会话；新代码请使用 <c>From&lt;T&gt;().ForRead()</c>。</summary>
-    [Obsolete("返回值具有独立连接所有权。请使用 From<T>().ForRead() 让查询执行管线管理连接。3.0 移除。")]
-    public async ValueTask<DataSession<TProvider>> ForRead(CancellationToken ct = default)
-    {
-        // 保留 $ENV: 间接引用原样传递，不物化为明文——CreateAsync 内部按需解析。
-        // 物化会让刻意用环境变量避免明文驻留的配置在新 DbOptions 实例中出现明文密码。
-        string? readConnectionString = _options.ReadConnectionString ?? _options.ConnectionString;
-        DbOptions readOptions = _options with { ConnectionString = readConnectionString, ReadConnectionString = null };
-        return await CreateAsync(readOptions, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>返回当前主库会话。新代码请使用 <c>From&lt;T&gt;().ForWrite()</c> 明确查询路由。</summary>
-    [Obsolete("DataSession 始终持有主连接。请使用 From<T>().ForWrite() 明确查询路由。3.0 移除。")]
-    public DataSession<TProvider> ForWrite()
-    {
-        return this;
-    }
 }

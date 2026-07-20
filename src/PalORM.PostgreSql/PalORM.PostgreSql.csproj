@@ -4,7 +4,7 @@
     <AssemblyName>PalORM.PostgreSql</AssemblyName>
     <Description>PalORM PostgreSQL Provider — Npgsql 适配 + JSONB/LISTEN/NOTIFY 扩展</Description>
     <PackageTags>ORM;PostgreSQL;Npgsql;AOT;micro-ORM</PackageTags>
-    <Version>2.1.0</Version>
+    <Version>3.0.0</Version>
     <!-- CA2100: SQL 构建使用编译时确定的 channel 名和 payload，非用户原始输入 -->
     <NoWarn>$(NoWarn);CA2100;CA2007;CA1031;CA2025;NU5104</NoWarn>
   </PropertyGroup>
