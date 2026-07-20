@@ -46,11 +46,8 @@ public sealed class StoredProcBuilder
         {
             if (segment.Length == 0 || (!char.IsLetter(segment[0]) && segment[0] != '_'))
                 throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
-            foreach (char c in segment)
-            {
-                if (!char.IsLetterOrDigit(c) && c != '_')
-                    throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
-            }
+            if (segment.Any(static c => !char.IsLetterOrDigit(c) && c != '_'))
+                throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
         }
         return name;
     }
