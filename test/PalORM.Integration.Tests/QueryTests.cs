@@ -138,17 +138,7 @@ public sealed class QueryTests
 
     [Test] public async Task RowFactory_VerifySnapshot() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var ins=await db.InsertAsync(new Order{Status="RF",Total=99m,CreatedAt=1234567890}); var r=await db.GetAsync<Order>(ins.Id); await Assert.That(r!.Status).IsEqualTo("RF"); await Assert.That(r.Total).IsEqualTo(99m); await Assert.That(r.CreatedAt).IsEqualTo(1234567890); }
 
-    [Test] public async Task IQueryInterceptor_FiresCallbacks() { var interceptor=new TestInterceptor(); var opts=new DbOptions{ConnectionString="Data Source=:memory:"}; opts=opts with{Interceptors=[interceptor]}; await using var db=await DataSession<SqliteProvider>.CreateAsync(opts); await db.MigrateAsync(); await db.InsertAsync(new Order{Status="I",Total=1m,CreatedAt=0}); await db.From<Order>().ToListAsync(); await Assert.That(interceptor.BeforeCount).IsGreaterThan(0); await Assert.That(interceptor.AfterCount).IsGreaterThan(0); }
-
-    private sealed class TestInterceptor : IQueryInterceptor
-    {
-        public int BeforeCount;
-        public int AfterCount;
-        public void OnBefore(QueryContext context) => BeforeCount++;
-        public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) => AfterCount++;
-        // S108: 测试 interceptor 不消费错误路径——表达式主体显式 discard 参数。
-        public void OnError(QueryContext context, Exception exception) => _ = (context, exception);
-    }
+    [Test] public async Task IQueryInterceptor_FiresCallbacks() { var interceptor=new CountingTestInterceptor(); var opts=new DbOptions{ConnectionString="Data Source=:memory:"}; opts=opts with{Interceptors=[interceptor]}; await using var db=await DataSession<SqliteProvider>.CreateAsync(opts); await db.MigrateAsync(); await db.InsertAsync(new Order{Status="I",Total=1m,CreatedAt=0}); await db.From<Order>().ToListAsync(); await Assert.That(interceptor.BeforeCount).IsGreaterThan(0); await Assert.That(interceptor.AfterCount).IsGreaterThan(0); }
 
     [Test] public async Task ForUpdate_AppearsAfterLimit() { await using var db = await TestDb.SqliteAsync(); var sql=db.From<Order>().Take(1).ForUpdate().ToSql(); await Assert.That(sql.IndexOf("LIMIT",StringComparison.Ordinal)).IsLessThan(sql.IndexOf("FOR UPDATE",StringComparison.Ordinal)); }
 
