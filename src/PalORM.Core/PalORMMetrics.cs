@@ -20,31 +20,6 @@ public static class PalORMMetrics
     private static readonly Histogram<double> _queryDuration = _meter.CreateHistogram<double>(
         "palorm.query.duration", "s", "Database command duration in seconds");
 
-    /// <summary>兼容旧版手动计数入口。参数不会写入指标标签。</summary>
-    [Obsolete("请使用 QueryBuilder.WithMetrics() 由执行管线自动记录结果和耗时。3.0 移除。")]
-    public static void LogQuery(string entityType)
-    {
-        // ITM-531: 不再 RecordCount——兼容期的手动调用无真实执行结果，计入 outcome=success 会
-        // 污染 palorm.query.executions 指标（伪造成功样本）。保留 Obsolete 引导迁移，方法体 no-op。
-        ArgumentException.ThrowIfNullOrWhiteSpace(entityType);
-    }
-
-    /// <summary>兼容旧版手动开始入口。参数不会写入指标标签。</summary>
-    [Obsolete("请使用 QueryBuilder.WithMetrics() 由执行管线自动记录结果和耗时。3.0 移除。")]
-    public static void RecordQueryStart(string queryName)
-    {
-        // ITM-531: 同上 no-op，避免污染指标。
-        ArgumentException.ThrowIfNullOrWhiteSpace(queryName);
-    }
-
-    /// <summary>兼容旧版手动耗时入口。参数不会写入指标标签。</summary>
-    [Obsolete("请使用 QueryBuilder.WithMetrics() 由执行管线自动记录结果和耗时。3.0 移除。")]
-    public static void RecordQueryDuration(string queryName, TimeSpan duration)
-    {
-        // ITM-531: 同上 no-op，避免污染指标。
-        ArgumentException.ThrowIfNullOrWhiteSpace(queryName);
-    }
-
     internal static Activity? StartActivity(string operation, string provider)
     {
         Activity? activity = ActivitySource.StartActivity("PalORM.Query", ActivityKind.Client);

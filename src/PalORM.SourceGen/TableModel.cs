@@ -5,23 +5,17 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace PalORM.SourceGen;
 
 /// <summary>源生成器数据模型——从 [Table] 注解提取的编译时元数据。</summary>
-// ITM-539：IsView / Schema / Database 目前恒为 false/null（FromContext 未填充，无 DDL 消费），
-// 属预留字段。保留而非删除——它们是 record 位置参数，测试（DialectSymmetryTests）显式构造引用，
-// 删除会破坏构造签名与 EquatableArray 增量缓存键；待 Schema 限定表功能落地后再填充。
 internal sealed record TableModel(
     string Namespace,
     string ClassName,
     string EntityTypeName,
     string GeneratedTypeSuffix,
     string TableName,
-    bool IsView,
     bool IsSoftDelete,
     bool IsTenantAware,
     EquatableArray<ColumnModel> Columns,
     EquatableArray<IndexModel> Indexes,
-    EquatableArray<ForeignKeyModel> ForeignKeys,
-    string? Schema,
-    string? Database)
+    EquatableArray<ForeignKeyModel> ForeignKeys)
 {
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -173,11 +167,10 @@ internal sealed record TableModel(
             typeSymbol.Name,
             entityTypeName,
             PalORMGenerator.CreateGeneratedTypeSuffix(entityTypeName),
-            tableName, false, isSoftDelete, isTenantAware,
+            tableName, isSoftDelete, isTenantAware,
             new EquatableArray<ColumnModel>(columns.ToArray()),
             new EquatableArray<IndexModel>(indexes.ToArray()),
-            new EquatableArray<ForeignKeyModel>(foreignKeys.ToArray()),
-            null, null);
+            new EquatableArray<ForeignKeyModel>(foreignKeys.ToArray()));
     }
 
     /// <summary>收集实体自身及基类链上的可映射属性（ITM-502：GetMembers 不含继承成员，

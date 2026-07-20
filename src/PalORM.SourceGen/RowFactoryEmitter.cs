@@ -93,7 +93,6 @@ internal static class RowFactoryEmitter
             string providerRead = GetRawReadExpression(
                 col.ProviderClrTypeName,
                 ordinal,
-                generatedTypeSuffix,
                 col.ColumnName);
             return $"((global::PalORM.IValueConverter<{col.ClrTypeName}, {col.ProviderClrTypeName}>)new {col.ConverterTypeName}()).FromProvider({providerRead})";
         }
@@ -105,14 +104,12 @@ internal static class RowFactoryEmitter
         return GetRawReadExpression(
             col.ProviderClrTypeName,
             ordinal,
-            generatedTypeSuffix,
             col.ColumnName);
     }
 
     private static string GetRawReadExpression(
         string clrTypeName,
         int ordinal,
-        string generatedTypeSuffix,
         string columnName)
     {
         string tn = clrTypeName;
@@ -131,7 +128,7 @@ internal static class RowFactoryEmitter
             "System.Guid" => $"r.GetGuid({ordinal})",
             "System.DateTime" => $"r.GetDateTime({ordinal})",
             "System.DateTimeOffset"
-                => $"TypeMapper_{generatedTypeSuffix}.ReadDateTimeOffset(r, {ordinal})",
+                => $"r.GetFieldValue<global::System.DateTimeOffset>({ordinal})",
             "System.DateOnly" => $"global::System.DateOnly.FromDateTime(r.GetDateTime({ordinal}))",
             // DbDataReader 无 GetTimeSpan 实例方法（仅部分驱动子类提供），必须走泛型 GetFieldValue
             "System.TimeOnly" => $"global::System.TimeOnly.FromTimeSpan(r.GetFieldValue<global::System.TimeSpan>({ordinal}))",

@@ -126,14 +126,10 @@ public sealed record DbOptions
         };
     }
 
-    /// <summary>日志工厂。设置后 DataSession 经其创建 ILogger（ITM-323：此前公共入口
-    /// 拿不到 logger，MinimumLogLevel 是死配置）。未设置时使用 NullLogger。</summary>
+    /// <summary>日志工厂。设置后 DataSession 经其创建 ILogger。
+    /// 级别过滤请在 LoggerFactory 配置（AddFilter / appsettings Logging 节），
+    /// 那里的过滤对全部日志出口生效。</summary>
     public Microsoft.Extensions.Logging.ILoggerFactory? LoggerFactory { get; init; }
-
-    /// <summary>会话日志级别下限。零消费点的死配置（ITM-423）——级别过滤请在
-    /// LoggerFactory 配置（AddFilter/appsettings Logging 节），那里的过滤对全部日志出口生效。</summary>
-    [Obsolete("此配置从未被消费。请在 LoggerFactory 上配置级别过滤（AddFilter）。3.0 移除。")]
-    public LogLevel MinimumLogLevel { get; init; } = LogLevel.Warning;
 
     /// <summary>解析主库连接串中的环境变量引用。</summary>
     public string ResolveConnectionString() => ResolveConnectionString(ConnectionString);
@@ -174,26 +170,4 @@ public enum NamingConvention
 
     /// <summary>转为全小写（UserName → username）。</summary>
     LowerCase
-}
-
-/// <summary>日志级别简化版。</summary>
-public enum LogLevel
-{
-    /// <summary>最详细级别——逐步执行细节。</summary>
-    Trace = 0,
-
-    /// <summary>调试信息——开发期诊断。</summary>
-    Debug = 1,
-
-    /// <summary>常规信息——正常流程事件。</summary>
-    Information = 2,
-
-    /// <summary>警告——异常但不中断执行的情况。</summary>
-    Warning = 3,
-
-    /// <summary>错误——当前操作失败。</summary>
-    Error = 4,
-
-    /// <summary>严重错误——进程级不可恢复故障。</summary>
-    Critical = 5
 }

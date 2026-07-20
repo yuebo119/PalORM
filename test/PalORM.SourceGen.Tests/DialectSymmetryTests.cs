@@ -75,7 +75,6 @@ internal sealed class DialectSymmetryTests
         EntityTypeName: "global::Symmetry.SymmetryEntity",
         GeneratedTypeSuffix: "Symmetry_SymmetryEntity",
         TableName: "symmetry_items",
-        IsView: false,
         IsSoftDelete: true,
         IsTenantAware: true,
         Columns: new EquatableArray<ColumnModel>(new ColumnModel[]
@@ -96,9 +95,7 @@ internal sealed class DialectSymmetryTests
         {
             new("ux_symmetry_sku", new EquatableArray<string>(new[] { "sku" }), Unique: true),
         }),
-        ForeignKeys: new EquatableArray<ForeignKeyModel>(System.Array.Empty<ForeignKeyModel>()),
-        Schema: null,
-        Database: null);
+        ForeignKeys: new EquatableArray<ForeignKeyModel>(System.Array.Empty<ForeignKeyModel>()));
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:MethodsShouldNotHaveTooManyParameters",
