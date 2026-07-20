@@ -37,6 +37,7 @@ nupkgs/
 .github/*
 !.github/workflows/
 !.github/workflows/**
+!.github/PULL_REQUEST_TEMPLATE.md
 .trellis/
 .zcode/
 .serena/
