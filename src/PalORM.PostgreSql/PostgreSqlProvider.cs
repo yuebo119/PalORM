@@ -12,9 +12,6 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <summary>SQL 方言标识:<see cref="SqlDialect.PostgreSql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.PostgreSql;
 
-    /// <summary>创建 NpgsqlConnection,连接池配置沿用连接串默认值。</summary>
-    public static DbConnection CreateConnection(string connectionString) => new NpgsqlConnection(connectionString);
-
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 Npgsql 连接串:
     /// MaxPoolSize / ConnectionIdleLifetime(秒)/ ConnectionLifetime(分钟换算为秒,checked 防溢出)。</summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
@@ -38,7 +35,8 @@ public sealed class PostgreSqlProvider : IDbProvider
         return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
     }
 
-    /// <summary>schema 与表名分别引用后以点连接;schema 为空时省略,落到 search_path 解析。</summary>
+    /// <summary>schema 与表名分别引用后以点连接;schema 为空时省略,落到 search_path 解析。
+    /// 覆盖接口默认实现以支持 PostgreSQL 的 schema 语义。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)
@@ -63,9 +61,6 @@ public sealed class PostgreSqlProvider : IDbProvider
         command.Parameters.Add(CreateParameter("@table_schema", schema));
         return 0;
     }
-
-    /// <summary>参数占位符,形如 @p0(Npgsql 支持命名参数)。</summary>
-    public static string GetParameterPlaceholder(int index) => $"@p{index}";
 
     /// <summary>创建 NpgsqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。</summary>
     public static DbParameter CreateParameter(string name, object? value)

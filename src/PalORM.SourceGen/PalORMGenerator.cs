@@ -30,14 +30,6 @@ public sealed class PalORMGenerator : IIncrementalGenerator
             spc.AddSource(CreateStableHintName("RowFactory", model.EntityTypeName), RowFactoryEmitter.Generate(model));
         });
 
-        // TypeMapper (Phase 1)
-        context.RegisterSourceOutput(tableModels, static (spc, model) =>
-        {
-            string source = TypeMapperEmitter.Generate(model);
-            if (!string.IsNullOrEmpty(source))
-                spc.AddSource(CreateStableHintName("TypeMapper", model.EntityTypeName), source);
-        });
-
         // CommandFactory (Phase 2)
         context.RegisterSourceOutput(tableModels, static (spc, model) =>
         {
