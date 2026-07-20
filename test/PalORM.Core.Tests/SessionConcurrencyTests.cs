@@ -950,6 +950,9 @@ internal sealed class ConcurrencyTransaction(
         return Task.CompletedTask;
     }
     // S4144: 测试 mock 故意让 Rollback 与 Commit 同体——验证 _completed 标记在两种路径下都被设置。
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Code Smell",
+        "S4144:MethodsShouldNotHaveIdenticalImplementations",
+        Justification = "测试 mock 故意让 RollbackAsync 与 CommitAsync 同体——验证 _completed 标记在 commit/rollback 两种路径下都被设置。")]
     public override Task RollbackAsync(CancellationToken cancellationToken = default)
     {
         _completed = true;
