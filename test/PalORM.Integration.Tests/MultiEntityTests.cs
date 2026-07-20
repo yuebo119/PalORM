@@ -295,22 +295,92 @@ public sealed class MultiEntityTests
         await Assert.That(result.Count).IsEqualTo(1);
     }
 
-    [Test] public async Task WhereIn_EmptyList_ReturnsZero() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var r=await db.From<Product>().WhereIn(p=>p.Id,[]).ToListAsync(); await Assert.That(r.Count).IsEqualTo(0); }
+    [Test]
+    public async Task WhereIn_EmptyList_ReturnsZero()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var r = await db.From<Product>().WhereIn(p => p.Id, []).ToListAsync();
+        await Assert.That(r.Count).IsEqualTo(0);
+    }
 
-    [Test] public async Task LeftJoin_ReturnsAllLeftRows() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var p=await db.InsertAsync(new Product{Name="L",Price=1m,Stock=0}); var r=await db.From<Product>().LeftJoin<OrderItem>($"products.id = order_items.product_id").ToListAsync(); await Assert.That(r.Count).IsGreaterThanOrEqualTo(1); }
+    [Test]
+    public async Task LeftJoin_ReturnsAllLeftRows()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var p = await db.InsertAsync(new Product { Name = "L", Price = 1m, Stock = 0 });
+        var r = await db.From<Product>().LeftJoin<OrderItem>($"products.id = order_items.product_id").ToListAsync();
+        await Assert.That(r.Count).IsGreaterThanOrEqualTo(1);
+    }
 
-    [Test] public async Task GridReader_SingleResult_Works() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="G1",Price=1m,Stock=0}); await using var gr=await db.From<Product>().QueryMultipleAsync($"SELECT * FROM products LIMIT 1"); var products=await gr.ReadAsync<Product>(); await Assert.That(products.Count).IsEqualTo(1); }
+    [Test]
+    public async Task GridReader_SingleResult_Works()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        await db.InsertAsync(new Product { Name = "G1", Price = 1m, Stock = 0 });
+        await using var gr = await db.From<Product>().QueryMultipleAsync($"SELECT * FROM products LIMIT 1");
+        var products = await gr.ReadAsync<Product>();
+        await Assert.That(products.Count).IsEqualTo(1);
+    }
 
-    [Test] public async Task Include_GeneratesJoin() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var p=await db.InsertAsync(new Product{Name="Inc",Price=1m,Stock=0}); var oi=await db.InsertAsync(new OrderItem{OrderId=1,ProductId=p.Id,Quantity=1}); var dry=db.From<OrderItem>().Include<Product>(oi=>oi.ProductId,p=>p.Id).AsDryRun(); await Assert.That(dry.Sql).Contains("JOIN"); }
+    [Test]
+    public async Task Include_GeneratesJoin()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var p = await db.InsertAsync(new Product { Name = "Inc", Price = 1m, Stock = 0 });
+        var oi = await db.InsertAsync(new OrderItem { OrderId = 1, ProductId = p.Id, Quantity = 1 });
+        var dry = db.From<OrderItem>().Include<Product>(oi => oi.ProductId, p => p.Id).AsDryRun();
+        await Assert.That(dry.Sql).Contains("JOIN");
+    }
 
-    [Test] public async Task BulkUpdate_ModifiesMultipleRows() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var p1=await db.InsertAsync(new Product{Name="U1",Price=1m,Stock=10}); var p2=await db.InsertAsync(new Product{Name="U2",Price=2m,Stock=20}); p1.Price=99m; p2.Price=99m; long n=await db.BulkUpdateAsync([p1,p2]); await Assert.That(n).IsEqualTo(2); }
+    [Test]
+    public async Task BulkUpdate_ModifiesMultipleRows()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var p1 = await db.InsertAsync(new Product { Name = "U1", Price = 1m, Stock = 10 });
+        var p2 = await db.InsertAsync(new Product { Name = "U2", Price = 2m, Stock = 20 });
+        p1.Price = 99m; p2.Price = 99m;
+        long n = await db.BulkUpdateAsync([p1, p2]);
+        await Assert.That(n).IsEqualTo(2);
+    }
 
-    [Test] public async Task BulkDelete_RemovesMultipleRows() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var p1=await db.InsertAsync(new Product{Name="D1",Price=1m,Stock=0}); var p2=await db.InsertAsync(new Product{Name="D2",Price=2m,Stock=0}); long n=await db.BulkDeleteAsync<Product>([p1.Id,p2.Id]); await Assert.That(n).IsEqualTo(2); }
+    [Test]
+    public async Task BulkDelete_RemovesMultipleRows()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var p1 = await db.InsertAsync(new Product { Name = "D1", Price = 1m, Stock = 0 });
+        var p2 = await db.InsertAsync(new Product { Name = "D2", Price = 2m, Stock = 0 });
+        long n = await db.BulkDeleteAsync<Product>([p1.Id, p2.Id]);
+        await Assert.That(n).IsEqualTo(2);
+    }
 
-    [Test] public async Task SoftDelete_PhysicalDelete_RemovesRow() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var p=await db.InsertAsync(new Product{Name="PD",Price=1m,Stock=0}); await db.DeleteAsync<Product>(p.Id); var gone=await db.GetAsync<Product>(p.Id); await Assert.That(gone).IsNull(); }
+    [Test]
+    public async Task SoftDelete_PhysicalDelete_RemovesRow()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var p = await db.InsertAsync(new Product { Name = "PD", Price = 1m, Stock = 0 });
+        await db.DeleteAsync<Product>(p.Id);
+        var gone = await db.GetAsync<Product>(p.Id);
+        await Assert.That(gone).IsNull();
+    }
 
     // ─── ConcurrencyCheck ────────────────────────────────
-    [Test] public async Task ConcurrencyCheck_UpdateSucceeds() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); var p=await db.InsertAsync(new Product{Name="CC",Price=1m,Stock=0}); p.Price=99m; int rows=await db.UpdateAsync(p); await Assert.That(rows).IsEqualTo(1); }
+    [Test]
+    public async Task ConcurrencyCheck_UpdateSucceeds()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var p = await db.InsertAsync(new Product { Name = "CC", Price = 1m, Stock = 0 });
+        p.Price = 99m;
+        int rows = await db.UpdateAsync(p);
+        await Assert.That(rows).IsEqualTo(1);
+    }
 
     // ─── ValidateSchema ──────────────────────────────────
 

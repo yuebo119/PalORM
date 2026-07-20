@@ -6,11 +6,9 @@ using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace PalORM.SourceGen;
 
-/// <summary>PalORM 编译时验证——V1-V6 诊断规则。</summary>
-/// <remarks><b>占位描述符</b>（ITM-581/600）：PALORM006/007 已注册但无 RegisterSymbolAction
-/// 触发——006 由 <c>SqlFileEmitter</c> 的 <c>[Obsolete(error:true)]</c> 机制实际承担，
-/// 007 无 schema 对照数据源。用户在 <c>.editorconfig</c> 配置这两项 severity 无效
-/// （诊断永远不报告）；保留占位防编号复用歧义，3.0 与其它死成员一并裁决。</remarks>
+/// <summary>PalORM 编译时验证——PALORM001-005, 008-022 诊断规则。
+/// PALORM006/007 已删除——006 由 SqlFileEmitter 的 Obsolete-error 机制承担，
+/// 007 无 schema 对照数据源。编号不复用，避免历史引用混淆。</summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 {
@@ -39,17 +37,6 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     public static readonly DiagnosticDescriptor NPlusOneDetected = new(
         "PALORM005", "Potential N+1 query pattern detected",
         "From<T>() called inside a loop may cause N+1 queries. Consider using JOIN or WhereIn.", "PalORM", DiagnosticSeverity.Warning, true);
-
-    // ITM-581: PALORM006/007 为零报告点的占位描述符——006 由 SqlFileEmitter 的
-    // Obsolete-error 机制实际承担，007 无 schema 对照数据源。保留占位防编号复用歧义；
-    // 3.0 与其它死成员一并裁决（AnalyzerDiagnosticsTests 已固化现状）。
-    public static readonly DiagnosticDescriptor SqlFileNotFound = new(
-        "PALORM006", "Referenced SQL file does not exist",
-        "[SqlFile] references '{0}' but the file was not found", "PalORM", DiagnosticSeverity.Error, true);
-
-    public static readonly DiagnosticDescriptor SchemaMismatch = new(
-        "PALORM007", "Column type mismatch between entity and database",
-        "Column '{0}' type mismatch between entity and database schema", "PalORM", DiagnosticSeverity.Warning, true);
 
     public static readonly DiagnosticDescriptor MissingOwnedJsonContext = new(
         "PALORM008", "Object OwnedJson requires a source-generated JSON context",
@@ -129,7 +116,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
-         NPlusOneDetected, SqlFileNotFound, SchemaMismatch, MissingOwnedJsonContext,
+         NPlusOneDetected, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
          UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl,
