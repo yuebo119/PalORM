@@ -42,4 +42,9 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" Version="1.1.2" />
   </ItemGroup>
   -->
+
+  <!-- 质量分析器（v3.0：CI 守护层——让 SonarLint IDE 报告与 CI 编译错误对齐） -->
+  <ItemGroup>
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.29.0.143774" />
+  </ItemGroup>
 </Project>

@@ -48,11 +48,54 @@ dotnet_diagnostic.IDE0058.severity = silent     # 未使用的表达式值
 # 文件范围命名空间 (C# 10+)
 csharp_style_namespace_declarations = file_scoped:warning
 
+# ─── SonarAnalyzer 规则分层配置（v3.0 引入）───────────────────────────────────
+# 目标：让 IDE SonarLint 报告与 CI 编译错误对齐，使大规模修复成为历史。
+# 分阶段启用：v2.1 启用 P0；v2.2 启用 P1；v2.3 启用 P2。
+
+# P0 安全/正确性 → 立即阻断（error）
+dotnet_diagnostic.S2068.severity = error   # 硬编码凭据
+dotnet_diagnostic.S6966.severity = error   # 缺失 await（ADO.NET 异步 API）
+dotnet_diagnostic.S5034.severity = error   # ValueTask 双消费
+dotnet_diagnostic.S108.severity = error    # 空块
+dotnet_diagnostic.S1186.severity = error   # 空方法
+dotnet_diagnostic.S4144.severity = error   # 方法同体（Commit/Rollback）
+
+# 项目级豁免（设计本意，非违规）
+dotnet_diagnostic.S101.severity = none     # PalORM 是项目品牌名，不改 PascalCase
+dotnet_diagnostic.S1133.severity = none    # Obsolete 已附移除版本注释（3.0）
+dotnet_diagnostic.S2077.severity = none    # FormattableString + 源生成器自动参数化，非字符串拼接
+dotnet_diagnostic.S3236.severity = none    # CallerArgumentExpression 用法是项目诊断设计
+dotnet_diagnostic.S6667.severity = none    # LoggerMessage 源生成器已用，模板参数符合规范
+
+# P1 设计/可读性 → 警告（warning，不阻断但有信号）
+# 注：本批次已完成系统性拆分，残留项加 SuppressMessage。
+dotnet_diagnostic.S3776.severity = warning  # 认知复杂度
+dotnet_diagnostic.S107.severity = warning   # 参数过多
+dotnet_diagnostic.S927.severity = warning   # 参数名匹配接口
+dotnet_diagnostic.S2681.severity = warning  # 单行 if/foreach
+dotnet_diagnostic.S125.severity = warning   # 注释代码
+dotnet_diagnostic.S1066.severity = warning  # 合并 if
+dotnet_diagnostic.S1994.severity = warning  # for 循环 stop 变量
+dotnet_diagnostic.S2189.severity = warning  # incrementer 不被测试
+
+# P2 风格 → 建议（suggestion，IDE 提示但不显著）
+dotnet_diagnostic.IDE0007.severity = suggestion  # var 替代
+dotnet_diagnostic.IDE0022.severity = suggestion  # 表达式主体
+dotnet_diagnostic.IDE0005.severity = suggestion  # unused using
+dotnet_diagnostic.IDE0060.severity = suggestion  # 未使用参数
+dotnet_diagnostic.IDE1006.severity = suggestion  # 命名前缀 _
+
+# ─────────────────────────────────────────────────────────────────────
+
 [test/**/*.cs]
 # 测试名使用 Method_Scenario_Expectation，夹具保留紧凑布局；不影响生产代码。
 dotnet_diagnostic.CA1707.severity = none
 dotnet_diagnostic.CA1515.severity = none
 dotnet_diagnostic.IDE0055.severity = none
+# 测试夹具允许：空类（占位实体）、未用局部变量（test 表达式）、Task.Run 无 timeout（测试主体有超时控制）
+dotnet_diagnostic.S2094.severity = none
+dotnet_diagnostic.S1481.severity = none
+dotnet_diagnostic.S6444.severity = none
 
 [bench/**/*.cs]
 # Benchmark 名称包含场景分隔符，基准夹具保留紧凑布局。

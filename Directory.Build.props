@@ -56,4 +56,14 @@
     <NoWarn>$(NoWarn);CA2007;CA1724;CA1822;IDE1006;IDE0060;CS1591</NoWarn>
     <Optimize>true</Optimize>
   </PropertyGroup>
+  <!-- 质量分析器（v3.0 引入）：
+       SonarAnalyzer.CSharp 让 IDE SonarLint 报告与 CI 编译错误对齐。
+       排除 SourceGen 项目——它运行在 netstandard2.0 + Roslyn 分析器上下文，SonarAnalyzer 不兼容。
+       规则严重性在 .editorconfig 分层配置（P0 安全/正确性 → error，P1 设计 → warning，P2 风格 → suggestion）。-->
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'PalORM.SourceGen'">
+    <PackageReference Include="SonarAnalyzer.CSharp">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
 </Project>

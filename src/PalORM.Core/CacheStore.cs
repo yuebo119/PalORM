@@ -78,11 +78,9 @@ public sealed class BoundedQueryCache : IQueryCache
 
     private void EvictExpired()
     {
-        foreach (var pair in _cache)
-        {
-            if (pair.Value.IsExpired())
-                _cache.TryRemove(pair);
-        }
+        // 物化到 List 后再 TryRemove——避免迭代中修改 ConcurrentDictionary 引发枚举器失效。
+        foreach (var pair in _cache.Where(static p => p.Value.IsExpired()).ToList())
+            _cache.TryRemove(pair);
     }
 
     private sealed class CacheEntry(object value, TimeSpan ttl)
