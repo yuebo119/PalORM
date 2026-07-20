@@ -560,11 +560,6 @@ public sealed class MultiEntityTests
         var product = await db.InsertAsync(new Product { Name = "nested", Price = 1m, Stock = 1 });
         await db.InsertAsync(new OrderItem { OrderId = 1, ProductId = product.Id, Quantity = 1 });
 
-#pragma warning disable CS0618 // 验证弃用重载仍以 NotSupportedException 拒绝不完整 JOIN 键。
-        await Assert.That(() => db.From<OrderItem>().ThenInclude<Product>(item => item.Id))
-            .Throws<NotSupportedException>();
-#pragma warning restore CS0618
-
         var query = db.From<OrderItem>()
             .ThenInclude<Product, OrderItem>(item => item.Id, parent => parent.ProductId);
         var dryRun = query.AsDryRun();

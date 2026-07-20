@@ -280,14 +280,6 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
-    /// <summary>已废弃：单键无法表达 JOIN 两端，调用即抛 <see cref="NotSupportedException"/>。
-    /// 请使用 ThenInclude&lt;TGrandChild, TParent&gt;(grandChildKey, parentKey)。</summary>
-    [Obsolete("此重载无法表达 JOIN 两端。请使用 ThenInclude<TGrandChild, TParent>(grandChildKey, parentKey)。")]
-    public QueryBuilder<T> ThenInclude<TGrandChild>(Expression<Func<TGrandChild, object?>> fk)
-        where TGrandChild : class, new()
-        => throw new NotSupportedException(
-            "ThenInclude requires both join keys. Use ThenInclude<TGrandChild, TParent>(grandChildKey, parentKey).");
-
     /// <summary>在 <see cref="Include{TChild}"/> 基础上按两端键继续 INNER JOIN 孙实体 TGrandChild 的表。
     /// 两实体均需已注册；仅生成 JOIN 子句，不装配导航对象。</summary>
     public QueryBuilder<T> ThenInclude<TGrandChild, TParent>(
@@ -859,24 +851,10 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     private string GetQualifiedColumnName<TKey>(Expression<Func<T, TKey>> member)
-        => $"{_quoteIdentifier(_cteName ?? _tableName)}." +
-            $"{_quoteIdentifier(GetColumnName(member))}";
+        => MemberResolver.GetQualifiedColumnName(member, _cteName ?? _tableName, _quoteIdentifier);
 
     private static string GetColumnName<TEntity, TKey>(Expression<Func<TEntity, TKey>> member)
-    {
-        string propertyName = GetMemberName(member);
-        return PalORM_Runtime.PropertyToColumn.TryGetValue(typeof(TEntity), out var mapping)
-            && mapping.TryGetValue(propertyName, out string? columnName)
-            ? columnName
-            : propertyName;
-    }
-
-    private static string GetMemberName<TEntity, TKey>(Expression<Func<TEntity, TKey>> member)
-    {
-        if (member.Body is MemberExpression memberExpression) return memberExpression.Member.Name;
-        if (member.Body is UnaryExpression { Operand: MemberExpression unaryExpression }) return unaryExpression.Member.Name;
-        throw new InvalidOperationException($"Cannot resolve member name from {member.Body}");
-    }
+        => MemberResolver.GetColumnName(member);
 }
 
 /// <summary>Provider 能力聚合——把 dialect/factory/interceptors/paramFactory/quoteIdentifier/
