@@ -107,7 +107,7 @@ internal sealed class DialectSymmetryTests
         bool isRequired = false, bool isConcurrencyToken = false)
         => new(
             property, column, clrType, clrType, dbType, isPrimaryKey, isAutoIncrement,
-            isNullable, isRequired, null, null, null, null,
+            isNullable, isRequired,
             IgnoreOnInsert: false, IsConcurrencyToken: isConcurrencyToken, IsTimestamp: false,
             ComputedExpression: null, IsOwnedJson: false, OwnedJsonContextTypeName: null,
             ConverterTypeName: null);
