@@ -10,21 +10,88 @@
 
 PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运行时生产路径禁止反射和 IL/AOT 警告抑制。三 Provider（SQLite/PostgreSQL/MySQL）完整 CRUD、OwnedJson、并发、跨程序集与 NuGet consumer 原生运行均已验证——PG/MySQL 经本机 Docker（CI 同配置服务容器）实测，远端 CI 待 push 触发。
 
-> 2.0.0 收紧了 `PalORM_Runtime` 注册 API，属于 binary-breaking 变更；从 1.x 升级的已编译消费者必须重新编译。
+> v3.0.0 是 breaking release：移除了 ForRead/ForWrite/CrudMetadata 旧 ctor/ThenInclude 单参重载。
 
 ---
 
 ## 主要特性
 
+### 核心架构
+
 | 特性 | 说明 |
 |------|------|
 | **编译时安全** | `FormattableString` 参数化 — 编译时提取参数值，杜绝 SQL 注入 |
 | **原子元数据注册** | SourceGen 生成 `RegistryFragment`；运行时一次发布不可变快照，外部只读 |
-| **struct QueryBuilder** | 值类型 — `From<T>()` 返回 stack-allocated struct |
-| **真 AOT** | 零 IL 抑制 — 三 Provider 原生运行通过（SQLite 本机 + PG/MySQL 本机 Docker CI 同配置容器实测） |
-| **Provider 原生优化** | PG Binary COPY · MySQL/SQLite batched INSERT |
-| **UPSERT 单次往返** | `INSERT ON CONFLICT DO UPDATE` / `ON DUPLICATE KEY UPDATE` |
-| **最小依赖** | Core 零第三方 NuGet 依赖：BCL + ADO.NET + 共享框架日志抽象（`Microsoft.Extensions.Logging.Abstractions`）；可观测性基于 BCL `ActivitySource` / `Meter` |
+| **struct QueryBuilder** | 值类型 — `From<T>()` 返回 stack-allocated struct，copy-on-write 保证条件隔离 |
+| **真 Native AOT** | 零 IL 抑制 — 三 Provider 原生二进制运行通过（`IsAotCompatible` + `IsTrimmable` + `PublishAot`） |
+| **static abstract Provider** | C# 11 `IDbProvider` 接口编译时分发——零虚调用开销，JIT 特化 |
+| **最小依赖** | Core 零第三方 NuGet：BCL + ADO.NET + `Microsoft.Extensions.Logging.Abstractions`；可观测性基于 BCL `ActivitySource` / `Meter` |
+
+### 编译时诊断（21 条规则）
+
+| 特性 | 说明 |
+|------|------|
+| **PALORM001-005** | 实体级诊断：缺少主键 / 列名不匹配 / FK 引用不存在 / FK 缺 OnDelete / N+1 查询检测 |
+| **PALORM008-012** | OwnedJson / 表声明 / Schema 限定 / 并发令牌类型 |
+| **PALORM013-019** | Schema 列校验 / 软删 / 租户 / 值映射 / 注解不生效 / 索引声明 |
+| **PALORM020-022** | 索引重复 / 列名唯一性 / Key 声明合法性（AutoIncrement 类型/init-only/nullable） |
+
+### 查询能力
+
+| 特性 | 说明 |
+|------|------|
+| **链式 DSL** | Where / OrWhere / OrderBy / ThenBy / Take / Skip / Select / GroupBy / Having |
+| **JOIN** | InnerJoin / LeftJoin / RightJoin / Include / ThenInclude（多级导航） |
+| **IN 操作** | WhereIn / WhereNotIn（参数上限自动钳制） |
+| **CTE** | `With("cte", $"SELECT ...")` 公用表表达式 |
+| **窗口函数** | `UnsafeWindowOver("ROW_NUMBER()", "PARTITION BY ...")` |
+| **锁** | `ForUpdate()` / `ForShare()`（SELECT ... FOR UPDATE/SHARE） |
+| **缓存** | `WithCache("key", TTL)` — 有界 LRU 缓存 + 快照副本隔离 |
+| **预编译** | `AsPrepared()` — `DbCommand.PrepareAsync` 预编译参数化命令 |
+| **DryRun** | `AsDryRun()` — 生成 SQL + 参数预览不执行 |
+| **读写分离** | `ForRead()` 路由到只读副本连接（独立 ConnectionLease） |
+
+### 写入能力
+
+| 特性 | 说明 |
+|------|------|
+| **CRUD** | Insert / Update / Delete / Save（UPSERT）/ Get / GetAll |
+| **批量操作** | BulkInsert / BulkDelete / BulkUpdate / BulkMerge / SeedAsync |
+| **PG Binary COPY** | `NpgsqlBinaryImporter` 零往返批量写入 |
+| **多值 INSERT** | SQLite/MySQL 共享骨架（参数上限自动钳制：SQLite 999 / MySQL 65535） |
+| **UPSERT 单次往返** | PG/SQLite `ON CONFLICT DO UPDATE` / MySQL `ON DUPLICATE KEY UPDATE` |
+| **RETURNING** | PG/SQLite `INSERT ... RETURNING` 单次往返物化完整行 |
+
+### 弹性与可靠性
+
+| 特性 | 说明 |
+|------|------|
+| **重试** | 可配置次数 + 指数退避（100ms→200ms→400ms） |
+| **熔断器** | 连续失败≥阈值→快速失败→resetAfter 后半开探针验证（generation 防陈旧） |
+| **命令超时** | `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter` |
+| **事务编排** | `WithTransaction(async callback)` — 自动 Commit/Rollback + 异常保留语义 |
+| **保存点** | `SavepointAsync` / `RollbackToAsync` — 事务内部分回滚 |
+| **异常保留** | cleanup 失败挂 `Exception.Data` 不替换原始失败（审计可追溯） |
+
+### 横切关注点
+
+| 特性 | 说明 |
+|------|------|
+| **软删除** | `[SoftDelete]` + `deleted_at` 列——查询自动过滤，`IgnoreFilters()` 可显式包含 |
+| **多租户** | `[TenantAware]` + `tenant_id` 列——查询自动隔离，`WithTenant(id)` 切换 |
+| **乐观锁** | `[ConcurrencyCheck]` + `Version` 字段——Update 自动检查 + 递增版本号 |
+| **拦截器** | `IQueryInterceptor` — OnBefore/OnAfter/OnError 三阶段 + 优先级排序 |
+| **可观测性** | `WithTracing()` / `WithMetrics()` — BCL `ActivitySource` + `Meter`（零第三方） |
+| **编译时 SQL** | `[SqlFile("path.sql")]` — 编译时读取 .sql 文件嵌入为 `const string` |
+| **SQL 模板** | `[SqlTemplate("name")]` — 提取方法内的 `FormattableString` 为静态常量 |
+
+### PostgreSQL 专有
+
+| 特性 | 说明 |
+|------|------|
+| **NOTIFY/LISTEN** | 异步通知监听——自动重连 + 重试 LISTEN + 半开探针 + 订阅者异常隔离 |
+| **JSONB 查询** | `WhereJson("column", "jsonpath", value)` — JSONB 路径条件 |
+| **Binary COPY** | 零往返批量写入——`StartRowAsync` + `WriteAsync(value, NpgsqlDbType)` |
 
 ---
 
