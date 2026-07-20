@@ -4,7 +4,7 @@
     <AssemblyName>PalORM.Sqlite</AssemblyName>
     <Description>PalORM SQLite Provider — Microsoft.Data.Sqlite.Core + SQLite3MC 适配</Description>
     <PackageTags>ORM;SQLite;AOT;micro-ORM</PackageTags>
-    <Version>2.0.1</Version>
+    <Version>2.1.0</Version>
     <NoWarn>$(NoWarn);CA2100;CA2007;NU5104</NoWarn>
   </PropertyGroup>
 
