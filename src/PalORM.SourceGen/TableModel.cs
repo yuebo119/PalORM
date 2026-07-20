@@ -132,7 +132,6 @@ internal sealed record TableModel(
                 providerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 MapToDbType(providerType), isKey, isAutoIncrement,
                 prop.NullableAnnotation == NullableAnnotation.Annotated, isRequired,
-                null, null, null, null,
                 ignoreOnInsert, isConcurrencyToken, isTimestamp, computedExpression, isOwnedJson,
                 ownedJsonContextTypeName,
                 converterType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)));
@@ -226,7 +225,7 @@ internal sealed record TableModel(
 internal sealed record ColumnModel(
     string PropertyName, string ColumnName, string ClrTypeName, string ProviderClrTypeName,
     string DbTypeName, bool IsPrimaryKey, bool IsAutoIncrement, bool IsNullable,
-    bool IsRequired, int? Length, int? Precision, int? Scale, string? DefaultExpression,
+    bool IsRequired,
     bool IgnoreOnInsert, bool IsConcurrencyToken, bool IsTimestamp, string? ComputedExpression,
     bool IsOwnedJson, string? OwnedJsonContextTypeName, string? ConverterTypeName)
 {
@@ -249,31 +248,3 @@ internal sealed record ForeignKeyModel(
 /// 3.0 启用 FK DDL 前必须改为强约束（如代码生成器直接消费 Core enum 类型符号）。</summary>
 internal enum DeleteAction { NoAction = 0, Cascade = 1, SetNull = 2, Restrict = 3 }
 
-/// <summary>值相等数组——支持 foreach 和 record 的 Equals/GetHashCode。</summary>
-internal readonly struct EquatableArray<T> : IEquatable<EquatableArray<T>> where T : IEquatable<T>
-{
-    private readonly T[] _items;
-    public EquatableArray(T[] items) => _items = items;
-    public EquatableArray(System.Collections.Immutable.ImmutableArray<T> items) : this(items.AsSpan().ToArray()) { }
-    public ReadOnlySpan<T> AsSpan() => _items;
-    public T[] ToArray() => _items;
-    public bool Equals(EquatableArray<T> other) => AsSpan().SequenceEqual(other.AsSpan());
-    public override bool Equals(object? obj) => obj is EquatableArray<T> other && Equals(other);
-    public override int GetHashCode()
-    {
-        // ITM-544：default(EquatableArray<T>) 的 _items 为 null，直接 foreach 会 NRE——归一化空数组
-        int hash = 17;
-        foreach (var item in _items ?? Array.Empty<T>()) hash = hash * 31 + (item?.GetHashCode() ?? 0);
-        return hash;
-    }
-    // ITM-544：default 实例枚举同样归一化，避免 _items 为 null 时 MoveNext/Current 抛 NRE
-    public Enumerator GetEnumerator() => new(_items ?? Array.Empty<T>());
-    public ref struct Enumerator
-    {
-        private readonly T[] _items;
-        private int _index;
-        internal Enumerator(T[] items) { _items = items; _index = -1; }
-        public T Current => _items[_index];
-        public bool MoveNext() => ++_index < _items.Length;
-    }
-}

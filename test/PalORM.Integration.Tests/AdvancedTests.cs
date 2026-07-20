@@ -34,25 +34,10 @@ public sealed class AdvancedFeatureTests
     [Test] public async Task WithCache_ReturnsSnapshotCopies_CallerMutationDoesNotPolluteCache() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="S1",Price=1m,Stock=0}); var r1=await db.From<Product>().WithCache("snap1",TimeSpan.FromMinutes(1)).ToListAsync(); r1.Clear(); var r2=await db.From<Product>().WithCache("snap1",TimeSpan.FromMinutes(1)).ToListAsync(); r2.Add(new Product{Name="X",Price=9m,Stock=0}); var r3=await db.From<Product>().WithCache("snap1",TimeSpan.FromMinutes(1)).ToListAsync(); await Assert.That(r2.Count).IsEqualTo(2); await Assert.That(r3.Count).IsEqualTo(1); await Assert.That(ReferenceEquals(r2,r3)).IsFalse(); }
     [Test] public async Task Raw_LiteralInjection() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="R1",Price=1m,Stock=0}); var r=await db.From<Product>().Where($"name = {"R1"}").Raw("LIMIT 1").ToListAsync(); await Assert.That(r.Count).IsEqualTo(1); }
     [Test] public async Task AsPrepared_ExecutesAndReturnsSameRowsAsUnprepared() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="P1",Price=1m,Stock=0}); var prepared=await db.From<Product>().AsPrepared().Where($"name = {"P1"}").ToListAsync(); var plain=await db.From<Product>().Where($"name = {"P1"}").ToListAsync(); await Assert.That(prepared.Count).IsEqualTo(1); await Assert.That(prepared.Count).IsEqualTo(plain.Count); await Assert.That(prepared[0].Name).IsEqualTo("P1"); }
-    [Test] public async Task Interceptor_FiresCallbacks() { int b=0,a=0; var opt=new DbOptions{ConnectionString="Data Source=:memory:",Interceptors=[new TestInterceptor(()=>b++,()=>a++)]}; await using var db=await DataSession<SqliteProvider>.CreateAsync(opt); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="I1",Price=1m,Stock=0}); await db.From<Product>().ToListAsync(); await Assert.That(b).IsEqualTo(1); await Assert.That(a).IsEqualTo(1); }
+    [Test] public async Task Interceptor_FiresCallbacks() { int b=0,a=0; var opt=new DbOptions{ConnectionString="Data Source=:memory:",Interceptors=[new CallbackTestInterceptor(()=>b++,()=>a++)]}; await using var db=await DataSession<SqliteProvider>.CreateAsync(opt); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="I1",Price=1m,Stock=0}); await db.From<Product>().ToListAsync(); await Assert.That(b).IsEqualTo(1); await Assert.That(a).IsEqualTo(1); }
     [Test] public async Task AddInterceptor_OrdersDynamicInterceptorsByPriority() { var order=new List<int>(); await using var db=await TestDb.SqliteAsync(); await db.MigrateAsync(); db.AddInterceptor(new OrderedInterceptor(200,order)).AddInterceptor(new OrderedInterceptor(10,order)); await db.From<Product>().ToListAsync(); await Assert.That(order).IsEquivalentTo([10,200]); }
 
 
     [Test] public async Task CountAsync_ReturnsCount() { await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync(); await db.InsertAsync(new Product{Name="C1",Price=1m,Stock=0}); await db.InsertAsync(new Product{Name="C2",Price=2m,Stock=0}); long c=await db.CountAsync<Product>(); await Assert.That(c).IsEqualTo(2); }
     [Test] public async Task WindowOver_DryRun_GeneratesSQL() { await using var db = await TestDb.SqliteAsync(); var dry=db.From<Product>().UnsafeWindowOver("ROW_NUMBER()","PARTITION BY stock ORDER BY price DESC").AsDryRun(); await Assert.That(dry.Sql).Contains("ROW_NUMBER"); await Assert.That(dry.Sql).Contains("OVER"); }
-}
-
-internal sealed class TestInterceptor(Action onBefore, Action onAfter) : IQueryInterceptor
-{
-    public void OnBefore(QueryContext context) => onBefore();
-    public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) => onAfter();
-    public void OnError(QueryContext context, Exception exception) { /* S108: 测试 interceptor 不关心错误路径 */ }
-}
-
-internal sealed class OrderedInterceptor(int priority, List<int> order) : IQueryInterceptor
-{
-    public int Priority => priority;
-    public void OnBefore(QueryContext context) => order.Add(priority);
-    public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) { }
-    public void OnError(QueryContext context, Exception exception) { }
 }
