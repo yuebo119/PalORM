@@ -2,7 +2,7 @@
 <p align="center"><strong>面向严格 Native AOT 的 .NET 微 ORM</strong></p>
 <p align="center">
   <img src="https://img.shields.io/badge/.NET-11-512BD4?logo=dotnet">
-  <img src="https://img.shields.io/badge/tests-418%2F418-success">
+  <img src="https://img.shields.io/badge/tests-410%2F410-success">
   <img src="https://img.shields.io/badge/AOT-3%20providers%20verified-success">
   <img src="https://img.shields.io/badge/IL%20suppressions-0-success">
   <img src="https://img.shields.io/badge/license-AGPL%20v3-blue">
@@ -295,7 +295,7 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 测试项目使用 TUnit（Microsoft.Testing.Platform 模式）：**`dotnet test` 会静默零输出**（MTP 与经典 test 管道不桥接），必须用 `dotnet run`：
 
 ```bash
-dotnet run --project test/PalORM.Core.Tests            # 137 用例
+dotnet run --project test/PalORM.Core.Tests            # 156 用例
 dotnet run --project test/PalORM.SourceGen.Tests       # 生成器/分析器
 dotnet run --project test/PalORM.Integration.Tests -- \
   --treenode-filter "/*/*/*/*[Category!=ExternalDatabase]"   # 本地（无 MySQL/PG 服务）
