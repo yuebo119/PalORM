@@ -370,3 +370,104 @@ P2 风格（建议改）：
 - ✅ 14 类 Sonar 触发模式 grep 全部清零
 - ✅ `git status` 工作树清洁
 
+---
+
+## AI 系统精炼缺陷登记（v5.0——架构精炼反思）
+
+> 以下 7 个缺陷来自架构精炼实践（D1-R4 共 6 次提交），区别于 v4.0 的修复阶段教训。
+
+### 精炼缺陷 1：Python 按行号切割文件不可靠
+**现象**：用 Python 按行号 `lines[120:562]` 切割 DataSession 时，注释行/方法边界对不齐导致 CS1002/CS1587
+**根因**：行号是硬编码的，但文件内容在之前的 Edit 操作后行号已漂移
+**正解**：
+1. 切割前**必须重新 Read 确认行号**
+2. 优先用**符号边界**（grep 方法签名行）而非固定行号
+3. 切割后立即构建验证——CS1002/CS1587/CS1591 是切割边界错误的信号
+
+### 精炼缺陷 2：C# static virtual 默认实现不能调同接口的 static abstract
+**现象**：`IDbProvider.QuoteQualifiedIdentifier` 默认实现调 `QuoteIdentifier` → CS8926
+**根因**：C# 11 static virtual interface 成员在默认实现中不能引用其他 static abstract 成员——编译器无法在接口上下文中解析类型参数分发
+**正解**：三 Provider 逐字相同的方法即使想上提也必须保留为各 Provider 独立实现，或改为接口外 helper
+**案例**：M2 撤销（commit `fa92996`）
+
+### 精炼缺陷 3：partial class 切割后 using 丢失
+**现象**：DataSession.Schema.cs 缺 `using System.Diagnostics`（Stopwatch）和 `using Microsoft.Extensions.Logging`（LogWarning）
+**根因**：Python 切割时只复制了 header using，但不同职责的 partial 需要不同的 using 集
+**正解**：每个 partial 文件的 using 列表**按自身依赖独立确定**，不能盲目从原文件复制
+**检查清单**：切割后构建报 CS0246/CS0103 时，优先检查 using 而非逻辑
+
+### 精炼缺陷 4：partial class 切割后 XML 注释断裂
+**现象**：CS1591（公共方法缺 XML 注释）+ CS1587（XML 注释没有放在有效语言元素上）
+**根因**：方法注释 `/// <summary>` 在原文件中位于方法声明前一行，切割时注释和方法体分离
+**正解**：切割时把每个方法的 XML 注释**与方法声明一起搬运**；如果方法注释在上一个文件的末尾（属于下一个文件的首方法），需要在目标文件首方法前补注释
+
+### 精炼缺陷 5：残留方法声明（"幽灵签名"）
+**现象**：Core.cs 删除了 From<T> 方法体但残留 `public QueryBuilder<T> From<T>()` 签名 → CS1002
+**根因**：Python 按行号删除时，方法的签名行（class 声明后紧跟的方法）被保留，但方法体被移走
+**正解**：切割后 `grep -n "public.*(" Core.cs` 逐一核对每个方法签名是否仍有完整方法体
+
+### 精炼缺陷 6：同一方法被多个 partial 文件重复提取
+**现象**：SavepointAsync 同时出现在 Query.cs 和 Transactions.cs → CS0111 重复成员
+**根因**：Python 切割 Query.cs（行 708-953）和 Transactions.cs（行 780-810 + 954-1175）时，780-810 落在两个范围的重叠区
+**正解**：切割前**画行号范围图**确认无重叠；每个方法只属于一个 partial 文件
+
+### 精炼缺陷 7：stash pop 恢复无关改动
+**现象**：stash pop 把 ValueStringBuilder.cs 的 `ref struct → struct` 改动恢复，触发 CS8345
+**根因**：stash 存储时工作区有 IDE 自动格式化改动（using 重排序），pop 时全部恢复
+**正解**：用 `git diff HEAD -- <file>` 验证 HEAD 状态，不依赖 stash
+
+---
+
+## 架构精炼 SOP（标准操作流程）
+
+### 阶段 1：调研
+1. 用 Agent 并行调研每个模块（Core/SourceGen/Provider/测试）
+2. 输出文件清单 + 职责评估 + 评级（✅必要 / ⚠️可优化 / ❌冗余）
+3. 按 ROI 排序：D（删除死代码）> M（合并）> R（拆分重构）
+
+### 阶段 2：执行（按批次）
+1. **D 批次**（删除死代码）——最低风险，每项独立提交或合并提交
+2. **M 批次**（合并/上提）——低风险，验证快照基线
+3. **R 批次**（拆分重构）——中高风险，**每个 R 独立提交 + 独立测试**
+
+### 阶段 3：partial class 拆分专门流程
+```
+1. 读取完整源文件
+2. grep 所有方法签名，记录行号
+3. 画行号范围图，确认无重叠
+4. 用 Python 按行号切割到独立文件（每个文件带 header + using + namespace + class 声明）
+5. 从原文件删除已提取的行段
+6. 每个新文件的 using 列表按自身依赖独立确定
+7. 检查每个文件首方法是否缺 XML 注释（CS1591）
+8. 检查每个文件末尾是否有悬空 XML 注释（CS1587）
+9. 构建验证——CS1002/CS0111/CS1591/CS1587 是切割错误的信号
+10. 测试验证——确保 partial 拆分不影响运行时行为
+```
+
+### 阶段 4：验证
+```
+1. dotnet build -c Debug --no-incremental（全量重建）
+2. dotnet test 全部测试项目
+3. PALORM_UPDATE_SNAPSHOTS=1 dotnet run（如涉及源生成器）
+4. git diff --stat 确认改动范围合理
+5. grep 确认无残留引用
+```
+
+### 精炼决策矩阵
+
+| 类型 | 决策标准 | 执行策略 |
+|------|---------|---------|
+| 死代码 | `[Obsolete]` + 零消费点 | 直接删除 + 同步测试 |
+| 重复代码 | 逐字相同 ≥ 3 处 | 抽到共享 helper 或上提接口 |
+| God Object | 单文件 > 800 行 + 多职责 | 按职责边界拆 partial |
+| 过度抽象 | 唯一调用方是自身 | 内联或删除 |
+| 过细粒度 | 单文件 < 50 行 + 单方法 | 合并到语义最近的文件 |
+
+### 精炼终止条件
+- ✅ 无 `[Obsolete]` 公共 API（或已有明确移除计划）
+- ✅ 无恒 null/false 预留字段
+- ✅ 无逐字复制 ≥ 3 处的重复代码
+- ✅ 无单文件 > 800 行的 God Object（partial 拆分后）
+- ✅ 无零消费点的死代码
+- ✅ 全量构建 + 测试零回归
+
