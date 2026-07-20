@@ -71,30 +71,6 @@ public struct QueryBuilder<T> where T : class, new()
         _transaction = null;
     }
 
-    /// <summary>遗留 14 参构造——内部已迁移到 QueryBuilderContext。
-    /// 保留供测试/反射代码兼容；新代码请用 <see cref="QueryBuilder(QueryBuilderContext{T})"/>。</summary>
-    [Obsolete("Use QueryBuilder(QueryBuilderContext<T>). Kept for compat.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
-        "S107:MethodsShouldNotHaveTooManyParameters",
-        Justification = "遗留 ctor 保留向后兼容，参数多于 7 但不能改签名。新代码请用聚合 ctor。")]
-    internal QueryBuilder(DbConnection conn, SqlDialect dialect, IRowFactory<T> factory,
-        List<IQueryInterceptor> interceptors, Func<string, object?, DbParameter> paramFactory,
-        Func<string, string> quoteIdentifier, string tableName,
-        IReadOnlyList<string> columnNames, TimeSpan commandTimeout,
-        SessionOperationState operationState,
-        Func<DbConnection>? readConnFactory = null,
-        IQueryCache? queryCache = null,
-        bool validateColumnOrder = false,
-        Func<DbConnection, CancellationToken, Task>? readConnInitializer = null)
-        : this(new QueryBuilderContext<T>(
-            conn,
-            new QueryBuilderServices<T>(dialect, factory, interceptors, paramFactory,
-                quoteIdentifier, operationState, commandTimeout),
-            tableName, columnNames,
-            readConnFactory, queryCache, validateColumnOrder, readConnInitializer))
-    {
-    }
-
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
     /// 分组组合：WHERE defaults AND ((A) OR (B))——用户 OR 无法绕过默认过滤（ITM-401 根治）。</summary>
     public QueryBuilder<T> Where(FormattableString clause)

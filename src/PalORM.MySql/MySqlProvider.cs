@@ -12,9 +12,6 @@ public sealed class MySqlProvider : IDbProvider
     /// <summary>SQL 方言标识:<see cref="SqlDialect.MySql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.MySql;
 
-    /// <summary>创建 MySqlConnection,连接池配置沿用连接串默认值。</summary>
-    public static DbConnection CreateConnection(string connectionString) => new MySqlConnection(connectionString);
-
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 MySqlConnector 连接串:
     /// MaximumPoolSize / ConnectionIdleTimeout(秒)/ ConnectionLifeTime(分钟换算为秒);
     /// MySqlConnector 池参数为 uint,checked 转换防负值/溢出静默截断。</summary>
@@ -39,21 +36,12 @@ public sealed class MySqlProvider : IDbProvider
         return $"`{identifier.Replace("`", "``", StringComparison.Ordinal)}`";
     }
 
-    /// <summary>schema 与表名分别反引号引用后以点连接;MySQL 中 schema 即数据库名。</summary>
+    /// <summary>schema 与表名分别反引号引用后以点连接;MySQL 中 schema 即数据库名。
+    /// 覆盖接口默认实现以支持 MySQL 的 schema/database 语义。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
-
-    /// <summary>MySQL 的 LIMIT offset, count 语法;无 limit 时用 uint64 极大值哨兵(LIMIT offset, -1 非法)。</summary>
-    [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause。3.0 随接口成员一并移除。")]
-    public static string GetLimitOffsetClause(int? limit, int? offset)
-    {
-        // 无 limit 时 MySQL 需极大值哨兵（LIMIT offset, -1 是非法语法）——与 BuildLimitClause 对齐
-        string take = limit?.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            ?? "18446744073709551615";
-        return $"LIMIT {offset ?? 0}, {take}";
-    }
 
     /// <summary>MySQL 不支持 RETURNING 子句(自增主键回读走 LAST_INSERT_ID 路径)。</summary>
     public static bool SupportsReturningClause => false;
@@ -81,9 +69,6 @@ public sealed class MySqlProvider : IDbProvider
         command.CommandText = $"SHOW COLUMNS FROM {QuoteQualifiedIdentifier(schema, tableName)}";
         return 0;
     }
-
-    /// <summary>参数占位符,形如 @p0。</summary>
-    public static string GetParameterPlaceholder(int index) => $"@p{index}";
 
     /// <summary>创建 MySqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。</summary>
     public static DbParameter CreateParameter(string name, object? value)

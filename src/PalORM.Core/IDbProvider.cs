@@ -14,16 +14,8 @@ public interface IDbProvider
     /// <summary>Provider 名称（PostgreSql / MySql / SQLite）。</summary>
     static abstract string Name { get; }
 
-    /// <summary>参数占位符前缀（统一使用 @）。</summary>
-    [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause。3.0 移除。")]
-    static virtual char ParameterPrefix => '@';
-
     /// <summary>SQL 方言标识。</summary>
     static abstract SqlDialect Dialect { get; }
-
-    /// <summary>创建数据库连接。</summary>
-    [Obsolete("零调用点的死接口成员（本库恒走双参重载应用池配置）；且 static abstract 强迫第三方 Provider 实现死代码。3.0 移除。")]
-    static abstract DbConnection CreateConnection(string connectionString);
 
     /// <summary>创建应用连接池配置的数据库连接。</summary>
     static abstract DbConnection CreateConnection(string connectionString, DbOptions options);
@@ -31,13 +23,10 @@ public interface IDbProvider
     /// <summary>引用单段标识符，并转义 Provider 对应的内部引用符。</summary>
     static abstract string QuoteIdentifier(string identifier);
 
-    /// <summary>分别引用 schema 与表名，避免把点分名称误作单个标识符。</summary>
+    /// <summary>分别引用 schema 与表名，避免把点分名称误作单个标识符。
+    /// 各 Provider 自行实现——虽然三方言实现高度相似，但 C# static virtual 默认实现
+    /// 无法调用同接口的 static abstract 成员（CS8926），故不做默认实现。</summary>
     static abstract string QuoteQualifiedIdentifier(string? schema, string identifier);
-
-    /// <summary>LIMIT/OFFSET 子句。不同数据库语法不同。</summary>
-    [Obsolete("零调用点的死接口成员；LIMIT 构建统一在 QueryBuilder.BuildLimitClause（按 SqlDialect 分支）。3.0 移除。")]
-    static virtual string GetLimitOffsetClause(int? limit, int? offset)
-        => $"LIMIT {limit ?? long.MaxValue} OFFSET {offset ?? 0}";
 
     /// <summary>是否支持 RETURNING 子句（PG/SQLite ✅，MySQL ❌）。</summary>
     static abstract bool SupportsReturningClause { get; }
@@ -45,8 +34,8 @@ public interface IDbProvider
     /// <summary>数据库当前时间表达式，用于软删除等服务端时间写入。</summary>
     static abstract string CurrentTimestampExpression { get; }
 
-    /// <summary>参数占位符生成（如 @p0）。</summary>
-    static abstract string GetParameterPlaceholder(int index);
+    /// <summary>参数占位符生成（@p{N}）。统一格式，三 Provider 共享默认实现。</summary>
+    static virtual string GetParameterPlaceholder(int index) => $"@p{index}";
 
     /// <summary>创建 DbParameter。避免 QueryBuilder.Where() 中 CreateCommand() 资源泄漏。</summary>
     static abstract DbParameter CreateParameter(string name, object? value);

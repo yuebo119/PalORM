@@ -25,7 +25,7 @@ internal sealed class RowFactory_global__AllTypesEntity_7f6c8145 : global::PalOR
             FloatValue = r.GetFloat(9),
             DateTimeValue = r.GetDateTime(10),
             GuidValue = r.GetGuid(11),
-            DateTimeOffsetValue = TypeMapper_global__AllTypesEntity_7f6c8145.ReadDateTimeOffset(r, 12),
+            DateTimeOffsetValue = r.GetFieldValue<global::System.DateTimeOffset>(12),
             DateOnlyValue = global::System.DateOnly.FromDateTime(r.GetDateTime(13)),
             TimeOnlyValue = global::System.TimeOnly.FromTimeSpan(r.GetFieldValue<global::System.TimeSpan>(14)),
             NullableInt = r.IsDBNull(15) ? null : r.GetInt32(15),

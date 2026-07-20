@@ -20,11 +20,9 @@ public sealed class SqliteProvider : IDbProvider
     /// <summary>SQL 方言标识:<see cref="SqlDialect.Sqlite"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.Sqlite;
 
-    /// <summary>创建 SqliteConnection。静态构造已保证 SQLitePCL bundle 在首次使用前初始化。</summary>
-    public static DbConnection CreateConnection(string connectionString) => new SqliteConnection(connectionString);
-
     /// <summary>创建连接。SQLite 为进程内嵌入式库,无服务端连接池——
-    /// 显式配置池参数时抛 <see cref="NotSupportedException"/>,而非静默忽略。</summary>
+    /// 显式配置池参数时抛 <see cref="NotSupportedException"/>,而非静默忽略。
+    /// 静态构造已保证 SQLitePCL bundle 在首次使用前初始化。</summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -76,9 +74,6 @@ public sealed class SqliteProvider : IDbProvider
         command.CommandText = $"PRAGMA table_info({QuoteIdentifier(tableName)})";
         return 1;
     }
-
-    /// <summary>参数占位符,形如 @p0。</summary>
-    public static string GetParameterPlaceholder(int index) => $"@p{index}";
 
     /// <summary>创建 SqliteParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。</summary>
     public static DbParameter CreateParameter(string name, object? value)

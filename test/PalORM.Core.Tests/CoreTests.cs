@@ -15,9 +15,6 @@ public sealed class DbOptionsTests
         await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(5);
         await Assert.That(opts.CircuitBreakerResetAfter).IsEqualTo(TimeSpan.FromSeconds(30));
         await Assert.That(opts.NamingConvention).IsEqualTo(NamingConvention.None);
-#pragma warning disable CS0618 // 死配置已 Obsolete（ITM-423），3.0 移除前默认值仍固化
-        await Assert.That(opts.MinimumLogLevel).IsEqualTo(LogLevel.Warning);
-#pragma warning restore CS0618
     }
 
     [Test]
@@ -982,10 +979,11 @@ public sealed class ProviderTests
     public async Task Providers_RejectInvalidBatchSizeBeforeDatabaseAccess()
     {
         await using var postgres = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
-            "Host=localhost;Database=test");
+            "Host=localhost;Database=test", new DbOptions { ConnectionString = "Host=localhost;Database=test" });
         await using var mysql = PalORM.MySql.MySqlProvider.CreateConnection(
-            "Server=localhost;Database=test");
-        await using var sqlite = PalORM.Sqlite.SqliteProvider.CreateConnection("Data Source=:memory:");
+            "Server=localhost;Database=test", new DbOptions { ConnectionString = "Server=localhost;Database=test" });
+        await using var sqlite = PalORM.Sqlite.SqliteProvider.CreateConnection(
+            "Data Source=:memory:", new DbOptions { ConnectionString = "Data Source=:memory:" });
 
         await Assert.That(async () => await PalORM.PostgreSql.PostgreSqlProvider.BulkInsertAsync(
             postgres, null, Array.Empty<ProviderBatchEntity>(), 0, 30, default)).Throws<ArgumentOutOfRangeException>();
@@ -999,17 +997,18 @@ public sealed class ProviderTests
     public async Task SchemaCommands_UseProviderSpecificColumnOrdinals()
     {
         await using var postgres = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
-            "Host=localhost;Database=test");
+            "Host=localhost;Database=test", new DbOptions { ConnectionString = "Host=localhost;Database=test" });
         await using var postgresCommand = postgres.CreateCommand();
         int postgresOrdinal = PalORM.PostgreSql.PostgreSqlProvider.ConfigureSchemaCommand(
             postgresCommand, "users", "app");
 
         await using var mysql = PalORM.MySql.MySqlProvider.CreateConnection(
-            "Server=localhost;Database=test");
+            "Server=localhost;Database=test", new DbOptions { ConnectionString = "Server=localhost;Database=test" });
         await using var mysqlCommand = mysql.CreateCommand();
         int mysqlOrdinal = PalORM.MySql.MySqlProvider.ConfigureSchemaCommand(mysqlCommand, "users", "app");
 
-        await using var sqlite = PalORM.Sqlite.SqliteProvider.CreateConnection("Data Source=:memory:");
+        await using var sqlite = PalORM.Sqlite.SqliteProvider.CreateConnection(
+            "Data Source=:memory:", new DbOptions { ConnectionString = "Data Source=:memory:" });
         await using var sqliteCommand = sqlite.CreateCommand();
         int sqliteOrdinal = PalORM.Sqlite.SqliteProvider.ConfigureSchemaCommand(sqliteCommand, "users");
 
