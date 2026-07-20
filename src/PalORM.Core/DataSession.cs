@@ -637,11 +637,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
                 dbColumns.Add(reader.GetString(columnNameOrdinal));
 
-            foreach (string colName in expectedColumns)
-            {
-                if (!dbColumns.Contains(colName))
-                    issues.Add($"Column '{colName}' not found in table '{tableName}'");
-            }
+            foreach (string colName in expectedColumns.Where(c => !dbColumns.Contains(c)))
+                issues.Add($"Column '{colName}' not found in table '{tableName}'");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         // ITM-542: 只透出异常类型名，不透传 ex.Message——Message 常含主机/端口/库名等拓扑信息，
@@ -662,15 +659,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        foreach (var kv in PalORM_Runtime.CreateTableSql)
+        foreach (var type in PalORM_Runtime.CreateTableSql.Keys)
         {
             // ITM-569：拒绝回退 legacy 单方言 DDL（与 GetCommandSqls 对称）——旧生成器片段的
             // CreateTableSql 恒为 SQLite 风格双引号，MySQL 上报语法错而非清晰的"请重新编译"。
             if (!PalORM_Runtime.CreateTableSqlByDialect.TryGetValue(
-                    kv.Key, out CreateTableSqlSet sqls))
+                    type, out CreateTableSqlSet sqls))
             {
                 throw new InvalidOperationException(
-                    $"Type '{kv.Key.Name}' has no dialect-specific generated DDL. " +
+                    $"Type '{type.Name}' has no dialect-specific generated DDL. " +
                     "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
             }
             string ddl = sqls.Get(TProvider.Dialect);
@@ -680,7 +677,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
             if (!PalORM_Runtime.CreateIndexSqlByDialect.TryGetValue(
-                    kv.Key, out CreateIndexSqlSet indexSqls))
+                    type, out CreateIndexSqlSet indexSqls))
             {
                 continue;
             }
