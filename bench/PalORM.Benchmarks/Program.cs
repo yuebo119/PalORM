@@ -97,7 +97,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     private static Task<DataSession<SqliteProvider>> CreateDb()
         => DataSession<SqliteProvider>.CreateAsync(new DbOptions { ConnectionString = Cs });
 
-    // ═══════ 查询（6 个）═══════
+    // ═══════ 查询（8 个）═══════
 
     [Benchmark(Baseline = true), BenchmarkCategory("Query")]
     public async Task<List<BenchOrder>> RawAdo_QueryAll()
@@ -128,6 +128,17 @@ public class SqliteBenchmarks : IAsyncDisposable
     }
 
     [Benchmark, BenchmarkCategory("Query")]
+    public async Task<BenchOrder?> RawAdo_GetByKey()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders WHERE id = 5000";
+        using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new BenchOrder { id = r.GetInt64(0), status = r.GetString(1), total = r.GetDecimal(2), created_at = r.GetInt64(3) };
+    }
+
+    [Benchmark, BenchmarkCategory("Query")]
     public async Task<BenchOrder?> Dapper_GetByKey()
     {
         using var c = OpenConn();
@@ -143,13 +154,31 @@ public class SqliteBenchmarks : IAsyncDisposable
     }
 
     [Benchmark, BenchmarkCategory("Query")]
+    public async Task<long> RawAdo_Count()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM bench_orders";
+        return (long)(await cmd.ExecuteScalarAsync())!;
+    }
+
+    [Benchmark, BenchmarkCategory("Query")]
     public async Task<long> PalORM_Count()
     {
         await using var db = await CreateDb();
         return await db.CountAsync<BenchOrder>();
     }
 
-    // ═══════ 写入（9 个）═══════
+    // ═══════ 写入（12 个）═══════
+
+    [Benchmark, BenchmarkCategory("Write")]
+    public async Task<long> RawAdo_Insert()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "INSERT INTO bench_orders (status, total, created_at) VALUES ('B', 99, 0); SELECT last_insert_rowid();";
+        return (long)(await cmd.ExecuteScalarAsync())!;
+    }
 
     [Benchmark, BenchmarkCategory("Write")]
     public async Task<int> Dapper_Insert()
@@ -165,6 +194,15 @@ public class SqliteBenchmarks : IAsyncDisposable
     {
         await using var db = await CreateDb();
         return await db.InsertAsync(new BenchOrder { status = "B", total = 99m, created_at = 0 });
+    }
+
+    [Benchmark, BenchmarkCategory("Write")]
+    public async Task<int> RawAdo_Update()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "UPDATE bench_orders SET status = 'U', total = 999 WHERE id = 5000";
+        return await cmd.ExecuteNonQueryAsync();
     }
 
     [Benchmark, BenchmarkCategory("Write")]
@@ -196,6 +234,17 @@ public class SqliteBenchmarks : IAsyncDisposable
     }
 
     [Benchmark, BenchmarkCategory("Write")]
+    public async Task<int> RawAdo_Delete()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "INSERT INTO bench_orders (status, total, created_at) VALUES ('DEL', 1, 0); SELECT last_insert_rowid();";
+        long id = (long)(await cmd.ExecuteScalarAsync())!;
+        cmd.CommandText = $"DELETE FROM bench_orders WHERE id = {id}";
+        return await cmd.ExecuteNonQueryAsync();
+    }
+
+    [Benchmark, BenchmarkCategory("Write")]
     public async Task<int> PalORM_Delete_Physical()
     {
         await using var db = await CreateDb();
@@ -212,10 +261,12 @@ public class SqliteBenchmarks : IAsyncDisposable
     }
 
     [Benchmark, BenchmarkCategory("Write")]
-    public async Task<BenchOrder> PalORM_Save_Upsert()
+    public async Task<int> RawAdo_Upsert()
     {
-        await using var db = await CreateDb();
-        return await db.SaveAsync(new BenchOrder { id = 5000, status = "UPS", total = 555m, created_at = 0 });
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "INSERT INTO bench_orders (id, status, total, created_at) VALUES (5000, 'UPS', 555, 0) ON CONFLICT(id) DO UPDATE SET status = 'UPS', total = 555";
+        return await cmd.ExecuteNonQueryAsync();
     }
 
     [Benchmark, BenchmarkCategory("Write")]
@@ -226,6 +277,13 @@ public class SqliteBenchmarks : IAsyncDisposable
             "INSERT INTO bench_orders (id, status, total, created_at) VALUES (@id, @status, @total, @created_at) " +
             "ON CONFLICT(id) DO UPDATE SET status = @status, total = @total",
             new BenchOrder { id = 5000, status = "UPS", total = 555m, created_at = 0 });
+    }
+
+    [Benchmark, BenchmarkCategory("Write")]
+    public async Task<BenchOrder> PalORM_Save_Upsert()
+    {
+        await using var db = await CreateDb();
+        return await db.SaveAsync(new BenchOrder { id = 5000, status = "UPS", total = 555m, created_at = 0 });
     }
 
     // ═══════ 批量（4 个）═══════
