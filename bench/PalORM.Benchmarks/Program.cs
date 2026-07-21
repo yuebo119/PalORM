@@ -52,7 +52,7 @@ public sealed partial class BenchSoft
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
-[SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 5)]
+[SimpleJob(launchCount: 3, warmupCount: 5, iterationCount: 10)]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
 [SuppressMessage("Security", "CA2100", Justification = "Seed data uses compile-time constants.")]
@@ -411,7 +411,7 @@ public class SqliteBenchmarks : IAsyncDisposable
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
-[SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 5)]
+[SimpleJob(launchCount: 3, warmupCount: 5, iterationCount: 10)]
 public class SqlBuildBenchmarks
 {
     private DataSession<SqliteProvider>? _db;
