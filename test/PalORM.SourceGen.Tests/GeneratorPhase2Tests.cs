@@ -221,8 +221,12 @@ internal sealed class GeneratorPhase2Tests
             pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // v4.0 优化 A：CommandFactory emit 从 `new Converter()` 内联改为类级 static readonly 单例字段，
+        // 与 RowFactory 模式对齐（百万行 BulkInsert 含 Converter 列省 ~N 万 Gen0 分配）。
         await Assert.That(commandFactory).Contains(
-            "IValueConverter<global::Ulid, string>)new global::UlidConverter()).ToProvider(entity.ExternalId)");
+            "IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter()");
+        await Assert.That(commandFactory).Contains("_conv_ExternalId.ToProvider(entity.ExternalId)");
+        await Assert.That(commandFactory).DoesNotContain("new global::UlidConverter()).ToProvider(entity");
         // v3.1: RowFactory emit 从 `new Converter()` 内联改为类级 static readonly 单例字段。
         // 断言 emit 同时含：(1) 类级 _conv_<prop> 字段声明；(2) Read lambda 内引用字段调用 FromProvider。
         await Assert.That(rowFactory).Contains(
@@ -364,8 +368,9 @@ internal sealed class GeneratorPhase2Tests
         string bindDelete = ExtractMethod(commandFactory, "BindDelete(", "SetId(");
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
-        await Assert.That(bindDelete).Contains(
-            "IValueConverter<global::Ulid, string>)new global::UlidConverter()).ToProvider((global::Ulid)key)");
+        // v4.0 优化 A：BindDelete 也走单例字段 _conv_<prop>，不再每次 new Converter。
+        await Assert.That(bindDelete).Contains("_conv_Id.ToProvider((global::Ulid)key)");
+        await Assert.That(bindDelete).DoesNotContain("new global::UlidConverter()).ToProvider((global::Ulid)key)");
     }
 
     [Test]
@@ -667,8 +672,10 @@ internal sealed class GeneratorPhase2Tests
         string generated = string.Join("\n", result.GeneratedSources.Values);
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // v4.0 优化 A：CommandFactory 也走单例字段——显式接口实现仍可通过类级字段调用。
         await Assert.That(generated).Contains(
-            "((global::PalORM.IValueConverter<global::ExternalId, string>)new global::ExplicitConverter())");
+            "IValueConverter<global::ExternalId, string> _conv_ExternalId = new global::ExplicitConverter()");
+        await Assert.That(generated).Contains("_conv_ExternalId.ToProvider(entity.ExternalId)");
     }
 
     [Test]
