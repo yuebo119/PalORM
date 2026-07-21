@@ -206,13 +206,12 @@ var orders = await db.From<Order>()
     .ToListAsync();
 
 // SplitQuery 当前只构建根查询并移除 JOIN，不装配导航对象。
-// 需要关联对象时应执行显式查询并在应用层组合。
 var rootOrders = await db.From<Order>()
     .Include<Customer>(o => o.CustomerId, c => c.Id)
     .AsSplitQuery()
     .ToListAsync();
 
-// ThenInclude 必须显式提供 JOIN 两端，单参数旧重载会明确失败。
+// ThenInclude — 双参数显式表达 JOIN 两端
 var sql = db.From<Order>()
     .ThenInclude<Customer, Order>(c => c.Id, o => o.CustomerId)
     .ToSql();
@@ -227,14 +226,11 @@ var options = new DbOptions
     ReadConnectionString = "Host=replica;..."
 };
 
-// 强制走读副本
+// 强制走读副本（QueryBuilder 级路由——执行时打开独立连接并自动释放）
 var users = await db.From<User>().ForRead().ToListAsync();
 
 // 写后立即读 — 强制走主库
 var user = await db.From<User>().ForWrite().Where($"id = {1}").FirstAsync();
-
-// 会话级 ForRead/ForWrite 已弃用：ForRead 返回独立会话并要求调用方释放。
-// 新代码统一使用上面的 QueryBuilder 路由。
 ```
 
 ### 事务
@@ -336,6 +332,103 @@ await listener.StartAsync();
 
 // 发送（参数化，零 SQL 注入）；payload 可为 null
 await PgNotificationListener.NotifyAsync(cs, "events", "order-created");
+```
+
+### 聚合查询
+
+```csharp
+// 所有聚合自动附加软删除过滤（WHERE deleted_at IS NULL）
+long total = await db.CountAsync<Order>();
+decimal revenue = await db.SumAsync<Order>($"total");
+DateTime? latest = await db.MaxAsync<Order, DateTime>($"created_at");
+double avgPrice = await db.AvgAsync<Product>($"price");
+```
+
+### 乐观锁（并发控制）
+
+```csharp
+[ConcurrencyCheck]
+[Column("version")]
+public long Version { get; set; }
+
+// UpdateAsync 自动检查 version 匹配——不匹配抛 ConcurrencyConflictException
+user.Name = "Updated";
+await db.UpdateAsync(user);  // WHERE id = @id AND version = @oldVersion
+                             // SET version = version + 1
+```
+
+### WhereIn / WhereNotIn
+
+```csharp
+// 自动按参数上限分批（SQLite 999 / MySQL 65535）
+var statuses = new[] { "pending", "shipped", "delivered" };
+var orders = await db.From<Order>()
+    .WhereIn(o => o.Status, statuses)
+    .ToListAsync();
+
+// 排除
+var active = await db.From<User>()
+    .WhereNotIn(u => u.Role, bannedRoles)
+    .ToListAsync();
+```
+
+### Keyset 游标分页
+
+```csharp
+// 第一页
+var (rows, total) = await db.From<Order>()
+    .OrderBy(o => o.CreatedAt, descending: true)
+    .ToPageAsync(pageSize: 20, o => o.CreatedAt);
+
+// 续页（传入上一页最后一行的排序值作为游标）
+long? lastCursor = rows[^1].CreatedAt.Ticks;
+var (next, _) = await db.From<Order>()
+    .OrderBy(o => o.CreatedAt, descending: true)
+    .ToPageAsync(20, o => o.CreatedAt, lastCursor);
+```
+
+### 自定义值转换器
+
+```csharp
+// Ulid ↔ string 的自定义转换（AOT 安全——编译时生成调用代码）
+public sealed class UlidStringConverter : IValueConverter<Ulid, string>
+{
+    public string ToProvider(Ulid model) => model.ToString();
+    public Ulid FromProvider(string provider) => Ulid.Parse(provider);
+}
+
+[Table("documents")]
+public partial class Document
+{
+    [Key] [Converter(typeof(UlidStringConverter))]
+    public Ulid Id { get; set; }
+    [Column("title")] public string Title { get; set; } = "";
+}
+```
+
+### OwnedJson（编译时安全 JSON 序列化）
+
+```csharp
+// 需要源生成的 JsonSerializerContext（AOT 安全）
+[JsonSerializable(typeof(ProductDetails))]
+internal sealed partial class ProductJsonContext : JsonSerializerContext;
+
+[Table("products")]
+public partial class Product
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [OwnedJson(typeof(ProductJsonContext))]
+    [Column("details")]
+    public ProductDetails? Details { get; set; }
+}
+
+// 读写自动 JSON 序列化/反序列化（零运行时反射）
+var product = await db.InsertAsync(new Product
+{
+    Name = "Widget",
+    Details = new ProductDetails { Sku = "W-001", Weight = 1.5m }
+});
 ```
 
 ---
