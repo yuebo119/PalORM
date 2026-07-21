@@ -47,7 +47,7 @@ public sealed partial class BenchOrder
 [SuppressMessage("Security", "CA2100", Justification = "Seed data uses compile-time constants.")]
 public class SqliteBenchmarks : IAsyncDisposable
 {
-    private const int SeedRows = 1000;
+    private const int SeedRows = 10000;
     private const string Cs = "Data Source=bench;Mode=Memory;Cache=Shared";
     private SqliteConnection? _keeper;
 
@@ -82,11 +82,11 @@ public class SqliteBenchmarks : IAsyncDisposable
     // ─── Query 4× 对照 ───
 
     [Benchmark(Baseline = true)]
-    public async Task<List<BenchOrder>> RawAdo_Query1000()
+    public async Task<List<BenchOrder>> RawAdo_Query10000()
     {
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders LIMIT 1000";
+        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders LIMIT 10000";
         using var r = await cmd.ExecuteReaderAsync();
         var list = new List<BenchOrder>(SeedRows);
         while (await r.ReadAsync())
@@ -95,15 +95,15 @@ public class SqliteBenchmarks : IAsyncDisposable
     }
 
     [Benchmark]
-    public async Task<List<BenchOrder>> Dapper_Query1000()
+    public async Task<List<BenchOrder>> Dapper_Query10000()
     {
         using var c = OpenConn();
-        var rows = await c.QueryAsync<BenchOrder>("SELECT id, status, total, created_at FROM bench_orders LIMIT 1000");
+        var rows = await c.QueryAsync<BenchOrder>("SELECT id, status, total, created_at FROM bench_orders LIMIT 10000");
         return rows.AsList();
     }
 
     [Benchmark]
-    public async Task<List<BenchOrder>> PalORM_Query1000()
+    public async Task<List<BenchOrder>> PalORM_Query10000()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(new DbOptions { ConnectionString = Cs });
         return await db.From<BenchOrder>().ToListAsync();
@@ -136,10 +136,10 @@ public class SqliteBenchmarks : IAsyncDisposable
     }
 
     [Benchmark]
-    public async Task<long> PalORM_BulkInsert1000()
+    public async Task<long> PalORM_BulkInsert10000()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(new DbOptions { ConnectionString = Cs });
-        var items = Enumerable.Range(0, 1000).Select(i => new BenchOrder { status = $"B{i}", total = i * 10m, created_at = 0 }).ToList();
+        var items = Enumerable.Range(0, 10000).Select(i => new BenchOrder { status = $"B{i}", total = i * 10m, created_at = 0 }).ToList();
         return await db.BulkInsertAsync(items);
     }
 }
@@ -201,7 +201,7 @@ public class SqlBuildBenchmarks
 [SuppressMessage("Security", "CA2100", Justification = "Seed data uses compile-time constants.")]
 public class FeatureBenchmarks : IAsyncDisposable
 {
-    private const int SeedRows = 1000;
+    private const int SeedRows = 10000;
     private const string Cs = "Data Source=feat;Mode=Memory;Cache=Shared";
     private SqliteConnection? _keeper;
 
