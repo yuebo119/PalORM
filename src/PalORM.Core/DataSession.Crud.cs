@@ -253,9 +253,11 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory)
-            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
-            || !PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out var columnNames))
+        // v4.0 优化 B：CurrentState 单次快照——与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
+            || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
+            || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
         await using DbCommand cmd = CreateCommand();
@@ -276,9 +278,11 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory)
-            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
-            || !PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out var columnNames))
+        // v4.0 优化 B：CurrentState 单次快照——与 GetAsync 和 From<T> 对齐。
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
+            || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
+            || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
         await using DbCommand cmd = CreateCommand();
@@ -288,7 +292,8 @@ public sealed partial class DataSession<TProvider>
         BindDefaultFilterParameters<T>(cmd);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        List<T> list = [];
+        // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容。
+        List<T> list = new(16);
         var tf = (Func<DbDataReader, T>)factory;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             list.Add(tf(reader));

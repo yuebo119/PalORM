@@ -28,9 +28,11 @@ public partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(keys);
         if (keys.Count == 0) return 0;
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
-            || !PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pkCol)
-            || !PalORM_Runtime.BindDelete.TryGetValue(
+        // v4.0 优化 B：CurrentState 单次快照——替代 3 次独立 Volatile.Read。
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._tableNames.TryGetValue(typeof(T), out string? tableName)
+            || !state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
+            || !state._bindDelete.TryGetValue(
                 typeof(T), out Action<DbCommand, object>? bindKey))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
 
