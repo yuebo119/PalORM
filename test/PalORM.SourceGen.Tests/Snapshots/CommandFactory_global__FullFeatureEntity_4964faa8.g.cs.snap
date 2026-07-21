@@ -6,6 +6,8 @@ namespace PalORM.Generated;
 [global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "2.0.0")]
 internal static class CommandFactory_global__FullFeatureEntity_4964faa8
 {
+    private static readonly global::PalORM.IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter();
+
     internal static readonly global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<global::Payload> JsonTypeInfo_Payload = (global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<global::Payload>)(global::SnapshotJsonContext.Default.GetTypeInfo(typeof(global::Payload)) ?? throw new global::System.InvalidOperationException("OwnedJson type metadata was not generated."));
     internal const string InsertSql = "INSERT INTO full_feature (code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)";
     internal const string UpdateSql = "UPDATE full_feature SET code = @p0, kind = @p1, external_id = @p2, payload = @p3, raw_json = @p4, uniq_token = @p5, deleted_at = @p6, tenant_id = @p7 WHERE Id = @p8";
@@ -17,7 +19,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.Value = (object)entity.Code; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.Value = (object)entity.Kind; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.Value = (object)((global::PalORM.IValueConverter<global::Ulid, string>)new global::UlidConverter()).ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p5"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
@@ -31,7 +33,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.Value = (object)entity.Code; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.Value = (object)entity.Kind; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.Value = (object)((global::PalORM.IValueConverter<global::Ulid, string>)new global::UlidConverter()).ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p5"; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p6"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
@@ -44,7 +46,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.Value = (object)entity.Code; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.Value = (object)entity.Kind; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.Value = (object)((global::PalORM.IValueConverter<global::Ulid, string>)new global::UlidConverter()).ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p5"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }

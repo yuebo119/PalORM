@@ -61,7 +61,9 @@ public static class QueryBuilderExtensions
             NotifyInterceptorsOnBefore(interceptors, context);
             await PrepareCommandAsync(cmd, builder._prepared, ct).ConfigureAwait(false);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            List<T> list = builder._take.HasValue ? new(builder._take.Value) : [];
+            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
+            // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
+            List<T> list = builder._take.HasValue ? new(builder._take.Value) : new List<T>(16);
             while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(builder._factory(reader));
             NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
             // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。

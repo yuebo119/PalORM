@@ -37,7 +37,10 @@ public sealed partial class DataSession<TProvider>
         return issues;
     }
 
-    /// <summary>Schema 差异检测（CI 仅检查不执行）。</summary>
+    /// <summary>Schema 差异检测（CI 仅检查不执行）。
+    /// <para><b>v4.0 起标 Obsolete</b>——本质是 <see cref="ValidateSchemaAsync{T}"/> 的字符串前缀包装，
+    /// 增加了调用方心智负担却无新信息。直接用 <c>ValidateSchemaAsync&lt;T&gt;()</c> 然后按需加前缀。</para></summary>
+    [Obsolete("Use ValidateSchemaAsync<T>() and apply prefix manually if needed. This thin wrapper adds no information.")]
     public async ValueTask<List<string>> DiffAsync<T>(CancellationToken ct = default) where T : class, new()
         => (await ValidateSchemaAsync<T>(ct).ConfigureAwait(false)).Select(d => $"[DIFF] {d}").ToList();
 
@@ -117,7 +120,11 @@ public sealed partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>逃生舱 —— 获取原生 DbConnection（第三方工具集成）。原生操作不受会话并发门禁保护。</summary>
+    /// <summary>⚠️ 逃生舱（escape hatch）—— 获取原生 <see cref="DbConnection"/>。
+    /// <para><b>危险操作</b>：原生操作不受会话并发门禁保护——绕过 SessionOperationState 的
+    /// 「同一 DataSession 同时只允许一个活动操作」契约，调用方完全负责并发安全与事务边界。</para>
+    /// <para><b>第三方工具集成</b>场景（如 EF Core 迁移脚本、Dapper 共享连接）可用；普通 CRUD 场景应走
+    /// From&lt;T&gt;/InsertAsync 等托管路径。返回的连接仍归 DataSession 持有，不应 Dispose。</para></summary>
     public DbConnection GetRawConnection()
     {
         _operationState.EnsureAvailable();

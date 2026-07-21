@@ -15,6 +15,20 @@ internal static class CommandFactoryEmitter
         sb.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"PalORM.SourceGen\", \"2.0.0\")]");
         sb.AppendLine($"internal static class CommandFactory_{model.GeneratedTypeSuffix}");
         sb.AppendLine("{");
+
+        // v4.0 性能优化 A：Converter 单例对齐 RowFactory 模式。
+        // v3.1 RowFactoryEmitter 已用 static readonly Converter 字段，CommandFactory 仍每次 new——不对称。
+        // Bind 路径（Insert/Update/Upsert/Delete）被高频调用：百万行 BulkInsert 含 2 Converter 列省 ~200 万 Gen0 分配。
+        int converterCount = 0;
+        foreach (var col in model.Columns)
+        {
+            if (col.ConverterTypeName is null) continue;
+            sb.AppendLine($"    private static readonly global::PalORM.IValueConverter<{col.ClrTypeName}, {col.ProviderClrTypeName}> _conv_{col.PropertyName} = new {col.ConverterTypeName}();");
+            converterCount++;
+        }
+        if (converterCount > 0)
+            sb.AppendLine();
+
         foreach (var column in model.Columns.AsSpan())
         {
             if (!IsObjectOwnedJson(column)) continue;
@@ -92,7 +106,7 @@ internal static class CommandFactoryEmitter
             };
             string providerValueExpr = col.ConverterTypeName is null
                 ? castExpr
-                : $"(({GetConverterInterfaceType(col)})new {col.ConverterTypeName}()).ToProvider({castExpr})";
+                : $"_conv_{col.PropertyName}.ToProvider({castExpr})";
             string valueExpr = col.IsNullable
                 ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
                 : $"(object){providerValueExpr}";
@@ -286,14 +300,11 @@ internal static class CommandFactoryEmitter
 
         string valueExpression = col.ConverterTypeName is null
             ? $"entity.{col.PropertyName}"
-            : $"(({GetConverterInterfaceType(col)})new {col.ConverterTypeName}()).ToProvider(entity.{col.PropertyName})";
+            : $"_conv_{col.PropertyName}.ToProvider(entity.{col.PropertyName})";
         return col.IsNullable
             ? $"entity.{col.PropertyName} is null ? global::System.DBNull.Value : (object){valueExpression}"
             : $"(object){valueExpression}";
     }
-
-    private static string GetConverterInterfaceType(ColumnModel column)
-        => $"global::PalORM.IValueConverter<{column.ClrTypeName}, {column.ProviderClrTypeName}>";
 
     private static bool IsObjectOwnedJson(ColumnModel column)
         => column.IsOwnedJson
