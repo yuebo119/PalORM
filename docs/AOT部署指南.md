@@ -94,6 +94,19 @@ AOT 部署前逐项确认：
 | `QueryAsync<T>(string rawSql)` 未使用源生成 | 裸 SQL 需要运行时类型映射 | 使用 `FormattableString` 重载 |
 | `ExecuteAsync(string rawSql)` 无类型参数 | 同上 | 使用 `FormattableString` 重载 |
 
+### 聚合/标量查询的 AOT 注意事项（v4.0 补录）
+
+`MaxAsync<T, TValue>` / `MinAsync<T, TValue>` / `ScalarAsync<T>` 通过 <xref:System.Convert.ChangeType%2A> 转换 DB 返回值。
+`Convert.ChangeType(object, Type, IFormatProvider)` 本身 AOT 安全（走 IConvertible 接口分发，不依赖反射），
+但 **TValue 必须是实现 IConvertible 的基元类型**：`int`/`long`/`decimal`/`double`/`float`/`string`/`DateTime` 等。
+
+非 IConvertible 类型在 **JIT 与 AOT 下行为一致**——均抛 `InvalidCastException`：
+- `Guid` / `DateOnly` / `TimeOnly`
+- 枚举类型
+- 自定义 struct（除非显式实现 IConvertible）
+
+如需聚合这些类型，建议先 `MaxAsync<T, long>` 取基础类型，再在应用层显式构造目标类型。
+
 ## CI 集成
 
 仓库的 `.github/workflows/ci.yml` 包含四条独立原生验证路径：
