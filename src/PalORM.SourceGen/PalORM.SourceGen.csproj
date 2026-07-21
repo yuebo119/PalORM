@@ -22,7 +22,7 @@
     <DevelopmentDependency>true</DevelopmentDependency>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageTags>ORM;AOT;source-generator;analyzer;sqlfile</PackageTags>
-    <Version>3.1.0</Version>
+    <Version>4.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
