@@ -30,7 +30,7 @@
 
 ---
 
-## II. AI 缺陷登记（14 个）
+## II. AI 缺陷登记（15 个）
 
 ### 阶段 A：修复缺陷（Sonar 4 轮）
 
@@ -55,6 +55,7 @@
 | B5 | 幽灵方法签名 | 切割后 grep 核对完整性 |
 | B6 | 方法重复提取 | 画行号范围图 |
 | B7 | stash pop 再次 | `git diff HEAD` |
+| B8 | 源生成器 emit 改动后 obj 缓存陷阱（v3.1） | emit 模板改动后必须清 `obj/` + `bin/`，否则增量构建复用旧 emit 导致运行时 cast 失败 NRE。详见 X 章 `9a5c5a7`。SOP：① 改 RowFactoryEmitter/CommandFactoryEmitter/RegistryEmitter/MigrationEmitter 任一 emit 模板 → ② `rm -rf src/*/obj src/*/bin test/*/obj test/*/bin` → ③ 全量 `dotnet build --no-incremental` |
 
 ---
 
@@ -198,8 +199,9 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 4. .editorconfig——39 条规则配置完整？
 5. .ai/lessons.md——已读最新版？
 6. PR 模板——已更新最新检查项？
-7. CHANGELOG——当前版本号（3.0.0）？
+7. CHANGELOG——当前版本号（3.1.0）？
 8. 测试用例数——README badge 与实际一致？
+9. 【如改动 src/PalORM.SourceGen/*.Emitter.cs】obj 缓存陷阱——改 emit 模板后必须清 obj/bin 再全量构建（见 II.B8）
 ```
 
 ---
@@ -229,5 +231,6 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 | RP-14 Bulk 重复 | `3f77dcf` | BulkOperationFramework.cs |
 | B1 Python 切割 | `11f28f6` | DataSession partial |
 | B2 static virtual | `fa92996` | IDbProvider CS8926 |
+| B8 obj 缓存陷阱 | `9a5c5a7` | RowFactoryEmitter emit 改动——Func 委托迁移 |
 | 占位诊断删除 | `8781357` | PalORMAnalyzer PALORM006/007 |
 | 规范化 | `3450e18` | CHANGELOG + CONTRIBUTING |
