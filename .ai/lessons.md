@@ -30,7 +30,7 @@
 
 ---
 
-## II. AI 缺陷登记（15 个）
+## II. AI 缺陷登记（16 个）
 
 ### 阶段 A：修复缺陷（Sonar 4 轮）
 
@@ -56,6 +56,7 @@
 | B6 | 方法重复提取 | 画行号范围图 |
 | B7 | stash pop 再次 | `git diff HEAD` |
 | B8 | 源生成器 emit 改动后 obj 缓存陷阱（v3.1） | emit 模板改动后必须清 `obj/` + `bin/`，否则增量构建复用旧 emit 导致运行时 cast 失败 NRE。详见 X 章 `9a5c5a7`。SOP：① 改 RowFactoryEmitter/CommandFactoryEmitter/RegistryEmitter/MigrationEmitter 任一 emit 模板 → ② `rm -rf src/*/obj src/*/bin test/*/obj test/*/bin` → ③ 全量 `dotnet build --no-incremental` |
+| B9 | 方案文字优化项被合理简化（v3.1 审查发现） | 优化方案文字（plan 文档）与实施代码会有偏差：核心性能路径必须严格对齐，辅助/锦上添花的优化允许基于测量数据（S3 反向验证）取舍。**陷阱**：方案文字本身可能存在自相矛盾（如「保留接口 + 标 Obsolete」），实施时不应照搬。**SOP**：① 实施后做代码审查对比方案文字 → ② 列出偏差 → ③ 每项偏差给出 S3 依据（数据/IL 等价/JIT 内联） → ④ 在方案文档补「实施差异说明」章节承认偏差。详见 `docs/v3.1-performance-plan.md` 实施差异 1/2/3。 |
 
 ---
 
@@ -232,5 +233,6 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 | B1 Python 切割 | `11f28f6` | DataSession partial |
 | B2 static virtual | `fa92996` | IDbProvider CS8926 |
 | B8 obj 缓存陷阱 | `9a5c5a7` | RowFactoryEmitter emit 改动——Func 委托迁移 |
+| B9 方案合理简化 | `e58f414` / `本会话` | v3.1-performance-plan.md 实施差异说明 + 第二次基准复现 |
 | 占位诊断删除 | `8781357` | PalORMAnalyzer PALORM006/007 |
 | 规范化 | `3450e18` | CHANGELOG + CONTRIBUTING |
