@@ -10,6 +10,14 @@
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
 
+    <!-- .NET 11 runtime-async：运行时原生异步（替换编译器状态机）。
+         BCL 自 .NET 11 起已用 runtime-async=on 编译。
+         net11.0 目标不再需要 EnablePreviewFeatures，但仍需显式开启此 Features 开关。
+         收益：① ExecutionContext 空捕获跳过（项目 AsyncLocal 仅 2 个，绝大多数 await 受益）
+              ② JIT 直接编译 runtime-async 版本（去掉 thunk 间接层）
+              ③ 更干净堆栈跟踪（无状态机帧）—— WithTransaction / Bulk 调试可读性改善 -->
+    <Features>runtime-async=on</Features>
+
     <!-- 严格编译 -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-all</AnalysisLevel>
