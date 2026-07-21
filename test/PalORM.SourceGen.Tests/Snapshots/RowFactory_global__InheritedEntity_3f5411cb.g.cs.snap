@@ -4,12 +4,10 @@
 namespace PalORM.Generated;
 
 [global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "2.0.0")]
-internal sealed class RowFactory_global__InheritedEntity_3f5411cb : global::PalORM.IRowFactory<global::InheritedEntity>
+internal static class RowFactory_global__InheritedEntity_3f5411cb
 {
-    internal static readonly RowFactory_global__InheritedEntity_3f5411cb Instance = new();
-    private RowFactory_global__InheritedEntity_3f5411cb() { }
-
-    public global::InheritedEntity Read(global::System.Data.Common.DbDataReader r)
+    internal static readonly global::System.Func<global::System.Data.Common.DbDataReader, global::InheritedEntity> Read
+        = static (global::System.Data.Common.DbDataReader r) =>
     {
         return new global::InheritedEntity
         {
@@ -18,5 +16,5 @@ internal sealed class RowFactory_global__InheritedEntity_3f5411cb : global::PalO
             CreatedBy = r.GetString(2),
             CreatedAt = r.GetFieldValue<global::System.DateTimeOffset>(3),
         };
-    }
+    };
 }

@@ -3,7 +3,10 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace PalORM.SourceGen;
 
-/// <summary>RowFactory 代码生成器——为每个 [Table] 类生成 IRowFactory&lt;T&gt;.Read() 实现。</summary>
+/// <summary>RowFactory 代码生成器——为每个 [Table] 类生成静态 Func&lt;DbDataReader, T&gt; Read 委托。
+/// <para><b>v3.1 性能优化 1</b>: emit 从 <c>sealed class : IRowFactory&lt;T&gt;</c> 迁移到
+/// <c>static class + static readonly Func&lt;DbDataReader, T&gt; Read</c>，调用方直接委托 invoke，
+/// 消除接口虚分发（JIT 无法跨接口边界内联）。.NET 8+ JIT 对 static delegate invoke 有更好内联支持。</para></summary>
 internal static class RowFactoryEmitter
 {
     internal static string Generate(TableModel model)
@@ -15,12 +18,28 @@ internal static class RowFactoryEmitter
         sb.AppendLine($"namespace PalORM.Generated;");
         sb.AppendLine();
         sb.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"PalORM.SourceGen\", \"2.0.0\")]");
-        sb.AppendLine($"internal sealed class RowFactory_{model.GeneratedTypeSuffix} : global::PalORM.IRowFactory<{model.EntityTypeName}>");
+        sb.AppendLine($"internal static class RowFactory_{model.GeneratedTypeSuffix}");
         sb.AppendLine("{");
-        sb.AppendLine($"    internal static readonly RowFactory_{model.GeneratedTypeSuffix} Instance = new();");
-        sb.AppendLine($"    private RowFactory_{model.GeneratedTypeSuffix}() {{ }}");
-        sb.AppendLine();
-        sb.AppendLine($"    public {model.EntityTypeName} Read(global::System.Data.Common.DbDataReader r)");
+
+        // v3.1 性能优化 2：Converter 单例缓存——为每个 [Converter] 列生成 static readonly 字段。
+        // 替代旧 emit 中每次 Read 都 `new Converter()` 的分配。converter 是 stateless 类型，
+        // 重复 new 是无意义的 GC Gen0 压力（带 Converter 的实体每行每列省一次分配）。
+        // 字段必须声明在 Read 之前：Read 是 static lambda 引用这些字段，编译器要求
+        // 字段已初始化——声明顺序保证 Read 在首次调用前字段已完成静态初始化。
+        int converterCount = 0;
+        foreach (var col in model.Columns)
+        {
+            if (col.ConverterTypeName is null) continue;
+            sb.AppendLine($"    private static readonly global::PalORM.IValueConverter<{col.ClrTypeName}, {col.ProviderClrTypeName}> _conv_{col.PropertyName} = new {col.ConverterTypeName}();");
+            converterCount++;
+        }
+        if (converterCount > 0)
+            sb.AppendLine();
+
+        // v3.1 性能优化 1：Read 委托——static readonly，由 JIT 特化为直接调用（消除接口虚分发）。
+        // static lambda 保证无闭包捕获，JIT 生成代码与直接方法调用等价。
+        sb.AppendLine($"    internal static readonly global::System.Func<global::System.Data.Common.DbDataReader, {model.EntityTypeName}> Read");
+        sb.AppendLine($"        = static (global::System.Data.Common.DbDataReader r) =>");
         sb.AppendLine("    {");
         sb.AppendLine($"        return new {model.EntityTypeName}");
         sb.AppendLine("        {");
@@ -34,7 +53,7 @@ internal static class RowFactoryEmitter
         }
 
         sb.AppendLine("        };");
-        sb.AppendLine("    }");
+        sb.AppendLine("    };");
 
         // ITM-520：char 列经 GetString(o)[0] 读取，空串会抛 IndexOutOfRange 且无列名可诊断。
         // 统一走辅助方法，空串时抛带列名的 InvalidOperationException。仅在存在 char 列时生成。
@@ -88,13 +107,16 @@ internal static class RowFactoryEmitter
     private static string GetNonNullReadExpression(ColumnModel col, int ordinal, string generatedTypeSuffix)
     {
         // Converter 的 provider 类型在编译期确定，读取后再转换为实体属性类型。
+        // v3.1：引用类级 static readonly 字段 _conv_<prop>，避免每次 Read 分配新 Converter。
+        // 抚慰符 ! 告知 NRT 分析器：static readonly 字段已完成初始化（字段声明在 Read 之前，
+        // 静态构造函数完成前 Read 不会被调用），lambda 体内引用非空。
         if (col.ConverterTypeName is not null)
         {
             string providerRead = GetRawReadExpression(
                 col.ProviderClrTypeName,
                 ordinal,
                 col.ColumnName);
-            return $"((global::PalORM.IValueConverter<{col.ClrTypeName}, {col.ProviderClrTypeName}>)new {col.ConverterTypeName}()).FromProvider({providerRead})";
+            return $"_conv_{col.PropertyName}!.FromProvider({providerRead})";
         }
 
         // 字符串 OwnedJson 是原始 JSON；对象 OwnedJson 仅走源生成 JsonTypeInfo<T>。

@@ -27,8 +27,10 @@ internal static class RegistryEmitter
         sb.AppendLine("        {");
         sb.AppendLine("            RowFactories = new global::System.Collections.Generic.Dictionary<global::System.Type, object>");
         sb.AppendLine("        {");
+        // v3.1: 注册 Func<DbDataReader, T> 委托（装箱为 object），替代旧的 RowFactory Instance。
+        // 调用方从字典取出后强转为 Func<DbDataReader, T> 直接 invoke，消除接口虚分发。
         foreach (var m in models.AsSpan())
-            sb.AppendLine($"            [typeof({m.EntityTypeName})] = RowFactory_{m.GeneratedTypeSuffix}.Instance,");
+            sb.AppendLine($"            [typeof({m.EntityTypeName})] = RowFactory_{m.GeneratedTypeSuffix}.Read,");
         sb.AppendLine("        },");
         sb.AppendLine();
         sb.AppendLine("            TableNames = new global::System.Collections.Generic.Dictionary<global::System.Type, string>");
@@ -95,7 +97,7 @@ internal static class RegistryEmitter
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
-            sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Instance),");
+            sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read),");
             string insertColumns = BuildStringArrayLiteral(
                 m.Columns.AsSpan().ToArray()
                     .Where(static column => column.IsInsertable)

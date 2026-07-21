@@ -694,7 +694,8 @@ public sealed class SessionConcurrencyTests
         var connection = new RegistrationFailureConnection();
         try
         {
-            var factory = (IRowFactory<SessionConcurrencyEntity>)
+            // v3.1: RowFactories 注册值从 IRowFactory<T> 改为 Func<DbDataReader, T> 委托。
+            var factory = (Func<System.Data.Common.DbDataReader, SessionConcurrencyEntity>)
                 PalORM_Runtime.RowFactories[typeof(SessionConcurrencyEntity)];
             var builder = new QueryBuilder<SessionConcurrencyEntity>(
                 new QueryBuilderContext<SessionConcurrencyEntity>(
