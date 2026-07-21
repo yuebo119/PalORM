@@ -61,6 +61,8 @@ public class SqliteBenchmarks : IAsyncDisposable
     private const int SeedRows = 10000;
     private const string Cs = "Data Source=bench;Mode=Memory;Cache=Shared";
     private SqliteConnection? _keeper;
+    private DataSession<SqliteProvider>? _sharedDb;
+    private DbOptions _options = new() { ConnectionString = Cs };
 
     [GlobalSetup]
     public async Task Setup()
@@ -74,6 +76,8 @@ public class SqliteBenchmarks : IAsyncDisposable
         await Exec("INSERT INTO bench_versioned (name, version) VALUES ('seed', 0)");
         await Exec("CREATE TABLE bench_soft (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, deleted_at TEXT)");
         await Exec("INSERT INTO bench_soft (name) VALUES ('seed')");
+        // 预创建共享 DataSession——与 ADO.NET/Dapper 复用连接对等
+        _sharedDb = await DataSession<SqliteProvider>.CreateAsync(_options);
     }
 
     private async Task Exec(string sql)
@@ -126,7 +130,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Query")]
     public async Task<List<BenchOrder>> PalORM_QueryAll()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         return await db.From<BenchOrder>().ToListAsync();
     }
 
@@ -155,7 +159,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Query")]
     public async Task<BenchOrder?> PalORM_GetByKey()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         return await db.GetAsync<BenchOrder>(5000L);
     }
 
@@ -184,7 +188,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Insert")]
     public async Task<long> PalORM_Insert()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         var entity = await db.InsertAsync(new BenchOrder { status = "B", total = 99m, created_at = 0 });
         return entity.id;
     }
@@ -214,7 +218,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     public async Task<int> PalORM_Update()
     {
         // PalORM 最优：Set().Where().ExecuteNonQueryAsync() 单步更新（不做 Get+Update 两步）
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         return await db.From<BenchOrder>()
             .Set(o => o.status, "U")
             .Set(o => o.total, 999m)
@@ -226,7 +230,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     public async Task<int> PalORM_Update_OptimisticLock()
     {
         // PalORM 独有：[ConcurrencyCheck] 自动 version 检查（最优路径同 Update）
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         return await db.From<BenchVersioned>()
             .Set(o => o.name, "updated")
             .Where($"id = {1L}")
@@ -259,7 +263,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Delete")]
     public async Task<int> PalORM_Delete_Physical()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         var inserted = await db.InsertAsync(new BenchOrder { status = "DEL", total = 1m, created_at = 0 });
         return await db.DeleteAsync<BenchOrder>(inserted.id);
     }
@@ -267,7 +271,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Delete")]
     public async Task<int> PalORM_Delete_SoftDelete()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         var inserted = await db.InsertAsync(new BenchSoft { name = "del" });
         return await db.DeleteAsync<BenchSoft>(inserted.id);
     }
@@ -296,7 +300,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Upsert")]
     public async Task<BenchOrder> PalORM_Save_Upsert()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         return await db.SaveAsync(new BenchOrder { id = 5000, status = "UPS", total = 555m, created_at = 0 });
     }
 
@@ -315,7 +319,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Bulk")]
     public async Task<long> PalORM_BulkInsert_10000()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         var items = Enumerable.Range(0, 10000)
             .Select(i => new BenchOrder { status = $"B{i}", total = i * 10m, created_at = 0 }).ToList();
         return await db.BulkInsertAsync(items);
@@ -324,7 +328,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Bulk")]
     public async Task<long> PalORM_BulkUpdate_1000()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         var items = await db.From<BenchOrder>().Take(1000).ToListAsync();
         foreach (var item in items) { item.status = "BU"; }
         return await db.BulkUpdateAsync(items);
@@ -333,7 +337,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Bulk")]
     public async Task<long> PalORM_BulkDelete_500()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         var items = Enumerable.Range(0, 500)
             .Select(i => new BenchOrder { status = $"BD{i}", total = 0m, created_at = 0 }).ToList();
         await db.BulkInsertAsync(items);
@@ -346,7 +350,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Transaction")]
     public async Task PalORM_Transaction_Commit()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         await db.WithTransaction(async ct =>
         {
             await db.InsertAsync(new BenchOrder { status = "T1", total = 1m, created_at = 0 }, ct);
@@ -358,7 +362,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Transaction")]
     public async Task PalORM_Transaction_Rollback()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         try
         {
             await db.WithTransaction(async ct =>
@@ -374,7 +378,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Transaction")]
     public async Task PalORM_Transaction_Savepoint()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         using var tran = await db.BeginTransactionAsync();
         await db.InsertAsync(new BenchOrder { status = "SP1", total = 1m, created_at = 0 });
         await db.SavepointAsync(tran, "sp1");
@@ -388,7 +392,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Feature")]
     public async Task<List<BenchOrder>> PalORM_Query_CacheHit()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         await db.From<BenchOrder>().WithCache("hit-bench", TimeSpan.FromMinutes(5)).ToListAsync();
         return await db.From<BenchOrder>().WithCache("hit-bench", TimeSpan.FromMinutes(5)).ToListAsync();
     }
@@ -396,7 +400,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Feature")]
     public async Task<List<BenchOrder>> PalORM_Query_WhereIn_500()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         var ids = Enumerable.Range(1, 500).Select(i => (long)i).ToArray();
         return await db.From<BenchOrder>().WhereIn(o => o.id, ids).ToListAsync();
     }
@@ -404,14 +408,14 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Feature")]
     public async Task<List<BenchSoft>> PalORM_Query_SoftDelete_Filter()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         return await db.From<BenchSoft>().ToListAsync();
     }
 
     [Benchmark, BenchmarkCategory("Feature")]
     public async Task<List<BenchOrder>> PalORM_Query_WithTracing()
     {
-        await using var db = await CreateDb();
+        var db = _sharedDb!;
         return await db.From<BenchOrder>().WithTracing().ToListAsync();
     }
 }
