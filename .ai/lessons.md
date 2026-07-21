@@ -30,7 +30,7 @@
 
 ---
 
-## II. AI 缺陷登记（16 个）
+## II. AI 缺陷登记（17 个）
 
 ### 阶段 A：修复缺陷（Sonar 4 轮）
 
@@ -57,6 +57,7 @@
 | B7 | stash pop 再次 | `git diff HEAD` |
 | B8 | 源生成器 emit 改动后 obj 缓存陷阱（v3.1） | emit 模板改动后必须清 `obj/` + `bin/`，否则增量构建复用旧 emit 导致运行时 cast 失败 NRE。详见 X 章 `9a5c5a7`。SOP：① 改 RowFactoryEmitter/CommandFactoryEmitter/RegistryEmitter/MigrationEmitter 任一 emit 模板 → ② `rm -rf src/*/obj src/*/bin test/*/obj test/*/bin` → ③ 全量 `dotnet build --no-incremental` |
 | B9 | 方案文字优化项被合理简化（v3.1 审查发现） | 优化方案文字（plan 文档）与实施代码会有偏差：核心性能路径必须严格对齐，辅助/锦上添花的优化允许基于测量数据（S3 反向验证）取舍。**陷阱**：方案文字本身可能存在自相矛盾（如「保留接口 + 标 Obsolete」），实施时不应照搬。**SOP**：① 实施后做代码审查对比方案文字 → ② 列出偏差 → ③ 每项偏差给出 S3 依据（数据/IL 等价/JIT 内联） → ④ 在方案文档补「实施差异说明」章节承认偏差。详见 `docs/v3.1-performance-plan.md` 实施差异 1/2/3。 |
+| B10 | 方案调研可能基于不完整数据（v4.0 实施时发现） | v4.0 方案基于 4 路并行 Agent 调研，但实施时发现多个高风险项被误判为瓶颈：① 优化 C（QueryBuilder O(N²)）实际只占 QueryAll 4.73ms 的 0.02%；② 源生成器 emit 工程化 4 子项均有现有机制覆盖；③ Convert.ChangeType 在 AOT 下经评估确认安全（走 IConvertible 接口，不依赖反射）。**陷阱**：调研 Agent 可能从代码模式推断出"理论瓶颈"，但缺乏运行时数据验证。**SOP**：① 实施前先用 benchmark 验证方案声称的瓶颈是否属实 → ② 评估复杂度/收益比，YAGNI 跳过理论瓶颈 → ③ 在方案文档补「评估后跳过」章节说明理由。详见 `docs/v4.0-improvement-plan.md` 与 `CHANGELOG.md` v4.0.0 「评估后跳过的方案项」表。 |
 
 ---
 
@@ -200,7 +201,7 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 4. .editorconfig——39 条规则配置完整？
 5. .ai/lessons.md——已读最新版？
 6. PR 模板——已更新最新检查项？
-7. CHANGELOG——当前版本号（3.1.0）？
+7. CHANGELOG——当前版本号（4.0.0）？
 8. 测试用例数——README badge 与实际一致？
 9. 【如改动 src/PalORM.SourceGen/*.Emitter.cs】obj 缓存陷阱——改 emit 模板后必须清 obj/bin 再全量构建（见 II.B8）
 ```
@@ -234,5 +235,6 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 | B2 static virtual | `fa92996` | IDbProvider CS8926 |
 | B8 obj 缓存陷阱 | `9a5c5a7` | RowFactoryEmitter emit 改动——Func 委托迁移 |
 | B9 方案合理简化 | `e58f414` / `本会话` | v3.1-performance-plan.md 实施差异说明 + 第二次基准复现 |
+| B10 方案调研误判 | `本会话 v4.0` | v4.0-improvement-plan.md + CHANGELOG v4.0.0 评估后跳过表 |
 | 占位诊断删除 | `8781357` | PalORMAnalyzer PALORM006/007 |
 | 规范化 | `3450e18` | CHANGELOG + CONTRIBUTING |
