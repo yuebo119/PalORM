@@ -66,6 +66,11 @@ public static class PalORM_Runtime
     private static readonly Lock _registrationLock = new();
     private static RuntimeRegistryState _state = RuntimeRegistryState.Empty;
 
+    /// <summary>v3.1 性能优化：单次 Volatile.Read 取回完整不可变状态快照。
+    /// <para>调用方在多个字典查找（RowFactories/TableNames/ColumnNames 等）场景应一次取快照复用，
+    /// 避免每个属性各自触发 Volatile.Read 与 fence 开销（每次查询省 ~2 次内存屏障）。</para></summary>
+    internal static RuntimeRegistryState CurrentState => Volatile.Read(ref _state);
+
     /// <summary>类型 → 行读取工厂委托（装箱为 object，调用方按实体类型还原泛型）。</summary>
     public static FrozenDictionary<Type, object> RowFactories => Volatile.Read(ref _state)._rowFactories;
 
@@ -232,7 +237,7 @@ public static class PalORM_Runtime
             throw new InvalidOperationException($"Registry fragment '{metadataName}' contains unknown entity type '{unexpected.FullName}'.");
     }
 
-    private sealed class RuntimeRegistryState
+    internal sealed class RuntimeRegistryState
     {
         internal static readonly RuntimeRegistryState Empty = new();
 

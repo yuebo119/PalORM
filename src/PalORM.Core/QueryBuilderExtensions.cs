@@ -39,8 +39,13 @@ public static class QueryBuilderExtensions
         var context = new QueryContext(sql, parameters);
         const string operation = "select";
         string provider = builder._dialect.GetName();
+        bool observed = builder._tracing || builder._metrics;
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
-        var sw = Stopwatch.StartNew();
+        // v3.1：Stopwatch 延迟创建——仅当 Tracing/Metrics/拦截器任一启用时才分配（拦截器 OnAfter 需要 Elapsed）。
+        // 默认配置（无观测性 + 无拦截器）的热路径省一次 StartNew + Stop（~150ns）。
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        bool needStopwatch = observed || interceptors.Count > 0;
+        Stopwatch? sw = needStopwatch ? Stopwatch.StartNew() : null;
         string outcome = "error";
         try
         {
@@ -52,12 +57,13 @@ public static class QueryBuilderExtensions
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             cmd.Transaction = builder.GetActiveTransaction();
             AddParameters(cmd, builder, parameters);
-            foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnBefore(context);
+            // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
+            NotifyInterceptorsOnBefore(interceptors, context);
             await PrepareCommandAsync(cmd, builder._prepared, ct).ConfigureAwait(false);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             List<T> list = builder._take.HasValue ? new(builder._take.Value) : [];
-            while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(builder._factory.Read(reader));
-            foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnAfter(context, sw.Elapsed, list.Count);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(builder._factory(reader));
+            NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
             // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
             if (builder._cacheKey is not null) builder._queryCache.Set(builder._cacheKey, new List<T>(list), builder._cacheTtl);
             outcome = "success";
@@ -72,9 +78,9 @@ public static class QueryBuilderExtensions
         }
         finally
         {
-            sw.Stop();
+            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics)
+            if (builder._metrics && sw is not null)
                 PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
         }
     }
@@ -84,11 +90,33 @@ public static class QueryBuilderExtensions
     private static void NotifyInterceptorsOnError(
         List<IQueryInterceptor> interceptors, QueryContext context, Exception exception)
     {
+        // v3.1：默认会话无拦截器——空列表直接返回，避免 foreach 迭代与方法调用开销。
+        if (interceptors.Count == 0) return;
         foreach (IQueryInterceptor interceptor in interceptors)
         {
             try { interceptor.OnError(context, exception); }
             catch { /* 拦截器不能覆盖原始执行异常，也不能阻断资源清理。 */ }
         }
+    }
+
+    /// <summary>触发所有拦截器的 OnBefore——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。</summary>
+    private static void NotifyInterceptorsOnBefore(
+        List<IQueryInterceptor> interceptors, QueryContext context)
+    {
+        if (interceptors.Count == 0) return;
+        foreach (IQueryInterceptor interceptor in interceptors) interceptor.OnBefore(context);
+    }
+
+    /// <summary>触发所有拦截器的 OnAfter——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。
+    /// Stopwatch 由调用方传入，仅当拦截器非空时才会读取 Elapsed（调用方需保证拦截器非空时 sw 也非 null）。</summary>
+    private static void NotifyInterceptorsOnAfter(
+        List<IQueryInterceptor> interceptors, QueryContext context, Stopwatch? sw, int count)
+    {
+        if (interceptors.Count == 0) return;
+        // 调用方契约：interceptors.Count > 0 时 sw 必非 null（needStopwatch = observed || interceptors.Count > 0）。
+        TimeSpan elapsed = sw!.Elapsed;
+        foreach (IQueryInterceptor interceptor in interceptors)
+            interceptor.OnAfter(context, elapsed, count);
     }
 
     /// <summary>返回第一行实体；无结果抛 <see cref="InvalidOperationException"/>。
@@ -294,8 +322,11 @@ public static class QueryBuilderExtensions
     {
         const string operation = "update";
         string provider = builder._dialect.GetName();
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        bool observed = builder._tracing || builder._metrics;
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
-        var stopwatch = Stopwatch.StartNew();
+        // v3.1：Stopwatch 延迟创建——与 ExecuteQueryAsync 同构（拦截器 OnAfter 需要 Elapsed）。
+        Stopwatch? sw = observed || interceptors.Count > 0 ? Stopwatch.StartNew() : null;
         string outcome = "error";
         // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
         string sql = builder.BuildUpdateSql();
@@ -311,10 +342,10 @@ public static class QueryBuilderExtensions
             command.CommandText = sql;
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             AddParameters(command, builder, updateParameters);
-            foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnBefore(context);
+            NotifyInterceptorsOnBefore(interceptors, context);
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            foreach (IQueryInterceptor interceptor in builder._interceptors) interceptor.OnAfter(context, stopwatch.Elapsed, affectedRows);
+            NotifyInterceptorsOnAfter(interceptors, context, sw, affectedRows);
             outcome = "success";
             return affectedRows;
         }
@@ -323,19 +354,15 @@ public static class QueryBuilderExtensions
             // ITM-513: 与 SELECT 管线一致——取消归类 cancelled，任何异常都通知拦截器 OnError
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
-            foreach (IQueryInterceptor interceptor in builder._interceptors)
-            {
-                try { interceptor.OnError(context, exception); }
-                catch { /* 拦截器不能覆盖原始执行异常，也不能阻断资源清理。 */ }
-            }
+            NotifyInterceptorsOnError(interceptors, context, exception);
             throw;
         }
         finally
         {
-            stopwatch.Stop();
+            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics)
-                PalORMMetrics.Record(operation, provider, outcome, stopwatch.Elapsed);
+            if (builder._metrics && sw is not null)
+                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
         }
     }
 
