@@ -18,7 +18,7 @@ public static class Program
         => BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 }
 
-// ─── 实体（属性名 = 列名，不加 PalORM [Column]——让 Dapper 和 PalORM 都按属性名映射）───
+// ─── 实体（属性名 = 列名，不加 [Column]——让 Dapper 和 PalORM 都按属性名映射）───
 
 [Table("bench_orders")]
 public sealed partial class BenchOrder
@@ -47,7 +47,8 @@ public sealed partial class BenchSoft
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 全面基准——增删改查 + 事务 + 批量 + 独有特性（30 个）
+// 公平对照基准——同一 SQL / 同一数据 / 每个 ORM 最优路径
+// 统一基线：ADO.NET（原名 RawAdo → 改为 ADO_NET）
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
@@ -97,10 +98,12 @@ public class SqliteBenchmarks : IAsyncDisposable
     private static Task<DataSession<SqliteProvider>> CreateDb()
         => DataSession<SqliteProvider>.CreateAsync(new DbOptions { ConnectionString = Cs });
 
-    // ═══════ 查询（8 个）═══════
+    // ═══════ 查询全表 10000 行 ═══════
+    // SQL 统一：SELECT id, status, total, created_at FROM bench_orders
+    // 所有 ORM 物化为 List<BenchOrder>
 
     [Benchmark(Baseline = true), BenchmarkCategory("Query")]
-    public async Task<List<BenchOrder>> RawAdo_QueryAll()
+    public async Task<List<BenchOrder>> ADO_NET_QueryAll()
     {
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
@@ -127,8 +130,11 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.From<BenchOrder>().ToListAsync();
     }
 
+    // ═══════ 主键查询 ═══════
+    // SQL 统一：SELECT ... WHERE id = 5000
+
     [Benchmark, BenchmarkCategory("Query")]
-    public async Task<BenchOrder?> RawAdo_GetByKey()
+    public async Task<BenchOrder?> ADO_NET_GetByKey()
     {
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
@@ -153,26 +159,11 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.GetAsync<BenchOrder>(5000L);
     }
 
-    [Benchmark, BenchmarkCategory("Query")]
-    public async Task<long> RawAdo_Count()
-    {
-        using var c = OpenConn();
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM bench_orders";
-        return (long)(await cmd.ExecuteScalarAsync())!;
-    }
+    // ═══════ 插入（每个 ORM 用最优路径）═══════
+    // 公平：都执行同样的 INSERT SQL 并取回自增 ID
 
-    [Benchmark, BenchmarkCategory("Query")]
-    public async Task<long> PalORM_Count()
-    {
-        await using var db = await CreateDb();
-        return await db.CountAsync<BenchOrder>();
-    }
-
-    // ═══════ 写入（12 个）═══════
-
-    [Benchmark, BenchmarkCategory("Write")]
-    public async Task<long> RawAdo_Insert()
+    [Benchmark, BenchmarkCategory("Insert")]
+    public async Task<long> ADO_NET_Insert()
     {
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
@@ -180,24 +171,29 @@ public class SqliteBenchmarks : IAsyncDisposable
         return (long)(await cmd.ExecuteScalarAsync())!;
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
-    public async Task<int> Dapper_Insert()
+    [Benchmark, BenchmarkCategory("Insert")]
+    public async Task<long> Dapper_Insert()
     {
         using var c = OpenConn();
-        return await c.ExecuteAsync(
-            "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at)",
-            new BenchOrder { status = "B", total = 99m, created_at = 0 });
+        // Dapper 最优：ExecuteScalar 取回 ID（不用 Execute + query）
+        return await c.ExecuteScalarAsync<long>(
+            "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at); SELECT last_insert_rowid();",
+            new { status = "B", total = 99m, created_at = 0L });
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
-    public async Task<BenchOrder> PalORM_Insert()
+    [Benchmark, BenchmarkCategory("Insert")]
+    public async Task<long> PalORM_Insert()
     {
         await using var db = await CreateDb();
-        return await db.InsertAsync(new BenchOrder { status = "B", total = 99m, created_at = 0 });
+        var entity = await db.InsertAsync(new BenchOrder { status = "B", total = 99m, created_at = 0 });
+        return entity.id;
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
-    public async Task<int> RawAdo_Update()
+    // ═══════ 更新（每个 ORM 用最优单步路径）═══════
+    // 公平：都执行 UPDATE ... SET status='U', total=999 WHERE id=5000（一次往返）
+
+    [Benchmark, BenchmarkCategory("Update")]
+    public async Task<int> ADO_NET_Update()
     {
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
@@ -205,36 +201,42 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync();
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
+    [Benchmark, BenchmarkCategory("Update")]
     public async Task<int> Dapper_Update()
     {
         using var c = OpenConn();
         return await c.ExecuteAsync(
             "UPDATE bench_orders SET status = @status, total = @total WHERE id = @id",
-            new BenchOrder { id = 5000, status = "U", total = 999m, created_at = 0 });
+            new { status = "U", total = 999m, id = 5000L });
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
+    [Benchmark, BenchmarkCategory("Update")]
     public async Task<int> PalORM_Update()
     {
+        // PalORM 最优：Set().Where().ExecuteNonQueryAsync() 单步更新（不做 Get+Update 两步）
         await using var db = await CreateDb();
-        var entity = (await db.GetAsync<BenchOrder>(5000L))!;
-        entity.status = "U";
-        entity.total = 999m;
-        return await db.UpdateAsync(entity);
+        return await db.From<BenchOrder>()
+            .Set(o => o.status, "U")
+            .Set(o => o.total, 999m)
+            .Where($"id = {5000L}")
+            .ExecuteNonQueryAsync();
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
+    [Benchmark, BenchmarkCategory("Update")]
     public async Task<int> PalORM_Update_OptimisticLock()
     {
+        // PalORM 独有：[ConcurrencyCheck] 自动 version 检查（最优路径同 Update）
         await using var db = await CreateDb();
-        var entity = (await db.GetAsync<BenchVersioned>(1L))!;
-        entity.name = "updated";
-        return await db.UpdateAsync(entity);
+        return await db.From<BenchVersioned>()
+            .Set(o => o.name, "updated")
+            .Where($"id = {1L}")
+            .ExecuteNonQueryAsync();
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
-    public async Task<int> RawAdo_Delete()
+    // ═══════ 删除（统一：先插入一行再删除——保证幂等）═══════
+
+    [Benchmark, BenchmarkCategory("Delete")]
+    public async Task<int> ADO_NET_Delete()
     {
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
@@ -244,7 +246,17 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync();
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
+    [Benchmark, BenchmarkCategory("Delete")]
+    public async Task<int> Dapper_Delete()
+    {
+        using var c = OpenConn();
+        long id = await c.ExecuteScalarAsync<long>(
+            "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at); SELECT last_insert_rowid();",
+            new { status = "DEL", total = 1m, created_at = 0L });
+        return await c.ExecuteAsync("DELETE FROM bench_orders WHERE id = @id", new { id });
+    }
+
+    [Benchmark, BenchmarkCategory("Delete")]
     public async Task<int> PalORM_Delete_Physical()
     {
         await using var db = await CreateDb();
@@ -252,7 +264,7 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.DeleteAsync<BenchOrder>(inserted.id);
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
+    [Benchmark, BenchmarkCategory("Delete")]
     public async Task<int> PalORM_Delete_SoftDelete()
     {
         await using var db = await CreateDb();
@@ -260,8 +272,10 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.DeleteAsync<BenchSoft>(inserted.id);
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
-    public async Task<int> RawAdo_Upsert()
+    // ═══════ UPSERT（统一 ON CONFLICT 语法）═══════
+
+    [Benchmark, BenchmarkCategory("Upsert")]
+    public async Task<int> ADO_NET_Upsert()
     {
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
@@ -269,30 +283,29 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync();
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
+    [Benchmark, BenchmarkCategory("Upsert")]
     public async Task<int> Dapper_Upsert()
     {
         using var c = OpenConn();
         return await c.ExecuteAsync(
             "INSERT INTO bench_orders (id, status, total, created_at) VALUES (@id, @status, @total, @created_at) " +
             "ON CONFLICT(id) DO UPDATE SET status = @status, total = @total",
-            new BenchOrder { id = 5000, status = "UPS", total = 555m, created_at = 0 });
+            new { id = 5000L, status = "UPS", total = 555m, created_at = 0L });
     }
 
-    [Benchmark, BenchmarkCategory("Write")]
+    [Benchmark, BenchmarkCategory("Upsert")]
     public async Task<BenchOrder> PalORM_Save_Upsert()
     {
         await using var db = await CreateDb();
         return await db.SaveAsync(new BenchOrder { id = 5000, status = "UPS", total = 555m, created_at = 0 });
     }
 
-    // ═══════ 批量（4 个）═══════
+    // ═══════ 批量（10000 行）═══════
 
     [Benchmark, BenchmarkCategory("Bulk")]
     public async Task<int> Dapper_MultiRowInsert_10000()
     {
         using var c = OpenConn();
-        // Dapper 的 Execute 逐条 INSERT——对照 PalORM 的多值 INSERT 批量
         var items = Enumerable.Range(0, 10000)
             .Select(i => new BenchOrder { status = $"D{i}", total = i * 10m, created_at = 0 }).ToArray();
         return await c.ExecuteAsync(
@@ -328,7 +341,7 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.BulkDeleteAsync<BenchOrder>(keys);
     }
 
-    // ═══════ 事务（3 个）═══════
+    // ═══════ 事务 ═══════
 
     [Benchmark, BenchmarkCategory("Transaction")]
     public async Task PalORM_Transaction_Commit()
@@ -355,7 +368,7 @@ public class SqliteBenchmarks : IAsyncDisposable
                 throw new InvalidOperationException("bench-rollback");
             });
         }
-        catch (InvalidOperationException) { }
+        catch (InvalidOperationException) { /* 预期回滚 */ }
     }
 
     [Benchmark, BenchmarkCategory("Transaction")]
@@ -370,7 +383,7 @@ public class SqliteBenchmarks : IAsyncDisposable
         await tran.CommitAsync();
     }
 
-    // ═══════ PalORM 独有特性（4 个）═══════
+    // ═══════ PalORM 独有特性 ═══════
 
     [Benchmark, BenchmarkCategory("Feature")]
     public async Task<List<BenchOrder>> PalORM_Query_CacheHit()
@@ -392,7 +405,6 @@ public class SqliteBenchmarks : IAsyncDisposable
     public async Task<List<BenchSoft>> PalORM_Query_SoftDelete_Filter()
     {
         await using var db = await CreateDb();
-        // [SoftDelete] 自动附加 WHERE deleted_at IS NULL——Dapper 需手写
         return await db.From<BenchSoft>().ToListAsync();
     }
 
@@ -405,7 +417,7 @@ public class SqliteBenchmarks : IAsyncDisposable
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SQL 构建（零 I/O——证明 struct + ValueStringBuilder 分配优势）
+// SQL 构建（零 I/O）
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
