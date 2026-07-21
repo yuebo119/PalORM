@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 
 namespace PalORM;
 
@@ -22,11 +23,23 @@ public interface IQueryCache
 /// <para><b>软上限</b>：容量检查与写入非原子（check-then-act），并发 Set 可短暂超出上限
 /// （幅度 ≤ 并发写入者数，有界且随 TTL 回落）——刻意不加锁换取写入路径无阻塞。
 /// 另注：ConcurrentDictionary.Count 为全分段锁操作，每次 Set 付一次；查询缓存写频率低可接受，
-/// 若未来成为热点可改 Interlocked 近似计数。</para></summary>
+/// 若未来成为热点可改 Interlocked 近似计数。</para>
+/// <para><b>OpenTelemetry 指标</b>（对齐 .NET 11 MemoryCache 标准口径，ITM-P3A）：
+/// 复用 <see cref="PalORMMetrics.Meter"/> 暴露 5 个指标（无 cache key 标签——ITM-539 教训）：
+/// <c>palorm.cache.requests{outcome=hit|miss}</c>、<c>palorm.cache.evictions</c>、
+/// <c>palorm.cache.entries</c>（ObservableGauge）、<c>palorm.cache.estimated_size</c>（ObservableGauge，未实现精确字节估算故恒为 Count）。
+/// 通过 <c>PalORMMetrics.Meter</c> 上游 OTLP 导出即可观测。</para></summary>
 public sealed class BoundedQueryCache : IQueryCache
 {
+    private static readonly Counter<long> _requests = PalORMMetrics.Meter.CreateCounter<long>(
+        "palorm.cache.requests", description: "Cache lookup requests (outcome=hit|miss)");
+    private static readonly Counter<long> _evictions = PalORMMetrics.Meter.CreateCounter<long>(
+        "palorm.cache.evictions", description: "Cache entries evicted (expired or type mismatch)");
+
+    // ObservableGauge 在 Pull 模式下被 OTel 主动轮询——缓存读取路径零开销（不每次 Set/TryGet 计数）。
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
     private readonly int _maxEntries;
+    private readonly string _instanceId = Guid.NewGuid().ToString("N");
 
     /// <summary>创建有界缓存。</summary>
     /// <param name="maxEntries">容量上限（默认 1024 条）。</param>
@@ -34,6 +47,18 @@ public sealed class BoundedQueryCache : IQueryCache
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEntries);
         _maxEntries = maxEntries;
+        // 注册 entries/size ObservableGauge——每个实例注册一次，以 instanceId 标签区分。
+        // 标签仅 instanceId（有界，1 标签/实例），避免 hit/miss/eviction 那种请求级标签的高基数问题。
+        PalORMMetrics.Meter.CreateObservableGauge(
+            "palorm.cache.entries",
+            () => new Measurement<int>(_cache.Count, new KeyValuePair<string, object?>("instance", _instanceId)),
+            unit: "{entries}",
+            description: "Current number of cache entries");
+        PalORMMetrics.Meter.CreateObservableGauge(
+            "palorm.cache.estimated_size",
+            () => new Measurement<int>(_cache.Count, new KeyValuePair<string, object?>("instance", _instanceId)),
+            unit: "{entries}",
+            description: "Estimated cache size (approximated as entry count; no per-entry byte accounting)");
     }
 
     /// <inheritdoc />
@@ -51,13 +76,20 @@ public sealed class BoundedQueryCache : IQueryCache
                 // 与"缓存未命中是正确性中性的"设计一致。
                 if (entry.Value is T typed)
                 {
+                    _requests.Add(1, new KeyValuePair<string, object?>("outcome", "hit"));
                     value = typed;
                     return true;
                 }
+                _evictions.Add(1);  // 类型不匹配淘汰
             }
 #pragma warning restore S1066
+            else
+            {
+                _evictions.Add(1);  // 过期淘汰
+            }
             _cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry));
         }
+        _requests.Add(1, new KeyValuePair<string, object?>("outcome", "miss"));
         value = default;
         return false;
     }
@@ -79,8 +111,13 @@ public sealed class BoundedQueryCache : IQueryCache
     private void EvictExpired()
     {
         // 物化到 List 后再 TryRemove——避免迭代中修改 ConcurrentDictionary 引发枚举器失效。
-        foreach (var pair in _cache.Where(static p => p.Value.IsExpired()).ToList())
-            _cache.TryRemove(pair);
+        var expired = _cache.Where(static p => p.Value.IsExpired()).ToList();
+        if (expired.Count > 0)
+        {
+            _evictions.Add(expired.Count);
+            foreach (var pair in expired)
+                _cache.TryRemove(pair);
+        }
     }
 
     private sealed class CacheEntry(object value, TimeSpan ttl)

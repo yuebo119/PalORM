@@ -450,6 +450,43 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 
 ---
 
+## .NET 11 性能特性
+
+PalORM 已为 .NET 11 runtime-async 优化，并在 `Directory.Build.props` 中启用：
+
+```xml
+<PropertyGroup>
+  <!-- .NET 11 runtime-async：运行时原生异步，替换编译器状态机 -->
+  <Features>runtime-async=on</Features>
+</PropertyGroup>
+```
+
+**被动受益**（无代码改动，preview 6 SDK 自动生效）：
+
+- **Runtime-async + ExecutionContext 空捕获跳过**——PalORM `AsyncLocal<T>` 仅 2 个（操作/事务 owner），绝大多数 `await` 路径无环境状态可恢复，跳过捕获直接受益；`ConfigureAwait(false)` 全库统一协同最大化
+- **NativeAOT 接口派发加速**——热路径 `IRowFactory<T>.Read`（每行调用）+ `IDbProvider` 静态抽象 + `IQueryInterceptor` 链直接受益；preview 6 共享派发 helper 减小二进制体积
+- **JIT 边界检查消除 + `SequenceEqual` 常量折叠**——`ValueStringBuilder` Span 操作与 `EquatableArray.Equals` 受益
+- **R2R 对 `EqualityComparer<T>.Default` 专门化**——`QueryBuilderExtensions.ToPageAsync` 续页检查受益（官方称最高提速 20×）
+
+**可观测性**（BoundedQueryCache 暴露 OTel 指标，对齐 .NET 11 MemoryCache 标准口径）：
+
+- `palorm.cache.requests{outcome=hit|miss}`
+- `palorm.cache.evictions`
+- `palorm.cache.entries` (ObservableGauge，Pull 模式)
+- `palorm.cache.estimated_size` (ObservableGauge，以条目数近似)
+
+通过 `PalORM` Meter 上游 OTLP 导出即可观测（无需额外适配器包）。如需按规则启停 `Activity` 跟踪，使用 .NET 11 `AddTracing`：
+
+```csharp
+builder.Services.AddTracing(tracing =>
+{
+    tracing.EnableTracing(sourceName: "PalORM");           // PalORM.ActivitySource
+    tracing.DisableTracing(sourceName: "PalORM", operationName: "HealthCheck");
+});
+```
+
+---
+
 ## 运行测试
 
 测试项目使用 TUnit（Microsoft.Testing.Platform 模式）：**`dotnet test` 会静默零输出**（MTP 与经典 test 管道不桥接），必须用 `dotnet run`：
