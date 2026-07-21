@@ -18,6 +18,8 @@ internal static class CommandFactoryEmitter
         foreach (var column in model.Columns.AsSpan())
         {
             if (!IsObjectOwnedJson(column)) continue;
+            // JsonSerializerContext（OwnedJson 用的 context.Default）只有非泛型 GetTypeInfo(Type)——
+            // 泛型 GetTypeInfo<T>() 在 JsonSerializerOptions 上（不在 Context 上），此处保持强转形态。
             sb.AppendLine($"    internal static readonly global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<{column.ClrTypeName}> JsonTypeInfo_{column.PropertyName} = (global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<{column.ClrTypeName}>)({column.OwnedJsonContextTypeName}.Default.GetTypeInfo(typeof({column.ClrTypeName})) ?? throw new global::System.InvalidOperationException(\"OwnedJson type metadata was not generated.\"));");
         }
         sb.AppendLine($"    internal const string InsertSql = {MigrationEmitter.ToCSharpLiteral(BuildInsertSql(model))};");

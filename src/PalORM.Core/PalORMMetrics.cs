@@ -14,7 +14,11 @@ public static class PalORMMetrics
 
     internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "1.0.0");
 
-    private static readonly Meter _meter = new(MeterName, "1.0.0");
+    /// <summary>共享 Meter——供其他模块（如 <see cref="BoundedQueryCache"/>）注册指标。
+    /// 通过 <c>PalORM</c> 名称统一导出到 OpenTelemetry。</summary>
+    internal static Meter Meter { get; } = new(MeterName, "1.0.0");
+
+    private static readonly Meter _meter = Meter;
     private static readonly Counter<long> _queryCounter = _meter.CreateCounter<long>(
         "palorm.query.executions", description: "Number of database commands executed");
     private static readonly Histogram<double> _queryDuration = _meter.CreateHistogram<double>(
