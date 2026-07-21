@@ -4,17 +4,26 @@
     <AssemblyName>PalORM.Benchmarks</AssemblyName>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
-    <NoWarn>$(NoWarn);CA1303</NoWarn>
+    <NoWarn>$(NoWarn);CA1303;CA2007;CA1062;CA1031;CA1515;CA1812;CA2100;CA1852;CA1816;S1450;DAP043</NoWarn>
+    <!-- BenchmarkDotNet 需要反射——基准项目不是 AOT 目标 -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <!-- Dapper.AOT 拦截器需要启用命名空间 -->
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);Dapper.AOT</InterceptorsNamespaces>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
     <ProjectReference Include="..\..\src\PalORM.Sqlite\PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.PostgreSql\PalORM.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.MySql\PalORM.MySql.csproj" />
     <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Dapper.AOT" />
   </ItemGroup>
 </Project>

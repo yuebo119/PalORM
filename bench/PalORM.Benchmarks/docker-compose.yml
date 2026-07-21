@@ -1,0 +1,36 @@
+# PalORM 基准测试——PostgreSQL + MySQL Docker 容器
+#
+# 用法：
+#   docker compose -f bench/PalORM.Benchmarks/docker-compose.yml up -d
+#   export PALORM_PG_CONNECTION="Host=127.0.0.1;Username=postgres;Database=bench"
+#   export PALORM_MYSQL_CONNECTION="Server=127.0.0.1;User=root;Database=bench"
+#   dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*Provider*'
+#
+# 安全：本地基准测试用 trust/empty-password 认证——不暴露到生产网络。
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: bench
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bench"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: yes
+      MYSQL_DATABASE: bench
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
