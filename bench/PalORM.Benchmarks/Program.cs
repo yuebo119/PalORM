@@ -61,7 +61,7 @@ public class SqliteBenchmarks : IAsyncDisposable
     private const int SeedRows = 10000;
     private const string Cs = "Data Source=bench;Mode=Memory;Cache=Shared";
     private SqliteConnection? _keeper;
-    private DbOptions _options = new() { ConnectionString = Cs };
+    private readonly DbOptions _options = new() { ConnectionString = Cs };
 
     [GlobalSetup]
     public async Task Setup()
@@ -95,9 +95,6 @@ public class SqliteBenchmarks : IAsyncDisposable
         c.Open();
         return c;
     }
-
-    private static Task<DataSession<SqliteProvider>> CreateDb()
-        => DataSession<SqliteProvider>.CreateAsync(new DbOptions { ConnectionString = Cs });
 
     // ═══════ 查询全表 10000 行 ═══════
     // SQL 统一：SELECT id, status, total, created_at FROM bench_orders
