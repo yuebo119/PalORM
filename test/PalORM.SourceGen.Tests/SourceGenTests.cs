@@ -257,13 +257,12 @@ internal sealed class SourceGenIntegrationTests
     [Test]
     public async Task GeneratedRowFactory_IsAccessible()
     {
-        // 验证源生成器产出的 RowFactory 已注册
+        // v3.1: 源生成器产出的 RowFactory 已注册——emit 从 IRowFactory<T> 类迁移到
+        // static readonly Func<DbDataReader, T> 委托字段，注册值类型从 RowFactory_X.Instance
+        // 变为 RowFactory_X.Read 委托。断言强转可成功即证明注册的是 Read 委托。
         var factory = PalORM_Runtime.RowFactories[typeof(TestUser)];
         await Assert.That(factory).IsNotNull();
-        string suffix = PalORMGenerator.CreateGeneratedTypeSuffix(
-            "global::PalORM.SourceGen.Tests.TestUser");
-        await Assert.That(factory).IsTypeOf(
-            Type.GetType($"PalORM.Generated.RowFactory_{suffix}, PalORM.SourceGen.Tests")!);
+        await Assert.That(factory).IsTypeOf<Func<System.Data.Common.DbDataReader, TestUser>>();
     }
 
     [Test]
@@ -435,13 +434,17 @@ internal sealed class SourceGenIntegrationTests
     [Test]
     public async Task RowFactory_GeneratedTypeStructure()
     {
+        // v3.1: 注册值改为 Func<DbDataReader, T> 委托——factory.GetType() 不再是 RowFactory_X。
+        // 改断言委托类型与签名正确，证明 emit 已迁移。
         var factory = PalORM_Runtime.RowFactories[typeof(TestUser)];
         await Assert.That(factory).IsNotNull();
-        // Verify the generated RowFactory type name
-        string typeName = factory.GetType().FullName!;
+        await Assert.That(factory).IsTypeOf<Func<System.Data.Common.DbDataReader, TestUser>>();
+        // 委托目标方法应属于 RowFactory_X 静态类（证明 emit 仍是 per-entity 特化）
+        Delegate del = (Delegate)factory;
+        string targetTypeName = del.Method.DeclaringType!.FullName!;
         string suffix = PalORMGenerator.CreateGeneratedTypeSuffix(
             "global::PalORM.SourceGen.Tests.TestUser");
-        await Assert.That(typeName).Contains($"RowFactory_{suffix}");
+        await Assert.That(targetTypeName).Contains($"RowFactory_{suffix}");
     }
 
     [Test]

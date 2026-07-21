@@ -44,9 +44,9 @@ public sealed class GridReader : IAsyncDisposable
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             List<T> list = [];
-            var typedFactory = (IRowFactory<T>)factory;
+            var typedFactory = (Func<DbDataReader, T>)factory;
             while (await _reader.ReadAsync(ct).ConfigureAwait(false))
-                list.Add(typedFactory.Read(_reader));
+                list.Add(typedFactory(_reader));
 
             await _reader.NextResultAsync(ct).ConfigureAwait(false);
             return list;
@@ -74,10 +74,10 @@ public sealed class GridReader : IAsyncDisposable
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
-            var typedFactory = (IRowFactory<T>)factory;
+            var typedFactory = (Func<DbDataReader, T>)factory;
             if (await _reader.ReadAsync(ct).ConfigureAwait(false))
             {
-                T result = typedFactory.Read(_reader);
+                T result = typedFactory(_reader);
                 await _reader.NextResultAsync(ct).ConfigureAwait(false);
                 return result;
             }

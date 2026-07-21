@@ -103,7 +103,7 @@ public sealed partial class DataSession<TProvider>
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        var tf = (IRowFactory<T>)factory;
+        var tf = (Func<DbDataReader, T>)factory;
         bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -112,7 +112,7 @@ public sealed partial class DataSession<TProvider>
                 ValidateColumnOrder<T>(reader);
                 firstRow = false;
             }
-            yield return tf.Read(reader);
+            yield return tf(reader);
         }
     }
 
@@ -158,7 +158,7 @@ public sealed partial class DataSession<TProvider>
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         List<T> list = [];
-        var typedFactory = (IRowFactory<T>)factory;
+        var typedFactory = (Func<DbDataReader, T>)factory;
         bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -167,7 +167,7 @@ public sealed partial class DataSession<TProvider>
                 ValidateColumnOrder<T>(reader);
                 firstRow = false;
             }
-            list.Add(typedFactory.Read(reader));
+            list.Add(typedFactory(reader));
         }
         return list;
     }

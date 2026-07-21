@@ -16,7 +16,8 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly SqlDialect _dialect;
     internal readonly bool _validateColumnOrder;
     internal readonly Func<string, string> _quoteIdentifier;
-    internal readonly IRowFactory<T> _factory;
+    // v3.1: 字段类型 IRowFactory<T> → Func<DbDataReader, T>——消除接口虚分发，每行调用直接 invoke 委托。
+    internal readonly Func<DbDataReader, T> _factory;
     internal readonly List<IQueryInterceptor> _interceptors;
     internal readonly Func<string, object?, DbParameter> _paramFactory;
     internal readonly string _tableName;
@@ -862,7 +863,7 @@ public struct QueryBuilder<T> where T : class, new()
 /// 一次构造，多个 QueryBuilder 实例共享。</summary>
 internal sealed record QueryBuilderServices<T>(
     SqlDialect Dialect,
-    IRowFactory<T> Factory,
+    Func<DbDataReader, T> Factory,
     List<IQueryInterceptor> Interceptors,
     Func<string, object?, DbParameter> ParamFactory,
     Func<string, string> QuoteIdentifier,

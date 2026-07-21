@@ -223,8 +223,12 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
         await Assert.That(commandFactory).Contains(
             "IValueConverter<global::Ulid, string>)new global::UlidConverter()).ToProvider(entity.ExternalId)");
+        // v3.1: RowFactory emit 从 `new Converter()` 内联改为类级 static readonly 单例字段。
+        // 断言 emit 同时含：(1) 类级 _conv_<prop> 字段声明；(2) Read lambda 内引用字段调用 FromProvider。
         await Assert.That(rowFactory).Contains(
-            "IValueConverter<global::Ulid, string>)new global::UlidConverter()).FromProvider(r.GetString(1))");
+            "IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter()");
+        await Assert.That(rowFactory).Contains("_conv_ExternalId!.FromProvider(r.GetString(1))");
+        await Assert.That(rowFactory).DoesNotContain("new global::UlidConverter()).FromProvider");
         await Assert.That(migration).Contains("\\\"external_id\\\" TEXT");
         await Assert.That(generated).DoesNotContain("ReadUlidFromBlob");
         await Assert.That(generated).DoesNotContain("ReadGuidFromBlob");

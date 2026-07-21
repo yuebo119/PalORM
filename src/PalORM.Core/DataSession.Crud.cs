@@ -12,13 +12,16 @@ public sealed partial class DataSession<TProvider>
     {
         _operationState.EnsureAvailable();
 
-        if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out var factory))
+        // v3.1：单次 Volatile.Read 复用——替代三次独立属性访问（每个属性各自触发 fence）。
+        // 单查询固定开销下降 ~2 次内存屏障（与 state 快照合并方案一致）。
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._rowFactories.TryGetValue(typeof(T), out var factory))
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' is not registered. Add [Table] attribute.");
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out var tableName))
+        if (!state._tableNames.TryGetValue(typeof(T), out var tableName))
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no [Table] attribute.");
-        if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out var columnNames))
+        if (!state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated column metadata.");
 
@@ -29,7 +32,7 @@ public sealed partial class DataSession<TProvider>
         var builder = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(
-                TProvider.Dialect, (IRowFactory<T>)factory!, _interceptors,
+                TProvider.Dialect, (Func<DbDataReader, T>)factory!, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
                 _operationState, _options.CommandTimeout),
             tableName, columnNames, readConnFactory,
@@ -101,7 +104,7 @@ public sealed partial class DataSession<TProvider>
         if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
 
-        T materialized = ((IRowFactory<T>)metadata.RowFactory).Read(reader);
+        T materialized = ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
         // 回填对齐 MySQL 路径（ITM-325）
         if (PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
             && PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pkColumn))
@@ -265,7 +268,7 @@ public sealed partial class DataSession<TProvider>
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false)
-            ? ((IRowFactory<T>)factory).Read(reader) : default;
+            ? ((Func<DbDataReader, T>)factory)(reader) : default;
     }
 
     /// <summary>查询全表。</summary>
@@ -286,9 +289,9 @@ public sealed partial class DataSession<TProvider>
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         List<T> list = [];
-        var tf = (IRowFactory<T>)factory;
+        var tf = (Func<DbDataReader, T>)factory;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            list.Add(tf.Read(reader));
+            list.Add(tf(reader));
         return list;
     }
 
@@ -367,7 +370,7 @@ public sealed partial class DataSession<TProvider>
             $"RETURNING {returningList}";
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
-            return ((IRowFactory<T>)metadata.RowFactory).Read(reader);
+            return ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
         return entity;
     }
 
