@@ -56,6 +56,7 @@ public sealed partial class BenchSoft
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
+// 标准基准配置——正式报告用，统计可信度中
 [SimpleJob(launchCount: 3, warmupCount: 5, iterationCount: 10)]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
@@ -472,6 +473,7 @@ public class SqliteBenchmarks : IAsyncDisposable
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
+// 快速验证配置——远程 DB 基准用（网络延迟 > 统计精度，快速迭代优先）
 [SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 5)]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
@@ -586,6 +588,7 @@ public class SqlBuildBenchmarks
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
+// 快速验证配置——远程 DB 基准用（网络延迟 > 统计精度，快速迭代优先）
 [SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 5)]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
@@ -704,6 +707,7 @@ public class PgBenchmarks : IAsyncDisposable
 }
 
 [MemoryDiagnoser]
+// 快速验证配置——远程 DB 基准用（网络延迟 > 统计精度，快速迭代优先）
 [SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 5)]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
