@@ -86,8 +86,10 @@ internal static class MigrationEmitter
                 : $" GENERATED ALWAYS AS ({column.ComputedExpression}) STORED";
             // NOT NULL 语义源与 RowFactory 的 IsDBNull 守卫合一（ITM-312）：
             // 非可空注解列（IsNullable=false）物化时不做 DBNull 检查，DDL 必须同步 NOT NULL，
-            // 否则外部写入 NULL 后读取直接抛异常
-            string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
+            // 否则外部写入 NULL 后读取直接抛异常。
+            // R12 修复：PK 列也显式 NOT NULL——依赖 DB 隐式 NOT NULL 在非 INTEGER PK（SQLite）
+            // 或无 STRICT 表时不安全。
+            string nullable = column.IsRequired || !column.IsNullable || column.IsPrimaryKey
                 ? " NOT NULL" : "";
             // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）。
             // ITM-519：DEFAULT CURRENT_TIMESTAMP 仅对 DateTime/DateTimeOffset 合法；
@@ -115,8 +117,9 @@ internal static class MigrationEmitter
                 : $" GENERATED ALWAYS AS ({column.ComputedExpression}) STORED";
             // NOT NULL 语义源与 RowFactory 的 IsDBNull 守卫合一（ITM-312）：
             // 非可空注解列（IsNullable=false）物化时不做 DBNull 检查，DDL 必须同步 NOT NULL，
-            // 否则外部写入 NULL 后读取直接抛异常
-            string nullable = column.IsRequired || (!column.IsNullable && !column.IsPrimaryKey)
+            // 否则外部写入 NULL 后读取直接抛异常。
+            // R12 修复：PK 列也显式 NOT NULL。
+            string nullable = column.IsRequired || !column.IsNullable || column.IsPrimaryKey
                 ? " NOT NULL" : "";
             // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）。
             // MySQL 分秒精度列要求 DEFAULT 表达式精度一致（DATETIME(6) 需 CURRENT_TIMESTAMP(6)）。

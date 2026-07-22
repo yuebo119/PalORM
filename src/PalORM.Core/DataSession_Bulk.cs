@@ -52,6 +52,8 @@ public partial class DataSession<TProvider>
                 null, operation.Owner, ct).ConfigureAwait(false);
         bool ownsTransaction = previousTransaction is null;
         Exception? primaryException = null;
+        // R10 修复：scratch 命令跨批次复用——替代每批 CreateCommand（对齐 MultiValueBulkInsert rowCommand 模式）
+        DbCommand scratch = CreateCommand();
         try
         {
             for (int start = 0; start < keys.Count; start += batchSize)
@@ -75,7 +77,6 @@ public partial class DataSession<TProvider>
                 // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
                 // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
                 // 经暂存命令中转取值，按批内序号重建参数。
-                await using DbCommand scratch = CreateCommand();
                 for (int index = 0; index < batchLen; index++)
                 {
                     scratch.Parameters.Clear();
@@ -103,6 +104,7 @@ public partial class DataSession<TProvider>
         }
         finally
         {
+            await scratch.DisposeAsync().ConfigureAwait(false);
             _operationState.RestoreTransaction(
                 tran, previousTransaction);
             if (ownsTransaction)
