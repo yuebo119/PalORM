@@ -105,22 +105,70 @@ public static class MultiValueBulkInsert
         return total;
     }
 
-    /// <summary>构建每行 (?,?,?,?,?) 占位符组——批内每行一组，逗号分隔。</summary>
+    /// <summary>构建每行 (?,?,?,?,?) 占位符组——批内每行一组，逗号分隔。
+    /// v4.0 性能优化：改用 ValueStringBuilder + stackalloc 消除 LINQ + string.Join 分配。
+    /// 10000 行批量场景下，每批 BuildRowPlaceholders 省一次数组 + 多次字符串分配。</summary>
     private static string[] BuildRowPlaceholders(int batchLength, int columnCount)
     {
         var rowPlaceholders = new string[batchLength];
+        int singleRowMaxLen = columnCount * 10 + 4;
+        Span<char> buffer = singleRowMaxLen <= 512
+            ? stackalloc char[singleRowMaxLen]
+            : new char[singleRowMaxLen];
         for (int row = 0; row < batchLength; row++)
         {
             int parameterOffset = row * columnCount;
-            rowPlaceholders[row] = "(" + string.Join(", ",
-                Enumerable.Range(0, columnCount)
-                    .Select(column => $"@p{parameterOffset + column}")) + ")";
+            int written = FormatRowPlaceholder(buffer, parameterOffset, columnCount);
+            rowPlaceholders[row] = new string(buffer[..written]);
         }
         return rowPlaceholders;
     }
 
+    /// <summary>把单行占位符 "( @p0, @p1, ... )" 写入 buffer，返回写入字符数。</summary>
+    private static int FormatRowPlaceholder(Span<char> buffer, int parameterOffset, int columnCount)
+    {
+        int written = 0;
+        buffer[written++] = '(';
+        for (int column = 0; column < columnCount; column++)
+        {
+            if (column > 0)
+            {
+                buffer[written++] = ',';
+                buffer[written++] = ' ';
+            }
+            buffer[written++] = '@';
+            buffer[written++] = 'p';
+            written += WriteIndexDigits(buffer[written..], parameterOffset + column);
+        }
+        buffer[written++] = ')';
+        return written;
+    }
+
+    /// <summary>把非负整数写入 span（不含前导零），返回写入字符数。</summary>
+    private static int WriteIndexDigits(Span<char> buffer, int value)
+    {
+        if (value == 0)
+        {
+            buffer[0] = '0';
+            return 1;
+        }
+        Span<char> digits = stackalloc char[5];
+        int digitCount = 0;
+        while (value > 0)
+        {
+            digits[digitCount++] = (char)('0' + value % 10);
+            value /= 10;
+        }
+        // digits 是反向存的（个位在前），写入 buffer 时倒序还原
+        for (int i = 0; i < digitCount; i++)
+            buffer[i] = digits[digitCount - 1 - i];
+        return digitCount;
+    }
+
     /// <summary>分批执行 INSERT——批大小受 effectiveBatchSize 与参数上限钳制。
-    /// 行参数暂存命令在批间复用（原实现每行新建一个 DbCommand，1 万行即 1 万次分配）。</summary>
+    /// 行参数暂存命令在批间复用（原实现每行新建一个 DbCommand，1 万行即 1 万次分配）。
+    /// v4.0 性能优化：DbCommand 跨批次复用（Parameters.Clear + CommandText 更新），
+    /// 避免 N 批次 × 1 次 CreateCommand 分配。占位符预构建改用 ValueStringBuilder。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:MethodsShouldNotHaveTooManyParameters",
         Justification = "批量执行参数多但全是必要——连接/事务/命令/实体集合/binder/quoter/cancellationToken "
@@ -135,21 +183,33 @@ public static class MultiValueBulkInsert
         int commandTimeoutSeconds, string typeName, CancellationToken ct) where T : class, new()
     {
         long total = 0;
-        for (int start = 0; start < entities.Count; start += effectiveBatchSize)
+        // v4.0 优化：批次命令跨批次复用——当批大小恒定时 CommandText 也复用。
+        // 末尾批可能小于 effectiveBatchSize，需要重建 CommandText。
+        DbCommand batchCmd = conn.CreateCommand();
+        string? lastBatchSql = null;
+        int lastBatchLength = -1;
+        Exception? batchCommandException = null;
+        try
         {
-            int end = Math.Min(start + effectiveBatchSize, entities.Count);
-            int batchLength = end - start;
-            string[] rowPlaceholders = BuildRowPlaceholders(batchLength, columnCount);
+            batchCmd.Transaction = tran;
+            batchCmd.CommandTimeout = commandTimeoutSeconds;
 
-            DbCommand cmd = conn.CreateCommand();
-            Exception? commandException = null;
-            try
+            for (int start = 0; start < entities.Count; start += effectiveBatchSize)
             {
-                cmd.Transaction = tran;
-                cmd.CommandTimeout = commandTimeoutSeconds;
-                cmd.CommandText =
-                    $"INSERT INTO {quotedTable} ({quotedColumns}) VALUES " +
-                    string.Join(", ", rowPlaceholders);
+                int end = Math.Min(start + effectiveBatchSize, entities.Count);
+                int batchLength = end - start;
+
+                // CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）
+                if (batchLength != lastBatchLength)
+                {
+                    string[] rowPlaceholders = BuildRowPlaceholders(batchLength, columnCount);
+                    lastBatchSql =
+                        $"INSERT INTO {quotedTable} ({quotedColumns}) VALUES " +
+                        string.Join(", ", rowPlaceholders);
+                    lastBatchLength = batchLength;
+                }
+                batchCmd.CommandText = lastBatchSql;
+                batchCmd.Parameters.Clear();
 
                 for (int row = 0; row < batchLength; row++)
                 {
@@ -164,23 +224,23 @@ public static class MultiValueBulkInsert
                     for (int column = 0; column < columnCount; column++)
                     {
                         DbParameter source = rowCommand.Parameters[column];
-                        cmd.Parameters.Add(createParameter(
+                        batchCmd.Parameters.Add(createParameter(
                             $"@p{parameterOffset + column}", source.Value));
                     }
                 }
 
-                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                total += await batchCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
-            catch (Exception exception)
-            {
-                commandException = exception;
-                throw;
-            }
-            finally
-            {
-                await BulkOperationFramework.DisposePreservingAsync(cmd, commandException,
-                    "PalORM.CommandCleanupException").ConfigureAwait(false);
-            }
+        }
+        catch (Exception exception)
+        {
+            batchCommandException = exception;
+            throw;
+        }
+        finally
+        {
+            await BulkOperationFramework.DisposePreservingAsync(batchCmd, batchCommandException,
+                "PalORM.CommandCleanupException").ConfigureAwait(false);
         }
         return total;
     }
