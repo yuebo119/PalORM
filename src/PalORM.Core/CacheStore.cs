@@ -41,7 +41,11 @@ public sealed class BoundedQueryCache : IQueryCache
     private readonly int _maxEntries;
     private readonly string _instanceId = Guid.NewGuid().ToString("N");
 
-    /// <summary>创建有界缓存。</summary>
+    /// <summary>创建有界缓存。
+    /// <para><b>生命周期契约（review R8）</b>：每个 BoundedQueryCache 实例在静态 Meter 上注册
+    /// ObservableGauge（持有缓存字典引用）。Meter 为静态永久存活——instrument 与缓存字典
+    /// 无法被 GC 回收。<b>推荐复用进程级共享单例</b>（<c>CacheStore.Default</c>），避免多实例场景下的
+    /// instrument 泄漏。短生命周期使用请实现 <see cref="IQueryCache"/> 自定义轻量缓存。</para></summary>
     /// <param name="maxEntries">容量上限（默认 1024 条）。</param>
     public BoundedQueryCache(int maxEntries = 1024)
     {

@@ -177,13 +177,16 @@ public sealed partial class DataSession<TProvider>
     private void ValidateColumnOrder<T>(DbDataReader reader) where T : class, new()
         => ColumnOrderValidator.Validate<T>(reader, _options.ValidateQueryColumnOrder);
 
-    /// <summary>直查首行——无结果抛 InvalidOperationException。</summary>
+    /// <summary>直查首行——无结果抛 InvalidOperationException。
+    /// <para>review R4：流式读取首行后立即释放 reader，不物化全表（大结果集场景省分配）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Bugprone", "S1751",
+        Justification = "「循环内 return」是有意为之的流式首行模式——取首行后立即跳出并释放 reader。")]
     public async ValueTask<T> QueryFirstAsync<T>(FormattableString sql, CancellationToken ct = default)
         where T : class, new()
     {
-        var results = await QueryAsync<T>(sql, ct).ConfigureAwait(false);
-        return results.Count > 0 ? results[0]
-            : throw new InvalidOperationException($"QueryFirstAsync: no rows for '{typeof(T).Name}'.");
+        await foreach (T row in QueryAsyncEnumerable<T>(sql, ct).ConfigureAwait(false))
+            return row;
+        throw new InvalidOperationException($"QueryFirstAsync: no rows for '{typeof(T).Name}'.");
     }
 
     /// <summary>直查精确单行——0 或 >1 行均抛异常。</summary>

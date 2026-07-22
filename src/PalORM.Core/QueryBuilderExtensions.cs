@@ -207,6 +207,8 @@ public static class QueryBuilderExtensions
             string operation = descending ? "<" : ">";
             if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
                 paged.AddWhereComparison(orderBy, operation, lastValue);
+            // review R3：如果 builder 已有 OrderBy，AddOrderBy 追加为次级排序键。
+            // keyset 续页条件始终锚定 orderBy 参数列——用户预设排序不影响续页正确性。
             paged.AddOrderBy(orderBy, descending);
             List<T> rows = await ExecuteQueryAsync(
                 paged, ct, operationLease.Owner).ConfigureAwait(false);
