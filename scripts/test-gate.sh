@@ -125,31 +125,43 @@ fi
 # ─── CI timeout-minutes 检查（T-DEF-4 下沉）─────────────
 echo ""
 echo "─── T-DEF-4: CI job timeout-minutes ───"
+
+count_ci_jobs() {
+  local file="$1"
+  # 只统计 jobs: 之后的 4 空格缩进 job 定义，排除 on:/push:/pull_request:/services:/env: 等
+  awk '/^jobs:/{in_jobs=1; next} in_jobs && /^    [a-z][a-z-]*:$/{gsub(/[ :]/,""); print}' "$file" 2>/dev/null | head -20
+}
+
+count_ci_timeouts() {
+  local file="$1"
+  grep -c 'timeout-minutes' "$file" 2>/dev/null || echo 0
+}
+
 CI_FILE="$ROOT_DIR/.github/workflows/ci.yml"
+PERF_FILE="$ROOT_DIR/.github/workflows/perf-gate.yml"
+
+TOTAL_JOBS=0
+TIMEOUTS=0
+
 if [ -f "$CI_FILE" ]; then
-  # 统计 CI job 数（行首 4 空格 + 标识符 + 冒号，排除已知非 job 关键字）
-  JOBS=$(grep -E '^\s{4}[a-z][a-z-]*:$' "$CI_FILE" | tr -d ' :' | head -20)
-  TOTAL_JOBS=$(echo "$JOBS" | grep -c . || true)
-  TIMEOUTS=$(grep -c 'timeout-minutes' "$CI_FILE" || true)
+  CI_JOB_COUNT=$(count_ci_jobs "$CI_FILE" | wc -l)
+  CI_TIMEOUT_COUNT=$(count_ci_timeouts "$CI_FILE")
+  TOTAL_JOBS=$((TOTAL_JOBS + CI_JOB_COUNT))
+  TIMEOUTS=$((TIMEOUTS + CI_TIMEOUT_COUNT))
+fi
 
-  # perf-gate.yml 的 job 也应统计
-  PERF_CI="$ROOT_DIR/.github/workflows/perf-gate.yml"
-  if [ -f "$PERF_CI" ]; then
-    PERF_JOBS=$(grep -E '^\s{4}[a-z][a-z-]*:$' "$PERF_CI" | tr -d ' :' | head -5)
-    PERF_TOTAL=$(echo "$PERF_JOBS" | grep -c . || true)
-    PERF_TIMEOUTS=$(grep -c 'timeout-minutes' "$PERF_CI" || true)
-    TOTAL_JOBS=$((TOTAL_JOBS + PERF_TOTAL))
-    TIMEOUTS=$((TIMEOUTS + PERF_TIMEOUTS))
-  fi
+if [ -f "$PERF_FILE" ]; then
+  PERF_JOB_COUNT=$(count_ci_jobs "$PERF_FILE" | wc -l)
+  PERF_TIMEOUT_COUNT=$(count_ci_timeouts "$PERF_FILE")
+  TOTAL_JOBS=$((TOTAL_JOBS + PERF_JOB_COUNT))
+  TIMEOUTS=$((TIMEOUTS + PERF_TIMEOUT_COUNT))
+fi
 
-  if [ "$TIMEOUTS" -lt "$TOTAL_JOBS" ]; then
-    echo "WARN  T-DEF-4  CI 有 $TOTAL_JOBS 个 job，仅 $TIMEOUTS 个有 timeout-minutes"
-    ((WARN_COUNT++)) || true
-  else
-    echo "PASS  T-DEF-4  所有 CI job 均有 timeout-minutes"
-  fi
+if [ "$TIMEOUTS" -lt "$TOTAL_JOBS" ]; then
+  echo "WARN  T-DEF-4  CI 有 $TOTAL_JOBS 个 job，仅 $TIMEOUTS 个有 timeout-minutes"
+  ((WARN_COUNT++)) || true
 else
-  echo "SKIP  T-DEF-4  ci.yml 不存在"
+  echo "PASS  T-DEF-4  所有 CI job 均有 timeout-minutes（$TOTAL_JOBS 个）"
 fi
 
 # ─── 总结 ────────────────────────────────────────────────
