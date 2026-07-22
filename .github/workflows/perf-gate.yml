@@ -1,0 +1,104 @@
+name: Performance Gate
+
+on:
+  # 每周日凌晨 2:00 自动运行（追踪性能趋势）
+  schedule:
+    - cron: '0 2 * * 0'
+  # 手动触发
+  workflow_dispatch:
+  # PR 带 [perf] 标签时触发
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  sqlite-benchmark:
+    name: SQLite Benchmark Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 11
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Restore
+        run: dotnet restore PalORM.slnx
+
+      - name: Build Benchmarks (Release)
+        run: dotnet build bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj -c Release --no-restore
+
+      - name: Run SQLite Benchmarks
+        run: |
+          dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- \
+            --filter '*SqliteBenchmarks*' \
+            --exporters json \
+            2>&1 | tee benchmark-output.log
+
+      - name: Extract Results
+        id: results
+        run: |
+          # 从 BenchmarkDotNet 输出提取关键指标
+          echo "## Performance Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Benchmark | Mean | Allocated |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|------|-----------|" >> $GITHUB_STEP_SUMMARY
+          grep '|.*us\||.*ms' benchmark-output.log | grep '^|' | while read line; do
+            echo "$line" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Check Regression (vs baseline)
+        run: |
+          BASELINE_FILE="bench/baselines/v4.0.json"
+          if [ ! -f "$BASELINE_FILE" ]; then
+            echo "⚠ No baseline file found, skipping regression check"
+            exit 0
+          fi
+
+          echo "Checking regression against $BASELINE_FILE..."
+          # 提取基线中的 PalORM_QueryAll median
+          BASELINE_QUERYALL=$(python3 -c "
+          import json
+          with open('$BASELINE_FILE') as f:
+              data = json.load(f)
+          for b in data['benchmarks']:
+              if b['name'] == 'PalORM_QueryAll':
+                  print(b.get('median_ms', b.get('mean_ms', 'N/A')))
+          " 2>/dev/null || echo "N/A")
+
+          echo "Baseline PalORM_QueryAll median: ${BASELINE_QUERYALL}ms"
+          echo "Regression threshold: +10% (Median > $(python3 -c "print(round(${BASELINE_QUERYALL:-999} * 1.1, 2))" 2>/dev/null || echo 'N/A')ms)"
+
+          # 提取当前运行的 Median
+          CURRENT_QUERYALL=$(grep 'PalORM_QueryAll' benchmark-output.log | grep 'ms |' | head -1 | awk -F'|' '{print $2}' | awk '{print $1}' || echo "N/A")
+          echo "Current PalORM_QueryAll: ${CURRENT_QUERYALL}ms"
+
+          # 回归判定（如果基线和当前值都可解析）
+          if [ "$BASELINE_QUERYALL" != "N/A" ] && [ "$CURRENT_QUERYALL" != "N/A" ]; then
+            python3 -c "
+          baseline = float('${BASELINE_QUERYALL}')
+          current = float('${CURRENT_QUERYALL}'.replace(',', ''))
+          ratio = current / baseline
+          print(f'Regression ratio: {ratio:.2%}')
+          if ratio > 1.10:
+              print(f'❌ REGRESSION: {ratio:.2%} > 10% threshold')
+              exit(1)
+          else:
+              print(f'✅ OK: {ratio:.2%} <= 10% threshold')
+          " || exit 1
+          else
+            echo "⚠ Could not parse values for comparison, skipping"
+          fi
+
+      - name: Upload Benchmark Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-output.log
+            bench/PalORM.Benchmarks/BenchmarkDotNet.Artifacts/
+          retention-days: 30
