@@ -6,10 +6,10 @@ namespace PalORM.Generated;
 [global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "2.0.0")]
 internal static class Migration_global__ReservedWordEntity_c143a9c9
 {
-    internal const string CreateTable = "CREATE TABLE IF NOT EXISTS \"order\" (\n    \"Id\" TEXT PRIMARY KEY,\n    \"select\" TEXT NOT NULL\n)";
-    internal const string CreateTableSqlite = "CREATE TABLE IF NOT EXISTS \"order\" (\n    \"Id\" TEXT PRIMARY KEY,\n    \"select\" TEXT NOT NULL\n)";
-    internal const string CreateTablePostgreSql = "CREATE TABLE IF NOT EXISTS \"order\" (\n    \"Id\" TEXT PRIMARY KEY,\n    \"select\" TEXT NOT NULL\n)";
-    internal const string CreateTableMySql = "CREATE TABLE IF NOT EXISTS `order` (\n    `Id` VARCHAR(255) PRIMARY KEY,\n    `select` TEXT NOT NULL\n)";
+    internal const string CreateTable = "CREATE TABLE IF NOT EXISTS \"order\" (\n    \"Id\" TEXT NOT NULL PRIMARY KEY,\n    \"select\" TEXT NOT NULL\n)";
+    internal const string CreateTableSqlite = "CREATE TABLE IF NOT EXISTS \"order\" (\n    \"Id\" TEXT PRIMARY KEY NOT NULL,\n    \"select\" TEXT NOT NULL\n)";
+    internal const string CreateTablePostgreSql = "CREATE TABLE IF NOT EXISTS \"order\" (\n    \"Id\" TEXT PRIMARY KEY NOT NULL,\n    \"select\" TEXT NOT NULL\n)";
+    internal const string CreateTableMySql = "CREATE TABLE IF NOT EXISTS `order` (\n    `Id` VARCHAR(255) PRIMARY KEY NOT NULL,\n    `select` TEXT NOT NULL\n)";
 
     internal static readonly string[] CreateIndexesSqlite = global::System.Array.Empty<string>();
     internal static readonly string[] CreateIndexesPostgreSql = global::System.Array.Empty<string>();
