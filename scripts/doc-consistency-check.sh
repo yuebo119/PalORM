@@ -26,14 +26,13 @@ else
     fail "D1 README badge($readme_badge) ≠ 架构总计($arch_total)"
 fi
 
-# ── D2: 架构表格 Core 计数 = README/API/变更日志中 Core 计数 ──
+# ── D2: 架构表格 Core 计数 = API参考中 Core 计数（变更日志是历史快照不检查）──
 core_arch=$(grep -oP 'Core\.Tests\s*\|\s*\K\d+/\d+' docs/架构设计.md)
 core_api=$(grep -oP 'Core \K\d+/\d+' docs/API参考.md | head -1)
-core_changelog=$(grep -oP 'Core \K\d+/\d+' docs/变更日志.md | head -1)
-if [ "$core_arch" = "$core_api" ] && [ "$core_arch" = "$core_changelog" ]; then
-    pass "D2 Core 计数六处一致: $core_arch"
+if [ "$core_arch" = "$core_api" ]; then
+    pass "D2 Core 计数一致: $core_arch"
 else
-    fail "D2 Core 计数: 架构=$core_arch, API=$core_api, 日志=$core_changelog"
+    fail "D2 Core 计数: 架构=$core_arch, API=$core_api"
 fi
 
 # ── D3: G9 文档状态与整改事实一致（仓库侧已整改，数据库轮换留 AUD-001）──

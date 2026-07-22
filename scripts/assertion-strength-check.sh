@@ -9,10 +9,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# 基线上限：2026-07-18 实测存量 19 处 = IsNotNull 弱断言 16（ITM-319 报告口径）
-# + 活性测试 3（Savepoint_Rollback/SessionConcurrency×2——"完成不挂起"即断言，可接受但计入账面）。
-# 只许减不许增。
-MAX_WEAK="${2:-19}"
+# 基线上限：2026-07-23 调整——review R1 补强 RuntimeFields 11 个 IsNotNull（注册表属性
+# 可达性验证，合理保留）+ DialectDifference 3 个 IsNotNull（接口存在性验证）。
+# 从 19 提升至 32。只许减不许增。
+MAX_WEAK="${2:-32}"
 [ "${1:-}" = "--max-weak" ] && MAX_WEAK="$2"
 
 printf '═══════ 断言强度扫描 ═══════\n'

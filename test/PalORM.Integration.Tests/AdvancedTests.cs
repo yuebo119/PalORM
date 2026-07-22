@@ -153,7 +153,7 @@ public sealed class AdvancedFeatureTests
     }
 
     [Test]
-    public async Task Savepoint_Rollback()
+    public async Task Savepoint_Rollback_PreservesPriorInserts()
     {
         await using var db = await TestDb.SqliteAsync();
         await db.MigrateAsync();
@@ -163,6 +163,9 @@ public sealed class AdvancedFeatureTests
         await db.InsertAsync(new Product { Name = "SP2", Price = 2m, Stock = 0 });
         await db.RollbackToAsync(t, "sp1");
         await t.CommitAsync();
+        // SP2 已回滚，SP1 保留
+        await Assert.That(await db.CountAsync<Product>()).IsEqualTo(1);
+        await Assert.That((await db.GetAsync<Product>(1L))!.Name).IsEqualTo("SP1");
     }
 
     [Test]
