@@ -4,7 +4,7 @@
 # 可 grep 的 17 项输出命中量级；7 项需 Roslyn/IDE 分析，明确标注 [人工]。
 # 命中数是候选量级，不是执行清单——逐项评估后才可执行。
 
-set -uo pipefail
+set -euo pipefail
 
 cd "$(dirname "$0")/.."
 

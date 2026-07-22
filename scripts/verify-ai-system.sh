@@ -2,7 +2,7 @@
 # .ai 系统机械校验：提示词引用可解析、口径数字与事实一致、配套脚本存在。
 # 11 项检查全部通过退出 0，任一失败退出 1。
 
-set -uo pipefail
+set -euo pipefail
 
 cd "$(dirname "$0")/.."
 

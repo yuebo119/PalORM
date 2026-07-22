@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PalORM 仓库门禁。每条规则独立执行，最终统一返回结果。
 
-set -uo pipefail
+set -euo pipefail
 
 PASSED=0
 FAILED=0
