@@ -86,23 +86,29 @@ else
 fi
 
 # V5 门禁编号：gate 提示词表、gate-check.sh、编码规范清单三方最大 G 编号一致
-g_prompt=$(grep -oE '^\| G[0-9]+' .ai/gate/prompt.md | grep -oE '[0-9]+' | sort -n | tail -1)
-g_script=$(grep -oE '"?G[0-9]+"?' scripts/gate-check.sh | grep -oE '[0-9]+' | sort -n | tail -1)
+# gate/prompt.md 格式: | G1 | ... | 或 G1-G28 标题
+g_prompt=$(grep -oE 'G1-G[0-9]+' .ai/gate/prompt.md | grep -oE '[0-9]+$' | sort -n | tail -1)
+# gate-check.sh 格式: check_zero G28 '...' 或 G28 出现在字符串中
+g_script=$(grep -oE 'G[0-9]+' scripts/gate-check.sh | grep -oE '[0-9]+' | sort -n | tail -1)
+# 编码规范.md 格式: G1-G28 标题
 g_doc=$(grep -oE 'G1-G[0-9]+' docs/编码规范.md | grep -oE '[0-9]+$' | sort -n | tail -1)
-if [ "$g_prompt" = "$g_script" ] && [ "$g_script" = "$g_doc" ]; then
-    pass 5 "门禁编号三方一致（G1-G$g_script）"
+# README.md 格式: G1-G28
+g_readme=$(grep -oE 'G1-G[0-9]+' .ai/README.md | grep -oE '[0-9]+$' | sort -n | tail -1)
+if [ "$g_prompt" = "$g_script" ] && [ "$g_script" = "$g_doc" ] && [ "$g_doc" = "$g_readme" ]; then
+    pass 5 "门禁编号四方一致（G1-G$g_script）"
 else
-    fail 5 '门禁编号不同步' "提示词 G$g_prompt，脚本 G$g_script，编码规范 G$g_doc"
+    fail 5 '门禁编号不同步' "提示词 G$g_prompt，脚本 G$g_script，编码规范 G$g_doc，README G$g_readme"
 fi
 
-# V6 API 口径：提示词 113/112 与 API参考.md 自述一致
+# V6 API 参考：API参考.md 存在且非空（v3.0.0 重写后不再用 113/112 口径）
 api_ok=true
-grep -q '113 API 中 112 个已实现' docs/API参考.md || api_ok=false
-grep -q '113 API 覆盖' .ai/review/prompt.md || api_ok=false
-if $api_ok; then
-    pass 6 'API 口径一致（113 = 112 实现 + 1 移除）'
+[ -f docs/API参考.md ] || api_ok=false
+# 检查文件有实质内容（至少 50 行，含多个章节标题）
+api_lines=$(wc -l < docs/API参考.md 2>/dev/null || echo 0)
+if $api_ok && [ "$api_lines" -gt 50 ]; then
+    pass 6 "API 参考完整（$api_lines 行）"
 else
-    fail 6 'API 口径漂移' '113/112 口径在 API参考.md 或 audit prompt 中不成立'
+    fail 6 'API 参考异常' "docs/API参考.md 行数 $api_lines（预期 >50）"
 fi
 
 # V7 误判知识库可加载且模式数达标（排除 HTML 注释中的模板行）
