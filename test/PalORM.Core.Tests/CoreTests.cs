@@ -865,7 +865,8 @@ public sealed class ProviderTests
 {
     private sealed class ProviderBatchEntity;
 
-    [Test] public async Task SqliteProvider_AllMembers_Defined()
+    [Test]
+    public async Task SqliteProvider_AllMembers_Defined()
     {
         await Assert.That(PalORM.Sqlite.SqliteProvider.Name).IsEqualTo("SQLite");
         await Assert.That(PalORM.Sqlite.SqliteProvider.SupportsReturningClause).IsTrue();
@@ -884,7 +885,8 @@ public sealed class ProviderTests
             new Microsoft.Data.Sqlite.SqliteException("busy", 5))).IsFalse();
     }
 
-    [Test] public async Task SqliteProvider_CreateParameter_Works()
+    [Test]
+    public async Task SqliteProvider_CreateParameter_Works()
     {
         var p = PalORM.Sqlite.SqliteProvider.CreateParameter("@p0", "hello");
         await Assert.That(p.ParameterName).IsEqualTo("@p0");
@@ -902,7 +904,8 @@ public sealed class ProviderTests
             new Microsoft.Data.Sqlite.SqliteException("constraint", 19))).IsFalse();
     }
 
-    [Test] public async Task NamingConvention_SnakeCase_Works()
+    [Test]
+    public async Task NamingConvention_SnakeCase_Works()
     {
         var opts = new DbOptions { ConnectionString = "x", NamingConvention = NamingConvention.SnakeCase };
         await Assert.That(opts.ApplyNaming("OrderId")).IsEqualTo("order_id");
@@ -910,7 +913,8 @@ public sealed class ProviderTests
         await Assert.That(opts.ApplyNaming("Id")).IsEqualTo("id");
     }
 
-    [Test] public async Task IValueConverter_Interface_Exists()
+    [Test]
+    public async Task IValueConverter_Interface_Exists()
     {
         // 验证 IValueConverter<T,U> 接口已定义并可被实现
         var converter = new TestConverter();
@@ -924,14 +928,16 @@ public sealed class ProviderTests
         public string ToProvider(int value) => value.ToString(CultureInfo.InvariantCulture);
     }
 
-    [Test] public async Task PostgreSqlProvider_AllMembers_Compiled()
+    [Test]
+    public async Task PostgreSqlProvider_AllMembers_Compiled()
     {
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.Name).IsEqualTo("PostgreSql");
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.SupportsReturningClause).IsTrue();
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.QuoteIdentifier("t")).IsEqualTo("\"t\"");
     }
 
-    [Test] public async Task MySqlProvider_AllMembers_Compiled()
+    [Test]
+    public async Task MySqlProvider_AllMembers_Compiled()
     {
         await Assert.That(PalORM.MySql.MySqlProvider.Name).IsEqualTo("MySql");
         await Assert.That(PalORM.MySql.MySqlProvider.SupportsReturningClause).IsFalse();
