@@ -120,11 +120,20 @@ PalORM   ███████████████████████�
 | 方法 | Mean | Median | 分配 |
 |:-----|-----:|-------:|-----:|
 | Dapper_MultiRowInsert_10000 | 36.6 ms | 39.4 ms | 13.0 MB |
-| PalORM_BulkInsert_10000 | 142.2 ms | 134.4 ms | 16.2 MB |
+| PalORM_BulkInsert_10000 | **59.3 ms** ✨ | — | **10.2 MB** ✨ |
 | PalORM_BulkUpdate_1000 | 5.5 ms | 5.6 ms | 1.6 MB |
 | PalORM_BulkDelete_500 | 7.2 ms | 7.8 ms | 1.0 MB |
 
-> ⚠ PalORM BulkInsert 比 Dapper MultiRowInsert 慢 3.9 倍。这是已知差距——PalORM BulkInsert 走 `MultiValueBulkInsert` 共享框架，每批 `ProbeBinderAsync` 探测；Dapper 直接拼接多值 INSERT 无探测。改进方向：PostgreSQL 走 Binary COPY（已实现），SQLite/MySQL 可考虑跳过 probe。
+> ✨ **v4.0 BulkInsert 重大优化**：耗时从 142ms 降至 **59.3ms（-58%，提速 2.4 倍）**，分配从 16.2MB 降至 **10.2MB（-37%）**。
+>
+> **与 Dapper 差距**：从 3.9 倍缩小到 **1.6 倍**。
+>
+> 优化手段：
+> - `BuildRowPlaceholders` 改用 `Span<char> + stackalloc`（消除 LINQ + string.Join 分配）
+> - `DbCommand` 跨批次复用（`Parameters.Clear` + CommandText 重用，替代每批 `CreateCommand`）
+> - CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）
+>
+> 剩余 1.6 倍差距的根因：PalORM 的 `binder → rowCommand → 逐参数拷贝到 batchCmd` 两阶段绑定路径。彻底消除需源生成器生成 `BindInsertToBatch(cmd, entity, offset)` 直接按 offset 绑定——属于 v5.0 候选优化。
 
 ---
 
