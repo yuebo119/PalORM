@@ -255,69 +255,77 @@ micro-benchmark 对环境高度敏感。已知影响：
 
 ---
 
-## 🌐 三 Provider 远程基准（v4.0 新增）
+## 🌐 三 Provider 纯 Docker 基准（v4.0）
 
-> 远程服务器：Ubuntu 7.0 / 8 核 / 7.2 GB RAM / Docker
-> - PostgreSQL 18.4（Docker 容器）
-> - MySQL 8.4.10（Docker 容器）
-> - 客户端：本地 Windows 10 通过网络连接（`Pooling=false` 真实场景）
+> **纯 Docker 环境**——benchmark 客户端与数据库在同一台服务器的 Docker 容器内，通过 `--network=host` 用 localhost 通信（零网络 RTT）
+>
+> 服务器：Ubuntu 7.0 / 8 核 / 7.2 GB RAM
+> - PostgreSQL 18.4（Docker 容器，1Panel 管理）
+> - MySQL 8.4.10（Docker 容器，1Panel 管理）
+> - Benchmark 客户端：`mcr.microsoft.com/dotnet/sdk:11.0-preview` Docker 镜像
+> - 网络：`--network=host`（localhost，零 RTT）
 > 种子数据：10,000 行 bench_orders
 > 配置：`launchCount=1, warmupCount=3, iterationCount=5`
 
-### PostgreSQL 18.4
+### PostgreSQL 18.4（纯 Docker）
 
 | 操作 | ADO.NET | Dapper | PalORM | PalORM vs ADO.NET |
 |------|:---:|:---:|:---:|:---:|
-| QueryAll 10K | 28.21 ms | 28.38 ms (101%) | **18.35 ms** | **65%** 🟢🟢 |
-| GetByKey | 22.35 ms | — | **7.48 ms** | **33%** 🟢🟢🟢 |
-| Insert + RETURNING | 23.54 ms | — | **8.04 ms** | **35%** 🟢🟢🟢 |
-| BulkInsert 10K（Binary COPY）| — | — | **65.09 ms** | — |
+| QueryAll 10K | 11.37 ms | 11.82 ms (108%) | **9.86 ms** | **90%** 🟢 |
+| GetByKey | 6.66 ms | — | 8.68 ms | 130% |
+| Insert + RETURNING | 7.82 ms | — | **7.26 ms** | **94%** 🟢 |
+| BulkInsert 10K（Binary COPY）| — | — | **43.21 ms** | — |
 
-> 🟢🟢🟢 **PalORM 在 PostgreSQL 上大幅超越 ADO.NET！**
->
-> - **QueryAll 快 35%**：源生成 RowFactory 委托比手写 `r.GetInt64 + GetString + GetDecimal` 更快——JIT 可内联 static delegate
-> - **Insert 快 65%**：PalORM 用参数化 INSERT + RETURNING 单次往返物化整行；ADO.NET 手写相同 SQL 但连接管理开销更大
-> - **GetByKey 快 67%**：CRUD 路径 CurrentState 快照合并 + 预编译 SQL 路径
-> - **BulkInsert 65ms**：PG Binary COPY 是 Najpsql 原生最快路径
+> 🟢 PalORM 在 PG 上 **QueryAll 快 10%、Insert 持平**。消除网络 RTT 后，框架开销占比变大（vs 上次网络测试的 65%/35%）——说明上次的巨大优势部分来自 PalORM 减少了网络往返次数。
 
-### MySQL 8.4.10
+### MySQL 8.4.10（纯 Docker）
 
 | 操作 | ADO.NET | Dapper | PalORM | PalORM vs ADO.NET |
 |------|:---:|:---:|:---:|:---:|
-| QueryAll 10K | 14.42 ms | 15.53 ms (108%) | **15.20 ms** | **106%** |
-| GetByKey | 5.26 ms | — | **5.54 ms** | **105%** |
-| Insert + LAST_INSERT_ID | 6.37 ms | — | **6.60 ms** | **104%** |
-| BulkInsert 10K（多值 INSERT）| — | — | **72.74 ms** | — |
+| QueryAll 10K | 7.66 ms | 9.05 ms (118%) | 9.24 ms | 121% |
+| GetByKey | 4.02 ms | — | 4.51 ms | 112% |
+| Insert + LAST_INSERT_ID | 6.16 ms | — | **5.82 ms** | **96%** 🟢 |
+| BulkInsert 10K（多值 INSERT）| — | — | **56.50 ms** | — |
 
-> MySQL 上 PalORM 与 ADO.NET **基本持平**（104-106%）。MySQL 无 RETURNING 子句，走 `LAST_INSERT_ID()` 两次往返，无性能优势。MySqlConnector 的参数化路径已经很高效。
+> MySQL 上 PalORM Insert **略快于 ADO.NET（96%）**。QueryAll 慢 21%——MySQL 无 RETURNING，框架开销无法被网络优势抵消。
 
-### 三 Provider 对比
+### 三 Provider 对比（纯 Docker）
 
-| 操作 | SQLite | PostgreSQL | MySQL |
+| 操作 | SQLite（本地内存） | PostgreSQL（Docker） | MySQL（Docker） |
 |------|:---:|:---:|:---:|
-| QueryAll vs ADO.NET | 118% | **65%** 🟢 | 106% |
-| GetByKey vs ADO.NET | 125% | **33%** 🟢 | 105% |
-| Insert vs ADO.NET | 134% | **35%** 🟢 | 104% |
-| BulkInsert 10K | 59.3 ms | 65.1 ms (COPY) | 72.7 ms |
+| QueryAll vs ADO.NET | 118% | **90%** 🟢 | 121% |
+| GetByKey vs ADO.NET | 125% | 130% | 112% |
+| Insert vs ADO.NET | 134% | **94%** 🟢 | **96%** 🟢 |
+| BulkInsert 10K | 59.3 ms | 43.2 ms (COPY) | 56.5 ms |
 
-> **关键洞察**：PalORM 在 **PostgreSQL 上性能最优**——所有 CRUD 操作都比原生 ADO.NET 快 35-67%。
-> 原因分析：
-> 1. PG 的 RETURNING 子句让 Insert/GetByKey 走单次往返物化，PalORM 的源生成 RowFactory 委托比手写 reader 读取更快
-> 2. PG 协议支持prepared statement缓存，PalORM 的参数化路径充分利用
-> 3. PG Binary COPY 是百万行场景的最优路径（SQLite/MySQL 走多值 INSERT）
->
-> SQLite 因内存模式无网络往返优势，框架开销占比更大；MySQL 无 RETURNING，Insert 走两次往返。
+### 网络环境 vs 纯 Docker 对比
+
+| 操作 | 环境 | ADO.NET | PalORM | PalORM vs ADO.NET | 差异分析 |
+|------|------|:---:|:---:|:---:|------|
+| PG QueryAll | 网络 | 28.21 ms | 18.35 ms | **65%** 🟢 | 网络下 PalORM 减少往返次数优势放大 |
+| PG QueryAll | Docker | 11.37 ms | 9.86 ms | **90%** 🟢 | 零 RTT 后框架开销占比变大 |
+| PG Insert | 网络 | 23.54 ms | 8.04 ms | **35%** 🟢 | 网络下 RETURNING 单次往返优势巨大 |
+| PG Insert | Docker | 7.82 ms | 7.26 ms | **94%** 🟢 | 零 RTT 后优势缩小但仍持平 |
+| MySQL Insert | 网络 | 6.37 ms | 6.60 ms | 104% | 网络下基本持平 |
+| MySQL Insert | Docker | 6.16 ms | 5.82 ms | **96%** 🟢 | Docker 下 PalORM 略快 |
+
+> **关键洞察**：PalORM 的 RETURNING 单次往返在网络环境下优势巨大（PG Insert 快 65%），但在零 RTT 的 Docker 环境下回归到框架基线（90-96%）。这证明 PalORM 的核心价值在**网络场景**——减少往返次数比单次操作速度更重要。
 
 ### 连接配置
 
 ```bash
+# 纯 Docker 运行（benchmark 客户端也在 Docker 里）
+docker build -t palorm-bench .
+
 # PostgreSQL
-export PALORM_BENCH_PG="Host=HOST;Port=5432;Username=USER;Password=PASS;Database=palorm_bench;Pooling=false"
+docker run --rm --network=host \
+  -e PALORM_BENCH_PG="Host=127.0.0.1;Port=5432;Username=USER;Password=PASS;Database=palorm_bench;Pooling=false" \
+  palorm-bench \
+  dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- --filter '*PgBenchmarks*'
 
 # MySQL
-export PALORM_BENCH_MYSQL="Server=HOST;Port=3306;User ID=USER;Password=PASS;Database=palorm_bench;Pooling=false"
-
-# 运行
-dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*PgBenchmarks*'
-dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*MySqlBenchmarks*'
+docker run --rm --network=host \
+  -e PALORM_BENCH_MYSQL="Server=127.0.0.1;Port=3306;User ID=USER;Password=PASS;Database=palorm_bench;Pooling=false" \
+  palorm-bench \
+  dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- --filter '*MySqlBenchmarks*'
 ```
