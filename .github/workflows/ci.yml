@@ -133,6 +133,9 @@ jobs:
             - name: Run assertion strength gate
               run: bash scripts/assertion-strength-check.sh
 
+            - name: Run test specification gate
+              run: bash scripts/test-gate.sh
+
             - name: Run tech debt scan
               run: bash scripts/tech-debt-scan.sh
 
