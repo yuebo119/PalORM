@@ -375,6 +375,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
         foreach (IPropertySymbol concurrencyToken in concurrencyTokens)
         {
+            // R7 修复：init-only setter 的 [ConcurrencyCheck] 属性无法被 IncrementVersion emit 修改（CS8852）
+            if (concurrencyToken.SetMethod?.IsInitOnly == true)
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(InvalidConcurrencyTokenType,
+                    concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0], concurrencyToken.Name));
+            }
             if (concurrencyToken.NullableAnnotation == NullableAnnotation.Annotated
                 || concurrencyToken.Type.SpecialType is not SpecialType.System_Int32
                     and not SpecialType.System_Int64)

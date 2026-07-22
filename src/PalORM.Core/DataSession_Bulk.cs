@@ -178,14 +178,16 @@ public partial class DataSession<TProvider>
         Exception? primaryException = null;
         try
         {
+            long affected = 0;
             foreach (T entity in entities)
             {
                 await SaveCoreAsync(
                     entity, operation.Owner, ct).ConfigureAwait(false);
+                affected++;
             }
             if (ownsTransaction)
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
-            return entities.Count;
+            return affected;
         }
         catch (Exception exception)
         {

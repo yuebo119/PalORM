@@ -122,6 +122,22 @@ public sealed class AdvancedFeatureTests
         await Assert.That((await db.GetAsync<Product>(101L))!.Name).IsEqualTo("Updated");
     }
 
+    // R1 回归覆盖：默认键实体（Id=0）走 InsertCoreAsync 路径
+    [Test]
+    public async Task BulkMergeAsync_DefaultKeys_InsertsNewRows()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        Product[] items = [
+            new Product { Name = "Default1", Price = 1m, Stock = 1 },
+            new Product { Name = "Default2", Price = 2m, Stock = 2 }];
+        await db.BulkMergeAsync(items);
+        await Assert.That(await db.CountAsync<Product>()).IsEqualTo(2);
+        // 验证自增 ID 被回填
+        await Assert.That(items[0].Id).IsGreaterThan(0);
+        await Assert.That(items[1].Id).IsGreaterThan(0);
+    }
+
     [Test]
     public async Task SeedAsync_IsIdempotentAndRequiresStableKeys()
     {

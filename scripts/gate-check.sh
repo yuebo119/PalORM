@@ -142,9 +142,12 @@ check_zero G23 'AOT 项目不得手工编译生成文件' "$aot_generated_count"
 ca_missing=0
 while IFS= read -r file; do
     diff=$(perl -0777 -ne '
+        # 剥离 XML doc（/// 开头）和行注释（// 开头）再统计
+        s{^\s*///.*$}{}gms;
+        s{//.*$}{}gm;
         $c += () = /\bawait\s+(?!using\b|foreach\b|Task\.Yield\(\))/gs;
         $cf += () = /ConfigureAwait\(false\)/g;
-        END { print $c - $cf }
+        END { my $d = $c - $cf; print $d < 0 ? 0 : $d }
     ' "$file")
     if [ "$diff" -gt 0 ]; then
         printf 'ConfigureAwait 缺失 %s 处：%s\n' "$diff" "$file"

@@ -157,7 +157,20 @@ public sealed class GridReader : IAsyncDisposable
 
     private async Task DisposeCoreAsync(Task activeRead)
     {
-        await activeRead.ConfigureAwait(false);
+        // R2 修复：对齐 SessionOperationState 的超时保护——活动 ReadAsync 网络阻塞时
+        // 无超时的 await 会导致 DisposeAsync 永久挂起，await using 卡死。
+        // 使用 SessionOperationState.DisposeWaitTimeout（5 分钟）+ 超时诊断异常。
+        try
+        {
+            await activeRead.WaitAsync(SessionOperationState.DisposeWaitTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(
+                $"GridReader Dispose timed out after {SessionOperationState.DisposeWaitTimeout} "
+                + "waiting for an active ReadAsync to complete. "
+                + "Ensure all ReadAsync calls complete before disposing the GridReader.");
+        }
         Exception? cleanupException = null;
         try { await _reader.DisposeAsync().ConfigureAwait(false); }
         catch (Exception exception) { cleanupException = exception; }
