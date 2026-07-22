@@ -47,7 +47,7 @@ public static class MultiValueBulkInsert
         int columnCount = metadata.InsertColumns.Count;
         await BulkOperationFramework.ProbeBinderAsync(
             conn, binder, entities[0], columnCount, typeof(T).Name,
-            "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
+            "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
 
         if (columnCount > maxParametersPerStatement)
             throw new InvalidOperationException(
@@ -84,7 +84,7 @@ public static class MultiValueBulkInsert
             finally
             {
                 await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
-                    "PalORM.RowCommandCleanupException").ConfigureAwait(false);
+                    "PalORM.RowCommandCleanupException", ct).ConfigureAwait(false);
             }
             if (ownsTransaction)
                 await tran.CommitAsync(ct).ConfigureAwait(false);
@@ -240,7 +240,7 @@ public static class MultiValueBulkInsert
         finally
         {
             await BulkOperationFramework.DisposePreservingAsync(batchCmd, batchCommandException,
-                "PalORM.CommandCleanupException").ConfigureAwait(false);
+                "PalORM.CommandCleanupException", ct).ConfigureAwait(false);
         }
         return total;
     }
