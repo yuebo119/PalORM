@@ -820,3 +820,86 @@ public class MySqlBenchmarks : IAsyncDisposable
         await db.BulkInsertAsync(batch, batchSize: 1000);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 纯速度基准（无 MemoryDiagnoser）
+// MemoryDiagnoser 每次 GC.Collect + WaitForPendingFinalizers 阻碍 JIT 内联。
+// 本类用于交叉验证：如果纯速度显著快（>5%）说明 MemoryDiagnoser 干扰了测量。
+// ═══════════════════════════════════════════════════════════════
+
+[SimpleJob(launchCount: 3, warmupCount: 5, iterationCount: 10)]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
+[SuppressMessage("Security", "CA2100", Justification = "Seed data uses compile-time constants.")]
+public class SqliteSpeedBenchmarks : IAsyncDisposable
+{
+    // 注意：无 [MemoryDiagnoser]——纯速度测量，消除 GC.Collect 干扰
+    private const int SeedRows = 10000;
+    private const string Cs = "Data Source=bench_speed;Mode=Memory;Cache=Shared";
+    private SqliteConnection? _keeper;
+    private readonly DbOptions _options = new() { ConnectionString = Cs };
+
+    [GlobalSetup]
+    public async Task Setup()
+    {
+        _keeper = new SqliteConnection(Cs);
+        await _keeper.OpenAsync();
+        await Exec("CREATE TABLE bench_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, total REAL NOT NULL, created_at INTEGER NOT NULL)");
+        for (int i = 0; i < SeedRows; i++)
+            await Exec($"INSERT INTO bench_orders (status, total, created_at) VALUES ('S{i}', {i * 10m}, {i})");
+    }
+
+    private async Task Exec(string sql)
+    {
+        using var cmd = _keeper!.CreateCommand();
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_keeper is not null) await _keeper.DisposeAsync();
+    }
+
+    private static SqliteConnection OpenConn()
+    {
+        var c = new SqliteConnection(Cs);
+        c.Open();
+        return c;
+    }
+
+    [Benchmark(Baseline = true), BenchmarkCategory("Speed")]
+    public async Task<List<BenchOrder>> ADO_NET_QueryAll_Speed()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders";
+        using var r = await cmd.ExecuteReaderAsync();
+        var list = new List<BenchOrder>(SeedRows);
+        while (await r.ReadAsync())
+            list.Add(new BenchOrder { id = r.GetInt64(0), status = r.GetString(1), total = r.GetDecimal(2), created_at = r.GetInt64(3) });
+        return list;
+    }
+
+    [Benchmark, BenchmarkCategory("Speed")]
+    public async Task<List<BenchOrder>> PalORM_QueryAll_Speed()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        return await db.From<BenchOrder>().ToListAsync();
+    }
+
+    [Benchmark, BenchmarkCategory("Speed")]
+    public async Task<BenchOrder?> PalORM_GetByKey_Speed()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        return await db.GetAsync<BenchOrder>(5000L);
+    }
+
+    [Benchmark, BenchmarkCategory("Speed")]
+    public async Task<long> PalORM_Insert_Speed()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        var e = await db.InsertAsync(new BenchOrder { status = "X", total = 1m, created_at = 1 });
+        return e.id;
+    }
+}

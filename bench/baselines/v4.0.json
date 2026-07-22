@@ -1,0 +1,36 @@
+{
+  "version": "4.0.0",
+  "date": "2026-07-22",
+  "environment": {
+    "cpu": "AMD Ryzen 9 8945HX (32 logical)",
+    "os": "Windows 10 22H2",
+    "dotnet": "11.0.0-preview.6.26359.118",
+    "benchmarkdotnet": "0.14.0",
+    "provider": "SQLite (Memory: Data Source=bench;Mode=Memory;Cache=Shared)",
+    "seedRows": 10000
+  },
+  "benchmarks": [
+    { "name": "ADO_NET_QueryAll", "median_ms": 3.95, "mean_ms": 4.15, "allocated_kb": 1329 },
+    { "name": "Dapper_QueryAll", "median_ms": 3.67, "mean_ms": 3.74, "allocated_kb": 1352 },
+    { "name": "PalORM_QueryAll", "median_ms": 4.64, "mean_ms": 4.72, "allocated_kb": 1511 },
+    { "name": "ADO_NET_GetByKey", "median_us": 18.73, "mean_us": 20.44, "allocated_b": 1440 },
+    { "name": "PalORM_GetByKey", "median_us": 23.40, "mean_us": 24.03, "allocated_b": 4656 },
+    { "name": "ADO_NET_Insert", "median_us": 21.66, "mean_us": 22.44, "allocated_b": 1464 },
+    { "name": "PalORM_Insert", "median_us": 29.05, "mean_us": 29.55, "allocated_b": 5160 },
+    { "name": "ADO_NET_Update", "median_us": 17.45, "mean_us": 17.76, "allocated_b": 936 },
+    { "name": "PalORM_Update", "median_us": 24.14, "mean_us": 25.04, "allocated_b": 8312 },
+    { "name": "ADO_NET_Delete", "median_us": 32.24, "mean_us": 32.49, "allocated_b": 1816 },
+    { "name": "PalORM_Delete_Physical", "median_us": 47.76, "mean_us": 48.43, "allocated_b": 6080 },
+    { "name": "PalORM_Delete_SoftDelete", "median_us": 49.88, "mean_us": 50.36, "allocated_b": 5896 },
+    { "name": "ADO_NET_Upsert", "median_us": 20.67, "mean_us": 22.13, "allocated_b": 1008 },
+    { "name": "PalORM_Save_Upsert", "median_us": 30.38, "mean_us": 31.52, "allocated_b": 7776 },
+    { "name": "PalORM_BulkInsert_10000", "mean_ms": 59.29, "allocated_kb": 10419 },
+    { "name": "PalORM_BulkInsert_10000_pg_copy", "mean_ms": 43.21, "allocated_kb": 9359, "provider": "PostgreSQL 18.4 Docker" },
+    { "name": "PalORM_BulkInsert_10000_mysql", "mean_ms": 56.50, "allocated_kb": 13123, "provider": "MySQL 8.4 Docker" }
+  ],
+  "regressionThresholds": {
+    "median_pct": 10,
+    "allocated_pct": 20,
+    "gen0_pct": 50
+  }
+}

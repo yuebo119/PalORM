@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
 # PalORM 性能基准标准运行脚本
-# 用法：bash scripts/run-benchmarks.sh [sqlite|pg|mysql|all|scale|build]
+# 用法：
+#   bash scripts/run-benchmarks.sh [sqlite|pg|mysql|all|scale|build|speed]
+#   bash scripts/run-benchmarks.sh sqlite --save-baseline  # 保存基线 JSON
+#   bash scripts/run-benchmarks.sh sqlite --compare v4.0   # 与基线对比
 #
 # 配置层级：
 #   快速（默认）：launchCount=1, warmupCount=3, iterationCount=5
-#   严格（--strict）：SqlBuild 用 5/10/15，SqliteBenchmarks 用 3/5/10
+#   严格（SqlBuild/Speed）：5/10/15
 #
 # 输出：
 #   bench/PalORM.Benchmarks/BenchmarkDotNet.Artifacts/（JSON + MD 报告）
+#   bench/baselines/（基线 JSON，入 git）
 #   控制台统计有效性检查（Error/Mean 比值）
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_DIR="$ROOT_DIR/bench/PalORM.Benchmarks"
+BASELINE_DIR="$ROOT_DIR/bench/baselines"
 TARGET="${1:-sqlite}"
+EXTRA="${2:-}"
 
 echo "═══════════════════════════════════════════════════════════════"
 echo " PalORM 性能基准运行器"
@@ -64,15 +70,74 @@ case "$TARGET" in
       --filter '*MySqlBenchmarks*' 2>&1 | tee /tmp/bench-mysql-$(date +%Y%m%d-%H%M%S).log
     ;;
   all)
-    echo ">>> 运行全部 SQLite + Scale + Build 基准（约 30 分钟）..."
+    echo ">>> 运行全部 SQLite + Scale + Build + Speed 基准（约 30 分钟）..."
     dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
       --filter '*' 2>&1 | tee /tmp/bench-all-$(date +%Y%m%d-%H%M%S).log
     ;;
+  speed)
+    echo ">>> 运行纯速度基准（无 MemoryDiagnoser 交叉验证）..."
+    dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
+      --filter '*SqliteSpeedBenchmarks*' 2>&1 | tee /tmp/bench-speed-$(date +%Y%m%d-%H%M%S).log
+    ;;
   *)
-    echo "用法: bash scripts/run-benchmarks.sh [sqlite|pg|mysql|scale|build|all]"
+    echo "用法: bash scripts/run-benchmarks.sh [sqlite|pg|mysql|scale|build|speed|all]"
+    echo "  追加 --save-baseline 保存基线 JSON"
+    echo "  追加 --compare <version> 与已有基线对比"
     exit 1
     ;;
 esac
+
+# 后处理：基线保存 / 对比
+if [ "$EXTRA" = "--save-baseline" ]; then
+  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+  BASELINE_FILE="$BASELINE_DIR/snapshot-$TIMESTAMP.json"
+  mkdir -p "$BASELINE_DIR"
+
+  # 从 BenchmarkDotNet CSV 报告提取 Median + Allocated 生成精简 JSON
+  CSV_FILE="$BENCH_DIR/BenchmarkDotNet.Artifacts/results/PalORM.Benchmarks.SqliteBenchmarks-report.csv"
+  if [ -f "$CSV_FILE" ]; then
+    echo ""> "$BASELINE_FILE"
+    echo "{" >> "$BASELINE_FILE"
+    echo "  \"snapshot\": \"$TIMESTAMP\"," >> "$BASELINE_FILE"
+    echo "  \"source\": \"run-benchmarks.sh $TARGET\"," >> "$BASELINE_FILE"
+    echo "  \"benchmarks\": [" >> "$BASELINE_FILE"
+    FIRST=true
+    # CSV 格式: Method,Mean,Error,StdDev,Median,Ratio,...,Allocated
+    tail -n +2 "$CSV_FILE" | while IFS=',' read -r method mean error stddev median ratio _gen0 _gen1 _gen2 allocated _allocratio; do
+      # 清理引号
+      method="${method//\"/}"
+      if [ "$FIRST" = true ]; then
+        FIRST=false
+      else
+        echo "    ," >> "$BASELINE_FILE"
+      fi
+      echo -n "    { \"name\": \"$method\", \"mean\": \"$mean\", \"median\": \"$median\", \"allocated\": \"$allocated\" }" >> "$BASELINE_FILE"
+    done
+    echo "" >> "$BASELINE_FILE"
+    echo "  ]" >> "$BASELINE_FILE"
+    echo "}" >> "$BASELINE_FILE"
+    echo "✅ 基线已保存: $BASELINE_FILE"
+  else
+    echo "⚠ 未找到 CSV 报告，跳过基线保存"
+  fi
+fi
+
+if [[ "$EXTRA" == --compare* ]]; then
+  VERSION="${EXTRA#--compare }"
+  VERSION="${VERSION// /}"
+  BASELINE_FILE="$BASELINE_DIR/$VERSION.json"
+  if [ -f "$BASELINE_FILE" ]; then
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo " 基线对比: 当前运行 vs $VERSION"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "（对比功能需人工或后续脚本自动化——当前输出基线 JSON 供 diff 工具使用）"
+    echo "基线文件: $BASELINE_FILE"
+  else
+    echo "⚠ 基线 $VERSION 不存在，可用版本:"
+    ls "$BASELINE_DIR"/*.json 2>/dev/null | xargs -I{} basename {} .json || echo "  (无)"
+  fi
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
