@@ -408,6 +408,127 @@ public class SqliteBenchmarks : IAsyncDisposable
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
         return await db.From<BenchOrder>().WithTracing().ToListAsync();
     }
+
+    // ═══════ v4.0 P1 新增：维度覆盖基准 ═══════
+
+    // 多结果集 GridReader（两个结果集，验证多 ResultSet 物化性能）
+    [Benchmark, BenchmarkCategory("Advanced")]
+    public async Task<int> PalORM_GridReader_TwoResultSets()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        // QueryMultipleAsync 是 QueryBuilder<T> 的扩展——从 From<T>() 发起
+        await using var grid = await db.From<BenchOrder>().QueryMultipleAsync(
+            $"SELECT id, status, total, created_at FROM bench_orders WHERE id <= 100 ORDER BY id; SELECT id, status, total, created_at FROM bench_orders WHERE id > 9900 ORDER BY id");
+        var first = await grid.ReadAsync<BenchOrder>();
+        var second = await grid.ReadAsync<BenchOrder>();
+        return first.Count + second.Count;
+    }
+
+    // WhereIn 跨批次（1500 个值，SQLite 999 参数上限 → 自动分 2 批）
+    [Benchmark, BenchmarkCategory("Advanced")]
+    public async Task<List<BenchOrder>> PalORM_WhereIn_CrossBatch_1500()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        var ids = Enumerable.Range(1, 1500).Select(i => (long)i).ToArray();
+        return await db.From<BenchOrder>().WhereIn(a => a.id, ids).ToListAsync();
+    }
+
+    // IAsyncEnumerable 流式查询（逐行消费，不缓存全列表）
+    [Benchmark, BenchmarkCategory("Advanced")]
+    public async Task<int> PalORM_StreamQuery_IAsyncEnumerable()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        int count = 0;
+        await foreach (var _ in db.QueryAsyncEnumerable<BenchOrder>(
+            $"SELECT id, status, total, created_at FROM bench_orders WHERE id <= 1000"))
+            count++;
+        return count;
+    }
+
+    // 并发查询（8 个并行 DataSession 各自 GetByKey——模拟多连接场景）
+    [Benchmark, BenchmarkCategory("Advanced")]
+    public async Task<int> PalORM_Concurrent_GetByKey_8x()
+    {
+        var tasks = Enumerable.Range(0, 8).Select(async _ =>
+        {
+            await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+            return await db.GetAsync<BenchOrder>(5000) is not null ? 1 : 0;
+        });
+        var results = await Task.WhenAll(tasks);
+        return results.Sum();
+    }
+
+    // 小数据量冷启动（10 行——测量首次 JIT + 连接建立开销）
+    [Benchmark, BenchmarkCategory("Scale")]
+    public async Task<List<BenchOrder>> PalORM_QueryAll_Small_10()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        return await db.From<BenchOrder>().Take(10).ToListAsync();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BulkInsert 拐点扫描——Params 矩阵（100/1K/10K/100K 行）
+// ═══════════════════════════════════════════════════════════════
+
+[MemoryDiagnoser]
+[SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 5)]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
+public class BulkInsertScaleBenchmarks : IAsyncDisposable
+{
+    [Params(100, 1000, 10000, 100000)]
+    public int RowCount { get; set; }
+
+    private const string Cs = "Data Source=bench;Mode=Memory;Cache=Shared";
+    private SqliteConnection? _keeper;
+    private readonly DbOptions _options = new() { ConnectionString = Cs };
+
+    [GlobalSetup]
+    public async Task Setup()
+    {
+        _keeper = new SqliteConnection(Cs);
+        await _keeper.OpenAsync();
+        // 建表（bench_orders 由 BenchOrder 实体映射）
+        using var cmd = _keeper.CreateCommand();
+        cmd.CommandText = "DROP TABLE IF EXISTS bench_orders; CREATE TABLE bench_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, total REAL NOT NULL, created_at INTEGER NOT NULL)";
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    [IterationSetup]
+    public void IterationSetup()
+    {
+        // 每次迭代前清表——bench_orders 表由 BenchOrder 实体映射
+        using var cmd = _keeper!.CreateCommand();
+        cmd.CommandText = "DELETE FROM bench_orders";
+        cmd.ExecuteNonQuery();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_keeper is not null) await _keeper.DisposeAsync();
+    }
+
+    [Benchmark, BenchmarkCategory("BulkInsert")]
+    public async Task<long> PalORM_BulkInsert_Scaled()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        var batch = Enumerable.Range(0, RowCount)
+            .Select(i => new BenchOrder { status = $"B{i}", total = i, created_at = i }).ToArray();
+        return await db.BulkInsertAsync(batch, batchSize: 500);
+    }
+
+    [Benchmark, BenchmarkCategory("BulkInsert")]
+    public async Task<int> Dapper_MultiRowInsert_Scaled()
+    {
+        var batch = Enumerable.Range(0, RowCount)
+            .Select(i => new { status = $"B{i}", total = (double)i, created_at = (long)i }).ToArray();
+        using var c = new SqliteConnection(Cs);
+        await c.OpenAsync();
+        return await c.ExecuteAsync(
+            "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at)",
+            batch);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -415,7 +536,9 @@ public class SqliteBenchmarks : IAsyncDisposable
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
-[SimpleJob(launchCount: 3, warmupCount: 5, iterationCount: 10)]
+// P0 修复：SqlBuild 是 nanosecond 级，原 3/5/10 在慢机上 Error/Mean 达 14%。
+// 提升至 5/10/15 严格配置 + Throughput 模式（多次调用取均值降低单次抖动）。
+[SimpleJob(launchCount: 5, warmupCount: 10, iterationCount: 15, invocationCount: 4096)]
 public class SqlBuildBenchmarks
 {
     private DataSession<SqliteProvider>? _db;
