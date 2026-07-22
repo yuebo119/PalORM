@@ -68,18 +68,29 @@ public sealed class PostgreSqlIntegrationTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task PG_HealthCheck_Succeeds() { await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(Opts); await Assert.That((await db.HealthCheckAsync()).IsHealthy).IsTrue(); }
+    public async Task PG_HealthCheck_Succeeds()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(Opts);
+        await Assert.That((await db.HealthCheckAsync()).IsHealthy).IsTrue();
+    }
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task PG_DDL_Insert_Query_Works()
+    public async Task PG_DDL_Insert_Query_RoundTripsData()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(Opts);
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS pg_test");
-        await db.ExecuteAsync($"CREATE TABLE pg_test (id BIGSERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL)");
-        await db.ExecuteAsync($"INSERT INTO pg_test (name, value) VALUES ({"PG"}, {42})");
-        var c = await db.ScalarAsync<long>($"SELECT COUNT(*) FROM pg_test WHERE name = {"PG"}");
-        await Assert.That(c).IsEqualTo(1);
-        await db.ExecuteAsync($"DROP TABLE pg_test");
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS pg_test");
+            await db.ExecuteAsync($"CREATE TABLE pg_test (id BIGSERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL)");
+            await db.ExecuteAsync($"INSERT INTO pg_test (name, value) VALUES ({"PG"}, {42})");
+            var c = await db.ScalarAsync<long>($"SELECT COUNT(*) FROM pg_test WHERE name = {"PG"}");
+            await Assert.That(c).IsEqualTo(1);
+        }
+        finally
+        {
+            // T6：断言失败也清理表
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS pg_test");
+        }
     }
 }
