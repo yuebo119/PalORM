@@ -40,19 +40,22 @@ echo ""
 echo "─── T8: 基准配置注释 ───"
 BENCH_FILE="$ROOT_DIR/bench/PalORM.Benchmarks/Program.cs"
 if [ -f "$BENCH_FILE" ]; then
-  # 检查每个 SimpleJob 上面一行是否有注释
-  UNCOMMENTED_JOBS=$(grep -B1 'SimpleJob' "$BENCH_FILE" | \
-    grep -c 'SimpleJob.*$' || true)
-  TOTAL_JOBS=$(grep -c 'SimpleJob' "$BENCH_FILE" || true)
-
-  # 检查是否有 SimpleJob 行上面紧跟的不是注释
+  # 检查每个 SimpleJob 前 3 行是否有注释（多行注释可能在 attribute 上方）
   JOBS_WITHOUT_COMMENT=$(awk '
     /SimpleJob/ {
-      if (prev !~ /\/\/|\/\*/) {
+      # 检查前 3 行是否有注释
+      has_comment = 0
+      for (i = NR - 3; i <= NR - 1; i++) {
+        if (i > 0 && lines[i] ~ /\/\/|\/\*/) {
+          has_comment = 1
+          break
+        }
+      }
+      if (!has_comment) {
         print NR": "$0
       }
     }
-    { prev = $0 }
+    { lines[NR] = $0 }
   ' "$BENCH_FILE" | head -5 || true)
 
   if [ -n "$JOBS_WITHOUT_COMMENT" ]; then
@@ -124,10 +127,20 @@ echo ""
 echo "─── T-DEF-4: CI job timeout-minutes ───"
 CI_FILE="$ROOT_DIR/.github/workflows/ci.yml"
 if [ -f "$CI_FILE" ]; then
-  # 只统计真正的 job 定义（4 空格缩进 + 名称: 后无其他）
+  # 统计 CI job 数（行首 4 空格 + 标识符 + 冒号，排除已知非 job 关键字）
   JOBS=$(grep -E '^\s{4}[a-z][a-z-]*:$' "$CI_FILE" | tr -d ' :' | head -20)
   TOTAL_JOBS=$(echo "$JOBS" | grep -c . || true)
   TIMEOUTS=$(grep -c 'timeout-minutes' "$CI_FILE" || true)
+
+  # perf-gate.yml 的 job 也应统计
+  PERF_CI="$ROOT_DIR/.github/workflows/perf-gate.yml"
+  if [ -f "$PERF_CI" ]; then
+    PERF_JOBS=$(grep -E '^\s{4}[a-z][a-z-]*:$' "$PERF_CI" | tr -d ' :' | head -5)
+    PERF_TOTAL=$(echo "$PERF_JOBS" | grep -c . || true)
+    PERF_TIMEOUTS=$(grep -c 'timeout-minutes' "$PERF_CI" || true)
+    TOTAL_JOBS=$((TOTAL_JOBS + PERF_TOTAL))
+    TIMEOUTS=$((TIMEOUTS + PERF_TIMEOUTS))
+  fi
 
   if [ "$TIMEOUTS" -lt "$TOTAL_JOBS" ]; then
     echo "WARN  T-DEF-4  CI 有 $TOTAL_JOBS 个 job，仅 $TIMEOUTS 个有 timeout-minutes"
