@@ -19,13 +19,15 @@ public static class BulkOperationFramework
     /// <param name="columnCount">期望的列数（来自 metadata.InsertColumns.Count）。</param>
     /// <param name="typeName">实体类型名，用于错误消息。</param>
     /// <param name="cleanupDataKey">probe 命令清理失败时挂 Data 的键名（如 PalORM.ProbeCommandCleanupException）。</param>
+    /// <param name="ct">取消令牌。</param>
     public static async ValueTask ProbeBinderAsync(
         DbConnection conn,
         Action<DbCommand, object> binder,
         object first,
         int columnCount,
         string typeName,
-        string cleanupDataKey)
+        string cleanupDataKey,
+        CancellationToken ct = default)
     {
         DbCommand probeCommand = conn.CreateCommand();
         Exception? probeException = null;
@@ -44,7 +46,7 @@ public static class BulkOperationFramework
         }
         finally
         {
-            await DisposePreservingAsync(probeCommand, probeException, cleanupDataKey).ConfigureAwait(false);
+            await DisposePreservingAsync(probeCommand, probeException, cleanupDataKey, ct).ConfigureAwait(false);
         }
     }
 
@@ -53,12 +55,14 @@ public static class BulkOperationFramework
     /// <param name="resource">待释放的资源（DbCommand/DbTransaction/importer 等）。</param>
     /// <param name="primaryException">主异常；为 null 时 cleanup 失败被吞掉（无主异常可挂）。</param>
     /// <param name="dataKey">cleanup 异常挂 Data 的键名（如 PalORM.CommandCleanupException）。</param>
+    /// <param name="ct">取消令牌。</param>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "释放是清理路径；异常附加到主异常，不能替换原始批量写失败。")]
     public static async ValueTask DisposePreservingAsync(
         IAsyncDisposable resource,
         Exception? primaryException,
-        string dataKey)
+        string dataKey,
+        CancellationToken ct = default)
     {
         try { await resource.DisposeAsync().ConfigureAwait(false); }
         catch (Exception cleanupException) when (primaryException is not null)

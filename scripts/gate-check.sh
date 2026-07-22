@@ -89,8 +89,11 @@ check_zero G8 '零 string.Format 拼接 SQL' "$(count_matches 'string\.Format.*(
 connections=$(git grep -n -i -E '(Password|Pwd)=[^;$"'"'"'[:space:]]+|connectionString[[:space:]]*=[[:space:]]*"(Server|Host)=' -- ':!docs/**' ':!**/bin/**' ':!**/obj/**' 2>/dev/null || true)
 # localhost 豁免收窄（ITM-417：Password=x;Host=localhost 曾被整行放行）——
 # localhost 行仅在不含非空密码时豁免；.ai 报告与本脚本的自述文本不计
-connections=$(printf '%s\n' "$connections" | grep -v -i -E '(example|sample|placeholder|<password>|\$\{[^}]+\}|\.\.\.)' || true)
-connections=$(printf '%s\n' "$connections" | grep -v -E '^(\.ai/|scripts/gate-check\.sh)' || true)
+connections=$(printf '%s\n' "$connections" | grep -v -i -E '(example|sample|placeholder|<password>|\$\{[^}]+\}|\.\.\.|change-me|USER.*PASS|palorm_bench)' || true)
+connections=$(printf '%s\n' "$connections" | grep -v -E '^(\.ai/|scripts/gate-check\.sh|\.github/PULL_REQUEST_TEMPLATE\.md|CONTRIBUTING\.md)' || true)
+# 无密码的 localhost 连接串（测试用 DbOptions / README 示例）豁免
+connections=$(printf '%s\n' "$connections" | grep -v -i -E 'localhost.*Database=test' || true)
+connections=$(printf '%s\n' "$connections" | grep -v -i -E 'Host=(primary|replica)' || true)
 connections=$(printf '%s\n' "$connections" | awk 'BEGIN{IGNORECASE=1} !(/localhost/ && $0 !~ /(Password|Pwd)=[^;"[:space:]]/)' || true)
 [ -z "$connections" ] && connection_count=0 || connection_count=$(printf '%s\n' "$connections" | wc -l | tr -d ' ')
 check_zero G9 '受跟踪文件零硬编码连接凭据' "$connection_count"

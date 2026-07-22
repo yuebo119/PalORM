@@ -108,7 +108,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         int columnCount = metadata.InsertColumns.Count;
         await BulkOperationFramework.ProbeBinderAsync(
             conn, binder, entities[0], columnCount, typeof(T).Name,
-            "PalORM.ProbeCommandCleanupException").ConfigureAwait(false);
+            "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
 
         string quotedColumns = string.Join(", ",
             metadata.InsertColumns.Select(QuoteIdentifier));
@@ -156,7 +156,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                     finally
                     {
                         await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
-                            "PalORM.RowCommandCleanupException").ConfigureAwait(false);
+                            "PalORM.RowCommandCleanupException", ct).ConfigureAwait(false);
                     }
                 }
                 catch (Exception exception)
@@ -167,7 +167,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                 finally
                 {
                     await BulkOperationFramework.DisposePreservingAsync(importer, importerException,
-                        "PalORM.ImporterCleanupException").ConfigureAwait(false);
+                        "PalORM.ImporterCleanupException", ct).ConfigureAwait(false);
                 }
             }
 
@@ -186,7 +186,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         {
             if (ownsTransaction)
                 await BulkOperationFramework.DisposePreservingAsync(bulkTransaction, primaryException,
-                    "PalORM.TransactionCleanupException").ConfigureAwait(false);
+                    "PalORM.TransactionCleanupException", ct).ConfigureAwait(false);
         }
     }
 
