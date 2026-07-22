@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # PalORM 测试环境变量——从未跟踪的 .env.test 加载，不回显值。
 #
 # 用法: source scripts/set-test-env.sh  (或 . scripts/set-test-env.sh)

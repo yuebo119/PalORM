@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PalORM 文档一致性机械校验。所有 checks 独立运行，单一事实来源原则。
-set -uo pipefail
+set -euo pipefail
 
 PASSED=0
 FAILED=0
