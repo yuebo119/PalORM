@@ -46,7 +46,9 @@ public sealed class SessionConcurrencyTests
 
         firstResources.Connection.Release();
         secondResources.Connection.Release();
-        await Task.WhenAll(first, second);
+        long[] results = await Task.WhenAll(first, second);
+        await Assert.That(results[0]).IsGreaterThan(0L);
+        await Assert.That(results[1]).IsGreaterThan(0L);
     }
 
     [Test]
@@ -478,6 +480,9 @@ public sealed class SessionConcurrencyTests
             releaseCallback.TrySetResult();
             await transaction;
             await dispose;
+            // 显式断言：transaction 和 dispose 均正常完成（无异常 = 通过）
+            await Assert.That(transaction.IsCompletedSuccessfully).IsTrue();
+            await Assert.That(dispose.IsCompletedSuccessfully).IsTrue();
         }
         finally
         {
