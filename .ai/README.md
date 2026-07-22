@@ -15,7 +15,7 @@
 | 入口 | 系统 | 回答的问题 | 触发 |
 |------|------|-----------|------|
 | [review/prompt.md](review/prompt.md) | **review**（审计+评审已合并）：单入口五档位，引擎/账本/误判库/模板/历史全内聚于 `review/` | diff 档=这次提交行不行？里程碑档=整体健康+走向？ | `/review` 按档位 |
-| [gate/prompt.md](gate/prompt.md) | **gate**：G1-G28 机械门禁（全阻断，零警告级死项） | 遵守规范了吗？ | 每次提交前 + CI |
+| [gate/prompt.md](gate/prompt.md) | **gate**：G1-G30 机械门禁（全阻断，零警告级死项） | 遵守规范了吗？ | 每次提交前 + CI |
 | [refine/prompt.md](refine/prompt.md) | **refine**：24 项操作矩阵 | 如何更优实现？ | `refine-scan.sh` 起步 |
 | [test/prompt.md](test/prompt.md) | **test**：T1-T10 测试铁律 + 覆盖矩阵 + 基准配置规范 | 测试是否充分且规范？ | `test-gate.sh` + `/test` |
 

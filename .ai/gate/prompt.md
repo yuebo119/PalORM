@@ -25,11 +25,11 @@
 |----|---------|----------------|
 | 编译期 | TreatWarningsAsErrors · IsAotCompatible · STJ源生成关闭反射 | — |
 | 架构 | Directory.Build.props 统一配置 · 中央包管理 | — |
-| **门禁（新增）** | **—** | **G1-G28：由 scripts/gate-check.sh 机械执行** |
+| **门禁（新增）** | **—** | **G1-G30：由 scripts/gate-check.sh 机械执行** |
 
 ---
 
-## G1-G28 检查项（与 scripts/gate-check.sh 一一对应）
+## G1-G30 检查项（与 scripts/gate-check.sh 一一对应）
 
 > 本表描述脚本已实现的检查。编号、名称、判定级别（阻断/警告）与脚本保持一致；修改脚本时必须同步本表和 `docs/编码规范.md` 门禁清单章节。
 
