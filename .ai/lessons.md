@@ -204,6 +204,7 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 7. CHANGELOG——当前版本号（4.0.0）？
 8. 测试用例数——README badge 与实际一致？
 9. 【如改动 src/PalORM.SourceGen/*.Emitter.cs】obj 缓存陷阱——改 emit 模板后必须清 obj/bin 再全量构建（见 II.B8）
+10. bash scripts/test-gate.sh——T1-T10 测试规范门禁通过？
 ```
 
 ---

@@ -1,6 +1,6 @@
 # .ai — PalORM AI 质量工程系统
 
-> **三系统一个入口**：review（找缺陷）· gate（查规范）· refine（求更优）。各系统目录自包含。
+> **四系统一个入口**：review（找缺陷）· gate（查规范）· refine（求更优）· test（验测试）。各系统目录自包含。
 > **宗旨：质量为先**——默认地毯式逐行、逐文件阅读全部范围内代码；探针/防线/档位是
 > 质量之上的证据强化与流程编排，不以牺牲覆盖换速度。
 > 核心原则：**把纪律转化为基础设施——让正确的事比错误的事更容易做**。
@@ -10,15 +10,16 @@
 
 ---
 
-## 三系统（每个系统一个目录、一个 prompt 入口）
+## 四系统（每个系统一个目录、一个 prompt 入口）
 
 | 入口 | 系统 | 回答的问题 | 触发 |
 |------|------|-----------|------|
 | [review/prompt.md](review/prompt.md) | **review**（审计+评审已合并）：单入口五档位，引擎/账本/误判库/模板/历史全内聚于 `review/` | diff 档=这次提交行不行？里程碑档=整体健康+走向？ | `/review` 按档位 |
 | [gate/prompt.md](gate/prompt.md) | **gate**：G1-G28 机械门禁（全阻断，零警告级死项） | 遵守规范了吗？ | 每次提交前 + CI |
 | [refine/prompt.md](refine/prompt.md) | **refine**：24 项操作矩阵 | 如何更优实现？ | `refine-scan.sh` 起步 |
+| [test/prompt.md](test/prompt.md) | **test**：T1-T10 测试铁律 + 覆盖矩阵 + 基准配置规范 | 测试是否充分且规范？ | `test-gate.sh` + `/test` |
 
-裁决顺序：**gate 阻断 > review 缺陷 > refine 优化**。同一发现只归属一个系统。
+裁决顺序：**gate 阻断 > test 违规 > review 缺陷 > refine 优化**。同一发现只归属一个系统。
 
 ## 文件地图
 
@@ -39,6 +40,7 @@
 │       └── reports/             历轮报告（含原 audit-*.md）
 ├── gate/prompt.md               门禁提示词（与 scripts/gate-check.sh 一一对应）
 ├── refine/prompt.md             精炼提示词（24 项操作矩阵 + 热点基线 v1.2）
+├── test/prompt.md               测试规范提示词（T1-T10 铁律 + 覆盖矩阵 + 基准规范）
 └── brain-data/                  cortex 运行时记忆（gitignore，不版本化）
 ```
 
@@ -56,6 +58,7 @@
 | scripts/doc-consistency-check.sh | 文档口径（含 D9 加和校验） | DOC 系列 + ITM-418 |
 | scripts/probe-template.sh | 探针骨架生成（~30 秒出最小工程，定稿实证基建） | ITM-401/403 探针实践 |
 | scripts/review-scope.sh | 应读清单+分片+覆盖度账本（地毯完整性机械可查） | 质量为先宗旨配套 |
+| scripts/test-gate.sh | T1/T4/T6/T8/T9 测试规范门禁 + T-DEF-1/4 下沉 | T-DEF-1/3/4 审计 |
 
 ## 权威依据链
 
