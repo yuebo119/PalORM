@@ -82,11 +82,10 @@ internal sealed record TableModel(
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "Computed"))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             // ITM-584：[Computed] 表达式是编译期常量（Raw 同级信任），但 NUL/未配对括号会生成
-    // 非法 DDL 延迟到 MigrateAsync 才炸——快检拒绝，实体整体跳过（PALORM015 兜底提示）
+            // 非法 DDL 延迟到 MigrateAsync 才炸——快检拒绝，实体整体跳过（PALORM015 兜底提示）
+            // R11 修复：括号配对改为词法扫描——忽略单引号字符串内的括号（如 LOWER(')foo')）
             if (computedExpression is not null
-                && (computedExpression.Contains('\0')
-                    || computedExpression.Count(static c => c == '(')
-                        != computedExpression.Count(static c => c == ')')))
+                && (computedExpression.Contains('\0') || !AreParenthesesBalanced(computedExpression)))
                 return null;
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
@@ -170,6 +169,23 @@ internal sealed record TableModel(
             new EquatableArray<ColumnModel>(columns.ToArray()),
             new EquatableArray<IndexModel>(indexes.ToArray()),
             new EquatableArray<ForeignKeyModel>(foreignKeys.ToArray()));
+    }
+
+    /// <summary>R11 修复：词法扫描括号配对——忽略单引号字符串内的括号。
+    /// 如 <c>LOWER(')foo')</c> 的 <c>)</c> 在字符串内，不应计入配对。</summary>
+    private static bool AreParenthesesBalanced(string expression)
+    {
+        int depth = 0;
+        bool inString = false;
+        for (int i = 0; i < expression.Length; i++)
+        {
+            char c = expression[i];
+            if (c == '\'') { inString = !inString; continue; }
+            if (inString) continue;
+            if (c == '(') depth++;
+            else if (c == ')') { depth--; if (depth < 0) return false; }
+        }
+        return depth == 0;
     }
 
     /// <summary>收集实体自身及基类链上的可映射属性（ITM-502：GetMembers 不含继承成员，
