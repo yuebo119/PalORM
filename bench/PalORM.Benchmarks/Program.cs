@@ -304,7 +304,7 @@ public class SqliteBenchmarks : IAsyncDisposable
 
     // ═══════ 批量（10000 行）═══════
 
-    [Benchmark, BenchmarkCategory("Bulk")]
+    [Benchmark, BenchmarkCategory("BulkInsert")]
     public async Task<int> Dapper_MultiRowInsert_10000()
     {
         using var c = OpenConn();
@@ -314,7 +314,7 @@ public class SqliteBenchmarks : IAsyncDisposable
             "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at)", items);
     }
 
-    [Benchmark, BenchmarkCategory("Bulk")]
+    [Benchmark, BenchmarkCategory("BulkInsert")]
     public async Task<long> PalORM_BulkInsert_10000()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
@@ -323,7 +323,7 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.BulkInsertAsync(items);
     }
 
-    [Benchmark, BenchmarkCategory("Bulk")]
+    [Benchmark, BenchmarkCategory("BulkInsert")]
     public async Task<long> PalORM_BulkUpdate_1000()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
@@ -332,7 +332,7 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.BulkUpdateAsync(items);
     }
 
-    [Benchmark, BenchmarkCategory("Bulk")]
+    [Benchmark, BenchmarkCategory("BulkInsert")]
     public async Task<long> PalORM_BulkDelete_500()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
@@ -518,7 +518,7 @@ public class BulkInsertScaleBenchmarks : IAsyncDisposable
         return await db.BulkInsertAsync(batch, batchSize: 500);
     }
 
-    [Benchmark, BenchmarkCategory("BulkInsert")]
+    [Benchmark(Baseline = true), BenchmarkCategory("BulkInsert")]
     public async Task<int> Dapper_MultiRowInsert_Scaled()
     {
         var batch = Enumerable.Range(0, RowCount)

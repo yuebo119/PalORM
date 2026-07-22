@@ -6,7 +6,7 @@
 # 用法：bash scripts/assertion-strength-check.sh [--max-weak N]
 # 退出码：弱断言总数 > 基线上限 → exit 1（防新增，存量按基线钳制递减）
 
-set -uo pipefail
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # 基线上限：2026-07-18 实测存量 19 处 = IsNotNull 弱断言 16（ITM-319 报告口径）

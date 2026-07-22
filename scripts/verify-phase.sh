@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 阶段完成验证。所有自动检查均真实阻断，不输出未经测量的结论。
 
-set -uo pipefail
+set -euo pipefail
 
 PHASE="${1:-}"
 case "$(uname -s)" in
