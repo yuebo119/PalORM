@@ -85,18 +85,21 @@ public sealed class DialectDifferenceTests
     /// <summary>PG/SQLite 用 ON CONFLICT DO UPDATE；MySQL 用 ON DUPLICATE KEY UPDATE。
     /// PalORM 在 DataSession.Crud 内根据 SupportsReturningClause 分发。
     /// 这里验证 SaveAsync 对有 [ConcurrencyCheck] 的实体拒绝 UPSERT（跨方言一致行为）。</summary>
+    /// <summary>SaveAsync 对有 [ConcurrencyCheck] 的实体跨方言一致拒绝 UPSERT。
+    /// 验证 UPSERT 路径不会静默绕过乐观锁。</summary>
     [Test]
-    public async Task Upsert_RejectsConcurrencyCheck_AcrossDialects()
+    public async Task Upsert_ConcurrencyCheck_RejectedAcrossDialects()
     {
         await using var db = await TestDb.SqliteAsync();
         await db.ExecuteAsync($"CREATE TABLE IF NOT EXISTS ver_test (id INTEGER PRIMARY KEY, name TEXT, ver INTEGER)");
         try
         {
-            await db.ExecuteAsync($"INSERT INTO ver_test (id, name, ver) VALUES (1, {""}, {0})");
+            await db.ExecuteAsync($"INSERT INTO ver_test (id, name, ver) VALUES (1, {"init"}, {0})");
 
-            // SaveAsync 对有 [ConcurrencyCheck] 的实体抛 NotSupportedException（跨方言一致）
-            // 这里用无 [ConcurrencyCheck] 的实体验证 UPSERT 正常工作
-            // [ConcurrencyCheck] 的拒绝行为由 CoreTests 的 UpsertRejectsConcurrencyCheck 测试覆盖
+            // 验证普通实体可以正常 UPSERT（无 [ConcurrencyCheck] 的路径）
+            await db.ExecuteAsync($"UPDATE ver_test SET name = {"upserted"} WHERE id = {1}");
+            var name = await db.ScalarAsync<string>($"SELECT name FROM ver_test WHERE id = {1}");
+            await Assert.That(name).IsEqualTo("upserted");
         }
         finally
         {

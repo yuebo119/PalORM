@@ -135,3 +135,130 @@ public async Task<List<BenchOrder>> PalORM_QueryAll() { ... }
 2. **铁律变更需评审**：新增/修改 T 编号铁律必须在 PR 中说明依据。
 3. **门禁脚本同步**：改 `test-gate.sh` 必须同步本文的机械防线表。
 4. **与 gate 系统不重复**：gate 系统已覆盖的编码规范检查（G1-G28），test 系统只关注测试维度。
+
+---
+
+## 三阶段测试规范（架构 → 编写 → 收口）
+
+> 测试代码的生命周期分三个阶段，每阶段有明确的约束清单。AI 和贡献者在各阶段必须遵守对应规范。
+
+### 阶段 1：架构约束（编写前）
+
+新增测试前必须确认以下架构决策：
+
+| 检查项 | 规范 | 违反后果 |
+|--------|------|---------|
+| **测试项目归属** | Core 路径 → `PalORM.Core.Tests`；源生成 → `PalORM.SourceGen.Tests`；真库 → `PalORM.Integration.Tests`；基准 → `bench/PalORM.Benchmarks` | 拒绝 |
+| **文件命名** | 一个测试类一个文件，文件名 = 主类名（如 `QueryColumnOrderValidationTests.cs`） | 警告 |
+| **实体与测试分离** | `[Table]` 实体类放在独立文件（`TestEntities/` 或文件底部 `#region Entities`），不与测试类混在同一作用域 | 警告 |
+| **测试框架统一** | TUnit + TUnit.Assertions（中央包管理锁定版本），禁止 xUnit/NUnit/MSTest | 阻断 |
+| **测试项目继承配置** | `.Tests` 后缀项目自动继承 `Directory.Build.props` 的 `TreatWarningsAsErrors=true` + 测试专属 NoWarn | 警告 |
+
+### 阶段 2：编写约束（编写中）
+
+编写每个测试方法时必须遵守：
+
+#### 2.1 命名规范（T4 细化）
+
+```csharp
+// ✅ 正确：Method_Scenario_ExpectedResult（三段式）
+[Test]
+public async Task GetByKey_ReturnsNull_WhenNotFound() { ... }
+
+// ✅ 正确：Provider_Operation_Behavior（集成测试）
+[Test]
+public async Task Sqlite_BulkInsert_RoundTripsAllRows() { ... }
+
+// ❌ 错误：缺少 Scenario 或 ExpectedResult
+[Test]
+public async Task HealthCheck() { ... }
+```
+
+#### 2.2 体例规范（禁止单行测试）
+
+```csharp
+// ✅ 正确：多行体例，每语句一行
+[Test]
+public async Task Insert_ReturnsEntity_WithAssignedId()
+{
+    await using var db = await TestDb.SqliteAsync();
+    var entity = new Product { Name = "Test", Price = 10m };
+    var result = await db.InsertAsync(entity);
+    await Assert.That(result.Id).IsGreaterThan(0);
+}
+
+// ❌ 错误：单行体例（不可读、不可 diff）
+[Test]
+public async Task HealthCheck() { await using var db = ...; await Assert.That(...); }
+```
+
+#### 2.3 断言规范（统一 TUnit 链式）
+
+```csharp
+// ✅ 正确：TUnit 链式断言
+await Assert.That(result).IsNotNull();
+await Assert.That(result.Name).IsEqualTo("Test");
+await Assert.That(() => ThrowMethod()).Throws<ArgumentException>();
+
+// ❌ 错误：同步 Assert.Throws / Assert.Fail
+Assert.Throws<ArgumentException>(() => Method());      // 用 TUnit 链式
+Assert.Fail("unexpected");                              // 用 await Assert.That(false).IsTrue()
+
+// ❌ 错误：弱断言（无断言 / 仅验证不抛异常）
+// 无任何 Assert.That 调用的测试方法
+```
+
+#### 2.4 清理规范（T6 细化）
+
+```csharp
+// SQLite 内存库：using var 自动释放，无需手动清理
+await using var db = await TestDb.SqliteAsync();
+
+// 外部 DB（PG/MySQL）：必须 try/finally 清理表
+try
+{
+    await db.ExecuteAsync($"CREATE TABLE test_tbl (...)");
+    // ... 测试逻辑 + 断言
+}
+finally
+{
+    await db.ExecuteAsync($"DROP TABLE IF EXISTS test_tbl");
+}
+
+// ❌ 错误：裸 DROP 在断言后（断言失败则不执行）
+await Assert.That(...);
+await db.ExecuteAsync($"DROP TABLE test_tbl");
+```
+
+#### 2.5 注释规范
+
+- 复杂测试场景（多步 setup / 回归用例）必须有 `//` 行内注释说明
+- 回归用例标注 ITM 编号：`// ITM-505: 精确类型匹配防 EndsWith 误判`
+- 简单 CRUD 测试无需 XML doc——方法名已自解释
+
+### 阶段 3：收口整理（编写后）
+
+PR 提交前对全部测试变更做收口检查：
+
+| 检查项 | 命令 / 方法 | 阻断级别 |
+|--------|-----------|---------|
+| **风格统一** | 所有新增/修改的测试方法为多行体例 | 警告 |
+| **断言统一** | 全部使用 TUnit 链式（`await Assert.That`），无 `Assert.Throws`/`Assert.Fail` | 警告 |
+| **无弱断言** | 每个 `[Test]` 方法至少 1 个 `Assert.That` 调用 | 阻断 |
+| **清理统一** | 外部 DB 测试全部 try/finally 包裹 DROP | 阻断 |
+| **测试用例数同步** | `bash scripts/tech-debt-scan.sh` 检查 #9 badge 一致 | 阻断 |
+| **test-gate 通过** | `bash scripts/test-gate.sh` 0 失败 | 阻断 |
+| **全量测试通过** | `dotnet test test/PalORM.Core.Tests` + `SourceGen.Tests` 全绿 | 阻断 |
+| **README badge 更新** | 测试数变更时同步 README.md badge | 警告 |
+
+---
+
+## 缺陷登记补充（T-DEF-8 ~ T-DEF-12）
+
+| # | 缺陷 | 教训 | 来源 |
+|---|------|------|------|
+| T-DEF-8 | 单行测试体例 | 单行测试不可读、不可 diff、无法逐行调试。全部改多行 | 风格审计 2026-07-22 |
+| T-DEF-9 | 混用同步断言 | `Assert.Throws` / `Assert.Fail` 非 TUnit 链式，与 `await Assert.That` 混用。统一 TUnit | 风格审计 2026-07-22 |
+| T-DEF-10 | 弱断言（无断言测试） | `RuntimeFields_AreAccessible` / `Savepoint_Rollback` 等无 Assert.That——测试通过不验证任何行为。每个 [Test] 至少 1 个断言 | 风格审计 2026-07-22 |
+| T-DEF-11 | 文件名与类名不匹配 | 文件名必须等于主类名（V11Tests→OwnedJsonTests 已修复；后续新增必须遵守） | 风格审计 2026-07-22 |
+| T-DEF-12 | 实体类与测试类混放 | `[Table]` 实体应独立文件或文件底部 region，不与测试类同级混放 | 风格审计 2026-07-22 |

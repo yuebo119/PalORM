@@ -321,22 +321,20 @@ public sealed class PalORM_RuntimeTests
     }
 
     [Test]
-    public async Task RuntimeFields_AreAccessible()
+    public async Task RuntimeFields_AreAccessible_AfterModuleInit()
     {
-        // 验证注册表属性可访问（模块初始化器填充前为 null）
-        // 直接引用而非反射——编译时类型安全
+        // 验证注册表属性全部可访问且非 null（模块初始化器填充后）
         await Assert.That(PalORM_Runtime.RowFactories).IsNotNull();
-        _ = PalORM_Runtime.TableNames;
-        _ = PalORM_Runtime.CommandSqls;
-        _ = PalORM_Runtime.CommandSqlsByDialect;
-        _ = PalORM_Runtime.BindInsert;
-        _ = PalORM_Runtime.BindUpdate;
-        _ = PalORM_Runtime.BindDelete;
-        _ = PalORM_Runtime.PkColumns;
-        _ = PalORM_Runtime.ColumnNames;
-        _ = PalORM_Runtime.CreateTableSql;
-        _ = PalORM_Runtime.CreateTableSqlByDialect;
-        // 无异常 = 属性可访问。
+        await Assert.That(PalORM_Runtime.TableNames).IsNotNull();
+        await Assert.That(PalORM_Runtime.CommandSqls).IsNotNull();
+        await Assert.That(PalORM_Runtime.CommandSqlsByDialect).IsNotNull();
+        await Assert.That(PalORM_Runtime.BindInsert).IsNotNull();
+        await Assert.That(PalORM_Runtime.BindUpdate).IsNotNull();
+        await Assert.That(PalORM_Runtime.BindDelete).IsNotNull();
+        await Assert.That(PalORM_Runtime.PkColumns).IsNotNull();
+        await Assert.That(PalORM_Runtime.ColumnNames).IsNotNull();
+        await Assert.That(PalORM_Runtime.CreateTableSql).IsNotNull();
+        await Assert.That(PalORM_Runtime.CreateTableSqlByDialect).IsNotNull();
     }
 
     [Test]
