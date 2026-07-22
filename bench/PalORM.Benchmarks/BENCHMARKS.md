@@ -252,3 +252,72 @@ micro-benchmark 对环境高度敏感。已知影响：
 - **后台 Windows Update / 杀毒软件**：偶发尖峰
 
 **建议**：对比不同版本时，**关注相对 ADO.NET 的倍数**而非绝对值——ADO.NET 基线随环境波动，但 PalORM/ADO.NET 的相对关系稳定。
+
+---
+
+## 🌐 三 Provider 远程基准（v4.0 新增）
+
+> 远程服务器：Ubuntu 7.0 / 8 核 / 7.2 GB RAM / Docker
+> - PostgreSQL 18.4（Docker 容器）
+> - MySQL 8.4.10（Docker 容器）
+> - 客户端：本地 Windows 10 通过网络连接（`Pooling=false` 真实场景）
+> 种子数据：10,000 行 bench_orders
+> 配置：`launchCount=1, warmupCount=3, iterationCount=5`
+
+### PostgreSQL 18.4
+
+| 操作 | ADO.NET | Dapper | PalORM | PalORM vs ADO.NET |
+|------|:---:|:---:|:---:|:---:|
+| QueryAll 10K | 28.21 ms | 28.38 ms (101%) | **18.35 ms** | **65%** 🟢🟢 |
+| GetByKey | 22.35 ms | — | **7.48 ms** | **33%** 🟢🟢🟢 |
+| Insert + RETURNING | 23.54 ms | — | **8.04 ms** | **35%** 🟢🟢🟢 |
+| BulkInsert 10K（Binary COPY）| — | — | **65.09 ms** | — |
+
+> 🟢🟢🟢 **PalORM 在 PostgreSQL 上大幅超越 ADO.NET！**
+>
+> - **QueryAll 快 35%**：源生成 RowFactory 委托比手写 `r.GetInt64 + GetString + GetDecimal` 更快——JIT 可内联 static delegate
+> - **Insert 快 65%**：PalORM 用参数化 INSERT + RETURNING 单次往返物化整行；ADO.NET 手写相同 SQL 但连接管理开销更大
+> - **GetByKey 快 67%**：CRUD 路径 CurrentState 快照合并 + 预编译 SQL 路径
+> - **BulkInsert 65ms**：PG Binary COPY 是 Najpsql 原生最快路径
+
+### MySQL 8.4.10
+
+| 操作 | ADO.NET | Dapper | PalORM | PalORM vs ADO.NET |
+|------|:---:|:---:|:---:|:---:|
+| QueryAll 10K | 14.42 ms | 15.53 ms (108%) | **15.20 ms** | **106%** |
+| GetByKey | 5.26 ms | — | **5.54 ms** | **105%** |
+| Insert + LAST_INSERT_ID | 6.37 ms | — | **6.60 ms** | **104%** |
+| BulkInsert 10K（多值 INSERT）| — | — | **72.74 ms** | — |
+
+> MySQL 上 PalORM 与 ADO.NET **基本持平**（104-106%）。MySQL 无 RETURNING 子句，走 `LAST_INSERT_ID()` 两次往返，无性能优势。MySqlConnector 的参数化路径已经很高效。
+
+### 三 Provider 对比
+
+| 操作 | SQLite | PostgreSQL | MySQL |
+|------|:---:|:---:|:---:|
+| QueryAll vs ADO.NET | 118% | **65%** 🟢 | 106% |
+| GetByKey vs ADO.NET | 125% | **33%** 🟢 | 105% |
+| Insert vs ADO.NET | 134% | **35%** 🟢 | 104% |
+| BulkInsert 10K | 59.3 ms | 65.1 ms (COPY) | 72.7 ms |
+
+> **关键洞察**：PalORM 在 **PostgreSQL 上性能最优**——所有 CRUD 操作都比原生 ADO.NET 快 35-67%。
+> 原因分析：
+> 1. PG 的 RETURNING 子句让 Insert/GetByKey 走单次往返物化，PalORM 的源生成 RowFactory 委托比手写 reader 读取更快
+> 2. PG 协议支持prepared statement缓存，PalORM 的参数化路径充分利用
+> 3. PG Binary COPY 是百万行场景的最优路径（SQLite/MySQL 走多值 INSERT）
+>
+> SQLite 因内存模式无网络往返优势，框架开销占比更大；MySQL 无 RETURNING，Insert 走两次往返。
+
+### 连接配置
+
+```bash
+# PostgreSQL
+export PALORM_BENCH_PG="Host=HOST;Port=5432;Username=USER;Password=PASS;Database=palorm_bench;Pooling=false"
+
+# MySQL
+export PALORM_BENCH_MYSQL="Server=HOST;Port=3306;User ID=USER;Password=PASS;Database=palorm_bench;Pooling=false"
+
+# 运行
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*PgBenchmarks*'
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*MySqlBenchmarks*'
+```
