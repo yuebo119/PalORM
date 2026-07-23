@@ -30,7 +30,7 @@
 
 ---
 
-## II. AI 缺陷登记（21 个）
+## II. AI 缺陷登记（22 个）
 
 ### 阶段 A：修复缺陷（Sonar 4 轮）
 
@@ -62,6 +62,7 @@
 | B12 | Edit 替换 emit 代码时误删相邻行（v4.0 R11 修复） | 修 MigrationEmitter nullable 条件时，Edit 的 old_string 含了 defaultClause/primaryKey/columns.Add 三行——new_string 只保留了 nullable 行，导致 emit 生成的 DDL 列为空。**陷阱**：Edit 工具按精确匹配替换，old_string 越大越容易误删相邻代码。**SOP**：emit 代码 Edit 时 old_string 只含目标行 ± 1 行上下文，不贪多。改后必须 `dotnet build` + 快照比对验证 emit 产物完整。 |
 | B13 | 门禁脚本正则匹配注释内容（v4.0 G24 修复） | G24 perl 正则 `\bawait\s+` 统计 await 数量，但 GridReader.cs 注释中的 "await 会导致...await using 卡死" 被误匹配，导致 await=12 > ConfigureAwait=11 误报。**陷阱**：正则不区分代码与注释/XML doc。**SOP**：门禁脚本的正则统计前必须先剥离 `///` XML doc 和 `//` 行注释（`s{^\s*///.*$}{}gms; s{//.*$}{}gm;`）。 |
 | B14 | 测试计数口径冲突——声明数 vs 通过数（v4.0 badge/D10） | README badge 写 427（源码 [Test] 声明总数），tech-debt #9 检查 badge == dotnet test 通过数（419，8 个外部 DB 失败）。D10 检查文档计数 == 源码标注数。三者口径不一致导致连环 FAIL。**陷阱**：同一数字（"测试数"）在不同检查中有不同口径。**SOP**：全仓库统一口径 = "CI 全环境实际通过数"（419）。外部 DB 环境依赖测试在文档中标注"需外部 DB"但不计入 badge 总数。D10 对 Integration.Tests 允许文档 ≤ 源码标注。 |
+| B15 | 测试预期不看实现代码就写断言（v4.0 LimitOffset） | LimitOffset 测试假设 `Take(5)` 无 `Skip` 时不含 `OFFSET`，但 `QueryBuilder.BuildLimitOffset` 生成 `LIMIT 5 OFFSET 0`（`_skip ?? 0` 默认 0）。测试失败后才读 SQL 生成代码。**陷阱**：写 SQL 结构断言时凭直觉假设而非读代码确认。**SOP**：写 DryRun/SQL 断言前必须先读 `QueryBuilder.BuildLimitOffset` / `BuildSql` 的实际生成逻辑，断言预期 = 代码确认的结果。 |
 
 ---
 
@@ -245,5 +246,6 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 | B12 Edit 误删 emit 行 | `a4a9c7c` | MigrationEmitter R11 修复 defaultClause/primaryKey 误删 |
 | B13 门禁正则匹配注释 | `860b09d` | G24 perl await 统计含注释→剥离注释后统计 |
 | B14 测试计数口径冲突 | `5788eeb` | badge 419/427/D10 三口径统一 |
+| B15 测试预期不看代码 | `49749ff` | LimitOffset OFFSET 0 误判→先读 BuildLimitOffset |
 | 占位诊断删除 | `8781357` | PalORMAnalyzer PALORM006/007 |
 | 规范化 | `3450e18` | CHANGELOG + CONTRIBUTING |
