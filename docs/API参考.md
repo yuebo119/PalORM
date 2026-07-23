@@ -1,7 +1,7 @@
 # PalORM API 参考
 
-> v3.0.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: Core 156/156、SourceGen 104/104、Integration 149/149（SQLite）
+> v4.0.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
+> 测试: 全仓库 419 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -20,6 +20,7 @@
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
 ### 编译时验证 — 21 条 PALORM 诊断
+> PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。实际编号 001-005 + 008-022，共 21 条。
 
 | 规则 | 说明 |
 |------|------|

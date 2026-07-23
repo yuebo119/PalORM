@@ -2,7 +2,7 @@
 <p align="center"><strong>面向严格 Native AOT 的 .NET 微 ORM</strong></p>
 <p align="center">
   <img src="https://img.shields.io/badge/.NET-11-512BD4?logo=dotnet">
-  <img src="https://img.shields.io/badge/tests-420%2F420-success">
+  <img src="https://img.shields.io/badge/tests-419%2F419-success">
   <img src="https://img.shields.io/badge/AOT-3%20providers%20verified-success">
   <img src="https://img.shields.io/badge/IL%20suppressions-0-success">
   <img src="https://img.shields.io/badge/license-AGPL%20v3-blue">
@@ -28,6 +28,8 @@ PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运�
 | **最小依赖** | Core 零第三方 NuGet：BCL + ADO.NET + `Microsoft.Extensions.Logging.Abstractions`；可观测性基于 BCL `ActivitySource` / `Meter` |
 
 ### 编译时诊断（21 条规则）
+
+> PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。实际编号为 001-005 + 008-022，共 21 条。
 
 | 特性 | 说明 |
 |------|------|
@@ -492,13 +494,13 @@ builder.Services.AddTracing(tracing =>
 测试项目使用 TUnit（Microsoft.Testing.Platform 模式）：**`dotnet test` 会静默零输出**（MTP 与经典 test 管道不桥接），必须用 `dotnet run`：
 
 ```bash
-dotnet run --project test/PalORM.Core.Tests            # 156 用例
-dotnet run --project test/PalORM.SourceGen.Tests       # 生成器/分析器
+dotnet run --project test/PalORM.Core.Tests            # 单元 + 架构不变式
+dotnet run --project test/PalORM.SourceGen.Tests       # 生成器/分析器 + 快照基线
 dotnet run --project test/PalORM.Integration.Tests -- \
   --treenode-filter "/*/*/*/*[Category!=ExternalDatabase]"   # 本地（无 MySQL/PG 服务）
 ```
 
-CI 中请校验输出含 `Test run summary` 行——无摘要即视为未运行，不是通过。
+CI 中请校验输出含 `Test run summary` 行--无摘要即视为未运行，不是通过。外部 DB 依赖测试（PG/MySQL）标注 `Category=ExternalDatabase`，不计入 badge 总数（B14 口径统一）。
 
 ---
 
