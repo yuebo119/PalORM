@@ -47,15 +47,15 @@ public sealed class BulkCleanupTests
     public async Task BulkInsert_ProbeCleanupWithoutPrimary_ThrowsCleanupException(
         string provider)
     {
+        // v4.3：probe 被 InsertBinderValidated 跳过，ProbeCleanup 场景不再触发
+        // 改为验证 probe 跳过后正常执行（不抛异常）
         var failures = new BulkFailureSet();
         await using var connection = new BulkFailureConnection(
             BulkFailureScenario.ProbeCleanup,
             failures);
 
-        Exception? actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await BulkInsertAsync(provider, connection));
-
-        await Assert.That(actual).IsSameReferenceAs(failures.ProbeCleanup);
+        long result = await BulkInsertAsync(provider, connection);
+        await Assert.That(result).IsEqualTo(1L);
     }
 
     [Test]
@@ -182,9 +182,9 @@ internal sealed class BulkFailureCommand(
     BulkFailureScenario scenario,
     BulkFailureSet failures) : DbCommand
 {
-    // v4.1：命令创建顺序（BindInsertToBatch 直绑后）：probe=1、主命令(batchCmd)=2
+    // v4.3：probe 被缓存跳过，命令创建顺序：主命令(batchCmd)=1
     private readonly BulkFailureParameterCollection _parameters = new(
-        commandIndex == 2 && scenario == BulkFailureScenario.RowAndMainCleanup
+        commandIndex == 1 && scenario == BulkFailureScenario.RowAndMainCleanup
             ? failures.RowOperation
             : null);
 
@@ -207,7 +207,7 @@ internal sealed class BulkFailureCommand(
     protected override DbParameter CreateDbParameter() => new BulkFailureParameter();
 
     public override Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
-        => commandIndex == 2
+        => commandIndex == 1
             && scenario == BulkFailureScenario.MainAndTransactionCleanup
                 ? Task.FromException<int>(failures.Execution)
                 : Task.FromResult(1);
@@ -215,13 +215,11 @@ internal sealed class BulkFailureCommand(
     public override async ValueTask DisposeAsync()
     {
         await base.DisposeAsync().ConfigureAwait(false);
-        if (commandIndex == 1 && scenario == BulkFailureScenario.ProbeCleanup)
-            throw failures.ProbeCleanup;
-        if (commandIndex == 2
+        // v4.3：probe 被缓存跳过，ProbeCleanup 场景不再触发
+        if (commandIndex == 1
             && scenario is BulkFailureScenario.MainAndTransactionCleanup
                 or BulkFailureScenario.RowAndMainCleanup)
             throw failures.MainCleanup;
-        // v4.1：RowCommand scratch 已删除，不再有 RowCleanup 步骤
     }
 }
 

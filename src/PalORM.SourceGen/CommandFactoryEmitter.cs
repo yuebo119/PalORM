@@ -349,7 +349,7 @@ internal static class CommandFactoryEmitter
             if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
             // withOffset=true 时生成 $\"@p{paramOffset + N}\"（插值表达式），false 时生成 \"@pN\"（字面量）
-            string paramName = withOffset ? $"$\"@p{{paramOffset + {pi}}}\"" : $"\"@p{pi}\"";
+            string paramName = withOffset ? $"global::PalORM.ParameterNameCache.GetName(paramOffset + {pi})" : $"\"@p{pi}\"";
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
             pi++;
         }

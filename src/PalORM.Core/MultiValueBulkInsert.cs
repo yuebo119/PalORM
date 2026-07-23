@@ -45,9 +45,13 @@ public static class MultiValueBulkInsert
         // v4.1：BindInsertToBatch 直绑--binder 支持 paramOffset，消除 rowCommand scratch
         Action<DbCommand, object, int> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
-        await BulkOperationFramework.ProbeBinderAsync(
-            conn, binder, entities[0], columnCount, typeof(T).Name,
-            "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
+        // v4.3：源生成器保证 binder 参数数 == 列数，probe 只需首次验证（InsertBinderValidated=true 时跳过）
+        if (!metadata.InsertBinderValidated)
+        {
+            await BulkOperationFramework.ProbeBinderAsync(
+                conn, binder, entities[0], columnCount, typeof(T).Name,
+                "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
+        }
 
         if (columnCount > maxParametersPerStatement)
             throw new InvalidOperationException(

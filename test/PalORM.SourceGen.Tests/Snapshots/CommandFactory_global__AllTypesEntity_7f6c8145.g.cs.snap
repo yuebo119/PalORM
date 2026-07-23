@@ -17,24 +17,24 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
     /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>
     internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, global::AllTypesEntity entity, int paramOffset)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 0}"; p.Value = (object)entity.IntValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 1}"; p.Value = (object)entity.ShortValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 2}"; p.Value = (object)entity.ByteValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 3}"; p.Value = (object)entity.StringValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 4}"; p.Value = (object)entity.CharValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 5}"; p.Value = (object)entity.BoolValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 6}"; p.Value = (object)entity.DecimalValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 7}"; p.Value = (object)entity.DoubleValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 8}"; p.Value = (object)entity.FloatValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 9}"; p.Value = (object)entity.DateTimeValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 10}"; p.Value = (object)entity.GuidValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 11}"; p.Value = (object)entity.DateTimeOffsetValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 12}"; p.Value = (object)entity.DateOnlyValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 13}"; p.Value = (object)entity.TimeOnlyValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 14}"; p.Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 15}"; p.Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 16}"; p.Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 17}"; p.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 0); p.Value = (object)entity.IntValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 1); p.Value = (object)entity.ShortValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 2); p.Value = (object)entity.ByteValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 3); p.Value = (object)entity.StringValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 4); p.Value = (object)entity.CharValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 5); p.Value = (object)entity.BoolValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 6); p.Value = (object)entity.DecimalValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 7); p.Value = (object)entity.DoubleValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 8); p.Value = (object)entity.FloatValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 9); p.Value = (object)entity.DateTimeValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 10); p.Value = (object)entity.GuidValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 11); p.Value = (object)entity.DateTimeOffsetValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 12); p.Value = (object)entity.DateOnlyValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 13); p.Value = (object)entity.TimeOnlyValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 14); p.Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 15); p.Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 16); p.Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 17); p.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
