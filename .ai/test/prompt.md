@@ -36,6 +36,8 @@
 | T10 | **基准 Median 的 Error/Mean > 15% 视为统计无效**——必须提升配置或标注环境噪声 | 警告 |
 | T11 | **测试计数口径统一为 CI 全环境通过数**——badge / 文档 / tech-debt #9 全部对齐。外部 DB 环境依赖测试标注但不计入 badge 总数（B14 教训） | 阻断 |
 | T12 | **断言基线提升需标注理由**——assertion-strength 基线只许下调，但 review 补强引入的合规 IsNotNull（注册表/接口可达性验证）允许提升，必须在脚本注释标注来源 | 警告 |
+| T13 | **DryRun/SQL 断言必须先读 SQL 生成代码**——断言 SQL 含/不含某关键词前，必须确认 QueryBuilder 实际生成逻辑（如 `Take(5)` 无 `Skip` 时 SQLite 仍生成 `OFFSET 0`）。不看代码的 SQL 断言预期 = 猜测 | 阻断 |
+| T14 | **优先行为断言，避免裸 IsNotNull**——查询结果的 `Assert.That(result).IsNotNull()` 改为 `Assert.That(result!.Property).IsEqualTo(expected)`。例外：try-catch 异常验证、异步通知捕获、static abstract 委托可达性前置 | 警告 |
 
 ---
 
@@ -218,13 +220,22 @@ public async Task Insert_ReturnsEntity_WithAssignedId()
 public async Task HealthCheck() { await using var db = ...; await Assert.That(...); }
 ```
 
-#### 2.3 断言规范（统一 TUnit 链式）
+#### 2.3 断言规范（统一 TUnit 链式 + T13/T14）
 
 ```csharp
 // ✅ 正确：TUnit 链式断言
-await Assert.That(result).IsNotNull();
 await Assert.That(result.Name).IsEqualTo("Test");
 await Assert.That(() => ThrowMethod()).Throws<ArgumentException>();
+
+// ✅ 正确：行为断言（T14——优先具体属性而非裸 IsNotNull）
+await Assert.That(found!.Name).IsEqualTo("expected");
+
+// ❌ 错误：弱断言（T14——避免裸 IsNotNull）
+await Assert.That(found).IsNotNull(); // 改为 found!.Property 断言
+
+// ❌ 错误：SQL 断言不看代码（T13——必须先读 BuildLimitOffset）
+// Take(5) 无 Skip 时 SQLite 生成 "LIMIT 5 OFFSET 0"——不能假设不含 OFFSET
+await Assert.That(dry.Sql.Contains("OFFSET")).IsFalse(); // 失败！OFFSET 0 合规
 
 // ❌ 错误：同步 Assert.Throws / Assert.Fail
 Assert.Throws<ArgumentException>(() => Method());      // 用 TUnit 链式
@@ -290,3 +301,5 @@ PR 提交前对全部测试变更做收口检查：
 | T-DEF-12 | 实体类与测试类混放 | `[Table]` 实体应独立文件或文件底部 region，不与测试类同级混放 | 风格审计 2026-07-22 |
 | T-DEF-13 | 测试计数口径冲突 | badge 声明数 427 vs tech-debt 通过数 419 vs D10 标注数 167——三者口径不一致连环 FAIL。全仓库统一为 CI 通过数，外部 DB 测试不计入（B14） | v4.0 评审 2026-07-23 |
 | T-DEF-14 | 断言基线机械提升 | assertion-strength 基线从 19→32 提升，新引入的 IsNotNull 是 review 补强的注册表属性验证——合规保留。基线变更必须在脚本注释标注来源和理由 | v4.0 评审 2026-07-23 |
+| T-DEF-15 | DryRun SQL 断言预期不看代码 | LimitOffset 测试假设 Take(5) 无 Skip 不含 OFFSET，但 QueryBuilder 生成 `LIMIT 5 OFFSET 0`（`_skip ?? 0`）。断言 SQL 结构前必须先读 `BuildLimitOffset` 生成逻辑 | v4.0 测试 2026-07-23 |
+| T-DEF-16 | 裸 IsNotNull 泛滥 | 弱断言从 30 削减到 11——RuntimeFields/found/loaded/factory 都能改行为断言。初版测试习惯性写 IsNotNull 而非具体属性断言。规则：`result.IsNotNull` → `result!.Property.IsEqualTo(expected)` | v4.0 测试 2026-07-23 |
