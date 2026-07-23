@@ -160,7 +160,8 @@ internal static class RowFactoryEmitter
             // ITM-520：Microsoft.Data.Sqlite/Npgsql 的 GetChar 抛 NotSupportedException，
             // 经字符串读取；空串守卫走 ReadChar，抛带列名异常而非裸 IndexOutOfRange
             "char" or "System.Char" => $"ReadChar(r, {ordinal}, {SymbolDisplay.FormatLiteral(columnName, quote: true)})",
-            "byte[]" or "System.Byte[]" => $"(byte[])r.GetValue({ordinal})",
+            // v4.4：GetFieldValue<byte[]> 比 GetValue 反射路径更快，对齐 DateTimeOffset/TimeSpan 路径
+            "byte[]" or "System.Byte[]" => $"r.GetFieldValue<byte[]>({ordinal})",
             _ => $"({clrTypeName})r.GetValue({ordinal})"
         };
     }

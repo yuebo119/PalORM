@@ -117,7 +117,7 @@ public sealed class StoredProcBuilder
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         ColumnOrderValidator.Validate<T>(reader, _validateColumnOrder);
-        List<T> list = [];
+        List<T> list = new(16);
         var tf = (Func<DbDataReader, T>)factory;
         while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(tf(reader));
         return list;
