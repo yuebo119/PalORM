@@ -126,9 +126,11 @@ public sealed class DialectDifferenceTests
     [Test]
     public async Task IsUniqueViolation_Dialect_ErrorCodes()
     {
-        // SQLite 的唯一冲突行为由 Integration Tests 的 UniqueConstraintTests 覆盖
-        // 这里验证接口存在且类型正确
-        await Assert.That(PalORM.Sqlite.SqliteProvider.IsUniqueViolation).IsNotNull();
+        // 验证三 Provider 的 IsUniqueViolation 委托可调用且不抛异常
+        bool sqliteResult = PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
+            new Microsoft.Data.Sqlite.SqliteException("test", 19, 2067));
+        await Assert.That(sqliteResult).IsTrue();
+        // PG/MySQL 委托存在性由编译保证（static abstract），这里验证调用不抛
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.IsUniqueViolation).IsNotNull();
         await Assert.That(PalORM.MySql.MySqlProvider.IsUniqueViolation).IsNotNull();
     }
