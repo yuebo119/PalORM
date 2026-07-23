@@ -106,9 +106,13 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         Action<DbCommand, object, int> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
-        await BulkOperationFramework.ProbeBinderAsync(
-            conn, binder, entities[0], columnCount, typeof(T).Name,
-            "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
+        // v4.3：源生成器保证 binder 合法，probe 只需首次验证
+        if (!metadata.InsertBinderValidated)
+        {
+            await BulkOperationFramework.ProbeBinderAsync(
+                conn, binder, entities[0], columnCount, typeof(T).Name,
+                "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
+        }
 
         string quotedColumns = string.Join(", ",
             metadata.InsertColumns.Select(QuoteIdentifier));

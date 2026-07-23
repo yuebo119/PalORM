@@ -17,9 +17,9 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
     /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>
     internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, global::InheritedEntity entity, int paramOffset)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 0}"; p.Value = (object)entity.Name; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 1}"; p.Value = (object)entity.CreatedBy; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 2}"; p.Value = (object)entity.CreatedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 0); p.Value = (object)entity.Name; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 1); p.Value = (object)entity.CreatedBy; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 2); p.Value = (object)entity.CreatedAt; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>

@@ -68,6 +68,8 @@ public readonly struct CrudMetadata
     public readonly Action<object>? IncrementVersion;
     /// <summary>判断实体主键是否仍为默认值（用于 Save 区分 Insert/Update）。</summary>
     public readonly Func<object, bool> HasDefaultKey;
+    /// <summary>v4.3：源生成器保证 binder 参数数 == 列数，probe 只需验证一次。注册时设 true。</summary>
+    public readonly bool InsertBinderValidated;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 二进制布局与遗留 9 参 ctor 等价，所有 public readonly 字段保持位置。</summary>
@@ -76,12 +78,14 @@ public readonly struct CrudMetadata
     /// <param name="columns">列名聚合（Insert/Upsert，注册时做只读快照）。</param>
     /// <param name="incrementVersion">递增并发令牌委托，无并发列时传 null。</param>
     /// <param name="hasDefaultKey">主键默认值判断委托。</param>
+    /// <param name="insertBinderValidated">源生成器已验证 binder 参数数 == 列数时为 true，跳过运行时 probe。</param>
     public CrudMetadata(
         CommandSqlSet sqls,
         CrudBindings bindings,
         CrudColumns columns,
         Action<object>? incrementVersion,
-        Func<object, bool> hasDefaultKey)
+        Func<object, bool> hasDefaultKey,
+        bool insertBinderValidated = true)
     {
         Sqls = sqls;
         BindInsert = bindings.BindInsert;
@@ -93,11 +97,12 @@ public readonly struct CrudMetadata
         UpsertColumns = columns.Upsert;
         IncrementVersion = incrementVersion;
         HasDefaultKey = hasDefaultKey;
+        InsertBinderValidated = insertBinderValidated;
     }
 
     internal CrudMetadata Copy()
         => new(Sqls,
             new CrudBindings(BindInsert, BindUpsert, BindUpdate, RowFactory),
             new CrudColumns(InsertColumns, UpsertColumns),
-            IncrementVersion, HasDefaultKey);
+            IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }
