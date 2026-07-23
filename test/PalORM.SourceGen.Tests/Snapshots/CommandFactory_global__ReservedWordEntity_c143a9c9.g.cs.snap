@@ -10,6 +10,8 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
     internal const string UpdateSql = "UPDATE order SET select = @p0 WHERE Id = @p1";
     internal const string DeleteSql = "DELETE FROM order WHERE Id = @p0";
     internal const string InsertReturningSql = "INSERT INTO order (Id, select) VALUES (@p0, @p1) RETURNING Id, select";
+    internal const string UpsertReturningSql = "INSERT INTO order (Id, select) VALUES (@p0, @p1) ON CONFLICT (Id) DO UPDATE SET select = excluded.select RETURNING Id, select";
+    internal const string UpsertMySqlSql = "INSERT INTO order (Id, select) VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE select = VALUES(select)";
 
     /// <summary>绑定实体属性到 INSERT 参数。</summary>
     internal static void BindInsert(global::System.Data.Common.DbCommand cmd, global::ReservedWordEntity entity)

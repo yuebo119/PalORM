@@ -294,7 +294,7 @@ public sealed class PalORM_RuntimeTests
         {
             RowFactories = new Dictionary<Type, object> { [entityType] = new object() },
             TableNames = new Dictionary<Type, string> { [entityType] = tableName },
-            CommandSqls = new Dictionary<Type, CommandSqlSet> { [entityType] = new("I", "U", "D", "IR") },
+            CommandSqls = new Dictionary<Type, CommandSqlSet> { [entityType] = new("I", "U", "D", "IR", "UR", "UM") },
             BindInsert = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
             BindUpdate = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
             BindDelete = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
@@ -309,7 +309,7 @@ public sealed class PalORM_RuntimeTests
             CrudMetadatas = new Dictionary<Type, CrudMetadata>
             {
                 [entityType] = new(
-                    new("I", "U", "D", "IR"),
+                    new("I", "U", "D", "IR", "UR", "UM"),
                     new CrudBindings(Bind, Bind, Bind, new object()),
                     new CrudColumns(insertColumns, upsertColumns),
                     null, static _ => false)
@@ -341,11 +341,13 @@ public sealed class PalORM_RuntimeTests
     [Test]
     public async Task CommandSqlSet_IsRecordStruct()
     {
-        var set = new CommandSqlSet("I", "U", "D", "IR");
+        var set = new CommandSqlSet("I", "U", "D", "IR", "UR", "UM");
         await Assert.That(set.Insert).IsEqualTo("I");
         await Assert.That(set.Update).IsEqualTo("U");
         await Assert.That(set.Delete).IsEqualTo("D");
         await Assert.That(set.InsertReturning).IsEqualTo("IR");
+        await Assert.That(set.UpsertReturning).IsEqualTo("UR");
+        await Assert.That(set.UpsertMySql).IsEqualTo("UM");
     }
 }
 

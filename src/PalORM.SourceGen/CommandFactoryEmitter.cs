@@ -40,6 +40,8 @@ internal static class CommandFactoryEmitter
         sb.AppendLine($"    internal const string UpdateSql = {MigrationEmitter.ToCSharpLiteral(BuildUpdateSql(model))};");
         sb.AppendLine($"    internal const string DeleteSql = {MigrationEmitter.ToCSharpLiteral(BuildDeleteSql(model))};");
         sb.AppendLine($"    internal const string InsertReturningSql = {MigrationEmitter.ToCSharpLiteral(BuildInsertReturningSql(model))};");
+        sb.AppendLine($"    internal const string UpsertReturningSql = {MigrationEmitter.ToCSharpLiteral(BuildUpsertReturningSql(model))};");
+        sb.AppendLine($"    internal const string UpsertMySqlSql = {MigrationEmitter.ToCSharpLiteral(BuildUpsertMySqlSql(model))};");
         sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定实体属性到 INSERT 参数。</summary>");
         sb.AppendLine($"    internal static void BindInsert(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity)");
@@ -110,18 +112,6 @@ internal static class CommandFactoryEmitter
             string valueExpr = col.IsNullable
                 ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
                 : $"(object){providerValueExpr}";
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
-            pi++;
-        }
-    }
-
-    private static void GenerateBindUpsertBody(TableModel model, StringBuilder sb)
-    {
-        int pi = 0;
-        foreach (var col in model.Columns.AsSpan())
-        {
-            if (!col.IsUpsertable) continue;
-            string valueExpr = GetParameterValueExpression(col);
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
             pi++;
         }
@@ -255,12 +245,105 @@ internal static class CommandFactoryEmitter
                 .Select(column => Quote(column.ColumnName)));
     }
 
+    // ── Upsert SQL 预构建（v4.1 性能优化：消除运行时 LINQ + string.Join 拼接）──
+    // 运行时 UpsertWithReturningAsync / UpsertWithMySqlAsync 直接取 const，零分配。
+
+    internal static string BuildUpsertReturningSql(TableModel model)
+        => BuildUpsertReturningSql(model, null);
+
+    internal static string BuildUpsertReturningSql(
+        TableModel model, SqlGenerationDialect? dialect)
+    {
+        // MySQL 无 RETURNING：空串
+        if (dialect == SqlGenerationDialect.MySql)
+            return string.Empty;
+
+        string Quote(string value) => dialect is null
+            ? value
+            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+
+        ColumnModel[] upsertColumns = model.Columns.AsSpan().ToArray()
+            .Where(static column => column.IsUpsertable).ToArray();
+        ColumnModel[] pkCols = upsertColumns.Where(static c => c.IsPrimaryKey).ToArray();
+        if (pkCols.Length == 0)
+            return string.Empty;
+
+        string pkColumnName = pkCols[0].ColumnName;
+        string[] updateColumns = upsertColumns
+            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal))
+            .Select(column => Quote(column.ColumnName))
+            .ToArray();
+
+        string conflictAction = updateColumns.Length == 0
+            ? "DO NOTHING"
+            : "DO UPDATE SET " + string.Join(", ", updateColumns.Select(column =>
+                $"{column} = excluded.{column}"));
+
+        string columnList = string.Join(", ", upsertColumns.Select(c => Quote(c.ColumnName)));
+        string valueList = string.Join(", ",
+            Enumerable.Range(0, upsertColumns.Length).Select(static index => $"@p{index}"));
+        string returningList = string.Join(", ", model.Columns.AsSpan().ToArray()
+            .Select(column => Quote(column.ColumnName)));
+
+        return $"INSERT INTO {Quote(model.TableName)} ({columnList}) " +
+            $"VALUES ({valueList}) ON CONFLICT " +
+            $"({Quote(pkColumnName)}) {conflictAction} " +
+            $"RETURNING {returningList}";
+    }
+
+    internal static string BuildUpsertMySqlSql(TableModel model)
+        => BuildUpsertMySqlSql(model, null);
+
+    internal static string BuildUpsertMySqlSql(
+        TableModel model, SqlGenerationDialect? dialect)
+    {
+        string Quote(string value) => dialect is null
+            ? value
+            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+
+        ColumnModel[] upsertColumns = model.Columns.AsSpan().ToArray()
+            .Where(static column => column.IsUpsertable).ToArray();
+        ColumnModel[] pkCols = upsertColumns.Where(static c => c.IsPrimaryKey).ToArray();
+        if (pkCols.Length == 0)
+            return string.Empty;
+
+        string pkColumnName = pkCols[0].ColumnName;
+        string[] updateColumns = upsertColumns
+            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal))
+            .Select(column => Quote(column.ColumnName))
+            .ToArray();
+
+        string columnList = string.Join(", ", upsertColumns.Select(c => Quote(c.ColumnName)));
+        string valueList = string.Join(", ",
+            Enumerable.Range(0, upsertColumns.Length).Select(static index => $"@p{index}"));
+
+        // ON DUPLICATE KEY UPDATE：非 PK 列更新，自增 PK 用 LAST_INSERT_ID(id) 回填
+        var assignments = updateColumns.Select(col =>
+            col == Quote(pkCols[0].ColumnName) && pkCols[0].IsAutoIncrement
+                ? $"{Quote(pkColumnName)} = LAST_INSERT_ID({Quote(pkColumnName)})"
+                : $"{col} = VALUES({col})").ToArray();
+
+        string conflictAction = assignments.Length == 0
+            ? ""
+            : " ON DUPLICATE KEY UPDATE " + string.Join(", ", assignments);
+
+        return $"INSERT INTO {Quote(model.TableName)} ({columnList}) VALUES ({valueList}){conflictAction}";
+    }
+
     private static void GenerateBindInsertBody(TableModel model, StringBuilder sb)
+        => GenerateBindBody(model, sb, static column => column.IsInsertable);
+
+    private static void GenerateBindUpsertBody(TableModel model, StringBuilder sb)
+        => GenerateBindBody(model, sb, static column => column.IsUpsertable);
+
+    /// <summary>共享 Bind 循环——Insert 和 Upsert 仅列谓词不同（IsInsertable vs IsUpsertable）。
+    /// v4.1：合并两个逐字重复的方法，防未来漂移。emit 产物与合并前逐字等价。</summary>
+    private static void GenerateBindBody(TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate)
     {
         int pi = 0;
         foreach (var col in model.Columns.AsSpan())
         {
-            if (!col.IsInsertable) continue;
+            if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
             pi++;
