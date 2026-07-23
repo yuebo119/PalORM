@@ -34,7 +34,6 @@ public static class MultiValueBulkInsert
         int batchSize = ctx.BatchSize;
         int maxParametersPerStatement = ctx.MaxParametersPerStatement;
         Func<string, string> quoteIdentifier = ctx.QuoteIdentifier;
-        Func<string, object?, DbParameter> createParameter = ctx.CreateParameter;
         int commandTimeoutSeconds = ctx.CommandTimeoutSeconds;
         if (entities.Count == 0) return 0;
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
@@ -43,7 +42,8 @@ public static class MultiValueBulkInsert
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
 
-        Action<DbCommand, object> binder = metadata.BindInsert;
+        // v4.1：BindInsertToBatch 直绑--binder 支持 paramOffset，消除 rowCommand scratch
+        Action<DbCommand, object, int> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
         await BulkOperationFramework.ProbeBinderAsync(
             conn, binder, entities[0], columnCount, typeof(T).Name,
@@ -66,26 +66,11 @@ public static class MultiValueBulkInsert
         Exception? primaryException = null;
         try
         {
-            // 行参数暂存命令在批间复用（原实现每行新建一个 DbCommand，1 万行即 1 万次分配）
-            DbCommand rowCommand = conn.CreateCommand();
-            Exception? rowCommandException = null;
-            try
-            {
-                total = await ExecuteBatchesAsync(
-                    conn, tran, rowCommand, entities, effectiveBatchSize, columnCount,
-                    quotedTable, quotedColumns, binder, createParameter, commandTimeoutSeconds,
-                    typeof(T).Name, ct).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                rowCommandException = exception;
-                throw;
-            }
-            finally
-            {
-                await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
-                    "PalORM.RowCommandCleanupException", ct).ConfigureAwait(false);
-            }
+            // v4.1：BindInsertToBatch 直接写入 batchCmd，不再需要 rowCommand scratch
+            total = await ExecuteBatchesAsync(
+                conn, tran, entities, effectiveBatchSize, columnCount,
+                quotedTable, quotedColumns, binder, commandTimeoutSeconds,
+                typeof(T).Name, ct).ConfigureAwait(false);
             if (ownsTransaction)
                 await tran.CommitAsync(ct).ConfigureAwait(false);
         }
@@ -175,15 +160,14 @@ public static class MultiValueBulkInsert
             + "都是 ADO.NET 批量骨架的必然组件，聚合成对象会引入跨方法状态传递。已抽出 ProbeBinderAsync "
             + "+ BuildRowPlaceholders 减少方法主体复杂度。")]
     private static async Task<long> ExecuteBatchesAsync<T>(
-        DbConnection conn, DbTransaction tran, DbCommand rowCommand,
+        DbConnection conn, DbTransaction tran,
         IReadOnlyList<T> entities, int effectiveBatchSize, int columnCount,
         string quotedTable, string quotedColumns,
-        Action<DbCommand, object> binder,
-        Func<string, object?, DbParameter> createParameter,
+        Action<DbCommand, object, int> binder,
         int commandTimeoutSeconds, string typeName, CancellationToken ct) where T : class, new()
     {
         long total = 0;
-        // v4.0 优化：批次命令跨批次复用——当批大小恒定时 CommandText 也复用。
+        // v4.0 优化：批次命令跨批次复用--当批大小恒定时 CommandText 也复用。
         // 末尾批可能小于 effectiveBatchSize，需要重建 CommandText。
         DbCommand batchCmd = conn.CreateCommand();
         string? lastBatchSql = null;
@@ -211,23 +195,18 @@ public static class MultiValueBulkInsert
                 batchCmd.CommandText = lastBatchSql;
                 batchCmd.Parameters.Clear();
 
+                // v4.1 BindInsertToBatch 直绑：binder 直接写入 batchCmd，消除 rowCommand scratch 和阶段 2 拷贝
                 for (int row = 0; row < batchLength; row++)
                 {
                     int parameterOffset = row * columnCount;
-                    rowCommand.Parameters.Clear();
-                    binder(rowCommand, entities[start + row]);
-                    if (rowCommand.Parameters.Count != columnCount)
-                        throw new InvalidOperationException(
-                            $"Type '{typeName}' generated {columnCount} insert columns but " +
-                            $"{rowCommand.Parameters.Count} parameters.");
-
-                    for (int column = 0; column < columnCount; column++)
-                    {
-                        DbParameter source = rowCommand.Parameters[column];
-                        batchCmd.Parameters.Add(createParameter(
-                            $"@p{parameterOffset + column}", source.Value));
-                    }
+                    binder(batchCmd, entities[start + row], parameterOffset);
                 }
+
+                // 列数校验：每行应产生 columnCount 个参数
+                if (batchCmd.Parameters.Count != batchLength * columnCount)
+                    throw new InvalidOperationException(
+                        $"Type '{typeName}' generated {columnCount} insert columns but " +
+                        $"{batchCmd.Parameters.Count} parameters after binding {batchLength} rows.");
 
                 total += await batchCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }

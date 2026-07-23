@@ -42,9 +42,10 @@ internal static class CommandFactoryEmitter
         sb.AppendLine($"    internal const string InsertReturningSql = {MigrationEmitter.ToCSharpLiteral(BuildInsertReturningSql(model))};");
         sb.AppendLine($"    internal const string UpsertReturningSql = {MigrationEmitter.ToCSharpLiteral(BuildUpsertReturningSql(model))};");
         sb.AppendLine($"    internal const string UpsertMySqlSql = {MigrationEmitter.ToCSharpLiteral(BuildUpsertMySqlSql(model))};");
+        sb.AppendLine($"    internal const string InsertWithLastInsertIdSql = {MigrationEmitter.ToCSharpLiteral(BuildInsertWithLastInsertIdSql(model))};");
         sb.AppendLine();
-        sb.AppendLine($"    /// <summary>绑定实体属性到 INSERT 参数。</summary>");
-        sb.AppendLine($"    internal static void BindInsert(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity)");
+        sb.AppendLine($"    /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>");
+        sb.AppendLine($"    internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity, int paramOffset)");
         sb.AppendLine("    {");
         GenerateBindInsertBody(model, sb);
         sb.AppendLine("    }");
@@ -334,24 +335,33 @@ internal static class CommandFactoryEmitter
     }
 
     private static void GenerateBindInsertBody(TableModel model, StringBuilder sb)
-        => GenerateBindBody(model, sb, static column => column.IsInsertable);
+        => GenerateBindBody(model, sb, static column => column.IsInsertable, withOffset: true);
 
     private static void GenerateBindUpsertBody(TableModel model, StringBuilder sb)
-        => GenerateBindBody(model, sb, static column => column.IsUpsertable);
+        => GenerateBindBody(model, sb, static column => column.IsUpsertable, withOffset: false);
 
-    /// <summary>共享 Bind 循环——Insert 和 Upsert 仅列谓词不同（IsInsertable vs IsUpsertable）。
-    /// v4.1：合并两个逐字重复的方法，防未来漂移。emit 产物与合并前逐字等价。</summary>
-    private static void GenerateBindBody(TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate)
+    /// <summary>共享 Bind 循环。v4.1：withOffset=true 时参数名用 @p{paramOffset+pi}（批量直绑），false 时用 @p{pi}（单行）。</summary>
+    private static void GenerateBindBody(TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate, bool withOffset)
     {
         int pi = 0;
         foreach (var col in model.Columns.AsSpan())
         {
             if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            // withOffset=true 时生成 $\"@p{paramOffset + N}\"（插值表达式），false 时生成 \"@pN\"（字面量）
+            string paramName = withOffset ? $"$\"@p{{paramOffset + {pi}}}\"" : $"\"@p{pi}\"";
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
             pi++;
         }
     }
+
+    // v4.1：MySQL INSERT + SELECT LAST_INSERT_ID() 预构建，消除运行时 string 拼接
+    internal static string BuildInsertWithLastInsertIdSql(TableModel model)
+        => BuildInsertWithLastInsertIdSql(model, null);
+
+    internal static string BuildInsertWithLastInsertIdSql(
+        TableModel model, SqlGenerationDialect? dialect)
+        => BuildInsertSql(model, dialect) + "; SELECT LAST_INSERT_ID()";
 
     private static void GenerateBindUpdateBody(TableModel model, StringBuilder sb)
     {

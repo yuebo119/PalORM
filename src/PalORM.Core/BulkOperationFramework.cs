@@ -22,7 +22,7 @@ public static class BulkOperationFramework
     /// <param name="ct">取消令牌。</param>
     public static async ValueTask ProbeBinderAsync(
         DbConnection conn,
-        Action<DbCommand, object> binder,
+        Action<DbCommand, object, int> binder,
         object first,
         int columnCount,
         string typeName,
@@ -33,7 +33,7 @@ public static class BulkOperationFramework
         Exception? probeException = null;
         try
         {
-            binder(probeCommand, first);
+            binder(probeCommand, first, 0);
             if (probeCommand.Parameters.Count != columnCount)
                 throw new InvalidOperationException(
                     $"Type '{typeName}' generated {columnCount} insert columns but " +

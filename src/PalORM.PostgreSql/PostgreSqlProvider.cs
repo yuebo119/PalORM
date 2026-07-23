@@ -104,7 +104,7 @@ public sealed class PostgreSqlProvider : IDbProvider
             throw new ArgumentException(
                 "PostgreSqlProvider.BulkInsertAsync requires an NpgsqlConnection.", nameof(conn));
 
-        Action<DbCommand, object> binder = metadata.BindInsert;
+        Action<DbCommand, object, int> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
         await BulkOperationFramework.ProbeBinderAsync(
             conn, binder, entities[0], columnCount, typeof(T).Name,
@@ -137,7 +137,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                         for (int index = start; index < end; index++)
                         {
                             rowCommand.Parameters.Clear();
-                            binder(rowCommand, entities[index]);
+                            binder(rowCommand, entities[index], 0);
                             if (rowCommand.Parameters.Count != columnCount)
                                 throw new InvalidOperationException(
                                     $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
