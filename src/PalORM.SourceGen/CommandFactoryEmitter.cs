@@ -96,12 +96,15 @@ internal static class CommandFactoryEmitter
                 ? $"({col.ClrTypeName})key"
                 : NormalizeClrType(col.ClrTypeName) switch
             {
-                // 精确类型匹配——EndsWith 会把 "ulong".EndsWith("long")/"uint".EndsWith("int")
-                // 误判为有符号型，生成错误拆箱 (long)key 运行期抛 InvalidCastException（ITM-505）。
-                "long" or "global::System.Int64" => "((long)key)",
-                "int" or "global::System.Int32" => "((int)key)",
-                "short" or "global::System.Int16" => "((short)key)",
-                "byte" or "global::System.Byte" => "((byte)key)",
+                // 整数主键用 Convert.ToXxx(key) 而非直接 cast：
+                // 调用方可能传 int（如 BenchmarkDotNet 的 NextId()）、byte 等装箱为 object，
+                // 直接 (long)key 在 key 是 int 时抛 InvalidCastException（ITM-587）。
+                // Convert 在装箱类型间自动转换，代价仅几 ns，GetByKey 21μs 路径可忽略。
+                "long" or "global::System.Int64" => "global::System.Convert.ToInt64(key)",
+                "int" or "global::System.Int32" => "global::System.Convert.ToInt32(key)",
+                "short" or "global::System.Int16" => "global::System.Convert.ToInt16(key)",
+                "byte" or "global::System.Byte" => "global::System.Convert.ToByte(key)",
+                // string/Guid 保持精确 cast——语义不同（不接受 int→string 隐式转换）
                 "string" or "global::System.String" => "((string)key)",
                 "global::System.Guid" => "((global::System.Guid)key)",
                 _ => "key"
