@@ -47,8 +47,10 @@ internal static class RegistryEmitter
             string upd = CommandFactoryEmitter.BuildUpdateSql(m);
             string del = CommandFactoryEmitter.BuildDeleteSql(m);
             string ret = CommandFactoryEmitter.BuildInsertReturningSql(m);
+            string uRet = CommandFactoryEmitter.BuildUpsertReturningSql(m);
+            string uMy = CommandFactoryEmitter.BuildUpsertMySqlSql(m);
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::PalORM.CommandSqlSet(");
-            sb.AppendLine($"                {MigrationEmitter.ToCSharpLiteral(ins)}, {MigrationEmitter.ToCSharpLiteral(upd)}, {MigrationEmitter.ToCSharpLiteral(del)}, {MigrationEmitter.ToCSharpLiteral(ret)}),");
+            sb.AppendLine($"                {MigrationEmitter.ToCSharpLiteral(ins)}, {MigrationEmitter.ToCSharpLiteral(upd)}, {MigrationEmitter.ToCSharpLiteral(del)}, {MigrationEmitter.ToCSharpLiteral(ret)}, {MigrationEmitter.ToCSharpLiteral(uRet)}, {MigrationEmitter.ToCSharpLiteral(uMy)}),");
         }
         sb.AppendLine("        },");
         sb.AppendLine();
@@ -92,7 +94,9 @@ internal static class RegistryEmitter
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertSql,");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpdateSql,");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.DeleteSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertReturningSql),");
+            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertReturningSql,");
+            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpsertReturningSql,");
+            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpsertMySqlSql),");
             sb.AppendLine($"                new global::PalORM.CrudBindings(");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
@@ -228,11 +232,15 @@ internal static class RegistryEmitter
         string update = CommandFactoryEmitter.BuildUpdateSql(model, dialect);
         string delete = CommandFactoryEmitter.BuildDeleteSql(model, dialect);
         string returning = CommandFactoryEmitter.BuildInsertReturningSql(model, dialect);
+        string upsertReturning = CommandFactoryEmitter.BuildUpsertReturningSql(model, dialect);
+        string upsertMySql = CommandFactoryEmitter.BuildUpsertMySqlSql(model, dialect);
         builder.AppendLine("                new global::PalORM.CommandSqlSet(");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(insert)},");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(update)},");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(delete)},");
-        builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(returning)}){(isLast ? "" : ",")}");
+        builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(returning)},");
+        builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(upsertReturning)},");
+        builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(upsertMySql)}){(isLast ? "" : ",")}");
     }
 
     private static string BuildStringArrayLiteral(IEnumerable<string> values)

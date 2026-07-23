@@ -75,7 +75,7 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation =
             EnterOperation(operationOwner);
-        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
+        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
         if (metadata.InsertColumns.Count == 0)
             throw new InvalidOperationException(
@@ -106,8 +106,9 @@ public sealed partial class DataSession<TProvider>
 
         T materialized = ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
         // 回填对齐 MySQL 路径（ITM-325）
-        if (PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
-            && PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pkColumn))
+        var insertState = PalORM_Runtime.CurrentState;
+        if (insertState._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
+            && insertState._pkColumns.TryGetValue(typeof(T), out string? pkColumn))
         {
             int pkOrdinal = reader.GetOrdinal(pkColumn);
             if (!await reader.IsDBNullAsync(pkOrdinal, ct).ConfigureAwait(false))
@@ -313,9 +314,10 @@ public sealed partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation =
             EnterOperation(operationOwner);
         object? effectiveOperationOwner = operationOwner ?? operation.Owner;
-        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
-            || !PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? primaryKeyColumn)
-            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName))
+        // v4.0 优化 B 对齐：SaveCoreAsync 合并 3 次 Volatile.Read 为单次 CurrentState 快照
+        // （GetAsync/GetAllAsync 已做，Save/Upsert 路径此前未对齐，省 2 次内存屏障）
+        var state = PalORM_Runtime.CurrentState;
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
 
         if (metadata.HasDefaultKey(entity))
@@ -342,61 +344,42 @@ public sealed partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' generated {metadata.UpsertColumns.Count} upsert columns but " +
                 $"{cmd.Parameters.Count} parameters.");
 
+        // v4.1 性能优化：Upsert SQL 预构建为编译期 const，消除运行时 LINQ + string.Join 拼接
+        CommandSqlSet sqls = GetCommandSqls<T>(metadata.Sqls);
+
         return TProvider.SupportsReturningClause
-            ? await UpsertWithReturningAsync(cmd, metadata, entity, tableName, primaryKeyColumn, ct).ConfigureAwait(false)
-            : await UpsertWithMySqlAsync(cmd, entity, tableName, primaryKeyColumn, metadata.UpsertColumns, ct).ConfigureAwait(false);
+            ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false)
+            : await UpsertWithMySqlAsync(cmd, sqls, entity, ct).ConfigureAwait(false);
     }
 
-    /// <summary>PG/SQLite UPSERT——ON CONFLICT ... DO UPDATE/NOTHING + RETURNING 物化完整行。</summary>
+    /// <summary>PG/SQLite UPSERT--ON CONFLICT ... DO UPDATE/NOTHING + RETURNING 物化完整行。
+    /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertReturning），消除运行时拼接。</summary>
     private static async ValueTask<T> UpsertWithReturningAsync<T>(
-        DbCommand cmd, CrudMetadata metadata, T entity,
-        string tableName, string primaryKeyColumn, CancellationToken ct) where T : class, new()
+        DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, CancellationToken ct)
+        where T : class, new()
     {
-        if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? returningColumns))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated column metadata.");
-
-        string[] updateColumns = metadata.UpsertColumns
-            .Where(column => !string.Equals(column, primaryKeyColumn, StringComparison.Ordinal))
-            .ToArray();
-        string conflictAction = updateColumns.Length == 0
-            ? "DO NOTHING"
-            : "DO UPDATE SET " + string.Join(", ", updateColumns.Select(column =>
-                $"{TProvider.QuoteIdentifier(column)} = excluded.{TProvider.QuoteIdentifier(column)}"));
-
-        string columnList = string.Join(", ", metadata.UpsertColumns.Select(TProvider.QuoteIdentifier));
-        string valueList = string.Join(", ",
-            Enumerable.Range(0, cmd.Parameters.Count).Select(static index => $"@p{index}"));
-        string returningList = string.Join(", ", returningColumns.Select(TProvider.QuoteIdentifier));
-
-        cmd.CommandText =
-            $"INSERT INTO {TProvider.QuoteIdentifier(tableName)} ({columnList}) " +
-            $"VALUES ({valueList}) ON CONFLICT " +
-            $"({TProvider.QuoteIdentifier(primaryKeyColumn)}) {conflictAction} " +
-            $"RETURNING {returningList}";
+        cmd.CommandText = sqls.UpsertReturning;
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
             return ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
         return entity;
     }
 
-    /// <summary>MySQL UPSERT——ON DUPLICATE KEY UPDATE，自增键用 LAST_INSERT_ID(expr) 回填。</summary>
+    /// <summary>MySQL UPSERT--ON DUPLICATE KEY UPDATE，自增键用 LAST_INSERT_ID(expr) 回填。
+    /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertMySql）。</summary>
     private static async ValueTask<T> UpsertWithMySqlAsync<T>(
-        DbCommand cmd, T entity,
-        string tableName, string primaryKeyColumn,
-        IReadOnlyList<string> upsertColumns, CancellationToken ct) where T : class, new()
+        DbCommand cmd, CommandSqlSet sqls, T entity, CancellationToken ct)
+        where T : class, new()
     {
         if (TProvider.Dialect != SqlDialect.MySql)
             throw new NotSupportedException(
                 $"Provider '{TProvider.Name}' does not support RETURNING and has no upsert strategy; " +
                 "only the MySQL dialect fallback (ON DUPLICATE KEY UPDATE) is implemented.");
 
-        bool hasGeneratedKey = PalORM_Runtime.SetIdDelegates.TryGetValue(
-            typeof(T), out Action<object, long>? setId);
-        cmd.CommandText = BuildMySqlUpsertSql(
-            tableName, primaryKeyColumn, upsertColumns,
-            cmd.Parameters.Count, hasGeneratedKey);
+        cmd.CommandText = sqls.UpsertMySql;
 
-        if (!hasGeneratedKey)
+        var state = PalORM_Runtime.CurrentState;
+        if (!state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? setId))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             return entity;
@@ -405,7 +388,7 @@ public sealed partial class DataSession<TProvider>
         long? generatedId = NormalizeGeneratedId(
             await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
         if (generatedId is long id)
-            setId!(entity, id);
+            setId(entity, id);
         return entity;
     }
 
@@ -425,6 +408,8 @@ public sealed partial class DataSession<TProvider>
             "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
     }
 
+    // v4.1：Upsert SQL 已改为编译期预构建（CommandFactoryEmitter.BuildUpsertMySqlSql）。
+    // 此方法保留用于旧测试验证，运行时不再调用。
     internal static string BuildMySqlUpsertSql(
         string tableName,
         string primaryKeyColumn,
