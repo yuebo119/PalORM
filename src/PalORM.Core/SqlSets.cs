@@ -7,13 +7,15 @@ namespace PalORM;
 /// <param name="InsertReturning">带主键回填的 INSERT 语句（如 RETURNING/LAST_INSERT_ID）。</param>
 /// <param name="UpsertReturning">PG/SQLite UPSERT + RETURNING 语句（ON CONFLICT ... DO UPDATE/NOTHING RETURNING）。</param>
 /// <param name="UpsertMySql">MySQL UPSERT 语句（ON DUPLICATE KEY UPDATE）。</param>
+/// <param name="InsertWithLastInsertId">MySQL INSERT + SELECT LAST_INSERT_ID() 语句。</param>
 public readonly record struct CommandSqlSet(
     string Insert,
     string Update,
     string Delete,
     string InsertReturning,
     string UpsertReturning,
-    string UpsertMySql);
+    string UpsertMySql,
+    string InsertWithLastInsertId);
 
 /// <summary>编译期生成的三数据库方言 CRUD SQL。</summary>
 /// <param name="Sqlite">SQLite 方言 SQL 集。</param>

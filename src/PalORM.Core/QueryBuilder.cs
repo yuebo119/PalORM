@@ -10,6 +10,8 @@ namespace PalORM;
 /// <para><b>写时复制</b>: struct 复制后共享子句/参数列表；每次追加子句都创建独立副本，任意时点复制的分支互不污染。</para></summary>
 public struct QueryBuilder<T> where T : class, new()
 {
+    // v4.1 极致降内存：引用 ParameterNameCache 消除每次 $"@p{N}" 插值分配
+    internal static string GetParameterName(int index) => ParameterNameCache.GetName(index);
     internal DbConnection _conn;
     internal readonly Func<DbConnection>? _readConnFactory;
     internal readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
@@ -56,8 +58,9 @@ public struct QueryBuilder<T> where T : class, new()
         _columnNames = ctx.ColumnNames;
         _operationState = ctx.Services.OperationState;
         _commandTimeout = ctx.Services.CommandTimeout;
-        _clauses = [];
-        _parameters = [];
+        // v4.1：预分配常见容量，省首次 Add 的 T4 数组扩容
+        _clauses = new List<QueryClause>(4);
+        _parameters = new List<DbParameter>(8);
         _selectColumns = null;
         _take = null;
         _skip = null;
@@ -684,7 +687,7 @@ public struct QueryBuilder<T> where T : class, new()
         string formatted = FormatFormattableSql(sql, baseIndex);
         var parameters = new List<DbParameter>(sql.ArgumentCount);
         for (int i = 0; i < sql.ArgumentCount; i++)
-            parameters.Add(_paramFactory($"@p{baseIndex + i}", sql.GetArgument(i)));
+            parameters.Add(_paramFactory(GetParameterName(baseIndex + i), sql.GetArgument(i)));
         return (formatted, parameters);
     }
 
@@ -695,7 +698,7 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     private DbParameter CreateParameter(object? value, int localOffset = 0)
-        => _paramFactory($"@p{_parameters.Count + localOffset}", value);
+        => _paramFactory(GetParameterName(_parameters.Count + localOffset), value);
 
     private void AddClause(QueryClauseKind kind, string sql,
         IReadOnlyList<DbParameter>? parameters = null)
@@ -726,16 +729,17 @@ public struct QueryBuilder<T> where T : class, new()
         return count;
     }
 
-    private System.Collections.ObjectModel.ReadOnlyCollection<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
+    // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
+    private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
-        // 预分配至全参数量上限——绝大多数查询全部子句类别都被选中，扩容为零
+        // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
         var parameters = new List<DbParameter>(_parameters.Count);
         foreach (QueryClause clause in _clauses)
         {
-            if (!kinds.Contains(clause.Kind)) continue;
+            if (Array.IndexOf(kinds, clause.Kind) < 0) continue;
             parameters.AddRange(clause.Parameters);
         }
-        return parameters.AsReadOnly();
+        return parameters;
     }
 
     private void AppendComments(ref ValueStringBuilder builder)

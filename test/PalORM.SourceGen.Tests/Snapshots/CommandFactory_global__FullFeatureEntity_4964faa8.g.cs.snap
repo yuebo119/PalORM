@@ -15,18 +15,19 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     internal const string InsertReturningSql = "INSERT INTO full_feature (code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7) RETURNING Id, code, kind, external_id, payload, raw_json, uniq_token, row_updated_at, total_display, deleted_at, tenant_id";
     internal const string UpsertReturningSql = "INSERT INTO full_feature (Id, code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) ON CONFLICT (Id) DO UPDATE SET code = excluded.code, kind = excluded.kind, external_id = excluded.external_id, payload = excluded.payload, raw_json = excluded.raw_json, uniq_token = excluded.uniq_token, deleted_at = excluded.deleted_at, tenant_id = excluded.tenant_id RETURNING Id, code, kind, external_id, payload, raw_json, uniq_token, row_updated_at, total_display, deleted_at, tenant_id";
     internal const string UpsertMySqlSql = "INSERT INTO full_feature (Id, code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) ON DUPLICATE KEY UPDATE code = VALUES(code), kind = VALUES(kind), external_id = VALUES(external_id), payload = VALUES(payload), raw_json = VALUES(raw_json), uniq_token = VALUES(uniq_token), deleted_at = VALUES(deleted_at), tenant_id = VALUES(tenant_id)";
+    internal const string InsertWithLastInsertIdSql = "INSERT INTO full_feature (code, kind, external_id, payload, raw_json, uniq_token, deleted_at, tenant_id) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7); SELECT LAST_INSERT_ID()";
 
-    /// <summary>绑定实体属性到 INSERT 参数。</summary>
-    internal static void BindInsert(global::System.Data.Common.DbCommand cmd, global::FullFeatureEntity entity)
+    /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>
+    internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, global::FullFeatureEntity entity, int paramOffset)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.Value = (object)entity.Code; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.Value = (object)entity.Kind; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p5"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p6"; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 0}"; p.Value = (object)entity.Code; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 1}"; p.Value = (object)entity.Kind; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 2}"; p.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 3}"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 4}"; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 5}"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 6}"; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 7}"; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>

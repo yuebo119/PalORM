@@ -262,7 +262,7 @@ public static class QueryBuilderExtensions
             command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0);
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             for (int i = 0; i < sql.ArgumentCount; i++)
-                command.Parameters.Add(builder._paramFactory($"@p{i}", sql.GetArgument(i)));
+                command.Parameters.Add(builder._paramFactory(QueryBuilder<T>.GetParameterName(i), sql.GetArgument(i)));
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             grid = new GridReader(
@@ -403,10 +403,13 @@ public static class QueryBuilderExtensions
         CancellationToken cancellationToken)
         => prepared ? command.PrepareAsync(cancellationToken) : Task.CompletedTask;
 
+    // v4.1 极致降内存：直接复用 GetQueryParameters 已创建的 DbParameter，避免 _paramFactory 重建 N 个参数
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S1172",
+        Justification = "builder parameter retained for API consistency; no longer used internally after v4.1 parameter reuse optimization.")]
     private static void AddParameters<T>(DbCommand command, QueryBuilder<T> builder,
         IReadOnlyList<DbParameter> parameters) where T : class, new()
     {
         foreach (DbParameter parameter in parameters)
-            command.Parameters.Add(builder._paramFactory(parameter.ParameterName, parameter.Value));
+            command.Parameters.Add(parameter);
     }
 }

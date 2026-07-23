@@ -287,15 +287,16 @@ public sealed class PalORM_RuntimeTests
         columnNames ??= [columnName];
         insertColumns ??= [columnName];
         upsertColumns ??= [columnName];
-        // S108/S1186: 测试桩绑定器——RegistryFragment 需要委托占位，实际测试不消费绑定结果。
+        // S108/S1186: 测试桩绑定器--RegistryFragment 需要委托占位，实际测试不消费绑定结果。
         static void Bind(System.Data.Common.DbCommand command, object entity) { /* test stub: no-op binder */ }
+        static void BindWithOffset(System.Data.Common.DbCommand command, object entity, int offset) { /* test stub */ }
 
         return new RegistryFragment
         {
             RowFactories = new Dictionary<Type, object> { [entityType] = new object() },
             TableNames = new Dictionary<Type, string> { [entityType] = tableName },
-            CommandSqls = new Dictionary<Type, CommandSqlSet> { [entityType] = new("I", "U", "D", "IR", "UR", "UM") },
-            BindInsert = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
+            CommandSqls = new Dictionary<Type, CommandSqlSet> { [entityType] = new("I", "U", "D", "IR", "UR", "UM", "IL") },
+            BindInsert = new Dictionary<Type, Action<System.Data.Common.DbCommand, object, int>> { [entityType] = BindWithOffset },
             BindUpdate = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
             BindDelete = new Dictionary<Type, Action<System.Data.Common.DbCommand, object>> { [entityType] = Bind },
             PkColumns = new Dictionary<Type, string> { [entityType] = "id" },
@@ -309,8 +310,8 @@ public sealed class PalORM_RuntimeTests
             CrudMetadatas = new Dictionary<Type, CrudMetadata>
             {
                 [entityType] = new(
-                    new("I", "U", "D", "IR", "UR", "UM"),
-                    new CrudBindings(Bind, Bind, Bind, new object()),
+                    new("I", "U", "D", "IR", "UR", "UM", "IL"),
+                    new CrudBindings(BindWithOffset, Bind, Bind, new object()),
                     new CrudColumns(insertColumns, upsertColumns),
                     null, static _ => false)
             },
@@ -341,7 +342,7 @@ public sealed class PalORM_RuntimeTests
     [Test]
     public async Task CommandSqlSet_IsRecordStruct()
     {
-        var set = new CommandSqlSet("I", "U", "D", "IR", "UR", "UM");
+        var set = new CommandSqlSet("I", "U", "D", "IR", "UR", "UM", "IL");
         await Assert.That(set.Insert).IsEqualTo("I");
         await Assert.That(set.Update).IsEqualTo("U");
         await Assert.That(set.Delete).IsEqualTo("D");

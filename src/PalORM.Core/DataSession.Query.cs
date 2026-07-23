@@ -157,7 +157,8 @@ public sealed partial class DataSession<TProvider>
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        List<T> list = [];
+        // v4.1：对齐 GetAllAsync 的 capacity=16，避免 10K 行场景 14 次扩容
+        List<T> list = new(16);
         var typedFactory = (Func<DbDataReader, T>)factory;
         bool firstRow = true;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))

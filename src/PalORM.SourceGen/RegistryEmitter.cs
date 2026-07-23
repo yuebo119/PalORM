@@ -49,8 +49,9 @@ internal static class RegistryEmitter
             string ret = CommandFactoryEmitter.BuildInsertReturningSql(m);
             string uRet = CommandFactoryEmitter.BuildUpsertReturningSql(m);
             string uMy = CommandFactoryEmitter.BuildUpsertMySqlSql(m);
+            string lId = CommandFactoryEmitter.BuildInsertWithLastInsertIdSql(m);
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::PalORM.CommandSqlSet(");
-            sb.AppendLine($"                {MigrationEmitter.ToCSharpLiteral(ins)}, {MigrationEmitter.ToCSharpLiteral(upd)}, {MigrationEmitter.ToCSharpLiteral(del)}, {MigrationEmitter.ToCSharpLiteral(ret)}, {MigrationEmitter.ToCSharpLiteral(uRet)}, {MigrationEmitter.ToCSharpLiteral(uMy)}),");
+            sb.AppendLine($"                {MigrationEmitter.ToCSharpLiteral(ins)}, {MigrationEmitter.ToCSharpLiteral(upd)}, {MigrationEmitter.ToCSharpLiteral(del)}, {MigrationEmitter.ToCSharpLiteral(ret)}, {MigrationEmitter.ToCSharpLiteral(uRet)}, {MigrationEmitter.ToCSharpLiteral(uMy)}, {MigrationEmitter.ToCSharpLiteral(lId)}),");
         }
         sb.AppendLine("        },");
         sb.AppendLine();
@@ -66,10 +67,10 @@ internal static class RegistryEmitter
         }
         sb.AppendLine("        },");
         sb.AppendLine();
-        sb.AppendLine("            BindInsert = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object>>");
+        sb.AppendLine("            BindInsert = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object, int>>");
         sb.AppendLine("        {");
         foreach (var m in models.AsSpan())
-            sb.AppendLine($"            [typeof({m.EntityTypeName})] = (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsert(cmd, ({m.EntityTypeName})obj),");
+            sb.AppendLine($"            [typeof({m.EntityTypeName})] = (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
         sb.AppendLine("        },");
         sb.AppendLine();
         sb.AppendLine("            BindUpdate = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object>>");
@@ -96,9 +97,10 @@ internal static class RegistryEmitter
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.DeleteSql,");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertReturningSql,");
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpsertReturningSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpsertMySqlSql),");
+            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpsertMySqlSql,");
+            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertWithLastInsertIdSql),");
             sb.AppendLine($"                new global::PalORM.CrudBindings(");
-            sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsert(cmd, ({m.EntityTypeName})obj),");
+            sb.AppendLine($"                    (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read),");
@@ -234,13 +236,15 @@ internal static class RegistryEmitter
         string returning = CommandFactoryEmitter.BuildInsertReturningSql(model, dialect);
         string upsertReturning = CommandFactoryEmitter.BuildUpsertReturningSql(model, dialect);
         string upsertMySql = CommandFactoryEmitter.BuildUpsertMySqlSql(model, dialect);
+        string insertLastId = CommandFactoryEmitter.BuildInsertWithLastInsertIdSql(model, dialect);
         builder.AppendLine("                new global::PalORM.CommandSqlSet(");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(insert)},");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(update)},");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(delete)},");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(returning)},");
         builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(upsertReturning)},");
-        builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(upsertMySql)}){(isLast ? "" : ",")}");
+        builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(upsertMySql)},");
+        builder.AppendLine($"                    {MigrationEmitter.ToCSharpLiteral(insertLastId)}){(isLast ? "" : ",")}");
     }
 
     private static string BuildStringArrayLiteral(IEnumerable<string> values)

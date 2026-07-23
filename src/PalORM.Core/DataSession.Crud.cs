@@ -25,17 +25,14 @@ public sealed partial class DataSession<TProvider>
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated column metadata.");
 
-        string? readConnectionString = _options.ResolveReadConnectionString();
-        Func<DbConnection>? readConnFactory = readConnectionString is not null
-            ? () => TProvider.CreateConnection(readConnectionString, _options)
-            : null;
+        // v4.1：使用实例字段缓存的读连接工厂，避免每次 From<T> 新建闭包
         var builder = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(
                 TProvider.Dialect, (Func<DbDataReader, T>)factory!, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
                 _operationState, _options.CommandTimeout),
-            tableName, columnNames, readConnFactory,
+            tableName, columnNames, _readConnFactory,
             _options.QueryCache, _options.ValidateQueryColumnOrder,
             static (conn, ct) => TProvider.InitializeConnectionAsync(conn, ct)));
 
@@ -99,7 +96,7 @@ public sealed partial class DataSession<TProvider>
     {
         cmd.CommandText = sqls.InsertReturning;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindInsert(cmd, entity);
+        metadata.BindInsert(cmd, entity, 0);
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
@@ -128,9 +125,10 @@ public sealed partial class DataSession<TProvider>
                 $"Provider '{TProvider.Name}' does not support RETURNING and has no insert-id strategy; " +
                 "only the MySQL dialect fallback (LAST_INSERT_ID) is implemented.");
 
-        cmd.CommandText = sqls.Insert + "; SELECT LAST_INSERT_ID();";
+        // v4.1：使用编译期预构建 const，消除运行时 string 拼接
+        cmd.CommandText = sqls.InsertWithLastInsertId;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindInsert(cmd, entity);
+        metadata.BindInsert(cmd, entity, 0);
         long? generatedId = NormalizeGeneratedId(
             await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
         if (generatedId is long id &&
@@ -249,12 +247,22 @@ public sealed partial class DataSession<TProvider>
         return await delCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    // v4.1 极致降内存：per-(Type, Dialect) 缓存 selectColumns，消除每次 Get/GetAll 的 N 次 QuoteIdentifier + string.Join
+    // S2743：泛型类型中的 static 字段不跨 TProvider 共享，故用非泛型 DataSessionCache 持有
+    private static System.Collections.Concurrent.ConcurrentDictionary<(Type, SqlDialect), string> SelectColumnsCache
+        => DataSessionCache.SelectColumnsCache;
+
+    private static string GetSelectColumns<T>(IReadOnlyList<string> columnNames)
+        => SelectColumnsCache.GetOrAdd(
+            (typeof(T), TProvider.Dialect),
+            _ => string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier)));
+
     /// <summary>按主键查询。</summary>
     public async ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        // v4.0 优化 B：CurrentState 单次快照——与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
+        // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
             || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
@@ -263,7 +271,8 @@ public sealed partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         string filter = GetDefaultFilterFragment<T>();
-        string selectColumns = string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier));
+        // v4.1：缓存 selectColumns 消除 N 次 QuoteIdentifier + string.Join
+        string selectColumns = GetSelectColumns<T>(columnNames);
         cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0{filter}";
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(cmd, key);
@@ -279,7 +288,7 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        // v4.0 优化 B：CurrentState 单次快照——与 GetAsync 和 From<T> 对齐。
+        // v4.0 优化 B：CurrentState 单次快照--与 GetAsync 和 From<T> 对齐。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
             || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
@@ -287,7 +296,8 @@ public sealed partial class DataSession<TProvider>
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
         await using DbCommand cmd = CreateCommand();
-        string selectColumns = string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier));
+        // v4.1：缓存 selectColumns
+        string selectColumns = GetSelectColumns<T>(columnNames);
         cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindDefaultFilterParameters<T>(cmd);

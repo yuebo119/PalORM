@@ -9,73 +9,88 @@ internal static class FormattableSqlFormatter
     //   - `{{`/`}}` 转义符需跳过第二个字符
     //   - `{N}` 占位符解析后需把游标直接跳到结束花括号位置
     // 这些是单遍扫描复合格式串的标准实现（与 BCL StringBuilder.AppendFormat 内部模式一致），
-    // 末尾的自增不会破坏正确性——每次循环内已先调整 index 到目标位置。
+    // 末尾的自增不会破坏正确性--每次循环内已先调整 index 到目标位置。
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S127:DoNotUpdateLoopVariableInLoopBody",
         Justification = "Composite format scan requires cursor adjustment for escapes and placeholders.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S1994:ForLoopConditionChanged",
-        Justification = "Same as S127 — composite format scan requires index manipulation.")]
+        Justification = "Same as S127 - composite format scan requires index manipulation.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
-        Justification = "单遍扫描复合格式串——三种分支（{{}} 转义/{N} 占位符/普通字符）+ 校验逻辑，"
-            + "结构紧凑；拆分会破坏单遍扫描的局部性。")]
+        Justification = "Single-pass composite format scan - three branches (escape/placeholder/literal) + validation.")]
     internal static string Format(FormattableString sql, int baseIndex = 0)
     {
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentOutOfRangeException.ThrowIfNegative(baseIndex);
 
         string format = sql.Format;
-        _ = CompositeFormat.Parse(format);
-
-        var result = new StringBuilder(format.Length + sql.ArgumentCount * 4);
-        for (int index = 0; index < format.Length; index++)
+        // v4.1：删除丢弃的 CompositeFormat.Parse（纯浪费），改用 ValueStringBuilder（栈分配 + ArrayPool 兜底）
+        var sb = new ValueStringBuilder(stackalloc char[256]);
+        try
         {
-            char current = format[index];
-            if (current == '{' && index + 1 < format.Length && format[index + 1] == '{')
+            for (int index = 0; index < format.Length; index++)
             {
-                result.Append('{');
-                index++;
-                continue;
+                char current = format[index];
+                if (current == '{' && index + 1 < format.Length && format[index + 1] == '{')
+                {
+                    sb.Append('{');
+                    index++;
+                    continue;
+                }
+
+                if (current == '}' && index + 1 < format.Length && format[index + 1] == '}')
+                {
+                    sb.Append('}');
+                    index++;
+                    continue;
+                }
+
+                // v4.1：单独的 } 不是合法的转义（}} 才是）--替代被删除的 CompositeFormat.Parse 校验
+                if (current == '}')
+                    throw new FormatException("Formattable SQL has an unescaped '}' that is not part of a '}}' escape.");
+
+                if (current != '{')
+                {
+                    sb.Append(current);
+                    continue;
+                }
+
+                int close = format.IndexOf('}', index + 1);
+                if (close < 0)
+                    throw new FormatException("Formattable SQL has an unclosed '{' in its format string.");
+                ReadOnlySpan<char> item = format.AsSpan(index + 1, close - index - 1);
+                int separator = item.IndexOfAny(',', ':');
+                ReadOnlySpan<char> argumentIndex = separator < 0 ? item : item[..separator];
+                if (!int.TryParse(argumentIndex, out int parsedIndex)
+                    || parsedIndex < 0
+                    || parsedIndex >= sql.ArgumentCount)
+                {
+                    throw new FormatException(
+                        $"Formattable SQL contains an invalid argument index '{argumentIndex}' " +
+                        $"(argument count: {sql.ArgumentCount}).");
+                }
+                // v4.1：校验 alignment 部分（逗号后）--替代被删除的 CompositeFormat.Parse 的格式验证
+                if (separator >= 0 && item[separator] == ',')
+                {
+                    ReadOnlySpan<char> rest = item[(separator + 1)..];
+                    int formatColon = rest.IndexOf(':');
+                    ReadOnlySpan<char> alignment = formatColon < 0 ? rest : rest[..formatColon];
+                    if (!alignment.IsWhiteSpace() && !int.TryParse(alignment, out _))
+                        throw new FormatException(
+                            $"Formattable SQL contains an invalid alignment '{alignment}' in format item.");
+                }
+
+                sb.Append("@p");
+                sb.Append((baseIndex + parsedIndex).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                index = close;
             }
 
-            if (current == '}' && index + 1 < format.Length && format[index + 1] == '}')
-            {
-                result.Append('}');
-                index++;
-                continue;
-            }
-
-            if (current != '{')
-            {
-                // ITM-546：不再拦截 SQL 文本中的字面 @p<n>。此前（ITM-509）为防"手写 @p0 与
-                // 生成占位符同名"而纯文本扫描拒绝，但它不理解 SQL 字符串字面量，误拒了
-                // 'a@p1.com'（邮箱）、LIKE '%@p2%' 等合法 SQL。手写 @pN 冲突极罕见，
-                // 且组合查询 baseIndex>0 时生成号不从 0 起，真实碰撞概率极低——移除该检测。
-                result.Append(current);
-                continue;
-            }
-
-            int close = format.IndexOf('}', index + 1);
-            if (close < 0)
-                throw new FormatException("Formattable SQL has an unclosed '{' in its format string.");
-            ReadOnlySpan<char> item = format.AsSpan(index + 1, close - index - 1);
-            int separator = item.IndexOfAny(',', ':');
-            ReadOnlySpan<char> argumentIndex = separator < 0 ? item : item[..separator];
-            if (!int.TryParse(argumentIndex, out int parsedIndex)
-                || parsedIndex < 0
-                || parsedIndex >= sql.ArgumentCount)
-            {
-                throw new FormatException(
-                    $"Formattable SQL contains an invalid argument index '{argumentIndex}' " +
-                    $"(argument count: {sql.ArgumentCount}).");
-            }
-
-            result.Append("@p");
-            result.Append(baseIndex + parsedIndex);
-            index = close;
+            return sb.ToString();
         }
-
-        return result.ToString();
+        finally
+        {
+            sb.Dispose();
+        }
     }
 }

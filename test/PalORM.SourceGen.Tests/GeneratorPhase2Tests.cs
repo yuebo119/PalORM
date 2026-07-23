@@ -110,7 +110,7 @@ internal sealed class GeneratorPhase2Tests
         string commandFactory = result.GeneratedSources.Single(pair =>
             pair.Key.StartsWith("CommandFactory_", StringComparison.Ordinal)).Value;
         string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
-        string bindInsert = ExtractMethod(commandFactory, "BindInsert(", "BindUpsert(");
+        string bindInsert = ExtractMethod(commandFactory, "BindInsertToBatch(", "BindUpsert(");
 
         await Assert.That(errors).IsEmpty();
         await Assert.That(commandFactory).Contains(
