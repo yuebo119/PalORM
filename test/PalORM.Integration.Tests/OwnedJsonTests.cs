@@ -62,7 +62,7 @@ public sealed class OwnedJsonTests
         });
         var found = await db.GetAsync<JsonTestEntity>(entity.Id);
 
-        await Assert.That(found).IsNotNull();
+        await Assert.That(found!.Name).IsEqualTo("object");
         await Assert.That(found!.Details.Key).IsEqualTo("value");
         await Assert.That(found.Details.Count).IsEqualTo(7);
     }
