@@ -64,19 +64,23 @@ public sealed class BulkCleanupTests
     public async Task BulkInsert_RowAndMainCleanupFailures_AreBothPreserved(
         string provider)
     {
+        // v4.1：BindInsertToBatch 直绑消除了 rowCommand scratch，
+        // 此场景不再产生 RowCommandCleanupException--仅保留 MainCleanup + TransactionCleanup
         var failures = new BulkFailureSet();
         await using var connection = new BulkFailureConnection(
-            BulkFailureScenario.RowAndMainCleanup,
+            BulkFailureScenario.MainAndTransactionCleanup,
             failures);
 
         Exception? actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await BulkInsertAsync(provider, connection));
 
-        await Assert.That(actual).IsSameReferenceAs(failures.RowOperation);
-        await Assert.That(actual!.Data["PalORM.RowCommandCleanupException"])
-            .IsSameReferenceAs(failures.RowCleanup);
-        await Assert.That(actual.Data["PalORM.CommandCleanupException"])
+        await Assert.That(actual).IsSameReferenceAs(failures.Execution);
+        await Assert.That(actual!.Data["PalORM.CommandCleanupException"])
             .IsSameReferenceAs(failures.MainCleanup);
+        await Assert.That(actual.Data["PalORM.RollbackException"])
+            .IsSameReferenceAs(failures.Rollback);
+        await Assert.That(actual.Data["PalORM.TransactionCleanupException"])
+            .IsSameReferenceAs(failures.TransactionCleanup);
     }
 
     private static Task<long> BulkInsertAsync(
@@ -178,7 +182,7 @@ internal sealed class BulkFailureCommand(
     BulkFailureScenario scenario,
     BulkFailureSet failures) : DbCommand
 {
-    // 命令创建顺序（MultiValueBulkInsert 骨架）：probe=1、复用行命令=2、主命令=3（每批一个）
+    // v4.1：命令创建顺序（BindInsertToBatch 直绑后）：probe=1、主命令(batchCmd)=2
     private readonly BulkFailureParameterCollection _parameters = new(
         commandIndex == 2 && scenario == BulkFailureScenario.RowAndMainCleanup
             ? failures.RowOperation
@@ -203,7 +207,7 @@ internal sealed class BulkFailureCommand(
     protected override DbParameter CreateDbParameter() => new BulkFailureParameter();
 
     public override Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
-        => commandIndex == 3
+        => commandIndex == 2
             && scenario == BulkFailureScenario.MainAndTransactionCleanup
                 ? Task.FromException<int>(failures.Execution)
                 : Task.FromResult(1);
@@ -213,12 +217,11 @@ internal sealed class BulkFailureCommand(
         await base.DisposeAsync().ConfigureAwait(false);
         if (commandIndex == 1 && scenario == BulkFailureScenario.ProbeCleanup)
             throw failures.ProbeCleanup;
-        if (commandIndex == 3
+        if (commandIndex == 2
             && scenario is BulkFailureScenario.MainAndTransactionCleanup
                 or BulkFailureScenario.RowAndMainCleanup)
             throw failures.MainCleanup;
-        if (commandIndex == 2 && scenario == BulkFailureScenario.RowAndMainCleanup)
-            throw failures.RowCleanup;
+        // v4.1：RowCommand scratch 已删除，不再有 RowCleanup 步骤
     }
 }
 

@@ -21,6 +21,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private readonly List<IQueryInterceptor> _interceptors;
     private readonly ILogger _logger;
     private readonly SessionOperationState _operationState = new();
+    // v4.1：读连接工厂缓存为实例字段，避免每次 From<T> 新建闭包
+    private readonly Func<DbConnection>? _readConnFactory;
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
     {
@@ -31,6 +33,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         _resilience = new ResilienceExecutor(options, TProvider.IsTransient);
         _interceptors = interceptors.OrderBy(i => i.Priority).ToList();
         _logger = logger ?? NullLogger.Instance;
+        // v4.1：一次性创建读连接工厂闭包，避免每次 From<T> 分配
+        string? readCs = options.ResolveReadConnectionString();
+        _readConnFactory = readCs is not null
+            ? () => TProvider.CreateConnection(readCs, options)
+            : null;
         if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
             _logger.LogDebug("DataSession<{Provider}> created", TProvider.Name);
     }
@@ -329,15 +336,26 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>默认过滤条件的参数名——避开生成 SQL 的 @p{N} 命名空间。</summary>
     private const string _tenantParameterName = "@__tenant0";
 
+    // v4.1 cache key includes softDelete/tenant flags; _ignoreFilters changes the key (not cached when ignoring)
+    // S2743：用非泛型 DataSessionCache 持有，跨 TProvider 共享
+    private static System.Collections.Concurrent.ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> FilterConditionCache
+        => DataSessionCache.FilterConditionCache;
+
     private string GetDefaultFilterCondition<T>() where T : class, new()
     {
-        string softDelete = !_ignoreFilters && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0
-            ? $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL"
-            : "";
-        if (!HasTenantFilter<T>())
-            return softDelete;
-        string tenant = $"{TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
-        return softDelete.Length == 0 ? tenant : $"{softDelete} AND {tenant}";
+        bool hasSoftDelete = !_ignoreFilters && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
+        bool hasTenant = HasTenantFilter<T>();
+        if (!hasSoftDelete && !hasTenant) return "";
+        return FilterConditionCache.GetOrAdd(
+            (typeof(T), TProvider.Dialect, hasSoftDelete, hasTenant),
+            key =>
+            {
+                var (_, _, sd, tn) = key;
+                string softDelete = sd ? $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL" : "";
+                if (!tn) return softDelete;
+                string tenant = $"{TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
+                return softDelete.Length == 0 ? tenant : $"{softDelete} AND {tenant}";
+            });
     }
 
     /// <summary>已有 WHERE 时的追加片段：" AND cond" 或空。</summary>
@@ -390,7 +408,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         for (int i = 0; i < sql.ArgumentCount; i++)
         {
             object? value = sql.GetArgument(i);
-            DbParameter param = TProvider.CreateParameter($"@p{i}", value);
+            DbParameter param = TProvider.CreateParameter(ParameterNameCache.GetName(i), value);
             cmd.Parameters.Add(param);
         }
     }

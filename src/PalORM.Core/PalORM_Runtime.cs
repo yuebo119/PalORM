@@ -21,7 +21,7 @@ public sealed class RegistryFragment
         = FrozenDictionary<Type, CommandSqlByDialect>.Empty;
 
     /// <summary>类型 → Insert 参数绑定委托。</summary>
-    public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindInsert { get; init; }
+    public required IReadOnlyDictionary<Type, Action<DbCommand, object, int>> BindInsert { get; init; }
 
     /// <summary>类型 → Update 参数绑定委托。</summary>
     public required IReadOnlyDictionary<Type, Action<DbCommand, object>> BindUpdate { get; init; }
@@ -85,7 +85,7 @@ public static class PalORM_Runtime
         => Volatile.Read(ref _state)._commandSqlsByDialect;
 
     /// <summary>类型到 Insert 绑定委托。</summary>
-    public static FrozenDictionary<Type, Action<DbCommand, object>> BindInsert => Volatile.Read(ref _state)._bindInsert;
+    public static FrozenDictionary<Type, Action<DbCommand, object, int>> BindInsert => Volatile.Read(ref _state)._bindInsert;
 
     /// <summary>类型 → Update 绑定委托。</summary>
     public static FrozenDictionary<Type, Action<DbCommand, object>> BindUpdate => Volatile.Read(ref _state)._bindUpdate;
@@ -246,7 +246,7 @@ public static class PalORM_Runtime
         internal FrozenDictionary<Type, string> _tableNames { get; init; } = FrozenDictionary<Type, string>.Empty;
         internal FrozenDictionary<Type, CommandSqlSet> _commandSqls { get; init; } = FrozenDictionary<Type, CommandSqlSet>.Empty;
         internal FrozenDictionary<Type, CommandSqlByDialect> _commandSqlsByDialect { get; init; } = FrozenDictionary<Type, CommandSqlByDialect>.Empty;
-        internal FrozenDictionary<Type, Action<DbCommand, object>> _bindInsert { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
+        internal FrozenDictionary<Type, Action<DbCommand, object, int>> _bindInsert { get; init; } = FrozenDictionary<Type, Action<DbCommand, object, int>>.Empty;
         internal FrozenDictionary<Type, Action<DbCommand, object>> _bindUpdate { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
         internal FrozenDictionary<Type, Action<DbCommand, object>> _bindDelete { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
         internal FrozenDictionary<Type, string> _pkColumns { get; init; } = FrozenDictionary<Type, string>.Empty;

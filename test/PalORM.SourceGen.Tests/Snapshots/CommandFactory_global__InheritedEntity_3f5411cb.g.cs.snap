@@ -12,13 +12,14 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
     internal const string InsertReturningSql = "INSERT INTO inherited (name, created_by, created_at) VALUES (@p0, @p1, @p2) RETURNING Id, name, created_by, created_at";
     internal const string UpsertReturningSql = "INSERT INTO inherited (Id, name, created_by, created_at) VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (Id) DO UPDATE SET name = excluded.name, created_by = excluded.created_by, created_at = excluded.created_at RETURNING Id, name, created_by, created_at";
     internal const string UpsertMySqlSql = "INSERT INTO inherited (Id, name, created_by, created_at) VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE name = VALUES(name), created_by = VALUES(created_by), created_at = VALUES(created_at)";
+    internal const string InsertWithLastInsertIdSql = "INSERT INTO inherited (name, created_by, created_at) VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()";
 
-    /// <summary>绑定实体属性到 INSERT 参数。</summary>
-    internal static void BindInsert(global::System.Data.Common.DbCommand cmd, global::InheritedEntity entity)
+    /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>
+    internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, global::InheritedEntity entity, int paramOffset)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.Value = (object)entity.Name; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.Value = (object)entity.CreatedBy; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.Value = (object)entity.CreatedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 0}"; p.Value = (object)entity.Name; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 1}"; p.Value = (object)entity.CreatedBy; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 2}"; p.Value = (object)entity.CreatedAt; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>

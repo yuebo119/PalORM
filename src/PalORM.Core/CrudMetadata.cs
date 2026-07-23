@@ -6,8 +6,8 @@ namespace PalORM;
 /// 与 CrudMetadata 同生命周期：注册时一次绑定，运行时按类型查找后调用。</summary>
 public readonly struct CrudBindings
 {
-    /// <summary>Insert 参数绑定委托。</summary>
-    public readonly Action<DbCommand, object> BindInsert;
+    /// <summary>Insert 参数绑定委托（支持批量 paramOffset 偏移）。</summary>
+    public readonly Action<DbCommand, object, int> BindInsert;
     /// <summary>Upsert 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpsert;
     /// <summary>Update 参数绑定委托。</summary>
@@ -17,7 +17,7 @@ public readonly struct CrudBindings
 
     /// <summary>构造 CRUD 委托聚合。</summary>
     public CrudBindings(
-        Action<DbCommand, object> bindInsert,
+        Action<DbCommand, object, int> bindInsert,
         Action<DbCommand, object> bindUpsert,
         Action<DbCommand, object> bindUpdate,
         object rowFactory)
@@ -52,8 +52,8 @@ public readonly struct CrudMetadata
     /// GetCommandSqls 的 fallback 形参传递并被其拒绝——不要直接消费；
     /// 按方言 SQL 走 PalORM_Runtime.CommandSqlsByDialect。</summary>
     public readonly CommandSqlSet Sqls;
-    /// <summary>Insert 参数绑定委托。</summary>
-    public readonly Action<DbCommand, object> BindInsert;
+    /// <summary>Insert 参数绑定委托（支持批量 paramOffset 偏移）。</summary>
+    public readonly Action<DbCommand, object, int> BindInsert;
     /// <summary>Upsert 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpsert;
     /// <summary>Update 参数绑定委托。</summary>
