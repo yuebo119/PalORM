@@ -528,24 +528,13 @@ public struct QueryBuilder<T> where T : class, new()
             $"{GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
 
     internal IReadOnlyList<DbParameter> GetQueryParameters()
-        => GetParametersForKinds(_splitQuery
-            ? [QueryClauseKind.CommonTableExpression, QueryClauseKind.DefaultFilter, QueryClauseKind.Where,
-                QueryClauseKind.GroupBy, QueryClauseKind.Having, QueryClauseKind.OrderBy,
-                QueryClauseKind.Raw, QueryClauseKind.Lock]
-            : [QueryClauseKind.CommonTableExpression, QueryClauseKind.Join, QueryClauseKind.DefaultFilter,
-                QueryClauseKind.Where, QueryClauseKind.GroupBy, QueryClauseKind.Having, QueryClauseKind.OrderBy,
-                QueryClauseKind.Raw, QueryClauseKind.Lock]);
+        => GetParametersForKinds(_splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
 
     internal IReadOnlyList<DbParameter> GetCountParameters()
-        => GetParametersForKinds(_splitQuery
-            ? [QueryClauseKind.CommonTableExpression, QueryClauseKind.DefaultFilter, QueryClauseKind.Where,
-                QueryClauseKind.GroupBy, QueryClauseKind.Having]
-            : [QueryClauseKind.CommonTableExpression, QueryClauseKind.Join, QueryClauseKind.DefaultFilter,
-                QueryClauseKind.Where, QueryClauseKind.GroupBy, QueryClauseKind.Having]);
+        => GetParametersForKinds(_splitQuery ? QueryClauseKinds.CountSplit : QueryClauseKinds.Count);
 
     internal IReadOnlyList<DbParameter> GetUpdateParameters()
-        => GetParametersForKinds([QueryClauseKind.Set, QueryClauseKind.DefaultFilter,
-            QueryClauseKind.Where, QueryClauseKind.Raw]);
+        => GetParametersForKinds(QueryClauseKinds.Update);
 
     internal string BuildCountSql()
     {
@@ -562,7 +551,7 @@ public struct QueryBuilder<T> where T : class, new()
             AppendClauses(ref sb, QueryClauseKind.GroupBy);
             AppendClauses(ref sb, QueryClauseKind.Having);
             sb.Append(") AS count_source");
-            return sb.ToString().TrimEnd();
+            sb.TrimEnd(); return sb.ToString();
         }
         finally { sb.Dispose(); }  // 构建中途异常时归还池数组；ToString 已释放则为幂等 no-op
     }
@@ -590,7 +579,7 @@ public struct QueryBuilder<T> where T : class, new()
             AppendClauses(ref sb, QueryClauseKind.Set);
             AppendWhereSection(ref sb);
             AppendClauses(ref sb, QueryClauseKind.Raw);
-            return sb.ToString().TrimEnd();
+            sb.TrimEnd(); return sb.ToString();
         }
         finally { sb.Dispose(); }
     }
@@ -627,14 +616,13 @@ public struct QueryBuilder<T> where T : class, new()
             AppendClauses(ref sb, QueryClauseKind.Having);
             AppendClauses(ref sb, QueryClauseKind.OrderBy);
             AppendClauses(ref sb, QueryClauseKind.Raw);
-            string? limitClause = BuildLimitClause();
-            if (limitClause is not null)
-            {
-                sb.Append(limitClause);
-                sb.Append(' ');
-            }
+            // v4.4：直接写 VSB，消除中间 string 分配
+            AppendLimitClause(ref sb);
+            sb.Append(' ');
             AppendClauses(ref sb, QueryClauseKind.Lock);
-            return sb.ToString().TrimEnd();
+            // v4.4：先 TrimEnd 再 ToString，省 1 次 string 分配（TrimEnd 前已用 VSB 原地裁剪）
+            sb.TrimEnd();
+            return sb.ToString();
         }
         finally { sb.Dispose(); }
     }
@@ -648,10 +636,12 @@ public struct QueryBuilder<T> where T : class, new()
             sb.Append(_selectColumns);
             return;
         }
+        // v4.4：sourceName 的 quote 提循环外，避免 N 列重复 quote 同一个值
+        string quotedSource = _quoteIdentifier(sourceName);
         for (int index = 0; index < _columnNames.Count; index++)
         {
             if (index > 0) sb.Append(", ");
-            sb.Append(_quoteIdentifier(sourceName));
+            sb.Append(quotedSource);
             sb.Append('.');
             sb.Append(_quoteIdentifier(_columnNames[index]));
         }
@@ -815,25 +805,45 @@ public struct QueryBuilder<T> where T : class, new()
         }
     }
 
-    private string? BuildLimitClause()
+    // v4.4：直接写 ValueStringBuilder，消除中间 string 分配
+    private void AppendLimitClause(ref ValueStringBuilder sb)
     {
-        if (!_take.HasValue && !_skip.HasValue) return null;
+        if (!_take.HasValue && !_skip.HasValue) return;
         if (!_take.HasValue)
         {
-            // SQLite 的 OFFSET 必须伴随 LIMIT（裸 OFFSET 是语法错误）——LIMIT -1 表示无上限；
-            // PG 支持裸 OFFSET；MySQL 用极大值哨兵（ITM-407）
-            return _dialect switch
+            switch (_dialect)
             {
-                SqlDialect.MySql => $"LIMIT {_skip!.Value}, 18446744073709551615",
-                SqlDialect.Sqlite => $"LIMIT -1 OFFSET {_skip!.Value}",
-                _ => $"OFFSET {_skip!.Value}"
-            };
+                case SqlDialect.MySql:
+                    sb.Append("LIMIT ");
+                    sb.Append(_skip!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    sb.Append(", 18446744073709551615");
+                    break;
+                case SqlDialect.Sqlite:
+                    sb.Append("LIMIT -1 OFFSET ");
+                    sb.Append(_skip!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+                default:
+                    sb.Append("OFFSET ");
+                    sb.Append(_skip!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+            }
+            return;
         }
-        return _dialect switch
+        switch (_dialect)
         {
-            SqlDialect.MySql => $"LIMIT {_skip ?? 0}, {_take.Value}",
-            _ => $"LIMIT {_take.Value} OFFSET {_skip ?? 0}"
-        };
+            case SqlDialect.MySql:
+                sb.Append("LIMIT ");
+                sb.Append((_skip ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                sb.Append(", ");
+                sb.Append(_take.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                break;
+            default:
+                sb.Append("LIMIT ");
+                sb.Append(_take.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                sb.Append(" OFFSET ");
+                sb.Append((_skip ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                break;
+        }
     }
 
     private static string GetRegisteredTableName(Type entityType)

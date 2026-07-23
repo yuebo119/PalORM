@@ -43,7 +43,8 @@ public sealed class GridReader : IAsyncDisposable
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
-            List<T> list = [];
+            // v4.4：对齐 ExecuteQueryAsync/QueryAsync 的 16 起步容量
+            List<T> list = new(16);
             var typedFactory = (Func<DbDataReader, T>)factory;
             while (await _reader.ReadAsync(ct).ConfigureAwait(false))
                 list.Add(typedFactory(_reader));
