@@ -36,6 +36,10 @@ public sealed class BoundedQueryCache : IQueryCache
     private static readonly Counter<long> _evictions = PalORMMetrics.Meter.CreateCounter<long>(
         "palorm.cache.evictions", description: "Cache entries evicted (expired or type mismatch)");
 
+    // v4.4：预构造 hit/miss KVP，消除每次 TryGet 的 KeyValuePair 构造开销
+    private static readonly KeyValuePair<string, object?> HitTag = new("outcome", "hit");
+    private static readonly KeyValuePair<string, object?> MissTag = new("outcome", "miss");
+
     // ObservableGauge 在 Pull 模式下被 OTel 主动轮询——缓存读取路径零开销（不每次 Set/TryGet 计数）。
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
     private readonly int _maxEntries;
@@ -80,7 +84,7 @@ public sealed class BoundedQueryCache : IQueryCache
                 // 与"缓存未命中是正确性中性的"设计一致。
                 if (entry.Value is T typed)
                 {
-                    _requests.Add(1, new KeyValuePair<string, object?>("outcome", "hit"));
+                    _requests.Add(1, HitTag);
                     value = typed;
                     return true;
                 }
@@ -93,7 +97,7 @@ public sealed class BoundedQueryCache : IQueryCache
             }
             _cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry));
         }
-        _requests.Add(1, new KeyValuePair<string, object?>("outcome", "miss"));
+        _requests.Add(1, MissTag);
         value = default;
         return false;
     }
