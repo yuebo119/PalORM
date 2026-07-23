@@ -17,8 +17,8 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
     /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>
     internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, global::ReservedWordEntity entity, int paramOffset)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 0}"; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 1}"; p.Value = (object)entity.Value; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 0); p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 1); p.Value = (object)entity.Value; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>

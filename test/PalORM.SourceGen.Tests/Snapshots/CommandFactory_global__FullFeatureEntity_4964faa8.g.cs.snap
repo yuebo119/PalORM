@@ -20,14 +20,14 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>
     internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, global::FullFeatureEntity entity, int paramOffset)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 0}"; p.Value = (object)entity.Code; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 1}"; p.Value = (object)entity.Kind; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 2}"; p.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 3}"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 4}"; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 5}"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 6}"; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = $"@p{paramOffset + 7}"; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 0); p.Value = (object)entity.Code; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 1); p.Value = (object)entity.Kind; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 2); p.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 3); p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 4); p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 5); p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 6); p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 7); p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
