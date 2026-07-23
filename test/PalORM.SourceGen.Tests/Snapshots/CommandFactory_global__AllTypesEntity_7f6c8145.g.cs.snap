@@ -87,7 +87,7 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
     /// <summary>绑定主键到 DELETE 参数。</summary>
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.Value = (object)((long)key); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
     }
 
     internal static void SetId(global::AllTypesEntity entity, long id)

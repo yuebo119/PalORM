@@ -989,6 +989,12 @@ public class DapperCacheImpactBenchmarks : IAsyncDisposable
             cmd.CommandText = $"INSERT INTO bench_orders (status, total, created_at) VALUES ('S{i}', {i * 10m}, {i})";
             await cmd.ExecuteNonQueryAsync();
         }
+        // 给 status 加索引——消除 VaryingShape 场景的全表扫描主导，分离 ORM cache miss 代价
+        using (var idx = _keeper.CreateCommand())
+        {
+            idx.CommandText = "CREATE INDEX ix_bench_orders_status ON bench_orders(status)";
+            await idx.ExecuteNonQueryAsync();
+        }
     }
 
     public async ValueTask DisposeAsync()
