@@ -9,10 +9,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# 基线上限：2026-07-23 调整——review R1 补强 RuntimeFields 11 个 IsNotNull（注册表属性
-# 可达性验证，合理保留）+ DialectDifference 3 个 IsNotNull（接口存在性验证）。
-# 从 19 提升至 32。只许减不许增。
-MAX_WEAK="${2:-32}"
+# 基线上限：2026-07-23 下调——RuntimeFields 11 个改行为断言（Count > 0），
+# KeyAttribute 改类型断言，SQLite IsUniqueViolation 改调用断言。从 32 降至 17。
+MAX_WEAK="${2:-17}"
 [ "${1:-}" = "--max-weak" ] && MAX_WEAK="$2"
 
 printf '═══════ 断言强度扫描 ═══════\n'
