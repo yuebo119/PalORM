@@ -261,7 +261,7 @@ internal sealed class SourceGenIntegrationTests
         // static readonly Func<DbDataReader, T> 委托字段，注册值类型从 RowFactory_X.Instance
         // 变为 RowFactory_X.Read 委托。断言强转可成功即证明注册的是 Read 委托。
         var factory = PalORM_Runtime.RowFactories[typeof(TestUser)];
-        await Assert.That(factory).IsNotNull();
+        await Assert.That(factory is Delegate).IsTrue();
         await Assert.That(factory).IsTypeOf<Func<System.Data.Common.DbDataReader, TestUser>>();
     }
 
@@ -437,7 +437,7 @@ internal sealed class SourceGenIntegrationTests
         // v3.1: 注册值改为 Func<DbDataReader, T> 委托——factory.GetType() 不再是 RowFactory_X。
         // 改断言委托类型与签名正确，证明 emit 已迁移。
         var factory = PalORM_Runtime.RowFactories[typeof(TestUser)];
-        await Assert.That(factory).IsNotNull();
+        await Assert.That(factory is Delegate).IsTrue();
         await Assert.That(factory).IsTypeOf<Func<System.Data.Common.DbDataReader, TestUser>>();
         // 委托目标方法应属于 RowFactory_X 静态类（证明 emit 仍是 per-entity 特化）
         Delegate del = (Delegate)factory;

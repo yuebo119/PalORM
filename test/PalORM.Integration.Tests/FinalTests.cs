@@ -23,7 +23,7 @@ public sealed class FinalTests
         await using var db = await TestDb.SqliteAsync();
         await db.MigrateAsync();
         var r = await db.From<Product>().WithCommandTimeout(30).ToListAsync();
-        await Assert.That(r).IsNotNull();
+        await Assert.That(r.Count).IsEqualTo(0);
     }
 
     [Test]

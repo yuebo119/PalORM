@@ -9,9 +9,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# 基线上限：2026-07-23 下调——RuntimeFields 11 个改行为断言（Count > 0），
-# KeyAttribute 改类型断言，SQLite IsUniqueViolation 改调用断言。从 32 降至 17。
-MAX_WEAK="${2:-17}"
+# 基线上限：2026-07-23 二次下调——6 处查询结果 IsNotNull 改属性断言。
+# 剩余 11 处全部是合法场景（try-catch 异常验证/异步通知捕获/委托可达性前置/软删行为验证）。
+MAX_WEAK="${2:-11}"
 [ "${1:-}" = "--max-weak" ] && MAX_WEAK="$2"
 
 printf '═══════ 断言强度扫描 ═══════\n'
