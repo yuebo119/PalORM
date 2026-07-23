@@ -10,6 +10,8 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
     internal const string UpdateSql = "UPDATE inherited SET name = @p0, created_by = @p1, created_at = @p2 WHERE Id = @p3";
     internal const string DeleteSql = "DELETE FROM inherited WHERE Id = @p0";
     internal const string InsertReturningSql = "INSERT INTO inherited (name, created_by, created_at) VALUES (@p0, @p1, @p2) RETURNING Id, name, created_by, created_at";
+    internal const string UpsertReturningSql = "INSERT INTO inherited (Id, name, created_by, created_at) VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (Id) DO UPDATE SET name = excluded.name, created_by = excluded.created_by, created_at = excluded.created_at RETURNING Id, name, created_by, created_at";
+    internal const string UpsertMySqlSql = "INSERT INTO inherited (Id, name, created_by, created_at) VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE name = VALUES(name), created_by = VALUES(created_by), created_at = VALUES(created_at)";
 
     /// <summary>绑定实体属性到 INSERT 参数。</summary>
     internal static void BindInsert(global::System.Data.Common.DbCommand cmd, global::InheritedEntity entity)

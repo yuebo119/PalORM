@@ -154,13 +154,14 @@ internal sealed class DialectSymmetryTests
     {
         // ITM-416：归一化把引用符整串删除——某方言漏引用标识符时归一化产物仍一致，
         // 对"引用符存在性"失明。此断言独立验证每个方言产物确实引用了标识符。
-        // Upsert SQL 由运行时构建（DataSession.BuildMySqlUpsertSql/SaveCoreAsync 经
-        // QuoteIdentifier），不在 Emitter 对称面内。
+        // v4.1：Upsert SQL 也改为源生成器预构建，纳入 Emitter 对称面。
         var builds = new (string Name, Func<SqlGenerationDialect, string> Build)[]
         {
             ("Insert", d => CommandFactoryEmitter.BuildInsertSql(_model, d)),
             ("Update", d => CommandFactoryEmitter.BuildUpdateSql(_model, d)),
             ("Delete", d => CommandFactoryEmitter.BuildDeleteSql(_model, d)),
+            ("UpsertReturning", d => CommandFactoryEmitter.BuildUpsertReturningSql(_model, d)),
+            ("UpsertMySql", d => CommandFactoryEmitter.BuildUpsertMySqlSql(_model, d)),
             ("CreateTable", d => MigrationEmitter.BuildCreateTable(_model, d)),
             ("CreateIndex", d => MigrationEmitter.BuildCreateIndex(_model, _model.Indexes.AsSpan()[0], d)),
         };
@@ -170,6 +171,9 @@ internal sealed class DialectSymmetryTests
             foreach (SqlGenerationDialect dialect in _dialects)
             {
                 string sql = build(dialect);
+                // 空串（如 MySQL 的 UpsertReturning）跳过引用检查
+                if (string.IsNullOrEmpty(sql))
+                    continue;
                 char quote = dialect == SqlGenerationDialect.MySql ? '`' : '"';
                 // 表名必须以引用形式出现（symmetry_items 被引用符包裹）
                 if (!sql.Contains($"{quote}symmetry_items{quote}", StringComparison.Ordinal))
