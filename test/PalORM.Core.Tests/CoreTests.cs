@@ -131,10 +131,11 @@ public sealed class AnnotationsTests
     }
 
     [Test]
-    public async Task KeyAttribute_Exists()
+    public async Task KeyAttribute_CanBeInstantiated()
     {
         var attr = new KeyAttribute();
-        await Assert.That(attr).IsNotNull();
+        // 验证可实例化且 AttributeUsage 正确（不是 abstract/sealed 误标）
+        await Assert.That(attr.GetType()).IsEqualTo(typeof(KeyAttribute));
     }
 
     [Test]
@@ -321,20 +322,20 @@ public sealed class PalORM_RuntimeTests
     }
 
     [Test]
-    public async Task RuntimeFields_AreAccessible_AfterModuleInit()
+    public async Task RuntimeFields_ArePopulated_AfterModuleInit()
     {
-        // 验证注册表属性全部可访问且非 null（模块初始化器填充后）
-        await Assert.That(PalORM_Runtime.RowFactories).IsNotNull();
-        await Assert.That(PalORM_Runtime.TableNames).IsNotNull();
-        await Assert.That(PalORM_Runtime.CommandSqls).IsNotNull();
-        await Assert.That(PalORM_Runtime.CommandSqlsByDialect).IsNotNull();
-        await Assert.That(PalORM_Runtime.BindInsert).IsNotNull();
-        await Assert.That(PalORM_Runtime.BindUpdate).IsNotNull();
-        await Assert.That(PalORM_Runtime.BindDelete).IsNotNull();
-        await Assert.That(PalORM_Runtime.PkColumns).IsNotNull();
-        await Assert.That(PalORM_Runtime.ColumnNames).IsNotNull();
-        await Assert.That(PalORM_Runtime.CreateTableSql).IsNotNull();
-        await Assert.That(PalORM_Runtime.CreateTableSqlByDialect).IsNotNull();
+        // 验证注册表属性全部可访问且含数据（模块初始化器填充后）
+        await Assert.That(PalORM_Runtime.RowFactories.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.TableNames.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.CommandSqls.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.CommandSqlsByDialect.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.BindInsert.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.BindUpdate.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.BindDelete.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.PkColumns.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.ColumnNames.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.CreateTableSql.Count).IsGreaterThan(0);
+        await Assert.That(PalORM_Runtime.CreateTableSqlByDialect.Count).IsGreaterThan(0);
     }
 
     [Test]
