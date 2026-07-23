@@ -231,9 +231,9 @@ PalORM_Complex     ███████████████████  39
 
 PalORM 在所有路径上比 Dapper 慢 10-42%。**但 PalORM 提供 Dapper 没有的**：
 - 编译时实体校验（PALORM001-022 诊断）
-- 源生成 RowFactory（零反射）
+- 源生成 RowFactory——架构层面零反射（**注意**：稳态查询下 Dapper IL 缓存命中后比 PalORM 接口派发更快，见下方 Cache Impact 章节；源生成的真实价值在 AOT 发布合规、首次查询冷启动、编译时类型校验）
 - 软删/多租户/乐观锁自动注入
-- Native AOT 全链路支持
+- Native AOT 全链路支持（零 IL 抑制）
 - SessionOperationState 单会话门禁
 
 ---
@@ -290,32 +290,36 @@ PalORM 在所有路径上比 Dapper 慢 10-42%。**但 PalORM 提供 Dapper 没�
 > 目的：验证 PalORM "源生成 RowFactory 零反射" 在不同参数形状下的表现。
 > 配置：`launchCount=1, warmupCount=3, iterationCount=5`
 
-### 假设（事前）
+### 设计修正（v4.1.1）
 
-- 假设：参数形状变化时 Dapper 缓存 miss 显著拖慢，PalORM 源生成路径恒定快。
+初版 VaryingShape 用 `WHERE status=@status` 触发全表扫描，绝对值被 DB 扫描时间主导（322μs）。v4.1.1 给 status 列加索引 `CREATE INDEX ix_bench_orders_status`，分离 ORM cache miss 代价与 DB 扫描代价。
 
-### 实测结果
+### 实测结果（加索引后）
 
 | Method | Mean | Error | StdDev | Allocated |
 |:------|-----:|------:|-------:|----------:|
 | **稳定参数形状（缓存命中）** | | | | |
-| Dapper_StableShape | **23.73 μs** 🟢 | 77.44 μs | 4.25 μs | **2.25 KB** 🟢 |
-| PalORM_StableShape | 40.50 μs | 82.38 μs | 4.52 μs | 7.46 KB |
-| **变化参数形状（缓存 miss）** | | | | |
-| Dapper_VaryingShape | **322.07 μs** 🟢 | 475.34 μs | 26.06 μs | **1.92 KB** 🟢 |
-| PalORM_VaryingShape | 351.68 μs | 278.80 μs | 15.28 μs | 6.75 KB |
+| Dapper_StableShape | **20.37 μs** 🟢 | 1.33 μs | 0.35 μs | **2.25 KB** 🟢 |
+| PalORM_StableShape | 23.32 μs | 0.33 μs | 0.08 μs | 7.46 KB |
+| **变化参数形状（参数值轮询）** | | | | |
+| Dapper_VaryingShape | **18.38 μs** 🟢 | 0.40 μs | 0.06 μs | **1.92 KB** 🟢 |
+| PalORM_VaryingShape | 23.67 μs | 0.15 μs | 0.04 μs | 6.75 KB |
 
-### 结论（事前假设被证伪）
+### 结论（两次假设均被证伪）
 
 **原假设错误**。数据证明：
 
-1. **缓存命中场景 Dapper 反而比 PalORM 快 1.7×**（23.73 vs 40.50μs）——Dapper 的 IL 物化器一旦缓存命中，直接委托调用，比 PalORM 的 `IRowFactory<T>.Read` 接口分发快。
-2. **变化参数形状场景两者持平**（322 vs 351μs，PalORM 慢 9%）——但绝对值主要由 `WHERE status = @status` **全表扫描**（无索引）主导，ORM 开销被 DB 扫描时间掩盖，无法分离 cache miss 代价。
-3. **PalORM 分配始终高于 Dapper**（7.46/6.75 KB vs 2.25/1.92 KB）——SessionOperationState 门禁 + IRowFactory 委托 + 拦截器空列表检查的固有代价。
+1. **缓存命中场景 Dapper 比 PalORM 快 14%**（20.37 vs 23.32μs）——Dapper 的 IL 物化器一旦缓存命中，直接委托调用，比 PalORM 的 `IRowFactory<T>.Read` 接口派发快。
+2. **"参数形状变化触发 Dapper cache miss" 假设证伪**——Dapper VaryingShape（18.38μs）反而比 StableShape（20.37μs）**更快**。原因：Dapper 的缓存哈希键基于**参数类型签名**（`{id:long, status:string}`），不是**参数值**。变化 status 字符串长度不改变类型签名，Dapper 缓存仍然命中。
+3. **PalORM 在两个场景下表现一致**（23.32 vs 23.67μs）——源生成路径确实不受参数形状影响，但绝对速度仍然慢于 Dapper IL 缓存路径。
+4. **PalORM 分配始终高于 Dapper**（7.46/6.75 KB vs 2.25/1.92 KB）——SessionOperationState 门禁 + IRowFactory 委托 + 拦截器空列表检查的固有代价。
 
-**对 PalORM 卖点的修正**：
-- ❌ "源生成零反射优势 → 查询更快"——**在稳态查询场景下不成立**，Dapper IL 缓存命中后更快。
-- ✅ "源生成零反射优势"——**仍然成立，但限定场景**：AOT 发布（Dapper.AOT 拦截器对 internal 类型失效）、首次查询冷启动、编译时类型校验。
+**对 PalORM 卖点的最终修正**：
+- ❌ "源生成零反射优势 → 查询更快"——**完全证伪**。Dapper IL 缓存路径在任何参数形状下都比 PalORM 接口派发快 14-22%。
+- ✅ "源生成零反射优势"——**仅限以下场景成立**：
+  - **Native AOT 发布合规**（Dapper.AOT 拦截器对 `internal` 类型失效——PalORM 项目核心定位）
+  - **首次查询冷启动**（Dapper 首次需构建 IL，PalORM 编译时已生成）
+  - **编译时类型校验**（PALORM001-022 诊断，运行时无对应能力）
 - ✅ "统一 SessionOperationState 门禁 + 编译时诊断 + AOT 全链路"——**架构性优势，不能直接用 CRUD 速度衡量**。
 
 ---
