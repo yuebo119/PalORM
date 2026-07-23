@@ -30,7 +30,7 @@
 
 ---
 
-## II. AI 缺陷登记（17 个）
+## II. AI 缺陷登记（21 个）
 
 ### 阶段 A：修复缺陷（Sonar 4 轮）
 
@@ -58,6 +58,10 @@
 | B8 | 源生成器 emit 改动后 obj 缓存陷阱（v3.1） | emit 模板改动后必须清 `obj/` + `bin/`，否则增量构建复用旧 emit 导致运行时 cast 失败 NRE。详见 X 章 `9a5c5a7`。SOP：① 改 RowFactoryEmitter/CommandFactoryEmitter/RegistryEmitter/MigrationEmitter 任一 emit 模板 → ② `rm -rf src/*/obj src/*/bin test/*/obj test/*/bin` → ③ 全量 `dotnet build --no-incremental` |
 | B9 | 方案文字优化项被合理简化（v3.1 审查发现） | 优化方案文字（plan 文档）与实施代码会有偏差：核心性能路径必须严格对齐，辅助/锦上添花的优化允许基于测量数据（S3 反向验证）取舍。**陷阱**：方案文字本身可能存在自相矛盾（如「保留接口 + 标 Obsolete」），实施时不应照搬。**SOP**：① 实施后做代码审查对比方案文字 → ② 列出偏差 → ③ 每项偏差给出 S3 依据（数据/IL 等价/JIT 内联） → ④ 在方案文档补「实施差异说明」章节承认偏差。详见 `docs/v3.1-performance-plan.md` 实施差异 1/2/3。 |
 | B10 | 方案调研可能基于不完整数据（v4.0 实施时发现） | v4.0 方案基于 4 路并行 Agent 调研，但实施时发现多个高风险项被误判为瓶颈：① 优化 C（QueryBuilder O(N²)）实际只占 QueryAll 4.73ms 的 0.02%；② 源生成器 emit 工程化 4 子项均有现有机制覆盖；③ Convert.ChangeType 在 AOT 下经评估确认安全（走 IConvertible 接口，不依赖反射）。**陷阱**：调研 Agent 可能从代码模式推断出"理论瓶颈"，但缺乏运行时数据验证。**SOP**：① 实施前先用 benchmark 验证方案声称的瓶颈是否属实 → ② 评估复杂度/收益比，YAGNI 跳过理论瓶颈 → ③ 在方案文档补「评估后跳过」章节说明理由。详见 `docs/v4.0-improvement-plan.md` 与 `CHANGELOG.md` v4.0.0 「评估后跳过的方案项」表。 |
+| B11 | review Agent 推理不验证代码就下结论（v4.0 全量评审） | review R1 声称 BulkMerge 默认键实体 operationOwner 坍缩为 null→EnterOperation 失败。实际代码 `operationOwner ?? operation.Owner` 中 operationOwner 参数（非 null）优先生效——推理链断裂但未读代码验证。R6 声称 PG 类型校验在 ProbeBinder 之后，实际已在之前。**陷阱**：并行 review 子代理对复杂调用链的跨方法推理易出错。**SOP**：review 报告的 P0/P1 发现必须附带探针验证（写测试复现或 grep 确认），不能仅凭推理定级。 |
+| B12 | Edit 替换 emit 代码时误删相邻行（v4.0 R11 修复） | 修 MigrationEmitter nullable 条件时，Edit 的 old_string 含了 defaultClause/primaryKey/columns.Add 三行——new_string 只保留了 nullable 行，导致 emit 生成的 DDL 列为空。**陷阱**：Edit 工具按精确匹配替换，old_string 越大越容易误删相邻代码。**SOP**：emit 代码 Edit 时 old_string 只含目标行 ± 1 行上下文，不贪多。改后必须 `dotnet build` + 快照比对验证 emit 产物完整。 |
+| B13 | 门禁脚本正则匹配注释内容（v4.0 G24 修复） | G24 perl 正则 `\bawait\s+` 统计 await 数量，但 GridReader.cs 注释中的 "await 会导致...await using 卡死" 被误匹配，导致 await=12 > ConfigureAwait=11 误报。**陷阱**：正则不区分代码与注释/XML doc。**SOP**：门禁脚本的正则统计前必须先剥离 `///` XML doc 和 `//` 行注释（`s{^\s*///.*$}{}gms; s{//.*$}{}gm;`）。 |
+| B14 | 测试计数口径冲突——声明数 vs 通过数（v4.0 badge/D10） | README badge 写 427（源码 [Test] 声明总数），tech-debt #9 检查 badge == dotnet test 通过数（419，8 个外部 DB 失败）。D10 检查文档计数 == 源码标注数。三者口径不一致导致连环 FAIL。**陷阱**：同一数字（"测试数"）在不同检查中有不同口径。**SOP**：全仓库统一口径 = "CI 全环境实际通过数"（419）。外部 DB 环境依赖测试在文档中标注"需外部 DB"但不计入 badge 总数。D10 对 Integration.Tests 允许文档 ≤ 源码标注。 |
 
 ---
 
@@ -237,5 +241,9 @@ D 删除（低风险）→ M 合并（低）→ R 拆分（中高，每个独立
 | B8 obj 缓存陷阱 | `9a5c5a7` | RowFactoryEmitter emit 改动——Func 委托迁移 |
 | B9 方案合理简化 | `e58f414` / `本会话` | v3.1-performance-plan.md 实施差异说明 + 第二次基准复现 |
 | B10 方案调研误判 | `本会话 v4.0` | v4.0-improvement-plan.md + CHANGELOG v4.0.0 评估后跳过表 |
+| B11 review 推理不验证 | `860b09d` | review R1/R6 误判→补测试验证代码正确 |
+| B12 Edit 误删 emit 行 | `a4a9c7c` | MigrationEmitter R11 修复 defaultClause/primaryKey 误删 |
+| B13 门禁正则匹配注释 | `860b09d` | G24 perl await 统计含注释→剥离注释后统计 |
+| B14 测试计数口径冲突 | `5788eeb` | badge 419/427/D10 三口径统一 |
 | 占位诊断删除 | `8781357` | PalORMAnalyzer PALORM006/007 |
 | 规范化 | `3450e18` | CHANGELOG + CONTRIBUTING |

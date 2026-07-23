@@ -138,7 +138,8 @@ aot_generated=$(grep -rn -E 'Compile[[:space:]]+(Include|Remove)=.*\.g\.cs' test
 check_zero G23 'AOT 项目不得手工编译生成文件' "$aot_generated_count"
 
 # G24：库代码每个 await 必须 ConfigureAwait(false)。跨行统计（await 与 ConfigureAwait 可能不同行）。
-# 例外：await using / await foreach（作用于资源与流，无 ConfigureAwait 位点）、await Task.Yield()（YieldAwaitable 无该重载）。
+# B13 教训：perl 正则不区分代码与注释——统计前必须先剥离 /// XML doc 和 // 行注释。
+# 例外：await using / await foreach / await Task.Yield()（无 ConfigureAwait 位点）。
 ca_missing=0
 while IFS= read -r file; do
     diff=$(perl -0777 -ne '
