@@ -89,9 +89,9 @@ check "8. SuppressMessage 无 Justification" "$SUPPRESS_NO_JUST" "strict"
 # ─── 9. 测试用例数对照 README badge ───
 BADGE_NUM=$(grep -oP 'tests-\K[0-9]+' README.md 2>/dev/null | head -1)
 [ -z "$BADGE_NUM" ] && BADGE_NUM=0
-CORE_COUNT=$(dotnet test test/PalORM.Core.Tests -c Debug --no-build 2>&1 | grep -oP 'succeeded: \K[0-9]+' 2>/dev/null || true)
-SG_COUNT=$(dotnet test test/PalORM.SourceGen.Tests -c Debug --no-build 2>&1 | grep -oP 'succeeded: \K[0-9]+' 2>/dev/null || true)
-INT_COUNT=$(dotnet test test/PalORM.Integration.Tests -c Debug --no-build 2>&1 | grep -oP 'Passed: \K[0-9]+' 2>/dev/null || true)
+CORE_COUNT=$(dotnet test test/PalORM.Core.Tests -c Debug 2>&1 | grep -oP 'succeeded: \K[0-9]+' 2>/dev/null || true)
+SG_COUNT=$(dotnet test test/PalORM.SourceGen.Tests -c Debug 2>&1 | grep -oP 'succeeded: \K[0-9]+' 2>/dev/null || true)
+INT_COUNT=$(dotnet test test/PalORM.Integration.Tests -c Debug 2>&1 | grep -oP 'succeeded: \K[0-9]+' 2>/dev/null || true)
 [ -z "$CORE_COUNT" ] && CORE_COUNT=0
 [ -z "$SG_COUNT" ] && SG_COUNT=0
 [ -z "$INT_COUNT" ] && INT_COUNT=0
