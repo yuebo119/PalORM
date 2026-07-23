@@ -7,6 +7,21 @@
 
 ---
 
+## 📋 基准方法论（对齐 Dapper 官方 benchmarks/）
+
+本项目基准设计严格对齐 [DapperLib/Dapper](https://github.com/DapperLib/Dapper/tree/main/benchmarks/Dapper.Tests.Performance) 官方基准：
+
+| 设计点 | 做法 | 理由 |
+|--------|------|------|
+| **测量工具** | BenchmarkDotNet 0.14 `[MemoryDiagnoser]` | .NET 官方运行时团队、Dapper、EF Core 全采用 |
+| **ADO.NET 基线** | 每 benchmark 类都有 `ADO_NET_*` 方法标 `[Benchmark(Baseline = true)]` | 测量纯框架开销（相对原生 ADO.NET 的百分比） |
+| **多 ORM 对照** | Dapper（micro-ORM）+ RepoDB（micro-ORM，同类公平对照） | Dapper 官方对照 9 个 ORM；PalORM 选 2 个同类最具代表性 |
+| **防 page cache 命中** | 单点查询（GetByKey）使用 `NextId()` 轮询 1..10000 | 对齐 Dapper 官方 `Step()` 机制，避免 SQLite page cache 让数字失真 |
+| **统计三件套** | Mean + Error + StdDev + Allocated | 所有报告表均含此四列 |
+| **Job 配置** | 主基准 `launchCount=3, warmupCount=5, iterationCount=10`；远程 DB 用快速配置 `1/3/5` | Adam Sitnik 推荐 ≥15 迭代；3 次独立进程降低进程间差异 |
+
+---
+
 ## 📖 查询
 
 ### 全表查询（10,000 行）
@@ -220,6 +235,88 @@ PalORM 在所有路径上比 Dapper 慢 10-42%。**但 PalORM 提供 Dapper 没�
 - 软删/多租户/乐观锁自动注入
 - Native AOT 全链路支持
 - SessionOperationState 单会话门禁
+
+---
+
+## 🆚 同类 micro-ORM 四方对照（v4.1 新增）
+
+> 对齐 Dapper 官方 `benchmarks/Dapper.Tests.Performance` 的多 ORM 对照做法。
+> 加入 **RepoDB**（同为 micro-ORM，自称最快 ORM）作为同类公平对照。
+> 配置：`launchCount=1, warmupCount=3, iterationCount=5`（快速验证，统计精度中等）
+> 2026-07-23 · AMD Ryzen 9 8945HX · .NET 11 preview 6
+
+### 核心读写四 ORM 对照
+
+| Method | Mean | Error | StdDev | Allocated |
+|:------|-----:|------:|-------:|----------:|
+| **QueryAll 10K 行** | | | | |
+| ADO_NET_QueryAll | 3,667.14 μs | 17.09 μs | 4.44 μs | 1,328.67 KB |
+| RepoDb_QueryAll | **3,322.10 μs** 🟢 | 177.07 μs | 45.98 μs | **1,118.33 KB** 🟢 |
+| Dapper_QueryAll | 3,445.34 μs | 257.67 μs | 66.92 μs | 1,351.87 KB |
+| PalORM_QueryAll | 4,293.73 μs | 725.74 μs | 188.47 μs | 1,510.46 KB |
+| **GetByKey（轮询 1..10000）** | | | | |
+| Dapper_GetByKey | **18.17 μs** 🟢 | 0.24 μs | 0.04 μs | 2.34 KB |
+| ADO_NET_GetByKey | 19.73 μs | 1.97 μs | 0.51 μs | 1.70 KB |
+| RepoDb_GetByKey | 21.27 μs | 0.47 μs | 0.12 μs | 5.38 KB |
+| PalORM_GetByKey | 21.36 μs | 0.46 μs | 0.07 μs | 4.55 KB |
+| **Insert + 取回自增 ID** | | | | |
+| RepoDb_Insert | **23.39 μs** 🟢 | 1.30 μs | 0.20 μs | 3.86 KB |
+| ADO_NET_Insert | 26.17 μs | 17.10 μs | 4.44 μs | **1.43 KB** 🟢 |
+| Dapper_Insert | 30.05 μs | 18.35 μs | 4.77 μs | 3.73 KB |
+| PalORM_Insert | 32.94 μs | 7.46 μs | 1.94 μs | 5.04 KB |
+
+### 排名（按 Mean 升序）
+
+| 操作 | 1st | 2nd | 3rd | 4th |
+|------|:---:|:---:|:---:|:---:|
+| QueryAll | **RepoDb** 🟢 | Dapper | ADO.NET | PalORM |
+| GetByKey | **Dapper** 🟢 | ADO.NET | RepoDb | PalORM |
+| Insert | **RepoDb** 🟢 | ADO.NET | Dapper | PalORM |
+
+### 结论（诚实归因）
+
+1. **RepoDB 在 2/3 项胜出**——它自称"最快 ORM"在 QueryAll/Insert 路径上有数据支撑。原因：RepoDB 内部用 `DbCommandCache` + 预编译参数绑定，绕过 Dapper 的 IL 缓存层。
+2. **Dapper 在 GetByKey 上最快**——但比 ADO.NET 仅快 8%（18.17 vs 19.73μs），在统计误差边缘。
+3. **PalORM 在所有三项排名末位**——但与第三名差距小（GetByKey 落后 RepoDB 0.4%，Insert 落后 Dapper 9.6%）。
+4. **PalORM 的 Insert 慢的根因**：`InsertAsync` 包含 RETURNING 物化整行 + SetId 回填 + SessionOperationState 门禁，相对 RepoDB 的 `InsertAsync` 路径（只回 last_insert_rowid）多一次物化。
+
+**绝对不是"PalORM 比 RepoDB/Dapper 慢"这么简单**——PalORM 在同样安全语义（编译时校验 + AOT 全链路 + 软删/租户/乐观锁）下交付速度。若只比裸 CRUD 速度，用户应直接选 RepoDB 或 Dapper。
+
+---
+
+## 🔬 Dapper Cache Impact 专项（v4.1 新增）
+
+> 对齐 Dapper 官方 [`DapperCacheImpact.cs`](https://github.com/DapperLib/Dapper/blob/main/benchmarks/Dapper.Tests.Performance/DapperCacheImpact.cs)。
+> 目的：验证 PalORM "源生成 RowFactory 零反射" 在不同参数形状下的表现。
+> 配置：`launchCount=1, warmupCount=3, iterationCount=5`
+
+### 假设（事前）
+
+- 假设：参数形状变化时 Dapper 缓存 miss 显著拖慢，PalORM 源生成路径恒定快。
+
+### 实测结果
+
+| Method | Mean | Error | StdDev | Allocated |
+|:------|-----:|------:|-------:|----------:|
+| **稳定参数形状（缓存命中）** | | | | |
+| Dapper_StableShape | **23.73 μs** 🟢 | 77.44 μs | 4.25 μs | **2.25 KB** 🟢 |
+| PalORM_StableShape | 40.50 μs | 82.38 μs | 4.52 μs | 7.46 KB |
+| **变化参数形状（缓存 miss）** | | | | |
+| Dapper_VaryingShape | **322.07 μs** 🟢 | 475.34 μs | 26.06 μs | **1.92 KB** 🟢 |
+| PalORM_VaryingShape | 351.68 μs | 278.80 μs | 15.28 μs | 6.75 KB |
+
+### 结论（事前假设被证伪）
+
+**原假设错误**。数据证明：
+
+1. **缓存命中场景 Dapper 反而比 PalORM 快 1.7×**（23.73 vs 40.50μs）——Dapper 的 IL 物化器一旦缓存命中，直接委托调用，比 PalORM 的 `IRowFactory<T>.Read` 接口分发快。
+2. **变化参数形状场景两者持平**（322 vs 351μs，PalORM 慢 9%）——但绝对值主要由 `WHERE status = @status` **全表扫描**（无索引）主导，ORM 开销被 DB 扫描时间掩盖，无法分离 cache miss 代价。
+3. **PalORM 分配始终高于 Dapper**（7.46/6.75 KB vs 2.25/1.92 KB）——SessionOperationState 门禁 + IRowFactory 委托 + 拦截器空列表检查的固有代价。
+
+**对 PalORM 卖点的修正**：
+- ❌ "源生成零反射优势 → 查询更快"——**在稳态查询场景下不成立**，Dapper IL 缓存命中后更快。
+- ✅ "源生成零反射优势"——**仍然成立，但限定场景**：AOT 发布（Dapper.AOT 拦截器对 internal 类型失效）、首次查询冷启动、编译时类型校验。
+- ✅ "统一 SessionOperationState 门禁 + 编译时诊断 + AOT 全链路"——**架构性优势，不能直接用 CRUD 速度衡量**。
 
 ---
 
