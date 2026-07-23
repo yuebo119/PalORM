@@ -10,6 +10,8 @@ using Npgsql;
 using PalORM.Sqlite;
 using PalORM.PostgreSql;
 using PalORM.MySql;
+// RepoDb（含 Sqlite 扩展，全部位于 RepoDb 命名空间下：SqliteGlobalConfiguration.UseSqlite）
+using RepoDb;
 
 [assembly: DapperAot]
 [assembly: SuppressMessage("Design", "CA1515", Justification = "BenchmarkDotNet requires public types.")]
@@ -80,6 +82,8 @@ public class SqliteBenchmarks : IAsyncDisposable
         await Exec("INSERT INTO bench_versioned (name, version) VALUES ('seed', 0)");
         await Exec("CREATE TABLE bench_soft (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, deleted_at TEXT)");
         await Exec("INSERT INTO bench_soft (name) VALUES ('seed')");
+        // RepoDB 全局初始化（仅一次，Sqlite provider 探测）
+        GlobalConfiguration.Setup().UseSqlite();
     }
 
     private async Task Exec(string sql)
@@ -100,6 +104,13 @@ public class SqliteBenchmarks : IAsyncDisposable
         c.Open();
         return c;
     }
+
+    // Dapper 官方 benchmarks/Dapper.Tests.Performance 的 Step() 等价实现：
+    // 每次迭代查不同 id，避免同一数据页被 SQLite page cache 命中导致测量失真。
+    // 仅用于单点查询（GetByKey）；Update/Upsert 保留固定 id 以保证语义正确。
+    // 返回 long：对齐 BenchOrder.id（long）——源生成器 BindDelete 要求 key 类型精确匹配
+    private long _counter;
+    private long NextId() => (Interlocked.Increment(ref _counter) % SeedRows) + 1;  // 1..SeedRows
 
     // ═══════ 查询全表 10000 行 ═══════
     // SQL 统一：SELECT id, status, total, created_at FROM bench_orders
@@ -133,15 +144,26 @@ public class SqliteBenchmarks : IAsyncDisposable
         return await db.From<BenchOrder>().ToListAsync();
     }
 
+    [Benchmark, BenchmarkCategory("Query")]
+    public async Task<List<BenchOrder>> RepoDb_QueryAll()
+    {
+        using var c = OpenConn();
+        // 显式表名——BenchOrder 同时有 PalORM [Table]，避免与 RepoDB [Map] 注解冲突
+        return (await c.QueryAllAsync<BenchOrder>("bench_orders")).AsList();
+    }
+
     // ═══════ 主键查询 ═══════
-    // SQL 统一：SELECT ... WHERE id = 5000
+    // 使用 NextId() 轮询 id（1..10000）——避免 SQLite page cache 命中导致测量失真
+    // 对齐 Dapper 官方 benchmarks/Dapper.Tests.Performance 的 Step() 机制
 
     [Benchmark, BenchmarkCategory("Query")]
     public async Task<BenchOrder?> ADO_NET_GetByKey()
     {
+        var id = NextId();
         using var c = OpenConn();
         using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders WHERE id = 5000";
+        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders WHERE id = @id";
+        cmd.Parameters.AddWithValue("@id", id);
         using var r = await cmd.ExecuteReaderAsync();
         if (!await r.ReadAsync()) return null;
         return new BenchOrder { id = r.GetInt64(0), status = r.GetString(1), total = r.GetDecimal(2), created_at = r.GetInt64(3) };
@@ -150,16 +172,27 @@ public class SqliteBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Query")]
     public async Task<BenchOrder?> Dapper_GetByKey()
     {
+        var id = NextId();
         using var c = OpenConn();
         return await c.QueryFirstOrDefaultAsync<BenchOrder>(
-            "SELECT id, status, total, created_at FROM bench_orders WHERE id = @id", new { id = 5000L });
+            "SELECT id, status, total, created_at FROM bench_orders WHERE id = @id", new { id });
     }
 
     [Benchmark, BenchmarkCategory("Query")]
     public async Task<BenchOrder?> PalORM_GetByKey()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
-        return await db.GetAsync<BenchOrder>(5000L);
+        return await db.GetAsync<BenchOrder>(NextId());
+    }
+
+    [Benchmark, BenchmarkCategory("Query")]
+    public async Task<BenchOrder?> RepoDb_GetByKey()
+    {
+        var id = NextId();
+        using var c = OpenConn();
+        // Lambda + 显式表名重载——避免类上 RepoDB [Map] 注解
+        var rows = await c.QueryAsync<BenchOrder>("bench_orders", e => e.id == id);
+        return rows.FirstOrDefault();
     }
 
     // ═══════ 插入（每个 ORM 用最优路径）═══════
@@ -179,7 +212,8 @@ public class SqliteBenchmarks : IAsyncDisposable
     {
         using var c = OpenConn();
         // Dapper 最优：ExecuteScalar 取回 ID（不用 Execute + query）
-        return await c.ExecuteScalarAsync<long>(
+        // 显式 SqlMapper 调用——RepoDB 也定义了 ExecuteScalarAsync 扩展，二义性
+        return await Dapper.SqlMapper.ExecuteScalarAsync<long>(c,
             "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at); SELECT last_insert_rowid();",
             new { status = "B", total = 99m, created_at = 0L });
     }
@@ -190,6 +224,16 @@ public class SqliteBenchmarks : IAsyncDisposable
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
         var entity = await db.InsertAsync(new BenchOrder { status = "B", total = 99m, created_at = 0 });
         return entity.id;
+    }
+
+    [Benchmark, BenchmarkCategory("Insert")]
+    public async Task<long> RepoDb_Insert()
+    {
+        using var c = OpenConn();
+        // 显式表名——BenchOrder 同时有 PalORM [Table]，避免与 RepoDB [Map] 注解冲突
+        return Convert.ToInt64(
+            await c.InsertAsync("bench_orders", new { status = "B", total = 99m, created_at = 0L }),
+            System.Globalization.CultureInfo.InvariantCulture);
     }
 
     // ═══════ 更新（每个 ORM 用最优单步路径）═══════
@@ -253,7 +297,8 @@ public class SqliteBenchmarks : IAsyncDisposable
     public async Task<int> Dapper_Delete()
     {
         using var c = OpenConn();
-        long id = await c.ExecuteScalarAsync<long>(
+        // 显式 SqlMapper 调用——RepoDB 同名扩展冲突
+        long id = await Dapper.SqlMapper.ExecuteScalarAsync<long>(c,
             "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at); SELECT last_insert_rowid();",
             new { status = "DEL", total = 1m, created_at = 0L });
         return await c.ExecuteAsync("DELETE FROM bench_orders WHERE id = @id", new { id });
@@ -905,5 +950,104 @@ public class SqliteSpeedBenchmarks : IAsyncDisposable
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
         var e = await db.InsertAsync(new BenchOrder { status = "X", total = 1m, created_at = 1 });
         return e.id;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Dapper Cache Impact 专项（对齐 Dapper 官方 DapperCacheImpact.cs）
+//
+// PalORM 卖点：源生成 RowFactory，零运行时反射、零 IL 缓存查找。
+// Dapper：首次（或参数形状变化时）需构建 + 缓存 IL 物化代码。
+// 本基准对照三种参数形状下两者的查询延迟，证明源生成路径的稳定性。
+// ═══════════════════════════════════════════════════════════════
+
+[MemoryDiagnoser]
+[SimpleJob(launchCount: 1, warmupCount: 3, iterationCount: 5)]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]
+[SuppressMessage("Security", "CA2100", Justification = "Seed data uses compile-time constants.")]
+public class DapperCacheImpactBenchmarks : IAsyncDisposable
+{
+    private const int SeedRows = 10000;
+    private const string Cs = "Data Source=bench_cache;Mode=Memory;Cache=Shared";
+    private SqliteConnection? _keeper;
+    private readonly DbOptions _options = new() { ConnectionString = Cs };
+
+    [GlobalSetup]
+    public async Task Setup()
+    {
+        _keeper = new SqliteConnection(Cs);
+        await _keeper.OpenAsync();
+        using (var cmd = _keeper.CreateCommand())
+        {
+            cmd.CommandText = "CREATE TABLE bench_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, total REAL NOT NULL, created_at INTEGER NOT NULL)";
+            await cmd.ExecuteNonQueryAsync();
+        }
+        for (int i = 0; i < SeedRows; i++)
+        {
+            using var cmd = _keeper.CreateCommand();
+            cmd.CommandText = $"INSERT INTO bench_orders (status, total, created_at) VALUES ('S{i}', {i * 10m}, {i})";
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_keeper is not null) await _keeper.DisposeAsync();
+    }
+
+    private static SqliteConnection OpenConn()
+    {
+        var c = new SqliteConnection(Cs);
+        c.Open();
+        return c;
+    }
+
+    // ─── 场景 1：稳定参数形状（Dapper 缓存命中后的稳态） ───
+    // Dapper：第 N 次（N > 1）后 IL 缓存命中；PalORM：源生成，恒定。
+
+    [Benchmark, BenchmarkCategory("StableShape")]
+    public async Task<BenchOrder?> Dapper_StableShape()
+    {
+        using var c = OpenConn();
+        // 固定参数形状 {id, status}——Dapper 复用已缓存的 IL 物化器
+        return await c.QueryFirstOrDefaultAsync<BenchOrder>(
+            "SELECT id, status, total, created_at FROM bench_orders WHERE id = @id AND status = @status",
+            new { id = 1L, status = "S1" });
+    }
+
+    [Benchmark, BenchmarkCategory("StableShape")]
+    public async Task<BenchOrder?> PalORM_StableShape()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        return await db.From<BenchOrder>()
+            .Where($"id = {1L} AND status = {"S1"}")
+            .FirstOrDefaultAsync();
+    }
+
+    // ─── 场景 2：变化参数形状（Dapper 每次缓存 miss，重 build IL） ───
+    // 每次迭代不同的 status 字段长度 → Dapper 哈希键变化 → 缓存未命中
+    // PalORM 源生成路径不受参数形状影响
+
+    private int _shape;
+    [Benchmark, BenchmarkCategory("VaryingShape")]
+    public async Task<BenchOrder?> Dapper_VaryingShape()
+    {
+        // 每次迭代 status 不同长度——Dapper 参数形状哈希变化，缓存 miss
+        var status = new string('X', (++_shape % 32) + 1);
+        using var c = OpenConn();
+        return await c.QueryFirstOrDefaultAsync<BenchOrder>(
+            "SELECT id, status, total, created_at FROM bench_orders WHERE status = @status",
+            new { status });
+    }
+
+    [Benchmark, BenchmarkCategory("VaryingShape")]
+    public async Task<BenchOrder?> PalORM_VaryingShape()
+    {
+        var status = new string('X', (++_shape % 32) + 1);
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        return await db.From<BenchOrder>()
+            .Where($"status = {status}")
+            .FirstOrDefaultAsync();
     }
 }

@@ -27,5 +27,8 @@
     <PackageReference Include="BenchmarkDotNet" />
     <PackageReference Include="Dapper" />
     <PackageReference Include="Dapper.AOT" />
+    <!-- 同类 micro-ORM 对照——Dapper 官方 benchmarks/ 同样多 ORM 对照 -->
+    <PackageReference Include="RepoDb" />
+    <PackageReference Include="RepoDb.Sqlite.Microsoft" />
   </ItemGroup>
 </Project>

@@ -33,6 +33,9 @@
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <PackageVersion Include="Dapper" Version="2.1.66" />
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
+    <!-- 同类 micro-ORM 对照（Dapper 官方 benchmarks/ 同样多 ORM 对照） -->
+    <PackageVersion Include="RepoDb" Version="1.13.1" />
+    <PackageVersion Include="RepoDb.Sqlite.Microsoft" Version="1.13.1" />
   </ItemGroup>
 
   <!-- 源生成器测试（Phase 2 启用） -->
