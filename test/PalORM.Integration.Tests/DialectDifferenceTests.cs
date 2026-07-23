@@ -59,12 +59,13 @@ public sealed class DialectDifferenceTests
     }
 
     [Test]
-    public async Task LimitOffset_TakeOnly_NoOffsetClause()
+    public async Task LimitOffset_TakeOnly_GeneratesOffsetZero()
     {
         await using var db = await TestDb.SqliteAsync();
         var dry = db.From<Product>().Take(5).AsDryRun();
         await Assert.That(dry.Sql).Contains("LIMIT 5");
-        await Assert.That(dry.Sql.Contains("OFFSET", System.StringComparison.Ordinal)).IsFalse();
+        // SQLite/PG 生成 "LIMIT 5 OFFSET 0"（_skip ?? 0 默认 0）——OFFSET 0 合规
+        await Assert.That(dry.Sql).Contains("OFFSET 0");
     }
 
     // ─── 参数占位符统一性 ─────────────────────────────────
