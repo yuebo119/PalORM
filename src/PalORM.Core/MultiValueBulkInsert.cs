@@ -44,6 +44,8 @@ public static class MultiValueBulkInsert
 
         // v4.1：BindInsertToBatch 直绑--binder 支持 paramOffset，消除 rowCommand scratch
         Action<DbCommand, object, int> binder = metadata.BindInsert;
+        // v4.6：参数复用路径 -- 仅改 Value 不 CreateParameter（满批跨批复用）
+        Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
         int columnCount = metadata.InsertColumns.Count;
         // v4.3：源生成器保证 binder 参数数 == 列数，probe 只需首次验证（InsertBinderValidated=true 时跳过）
         if (!metadata.InsertBinderValidated)
@@ -73,7 +75,7 @@ public static class MultiValueBulkInsert
             // v4.1：BindInsertToBatch 直接写入 batchCmd，不再需要 rowCommand scratch
             total = await ExecuteBatchesAsync(
                 conn, tran, entities, effectiveBatchSize, columnCount,
-                quotedTable, quotedColumns, binder, commandTimeoutSeconds,
+                quotedTable, quotedColumns, binder, valuesBinder, commandTimeoutSeconds,
                 typeof(T).Name, ct).ConfigureAwait(false);
             if (ownsTransaction)
                 await tran.CommitAsync(ct).ConfigureAwait(false);
@@ -160,22 +162,27 @@ public static class MultiValueBulkInsert
     /// 避免 N 批次 × 1 次 CreateCommand 分配。占位符预构建改用 ValueStringBuilder。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:MethodsShouldNotHaveTooManyParameters",
-        Justification = "批量执行参数多但全是必要——连接/事务/命令/实体集合/binder/quoter/cancellationToken "
+        Justification = "批量执行参数多但全是必要--连接/事务/命令/实体集合/binder/quoter/cancellationToken "
             + "都是 ADO.NET 批量骨架的必然组件，聚合成对象会引入跨方法状态传递。已抽出 ProbeBinderAsync "
             + "+ BuildRowPlaceholders 减少方法主体复杂度。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "v4.6 参数复用增加满批/末批分支，逻辑紧凑不宜拆分。")]
     private static async Task<long> ExecuteBatchesAsync<T>(
         DbConnection conn, DbTransaction tran,
         IReadOnlyList<T> entities, int effectiveBatchSize, int columnCount,
         string quotedTable, string quotedColumns,
         Action<DbCommand, object, int> binder,
+        Action<DbParameter[], object, int>? valuesBinder,
         int commandTimeoutSeconds, string typeName, CancellationToken ct) where T : class, new()
     {
         long total = 0;
-        // v4.0 优化：批次命令跨批次复用--当批大小恒定时 CommandText 也复用。
-        // 末尾批可能小于 effectiveBatchSize，需要重建 CommandText。
         DbCommand batchCmd = conn.CreateCommand();
         string? lastBatchSql = null;
         int lastBatchLength = -1;
+        // v4.6：满批参数池 -- 首次分配后跨批复用，只改 Value 不 CreateParameter
+        DbParameter[]? paramPool = null;
+        bool poolAdded = false; // 首次 Add 后设 true，后续批次不清不重 Add（只改 Value）
         Exception? batchCommandException = null;
         try
         {
@@ -186,6 +193,7 @@ public static class MultiValueBulkInsert
             {
                 int end = Math.Min(start + effectiveBatchSize, entities.Count);
                 int batchLength = end - start;
+                bool isFullBatch = batchLength == effectiveBatchSize && valuesBinder is not null;
 
                 // CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）
                 if (batchLength != lastBatchLength)
@@ -197,16 +205,49 @@ public static class MultiValueBulkInsert
                     lastBatchLength = batchLength;
                 }
                 batchCmd.CommandText = lastBatchSql;
-                batchCmd.Parameters.Clear();
 
-                // v4.1 BindInsertToBatch 直绑：binder 直接写入 batchCmd，消除 rowCommand scratch 和阶段 2 拷贝
-                for (int row = 0; row < batchLength; row++)
+                if (isFullBatch)
                 {
-                    int parameterOffset = row * columnCount;
-                    binder(batchCmd, entities[start + row], parameterOffset);
+                    // v4.6：满批参数复用路径
+                    if (paramPool is null)
+                    {
+                        // 首次：预分配 + Add 到 batchCmd
+                        int poolSize = effectiveBatchSize * columnCount;
+                        paramPool = new DbParameter[poolSize];
+                        for (int i = 0; i < poolSize; i++)
+                        {
+                            var p = batchCmd.CreateParameter();
+                            p.ParameterName = ParameterNameCache.GetName(i);
+                            batchCmd.Parameters.Add(p);
+                            paramPool[i] = p;
+                        }
+                        poolAdded = true;
+                    }
+                    else if (!poolAdded)
+                    {
+                        // 末批后回到满批：重新 Add 参数
+                        batchCmd.Parameters.Clear();
+                        for (int i = 0; i < paramPool.Length; i++)
+                            batchCmd.Parameters.Add(paramPool[i]);
+                        poolAdded = true;
+                    }
+                    // valuesBinder 只改 Value，不 Clear/Add
+                    for (int row = 0; row < batchLength; row++)
+                        valuesBinder!(paramPool, entities[start + row], row * columnCount);
+                }
+                else
+                {
+                    // 末批或无 valuesBinder：走老路径
+                    batchCmd.Parameters.Clear();
+                    poolAdded = false;
+                    for (int row = 0; row < batchLength; row++)
+                    {
+                        int parameterOffset = row * columnCount;
+                        binder(batchCmd, entities[start + row], parameterOffset);
+                    }
                 }
 
-                // 列数校验：每行应产生 columnCount 个参数
+                // 列数校验
                 if (batchCmd.Parameters.Count != batchLength * columnCount)
                     throw new InvalidOperationException(
                         $"Type '{typeName}' generated {columnCount} insert columns but " +

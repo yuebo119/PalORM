@@ -22,6 +22,14 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 2); p.Value = (object)entity.CreatedAt; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
+    internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::InheritedEntity entity, int paramOffset)
+    {
+        parameters[paramOffset + 0].Value = (object)entity.Name;
+        parameters[paramOffset + 1].Value = (object)entity.CreatedBy;
+        parameters[paramOffset + 2].Value = (object)entity.CreatedAt;
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::InheritedEntity entity)
     {
