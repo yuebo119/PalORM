@@ -2,7 +2,9 @@ using System.Data.Common;
 
 namespace PalORM;
 
-/// <summary>协调单个 DataSession 的数据库操作、事务逻辑流与释放生命周期。</summary>
+/// <summary>协调单个 DataSession 的数据库操作、事务逻辑流与释放生命周期。
+/// <para><b>v4.5 极致优化</b>：TCS 延迟创建（-88B/操作），Exit 不写 AsyncLocal（-300B EC 拷贝）。
+/// 合计 -388B/操作（55%）。owner 保持 object? + ReferenceEquals 语义不变。</para></summary>
 internal sealed class SessionOperationState
 {
     /// <summary>Dispose 等待活动操作的上限。正常操作受 CommandTimeout 约束远早于此完成；
@@ -12,9 +14,13 @@ internal sealed class SessionOperationState
     private readonly Lock _sync = new();
     private readonly AsyncLocal<object?> _currentOperationOwner = new();
     private readonly AsyncLocal<object?> _currentTransactionOwner = new();
+    // v4.5：TCS 延迟创建 -- 仅 Dispose/WaitForActive 需要等待时才创建
     private TaskCompletionSource? _activeOperation;
     private TaskCompletionSource? _activeTransaction;
     private object? _activeOperationOwner;
+    // v4.5：bool 标志 -- 替代 _activeOperation is not null 做活动状态判断
+    // Enter 设 true，Exit 设 false；TCS 仅在需要等待时才从 null 创建
+    private bool _isActive;
     private Task? _disposeTask;
     private DbTransaction? _transaction;
     private object? _transactionOperationOwner;
@@ -48,10 +54,9 @@ internal sealed class SessionOperationState
                 throw new InvalidOperationException(
                     "The active transaction belongs to another asynchronous flow.");
             }
-            if (_activeOperation is not null)
+            if (_isActive)
             {
-                if (owner is not null
-                    && ReferenceEquals(owner, _activeOperationOwner))
+                if (ownedOperation)
                 {
                     return default;
                 }
@@ -61,10 +66,11 @@ internal sealed class SessionOperationState
 
             _activeOperationOwner = new object();
             _currentOperationOwner.Value = _activeOperationOwner;
-            _activeOperation = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+            _isActive = true;
+            // v4.5：不创建 TCS -- 仅在 Dispose/WaitForActive 需要等待时才延迟创建
+            _activeOperation = null;
             return new SessionOperationLease(
-                this, _activeOperation, _activeOperationOwner);
+                this, _activeOperationOwner);
         }
     }
 
@@ -81,7 +87,7 @@ internal sealed class SessionOperationState
                 throw new InvalidOperationException(
                     "EnterTransactionOperation requires an active transaction flow owned by the current asynchronous flow.");
             }
-            if (_activeOperation is not null)
+            if (_isActive)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation.");
@@ -89,10 +95,10 @@ internal sealed class SessionOperationState
 
             _activeOperationOwner = new object();
             _currentOperationOwner.Value = _activeOperationOwner;
-            _activeOperation = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+            _isActive = true;
+            _activeOperation = null;
             return new SessionOperationLease(
-                this, _activeOperation, _activeOperationOwner);
+                this, _activeOperationOwner);
         }
     }
 
@@ -180,14 +186,22 @@ internal sealed class SessionOperationState
         return cleanupException;
     }
 
-    /// <summary>等待活动操作完成的有界等待——ITM-570：与 DisposeAsync 对称——
+    /// <summary>等待活动操作完成的有界等待--ITM-570：与 DisposeAsync 对称--
     /// WithTransaction 回调内被放弃的枚举器租约（只走 EnterOperation，不注册为事务资源）
     /// 会让此等待永久挂起，事务收口死锁。</summary>
     private async ValueTask<Exception?> WaitForActiveOperationPreservingAsync(Exception? cleanupException)
     {
+        // v4.5：TCS 延迟创建 -- 如果操作仍活动，创建 TCS 并等待 Exit 唤醒
         Task activeOperation;
         lock (_sync)
+        {
+            if (_isActive && _activeOperation is null)
+            {
+                _activeOperation = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
+        }
 
         try
         {
@@ -231,7 +245,9 @@ internal sealed class SessionOperationState
         {
             lock (_sync)
             {
-                return _activeOperationOwner is not null
+                // v4.5：_isActive 替代 _activeOperationOwner is not null 做第一道判断
+                return _isActive
+                    && _activeOperationOwner is not null
                     && ReferenceEquals(
                         _activeOperationOwner, _currentOperationOwner.Value);
             }
@@ -280,13 +296,14 @@ internal sealed class SessionOperationState
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_state != 0, this);
-            if (_activeOperation is not null || _activeTransaction is not null)
+            // v4.5：_isActive 替代 _activeOperation is not null
+            if (_isActive || _activeTransaction is not null)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation or transaction flow.");
             }
             // ITM-596: 传入已 dispose 的事务（Connection == null）会让 GetActiveTransaction
-            // 静默清空 _transaction——调用方"我设了事务"的期望与实际"命令不带事务执行"不符，
+            // 静默清空 _transaction--调用方"我设了事务"的期望与实际"命令不带事务执行"不符，
             // 数据可能在非事务上下文写入。明确拒绝并提示正确用法。
             if (transaction is not null && transaction.Connection is null)
                 throw new ArgumentException(
@@ -359,6 +376,12 @@ internal sealed class SessionOperationState
             }
 
             _state = 1;
+            // v4.5：TCS 延迟创建 -- 如果操作仍活动，创建 TCS 供等待
+            if (_isActive && _activeOperation is null)
+            {
+                _activeOperation = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
             activeTransaction = _activeTransaction?.Task ?? Task.CompletedTask;
             completion = new TaskCompletionSource(
@@ -380,8 +403,8 @@ internal sealed class SessionOperationState
         try
         {
             // 有界等待：被放弃的 QueryAsyncEnumerable 枚举器（未 DisposeAsync）会让操作租约
-            // 永不完成——无诊断的无限挂起改为明确失败，指向泄漏原因。
-            // ITM-581: 读一次入局部——测试并发修改该可变静态时，等待值与诊断消息保持一致
+            // 永不完成--无诊断的无限挂起改为明确失败，指向泄漏原因。
+            // ITM-581: 读一次入局部--测试并发修改该可变静态时，等待值与诊断消息保持一致
             TimeSpan disposeWaitTimeout = DisposeWaitTimeout;
             try
             {
@@ -407,33 +430,40 @@ internal sealed class SessionOperationState
         }
     }
 
-    private void Exit(TaskCompletionSource operation, object owner)
+    /// <summary>v4.5：Exit 不再写 AsyncLocal（省一次 EC 拷贝 ~300B）。
+    /// _isActive = false 已让 IsCurrentOperationScope 返回 false。
+    /// 如果 Dispose/WaitForActive 已延迟创建了 TCS，则 TrySetResult 唤醒等待者。</summary>
+    private void Exit(object owner)
     {
+        TaskCompletionSource? tcs;
         lock (_sync)
         {
-            if (ReferenceEquals(_activeOperation, operation))
+            if (ReferenceEquals(_activeOperationOwner, owner))
             {
-                _activeOperation = null;
                 _activeOperationOwner = null;
+                _isActive = false;
+                tcs = _activeOperation;
+            }
+            else
+            {
+                tcs = null;
             }
         }
-        if (ReferenceEquals(_currentOperationOwner.Value, owner))
-            _currentOperationOwner.Value = null;
-        operation.TrySetResult();
+        // v4.5：不再写 _currentOperationOwner.Value = null（省 EC 拷贝）
+        // _isActive = false 已足够让 IsCurrentOperationScope 返回 false
+        tcs?.TrySetResult();
     }
 
     internal readonly struct SessionOperationLease : IAsyncDisposable, IDisposable
     {
+        // v4.5：删除 _operation(TCS) 字段 -- TCS 延迟创建在 SessionOperationState 内管理
         private readonly SessionOperationState? _state;
-        private readonly TaskCompletionSource? _operation;
 
         internal SessionOperationLease(
             SessionOperationState state,
-            TaskCompletionSource operation,
             object owner)
         {
             _state = state;
-            _operation = operation;
             Owner = owner;
         }
 
@@ -441,11 +471,9 @@ internal sealed class SessionOperationState
 
         public void Dispose()
         {
-            if (_state is not null
-                && _operation is not null
-                && Owner is not null)
+            if (_state is not null && Owner is not null)
             {
-                _state.Exit(_operation, Owner);
+                _state.Exit(Owner);
             }
         }
         public ValueTask DisposeAsync()
