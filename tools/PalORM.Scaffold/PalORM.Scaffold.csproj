@@ -8,7 +8,8 @@
     <IsPackable>false</IsPackable>
     <!-- 仓库内部 CLI 通过 dotnet run 使用，尚未定义 NuGet Tool 发布契约。 -->
     <!-- CLI 工具无需本地化，连接字符串来自用户输入非注入 -->
-    <NoWarn>CA1303;CA2100</NoWarn>
+    <!-- $(NoWarn) 保留 Directory.Build.props 的 NU1507 抑制（多源中央包管理误报） -->
+    <NoWarn>$(NoWarn);CA1303;CA2100</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
