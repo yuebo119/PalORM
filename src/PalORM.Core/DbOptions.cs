@@ -98,8 +98,9 @@ public sealed record DbOptions
     public IQueryCache? QueryCache { get; init; }
 
     /// <summary>校验配置数值合法性（ITM-517）——init 属性可绕过 WithPool 的构造校验直接设非法值，
-    /// 在会话创建入口统一兜底。CommandTimeout=Zero 是合法的"无限等待"，此处不拒绝。</summary>
-    internal void Validate()
+    /// 在会话创建入口统一兜底。CommandTimeout=Zero 是合法的"无限等待"，此处不拒绝。
+    /// <para><b>v4.6 公开化</b>：用户可在 CreateAsync 前主动调用，实现 fail-fast。</para></summary>
+    public void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegative(CommandTimeout.Ticks, nameof(CommandTimeout));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
@@ -124,6 +125,82 @@ public sealed record DbOptions
             PoolLifetimeMinutes = lifetimeMinutes,
             PoolExplicitlyConfigured = true
         };
+    }
+
+    // ── v4.6 预设配置：常见场景一键初始化 ──────────────────────────────
+
+    /// <summary>开发环境预设：宽松超时 + 禁用熔断 + 单次重试。
+    /// <para>快速迭代优先，遇到错误快速失败而非重试堆积。</para></summary>
+    public static DbOptions Development(string connectionString) => new DbOptions
+    {
+        ConnectionString = connectionString,
+        CommandTimeout = TimeSpan.FromSeconds(60),
+        ConnectionTimeout = TimeSpan.FromSeconds(30),
+        MaxRetries = 1,
+        CircuitBreakerThreshold = 0
+    };
+
+    /// <summary>生产环境预设：严格超时 + 高重试 + 激进熔断。
+    /// <para>稳定性优先，瞬时故障自动重试，连续失败快速熔断保护下游。</para></summary>
+    public static DbOptions Production(string connectionString, string? readConnectionString = null) => new DbOptions
+    {
+        ConnectionString = connectionString,
+        ReadConnectionString = readConnectionString,
+        CommandTimeout = TimeSpan.FromSeconds(30),
+        ConnectionTimeout = TimeSpan.FromSeconds(15),
+        MaxRetries = 5,
+        CircuitBreakerThreshold = 10,
+        CircuitBreakerResetAfter = TimeSpan.FromSeconds(60)
+    }.WithPool(maxSize: 100);
+
+    /// <summary>测试环境预设：短超时 + 零重试 + 禁用熔断。
+    /// <para>测试确定性优先，瞬时故障应立即暴露而非重试掩盖。</para></summary>
+    public static DbOptions Testing(string connectionString) => new DbOptions
+    {
+        ConnectionString = connectionString,
+        CommandTimeout = TimeSpan.FromSeconds(5),
+        ConnectionTimeout = TimeSpan.FromSeconds(5),
+        MaxRetries = 0,
+        CircuitBreakerThreshold = 0,
+        ValidateQueryColumnOrder = true
+    };
+
+    // ── v4.6 环境变量覆盖：Docker/K8s 部署友好 ──────────────────────
+
+    /// <summary>从环境变量构建配置。未设置的环境变量使用默认值。
+    /// <para>支持的变量：PALORM_CONNECTION（必需）、PALORM_READ_CONNECTION、
+    /// PALORM_COMMAND_TIMEOUT、PALORM_CONNECTION_TIMEOUT、PALORM_MAX_RETRIES、
+    /// PALORM_CIRCUIT_BREAKER_THRESHOLD、PALORM_MAX_POOL_SIZE。</para></summary>
+    /// <param name="connectionEnv">主库连接串环境变量名（默认 PALORM_CONNECTION）。</param>
+    public static DbOptions FromEnvironment(string connectionEnv = "PALORM_CONNECTION")
+    {
+        string? cs = Environment.GetEnvironmentVariable(connectionEnv)
+            ?? throw new InvalidOperationException(
+                $"Environment variable '{connectionEnv}' is not set. "
+                + "Set it to your database connection string.");
+
+        var options = new DbOptions { ConnectionString = cs };
+
+        string? readCs = Environment.GetEnvironmentVariable("PALORM_READ_CONNECTION");
+        if (readCs is not null)
+            options = options with { ReadConnectionString = readCs };
+
+        if (int.TryParse(Environment.GetEnvironmentVariable("PALORM_COMMAND_TIMEOUT"), out int cmdTimeout))
+            options = options with { CommandTimeout = TimeSpan.FromSeconds(cmdTimeout) };
+
+        if (int.TryParse(Environment.GetEnvironmentVariable("PALORM_CONNECTION_TIMEOUT"), out int connTimeout))
+            options = options with { ConnectionTimeout = TimeSpan.FromSeconds(connTimeout) };
+
+        if (int.TryParse(Environment.GetEnvironmentVariable("PALORM_MAX_RETRIES"), out int retries))
+            options = options with { MaxRetries = retries };
+
+        if (int.TryParse(Environment.GetEnvironmentVariable("PALORM_CIRCUIT_BREAKER_THRESHOLD"), out int cbThreshold))
+            options = options with { CircuitBreakerThreshold = cbThreshold };
+
+        if (int.TryParse(Environment.GetEnvironmentVariable("PALORM_MAX_POOL_SIZE"), out int poolSize))
+            options = options with { MaxPoolSize = poolSize, PoolExplicitlyConfigured = true };
+
+        return options;
     }
 
     /// <summary>日志工厂。设置后 DataSession 经其创建 ILogger。
