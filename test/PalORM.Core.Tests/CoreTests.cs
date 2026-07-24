@@ -311,7 +311,7 @@ public sealed class PalORM_RuntimeTests
             {
                 [entityType] = new(
                     new("I", "U", "D", "IR", "UR", "UM", "IL"),
-                    new CrudBindings(BindWithOffset, Bind, Bind, new object()),
+                    new CrudBindings(BindWithOffset, null, Bind, Bind, new object()),
                     new CrudColumns(insertColumns, upsertColumns),
                     null, static _ => false)
             },

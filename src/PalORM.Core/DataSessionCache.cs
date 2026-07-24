@@ -11,4 +11,6 @@ internal static class DataSessionCache
 
     /// <summary>per-(Type, Dialect, softDelete, tenant) 缓存默认过滤条件，消除每次 QuoteIdentifier + 插值。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> FilterConditionCache = new();
+    /// <summary>per-(Type, Dialect, hasTenant, hasFilter) 缓存 GetAsync 完整 SQL，消除每次插值 + QuoteIdentifier。</summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> GetByKeySqlCache = new();
 }

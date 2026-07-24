@@ -110,7 +110,7 @@ internal sealed class GeneratorPhase2Tests
         string commandFactory = result.GeneratedSources.Single(pair =>
             pair.Key.StartsWith("CommandFactory_", StringComparison.Ordinal)).Value;
         string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
-        string bindInsert = ExtractMethod(commandFactory, "BindInsertToBatch(", "BindUpsert(");
+        string bindInsert = ExtractMethod(commandFactory, "BindInsertToBatch(", "BindInsertValues(");
 
         await Assert.That(errors).IsEmpty();
         await Assert.That(commandFactory).Contains(
@@ -119,8 +119,8 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(bindInsert).DoesNotContain("entity.Ignored");
         await Assert.That(bindInsert).DoesNotContain("entity.Timestamp");
         await Assert.That(bindInsert).DoesNotContain("entity.Computed");
-        // ITM-113: BindInsertValues 死代码已删除，不再生成
-        await Assert.That(commandFactory).DoesNotContain("BindInsertValues");
+        // v4.6：BindInsertValues 是参数复用路径，已重新引入
+        await Assert.That(commandFactory).Contains("BindInsertValues");
         await Assert.That(registry).Contains("new[] { \"name\" }");
     }
 

@@ -37,6 +37,29 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 17); p.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
+    internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::AllTypesEntity entity, int paramOffset)
+    {
+        parameters[paramOffset + 0].Value = (object)entity.IntValue;
+        parameters[paramOffset + 1].Value = (object)entity.ShortValue;
+        parameters[paramOffset + 2].Value = (object)entity.ByteValue;
+        parameters[paramOffset + 3].Value = (object)entity.StringValue;
+        parameters[paramOffset + 4].Value = (object)entity.CharValue;
+        parameters[paramOffset + 5].Value = (object)entity.BoolValue;
+        parameters[paramOffset + 6].Value = (object)entity.DecimalValue;
+        parameters[paramOffset + 7].Value = (object)entity.DoubleValue;
+        parameters[paramOffset + 8].Value = (object)entity.FloatValue;
+        parameters[paramOffset + 9].Value = (object)entity.DateTimeValue;
+        parameters[paramOffset + 10].Value = (object)entity.GuidValue;
+        parameters[paramOffset + 11].Value = (object)entity.DateTimeOffsetValue;
+        parameters[paramOffset + 12].Value = (object)entity.DateOnlyValue;
+        parameters[paramOffset + 13].Value = (object)entity.TimeOnlyValue;
+        parameters[paramOffset + 14].Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt;
+        parameters[paramOffset + 15].Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString;
+        parameters[paramOffset + 16].Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid;
+        parameters[paramOffset + 17].Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly;
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::AllTypesEntity entity)
     {

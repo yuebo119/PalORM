@@ -21,6 +21,13 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 1); p.Value = (object)entity.Value; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
+    internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::ReservedWordEntity entity, int paramOffset)
+    {
+        parameters[paramOffset + 0].Value = (object)entity.Id;
+        parameters[paramOffset + 1].Value = (object)entity.Value;
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::ReservedWordEntity entity)
     {

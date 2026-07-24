@@ -81,8 +81,8 @@ internal static class FormattableSqlFormatter
                             $"Formattable SQL contains an invalid alignment '{alignment}' in format item.");
                 }
 
-                sb.Append("@p");
-                sb.Append((baseIndex + parsedIndex).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                // v4.6：用 ParameterNameCache.GetName 替代 @p + int.ToString（零分配索引取用）
+                sb.Append(ParameterNameCache.GetName(baseIndex + parsedIndex));
                 index = close;
             }
 
