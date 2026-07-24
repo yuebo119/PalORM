@@ -74,7 +74,8 @@ test/
 tools/
   PalORM.Scaffold/      — SQLite schema → C# 实体生成器
 docs/                   — 文档（架构/API/规范/ADR/踩坑）
-scripts/                — 质量脚本（gate-check/verify-ai-system 等）
+scripts/                — 通用脚本（基准/测试环境/包验证）
+.ai/scripts/            — AI 质量脚本（本地工具，不入仓库）
 ```
 
 ## 许可证
