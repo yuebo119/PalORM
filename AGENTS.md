@@ -3,13 +3,13 @@
 > 本文件被 ZCode 自动加载（项目根目录 AGENTS.md 约定）。
 > 与全局 `~/.zcode/AGENTS.md` 的分工：全局管行为准则（Karpathy 准则），项目级管项目规范。
 
-## AI 启动清单（每次会话开始确认）
+## 启动清单（每次会话开始确认）
 
 ```
 1. git status——工作树清洁？
 2. dotnet build -c Debug——0 警告 0 错误？
-3. 技术债扫描——bash scripts/tech-debt-scan.sh 12/12 通过？
-4. .ai/lessons.md——已读最新版？
+3. 技术债扫描——bash .ai/scripts/tech-debt-scan.sh 12/12 通过？（本地工具，不入仓库）
+4. .ai/lessons.md——已读最新版？（本地工具，不入仓库）
 ```
 
 ## 规范真源（按优先级）
@@ -17,8 +17,8 @@
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
 | **最高** | `.editorconfig` | SonarAnalyzer 38 条规则（P0+P1 error，编译期阻断） |
-| **高** | `.ai/lessons.md` | AI 规范系统手册 v7.0（6 铁律 + 22 缺陷 + SOP + 决策矩阵） |
-| **高** | `.ai/test/prompt.md` | 测试规范系统 v1.0（14 铁律 + 16 缺陷 + 覆盖矩阵 + 基准配置） |
+| **高** | `.ai/lessons.md` | 规范系统手册 v7.0（本地工具，不入仓库） |
+| **高** | `.ai/test/prompt.md` | 测试规范系统 v1.0（本地工具，不入仓库） |
 | **中** | `docs/编码规范.md` §18 | SonarAnalyzer 守护层规则文档化 |
 | **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 6 类 |
 
@@ -41,7 +41,7 @@
 | 跨类别切换 | `dotnet build` |
 | 快照类改动 | 先 `PALORM_UPDATE_SNAPSHOTS=1 dotnet run` 确认基线 |
 | 最终提交前 | `dotnet build --no-incremental` |
-| 技术债扫描 | `bash scripts/tech-debt-scan.sh` |
+| 技术债扫描 | `bash .ai/scripts/tech-debt-scan.sh`（本地工具） |
 
 ## 详见
 

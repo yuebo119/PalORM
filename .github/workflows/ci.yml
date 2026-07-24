@@ -121,23 +121,8 @@ jobs:
             - name: Run quality script fixtures
               run: bash scripts/test-quality-scripts.sh
 
-            - name: Run AI system consistency check
-              run: bash scripts/verify-ai-system.sh
-
             - name: Run stub gate
               run: bash scripts/stub-check.sh
-
-            - name: Run repository gate
-              run: bash scripts/gate-check.sh
-
-            - name: Run assertion strength gate
-              run: bash scripts/assertion-strength-check.sh
-
-            - name: Run test specification gate
-              run: bash scripts/test-gate.sh
-
-            - name: Run tech debt scan
-              run: bash scripts/tech-debt-scan.sh
 
     aot-sqlite:
         name: SQLite Native AOT

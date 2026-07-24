@@ -31,8 +31,8 @@ nupkgs/
 *.g.cs
 
 ## Local tool data / AI assistants
-## .ai 的提示词/模板/误判知识库/报告是版本化资产，仅排除运行时记忆数据库
-.ai/brain-data/
+## .ai 目录是本地开发辅助工具，不推送到 GitHub
+.ai/
 .cortex/
 .github/*
 !.github/workflows/
