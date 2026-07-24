@@ -157,27 +157,28 @@ ConnectionString = "$ENV:DATABASE_URL"
 | 原子元数据注册 | ModuleInitializer 启动时一次性注册所有实体的元数据，发布不可变快照 |
 | Native AOT 全链路 | `IsAotCompatible=true` + `IsTrimmable=true`，三 Provider 原生二进制运行通过，**零 IL 抑制** |
 
-### 编译时诊断（21 条规则）
+### 注解
 
-| 规则 | 说明 |
+| 注解 | 说明 |
 |------|------|
-| PALORM001 | [Table] 实体缺少 [Key] |
-| PALORM002 | 属性未标注 [Column] |
-| PALORM003 | [ForeignKey] 引用表不存在 |
-| PALORM004 | [ForeignKey] 缺少 OnDelete |
-| PALORM005 | N+1 查询检测 |
-| PALORM008-010 | OwnedJson 上下文校验 |
-| PALORM011 | 拒绝限定表名（Database.Schema.Table） |
-| PALORM012 | 并发令牌类型约束 |
-| PALORM014 | [SoftDelete] 需 `deleted_at` 列 |
-| PALORM016 | 未知类型映射 |
-| PALORM017 | 注解声明但不参与 DDL |
-| PALORM018 | [TenantAware] 需 `tenant_id` 列 |
-| PALORM019-022 | OwnedJson / Key 合法性校验 |
-
-### 查询构建器与注解（22 个）
-
-`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]` `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Computed]` `[DefaultValue]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[SqlTemplate]`
+| `[Table("name")]` | 指定数据库表名，同时标识该类为 ORM 实体 |
+| `[Column("name")]` | 指定列名，源生成器按此生成读写映射 |
+| `[Key]` | 主键标记，支持自增（默认）和 `AutoIncrement=false` |
+| `[NotMapped]` | 排除属性，不参与数据库映射 |
+| `[ForeignKey]` | 外键引用声明（PALORM003/004 编译时校验） |
+| `[ConcurrencyCheck]` | 乐观锁标记，Update 时自动检查版本递增 |
+| `[IgnoreOnInsert]` | 插入时跳过该列（如数据库默认值列） |
+| `[Computed("SQL")]` | 计算列，`GENERATED ALWAYS AS ... STORED` |
+| `[DefaultValue(x)]` | 数据库默认值（DDL 生成） |
+| `[SensitiveData]` | 标记敏感字段（日志/审计脱敏提示） |
+| `[Converter(typeof(T))]` | 自定义值转换器（AOT 安全，编译时生成调用代码） |
+| `[SoftDelete]` | 软删除实体，查询自动附加 `WHERE deleted_at IS NULL` |
+| `[TenantAware]` | 多租户实体，查询自动附加 `WHERE tenant_id = @current` |
+| `[OwnedJson(typeof(Ctx))]` | JSON 序列化列（需 `JsonSerializerContext`，AOT 安全） |
+| `[Index(name, cols, unique)]` | 复合索引声明 |
+| `[Unique]` | 唯一约束 |
+| `[SqlFile("path.sql")]` | 编译时嵌入 .sql 文件为 `const string` |
+| `[SqlTemplate("name")]` | 提取 `FormattableString` 为静态常量 |
 
 ### 查询能力
 
@@ -535,15 +536,6 @@ v4.6 基准测试（BenchmarkDotNet v0.14.0 · SQLite 内存模式 · 10K 行种
 | 100,000 | 532ms / 101.6MB | 247ms / 124.3MB | 2.15× |
 
 > PalORM 在所有数据规模上分配低于 Dapper（-15% ~ -21%），10K 行场景分配低 62%。完整报告见 [BENCHMARKS.md](bench/PalORM.Benchmarks/BENCHMARKS.md)。
-
-### v4.6 优化历程
-
-| 版本 | 核心优化 | BulkInsert 分配 |
-|------|---------|:---:|
-| v4.0 | 基线 | 10.66 MB |
-| v4.2 | FormattableSqlFormatter VSB + 参数名缓存 + selectColumns 缓存 | 8.33 MB |
-| v4.5 | TCS 延迟创建 + Exit 不写 AsyncLocal（-388B/操作） | 6.73 MB |
-| v4.6 | owner=this + SqliteParameter 复用 + HasClause 位掩码 + GetAsync SQL 缓存 | **4.97 MB** |
 
 ---
 
