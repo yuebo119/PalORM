@@ -146,18 +146,70 @@ ConnectionString = "$ENV:DATABASE_URL"
 
 ## 核心特性
 
-### 编译时类型安全与 AOT 全链路
+### 架构设计
+
+PalORM 的编译时→运行时数据流：
+
+```
+[Table("orders")] public partial class Order { ... }
+        │
+        ▼  编译时（Roslyn IIncrementalGenerator）
+  ┌─────────────────────────────────────────────┐
+  │ RowFactory      → Func<DbDataReader, T> 委托 │
+  │ CommandFactory  → INSERT/UPDATE/UPSERT/DELETE │
+  │ Migration       → 三方言 CREATE TABLE DDL    │
+  │ Registry        → ModuleInitializer 注册     │
+  │ SqlFile         → 编译时嵌入 .sql 文件       │
+  │ SqlTemplate     → FormattableString 常量     │
+  └─────────────────────────────────────────────┘
+        │
+        ▼  运行时
+  var db = await DataSession<SqliteProvider>.CreateAsync(options);
+  var orders = await db.From<Order>().Where($"status = {"active"}").ToListAsync();
+```
+
+| 组件 | 说明 |
+|------|------|
+| `DataSession<TProvider>` | `using`-scoped 会话，持有单个数据库连接，用完即弃。`static abstract IDbProvider` 泛型参数在 JIT 编译时特化，零虚调用 |
+| `QueryBuilder<T>` | **值类型 struct**，`From<T>()` 返回栈分配副本，链式方法 copy-on-write 保证条件隔离 |
+| `IDbProvider` | C# 11 `static abstract interface`，编译时分发 `CreateConnection`/`QuoteIdentifier`/`BulkInsertAsync` 等核心操作 |
+| `ValueStringBuilder` | `ref struct`，栈分配 512B 初始缓冲 + `ArrayPool<char>` 兜底，BuildSql 热路径零堆分配 |
+| `FrozenDictionary` 元数据 | 运行时一次发布不可变快照，读路径无锁 |
+
+**三 Provider 架构**：`PalORM.Sqlite` / `PalORM.PostgreSql` / `PalORM.MySql` 独立程序集，互不引用。Core 通过 `IDbProvider` 接口统一调度，增删 Provider 不影响其他 Provider。
+
+**依赖最小化**：Core 只依赖 BCL + ADO.NET + `Microsoft.Extensions.Logging.Abstractions`（.NET 共享框架提供），零第三方 NuGet 包。可观测性基于 BCL `ActivitySource` / `Meter`。
+
+### 编译时安全与 Native AOT
 
 | 特性 | 说明 |
 |------|------|
-| `FormattableString` 参数化 | SQL 使用 `$"WHERE id = {value}"` 插值语法，编译时提取参数值绑定到 `DbParameter`，从架构层面杜绝 SQL 注入 |
-| 源生成 RowFactory | 每个实体编译时生成 `Func<DbDataReader, T>` 委托，零反射物化 |
-| 源生成 CommandFactory | INSERT/UPDATE/UPSERT/DELETE SQL 与参数绑定均在编译时完成 |
-| 源生成 Migration | CREATE TABLE DDL 按三方言分别生成 |
-| 原子元数据注册 | ModuleInitializer 启动时一次性注册所有实体的元数据，发布不可变快照 |
-| Native AOT 全链路 | `IsAotCompatible=true` + `IsTrimmable=true`，三 Provider 原生二进制运行通过，**零 IL 抑制** |
+| `FormattableString` 参数化 | SQL 使用 `$"WHERE id = {value}"` 插值语法，编译时提取参数值绑定到 `DbParameter`，从架构层面杜绝 SQL 注入。每个 FormattableString 的格式字符串在编译时已知，参数值与 SQL 结构强制分离 |
+| 源生成 RowFactory | 每个 `[Table]` 实体编译时生成 `Func<DbDataReader, T>` 委托，直接调 `reader.GetInt64(0)`、`GetString(1)` 等强类型方法。零反射、零 `GetValue` 装箱、零动态列名查找。v3.1 起委托替代 `IRowFactory<T>` 接口虚分发 |
+| 源生成 CommandFactory | INSERT/UPDATE/UPSERT/DELETE 四类 SQL 及 `BindInsert`/`BindUpdate` 参数绑定全部编译时生成。值类型列通过 Converter 单例转换（`static readonly`），BulkInsert 走 `BindInsertToBatch` 直绑。v4.6 新增 `BindInsertValues` 旁路 binder 实现参数对象跨批复用 |
+| 源生成 Migration | `CREATE TABLE` DDL 按 SQLite/PostgreSQL/MySQL 三方言分别生成对应的列类型、主键、自增、默认值语法。`MigrateAsync()` 按 `TProvider.Dialect` 自动选择 |
+| 原子元数据注册 | 源生成器为每个程序集生成 `RegistryFragment`，`ModuleInitializer` 运行时一次性注册所有实体。16 个元数据字典（RowFactories / TableNames / ColumnNames / CrudMetadatas 等）通过 `Register(fragment)` 快照锁定，外部只读 |
+| Native AOT 全链路 | `IsAotCompatible=true` + `IsTrimmable=true`。禁止 `Type.GetType()`、`Assembly.GetType()`、`MakeGenericType`、`Expression.Compile()`、`Activator.CreateInstance`。三 Provider `dotnet publish -p:PublishAot=true` 原生二进制运行通过，**零 IL 抑制**（0 条 SuppressMessage 针对 IL/AOT 警告） |
 
-### 注解
+### 实体建模
+
+实体必须是 `partial class`。源生成器通过 `ForAttributeWithMetadataName("PalORM.TableAttribute")` 收集所有 `[Table]` 类，逐个生成对应的工厂代码。
+
+```csharp
+[Table("users")]
+[SoftDelete]         // 自动过滤 WHERE deleted_at IS NULL
+[TenantAware]        // 自动过滤 WHERE tenant_id = @current
+public partial class User
+{
+    [Key] public long Id { get; set; }
+    [Column("email")] public string Email { get; set; } = "";
+    [Column("deleted_at")] public DateTime? DeletedAt { get; set; }
+    [Column("tenant_id")] public string TenantId { get; set; } = "";
+    [NotMapped] public string DisplayName => Email;
+}
+```
+
+**注解列表**：
 
 | 注解 | 说明 |
 |------|------|
@@ -165,7 +217,7 @@ ConnectionString = "$ENV:DATABASE_URL"
 | `[Column("name")]` | 指定列名，源生成器按此生成读写映射 |
 | `[Key]` | 主键标记，支持自增（默认）和 `AutoIncrement=false` |
 | `[NotMapped]` | 排除属性，不参与数据库映射 |
-| `[ForeignKey]` | 外键引用声明（PALORM003/004 编译时校验） |
+| `[ForeignKey]` | 外键引用声明（编译时校验引用表和 OnDelete） |
 | `[ConcurrencyCheck]` | 乐观锁标记，Update 时自动检查版本递增 |
 | `[IgnoreOnInsert]` | 插入时跳过该列（如数据库默认值列） |
 | `[Computed("SQL")]` | 计算列，`GENERATED ALWAYS AS ... STORED` |
@@ -182,43 +234,69 @@ ConnectionString = "$ENV:DATABASE_URL"
 
 ### 查询能力
 
+`QueryBuilder<T>` 是 `struct`值类型，每次 `From<T>()` 返回栈分配副本。链式方法（Where/OrderBy/Take 等）追加子句时通过写时复制保证分支隔离——任意时点复制的分支互不污染。
+
+**执行管线**：每个子句收集 `FormattableString` 格式串和参数到 `List<QueryClause>` → `BuildSql()` 用 `ValueStringBuilder` 栈分配拼接 SQL → `ExecuteQueryAsync()` 创建 `DbCommand` 并绑定参数 → `DbDataReader` + `RowFactory` 委托逐行物化实体 → 返回 `List<T>`。
+
 | API | 说明 |
 |-----|------|
 | `From<T>()` | 返回 `struct QueryBuilder<T>`（值类型，零堆分配） |
-| `.Where(FormattableString)` / `.OrWhere()` | 参数化条件，用户 OR 无法绕过默认过滤 |
-| `.OrderBy(expr)` / `.ThenBy()` / `.Take()` / `.Skip()` | 排序与分页 |
-| `.Select(expr[])` | 列投影（DryRun/ToSql 用） |
+| `.Where(FormattableString)` / `.OrWhere()` | 参数化条件，用户 OR 无法绕过默认过滤（软删/租户） |
+| `.OrderBy(expr)` / `.ThenBy()` | 表达式排序，支持降序 |
+| `.Take(n)` / `.Skip(n)` | 分页（LIMIT/OFFSET） |
+| `.Select(expr[])` | 列投影（仅 DryRun/ToSql 模式） |
 | `.InnerJoin<T>()` / `.LeftJoin()` / `.RightJoin()` | SQL JOIN |
-| `.Include<TChild>(fk, pk)` / `.ThenInclude()` | 多级导航，双参数显式表达 JOIN 两端 |
-| `.WhereIn(expr, values)` / `.WhereNotIn()` | 自动按参数上限分批 |
-| `.GroupBy(expr)` / `.Having(FormattableString)` | 聚合条件 |
-| `.With("cte", subquery)` | 公用表表达式 |
-| `.UnsafeWindowOver(func, over)` | 窗口函数（仅可信常量） |
-| `.ForUpdate()` / `.ForShare()` | 悲观锁 |
-| `.AsSplitQuery()` | 仅构建根查询，不装配导航对象 |
-| `.ForRead()` / `.ForWrite()` | 读写路由意图 |
+| `.Include<TChild>(fk, pk)` / `.ThenInclude()` | 多级导航关联，双参数显式指定 JOIN 两端 |
+| `.WhereIn(expr, values)` / `.WhereNotIn()` | IN/NOT IN 操作，参数上限自动钳制（SQLite 999 / MySQL 65535） |
+| `.GroupBy(expr)` / `.Having(FormattableString)` | GROUP BY / HAVING |
+| `.With("cte", FormattableString)` | 公用表表达式（CTE） |
+| `.UnsafeWindowOver(func, over)` | 窗口函数（参数为可信常量，非用户输入） |
+| `.ForUpdate()` / `.ForShare()` | 悲观锁（SELECT ... FOR UPDATE / FOR SHARE） |
+| `.AsSplitQuery()` | 仅构建根查询并移除 JOIN，不装配导航对象 |
+| `.ForRead()` / `.ForWrite()` | 读写路由意图（需配置 ReadConnectionString） |
 | `.WithCache(key, TTL)` | 有界 LRU 查询缓存 + 快照副本隔离 |
-| `.AsPrepared()` | 参数绑定后调用 `DbCommand.PrepareAsync` |
-| `.AsDryRun()` -> `DryRunResult` | SQL + 参数预览，不执行 |
-| `.Tag("name")` / `.TagWithCaller()` | SQL 注释标签 |
-| `.WithTracing()` / `.WithMetrics()` | BCL ActivitySource + Meter，AOT 安全 |
-| `.ToPageAsync(size, orderBy, cursor?)` | Keyset 游标分页 |
+| `.AsPrepared()` | 参数绑定后调用 `DbCommand.PrepareAsync`（PG/MySQL 服务端缓存执行计划） |
+| `.AsDryRun()` → `DryRunResult` | 生成 SQL + 参数列表预览，不执行数据库操作 |
+| `.Tag("name")` / `.TagWithCaller()` | SQL 注释标签（`/* tag */`，可观测性辅助） |
+| `.WithTracing()` / `.WithMetrics(name)` | BCL `ActivitySource` + `Meter`，零第三方可观测性 |
+| `.WithCommandTimeout(TimeSpan)` | 独立命令超时 |
+| `.WithTransaction(DbTransaction)` | 绑定外部事务 |
+| `.ToPageAsync(size, orderBy, cursor?)` | Keyset 游标分页，返回 `(rows, total)` |
+
+**执行方法**（QueryBuilderExtensions 扩展方法）：
+
+| 方法 | 说明 |
+|------|------|
+| `.ToListAsync(ct)` | 全量物化 `List<T>` |
+| `.FirstAsync(ct)` / `.FirstOrDefaultAsync(ct)` | 首行（LIMIT 1） |
+| `.SingleAsync(ct)` / `.SingleOrDefaultAsync(ct)` | 唯一行断言（LIMIT 2） |
+| `.ExecuteNonQueryAsync(ct)` | UPDATE/DELETE 执行 |
+| `.QueryMultipleAsync(sql)` → `GridReader` | 多结果集（单 reader 读取多个 SELECT） |
 
 ### 写入能力
 
 | API | 说明 |
 |-----|------|
-| `InsertAsync(T)` -> T | PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID |
-| `UpdateAsync(T)` | 自动乐观锁检查（ConcurrencyCheck 列） |
-| `DeleteAsync<T>(key)` | SoftDelete 实体更新 deleted_at，其他物理删除 |
-| `SaveAsync(T)` -> T | UPSERT：默认键走 Insert，非默认键走 `ON CONFLICT DO UPDATE` |
+| `InsertAsync(T)` → `T` | 插入并返回含自增 ID 的实体。PG/SQLite 走 `INSERT ... RETURNING` 单次往返；MySQL 走 `INSERT; SELECT LAST_INSERT_ID()` |
+| `UpdateAsync(T)` | 按主键更新，自动乐观锁检查 |
+| `DeleteAsync<T>(key)` | 按主键删除。`[SoftDelete]` 实体执行 `UPDATE SET deleted_at`；其他实体执行物理 DELETE |
+| `SaveAsync(T)` → `T` | UPSERT。默认键走 Insert，非默认键走 `ON CONFLICT DO UPDATE`（PG/SQLite）/ `ON DUPLICATE KEY UPDATE`（MySQL）。单次往返 |
 | `GetAsync<T>(key)` | 按主键查询 |
-| `GetAllAsync<T>()` | 全表查询 |
-| `BulkInsertAsync(items)` | PG Binary COPY / SQLite+MySQL 多值 INSERT（参数上限自动钳制） |
-| `BulkUpdateAsync(items)` | 单事务批量更新 |
-| `BulkDeleteAsync<T>(keys)` | 500/批 IN 子句 |
+| `GetAllAsync<T>()` | 全表查询（带默认过滤） |
+| `BulkInsertAsync(items, batchSize?)` | 批量插入。PG 走 `NpgsqlBinaryImporter`（Binary COPY）；SQLite/MySQL 走多值 INSERT，参数上限自动钳制 |
+| `BulkUpdateAsync(items)` | 单事务内批量更新，支持乐观锁 |
+| `BulkDeleteAsync<T>(keys)` | 按主键批量删除，500/批 IN 子句 |
 | `BulkMergeAsync(items)` | 逐项 UPSERT |
-| `SeedAsync(items)` | 非默认稳定主键，事务内 Upsert 幂等 |
+| `SeedAsync(items)` | 种子数据幂等插入，事务内逐项 Upsert |
+| `QueryAsync<T>(FormattableString)` | 直查物化 `List<T>`（走源生成 RowFactory） |
+| `QueryAsyncEnumerable<T>(FormattableString)` | 流式 `IAsyncEnumerable<T>`，逐行读取不物化全表 |
+| `ScalarAsync<T>(FormattableString)` | 标量查询 |
+| `ExecuteAsync(FormattableString)` → `int` | 直执 DDL/DML |
+| `CountAsync<T>(where?)` → `long` | 计数（自动附加软删除过滤） |
+| `SumAsync<T>(expr)` → `decimal` | 求和 |
+| `MaxAsync<T, TValue>(expr)` → `TValue?` | 最大值 |
+| `AvgAsync<T>(expr)` → `double` | 平均值 |
+| `StoredProc("name")` | 存储过程入口，链式 `WithParam().QueryAsync<T>()` |
 
 ### 事务与保存点
 
@@ -244,27 +322,34 @@ await tran.CommitAsync();
 
 ### 弹性与可靠性
 
+每个 `DataSession` 内部持有 `ResilienceExecutor`（~100 行，零外部依赖）。所有数据库操作默认不经重试/熔断——通过 `ExecuteWithResilience()` 显式包装幂等操作。
+
 | 特性 | 说明 |
 |------|------|
-| 重试 | `WithRetry(maxRetries: 3)` — 指数退避（100→200→400ms），仅重试瞬时数据库故障和内部命令超时 |
-| 熔断器 | `WithCircuitBreaker(threshold: 5, resetAfter: 30s)` — 连续失败 N 次后快速失败，半开探针验证恢复，generation 防陈旧 |
-| 超时 | 每命令通过 `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter` 控制 |
-| 异常保留 | cleanup 失败挂 `Exception.Data`，不替换原始失败，审计可追溯 |
+| **重试** | `WithRetry(maxRetries: 3)` 配置重试次数。退避策略默认指数递增（100ms→200ms→400ms），可通过 `RetryBackoff` 委托自定义。仅重试 Provider 判定的瞬时故障（`DbException.IsTransient`）和内部命令超时；调用方取消与确定性异常（唯一键冲突等）不重试 |
+| **熔断器** | `WithCircuitBreaker(threshold: 5, resetAfter: 30s)`。连续失败 N 次后进入 Open 状态（快速失败抛 `CircuitBreakerOpenException`），`resetAfter` 后进入 Half-Open（允许一个探针请求验证恢复），成功则 Close，失败则回到 Open。generation 机制防止陈旧半开状态在并发下重复放行 |
+| **超时** | `WithTimeout(TimeSpan)` 或 `WithCommandTimeout(seconds)`。通过 `CancellationTokenSource.CreateLinkedTokenSource(ct) + CancelAfter(timeout)` 控制。超时内未完成的操作抛 `TimeoutException`，超时后服务器可能已完成但客户端不知——幂等操作才适合重试 |
+| **事务编排** | `WithTransaction(async callback)` 函数式事务。自动 Begin/Commit/Rollback，callback 内顺序使用同一 DataSession。支持事务内任意步数的 Insert/Update/BulkInsert/Execute。`BeginTransactionAsync()` + `UseTransaction(tran)` 提供显式模式 |
+| **保存点** | `SavepointAsync(tran, "sp")` / `RollbackToAsync(tran, "sp")`，事务内部分回滚 |
+| **异常保留** | cleanup 失败挂 `Exception.Data` 不替换原始失败。rollback/probe 清理等辅助操作的异常均通过 Data 字典附加，审计可追溯 |
 
 ### 横切关注点
 
-| 特性 | 注解/API | 说明 |
-|------|---------|------|
-| 软删除 | `[SoftDelete]` + `deleted_at` | 查询自动过滤，`IgnoreFilters()` 显式包含 |
-| 多租户 | `[TenantAware]` + `tenant_id` | 查询自动隔离，`WithTenant(id)` 切换 |
-| 乐观锁 | `[ConcurrencyCheck]` | Update 自动检查 version 匹配，不匹配抛 `ConcurrencyConflictException` |
-| 拦截器 | `IQueryInterceptor` | OnBefore/OnAfter/OnError 三阶段 + 优先级排序 |
-| 可观测性 | `WithTracing()` / `WithMetrics()` | BCL ActivitySource + Meter，不记录 SQL/参数/连接串，AOT 安全 |
-| SQL 文件 | `[SqlFile("path.sql")]` | 编译时读取 .sql 嵌入为 `const string`，支持 Provider 条件分支 |
-| SQL 模板 | `[SqlTemplate("name")]` | 提取 `FormattableString` 为静态常量 |
-| 值转换器 | `[Converter(typeof(T))]` | AOT 安全，源生成调用代码 |
-| 查询缓存 | `WithCache(key, TTL)` | 有界 LRU + OTel 指标，对齐 .NET 11 MemoryCache 口径 |
-| 读写分离 | `ForRead()` / `ForWrite()` | ReadConnectionString 配置后自动路由 |
+| 特性 | 实现 | 说明 |
+|------|------|------|
+| **软删除** | `[SoftDelete]` + `deleted_at` 列 | 查询自动过滤 `WHERE deleted_at IS NULL`，`IgnoreFilters()` 取消过滤，Delete 执行 UPDATE 而非物理删除 |
+| **多租户** | `[TenantAware]` + `tenant_id` 列 | 查询自动附加 `WHERE tenant_id = @__tenant0`，`WithTenant(id)` 切换租户，`IgnoreFilters()` 取消 |
+| **乐观锁** | `[ConcurrencyCheck]` | Update 自动生成 `WHERE id = @id AND version = @oldVersion`，递增 `SET version = version + 1`。0 行影响抛 `ConcurrencyConflictException` |
+| **拦截器** | `IQueryInterceptor` | OnBefore/OnAfter/OnError 三阶段钩子。优先级排序，抛出异常跳过后续拦截器。典型用途：审计日志、全局过滤桥接、性能采样 |
+| **可观测性** | `WithTracing()` / `WithMetrics()` | BCL `ActivitySource` + `Meter`，零第三方依赖。不记录 SQL/参数/连接串/调用方路径。BoundedQueryCache 暴露 OTel 标准口径：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions` 等 |
+| **SQL 文件嵌入** | `[SqlFile("path.sql")]` | 源生成器编译时读取 .sql 文件并嵌入为 `const string`。支持 Provider 条件分支（`-- @pg` / `-- @mysql` / `-- @sqlite` / `-- @all`） |
+| **SQL 模板** | `[SqlTemplate("name")]` | 提取方法体内的 `FormattableString` 为静态常量，编译时校验格式 |
+| **值转换器** | `[Converter(typeof(T))]` | AOT 安全：源生成器直接生成 `new Converter().ToProvider(entity.Prop)` 调用代码，不经反射 |
+| **查询缓存** | `WithCache(key, TTL)` | `BoundedQueryCache` 有界 LRU（默认 1024 条）+ TTL 过期。命中返回快照副本隔离，ConcurrentDictionary 无锁读。可通过 `DbOptions.QueryCache` 注入自定义 `IQueryCache` 实现 |
+| **读写分离** | `ForRead()` / `ForWrite()` | 配置 `ReadConnectionString` 后生效。读路由在执行时打开独立连接并自动释放，写路由和事务强制走主库 |
+| **直接 SQL** | `QueryAsync<T>(sql)` / `ExecuteAsync(sql)` | 绕过 QueryBuilder，直接传 `FormattableString`。RowFactory 物化、参数绑定仍走编译时生成 |
+| **连接池** | `DbOptions.WithPool()` | PG/MySQL 生效（配置同名 pool 参数），SQLite 不支持池配置时显式拒绝 |
+| **PostgreSQL NOTIFY** | `PgNotificationListener` | 异步通知监听：瞬态断线自动重连 + 重新 LISTEN，半开探针验证，订阅者异常隔离。`NotifyAsync()` 参数化发送 |
 
 ### PostgreSQL 专有
 
