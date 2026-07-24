@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 质量脚本的固定回归夹具。验证成功与故障输入的退出码和计数。
+# AI 系统脚本在 .ai/scripts/（本地工具，不入仓库）。CI 上不存在时自动跳过。
 
 set -euo pipefail
 
@@ -8,6 +9,14 @@ cd "$ROOT"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+# AI 脚本路径（本地存在时测试，不存在时跳过）
+AI_SCRIPTS="$ROOT/.ai/scripts"
+skip_ai() { [ ! -d "$AI_SCRIPTS" ]; }
+
+if skip_ai; then
+    printf 'SKIP: .ai/scripts/ not found (CI mode)\n'
+fi
+
 printf '─── verify-action-items ───\n'
 printf '# fixture\n`README.md`\n' > "$TMP/action-pass.md"
 printf '# fixture\n`missing-file.yml`\n' > "$TMP/action-fail-file.md"
@@ -15,8 +24,8 @@ missing_symbol='PalOrmDefinitelyMissing'
 missing_symbol+='Symbol'
 printf '# fixture\n`%s`\n' "$missing_symbol" > "$TMP/action-fail-symbol.md"
 
-bash scripts/verify-action-items.sh "$TMP/action-pass.md" > "$TMP/action-pass.log"
-if bash scripts/verify-action-items.sh "$TMP/action-fail-file.md" > "$TMP/action-fail-file.log"; then
+bash .ai/scripts/verify-action-items.sh "$TMP/action-pass.md" > "$TMP/action-pass.log"
+if bash .ai/scripts/verify-action-items.sh "$TMP/action-fail-file.md" > "$TMP/action-fail-file.log"; then
     printf 'FAIL 缺失文件未导致失败\n'
     exit 1
 fi
@@ -24,7 +33,7 @@ if ! grep -q '缺失：1' "$TMP/action-fail-file.log"; then
     printf 'FAIL 缺失文件计数错误\n'
     exit 1
 fi
-if bash scripts/verify-action-items.sh "$TMP/action-fail-symbol.md" > "$TMP/action-fail-symbol.log"; then
+if bash .ai/scripts/verify-action-items.sh "$TMP/action-fail-symbol.md" > "$TMP/action-fail-symbol.log"; then
     printf 'FAIL 缺失标识符未导致失败\n'
     exit 1
 fi
@@ -50,7 +59,7 @@ fi
 printf 'PASS stub-check\n'
 
 printf '\n─── review-snapshot ───\n'
-bash scripts/review-snapshot.sh --no-build > "$TMP/snapshot.log"
+bash .ai/scripts/review-snapshot.sh --no-build > "$TMP/snapshot.log"
 if ! grep -q '构建状态' "$TMP/snapshot.log" || ! grep -q '已跳过（--no-build）' "$TMP/snapshot.log"; then
     printf 'FAIL 快照无构建模式输出不完整\n'
     exit 1
@@ -71,7 +80,7 @@ git -C "$TMP/gate" init -q
 git -C "$TMP/gate" add .
 (
     cd "$TMP/gate"
-    bash "$ROOT/scripts/gate-check.sh" > "$TMP/gate-pass.log"
+    bash "$ROOT/.ai/scripts/gate-check.sh" > "$TMP/gate-pass.log"
 )
 if ! grep -q 'PASS G12: 禁止公开 static 可写状态' "$TMP/gate-pass.log"; then
     printf 'FAIL G12 干净夹具未通过\n'
@@ -82,7 +91,7 @@ printf 'public static class Broken { public static int Value\n{\n    get;\n    s
 git -C "$TMP/gate" add .
 if (
     cd "$TMP/gate"
-    bash "$ROOT/scripts/gate-check.sh" > "$TMP/gate-fail.log"
+    bash "$ROOT/.ai/scripts/gate-check.sh" > "$TMP/gate-fail.log"
 ); then
     printf 'FAIL G12 多行可写属性未导致失败\n'
     exit 1
@@ -96,7 +105,7 @@ printf 'using System.Collections.Generic; public static class Broken { public st
 git -C "$TMP/gate" add .
 if (
     cd "$TMP/gate"
-    bash "$ROOT/scripts/gate-check.sh" > "$TMP/gate-collection-fail.log"
+    bash "$ROOT/.ai/scripts/gate-check.sh" > "$TMP/gate-collection-fail.log"
 ); then
     printf 'FAIL G12 可变集合属性未导致失败\n'
     exit 1
@@ -109,7 +118,7 @@ rm "$TMP/gate/src/Fixture/Broken.cs"
 git -C "$TMP/gate" add -A
 (
     cd "$TMP/gate"
-    bash "$ROOT/scripts/gate-check.sh" > "$TMP/gate-recovered.log"
+    bash "$ROOT/.ai/scripts/gate-check.sh" > "$TMP/gate-recovered.log"
 )
 if ! grep -q 'PASS G12: 禁止公开 static 可写状态' "$TMP/gate-recovered.log"; then
     printf 'FAIL G12 移除违规后未恢复\n'
@@ -118,11 +127,11 @@ fi
 printf 'PASS gate-check G12 故障与恢复\n'
 
 printf '\n─── verify-phase ───\n'
-if bash scripts/verify-phase.sh invalid > "$TMP/phase.log" 2>&1; then
+if bash .ai/scripts/verify-phase.sh invalid > "$TMP/phase.log" 2>&1; then
     printf 'FAIL 非法阶段参数未导致失败\n'
     exit 1
 fi
-if ! grep -q '用法：bash scripts/verify-phase.sh <phase-number>' "$TMP/phase.log"; then
+if ! grep -q '用法：bash .ai/scripts/verify-phase.sh <phase-number>' "$TMP/phase.log"; then
     printf 'FAIL 非法阶段参数输出不完整\n'
     exit 1
 fi
@@ -147,7 +156,7 @@ fi
 printf 'PASS SDK 固定与 CI 一致性\n'
 
 printf '\n─── doc-consistency ───\n'
-if bash scripts/doc-consistency-check.sh > "$TMP/doc-pass.log"; then
+if bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-pass.log"; then
     printf 'PASS doc-consistency 8/8\n'
 else
     printf 'FAIL doc-consistency 未通过\n'
@@ -161,13 +170,13 @@ current_core=$(grep -oP 'Core\.Tests\s*\|\s*\K\d+/\d+' docs/架构设计.md)
 broken="71/71"
 [ "$current_core" = "$broken" ] && broken="72/72"
 sed -i "s|${current_core}|${broken}|g" docs/架构设计.md
-if bash scripts/doc-consistency-check.sh > "$TMP/doc-fail.log" 2>&1; then
+if bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-fail.log" 2>&1; then
     printf 'FAIL doc-consistency 过期计数未导致失败\n'
     exit 1
 fi
 cp "$TMP/pristine-arch.md" docs/架构设计.md
 trap - EXIT
-if ! bash scripts/doc-consistency-check.sh > "$TMP/doc-recover.log"; then
+if ! bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-recover.log"; then
     printf 'FAIL doc-consistency 恢复后未通过\n'
     exit 1
 fi
