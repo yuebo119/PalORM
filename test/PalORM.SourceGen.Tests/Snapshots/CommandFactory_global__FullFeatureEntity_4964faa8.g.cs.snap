@@ -30,6 +30,19 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 7); p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
+    internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::FullFeatureEntity entity, int paramOffset)
+    {
+        parameters[paramOffset + 0].Value = (object)entity.Code;
+        parameters[paramOffset + 1].Value = (object)entity.Kind;
+        parameters[paramOffset + 2].Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId);
+        parameters[paramOffset + 3].Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
+        parameters[paramOffset + 4].Value = (object)entity.RawJson;
+        parameters[paramOffset + 5].Value = (object)entity.UniqueToken;
+        parameters[paramOffset + 6].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
+        parameters[paramOffset + 7].Value = (object)entity.TenantId;
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::FullFeatureEntity entity)
     {

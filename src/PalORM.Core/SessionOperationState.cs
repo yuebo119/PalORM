@@ -64,7 +64,8 @@ internal sealed class SessionOperationState
                     "DataSession already has an active database operation.");
             }
 
-            _activeOperationOwner = new object();
+            // v4.6：用 this 替代 new object() -- 常驻引用，第2次 AsyncLocal.Value=this 与旧值相等时 EC 短路不 COW
+            _activeOperationOwner = this;
             _currentOperationOwner.Value = _activeOperationOwner;
             _isActive = true;
             // v4.5：不创建 TCS -- 仅在 Dispose/WaitForActive 需要等待时才延迟创建
@@ -93,7 +94,8 @@ internal sealed class SessionOperationState
                     "DataSession already has an active database operation.");
             }
 
-            _activeOperationOwner = new object();
+            // v4.6：用 this 替代 new object() -- 常驻引用，第2次 AsyncLocal.Value=this 与旧值相等时 EC 短路不 COW
+            _activeOperationOwner = this;
             _currentOperationOwner.Value = _activeOperationOwner;
             _isActive = true;
             _activeOperation = null;
@@ -234,8 +236,9 @@ internal sealed class SessionOperationState
                 _activeTransaction = null;
             }
         }
-        if (ReferenceEquals(_currentTransactionOwner.Value, owner))
-            _currentTransactionOwner.Value = null;
+        // v4.6：不清 _currentTransactionOwner.Value -- _transactionOwner=null 已让所有读取方判定 false
+        // stale AsyncLocal 值永不被咨询（下次 EnterTransactionFlow 先查 _transactionOwner is not null）
+        // 省一次 EC 拷贝 ~300B/事务收口
         completion?.TrySetResult();
     }
 

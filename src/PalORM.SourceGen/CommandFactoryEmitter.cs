@@ -50,6 +50,13 @@ internal static class CommandFactoryEmitter
         GenerateBindInsertBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // v4.6：参数复用路径 -- 接收预分配的 DbParameter[]，只改 Value，不 CreateParameter/Add
+        sb.AppendLine($"    /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>");
+        sb.AppendLine($"    internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, {model.EntityTypeName} entity, int paramOffset)");
+        sb.AppendLine("    {");
+        GenerateBindValuesBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>");
         sb.AppendLine($"    internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity)");
         sb.AppendLine("    {");
@@ -351,6 +358,19 @@ internal static class CommandFactoryEmitter
             // withOffset=true 时生成 $\"@p{paramOffset + N}\"（插值表达式），false 时生成 \"@pN\"（字面量）
             string paramName = withOffset ? $"global::PalORM.ParameterNameCache.GetName(paramOffset + {pi})" : $"\"@p{pi}\"";
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            pi++;
+        }
+    }
+
+    /// <summary>v4.6：仅设置预分配参数的 Value（无 CreateParameter/Add/ParameterName），用于跨批参数复用。</summary>
+    private static void GenerateBindValuesBody(TableModel model, StringBuilder sb)
+    {
+        int pi = 0;
+        foreach (var col in model.Columns.AsSpan())
+        {
+            if (!col.IsInsertable) continue;
+            string valueExpr = GetParameterValueExpression(col);
+            sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
     }

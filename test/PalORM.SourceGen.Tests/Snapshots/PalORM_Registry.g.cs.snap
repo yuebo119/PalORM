@@ -184,6 +184,7 @@ internal static class PalORM_RegistryInitializer
                     CommandFactory_global__AllTypesEntity_7f6c8145.InsertWithLastInsertIdSql),
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__AllTypesEntity_7f6c8145.BindInsertToBatch(cmd, (global::AllTypesEntity)obj, off),
+                    (parameters, obj, off) => CommandFactory_global__AllTypesEntity_7f6c8145.BindInsertValues(parameters, (global::AllTypesEntity)obj, off),
                     (cmd, obj) => CommandFactory_global__AllTypesEntity_7f6c8145.BindUpsert(cmd, (global::AllTypesEntity)obj),
                     (cmd, obj) => CommandFactory_global__AllTypesEntity_7f6c8145.BindUpdate(cmd, (global::AllTypesEntity)obj),
                     RowFactory_global__AllTypesEntity_7f6c8145.Read),
@@ -203,6 +204,7 @@ internal static class PalORM_RegistryInitializer
                     CommandFactory_global__FullFeatureEntity_4964faa8.InsertWithLastInsertIdSql),
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindInsertToBatch(cmd, (global::FullFeatureEntity)obj, off),
+                    (parameters, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindInsertValues(parameters, (global::FullFeatureEntity)obj, off),
                     (cmd, obj) => CommandFactory_global__FullFeatureEntity_4964faa8.BindUpsert(cmd, (global::FullFeatureEntity)obj),
                     (cmd, obj) => CommandFactory_global__FullFeatureEntity_4964faa8.BindUpdate(cmd, (global::FullFeatureEntity)obj),
                     RowFactory_global__FullFeatureEntity_4964faa8.Read),
@@ -222,6 +224,7 @@ internal static class PalORM_RegistryInitializer
                     CommandFactory_global__ReservedWordEntity_c143a9c9.InsertWithLastInsertIdSql),
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindInsertToBatch(cmd, (global::ReservedWordEntity)obj, off),
+                    (parameters, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindInsertValues(parameters, (global::ReservedWordEntity)obj, off),
                     (cmd, obj) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindUpsert(cmd, (global::ReservedWordEntity)obj),
                     (cmd, obj) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindUpdate(cmd, (global::ReservedWordEntity)obj),
                     RowFactory_global__ReservedWordEntity_c143a9c9.Read),
@@ -241,6 +244,7 @@ internal static class PalORM_RegistryInitializer
                     CommandFactory_global__InheritedEntity_3f5411cb.InsertWithLastInsertIdSql),
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindInsertToBatch(cmd, (global::InheritedEntity)obj, off),
+                    (parameters, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindInsertValues(parameters, (global::InheritedEntity)obj, off),
                     (cmd, obj) => CommandFactory_global__InheritedEntity_3f5411cb.BindUpsert(cmd, (global::InheritedEntity)obj),
                     (cmd, obj) => CommandFactory_global__InheritedEntity_3f5411cb.BindUpdate(cmd, (global::InheritedEntity)obj),
                     RowFactory_global__InheritedEntity_3f5411cb.Read),

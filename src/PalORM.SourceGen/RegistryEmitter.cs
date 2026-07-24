@@ -101,6 +101,7 @@ internal static class RegistryEmitter
             sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertWithLastInsertIdSql),");
             sb.AppendLine($"                new global::PalORM.CrudBindings(");
             sb.AppendLine($"                    (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
+            sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(parameters, ({m.EntityTypeName})obj, off),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read),");

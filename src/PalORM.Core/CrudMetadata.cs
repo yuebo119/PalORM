@@ -8,6 +8,8 @@ public readonly struct CrudBindings
 {
     /// <summary>Insert 参数绑定委托（支持批量 paramOffset 偏移）。</summary>
     public readonly Action<DbCommand, object, int> BindInsert;
+    /// <summary>v4.6：仅设置预分配参数 Value 的委托（跨批参数复用路径）。</summary>
+    public readonly Action<DbParameter[], object, int>? BindInsertValues;
     /// <summary>Upsert 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpsert;
     /// <summary>Update 参数绑定委托。</summary>
@@ -18,11 +20,13 @@ public readonly struct CrudBindings
     /// <summary>构造 CRUD 委托聚合。</summary>
     public CrudBindings(
         Action<DbCommand, object, int> bindInsert,
+        Action<DbParameter[], object, int>? bindInsertValues,
         Action<DbCommand, object> bindUpsert,
         Action<DbCommand, object> bindUpdate,
         object rowFactory)
     {
         BindInsert = bindInsert;
+        BindInsertValues = bindInsertValues;
         BindUpsert = bindUpsert;
         BindUpdate = bindUpdate;
         RowFactory = rowFactory;
@@ -54,6 +58,8 @@ public readonly struct CrudMetadata
     public readonly CommandSqlSet Sqls;
     /// <summary>Insert 参数绑定委托（支持批量 paramOffset 偏移）。</summary>
     public readonly Action<DbCommand, object, int> BindInsert;
+    /// <summary>v4.6：仅设置预分配参数 Value 的委托（跨批参数复用路径）。</summary>
+    public readonly Action<DbParameter[], object, int>? BindInsertValues;
     /// <summary>Upsert 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpsert;
     /// <summary>Update 参数绑定委托。</summary>
@@ -89,6 +95,7 @@ public readonly struct CrudMetadata
     {
         Sqls = sqls;
         BindInsert = bindings.BindInsert;
+        BindInsertValues = bindings.BindInsertValues;
         BindUpsert = bindings.BindUpsert;
         BindUpdate = bindings.BindUpdate;
         RowFactory = bindings.RowFactory;
@@ -102,7 +109,7 @@ public readonly struct CrudMetadata
 
     internal CrudMetadata Copy()
         => new(Sqls,
-            new CrudBindings(BindInsert, BindUpsert, BindUpdate, RowFactory),
+            new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory),
             new CrudColumns(InsertColumns, UpsertColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }
