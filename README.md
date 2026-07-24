@@ -2,7 +2,7 @@
 <p align="center"><strong>面向 Native AOT 的 .NET 11 微 ORM</strong></p>
 <p align="center">
   <img src="https://img.shields.io/badge/.NET-11-512BD4?logo=dotnet">
-  <img src="https://img.shields.io/badge/tests-425%2F425-success">
+  <img src="https://img.shields.io/badge/tests-424%2F424-success">
   <img src="https://img.shields.io/badge/AOT-verified-success">
   <img src="https://img.shields.io/badge/IL%20suppressions-0-success">
   <img src="https://img.shields.io/badge/license-AGPL%20v3-blue">
@@ -221,13 +221,13 @@ public partial class User
 | `[ConcurrencyCheck]` | 乐观锁标记，Update 时自动检查版本递增 |
 | `[IgnoreOnInsert]` | 插入时跳过该列（如数据库默认值列） |
 | `[Computed("SQL")]` | 计算列，`GENERATED ALWAYS AS ... STORED` |
-| `[DefaultValue(x)]` | 数据库默认值（DDL 生成） |
+| `[DefaultValue("SQL")]` | 数据库默认值表达式（DDL 生成，当前未实现） |
 | `[SensitiveData]` | 标记敏感字段（日志/审计脱敏提示） |
 | `[Converter(typeof(T))]` | 自定义值转换器（AOT 安全，编译时生成调用代码） |
 | `[SoftDelete]` | 软删除实体，查询自动附加 `WHERE deleted_at IS NULL` |
 | `[TenantAware]` | 多租户实体，查询自动附加 `WHERE tenant_id = @current` |
 | `[OwnedJson(typeof(Ctx))]` | JSON 序列化列（需 `JsonSerializerContext`，AOT 安全） |
-| `[Index(name, cols, unique)]` | 复合索引声明 |
+| `[Index(name, cols, Unique = true)]` | 复合索引声明 |
 | `[Unique]` | 唯一约束 |
 | `[SqlFile("path.sql")]` | 编译时嵌入 .sql 文件为 `const string` |
 | `[SqlTemplate("name")]` | 提取 `FormattableString` 为静态常量 |
@@ -442,10 +442,12 @@ var result = await db.StoredProc("GetUsersByAge")
     .WithOutputParam<int>("total")
     .QueryAsync<User>();
 
-int total = db.StoredProc("GetUsersByAge")
+// 读取输出参数需先执行
+var proc = db.StoredProc("GetUsersByAge")
     .WithParam("minAge", 18)
-    .WithOutputParam<int>("total")
-    .GetOutputValue<int>("total");
+    .WithOutputParam<int>("total");
+await proc.ExecuteAsync();
+int total = proc.GetOutputValue<int>("total");
 ```
 
 ### 聚合查询
@@ -592,6 +594,8 @@ AOT 部署前提：
 
 v4.6 基准测试（BenchmarkDotNet v0.14.0 · SQLite 内存模式 · 10K 行种子 · `launchCount=3, warmupCount=5, iterationCount=10`）：
 
+> 数据来自独立基准运行。BulkInsert 分配已优于 Dapper 62%。完整报告见 [BENCHMARKS.md](bench/PalORM.Benchmarks/BENCHMARKS.md)。
+
 ### CRUD
 
 | 操作 | PalORM | Dapper | RepoDb | PalORM vs Dapper |
@@ -635,7 +639,7 @@ dotnet run --project test/PalORM.Integration.Tests -- \
   --treenode-filter "/*/*/*/*[Category!=ExternalDatabase]"   # 160 用例（本地）
 ```
 
-全仓库 **425 项**测试（Core 161 + SourceGen 104 + Integration 160）。外部 DB 依赖测试（PG/MySQL）标注 `Category=ExternalDatabase`，不计入 badge 总数。CI 请校验输出含 `Test run summary` 行，无摘要视为未运行。
+全仓库 **424 项**测试。外部 DB 依赖测试（PG/MySQL）标注 `Category=ExternalDatabase`，不计入 badge 总数。CI 请校验输出含 `Test run summary` 行，无摘要视为未运行。
 
 ### 测试环境配置
 
