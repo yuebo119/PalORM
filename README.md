@@ -10,7 +10,7 @@
 
 PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运行时生产路径禁止反射和 IL/AOT 警告抑制。三 Provider（SQLite/PostgreSQL/MySQL）完整 CRUD、OwnedJson、并发、跨程序集与 NuGet consumer 原生运行均已验证——PG/MySQL 经本机 Docker（CI 同配置服务容器）实测，远端 CI 待 push 触发。
 
-> v3.0.0 是 breaking release：移除了 ForRead/ForWrite/CrudMetadata 旧 ctor/ThenInclude 单参重载。
+> v4.6.0 是极致性能版本：25+ 项分配优化将 BulkInsert 分配从 10.66MB 降至 4.97MB（-53%），CRUD 分配降低 10-18%。详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
