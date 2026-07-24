@@ -12,6 +12,9 @@ public struct QueryBuilder<T> where T : class, new()
 {
     // v4.1 极致降内存：引用 ParameterNameCache 消除每次 $"@p{N}" 插值分配
     internal static string GetParameterName(int index) => ParameterNameCache.GetName(index);
+
+    // v4.6：HasClause 位掩码 -- O(1) 判断子句存在，消除 List.Exists 的 O(n) 扫描 + Predicate 委托分配
+    private int _clauseBitmask;
     internal DbConnection _conn;
     internal readonly Func<DbConnection>? _readConnFactory;
     internal readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
@@ -494,7 +497,9 @@ public struct QueryBuilder<T> where T : class, new()
             _metrics = _metrics,
             _splitQuery = _splitQuery,
             _useReadRoute = _useReadRoute,
-            _transaction = _transaction
+            _transaction = _transaction,
+            // v4.6：同步位掩码到克隆体
+            _clauseBitmask = _clauseBitmask
         };
         foreach (QueryClause clause in _clauses)
         {
@@ -699,11 +704,14 @@ public struct QueryBuilder<T> where T : class, new()
         _parameters = new List<DbParameter>(_parameters);
         IReadOnlyList<DbParameter> ownedParameters = parameters ?? Array.Empty<DbParameter>();
         _clauses.Add(new QueryClause(kind, sql, ownedParameters));
+        // v4.6：同步设置位掩码
+        _clauseBitmask |= 1 << (int)kind;
         foreach (DbParameter parameter in ownedParameters) _parameters.Add(parameter);
     }
 
+    // v4.6：位掩码 O(1) 判断，消除 List.Exists 的 O(n) 扫描 + Predicate 委托分配
     private bool HasClause(QueryClauseKind kind)
-        => _clauses.Exists(clause => clause.Kind == kind);
+        => (_clauseBitmask & (1 << (int)kind)) != 0;
 
     /// <summary>统计"用户实质子句"数——排除 Comment（Tag/TagWithCaller）与 DefaultFilter
     /// （From&lt;T&gt;() 注入的软删/租户过滤）。QueryMultipleAsync 误用守卫据此判断，
