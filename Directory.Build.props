@@ -24,7 +24,8 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
-    <!-- NU1507: 中央包管理多源警告（NuGet.Config 单源，误报） -->
+    <!-- NU1507: 中央包管理多源警告（NuGet.Config 双源 nuget.org + dotnet-tools，
+         前者承载稳定包，后者承载 .NET SDK 预览版；不使用 packageSourceMapping 故触发 NU1507） -->
     <NoWarn>$(NoWarn);NU1507</NoWarn>
 
     <!-- NuGet -->
@@ -61,7 +62,9 @@
     <IsTrimmable>false</IsTrimmable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- CS1591: 基准代码非公共 API 面，不强制 XML 文档（src/ 全域强制） -->
-    <NoWarn>$(NoWarn);CA2007;CA1724;CA1822;IDE1006;IDE0060;CS1591</NoWarn>
+    <!-- NETSDK1206: SQLitePCLRaw alpine RID 资产缺失——Benchmarks 仅本地跑性能对比，
+         不发布 alpine 运行时，此警告无意义（与 src/ 发布库不同） -->
+    <NoWarn>$(NoWarn);CA2007;CA1724;CA1822;IDE1006;IDE0060;CS1591;NETSDK1206</NoWarn>
     <Optimize>true</Optimize>
   </PropertyGroup>
   <!-- 质量分析器（v3.0 引入）：
