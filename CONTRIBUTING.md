@@ -45,7 +45,7 @@ source scripts/set-test-env.sh
 - 测试用凭据不用 `Password=xxx`——用字符数组构造或环境变量
 - 单行测试方法拆为多行（≤180 字符/行）
 
-详见 `.ai/lessons.md` 和 `docs/编码规范.md`。
+详见 `docs/编码规范.md`。
 
 ## PR 流程
 
