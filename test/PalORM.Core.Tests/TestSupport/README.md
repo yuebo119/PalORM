@@ -11,4 +11,4 @@
 > - `MockTransactions.cs` — FailingDbTransaction / CountingTransaction
 > - `FakeConnections.cs` — TestDbConnection / FailureInjectionConnection
 >
-> **规范参考**：`.ai/lessons.md` 的「测试代码规范」章节。
+> **规范参考**：`docs/编码规范.md` 第 9 节「测试与 CI」。
