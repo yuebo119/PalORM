@@ -1,105 +1,28 @@
 <h1 align="center">PalORM</h1>
-<p align="center"><strong>面向严格 Native AOT 的 .NET 微 ORM</strong></p>
+<p align="center"><strong>Native AOT Micro-ORM for .NET 11</strong></p>
 <p align="center">
   <img src="https://img.shields.io/badge/.NET-11-512BD4?logo=dotnet">
   <img src="https://img.shields.io/badge/tests-425%2F425-success">
-  <img src="https://img.shields.io/badge/AOT-3%20providers%20verified-success">
+  <img src="https://img.shields.io/badge/AOT-verified-success">
   <img src="https://img.shields.io/badge/IL%20suppressions-0-success">
   <img src="https://img.shields.io/badge/license-AGPL%20v3-blue">
 </p>
 
-PalORM 通过 Roslyn 源生成器在**编译时**生成数据访问代码。运行时生产路径禁止反射和 IL/AOT 警告抑制。三 Provider（SQLite/PostgreSQL/MySQL）完整 CRUD、OwnedJson、并发、跨程序集与 NuGet consumer 原生运行均已验证——PG/MySQL 经本机 Docker（CI 同配置服务容器）实测，远端 CI 待 push 触发。
-
-> v4.6.0 是极致性能版本：25+ 项分配优化将 BulkInsert 分配从 10.66MB 降至 4.97MB（-53%），CRUD 分配降低 10-18%。详见 [CHANGELOG.md](CHANGELOG.md)。
+Compile-time code generation via Roslyn source generators. No reflection, no IL/AOT warning suppression. Three providers (SQLite / PostgreSQL / MySQL) with full CRUD, OwnedJson, optimistic concurrency, cross-assembly, and NuGet consumer Native AOT verified.
 
 ---
 
-## 主要特性
+## Installation
 
-### 核心架构
-
-| 特性 | 说明 |
-|------|------|
-| **编译时安全** | `FormattableString` 参数化 — 编译时提取参数值，杜绝 SQL 注入 |
-| **原子元数据注册** | SourceGen 生成 `RegistryFragment`；运行时一次发布不可变快照，外部只读 |
-| **struct QueryBuilder** | 值类型 — `From<T>()` 返回 stack-allocated struct，copy-on-write 保证条件隔离 |
-| **真 Native AOT** | 零 IL 抑制 — 三 Provider 原生二进制运行通过（`IsAotCompatible` + `IsTrimmable` + `PublishAot`） |
-| **static abstract Provider** | C# 11 `IDbProvider` 接口编译时分发——零虚调用开销，JIT 特化 |
-| **最小依赖** | Core 零第三方 NuGet：BCL + ADO.NET + `Microsoft.Extensions.Logging.Abstractions`；可观测性基于 BCL `ActivitySource` / `Meter` |
-
-### 编译时诊断（21 条规则）
-
-> PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。实际编号为 001-005 + 008-022，共 21 条。
-
-| 特性 | 说明 |
-|------|------|
-| **PALORM001-005** | 实体级诊断：缺少主键 / 列名不匹配 / FK 引用不存在 / FK 缺 OnDelete / N+1 查询检测 |
-| **PALORM008-012** | OwnedJson / 表声明 / Schema 限定 / 并发令牌类型 |
-| **PALORM013-019** | Schema 列校验 / 软删 / 租户 / 值映射 / 注解不生效 / 索引声明 |
-| **PALORM020-022** | 索引重复 / 列名唯一性 / Key 声明合法性（AutoIncrement 类型/init-only/nullable） |
-
-### 查询能力
-
-| 特性 | 说明 |
-|------|------|
-| **链式 DSL** | Where / OrWhere / OrderBy / ThenBy / Take / Skip / Select / GroupBy / Having |
-| **JOIN** | InnerJoin / LeftJoin / RightJoin / Include / ThenInclude（多级导航） |
-| **IN 操作** | WhereIn / WhereNotIn（参数上限自动钳制） |
-| **CTE** | `With("cte", $"SELECT ...")` 公用表表达式 |
-| **窗口函数** | `UnsafeWindowOver("ROW_NUMBER()", "PARTITION BY ...")` |
-| **锁** | `ForUpdate()` / `ForShare()`（SELECT ... FOR UPDATE/SHARE） |
-| **缓存** | `WithCache("key", TTL)` — 有界 LRU 缓存 + 快照副本隔离 |
-| **预编译** | `AsPrepared()` — `DbCommand.PrepareAsync` 预编译参数化命令 |
-| **DryRun** | `AsDryRun()` — 生成 SQL + 参数预览不执行 |
-| **读写分离** | `ForRead()` 路由到只读副本连接（独立 ConnectionLease） |
-
-### 写入能力
-
-| 特性 | 说明 |
-|------|------|
-| **CRUD** | Insert / Update / Delete / Save（UPSERT）/ Get / GetAll |
-| **批量操作** | BulkInsert / BulkDelete / BulkUpdate / BulkMerge / SeedAsync |
-| **PG Binary COPY** | `NpgsqlBinaryImporter` 零往返批量写入 |
-| **多值 INSERT** | SQLite/MySQL 共享骨架（参数上限自动钳制：SQLite 999 / MySQL 65535） |
-| **UPSERT 单次往返** | PG/SQLite `ON CONFLICT DO UPDATE` / MySQL `ON DUPLICATE KEY UPDATE` |
-| **RETURNING** | PG/SQLite `INSERT ... RETURNING` 单次往返物化完整行 |
-
-### 弹性与可靠性
-
-| 特性 | 说明 |
-|------|------|
-| **重试** | 可配置次数 + 指数退避（100ms→200ms→400ms） |
-| **熔断器** | 连续失败≥阈值→快速失败→resetAfter 后半开探针验证（generation 防陈旧） |
-| **命令超时** | `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter` |
-| **事务编排** | `WithTransaction(async callback)` — 自动 Commit/Rollback + 异常保留语义 |
-| **保存点** | `SavepointAsync` / `RollbackToAsync` — 事务内部分回滚 |
-| **异常保留** | cleanup 失败挂 `Exception.Data` 不替换原始失败（审计可追溯） |
-
-### 横切关注点
-
-| 特性 | 说明 |
-|------|------|
-| **软删除** | `[SoftDelete]` + `deleted_at` 列——查询自动过滤，`IgnoreFilters()` 可显式包含 |
-| **多租户** | `[TenantAware]` + `tenant_id` 列——查询自动隔离，`WithTenant(id)` 切换 |
-| **乐观锁** | `[ConcurrencyCheck]` + `Version` 字段——Update 自动检查 + 递增版本号 |
-| **拦截器** | `IQueryInterceptor` — OnBefore/OnAfter/OnError 三阶段 + 优先级排序 |
-| **可观测性** | `WithTracing()` / `WithMetrics()` — BCL `ActivitySource` + `Meter`（零第三方） |
-| **编译时 SQL** | `[SqlFile("path.sql")]` — 编译时读取 .sql 文件嵌入为 `const string` |
-| **SQL 模板** | `[SqlTemplate("name")]` — 提取方法内的 `FormattableString` 为静态常量 |
-
-### PostgreSQL 专有
-
-| 特性 | 说明 |
-|------|------|
-| **NOTIFY/LISTEN** | 异步通知监听——自动重连 + 重试 LISTEN + 半开探针 + 订阅者异常隔离 |
-| **JSONB 查询** | `WhereJson("column", "jsonpath", value)` — JSONB 路径条件 |
-| **Binary COPY** | 零往返批量写入——`StartRowAsync` + `WriteAsync(value, NpgsqlDbType)` |
+```xml
+<PackageReference Include="PalORM.Core" Version="4.6.0" />
+<PackageReference Include="PalORM.Sqlite" Version="4.6.0" />
+<PackageReference Include="PalORM.SourceGen" Version="4.6.0" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+```
 
 ---
 
-## 使用示例
-
-### 基础 CRUD
+## Quick Start
 
 ```csharp
 [Table("users")]
@@ -107,441 +30,307 @@ public partial class User
 {
     [Key] public long Id { get; set; }
     [Column("name")] public string Name { get; set; } = "";
-    [Column("email")] public string? Email { get; set; }
 }
 
 var db = await DataSession<SqliteProvider>.CreateAsync(
-    new DbOptions { ConnectionString = "Data Source=app.db" });
+    DbOptions.Development("Data Source=app.db"));
 await db.MigrateAsync();
 
-// 插入 — 返回带自增 ID 的实体
-var user = await db.InsertAsync(new User { Name = "Alice", Email = "a@example.com" });
-
-// 按主键查询
+var user = await db.InsertAsync(new User { Name = "Alice" });
 var found = await db.GetAsync<User>(user.Id);
-
-// 条件查询
 var users = await db.From<User>()
     .Where($"name = {"Alice"}")
     .OrderBy(u => u.Id, descending: true)
     .Take(10)
     .ToListAsync();
-
-// 更新
-user.Name = "Bob";
-await db.UpdateAsync(user);
-
-// 删除
-await db.DeleteAsync<User>(user.Id);
 ```
 
-### UPSERT — 单次往返
+## Configuration
 
 ```csharp
-// 自动 INSERT ON CONFLICT DO UPDATE（PG/SQLite）
-// 或 ON DUPLICATE KEY UPDATE（MySQL）
-await db.SaveAsync(new User { Id = 1, Name = "Updated" });
-```
+// Presets
+var dev = DbOptions.Development("Data Source=dev.db");       // relaxed
+var prod = DbOptions.Production("$ENV:DATABASE_URL");        // strict + pooling
+var test = DbOptions.Testing("Data Source=:memory:");        // short timeout
 
-### 批量操作
-
-```csharp
-// 批量插入 — 三 Provider 统一使用源生成 InsertColumns/BindInsert
-await db.BulkInsertAsync(tenThousandUsers);
-
-// 批量删除 — SoftDelete 实体更新 deleted_at，其他实体物理删除
-await db.BulkDeleteAsync<User>(new object[] { 1L, 2L, 3L });
-
-// 批量更新
-await db.BulkUpdateAsync(modifiedUsers);
-```
-
-### 编译时 SQL 文件嵌入
-
-```csharp
-// 源生成器编译时读取 .sql 文件，嵌入为常量
-public partial class Queries
-{
-    [SqlFile("Queries/GetUsers.sql")]
-    public static partial string GetUsers();
-}
-// → SELECT * FROM users WHERE active = 1
-```
-
-### Provider 条件分支
-
-```sql
--- Queries/Stats.sql
--- @pg    SELECT current_database()
--- @mysql SELECT DATABASE()
--- @sqlite SELECT 'sqlite'
--- @all   FROM dual
-```
-
-```csharp
-[SqlFile("Queries/Stats.sql", Provider = "pg")]
-public static partial string PgStats();
-// → SELECT current_database() FROM dual
-```
-
-### CTE 与窗口函数
-
-```csharp
-// CTE
-var result = await db.From<Product>()
-    .With("top", $"SELECT * FROM products WHERE price > {100m}")
-    .ToListAsync();
-
-// 窗口函数：参数是原始 SQL 结构，只能使用可信常量
-var ranked = await db.From<Product>()
-    .UnsafeWindowOver("ROW_NUMBER()", "ORDER BY price DESC")
-    .ToListAsync();
-```
-
-### 关联查询与拆分
-
-```csharp
-// Include — 编译时 JOIN
-var orders = await db.From<Order>()
-    .Include<Customer>(o => o.CustomerId, c => c.Id)
-    .Where($"status = {"pending"}")
-    .ToListAsync();
-
-// SplitQuery 当前只构建根查询并移除 JOIN，不装配导航对象。
-var rootOrders = await db.From<Order>()
-    .Include<Customer>(o => o.CustomerId, c => c.Id)
-    .AsSplitQuery()
-    .ToListAsync();
-
-// ThenInclude — 双参数显式表达 JOIN 两端
-var sql = db.From<Order>()
-    .ThenInclude<Customer, Order>(c => c.Id, o => o.CustomerId)
-    .ToSql();
-```
-
-### 读写分离
-
-```csharp
+// Custom
 var options = new DbOptions
 {
-    ConnectionString = "Host=primary;...",
-    ReadConnectionString = "Host=replica;..."
-};
+    ConnectionString = "$ENV:DATABASE_URL",
+    CommandTimeout = TimeSpan.FromSeconds(60),
+    MaxRetries = 5,
+    CircuitBreakerThreshold = 10
+}.WithPool(maxSize: 200);
 
-// 强制走读副本（QueryBuilder 级路由——执行时打开独立连接并自动释放）
-var users = await db.From<User>().ForRead().ToListAsync();
-
-// 写后立即读 — 强制走主库
-var user = await db.From<User>().ForWrite().Where($"id = {1}").FirstAsync();
+// Environment variables (Docker/K8s)
+var env = DbOptions.FromEnvironment("DATABASE_URL");
 ```
 
-### 事务
+---
+
+## Core Features
+
+### Architecture
+
+| Feature | Description |
+|---------|-------------|
+| `FormattableString` parameters | Compile-time parameter extraction, zero SQL injection |
+| `struct QueryBuilder<T>` | Value type, copy-on-write, zero heap allocation |
+| Native AOT | `IsAotCompatible` + `IsTrimmable` + `PublishAot`, zero IL suppression |
+| `static abstract IDbProvider` | Compile-time dispatch, zero virtual call overhead |
+| Zero dependencies | Core: BCL + ADO.NET + `LoggerFactory.Abstractions` |
+
+### Query
+
+| API | Description |
+|-----|-------------|
+| `Where(FormattableString)` / `OrWhere` | Parameterized conditions |
+| `OrderBy(expr)` / `ThenBy` / `Take` / `Skip` | Sorting and paging |
+| `Select(expr[])` | Projection (DryRun only) |
+| `InnerJoin` / `LeftJoin` / `RightJoin` | SQL JOIN |
+| `Include<TChild>(fk, pk)` / `ThenInclude` | Multi-level navigation |
+| `WhereIn` / `WhereNotIn` | Auto-batched (SQLite 999 / MySQL 65535) |
+| `GroupBy` / `Having` | Aggregation |
+| `With("cte", subquery)` | CTE |
+| `UnsafeWindowOver` | Window functions |
+| `ForUpdate()` / `ForShare()` | Pessimistic locks |
+| `AsSplitQuery()` | Root-only query (no navigation assembly) |
+| `ForRead()` / `ForWrite()` | Read/write routing |
+| `WithCache(key, TTL)` | Bounded LRU cache |
+| `AsPrepared()` | DbCommand.PrepareAsync |
+| `AsDryRun()` | SQL preview without execution |
+| `Tag("name")` / `TagWithCaller()` | SQL comment tags |
+
+### Write
+
+| API | Description |
+|-----|-------------|
+| `InsertAsync` / `UpdateAsync` / `DeleteAsync` | CRUD |
+| `SaveAsync` (UPSERT) | Single round-trip: `ON CONFLICT DO UPDATE` / `ON DUPLICATE KEY UPDATE` |
+| `GetAsync(key)` / `GetAllAsync` | Primary key / full table |
+| `BulkInsertAsync` / `BulkUpdateAsync` / `BulkDeleteAsync` | Batch operations |
+| `SeedAsync` | Idempotent upsert seed data |
+
+### Resilience
+
+| Feature | Description |
+|---------|-------------|
+| Retry | Configurable count + exponential backoff |
+| Circuit breaker | Fast-fail after N consecutive failures, half-open probe on reset |
+| Timeout | Per-command via `CancellationTokenSource.CancelAfter` |
+| Transactions | `WithTransaction(callback)` auto commit/rollback + exception preservation |
+| Savepoints | `SavepointAsync` / `RollbackToAsync` |
+
+### Cross-Cutting
+
+| Feature | Annotation |
+|---------|-----------|
+| Soft delete | `[SoftDelete]` + `deleted_at` column, auto-filtered |
+| Multi-tenant | `[TenantAware]` + `tenant_id` column, auto-isolated |
+| Optimistic lock | `[ConcurrencyCheck]` + `Version` column |
+| Interceptors | `IQueryInterceptor` — OnBefore/OnAfter/OnError |
+| Observability | `WithTracing()` / `WithMetrics()` — BCL ActivitySource + Meter |
+| SQL file embedding | `[SqlFile("path.sql")]` — compile-time embed as `const string` |
+| SQL templates | `[SqlTemplate("name")]` — extract `FormattableString` as constant |
+| Value converter | `[Converter(typeof(T))]` — AOT-safe, source-generated |
+
+### PostgreSQL
+
+| Feature | Description |
+|---------|-------------|
+| NOTIFY/LISTEN | `PgNotificationListener` — auto-reconnect, half-open probe, subscriber isolation |
+| JSONB | `WhereJson(column, jsonpath, value)` |
+| Binary COPY | `NpgsqlBinaryImporter` — zero round-trip bulk write |
+
+---
+
+## Compile-Time Diagnostics (21 rules)
+
+| Rule | Description |
+|------|-------------|
+| PALORM001 | [Table] entity missing [Key] |
+| PALORM002 | Property missing [Column] |
+| PALORM003 | [ForeignKey] references non-existent table |
+| PALORM004 | [ForeignKey] missing OnDelete |
+| PALORM005 | N+1 query detection |
+| PALORM008-010 | OwnedJson context validation |
+| PALORM011 | Qualified table name rejected |
+| PALORM012-013 | Concurrency token type constraints |
+| PALORM014 | [SoftDelete] requires deleted_at column |
+| PALORM016 | Unknown type / invalid mapping |
+| PALORM017 | Annotation declared but unused in DDL |
+| PALORM018 | [TenantAware] requires tenant_id column |
+| PALORM019-022 | OwnedJson context / Key legality |
+
+> PALORM006/007 removed (006 handled by SqlFileEmitter Obsolete-error mechanism).
+
+---
+
+## Annotations
+
+`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]` `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Computed]` `[DefaultValue]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[SqlTemplate]`
+
+---
+
+## Examples
+
+### Transaction
 
 ```csharp
-// 函数式 — 自动 commit/rollback；callback 内按顺序使用同一会话
 await db.WithTransaction(async ct =>
 {
-    await db.InsertAsync(new User { Name = "A" }, ct);
-    await db.ExecuteAsync($"UPDATE users SET name = {"B"} WHERE id = {1}", ct);
+    await db.InsertAsync(new Order { Status = "pending" }, ct);
+    await db.BulkInsertAsync(order.Items, ct);
+    await db.ExecuteAsync(
+        $"UPDATE inventory SET stock = stock - {qty} WHERE id = {itemId}", ct);
 });
-// 同一 DataSession 不支持重叠数据库操作、嵌套事务或 callback 内派生并发任务。
-
-// 显式 — 手动控制
-using var tran = await db.BeginTransactionAsync();
-db.UseTransaction(tran);
-await db.BulkInsertAsync(users);
-await tran.CommitAsync();
 ```
 
-### 直查与存储过程
+### Batch
 
 ```csharp
-// 直查 — 绕过 QueryBuilder
-var users = await db.QueryAsync<User>($"SELECT * FROM users WHERE age > {18}");
-var count = await db.ScalarAsync<long>($"SELECT COUNT(*) FROM users");
-
-// 存储过程
-var result = await db.StoredProc("GetUsersByAge")
-    .WithParam("@minAge", 18)
-    .WithOutputParam<int>("@total")
-    .QueryAsync<User>();
-
-int total = db.StoredProc("GetUsersByAge")
-    .WithParam("@minAge", 18)
-    .WithOutputParam<int>("@total")
-    .GetOutputValue<int>("@total");
+await db.BulkInsertAsync(tenThousandUsers);
+await db.BulkUpdateAsync(modifiedUsers);
+await db.BulkDeleteAsync<User>(new object[] { 1L, 2L, 3L });
 ```
 
-### 弹性与可观测性
+### Multi-Result Set
 
 ```csharp
-var db = await DataSession<SqliteProvider>.CreateAsync(options);
-
-// 重试 + 熔断：同一 DataSession 持久保存连续最终失败状态
-// MaxRetries=3 表示首次尝试之外最多重试 3 次
-// 仅重试 Provider 判定的瞬时数据库异常和内部命令超时
-db.WithRetry(maxRetries: 3)
-  .WithCircuitBreaker(failureThreshold: 5, resetAfter: TimeSpan.FromSeconds(30));
-
-// AOT 安全 Activity + Meter；不记录 SQL、参数、连接串或调用方路径
-await db.From<User>()
-    .WithTracing()
-    .WithMetrics("get-active-users") // 名称不进入指标标签
-    .Where($"status = {"active"}")
-    .ToListAsync();
-
-// 参数绑定后调用 Provider 的 DbCommand.PrepareAsync
-await db.From<User>()
-    .Where($"status = {"active"}")
-    .AsPrepared()
-    .ToListAsync();
-
-// 查询缓存
-await db.From<User>()
-    .WithCache("all-users", TimeSpan.FromMinutes(5))
-    .ToListAsync();
+await using var grid = await db.From<Order>().QueryMultipleAsync(
+    $"SELECT * FROM orders WHERE id = {orderId}; " +
+    $"SELECT * FROM order_items WHERE order_id = {orderId}");
+var order = await grid.ReadAsync<Order>();
+var items = await grid.ReadItemsAsync<OrderItem>();
 ```
 
-### 多租户与软删除
+### Keyset Pagination
 
 ```csharp
-[Table("orders")]
-[TenantAware]   // 自动附加 WHERE tenant_id = @current
-[SoftDelete]    // 自动附加 WHERE deleted_at IS NULL
-public partial class Order
-{
-    [Key] public long Id { get; set; }
-    [Column("status")] public string Status { get; set; } = "";
-    [Column("deleted_at")] public DateTime? DeletedAt { get; set; }
-}
-
-// 设置当前租户 — 后续查询自动过滤
-db.WithTenant(tenantId);
-
-// IgnoreFilters 是当前 DataSession 的持久开关，后续 ORM 查询均忽略默认过滤器。
-// 需要隔离作用域时创建独立 DataSession。
-var allOrders = await db.IgnoreFilters().From<Order>().ToListAsync();
-```
-
-### PostgreSQL NOTIFY
-
-```csharp
-// 监听：瞬态断线后创建新连接并重新执行全部 LISTEN
-await using var listener = new PgNotificationListener(cs, "events");
-listener.OnNotification += (_, args) => Console.WriteLine($"{args.Channel}: {args.Payload}");
-listener.OnError += (_, args) => Console.Error.WriteLine(args.Exception.GetType().Name);
-await listener.StartAsync();
-
-// 发送（参数化，零 SQL 注入）；payload 可为 null
-await PgNotificationListener.NotifyAsync(cs, "events", "order-created");
-```
-
-### 聚合查询
-
-```csharp
-// 所有聚合自动附加软删除过滤（WHERE deleted_at IS NULL）
-long total = await db.CountAsync<Order>();
-decimal revenue = await db.SumAsync<Order>($"total");
-DateTime? latest = await db.MaxAsync<Order, DateTime>($"created_at");
-double avgPrice = await db.AvgAsync<Product>($"price");
-```
-
-### 乐观锁（并发控制）
-
-```csharp
-[ConcurrencyCheck]
-[Column("version")]
-public long Version { get; set; }
-
-// UpdateAsync 自动检查 version 匹配——不匹配抛 ConcurrencyConflictException
-user.Name = "Updated";
-await db.UpdateAsync(user);  // WHERE id = @id AND version = @oldVersion
-                             // SET version = version + 1
-```
-
-### WhereIn / WhereNotIn
-
-```csharp
-// 自动按参数上限分批（SQLite 999 / MySQL 65535）
-var statuses = new[] { "pending", "shipped", "delivered" };
-var orders = await db.From<Order>()
-    .WhereIn(o => o.Status, statuses)
-    .ToListAsync();
-
-// 排除
-var active = await db.From<User>()
-    .WhereNotIn(u => u.Role, bannedRoles)
-    .ToListAsync();
-```
-
-### Keyset 游标分页
-
-```csharp
-// 第一页
 var (rows, total) = await db.From<Order>()
     .OrderBy(o => o.CreatedAt, descending: true)
     .ToPageAsync(pageSize: 20, o => o.CreatedAt);
-
-// 续页（传入上一页最后一行的排序值作为游标）
-long? lastCursor = rows[^1].CreatedAt.Ticks;
 var (next, _) = await db.From<Order>()
     .OrderBy(o => o.CreatedAt, descending: true)
-    .ToPageAsync(20, o => o.CreatedAt, lastCursor);
+    .ToPageAsync(20, o => o.CreatedAt, rows[^1].CreatedAt.Ticks);
 ```
 
-### 自定义值转换器
+### OwnedJson
 
 ```csharp
-// Ulid ↔ string 的自定义转换（AOT 安全——编译时生成调用代码）
-public sealed class UlidStringConverter : IValueConverter<Ulid, string>
-{
-    public string ToProvider(Ulid model) => model.ToString();
-    public Ulid FromProvider(string provider) => Ulid.Parse(provider);
-}
-
-[Table("documents")]
-public partial class Document
-{
-    [Key] [Converter(typeof(UlidStringConverter))]
-    public Ulid Id { get; set; }
-    [Column("title")] public string Title { get; set; } = "";
-}
-```
-
-### OwnedJson（编译时安全 JSON 序列化）
-
-```csharp
-// 需要源生成的 JsonSerializerContext（AOT 安全）
 [JsonSerializable(typeof(ProductDetails))]
-internal sealed partial class ProductJsonContext : JsonSerializerContext;
+internal sealed partial class ProductCtx : JsonSerializerContext;
 
 [Table("products")]
 public partial class Product
 {
     [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [OwnedJson(typeof(ProductJsonContext))]
-    [Column("details")]
-    public ProductDetails? Details { get; set; }
+    [OwnedJson(typeof(ProductCtx))] public ProductDetails? Details { get; set; }
+}
+```
+
+### Custom Converter
+
+```csharp
+public sealed class UlidConverter : IValueConverter<Ulid, string>
+{
+    public string ToProvider(Ulid m) => m.ToString();
+    public Ulid FromProvider(string p) => Ulid.Parse(p);
 }
 
-// 读写自动 JSON 序列化/反序列化（零运行时反射）
-var product = await db.InsertAsync(new Product
+[Table("docs")]
+public partial class Document
 {
-    Name = "Widget",
-    Details = new ProductDetails { Sku = "W-001", Weight = 1.5m }
-});
+    [Key] [Converter(typeof(UlidConverter))] public Ulid Id { get; set; }
+}
+```
+
+### Stored Procedure
+
+```csharp
+var result = await db.StoredProc("GetUsersByAge")
+    .WithParam("minAge", 18)
+    .WithOutputParam<int>("total")
+    .QueryAsync<User>();
+```
+
+### Aggregate
+
+```csharp
+long total = await db.CountAsync<Order>();
+decimal revenue = await db.SumAsync<Order>($"total");
+double avgPrice = await db.AvgAsync<Product>($"price");
+```
+
+### Raw SQL
+
+```csharp
+var users = await db.QueryAsync<User>($"SELECT * FROM users WHERE age > {18}");
+var count = await db.ScalarAsync<long>($"SELECT COUNT(*) FROM users");
 ```
 
 ---
 
-## AOT 原生编译
+## Native AOT
 
 ```bash
 dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
-  --self-contained true -p:PublishAot=true -p:PublishTrimmed=true \
-  -p:JsonSerializerIsReflectionEnabledByDefault=false -o artifacts/aot/sqlite
-./artifacts/aot/sqlite/PalORM.AotTest.exe
+  --self-contained -p:PublishAot=true -p:PublishTrimmed=true \
+  -p:JsonSerializerIsReflectionEnabledByDefault=false \
+  -o artifacts/aot
+./artifacts/aot/PalORM.AotTest.exe
 ```
 
-| Provider | 验证状态 | IL 抑制 |
-|----------|----------|:--:|
-| SQLite | 本机原生运行通过 | 0 |
-| PostgreSQL | 原生运行通过（本机 Docker CI 同配置容器） | 0 |
-| MySQL | 原生运行通过（本机 Docker CI 同配置容器） | 0 |
+| Provider | Status | IL Suppressions |
+|----------|--------|:--:|
+| SQLite | Native verified | 0 |
+| PostgreSQL | Native verified (Docker) | 0 |
+| MySQL | Native verified (Docker) | 0 |
 
 ---
 
-## .NET 11 性能特性
+## Performance
 
-PalORM 已为 .NET 11 runtime-async 优化，并在 `Directory.Build.props` 中启用：
+v4.6 benchmark vs Dapper (SQLite in-memory, 10K rows):
 
-```xml
-<PropertyGroup>
-  <!-- .NET 11 runtime-async：运行时原生异步，替换编译器状态机 -->
-  <Features>runtime-async=on</Features>
-</PropertyGroup>
-```
+| Operation | PalORM | Dapper | Comparison |
+|-----------|-------:|-------:|:---------:|
+| QueryAll 10K | 4.85ms / 1.47MB | 3.99ms / 1.32MB | +22% / +11% |
+| GetByKey | 26.47μs / 3.98KB | 22.43μs / 2.34KB | +18% / +70% |
+| Insert | 33.93μs / 4.97KB | 25.22μs / 3.73KB | +35% / +33% |
+| BulkInsert 10K | 55.86ms / **4.97MB** | 34.32ms / 12.97MB | +63% / **-62%** |
 
-**被动受益**（无代码改动，preview 6 SDK 自动生效）：
-
-- **Runtime-async + ExecutionContext 空捕获跳过**——PalORM `AsyncLocal<T>` 仅 2 个（操作/事务 owner），绝大多数 `await` 路径无环境状态可恢复，跳过捕获直接受益；`ConfigureAwait(false)` 全库统一协同最大化
-- **NativeAOT 接口派发加速**——热路径 `IRowFactory<T>.Read`（每行调用）+ `IDbProvider` 静态抽象 + `IQueryInterceptor` 链直接受益；preview 6 共享派发 helper 减小二进制体积
-- **JIT 边界检查消除 + `SequenceEqual` 常量折叠**——`ValueStringBuilder` Span 操作与 `EquatableArray.Equals` 受益
-- **R2R 对 `EqualityComparer<T>.Default` 专门化**——`QueryBuilderExtensions.ToPageAsync` 续页检查受益（官方称最高提速 20×）
-
-**可观测性**（BoundedQueryCache 暴露 OTel 指标，对齐 .NET 11 MemoryCache 标准口径）：
-
-- `palorm.cache.requests{outcome=hit|miss}`
-- `palorm.cache.evictions`
-- `palorm.cache.entries` (ObservableGauge，Pull 模式)
-- `palorm.cache.estimated_size` (ObservableGauge，以条目数近似)
-
-通过 `PalORM` Meter 上游 OTLP 导出即可观测（无需额外适配器包）。如需按规则启停 `Activity` 跟踪，使用 .NET 11 `AddTracing`：
-
-```csharp
-builder.Services.AddTracing(tracing =>
-{
-    tracing.EnableTracing(sourceName: "PalORM");           // PalORM.ActivitySource
-    tracing.DisableTracing(sourceName: "PalORM", operationName: "HealthCheck");
-});
-```
+> BulkInsert allocation is **62% lower than Dapper**. See [BENCHMARKS.md](bench/PalORM.Benchmarks/BENCHMARKS.md).
 
 ---
 
-## 运行测试
+## Running Tests
 
-测试项目使用 TUnit（Microsoft.Testing.Platform 模式）：**`dotnet test` 会静默零输出**（MTP 与经典 test 管道不桥接），必须用 `dotnet run`：
+Uses TUnit (Microsoft.Testing.Platform). Use `dotnet run`, not `dotnet test`:
 
 ```bash
-dotnet run --project test/PalORM.Core.Tests            # 单元 + 架构不变式
-dotnet run --project test/PalORM.SourceGen.Tests       # 生成器/分析器 + 快照基线
+dotnet run --project test/PalORM.Core.Tests
+dotnet run --project test/PalORM.SourceGen.Tests
 dotnet run --project test/PalORM.Integration.Tests -- \
-  --treenode-filter "/*/*/*/*[Category!=ExternalDatabase]"   # 本地（无 MySQL/PG 服务）
+  --treenode-filter "/*/*/*/*[Category!=ExternalDatabase]"
 ```
 
-CI 中请校验输出含 `Test run summary` 行--无摘要即视为未运行，不是通过。外部 DB 依赖测试（PG/MySQL）标注 `Category=ExternalDatabase`，不计入 badge 总数（B14 口径统一）。
+425 tests total (161 Core + 104 SourceGen + 160 Integration). External DB tests marked `Category=ExternalDatabase`.
 
 ---
 
-## 测试配置（连接串）
+## Documentation
 
-测试 / 工具链的连接串由**双层覆盖**机制管理（生产库 PalORM.Core 不引入配置依赖）：
-
-| 文件 | 跟踪 | 用途 |
-|------|------|------|
-| `appsettings.test.json` | ✅ git 跟踪 | 结构化模板（端口/超时/host 占位符） |
-| `.env.test.example` | ✅ git 跟踪 | 凭据示例 |
-| `.env.test` | ❌ gitignored | 本地凭据（从 .example 复制后填入） |
-
-**优先级**：`PALORM_*_CONNECTION` 整串环境变量 > `appsettings.test.json` 模板 `${VAR}` 占位符替换 > 显式失败（不静默回退 localhost，避免误写系统库——ITM-428 凭据卫生）。
-
-首次使用：
-
-```bash
-cp .env.test.example .env.test
-# 编辑 .env.test 填入本地 PG/MySQL 凭据
-source scripts/set-test-env.sh
-dotnet run --project test/PalORM.Integration.Tests
-```
-
-CI 通过 secret 注入 `PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION` 即可，无需 .env.test 文件。
-
-`PalORM.Testing.TestEnvironment` 从 `AppContext.BaseDirectory` 向上回溯查找 `appsettings.test.json`，集成测试项目 csproj 已配置 `<CopyToOutputDirectory>` 自动复制。
+| Document | Content |
+|----------|---------|
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [docs/API参考.md](docs/API参考.md) | API reference |
+| [docs/架构设计.md](docs/架构设计.md) | Architecture & design decisions |
+| [docs/AOT部署指南.md](docs/AOT部署指南.md) | AOT deployment guide |
+| [docs/编码规范.md](docs/编码规范.md) | Coding standards |
+| [docs/踩坑目录.md](docs/踩坑目录.md) | 302 ORM pitfalls |
+| [docs/变更日志.md](docs/变更日志.md) | v2.0.1 snapshot |
 
 ---
 
-## 文档
-
-| | |
-|---|---|
-| [API 参考](docs/API参考.md) | 100+ 项 QueryBuilder/DataSession/StoredProc API 清单 |
-| [架构设计](docs/架构设计.md) | 源生成器 · 数据流 · 17 项决策 |
-| [踩坑目录](docs/踩坑目录.md) | 302 项跨语言 ORM 陷阱 |
-| [AOT 部署指南](docs/AOT部署指南.md) | 发布配置与验证 |
-| [编码规范](docs/编码规范.md) | 167 条 STD 规则 × 17 类 |
-| [变更日志](docs/变更日志.md) | 版本交付记录 |
-
----
-
-AGPL v3
+AGPL v3 · [PalDDD](https://github.com/PalDDD)
