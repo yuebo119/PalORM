@@ -4,7 +4,7 @@
     <AssemblyName>PalORM.Testing</AssemblyName>
     <Description>PalORM 测试工具库 — TestDb.Sqlite() + TestDb.PostgreSqlAsync() + TestDb.MySqlAsync() + TestDb.FromRows()</Description>
     <PackageTags>ORM;Testing;AOT;micro-ORM</PackageTags>
-    <Version>4.0.0</Version>
+    <Version>4.6.0</Version>
     <NoWarn>$(NoWarn);CA2007;NU5104</NoWarn>
   </PropertyGroup>
 

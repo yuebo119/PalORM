@@ -4,7 +4,7 @@
     <AssemblyName>PalORM.Core</AssemblyName>
     <Description>PalORM 运行时核心 — DataSession, QueryBuilder, DbOptions, 注解定义</Description>
     <PackageTags>ORM;AOT;NativeAOT;micro-ORM;source-generator</PackageTags>
-    <Version>4.0.0</Version>
+    <Version>4.6.0</Version>
     <!-- SQL 构建使用 FormattableString 编译时参数化，CA2100 为误报 -->
     <!-- CA1000: DataSession<TProvider> 泛型静态方法是核心 API 设计 -->
     <!-- Phase 1 放宽 CA 规则至建议，Phase 4 收紧 -->

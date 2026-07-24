@@ -2,6 +2,74 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [4.6.0] — 极致性能（25+ 项分配优化）
+
+> 基于 v4.0 实施后的深度性能审计与基准驱动迭代优化。
+> 本版本为 **non-breaking**——公共 API 无破坏性变更。
+
+### 性能成果（vs v4.0 实测）
+
+| 操作 | v4.0 分配 | v4.6 分配 | 改善 |
+|------|:---------:|:---------:|:----:|
+| GetByKey | 4.65 KB | **3.98 KB** | **-14%** |
+| Insert | 5.16 KB | **4.97 KB** | **-4%** |
+| Update | 8.31 KB | **7.44 KB** | **-10%** |
+| BulkInsert 10K | 10.66 MB | **4.97 MB** | **-53%** |
+
+BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
+
+### v4.1：性能优化（IRowFactory 委托化 + Converter 单例 + 快照合并）
+
+详见 v3.1/v4.0 CHANGELOG 条目。核心：IRowFactory → Func 委托、Converter static readonly 单例、CRUD Volatile.Read 合并。
+
+### v4.2：极致降内存第一批（8 项）
+
+- FormattableSqlFormatter 删除丢弃的 CompositeFormat.Parse + 改用 ValueStringBuilder
+- QueryAsync 结果 List 起步容量 16
+- InsertWithLastInsertId 预构建为 CommandSqlSet const
+- QueryBuilder _clauses/_parameters 初始容量预分配 4/8
+- 参数名预缓存 ParameterNameCache（@p0..@p1023 零分配索引取用）
+- GetParametersForKinds 去 LINQ Contains + AsReadOnly
+- 软删/租户过滤 SQL 片段 per-(Type,Dialect) 缓存
+- From\<T\> 读连接工厂闭包提取为实例字段
+
+### v4.3：ParameterNameCache public + probe 缓存跳过
+
+- ParameterNameCache 提为 public，SourceGen binder emit 改用 GetName
+- ProbeBinderAsync 结果缓存（InsertBinderValidated=true 跳过 probe）
+- BulkInsert 10K 省 30K 次字符串插值
+
+### v4.4：极致降内存第二批（8 项）
+
+- BuildSql TrimEnd 先裁剪再 ToString（省 1 次 string 分配）
+- CacheStore OTel counter 预构造 hit/miss KVP
+- GridReader/StoredProcBuilder list 起步容量 16
+- QueryClauseKinds 提为非泛型 static readonly（省临时数组）
+- AppendSelectColumns sourceName quote 提循环外
+- byte[] 列 GetValue → GetFieldValue<byte[]>
+- BuildLimitClause 直接写 ValueStringBuilder
+
+### v4.5：SessionOperationState TCS 延迟创建 + Exit 不写 AsyncLocal
+
+- Enter 不创建 TCS，仅设 _isActive=true（省 88B/操作）
+- Exit 不写 _currentOperationOwner.Value=null（省 ~300B EC 拷贝）
+- Dispose/WaitForActive 条件创建 TCS
+
+### v4.6：极致降内存第三批（6 项）
+
+- owner=new object()→this + EC 相等短路（省 324B/操作）
+- ExitTransactionFlow 不清 AsyncLocal（省 300B/事务收口）
+- GetAsync 完整 SELECT SQL 缓存（省 120B/GetByKey）
+- FormattableSqlFormatter 用 ParameterNameCache（省 32B/占位符）
+- BulkInsert SqliteParameter 复用：新增 BindInsertValuesToBatch 旁路 binder，满批预分配参数池跨批复用（省 ~1.76MB/10K行）
+- HasClause 位掩码 O(n)→O(1)（省 Predicate 委托分配/链式调用）
+
+### 验证
+- Core 161/161 + SourceGen 104/104 + Integration 160/160 = **425/425**
+- 技术债扫描 12/12 + 门禁 G1-G29 全绿
+
+---
+
 ## [4.0.0] — 性能与一致性收口（CommandFactory 单例 + Volatile 合并 + API 治理）
 
 > 基于 v3.1 实施后的代码审查与 4 路并行深度调研产出，详见 `docs/v4.0-improvement-plan.md`。
