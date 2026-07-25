@@ -52,12 +52,19 @@ public sealed class AuditInterceptor : IQueryInterceptor
             rowCount, elapsed.TotalMilliseconds, context.Sql);
     }
 
-    /// <summary>查询失败：记录异常类型与消息（异常实例照常向调用方抛出）。</summary>
+    /// <summary>查询失败：记录异常类型（异常实例照常向调用方抛出）。
+    /// <para><b>脱敏说明</b>：异常消息（exception.Message）经常含数据库返回的参数值
+    /// （如 PG DETAIL: Key (email)=(a@b.com)）。logParameters=false 时仅记录异常类型名 + SQL，
+    /// 不记录 exception.Message，与参数脱敏承诺一致。</para></summary>
     public void OnError(QueryContext context, Exception exception)
     {
         if (!_logger.IsEnabled(LogLevel.Error)) return;
-        _logger.LogError(exception, "PalORM Audit [Error]: {ExceptionType}: {Message} | {Sql}",
-            exception.GetType().Name, exception.Message, context.Sql);
+        if (_logParameters)
+            _logger.LogError(exception, "PalORM Audit [Error]: {ExceptionType}: {Message} | {Sql}",
+                exception.GetType().Name, exception.Message, context.Sql);
+        else
+            _logger.LogError(exception, "PalORM Audit [Error]: {ExceptionType} | {Sql}",
+                exception.GetType().Name, context.Sql);
     }
 
     /// <summary>参数格式化（仅 logParameters=true 时调用）。
