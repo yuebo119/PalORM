@@ -61,10 +61,26 @@ internal static class TypeMapper
         if (baseType.StartsWith('_', StringComparison.Ordinal) || baseType.EndsWith("[]", StringComparison.Ordinal))
             return ("string", true);
 
+        // bit(1) → bool（惯例），bit(n>1) → string（位串非布尔，避免数据丢失）
+        if (baseType == "bit" || baseType == "varbit" || baseType == "bit varying")
+        {
+            // 从原始 dbType 提取长度：bit(1) → 1, bit(64) → 64
+            int lenStart = dbType.IndexOf('(');
+            if (lenStart >= 0)
+            {
+                string lenStr = dbType.AsSpan()[(lenStart + 1)..].SliceUntil(')').ToString().Trim();
+                if (int.TryParse(lenStr, out int bitLen) && bitLen > 1)
+                    return ("string", true);  // bit(n>1) 是位串，不是布尔
+            }
+            return ("bool", false);  // bit(1) 或无长度信息 → bool
+        }
+
         return TryNumeric(baseType)
             ?? TryDateTime(baseType)
             ?? TryStringAndBinary(baseType)
-            ?? ("string", true);  // fallback
+            // fallback：未识别类型（如 PG tsvector/domain/xml schema）默认 string。
+            // 运行时类型转换失败时回溯到此——EntityGenerator 应对 fallback 列加 TODO 注释。
+            ?? ("string", true);
     }
 
     // 数值类型：整数 + 浮点 + 精确小数 + 布尔
@@ -78,7 +94,6 @@ internal static class TypeMapper
         "double precision" or "float8" or "double" => ("double", false),
         "decimal" or "numeric" or "money" => ("decimal", false),
         "boolean" or "bool" => ("bool", false),
-        "bit" or "varbit" or "bit varying" => ("bool", false),
         _ => null
     };
 
