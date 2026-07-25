@@ -2,6 +2,85 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [5.0.0] — 驱动现代化 + 调优（包升级 + 连接串/PRAGMA 性能调优）
+
+> 基于 v5.0-roadmap.md 的 5 阶段方案。本版本聚焦**驱动层现代化 + 默认调优**，
+> 不引入新公共 API。架构级改造（DbDataSource 单例化 / MySqlBulkCopy / DbBatch）
+> 与功能增值（阶段 5）作为独立后续工作，不在 v5.0 主线。
+
+### 破坏性变更（测试源码层，公共 API 零破坏）
+
+仅影响**测试代码**（src/ 公共 API 面零改动）：
+- TUnit 0.19.24→1.61.15 引入 4 类测试 API 适配（10 处修复）：
+  - `Assert.ThrowsAsync<T>(Task)` 重载移除→改用 `() => task`
+  - `Assert.ThrowsAsync<T>` 返回类型可空化（`TException?`）→访问 `.Message` 加 `!`
+  - `HasCount()` 已弃用→改用 `Count().IsEqualTo(n)`
+  - `WithMessage(string)` 新增 `StringComparison` 重载→加 `Ordinal`
+
+### 包升级
+
+| 包 | v4.6 | v5.0 | 备注 |
+|---|:---:|:---:|------|
+| TUnit | 0.19.24 | **1.61.15** | 测试框架现代化 |
+| TUnit.Assertions | 0.7.9 | **1.61.15** | 与 TUnit 元包版本锁定 |
+| Microsoft.NET.Test.Sdk | 17.13.0 | **删除** | TUnit 1.x 走 MTP 模式，不需 VSTest 桥接 |
+| Npgsql | 9.0.3 | **10.0.3** | RowFactory 兼容（GetDateTime 仍返回 DateTime） |
+| MySqlConnector | 2.4.0 | **2.6.1** | 含安全修复 GHSA-473q-m89c-ghf8 |
+| BenchmarkDotNet | 0.14.0 | **0.15.8** | 基准工具升级 |
+| Dapper | 2.1.66 | **2.1.79** | 基准对照升级 |
+| RepoDb | 1.13.1 | **1.15.1** | 基准对照升级 |
+| RepoDb.Sqlite.Microsoft | 1.13.1 | **1.15.0** | 基准对照升级 |
+
+**保持不动**（有约束）：Microsoft.CodeAnalysis.Analyzers 5.3.0（5.6.0 不在 NuGet.Config 配置的 dotnet-tools 源，触发 NU1103）；Microsoft.Data.Sqlite.Core 11.0-preview.6（等 net11 GA）。
+
+### 性能调优
+
+**PG 连接串调优**（PostgreSqlProvider.CreateConnection，用户显式值优先）：
+- MaxAutoPrepare 0→100（自动预编译，查询延迟 -30~50%）
+- AutoPrepareMinUsages 5→2（第 2 次起 Prepare）
+- NoResetOnClose false→true（归还连接跳过 DISCARD ALL，+30% localhost 吞吐）
+- ReadBufferSize/WriteBufferSize 8192→16384（大结果集/大值写入吞吐）
+- Enlist true→false（跳过 TransactionScope 检查）
+
+**MySQL 连接串调优**（MySqlProvider.CreateConnection，用户显式值优先）：
+- AutoEnlist true→false / ConnectionReset true→false（归还池更快）
+- CancellationTimeout 2→5（防连接泄漏）
+- AllowLoadLocalInfile false→true（MySqlBulkCopy 前提，为后续阶段铺路）
+- ServerRedirectionMode Disabled→Preferred（Azure MySQL 直连）
+
+**SQLite PRAGMA 调优**（SqliteProvider.InitializeConnectionAsync）：
+- synchronous=NORMAL（WAL 下安全，减少 fsync）
+- cache_size=-65536（64MB 页缓存，默认 2MB）
+- temp_store=MEMORY / wal_autocheckpoint=1000
+- mmap_size=268435456（256MB，**仅文件数据库**，:memory: 跳过）
+
+**global.json**：rollForward `disable`→`latestMinor`（允许 SDK 补丁版本前滚）。
+
+### 调优判断策略
+
+"用户未显式设置"的判据：属性当前值等于 ADO.NET 默认值。该判据在罕见场景（用户显式
+设成默认值）下会把用户意图当作默认覆盖，但调优参数主动设成低性能默认值的实际场景极少，
+收益（透明调优）大于风险。用户可通过显式设置非默认值避免被覆盖。
+
+### 不做项（v5.0 主线排除，理由）
+
+| 项 | 理由 |
+|------|------|
+| 阶段 3.4 NpgsqlParameter\<T\> 零装箱 | CommandFactoryEmitter 改造复杂，需独立评估 |
+| 阶段 3.6 SQLite Pooling/Cache 解除限制 | 强制 Pooling 有测试隔离风险；用户可在连接串显式配置 |
+| 阶段 4.1-4.3 架构级驱动层改造 | DbDataSource 单例化 / BulkCopy / DbBatch 应作为独立工作，每项需 Trellis brainstorm 明确设计 |
+| 阶段 5 功能增值（5.1-5.7） | 7 个功能各自独立，不应塞进 v5.0 大改动 |
+| Microsoft.CodeAnalysis.Analyzers 5.6.0 | NuGet.Config 约束 Microsoft.CodeAnalysis.* 只从 dotnet-tools 源，该源无 5.6.0 stable |
+
+### 验证
+
+- dotnet build：0 错误
+- Core.Tests: 161/161 通过
+- SourceGen.Tests: 104/104 通过
+- Integration.Tests：本地无 DB 环境，待 CI/带 DB 环境验证 PG/MySQL 真实读写
+
+---
+
 ## [4.6.0] — 极致性能（25+ 项分配优化）
 
 > 基于 v4.0 实施后的深度性能审计与基准驱动迭代优化。
