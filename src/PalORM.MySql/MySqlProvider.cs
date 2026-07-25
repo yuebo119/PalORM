@@ -14,7 +14,17 @@ public sealed class MySqlProvider : IDbProvider
 
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 MySqlConnector 连接串:
     /// MaximumPoolSize / ConnectionIdleTimeout(秒)/ ConnectionLifeTime(分钟换算为秒);
-    /// MySqlConnector 池参数为 uint,checked 转换防负值/溢出静默截断。</summary>
+    /// MySqlConnector 池参数为 uint,checked 转换防负值/溢出静默截断。
+    /// <para><b>v5.0 阶段 3.2 调优</b>：对每个调优参数，如果用户连接串里的值等于该参数的
+    /// ADO.NET 默认值（即用户未显式调优），则覆盖为推荐调优值：
+    /// AutoEnlist: true→false（跳过 TransactionScope 检查）；
+    /// ConnectionReset: true→false（跳过 COM_RESET_CONNECTION，归还池更快）；
+    /// UseCompression: 默认 false 不变，显式固定避免部署环境注入 Compress=true；
+    /// CancellationTimeout: 2→5（软取消 5 秒后强制关闭，避免连接泄漏）；
+    /// AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）；
+    /// ServerRedirectionMode: Disabled→Preferred（Azure MySQL 直连后端）。</para>
+    /// <para><b>判断策略</b>：用"属性当前值 == ADO.NET 默认值"作为"用户未显式设置"的判据
+    /// （同 PostgreSqlProvider，详见其注释）。</para></summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -24,6 +34,22 @@ public sealed class MySqlProvider : IDbProvider
             ConnectionIdleTimeout = checked((uint)options.PoolIdleTimeoutSeconds),
             ConnectionLifeTime = checked((uint)(options.PoolLifetimeMinutes * 60))
         };
+
+        // v5.0 阶段 3.2：仅当属性当前值等于 ADO.NET 默认值时覆盖为调优推荐值。
+        // MySqlConnector 默认值：AutoEnlist=true，ConnectionReset=true，UseCompression=false，
+        // CancellationTimeout=2，AllowLoadLocalInfile=false，ServerRedirectionMode=Disabled。
+        if (builder.AutoEnlist)
+            builder.AutoEnlist = false;
+        if (builder.ConnectionReset)
+            builder.ConnectionReset = false;
+        // UseCompression 默认 false 即目标值，无需改——仅防注入：用户若显式 true 不覆盖
+        if (builder.CancellationTimeout == 2)
+            builder.CancellationTimeout = 5;
+        if (!builder.AllowLoadLocalInfile)
+            builder.AllowLoadLocalInfile = true;
+        if (builder.ServerRedirectionMode == MySqlServerRedirectionMode.Disabled)
+            builder.ServerRedirectionMode = MySqlServerRedirectionMode.Preferred;
+
         return new MySqlConnection(builder.ConnectionString);
     }
 
