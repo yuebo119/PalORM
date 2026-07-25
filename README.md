@@ -156,7 +156,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 ### 写入与批量
 
-`InsertAsync` / `UpdateAsync` / `DeleteAsync` / `SaveAsync`（UPSERT 单次往返）/ `GetAsync` / `GetAllAsync`。批量：`BulkInsertAsync`（PG Binary COPY / SQLite+MySQL 多值 INSERT）/ `BulkUpdateAsync` / `BulkDeleteAsync` / `BulkMergeAsync` / `SeedAsync`。直查：`QueryAsync<T>` / `QueryAsyncEnumerable<T>` / `ScalarAsync<T>` / `ExecuteAsync` / `CountAsync` / `SumAsync` / `MaxAsync` / `AvgAsync` / `StoredProc`。
+`InsertAsync` / `UpdateAsync` / `DeleteAsync` / `SaveAsync`（UPSERT 单次往返）/ `GetAsync` / `GetAllAsync`。批量：`BulkInsertAsync`（PG Binary COPY / MySQL BulkCopy / SQLite 多值 INSERT）/ `BulkUpdateAsync`（逐条 + 乐观锁）/ `BulkUpdateBatchAsync`（v5.0：PG UPDATE FROM VALUES / MySQL CASE WHEN 单语句批量，SQLite 自动回退逐条）/ `BulkDeleteAsync`（`IN` 单语句）/ `BulkMergeAsync` / `SeedAsync`。直查：`QueryAsync<T>` / `QueryAsyncEnumerable<T>` / `ScalarAsync<T>` / `ExecuteAsync` / `CountAsync` / `SumAsync` / `MaxAsync` / `AvgAsync` / `StoredProc`。
 
 ### 事务与弹性
 
@@ -164,7 +164,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 ### 横切关注点
 
-`[SoftDelete]` 软删除自动过滤、`[TenantAware]` 多租户自动隔离、`[ConcurrencyCheck]` 乐观锁自动版本检查、`IQueryInterceptor` 三阶段拦截器、`WithTracing` / `WithMetrics` BCL 可观测性、`[SqlFile]` 编译时嵌入 SQL、`[Converter]` 自定义值转换器、`[OwnedJson]` 编译时安全 JSON 序列化、`ForRead` 读写分离。
+`[SoftDelete]` 软删除自动过滤、`[TenantAware]` 多租户自动隔离（`SetTenant(id)` 单库列过滤）、`[ConcurrencyCheck]` 乐观锁自动版本检查、`IQueryInterceptor` 三阶段拦截器、`AuditInterceptor`（v5.0 内置审计拦截器）、`WithTracing` / `WithMetrics` BCL 可观测性、`[SqlFile]` 编译时嵌入 SQL、`[Converter]` 自定义值转换器、`[OwnedJson]` 编译时安全 JSON 序列化、`ForRead` 读写分离、`SessionSetupSql`（v5.0 会话级 SET 一次性执行）。
 
 ### 注解
 
@@ -191,7 +191,18 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 ### PostgreSQL 专有
 
-`PgNotificationListener` 异步通知监听（自动重连 + 半开探针 + 订阅者隔离）、`WhereJson("col", "jsonpath", val)` JSONB 查询、`NpgsqlBinaryImporter` Binary COPY 批量写入。
+`PgNotificationListener` 异步通知监听（自动重连 + 半开探针 + 订阅者隔离）、`WhereJson("col", "jsonpath", val)` JSONB 查询、`NpgsqlBinaryImporter` Binary COPY 批量写入、`AcquireXactLockAsync` / `TryAcquireXactLockAsync`（v5.0 事务级咨询锁 `pg_advisory_xact_lock`）。
+
+### v5.0 连接串与 PRAGMA 调优
+
+PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置时覆盖默认值）：
+- **PostgreSQL**：`MaxAutoPrepare=100`（查询延迟 -30~50%）、`NoResetOnClose=true`（+30% localhost 吞吐）、`Enlist=false`
+- **MySQL**：`AutoEnlist=false`、`ConnectionReset=false`、`AllowLoadLocalInfile=true`（BulkCopy 前提）、`ServerRedirectionMode=Preferred`（Azure MySQL）
+- **SQLite PRAGMA**：`synchronous=NORMAL`、`cache_size=-65536`（64MB）、`temp_store=MEMORY`、`mmap_size=268435456`（仅文件库）
+
+### Scaffold 工具
+
+`dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqlite|pg|mysql`——三 Provider schema → C# 实体反向工程。支持 `--namespace`、`--output` 参数。40+ 数据库类型映射（含 uuid/jsonb/bytea/DateOnly/TimeOnly）。
 
 详见 [API 参考](docs/API参考.md) 和 [架构设计](docs/架构设计.md)。
 
