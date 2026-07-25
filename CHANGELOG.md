@@ -56,19 +56,33 @@
 
 **global.json**：rollForward `disable`→`latestMinor`（允许 SDK 补丁版本前滚）。
 
+### MySQL 大批量插入阈值分流（阶段 4.2）
+
+`MySqlProvider.BulkInsertAsync` 新增阈值分流：
+- **≥2000 行**走 `MySqlBulkCopy`（LOAD DATA LOCAL INFILE 协议，~4.84x）
+- **<2000 行**保持多值 INSERT（小批量更快，无协议初始化开销）
+
+**部署约束**（已文档化）：BulkCopy 路径要求 MySQL 服务端 `local_infile=ON`（默认 OFF）。
+客户端连接串默认追加 `AllowLoadLocalInfile=true`（v5.0 阶段 3.2）。`local_infile` 是已知
+安全风险（客户端任意文件读取攻击），生产环境开启需评估信任边界。
+
+**DataTable 设计**：包含目标表全部列（含 AUTO_INCREMENT 主键），主键列填 NULL 让 MySQL 自增。
+复合主键场景不支持 BulkCopy 路径，会回退到多值 INSERT（PalORM_Runtime.PkColumns 是单主键字典）。
+
 ### 调优判断策略
 
 "用户未显式设置"的判据：属性当前值等于 ADO.NET 默认值。该判据在罕见场景（用户显式
 设成默认值）下会把用户意图当作默认覆盖，但调优参数主动设成低性能默认值的实际场景极少，
 收益（透明调优）大于风险。用户可通过显式设置非默认值避免被覆盖。
 
-### 不做项（v5.0 主线排除，理由）
+### 不做项（v5.0 排除，理由）
 
 | 项 | 理由 |
 |------|------|
 | 阶段 3.4 NpgsqlParameter\<T\> 零装箱 | CommandFactoryEmitter 改造复杂，需独立评估 |
 | 阶段 3.6 SQLite Pooling/Cache 解除限制 | 强制 Pooling 有测试隔离风险；用户可在连接串显式配置 |
-| 阶段 4.1-4.3 架构级驱动层改造 | DbDataSource 单例化 / BulkCopy / DbBatch 应作为独立工作，每项需 Trellis brainstorm 明确设计 |
+| 阶段 4.1 DbDataSource 单例化 | 架构风险高（生命周期/静态状态），v5.0 阶段 3.1 连接串池化已覆盖核心收益；ADR 待写 |
+| 阶段 4.3 DbBatch 批量化 BulkUpdate/Delete | 与 4.1 共享连接管理，4.2 完成后再独立评估 |
 | 阶段 5 功能增值（5.1-5.7） | 7 个功能各自独立，不应塞进 v5.0 大改动 |
 | Microsoft.CodeAnalysis.Analyzers 5.6.0 | NuGet.Config 约束 Microsoft.CodeAnalysis.* 只从 dotnet-tools 源，该源无 5.6.0 stable |
 
@@ -77,7 +91,8 @@
 - dotnet build：0 错误
 - Core.Tests: 161/161 通过
 - SourceGen.Tests: 104/104 通过
-- Integration.Tests：本地无 DB 环境，待 CI/带 DB 环境验证 PG/MySQL 真实读写
+- Integration.Tests: 168/168 通过（含 v5.0 阶段 4.2 MySqlBulkCopy 阈值路径测试）
+- 环境：PG 18.4 + MySQL 8.4.10（MySQL local_infile=ON 部署约束）
 
 ---
 

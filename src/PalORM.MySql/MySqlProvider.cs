@@ -100,17 +100,99 @@ public sealed class MySqlProvider : IDbProvider
     public static DbParameter CreateParameter(string name, object? value)
         => new MySqlParameter(name, value ?? DBNull.Value);
 
-    /// <summary>批量插入——委托共享多值 INSERT 骨架。
+    /// <summary>批量插入——v5.0 阶段 4.2 阈值分流：≥2000 行走 MySqlBulkCopy（LOAD DATA LOCAL
+    /// INFILE 协议，~4.84x），否则走多值 INSERT（小批量更快，无协议初始化开销）。
     /// <para>MySQL 协议单语句占位符上限 65535（2 字节计数）；宽表大批次经骨架按列数钳制，
-    /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para></summary>
-    public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
+    /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para>
+    /// <para><b>BulkCopy 路径要求</b>：v5.0 阶段 3.2 已在连接串默认追加 AllowLoadLocalInfile=true
+    /// （仅当用户未显式覆盖时）；服务端需 local_infile=ON（已部署约束，文档注明）。</para></summary>
+    public static async Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
-        => MultiValueBulkInsert.ExecuteAsync(
+    {
+        ArgumentNullException.ThrowIfNull(conn);
+        ArgumentNullException.ThrowIfNull(entities);
+        // batchSize 校验优先于 entities.Count 检查——调用方契约（ProviderTests 验证）。
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(batchSize, 0);
+        if (entities.Count == 0) return 0;
+
+        // v5.0 阶段 4.2：阈值分流。≥2000 行且为 MySqlConnection 走 BulkCopy，否则多值 INSERT。
+        if (entities.Count >= MySqlBulkCopyInserter.BulkCopyThreshold
+            && conn is MySqlConnection mySqlConnection)
+        {
+            return await ExecuteBulkCopyAsync(
+                mySqlConnection, transaction, entities, commandTimeoutSeconds, ct).ConfigureAwait(false);
+        }
+
+        // 回退路径：小批量走多值 INSERT。
+        return await MultiValueBulkInsert.ExecuteAsync(
             conn, transaction, entities,
             new BulkContext(
                 batchSize,
                 MaxParametersPerStatement: 65535,
                 QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
-            ct);
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>v5.0 阶段 4.2：MySqlBulkCopy 路径。从 BulkInsertAsync 抽出以降低认知复杂度（S3776）。
+    /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时内部开新事务包整批。</para></summary>
+    private static async Task<long> ExecuteBulkCopyAsync<T>(
+        MySqlConnection conn, DbTransaction? transaction,
+        IReadOnlyList<T> entities, int commandTimeoutSeconds, CancellationToken ct)
+        where T : class, new()
+    {
+        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
+            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
+            || metadata.InsertColumns.Count == 0)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated insert metadata.");
+
+        // MySQL schema=database；当前会话已在连接串指定的库里，表名直接引用。
+        string quotedTable = QuoteIdentifier(tableName);
+        // 主键列——DataTable 中放首列填 NULL（AUTO_INCREMENT 自增）。
+        string? pkColumn = PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pk) ? pk : null;
+        IReadOnlyList<string> pkColumns = pkColumn is not null ? [pkColumn] : [];
+
+        // 事务：BulkCopy 需在事务内执行；未传时内部开新事务保证原子性。
+        MySqlTransaction? mySqlTransaction = transaction as MySqlTransaction;
+        bool ownsTransaction = false;
+        if (mySqlTransaction is null)
+        {
+            mySqlTransaction = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            ownsTransaction = true;
+        }
+        Exception? primaryException = null;
+        try
+        {
+            long inserted = await MySqlBulkCopyInserter.ExecuteAsync(
+                conn,
+                mySqlTransaction,
+                entities,
+                new MySqlBulkCopyContext(
+                    quotedTable,
+                    metadata.InsertColumns,
+                    pkColumns,
+                    metadata.BindInsert,
+                    commandTimeoutSeconds),
+                ct).ConfigureAwait(false);
+            // 成功路径：自管事务需显式 commit（DisposeAsync 默认 rollback）。
+            if (ownsTransaction)
+                await mySqlTransaction.CommitAsync(ct).ConfigureAwait(false);
+            return inserted;
+        }
+        catch (Exception ex)
+        {
+            primaryException = ex;
+            throw;
+        }
+        finally
+        {
+            if (ownsTransaction)
+            {
+                await BulkOperationFramework.DisposePreservingAsync(
+                    mySqlTransaction, primaryException, "PalORM.TransactionCleanupException", ct)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
 }
