@@ -81,9 +81,9 @@
 |------|------|
 | 阶段 3.4 NpgsqlParameter\<T\> 零装箱 | CommandFactoryEmitter 改造复杂，需独立评估 |
 | 阶段 3.6 SQLite Pooling/Cache 解除限制 | 强制 Pooling 有测试隔离风险；用户可在连接串显式配置 |
-| 阶段 4.1 DbDataSource 单例化 | 架构风险高（生命周期/静态状态），v5.0 阶段 3.1 连接串池化已覆盖核心收益；ADR 待写 |
-| 阶段 4.3 DbBatch 批量化 BulkUpdate/Delete | 与 4.1 共享连接管理，4.2 完成后再独立评估 |
-| 阶段 5 功能增值（5.1-5.7） | 7 个功能各自独立，不应塞进 v5.0 大改动 |
+| 阶段 4.1 DbDataSource 单例化 | **已批准 E1（不做）**——5 条 ORM 实践调研 + EF Core #3086 反面证据 + Npgsql 官方 "discouraged 非 deprecated"。详见 `docs/adr/ADR-E-dbdatasource-单例化取舍.md` |
+| 阶段 4.3 DbBatch 批量化 BulkUpdate/Delete | 与 4.1 解耦但 BulkDeleteAsync 已是批量（`IN (@p0,...)` 单语句），BulkUpdateAsync 真有 N 次 RTT 但用户无反馈，YAGNI |
+| 阶段 5 功能增值（5.1-5.7） | 7 个功能各自独立，按需推进（5.5 ForUpdate 已实现于 `QueryBuilder.cs:341`） |
 | Microsoft.CodeAnalysis.Analyzers 5.6.0 | NuGet.Config 约束 Microsoft.CodeAnalysis.* 只从 dotnet-tools 源，该源无 5.6.0 stable |
 
 ### 验证

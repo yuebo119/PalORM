@@ -1,6 +1,6 @@
 # ADR-E：DbDataSource 单例化取舍
 
-> 状态：**待用户决策**（2026-07-25 起草）· 来源：v5.0-roadmap 阶段 4.1
+> 状态：**已批准 E1（不做）**（2026-07-25 用户裁决）· 来源：v5.0-roadmap 阶段 4.1
 
 ## 背景
 
@@ -147,3 +147,12 @@ DbDataSource 单例化对 PalORM 是"伪优化"：
 - MySqlDataSourceBuilder 文档：https://mysqlconnector.net/api/mysqlconnector.mysqldatasourcebuilder/
 - v5.0-roadmap 阶段 4.1：`docs/v5.0-roadmap.md` 第 104-124 行
 - v5.0 阶段 3.1/3.2 实施：`src/PalORM.PostgreSql/PostgreSqlProvider.cs:18-58`、`src/PalORM.MySql/MySqlProvider.cs:18-59`
+
+## 决策记录（2026-07-25 · 已批准）
+
+按用户批准的 **E1（维持现状，不做）** 落地：
+
+- **决策依据**：5 条主流 ORM 实践调研 + EF Core #3086 反面证据 + Npgsql 官方 "discouraged 但非 deprecated" 事实定位
+- **当前覆盖度**：v5.0 阶段 3.1/3.2 已通过连接串层调优拿到 DataSource 的核心收益（MaxAutoPrepare / NoResetOnClose / 池化）；PalORM 已 AOT 兼容
+- **遗留场景**：Azure PG 密码轮换 / 多租户动态切换 / 复杂类型映射 → 当前非 PalORM 目标，未来如需要走 E3（可选钩子）而非 E2（强制改造）
+- **触发 revisit 的条件**：Npgsql 11 强制要求 DataSource / 用户提出明确的密码轮换或多租户需求 / EF Core #3086 类似痛点在 PalORM 实际出现
