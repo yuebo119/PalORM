@@ -40,8 +40,9 @@
 
   <!-- 基准 -->
   <ItemGroup>
-    <!-- v5.0 阶段 1.5：基准工具升级到最新稳定版 -->
-    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <!-- v5.0 阶段 3.4：BenchmarkDotNet 从 NuGet 0.15.8 改为本地 ProjectReference（fork 已支持 net11）。
+         删除此处的 PackageVersion，避免 NuGet 把旧包带回来覆盖 ProjectReference。
+         PalORM.Benchmarks.csproj 直接 ProjectReference 引用 bench/BenchmarkDotNet。 -->
     <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
     <!-- 同类 micro-ORM 对照（Dapper 官方 benchmarks/ 同样多 ORM 对照）。

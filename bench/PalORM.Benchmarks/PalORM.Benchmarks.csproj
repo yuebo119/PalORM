@@ -24,7 +24,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" />
+    <!-- v5.0 阶段 3.4：从 NuGet 0.15.8 改为本地 ProjectReference（fork 已支持 net11）。
+         NuGet 0.15.8 在 .NET 11 preview SDK 下抛 NotRecognized 异常。
+         本地 fork 位于 bench/BenchmarkDotNet（.gitignore 排除，不入仓库）。
+         其他开发者需自行 clone BDN fork 到此目录。 -->
+    <ProjectReference Include="..\BenchmarkDotNet\src\BenchmarkDotNet\BenchmarkDotNet.csproj" />
+    <ProjectReference Include="..\BenchmarkDotNet\src\BenchmarkDotNet.Annotations\BenchmarkDotNet.Annotations.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Dapper 对照 -->
     <PackageReference Include="Dapper" />
     <PackageReference Include="Dapper.AOT" />
     <!-- 同类 micro-ORM 对照——Dapper 官方 benchmarks/ 同样多 ORM 对照 -->

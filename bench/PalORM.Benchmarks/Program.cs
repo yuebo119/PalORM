@@ -28,6 +28,16 @@ public static class Program
             BoxingMicroBenchmark.RunAsync().GetAwaiter().GetResult();
             return;
         }
+        // 诊断 BDN RuntimeMoniker 推断
+        if (args.Length > 0 && args[0] == "--bdn-debug")
+        {
+            var attrs = typeof(SqliteBenchmarks).Assembly.GetCustomAttributes(typeof(System.Runtime.Versioning.TargetFrameworkAttribute), false);
+            var attr = attrs.Length > 0 ? (System.Runtime.Versioning.TargetFrameworkAttribute)attrs[0] : null;
+            Console.WriteLine($"TargetFrameworkAttribute.FrameworkName: {attr?.FrameworkName ?? "(null)"}");
+            Console.WriteLine($"Environment.Version: {Environment.Version}");
+            Console.WriteLine($"RuntimeInformation.FrameworkDescription: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
+            return;
+        }
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
     }
 }
