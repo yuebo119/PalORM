@@ -109,6 +109,33 @@
 
 **5.5 ForUpdate**（`QueryBuilder.ForUpdate(skipLocked)`）：v5.0 前已实现，本次确认存在。
 
+### Scaffold 三 Provider 支持（阶段 5.3）
+
+`tools/PalORM.Scaffold` 从 SQLite-only 扩展为三 Provider：
+- **新增 ISchemaProvider 抽象**（`tools/PalORM.Scaffold/ISchemaProvider.cs`）：屏蔽三方言元数据差异
+- **三 Provider 实现**：
+  - `SqliteSchemaProvider`：sqlite_master + PRAGMA table_info
+  - `PostgreSqlSchemaProvider`：information_schema + JOIN tables/key_column_usage
+  - `MySqlSchemaProvider`：information_schema.COLUMNS（DATABASE() 当前库过滤）
+- **TypeMapper**（`tools/PalORM.Scaffold/TypeMapper.cs`）：DB 类型 → C# 类型，按方言分支
+  - SQLite 按亲和性（INTEGER/REAL/TEXT/BLOB/NUMERIC）
+  - PG/MySQL 按精确类型名 + 长度后缀裁剪（如 `varchar(255)` → `varchar`）
+  - 覆盖 40+ 类型（含 uuid/jsonb/bytea/tinyint/DateOnly/TimeOnly 等）
+- **EntityGenerator**：与 Provider 解耦，从 SchemaTable DTO 生成 C# 实体类
+  - snake_case → PascalCase 转换（表名 + 列名）
+  - 列名与属性名不同时加 `[Column("原名")]`
+  - 自增 PK 加 `[Key(AutoIncrement = true)]`
+  - 引用类型属性加 `= default!`（避免 nullable 警告）
+  - 值类型可空列加 `?` 后缀
+- **CLI 扩展**：`--dialect sqlite|pg|mysql` + `--namespace NS` + `--output DIR`
+  - 方言别名：pg/postgres/postgresql、mysql/my、sqlite/sql
+  - 兼容旧位置参数（args[1] 当 namespace）
+
+**真实集成验证**（三 Provider 连真实库 scaffold）：
+- SQLite：建表 → 生成 `UserOrders` 实体（含可空列 + 自增 PK）
+- PostgreSQL：连 PG 18.4，生成 `AllTypesEntities`（uuid/bool/DateOnly/TimeOnly 类型完整映射）
+- MySQL：连 MySQL 8.4.10，生成 `AllTypesEntities`（datetime/decimal/char 类型映射）
+
 ### 批量 UPDATE 单语句化（阶段 4.3b）
 
 **新增** `DataSession.BulkUpdateBatchAsync<T>`（方案 Y 严格版）：
