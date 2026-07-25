@@ -64,6 +64,76 @@ v5.0-roadmap 阶段 4.1 提议把当前 `new NpgsqlConnection(cs)` / `new MySqlC
 
 如果未来确实需要 DataSource 路径（如 Npgsql 11 强制要求、或新特性只在 DataSource 上提供），再走 E3（可选钩子）而非 E2（强制改造）。
 
+## 主流 ORM 实践调研（2026-07-25 补充）
+
+### 各 ORM 是否强制 DataSource 单例
+
+| ORM | 是否强制 | 模式 | 来源 |
+|-----|:---:|------|------|
+| **EF Core** | ✓ 强制 | DI 容器注册（NpgsqlDataSource 9.0 前为 Singleton，9.0 改 Scoped） | [npgsql/efcore.pg#3086](https://github.com/npgsql/efcore.pg/issues/3086) |
+| **Dapper** | ✗ 不强制 | 推荐用 `DbConnection` + `using`（连接串驱动），另提供基于 DataSource 的扩展方法 | Dapper 官方仓库 |
+| **Linq2Db** | ✗ 不强制 | `DataOptions` 同时支持连接串和 DataSource，每个 DataContext 独立 | [linq2db GitHub](https://github.com/linq2db/linq2db) |
+| **RepoDB** | ✗ 不用 | 静态 `DbConnection` 创建方法，无 DataSource 概念 | RepoDB 文档 |
+| **PetaPoco** | ✗ 不用 | 连接串直接传构造函数 | PetaPoco 文档 |
+
+**结论**：只有 EF Core 强制用——因为它重度依赖 DI 容器（AddDbContext + DI 注册），DataSource 在 DI 里顺理成章。**纯微型 ORM 都不强求**，连接串模式仍是主流。PalORM 是无 DI 设计（`DbOptions.cs:3` 注释明确"为什么不是 DI"），属微型 ORM 阵营。
+
+### EF Core 的 Singleton → Scoped 教训（重要反面证据）
+
+[npgsql/efcore.pg#3086](https://github.com/npgsql/efcore.pg/issues/3086) 揭示了 DataSource Singleton 在 EF Core 里的真实痛点：
+1. **多租户场景失效**：单例让 EF Core 无法判断"是否需要 new service provider"
+2. **测试场景污染**：测试需同一容器配合多 DataSource，Singleton 阻碍
+3. **触发"many service providers"警告**
+
+**EF Core 9.0 修复**：把 NpgsqlDataSource 从 Singleton 改 Scoped。
+
+**对 PalORM 的警示**：如果引入 DataSource Singleton，等于把 EF Core 8.0 之前的痛点重新踩一遍，且没有 DI 容器来缓冲。
+
+### Npgsql 官方定位（事实）
+
+来自 [Npgsql 文档](https://www.npgsql.org/doc/basic-usage.html)：
+> "Direct instantiation of connection is **still supported**, but is **discouraged**... when using Npgsql 7.0"
+
+官方"不推荐"**不是"强制"**。关键事实：
+- DataSource 实质 = "连接池的对象化封装"（官方原文"usually correspond to a connection pool inside Npgsql"）
+- **多 NpgsqlConnection 同连接串 ≠ 多池**：Npgsql 内部按连接串哈希共享池
+- `new NpgsqlConnection(cs)` 路径在 Npgsql 10 仍完全支持，无 deprecation 标记
+
+### DataSource 真正必须的场景 vs PalORM 覆盖度
+
+| 场景 | 是否必须 DataSource | PalORM 现状 | 是否需要做 |
+|------|:---:|------|:---:|
+| Azure PG 托管 + 密码自动轮换 | ✓ 必须 | ✗ 未覆盖（用户连静态密码） | 推迟（用户无需求） |
+| 多租户动态切换 DataSource | ✓ 必须 | ✗ 未覆盖（一进程一 Provider） | 推迟（设计哲学冲突） |
+| 复杂类型映射/自定义类型解析器 | ✓ 必须 | ✗ 未覆盖（用源生成器） | 推迟（架构不同） |
+| Native AOT + 极致裁剪 | SlimBuilder 更优 | ✓ 已 AOT 兼容 | 已覆盖 |
+| 简单单库 CRUD（PalORM 主战场） | ✗ 不必须 | ✓ 已覆盖 | 已覆盖 |
+
+### 优缺点对比
+
+**优点（如果做 4.1）**：
+- 与 Npgsql 7+ 官方推荐对齐（弱——"discouraged"非"deprecated"）
+- 为密码轮换/多租户铺路（中——PalORM 当前无此需求）
+- NpgsqlSlimDataSourceBuilder AOT 优化（弱——PalORM 已 AOT 兼容）
+- DataSource 直接执行命令省 Open/Close（弱——DataSession 已封装）
+
+**缺点（风险）**：
+- **生命周期复杂**：DataSession using-scoped vs DataSource 单例所有者不明（高，EF Core #3086 已踩坑）
+- **违反项目"零全局可变状态"原则**（高，DbOptions.cs:3 注释）
+- **引入 DI 依赖**才能管理生命周期（高，PalORM 设计哲学冲突）
+- **多租户场景 Singleton 阻碍**（高，EF Core 9.0 改 Scoped 即为此）
+- **多连接串场景内存膨胀**（中）
+- **API 行为变化**：CreateAsync 语义变化（中）
+
+### 综合判断
+
+DbDataSource 单例化对 PalORM 是"伪优化"：
+1. **只有 EF Core 强制用**——因为它重度依赖 DI
+2. **其他微型 ORM 都不强求**——连接串模式是微型 ORM 主流
+3. **EF Core 自己从 Singleton 改 Scoped**——证明 Singleton 模式有真实痛点
+4. **PalORM 无 DI 设计**——引入 Singleton 等于把 EF Core 8.0 的坑重新踩一遍
+5. **PalORM 核心场景不需要 DataSource 独有能力**——密码轮换/多租户/复杂类型映射都不是 PalORM 目标场景
+
 ## 待用户决策
 
 1. **采纳 E1（不做）还是 E2（完整实施）还是 E3（可选钩子）**？
