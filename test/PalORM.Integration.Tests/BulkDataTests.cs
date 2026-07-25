@@ -85,6 +85,56 @@ public sealed class BulkDataTests
         await Assert.That(deleted.All(entity => entity.DeletedAt is not null)).IsTrue();
     }
 
+    // v5.0 阶段 4.3b：BulkUpdateBatchAsync 测试——验证批量 UPDATE 单次 RTT 完成多行更新。
+    [Test]
+    public async Task BulkUpdateBatch_UpdatesMultipleRowsInSingleStatement()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        Product[] toInsert =
+        [
+            new Product { Name = "p1", Price = 1m, Stock = 1 },
+            new Product { Name = "p2", Price = 2m, Stock = 2 },
+            new Product { Name = "p3", Price = 3m, Stock = 3 }
+        ];
+        await db.BulkInsertAsync(toInsert);
+        List<Product> inserted = await db.From<Product>().ToListAsync();
+
+        foreach (Product p in inserted) p.Price *= 100;
+        long affected = await db.BulkUpdateBatchAsync(inserted);
+        await Assert.That(affected).IsEqualTo(3);
+
+        List<Product> updated = await db.From<Product>().ToListAsync();
+        await Assert.That(updated[0].Price).IsEqualTo(100m);
+        await Assert.That(updated[1].Price).IsEqualTo(200m);
+        await Assert.That(updated[2].Price).IsEqualTo(300m);
+    }
+
+    [Test]
+    public async Task BulkUpdateBatch_N1_StillBatches_NoThreshold()
+    {
+        // 方案 Y 严格版——N=1 也走批量（无内部阈值）
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        await db.InsertAsync(new Product { Name = "single", Price = 1m, Stock = 1 });
+        List<Product> list = await db.From<Product>().ToListAsync();
+        list[0].Price = 999m;
+
+        long affected = await db.BulkUpdateBatchAsync([list[0]]);
+        await Assert.That(affected).IsEqualTo(1);
+        Product loaded = (await db.From<Product>().ToListAsync())[0];
+        await Assert.That(loaded.Price).IsEqualTo(999m);
+    }
+
+    [Test]
+    public async Task BulkUpdateBatch_EmptyList_ReturnsZero()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        long affected = await db.BulkUpdateBatchAsync<Product>([]);
+        await Assert.That(affected).IsEqualTo(0);
+    }
+
     [Test]
     public async Task BulkDelete_MoreThanOneBatch_UsesAmbientTransaction()
     {

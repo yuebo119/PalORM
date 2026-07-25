@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Text;
 
 namespace PalORM;
 
@@ -159,6 +160,181 @@ public partial class DataSession<TProvider>
             if (ownsTransaction)
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>v5.0 阶段 4.3b：批量更新（单语句批量 UPDATE，方案 Y 严格版）。
+    /// <para><b>与 <see cref="BulkUpdateAsync{T}"/> 的差异</b>：本方法永远走批量 SQL
+    /// （PG: UPDATE FROM VALUES；MySQL/SQLite: CASE WHEN），单次 RTT 完成 N 行更新。
+    /// 无内部阈值——调用即批量，N=1 也走批量（用户显式选择）。</para>
+    /// <para><b>乐观锁不支持</b>：带 <c>[ConcurrencyCheck]</c> 的实体调用本方法抛
+    /// <see cref="NotSupportedException"/>。批量 UPDATE 无法正确表达"每行 version 匹配"语义，
+    /// 需要乐观锁的实体请用 <see cref="BulkUpdateAsync{T}"/>（逐条 + version 检查）。</para>
+    /// <para><b>租户过滤</b>：自动追加 <c>AND tenant_id = @p</c>（与 BulkUpdateAsync 对齐）。</para>
+    /// <para><b>参数上限</b>：按驱动上限分批执行（PG/MySQL 65535，SQLite 999），物理约束非性能阈值。</para>
+    /// <para><b>受影响行数</b>：返回实际更新的行数（含 0 行的场景，如行不存在或被并发修改）。
+    /// 与 BulkUpdateAsync 不同——后者每行单独检查 affectedRows==1 抛 ConcurrencyConflictException；
+    /// 本方法不区分"行不存在"与"并发修改"，调用方需自行根据返回值判断。</para></summary>
+    public async ValueTask<long> BulkUpdateBatchAsync<T>(
+        IReadOnlyList<T> entities, CancellationToken ct = default)
+        where T : class, new()
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        ArgumentNullException.ThrowIfNull(entities);
+        if (entities.Count == 0) return 0;
+
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
+            || !state._tableNames.TryGetValue(typeof(T), out string? tableName))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        // 乐观锁实体拒绝——批量 UPDATE 无法表达"每行 version 匹配"语义。
+        if (metadata.IncrementVersion is not null)
+            throw new NotSupportedException(
+                $"BulkUpdateBatchAsync cannot honor [ConcurrencyCheck] on '{typeof(T).Name}'; " +
+                "batch UPDATE cannot express per-row version matching. " +
+                "Use BulkUpdateAsync (row-by-row with version check) instead.");
+
+        // 准备批量上下文：SET 列集、引号包裹标识符、租户过滤标记。
+        BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, metadata, tableName, entities[0]);
+        int driverLimit = TProvider.Dialect == SqlDialect.Sqlite ? 999 : 65535;
+        int tenantParams = ctx.HasTenantFilter ? 1 : 0;
+        int rowsPerBatch = Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1));
+
+        DbTransaction? previousTransaction = GetActiveTransaction();
+        DbTransaction tran = previousTransaction
+            ?? await BeginTransactionCoreAsync(null, operation.Owner, ct).ConfigureAwait(false);
+        bool ownsTransaction = previousTransaction is null;
+        Exception? primaryException = null;
+        try
+        {
+            long totalAffected = 0;
+            for (int batchStart = 0; batchStart < entities.Count; batchStart += rowsPerBatch)
+            {
+                int batchEnd = Math.Min(batchStart + rowsPerBatch, entities.Count);
+                totalAffected += await ExecuteBatchUpdateAsync(
+                    entities, batchStart, batchEnd, metadata, ctx, tran, ct).ConfigureAwait(false);
+            }
+            if (ownsTransaction)
+                await tran.CommitAsync(ct).ConfigureAwait(false);
+            return totalAffected;
+        }
+        catch (Exception exception)
+        {
+            primaryException = exception;
+            if (ownsTransaction)
+                await TransactionCleanup.RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            _operationState.RestoreTransaction(tran, previousTransaction);
+            if (ownsTransaction)
+                await TransactionCleanup.DisposeTransactionPreservingAsync(tran, primaryException).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>准备批量 UPDATE 上下文：提取 SET 列名、引号包裹、租户过滤。
+    /// 用 probe 命令验证 BindUpdate 参数序（与 MultiValueBulkInsert 模式一致）。</summary>
+    private BatchUpdateContext PrepareBatchUpdateContext<T>(
+        PalORM_Runtime.RuntimeRegistryState state, CrudMetadata metadata,
+        string tableName, T firstEntity)
+        where T : class, new()
+    {
+        string updateSql = GetCommandSqls<T>(metadata.Sqls).Update;
+        // probe 提取参数总数
+        using DbCommand probe = CreateCommand();
+        metadata.BindUpdate(probe, firstEntity);
+        int totalParams = probe.Parameters.Count;
+        int setColumnCount = totalParams - 1;
+        if (setColumnCount <= 0)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no updatable columns.");
+        string[] setColumns = ExtractUpdateSetColumns(updateSql, setColumnCount);
+        string quotedTable = TProvider.QuoteIdentifier(tableName);
+        string quotedPk = state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
+            ? TProvider.QuoteIdentifier(pkCol) : "\"id\"";
+        return new BatchUpdateContext(setColumns, quotedTable, quotedPk, HasTenantFilter<T>());
+    }
+
+    /// <summary>执行单批 UPDATE（构造 SQL + 绑定参数 + 执行）。</summary>
+    private async ValueTask<long> ExecuteBatchUpdateAsync<T>(
+        IReadOnlyList<T> entities, int batchStart, int batchEnd,
+        CrudMetadata metadata, BatchUpdateContext ctx,
+        DbTransaction tran, CancellationToken ct)
+        where T : class, new()
+    {
+        int batchLen = batchEnd - batchStart;
+        int paramsPerRow = ctx.SetColumnCount + 1;
+
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandText = BatchUpdateSqlBuilder.Build(
+            TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
+            batchLen, ctx.HasTenantFilter, _tenantParameterName);
+
+        // probe 复用：逐行绑定提取参数值
+        DbCommand probe = CreateCommand();
+        try
+        {
+            for (int i = batchStart; i < batchEnd; i++)
+            {
+                probe.Parameters.Clear();
+                metadata.BindUpdate(probe, entities[i]);
+                for (int c = 0; c <= ctx.SetColumnCount; c++)
+                {
+                    int globalIdx = (i - batchStart) * paramsPerRow + c;
+                    cmd.Parameters.Add(TProvider.CreateParameter($"@p{globalIdx}", probe.Parameters[c].Value));
+                }
+            }
+            if (ctx.HasTenantFilter)
+                cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
+
+            return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await probe.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>批量 UPDATE 上下文（避免方法参数过多 S107）。</summary>
+    private sealed record BatchUpdateContext(
+        string[] SetColumns, string QuotedTable, string QuotedPk, bool HasTenantFilter)
+    {
+        public int SetColumnCount => SetColumns.Length;
+    }
+
+    /// <summary>从 UPDATE SQL 反解 SET 列名。
+    /// 输入：<c>UPDATE "t" SET "a" = @p0, "b" = @p1 WHERE "id" = @p2</c>
+    /// 输出：["\"a\"", "\"b\""]（含引号包裹，供后续 SQL 构造直接拼接）。</summary>
+    private static string[] ExtractUpdateSetColumns(string updateSql, int expectedCount)
+    {
+        // 用 ReadOnlySpan<char>.IndexOf 避免歧义——string.IndexOf(string, StringComparison) 在
+        // .NET 11 可能优先匹配 char 重载。AsSpan 明确语义。
+        ReadOnlySpan<char> sql = updateSql.AsSpan();
+        int setIdx = sql.IndexOf(" SET ");
+        if (setIdx < 0) throw ParseError(updateSql, "SET");
+        int whereIdx = sql[(setIdx + 5)..].IndexOf(" WHERE ");
+        if (whereIdx < 0) throw ParseError(updateSql, "WHERE");
+        whereIdx += setIdx + 5;
+
+        string setClause = updateSql.Substring(setIdx + 5, whereIdx - setIdx - 5);
+        string[] parts = setClause.Split(", ");
+        if (parts.Length != expectedCount)
+            throw new InvalidOperationException(
+                $"SET column count mismatch: parsed {parts.Length} but expected {expectedCount}.");
+
+        var result = new string[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            int eq = parts[i].IndexOf('=');
+            if (eq < 0) throw ParseError(parts[i], "= in SET");
+            result[i] = parts[i].Substring(0, eq).Trim();
+        }
+        return result;
+
+        static InvalidOperationException ParseError(string sql, string what) => new(
+            $"Cannot parse {what} clause from UPDATE SQL: {sql}");
     }
 
     /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。
