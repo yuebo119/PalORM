@@ -56,18 +56,17 @@
 
 **global.json**：rollForward `disable`→`latestMinor`（允许 SDK 补丁版本前滚）。
 
-### MySQL 大批量插入阈值分流（阶段 4.2）
+### MySQL BulkInsert local_infile 能力检测分流（阶段 4.2）
 
-`MySqlProvider.BulkInsertAsync` 新增阈值分流：
-- **≥2000 行**走 `MySqlBulkCopy`（LOAD DATA LOCAL INFILE 协议，~4.84x）
-- **<2000 行**保持多值 INSERT（小批量更快，无协议初始化开销）
+`MySqlProvider.BulkInsertAsync` 改为 **local_infile 能力检测** 分流（替代原 2000 行阈值）：
+- **local_infile=ON**（服务端）→ 走 `MySqlBulkCopy`（LOAD DATA LOCAL INFILE 协议，~4.84x）
+- **local_infile=OFF** 或非 MySqlConnection → 走多值 INSERT
 
-**部署约束**（已文档化）：BulkCopy 路径要求 MySQL 服务端 `local_infile=ON`（默认 OFF）。
-客户端连接串默认追加 `AllowLoadLocalInfile=true`（v5.0 阶段 3.2）。`local_infile` 是已知
-安全风险（客户端任意文件读取攻击），生产环境开启需评估信任边界。
+**无阈值**：不再用行数阈值（2000 是伪精确），改为环境能力检测——行为可预测。与 PG COPY 永远走最优协议对齐。检测开销：每次 BulkInsert 额外 1 次 SHOW VARIABLES RTT（<1ms，批量场景占比可忽略）。
+
+**部署约束**（已文档化）：客户端连接串默认追加 `AllowLoadLocalInfile=true`（v5.0 阶段 3.2）；服务端需 `local_infile=ON`（MySQL 默认 OFF，需 `SET GLOBAL local_infile=ON` 或 my.cnf）。
 
 **DataTable 设计**：包含目标表全部列（含 AUTO_INCREMENT 主键），主键列填 NULL 让 MySQL 自增。
-复合主键场景不支持 BulkCopy 路径，会回退到多值 INSERT（PalORM_Runtime.PkColumns 是单主键字典）。
 
 ### 调优判断策略
 

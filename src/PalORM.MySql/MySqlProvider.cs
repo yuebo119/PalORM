@@ -100,12 +100,13 @@ public sealed class MySqlProvider : IDbProvider
     public static DbParameter CreateParameter(string name, object? value)
         => new MySqlParameter(name, value ?? DBNull.Value);
 
-    /// <summary>批量插入——v5.0 阶段 4.2 阈值分流：≥2000 行走 MySqlBulkCopy（LOAD DATA LOCAL
-    /// INFILE 协议，~4.84x），否则走多值 INSERT（小批量更快，无协议初始化开销）。
+    /// <summary>批量插入——v5.0 阶段 4.2 改进：local_infile 能力检测分流（替代原 2000 阈值）。
+    /// <para>分流判据：<c>local_infile=ON</c>（服务端）走 <c>MySqlBulkCopy</c>（LOAD DATA LOCAL
+    /// INFILE 协议，~4.84x），否则走多值 INSERT（无协议初始化开销）。与 PG COPY 永远走最优协议对齐。</para>
+    /// <para><b>无阈值</b>：不再用行数阈值（2000 是伪精确），改为环境能力检测——行为可预测。
+    /// 检测开销：每次 BulkInsert 额外 1 次 SHOW VARIABLES RTT（&lt;1ms，批量场景占比可忽略）。</para>
     /// <para>MySQL 协议单语句占位符上限 65535（2 字节计数）；宽表大批次经骨架按列数钳制，
-    /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para>
-    /// <para><b>BulkCopy 路径要求</b>：v5.0 阶段 3.2 已在连接串默认追加 AllowLoadLocalInfile=true
-    /// （仅当用户未显式覆盖时）；服务端需 local_infile=ON（已部署约束，文档注明）。</para></summary>
+    /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para></summary>
     public static async Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
@@ -116,15 +117,14 @@ public sealed class MySqlProvider : IDbProvider
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(batchSize, 0);
         if (entities.Count == 0) return 0;
 
-        // v5.0 阶段 4.2：阈值分流。≥2000 行且为 MySqlConnection 走 BulkCopy，否则多值 INSERT。
-        if (entities.Count >= MySqlBulkCopyInserter.BulkCopyThreshold
-            && conn is MySqlConnection mySqlConnection)
+        // local_infile 能力检测：开启走 BulkCopy（对齐 PG 永远 COPY），关闭走多值 INSERT。
+        if (conn is MySqlConnection mySqlConnection && await IsLocalInfileEnabledAsync(mySqlConnection, ct).ConfigureAwait(false))
         {
             return await ExecuteBulkCopyAsync(
                 mySqlConnection, transaction, entities, commandTimeoutSeconds, ct).ConfigureAwait(false);
         }
 
-        // 回退路径：小批量走多值 INSERT。
+        // 回退路径：local_infile=OFF 或非 MySqlConnection，走多值 INSERT。
         return await MultiValueBulkInsert.ExecuteAsync(
             conn, transaction, entities,
             new BulkContext(
@@ -132,6 +132,19 @@ public sealed class MySqlProvider : IDbProvider
                 MaxParametersPerStatement: 65535,
                 QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>检测服务端 local_infile 是否开启（每次执行检测，无静态缓存，符合零全局状态原则）。
+    /// BulkCopy 走 LOAD DATA LOCAL INFILE，需要 local_infile=ON（MySQL 默认 OFF）。</summary>
+    private static async ValueTask<bool> IsLocalInfileEnabledAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
+        using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            return false;
+        string value = reader.GetString(1);
+        return string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
     }
 
     /// <summary>v5.0 阶段 4.2：MySqlBulkCopy 路径。从 BulkInsertAsync 抽出以降低认知复杂度（S3776）。
