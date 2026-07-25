@@ -4,22 +4,18 @@ using MySqlConnector;
 
 namespace PalORM.MySql;
 
-/// <summary>v5.0 阶段 4.2：MySQL 大批量插入阈值分流——≥2000 行走 MySqlBulkCopy（二进制行协议）。
+/// <summary>v5.0 阶段 4.2：MySQL 批量插入——MySqlBulkCopy（LOAD DATA LOCAL INFILE 协议）。
 /// <para><b>设计</b>：MySqlBulkCopy 走 LOAD DATA INFILE / 二进制行协议，批量插入比多值 INSERT
-/// 快约 4.84 倍（roadmap 基准）。但小批量（&lt;2000 行）多值 INSERT 更快（无协议初始化开销），
-/// 故采用阈值分流。</para>
-/// <para><b>阈值 2000</b>：来自 roadmap 基准经验（对齐 EF Core/Dapper 实践）。低于此值多值 INSERT
-/// 胜出，高于此值 BulkCopy 协议开销摊薄后大幅领先。</para>
+/// 快约 4.84 倍（roadmap 基准）。</para>
+/// <para><b>调用判据</b>：由 MySqlProvider.BulkInsertAsync 检测 local_infile=ON 后调用（无阈值）。
+/// local_infile=OFF 时走多值 INSERT 路径。</para>
 /// <para><b>DataTable 路径</b>：用 metadata.BindInsert 把每行实体绑定到 DbCommand，提取参数值
 /// 填入 DataTable。比自实现 IDataReader 简单且 MySqlBulkCopy 对 DataTable 路径有专门优化。</para>
 /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时内部开新事务包整批。
 /// BulkCopy 失败整批回滚。</para></summary>
 internal static class MySqlBulkCopyInserter
 {
-    /// <summary>阈值：≥此行数走 MySqlBulkCopy，否则回退多值 INSERT。</summary>
-    public const int BulkCopyThreshold = 2000;
-
-    /// <summary>执行批量插入——阈值分流入口。</summary>
+    /// <summary>执行批量插入。</summary>
     public static async Task<long> ExecuteAsync<T>(
         MySqlConnection conn,
         MySqlTransaction? transaction,
