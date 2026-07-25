@@ -109,13 +109,28 @@
 
 **5.5 ForUpdate**（`QueryBuilder.ForUpdate(skipLocked)`）：v5.0 前已实现，本次确认存在。
 
+### 批量 UPDATE 单语句化（阶段 4.3b）
+
+**新增** `DataSession.BulkUpdateBatchAsync<T>`（方案 Y 严格版）：
+- 单次 RTT 完成 N 行 UPDATE（PG: UPDATE FROM VALUES 4x 提速；MySQL/SQLite: CASE WHEN）
+- 永远走批量，无内部阈值，N=1 也走批量（用户显式选择）
+- 带 `[ConcurrencyCheck]` 的实体调用抛 `NotSupportedException`（批量无法表达每行 version 匹配）
+- 参数上限自动分批（PG/MySQL 65535，SQLite 999），物理约束非性能阈值
+- 租户过滤自动追加 `AND tenant_id = @p`（与 BulkUpdateAsync 对齐）
+
+**新增 BatchUpdateSqlBuilder**（`src/PalORM.Core/BatchUpdateSqlBuilder.cs`）：静态 SQL 构造器，与 DataSession 解耦降低认知复杂度。参数顺序对应 BindUpdate 输出：`[setCol0, setCol1, ..., pk]`（SET 列先，PK 在末尾）。
+
+**与 BulkUpdateAsync 的语义差异**：
+- BulkUpdateAsync 逐条执行 + 乐观锁检查（每行 affectedRows==1 否则 ConcurrencyConflictException）
+- BulkUpdateBatchAsync 单语句批量 + 不区分"行不存在"与"并发修改"（返回受影响总行数）
+
 ### 验证
 
 - dotnet build：0 错误
-- Core.Tests: 173/173 通过（161 基线 + 5 SessionSetupSql + 7 AuditInterceptor）
+- Core.Tests: 173/173 通过（含 5.2 SessionSetupSql + 5.4 AuditInterceptor + 架构测试登记 BulkUpdateBatchAsync）
 - SourceGen.Tests: 104/104 通过
-- Integration.Tests: 170/170 通过（168 + 2 AdvisoryXactLock）
-- 总计：447/447 全部通过
+- Integration.Tests: 173/173 通过（168 + 2 AdvisoryXactLock + 3 BulkUpdateBatchAsync）
+- 总计：450/450 全部通过
 - 环境：PG 18.4 + MySQL 8.4.10（MySQL local_infile=ON 部署约束）
 
 ---
