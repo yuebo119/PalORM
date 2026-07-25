@@ -42,33 +42,7 @@ public static class Program
     }
 }
 
-// ─── 实体（属性名 = 列名，不加 [Column]——让 Dapper 和 PalORM 都按属性名映射）───
-
-[Table("bench_orders")]
-public sealed partial class BenchOrder
-{
-    [Key] [Column("id")] public long id { get; set; }
-    [Column("status")] public string status { get; set; } = "";
-    [Column("total")] public decimal total { get; set; }
-    [Column("created_at")] public long created_at { get; set; }
-}
-
-[Table("bench_versioned")]
-public sealed partial class BenchVersioned
-{
-    [Key] [Column("id")] public long id { get; set; }
-    [Column("name")] public string name { get; set; } = "";
-    [Column("version")] [ConcurrencyCheck] public long version { get; set; }
-}
-
-[SoftDelete]
-[Table("bench_soft")]
-public sealed partial class BenchSoft
-{
-    [Key] [Column("id")] public long id { get; set; }
-    [Column("name")] public string name { get; set; } = "";
-    [Column("deleted_at")] public string? deleted_at { get; set; }
-}
+// 实体定义已移至 BenchmarkEntities.cs（v5.0 基准体系重构）
 
 // ═══════════════════════════════════════════════════════════════
 // 公平对照基准——同一 SQL / 同一数据 / 每个 ORM 最优路径
