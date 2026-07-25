@@ -116,6 +116,45 @@ PG 的 UPDATE FROM VALUES 应更快（待 PG 基准验证）。
 
 ---
 
+## 🌐 三方言基准（PG 18.4 / MySQL 8.4.10 / SQLite）
+
+### QueryAll 10,000 行跨方言对照
+
+| 方言 | ADO.NET | PalORM | PalORM vs ADO.NET | PalORM Allocated |
+|------|--------:|-------:|:-----------------:|-----------------:|
+| **SQLite**（内存） | 4.83 ms | 5.58 ms | 1.17x（慢 17%） | 1,516 KB |
+| **PostgreSQL** 18.4 | 16.13 ms | **15.04 ms** | **0.94x（快 6%）** | 1,140 KB |
+| **MySQL** 8.4.10 | 115.15 ms | **94.79 ms** | **0.85x（快 15%）** | 1,937 KB |
+
+**关键发现**：PalORM QueryAll 在远程 DB（PG/MySQL）上**比 ADO.NET 更快**——v5.0 连接串调优（MaxAutoPrepare=100 / NoResetOnClose=true）的收益在远程场景放大（网络延迟掩盖框架开销，连接池优化主导）。
+
+### BulkInsert 10,000 行跨方言对照
+
+| 方言 | 路径 | Mean | Allocated |
+|------|------|-----:|----------:|
+| **SQLite**（内存） | 多值 INSERT | 63.30 ms | 4.97 MB |
+| **PostgreSQL** 18.4 | Binary COPY | 63.51 ms | 9.57 MB |
+| **MySQL** 8.4.10 | 多值 INSERT（local_infile 可能 OFF） | 820.04 ms | 7.89 MB |
+
+> MySQL BulkInsert 慢（820ms）可能是 local_infile=OFF（走多值 INSERT）+ 远程网络延迟。
+> local_infile=ON 时走 MySqlBulkCopy（LOAD DATA LOCAL INFILE）应更快。
+
+### BulkUpdateBatch 跨方言对照（1,000 行）
+
+| 方言 | SQL 策略 | Mean | vs SQLite |
+|------|---------|-----:|:---------:|
+| **SQLite**（内存） | CASE WHEN | 246.93 ms | 1.0x（基线） |
+| **PostgreSQL** 18.4 | UPDATE FROM VALUES | **14.58 ms** | **16.9x 快** |
+| **MySQL** 8.4.10 | CASE WHEN | 73.41 ms | **3.3x 快** |
+
+**关键发现**：
+- PG UPDATE FROM VALUES 极快（14.58ms）——Django 实测的 4x 提速在 PG 上验证
+- SQLite CASE WHEN 最慢——SQLite SQL 解析器对复杂 CASE WHEN 效率低
+- MySQL CASE WHEN 中等——MySQL SQL 解析器比 SQLite 强但不如 PG FROM VALUES
+- **建议**：PG/MySQL 用 BulkUpdateBatchAsync，SQLite 大批量用 BulkUpdateAsync（逐条）
+
+---
+
 ## 🏃 运行方法
 
 ### 前置条件
