@@ -86,12 +86,36 @@
 | 阶段 5 功能增值（5.1-5.7） | 7 个功能各自独立，按需推进（5.5 ForUpdate 已实现于 `QueryBuilder.cs:341`） |
 | Microsoft.CodeAnalysis.Analyzers 5.6.0 | NuGet.Config 约束 Microsoft.CodeAnalysis.* 只从 dotnet-tools 源，该源无 5.6.0 stable |
 
+### 功能增值（阶段 5 第一梯队）
+
+**5.2 SessionSetupSql**（`DbOptions.SessionSetupSql` + `DbOptions.ReadSessionSetupSql`）：
+- 主连接 + 读副本分别配置会话级 SQL（如 `SET TIME ZONE` / `SET search_path` / `SET statement_timeout`）
+- 多条 SQL 分号分隔一次 `ExecuteNonQueryAsync` 执行（三方言均支持多语句）
+- `IsNullOrWhiteSpace` 判断 null/空白等价未设置（向后兼容）
+- 读连接初始化器：无 ReadSessionSetupSql 时用 static 委托（零闭包分配）
+
+**5.4 AuditInterceptor**（`src/PalORM.Core/AuditInterceptor.cs`）：
+- 实现 `IQueryInterceptor` 三段式：OnBefore/OnAfter/OnError
+- Priority=200（让用户业务拦截器优先）
+- `logParameters` 默认 false（脱敏，避免凭据/PII 写入日志）
+- `ILogger.IsEnabled` 短路优化（无订阅者零开销）
+- 覆盖面继承 IQueryInterceptor：仅实体 SELECT + QueryBuilder UPDATE；INSERT/DELETE/Bulk/存储过程不经过
+
+**5.5b AdvisoryXactLock**（`src/PalORM.PostgreSql/AdvisoryLockExtensions.cs`）：
+- 4 个扩展方法：`AcquireXactLockAsync(long)` / `AcquireXactLockAsync(int,int)` / `TryAcquireXactLockAsync(long)` / `TryAcquireXactLockAsync(int,int)`
+- 事务级锁（`pg_advisory_xact_lock` / `pg_try_advisory_xact_lock`），事务结束自动释放
+- 单 bigint key 和双 int key 是独立锁空间（不冲突）
+- 用法：`await db.WithTransaction(async ct => await db.AcquireXactLockAsync(key, ct))`
+
+**5.5 ForUpdate**（`QueryBuilder.ForUpdate(skipLocked)`）：v5.0 前已实现，本次确认存在。
+
 ### 验证
 
 - dotnet build：0 错误
-- Core.Tests: 161/161 通过
+- Core.Tests: 173/173 通过（161 基线 + 5 SessionSetupSql + 7 AuditInterceptor）
 - SourceGen.Tests: 104/104 通过
-- Integration.Tests: 168/168 通过（含 v5.0 阶段 4.2 MySqlBulkCopy 阈值路径测试）
+- Integration.Tests: 170/170 通过（168 + 2 AdvisoryXactLock）
+- 总计：447/447 全部通过
 - 环境：PG 18.4 + MySQL 8.4.10（MySQL local_infile=ON 部署约束）
 
 ---
