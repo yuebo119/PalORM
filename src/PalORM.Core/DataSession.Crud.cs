@@ -34,7 +34,7 @@ public sealed partial class DataSession<TProvider>
                 _operationState, _options.CommandTimeout),
             tableName, columnNames, _readConnFactory,
             _options.QueryCache, _options.ValidateQueryColumnOrder,
-            static (conn, ct) => TProvider.InitializeConnectionAsync(conn, ct)));
+            _readConnInitializer));  // v5.0 阶段 5.2：从实例字段取（含 ReadSessionSetupSql）
 
         // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）
