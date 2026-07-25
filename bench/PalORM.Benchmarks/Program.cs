@@ -21,7 +21,15 @@ namespace PalORM.Benchmarks;
 public static class Program
 {
     public static void Main(string[] args)
-        => BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+    {
+        // v5.0 阶段 3.4：--boxing 切到手写微基准（绕过 BDN .NET 11 preview 不兼容）
+        if (args.Length > 0 && args[0] == "--boxing")
+        {
+            BoxingMicroBenchmark.RunAsync().GetAwaiter().GetResult();
+            return;
+        }
+        BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+    }
 }
 
 // ─── 实体（属性名 = 列名，不加 [Column]——让 Dapper 和 PalORM 都按属性名映射）───
