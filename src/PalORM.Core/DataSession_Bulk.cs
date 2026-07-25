@@ -277,28 +277,21 @@ public partial class DataSession<TProvider>
             batchLen, ctx.HasTenantFilter, _tenantParameterName);
 
         // probe 复用：逐行绑定提取参数值
-        DbCommand probe = CreateCommand();
-        try
+        await using DbCommand probe = CreateCommand();
+        for (int i = batchStart; i < batchEnd; i++)
         {
-            for (int i = batchStart; i < batchEnd; i++)
+            probe.Parameters.Clear();
+            metadata.BindUpdate(probe, entities[i]);
+            for (int c = 0; c <= ctx.SetColumnCount; c++)
             {
-                probe.Parameters.Clear();
-                metadata.BindUpdate(probe, entities[i]);
-                for (int c = 0; c <= ctx.SetColumnCount; c++)
-                {
-                    int globalIdx = (i - batchStart) * paramsPerRow + c;
-                    cmd.Parameters.Add(TProvider.CreateParameter($"@p{globalIdx}", probe.Parameters[c].Value));
-                }
+                int globalIdx = (i - batchStart) * paramsPerRow + c;
+                cmd.Parameters.Add(TProvider.CreateParameter($"@p{globalIdx}", probe.Parameters[c].Value));
             }
-            if (ctx.HasTenantFilter)
-                cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
+        }
+        if (ctx.HasTenantFilter)
+            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
 
-            return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }
-        finally
-        {
-            await probe.DisposeAsync().ConfigureAwait(false);
-        }
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>批量 UPDATE 上下文（避免方法参数过多 S107）。</summary>

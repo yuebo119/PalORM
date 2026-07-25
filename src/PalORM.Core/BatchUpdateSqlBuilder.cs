@@ -34,7 +34,12 @@ internal static class BatchUpdateSqlBuilder
             BuildCaseWhen(sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow, setColCount);
 
         if (hasTenantFilter)
-            sb.Append(" AND ").Append('"').Append("tenant_id").Append('"').Append(" = ").Append(tenantParameterName);
+        {
+            // v5.0 修复 P2-2：按方言选择引号——MySQL 用反引号，PG/SQLite 用双引号。
+            // 之前硬编码双引号在 MySQL 默认 sql_mode 下会把 "tenant_id" 当字符串字面量。
+            char q = dialect == SqlDialect.MySql ? '`' : '"';
+            sb.Append(" AND ").Append(q).Append("tenant_id").Append(q).Append(" = ").Append(tenantParameterName);
+        }
 
         return sb.ToString();
     }
