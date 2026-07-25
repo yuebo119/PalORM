@@ -22,7 +22,16 @@
     { "name": "Gc_BulkUpdateBatch_SingleStatement_10000", "median_ms": 246.93, "allocated_kb": 21138, "bytes_per_row": 2161 },
     { "name": "Gc_Query_NoBoxing_10000", "median_us": 87.90, "allocated_kb": 5.41, "bytes_per_row": 0.55 },
 
-    { "name": "PalORM_BulkInsert_Scaled_10000", "mean_ms": 63.30, "allocated_mb": 4.97, "gen0_per_1k": 222.22, "note": "BDN 实测" }
+    { "name": "PalORM_BulkInsert_Scaled_10000", "mean_ms": 63.30, "allocated_mb": 4.97, "gen0_per_1k": 222.22, "note": "BDN 实测" },
+
+    { "name": "Pg_PalORM_QueryAll", "mean_ms": 15.04, "allocated_kb": 1140, "ratio_vs_ado": 0.94, "provider": "PostgreSQL 18.4 (192.168.x.x)" },
+    { "name": "Pg_PalORM_BulkInsert_10000_COPY", "mean_ms": 63.51, "allocated_kb": 9796, "provider": "PostgreSQL 18.4", "note": "Npgsql Binary COPY 协议" },
+    { "name": "Pg_PalORM_BulkUpdateBatch_1000", "mean_ms": 14.58, "allocated_kb": 2775, "provider": "PostgreSQL 18.4", "note": "UPDATE FROM VALUES" },
+
+    { "name": "MySql_PalORM_QueryAll", "mean_ms": 94.79, "allocated_kb": 1937, "ratio_vs_ado": 0.85, "provider": "MySQL 8.4.10 (192.168.x.x)" },
+    { "name": "MySql_PalORM_Insert", "mean_us": 4002, "allocated_kb": 12.5, "provider": "MySQL 8.4.10" },
+    { "name": "MySql_PalORM_BulkInsert_10000", "mean_ms": 820.04, "allocated_kb": 7893, "provider": "MySQL 8.4.10", "note": "local_infile 可能 OFF，走多值 INSERT" },
+    { "name": "MySql_PalORM_BulkUpdateBatch_1000", "mean_ms": 73.41, "allocated_kb": 2403, "provider": "MySQL 8.4.10", "note": "CASE WHEN" }
   ],
   "regressionThresholds": {
     "median_pct": 10,
@@ -30,7 +39,8 @@
   },
   "notes": {
     "queryall_regression": "PalORM_QueryAll v4.0=4.72ms → v5.0=5.58ms (+18%)。可能因 BenchmarkDotNet fork vs NuGet 0.14 测量差异。分配 1511KB→1516KB (+0.3%) 无回归。",
-    "bulkupdatebatch_sqlite_warning": "BulkUpdateBatch 在 SQLite 上比逐条慢 6.4x（CASE WHEN 解析开销）。PG UPDATE FROM VALUES 应更快（待验证）。SQLite 小批量或逐条更优。",
-    "boxing_analysis": "BulkInsert 装箱占比 ~24.5%（128B/522B）。3.4 决策不做——PG COPY/MySQL BulkCopy 已无装箱。详见 docs/boxing-benchmark-design.md。"
+    "bulkupdatebatch_sqlite_warning": "BulkUpdateBatch 在 SQLite 上比逐条慢 6.4x（CASE WHEN 解析开销）。PG UPDATE FROM VALUES 快 16.9x（14.58ms vs SQLite 246.93ms），MySQL CASE WHEN 快 3.3x（73.41ms）。",
+    "boxing_analysis": "BulkInsert 装箱占比 ~24.5%（128B/522B）。3.4 决策不做——PG COPY/MySQL BulkCopy 已无装箱。详见 docs/boxing-benchmark-design.md。",
+    "pg_mysql_queryall_advantage": "PalORM QueryAll 在 PG 上比 ADO.NET 快 6%（15.04ms vs 16.13ms），在 MySQL 上快 15%（94.79ms vs 115.15ms）。源生成 RowFactory + 连接池调优（v5.0 MaxAutoPrepare/NoResetOnClose）的实际收益。"
   }
 }
