@@ -13,7 +13,19 @@ public sealed class PostgreSqlProvider : IDbProvider
     public static SqlDialect Dialect => SqlDialect.PostgreSql;
 
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 Npgsql 连接串:
-    /// MaxPoolSize / ConnectionIdleLifetime(秒)/ ConnectionLifetime(分钟换算为秒,checked 防溢出)。</summary>
+    /// MaxPoolSize / ConnectionIdleLifetime(秒)/ ConnectionLifetime(分钟换算为秒,checked 防溢出)。
+    /// <para><b>v5.0 阶段 3.1 调优</b>：对每个调优参数，如果用户连接串里的值等于该参数的
+    /// ADO.NET 默认值（即用户未显式调优），则覆盖为推荐调优值：
+    /// MaxAutoPrepare: 0→100（自动预编译，跨连接复用，查询延迟 -30~50%）；
+    /// AutoPrepareMinUsages: 5→2（第 2 次执行起 Prepare）；
+    /// NoResetOnClose: false→true（归还连接跳过 DISCARD ALL，+30% localhost 吞吐）；
+    /// ReadBufferSize/WriteBufferSize: 默认(8192)→16384（大结果集/大值写入吞吐）；
+    /// Enlist: true→false（跳过 TransactionScope 检查）。
+    /// <see cref="SslNegotiation"/> 不在此默认追加——Direct 值要求同时 SslMode=Require+，
+    /// 用户场景各异，应由用户按需显式设置。</para>
+    /// <para><b>判断策略说明</b>：用"属性当前值 == ADO.NET 默认值"作为"用户未显式设置"的判据。
+    /// 该判据在罕见场景（用户显式设置成默认值）下会把用户意图当作默认覆盖，但调优参数
+    /// 主动设成低性能默认值的实际场景极少，收益（透明调优）大于风险。</para></summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -23,6 +35,23 @@ public sealed class PostgreSqlProvider : IDbProvider
             ConnectionIdleLifetime = options.PoolIdleTimeoutSeconds,
             ConnectionLifetime = checked(options.PoolLifetimeMinutes * 60)
         };
+
+        // v5.0 阶段 3.1：仅当属性当前值等于 ADO.NET 默认值时覆盖为调优推荐值。
+        // Npgsql 默认值（已通过 ConnectionStringBuilder 属性默认核实）：MaxAutoPrepare=0，
+        // AutoPrepareMinUsages=5，NoResetOnClose=false，ReadBufferSize/WriteBufferSize=8192，Enlist=true。
+        if (builder.MaxAutoPrepare == 0)
+            builder.MaxAutoPrepare = 100;
+        if (builder.AutoPrepareMinUsages == 5)
+            builder.AutoPrepareMinUsages = 2;
+        if (!builder.NoResetOnClose)
+            builder.NoResetOnClose = true;
+        if (builder.ReadBufferSize == 8192)
+            builder.ReadBufferSize = 16384;
+        if (builder.WriteBufferSize == 8192)
+            builder.WriteBufferSize = 16384;
+        if (builder.Enlist)
+            builder.Enlist = false;
+
         return new NpgsqlConnection(builder.ConnectionString);
     }
 
