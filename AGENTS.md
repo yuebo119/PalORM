@@ -8,8 +8,7 @@
 ```
 1. git status——工作树清洁？
 2. dotnet build -c Debug——0 警告 0 错误？
-3. 技术债扫描——bash .ai/scripts/tech-debt-scan.sh 12/12 通过？（本地工具，不入仓库）
-4. .ai/lessons.md——已读最新版？（本地工具，不入仓库）
+3. 技术债扫描——bash .ai/scripts/tech-debt-scan.sh（本地工具，不入仓库）
 ```
 
 ## 规范真源（按优先级）
@@ -17,10 +16,9 @@
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
 | **最高** | `.editorconfig` | SonarAnalyzer 38 条规则（P0+P1 error，编译期阻断） |
-| **高** | `.ai/lessons.md` | 规范系统手册 v7.0（22 缺陷，本地工具，不入仓库） |
-| **高** | `.ai/test/prompt.md` | 测试规范系统 v1.0（14 铁律 + 16 缺陷，本地工具，不入仓库） |
-| **中** | `docs/编码规范.md` §18 | SonarAnalyzer 守护层规则文档化 |
-| **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 6 类 |
+| **高** | `docs/编码规范.md` §18 | SonarAnalyzer 守护层规则文档化 |
+| **中** | 全局 `~/.zcode/AGENTS.md` | Karpathy 准则 + 大型重构教训（16 条）+ AOT 全链路规则 |
+| **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 |
 
 ## 四系统（按需触发）
 
@@ -50,7 +48,7 @@
 - T12 三方一致扩展（包版本号+连接串参数+PRAGMA）
 - T13 被测代码完整性（写测试前确认实现完整）— 已提升到全局
 
-**过程纪律 B8-B15**（PalORM 专属缺陷编号，见 .ai/lessons.md）：
+**过程纪律 B8-B15**（PalORM 专属缺陷编号，v4.0 实测）：
 - B8 emit 变更必须清 obj/bin（增量构建复用旧 emit 导致 NRE）
 - B9 方案文字与实施代码偏差（核心路径严格对齐）
 - B10 方案调研可能误判瓶颈（benchmark 验证声称的瓶颈）
@@ -61,8 +59,6 @@
 - B15 SQL 断言必须先读生成代码（不看代码的断言 = 猜测）
 
 **R0 审查前置三核实**（已提升到全局）：核实 summary / 核实 diff / 核实 API
-
-详见 `.ai/README.md`。
 
 ## 构建验证时机
 
@@ -76,7 +72,6 @@
 
 ## 详见
 
-- **完整规范手册**：`.ai/lessons.md`
-- **四系统导航**：`.ai/README.md`
 - **贡献指南**：`CONTRIBUTING.md`
 - **变更日志**：`CHANGELOG.md`
+- **全局规范**：`~/.zcode/AGENTS.md`（Karpathy 准则 + 大型重构教训 + AOT 全链路规则）
