@@ -78,7 +78,8 @@ public sealed class DialectDifferenceTests
         await using var db = await TestDb.SqliteAsync();
         var dry = db.From<Product>().Where($"Id = {42}").AsDryRun();
         await Assert.That(dry.Sql).Contains("@p0");
-        await Assert.That(dry.Parameters).HasCount().EqualTo(1);
+        // TUnit 1.x：HasCount() 已弃用，改用 Count() 提供完整数值断言链
+        await Assert.That(dry.Parameters).Count().IsEqualTo(1);
     }
 
     // ─── UPSERT 方言分支 ───────────────────────────────────
