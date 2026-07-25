@@ -65,10 +65,11 @@ public sealed class AuditInterceptorTests
     }
 
     [Test]
-    public async Task OnError_LogsExceptionTypeAndMessage()
+    public async Task OnError_LogsExceptionTypeAndMessage_WhenLogParametersTrue()
     {
+        // logParameters=true 时记录完整异常消息
         var logger = new StubLogger();
-        var interceptor = new AuditInterceptor(logger);
+        var interceptor = new AuditInterceptor(logger, logParameters: true);
         var ctx = new QueryContext("BAD SQL", EmptyParams);
         var ex = new InvalidOperationException("syntax error");
 
@@ -77,6 +78,23 @@ public sealed class AuditInterceptorTests
         await Assert.That(logger.Entries[0].Level).IsEqualTo(LogLevel.Error);
         await Assert.That(logger.Entries[0].Message).Contains("InvalidOperationException");
         await Assert.That(logger.Entries[0].Message).Contains("syntax error");
+        await Assert.That(logger.Entries[0].Exception).IsSameReferenceAs(ex);
+    }
+
+    [Test]
+    public async Task OnError_LogsOnlyExceptionType_WhenLogParametersFalse()
+    {
+        // v5.0 P1-4 修复：logParameters=false 时不写 exception.Message（可能含参数值）
+        var logger = new StubLogger();
+        var interceptor = new AuditInterceptor(logger);  // logParameters=false（默认）
+        var ctx = new QueryContext("BAD SQL", EmptyParams);
+        var ex = new InvalidOperationException("syntax error with secret@email.com");
+
+        interceptor.OnError(ctx, ex);
+
+        await Assert.That(logger.Entries[0].Level).IsEqualTo(LogLevel.Error);
+        await Assert.That(logger.Entries[0].Message).Contains("InvalidOperationException");
+        await Assert.That(logger.Entries[0].Message.Contains("secret@email.com", StringComparison.Ordinal)).IsFalse();
         await Assert.That(logger.Entries[0].Exception).IsSameReferenceAs(ex);
     }
 
