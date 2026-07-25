@@ -163,17 +163,15 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>v5.0 阶段 4.3b：批量更新（单语句批量 UPDATE，方案 Y 严格版）。
-    /// <para><b>与 <see cref="BulkUpdateAsync{T}"/> 的差异</b>：本方法永远走批量 SQL
-    /// （PG: UPDATE FROM VALUES；MySQL/SQLite: CASE WHEN），单次 RTT 完成 N 行更新。
-    /// 无内部阈值——调用即批量，N=1 也走批量（用户显式选择）。</para>
+    /// <para><b>与 <see cref="BulkUpdateAsync{T}"/> 的差异</b>：本方法走批量 SQL
+    /// （PG: UPDATE FROM VALUES；MySQL: CASE WHEN），单次 RTT 完成 N 行更新。</para>
+    /// <para><b>SQLite 方言感知回退</b>：SQLite 的 CASE WHEN 大批量比逐条慢 6.4x（SQL 解析开销），
+    /// 实测验证 SQLite 逐条 UPDATE 已是最优路径。SQLite 调用本方法自动回退到
+    /// <see cref="BulkUpdateAsync{T}"/>（逐条 + 乐观锁语义保留），调用方无需感知。</para>
     /// <para><b>乐观锁不支持</b>：带 <c>[ConcurrencyCheck]</c> 的实体调用本方法抛
-    /// <see cref="NotSupportedException"/>。批量 UPDATE 无法正确表达"每行 version 匹配"语义，
-    /// 需要乐观锁的实体请用 <see cref="BulkUpdateAsync{T}"/>（逐条 + version 检查）。</para>
+    /// <see cref="NotSupportedException"/>（PG/MySQL 路径）；SQLite 回退到 BulkUpdateAsync 则支持。</para>
     /// <para><b>租户过滤</b>：自动追加 <c>AND tenant_id = @p</c>（与 BulkUpdateAsync 对齐）。</para>
-    /// <para><b>参数上限</b>：按驱动上限分批执行（PG/MySQL 65535，SQLite 999），物理约束非性能阈值。</para>
-    /// <para><b>受影响行数</b>：返回实际更新的行数（含 0 行的场景，如行不存在或被并发修改）。
-    /// 与 BulkUpdateAsync 不同——后者每行单独检查 affectedRows==1 抛 ConcurrencyConflictException；
-    /// 本方法不区分"行不存在"与"并发修改"，调用方需自行根据返回值判断。</para></summary>
+    /// <para><b>参数上限</b>：按驱动上限分批执行（PG/MySQL 65535，SQLite 999），物理约束非性能阈值。</para></summary>
     public async ValueTask<long> BulkUpdateBatchAsync<T>(
         IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
@@ -181,6 +179,12 @@ public partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
         if (entities.Count == 0) return 0;
+
+        // v5.0 SQLite 方言感知回退：CASE WHEN 在 SQLite 上比逐条慢 6.4x（实测验证）。
+        // PG UPDATE FROM VALUES 快 16.9x，MySQL CASE WHEN 快 3.3x——仅 SQLite 需回退。
+        // 详见 BENCHMARKS.md "BulkUpdateBatch 跨方言对照"。
+        if (TProvider.Dialect == SqlDialect.Sqlite)
+            return await BulkUpdateAsync<T>(entities, ct).ConfigureAwait(false);
 
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
