@@ -8,8 +8,13 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-preview.6.26359.118" />
     <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.3.6" />
-    <PackageVersion Include="Npgsql" Version="9.0.3" />
-    <PackageVersion Include="MySqlConnector" Version="2.4.0" />
+    <!-- v5.0 阶段 2.2：Npgsql 9.0.3→10.0.3。破坏性变更（date/time 默认映射 DateOnly/TimeOnly）
+         仅影响 GetValue/ExecuteScalar 路径；RowFactoryEmitter 全部用 GetDateTime/GetFieldValue<T>，
+         经源码核实 v10 仍返回 DateTime/TimeSpan，零代码改动。 -->
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <!-- v5.0 阶段 2.1：MySqlConnector 2.4.0→2.6.1（含安全修复 GHSA-473q-m89c-ghf8）。
+         破坏性变更（State=Broken / DI 命名空间迁移）对本项目零影响（见调研报告）。 -->
+    <PackageVersion Include="MySqlConnector" Version="2.6.1" />
   </ItemGroup>
 
   <!-- 基础依赖 (BCL 自带，无需 NuGet 引用) -->
