@@ -1,0 +1,36 @@
+{
+  "version": "5.0.0",
+  "date": "2026-07-25",
+  "environment": {
+    "cpu": "AMD Ryzen 9 8945HX (32 logical)",
+    "os": "Windows 10 22H2",
+    "dotnet": "11.0.0-preview.6.26359.118",
+    "benchmarkdotnet": "fork (local ProjectReference, net11 support)",
+    "provider": "SQLite (Memory: Data Source=bench;Mode=Memory;Cache=Shared)",
+    "seedRows": 10000,
+    "note": "v5.0 基准用 BenchmarkDotNet fork（本地引用），非 NuGet 0.15.8。fork 支持 net11 Core11_0。"
+  },
+  "benchmarks": [
+    { "name": "ADO_NET_QueryAll", "median_ms": 4.83, "mean_ms": 4.83, "allocated_kb": 1331, "gen0_per_1k": 78.13 },
+    { "name": "Dapper_QueryAll", "median_ms": 4.34, "mean_ms": 4.34, "allocated_kb": 1352, "gen0_per_1k": 82.03 },
+    { "name": "PalORM_QueryAll", "median_ms": 5.58, "mean_ms": 5.58, "allocated_kb": 1516, "gen0_per_1k": 85.94 },
+    { "name": "RepoDb_QueryAll", "median_ms": 4.16, "mean_ms": 4.16, "allocated_kb": 1116, "gen0_per_1k": 78.13 },
+
+    { "name": "Gc_Insert_OneByOne_10000", "median_ms": 103.73, "allocated_kb": 25930, "bytes_per_row": 2654 },
+    { "name": "Gc_BulkInsert_10000", "median_ms": 77.10, "allocated_kb": 5099, "bytes_per_row": 522, "boxing_pct_est": 24.5 },
+    { "name": "Gc_BulkUpdate_OneByOne_10000", "median_ms": 38.64, "allocated_kb": 17973, "bytes_per_row": 1839 },
+    { "name": "Gc_BulkUpdateBatch_SingleStatement_10000", "median_ms": 246.93, "allocated_kb": 21138, "bytes_per_row": 2161 },
+    { "name": "Gc_Query_NoBoxing_10000", "median_us": 87.90, "allocated_kb": 5.41, "bytes_per_row": 0.55 },
+
+    { "name": "PalORM_BulkInsert_Scaled_10000", "mean_ms": 63.30, "allocated_mb": 4.97, "gen0_per_1k": 222.22, "note": "BDN 实测" }
+  ],
+  "regressionThresholds": {
+    "median_pct": 10,
+    "allocated_pct": 20
+  },
+  "notes": {
+    "queryall_regression": "PalORM_QueryAll v4.0=4.72ms → v5.0=5.58ms (+18%)。可能因 BenchmarkDotNet fork vs NuGet 0.14 测量差异。分配 1511KB→1516KB (+0.3%) 无回归。",
+    "bulkupdatebatch_sqlite_warning": "BulkUpdateBatch 在 SQLite 上比逐条慢 6.4x（CASE WHEN 解析开销）。PG UPDATE FROM VALUES 应更快（待验证）。SQLite 小批量或逐条更优。",
+    "boxing_analysis": "BulkInsert 装箱占比 ~24.5%（128B/522B）。3.4 决策不做——PG COPY/MySQL BulkCopy 已无装箱。详见 docs/boxing-benchmark-design.md。"
+  }
+}
