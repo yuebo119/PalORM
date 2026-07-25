@@ -27,9 +27,10 @@ internal static class MySqlBulkCopyInserter
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);
 
-        // MySqlBulkCopy 走 LOAD DATA LOCAL INFILE，DataTable 必须包含目标表全部列
-        // （包括 AUTO_INCREMENT 主键列），主键列填 DBNull 让 MySQL 自增。否则 MySqlBulkCopy
-        // 内部按 DataTable 列序映射目标表列，列数不匹配会失败（已通过最小复现验证）。
+        // MySqlBulkCopy 走 LOAD DATA LOCAL INFILE。DataTable 必须包含目标表全部列
+        // （包括 AUTO_INCREMENT 主键列），主键列填 DBNull 让 MySQL 自增。
+        // 不指定 ColumnMappings 时 MySqlBulkCopy 按 DataTable 列名匹配目标表列名（非列序），
+        // 因此列名必须与目标表列名一致——已通过最小复现验证。
         // 源生成器 InsertColumns 已排除自增主键，需补齐主键列到 DataTable。
         int columnCount = ctx.InsertColumns.Count;
         string[] allColumns = new string[columnCount + ctx.PrimaryKeyColumns.Count];

@@ -170,6 +170,8 @@ public partial class DataSession<TProvider>
     /// <see cref="BulkUpdateAsync{T}"/>（逐条 + 乐观锁语义保留），调用方无需感知。</para>
     /// <para><b>乐观锁不支持</b>：带 <c>[ConcurrencyCheck]</c> 的实体调用本方法抛
     /// <see cref="NotSupportedException"/>（PG/MySQL 路径）；SQLite 回退到 BulkUpdateAsync 则支持。</para>
+    /// <para><b>输入不可变约束</b>：调用方在方法返回前不得修改 <paramref name="entities"/> 集合
+    /// （与 BulkInsertAsync / BulkUpdateAsync 的 IReadOnlyList&lt;T&gt; 契约一致）。</para>
     /// <para><b>租户过滤</b>：自动追加 <c>AND tenant_id = @p</c>（与 BulkUpdateAsync 对齐）。</para>
     /// <para><b>参数上限</b>：按驱动上限分批执行（PG/MySQL 65535，SQLite 999），物理约束非性能阈值。</para></summary>
     public async ValueTask<long> BulkUpdateBatchAsync<T>(
@@ -316,7 +318,8 @@ public partial class DataSession<TProvider>
         whereIdx += setIdx + 5;
 
         string setClause = updateSql.Substring(setIdx + 5, whereIdx - setIdx - 5);
-        string[] parts = setClause.Split(", ");
+        // 用 Split(',') + Trim 对生成器输出格式更宽容（容许逗号后 0/1/多空格或换行）
+        string[] parts = setClause.Split(',');
         if (parts.Length != expectedCount)
             throw new InvalidOperationException(
                 $"SET column count mismatch: parsed {parts.Length} but expected {expectedCount}.");

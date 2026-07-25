@@ -27,6 +27,7 @@ public static class AdvisoryLockExtensions
         this DataSession<PostgreSqlProvider> session, long key, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+        // FormattableString 重载：key 经 ExecuteAsync 参数化为 @p0，非字符串拼接（SQL 注入安全）
         await session.ExecuteAsync($"SELECT pg_advisory_xact_lock({key})", ct).ConfigureAwait(false);
     }
 
@@ -41,6 +42,7 @@ public static class AdvisoryLockExtensions
         this DataSession<PostgreSqlProvider> session, int key1, int key2, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+        // FormattableString 重载：key1/key2 参数化为 @p0/@p1，非字符串拼接（SQL 注入安全）
         await session.ExecuteAsync($"SELECT pg_advisory_xact_lock({key1}, {key2})", ct).ConfigureAwait(false);
     }
 
@@ -54,6 +56,7 @@ public static class AdvisoryLockExtensions
         this DataSession<PostgreSqlProvider> session, long key, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+        // FormattableString 重载：key 参数化为 @p0，非字符串拼接（SQL 注入安全）
         return await session.ScalarAsync<bool>($"SELECT pg_try_advisory_xact_lock({key})", ct).ConfigureAwait(false);
     }
 
@@ -63,6 +66,7 @@ public static class AdvisoryLockExtensions
         this DataSession<PostgreSqlProvider> session, int key1, int key2, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+        // FormattableString 重载：key1/key2 参数化为 @p0/@p1，非字符串拼接（SQL 注入安全）
         return await session.ScalarAsync<bool>(
             $"SELECT pg_try_advisory_xact_lock({key1}, {key2})", ct).ConfigureAwait(false);
     }
