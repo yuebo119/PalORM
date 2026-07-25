@@ -8,12 +8,18 @@
     <IsPackable>false</IsPackable>
     <!-- 仓库内部 CLI 通过 dotnet run 使用，尚未定义 NuGet Tool 发布契约。 -->
     <!-- CLI 工具无需本地化，连接字符串来自用户输入非注入 -->
-    <NoWarn>CA1303;CA2100</NoWarn>
+    <!-- S6966/CA1849：CLI 工具的 Console.WriteLine 同步调用可接受（非高并发路径） -->
+    <!-- IDE0028/IDE0061：CLI 程序风格保守，不强推集合表达式/表达式主体 -->
+    <!-- CLI 程序风格保守，不强推集合表达式/表达式主体。CA1308：PG/MySQL 类型名小写是惯例，不强转大写 -->
+    <NoWarn>CA1303;CA2100;CA1849;S6966;IDE0028;IDE0061;CA1308</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- v5.0 阶段 5.3：三 Provider scaffold 支持，全部 Provider 包都引入 -->
     <PackageReference Include="Microsoft.Data.Sqlite.Core" />
     <PackageReference Include="SQLite3MC.PCLRaw.bundle" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="MySqlConnector" />
   </ItemGroup>
 
 </Project>

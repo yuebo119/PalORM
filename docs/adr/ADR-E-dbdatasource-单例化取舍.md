@@ -104,10 +104,19 @@ v5.0-roadmap 阶段 4.1 提议把当前 `new NpgsqlConnection(cs)` / `new MySqlC
 | 场景 | 是否必须 DataSource | PalORM 现状 | 是否需要做 |
 |------|:---:|------|:---:|
 | Azure PG 托管 + 密码自动轮换 | ✓ 必须 | ✗ 未覆盖（用户连静态密码） | 推迟（用户无需求） |
-| 多租户动态切换 DataSource | ✓ 必须 | ✗ 未覆盖（一进程一 Provider） | 推迟（设计哲学冲突） |
+| **多库动态切换 DataSource**（每租户一个库） | ✓ 必须 | ✗ 未覆盖（设计哲学冲突） | 不做（见下） |
+| **单库多租户 + tenant_id 列过滤**（PalORM 当前模式） | ✗ 不必须 | ✓ **已实现**（`[TenantAware]` 特性 + `SetTenant` API） | 已覆盖 |
 | 复杂类型映射/自定义类型解析器 | ✓ 必须 | ✗ 未覆盖（用源生成器） | 推迟（架构不同） |
 | Native AOT + 极致裁剪 | SlimBuilder 更优 | ✓ 已 AOT 兼容 | 已覆盖 |
 | 简单单库 CRUD（PalORM 主战场） | ✗ 不必须 | ✓ 已覆盖 | 已覆盖 |
+
+**多租户场景澄清**（2026-07-25 修正）：
+- PalORM **已内置多租户支持**——`[TenantAware]` 特性 + `DataSession.SetTenant(id)` API +
+  `WHERE tenant_id = @p` 自动过滤（`DataSession.cs:169`、`DataSession.Crud.cs:44`）。
+- PalORM 的多租户是**单库 + tenant_id 列过滤**模式（同库同 DataSource 处理所有租户），
+  每个 DataSession 设不同 tenant_id，**不需要多个 DataSource**。
+- EF Core #3086 的多租户痛点是**多库动态切换**场景（每租户独立库 + 独立 DataSource），
+  与 PalORM 的单库模式不同。PalORM 当前模式不需要 DataSource 单例化。
 
 ### 优缺点对比
 
@@ -130,9 +139,10 @@ v5.0-roadmap 阶段 4.1 提议把当前 `new NpgsqlConnection(cs)` / `new MySqlC
 DbDataSource 单例化对 PalORM 是"伪优化"：
 1. **只有 EF Core 强制用**——因为它重度依赖 DI
 2. **其他微型 ORM 都不强求**——连接串模式是微型 ORM 主流
-3. **EF Core 自己从 Singleton 改 Scoped**——证明 Singleton 模式有真实痛点
+3. **EF Core 自己从 Singleton 改 Scoped**——证明 Singleton 模式有真实痛点（针对多库动态切换场景）
 4. **PalORM 无 DI 设计**——引入 Singleton 等于把 EF Core 8.0 的坑重新踩一遍
-5. **PalORM 核心场景不需要 DataSource 独有能力**——密码轮换/多租户/复杂类型映射都不是 PalORM 目标场景
+5. **PalORM 核心场景不需要 DataSource 独有能力**——密码轮换/复杂类型映射非目标；
+   **单库多租户已内置支持**（`[TenantAware]`）；多库动态切换非设计目标
 
 ## 待用户决策
 
