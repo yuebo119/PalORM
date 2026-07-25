@@ -110,13 +110,4 @@ internal static class BoxingMicroBenchmark
         await db.ExecuteAsync($"DROP TABLE boxing_test");
     }
 }
-
-[Table("boxing_test")]
-public partial class BoxingTestEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("value")] public int Value { get; set; }
-    [Column("price")] public decimal Price { get; set; }
-    [Column("active")] public bool Active { get; set; }
-}
+// BoxingTestEntity 已移至 BenchmarkEntities.cs（v5.0 基准体系重构）
