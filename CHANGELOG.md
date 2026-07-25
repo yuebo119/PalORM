@@ -78,11 +78,13 @@
 
 | 项 | 理由 |
 |------|------|
-| 阶段 3.4 NpgsqlParameter\<T\> 零装箱 | CommandFactoryEmitter 改造复杂，需独立评估 |
-| 阶段 3.6 SQLite Pooling/Cache 解除限制 | 强制 Pooling 有测试隔离风险；用户可在连接串显式配置 |
+| 阶段 3.4 NpgsqlParameter\<T\> 零装箱 | **已实测决策不做**——装箱占比 ~24.5% 但 PG COPY/MySQL BulkCopy 已无装箱；SQLite 无泛型参数 API。详见 `docs/boxing-benchmark-design.md` |
+| 阶段 3.6 SQLite Pooling/Cache 解除限制 | 强制 Pooling 有测试隔离风险；用户可在连接串显式配置 Pooling=true / Cache=Shared |
 | 阶段 4.1 DbDataSource 单例化 | **已批准 E1（不做）**——5 条 ORM 实践调研 + EF Core #3086 反面证据 + Npgsql 官方 "discouraged 非 deprecated"。详见 `docs/adr/ADR-E-dbdatasource-单例化取舍.md` |
-| 阶段 4.3 DbBatch 批量化 BulkUpdate/Delete | 与 4.1 解耦但 BulkDeleteAsync 已是批量（`IN (@p0,...)` 单语句），BulkUpdateAsync 真有 N 次 RTT 但用户无反馈，YAGNI |
-| 阶段 5 功能增值（5.1-5.7） | 7 个功能各自独立，按需推进（5.5 ForUpdate 已实现于 `QueryBuilder.cs:341`） |
+| 阶段 4.3a BulkMerge 多值 UPSERT | 分流有害（语义偏差）+ RETURNING 多行回填复杂 + 用户无需求。BulkUpdateBatchAsync（4.3b）已完成 |
+| 阶段 5.1 单操作 timeout/retry override | API 一致性困境（20+ 方法）+ 替代方案充分（多 DataSession / CancellationToken）|
+| 阶段 5.6 ASP.NET Core 集成包 | 设计哲学冲突（无 DI）+ 替代方案充分（单例 DbOptions + 工厂模式）|
+| 阶段 5.7 MySQL VECTOR 映射 | Innovation 版 + MySqlVector\<T\> API 不完整 + MySQL 8.4 测试环境不支持 |
 | Microsoft.CodeAnalysis.Analyzers 5.6.0 | NuGet.Config 约束 Microsoft.CodeAnalysis.* 只从 dotnet-tools 源，该源无 5.6.0 stable |
 
 ### 功能增值（阶段 5 第一梯队）
