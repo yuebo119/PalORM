@@ -139,6 +139,7 @@ public sealed class MySqlProvider : IDbProvider
     private static async ValueTask<bool> IsLocalInfileEnabledAsync(MySqlConnection conn, CancellationToken ct)
     {
         using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 3;  // SHOW VARIABLES 是即时查询，3 秒足够
         cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
         using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await reader.ReadAsync(ct).ConfigureAwait(false))
