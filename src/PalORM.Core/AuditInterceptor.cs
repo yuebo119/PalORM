@@ -5,13 +5,15 @@ using Microsoft.Extensions.Logging;
 namespace PalORM;
 
 /// <summary>v5.0 阶段 5.4：审计拦截器——记录每条查询的开始/结束/耗时/错误。
+/// <para><b>⚠ 覆盖面限制</b>（重要）：本拦截器仅覆盖实体 SELECT 执行管线
+/// （ToListAsync/FirstOrDefault）与 QueryBuilder UPDATE。<b>INSERT/DELETE/Bulk/存储过程不经过拦截器</b>——
+/// 如需全量审计（含写入操作），请用数据库层审计（PG log_statement / MySQL general_log）或 OpenTelemetry。
+/// 这是 <see cref="IQueryInterceptor"/> 接口的既有限制，非 AuditInterceptor 独有。</para>
 /// <para><b>设计</b>：实现 <see cref="IQueryInterceptor"/>，把审计事件转发给 <see cref="ILogger"/>。
 /// 默认 Priority=200（让用户业务拦截器优先于审计执行，避免审计日志污染业务逻辑顺序）。</para>
-/// <para><b>覆盖面限制</b>（继承自 <see cref="IQueryInterceptor"/> 文档）：仅覆盖实体 SELECT 执行管线
-/// （ToListAsync/FirstOrDefault）与 QueryBuilder UPDATE。INSERT/DELETE/Bulk/存储过程不经过拦截器——
-/// 完整审计请用数据库层审计（PG log_statement / MySQL general_log）或 OpenTelemetry。</para>
 /// <para><b>敏感数据脱敏</b>：参数值默认不写入日志（避免凭据/PII 泄露）。
-/// 调用方如需调试参数，显式在构造函数传 <c>logParameters: true</c> 并自行承担合规风险。</para>
+/// 调用方如需调试参数，显式在构造函数传 <c>logParameters: true</c> 并自行承担合规风险。
+/// 异常消息（OnError）在 logParameters=false 时也仅记录异常类型名，不记录可能含参数值的 Message。</para>
 /// <para><b>性能影响</b>：每次查询多一次 OnBefore + OnAfter 调用（含 Stopwatch.StartNew/Stop）。
 /// 无日志订阅者时（ILogger.IsEnabled=false），仍构造 QueryContext 字符串——不适用于超高频场景。
 /// 超高频场景请用 OpenTelemetry WithTracing（采样控制）。</para></summary>
