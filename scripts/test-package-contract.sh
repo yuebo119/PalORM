@@ -14,9 +14,9 @@ for project in Core SourceGen Sqlite PostgreSql MySql Testing; do
     dotnet pack "src/PalORM.$project/PalORM.$project.csproj" -c Release -o "$PACKAGES" --nologo >/dev/null
 done
 
-nuspec=$(unzip -p "$PACKAGES/PalORM.Testing.2.0.0.nupkg" '*.nuspec')
+nuspec=$(unzip -p "$PACKAGES/PalORM.Testing.5.0.0.nupkg" '*.nuspec')
 for dependency in PalORM.Core PalORM.Sqlite PalORM.PostgreSql PalORM.MySql; do
-    if ! grep -q "dependency id=\"$dependency\" version=\"2.0.0\"" <<< "$nuspec"; then
+    if ! grep -q "dependency id=\"$dependency\" version=\"5.0.0\"" <<< "$nuspec"; then
         printf 'FAIL PalORM.Testing 缺少包依赖：%s\n' "$dependency"
         exit 1
     fi
@@ -31,7 +31,7 @@ cat > "$TMP/consumer/Consumer.csproj" <<'XML'
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="PalORM.Testing" Version="2.0.0" />
+    <PackageReference Include="PalORM.Testing" Version="5.0.0" />
   </ItemGroup>
 </Project>
 XML
@@ -103,8 +103,8 @@ cat > "$TMP/analyzer-consumer/AnalyzerConsumer.csproj" <<'XML'
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="PalORM.Core" Version="2.0.0" />
-    <PackageReference Include="PalORM.SourceGen" Version="2.0.0"
+    <PackageReference Include="PalORM.Core" Version="5.0.0" />
+    <PackageReference Include="PalORM.SourceGen" Version="5.0.0"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
