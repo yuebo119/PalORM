@@ -237,7 +237,7 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | 特性 | **PalORM 5.0** | Dapper 2.1.79 | EF Core 10.0.10 | RepoDb 1.15.1 |
 |------|:---:|:---:|:---:|:---:|
 | **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选（实验性拦截器） | ❌ 实验性，生产不推荐 | ❌ 反射 + IL Emit |
-| **编译时类型诊断** | ✓ 20 条诊断规则 | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
+| **编译时类型诊断** | ✓ 33 条诊断规则（P0 防崩溃 + P1 防静默错误 + 调用级 API 误用） | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
 | **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
 | **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
 | **三方言批量策略** | ✓ COPY / BulkCopy / 多值 | ❌ 无（手写多值 SQL） | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
@@ -340,9 +340,11 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | `AcquireXactLockAsync`（v5.0） | 事务级咨询锁 `pg_advisory_xact_lock` |
 | `TryAcquireXactLockAsync`（v5.0） | 非阻塞咨询锁 |
 
-### 编译时诊断（PALORM001-022）
+### 编译时诊断（PALORM001-040）
 
-20 条 Roslyn 分析器规则：缺 `[Key]`、N+1 检测、软删/租户列校验、OwnedJson 上下文验证等——编译期发现错误，不是运行时崩溃。
+33 条 Roslyn 分析器规则，按价值分层：
+- **P0 防运行时崩溃**（PALORM001-027 + 031-033）：缺 `[Key]`、N+1 检测、软删/租户列校验、OwnedJson 上下文验证、无插入/更新列、`[Timestamp]` 非时间类型、`[NotMapped]` 冲突、`BulkUpdateBatchAsync` 对并发实体调用等——把运行时 `throw` 提前到编译期
+- **P1 防静默错误**（PALORM034-037 + 040）：`[Key]` 非默认初值让 SaveAsync 永远走 Update、`[ConcurrencyCheck]+[IgnoreOnInsert]` 让乐观锁基线为 0、`#nullable disable` 下 NULL 读取崩溃、`[Required]`+可空矛盾、`[TenantAware]` 租户列可空绕过隔离——防止不 throw 但数据错/丢失/安全绕过
 
 ---
 
@@ -540,7 +542,7 @@ dotnet publish -c Release -r win-x64 /p:PublishAot=true
 | Migration DDL | ✓ 编译时生成 |
 | QueryBuilder（值类型 struct） | ✓ 零虚调用 |
 | OwnedJson（JsonSerializerContext） | ✓ 源生成 |
-| 注解诊断（PALORM001-022） | ✓ 编译时 |
+| 注解诊断（PALORM001-040） | ✓ 编译时 |
 | AuditInterceptor | ✓ 零反射 |
 | BulkUpdateBatchAsync | ✓ StringBuilder + 参数绑定 |
 
