@@ -7,9 +7,10 @@
 - [ ] CI 干净环境 `dotnet restore` 通过（NuGet.Config packageSourceMapping 约束的包在 CI 源可用）
 
 ## 测试验证
-- [ ] `PalORM.Core.Tests` 全绿（173+ 用例）
-- [ ] `PalORM.SourceGen.Tests` 全绿（104+ 用例，含快照比对）
-- [ ] `PalORM.Integration.Tests` 全绿（171+ 用例，含 PG/MySQL 真实 DB）
+- [ ] `PalORM.Core.Tests` 全绿（174+ 用例）
+- [ ] `PalORM.SourceGen.Tests` 全绿（121+ 用例，含 33 条诊断规则测试 + 快照比对）
+- [ ] `PalORM.Integration.Tests` 全绿（173+ 用例，含 PG/MySQL 真实 DB）
+- [ ] 总计 468+ 用例全绿
 - [ ] 如改 emit 模板，`PALORM_UPDATE_SNAPSHOTS=1` 重生成并评审 diff
 - [ ] 远程 DB 测试用 `PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION`（.env.test），不用基准变量
 
@@ -48,3 +49,10 @@
 - [ ] 第三方库升级前查 release notes（不凭印象）——破坏性变更需手工适配
 - [ ] SourceGen 改动保持 netstandard2.0 + EnforceExtendedAnalyzerRules
 - [ ] NuGet.Config packageSourceMapping 约束的包在 nuget.org 也可还原（CI 兼容）
+
+## v5.0 诊断规则守护（2026-07-26 新增）
+- [ ] 新增 DiagnosticDescriptor 的 messageFormat 符合 RS1032（句点终止的单句，禁分号子句链）
+- [ ] XML doc 注释中的 `<`/`>`/`&` 已转义为 `&lt;`/`&gt;`/`&amp;`（CS1570）
+- [ ] 新规则区分 P0（防崩溃）/P1（防静默错误）/P2（风格）价值层级——P1 优先级 ≥ P0
+- [ ] 跨语句变量流追踪不只用 SyntaxNodeAction（局限：单语句内模式匹配）
+- [ ] 新增规则的 `IsPalORMAttribute` 命名空间守卫已加（避免误判第三方同名特性）
