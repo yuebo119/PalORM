@@ -478,7 +478,7 @@ public sealed class ResilienceTests
         {
             await executor.ExecuteAsync<int>(_ => throw new InvalidOperationException("trigger retry"));
         });
-        await Assert.That(ex.Message).Contains("RetryBackoff");
+        await Assert.That(ex!.Message).Contains("RetryBackoff");
         await Assert.That(ex.Message).Contains("attempt=0");
     }
 
