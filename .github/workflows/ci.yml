@@ -45,10 +45,10 @@ jobs:
                   global-json-file: global.json
 
             - name: Core tests
-              run: dotnet test test/PalORM.Core.Tests -c Release
+              run: dotnet run --project test/PalORM.Core.Tests -c Release --no-build
 
             - name: Source generator tests
-              run: dotnet test test/PalORM.SourceGen.Tests -c Release
+              run: dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build
 
     integration:
         name: Integration Tests
@@ -89,8 +89,11 @@ jobs:
               with:
                   global-json-file: global.json
 
+            - name: Build integration tests
+              run: dotnet build test/PalORM.Integration.Tests -c Release
+
             - name: Run complete integration suite
-              run: dotnet test test/PalORM.Integration.Tests -c Release
+              run: dotnet run --project test/PalORM.Integration.Tests -c Release --no-build
 
     gate:
         name: Quality Gates
