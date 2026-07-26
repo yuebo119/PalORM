@@ -177,7 +177,7 @@ public sealed class MultiEntityTests
             .IsEqualTo("item-computed");
         await Assert.That(inserted.ExternalId).IsEqualTo(externalId);
         await Assert.That(loaded!.Name).IsEqualTo("item");
-        await Assert.That(loaded!.ComputedName)
+        await Assert.That(loaded.ComputedName)
             .IsEqualTo("item-computed");
         await Assert.That(loaded.ExternalId).IsEqualTo(externalId);
     }

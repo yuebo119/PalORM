@@ -534,7 +534,7 @@ public sealed class SessionConcurrencyTests
             .Throws<ArgumentException>();
         await Assert.That(ex!.Message).Contains("disposed transaction");
         // 确保未被遮蔽为"事务必须属于主连接"消息
-        await Assert.That(ex!.Message.Contains("主连接", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(ex.Message.Contains("主连接", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]

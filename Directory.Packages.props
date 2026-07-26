@@ -32,8 +32,8 @@
 
   <!-- 测试 -->
   <ItemGroup>
-    <PackageVersion Include="TUnit" Version="1.61.15" />
-    <PackageVersion Include="TUnit.Assertions" Version="1.61.15" />
+    <PackageVersion Include="TUnit" Version="1.61.38" />
+    <PackageVersion Include="TUnit.Assertions" Version="1.61.38" />
     <!-- v5.0 阶段 1.3：移除 Microsoft.NET.Test.Sdk——TUnit 1.x 走 MTP 模式，
          dotnet run 直接执行，不再需要 VSTest 桥接（dotnet test 入口）。 -->
   </ItemGroup>
@@ -61,6 +61,6 @@
 
   <!-- 质量分析器（v3.0：CI 守护层——让 SonarLint IDE 报告与 CI 编译错误对齐） -->
   <ItemGroup>
-    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.29.0.143774" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.30.0.144632" />
   </ItemGroup>
 </Project>
