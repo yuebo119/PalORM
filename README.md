@@ -9,7 +9,11 @@
 [![Version](https://img.shields.io/badge/version-5.0.0-512BD4)](#)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
 
-**编译时源生成 · 零运行时反射 · 三数据库方言 · 跨平台加密**
+**编译时生成全部 SQL/参数绑定/物化代码——零运行时反射，Native AOT 全链路验证通过。**
+
+**支持 PostgreSQL / MySQL / SQLite 三方言，同一套 API 跨数据库最优——BulkInsert 走 COPY/BulkCopy/多值 INSERT，BulkUpdateBatch 走 FROM VALUES/CASE WHEN/自动回退。**
+
+**内置多租户隔离、乐观锁、软删除、AES-256 加密（SQLite）、审计拦截器、咨询锁——企业级特性开箱即用。**
 
 </div>
 
@@ -166,26 +170,27 @@ var env = DbOptions.FromEnvironment("PALORM_CONNECTION");
 
 ### 全部配置项
 
-| 属性 | 类型 | 默认值 | v5.0 新增 |
-|------|------|:---:|:---:|
-| `ConnectionString` | `string` (required) | — | |
-| `ReadConnectionString` | `string?` | null | |
-| `ConnectionTimeout` | `TimeSpan` | 15s | |
-| `CommandTimeout` | `TimeSpan` | 30s | |
-| `MaxRetries` | `int` | 3 | |
-| `RetryBackoff` | `Func<int, TimeSpan>?` | 指数退避 | |
-| `MaxPoolSize` | `int` | 100 | |
-| `PoolIdleTimeoutSeconds` | `int` | 30 | |
-| `PoolLifetimeMinutes` | `int` | 60 | |
-| `CircuitBreakerThreshold` | `int` | 5 | |
-| `CircuitBreakerResetAfter` | `TimeSpan` | 30s | |
-| `NamingConvention` | `enum` | None | |
-| `Interceptors` | `IReadOnlyList<IQueryInterceptor>?` | null | |
-| `ValidateQueryColumnOrder` | `bool` | true | |
-| `QueryCache` | `IQueryCache?` | 默认 1024 条 | |
-| `SessionSetupSql` | `string?` | null | **v5.0** |
-| `ReadSessionSetupSql` | `string?` | null | **v5.0** |
-| `LoggerFactory` | `ILoggerFactory?` | null | |
+| 属性 | 类型 | 默认值 | 说明 | v5.0 |
+|------|------|:---:|------|:---:|
+| `ConnectionString` | `string` (required) | — | 主库连接串（必需）。支持 `$ENV:VAR_NAME` 环境变量引用 | |
+| `ReadConnectionString` | `string?` | null | 只读副本连接串。配置后 `ForRead()` 自动路由到副本 | |
+| `ConnectionTimeout` | `TimeSpan` | 15s | 连接建立超时（含重试）。超时后抛 `TimeoutException` | |
+| `CommandTimeout` | `TimeSpan` | 30s | 每条 SQL 命令的执行超时。亚秒值向上取整为 1 秒（避免塌缩为 0=无限等待） | |
+| `MaxRetries` | `int` | 3 | 瞬时故障（连接失败/超时/死锁）最大重试次数。0=禁用重试 | |
+| `RetryBackoff` | `Func<int, TimeSpan>?` | 指数退避 | 自定义重试间隔（参数=重试次数）。返回负值抛异常 | |
+| `MaxPoolSize` | `int` | 100 | 连接池最大连接数。SQLite 不支持（抛 `NotSupportedException`） | |
+| `PoolIdleTimeoutSeconds` | `int` | 30 | 连接池空闲超时（秒）。超时后空闲连接被关闭 | |
+| `PoolLifetimeMinutes` | `int` | 60 | 连接最大生命周期（分钟）。到期后强制重建，避免长期持有陈旧连接 | |
+| `PoolExplicitlyConfigured` | `bool` | false | `WithPool()` 设置后为 true。SQLite 据此拒绝池配置 | |
+| `CircuitBreakerThreshold` | `int` | 5 | 断路器：连续失败次数阈值。0=禁用熔断 | |
+| `CircuitBreakerResetAfter` | `TimeSpan` | 30s | 熔断后恢复等待时间。超时后进入半开状态（允许一次试探请求） | |
+| `NamingConvention` | `enum` | None | 命名策略（None=原样 / SnakeCase / LowerCase）。仅影响自定义 SQL 中的标识符归一化，不影响源生成器列映射 | |
+| `Interceptors` | `IReadOnlyList<IQueryInterceptor>?` | null | 查询拦截器列表。按 `Priority` 升序执行（数值小先执行）。`AuditInterceptor` 默认 Priority=200 | |
+| `ValidateQueryColumnOrder` | `bool` | true | `QueryAsync` 首行列名与实体声明序比对，不匹配抛异常。使用列别名/表达式列的查询需关闭 | |
+| `QueryCache` | `IQueryCache?` | 默认 1024 条 | 查询缓存实现。注入独立实例可实现会话/租户级隔离。实现需线程安全 | |
+| `SessionSetupSql` | `string?` | null | 主连接首次激活后执行的 SQL（`SET TIME ZONE` / `search_path` / `statement_timeout`）。多条用分号分隔 | **v5.0** |
+| `ReadSessionSetupSql` | `string?` | null | 读副本连接首次激活后执行的 SQL。语义同 `SessionSetupSql`，作用于 `ForRead` 路由的只读副本 | **v5.0** |
+| `LoggerFactory` | `ILoggerFactory?` | null | 日志工厂。设置后 `DataSession` 创建 `ILogger`。日志级别过滤在 `LoggerFactory` 配置 | |
 
 ### v5.0 连接串自动调优
 
@@ -223,6 +228,37 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | `mmap_size` | 0 → **256MB** | 文件库 I/O 加速（`:memory:` 跳过） |
 
 ---
+
+## 与主流 ORM 特性对比
+
+| 特性 | **PalORM 5.0** | Dapper | EF Core 9 | RepoDB |
+|------|:---:|:---:|:---:|:---:|
+| **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选 | ❌ 不支持 | ❌ 反射 |
+| **编译时类型安全** | ✓ 20 条诊断规则 | ❌ 运行时 | ✓ 迁移检查 | ❌ |
+| **源生成 SQL** | ✓ 编译时预构建 | ❌ 运行时 | △ 编译时模型 | ❌ |
+| **零运行时反射** | ✓ | ❌ 首次反射+IL Emit | ❌ 表达式树 | ❌ 反射 |
+| **三方言批量策略** | ✓ COPY/BulkCopy/多值 | ❌ 统一多值 | △ Provider 差异 | ❌ 统一 |
+| **BulkUpdateBatch（单语句）** | ✓ FROM VALUES / CASE WHEN | ❌ | △ 逐条 | ❌ |
+| **乐观锁** | ✓ `[ConcurrencyCheck]` | ❌ 手动 | ✓ `RowVersion` | ❌ |
+| **软删除** | ✓ `[SoftDelete]` 自动过滤 | ❌ | ✓ 全局查询过滤器 | ❌ |
+| **多租户** | ✓ `[TenantAware]` 列隔离 | ❌ | △ 需手动实现 | ❌ |
+| **OwnedJson 编译时安全** | ✓ `[OwnedJson]` + 源生成 | ❌ 手动 STJ | ✓ Owned Types | ❌ |
+| **审计拦截器** | ✓ `AuditInterceptor`（v5.0） | ❌ | ✓ Interceptors | ❌ |
+| **咨询锁** | ✓ `pg_advisory_xact_lock`（v5.0） | ❌ | ❌ | ❌ |
+| **会话级 SET** | ✓ `SessionSetupSql`（v5.0） | ❌ | ❌ | ❌ |
+| **SQL 文件嵌入** | ✓ `[SqlFile]` 编译时 | ❌ | ❌ | ❌ |
+| **断路器 + 重试** | ✓ 内置 | ❌ 需 Polly | ✓ 类似 | ❌ |
+| **CTE / 窗口函数** | ✓ 链式 API | ❌ 原生 SQL | △ 有限 | ❌ |
+| **多结果集 GridReader** | ✓ | ✓ `QueryMultiple` | ❌ | ❌ |
+| **Keyset 分页** | ✓ `ToPageAsync` | ❌ | ❌ | ❌ |
+| **Scaffold 工具** | ✓ 三 Provider（v5.0） | ❌ | ✓ `dotnet ef` | ❌ |
+| **连接串自动调优** | ✓ PG 6 / MySQL 5 / SQLite 5 | ❌ | ❌ | ❌ |
+| **内存分配效率** | ✓ BulkInsert 分配 Dapper 的 40% | 基线 | 最高（ChangeTracker） | 中等 |
+| **第三方依赖** | **零**（Core 不引用任何 NuGet） | 零 | 高（多包） | 中等 |
+| **目标框架** | net11.0 | 多目标 | 多目标 | 多目标 |
+| **许可证** | AGPL-3.0 | Apache-2.0 | MIT | MIT |
+
+> PalORM 的核心差异：**编译时生成 + AOT 兼容 + 三方言批量策略**。Dapper 快但运行时反射；EF Core 功能全但重且不支持 AOT；RepoDb 与 PalORM 同类但无源生成。
 
 ## 特性总览
 
