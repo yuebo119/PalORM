@@ -57,7 +57,7 @@
 - 三方一致扩展 → 全局"三方一致"铁律已覆盖（包版本号+连接串参数）
 - 被测代码完整性 → 已提升到全局
 
-**过程纪律 B8-B23**（PalORM 专属缺陷编号，见 .ai/lessons.md）：
+**过程纪律 B8-B27**（PalORM 专属缺陷编号，见 .ai/lessons.md）：
 - B8 emit 变更必须清 obj/bin（增量构建复用旧 emit 导致 NRE）
 - B9 方案文字与实施代码偏差（核心路径严格对齐）
 - B10 方案调研可能误判瓶颈（benchmark 验证声称的瓶颈）
@@ -68,6 +68,7 @@
 - B15 SQL 断言必须先读生成代码（不看代码的断言 = 猜测）
 - B16-B20 v5.0 会话缺陷（TUnit 零改动误判/阈值伪精确/CASE WHEN 方言慢/NuGet.Config CI/SourceGen WithComparer）
 - B21-B23 过程纪律缺陷（核实 summary / 核实 diff / 核实 API）— R0 的底层缺陷登记
+- B24-B27 诊断规则工程化缺陷（RS1032 消息格式/XML doc 转义/防静默错误价值分层/SyntaxNodeAction 变量流局限）— PALORM001-040 完整化会话
 
 **R0 审查前置三核实**（已提升到全局）：核实 summary / 核实 diff / 核实 API
 
