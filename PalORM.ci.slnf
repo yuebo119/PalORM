@@ -1,0 +1,22 @@
+{
+  "solution": {
+    "path": "PalORM.slnx",
+    "projects": [
+      "src/PalORM.Core/PalORM.Core.csproj",
+      "src/PalORM.MySql/PalORM.MySql.csproj",
+      "src/PalORM.PostgreSql/PalORM.PostgreSql.csproj",
+      "src/PalORM.SourceGen/PalORM.SourceGen.csproj",
+      "src/PalORM.Sqlite/PalORM.Sqlite.csproj",
+      "src/PalORM.Testing/PalORM.Testing.csproj",
+      "test/PalORM.AotModels.First/PalORM.AotModels.First.csproj",
+      "test/PalORM.AotModels.Second/PalORM.AotModels.Second.csproj",
+      "test/PalORM.AotTest.MySql/PalORM.AotTest.MySql.csproj",
+      "test/PalORM.AotTest.Pg/PalORM.AotTest.Pg.csproj",
+      "test/PalORM.AotTest/PalORM.AotTest.csproj",
+      "test/PalORM.Core.Tests/PalORM.Core.Tests.csproj",
+      "test/PalORM.Integration.Tests/PalORM.Integration.Tests.csproj",
+      "test/PalORM.SourceGen.Tests/PalORM.SourceGen.Tests.csproj",
+      "tools/PalORM.Scaffold/PalORM.Scaffold.csproj"
+    ]
+  }
+}
