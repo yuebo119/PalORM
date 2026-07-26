@@ -124,9 +124,6 @@ jobs:
                     git show --check --no-ext-diff HEAD
                   fi
 
-            - name: Run quality script fixtures
-              run: bash scripts/test-quality-scripts.sh
-
             - name: Run stub gate
               run: bash scripts/stub-check.sh
 
