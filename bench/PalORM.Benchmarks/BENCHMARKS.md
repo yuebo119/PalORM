@@ -53,6 +53,17 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
 
 ### 全表查询（10,000 行）
 
+#### 2026-07-26 实测（提交 b4093de，BDN v0.16.0-develop）
+
+| 方法 | Mean | Median | Ratio | Allocated | Alloc Ratio |
+|:-----|-----:|-------:|:-----:|----------:|:-----------:|
+| **ADO_NET_QueryAll** | 4,245 μs | 4,046 μs | **1.000** | 1,360,480 B | **1.000** |
+| Dapper_QueryAll | 3,714 μs | 3,579 μs | 0.883 | 1,384,254 B | 1.017 |
+| **PalORM_QueryAll** | **4,948 μs** | 4,697 μs | **1.176** | **1,546,880 B** | **1.137** |
+| RepoDb_QueryAll | 3,716 μs | 3,464 μs | 0.884 | 1,145,086 B | 0.842 |
+
+#### 2026-07-25 实测（提交 fbfb548）
+
 | 方法 | Mean | Ratio | Allocated | Alloc Ratio |
 |:-----|-----:|:-----:|----------:|:-----------:|
 | **ADO_NET_QueryAll** | 4.83 ms | **1.00** | 1.30 MB | **1.00** |
@@ -60,7 +71,29 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
 | **PalORM_QueryAll** | **5.58 ms** | **1.17** | **1.48 MB** | **1.14** |
 | RepoDb_QueryAll | 4.16 ms | 0.87 | 1.09 MB | 0.84 |
 
-PalORM QueryAll 比 ADO.NET 慢 17%、比 Dapper 慢 29%——框架开销（RowFactory 物化 + SessionOperationState 门禁 + QueryBuilder 状态机）。
+#### 两次对比
+
+| 指标 | 07-25 (fbfb548) | 07-26 (b4093de) | 变化 | 判定 |
+|------|----------------:|----------------:|-----:|------|
+| PalORM_QueryAll Mean | 5.58 ms | 4.95 ms | **-11%** | ✅ 改善（测量精度差异） |
+| PalORM_QueryAll Allocated | 1,516 KB | 1,511 KB | -0.3% | ✅ 无变化 |
+| PalORM vs ADO.NET Ratio | 1.17× | 1.176× | 持平 | ✅ 一致 |
+
+PalORM QueryAll 比 ADO.NET 慢 17-18%、比 Dapper 慢 29-33%——框架开销（RowFactory 物化 + SessionOperationState 门禁 + QueryBuilder 状态机）。两次测试结果一致，ORM 核心代码零变更验证无回归。
+
+### 单条 CRUD 对照（2026-07-26 实测）
+
+| 操作 | ADO.NET | Dapper | **PalORM** | RepoDb | PalORM 慢于 ADO.NET |
+|------|--------:|-------:|-----------:|-------:|:-------------------:|
+| Insert | 22.78 μs / 1.4 KB | 24.64 μs / 3.7 KB | **33.69 μs / 5.8 KB** | 22.92 μs / 3.7 KB | +48% |
+| GetByKey | 21.15 μs / 1.7 KB | 19.29 μs / 2.3 KB | **27.35 μs / 4.8 KB** | 23.95 μs / 5.4 KB | +29% |
+| Update | 19.03 μs / 0.9 KB | 19.20 μs / 2.3 KB | **28.26 μs / 7.8 KB** | — | +48% |
+| Update+乐观锁 | — | — | **28.57 μs / 6.5 KB** | — | — |
+| Delete（物理） | 25.63 μs / 1.8 KB | 29.86 μs / 4.8 KB | **43.03 μs / 6.6 KB** | — | +68% |
+| Delete（软删除） | — | — | **40.98 μs / 6.4 KB** | — | — |
+| Upsert (Save) | 22.60 μs / 1.0 KB | 21.75 μs / 2.9 KB | **33.38 μs / 5.4 KB** | — | +48% |
+
+**分析**：PalORM 单条 CRUD 比手写 ADO.NET 慢 29-68%——SessionOperationState 门禁 + 源生成委托调用的固定开销。乐观锁路径与普通 Update 相当（+1%，版本递增是 `++` 操作）。软删除比物理删除略快（-5%，少一次 DELETE 多一次 UPDATE 但跳过子表清理）。Bulk 路径摊薄此开销。
 
 ---
 
