@@ -152,13 +152,47 @@
 - BulkUpdateAsync 逐条执行 + 乐观锁检查（每行 affectedRows==1 否则 ConcurrencyConflictException）
 - BulkUpdateBatchAsync 单语句批量 + 不区分"行不存在"与"并发修改"（返回受影响总行数）
 
+### 诊断规则完整化（PALORM001-040，33 条）
+
+**扩充 13 条新规则**（PALORM023-027, 031-033, 034-037, 040）：
+
+- **P0 防运行时崩溃**（8 条）：
+  - PALORM023/024：实体无可插入/可更新列（运行期 `throw`）
+  - PALORM025：`[Timestamp]` 标在非时间类型（NOT NULL 无 DEFAULT 每次插入失败）
+  - PALORM026：`[NotMapped]` 与映射特性互斥（避免 PALORM001 误报）
+  - PALORM027：`[Converter]` 与 `[OwnedJson]` 互斥（消息比 PALORM015 更精准）
+  - PALORM031：`BulkUpdateBatchAsync<T>` 对 `[ConcurrencyCheck]` 实体调用（必崩）
+  - PALORM032：`Include/Join` 引用未注册实体（运行期 throw）
+  - PALORM033：`Select(projection).ToListAsync()` 调用链（必崩）
+
+- **P1 防静默错误**（5 条）——防止不 throw 但数据错/丢失/安全绕过：
+  - PALORM034：`[Key]` 非默认初值让 SaveAsync 永远走 Update（数据静默丢失）
+  - PALORM035：`[ConcurrencyCheck]+[IgnoreOnInsert]` 让乐观锁基线为 0（安全绕过）
+  - PALORM036：`#nullable disable` 下引用类型不生成 IsDBNull 守卫（NULL 读取崩溃）
+  - PALORM037：`[Required]` + 可空注解矛盾（DDL/读取行为不一致）
+  - PALORM040：`[TenantAware]` 租户列可空（跨租户数据可见，多租户安全漏洞）
+
+**修复 7 项现有规则缺陷**：
+
+- F1：PALORM005 N+1 检测遗漏 Bulk/Save/Get 方法（功能遗漏）
+- F2：PALORM002 消息"does not match table schema"语义错位（实际是"建议加 [Column]"）
+- F3：PALORM017 对每个 `[ForeignKey]` 无条件报 Warning（过度报告，FK 在 Include 中有效）
+- F4：PALORM015 消息"writable mapped properties"含义模糊（修订为原因清单）
+- F5：PALORM012 类型限制未说明"emitter 用 ++ 自增"理由
+- F6：PALORM003 跨程序集局限未在消息中提示可降级
+- F7：PALORM010 无正例测试（补 `DoesNotReport`）
+
+**精准化 1 条消息**：
+
+- F8：PALORM009 补"partial sealed class"要求说明（STJ 源生成器约束）
+
 ### 验证
 
 - dotnet build：0 错误
-- Core.Tests: 173/173 通过（含 5.2 SessionSetupSql + 5.4 AuditInterceptor + 架构测试登记 BulkUpdateBatchAsync）
-- SourceGen.Tests: 104/104 通过
-- Integration.Tests: 173/173 通过（168 + 2 AdvisoryXactLock + 3 BulkUpdateBatchAsync）
-- 总计：450/450 全部通过
+- Core.Tests: 174/174 通过
+- SourceGen.Tests: 121/121 通过（原 104 + 新增 17 条诊断规则测试）
+- Integration.Tests: 173/173 通过
+- 总计：468/468 全部通过
 - 环境：PG 18.4 + MySQL 8.4.10（MySQL local_infile=ON 部署约束）
 
 ---
@@ -373,7 +407,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - Core + 3 Provider（SQLite/PostgreSQL/MySQL）+ SourceGen + Testing
 - 面向严格 Native AOT（IsAotCompatible + IsTrimmable）
 - 源生成器：RowFactory / CommandFactory / Migration / Registry / SqlFile / SqlTemplate
-- 编译期诊断：PALORM001-022
+- 编译期诊断：PALORM001-040（33 条，含 P0 防崩溃 + P1 防静默错误 + 调用级 API 误用）
 - 三方言支持：SQLite / PostgreSQL / MySQL
 - 弹性执行器：重试 + 退避 + 超时 + 熔断
 - 批量操作：MultiValue INSERT / PG Binary COPY

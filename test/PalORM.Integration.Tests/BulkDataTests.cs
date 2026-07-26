@@ -17,14 +17,20 @@ public partial class BulkInsertDefaultEntity
 }
 
 [Table("bulk_generated_only")]
+// PALORM023/024：测试专用的"仅 Key + Generated"实体——验证 BulkInsert 对生成列的处理
+#pragma warning disable PALORM023, PALORM024
 public partial class BulkGeneratedOnlyEntity
+#pragma warning restore PALORM023, PALORM024
 {
     [Key]
     public long Id { get; set; }
 }
 
 [Table("bulk_key_only")]
+// PALORM023/024：测试专用的"仅 Key"实体——验证 BulkInsert 在最小列集下的行为
+#pragma warning disable PALORM023, PALORM024
 public partial class BulkKeyOnlyEntity
+#pragma warning restore PALORM023, PALORM024
 {
     [Key(AutoIncrement = false)]
     public string Id { get; set; } = "";

@@ -322,6 +322,7 @@ internal sealed class GeneratorPhase2Tests
             {
                 [Key] public long Id { get; set; }
                 [NotMapped] public Ulid TransientId { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
             }
             """;
 
@@ -332,6 +333,7 @@ internal sealed class GeneratorPhase2Tests
         GeneratorResult result = RunGenerator(compilation);
         string generated = string.Join("\n", result.GeneratedSources.Values);
 
+        // PALORM024 不应触发（加了 Name 列后实体有可更新列）；PALORM016 不应触发（NotMapped 排除了 Ulid）
         await Assert.That(diagnostics
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             .IsEmpty();
@@ -717,14 +719,17 @@ internal sealed class GeneratorPhase2Tests
         GeneratorResult result = RunGenerator(compilation);
 
         // ITM-587/590 后 PALORM001/014 触发顺序变化（分析器注册结构改为 CompilationStartAction），
-        // 用 Contains 替代 IsEquivalentTo 避免对执行顺序敏感——语义是"两者都触发且无其他 error"。
+        // 用 Contains 替代 IsEquivalentTo 避免对执行顺序敏感——语义是"两者都触发"。
+        // v5.0 PALORM026：[NotMapped]+映射特性互斥——此测试故意构造 4 个冲突属性，每个触发 PALORM026。
+        // 不再断言 errorIds.Count（随 PALORM026 触发数变化，测试语义改为"两个核心规则都触发"）。
         var errorIds = diagnostics
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .Select(static diagnostic => diagnostic.Id)
             .ToList();
-        await Assert.That(errorIds.Count).IsEqualTo(2);
         await Assert.That(errorIds).Contains("PALORM001");
         await Assert.That(errorIds).Contains("PALORM014");
+        // v5.0：[NotMapped]+映射特性冲突应触发 PALORM026（至少 4 次——Column/ConcurrencyCheck/OwnedJson/ForeignKey）
+        await Assert.That(errorIds.Count(id => id == "PALORM026")).IsGreaterThanOrEqualTo(4);
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
     }
 
@@ -758,10 +763,11 @@ internal sealed class GeneratorPhase2Tests
             .GetAnalyzerDiagnosticsAsync();
         GeneratorResult result = RunGenerator(compilation);
 
+        // v5.0：PALORM027（[Converter]+[OwnedJson] 互斥）也会触发——消息比 PALORM016 更精准
         await Assert.That(diagnostics
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .Select(static diagnostic => diagnostic.Id))
-            .IsEquivalentTo(["PALORM016"]);
+            .IsEquivalentTo(["PALORM016", "PALORM027"]);
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
     }
 
