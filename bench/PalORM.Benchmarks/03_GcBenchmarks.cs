@@ -13,7 +13,7 @@ namespace PalORM.Benchmarks;
 /// 其 bytes/row 作为"非装箱基线"。其他操作的 bytes/row 减去基线 = 装箱估算值。</para>
 /// <para><b>BoxingTestEntity</b>：4 个值类型列（long/int/decimal/bool），每行装箱精确 128B
 /// （long 32B + int 24B + decimal 48B + bool 24B，含对象头 + 对齐填充）。</para>
-/// <para><b>3.4 决策指标</b>：装箱占总分配 >20% → 值得做 NpgsqlParameter&lt;T&gt;；<5% → 不做。
+/// <para><b>3.4 决策指标</b>：装箱占总分配 &gt;20% → 值得做 NpgsqlParameter&lt;T&gt;；&lt;5% → 不做。
 /// 实测结果见 docs/boxing-benchmark-design.md。</para></summary>
 [MemoryDiagnoser]
 [SimpleJob(launchCount: BenchmarkConfig.StandardLaunch, warmupCount: BenchmarkConfig.StandardWarmup, iterationCount: BenchmarkConfig.StandardIterations)]

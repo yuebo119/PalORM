@@ -26,11 +26,11 @@ jobs:
                   global-json-file: global.json
 
             - name: Restore
-              run: dotnet restore PalORM.slnx
+              run: dotnet restore PalORM.ci.slnf
 
             - name: Build (Release, warnings as errors)
               run: >-
-                  dotnet build PalORM.slnx -c Release --no-restore --no-incremental
+                  dotnet build PalORM.ci.slnf -c Release --no-restore --no-incremental
                   -warnaserror
 
     unit:
