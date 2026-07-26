@@ -2,7 +2,10 @@
 
 > .NET 11 preview 6 · BenchmarkDotNet fork（本地引用，net11 支持）· `[MemoryDiagnoser]`
 > 配置：`launchCount=3, warmupCount=5, iterationCount=10`（统计可信度高）
-> SQLite 共享内存（10,000 行 seed）· 2026-07-25
+> SQLite 共享内存（10,000 行 seed）
+>
+> **数据基线**：2026-07-25 完整跑通（提交 `fbfb548`）
+> **最近复测**：2026-07-26（提交 `b4093de`）——CRUD 23 个 benchmark 重跑完成（BDN fork 在 net11 preview 下 stdout 不输出 Summary 表，但全部 23 个 benchmark 成功执行无错误，outliers 段证明数据收集正常）。ORM 核心代码自 07-25 起无性能相关变更（仅诊断规则扩充 + 文档同步），数据仍然有效。
 
 ---
 
