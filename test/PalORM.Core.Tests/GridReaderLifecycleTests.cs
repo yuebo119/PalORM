@@ -6,7 +6,10 @@ using System.Diagnostics.CodeAnalysis;
 namespace PalORM.Core.Tests;
 
 [Table("grid_lifecycle")]
+// PALORM023/024：测试专用的"仅 Key"实体——验证 GridReader 在最小列集下的生命周期
+#pragma warning disable PALORM023, PALORM024
 internal sealed partial class GridLifecycleEntity
+#pragma warning restore PALORM023, PALORM024
 {
     [Key]
     public long Id { get; set; }
@@ -61,8 +64,11 @@ public sealed class GridReaderLifecycleTests
 
         Task first = grid.DisposeAsync().AsTask();
         Task second = grid.DisposeAsync().AsTask();
-        Exception? firstException = await Assert.ThrowsAsync<InvalidOperationException>(first);
-        Exception? secondException = await Assert.ThrowsAsync<InvalidOperationException>(second);
+        // TUnit 1.x：Assert.ThrowsAsync<T>(Task) 重载移除，需 Func<Task>。
+        // first/second 是已启动的 ValueTask.AsTask() 副本（GridReader 内部幂等），
+        // 用 _ => first 把"已启动的 Task"包装成委托以满足新签名。
+        Exception? firstException = await Assert.ThrowsAsync<InvalidOperationException>(() => first);
+        Exception? secondException = await Assert.ThrowsAsync<InvalidOperationException>(() => second);
 
         await Assert.That(ReferenceEquals(first, second)).IsTrue();
         await Assert.That(firstException).IsSameReferenceAs(secondException);

@@ -19,25 +19,40 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 21 条 PALORM 诊断
-> PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。实际编号 001-005 + 008-022，共 21 条。
+### 编译时验证 — 33 条 PALORM 诊断（v5.0 完整化）
+> PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
+> v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
+> 价值分层：P0 防崩溃（throw）/ P1 防静默错误（不 throw 但数据错/安全绕过）/ P2 风格。
 
-| 规则 | 说明 |
-|------|------|
-| PALORM001 | [Table] 实体必须有 [Key] |
-| PALORM002 | 属性无 [Column] 建议添加 |
-| PALORM003 | [ForeignKey] 引用表不存在 |
-| PALORM004 | [ForeignKey] 缺 OnDelete |
-| PALORM005 | N+1 查询检测（循环内 From/Insert 等） |
-| PALORM008-010 | OwnedJson 上下文验证 |
-| PALORM011 | 拒绝限定表名（Schema/Database） |
-| PALORM012-013 | 并发令牌类型约束 |
-| PALORM014 | [SoftDelete] 必须有 deleted_at 列 |
-| PALORM015 | 拒绝无法生成的实体形状 |
-| PALORM016 | 拒绝未知类型/无效映射 |
-| PALORM017 | 注解声明但不参与 DDL 告警 |
-| PALORM018 | [TenantAware] 必须有 tenant_id 列 |
-| PALORM019-022 | OwnedJson 上下文/Key 合法性 |
+| 规则 | 说明 | 层级 |
+|------|------|------|
+| PALORM001 | [Table] 实体必须有 [Key] | P0 |
+| PALORM002 | 属性无 [Column] 建议添加 | P2 |
+| PALORM003 | [ForeignKey] 引用表不存在 | P0 |
+| PALORM004 | [ForeignKey] 缺 OnDelete | P2 |
+| PALORM005 | N+1 查询检测（循环内 From/Insert/Bulk/Save 等） | P0 |
+| PALORM008-010 | OwnedJson 上下文验证 | P0 |
+| PALORM011 | 拒绝限定表名（Schema/Database） | P0 |
+| PALORM012-013 | 并发令牌类型约束 | P0 |
+| PALORM014 | [SoftDelete] 必须有 deleted_at 列 | P0 |
+| PALORM015 | 拒绝无法生成的实体形状 | P0 |
+| PALORM016 | 拒绝未知类型/无效映射 | P0 |
+| PALORM017 | 注解声明但不参与 DDL 告警 | P2 |
+| PALORM018 | [TenantAware] 必须有 tenant_id 列 | P0 |
+| PALORM019-022 | 复合主键/索引/列名冲突/Key 合法性 | P0 |
+| **PALORM023** | **实体无可插入列**（运行期必崩） | **P0** |
+| **PALORM024** | **实体无可更新列**（运行期必崩） | **P0** |
+| **PALORM025** | **[Timestamp] 标在非时间类型** | **P0** |
+| **PALORM026** | **[NotMapped] 与映射特性互斥** | **P0** |
+| **PALORM027** | **[Converter] 与 [OwnedJson] 互斥** | **P0** |
+| **PALORM031** | **BulkUpdateBatchAsync 对 [ConcurrencyCheck] 实体调用**（必崩） | **P0** |
+| **PALORM032** | **Include/Join 引用未注册实体** | **P0** |
+| **PALORM033** | **Select(projection).ToListAsync()**（必崩） | **P0** |
+| **PALORM034** | **[Key] 非默认初值让 SaveAsync 永远走 Update** | **P1** |
+| **PALORM035** | **[ConcurrencyCheck]+[IgnoreOnInsert] 乐观锁基线为 0** | **P1** |
+| **PALORM036** | **#nullable disable 下引用类型不生成 IsDBNull 守卫** | **P1** |
+| **PALORM037** | **[Required] + 可空注解矛盾** | **P1** |
+| **PALORM040** | **[TenantAware] 租户列可空（跨租户数据可见）** | **P1** |
 
 ### 基础注解 (22 个)
 

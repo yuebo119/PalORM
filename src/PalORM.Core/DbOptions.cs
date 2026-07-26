@@ -97,6 +97,21 @@ public sealed record DbOptions
     /// 注入独立实例可实现会话/租户级缓存隔离；实现需线程安全。</summary>
     public IQueryCache? QueryCache { get; init; }
 
+    /// <summary>v5.0 阶段 5.2：主连接首次激活后执行的 SQL（一次性会话级配置）。
+    /// <para>典型用途：<c>SET TIME ZONE 'UTC'</c>、<c>SET search_path TO 'app, public'</c>、
+    /// <c>SET statement_timeout = 30000</c> 等。多条 SQL 用分号分隔，PalORM 一次
+    /// ExecuteNonQueryAsync 执行（PG/MySQL/SQLite 均支持多语句）。</para>
+    /// <para><b>作用域</b>：仅主连接（<see cref="DataSession{TProvider}.CreateAsync"/> 打开后）。
+    /// 读副本连接请用 <see cref="ReadSessionSetupSql"/>。</para>
+    /// <para><b>用户责任</b>：SQL 方言正确性由调用方保证。PalORM 不解析、不验证内容，
+    /// 原样提交给数据库执行。</para></summary>
+    public string? SessionSetupSql { get; init; }
+
+    /// <summary>v5.0 阶段 5.2：读副本连接首次激活后执行的 SQL（一次性会话级配置）。
+    /// <para>语义同 <see cref="SessionSetupSql"/>，但作用于 ForRead 路由到的只读副本连接。
+    /// 未设置时读副本不执行任何额外 SQL。</para></summary>
+    public string? ReadSessionSetupSql { get; init; }
+
     /// <summary>校验配置数值合法性（ITM-517）——init 属性可绕过 WithPool 的构造校验直接设非法值，
     /// 在会话创建入口统一兜底。CommandTimeout=Zero 是合法的"无限等待"，此处不拒绝。
     /// <para><b>v4.6 公开化</b>：用户可在 CreateAsync 前主动调用，实现 fail-fast。</para></summary>
