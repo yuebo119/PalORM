@@ -44,6 +44,9 @@ jobs:
               with:
                   global-json-file: global.json
 
+            - name: Build
+              run: dotnet build PalORM.ci.slnf -c Release --no-incremental
+
             - name: Core tests
               run: dotnet run --project test/PalORM.Core.Tests -c Release --no-build
 
