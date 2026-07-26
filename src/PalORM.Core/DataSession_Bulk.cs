@@ -125,11 +125,17 @@ public partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
         if (entities.Count == 0) return 0;
+        return await ExecuteBulkUpdateRowByRowAsync<T>(entities, operation.Owner, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>BulkUpdate 逐条核心逻辑（不含 EnterOperation）——供 BulkUpdateAsync 和 BulkUpdateBatchAsync SQLite 回退复用。</summary>
+    private async ValueTask<long> ExecuteBulkUpdateRowByRowAsync<T>(
+        IReadOnlyList<T> entities, object? operationOwner, CancellationToken ct)
+        where T : class, new()
+    {
         DbTransaction? previousTransaction = GetActiveTransaction();
         DbTransaction transaction = previousTransaction
-            ?? await BeginTransactionCoreAsync(
-                null, operation.Owner, ct).ConfigureAwait(false);
+            ?? await BeginTransactionCoreAsync(null, operationOwner, ct).ConfigureAwait(false);
         bool ownsTransaction = previousTransaction is null;
         long total = 0;
         Exception? primaryException = null;
@@ -139,7 +145,7 @@ public partial class DataSession<TProvider>
             foreach (T entity in entities)
             {
                 total += await UpdateCoreAsync(
-                    entity, operation.Owner, ct, deferredVersionIncrements).ConfigureAwait(false);
+                    entity, operationOwner, ct, deferredVersionIncrements).ConfigureAwait(false);
             }
             if (ownsTransaction)
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
@@ -155,8 +161,7 @@ public partial class DataSession<TProvider>
         }
         finally
         {
-            _operationState.RestoreTransaction(
-                transaction, previousTransaction);
+            _operationState.RestoreTransaction(transaction, previousTransaction);
             if (ownsTransaction)
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
         }
@@ -183,10 +188,9 @@ public partial class DataSession<TProvider>
         if (entities.Count == 0) return 0;
 
         // v5.0 SQLite 方言感知回退：CASE WHEN 在 SQLite 上比逐条慢 6.4x（实测验证）。
-        // PG UPDATE FROM VALUES 快 16.9x，MySQL CASE WHEN 快 3.3x——仅 SQLite 需回退。
-        // 详见 BENCHMARKS.md "BulkUpdateBatch 跨方言对照"。
+        // 直接调内部逐条路径（不复用 BulkUpdateAsync 的 EnterOperation——会双重锁定）。
         if (TProvider.Dialect == SqlDialect.Sqlite)
-            return await BulkUpdateAsync<T>(entities, ct).ConfigureAwait(false);
+            return await ExecuteBulkUpdateRowByRowAsync(entities, operation.Owner, ct).ConfigureAwait(false);
 
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
