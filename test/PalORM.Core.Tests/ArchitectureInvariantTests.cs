@@ -42,6 +42,7 @@ public sealed class ArchitectureInvariantTests
         ["SaveAsync"] = "UPSERT 委托 Insert/Update 路径",
         ["BulkInsertAsync"] = "同 InsertAsync（租户列值由实体携带）",
         ["BulkUpdateAsync"] = "逐条委托 UpdateCoreAsync（已过滤路由）",
+        ["BulkUpdateBatchAsync"] = "v5.0 阶段 4.3b：批量 UPDATE 单语句（CASE WHEN/FROM VALUES）。租户过滤在 SQL 末尾自动追加，与 BulkUpdateAsync 对齐",
         ["BulkMergeAsync"] = "逐条委托 SaveCoreAsync（Insert/Update 语义）",
         ["SeedAsync"] = "委托 BulkMergeAsync",
     };

@@ -71,7 +71,7 @@ public sealed class AdvancedFeatureTests
         db.IgnoreFilters();
         var found = await db.GetAsync<SoftDeletableEntity>(e.Id);
         await Assert.That(found!.Name).IsEqualTo("SD");
-        await Assert.That(found!.DeletedAt).IsNotNull();
+        await Assert.That(found.DeletedAt).IsNotNull();
     }
 
     [Test]

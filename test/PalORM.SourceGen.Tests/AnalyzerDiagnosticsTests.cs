@@ -889,4 +889,290 @@ public sealed class AnalyzerDiagnosticsTests
             .Where(static d => d.Severity == DiagnosticSeverity.Error)];
         return (analyzerDiagnostics, compileErrors);
     }
+
+    // === v5.0 新规则测试（PALORM023-027, 031-033, 034-037, 040）===
+
+    [Test]
+    public async Task PALORM023_EntityWithNoInsertableColumns_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [IgnoreOnInsert] public string A { get; set; } = "";
+                [Timestamp] public System.DateTimeOffset Updated { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM023")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM023_EntityWithInsertableColumn_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                public string A { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM023")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM024_EntityWithNoUpdatableColumns_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [IgnoreOnInsert] public string A { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM024")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM024_EntityWithUpdatableColumn_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                public string A { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM024")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM025_TimestampOnNonTemporalType_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Timestamp] public int Version { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM025")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM025_TimestampOnDateTime_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Timestamp] public System.DateTime Updated { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM025")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM026_NotMappedWithKey_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [NotMapped] [Key] public long Id { get; set; }
+                public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM026")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM026_NotMappedAlone_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [NotMapped] public string Transient { get; set; } = "";
+                public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM026")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM027_ConverterWithOwnedJson_Reports()
+    {
+        const string source = """
+            using PalORM;
+            public sealed class IdConv : IValueConverter<string, string>
+            {
+                public string ToProvider(string v) => v;
+                public string FromProvider(string v) => v;
+            }
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [OwnedJson] [Converter(typeof(IdConv))] public string Payload { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM027")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM027_ConverterAlone_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            public sealed class IdConv : IValueConverter<string, string>
+            {
+                public string ToProvider(string v) => v;
+                public string FromProvider(string v) => v;
+            }
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Converter(typeof(IdConv))] public string Payload { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM027")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM034_KeyWithNonDefaultValue_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; } = -1;
+                public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM034")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM034_KeyWithAutoIncrementFalse_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key(AutoIncrement = false)] public long Id { get; set; } = 12345;
+                public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM034")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM035_ConcurrencyCheckWithIgnoreOnInsert_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [ConcurrencyCheck] [IgnoreOnInsert] public int Version { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM035")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM035_ConcurrencyCheckAlone_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [ConcurrencyCheck] public int Version { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM035")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM037_RequiredWithNullableAnnotation_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Required] public string? Name { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM037")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM040_TenantColumnNullableString_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")] [TenantAware]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("tenant_id")] public string? TenantId { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM040")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM040_TenantColumnValueType_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")] [TenantAware]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("tenant_id")] public long TenantId { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM040")).IsFalse();
+    }
 }
