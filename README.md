@@ -9,13 +9,11 @@
 [![Version](https://img.shields.io/badge/version-5.0.0-512BD4)](#)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
 
-**.NET 生态唯一完整支持全链路 Native AOT 的 ORM**。
-
-**编译时生成一切**——Roslyn 在编译期产出 SQL 构造、参数绑定、对象映射、表结构迁移，运行时零反射、零 IL Emit。Native AOT 全链路验证，原生二进制部署。
-
-**支持 PostgreSQL / MySQL / SQLite**。内置多租户隔离、乐观锁、软删除、AES-256 透明加密（SQLite）、审计拦截器、咨询锁、编译时诊断——企业级特性开箱即用，无需样板代码。
-
 </div>
+
+- **.NET 生态唯一完整支持全链路 Native AOT 的 ORM**
+- **编译时生成一切**——Roslyn 在编译期产出 SQL 构造、参数绑定、对象映射、表结构迁移，运行时零反射、零 IL Emit。Native AOT 全链路验证，原生二进制部署
+- **支持 PostgreSQL / MySQL / SQLite**。内置多租户隔离、乐观锁、软删除、AES-256 透明加密（SQLite）、审计拦截器、咨询锁、编译时诊断——企业级特性开箱即用，无需样板代码
 
 ---
 
