@@ -1,113 +1,97 @@
+using System.Data.Common;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using MySqlConnector;
+using Npgsql;
+using PalORM.Scaffold;
 
+// === 参数解析 ===
+// 用法：
+//   dotnet run -- <connection-string> [--dialect sqlite|pg|mysql] [--namespace NS] [--output DIR]
+//   或位置参数：dotnet run -- <connection-string> [namespace]
 if (args.Length < 1)
 {
-    Console.WriteLine("PalORM Scaffold — SQLite schema → C# entity generator");
-    Console.WriteLine("Usage: dotnet run -- <connection-string> [namespace]");
-    Console.WriteLine("  connection-string  SQLite 连接串（如 Data Source=my.db）");
-    Console.WriteLine("  namespace          生成的命名空间（默认 Models，或读 PALORM_SCAFFOLD_NAMESPACE 环境变量）");
+    Console.Error.WriteLine("PalORM Scaffold — 三 Provider schema → C# entity generator");
+    Console.Error.WriteLine("Usage: dotnet run -- <connection-string> [--dialect sqlite|pg|mysql] [--namespace NS] [--output DIR]");
+    Console.Error.WriteLine("  --dialect     sqlite (默认) | pg | mysql");
+    Console.Error.WriteLine("  --namespace   生成的命名空间（默认 Models，或读 PALORM_SCAFFOLD_NAMESPACE）");
+    Console.Error.WriteLine("  --output      输出目录（默认 stdout，每张表一个 class）");
     return 1;
 }
 
 string connectionString = args[0];
-// 命令行参数优先；其次 PALORM_SCAFFOLD_NAMESPACE 环境变量；最后内置默认值。
-string targetNamespace = args.Length > 1
-    ? args[1]
-    : Environment.GetEnvironmentVariable("PALORM_SCAFFOLD_NAMESPACE") ?? "Models";
+string dialectArg = ParseOption(args, "--dialect") ?? "sqlite";
+string targetNamespace = ParseOption(args, "--namespace")
+    ?? Environment.GetEnvironmentVariable("PALORM_SCAFFOLD_NAMESPACE")
+    ?? "Models";
+string? outputDir = ParseOption(args, "--output");  // null = stdout
 
-// S6966：ADO.NET 异步 API 优先——同步 Open/ExecuteReader 在 top-level 程序中也会阻塞线程池。
-using var connection = new SqliteConnection(connectionString);
+// 兼容旧位置参数：args[1] 不以 -- 开头则当 namespace
+if (args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal) && !args.Contains("--namespace"))
+    targetNamespace = args[1];
+
+// 支持方言别名：pg/postgres/postgresql → PostgreSql；mysql/my → MySql；sqlite/sql → Sqlite
+SchemaDialect dialect = dialectArg.ToLowerInvariant() switch
+{
+    "sqlite" or "sql" => SchemaDialect.Sqlite,
+    "pg" or "postgres" or "postgresql" => SchemaDialect.PostgreSql,
+    "mysql" or "my" => SchemaDialect.MySql,
+    _ => throw new ArgumentException($"无效的 dialect: '{dialectArg}'。支持: sqlite | pg | mysql")
+};
+
+// === 选择 ISchemaProvider + 打开连接 ===
+ISchemaProvider provider = dialect switch
+{
+    SchemaDialect.Sqlite => new SqliteSchemaProvider(),
+    SchemaDialect.PostgreSql => new PostgreSqlSchemaProvider(),
+    SchemaDialect.MySql => new MySqlSchemaProvider(),
+    _ => throw new InvalidOperationException($"Unsupported dialect: {dialect}")
+};
+
+if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
+    Directory.CreateDirectory(outputDir);
+
+using DbConnection connection = CreateConnection(dialect, connectionString);
 await connection.OpenAsync().ConfigureAwait(false);
 
-using var tablesCommand = connection.CreateCommand();
-tablesCommand.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'";
-using var tableReader = await tablesCommand.ExecuteReaderAsync().ConfigureAwait(false);
-
-while (await tableReader.ReadAsync().ConfigureAwait(false))
+IReadOnlyList<SchemaTable> tables = await provider.GetTablesAsync(connection).ConfigureAwait(false);
+if (tables.Count == 0)
 {
-    string tableName = tableReader.GetString(0);
-    string className = ToPascalCase(tableName);
+    Console.Error.WriteLine($"警告：未在 {dialect} 数据库中发现任何用户表。");
+    return 0;
+}
 
-    Console.WriteLine($"using PalORM;\n");
-    Console.WriteLine($"namespace {targetNamespace};\n");
-    Console.WriteLine($"[Table(\"{tableName}\")]");
-    Console.WriteLine($"public partial class {className}");
-    Console.WriteLine("{");
-
-    using var columnCommand = connection.CreateCommand();
-    columnCommand.CommandText = $"PRAGMA table_info({tableName})";
-    using var columnReader = await columnCommand.ExecuteReaderAsync().ConfigureAwait(false);
-
-    bool isFirstColumn = true;
-    while (await columnReader.ReadAsync().ConfigureAwait(false))
+foreach (SchemaTable table in tables)
+{
+    string code = EntityGenerator.Generate(table, dialect, targetNamespace);
+    if (string.IsNullOrEmpty(outputDir))
     {
-        string columnName = columnReader.GetString(1);
-        string dbType = columnReader.GetString(2).ToUpper(CultureInfo.InvariantCulture);
-        int isPrimaryKey = Convert.ToInt32(columnReader.GetInt64(5));
-
-        string csharpType = MapDbType(dbType);
-        string propertyName = ToPascalCase(columnName);
-
-        string columnAttribute = "";
-        if (!string.Equals(columnName, propertyName, StringComparison.OrdinalIgnoreCase))
-        {
-            columnAttribute = $"[Column(\"{columnName}\")] ";
-        }
-
-        if (isPrimaryKey > 0 && isFirstColumn)
-        {
-            Console.WriteLine($"    [Key] public {csharpType} {propertyName} {{ get; set; }}");
-            isFirstColumn = false;
-        }
-        else
-        {
-            Console.WriteLine($"    {columnAttribute}public {csharpType} {propertyName} {{ get; set; }} = default!;");
-        }
+        Console.WriteLine(code);
     }
-
-    Console.WriteLine("}");
-    Console.WriteLine();
+    else
+    {
+        string className = EntityGenerator.ToPascalCase(table.Name);
+        string path = Path.Combine(outputDir, $"{className}.cs");
+        await File.WriteAllTextAsync(path, code).ConfigureAwait(false);
+        Console.WriteLine($"生成: {path}");
+    }
 }
 
 return 0;
 
-static string MapDbType(string dbType)
+// === 辅助：--key value 参数解析（默认 null）===
+static string? ParseOption(string[] args, string key)
 {
-    if (dbType.StartsWith("INT", StringComparison.Ordinal))
-    {
-        return "long";
-    }
-    if (dbType.StartsWith("REAL", StringComparison.Ordinal)
-        || dbType.StartsWith("FLOAT", StringComparison.Ordinal)
-        || dbType.StartsWith("DOUB", StringComparison.Ordinal))
-    {
-        return "decimal";
-    }
-    if (dbType == "BLOB")
-    {
-        return "byte[]";
-    }
-    return "string";
+    int idx = Array.IndexOf(args, key);
+    return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
 }
 
-static string ToPascalCase(string name)
-{
-    string[] parts = name.Split('_');
-    var result = new char[name.Length];
-    int index = 0;
-    for (int i = 0; i < parts.Length; i++)
+// === 辅助：按方言创建连接 ===
+static DbConnection CreateConnection(SchemaDialect dialect, string connectionString)
+    => dialect switch
     {
-        string part = parts[i];
-        if (part.Length == 0)
-        {
-            continue;
-        }
-        result[index++] = char.ToUpper(part[0], CultureInfo.InvariantCulture);
-        for (int j = 1; j < part.Length; j++)
-        {
-            result[index++] = char.ToLower(part[j], CultureInfo.InvariantCulture);
-        }
-    }
-    return new string(result, 0, index);
-}
+        SchemaDialect.Sqlite => new SqliteConnection(connectionString),
+        SchemaDialect.PostgreSql => new NpgsqlConnection(connectionString),
+        SchemaDialect.MySql => new MySqlConnection(connectionString),
+        _ => throw new InvalidOperationException($"Unsupported dialect: {dialect}")
+    };

@@ -23,6 +23,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private readonly SessionOperationState _operationState = new();
     // v4.1：读连接工厂缓存为实例字段，避免每次 From<T> 新建闭包
     private readonly Func<DbConnection>? _readConnFactory;
+    // v5.0 阶段 5.2：读连接初始化器——包装 Provider 钩子 + ReadSessionSetupSql。
+    // 仅当 ReadSessionSetupSql 非空时才捕获实例委托；否则用 static 委托（无闭包分配）。
+    private readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
     {
@@ -38,6 +41,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         _readConnFactory = readCs is not null
             ? () => TProvider.CreateConnection(readCs, options)
             : null;
+        // v5.0 阶段 5.2：读连接初始化器——无 ReadSessionSetupSql 时用 static 委托（零闭包分配），
+        // 有时包装一层实例委托追加执行 ReadSessionSetupSql。
+        _readConnInitializer = string.IsNullOrWhiteSpace(options.ReadSessionSetupSql)
+            ? static (conn, ct) => TProvider.InitializeConnectionAsync(conn, ct)
+            : async (conn, ct) =>
+            {
+                await TProvider.InitializeConnectionAsync(conn, ct).ConfigureAwait(false);
+                await using DbCommand cmd = conn.CreateCommand();
+                cmd.CommandTimeout = options.CommandTimeoutSeconds;
+                cmd.CommandText = options.ReadSessionSetupSql;
+                await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            };
         if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
             _logger.LogDebug("DataSession<{Provider}> created", TProvider.Name);
     }
@@ -67,6 +82,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 // Provider 初始化钩子（SQLite: PRAGMA foreign_keys/WAL）。
                 // 与 OpenAsync 共享连接超时和调用方取消——初始化被锁阻塞时不再无限等待。
                 await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
+
+                // v5.0 阶段 5.2：用户会话级 SQL（SET TIME ZONE / search_path / statement_timeout 等）。
+                // 在 Provider 钩子后执行——Provider 钩子可能设置影响后续 SET 的状态（如 SQLite PRAGMA）。
+                // 多条 SQL 用分号分隔，一次 ExecuteNonQueryAsync 执行（三方言均支持多语句）。
+                if (!string.IsNullOrWhiteSpace(options.SessionSetupSql))
+                {
+                    await using DbCommand setupCmd = connection.CreateCommand();
+                    setupCmd.CommandTimeout = options.CommandTimeoutSeconds;
+                    setupCmd.CommandText = options.SessionSetupSql;
+                    await setupCmd.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
+                }
 
                 var interceptors = options.Interceptors?.ToList() ?? [];
                 ILogger? logger = options.LoggerFactory?.CreateLogger($"PalORM.{TProvider.Name}");
