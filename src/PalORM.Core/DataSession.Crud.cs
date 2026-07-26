@@ -29,7 +29,7 @@ public sealed partial class DataSession<TProvider>
         var builder = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(
-                TProvider.Dialect, (Func<DbDataReader, T>)factory!, _interceptors,
+                TProvider.Dialect, (Func<DbDataReader, T>)factory, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
                 _operationState, _options.CommandTimeout),
             tableName, columnNames, _readConnFactory,
