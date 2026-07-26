@@ -28,7 +28,7 @@ public sealed class SessionConcurrencyTests
         resources.Connection.Release();
         await first;
 
-        await Assert.That(overlapException.Message)
+        await Assert.That(overlapException!.Message)
             .IsEqualTo("DataSession already has an active database operation.");
     }
 
@@ -166,7 +166,8 @@ public sealed class SessionConcurrencyTests
             await Assert.That(async () => await session.DisposeAsync())
                 .Throws<InvalidOperationException>()
                 .WithMessage(
-                    "Complete or dispose the active transaction before disposing DataSession.");
+                    "Complete or dispose the active transaction before disposing DataSession.",
+                    StringComparison.Ordinal);
             await transaction.CommitAsync();
 
             await session.DisposeAsync();
@@ -219,7 +220,7 @@ public sealed class SessionConcurrencyTests
         {
             await Assert.That(async () => await session.DisposeAsync())
                 .Throws<InvalidOperationException>()
-                .WithMessage("DataSession cannot be disposed from its active operation or transaction scope.");
+                .WithMessage("DataSession cannot be disposed from its active operation or transaction scope.", StringComparison.Ordinal);
         });
 
         await session.ExecuteAsync($"SELECT 1");
@@ -239,7 +240,7 @@ public sealed class SessionConcurrencyTests
 
         await Assert.That(exception).IsSameReferenceAs(actionFailure);
         await Assert.That(
-                exception.Data["PalORM.TransactionCleanupException"])
+                exception!.Data["PalORM.TransactionCleanupException"])
             .IsSameReferenceAs(resources.Connection.TransactionDisposeFailure);
     }
 
@@ -273,8 +274,9 @@ public sealed class SessionConcurrencyTests
         await session.WithTransaction(async _ =>
         {
             startSibling.TrySetResult();
-            Exception? exception = await Assert.ThrowsAsync<InvalidOperationException>(sibling);
-            await Assert.That(exception.Message)
+            // TUnit 1.x：ThrowsAsync<T>(Task) 重载移除，需 Func<Task>
+            Exception? exception = await Assert.ThrowsAsync<InvalidOperationException>(() => sibling);
+            await Assert.That(exception!.Message)
                 .IsEqualTo("The active transaction belongs to another asynchronous flow.");
         });
     }
@@ -289,7 +291,7 @@ public sealed class SessionConcurrencyTests
             await Assert.That(async () =>
                     await session.WithTransaction(_ => Task.CompletedTask, ct: ct))
                 .Throws<InvalidOperationException>()
-                .WithMessage("DataSession does not support nested transactions.");
+                .WithMessage("DataSession does not support nested transactions.", StringComparison.Ordinal);
         });
     }
 
@@ -306,7 +308,7 @@ public sealed class SessionConcurrencyTests
         resources.Connection.Release();
         await first;
 
-        await Assert.That(exception.Message)
+        await Assert.That(exception!.Message)
             .IsEqualTo("DataSession already has an active database operation.");
     }
 
@@ -320,7 +322,7 @@ public sealed class SessionConcurrencyTests
             .QueryMultipleAsync($"SELECT * FROM session_concurrency");
         await Assert.That(async () => await session.ExecuteAsync($"SELECT 1"))
             .Throws<InvalidOperationException>()
-            .WithMessage("DataSession already has an active database operation.");
+            .WithMessage("DataSession already has an active database operation.", StringComparison.Ordinal);
 
         await grid.DisposeAsync();
         int affected = await session.ExecuteAsync($"SELECT 1");
@@ -532,7 +534,7 @@ public sealed class SessionConcurrencyTests
             .Throws<ArgumentException>();
         await Assert.That(ex!.Message).Contains("disposed transaction");
         // 确保未被遮蔽为"事务必须属于主连接"消息
-        await Assert.That(ex!.Message.Contains("主连接", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(ex.Message.Contains("主连接", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]
@@ -679,11 +681,11 @@ public sealed class SessionConcurrencyTests
 
             await Assert.That(() => state.Enter())
                 .Throws<InvalidOperationException>()
-                .WithMessage("The active transaction flow is completing.");
+                .WithMessage("The active transaction flow is completing.", StringComparison.Ordinal);
             await Assert.That(() => state.RegisterTransactionResource(
                     new TrackingAsyncDisposable()))
                 .Throws<InvalidOperationException>()
-                .WithMessage("The active transaction flow is completing.");
+                .WithMessage("The active transaction flow is completing.", StringComparison.Ordinal);
         }
         finally
         {
@@ -720,11 +722,12 @@ public sealed class SessionConcurrencyTests
                 .DisposeTransactionResourcesAsync(null).AsTask();
 
             connection.ReleaseReader();
+            // TUnit 1.x：ThrowsAsync<T>(Task) 重载移除，需 Func<Task>
             Exception? exception = await Assert.ThrowsAsync<InvalidOperationException>(
-                query);
+                () => query);
             await completing;
 
-            await Assert.That(exception.Message).IsEqualTo(
+            await Assert.That(exception!.Message).IsEqualTo(
                 "The active transaction flow is completing.");
             await Assert.That(connection.Reader.DisposeCount).IsEqualTo(1);
             await Assert.That(connection.CommandDisposeCount).IsEqualTo(1);

@@ -8,7 +8,7 @@
 ```
 1. git status——工作树清洁？
 2. dotnet build -c Debug——0 警告 0 错误？
-3. 技术债扫描——bash .ai/scripts/tech-debt-scan.sh 12/12 通过？（本地工具，不入仓库）
+3. 技术债扫描——bash .ai/scripts/tech-debt-scan.sh（本地工具，不入仓库）
 4. .ai/lessons.md——已读最新版？（本地工具，不入仓库）
 ```
 
@@ -17,19 +17,60 @@
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
 | **最高** | `.editorconfig` | SonarAnalyzer 38 条规则（P0+P1 error，编译期阻断） |
-| **高** | `.ai/lessons.md` | 规范系统手册 v7.0（本地工具，不入仓库） |
-| **高** | `.ai/test/prompt.md` | 测试规范系统 v1.0（本地工具，不入仓库） |
+| **高** | `.ai/lessons.md` | 规范系统手册 v7.0（22 缺陷，本地工具，不入仓库） |
+| **高** | `.ai/test/prompt.md` | 测试规范系统 v1.0（14 铁律 + 16 缺陷，本地工具，不入仓库） |
 | **中** | `docs/编码规范.md` §18 | SonarAnalyzer 守护层规则文档化 |
-| **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 6 类 |
+| **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 |
 
 ## 四系统（按需触发）
 
 | 命令 | 系统 | 用途 |
 |------|------|------|
 | `/review` | 审计+评审 | 地毯式逐行代码审查（5 档位） |
-| `/gate` | 门禁 | G1-G28 规范合规检查（编译前阻断） |
-| `/refine` | 精炼 | 24 项操作矩阵（更优实现） |
-| `/test` | 测试规范 | T1-T10 测试铁律 + 覆盖矩阵 + 基准配置规范 |
+| `/gate` | 门禁 | G1-G33 规范合规检查（编译前阻断） |
+| `/refine` | 精炼 | 24+3 项操作矩阵（更优实现） |
+| `/test` | 测试规范 | T1-T14 测试铁律 + 覆盖矩阵 + 基准配置规范 |
+
+### 项目专属经验（v4.0 + v5.0 实测，编号与四系统脚本对齐）
+
+> 通用教训已在全局 `~/.zcode/AGENTS.md` 的"大型重构实践教训"章节。以下仅保留 PalORM 专属的规则编号和缺陷编号。
+
+**门禁 G31-G33**：
+- G31 方言感知验证（跨方言 API 需 SqlDialect 分支或回退）
+- G32 NuGet.Config packageSourceMapping CI 兼容（nuget.org 也能提供约束包）
+- G33 工作树脏检查（跨任务切换前 git status 清洁）— 已提升到全局
+
+**精炼 O25-O27**：
+- O25 阈值改能力检测（local_infile 替代行数阈值）
+- O26 方案 Y 双方法（BulkUpdate vs BulkUpdateBatchAsync）
+- O27 SourceGen WithComparer（sealed record 增量缓存）
+
+**测试 T11-T14**（编号冲突注意）：
+- T11 计数口径统一（badge / 文档 / tech-debt #9 一致）
+- T12 断言基线提升需标注理由
+- T13 DryRun/SQL 断言必须先读生成代码
+- T14 优先行为断言，避免裸 IsNotNull
+
+**v5.0 期望但未入 test/prompt.md 的规则**（编号冲突）：
+- 原 AGENTS.md 声称的"T11 环境变量命名分离 / T12 三方一致扩展 / T13 被测代码完整性"与 test/prompt.md 的 T11-T14 完全冲突
+- 环境变量命名分离 → 全局 `~/.zcode/AGENTS.md` 的 v5.0 大型重构教训章节已覆盖
+- 三方一致扩展 → 全局"三方一致"铁律已覆盖（包版本号+连接串参数）
+- 被测代码完整性 → 已提升到全局
+
+**过程纪律 B8-B27**（PalORM 专属缺陷编号，见 .ai/lessons.md）：
+- B8 emit 变更必须清 obj/bin（增量构建复用旧 emit 导致 NRE）
+- B9 方案文字与实施代码偏差（核心路径严格对齐）
+- B10 方案调研可能误判瓶颈（benchmark 验证声称的瓶颈）
+- B11 review 子代理推理不验证代码（P0/P1 定级前写复现测试）
+- B12 Edit 替换误删相邻行（old_string 只含目标行 ±1 行）
+- B13 门禁正则匹配注释内容（统计前剥离 /// 和 //）
+- B14 测试计数口径统一（全仓库统一为 CI 通过数）
+- B15 SQL 断言必须先读生成代码（不看代码的断言 = 猜测）
+- B16-B20 v5.0 会话缺陷（TUnit 零改动误判/阈值伪精确/CASE WHEN 方言慢/NuGet.Config CI/SourceGen WithComparer）
+- B21-B23 过程纪律缺陷（核实 summary / 核实 diff / 核实 API）— R0 的底层缺陷登记
+- B24-B27 诊断规则工程化缺陷（RS1032 消息格式/XML doc 转义/防静默错误价值分层/SyntaxNodeAction 变量流局限）— PALORM001-040 完整化会话
+
+**R0 审查前置三核实**（已提升到全局）：核实 summary / 核实 diff / 核实 API
 
 详见 `.ai/README.md`。
 

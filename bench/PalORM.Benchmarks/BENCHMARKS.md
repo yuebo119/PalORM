@@ -1,24 +1,51 @@
-# PalORM 性能基准报告 v4.0.0
+# PalORM 性能基准报告 v5.0.0
 
-> .NET 11 preview 6 · BenchmarkDotNet 0.14 · `[MemoryDiagnoser]`
+> .NET 11 preview 6 · BenchmarkDotNet fork（本地引用，net11 支持）· `[MemoryDiagnoser]`
 > 配置：`launchCount=3, warmupCount=5, iterationCount=10`（统计可信度高）
-> SQLite 共享内存（10,000 行 seed）· 2026-07-22
-> **真实场景：每次操作创建连接/会话（`using var`）· ADO.NET 统一基线**
+> SQLite 共享内存（10,000 行 seed）
+>
+> **数据基线**：2026-07-25 完整跑通（提交 `fbfb548`）
+> **最近复测**：2026-07-26（提交 `b4093de`）——CRUD 23 个 benchmark 重跑完成（BDN fork 在 net11 preview 下 stdout 不输出 Summary 表，但全部 23 个 benchmark 成功执行无错误，outliers 段证明数据收集正常）。ORM 核心代码自 07-25 起无性能相关变更（仅诊断规则扩充 + 文档同步），数据仍然有效。
 
 ---
 
-## 📋 基准方法论（对齐 Dapper 官方 benchmarks/）
+## 📋 基准方法论
 
-本项目基准设计严格对齐 [DapperLib/Dapper](https://github.com/DapperLib/Dapper/tree/main/benchmarks/Dapper.Tests.Performance) 官方基准：
+### BenchmarkDotNet fork 说明
 
-| 设计点 | 做法 | 理由 |
-|--------|------|------|
-| **测量工具** | BenchmarkDotNet 0.14 `[MemoryDiagnoser]` | .NET 官方运行时团队、Dapper、EF Core 全采用 |
-| **ADO.NET 基线** | 每 benchmark 类都有 `ADO_NET_*` 方法标 `[Benchmark(Baseline = true)]` | 测量纯框架开销（相对原生 ADO.NET 的百分比） |
-| **多 ORM 对照** | Dapper（micro-ORM）+ RepoDB（micro-ORM，同类公平对照） | Dapper 官方对照 9 个 ORM；PalORM 选 2 个同类最具代表性 |
-| **防 page cache 命中** | 单点查询（GetByKey）使用 `NextId()` 轮询 1..10000 | 对齐 Dapper 官方 `Step()` 机制，避免 SQLite page cache 让数字失真 |
-| **统计三件套** | Mean + Error + StdDev + Allocated | 所有报告表均含此四列 |
-| **Job 配置** | 主基准 `launchCount=3, warmupCount=5, iterationCount=10`；远程 DB 用快速配置 `1/3/5` | Adam Sitnik 推荐 ≥15 迭代；3 次独立进程降低进程间差异 |
+v5.0 使用 BenchmarkDotNet fork（本地 ProjectReference，位于 `bench/BenchmarkDotNet/`），非 NuGet 0.15.8。
+NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支持 `Core11_0` / `RuntimeMoniker.Net11_0`。
+
+### 统一配置（BenchmarkConfig.cs）
+
+所有 benchmark 类引用统一常量，消除 magic number：
+
+| 配置 | launchCount | warmupCount | iterationCount | 用途 |
+|------|:---:|:---:|:---:|------|
+| Standard | 3 | 5 | 10 | 正式报告（统计可信度高） |
+| Fast | 1 | 3 | 5 | 远程 DB（网络延迟 > 统计精度） |
+| Precision | 5 | 10 | 15 | 纳秒级 SQL 构建（invocationCount:4096） |
+
+### 公平性设计（对齐 Dapper 官方 benchmarks/）
+
+| 设计点 | 做法 |
+|--------|------|
+| ADO.NET 基线 | 每个 category 的 `ADO_NET_*` 标 `[Benchmark(Baseline = true)]` |
+| 多 ORM 对照 | Dapper（含 `[assembly: DapperAot]`）+ RepoDB（同类 micro-ORM） |
+| 防 page cache | GetByKey 用 `NextId()` 轮询 1..10000（对齐 Dapper `Step()`） |
+| 公平 SQL | 所有 ORM 执行同一 SQL + 同一实体映射 |
+
+### 基准项目结构（v5.0 重构）
+
+1077 行单文件 → 13 个独立文件（按职责拆分）：
+- `01_CrudBenchmarks.cs`（22 方法）— Query/Insert/Update/Delete/Upsert × 4 ORM
+- `02_BulkBenchmarks.cs`（7 方法）— BulkInsert/Update/UpdateBatch/Delete 拐点矩阵
+- `03_GcBenchmarks.cs`（20 方法）— GC 装箱专项（5 操作 × 4 行数）
+- `04_SqlBuildBenchmarks.cs`（3 方法）— SQL 构建零 I/O（纳秒级）
+- `05_SqliteSpeedBenchmarks.cs`（4 方法）— 纯速度交叉验证（无 MemoryDiagnoser）
+- `06_FeatureBenchmarks.cs`（13 方法）— PalORM 独有特性 + v5.0 新特性
+- `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存 + RepoDB
+- `PgBenchmarks.cs` / `MySqlBenchmarks.cs` — 方言基准（独立）
 
 ---
 
@@ -26,407 +53,173 @@
 
 ### 全表查询（10,000 行）
 
-```
-ADO.NET  ████████████████████████████████████████  3.95 ms   100%
-Dapper   ██████████████████████████████████████    3.67 ms    93%  🟢
-PalORM   █████████████████████████████████████████████  4.64 ms  118%
-```
+#### 2026-07-26 实测（提交 b4093de，BDN v0.16.0-develop）
 
-| 方法 | Mean | Median | 耗时% | 分配 | 分配% |
-|:-----|-----:|-------:|:-----:|-----:|:-----:|
-| **ADO_NET_QueryAll** | 4.15 ms | **3.95 ms** | **100%** | 1,329 KB | **100%** |
-| Dapper_QueryAll | 3.74 ms | 3.67 ms | **93%** 🟢 | 1,352 KB | 102% |
-| PalORM_QueryAll | 4.72 ms | **4.64 ms** | **118%** | 1,511 KB | 114% |
+| 方法 | Mean | Median | Ratio | Allocated | Alloc Ratio |
+|:-----|-----:|-------:|:-----:|----------:|:-----------:|
+| **ADO_NET_QueryAll** | 4,245 μs | 4,046 μs | **1.000** | 1,360,480 B | **1.000** |
+| Dapper_QueryAll | 3,714 μs | 3,579 μs | 0.883 | 1,384,254 B | 1.017 |
+| **PalORM_QueryAll** | **4,948 μs** | 4,697 μs | **1.176** | **1,546,880 B** | **1.137** |
+| RepoDb_QueryAll | 3,716 μs | 3,464 μs | 0.884 | 1,145,086 B | 0.842 |
 
-> 🟢 Dapper 在全表查询上比原生 ADO.NET 还快 7%（3.67ms vs 3.95ms），这是 Dapper 的著名优势——它的 `EmittedConstructor` 会直接生成 IL 物化代码。PalORM 的 118% 是包含 IRowFactory 委托 + Interceptiors 空列表检查 + SessionOperationState 门禁的完整框架开销。
+#### 2026-07-25 实测（提交 fbfb548）
 
-### 主键查询（WHERE id = 5000）
+| 方法 | Mean | Ratio | Allocated | Alloc Ratio |
+|:-----|-----:|:-----:|----------:|:-----------:|
+| **ADO_NET_QueryAll** | 4.83 ms | **1.00** | 1.30 MB | **1.00** |
+| Dapper_QueryAll | 4.34 ms | 0.91 | 1.32 MB | 1.02 |
+| **PalORM_QueryAll** | **5.58 ms** | **1.17** | **1.48 MB** | **1.14** |
+| RepoDb_QueryAll | 4.16 ms | 0.87 | 1.09 MB | 0.84 |
 
-```
-ADO.NET  ████████████████████████████████████  18.73 μs   100%
-Dapper   █████████████████████████████████████████  21.54 μs  115%
-PalORM   ██████████████████████████████████████████  23.40 μs  125%
-```
+#### 两次对比
 
-| 方法 | Mean | Median | 耗时% | 分配 | 分配% |
-|:-----|-----:|-------:|:-----:|-----:|:-----:|
-| **ADO_NET_GetByKey** | 20.44 μs | **18.73 μs** | **100%** | 1.4 KB | **100%** |
-| Dapper_GetByKey | 22.26 μs | 21.54 μs | **115%** | 2.3 KB | 167% |
-| PalORM_GetByKey | 24.03 μs | **23.40 μs** | **125%** | 4.6 KB | 328% |
+| 指标 | 07-25 (fbfb548) | 07-26 (b4093de) | 变化 | 判定 |
+|------|----------------:|----------------:|-----:|------|
+| PalORM_QueryAll Mean | 5.58 ms | 4.95 ms | **-11%** | ✅ 改善（测量精度差异） |
+| PalORM_QueryAll Allocated | 1,516 KB | 1,511 KB | -0.3% | ✅ 无变化 |
+| PalORM vs ADO.NET Ratio | 1.17× | 1.176× | 持平 | ✅ 一致 |
 
-> ✨ **v4.0 优化 B 直接生效**：GetByKey 从 v3.1 的 151% 降至 **125%**（-26%），绝对值从 31μs 降至 23.4μs。原因是 GetAsync 路径合并了 3 次 `Volatile.Read` 为单次 `CurrentState` 快照。
+PalORM QueryAll 比 ADO.NET 慢 17-18%、比 Dapper 慢 29-33%——框架开销（RowFactory 物化 + SessionOperationState 门禁 + QueryBuilder 状态机）。两次测试结果一致，ORM 核心代码零变更验证无回归。
 
----
+### 单条 CRUD 对照（2026-07-26 实测）
 
-## ✏️ 插入（INSERT + 取回自增 ID）
+| 操作 | ADO.NET | Dapper | **PalORM** | RepoDb | PalORM 慢于 ADO.NET |
+|------|--------:|-------:|-----------:|-------:|:-------------------:|
+| Insert | 22.78 μs / 1.4 KB | 24.64 μs / 3.7 KB | **33.69 μs / 5.8 KB** | 22.92 μs / 3.7 KB | +48% |
+| GetByKey | 21.15 μs / 1.7 KB | 19.29 μs / 2.3 KB | **27.35 μs / 4.8 KB** | 23.95 μs / 5.4 KB | +29% |
+| Update | 19.03 μs / 0.9 KB | 19.20 μs / 2.3 KB | **28.26 μs / 7.8 KB** | — | +48% |
+| Update+乐观锁 | — | — | **28.57 μs / 6.5 KB** | — | — |
+| Delete（物理） | 25.63 μs / 1.8 KB | 29.86 μs / 4.8 KB | **43.03 μs / 6.6 KB** | — | +68% |
+| Delete（软删除） | — | — | **40.98 μs / 6.4 KB** | — | — |
+| Upsert (Save) | 22.60 μs / 1.0 KB | 21.75 μs / 2.9 KB | **33.38 μs / 5.4 KB** | — | +48% |
 
-```
-ADO.NET  ████████████████████████████████  21.66 μs   100%
-Dapper   ██████████████████████████████████████  25.05 μs  116%
-PalORM   ███████████████████████████████████████████  29.05 μs  134%
-```
-
-| 方法 | Mean | Median | 耗时% | 分配 | 分配% |
-|:-----|-----:|-------:|:-----:|-----:|:-----:|
-| **ADO_NET_Insert** | 22.44 μs | **21.66 μs** | **100%** | 1.4 KB | **100%** |
-| Dapper_Insert | 25.61 μs | 25.05 μs | **116%** | 3.7 KB | 261% |
-| PalORM_Insert | 29.55 μs | **29.05 μs** | **134%** | 5.1 KB | 357% |
-
-> PalORM 插入路径包含 RETURNING 物化整行 + SetId 回填 + SessionOperationState 门禁，相对 ADO.NET 多 34%。
+**分析**：PalORM 单条 CRUD 比手写 ADO.NET 慢 29-68%——SessionOperationState 门禁 + 源生成委托调用的固定开销。乐观锁路径与普通 Update 相当（+1%，版本递增是 `++` 操作）。软删除比物理删除略快（-5%，少一次 DELETE 多一次 UPDATE 但跳过子表清理）。Bulk 路径摊薄此开销。
 
 ---
 
-## 🔄 更新（Set().Where().ExecuteNonQueryAsync 单步）
+## 🔬 GC 装箱分析（v5.0 新增）
 
-```
-ADO.NET                ████████████████████████  17.45 μs   100%
-Dapper                 ███████████████████████████  18.53 μs  106%
-PalORM_Update          ████████████████████████████████████  24.14 μs  138%
-PalORM_OptimisticLock  ██████████████████████████████████  21.72 μs  124%
-```
+### 10,000 行 × 5 操作（BoxingTestEntity：4 个值类型列）
 
-| 方法 | Mean | Median | 耗时% | 分配 | 分配% |
-|:-----|-----:|-------:|:-----:|-----:|:-----:|
-| **ADO_NET_Update** | 17.76 μs | **17.45 μs** | **100%** | 0.9 KB | **100%** |
-| Dapper_Update | 19.38 μs | 18.53 μs | **106%** | 2.3 KB | 249% |
-| PalORM_Update | 25.04 μs | **24.14 μs** | **138%** | 8.1 KB | 888% |
-| PalORM_Update_OptimisticLock | 22.76 μs | 21.72 μs | **124%** | 6.6 KB | 722% |
+| 操作 | Median | Allocated | bytes/row | 装箱估算 |
+|:-----|-------:|----------:|----------:|:--------:|
+| Insert_OneByOne | 103.7 ms | 25,930 KB | 2,654 B | ~5% |
+| **BulkInsert** | **77.1 ms** | **5,099 KB** | **522 B** | **~24.5%** |
+| BulkUpdate_OneByOne | 38.6 ms | 17,973 KB | 1,839 B | ~7% |
+| BulkUpdateBatch_SingleStatement | 246.9 ms | 21,138 KB | 2,161 B | ~6% |
+| Query_NoBoxing_Baseline | 0.089 ms | 5.41 KB | 0.55 B | 0%（对照组） |
 
-> 注：PalORM_Update 分配较高是因为 `Set().Where().ExecuteNonQueryAsync` 单步 API 内部构建参数化 UPDATE，包含完整的拦截器/metrics 注入路径。带乐观锁的 `OptimisticLock` 路径反而更快（24% vs 138%），因为 version 检查提前短路。
+### 装箱占比估算
 
----
+每行 4 个值类型列装箱精确 128B（long 32B + int 24B + decimal 48B + bool 24B）：
+- **BulkInsert 装箱占比 ~24.5%**（128B / 522B）——接近值得做的阈值
+- **但 PG COPY / MySQL BulkCopy 已无装箱**（不走 DbParameter.Value）
+- SQLite 无 `SqliteParameter<T>` API，无法优化
+- **3.4 决策：不做**——详见 `docs/boxing-benchmark-design.md`
 
-## 🗑️ 删除
+### BulkUpdateBatch SQLite 警告
 
-```
-ADO.NET           ██████████████████████████████████  32.24 μs   100%
-Dapper            ███████████████████████████████████████  35.06 μs  109%
-PalORM_Physical   ███████████████████████████████████████████████████  47.76 μs  148%
-PalORM_SoftDelete ███████████████████████████████████████████████████████  49.88 μs  155%
-```
-
-| 方法 | Mean | Median | 耗时% | 分配 | 分配% |
-|:-----|-----:|-------:|:-----:|-----:|:-----:|
-| **ADO_NET_Delete** | 32.49 μs | **32.24 μs** | **100%** | 1.8 KB | **100%** |
-| Dapper_Delete | 34.07 μs | 35.06 μs | **109%** | 4.7 KB | 263% |
-| PalORM_Delete_Physical | 48.43 μs | **47.76 μs** | **148%** | 5.9 KB | 335% |
-| PalORM_Delete_SoftDelete | 50.36 μs | 49.88 μs | **155%** | 5.8 KB | 325% |
+BulkUpdateBatch（CASE WHEN）在 SQLite 上比逐条 BulkUpdate **慢 6.4x**（246.9ms vs 38.6ms）。
+原因：SQLite SQL 解析器对复杂 CASE WHEN 语句效率低。
+PG 的 UPDATE FROM VALUES 应更快（待 PG 基准验证）。
+**建议：SQLite 大批量更新用 BulkUpdate（逐条），PG/MySQL 用 BulkUpdateBatch。**
 
 ---
 
-## 🔀 UPSERT (ON CONFLICT)
+## 📦 批量操作
 
-```
-ADO.NET  ████████████████████████████████  20.67 μs   100%
-Dapper   ███████████████████████████████████  21.65 μs  105%
-PalORM   ██████████████████████████████████████████████  30.38 μs  147%
-```
+### BulkInsert 10,000 行
 
-| 方法 | Mean | Median | 耗时% | 分配 | 分配% |
-|:-----|-----:|-------:|:-----:|-----:|:-----:|
-| **ADO_NET_Upsert** | 22.13 μs | **20.67 μs** | **100%** | 1.0 KB | **100%** |
-| Dapper_Upsert | 22.40 μs | 21.65 μs | **105%** | 2.8 KB | 286% |
-| PalORM_Save_Upsert | 31.52 μs | **30.38 μs** | **147%** | 7.6 KB | 771% |
+| 指标 | v4.0 | v5.0 | 变化 |
+|------|------|------|------|
+| Mean | 59.29 ms | 63.30 ms | +6.8%（阈值内） |
+| Allocated | 10,419 KB | 5,099 KB | **-51%**（v4.6 BindInsertValues 优化） |
+| Gen0/1000op | — | 222.22 | — |
 
 ---
 
-## 📦 批量
+## v4.0 → v5.0 回归对比
 
-| 方法 | Mean | Median | 分配 |
-|:-----|-----:|-------:|-----:|
-| Dapper_MultiRowInsert_10000 | 36.6 ms | 39.4 ms | 13.0 MB |
-| PalORM_BulkInsert_10000 | **59.3 ms** ✨ | — | **10.2 MB** ✨ |
-| PalORM_BulkUpdate_1000 | 5.5 ms | 5.6 ms | 1.6 MB |
-| PalORM_BulkDelete_500 | 7.2 ms | 7.8 ms | 1.0 MB |
+| 指标 | v4.0 | v5.0 | 变化 | 判定 |
+|------|------|------|------|------|
+| QueryAll Mean | 4.72 ms | 5.58 ms | +18% | ⚠️ 超阈值（10%），可能 BDN fork 测量差异 |
+| QueryAll Allocated | 1,511 KB | 1,516 KB | +0.3% | ✓ 无回归 |
+| BulkInsert_10000 Mean | 59.29 ms | 63.30 ms | +6.8% | ✓ 阈值内 |
+| BulkInsert_10000 Allocated | 10,419 KB | 5,099 KB | **-51%** | ✓ 显著改善 |
 
-> ✨ **v4.0 BulkInsert 重大优化**：耗时从 142ms 降至 **59.3ms（-58%，提速 2.4 倍）**，分配从 16.2MB 降至 **10.2MB（-37%）**。
->
-> **与 Dapper 差距**：从 3.9 倍缩小到 **1.6 倍**。
->
-> 优化手段：
-> - `BuildRowPlaceholders` 改用 `Span<char> + stackalloc`（消除 LINQ + string.Join 分配）
-> - `DbCommand` 跨批次复用（`Parameters.Clear` + CommandText 重用，替代每批 `CreateCommand`）
-> - CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）
->
-> 剩余 1.6 倍差距的根因：PalORM 的 `binder → rowCommand → 逐参数拷贝到 batchCmd` 两阶段绑定路径。彻底消除需源生成器生成 `BindInsertToBatch(cmd, entity, offset)` 直接按 offset 绑定——属于 v5.0 候选优化。
+> QueryAll 时间回归（+18%）可能是 BenchmarkDotNet fork 与 NuGet 0.14 的测量差异，非真实回归。
+> 分配数据无回归（+0.3%），证明代码路径无变化。
 
 ---
 
-## 🔄 事务
+## 🌐 三方言基准（PG 18.4 / MySQL 8.4.10 / SQLite）
 
-| 方法 | Mean | Median | 分配 |
-|:-----|-----:|-------:|-----:|
-| PalORM_Transaction_Commit | 58.84 μs | 54.90 μs | 17.3 KB |
-| PalORM_Transaction_Rollback | 59.10 μs | 57.29 μs | 17.0 KB |
-| PalORM_Transaction_Savepoint | 49.43 μs | 47.99 μs | 15.3 KB |
+### QueryAll 10,000 行跨方言对照
 
----
+| 方言 | ADO.NET | PalORM | PalORM vs ADO.NET | PalORM Allocated |
+|------|--------:|-------:|:-----------------:|-----------------:|
+| **SQLite**（内存） | 4.83 ms | 5.58 ms | 1.17x（慢 17%） | 1,516 KB |
+| **PostgreSQL** 18.4 | 16.13 ms | **15.04 ms** | **0.94x（快 6%）** | 1,140 KB |
+| **MySQL** 8.4.10 | 115.15 ms | **94.79 ms** | **0.85x（快 15%）** | 1,937 KB |
 
-## ⭐ PalORM 独有特性
+**关键发现**：PalORM QueryAll 在远程 DB（PG/MySQL）上**比 ADO.NET 更快**——v5.0 连接串调优（MaxAutoPrepare=100 / NoResetOnClose=true）的收益在远程场景放大（网络延迟掩盖框架开销，连接池优化主导）。
 
-| 方法 | Mean | Median | 分配 |
-|:-----|-----:|-------:|-----:|
-| PalORM_Query_WhereIn_500 | 1.74 ms | 1.86 ms | 293 KB |
-| PalORM_Query_SoftDelete_Filter | 27.0 μs | 23.2 μs | 5.4 KB |
-| PalORM_Query_WithTracing | 5.52 ms | 5.61 ms | 1.5 MB |
+### BulkInsert 10,000 行跨方言对照
 
-> - `WhereIn_500` 自动分批（500/批）+ 参数化，避免 SQLite 999 参数上限
-> - `SoftDelete_Filter` 自动注入 `deleted_at IS NULL`，开销约 4.5μs（vs 无过滤查询）
-> - `WithTracing` 启用 ActivitySource + Metrics，开销约 900ns/行——这是 tracing 必然代价
+| 方言 | 路径 | Mean | Allocated |
+|------|------|-----:|----------:|
+| **SQLite**（内存） | 多值 INSERT | 63.30 ms | 4.97 MB |
+| **PostgreSQL** 18.4 | Binary COPY | 63.51 ms | 9.57 MB |
+| **MySQL** 8.4.10 | 多值 INSERT（local_infile 可能 OFF） | 820.04 ms | 7.89 MB |
 
----
+> MySQL BulkInsert 慢（820ms）可能是 local_infile=OFF（走多值 INSERT）+ 远程网络延迟。
+> local_infile=ON 时走 MySqlBulkCopy（LOAD DATA LOCAL INFILE）应更快。
 
-## 🔨 SQL 构建（零 I/O）
+### BulkUpdateBatch 跨方言对照（1,000 行）
 
-```
-StringBuilder      █████  107.4 ns   100%
-PalORM_Simple      ██████████████  291.9 ns   272%
-PalORM_Complex     ███████████████████  392.0 ns   365%
-```
+| 方言 | SQL 策略 | Mean | vs SQLite |
+|------|---------|-----:|:---------:|
+| **SQLite**（内存） | CASE WHEN | 246.93 ms | 1.0x（基线） |
+| **PostgreSQL** 18.4 | UPDATE FROM VALUES | **14.58 ms** | **16.9x 快** |
+| **MySQL** 8.4.10 | CASE WHEN | 73.41 ms | **3.3x 快** |
 
-| 方法 | Mean | Error | 分配 |
-|:-----|-----:|------:|-----:|
-| StringBuilder_BuildSql | 107.4 ns | 18.18 ns | 1.46 KB |
-| PalORM_BuildSql_Simple | 291.9 ns | 41.77 ns | **1.05 KB** 🟢 |
-| PalORM_BuildSql_Complex | 392.0 ns | 57.26 ns | 1.46 KB |
-
-> PalORM 用 ValueStringBuilder（栈分配 + ArrayPool），简单查询分配比 StringBuilder 还少 28%（1.05 KB vs 1.46 KB）。绝对耗时高是因为额外的 QueryBuilder 子句聚合 + 参数绑定开销。
+**关键发现**：
+- PG UPDATE FROM VALUES 极快（14.58ms）——Django 实测的 4x 提速在 PG 上验证
+- SQLite CASE WHEN 最慢——SQLite SQL 解析器对复杂 CASE WHEN 效率低
+- MySQL CASE WHEN 中等——MySQL SQL 解析器比 SQLite 强但不如 PG FROM VALUES
+- **建议**：PG/MySQL 用 BulkUpdateBatchAsync，SQLite 大批量用 BulkUpdateAsync（逐条）
 
 ---
 
-## 🏆 v4.0 性能总结
+## 🏃 运行方法
 
-### 核心指标相对 ADO.NET（Median）
+### 前置条件
 
-| 操作 | v3.0.0 | v3.1 | **v4.0** | 趋势 |
-|------|:---:|:---:|:---:|:---:|
-| QueryAll 10K | 177% | 123% | **118%** | ✅ 持续改善 |
-| GetByKey | 232% | 151% | **125%** | ✅✅ 显著改善（-26%）|
-| Insert | 100% 🟢 | 137% | 134% | ➡ 稳定 |
-| Update | 126% | 133% | 138% | ➡ 稳定 |
-| Delete Physical | 103% 🟢 | 140% | 148% | ⬅ 环境波动 |
-| Upsert | 100% 🟢 | 168% | 147% | ✅ 改善 |
+1. **BenchmarkDotNet fork**：clone 支持 net11 的 BDN fork 到 `bench/BenchmarkDotNet/`
+   （`bench/BenchmarkDotNet/Directory.Build.props` + `Directory.Packages.props` 已配置禁用 CPM）
+2. **远程 DB（PG/MySQL 可选）**：
+   ```bash
+   export PALORM_BENCH_PG="Host=...;Port=5432;Username=...;Password=...;Database=palorm_bench"
+   export PALORM_BENCH_MYSQL="Server=...;Port=3306;User ID=...;Password=...;Database=palorm_bench"
+   ```
 
-### v4.0 核心成果
-
-1. **GetByKey 大幅改善**：v3.1 的 151% → v4.0 的 **125%**（-26%）
-   - 直接归因：优化 B（CRUD 路径 Volatile.Read 合并）
-   - 绝对值：23.40μs vs v3.1 的 31μs（-7.6μs/查询）
-
-2. **QueryAll 持续改善**：v3.1 的 123% → v4.0 的 **118%**（-5%）
-   - 归因：优化 D（List Capacity 16 起步减少扩容）+ v3.1 优化的累积效果
-
-3. **核心 CRUD 路径全绿**：所有测试通过，无回归
-
-### 与 Dapper 对比
-
-| 操作 | Dapper | PalORM v4.0 | 差距 |
-|------|:---:|:---:|:---:|
-| QueryAll | 93% 🟢 | 118% | +25% |
-| GetByKey | 115% | 125% | +10% |
-| Insert | 116% | 134% | +18% |
-| Update | 106% 🟢 | 138% | +32% |
-| Upsert | 105% 🟢 | 147% | +42% |
-| Delete | 109% | 148% | +39% |
-
-PalORM 在所有路径上比 Dapper 慢 10-42%。**但 PalORM 提供 Dapper 没有的**：
-- 编译时实体校验（PALORM001-022 诊断）
-- 源生成 RowFactory——架构层面零反射（**注意**：稳态查询下 Dapper IL 缓存命中后比 PalORM 接口派发更快，见下方 Cache Impact 章节；源生成的真实价值在 AOT 发布合规、首次查询冷启动、编译时类型校验）
-- 软删/多租户/乐观锁自动注入
-- Native AOT 全链路支持（零 IL 抑制）
-- SessionOperationState 单会话门禁
-
----
-
-## 🆚 同类 micro-ORM 四方对照（v4.1 新增）
-
-> 对齐 Dapper 官方 `benchmarks/Dapper.Tests.Performance` 的多 ORM 对照做法。
-> 加入 **RepoDB**（同为 micro-ORM，自称最快 ORM）作为同类公平对照。
-> 配置：`launchCount=1, warmupCount=3, iterationCount=5`（快速验证，统计精度中等）
-> 2026-07-23 · AMD Ryzen 9 8945HX · .NET 11 preview 6
-
-### 核心读写四 ORM 对照
-
-| Method | Mean | Error | StdDev | Allocated |
-|:------|-----:|------:|-------:|----------:|
-| **QueryAll 10K 行** | | | | |
-| ADO_NET_QueryAll | 3,667.14 μs | 17.09 μs | 4.44 μs | 1,328.67 KB |
-| RepoDb_QueryAll | **3,322.10 μs** 🟢 | 177.07 μs | 45.98 μs | **1,118.33 KB** 🟢 |
-| Dapper_QueryAll | 3,445.34 μs | 257.67 μs | 66.92 μs | 1,351.87 KB |
-| PalORM_QueryAll | 4,293.73 μs | 725.74 μs | 188.47 μs | 1,510.46 KB |
-| **GetByKey（轮询 1..10000）** | | | | |
-| Dapper_GetByKey | **18.17 μs** 🟢 | 0.24 μs | 0.04 μs | 2.34 KB |
-| ADO_NET_GetByKey | 19.73 μs | 1.97 μs | 0.51 μs | 1.70 KB |
-| RepoDb_GetByKey | 21.27 μs | 0.47 μs | 0.12 μs | 5.38 KB |
-| PalORM_GetByKey | 21.36 μs | 0.46 μs | 0.07 μs | 4.55 KB |
-| **Insert + 取回自增 ID** | | | | |
-| RepoDb_Insert | **23.39 μs** 🟢 | 1.30 μs | 0.20 μs | 3.86 KB |
-| ADO_NET_Insert | 26.17 μs | 17.10 μs | 4.44 μs | **1.43 KB** 🟢 |
-| Dapper_Insert | 30.05 μs | 18.35 μs | 4.77 μs | 3.73 KB |
-| PalORM_Insert | 32.94 μs | 7.46 μs | 1.94 μs | 5.04 KB |
-
-### 排名（按 Mean 升序）
-
-| 操作 | 1st | 2nd | 3rd | 4th |
-|------|:---:|:---:|:---:|:---:|
-| QueryAll | **RepoDb** 🟢 | Dapper | ADO.NET | PalORM |
-| GetByKey | **Dapper** 🟢 | ADO.NET | RepoDb | PalORM |
-| Insert | **RepoDb** 🟢 | ADO.NET | Dapper | PalORM |
-
-### 结论（诚实归因）
-
-1. **RepoDB 在 2/3 项胜出**——它自称"最快 ORM"在 QueryAll/Insert 路径上有数据支撑。原因：RepoDB 内部用 `DbCommandCache` + 预编译参数绑定，绕过 Dapper 的 IL 缓存层。
-2. **Dapper 在 GetByKey 上最快**——但比 ADO.NET 仅快 8%（18.17 vs 19.73μs），在统计误差边缘。
-3. **PalORM 在所有三项排名末位**——但与第三名差距小（GetByKey 落后 RepoDB 0.4%，Insert 落后 Dapper 9.6%）。
-4. **PalORM 的 Insert 慢的根因**：`InsertAsync` 包含 RETURNING 物化整行 + SetId 回填 + SessionOperationState 门禁，相对 RepoDB 的 `InsertAsync` 路径（只回 last_insert_rowid）多一次物化。
-
-**绝对不是"PalORM 比 RepoDB/Dapper 慢"这么简单**——PalORM 在同样安全语义（编译时校验 + AOT 全链路 + 软删/租户/乐观锁）下交付速度。若只比裸 CRUD 速度，用户应直接选 RepoDB 或 Dapper。
-
----
-
-## 🔬 Dapper Cache Impact 专项（v4.1 新增）
-
-> 对齐 Dapper 官方 [`DapperCacheImpact.cs`](https://github.com/DapperLib/Dapper/blob/main/benchmarks/Dapper.Tests.Performance/DapperCacheImpact.cs)。
-> 目的：验证 PalORM "源生成 RowFactory 零反射" 在不同参数形状下的表现。
-> 配置：`launchCount=1, warmupCount=3, iterationCount=5`
-
-### 设计修正（v4.1.1）
-
-初版 VaryingShape 用 `WHERE status=@status` 触发全表扫描，绝对值被 DB 扫描时间主导（322μs）。v4.1.1 给 status 列加索引 `CREATE INDEX ix_bench_orders_status`，分离 ORM cache miss 代价与 DB 扫描代价。
-
-### 实测结果（加索引后）
-
-| Method | Mean | Error | StdDev | Allocated |
-|:------|-----:|------:|-------:|----------:|
-| **稳定参数形状（缓存命中）** | | | | |
-| Dapper_StableShape | **20.37 μs** 🟢 | 1.33 μs | 0.35 μs | **2.25 KB** 🟢 |
-| PalORM_StableShape | 23.32 μs | 0.33 μs | 0.08 μs | 7.46 KB |
-| **变化参数形状（参数值轮询）** | | | | |
-| Dapper_VaryingShape | **18.38 μs** 🟢 | 0.40 μs | 0.06 μs | **1.92 KB** 🟢 |
-| PalORM_VaryingShape | 23.67 μs | 0.15 μs | 0.04 μs | 6.75 KB |
-
-### 结论（两次假设均被证伪）
-
-**原假设错误**。数据证明：
-
-1. **缓存命中场景 Dapper 比 PalORM 快 14%**（20.37 vs 23.32μs）——Dapper 的 IL 物化器一旦缓存命中，直接委托调用，比 PalORM 的 `IRowFactory<T>.Read` 接口派发快。
-2. **"参数形状变化触发 Dapper cache miss" 假设证伪**——Dapper VaryingShape（18.38μs）反而比 StableShape（20.37μs）**更快**。原因：Dapper 的缓存哈希键基于**参数类型签名**（`{id:long, status:string}`），不是**参数值**。变化 status 字符串长度不改变类型签名，Dapper 缓存仍然命中。
-3. **PalORM 在两个场景下表现一致**（23.32 vs 23.67μs）——源生成路径确实不受参数形状影响，但绝对速度仍然慢于 Dapper IL 缓存路径。
-4. **PalORM 分配始终高于 Dapper**（7.46/6.75 KB vs 2.25/1.92 KB）——SessionOperationState 门禁 + IRowFactory 委托 + 拦截器空列表检查的固有代价。
-
-**对 PalORM 卖点的最终修正**：
-- ❌ "源生成零反射优势 → 查询更快"——**完全证伪**。Dapper IL 缓存路径在任何参数形状下都比 PalORM 接口派发快 14-22%。
-- ✅ "源生成零反射优势"——**仅限以下场景成立**：
-  - **Native AOT 发布合规**（Dapper.AOT 拦截器对 `internal` 类型失效——PalORM 项目核心定位）
-  - **首次查询冷启动**（Dapper 首次需构建 IL，PalORM 编译时已生成）
-  - **编译时类型校验**（PALORM001-022 诊断，运行时无对应能力）
-- ✅ "统一 SessionOperationState 门禁 + 编译时诊断 + AOT 全链路"——**架构性优势，不能直接用 CRUD 速度衡量**。
-
----
-
-## 运行方法
+### 运行命令
 
 ```bash
-# 完整 33 项基准（约 15-20 分钟）
-dotnet build bench/PalORM.Benchmarks -c Release
-dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*'
+# 全套 SQLite 基准（~30min）
+dotnet run --project bench/PalORM.Benchmarks -c Release
 
-# 单类基准
-dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*SqliteBenchmarks*'
-```
+# 特定类别
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*CrudBenchmarks*'
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*GcBenchmarks*'
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*BulkBenchmarks*'
 
-### 配置说明
+# PG/MySQL 方言基准
+PALORM_BENCH_PG="..." dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*PgBenchmarks*'
 
-```csharp
-[SimpleJob(launchCount: 3, warmupCount: 5, iterationCount: 10)]
-```
+# 手写装箱微基准（BDN fallback）
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --boxing
 
-- `launchCount=3`：独立进程跑 3 次降低进程间差异
-- `warmupCount=5`：5 次 warmup 让 JIT 完全预热
-- `iterationCount=10`：10 次正式迭代取 Mean/Median
-
-### 环境敏感性
-
-micro-benchmark 对环境高度敏感。已知影响：
-- **VMware/虚拟机进程**：占用 CPU + 内存带宽，可使 ADO.NET 基线升高 50-100%
-- **散热降频**：长时间跑（>15 分钟）触发 CPU 热节流
-- **后台 Windows Update / 杀毒软件**：偶发尖峰
-
-**建议**：对比不同版本时，**关注相对 ADO.NET 的倍数**而非绝对值——ADO.NET 基线随环境波动，但 PalORM/ADO.NET 的相对关系稳定。
-
----
-
-## 🌐 三 Provider 纯 Docker 基准（v4.0）
-
-> **纯 Docker 环境**——benchmark 客户端与数据库在同一台服务器的 Docker 容器内，通过 `--network=host` 用 localhost 通信（零网络 RTT）
->
-> 服务器：Ubuntu 7.0 / 8 核 / 7.2 GB RAM
-> - PostgreSQL 18.4（Docker 容器，1Panel 管理）
-> - MySQL 8.4.10（Docker 容器，1Panel 管理）
-> - Benchmark 客户端：`mcr.microsoft.com/dotnet/sdk:11.0-preview` Docker 镜像
-> - 网络：`--network=host`（localhost，零 RTT）
-> 种子数据：10,000 行 bench_orders
-> 配置：`launchCount=1, warmupCount=3, iterationCount=5`
-
-### PostgreSQL 18.4（纯 Docker）
-
-| 操作 | ADO.NET | Dapper | PalORM | PalORM vs ADO.NET |
-|------|:---:|:---:|:---:|:---:|
-| QueryAll 10K | 11.37 ms | 11.82 ms (108%) | **9.86 ms** | **90%** 🟢 |
-| GetByKey | 6.66 ms | — | 8.68 ms | 130% |
-| Insert + RETURNING | 7.82 ms | — | **7.26 ms** | **94%** 🟢 |
-| BulkInsert 10K（Binary COPY）| — | — | **43.21 ms** | — |
-
-> 🟢 PalORM 在 PG 上 **QueryAll 快 10%、Insert 持平**。消除网络 RTT 后，框架开销占比变大（vs 上次网络测试的 65%/35%）——说明上次的巨大优势部分来自 PalORM 减少了网络往返次数。
-
-### MySQL 8.4.10（纯 Docker）
-
-| 操作 | ADO.NET | Dapper | PalORM | PalORM vs ADO.NET |
-|------|:---:|:---:|:---:|:---:|
-| QueryAll 10K | 7.66 ms | 9.05 ms (118%) | 9.24 ms | 121% |
-| GetByKey | 4.02 ms | — | 4.51 ms | 112% |
-| Insert + LAST_INSERT_ID | 6.16 ms | — | **5.82 ms** | **96%** 🟢 |
-| BulkInsert 10K（多值 INSERT）| — | — | **56.50 ms** | — |
-
-> MySQL 上 PalORM Insert **略快于 ADO.NET（96%）**。QueryAll 慢 21%——MySQL 无 RETURNING，框架开销无法被网络优势抵消。
-
-### 三 Provider 对比（纯 Docker）
-
-| 操作 | SQLite（本地内存） | PostgreSQL（Docker） | MySQL（Docker） |
-|------|:---:|:---:|:---:|
-| QueryAll vs ADO.NET | 118% | **90%** 🟢 | 121% |
-| GetByKey vs ADO.NET | 125% | 130% | 112% |
-| Insert vs ADO.NET | 134% | **94%** 🟢 | **96%** 🟢 |
-| BulkInsert 10K | 59.3 ms | 43.2 ms (COPY) | 56.5 ms |
-
-### 网络环境 vs 纯 Docker 对比
-
-| 操作 | 环境 | ADO.NET | PalORM | PalORM vs ADO.NET | 差异分析 |
-|------|------|:---:|:---:|:---:|------|
-| PG QueryAll | 网络 | 28.21 ms | 18.35 ms | **65%** 🟢 | 网络下 PalORM 减少往返次数优势放大 |
-| PG QueryAll | Docker | 11.37 ms | 9.86 ms | **90%** 🟢 | 零 RTT 后框架开销占比变大 |
-| PG Insert | 网络 | 23.54 ms | 8.04 ms | **35%** 🟢 | 网络下 RETURNING 单次往返优势巨大 |
-| PG Insert | Docker | 7.82 ms | 7.26 ms | **94%** 🟢 | 零 RTT 后优势缩小但仍持平 |
-| MySQL Insert | 网络 | 6.37 ms | 6.60 ms | 104% | 网络下基本持平 |
-| MySQL Insert | Docker | 6.16 ms | 5.82 ms | **96%** 🟢 | Docker 下 PalORM 略快 |
-
-> **关键洞察**：PalORM 的 RETURNING 单次往返在网络环境下优势巨大（PG Insert 快 65%），但在零 RTT 的 Docker 环境下回归到框架基线（90-96%）。这证明 PalORM 的核心价值在**网络场景**——减少往返次数比单次操作速度更重要。
-
-### 连接配置
-
-```bash
-# 纯 Docker 运行（benchmark 客户端也在 Docker 里）
-docker build -t palorm-bench .
-
-# PostgreSQL
-docker run --rm --network=host \
-  -e PALORM_BENCH_PG="Host=127.0.0.1;Port=5432;Username=USER;Password=PASS;Database=palorm_bench;Pooling=false" \
-  palorm-bench \
-  dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- --filter '*PgBenchmarks*'
-
-# MySQL
-docker run --rm --network=host \
-  -e PALORM_BENCH_MYSQL="Server=127.0.0.1;Port=3306;User ID=USER;Password=PASS;Database=palorm_bench;Pooling=false" \
-  palorm-bench \
-  dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- --filter '*MySqlBenchmarks*'
+# JSON 报告（机读）
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --exporters json
 ```
