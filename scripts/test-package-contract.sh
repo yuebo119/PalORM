@@ -117,7 +117,7 @@ public sealed partial class RootUser
 {
     [global::PalORM.Key]
     public long Id { get; set; }
-    public string Name { get; set; } = "";
+    public [global::PalORM.Column("name")] string Name { get; set; } = "";
 }
 
 namespace Alpha
@@ -127,7 +127,7 @@ namespace Alpha
     {
         [global::PalORM.Key]
         public long Id { get; set; }
-        public string Name { get; set; } = "";
+        public [global::PalORM.Column("name")] string Name { get; set; } = "";
     }
 }
 
@@ -138,7 +138,7 @@ namespace Beta
     {
         [global::PalORM.Key]
         public long Id { get; set; }
-        public string Name { get; set; } = "";
+        public [global::PalORM.Column("name")] string Name { get; set; } = "";
     }
 }
 CS
