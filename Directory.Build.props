@@ -47,7 +47,7 @@
     <IsTrimmable>false</IsTrimmable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- CS1591: 测试代码非公共 API 面，不强制 XML 文档（src/ 全域强制） -->
-    <NoWarn>$(NoWarn);CA2007;CA1062;CA1031;CS1591</NoWarn>
+    <NoWarn>$(NoWarn);CA2007;CA1062;CA1031;CS1591;S8969</NoWarn>
   </PropertyGroup>
 
   <!-- 测试支撑模型程序集（AotModels.*）：同测试项目，不强制 XML 文档 -->
@@ -68,7 +68,7 @@
        SonarAnalyzer.CSharp 让 IDE SonarLint 报告与 CI 编译错误对齐。
        排除 SourceGen 项目——它运行在 netstandard2.0 + Roslyn 分析器上下文，SonarAnalyzer 不兼容。
        规则严重性在 .editorconfig 分层配置（P0 安全/正确性 → error，P1 设计 → warning，P2 风格 → suggestion）。-->
-  <ItemGroup Condition="'$(MSBuildProjectName)' != 'PalORM.SourceGen'">
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'PalORM.SourceGen' and '$(ManagePackageVersionsCentrally)' != 'false'">
     <PackageReference Include="SonarAnalyzer.CSharp">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>

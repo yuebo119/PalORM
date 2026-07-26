@@ -2,6 +2,201 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [5.0.0] — 驱动现代化 + 调优（包升级 + 连接串/PRAGMA 性能调优）
+
+> 基于 v5.0-roadmap.md 的 5 阶段方案。本版本聚焦**驱动层现代化 + 默认调优**，
+> 不引入新公共 API。架构级改造（DbDataSource 单例化 / MySqlBulkCopy / DbBatch）
+> 与功能增值（阶段 5）作为独立后续工作，不在 v5.0 主线。
+
+### 破坏性变更（测试源码层，公共 API 零破坏）
+
+仅影响**测试代码**（src/ 公共 API 面零改动）：
+- TUnit 0.19.24→1.61.15 引入 4 类测试 API 适配（10 处修复）：
+  - `Assert.ThrowsAsync<T>(Task)` 重载移除→改用 `() => task`
+  - `Assert.ThrowsAsync<T>` 返回类型可空化（`TException?`）→访问 `.Message` 加 `!`
+  - `HasCount()` 已弃用→改用 `Count().IsEqualTo(n)`
+  - `WithMessage(string)` 新增 `StringComparison` 重载→加 `Ordinal`
+
+### 包升级
+
+| 包 | v4.6 | v5.0 | 备注 |
+|---|:---:|:---:|------|
+| TUnit | 0.19.24 | **1.61.15** | 测试框架现代化 |
+| TUnit.Assertions | 0.7.9 | **1.61.15** | 与 TUnit 元包版本锁定 |
+| Microsoft.NET.Test.Sdk | 17.13.0 | **删除** | TUnit 1.x 走 MTP 模式，不需 VSTest 桥接 |
+| Npgsql | 9.0.3 | **10.0.3** | RowFactory 兼容（GetDateTime 仍返回 DateTime） |
+| MySqlConnector | 2.4.0 | **2.6.1** | 含安全修复 GHSA-473q-m89c-ghf8 |
+| BenchmarkDotNet | 0.14.0 | **0.15.8** | 基准工具升级 |
+| Dapper | 2.1.66 | **2.1.79** | 基准对照升级 |
+| RepoDb | 1.13.1 | **1.15.1** | 基准对照升级 |
+| RepoDb.Sqlite.Microsoft | 1.13.1 | **1.15.0** | 基准对照升级 |
+
+**保持不动**（有约束）：Microsoft.CodeAnalysis.Analyzers 5.3.0（5.6.0 不在 NuGet.Config 配置的 dotnet-tools 源，触发 NU1103）；Microsoft.Data.Sqlite.Core 11.0-preview.6（等 net11 GA）。
+
+### 性能调优
+
+**PG 连接串调优**（PostgreSqlProvider.CreateConnection，用户显式值优先）：
+- MaxAutoPrepare 0→100（自动预编译，查询延迟 -30~50%）
+- AutoPrepareMinUsages 5→2（第 2 次起 Prepare）
+- NoResetOnClose false→true（归还连接跳过 DISCARD ALL，+30% localhost 吞吐）
+- ReadBufferSize/WriteBufferSize 8192→16384（大结果集/大值写入吞吐）
+- Enlist true→false（跳过 TransactionScope 检查）
+
+**MySQL 连接串调优**（MySqlProvider.CreateConnection，用户显式值优先）：
+- AutoEnlist true→false / ConnectionReset true→false（归还池更快）
+- CancellationTimeout 2→5（防连接泄漏）
+- AllowLoadLocalInfile false→true（MySqlBulkCopy 前提，为后续阶段铺路）
+- ServerRedirectionMode Disabled→Preferred（Azure MySQL 直连）
+
+**SQLite PRAGMA 调优**（SqliteProvider.InitializeConnectionAsync）：
+- synchronous=NORMAL（WAL 下安全，减少 fsync）
+- cache_size=-65536（64MB 页缓存，默认 2MB）
+- temp_store=MEMORY / wal_autocheckpoint=1000
+- mmap_size=268435456（256MB，**仅文件数据库**，:memory: 跳过）
+
+**global.json**：rollForward `disable`→`latestMinor`（允许 SDK 补丁版本前滚）。
+
+### MySQL BulkInsert local_infile 能力检测分流（阶段 4.2）
+
+`MySqlProvider.BulkInsertAsync` 改为 **local_infile 能力检测** 分流（替代原 2000 行阈值）：
+- **local_infile=ON**（服务端）→ 走 `MySqlBulkCopy`（LOAD DATA LOCAL INFILE 协议，~4.84x）
+- **local_infile=OFF** 或非 MySqlConnection → 走多值 INSERT
+
+**无阈值**：不再用行数阈值（2000 是伪精确），改为环境能力检测——行为可预测。与 PG COPY 永远走最优协议对齐。检测开销：每次 BulkInsert 额外 1 次 SHOW VARIABLES RTT（<1ms，批量场景占比可忽略）。
+
+**部署约束**（已文档化）：客户端连接串默认追加 `AllowLoadLocalInfile=true`（v5.0 阶段 3.2）；服务端需 `local_infile=ON`（MySQL 默认 OFF，需 `SET GLOBAL local_infile=ON` 或 my.cnf）。
+
+**DataTable 设计**：包含目标表全部列（含 AUTO_INCREMENT 主键），主键列填 NULL 让 MySQL 自增。
+
+### 调优判断策略
+
+"用户未显式设置"的判据：属性当前值等于 ADO.NET 默认值。该判据在罕见场景（用户显式
+设成默认值）下会把用户意图当作默认覆盖，但调优参数主动设成低性能默认值的实际场景极少，
+收益（透明调优）大于风险。用户可通过显式设置非默认值避免被覆盖。
+
+### 不做项（v5.0 排除，理由）
+
+| 项 | 理由 |
+|------|------|
+| 阶段 3.4 NpgsqlParameter\<T\> 零装箱 | **已实测决策不做**——装箱占比 ~24.5% 但 PG COPY/MySQL BulkCopy 已无装箱；SQLite 无泛型参数 API。详见 `docs/boxing-benchmark-design.md` |
+| 阶段 3.6 SQLite Pooling/Cache 解除限制 | 强制 Pooling 有测试隔离风险；用户可在连接串显式配置 Pooling=true / Cache=Shared |
+| 阶段 4.1 DbDataSource 单例化 | **已批准 E1（不做）**——5 条 ORM 实践调研 + EF Core #3086 反面证据 + Npgsql 官方 "discouraged 非 deprecated"。详见 `docs/adr/ADR-E-dbdatasource-单例化取舍.md` |
+| 阶段 4.3a BulkMerge 多值 UPSERT | 分流有害（语义偏差）+ RETURNING 多行回填复杂 + 用户无需求。BulkUpdateBatchAsync（4.3b）已完成 |
+| 阶段 5.1 单操作 timeout/retry override | API 一致性困境（20+ 方法）+ 替代方案充分（多 DataSession / CancellationToken）|
+| 阶段 5.6 ASP.NET Core 集成包 | 设计哲学冲突（无 DI）+ 替代方案充分（单例 DbOptions + 工厂模式）|
+| 阶段 5.7 MySQL VECTOR 映射 | Innovation 版 + MySqlVector\<T\> API 不完整 + MySQL 8.4 测试环境不支持 |
+| Microsoft.CodeAnalysis.Analyzers 5.6.0 | NuGet.Config 约束 Microsoft.CodeAnalysis.* 只从 dotnet-tools 源，该源无 5.6.0 stable |
+
+### 功能增值（阶段 5 第一梯队）
+
+**5.2 SessionSetupSql**（`DbOptions.SessionSetupSql` + `DbOptions.ReadSessionSetupSql`）：
+- 主连接 + 读副本分别配置会话级 SQL（如 `SET TIME ZONE` / `SET search_path` / `SET statement_timeout`）
+- 多条 SQL 分号分隔一次 `ExecuteNonQueryAsync` 执行（三方言均支持多语句）
+- `IsNullOrWhiteSpace` 判断 null/空白等价未设置（向后兼容）
+- 读连接初始化器：无 ReadSessionSetupSql 时用 static 委托（零闭包分配）
+
+**5.4 AuditInterceptor**（`src/PalORM.Core/AuditInterceptor.cs`）：
+- 实现 `IQueryInterceptor` 三段式：OnBefore/OnAfter/OnError
+- Priority=200（让用户业务拦截器优先）
+- `logParameters` 默认 false（脱敏，避免凭据/PII 写入日志）
+- `ILogger.IsEnabled` 短路优化（无订阅者零开销）
+- 覆盖面继承 IQueryInterceptor：仅实体 SELECT + QueryBuilder UPDATE；INSERT/DELETE/Bulk/存储过程不经过
+
+**5.5b AdvisoryXactLock**（`src/PalORM.PostgreSql/AdvisoryLockExtensions.cs`）：
+- 4 个扩展方法：`AcquireXactLockAsync(long)` / `AcquireXactLockAsync(int,int)` / `TryAcquireXactLockAsync(long)` / `TryAcquireXactLockAsync(int,int)`
+- 事务级锁（`pg_advisory_xact_lock` / `pg_try_advisory_xact_lock`），事务结束自动释放
+- 单 bigint key 和双 int key 是独立锁空间（不冲突）
+- 用法：`await db.WithTransaction(async ct => await db.AcquireXactLockAsync(key, ct))`
+
+**5.5 ForUpdate**（`QueryBuilder.ForUpdate(skipLocked)`）：v5.0 前已实现，本次确认存在。
+
+### Scaffold 三 Provider 支持（阶段 5.3）
+
+`tools/PalORM.Scaffold` 从 SQLite-only 扩展为三 Provider：
+- **新增 ISchemaProvider 抽象**（`tools/PalORM.Scaffold/ISchemaProvider.cs`）：屏蔽三方言元数据差异
+- **三 Provider 实现**：
+  - `SqliteSchemaProvider`：sqlite_master + PRAGMA table_info
+  - `PostgreSqlSchemaProvider`：information_schema + JOIN tables/key_column_usage
+  - `MySqlSchemaProvider`：information_schema.COLUMNS（DATABASE() 当前库过滤）
+- **TypeMapper**（`tools/PalORM.Scaffold/TypeMapper.cs`）：DB 类型 → C# 类型，按方言分支
+  - SQLite 按亲和性（INTEGER/REAL/TEXT/BLOB/NUMERIC）
+  - PG/MySQL 按精确类型名 + 长度后缀裁剪（如 `varchar(255)` → `varchar`）
+  - 覆盖 40+ 类型（含 uuid/jsonb/bytea/tinyint/DateOnly/TimeOnly 等）
+- **EntityGenerator**：与 Provider 解耦，从 SchemaTable DTO 生成 C# 实体类
+  - snake_case → PascalCase 转换（表名 + 列名）
+  - 列名与属性名不同时加 `[Column("原名")]`
+  - 自增 PK 加 `[Key(AutoIncrement = true)]`
+  - 引用类型属性加 `= default!`（避免 nullable 警告）
+  - 值类型可空列加 `?` 后缀
+- **CLI 扩展**：`--dialect sqlite|pg|mysql` + `--namespace NS` + `--output DIR`
+  - 方言别名：pg/postgres/postgresql、mysql/my、sqlite/sql
+  - 兼容旧位置参数（args[1] 当 namespace）
+
+**真实集成验证**（三 Provider 连真实库 scaffold）：
+- SQLite：建表 → 生成 `UserOrders` 实体（含可空列 + 自增 PK）
+- PostgreSQL：连 PG 18.4，生成 `AllTypesEntities`（uuid/bool/DateOnly/TimeOnly 类型完整映射）
+- MySQL：连 MySQL 8.4.10，生成 `AllTypesEntities`（datetime/decimal/char 类型映射）
+
+### 批量 UPDATE 单语句化（阶段 4.3b）
+
+**新增** `DataSession.BulkUpdateBatchAsync<T>`（方案 Y 严格版）：
+- 单次 RTT 完成 N 行 UPDATE（PG: UPDATE FROM VALUES 4x 提速；MySQL/SQLite: CASE WHEN）
+- 永远走批量，无内部阈值，N=1 也走批量（用户显式选择）
+- 带 `[ConcurrencyCheck]` 的实体调用抛 `NotSupportedException`（批量无法表达每行 version 匹配）
+- 参数上限自动分批（PG/MySQL 65535，SQLite 999），物理约束非性能阈值
+- 租户过滤自动追加 `AND tenant_id = @p`（与 BulkUpdateAsync 对齐）
+
+**新增 BatchUpdateSqlBuilder**（`src/PalORM.Core/BatchUpdateSqlBuilder.cs`）：静态 SQL 构造器，与 DataSession 解耦降低认知复杂度。参数顺序对应 BindUpdate 输出：`[setCol0, setCol1, ..., pk]`（SET 列先，PK 在末尾）。
+
+**与 BulkUpdateAsync 的语义差异**：
+- BulkUpdateAsync 逐条执行 + 乐观锁检查（每行 affectedRows==1 否则 ConcurrencyConflictException）
+- BulkUpdateBatchAsync 单语句批量 + 不区分"行不存在"与"并发修改"（返回受影响总行数）
+
+### 诊断规则完整化（PALORM001-040，33 条）
+
+**扩充 13 条新规则**（PALORM023-027, 031-033, 034-037, 040）：
+
+- **P0 防运行时崩溃**（8 条）：
+  - PALORM023/024：实体无可插入/可更新列（运行期 `throw`）
+  - PALORM025：`[Timestamp]` 标在非时间类型（NOT NULL 无 DEFAULT 每次插入失败）
+  - PALORM026：`[NotMapped]` 与映射特性互斥（避免 PALORM001 误报）
+  - PALORM027：`[Converter]` 与 `[OwnedJson]` 互斥（消息比 PALORM015 更精准）
+  - PALORM031：`BulkUpdateBatchAsync<T>` 对 `[ConcurrencyCheck]` 实体调用（必崩）
+  - PALORM032：`Include/Join` 引用未注册实体（运行期 throw）
+  - PALORM033：`Select(projection).ToListAsync()` 调用链（必崩）
+
+- **P1 防静默错误**（5 条）——防止不 throw 但数据错/丢失/安全绕过：
+  - PALORM034：`[Key]` 非默认初值让 SaveAsync 永远走 Update（数据静默丢失）
+  - PALORM035：`[ConcurrencyCheck]+[IgnoreOnInsert]` 让乐观锁基线为 0（安全绕过）
+  - PALORM036：`#nullable disable` 下引用类型不生成 IsDBNull 守卫（NULL 读取崩溃）
+  - PALORM037：`[Required]` + 可空注解矛盾（DDL/读取行为不一致）
+  - PALORM040：`[TenantAware]` 租户列可空（跨租户数据可见，多租户安全漏洞）
+
+**修复 7 项现有规则缺陷**：
+
+- F1：PALORM005 N+1 检测遗漏 Bulk/Save/Get 方法（功能遗漏）
+- F2：PALORM002 消息"does not match table schema"语义错位（实际是"建议加 [Column]"）
+- F3：PALORM017 对每个 `[ForeignKey]` 无条件报 Warning（过度报告，FK 在 Include 中有效）
+- F4：PALORM015 消息"writable mapped properties"含义模糊（修订为原因清单）
+- F5：PALORM012 类型限制未说明"emitter 用 ++ 自增"理由
+- F6：PALORM003 跨程序集局限未在消息中提示可降级
+- F7：PALORM010 无正例测试（补 `DoesNotReport`）
+
+**精准化 1 条消息**：
+
+- F8：PALORM009 补"partial sealed class"要求说明（STJ 源生成器约束）
+
+### 验证
+
+- dotnet build：0 错误
+- Core.Tests: 174/174 通过
+- SourceGen.Tests: 121/121 通过（原 104 + 新增 17 条诊断规则测试）
+- Integration.Tests: 173/173 通过
+- 总计：468/468 全部通过
+- 环境：PG 18.4 + MySQL 8.4.10（MySQL local_infile=ON 部署约束）
+
+---
+
 ## [4.6.0] — 极致性能（25+ 项分配优化）
 
 > 基于 v4.0 实施后的深度性能审计与基准驱动迭代优化。
@@ -212,7 +407,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - Core + 3 Provider（SQLite/PostgreSQL/MySQL）+ SourceGen + Testing
 - 面向严格 Native AOT（IsAotCompatible + IsTrimmable）
 - 源生成器：RowFactory / CommandFactory / Migration / Registry / SqlFile / SqlTemplate
-- 编译期诊断：PALORM001-022
+- 编译期诊断：PALORM001-040（33 条，含 P0 防崩溃 + P1 防静默错误 + 调用级 API 误用）
 - 三方言支持：SQLite / PostgreSQL / MySQL
 - 弹性执行器：重试 + 退避 + 超时 + 熔断
 - 批量操作：MultiValue INSERT / PG Binary COPY

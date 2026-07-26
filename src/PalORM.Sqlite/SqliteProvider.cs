@@ -55,12 +55,34 @@ public sealed class SqliteProvider : IDbProvider
     /// 软删除 deleted_at 跨库混用时语义不同（ITM-326）。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
-    /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式。数据库文件被其他进程锁定时受调用方取消/超时约束。</summary>
+    /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式 + v5.0 阶段 3.3 写入/读取 PRAGMA 调优。
+    /// 数据库文件被其他进程锁定时受调用方取消/超时约束。
+    /// <para><b>v5.0 阶段 3.3 PRAGMA 调优</b>（统一执行一次，单次往返）：
+    /// synchronous=NORMAL（WAL 下安全，减少 fsync，写性能提升）；
+    /// cache_size=-65536（64MB 页缓存，默认 2MB，读密集型提升）；
+    /// temp_store=MEMORY（临时表/索引走内存）；
+    /// wal_autocheckpoint=1000（WAL 自动检查点，默认即 1000，显式固定防部署漂移）。</para>
+    /// <para><b>v5.0 阶段 3.5 mmap_size 条件判断</b>：仅文件数据库追加 mmap_size=268435456（256MB
+    /// mmap I/O），:memory: 数据库跳过（mmap 对纯内存库无收益且某些 SQLite 构建会拒绝）。
+    /// 判据：连接串含 "Mode=Memory" 或 ":memory:"。</para></summary>
     public static async Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        // v5.0 阶段 3.5：检测 :memory: 数据库——mmap_size 对纯内存库无意义。
+        string cs = connection.ConnectionString;
+        bool isInMemory = cs.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase)
+            || cs.Contains(":memory:", StringComparison.OrdinalIgnoreCase);
+
         await using DbCommand command = connection.CreateCommand();
-        command.CommandText = "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL";
+        // 单次往返执行全部 PRAGMA（用分号连接，SQLite 原生支持）。
+        command.CommandText = isInMemory
+            ? "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; "
+              + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
+              + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000"
+            : "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; "
+              + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
+              + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000; "
+              + "PRAGMA mmap_size=268435456";
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 

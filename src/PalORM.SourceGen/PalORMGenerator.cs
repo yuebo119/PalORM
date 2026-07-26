@@ -22,23 +22,18 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 predicate: static (node, _) => node is ClassDeclarationSyntax,
                 transform: static (ctx, _) => TableModel.FromContext(ctx))
             .Where(static m => m is not null)
-            .Select(static (m, _) => m!);
+            .Select(static (m, _) => m!)
+            // v5.0 优化：显式用值相等比较器——TableModel 是 sealed record（有 Equals/GetHashCode），
+            // 但 Roslyn 增量管道默认用 ReferenceEqualityComparer，导致实体未变更时仍重新生成。
+            // WithComparer 让管道用值相等判断，提高增量缓存命中率（大项目构建时间进一步降低）。
+            .WithComparer(EqualityComparer<TableModel>.Default);
 
-        // RowFactory (Phase 1)
+        // v5.0 优化：合并 3 次独立 RegisterSourceOutput 为 1 次（减少增量管道回调 3→1）。
+        // RowFactory / CommandFactory / Migration 互不依赖，可在一个回调内生成全部源文件。
         context.RegisterSourceOutput(tableModels, static (spc, model) =>
         {
             spc.AddSource(CreateStableHintName("RowFactory", model.EntityTypeName), RowFactoryEmitter.Generate(model));
-        });
-
-        // CommandFactory (Phase 2)
-        context.RegisterSourceOutput(tableModels, static (spc, model) =>
-        {
             spc.AddSource(CreateStableHintName("CommandFactory", model.EntityTypeName), CommandFactoryEmitter.Generate(model));
-        });
-
-        // Migration DDL (Phase 2)
-        context.RegisterSourceOutput(tableModels, static (spc, model) =>
-        {
             spc.AddSource(CreateStableHintName("Migration", model.EntityTypeName), MigrationEmitter.Generate(model));
         });
 
