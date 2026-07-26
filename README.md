@@ -232,34 +232,42 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 
 ## 与主流 ORM 特性对比
 
-| 特性 | **PalORM 5.0** | Dapper | EF Core 9 | RepoDB |
+> 版本基准：**PalORM 5.0.0**（.NET 11）/ **Dapper 2.1.79**（2025）/ **EF Core 10.0.10**（2025-11 LTS）/ **RepoDb 1.15.1**（2025）。单元格依据见下方"对比依据"小节。
+
+| 特性 | **PalORM 5.0** | Dapper 2.1.79 | EF Core 10.0.10 | RepoDb 1.15.1 |
 |------|:---:|:---:|:---:|:---:|
-| **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选 | ❌ 不支持 | ❌ 反射 |
-| **编译时类型安全** | ✓ 20 条诊断规则 | ❌ 运行时 | ✓ 迁移检查 | ❌ |
-| **源生成 SQL** | ✓ 编译时预构建 | ❌ 运行时 | △ 编译时模型 | ❌ |
-| **零运行时反射** | ✓ | ❌ 首次反射+IL Emit | ❌ 表达式树 | ❌ 反射 |
-| **三方言批量策略** | ✓ COPY/BulkCopy/多值 | ❌ 统一多值 | △ Provider 差异 | ❌ 统一 |
-| **BulkUpdateBatch（单语句）** | ✓ FROM VALUES / CASE WHEN | ❌ | △ 逐条 | ❌ |
-| **乐观锁** | ✓ `[ConcurrencyCheck]` | ❌ 手动 | ✓ `RowVersion` | ❌ |
+| **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选（实验性拦截器） | ❌ 实验性，生产不推荐 | ❌ 反射 + IL Emit |
+| **编译时类型诊断** | ✓ 20 条诊断规则 | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
+| **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
+| **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
+| **三方言批量策略** | ✓ COPY / BulkCopy / 多值 | ❌ 无（手写多值 SQL） | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
+| **单语句多行 UPDATE** | ✓ FROM VALUES / CASE WHEN | ❌ | ❌ ExecuteUpdate 仅按 WHERE 单值 | ❌ |
+| **乐观锁** | ✓ `[ConcurrencyCheck]` 自动 | ❌ 手写 | ✓ `RowVersion` 自动 | ❌ 手写 |
 | **软删除** | ✓ `[SoftDelete]` 自动过滤 | ❌ | ✓ 全局查询过滤器 | ❌ |
-| **多租户** | ✓ `[TenantAware]` 列隔离 | ❌ | △ 需手动实现 | ❌ |
-| **OwnedJson 编译时安全** | ✓ `[OwnedJson]` + 源生成 | ❌ 手动 STJ | ✓ Owned Types | ❌ |
+| **多租户列隔离** | ✓ `[TenantAware]` 编译时 | ❌ | △ 需手动实现 | ❌ |
+| **OwnedJson 编译时安全** | ✓ `[OwnedJson]` + 源生成 | ❌ 手写 STJ | ✓ Owned Types（运行时） | ❌ |
 | **审计拦截器** | ✓ `AuditInterceptor`（v5.0） | ❌ | ✓ Interceptors | ❌ |
 | **咨询锁** | ✓ `pg_advisory_xact_lock`（v5.0） | ❌ | ❌ | ❌ |
 | **会话级 SET** | ✓ `SessionSetupSql`（v5.0） | ❌ | ❌ | ❌ |
-| **SQL 文件嵌入** | ✓ `[SqlFile]` 编译时 | ❌ | ❌ | ❌ |
-| **断路器 + 重试** | ✓ 内置 | ❌ 需 Polly | ✓ 类似 | ❌ |
-| **CTE / 窗口函数** | ✓ 链式 API | ❌ 原生 SQL | △ 有限 | ❌ |
-| **多结果集 GridReader** | ✓ | ✓ `QueryMultiple` | ❌ | ❌ |
+| **SQL 文件嵌入** | ✓ `[SqlFile]` 编译时校验 | ❌ | ❌ | ❌ |
+| **断路器 + 重试** | ✓ 内置 | ❌ 需 Polly | △ 类似（执行策略） | ❌ |
+| **CTE / 窗口函数** | ✓ 链式 API | △ 原生 SQL 字符串 | △ LINQ 翻译（部分） | △ 原生 SQL |
+| **多结果集** | ✓ `GridReader` | ✓ `QueryMultiple` | ❌ | △ `ExecuteQueryMultiple` |
 | **Keyset 分页** | ✓ `ToPageAsync` | ❌ | ❌ | ❌ |
-| **Scaffold 工具** | ✓ 三 Provider（v5.0） | ❌ | ✓ `dotnet ef` | ❌ |
+| **Scaffold 工具** | ✓ 三 Provider（v5.0） | ❌ | ✓ `dotnet ef dbContext scaffold` | ❌ |
 | **连接串自动调优** | ✓ PG 6 / MySQL 5 / SQLite 5 | ❌ | ❌ | ❌ |
-| **内存分配效率** | ✓ BulkInsert 分配 Dapper 的 40% | 基线 | 最高（ChangeTracker） | 中等 |
-| **第三方依赖** | **零**（Core 不引用任何 NuGet） | 零 | 高（多包） | 中等 |
-| **目标框架** | net11.0 | 多目标 | 多目标 | 多目标 |
-| **许可证** | AGPL-3.0 | Apache-2.0 | MIT | MIT |
+| **BulkInsert 内存效率** | ✓ Dapper 的 ~40% | 基线 | 最高（ChangeTracker） | 中等（packed） |
+| **核心包 NuGet 依赖** | 零 | 零 | 高（多包拆分） | 中等 |
+| **目标框架** | net11.0（单目标） | 多目标（netstandard2.0+） | 多目标（net8+） | 多目标（netstandard2.0+） |
+| **许可证** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
 
-> PalORM 的核心差异：**编译时生成 + AOT 兼容 + 三方言批量策略**。Dapper 快但运行时反射；EF Core 功能全但重且不支持 AOT；RepoDb 与 PalORM 同类但无源生成。
+> **PalORM 的核心差异**：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 与 PalORM 同为微 ORM 但无源生成，且批量仅 SQL Server。
+
+### 对比依据
+
+- **Dapper 2.1.79**：`Dapper.AOT`（独立包，[aot.dapperlib.dev](https://aot.dapperlib.dev)）通过 Roslyn interceptors 生成 AOT 拦截器，但 interceptors 是 C# 实验性特性，非默认启用。
+- **EF Core 10.0.10**：EF Core 10 为 LTS（[learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)）。`ExecuteUpdateAsync`/`ExecuteDeleteAsync` 仅支持"按 WHERE 单值更新"，无法在单 SQL 内对每行设置不同值。AOT 仍为实验性（[issue #35945](https://github.com/dotnet/efcore/issues/35945)，CS9137 错误未解决）。Scaffold：`dotnet ef dbContext scaffold` 完整支持。
+- **RepoDb 1.15.1**：BulkOperation 仅 SQL Server（[repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert)：*"It is only supporting the SQL Server RDBMS."*），其他方言走 `InsertAll`（packed statements，非真正二进制 bulk）。`ExecuteQueryMultiple` 提供多结果集。
 
 ## 特性总览
 
