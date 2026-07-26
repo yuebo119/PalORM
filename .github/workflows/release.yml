@@ -1,0 +1,127 @@
+name: Publish to NuGet
+
+on:
+    push:
+        tags:
+            - 'v*' # v5.0.0 / v5.1.0 等
+    workflow_dispatch:
+        inputs:
+            version:
+                description: '版本号（必须与 Directory.Build.props 的 <Version> 一致）'
+                required: true
+                type: string
+
+# 同一 tag/ref 并发触发只跑一个，不取消进行中的发布（避免半成品）
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: false
+
+env:
+    DOTNET_CLI_TELEMETRY_OPTOUT: true
+    DOTNET_NOLOGO: true
+
+jobs:
+    publish:
+        name: Build + Test + Pack + Push
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        permissions:
+            contents: write # 用于创建 GitHub Release
+
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0 # SourceLink 需要完整 git 历史
+
+            - name: Setup .NET
+              uses: actions/setup-dotnet@v4
+              with:
+                  global-json-file: global.json
+
+            - name: Resolve version
+              id: ver
+              run: |
+                  if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+                      VERSION="${{ github.event.inputs.version }}"
+                  else
+                      # tag 触发：从 tag 名剥离 v 前缀
+                      VERSION="${GITHUB_REF_NAME#v}"
+                  fi
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+                  echo "Resolved version: $VERSION"
+
+            - name: Verify version matches Directory.Build.props
+              run: |
+                  EXPECTED="${{ steps.ver.outputs.version }}"
+                  ACTUAL=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props | head -1)
+                  echo "Expected (tag/input): $EXPECTED"
+                  echo "Actual (props):       $ACTUAL"
+                  if [ "$EXPECTED" != "$ACTUAL" ]; then
+                      echo "::error::版本不一致：tag=$EXPECTED props=$ACTUAL"
+                      exit 1
+                  fi
+
+            - name: Restore
+              run: dotnet restore PalORM.ci.slnf
+
+            - name: Build (Release, warnings as errors)
+              run: >-
+                  dotnet build PalORM.ci.slnf -c Release --no-restore --no-incremental
+                  -warnaserror
+
+            - name: Unit tests
+              run: |
+                  dotnet run --project test/PalORM.Core.Tests -c Release --no-build --no-restore
+                  dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build --no-restore
+
+            - name: Integration tests (PostgreSQL)
+              env:
+                  PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm
+              run: |
+                  docker run -d --rm --name pg-test \
+                    -e POSTGRES_HOST_AUTH_METHOD=trust \
+                    -e POSTGRES_DB=palorm \
+                    -p 5432:5432 postgres:17
+                  for i in $(seq 1 30); do
+                      pg_isready -h 127.0.0.1 -p 5432 && break || sleep 2
+                  done
+                  dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --no-restore
+
+            - name: Pack all src projects
+              run: |
+                  VERSION="${{ steps.ver.outputs.version }}"
+                  for proj in Core SourceGen Sqlite PostgreSql MySql Testing; do
+                      dotnet pack "src/PalORM.$proj/PalORM.$proj.csproj" \
+                        -c Release --no-build \
+                        -o artifacts/packages \
+                        -p:Version="$VERSION"
+                  done
+
+            - name: Verify package count
+              run: |
+                  COUNT=$(find artifacts/packages -name "*.nupkg" | wc -l)
+                  echo "Package count: $COUNT (expected 6)"
+                  if [ "$COUNT" -ne 6 ]; then
+                      echo "::error::预期 6 个 nupkg，实际 $COUNT 个"
+                      exit 1
+                  fi
+                  ls -la artifacts/packages/
+
+            - name: Push to NuGet.org
+              run: >-
+                  dotnet nuget push "artifacts/packages/*.nupkg"
+                  --source https://api.nuget.org/v3/index.json
+                  --api-key ${{ secrets.NUGET_API_KEY }}
+                  --skip-duplicate
+
+            - name: Create GitHub Release
+              if: github.event_name == 'push'
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ github.ref_name }}
+                  name: ${{ github.ref_name }}
+                  body_path: CHANGELOG.md
+                  files: |
+                      artifacts/packages/*.nupkg
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

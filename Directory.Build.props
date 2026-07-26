@@ -34,6 +34,24 @@
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
+    <!-- NuGet 包版本（中央管理，避免 6 个 src csproj 各自硬编码漂移）。
+         只设 Version；FileVersion/AssemblyVersion 让 MSBuild 默认派生（避免补丁版强名称漂移）。 -->
+    <Version>5.0.0</Version>
+
+    <!-- NuGet.org 展示元数据（指向仓库与变更日志，包页可点击） -->
+    <PackageProjectUrl>https://github.com/yuebo119/PalORM</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yuebo119/PalORM.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReleaseNotes>https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md</PackageReleaseNotes>
+
+    <!-- SourceLink：NuGet.org 包页显示源码链接，F12 可步入源码（现代实践标准）。
+         EmbedUntrackedSources 把未跟踪源文件嵌入 PDB；PublishRepositoryUrl 把仓库 URL 写入 PDB。
+         ContinuousIntegrationBuild 只在 CI 设 true（启用确定性构建+deterministic PDB），
+         本地保持 false 避免锁定 DLL 时间戳影响调试。 -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+
     <!-- 源生成器产出不审计 -->
     <GeneratedFolder>$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\generated\</GeneratedFolder>
   </PropertyGroup>
@@ -47,6 +65,10 @@
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- ContinuousIntegrationBuild 触发 DeterministicSourcePaths=true，把 [CallerFilePath]
+         归一化为 /_/ 虚拟路径，破坏 ArchitectureInvariantTests 的 src 目录定位
+         （dotnet/roslyn#55860）。测试项目强制 false，src/ 发布包仍享受 SourceLink 确定性构建。 -->
+    <ContinuousIntegrationBuild>false</ContinuousIntegrationBuild>
     <!-- CS1591: 测试代码非公共 API 面，不强制 XML 文档（src/ 全域强制） -->
     <NoWarn>$(NoWarn);CA2007;CA1062;CA1031;CS1591;S8969</NoWarn>
   </PropertyGroup>
