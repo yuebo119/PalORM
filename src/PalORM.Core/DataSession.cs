@@ -50,7 +50,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 await TProvider.InitializeConnectionAsync(conn, ct).ConfigureAwait(false);
                 await using DbCommand cmd = conn.CreateCommand();
                 cmd.CommandTimeout = options.CommandTimeoutSeconds;
-                cmd.CommandText = options.ReadSessionSetupSql!;
+                cmd.CommandText = options.ReadSessionSetupSql;
                 await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             };
         if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
