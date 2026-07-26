@@ -22,7 +22,7 @@
     <DevelopmentDependency>true</DevelopmentDependency>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageTags>ORM;AOT;source-generator;analyzer;sqlfile</PackageTags>
-    <Version>5.0.0</Version>
+    <!-- Version 由 Directory.Build.props 集中管理 -->
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,5 +36,11 @@
 
   <ItemGroup>
     <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
+  <!-- SourceLink：PrivateAssets=all。SourceGen 跑在 netstandard2.0+Roslyn 分析器上下文，
+       SourceLink 是 build-time target 包（不进 analyzer load 路径），无 RS1036 风险。 -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
   </ItemGroup>
 </Project>
