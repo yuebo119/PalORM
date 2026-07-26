@@ -63,4 +63,10 @@
   <ItemGroup>
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.30.0.144632" />
   </ItemGroup>
+
+  <!-- SourceLink（v5.0 发布管道：NuGet.org 包页源码链接 + F12 步入）。
+       8.0.0 是当前最新 stable（10.x 配套 .NET 10，源兼容性未验证，保守取 8.0.0）。 -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
+  </ItemGroup>
 </Project>

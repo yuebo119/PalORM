@@ -34,6 +34,24 @@
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
+    <!-- NuGet 包版本（中央管理，避免 6 个 src csproj 各自硬编码漂移）。
+         只设 Version；FileVersion/AssemblyVersion 让 MSBuild 默认派生（避免补丁版强名称漂移）。 -->
+    <Version>5.0.0</Version>
+
+    <!-- NuGet.org 展示元数据（指向仓库与变更日志，包页可点击） -->
+    <PackageProjectUrl>https://github.com/yuebo119/PalORM</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yuebo119/PalORM.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReleaseNotes>https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md</PackageReleaseNotes>
+
+    <!-- SourceLink：NuGet.org 包页显示源码链接，F12 可步入源码（现代实践标准）。
+         EmbedUntrackedSources 把未跟踪源文件嵌入 PDB；PublishRepositoryUrl 把仓库 URL 写入 PDB。
+         ContinuousIntegrationBuild 只在 CI 设 true（启用确定性构建+deterministic PDB），
+         本地保持 false 避免锁定 DLL 时间戳影响调试。 -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+
     <!-- 源生成器产出不审计 -->
     <GeneratedFolder>$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\generated\</GeneratedFolder>
   </PropertyGroup>
