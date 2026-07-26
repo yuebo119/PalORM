@@ -328,7 +328,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     /// <summary>PALORM033：Select(projection) 后接 ToListAsync/FirstAsync——运行期必崩。
     /// 策略：同一 IdentifierName 变量上 Select 后立即跟 To/First/Single 调用。
-    /// 降级：如追踪不可靠，至少报 Select 调用本身（Warning 级变体）。</summary>
+    /// 已知限制：仅覆盖多语句模式（builder.Select(...); builder.ToListAsync();），
+    /// 链式调用（session.From&lt;T&gt;().Select(...).ToListAsync()）不报告——
+    /// 因 ma.Expression 是 InvocationExpressionSyntax 不是 IdentifierNameSyntax。
+    /// 链式追踪复杂度高且易误报，留作未来增强。</summary>
     private static void CheckSelectProjection(
         SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma, InvocationExpressionSyntax invocation)
     {
