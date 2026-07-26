@@ -5,6 +5,15 @@ set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
+
+# 从 Directory.Build.props 动态读取版本号（与包版本同源，避免硬编码漂移）
+VERSION=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props | head -1)
+if [ -z "$VERSION" ]; then
+    printf 'FAIL 无法从 Directory.Build.props 读取 Version\n' >&2
+    exit 1
+fi
+printf 'INFO 检测到版本 %s\n' "$VERSION"
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 PACKAGES="$TMP/packages"
@@ -14,15 +23,15 @@ for project in Core SourceGen Sqlite PostgreSql MySql Testing; do
     dotnet pack "src/PalORM.$project/PalORM.$project.csproj" -c Release -o "$PACKAGES" --nologo >/dev/null
 done
 
-nuspec=$(unzip -p "$PACKAGES/PalORM.Testing.5.0.0.nupkg" '*.nuspec')
+nuspec=$(unzip -p "$PACKAGES/PalORM.Testing.${VERSION}.nupkg" '*.nuspec')
 for dependency in PalORM.Core PalORM.Sqlite PalORM.PostgreSql PalORM.MySql; do
-    if ! grep -q "dependency id=\"$dependency\" version=\"5.0.0\"" <<< "$nuspec"; then
+    if ! grep -q "dependency id=\"$dependency\" version=\"$VERSION\"" <<< "$nuspec"; then
         printf 'FAIL PalORM.Testing 缺少包依赖：%s\n' "$dependency"
         exit 1
     fi
 done
 
-cat > "$TMP/consumer/Consumer.csproj" <<'XML'
+cat > "$TMP/consumer/Consumer.csproj" <<XML
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
@@ -31,7 +40,7 @@ cat > "$TMP/consumer/Consumer.csproj" <<'XML'
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="PalORM.Testing" Version="5.0.0" />
+    <PackageReference Include="PalORM.Testing" Version="$VERSION" />
   </ItemGroup>
 </Project>
 XML
@@ -92,7 +101,7 @@ XML
 dotnet build "$TMP/consumer/Consumer.csproj" -c Release --configfile "$TMP/consumer/NuGet.config" --nologo
 printf 'PASS PalORM.Testing NuGet 依赖与独立消费者契约\n'
 
-cat > "$TMP/analyzer-consumer/AnalyzerConsumer.csproj" <<'XML'
+cat > "$TMP/analyzer-consumer/AnalyzerConsumer.csproj" <<XML
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
@@ -103,8 +112,8 @@ cat > "$TMP/analyzer-consumer/AnalyzerConsumer.csproj" <<'XML'
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="PalORM.Core" Version="5.0.0" />
-    <PackageReference Include="PalORM.SourceGen" Version="5.0.0"
+    <PackageReference Include="PalORM.Core" Version="$VERSION" />
+    <PackageReference Include="PalORM.SourceGen" Version="$VERSION"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
