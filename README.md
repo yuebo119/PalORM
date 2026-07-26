@@ -348,7 +348,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 ## 性能基准报告
 
-> **测试环境**：AMD Ryzen 9 8945HX (32 logical) · Windows 10 22H2 · .NET 11.0.0-preview.6 · BenchmarkDotNet fork (net11) · SQLite 共享内存 10K 行 · PG 18.4 / MySQL 8.4.10 远程（192.168.x.x）
+> **测试环境**：AMD Ryzen 9 8945HX (32 logical) · Windows 10 22H2 · .NET 11.0.0-preview.6 · BenchmarkDotNet fork (net11) · SQLite 共享内存 10K 行 · PG 18.4 / MySQL 8.4.10 远程
 
 ### SQLite CRUD（4 ORM 对照）
 

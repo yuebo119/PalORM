@@ -24,11 +24,11 @@
 
     { "name": "PalORM_BulkInsert_Scaled_10000", "mean_ms": 63.30, "allocated_mb": 4.97, "gen0_per_1k": 222.22, "note": "BDN 实测" },
 
-    { "name": "Pg_PalORM_QueryAll", "mean_ms": 15.04, "allocated_kb": 1140, "ratio_vs_ado": 0.94, "provider": "PostgreSQL 18.4 (192.168.x.x)" },
+    { "name": "Pg_PalORM_QueryAll", "mean_ms": 15.04, "allocated_kb": 1140, "ratio_vs_ado": 0.94, "provider": "PostgreSQL 18.4 (远程)" },
     { "name": "Pg_PalORM_BulkInsert_10000_COPY", "mean_ms": 63.51, "allocated_kb": 9796, "provider": "PostgreSQL 18.4", "note": "Npgsql Binary COPY 协议" },
     { "name": "Pg_PalORM_BulkUpdateBatch_1000", "mean_ms": 14.58, "allocated_kb": 2775, "provider": "PostgreSQL 18.4", "note": "UPDATE FROM VALUES" },
 
-    { "name": "MySql_PalORM_QueryAll", "mean_ms": 94.79, "allocated_kb": 1937, "ratio_vs_ado": 0.85, "provider": "MySQL 8.4.10 (192.168.x.x)" },
+    { "name": "MySql_PalORM_QueryAll", "mean_ms": 94.79, "allocated_kb": 1937, "ratio_vs_ado": 0.85, "provider": "MySQL 8.4.10 (远程)" },
     { "name": "MySql_PalORM_Insert", "mean_us": 4002, "allocated_kb": 12.5, "provider": "MySQL 8.4.10" },
     { "name": "MySql_PalORM_BulkInsert_10000", "mean_ms": 820.04, "allocated_kb": 7893, "provider": "MySQL 8.4.10", "note": "local_infile 可能 OFF，走多值 INSERT" },
     { "name": "MySql_PalORM_BulkUpdateBatch_1000", "mean_ms": 73.41, "allocated_kb": 2403, "provider": "MySQL 8.4.10", "note": "CASE WHEN" }
