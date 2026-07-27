@@ -49,12 +49,23 @@ source scripts/set-test-env.sh
 
 ## PR 流程
 
-1. 创建分支：`git checkout -b feature/xxx` 或 `fix/xxx`
+1. 创建分支：`git checkout -b feature/xxx` 或 `fix/xxx`（从 dev 创建，详见 `docs/发布规范.md` §3.1）
 2. 实现变更 + 测试
 3. 验证 `dotnet build -c Release --no-incremental -warnaserror` 通过
 4. 运行测试
 5. 检查 `.github/PULL_REQUEST_TEMPLATE.md` 清单
 6. 提交 PR
+
+## 版本发布
+
+发布到 NuGet 的完整流程（含版本号管理、tag 触发、回滚等）详见 [`docs/发布规范.md`](docs/发布规范.md)。
+
+**简版流程**：
+1. 改 `Directory.Build.props` 的 `<Version>`（唯一版本源，禁止 csproj 硬编码）
+2. 同步改 README badge 版本号
+3. 走 feature → dev → main PR 流程
+4. main 合并后打 tag：`git tag v5.0.1 && git push origin v5.0.1`
+5. release.yml 自动触发：test → pack 5 个包 → push → GitHub Release
 
 ## 项目结构
 
