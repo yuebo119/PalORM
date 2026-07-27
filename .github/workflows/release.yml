@@ -27,6 +27,31 @@ jobs:
         timeout-minutes: 30
         permissions:
             contents: write # 用于创建 GitHub Release
+        services:
+            postgres:
+                image: postgres:17
+                env:
+                    POSTGRES_HOST_AUTH_METHOD: trust
+                    POSTGRES_DB: palorm
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U postgres -d palorm"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
+            mysql:
+                image: mysql:8.4
+                env:
+                    MYSQL_ALLOW_EMPTY_PASSWORD: yes
+                    MYSQL_DATABASE: palorm
+                ports:
+                    - 3306:3306
+                options: >-
+                    --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
 
         steps:
             - uses: actions/checkout@v4
@@ -74,17 +99,11 @@ jobs:
                   dotnet run --project test/PalORM.Core.Tests -c Release --no-build --no-restore
                   dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build --no-restore
 
-            - name: Integration tests (PostgreSQL)
+            - name: Integration tests (PostgreSQL + MySQL)
               env:
                   PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm
+                  PALORM_MYSQL_CONNECTION: Server=127.0.0.1;User=root;Database=palorm
               run: |
-                  docker run -d --rm --name pg-test \
-                    -e POSTGRES_HOST_AUTH_METHOD=trust \
-                    -e POSTGRES_DB=palorm \
-                    -p 5432:5432 postgres:17
-                  for i in $(seq 1 30); do
-                      pg_isready -h 127.0.0.1 -p 5432 && break || sleep 2
-                  done
                   dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --no-restore
 
             - name: Pack all src projects
