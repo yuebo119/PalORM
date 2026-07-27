@@ -2,7 +2,10 @@
   <PropertyGroup>
     <RootNamespace>PalORM.Testing</RootNamespace>
     <AssemblyName>PalORM.Testing</AssemblyName>
-    <Description>PalORM 测试工具库 — TestDb.Sqlite() + TestDb.PostgreSqlAsync() + TestDb.MySqlAsync() + TestDb.FromRows()</Description>
+    <Description>PalORM 内部测试工具库（不发布到 NuGet）— 供 PalORM.Integration.Tests 引用，构造测试数据库连接</Description>
+    <!-- 不发布到 nuget.org：此库仅 PalORM 自身集成测试用，不是面向最终用户的公共 API。
+         Version/SourceLink 仍继承自 Directory.Build.props（ProjectReference 内部消费用）。 -->
+    <IsPackable>false</IsPackable>
     <PackageTags>ORM;Testing;AOT;micro-ORM</PackageTags>
     <!-- Version 由 Directory.Build.props 集中管理 -->
     <NoWarn>$(NoWarn);CA2007;NU5104</NoWarn>
@@ -13,9 +16,5 @@
     <ProjectReference Include="..\PalORM.Sqlite\PalORM.Sqlite.csproj" />
     <ProjectReference Include="..\PalORM.PostgreSql\PalORM.PostgreSql.csproj" />
     <ProjectReference Include="..\PalORM.MySql\PalORM.MySql.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
   </ItemGroup>
 </Project>
