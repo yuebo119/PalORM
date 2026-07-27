@@ -109,7 +109,8 @@ jobs:
             - name: Pack all src projects
               run: |
                   VERSION="${{ steps.ver.outputs.version }}"
-                  for proj in Core SourceGen Sqlite PostgreSql MySql Testing; do
+                  # 5 个公开发布的包（PalORM.Testing 是内部测试库，IsPackable=false 不打包）
+                  for proj in Core SourceGen Sqlite PostgreSql MySql; do
                       dotnet pack "src/PalORM.$proj/PalORM.$proj.csproj" \
                         -c Release --no-build \
                         -o artifacts/packages \
@@ -119,9 +120,9 @@ jobs:
             - name: Verify package count
               run: |
                   COUNT=$(find artifacts/packages -name "*.nupkg" | wc -l)
-                  echo "Package count: $COUNT (expected 6)"
-                  if [ "$COUNT" -ne 6 ]; then
-                      echo "::error::预期 6 个 nupkg，实际 $COUNT 个"
+                  echo "Package count: $COUNT (expected 5)"
+                  if [ "$COUNT" -ne 5 ]; then
+                      echo "::error::预期 5 个 nupkg（Core/SourceGen/Sqlite/PostgreSql/MySql），实际 $COUNT 个"
                       exit 1
                   fi
                   ls -la artifacts/packages/
