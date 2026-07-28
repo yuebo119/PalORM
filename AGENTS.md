@@ -58,7 +58,7 @@
 - 三方一致扩展 → 全局"三方一致"铁律已覆盖（包版本号+连接串参数）
 - 被测代码完整性 → 已提升到全局
 
-**过程纪律 B8-B27**（PalORM 专属缺陷编号，见 .ai/lessons.md）：
+**过程纪律 B8-B28**（PalORM 专属缺陷编号，见 .ai/lessons.md）：
 - B8 emit 变更必须清 obj/bin（增量构建复用旧 emit 导致 NRE）
 - B9 方案文字与实施代码偏差（核心路径严格对齐）
 - B10 方案调研可能误判瓶颈（benchmark 验证声称的瓶颈）
@@ -70,6 +70,7 @@
 - B16-B20 v5.0 会话缺陷（TUnit 零改动误判/阈值伪精确/CASE WHEN 方言慢/NuGet.Config CI/SourceGen WithComparer）
 - B21-B23 过程纪律缺陷（核实 summary / 核实 diff / 核实 API）— R0 的底层缺陷登记
 - B24-B27 诊断规则工程化缺陷（RS1032 消息格式/XML doc 转义/防静默错误价值分层/SyntaxNodeAction 变量流局限）— PALORM001-040 完整化会话
+- B28 特性推荐偏置缺陷（参照系偏置：用 EF Core 全功能面衡量 micro-ORM）— 「特性推荐四问」SOP：推荐前必过(1) ORM 职责吗？(2) AOT 可行吗？(3) 客户自己做更好吗？(4) 真必需吗？且必查 docs/adr/ 既有 ADR + .ai/lessons.md B 系列 + grep 目标 API 已存在性
 
 **R0 审查前置三核实**（已提升到全局）：核实 summary / 核实 diff / 核实 API
 
