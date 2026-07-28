@@ -9,7 +9,22 @@
     <IsTrimmable>true</IsTrimmable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- PoC：启用 Auto Tagging Interceptor（opt-in） -->
+    <PalORMAutoTagging>true</PalORMAutoTagging>
+    <!-- Interceptors 实验特性 opt-in（CS9137） -->
+    <Features>$(Features);InterceptorsPreview</Features>
+    <!-- Interceptors 是 net9+ SDK 稳定特性；net11 已含稳定支持 -->
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);PalORM.Generated</InterceptorsNamespaces>
+    <!-- 让源生成器输出可见——便于 PoC 调试 -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
+
+  <!-- 关键：声明 MSBuild 属性为编译器可见，源生成器经
+       AnalyzerConfigOptionsProvider.GlobalOptions["build_property.PalORMAutoTagging"] 读取 -->
+  <ItemGroup>
+    <CompilerVisibleProperty Include="PalORMAutoTagging" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
