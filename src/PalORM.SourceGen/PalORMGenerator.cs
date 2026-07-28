@@ -83,6 +83,33 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                     SqlTemplateEmitter.Render(model));
             }
         });
+
+        // ── PoC: Auto Tagging Interceptor（仅 ToListAsync，opt-in）──
+        // 4 个硬假设已验证通过（PoC 阶段）：
+        //   A. CSharpExtensions.GetInterceptableLocation 在 Roslyn 5.6.0 可用（扩展方法，非 SemanticModel 实例方法）
+        //   B. netstandard2.0 源生成器项目可调用该 API
+        //   C. SyntaxProvider.CreateSyntaxProvider + 谓词正确检测调用点（targets=1 实测）
+        //   D. net11 AOT publish 0 警告（Interceptors 与 NativeAOT 完全兼容）
+        // 配置经 CompilerVisibleProperty ItemGroup 传递到 GlobalOptions["build_property.PalORMAutoTagging"]。
+        var autoTaggingEnabled = context.AnalyzerConfigOptionsProvider
+            .Select(static (provider, _) =>
+                provider.GlobalOptions.TryGetValue("build_property.PalORMAutoTagging", out string? v)
+                && string.Equals(v, "true", System.StringComparison.OrdinalIgnoreCase));
+
+        var toListCalls = context.SyntaxProvider.CreateSyntaxProvider(
+            predicate: static (node, _) => PoCAutoTaggingEmitter.IsToListAsyncCall(node),
+            transform: static (ctx, ct) => PoCAutoTaggingEmitter.ExtractTarget(ctx, ct))
+            .Where(static t => t is not null)
+            .Collect();
+
+        context.RegisterSourceOutput(
+            autoTaggingEnabled.Combine(toListCalls),
+            static (spc, tuple) =>
+            {
+                if (!tuple.Left) return;  // 开关关闭：零生成物
+                spc.AddSource("PalORM_PoCAutoTagging.g.cs",
+                    PoCAutoTaggingEmitter.Generate(tuple.Right));
+            });
     }
 
     private static GeneratedSource? CreateGeneratedSource(
