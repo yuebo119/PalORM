@@ -9,7 +9,19 @@
     <IsTrimmable>true</IsTrimmable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- PoC：启用 Auto Tagging Interceptor（opt-in）。targets 自动注入 Features + InterceptorsNamespaces。 -->
+    <PalORMAutoTagging>true</PalORMAutoTagging>
+    <!-- 让源生成器输出可见——便于 PoC 调试 -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
+
+  <!--
+    注：buildTransitive targets 通过 NuGet 包传递。本地 ProjectReference 测试场景下，
+    targets 不会自动加载——需显式 import。生产环境（NuGet 包引用）则自动生效。
+  -->
+  <Import Project="..\..\src\PalORM.SourceGen\buildTransitive\PalORM.SourceGen.targets"
+          Condition="Exists('..\..\src\PalORM.SourceGen\buildTransitive\PalORM.SourceGen.targets')" />
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
