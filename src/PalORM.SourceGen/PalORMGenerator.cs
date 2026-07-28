@@ -84,7 +84,7 @@ public sealed class PalORMGenerator : IIncrementalGenerator
             }
         });
 
-        // ── PoC: Auto Tagging Interceptor（仅 ToListAsync，opt-in）──
+        // ── Auto Tagging Interceptor（6 个终态方法，opt-in）──
         // 4 个硬假设已验证通过（PoC 阶段）：
         //   A. CSharpExtensions.GetInterceptableLocation 在 Roslyn 5.6.0 可用（扩展方法，非 SemanticModel 实例方法）
         //   B. netstandard2.0 源生成器项目可调用该 API
@@ -96,19 +96,21 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 provider.GlobalOptions.TryGetValue("build_property.PalORMAutoTagging", out string? v)
                 && string.Equals(v, "true", System.StringComparison.OrdinalIgnoreCase));
 
-        var toListCalls = context.SyntaxProvider.CreateSyntaxProvider(
-            predicate: static (node, _) => PoCAutoTaggingEmitter.IsToListAsyncCall(node),
-            transform: static (ctx, ct) => PoCAutoTaggingEmitter.ExtractTarget(ctx, ct))
+        // 检测 6 个终态方法调用点；InterceptionTarget 是 sealed record（值相等），增量缓存按值命中。
+        var terminalCalls = context.SyntaxProvider.CreateSyntaxProvider(
+            predicate: static (node, _) => AutoTaggingEmitter.IsTerminalCall(node),
+            transform: static (ctx, ct) => AutoTaggingEmitter.ExtractTarget(ctx, ct))
             .Where(static t => t is not null)
+            .WithComparer(EqualityComparer<AutoTaggingEmitter.InterceptionTarget?>.Default)
             .Collect();
 
         context.RegisterSourceOutput(
-            autoTaggingEnabled.Combine(toListCalls),
+            autoTaggingEnabled.Combine(terminalCalls),
             static (spc, tuple) =>
             {
                 if (!tuple.Left) return;  // 开关关闭：零生成物
-                spc.AddSource("PalORM_PoCAutoTagging.g.cs",
-                    PoCAutoTaggingEmitter.Generate(tuple.Right));
+                spc.AddSource("PalORM_AutoTagging.g.cs",
+                    AutoTaggingEmitter.Generate(tuple.Right));
             });
     }
 

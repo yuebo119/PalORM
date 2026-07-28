@@ -36,6 +36,9 @@
 
   <ItemGroup>
     <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <!-- v5.1：Auto Tagging Interceptor 的 buildTransitive targets——
+         消费侧设 <PalORMAutoTagging>true</PalORMAutoTagging> 后自动注入 Interceptors 配置 -->
+    <None Include="buildTransitive\**\*.targets" Pack="true" PackagePath="buildTransitive" />
   </ItemGroup>
 
   <!-- SourceLink：PrivateAssets=all。SourceGen 跑在 netstandard2.0+Roslyn 分析器上下文，
