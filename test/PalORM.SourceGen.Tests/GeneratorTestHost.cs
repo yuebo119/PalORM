@@ -1,5 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace PalORM.SourceGen.Tests;
 
@@ -12,12 +13,25 @@ internal static class GeneratorTestHost
         IReadOnlyDictionary<string, string> GeneratedSources);
 
     internal static GeneratorResult RunGenerator(string source, string assemblyName = "SnapshotConsumer")
+        => RunGenerator(source, assemblyName, analyzerConfigOptions: null);
+
+    /// <summary>运行生成器，支持注入 analyzerConfigOptions（如 build_property.PalORMAutoTagging=true）。</summary>
+    internal static GeneratorResult RunGenerator(
+        string source,
+        string assemblyName,
+        IReadOnlyDictionary<string, string>? analyzerConfigOptions)
     {
         CSharpCompilation compilation = CreateCompilation(source, assemblyName);
         var parseOptions = (CSharpParseOptions)compilation.SyntaxTrees.Single().Options;
+
+        // 构造 AnalyzerConfigOptionsProvider——源生成器经 context.AnalyzerConfigOptionsProvider 读取
+        AnalyzerConfigOptionsProvider configProvider = TestConfigOptionsProvider.Create(
+            analyzerConfigOptions ?? new Dictionary<string, string>());
+
         GeneratorDriver driver = CSharpGeneratorDriver.Create(
             [new PalORMGenerator().AsSourceGenerator()],
-            parseOptions: parseOptions);
+            parseOptions: parseOptions,
+            optionsProvider: configProvider);
         driver = driver.RunGeneratorsAndUpdateCompilation(
             compilation,
             out Compilation outputCompilation,
@@ -54,4 +68,47 @@ internal static class GeneratorTestHost
         => string.Join("\n", compilation.GetDiagnostics()
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .Select(static diagnostic => diagnostic.ToString()));
+}
+
+/// <summary>
+/// 测试用 AnalyzerConfigOptionsProvider——把字典转为 GlobalOptions 供源生成器读取。
+/// 用于测试 PalORMAutoTagging 等 build_property 开关。
+/// </summary>
+internal sealed class TestConfigOptionsProvider : AnalyzerConfigOptionsProvider
+{
+    private readonly TestGlobalOptions _globalOptions;
+
+    private TestConfigOptionsProvider(IReadOnlyDictionary<string, string> options)
+    {
+        _globalOptions = new TestGlobalOptions(options);
+    }
+
+    internal static TestConfigOptionsProvider Create(IReadOnlyDictionary<string, string> options)
+        => new(options);
+
+    public override AnalyzerConfigOptions GlobalOptions => _globalOptions;
+    public override AnalyzerConfigOptions GetOptions(SyntaxTree tree) => TestGlobalOptions.Empty;
+    public override AnalyzerConfigOptions GetOptions(AdditionalText textFile) => TestGlobalOptions.Empty;
+
+    private sealed class TestGlobalOptions : AnalyzerConfigOptions
+    {
+        internal static readonly TestGlobalOptions Empty = new(new Dictionary<string, string>());
+        private readonly IReadOnlyDictionary<string, string> _options;
+
+        internal TestGlobalOptions(IReadOnlyDictionary<string, string> options)
+        {
+            _options = options;
+        }
+
+        public override bool TryGetValue(string key, out string value)
+        {
+            if (_options.TryGetValue(key, out string? v))
+            {
+                value = v;
+                return true;
+            }
+            value = "";
+            return false;
+        }
+    }
 }

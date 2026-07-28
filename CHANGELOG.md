@@ -2,6 +2,45 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [5.1.0] — Auto Tagging Interceptor（SourceGen 自动 SQL 源码定位）
+
+> 基于 `docs/v5.1-auto-tagging-design.md` + ADR-F。本版本引入 **opt-in 的自动 Query Tagging**，
+> 用户零代码改动即可让 SQL 自动带源码定位注释（`/* 相对路径:行号 方法名 */`）。
+
+### 新增
+
+- **Auto Tagging Interceptor**（opt-in）：消费侧 csproj 设 `<PalORMAutoTagging>true</PalORMAutoTagging>` 启用。
+  源生成器在编译期检测 `QueryBuilderExtensions` 的 6 个终态方法调用（`ToListAsync`/`FirstAsync`/
+  `FirstOrDefaultAsync`/`SingleAsync`/`SingleOrDefaultAsync`/`ExecuteNonQueryAsync`），
+  为每个调用点生成 `[InterceptsLocation]` 拦截方法，自动注入 `builder.Tag(...)` 后调用原方法。
+  - SQL 日志自动含 `/* Controllers/UserController.cs:42 GetUserList */` 样式注释
+  - 路径规范化：绝对路径 → 相对工作目录（避免泄露编译机目录结构到 DB 日志）
+  - AOT 全兼容：net11 NativeAOT publish 0 警告实测通过
+- **buildTransitive targets**：NuGet 包消费侧只需一行 `<PalORMAutoTagging>true</PalORMAutoTagging>`，
+  targets 自动注入 `Features`/`InterceptorsNamespaces`/`CompilerVisibleProperty`
+- **ADR-F**：`docs/adr/ADR-F-auto-tagging-interceptor.md`（决策记录 + 6 项技术约束）
+- **B29 教训**：`.ai/lessons.md` AC 章节（Interceptor 实施工程化缺陷 + PoC 驱动 SOP）
+
+### 技术约束（实施过程发现，详见 ADR-F）
+
+| 约束 | 说明 |
+|------|------|
+| `GetInterceptableLocation` 是扩展方法 | 在 `CSharpExtensions` 类，非 `SemanticModel` 实例方法 |
+| `InterceptsLocationAttribute` 命名空间 | 编译器硬编码要求 `System.Runtime.CompilerServices` |
+| MSBuild Property 传递 | 需 `<CompilerVisibleProperty>` 显式声明 |
+| `TagWithCaller` 不能直接复用 | Caller* 在拦截器中返回拦截器自身位置，需用 `Tag(string)` + 编译期常量 |
+
+### 测试
+
+- 新增 4 个 AutoTagging 单元测试（开关关闭零生成 + 开关开启生成拦截器 + 签名匹配 + 路径规范化）
+- `test/PalORM.AotTest.MySql` 扩展：启用 PalORMAutoTagging + 2 个拦截调用点
+- 125 个 SourceGen 测试全部通过（零回归）
+
+### 参考
+
+- 设计文档：`docs/v5.1-auto-tagging-design.md`（含"实施差异说明"章节，B9 教训）
+- EF Core 参考实现：[Thirty25 博客](https://thirty25.blog/blog/2025/04/ef-core-source-gen-interceptors)
+
 ## [5.0.0] — 驱动现代化 + 调优（包升级 + 连接串/PRAGMA 性能调优）
 
 > 基于 v5.0-roadmap.md 的 5 阶段方案。本版本聚焦**驱动层现代化 + 默认调优**，
