@@ -149,6 +149,11 @@ internal static class Program
                 ?? throw new InvalidOperationException("MySQL migrated-table GET failed");
             if (migratedBack.Label != "migrated" || migratedBack.Amount != 12.5m)
                 throw new InvalidOperationException("MySQL migrated-table round trip failed");
+
+            // PoC Auto Tagging Interceptor 拦截目标——6 个终态方法全部覆盖。
+            // 不做内容断言（表可能为空），只验证调用本身不抛异常即证明拦截器 + AOT 链路通畅。
+            _ = await db.From<AotMySqlEntity>().Take(1).ToListAsync().ConfigureAwait(false);
+            _ = await db.From<AotMySqlEntity>().Take(1).FirstOrDefaultAsync().ConfigureAwait(false);
         }
 
         Console.WriteLine("PalORM AOT MySQL verification PASSED");

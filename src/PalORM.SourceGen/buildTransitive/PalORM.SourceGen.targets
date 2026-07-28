@@ -1,0 +1,24 @@
+<Project>
+  <!--
+    PalORM.SourceGen buildTransitive targets
+    自动为所有消费 PalORM.SourceGen 的项目注入 Interceptors + CompilerVisibleProperty 配置。
+
+    消费侧只需：
+      <PalORMAutoTagging>true</PalORMAutoTagging>
+    本 targets 自动注入：
+      - CompilerVisibleProperty PalORMAutoTagging（让源生成器能读 GlobalOptions）
+      - Features InterceptorsPreview（CS9137 实验特性 opt-in）
+      - InterceptorsNamespaces PalORM.Generated（拦截器类型所在 namespace）
+  -->
+  <PropertyGroup Condition="'$(PalORMAutoTagging)' == 'true'">
+    <!-- Interceptors 实验特性 opt-in（CS9137）。net9+ SDK 已稳定支持，但 MSBuild 属性名保持兼容。 -->
+    <Features>$(Features);InterceptorsPreview</Features>
+    <!-- 拦截器类型在 PalORM.Generated namespace（AutoTaggingEmitter.cs 生成） -->
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);PalORM.Generated</InterceptorsNamespaces>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(PalORMAutoTagging)' == 'true'">
+    <!-- 声明 MSBuild 属性为编译器可见，源生成器经 GlobalOptions["build_property.PalORMAutoTagging"] 读取 -->
+    <CompilerVisibleProperty Include="PalORMAutoTagging" />
+  </ItemGroup>
+</Project>
