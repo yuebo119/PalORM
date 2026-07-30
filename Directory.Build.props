@@ -36,7 +36,7 @@
 
     <!-- NuGet 包版本（中央管理，避免 6 个 src csproj 各自硬编码漂移）。
          只设 Version；FileVersion/AssemblyVersion 让 MSBuild 默认派生（避免补丁版强名称漂移）。 -->
-    <Version>5.0.0</Version>
+    <Version>5.1.0</Version>
 
     <!-- NuGet.org 展示元数据（指向仓库与变更日志，包页可点击） -->
     <PackageProjectUrl>https://github.com/yuebo119/PalORM</PackageProjectUrl>
