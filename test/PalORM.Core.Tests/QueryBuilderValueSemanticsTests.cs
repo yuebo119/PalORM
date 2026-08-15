@@ -244,6 +244,23 @@ public sealed class QueryBuilderValueSemanticsTests
 
         await Assert.That(clone._isolationLevel).IsEqualTo(builder._isolationLevel);
     }
+
+    [Test]
+    public async Task BuildUpdateSql_WithTakeOrSkip_ThrowsAtBuildTime()
+    {
+        // r8-D1(P1) 锁定：Take/Skip 是字段非子句位掩码——守卫族曾结构性看不见，
+        // 静默丢 LIMIT 扩大更新范围（Set+Take 组合应构建期拒绝）
+        await using DataSession<SqliteProvider> session =
+            await CreateSessionAsync();
+
+        QueryBuilder<ValueSemanticsEntity> limited =
+            session.From<ValueSemanticsEntity>().Set(e => e.Name, "x").Take(5);
+        await Assert.That(() => limited.BuildUpdateSql()).Throws<NotSupportedException>();
+
+        QueryBuilder<ValueSemanticsEntity> skipped =
+            session.From<ValueSemanticsEntity>().Set(e => e.Name, "x").Skip(5);
+        await Assert.That(() => skipped.BuildUpdateSql()).Throws<NotSupportedException>();
+    }
 }
 
 #region Test Entities
