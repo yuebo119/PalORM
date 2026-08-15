@@ -337,21 +337,18 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>追加 FOR UPDATE 行锁；skipLocked 为 true 时附加 SKIP LOCKED 跳过已锁行。需在事务内使用才有意义。
-    /// <para>ITM-639：SQLite 不支持 FOR UPDATE——构建期拒绝，而非执行期远端语法错误。</para></summary>
+    /// <para>ITM-639 登记：SQLite 不支持 FOR UPDATE——构建不拒绝（DryRun/ToSql 预览与
+    /// 测试用 SQLite 会话验证 SQL 形态是既定契约），执行期由 SQLite 报语法错误。</para></summary>
     public QueryBuilder<T> ForUpdate(bool skipLocked = false)
     {
-        if (_dialect == SqlDialect.Sqlite)
-            throw new NotSupportedException("SQLite does not support FOR UPDATE row locks.");
         AddClause(QueryClauseKind.Lock, $"FOR UPDATE{(skipLocked ? " SKIP LOCKED" : "")}");
         return this;
     }
 
     /// <summary>追加 FOR SHARE 共享锁——允许并发读、阻止并发写。需在事务内使用才有意义。
-    /// <para>ITM-639：同 ForUpdate，SQLite 构建期拒绝。</para></summary>
+    /// <para>ITM-639 登记：同 ForUpdate，SQLite 执行期报语法错误。</para></summary>
     public QueryBuilder<T> ForShare()
     {
-        if (_dialect == SqlDialect.Sqlite)
-            throw new NotSupportedException("SQLite does not support FOR SHARE locks.");
         AddClause(QueryClauseKind.Lock, "FOR SHARE");
         return this;
     }

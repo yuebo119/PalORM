@@ -30,10 +30,21 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
         }
         catch (NpgsqlException exception)
         {
+            // ITM-638：Open 失败（含订阅事件前的半开形态）自清理——不依赖调用方
+            // 记得 Dispose 一个从未 Open 成功的连接（调用方重连循环每次 factory 新建）。
+            await _connection.DisposeAsync().ConfigureAwait(false);
             throw WrapConnectionException(exception);
+        }
+        catch
+        {
+            await _connection.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
     }
 
+    /// <summary>执行 LISTEN。channel <b>必须已经 QuoteIdentifier 引用</b>（本适配器不再
+    /// 二次引用，双重引用会改变通道名）——当前唯一调用方 PgNotificationListener 已保证，
+    /// 新调用方必须遵守（ITM-638 契约显式化）。</summary>
     public async Task ListenAsync(string quotedChannel, CancellationToken cancellationToken)
     {
         try
