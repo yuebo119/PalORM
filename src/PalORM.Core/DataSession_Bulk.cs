@@ -205,7 +205,8 @@ public partial class DataSession<TProvider>
 
         // 准备批量上下文：SET 列集、引号包裹标识符、租户过滤标记。
         BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, metadata, tableName, entities[0]);
-        int driverLimit = TProvider.Dialect == SqlDialect.Sqlite ? 999 : 65535;
+        // ITM-640：SQLite 已在上方回退逐条路径，此处恒非 SQLite——原三元的 999 分支不可达。
+        const int driverLimit = 65535;
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
         int rowsPerBatch = Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1));
 

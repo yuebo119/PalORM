@@ -202,6 +202,10 @@ public static class QueryBuilderExtensions
             AddParameters(countCommand, paged, paged.GetCountParameters());
             object? countResult = await ExecuteScalarObservedAsync(
                 countCommand, paged, "count", ct).ConfigureAwait(false);
+            // ITM-637：COUNT 结果理论恒非 null——驱动异常形态下显式报错比 NRE 近根因
+            if (countResult is null)
+                throw new InvalidOperationException(
+                    "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
             long total = countResult is long count ? count : Convert.ToInt64(countResult);
 
             string operation = descending ? "<" : ">";

@@ -11,6 +11,7 @@ internal static class DataSessionCache
 
     /// <summary>per-(Type, Dialect, softDelete, tenant) 缓存默认过滤条件，消除每次 QuoteIdentifier + 插值。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> FilterConditionCache = new();
-    /// <summary>per-(Type, Dialect, hasTenant, hasFilter) 缓存 GetAsync 完整 SQL，消除每次插值 + QuoteIdentifier。</summary>
+    /// <summary>per-(Type, Dialect, hasTenant, !ignoreFilters) 缓存 GetAsync 完整 SQL，消除每次插值 + QuoteIdentifier。
+    /// （ITM-640：第四元实义为 !ignoreFilters——key 由 DataSession.Crud 传入，注释修正）。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> GetByKeySqlCache = new();
 }
