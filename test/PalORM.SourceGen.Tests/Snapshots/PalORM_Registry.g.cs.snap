@@ -190,7 +190,8 @@ internal static class PalORM_RegistryInitializer
                     RowFactory_global__AllTypesEntity_7f6c8145.Read),
                 new global::PalORM.CrudColumns(
                     new[] { "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time" },
-                    new[] { "Id", "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time" }),
+                    new[] { "Id", "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time" },
+                    new[] { "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time" }),
                 null,
                 obj => CommandFactory_global__AllTypesEntity_7f6c8145.HasDefaultKey((global::AllTypesEntity)obj)),
             [typeof(global::FullFeatureEntity)] = new global::PalORM.CrudMetadata(
@@ -210,7 +211,8 @@ internal static class PalORM_RegistryInitializer
                     RowFactory_global__FullFeatureEntity_4964faa8.Read),
                 new global::PalORM.CrudColumns(
                     new[] { "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id" },
-                    new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id" }),
+                    new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id" },
+                    new[] { "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id" }),
                 null,
                 obj => CommandFactory_global__FullFeatureEntity_4964faa8.HasDefaultKey((global::FullFeatureEntity)obj)),
             [typeof(global::ReservedWordEntity)] = new global::PalORM.CrudMetadata(
@@ -230,7 +232,8 @@ internal static class PalORM_RegistryInitializer
                     RowFactory_global__ReservedWordEntity_c143a9c9.Read),
                 new global::PalORM.CrudColumns(
                     new[] { "Id", "select" },
-                    new[] { "Id", "select" }),
+                    new[] { "Id", "select" },
+                    new[] { "select" }),
                 null,
                 obj => CommandFactory_global__ReservedWordEntity_c143a9c9.HasDefaultKey((global::ReservedWordEntity)obj)),
             [typeof(global::InheritedEntity)] = new global::PalORM.CrudMetadata(
@@ -250,7 +253,8 @@ internal static class PalORM_RegistryInitializer
                     RowFactory_global__InheritedEntity_3f5411cb.Read),
                 new global::PalORM.CrudColumns(
                     new[] { "name", "created_by", "created_at" },
-                    new[] { "Id", "name", "created_by", "created_at" }),
+                    new[] { "Id", "name", "created_by", "created_at" },
+                    new[] { "name", "created_by", "created_at" }),
                 null,
                 obj => CommandFactory_global__InheritedEntity_3f5411cb.HasDefaultKey((global::InheritedEntity)obj)),
         },

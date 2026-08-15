@@ -33,19 +33,23 @@ public readonly struct CrudBindings
     }
 }
 
-/// <summary>INSERT/UPSERT 涉及的列名聚合——把两个 IReadOnlyList 打包为单参数。</summary>
+/// <summary>INSERT/UPSERT/UPDATE 涉及的列名聚合——把三个 IReadOnlyList 打包为单参数。</summary>
 public readonly struct CrudColumns
 {
     /// <summary>INSERT 涉及的列名（排除自增主键与计算列）。</summary>
     public readonly IReadOnlyList<string> Insert;
     /// <summary>UPSERT 涉及的列名。</summary>
     public readonly IReadOnlyList<string> Upsert;
+    /// <summary>UPDATE SET 涉及的列名（ITM-642：与生成器 IsUpdatableColumn 谓词同序——
+    /// BulkUpdateBatchAsync 直接消费本真源，不再解析生成 SQL 文本）。</summary>
+    public readonly IReadOnlyList<string> Update;
 
-    /// <summary>构造列名聚合。两个列表做只读快照，调用方可安全复用生成代码的静态数组。</summary>
-    public CrudColumns(IReadOnlyList<string> insert, IReadOnlyList<string> upsert)
+    /// <summary>构造列名聚合。三个列表做只读快照，调用方可安全复用生成代码的静态数组。</summary>
+    public CrudColumns(IReadOnlyList<string> insert, IReadOnlyList<string> upsert, IReadOnlyList<string> update)
     {
         Insert = Array.AsReadOnly(insert.ToArray());
         Upsert = Array.AsReadOnly(upsert.ToArray());
+        Update = Array.AsReadOnly(update.ToArray());
     }
 }
 
@@ -70,6 +74,8 @@ public readonly struct CrudMetadata
     public readonly IReadOnlyList<string> InsertColumns;
     /// <summary>UPSERT 涉及的列名。</summary>
     public readonly IReadOnlyList<string> UpsertColumns;
+    /// <summary>UPDATE SET 涉及的列名（与 BindUpdate 参数序同源同序，ITM-642）。</summary>
+    public readonly IReadOnlyList<string> UpdateColumns;
     /// <summary>递增并发令牌委托；实体无 [ConcurrencyCheck] 时为 null。</summary>
     public readonly Action<object>? IncrementVersion;
     /// <summary>判断实体主键是否仍为默认值（用于 Save 区分 Insert/Update）。</summary>
@@ -102,6 +108,7 @@ public readonly struct CrudMetadata
         // CrudColumns ctor 已做只读快照；这里直接复用，避免二次拷贝。
         InsertColumns = columns.Insert;
         UpsertColumns = columns.Upsert;
+        UpdateColumns = columns.Update;
         IncrementVersion = incrementVersion;
         HasDefaultKey = hasDefaultKey;
         InsertBinderValidated = insertBinderValidated;
@@ -110,6 +117,6 @@ public readonly struct CrudMetadata
     internal CrudMetadata Copy()
         => new(Sqls,
             new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory),
-            new CrudColumns(InsertColumns, UpsertColumns),
+            new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }

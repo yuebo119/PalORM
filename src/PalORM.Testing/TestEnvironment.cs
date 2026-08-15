@@ -20,32 +20,38 @@ public static class TestEnvironment
     private const string _pgFullEnvVar = "PALORM_PG_CONNECTION";
     private const string _mySqlFullEnvVar = "PALORM_MYSQL_CONNECTION";
 
-    private static readonly TestSettings _settings = Load();
+    // ITM-648：惰性加载 + 失败可重试——静态字段初始化抛异常会以 TypeInitializationException
+    // 永久污染类型（文件后补也无法自愈）。Lazy(PublicationOnly) 不缓存异常：加载失败后
+    // 下次调用自动重试，文件后补可自愈；并发首调由 Lazy 去重，不再竞态各自加载。
+    private static readonly Lazy<TestSettings> _settings = new(
+        Load, LazyThreadSafetyMode.PublicationOnly);
+
+    private static TestSettings Settings => _settings.Value;
 
     /// <summary>解析 PostgreSQL 连接串。
     /// 优先级：<c>PALORM_PG_CONNECTION</c> &gt; JSON 模板 + <c>${PALORM_PG_*}</c> 占位符替换。</summary>
     /// <exception cref="InvalidOperationException">占位符对应的环境变量未设置。</exception>
     public static string ResolvePostgreSqlConnectionString()
-        => ResolveWithFullOverride(_settings.ConnectionStrings.PostgreSql, _pgFullEnvVar);
+        => ResolveWithFullOverride(Settings.ConnectionStrings.PostgreSql, _pgFullEnvVar);
 
     /// <summary>解析 MySQL 连接串。同 PG 的优先级规则。</summary>
     /// <exception cref="InvalidOperationException">占位符对应的环境变量未设置。</exception>
     public static string ResolveMySqlConnectionString()
-        => ResolveWithFullOverride(_settings.ConnectionStrings.MySql, _mySqlFullEnvVar);
+        => ResolveWithFullOverride(Settings.ConnectionStrings.MySql, _mySqlFullEnvVar);
 
     /// <summary>SQLite 连接串（无凭据，固定 <c>Data Source=:memory:</c>）。</summary>
-    public static string ResolveSqliteConnectionString() => _settings.ConnectionStrings.Sqlite;
+    public static string ResolveSqliteConnectionString() => Settings.ConnectionStrings.Sqlite;
 
     /// <summary>获取默认连接参数（超时/重试/池大小）。JSON 未配置时返回内置默认值。</summary>
-    public static DefaultsSection Defaults => _settings.Defaults ?? new DefaultsSection();
+    public static DefaultsSection Defaults => Settings.Defaults ?? new DefaultsSection();
 
     /// <summary>获取 PG 通知监听器默认配置。</summary>
     public static NotificationSection Notification
-        => _settings.Notification ?? new NotificationSection();
+        => Settings.Notification ?? new NotificationSection();
 
     /// <summary>获取 Scaffold CLI 默认命名空间。</summary>
     public static string ScaffoldDefaultNamespace
-        => _settings.Scaffold?.DefaultNamespace ?? "Models";
+        => Settings.Scaffold?.DefaultNamespace ?? "Models";
 
     private static TestSettings Load()
     {

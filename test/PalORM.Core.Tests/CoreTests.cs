@@ -68,11 +68,7 @@ public sealed class DbOptionsTests
     public async Task ResolveConnectionString_MissingEnvVar_Throws()
     {
         var opts = new DbOptions { ConnectionString = "$ENV:NONEXISTENT_VAR_12345" };
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-        {
-            opts.ResolveConnectionString();
-            return Task.CompletedTask;
-        });
+        await Assert.That(opts.ResolveConnectionString).Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -281,12 +277,14 @@ public sealed class PalORM_RuntimeTests
         string columnName,
         string[]? columnNames = null,
         string[]? insertColumns = null,
-        string[]? upsertColumns = null)
+        string[]? upsertColumns = null,
+        string[]? updateColumns = null)
     {
         Type entityType = typeof(TEntity);
         columnNames ??= [columnName];
         insertColumns ??= [columnName];
         upsertColumns ??= [columnName];
+        updateColumns ??= [columnName];
         // S108/S1186: 测试桩绑定器--RegistryFragment 需要委托占位，实际测试不消费绑定结果。
         static void Bind(System.Data.Common.DbCommand command, object entity) { /* test stub: no-op binder */ }
         static void BindWithOffset(System.Data.Common.DbCommand command, object entity, int offset) { /* test stub */ }
@@ -312,7 +310,7 @@ public sealed class PalORM_RuntimeTests
                 [entityType] = new(
                     new("I", "U", "D", "IR", "UR", "UM", "IL"),
                     new CrudBindings(BindWithOffset, null, Bind, Bind, new object()),
-                    new CrudColumns(insertColumns, upsertColumns),
+                    new CrudColumns(insertColumns, upsertColumns, updateColumns),
                     null, static _ => false)
             },
             EntityFeatures = new Dictionary<Type, EntityFeatures>

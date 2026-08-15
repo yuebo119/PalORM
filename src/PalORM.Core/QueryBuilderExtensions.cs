@@ -183,13 +183,15 @@ public static class QueryBuilderExtensions
         paged._take = pageSize;
         paged._skip = null;
         DbTransaction? existingTransaction = paged.GetActiveTransaction();
-        // 注意：此处直接在会话主连接上开启事务而不经 PublishTransaction 登记——
-        // 全程持有操作租约、事务只赋给克隆体并在 finally 自行提交/回滚/释放，自包含成立。
-        // 若未来门禁逻辑依赖 SessionOperationState 的事务登记状态，此路径需改走 BeginTransactionCoreAsync。
+        // ITM-649：自有事务经 PublishTransaction 登记进 SessionOperationState——会话 Dispose
+        // 与事务门禁可见该事务（此前直接 BeginTransactionAsync 自包含但登记缺席；若 Dispose/
+        // 门禁依赖登记状态则为盲区）。外部事务已由其创建方登记，此处不重复发布。
         DbTransaction transaction = existingTransaction
             ?? await paged._conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         bool ownsTransaction = existingTransaction is null;
         Exception? primaryException = null;
+        if (ownsTransaction)
+            paged._operationState.PublishTransaction(transaction, operationLease.Owner);
         paged._transaction = transaction;
         try
         {
@@ -230,7 +232,11 @@ public static class QueryBuilderExtensions
         finally
         {
             if (ownsTransaction)
+            {
+                // 与 WithTransaction 同序：先还原登记状态，再释放事务本体（ITM-649）。
+                paged._operationState.RestoreTransaction(transaction, existingTransaction);
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
+            }
         }
     }
 

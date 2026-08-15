@@ -188,7 +188,9 @@ internal static class CommandFactoryEmitter
 
     // ITM-552：UPDATE 的 SET 列谓词——BuildUpdateSql（生成 SQL）与 GenerateBindUpdateBody（绑定参数）
     // 曾各自内联复制此条件，二者必须逐字一致否则参数序与占位符错位。提取为单一真源防漂移。
-    private static bool IsUpdatableColumn(ColumnModel col)
+    // ITM-642：RegistryEmitter 发射 CrudColumns.Update 亦消费本谓词——运行时 BulkUpdateBatchAsync
+    // 直接读元数据列集，与生成 SQL/绑定序三处同源。
+    internal static bool IsUpdatableColumn(ColumnModel col)
         => !col.IsPrimaryKey && !col.IsConcurrencyToken
             && !col.IsTimestamp && col.ComputedExpression is null;
 

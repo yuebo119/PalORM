@@ -121,9 +121,10 @@ public sealed class PostgreSqlProvider : IDbProvider
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
         where T : class, new()
     {
-        // ITM-557 注记：COPY 路径经 NpgsqlBinaryImporter 而非 DbCommand，无 CommandTimeout 挂点；
-        // 写入超时由 Npgsql 连接串 CommandTimeout/取消令牌治理。参数保留以维持接口对称。
-        _ = commandTimeoutSeconds;
+        // ITM-643：COPY 路径经 NpgsqlBinaryImporter 而非 DbCommand，无 CommandTimeout 挂点——
+        // 用联动 CTS 按 commandTimeoutSeconds 取消每次 COPY，履行 IDbProvider 契约
+        // "批量命令必须应用超时"（0 = 无限等待，不设超时）。取消与调用方 ct 可区分：
+        // 超时触发的 OCE 挂回滚路径，调用方取消原样透传。
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
@@ -164,50 +165,61 @@ public sealed class PostgreSqlProvider : IDbProvider
             for (int start = 0; start < entities.Count; start += batchSize)
             {
                 int end = Math.Min(start + batchSize, entities.Count);
-                NpgsqlBinaryImporter importer = await npgsqlConnection.BeginBinaryImportAsync(
-                    $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)", ct)
-                    .ConfigureAwait(false);
-                Exception? importerException = null;
+                // ITM-643：每次 COPY 一个独立超时窗口（对齐 ADO.NET 每命令超时语义，非整批累计）。
+                CancellationTokenSource timeoutCts =
+                    CreateCopyTimeoutTokenSource(commandTimeoutSeconds, ct);
                 try
                 {
-                    DbCommand rowCommand = conn.CreateCommand();
-                    Exception? rowCommandException = null;
+                    CancellationToken commandCt = timeoutCts.Token;
+                    NpgsqlBinaryImporter importer = await npgsqlConnection.BeginBinaryImportAsync(
+                        $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)", commandCt)
+                        .ConfigureAwait(false);
+                    Exception? importerException = null;
                     try
                     {
-                        for (int index = start; index < end; index++)
+                        DbCommand rowCommand = conn.CreateCommand();
+                        Exception? rowCommandException = null;
+                        try
                         {
-                            rowCommand.Parameters.Clear();
-                            binder(rowCommand, entities[index], 0);
-                            if (rowCommand.Parameters.Count != columnCount)
-                                throw new InvalidOperationException(
-                                    $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                                    $"{rowCommand.Parameters.Count} parameters.");
+                            for (int index = start; index < end; index++)
+                            {
+                                rowCommand.Parameters.Clear();
+                                binder(rowCommand, entities[index], 0);
+                                if (rowCommand.Parameters.Count != columnCount)
+                                    throw new InvalidOperationException(
+                                        $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
+                                        $"{rowCommand.Parameters.Count} parameters.");
 
-                            await WriteRowAsync(importer, rowCommand, columnCount, ct).ConfigureAwait(false);
-                            total++;
+                                await WriteRowAsync(importer, rowCommand, columnCount, commandCt).ConfigureAwait(false);
+                                total++;
+                            }
+                            await importer.CompleteAsync(commandCt).ConfigureAwait(false);
                         }
-                        await importer.CompleteAsync(ct).ConfigureAwait(false);
+                        catch (Exception exception)
+                        {
+                            rowCommandException = exception;
+                            throw;
+                        }
+                        finally
+                        {
+                            await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
+                                "PalORM.RowCommandCleanupException", ct).ConfigureAwait(false);
+                        }
                     }
                     catch (Exception exception)
                     {
-                        rowCommandException = exception;
+                        importerException = exception;
                         throw;
                     }
                     finally
                     {
-                        await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
-                            "PalORM.RowCommandCleanupException", ct).ConfigureAwait(false);
+                        await BulkOperationFramework.DisposePreservingAsync(importer, importerException,
+                            "PalORM.ImporterCleanupException", ct).ConfigureAwait(false);
                     }
-                }
-                catch (Exception exception)
-                {
-                    importerException = exception;
-                    throw;
                 }
                 finally
                 {
-                    await BulkOperationFramework.DisposePreservingAsync(importer, importerException,
-                        "PalORM.ImporterCleanupException", ct).ConfigureAwait(false);
+                    timeoutCts.Dispose();
                 }
             }
 
@@ -228,6 +240,18 @@ public sealed class PostgreSqlProvider : IDbProvider
                 await BulkOperationFramework.DisposePreservingAsync(bulkTransaction, primaryException,
                     "PalORM.TransactionCleanupException", ct).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>创建单次 COPY 的超时令牌源——ITM-643：COPY 无 CommandTimeout 挂点，
+    /// 联动 CTS + CancelAfter 履行"批量命令必须应用超时"契约；0 = 无限等待（不设取消），
+    /// 与 DbOptions.ToCommandTimeoutSeconds 的 Zero 透传语义一致。</summary>
+    private static CancellationTokenSource CreateCopyTimeoutTokenSource(
+        int commandTimeoutSeconds, CancellationToken ct)
+    {
+        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (commandTimeoutSeconds > 0)
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
+        return timeoutCts;
     }
 
     /// <summary>把单行参数写入 PG Binary importer——DBNull 转换为 null 让 importer 用列默认类型。</summary>

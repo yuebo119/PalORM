@@ -91,7 +91,7 @@ public sealed class ResilienceExecutor
                     await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException
-                    && attempt < _maxRetries && IsRetryable(exception, ct))
+                    && attempt < _maxRetries && _isTransient(exception))
                 {
                     await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
                 }
@@ -99,8 +99,10 @@ public sealed class ResilienceExecutor
                     && timeout.IsCancellationRequested)
                 {
                     // 内部命令超时且重试耗尽：包装为 TimeoutException，调用方可与"我被取消"区分。
+                    // ITM-647：attempt 从 0 起，分母 = _maxRetries + 1 = 1 次初始尝试 + _maxRetries 次重试。
                     throw new TimeoutException(
-                        $"Command timed out after {_timeout} (attempt {attempt + 1}/{_maxRetries + 1}).",
+                        $"Command timed out after {_timeout} (attempt {attempt + 1} of {_maxRetries + 1}; " +
+                        $"1 initial attempt + {_maxRetries} retries).",
                         timeoutException);
                 }
                 finally
@@ -139,9 +141,4 @@ public sealed class ResilienceExecutor
         long milliseconds = Math.Min(100L << shift, 30_000L);
         return TimeSpan.FromMilliseconds(milliseconds);
     }
-
-    private bool IsRetryable(Exception exception, CancellationToken callerToken)
-        => exception is OperationCanceledException
-            ? !callerToken.IsCancellationRequested
-            : _isTransient(exception);
 }

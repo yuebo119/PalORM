@@ -150,11 +150,13 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>追加参数化 IN 条件，与既有条件 AND 组合。
+    /// <para>列名经表名/CTE 名限定（ITM-641——JOIN 下与关联表同名列不再产生 ambiguous column，
+    /// 与 OrderBy/GroupBy/AddWhereComparison 的 GetQualifiedColumnName 口径对齐）。</para>
     /// <para>空集合生成恒假条件 1=0（IN () 是非法 SQL）；超过 500 个值按批次切分为多个 IN 片段 OR 组合，规避各数据库参数上限。</para></summary>
     public QueryBuilder<T> WhereIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        string column = _quoteIdentifier(GetColumnName(member));
+        string column = GetQualifiedColumnName(member);
         var items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0)
         {
@@ -195,11 +197,12 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>追加参数化 NOT IN 条件，与既有条件 AND 组合。
+    /// <para>列名经表名/CTE 名限定（同 <see cref="WhereIn{TValue}"/>，ITM-641）。</para>
     /// <para>空集合为 no-op（排除空集等于不过滤）；超过 500 个值按批次切分为多个 NOT IN 片段 AND 组合。</para></summary>
     public QueryBuilder<T> WhereNotIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        string column = _quoteIdentifier(GetColumnName(member));
+        string column = GetQualifiedColumnName(member);
         var items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0) return this;
         // ITM-514: 同 WhereIn——参数总量不封顶会生成越界 SQL；ITM-562: 存量+增量累计判定。
