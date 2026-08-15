@@ -24,9 +24,10 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
-    <!-- NU1507: 中央包管理多源警告（NuGet.Config 双源 nuget.org + dotnet-tools，
-         前者承载稳定包，后者承载 .NET SDK 预览版；不使用 packageSourceMapping 故触发 NU1507） -->
-    <NoWarn>$(NoWarn);NU1507</NoWarn>
+    <!-- NU1507（中央包管理多源警告）：NuGet.Config 双源 nuget.org + dotnet-tools。
+         历史上无 packageSourceMapping 时触发故曾 NoWarn 抑制；G32 引入映射后触发条件
+         已消除（2026-08-15 实验验证：去抑制强制还原 Core + Tests 依赖链均无 NU1507），
+         抑制项已删除——若该警告复现说明 packageSourceMapping 失效，须修复而非再抑制。 -->
 
     <!-- NuGet -->
     <Authors>PalDDD</Authors>
