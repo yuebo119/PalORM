@@ -38,8 +38,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         _logger = logger ?? NullLogger.Instance;
         // v4.1：一次性创建读连接工厂闭包，避免每次 From<T> 分配
         string? readCs = options.ResolveReadConnectionString();
+        // ITM-624 同型面（修复侧纪律卡第三问实证）：原 lambda 捕获构造期 options 整体，
+        // WithTimeout/WithRetry 后读连接仍用旧池参数/超时——改读 _options 字段保持口径一致。
         _readConnFactory = readCs is not null
-            ? () => TProvider.CreateConnection(readCs, options)
+            ? () => TProvider.CreateConnection(readCs, _options)
             : null;
         // v5.0 阶段 5.2：读连接初始化器——无 ReadSessionSetupSql 时用 static 委托（零闭包分配），
         // 有时包装一层实例委托追加执行 ReadSessionSetupSql。
