@@ -127,12 +127,14 @@ public sealed class PostgreSqlProvider : IDbProvider
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
-        if (entities.Count == 0) return 0;
+        // ITM-637 同型面（第三处，2026-08-15 复检发现）：元数据检查先于空列表短路——
+        // 未注册类型与空/非空列表一致抛（原顺序下 SQLite/MySQL 抛、PG 静默 0，三方言分叉）
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
             || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
             || metadata.InsertColumns.Count == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
+        if (entities.Count == 0) return 0;
 
         if (conn is not NpgsqlConnection npgsqlConnection)
             throw new ArgumentException(
