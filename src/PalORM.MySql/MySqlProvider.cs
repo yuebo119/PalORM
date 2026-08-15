@@ -148,7 +148,8 @@ public sealed class MySqlProvider : IDbProvider
             new BulkContext(
                 batchSize,
                 MaxParametersPerStatement: 65535,
-                QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
+                QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
+                IsolationLevel: isolationLevel),  // r7-S1：回退分支同透传
             ct).ConfigureAwait(false);
     }
 
