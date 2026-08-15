@@ -1175,4 +1175,61 @@ public sealed class AnalyzerDiagnosticsTests
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM040")).IsFalse();
     }
+
+    [Test]
+    public async Task PALORM031_InferredGenericCall_Reports_VersionedEntity()
+    {
+        // ITM-614 探针：推断式调用（无显式 <E>）的 ma.Name 是 IdentifierNameSyntax——
+        // 语法层 GenericNameSyntax 判定漏报。语义层（IMethodSymbol.TypeArguments）修复后应报。
+        // 泛型方法形态避免依赖具体 Provider 程序集（DataSession<TProvider> 约束即可编译）。
+        const string source = """
+            using PalORM;
+            using System.Collections.Generic;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [ConcurrencyCheck] public long Version { get; set; }
+            }
+            public static class C
+            {
+                static void M<TProvider>(DataSession<TProvider> s, List<E> list)
+                    where TProvider : IDbProvider
+                {
+                    _ = s.BulkUpdateBatchAsync(list);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM031")).IsTrue();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
+    public async Task PALORM031_ExplicitGenericCall_StillReports_VersionedEntity()
+    {
+        // 对照组：显式 <E> 形态在修复前后都应报告（语义层判定不得回归）
+        const string source = """
+            using PalORM;
+            using System.Collections.Generic;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [ConcurrencyCheck] public long Version { get; set; }
+            }
+            public static class C
+            {
+                static void M<TProvider>(DataSession<TProvider> s, List<E> list)
+                    where TProvider : IDbProvider
+                {
+                    _ = s.BulkUpdateBatchAsync<E>(list);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM031")).IsTrue();
+    }
 }

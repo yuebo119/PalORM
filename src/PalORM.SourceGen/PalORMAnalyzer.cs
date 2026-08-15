@@ -288,13 +288,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckBulkUpdateBatchConcurrency(
         SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma, InvocationExpressionSyntax invocation)
     {
-        // 取泛型实参 T——方法名 ma.Name 为 GenericName 时有 TypeArgumentList
-        if (ma.Name is not GenericNameSyntax genericName) return;
-        if (genericName.TypeArgumentList.Arguments.Count < 1) return;
-
-        var typeArgSyntax = genericName.TypeArgumentList.Arguments[0];
-        var typeInfo = ctx.SemanticModel.GetTypeInfo(typeArgSyntax, ctx.CancellationToken);
-        if (typeInfo.Type is not INamedTypeSymbol entityType) return;
+        // ITM-614：语义层取泛型实参（IMethodSymbol.TypeArguments）——推断式调用
+        // （session.BulkUpdateBatchAsync(list)）的 ma.Name 是 IdentifierNameSyntax 而非
+        // GenericNameSyntax，语法层判定漏报（探针实证，AnalyzerDiagnosticsTests 推断式用例）。
+        if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
+            is not IMethodSymbol { IsGenericMethod: true } method)
+            return;
+        if (method.TypeArguments.Length < 1) return;
+        if (method.TypeArguments[0] is not INamedTypeSymbol entityType) return;
 
         bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)
             .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck")));
@@ -310,12 +311,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma,
         InvocationExpressionSyntax invocation, string methodName)
     {
-        if (ma.Name is not GenericNameSyntax genericName) return;
-        if (genericName.TypeArgumentList.Arguments.Count < 1) return;
-
-        var typeArgSyntax = genericName.TypeArgumentList.Arguments[0];
-        var typeInfo = ctx.SemanticModel.GetTypeInfo(typeArgSyntax, ctx.CancellationToken);
-        if (typeInfo.Type is not INamedTypeSymbol entityType) return;
+        // ITM-614：同 CheckBulkUpdateBatchConcurrency——语义层 TypeArguments 覆盖推断式调用
+        if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
+            is not IMethodSymbol { IsGenericMethod: true } method)
+            return;
+        if (method.TypeArguments.Length < 1) return;
+        if (method.TypeArguments[0] is not INamedTypeSymbol entityType) return;
 
         bool hasTable = entityType.GetAttributes().Any(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
