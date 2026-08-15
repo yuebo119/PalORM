@@ -498,7 +498,7 @@ public struct QueryBuilder<T> where T : class, new()
         var clone = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
-                _quoteIdentifier, _operationState, _commandTimeout),
+                _quoteIdentifier, _operationState, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
             _tableName, _columnNames, _readConnFactory, _queryCache, _validateColumnOrder, _readConnInitializer))
         {
             _selectColumns = _selectColumns,

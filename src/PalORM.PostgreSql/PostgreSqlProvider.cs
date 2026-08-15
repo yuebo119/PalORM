@@ -124,7 +124,8 @@ public sealed class PostgreSqlProvider : IDbProvider
             + "已抽出 ProbeBinderAsync + WriteRowAsync 减少方法体复杂度；余下嵌套是 importer/rowCommand/"
             + "transaction 三级 cleanup 的「主异常保留」模式（ITM-412 防漂移锚点）。")]
     public static async Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
+        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct,
+        System.Data.IsolationLevel isolationLevel = System.Data.IsolationLevel.ReadCommitted)
         where T : class, new()
     {
         // ITM-643：COPY 路径经 NpgsqlBinaryImporter 而非 DbCommand，无 CommandTimeout 挂点——
@@ -162,7 +163,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         string quotedTable = QuoteIdentifier(tableName);
         long total = 0;
         DbTransaction bulkTransaction = transaction
-            ?? await npgsqlConnection.BeginTransactionAsync(ct).ConfigureAwait(false);
+            ?? await npgsqlConnection.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
         bool ownsTransaction = transaction is null;
         Exception? primaryException = null;
 

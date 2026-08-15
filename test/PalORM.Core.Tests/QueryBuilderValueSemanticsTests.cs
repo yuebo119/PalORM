@@ -231,6 +231,20 @@ public sealed class QueryBuilderValueSemanticsTests
 
         await Assert.That(() => builder.BuildCountSql()).Throws<InvalidOperationException>();
     }
+
+    [Test]
+    public async Task CloneForExecution_PreservesIsolationLevel()
+    {
+        // r6-N1 锁定：克隆透传隔离级别——r5-S2 曾因 Services 7 参构造丢失致条件分支死代码
+        await using DataSession<SqliteProvider> session =
+            await CreateSessionAsync();
+
+        QueryBuilder<ValueSemanticsEntity> builder = session.From<ValueSemanticsEntity>();
+        QueryBuilder<ValueSemanticsEntity> clone = builder.CloneForExecution();
+
+        await Assert.That(clone._isolationLevel).IsNotNull();
+        await Assert.That(clone._isolationLevel).IsEqualTo(builder._isolationLevel);
+    }
 }
 
 #region Test Entities
