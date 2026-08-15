@@ -31,7 +31,8 @@ public struct QueryBuilder<T> where T : class, new()
     internal TimeSpan _commandTimeout;
     internal List<QueryClause> _clauses;
     internal List<DbParameter> _parameters;
-    internal string? _selectColumns;
+    /// <summary>显式投影的裸列名（构建时才限定表/CTE 名）。</summary>
+    internal string[]? _selectColumns;
     internal int? _take;
     internal int? _skip;
     internal string? _cacheKey;
@@ -125,12 +126,10 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Select(params Expression<Func<T, object?>>[] members)
     {
         ArgumentNullException.ThrowIfNull(members);
-        // ITM-537: 投影列带表限定（_cteName ?? _tableName），与 GetQualifiedColumnName 一致——
-        // JOIN/Include 下裸列名产生 ambiguous column 错误。
-        string source = _quoteIdentifier(_cteName ?? _tableName);
-        Func<string, string> quoteIdentifier = _quoteIdentifier;
-        _selectColumns = string.Join(", ",
-            members.Select(member => $"{source}.{quoteIdentifier(GetColumnName(member))}"));
+        // ITM-622：存裸列名，构建时以当前 FROM 源（_cteName ?? _tableName）限定——
+        // 调用时点固化限定名会在 Select 先于 With(cte) 时投影指向旧表名
+        // （与 OrderBy/GroupBy 的构建时动态求值不对称）。限定语义（ITM-537）不变。
+        _selectColumns = members.Select(GetColumnName).ToArray();
         return this;
     }
 
@@ -643,7 +642,14 @@ public struct QueryBuilder<T> where T : class, new()
         string sourceName = _cteName ?? _tableName;
         if (_selectColumns is not null)
         {
-            sb.Append(_selectColumns);
+            // ITM-622：构建时限定（sourceName 为当前 FROM 源）
+            for (int index = 0; index < _selectColumns.Length; index++)
+            {
+                if (index > 0) sb.Append(", ");
+                sb.Append(_quoteIdentifier(sourceName));
+                sb.Append('.');
+                sb.Append(_quoteIdentifier(_selectColumns[index]));
+            }
             return;
         }
         // v4.4：sourceName 的 quote 提循环外，避免 N 列重复 quote 同一个值

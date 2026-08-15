@@ -128,6 +128,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         await Task.Yield();
         int reconnectAttempt = 0;
         bool initialConnection = true;
+        // ITM-620：startupPhase = started.Task 尚未完成（StartAsync 仍在 await started）。
+        // initialConnection 在 Open 成功后即置 false（R9），而 LISTEN 阶段耗尽重连的 throw
+        // 需要区分"启动失败"（TrySetException 让 StartAsync 抛真实异常）与"运行期失败"
+        // （RaiseError）——用 initialConnection 判定会把启动失败误报为 TaskCanceled。
+        bool startupPhase = true;
         try
         {
             while (!owner.IsCancellationRequested)
@@ -153,6 +158,7 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                     if (wasInitial)
                     {
                         started.TrySetResult();
+                        startupPhase = false;
                     }
                     // ITM-567：重连成功（Open+LISTEN 全通过）即清零——此前仅收到 NOTIFY 才清零，
                     // 静默通道 + 周期性断连（LB 空闲切断）下每次成功重连仍累加计数，
@@ -190,12 +196,12 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         }
         catch (OperationCanceledException) when (owner.IsCancellationRequested)
         {
-            if (initialConnection)
+            if (startupPhase)
                 started.TrySetCanceled(owner.Token);
         }
         catch (Exception exception)
         {
-            if (initialConnection)
+            if (startupPhase)
                 started.TrySetException(exception);
             else
                 RaiseError(exception);

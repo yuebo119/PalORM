@@ -100,14 +100,13 @@ internal static class CommandFactoryEmitter
         int pi = 0;
         foreach (var col in pkCols)
         {
-            string castExpr = col.ConverterTypeName is not null
-                ? $"({col.ClrTypeName})key"
-                : NormalizeClrType(col.ClrTypeName) switch
+            // ITM-587/627：整数主键用 Convert.ToXxx(key) 而非直接 cast：
+            // 调用方可能传 int（如 BenchmarkDotNet 的 NextId()）、byte 等装箱为 object，
+            // 直接 (long)key 在 key 是 int 时抛 InvalidCastException。Convert 在装箱类型间
+            // 自动转换，代价仅几 ns。Converter 列同样归一化（627——先归一到 CLR 侧类型再交
+            // ToProvider）；非基元类型保持类型化 cast（默认 key 对 Converter 列不编译）。
+            string castExpr = NormalizeClrType(col.ClrTypeName) switch
             {
-                // 整数主键用 Convert.ToXxx(key) 而非直接 cast：
-                // 调用方可能传 int（如 BenchmarkDotNet 的 NextId()）、byte 等装箱为 object，
-                // 直接 (long)key 在 key 是 int 时抛 InvalidCastException（ITM-587）。
-                // Convert 在装箱类型间自动转换，代价仅几 ns，GetByKey 21μs 路径可忽略。
                 "long" or "global::System.Int64" => "global::System.Convert.ToInt64(key)",
                 "int" or "global::System.Int32" => "global::System.Convert.ToInt32(key)",
                 "short" or "global::System.Int16" => "global::System.Convert.ToInt16(key)",
@@ -115,7 +114,7 @@ internal static class CommandFactoryEmitter
                 // string/Guid 保持精确 cast——语义不同（不接受 int→string 隐式转换）
                 "string" or "global::System.String" => "((string)key)",
                 "global::System.Guid" => "((global::System.Guid)key)",
-                _ => "key"
+                _ => col.ConverterTypeName is not null ? $"({col.ClrTypeName})key" : "key"
             };
             string providerValueExpr = col.ConverterTypeName is null
                 ? castExpr
