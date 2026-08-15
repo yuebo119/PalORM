@@ -54,6 +54,9 @@ public sealed class PostgreSqlProvider : IDbProvider
             builder.ReadBufferSize = 16384;
         if (builder.WriteBufferSize == 8192)
             builder.WriteBufferSize = 16384;
+        // ITM-643(r4) 登记：显式 Enlist=true 与默认 true 不可区分（同 ADR-G 的
+        // AllowLoadLocalInfile 形态）——依赖 TransactionScope 的用户被静默脱离环境事务。
+        // 缓解：环境事务场景请用 BeginTransaction 显式事务（PalORM 主路径）。
         if (builder.Enlist)
             builder.Enlist = false;
 

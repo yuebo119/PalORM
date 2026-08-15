@@ -42,6 +42,7 @@ public sealed class MySqlProvider : IDbProvider
         // v5.0 阶段 3.2：仅当属性当前值等于 ADO.NET 默认值时覆盖为调优推荐值。
         // MySqlConnector 默认值：AutoEnlist=true，ConnectionReset=true，UseCompression=false，
         // CancellationTimeout=2，AllowLoadLocalInfile=false，ServerRedirectionMode=Disabled。
+        // ITM-643(r4) 登记：显式 AutoEnlist=true 与默认不可区分（同上）——环境事务静默脱离。
         if (builder.AutoEnlist)
             builder.AutoEnlist = false;
         if (builder.ConnectionReset)
@@ -123,6 +124,13 @@ public sealed class MySqlProvider : IDbProvider
         ArgumentNullException.ThrowIfNull(entities);
         // batchSize 校验优先于 entities.Count 检查——调用方契约（ProviderTests 验证）。
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(batchSize, 0);
+        // ITM-637 同型面（第五处，r4）：元数据检查先于空列表短路——未注册类型与空/非空
+        // 列表一致抛（BulkCopy 与多值 fallback 两分支共用此前置）
+        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
+            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out _)
+            || metadata.InsertColumns.Count == 0)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated insert metadata.");
         if (entities.Count == 0) return 0;
 
         // local_infile 能力检测：开启走 BulkCopy（对齐 PG 永远 COPY），关闭走多值 INSERT。
