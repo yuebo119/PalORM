@@ -31,7 +31,8 @@ public sealed partial class DataSession<TProvider>
             new QueryBuilderServices<T>(
                 TProvider.Dialect, (Func<DbDataReader, T>)factory, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
-                _operationState, _options.CommandTimeout),
+                _operationState, _options.CommandTimeout,
+                _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
             tableName, columnNames, _readConnFactory,
             _options.QueryCache, _options.ValidateQueryColumnOrder,
             _readConnInitializer));  // v5.0 阶段 5.2：从实例字段取（含 ReadSessionSetupSql）

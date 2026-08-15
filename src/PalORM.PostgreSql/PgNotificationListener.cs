@@ -147,15 +147,17 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                     await connection.OpenAsync(owner.Token).ConfigureAwait(false);
                     // R9 修复：Open 成功即标记 initialConnection=false——LISTEN 阶段 transient 失败
                     // 也应走重连逻辑而非直接终止监听（review R9：首次 LISTEN 失败永久退出）。
-                    bool wasInitial = initialConnection;
-                    initialConnection = false;
+                    initialConnection = false;  // r5-S1 后 wasInitial 无消费者——S1481 移除
                     foreach (string channel in _channels)
                     {
                         string safeChannel = PostgreSqlProvider.QuoteIdentifier(channel);
                         await connection.ListenAsync(safeChannel, owner.Token).ConfigureAwait(false);
                     }
 
-                    if (wasInitial)
+                    // r5-S1：完成信号锚定 startupPhase（与异常路径判定一致）——原 wasInitial 在
+                    // R9 提前置 false 后，"首连 LISTEN 瞬态失败→重连成功"路径永不 TrySetResult，
+                    // StartAsync 永久挂起而监听器实际正常（最隐蔽形态）。
+                    if (startupPhase)
                     {
                         started.TrySetResult();
                         startupPhase = false;

@@ -186,8 +186,12 @@ public static class QueryBuilderExtensions
         // ITM-649：自有事务经 PublishTransaction 登记进 SessionOperationState——会话 Dispose
         // 与事务门禁可见该事务（此前直接 BeginTransactionAsync 自包含但登记缺席；若 Dispose/
         // 门禁依赖登记状态则为盲区）。外部事务已由其创建方登记，此处不重复发布。
+        // r5-S2：自开事务 honoring 会话 WithIsolationLevel——原裸调 BeginTransactionAsync
+        // 恒驱动默认，Serializable/Snapshot 会话的分页一致性快照被静默降级
         DbTransaction transaction = existingTransaction
-            ?? await paged._conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            ?? (paged._isolationLevel is { } iso
+                ? await paged._conn.BeginTransactionAsync(iso, ct).ConfigureAwait(false)
+                : await paged._conn.BeginTransactionAsync(ct).ConfigureAwait(false));
         bool ownsTransaction = existingTransaction is null;
         Exception? primaryException = null;
         if (ownsTransaction)
