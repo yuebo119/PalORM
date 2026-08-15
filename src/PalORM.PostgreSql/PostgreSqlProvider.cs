@@ -48,6 +48,9 @@ public sealed class PostgreSqlProvider : IDbProvider
             builder.MaxAutoPrepare = 100;
         if (builder.AutoPrepareMinUsages == 5)
             builder.AutoPrepareMinUsages = 2;
+        // ITM-652(r4) 登记：NoResetOnClose=true 使归池连接跳过 DISCARD ALL——经 raw SQL
+        // 的 SET/临时表/会话状态会泄漏给下一个池租客（吞吐收益的既定取舍）。需要会话
+        // 状态隔离的场景请用独立连接（连接串 Max Pool Size=1）或显式 DISCARD。
         if (!builder.NoResetOnClose)
             builder.NoResetOnClose = true;
         if (builder.ReadBufferSize == 8192)

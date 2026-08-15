@@ -356,7 +356,11 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
-    /// <summary>追加调用方负责安全性的原始 SQL 片段。不得传入不可信内容。</summary>
+    /// <summary>追加调用方负责安全性的原始 SQL 片段。不得传入不可信内容。
+    /// <para>ITM-645(r4) 契约登记：Raw 在 SELECT 构建中追加于 OrderBy 之后（全句尾、
+    /// LIMIT 前——测试锁定的既定位置）；COUNT 构建中位于 Having 后（过滤段语义）。
+    /// 组合 OrderBy+Raw 且 Raw 为 WHERE 补充形态（如 "AND deleted=0"）时页 SQL 会产
+    /// 无效后缀——WHERE 补充请用 Where()，Raw 的位置语义是"尾部追加"。</para></summary>
     public QueryBuilder<T> Raw(string literal)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(literal);

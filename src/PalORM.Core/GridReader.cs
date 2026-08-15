@@ -163,18 +163,9 @@ public sealed class GridReader : IAsyncDisposable
         // 使用 SessionOperationState.DisposeWaitTimeout（5 分钟）+ 超时诊断异常。
         // ITM-629：静态可变值读一次入局部（对齐 ITM-581 的 SessionOperationState 修法）——
         // 双读在等待期间被改写时，实际等待时长与诊断消息不一致。
-        TimeSpan waitTimeout = SessionOperationState.DisposeWaitTimeout;
-        try
-        {
-            await activeRead.WaitAsync(waitTimeout).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            throw new InvalidOperationException(
-                $"GridReader Dispose timed out after {waitTimeout} "
-                + "waiting for an active ReadAsync to complete. "
-                + "Ensure all ReadAsync calls complete before disposing the GridReader.");
-        }
+        // ITM-647(r4)：超时不再前置 throw——原路径 reader/command/lease/operation 四级
+        // 均未释放且观测挂起。改为记录挂起异常，先走完统一清理链再抛。
+        Exception? hangException = await WaitForActiveReadAsync(activeRead);
         Exception? cleanupException = null;
         try { await _reader.DisposeAsync().ConfigureAwait(false); }
         catch (Exception exception) { cleanupException = exception; }
@@ -201,12 +192,31 @@ public sealed class GridReader : IAsyncDisposable
         }
 
         lock (_sync) _state = 2;
-        if (cleanupException is not null)
+        // ITM-647(r4)：挂起（等待超时）优先于清理异常抛出——它是根因
+        Exception? fatal = hangException ?? cleanupException;
+        if (fatal is not null)
         {
             _observation?.Complete("error");
-            ExceptionDispatchInfo.Capture(cleanupException).Throw();
+            ExceptionDispatchInfo.Capture(fatal).Throw();
         }
 
         _observation?.Complete("success");
+    }
+
+    /// <summary>有界等待活动 ReadAsync（ITM-629 单读 + ITM-647 超时转挂起异常不前置抛）。</summary>
+    private static async Task<Exception?> WaitForActiveReadAsync(Task activeRead)
+    {
+        try
+        {
+            await activeRead.WaitAsync(SessionOperationState.DisposeWaitTimeout).ConfigureAwait(false);
+            return null;
+        }
+        catch (TimeoutException)
+        {
+            return new InvalidOperationException(
+                $"GridReader Dispose timed out after {SessionOperationState.DisposeWaitTimeout} "
+                + "waiting for an active ReadAsync to complete. "
+                + "Ensure all ReadAsync calls complete before disposing the GridReader.");
+        }
     }
 }

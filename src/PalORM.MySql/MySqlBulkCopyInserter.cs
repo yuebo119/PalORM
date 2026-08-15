@@ -84,7 +84,8 @@ internal static class MySqlBulkCopyInserter
                 var bulk = new MySqlBulkCopy(conn, transaction)
                 {
                     DestinationTableName = ctx.QuotedTable,
-                    BulkCopyTimeout = ctx.CommandTimeoutSeconds > 0 ? ctx.CommandTimeoutSeconds : 30,
+                    // ITM-655(r4)：0=无限（全库契约，非 30 秒）；正数透传
+                    BulkCopyTimeout = ctx.CommandTimeoutSeconds,
                 };
                 // ITM-615：显式按列名映射（DataTable 列名 == 目标表列名，裸名由驱动处理
                 // 标识符）——消除对 DataTable 列序与表列序一致的隐式依赖（默认按序匹配，
@@ -94,7 +95,9 @@ internal static class MySqlBulkCopyInserter
                 for (int i = 0; i < allColumns.Length; i++)
                     bulk.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, allColumns[i]));
                 MySqlBulkCopyResult result = await bulk.WriteToServerAsync(table, ct).ConfigureAwait(false);
-                return result.RowsInserted;
+                // ITM-656(r4)：MySqlConnector 服务端不报行数时返 -1——规范化为已提交实体数
+                long inserted = result.RowsInserted;
+                return inserted >= 0 ? inserted : entities.Count;
             }
             finally
             {
