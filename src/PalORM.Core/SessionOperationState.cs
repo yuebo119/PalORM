@@ -205,14 +205,16 @@ internal sealed class SessionOperationState
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
         }
 
+        // ITM-629 同型面（修复侧纪律卡第三问实证——210/215 双读，411 行已单读此处漏改）
+        TimeSpan waitTimeout = DisposeWaitTimeout;
         try
         {
-            await activeOperation.WaitAsync(DisposeWaitTimeout).ConfigureAwait(false);
+            await activeOperation.WaitAsync(waitTimeout).ConfigureAwait(false);
         }
         catch (TimeoutException timeoutException)
         {
             var hangException = new InvalidOperationException(
-                $"Transaction completion timed out after {DisposeWaitTimeout} waiting for an active operation. " +
+                $"Transaction completion timed out after {waitTimeout} waiting for an active operation. " +
                 "A likely cause is an abandoned QueryAsyncEnumerable enumerator inside the transaction callback; " +
                 "always consume it with 'await foreach' or dispose the enumerator explicitly.",
                 timeoutException);

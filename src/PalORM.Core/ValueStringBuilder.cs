@@ -9,8 +9,10 @@ namespace PalORM;
 /// <para><b>为什么不用 StringBuilder</b>: StringBuilder 始终在堆上分配→高 QPS 场景 Gen0 GC 压力。
 /// 小查询(≤512B)零分配, 大查询用 ArrayPool 减少 GC。</para>
 /// <para><b>终态契约</b>（ITM-640 登记）：<see cref="ToString"/> 隐式 Dispose——调用后对象进入
-/// 不可用态（缓冲已归还池，再 Append/ToString 得空串非抛错）；异常路径未 Dispose 时租借数组
-/// 由 GC 回收（无正确性危害，仅池流失）。调用方遵循 build-then-tostring 单段使用即可。</para></summary>
+/// 不可用态（缓冲已归还池且置 default，_pos 不清零）：构建过内容后重用 Append/ToString 会对
+/// 空 span 按 _pos 越界切片抛 <see cref="ArgumentOutOfRangeException"/>（仅从未写入时可无害重用）。
+/// 异常路径未 Dispose 时租借数组由 GC 回收（无正确性危害，仅池流失）。调用方遵循
+/// build-then-tostring 单段使用即可。</para></summary>
 internal ref struct ValueStringBuilder
 {
     private char[]? _pooled;
