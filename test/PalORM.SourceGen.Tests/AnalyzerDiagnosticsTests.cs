@@ -928,6 +928,27 @@ public sealed class AnalyzerDiagnosticsTests
     [Test]
     public async Task PALORM024_EntityWithNoUpdatableColumns_Reports()
     {
+        // r8-D-A：无可更新列用真源真排除形态构造（Computed/Timestamp/Key）——
+        // 纯 [IgnoreOnInsert] 实体的旧断言锁定的是误报行为（运行时 UPDATE 正常：
+        // IsUpdatableColumn 真源不排除 IgnoreOnInsert），随谓词对齐反转
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Computed("1")] public string A { get; set; } = "";
+                [Timestamp] public System.DateTimeOffset B { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM024")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM024_IgnoreOnlyEntity_DoesNotReport()
+    {
+        // r8-D-A 锁定：纯 [IgnoreOnInsert] 列在 UPDATE 真源中可更新——不报 024
         const string source = """
             using PalORM;
             [Table("t")]
@@ -938,7 +959,7 @@ public sealed class AnalyzerDiagnosticsTests
             }
             """;
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
-        await Assert.That(diagnostics.Any(d => d.Id == "PALORM024")).IsTrue();
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM024")).IsFalse();
     }
 
     [Test]
