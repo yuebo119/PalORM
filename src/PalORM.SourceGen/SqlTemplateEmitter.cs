@@ -56,7 +56,10 @@ internal static class SqlTemplateEmitter
             {
                 ISymbol? symbol = semanticModel.GetSymbolInfo(identifier, ct).Symbol;
                 if (symbol is ILocalSymbol or IParameterSymbol
-                    || (symbol is IFieldSymbol or IPropertySymbol && !symbol.IsStatic))
+                    || (symbol is IFieldSymbol or IPropertySymbol && !symbol.IsStatic)
+                    // r5-A3：实例方法调用（{GetId()}）漏滤会生成静态类内 CS0120——
+                    // 恰是 ITM-573 要消除的"错误指向 .g.cs"形态
+                    || (symbol is IMethodSymbol invokedMethod && !invokedMethod.IsStatic))
                 {
                     return null;
                 }

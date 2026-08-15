@@ -51,8 +51,9 @@ public enum StoreAs
 }
 
 /// <summary>标记主键属性。支持 long/int/short/byte、Guid、string；Ulid 必须配置编译期值转换器。
-/// 数值主键（long/int/short/byte）默认视为数据库自增（排除出 INSERT 列）；
-/// 雪花 ID 等应用侧赋值的数值主键设置 <c>AutoIncrement = false</c> 关闭。</summary>
+/// <para>r5-A2 文档订正：仅 long/int 默认视为数据库自增（排除出 INSERT 列）；
+/// short/byte 键不支持自增（PALORM022 要求显式 <c>AutoIncrement = false</c>，进入 INSERT 列）。
+/// 雪花 ID 等应用侧赋值的数值主键同样设置 <c>AutoIncrement = false</c> 关闭。</para></summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class KeyAttribute : Attribute
 {

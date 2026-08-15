@@ -203,18 +203,20 @@ public sealed class GridReader : IAsyncDisposable
         _observation?.Complete("success");
     }
 
-    /// <summary>有界等待活动 ReadAsync（ITM-629 单读 + ITM-647 超时转挂起异常不前置抛）。</summary>
+    /// <summary>有界等待活动 ReadAsync（ITM-629 单读 + ITM-647 超时转挂起异常不前置抛）。
+    /// r5-A1：单读局部在 647 提取重构时意外丢失——本处恢复（与 SessionOperationState 两处同型）。</summary>
     private static async Task<Exception?> WaitForActiveReadAsync(Task activeRead)
     {
+        TimeSpan waitTimeout = SessionOperationState.DisposeWaitTimeout;
         try
         {
-            await activeRead.WaitAsync(SessionOperationState.DisposeWaitTimeout).ConfigureAwait(false);
+            await activeRead.WaitAsync(waitTimeout).ConfigureAwait(false);
             return null;
         }
         catch (TimeoutException)
         {
             return new InvalidOperationException(
-                $"GridReader Dispose timed out after {SessionOperationState.DisposeWaitTimeout} "
+                $"GridReader Dispose timed out after {waitTimeout} "
                 + "waiting for an active ReadAsync to complete. "
                 + "Ensure all ReadAsync calls complete before disposing the GridReader.");
         }
