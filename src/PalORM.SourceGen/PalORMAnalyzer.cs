@@ -878,7 +878,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             or "0" or "0L" or "0l" or "null" or "\"\"" or "string.Empty"
             or "Guid.Empty" or "int.MinValue" or "long.MinValue" or "0u" or "0UL"
             // ITM-650(r4)：等价默认写法补收（十六进制/无符号序/带空格抑制后缀）
-            or "0x0" or "0ul" or "0lu" or "0Lu" or "0UL" or "default!" or "default !"
+            or "0x0" or "0ul" or "0lu" or "0Lu" or "default !"
             or "default(long)!" or "default(int)!" or "default(Guid)!") return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(KeyWithNonDefaultValue,
