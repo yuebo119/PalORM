@@ -328,12 +328,14 @@ public static class QueryBuilderExtensions
         string provider = builder._dialect.GetName();
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool observed = builder._tracing || builder._metrics;
+        // ITM-625：SQL 先行（同 ExecuteQueryAsync 顺序）——BuildUpdateSql 守卫抛异常时
+        // 已创建的 Activity 无人 Dispose，污染 Activity.Current 链。
+        string sql = builder.BuildUpdateSql();
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         // v3.1：Stopwatch 延迟创建——与 ExecuteQueryAsync 同构（拦截器 OnAfter 需要 Elapsed）。
         Stopwatch? sw = observed || interceptors.Count > 0 ? Stopwatch.StartNew() : null;
         string outcome = "error";
         // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
-        string sql = builder.BuildUpdateSql();
         IReadOnlyList<DbParameter> updateParameters = builder.GetUpdateParameters();
         var context = new QueryContext(sql, updateParameters);
         try

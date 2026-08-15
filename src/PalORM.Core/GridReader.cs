@@ -161,14 +161,17 @@ public sealed class GridReader : IAsyncDisposable
         // R2 修复：对齐 SessionOperationState 的超时保护——活动 ReadAsync 网络阻塞时
         // 无超时的 await 会导致 DisposeAsync 永久挂起，await using 卡死。
         // 使用 SessionOperationState.DisposeWaitTimeout（5 分钟）+ 超时诊断异常。
+        // ITM-629：静态可变值读一次入局部（对齐 ITM-581 的 SessionOperationState 修法）——
+        // 双读在等待期间被改写时，实际等待时长与诊断消息不一致。
+        TimeSpan waitTimeout = SessionOperationState.DisposeWaitTimeout;
         try
         {
-            await activeRead.WaitAsync(SessionOperationState.DisposeWaitTimeout).ConfigureAwait(false);
+            await activeRead.WaitAsync(waitTimeout).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
             throw new InvalidOperationException(
-                $"GridReader Dispose timed out after {SessionOperationState.DisposeWaitTimeout} "
+                $"GridReader Dispose timed out after {waitTimeout} "
                 + "waiting for an active ReadAsync to complete. "
                 + "Ensure all ReadAsync calls complete before disposing the GridReader.");
         }

@@ -49,8 +49,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             {
                 await TProvider.InitializeConnectionAsync(conn, ct).ConfigureAwait(false);
                 await using DbCommand cmd = conn.CreateCommand();
-                cmd.CommandTimeout = options.CommandTimeoutSeconds;
-                cmd.CommandText = options.ReadSessionSetupSql;
+                // ITM-624：读 _options 字段而非捕获构造期 options——WithTimeout/WithRetry 经
+                // Volatile.Write 替换 _options 后，读连接初始化与主连接的超时口径保持一致。
+                cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                cmd.CommandText = _options.ReadSessionSetupSql;
                 await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             };
         if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
