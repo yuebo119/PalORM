@@ -11,13 +11,6 @@ namespace PalORM.Core.Tests;
 ///
 /// 这些测试覆盖回归路径——BenchmarkDotNet 的 NextId() 返回 int 时暴露了此 bug。
 /// </summary>
-[Table("key_conversion_long_pk")]
-internal sealed partial class KeyConversionEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = string.Empty;
-}
-
 public sealed class KeyConversionTests
 {
     [Test]
@@ -101,3 +94,12 @@ public sealed class KeyConversionTests
             $"CREATE TABLE IF NOT EXISTS key_conversion_long_pk (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)");
     }
 }
+
+#region Test Entities
+[Table("key_conversion_long_pk")]
+internal sealed partial class KeyConversionEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = string.Empty;
+}
+#endregion

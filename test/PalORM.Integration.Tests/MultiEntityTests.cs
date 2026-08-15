@@ -3,123 +3,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-// 实体1: Order (已存在)
-// 实体2: Product
-[Table("products")]
-public partial class Product
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("price")] public decimal Price { get; set; }
-    [Column("stock")] public int Stock { get; set; }
-}
-
-// 实体3: Customer
-[Table("customers")]
-public partial class Customer
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("email")] public string? Email { get; set; }
-}
-
-// 实体4: OrderItem (关联 Order)
-[Table("order_items")]
-public partial class OrderItem
-{
-    [Key] public long Id { get; set; }
-    [Column("order_id")] public long OrderId { get; set; }
-    [Column("product_id")] public long ProductId { get; set; }
-    [Column("quantity")] public int Quantity { get; set; }
-}
-
-// 实体5: AuditLog
-[Table("audit_logs")]
-public partial class AuditLog
-{
-    [Key] public long Id { get; set; }
-    [Column("action")] public string Action { get; set; } = "";
-    [Column("entity_type")] public string EntityType { get; set; } = "";
-    [Column("entity_id")] public long EntityId { get; set; }
-}
-
-// 实体6: OwnedJson 测试
-public class Address { public string Street { get; set; } = ""; public string City { get; set; } = ""; }
-[Table("json_entity")]
-public partial class JsonEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("metadata")] [OwnedJson] public string Metadata { get; set; } = "{}";
-}
-
-public readonly record struct BinaryId(Guid Value);
-
-public sealed class BinaryIdConverter : IValueConverter<BinaryId, string>
-{
-    public string ToProvider(BinaryId value) => value.Value.ToString("D");
-    public BinaryId FromProvider(string value) => new(Guid.Parse(value));
-}
-
-[Table("computed_converted_entities")]
-public partial class ComputedConvertedEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("computed_name")]
-    [Computed("name || '-computed'")]
-    public string ComputedName { get; set; } = "";
-    [Column("external_id")]
-    [Converter(typeof(BinaryIdConverter))]
-    public BinaryId ExternalId { get; set; }
-}
-
-[Table("converted_key_entities")]
-public partial class ConvertedKeyEntity
-{
-    [Key(AutoIncrement = false)]
-    [Converter(typeof(BinaryIdConverter))]
-    public BinaryId Id { get; set; }
-
-    [Column("name")]
-    public string Name { get; set; } = "";
-}
-
-[SoftDelete]
-[Table("converted_soft_delete_entities")]
-public partial class ConvertedSoftDeleteEntity
-{
-    [Key(AutoIncrement = false)]
-    [Converter(typeof(BinaryIdConverter))]
-    public BinaryId Id { get; set; }
-
-    [Column("name")]
-    public string Name { get; set; } = "";
-
-    [Column("deleted_at")]
-    public string? DeletedAt { get; set; }
-}
-
-[Table("upsert_shape_entities")]
-public partial class UpsertShapeEntity
-{
-    [Key(AutoIncrement = false)]
-    public string Id { get; set; } = "";
-
-    [Column("name")]
-    public string Name { get; set; } = "";
-}
-
-[Table("order")]
-public partial class ReservedIdentifierEntity
-{
-    [Key]
-    public long Id { get; set; }
-
-    [Column("select")]
-    public string Value { get; set; } = "";
-}
-
 public sealed class MultiEntityTests
 {
     [Test]
@@ -611,3 +494,121 @@ public sealed class MultiEntityTests
         await Assert.That(rowsAfterDispose.Count).IsEqualTo(1);
     }
 }
+
+#region Test Entities
+// 实体2: Product
+[Table("products")]
+public partial class Product
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("price")] public decimal Price { get; set; }
+    [Column("stock")] public int Stock { get; set; }
+}
+
+// 实体3: Customer
+[Table("customers")]
+public partial class Customer
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("email")] public string? Email { get; set; }
+}
+
+// 实体4: OrderItem (关联 Order)
+[Table("order_items")]
+public partial class OrderItem
+{
+    [Key] public long Id { get; set; }
+    [Column("order_id")] public long OrderId { get; set; }
+    [Column("product_id")] public long ProductId { get; set; }
+    [Column("quantity")] public int Quantity { get; set; }
+}
+
+// 实体5: AuditLog
+[Table("audit_logs")]
+public partial class AuditLog
+{
+    [Key] public long Id { get; set; }
+    [Column("action")] public string Action { get; set; } = "";
+    [Column("entity_type")] public string EntityType { get; set; } = "";
+    [Column("entity_id")] public long EntityId { get; set; }
+}
+
+// 实体6: OwnedJson 测试
+public class Address { public string Street { get; set; } = ""; public string City { get; set; } = ""; }
+[Table("json_entity")]
+public partial class JsonEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("metadata")] [OwnedJson] public string Metadata { get; set; } = "{}";
+}
+
+public readonly record struct BinaryId(Guid Value);
+
+public sealed class BinaryIdConverter : IValueConverter<BinaryId, string>
+{
+    public string ToProvider(BinaryId value) => value.Value.ToString("D");
+    public BinaryId FromProvider(string value) => new(Guid.Parse(value));
+}
+
+[Table("computed_converted_entities")]
+public partial class ComputedConvertedEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("computed_name")]
+    [Computed("name || '-computed'")]
+    public string ComputedName { get; set; } = "";
+    [Column("external_id")]
+    [Converter(typeof(BinaryIdConverter))]
+    public BinaryId ExternalId { get; set; }
+}
+
+[Table("converted_key_entities")]
+public partial class ConvertedKeyEntity
+{
+    [Key(AutoIncrement = false)]
+    [Converter(typeof(BinaryIdConverter))]
+    public BinaryId Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+}
+
+[SoftDelete]
+[Table("converted_soft_delete_entities")]
+public partial class ConvertedSoftDeleteEntity
+{
+    [Key(AutoIncrement = false)]
+    [Converter(typeof(BinaryIdConverter))]
+    public BinaryId Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("deleted_at")]
+    public string? DeletedAt { get; set; }
+}
+
+[Table("upsert_shape_entities")]
+public partial class UpsertShapeEntity
+{
+    [Key(AutoIncrement = false)]
+    public string Id { get; set; } = "";
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+}
+
+[Table("order")]
+public partial class ReservedIdentifierEntity
+{
+    [Key]
+    public long Id { get; set; }
+
+    [Column("select")]
+    public string Value { get; set; } = "";
+}
+#endregion

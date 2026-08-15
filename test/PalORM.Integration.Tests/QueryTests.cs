@@ -3,22 +3,10 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-[Table("orders")]
-public partial class Order
-{
-    [Key] public long Id { get; set; }
-    [Column("status")] public string Status { get; set; } = "";
-    [Column("total")] public decimal Total { get; set; }
-    [Column("created_at")] public long CreatedAt { get; set; }
-}
-
 public sealed class QueryTests
 {
     private static readonly string[] _includedStatuses = ["A", "C"];
     private static readonly string[] _excludedStatuses = ["A", "B"];
-
-    [Before(Test)]
-    public void Setup() { /* 每个测试独立 */ }
 
     // ─── Phase 1 ────────────────────────────────────────
 
@@ -274,7 +262,7 @@ public sealed class QueryTests
     }
 
     [Test]
-    public async Task Performance_Query1000Rows_Under50ms()
+    public async Task Performance_Query1000Rows_Under100ms()
     {
         await using var db = await TestDb.SqliteAsync();
         await db.MigrateAsync();
@@ -669,3 +657,14 @@ public sealed class QueryTests
         return orders;
     }
 }
+
+#region Test Entities
+[Table("orders")]
+public partial class Order
+{
+    [Key] public long Id { get; set; }
+    [Column("status")] public string Status { get; set; } = "";
+    [Column("total")] public decimal Total { get; set; }
+    [Column("created_at")] public long CreatedAt { get; set; }
+}
+#endregion

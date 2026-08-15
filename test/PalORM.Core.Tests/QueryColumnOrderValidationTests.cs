@@ -2,17 +2,6 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-[Table("colorder")]
-internal sealed partial class ColumnOrderEntity
-{
-    [Key]
-    public long Id { get; set; }
-    [Column("first_name")]
-    public string FirstName { get; set; } = "";
-    [Column("last_name")]
-    public string LastName { get; set; } = "";
-}
-
 public sealed class QueryColumnOrderValidationTests
 {
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync(bool validate = true)
@@ -169,3 +158,16 @@ public sealed class QueryColumnOrderValidationTests
         await Assert.That(rows[0].FirstName).IsEqualTo("Ada");
     }
 }
+
+#region Test Entities
+[Table("colorder")]
+internal sealed partial class ColumnOrderEntity
+{
+    [Key]
+    public long Id { get; set; }
+    [Column("first_name")]
+    public string FirstName { get; set; } = "";
+    [Column("last_name")]
+    public string LastName { get; set; } = "";
+}
+#endregion

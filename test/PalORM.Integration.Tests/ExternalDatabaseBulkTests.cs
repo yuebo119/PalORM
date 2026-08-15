@@ -4,21 +4,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-// ITM-317/318 真库验证实体：可空列 + UTC DateTime + decimal 精度 + 唯一索引 string 列。
-// PG Binary COPY 对 NpgsqlDbType 推断的两个疑点（DBNull 无法推断 / UTC DateTime 与
-// TIMESTAMP 列错配）与 MySQL 索引 DDL(1170)/DECIMAL 截断都在此覆盖。
-[Table("ext_bulk_entities")]
-[Index("ux_ext_bulk_entities_code", "code", Unique = true)]
-public partial class ExtBulkEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("code")] [Required] public string Code { get; set; } = "";
-    [Column("note")] public string? Note { get; set; }
-    [Column("amount")] public decimal Amount { get; set; }
-    [Column("created_at")] public DateTime CreatedAt { get; set; }
-    [Column("optional_count")] public int? OptionalCount { get; set; }
-}
-
 // 三个测试共用 ext_bulk_entities 表（DROP/CREATE），必须串行
 [NotInParallel("ExtBulkTable")]
 public sealed class ExternalDatabaseBulkTests
@@ -106,7 +91,7 @@ public sealed class ExternalDatabaseBulkTests
                     Code = "A1", Amount = 1m,
                     CreatedAt = new DateTime(2026, 7, 18, 12, 0, 0, DateTimeKind.Utc)
                 });
-                Assert.Fail("重复 code 应触发唯一约束冲突");
+                throw new InvalidOperationException("重复 code 应触发唯一约束冲突");
             }
             catch (Exception ex)
             {
@@ -140,7 +125,7 @@ public sealed class ExternalDatabaseBulkTests
                     Code = "DUP", Amount = 2m,
                     CreatedAt = new DateTime(2026, 7, 18, 13, 0, 0, DateTimeKind.Utc)
                 });
-                Assert.Fail("重复 code 应触发唯一约束冲突");
+                throw new InvalidOperationException("重复 code 应触发唯一约束冲突");
             }
             catch (Exception ex)
             {
@@ -153,3 +138,20 @@ public sealed class ExternalDatabaseBulkTests
         }
     }
 }
+
+#region Test Entities
+// ITM-317/318 真库验证实体：可空列 + UTC DateTime + decimal 精度 + 唯一索引 string 列。
+// PG Binary COPY 对 NpgsqlDbType 推断的两个疑点（DBNull 无法推断 / UTC DateTime 与
+// TIMESTAMP 列错配）与 MySQL 索引 DDL(1170)/DECIMAL 截断都在此覆盖。
+[Table("ext_bulk_entities")]
+[Index("ux_ext_bulk_entities_code", "code", Unique = true)]
+public partial class ExtBulkEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("code")] [Required] public string Code { get; set; } = "";
+    [Column("note")] public string? Note { get; set; }
+    [Column("amount")] public decimal Amount { get; set; }
+    [Column("created_at")] public DateTime CreatedAt { get; set; }
+    [Column("optional_count")] public int? OptionalCount { get; set; }
+}
+#endregion

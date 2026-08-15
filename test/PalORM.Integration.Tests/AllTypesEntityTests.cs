@@ -2,31 +2,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-// 全类型回归实体：覆盖 PALORM016 白名单全部受支持类型（ITM-301 教训——
-// 白名单类型必须有"生成→编译→物化"端到端验证，否则 TimeOnly/char 这类
-// 生成物缺陷会潜伏到消费方编译期才暴露）。
-[Table("all_types_entities")]
-public partial class AllTypesEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("v_int")] public int VInt { get; set; }
-    [Column("v_short")] public short VShort { get; set; }
-    [Column("v_byte")] public byte VByte { get; set; }
-    [Column("v_string")] [Required] public string VString { get; set; } = "";
-    [Column("v_char")] public char VChar { get; set; }
-    [Column("v_bool")] public bool VBool { get; set; }
-    [Column("v_decimal")] public decimal VDecimal { get; set; }
-    [Column("v_double")] public double VDouble { get; set; }
-    [Column("v_float")] public float VFloat { get; set; }
-    [Column("v_datetime")] public DateTime VDateTime { get; set; }
-    [Column("v_guid")] public Guid VGuid { get; set; }
-    [Column("v_dto")] public DateTimeOffset VDto { get; set; }
-    [Column("v_dateonly")] public DateOnly VDateOnly { get; set; }
-    [Column("v_timeonly")] public TimeOnly VTimeOnly { get; set; }
-    [Column("v_nullable_int")] public int? VNullableInt { get; set; }
-    [Column("v_nullable_timeonly")] public TimeOnly? VNullableTimeOnly { get; set; }
-}
-
 public class AllTypesEntityTests
 {
     private static AllTypesEntity NewSample() => new()
@@ -95,3 +70,30 @@ public class AllTypesEntityTests
         await Assert.That(read.VNullableTimeOnly).IsNull();
     }
 }
+
+#region Test Entities
+// 全类型回归实体：覆盖 PALORM016 白名单全部受支持类型（ITM-301 教训——
+// 白名单类型必须有"生成→编译→物化"端到端验证，否则 TimeOnly/char 这类
+// 生成物缺陷会潜伏到消费方编译期才暴露）。
+[Table("all_types_entities")]
+public partial class AllTypesEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("v_int")] public int VInt { get; set; }
+    [Column("v_short")] public short VShort { get; set; }
+    [Column("v_byte")] public byte VByte { get; set; }
+    [Column("v_string")] [Required] public string VString { get; set; } = "";
+    [Column("v_char")] public char VChar { get; set; }
+    [Column("v_bool")] public bool VBool { get; set; }
+    [Column("v_decimal")] public decimal VDecimal { get; set; }
+    [Column("v_double")] public double VDouble { get; set; }
+    [Column("v_float")] public float VFloat { get; set; }
+    [Column("v_datetime")] public DateTime VDateTime { get; set; }
+    [Column("v_guid")] public Guid VGuid { get; set; }
+    [Column("v_dto")] public DateTimeOffset VDto { get; set; }
+    [Column("v_dateonly")] public DateOnly VDateOnly { get; set; }
+    [Column("v_timeonly")] public TimeOnly VTimeOnly { get; set; }
+    [Column("v_nullable_int")] public int? VNullableInt { get; set; }
+    [Column("v_nullable_timeonly")] public TimeOnly? VNullableTimeOnly { get; set; }
+}
+#endregion

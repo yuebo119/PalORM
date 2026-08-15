@@ -5,15 +5,6 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-[Table("session_concurrency")]
-internal sealed partial class SessionConcurrencyEntity
-{
-    [Key]
-    public long Id { get; set; }
-    [Column("name")]
-    public string Name { get; set; } = string.Empty;
-}
-
 public sealed class SessionConcurrencyTests
 {
     [Test]
@@ -1016,3 +1007,14 @@ internal sealed class ConcurrencyCommand(
         return 1L;
     }
 }
+
+#region Test Entities
+[Table("session_concurrency")]
+internal sealed partial class SessionConcurrencyEntity
+{
+    [Key]
+    public long Id { get; set; }
+    [Column("name")]
+    public string Name { get; set; } = string.Empty;
+}
+#endregion

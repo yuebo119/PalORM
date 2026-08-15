@@ -2,15 +2,6 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-[Table("qcache_items")]
-internal sealed partial class QueryCacheEntity
-{
-    [Key]
-    public long Id { get; set; }
-    [Column("name")]
-    public string Name { get; set; } = "";
-}
-
 [NotInParallel("CacheStore")]
 public sealed class QueryCacheInjectionTests
 {
@@ -101,3 +92,14 @@ public sealed class QueryCacheInjectionTests
         await Assert.That(value!.Count).IsEqualTo(2);
     }
 }
+
+#region Test Entities
+[Table("qcache_items")]
+internal sealed partial class QueryCacheEntity
+{
+    [Key]
+    public long Id { get; set; }
+    [Column("name")]
+    public string Name { get; set; } = "";
+}
+#endregion
