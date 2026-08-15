@@ -65,7 +65,9 @@ public sealed class AuditInterceptor : IQueryInterceptor
             _logger.LogError(exception, "PalORM Audit [Error]: {ExceptionType}: {Message} | {Sql}",
                 exception.GetType().Name, exception.Message, context.Sql);
         else
-            _logger.LogError(exception, "PalORM Audit [Error]: {ExceptionType} | {Sql}",
+            // ITM-611：不传 exception 实例——LogError(exception,...) 会让标准 provider 渲染
+            // exception.ToString()（含 Message 内的 PG DETAIL 参数值），击穿 logParameters=false 的脱敏承诺。
+            _logger.LogError("PalORM Audit [Error]: {ExceptionType} | {Sql}",
                 exception.GetType().Name, context.Sql);
     }
 

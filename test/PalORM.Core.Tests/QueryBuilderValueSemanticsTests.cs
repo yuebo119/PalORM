@@ -223,4 +223,22 @@ public sealed class QueryBuilderValueSemanticsTests
         await Assert.That(aParams[0].Value).IsEqualTo("Alice");
         await Assert.That(bParams[0].Value).IsEqualTo("Bob");
     }
+
+    [Test]
+    public async Task BuildCountSql_IncludesRawClause_AlignedWithBuildSql()
+    {
+        // ITM-609：Raw 子句必须进 COUNT——否则 .Raw("AND ...") 后 ToPageAsync 的
+        // 页查询生效而 Total 虚高（COUNT 与 SELECT 过滤语义分叉）。
+        await using DataSession<SqliteProvider> session =
+            await CreateSessionAsync();
+
+        QueryBuilder<ValueSemanticsEntity> builder =
+            session.From<ValueSemanticsEntity>().Where($"name = {"Bob"}").Raw("AND price > 10");
+
+        string selectSql = builder.BuildSql();
+        string countSql = builder.BuildCountSql();
+
+        await Assert.That(selectSql).Contains("price > 10");
+        await Assert.That(countSql).Contains("price > 10");
+    }
 }

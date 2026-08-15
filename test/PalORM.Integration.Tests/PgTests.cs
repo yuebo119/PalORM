@@ -59,6 +59,19 @@ public sealed class PostgreSqlIntegrationTests
     }
 
     [Test]
+    public async Task WhereJson_BoolValue_NormalizedToLowercase_MatchesJsonbText()
+    {
+        // ITM-610：jsonb ->> 提取的布尔 text 恒为小写 "true"；Convert.ToString(bool) 产 "True"
+        // 首字母大写——text 相等比较大小写敏感，恒不匹配 → 静默空结果。bool 必须特判小写。
+        await using var db = await TestDb.SqliteAsync();
+        var dry = db.From<Product>()
+            .WhereJson("payload", "active", true)
+            .AsDryRun();
+
+        await Assert.That(dry.Parameters[1].Value).IsEqualTo("true");
+    }
+
+    [Test]
     public async Task WhereJson_NulInColumn_ThrowsArgumentException()
     {
         await using var db = await TestDb.SqliteAsync();

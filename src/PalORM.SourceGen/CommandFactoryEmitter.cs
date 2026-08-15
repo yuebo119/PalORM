@@ -328,17 +328,27 @@ internal static class CommandFactoryEmitter
         string valueList = string.Join(", ",
             Enumerable.Range(0, upsertColumns.Length).Select(static index => $"@p{index}"));
 
-        // ON DUPLICATE KEY UPDATE：非 PK 列更新，自增 PK 用 LAST_INSERT_ID(id) 回填
-        var assignments = updateColumns.Select(col =>
-            col == Quote(pkCols[0].ColumnName) && pkCols[0].IsAutoIncrement
-                ? $"{Quote(pkColumnName)} = LAST_INSERT_ID({Quote(pkColumnName)})"
-                : $"{col} = VALUES({col})").ToArray();
+        // ON DUPLICATE KEY UPDATE 赋值项，对齐旧运行时语义（DataSession.BuildMySqlUpsertSetClause）：
+        // ITM-608 修复——原 `col == Quote(pk)` 比较在 updateColumns（已排除 PK 再 Quote）上恒 false，
+        // LAST_INSERT_ID 赋值与 "; SELECT LAST_INSERT_ID()" 后缀全部丢失 → 自增主键 upsert 后不回填。
+        // ① 非 PK 列 VALUES(col) 回写；② 自增 PK 追加 LAST_INSERT_ID(pk)（更新已有行时
+        // SELECT LAST_INSERT_ID() 返回该行 PK）；③ 空更新列回写 PK 保持 no-op upsert 语义
+        // （MySQL 无 DO NOTHING，等价形态 = pk=VALUES(pk) / pk=LAST_INSERT_ID(pk)）。
+        bool isAutoIncrement = pkCols[0].IsAutoIncrement;
+        string quotedPk = Quote(pkCols[0].ColumnName);
+        List<string> assignments = updateColumns
+            .Select(static col => $"{col} = VALUES({col})")
+            .ToList();
+        if (isAutoIncrement || updateColumns.Length == 0)
+            assignments.Add(isAutoIncrement
+                ? $"{quotedPk} = LAST_INSERT_ID({quotedPk})"
+                : $"{quotedPk} = VALUES({quotedPk})");
 
-        string conflictAction = assignments.Length == 0
-            ? ""
-            : " ON DUPLICATE KEY UPDATE " + string.Join(", ", assignments);
-
-        return $"INSERT INTO {Quote(model.TableName)} ({columnList}) VALUES ({valueList}){conflictAction}";
+        string sql = $"INSERT INTO {Quote(model.TableName)} ({columnList}) VALUES ({valueList})" +
+            $" ON DUPLICATE KEY UPDATE {string.Join(", ", assignments)}";
+        // 仅自增键实体回填：消费端（UpsertWithMySqlAsync）只对有 SetIdDelegates 的实体走
+        // ExecuteScalarAsync，非自增键执行 ExecuteNonQueryAsync——后缀对它是多余结果集。
+        return isAutoIncrement ? $"{sql}; SELECT LAST_INSERT_ID()" : sql;
     }
 
     private static void GenerateBindInsertBody(TableModel model, StringBuilder sb)
