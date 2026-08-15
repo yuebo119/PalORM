@@ -125,7 +125,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM023", "Entity has no insertable columns",
         "Type '{0}' has no insertable columns (all properties are [IgnoreOnInsert]/[Key(AutoIncrement)]/[Computed]/[Timestamp])", "PalORM", DiagnosticSeverity.Error, true);
 
-    // PALORM024：实体无可更新列——运行期 DataSession.Crud.cs:183 / DataSession_Bulk.cs:260 throw。
+    // PALORM024：实体无可更新列——运行期 DataSession.Crud.cs:183 / DataSession_Bulk.cs BulkMergeAsync 并发令牌 throw。
     public static readonly DiagnosticDescriptor NoUpdatableColumns = new(
         "PALORM024", "Entity has no updatable columns",
         "Type '{0}' has no updatable columns (all non-PK properties are [IgnoreOnInsert]/[Computed]/[Timestamp])", "PalORM", DiagnosticSeverity.Error, true);
@@ -156,7 +156,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM031", "BulkUpdateBatchAsync on [ConcurrencyCheck] entity always throws",
         "BulkUpdateBatchAsync<{0}> is called but {0} has [ConcurrencyCheck], which always throws NotSupportedException at runtime", "PalORM", DiagnosticSeverity.Error, true);
 
-    // PALORM032：Include/Join 引用未注册实体——QueryBuilder.cs:857-861 throw。
+    // PALORM032：Include/Join 引用未注册实体——QueryBuilder.cs AppendLimitClause 的方言分页 throw。
     // Warning 级：多程序集场景同 PALORM003 局限。
     public static readonly DiagnosticDescriptor JoinReferencesUnregisteredEntity = new(
         "PALORM032", "Join/Include references an entity without [Table]",
@@ -612,7 +612,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM023：实体无可插入列——InsertAsync/BulkInsertAsync 运行期必崩。
-    /// IsInsertable 等价 TableModel.cs:248-249：!IgnoreOnInsert and !IsAutoIncrement and ComputedExpression is null and !IsTimestamp</summary>
+    /// IsInsertable 等价 TableModel.cs IsInsertable（单一真源，见现文件）：!IgnoreOnInsert and !IsAutoIncrement and ComputedExpression is null and !IsTimestamp</summary>
     private static void CheckInsertableColumns(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool hasInsertable = false;
@@ -632,7 +632,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM024：实体无可更新列——UpdateAsync/BulkUpdateAsync 运行期必崩。
-    /// IsUpsertable 等价 TableModel.cs:251-252：!IgnoreOnInsert and ComputedExpression is null and !IsTimestamp
+    /// IsUpsertable 等价 TableModel.cs IsUpsertable（单一真源，见现文件）：!IgnoreOnInsert and ComputedExpression is null and !IsTimestamp
     /// 注：非主键属性——主键在 UPDATE 中是 WHERE 条件，不计入 SET 列。</summary>
     private static void CheckUpdatableColumns(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
@@ -674,15 +674,21 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         return !ignoreOnInsert && !isAutoIncrement && !hasComputed && !isTimestamp;
     }
 
+    // r8-D-A：对齐生成器真源 IsUpdatableColumn（CommandFactoryEmitter——无 IgnoreOnInsert
+    // 排除）。原谓词锚错到 UPSERT 形态（含 IgnoreOnInsert 排除）致"全部非 PK 列为
+    // IgnoreOnInsert/Computed/Timestamp 且至少一个纯 IgnoreOnInsert"的实体被 PALORM024
+    // Error 误报阻断编译（运行时 UPDATE 正常——真源不排除该列）。
     private static bool IsPropertyUpdatable(IPropertySymbol property)
     {
-        bool ignoreOnInsert = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "IgnoreOnInsert"));
+        bool isKey = property.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+        bool isConcurrency = property.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck"));
         bool hasComputed = property.GetAttributes().Any(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
         bool isTimestamp = property.GetAttributes().Any(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
-        return !ignoreOnInsert && !hasComputed && !isTimestamp;
+        return !isKey && !isConcurrency && !hasComputed && !isTimestamp;
     }
 
     /// <summary>PALORM021：列名大小写不敏感唯一性——重复 [Column] 生成 INSERT INTO t (x, x) 运行期才炸（ITM-409）。
