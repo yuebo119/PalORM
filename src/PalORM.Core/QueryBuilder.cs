@@ -572,10 +572,12 @@ public struct QueryBuilder<T> where T : class, new()
             throw new NotSupportedException("CTE is not supported by the current UPDATE builder.");
         // ITM-522: UPDATE 构建只消费 Set/Where/Raw——Join/OrderBy/Lock/Window 会被静默丢弃，
         // 让调用方误以为已生效。与 CTE 守卫并列，显式拒绝这些不受支持的子句。
+        // ITM-623：GroupBy/Having 同属"会被静默丢弃"（构建输出无这两类）——一并显式拒绝。
         if (HasClause(QueryClauseKind.Join) || HasClause(QueryClauseKind.OrderBy)
-            || HasClause(QueryClauseKind.Lock) || HasClause(QueryClauseKind.Window))
+            || HasClause(QueryClauseKind.Lock) || HasClause(QueryClauseKind.Window)
+            || HasClause(QueryClauseKind.GroupBy) || HasClause(QueryClauseKind.Having))
             throw new NotSupportedException(
-                "UPDATE does not support Join/OrderBy/Lock/Window clauses; they would be silently dropped. " +
+                "UPDATE does not support Join/OrderBy/Lock/Window/GroupBy/Having clauses; they would be silently dropped. " +
                 "Remove them, or express the filter via Where.");
         var sb = new ValueStringBuilder(stackalloc char[256]);
         try
