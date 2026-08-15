@@ -97,15 +97,24 @@ internal sealed record TableModel(
             INamedTypeSymbol? converterType = null;
             ITypeSymbol providerType =
                 SourceGenerationValidation.UnwrapNullable(prop.Type);
-            if (converterAttr is not null)
+            if (converterAttr is not null
+                && SourceGenerationValidation.TryGetConverterTypes(
+                    prop, converterAttr, out converterType, out ITypeSymbol? mappedProviderType)
+                && mappedProviderType is not null)
             {
-                _ = SourceGenerationValidation.TryGetConverterTypes(
-                    prop,
-                    converterAttr,
-                    out converterType,
-                    out ITypeSymbol? mappedProviderType);
-                providerType = mappedProviderType!;
+                providerType = mappedProviderType;
             }
+            // ITM-621：转换器解析失败（非法构造/基类链属性绕过 CanGenerateEntity 的校验循环）
+            // 按原属性类型映射兜底——此前 bool 返回值被丢弃 + `!` 抑制，失败路径
+            // providerType 为 null 在 ToDisplayString 处 NRE 崩掉生成器。
+
+            // ITM-626：[Timestamp]（DEFAULT CURRENT_TIMESTAMP）与 [Computed]（GENERATED ALWAYS AS）
+            // 同标一属性会生成 "GENERATED ... STORED ... DEFAULT"——MySQL/PG 均拒绝（GENERATED 列
+            // 不得带 DEFAULT）。生成期拒绝，比真库 Migrate 时远端报错更近根因（诊断化归 ITM-640）。
+            if (isTimestamp && computedExpression is not null)
+                throw new InvalidOperationException(
+                    $"Property '{prop.Name}' on entity cannot be marked both [Timestamp] and [Computed] — " +
+                    "the generated column would be GENERATED with a DEFAULT clause, which all three dialects reject.");
 
             var fkAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512

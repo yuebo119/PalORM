@@ -15,15 +15,14 @@ internal static class SourceGenerationValidation
             return false;
         }
 
-        return type.GetMembers().OfType<IPropertySymbol>()
-            .Where(static property => !IsNotMapped(property))
-            .All(static property => !property.IsStatic
-                && !property.IsIndexer
-                && property.SetMethod is
-                {
-                    DeclaredAccessibility: Accessibility.Public
-                        or Accessibility.Internal
-                });
+        // ITM-617：setter 校验走基类链（与列收集同源）——声明成员判定会让基类 get-only/
+        // protected-set 属性流入 ColumnModel，生成 `entity.Prop = ...` 的 RowFactory 不可编译。
+        return EnumerateMappedProperties(type)
+            .All(static property => property.SetMethod is
+            {
+                DeclaredAccessibility: Accessibility.Public
+                    or Accessibility.Internal
+            });
     }
 
     internal static bool CanGenerateEntity(INamedTypeSymbol type)
@@ -54,7 +53,9 @@ internal static class SourceGenerationValidation
         if (keyProperty.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T })
             return false;
 
-        foreach (IPropertySymbol property in type.GetMembers().OfType<IPropertySymbol>())
+        // ITM-617：OwnedJson/值映射校验走基类链（同上）——声明成员判定会漏检基类的
+        // byte[]/数组/非法 OwnedJson 属性，使其未经校验流入列收集。
+        foreach (IPropertySymbol property in EnumerateMappedProperties(type))
         {
             if (IsNotMapped(property))
                 continue;
