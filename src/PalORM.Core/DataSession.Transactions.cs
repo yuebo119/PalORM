@@ -12,6 +12,10 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(tran);
+        // ITM-637 同型面（复检发现）：已释放事务（Connection null）先于归属检查——
+        // 原统一报"不属于主连接"误导排查方向（与 WithTransaction 同口径）
+        if (tran.Connection is null)
+            throw new ArgumentException("事务已释放（Connection 为 null），无法创建保存点。", nameof(tran));
         // ITM-575: 与 UseTransaction 对称——异连接事务在驱动层的错误形态不可控，库内明确失败
         if (!ReferenceEquals(tran.Connection, _conn))
             throw new ArgumentException("事务必须属于当前 DataSession 的主连接。", nameof(tran));
@@ -27,6 +31,9 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(tran);
+        // ITM-637 同型面（复检发现，同 SavepointAsync）
+        if (tran.Connection is null)
+            throw new ArgumentException("事务已释放（Connection 为 null），无法回滚保存点。", nameof(tran));
         if (!ReferenceEquals(tran.Connection, _conn))
             throw new ArgumentException("事务必须属于当前 DataSession 的主连接。", nameof(tran));
         await using DbCommand cmd = CreateCommand();
