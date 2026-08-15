@@ -62,6 +62,9 @@ public interface IDbProvider
     /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。
     /// <para>ITM-557: <paramref name="commandTimeoutSeconds"/> 为会话 CommandTimeout——
     /// <para>r6-N2: <paramref name="isolationLevel"/> 为会话 WithIsolationLevel 值——自开事务遵从（原裸驱动默认）。</para>
+    /// <para>r7-O1 登记：isolationLevel 默认参使 ct 非末位（二者不可兼得）；且 static virtual
+    /// 接口加参对库外旧签名实现是形态断裂（dispatch 落默认 throw）——破坏性变更，
+    /// 5.x minor 内消化（外部 Provider 实现需同步签名，CHANGELOG 注明）。</para>
     /// 批量命令必须应用，否则慢库上按驱动默认（约 30s）超时，与配置意图相反。</para></summary>
     static virtual Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct,

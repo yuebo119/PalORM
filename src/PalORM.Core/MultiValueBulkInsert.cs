@@ -68,8 +68,10 @@ public static class MultiValueBulkInsert
             metadata.InsertColumns.Select(quoteIdentifier));
         long total = 0;
 
+        // r7-S1：自开事务遵从会话隔离级别——原裸调致 MySQL local_infile=OFF 回退路径
+        // 丢弃 isolationLevel（与 BulkCopy 分支同族，r6 只修了前者）
         DbTransaction tran = transaction
-            ?? await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            ?? await conn.BeginTransactionAsync(ctx.IsolationLevel, ct).ConfigureAwait(false);
         bool ownsTransaction = transaction is null;
         Exception? primaryException = null;
         try
@@ -279,4 +281,5 @@ public readonly record struct BulkContext(
     int MaxParametersPerStatement,
     Func<string, string> QuoteIdentifier,
     Func<string, object?, DbParameter> CreateParameter,
-    int CommandTimeoutSeconds);
+    int CommandTimeoutSeconds,
+    System.Data.IsolationLevel IsolationLevel = System.Data.IsolationLevel.ReadCommitted);  // r7-S1：自开事务隔离级别透传（SQLite 单一隔离模型传默认无语义差异）
