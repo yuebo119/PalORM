@@ -1232,4 +1232,90 @@ public sealed class AnalyzerDiagnosticsTests
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM031")).IsTrue();
     }
+
+    [Test]
+    public async Task PALORM032_InferredGenericInclude_ReportsUnregisteredEntity()
+    {
+        // ITM-662 锁定 032 语义层修复（推断式 Include 引用未注册实体应报）
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                public long AuthorId { get; set; }
+            }
+            public sealed class Author { public long Id { get; set; } }
+            public static class C
+            {
+                static void M<TProvider>(DataSession<TProvider> s)
+                    where TProvider : IDbProvider
+                {
+                    _ = s.From<E>().Include((E e) => e.AuthorId, (Author a) => a.Id);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> errors) =
+            await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM032")).IsTrue();
+        await Assert.That(errors).IsEmpty();
+    }
+
+    [Test]
+    public async Task PALORM033_PalORMFooNamespace_DoesNotReport()
+    {
+        // ITM-649/662 锁定：用户命名空间 PalORMFoo 下自建 QueryBuilder 的 Select 不误报
+        const string source = """
+            namespace PalORMFoo
+            {
+                public sealed class QueryBuilder<T> where T : class, new()
+                {
+                    public QueryBuilder<T> Select(System.Linq.Expressions.Expression<System.Func<T, object?>> m) => this;
+                    public QueryBuilder<T> ToListAsync() => this;
+                }
+                public sealed class E { public long Id { get; set; } }
+                public static class C
+                {
+                    static void M(QueryBuilder<E> b) { _ = b.Select(x => x.Id); _ = b.ToListAsync(); }
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM033")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM036_ValueOnlyEntityInDisabledContext_DoesNotReport()
+    {
+        // ITM-648/662 锁定：纯值类型实体（无引用属性）在 NRT 禁用项目不报（噪音消除）
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                public int Count { get; set; }
+                public System.DateTime When { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM036")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM034_DefaultBangInitializer_DoesNotReport()
+    {
+        // ITM-650/662 锁定：default! 等等价默认写法白名单
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; } = default!;
+                public string Name { get; set; } = default!;
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM034")).IsFalse();
+    }
 }
