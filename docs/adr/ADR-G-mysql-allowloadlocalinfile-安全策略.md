@@ -34,3 +34,11 @@ false（ITM-612 实证），用户的安全加固意图被静默覆盖。
 - 检测连接串文本关键字：无法覆盖等价写法，误报风险。
 - 默认 Never + BulkCopy 需显式 opt-in：性能路径（4.84× 基准）对多数内部服务端场景
   是安全收益为零的损失——留待真实需求驱动。
+
+## 补充（2026-08-15 r4）：Enlist 族同型参数
+
+PG `Enlist` / MySQL `AutoEnlist` / `ConnectionReset` 与 AllowLoadLocalInfile 同属
+"显式设置与驱动默认不可区分，无条件覆盖"形态（ITM-643）。其中 Enlist 族的后果最重：
+依赖 TransactionScope 的用户被静默脱离环境事务（SQL 自动提交，数据一致性风险）。
+维持覆盖现状（与 G 主决策同理由：TransactionScope 不在支持路径——G18 门禁禁用），
+缓解 = 显式事务主路径 + Provider 注释登记；revisit 条件并入 G 主体。

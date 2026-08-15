@@ -32,10 +32,17 @@ public static class PostgreSqlExtensions
         // ->> 结果恒为 text：非字符串 value 归一为不变文化字符串，绑定参数类型对齐。
         // ITM-610：bool 必须特判小写——Convert.ToString(bool) 产 "True"（首字母大写），
         // jsonb 提取 text 恒为 "true"，text 相等比较大小写敏感 → 恒不匹配静默空结果。
+        // ITM-641(r4)：DateTime/DateTimeOffset 显式拒绝——Convert.ToString 产区域格式
+        // （06/15/2026 ...），jsonb ->> 提取 ISO text 恒不相等（同型静默空结果）。格式
+        // 对齐需 PG 真库实证提取形态——实现前响亮拒绝优于静默错；调用方请先 ToString
+        // 为与存储一致的 ISO 形态再传 string。
         object? normalized = value switch
         {
             null or string => value,
             bool b => b ? "true" : "false",
+            DateTime or DateTimeOffset => throw new NotSupportedException(
+                "WhereJson does not accept DateTime/DateTimeOffset values: the culture-formatted text "
+                + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first."),
             _ => Convert.ToString(value, CultureInfo.InvariantCulture),
         };
         return builder.Where(FormattableStringFactory.Create(quoted + "->>{0} = {1}", path, normalized));
