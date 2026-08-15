@@ -2,18 +2,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-[Table("indexed_products")]
-[Index("idx_indexed_products_cat_price", "category", "price")]
-public partial class IndexedProduct
-{
-    [Key] public long Id { get; set; }
-    [Column("category")] public string Category { get; set; } = "";
-    [Column("price")] public decimal Price { get; set; }
-    [Column("sku")]
-    [Unique]
-    public string Sku { get; set; } = "";
-}
-
 public sealed class MigrationIndexTests
 {
     [Test]
@@ -54,3 +42,17 @@ public sealed class MigrationIndexTests
             await db.InsertAsync(new IndexedProduct { Category = "b", Price = 2m, Sku = "SKU-1" }));
     }
 }
+
+#region Test Entities
+[Table("indexed_products")]
+[Index("idx_indexed_products_cat_price", "category", "price")]
+public partial class IndexedProduct
+{
+    [Key] public long Id { get; set; }
+    [Column("category")] public string Category { get; set; } = "";
+    [Column("price")] public decimal Price { get; set; }
+    [Column("sku")]
+    [Unique]
+    public string Sku { get; set; } = "";
+}
+#endregion

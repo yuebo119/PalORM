@@ -3,29 +3,6 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-[Table("value_semantics")]
-internal sealed partial class ValueSemanticsEntity
-{
-    [Key]
-    public long Id { get; set; }
-    [Column("name")]
-    public string Name { get; set; } = string.Empty;
-    [Column("price")]
-    public decimal Price { get; set; }
-}
-
-[Table("value_semantics_sd")]
-[SoftDelete]
-internal sealed partial class SoftDeleteValueSemanticsEntity
-{
-    [Key]
-    public long Id { get; set; }
-    [Column("name")]
-    public string Name { get; set; } = string.Empty;
-    [Column("deleted_at")]
-    public DateTime? DeletedAt { get; set; }
-}
-
 public sealed class QueryBuilderValueSemanticsTests
 {
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
@@ -242,3 +219,28 @@ public sealed class QueryBuilderValueSemanticsTests
         await Assert.That(countSql).Contains("price > 10");
     }
 }
+
+#region Test Entities
+[Table("value_semantics")]
+internal sealed partial class ValueSemanticsEntity
+{
+    [Key]
+    public long Id { get; set; }
+    [Column("name")]
+    public string Name { get; set; } = string.Empty;
+    [Column("price")]
+    public decimal Price { get; set; }
+}
+
+[Table("value_semantics_sd")]
+[SoftDelete]
+internal sealed partial class SoftDeleteValueSemanticsEntity
+{
+    [Key]
+    public long Id { get; set; }
+    [Column("name")]
+    public string Name { get; set; } = string.Empty;
+    [Column("deleted_at")]
+    public DateTime? DeletedAt { get; set; }
+}
+#endregion

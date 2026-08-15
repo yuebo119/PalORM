@@ -19,6 +19,7 @@ namespace PalORM.Benchmarks;
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
+// 快速验证配置——SQLite 本地对照基准，参数形状差异用多迭代摊平抖动（对照结论而非绝对数值）
 [SimpleJob(launchCount: BenchmarkConfig.FastLaunch,
            warmupCount: BenchmarkConfig.FastWarmup,
            iterationCount: BenchmarkConfig.FastIterations)]

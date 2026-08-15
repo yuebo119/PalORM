@@ -2,40 +2,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-[Table("bulk_insert_defaults")]
-public partial class BulkInsertDefaultEntity
-{
-    [Key(AutoIncrement = false)]
-    public string Id { get; set; } = "";
-
-    [Column("name")]
-    public string Name { get; set; } = "";
-
-    [Column("created_by")]
-    [IgnoreOnInsert]
-    public string CreatedBy { get; set; } = "client";
-}
-
-[Table("bulk_generated_only")]
-// PALORM023/024：测试专用的"仅 Key + Generated"实体——验证 BulkInsert 对生成列的处理
-#pragma warning disable PALORM023, PALORM024
-public partial class BulkGeneratedOnlyEntity
-#pragma warning restore PALORM023, PALORM024
-{
-    [Key]
-    public long Id { get; set; }
-}
-
-[Table("bulk_key_only")]
-// PALORM023/024：测试专用的"仅 Key"实体——验证 BulkInsert 在最小列集下的行为
-#pragma warning disable PALORM023, PALORM024
-public partial class BulkKeyOnlyEntity
-#pragma warning restore PALORM023, PALORM024
-{
-    [Key(AutoIncrement = false)]
-    public string Id { get; set; } = "";
-}
-
 public sealed class BulkDataTests
 {
     [Test]
@@ -234,3 +200,39 @@ public sealed class BulkDataTests
         await Assert.That(await db.CountAsync<BulkKeyOnlyEntity>()).IsEqualTo(1);
     }
 }
+
+#region Test Entities
+[Table("bulk_insert_defaults")]
+public partial class BulkInsertDefaultEntity
+{
+    [Key(AutoIncrement = false)]
+    public string Id { get; set; } = "";
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("created_by")]
+    [IgnoreOnInsert]
+    public string CreatedBy { get; set; } = "client";
+}
+
+[Table("bulk_generated_only")]
+// PALORM023/024：测试专用的"仅 Key + Generated"实体——验证 BulkInsert 对生成列的处理
+#pragma warning disable PALORM023, PALORM024
+public partial class BulkGeneratedOnlyEntity
+#pragma warning restore PALORM023, PALORM024
+{
+    [Key]
+    public long Id { get; set; }
+}
+
+[Table("bulk_key_only")]
+// PALORM023/024：测试专用的"仅 Key"实体——验证 BulkInsert 在最小列集下的行为
+#pragma warning disable PALORM023, PALORM024
+public partial class BulkKeyOnlyEntity
+#pragma warning restore PALORM023, PALORM024
+{
+    [Key(AutoIncrement = false)]
+    public string Id { get; set; } = "";
+}
+#endregion

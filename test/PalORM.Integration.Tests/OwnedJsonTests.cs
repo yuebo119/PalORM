@@ -1,26 +1,7 @@
-
 using System.Text.Json.Serialization;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
-
-[Table("json_test")]
-public partial class JsonTestEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("data")] [OwnedJson] public string Data { get; set; } = "{}";
-    [Column("details")] [OwnedJson(typeof(OwnedJsonSerializerContext))] public JsonDetails Details { get; set; } = new();
-}
-
-public sealed class JsonDetails
-{
-    public string Key { get; set; } = "";
-    public int Count { get; set; }
-}
-
-[JsonSerializable(typeof(JsonDetails), TypeInfoPropertyName = "JsonDetailsInfo")]
-internal sealed partial class OwnedJsonSerializerContext : JsonSerializerContext;
 
 public sealed class OwnedJsonTests
 {
@@ -79,3 +60,23 @@ public sealed class OwnedJsonTests
         await Assert.That(result[0].Name).IsEqualTo("C1");
     }
 }
+
+#region Test Entities
+[Table("json_test")]
+public partial class JsonTestEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("data")] [OwnedJson] public string Data { get; set; } = "{}";
+    [Column("details")] [OwnedJson(typeof(OwnedJsonSerializerContext))] public JsonDetails Details { get; set; } = new();
+}
+
+public sealed class JsonDetails
+{
+    public string Key { get; set; } = "";
+    public int Count { get; set; }
+}
+
+[JsonSerializable(typeof(JsonDetails), TypeInfoPropertyName = "JsonDetailsInfo")]
+internal sealed partial class OwnedJsonSerializerContext : JsonSerializerContext;
+#endregion

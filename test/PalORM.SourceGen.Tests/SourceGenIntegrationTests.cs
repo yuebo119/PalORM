@@ -5,34 +5,6 @@ using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace PalORM.SourceGen.Tests;
 
-[Table("test_users")]
-internal sealed partial class TestUser
-{
-    [Key] public long Id { get; set; }
-    [Column("name")]
-    [Required]
-    public string Name { get; set; } = "";
-    [Column("email")] public string? Email { get; set; }
-}
-
-[Table("external_users")]
-internal sealed partial class ExternalUser
-{
-    // ITM-589：string 主键须显式 AutoIncrement = false（应用侧赋值，如雪花 ID/外部系统 ID）
-    [Key(AutoIncrement = false)] public string Id { get; set; } = "";
-    [Column("name")] public string Name { get; set; } = "";
-}
-
-[Table("versioned_users")]
-internal sealed partial class VersionedUser
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("version")]
-    [ConcurrencyCheck]
-    public long Version { get; set; }
-}
-
 internal sealed class SourceGenIntegrationTests
 {
     [Test]
@@ -471,3 +443,33 @@ internal sealed class SourceGenIntegrationTests
         await Assert.That(generatedType).IsNull();
     }
 }
+
+#region Test Entities
+[Table("test_users")]
+internal sealed partial class TestUser
+{
+    [Key] public long Id { get; set; }
+    [Column("name")]
+    [Required]
+    public string Name { get; set; } = "";
+    [Column("email")] public string? Email { get; set; }
+}
+
+[Table("external_users")]
+internal sealed partial class ExternalUser
+{
+    // ITM-589：string 主键须显式 AutoIncrement = false（应用侧赋值，如雪花 ID/外部系统 ID）
+    [Key(AutoIncrement = false)] public string Id { get; set; } = "";
+    [Column("name")] public string Name { get; set; } = "";
+}
+
+[Table("versioned_users")]
+internal sealed partial class VersionedUser
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("version")]
+    [ConcurrencyCheck]
+    public long Version { get; set; }
+}
+#endregion

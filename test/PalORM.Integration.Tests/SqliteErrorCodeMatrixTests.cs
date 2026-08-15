@@ -4,14 +4,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-[Table("uniq_matrix")]
-public partial class UniqueMatrixEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("code")] [Unique] public string Code { get; set; } = "";
-    [Column("required_value")] public string RequiredValue { get; set; } = "";
-}
-
 /// <summary>ITM-403 下沉防线：真库触发 UNIQUE/PK/NOT NULL/FK 四类约束异常，
 /// 断言 IsUniqueViolation 仅对前两类为真。前轮用手工构造异常（无扩展码）验证是
 /// 验证方法缺陷——本测试确保扩展码在真驱动路径实际生效。</summary>
@@ -26,7 +18,7 @@ public sealed class SqliteErrorCodeMatrixTests
         try
         {
             await db.InsertAsync(new UniqueMatrixEntity { Code = "A", RequiredValue = "y" });
-            Assert.Fail("Expected unique violation");
+            throw new InvalidOperationException("Expected unique violation");
         }
         catch (SqliteException ex)
         {
@@ -45,7 +37,7 @@ public sealed class SqliteErrorCodeMatrixTests
         try
         {
             await cmd.ExecuteNonQueryAsync();
-            Assert.Fail("Expected NOT NULL violation");
+            throw new InvalidOperationException("Expected NOT NULL violation");
         }
         catch (SqliteException ex)
         {
@@ -71,7 +63,7 @@ public sealed class SqliteErrorCodeMatrixTests
         try
         {
             await cmd.ExecuteNonQueryAsync();
-            Assert.Fail("Expected FK violation");
+            throw new InvalidOperationException("Expected FK violation");
         }
         catch (SqliteException ex)
         {
@@ -96,7 +88,7 @@ public sealed class SqliteErrorCodeMatrixTests
         try
         {
             await cmd.ExecuteNonQueryAsync();
-            Assert.Fail("Expected PK violation");
+            throw new InvalidOperationException("Expected PK violation");
         }
         catch (SqliteException ex)
         {
@@ -104,3 +96,13 @@ public sealed class SqliteErrorCodeMatrixTests
         }
     }
 }
+
+#region Test Entities
+[Table("uniq_matrix")]
+public partial class UniqueMatrixEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("code")] [Unique] public string Code { get; set; } = "";
+    [Column("required_value")] public string RequiredValue { get; set; } = "";
+}
+#endregion

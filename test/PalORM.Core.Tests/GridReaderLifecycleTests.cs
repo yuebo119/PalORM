@@ -5,16 +5,6 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace PalORM.Core.Tests;
 
-[Table("grid_lifecycle")]
-// PALORM023/024：测试专用的"仅 Key"实体——验证 GridReader 在最小列集下的生命周期
-#pragma warning disable PALORM023, PALORM024
-internal sealed partial class GridLifecycleEntity
-#pragma warning restore PALORM023, PALORM024
-{
-    [Key]
-    public long Id { get; set; }
-}
-
 public sealed class GridReaderLifecycleTests
 {
     [Test]
@@ -197,3 +187,15 @@ internal sealed class GridTrackingConnection : DbConnection
     protected override DbCommand CreateDbCommand() => throw new NotSupportedException();
     public override async ValueTask DisposeAsync() { DisposeCount++; await base.DisposeAsync().ConfigureAwait(false); }
 }
+
+#region Test Entities
+[Table("grid_lifecycle")]
+// PALORM023/024：测试专用的"仅 Key"实体——验证 GridReader 在最小列集下的生命周期
+#pragma warning disable PALORM023, PALORM024
+internal sealed partial class GridLifecycleEntity
+#pragma warning restore PALORM023, PALORM024
+{
+    [Key]
+    public long Id { get; set; }
+}
+#endregion

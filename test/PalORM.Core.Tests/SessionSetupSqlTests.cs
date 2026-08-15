@@ -58,9 +58,10 @@ public sealed class SessionSetupSqlTests
     [Test]
     public async Task SessionSetupSql_InvalidSyntax_ThrowsAndFailsSessionCreation()
     {
-        // 无效 SQL 应该让 CreateAsync 失败（连接初始化失败语义）
+        // 无效 SQL 应该让 CreateAsync 失败（连接初始化失败语义）——SQLite 驱动原样传播
+        // SqliteException（语法错误非瞬时异常，不重试），锁定具体类型而非裸 Exception。
         await Assert.That(async () =>
             await DataSession<SqliteProvider>.CreateAsync(Opts("NOT A VALID SQL STATEMENT")))
-            .Throws<Exception>();
+            .Throws<Microsoft.Data.Sqlite.SqliteException>();
     }
 }
