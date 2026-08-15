@@ -34,12 +34,13 @@ internal static class MySqlBulkCopyInserter
         // 映射，列序不再是契约。
         // 源生成器 InsertColumns 已排除自增主键，需补齐主键列到 DataTable。
         int columnCount = ctx.InsertColumns.Count;
-        string[] allColumns = new string[columnCount + ctx.PrimaryKeyColumns.Count];
-        // 主键列放最前（对齐 MySQL 表定义：AUTO_INCREMENT 通常首列）
-        for (int i = 0; i < ctx.PrimaryKeyColumns.Count; i++)
-            allColumns[i] = ctx.PrimaryKeyColumns[i];
-        for (int i = 0; i < columnCount; i++)
-            allColumns[i + ctx.PrimaryKeyColumns.Count] = ctx.InsertColumns[i];
+        // 复检轮发现（预存缺陷）：非自增 PK（Guid/string 键）实体的 PK 已含于 InsertColumns
+        // ——原构造重复添加列名致 DataTable 抛 DuplicateNameException。仅补 InsertColumns
+        // 缺席的 PK（= 自增 PK，生成器已将其排除于 InsertColumns）。补位列仍在最前（对齐
+        // MySQL 表定义：AUTO_INCREMENT 通常首列），下方 DBNull 填值与参数填值的偏移配对不变。
+        string[] pksToAdd = [.. ctx.PrimaryKeyColumns
+            .Where(pk => !ctx.InsertColumns.Contains(pk, StringComparer.Ordinal))];
+        string[] allColumns = [.. pksToAdd, .. ctx.InsertColumns];
 
         var table = new DataTable();
         try
@@ -66,12 +67,12 @@ internal static class MySqlBulkCopyInserter
                         rowCommand.Parameters.Clear();
                         ctx.Binder(rowCommand, entities[i], 0);
                         DataRow row = table.NewRow();
-                        // 主键列填 DBNull（AUTO_INCREMENT 自增）
-                        for (int p = 0; p < ctx.PrimaryKeyColumns.Count; p++)
+                        // 补位 PK 列填 DBNull（AUTO_INCREMENT 自增；非自增 PK 已在参数值内）
+                        for (int p = 0; p < pksToAdd.Length; p++)
                             row[p] = DBNull.Value;
                         // InsertColumns 列从 rowCommand.Parameters 按序填入
                         for (int c = 0; c < columnCount; c++)
-                            row[c + ctx.PrimaryKeyColumns.Count] = rowCommand.Parameters[c].Value;
+                            row[c + pksToAdd.Length] = rowCommand.Parameters[c].Value;
                         table.Rows.Add(row);
                     }
                 }

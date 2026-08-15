@@ -105,7 +105,8 @@ internal static class RegistryEmitter
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read),");
-            // ITM-640：单次物化 Columns（原 6 处 AsSpan().ToArray() 重复分配，编译期路径）
+            // ITM-640：单次物化 Columns（本块原 3 处 AsSpan().ToArray() 重复分配；另 3 处
+            // 分属独立 per-model 循环无法共用——复检轮计数订正）
             var columns = m.Columns.AsSpan().ToArray();
             string insertColumns = BuildStringArrayLiteral(
                 columns.Where(static column => column.IsInsertable)
