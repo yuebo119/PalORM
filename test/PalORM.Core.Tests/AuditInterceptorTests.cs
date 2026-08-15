@@ -95,7 +95,8 @@ public sealed class AuditInterceptorTests
         await Assert.That(logger.Entries[0].Level).IsEqualTo(LogLevel.Error);
         await Assert.That(logger.Entries[0].Message).Contains("InvalidOperationException");
         await Assert.That(logger.Entries[0].Message.Contains("secret@email.com", StringComparison.Ordinal)).IsFalse();
-        await Assert.That(logger.Entries[0].Exception).IsSameReferenceAs(ex);
+        // ITM-611：不传 exception 实例——标准 provider 渲染 exception.ToString() 含 Message（PII 击穿）
+        await Assert.That(logger.Entries[0].Exception).IsNull();
     }
 
     [Test]

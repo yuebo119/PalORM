@@ -26,9 +26,15 @@ public static class PostgreSqlExtensions
         string quoted = PostgreSqlProvider.QuoteIdentifier(column)
             .Replace("{", "{{", StringComparison.Ordinal)
             .Replace("}", "}}", StringComparison.Ordinal);
-        // ->> 结果恒为 text：非字符串 value 归一为不变文化字符串，绑定参数类型对齐
-        object? normalized = value is null or string ? value
-            : Convert.ToString(value, CultureInfo.InvariantCulture);
+        // ->> 结果恒为 text：非字符串 value 归一为不变文化字符串，绑定参数类型对齐。
+        // ITM-610：bool 必须特判小写——Convert.ToString(bool) 产 "True"（首字母大写），
+        // jsonb 提取 text 恒为 "true"，text 相等比较大小写敏感 → 恒不匹配静默空结果。
+        object? normalized = value switch
+        {
+            null or string => value,
+            bool b => b ? "true" : "false",
+            _ => Convert.ToString(value, CultureInfo.InvariantCulture),
+        };
         return builder.Where(FormattableStringFactory.Create(quoted + "->>{0} = {1}", path, normalized));
     }
 }

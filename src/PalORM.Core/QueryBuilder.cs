@@ -555,6 +555,9 @@ public struct QueryBuilder<T> where T : class, new()
             AppendWhereSection(ref sb);
             AppendClauses(ref sb, QueryClauseKind.GroupBy);
             AppendClauses(ref sb, QueryClauseKind.Having);
+            // ITM-609：Raw 子句进 Count——与 BuildSql 的过滤语义对齐，否则 .Raw("AND deleted=0")
+            // 后 ToPageAsync 的页查询生效而 Total 虚高（Raw 在 BuildSql 中位于 Having/OrderBy 后）。
+            AppendClauses(ref sb, QueryClauseKind.Raw);
             sb.Append(") AS count_source");
             sb.TrimEnd(); return sb.ToString();
         }

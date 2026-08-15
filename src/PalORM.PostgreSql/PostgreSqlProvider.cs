@@ -29,12 +29,17 @@ public sealed class PostgreSqlProvider : IDbProvider
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var builder = new NpgsqlConnectionStringBuilder(connectionString)
-        {
-            MaxPoolSize = options.MaxPoolSize,
-            ConnectionIdleLifetime = options.PoolIdleTimeoutSeconds,
-            ConnectionLifetime = checked(options.PoolLifetimeMinutes * 60)
-        };
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        // ITM-612：池参数遵循下方系列的"仅默认时覆盖"策略——原对象初始化器在连接串解析后
+        // 无条件覆盖，连接串内嵌 "Max Pool Size=500" 被静默改写为 DbOptions 默认值。
+        // Npgsql 10 实测默认值：MaxPoolSize=100 / ConnectionIdleLifetime=300 / ConnectionLifetime=3600
+        //（注意 Lifetime 默认非 0——曾按 0 写判据致 WithPool 值永不应用，实证修正）。
+        if (builder.MaxPoolSize == 100)
+            builder.MaxPoolSize = options.MaxPoolSize;
+        if (builder.ConnectionIdleLifetime == 300)
+            builder.ConnectionIdleLifetime = options.PoolIdleTimeoutSeconds;
+        if (builder.ConnectionLifetime == 3600)
+            builder.ConnectionLifetime = checked(options.PoolLifetimeMinutes * 60);
 
         // v5.0 阶段 3.1：仅当属性当前值等于 ADO.NET 默认值时覆盖为调优推荐值。
         // Npgsql 默认值（已通过 ConnectionStringBuilder 属性默认核实）：MaxAutoPrepare=0，
