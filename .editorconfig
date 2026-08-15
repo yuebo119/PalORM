@@ -67,7 +67,7 @@ dotnet_diagnostic.S2077.severity = none    # FormattableString + 源生成器自
 dotnet_diagnostic.S3236.severity = none    # CallerArgumentExpression 用法是项目诊断设计
 dotnet_diagnostic.S6667.severity = none    # LoggerMessage 源生成器已用，模板参数符合规范
 
-# P1 设计/可读性 → 警告（warning，不阻断但有信号）
+# P1 设计/可读性 → error（v3.0.0 升级为编译阻断，与 docs/编码规范.md §18.2 一致）
 # 注：本批次已完成系统性拆分，残留项加 SuppressMessage。
 dotnet_diagnostic.S3776.severity = error  # 认知复杂度
 dotnet_diagnostic.S107.severity = error   # 参数过多
