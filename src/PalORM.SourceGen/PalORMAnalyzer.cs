@@ -336,6 +336,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckSelectProjection(
         SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma, InvocationExpressionSyntax invocation)
     {
+        // ITM-634：语法预筛先行（零成本）——GetSymbolInfo 语义查询原在其后，全项目每个
+        // Select 调用（含 LINQ Select）都白付一次语义解析。
+        if (ma.Expression is not IdentifierNameSyntax varRef) return;
+
         // Select 必须属于 PalORM——从 QueryBuilder<T> 类型
         if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
             is not IMethodSymbol methodSymbol
@@ -345,7 +349,6 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             return;
 
         // 追踪 Select 的接收者变量名
-        if (ma.Expression is not IdentifierNameSyntax varRef) return;
         string varName = varRef.Identifier.Text;
 
         // 向后扫描：同一语句或 ExpressionStatement 后续是否存在 varName.ToListAsync/FirstAsync 调用
@@ -355,9 +358,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             parent = parent.Parent;
         if (parent is not ExpressionStatementSyntax currentStmt) return;
 
+        // ITM-634：向后扫描加上限——原无距离上限，中间隔任意多语句仍误报（变量可能已重赋值）
         SyntaxNode? sibling = currentStmt;
-        while (sibling is not null)
+        int scanned = 0;
+        while (sibling is not null && scanned < 5)
         {
+            scanned++;
             sibling = sibling.Parent?.ChildNodes()
                 .FirstOrDefault(n => n.SpanStart > sibling.SpanStart);
             if (sibling is ExpressionStatementSyntax exprStmt
@@ -591,6 +597,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // NullableContextOptions 是 [Flags]：Enable=1, Warnings=2, Annotations=4
         // 仅当含 Enable 标记时才视为启用了 NRT
         if ((csc.Options.NullableContextOptions & NullableContextOptions.Enable) != 0) return;
+
+        // ITM-634：纯值类型实体不受 NRT 语义影响（IsDBNull 守卫只对可空引用/值类型生成）——
+        // 无引用类型属性时报告只是噪音。string 属引用类型（可空 string 同样受影响），保留判定。
+        bool hasReferenceTypeProperty = SourceGenerationValidation.EnumerateMappedProperties(type)
+            .Any(static p => p.Type.IsReferenceType);
+        if (!hasReferenceTypeProperty) return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(NullableContextDisabled,
             type.Locations[0], type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
@@ -857,9 +869,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (propertyDecl?.Initializer is null) return;
 
         // 初始值文本：对值类型 default/0/null 不报；对 string ""/null 不报
+        // ITM-634：白名单补常用等价写法（default! 抑制 NRT / Guid.Empty / MinValue哨兵 / 常量内插）
         string initText = propertyDecl.Initializer.Value.ToString();
-        if (initText is "default" or "default(long)" or "default(int)" or "default(Guid)"
-            or "0" or "0L" or "0l" or "null" or "\"\"" or "string.Empty") return;
+        if (initText is "default" or "default!" or "default(long)" or "default(int)" or "default(Guid)"
+            or "0" or "0L" or "0l" or "null" or "\"\"" or "string.Empty"
+            or "Guid.Empty" or "int.MinValue" or "long.MinValue" or "0u" or "0UL") return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(KeyWithNonDefaultValue,
             member.Locations.FirstOrDefault() ?? type.Locations[0],

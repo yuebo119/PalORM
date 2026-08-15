@@ -32,7 +32,7 @@ internal static class SqlFileEmitter
 
         string relativePath = attr.ConstructorArguments[0].Value?.ToString() ?? "";
         if (string.IsNullOrEmpty(relativePath))
-            return null;
+            return GenerateError(method, "SqlFile 路径不能为空。");
 
         // 读取可选 Provider 参数
         string? targetProvider = null;
@@ -46,7 +46,7 @@ internal static class SqlFileEmitter
         // ITM-584: '..' 按路径段判定——子串判定误拒 `my..queries.sql` 等合法文件名；
         // 真正的遍历（`../x` / `a/../b`）仍被拒绝，且 ITM-545 的解析后前缀校验仍在下游兜底。
         if (Path.IsPathRooted(relativePath) || HasTraversalSegment(relativePath))
-            return GenerateError(method, $"SqlFile 路径必须为相对路径，不允许 '..' 或绝对路径: {EscapeForCSharp(relativePath)}");
+            return GenerateError(method, $"SqlFile 路径必须为相对路径，不允许 '..' 或绝对路径: {relativePath}");
 
         ct.ThrowIfCancellationRequested();
 
@@ -66,14 +66,17 @@ internal static class SqlFileEmitter
 
         // 确保解析后路径仍在项目目录内。前缀比较带尾分隔符（ITM-545 纵深防御）：
         // 否则 rootDir="/proj/app" 时 "/proj/app-evil/x" 会误判为在内（虽当前被 .. 拒绝挡住）。
+        // ITM-632 登记：OrdinalIgnoreCase 在 Linux 大小写敏感 FS 上可放行大小写异形越界路径
+        // （下游读取失败兜底，实害低）；GetFullPath 不解析 symlink——指向项目外的 .sql 符号链接
+        // 可越界读。两者属受信任项目文件模型的接受面（.csproj 同级威胁），不做纵深加固。
         string rootWithSep = rootDir.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
             ? rootDir : rootDir + Path.DirectorySeparatorChar;
         if (!fullPath.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
-            return GenerateError(method, $"SqlFile 路径越界: {EscapeForCSharp(relativePath)}");
+            return GenerateError(method, $"SqlFile 路径越界: {relativePath}");
 
         string? sqlContent = TryReadSqlFile(fullPath);
         if (sqlContent is null)
-            return GenerateError(method, $"SQL file not found or unreadable: {EscapeForCSharp(fullPath)}");
+            return GenerateError(method, $"SQL file not found or unreadable: {fullPath}");
 #pragma warning restore RS1035
 
         // ── V_SQL: 条件分支解析 ──
@@ -82,12 +85,12 @@ internal static class SqlFileEmitter
         SqlSectionResolution resolution = ResolveProviderSections(sqlContent, targetProvider);
         if (resolution.UnrecognizedProvider is not null)
             return GenerateError(method,
-                $"SqlFile Provider '{EscapeForCSharp(resolution.UnrecognizedProvider)}' 不是有效的 provider 名；" +
+                $"SqlFile Provider '{resolution.UnrecognizedProvider}' 不是有效的 provider 名；" +
                 "支持: postgresql/pg, mysql/my, sqlite/sq");
         if (resolution.HasDirectives && string.IsNullOrWhiteSpace(resolution.Resolved))
             return GenerateError(method,
-                $"SqlFile '{EscapeForCSharp(relativePath)}' 声明了 provider 段但没有任何段匹配 " +
-                $"'{EscapeForCSharp(targetProvider ?? "(未指定)")}'（也无 @all 段）；" +
+                $"SqlFile '{relativePath}' 声明了 provider 段但没有任何段匹配 " +
+                $"'{targetProvider ?? "(未指定)"}'（也无 @all 段）；" +
                 "嵌入整份原文会在运行期执行异方言 SQL，已拒绝");
         sqlContent = resolution.Resolved;
 
@@ -217,6 +220,10 @@ internal static class SqlFileEmitter
             string line = rawLine.TrimEnd('\r');
 
             // 检测 -- @provider 指令
+            // ITM-632 登记：`-- @` 前缀是指令语法的保留前缀——任何以之行首的注释都会切换
+            // 段落（含 -- @author 等普通注释，其后内容不再输出）。段名集开放（Provider 参数
+            // 接受别名如 pg，由 SqlFileTests 锁定），无法白名单枚举。用户注释请勿以 `-- @`
+            // 开头——这是本特性的既定语法契约。
             var trimmed = line.TrimStart();
             if (trimmed.StartsWith("-- @", StringComparison.Ordinal))
             {
@@ -247,12 +254,6 @@ internal static class SqlFileEmitter
             slot = value;
             return value;
         }
-    }
-
-    /// <summary>将路径/错误信息转义为合法的 C# 字符串字面量。</summary>
-    private static string EscapeForCSharp(string text)
-    {
-        return text.Replace("\\", "\\\\").Replace("\"", "\\\"");
     }
 
     /// <summary>XML doc 注释内容转义（ITM-584）：&amp;/&lt;/&gt; 实体化防 CS1570。</summary>
