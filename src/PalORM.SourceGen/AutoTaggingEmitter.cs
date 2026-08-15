@@ -137,8 +137,11 @@ internal static class AutoTaggingEmitter
         string tag = $"{target.RelativePath}:{target.Line} {target.MemberName}";
         // ITM-631：拦截 `*/`（Linux 文件名可含 *）——tag 进入 SQL 块注释，
         // 未转义的 */ 会被运行时 ValidateSqlComment 拒绝且报错远根因。插空格防闭合。
+        // ITM-645：`/*` 同理——ValidateSqlComment 双向拒绝（注释开启/闭合定界符），
+        // 发送侧与接收侧契约对称：这里也插空格防开启定界。
         string escapedTag = tag
             .Replace("*/", "* /")
+            .Replace("/*", "/ *")
             .Replace("\\", "\\\\")
             .Replace("\"", "\\\"");
 
