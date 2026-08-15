@@ -19,6 +19,8 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly Func<DbConnection>? _readConnFactory;
     internal readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
     internal readonly SqlDialect _dialect;
+    /// <summary>r5-S2：会话隔离级别（WithIsolationLevel 透传，null=驱动默认）。</summary>
+    internal readonly System.Data.IsolationLevel? _isolationLevel;
     internal readonly bool _validateColumnOrder;
     internal readonly Func<string, string> _quoteIdentifier;
     // v3.1: 字段类型 IRowFactory<T> → Func<DbDataReader, T>——消除接口虚分发，每行调用直接 invoke 委托。
@@ -54,6 +56,7 @@ public struct QueryBuilder<T> where T : class, new()
         _readConnInitializer = ctx.ReadConnInitializer;
         _queryCache = ctx.QueryCache ?? CacheStore.Default;
         _dialect = ctx.Services.Dialect;
+        _isolationLevel = ctx.Services.IsolationLevel;
         _quoteIdentifier = ctx.Services.QuoteIdentifier;
         _factory = ctx.Services.Factory;
         _interceptors = ctx.Services.Interceptors;
@@ -920,7 +923,9 @@ internal sealed record QueryBuilderServices<T>(
     Func<string, object?, DbParameter> ParamFactory,
     Func<string, string> QuoteIdentifier,
     SessionOperationState OperationState,
-    TimeSpan CommandTimeout) where T : class, new();
+    TimeSpan CommandTimeout,
+    System.Data.IsolationLevel? IsolationLevel = null)  // r5-S2：会话隔离级别透传（ToPageAsync 自开事务 honoring WithIsolationLevel）
+    where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。
 /// 用 record 而非 struct：成员复杂、生命周期跨多个 QueryBuilder 实例（每次查询从 DataSession 派生），
