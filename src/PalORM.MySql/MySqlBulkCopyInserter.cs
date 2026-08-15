@@ -29,8 +29,9 @@ internal static class MySqlBulkCopyInserter
 
         // MySqlBulkCopy 走 LOAD DATA LOCAL INFILE。DataTable 必须包含目标表全部列
         // （包括 AUTO_INCREMENT 主键列），主键列填 DBNull 让 MySQL 自增。
-        // 不指定 ColumnMappings 时 MySqlBulkCopy 按 DataTable 列名匹配目标表列名（非列序），
-        // 因此列名必须与目标表列名一致——已通过最小复现验证。
+        // ITM-615：MySqlConnector 不指定 ColumnMappings 时按 DataTable 列序匹配目标表
+        // （官方 issue #1375 确认，此前"按列名匹配"注释结论错误已订正）——下方显式按列名
+        // 映射，列序不再是契约。
         // 源生成器 InsertColumns 已排除自增主键，需补齐主键列到 DataTable。
         int columnCount = ctx.InsertColumns.Count;
         string[] allColumns = new string[columnCount + ctx.PrimaryKeyColumns.Count];
@@ -84,8 +85,13 @@ internal static class MySqlBulkCopyInserter
                     DestinationTableName = ctx.QuotedTable,
                     BulkCopyTimeout = ctx.CommandTimeoutSeconds > 0 ? ctx.CommandTimeoutSeconds : 30,
                 };
-                // 不指定 ColumnMappings——MySqlBulkCopy 按 DataTable 列序自动匹配目标表列
-                // （DataTable 列已对齐目标表全部列，含主键 NULL 占位）。
+                // ITM-615：显式按列名映射（DataTable 列名 == 目标表列名，裸名由驱动处理
+                // 标识符）——消除对 DataTable 列序与表列序一致的隐式依赖（默认按序匹配，
+                // 官方 issue #1375）。PK 非首列 / [Computed]/[Timestamp] 缺席形态均列序无关。
+                // 映射 = DataTable 序号（自构造，i 即列序）→ 目标表列名：目标侧按名匹配，
+                // 不再依赖目标表列序与 DataTable 列序一致。
+                for (int i = 0; i < allColumns.Length; i++)
+                    bulk.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, allColumns[i]));
                 MySqlBulkCopyResult result = await bulk.WriteToServerAsync(table, ct).ConfigureAwait(false);
                 return result.RowsInserted;
             }
