@@ -345,7 +345,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             is not IMethodSymbol methodSymbol
             || methodSymbol.ContainingType?.Name is not ("QueryBuilder" or "QueryBuilder`1")
             || methodSymbol.ContainingNamespace?.ToDisplayString() is not { } ns
-            || !ns.StartsWith("PalORM", StringComparison.Ordinal))
+            || !(ns == "PalORM" || ns.StartsWith("PalORM.", StringComparison.Ordinal)))  // ITM-649(r4)：点边界，防 PalORMFoo 穿透（对齐同文件 032 判据）
             return;
 
         // 追踪 Select 的接收者变量名
@@ -596,7 +596,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (ctx.Compilation is not CSharpCompilation csc) return;
         // NullableContextOptions 是 [Flags]：Enable=1, Warnings=2, Annotations=4
         // 仅当含 Enable 标记时才视为启用了 NRT
-        if ((csc.Options.NullableContextOptions & NullableContextOptions.Enable) != 0) return;
+        // ITM-648(r4)：Annotations-only 配置下 NullableAnnotation.Annotated 仍生效、
+        // IsDBNull 守卫仍生成——仅 Enable 判据在该配置误报。含 Annotations 位一并豁免。
+        if ((csc.Options.NullableContextOptions
+                & (NullableContextOptions.Enable | NullableContextOptions.Annotations)) != 0) return;
 
         // ITM-634：纯值类型实体不受 NRT 语义影响（IsDBNull 守卫只对可空引用/值类型生成）——
         // 无引用类型属性时报告只是噪音。string 属引用类型（可空 string 同样受影响），保留判定。
@@ -873,7 +876,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         string initText = propertyDecl.Initializer.Value.ToString();
         if (initText is "default" or "default!" or "default(long)" or "default(int)" or "default(Guid)"
             or "0" or "0L" or "0l" or "null" or "\"\"" or "string.Empty"
-            or "Guid.Empty" or "int.MinValue" or "long.MinValue" or "0u" or "0UL") return;
+            or "Guid.Empty" or "int.MinValue" or "long.MinValue" or "0u" or "0UL"
+            // ITM-650(r4)：等价默认写法补收（十六进制/无符号序/带空格抑制后缀）
+            or "0x0" or "0ul" or "0lu" or "0Lu" or "0UL" or "default!" or "default !"
+            or "default(long)!" or "default(int)!" or "default(Guid)!") return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(KeyWithNonDefaultValue,
             member.Locations.FirstOrDefault() ?? type.Locations[0],
