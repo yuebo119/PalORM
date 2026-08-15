@@ -1025,4 +1025,27 @@ public sealed class ProviderTests
         await Assert.That(sqliteOrdinal).IsEqualTo(1);
         await Assert.That(sqliteCommand.CommandText).Contains("\"users\"");
     }
+
+    [Test]
+    public async Task BulkInsert_EmptyList_UnregisteredType_ThrowsConsistently()
+    {
+        // ITM-637/662 锁定：空列表 + 未注册类型与 + 非空列表一致抛（元数据检查先于空短路）
+        await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "DataSource=:memory:" });
+        await Assert.That(async () => await session.BulkInsertAsync(new List<UnregisteredEntity>()))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task CommandTimeout_Zero_SecondsMapsToZeroInfinite()
+    {
+        // ITM-619/662 锁定：Zero 透传为 0（ADO.NET 无限等待）——Resilience 侧归一
+        // InfiniteTimeSpan 的上游契约面（Validate 允许 Zero + 秒值=0）
+        var options = new DbOptions { ConnectionString = "x", CommandTimeout = TimeSpan.Zero };
+        options.Validate();
+        await Assert.That(DbOptions.ToCommandTimeoutSeconds(TimeSpan.Zero)).IsEqualTo(0);
+        await Assert.That(options.CommandTimeoutSeconds).IsEqualTo(0);
+    }
+
+    private sealed class UnregisteredEntity { public string Name { get; set; } = ""; }
 }
