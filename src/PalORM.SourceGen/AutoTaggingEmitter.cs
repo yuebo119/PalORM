@@ -58,8 +58,10 @@ internal static class AutoTaggingEmitter
         var invocation = (InvocationExpressionSyntax)ctx.Node;
         if (ctx.SemanticModel.GetOperation(invocation, ct) is not IInvocationOperation op)
             return null;
-        // 过滤：必须是 QueryBuilderExtensions 的方法（排除其他同名方法）
-        if (op.TargetMethod.ContainingType?.Name != "QueryBuilderExtensions")
+        // 过滤：必须是 PalORM.QueryBuilderExtensions 的方法（排除其他同名方法）。
+        // ITM-631：裸类名比对可被用户自定义同名静态类穿透——命名空间全限定精确匹配。
+        if (op.TargetMethod.ContainingType is not { Name: "QueryBuilderExtensions" } containingType
+            || containingType.ContainingNamespace?.ToDisplayString() != "PalORM")
             return null;
 
         // GetInterceptableLocation 扩展方法（CSharpExtensions 提供）
@@ -133,7 +135,12 @@ internal static class AutoTaggingEmitter
 
         // Tag 注释内容：相对路径:行号 成员名
         string tag = $"{target.RelativePath}:{target.Line} {target.MemberName}";
-        string escapedTag = tag.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        // ITM-631：拦截 `*/`（Linux 文件名可含 *）——tag 进入 SQL 块注释，
+        // 未转义的 */ 会被运行时 ValidateSqlComment 拒绝且报错远根因。插空格防闭合。
+        string escapedTag = tag
+            .Replace("*/", "* /")
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"");
 
         // 方法签名：统一参数 (this QueryBuilder<T> builder, CancellationToken ct = default) + where T : class, new()
         sb.AppendLine($"        internal static async {returnType}");
@@ -190,7 +197,7 @@ internal static class AutoTaggingEmitter
         return System.IO.Path.GetFileName(absolutePath);
     }
 
-    /// <summary>从调用点向上查找包含的成员名（方法/属性）。</summary>
+    /// <summary>从调用点向上查找包含的成员名（方法/属性/局部函数）。</summary>
     private static string FindEnclosingMemberName(SyntaxNode node)
     {
         SyntaxNode? current = node.Parent;
@@ -200,6 +207,9 @@ internal static class AutoTaggingEmitter
                 return method.Identifier.Text;
             if (current is PropertyDeclarationSyntax prop)
                 return prop.Identifier.Text;
+            // ITM-631：局部函数是最常见的仓储封装形态——此前标签恒为 unknown 丢失定位
+            if (current is Microsoft.CodeAnalysis.CSharp.Syntax.LocalFunctionStatementSyntax local)
+                return local.Identifier.Text;
             current = current.Parent;
         }
         return "unknown";

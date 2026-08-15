@@ -712,8 +712,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // R7 修复：init-only setter 的 [ConcurrencyCheck] 属性无法被 IncrementVersion emit 修改（CS8852）
             if (concurrencyToken.SetMethod?.IsInitOnly == true)
             {
+                // ITM-634：setter 问题补消息上下文——描述符文案讲的是类型限制，
+                // init-only 场景原文案误导（"must be non-nullable int or long"答非所问）
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidConcurrencyTokenType,
-                    concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0], concurrencyToken.Name));
+                    concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0],
+                    $"{concurrencyToken.Name}: init-only setter cannot be modified by the generated increment — use a set accessor"));
             }
             if (concurrencyToken.NullableAnnotation == NullableAnnotation.Annotated
                 || concurrencyToken.Type.SpecialType is not SpecialType.System_Int32
