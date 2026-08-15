@@ -242,7 +242,6 @@ public sealed class QueryBuilderValueSemanticsTests
         QueryBuilder<ValueSemanticsEntity> builder = session.From<ValueSemanticsEntity>();
         QueryBuilder<ValueSemanticsEntity> clone = builder.CloneForExecution();
 
-        await Assert.That(clone._isolationLevel).IsNotNull();
         await Assert.That(clone._isolationLevel).IsEqualTo(builder._isolationLevel);
     }
 }
