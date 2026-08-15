@@ -215,6 +215,9 @@ public sealed record DbOptions
         if (int.TryParse(Environment.GetEnvironmentVariable("PALORM_MAX_POOL_SIZE"), out int poolSize))
             options = options with { MaxPoolSize = poolSize, PoolExplicitlyConfigured = true };
 
+        // ITM-636：环境变量是用户输入面——组装完立即 Validate（非法值在此报，
+        // 而非延迟到 CreateAsync）。预设方法为编译期字面量，正确性由代码审查保证。
+        options.Validate();
         return options;
     }
 

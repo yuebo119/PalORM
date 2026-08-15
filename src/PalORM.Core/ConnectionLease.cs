@@ -48,6 +48,12 @@ internal sealed class ConnectionLease : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
         if (_ownsConnection)
-            await Connection.DisposeAsync().ConfigureAwait(false);
+        {
+            // ITM-635：await using 语法下，主查询异常先抛时此处的释放异常会覆盖主异常
+            // （丢失原始失败）。释放失败几乎总伴随连接已死的主异常——本类型无日志通道，
+            // 取舍为静默吞释放异常以保主异常（同 TransactionCleanup 成功路径的文档化决策）。
+            try { await Connection.DisposeAsync().ConfigureAwait(false); }
+            catch { /* 主异常保留优先——见上方注释 */ }
+        }
     }
 }
