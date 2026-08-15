@@ -203,12 +203,12 @@ internal sealed record TableModel(
     private static IEnumerable<ISymbol> GetMappableProperties(INamedTypeSymbol type)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var ordered = new List<ISymbol>();
+        List<ISymbol> ordered = [];
         for (INamedTypeSymbol? current = type;
              current is not null && current.SpecialType != SpecialType.System_Object;
              current = current.BaseType)
         {
-            var layer = new List<ISymbol>();
+            List<ISymbol> layer = [];
             foreach (ISymbol member in current.GetMembers())
             {
                 if (member is not IPropertySymbol prop) continue;

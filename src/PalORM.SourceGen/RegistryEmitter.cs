@@ -114,9 +114,15 @@ internal static class RegistryEmitter
             string upsertColumns = BuildStringArrayLiteral(
                 columns.Where(static column => column.IsUpsertable)
                     .Select(static column => column.ColumnName));
+            // ITM-642：UpdateColumns 与 BuildUpdateSql/BindUpdate 同源同序（ITM-552 单一谓词）——
+            // 运行时 BulkUpdateBatchAsync 消费本真源，不再解析生成 SQL 文本反解列名。
+            string updateColumns = BuildStringArrayLiteral(
+                columns.Where(CommandFactoryEmitter.IsUpdatableColumn)
+                    .Select(static column => column.ColumnName));
             sb.AppendLine($"                new global::PalORM.CrudColumns(");
             sb.AppendLine($"                    {insertColumns},");
-            sb.AppendLine($"                    {upsertColumns}),");
+            sb.AppendLine($"                    {upsertColumns},");
+            sb.AppendLine($"                    {updateColumns}),");
             bool hasConcurrency = columns.Any(c => c.IsConcurrencyToken);
             sb.AppendLine(hasConcurrency
                 ? $"                obj => CommandFactory_{m.GeneratedTypeSuffix}.IncrementVersion(({m.EntityTypeName})obj),"

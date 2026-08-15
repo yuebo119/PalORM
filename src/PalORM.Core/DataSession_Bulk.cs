@@ -243,23 +243,30 @@ public partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>准备批量 UPDATE 上下文：提取 SET 列名、引号包裹、租户过滤。
-    /// 用 probe 命令验证 BindUpdate 参数序（与 MultiValueBulkInsert 模式一致）。</summary>
+    /// <summary>准备批量 UPDATE 上下文：SET 列集取自 CrudMetadata 真源、引号包裹、租户过滤。
+    /// probe 命令验证 BindUpdate 参数序与元数据列集一致（ITM-642——原实现解析生成 SQL 文本
+    /// 反解列名，含逗号标识符被 Split(',') 错切、表名内含 " SET " 亦会误判）。</summary>
     private BatchUpdateContext PrepareBatchUpdateContext<T>(
         PalORM_Runtime.RuntimeRegistryState state, CrudMetadata metadata,
         string tableName, T firstEntity)
         where T : class, new()
     {
-        string updateSql = GetCommandSqls<T>(metadata.Sqls).Update;
-        // probe 提取参数总数
-        using DbCommand probe = CreateCommand();
-        metadata.BindUpdate(probe, firstEntity);
-        int totalParams = probe.Parameters.Count;
-        int setColumnCount = totalParams - 1;
+        // ITM-642：SET 列集直接消费生成器发射的 UpdateColumns（与 BuildUpdateSql/BindUpdate
+        // 同源同序，ITM-552 单一谓词）——不再解析生成 SQL 文本反解列名。
+        int setColumnCount = metadata.UpdateColumns.Count;
         if (setColumnCount <= 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
-        string[] setColumns = ExtractUpdateSetColumns(updateSql, setColumnCount);
+        // probe 提取参数总数，作为生成器三处（SQL/Bind/元数据）漂移的运行时哨兵。
+        using DbCommand probe = CreateCommand();
+        metadata.BindUpdate(probe, firstEntity);
+        int totalParams = probe.Parameters.Count;
+        if (totalParams != setColumnCount + 1)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' BindUpdate produced {totalParams} parameters but metadata " +
+                $"declares {setColumnCount} update columns (+1 primary key). Recompile the model assembly.");
+        string[] setColumns = metadata.UpdateColumns
+            .Select(TProvider.QuoteIdentifier).ToArray();
         string quotedTable = TProvider.QuoteIdentifier(tableName);
         string quotedPk = state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
             ? TProvider.QuoteIdentifier(pkCol) : "\"id\"";
@@ -306,40 +313,6 @@ public partial class DataSession<TProvider>
         string[] SetColumns, string QuotedTable, string QuotedPk, bool HasTenantFilter)
     {
         public int SetColumnCount => SetColumns.Length;
-    }
-
-    /// <summary>从 UPDATE SQL 反解 SET 列名。
-    /// 输入：<c>UPDATE "t" SET "a" = @p0, "b" = @p1 WHERE "id" = @p2</c>
-    /// 输出：["\"a\"", "\"b\""]（含引号包裹，供后续 SQL 构造直接拼接）。</summary>
-    private static string[] ExtractUpdateSetColumns(string updateSql, int expectedCount)
-    {
-        // 用 ReadOnlySpan<char>.IndexOf 避免歧义——string.IndexOf(string, StringComparison) 在
-        // .NET 11 可能优先匹配 char 重载。AsSpan 明确语义。
-        ReadOnlySpan<char> sql = updateSql.AsSpan();
-        int setIdx = sql.IndexOf(" SET ");
-        if (setIdx < 0) throw ParseError(updateSql, "SET");
-        int whereIdx = sql[(setIdx + 5)..].IndexOf(" WHERE ");
-        if (whereIdx < 0) throw ParseError(updateSql, "WHERE");
-        whereIdx += setIdx + 5;
-
-        string setClause = updateSql.Substring(setIdx + 5, whereIdx - setIdx - 5);
-        // 用 Split(',') + Trim 对生成器输出格式更宽容（容许逗号后 0/1/多空格或换行）
-        string[] parts = setClause.Split(',');
-        if (parts.Length != expectedCount)
-            throw new InvalidOperationException(
-                $"SET column count mismatch: parsed {parts.Length} but expected {expectedCount}.");
-
-        var result = new string[parts.Length];
-        for (int i = 0; i < parts.Length; i++)
-        {
-            int eq = parts[i].IndexOf('=');
-            if (eq < 0) throw ParseError(parts[i], "= in SET");
-            result[i] = parts[i].Substring(0, eq).Trim();
-        }
-        return result;
-
-        static InvalidOperationException ParseError(string sql, string what) => new(
-            $"Cannot parse {what} clause from UPDATE SQL: {sql}");
     }
 
     /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。

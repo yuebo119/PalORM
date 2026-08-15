@@ -18,10 +18,13 @@ public static class PostgreSqlExtensions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(column);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        // NUL 显式拒绝（ITM-212）：PG 线协议不允许字符串含 0x00——与 ValidateSqlComment
-        // 的防御对称，库内明确失败而非依赖驱动层报错形态。
+        // NUL 显式拒绝（ITM-212）：PG 线协议不允许字符串含 0x00。column 进 SQL 文本
+        // 格式串段（与 ValidateSqlComment 同侧防御）；path 是绑定参数——参数化已隔离
+        // 注入面，但驱动层对 NUL 的错误形态不可控（ITM-644），库内统一明确失败。
         if (column.Contains('\0', StringComparison.Ordinal))
             throw new ArgumentException("JSONB 列名不能包含 NUL 字符。", nameof(column));
+        if (path.Contains('\0', StringComparison.Ordinal))
+            throw new ArgumentException("JSONB 路径不能包含 NUL 字符。", nameof(path));
         // 花括号转义：列名进入复合格式串文本段，未转义的 {/} 会被格式解析器误读。
         string quoted = PostgreSqlProvider.QuoteIdentifier(column)
             .Replace("{", "{{", StringComparison.Ordinal)
