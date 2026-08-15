@@ -126,7 +126,8 @@ public sealed class MySqlProvider : IDbProvider
         if (entities.Count == 0) return 0;
 
         // local_infile 能力检测：开启走 BulkCopy（对齐 PG 永远 COPY），关闭走多值 INSERT。
-        if (conn is MySqlConnection mySqlConnection && await IsLocalInfileEnabledAsync(mySqlConnection, ct).ConfigureAwait(false))
+        if (conn is MySqlConnection mySqlConnection
+            && await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
         {
             return await ExecuteBulkCopyAsync(
                 mySqlConnection, transaction, entities, commandTimeoutSeconds, ct).ConfigureAwait(false);
@@ -143,17 +144,29 @@ public sealed class MySqlProvider : IDbProvider
     }
 
     /// <summary>检测服务端 local_infile 是否开启（每次执行检测，无静态缓存，符合零全局状态原则）。
-    /// BulkCopy 走 LOAD DATA LOCAL INFILE，需要 local_infile=ON（MySQL 默认 OFF）。</summary>
-    private static async ValueTask<bool> IsLocalInfileEnabledAsync(MySqlConnection conn, CancellationToken ct)
+    /// BulkCopy 走 LOAD DATA LOCAL INFILE，需要 local_infile=ON（MySQL 默认 OFF）。
+    /// <para>ITM-633：检测命令挂接外部事务（连接 pending 事务下未挂接命令 MySqlConnector
+    /// 会抛 InvalidOperationException）；检测自身故障（网络抖动/超时）降级为 OFF 走多值
+    /// INSERT——能力探测不应终止整批插入。</para></summary>
+    private static async ValueTask<bool> IsLocalInfileEnabledAsync(
+        MySqlConnection conn, MySqlTransaction? transaction, CancellationToken ct)
     {
-        using DbCommand cmd = conn.CreateCommand();
-        cmd.CommandTimeout = 3;  // SHOW VARIABLES 是即时查询，3 秒足够
-        cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
-        using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
-            return false;
-        string value = reader.GetString(1);
-        return string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
+        try
+        {
+            using DbCommand cmd = conn.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandTimeout = 3;  // SHOW VARIABLES 是即时查询，3 秒足够
+            cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
+            using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                return false;
+            string value = reader.GetString(1);
+            return string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return false;  // 探测故障降级多值路径（见 summary）；取消原样上抛
+        }
     }
 
     /// <summary>v5.0 阶段 4.2：MySqlBulkCopy 路径。从 BulkInsertAsync 抽出以降低认知复杂度（S3776）。
@@ -177,6 +190,13 @@ public sealed class MySqlProvider : IDbProvider
 
         // 事务：BulkCopy 需在事务内执行；未传时内部开新事务保证原子性。
         MySqlTransaction? mySqlTransaction = transaction as MySqlTransaction;
+        // ITM-633：外部事务非 MySqlTransaction（包装/装饰事务）时原 as 得 null 会在
+        // pending 事务连接上再开新事务（驱动报错或未定义行为）——显式拒绝近根因。
+        if (transaction is not null && mySqlTransaction is null)
+            throw new ArgumentException(
+                $"External transaction must be a MySqlTransaction (got '{transaction.GetType().Name}'). "
+                + "Wrapped/decorated transactions are not supported by the MySQL bulk path.",
+                nameof(transaction));
         bool ownsTransaction = false;
         if (mySqlTransaction is null)
         {

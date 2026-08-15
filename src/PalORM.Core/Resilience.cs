@@ -70,9 +70,10 @@ public sealed class ResilienceExecutor
         {
             for (int attempt = 0; ; attempt++)
             {
+                CancellationTokenSource? timeout = null;
                 try
                 {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     timeout.CancelAfter(_timeout);
                     T result = await operation(timeout.Token).ConfigureAwait(false);
                     _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
@@ -82,16 +83,29 @@ public sealed class ResilienceExecutor
                 {
                     throw;
                 }
-                catch (Exception exception) when (attempt < _maxRetries && IsRetryable(exception, ct))
+                catch (OperationCanceledException) when (timeout is not null
+                    && timeout.IsCancellationRequested && attempt < _maxRetries)
+                {
+                    // ITM-630：仅超时 token 触发的 OCE 可重试——operation 内部自取消
+                    // （非调用方 ct、非超时）原样上抛：重试会放大已取消操作的副作用。
+                    await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException
+                    && attempt < _maxRetries && IsRetryable(exception, ct))
                 {
                     await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException timeoutException) when (!ct.IsCancellationRequested)
+                catch (OperationCanceledException timeoutException) when (timeout is not null
+                    && timeout.IsCancellationRequested)
                 {
                     // 内部命令超时且重试耗尽：包装为 TimeoutException，调用方可与"我被取消"区分。
                     throw new TimeoutException(
                         $"Command timed out after {_timeout} (attempt {attempt + 1}/{_maxRetries + 1}).",
                         timeoutException);
+                }
+                finally
+                {
+                    timeout?.Dispose();
                 }
             }
         }
