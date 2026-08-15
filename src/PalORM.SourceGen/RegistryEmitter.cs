@@ -105,18 +105,18 @@ internal static class RegistryEmitter
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read),");
+            // ITM-640：单次物化 Columns（原 6 处 AsSpan().ToArray() 重复分配，编译期路径）
+            var columns = m.Columns.AsSpan().ToArray();
             string insertColumns = BuildStringArrayLiteral(
-                m.Columns.AsSpan().ToArray()
-                    .Where(static column => column.IsInsertable)
+                columns.Where(static column => column.IsInsertable)
                     .Select(static column => column.ColumnName));
             string upsertColumns = BuildStringArrayLiteral(
-                m.Columns.AsSpan().ToArray()
-                    .Where(static column => column.IsUpsertable)
+                columns.Where(static column => column.IsUpsertable)
                     .Select(static column => column.ColumnName));
             sb.AppendLine($"                new global::PalORM.CrudColumns(");
             sb.AppendLine($"                    {insertColumns},");
             sb.AppendLine($"                    {upsertColumns}),");
-            bool hasConcurrency = m.Columns.AsSpan().ToArray().Any(c => c.IsConcurrencyToken);
+            bool hasConcurrency = columns.Any(c => c.IsConcurrencyToken);
             sb.AppendLine(hasConcurrency
                 ? $"                obj => CommandFactory_{m.GeneratedTypeSuffix}.IncrementVersion(({m.EntityTypeName})obj),"
                 : "                null,");
