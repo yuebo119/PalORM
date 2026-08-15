@@ -28,12 +28,16 @@ public sealed class MySqlProvider : IDbProvider
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var builder = new MySqlConnectionStringBuilder(connectionString)
-        {
-            MaximumPoolSize = checked((uint)options.MaxPoolSize),
-            ConnectionIdleTimeout = checked((uint)options.PoolIdleTimeoutSeconds),
-            ConnectionLifeTime = checked((uint)(options.PoolLifetimeMinutes * 60))
-        };
+        var builder = new MySqlConnectionStringBuilder(connectionString);
+        // ITM-612：池参数遵循下方系列的"仅默认时覆盖"策略——原对象初始化器在连接串解析后
+        // 无条件覆盖，连接串内嵌池参数被静默改写为 DbOptions 默认值。
+        // MySqlConnector 默认：MaximumPoolSize=100 / ConnectionIdleTimeout=180 / ConnectionLifeTime=0。
+        if (builder.MaximumPoolSize == 100)
+            builder.MaximumPoolSize = checked((uint)options.MaxPoolSize);
+        if (builder.ConnectionIdleTimeout == 180)
+            builder.ConnectionIdleTimeout = checked((uint)options.PoolIdleTimeoutSeconds);
+        if (builder.ConnectionLifeTime == 0)
+            builder.ConnectionLifeTime = checked((uint)(options.PoolLifetimeMinutes * 60));
 
         // v5.0 阶段 3.2：仅当属性当前值等于 ADO.NET 默认值时覆盖为调优推荐值。
         // MySqlConnector 默认值：AutoEnlist=true，ConnectionReset=true，UseCompression=false，
@@ -45,6 +49,10 @@ public sealed class MySqlProvider : IDbProvider
         // UseCompression 默认 false 即目标值，无需改——仅防注入：用户若显式 true 不覆盖
         if (builder.CancellationTimeout == 2)
             builder.CancellationTimeout = 5;
+        // AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）。
+        // ITM-612/EVAL-1：builder 层无法区分"未设置（驱动默认 false）"与"显式 false（安全加固，
+        // 规避恶意服务端读取客户端文件的攻击面）"——显式 false 会被此覆盖。安全策略
+        // （默认关闭、BulkCopy 用户显式 opt-in）待 ADR 裁决，暂维持性能优先现状。
         if (!builder.AllowLoadLocalInfile)
             builder.AllowLoadLocalInfile = true;
         if (builder.ServerRedirectionMode == MySqlServerRedirectionMode.Disabled)

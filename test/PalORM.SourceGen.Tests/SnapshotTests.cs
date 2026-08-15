@@ -191,6 +191,29 @@ internal sealed class SnapshotTests
         return "长度不同";
     }
 
+    [Test]
+    public async Task MySqlUpsert_AutoIncrementPk_IncludesLastInsertIdRoundtrip()
+    {
+        // ITM-608 防回退：自增 PK 实体的 MySQL upsert SQL 必须同时含
+        // ① "pk = LAST_INSERT_ID(pk)" 赋值（更新已有行时 SELECT LAST_INSERT_ID() 返回该行 PK）
+        // ② "; SELECT LAST_INSERT_ID()" 后缀（消费端 ExecuteScalarAsync 回读新行 PK）。
+        // v4.1 预构建曾因 updateColumns(排除 PK 再 Quote) 与 Quote(pk) 比较恒 false 两者全丢。
+        string autoIncrement = await File.ReadAllTextAsync(Path.Combine(
+            GetSnapshotDirectory(), "CommandFactory_global__AllTypesEntity_7f6c8145.g.cs.snap"));
+        string autoUpsertLine = autoIncrement.Split('\n')
+            .First(l => l.Contains("UpsertMySqlSql", StringComparison.Ordinal));
+        await Assert.That(autoUpsertLine).Contains("Id = LAST_INSERT_ID(Id)");
+        await Assert.That(autoUpsertLine).Contains("; SELECT LAST_INSERT_ID()");
+
+        // 非自增 PK（Id 显式插入）的 upsert 不加 LAST_INSERT_ID——消费端走 ExecuteNonQueryAsync，
+        // 多余结果集反而致错（InsertWithLastInsertIdSql 行的后缀不属 upsert，行级断言避免误圈）。
+        string explicitPk = await File.ReadAllTextAsync(Path.Combine(
+            GetSnapshotDirectory(), "CommandFactory_global__ReservedWordEntity_c143a9c9.g.cs.snap"));
+        string explicitUpsertLine = explicitPk.Split('\n')
+            .First(l => l.Contains("UpsertMySqlSql", StringComparison.Ordinal));
+        await Assert.That(explicitUpsertLine.Contains("LAST_INSERT_ID", StringComparison.Ordinal)).IsFalse();
+    }
+
     private static string Truncate(string line)
         => line.Length <= 120 ? line : line[..120] + "…";
 
