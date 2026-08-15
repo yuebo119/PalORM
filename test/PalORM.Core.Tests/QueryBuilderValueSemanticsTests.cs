@@ -218,6 +218,19 @@ public sealed class QueryBuilderValueSemanticsTests
         await Assert.That(selectSql).Contains("price > 10");
         await Assert.That(countSql).Contains("price > 10");
     }
+
+    [Test]
+    public async Task BuildCountSql_WithSetClause_ThrowsAtBuildTime()
+    {
+        // ITM-642(r4)/662 锁定：Set 守卫构建期拒绝——COUNT 不再先真实执行后页构建才抛
+        await using DataSession<SqliteProvider> session =
+            await CreateSessionAsync();
+
+        QueryBuilder<ValueSemanticsEntity> builder =
+            session.From<ValueSemanticsEntity>().Set(e => e.Name, "x");
+
+        await Assert.That(() => builder.BuildCountSql()).Throws<InvalidOperationException>();
+    }
 }
 
 #region Test Entities

@@ -64,6 +64,18 @@ public sealed class PostgreSqlIntegrationTests
     }
 
     [Test]
+    public async Task WhereJson_DateTimeValue_ThrowsExplicitly()
+    {
+        // ITM-641(r4)/662 锁定：DateTime 区域格式与 jsonb ISO text 恒不相等——
+        // 显式拒绝优于静默空结果（格式对齐留真库实现窗口）
+        await using var db = await TestDb.SqliteAsync();
+
+        await Assert.That(() => db.From<Product>()
+            .WhereJson("payload", "when", System.DateTime.Now))
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
     public async Task WhereJson_NulInColumn_ThrowsArgumentException()
     {
         await using var db = await TestDb.SqliteAsync();
