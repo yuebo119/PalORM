@@ -118,11 +118,8 @@ public sealed class ResilienceExecutor
         }
         catch (Exception exception)
         {
-            // 仅瞬时故障与超时计入熔断（ITM-506）：唯一约束冲突/SQL 语法错误等确定性
-            // 失败是应用层问题，不应熔断整个执行器。TimeoutException 是内部命令超时的包装，
-            // 属基础设施信号，计入。
-            bool countsTowardCircuit = exception is TimeoutException || _isTransient(exception);
-            _circuitBreaker.RecordFinalFailure(isHalfOpenProbe, countsTowardCircuit);
+            _circuitBreaker.RecordFinalFailure(
+                isHalfOpenProbe, CountsTowardCircuit(exception));
             throw;
         }
     }
@@ -141,4 +138,12 @@ public sealed class ResilienceExecutor
         long milliseconds = Math.Min(100L << shift, 30_000L);
         return TimeSpan.FromMilliseconds(milliseconds);
     }
+
+    /// <summary>ITM-506/658(r4)：仅瞬时故障与本类型包装的基础设施超时（消息前缀标识）
+    /// 计入熔断——用户 operation 自抛的 TimeoutException 是应用域确定性信号，不熔断；
+    /// 唯一约束冲突/SQL 语法错误等确定性失败同理。</summary>
+    private bool CountsTowardCircuit(Exception exception)
+        => (exception is TimeoutException
+                && exception.Message.StartsWith("Command timed out", StringComparison.Ordinal))
+            || _isTransient(exception);
 }

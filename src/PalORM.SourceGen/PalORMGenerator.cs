@@ -50,11 +50,16 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 "PalORM.SqlFileAttribute",
                 predicate: static (node, _) => node is MethodDeclarationSyntax,
                 transform: static (ctx, ct) => CreateGeneratedSource("SqlFile", ctx, SqlFileEmitter.Generate(ctx, ct)))
-            .Where(static s => s is not null);
+            .Where(static s => s is not null)
+            // ITM-653(r4)：GeneratedSource 为 record struct（值相等）——Collect+WithComparer
+            // 启用增量缓存按值命中（对齐 tableModels/terminalCalls 管道，防每次编辑全量重发）
+            .WithComparer(EqualityComparer<GeneratedSource?>.Default)
+            .Collect();
 
-        context.RegisterSourceOutput(sqlFileMethods, static (spc, source) =>
+        context.RegisterSourceOutput(sqlFileMethods, static (spc, sources) =>
         {
-            spc.AddSource(source!.Value.HintName, source.Value.Source);
+            foreach (var source in sources)
+                spc.AddSource(source!.Value.HintName, source.Value.Source);
         });
 
         // ── SqlTemplate: [SqlTemplate("name")] → 预编译 SQL 常量 (Phase 5) ──
@@ -67,6 +72,8 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 predicate: static (node, _) => node is MethodDeclarationSyntax,
                 transform: static (ctx, ct) => SqlTemplateEmitter.Generate(ctx, ct))
             .Where(static m => m is not null)
+            // ITM-653(r4)：SqlTemplateModel 为 record（值相等）——同上启用增量按值缓存
+            .WithComparer(EqualityComparer<SqlTemplateEmitter.SqlTemplateModel?>.Default)
             .Collect();
 
         context.RegisterSourceOutput(sqlTemplates, static (spc, models) =>
