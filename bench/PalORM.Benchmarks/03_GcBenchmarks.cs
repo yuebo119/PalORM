@@ -16,6 +16,7 @@ namespace PalORM.Benchmarks;
 /// <para><b>3.4 决策指标</b>：装箱占总分配 &gt;20% → 值得做 NpgsqlParameter&lt;T&gt;；&lt;5% → 不做。
 /// 实测结果见 docs/boxing-benchmark-design.md。</para></summary>
 [MemoryDiagnoser]
+// 标准基准配置——装箱占比决策基准，统计可信度与运行时长平衡（决策指标见类 doc）
 [SimpleJob(launchCount: BenchmarkConfig.StandardLaunch, warmupCount: BenchmarkConfig.StandardWarmup, iterationCount: BenchmarkConfig.StandardIterations)]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [SuppressMessage("Performance", "CA1812", Justification = "BenchmarkDotNet creates instances via reflection.")]

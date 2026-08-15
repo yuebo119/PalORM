@@ -3,32 +3,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-[Table("versioned")]
-public partial class VersionedEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("version")] [ConcurrencyCheck] public long Version { get; set; }
-}
-
-[SoftDelete]
-[Table("soft_deletable")]
-public partial class SoftDeletableEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("deleted_at")] public string? DeletedAt { get; set; }
-}
-
-[TenantAware]
-[Table("tenant_data")]
-public partial class TenantEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("tenant_id")] public long TenantId { get; set; }
-    [Column("value")] public string Value { get; set; } = "";
-}
-
 public sealed class AdvancedFeatureTests
 {
     [Test]
@@ -173,11 +147,11 @@ public sealed class AdvancedFeatureTests
     {
         await using var db = await TestDb.SqliteAsync();
         // 过程名白名单：特殊字符明确拒绝（防注入纵深）
-        Assert.Throws<ArgumentException>(() => db.StoredProc("bad name; DROP"));
+        await Assert.That(() => db.StoredProc("bad name; DROP")).Throws<ArgumentException>();
         // 未注册输出参数名明确失败（SqliteParameter 不支持 Output 方向，输出参数行为由 MySQL/PG CI 覆盖）
         var sp = db.StoredProc("proc_ok").WithParam("@p0", "hello");
-        Assert.Throws<InvalidOperationException>(() => sp.GetOutputValue<long>("@missing"));
-        // S108: 用 Assert.ThrowsAsync 显式断言预期异常，避免空 catch
+        await Assert.That(() => sp.GetOutputValue<long>("@missing")).Throws<InvalidOperationException>();
+        // S108: 用 ThrowsAsync 显式断言预期异常，避免空 catch
         await Assert.ThrowsAsync<ArgumentException>(async () => await sp.ExecuteAsync());
         await Assert.That(async () => await sp.ExecuteAsync()).Throws<InvalidOperationException>();
     }
@@ -294,3 +268,31 @@ public sealed class AdvancedFeatureTests
         await Assert.That(dry.Sql).Contains("OVER");
     }
 }
+
+#region Test Entities
+[Table("versioned")]
+public partial class VersionedEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("version")] [ConcurrencyCheck] public long Version { get; set; }
+}
+
+[SoftDelete]
+[Table("soft_deletable")]
+public partial class SoftDeletableEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("deleted_at")] public string? DeletedAt { get; set; }
+}
+
+[TenantAware]
+[Table("tenant_data")]
+public partial class TenantEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("tenant_id")] public long TenantId { get; set; }
+    [Column("value")] public string Value { get; set; } = "";
+}
+#endregion

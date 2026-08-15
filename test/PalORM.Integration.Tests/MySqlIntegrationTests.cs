@@ -3,14 +3,6 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-[Table("mysql_test")]
-public partial class MySqlEntity
-{
-    [Key] public long Id { get; set; }
-    [Column("name")] public string Name { get; set; } = "";
-    [Column("value")] public int Value { get; set; }
-}
-
 public sealed class MySqlIntegrationTests
 {
     private static DbOptions Opts => new()
@@ -80,6 +72,15 @@ public sealed class MySqlIntegrationTests
     }
 }
 
+#region Test Entities
+[Table("mysql_test")]
+public partial class MySqlEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("value")] public int Value { get; set; }
+}
+
 [Table("mysql_bulk_test")]
 public partial class MySqlBulkEntity
 {
@@ -87,3 +88,4 @@ public partial class MySqlBulkEntity
     [Column("name")] public string Name { get; set; } = "";
     [Column("value")] public int Value { get; set; }
 }
+#endregion

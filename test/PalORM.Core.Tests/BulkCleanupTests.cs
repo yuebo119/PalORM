@@ -7,16 +7,6 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-[Table("bulk_cleanup")]
-internal sealed partial class BulkCleanupEntity
-{
-    [Key(AutoIncrement = false)]
-    public string Id { get; set; } = string.Empty;
-
-    [Column("name")]
-    public string Name { get; set; } = string.Empty;
-}
-
 public sealed class BulkCleanupTests
 {
     [Test]
@@ -273,3 +263,15 @@ internal sealed class BulkFailureParameterCollection(
         if (index < 0) _items.Add(value); else _items[index] = value;
     }
 }
+
+#region Test Entities
+[Table("bulk_cleanup")]
+internal sealed partial class BulkCleanupEntity
+{
+    [Key(AutoIncrement = false)]
+    public string Id { get; set; } = string.Empty;
+
+    [Column("name")]
+    public string Name { get; set; } = string.Empty;
+}
+#endregion

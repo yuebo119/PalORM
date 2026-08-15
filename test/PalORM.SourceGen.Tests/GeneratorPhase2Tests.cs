@@ -182,7 +182,6 @@ internal sealed class GeneratorPhase2Tests
             pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
-        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
         await Assert.That(migration).Contains(
             "\\\"computed\\\" TEXT GENERATED ALWAYS AS (\\\"name\\\" || '-computed') STORED");
     }

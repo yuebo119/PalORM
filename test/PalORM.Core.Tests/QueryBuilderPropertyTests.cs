@@ -2,19 +2,6 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-[Table("property_probe")]
-internal sealed partial class PropertyProbeEntity
-{
-    [Key]
-    public long Id { get; set; }
-    [Column("name")]
-    public string Name { get; set; } = string.Empty;
-    [Column("price")]
-    public decimal Price { get; set; }
-    [Column("stock")]
-    public long Stock { get; set; }
-}
-
 /// <summary>
 /// QueryBuilder 生成式性质测试（ITM-306/307 类缺陷的机械防线——"框架自产非法 SQL"根因类）。
 /// 随机组合 Where/OrWhere/WhereIn/OrderBy/ThenBy/Skip/Take/GroupBy/Having 共 500 个种子序列，
@@ -241,3 +228,18 @@ public sealed class QueryBuilderPropertyTests
         await Assert.That(consecutiveSame).IsTrue();
     }
 }
+
+#region Test Entities
+[Table("property_probe")]
+internal sealed partial class PropertyProbeEntity
+{
+    [Key]
+    public long Id { get; set; }
+    [Column("name")]
+    public string Name { get; set; } = string.Empty;
+    [Column("price")]
+    public decimal Price { get; set; }
+    [Column("stock")]
+    public long Stock { get; set; }
+}
+#endregion
