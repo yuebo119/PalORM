@@ -208,7 +208,7 @@ internal sealed class SessionOperationState
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
         }
 
-        // ITM-629 同型面（修复侧纪律卡第三问实证——本处原双读，与 GridReader/411 行三处已全部单读）
+        // ITM-629 同型面（修复侧纪律卡第三问实证——本处原双读，与 GridReader 及 DisposeAndCompleteAsync 三处消费点已全部单读）
         TimeSpan waitTimeout = DisposeWaitTimeout;
         try
         {

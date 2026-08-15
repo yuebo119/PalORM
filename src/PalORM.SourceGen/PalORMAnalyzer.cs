@@ -442,7 +442,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     /// <summary>PALORM001/019/022 主键诊断调度。
     /// ITM-559：计数走基类链——只查声明成员会对"基类声明 [Key]"的实体误报"无 [Key]"。
-    /// ITM-614：reason 链按 init-only → nullable value type → 非整型+AutoIncrement 三分支首中即报。</summary>
+    /// ITM-614：reason 链按 init-only → nullable value type → 非 int/long（含 short/byte 窄整型）+默认 AutoIncrement 三分支首中即报。</summary>
     private static void AnalyzePrimaryKey(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         List<IPropertySymbol> keyProperties = SourceGenerationValidation
