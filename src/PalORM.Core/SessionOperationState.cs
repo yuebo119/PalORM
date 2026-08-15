@@ -8,7 +8,10 @@ namespace PalORM;
 internal sealed class SessionOperationState
 {
     /// <summary>Dispose 等待活动操作的上限。正常操作受 CommandTimeout 约束远早于此完成；
-    /// 触发即说明存在永不完成的租约（如被放弃的枚举器）。internal 可写供测试缩短。</summary>
+    /// 触发即说明存在永不完成的租约（如被放弃的枚举器）。internal 可写供测试缩短。
+    /// <para><b>单读母模式契约</b>（ITM-581/629/r5-A1）：本属性可变——全部消费点
+    /// （GridReader.WaitForActiveReadAsync / 本类两处）必须读一次入局部再用于等待与
+    /// 诊断消息，防并发改写下实际值与报告值分叉。修改消费点时对照此锚。</para></summary>
     internal static TimeSpan DisposeWaitTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     private readonly Lock _sync = new();
@@ -205,7 +208,7 @@ internal sealed class SessionOperationState
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
         }
 
-        // ITM-629 同型面（修复侧纪律卡第三问实证——210/215 双读，411 行已单读此处漏改）
+        // ITM-629 同型面（修复侧纪律卡第三问实证——本处原双读，与 GridReader/411 行三处已全部单读）
         TimeSpan waitTimeout = DisposeWaitTimeout;
         try
         {

@@ -117,7 +117,8 @@ public sealed class MySqlProvider : IDbProvider
     /// <para>MySQL 协议单语句占位符上限 65535（2 字节计数）；宽表大批次经骨架按列数钳制，
     /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para></summary>
     public static async Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct)
+        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct,
+        System.Data.IsolationLevel isolationLevel = System.Data.IsolationLevel.ReadCommitted)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(conn);
@@ -138,7 +139,7 @@ public sealed class MySqlProvider : IDbProvider
             && await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
         {
             return await ExecuteBulkCopyAsync(
-                mySqlConnection, transaction, entities, commandTimeoutSeconds, ct).ConfigureAwait(false);
+                mySqlConnection, transaction, entities, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
         }
 
         // 回退路径：local_infile=OFF 或非 MySqlConnection，走多值 INSERT。
@@ -181,7 +182,8 @@ public sealed class MySqlProvider : IDbProvider
     /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时内部开新事务包整批。</para></summary>
     private static async Task<long> ExecuteBulkCopyAsync<T>(
         MySqlConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int commandTimeoutSeconds, CancellationToken ct)
+        IReadOnlyList<T> entities, int commandTimeoutSeconds,
+        System.Data.IsolationLevel isolationLevel, CancellationToken ct)  // r6-N2（CA1068 ct 末位）
         where T : class, new()
     {
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
@@ -208,7 +210,7 @@ public sealed class MySqlProvider : IDbProvider
         bool ownsTransaction = false;
         if (mySqlTransaction is null)
         {
-            mySqlTransaction = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            mySqlTransaction = await conn.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
             ownsTransaction = true;
         }
         Exception? primaryException = null;

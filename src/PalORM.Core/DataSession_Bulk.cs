@@ -15,7 +15,7 @@ public partial class DataSession<TProvider>
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         if (entities.Count == 0) return 0;
         return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
-            _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+            _options.CommandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
     }
 
     /// <summary>批量删除——每 500 个生成主键 IN 批次；软删除实体更新 deleted_at，其他实体物理删除。</summary>
