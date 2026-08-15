@@ -600,6 +600,12 @@ public struct QueryBuilder<T> where T : class, new()
             throw new NotSupportedException(
                 "UPDATE does not support Join/OrderBy/Lock/Window/GroupBy/Having clauses; they would be silently dropped. " +
                 "Remove them, or express the filter via Where.");
+        // r8-D1(P1)：Take/Skip 是字段非子句位掩码，守卫族结构性看不见——静默丢弃 LIMIT
+        // 会扩大更新范围（用户期望限 N 行实为全量匹配行），比其他子句丢弃后果更重
+        if (_take > 0 || _skip > 0)
+            throw new NotSupportedException(
+                "UPDATE does not support Take/Skip; the LIMIT would be silently dropped and widen the affected rows. " +
+                "Use Where() to bound the update, or BulkUpdateAsync for row-by-row.");
         var sb = new ValueStringBuilder(stackalloc char[256]);
         try
         {
