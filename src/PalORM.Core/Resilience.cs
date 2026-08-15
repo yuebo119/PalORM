@@ -41,7 +41,11 @@ public sealed class ResilienceExecutor
                     + "The delegate must return a non-negative delay.");
             return delay;
         };
-        _timeout = options.CommandTimeout;
+        // ITM-619：DbOptions 契约 TimeSpan.Zero = 无限等待（Validate 允许 Zero），但
+        // CancelAfter(Zero) 是立即取消——归一为 InfiniteTimeSpan 保持契约语义。
+        _timeout = options.CommandTimeout == TimeSpan.Zero
+            ? Timeout.InfiniteTimeSpan
+            : options.CommandTimeout;
         _isTransient = isTransient;
         _circuitBreaker = new CircuitBreaker(options.CircuitBreakerThreshold, options.CircuitBreakerResetAfter);
     }
