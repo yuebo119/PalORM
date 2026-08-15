@@ -18,10 +18,9 @@ public static class PalORMMetrics
     /// 通过 <c>PalORM</c> 名称统一导出到 OpenTelemetry。</summary>
     internal static Meter Meter { get; } = new(MeterName, "1.0.0");
 
-    private static readonly Meter _meter = Meter;
-    private static readonly Counter<long> _queryCounter = _meter.CreateCounter<long>(
+    private static readonly Counter<long> _queryCounter = Meter.CreateCounter<long>(
         "palorm.query.executions", description: "Number of database commands executed");
-    private static readonly Histogram<double> _queryDuration = _meter.CreateHistogram<double>(
+    private static readonly Histogram<double> _queryDuration = Meter.CreateHistogram<double>(
         "palorm.query.duration", "s", "Database command duration in seconds");
 
     internal static Activity? StartActivity(string operation, string provider)
