@@ -27,6 +27,10 @@ public sealed partial class DataSession<TProvider>
         if (where is not null) BindFormattableParameters(cmd, where);
         BindDefaultFilterParameters<T>(cmd);
         object? r = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        // ITM-637 同型面：COUNT null 静默 0 掩蔽驱动异常——与 ToPageAsync 同口径显式报错
+        if (r is null)
+            throw new InvalidOperationException(
+                "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
         return r is long l ? l : Convert.ToInt64(r);
     }
 
