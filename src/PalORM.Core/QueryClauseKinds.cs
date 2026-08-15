@@ -26,9 +26,10 @@ internal static class QueryClauseKinds
         QueryClauseKind.CommonTableExpression, QueryClauseKind.DefaultFilter, QueryClauseKind.Where,
         QueryClauseKind.GroupBy, QueryClauseKind.Having
     ];
+    // ITM-640：Join/CTE 由 BuildUpdateSql 先抛 NotSupportedException——数组中的两位是
+    // 不可达死防御位（GetUpdateParameters 走此数组过滤参数），移除防三处维护漂移。
     internal static readonly QueryClauseKind[] Update =
     [
-        QueryClauseKind.Set, QueryClauseKind.DefaultFilter,
-        QueryClauseKind.Where, QueryClauseKind.Join, QueryClauseKind.CommonTableExpression
+        QueryClauseKind.Set, QueryClauseKind.DefaultFilter, QueryClauseKind.Where
     ];
 }

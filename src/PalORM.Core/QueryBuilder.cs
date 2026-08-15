@@ -409,6 +409,9 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> WithTransaction(DbTransaction tran)
     {
         ArgumentNullException.ThrowIfNull(tran);
+        // ITM-637：已释放事务的 Connection 为 null——原统一报"不属于主连接"误导排查方向
+        if (tran.Connection is null)
+            throw new ArgumentException("事务已释放（Connection 为 null），无法绑定。", nameof(tran));
         if (!ReferenceEquals(tran.Connection, _conn))
             throw new ArgumentException("事务必须属于 QueryBuilder 的主连接。", nameof(tran));
         _transaction = tran;
