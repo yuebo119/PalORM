@@ -551,6 +551,12 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal string BuildCountSql()
     {
+        // ITM-642(r4)：Set 守卫对齐 BuildSql——`.Set().ToPageAsync()` 原本 COUNT 先真实
+        // 执行（一轮 DB 往返+事务回滚）后页构建才抛，构建期拒绝消除无效往返。
+        if (HasClause(QueryClauseKind.Set))
+            throw new InvalidOperationException(
+                "This builder has Set() clauses; COUNT would silently discard them. " +
+                "Use ExecuteNonQueryAsync for UPDATE, or remove Set() for COUNT/paging.");
         var sb = new ValueStringBuilder(stackalloc char[384]);
         try
         {
