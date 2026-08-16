@@ -35,10 +35,24 @@ public class MySqlBenchmarks : IAsyncDisposable
     public async Task Setup()
     {
         _keeper = BenchmarkConfig.OpenMySql(Cs);
+        await ResetAsync();
+    }
+
+    // r19/ITM-688：每次迭代重置为 10K seed（BulkInsert 此前使表持续膨胀）；
+    // 批量组为 PalORM 特性单臂，不产组内 Ratio（BENCHMARKS.md 已声明）。
+    [IterationSetup]
+    public async Task IterationSetup()
+        => await ResetAsync();
+
+    private async Task ResetAsync()
+    {
         await BenchmarkConfig.ExecMySqlAsync(_keeper!, "DROP TABLE IF EXISTS bench_orders");
         await BenchmarkConfig.ExecMySqlAsync(_keeper!, "CREATE TABLE bench_orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, status TEXT NOT NULL, total DECIMAL(18,6) NOT NULL, created_at BIGINT NOT NULL)");
-        for (int i = 0; i < BenchmarkConfig.SeedRows; i++)
-            await BenchmarkConfig.ExecMySqlAsync(_keeper!, $"INSERT INTO bench_orders (status, total, created_at) VALUES ('S{i}', {i * 10m}, {i})");
+        var rows = string.Join(", ",
+            Enumerable.Range(0, BenchmarkConfig.SeedRows)
+                .Select(i => $"('S{i}', {i * 10m}, {i})"));
+        await BenchmarkConfig.ExecMySqlAsync(_keeper!,
+            $"INSERT INTO bench_orders (status, total, created_at) VALUES {rows}");
     }
 
     public async ValueTask DisposeAsync()

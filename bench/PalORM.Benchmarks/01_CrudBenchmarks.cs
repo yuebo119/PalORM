@@ -90,7 +90,7 @@ public class CrudBenchmarks : IAsyncDisposable
     // 对齐 Dapper 官方 benchmarks/Dapper.Tests.Performance 的 Step() 机制
     // T-P3-06：category 全局统一 GetByKey（Pg/MySql 同标签）——不再并入 Query 组
 
-    [Benchmark, BenchmarkCategory("GetByKey")]
+    [Benchmark(Baseline = true), BenchmarkCategory("GetByKey")]
     public async Task<BenchOrder?> ADO_NET_GetByKey()
     {
         var id = BenchmarkConfig.NextId(ref _counter);
@@ -132,7 +132,7 @@ public class CrudBenchmarks : IAsyncDisposable
     // ═══════ 插入（每个 ORM 用最优路径）═══════
     // 公平：都执行同样的 INSERT SQL 并取回自增 ID
 
-    [Benchmark, BenchmarkCategory("Insert")]
+    [Benchmark(Baseline = true), BenchmarkCategory("Insert")]
     public async Task<long> ADO_NET_Insert()
     {
         using var c = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
@@ -173,7 +173,7 @@ public class CrudBenchmarks : IAsyncDisposable
     // ═══════ 更新（每个 ORM 用最优单步路径）═══════
     // 公平：都执行 UPDATE ... SET status='U', total=999 WHERE id=5000（一次往返）
 
-    [Benchmark, BenchmarkCategory("Update")]
+    [Benchmark(Baseline = true), BenchmarkCategory("Update")]
     public async Task<int> ADO_NET_Update()
     {
         using var c = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
@@ -216,7 +216,7 @@ public class CrudBenchmarks : IAsyncDisposable
 
     // ═══════ 删除（统一：先插入一行再删除——保证幂等）═══════
 
-    [Benchmark, BenchmarkCategory("Delete")]
+    [Benchmark(Baseline = true), BenchmarkCategory("Delete")]
     public async Task<int> ADO_NET_Delete()
     {
         using var c = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
@@ -256,7 +256,7 @@ public class CrudBenchmarks : IAsyncDisposable
 
     // ═══════ UPSERT（统一 ON CONFLICT 语法）═══════
 
-    [Benchmark, BenchmarkCategory("Upsert")]
+    [Benchmark(Baseline = true), BenchmarkCategory("Upsert")]
     public async Task<int> ADO_NET_Upsert()
     {
         using var c = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
