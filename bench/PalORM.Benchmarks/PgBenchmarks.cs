@@ -35,10 +35,25 @@ public class PgBenchmarks : IAsyncDisposable
     public async Task Setup()
     {
         _keeper = BenchmarkConfig.OpenPg(Cs);
+        await ResetAsync();
+    }
+
+    // r19/ITM-688：每次迭代重置为 10K seed——此前 BulkInsert 在 warmup+iteration 持续
+    // 插入，表从 10K 膨胀到 ~110K，后期迭代负载失真；批量组为 PalORM 特性单臂
+    //（无同 SQL 的 ORM 对照），不产组内 Ratio（BENCHMARKS.md 已声明）。
+    [IterationSetup]
+    public async Task IterationSetup()
+        => await ResetAsync();
+
+    private async Task ResetAsync()
+    {
         await BenchmarkConfig.ExecPgAsync(_keeper!, "DROP TABLE IF EXISTS bench_orders");
         await BenchmarkConfig.ExecPgAsync(_keeper!, "CREATE TABLE bench_orders (id BIGSERIAL PRIMARY KEY, status TEXT NOT NULL, total NUMERIC(18,6) NOT NULL, created_at BIGINT NOT NULL)");
-        for (int i = 0; i < BenchmarkConfig.SeedRows; i++)
-            await BenchmarkConfig.ExecPgAsync(_keeper!, $"INSERT INTO bench_orders (status, total, created_at) VALUES ('S{i}', {i * 10m}, {i})");
+        var rows = string.Join(", ",
+            Enumerable.Range(0, BenchmarkConfig.SeedRows)
+                .Select(i => $"('S{i}', {i * 10m}, {i})"));
+        await BenchmarkConfig.ExecPgAsync(_keeper!,
+            $"INSERT INTO bench_orders (status, total, created_at) VALUES {rows}");
     }
 
     public async ValueTask DisposeAsync()

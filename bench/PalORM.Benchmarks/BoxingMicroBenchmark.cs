@@ -1,6 +1,6 @@
 // v5.0 阶段 3.4 装箱基准——手写微基准（BenchmarkDotNet 0.15.8 不兼容 .NET 11 preview SDK）
-// 用 GC.GetAllocatedBytesForCurrentThread() 直接测分配，绕过 BDN 框架依赖。
-// 入口由 Program.Main 识别 --boxing 参数后调用 RunAsync()。
+// r19/ITM-691：分配计数改 GC.GetTotalAllocatedBytes（测量前强制 GC）——原
+// GetAllocatedBytesForCurrentThread 跨 await 时异步续体可能换线程，线程级差值失真。
 
 using PalORM;
 using PalORM.Sqlite;
@@ -8,7 +8,9 @@ using PalORM.Sqlite;
 namespace PalORM.Benchmarks;
 
 /// <summary>v5.0 阶段 3.4 装箱微基准——不依赖 BenchmarkDotNet。
-/// 用 GC.GetAllocatedBytesForCurrentThread() 测每操作分配字节数，回答装箱占比问题。</summary>
+/// 用 GC.GetTotalAllocatedBytes 测每操作分配字节数，回答装箱占比问题。</summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "S1215",
+    Justification = "微基准在测量前强制 GC 是测量方法本身——与 BDN MemoryDiagnoser 的强制回收同原理（r19/ITM-691）。")]
 internal static class BoxingMicroBenchmark
 {
     public static async Task RunAsync()
@@ -46,12 +48,15 @@ internal static class BoxingMicroBenchmark
         await db.InsertAsync(entities[0]);
         await db.ExecuteAsync($"DELETE FROM boxing_test");
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        long before = GC.GetTotalAllocatedBytes(false);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         foreach (var e in entities)
             await db.InsertAsync(e);
         sw.Stop();
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        long after = GC.GetTotalAllocatedBytes(false);
 
         double allocatedKb = (after - before) / 1024.0;
         double perRowBytes = (after - before) / (double)rowCount;
@@ -73,11 +78,14 @@ internal static class BoxingMicroBenchmark
             await db.BulkInsertAsync([entities[0]]);
         await db.ExecuteAsync($"DELETE FROM boxing_test");
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        long before = GC.GetTotalAllocatedBytes(false);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await db.BulkInsertAsync(entities);
         sw.Stop();
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        long after = GC.GetTotalAllocatedBytes(false);
 
         double allocatedKb = (after - before) / 1024.0;
         double perRowBytes = (after - before) / (double)rowCount;
@@ -97,11 +105,14 @@ internal static class BoxingMicroBenchmark
 
         _ = await db.From<BoxingTestEntity>().ToListAsync();
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        long before = GC.GetTotalAllocatedBytes(false);
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var result = await db.From<BoxingTestEntity>().ToListAsync();
+        _ = await db.From<BoxingTestEntity>().ToListAsync();
         sw.Stop();
-        long after = GC.GetAllocatedBytesForCurrentThread();
+        long after = GC.GetTotalAllocatedBytes(false);
 
         double allocatedKb = (after - before) / 1024.0;
         double perRowBytes = rowCount > 0 ? (after - before) / (double)rowCount : 0;

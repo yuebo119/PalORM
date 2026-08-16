@@ -14,7 +14,9 @@ namespace PalORM.Benchmarks;
 /// <para><b>BoxingTestEntity</b>：4 个值类型列（long/int/decimal/bool），每行装箱精确 128B
 /// （long 32B + int 24B + decimal 48B + bool 24B，含对象头 + 对齐填充）。</para>
 /// <para><b>3.4 决策指标</b>：装箱占总分配 &gt;20% → 值得做 NpgsqlParameter&lt;T&gt;；&lt;5% → 不做。
-/// 实测结果见 docs/boxing-benchmark-design.md。</para></summary>
+/// 实测结果见 docs/boxing-benchmark-design.md。</para>
+/// <para><b>r19/ITM-687</b>：查询/更新类基准的 IterationSetup 预插数据——此前空表恒
+/// 0 行（装箱基线无效）；每个操作有自己的按场景准备。</para></summary>
 [MemoryDiagnoser]
 // 标准基准配置——装箱占比决策基准，统计可信度与运行时长平衡（决策指标见类 doc）
 [SimpleJob(launchCount: BenchmarkConfig.StandardLaunch, warmupCount: BenchmarkConfig.StandardWarmup, iterationCount: BenchmarkConfig.StandardIterations)]
@@ -38,19 +40,50 @@ public class GcBenchmarks : IAsyncDisposable
         await EnsureTableAsync();
     }
 
-    [IterationSetup]
-    public async Task IterationSetup()
+    public async ValueTask DisposeAsync()
     {
-        // 每次迭代重建表 + 准备实体（DROP+CREATE 比 DELETE 快 100x）
+        if (_keeper is not null) await _keeper.DisposeAsync();
+    }
+
+    private async Task ResetTableAsync()
+    {
         await BenchmarkConfig.ExecSqliteAsync(_keeper!,
             "DROP TABLE IF EXISTS boxing_test; " +
             "CREATE TABLE boxing_test (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, value INTEGER NOT NULL, price REAL NOT NULL, active INTEGER NOT NULL)");
-        _entities = Enumerable.Range(0, RowCount)
-            .Select(i => new BoxingTestEntity { Name = $"row-{i}", Value = i, Price = i * 1.5m, Active = (i % 2) == 0 })
-            .ToList();
+    }
+
+    private void PrepareEntities()
+    {
+        _entities = [.. Enumerable.Range(0, RowCount)
+            .Select(i => new BoxingTestEntity { Name = $"row-{i}", Value = i, Price = i * 1.5m, Active = (i % 2) == 0 })];
+    }
+
+    private async Task SeedEntitiesAsync()
+    {
+        // IterationSetup 内的布置不计入测量；回填自增 id 供更新类基准使用
+        using var cmd = _keeper!.CreateCommand();
+        cmd.CommandText = "INSERT INTO boxing_test (name, value, price, active) VALUES (@name, @value, @price, @active); SELECT last_insert_rowid();";
+#pragma warning disable PALORM005 // 布置数据循环是本方法目的——不计入测量，非 N+1 查询形态
+        foreach (BoxingTestEntity e in _entities)
+        {
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("@name", e.Name);
+            cmd.Parameters.AddWithValue("@value", e.Value);
+            cmd.Parameters.AddWithValue("@price", e.Price);
+            cmd.Parameters.AddWithValue("@active", e.Active);
+            e.Id = (long)(await cmd.ExecuteScalarAsync())!;
+        }
+#pragma warning restore PALORM005
     }
 
     // ─── InsertAsync：逐条装箱路径 ───
+    [IterationSetup(Targets = [nameof(Insert_OneByOne), nameof(BulkInsert)])]
+    public async Task InsertLikeSetup()
+    {
+        await ResetTableAsync();
+        PrepareEntities();
+    }
+
     [Benchmark, BenchmarkCategory("Insert")]
     public async Task Insert_OneByOne()
     {
@@ -68,6 +101,15 @@ public class GcBenchmarks : IAsyncDisposable
     }
 
     // ─── QueryAsync：无装箱对照组（RowFactory 用 GetInt32/GetDecimal，不装箱）───
+    [IterationSetup(Targets =
+        [nameof(Query_NoBoxing_Baseline), nameof(BulkUpdate_OneByOne), nameof(BulkUpdateBatch_SingleStatement)])]
+    public async Task ReadUpdateSetup()
+    {
+        await ResetTableAsync();
+        PrepareEntities();
+        await SeedEntitiesAsync();
+    }
+
     [Benchmark, BenchmarkCategory("Query")]
     public async Task<List<BoxingTestEntity>> Query_NoBoxing_Baseline()
     {
@@ -96,10 +138,5 @@ public class GcBenchmarks : IAsyncDisposable
         await BenchmarkConfig.ExecSqliteAsync(_keeper!,
             "DROP TABLE IF EXISTS boxing_test; " +
             "CREATE TABLE boxing_test (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, value INTEGER NOT NULL, price REAL NOT NULL, active INTEGER NOT NULL)");
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_keeper is not null) await _keeper.DisposeAsync();
     }
 }

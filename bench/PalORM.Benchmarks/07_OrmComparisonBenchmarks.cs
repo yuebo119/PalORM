@@ -53,7 +53,7 @@ public class OrmComparisonBenchmarks : IAsyncDisposable
     // ─── 场景 1：稳定参数形状（Dapper 缓存命中后的稳态） ───
     // Dapper：第 N 次（N > 1）后 IL 缓存命中；PalORM：源生成，恒定。
 
-    [Benchmark, BenchmarkCategory("StableShape")]
+    [Benchmark(Baseline = true), BenchmarkCategory("StableShape")]
     public async Task<BenchOrder?> Dapper_StableShape()
     {
         using var c = BenchmarkConfig.OpenSqlite(BenchmarkConfig.CacheSqliteCs);
@@ -77,7 +77,7 @@ public class OrmComparisonBenchmarks : IAsyncDisposable
     // PalORM 源生成路径不受参数形状影响
 
     private int _shape;
-    [Benchmark, BenchmarkCategory("VaryingShape")]
+    [Benchmark(Baseline = true), BenchmarkCategory("VaryingShape")]
     public async Task<BenchOrder?> Dapper_VaryingShape()
     {
         // 每次迭代 status 不同长度——Dapper 参数形状哈希变化，缓存 miss
