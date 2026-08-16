@@ -262,19 +262,18 @@ public sealed class QueryTests
     }
 
     [Test]
-    public async Task Performance_Query1000Rows_Under100ms()
+    public async Task Query1000Rows_ReturnsAllRows()
     {
+        // T-P3-04：删除 100ms 硬阈值——CI 抖动误报且性能由 bench 体系负责（01/05 类）。
+        // 本测试只锁 1000 行大批量查询的正确性（行数完整）。
         await using var db = await TestDb.SqliteAsync();
         await db.MigrateAsync();
         var items = Enumerable.Range(0, 1000).Select(i => new Order { Status = "T", Total = i * 10m, CreatedAt = 0 }).ToList();
         await db.BulkInsertAsync(items);
         await db.From<Order>().ToListAsync();
         await db.From<Order>().ToListAsync();
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         var r = await db.From<Order>().ToListAsync();
-        sw.Stop();
         await Assert.That(r.Count).IsEqualTo(1000);
-        await Assert.That(sw.ElapsedMilliseconds).IsLessThan(100);
     }
 
     // ─── Phase 3 聚合 ──────────────────────────────────
@@ -590,7 +589,8 @@ public sealed class QueryTests
     [Test]
     public async Task ToPageAsync_KeysetConditionConstrainsAllOrBranches()
     {
-        await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync();
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
         await InsertOrdersAsync(db, 6, i => new Order { Status = i % 2 == 0 ? "A" : "B", Total = i * 10m, CreatedAt = 0 });
         var seen = new HashSet<long>();
         long? last = null; long total = 0;
@@ -616,7 +616,8 @@ public sealed class QueryTests
     [Test]
     public async Task BulkUpdate_RollbackKeepsInMemoryVersionInSync()
     {
-        await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync();
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
         var a = await db.InsertAsync(new VersionedEntity { Name = "A", Version = 0 });
         var b = await db.InsertAsync(new VersionedEntity { Name = "B", Version = 0 });
         var bFresh = await db.GetAsync<VersionedEntity>(b.Id);
@@ -635,7 +636,8 @@ public sealed class QueryTests
     [Test]
     public async Task BulkUpdate_SuccessBackfillsVersions()
     {
-        await using var db = await TestDb.SqliteAsync(); await db.MigrateAsync();
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
         var a = await db.InsertAsync(new VersionedEntity { Name = "A", Version = 0 });
         var b = await db.InsertAsync(new VersionedEntity { Name = "B", Version = 0 });
         a.Name = "A2"; b.Name = "B2";

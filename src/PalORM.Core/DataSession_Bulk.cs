@@ -60,10 +60,13 @@ public partial class DataSession<TProvider>
                 null, operation.Owner, ct).ConfigureAwait(false);
         bool ownsTransaction = previousTransaction is null;
         Exception? primaryException = null;
-        // R10 修复：scratch 命令跨批次复用——替代每批 CreateCommand（对齐 MultiValueBulkInsert rowCommand 模式）
-        DbCommand scratch = CreateCommand();
+        // ITM-676：scratch 声明在 try 前、创建在 try 内——CreateCommand 抛异常时 finally
+        // 仍执行 RestoreTransaction 与事务释放（此前创建位于 try 之外，泄漏窗口）。
+        DbCommand? scratch = null;
         try
         {
+            // R10 修复：scratch 命令跨批次复用——替代每批 CreateCommand（对齐 MultiValueBulkInsert rowCommand 模式）。
+            scratch = CreateCommand();
             for (int start = 0; start < keys.Count; start += batchSize)
             {
                 int end = Math.Min(start + batchSize, keys.Count);
@@ -112,7 +115,8 @@ public partial class DataSession<TProvider>
         }
         finally
         {
-            await scratch.DisposeAsync().ConfigureAwait(false);
+            if (scratch is not null)
+                await scratch.DisposeAsync().ConfigureAwait(false);
             _operationState.RestoreTransaction(
                 tran, previousTransaction);
             if (ownsTransaction)

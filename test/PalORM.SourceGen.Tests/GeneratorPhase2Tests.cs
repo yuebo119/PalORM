@@ -996,7 +996,7 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
-    public async Task EntityWithoutIndexes_GeneratesEmptyIndexArraysAndNoRegistryEntry()
+    public async Task EntityWithoutIndexes_GeneratesEmptyIndexArraysAndEmptyRegistryEntry()
     {
         const string source = """
             using PalORM;
@@ -1015,8 +1015,9 @@ internal sealed class GeneratorPhase2Tests
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
         await Assert.That(migration).Contains("CreateIndexesSqlite = global::System.Array.Empty<string>()");
-        // 无索引实体不进入 CreateIndexSqlByDialect 字典（可选键）
-        await Assert.That(registry).DoesNotContain("[typeof(global::PlainItem)] = new global::PalORM.CreateIndexSqlSet");
+        // r18/ITM-672：零索引实体也必须进入 CreateIndexSqlByDialect（值为空集）——
+        // 运行时"缺键即拒绝"据此区分无索引（空集）与旧生成器/手工片段（键缺失）
+        await Assert.That(registry).Contains("[typeof(global::PlainItem)] = new global::PalORM.CreateIndexSqlSet");
     }
 
     [Test]
@@ -1351,10 +1352,19 @@ internal sealed class GeneratorPhase2Tests
             """;
         GeneratorResult result = RunGenerator(source);
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
-        string all = string.Join(System.Environment.NewLine, result.GeneratedSources.Values);
-        // RowFactory/CommandFactory/Registry 三族均生成（非静默跳过）
-        await Assert.That(all.Contains("RecordItem", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(result.GeneratedSources.Keys.Any(k => k.Contains("RowFactory", StringComparison.Ordinal))).IsTrue();
+        // T-P2-01：逐族断言（原仅聚合 Contains "RecordItem"——RowFactory 缺失也过）
+        string rowFactoryKey = result.GeneratedSources.Keys
+            .Single(k => k.Contains("RowFactory", StringComparison.Ordinal));
+        string commandFactoryKey = result.GeneratedSources.Keys
+            .Single(k => k.Contains("CommandFactory", StringComparison.Ordinal));
+        string registryKey = result.GeneratedSources.Keys
+            .Single(k => k.Contains("PalORM_Registry", StringComparison.Ordinal));
+        await Assert.That(result.GeneratedSources[rowFactoryKey])
+            .Contains("RecordItem", StringComparison.Ordinal);
+        await Assert.That(result.GeneratedSources[commandFactoryKey])
+            .Contains("RecordItem", StringComparison.Ordinal);
+        await Assert.That(result.GeneratedSources[registryKey])
+            .Contains("RecordItem", StringComparison.Ordinal);
     }
 
     [Test]
@@ -1370,7 +1380,11 @@ internal sealed class GeneratorPhase2Tests
             }
             """;
         var (diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
-        await Assert.That(diagnostics.Any(d => d.Id == "PALORM015")).IsTrue();
+        // T-P1-01：仿 PALORM020 锁定消息文本——4a31520 文案订正（r16-QA1 init-only 放行）
+        // 必须参与断言，诊断 ID 存在但文案回退时本测试失败。
+        await Assert.That(diagnostics.Any(d =>
+            d.Id == "PALORM015"
+            && d.GetMessage(null).Contains("r16-QA1 订正", System.StringComparison.Ordinal))).IsTrue();
     }
 
     [Test]

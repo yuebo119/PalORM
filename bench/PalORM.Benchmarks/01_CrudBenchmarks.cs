@@ -88,8 +88,9 @@ public class CrudBenchmarks : IAsyncDisposable
     // ═══════ 主键查询 ═══════
     // 使用 NextId() 轮询 id（1..10000）——避免 SQLite page cache 命中导致测量失真
     // 对齐 Dapper 官方 benchmarks/Dapper.Tests.Performance 的 Step() 机制
+    // T-P3-06：category 全局统一 GetByKey（Pg/MySql 同标签）——不再并入 Query 组
 
-    [Benchmark, BenchmarkCategory("Query")]
+    [Benchmark, BenchmarkCategory("GetByKey")]
     public async Task<BenchOrder?> ADO_NET_GetByKey()
     {
         var id = BenchmarkConfig.NextId(ref _counter);
@@ -102,7 +103,7 @@ public class CrudBenchmarks : IAsyncDisposable
         return new BenchOrder { id = r.GetInt64(0), status = r.GetString(1), total = r.GetDecimal(2), created_at = r.GetInt64(3) };
     }
 
-    [Benchmark, BenchmarkCategory("Query")]
+    [Benchmark, BenchmarkCategory("GetByKey")]
     public async Task<BenchOrder?> Dapper_GetByKey()
     {
         var id = BenchmarkConfig.NextId(ref _counter);
@@ -111,14 +112,14 @@ public class CrudBenchmarks : IAsyncDisposable
             "SELECT id, status, total, created_at FROM bench_orders WHERE id = @id", new { id });
     }
 
-    [Benchmark, BenchmarkCategory("Query")]
+    [Benchmark, BenchmarkCategory("GetByKey")]
     public async Task<BenchOrder?> PalORM_GetByKey()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
         return await db.GetAsync<BenchOrder>(BenchmarkConfig.NextId(ref _counter));
     }
 
-    [Benchmark, BenchmarkCategory("Query")]
+    [Benchmark, BenchmarkCategory("GetByKey")]
     public async Task<BenchOrder?> RepoDb_GetByKey()
     {
         var id = BenchmarkConfig.NextId(ref _counter);

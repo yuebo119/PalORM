@@ -56,7 +56,7 @@ public static class QueryBuilderExtensions
             cmd.CommandText = sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             cmd.Transaction = builder.GetActiveTransaction();
-            AddParameters(cmd, builder, parameters);
+            AddParameters(cmd, parameters);
             // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
             NotifyInterceptorsOnBefore(interceptors, context);
             await PrepareCommandAsync(cmd, builder._prepared, ct).ConfigureAwait(false);
@@ -209,7 +209,7 @@ public static class QueryBuilderExtensions
             countCommand.Transaction = transaction;
             countCommand.CommandText = countSql;
             countCommand.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
-            AddParameters(countCommand, paged, paged.GetCountParameters());
+            AddParameters(countCommand, paged.GetCountParameters());
             object? countResult = await ExecuteScalarObservedAsync(
                 countCommand, paged, "count", ct).ConfigureAwait(false);
             // ITM-637：COUNT 结果理论恒非 null——驱动异常形态下显式报错比 NRE 近根因
@@ -365,7 +365,7 @@ public static class QueryBuilderExtensions
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = sql;
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            AddParameters(command, builder, updateParameters);
+            AddParameters(command, updateParameters);
             NotifyInterceptorsOnBefore(interceptors, context);
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -423,11 +423,10 @@ public static class QueryBuilderExtensions
         CancellationToken cancellationToken)
         => prepared ? command.PrepareAsync(cancellationToken) : Task.CompletedTask;
 
-    // v4.1 极致降内存：直接复用 GetQueryParameters 已创建的 DbParameter，避免 _paramFactory 重建 N 个参数
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S1172",
-        Justification = "builder parameter retained for API consistency; no longer used internally after v4.1 parameter reuse optimization.")]
-    private static void AddParameters<T>(DbCommand command, QueryBuilder<T> builder,
-        IReadOnlyList<DbParameter> parameters) where T : class, new()
+    // v4.1 极致降内存：直接复用 GetQueryParameters 已创建的 DbParameter，避免 _paramFactory 重建 N 个参数。
+    // r18：builder 参数自 v4.1 起未再使用——删除并消除 S1172 抑制（refine R-P2-01）。
+    private static void AddParameters(DbCommand command,
+        IReadOnlyList<DbParameter> parameters)
     {
         foreach (DbParameter parameter in parameters)
             command.Parameters.Add(parameter);

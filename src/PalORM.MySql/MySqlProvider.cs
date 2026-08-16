@@ -52,8 +52,9 @@ public sealed class MySqlProvider : IDbProvider
             builder.CancellationTimeout = 5;
         // AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）。
         // ITM-612/EVAL-1：builder 层无法区分"未设置（驱动默认 false）"与"显式 false（安全加固，
-        // 规避恶意服务端读取客户端文件的攻击面）"——显式 false 会被此覆盖。安全策略
-        // （默认关闭、BulkCopy 用户显式 opt-in）待 ADR 裁决，暂维持性能优先现状。
+        // 规避恶意服务端读取客户端文件的攻击面）"——显式 false 会被此覆盖。
+        // ITM-666：ADR-G（2026-08-15）已裁决维持本现状——三层兜底（文档登记攻击面 /
+        // 服务端 local_infile=OFF 即禁 BulkCopy / 不做启发式检测），revisit 条件见 ADR-G。
         if (!builder.AllowLoadLocalInfile)
             builder.AllowLoadLocalInfile = true;
         if (builder.ServerRedirectionMode == MySqlServerRedirectionMode.Disabled)

@@ -16,6 +16,9 @@ namespace PalORM.Benchmarks;
 // ═══════════════════════════════════════════════════════════════
 
 // 注意：无 [MemoryDiagnoser]——纯速度测量，消除 GC.Collect 干扰（刻意保留）
+// T-P3-05（T8 配置理由）：复用 BenchmarkConfig.StandardLaunch/Warmup/Iterations 三常量
+// 而非本类硬编码——与 01/02/03/06 各基准同配置，结果可跨类比较；纯速度类仅刻意
+// 去掉 MemoryDiagnoser（GC.Collect 阻碍 JIT 内联，见类头说明）。
 [SimpleJob(launchCount: BenchmarkConfig.StandardLaunch,
            warmupCount: BenchmarkConfig.StandardWarmup,
            iterationCount: BenchmarkConfig.StandardIterations)]

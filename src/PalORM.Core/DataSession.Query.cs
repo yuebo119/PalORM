@@ -100,6 +100,9 @@ public sealed partial class DataSession<TProvider>
         _operationState, _options.ValidateQueryColumnOrder);
 
     /// <summary>流式查询——IAsyncEnumerable 恒定内存。
+    /// <para><b>ITM-572/677 警告</b>：SQL 逐字执行，<b>默认过滤（[SoftDelete]/[TenantAware]）不适用</b>——
+    /// 租户会话经此入口可读到全部租户与已软删数据（与 QueryMultipleAsync 同契约）。
+    /// 多租户场景必须在 SQL 中自行携带 tenant_id/deleted_at 条件，或改用受过滤保护的常规查询入口。</para>
     /// <para><b>枚举器必须释放（ITM-508）</b>：操作租约在枚举期间持有，到枚举器 DisposeAsync 才归还。
     /// 用 <c>await foreach</c> 消费（自动释放）；手写 <c>GetAsyncEnumerator</c> 时必须 <c>await using</c>
     /// 或在 break/异常路径显式 DisposeAsync——否则租约永不归还，会话后续操作被门禁拒绝，
