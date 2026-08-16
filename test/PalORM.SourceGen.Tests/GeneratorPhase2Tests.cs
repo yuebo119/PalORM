@@ -1262,4 +1262,37 @@ internal sealed class GeneratorPhase2Tests
     private sealed record GeneratorResult(
         CSharpCompilation OutputCompilation,
         IReadOnlyDictionary<string, string> GeneratedSources);
+
+    [Test]
+    public async Task SqlTemplate_UnqualifiedStaticField_DoesNotGenerate()
+    {
+        // r11.5-D1/r12-A1 锁定：非限定静态引用（{TablePrefix}）在生成类 SqlTemplates 内
+        // CS0103 不可解析——拒绝生成（ITM-573 家族）；限定引用（Repos.X）放行对照
+        // r12-A1 修正：非限定静态的真实形态是"方法所在类自己的静态字段"（用户源码合法，
+        // 生成到 namespace 级 SqlTemplates 才 CS0103）——跨类引用在用户源码就编译不过
+        const string source = """
+            using PalORM;
+            public static class C
+            {
+                public static string TablePrefix = "t";
+                [SqlTemplate("bad")]
+                public static System.FormattableString Bad()
+                    => $"SELECT * FROM {TablePrefix}";
+                [SqlTemplate("good")]
+                public static System.FormattableString Good()
+                    => $"SELECT * FROM {C.TablePrefix}";
+            }
+            """;
+
+        GeneratorResult result = RunGenerator(source);
+        var templates = result.GeneratedSources
+            .Where(pair => pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))
+            .ToList();
+
+        // 限定引用可编译生成；非限定被拒（不产生 CS0103 的非法生成物）
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        string combined = string.Join(System.Environment.NewLine, templates.Select(pair => pair.Value));
+        await Assert.That(combined.Contains("{TablePrefix}", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(combined.Contains("C.TablePrefix", StringComparison.Ordinal)).IsTrue();
+    }
 }
