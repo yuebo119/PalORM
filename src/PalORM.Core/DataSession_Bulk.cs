@@ -191,6 +191,11 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
+        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated CRUD.");
+        // r12-B1（D3 残留族）：空短路后置（三方言/两路径统一口径——SQLite 回退路径同样
+        // 不应使未注册类型+空列表静默成功）
         if (entities.Count == 0) return 0;
 
         // v5.0 SQLite 方言感知回退：CASE WHEN 在 SQLite 上比逐条慢 6.4x（实测验证）。
@@ -373,9 +378,10 @@ public partial class DataSession<TProvider>
     {
         ArgumentNullException.ThrowIfNull(entities);
         var items = entities.ToList();
-        if (items.Count == 0) return;
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        // r12-B1（D3 残留族）：空短路后置——同 BulkInsertAsync 口径
+        if (items.Count == 0) return;
         if (items.Any(entity => metadata.HasDefaultKey(entity)))
             throw new InvalidOperationException($"Seed entity '{typeof(T).Name}' requires a non-default stable primary key.");
         await BulkMergeAsync(items, ct).ConfigureAwait(false);
