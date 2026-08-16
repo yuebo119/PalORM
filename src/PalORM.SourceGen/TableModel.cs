@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace PalORM.SourceGen;
@@ -262,6 +263,14 @@ internal sealed record ColumnModel(
 
     internal bool IsUpsertable =>
         !IgnoreOnInsert && ComputedExpression is null && !IsTimestamp;
+
+    /// <summary>生成物代码中安全使用的属性名——C# 保留关键字属性（如 <c>@class</c>）在
+    /// 成员访问/对象初始化器中必须带 @ 前缀，否则生成源不可编译（ITM-670）。
+    /// 字段名拼接（_conv_X/JsonTypeInfo_X）不受影响，继续用裸 PropertyName。</summary>
+    internal string EscapedPropertyName =>
+        SyntaxFacts.GetKeywordKind(PropertyName) != SyntaxKind.None
+            ? "@" + PropertyName
+            : PropertyName;
 }
 
 internal sealed record IndexModel(string Name, EquatableArray<string> Columns, bool Unique);

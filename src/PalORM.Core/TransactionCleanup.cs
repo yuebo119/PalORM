@@ -23,13 +23,11 @@ internal static class TransactionCleanup
         Exception? primaryException,
         string exceptionDataKey = "PalORM.TransactionCleanupException")
     {
-        // ITM-595: when (primaryException is not null) 守卫使成功路径（primaryException==null）
-        // 下 DisposeAsync 抛的清理异常被完全吞掉——无 Data 挂载点（无主异常可挂）、无日志、
-        // 无返回信号。这是成功路径 Dispose 失败极罕见（连接已断才走到此分支）下的取舍：
-        // 调用方 WithTransaction/BulkUpdate/BulkDelete 等的 finally 已无业务异常可保留，
-        // 重新抛 Dispose 异常会掩盖成功路径的语义（业务方看到异常会以为整体失败）。
-        // 替代方案：引入 logger 字段记录此类异常；当前未做（TransactionCleanup 是 static helper
-        // 无依赖注入点），调用方自行包 try/catch 可观测成功路径 Dispose 失败。
+        // ITM-595/660：when (primaryException is not null) 守卫的语义——成功路径
+        // （primaryException==null）下 DisposeAsync 抛出的清理异常**向外传播**（filter 为
+        // false 不捕获），调用方看到释放失败而非静默成功；失败路径下清理异常挂主异常
+        // Data 不替换原始失败。这是有意裁决：静默吞掉释放失败违反 B26（防静默错误优先），
+        // 且成功路径 Dispose 失败极罕见（连接已断才走到此分支）——传播不掩盖真实信号。
         try { await transaction.DisposeAsync().ConfigureAwait(false); }
         catch (Exception cleanupException) when (primaryException is not null)
         {

@@ -20,7 +20,11 @@ public interface IDbProvider
     /// <summary>创建应用连接池配置的数据库连接。</summary>
     static abstract DbConnection CreateConnection(string connectionString, DbOptions options);
 
-    /// <summary>引用单段标识符，并转义 Provider 对应的内部引用符。</summary>
+    /// <summary>引用单段标识符，并转义 Provider 对应的内部引用符。
+    /// <para><b>第三方 Provider 契约（ITM-674）</b>：跨 Provider 共享的缓存键仅含
+    /// <c>(Type, SqlDialect)</c>——同一 <see cref="SqlDialect"/> 的不同 Provider 实现
+    /// <b>必须</b>产生相同的引用语义（同样的 <see cref="QuoteIdentifier"/> 输出）。
+    /// 引用语义不同的变体请使用独立 <see cref="SqlDialect"/> 值或实现私有缓存。</para></summary>
     static abstract string QuoteIdentifier(string identifier);
 
     /// <summary>分别引用 schema 与表名，避免把点分名称误作单个标识符。

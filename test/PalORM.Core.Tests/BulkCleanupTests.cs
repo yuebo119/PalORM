@@ -51,11 +51,10 @@ public sealed class BulkCleanupTests
     [Test]
     [Arguments("sqlite")]
     [Arguments("mysql")]
-    public async Task BulkInsert_RowAndMainCleanupFailures_AreBothPreserved(
+    public async Task BulkInsert_MainAndTransactionCleanupFailures_AreAllPreserved(
         string provider)
     {
-        // v4.1：BindInsertToBatch 直绑消除了 rowCommand scratch，
-        // 此场景不再产生 RowCommandCleanupException--仅保留 MainCleanup + TransactionCleanup
+        // r18/T-P3-02：原名 RowAndMain 实为 MainAndTransaction——名实对齐后保留原覆盖。
         var failures = new BulkFailureSet();
         await using var connection = new BulkFailureConnection(
             BulkFailureScenario.MainAndTransactionCleanup,
@@ -71,6 +70,72 @@ public sealed class BulkCleanupTests
             .IsSameReferenceAs(failures.Rollback);
         await Assert.That(actual.Data["PalORM.TransactionCleanupException"])
             .IsSameReferenceAs(failures.TransactionCleanup);
+    }
+
+    [Test]
+    [Arguments("sqlite")]
+    [Arguments("mysql")]
+    public async Task BulkInsert_RowOperationAndMainCleanupFailures_AreBothPreserved(
+        string provider)
+    {
+        // r18/T-P3-02：补真实 RowAndMain 覆盖——首个批量命令参数 Add 抛 RowOperation
+        // （主异常），命令 DisposeAsync 抛 MainCleanup（挂 Data），事务无失败。
+        var failures = new BulkFailureSet();
+        await using var connection = new BulkFailureConnection(
+            BulkFailureScenario.RowAndMainCleanup,
+            failures);
+
+        Exception? actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await BulkInsertAsync(provider, connection));
+
+        await Assert.That(actual).IsSameReferenceAs(failures.RowOperation);
+        await Assert.That(actual!.Data["PalORM.CommandCleanupException"])
+            .IsSameReferenceAs(failures.MainCleanup);
+    }
+
+    [Test]
+    public async Task DisposeTransactionPreserving_SuccessPathCleanupFailure_Propagates()
+    {
+        // ITM-660：成功路径（primaryException=null）下 DisposeAsync 异常**传播**
+        // （when-filter false 不捕获）——释放失败必须可见，注释与行为对齐后的锁定。
+        var failures = new BulkFailureSet();
+        await using var connection = new BulkFailureConnection(
+            BulkFailureScenario.TransactionCleanupOnSuccess, failures);
+        await using var transaction = new BulkFailureTransaction(
+            connection, BulkFailureScenario.TransactionCleanupOnSuccess, failures);
+
+        Exception? actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, null));
+
+        await Assert.That(actual).IsSameReferenceAs(failures.TransactionCleanup);
+    }
+
+    [Test]
+    public async Task BulkOperationFramework_DisposePreserving_SuccessPathCleanupFailure_Propagates()
+    {
+        // ITM-660 双站点第二处：BulkOperationFramework.DisposePreservingAsync 同语义。
+        var failures = new BulkFailureSet();
+        await using var connection = new BulkFailureConnection(
+            BulkFailureScenario.TransactionCleanupOnSuccess, failures);
+        await using var transaction = new BulkFailureTransaction(
+            connection, BulkFailureScenario.TransactionCleanupOnSuccess, failures);
+
+        Exception? actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await BulkOperationFramework.DisposePreservingAsync(transaction, null, "PalORM.TransactionCleanupException"));
+
+        await Assert.That(actual).IsSameReferenceAs(failures.TransactionCleanup);
+    }
+
+    [Test]
+    public async Task MultiValueBulkInsert_ParameterLimitAboveFiveDigits_Throws()
+    {
+        // ITM-668：占位符下标 5 位上限——入口显式拒绝而非第 100000 个参数处越界。
+        var ctx = new BulkContext(1, 100_000,
+            SqliteProvider.QuoteIdentifier, SqliteProvider.CreateParameter, 30);
+
+        await Assert.That(async () => await MultiValueBulkInsert.ExecuteAsync<BulkCleanupEntity>(
+                null!, null, [], ctx, CancellationToken.None))
+            .Throws<ArgumentOutOfRangeException>();
     }
 
     private static Task<long> BulkInsertAsync(
@@ -97,7 +162,9 @@ internal enum BulkFailureScenario
 {
     MainAndTransactionCleanup,
     ProbeCleanup,
-    RowAndMainCleanup
+    RowAndMainCleanup,
+    // ITM-660：成功路径事务释放失败——DisposeAsync 抛 TransactionCleanup，执行/回滚均成功
+    TransactionCleanupOnSuccess
 }
 
 internal sealed class BulkFailureSet
@@ -144,6 +211,7 @@ internal sealed class BulkFailureTransaction(
     BulkFailureScenario scenario,
     BulkFailureSet failures) : DbTransaction
 {
+    private bool _disposed;
     public override IsolationLevel IsolationLevel => IsolationLevel.Unspecified;
     protected override DbConnection DbConnection => connection;
 
@@ -162,7 +230,11 @@ internal sealed class BulkFailureTransaction(
     public override async ValueTask DisposeAsync()
     {
         await base.DisposeAsync().ConfigureAwait(false);
-        if (scenario == BulkFailureScenario.MainAndTransactionCleanup)
+        // 幂等：await using 的 scope-end 二次释放不再重复抛（Dispose 语义要求幂等）
+        if (_disposed) return;
+        _disposed = true;
+        if (scenario is BulkFailureScenario.MainAndTransactionCleanup
+            or BulkFailureScenario.TransactionCleanupOnSuccess)
             throw failures.TransactionCleanup;
     }
 }

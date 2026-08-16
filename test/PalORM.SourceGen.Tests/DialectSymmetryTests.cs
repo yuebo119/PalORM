@@ -142,12 +142,16 @@ internal sealed class DialectSymmetryTests
 
     [Test]
     public async Task CreateTableSql_IsSymmetricAcrossDialects()
-        => await AssertSymmetric(dialect => MigrationEmitter.BuildCreateTable(_model, dialect));
+    {
+        await AssertSymmetric(dialect => MigrationEmitter.BuildCreateTable(_model, dialect));
+    }
 
     [Test]
     public async Task CreateIndexSql_IsSymmetricAcrossDialects()
-        => await AssertSymmetric(dialect =>
+    {
+        await AssertSymmetric(dialect =>
             MigrationEmitter.BuildCreateIndex(_model, _model.Indexes.AsSpan()[0], dialect));
+    }
 
     [Test]
     public async Task AllDialectSqls_QuoteIdentifiers()

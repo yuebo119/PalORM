@@ -100,10 +100,14 @@ public sealed class ResilienceExecutor
                 {
                     // 内部命令超时且重试耗尽：包装为 TimeoutException，调用方可与"我被取消"区分。
                     // ITM-647：attempt 从 0 起，分母 = _maxRetries + 1 = 1 次初始尝试 + _maxRetries 次重试。
-                    throw new TimeoutException(
+                    // ITM-667：Data 标记替代消息前缀识别——用户自抛同前缀 TimeoutException
+                    // 不再被误判为基础设施超时计入熔断。
+                    var wrappedTimeout = new TimeoutException(
                         $"Command timed out after {_timeout} (attempt {attempt + 1} of {_maxRetries + 1}; " +
                         $"1 initial attempt + {_maxRetries} retries).",
                         timeoutException);
+                    wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+                    throw wrappedTimeout;
                 }
                 finally
                 {
@@ -139,11 +143,11 @@ public sealed class ResilienceExecutor
         return TimeSpan.FromMilliseconds(milliseconds);
     }
 
-    /// <summary>ITM-506/658(r4)：仅瞬时故障与本类型包装的基础设施超时（消息前缀标识）
-    /// 计入熔断——用户 operation 自抛的 TimeoutException 是应用域确定性信号，不熔断；
-    /// 唯一约束冲突/SQL 语法错误等确定性失败同理。</summary>
+    /// <summary>ITM-506/658(r4)：仅瞬时故障与本类型包装的基础设施超时（ITM-667 起用
+    /// Data 标记识别，不再按消息前缀）计入熔断——用户 operation 自抛的 TimeoutException
+    /// 是应用域确定性信号，不熔断；唯一约束冲突/SQL 语法错误等确定性失败同理。</summary>
     private bool CountsTowardCircuit(Exception exception)
-        => (exception is TimeoutException
-                && exception.Message.StartsWith("Command timed out", StringComparison.Ordinal))
+        => (exception is TimeoutException timeoutException
+                && timeoutException.Data.Contains("PalORM.InfrastructureTimeout"))
             || _isTransient(exception);
 }

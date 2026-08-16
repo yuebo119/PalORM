@@ -521,7 +521,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     /// <summary>PALORM014：[SoftDelete] 实体必须映射 deleted_at 列。
     /// ITM-587：走基类链（与 TableModel.GetMappableProperties 口径一致）——派生类继承
-    /// AuditBase 把 deleted_at 放基类时，type.GetMembers() 只查声明类型会误报。</summary>
+    /// AuditBase 把 deleted_at 放基类时，type.GetMembers() 只查声明类型会误报。
+    /// ITM-659：有效列名 = [Column] 值 ?? 属性名（与 TableModel.cs:52-53 同口径）——
+    /// 属性名恰为 deleted_at 且无 [Column] 时同样满足运行时硬编码契约，不得误报。</summary>
     private static void CheckSoftDeleteColumn(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool isSoftDelete = type.GetAttributes().Any(attribute =>
@@ -529,15 +531,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (!isSoftDelete) return;
 
         bool hasSoftDeleteColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
-            .Any(static property => property.GetAttributes().Any(attribute =>
-                SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
-                && attribute.ConstructorArguments.FirstOrDefault().Value is "deleted_at"));  // ITM-512
+            .Any(property => HasColumnNamed(property, "deleted_at"));
         if (!hasSoftDeleteColumn)
             ctx.ReportDiagnostic(Diagnostic.Create(MissingSoftDeleteColumn, type.Locations[0], type.Name));
     }
 
     /// <summary>PALORM018：[TenantAware] 实体必须映射 tenant_id 列。
-    /// ITM-588：同 ITM-587——走基类链覆盖 TenantBase 放 tenant_id 的派生类。</summary>
+    /// ITM-588：同 ITM-587——走基类链覆盖 TenantBase 放 tenant_id 的派生类。
+    /// ITM-659：同 ITM-659——默认列名（属性名）同口径。</summary>
     private static void CheckTenantColumn(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool isTenantAware = type.GetAttributes().Any(attribute =>
@@ -545,11 +546,21 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (!isTenantAware) return;
 
         bool hasTenantColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
-            .Any(static property => property.GetAttributes().Any(attribute =>
-                SourceGenerationValidation.IsPalORMAttribute(attribute, "Column")
-                && attribute.ConstructorArguments.FirstOrDefault().Value is "tenant_id"));  // ITM-512
+            .Any(property => HasColumnNamed(property, "tenant_id"));
         if (!hasTenantColumn)
             ctx.ReportDiagnostic(Diagnostic.Create(MissingTenantColumn, type.Locations[0], type.Name));
+    }
+
+    /// <summary>有效列名 = [Column] 显式名 ?? 属性名——与 TableModel.cs 的列名推导
+    /// 单一口径（ITM-659：此前 PALORM014/018/040 只认 [Column] 显式名，属性名恰为
+    /// deleted_at/tenant_id 时误报，且 PALORM040 安全守卫可被无 [Column] 形态绕过）。</summary>
+    private static bool HasColumnNamed(IPropertySymbol property, string expected)
+    {
+        var columnAttr = property.GetAttributes().FirstOrDefault(attribute =>
+            SourceGenerationValidation.IsPalORMAttribute(attribute, "Column"));  // ITM-512
+        string effectiveColumnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
+            ?? property.Name;
+        return string.Equals(effectiveColumnName, expected, StringComparison.Ordinal);
     }
 
     /// <summary>PALORM040：[TenantAware] 实体的 tenant_id 列可空或无 [Required]。
@@ -564,9 +575,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
-            var colAttr = property.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
-            if (colAttr?.ConstructorArguments.FirstOrDefault().Value is not "tenant_id") continue;
+            // ITM-659：有效列名回退属性名——无 [Column] 的属性名 tenant_id 同样命中
+            // PALORM040 判据，可空形态不得借"无显式 [Column]"绕过安全守卫。
+            if (!HasColumnNamed(property, "tenant_id")) continue;
 
             // 仅引用类型需要 [Required]——值类型（long/Guid 等）天然不可 null
             bool isReferenceType = property.Type.IsReferenceType

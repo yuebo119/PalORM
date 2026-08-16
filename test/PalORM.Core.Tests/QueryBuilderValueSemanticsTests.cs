@@ -242,6 +242,9 @@ public sealed class QueryBuilderValueSemanticsTests
         QueryBuilder<ValueSemanticsEntity> builder = session.From<ValueSemanticsEntity>();
         QueryBuilder<ValueSemanticsEntity> clone = builder.CloneForExecution();
 
+        // T-P3-01 白盒豁免（T2）：_isolationLevel 是纯内部透传字段，SQLite 内存库
+        // 单隔离模型无法观测事务隔离级别差异；消费点（ToPageAsync 自开事务）只能经
+        // 字段断言锁定 r5-S2 修复（Services 构造丢失致条件分支死代码）。
         await Assert.That(clone._isolationLevel).IsEqualTo(builder._isolationLevel);
     }
 

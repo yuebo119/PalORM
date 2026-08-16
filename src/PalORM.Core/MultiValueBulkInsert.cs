@@ -26,6 +26,9 @@ public static class MultiValueBulkInsert
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ctx.BatchSize);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ctx.MaxParametersPerStatement);
+        // ITM-668：占位符下标写缓冲 5 位上限（WriteIndexDigits stackalloc char[5]）——
+        // 超限在入口显式拒绝，而非第 100000 个参数处越界 IndexOutOfRangeException。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(ctx.MaxParametersPerStatement, 99_999);
         ArgumentOutOfRangeException.ThrowIfNegative(ctx.CommandTimeoutSeconds);
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);

@@ -365,10 +365,22 @@ internal static class PalORM_RegistryInitializer
 
             CreateIndexSqlByDialect = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateIndexSqlSet>
         {
+            [typeof(global::AllTypesEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesSqlite,
+                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesPostgreSql,
+                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesMySql),
             [typeof(global::FullFeatureEntity)] = new global::PalORM.CreateIndexSqlSet(
                 Migration_global__FullFeatureEntity_4964faa8.CreateIndexesSqlite,
                 Migration_global__FullFeatureEntity_4964faa8.CreateIndexesPostgreSql,
                 Migration_global__FullFeatureEntity_4964faa8.CreateIndexesMySql),
+            [typeof(global::ReservedWordEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesSqlite,
+                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesPostgreSql,
+                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesMySql),
+            [typeof(global::InheritedEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__InheritedEntity_3f5411cb.CreateIndexesSqlite,
+                Migration_global__InheritedEntity_3f5411cb.CreateIndexesPostgreSql,
+                Migration_global__InheritedEntity_3f5411cb.CreateIndexesMySql),
         },
 
             SetIdDelegates = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<object, long>>

@@ -135,14 +135,14 @@ internal static class CommandFactoryEmitter
             sb.AppendLine("        return true;");
             return;
         }
-        sb.AppendLine($"        return global::System.Collections.Generic.EqualityComparer<{pkColumn.ClrTypeName}>.Default.Equals(entity.{pkColumn.PropertyName}, default);");
+        sb.AppendLine($"        return global::System.Collections.Generic.EqualityComparer<{pkColumn.ClrTypeName}>.Default.Equals(entity.{pkColumn.EscapedPropertyName}, default);");
     }
 
     private static void GenerateIncrementVersionBody(TableModel model, StringBuilder sb)
     {
         var concurrencyColumn = model.Columns.AsSpan().ToArray().FirstOrDefault(c => c.IsConcurrencyToken);
         if (concurrencyColumn is null) return;
-        sb.AppendLine($"        entity.{concurrencyColumn.PropertyName}++;");
+        sb.AppendLine($"        entity.{concurrencyColumn.EscapedPropertyName}++;");
     }
 
     private static void GenerateSetIdBody(TableModel model, StringBuilder sb)
@@ -160,7 +160,7 @@ internal static class CommandFactoryEmitter
             "long" or "global::System.Int64" => "",
             _ => "(long)" // 默认转为 long 再写入
         };
-        sb.AppendLine($"        entity.{pkCol.PropertyName} = {cast}id;");
+        sb.AppendLine($"        entity.{pkCol.EscapedPropertyName} = {cast}id;");
     }
 
     /// <summary>去除可空标注（string? → string），供主键类型精确匹配——EndsWith 匹配
@@ -414,7 +414,7 @@ internal static class CommandFactoryEmitter
         }
         if (cc is not null)
         {
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = entity.{cc.PropertyName}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = entity.{cc.EscapedPropertyName}; cmd.Parameters.Add(p); }}");
         }
     }
 
@@ -422,14 +422,14 @@ internal static class CommandFactoryEmitter
     {
         if (IsObjectOwnedJson(col))
             return col.IsNullable
-                ? $"entity.{col.PropertyName} is null ? global::System.DBNull.Value : (object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.PropertyName}, JsonTypeInfo_{col.PropertyName})"
-                : $"(object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.PropertyName}, JsonTypeInfo_{col.PropertyName})";
+                ? $"entity.{col.EscapedPropertyName} is null ? global::System.DBNull.Value : (object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})"
+                : $"(object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})";
 
         string valueExpression = col.ConverterTypeName is null
-            ? $"entity.{col.PropertyName}"
-            : $"_conv_{col.PropertyName}.ToProvider(entity.{col.PropertyName})";
+            ? $"entity.{col.EscapedPropertyName}"
+            : $"_conv_{col.PropertyName}.ToProvider(entity.{col.EscapedPropertyName})";
         return col.IsNullable
-            ? $"entity.{col.PropertyName} is null ? global::System.DBNull.Value : (object){valueExpression}"
+            ? $"entity.{col.EscapedPropertyName} is null ? global::System.DBNull.Value : (object){valueExpression}"
             : $"(object){valueExpression}";
     }
 

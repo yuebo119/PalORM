@@ -13,10 +13,12 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         List<string> issues = [];
+        // ITM-671：未注册实体/缺元数据必须显式失败——静默空 issues 与"schema 完全匹配"
+        // 不可区分，掩盖未注册/旧生成器问题（与 GetAsync/InsertAsync 未注册失败口径对齐）。
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName))
-            return issues;
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated table metadata.");
         if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? expectedColumns))
-            return issues;
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated column metadata.");
 
         try
         {
@@ -40,7 +42,8 @@ public sealed partial class DataSession<TProvider>
     /// <summary>Schema 差异检测（CI 仅检查不执行）。
     /// <para><b>v4.0 起标 Obsolete</b>——本质是 <see cref="ValidateSchemaAsync{T}"/> 的字符串前缀包装，
     /// 增加了调用方心智负担却无新信息。直接用 <c>ValidateSchemaAsync&lt;T&gt;()</c> 然后按需加前缀。</para></summary>
-    [Obsolete("Use ValidateSchemaAsync<T>() and apply prefix manually if needed. This thin wrapper adds no information.")]
+    [Obsolete("Use ValidateSchemaAsync<T>() and apply prefix manually if needed. This thin wrapper adds no information. Scheduled for removal in v6.0.",
+        DiagnosticId = "PALORM901")]
     public async ValueTask<List<string>> DiffAsync<T>(CancellationToken ct = default) where T : class, new()
         => (await ValidateSchemaAsync<T>(ct).ConfigureAwait(false)).Select(d => $"[DIFF] {d}").ToList();
 
@@ -69,10 +72,12 @@ public sealed partial class DataSession<TProvider>
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
+            // ITM-672 → r18 修正：无 [Index] 属性的实体不在 CreateIndexSqlByDialect 中
+            // （生成器有意省略——省内存）——跳过索引 DDL 而非误抛"旧版本"异常
             if (!PalORM_Runtime.CreateIndexSqlByDialect.TryGetValue(
                     type, out CreateIndexSqlSet indexSqls))
             {
-                continue;
+                continue;  // 无索引实体——建表已完成，无索引 DDL 需执行
             }
             foreach (string indexDdl in indexSqls.Get(TProvider.Dialect))
             {
