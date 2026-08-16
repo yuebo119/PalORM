@@ -57,3 +57,46 @@ mydatabase.db
 ## Local tool caches / review artifacts
 .depwire/
 artifacts/
+
+# ═══ 敏感信息文件（全面禁止提交）═══
+# 环境变量 / 凭据文件
+.env
+.env.*
+!.env.test.example
+*.env
+
+# 密钥 / 证书
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.ppk
+
+# NuGet / 包管理凭据
+nuget.config
+NuGet.Config.user
+*.nuget.credentials
+
+# 云平台凭据
+.aws/credentials
+.aws/config
+.gcp/
+.azure/
+kubeconfig
+.kube/
+
+# 数据库备份（可能含数据）
+*.sql.bak
+*.db.bak
+*.dump
+
+# 临时导出
+*secrets*
+*credentials*
+*token*.txt
+*apikey*.txt

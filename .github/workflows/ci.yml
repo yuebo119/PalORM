@@ -13,6 +13,34 @@ env:
     PALORM_UPDATE_SNAPSHOTS: ""
 
 jobs:
+    security:
+        name: Secret Scan (gitleaks + custom)
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0  # 全历史扫描
+
+            - name: Gitleaks (全历史)
+              uses: gitleaks/gitleaks-action@v2
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Custom Secret Guard (staged diff)
+              run: |
+                  # 用项目自带的 secret-guard 扫描最近提交的 diff
+                  chmod +x scripts/secret-guard.sh
+                  # 构造 staged 环境：检查最近一次 push 的所有文件
+                  git diff origin/main..HEAD --name-only --diff-filter=ACM | while read f; do
+                      if [ -f "$f" ]; then
+                          git show ":$f" 2>/dev/null | head -1 > /dev/null && \
+                          echo "checking: $f"
+                      fi
+                  done
+                  # 直接运行 hook 检查当前 HEAD
+                  bash scripts/secret-guard.sh
+
     build:
         name: Build (.NET 11)
         runs-on: ubuntu-latest
