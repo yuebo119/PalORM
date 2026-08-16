@@ -55,11 +55,21 @@ internal static class SqlTemplateEmitter
                 .DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
             {
                 ISymbol? symbol = semanticModel.GetSymbolInfo(identifier, ct).Symbol;
+                // r11.5-D1(P2)：所在类静态成员的非限定引用（{TablePrefix}）同样在生成物
+                // SqlTemplates（namespace 级静态类）内不可解析——CS0103 仍是 ITM-573 要
+                // 消除的"错误指向 .g.cs"形态。放行的静态成员仅限生成类自身可解析的：
+                // 限定引用（{Repos.X}/{Math.PI}——MemberAccess 的 Identifier 已在
+                // DescendantNodesAndSelf 中单独判定，其 symbol 为用户类成员仍拒）
                 if (symbol is ILocalSymbol or IParameterSymbol
                     || (symbol is IFieldSymbol or IPropertySymbol && !symbol.IsStatic)
                     // r5-A3：实例方法调用（{GetId()}）漏滤会生成静态类内 CS0120——
-                    // 恰是 ITM-573 要消除的"错误指向 .g.cs"形态
-                    || (symbol is IMethodSymbol invokedMethod && !invokedMethod.IsStatic))
+                    || (symbol is IMethodSymbol invokedMethod && !invokedMethod.IsStatic)
+                    // r11.5-D1：非限定静态引用（{TablePrefix}——identifier 直接为洞表达式，
+                    // 非 X.Y 成员访问的右操作数）在生成类 SqlTemplates 内不可解析。
+                    // 限定引用（{Repos.TablePrefix}/{Math.PI}）的右 identifier 父节点是
+                    // MemberAccess，不受本分支影响（保持放行）
+                    || (symbol is (IFieldSymbol or IPropertySymbol) and { IsStatic: true }
+                        && identifier.Parent is not MemberAccessExpressionSyntax))
                 {
                     return null;
                 }

@@ -178,7 +178,7 @@ internal static class MigrationEmitter
         {
             foreach (string indexColumn in index.Columns.AsSpan())
             {
-                if (string.Equals(indexColumn, column.ColumnName, StringComparison.Ordinal))
+                if (string.Equals(indexColumn, column.ColumnName, StringComparison.OrdinalIgnoreCase))  // r11.5-D4：与 PALORM020 knownColumns 口径对齐——大小写异形索引列需触发 VARCHAR(255) 改写
                     return true;
             }
         }
