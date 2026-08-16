@@ -506,7 +506,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         CheckPropertyLevelDiagnostics(ctx, type, ref assemblyTables); // PALORM002/003/004/017/019/025/026/027/034/035/037
     }
 
-    /// <summary>PALORM013：带 Schema/Database 限定符的 [Table] 不被支持。</summary>
+    /// <summary>PALORM011：带 Schema/Database 限定符的 [Table] 不被支持。</summary>
     private static void CheckQualifiedTable(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
@@ -769,7 +769,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
 
             CheckAnnotationNotApplied(ctx, member, memberLocation);              // PALORM017
-            CheckOwnedJson(ctx, type, member);                                    // PALORM019
+            CheckOwnedJson(ctx, type, member);                                    // PALORM008/009/010（r11.5-D2 订正：019 是复合主键）
             CheckValueMapping(ctx, member);                                       // 值映射
             CheckColumnNameMismatch(ctx, member, type);                           // PALORM002
             CheckForeignKey(ctx, member, type, memberLocation, ref assemblyTables); // PALORM003/004
@@ -940,7 +940,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column] schema arguments (Length/Precision/Scale/TypeName/StoreAs)", member.Name));
     }
 
-    /// <summary>PALORM019：[OwnedJson] 必须是 string 属性 + 有效的 JsonSerializerContext。
+    /// <summary>PALORM008/009/010：[OwnedJson] 必须是 string 属性（r11.5-D2 订正原 019 错标） + 有效的 JsonSerializerContext。
     /// 三种失败：声明位置不合法（泛型/嵌套）、缺少上下文、上下文无效。</summary>
     private static void CheckOwnedJson(SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
