@@ -4,52 +4,78 @@
 
 ## [5.2.0] — 质量收口（14 轮 AI 评审 + record 支持 + 隔离级别全链 + 真库回归）
 
-> 本版本包含 14 轮自动化 AI 评审-修复迭代（56→0 缺陷收敛），全部修复均经独立验证轮确认。
-> 变更规模：57 个提交 · 127 个文件 · +5389/−2939 行。
+> 58 个提交 · 127 个文件 · +5390/−2939 行 · 48 个产品代码文件变更
+> 14 轮 AI 自动化评审-修复迭代，每批修复经下一轮独立验证确认
 
-### ✨ 新增
+## 💔 破坏性变更
 
-- **record 实体支持**：`[Table] record` 声明现在完全可生成（get;set 属性真生成、
-  位置参数/init-only 键有 Error 级定位诊断）——三支分形态全覆盖
+- **`CrudColumns` 构造函数**：2 参数 → 3 参数（新增 `update` 列集）
+  ```csharp
+  // v5.1.0
+  new CrudColumns(insertColumns, upsertColumns)
+  // v5.2.0
+  new CrudColumns(insertColumns, upsertColumns, updateColumns)
+  ```
+- **`IDbProvider.BulkInsertAsync`**：新增 `IsolationLevel` 参数（自定义 Provider 需同步签名）
+- **`[Table]` 实体类约束**：record 类型现在被支持（不再是 class-only）
+
+## ✨ 新增功能
+
+- **record 实体支持**：`[Table] public record User { [Key] public long Id { get; set; } }` 现在完全可生成。
+  - `get; set` 属性 → 真实生成（RowFactory/CommandFactory/Migration/Registry 全输出）
+  - 位置参数 `record User(string Name)` → PALORM015 Error（缺无参构造，有定位诊断）
+  - `[Key]` init-only → PALORM022 Error（防 CS8852，有定位诊断）
+  - 锁定测试 ×3（GeneratorPhase2Tests）
 - **隔离级别全链透传**：`WithIsolationLevel()` 现在在所有自开事务路径生效
-  （ToPageAsync/BulkInsert/BulkCopy/fallback——此前仅单条 CRUD 生效）
-- **PALORM015/022/024/025/031/032/033/034/036** 诊断规则修复与增强
-  （推断式泛型调用/Nullable 时间/init-only 并发令牌/分析器谓词对齐真源）
+  - `ToPageAsync`（此前仅单条 CRUD 生效）
+  - `BulkInsertAsync`（PG COPY / MySQL BulkCopy / MySQL 多值 fallback）
+  - `BulkDeleteAsync` / `BulkUpdateAsync` / `BulkUpdateBatchAsync` / `BulkMergeAsync` / `SeedAsync`
+- **`CrudColumns.Update` 列集**：批量 UPDATE 不再反解 SQL 文本，直接消费编译期元数据
+- **`SqlTemplate` 生成物 `global using System`**：限定引用（`{Math.PI}`）在无 ImplicitUsings 项目不再 CS0246
 
-### 🐛 修复
+## 🐛 修复
 
-- **MySQL Upsert 主键回填**（ITM-608）：LAST_INSERT_ID 死分支 + 缺 SELECT 后缀——v4.1 预构建引入的回归
-- **Raw 子句分页 Total 虚高**（ITM-609）：BuildCountSql 补 Raw 消费
-- **PG bool JSON 恒不匹配**（ITM-610）：Convert.ToString(bool) 产 "True" 与 jsonb 小写 "true" 恒不等
-- **Audit 脱敏承诺击穿**（ITM-611）：logParameters=false 仍渲染 exception.ToString()（含 PG DETAIL PII）
-- **连接池参数静默覆盖**（ITM-612）：用户连接串显式 Max Pool Size 被 DbOptions 默认值改写
-- **Bulk 家族空列表+未注册类型**（ITM-637 六侧收口）：六方法统一"一致抛"语义
-- **PgListener 启动挂起**（S1）：首连 LISTEN 瞬态失败→重连成功路径 TrySetResult 修复
-- **ToPageAsync 缓存键污染**（S-A）：页截断结果写入用户缓存键致同键 ToListAsync 静默丢行
-- **Take/Skip UPDATE 扩大范围**（D-1）：BuildUpdateSql 守卫族补 Take/Skip（静默丢 LIMIT）
-- **PALORM024 谓词锚错真源**（D-A）：分析器与生成器 IsUpdatableColumn 对齐
+| 问题 | 影响 | 修复 |
+|------|------|------|
+| MySQL Upsert 自增主键不回填 | `entity.Id` 恒为 0 | LAST_INSERT_ID 死分支 + 补 SELECT 后缀 |
+| Raw 子句分页 Total 虚高 | 分页统计错误 | BuildCountSql 补 Raw 消费 |
+| PG `WhereJson<T>(bool)` 恒空 | 查询静默返回空结果 | bool 特判小写 "true" |
+| Audit `logParameters=false` 仍泄露 PII | PG DETAIL 参数值入日志 | else 分支不再传 exception 实例 |
+| 连接池参数被静默覆盖 | 用户 `Max Pool Size=500` 被改为默认 100 | 仅默认值时覆盖策略 |
+| Bulk 空列表+未注册类型静默 0 | 同一非法输入两种结果 | 六方法统一前置检查 |
+| PgListener 首连挂起 | LISTEN 瞬态失败后 `StartAsync` 永久阻塞 | TrySetResult 锚定 startupPhase |
+| ToPageAsync 缓存键污染 | 页截断结果写入用户缓存致同键 ToListAsync 丢行 | 克隆后清 `_cacheKey` |
+| UPDATE + Take/Skip 扩大范围 | `.Set().Take(5)` 静默丢 LIMIT 更新全表 | 构建期显式拒绝 |
+| PALORM024 谓词误报 | 纯 `[IgnoreOnInsert]` 实体被 Error 阻断 | 分析器谓词对齐生成器真源 |
+| PALORM025 Nullable 时间误报 | `DateTime?` 属性被 Error 阻断 | UnwrapNullable 判定 |
+| PALORM031/032 推断式调用漏报 | `BulkUpdateBatchAsync(list)` 不报 | 语义层 TypeArguments |
+| `WithTransaction` 已释放事务误导报错 | 报"不属于主连接"而非"已释放" | 先查 Connection null |
 
-### 📦 依赖
+## 📦 依赖升级
 
-- Microsoft.Data.Sqlite.Core 11.0.0-preview.6 → preview.7
-- MySqlConnector 2.6.1 → 2.6.2
-- SQLite3MC.PCLRaw.bundle 2.3.6 → 2.4.0
-- SonarAnalyzer.CSharp 10.30 → 10.32
-- Microsoft.CodeAnalysis.Analyzers 5.3.0 → 5.6.0
-- Microsoft.SourceLink.GitHub 8.0.0 → 10.0.400
-- TUnit / TUnit.Assertions 1.61.38 → 1.65.0
+| 包 | 旧版本 | 新版本 |
+|---|--------|--------|
+| Microsoft.Data.Sqlite.Core | 11.0.0-preview.6 | 11.0.0-preview.7 |
+| MySqlConnector | 2.6.1 | 2.6.2 |
+| SQLite3MC.PCLRaw.bundle | 2.3.6 | 2.4.0 |
+| Microsoft.CodeAnalysis.Analyzers | 5.3.0 | 5.6.0 |
+| Microsoft.SourceLink.GitHub | 8.0.0 | 10.0.400 |
+| TUnit / TUnit.Assertions | 1.61.38 | 1.65.0 |
+| SonarAnalyzer.CSharp | 10.30 | 10.32 |
 
-### 🧪 测试
+## 🧪 验证
 
-- 518 个测试全绿（Core 195 + SourceGen 144 + Integration 179 含 PG/MySQL 真库）
-- Native AOT 三平台 publish + 原生运行通过
-- 快照基线 13 份一致
-- 14 轮独立评审验证（B37 收敛纪律）
+- **518 个测试全绿**：Core 195 + SourceGen 144 + Integration 179（含 PG/MySQL 真库回归）
+- **Native AOT** 三平台 publish 零错误 + 原生二进制运行通过
+- **快照基线** 13 份一致（源生成器输出锁定）
+- **每批修复经下一轮独立地毯评审验证**（连续 4 轮零 P0-P2 终证）
 
-### 📚 参考
+## 🔧 开发基础设施
 
-- [ADR-G/H/I](docs/adr/)：LocalInfile 安全策略 / IRowFactory 处置 / legacy 移除窗口
-- [AI 质量系统](.ai/README.md)：V1-V15 防线 + B30-B37 教训库
+- **敏感信息三层防护**：.gitignore 20+ 模式 → pre-commit hook 9 类检测 → CI gitleaks 全历史扫描
+- **Release 自动化**：从 CHANGELOG 自动提取版本段 + 组装标准 Release Body
+- **CHANGELOG 规范化**：全部版本统一 emoji 段头七段结构
+
 
 ## [5.1.0] — Auto Tagging Interceptor（SourceGen 自动 SQL 源码定位）
 
