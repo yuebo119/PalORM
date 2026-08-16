@@ -19,7 +19,7 @@ public sealed class PalORMGenerator : IIncrementalGenerator
         var tableModels = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 "PalORM.TableAttribute",
-                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,  // r15-N1：analyzer 含 record，生成器漏收致 [Table] record 静默跳过
                 transform: static (ctx, _) => TableModel.FromContext(ctx))
             .Where(static m => m is not null)
             .Select(static (m, _) => m!)
