@@ -11,6 +11,9 @@ namespace PalORM.Core.Tests;
 /// ITM-404 再证 partial 文件（DataSession_Bulk.cs）是盲区——扫描范围覆盖全部
 /// DataSession*.cs（ITM-405），方法体提取改为花括号配对（ITM-413：不再依赖
 /// "\n    }" 文本定界，表达式体/嵌套方法不误吞）。
+/// <para><b>T2 白盒豁免（r19/T-P3-19）</b>：本类以源码文本扫描为断言手段——架构不变式
+/// （"所有 X 必须经过 Y"）在类型系统/运行时层面不可表达，只能源码级验证；这是该防线
+/// 的设计形态，非实现细节窥探。</para>
 /// </summary>
 public sealed class ArchitectureInvariantTests
 {

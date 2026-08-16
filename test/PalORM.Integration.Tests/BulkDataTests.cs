@@ -168,7 +168,6 @@ public sealed class BulkDataTests
             await db.BulkInsertAsync([new BulkGeneratedOnlyEntity()]))
             .Throws<InvalidOperationException>();
 
-        await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.Message)
             .Contains("has no generated insert metadata");
     }
@@ -182,7 +181,6 @@ public sealed class BulkDataTests
             await db.UpdateAsync(new BulkKeyOnlyEntity { Id = "only" }))
             .Throws<InvalidOperationException>();
 
-        await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.Message)
             .Contains("has no updatable columns");
     }

@@ -226,9 +226,15 @@ public sealed class MultiEntityTests
         await db.MigrateAsync();
         var p1 = await db.InsertAsync(new Product { Name = "U1", Price = 1m, Stock = 10 });
         var p2 = await db.InsertAsync(new Product { Name = "U2", Price = 2m, Stock = 20 });
-        p1.Price = 99m; p2.Price = 99m;
+        p1.Price = 99m;
+        p2.Price = 99m;
         long n = await db.BulkUpdateAsync([p1, p2]);
         await Assert.That(n).IsEqualTo(2);
+        // r19/T-P3-08：affected 数只证明 WHERE 命中——回查 DB 锁定列值确实变更
+        Product? after1 = await db.GetAsync<Product>(p1.Id);
+        Product? after2 = await db.GetAsync<Product>(p2.Id);
+        await Assert.That(after1!.Price).IsEqualTo(99m);
+        await Assert.That(after2!.Price).IsEqualTo(99m);
     }
 
     [Test]
@@ -240,6 +246,9 @@ public sealed class MultiEntityTests
         var p2 = await db.InsertAsync(new Product { Name = "D2", Price = 2m, Stock = 0 });
         long n = await db.BulkDeleteAsync<Product>([p1.Id, p2.Id]);
         await Assert.That(n).IsEqualTo(2);
+        // r19/T-P3-08：affected 数只证明 WHERE 命中——回查 DB 锁定行确实不存在
+        await Assert.That(await db.GetAsync<Product>(p1.Id)).IsNull();
+        await Assert.That(await db.GetAsync<Product>(p2.Id)).IsNull();
     }
 
     [Test]

@@ -24,8 +24,13 @@ public sealed class AnnotationsTests
     public async Task KeyAttribute_CanBeInstantiated()
     {
         var attr = new KeyAttribute();
-        // 验证可实例化且 AttributeUsage 正确（不是 abstract/sealed 误标）
-        await Assert.That(attr.GetType()).IsEqualTo(typeof(KeyAttribute));
+        // r19/T-P3-17：原 GetType()==typeof(KeyAttribute) 恒真——改锁 AttributeUsage 契约
+        //（仅属性、单次、不可继承——这些是生成器主键收集的实际判据）
+        var usage = (AttributeUsageAttribute)Attribute.GetCustomAttribute(
+            attr.GetType(), typeof(AttributeUsageAttribute))!;
+        await Assert.That(usage.ValidOn).IsEqualTo(AttributeTargets.Property);
+        await Assert.That(usage.AllowMultiple).IsFalse();
+        await Assert.That(usage.Inherited).IsFalse();
     }
 
     [Test]

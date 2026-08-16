@@ -52,6 +52,9 @@ internal sealed partial class AotMySqlMigratedEntity
 
 internal static class Program
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S3776",
+        Justification = "AOT MySQL smoke 单一主流程——建表/CRUD/并发控制/JSON/批量/迁移/探针顺序验证，" +
+        "拆分方法会拆散一条直读的验收链（r19/T-P3-10 增内容断言后 +2）。")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1303",
         Justification = "固定英文文本是 Native AOT smoke test 的机器可读成功标记。")]
     internal static async Task Main()
@@ -72,6 +75,9 @@ internal static class Program
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_test (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL, version BIGINT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_json_test (id BIGINT AUTO_INCREMENT PRIMARY KEY, details TEXT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_mysql_bulk_test (Id VARCHAR(255) PRIMARY KEY, name TEXT NOT NULL, created_by VARCHAR(64) NOT NULL DEFAULT 'database', deleted_at DATETIME(6))").ConfigureAwait(false);
+            // r19/T-P3-10：建表后逻辑包 try/finally——断言失败也清理（T6），避免真库残留
+            try
+            {
 
             AotMySqlEntity inserted = await db.InsertAsync(new AotMySqlEntity
             {
@@ -151,9 +157,28 @@ internal static class Program
                 throw new InvalidOperationException("MySQL migrated-table round trip failed");
 
             // PoC Auto Tagging Interceptor 拦截目标——6 个终态方法全部覆盖。
-            // 不做内容断言（表可能为空），只验证调用本身不抛异常即证明拦截器 + AOT 链路通畅。
-            _ = await db.From<AotMySqlEntity>().Take(1).ToListAsync().ConfigureAwait(false);
-            _ = await db.From<AotMySqlEntity>().Take(1).FirstOrDefaultAsync().ConfigureAwait(false);
+            // r19/T-P3-10：内容断言（此前"不抛即过"零行为验证）——插入探针行后验证物化结果
+            var probe = await db.InsertAsync(new AotMySqlEntity
+            {
+                Name = "tag probe",
+                Value = 1,
+                Version = 0
+            }).ConfigureAwait(false);
+            var tagged = await db.From<AotMySqlEntity>().Take(1).ToListAsync().ConfigureAwait(false);
+            if (tagged.Count != 1 || tagged[0].Id != probe.Id)
+                throw new InvalidOperationException("AutoTagged ToListAsync materialization failed");
+            var taggedFirst = await db.From<AotMySqlEntity>().Take(1).FirstOrDefaultAsync().ConfigureAwait(false);
+            if (taggedFirst is null || taggedFirst.Id != probe.Id)
+                throw new InvalidOperationException("AutoTagged FirstOrDefaultAsync materialization failed");
+            await db.DeleteAsync<AotMySqlEntity>(probe.Id).ConfigureAwait(false);
+            }
+            finally
+            {
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_bulk_test").ConfigureAwait(false);
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_json_test").ConfigureAwait(false);
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_test").ConfigureAwait(false);
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_mysql_migrated").ConfigureAwait(false);
+            }
         }
 
         Console.WriteLine("PalORM AOT MySQL verification PASSED");

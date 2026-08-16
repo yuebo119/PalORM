@@ -157,6 +157,34 @@ public sealed class AdvancedFeatureTests
     }
 
     [Test]
+    public async Task StoredProc_QueryAsyncUnregisteredType_DoesNotConsumeSingleUse()
+    {
+        // r19/ITM-692：未注册类型失败不得永久消耗 single-use builder（ITM-424 注释意图）
+        await using var db = await TestDb.SqliteAsync();
+        var sp = db.StoredProc("proc_ok");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await sp.QueryAsync<UnregisteredSpEntity>());
+
+        // 同 builder 换已注册类型重试：若被误标"已执行"会抛 single-use InvalidOperationException。
+        // 此处允许的只有 SQLite 对存储过程的不支持——single-use 消息不得出现。
+        try
+        {
+            await sp.QueryAsync<Product>();
+            throw new InvalidOperationException("SQLite 应拒绝存储过程执行");
+        }
+        catch (InvalidOperationException ex)
+        {
+            await Assert.That(ex.Message).DoesNotContain("single-use");
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException) { /* 驱动拒绝形态——非本测试关注点 */ }
+        catch (NotSupportedException) { /* 驱动拒绝形态——非本测试关注点 */ }
+        catch (ArgumentException) { /* SQLite: CommandType.StoredProcedure 不支持 */ }
+    }
+
+    private sealed class UnregisteredSpEntity;
+
+    [Test]
     public async Task GetRawConnection_Open()
     {
         await using var db = await TestDb.SqliteAsync();

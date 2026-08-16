@@ -69,10 +69,11 @@ public sealed class DialectDifferenceTests
 
     // ─── 参数占位符统一性 ─────────────────────────────────
 
-    /// <summary>三个 Provider 都用 @p{N} 格式——通过 DryRun 验证 SQL 生成。
+    /// <summary>三个 Provider 都用 @p{N} 格式——IDbProvider.GetParameterPlaceholder 的
+    /// static virtual 默认实现由三 Provider 共享（编译期保证），SQLite DryRun 验证生成侧。
     /// static virtual 成员不能直接通过类名调用，用 DryRun 间接验证。</summary>
     [Test]
-    public async Task ParameterPlaceholder_AllProvidersUseAtPN()
+    public async Task ParameterPlaceholder_SqliteDryRun_UsesAtPN()
     {
         await using var db = await TestDb.SqliteAsync();
         var dry = db.From<Product>().Where($"Id = {42}").AsDryRun();
@@ -102,9 +103,9 @@ public sealed class DialectDifferenceTests
     // ─── CurrentTimestamp 时区语义差异 ───────────────────
 
     /// <summary>SQLite CURRENT_TIMESTAMP 恒 UTC（ITM-326）；PG/MySQL 用会话时区。
-    /// 验证 CurrentTimestampExpression 属性差异。</summary>
+    /// 三 Provider 的 CurrentTimestampExpression 属性文本相同（时区语义差异另见注释）。</summary>
     [Test]
-    public async Task CurrentTimestampExpression_Dialect_Difference()
+    public async Task CurrentTimestampExpression_SameAcrossProviders()
     {
         await Assert.That(PalORM.Sqlite.SqliteProvider.CurrentTimestampExpression).IsEqualTo("CURRENT_TIMESTAMP");
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.CurrentTimestampExpression).IsEqualTo("CURRENT_TIMESTAMP");

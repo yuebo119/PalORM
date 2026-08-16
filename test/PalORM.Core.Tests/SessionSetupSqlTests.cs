@@ -16,17 +16,19 @@ public sealed class SessionSetupSqlTests
     [Test]
     public async Task SessionSetupSql_Null_Default_DoesNotExecute()
     {
-        // 默认 null 不应抛异常（向后兼容）
+        // 默认 null 不应抛异常（向后兼容），且不得改写任何会话状态（cache_size 保持默认 -65536）
         await using var session = await DataSession<SqliteProvider>.CreateAsync(Opts(null));
-        await Assert.That(session).IsNotNull();
+        long cacheSize = await session.ScalarAsync<long>($"PRAGMA cache_size");
+        await Assert.That(cacheSize).IsEqualTo(-65536);
     }
 
     [Test]
     public async Task SessionSetupSql_EmptyOrWhitespace_TreatedAsNotSet()
     {
-        // 空白字符串等价于 null（IsNullOrWhitespace 判断）
+        // 空白字符串等价于 null（IsNullOrWhitespace 判断）——同上以默认状态未变锁定
         await using var session = await DataSession<SqliteProvider>.CreateAsync(Opts("   "));
-        await Assert.That(session).IsNotNull();
+        long cacheSize = await session.ScalarAsync<long>($"PRAGMA cache_size");
+        await Assert.That(cacheSize).IsEqualTo(-65536);
     }
 
     [Test]

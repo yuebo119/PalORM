@@ -52,8 +52,9 @@ public sealed class QueryTests
     }
 
     [Test]
-    public async Task ScalarAsync_CompositeFormat_RemainsParameterized()
+    public async Task ScalarAsync_CompositeFormat_ReturnsFilteredCount()
     {
+        // r19/T-P3-06：原名 RemainsParameterized 无参数化断言——按实际行为改名
         await using var db = await TestDb.SqliteAsync();
         await db.MigrateAsync();
         await db.InsertAsync(new Order { Status = "F", Total = 12.5m, CreatedAt = 0 });
@@ -593,7 +594,8 @@ public sealed class QueryTests
         await db.MigrateAsync();
         await InsertOrdersAsync(db, 6, i => new Order { Status = i % 2 == 0 ? "A" : "B", Total = i * 10m, CreatedAt = 0 });
         var seen = new HashSet<long>();
-        long? last = null; long total = 0;
+        long? last = null;
+        long total = 0;
 #pragma warning disable PALORM005 // 分页循环本质就是逐页查询，非 N+1（ITM-574 已登记该误报形态）
         for (int page = 0; page < 10; page++)
         {
@@ -623,7 +625,8 @@ public sealed class QueryTests
         var bFresh = await db.GetAsync<VersionedEntity>(b.Id);
         bFresh!.Name = "B-bump";
         await db.UpdateAsync(bFresh);  // DB: B.version=1，b 成为 stale
-        a.Name = "A-bulk"; b.Name = "B-bulk";
+        a.Name = "A-bulk";
+        b.Name = "B-bulk";
         await Assert.That(async () => await db.BulkUpdateAsync([a, b])).Throws<ConcurrencyConflictException>();
         await Assert.That(a.Version).IsEqualTo(0);  // 回滚后内存 version 未被抬高
         a.Name = "A-retry";
