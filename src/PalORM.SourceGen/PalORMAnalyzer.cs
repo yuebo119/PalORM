@@ -128,7 +128,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     // PALORM024：实体无可更新列——运行期 UpdateCoreAsync 空 SET throw / BulkMergeAsync 并发令牌 throw（r9-S-D 去字面行号）。
     public static readonly DiagnosticDescriptor NoUpdatableColumns = new(
         "PALORM024", "Entity has no updatable columns",
-        "Type '{0}' has no updatable columns (all non-PK properties are [Key-less computed]/[ConcurrencyCheck]/[Computed]/[Timestamp])", "PalORM", DiagnosticSeverity.Error, true);
+        "Type '{0}' has no updatable columns (all non-PK properties are [ConcurrencyCheck]/[Computed]/[Timestamp])", "PalORM", DiagnosticSeverity.Error, true);
 
     // PALORM025：[Timestamp] 标在非时间类型——ITM-402：MigrationEmitter 仅对 DateTime/DateTimeOffset
     // 生成 DEFAULT CURRENT_TIMESTAMP，其它类型 NOT NULL 无 DEFAULT 每次插入必失败。
