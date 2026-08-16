@@ -80,7 +80,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     // F4（消息精准化）：原消息"writable mapped properties"含义模糊，修订为单句原因清单。
     public static readonly DiagnosticDescriptor UnsupportedEntityDeclaration = new(
         "PALORM015", "Entity declaration is not supported by source generation",
-        "Type '{0}' cannot be processed by source generation: the entity is generic/nested/abstract/static, lacks a public parameterless constructor, or has a property with init-only or non-public/internal setter", "PalORM", DiagnosticSeverity.Error, true);
+        "Type '{0}' cannot be processed by source generation: the entity is generic/nested/abstract/static, lacks a public parameterless constructor, or has a property with a non-public/internal setter (r16-QA1 订正：init-only 列属性实际放行——RowFactory 用对象初始化器赋值合法；仅 [Key] init-only 走 PALORM022)", "PalORM", DiagnosticSeverity.Error, true);
 
     public static readonly DiagnosticDescriptor InvalidValueMapping = new(
         "PALORM016", "Property value mapping is not supported",
