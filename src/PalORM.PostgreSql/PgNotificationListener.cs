@@ -245,17 +245,23 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         }
 
         var args = new PgNotificationErrorEventArgs(exception);
+        bool subscriberThrew = false;
         foreach (Delegate candidate in handlers.GetInvocationList())
         {
             var handler = (EventHandler<PgNotificationErrorEventArgs>)candidate;
             try { handler(this, args); }
             catch (Exception ex)
             {
+                subscriberThrew = true;
                 // 记录但不传播订阅者异常，确保其他订阅者和监听循环不受影响
                 if (Logger is { } logger1)
                     LogOnErrorSubscriberThrew(logger1, ex);
             }
         }
+        // r19/ITM-702：订阅者全部抛异常时，订阅者异常只有 Debug 级——监听终止根因
+        // 必须 Error 级留痕（与无订阅者路径同口径），否则生产排障丢根因。
+        if (subscriberThrew && Logger is { } logger2)
+            LogListenerTerminated(logger2, exception);
     }
 
     private void OnConnectionNotification(string channel, string payload)

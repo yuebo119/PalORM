@@ -43,6 +43,10 @@ public sealed class ResilienceExecutor
         };
         // ITM-619：DbOptions 契约 TimeSpan.Zero = 无限等待（Validate 允许 Zero），但
         // CancelAfter(Zero) 是立即取消——归一为 InfiniteTimeSpan 保持契约语义。
+        // r19/ITM-696：直接构造未 Validate 的 options 时负值会在执行期 CancelAfter(负)
+        // 抛 AOORE 且消息不指向配置——构造期拒绝（与 RetryBackoff 守卫同族）。
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            options.CommandTimeout.Ticks, nameof(options.CommandTimeout));
         _timeout = options.CommandTimeout == TimeSpan.Zero
             ? Timeout.InfiniteTimeSpan
             : options.CommandTimeout;

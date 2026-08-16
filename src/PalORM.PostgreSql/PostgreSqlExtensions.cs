@@ -43,8 +43,19 @@ public static class PostgreSqlExtensions
             DateTime or DateTimeOffset => throw new NotSupportedException(
                 "WhereJson does not accept DateTime/DateTimeOffset values: the culture-formatted text "
                 + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first."),
+            // r19/ITM-683：DateOnly/TimeOnly 与 DateTime 同族——Convert.ToString 的 invariant
+            // 输出（MM/dd/yyyy / H:mm）与 jsonb ->> 提取的 ISO text（yyyy-MM-dd / HH:mm:ss）
+            // 恒不相等 → 静默空结果。显式拒绝，调用方请 ToString("yyyy-MM-dd")/("HH:mm:ss")。
+            DateOnly or TimeOnly => throw new NotSupportedException(
+                "WhereJson does not accept DateOnly/TimeOnly values: the invariant-formatted text "
+                + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first "
+                + "(e.g. value.ToString(\"yyyy-MM-dd\") or value.ToString(\"HH:mm:ss\"))."),
             _ => Convert.ToString(value, CultureInfo.InvariantCulture),
         };
+        // ITM-701：value 与 column/path 同口径 NUL 显式拒绝——绑定参数虽已隔离注入面，
+        // 但 Npgsql 线协议对 NUL 的错误形态不可控，库内统一明确失败（ITM-644 族）。
+        if (normalized is string normalizedString && normalizedString.Contains('\0', StringComparison.Ordinal))
+            throw new ArgumentException("JSONB 比较值不能包含 NUL 字符。", nameof(value));
         return builder.Where(FormattableStringFactory.Create(quoted + "->>{0} = {1}", path, normalized));
     }
 }

@@ -107,17 +107,22 @@ public sealed partial class DataSession<TProvider>
         }
         finally
         {
-            if (transaction is not null)
-            {
-                _operationState.RestoreTransaction(
-                    transaction, previousTransaction);
-            }
             try
             {
                 if (transaction is not null)
                 {
-                    await TransactionCleanup.DisposeTransactionPreservingAsync(
-                        transaction, primaryException).ConfigureAwait(false);
+                    // r19/ITM-704：RestoreTransaction 若抛异常（如 previousTransaction 状态访问失败），
+                    // 事务释放仍必须执行——嵌套 finally 保证清理链不可跳步。
+                    try
+                    {
+                        _operationState.RestoreTransaction(
+                            transaction, previousTransaction);
+                    }
+                    finally
+                    {
+                        await TransactionCleanup.DisposeTransactionPreservingAsync(
+                            transaction, primaryException).ConfigureAwait(false);
+                    }
                 }
             }
             finally
@@ -161,17 +166,22 @@ public sealed partial class DataSession<TProvider>
         }
         finally
         {
-            if (transaction is not null)
-            {
-                _operationState.RestoreTransaction(
-                    transaction, previousTransaction);
-            }
             try
             {
                 if (transaction is not null)
                 {
-                    await TransactionCleanup.DisposeTransactionPreservingAsync(
-                        transaction, primaryException).ConfigureAwait(false);
+                    // r19/ITM-704：RestoreTransaction 若抛异常（如 previousTransaction 状态访问失败），
+                    // 事务释放仍必须执行——嵌套 finally 保证清理链不可跳步。
+                    try
+                    {
+                        _operationState.RestoreTransaction(
+                            transaction, previousTransaction);
+                    }
+                    finally
+                    {
+                        await TransactionCleanup.DisposeTransactionPreservingAsync(
+                            transaction, primaryException).ConfigureAwait(false);
+                    }
                 }
             }
             finally
@@ -185,17 +195,44 @@ public sealed partial class DataSession<TProvider>
         DbTransaction transaction,
         Exception primaryException)
     {
+        SessionOperationState.SessionOperationLease operation;
         try
         {
-            using SessionOperationState.SessionOperationLease operation =
-                _operationState.EnterTransactionOperation();
-            await transaction.RollbackAsync(CancellationToken.None)
-                .ConfigureAwait(false);
+            operation = _operationState.EnterTransactionOperation();
         }
-        catch (Exception rollbackException)
+        catch (Exception gateException)
         {
-            primaryException.Data["PalORM.RollbackException"] =
-                rollbackException;
+            // r19/ITM-693：被弃的 QueryAsyncEnumerable 枚举器让 WaitForActiveOperationPreservingAsync
+            // 超时后 _isActive 仍为 true——门禁拒绝回滚租约。此前直接放弃回滚（只靠 finally
+            // Dispose 的驱动隐式回滚，无任何留痕）。此处绕过门禁直接尝试回滚：连接上有活跃
+            // reader 时驱动可能再次拒绝，成败都以结构化 Data 记录，不静默跳过。
+            try
+            {
+                await transaction.RollbackAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception directRollbackException)
+            {
+                directRollbackException.Data["PalORM.RollbackGateException"] = gateException;
+                primaryException.Data["PalORM.RollbackException"] = directRollbackException;
+                return;
+            }
+            primaryException.Data["PalORM.RollbackGateException"] = gateException;
+            return;
+        }
+
+        using (operation)
+        {
+            try
+            {
+                await transaction.RollbackAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception rollbackException)
+            {
+                primaryException.Data["PalORM.RollbackException"] =
+                    rollbackException;
+            }
         }
     }
 }
