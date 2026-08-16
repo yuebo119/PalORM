@@ -7,7 +7,9 @@ namespace PalORM;
 internal sealed class ConnectionLease : IAsyncDisposable
 {
     private readonly bool _ownsConnection;
-    private bool _disposed;
+    // r19/ITM-694：int + Interlocked 一次性守卫——此前 check-then-act 在并发双释放下
+    // 两个调用都能读到 false 并对 owned 连接重复 DisposeAsync。
+    private int _disposeState;
 
     private ConnectionLease(DbConnection connection, bool ownsConnection)
     {
@@ -45,8 +47,7 @@ internal sealed class ConnectionLease : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0) return;
         if (_ownsConnection)
         {
             // ITM-635：await using 语法下，主查询异常先抛时此处的释放异常会覆盖主异常

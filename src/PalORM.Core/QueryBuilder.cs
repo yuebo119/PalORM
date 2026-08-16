@@ -386,12 +386,13 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
-    /// <summary>以调用方源码位置为 Tag。注意：[CallerFilePath] 是编译机绝对路径，
-    /// 会随 SQL 注释发送到数据库服务器（可见于 DB 日志/pg_stat_activity），泄露内部目录结构。
-    /// 生产环境建议使用 Tag(name) 传业务标识，或配置 PathMap 规范化编译路径。</summary>
+    /// <summary>以调用方源码位置为 Tag。
+    /// r19/ITM-705：只取文件名（[CallerFilePath] 是编译机绝对路径——完整路径随 SQL 注释
+    /// 发送到数据库服务器会泄露内部目录结构）；行号+成员名保留排查价值。
+    /// 生产环境仍建议使用 Tag(name) 传业务标识。</summary>
     public QueryBuilder<T> TagWithCaller([CallerMemberName] string? member = null,
         [CallerFilePath] string? file = null, [CallerLineNumber] int line = 0)
-        => Tag($"{file}:{line} {member}");
+        => Tag($"{System.IO.Path.GetFileName(file)}:{line} {member}");
 
     /// <summary>路由到只读连接（若配置了读连接工厂）。活跃事务或写操作时自动回退主连接。</summary>
     public QueryBuilder<T> ForRead() { _useReadRoute = true; return this; }

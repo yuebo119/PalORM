@@ -1187,8 +1187,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             {
                 var tableAttr = type.GetAttributes().FirstOrDefault(a =>
                     SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
-                if (tableAttr?.ConstructorArguments.FirstOrDefault().Value is string name)
-                    names.Add(name);
+                // r19/ITM-685：无显式表名时默认表名 = 类型名（与 TableModel.cs:38-39、
+                // ValidateIndexDeclarations L1061 同口径）——此前只登记显式名，
+                // [ForeignKey("TypeName",…)] 指向裸 [Table] 实体时 PALORM003 误报。
+                if (tableAttr is null) continue;
+                string name = tableAttr.ConstructorArguments.FirstOrDefault().Value as string
+                    ?? type.Name;
+                names.Add(name);
             }
         }
         return names;

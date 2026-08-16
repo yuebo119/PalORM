@@ -65,7 +65,7 @@ public sealed class PalORMGenerator : IIncrementalGenerator
         // ── SqlTemplate: [SqlTemplate("name")] → 预编译 SQL 常量 (Phase 5) ──
         // ITM-573：Collect 后按 (Namespace, TemplateName) 去重——两个方法挂同名模板此前
         // 各自生成同名字段（双 partial class → CS0102，错误指向 .g.cs 难定位）。
-        // 重复时保留方法标识序最小者，其余静默丢弃（模板名冲突属用户错误，但生成物必须合法）。
+        // ITM-662：重名现在发射 PALORM041 Error 诊断（不再静默丢弃）——下方 RegisterSourceOutput 执行。
         var sqlTemplates = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 "PalORM.SqlTemplateAttribute",

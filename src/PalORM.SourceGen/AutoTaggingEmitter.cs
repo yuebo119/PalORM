@@ -133,7 +133,7 @@ internal static class AutoTaggingEmitter
         // 查找方法的返回类型（签名必须逐字匹配被拦截方法，否则 CS9144）
         string returnType = GetReturnType(target.MethodName);
 
-        // Tag 注释内容：相对路径:行号 成员名
+        // Tag 注释内容：文件名:行号 成员名（ITM-697：恒文件名，构建确定性）
         string tag = $"{target.RelativePath}:{target.Line} {target.MemberName}";
         // ITM-631：拦截 `*/`（Linux 文件名可含 *）——tag 进入 SQL 块注释，
         // 未转义的 */ 会被运行时 ValidateSqlComment 拒绝且报错远根因。插空格防闭合。
@@ -172,41 +172,14 @@ internal static class AutoTaggingEmitter
     }
 
     /// <summary>
-    /// 路径规范化：绝对路径 → 相对当前工作目录或仅文件名。
+    /// 路径规范化：绝对路径 → 仅文件名（确定性）。
     /// 避免编译机绝对路径泄露到 DB 日志（TagWithCaller 的已知限制）。
-    /// 注意：netstandard2.0 不含 Path.GetRelativePath，需手工实现前缀剥离。
+    /// r19/ITM-697：不再以 GetCurrentDirectory 为基准剥前缀——不同 CWD 构建会产出
+    /// 不同的相对路径 Tag（生成源非确定性）；恒返回文件名，构建可复现。
     /// </summary>
     private static string NormalizePath(string absolutePath)
     {
         if (string.IsNullOrEmpty(absolutePath)) return "unknown";
-
-        // 尝试剥离当前工作目录前缀（跨平台分隔符统一处理）
-        try
-        {
-            string cwd = System.IO.Directory.GetCurrentDirectory();
-            if (!string.IsNullOrEmpty(cwd))
-            {
-                // 统一分隔符比较
-                string normAbs = absolutePath.Replace('\\', '/');
-                string normCwd = cwd.Replace('\\', '/').TrimEnd('/');
-                // ITM-669：目录边界检查——cwd=C:/src/App 不得把 C:/src/Application/X.cs
-                // 剥成 "lication/X.cs"（前缀碰撞）。下一字符必须恰是 '/'。
-                bool boundaryOk = normAbs.Length == normCwd.Length
-                    || (normAbs.Length > normCwd.Length && normAbs[normCwd.Length] == '/');
-                if (boundaryOk
-                    && normAbs.StartsWith(normCwd, System.StringComparison.OrdinalIgnoreCase))
-                {
-                    string relative = normAbs.Substring(normCwd.Length).TrimStart('/');
-                    return relative;
-                }
-            }
-        }
-        catch
-        {
-            // GetCurrentDirectory 在源生成器上下文可能不可用——降级
-        }
-
-        // fallback：只保留文件名，避免泄露完整路径
         return System.IO.Path.GetFileName(absolutePath);
     }
 

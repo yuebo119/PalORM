@@ -24,6 +24,15 @@ internal static class SqlFileEmitter
         if (ctx.TargetSymbol is not IMethodSymbol method)
             return null;
 
+        // r19/ITM-686：泛型/嵌套类不支持——partial 声明必须逐字匹配类型参数、
+        // 约束与嵌套层级，发射非泛型非嵌套 partial 会产 CS0261/CS0260 且错误指向 .g.cs。
+        // 跳过生成 → 宿主侧得到 CS8795（partial 方法缺实现）直接指向原方法，明确可定位；
+        // 完整支持需按类型符号发射 arity/约束/嵌套路径（Table 侧同形态由
+        // SourceGenerationValidation 拒绝，此处为轻量同型守卫）。
+        if (method.ContainingType is { IsGenericType: true }
+            || method.ContainingType?.ContainingType is not null)
+            return null;
+
         var attr = method.GetAttributes().FirstOrDefault(a =>
             a.AttributeClass?.Name is "SqlFileAttribute" or "SqlFile"
             && a.AttributeClass?.ContainingNamespace?.ToDisplayString() is "PalORM");

@@ -288,8 +288,14 @@ public partial class DataSession<TProvider>
         string[] setColumns = metadata.UpdateColumns
             .Select(TProvider.QuoteIdentifier).ToArray();
         string quotedTable = TProvider.QuoteIdentifier(tableName);
+        // r19/ITM-684：缺 PkColumns 不再静默回退主键 "id"——错列更新比明确失败更危险。
+        // Register 的必填键校验使此分支经公共 API 不可达（防御纵深），但与 GetPkColumn/
+        // ITM-672 缺键拒绝族保持同口径：旧生成器/手工片段必须显式失败。
         string quotedPk = state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
-            ? TProvider.QuoteIdentifier(pkCol) : "\"id\"";
+            ? TProvider.QuoteIdentifier(pkCol)
+            : throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated primary key metadata; " +
+                "recompile the model assembly against the current PalORM source generator.");
         return new BatchUpdateContext(setColumns, quotedTable, quotedPk, HasTenantFilter<T>());
     }
 
