@@ -16,6 +16,20 @@ public sealed class ResilienceTests
     }
 
     [Test]
+    public async Task Constructor_NegativeCommandTimeout_ThrowsAtConstruction()
+    {
+        // r19/ITM-696：直接构造未 Validate 的 options 时负值会在执行期 CancelAfter(负)
+        // 抛 AOORE 且不指向配置——构造期拒绝（与 RetryBackoff 守卫同族）。
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            CommandTimeout = TimeSpan.FromSeconds(-1)
+        };
+
+        await Assert.That(() => new ResilienceExecutor(opts)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task ExecuteAsync_RetriesOnFailure()
     {
         var opts = new DbOptions { ConnectionString = "dummy", MaxRetries = 2, CircuitBreakerThreshold = 0 };

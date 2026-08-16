@@ -95,6 +95,32 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task ForeignKeyToImplicitTableName_DoesNotReportPalorm003()
+    {
+        // r19/ITM-685：表名回退到类型名的形态（[Table(null)]）与 TableModel 同口径——
+        // FK 指向类型名时必须按已知表处理，不得误报 PALORM003。
+        const string source = """
+            using PalORM;
+            [Table(null)]
+            public sealed class Customer { [Key] public long Id { get; set; } }
+            [Table("orders")]
+            public sealed class Order
+            {
+                [Key] public long Id { get; set; }
+                [Column("customer_id")]
+                [ForeignKey("Customer", "id", OnDelete = DeleteAction.Cascade)]
+                public long CustomerId { get; set; }
+            }
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM003")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
     public async Task ForeignKeyWithoutOnDelete_ReportsPalorm004_WithoutCascadingErrors()
     {
         const string source = """
@@ -724,7 +750,7 @@ public sealed class AnalyzerDiagnosticsTests
             [Table("derived_named")]
             public sealed class DerivedNamed : NamedBase
             {
-                [Column("name")] public override string Name { get; set; } = "";
+                [Column("name")] public new string Name { get; set; } = "";
                 [Key] public long Id { get; set; }
             }
             """;

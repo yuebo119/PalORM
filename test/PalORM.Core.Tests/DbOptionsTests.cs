@@ -70,6 +70,20 @@ public sealed class DbOptionsTests
     }
 
     [Test]
+    public async Task Validate_RejectsPoolLifetimeOverflowingProviderSeconds()
+    {
+        // r19/ITM-695：分钟×60 超 int 秒上限时 PG 侧 checked 会抛 OverflowException——
+        // Validate 统一拒绝，三 Provider 行为一致。
+        var opts = new DbOptions
+        {
+            ConnectionString = "x",
+            PoolLifetimeMinutes = (int.MaxValue / 60) + 1
+        };
+
+        await Assert.That(opts.Validate).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task ToString_MasksConnectionStrings()
     {
         // S2068: 用 string(ReadOnlySpan<char>) 构造键名彻底避开 "Password" 字面量模式匹配。

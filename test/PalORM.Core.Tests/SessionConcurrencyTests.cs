@@ -59,6 +59,52 @@ public sealed class SessionConcurrencyTests
     }
 
     [Test]
+    public async Task WithTransaction_AbandonedEnumerator_TimesOutAndAttemptsRollback()
+    {
+        // r19/ITM-693：被弃的 QueryAsyncEnumerable 枚举器让租约永不归还——收口等待超时后
+        // 仍须尝试回滚（绕过门禁直接 rollback，成败都以结构化 Data 留痕）。
+        TimeSpan previousTimeout = SessionOperationState.DisposeWaitTimeout;
+        SessionOperationState.DisposeWaitTimeout = TimeSpan.FromMilliseconds(50);
+        IAsyncEnumerator<SessionConcurrencyEntity>? abandoned = null;
+        await using var session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "Data Source=:memory:" });
+        try
+        {
+            await session.ExecuteAsync(
+                $"CREATE TABLE session_concurrency (id INTEGER PRIMARY KEY, name TEXT)");
+            await session.ExecuteAsync(
+                $"INSERT INTO session_concurrency (id, name) VALUES (1, 'x')");
+
+            Exception? primary = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                await session.WithTransaction(async ct =>
+                {
+                    abandoned = session.QueryAsyncEnumerable<SessionConcurrencyEntity>(
+                        $"SELECT * FROM session_concurrency", ct).GetAsyncEnumerator(ct);
+                    // 必须 MoveNextAsync 一次才真正进入迭代器体并持有操作租约——
+                    // GetAsyncEnumerator 本身不执行体，租约不会被占
+                    if (!await abandoned.MoveNextAsync())
+                        throw new InvalidOperationException("unexpected empty result");
+                    throw new InvalidOperationException("callback failed");
+                });
+            });
+
+            await Assert.That(primary!.Message).IsEqualTo("callback failed");
+            await Assert.That(primary.Data["PalORM.TransactionResourceCleanupException"])
+                .IsTypeOf<InvalidOperationException>();
+            // 门禁被活动租约拒绝后仍直接尝试回滚：成功则挂 GateException、失败则挂 RollbackException
+            await Assert.That(primary.Data.Contains("PalORM.RollbackException")
+                || primary.Data.Contains("PalORM.RollbackGateException")).IsTrue();
+        }
+        finally
+        {
+            if (abandoned is not null)
+                await abandoned.DisposeAsync();
+            SessionOperationState.DisposeWaitTimeout = previousTimeout;
+        }
+    }
+
+    [Test]
     public async Task DisposeDuringOperation_WaitsAndRejectsNewOperations()
     {
         var resources = new ConcurrencyResources();
@@ -470,12 +516,14 @@ public sealed class SessionConcurrencyTests
             await callbackEntered.Task;
 
             Task dispose = session.DisposeAsync().AsTask();
+            // r19/T-P3-01：原 IsCompletedSuccessfully 断言在 await 后恒真——改为锁等待语义：
+            // 回调未释放前 Dispose 必须仍在等待（完成后为 false = Dispose 未等回调，提前返回）
+            bool disposeBlockedBeforeRelease = !dispose.IsCompleted;
             releaseCallback.TrySetResult();
             await transaction;
             await dispose;
-            // 显式断言：transaction 和 dispose 均正常完成（无异常 = 通过）
-            await Assert.That(transaction.IsCompletedSuccessfully).IsTrue();
-            await Assert.That(dispose.IsCompletedSuccessfully).IsTrue();
+
+            await Assert.That(disposeBlockedBeforeRelease).IsTrue();
         }
         finally
         {

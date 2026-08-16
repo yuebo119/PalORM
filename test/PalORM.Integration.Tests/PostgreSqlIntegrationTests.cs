@@ -76,6 +76,39 @@ public sealed class PostgreSqlIntegrationTests
     }
 
     [Test]
+    public async Task WhereJson_DateOnlyValue_ThrowsExplicitly()
+    {
+        // r19/ITM-683：DateOnly invariant 输出 MM/dd/yyyy 与 jsonb ISO text 恒不相等
+        // （探针实证）——同 ITM-641 族显式拒绝，防静默空结果
+        await using var db = await TestDb.SqliteAsync();
+
+        await Assert.That(() => db.From<Product>()
+            .WhereJson("payload", "day", new System.DateOnly(2026, 8, 16)))
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
+    public async Task WhereJson_TimeOnlyValue_ThrowsExplicitly()
+    {
+        // r19/ITM-683：TimeOnly invariant 输出 H:mm 与 ISO HH:mm:ss 恒不相等——同族拒绝
+        await using var db = await TestDb.SqliteAsync();
+
+        await Assert.That(() => db.From<Product>()
+            .WhereJson("payload", "at", new System.TimeOnly(10, 30, 0)))
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
+    public async Task WhereJson_NulInValue_ThrowsArgumentException()
+    {
+        // r19/ITM-701：value 与 column/path 同口径 NUL 显式拒绝
+        await using var db = await TestDb.SqliteAsync();
+
+        await Assert.That(() => db.From<Product>().WhereJson("payload", "k", "a\0b"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task WhereJson_NulInColumn_ThrowsArgumentException()
     {
         await using var db = await TestDb.SqliteAsync();
