@@ -52,7 +52,10 @@ internal static class SqlTemplateEmitter
         foreach (var interpolation in interpolated.Contents.OfType<InterpolationSyntax>())
         {
             foreach (var identifier in interpolation.Expression
-                .DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+                // r14-S2：泛型调用的方法名是 GenericNameSyntax 非 IdentifierNameSyntax——
+                // .OfType<IdentifierNameSyntax>() 漏枚举，{M<int>()} 三代同漏。并集两形态
+                .DescendantNodesAndSelf().OfType<SyntaxNode>()
+                .Where(n => n is IdentifierNameSyntax or GenericNameSyntax))
             {
                 ISymbol? symbol = semanticModel.GetSymbolInfo(identifier, ct).Symbol;
                 // r11.5-D1(P2)：所在类静态成员的非限定引用（{TablePrefix}）同样在生成物
