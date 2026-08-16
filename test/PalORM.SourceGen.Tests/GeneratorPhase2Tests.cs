@@ -1295,4 +1295,44 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(combined.Contains("{TablePrefix}", StringComparison.Ordinal)).IsFalse();
         await Assert.That(combined.Contains("C.TablePrefix", StringComparison.Ordinal)).IsTrue();
     }
+
+    [Test]
+    public async Task SqlTemplate_UnqualifiedStaticMethod_DoesNotGenerate()
+    {
+        // r14-S1/r13-A 锁定：非限定静态方法 {M()} 与字段同族拒绝
+        const string source = """
+            using PalORM;
+            public static class C
+            {
+                public static long NextId() => 1;
+                [SqlTemplate("m")]
+                public static System.FormattableString M()
+                    => $"SELECT {NextId()}";
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string combined = string.Join(System.Environment.NewLine, result.GeneratedSources
+            .Where(pair => pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))
+            .Select(pair => pair.Value));
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(combined.Contains("{NextId()}", StringComparison.Ordinal)).IsFalse();
+    }
+
+    [Test]
+    public async Task SqlTemplate_QualifiedMathReference_CompilesWithoutImplicitUsings()
+    {
+        // r14-S1/r13-B 锁定：{Math.PI} 限定引用在无 ImplicitUsings 宿主可解析（global using System）
+        const string source = """
+            using PalORM;
+            public static class C
+            {
+                [SqlTemplate("pi")]
+                public static System.FormattableString Pi()
+                    => $"SELECT {System.Math.PI}";
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        // 生成物编译零错（CS0246 已被 global using System 消除）
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
 }

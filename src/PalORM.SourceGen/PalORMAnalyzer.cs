@@ -831,7 +831,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
         if (!isTimestamp) return;
 
-        string typeName = member.Type.ToDisplayString();
+        // r14-S7：Nullable 时间类型（DateTime?/DateTimeOffset?）经 UnwrapNullable 判定——
+        // 生成器全链路支持（IsDBNull 守卫+NOT NULL 豁免），ToDisplayString 含 ? 后缀曾致误报
+        ITypeSymbol unwrapped = SourceGenerationValidation.UnwrapNullable(member.Type);
+        string typeName = unwrapped.ToDisplayString();
         if (typeName is not "System.DateTime" and not "System.DateTimeOffset")
         {
             ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedTimestampType,
