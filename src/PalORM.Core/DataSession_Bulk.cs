@@ -34,7 +34,6 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(keys);
-        if (keys.Count == 0) return 0;
         // v4.0 优化 B：CurrentState 单次快照——替代 3 次独立 Volatile.Read。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._tableNames.TryGetValue(typeof(T), out string? tableName)
@@ -42,6 +41,8 @@ public partial class DataSession<TProvider>
             || !state._bindDelete.TryGetValue(
                 typeof(T), out Action<DbCommand, object>? bindKey))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        // r13-S1（r12 声称未交付第四例——本批真交付）：空短路后置同族口径
+        if (keys.Count == 0) return 0;
 
         bool isSoftDelete =
             (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
