@@ -134,13 +134,58 @@ jobs:
                   --api-key ${{ secrets.NUGET_API_KEY }}
                   --skip-duplicate
 
+            - name: Extract Release Notes
+              if: github.event_name == 'push'
+              run: |
+                  VERSION="${GITHUB_REF_NAME#v}"
+                  # 提取 CHANGELOG.md 中当前版本段（从 ## [version] 到下一个 ## 或 EOF）
+                  awk -v ver="$VERSION" '
+                      /^## \[/ {
+                          if (found) exit
+                          if (index($0, "[" ver "]")) { found=1; next }
+                      }
+                      found { print }
+                  ' CHANGELOG.md > release-notes.md
+
+                  # 组装完整 Release Body
+                  {
+                      echo "## PalORM $GITHUB_REF_NAME"
+                      echo ""
+                      echo "### 📦 发布包"
+                      echo ""
+                      echo "| 包名 | 版本 |"
+                      echo "|------|------|"
+                      echo "| PalORM.Core | $VERSION |"
+                      echo "| PalORM.Sqlite | $VERSION |"
+                      echo "| PalORM.MySql | $VERSION |"
+                      echo "| PalORM.PostgreSql | $VERSION |"
+                      echo "| PalORM.SourceGen | $VERSION |"
+                      echo ""
+                      echo "### 📥 安装"
+                      echo ""
+                      echo '```bash'
+                      echo "dotnet add package PalORM.Core --version $VERSION"
+                      echo "dotnet add package PalORM.Sqlite --version $VERSION   # SQLite"
+                      echo "dotnet add package PalORM.MySql --version $VERSION    # MySQL"
+                      echo "dotnet add package PalORM.PostgreSql --version $VERSION # PostgreSQL"
+                      echo '```'
+                      echo ""
+                      echo "### 📋 变更明细"
+                      echo ""
+                      cat release-notes.md
+                      echo ""
+                      echo "---"
+                      echo ""
+                      echo "**完整变更日志**: [CHANGELOG.md](https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md)"
+                  } > full-release-body.md
+
             - name: Create GitHub Release
               if: github.event_name == 'push'
               uses: softprops/action-gh-release@v2
               with:
                   tag_name: ${{ github.ref_name }}
-                  name: ${{ github.ref_name }}
-                  body_path: CHANGELOG.md
+                  name: PalORM ${{ github.ref_name }}
+                  body_path: full-release-body.md
                   files: |
                       artifacts/packages/*.nupkg
               env:
