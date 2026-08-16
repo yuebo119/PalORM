@@ -38,7 +38,7 @@ public sealed class ExternalDatabaseBulkTests
     public async Task PG_MigrateAndBinaryCopy_NullableAndUtcDateTime_RoundTrip()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
         await db.MigrateAsync();
         try
         {
@@ -56,7 +56,7 @@ public sealed class ExternalDatabaseBulkTests
         }
         finally
         {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
         }
     }
 
@@ -69,7 +69,7 @@ public sealed class ExternalDatabaseBulkTests
         // ITM-201 真库验证：被索引 string 列 VARCHAR(255)，首次迁移不得报 1170；
         // ITM-303 真库验证：DECIMAL(18,6) 下小数不被截断为整数
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
         await db.MigrateAsync();
         try
         {
@@ -102,7 +102,7 @@ public sealed class ExternalDatabaseBulkTests
         }
         finally
         {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
         }
     }
 
@@ -111,7 +111,7 @@ public sealed class ExternalDatabaseBulkTests
     public async Task PG_UniqueViolation_IsUniformlyDetected()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
         await db.MigrateAsync();
         try
         {
@@ -136,7 +136,7 @@ public sealed class ExternalDatabaseBulkTests
         }
         finally
         {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
         }
     }
 }
