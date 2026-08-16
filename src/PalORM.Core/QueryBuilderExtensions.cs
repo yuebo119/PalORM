@@ -182,6 +182,9 @@ public static class QueryBuilderExtensions
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
         paged._take = pageSize;
         paged._skip = null;
+        // r9-S-A(P1)：页截断结果不得写入用户缓存键——同键 ToListAsync 将静默命中单页子集
+        // （ITM-406 同型面唯一漏口，First/Single/SingleOrDefault 三入口均已清）
+        paged._cacheKey = null;
         DbTransaction? existingTransaction = paged.GetActiveTransaction();
         // ITM-649：自有事务经 PublishTransaction 登记进 SessionOperationState——会话 Dispose
         // 与事务门禁可见该事务（此前直接 BeginTransactionAsync 自包含但登记缺席；若 Dispose/
