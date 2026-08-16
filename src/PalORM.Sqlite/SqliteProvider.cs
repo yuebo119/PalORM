@@ -113,7 +113,7 @@ public sealed class SqliteProvider : IDbProvider
 
     /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 999。</summary>
     /// <para>r6-N2：隔离级别参数仅为接口形态同步（SQLite 事务隔离单一 Serializable，
-    /// BeginTransactionAsync 忽略隔离参数差异，透传给共享骨架的事务创建）。</para>
+    /// BeginTransactionAsync 忽略隔离参数差异；r9-S4：本调用点走 BulkContext 默认值（ReadCommitted），非透传——行为中性，措辞订正）。</para>
     public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct,
         System.Data.IsolationLevel isolationLevel = System.Data.IsolationLevel.ReadCommitted)
