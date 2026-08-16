@@ -55,7 +55,7 @@
 > 基于 `docs/v5.1-auto-tagging-design.md` + ADR-F。本版本引入 **opt-in 的自动 Query Tagging**，
 > 用户零代码改动即可让 SQL 自动带源码定位注释（`/* 相对路径:行号 方法名 */`）。
 
-### 新增
+### ✨ 新增
 
 - **Auto Tagging Interceptor**（opt-in）：消费侧 csproj 设 `<PalORMAutoTagging>true</PalORMAutoTagging>` 启用。
   源生成器在编译期检测 `QueryBuilderExtensions` 的 6 个终态方法调用（`ToListAsync`/`FirstAsync`/
@@ -69,7 +69,7 @@
 - **ADR-F**：`docs/adr/ADR-F-auto-tagging-interceptor.md`（决策记录 + 6 项技术约束）
 - **B29 教训**：`.ai/lessons.md` AC 章节（Interceptor 实施工程化缺陷 + PoC 驱动 SOP）
 
-### 技术约束（实施过程发现，详见 ADR-F）
+### 🔧 技术约束（详见 ADR-F）
 
 | 约束 | 说明 |
 |------|------|
@@ -78,13 +78,13 @@
 | MSBuild Property 传递 | 需 `<CompilerVisibleProperty>` 显式声明 |
 | `TagWithCaller` 不能直接复用 | Caller* 在拦截器中返回拦截器自身位置，需用 `Tag(string)` + 编译期常量 |
 
-### 测试
+### 🧪 测试
 
 - 新增 4 个 AutoTagging 单元测试（开关关闭零生成 + 开关开启生成拦截器 + 签名匹配 + 路径规范化）
 - `test/PalORM.AotTest.MySql` 扩展：启用 PalORMAutoTagging + 2 个拦截调用点
 - 125 个 SourceGen 测试全部通过（零回归）
 
-### 参考
+### 📚 参考
 
 - 设计文档：`docs/v5.1-auto-tagging-design.md`（含"实施差异说明"章节，B9 教训）
 - EF Core 参考实现：[Thirty25 博客](https://thirty25.blog/blog/2025/04/ef-core-source-gen-interceptors)
@@ -95,7 +95,7 @@
 > 不引入新公共 API。架构级改造（DbDataSource 单例化 / MySqlBulkCopy / DbBatch）
 > 与功能增值（阶段 5）作为独立后续工作，不在 v5.0 主线。
 
-### 破坏性变更（测试源码层，公共 API 零破坏）
+### 💔 破坏性变更（测试源码层，公共 API 零破坏）
 
 仅影响**测试代码**（src/ 公共 API 面零改动）：
 - TUnit 0.19.24→1.61.15 引入 4 类测试 API 适配（10 处修复）：
@@ -104,7 +104,7 @@
   - `HasCount()` 已弃用→改用 `Count().IsEqualTo(n)`
   - `WithMessage(string)` 新增 `StringComparison` 重载→加 `Ordinal`
 
-### 包升级
+### 📦 依赖升级
 
 | 包 | v4.6 | v5.0 | 备注 |
 |---|:---:|:---:|------|
@@ -120,7 +120,7 @@
 
 **保持不动**（有约束）：Microsoft.CodeAnalysis.Analyzers 5.3.0（5.6.0 不在 NuGet.Config 配置的 dotnet-tools 源，触发 NU1103）；Microsoft.Data.Sqlite.Core 11.0-preview.6（等 net11 GA）。
 
-### 性能调优
+### ⚡ 性能调优
 
 **PG 连接串调优**（PostgreSqlProvider.CreateConnection，用户显式值优先）：
 - MaxAutoPrepare 0→100（自动预编译，查询延迟 -30~50%）
@@ -143,7 +143,7 @@
 
 **global.json**：rollForward `disable`→`latestMinor`（允许 SDK 补丁版本前滚）。
 
-### MySQL BulkInsert local_infile 能力检测分流（阶段 4.2）
+### ✨ 新增：MySQL BulkInsert 能力检测分流
 
 `MySqlProvider.BulkInsertAsync` 改为 **local_infile 能力检测** 分流（替代原 2000 行阈值）：
 - **local_infile=ON**（服务端）→ 走 `MySqlBulkCopy`（LOAD DATA LOCAL INFILE 协议，~4.84x）
@@ -155,13 +155,13 @@
 
 **DataTable 设计**：包含目标表全部列（含 AUTO_INCREMENT 主键），主键列填 NULL 让 MySQL 自增。
 
-### 调优判断策略
+### 📐 调优判断策略
 
 "用户未显式设置"的判据：属性当前值等于 ADO.NET 默认值。该判据在罕见场景（用户显式
 设成默认值）下会把用户意图当作默认覆盖，但调优参数主动设成低性能默认值的实际场景极少，
 收益（透明调优）大于风险。用户可通过显式设置非默认值避免被覆盖。
 
-### 不做项（v5.0 排除，理由）
+### ❌ 不做项（v5.0 排除 + 理由）
 
 | 项 | 理由 |
 |------|------|
@@ -174,7 +174,7 @@
 | 阶段 5.7 MySQL VECTOR 映射 | Innovation 版 + MySqlVector\<T\> API 不完整 + MySQL 8.4 测试环境不支持 |
 | Microsoft.CodeAnalysis.Analyzers 5.6.0 | NuGet.Config 约束 Microsoft.CodeAnalysis.* 只从 dotnet-tools 源，该源无 5.6.0 stable |
 
-### 功能增值（阶段 5 第一梯队）
+### ✨ 功能增值（阶段 5 第一梯队）
 
 **5.2 SessionSetupSql**（`DbOptions.SessionSetupSql` + `DbOptions.ReadSessionSetupSql`）：
 - 主连接 + 读副本分别配置会话级 SQL（如 `SET TIME ZONE` / `SET search_path` / `SET statement_timeout`）
@@ -197,7 +197,7 @@
 
 **5.5 ForUpdate**（`QueryBuilder.ForUpdate(skipLocked)`）：v5.0 前已实现，本次确认存在。
 
-### Scaffold 三 Provider 支持（阶段 5.3）
+### ✨ Scaffold 三 Provider 支持
 
 `tools/PalORM.Scaffold` 从 SQLite-only 扩展为三 Provider：
 - **新增 ISchemaProvider 抽象**（`tools/PalORM.Scaffold/ISchemaProvider.cs`）：屏蔽三方言元数据差异
@@ -224,7 +224,7 @@
 - PostgreSQL：连 PG 18.4，生成 `AllTypesEntities`（uuid/bool/DateOnly/TimeOnly 类型完整映射）
 - MySQL：连 MySQL 8.4.10，生成 `AllTypesEntities`（datetime/decimal/char 类型映射）
 
-### 批量 UPDATE 单语句化（阶段 4.3b）
+### ✨ 批量 UPDATE 单语句化
 
 **新增** `DataSession.BulkUpdateBatchAsync<T>`（方案 Y 严格版）：
 - 单次 RTT 完成 N 行 UPDATE（PG: UPDATE FROM VALUES 4x 提速；MySQL/SQLite: CASE WHEN）
@@ -239,7 +239,7 @@
 - BulkUpdateAsync 逐条执行 + 乐观锁检查（每行 affectedRows==1 否则 ConcurrencyConflictException）
 - BulkUpdateBatchAsync 单语句批量 + 不区分"行不存在"与"并发修改"（返回受影响总行数）
 
-### 诊断规则完整化（PALORM001-040，33 条）
+### ✨ 诊断规则完整化（PALORM001-040）
 
 **扩充 13 条新规则**（PALORM023-027, 031-033, 034-037, 040）：
 
@@ -273,7 +273,7 @@
 
 - F8：PALORM009 补"partial sealed class"要求说明（STJ 源生成器约束）
 
-### 验证
+### 🧪 验证
 
 - dotnet build：0 错误
 - Core.Tests: 174/174 通过
@@ -289,7 +289,7 @@
 > 基于 v4.0 实施后的深度性能审计与基准驱动迭代优化。
 > 本版本为 **non-breaking**——公共 API 无破坏性变更。
 
-### 性能成果（vs v4.0 实测）
+### ⚡ 性能成果（vs v4.0 实测）
 
 | 操作 | v4.0 分配 | v4.6 分配 | 改善 |
 |------|:---------:|:---------:|:----:|
@@ -346,7 +346,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - BulkInsert SqliteParameter 复用：新增 BindInsertValuesToBatch 旁路 binder，满批预分配参数池跨批复用（省 ~1.76MB/10K行）
 - HasClause 位掩码 O(n)→O(1)（省 Predicate 委托分配/链式调用）
 
-### 验证
+### 🧪 验证
 - Core 161/161 + SourceGen 104/104 + Integration 160/160 = **425/425**
 - 技术债扫描 12/12 + 门禁 G1-G29 全绿
 
@@ -357,7 +357,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 > 基于 v3.1 实施后的代码审查与 4 路并行深度调研产出，详见 `docs/v4.0-improvement-plan.md`。
 > 本版本为 **non-breaking**——公共 API 无破坏性变更，仅 `DiffAsync` 标 `[Obsolete]`。
 
-### 核心优化
+### ⚡ 核心优化
 
 #### 优化 A：CommandFactory Converter 单例对齐（v3.1 最大遗留不对称）
 - **问题**：v3.1 RowFactoryEmitter 已用 `static readonly _conv_<prop>` 单例，CommandFactoryEmitter 仍每次 `new Converter()`——同一项目内 emit 模式不对称
@@ -376,7 +376,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - **改动**：默认 `new List<T>(16)` 起步
 - **收益**：10K 行场景扩容次数从 14 降至 10
 
-### API 治理
+### 💔 API 治理（Breaking）
 
 - **`DiffAsync<T>`** 标 `[Obsolete]`——本质是 `ValidateSchemaAsync<T>` 的字符串前缀薄包装
 - **`GetRawConnection`** XML doc 强化「⚠️ 危险操作」警示（不重命名，避免破坏性）
@@ -385,7 +385,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - **`WithMetrics(name)`**：保留——已有文档说明「名称仅保留 API 兼容」
 - **`IRowFactory<T>`**：保留——v3.1 已决定作为公共契约
 
-### AOT 文档补录
+### 📚 AOT 文档补录
 
 - **`docs/AOT部署指南.md`** 新增「聚合/标量查询 AOT 注意事项」小节
 - 澄清 `Convert.ChangeType` 经评估确认 AOT 安全（走 IConvertible 接口分发）
@@ -401,7 +401,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 | AddRange 参数批处理 | ADO.NET Provider 行为不一致，风险高于收益 |
 | Tracing/Metrics 短路 | 已是 const string + intern，零分配 |
 
-### 验证
+### 🧪 验证
 
 - 构建：0 警告 0 错误
 - Core Tests：156/156 全绿
@@ -414,7 +414,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 
 > 基于 v3.0.0 真实场景基准数据的深度优化，详见 `docs/v3.1-performance-plan.md`。
 
-### 性能成果（vs v3.0.0）
+### ⚡ 性能成果（vs v3.0.0）
 
 | 操作 | v3.0.0 | v3.1 | vs ADO.NET | 改善 |
 |------|:---:|:---:|:---:|:---:|
@@ -438,7 +438,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - **3c：拦截器空列表跳过**：`foreach (interceptor) OnBefore/OnAfter/OnError` 加 `if (interceptors.Count == 0) return` 守卫；默认会话无拦截器时省迭代开销
 - **抽取辅助方法**：`NotifyInterceptorsOnBefore/OnAfter` 共享于 SELECT/UPDATE 管线，降低认知复杂度
 
-### 文件变更
+### 📦 文件变更
 - `src/PalORM.Core/IRowFactory.cs` — 接口保留（向后兼容），XML 注释更新说明迁移
 - `src/PalORM.Core/PalORM_Runtime.cs` — `RuntimeRegistryState` 从 private → internal，新增 `CurrentState` 属性
 - `src/PalORM.Core/QueryBuilder.cs` — `_factory` 字段 + `QueryBuilderServices.Factory` 类型 `IRowFactory<T>` → `Func<DbDataReader, T>`
@@ -450,7 +450,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - `src/PalORM.SourceGen/RowFactoryEmitter.cs` — emit 重写
 - `src/PalORM.SourceGen/RegistryEmitter.cs` — 注册值从 Instance → Read
 
-### 验证
+### 🧪 验证
 - Core Tests: 156/156 全绿
 - SourceGen Tests: 104/104 全绿（5 个快照基线重生成 + 评审通过）
 - SQLite Integration Tests: 149/149 全绿（7 个 PG/MySQL 环境变量失败与本次无关）
@@ -459,12 +459,12 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 
 ## [3.0.0] — Breaking Changes（架构精炼 + Breaking API 移除 + 质量增值）
 
-### Breaking Changes
+### 💔 Breaking Changes
 - **移除 DataSession.ForRead() / ForWrite()**：请使用 `From<T>().ForRead()` / `From<T>().ForWrite()`
 - **移除 CrudMetadata 旧 9 参 ctor**：请使用聚合 ctor（CrudBindings + CrudColumns）
 - **移除 QueryBuilder.ThenInclude&lt;TGrandChild&gt;(单参)**：请使用双参 `ThenInclude<TGrandChild, TParent>(grandChildKey, parentKey)`
 
-### 架构精炼
+### ✨ 架构精炼
 - **删除 8 个 Obsolete 公共 API**：MinimumLogLevel / ParameterPrefix / CreateConnection 单参 / GetLimitOffsetClause / LogQuery / RecordQueryStart / RecordQueryDuration / QueryBuilder 14 参 ctor
 - **合并 TypeMapperEmitter → RowFactoryEmitter**：DateTimeOffset 读取直接内联 `GetFieldValue<T>`
 - **PalORM_Runtime 拆 3 文件**：EntityFeatures.cs / SqlSets.cs / CrudMetadata.cs
@@ -475,7 +475,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - **ColumnModel 瘦身**：删除 4 个恒 null 预留字段（Length/Precision/Scale/DefaultExpression）
 - **EquatableArray 独立文件**：从 TableModel.cs 提取
 
-### 质量增值
+### 🧪 质量增值
 - **集成 SonarAnalyzer.CSharp 10.29.0**：CI 守护层——P0 安全 + P1 设计规则全部为 error
 - **BulkOperationFramework**：三 Provider 共享的 probe + cleanup 骨架
 - **测试配置双层覆盖**：appsettings.test.json + .env.test + TestEnvironment 读取器
@@ -484,7 +484,7 @@ BulkInsert 分配已优于 Dapper 62%（4.97MB vs 12.97MB）。
 - **PALORM006/007 占位诊断删除**：零报告描述符移除
 - **P1-2 规则升级为 error**：S3776/S107/S927/S2681/S125/S1066/S1994/S2189
 
-### AI 系统
+### 📚 AI 系统
 - **`.ai/lessons.md` v6.0**：14 个缺陷 + SOP + 决策矩阵 + 技术债扫描 SOP（自包含手册）
 - **PR 模板**：编译/测试/Sonar/三方一致/精炼守护/反模式预防 6 类清单
 - **`docs/编码规范.md` 第 18 节**：SonarAnalyzer 守护层规则配置
