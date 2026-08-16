@@ -204,7 +204,7 @@ public sealed class UniqueAttribute : Attribute { }
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
 public sealed class SqlFileAttribute : Attribute
 {
-    /// <summary>.sql 文件路径（相对项目根，需以 AdditionalFiles 加入编译）。</summary>
+    /// <summary>.sql 文件路径（相对项目根，按特性参数相对路径由源生成器编译期直读磁盘（RS1041 下不可用 AdditionalFiles——r14-S6 订正））。</summary>
     public string Path { get; }
     /// <summary>可选：指定 Provider 名称（PostgreSql/MySql/Sqlite）。省略则使用 -- @all 段。</summary>
     public string? Provider { get; init; }
