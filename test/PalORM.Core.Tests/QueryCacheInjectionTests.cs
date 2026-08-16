@@ -91,6 +91,24 @@ public sealed class QueryCacheInjectionTests
         await Assert.That(cache.TryGet("k", out List<string>? value)).IsTrue();
         await Assert.That(value!.Count).IsEqualTo(2);
     }
+
+    [Test]
+    public async Task ToPageAsync_DoesNotWriteUserCacheKey()
+    {
+        // r9-SA/r10-N3（r11.5 片 B 揭穿后真交付——"声称未交付"第三例）：
+        // 页截断结果不得写入用户缓存键——同键 ToListAsync 将静默命中单页子集（ITM-406 族）
+        var cache = new BoundedQueryCache();
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync(cache);
+        await session.InsertAsync(new QueryCacheEntity { Name = "A" });
+        await session.InsertAsync(new QueryCacheEntity { Name = "B" });
+
+        _ = await session.From<QueryCacheEntity>()
+            .WithCache("page-key", TimeSpan.FromMinutes(1))
+            .OrderBy(x => x.Id)
+            .ToPageAsync(1, x => x.Id);
+
+        await Assert.That(cache.TryGet("page-key", out List<QueryCacheEntity>? _)).IsFalse();
+    }
 }
 
 #region Test Entities

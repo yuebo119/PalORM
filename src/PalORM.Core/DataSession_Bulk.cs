@@ -13,6 +13,12 @@ public partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // r11.5-D3（ITM-637 同型第六处）：元数据检查先于空列表短路——会话层短路使
+        // Provider 层（r4 批次已修）的三方言一致性检查对空列表不可达
+        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out _)
+            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated insert metadata.");
         if (entities.Count == 0) return 0;
         return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
             _options.CommandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
