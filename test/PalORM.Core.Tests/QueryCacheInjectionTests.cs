@@ -20,16 +20,17 @@ public sealed class QueryCacheInjectionTests
     [Test]
     public async Task InjectedCache_IsUsedInsteadOfProcessDefault()
     {
-        var cache = new BoundedQueryCache();
+        // r19/T-P3-18：原断言依赖进程级默认 CacheStore 状态（跨测试耦合）——
+        // 改为计数缓存：注入实例收到 TryGet+Set 即证明未落到默认实例
+        var cache = new CountingCache();
         await using DataSession<SqliteProvider> session = await CreateSessionAsync(cache);
         await session.InsertAsync(new QueryCacheEntity { Name = "A" });
 
         await session.From<QueryCacheEntity>()
             .WithCache("inject-key", TimeSpan.FromMinutes(1)).ToListAsync();
 
-        // 命中注入实例，进程级默认实例不受影响
-        await Assert.That(cache.TryGet("inject-key", out List<QueryCacheEntity>? _)).IsTrue();
-        await Assert.That(CacheStore.TryGet("inject-key", out List<QueryCacheEntity>? _)).IsFalse();
+        await Assert.That(cache.TryGetCalls).IsEqualTo(1);
+        await Assert.That(cache.SetCalls).IsEqualTo(1);
     }
 
     [Test]
@@ -108,6 +109,34 @@ public sealed class QueryCacheInjectionTests
             .ToPageAsync(1, x => x.Id);
 
         await Assert.That(cache.TryGet("page-key", out List<QueryCacheEntity>? _)).IsFalse();
+    }
+
+    /// <summary>r19/T-P3-18 计数缓存——记录 TryGet/Set 调用次数，锁定注入实例被真实使用。</summary>
+    private sealed class CountingCache : IQueryCache
+    {
+        internal int TryGetCalls;
+        internal int SetCalls;
+        private readonly Dictionary<string, object> _store = [];
+
+        public bool TryGet<T>(string key, out T? value) where T : class
+        {
+            TryGetCalls++;
+            if (_store.TryGetValue(key, out object? cached) && cached is T typed)
+            {
+                value = typed;
+                return true;
+            }
+            value = null;
+            return false;
+        }
+
+        public void Set<T>(string key, T value, TimeSpan? ttl = null) where T : class
+        {
+            SetCalls++;
+            _store[key] = value;
+        }
+
+        public void Clear() => _store.Clear();
     }
 }
 

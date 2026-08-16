@@ -89,8 +89,10 @@ public sealed class QueryBuilderValueSemanticsTests
     }
 
     [Test]
-    public async Task ToPage_DoesNotMutateOriginalBuilder()
+    public async Task Where_AfterSharingReference_LeavesEarlierBuilderUnchanged()
     {
+        // r19/T-P3-04：原名 ToPage_DoesNotMutateOriginalBuilder 未调用 ToPage——按实际
+        // 行为（Where 写时复制）改名，避免名实不符
         await using DataSession<SqliteProvider> session =
             await CreateSessionAsync();
 

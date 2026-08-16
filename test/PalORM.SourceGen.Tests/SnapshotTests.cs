@@ -192,7 +192,7 @@ internal sealed class SnapshotTests
     }
 
     [Test]
-    public async Task MySqlUpsert_AutoIncrementPk_IncludesLastInsertIdRoundtrip()
+    public async Task MySqlUpsert_AutoIncrementPk_IncludesLastInsertId_AndExplicitPkDoesNot()
     {
         // ITM-608 防回退：自增 PK 实体的 MySQL upsert SQL 必须同时含
         // ① "pk = LAST_INSERT_ID(pk)" 赋值（更新已有行时 SELECT LAST_INSERT_ID() 返回该行 PK）

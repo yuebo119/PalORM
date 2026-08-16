@@ -68,7 +68,9 @@ public sealed class TenantIsolationTests
         await Assert.That(rows).IsEqualTo(0);
 
         db.IgnoreFilters();
-        await Assert.That(await db.GetAsync<TenantEntity>(otherId)).IsNotNull();
+        // r19/T-P3-09：行为断言——行不仅存在且内容未被跨租户删除触碰
+        var untouched = await db.GetAsync<TenantEntity>(otherId);
+        await Assert.That(untouched!.Value).IsEqualTo("theirs");
     }
 
     [Test]

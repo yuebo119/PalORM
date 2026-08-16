@@ -1040,10 +1040,15 @@ internal sealed class GeneratorPhase2Tests
             pair.Key.StartsWith("Migration_", StringComparison.Ordinal)).Value;
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // r19/T-P3-13：逐方言段各自断言——原单 Contains 只证明至少一方言有显式精度
         // 三方言（列名带引用符）统一显式精度；legacy CreateTable 走 DbTypeName 不在断言范围
-        string dialectSection = ExtractMethod(migration, "CreateTableSqlite", "CreateIndexesSqlite");
-        await Assert.That(dialectSection).Contains("DECIMAL(18,6)");
-        await Assert.That(dialectSection).DoesNotContain("DECIMAL ");
+        string sqliteSection = ExtractMethod(migration, "CreateTableSqlite", "CreateTablePostgreSql");
+        string pgSection = ExtractMethod(migration, "CreateTablePostgreSql", "CreateTableMySql");
+        string mySqlSection = ExtractMethod(migration, "CreateTableMySql", "CreateIndexesSqlite");
+        await Assert.That(sqliteSection).Contains("DECIMAL(18,6)");
+        await Assert.That(pgSection).Contains("DECIMAL(18,6)");
+        await Assert.That(mySqlSection).Contains("DECIMAL(18,6)");
+        await Assert.That(sqliteSection).DoesNotContain("DECIMAL ");
     }
 
     [Test]
@@ -1177,6 +1182,12 @@ internal sealed class GeneratorPhase2Tests
         GeneratorResult result = RunGenerator(source);
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // r19/T-P3-12：仅编译零错不证明生成了模板——生成被跳过同样绿。补生成物内容断言。
+        string combined = string.Join("\n", result.GeneratedSources
+            .Where(pair => pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))
+            .Select(pair => pair.Value));
+        await Assert.That(combined).Contains("Quoted");
+        await Assert.That(combined).Contains("FROM t");
     }
 
     [Test]
@@ -1335,6 +1346,57 @@ internal sealed class GeneratorPhase2Tests
         GeneratorResult result = RunGenerator(source);
         // 生成物编译零错（CS0246 已被 global using System 消除）
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // r19/T-P3-12：补生成物内容断言——模板被跳过同样"编译零错"
+        string combined = string.Join(System.Environment.NewLine, result.GeneratedSources
+            .Where(pair => pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))
+            .Select(pair => pair.Value));
+        await Assert.That(combined).Contains("System.Math.PI");
+    }
+
+    [Test]
+    public async Task SqlFile_GenericContainingType_SkipsGeneration_WithCs8795AtMethod()
+    {
+        // r19/ITM-686：泛型类不支持发射 partial（arity/约束无法逐字匹配）——
+        // 跳过生成后宿主在方法处得到 CS8795，而非 .g.cs 的 CS0261
+        const string source = """
+            using PalORM;
+            public partial class Repo<T>
+            {
+                [SqlFile("queries/get.sql")]
+                public static partial string Get();
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string errors = FormatErrors(result.OutputCompilation);
+
+        await Assert.That(result.GeneratedSources.Keys
+            .Any(k => k.StartsWith("SqlFile", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(errors).Contains("CS8795");
+        await Assert.That(errors).DoesNotContain("CS0261");
+    }
+
+    [Test]
+    public async Task SqlFile_NestedContainingType_SkipsGeneration_WithCs8795AtMethod()
+    {
+        // r19/ITM-686：嵌套类同型——发射顶层 partial 会产生 CS0260 指向 .g.cs
+        const string source = """
+            using PalORM;
+            public partial class Outer
+            {
+                public partial class Inner
+                {
+                    [SqlFile("queries/get.sql")]
+                    public static partial string Get();
+                }
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string errors = FormatErrors(result.OutputCompilation);
+
+        await Assert.That(result.GeneratedSources.Keys
+            .Any(k => k.StartsWith("SqlFile", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(errors).Contains("CS8795");
+        await Assert.That(errors).DoesNotContain("CS0260");
     }
 
     [Test]

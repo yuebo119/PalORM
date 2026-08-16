@@ -9,7 +9,7 @@ namespace PalORM.SourceGen.Tests;
 /// 测试覆盖：
 /// - 开关关闭时零生成物（不影响现有行为）
 /// - 开关开启时生成拦截器（含 InterceptsLocationAttribute + 拦截方法）
-/// - 生成的 Tag 注释含相对路径 + 方法名
+/// - 生成的 Tag 注释含文件名/哨兵路径 + 方法名（ITM-697 后恒为文件名，确定性）
 /// </remarks>
 public class AutoTaggingTests
 {
@@ -70,7 +70,7 @@ public class AutoTaggingTests
     }
 
     [Test]
-    public async Task AutoTagging_GeneratedInterceptor_ContainsRelativePathAndMember()
+    public async Task AutoTagging_GeneratedInterceptor_ContainsFileNameAndMember()
     {
         var options = new Dictionary<string, string>
         {
@@ -83,8 +83,9 @@ public class AutoTaggingTests
 
         // Tag 注释应含成员名（Probe 是测试源码中的方法名）
         await Assert.That(generated).Contains("Probe");
-        // Tag 注释应含行号（格式 path:line member）
-        await Assert.That(generated).Contains(":");
+        // r19/T-P3-11：原"含冒号"弱断言改为路径哨兵断言——内存语法树无文件路径时
+        // NormalizePath 恒返回 "unknown"，格式 path:line member 必须完整出现
+        await Assert.That(generated).Contains("unknown:");
     }
 
     [Test]

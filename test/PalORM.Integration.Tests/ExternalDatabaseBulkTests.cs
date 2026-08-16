@@ -64,6 +64,8 @@ public sealed class ExternalDatabaseBulkTests
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_MigrateWithUniqueIndexOnString_AndDecimalPrecision_RoundTrip()
     {
+        // r19/T-P3-20 观察登记：本测试是一个真库往返链（迁移→幂等→decimal→唯一冲突），
+        // 三检查共享同一建表成本——真库不可本地验证时保持单测试形态，拆分留待 CI 环境。
         // ITM-201 真库验证：被索引 string 列 VARCHAR(255)，首次迁移不得报 1170；
         // ITM-303 真库验证：DECIMAL(18,6) 下小数不被截断为整数
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);

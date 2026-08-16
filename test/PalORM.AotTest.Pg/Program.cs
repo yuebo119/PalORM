@@ -72,6 +72,9 @@ internal static class Program
             await db.ExecuteAsync($"CREATE TABLE aot_pg_test (\"Id\" BIGSERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL, version BIGINT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_pg_json_test (\"Id\" BIGSERIAL PRIMARY KEY, details TEXT NOT NULL)").ConfigureAwait(false);
             await db.ExecuteAsync($"CREATE TABLE aot_pg_bulk_test (\"Id\" TEXT PRIMARY KEY, name TEXT NOT NULL, created_by TEXT NOT NULL DEFAULT 'database', deleted_at TIMESTAMPTZ)").ConfigureAwait(false);
+            // r19/T-P3-10：建表后逻辑包 try/finally——断言失败也清理（T6）
+            try
+            {
 
             AotPgEntity inserted = await db.InsertAsync(new AotPgEntity
             {                Name = "AOT PG works!",
@@ -148,6 +151,14 @@ internal static class Program
                 ?? throw new InvalidOperationException("PostgreSQL migrated-table GET failed");
             if (migratedBack.Label != "migrated" || migratedBack.Amount != 12.5m)
                 throw new InvalidOperationException("PostgreSQL migrated-table round trip failed");
+            }
+            finally
+            {
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_pg_bulk_test").ConfigureAwait(false);
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_pg_json_test").ConfigureAwait(false);
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_pg_test").ConfigureAwait(false);
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS aot_pg_migrated").ConfigureAwait(false);
+            }
         }
 
         Console.WriteLine("PalORM AOT PG verification PASSED");

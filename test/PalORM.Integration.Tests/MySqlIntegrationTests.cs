@@ -38,11 +38,11 @@ public sealed class MySqlIntegrationTests
         }
     }
 
-    // v5.0 阶段 4.2 改进：验证 local_infile=ON 时走 MySqlBulkCopy（无阈值，对齐 PG COPY）。
-    // 用任意行数（10 行）验证：local_infile 能力检测驱动分流，不再依赖 2000 阈值。
+    // v5.0 阶段 4.2：local_infile=ON 时无阈值走 BulkCopy；本测试锁行数与内容往返，
+    // 分流策略本身无 SQL 形状断言（r19/T-P3-16 按实际行为改名）。
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task MySql_BulkInsert_LocalInfileOn_UsesBulkCopyAndInsertsAll()
+    public async Task MySql_BulkInsert_LocalInfileOn_InsertsAllRows()
     {
         await using var db = await DataSession<MySqlProvider>.CreateAsync(Opts);
         try

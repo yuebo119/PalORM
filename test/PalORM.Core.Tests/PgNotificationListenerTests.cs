@@ -137,6 +137,30 @@ public sealed class PgNotificationListenerTests
         await Assert.That(captured!.Message).IsEqualTo("terminal");
     }
 
+    [Test]
+    public async Task BackgroundFailure_AllOnErrorSubscribersThrow_LogsRootCause()
+    {
+        // r19/ITM-702：订阅者全部抛异常时，订阅者异常只有 Debug 级——监听终止根因
+        // 必须 Error 级留痕（与无订阅者路径同口径）。
+        var connection = new FakePgNotificationConnection();
+        connection.WaitSteps.Enqueue(_ => Task.FromException(new InvalidOperationException("terminal")));
+        var logged = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var listener = new PgNotificationListener(
+            () => connection,
+            ["events"],
+            _ => TimeSpan.Zero)
+        {
+            Logger = new TerminalCapturingLogger(logged),
+        };
+        listener.OnError += (_, _) => throw new InvalidOperationException("subscriber boom");
+
+        await listener.StartAsync();
+        Exception? captured = await logged.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(captured).IsNotNull();
+        await Assert.That(captured!.Message).IsEqualTo("terminal");
+    }
+
     private sealed class CapturingLogger(TaskCompletionSource<Exception?> sink)
         : Microsoft.Extensions.Logging.ILogger
     {
@@ -146,6 +170,21 @@ public sealed class PgNotificationListenerTests
             Microsoft.Extensions.Logging.EventId eventId, TState state,
             Exception? exception, Func<TState, Exception?, string> formatter)
             => sink.TrySetResult(exception);
+    }
+
+    /// <summary>只捕获根因（Message == "terminal"）的日志——跳过订阅者异常（Debug 级）与重连噪音。</summary>
+    private sealed class TerminalCapturingLogger(TaskCompletionSource<Exception?> sink)
+        : Microsoft.Extensions.Logging.ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (exception?.Message == "terminal")
+                sink.TrySetResult(exception);
+        }
     }
 
     [Test]

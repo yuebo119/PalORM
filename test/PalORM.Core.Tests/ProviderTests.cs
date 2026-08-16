@@ -9,7 +9,7 @@ public sealed class ProviderTests
     private sealed class ProviderBatchEntity;
 
     [Test]
-    public async Task SqliteProvider_AllMembers_Defined()
+    public async Task SqliteProvider_KeyMembers_BehaveAsExpected()
     {
         await Assert.That(PalORM.Sqlite.SqliteProvider.Name).IsEqualTo("SQLite");
         await Assert.That(PalORM.Sqlite.SqliteProvider.SupportsReturningClause).IsTrue();
@@ -72,7 +72,7 @@ public sealed class ProviderTests
     }
 
     [Test]
-    public async Task PostgreSqlProvider_AllMembers_Compiled()
+    public async Task PostgreSqlProvider_KeyMembers_Compiled()
     {
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.Name).IsEqualTo("PostgreSql");
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.SupportsReturningClause).IsTrue();
@@ -80,7 +80,7 @@ public sealed class ProviderTests
     }
 
     [Test]
-    public async Task MySqlProvider_AllMembers_Compiled()
+    public async Task MySqlProvider_KeyMembers_Compiled()
     {
         await Assert.That(PalORM.MySql.MySqlProvider.Name).IsEqualTo("MySql");
         await Assert.That(PalORM.MySql.MySqlProvider.SupportsReturningClause).IsFalse();
