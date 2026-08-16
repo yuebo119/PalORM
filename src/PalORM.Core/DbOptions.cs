@@ -122,6 +122,10 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PoolIdleTimeoutSeconds, nameof(PoolIdleTimeoutSeconds));
+        // r19/ITM-695：PG 侧 checked(分钟*60) 会在极大值抛 OverflowException（Npgsql 连接串
+        // 的 ConnectionLifetime 为 int 秒）——Validate 统一兜底上限，三 Provider 行为一致。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            PoolLifetimeMinutes, int.MaxValue / 60, nameof(PoolLifetimeMinutes));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PoolLifetimeMinutes, nameof(PoolLifetimeMinutes));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerThreshold, nameof(CircuitBreakerThreshold));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerResetAfter.Ticks, nameof(CircuitBreakerResetAfter));

@@ -156,6 +156,9 @@ public sealed partial class DataSession<TProvider>
         throw new InvalidOperationException($"No primary key for '{typeof(T).Name}'.");
     }
     /// <summary>直查实体列表——绕过 QueryBuilder 的原生 SQL 入口。
+    /// <para><b>ITM-572/677/700 警告</b>：SQL 逐字执行，<b>默认过滤（[SoftDelete]/[TenantAware]）不适用</b>——
+    /// 租户会话经此入口可读到全部租户与已软删数据（与 QueryAsyncEnumerable/QueryMultipleAsync 同契约）。
+    /// 多租户场景必须在 SQL 中自行携带 tenant_id/deleted_at 条件，或改用受过滤保护的常规查询入口。</para>
     /// <para><b>列序契约（重要）</b>: 结果按序号（ordinal）映射到实体，第 n 列写入实体声明序第 n 个映射属性。
     /// SELECT 列序必须与实体列声明序一致；同类型列错位会静默交换数据。
     /// 避免 <c>SELECT *</c>（依赖物理表列序）——请显式 <c>SELECT col1, col2, ...</c> 按实体声明序列出，
@@ -206,7 +209,8 @@ public sealed partial class DataSession<TProvider>
         throw new InvalidOperationException($"QueryFirstAsync: no rows for '{typeof(T).Name}'.");
     }
 
-    /// <summary>直查精确单行——0 或 >1 行均抛异常。</summary>
+    /// <summary>直查精确单行——0 或 >1 行均抛异常。
+    /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para></summary>
     public async ValueTask<T> QuerySingleAsync<T>(FormattableString sql, CancellationToken ct = default)
         where T : class, new()
     {
@@ -217,6 +221,7 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>直查标量。数据库返回类型与 <typeparamref name="T"/> 不同时按 Convert.ChangeType 转换
     /// （PG COUNT 返回 long、MySQL SUM 返回 decimal 等常见情形）；无法转换时抛 InvalidCastException 而非静默返回 default。
+    /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para>
     /// <para><b>类型支持范围</b>（与 MaxAsync/MinAsync 一致）：<typeparamref name="T"/> 限 IConvertible 基元类型
     /// （数值/bool/string/DateTime）及其 Nullable；Guid/枚举/DateOnly 等非 IConvertible 目标在类型不完全匹配时
     /// 抛 InvalidCastException——此类值请以 string 取回后自行 Parse。</para></summary>
@@ -233,7 +238,8 @@ public sealed partial class DataSession<TProvider>
         return (T)Convert.ChangeType(result, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    /// <summary>执行任意 DDL/DML。</summary>
+    /// <summary>执行任意 DDL/DML。
+    /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para></summary>
     public async ValueTask<int> ExecuteAsync(FormattableString sql, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();

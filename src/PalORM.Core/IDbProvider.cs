@@ -8,7 +8,8 @@ namespace PalORM;
 /// <para><b>为什么不是 DI 注册</b>: Provider 是编译时常量——一个项目只用一种数据库。DI 容器注册增加启动开销和复杂度。</para>
 /// <para><b>扩展方式</b>: Provider 之间零引用、零耦合；但新增 SQL 方言还需同步扩展
 /// Core 的 SqlDialect 枚举、CommandSqlByDialect 等按方言展开的类型以及 SourceGen 的
-/// SqlGenerationDialect——"实现本接口"只覆盖连接/参数/批量层（ITM-331，ADR 待裁决）。</para></summary>
+/// SqlGenerationDialect——"实现本接口"只覆盖连接/参数/批量层（ITM-331b 已裁决：
+/// 确有第四 Provider 需求时再议，文档已收窄）。</para></summary>
 public interface IDbProvider
 {
     /// <summary>Provider 名称（PostgreSql / MySql / SQLite）。</summary>
