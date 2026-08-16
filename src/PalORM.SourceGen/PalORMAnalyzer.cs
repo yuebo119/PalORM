@@ -125,10 +125,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM023", "Entity has no insertable columns",
         "Type '{0}' has no insertable columns (all properties are [IgnoreOnInsert]/[Key(AutoIncrement)]/[Computed]/[Timestamp])", "PalORM", DiagnosticSeverity.Error, true);
 
-    // PALORM024：实体无可更新列——运行期 DataSession.Crud.cs:183 / DataSession_Bulk.cs BulkMergeAsync 并发令牌 throw。
+    // PALORM024：实体无可更新列——运行期 UpdateCoreAsync 空 SET throw / BulkMergeAsync 并发令牌 throw（r9-S-D 去字面行号）。
     public static readonly DiagnosticDescriptor NoUpdatableColumns = new(
         "PALORM024", "Entity has no updatable columns",
-        "Type '{0}' has no updatable columns (all non-PK properties are [IgnoreOnInsert]/[Computed]/[Timestamp])", "PalORM", DiagnosticSeverity.Error, true);
+        "Type '{0}' has no updatable columns (all non-PK properties are [Key-less computed]/[ConcurrencyCheck]/[Computed]/[Timestamp])", "PalORM", DiagnosticSeverity.Error, true);
 
     // PALORM025：[Timestamp] 标在非时间类型——ITM-402：MigrationEmitter 仅对 DateTime/DateTimeOffset
     // 生成 DEFAULT CURRENT_TIMESTAMP，其它类型 NOT NULL 无 DEFAULT 每次插入必失败。
@@ -156,7 +156,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM031", "BulkUpdateBatchAsync on [ConcurrencyCheck] entity always throws",
         "BulkUpdateBatchAsync<{0}> is called but {0} has [ConcurrencyCheck], which always throws NotSupportedException at runtime", "PalORM", DiagnosticSeverity.Error, true);
 
-    // PALORM032：Include/Join 引用未注册实体——QueryBuilder.cs AppendLimitClause 的方言分页 throw。
+    // PALORM032：Include/Join 引用未注册实体——QueryBuilder.cs GetRegisteredTableName 的未注册实体 throw（r9-S-E：原字面锚本就指错，语义锚修正）。
     // Warning 级：多程序集场景同 PALORM003 局限。
     public static readonly DiagnosticDescriptor JoinReferencesUnregisteredEntity = new(
         "PALORM032", "Join/Include references an entity without [Table]",
@@ -632,7 +632,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM024：实体无可更新列——UpdateAsync/BulkUpdateAsync 运行期必崩。
-    /// IsUpsertable 等价 TableModel.cs IsUpsertable（单一真源，见现文件）：!IgnoreOnInsert and ComputedExpression is null and !IsTimestamp
+    /// 等价 CommandFactoryEmitter.IsUpdatableColumn 单一真源（r8-D-A 修正：!Key/!Concurrency/!Computed/!Timestamp）
     /// 注：非主键属性——主键在 UPDATE 中是 WHERE 条件，不计入 SET 列。</summary>
     private static void CheckUpdatableColumns(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
