@@ -134,6 +134,24 @@ jobs:
                   --api-key ${{ secrets.NUGET_API_KEY }}
                   --skip-duplicate
 
+            - name: Verify Release Accuracy
+              run: |
+                  # §三 数字准确性检查（docs/发布变更日志规范.md）
+                  echo "═══ 数字准确性验证 ═══"
+                  echo "版本号: $(grep '<Version>' Directory.Build.props | grep -oP '\d+\.\d+\.\d+')"
+                  echo "Core 测试: $(dotnet run --project test/PalORM.Core.Tests -c Release --no-build --no-restore 2>&1 | grep -oP '成功: \K\d+')"
+                  echo "SourceGen 测试: $(dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build --no-restore 2>&1 | grep -oP '成功: \K\d+')"
+                  echo "Integration 测试: $(dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --no-restore 2>&1 | grep -oP '成功: \K\d+')"
+                  echo "快照基线: $(ls test/PalORM.SourceGen.Tests/Snapshots/*.snap | wc -l)"
+                  echo "═══ CHANGELOG 与版本号一致性 ═══"
+                  VERSION="${GITHUB_REF_NAME#v}"
+                  if grep -q "\[$VERSION\]" CHANGELOG.md; then
+                      echo "✓ CHANGELOG 含 [$VERSION] 条目"
+                  else
+                      echo "✗ CHANGELOG 缺少 [$VERSION] 条目——禁止发布"
+                      exit 1
+                  fi
+
             - name: Extract Release Notes
               if: github.event_name == 'push'
               run: |
