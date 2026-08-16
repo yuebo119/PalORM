@@ -132,7 +132,7 @@ public sealed class PostgreSqlIntegrationTests
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(Opts);
         try
         {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS pg_test");
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS pg_test CASCADE");
             await db.ExecuteAsync($"CREATE TABLE pg_test (id BIGSERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL)");
             await db.ExecuteAsync($"INSERT INTO pg_test (name, value) VALUES ({"PG"}, {42})");
             var c = await db.ScalarAsync<long>($"SELECT COUNT(*) FROM pg_test WHERE name = {"PG"}");
@@ -141,7 +141,7 @@ public sealed class PostgreSqlIntegrationTests
         finally
         {
             // T6：断言失败也清理表
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS pg_test");
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS pg_test CASCADE");
         }
     }
 
