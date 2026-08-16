@@ -38,10 +38,13 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
 ### 基准项目结构（v5.0 重构）
 
 1077 行单文件 → 13 个独立文件（按职责拆分）：
-- `01_CrudBenchmarks.cs`（22 方法）— Query/Insert/Update/Delete/Upsert × 4 ORM
+- `01_CrudBenchmarks.cs`（22 方法）— Query/GetByKey/Insert/Update/Delete/Upsert × 4 ORM（r18/T-P3-06：GetByKey 独立 category，与 Pg/MySql 全局统一）
 - `02_BulkBenchmarks.cs`（7 方法）— BulkInsert/Update/UpdateBatch/Delete 拐点矩阵
 - `03_GcBenchmarks.cs`（20 方法）— GC 装箱专项（5 操作 × 4 行数）
-- `04_SqlBuildBenchmarks.cs`（3 方法）— SQL 构建零 I/O（纳秒级）
+- `04_SqlBuildBenchmarks.cs`（3 方法）— SQL 构建零 I/O（纳秒级，高精度 5/10/15 + 4096 invocations）
+  - **r18/T-P3-07（T10 噪声标注）**：本地基线报告基线行 Error/Mean ≈ 16.9% > 15% 上限，
+    由旧配置 3/5/10 生成；本地重跑被 BDN fork NU1100 环境项阻断，下次 bench 环境可用时
+    以高精度配置重跑并覆盖报告。
 - `05_SqliteSpeedBenchmarks.cs`（4 方法）— 纯速度交叉验证（无 MemoryDiagnoser）
 - `06_FeatureBenchmarks.cs`（13 方法）— PalORM 独有特性 + v5.0 新特性
 - `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存 + RepoDB
