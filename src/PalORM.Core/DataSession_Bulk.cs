@@ -131,6 +131,10 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
+        // r15-DB1（D3 族第五侧一致性收口——同四侧口径）
+        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
         return await ExecuteBulkUpdateRowByRowAsync<T>(entities, operation.Owner, ct).ConfigureAwait(false);
     }
@@ -336,6 +340,10 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
+        // r15-DB2（第六侧：公共 API 直调路径——Seed 侧已有自身入口保护）
+        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
 
         DbTransaction? previousTransaction = GetActiveTransaction();

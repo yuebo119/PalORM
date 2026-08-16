@@ -1067,6 +1067,26 @@ public sealed class ProviderTests
     }
 
     [Test]
+    public async Task BulkUpdate_EmptyList_UnregisteredType_ThrowsConsistently()
+    {
+        // r15-DB1 锁定（第五侧）
+        await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "DataSource=:memory:" });
+        await Assert.That(async () => await session.BulkUpdateAsync(new List<UnregisteredEntity>()))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task BulkMerge_EmptyList_UnregisteredType_ThrowsConsistently()
+    {
+        // r15-DB2 锁定（第六侧——族全闭）
+        await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "DataSource=:memory:" });
+        await Assert.That(async () => await session.BulkMergeAsync(new List<UnregisteredEntity>()))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task CommandTimeout_Zero_SecondsMapsToZeroInfinite()
     {
         // ITM-619/662 锁定：Zero 透传为 0（ADO.NET 无限等待）——Resilience 侧归一
