@@ -138,7 +138,8 @@ jobs:
               if: github.event_name == 'push'
               run: |
                   VERSION="${GITHUB_REF_NAME#v}"
-                  # 提取 CHANGELOG.md 中当前版本段（从 ## [version] 到下一个 ## 或 EOF）
+
+                  # ── 1. 提取 CHANGELOG 当前版本段 ──
                   awk -v ver="$VERSION" '
                       /^## \[/ {
                           if (found) exit
@@ -147,36 +148,99 @@ jobs:
                       found { print }
                   ' CHANGELOG.md > release-notes.md
 
-                  # 组装完整 Release Body
+                  # ── 2. 动态生成包表格（从实际打包产物读取，增减包零维护） ──
+                  PKG_TABLE=""
+                  for nupkg in artifacts/packages/*.nupkg; do
+                      pkg=$(basename "$nupkg" | sed "s/\.$VERSION\.nupkg//")
+                      PKG_TABLE="$PKG_TABLE| $pkg | $VERSION |\n"
+                  done
+
+                  # ── 3. 获取上一版本号（CHANGELOG 中当前段的下一个 ## 行） ──
+                  PREV_VER=$(awk -v ver="$VERSION" '
+                      /^## \[/ {
+                          if (found) { gsub(/## \[|\].*/, "", $0); print $0; exit }
+                          if (index($0, "[" ver "]")) found=1
+                      }
+                  ' CHANGELOG.md)
+
+                  # ── 4. 组装 Release Body ──
                   {
-                      echo "## PalORM $GITHUB_REF_NAME"
+                      echo "# PalORM $GITHUB_REF_NAME"
                       echo ""
-                      echo "### 📦 发布包"
+                      # 上一版本对比链接
+                      if [ -n "$PREV_VER" ]; then
+                          echo "**[与 v$PREV_VER 对比](https://github.com/yuebo119/PalORM/compare/v$PREV_VER...$GITHUB_REF_NAME)** |"
+                      fi
+                      echo "[NuGet](https://www.nuget.org/packages/PalORM.Core) |"
+                      echo "[完整变更日志](https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md)"
+                      echo ""
+
+                      # ── 发布包 ──
+                      echo "## 📦 发布包"
                       echo ""
                       echo "| 包名 | 版本 |"
                       echo "|------|------|"
-                      echo "| PalORM.Core | $VERSION |"
-                      echo "| PalORM.Sqlite | $VERSION |"
-                      echo "| PalORM.MySql | $VERSION |"
-                      echo "| PalORM.PostgreSql | $VERSION |"
-                      echo "| PalORM.SourceGen | $VERSION |"
+                      echo -e "$PKG_TABLE" | head -n -1  # 去尾部空行
                       echo ""
-                      echo "### 📥 安装"
+
+                      # ── 安装 ──
+                      echo "## 📥 安装"
                       echo ""
                       echo '```bash'
+                      echo "# 按需安装 Provider（Core 是必需的）"
                       echo "dotnet add package PalORM.Core --version $VERSION"
-                      echo "dotnet add package PalORM.Sqlite --version $VERSION   # SQLite"
-                      echo "dotnet add package PalORM.MySql --version $VERSION    # MySQL"
-                      echo "dotnet add package PalORM.PostgreSql --version $VERSION # PostgreSQL"
+                      echo ""
+                      echo "# SQLite（零配置即装即用）"
+                      echo "dotnet add package PalORM.Sqlite --version $VERSION"
+                      echo ""
+                      echo "# MySQL / PostgreSQL"
+                      echo "dotnet add package PalORM.MySql --version $VERSION"
+                      echo "dotnet add package PalORM.PostgreSql --version $VERSION"
+                      echo ""
+                      echo "# 源生成器（自动随 Provider 引入，通常无需单独安装）"
+                      echo "# dotnet add package PalORM.SourceGen --version $VERSION"
                       echo '```'
                       echo ""
-                      echo "### 📋 变更明细"
+
+                      # ── 快速上手 ──
+                      echo "## 🚀 30 秒上手"
                       echo ""
-                      cat release-notes.md
+                      echo '```csharp'
+                      echo '// 1. 定义实体（record 也可）'
+                      echo '[Table("users")]'
+                      echo 'public sealed partial class User'
+                      echo '{'
+                      echo '    [Key] public long Id { get; set; }'
+                      echo '    [Column("name")] public string Name { get; set; } = "";'
+                      echo '}'
+                      echo ''
+                      echo '// 2. 连接 + 操作（编译期生成全部 SQL，零反射零装箱）'
+                      echo 'await using var db = await DataSession<SqliteProvider>.CreateAsync('
+                      echo '    new DbOptions { ConnectionString = "Data Source=:memory:" });'
+                      echo 'await db.MigrateAsync();'
+                      echo 'await db.InsertAsync(new User { Name = "Alice" });'
+                      echo 'var user = await db.GetAsync<User>(1);'
+                      echo '```'
                       echo ""
+
+                      # ── 变更明细（CHANGELOG 提取段） ──
+                      if [ -s release-notes.md ]; then
+                          echo "## 📋 变更明细"
+                          echo ""
+                          cat release-notes.md
+                          echo ""
+                      fi
+
+                      # ── 底部链接 ──
                       echo "---"
                       echo ""
-                      echo "**完整变更日志**: [CHANGELOG.md](https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md)"
+                      echo "| 资源 | 链接 |"
+                      echo "|------|------|"
+                      echo "| 📖 文档 | [README](https://github.com/yuebo119/PalORM#readme) |"
+                      echo "| 📋 全部变更 | [CHANGELOG.md](https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md) |"
+                      echo "| 🏗️ 架构决策 | [ADR 目录](https://github.com/yuebo119/PalORM/tree/main/docs/adr) |"
+                      echo "| 🐛 报告问题 | [Issues](https://github.com/yuebo119/PalORM/issues) |"
+                      echo "| 💬 讨论 | [Discussions](https://github.com/yuebo119/PalORM/discussions) |"
                   } > full-release-body.md
 
             - name: Create GitHub Release
