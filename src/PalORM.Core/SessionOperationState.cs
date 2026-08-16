@@ -408,34 +408,49 @@ internal sealed class SessionOperationState
         Func<Task> disposeCore,
         TaskCompletionSource completion)
     {
+        // 有界等待：被放弃的 QueryAsyncEnumerable 枚举器（未 DisposeAsync）会让操作租约
+        // 永不完成--无诊断的无限挂起改为明确失败，指向泄漏原因。
+        // ITM-581: 读一次入局部--测试并发修改该可变静态时，等待值与诊断消息保持一致
+        TimeSpan disposeWaitTimeout = DisposeWaitTimeout;
+        Exception? primaryException = null;
         try
         {
-            // 有界等待：被放弃的 QueryAsyncEnumerable 枚举器（未 DisposeAsync）会让操作租约
-            // 永不完成--无诊断的无限挂起改为明确失败，指向泄漏原因。
-            // ITM-581: 读一次入局部--测试并发修改该可变静态时，等待值与诊断消息保持一致
-            TimeSpan disposeWaitTimeout = DisposeWaitTimeout;
-            try
-            {
-                await Task.WhenAll(activeOperation, activeTransaction)
-                    .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
-            }
-            catch (TimeoutException timeoutException)
-            {
-                throw new InvalidOperationException(
-                    $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
-                    "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed; " +
-                    "always consume it with 'await foreach' or dispose the enumerator explicitly.",
-                    timeoutException);
-            }
-            await disposeCore().ConfigureAwait(false);
-            lock (_sync) _state = 2;
-            completion.TrySetResult();
+            await Task.WhenAll(activeOperation, activeTransaction)
+                .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
         }
-        catch (Exception exception)
+        catch (TimeoutException timeoutException)
         {
-            lock (_sync) _state = 2;
-            completion.TrySetException(exception);
+            primaryException = new InvalidOperationException(
+                $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
+                "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed; " +
+                "always consume it with 'await foreach' or dispose the enumerator explicitly.",
+                timeoutException);
         }
+
+        // ITM-665: 超时路径也必须执行 disposeCore（关闭/释放主连接）——此前 throw 先于
+        // disposeCore，超时后连接保持 Open 且 _disposeTask 已 faulted 无法重试。
+        // 主异常保留：超时异常为 primary，清理失败挂 Data 不替换；无超时则清理失败为主。
+        try
+        {
+            await disposeCore().ConfigureAwait(false);
+        }
+        catch (Exception cleanupException)
+        {
+            if (primaryException is null)
+            {
+                primaryException = cleanupException;
+            }
+            else
+            {
+                primaryException.Data["PalORM.DisposeTimeoutCleanupException"] = cleanupException;
+            }
+        }
+
+        lock (_sync) _state = 2;
+        if (primaryException is not null)
+            completion.TrySetException(primaryException);
+        else
+            completion.TrySetResult();
     }
 
     /// <summary>v4.5：Exit 不再写 AsyncLocal（省一次 EC 拷贝 ~300B）。

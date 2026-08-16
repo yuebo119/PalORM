@@ -177,12 +177,25 @@ public sealed class AdvancedFeatureTests
     [Test]
     public async Task WithCache_CachesResults()
     {
-        await using var db = await TestDb.SqliteAsync();
+        // T-P2-02：注入计数缓存锁定真实命中——原断言只比较行数相等，不缓存也通过
+        var cache = new CountingCache();
+        var options = new DbOptions
+        {
+            ConnectionString = TestEnvironment.ResolveSqliteConnectionString(),
+            QueryCache = cache
+        };
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(options);
         await db.MigrateAsync();
         await db.InsertAsync(new Product { Name = "C1", Price = 1m, Stock = 0 });
         var r1 = await db.From<Product>().WithCache("t1", TimeSpan.FromMinutes(1)).ToListAsync();
         var r2 = await db.From<Product>().WithCache("t1", TimeSpan.FromMinutes(1)).ToListAsync();
-        await Assert.That(r1.Count).IsEqualTo(r2.Count);
+        // 两次查询都查缓存、首次写入后命中不再重写
+        await Assert.That(cache.TryGetCalls).IsEqualTo(2);
+        await Assert.That(cache.SetCalls).IsEqualTo(1);
+        await Assert.That(r1.Count).IsEqualTo(1);
+        await Assert.That(r2.Count).IsEqualTo(1);
+        // 命中返回新 List（浅拷贝契约，见 WithCache 文档）
+        await Assert.That(ReferenceEquals(r1, r2)).IsFalse();
     }
 
     [Test]
@@ -266,6 +279,34 @@ public sealed class AdvancedFeatureTests
         var dry = db.From<Product>().UnsafeWindowOver("ROW_NUMBER()", "PARTITION BY stock ORDER BY price DESC").AsDryRun();
         await Assert.That(dry.Sql).Contains("ROW_NUMBER");
         await Assert.That(dry.Sql).Contains("OVER");
+    }
+
+    /// <summary>T-P2-02 计数缓存：记录 TryGet/Set 调用次数，锁定缓存真实命中。</summary>
+    private sealed class CountingCache : IQueryCache
+    {
+        internal int TryGetCalls;
+        internal int SetCalls;
+        private readonly Dictionary<string, object> _store = [];
+
+        public bool TryGet<T>(string key, out T? value) where T : class
+        {
+            TryGetCalls++;
+            if (_store.TryGetValue(key, out object? cached) && cached is T typed)
+            {
+                value = typed;
+                return true;
+            }
+            value = null;
+            return false;
+        }
+
+        public void Set<T>(string key, T value, TimeSpan? ttl = null) where T : class
+        {
+            SetCalls++;
+            _store[key] = value;
+        }
+
+        public void Clear() => _store.Clear();
     }
 }
 

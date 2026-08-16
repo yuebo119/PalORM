@@ -143,7 +143,12 @@ internal static class AutoTaggingEmitter
             .Replace("*/", "* /")
             .Replace("/*", "/ *")
             .Replace("\\", "\\\\")
-            .Replace("\"", "\\\"");
+            .Replace("\"", "\\\"")
+            // ITM-669：C# 字符串字面量非法/破坏性字符——极端文件名（含换行/制表）不得
+            // 破坏生成源；转义为 \n \t \r 字面量（同时避免 SQL 注释内的裸控制符）。
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n")
+            .Replace("\t", "\\t");
 
         // 方法签名：统一参数 (this QueryBuilder<T> builder, CancellationToken ct = default) + where T : class, new()
         sb.AppendLine($"        internal static async {returnType}");
@@ -184,7 +189,12 @@ internal static class AutoTaggingEmitter
                 // 统一分隔符比较
                 string normAbs = absolutePath.Replace('\\', '/');
                 string normCwd = cwd.Replace('\\', '/').TrimEnd('/');
-                if (normAbs.StartsWith(normCwd, System.StringComparison.OrdinalIgnoreCase))
+                // ITM-669：目录边界检查——cwd=C:/src/App 不得把 C:/src/Application/X.cs
+                // 剥成 "lication/X.cs"（前缀碰撞）。下一字符必须恰是 '/'。
+                bool boundaryOk = normAbs.Length == normCwd.Length
+                    || (normAbs.Length > normCwd.Length && normAbs[normCwd.Length] == '/');
+                if (boundaryOk
+                    && normAbs.StartsWith(normCwd, System.StringComparison.OrdinalIgnoreCase))
                 {
                     string relative = normAbs.Substring(normCwd.Length).TrimStart('/');
                     return relative;

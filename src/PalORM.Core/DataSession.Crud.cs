@@ -73,7 +73,10 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation =
             EnterOperation(operationOwner);
-        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
+        // ITM-675：单次快照贯穿全路径——元数据与回填委托/列名必须来自同一注册表版本，
+        // 不得在 RETURNING 读后重读 CurrentState（热重载窗口会跨版本混用）。
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
         if (metadata.InsertColumns.Count == 0)
             throw new InvalidOperationException(
@@ -85,13 +88,14 @@ public sealed partial class DataSession<TProvider>
         // 双路径分发：PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID。
         // 未来第三方 Provider 无 RETURNING 且非 MySQL 方言，在 LAST_INSERT_ID 分支被显式拒绝。
         return TProvider.SupportsReturningClause
-            ? await InsertWithReturningAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false)
-            : await InsertWithLastInsertIdAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false);
+            ? await InsertWithReturningAsync(state, cmd, sqls, metadata, entity, ct).ConfigureAwait(false)
+            : await InsertWithLastInsertIdAsync(state, cmd, sqls, metadata, entity, ct).ConfigureAwait(false);
     }
 
     /// <summary>PG/SQLite 路径——INSERT ... RETURNING 单次往返物化完整行（含自增 ID）。
     /// ITM-325：调用方持有的传入实体引用同步回填自增 ID（DB 计算列仍以返回实例为准）。</summary>
     private async ValueTask<T> InsertWithReturningAsync<T>(
+        PalORM_Runtime.RuntimeRegistryState state,
         DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, CancellationToken ct)
         where T : class, new()
     {
@@ -103,10 +107,9 @@ public sealed partial class DataSession<TProvider>
             throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
 
         T materialized = ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
-        // 回填对齐 MySQL 路径（ITM-325）
-        var insertState = PalORM_Runtime.CurrentState;
-        if (insertState._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
-            && insertState._pkColumns.TryGetValue(typeof(T), out string? pkColumn))
+        // 回填对齐 MySQL 路径（ITM-325）；ITM-675：与元数据同一快照，不再重读 CurrentState
+        if (state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill)
+            && state._pkColumns.TryGetValue(typeof(T), out string? pkColumn))
         {
             int pkOrdinal = reader.GetOrdinal(pkColumn);
             if (!await reader.IsDBNullAsync(pkOrdinal, ct).ConfigureAwait(false))
@@ -118,6 +121,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>MySQL 路径——INSERT + SELECT LAST_INSERT_ID() 合并为单次 ExecuteScalarAsync。
     /// 显式方言守卫：未来第三方 Provider 走到此处应明确失败，而非收到 LAST_INSERT_ID 专有 SQL。</summary>
     private async ValueTask<T> InsertWithLastInsertIdAsync<T>(
+        PalORM_Runtime.RuntimeRegistryState state,
         DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, CancellationToken ct)
         where T : class, new()
     {
@@ -133,7 +137,7 @@ public sealed partial class DataSession<TProvider>
         long? generatedId = NormalizeGeneratedId(
             await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
         if (generatedId is long id &&
-            PalORM_Runtime.SetIdDelegates.TryGetValue(typeof(T), out Action<object, long>? setId))
+            state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? setId))
         {
             setId(entity, id);
         }

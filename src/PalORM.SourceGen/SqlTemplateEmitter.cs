@@ -10,8 +10,19 @@ namespace PalORM.SourceGen;
 /// 插值洞引用方法参数生成 CS0103 三类脆弱一并消除）。</summary>
 internal static class SqlTemplateEmitter
 {
+    /// <summary>PALORM041：[SqlTemplate] 同名模板冲突——同命名空间内模板名必须唯一；
+    /// 去重静默丢弃会让用户拿到另一段 SQL 而不自知（ITM-662，改显式报错）。</summary>
+    internal static readonly DiagnosticDescriptor DuplicateSqlTemplateName = new(
+        id: "PALORM041",
+        title: "Duplicate SqlTemplate name",
+        messageFormat: "Duplicate [SqlTemplate] name '{0}' in namespace '{1}': template names must be unique within a namespace",
+        category: "PalORM.Usage",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     /// <summary>单个模板的生成模型——生成器端按 (Namespace, TemplateName) 聚合去重
-    /// （ITM-573：两个方法挂同名模板会生成两个同名字段 → CS0102）。</summary>
+    /// （ITM-573：两个方法挂同名模板会生成两个同名字段 → CS0102；ITM-662：重名现在
+    /// 发射 PALORM041 而非静默丢弃）。</summary>
     internal sealed record SqlTemplateModel(string Namespace, string TemplateName, string Literal, string MethodIdentity);
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -111,32 +122,26 @@ public static partial class SqlTemplates
 }}
 ";
 
-    /// <summary>取方法返回值中的插值串（ITM-521）：优先表达式体 `=> $"..."`，
-    /// 否则取 return 语句内的插值串；两者皆无则 null（方法保持手写实现）。
-    /// 只在 return/箭头子树内查找，规避前置日志插值被误取。</summary>
+    /// <summary>取方法返回值中的插值串（ITM-521）：仅接受"返回表达式直接是单个插值串"
+    /// 的单一形态。ITM-661：条件表达式（b ? $"A" : $"B"）或多 return 会静默取首个、
+    /// 模板与运行时方法语义分叉——改为整体返回 null（模板不生成、方法保持手写实现），
+    /// 永不生成错误 SQL。前置日志插值不再可达（只取直接表达式，不搜索子树）。</summary>
     private static InterpolatedStringExpressionSyntax? FindReturnedInterpolatedString(
         MethodDeclarationSyntax methodSyntax)
     {
-        // 表达式体方法（箭头语法）——优先从箭头表达式提取插值串
+        // 表达式体方法（箭头语法）——返回表达式必须直接是插值串
         if (methodSyntax.ExpressionBody is { } arrow)
         {
-            return arrow.Expression
-                .DescendantNodesAndSelf()
-                .OfType<InterpolatedStringExpressionSyntax>()
-                .FirstOrDefault();
+            return arrow.Expression as InterpolatedStringExpressionSyntax;
         }
 
-        // 块体方法：取首个 return 语句内的插值串
+        // 块体方法：恰一个 return 语句且其表达式直接是插值串
+        ReturnStatementSyntax? singleReturn = null;
         foreach (var returnStatement in methodSyntax.DescendantNodes().OfType<ReturnStatementSyntax>())
         {
-            var interpolated = returnStatement
-                .DescendantNodesAndSelf()
-                .OfType<InterpolatedStringExpressionSyntax>()
-                .FirstOrDefault();
-            if (interpolated is not null)
-                return interpolated;
+            if (singleReturn is not null) return null;  // 多 return：跳过生成
+            singleReturn = returnStatement;
         }
-
-        return null;
+        return singleReturn?.Expression as InterpolatedStringExpressionSyntax;
     }
 }

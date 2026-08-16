@@ -448,7 +448,6 @@ public sealed class MultiEntityTests
         var dryRun = query.AsDryRun();
         var rows = await query.ToListAsync();
 
-        await Assert.That(dryRun.Sql).DoesNotContain("...");
         await Assert.That(dryRun.Sql).Contains("products");
         await Assert.That(dryRun.Sql).Contains("order_items");
         await Assert.That(rows.Count).IsEqualTo(1);

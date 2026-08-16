@@ -208,7 +208,8 @@ internal static class RegistryEmitter
         sb.AppendLine("        {");
         foreach (var m in models.AsSpan())
         {
-            if (m.Indexes.AsSpan().Length == 0) continue;
+            // r18/ITM-672：零索引实体也发射空 CreateIndexSqlSet——运行时"缺键即拒绝"才能区分
+            // "无索引"（空集，合法）与"旧生成器/手工片段"（键缺失，必须拒绝）。
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::PalORM.CreateIndexSqlSet(");
             sb.AppendLine($"                Migration_{m.GeneratedTypeSuffix}.CreateIndexesSqlite,");
             sb.AppendLine($"                Migration_{m.GeneratedTypeSuffix}.CreateIndexesPostgreSql,");

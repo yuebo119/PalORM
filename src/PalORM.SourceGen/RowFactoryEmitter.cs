@@ -48,7 +48,7 @@ internal static class RowFactoryEmitter
         foreach (var col in model.Columns)
         {
             string readCall = GetReadExpression(col, ordinal, model.GeneratedTypeSuffix);
-            sb.AppendLine($"            {col.PropertyName} = {readCall},");
+            sb.AppendLine($"            {col.EscapedPropertyName} = {readCall},");
             ordinal++;
         }
 

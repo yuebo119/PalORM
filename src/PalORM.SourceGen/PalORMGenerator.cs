@@ -84,7 +84,14 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 .OrderBy(static m => m.MethodIdentity, StringComparer.Ordinal))
             {
                 if (!emitted.Add($"{model.Namespace}.{model.TemplateName}"))
+                {
+                    // ITM-662：重名必须显式报错——静默 continue 让第二个模板的 SQL
+                    // 永远不可用且用户不知情（拿错 SQL 族）。
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        SqlTemplateEmitter.DuplicateSqlTemplateName, Location.None,
+                        model.TemplateName, model.Namespace));
                     continue;
+                }
                 spc.AddSource(
                     CreateStableHintName("SqlTemplate", model.MethodIdentity),
                     SqlTemplateEmitter.Render(model));

@@ -45,6 +45,8 @@ public sealed class ArchitectureInvariantTests
         ["BulkUpdateBatchAsync"] = "v5.0 阶段 4.3b：批量 UPDATE 单语句（CASE WHEN/FROM VALUES）。租户过滤在 SQL 末尾自动追加，与 BulkUpdateAsync 对齐",
         ["BulkMergeAsync"] = "逐条委托 SaveCoreAsync（Insert/Update 语义）",
         ["SeedAsync"] = "委托 BulkMergeAsync",
+        // ITM-677：实体物化原始 SQL 流式入口——与 QueryAsync 同族，文档已声明过滤不适用
+        ["QueryAsyncEnumerable"] = "原始 SQL 契约：用户 SQL 不可注入过滤（文档已声明，ITM-677）",
     };
 
     [Test]
@@ -90,7 +92,7 @@ public sealed class ArchitectureInvariantTests
                 "UpdateAsync", "ValidateSchemaAsync", "DiffAsync", "MigrateAsync",
                 "SavepointAsync", "RollbackToAsync", "ExecuteWithResilience",
                 "BeginTransactionAsync", "WithTransaction", "HealthCheckAsync",
-                "ForRead", "DisposeAsync", "QueryAsyncEnumerable", "QueryMultipleAsync",
+                "ForRead", "DisposeAsync", "QueryMultipleAsync",
                 "CreateAsync",
             ])
             .ToHashSet(StringComparer.Ordinal);

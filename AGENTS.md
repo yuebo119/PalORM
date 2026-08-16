@@ -17,8 +17,8 @@
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
 | **最高** | `.editorconfig` | SonarAnalyzer 39 条规则（P0+P1 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
-| **高** | `.ai/lessons.md` | 规范系统手册 v7.0（22 缺陷，本地工具，不入仓库） |
-| **高** | `.ai/test/prompt.md` | 测试规范系统 v1.0（14 铁律 + 16 缺陷，本地工具，不入仓库） |
+| **高** | `.ai/lessons.md` | 规范系统手册 v7.0（44 缺陷：A1-A7 + B1-B37，本地工具，不入仓库） |
+| **高** | `.ai/test/prompt.md` | 测试规范系统 v1.0（14 铁律 + 17 缺陷，本地工具，不入仓库） |
 | **高** | `docs/发布规范.md` | NuGet 发布流程 SOP（v5.0.0 实测，含 8 条实践教训） |
 | **中** | `docs/编码规范.md` §18 | SonarAnalyzer 守护层规则文档化 |
 | **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 |

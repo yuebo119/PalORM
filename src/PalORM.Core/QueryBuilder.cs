@@ -86,6 +86,7 @@ public struct QueryBuilder<T> where T : class, new()
     /// 分组组合：WHERE defaults AND ((A) OR (B))——用户 OR 无法绕过默认过滤（ITM-401 根治）。</summary>
     public QueryBuilder<T> Where(FormattableString clause)
     {
+        ArgumentNullException.ThrowIfNull(clause);  // ITM-664：null 在 BindFormattableString 处 NRE，入口显式拒绝
         AddParenthesizedClause(
             HasClause(QueryClauseKind.Where) ? "AND " : "", clause);
         return this;
@@ -95,6 +96,7 @@ public struct QueryBuilder<T> where T : class, new()
     /// <para>首个用户子句使用 OrWhere 时无既有条件可 OR，语义等价 <see cref="Where"/>。</para></summary>
     public QueryBuilder<T> OrWhere(FormattableString clause)
     {
+        ArgumentNullException.ThrowIfNull(clause);  // ITM-664
         // 用户子句在独立分组内组合，默认过滤恒以 AND 前置（AppendWhereSection）——
         // 首个用户子句用 OrWhere 时无既有条件可 OR，语义等价 Where。
         AddParenthesizedClause(
@@ -129,6 +131,10 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Select(params Expression<Func<T, object?>>[] members)
     {
         ArgumentNullException.ThrowIfNull(members);
+        // ITM-663：空数组合法但 _selectColumns=[] 与"未调用（null=全列）"语义分叉，
+        // 生成 SELECT  FROM 非法 SQL——入口显式拒绝。
+        if (members.Length == 0)
+            throw new ArgumentException("Select requires at least one member.", nameof(members));
         // ITM-622：存裸列名，构建时以当前 FROM 源（_cteName ?? _tableName）限定——
         // 调用时点固化限定名会在 Select 先于 With(cte) 时投影指向旧表名
         // （与 OrderBy/GroupBy 的构建时动态求值不对称）。限定语义（ITM-537）不变。
@@ -262,6 +268,7 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>追加 HAVING 条件（作用于分组后），参数化绑定；重复调用以 AND 组合。</summary>
     public QueryBuilder<T> Having(FormattableString clause)
     {
+        ArgumentNullException.ThrowIfNull(clause);  // ITM-664
         AddFormattableClause(QueryClauseKind.Having,
             HasClause(QueryClauseKind.Having) ? "AND " : "HAVING ", clause);
         return this;
@@ -327,6 +334,7 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> With(string cteName, FormattableString subquery)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cteName);
+        ArgumentNullException.ThrowIfNull(subquery);  // ITM-664
         var (sql, parameters) = BindFormattableString(subquery);
         _cteName = cteName;
         AddClause(QueryClauseKind.CommonTableExpression,
@@ -708,6 +716,7 @@ public struct QueryBuilder<T> where T : class, new()
     private QueryBuilder<T> AddJoin<TJoin>(string joinType, FormattableString onClause)
         where TJoin : class, new()
     {
+        ArgumentNullException.ThrowIfNull(onClause);  // ITM-664
         string joinTable = GetRegisteredTableName(typeof(TJoin));
         var (sql, parameters) = BindFormattableString(onClause);
         AddClause(QueryClauseKind.Join,

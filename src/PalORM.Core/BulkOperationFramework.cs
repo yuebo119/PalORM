@@ -53,7 +53,8 @@ public static class BulkOperationFramework
     /// <summary>资源清理——cleanup 失败的异常挂到主异常 Data，不替换原始失败。
     /// 通用接口（IAsyncDisposable）覆盖 DbCommand/DbTransaction/NpgsqlBinaryImporter 等全部资源。</summary>
     /// <param name="resource">待释放的资源（DbCommand/DbTransaction/importer 等）。</param>
-    /// <param name="primaryException">主异常；为 null 时 cleanup 失败被吞掉（无主异常可挂）。</param>
+    /// <param name="primaryException">主异常；为 null（成功路径）时 cleanup 失败**向外传播**
+    /// （ITM-660：when-filter false 不捕获——释放失败必须可见，不静默吞，B26）。</param>
     /// <param name="dataKey">cleanup 异常挂 Data 的键名（如 PalORM.CommandCleanupException）。</param>
     /// <param name="ct">取消令牌。</param>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",

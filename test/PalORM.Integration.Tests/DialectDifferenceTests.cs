@@ -45,8 +45,7 @@ public sealed class DialectDifferenceTests
 
     // ─── LIMIT OFFSET 方言差异 ─────────────────────────────
 
-    /// <summary>SQLite: LIMIT take OFFSET skip（skip=0 省略 OFFSET）
-    /// PG: LIMIT take OFFSET skip（skip=0 省略 OFFSET）
+    /// <summary>SQLite/PG: LIMIT take OFFSET skip（当前实现 skip=0 也输出 OFFSET 0——见 TakeOnly 锁定）
     /// MySQL: LIMIT skip, take（skip=0 用 LIMIT 0, take）</summary>
     [Test]
     public async Task LimitOffset_DryRun_ProducesCorrectDialectSql()
@@ -84,29 +83,20 @@ public sealed class DialectDifferenceTests
 
     // ─── UPSERT 方言分支 ───────────────────────────────────
 
-    /// <summary>PG/SQLite 用 ON CONFLICT DO UPDATE；MySQL 用 ON DUPLICATE KEY UPDATE。
-    /// PalORM 在 DataSession.Crud 内根据 SupportsReturningClause 分发。
-    /// 这里验证 SaveAsync 对有 [ConcurrencyCheck] 的实体拒绝 UPSERT（跨方言一致行为）。</summary>
-    /// <summary>SaveAsync 对有 [ConcurrencyCheck] 的实体跨方言一致拒绝 UPSERT。
-    /// 验证 UPSERT 路径不会静默绕过乐观锁。</summary>
+    /// <summary>SaveAsync 对有 [ConcurrencyCheck] 的实体拒绝 UPSERT。
+    /// 守卫在 Core 的 SaveCoreAsync 分发层（Provider 无关，三方言共用），故 SQLite 内存库
+    /// 单方言执行即覆盖全方言语义；不涉及 DDL/连接差异。</summary>
     [Test]
     public async Task Upsert_ConcurrencyCheck_RejectedAcrossDialects()
     {
         await using var db = await TestDb.SqliteAsync();
-        await db.ExecuteAsync($"CREATE TABLE IF NOT EXISTS ver_test (id INTEGER PRIMARY KEY, name TEXT, ver INTEGER)");
-        try
-        {
-            await db.ExecuteAsync($"INSERT INTO ver_test (id, name, ver) VALUES (1, {"init"}, {0})");
+        // 非默认主键 → SaveAsync 走 UPSERT 分支；UPSERT 无条件覆盖与乐观锁冲突 → 明确拒绝。
+        // 异常在 CreateCommand 之前抛出，无需建表。
+        Exception? ex = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await db.SaveAsync(new VersionedEntity { Id = 1, Name = "init", Version = 0 }));
 
-            // 验证普通实体可以正常 UPSERT（无 [ConcurrencyCheck] 的路径）
-            await db.ExecuteAsync($"UPDATE ver_test SET name = {"upserted"} WHERE id = {1}");
-            var name = await db.ScalarAsync<string>($"SELECT name FROM ver_test WHERE id = {1}");
-            await Assert.That(name).IsEqualTo("upserted");
-        }
-        finally
-        {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS ver_test");
-        }
+        await Assert.That(ex!.Message).Contains("[ConcurrencyCheck]");
+        await Assert.That(ex.Message).Contains("Use InsertAsync");
     }
 
     // ─── CurrentTimestamp 时区语义差异 ───────────────────
@@ -132,9 +122,11 @@ public sealed class DialectDifferenceTests
         bool sqliteResult = PalORM.Sqlite.SqliteProvider.IsUniqueViolation(
             new Microsoft.Data.Sqlite.SqliteException("test", 19, 2067));
         await Assert.That(sqliteResult).IsTrue();
-        // PG/MySQL 委托存在性由编译保证（static abstract），这里验证调用不抛
-        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.IsUniqueViolation).IsNotNull();
-        await Assert.That(PalORM.MySql.MySqlProvider.IsUniqueViolation).IsNotNull();
+        // T-P3-08：方法组 IsNotNull 是恒真断言（static abstract 存在性由编译保证）——改为行为断言：
+        // 非数据库异常必须判 false（真阳路径由 ExternalDatabaseBulkTests 真库锁定）
+        var neutral = new InvalidOperationException("not a database error");
+        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.IsUniqueViolation(neutral)).IsFalse();
+        await Assert.That(PalORM.MySql.MySqlProvider.IsUniqueViolation(neutral)).IsFalse();
     }
 
     // ─── Bulk 策略差异 ───────────────────────────────────
@@ -163,9 +155,11 @@ public sealed class DialectDifferenceTests
     }
 }
 
+#region Test Entities
 [Table("bulk_dialect_test")]
 public sealed partial class BulkDialectEntity
 {
     [Key] [Column("id")] public long id { get; set; }
     [Column("name")] public string name { get; set; } = "";
 }
+#endregion
