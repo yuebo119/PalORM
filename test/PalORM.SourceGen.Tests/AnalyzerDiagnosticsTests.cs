@@ -868,8 +868,8 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PALORM", System.StringComparison.Ordinal))).IsFalse();
     }
 
-    private static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
-        AnalyzeAsync(string source)
+    internal static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
+        AnalyzeAsync(string source)  // r17：internal 供 record 三支锁定测试复用
     {
         string[] trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);

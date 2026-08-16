@@ -1335,4 +1335,58 @@ internal sealed class GeneratorPhase2Tests
         // 生成物编译零错（CS0246 已被 global using System 消除）
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
     }
+
+    [Test]
+    public async Task RecordEntity_WithGetSetProperties_GeneratesFully()
+    {
+        // r17-S3/r15-N1 锁定（形态 A）：[Table] record get;set 真生成——修复前静默跳过
+        const string source = """
+            using PalORM;
+            [Table("rec_items")]
+            public record RecordItem
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        string all = string.Join(System.Environment.NewLine, result.GeneratedSources.Values);
+        // RowFactory/CommandFactory/Registry 三族均生成（非静默跳过）
+        await Assert.That(all.Contains("RecordItem", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(result.GeneratedSources.Keys.Any(k => k.Contains("RowFactory", StringComparison.Ordinal))).IsTrue();
+    }
+
+    [Test]
+    public async Task RecordEntity_PositionalParams_ReportsPalorm015()
+    {
+        // r17-S3 锁定（形态 B）：位置参数 record 无 public 无参构造 → PALORM015 Error
+        const string source = """
+            using PalORM;
+            [Table("rec_pos")]
+            public record PositionalItem(string Name)
+            {
+                [Key] public long Id { get; set; }
+            }
+            """;
+        var (diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM015")).IsTrue();
+    }
+
+    [Test]
+    public async Task RecordEntity_InitOnlyKey_ReportsPalorm022()
+    {
+        // r17-S3 锁定（形态 C）：record init-only [Key] → PALORM022（CS8852 防护）
+        const string source = """
+            using PalORM;
+            [Table("rec_init")]
+            public record InitKeyRecord
+            {
+                [Key] public long Id { get; init; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+        var (diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM022")).IsTrue();
+    }
 }
