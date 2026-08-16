@@ -1037,6 +1037,36 @@ public sealed class ProviderTests
     }
 
     [Test]
+    public async Task BulkDelete_EmptyKeys_UnregisteredType_ThrowsConsistently()
+    {
+        // r14-S3 锁定（r13-S1 修复的行为面）：Delete 侧与 Insert 侧同族口径
+        await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "DataSource=:memory:" });
+        await Assert.That(async () => await session.BulkDeleteAsync<UnregisteredEntity>([]))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task BulkUpdateBatch_EmptyList_UnregisteredType_ThrowsConsistently()
+    {
+        // r14-S3：UpdateBatch 侧同族（r12-B1 修复的行为面）
+        await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "DataSource=:memory:" });
+        await Assert.That(async () => await session.BulkUpdateBatchAsync(new List<UnregisteredEntity>()))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task Seed_EmptyList_UnregisteredType_ThrowsConsistently()
+    {
+        // r14-S3：Seed 侧同族（r12-B1 修复的行为面）
+        await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "DataSource=:memory:" });
+        await Assert.That(async () => await session.SeedAsync(new List<UnregisteredEntity>()))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task CommandTimeout_Zero_SecondsMapsToZeroInfinite()
     {
         // ITM-619/662 锁定：Zero 透传为 0（ADO.NET 无限等待）——Resilience 侧归一
