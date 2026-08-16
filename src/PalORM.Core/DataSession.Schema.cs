@@ -72,12 +72,16 @@ public sealed partial class DataSession<TProvider>
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-            // ITM-672 → r18 修正：无 [Index] 属性的实体不在 CreateIndexSqlByDialect 中
-            // （生成器有意省略——省内存）——跳过索引 DDL 而非误抛"旧版本"异常
+            // ITM-672 定稿：与建表 DDL 缺键（ITM-569）对称——索引元数据缺键必须显式拒绝，
+            // 不能建表成功、索引静默缺失（中间版本生成器的表会以"无索引"形态运行）。
+            // r18 配套契约：RegistryEmitter 对零索引实体也发射空 CreateIndexSqlSet，
+            // 因此"键缺失"只可能是旧生成器或手工片段——当前生成器永不缺键。
             if (!PalORM_Runtime.CreateIndexSqlByDialect.TryGetValue(
                     type, out CreateIndexSqlSet indexSqls))
             {
-                continue;  // 无索引实体——建表已完成，无索引 DDL 需执行
+                throw new InvalidOperationException(
+                    $"Type '{type.Name}' has no dialect-specific generated index DDL. " +
+                    "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
             }
             foreach (string indexDdl in indexSqls.Get(TProvider.Dialect))
             {
