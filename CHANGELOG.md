@@ -2,6 +2,30 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布] — byte[] 二进制列原生支持
+
+> 1 个提交 · 12 个文件 · 四环节编译期契约补齐（读取/绑定/DDL/BulkInsert）
+
+### ✨ 新增
+
+- **`byte[]` 一维数组列原生支持**：不再强制 Base64 TEXT 或 `[Converter]` 中转
+  - 白名单收窄放行：`SourceGenerationValidation.IsSupportedProviderType` 仅放行元素为 `System.Byte` 且 `Rank == 1` 的数组，`int[]`/`string[]`/多维数组仍被 PALORM016 拒绝
+  - DDL 映射：`MigrationEmitter.GetBinaryDbType` 三方言 BYTEA（PG）/ BLOB（SQLite）/ LONGBLOB（MySQL，4GB 上限对齐 Pomelo 惯例）；MySQL 主键/索引列走 VARBINARY(255)（BLOB 索引前缀约束，错误 1170）
+  - legacy 单方言 DDL（`TableModel.MapToDbType`）同步映射 BLOB
+  - 写入绑定 `p.Value` 直通、PG Binary COPY 经 NpgsqlDbType 推断、MySQL BulkCopy 序列化——三路径经驱动层 PoC 实测逐字节往返一致（含 0x00 字节与 1MB 载荷）
+  - 锁定测试：`ByteArrayColumns_GenerateCrudAndBlobDdl`（SourceGen）、`AllWhitelistedTypes_InsertAndMaterialize_RoundTrip`、`BulkInsert_ByteArrayColumn_RoundTripThroughMultiValueSkeleton`、`PG_MigrateAndBinaryCopy_NullableAndUtcDateTime_RoundTrip` / `MySql_MigrateWithUniqueIndexOnString_AndDecimalPrecision_RoundTrip`（真库）
+
+### 🐛 修复
+
+| 问题 | 影响 | 修复方式 |
+|------|------|---------|
+| byte[] 列落 TEXT 兜底（ITM-661(r4) 登记） | PG TEXT 拒 0x00 字节；MySQL strict mode 报 1366 Incorrect string value——二进制数据无法安全存储 | 白名单放行 + GetBinaryDbType 三方言 BLOB 映射，TEXT 兜底仅保留给真正未支持类型 |
+
+### 🧪 验证
+
+- **520 个测试全绿**：Core 195 + SourceGen 145 + Integration 180（含 PG/MySQL 真库 byte[] 往返）
+- **快照基线** 145 份一致（重生成并人工评审 diff：四条 DDL 均为 BLOB 语义）
+
 ## [5.2.0] — 质量收口（14 轮 AI 评审 + record 支持 + 隔离级别全链 + 真库回归）
 
 > 58 个提交 · 127 个文件 · +5390/−2939 行 · 48 个产品代码文件变更

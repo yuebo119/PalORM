@@ -224,7 +224,12 @@ internal sealed record TableModel(
     }
 
     private static string MapToDbType(ITypeSymbol type)
-        => type.SpecialType switch
+    {
+        // byte[] 一维数组：legacy 单方言 DDL（SQLite 风格）映射 BLOB；方言重载走
+        // MigrationEmitter.GetBinaryDbType（BYTEA/BLOB/LONGBLOB + VARBINARY 索引前缀）
+        if (type is IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Byte, Rank: 1 })
+            return "BLOB";
+        return type.SpecialType switch
         {
             SpecialType.System_Int64 => "BIGINT",
             SpecialType.System_Int32 => "INTEGER",
@@ -243,12 +248,13 @@ internal sealed record TableModel(
                 "Guid" => "UUID",
                 "DateOnly" => "DATE",
                 "TimeOnly" => "TIME",
-                // ITM-661(r4) 登记：byte[] 及未支持类型落 TEXT——PG TEXT 拒绝 0x00 字节、
-            // MySQL TEXT 有二进制截断/校对风险。二进制列是未声明的不支持面（ADR 候选），
-            // 当前映射为存储文本的兜底而非 BLOB 语义。
-            _ => "TEXT"
+                // ITM-661(r4) 登记：其余未支持类型落 TEXT——PG TEXT 拒绝 0x00 字节、
+                // MySQL TEXT 有二进制截断/校对风险。这些类型是未声明的不支持面，
+                // 当前映射为存储文本的兜底而非 BLOB 语义。
+                _ => "TEXT"
             }
         };
+    }
 }
 
 internal sealed record ColumnModel(

@@ -186,6 +186,36 @@ public sealed class BulkDataTests
     }
 
     [Test]
+    public async Task BulkInsert_ByteArrayColumn_RoundTripThroughMultiValueSkeleton()
+    {
+        // byte[] 列经多值 INSERT 参数化骨架（SQLite/MySQL 共享）的批量往返——
+        // 含 0x00/0xFF 形状与 NULL，锁定"参数直通不落文本编码"的契约。
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        BulkBinaryEntity[] entities =
+        [
+            new() { Name = "small", Blob = [1, 2, 3] },
+            new() { Name = "binary-unsafe", Blob = [0x00, 0x01, 0xFF, 0x00, 0x41] },
+            new() { Name = "null-blob", Blob = null },
+        ];
+        await db.BulkInsertAsync(entities);
+
+        List<BulkBinaryEntity> inserted = await db
+            .From<BulkBinaryEntity>()
+            .OrderBy(entity => entity.Name)
+            .ToListAsync();
+
+        await Assert.That(inserted.Count).IsEqualTo(3);
+        var small = inserted.Single(entity => entity.Name == "small");
+        var binaryUnsafe = inserted.Single(entity => entity.Name == "binary-unsafe");
+        var nullBlob = inserted.Single(entity => entity.Name == "null-blob");
+        await Assert.That(small.Blob!.SequenceEqual((byte[])[1, 2, 3])).IsTrue();
+        await Assert.That(binaryUnsafe.Blob!
+            .SequenceEqual((byte[])[0x00, 0x01, 0xFF, 0x00, 0x41])).IsTrue();
+        await Assert.That(nullBlob.Blob).IsNull();
+    }
+
+    [Test]
     public async Task Save_KeyOnlyEntity_PerformsIdempotentInsert()
     {
         await using var db = await TestDb.SqliteAsync();
@@ -232,5 +262,16 @@ public partial class BulkKeyOnlyEntity
 {
     [Key(AutoIncrement = false)]
     public string Id { get; set; } = "";
+}
+
+[Table("bulk_binary_entities")]
+public partial class BulkBinaryEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    // CA1819 误报：ORM 实体列需要可变数组读写
+#pragma warning disable CA1819
+    [Column("blob")] public byte[]? Blob { get; set; }
+#pragma warning restore CA1819
 }
 #endregion

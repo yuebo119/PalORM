@@ -54,7 +54,7 @@ internal static class SourceGenerationValidation
             return false;
 
         // ITM-617：OwnedJson/值映射校验走基类链（同上）——声明成员判定会漏检基类的
-        // byte[]/数组/非法 OwnedJson 属性，使其未经校验流入列收集。
+        // int[]/TimeSpan/非法 OwnedJson 属性，使其未经校验流入列收集。
         foreach (IPropertySymbol property in EnumerateMappedProperties(type))
         {
             if (IsNotMapped(property))
@@ -200,8 +200,12 @@ internal static class SourceGenerationValidation
 
     private static bool IsSupportedProviderType(ITypeSymbol type)
     {
-        if (type is IArrayTypeSymbol)
-            return false;
+        // 仅放行元素为 System.Byte 的一维数组——四环契约（读取 GetFieldValue/参数绑定/
+        // 三方言 BLOB DDL/BulkInsert）已全部可证明；其余数组（int[]/string[]/多维数组）
+        // 无 BLOB 语义与 DDL 契约，仍拒绝。
+        if (type is IArrayTypeSymbol arrayType)
+            return arrayType.ElementType.SpecialType == SpecialType.System_Byte
+                && arrayType.Rank == 1;
 
         if (type is INamedTypeSymbol namedType
             && namedType.OriginalDefinition.SpecialType

@@ -276,10 +276,10 @@ internal sealed class GeneratorPhase2Tests
 
             public readonly struct Ulid;
 
-            public sealed class WrongConverter : IValueConverter<string, byte[]>
+            public sealed class WrongConverter : IValueConverter<string, int[]>
             {
-                public byte[] ToProvider(string value) => [];
-                public string FromProvider(byte[] value) => "";
+                public int[] ToProvider(string value) => [];
+                public string FromProvider(int[] value) => "";
             }
 
             [Table("items")]
@@ -565,24 +565,27 @@ internal sealed class GeneratorPhase2Tests
     [Test]
     public async Task UnsupportedPortableProviderTypes_ReportPalorm016()
     {
+        // byte[] 一维数组已放行（白名单收窄），此处用 int[]/TimeSpan 继续锁定"无 DDL
+        // 契约的 provider 类型仍拒绝"——含直接属性、converter 出口、多维数组三种形态。
         const string source = """
             using PalORM;
 
-            public readonly record struct BinaryId(byte[] Value);
+            public readonly record struct BinaryId(int[] Value);
 
             public sealed class BinaryIdConverter
-                : IValueConverter<BinaryId, byte[]>
+                : IValueConverter<BinaryId, int[]>
             {
-                public byte[] ToProvider(BinaryId value) => value.Value;
-                public BinaryId FromProvider(byte[] value) => new(value);
+                public int[] ToProvider(BinaryId value) => value.Value;
+                public BinaryId FromProvider(int[] value) => new(value);
             }
 
             [Table("items")]
             public sealed partial class Item
             {
                 [Key] public long Id { get; set; }
-                [Column("payload")] public byte[] Payload { get; set; } = [];
+                [Column("payload")] public int[] Payload { get; set; } = [];
                 [Column("duration")] public System.TimeSpan Duration { get; set; }
+                [Column("matrix")] public byte[,] Matrix { get; set; } = new byte[1, 1];
                 [Column("external_id")]
                 [Converter(typeof(BinaryIdConverter))]
                 public BinaryId ExternalId { get; set; }
@@ -598,8 +601,42 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(diagnostics
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .Select(static diagnostic => diagnostic.Id))
-            .IsEquivalentTo(["PALORM016", "PALORM016", "PALORM016"]);
+            .IsEquivalentTo(["PALORM016", "PALORM016", "PALORM016", "PALORM016"]);
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
+    public async Task ByteArrayColumns_GenerateCrudAndBlobDdl()
+    {
+        // byte[] 白名单放行后的正向全链路：零诊断 + 生成物可编译 + 读取走 GetFieldValue<byte[]>
+        // + 三方言 DDL 均为 BLOB 语义（BYTEA/BLOB/LONGBLOB），不再落 TEXT 兜底。
+        const string source = """
+            using PalORM;
+
+            [Table("items")]
+            public sealed partial class Item
+            {
+                [Key] public long Id { get; set; }
+                [Column("payload")] public byte[] Payload { get; set; } = [];
+                [Column("preview")] public byte[]? Preview { get; set; }
+            }
+            """;
+
+        CSharpCompilation compilation = CreateCompilation(source);
+        ImmutableArray<Diagnostic> diagnostics = await compilation
+            .WithAnalyzers([new PalORMAnalyzer()])
+            .GetAnalyzerDiagnosticsAsync();
+        GeneratorResult result = RunGenerator(compilation);
+        string generated = string.Join("\n", result.GeneratedSources.Values);
+
+        await Assert.That(diagnostics
+            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .Select(static diagnostic => diagnostic.Id)).IsEmpty();
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(generated).Contains("GetFieldValue<byte[]>");
+        await Assert.That(generated).Contains("BYTEA");
+        await Assert.That(generated).Contains("LONGBLOB");
+        await Assert.That(generated).Contains("BLOB NOT NULL");
     }
 
     [Test]
