@@ -196,6 +196,7 @@ internal static class MigrationEmitter
         string typeName = column.ProviderClrTypeName;
         return GetNumericDbType(typeName, dialect)
             ?? GetTemporalDbType(typeName, dialect)
+            ?? GetBinaryDbType(typeName, dialect, column, isIndexed)
             ?? GetMiscDbType(typeName, dialect, column, isIndexed)
             ?? ResolveFallbackDbType(column, dialect, isIndexed);
     }
@@ -237,6 +238,27 @@ internal static class MigrationEmitter
                 _ => throw new ArgumentOutOfRangeException(nameof(dialect))
             };
         return null;
+    }
+
+    /// <summary>二进制类型（byte[] 一维数组）映射——BYTEA/BLOB/LONGBLOB。
+    /// TEXT 兜底对二进制不可用（ITM-661(r4) 实测登记：PG TEXT 拒 0x00 字节、
+    /// MySQL strict mode 报 1366 Incorrect string value）。MySQL 主键/索引列走
+    /// VARBINARY(255)——BLOB 建索引必须前缀长度（错误 1170，ITM-566 同型约束）；
+    /// 数据列取 LONGBLOB（4GB 上限，避免 MEDIUMBLOB 16MB 静默截断面，对齐 Pomelo 惯例）。</summary>
+    private static string? GetBinaryDbType(
+        string typeName, SqlGenerationDialect dialect, ColumnModel column, bool isIndexed)
+    {
+        if (typeName is not "byte[]" and not "global::System.Byte[]")
+            return null;
+        return dialect switch
+        {
+            SqlGenerationDialect.PostgreSql => "BYTEA",
+            SqlGenerationDialect.Sqlite => "BLOB",
+            SqlGenerationDialect.MySql => column.IsPrimaryKey || isIndexed
+                ? "VARBINARY(255)"
+                : "LONGBLOB",
+            _ => throw new ArgumentOutOfRangeException(nameof(dialect))
+        };
     }
 
     /// <summary>其他已知类型（Guid/char/string）映射。

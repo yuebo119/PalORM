@@ -23,13 +23,15 @@ public sealed class ExternalDatabaseBulkTests
         new()
         {
             Code = "A1", Note = "note-a", Amount = 12.345678m,
-            CreatedAt = new DateTime(2026, 7, 18, 10, 0, 0, DateTimeKind.Utc), OptionalCount = 7
+            CreatedAt = new DateTime(2026, 7, 18, 10, 0, 0, DateTimeKind.Utc), OptionalCount = 7,
+            Payload = [0x00, 0x01, 0xFF, 0x00]
         },
         // 可空列全 null 行——PG COPY 的 DBNull→NpgsqlDbType 推断疑点（ITM-318）
         new()
         {
             Code = "B2", Note = null, Amount = 0.000001m,
-            CreatedAt = new DateTime(2026, 7, 18, 11, 30, 0, DateTimeKind.Utc), OptionalCount = null
+            CreatedAt = new DateTime(2026, 7, 18, 11, 30, 0, DateTimeKind.Utc), OptionalCount = null,
+            Payload = null
         },
     ];
 
@@ -53,6 +55,9 @@ public sealed class ExternalDatabaseBulkTests
             await Assert.That(rows[1].Note).IsNull();
             await Assert.That(rows[1].OptionalCount).IsNull();
             await Assert.That(rows[1].Amount).IsEqualTo(0.000001m);
+            // byte[] 列经 Binary COPY 往返（含 0x00 字节——TEXT 兜底会在此静默变形）
+            await Assert.That(rows[0].Payload!.SequenceEqual((byte[])[0x00, 0x01, 0xFF, 0x00])).IsTrue();
+            await Assert.That(rows[1].Payload).IsNull();
         }
         finally
         {
@@ -84,6 +89,9 @@ public sealed class ExternalDatabaseBulkTests
             await Assert.That(rows[1].Amount).IsEqualTo(0.000001m);
             await Assert.That(rows[1].Note).IsNull();
             await Assert.That(rows[1].OptionalCount).IsNull();
+            // byte[] 列经 BulkCopy/多值 INSERT 回退往返（local_infile=OFF 时走参数化回退）
+            await Assert.That(rows[0].Payload!.SequenceEqual((byte[])[0x00, 0x01, 0xFF, 0x00])).IsTrue();
+            await Assert.That(rows[1].Payload).IsNull();
 
             // 唯一索引真实生效 + IsUniqueViolation 统一判定（ITM-314 真库验证）
             try
@@ -155,5 +163,9 @@ public partial class ExtBulkEntity
     [Column("amount")] public decimal Amount { get; set; }
     [Column("created_at")] public DateTime CreatedAt { get; set; }
     [Column("optional_count")] public int? OptionalCount { get; set; }
+    // CA1819 误报：ORM 实体列需要可变数组读写
+#pragma warning disable CA1819
+    [Column("payload")] public byte[]? Payload { get; set; }
+#pragma warning restore CA1819
 }
 #endregion
