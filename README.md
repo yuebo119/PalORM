@@ -6,7 +6,7 @@
 
 [![.NET](https://img.shields.io/badge/.NET-11.0.0--preview.6-512BD4)](https://dotnet.microsoft.com)
 [![AOT](https://img.shields.io/badge/Native%20AOT-✓%20全链路验证-512BD4)](#native-aot)
-[![Version](https://img.shields.io/badge/version-5.1.0-512BD4)](#)
+[![Version](https://img.shields.io/badge/version-5.3.0-512BD4)](#)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
 
 </div>
@@ -71,11 +71,11 @@
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="5.1.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="5.3.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="5.1.0" />
+<PackageReference Include="PalORM.MySql" Version="5.3.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="5.1.0" />
+<PackageReference Include="PalORM.Sqlite" Version="5.3.0" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。
@@ -106,7 +106,7 @@ public partial class User
 ```csharp
 using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 {
-    ConnectionString = "Host=localhost;Username=user;Password=pass;Database=mydb"
+    ConnectionString = "Host=localhost;Username=user;Password=xxx;Database=mydb"
 });
 ```
 
