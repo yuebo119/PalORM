@@ -10,6 +10,8 @@
     <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
                       OutputItemType="Analyzer" />
     <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
+    <!-- Scaffold 反向工程端到端回归：消费 internal 的 TypeMapper/EntityGenerator（配合其 InternalsVisibleTo） -->
+    <ProjectReference Include="..\..\tools\PalORM.Scaffold\PalORM.Scaffold.csproj" />
   </ItemGroup>
 
   <ItemGroup>

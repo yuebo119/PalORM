@@ -46,5 +46,6 @@ public static class Program
 // 01_CrudBenchmarks.cs / 02_BulkBenchmarks.cs / 03_GcBenchmarks.cs /
 // 04_SqlBuildBenchmarks.cs / 05_SqliteSpeedBenchmarks.cs /
 // 06_FeatureBenchmarks.cs / 07_OrmComparisonBenchmarks.cs /
+// 08_BinaryBenchmarks.cs /
 // PgBenchmarks.cs / MySqlBenchmarks.cs
 // 实体定义在 BenchmarkEntities.cs，统一配置在 BenchmarkConfig.cs
