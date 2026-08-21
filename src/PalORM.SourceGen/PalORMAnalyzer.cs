@@ -84,7 +84,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     public static readonly DiagnosticDescriptor InvalidValueMapping = new(
         "PALORM016", "Property value mapping is not supported",
-        "Property '{0}' has unsupported type '{1}'. Supported provider types: long/int/short/byte/string/char/bool/decimal/double/float/DateTime/Guid/DateTimeOffset/DateOnly/TimeOnly, and byte[] (single-dimensional arrays). TimeSpan and other arrays must convert via an accessible parameterless [Converter] to a supported provider type. Note: byte[] entity properties may trigger analyzer CA1819 — that is a false positive for ORM columns, suppress it locally",
+        "Property '{0}' has unsupported type '{1}'. Supported provider types are long, int, short, byte, string, char, bool, decimal, double, float, DateTime, Guid, DateTimeOffset, DateOnly, TimeOnly, and byte[] (single-dimensional arrays). TimeSpan and other arrays must convert via an accessible parameterless [Converter] to a supported provider type. byte[] entity properties may trigger analyzer CA1819, which is a false positive for ORM columns and should be suppressed locally.",
         "PalORM", DiagnosticSeverity.Error, true);
 
     public static readonly DiagnosticDescriptor AnnotationNotAppliedToDdl = new(
