@@ -42,9 +42,10 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
 - `02_BulkBenchmarks.cs`（8 方法：BulkBenchmarksFixed 5 + BulkBenchmarks Params 矩阵 3）— BulkInsert/BulkUpdate/BulkDelete 固定量 + 参数矩阵 + BulkUpdateBatch 单臂
 - `03_GcBenchmarks.cs`（5 方法 × Params 4 行数）— GC 装箱专项（5 操作 × 4 行数）
 - `04_SqlBuildBenchmarks.cs`（3 方法）— SQL 构建零 I/O（纳秒级，高精度 5/10/15 + 4096 invocations）
-  - **r18/T-P3-07（T10 噪声标注）**：本地基线报告基线行 Error/Mean ≈ 16.9% > 15% 上限，
-    由旧配置 3/5/10 生成；本地重跑被 BDN fork NU1100 环境项阻断，下次 bench 环境可用时
-    以高精度配置重跑并覆盖报告。
+  - **r18/T-P3-07（T10 已解决，2026-08-22）**：高精度重跑（5/10/15 + 4096）Error/Mean 全部
+    ≤4.9%——StringBuilder 99.67ns ±4.9% / PalORM Simple 193.02ns ±4.4% / Complex 231.62ns ±2.6%，
+    原 16.9% 超阈由旧配置 3/5/10 生成。BDN fork NU1100 同日修复（根 NuGet.Config 为 fork 的
+    源键 api.nuget.org 补通配映射）。
 - `05_SqliteSpeedBenchmarks.cs`（4 方法）— 纯速度交叉验证（无 MemoryDiagnoser）
 - `06_FeatureBenchmarks.cs`（13 方法）— PalORM 独有特性 + v5.0 新特性
 - `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存对照（Dapper/PalORM，无 RepoDb）
@@ -192,6 +193,30 @@ PG 的 UPDATE FROM VALUES 应更快（待 PG 基准验证）。
 - SQLite CASE WHEN 最慢——SQLite SQL 解析器对复杂 CASE WHEN 效率低
 - MySQL CASE WHEN 中等——MySQL SQL 解析器比 SQLite 强但不如 PG FROM VALUES
 - **建议**：PG/MySQL 用 BulkUpdateBatchAsync，SQLite 大批量用 BulkUpdateAsync（逐条）
+
+---
+
+## 🧬 二进制列（2026-08-22 首跑，SQLite 内存库）
+
+原生 BLOB vs Base64 TEXT（旧行为全成本：写入侧含 `Convert.ToBase64String`，读取侧含 `FromBase64String`）。
+Ryzen 9 8945HX · .NET 11.0.0-preview.7 · BDN v0.16.0-develop · StandardJob 3/5/10。
+
+| 方法 | Mean | Error | Allocated | Gen0/1/2 |
+|:-----|-----:|-----:|----------:|:---------:|
+| PalORM_Blob_Insert_256B | 51.60 μs | 1.18 μs | 5.24 KB | 0.31/-/- |
+| PalORM_Base64Text_Insert_256B | 47.09 μs | 4.52 μs | 6.36 KB | 0.37/-/- |
+| **PalORM_Blob_Insert_64KB** | **108.10 μs** | 6.33 μs | **68.99 KB** | 4.15/-/- |
+| PalORM_Base64Text_Insert_64KB | 246.32 μs | 24.16 μs | 431.85 KB | **136/136/136** |
+| PalORM_Blob_GetAll | 39.55 μs | 2.60 μs | 4.47 KB | 0.24/-/- |
+| PalORM_Base64Text_GetAll_Decoded | 38.02 μs | 3.06 μs | 4.48 KB | 0.24/-/- |
+
+**关键发现（ADR-G 数字背书）**：
+- **64KB 是悬崖**：Base64 编码串 ≈85.3KB 越过 .NET 85000B LOH 阈值——Base64 版插入分配 6.3 倍
+  （432KB vs 69KB）且 **Gen0/Gen1/Gen2 全触发**（每千次操作回收全三代）；原生 BLOB 零 Gen2。
+  延迟 2.3 倍（246μs vs 108μs）。
+- 小载荷（256B）两者相当（47 vs 52μs，噪声区间内）——二进制优势随载荷尺寸放大，64KB 档质变。
+- GetAll 同量级（表行数受同批 Insert 基准增长影响，横向对照以同批为准）。
+- 噪声标注（T10 口径）：4 项检出 Outliers、2 项 Multimodal——本地环境抖动，方向性结论不受影响。
 
 ---
 

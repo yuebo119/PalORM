@@ -141,7 +141,10 @@ STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
 for file in $STAGED; do
     [ "$DEBUG" = "1" ] && echo "  [debug] checking: $file"
 
-    if echo "$file" | grep -qiE "$FILE_BLACKLIST" 2>/dev/null; then
+    if echo "$file" | grep -qiE "$FILE_BLACKLIST" 2>/dev/null \
+        && ! echo "$file" | grep -qxE 'NuGet\.Config'; then
+        # 豁免：仓库根的 NuGet.Config 是版本化受控配置（仅源映射，无凭据——G32 门禁对象）；
+        # 子目录或其他机器的 nuget.config（可能含 packageSourceCredentials）仍拦截
         echo -e "${RED}✗ 文件名违规${NC}: $file"
         FAIL=$((FAIL+1))
         continue
