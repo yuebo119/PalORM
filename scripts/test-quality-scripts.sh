@@ -78,10 +78,15 @@ printf 'using System.Collections.Generic; public static class Clean { public sta
     > "$TMP/gate/src/Fixture/Clean.cs"
 git -C "$TMP/gate" init -q
 git -C "$TMP/gate" add .
-(
+# G33 工作树脏检查：临时仓库必须 commit，否则 staged 未提交文件必然 FAIL（预存断裂根因）
+git -C "$TMP/gate" -c user.name=fixture -c user.email=fixture@test.local commit -qm 'fixture init'
+if ! (
     cd "$TMP/gate"
     bash "$ROOT/.ai/scripts/gate-check.sh" > "$TMP/gate-pass.log"
-)
+); then
+    printf 'FAIL G12 干净夹具 gate-check 非零退出（查 gate-pass.log）'
+    exit 1
+fi
 if ! grep -q 'PASS G12: 禁止公开 static 可写状态' "$TMP/gate-pass.log"; then
     printf 'FAIL G12 干净夹具未通过\n'
     exit 1
@@ -131,16 +136,18 @@ if bash .ai/scripts/verify-phase.sh invalid > "$TMP/phase.log" 2>&1; then
     printf 'FAIL 非法阶段参数未导致失败\n'
     exit 1
 fi
-if ! grep -q '用法：bash .ai/scripts/verify-phase.sh <phase-number>' "$TMP/phase.log"; then
+if ! grep -q '用法' "$TMP/phase.log" || ! grep -q 'phase-number' "$TMP/phase.log"; then
     printf 'FAIL 非法阶段参数输出不完整\n'
     exit 1
 fi
 printf 'PASS verify-phase 参数失败传播\n'
 
 printf '\n─── SDK pin ───\n'
-current_sdk=$(dotnet --version)
-if ! grep -Fq "\"version\": \"$current_sdk\"" global.json; then
-    printf 'FAIL 当前 SDK 与 global.json 不一致\n'
+# rollForward: latestMinor 语义——global.json 是下限锚点，实跑 SDK 允许同 band 更高版本
+pin_band=$(grep -oP '"version":\s*"\K[0-9]+\.[0-9]+\.[0-9]+' global.json)
+sdk_band=$(dotnet --version | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+')
+if [ -z "$pin_band" ] || [ "$pin_band" != "$sdk_band" ]; then
+    printf 'FAIL 当前 SDK band(%s) 与 global.json band(%s) 不一致\n' "$sdk_band" "$pin_band"
     exit 1
 fi
 if grep -q 'dotnet-version: "11.0.x"' .github/workflows/ci.yml; then
@@ -163,13 +170,18 @@ else
     exit 1
 fi
 # 故障夹具（ITM-427：不就地改 tracked 文件——异常中断会留下损坏态；
-# 恒等替换防护——破坏值与当前值相同时换备选值，避免假失败）
+# 恒等替换防护——破坏值与当前值相同时换备选值，避免假失败；
+# B38 变体：命令替换 grep 无匹配返回 1 会沿 set -e 无声杀死夹具——必须 || true + 空值守卫）
 cp docs/架构设计.md "$TMP/pristine-arch.md"
 trap 'cp "$TMP/pristine-arch.md" docs/架构设计.md' EXIT
-current_core=$(grep -oP 'Core\.Tests\s*\|\s*\K\d+/\d+' docs/架构设计.md)
-broken="71/71"
-[ "$current_core" = "$broken" ] && broken="72/72"
-sed -i "s|${current_core}|${broken}|g" docs/架构设计.md
+# D10 实际校验的是 273 行附近的 "| **N 项 [Test] 声明**" 总声明（旧 Core.Tests N/N 表早已改版删除）
+current_total=$(grep -oP '\| \*\*\K[0-9]+(?= 项)' docs/架构设计.md | head -1 || true)
+if [ -z "$current_total" ]; then
+    printf 'FAIL 故障注入目标（总声明计数）缺失——文档格式再变更时同步本夹具\n'
+    exit 1
+fi
+broken=$((current_total - 1))
+sed -i "s/| \\*\\*${current_total} 项/| **${broken} 项/" docs/架构设计.md
 if bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-fail.log" 2>&1; then
     printf 'FAIL doc-consistency 过期计数未导致失败\n'
     exit 1
@@ -181,5 +193,14 @@ if ! bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-recover.log"; then
     exit 1
 fi
 printf 'PASS doc-consistency 故障与恢复\n'
+
+
+printf '─── secret-guard 自测（B41：误报/真阳性双向向量回归）───\n'
+if bash scripts/secret-guard.sh --selftest; then
+    printf 'PASS secret-guard 自测\n'
+else
+    printf 'FAIL secret-guard 自测未通过\n'
+    exit 1
+fi
 
 printf '\n质量脚本回归夹具全部通过。\n'

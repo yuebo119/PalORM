@@ -15,6 +15,43 @@ DEBUG="${SECRET_GUARD_DEBUG:-0}"
 # ─── 1. 文件名黑名单（扩展版）───
 FILE_BLACKLIST='\.env$|\.env\.[^e]|\.pem$|\.key$|\.pfx$|\.p12$|\.jks$|\.keystore$|id_rsa|id_ed25519|id_ecdsa|id_dsa|\.ppk$|nuget\.config$|credentials$|apikey\.?|\.kube/config|\.aws/|\.gcp/|\.azure/|kubeconfig|\.htpasswd|\.netrc|\.git-credentials|secrets?\.(yml|yaml|json|txt)|\.dockercfg|\.npmrc|\.pypirc|\.gem/credentials|travis\.yml$|\.ssh/|known_hosts|authorized_keys|\.pgpass|\.my\.cnf|\.dbpass|\.vault-token|\.terraform$|\.terraformrc|\.awsvault|serviceaccount'
 
+# 内容规则变量化（B41）：检查逻辑与 --selftest 共用同一正则，防双源漂移
+RULE_CONNSTRING_PASSWORD='(Server|Host|Data[[:space:]]Source)[[:space:]]*=[[:space:]]*[^;]+;.*Password[[:space:]]*=[[:space:]]*[^;."]+'
+RULE_INTERNAL_DOMAIN='\.(internal|local|corp|intranet|private)([:[:space:]]|$)'
+
+# ─── 自测模式（B41）：误报向量必须放行、真阳性必须拦截 ───
+if [ "${1:-}" = "--selftest" ]; then
+    self_fail=0
+    st_vec() { # $1=规则 $2=样本 $3=期望（1=应命中拦截）$4=grep 大小写（i=忽略，空=敏感，须与实际调用一致）
+        local flags="-nE"; [ "${4:-}" = "i" ] && flags="-inE"
+        if printf '%s' "$2" | grep $flags "$1" > /dev/null 2>&1; then got=1; else got=0; fi
+        if [ "$got" -ne "$3" ]; then
+            echo "SELFTEST FAIL: [$2] 期望命中=$3 实际=$got"
+            self_fail=1
+        fi
+    }
+    # 误报向量（2026-08-22 实战样本，期望不命中）
+    st_vec "$RULE_CONNSTRING_PASSWORD" 'Host=...;Port=5432;Username=...;Password=...;Database=palorm_bench' 0 i
+    st_vec "$RULE_INTERNAL_DOMAIN" 'or Accessibility.Internal' 0
+    # 真阳性向量（期望命中）
+    st_vec "$RULE_CONNSTRING_PASSWORD" 'Host=prod.db;Port=5432;Password=realpass123' 1 i
+    st_vec "$RULE_CONNSTRING_PASSWORD" 'Server=db1.internal;Password=Sup3rS3cret!' 1 i
+    st_vec "$RULE_INTERNAL_DOMAIN" 'connect to auth.service.internal now' 1
+    # 文件名豁免：根 NuGet.Config 放行、子路径 nuget.config 拦截
+    if echo "NuGet.Config" | grep -qiE "$FILE_BLACKLIST" && ! echo "NuGet.Config" | grep -qxE 'NuGet\.Config'; then
+        echo "SELFTEST FAIL: 根 NuGet.Config 应豁免"
+        self_fail=1
+    fi
+    if ! echo "sub/dir/nuget.config" | grep -qiE "$FILE_BLACKLIST"; then
+        echo "SELFTEST FAIL: 子路径 nuget.config 应在黑名单"
+        self_fail=1
+    fi
+    if [ "$self_fail" -eq 0 ]; then
+        echo "SELFTEST PASS: secret-guard 7 向量（2 误报 + 3 真阳性 + 2 文件名豁免）"
+    fi
+    exit "$self_fail"
+fi
+
 # ─── 2. 内容检测（40 类）───
 check_content() {
     local file="$1"
@@ -59,7 +96,7 @@ check_content() {
 
     # ═══ 数据库连接 ═══
     # 14. 完整连接串（含密码）——密码值须含非点字符：`Password=...`（占位符文档示例）不算泄漏
-    echo "$content" | grep -inE '(Server|Host|Data[[:space:]]Source)[[:space:]]*=[[:space:]]*[^;]+;.*Password[[:space:]]*=[[:space:]]*[^;."]+' > /dev/null 2>&1 && { echo "→ 连接串含密码"; return 1; }
+    echo "$content" | grep -inE "$RULE_CONNSTRING_PASSWORD" > /dev/null 2>&1 && { echo "→ 连接串含密码"; return 1; }
     # 15. MongoDB URI
     echo "$content" | grep -inE 'mongodb(\+srv)?://[^@[:space:]]+:[^@[:space:]]+@' > /dev/null 2>&1 && { echo "→ MongoDB URI"; return 1; }
     # 16. Redis URL
@@ -103,7 +140,7 @@ check_content() {
     # 31. 内网 IP
     echo "$content" | grep -inE '(Host|Server)[[:space:]]*=[[:space:]]*(192[.]168|10[.][0-9]+)[.][0-9]+[.][0-9]+' > /dev/null 2>&1 && { echo "→ 内网 IP"; return 1; }
     # 32. 内部域名——大小写敏感匹配（域名惯例小写；C# 限定符如 `Accessibility.Internal` 不算域名）
-    echo "$content" | grep -nE '\.(internal|local|corp|intranet|private)([:[:space:]]|$)' > /dev/null 2>&1 && { echo "→ 内部域名"; return 1; }
+    echo "$content" | grep -nE "$RULE_INTERNAL_DOMAIN" > /dev/null 2>&1 && { echo "→ 内部域名"; return 1; }
     # 33. 非标端口+凭据组合
     echo "$content" | grep -inE ':(5432|3306|6379|27017|9200)@' > /dev/null 2>&1 && { echo "→ 端口+凭据"; return 1; }
 
@@ -155,7 +192,8 @@ for file in $STAGED; do
     fi
 
     case "$file" in
-        scripts/secret-guard.sh|.git/hooks/pre-commit) continue ;;
+        # 自豁免：门禁脚本与其回归夹具按设计包含检测向量（真阳性样本），不适用内容检查
+        scripts/secret-guard.sh|scripts/test-quality-scripts.sh|.git/hooks/pre-commit) continue ;;
     esac
 
     REASON=$(check_content "$file")
