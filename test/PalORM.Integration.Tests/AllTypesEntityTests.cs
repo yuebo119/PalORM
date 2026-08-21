@@ -20,8 +20,10 @@ public class AllTypesEntityTests
         VDto = new DateTimeOffset(2026, 7, 18, 10, 30, 0, TimeSpan.FromHours(8)),
         VDateOnly = new DateOnly(2026, 7, 18),
         VTimeOnly = new TimeOnly(10, 30, 45),
+        VBytes = [0x00, 0x01, 0xFF, 0x00, 0x41],
         VNullableInt = null,
         VNullableTimeOnly = new TimeOnly(23, 59, 59),
+        VNullableBytes = [9, 8, 7],
     };
 
     [Test]
@@ -51,8 +53,10 @@ public class AllTypesEntityTests
         await Assert.That(read.VDto.UtcDateTime).IsEqualTo(new DateTime(2026, 7, 18, 2, 30, 0, DateTimeKind.Utc));
         await Assert.That(read.VDateOnly).IsEqualTo(new DateOnly(2026, 7, 18));
         await Assert.That(read.VTimeOnly).IsEqualTo(new TimeOnly(10, 30, 45));
+        await Assert.That(read.VBytes.SequenceEqual((byte[])[0x00, 0x01, 0xFF, 0x00, 0x41])).IsTrue();
         await Assert.That(read.VNullableInt).IsNull();
         await Assert.That(read.VNullableTimeOnly).IsEqualTo(new TimeOnly(23, 59, 59));
+        await Assert.That(read.VNullableBytes!.SequenceEqual((byte[])[9, 8, 7])).IsTrue();
     }
 
     [Test]
@@ -63,11 +67,13 @@ public class AllTypesEntityTests
 
         var sample = NewSample();
         sample.VNullableTimeOnly = null;
+        sample.VNullableBytes = null;
         await db.InsertAsync(sample);
 
         var read = (await db.GetAllAsync<AllTypesEntity>())[0];
         await Assert.That(read.VNullableInt).IsNull();
         await Assert.That(read.VNullableTimeOnly).IsNull();
+        await Assert.That(read.VNullableBytes).IsNull();
     }
 }
 
@@ -93,7 +99,14 @@ public partial class AllTypesEntity
     [Column("v_dto")] public DateTimeOffset VDto { get; set; }
     [Column("v_dateonly")] public DateOnly VDateOnly { get; set; }
     [Column("v_timeonly")] public TimeOnly VTimeOnly { get; set; }
+    // CA1819 误报：ORM 实体列需要可变数组读写
+#pragma warning disable CA1819
+    [Column("v_bytes")] public byte[] VBytes { get; set; } = [];
+#pragma warning restore CA1819
     [Column("v_nullable_int")] public int? VNullableInt { get; set; }
     [Column("v_nullable_timeonly")] public TimeOnly? VNullableTimeOnly { get; set; }
+#pragma warning disable CA1819
+    [Column("v_nullable_bytes")] public byte[]? VNullableBytes { get; set; }
+#pragma warning restore CA1819
 }
 #endregion

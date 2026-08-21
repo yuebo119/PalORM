@@ -54,10 +54,12 @@ internal sealed class SnapshotTests
             [Column("dto_value")] public System.DateTimeOffset DateTimeOffsetValue { get; set; }
             [Column("date_value")] public System.DateOnly DateOnlyValue { get; set; }
             [Column("time_value")] public System.TimeOnly TimeOnlyValue { get; set; }
+            [Column("bytes_value")] public byte[] BytesValue { get; set; } = [];
             [Column("nullable_int")] public int? NullableInt { get; set; }
             [Column("nullable_string")] public string? NullableString { get; set; }
             [Column("nullable_guid")] public System.Guid? NullableGuid { get; set; }
             [Column("nullable_time")] public System.TimeOnly? NullableTimeOnly { get; set; }
+            [Column("nullable_bytes")] public byte[]? NullableBytes { get; set; }
         }
 
         // 实体 2：SoftDelete × TenantAware × Converter × OwnedJson(对象+字符串) 全特性同体

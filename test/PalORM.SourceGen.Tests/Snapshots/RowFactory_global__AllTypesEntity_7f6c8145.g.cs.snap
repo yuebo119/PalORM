@@ -26,10 +26,12 @@ internal static class RowFactory_global__AllTypesEntity_7f6c8145
             DateTimeOffsetValue = r.GetFieldValue<global::System.DateTimeOffset>(12),
             DateOnlyValue = global::System.DateOnly.FromDateTime(r.GetDateTime(13)),
             TimeOnlyValue = global::System.TimeOnly.FromTimeSpan(r.GetFieldValue<global::System.TimeSpan>(14)),
-            NullableInt = r.IsDBNull(15) ? null : r.GetInt32(15),
-            NullableString = r.IsDBNull(16) ? null : r.GetString(16),
-            NullableGuid = r.IsDBNull(17) ? null : r.GetGuid(17),
-            NullableTimeOnly = r.IsDBNull(18) ? null : global::System.TimeOnly.FromTimeSpan(r.GetFieldValue<global::System.TimeSpan>(18)),
+            BytesValue = r.GetFieldValue<byte[]>(15),
+            NullableInt = r.IsDBNull(16) ? null : r.GetInt32(16),
+            NullableString = r.IsDBNull(17) ? null : r.GetString(17),
+            NullableGuid = r.IsDBNull(18) ? null : r.GetGuid(18),
+            NullableTimeOnly = r.IsDBNull(19) ? null : global::System.TimeOnly.FromTimeSpan(r.GetFieldValue<global::System.TimeSpan>(19)),
+            NullableBytes = r.IsDBNull(20) ? null : r.GetFieldValue<byte[]>(20),
         };
     };
 
