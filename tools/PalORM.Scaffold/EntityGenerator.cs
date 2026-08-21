@@ -12,7 +12,8 @@ namespace PalORM.Scaffold;
 /// <item>列名 → 属性名（snake_case → PascalCase）</item>
 /// <item>列名与属性名不同时加 [Column("原名")]</item>
 /// <item>PK 列加 [Key]，自增 PK 加 [Key(AutoIncrement = true)]</item>
-/// <item>引用类型 string/byte[] 默认值 = default!（非 null 模式）</item>
+/// <item>生成物带 #nullable enable；可空列（含引用类型 string/byte[]）加 ? 后缀——驱动 IsDBNull 守卫</item>
+/// <item>引用类型默认值 = default!（非 null 模式）</item>
 /// <item>值类型可空列加 ? 后缀</item>
 /// </list></summary>
 internal static class EntityGenerator
@@ -22,7 +23,9 @@ internal static class EntityGenerator
     {
         string className = ToPascalCase(table.Name);
         var sb = new StringBuilder();
-        sb.Append("using PalORM;\n\nnamespace ").Append(targetNamespace).Append(";\n\n");
+        // #nullable enable：可空注解驱动 PalORM 生成物的 IsDBNull 守卫（ITM-312）——
+        // 缺省上下文里可空列读 NULL 会绕过守卫直接抛 SqlNullValueException
+        sb.Append("#nullable enable\nusing PalORM;\n\nnamespace ").Append(targetNamespace).Append(";\n\n");
         sb.Append("[Table(\"").Append(table.Name).Append("\")]\n");
         sb.Append("public partial class ").Append(className).Append("\n{\n");
 
@@ -35,8 +38,9 @@ internal static class EntityGenerator
 
             // 列名与属性名不同时加 [Column("原名")]
             bool needsColumnAttr = !string.Equals(col.Name, propertyName, StringComparison.Ordinal);
-            // 引用类型天然可空；值类型可空列加 ?
-            bool needsNullableSuffix = !isReferenceType && col.IsNullable && !col.IsPrimaryKey;
+            // 可空列加 ? 后缀——引用（string/byte[]）与值类型一致：#nullable enable 下
+            // 可空注解是 RowFactory 生成 IsDBNull 守卫的判据，非空注解读 NULL 会炸
+            bool needsNullableSuffix = col.IsNullable && !col.IsPrimaryKey;
 
             string fullType = needsNullableSuffix ? csharpType + "?" : csharpType;
 
