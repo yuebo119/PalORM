@@ -48,6 +48,7 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
 - `05_SqliteSpeedBenchmarks.cs`（4 方法）— 纯速度交叉验证（无 MemoryDiagnoser）
 - `06_FeatureBenchmarks.cs`（13 方法）— PalORM 独有特性 + v5.0 新特性
 - `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存对照（Dapper/PalORM，无 RepoDb）
+- `08_BinaryBenchmarks.cs`（6 方法）— 二进制列专项：原生 BLOB vs Base64 TEXT（含手工编解码全成本）× 256B/64KB
 - `PgBenchmarks.cs` / `MySqlBenchmarks.cs` — 方言基准（独立）
 
 ---

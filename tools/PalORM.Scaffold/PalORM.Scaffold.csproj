@@ -24,4 +24,9 @@
     <PackageReference Include="MySqlConnector" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- BLOB 反向工程端到端回归：SourceGen.Tests 消费 internal 的 TypeMapper/EntityGenerator -->
+    <InternalsVisibleTo Include="PalORM.SourceGen.Tests" />
+  </ItemGroup>
+
 </Project>
