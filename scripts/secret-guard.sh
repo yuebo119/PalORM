@@ -58,8 +58,8 @@ check_content() {
     echo "$content" | grep -inE -- '-----BEGIN[[:space:]]+CERTIFICATE-----' > /dev/null 2>&1 && { echo "→ 证书"; return 1; }
 
     # ═══ 数据库连接 ═══
-    # 14. 完整连接串（含密码）
-    echo "$content" | grep -inE '(Server|Host|Data[[:space:]]Source)[[:space:]]*=[[:space:]]*[^;]+;.*Password=' > /dev/null 2>&1 && { echo "→ 连接串含密码"; return 1; }
+    # 14. 完整连接串（含密码）——密码值须含非点字符：`Password=...`（占位符文档示例）不算泄漏
+    echo "$content" | grep -inE '(Server|Host|Data[[:space:]]Source)[[:space:]]*=[[:space:]]*[^;]+;.*Password[[:space:]]*=[[:space:]]*[^;."]+' > /dev/null 2>&1 && { echo "→ 连接串含密码"; return 1; }
     # 15. MongoDB URI
     echo "$content" | grep -inE 'mongodb(\+srv)?://[^@[:space:]]+:[^@[:space:]]+@' > /dev/null 2>&1 && { echo "→ MongoDB URI"; return 1; }
     # 16. Redis URL
@@ -102,8 +102,8 @@ check_content() {
     # ═══ 网络 ═══
     # 31. 内网 IP
     echo "$content" | grep -inE '(Host|Server)[[:space:]]*=[[:space:]]*(192[.]168|10[.][0-9]+)[.][0-9]+[.][0-9]+' > /dev/null 2>&1 && { echo "→ 内网 IP"; return 1; }
-    # 32. 内部域名
-    echo "$content" | grep -inE '\.(internal|local|corp|intranet|private)([:[:space:]]|$)' > /dev/null 2>&1 && { echo "→ 内部域名"; return 1; }
+    # 32. 内部域名——大小写敏感匹配（域名惯例小写；C# 限定符如 `Accessibility.Internal` 不算域名）
+    echo "$content" | grep -nE '\.(internal|local|corp|intranet|private)([:[:space:]]|$)' > /dev/null 2>&1 && { echo "→ 内部域名"; return 1; }
     # 33. 非标端口+凭据组合
     echo "$content" | grep -inE ':(5432|3306|6379|27017|9200)@' > /dev/null 2>&1 && { echo "→ 端口+凭据"; return 1; }
 
