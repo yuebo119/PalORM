@@ -50,13 +50,17 @@ internal sealed class ScaffoldReverseEngineeringTests
             new SchemaColumn("id", "INTEGER", IsPrimaryKey: true, IsAutoIncrement: true, IsNullable: false),
             new SchemaColumn("title", "TEXT", IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: false),
             new SchemaColumn("content", "BLOB", IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: false),
+            new SchemaColumn("thumb", "BLOB", IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: true),
         ]);
         string source = EntityGenerator.Generate(table, SchemaDialect.Sqlite, "Scaffolded");
 
-        // 生成物含 byte[] 属性与表注解
+        // 生成物含 byte[] 属性与表注解；可空 BLOB 列带 ? 后缀（#nullable enable 下驱动 IsDBNull 守卫）
+        await Assert.That(source).Contains("#nullable enable");
         await Assert.That(source).Contains("[Table(\"doc_blobs\")]");
         await Assert.That(source)
             .Contains("[Column(\"content\")] public byte[] Content { get; set; } = default!;");
+        await Assert.That(source)
+            .Contains("[Column(\"thumb\")] public byte[]? Thumb { get; set; } = default!;");
 
         // PalORM 分析器：零错误诊断（白名单放行前此处报 PALORM016、实体整体跳过生成）
         CSharpCompilation compilation = GeneratorTestHost.CreateCompilation(source, "ScaffoldConsumer");

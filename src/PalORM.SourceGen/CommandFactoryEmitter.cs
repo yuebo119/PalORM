@@ -122,7 +122,7 @@ internal static class CommandFactoryEmitter
             string valueExpr = col.IsNullable
                 ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
                 : $"(object){providerValueExpr}";
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
             pi++;
         }
     }
@@ -368,7 +368,7 @@ internal static class CommandFactoryEmitter
             string valueExpr = GetParameterValueExpression(col);
             // withOffset=true 时生成 $\"@p{paramOffset + N}\"（插值表达式），false 时生成 \"@pN\"（字面量）
             string paramName = withOffset ? $"global::PalORM.ParameterNameCache.GetName(paramOffset + {pi})" : $"\"@p{pi}\"";
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
             pi++;
         }
     }
@@ -381,6 +381,8 @@ internal static class CommandFactoryEmitter
         {
             if (!col.IsInsertable) continue;
             string valueExpr = GetParameterValueExpression(col);
+            if (IsBinaryColumn(col))
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
@@ -405,18 +407,27 @@ internal static class CommandFactoryEmitter
         foreach (var col in setCols)
         {
             string valueExpr = GetParameterValueExpression(col);
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
         }
         foreach (var col in pkCols)
         {
             string valueExpr = GetParameterValueExpression(col);
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
         }
         if (cc is not null)
         {
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = entity.{cc.EscapedPropertyName}; cmd.Parameters.Add(p); }}");
         }
     }
+
+    /// <summary>byte[] provider 列的参数绑定显式化：DbType.Binary 在生成物中可见——
+    /// PG COPY 经 NpgsqlParameter.DbType → NpgsqlDbType.Bytea（不再依赖驱动从 Value 的
+    /// 运行时推断），MySQL/SQLite 同步获得确定性二进制分派。</summary>
+    private static string DbTypeHint(ColumnModel col)
+        => IsBinaryColumn(col) ? "p.DbType = global::System.Data.DbType.Binary; " : "";
+
+    private static bool IsBinaryColumn(ColumnModel col)
+        => col.ProviderClrTypeName is "byte[]" or "global::System.Byte[]";
 
     private static string GetParameterValueExpression(ColumnModel col)
     {

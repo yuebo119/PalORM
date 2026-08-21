@@ -31,12 +31,12 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 11); p.Value = (object)entity.DateTimeOffsetValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 12); p.Value = (object)entity.DateOnlyValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 13); p.Value = (object)entity.TimeOnlyValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 14); p.Value = (object)entity.BytesValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 14); p.DbType = global::System.Data.DbType.Binary; p.Value = (object)entity.BytesValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 15); p.Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 16); p.Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 17); p.Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 18); p.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 19); p.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 19); p.DbType = global::System.Data.DbType.Binary; p.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
@@ -56,11 +56,13 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         parameters[paramOffset + 11].Value = (object)entity.DateTimeOffsetValue;
         parameters[paramOffset + 12].Value = (object)entity.DateOnlyValue;
         parameters[paramOffset + 13].Value = (object)entity.TimeOnlyValue;
+        parameters[paramOffset + 14].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 14].Value = (object)entity.BytesValue;
         parameters[paramOffset + 15].Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt;
         parameters[paramOffset + 16].Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString;
         parameters[paramOffset + 17].Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid;
         parameters[paramOffset + 18].Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly;
+        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 19].Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes;
     }
 
@@ -82,12 +84,12 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         { var p = cmd.CreateParameter(); p.ParameterName = "@p12"; p.Value = (object)entity.DateTimeOffsetValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.Value = (object)entity.DateOnlyValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p14"; p.Value = (object)entity.TimeOnlyValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p15"; p.Value = (object)entity.BytesValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p15"; p.DbType = global::System.Data.DbType.Binary; p.Value = (object)entity.BytesValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p16"; p.Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p17"; p.Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p18"; p.Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p19"; p.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p20"; p.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p20"; p.DbType = global::System.Data.DbType.Binary; p.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
@@ -107,12 +109,12 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         { var p = cmd.CreateParameter(); p.ParameterName = "@p11"; p.Value = (object)entity.DateTimeOffsetValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p12"; p.Value = (object)entity.DateOnlyValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.Value = (object)entity.TimeOnlyValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p14"; p.Value = (object)entity.BytesValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p14"; p.DbType = global::System.Data.DbType.Binary; p.Value = (object)entity.BytesValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p15"; p.Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p16"; p.Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p17"; p.Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p18"; p.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p19"; p.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p19"; p.DbType = global::System.Data.DbType.Binary; p.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p20"; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 

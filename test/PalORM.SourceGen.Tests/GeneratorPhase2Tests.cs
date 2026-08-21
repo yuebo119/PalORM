@@ -637,6 +637,8 @@ internal sealed class GeneratorPhase2Tests
         await Assert.That(generated).Contains("BYTEA");
         await Assert.That(generated).Contains("LONGBLOB");
         await Assert.That(generated).Contains("BLOB NOT NULL");
+        // 参数绑定显式化：byte[] 列发射 DbType.Binary（PG COPY 据此推导 NpgsqlDbType.Bytea）
+        await Assert.That(generated).Contains("p.DbType = global::System.Data.DbType.Binary;");
     }
 
     [Test]
