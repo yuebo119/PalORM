@@ -60,6 +60,34 @@ public class AllTypesEntityTests
     }
 
     [Test]
+    public async Task BinaryColumn_EqualityPredicate_FiltersRows()
+    {
+        // 二进制等值过滤契约：byte[] 经 FormattableString 参数化直通（含 0x00 字节），
+        // SQLite/MySQL 全表扫描行为一致；驱动级等值已由 PoC 在 PG/MySQL 实测。
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var rowA = NewSample();
+        rowA.VBytes = [1, 2, 3];
+        var rowB = NewSample();
+        rowB.VBytes = [0x00, 0xFF, 0x00];
+        await db.InsertAsync(rowA);
+        await db.InsertAsync(rowB);
+
+        byte[] needle = [0x00, 0xFF, 0x00];
+        List<AllTypesEntity> hits = await db.From<AllTypesEntity>()
+            .Where($"v_bytes = {needle}")
+            .ToListAsync();
+
+        await Assert.That(hits.Count).IsEqualTo(1);
+        await Assert.That(hits[0].VBytes.SequenceEqual(needle)).IsTrue();
+
+        byte[] miss = [9, 9];
+        await Assert.That(await db.From<AllTypesEntity>()
+            .Where($"v_bytes = {miss}")
+            .ToListAsync()).IsEmpty();
+    }
+
+    [Test]
     public async Task NullableColumns_NullRoundTrip()
     {
         await using var db = await TestDb.SqliteAsync();
