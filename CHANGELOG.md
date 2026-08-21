@@ -2,29 +2,55 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] — byte[] 二进制列原生支持
+## [5.3.0] — byte[] 二进制列原生支持（契约显式化 + AOT 全链 + 基准背书）
 
-> 1 个提交 · 12 个文件 · 四环节编译期契约补齐（读取/绑定/DDL/BulkInsert）
+> 6 个提交 · 30 个文件 · +743/−92 行 · 四环节编译期契约补齐（读取/绑定/DDL/BulkInsert）
+> 设计决策与放弃项见 [ADR-G](docs/adr/ADR-G-byte[]-二进制列支持.md)；使用规范见 [二进制列最佳实践](docs/二进制列最佳实践.md)
+
+### 💔 破坏性变更
+
+- 无。白名单从"拒绝 byte[]"放宽为"收窄放行"，此前被 PALORM016 拒绝的实体现在可生成——纯放宽，Converter 出口 `string` 的既有路径不受影响。
 
 ### ✨ 新增
 
 - **`byte[]` 一维数组列原生支持**：不再强制 Base64 TEXT 或 `[Converter]` 中转
-  - 白名单收窄放行：`SourceGenerationValidation.IsSupportedProviderType` 仅放行元素为 `System.Byte` 且 `Rank == 1` 的数组，`int[]`/`string[]`/多维数组仍被 PALORM016 拒绝
-  - DDL 映射：`MigrationEmitter.GetBinaryDbType` 三方言 BYTEA（PG）/ BLOB（SQLite）/ LONGBLOB（MySQL，4GB 上限对齐 Pomelo 惯例）；MySQL 主键/索引列走 VARBINARY(255)（BLOB 索引前缀约束，错误 1170）
-  - legacy 单方言 DDL（`TableModel.MapToDbType`）同步映射 BLOB
-  - 写入绑定 `p.Value` 直通、PG Binary COPY 经 NpgsqlDbType 推断、MySQL BulkCopy 序列化——三路径经驱动层 PoC 实测逐字节往返一致（含 0x00 字节与 1MB 载荷）
-  - 锁定测试：`ByteArrayColumns_GenerateCrudAndBlobDdl`（SourceGen）、`AllWhitelistedTypes_InsertAndMaterialize_RoundTrip`、`BulkInsert_ByteArrayColumn_RoundTripThroughMultiValueSkeleton`、`PG_MigrateAndBinaryCopy_NullableAndUtcDateTime_RoundTrip` / `MySql_MigrateWithUniqueIndexOnString_AndDecimalPrecision_RoundTrip`（真库）
+  - 白名单收窄放行：仅元素为 `System.Byte` 且 `Rank == 1` 的数组——`int[]`/`string[]`/多维数组仍被 PALORM016 拒绝
+  - DDL 映射：`MigrationEmitter.GetBinaryDbType` 三方言 BYTEA（PG）/ BLOB（SQLite）/ LONGBLOB（MySQL 数据列，4GB 上限对齐 Pomelo 惯例）；主键/索引列 VARBINARY(255)（BLOB 索引前缀约束，防错误 1170）
+  - 参数绑定显式化：生成 binder 对 byte[] 列发射 `DbType.Binary`——PG Binary COPY 经 `NpgsqlParameter.DbType → NpgsqlDbType.Bytea` 显式分派，不依赖驱动运行时推断
+  - 等值过滤：`Where($"col = {bytes}")` 参数化直通（含 0x00 字节），Native AOT 原生二进制下验证
+  - Scaffold 反向工程闭环：BLOB/bytea/varbinary 全族 → 可用实体（修复前"生成即不可用"）
+  - 锁定测试：`ByteArrayColumns_GenerateCrudAndBlobDdl`、`BinaryColumn_EqualityPredicate_FiltersRows`、`ScaffoldReverseEngineeringTests` ×2、AllTypes/BulkBinary/ExtBulk 往返（PG COPY 与 MySQL 真库）
 
 ### 🐛 修复
 
 | 问题 | 影响 | 修复方式 |
 |------|------|---------|
-| byte[] 列落 TEXT 兜底（ITM-661(r4) 登记） | PG TEXT 拒 0x00 字节；MySQL strict mode 报 1366 Incorrect string value——二进制数据无法安全存储 | 白名单放行 + GetBinaryDbType 三方言 BLOB 映射，TEXT 兜底仅保留给真正未支持类型 |
+| byte[] 列落 TEXT 兜底（ITM-661(r4) 登记） | PG TEXT 拒 0x00 字节、静默变形为 hex 文本；MySQL strict mode 报 1366 | 白名单放行 + GetBinaryDbType 三方言 BLOB 映射 |
+| Scaffold 可空引用列不加 `?`（预存缺口） | 反向工程的可空 TEXT/BLOB 列读 NULL 即抛 SqlNullValueException | 生成物带 `#nullable enable`，可空列（含 string/byte[]）加 `?` 后缀驱动 IsDBNull 守卫 |
+| bench BDN fork NU1100 环境项 | 本地基准全部无法运行（T10 债根源） | 根 NuGet.Config 为 fork 源键补通配映射 |
+| secret-guard v3 三处误报 | 合法提交被拦，诱发 `--no-verify` 习惯化 | 规则 14 占位符连接串/规则 32 大小写敏感/根 NuGet.Config 文件名精确豁免；钩子按文档程序同步 |
+| T10 噪声债（r18/T-P3-07） | SqlBuild 基线 Error/Mean 16.9% 超阈 | 高精度重跑 ≤4.9%，基线数字入档 |
+
+### ⚡ 性能
+
+- **二进制列基准首跑**（SQLite 内存，StandardJob 3/5/10，详见 BENCHMARKS.md）：
+  - 64KB 档：原生 BLOB 插入 **108μs / 69KB 分配 / 零 Gen2** vs Base64 TEXT 246μs / 432KB / **Gen0+Gen1+Gen2 全触发**——2.3 倍延迟、6.3 倍分配；Base64 编码串 85.3KB 越过 .NET 85000B LOH 阈值（实测坐实）
+  - 256B 档两者相当（噪声区间）——二进制优势随载荷尺寸放大
+
+### 📦 依赖升级
+
+- 无
 
 ### 🧪 验证
 
-- **520 个测试全绿**：Core 195 + SourceGen 145 + Integration 180（含 PG/MySQL 真库 byte[] 往返）
-- **快照基线** 145 份一致（重生成并人工评审 diff：四条 DDL 均为 BLOB 语义）
+- **523 个测试全绿**：Core 195 + SourceGen 147 + Integration 181（含 PG COPY / MySQL 真库 byte[] 往返）
+- **Native AOT**：win-x64 本地 publish + 原生二进制实跑通过（含 0x00 等值参数化/物化往返/NULL 守卫）；linux/osx 由本次 tag 触发的 release workflow 验证
+- **快照基线** 13 份一致（重生成并人工评审 diff：四条 DDL 均为 BLOB 语义、绑定器含 DbType.Binary）
+- CI slnf 非增量构建零警告；tech-debt 扫描 12/12
+
+### 📚 参考
+
+- [ADR-G：byte[] 二进制列支持](docs/adr/ADR-G-byte[]-二进制列支持.md) · [二进制列最佳实践](docs/二进制列最佳实践.md) · [基准数字](bench/PalORM.Benchmarks/BENCHMARKS.md)
 
 ## [5.2.0] — 质量收口（14 轮 AI 评审 + record 支持 + 隔离级别全链 + 真库回归）
 
