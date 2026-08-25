@@ -31,6 +31,11 @@
 
 ### 🔧 工程
 
+- **源码精炼批次**（评审整改，净 -220 行）：MySQL UPSERT 死代码对删除（UPSERT SQL 收敛
+  至生成物单一真源）；WithTransaction 双重载委托泛型核心；聚合 Sum/Max/Min/Avg 共享
+  ExecuteAggregateScalarAsync 内核（Count 形态不同保留独立）；Bulk 家族四处事务骨架
+  收敛至 RunInTransactionScopeAsync 单内核（ITM-676/556/704 语义逐点保持）。
+  legacy CommandSqls 链清除按 ADR-I 维持 v6.0 窗口不变
 - **变异测试接入 CI**（mutation-tests.yml，每周六自动 + 手动）：Core 既有配置生效化，
   新增 SourceGen emitter + 分析器变异面——threshold-break=40 自此首次具备约束力
 - `.githooks/pre-commit` 薄包装托管（`core.hooksPath` 方案），消除 cp 拷贝式安装的脚本漂移
