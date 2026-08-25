@@ -12,8 +12,8 @@
          仅影响 GetValue/ExecuteScalar 路径；RowFactoryEmitter 全部用 GetDateTime/GetFieldValue<T>，
          经源码核实 v10 仍返回 DateTime/TimeSpan，零代码改动。 -->
     <PackageVersion Include="Npgsql" Version="10.0.3" />
-    <!-- v5.0 阶段 2.1：MySqlConnector 2.4.0→2.6.1（含安全修复 GHSA-473q-m89c-ghf8）。
-         破坏性变更（State=Broken / DI 命名空间迁移）对本项目零影响（见调研报告）。 -->
+    <!-- v5.0 阶段 2.1：MySqlConnector 2.4.0→2.6.1（含安全修复 GHSA-473q-m89c-ghf8）；
+         现为 2.6.2（安全修复延续，README 驱动表同口径）。破坏性变更（State=Broken / DI 命名空间迁移）对本项目零影响（见调研报告）。 -->
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
   </ItemGroup>
 
