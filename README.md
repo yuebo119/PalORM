@@ -56,14 +56,14 @@
 | 数据库 | 版本 | 驱动 | 加密 |
 |--------|------|------|:---:|
 | **PostgreSQL** | 14+（推荐 18） | Npgsql 10.0.3 | SSL/TLS |
-| **MySQL** | 8.0+（推荐 8.4 LTS） | MySqlConnector 2.6.1 | SSL/TLS |
-| **SQLite** | 3.47+（via SQLite3MC 2.3.6） | Microsoft.Data.Sqlite.Core 11.0-p6 | ✓ AES-256 |
+| **MySQL** | 8.0+（推荐 8.4 LTS） | MySqlConnector 2.6.2 | SSL/TLS |
+| **SQLite** | 3.47+（via SQLite3MC 2.4.0） | Microsoft.Data.Sqlite.Core 11.0-p7 | ✓ AES-256 |
 
 ### 为什么选择这些版本
 
 - **Npgsql 10.0.3**：原生支持 PG `date/time` → `DateOnly/TimeOnly`、`NpgsqlSlimDataSourceBuilder`（AOT 友好）、Binary COPY 批量写入
-- **MySqlConnector 2.6.1**：含安全修复 GHSA-473q（zero-config TLS MitM）、`MySqlBulkCopy`（LOAD DATA LOCAL INFILE）、VECTOR 类型准备
-- **SQLite3MC 2.3.6**：内嵌 SQLite 3.47.2 + AES-256 加密，PCLRaw 跨平台原生二进制加载
+- **MySqlConnector 2.6.2**：含安全修复 GHSA-473q（zero-config TLS MitM）、`MySqlBulkCopy`（LOAD DATA LOCAL INFILE）、VECTOR 类型准备
+- **SQLite3MC 2.4.0**：内嵌 SQLite + AES-256 加密，PCLRaw 跨平台原生二进制加载
 
 ---
 

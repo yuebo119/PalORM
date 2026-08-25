@@ -4,10 +4,14 @@
 
 ## 提交前必检
 
+> 本地防线经 `.githooks/pre-commit` 薄包装调用（转发仓库脚本，更新即时生效）。
+> 安装：`git config core.hooksPath .githooks`（一次性，见 CONTRIBUTING.md）。
+
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
-| `stub-check.sh` | Stub 方法门禁（检测 `throw new NotImplemented`） | ✅ ci.yml gate |
-| `test-quality-scripts.sh` | 脚本质量自检 | ✅ ci.yml gate |
+| `secret-guard.sh` | 敏感信息拦截（40 类；默认 staged 模式，`--range BASE..HEAD` 供 CI 扫差异集） | ✅ pre-commit + ci.yml security |
+| `stub-check.sh` | Stub 方法门禁（检测 `throw new NotImplemented`） | ✅ pre-commit + ci.yml gate |
+| `test-quality-scripts.sh` | 脚本质量自检 | ❌ 手动——依赖 `.ai/scripts/`（本地工具），fresh clone 不完整，未接入 CI |
 
 ## 性能基准
 

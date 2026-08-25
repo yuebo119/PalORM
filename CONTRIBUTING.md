@@ -13,18 +13,24 @@
 git clone <repo-url>
 cd Pal.ORM
 
+# 安装本地提交防线（敏感信息拦截 + stub 门禁）——一次性，必须执行
+git config core.hooksPath .githooks
+
 # 构建全部项目
 dotnet build PalORM.slnx -c Debug
 
 # 运行 SQLite 测试（无需外部数据库）
-dotnet test test/PalORM.Core.Tests -c Debug
-dotnet test test/PalORM.Integration.Tests -c Debug
+dotnet run --project test/PalORM.Core.Tests -c Debug
+dotnet run --project test/PalORM.Integration.Tests -c Debug
 
 # 可选：设置外部数据库连接串
 cp .env.test.example .env.test
 # 编辑 .env.test 填入本地 PG/MySQL 凭据
 source scripts/set-test-env.sh
 ```
+
+> **注意**：未配置 `.env.test` 时外部数据库集成测试会显式失败（fail-fast 设计），
+> 单元测试与 SQLite 集成测试不受影响。
 
 ## 代码规范
 
