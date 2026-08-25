@@ -1,0 +1,73 @@
+name: Mutation Tests
+
+on:
+  # 每周六 03:00 UTC 自动运行（变异测试耗时长，不进 PR 门禁）
+  schedule:
+    - cron: '0 3 * * 6'
+  # 手动触发
+  workflow_dispatch
+
+# 排程与手动触发重叠时取消旧运行
+concurrency:
+  group: mutation-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Stryker (Core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build (Debug)
+        run: dotnet build PalORM.ci.slnf -c Debug --no-incremental
+
+      - name: Install dotnet-stryker
+        run: dotnet tool install --global dotnet-stryker
+
+      - name: Run mutation suite (Core CRUD/Query/Bulk/SessionState)
+        working-directory: test/PalORM.Core.Tests
+        run: dotnet stryker --config-file stryker-config.json
+
+      # threshold-break=40：低于阈值时 dotnet-stryker 以非零码退出使本 job 变红——
+      # 配置中的阈值自此真实生效（此前配置存在但无任何调度消费，评审 P1）
+      - name: Upload Core mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stryker-core-report
+          path: test/PalORM.Core.Tests/StrykerOutput/**/reports/**
+          retention-days: 30
+
+  sourcegen:
+    name: Stryker (SourceGen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build (Debug)
+        run: dotnet build PalORM.ci.slnf -c Debug --no-incremental
+
+      - name: Install dotnet-stryker
+        run: dotnet tool install --global dotnet-stryker
+
+      - name: Run mutation suite (SourceGen emitters + analyzer)
+        working-directory: test/PalORM.SourceGen.Tests
+        run: dotnet stryker --config-file stryker-config.json
+
+      # SourceGen emitter 是本项目最大风险面（评审 P1：此前变异面完全未覆盖）
+      - name: Upload SourceGen mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stryker-sourcegen-report
+          path: test/PalORM.SourceGen.Tests/StrykerOutput/**/reports/**
+          retention-days: 30

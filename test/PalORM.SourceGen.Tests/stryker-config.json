@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-net/master/src/Stryker.Core/Stryker.Core/schema/stryker-schema.json",
+  "solution": "../PalORM.slnx",
+  "project": "PalORM.SourceGen.csproj",
+  "mutate": [
+    "src/PalORM.SourceGen/**/*.cs",
+    "!src/PalORM.SourceGen/Polyfills.cs",
+    "!src/PalORM.SourceGen/**/obj/**",
+    "!src/PalORM.SourceGen/**/bin/**"
+  ],
+  "test-projects": [
+    "test/PalORM.SourceGen.Tests/PalORM.SourceGen.Tests.csproj"
+  ],
+  "threshold-high": 80,
+  "threshold-low": 60,
+  "threshold-break": 40,
+  "reporters": [
+    "html",
+    "json"
+  ],
+  "log-level": "info",
+  "concurrency": 4,
+  "timeout-ms": 30000,
+  "additional-timeout-ms": 5000,
+  "ignore-methods": [
+    "ToString",
+    "GetHashCode",
+    "Equals"
+  ]
+}

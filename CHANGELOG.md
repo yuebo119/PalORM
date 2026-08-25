@@ -31,6 +31,8 @@
 
 ### 🔧 工程
 
+- **变异测试接入 CI**（mutation-tests.yml，每周六自动 + 手动）：Core 既有配置生效化，
+  新增 SourceGen emitter + 分析器变异面——threshold-break=40 自此首次具备约束力
 - `.githooks/pre-commit` 薄包装托管（`core.hooksPath` 方案），消除 cp 拷贝式安装的脚本漂移
 - secret-guard 白名单精确豁免 MySQL uint64 LIMIT 常量（20 位连续数字误触身份证号规则）
 - perf-gate 基线 v4.0.json→v5.0.json；回归解析失败从静默放行改为显式警告标注不可判定
