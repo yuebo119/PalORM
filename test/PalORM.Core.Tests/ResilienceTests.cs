@@ -306,26 +306,9 @@ public sealed class ResilienceTests
             .Throws<OverflowException>();
     }
 
-    [Test]
-    public async Task MySqlUpsert_UsesLastInsertIdOnlyForGeneratedNumericKey()
-    {
-        string assignedKeySql = DataSession<PalORM.MySql.MySqlProvider>.BuildMySqlUpsertSql(
-            "order", "Id", ["Id", "select"], 2, hasGeneratedKey: false);
-        string generatedKeySql = DataSession<PalORM.MySql.MySqlProvider>.BuildMySqlUpsertSql(
-            "order", "Id", ["Id", "select"], 2, hasGeneratedKey: true);
-        string keyOnlySql = DataSession<PalORM.MySql.MySqlProvider>.BuildMySqlUpsertSql(
-            "order", "Id", ["Id"], 1, hasGeneratedKey: false);
-
-        await Assert.That(assignedKeySql).IsEqualTo(
-            "INSERT INTO `order` (`Id`, `select`) VALUES (@p0, @p1) " +
-            "ON DUPLICATE KEY UPDATE `select` = VALUES(`select`)");
-        await Assert.That(assignedKeySql).DoesNotContain("LAST_INSERT_ID");
-        await Assert.That(generatedKeySql).Contains(
-            "`Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()");
-        await Assert.That(keyOnlySql).IsEqualTo(
-            "INSERT INTO `order` (`Id`) VALUES (@p0) " +
-            "ON DUPLICATE KEY UPDATE `Id` = VALUES(`Id`)");
-    }
+    // v5.4 精炼：MySqlUpsert_UsesLastInsertIdOnlyForGeneratedNumericKey 已随
+    // BuildMySqlUpsertSql 死代码删除——其行为锁定（LAST_INSERT_ID 仅自增键双分支）
+    // 由真源覆盖：SourceGen.Tests/SnapshotTests（生成物断言）+ DialectSymmetryTests。
 
     [Test]
     public async Task DataSession_ResilienceState_PersistsAcrossCalls()

@@ -96,7 +96,8 @@ public sealed partial class DataSession<TProvider>
             .ConfigureAwait(false);
     }
 
-    // ─── 保存点 ────────────────────────────────────────
+    // 说明：保存点入口在 DataSession.Transactions.cs（SavepointAsync/RollbackToAsync）——
+    // 此处原空"保存点"节头为拆分残留，v5.4 移除。
 
     // ─── 存储过程 ──────────────────────────────────────
 

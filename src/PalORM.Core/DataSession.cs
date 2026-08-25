@@ -345,27 +345,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         primary.Data[$"PalORM.CleanupException{primary.Data.Count}"] = exception;
     }
 
-    /// <summary>MySQL UPSERT 的 SET 子句（ON DUPLICATE KEY UPDATE 后的部分）。
-    /// updateColumns 为空时：依赖 MySQL 行为——主键自增场景用 LAST_INSERT_ID(expr) 回填新主键，
-    /// 否则用 VALUES(col) 回写（MySQL 8 起被 VALUES() 弃用警告，但仍是兼容路径）。
-    /// updateColumns 非空时：显式列出每列的 VALUES(col)。</summary>
-    private static string BuildMySqlUpsertSetClause(
-        string[] updateColumns,
-        string quotedPrimaryKey,
-        bool hasGeneratedKey,
-        Func<string, string> quoteIdentifier)
-    {
-        if (updateColumns.Length == 0)
-        {
-            return hasGeneratedKey
-                ? $"{quotedPrimaryKey} = LAST_INSERT_ID({quotedPrimaryKey})"
-                : $"{quotedPrimaryKey} = VALUES({quotedPrimaryKey})";
-        }
-
-        return string.Join(", ", updateColumns.Select(column =>
-            $"{quoteIdentifier(column)} = VALUES({quoteIdentifier(column)})"));
-    }
-
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()
         => PalORM_Runtime.EntityFeatures.GetValueOrDefault(typeof(T), EntityFeatures.None);
 
