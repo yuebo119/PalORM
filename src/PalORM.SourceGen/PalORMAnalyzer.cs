@@ -6,10 +6,12 @@ using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace PalORM.SourceGen;
 
-/// <summary>PalORM 编译时验证——PALORM001-005, 008-040 诊断规则（006/007 已删，038/039 备用留空）。
+/// <summary>PalORM 编译时验证——PALORM001-005, 008-044 诊断规则（006/007 已删，038/039 备用留空）。
 /// PALORM006/007 已删除——006 由 SqlFileEmitter 的 Obsolete-error 机制承担，
 /// 007 无 schema 对照数据源。编号不复用，避免历史引用混淆。
-/// v5.0 扩充（PALORM023-027 实体级硬规则 + PALORM031-033 调用级 + PALORM034-037/040 防静默错误）。</summary>
+/// v5.0 扩充（PALORM023-027 实体级硬规则 + PALORM031-033 调用级 + PALORM034-037/040 防静默错误）。
+/// ITM-640 收口（PALORM042-044）：生成器 throw/静默跳过的编译期定位面——分工同 PALORM022：
+/// 分析器精确定位报错，生成器防御性跳过。</summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 {
@@ -199,6 +201,27 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM040", "[TenantAware] entity's tenant_id column is nullable",
         "[TenantAware] entity's tenant_id column (property '{0}' on '{1}') is nullable or lacks [Required], bypassing tenant isolation", "PalORM", DiagnosticSeverity.Error, true);
 
+    // === ITM-640 收口（PALORM042-044）：生成器 throw/静默跳过的用户错误面前移 ===
+    // 分工与 PALORM022 同型：分析器在此定位报错；生成器侧防御性跳过不崩溃。
+
+    // PALORM042：[Timestamp]+[Computed] 同标——GENERATED 列不得带 DEFAULT（MySQL/PG 拒绝），
+    // 此前 TableModel.FromContext throw → 用户收到 CS8785 生成器崩溃堆栈。
+    public static readonly DiagnosticDescriptor TimestampComputedConflict = new(
+        "PALORM042", "[Timestamp] conflicts with [Computed]",
+        "[Timestamp] property '{0}' on type '{1}' also has [Computed]; a column cannot be both GENERATED ALWAYS AS and DEFAULT CURRENT_TIMESTAMP", "PalORM", DiagnosticSeverity.Error, true);
+
+    // PALORM043：进入 SQL 的标识符含控制字符或为空——镜像运行时 IdentifierSafety 拒绝范围
+    // （ITM-584/593/608），此前 SqlGeneration.QuoteIdentifier 发射期 throw → CS8785。
+    public static readonly DiagnosticDescriptor UnsafeIdentifierName = new(
+        "PALORM043", "SQL identifier contains a control character or is empty",
+        "{0} '{1}' on type '{2}' contains a control character (U+0000-U+001F, U+007F-U+009F) or is empty; generated SQL cannot embed it safely", "PalORM", DiagnosticSeverity.Error, true);
+
+    // PALORM044：[Computed] 表达式含 NUL 或括号不平衡——生成器静默跳过实体且
+    // 此前编译期零反馈（运行期才报 not registered），现补定位诊断。
+    public static readonly DiagnosticDescriptor InvalidComputedExpression = new(
+        "PALORM044", "[Computed] expression is invalid",
+        "[Computed] expression on property '{0}' of type '{1}' contains a NUL character or has unbalanced parentheses; the entity would be silently skipped by source generation", "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, MissingOwnedJsonContext,
@@ -211,7 +234,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          ConverterOwnedJsonConflict,
          BulkUpdateBatchOnVersionedEntity, JoinReferencesUnregisteredEntity, SelectProjectionWithToList,
          KeyWithNonDefaultValue, ConcurrencyCheckWithIgnoreOnInsert, NullableContextDisabled,
-         RequiredWithNullableAnnotation, TenantColumnNullable];
+         RequiredWithNullableAnnotation, TenantColumnNullable,
+         TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -494,6 +518,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
 
         CheckQualifiedTable(ctx, type);
+        CheckIdentifierSafety(ctx, type);     // PALORM043（ITM-640 收口）
         CheckSoftDeleteColumn(ctx, type);     // PALORM014
         CheckTenantColumn(ctx, type);         // PALORM018
         CheckTenantColumnNullable(ctx, type); // PALORM040
@@ -785,6 +810,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             CheckColumnNameMismatch(ctx, member, type);                           // PALORM002
             CheckForeignKey(ctx, member, type, memberLocation, ref assemblyTables); // PALORM003/004
             CheckTimestampType(ctx, type, member);                                // PALORM025
+            CheckTimestampComputedConflict(ctx, type, member);                    // PALORM042（ITM-640 收口）
+            CheckComputedExpressionValidity(ctx, type, member);                   // PALORM044（ITM-640 收口）
             CheckConverterOwnedJsonConflict(ctx, type, member);                   // PALORM027
             CheckKeyNonDefaultValue(ctx, type, member);                           // PALORM034
             CheckConcurrencyCheckWithIgnoreOnInsert(ctx, type, member);           // PALORM035
@@ -851,6 +878,119 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedTimestampType,
                 member.Locations.FirstOrDefault() ?? type.Locations[0],
                 member.Name, type.Name, typeName));
+        }
+    }
+
+    /// <summary>PALORM042：[Timestamp]+[Computed] 同标——GENERATED 列不得带 DEFAULT。
+    /// ITM-640 收口：生成器侧（TableModel.FromContext）静默跳过，此处定位报错（PALORM022 分工）。</summary>
+    private static void CheckTimestampComputedConflict(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        bool hasTimestamp = member.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
+        if (!hasTimestamp) return;
+        bool hasComputed = member.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
+        if (!hasComputed) return;
+
+        ctx.ReportDiagnostic(Diagnostic.Create(TimestampComputedConflict,
+            member.Locations.FirstOrDefault() ?? type.Locations[0],
+            member.Name, type.Name));
+    }
+
+    /// <summary>PALORM044：[Computed] 表达式含 NUL 或括号不平衡。
+    /// 判定与 TableModel 发射前快检共用 SourceGenerationValidation.IsBalancedParentheses
+    /// （单一真源）——生成器静默跳过实体，此处补编译期定位。</summary>
+    private static void CheckComputedExpressionValidity(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        var computedAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
+        if (computedAttr is null) return;
+        if (computedAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
+        if (!expression.Contains('\0') && SourceGenerationValidation.IsBalancedParentheses(expression))
+            return;
+
+        ctx.ReportDiagnostic(Diagnostic.Create(InvalidComputedExpression,
+            member.Locations.FirstOrDefault() ?? type.Locations[0],
+            member.Name, type.Name));
+    }
+
+    /// <summary>PALORM043：进入 SQL 的标识符含控制字符或为空。
+    /// 扫描面与生成器 Quote 消费面对齐：表名 / 列名 / 索引名与索引列 / FK 引用表列；
+    /// 拒绝范围与运行时 IdentifierSafety 一致（ITM-584/593/608），跨程序集一致性由
+    /// IdentifierConsistencyTests 锁定。此前 SqlGeneration.QuoteIdentifier 发射期 throw → CS8785，
+    /// ITM-640 收口后生成器静默跳过、此处定位报错。</summary>
+    private static void CheckIdentifierSafety(SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        var tableAttr = type.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
+        string tableName = tableAttr?.ConstructorArguments.FirstOrDefault().Value as string
+            ?? type.Name;
+        // 表名兜底为类型名时不可能命中（C# 标识符无控制字符），统一扫描保持口径简单
+        if (SourceGenerationValidation.HasUnsafeSqlIdentifier(tableName))
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(UnsafeIdentifierName,
+                type.Locations[0], "Table name", tableName, type.Name));
+        }
+
+        foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
+        {
+            var columnAttr = property.GetAttributes().FirstOrDefault(a =>
+                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+            string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
+                ?? property.Name;
+            if (SourceGenerationValidation.HasUnsafeSqlIdentifier(columnName))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(UnsafeIdentifierName,
+                    property.Locations.FirstOrDefault() ?? type.Locations[0],
+                    "Column name", columnName, type.Name));
+            }
+        }
+
+        foreach (var indexAttr in type.GetAttributes().Where(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Index")))  // ITM-512
+        {
+            Location indexLocation = indexAttr.ApplicationSyntaxReference?.GetSyntax(ctx.CancellationToken).GetLocation()
+                ?? type.Locations[0];
+            if (indexAttr.ConstructorArguments.Length < 2) continue;
+            if (indexAttr.ConstructorArguments[0].Value is string indexName
+                && SourceGenerationValidation.HasUnsafeSqlIdentifier(indexName))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(UnsafeIdentifierName,
+                    indexLocation, "Index name", indexName, type.Name));
+            }
+            foreach (string? indexColumn in indexAttr.ConstructorArguments[1].Values
+                .Select(static v => v.Value as string))
+            {
+                if (indexColumn is not null
+                    && SourceGenerationValidation.HasUnsafeSqlIdentifier(indexColumn))
+                {
+                    ctx.ReportDiagnostic(Diagnostic.Create(UnsafeIdentifierName,
+                        indexLocation, "Index column", indexColumn, type.Name));
+                }
+            }
+        }
+
+        foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
+        {
+            var fkAttr = property.GetAttributes().FirstOrDefault(a =>
+                SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
+            // 可空比较陷阱：fkAttr?.X < 2 在 fkAttr=null 时结果为 null、null<2=false——守卫失效致 NRE
+            if (fkAttr is null || fkAttr.ConstructorArguments.Length < 2) continue;
+            Location propertyLocation = property.Locations.FirstOrDefault() ?? type.Locations[0];
+            if (fkAttr!.ConstructorArguments[0].Value is string referencedTable
+                && SourceGenerationValidation.HasUnsafeSqlIdentifier(referencedTable))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(UnsafeIdentifierName,
+                    propertyLocation, "Foreign key referenced table", referencedTable, type.Name));
+            }
+            if (fkAttr.ConstructorArguments[1].Value is string referencedColumn
+                && SourceGenerationValidation.HasUnsafeSqlIdentifier(referencedColumn))
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(UnsafeIdentifierName,
+                    propertyLocation, "Foreign key referenced column", referencedColumn, type.Name));
+            }
         }
     }
 

@@ -2,6 +2,40 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布]
+
+> 评审整改批次：2×P0（CI 门禁失效）+ 3×P1（弹性脱节/事务静默降级/生成器崩溃 UX）+ 工程防线托管
+
+### ✨ 新增
+
+- **弹性策略接入只读查询内置管线**：`WithRetry`/`WithCircuitBreaker` 此前对内置管线无效
+  （全库唯一消费点是显式 `ExecuteWithResilience`）——现覆盖 `From<T>()` SELECT 家族、
+  `GetAsync`/`GetAllAsync` 与聚合五兄弟；写入路径与事务内查询维持直连（幂等性契约 ITM-310）
+- **编译时诊断 PALORM042-044**（ITM-640 收口）：`[Timestamp]+[Computed]` 冲突、SQL 标识符
+  含控制字符/空串、`[Computed]` 表达式 NUL 或括号不平衡——此前以生成器异常（CS8785）
+  或静默跳过呈现，现编译期精确定位；生成器侧改为防御性跳过不崩溃
+
+### 💔 破坏性变更
+
+- 默认 `DbOptions`（MaxRetries=3/CircuitBreakerThreshold=5）下，只读查询的瞬时故障现在
+  自动重试并计入熔断——与连接建立重试同口径；`Testing` 预设（零重试零熔断）行为不变；
+  事务内查询不受影响（重试会以次生异常掩盖根因）
+
+### 🐛 修复
+
+| 问题 | 影响 | 修复方式 |
+|------|------|---------|
+| perf-gate.yml 在 CI 必然失败 | 性能门禁从未生效 | BDN fork clone 步骤 + restore 收窄 + `[perf]` 标签门控 |
+| CI 秘密扫描第二道防线空转 | 40 类自定义规则从未消费 CI 差异集 | secret-guard 新增 `--range` 模式并接入 security job；临时仓库探针双向验证 |
+| UseTransaction 外部事务被外部 Dispose 后静默降级自动提交 | 写操作丢失事务隔离无反馈（ITM-640） | 失效的外部事务响亮失败；`UseTransaction(null)` 显式清场逃生门 |
+
+### 🔧 工程
+
+- `.githooks/pre-commit` 薄包装托管（`core.hooksPath` 方案），消除 cp 拷贝式安装的脚本漂移
+- secret-guard 白名单精确豁免 MySQL uint64 LIMIT 常量（20 位连续数字误触身份证号规则）
+- perf-gate 基线 v4.0.json→v5.0.json；回归解析失败从静默放行改为显式警告标注不可判定
+- README 驱动版本对齐 Directory.Packages.props 实际值（MySqlConnector 2.6.2 / SQLite3MC 2.4.0）
+
 ## [5.3.0] — byte[] 二进制列原生支持（契约显式化 + AOT 全链 + 基准背书）
 
 > 6 个提交 · 30 个文件 · +743/−92 行 · 四环节编译期契约补齐（读取/绑定/DDL/BulkInsert）

@@ -83,10 +83,11 @@ internal sealed record TableModel(
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "Computed"))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             // ITM-584：[Computed] 表达式是编译期常量（Raw 同级信任），但 NUL/未配对括号会生成
-            // 非法 DDL 延迟到 MigrateAsync 才炸——快检拒绝，实体整体跳过（PALORM015 兜底提示）
-            // R11 修复：括号配对改为词法扫描——忽略单引号字符串内的括号（如 LOWER(')foo')）
+            // 非法 DDL 延迟到 MigrateAsync 才炸——快检拒绝，实体整体跳过。
+            // ITM-640 收口：原注释声称"PALORM015 兜底提示"系误指（015 不覆盖此形态，编译期
+            // 零反馈直到运行期 not registered）——现由 PALORM044 定位报错，此处防御性跳过。
             if (computedExpression is not null
-                && (computedExpression.Contains('\0') || !AreParenthesesBalanced(computedExpression)))
+                && (computedExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
                 return null;
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
@@ -111,11 +112,11 @@ internal sealed record TableModel(
 
             // ITM-626：[Timestamp]（DEFAULT CURRENT_TIMESTAMP）与 [Computed]（GENERATED ALWAYS AS）
             // 同标一属性会生成 "GENERATED ... STORED ... DEFAULT"——MySQL/PG 均拒绝（GENERATED 列
-            // 不得带 DEFAULT）。生成期拒绝，比真库 Migrate 时远端报错更近根因（诊断化归 ITM-640）。
+            // 不得带 DEFAULT）。ITM-640 收口：此前在此 throw InvalidOperationException（用户收到
+            // CS8785 生成器崩溃堆栈）；现按 PALORM022 分工——生成器静默跳过，
+            // PALORM042 在编译期定位报错（Error 级阻断后续流程）。
             if (isTimestamp && computedExpression is not null)
-                throw new InvalidOperationException(
-                    $"Property '{prop.Name}' on entity cannot be marked both [Timestamp] and [Computed] — " +
-                    "the generated column would be GENERATED with a DEFAULT clause, which all three dialects reject.");
+                return null;
 
             var fkAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
@@ -170,6 +171,23 @@ internal sealed record TableModel(
         }
 
         string entityTypeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+        // ITM-618/ITM-640 收口：进入 SQL 的标识符在发射前统一快检（控制字符/空串）——
+        // 此前深藏在 SqlGeneration.QuoteIdentifier 的 throw 会让用户收到 CS8785 生成器崩溃；
+        // 现按 PALORM022 分工：生成器静默跳过，PALORM043 在编译期定位报错。
+        // 扫描面与 MigrationEmitter/CommandFactoryEmitter 的 Quote 消费面一一对应：
+        // 表名 / 列名 / 索引名与索引列 / FK 引用表列。属性名兜底形态不可能命中
+        // （C# 标识符无控制字符），扫描仅对显式注解字符串有实际约束力。
+        if (SourceGenerationValidation.HasUnsafeSqlIdentifier(tableName)
+            || columns.Any(static c => SourceGenerationValidation.HasUnsafeSqlIdentifier(c.ColumnName))
+            || indexes.Any(i => SourceGenerationValidation.HasUnsafeSqlIdentifier(i.Name)
+                || i.Columns.ToArray().Any(SourceGenerationValidation.HasUnsafeSqlIdentifier))
+            || foreignKeys.Any(fk => SourceGenerationValidation.HasUnsafeSqlIdentifier(fk.ReferencedTable)
+                || SourceGenerationValidation.HasUnsafeSqlIdentifier(fk.ReferencedColumn)))
+        {
+            return null;
+        }
+
         return new TableModel(
             typeSymbol.ContainingNamespace.ToDisplayString(),
             typeSymbol.Name,
@@ -179,23 +197,6 @@ internal sealed record TableModel(
             new EquatableArray<ColumnModel>(columns.ToArray()),
             new EquatableArray<IndexModel>(indexes.ToArray()),
             new EquatableArray<ForeignKeyModel>(foreignKeys.ToArray()));
-    }
-
-    /// <summary>R11 修复：词法扫描括号配对——忽略单引号字符串内的括号。
-    /// 如 <c>LOWER(')foo')</c> 的 <c>)</c> 在字符串内，不应计入配对。</summary>
-    private static bool AreParenthesesBalanced(string expression)
-    {
-        int depth = 0;
-        bool inString = false;
-        for (int i = 0; i < expression.Length; i++)
-        {
-            char c = expression[i];
-            if (c == '\'') { inString = !inString; continue; }
-            if (inString) continue;
-            if (c == '(') depth++;
-            else if (c == ')') { depth--; if (depth < 0) return false; }
-        }
-        return depth == 0;
     }
 
     /// <summary>收集实体自身及基类链上的可映射属性（ITM-502：GetMembers 不含继承成员，
