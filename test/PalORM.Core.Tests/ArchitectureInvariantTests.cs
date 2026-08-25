@@ -74,7 +74,10 @@ public sealed class ArchitectureInvariantTests
                 || (body.Contains("HasTenantFilter", StringComparison.Ordinal)
                     && body.Contains("BindDefaultFilterParameters", StringComparison.Ordinal))
                 // 聚合家族经 ExecuteScalarAsync 集中绑定，方法体只需出现过滤子句构造
-                || body.Contains("GetDefaultFilterWhereClause", StringComparison.Ordinal);
+                || body.Contains("GetDefaultFilterWhereClause", StringComparison.Ordinal)
+                // v5.4 精炼 L3：聚合家族（Sum/Max/Min/Avg）改经 ExecuteAggregateScalarAsync
+                // 集中路由——过滤子句构造移入该内核，薄包装体以内核调用名为路由凭证
+                || body.Contains("ExecuteAggregateScalarAsync", StringComparison.Ordinal);
             if (!routed)
                 violations.Add($"{method}: 方法体未经过默认过滤路由（GetDefaultFilter*/HasTenantFilter+BindDefaultFilterParameters）");
         }
