@@ -104,10 +104,9 @@ public sealed partial class DataSession<TProvider>
         }
     }
 
-    // ─── 聚合方法 ────────────────────────────────────────
+    // ─── 健康检查 ────────────────────────────────────────
 
-    /// <summary>COUNT 聚合。</summary>
-
+    /// <summary>SELECT 1 探活——返回耗时与失败类型名（不含拓扑信息，ITM-542）。</summary>
     public async ValueTask<HealthResult> HealthCheckAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();

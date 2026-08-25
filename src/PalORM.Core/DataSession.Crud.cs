@@ -453,37 +453,8 @@ public sealed partial class DataSession<TProvider>
             "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
     }
 
-    // v4.1：Upsert SQL 已改为编译期预构建（CommandFactoryEmitter.BuildUpsertMySqlSql）。
-    // 此方法保留用于旧测试验证，运行时不再调用。
-    internal static string BuildMySqlUpsertSql(
-        string tableName,
-        string primaryKeyColumn,
-        IReadOnlyList<string> upsertColumns,
-        int parameterCount,
-        bool hasGeneratedKey)
-    {
-        if (upsertColumns.Count != parameterCount)
-            throw new InvalidOperationException(
-                $"MySQL upsert generated {upsertColumns.Count} columns but " +
-                $"{parameterCount} parameters.");
-
-        string[] updateColumns = upsertColumns
-            .Where(column => !string.Equals(
-                column, primaryKeyColumn, StringComparison.Ordinal))
-            .ToArray();
-        string columnList = string.Join(", ",
-            upsertColumns.Select(TProvider.QuoteIdentifier));
-        string valueList = string.Join(", ",
-            Enumerable.Range(0, parameterCount)
-                .Select(static index => $"@p{index}"));
-        string quotedPrimaryKey = TProvider.QuoteIdentifier(primaryKeyColumn);
-        string setClause = BuildMySqlUpsertSetClause(updateColumns, quotedPrimaryKey, hasGeneratedKey, TProvider.QuoteIdentifier);
-        if (hasGeneratedKey && updateColumns.Length > 0)
-            setClause += $", {quotedPrimaryKey} = LAST_INSERT_ID({quotedPrimaryKey})";
-
-        string sql = $"INSERT INTO {TProvider.QuoteIdentifier(tableName)} " +
-            $"({columnList}) VALUES ({valueList}) " +
-            $"ON DUPLICATE KEY UPDATE {setClause}";
-        return hasGeneratedKey ? $"{sql}; SELECT LAST_INSERT_ID()" : sql;
-    }
+    // v5.4 精炼：BuildMySqlUpsertSql 运行时死代码已删（原注释自认"运行时不再调用"，
+    // 仅 ResilienceTests 作参照物）。UPSERT SQL 唯一真源是 CommandFactoryEmitter 生成的
+    // UpsertMySql 编译期常量，形态锁定见 SourceGen.Tests/SnapshotTests（LAST_INSERT_ID
+    // 仅自增键双分支）与 DialectSymmetryTests；运行时消费点 UpsertWithMySqlAsync。
 }
