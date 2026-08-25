@@ -18,7 +18,7 @@
 | 脚本 | 用途 | 耗时 |
 |------|------|:---:|
 | `run-benchmarks.sh` | 基准运行器（sqlite/pg/mysql/scale/build/speed/all） | 5-30min |
-| `run-mutation-tests.sh` | 变异测试（Stryker.NET，验证测试有效性） | 10-30min |
+| `run-mutation-tests.sh` | 变异测试（Stryker.NET，验证测试有效性；CI 每周六自动跑 mutation-tests.yml，Core + SourceGen 双配置） | 10-30min/项目 |
 
 ## 测试环境
 

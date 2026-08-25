@@ -21,7 +21,7 @@ echo "════════════════════════�
 
 # 检查 dotnet-stryker 是否安装
 if ! dotnet stryker --version &>/dev/null; then
-    echo ">>> 安装 dotnet-stryder 全局工具..."
+    echo ">>> 安装 dotnet-stryker 全局工具..."
     dotnet tool install -g dotnet-stryker
 fi
 
