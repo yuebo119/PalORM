@@ -35,7 +35,9 @@ public sealed record DbOptions
         return seconds >= int.MaxValue ? int.MaxValue : (int)seconds;
     }
 
-    /// <summary>最大重试次数（默认 3 次）。</summary>
+    /// <summary>最大重试次数（默认 3 次）。
+    /// <para><b>v5.4 作用域</b>: 连接建立与只读查询内置管线（From&lt;T&gt;() SELECT 家族/
+    /// GetAsync/GetAllAsync/聚合）。写入路径不自动重试（幂等性契约，见 DataSession.WithRetry）。</para></summary>
     public int MaxRetries { get; init; } = 3;
 
     /// <summary>重试退避策略（默认 100ms→200ms→400ms）。</summary>

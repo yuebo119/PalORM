@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# PalORM 预提交门禁——薄包装：转发到仓库内脚本，脚本更新即时生效（无拷贝漂移）。
+# 安装: git config core.hooksPath .githooks
+set -uo pipefail
+
+echo "── pre-commit: secret-guard ──"
+bash "$(git rev-parse --show-toplevel)/scripts/secret-guard.sh" || exit 1
+
+echo "── pre-commit: stub-check ──"
+bash "$(git rev-parse --show-toplevel)/scripts/stub-check.sh" || exit 1
+
+exit 0

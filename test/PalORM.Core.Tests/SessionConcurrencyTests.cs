@@ -750,7 +750,15 @@ public sealed class SessionConcurrencyTests
                         SqlDialect.Sqlite, factory, [],
                         ConcurrencyProvider.CreateParameter,
                         ConcurrencyProvider.QuoteIdentifier,
-                        state, TimeSpan.FromSeconds(30)),
+                        state,
+                        // v5.4：弹性策略参数——本用例走 QueryMultipleAsync（不接入管线），直通实例即可
+                        new ResilienceExecutor(new DbOptions
+                        {
+                            ConnectionString = "controlled",
+                            MaxRetries = 0,
+                            CircuitBreakerThreshold = 0
+                        }),
+                        TimeSpan.FromSeconds(30)),
                     "session_concurrency", ["id", "name"],
                     () => connection)).ForRead();
 

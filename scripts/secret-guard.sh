@@ -66,8 +66,11 @@ check_content() {
     local file="$1"
     local content
     # 白名单过滤（占位符/示例/环境变量引用）
+    # 18446744073709551615：MySQL LIMIT 裸 OFFSET 的 uint64 上限惯用常量（QueryBuilder.cs），
+    # 20 位连续数字会误触规则 38 身份证号——按行豁免；同行混入其他敏感内容时整行走白名单，
+    # 属已接受的窄边界（2026-08-25 提交实证）
     content=$(git show "${CONTENT_REV}${file}" 2>/dev/null | grep -viE \
-        'Password=\*\*\*|Password=xxx|Password=<password>|Password=change-me|Password=\$\{|PALORM_.*_PASSWORD|pwd=\|connectionString|example|placeholder|sample|template|gate-check\.sh|secret-guard\.sh|安全红线|YOUR_.*_HERE|REPLACE_ME|INSERT_|TO_BE_|FIXME|TODO' \
+        'Password=\*\*\*|Password=xxx|Password=<password>|Password=change-me|Password=\$\{|PALORM_.*_PASSWORD|pwd=\|connectionString|example|placeholder|sample|template|gate-check\.sh|secret-guard\.sh|安全红线|YOUR_.*_HERE|REPLACE_ME|INSERT_|TO_BE_|FIXME|TODO|18446744073709551615' \
         || true)
     [ -z "$content" ] && return 0
 

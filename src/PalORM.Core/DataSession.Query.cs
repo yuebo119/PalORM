@@ -26,12 +26,15 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         if (where is not null) BindFormattableParameters(cmd, where);
         BindDefaultFilterParameters<T>(cmd);
-        object? r = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        // v5.4 弹性接入：COUNT 为无事务只读路径时经会话弹性策略
+        object? scalar = await ExecuteReadPipelineAsync(
+            async token => await cmd.ExecuteScalarAsync(token).ConfigureAwait(false), ct)
+            .ConfigureAwait(false);
         // ITM-637 同型面：COUNT null 静默 0 掩蔽驱动异常——与 ToPageAsync 同口径显式报错
-        if (r is null)
+        if (scalar is null)
             throw new InvalidOperationException(
                 "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
-        return r is long l ? l : Convert.ToInt64(r);
+        return scalar is long l ? l : Convert.ToInt64(scalar);
     }
 
     /// <summary>SUM 聚合。空表/全过滤时 SUM 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
@@ -78,7 +81,8 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>聚合执行内核（不带操作门禁）——门禁由四个聚合入口持有（ITM-613：
     /// 先入门禁再拼 SQL）。Enter 不可重入，此处再 Enter 会抛
-    /// "already has an active database operation"（SoftDelete 聚合测试实证）。</summary>
+    /// "already has an active database operation"（SoftDelete 聚合测试实证）。
+    /// v5.4 弹性接入：无事务只读标量经会话弹性策略（重试/熔断）。</summary>
     private async ValueTask<object?> ExecuteScalarAsync<T>(string sql, FormattableString original, CancellationToken ct)
         where T : class, new()
     {
@@ -87,7 +91,9 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, original);
         BindDefaultFilterParameters<T>(cmd);
-        return await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return await ExecuteReadPipelineAsync(
+            async token => await cmd.ExecuteScalarAsync(token).ConfigureAwait(false), ct)
+            .ConfigureAwait(false);
     }
 
     // ─── 保存点 ────────────────────────────────────────
