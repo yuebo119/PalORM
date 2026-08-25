@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
 # PalORM 敏感信息拦截器 v3（pre-commit hook）— 40 类检测
-# 安装: cp scripts/secret-guard.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# 安装: git config core.hooksPath .githooks（见 .githooks/pre-commit）
 # 调试: SECRET_GUARD_DEBUG=1 bash .git/hooks/pre-commit
+#
+# 两种运行模式:
+#   默认（staged）      — 扫描暂存区文件（pre-commit 场景）
+#   --range BASE..HEAD  — 扫描提交范围内的新增/修改文件（CI 场景，右侧为内容源）
+# 自测: bash scripts/secret-guard.sh --selftest
 # ═══════════════════════════════════════════════════════════════
 set -uo pipefail
 
@@ -53,11 +58,15 @@ if [ "${1:-}" = "--selftest" ]; then
 fi
 
 # ─── 2. 内容检测（40 类）───
+# CONTENT_REV：内容读取的 rev 前缀——staged 模式读索引（":"），range 模式读范围右侧提交。
+# 与下方 check_content 的 `git show "$CONTENT_REV$file"` 配对，两模式共用同一检测函数。
+CONTENT_REV=":"
+
 check_content() {
     local file="$1"
     local content
     # 白名单过滤（占位符/示例/环境变量引用）
-    content=$(git show ":$file" 2>/dev/null | grep -viE \
+    content=$(git show "${CONTENT_REV}${file}" 2>/dev/null | grep -viE \
         'Password=\*\*\*|Password=xxx|Password=<password>|Password=change-me|Password=\$\{|PALORM_.*_PASSWORD|pwd=\|connectionString|example|placeholder|sample|template|gate-check\.sh|secret-guard\.sh|安全红线|YOUR_.*_HERE|REPLACE_ME|INSERT_|TO_BE_|FIXME|TODO' \
         || true)
     [ -z "$content" ] && return 0
@@ -171,9 +180,31 @@ check_content() {
 
 echo "═══ 敏感信息拦截器 v3（40 类检测）═══"
 
-STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
-[ -z "$STAGED" ] && { echo "✓ 无 staged 文件"; exit 0; }
-[ "$DEBUG" = "1" ] && echo "  [debug] staged: $STAGED"
+# ─── 3. 运行模式解析 ───
+# staged（默认）：pre-commit 场景，扫暂存区；range：CI 场景，扫提交范围右侧。
+# CI 此前"构造 staged 环境 + 直接运行 hook"恒空转（git diff --cached 在 CI 无暂存）——
+# range 模式让同一套 40 类规则真正消费 CI 的差异文件集。
+MODE="staged"
+RANGE=""
+if [ "${1:-}" = "--range" ]; then
+    if [ -z "${2:-}" ]; then
+        echo "用法: secret-guard.sh --range BASE..HEAD" >&2
+        exit 2
+    fi
+    RANGE="$2"
+    MODE="range"
+    # 内容源 = 范围右侧提交（a..b 取 b）；--diff-filter=ACM 已排除删除文件，右侧必存在
+    CONTENT_REV="${RANGE##*..}:"
+fi
+
+if [ "$MODE" = "staged" ]; then
+    STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
+    [ -z "$STAGED" ] && { echo "✓ 无 staged 文件"; exit 0; }
+else
+    STAGED=$(git diff --name-only --diff-filter=ACM "$RANGE" 2>/dev/null)
+    [ -z "$STAGED" ] && { echo "✓ 范围内无新增/修改文件: $RANGE"; exit 0; }
+fi
+[ "$DEBUG" = "1" ] && echo "  [debug] mode=$MODE files: $STAGED"
 
 for file in $STAGED; do
     [ "$DEBUG" = "1" ] && echo "  [debug] checking: $file"
