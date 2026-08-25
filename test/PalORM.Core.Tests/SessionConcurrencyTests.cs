@@ -780,6 +780,57 @@ public sealed class SessionConcurrencyTests
         }
     }
 
+    [Test]
+    public async Task UseTransaction_ExternallyDisposedTransaction_NextOperationFailsLoud()
+    {
+        // ITM-640：外部事务被外部 Dispose 后，后续命令必须响亮失败而非静默自动提交——
+        // 静默降级会让写操作脱离事务隔离而无任何反馈
+        await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
+        DbTransaction transaction = await session.BeginTransactionAsync();
+        session.UseTransaction(transaction);
+        await transaction.DisposeAsync();  // 模拟外部释放（Connection 置空）
+
+        Exception? exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await session.ExecuteAsync($"SELECT 1"));
+        await Assert.That(exception!.Message).Contains("disposed externally");
+    }
+
+    [Test]
+    public async Task UseTransaction_ExternallyDisposedTransaction_NullClearRestoresAutoCommit()
+    {
+        // ITM-640 逃生门：UseTransaction(null) 显式清场后恢复自动提交语义
+        await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
+        DbTransaction transaction = await session.BeginTransactionAsync();
+        session.UseTransaction(transaction);
+        await transaction.DisposeAsync();
+        session.UseTransaction(null);
+
+        int affected = await session.ExecuteAsync($"SELECT 1");
+        // SQLite 驱动对 SELECT 返回 -1（非 0 行）——断言的是"命令成功执行"而非行数
+        await Assert.That(affected).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task UseTransaction_ExternalTx_RejectsWithTransactionAsNested()
+    {
+        // ITM-640 边界锁定：UseTransaction 设入的活动外部事务与 WithTransaction 互斥
+        //（嵌套守卫拒绝）。因此内部事务发布/还原流程永远不会覆盖外部事务——
+        // GetActiveTransaction 的失效判定在外部事务整个生命周期内保持有效。
+        await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
+        DbTransaction external = await session.BeginTransactionAsync();
+        session.UseTransaction(external);
+
+        await Assert.That(async () =>
+                await session.WithTransaction(_ => Task.CompletedTask))
+            .Throws<InvalidOperationException>()
+            .WithMessage("DataSession does not support nested transactions.", StringComparison.Ordinal);
+
+        // 外部事务仍然生效：后续命令正常附着执行（未因拒绝而破坏状态）
+        int affected = await session.ExecuteAsync($"SELECT 1");
+        await Assert.That(affected).IsEqualTo(-1);
+        await external.DisposeAsync();
+    }
+
     private static async Task CreateConcurrencyTableAsync(
         DataSession<SqliteProvider> session)
     {

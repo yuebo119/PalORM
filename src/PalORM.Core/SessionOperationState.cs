@@ -27,6 +27,16 @@ internal sealed class SessionOperationState
     private Task? _disposeTask;
     private DbTransaction? _transaction;
     private object? _transactionOperationOwner;
+    // ITM-640 收口（评审 P1-2）：外部 UseTransaction 设入的事务被外部 Dispose 后，
+    // GetActiveTransaction 原本静默清空返回 null——后续命令以自动提交执行，
+    // 写操作丢失事务隔离而无任何反馈（与 ITM-596 设置守卫、ITM-524 QueryBuilder
+    // 绑定守卫不对称）。_externalTransaction 记录当前事务是否来自 UseTransaction：
+    // 外部事务失效 → 响亮失败；内部事务（BeginTransactionAsync 经 PublishTransaction
+    // 登记）完成后的残留 → 保持静默清理（手动 begin→commit→dispose→继续用会话是正常流程）。
+    private bool _externalTransaction;
+    // 说明：RestoreTransaction 还原目标恒为内部发布的事务或空——WithTransaction 在存在
+    // 活动事务时被嵌套守卫拒绝（BeginTransactionCoreAsync），ToPageAsync 仅在无活动事务时
+    // 自开并发布。因此收口后无需保存/还原"被覆盖事务的外部性"，复位为 false 即正确。
     private object? _transactionOwner;
     private List<IAsyncDisposable>? _transactionResources;
     private bool _transactionCompleting;
@@ -293,6 +303,22 @@ internal sealed class SessionOperationState
         {
             if (_transaction?.Connection is not null)
                 return _transaction;
+            // ITM-640：外部 UseTransaction 设入的事务被外部 Dispose（Connection 置空）——
+            // 静默降级为自动提交会让"我设了事务"的调用方数据脱离事务写入。响亮失败，
+            // 与 ITM-596（设置时拒绝已释放事务）、ITM-524（QueryBuilder 绑定事务失效）同策略；
+            // 逃生门：UseTransaction(null) 显式清场后恢复自动提交。
+            // 内部事务残留（手动 begin→commit→dispose）走下方静默清理，正常流程不受影响。
+            if (_transaction is not null && _externalTransaction)
+            {
+                _transaction = null;
+                _transactionOperationOwner = null;
+                _externalTransaction = false;
+                throw new InvalidOperationException(
+                    "The transaction assigned via UseTransaction has been disposed externally " +
+                    "(its Connection is null); the next command would silently execute outside " +
+                    "the intended transaction. Assign a live transaction via UseTransaction, " +
+                    "or call UseTransaction(null) to clear explicitly.");
+            }
             _transaction = null;
             _transactionOperationOwner = null;
             return null;
@@ -320,6 +346,8 @@ internal sealed class SessionOperationState
                     nameof(transaction));
             _transaction = transaction;
             _transactionOperationOwner = null;
+            // ITM-640：外部设入 → 失效时响亮失败；显式清场（null）→ 回归自动提交语义
+            _externalTransaction = transaction is not null;
         }
     }
 
@@ -339,6 +367,9 @@ internal sealed class SessionOperationState
                 _state == 2
                 || (_state == 1 && !ownedOperation && !currentTransaction),
                 this);
+            // ITM-640：内部发布的事务失效走静默清理（正常生命周期）；
+            // 外部事务不会被内部流程覆盖（嵌套守卫），此处恒复位为内部语义
+            _externalTransaction = false;
             _transaction = transaction;
             _transactionOperationOwner = ownedOperation
                 ? operationOwner
@@ -354,9 +385,13 @@ internal sealed class SessionOperationState
         {
             if (ReferenceEquals(_transaction, transaction))
             {
+                // 还原目标恒为内部事务或空（见字段说明）——外部性标记复位为内部语义。
+                // ITM-640：若未来允许 WithTransaction 包裹外部事务，此处须同步还原其
+                // 外部性判定，否则收口后外部事务失效会退回静默降级。
                 _transaction = previousTransaction?.Connection is not null
                     ? previousTransaction
                     : null;
+                _externalTransaction = false;
                 _transactionOperationOwner = null;
             }
         }

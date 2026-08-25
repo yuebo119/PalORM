@@ -182,7 +182,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>设置当前会话的事务。设置后所有后续查询在此事务内执行。
-    /// 调用 CommitAsync()/RollbackAsync() 后需再次设置或清空 (UseTransaction(null))。</summary>
+    /// 调用 CommitAsync()/RollbackAsync() 后需再次设置或清空 (UseTransaction(null))。
+    /// <para><b>失效契约（ITM-640）</b>: 设入的事务若在会话外被 Dispose（Connection 置 null），
+    /// 后续命令将抛 <see cref="InvalidOperationException"/> 而非静默降级为自动提交——
+    /// 写操作脱离事务是无反馈的数据完整性风险。调用 <see cref="UseTransaction"/>(null) 可显式
+    /// 清场回归自动提交。内部经 <see cref="BeginTransactionAsync"/> 开启的事务完成后的残留
+    /// 仍走静默清理（手动 begin→commit→继续使用是正常流程）。</para></summary>
     public DataSession<TProvider> UseTransaction(DbTransaction? tran)
     {
         // ITM-606: 先查 disposed——tran.Connection == null 时下方 ReferenceEquals 永远 false，
