@@ -338,11 +338,11 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | `AcquireXactLockAsync`（v5.0） | 事务级咨询锁 `pg_advisory_xact_lock` |
 | `TryAcquireXactLockAsync`（v5.0） | 非阻塞咨询锁 |
 
-### 编译时诊断（PALORM001-040）
+### 编译时诊断（PALORM001-044）
 
-33 条 Roslyn 分析器规则，按价值分层：
-- **P0 防运行时崩溃**（PALORM001-027 + 031-033）：缺 `[Key]`、N+1 检测、软删/租户列校验、OwnedJson 上下文验证、无插入/更新列、`[Timestamp]` 非时间类型、`[NotMapped]` 冲突、`BulkUpdateBatchAsync` 对并发实体调用等——把运行时 `throw` 提前到编译期
-- **P1 防静默错误**（PALORM034-037 + 040）：`[Key]` 非默认初值让 SaveAsync 永远走 Update、`[ConcurrencyCheck]+[IgnoreOnInsert]` 让乐观锁基线为 0、`#nullable disable` 下 NULL 读取崩溃、`[Required]`+可空矛盾、`[TenantAware]` 租户列可空绕过隔离——防止不 throw 但数据错/丢失/安全绕过
+36 条 Roslyn 分析器规则，按价值分层：
+- **P0 防运行时崩溃**（PALORM001-027 + 031-033 + 042-043）：缺 `[Key]`、N+1 检测、软删/租户列校验、OwnedJson 上下文验证、无插入/更新列、`[Timestamp]` 非时间类型、`[NotMapped]` 冲突、`BulkUpdateBatchAsync` 对并发实体调用等——把运行时 `throw` 提前到编译期；v5.4 新增 `[Timestamp]+[Computed]` 冲突（042）与 SQL 标识符含控制字符/空串（043）——两者此前以生成器异常或静默跳过呈现
+- **P1 防静默错误**（PALORM034-037 + 040 + 044）：`[Key]` 非默认初值让 SaveAsync 永远走 Update、`[ConcurrencyCheck]+[IgnoreOnInsert]` 让乐观锁基线为 0、`#nullable disable` 下 NULL 读取崩溃、`[Required]`+可空矛盾、`[TenantAware]` 租户列可空绕过隔离、`[Computed]` 表达式括号不平衡致实体被静默跳过（044）——防止不 throw 但数据错/丢失/安全绕过
 
 ---
 
@@ -540,7 +540,7 @@ dotnet publish -c Release -r win-x64 /p:PublishAot=true
 | Migration DDL | ✓ 编译时生成 |
 | QueryBuilder（值类型 struct） | ✓ 零虚调用 |
 | OwnedJson（JsonSerializerContext） | ✓ 源生成 |
-| 注解诊断（PALORM001-040） | ✓ 编译时 |
+| 注解诊断（PALORM001-044） | ✓ 编译时 |
 | AuditInterceptor | ✓ 零反射 |
 | BulkUpdateBatchAsync | ✓ StringBuilder + 参数绑定 |
 

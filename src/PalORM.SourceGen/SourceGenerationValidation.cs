@@ -174,6 +174,40 @@ internal static class SourceGenerationValidation
         => property.GetAttributes().Any(static attribute =>
             IsPalORMAttribute(attribute, "NotMapped"));
 
+    /// <summary>SQL 标识符安全快检（编译期镜像运行时 <c>PalORM.IdentifierSafety</c> 拒绝范围）：
+    /// 空/空白，或含 C0 控制字符（U+0000-U+001F）、DEL（U+007F）、C1 控制字符（U+0080-U+009F）。
+    /// 分析器 PALORM043 与 TableModel 发射前守卫共用本判定——netstandard2.0 不能引用 Core，
+    /// 数值范围靠本单点 + IdentifierConsistencyTests 跨程序集锁定防漂移。</summary>
+    internal static bool HasUnsafeSqlIdentifier(string identifier)
+    {
+        if (string.IsNullOrWhiteSpace(identifier))
+            return true;
+        foreach (char ch in identifier)
+        {
+            if (ch < ' ' || (ch >= '\x7F' && ch <= '\x9F'))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>括号配对词法扫描——忽略单引号字符串内的括号
+    /// （如 <c>LOWER(')foo')</c> 的 <c>)</c> 在字符串内，不应计入配对）。
+    /// 自 TableModel 迁入共享：分析器 PALORM044 与 TableModel 发射前快检同一真源。</summary>
+    internal static bool IsBalancedParentheses(string expression)
+    {
+        int depth = 0;
+        bool inString = false;
+        for (int i = 0; i < expression.Length; i++)
+        {
+            char c = expression[i];
+            if (c == '\'') { inString = !inString; continue; }
+            if (inString) continue;
+            if (c == '(') depth++;
+            else if (c == ')') { depth--; if (depth < 0) return false; }
+        }
+        return depth == 0;
+    }
+
     /// <summary>沿基类链枚举可映射属性（ITM-559，与 TableModel.GetMappableProperties 同一
     /// 隐藏语义：派生类同名属性覆盖基类）。排除 static/索引器/[NotMapped]。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",

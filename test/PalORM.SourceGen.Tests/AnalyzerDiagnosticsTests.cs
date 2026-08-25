@@ -1365,4 +1365,132 @@ public sealed class AnalyzerDiagnosticsTests
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM034")).IsFalse();
     }
+
+    // === ITM-640 收口测试（PALORM042-044）——生成器 throw/静默跳过的编译期定位面 ===
+
+    [Test]
+    public async Task PALORM042_TimestampWithComputed_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Timestamp]
+                [Computed("now()")]
+                public System.DateTime Updated { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM042")).IsTrue();
+        await Assert.That(diagnostics.Single(d => d.Id == "PALORM042").Severity)
+            .IsEqualTo(DiagnosticSeverity.Error);
+    }
+
+    [Test]
+    public async Task PALORM042_TimestampAlone_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Timestamp] public System.DateTime Updated { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM042")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM043_ColumnNameWithControlCharacter_Reports()
+    {
+        // 列名含换行（U+000A，C0 控制字符）——运行时 IdentifierSafety 拒绝范围，
+        // 此前发射期 QuoteIdentifier throw（CS8785），现编译期定位报错
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("na\u000Ame")] public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM043")).IsTrue();
+        await Assert.That(diagnostics.Single(d => d.Id == "PALORM043").Severity)
+            .IsEqualTo(DiagnosticSeverity.Error);
+    }
+
+    [Test]
+    public async Task PALORM043_EmptyTableName_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM043")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM043_SafeIdentifiers_DoesNotReport()
+    {
+        // 负向锁定：保留字列名经引号转义是合法形态；DEL/C1 之外的扩展区字符放行
+        const string source = """
+            using PalORM;
+            [Table("\"order\"")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("\"class\"")] public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM043")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM044_ComputedWithUnbalancedParentheses_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Computed("lower(name")]
+                public string Slug { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM044")).IsTrue();
+        await Assert.That(diagnostics.Single(d => d.Id == "PALORM044").Severity)
+            .IsEqualTo(DiagnosticSeverity.Error);
+    }
+
+    [Test]
+    public async Task PALORM044_ComputedWithParenthesesInsideStringLiteral_DoesNotReport()
+    {
+        // R11 词法扫描语义保持：单引号字符串内的括号不计入配对
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Computed("lower(')foo')")]
+                public string Slug { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM044")).IsFalse();
+    }
 }

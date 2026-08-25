@@ -152,7 +152,9 @@ internal static class RegistryEmitter
         {
             var pk = m.Columns.AsSpan().ToArray().FirstOrDefault(c => c.IsPrimaryKey);
             // ITM-581: CanGenerateEntity 契约保证恰一个 [Key]——此处缺 PK 是上游破坏，
-            // 静默兜底 "id" 会让错误列名进注册表，改为立即失败暴露契约破坏点
+            // 静默兜底 "id" 会让错误列名进注册表，改为立即失败暴露契约破坏点。
+            // ITM-640 处置：保留立即失败——这是不可达的内部不变量断言而非用户错误面
+            // （用户错误面 = PALORM001 Error 精确定位；到达此处仅当管道自身回归）。
             string pkName = pk?.ColumnName ?? throw new InvalidOperationException(
                 $"Entity '{m.EntityTypeName}' reached RegistryEmitter without a primary key column; " +
                 "CanGenerateEntity should have rejected it.");
