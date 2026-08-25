@@ -27,19 +27,28 @@ jobs:
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-            - name: Custom Secret Guard (staged diff)
+            - name: Custom Secret Guard (40 rules, changed files)
+              env:
+                  BEFORE_SHA: ${{ github.event.before }}
+                  BASE_REF: ${{ github.base_ref }}
               run: |
-                  # 用项目自带的 secret-guard 扫描最近提交的 diff
+                  # P0-2 修复：此前"构造 staged 环境 + 直接运行 hook"在 CI 恒空转
+                  # （CI 无暂存区，secret-guard 读 git diff --cached 恒 exit 0，
+                  # 40 类自定义规则实际从未消费 CI 差异集）。改用 --range 模式；
+                  # 全历史兜底仍由上方 gitleaks 承担。差异基线口径与 gate job 对齐。
                   chmod +x scripts/secret-guard.sh
-                  # 构造 staged 环境：检查最近一次 push 的所有文件
-                  git diff origin/main..HEAD --name-only --diff-filter=ACM | while read f; do
-                      if [ -f "$f" ]; then
-                          git show ":$f" 2>/dev/null | head -1 > /dev/null && \
-                          echo "checking: $f"
-                      fi
-                  done
-                  # 直接运行 hook 检查当前 HEAD
-                  bash scripts/secret-guard.sh
+                  # 空 SHA 用 printf 构造而非 40 个零的字面量——40 位连续数字
+                  # 会命中 secret-guard 的身份证号规则（真实误报，2026-08-25 提交实证）
+                  ZERO_SHA=$(printf '%040d' 0)
+                  if [ -n "$BASE_REF" ]; then
+                      RANGE="origin/$BASE_REF..HEAD"
+                  elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "$ZERO_SHA" ]; then
+                      RANGE="$BEFORE_SHA..HEAD"
+                  else
+                      echo "::notice::新分支首推无差异基线——全历史已由 gitleaks 覆盖"
+                      exit 0
+                  fi
+                  bash scripts/secret-guard.sh --range "$RANGE"
 
     build:
         name: Build (.NET 11)
@@ -148,9 +157,12 @@ jobs:
                   # Windows 开发者工作区经 autocrlf 转换后，diff 输出可能附加 CR 被误报。
                   # 真实 trailing whitespace（space/tab 在行末）仍会被检测——
                   # 用 grep 过滤掉纯 CR 报错（行末只有 \r 没有空格的）。
+                  # 空 SHA 用 printf 构造而非 40 个零的字面量——40 位连续数字
+                  # 会命中 secret-guard 的身份证号规则（同 secret-guard 步注释）
+                  ZERO_SHA=$(printf '%040d' 0)
                   if [ -n "$BASE_REF" ]; then
                     DIFF_REF="origin/$BASE_REF...HEAD"
-                  elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+                  elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "$ZERO_SHA" ]; then
                     DIFF_REF="$BEFORE_SHA...HEAD"
                   else
                     DIFF_REF=""
