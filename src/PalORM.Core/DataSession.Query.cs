@@ -37,15 +37,25 @@ public sealed partial class DataSession<TProvider>
         return scalar is long l ? l : Convert.ToInt64(scalar);
     }
 
+    /// <summary>聚合标量内核（Sum/Max/Min/Avg 共享，v5.4 精炼 L3）。
+    /// ITM-613 门禁次序保持：先 EnterOperation 再拼 SQL——门禁外读过滤状态 + 门禁内
+    /// 二次求值的窗口内，并发 IgnoreFilters()/WithTenant() 可致 SQL 片段与参数集错配。</summary>
+    private async ValueTask<object?> ExecuteAggregateScalarAsync<T>(
+        string function, FormattableString expression, CancellationToken ct)
+        where T : class, new()
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
+            throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
+        return await ExecuteScalarAsync<T>(
+            $"SELECT {function}({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}",
+            expression, ct).ConfigureAwait(false);
+    }
+
     /// <summary>SUM 聚合。空表/全过滤时 SUM 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
     public async ValueTask<decimal> SumAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        // ITM-613：先入门禁再拼 SQL（对齐 CountAsync）——门禁外读过滤状态 + 门禁内二次求值
-        // 的窗口内，并发 IgnoreFilters()/WithTenant() 可致 SQL 片段与参数集错配。
-        // ExecuteScalarAsync 为无门禁内核（Enter 不可重入）。
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        object? r = await ExecuteScalarAsync<T>($"SELECT SUM({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        object? r = await ExecuteAggregateScalarAsync<T>("SUM", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? 0m : Convert.ToDecimal(r, System.Globalization.CultureInfo.InvariantCulture);
     }
 
@@ -53,9 +63,7 @@ public sealed partial class DataSession<TProvider>
     /// Guid/DateOnly/枚举等经 Convert.ChangeType 会抛 InvalidCastException。</summary>
     public async ValueTask<TValue?> MaxAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation(); // ITM-613 同 SumAsync
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        object? r = await ExecuteScalarAsync<T>($"SELECT MAX({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        object? r = await ExecuteAggregateScalarAsync<T>("MAX", expression, ct).ConfigureAwait(false);
         // ITM-533: 补 InvariantCulture，与 ScalarAsync 一致——避免线程区域性影响数值/日期转换。
         return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue), System.Globalization.CultureInfo.InvariantCulture);
     }
@@ -63,9 +71,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>MIN 聚合。TValue 限制同 MaxAsync。</summary>
     public async ValueTask<TValue?> MinAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation(); // ITM-613 同 SumAsync
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        object? r = await ExecuteScalarAsync<T>($"SELECT MIN({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        object? r = await ExecuteAggregateScalarAsync<T>("MIN", expression, ct).ConfigureAwait(false);
         // ITM-533: 补 InvariantCulture，与 ScalarAsync 一致。
         return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue), System.Globalization.CultureInfo.InvariantCulture);
     }
@@ -73,9 +79,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>AVG 聚合。空表/全过滤时 AVG 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
     public async ValueTask<double> AvgAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation(); // ITM-613 同 SumAsync
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn)) throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
-        object? r = await ExecuteScalarAsync<T>($"SELECT AVG({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}", expression, ct).ConfigureAwait(false);
+        object? r = await ExecuteAggregateScalarAsync<T>("AVG", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? 0d : Convert.ToDouble(r, System.Globalization.CultureInfo.InvariantCulture);
     }
 
