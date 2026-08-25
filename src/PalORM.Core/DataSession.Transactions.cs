@@ -194,4 +194,47 @@ public sealed partial class DataSession<TProvider>
             }
         }
     }
+
+    /// <summary>事务作用域内核（Bulk 家族共享，v5.4 精炼 L1）——复用会话活动事务或自开事务，
+    /// 统一承载"commit / rollback-preserving / RestoreTransaction / 释放"四段骨架。
+    /// 此前该骨架在 BulkDelete/BulkUpdateRowByRow/BulkUpdateBatch/BulkMerge 四处逐字复制，
+    /// 是清理链修一处漏一处的温床。
+    /// <para><b>语义契约</b>: work 仅在成功路径返回；自开事务由本内核提交，异常路径回滚并
+    /// 重抛主异常，finally 先还原登记再释放事务（与 WithTransaction 同序，ITM-704 嵌套保证）。
+    /// 提交后的收尾动作（如 ITM-556 的 version 批量回填）应在内核返回后执行——仅成功路径可达。</para>
+    /// <para><see cref="QueryBuilderExtensions.ToPageAsync"/> 有意不走本内核：其自开事务需
+    /// honoring 会话隔离级别并经 PublishTransaction 登记（r9-S2/ITM-649），机制不同，
+    /// 强行统一需策略参数化反而劣化可读性。</para></summary>
+    private async ValueTask<T> RunInTransactionScopeAsync<T>(
+        object? operationOwner,
+        Func<DbTransaction, CancellationToken, Task<T>> work,
+        CancellationToken ct)
+    {
+        DbTransaction? previousTransaction = GetActiveTransaction();
+        DbTransaction transaction = previousTransaction
+            ?? await BeginTransactionCoreAsync(
+                null, operationOwner, ct).ConfigureAwait(false);
+        bool ownsTransaction = previousTransaction is null;
+        Exception? primaryException = null;
+        try
+        {
+            T result = await work(transaction, ct).ConfigureAwait(false);
+            if (ownsTransaction)
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return result;
+        }
+        catch (Exception exception)
+        {
+            primaryException = exception;
+            if (ownsTransaction)
+                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            _operationState.RestoreTransaction(transaction, previousTransaction);
+            if (ownsTransaction)
+                await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
+        }
+    }
 }

@@ -53,76 +53,56 @@ public partial class DataSession<TProvider>
             ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
             : "";
         const int batchSize = 500;
-        long total = 0;
-        DbTransaction? previousTransaction = GetActiveTransaction();
-        DbTransaction tran = previousTransaction
-            ?? await BeginTransactionCoreAsync(
-                null, operation.Owner, ct).ConfigureAwait(false);
-        bool ownsTransaction = previousTransaction is null;
-        Exception? primaryException = null;
-        // ITM-676：scratch 声明在 try 前、创建在 try 内——CreateCommand 抛异常时 finally
-        // 仍执行 RestoreTransaction 与事务释放（此前创建位于 try 之外，泄漏窗口）。
-        DbCommand? scratch = null;
-        try
-        {
-            // R10 修复：scratch 命令跨批次复用——替代每批 CreateCommand（对齐 MultiValueBulkInsert rowCommand 模式）。
-            scratch = CreateCommand();
-            for (int start = 0; start < keys.Count; start += batchSize)
+        // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
+        // RunInTransactionScopeAsync 单点。
+        return await RunInTransactionScopeAsync(
+            operation.Owner,
+            async (tran, token) =>
             {
-                int end = Math.Min(start + batchSize, keys.Count);
-                int batchLen = end - start;
-                var placeholders = new string[batchLen];
-                for (int index = 0; index < batchLen; index++)
-                    placeholders[index] = TProvider.GetParameterPlaceholder(index);
-
-                await using DbCommand cmd = CreateCommand();
-                cmd.Transaction = tran;
-                string predicate =
-                    $"{quotedPrimaryKey} IN ({string.Join(", ", placeholders)})";
-                cmd.CommandText = isSoftDelete
-                    ? $"UPDATE {quotedTable} SET {TProvider.QuoteIdentifier("deleted_at")} = " +
-                      $"{TProvider.CurrentTimestampExpression} WHERE {predicate} AND " +
-                      $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}"
-                    : $"DELETE FROM {quotedTable} WHERE {predicate}{tenantFilter}";
-
-                // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
-                // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
-                // 经暂存命令中转取值，按批内序号重建参数。
-                for (int index = 0; index < batchLen; index++)
+                // ITM-676 等价保持：scratch 在作用域内创建——创建失败时内核 finally
+                // 仍执行 Restore+事务释放；await using 覆盖批间清理。
+                // R10：scratch 跨批次复用（对齐 MultiValueBulkInsert rowCommand 模式）。
+                await using DbCommand scratch = CreateCommand();
+                long total = 0;
+                for (int start = 0; start < keys.Count; start += batchSize)
                 {
-                    scratch.Parameters.Clear();
-                    bindKey(scratch, keys[start + index]);
-                    if (scratch.Parameters.Count != 1)
-                        throw new InvalidOperationException(
-                            $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
+                    int end = Math.Min(start + batchSize, keys.Count);
+                    int batchLen = end - start;
+                    var placeholders = new string[batchLen];
+                    for (int index = 0; index < batchLen; index++)
+                        placeholders[index] = TProvider.GetParameterPlaceholder(index);
 
-                    cmd.Parameters.Add(TProvider.CreateParameter(
-                        placeholders[index], scratch.Parameters[0].Value));
+                    await using DbCommand cmd = CreateCommand();
+                    cmd.Transaction = tran;
+                    string predicate =
+                        $"{quotedPrimaryKey} IN ({string.Join(", ", placeholders)})";
+                    cmd.CommandText = isSoftDelete
+                        ? $"UPDATE {quotedTable} SET {TProvider.QuoteIdentifier("deleted_at")} = " +
+                          $"{TProvider.CurrentTimestampExpression} WHERE {predicate} AND " +
+                          $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}"
+                        : $"DELETE FROM {quotedTable} WHERE {predicate}{tenantFilter}";
+
+                    // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
+                    // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
+                    // 经暂存命令中转取值，按批内序号重建参数。
+                    for (int index = 0; index < batchLen; index++)
+                    {
+                        scratch.Parameters.Clear();
+                        bindKey(scratch, keys[start + index]);
+                        if (scratch.Parameters.Count != 1)
+                            throw new InvalidOperationException(
+                                $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
+
+                        cmd.Parameters.Add(TProvider.CreateParameter(
+                            placeholders[index], scratch.Parameters[0].Value));
+                    }
+                    BindDefaultFilterParameters<T>(cmd);
+
+                    total += await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
                 }
-                BindDefaultFilterParameters<T>(cmd);
-
-                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-            if (ownsTransaction)
-                await tran.CommitAsync(ct).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            primaryException = exception;
-            if (ownsTransaction)
-                await TransactionCleanup.RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
-            throw;
-        }
-        finally
-        {
-            if (scratch is not null)
-                await scratch.DisposeAsync().ConfigureAwait(false);
-            _operationState.RestoreTransaction(
-                tran, previousTransaction);
-            if (ownsTransaction)
-                await TransactionCleanup.DisposeTransactionPreservingAsync(tran, primaryException).ConfigureAwait(false);
-        }
-        return total;
+                return total;
+            },
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>批量更新。复用源生成 UPDATE 与并发语义，整个输入在同一事务内执行。
@@ -143,43 +123,33 @@ public partial class DataSession<TProvider>
         return await ExecuteBulkUpdateRowByRowAsync<T>(entities, operation.Owner, ct).ConfigureAwait(false);
     }
 
-    /// <summary>BulkUpdate 逐条核心逻辑（不含 EnterOperation）——供 BulkUpdateAsync 和 BulkUpdateBatchAsync SQLite 回退复用。</summary>
+    /// <summary>BulkUpdate 逐条核心逻辑（不含 EnterOperation）——供 BulkUpdateAsync 和 BulkUpdateBatchAsync SQLite 回退复用。
+    /// v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。</summary>
     private async ValueTask<long> ExecuteBulkUpdateRowByRowAsync<T>(
         IReadOnlyList<T> entities, object? operationOwner, CancellationToken ct)
         where T : class, new()
     {
-        DbTransaction? previousTransaction = GetActiveTransaction();
-        DbTransaction transaction = previousTransaction
-            ?? await BeginTransactionCoreAsync(null, operationOwner, ct).ConfigureAwait(false);
-        bool ownsTransaction = previousTransaction is null;
-        long total = 0;
-        Exception? primaryException = null;
-        List<Action> deferredVersionIncrements = [];
-        try
-        {
-            foreach (T entity in entities)
+        var (total, deferredVersionIncrements) = await RunInTransactionScopeAsync(
+            operationOwner,
+            async (transaction, token) =>
             {
-                total += await UpdateCoreAsync(
-                    entity, operationOwner, ct, deferredVersionIncrements).ConfigureAwait(false);
-            }
-            if (ownsTransaction)
-                await transaction.CommitAsync(ct).ConfigureAwait(false);
-            foreach (Action increment in deferredVersionIncrements) increment();
-            return total;
-        }
-        catch (Exception exception)
-        {
-            primaryException = exception;
-            if (ownsTransaction)
-                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
-            throw;
-        }
-        finally
-        {
-            _operationState.RestoreTransaction(transaction, previousTransaction);
-            if (ownsTransaction)
-                await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
-        }
+                long total = 0;
+                List<Action> increments = [];
+                foreach (T entity in entities)
+                {
+                    total += await UpdateCoreAsync(
+                        entity, operationOwner, token, increments).ConfigureAwait(false);
+                }
+                return (total, increments);
+            },
+            ct).ConfigureAwait(false);
+
+        // ITM-556：内存 version 回填在提交成功后统一执行——中途冲突整批回滚时，
+        // 已成功条目的内存状态与 DB 保持一致，重试不产生假冲突。置于内核之外：
+        // 仅成功提交路径可达此处（复用外部事务时回填发生在本方法返回前，
+        // 调用方随后回滚该外部事务的既有语义不变）。
+        foreach (Action increment in deferredVersionIncrements) increment();
+        return total;
     }
 
     /// <summary>v5.0 阶段 4.3b：批量更新（单语句批量 UPDATE，方案 Y 严格版）。
@@ -230,37 +200,21 @@ public partial class DataSession<TProvider>
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
         int rowsPerBatch = Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1));
 
-        DbTransaction? previousTransaction = GetActiveTransaction();
-        DbTransaction tran = previousTransaction
-            ?? await BeginTransactionCoreAsync(null, operation.Owner, ct).ConfigureAwait(false);
-        bool ownsTransaction = previousTransaction is null;
-        Exception? primaryException = null;
-        try
-        {
-            long totalAffected = 0;
-            for (int batchStart = 0; batchStart < entities.Count; batchStart += rowsPerBatch)
+        // v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。
+        return await RunInTransactionScopeAsync(
+            operation.Owner,
+            async (tran, token) =>
             {
-                int batchEnd = Math.Min(batchStart + rowsPerBatch, entities.Count);
-                totalAffected += await ExecuteBatchUpdateAsync(
-                    entities, batchStart, batchEnd, metadata, ctx, tran, ct).ConfigureAwait(false);
-            }
-            if (ownsTransaction)
-                await tran.CommitAsync(ct).ConfigureAwait(false);
-            return totalAffected;
-        }
-        catch (Exception exception)
-        {
-            primaryException = exception;
-            if (ownsTransaction)
-                await TransactionCleanup.RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
-            throw;
-        }
-        finally
-        {
-            _operationState.RestoreTransaction(tran, previousTransaction);
-            if (ownsTransaction)
-                await TransactionCleanup.DisposeTransactionPreservingAsync(tran, primaryException).ConfigureAwait(false);
-        }
+                long totalAffected = 0;
+                for (int batchStart = 0; batchStart < entities.Count; batchStart += rowsPerBatch)
+                {
+                    int batchEnd = Math.Min(batchStart + rowsPerBatch, entities.Count);
+                    totalAffected += await ExecuteBatchUpdateAsync(
+                        entities, batchStart, batchEnd, metadata, ctx, tran, token).ConfigureAwait(false);
+                }
+                return totalAffected;
+            },
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>准备批量 UPDATE 上下文：SET 列集取自 CrudMetadata 真源、引号包裹、租户过滤。
@@ -356,39 +310,21 @@ public partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
 
-        DbTransaction? previousTransaction = GetActiveTransaction();
-        DbTransaction transaction = previousTransaction
-            ?? await BeginTransactionCoreAsync(
-                null, operation.Owner, ct).ConfigureAwait(false);
-        bool ownsTransaction = previousTransaction is null;
-        Exception? primaryException = null;
-        try
-        {
-            long affected = 0;
-            foreach (T entity in entities)
+        // v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。
+        return await RunInTransactionScopeAsync(
+            operation.Owner,
+            async (transaction, token) =>
             {
-                await SaveCoreAsync(
-                    entity, operation.Owner, ct).ConfigureAwait(false);
-                affected++;
-            }
-            if (ownsTransaction)
-                await transaction.CommitAsync(ct).ConfigureAwait(false);
-            return affected;
-        }
-        catch (Exception exception)
-        {
-            primaryException = exception;
-            if (ownsTransaction)
-                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
-            throw;
-        }
-        finally
-        {
-            _operationState.RestoreTransaction(
-                transaction, previousTransaction);
-            if (ownsTransaction)
-                await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
-        }
+                long affected = 0;
+                foreach (T entity in entities)
+                {
+                    await SaveCoreAsync(
+                        entity, operation.Owner, token).ConfigureAwait(false);
+                    affected++;
+                }
+                return affected;
+            },
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>种子数据。要求每个实体具有非默认稳定主键，重复执行按主键更新。</summary>
