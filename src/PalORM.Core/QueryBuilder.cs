@@ -30,6 +30,10 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly string _tableName;
     internal readonly IReadOnlyList<string> _columnNames;
     internal readonly SessionOperationState _operationState;
+    /// <summary>会话弹性策略快照（From&lt;T&gt;() 时捕获，与 _commandTimeout 同口径）——
+    /// 只读执行管线据此决定是否经重试/熔断。WithRetry 等在 From 之后调用不回灌已存在的
+    /// builder（门禁禁止与飞行查询并发变更，快照语义见 WithRetry 文档）。</summary>
+    internal readonly ResilienceExecutor _resilience;
     internal TimeSpan _commandTimeout;
     internal List<QueryClause> _clauses;
     internal List<DbParameter> _parameters;
@@ -64,6 +68,7 @@ public struct QueryBuilder<T> where T : class, new()
         _tableName = ctx.TableName;
         _columnNames = ctx.ColumnNames;
         _operationState = ctx.Services.OperationState;
+        _resilience = ctx.Services.Resilience;
         _commandTimeout = ctx.Services.CommandTimeout;
         // v4.1：预分配常见容量，省首次 Add 的 T4 数组扩容
         _clauses = new List<QueryClause>(4);
@@ -507,7 +512,7 @@ public struct QueryBuilder<T> where T : class, new()
         var clone = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
-                _quoteIdentifier, _operationState, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
+                _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
             _tableName, _columnNames, _readConnFactory, _queryCache, _validateColumnOrder, _readConnInitializer))
         {
             _selectColumns = _selectColumns,
@@ -930,7 +935,7 @@ public struct QueryBuilder<T> where T : class, new()
 }
 
 /// <summary>Provider 能力聚合——把 dialect/factory/interceptors/paramFactory/quoteIdentifier/
-/// operationState/commandTimeout 七项打包为单参数，消除 QueryBuilder 14 参 ctor 的 S107 警告。
+/// operationState/resilience/commandTimeout 八项打包为单参数，消除 QueryBuilder 14 参 ctor 的 S107 警告。
 /// 一次构造，多个 QueryBuilder 实例共享。</summary>
 internal sealed record QueryBuilderServices<T>(
     SqlDialect Dialect,
@@ -939,6 +944,7 @@ internal sealed record QueryBuilderServices<T>(
     Func<string, object?, DbParameter> ParamFactory,
     Func<string, string> QuoteIdentifier,
     SessionOperationState OperationState,
+    ResilienceExecutor Resilience,
     TimeSpan CommandTimeout,
     System.Data.IsolationLevel? IsolationLevel = null)  // r5-S2：会话隔离级别透传（ToPageAsync 自开事务 honoring WithIsolationLevel）
     where T : class, new();

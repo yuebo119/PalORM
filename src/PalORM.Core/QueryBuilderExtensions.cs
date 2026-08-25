@@ -47,27 +47,50 @@ public static class QueryBuilderExtensions
         bool needStopwatch = observed || interceptors.Count > 0;
         Stopwatch? sw = needStopwatch ? Stopwatch.StartNew() : null;
         string outcome = "error";
+        // v5.4 弹性接入（评审 P1-a）：WithRetry/WithCircuitBreaker 此前对内置管线无效。
+        // 只读 SELECT 管线现经会话弹性策略执行。接入条件：
+        // ① 命令不带事务——事务内重试会在语句失败后二次失败（如 PG aborted transaction）
+        //   并以次生异常掩盖根因，且跨尝试的快照语义不成立；
+        // ② 策非直通（零重试且熔断禁用）——保持 Testing 预设与默认直通路径零开销。
+        // 写入路径（ExecuteNonQueryAsync/Bulk/StoredProc/原始 SQL 家族）维持直连：
+        // 重试非幂等写有重复执行风险（ITM-310 契约），显式需求请用 ExecuteWithResilience 包裹。
+        DbTransaction? boundTransaction = builder.GetActiveTransaction();
+        ResilienceExecutor resilience = builder._resilience;
+        bool resilient = boundTransaction is null && !resilience.IsPassThrough;
+
+        // 单次尝试内核——每次重试重建连接租约/命令/读取器；缓存写入仅在成功尝试发生；
+        // 拦截器 OnBefore/OnError 按尝试触发（失败的尝试确实发生了），OnAfter 仅成功尝试。
+        async Task<List<T>> ExecuteCoreAsync(CancellationToken token)
+        {
+            await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(false, token).ConfigureAwait(false);
+            await using DbCommand cmd = lease.Connection.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+            cmd.Transaction = boundTransaction;
+            AddParameters(cmd, parameters);
+            // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
+            NotifyInterceptorsOnBefore(interceptors, context);
+            await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
+            // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
+            List<T> list = builder._take.HasValue ? new(builder._take.Value) : new List<T>(16);
+            while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
+            NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
+            // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
+            if (builder._cacheKey is not null) builder._queryCache.Set(builder._cacheKey, new List<T>(list), builder._cacheTtl);
+            return list;
+        }
+
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =
                 builder._operationState.Enter(operationOwner);
-            await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(false, ct).ConfigureAwait(false);
-            await using DbCommand cmd = lease.Connection.CreateCommand();
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            cmd.Transaction = builder.GetActiveTransaction();
-            AddParameters(cmd, parameters);
-            // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
-            NotifyInterceptorsOnBefore(interceptors, context);
-            await PrepareCommandAsync(cmd, builder._prepared, ct).ConfigureAwait(false);
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
-            // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
-            List<T> list = builder._take.HasValue ? new(builder._take.Value) : new List<T>(16);
-            while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(builder._factory(reader));
-            NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
-            // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
-            if (builder._cacheKey is not null) builder._queryCache.Set(builder._cacheKey, new List<T>(list), builder._cacheTtl);
+            // 操作门禁横跨全部重试尝试持有——一次用户操作仍是一次门禁占用，
+            // 与 SessionOperationState 的单活动操作契约一致。
+            List<T> list = resilient
+                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
+                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
             outcome = "success";
             return list;
         }

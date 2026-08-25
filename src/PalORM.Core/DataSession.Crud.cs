@@ -31,7 +31,7 @@ public sealed partial class DataSession<TProvider>
             new QueryBuilderServices<T>(
                 TProvider.Dialect, (Func<DbDataReader, T>)factory, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
-                _operationState, _options.CommandTimeout,
+                _operationState, Volatile.Read(ref _resilience), _options.CommandTimeout,
                 _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
             tableName, columnNames, _readConnFactory,
             _options.QueryCache, _options.ValidateQueryColumnOrder,
@@ -283,26 +283,30 @@ public sealed partial class DataSession<TProvider>
             || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
-        await using DbCommand cmd = CreateCommand();
-        string filter = GetDefaultFilterFragment<T>();
-        // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
-        // key 含 hasTenant + ignoreFilters：两者影响 filter 后缀
-        bool hasTenant = HasTenantFilter<T>();
-        cmd.CommandText = GetByKeySqlCache.GetOrAdd(
-            (typeof(T), TProvider.Dialect, hasTenant, !_ignoreFilters),
-            _ =>
-            {
-                string selectColumns = GetSelectColumns<T>(columnNames);
-                string pkColumn = GetPkColumn<T>();
-                return $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
-            });
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindGeneratedKeyParameter<T>(cmd, key);
-        BindDefaultFilterParameters<T>(cmd);
+        // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）
+        return await ExecuteReadPipelineAsync(async token =>
+        {
+            await using DbCommand cmd = CreateCommand();
+            string filter = GetDefaultFilterFragment<T>();
+            // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
+            // key 含 hasTenant + ignoreFilters：两者影响 filter 后缀
+            bool hasTenant = HasTenantFilter<T>();
+            cmd.CommandText = GetByKeySqlCache.GetOrAdd(
+                (typeof(T), TProvider.Dialect, hasTenant, !_ignoreFilters),
+                _ =>
+                {
+                    string selectColumns = GetSelectColumns<T>(columnNames);
+                    string pkColumn = GetPkColumn<T>();
+                    return $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
+                });
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters<T>(cmd);
 
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        return await reader.ReadAsync(ct).ConfigureAwait(false)
-            ? ((Func<DbDataReader, T>)factory)(reader) : default;
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            return await reader.ReadAsync(token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)factory)(reader) : default;
+        }, ct).ConfigureAwait(false);
     }
 
     /// <summary>查询全表。</summary>
@@ -317,20 +321,24 @@ public sealed partial class DataSession<TProvider>
             || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
-        await using DbCommand cmd = CreateCommand();
-        // v4.1：缓存 selectColumns
-        string selectColumns = GetSelectColumns<T>(columnNames);
-        cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindDefaultFilterParameters<T>(cmd);
+        // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略
+        return await ExecuteReadPipelineAsync(async token =>
+        {
+            await using DbCommand cmd = CreateCommand();
+            // v4.1：缓存 selectColumns
+            string selectColumns = GetSelectColumns<T>(columnNames);
+            cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            BindDefaultFilterParameters<T>(cmd);
 
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容。
-        List<T> list = new(16);
-        var tf = (Func<DbDataReader, T>)factory;
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            list.Add(tf(reader));
-        return list;
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容。
+            List<T> list = new(16);
+            var tf = (Func<DbDataReader, T>)factory;
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+                list.Add(tf(reader));
+            return list;
+        }, ct).ConfigureAwait(false);
     }
 
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。</summary>

@@ -12,6 +12,12 @@ public sealed class ResilienceExecutor
     private readonly Func<Exception, bool> _isTransient;
     private readonly CircuitBreaker _circuitBreaker;
 
+    /// <summary>策略直通判定——零重试且熔断禁用时，内置只读管线跳过执行器
+    /// 以保持热路径零额外开销（链接 CTS 分配/状态机锁）。
+    /// <para><b>注意</b>：仅内部管线短路使用；公共 <see cref="ExecuteAsync{T}"/> 不短路——
+    /// 显式调用方已声明要弹性语义（含命令超时包装），即使配置为零也保持行为一致。</para></summary>
+    internal bool IsPassThrough => _maxRetries == 0 && !_circuitBreaker.IsEnabled;
+
     /// <summary>按配置创建执行器——重试/超时/熔断参数取自 <paramref name="options"/>，
     /// 瞬时异常判定默认为 <see cref="System.Data.Common.DbException.IsTransient"/>。</summary>
     public ResilienceExecutor(DbOptions options)

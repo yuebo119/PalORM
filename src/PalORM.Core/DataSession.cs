@@ -233,7 +233,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return this;
     }
 
-    /// <summary>启用重试策略——仅重试 Provider 判定的瞬时数据库故障和内部命令超时，并重置当前弹性策略状态。</summary>
+    /// <summary>启用重试策略——仅重试 Provider 判定的瞬时数据库故障和内部命令超时，并重置当前弹性策略状态。
+    /// <para><b>作用域（v5.4 起）</b>: 覆盖 ① 连接建立（<see cref="CreateAsync"/> 自有循环）
+    /// ② 只读查询内置管线——From&lt;T&gt;() SELECT 家族（ToList/First/Single）、GetAsync、GetAllAsync、
+    /// Count/Sum/Max/Min/Avg。<b>不覆盖</b>写入路径（Insert/Update/Delete/Save/ExecuteNonQueryAsync/
+    /// Bulk/StoredProc/原始 SQL 家族）与事务内查询——非幂等写重试有重复执行风险
+    /// （<see cref="ResilienceExecutor.ExecuteAsync{T}"/> 的幂等性契约），事务内重试会以次生异常
+    /// 掩盖根因。此类路径的显式弹性需求用 <see cref="ExecuteWithResilience{T}"/> 包裹。</para>
+    /// <para><b>快照语义</b>: 已通过 From&lt;T&gt;() 创建的 builder 捕获创建时的策略实例，
+    /// 本方法不回灌既有 builder（配置变更受操作门禁保护，无并发撕裂）。</para></summary>
     public DataSession<TProvider> WithRetry(int maxRetries, Func<int, TimeSpan>? backoff = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maxRetries);
@@ -242,6 +250,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>启用熔断器——连续最终失败达到阈值后快速失败，并重置当前弹性策略状态。
+    /// <para><b>作用域（v5.4 起）</b>: 与 <see cref="WithRetry"/> 同口径——覆盖连接建立与
+    /// 只读查询内置管线；写入路径与事务内查询不计入熔断也不受开闸影响（直连语义）。</para>
     /// <para>ITM-582: <paramref name="failureThreshold"/> = 0 表示<b>禁用熔断</b>（非"零容忍
     /// 立即熔断"）——与 DbOptions.CircuitBreakerThreshold 默认值语义一致。</para></summary>
     public DataSession<TProvider> WithCircuitBreaker(int failureThreshold, TimeSpan resetAfter)
@@ -432,6 +442,23 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     private DbTransaction? GetActiveTransaction()
         => _operationState.GetActiveTransaction();
+
+    /// <summary>只读查询的弹性执行入口——WithRetry/WithCircuitBreaker 在内置管线的接入点
+    /// （v5.4 行为变更，评审 P1-a：此前弹性配置对内置管线无效）。
+    /// <para><b>接入条件</b>: 命令不带事务且策略非直通。事务内重试会以次生异常掩盖根因
+    /// （如 PG aborted transaction），且跨重试的一致性快照语义不成立——事务内读取保持直连。</para>
+    /// <para><b>覆盖面</b>: GetAsync/GetAllAsync/聚合五兄弟与 From&lt;T&gt;() SELECT 管线。
+    /// 连接建立的重试由 <see cref="CreateAsync"/> 自有循环承担；写入/Bulk/StoredProc/
+    /// 原始 SQL 家族维持直连（幂等性契约见 <see cref="ResilienceExecutor.ExecuteAsync{T}"/>，
+    /// 显式需求用 <see cref="ExecuteWithResilience{T}"/> 包裹）。</para></summary>
+    private async ValueTask<T> ExecuteReadPipelineAsync<T>(
+        Func<CancellationToken, Task<T>> attemptCore, CancellationToken ct)
+    {
+        ResilienceExecutor executor = Volatile.Read(ref _resilience);
+        if (executor.IsPassThrough || GetActiveTransaction() is not null)
+            return await attemptCore(ct).ConfigureAwait(false);
+        return await executor.ExecuteAsync(attemptCore, ct).ConfigureAwait(false);
+    }
 
     /// <summary>将复合格式项映射为参数名，参数值保持原始对象。</summary>
     private static string FormatSqlWithParameters(FormattableString sql)
