@@ -75,61 +75,20 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>事务包裹执行——自动 commit/rollback。callback 内仅支持顺序数据库操作，不支持嵌套事务。</summary>
-    public async ValueTask WithTransaction(Func<CancellationToken, Task> action,
+    public ValueTask WithTransaction(Func<CancellationToken, Task> action,
         IsolationLevel? level = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(action);
-        object owner = _operationState.EnterTransactionFlow();
-        DbTransaction? previousTransaction = GetActiveTransaction();
-        DbTransaction? transaction = null;
-        Exception? primaryException = null;
-        try
-        {
-            transaction = await BeginTransactionAsync(level, ct).ConfigureAwait(false);
-            try
+        // v5.4 精炼（L2）：无返回值重载委托泛型核心——此前两份 ~60 行逐字复制，
+        // 是"commit/rollback/清理链修一处漏一处"的温床。包装委托每次事务分配一个，
+        // 非热路径，可忽略。ValueTask<T> 无隐式转换，经 new ValueTask(Task) 桥接。
+        return new ValueTask(WithTransaction<object?>(
+            async token =>
             {
-                await action(ct).ConfigureAwait(false);
-                await _operationState.DisposeTransactionResourcesAsync(null)
-                    .ConfigureAwait(false);
-                using SessionOperationState.SessionOperationLease operation =
-                    _operationState.EnterTransactionOperation();
-                await transaction.CommitAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                primaryException = exception;
-                await _operationState.DisposeTransactionResourcesAsync(exception)
-                    .ConfigureAwait(false);
-                await RollbackTransactionPreservingAsync(transaction, exception)
-                    .ConfigureAwait(false);
-                throw;
-            }
-        }
-        finally
-        {
-            try
-            {
-                if (transaction is not null)
-                {
-                    // r19/ITM-704：RestoreTransaction 若抛异常（如 previousTransaction 状态访问失败），
-                    // 事务释放仍必须执行——嵌套 finally 保证清理链不可跳步。
-                    try
-                    {
-                        _operationState.RestoreTransaction(
-                            transaction, previousTransaction);
-                    }
-                    finally
-                    {
-                        await TransactionCleanup.DisposeTransactionPreservingAsync(
-                            transaction, primaryException).ConfigureAwait(false);
-                    }
-                }
-            }
-            finally
-            {
-                _operationState.ExitTransactionFlow(owner);
-            }
-        }
+                await action(token).ConfigureAwait(false);
+                return null;
+            },
+            level, ct).AsTask());
     }
 
     /// <summary>事务包裹执行（带返回值）。callback 内仅支持顺序数据库操作，不支持嵌套事务。</summary>
