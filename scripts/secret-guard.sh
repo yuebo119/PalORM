@@ -9,6 +9,10 @@
 #   --range BASE..HEAD  — 扫描提交范围内的新增/修改文件（CI 场景，右侧为内容源）
 # 自测: bash scripts/secret-guard.sh --selftest
 # ═══════════════════════════════════════════════════════════════
+# T-DEF-1 豁免登记（v7.2.1）：有意不用 -e——本脚本是聚合计数器模式：
+# 逐文件收集违规最后统一汇总退出码；-e 会让 grep 无匹配（返回 1）的
+# 判定流中途杀死脚本，破坏"扫描完报总数"语义。退出路径显式完备：
+# selftest → exit self_fail；主流程 → FAIL>0 ? exit 1 : exit 0。
 set -uo pipefail
 
 RED='\033[0;31m'

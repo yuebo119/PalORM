@@ -16,6 +16,7 @@ public sealed class IdentifierConsistencyTests
     public async Task ControlCharacters_RejectedByBothRuntimeAndSourceGen()
     {
         // C0（U+0000-U+001F）+ DEL（U+007F）+ C1（U+0080-U+009F）：两侧必须一致拒绝
+        List<char> controlViolations = [];
         for (int codeUnit = 0; codeUnit <= 0xFFFF; codeUnit++)
         {
             char ch = (char)codeUnit;
@@ -25,13 +26,11 @@ public sealed class IdentifierConsistencyTests
             bool runtimeRejects = RuntimeRejects(ch);
             bool sourceGenRejects = SourceGenRejects(ch);
             if (!runtimeRejects || !sourceGenRejects)
-                throw new InvalidOperationException(
-                    $"U+{codeUnit:X4} 位于控制字符区间但未双侧拒绝" +
-                    $"（runtime={runtimeRejects}, sourceGen={sourceGenRejects}）——" +
-                    "IdentifierSafety 与 SourceGen 守卫发生漂移，须同步修复两侧");
+                controlViolations.Add(ch);
         }
 
-        await Task.CompletedTask;
+        // 失败时 TUnit 会打印集合内容（漂移码位清单）
+        await Assert.That(controlViolations).IsEmpty();
     }
 
     [Test]
@@ -49,14 +48,7 @@ public sealed class IdentifierConsistencyTests
                 mismatches.Add(ch);
         }
 
-        if (mismatches.Count > 0)
-        {
-            throw new InvalidOperationException(
-                $"{mismatches.Count} 个码位两侧判定不一致（首个 U+{(int)mismatches[0]:X4}）——" +
-                "IdentifierSafety 与 SourceGen 守卫发生漂移，须同步修复两侧");
-        }
-
-        await Task.CompletedTask;
+        await Assert.That(mismatches).IsEmpty();
     }
 
     [Test]
