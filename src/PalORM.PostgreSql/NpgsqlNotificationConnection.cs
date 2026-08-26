@@ -37,6 +37,8 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
         }
         catch
         {
+            // 非 NpgsqlException 路径同 ITM-638：Open 失败自清理后重抛（保留原始异常，
+            // 不吞不换型——与上方 catch 分支同一清理契约，仅异常类型过滤不同）。
             await _connection.DisposeAsync().ConfigureAwait(false);
             throw;
         }

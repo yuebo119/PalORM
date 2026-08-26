@@ -112,6 +112,8 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         }
         catch
         {
+            // 启动失败路径：等待 RunAsync 内部收尾（其自管 CTS/连接清理与错误上报），
+            // 再重抛原始异常——此处不吞不改型，仅保证 started 未触发时后台任务不悬空。
             await runTask.ConfigureAwait(false);
             throw;
         }
