@@ -184,6 +184,11 @@ jobs:
             - name: Run stub gate
               run: bash scripts/stub-check.sh
 
+            - name: Run quality-script fixtures
+              # v7.2 接线：夹具在 CI 自动跳过 .ai 段（本地工具不入库），
+              # 仍回归仓库内防线——stub-check / SDK 固定 / secret-guard 自测
+              run: bash scripts/test-quality-scripts.sh
+
     aot-sqlite:
         name: SQLite Native AOT
         runs-on: ubuntu-latest

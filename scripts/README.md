@@ -11,7 +11,7 @@
 |------|------|:---:|
 | `secret-guard.sh` | 敏感信息拦截（40 类；默认 staged 模式，`--range BASE..HEAD` 供 CI 扫差异集） | ✅ pre-commit + ci.yml security |
 | `stub-check.sh` | Stub 方法门禁（检测 `throw new NotImplemented`） | ✅ pre-commit + ci.yml gate |
-| `test-quality-scripts.sh` | 脚本质量自检 | ❌ 手动——依赖 `.ai/scripts/`（本地工具），fresh clone 不完整，未接入 CI |
+| `test-quality-scripts.sh` | 脚本质量自检（CI 模式自动跳过 `.ai` 段，仍回归 stub/SDK/secret-guard 三段） | ✅ pre-commit + ci.yml gate |
 
 ## 性能基准
 
