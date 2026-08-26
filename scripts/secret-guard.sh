@@ -23,6 +23,9 @@ FILE_BLACKLIST='\.env$|\.env\.[^e]|\.pem$|\.key$|\.pfx$|\.p12$|\.jks$|\.keystore
 # 内容规则变量化（B41）：检查逻辑与 --selftest 共用同一正则，防双源漂移
 RULE_CONNSTRING_PASSWORD='(Server|Host|Data[[:space:]]Source)[[:space:]]*=[[:space:]]*[^;]+;.*Password[[:space:]]*=[[:space:]]*[^;."]+'
 RULE_INTERNAL_DOMAIN='\.(internal|local|corp|intranet|private)([:[:space:]]|$)'
+# 白名单过滤正则变量化（B53）：与 --selftest 过滤层向量共用——此前内联于 check_content，
+# 白名单改动无任何自测覆盖（本次 uint64 常量豁免即属该盲区）
+WHITELIST_FILTER='Password=\*\*\*|Password=xxx|Password=<password>|Password=change-me|Password=\$\{|PALORM_.*_PASSWORD|pwd=\|connectionString|example|placeholder|sample|template|gate-check\.sh|secret-guard\.sh|安全红线|YOUR_.*_HERE|REPLACE_ME|INSERT_|TO_BE_|FIXME|TODO|18446744073709551615'
 
 # ─── 自测模式（B41）：误报向量必须放行、真阳性必须拦截 ───
 if [ "${1:-}" = "--selftest" ]; then
@@ -51,8 +54,19 @@ if [ "${1:-}" = "--selftest" ]; then
         echo "SELFTEST FAIL: 子路径 nuget.config 应在黑名单"
         self_fail=1
     fi
+    # ── 白名单过滤层双向向量（B53：过滤层与规则层同等回归）──
+    # 期望被过滤：uint64 LIMIT 常量行必须被 WHITELIST_FILTER 吸收（过滤后无残留）
+    if printf '%s' 'sb.Append(", 18446744073709551615");' | grep -viE "$WHITELIST_FILTER" | grep -q .; then
+        echo "SELFTEST FAIL: uint64 LIMIT 常量行应被白名单过滤"
+        self_fail=1
+    fi
+    # 期望穿透白名单：真阳性连接串不得被白名单误滤（否则规则层永远看不到）
+    if ! printf '%s' 'Host=prod.db;Port=5432;Password=realpass123' | grep -viE "$WHITELIST_FILTER" | grep -q .; then
+        echo "SELFTEST FAIL: 真阳性连接串不应被白名单误滤"
+        self_fail=1
+    fi
     if [ "$self_fail" -eq 0 ]; then
-        echo "SELFTEST PASS: secret-guard 7 向量（2 误报 + 3 真阳性 + 2 文件名豁免）"
+        echo "SELFTEST PASS: secret-guard 自测全通过（2 误报 + 3 真阳性 + 2 文件名豁免 + 2 白名单过滤层 B53）"
     fi
     exit "$self_fail"
 fi
@@ -65,12 +79,11 @@ CONTENT_REV=":"
 check_content() {
     local file="$1"
     local content
-    # 白名单过滤（占位符/示例/环境变量引用）
+    # 白名单过滤（占位符/示例/环境变量引用）——正则来自 WHITELIST_FILTER（B53 变量化）
     # 18446744073709551615：MySQL LIMIT 裸 OFFSET 的 uint64 上限惯用常量（QueryBuilder.cs），
     # 20 位连续数字会误触规则 38 身份证号——按行豁免；同行混入其他敏感内容时整行走白名单，
     # 属已接受的窄边界（2026-08-25 提交实证）
-    content=$(git show "${CONTENT_REV}${file}" 2>/dev/null | grep -viE \
-        'Password=\*\*\*|Password=xxx|Password=<password>|Password=change-me|Password=\$\{|PALORM_.*_PASSWORD|pwd=\|connectionString|example|placeholder|sample|template|gate-check\.sh|secret-guard\.sh|安全红线|YOUR_.*_HERE|REPLACE_ME|INSERT_|TO_BE_|FIXME|TODO|18446744073709551615' \
+    content=$(git show "${CONTENT_REV}${file}" 2>/dev/null | grep -viE "$WHITELIST_FILTER" \
         || true)
     [ -z "$content" ] && return 0
 

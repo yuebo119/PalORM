@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # 质量脚本的固定回归夹具。验证成功与故障输入的退出码和计数。
-# AI 系统脚本在 .ai/scripts/（本地工具，不入仓库）。CI 上不存在时自动跳过。
+# AI 系统脚本在 .ai/scripts/（本地工具，不入仓库）：存在时全量回归；
+# 不存在时（fresh clone / CI）跳过 AI 段、仍回归仓库内防线
+# （stub-check / SDK pin / secret-guard 自测）——v7.2 B 系列接线收口：
+# 此前 skip_ai 只打印不生效，后续段在 fresh clone 必挂。
 
 set -euo pipefail
 
@@ -9,14 +12,15 @@ cd "$ROOT"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# AI 脚本路径（本地存在时测试，不存在时跳过）
+# AI 脚本路径（本地存在时测试，不存在时跳过对应段）
 AI_SCRIPTS="$ROOT/.ai/scripts"
 skip_ai() { [ ! -d "$AI_SCRIPTS" ]; }
 
 if skip_ai; then
-    printf 'SKIP: .ai/scripts/ not found (CI mode)\n'
+    printf 'SKIP: .ai/scripts/ not found — AI 段跳过，仅回归仓库内防线\n'
 fi
 
+if ! skip_ai; then
 printf '─── verify-action-items ───\n'
 printf '# fixture\n`README.md`\n' > "$TMP/action-pass.md"
 printf '# fixture\n`missing-file.yml`\n' > "$TMP/action-fail-file.md"
@@ -42,6 +46,7 @@ if ! grep -q '缺失：1' "$TMP/action-fail-symbol.log"; then
     exit 1
 fi
 printf 'PASS verify-action-items\n'
+fi
 
 printf '\n─── stub-check ───\n'
 mkdir -p "$TMP/clean" "$TMP/stub"
@@ -58,6 +63,7 @@ if ! grep -q '发现 1 个' "$TMP/stub-fail.log"; then
 fi
 printf 'PASS stub-check\n'
 
+if ! skip_ai; then
 printf '\n─── review-snapshot ───\n'
 bash .ai/scripts/review-snapshot.sh --no-build > "$TMP/snapshot.log"
 if ! grep -q '构建状态' "$TMP/snapshot.log" || ! grep -q '已跳过（--no-build）' "$TMP/snapshot.log"; then
@@ -69,7 +75,9 @@ if grep -q '测试文件：5835' "$TMP/snapshot.log"; then
     exit 1
 fi
 printf 'PASS review-snapshot\n'
+fi
 
+if ! skip_ai; then
 printf '\n─── gate-check G12 ───\n'
 mkdir -p "$TMP/gate/src/Fixture"
 printf '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework><IsAotCompatible>true</IsAotCompatible></PropertyGroup></Project>\n' \
@@ -130,7 +138,9 @@ if ! grep -q 'PASS G12: 禁止公开 static 可写状态' "$TMP/gate-recovered.l
     exit 1
 fi
 printf 'PASS gate-check G12 故障与恢复\n'
+fi
 
+if ! skip_ai; then
 printf '\n─── verify-phase ───\n'
 if bash .ai/scripts/verify-phase.sh invalid > "$TMP/phase.log" 2>&1; then
     printf 'FAIL 非法阶段参数未导致失败\n'
@@ -141,6 +151,7 @@ if ! grep -q '用法' "$TMP/phase.log" || ! grep -q 'phase-number' "$TMP/phase.l
     exit 1
 fi
 printf 'PASS verify-phase 参数失败传播\n'
+fi
 
 printf '\n─── SDK pin ───\n'
 # rollForward: latestMinor 语义——global.json 是下限锚点，实跑 SDK 允许同 band 更高版本
@@ -162,6 +173,7 @@ if [ "$setup_count" -ne "$global_json_count" ]; then
 fi
 printf 'PASS SDK 固定与 CI 一致性\n'
 
+if ! skip_ai; then
 printf '\n─── doc-consistency ───\n'
 if bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-pass.log"; then
     printf 'PASS doc-consistency 8/8\n'
@@ -193,6 +205,7 @@ if ! bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-recover.log"; then
     exit 1
 fi
 printf 'PASS doc-consistency 故障与恢复\n'
+fi
 
 
 printf '─── secret-guard 自测（B41：误报/真阳性双向向量回归）───\n'
