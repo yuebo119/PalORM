@@ -175,7 +175,7 @@ var env = DbOptions.FromEnvironment("PALORM_CONNECTION");
 | `ReadConnectionString` | `string?` | null | 只读副本连接串。配置后 `ForRead()` 自动路由到副本 | |
 | `ConnectionTimeout` | `TimeSpan` | 15s | 连接建立超时（含重试）。超时后抛 `TimeoutException` | |
 | `CommandTimeout` | `TimeSpan` | 30s | 每条 SQL 命令的执行超时。亚秒值向上取整为 1 秒（避免塌缩为 0=无限等待） | |
-| `MaxRetries` | `int` | 3 | 瞬时故障（连接失败/超时/死锁）最大重试次数。0=禁用重试 | |
+| `MaxRetries` | `int` | 3 | 瞬时故障（连接失败/超时/死锁）最大重试次数。0=禁用重试。v5.4 起覆盖只读查询内置管线；写入路径不自动重试 | |
 | `RetryBackoff` | `Func<int, TimeSpan>?` | 指数退避 | 自定义重试间隔（参数=重试次数）。返回负值抛异常 | |
 | `MaxPoolSize` | `int` | 100 | 连接池最大连接数。SQLite 不支持（抛 `NotSupportedException`） | |
 | `PoolIdleTimeoutSeconds` | `int` | 30 | 连接池空闲超时（秒）。超时后空闲连接被关闭 | |
@@ -235,7 +235,7 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | 特性 | **PalORM 5.0** | Dapper 2.1.79 | EF Core 10.0.10 | RepoDb 1.15.1 |
 |------|:---:|:---:|:---:|:---:|
 | **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选（实验性拦截器） | ❌ 实验性，生产不推荐 | ❌ 反射 + IL Emit |
-| **编译时类型诊断** | ✓ 33 条诊断规则（P0 防崩溃 + P1 防静默错误 + 调用级 API 误用） | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
+| **编译时类型诊断** | ✓ 36 条诊断规则（P0 防崩溃 + P1 防静默错误 + 调用级 API 误用） | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
 | **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
 | **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
 | **三方言批量策略** | ✓ COPY / BulkCopy / 多值 | ❌ 无（手写多值 SQL） | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
@@ -314,7 +314,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 ### 事务与弹性
 
-函数式事务 `WithTransaction(callback)` 自动 commit/rollback，支持保存点。`WithRetry` 指数退避重试，`WithCircuitBreaker` 熔断快速失败。
+函数式事务 `WithTransaction(callback)` 自动 commit/rollback，支持保存点。`WithRetry` 指数退避重试，`WithCircuitBreaker` 熔断快速失败——v5.4 起自动覆盖只读查询内置管线（`From<T>()` SELECT 族、`GetAsync`/`GetAllAsync`、聚合）；写入与事务内查询保持直连（幂等性契约），显式弹性用 `ExecuteWithResilience` 包裹。
 
 ### 横切关注点
 
