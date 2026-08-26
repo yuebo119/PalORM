@@ -314,7 +314,18 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 ### 事务与弹性
 
-函数式事务 `WithTransaction(callback)` 自动 commit/rollback，支持保存点。`WithRetry` 指数退避重试，`WithCircuitBreaker` 熔断快速失败——v5.4 起自动覆盖只读查询内置管线（`From<T>()` SELECT 族、`GetAsync`/`GetAllAsync`、聚合）；写入与事务内查询保持直连（幂等性契约），显式弹性用 `ExecuteWithResilience` 包裹。
+函数式事务 `WithTransaction(callback)` 自动 commit/rollback，支持保存点。
+
+弹性策略（`WithRetry` 指数退避 + `WithCircuitBreaker` 熔断）自 v5.4 起**自动覆盖只读查询内置管线**：
+
+| 路径 | 弹性覆盖 | 说明 |
+|------|:---:|------|
+| `From<T>()` SELECT 族（ToList/First/Single）、`GetAsync`/`GetAllAsync`、聚合五兄弟 | ✓ 自动 | 瞬时故障按配置重试并计入熔断；每次重试重建连接 |
+| 连接建立 | ✓ 自动 | `CreateAsync` 自有重试循环（v5.0 起既有行为） |
+| 写入路径（Insert/Update/Delete/Save/Bulk/StoredProc） | ✗ 直连 | 非幂等写自动重试有重复执行风险；显式需求用 `ExecuteWithResilience` 包裹 |
+| 事务内查询 / `ToPageAsync` / 原始 SQL 家族 | ✗ 直连 | 事务内重试以次生异常掩盖根因；原始 SQL 保持直连语义 |
+
+默认 `DbOptions`（MaxRetries=3 / CircuitBreakerThreshold=5）即生效；`Testing` 预设零重试零熔断，测试确定性不受影响。
 
 ### 横切关注点
 
@@ -457,6 +468,30 @@ await db.WithTransaction(async ct =>
     await db.BulkInsertAsync(order.Items, ct);
     await db.ExecuteAsync($"UPDATE inventory SET stock = stock - {order.Items.Count} WHERE product_id = {productId}", ct);
 });
+```
+
+### 弹性重试（v5.4 只读管线）
+
+```csharp
+// 配置一次，只读查询自动获得重试 + 熔断
+await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(
+    DbOptions.Production(connectionString)
+    .WithRetry(maxRetries: 3)
+    .WithCircuitBreaker(failureThreshold: 5, resetAfter: TimeSpan.FromSeconds(30)));
+
+// SELECT 瞬时故障（死锁/超时/连接闪断）自动重试，无需样板代码
+List<Order> recent = await db.From<Order>()
+    .Where($"created_at > {since}")
+    .OrderBy(o => o.CreatedAt)
+    .Take(100)
+    .ToListAsync(ct);
+
+// 非幂等写入不自动重试——显式声明弹性意图
+long affected = await db.ExecuteWithResilience(
+    token => db.From<Order>()
+        .Set(o => o.Status, OrderStatus.Paid)
+        .Where($"id = {orderId}")
+        .ExecuteNonQueryAsync(token), ct);
 ```
 
 ### 多结果集（GridReader）
