@@ -1,7 +1,7 @@
 # PalORM API 参考
 
-> v4.0.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 509 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> v5.3.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
+> 测试: 全仓库 533 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -19,9 +19,10 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 33 条 PALORM 诊断（v5.0 完整化）
+### 编译时验证 — 36 条 PALORM 诊断（v5.0 完整化 + ITM-640 收口）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
+> v7.2 扩充（2026-08-26，ITM-640 收口）：PALORM042-044——生成器 throw/静默跳过的编译期定位面（分工同 022：分析器定位报错，生成器防御性跳过）。
 > 价值分层：P0 防崩溃（throw）/ P1 防静默错误（不 throw 但数据错/安全绕过）/ P2 风格。
 
 | 规则 | 说明 | 层级 |
@@ -53,6 +54,9 @@
 | **PALORM036** | **#nullable disable 下引用类型不生成 IsDBNull 守卫** | **P1** |
 | **PALORM037** | **[Required] + 可空注解矛盾** | **P1** |
 | **PALORM040** | **[TenantAware] 租户列可空（跨租户数据可见）** | **P1** |
+| **PALORM042** | **[Timestamp]+[Computed] 同标（GENERATED 列不得带 DEFAULT）** | **P0** |
+| **PALORM043** | **SQL 标识符含控制字符或为空（表/列/索引/FK 名）** | **P0** |
+| **PALORM044** | **[Computed] 表达式 NUL 或括号不平衡（实体曾被静默跳过）** | **P1** |
 
 ### 基础注解 (22 个)
 
@@ -145,10 +149,10 @@
 
 | API | 说明 |
 |------|------|
-| `.WithRetry(max, backoff?)` | 指数退避重试瞬时故障 |
-| `.WithCircuitBreaker(threshold, resetAfter)` | 熔断器（generation 防陈旧） |
+| `.WithRetry(max, backoff?)` | 指数退避重试瞬时故障。v5.4 起覆盖连接建立与只读查询内置管线（From\<T\>() SELECT 族/GetAsync/GetAllAsync/聚合）；写入与事务内查询不自动重试 |
+| `.WithCircuitBreaker(threshold, resetAfter)` | 熔断器（generation 防陈旧）。作用域同 WithRetry；写入路径不计入熔断 |
 | `.WithTimeout(TimeSpan)` | 命令超时 |
-| `ExecuteWithResilience(operation)` | 手动弹性执行入口 |
+| `ExecuteWithResilience(operation)` | 手动弹性执行入口——任意操作（含非幂等写）的显式弹性通道 |
 
 ### 横切关注点
 

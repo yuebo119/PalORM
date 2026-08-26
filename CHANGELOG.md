@@ -31,6 +31,13 @@
 
 ### 🔧 工程
 
+- **AI 质量系统 v7.2 升级**（lessons B46-B53 八项实践登记 + AF 节 B54-B55 两项质检沉淀，
+  计数修正至 62）：secret-guard 白名单正则变量化并入 --selftest（9 向量）；
+  test-quality-scripts.sh skip_ai 真修复并接入 ci.yml gate（"声称在岗"防线收口）；
+  .githooks 薄包装托管消除 cp 副本漂移
+- **全量质检运行产出修复四则**：G18 门禁词边界化（裸子串误命中 RunInTransactionScopeAsync）、
+  G9 豁免链补检测器自测向量文件、test-gate T-DEF-1 引入带理由豁免表（聚合计数器模式豁免）、
+  IdentifierConsistencyTests 两处零断言改 Assert 形态
 - **源码精炼批次**（评审整改，净 -220 行）：MySQL UPSERT 死代码对删除（UPSERT SQL 收敛
   至生成物单一真源）；WithTransaction 双重载委托泛型核心；聚合 Sum/Max/Min/Avg 共享
   ExecuteAggregateScalarAsync 内核（Count 形态不同保留独立）；Bulk 家族四处事务骨架
