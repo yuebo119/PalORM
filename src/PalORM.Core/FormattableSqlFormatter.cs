@@ -2,7 +2,11 @@ using System.Text;
 
 namespace PalORM;
 
-/// <summary>将复合格式项映射为数据库参数名，不格式化参数值。</summary>
+/// <summary>将复合格式项映射为数据库参数名，不格式化参数值。
+/// <para><b>格式说明符契约（v7.2.1 显式化）</b>: 插值项的格式说明符（如 <c>{0:N2}</c> 的
+/// <c>:N2</c>）被<b>有意忽略</b>——参数化路径下值恒以原始对象绑定（驱动负责类型转换），
+/// 数据库侧不存在 .NET 格式化语义；alignment（<c>{0,5}</c> 逗号后）仍校验合法性但同样不参与
+/// 输出。该契约由 QueryExecutionTests.FormatFormattableSql_ValidCompositeFormat 锁定。</para></summary>
 internal static class FormattableSqlFormatter
 {
     // S1994/S127（for 循环体内修改 stop 变量）在此抑制：
@@ -61,6 +65,7 @@ internal static class FormattableSqlFormatter
                     throw new FormatException("Formattable SQL has an unclosed '{' in its format string.");
                 ReadOnlySpan<char> item = format.AsSpan(index + 1, close - index - 1);
                 int separator = item.IndexOfAny(',', ':');
+                // ':' 后的格式说明符在 item[..separator] 截断处被有意忽略——契约见类 XML doc
                 ReadOnlySpan<char> argumentIndex = separator < 0 ? item : item[..separator];
                 if (!int.TryParse(argumentIndex, out int parsedIndex)
                     || parsedIndex < 0
@@ -70,7 +75,7 @@ internal static class FormattableSqlFormatter
                         $"Formattable SQL contains an invalid argument index '{argumentIndex}' " +
                         $"(argument count: {sql.ArgumentCount}).");
                 }
-                // v4.1：校验 alignment 部分（逗号后）--替代被删除的 CompositeFormat.Parse 的格式验证
+                // v4.1：校验 alignment 部分（逗号后）——替代被删除的 CompositeFormat.Parse 的格式验证
                 if (separator >= 0 && item[separator] == ',')
                 {
                     ReadOnlySpan<char> rest = item[(separator + 1)..];

@@ -63,12 +63,14 @@ public sealed class SqliteProvider : IDbProvider
     /// temp_store=MEMORY（临时表/索引走内存）；
     /// wal_autocheckpoint=1000（WAL 自动检查点，默认即 1000，显式固定防部署漂移）。</para>
     /// <para><b>v5.0 阶段 3.5 mmap_size 条件判断</b>：仅文件数据库追加 mmap_size=268435456（256MB
-    /// mmap I/O），:memory: 数据库跳过（mmap 对纯内存库无收益且某些 SQLite 构建会拒绝）。
-    /// 判据：连接串含 "Mode=Memory" 或 ":memory:"。</para></summary>
+    /// mmap I/O）。</para>
+    /// <para><b>v7.2.1 内存库分支收窄</b>：<c>:memory:</c> 库仅执行 foreign_keys 与 cache_size——
+    /// journal_mode=WAL / synchronous(fsync) / wal_autocheckpoint(检查点) / mmap_size 对无文件
+    /// I/O 的内存库均无语义（SQLite 静默返回不报错但徒增误导）；temp_store 本就以内存为目标。</para></summary>
     public static async Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(connection);
-        // v5.0 阶段 3.5：检测 :memory: 数据库——mmap_size 对纯内存库无意义。
+        // v5.0 阶段 3.5：检测 :memory: 数据库——文件 I/O 治理类 PRAGMA 仅对文件库有意义。
         string cs = connection.ConnectionString;
         bool isInMemory = cs.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase)
             || cs.Contains(":memory:", StringComparison.OrdinalIgnoreCase);
@@ -76,9 +78,7 @@ public sealed class SqliteProvider : IDbProvider
         await using DbCommand command = connection.CreateCommand();
         // 单次往返执行全部 PRAGMA（用分号连接，SQLite 原生支持）。
         command.CommandText = isInMemory
-            ? "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; "
-              + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
-              + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000"
+            ? "PRAGMA foreign_keys = ON; PRAGMA cache_size=-65536"
             : "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; "
               + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
               + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000; "
