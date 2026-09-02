@@ -13,6 +13,7 @@ public sealed class GridReader : IAsyncDisposable
     private readonly DbCommand _command;
     private readonly ConnectionLease _lease;
     private readonly SessionOperationState.SessionOperationLease _operation;
+    private readonly SessionOperationState? _operationState;
     private readonly QueryObservation? _observation;
     private readonly Lock _sync = new();
     private TaskCompletionSource? _activeRead;
@@ -23,13 +24,15 @@ public sealed class GridReader : IAsyncDisposable
     internal GridReader(DbDataReader reader, DbCommand command, ConnectionLease lease,
         QueryObservation? observation = null,
         SessionOperationState.SessionOperationLease operation = default,
-        bool validateColumnOrder = false)
+        bool validateColumnOrder = false,
+        SessionOperationState? operationState = null)
     {
         _validateColumnOrder = validateColumnOrder;
         _reader = reader;
         _command = command;
         _lease = lease;
         _operation = operation;
+        _operationState = operationState;
         _observation = observation;
     }
 
@@ -160,11 +163,9 @@ public sealed class GridReader : IAsyncDisposable
     {
         // R2 修复：对齐 SessionOperationState 的超时保护——活动 ReadAsync 网络阻塞时
         // 无超时的 await 会导致 DisposeAsync 永久挂起，await using 卡死。
-        // 使用 SessionOperationState.DisposeWaitTimeout（5 分钟）+ 超时诊断异常。
-        // ITM-629：静态可变值读一次入局部（对齐 ITM-581 的 SessionOperationState 修法）——
-        // 双读在等待期间被改写时，实际等待时长与诊断消息不一致。
-        // ITM-647(r4)：超时不再前置 throw——原路径 reader/command/lease/operation 四级
-        // 均未释放且观测挂起。改为记录挂起异常，先走完统一清理链再抛。
+        // 使用会话实例的 DisposeWaitTimeout（默认 5 分钟）+ 超时诊断异常。
+        // ITM-629：单读入局部。ITM-647(r4)：超时不再前置 throw——原路径 reader/command/
+        // lease/operation 四级均未释放且观测挂起。改为记录挂起异常，先走完统一清理链再抛。
         Exception? hangException = await WaitForActiveReadAsync(activeRead);
         Exception? cleanupException = null;
         try { await _reader.DisposeAsync().ConfigureAwait(false); }
@@ -204,10 +205,13 @@ public sealed class GridReader : IAsyncDisposable
     }
 
     /// <summary>有界等待活动 ReadAsync（ITM-629 单读 + ITM-647 超时转挂起异常不前置抛）。
-    /// r5-A1：单读局部在 647 提取重构时意外丢失——本处恢复（与 SessionOperationState 两处同型）。</summary>
-    private static async Task<Exception?> WaitForActiveReadAsync(Task activeRead)
+    /// 评审 2026-09-02：超时上限改读会话实例状态（原静态可变已结构化，见
+    /// SessionOperationState.DisposeWaitTimeout）；无状态引用的兼容构造回退默认值。
+    /// r5-A1：单读局部保留为防御习惯。</summary>
+    private async Task<Exception?> WaitForActiveReadAsync(Task activeRead)
     {
-        TimeSpan waitTimeout = SessionOperationState.DisposeWaitTimeout;
+        TimeSpan waitTimeout = _operationState?.DisposeWaitTimeout
+            ?? SessionOperationState.DefaultDisposeWaitTimeout;
         try
         {
             await activeRead.WaitAsync(waitTimeout).ConfigureAwait(false);

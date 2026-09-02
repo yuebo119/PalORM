@@ -33,7 +33,8 @@ public static class QueryBuilderExtensions
         object? operationOwner = null) where T : class, new()
     {
         if (builder._selectColumns is not null)
-            throw new NotSupportedException("实体查询不能执行部分 Select 投影；请使用完整实体查询或显式 QueryAsync 投影类型。");
+            throw new NotSupportedException(
+                "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
         string sql = builder.BuildSql();
         IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
         var context = new QueryContext(sql, parameters);
@@ -308,7 +309,7 @@ public static class QueryBuilderExtensions
             DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             grid = new GridReader(
                 reader, command, lease, observation, operationLease,
-                builder._validateColumnOrder);
+                builder._validateColumnOrder, builder._operationState);
             operationTransferred = true;
             builder._operationState.RegisterTransactionResource(grid);
             return grid;

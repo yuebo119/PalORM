@@ -123,6 +123,81 @@ public sealed class ProviderTests
     }
 
     [Test]
+    public async Task PostgreSqlConnectionFactory_AppliesConnectionTuning()
+    {
+        // 评审 2026-09-02 补测：v5.0 连接串自动调优此前仅由 Provider 注释与 README 承载、
+        // 无回归断言——驱动升级或重构时调优值可静默漂移。6 项均为"用户未显式设置才覆盖"。
+        await using var postgres = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Database=test", new DbOptions { ConnectionString = "Host=localhost;Database=test" });
+        string cs = postgres.ConnectionString;
+        await Assert.That(cs).Contains("Max Auto Prepare=100");
+        await Assert.That(cs).Contains("Auto Prepare Min Usages=2");
+        // 驱动 builder 规范化布尔为首字母大写（True/False）
+        await Assert.That(cs).Contains("No Reset On Close=True");
+        await Assert.That(cs).Contains("Read Buffer Size=16384");
+        await Assert.That(cs).Contains("Write Buffer Size=16384");
+        await Assert.That(cs).Contains("Enlist=False");
+    }
+
+    [Test]
+    public async Task MySqlConnectionFactory_AppliesConnectionTuning()
+    {
+        // 同上（MySQL 5 项）
+        await using var mysql = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", new DbOptions { ConnectionString = "Server=localhost;Database=test" });
+        string cs = mysql.ConnectionString;
+        await Assert.That(cs).Contains("Auto Enlist=False");
+        await Assert.That(cs).Contains("Connection Reset=False");
+        await Assert.That(cs).Contains("Cancellation Timeout=5");
+        await Assert.That(cs).Contains("Allow Load Local Infile=True");
+        await Assert.That(cs).Contains("Server Redirection Mode=Preferred");
+    }
+
+    [Test]
+    public async Task SqliteConnection_Pragmas_AppliedForFileDatabase()
+    {
+        // SQLite 调优 PRAGMA（文件库分支，v5.0 阶段 3.3/3.5 + v7.2.1 收窄口径）：
+        // :memory: 库仅跑 foreign_keys+cache_size（无文件 I/O 语义项被收窄），
+        // 故文件相关项必须用文件库验证。
+        string dbPath = Path.Combine(Path.GetTempPath(), $"palorm-pragma-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+                new DbOptions { ConnectionString = $"Data Source={dbPath}" });
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA foreign_keys")).IsEqualTo(1);
+            await Assert.That(await session.ScalarAsync<string>($"PRAGMA journal_mode")).IsEqualTo("wal");
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA synchronous")).IsEqualTo(1);        // NORMAL
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA cache_size")).IsEqualTo(-65536);   // 64MB
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA temp_store")).IsEqualTo(2);        // MEMORY
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA wal_autocheckpoint")).IsEqualTo(1000);
+        }
+        finally
+        {
+            foreach (string path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" })
+            {
+                // 尽力清理临时库文件；被占用/缺失时忽略（临时目录，非被测资产）
+                try { File.Delete(path); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    _ = exception;
+                }
+            }
+        }
+    }
+
+    [Test]
+    public async Task SqliteConnection_Pragmas_InMemoryBranch_StaysNarrow()
+    {
+        // v7.2.1 收窄口径锁定：:memory: 库只跑 foreign_keys + cache_size，
+        // journal_mode 保持默认 memory（非 WAL）——防"宽窄分支合一"漂移。
+        await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "Data Source=:memory:" });
+        await Assert.That(await session.ScalarAsync<long>($"PRAGMA foreign_keys")).IsEqualTo(1);
+        await Assert.That(await session.ScalarAsync<long>($"PRAGMA cache_size")).IsEqualTo(-65536);
+        await Assert.That(await session.ScalarAsync<string>($"PRAGMA journal_mode")).IsEqualTo("memory");
+    }
+
+    [Test]
     public async Task Providers_RejectInvalidBatchSizeBeforeDatabaseAccess()
     {
         await using var postgres = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(

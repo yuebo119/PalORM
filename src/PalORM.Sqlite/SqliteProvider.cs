@@ -28,7 +28,8 @@ public sealed class SqliteProvider : IDbProvider
         ArgumentNullException.ThrowIfNull(options);
         // 以显式标记位判定，而非与 DbOptions 默认值比对——魔法数字随默认值漂移（ITM-315）
         if (options.PoolExplicitlyConfigured)
-            throw new NotSupportedException("SQLite Provider 不支持连接池大小、空闲超时或生命周期配置。");
+            throw new NotSupportedException(
+                "The SQLite provider does not support connection pool size, idle timeout, or lifetime configuration.");
         return new SqliteConnection(connectionString);
     }
 
@@ -92,7 +93,7 @@ public sealed class SqliteProvider : IDbProvider
     {
         ArgumentNullException.ThrowIfNull(command);
         if (!string.IsNullOrWhiteSpace(schema))
-            throw new NotSupportedException("SQLite Provider 不支持实体 Schema 配置。");
+            throw new NotSupportedException("The SQLite provider does not support entity schema configuration.");
         command.CommandText = $"PRAGMA table_info({QuoteIdentifier(tableName)})";
         return 1;
     }

@@ -79,7 +79,7 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
         ArgumentNullException.ThrowIfNull(channels);
-        if (channels.Length == 0) throw new ArgumentException("至少指定一个 channel", nameof(channels));
+        if (channels.Length == 0) throw new ArgumentException("At least one channel must be specified.", nameof(channels));
         foreach (string channel in channels)
             ArgumentException.ThrowIfNullOrWhiteSpace(channel);
 

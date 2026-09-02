@@ -435,9 +435,11 @@ public struct QueryBuilder<T> where T : class, new()
         ArgumentNullException.ThrowIfNull(tran);
         // ITM-637：已释放事务的 Connection 为 null——原统一报"不属于主连接"误导排查方向
         if (tran.Connection is null)
-            throw new ArgumentException("事务已释放（Connection 为 null），无法绑定。", nameof(tran));
+            throw new ArgumentException(
+                "Cannot bind the transaction: it has been disposed (its Connection is null).", nameof(tran));
         if (!ReferenceEquals(tran.Connection, _conn))
-            throw new ArgumentException("事务必须属于 QueryBuilder 的主连接。", nameof(tran));
+            throw new ArgumentException(
+                "The transaction must belong to the QueryBuilder's primary connection.", nameof(tran));
         _transaction = tran;
         return this;
     }
@@ -922,7 +924,8 @@ public struct QueryBuilder<T> where T : class, new()
             || value.Contains("/*", StringComparison.Ordinal)
             || value.Contains('\0'))
         {
-            throw new ArgumentException("SQL 注释不能包含注释定界符（/* 或 */）或 NUL 字符。", nameof(value));
+            throw new ArgumentException(
+                "SQL comment must not contain comment delimiters (/* or */) or NUL characters.", nameof(value));
         }
         return value;
     }

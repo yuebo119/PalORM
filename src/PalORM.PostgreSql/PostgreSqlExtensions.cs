@@ -22,9 +22,9 @@ public static class PostgreSqlExtensions
         // 格式串段（与 ValidateSqlComment 同侧防御）；path 是绑定参数——参数化已隔离
         // 注入面，但驱动层对 NUL 的错误形态不可控（ITM-644），库内统一明确失败。
         if (column.Contains('\0', StringComparison.Ordinal))
-            throw new ArgumentException("JSONB 列名不能包含 NUL 字符。", nameof(column));
+            throw new ArgumentException("JSONB column name must not contain NUL characters.", nameof(column));
         if (path.Contains('\0', StringComparison.Ordinal))
-            throw new ArgumentException("JSONB 路径不能包含 NUL 字符。", nameof(path));
+            throw new ArgumentException("JSONB path must not contain NUL characters.", nameof(path));
         // 花括号转义：列名进入复合格式串文本段，未转义的 {/} 会被格式解析器误读。
         string quoted = PostgreSqlProvider.QuoteIdentifier(column)
             .Replace("{", "{{", StringComparison.Ordinal)
@@ -55,7 +55,7 @@ public static class PostgreSqlExtensions
         // ITM-701：value 与 column/path 同口径 NUL 显式拒绝——绑定参数虽已隔离注入面，
         // 但 Npgsql 线协议对 NUL 的错误形态不可控，库内统一明确失败（ITM-644 族）。
         if (normalized is string normalizedString && normalizedString.Contains('\0', StringComparison.Ordinal))
-            throw new ArgumentException("JSONB 比较值不能包含 NUL 字符。", nameof(value));
+            throw new ArgumentException("JSONB comparison value must not contain NUL characters.", nameof(value));
         return builder.Where(FormattableStringFactory.Create(quoted + "->>{0} = {1}", path, normalized));
     }
 }

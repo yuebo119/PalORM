@@ -7,12 +7,17 @@ namespace PalORM;
 /// 合计 -388B/操作（55%）。owner 保持 object? + ReferenceEquals 语义不变。</para></summary>
 internal sealed class SessionOperationState
 {
-    /// <summary>Dispose 等待活动操作的上限。正常操作受 CommandTimeout 约束远早于此完成；
-    /// 触发即说明存在永不完成的租约（如被放弃的枚举器）。internal 可写供测试缩短。
-    /// <para><b>单读母模式契约</b>（ITM-581/629/r5-A1）：本属性可变——全部消费点
-    /// （GridReader.WaitForActiveReadAsync / 本类两处）必须读一次入局部再用于等待与
-    /// 诊断消息，防并发改写下实际值与报告值分叉。修改消费点时对照此锚。</para></summary>
-    internal static TimeSpan DisposeWaitTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    /// <summary>Dispose 等待活动操作的上限默认值（5 分钟）。正常操作受 CommandTimeout 约束
+    /// 远早于此完成；触发即说明存在永不完成的租约（如被放弃的枚举器）。</summary>
+    internal static readonly TimeSpan DefaultDisposeWaitTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>Dispose 等待活动操作的上限（默认 <see cref="DefaultDisposeWaitTimeout"/>）。
+    /// <para><b>评审 2026-09-02 结构化</b>：原为 internal static 可写属性，"单读母模式契约"
+    /// （ITM-581/629/r5-A1）靠人工纪律约束全部消费点单次读取——该纪律已被两次双读事故证伪。
+    /// 改为实例状态：生产路径只读（值在首个操作前固定），internal setter 仅供测试在
+    /// 会话构造后、首个操作前设置。各消费点的"读一次入局部"保留为防御习惯，不再承担
+    /// 跨线程一致性的正确性职责。GridReader 经构造注入引用同一实例。</para></summary>
+    internal TimeSpan DisposeWaitTimeout { get; set; } = DefaultDisposeWaitTimeout;
 
     private readonly Lock _sync = new();
     private readonly AsyncLocal<object?> _currentOperationOwner = new();
@@ -218,7 +223,7 @@ internal sealed class SessionOperationState
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
         }
 
-        // ITM-629 同型面（修复侧纪律卡第三问实证——本处原双读，与 GridReader 及 DisposeAndCompleteAsync 三处消费点已全部单读）
+        // ITM-629 同型面：单读入局部（评审 2026-09-02 起为防御习惯——实例值在首个操作前固定）
         TimeSpan waitTimeout = DisposeWaitTimeout;
         try
         {
@@ -445,7 +450,7 @@ internal sealed class SessionOperationState
     {
         // 有界等待：被放弃的 QueryAsyncEnumerable 枚举器（未 DisposeAsync）会让操作租约
         // 永不完成--无诊断的无限挂起改为明确失败，指向泄漏原因。
-        // ITM-581: 读一次入局部--测试并发修改该可变静态时，等待值与诊断消息保持一致
+        // ITM-581：读一次入局部（评审 2026-09-02 起为防御习惯——实例值在首个操作前固定）
         TimeSpan disposeWaitTimeout = DisposeWaitTimeout;
         Exception? primaryException = null;
         try

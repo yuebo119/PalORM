@@ -63,11 +63,11 @@ public sealed class SessionConcurrencyTests
     {
         // r19/ITM-693：被弃的 QueryAsyncEnumerable 枚举器让租约永不归还——收口等待超时后
         // 仍须尝试回滚（绕过门禁直接 rollback，成败都以结构化 Data 留痕）。
-        TimeSpan previousTimeout = SessionOperationState.DisposeWaitTimeout;
-        SessionOperationState.DisposeWaitTimeout = TimeSpan.FromMilliseconds(50);
+        // 评审 2026-09-02：DisposeWaitTimeout 已实例化——直接设会话实例属性，无需保存/还原全局值。
         IAsyncEnumerator<SessionConcurrencyEntity>? abandoned = null;
         await using var session = await DataSession<SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = "Data Source=:memory:" });
+        session.DisposeWaitTimeout = TimeSpan.FromMilliseconds(50);
         try
         {
             await session.ExecuteAsync(
@@ -100,8 +100,36 @@ public sealed class SessionConcurrencyTests
         {
             if (abandoned is not null)
                 await abandoned.DisposeAsync();
-            SessionOperationState.DisposeWaitTimeout = previousTimeout;
         }
+    }
+
+    [Test]
+    public async Task WithTransaction_UndisposedGridReader_IsDisposedByTransactionCompletion()
+    {
+        // 评审 2026-09-02 补测（此前无覆盖的组合）：QueryMultipleAsync 把 GridReader 登记为
+        // 事务资源（RegisterTransactionResource）——回调未 await using 释放时，事务收口
+        // （DisposeTransactionResourcesAsync）统一释放它，其操作租约随之归还，提交正常
+        // 完成、会话继续可用。锁定该安全网行为，防"清理链修一处漏一处"回归。
+        await using var session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "Data Source=:memory:" });
+        await session.ExecuteAsync(
+            $"CREATE TABLE session_concurrency (id INTEGER PRIMARY KEY, name TEXT)");
+        await session.ExecuteAsync(
+            $"INSERT INTO session_concurrency (id, name) VALUES (1, 'x')");
+
+        await session.WithTransaction(async ct =>
+        {
+            GridReader grid = await session.From<SessionConcurrencyEntity>()
+                .QueryMultipleAsync(
+                    $"SELECT * FROM session_concurrency; SELECT * FROM session_concurrency", ct);
+            List<SessionConcurrencyEntity> first = await grid.ReadAsync<SessionConcurrencyEntity>(ct);
+            await Assert.That(first.Count).IsEqualTo(1);
+            // 故意不释放 grid——由事务收口兜底释放
+        });
+
+        // 事务已提交、门禁已归还——后续操作可用且数据可见
+        long count = await session.CountAsync<SessionConcurrencyEntity>();
+        await Assert.That(count).IsEqualTo(1L);
     }
 
     [Test]
@@ -564,7 +592,7 @@ public sealed class SessionConcurrencyTests
     public async Task UseTransaction_DisposedTransaction_ReportsDisposedNotBelonging()
     {
         // ITM-606：传入已 dispose 的事务（Connection == null）应抛"disposed transaction"消息，
-        // 不应被 ReferenceEquals(null, _conn) 遮蔽为"事务必须属于当前 DataSession 的主连接"。
+        // 不应被 ReferenceEquals(null, _conn) 遮蔽为"transaction must belong to primary connection"消息。
         await using var resources = new ConcurrencyResources();
         await using var tran = await resources.Session.BeginTransactionAsync();
         await tran.DisposeAsync();  // Connection 变 null
@@ -572,7 +600,7 @@ public sealed class SessionConcurrencyTests
         var ex = await Assert.That(() => resources.Session.UseTransaction(tran))
             .Throws<ArgumentException>();
         await Assert.That(ex!.Message).Contains("disposed transaction");
-        // 确保未被遮蔽为"事务必须属于主连接"消息
+        // 确保未被遮蔽为"transaction must belong to primary connection"消息
         await Assert.That(ex.Message.Contains("主连接", StringComparison.Ordinal)).IsFalse();
     }
 
