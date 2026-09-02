@@ -90,7 +90,7 @@
 ## [5.3.0] — byte[] 二进制列原生支持（契约显式化 + AOT 全链 + 基准背书）
 
 > 6 个提交 · 30 个文件 · +743/−92 行 · 四环节编译期契约补齐（读取/绑定/DDL/BulkInsert）
-> 设计决策与放弃项见 [ADR-G](docs/adr/ADR-G-byte[]-二进制列支持.md)；使用规范见 [二进制列最佳实践](docs/二进制列最佳实践.md)
+> 设计决策与放弃项见 [ADR-K](docs/adr/ADR-K-byte[]-二进制列支持.md)（发布时编号 ADR-G，2026-09-02 索引重建改号）；使用规范见 [二进制列最佳实践](docs/二进制列最佳实践.md)
 
 ### 💔 破坏性变更
 
@@ -135,7 +135,7 @@
 
 ### 📚 参考
 
-- [ADR-G：byte[] 二进制列支持](docs/adr/ADR-G-byte[]-二进制列支持.md) · [二进制列最佳实践](docs/二进制列最佳实践.md) · [基准数字](bench/PalORM.Benchmarks/BENCHMARKS.md)
+- [ADR-K：byte[] 二进制列支持](docs/adr/ADR-K-byte[]-二进制列支持.md) · [二进制列最佳实践](docs/二进制列最佳实践.md) · [基准数字](bench/PalORM.Benchmarks/BENCHMARKS.md)
 
 ## [5.2.0] — 质量收口（14 轮 AI 评审 + record 支持 + 隔离级别全链 + 真库回归）
 

@@ -1,6 +1,8 @@
-# ADR-G：byte[] 二进制列原生支持
+# ADR-K：byte[] 二进制列原生支持
 
 > 状态：已实施（2026-08-21/22 批准并实施）· 来源：消费方 payload 字段诉求 + 驱动层 PoC 实证
+> 编号沿革：原文档编号 ADR-G，2026-09-02 索引重建时改号 ADR-K——ADR-G 归还 MySQL
+> AllowLoadLocalInfile 安全策略（同日裁决、代码注释引用面在 src），本篇引用面仅 docs。
 
 ## 背景
 
