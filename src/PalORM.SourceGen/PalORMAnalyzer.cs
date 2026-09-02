@@ -32,6 +32,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     // 评审 2026-09-02 严重度复议：带已知假阳的启发式规则不符合本项目"P0 防崩溃=Error、
     // 启发式=Warning"分层——默认 Error 会让多程序集用户在合法代码上被阻断编译，
     // 降为 Warning（TreatWarningsAsErrors 项目可按需 dotnet_diagnostic 降级）。
+    // ADR-D 已裁决 D3（2026-09-02）——本诊断的 Warning 化即 D3"无法在本程序集验证，
+    // 运行时自负"的实现形态；D1（跨程序集扫描）保留为未来选项。
     // F6（消息精准化）：补"如实体在引用程序集"上下文。
     public static readonly DiagnosticDescriptor UnknownTable = new(
         "PALORM003", "Foreign key references unknown table",
