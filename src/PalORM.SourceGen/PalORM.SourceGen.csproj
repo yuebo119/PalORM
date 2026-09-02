@@ -15,8 +15,9 @@
 
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <AnalysisLevel>none</AnalysisLevel>
-    <!-- ITM-530：RS1035（源生成器禁用 IO API）不再全局抑制，改为 SqlFileEmitter 里
-         File.ReadAllText 处局部 #pragma，避免掩蔽其它意外的 IO 使用 -->
+    <!-- ITM-530：RS1035（源生成器禁用 IO API）。评审 2026-09-02 第二批：SqlFile 重构后
+         生成器零磁盘 IO（.sql 内容经 AdditionalTexts 进增量管线），全项目无 RS1035 抑制；
+         未来新增 IO 使用必须转为管线输入而非读盘 -->
     <NoWarn>$(NoWarn);CS1591;RS2008</NoWarn>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <DevelopmentDependency>true</DevelopmentDependency>
