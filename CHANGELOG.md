@@ -2,8 +2,9 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布]
+## [5.4.0] — 弹性只读管线 · 编译时诊断 PALORM045 · legacy SQL/DDL 收敛至方言单一真源
 
+> 变更规模：29 个提交 · 84 个文件 · +2893/−1112 行（v5.3.0…v5.4.0 实测）
 > 评审整改批次：2×P0（CI 门禁失效）+ 3×P1（弹性脱节/事务静默降级/生成器崩溃 UX）+ 工程防线托管
 > 架构评审整改批次（2026-09-02）：评审报告 P1×2 + P2×4 + P3×3 全项清偿（详见下文各节）
 > 架构评审第二批（2026-09-02）：复审报告 P2×2 + P3×3 + 可选项全项清偿（ADR-J + 包契约测试补强）
@@ -90,6 +91,19 @@
 - secret-guard 白名单精确豁免 MySQL uint64 LIMIT 常量（20 位连续数字误触身份证号规则）
 - perf-gate 基线 v4.0.json→v5.0.json；回归解析失败从静默放行改为显式警告标注不可判定
 - README 驱动版本对齐 Directory.Packages.props 实际值（MySqlConnector 2.6.2 / SQLite3MC 2.4.0）
+
+### 🧪 验证
+
+- **单元测试 369 项全绿**：Core 209 + SourceGen 160（Release 配置，`GITHUB_ACTIONS=true` 模拟 CI 环境）
+- **Integration 181 项**：本地实跑 171 通过、10 项因本地无 PG/MySQL 服务容器未执行
+  （环境变量缺失，非代码失败）；CI release 流水线以 postgres:17 / mysql:8.4 容器执行全量
+- **Release 严格构建**：`PalORM.ci.slnf -c Release --no-incremental -warnaserror` 0 警告 0 错误
+  （本地离线环境以临时清空 auditSources 规避 NU1900 联网审计；CI 在线环境不受影响）
+- **包契约**：`test-package-contract.sh` PASS——本地打 5 个 5.4.0 包 → 仓库外独立消费工程
+  → 实体身份契约 + SqlFile AdditionalFiles 注入验证
+- **pack 计数 5 个**（Core/SourceGen/Sqlite/PostgreSql/MySql），nuspec 元数据抽查
+  id/version/license(AGPL-3.0-only)/projectUrl/releaseNotes 全部正确
+- **快照基线 13 份一致**（`PALORM_UPDATE_SNAPSHOTS=1` 刷新后 diff 人工评审为净删除）
 
 ## [5.3.0] — byte[] 二进制列原生支持（契约显式化 + AOT 全链 + 基准背书）
 
