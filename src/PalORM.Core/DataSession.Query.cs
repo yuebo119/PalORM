@@ -221,13 +221,25 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>直查精确单行——0 或 >1 行均抛异常。
+    /// <para>评审 2026-09-02：流式精确单行——读到第 2 行立即失败并释放 reader，
+    /// 不再经 <see cref="QueryAsync{T}"/> 物化全表（大表上的隐式全读）。因流式提前终止，
+    /// 多于 1 行时报告 "at least 2" 而非精确总数。</para>
     /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para></summary>
     public async ValueTask<T> QuerySingleAsync<T>(FormattableString sql, CancellationToken ct = default)
         where T : class, new()
     {
-        var results = await QueryAsync<T>(sql, ct).ConfigureAwait(false);
-        return results.Count == 1 ? results[0]
-            : throw new InvalidOperationException($"QuerySingleAsync: expected 1 row, got {results.Count}.");
+        int count = 0;
+        T single = default!;
+        await foreach (T row in QueryAsyncEnumerable<T>(sql, ct).ConfigureAwait(false))
+        {
+            count++;
+            if (count > 1)
+                throw new InvalidOperationException(
+                    "QuerySingleAsync: expected 1 row, got at least 2.");
+            single = row;
+        }
+        return count == 1 ? single
+            : throw new InvalidOperationException($"QuerySingleAsync: expected 1 row, got {count}.");
     }
 
     /// <summary>直查标量。数据库返回类型与 <typeparamref name="T"/> 不同时按 Convert.ChangeType 转换

@@ -45,28 +45,68 @@ public sealed class BoundedQueryCache : IQueryCache
     private readonly int _maxEntries;
     private readonly string _instanceId = Guid.NewGuid().ToString("N");
 
+    // 评审 2026-09-02 结构化：gauge 注册从"每实例"改为"进程级单次 + 弱引用实例表"。
+    // 原实现每实例在静态 Meter 上注册 2 个 ObservableGauge 且回调闭包持有缓存字典——
+    // Meter 永久存活导致 instrument 与字典均不可 GC（review R8 登记的泄漏，靠
+    // "推荐复用单例"缓解）。现在所有实例进入弱引用表，gauge 回调逐个读取 Count
+    // 并顺带剪枝死引用——实例可正常 GC，指标名与 instance 标签形状保持不变。
+    private static readonly Lock _gaugeRegistryLock = new();
+    private static readonly List<WeakReference<BoundedQueryCache>> _liveInstances = [];
+    private static bool _gaugesRegistered;
+
     /// <summary>创建有界缓存。
-    /// <para><b>生命周期契约（review R8）</b>：每个 BoundedQueryCache 实例在静态 Meter 上注册
-    /// ObservableGauge（持有缓存字典引用）。Meter 为静态永久存活——instrument 与缓存字典
-    /// 无法被 GC 回收。<b>推荐复用进程级共享单例</b>（<c>CacheStore.Default</c>），避免多实例场景下的
-    /// instrument 泄漏。短生命周期使用请实现 <see cref="IQueryCache"/> 自定义轻量缓存。</para></summary>
+    /// <para><b>生命周期契约（review R8 + 评审 2026-09-02 结构化）</b>：ObservableGauge 进程内
+    /// 单次注册（首个实例触发），回调经弱引用表读取全部存活实例并剪枝死引用——
+    /// 实例可正常 GC，无 instrument 泄漏。高频创建场景仍推荐复用 <c>CacheStore.Default</c>
+    /// 单例（避免 instance 标签基数随实例增长）。</para></summary>
     /// <param name="maxEntries">容量上限（默认 1024 条）。</param>
     public BoundedQueryCache(int maxEntries = 1024)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEntries);
         _maxEntries = maxEntries;
-        // 注册 entries/size ObservableGauge——每个实例注册一次，以 instanceId 标签区分。
-        // 标签仅 instanceId（有界，1 标签/实例），避免 hit/miss/eviction 那种请求级标签的高基数问题。
-        PalORMMetrics.Meter.CreateObservableGauge(
-            "palorm.cache.entries",
-            () => new Measurement<int>(_cache.Count, new KeyValuePair<string, object?>("instance", _instanceId)),
-            unit: "{entries}",
-            description: "Current number of cache entries");
-        PalORMMetrics.Meter.CreateObservableGauge(
-            "palorm.cache.estimated_size",
-            () => new Measurement<int>(_cache.Count, new KeyValuePair<string, object?>("instance", _instanceId)),
-            unit: "{entries}",
-            description: "Estimated cache size (approximated as entry count; no per-entry byte accounting)");
+        RegisterGaugesAndTrackInstance(this);
+    }
+
+    private static void RegisterGaugesAndTrackInstance(BoundedQueryCache instance)
+    {
+        lock (_gaugeRegistryLock)
+        {
+            _liveInstances.RemoveAll(static weakRef => !weakRef.TryGetTarget(out _));
+            _liveInstances.Add(new WeakReference<BoundedQueryCache>(instance));
+            if (_gaugesRegistered) return;
+            _gaugesRegistered = true;
+            PalORMMetrics.Meter.CreateObservableGauge(
+                "palorm.cache.entries",
+                CollectCacheMeasurements,
+                unit: "{entries}",
+                description: "Current number of cache entries");
+            PalORMMetrics.Meter.CreateObservableGauge(
+                "palorm.cache.estimated_size",
+                CollectCacheMeasurements,
+                unit: "{entries}",
+                description: "Estimated cache size (approximated as entry count; no per-entry byte accounting)");
+        }
+    }
+
+    private static List<Measurement<int>> CollectCacheMeasurements()
+    {
+        // 先在锁内物化快照再返回——Lock.Scope 不得跨 yield 边界（CS4007）。
+        var measurements = new List<Measurement<int>>();
+        lock (_gaugeRegistryLock)
+        {
+            for (int i = _liveInstances.Count - 1; i >= 0; i--)
+            {
+                if (!_liveInstances[i].TryGetTarget(out BoundedQueryCache? instance))
+                {
+                    _liveInstances.RemoveAt(i);
+                    continue;
+                }
+                measurements.Add(new Measurement<int>(
+                    instance._cache.Count,
+                    new KeyValuePair<string, object?>("instance", instance._instanceId)));
+            }
+        }
+        return measurements;
     }
 
     /// <inheritdoc />

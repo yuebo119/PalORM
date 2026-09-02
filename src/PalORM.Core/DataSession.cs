@@ -21,6 +21,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private readonly List<IQueryInterceptor> _interceptors;
     private readonly ILogger _logger;
     private readonly SessionOperationState _operationState = new();
+
+    /// <summary>测试专用：会话级 Dispose 等待上限（默认 5 分钟）。转发 <see cref="SessionOperationState"/>
+    /// 实例状态——原静态可变属性已结构化（评审 2026-09-02），不同会话互不干扰，
+    /// 测试无需保存/还原全局值。仅应在会话构造后、首个操作前设置。</summary>
+    internal TimeSpan DisposeWaitTimeout
+    {
+        get => _operationState.DisposeWaitTimeout;
+        set => _operationState.DisposeWaitTimeout = value;
+    }
     // v4.1：读连接工厂缓存为实例字段，避免每次 From<T> 新建闭包
     private readonly Func<DbConnection>? _readConnFactory;
     // v5.0 阶段 5.2：读连接初始化器——包装 Provider 钩子 + ReadSessionSetupSql。
@@ -196,7 +205,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             throw new ArgumentException("Cannot use a disposed transaction (its Connection is null). "
                 + "Pass a transaction from an open DbConnection, or null to clear.", nameof(tran));
         if (tran is not null && !ReferenceEquals(tran.Connection, _conn))
-            throw new ArgumentException("事务必须属于当前 DataSession 的主连接。", nameof(tran));
+            throw new ArgumentException(
+                "The transaction must belong to the DataSession's primary connection.", nameof(tran));
         _operationState.UseTransaction(tran);
         return this;
     }
