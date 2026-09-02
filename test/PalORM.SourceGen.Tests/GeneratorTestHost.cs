@@ -59,6 +59,35 @@ internal static class GeneratorTestHost
         return new GeneratorResult((CSharpCompilation)outputCompilation, generatedSources);
     }
 
+    /// <summary>单趟运行并返回 SqlFile 生成源（指定 .sql 内容）。
+    /// 评审 2026-09-02 第二批：锁定"内容→嵌入产物"的映射行为。增量失效本身由管线结构保证
+    /// （SqlFileContent 值相等进入缓存键）；公共 Roslyn API 无 additional-text 变更注入面
+    /// （GeneratorDriver 无 WithChangedAdditionalText，已实测 SDK 11 内置 Roslyn），故以
+    /// 独立双跑锁定映射、不伪造增量断言。</summary>
+    internal static string RunGeneratorWithSqlContent(
+        string source,
+        string assemblyName,
+        IReadOnlyDictionary<string, string> analyzerConfigOptions,
+        string sqlPath,
+        string content)
+    {
+        CSharpCompilation compilation = CreateCompilation(source, assemblyName);
+        var parseOptions = (CSharpParseOptions)compilation.SyntaxTrees.Single().Options;
+        AnalyzerConfigOptionsProvider configProvider = TestConfigOptionsProvider.Create(analyzerConfigOptions);
+
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            [new PalORMGenerator().AsSourceGenerator()],
+            [new TestAdditionalText(sqlPath, content)],
+            parseOptions: parseOptions,
+            optionsProvider: configProvider);
+        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
+
+        return driver.GetRunResult().Results
+            .SelectMany(static result => result.GeneratedSources)
+            .First(static generated => generated.HintName.StartsWith("SqlFile", StringComparison.Ordinal))
+            .SourceText.ToString();
+    }
+
     internal static CSharpCompilation CreateCompilation(string source, string assemblyName)
     {
         string[] trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!
