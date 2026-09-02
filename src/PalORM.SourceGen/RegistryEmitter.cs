@@ -165,17 +165,10 @@ internal static class RegistryEmitter
         }
         sb.AppendLine("        },");
         sb.AppendLine();
-        sb.AppendLine("            CreateTableSql = new global::System.Collections.Generic.Dictionary<global::System.Type, string>");
-        sb.AppendLine("        {");
-        foreach (var m in models.AsSpan())
-        {
-            string ddl = MigrationEmitter.BuildCreateTable(m);
-            sb.AppendLine(
-                $"            [typeof({m.EntityTypeName})] = " +
-                $"{MigrationEmitter.ToCSharpLiteral(ddl)},");
-        }
-        sb.AppendLine("        },");
-        sb.AppendLine();
+        // 评审 2026-09-02 第二批（ADR-J）：legacy CreateTableSql 字典不再发射——其产物为
+        // SQLite 风格单方言 DDL，运行时自 ITM-569 起拒绝执行；方言 DDL
+        // （CreateTableSqlByDialect）是唯一真源。RegistryFragment.CreateTableSql 保留为
+        // 空集默认的可选属性，仅兼容旧生成器片段。
         sb.AppendLine("            CreateTableSqlByDialect = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateTableSqlSet>");
         sb.AppendLine("        {");
         foreach (var m in models.AsSpan())

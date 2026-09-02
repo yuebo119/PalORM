@@ -18,11 +18,11 @@ internal static class MigrationEmitter
         sb.AppendLine($"internal static class Migration_{model.GeneratedTypeSuffix}");
         sb.AppendLine("{");
 
-        string legacy = BuildCreateTable(model);
+        // 评审 2026-09-02 第二批（ADR-J）：legacy 单方言 CreateTable 常量已删除——三方言 DDL
+        // 是唯一真源（MigrateAsync 只执行 CreateTableSqlByDialect，ITM-569 拒绝 legacy 回退）。
         string sqlite = BuildCreateTable(model, SqlGenerationDialect.Sqlite);
         string postgreSql = BuildCreateTable(model, SqlGenerationDialect.PostgreSql);
         string mySql = BuildCreateTable(model, SqlGenerationDialect.MySql);
-        sb.AppendLine($"    internal const string CreateTable = {ToCSharpLiteral(legacy)};");
         sb.AppendLine($"    internal const string CreateTableSqlite = {ToCSharpLiteral(sqlite)};");
         sb.AppendLine($"    internal const string CreateTablePostgreSql = {ToCSharpLiteral(postgreSql)};");
         sb.AppendLine($"    internal const string CreateTableMySql = {ToCSharpLiteral(mySql)};");
@@ -69,39 +69,9 @@ internal static class MigrationEmitter
     internal static string ToCSharpLiteral(string value)
         => SymbolDisplay.FormatLiteral(value, quote: true);
 
-    /// <summary>legacy 单方言 DDL——填充注册表 CreateTableSql（MigrateAsync 在
-    /// CreateTableSqlByDialect 缺键时的回退）。标识符引用与方言重载对齐（SQLite/PG
-    /// 风格双引号）；列型走 DbTypeName 原值，与方言重载的类型映射刻意不同。</summary>
-    internal static string BuildCreateTable(TableModel model)
-    {
-        List<string> columns = [];
-        foreach (ColumnModel column in model.Columns.AsSpan())
-        {
-            string name = SqlGeneration.QuoteIdentifier(column.ColumnName, SqlGenerationDialect.Sqlite);
-            string dbType = column.IsPrimaryKey && column.IsAutoIncrement
-                ? "INTEGER"
-                : column.DbTypeName;
-            string generated = column.ComputedExpression is null
-                ? ""
-                : $" GENERATED ALWAYS AS ({column.ComputedExpression}) STORED";
-            // NOT NULL 语义源与 RowFactory 的 IsDBNull 守卫合一（ITM-312）：
-            // 非可空注解列（IsNullable=false）物化时不做 DBNull 检查，DDL 必须同步 NOT NULL，
-            // 否则外部写入 NULL 后读取直接抛异常。
-            // R12 修复：PK 列也显式 NOT NULL——依赖 DB 隐式 NOT NULL 在非 INTEGER PK（SQLite）
-            // 或无 STRICT 表时不安全。
-            string nullable = column.IsRequired || !column.IsNullable || column.IsPrimaryKey
-                ? " NOT NULL" : "";
-            // [Timestamp] 列被排除出 INSERT——NOT NULL 无 DEFAULT 时每次插入必失败（ITM-402）。
-            // ITM-519：DEFAULT CURRENT_TIMESTAMP 仅对 DateTime/DateTimeOffset 合法；
-            // TimeOnly/DateOnly/数值等类型上会生成 MySQL 非法 DDL，这些类型不加 DEFAULT。
-            string defaultClause = GetDefaultClause(column, SqlGenerationDialect.Sqlite, dbType);
-            string primaryKey = GetPrimaryKeyClause(column, SqlGenerationDialect.Sqlite);
-            columns.Add($"    {name} {dbType}{generated}{nullable}{defaultClause}{primaryKey}");
-        }
-
-        return $"CREATE TABLE IF NOT EXISTS {SqlGeneration.QuoteIdentifier(model.TableName, SqlGenerationDialect.Sqlite)} (\n" +
-            $"{string.Join(",\n", columns)}\n)";
-    }
+    // 评审 2026-09-02 第二批（ADR-J）：legacy 无方言 BuildCreateTable(model) 重载已删除——
+    // 其产物（SQLite 风格双引号单方言 DDL）此前填充注册表 CreateTableSql，运行时自 ITM-569
+    // 起拒绝执行，纯属死载荷；方言重载（dialect 参数必填）是唯一真源，快照测试锁定其形态。
 
     internal static string BuildCreateTable(
         TableModel model,

@@ -6,6 +6,7 @@
 
 > 评审整改批次：2×P0（CI 门禁失效）+ 3×P1（弹性脱节/事务静默降级/生成器崩溃 UX）+ 工程防线托管
 > 架构评审整改批次（2026-09-02）：评审报告 P1×2 + P2×4 + P3×3 全项清偿（详见下文各节）
+> 架构评审第二批（2026-09-02）：复审报告 P2×2 + P3×3 + 可选项全项清偿（ADR-J + 包契约测试补强）
 
 ### ✨ 新增
 
@@ -22,9 +23,13 @@
   `**/*.sql`，仓库内项目经 Directory.Build.props）进入增量缓存键——仅编辑 .sql 也触发
   重新生成（消除 ITM-585 陈旧缓存限制）；项目根改读 `build_property.ProjectDir`（不再
   从源文件路径向上找 *.csproj）；生成器零磁盘 IO
+- **legacy CreateTableSql 生成段移除**（ADR-J，复用 ADR-I 修订模板）：三方言 DDL 是唯一
+  真源；`RegistryFragment.CreateTableSql` 放宽为可选（旧片段仍可注册，运行时从不执行）；
+  `MigrateAsync` 实体枚举源改走 `TableNames.Keys`，缺方言键的 recompile 错误保持不变
 - **测试补强**：PG/MySQL 连接串自动调优值断言（此前仅注释承载）、SQLite 文件库/内存库
   PRAGMA 断言、`WithTransaction` 内未释放 GridReader 由事务收口兜底释放的安全网行为锁定、
-  SqlFile AdditionalFiles 管线正/负例
+  SqlFile AdditionalFiles 管线正/负例、独立双跑锁定 .sql 内容→嵌入产物映射（零串扰）、
+  包契约测试与 NuGet 包消费者 AOT 冒烟补入 SqlFile 用例（覆盖包分发路径的 targets 注入契约）
 
 ### 💔 破坏性变更
 
@@ -36,6 +41,9 @@
   片段"从注册成功/CRUD 时抛错改为注册期抛键集校验错误（均为响亮失败）；
   `RegistryFragment.CommandSqls` 放宽为可选（旧片段仍可注册，运行时从不消费）；
   `CrudMetadata` 新增不含 SQL 载荷的推荐构造，旧构造保留供旧生成片段二进制兼容
+- **legacy CreateTableSql 生成段移除**（ADR-J，同模板）：`RegistryFragment.CreateTableSql`
+  放宽为可选（运行时从不执行）；重编译模型程序集须同步升级包——影响面与上一条相同；
+  `MigrateAsync` 实体枚举改走 `TableNames`，行为仅"旧片段错误消息时点"变化
 - `QuerySingleAsync` 多于 1 行时的异常消息由精确总数改为 "at least 2"（流式精确单行——
   读到第 2 行立即失败并释放 reader，不再物化全表）；PALORM003 默认严重度由 Error 复议为
   Warning（多程序集布局可误报，见 ADR-D）；PALORM020 消息格式模板化、PALORM041 category
