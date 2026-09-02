@@ -76,6 +76,24 @@ namespace Beta
 }
 CS
 
+# 评审 2026-09-02 第二批：SqlFile 包契约用例——包内 buildTransitive targets 必须自动把
+# **/*.sql 注入为 AdditionalFiles（否则生成器拿不到内容，partial 方法缺实现 → CS8795）。
+mkdir -p "$TMP/analyzer-consumer/Queries"
+cat > "$TMP/analyzer-consumer/Queries/Ping.sql" <<'SQL'
+SELECT 1 AS ping;
+SQL
+
+cat > "$TMP/analyzer-consumer/SqlFileQueries.cs" <<'CS'
+namespace FileQueries
+{
+    public static partial class Ping
+    {
+        [global::PalORM.SqlFile("Queries/Ping.sql")]
+        public static partial string Get();
+    }
+}
+CS
+
 cat > "$TMP/analyzer-consumer/Program.cs" <<'CS'
 internal static class Program
 {
@@ -92,6 +110,12 @@ internal static class Program
             if (!global::PalORM.PalORM_Runtime.TableNames.ContainsKey(type))
                 return 1;
         }
+
+        // SqlFile 包契约：包 targets 注入 AdditionalFiles → 生成器嵌入 .sql 内容
+        // （未注入时 partial 无实现，编译期 CS8795 直接失败，到不了这里）
+        string ping = global::FileQueries.Ping.Get();
+        if (!ping.Contains("SELECT 1 AS ping", global::System.StringComparison.Ordinal))
+            return 3;
 
         return expected[1] == expected[2] ? 2 : 0;
     }
@@ -129,4 +153,4 @@ XML
 
 dotnet run --project "$TMP/analyzer-consumer/AnalyzerConsumer.csproj" -c Release \
     --configfile "$TMP/analyzer-consumer/NuGet.config" --nologo
-printf 'PASS SourceGen 包加载、禁用隐式 using 与实体身份契约\n'
+printf 'PASS SourceGen 包加载、禁用隐式 using、实体身份契约与 SqlFile AdditionalFiles 注入\n'

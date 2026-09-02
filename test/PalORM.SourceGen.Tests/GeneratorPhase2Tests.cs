@@ -1493,6 +1493,36 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    public async Task SqlFile_OutputFollowsContent_ExactlyPerRun()
+    {
+        // 评审 2026-09-02 第二批：独立双跑锁定"内容→嵌入产物"映射——同一路径两种内容各自
+        // 嵌入自身内容、零串扰。增量失效由管线结构保证（SqlFileContent 值相等进缓存键；
+        // 公共 Roslyn API 无 additional-text 变更注入面，不伪造 driver 级增量断言——
+        // 见 GeneratorTestHost.RunGeneratorWithSqlContent 注释）。
+        const string source = """
+            using PalORM;
+            public static partial class Queries
+            {
+                [SqlFile("Queries/get.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-tests");
+        string sqlPath = Path.Combine(projectDir, "Queries", "get.sql");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+
+        string first = GeneratorTestHost.RunGeneratorWithSqlContent(
+            source, "SqlFileIncrementalConsumer", options, sqlPath, "SELECT 1;");
+        string second = GeneratorTestHost.RunGeneratorWithSqlContent(
+            source, "SqlFileIncrementalConsumer", options, sqlPath, "SELECT 2;");
+
+        await Assert.That(first).Contains("SELECT 1;");
+        await Assert.That(first).DoesNotContain("SELECT 2;");
+        await Assert.That(second).Contains("SELECT 2;");
+        await Assert.That(second).DoesNotContain("SELECT 1;");
+    }
+
+    [Test]
     public async Task RecordEntity_WithGetSetProperties_GeneratesFully()
     {
         // r17-S3/r15-N1 锁定（形态 A）：[Table] record get;set 真生成——修复前静默跳过
