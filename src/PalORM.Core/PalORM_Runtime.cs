@@ -41,8 +41,11 @@ public sealed class RegistryFragment
     /// <summary>类型 → (属性名→列名) 映射（用于 Include JOIN ON 子句翻译）。</summary>
     public required IReadOnlyDictionary<Type, IReadOnlyDictionary<string, string>> PropertyToColumn { get; init; }
 
-    /// <summary>类型 → CREATE TABLE DDL。</summary>
-    public required IReadOnlyDictionary<Type, string> CreateTableSql { get; init; }
+    /// <summary>类型 → CREATE TABLE DDL。<b>legacy 兼容载荷（评审 2026-09-02 第二批，ADR-J）</b>：
+    /// 运行时从不执行——方言 DDL 走 <see cref="CreateTableSqlByDialect"/>（唯一真源），缺方言键时
+    /// MigrateAsync 明确拒绝。保留可缺省仅为旧版本生成器模型程序集的注册兼容；当前生成器不再发射。</summary>
+    public IReadOnlyDictionary<Type, string> CreateTableSql { get; init; }
+        = FrozenDictionary<Type, string>.Empty;
 
     /// <summary>类型 → 按数据库方言生成的 CREATE TABLE DDL。可选，旧片段可缺省。</summary>
     public IReadOnlyDictionary<Type, CreateTableSqlSet> CreateTableSqlByDialect { get; init; }
@@ -63,7 +66,14 @@ public sealed class RegistryFragment
 }
 
 /// <summary>编译时注册表。各模型程序集的 ModuleInitializer 通过 <see cref="Register"/> 合并片段。</summary>
-/// <remarks>注册在锁内构造完整不可变状态，并通过一次引用交换发布；外部调用方只能读取快照。</remarks>
+/// <remarks>
+/// 注册在锁内构造完整不可变状态，并通过一次引用交换发布；外部调用方只能读取快照。
+/// <para><b>触达时机契约（评审 2026-09-02 补记）</b>：ModuleInitializer 在其所在模块
+/// <b>首次被触达</b>（任一成员被调用/类型被实例化/静态字段被访问等）时执行——引用了
+/// 库程序集但从未触达其中任何类型时，该程序集的实体不会注册，运行期表现为
+/// "not registered"。跨程序集消费方请确保实体类型被真实引用（或触达该程序集的
+/// 任意 PalORM 生成类型）后再使用 <see cref="DataSession{TProvider}"/>。</para>
+/// </remarks>
 public static class PalORM_Runtime
 {
     private static readonly Lock _registrationLock = new();
@@ -105,7 +115,7 @@ public static class PalORM_Runtime
     /// <summary>类型 → (属性名→列名) 映射 (用于 Include JOIN ON 子句翻译)。</summary>
     public static FrozenDictionary<Type, FrozenDictionary<string, string>> PropertyToColumn => Volatile.Read(ref _state)._propertyToColumn;
 
-    /// <summary>类型 → CREATE TABLE DDL（编译时生成，零反射）。</summary>
+    /// <summary>类型 → CREATE TABLE DDL（legacy 兼容载荷，仅旧版本生成器片段写入；运行时不执行）。</summary>
     public static FrozenDictionary<Type, string> CreateTableSql => Volatile.Read(ref _state)._createTableSql;
 
     /// <summary>类型 → 按数据库方言生成的 CREATE TABLE DDL。</summary>
@@ -147,7 +157,9 @@ public static class PalORM_Runtime
             ValidateRequiredKeys(entityTypes, fragment.PkColumns.Keys, nameof(fragment.PkColumns));
             ValidateRequiredKeys(entityTypes, fragment.ColumnNames.Keys, nameof(fragment.ColumnNames));
             ValidateRequiredKeys(entityTypes, fragment.PropertyToColumn.Keys, nameof(fragment.PropertyToColumn));
-            ValidateRequiredKeys(entityTypes, fragment.CreateTableSql.Keys, nameof(fragment.CreateTableSql));
+            // CreateTableSql（legacy 兼容载荷）校验放宽为可选键集：旧片段携带、新片段为空集均为合法
+            // （ADR-J——运行时不执行该载荷，仅要求不含未知实体键）。
+            ValidateOptionalKeys(entityTypes, fragment.CreateTableSql.Keys, nameof(fragment.CreateTableSql));
             ValidateOptionalKeys(entityTypes, fragment.CreateTableSqlByDialect.Keys,
                 nameof(fragment.CreateTableSqlByDialect));
             ValidateOptionalKeys(entityTypes, fragment.CreateIndexSqlByDialect.Keys,

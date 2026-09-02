@@ -55,10 +55,13 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        foreach (var type in PalORM_Runtime.CreateTableSql.Keys)
+        // 评审 2026-09-02 第二批（ADR-J）：实体全集以 TableNames 为键源——legacy CreateTableSql
+        // 已从生成物移除，方言 DDL（CreateTableSqlByDialect）是唯一执行真源。
+        foreach (var type in PalORM_Runtime.TableNames.Keys)
         {
-            // ITM-569：拒绝回退 legacy 单方言 DDL（与 GetCommandSqls 对称）——旧生成器片段的
-            // CreateTableSql 恒为 SQLite 风格双引号，MySQL 上报语法错而非清晰的"请重新编译"。
+            // ITM-569：拒绝回退 legacy 单方言 DDL（与 GetCommandSqls 对称）——旧生成器片段缺
+            // CreateTableSqlByDialect 键即明确拒绝；其 legacy CreateTableSql 恒为 SQLite 风格
+            // 双引号，MySQL 上报语法错而非清晰的"请重新编译"。
             if (!PalORM_Runtime.CreateTableSqlByDialect.TryGetValue(
                     type, out CreateTableSqlSet sqls))
             {

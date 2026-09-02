@@ -606,6 +606,8 @@ PalORM.Testing        测试辅助（TestEnvironment / TestDb）
 
 **零运行时依赖**：PalORM.Core 不引用任何第三方 NuGet 包（仅 BCL + ADO.NET 抽象 + 共享框架日志抽象）。
 
+**跨程序集注册契约**：每个模型程序集的生成物通过 `ModuleInitializer` 在该模块**首次被触达**（任一成员被调用、类型被实例化、静态字段被访问）时向 `PalORM_Runtime` 注册。引用了库程序集但从未触达其中任何类型时，该程序集的实体不会注册，运行期表现为 "not registered"——跨程序集消费方请确保实体类型被真实引用后再使用会话。
+
 ---
 
 ## 许可证

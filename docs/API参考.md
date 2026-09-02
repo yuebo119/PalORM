@@ -240,7 +240,11 @@
 源生成器为每个模型程序集生成 `RegistryFragment`，通过 `PalORM_Runtime.Register(fragment)` 注册。运行时一次发布不可变快照（FrozenDictionary），外部只读。
 
 16 个注册字典：RowFactories / TableNames / CommandSqls（legacy 兼容载荷——运行时不消费，
-当前生成器不再发射，仅为旧版本生成器片段保留可选注册）/ CommandSqlsByDialect / BindInsert / BindUpdate / BindDelete / PkColumns / ColumnNames / PropertyToColumn / CreateTableSql / CreateTableSqlByDialect / CreateIndexSqlByDialect / SetIdDelegates / CrudMetadatas / EntityFeatures。
+当前生成器不再发射，仅为旧版本生成器片段保留可选注册）/ CommandSqlsByDialect / BindInsert / BindUpdate / BindDelete / PkColumns / ColumnNames / PropertyToColumn / CreateTableSql（legacy 兼容载荷——同 CommandSqls，ADR-J）/ CreateTableSqlByDialect / CreateIndexSqlByDialect / SetIdDelegates / CrudMetadatas / EntityFeatures。
+
+**触达时机契约**：各模型程序集的 `ModuleInitializer` 在其模块首次被触达（任一成员被调用、
+类型被实例化、静态字段被访问）时执行——引用了库程序集但从未触达其中任何类型时，该程序集
+实体不会注册，运行期表现为 "not registered"。跨程序集消费方请确保实体类型被真实引用后再使用会话。
 
 ---
 

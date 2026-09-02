@@ -389,12 +389,16 @@ internal sealed class SourceGenIntegrationTests
     }
 
     [Test]
-    public async Task CreateTableSql_IsGenerated()
+    public async Task CreateTableSqlByDialect_IsGenerated()
     {
-        var ddl = PalORM_Runtime.CreateTableSql[typeof(TestUser)];
+        // 评审 2026-09-02 第二批（ADR-J）：legacy CreateTableSql 已从生成物移除——方言 DDL 是
+        // 唯一真源（SQLite 双引号标识符 + AUTOINCREMENT 主键 + NOT NULL）。
+        var ddl = PalORM_Runtime.CreateTableSqlByDialect[typeof(TestUser)].Get(SqlDialect.Sqlite);
         await Assert.That(ddl).Contains("CREATE TABLE IF NOT EXISTS \"test_users\"");
         await Assert.That(ddl).Contains("NOT NULL");
         await Assert.That(ddl).Contains("PRIMARY KEY AUTOINCREMENT");
+        // 新生成器片段不再携带 legacy 载荷
+        await Assert.That(PalORM_Runtime.CreateTableSql.ContainsKey(typeof(TestUser))).IsFalse();
     }
 
     [Test]
