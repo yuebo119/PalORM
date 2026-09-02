@@ -33,7 +33,7 @@
 |------|------|------|
 | PALORM001 | [Table] 实体必须有 [Key] | P0 |
 | PALORM002 | 属性无 [Column] 建议添加 | P2 |
-| PALORM003 | [ForeignKey] 引用表不存在（默认 Warning——多程序集场景可误报，见 ADR-D） | P1 |
+| PALORM003 | [ForeignKey] 引用表不存在（默认 Warning——多程序集场景可误报，ADR-D 已裁决 D3） | P1 |
 | PALORM004 | [ForeignKey] 缺 OnDelete | P2 |
 | PALORM005 | N+1 查询检测（循环内 From/Insert/Bulk/Save 等） | P0 |
 | PALORM008-010 | OwnedJson 上下文验证 | P0 |

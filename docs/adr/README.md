@@ -11,7 +11,7 @@
 | [ADR-A](ADR-A-queryasync-列序契约.md) | QueryAsync 原生 SQL 列序契约 | 已实施 | 2026-07-17 评审 ITM-117/150（GEN-06） |
 | [ADR-B](ADR-B-index-fk-迁移支持范围.md) | Index/FK 迁移 DDL 支持范围 | 已实施 | 2026-07-17 评审 ITM-104/151（GEN-03） |
 | [ADR-C](ADR-C-cachestore-全局状态.md) | CacheStore 进程级静态缓存与"零全局可变状态"冲突 | 已实施 | 2026-07-17 评审 ITM-115/152（ARCH-07/CONC-03） |
-| [ADR-D](ADR-D-多程序集实体布局.md) | 多程序集实体布局的官方支持范围 | 草案（待裁决） | 2026-07-18 评审 ITM-420 |
+| [ADR-D](ADR-D-多程序集实体布局.md) | 多程序集实体布局的官方支持范围 | 已裁决 D3（降级告警，2026-09-02 追认实施） | 2026-07-18 评审 ITM-420 |
 | [ADR-E](ADR-E-dbdatasource-单例化取舍.md) | DbDataSource 单例化取舍 | 已批准 E1（不做） | v5.0-roadmap 阶段 4.1，2026-07-25 用户裁决 |
 | [ADR-F](ADR-F-auto-tagging-interceptor.md) | Auto Tagging Interceptor | 已批准 | v5.1 Auto Tagging 特性，2026-07-28 实施完成 |
 | [ADR-G](ADR-G-mysql-allowloadlocalinfile-安全策略.md) | MySQL AllowLoadLocalInfile 安全策略 | 已裁决 | 2026-08-15 评审 ITM-612/EVAL-1 |
