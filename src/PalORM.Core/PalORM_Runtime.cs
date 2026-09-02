@@ -13,8 +13,11 @@ public sealed class RegistryFragment
     /// <summary>类型 → 数据库表名。其键集是片段的实体全集，其余字典的键以此校验。</summary>
     public required IReadOnlyDictionary<Type, string> TableNames { get; init; }
 
-    /// <summary>类型 → CRUD SQL 集。</summary>
-    public required IReadOnlyDictionary<Type, CommandSqlSet> CommandSqls { get; init; }
+    /// <summary>类型 → CRUD SQL 集。<b>legacy 兼容载荷（评审 2026-09-02 收敛）</b>：运行时从不消费——
+    /// 方言 SQL 走 <see cref="CommandSqlsByDialect"/>（唯一真源），缺方言键时 GetCommandSqls 明确拒绝。
+    /// 保留可缺省仅为旧版本生成器模型程序集的注册兼容；当前生成器不再发射此字典。</summary>
+    public IReadOnlyDictionary<Type, CommandSqlSet> CommandSqls { get; init; }
+        = FrozenDictionary<Type, CommandSqlSet>.Empty;
 
     /// <summary>类型 → 按数据库方言生成的 CRUD SQL。可选，旧片段可缺省。</summary>
     public IReadOnlyDictionary<Type, CommandSqlByDialect> CommandSqlsByDialect { get; init; }
@@ -77,7 +80,7 @@ public static class PalORM_Runtime
     /// <summary>类型 → 数据库表名。</summary>
     public static FrozenDictionary<Type, string> TableNames => Volatile.Read(ref _state)._tableNames;
 
-    /// <summary>类型 → CRUD SQL 集。</summary>
+    /// <summary>类型 → CRUD SQL 集（legacy 兼容载荷，仅旧版本生成器片段写入；运行时不消费）。</summary>
     public static FrozenDictionary<Type, CommandSqlSet> CommandSqls => Volatile.Read(ref _state)._commandSqls;
 
     /// <summary>类型 → 按数据库方言生成的 CRUD SQL。</summary>
@@ -133,7 +136,9 @@ public static class PalORM_Runtime
             RuntimeRegistryState current = Volatile.Read(ref _state);
             var entityTypes = fragment.TableNames.Keys.ToHashSet();
             ValidateRequiredKeys(entityTypes, fragment.RowFactories.Keys, nameof(fragment.RowFactories));
-            ValidateRequiredKeys(entityTypes, fragment.CommandSqls.Keys, nameof(fragment.CommandSqls));
+            // CommandSqls（legacy 兼容载荷）校验放宽为可选键集：旧片段携带、新片段为空集均为合法
+            // （评审 2026-09-02 收敛——运行时不消费该载荷，仅要求不含未知实体键）。
+            ValidateOptionalKeys(entityTypes, fragment.CommandSqls.Keys, nameof(fragment.CommandSqls));
             ValidateOptionalKeys(entityTypes, fragment.CommandSqlsByDialect.Keys,
                 nameof(fragment.CommandSqlsByDialect));
             ValidateRequiredKeys(entityTypes, fragment.BindInsert.Keys, nameof(fragment.BindInsert));

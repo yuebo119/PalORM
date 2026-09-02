@@ -61,6 +61,13 @@
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="README.md" Visible="false" />
   </ItemGroup>
 
+  <!-- [SqlFile] 特性的 .sql 文件经 AdditionalFiles 进入源生成器增量管线
+       （评审 2026-09-02：文件内容成为缓存键——仅编辑 .sql 也触发重新生成，消除 ITM-585）。
+       NuGet 消费侧由 buildTransitive targets 自动注入同一声明；仓库内项目经本 ItemGroup 覆盖。 -->
+  <ItemGroup>
+    <AdditionalFiles Include="**/*.sql" />
+  </ItemGroup>
+
   <!-- 测试项目覆盖 -->
   <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
     <IsAotCompatible>false</IsAotCompatible>

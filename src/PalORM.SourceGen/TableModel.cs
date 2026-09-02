@@ -23,17 +23,27 @@ internal sealed record TableModel(
         Justification = "TableModel 一次性收集所有注解元数据（Column/Key/ForeignKey/Index/Converter/Computed）。"
             + "大 foreach 内的多分支是必然——按注解类型拆 BuildColumn/BuildForeignKey/BuildCompositeIndex "
             + "会把单列构建拆到 3 个方法，调用关系复杂。当前结构按属性顺序线性阅读，更清晰。")]
-    public static TableModel? FromContext(GeneratorAttributeSyntaxContext ctx)
+    public static EntityModelResult FromContext(GeneratorAttributeSyntaxContext ctx)
     {
-        if (ctx.TargetSymbol is not INamedTypeSymbol typeSymbol) return null;
-        if (typeSymbol.TypeKind != TypeKind.Class) return null;
-        if (!SourceGenerationValidation.CanGenerateEntity(typeSymbol)) return null;
+        if (ctx.TargetSymbol is not INamedTypeSymbol typeSymbol)
+            return EntityModelResult.Skipped("<unknown>",
+                "the [Table] target symbol is not a named type");
+        if (typeSymbol.TypeKind != TypeKind.Class)
+            return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                "the [Table] target is not a class or record (interfaces/structs/enums are not supported)");
+        if (!SourceGenerationValidation.CanGenerateEntity(typeSymbol))
+            return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                "entity declaration or primary key shape is not supported (generic/nested/abstract/static type, "
+                + "missing public parameterless constructor, non-writable properties, missing/invalid [Key], "
+                + "or an invalid value mapping; see PALORM015/016/022)");
 
         // ITM-512：注解匹配全程校验命名空间为 PalORM（IsPalORMAttribute），
         // 避免混挂 EF Core/System.ComponentModel.DataAnnotations 同名注解时误判。
         var tableAttr = typeSymbol.GetAttributes().FirstOrDefault(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
-        if (tableAttr is null) return null;
+        if (tableAttr is null)
+            return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                "no PalORM [Table] attribute found (unexpected: the pipeline filters by it)");
 
         string tableName = tableAttr.ConstructorArguments.FirstOrDefault().Value as string
             ?? typeSymbol.Name;
@@ -88,7 +98,8 @@ internal sealed record TableModel(
             // 零反馈直到运行期 not registered）——现由 PALORM044 定位报错，此处防御性跳过。
             if (computedExpression is not null
                 && (computedExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
-                return null;
+                return EntityModelResult.Skipped(typeSymbol.Name,
+                    $"[Computed] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM044)");
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
             bool isOwnedJson = ownedJsonAttr is not null;
@@ -116,7 +127,8 @@ internal sealed record TableModel(
             // CS8785 生成器崩溃堆栈）；现按 PALORM022 分工——生成器静默跳过，
             // PALORM042 在编译期定位报错（Error 级阻断后续流程）。
             if (isTimestamp && computedExpression is not null)
-                return null;
+                return EntityModelResult.Skipped(typeSymbol.Name,
+                    $"[Timestamp] and [Computed] conflict on property '{prop.Name}' (PALORM042)");
 
             var fkAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
@@ -185,10 +197,11 @@ internal sealed record TableModel(
             || foreignKeys.Any(fk => SourceGenerationValidation.HasUnsafeSqlIdentifier(fk.ReferencedTable)
                 || SourceGenerationValidation.HasUnsafeSqlIdentifier(fk.ReferencedColumn)))
         {
-            return null;
+            return EntityModelResult.Skipped(typeSymbol.Name,
+                "a SQL identifier (table/column/index/FK name) contains a control character or is empty (PALORM043)");
         }
 
-        return new TableModel(
+        return EntityModelResult.Generated(new TableModel(
             typeSymbol.ContainingNamespace.ToDisplayString(),
             typeSymbol.Name,
             entityTypeName,
@@ -196,7 +209,7 @@ internal sealed record TableModel(
             tableName, isSoftDelete, isTenantAware,
             new EquatableArray<ColumnModel>(columns.ToArray()),
             new EquatableArray<IndexModel>(indexes.ToArray()),
-            new EquatableArray<ForeignKeyModel>(foreignKeys.ToArray()));
+            new EquatableArray<ForeignKeyModel>(foreignKeys.ToArray())));
     }
 
     /// <summary>收集实体自身及基类链上的可映射属性（ITM-502：GetMembers 不含继承成员，
@@ -284,6 +297,23 @@ internal sealed record IndexModel(string Name, EquatableArray<string> Columns, b
 
 internal sealed record ForeignKeyModel(
     string PropertyName, string ReferencedTable, string ReferencedColumn, int OnDelete);
+
+/// <summary>实体模型提取结果——<see cref="Model"/> 为 null 表示实体被生成器防御性跳过。
+/// <para><b>评审 2026-09-02（PALORM045）</b>：原 FromContext 失败面恒返 null、编译期零反馈，
+/// 兜底完全依赖可被 .editorconfig/ruleset 降级关闭的分析器诊断——分析器规则被抑制时实体
+/// 静默不注册，故障延迟到运行期 "not registered"。本结果让生成器管线在失败面发射
+/// PALORM045 兜底 Warning，保证该场景下至少有一条可检索的编译期线索。</para>
+/// <para>纯 record + 字符串成员保证值相等语义，安全进入增量缓存（WithComparer）。</para></summary>
+internal sealed record EntityModelResult(
+    TableModel? Model,
+    string? EntityDisplayName,
+    string? FailureReason)
+{
+    public static EntityModelResult Generated(TableModel model) => new(model, null, null);
+
+    public static EntityModelResult Skipped(string entityDisplayName, string failureReason)
+        => new(null, entityDisplayName, failureReason);
+}
 
 /// <summary>外键删除行为（与 Core 中 DeleteAction 枚举值对齐）。
 /// ITM-613: SourceGen 是 netstandard2.0 不能引用 Core，故两侧数值靠约定对齐——

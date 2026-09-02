@@ -9,6 +9,8 @@ namespace PalORM.SourceGen;
 /// <summary>PalORM 编译时验证——PALORM001-005, 008-044 诊断规则（006/007 已删，038/039 备用留空）。
 /// PALORM006/007 已删除——006 由 SqlFileEmitter 的 Obsolete-error 机制承担，
 /// 007 无 schema 对照数据源。编号不复用，避免历史引用混淆。
+/// PALORM041 定义于 SqlTemplateEmitter；PALORM045（生成器 transform 失败面兜底，
+/// 评审 2026-09-02）定义于 PalORMGenerator——两者均为生成器侧上报。
 /// v5.0 扩充（PALORM023-027 实体级硬规则 + PALORM031-033 调用级 + PALORM034-037/040 防静默错误）。
 /// ITM-640 收口（PALORM042-044）：生成器 throw/静默跳过的编译期定位面——分工同 PALORM022：
 /// 分析器精确定位报错，生成器防御性跳过。</summary>
@@ -26,12 +28,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Property '{0}' has no [Column] attribute, so it maps to column '{0}' by name convention", "PalORM", DiagnosticSeverity.Warning, true);
 
     // ITM-585: 表名扫描仅覆盖本程序集（GetAssemblyTableNames）——多程序集实体布局下
-    // 引用他程序集表会误报。Analyzer 按类型增量执行、跨编译引用聚合不可靠，多程序集
-    // 场景可 .editorconfig 降级本诊断（dotnet_diagnostic.PALORM003.severity = suggestion）。
-    // F6（消息精准化）：补"如实体在引用程序集可降级"提示。
+    // 引用他程序集表会误报。Analyzer 按类型增量执行、跨编译引用聚合不可靠。
+    // 评审 2026-09-02 严重度复议：带已知假阳的启发式规则不符合本项目"P0 防崩溃=Error、
+    // 启发式=Warning"分层——默认 Error 会让多程序集用户在合法代码上被阻断编译，
+    // 降为 Warning（TreatWarningsAsErrors 项目可按需 dotnet_diagnostic 降级）。
+    // F6（消息精准化）：补"如实体在引用程序集"上下文。
     public static readonly DiagnosticDescriptor UnknownTable = new(
         "PALORM003", "Foreign key references unknown table",
-        "[ForeignKey] references table '{0}' but no [Table] attribute is found in the current assembly", "PalORM", DiagnosticSeverity.Error, true);
+        "[ForeignKey] references table '{0}' but no [Table] attribute is found in the current assembly; this can be a false positive if the entity lives in a referenced assembly", "PalORM", DiagnosticSeverity.Warning, true);
 
     // ITM-525：FK 约束 DDL 当前不由 MigrateAsync 生成（ForeignKeys 收集为未来兼容保留），
     // 故本诊断只提示 OnDelete 声明是为未来 FK DDL 预留，当前不产生任何运行时约束效果。
@@ -104,9 +108,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Type '{0}' declares {1} [Key] properties; PalORM supports exactly one primary key per entity",
         "PalORM", DiagnosticSeverity.Error, true);
 
+    // 评审 2026-09-02：messageFormat 由 "{0}"（整条消息经参数传入，描述符丧失统一格式
+    // 约束）改为真实格式——固定前缀 + 类型名 + 细节占位；各调用点只传动态细节。
     public static readonly DiagnosticDescriptor InvalidIndexDeclaration = new(
         "PALORM020", "Index declaration is invalid or conflicting",
-        "{0}", "PalORM", DiagnosticSeverity.Error, true);
+        "Invalid [Index] declaration on type '{0}': {1}", "PalORM", DiagnosticSeverity.Error, true);
 
     public static readonly DiagnosticDescriptor DuplicateColumnName = new(
         "PALORM021", "Multiple properties map to the same column name",
@@ -275,14 +281,16 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // PALORM005: N+1 检测 — 循环中 From<T>() / ORM 调用
         // ITM-574：语法名匹配会误报 EF Core/MongoDB 等第三方库的同名方法（ToListAsync 等），
         // TreatWarningsAsErrors 项目直接阻断——语义模型确认接收者/方法归属 PalORM 后才报。
+        // 评审 2026-09-02（ITM-634 同型）：语法圈检查先行——绝大多数调用不在循环内，
+        // 昂贵的语义确认只对候选付费（与 PALORM033 修复口径一致）。
         context.RegisterSyntaxNodeAction(ctx =>
         {
             var invocation = (InvocationExpressionSyntax)ctx.Node;
             if (invocation.Expression is not MemberAccessExpressionSyntax ma) return;
             if (!IsPalORMQueryMethod(ma.Name.Identifier.Text)) return;
+            if (TryFindEnclosingLoop(invocation) is not { } loopLocation) return;
             if (!IsPalORMInvocation(ctx, invocation)) return;
-            if (TryFindEnclosingLoop(invocation) is { } loopLocation)
-                ctx.ReportDiagnostic(Diagnostic.Create(NPlusOneDetected, loopLocation));
+            ctx.ReportDiagnostic(Diagnostic.Create(NPlusOneDetected, loopLocation));
         }, SyntaxKind.InvocationExpression);
 
         // PALORM031: BulkUpdateBatchAsync<T> 对 [ConcurrencyCheck] 实体调用——必崩
@@ -1010,8 +1018,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM034：[Key] 属性有非默认初始值——SaveAsync 永远走 Update 分支。
-    /// 例外：[Key(AutoIncrement = false)]（雪花 ID/string key）允许任意初值，不报告。
-    /// 例外：string 类型的 "" / null 等同默认值。</summary>
+    /// 例外：[Key(AutoIncrement = false)]（雪花 ID/string key）允许任意初值，不报告。</summary>
     private static void CheckKeyNonDefaultValue(
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
@@ -1031,19 +1038,55 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             .FirstOrDefault();
         if (propertyDecl?.Initializer is null) return;
 
-        // 初始值文本：对值类型 default/0/null 不报；对 string ""/null 不报
-        // ITM-634：白名单补常用等价写法（default! 抑制 NRT / Guid.Empty / MinValue哨兵 / 常量内插）
-        string initText = propertyDecl.Initializer.Value.ToString();
-        if (initText is "default" or "default!" or "default(long)" or "default(int)" or "default(Guid)"
-            or "0" or "0L" or "0l" or "null" or "\"\"" or "string.Empty"
-            or "Guid.Empty" or "int.MinValue" or "long.MinValue" or "0u" or "0UL"
-            // ITM-650(r4)：等价默认写法补收（十六进制/无符号序/带空格抑制后缀）
-            or "0x0" or "0ul" or "0lu" or "0Lu" or "default !"
-            or "default(long)!" or "default(int)!" or "default(Guid)!") return;
+        // 评审 2026-09-02：原"初始化器文本白名单"本质脆弱——0.0e0/1_000 等等价写法误报、
+        // 变体拼写漏报。改用语义常量值判定（GetConstantValue 给出编译期真值，等价写法自然
+        // 归一：0x0、default(long)!、带空格抑制后缀全部命中同一常量）。非常量初始化器
+        // （new Guid(...)、DateTime.Now）按非默认值照报。
+        // RS1030（评审 2026-09-02 局部抑制）：SymbolAnalysisContext 不暴露 SemanticModel；
+        // 初始化器语法属于正被分析的同一符号同一语法树，此处 GetSemanticModel 无跨树误用。
+#pragma warning disable RS1030
+        SemanticModel semanticModel = ctx.Compilation.GetSemanticModel(propertyDecl.SyntaxTree);
+        Optional<object?> constant = semanticModel.GetConstantValue(propertyDecl.Initializer.Value);
+#pragma warning restore RS1030
+        if (IsDefaultLikeKeyValue(semanticModel, propertyDecl.Initializer.Value, constant))
+            return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(KeyWithNonDefaultValue,
             member.Locations.FirstOrDefault() ?? type.Locations[0],
             member.Name, type.Name));
+    }
+
+    /// <summary>PALORM034 辅助：初始值是否"等同默认"——null/空串/数值 0/false/'\0'/Guid.Empty，
+    /// 以及既定哨兵例外 int.MinValue/long.MinValue（"未赋值"标记语义，ITM-634 口径保留）。
+    /// <paramref name="constant"/> 无值（非常量）时仅放行语义可证等于 Guid.Empty 的成员访问
+    /// （Guid.Empty 是 static readonly 字段而非编译期常量，GetConstantValue 取不到）。</summary>
+    private static bool IsDefaultLikeKeyValue(
+        SemanticModel semanticModel, ExpressionSyntax initializer, Optional<object?> constant)
+    {
+        if (!constant.HasValue)
+        {
+            return semanticModel.GetSymbolInfo(initializer).Symbol
+                is IFieldSymbol { Name: "Empty" } field
+                && field.ContainingType.ToDisplayString() == "System.Guid";
+        }
+        return constant.Value switch
+        {
+            null => true,
+            string text => text.Length == 0,
+            0 => true,              // int/short/byte/sbyte 等装箱 0
+            0L => true,
+            0u => true,
+            0UL => true,
+            0f => true,
+            0d => true,
+            0m => true,
+            false => true,
+            '\0' => true,
+            Guid guid => guid == Guid.Empty,
+            int.MinValue => true,   // 哨兵例外（ITM-634 口径）
+            long.MinValue => true,
+            _ => false
+        };
     }
 
     /// <summary>PALORM035：[ConcurrencyCheck] + [IgnoreOnInsert]——乐观锁基线为 0。</summary>
@@ -1246,7 +1289,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration,
                     member.Locations.FirstOrDefault() ?? type.Locations[0],
-                    $"[Unique] on '{member.Name}' derives index name '{derivedName}' which is already used on this entity"));
+                    type.Name,
+                    $"[Unique] on '{member.Name}' derives index name '{derivedName}', which is already used on this entity"));
             }
         }
     }
@@ -1267,14 +1311,16 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 || string.IsNullOrWhiteSpace(indexName))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
-                    $"[Index] on '{type.Name}' has no valid name; declare [Index(\"name\", \"col1\", ...)]"));
+                    type.Name,
+                    "no valid name; declare [Index(\"name\", \"col1\", ...)]"));
                 continue;
             }
 
             if (!TryGetIndexColumns(indexAttr, out string[] columns))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
-                    $"[Index(\"{indexName}\")] on '{type.Name}' declares no columns; it would be silently dropped"));
+                    type.Name,
+                    $"[Index(\"{indexName}\")] declares no columns; it would be silently dropped"));
                 continue;
             }
 
@@ -1283,7 +1329,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             if (!seenNames.Add(indexName))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
-                    $"Index name '{indexName}' is declared more than once on '{type.Name}'"));
+                    type.Name,
+                    $"index name '{indexName}' is declared more than once"));
             }
         }
     }
@@ -1309,7 +1356,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             if (!knownColumns.Contains(column))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration, location,
-                    $"[Index(\"{indexName}\")] on '{type.Name}' references column '{column}' " +
+                    type.Name,
+                    $"[Index(\"{indexName}\")] references column '{column}' " +
                     "which does not exist on the entity; CREATE INDEX would fail at MigrateAsync"));
             }
         }

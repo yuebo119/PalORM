@@ -1,34 +1,47 @@
+using System.Collections.Immutable;
 using System.Text;
 using Microsoft.CodeAnalysis;
 
 namespace PalORM.SourceGen;
 
-/// <summary>[SqlFile("path.sql")] 特性源生成器——编译时读取 .sql 文件并嵌入为 const string。
-/// <para><b>为什么不用 AdditionalTexts</b>: RS1041 强制 netstandard2.0, AdditionalTexts 仅在 net8.0+ 暴露。
-/// 使用 ForAttributeWithMetadataName 从特性参数获取文件路径——任何 Roslyn 版本通用。</para>
+/// <summary>[SqlFile("path.sql")] 特性源生成器——编译时把 .sql 文件嵌入为常量方法。
+/// <para><b>评审 2026-09-02 管线重构</b>：文件内容经 AdditionalFiles（targets 自动注入
+/// **/*.sql）进入增量管线，内容成为缓存键——仅编辑 .sql 也触发重新生成（消除 ITM-585
+/// "改 .sql 不重读"的陈旧缓存限制）；生成器零磁盘 IO，RS1035 文件级抑制删除。
+/// 此前注释声称"RS1041 强制 netstandard2.0 故不能用 AdditionalTexts"系误注——该规则只
+/// 约束 TFM，AdditionalTextsProvider 在 netstandard2.0 可用；真实收益是文件内容以值相等
+/// 进入缓存键（即本重构后的实际形态）。项目根改读 build_property.ProjectDir，不再从源
+/// 文件路径向上找 *.csproj（多项目/linked file 场景可能解析到错误根）。</para>
 /// <para>Provider 条件分支: .sql 文件中 -- @pg/@mysql/@sqlite/@all 指令→根据 [SqlFile(Provider="xx")]
 /// 编译时只提取匹配段。</para>
-/// <para>安全: 拒绝绝对路径和 .. 遍历, Path.GetFullPath 前缀校验防越界。</para>
-/// <para><b>ITM-585 已知限制</b>: 文件读取发生在 transform 内、增量缓存键只含语法/符号——
-/// 仅编辑 .sql 不改 C# 源时，IDE/增量构建沿用旧缓存，嵌入 SQL 陈旧直至相关源文件变动
-/// 或全量重建（dotnet build 冷构建恒新鲜；改 .sql 后请连带 touch 声明方法所在文件）。</para></summary>
+/// <para>安全: 拒绝绝对路径和 .. 遍历, 解析后前缀校验防越界。</para></summary>
 internal static class SqlFileEmitter
 {
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
-        "S3776:CognitiveComplexity",
-        Justification = "SqlFile 源生成器主入口：路径安全检查 + 项目根解析 + 文件读取 + Provider 段解析 "
-            + "四阶段顺序执行。已抽出 HasTraversalSegment/ResolveProjectRoot/TryReadSqlFile；"
-            + "余下复杂度来自多分支诊断（ITM-564 未识别 Provider/段全不匹配）。")]
-    internal static string? Generate(GeneratorAttributeSyntaxContext ctx, CancellationToken ct)
+    /// <summary>[SqlFile] 方法的编译期模型——路径校验与内容查找在 <see cref="Render"/>
+    /// 阶段（RegisterSourceOutput）执行；本模型只含缓存键友好（纯字符串）成员。</summary>
+    internal sealed record SqlFileMethodModel(
+        string HintName,
+        string? Namespace,
+        string TypeName,
+        string MethodName,
+        string RelativePath,
+        string? TargetProvider);
+
+    /// <summary>AdditionalText 的内容快照——值相等进入增量缓存键（内容变更即管线失效）。</summary>
+    internal readonly record struct SqlFileContent(string Path, string Content)
+    {
+        public static SqlFileContent FromAdditionalText(AdditionalText text, CancellationToken ct)
+            => new(text.Path, text.GetText(ct)?.ToString() ?? "");
+    }
+
+    /// <summary>提取阶段（transform，缓存键=语法+符号）：只取方法形状与特性参数，零 IO。
+    /// 泛型/嵌套类不支持——跳过生成 → 宿主侧得到 CS8795（partial 方法缺实现）直接指向
+    /// 原方法，明确可定位（r19/ITM-686）。</summary>
+    internal static SqlFileMethodModel? ExtractMethodModel(GeneratorAttributeSyntaxContext ctx)
     {
         if (ctx.TargetSymbol is not IMethodSymbol method)
             return null;
 
-        // r19/ITM-686：泛型/嵌套类不支持——partial 声明必须逐字匹配类型参数、
-        // 约束与嵌套层级，发射非泛型非嵌套 partial 会产 CS0261/CS0260 且错误指向 .g.cs。
-        // 跳过生成 → 宿主侧得到 CS8795（partial 方法缺实现）直接指向原方法，明确可定位；
-        // 完整支持需按类型符号发射 arity/约束/嵌套路径（Table 侧同形态由
-        // SourceGenerationValidation 拒绝，此处为轻量同型守卫）。
         if (method.ContainingType is { IsGenericType: true }
             || method.ContainingType?.ContainingType is not null)
             return null;
@@ -40,8 +53,6 @@ internal static class SqlFileEmitter
             return null;
 
         string relativePath = attr.ConstructorArguments[0].Value?.ToString() ?? "";
-        if (string.IsNullOrEmpty(relativePath))
-            return GenerateError(method, "SqlFile 路径不能为空。");
 
         // 读取可选 Provider 参数
         string? targetProvider = null;
@@ -51,70 +62,98 @@ internal static class SqlFileEmitter
                 targetProvider = p;
         }
 
-        // 安全: 拒绝绝对路径和路径遍历
-        // ITM-584: '..' 按路径段判定——子串判定误拒 `my..queries.sql` 等合法文件名；
-        // 真正的遍历（`../x` / `a/../b`）仍被拒绝，且 ITM-545 的解析后前缀校验仍在下游兜底。
-        if (Path.IsPathRooted(relativePath) || HasTraversalSegment(relativePath))
-            return GenerateError(method, $"SqlFile 路径必须为相对路径，不允许 '..' 或绝对路径: {relativePath}");
-
-        ct.ThrowIfCancellationRequested();
-
-        // ITM-530：源生成器读取磁盘 .sql 文件是本特性的核心设计（见类型注释——RS1041 下
-        // 无法用 AdditionalTexts），此处按需读盘属刻意为之，故局部抑制 RS1035（分析器禁用 IO API）
-        // 而非全局 NoWarn，保证其它意外 IO 仍被诊断。
-#pragma warning disable RS1035
-        // 编译时读取文件: 相对于项目根目录
-        string? projectDir = Path.GetDirectoryName(
-            ctx.TargetSymbol.Locations.FirstOrDefault()?.SourceTree?.FilePath);
-        if (projectDir is null) return null;
-
-        ct.ThrowIfCancellationRequested();
-
-        string rootDir = ResolveProjectRoot(projectDir);
-        string fullPath = Path.GetFullPath(Path.Combine(rootDir, relativePath));
-
-        // 确保解析后路径仍在项目目录内。前缀比较带尾分隔符（ITM-545 纵深防御）：
-        // 否则 rootDir="/proj/app" 时 "/proj/app-evil/x" 会误判为在内（虽当前被 .. 拒绝挡住）。
-        // ITM-632 登记：OrdinalIgnoreCase 在 Linux 大小写敏感 FS 上可放行大小写异形越界路径
-        // （下游读取失败兜底，实害低）；GetFullPath 不解析 symlink——指向项目外的 .sql 符号链接
-        // 可越界读。两者属受信任项目文件模型的接受面（.csproj 同级威胁），不做纵深加固。
-        string rootWithSep = rootDir.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
-            ? rootDir : rootDir + Path.DirectorySeparatorChar;
-        if (!fullPath.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
-            return GenerateError(method, $"SqlFile 路径越界: {relativePath}");
-
-        string? sqlContent = TryReadSqlFile(fullPath);
-        if (sqlContent is null)
-            return GenerateError(method, $"SQL file not found or unreadable: {fullPath}");
-#pragma warning restore RS1035
-
-        // ── V_SQL: 条件分支解析 ──
-        // ITM-564：段全不匹配时此前静默回退整份原文（含全部异方言语句），运行期才炸；
-        // 未识别的 provider 别名（如 "postgres"）也静默落入同路径——两者都转为编译期明确失败。
-        SqlSectionResolution resolution = ResolveProviderSections(sqlContent, targetProvider);
-        if (resolution.UnrecognizedProvider is not null)
-            return GenerateError(method,
-                $"SqlFile Provider '{resolution.UnrecognizedProvider}' 不是有效的 provider 名；" +
-                "支持: postgresql/pg, mysql/my, sqlite/sq");
-        if (resolution.HasDirectives && string.IsNullOrWhiteSpace(resolution.Resolved))
-            return GenerateError(method,
-                $"SqlFile '{relativePath}' 声明了 provider 段但没有任何段匹配 " +
-                $"'{targetProvider ?? "(未指定)"}'（也无 @all 段）；" +
-                "嵌入整份原文会在运行期执行异方言 SQL，已拒绝");
-        sqlContent = resolution.Resolved;
-
         INamedTypeSymbol? containingType = method.ContainingType;
         string typeName = containingType?.Name ?? "Unknown";
         string? ns = containingType?.ContainingNamespace?.IsGlobalNamespace == true
             ? null : containingType?.ContainingNamespace?.ToDisplayString();
 
-        return GenerateMethod(ns, typeName, method.Name, sqlContent, fullPath);
+        return new SqlFileMethodModel(
+            PalORMGenerator.CreateStableHintName(
+                "SqlFile", method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)),
+            ns, typeName, method.Name, relativePath, targetProvider);
     }
 
-    private static string GenerateMethod(string? ns, string typeName, string methodName, string sqlContent, string sourcePath)
+    /// <summary>渲染阶段（RegisterSourceOutput）：路径安全校验 + AdditionalFiles 内容查找 +
+    /// Provider 段解析。找不到内容时发射 Obsolete(error) 错误占位（调用点 CS0619 指向原方法）。</summary>
+    internal static string? Render(
+        SqlFileMethodModel model,
+        ImmutableArray<SqlFileContent> sqlFiles,
+        string? projectDir)
+    {
+        if (string.IsNullOrEmpty(model.RelativePath))
+            return GenerateError(model, "SqlFile 路径不能为空。");
+
+        // 安全: 拒绝绝对路径和路径遍历
+        // ITM-584: '..' 按路径段判定——子串判定误拒 `my..queries.sql` 等合法文件名；
+        // 真正的遍历（`../x` / `a/../b`）仍被拒绝，且 ITM-545 的解析后前缀校验仍在下游兜底。
+        if (Path.IsPathRooted(model.RelativePath) || HasTraversalSegment(model.RelativePath))
+            return GenerateError(model, $"SqlFile 路径必须为相对路径，不允许 '..' 或绝对路径: {model.RelativePath}");
+
+        // 无 ProjectDir（非 MSBuild 宿主）时无法解析相对路径——跳过（与原实现同口径）。
+        // 模式判空而非 IsNullOrEmpty：netstandard2.0 引用程序集无 [NotNullWhen] 注解，
+        // 流分析依赖模式匹配（评审 2026-09-02）。
+        if (projectDir is null || projectDir.Length == 0)
+            return null;
+
+        string fullPath = Path.GetFullPath(Path.Combine(projectDir, model.RelativePath));
+
+        // 确保解析后路径仍在项目目录内。前缀比较带尾分隔符（ITM-545 纵深防御）：
+        // 否则 rootDir="/proj/app" 时 "/proj/app-evil/x" 会误判为在内（虽当前被 .. 拒绝挡住）。
+        // ITM-632 登记：OrdinalIgnoreCase 在 Linux 大小写敏感 FS 上可放行大小写异形越界路径，
+        // 内容查找同为不区分大小写（实害低）；GetFullPath 不解析 symlink——指向项目外的 .sql
+        // 符号链接可越界读。两者属受信任项目文件模型的接受面（.csproj 同级威胁）。
+        string rootWithSep = projectDir.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+            ? projectDir : projectDir + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
+            return GenerateError(model, $"SqlFile 路径越界: {model.RelativePath}");
+
+        string? sqlContent = FindContent(sqlFiles, fullPath);
+        if (sqlContent is null)
+            return GenerateError(model,
+                $"SQL file not found: {fullPath}. Ensure the file exists and is supplied to the compiler as "
+                + "AdditionalFiles (automatic via the PalORM.SourceGen targets; otherwise add "
+                + "<AdditionalFiles Include=\"**\\*.sql\" /> to your project).");
+
+        // ── Provider 条件分支解析 ──
+        // ITM-564：段全不匹配时此前静默回退整份原文（含全部异方言语句），运行期才炸；
+        // 未识别的 provider 别名（如 "postgres"）也静默落入同路径——两者都转为编译期明确失败。
+        SqlSectionResolution resolution = ResolveProviderSections(sqlContent, model.TargetProvider);
+        if (resolution.UnrecognizedProvider is not null)
+            return GenerateError(model,
+                $"SqlFile Provider '{resolution.UnrecognizedProvider}' 不是有效的 provider 名；" +
+                "支持: postgresql/pg, mysql/my, sqlite/sq");
+        if (resolution.HasDirectives && string.IsNullOrWhiteSpace(resolution.Resolved))
+            return GenerateError(model,
+                $"SqlFile '{model.RelativePath}' 声明了 provider 段但没有任何段匹配 " +
+                $"'{model.TargetProvider ?? "(未指定)"}'（也无 @all 段）；" +
+                "嵌入整份原文会在运行期执行异方言 SQL，已拒绝");
+        sqlContent = resolution.Resolved;
+
+        return GenerateMethod(model, sqlContent, fullPath);
+    }
+
+    /// <summary>在 AdditionalFiles 内容快照中按解析后的绝对路径查找 .sql 内容。
+    /// 归一化分隔符后不区分大小写比较（MSBuild 传入路径的分隔符/大小写可能与
+    /// GetFullPath 产物不同；Linux 大小写接受面见 Render 注释 ITM-632）。</summary>
+    private static string? FindContent(ImmutableArray<SqlFileContent> sqlFiles, string fullPath)
+    {
+        string normalizedTarget = NormalizeSeparators(fullPath);
+        foreach (SqlFileContent file in sqlFiles)
+        {
+            if (string.Equals(NormalizeSeparators(file.Path), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                return file.Content;
+        }
+        return null;
+    }
+
+    private static string NormalizeSeparators(string path)
+        => path.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+
+    private static string GenerateMethod(SqlFileMethodModel model, string sqlContent, string sourcePath)
     {
         // 使用 C#11 raw string literal 处理含引号和反斜杠的 SQL；SQL 内容含 """ 序列时
-        // 加长定界符（比内容中最长引号连串多 1），保证生成物永远合法（ITM-410 同类加固）
+        // 加长定界符（比内容中最长引号连串多 1），保证生成物永远合法（ITM-410 同类加固）。
+        // 注意：生成物要求消费项目 LangVersion ≥ 11（评审 2026-09-02 补登记的前提）。
         int maxQuoteRun = 0, run = 0;
         foreach (char c in sqlContent)
         {
@@ -126,13 +165,13 @@ internal static class SqlFileEmitter
         sb.AppendLine("// <auto-generated/>");
         sb.AppendLine("#nullable enable");
         sb.AppendLine();
-        if (ns is not null) sb.AppendLine($"namespace {ns};");
+        if (model.Namespace is not null) sb.AppendLine($"namespace {model.Namespace};");
         sb.AppendLine();
-        sb.AppendLine($"partial class {typeName}");
+        sb.AppendLine($"partial class {model.TypeName}");
         sb.AppendLine("{");
         // ITM-584: 路径含 &/< 时 XML doc 畸形（CS1570，TreatWarningsAsErrors 下变错误）——XML 实体转义
         sb.AppendLine($"    /// <summary>编译时嵌入 SQL (来源: {EscapeForXmlDoc(sourcePath)})</summary>");
-        sb.Append("    public static partial string ").Append(methodName).Append("() => ").AppendLine(delimiter);
+        sb.Append("    public static partial string ").Append(model.MethodName).Append("() => ").AppendLine(delimiter);
         sb.AppendLine(sqlContent);
         sb.Append(delimiter).AppendLine(";");
         sb.AppendLine("}");
@@ -144,40 +183,8 @@ internal static class SqlFileEmitter
     private static bool HasTraversalSegment(string relativePath)
         => relativePath.Split('/', '\\').Any(static segment => segment == "..");
 
-    /// <summary>从当前目录向上查找含 .csproj 的项目根目录；最多 10 层避免无限循环。</summary>
-#pragma warning disable RS1035 // ITM-530：源生成器读取磁盘 .sql 文件是本特性的核心设计
-    private static string ResolveProjectRoot(string projectDir)
+    private static string GenerateError(SqlFileMethodModel model, string error)
     {
-        string? currentDir = projectDir;
-        for (int depth = 0; depth < 10 && currentDir is not null; depth++)
-        {
-            if (Directory.GetFiles(currentDir, "*.csproj").Length > 0) return currentDir;
-            string? parent = Path.GetDirectoryName(currentDir);
-            if (parent == currentDir) break;
-            currentDir = parent;
-        }
-        return currentDir ?? projectDir;
-    }
-
-    /// <summary>读 SQL 文件内容；文件不存在或被占用时返回 null（调用方决定诊断消息）。</summary>
-    /// <returns>文件内容；失败时返回 null。</returns>
-    private static string? TryReadSqlFile(string fullPath)
-    {
-        try { return File.ReadAllText(fullPath); }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException
-            or IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-#pragma warning restore RS1035
-
-    private static string GenerateError(IMethodSymbol method, string error)
-    {
-        string typeName = method.ContainingType?.Name ?? "Unknown";
-        string? ns = method.ContainingType?.ContainingNamespace?.IsGlobalNamespace == true
-            ? null : method.ContainingType?.ContainingNamespace?.ToDisplayString();
-
         // FormatLiteral 统一转义——错误消息含引号/换行时生成物仍是合法 C#（ITM-410：
         // 此前 AppendLine 在字符串字面量中间断行，生成物本身 CS1010，Obsolete 诊断被架空）
         string errorLiteral = Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(error, quote: true);
@@ -185,13 +192,13 @@ internal static class SqlFileEmitter
         sb.AppendLine("// <auto-generated/>");
         sb.AppendLine("#nullable enable");
         sb.AppendLine();
-        if (ns is not null) sb.AppendLine($"namespace {ns};");
+        if (model.Namespace is not null) sb.AppendLine($"namespace {model.Namespace};");
         sb.AppendLine();
-        sb.AppendLine($"partial class {typeName}");
+        sb.AppendLine($"partial class {model.TypeName}");
         sb.AppendLine("{");
         sb.AppendLine($"    /// <summary>SqlFile 源生成失败。</summary>");
         sb.AppendLine($"    [global::System.Obsolete({errorLiteral}, error: true)]");
-        sb.Append("    public static partial string ").Append(method.Name)
+        sb.Append("    public static partial string ").Append(model.MethodName)
             .Append("() => throw new global::System.IO.FileNotFoundException(")
             .Append(errorLiteral).AppendLine(");");
         sb.AppendLine("}");

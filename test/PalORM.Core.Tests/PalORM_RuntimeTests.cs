@@ -146,10 +146,12 @@ public sealed class PalORM_RuntimeTests
     [Test]
     public async Task RuntimeFields_ArePopulated_AfterModuleInit()
     {
-        // 验证注册表属性全部可访问且含数据（模块初始化器填充后）
+        // 验证注册表属性全部可访问且含数据（模块初始化器填充后）。
+        // 评审 2026-09-02：新生成器片段不再发射 legacy CommandSqls（方言 SQL 唯一真源）；
+        // 本套件其他测试可能手工 Register 携带该载荷的片段，故此处不断言其全局计数——
+        // "新生成物不含 legacy 载荷"由 SourceGenIntegrationTests.CommandSqlsByDialect_AreGenerated 锁定。
         await Assert.That(PalORM_Runtime.RowFactories.Count).IsGreaterThan(0);
         await Assert.That(PalORM_Runtime.TableNames.Count).IsGreaterThan(0);
-        await Assert.That(PalORM_Runtime.CommandSqls.Count).IsGreaterThan(0);
         await Assert.That(PalORM_Runtime.CommandSqlsByDialect.Count).IsGreaterThan(0);
         await Assert.That(PalORM_Runtime.BindInsert.Count).IsGreaterThan(0);
         await Assert.That(PalORM_Runtime.BindUpdate.Count).IsGreaterThan(0);

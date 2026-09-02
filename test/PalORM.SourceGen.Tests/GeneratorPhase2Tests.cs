@@ -113,8 +113,10 @@ internal sealed class GeneratorPhase2Tests
         string bindInsert = ExtractMethod(commandFactory, "BindInsertToBatch(", "BindInsertValues(");
 
         await Assert.That(errors).IsEmpty();
-        await Assert.That(commandFactory).Contains(
-            "InsertSql = \"INSERT INTO items (name) VALUES (@p0)\"");
+        // 评审 2026-09-02：legacy InsertSql const 已删除——断言 Registry 的方言 SQL（SQLite 集，
+        // 标识符经方言引号转义），与 BindInsert 同谓词同序（IsUpdatableColumn 单一真源）。
+        await Assert.That(registry).Contains(
+            "INSERT INTO \\\"items\\\" (\\\"name\\\") VALUES (@p0)");
         await Assert.That(bindInsert).Contains("entity.Name");
         await Assert.That(bindInsert).DoesNotContain("entity.Ignored");
         await Assert.That(bindInsert).DoesNotContain("entity.Timestamp");
@@ -934,14 +936,12 @@ internal sealed class GeneratorPhase2Tests
 
         GeneratorResult result = RunGenerator(source);
         string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
-        string commandFactory = result.GeneratedSources.Single(pair =>
-            pair.Key.StartsWith("CommandFactory_", StringComparison.Ordinal)).Value;
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+        // 评审 2026-09-02：CommandFactory 的 legacy const 已删除——转义字面量断言改锁
+        // Registry（方言 SQL 是唯一真源，ToCSharpLiteral 转义路径不变）。
         await Assert.That(registry).Contains("order\\\"archive\\\\2026");
         await Assert.That(registry).Contains("id`\\\"value\\\\part");
-        await Assert.That(commandFactory).Contains("order\\\"archive\\\\2026");
-        await Assert.That(commandFactory).Contains("id`\\\"value\\\\part");
     }
 
     [Test]
@@ -1436,6 +1436,60 @@ internal sealed class GeneratorPhase2Tests
             .Any(k => k.StartsWith("SqlFile", StringComparison.Ordinal))).IsFalse();
         await Assert.That(errors).Contains("CS8795");
         await Assert.That(errors).DoesNotContain("CS0260");
+    }
+
+    [Test]
+    public async Task SqlFile_ContentFromAdditionalFiles_IsEmbedded()
+    {
+        // 评审 2026-09-02：.sql 内容经 AdditionalFiles 进管线（模拟 targets 注入 **/*.sql）——
+        // 生成器零磁盘 IO，内容成为增量缓存键。零 provider 指令的普通文件原样嵌入。
+        const string source = """
+            using PalORM;
+            public static partial class Queries
+            {
+                [SqlFile("Queries/get.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-tests");
+        string fullPath = Path.Combine(projectDir, "Queries", "get.sql");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+        var texts = new AdditionalText[] { new TestAdditionalText(fullPath, "SELECT * FROM users;") };
+
+        // 显式限定 GeneratorTestHost——本文件的私有 RunGenerator 不支持 AdditionalTexts 注入
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "SqlFileConsumer", options, texts);
+
+        string sqlFileKey = result.GeneratedSources.Keys
+            .Single(k => k.StartsWith("SqlFile", StringComparison.Ordinal));
+        await Assert.That(result.GeneratedSources[sqlFileKey]).Contains("SELECT * FROM users;");
+        // partial 实现已生成，宿主无 CS8795
+        await Assert.That(FormatErrors(result.OutputCompilation)).DoesNotContain("CS8795");
+    }
+
+    [Test]
+    public async Task SqlFile_MissingAdditionalFile_EmitsObsoleteErrorPlaceholder()
+    {
+        // .sql 不在 AdditionalFiles（未注入或文件不存在）→ Obsolete(error) 占位可检索
+        const string source = """
+            using PalORM;
+            public static partial class Queries
+            {
+                [SqlFile("Queries/missing.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-tests");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "SqlFileConsumer", options, []);
+
+        string sqlFileKey = result.GeneratedSources.Keys
+            .Single(k => k.StartsWith("SqlFile", StringComparison.Ordinal));
+        string generated = result.GeneratedSources[sqlFileKey];
+        await Assert.That(generated).Contains("[global::System.Obsolete(");
+        await Assert.That(generated).Contains("SQL file not found");
     }
 
     [Test]
