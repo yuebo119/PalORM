@@ -19,17 +19,21 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 36 条 PALORM 诊断（v5.0 完整化 + ITM-640 收口）
+### 编译时验证 — 37 条 PALORM 诊断（v5.0 完整化 + ITM-640 收口 + PALORM045 兜底）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
 > v7.2 扩充（2026-08-26，ITM-640 收口）：PALORM042-044——生成器 throw/静默跳过的编译期定位面（分工同 022：分析器定位报错，生成器防御性跳过）。
+> 评审批次（2026-09-02）：新增 PALORM045（生成器 transform 失败面兜底 Warning——分析器规则被
+> .editorconfig/ruleset 抑制时实体静默跳过的唯一编译期线索）；PALORM003 因带已知多程序集误报、
+> 默认严重度由 Error 复议为 Warning；PALORM041 category 归一为 "PalORM"；PALORM020 消息改为
+> 真实格式模板（"Invalid [Index] declaration on type '{0}': {1}"）。
 > 价值分层：P0 防崩溃（throw）/ P1 防静默错误（不 throw 但数据错/安全绕过）/ P2 风格。
 
 | 规则 | 说明 | 层级 |
 |------|------|------|
 | PALORM001 | [Table] 实体必须有 [Key] | P0 |
 | PALORM002 | 属性无 [Column] 建议添加 | P2 |
-| PALORM003 | [ForeignKey] 引用表不存在 | P0 |
+| PALORM003 | [ForeignKey] 引用表不存在（默认 Warning——多程序集场景可误报，见 ADR-D） | P1 |
 | PALORM004 | [ForeignKey] 缺 OnDelete | P2 |
 | PALORM005 | N+1 查询检测（循环内 From/Insert/Bulk/Save 等） | P0 |
 | PALORM008-010 | OwnedJson 上下文验证 | P0 |
@@ -57,6 +61,7 @@
 | **PALORM042** | **[Timestamp]+[Computed] 同标（GENERATED 列不得带 DEFAULT）** | **P0** |
 | **PALORM043** | **SQL 标识符含控制字符或为空（表/列/索引/FK 名）** | **P0** |
 | **PALORM044** | **[Computed] 表达式 NUL 或括号不平衡（实体曾被静默跳过）** | **P1** |
+| **PALORM045** | **生成器兜底：实体被跳过且无对应分析器诊断时的编译期提示（分析器被抑制场景的最后线索）** | **P1** |
 
 ### 基础注解 (22 个)
 
@@ -234,7 +239,8 @@
 
 源生成器为每个模型程序集生成 `RegistryFragment`，通过 `PalORM_Runtime.Register(fragment)` 注册。运行时一次发布不可变快照（FrozenDictionary），外部只读。
 
-16 个注册字典：RowFactories / TableNames / CommandSqls / CommandSqlsByDialect / BindInsert / BindUpdate / BindDelete / PkColumns / ColumnNames / PropertyToColumn / CreateTableSql / CreateTableSqlByDialect / CreateIndexSqlByDialect / SetIdDelegates / CrudMetadatas / EntityFeatures。
+16 个注册字典：RowFactories / TableNames / CommandSqls（legacy 兼容载荷——运行时不消费，
+当前生成器不再发射，仅为旧版本生成器片段保留可选注册）/ CommandSqlsByDialect / BindInsert / BindUpdate / BindDelete / PkColumns / ColumnNames / PropertyToColumn / CreateTableSql / CreateTableSqlByDialect / CreateIndexSqlByDialect / SetIdDelegates / CrudMetadatas / EntityFeatures。
 
 ---
 

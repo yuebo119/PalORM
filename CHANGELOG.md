@@ -5,6 +5,7 @@
 ## [未发布]
 
 > 评审整改批次：2×P0（CI 门禁失效）+ 3×P1（弹性脱节/事务静默降级/生成器崩溃 UX）+ 工程防线托管
+> 架构评审整改批次（2026-09-02）：评审报告 P1×2 + P2×4 + P3×3 全项清偿（详见下文各节）
 
 ### ✨ 新增
 
@@ -14,12 +15,31 @@
 - **编译时诊断 PALORM042-044**（ITM-640 收口）：`[Timestamp]+[Computed]` 冲突、SQL 标识符
   含控制字符/空串、`[Computed]` 表达式 NUL 或括号不平衡——此前以生成器异常（CS8785）
   或静默跳过呈现，现编译期精确定位；生成器侧改为防御性跳过不崩溃
+- **编译时诊断 PALORM045**（架构评审 2026-09-02）：生成器 transform 失败面兜底 Warning——
+  分析器规则被 `.editorconfig`/ruleset 抑制时，实体静默跳过的唯一编译期线索
+  （此前该场景编译期零反馈，故障延迟到运行期 not registered）
+- **[SqlFile] 增量管线接入文件内容**：.sql 文件经 AdditionalFiles（包 targets 自动注入
+  `**/*.sql`，仓库内项目经 Directory.Build.props）进入增量缓存键——仅编辑 .sql 也触发
+  重新生成（消除 ITM-585 陈旧缓存限制）；项目根改读 `build_property.ProjectDir`（不再
+  从源文件路径向上找 *.csproj）；生成器零磁盘 IO
+- **测试补强**：PG/MySQL 连接串自动调优值断言（此前仅注释承载）、SQLite 文件库/内存库
+  PRAGMA 断言、`WithTransaction` 内未释放 GridReader 由事务收口兜底释放的安全网行为锁定、
+  SqlFile AdditionalFiles 管线正/负例
 
 ### 💔 破坏性变更
 
 - 默认 `DbOptions`（MaxRetries=3/CircuitBreakerThreshold=5）下，只读查询的瞬时故障现在
   自动重试并计入熔断——与连接建立重试同口径；`Testing` 预设（零重试零熔断）行为不变；
   事务内查询不受影响（重试会以次生异常掩盖根因）
+- **legacy 无方言 CommandSqls 生成段移除**（ADR-I 修订：原绑定 v6.0，提前理由见 ADR-I
+  修订节）：重编译模型程序集时须同步升级 PalORM.Core/Provider 包——"旧运行时 + 新生成
+  片段"从注册成功/CRUD 时抛错改为注册期抛键集校验错误（均为响亮失败）；
+  `RegistryFragment.CommandSqls` 放宽为可选（旧片段仍可注册，运行时从不消费）；
+  `CrudMetadata` 新增不含 SQL 载荷的推荐构造，旧构造保留供旧生成片段二进制兼容
+- `QuerySingleAsync` 多于 1 行时的异常消息由精确总数改为 "at least 2"（流式精确单行——
+  读到第 2 行立即失败并释放 reader，不再物化全表）；PALORM003 默认严重度由 Error 复议为
+  Warning（多程序集布局可误报，见 ADR-D）；PALORM020 消息格式模板化、PALORM041 category
+  归一为 "PalORM"；PALORM034 判定由初始化器文本白名单改为语义常量值（等价写法自然归一）
 
 ### 🐛 修复
 
@@ -28,6 +48,13 @@
 | perf-gate.yml 在 CI 必然失败 | 性能门禁从未生效 | BDN fork clone 步骤 + restore 收窄 + `[perf]` 标签门控 |
 | CI 秘密扫描第二道防线空转 | 40 类自定义规则从未消费 CI 差异集 | secret-guard 新增 `--range` 模式并接入 security job；临时仓库探针双向验证 |
 | UseTransaction 外部事务被外部 Dispose 后静默降级自动提交 | 写操作丢失事务隔离无反馈（ITM-640） | 失效的外部事务响亮失败；`UseTransaction(null)` 显式清场逃生门 |
+| `QuerySingleAsync` 为判"恰好一行"物化全表 | 大表上静默全读 | 流式精确单行：读第 2 行立即失败并释放 reader（对齐 QueryFirstAsync 策略） |
+| `SessionOperationState.DisposeWaitTimeout` 可变静态 + 单读人工契约 | 双读事故两次发生（ITM-581/629），纪律已被证伪 | 结构化为实例状态：生产只读、测试经 `DataSession.DisposeWaitTimeout` 按会话设置，无需保存/还原全局值 |
+| `BoundedQueryCache` 每实例注册 ObservableGauge 且回调闭包持有字典 | instrument 与缓存字典不可 GC（review R8 登记的泄漏） | 进程级单次注册 + 弱引用实例表（回调顺带剪枝死引用），指标名与标签形状不变 |
+| PALORM034 初始化器文本白名单 | `0.0e0`/`1_000` 等等价写法误报、变体拼写漏报 | 语义常量值判定（GetConstantValue），仅保留语义可证的 Guid.Empty 特判与 MinValue 哨兵例外 |
+| PALORM005 N+1 检测语义查询先行 | 绝大多数非循环调用白付 GetSymbolInfo | 语法圈检查前移（与 PALORM033 修复同口径） |
+| SqlFileEmitter 注释声称"RS1041 强制 netstandard2.0 故不能用 AdditionalTexts" | 错误理由误导后来者（该 API 与 TFM 无关） | 注释更正为真实动机（内容进缓存键），并以此为基础完成 AdditionalTexts 重构 |
+| 运行时异常消息中英混杂（15 处） | 公共库消费者无法统一检索 | 全部统一为英文（DataSession/Transactions/QueryBuilder/PostgreSqlExtensions/PgNotificationListener/SqliteProvider） |
 
 ### 🔧 工程
 
@@ -41,8 +68,10 @@
 - **源码精炼批次**（评审整改，净 -220 行）：MySQL UPSERT 死代码对删除（UPSERT SQL 收敛
   至生成物单一真源）；WithTransaction 双重载委托泛型核心；聚合 Sum/Max/Min/Avg 共享
   ExecuteAggregateScalarAsync 内核（Count 形态不同保留独立）；Bulk 家族四处事务骨架
-  收敛至 RunInTransactionScopeAsync 单内核（ITM-676/556/704 语义逐点保持）。
-  legacy CommandSqls 链清除按 ADR-I 维持 v6.0 窗口不变
+  收敛至 RunInTransactionScopeAsync 单内核（ITM-676/556/704 语义逐点保持）
+- **legacy CommandSqls 链清除**（ADR-I 修订：由 v6.0 窗口提前至本批次，裁决变更理由
+  与混合场景影响分析见 ADR-I 修订节）：生成物删除 7 legacy const + 无方言字典，方言 SQL
+  唯一真源；快照基线已刷新并人工评审 diff（净删除，无语义漂移）
 - **变异测试接入 CI**（mutation-tests.yml，每周六自动 + 手动）：Core 既有配置生效化，
   新增 SourceGen emitter + 分析器变异面——threshold-break=40 自此首次具备约束力
 - `.githooks/pre-commit` 薄包装托管（`core.hooksPath` 方案），消除 cp 拷贝式安装的脚本漂移
