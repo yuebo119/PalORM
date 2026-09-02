@@ -200,21 +200,45 @@ internal sealed class SnapshotTests
         // ① "pk = LAST_INSERT_ID(pk)" 赋值（更新已有行时 SELECT LAST_INSERT_ID() 返回该行 PK）
         // ② "; SELECT LAST_INSERT_ID()" 后缀（消费端 ExecuteScalarAsync 回读新行 PK）。
         // v4.1 预构建曾因 updateColumns(排除 PK 再 Quote) 与 Quote(pk) 比较恒 false 两者全丢。
-        string autoIncrement = await File.ReadAllTextAsync(Path.Combine(
-            GetSnapshotDirectory(), "CommandFactory_global__AllTypesEntity_7f6c8145.g.cs.snap"));
-        string autoUpsertLine = autoIncrement.Split('\n')
-            .First(l => l.Contains("UpsertMySqlSql", StringComparison.Ordinal));
-        await Assert.That(autoUpsertLine).Contains("Id = LAST_INSERT_ID(Id)");
-        await Assert.That(autoUpsertLine).Contains("; SELECT LAST_INSERT_ID()");
+        // 评审 2026-09-02：legacy 无方言 const 已删除——直接断言方言 emitter 真源
+        // （Registry 快照锁定同源形态，DialectSymmetryTests 锁定方言对称）。
+        string autoUpsert = CommandFactoryEmitter.BuildUpsertMySqlSql(
+            UpsertModel(pkAutoIncrement: true), SqlGenerationDialect.MySql);
+        await Assert.That(autoUpsert).Contains("`Id` = LAST_INSERT_ID(`Id`)");
+        await Assert.That(autoUpsert).Contains("; SELECT LAST_INSERT_ID()");
 
         // 非自增 PK（Id 显式插入）的 upsert 不加 LAST_INSERT_ID——消费端走 ExecuteNonQueryAsync，
-        // 多余结果集反而致错（InsertWithLastInsertIdSql 行的后缀不属 upsert，行级断言避免误圈）。
-        string explicitPk = await File.ReadAllTextAsync(Path.Combine(
-            GetSnapshotDirectory(), "CommandFactory_global__ReservedWordEntity_c143a9c9.g.cs.snap"));
-        string explicitUpsertLine = explicitPk.Split('\n')
-            .First(l => l.Contains("UpsertMySqlSql", StringComparison.Ordinal));
-        await Assert.That(explicitUpsertLine.Contains("LAST_INSERT_ID", StringComparison.Ordinal)).IsFalse();
+        // 多余结果集反而致错。
+        string explicitUpsert = CommandFactoryEmitter.BuildUpsertMySqlSql(
+            UpsertModel(pkAutoIncrement: false), SqlGenerationDialect.MySql);
+        await Assert.That(explicitUpsert.Contains("LAST_INSERT_ID", StringComparison.Ordinal)).IsFalse();
     }
+
+    /// <summary>MySQL upsert 契约断言的最小模型——自增/显式 PK 双形态共用。</summary>
+    private static TableModel UpsertModel(bool pkAutoIncrement)
+        => new(
+            Namespace: "Snapshots",
+            ClassName: "UpsertEntity",
+            EntityTypeName: "global::Snapshots.UpsertEntity",
+            GeneratedTypeSuffix: "Snapshots_UpsertEntity",
+            TableName: "upsert_items",
+            IsSoftDelete: false,
+            IsTenantAware: false,
+            Columns: new EquatableArray<ColumnModel>(new ColumnModel[]
+            {
+                new("Id", "Id", "long", "long", "BIGINT",
+                    IsPrimaryKey: true, IsAutoIncrement: pkAutoIncrement, IsNullable: false,
+                    IsRequired: false, IgnoreOnInsert: false, IsConcurrencyToken: false,
+                    IsTimestamp: false, ComputedExpression: null, IsOwnedJson: false,
+                    OwnedJsonContextTypeName: null, ConverterTypeName: null),
+                new("Name", "name", "string", "string", "TEXT",
+                    IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: false,
+                    IsRequired: true, IgnoreOnInsert: false, IsConcurrencyToken: false,
+                    IsTimestamp: false, ComputedExpression: null, IsOwnedJson: false,
+                    OwnedJsonContextTypeName: null, ConverterTypeName: null),
+            }),
+            Indexes: new EquatableArray<IndexModel>(System.Collections.Immutable.ImmutableArray<IndexModel>.Empty),
+            ForeignKeys: new EquatableArray<ForeignKeyModel>(System.Collections.Immutable.ImmutableArray<ForeignKeyModel>.Empty));
 
     private static string Truncate(string line)
         => line.Length <= 120 ? line : line[..120] + "…";

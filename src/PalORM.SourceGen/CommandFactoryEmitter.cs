@@ -36,13 +36,6 @@ internal static class CommandFactoryEmitter
             // 泛型 GetTypeInfo<T>() 在 JsonSerializerOptions 上（不在 Context 上），此处保持强转形态。
             sb.AppendLine($"    internal static readonly global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<{column.ClrTypeName}> JsonTypeInfo_{column.PropertyName} = (global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<{column.ClrTypeName}>)({column.OwnedJsonContextTypeName}.Default.GetTypeInfo(typeof({column.ClrTypeName})) ?? throw new global::System.InvalidOperationException(\"OwnedJson type metadata was not generated.\"));");
         }
-        sb.AppendLine($"    internal const string InsertSql = {MigrationEmitter.ToCSharpLiteral(BuildInsertSql(model))};");
-        sb.AppendLine($"    internal const string UpdateSql = {MigrationEmitter.ToCSharpLiteral(BuildUpdateSql(model))};");
-        sb.AppendLine($"    internal const string DeleteSql = {MigrationEmitter.ToCSharpLiteral(BuildDeleteSql(model))};");
-        sb.AppendLine($"    internal const string InsertReturningSql = {MigrationEmitter.ToCSharpLiteral(BuildInsertReturningSql(model))};");
-        sb.AppendLine($"    internal const string UpsertReturningSql = {MigrationEmitter.ToCSharpLiteral(BuildUpsertReturningSql(model))};");
-        sb.AppendLine($"    internal const string UpsertMySqlSql = {MigrationEmitter.ToCSharpLiteral(BuildUpsertMySqlSql(model))};");
-        sb.AppendLine($"    internal const string InsertWithLastInsertIdSql = {MigrationEmitter.ToCSharpLiteral(BuildInsertWithLastInsertIdSql(model))};");
         sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>");
         sb.AppendLine($"    internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity, int paramOffset)");
@@ -170,14 +163,13 @@ internal static class CommandFactoryEmitter
             ? clrTypeName.Substring(0, clrTypeName.Length - 1)
             : clrTypeName;
 
-    internal static string BuildInsertSql(TableModel model)
-        => BuildInsertSql(model, null);
+    // 评审 2026-09-02 收敛：无方言（Quote 恒等）重载已删除——方言参数必填，方言 SQL 是
+    // 唯一真源。此前 legacy 集合发射进注册表后被运行时 GetCommandSqls 拒绝（ITM-684），
+    // 纯属"标识符未经引用转义的死载荷"，且是关键字列名静默产出非法 SQL 的隐患面。
 
-    internal static string BuildInsertSql(TableModel model, SqlGenerationDialect? dialect)
+    internal static string BuildInsertSql(TableModel model, SqlGenerationDialect dialect)
     {
-        string Quote(string value) => dialect is null
-            ? value
-            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+        string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
         ColumnModel[] columns = model.Columns.AsSpan().ToArray()
             .Where(static column => column.IsInsertable).ToArray();
         var parameterNames = columns.Select((_, index) => $"@p{index}");
@@ -194,14 +186,9 @@ internal static class CommandFactoryEmitter
         => !col.IsPrimaryKey && !col.IsConcurrencyToken
             && !col.IsTimestamp && col.ComputedExpression is null;
 
-    internal static string BuildUpdateSql(TableModel model)
-        => BuildUpdateSql(model, null);
-
-    internal static string BuildUpdateSql(TableModel model, SqlGenerationDialect? dialect)
+    internal static string BuildUpdateSql(TableModel model, SqlGenerationDialect dialect)
     {
-        string Quote(string value) => dialect is null
-            ? value
-            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+        string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
         ColumnModel[] columns = model.Columns.AsSpan().ToArray();
         ColumnModel[] primaryKeys = columns.Where(static column => column.IsPrimaryKey).ToArray();
         ColumnModel[] setColumns = columns.Where(static column =>
@@ -223,14 +210,9 @@ internal static class CommandFactoryEmitter
             $"WHERE {string.Join(" AND ", conditions)}";
     }
 
-    internal static string BuildDeleteSql(TableModel model)
-        => BuildDeleteSql(model, null);
-
-    internal static string BuildDeleteSql(TableModel model, SqlGenerationDialect? dialect)
+    internal static string BuildDeleteSql(TableModel model, SqlGenerationDialect dialect)
     {
-        string Quote(string value) => dialect is null
-            ? value
-            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+        string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
         ColumnModel[] primaryKeys = model.Columns.AsSpan().ToArray()
             .Where(static column => column.IsPrimaryKey).ToArray();
         var conditions = primaryKeys.Select((column, index) =>
@@ -239,19 +221,14 @@ internal static class CommandFactoryEmitter
             string.Join(" AND ", conditions);
     }
 
-    internal static string BuildInsertReturningSql(TableModel model)
-        => BuildInsertReturningSql(model, null);
-
     internal static string BuildInsertReturningSql(
-        TableModel model, SqlGenerationDialect? dialect)
+        TableModel model, SqlGenerationDialect dialect)
     {
         // MySQL 无 RETURNING：生成空串而非无效 SQL——绕过 SupportsReturningClause 守卫的
         // 误用会以"空 CommandText"明确失败，不会把非法语句发给服务器。
         if (dialect == SqlGenerationDialect.MySql)
             return string.Empty;
-        string Quote(string value) => dialect is null
-            ? value
-            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+        string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
         return BuildInsertSql(model, dialect) + " RETURNING " +
             string.Join(", ", model.Columns.AsSpan().ToArray()
                 .Select(column => Quote(column.ColumnName)));
@@ -260,19 +237,14 @@ internal static class CommandFactoryEmitter
     // ── Upsert SQL 预构建（v4.1 性能优化：消除运行时 LINQ + string.Join 拼接）──
     // 运行时 UpsertWithReturningAsync / UpsertWithMySqlAsync 直接取 const，零分配。
 
-    internal static string BuildUpsertReturningSql(TableModel model)
-        => BuildUpsertReturningSql(model, null);
-
     internal static string BuildUpsertReturningSql(
-        TableModel model, SqlGenerationDialect? dialect)
+        TableModel model, SqlGenerationDialect dialect)
     {
         // MySQL 无 RETURNING：空串
         if (dialect == SqlGenerationDialect.MySql)
             return string.Empty;
 
-        string Quote(string value) => dialect is null
-            ? value
-            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+        string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
 
         ColumnModel[] upsertColumns = model.Columns.AsSpan().ToArray()
             .Where(static column => column.IsUpsertable).ToArray();
@@ -303,15 +275,10 @@ internal static class CommandFactoryEmitter
             $"RETURNING {returningList}";
     }
 
-    internal static string BuildUpsertMySqlSql(TableModel model)
-        => BuildUpsertMySqlSql(model, null);
-
     internal static string BuildUpsertMySqlSql(
-        TableModel model, SqlGenerationDialect? dialect)
+        TableModel model, SqlGenerationDialect dialect)
     {
-        string Quote(string value) => dialect is null
-            ? value
-            : SqlGeneration.QuoteIdentifier(value, dialect.Value);
+        string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
 
         ColumnModel[] upsertColumns = model.Columns.AsSpan().ToArray()
             .Where(static column => column.IsUpsertable).ToArray();
@@ -389,11 +356,8 @@ internal static class CommandFactoryEmitter
     }
 
     // v4.1：MySQL INSERT + SELECT LAST_INSERT_ID() 预构建，消除运行时 string 拼接
-    internal static string BuildInsertWithLastInsertIdSql(TableModel model)
-        => BuildInsertWithLastInsertIdSql(model, null);
-
     internal static string BuildInsertWithLastInsertIdSql(
-        TableModel model, SqlGenerationDialect? dialect)
+        TableModel model, SqlGenerationDialect dialect)
         => BuildInsertSql(model, dialect) + "; SELECT LAST_INSERT_ID()";
 
     private static void GenerateBindUpdateBody(TableModel model, StringBuilder sb)

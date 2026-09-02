@@ -1,6 +1,8 @@
+using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Text;
 
 namespace PalORM.SourceGen.Tests;
 
@@ -20,6 +22,16 @@ internal static class GeneratorTestHost
         string source,
         string assemblyName,
         IReadOnlyDictionary<string, string>? analyzerConfigOptions)
+        => RunGenerator(source, assemblyName, analyzerConfigOptions, additionalTexts: null);
+
+    /// <summary>运行生成器，支持注入 analyzerConfigOptions 与 AdditionalTexts
+    /// （评审 2026-09-02：SqlFile 管线的 .sql 内容经 AdditionalFiles 进入缓存键，
+    /// 本注入模拟 targets 自动注入的 **/*.sql）。</summary>
+    internal static GeneratorResult RunGenerator(
+        string source,
+        string assemblyName,
+        IReadOnlyDictionary<string, string>? analyzerConfigOptions,
+        IEnumerable<AdditionalText>? additionalTexts)
     {
         CSharpCompilation compilation = CreateCompilation(source, assemblyName);
         var parseOptions = (CSharpParseOptions)compilation.SyntaxTrees.Single().Options;
@@ -30,6 +42,7 @@ internal static class GeneratorTestHost
 
         GeneratorDriver driver = CSharpGeneratorDriver.Create(
             [new PalORMGenerator().AsSourceGenerator()],
+            additionalTexts?.ToImmutableArray() ?? [],
             parseOptions: parseOptions,
             optionsProvider: configProvider);
         driver = driver.RunGeneratorsAndUpdateCompilation(
@@ -111,4 +124,13 @@ internal sealed class TestConfigOptionsProvider : AnalyzerConfigOptionsProvider
             return false;
         }
     }
+}
+
+/// <summary>测试用 AdditionalText——内存内容模拟 targets 注入的 **/*.sql（零磁盘 IO）。</summary>
+internal sealed class TestAdditionalText(string path, string content) : AdditionalText
+{
+    public override string Path { get; } = path;
+
+    public override SourceText GetText(CancellationToken cancellationToken = default)
+        => SourceText.From(content);
 }

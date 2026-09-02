@@ -21,4 +21,11 @@
     <!-- 声明 MSBuild 属性为编译器可见，源生成器经 GlobalOptions["build_property.PalORMAutoTagging"] 读取 -->
     <CompilerVisibleProperty Include="PalORMAutoTagging" />
   </ItemGroup>
+
+  <!-- 评审 2026-09-02：[SqlFile] 特性的 .sql 文件经 AdditionalFiles 进入源生成器增量管线——
+       文件内容成为缓存键，仅编辑 .sql 也会触发重新生成（消除 ITM-585 陈旧缓存限制）。
+       包消费侧零配置；不希望 .sql 进入编译器管线的项目可自行移除这些项。 -->
+  <ItemGroup>
+    <AdditionalFiles Include="**/*.sql" />
+  </ItemGroup>
 </Project>

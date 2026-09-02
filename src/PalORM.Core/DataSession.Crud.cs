@@ -83,7 +83,7 @@ public sealed partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
 
         await using DbCommand cmd = CreateCommand();
-        CommandSqlSet sqls = GetCommandSqls<T>(state, metadata.Sqls);
+        CommandSqlSet sqls = GetCommandSqls<T>(state);
 
         // 双路径分发：PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID。
         // 未来第三方 Provider 无 RETURNING 且非 MySQL 方言，在 LAST_INSERT_ID 分支被显式拒绝。
@@ -184,7 +184,7 @@ public sealed partial class DataSession<TProvider>
         if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
 
-        string updateSql = GetCommandSqls<T>(state, metadata.Sqls).Update;
+        string updateSql = GetCommandSqls<T>(state).Update;
         if (updateSql.Length == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
@@ -223,11 +223,12 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        // r19/ITM-703：单快照贯穿（Delete 侧同口径）
+        // r19/ITM-703：单快照贯穿（Delete 侧同口径）；存在性检查与 Insert/Update/Save 对齐走
+        // CrudMetadatas——legacy 无方言 CommandSqls 已从生成物移除，不再作存在性代理。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._commandSqls.TryGetValue(typeof(T), out CommandSqlSet legacySqls))
+        if (!state._crudMetadatas.ContainsKey(typeof(T)))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
-        CommandSqlSet sqls = GetCommandSqls<T>(state, legacySqls);
+        CommandSqlSet sqls = GetCommandSqls<T>(state);
 
         // [SoftDelete]: 物理删除改为软删除 (UPDATE deleted_at)
         bool isSoftDelete = PalORM_Runtime.EntityFeatures.TryGetValue(typeof(T), out EntityFeatures features)
@@ -385,8 +386,8 @@ public sealed partial class DataSession<TProvider>
                 $"{cmd.Parameters.Count} parameters.");
 
         // v4.1 性能优化：Upsert SQL 预构建为编译期 const，消除运行时 LINQ + string.Join 拼接
-        // r19/ITM-703：state 快照贯穿（Insert/Update/Delete 同口径——不再经 GetCommandSqls 重读 live 注册表）
-        CommandSqlSet sqls = GetCommandSqls<T>(state, metadata.Sqls);
+        // r19/ITM-703：state 快照贯穿（Insert/Update/Delete 同口径）
+        CommandSqlSet sqls = GetCommandSqls<T>(state);
 
         return TProvider.SupportsReturningClause
             ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false)
@@ -434,20 +435,19 @@ public sealed partial class DataSession<TProvider>
     }
 
     private static CommandSqlSet GetCommandSqls<T>(
-        PalORM_Runtime.RuntimeRegistryState state,
-        CommandSqlSet fallback)
+        PalORM_Runtime.RuntimeRegistryState state)
         where T : class, new()
     {
         // r19/ITM-703：读调用方传入的同一注册表快照——不再直读 live 注册表
         // （热重载/Register 窗口内避免同一操作跨版本混用元数据）。
+        // 评审 2026-09-02 收敛：legacy 无方言 SQL 已从生成物移除（运行时此前即拒绝消费，
+        // 见 ITM-684），方言 SQL 是唯一真源。旧生成器模型程序集缺方言键时明确拒绝——
+        // 其 legacy 标识符未经引用转义，回退即错误语句。
         if (state._commandSqlsByDialect.TryGetValue(
                 typeof(T), out CommandSqlByDialect sqls))
         {
             return sqls.Get(TProvider.Dialect);
         }
-        // 拒绝回退到无方言 legacy SQL：其标识符未经引用转义（保留字/特殊字符表列名
-        // 产生错误语句），仅旧版本生成器的模型程序集会走到这里——要求重新编译。
-        _ = fallback;
         throw new InvalidOperationException(
             $"Type '{typeof(T).Name}' has no dialect-specific generated SQL. " +
             "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");

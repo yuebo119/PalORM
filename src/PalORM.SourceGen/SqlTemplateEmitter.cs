@@ -11,12 +11,14 @@ namespace PalORM.SourceGen;
 internal static class SqlTemplateEmitter
 {
     /// <summary>PALORM041：[SqlTemplate] 同名模板冲突——同命名空间内模板名必须唯一；
-    /// 去重静默丢弃会让用户拿到另一段 SQL 而不自知（ITM-662，改显式报错）。</summary>
+    /// 去重静默丢弃会让用户拿到另一段 SQL 而不自知（ITM-662，改显式报错）。
+    /// 评审 2026-09-02：category 由 "PalORM.Usage" 归一为 "PalORM"（其余 36 条均为此值，
+    /// 同一 ID 前缀不应分裂两个 category）。</summary>
     internal static readonly DiagnosticDescriptor DuplicateSqlTemplateName = new(
         id: "PALORM041",
         title: "Duplicate SqlTemplate name",
         messageFormat: "Duplicate [SqlTemplate] name '{0}' in namespace '{1}': template names must be unique within a namespace",
-        category: "PalORM.Usage",
+        category: "PalORM",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 

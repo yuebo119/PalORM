@@ -311,12 +311,16 @@ internal sealed class SourceGenIntegrationTests
     }
 
     [Test]
-    public async Task CommandSqls_AreGenerated()
+    public async Task CommandSqlsByDialect_AreGenerated()
     {
-        var sqls = PalORM_Runtime.CommandSqls[typeof(TestUser)];
-        await Assert.That(sqls.Insert).Contains("INSERT INTO test_users");
-        await Assert.That(sqls.Update).Contains("UPDATE test_users");
-        await Assert.That(sqls.Delete).Contains("DELETE FROM test_users");
+        // 评审 2026-09-02：legacy 无方言 CommandSqls 已从生成物移除——方言 SQL 是唯一真源，
+        // 标识符经方言引用符转义（SQLite 双引号）。
+        var sqls = PalORM_Runtime.CommandSqlsByDialect[typeof(TestUser)].Get(SqlDialect.Sqlite);
+        await Assert.That(sqls.Insert).Contains("INSERT INTO \"test_users\"");
+        await Assert.That(sqls.Update).Contains("UPDATE \"test_users\"");
+        await Assert.That(sqls.Delete).Contains("DELETE FROM \"test_users\"");
+        // 新生成器片段不再携带 legacy 载荷
+        await Assert.That(PalORM_Runtime.CommandSqls.ContainsKey(typeof(TestUser))).IsFalse();
     }
 
     [Test]
@@ -349,9 +353,11 @@ internal sealed class SourceGenIntegrationTests
     public async Task ConcurrencyUpdate_UsesAtomicIncrementAndSingleOldVersionParameter()
     {
         var metadata = PalORM_Runtime.CrudMetadatas[typeof(VersionedUser)];
-        // ITM-137 后 legacy/方言双实现统一为单方法（无方言 = 不 quote），格式为 "col = expr"
-        await Assert.That(metadata.Sqls.Update).Contains("version = version + 1");
-        await Assert.That(metadata.Sqls.Update).Contains("WHERE Id = @p1 AND version = @p2");
+        // 评审 2026-09-02：legacy Sqls 载荷移除后断言方言 SQL——SQLite 标识符双引号，
+        // SET 表达式与 WHERE 参数序同源同序（ITM-552 单一谓词）。
+        var updateSql = PalORM_Runtime.CommandSqlsByDialect[typeof(VersionedUser)].Get(SqlDialect.Sqlite).Update;
+        await Assert.That(updateSql).Contains("\"version\" = \"version\" + 1");
+        await Assert.That(updateSql).Contains("\"Id\" = @p1 AND \"version\" = @p2");
         await Assert.That(metadata.IncrementVersion).IsNotNull();
         var entity = new VersionedUser { Id = 7, Name = "B", Version = 3 };
         metadata.IncrementVersion!(entity);
@@ -422,13 +428,13 @@ internal sealed class SourceGenIntegrationTests
     [Test]
     public async Task CommandFactory_GeneratedSqlStructure()
     {
-        var sqls = PalORM_Runtime.CommandSqls[typeof(TestUser)];
+        var sqls = PalORM_Runtime.CommandSqlsByDialect[typeof(TestUser)].Get(SqlDialect.Sqlite);
         // Verify SQL patterns match expected structure
-        await Assert.That(sqls.Insert).Contains("INSERT INTO test_users");
+        await Assert.That(sqls.Insert).Contains("INSERT INTO \"test_users\"");
         await Assert.That(sqls.Insert).Contains("VALUES");
-        await Assert.That(sqls.Update).Contains("UPDATE test_users SET");
+        await Assert.That(sqls.Update).Contains("UPDATE \"test_users\" SET");
         await Assert.That(sqls.Update).Contains("WHERE");
-        await Assert.That(sqls.Delete).Contains("DELETE FROM test_users");
+        await Assert.That(sqls.Delete).Contains("DELETE FROM \"test_users\"");
     }
 
     [Test]

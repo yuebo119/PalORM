@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -8,21 +9,43 @@ namespace PalORM.SourceGen;
 /// 避免全量重建——大型项目(100+实体)构建时间从 30s→2s。</para>
 /// <para><b>Pipeline 设计</b>: ForAttributeWithMetadataName 收集所有 [Table] 类→逐模型独立生成→
 /// Collect() 聚合生成 Registry(ModuleInitializer)。每个 Emitter 只处理自己的代码生成逻辑。</para>
-/// <para><b>netstandard2.0 限制</b>: RS1041 强制源生成器目标 netstandard2.0——不能使用
-/// AdditionalTexts(SqlFile改用 [SqlFile] 特性替代)、不能使用 net8.0+ API。</para></summary>
+/// <para><b>SqlFile 文件内容</b>: .sql 文件经 AdditionalFiles（targets 自动注入 **/*.sql）进入
+/// 管线，内容成为增量缓存键——仅编辑 .sql 也重新生成（评审 2026-09-02，消除 ITM-585）。
+/// 注：RS1041 只约束生成器 TFM，AdditionalTextsProvider 在 netstandard2.0 可用——旧注释
+/// "RS1041 故不能用 AdditionalTexts"系误注，已随本重构更正。</para></summary>
 [Generator]
 public sealed class PalORMGenerator : IIncrementalGenerator
 {
+    /// <summary>PALORM045（评审 2026-09-02）：生成器 transform 失败面的兜底诊断。
+    /// 正常构建下失败面对应的分析器诊断（PALORM015/016/022/042/043/044）多为 Error——
+    /// 编译已失败，本 Warning 不改变结果；当分析器规则被 .editorconfig/ruleset 降级或关闭时，
+    /// 实体被生成器静默跳过、编译期零反馈直到运行期 not registered——本诊断是该场景的
+    /// 唯一编译期线索，故固定发射、不可关闭。位置为 None：兜底提示按实体名检索，
+    /// 精确定位属分析器诊断职责（增量缓存键不能携带 Location）。</summary>
+    internal static readonly DiagnosticDescriptor EntitySkippedByGenerator = new(
+        id: "PALORM045",
+        title: "Entity was skipped by the PalORM source generator",
+        messageFormat: "Entity '{0}' was skipped by the PalORM source generator: {1}. "
+            + "If no PALORM diagnostic marks the cause, an analyzer rule was probably suppressed via .editorconfig or a ruleset, and the entity would fail at runtime with 'not registered'.",
+        category: "PalORM",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // ── 实体表模型 ──
-        var tableModels = context.SyntaxProvider
+        // 评审 2026-09-02：transform 返回 EntityModelResult（含失败原因）——失败实体经
+        // PALORM045 兜底诊断显式呈现，成功模型进入下方 tableModels 管线（原行为不变）。
+        var entityModels = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 "PalORM.TableAttribute",
                 predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,  // r15-N1：analyzer 含 record，生成器漏收致 [Table] record 静默跳过
                 transform: static (ctx, _) => TableModel.FromContext(ctx))
-            .Where(static m => m is not null)
-            .Select(static (m, _) => m!)
+            .WithComparer(EqualityComparer<EntityModelResult>.Default);
+
+        var tableModels = entityModels
+            .Where(static r => r.Model is not null)
+            .Select(static (r, _) => r.Model!)
             // v5.0 优化：显式用值相等比较器——TableModel 是 sealed record（有 Equals/GetHashCode），
             // 但 Roslyn 增量管道默认用 ReferenceEqualityComparer，导致实体未变更时仍重新生成。
             // WithComparer 让管道用值相等判断，提高增量缓存命中率（大项目构建时间进一步降低）。
@@ -43,24 +66,55 @@ public sealed class PalORMGenerator : IIncrementalGenerator
             spc.AddSource("PalORM_Registry.g.cs", RegistryEmitter.Generate(new EquatableArray<TableModel>(models)));
         });
 
+        // PALORM045 兜底（评审 2026-09-02）：transform 失败面显式呈现——正常构建下对应
+        // 分析器诊断（多为 Error）先行阻断编译，本 Warning 无感；分析器规则被抑制时它是
+        // 唯一编译期线索（否则实体静默不注册，运行期才报 not registered）。
+        context.RegisterSourceOutput(
+            entityModels.Where(static r => r.Model is null),
+            static (spc, failure) => spc.ReportDiagnostic(Diagnostic.Create(
+                EntitySkippedByGenerator, Location.None,
+                failure.EntityDisplayName ?? "<unknown>",
+                failure.FailureReason ?? "unknown reason")));
+
         // ── SqlFile: [SqlFile("path.sql")] 特性 → 编译时嵌入 SQL (Phase 4) ──
-        // 无需 AdditionalTexts API——通过特性参数读取文件路径，任何 Roslyn 版本均可用
+        // 评审 2026-09-02：两阶段管线——ExtractMethodModel（transform，零 IO、缓存键=语法+符号）
+        // 与 Render（RegisterSourceOutput，路径校验 + AdditionalFiles 内容查找）。.sql 内容经
+        // AdditionalFiles 进缓存键：仅编辑 .sql 也重新生成（消除 ITM-585 陈旧缓存）。
         var sqlFileMethods = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 "PalORM.SqlFileAttribute",
                 predicate: static (node, _) => node is MethodDeclarationSyntax,
-                transform: static (ctx, ct) => CreateGeneratedSource("SqlFile", ctx, SqlFileEmitter.Generate(ctx, ct)))
-            .Where(static s => s is not null)
-            // ITM-653(r4)：GeneratedSource 为 record struct（值相等）——Collect+WithComparer
-            // 启用增量缓存按值命中（对齐 tableModels/terminalCalls 管道，防每次编辑全量重发）
-            .WithComparer(EqualityComparer<GeneratedSource?>.Default)
+                transform: static (ctx, _) => SqlFileEmitter.ExtractMethodModel(ctx))
+            .Where(static m => m is not null)
+            // ITM-653(r4)：模型为 record（值相等）——WithComparer+Collect 启用增量按值命中
+            .WithComparer(EqualityComparer<SqlFileEmitter.SqlFileMethodModel?>.Default)
             .Collect();
 
-        context.RegisterSourceOutput(sqlFileMethods, static (spc, sources) =>
-        {
-            foreach (var source in sources)
-                spc.AddSource(source!.Value.HintName, source.Value.Source);
-        });
+        var sqlFileTexts = context.AdditionalTextsProvider
+            .Where(static t => t.Path.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
+            .Select(static (text, ct) => SqlFileEmitter.SqlFileContent.FromAdditionalText(text, ct))
+            .Collect();
+
+        var palormProjectDir = context.AnalyzerConfigOptionsProvider
+            .Select(static (provider, _) =>
+                provider.GlobalOptions.TryGetValue("build_property.ProjectDir", out string? dir)
+                    ? dir : null);
+
+        context.RegisterSourceOutput(
+            sqlFileMethods.Combine(sqlFileTexts).Combine(palormProjectDir),
+            static (spc, tuple) =>
+            {
+                (ImmutableArray<SqlFileEmitter.SqlFileMethodModel?> methods,
+                    ImmutableArray<SqlFileEmitter.SqlFileContent> texts) = tuple.Left;
+                string? projectDir = tuple.Right;
+                foreach (SqlFileEmitter.SqlFileMethodModel? model in methods)
+                {
+                    if (model is null) continue;
+                    string? source = SqlFileEmitter.Render(model, texts, projectDir);
+                    if (source is null) continue;
+                    spc.AddSource(model.HintName, source);
+                }
+            });
 
         // ── SqlTemplate: [SqlTemplate("name")] → 预编译 SQL 常量 (Phase 5) ──
         // ITM-573：Collect 后按 (Namespace, TemplateName) 去重——两个方法挂同名模板此前
@@ -128,18 +182,6 @@ public sealed class PalORMGenerator : IIncrementalGenerator
             });
     }
 
-    private static GeneratedSource? CreateGeneratedSource(
-        string prefix,
-        GeneratorAttributeSyntaxContext context,
-        string? source)
-    {
-        if (source is null || context.TargetSymbol is not IMethodSymbol method)
-            return null;
-
-        string identity = method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        return new GeneratedSource(CreateStableHintName(prefix, identity), source);
-    }
-
     internal static string CreateStableHintName(string prefix, string symbolIdentity)
         => $"{prefix}_{SanitizeHintName(symbolIdentity)}_{ComputeStableHash(symbolIdentity):x8}.g.cs";
 
@@ -167,6 +209,4 @@ public sealed class PalORMGenerator : IIncrementalGenerator
 
         return hash;
     }
-
-    private readonly record struct GeneratedSource(string HintName, string Source);
 }

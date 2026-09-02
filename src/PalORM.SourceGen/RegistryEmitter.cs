@@ -39,22 +39,9 @@ internal static class RegistryEmitter
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = {MigrationEmitter.ToCSharpLiteral(m.TableName)},");
         sb.AppendLine("        },");
         sb.AppendLine();
-        sb.AppendLine("            CommandSqls = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CommandSqlSet>");
-        sb.AppendLine("        {");
-        foreach (var m in models.AsSpan())
-        {
-            string ins = CommandFactoryEmitter.BuildInsertSql(m);
-            string upd = CommandFactoryEmitter.BuildUpdateSql(m);
-            string del = CommandFactoryEmitter.BuildDeleteSql(m);
-            string ret = CommandFactoryEmitter.BuildInsertReturningSql(m);
-            string uRet = CommandFactoryEmitter.BuildUpsertReturningSql(m);
-            string uMy = CommandFactoryEmitter.BuildUpsertMySqlSql(m);
-            string lId = CommandFactoryEmitter.BuildInsertWithLastInsertIdSql(m);
-            sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::PalORM.CommandSqlSet(");
-            sb.AppendLine($"                {MigrationEmitter.ToCSharpLiteral(ins)}, {MigrationEmitter.ToCSharpLiteral(upd)}, {MigrationEmitter.ToCSharpLiteral(del)}, {MigrationEmitter.ToCSharpLiteral(ret)}, {MigrationEmitter.ToCSharpLiteral(uRet)}, {MigrationEmitter.ToCSharpLiteral(uMy)}, {MigrationEmitter.ToCSharpLiteral(lId)}),");
-        }
-        sb.AppendLine("        },");
-        sb.AppendLine();
+        // 评审 2026-09-02 收敛：legacy 无方言 CommandSqls 字典不再发射——其标识符未经引用
+        // 转义（Quote 恒等），且运行时 GetCommandSqls 此前即拒绝消费（ITM-684）。
+        // RegistryFragment.CommandSqls 保留为空集默认的可选属性，仅兼容旧生成器片段。
         sb.AppendLine("            CommandSqlsByDialect = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CommandSqlByDialect>");
         sb.AppendLine("        {");
         foreach (var m in models.AsSpan())
@@ -90,15 +77,8 @@ internal static class RegistryEmitter
         foreach (var m in models.AsSpan())
         {
             // CrudMetadata 用聚合 ctor（CrudBindings + CrudColumns）避免 9 参参数列表（S107）。
+            // 评审 2026-09-02：用不含 legacy SQL 载荷的新 ctor——方言 SQL 走 CommandSqlsByDialect。
             sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::PalORM.CrudMetadata(");
-            sb.AppendLine($"                new global::PalORM.CommandSqlSet(");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpdateSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.DeleteSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertReturningSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpsertReturningSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.UpsertMySqlSql,");
-            sb.AppendLine($"                    CommandFactory_{m.GeneratedTypeSuffix}.InsertWithLastInsertIdSql),");
             sb.AppendLine($"                new global::PalORM.CrudBindings(");
             sb.AppendLine($"                    (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
             sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(parameters, ({m.EntityTypeName})obj, off),");
@@ -153,8 +133,9 @@ internal static class RegistryEmitter
             var pk = m.Columns.AsSpan().ToArray().FirstOrDefault(c => c.IsPrimaryKey);
             // ITM-581: CanGenerateEntity 契约保证恰一个 [Key]——此处缺 PK 是上游破坏，
             // 静默兜底 "id" 会让错误列名进注册表，改为立即失败暴露契约破坏点。
-            // ITM-640 处置：保留立即失败——这是不可达的内部不变量断言而非用户错误面
-            // （用户错误面 = PALORM001 Error 精确定位；到达此处仅当管道自身回归）。
+            // ITM-640 处置 + 评审 2026-09-02：保留立即失败——transform 失败面已由 PALORM045
+            // 兜底诊断覆盖（CanGenerateEntity 失败的实体到不了这里）；到达此处仅当管道自身回归，
+            // 属不可达内部不变量断言而非用户错误面。
             string pkName = pk?.ColumnName ?? throw new InvalidOperationException(
                 $"Entity '{m.EntityTypeName}' reached RegistryEmitter without a primary key column; " +
                 "CanGenerateEntity should have rejected it.");

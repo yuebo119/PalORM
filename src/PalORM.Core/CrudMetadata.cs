@@ -56,9 +56,9 @@ public readonly struct CrudColumns
 /// <summary>CRUD 元数据聚合——单次字典查找替代四次独立查找。</summary>
 public readonly struct CrudMetadata
 {
-    /// <summary>legacy 无方言 CRUD SQL 集（标识符未经引用转义）。ITM-580: 仅作
-    /// GetCommandSqls 的 fallback 形参传递并被其拒绝——不要直接消费；
-    /// 按方言 SQL 走 PalORM_Runtime.CommandSqlsByDialect。</summary>
+    /// <summary>legacy 无方言 CRUD SQL 集（标识符未经引用转义，运行时从不消费）。
+    /// 评审 2026-09-02 收敛：方言 SQL（<c>PalORM_Runtime.CommandSqlsByDialect</c>）是唯一真源；
+    /// 本字段仅为旧版本生成器模型程序集的注册兼容而保留（经旧 ctor 写入），新代码勿读勿写。</summary>
     public readonly CommandSqlSet Sqls;
     /// <summary>Insert 参数绑定委托（支持批量 paramOffset 偏移）。</summary>
     public readonly Action<DbCommand, object, int> BindInsert;
@@ -84,22 +84,19 @@ public readonly struct CrudMetadata
     public readonly bool InsertBinderValidated;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
-    /// 二进制布局与遗留 9 参 ctor 等价，所有 public readonly 字段保持位置。</summary>
-    /// <param name="sqls">CRUD SQL 集。</param>
+    /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
     /// <param name="bindings">CRUD 委托聚合（BindInsert/BindUpsert/BindUpdate/RowFactory）。</param>
-    /// <param name="columns">列名聚合（Insert/Upsert，注册时做只读快照）。</param>
+    /// <param name="columns">列名聚合（Insert/Upsert/Update，注册时做只读快照）。</param>
     /// <param name="incrementVersion">递增并发令牌委托，无并发列时传 null。</param>
     /// <param name="hasDefaultKey">主键默认值判断委托。</param>
     /// <param name="insertBinderValidated">源生成器已验证 binder 参数数 == 列数时为 true，跳过运行时 probe。</param>
     public CrudMetadata(
-        CommandSqlSet sqls,
         CrudBindings bindings,
         CrudColumns columns,
         Action<object>? incrementVersion,
         Func<object, bool> hasDefaultKey,
         bool insertBinderValidated = true)
     {
-        Sqls = sqls;
         BindInsert = bindings.BindInsert;
         BindInsertValues = bindings.BindInsertValues;
         BindUpsert = bindings.BindUpsert;
@@ -112,6 +109,27 @@ public readonly struct CrudMetadata
         IncrementVersion = incrementVersion;
         HasDefaultKey = hasDefaultKey;
         InsertBinderValidated = insertBinderValidated;
+    }
+
+    /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
+    /// ModuleInitializer 经此 ctor 传入 legacy SQL 载荷）。新代码请用不含 <paramref name="sqls"/> 的 ctor；
+    /// <paramref name="sqls"/> 仅被存储、从不消费。</summary>
+    /// <param name="sqls">legacy CRUD SQL 集（仅兼容载荷，运行时不消费）。</param>
+    /// <param name="bindings">CRUD 委托聚合（BindInsert/BindUpsert/BindUpdate/RowFactory）。</param>
+    /// <param name="columns">列名聚合（Insert/Upsert/Update，注册时做只读快照）。</param>
+    /// <param name="incrementVersion">递增并发令牌委托，无并发列时传 null。</param>
+    /// <param name="hasDefaultKey">主键默认值判断委托。</param>
+    /// <param name="insertBinderValidated">源生成器已验证 binder 参数数 == 列数时为 true，跳过运行时 probe。</param>
+    public CrudMetadata(
+        CommandSqlSet sqls,
+        CrudBindings bindings,
+        CrudColumns columns,
+        Action<object>? incrementVersion,
+        Func<object, bool> hasDefaultKey,
+        bool insertBinderValidated = true)
+        : this(bindings, columns, incrementVersion, hasDefaultKey, insertBinderValidated)
+    {
+        Sqls = sqls;
     }
 
     internal CrudMetadata Copy()
