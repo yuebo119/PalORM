@@ -135,17 +135,16 @@ public sealed class MySqlProvider : IDbProvider
             || metadata.InsertColumns.Count == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
-        if (entities.Count == 0) return 0;
-
-        // ITM-740(r20)：包装/装饰事务（非 MySqlTransaction）在连接上挂起时，能力探测会因
-        // "命令未挂接事务"抛异常并被吞掉 → 静默降级多值路径，BulkCopy 路径的近根因
-        // ArgumentException 永不触达（ITM-633 的显式拒绝形同虚设）。改在探测前显式拒绝，
-        // 与执行路径同口径（仅 MySqlConnection 的批量路径有此约束）。
+        // ITM-740(r20)/778(r21)：包装/装饰事务（非 MySqlTransaction）在连接上挂起时，能力探测
+        // 会因"命令未挂接事务"抛异常并被吞掉 → 静默降级多值路径。守卫置于**空列表短路之前**
+        // （ITM-637 口径：契约校验先于短路）——原顺序下空列表+包装事务静默返 0、非空则抛，
+        // 同参数形态结果不对称。
         if (conn is MySqlConnection && transaction is not null && transaction is not MySqlTransaction)
             throw new ArgumentException(
                 $"External transaction must be a MySqlTransaction (got '{transaction.GetType().Name}'). "
                 + "Wrapped/decorated transactions are not supported by the MySQL bulk path.",
                 nameof(transaction));
+        if (entities.Count == 0) return 0;
 
         // local_infile 能力检测：开启走 BulkCopy（对齐 PG 永远 COPY），关闭走多值 INSERT。
         if (conn is MySqlConnection mySqlConnection
@@ -216,13 +215,8 @@ public sealed class MySqlProvider : IDbProvider
 
         // 事务：BulkCopy 需在事务内执行；未传时内部开新事务保证原子性。
         MySqlTransaction? mySqlTransaction = transaction as MySqlTransaction;
-        // ITM-633：外部事务非 MySqlTransaction（包装/装饰事务）时原 as 得 null 会在
-        // pending 事务连接上再开新事务（驱动报错或未定义行为）——显式拒绝近根因。
-        if (transaction is not null && mySqlTransaction is null)
-            throw new ArgumentException(
-                $"External transaction must be a MySqlTransaction (got '{transaction.GetType().Name}'). "
-                + "Wrapped/decorated transactions are not supported by the MySQL bulk path.",
-                nameof(transaction));
+        // ITM-795(r21)：原此处的包装事务守卫已上移至 BulkInsertAsync 入口（ITM-740/778，
+        // 探测前拦截）——本 private 方法的同型守卫不可达，删除。新增调用点经公共入口即受守卫。
         bool ownsTransaction = false;
         if (mySqlTransaction is null)
         {

@@ -362,6 +362,9 @@ public sealed partial class DataSession<TProvider>
         object? effectiveOperationOwner = operationOwner ?? operation.Owner;
         // v4.0 优化 B 对齐：SaveCoreAsync 合并 3 次 Volatile.Read 为单次 CurrentState 快照
         // （GetAsync/GetAllAsync 已做，Save/Upsert 路径此前未对齐，省 2 次内存屏障）
+        // ITM-758(r21) 口径：快照贯穿覆盖本方法及 Save/Update 路径；From<T>/DeleteAsync 的
+        // live 读（EntityFeatures/TableNames/PkColumns）语义安全——Register 对已注册类型抛异常，
+        // 类型级注册表条目单调不可变（live ≥ 快照且同值），无跨版本混用风险。
         var state = PalORM_Runtime.CurrentState;
         if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");

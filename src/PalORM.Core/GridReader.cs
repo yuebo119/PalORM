@@ -180,7 +180,18 @@ public sealed class GridReader : IAsyncDisposable
         // 使用会话实例的 DisposeWaitTimeout（默认 5 分钟）+ 超时诊断异常。
         // ITM-629：单读入局部。ITM-647(r4)：超时不再前置 throw——原路径 reader/command/
         // lease/operation 四级均未释放且观测挂起。改为记录挂起异常，先走完统一清理链再抛。
-        Exception? hangException = await WaitForActiveReadAsync(activeRead);
+        // ITM-793(r21)：防御包裹——WaitForActiveReadAsync 正常只返回 TimeoutException 包装；
+        // 若 activeRead TCS 异常传播（当前无写入点，结构性防御），原样抛出会跳过下方四级
+        // 清理链。捕获后与挂起异常同路径处理（先清理再抛）。
+        Exception? hangException;
+        try
+        {
+            hangException = await WaitForActiveReadAsync(activeRead);
+        }
+        catch (Exception waitFailure)
+        {
+            hangException = waitFailure;
+        }
         Exception? cleanupException = null;
         try { await _reader.DisposeAsync().ConfigureAwait(false); }
         catch (Exception exception) { cleanupException = exception; }

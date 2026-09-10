@@ -19,7 +19,8 @@ public static class BulkOperationFramework
     /// <param name="columnCount">期望的列数（来自 metadata.InsertColumns.Count）。</param>
     /// <param name="typeName">实体类型名，用于错误消息。</param>
     /// <param name="cleanupDataKey">probe 命令清理失败时挂 Data 的键名（如 PalORM.ProbeCommandCleanupException）。</param>
-    /// <param name="ct">取消令牌。</param>
+    /// <param name="ct">取消令牌。ITM-784(r21)：当前无消费点（binder 与 CreateCommand 均同步）——
+    /// 保留参数是为公共 async API 的取消令牌一致性（G25），未来探测引入可取消 IO 时立即生效。</param>
     public static async ValueTask ProbeBinderAsync(
         DbConnection conn,
         Action<DbCommand, object, int> binder,

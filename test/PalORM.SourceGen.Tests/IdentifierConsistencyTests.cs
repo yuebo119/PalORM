@@ -60,6 +60,24 @@ public sealed class IdentifierConsistencyTests
         await Assert.That(EmptyRejectedByBothSides()).IsTrue();
     }
 
+    [Test]
+    public async Task NullIdentifier_BothSidesThrowArgumentException()
+    {
+        // ITM-786(r21)：null 面——运行侧 ThrowIfNullOrWhiteSpace 抛 ArgumentNullException、
+        // 生成侧显式抛 ArgumentException；ArgumentNullException 是 ArgumentException 子类，
+        // 一致性契约 = 两侧均抛 ArgumentException（调用方 catch 面一致）。
+        bool runtimeThrows = false;
+        try { global::PalORM.IdentifierSafety.ThrowIfUnsafe(null!); }
+        catch (ArgumentException) { runtimeThrows = true; }
+
+        bool sourceGenThrows = false;
+        try { global::PalORM.SourceGen.SqlGeneration.QuoteIdentifier(null!, global::PalORM.SourceGen.SqlGenerationDialect.Sqlite); }
+        catch (ArgumentException) { sourceGenThrows = true; }
+
+        await Assert.That(runtimeThrows).IsTrue();
+        await Assert.That(sourceGenThrows).IsTrue();
+    }
+
     private static bool EmptyRejectedByBothSides()
     {
         bool runtimeRejects;

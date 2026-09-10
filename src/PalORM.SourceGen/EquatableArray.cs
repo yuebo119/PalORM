@@ -6,7 +6,9 @@ namespace PalORM.SourceGen;
 internal readonly struct EquatableArray<T> : IEquatable<EquatableArray<T>> where T : IEquatable<T>
 {
     private readonly T[] _items;
-    public EquatableArray(T[] items) => _items = items;
+    /// <summary>ITM-783(r21)：复制入参（防御性）——与出方向 ToArray 的 ITM-737 口径对称，
+    /// 调用方保留源数组的引用不再能污染本值对象（增量缓存键的等值语义）。</summary>
+    public EquatableArray(T[] items) => _items = (T[])items.Clone();
     public EquatableArray(System.Collections.Immutable.ImmutableArray<T> items) : this(items.AsSpan().ToArray()) { }
     public ReadOnlySpan<T> AsSpan() => _items;
     /// <summary>返回元素的<b>防御性副本</b>（ITM-737：原实现直接返回内部数组，与
