@@ -31,11 +31,15 @@ public static class TestEnvironment
     /// <summary>解析 PostgreSQL 连接串。
     /// 优先级：<c>PALORM_PG_CONNECTION</c> &gt; JSON 模板 + <c>${PALORM_PG_*}</c> 占位符替换。</summary>
     /// <exception cref="InvalidOperationException">占位符对应的环境变量未设置。</exception>
+    /// <exception cref="InvalidDataException">连接串模板格式非法（未闭合 <c>${</c> 或占位符名为空）。
+    /// ITM-746(r21)：异常消息不回显模板内容（模板可能含字面量凭据），仅报偏移量。</exception>
     public static string ResolvePostgreSqlConnectionString()
         => ResolveWithFullOverride(Settings.ConnectionStrings.PostgreSql, _pgFullEnvVar);
 
     /// <summary>解析 MySQL 连接串。同 PG 的优先级规则。</summary>
     /// <exception cref="InvalidOperationException">占位符对应的环境变量未设置。</exception>
+    /// <exception cref="InvalidDataException">连接串模板格式非法（未闭合 <c>${</c> 或占位符名为空）。
+    /// ITM-746(r21)：异常消息不回显模板内容（模板可能含字面量凭据），仅报偏移量。</exception>
     public static string ResolveMySqlConnectionString()
         => ResolveWithFullOverride(Settings.ConnectionStrings.MySql, _mySqlFullEnvVar);
 

@@ -89,11 +89,18 @@ internal sealed record TableModel(
             bool isRequired = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
             // ITM-713(r20)：[SensitiveData] 的掩码随生成物携带，标注在参数的 SourceColumn 上供
             // 审计拦截器脱敏——无需运行时解析 SQL 文本反查列（与 ITM-642 同一取向）。
-            string? sensitiveMask = prop.GetAttributes()
-                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "SensitiveData"))?
-                .NamedArguments.FirstOrDefault(static na => na.Key == "Mask").Value.Value as string
-                ?? (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "SensitiveData"))
-                    ? "***MASKED***" : null);
+            // ITM-751(r21)：空/空白 Mask 归一为默认值——若放行 `Mask = ""`，生成物写出
+            // `p.SourceColumn = "";`，而读侧用 IsNullOrEmpty 判"无掩码"→ 回落输出真实值，
+            // 把脱敏静默关成明文（安全洞）。此处收敛：空白即视为未指定，取默认掩码。
+            var sensitiveAttr = prop.GetAttributes()
+                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "SensitiveData"));
+            string? sensitiveMask = null;
+            if (sensitiveAttr is not null)
+            {
+                string? declaredMask = sensitiveAttr
+                    .NamedArguments.FirstOrDefault(static na => na.Key == "Mask").Value.Value as string;
+                sensitiveMask = string.IsNullOrWhiteSpace(declaredMask) ? "***MASKED***" : declaredMask;
+            }
             // ITM-554：改用本文件 helper（ITM-512 引入），与其余注解判定一致，避免裸串命名空间比对
             string? computedExpression = prop.GetAttributes()
                 .FirstOrDefault(static attribute =>

@@ -27,6 +27,10 @@ public sealed partial class DataSession<TProvider>
         try
         {
             await using DbCommand cmd = CreateCommand();
+            // ITM-723(r21)：schema 校验是探活式命令，零超时（= 无限等待）下同样须有限兜底
+            // ——原走 CreateCommand 的 _options.CommandTimeoutSeconds，CommandTimeout=Zero
+            // 时服务端/网络挂起会让校验永不返回（与 HealthCheckAsync 口径不一致）。
+            cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
             int columnNameOrdinal = TProvider.ConfigureSchemaCommand(cmd, tableName);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             var dbColumns = new HashSet<string>();
@@ -98,9 +102,17 @@ public sealed partial class DataSession<TProvider>
     private int ProbeCommandTimeoutSeconds
         => _options.CommandTimeoutSeconds == 0 ? DefaultProbeTimeoutSeconds : _options.CommandTimeoutSeconds;
 
-    /// <summary>逐条执行索引 DDL，重名对象按幂等跳过（ITM-203/722）。</summary>
+    /// <summary>逐条执行索引 DDL，重名对象按幂等跳过（ITM-203）。
+    /// <para><b>为什么跳过而非失败（ITM-528 既有裁决，r21 回退）</b>：MySQL 无
+    /// <c>CREATE INDEX IF NOT EXISTS</c>，1061（索引名已存在）就是幂等信号——重复迁移是
+    /// 正常运维场景（<c>ExternalDatabaseBulkTests</c> 有"二次迁移经 1061 兜底不抛"的既有断言）。
+    /// 但 1061 无法区分"同名同构"（真幂等）与"同名异构"（实为冲突），且运行时无安全判别手段
+    /// ——故 ITM-528 已裁决此处不改判定逻辑。</para>
+    /// <para><b>可观察性契约</b>：跳过以 Warning 记录，需配置 <c>DbOptions.LoggerFactory</c>
+    /// 才可见（默认会话是 NullLogger，IsEnabled 恒 false）。此处<b>不得</b>因日志不可见而改为
+    /// 抛异常——那会把正常幂等升级为硬失败（r20 曾如此修复并引入回归，r21 撤销）。</para></summary>
     private async ValueTask ApplyIndexDdlAsync(
-        IEnumerable<string> indexDdlStatements, CancellationToken ct)
+        IReadOnlyList<string> indexDdlStatements, CancellationToken ct)
     {
         foreach (string indexDdl in indexDdlStatements)
         {
@@ -113,22 +125,10 @@ public sealed partial class DataSession<TProvider>
             }
             catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
             {
-                // MySQL 重名索引（1061）通常 = 已建过（幂等跳过）；但同名异构索引（另一实体
-                // 占用同名）也触发 1061——记录警告以免唯一约束静默缺失（ITM-203）。
-                // ITM-722(r20)：默认会话的 _logger 是 NullLogger（IsEnabled 恒 false）——
-                // 警告会被丢弃，唯一约束静默缺失且无任何可观察信号。此时改为显式失败，
-                // 给出可定位信息与解法（改用唯一索引名 / 手动清理旧索引）。
-                if (!_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Warning))
-                {
-                    throw new InvalidOperationException(
-                        $"Index DDL was skipped as a duplicate object but no logger is configured to record it: " +
-                        $"{indexDdl}. A non-unique index with the same name may already exist, leaving a " +
-                        "[Unique] constraint silently unenforced. Rename the index or drop the conflicting " +
-                        "index manually; or configure DbOptions.LoggerFactory to receive the warning instead.",
-                        exception);
-                }
+                // MySQL 重名索引（1061）= 已建过（幂等跳过）；同名异构也触发 1061，
+                // 记录警告以便配置了 LoggerFactory 的会话审计（ITM-203）。
                 _logger.LogWarning(
-                    "Index DDL skipped as duplicate; verify no cross-entity index name collision: {IndexDdl}",
+                    "Index DDL skipped as duplicate object; verify no cross-entity index name collision: {IndexDdl}",
                     indexDdl);
             }
         }

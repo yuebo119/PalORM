@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.4.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 563 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 568 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -19,7 +19,7 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 37 条 PALORM 诊断（v5.0 完整化 + ITM-640 收口 + PALORM045 兜底）
+### 编译时验证 — 39 条 PALORM 诊断（36 条分析器 + 3 条生成器：PALORM041/045/046）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
 > v7.2 扩充（2026-08-26，ITM-640 收口）：PALORM042-044——生成器 throw/静默跳过的编译期定位面（分工同 022：分析器定位报错，生成器防御性跳过）。
@@ -27,6 +27,9 @@
 > .editorconfig/ruleset 抑制时实体静默跳过的唯一编译期线索）；PALORM003 因带已知多程序集误报、
 > 默认严重度由 Error 复议为 Warning；PALORM041 category 归一为 "PalORM"；PALORM020 消息改为
 > 真实格式模板（"Invalid [Index] declaration on type '{0}': {1}"）。
+> 评审批次（2026-09-10，r21）：新增 PALORM041（[SqlTemplate] 同命名空间重名）与 PALORM046
+> （[SqlTemplate] 声明形状/生成类名冲突）；PALORM031 由 Error 降为 Warning——SQLite 方言回退
+> 逐条路径使其在该方言合法可用，而分析器无 Provider 信息（ITM-752）。
 > 价值分层：P0 防崩溃（throw）/ P1 防静默错误（不 throw 但数据错/安全绕过）/ P2 风格。
 
 | 规则 | 说明 | 层级 |
@@ -50,7 +53,7 @@
 | **PALORM025** | **[Timestamp] 标在非时间类型** | **P0** |
 | **PALORM026** | **[NotMapped] 与映射特性互斥** | **P0** |
 | **PALORM027** | **[Converter] 与 [OwnedJson] 互斥** | **P0** |
-| **PALORM031** | **BulkUpdateBatchAsync 对 [ConcurrencyCheck] 实体调用**（必崩） | **P0** |
+| **PALORM031** | **BulkUpdateBatchAsync 对 [ConcurrencyCheck] 实体调用**（PG/MySQL 路径必抛；SQLite 回退逐条故 Warning） | **P1** |
 | **PALORM032** | **Include/Join 引用未注册实体** | **P0** |
 | **PALORM033** | **Select(projection).ToListAsync()**（必崩） | **P0** |
 | **PALORM034** | **[Key] 非默认初值让 SaveAsync 永远走 Update** | **P1** |
@@ -62,6 +65,8 @@
 | **PALORM043** | **SQL 标识符含控制字符或为空（表/列/索引/FK 名）** | **P0** |
 | **PALORM044** | **[Computed] 表达式 NUL 或括号不平衡（实体曾被静默跳过）** | **P1** |
 | **PALORM045** | **生成器兜底：实体被跳过且无对应分析器诊断时的编译期提示（分析器被抑制场景的最后线索）** | **P1** |
+| **PALORM041** | **[SqlTemplate] 同命名空间内模板名重复** | **P1** |
+| **PALORM046** | **[SqlTemplate] 声明形状非法或生成类名冲突（关键字名/带参/泛型/record 宿主/既有非 partial SqlTemplates）** | **P1** |
 
 ### 基础注解 (22 个)
 

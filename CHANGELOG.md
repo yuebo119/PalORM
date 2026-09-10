@@ -2,6 +2,51 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布] — r21 复检轮：回退上批过度修复 · 方言词法/诊断契约/文档三方一致
+
+> 本轮为 2026-09-10 r20 修复批（7 提交）的复检结果。独立分片评审发现并修复如下问题。
+
+### 🐛 修复（严重）
+
+- **回退 r20 的 ITM-722 过度修复**：该修复把 MySQL 1061（索引名已存在）从"警告日志 + 跳过"
+  改为"无可见日志即抛异常"，使**正常二次迁移变成硬失败**——与 ITM-528 既有裁决
+  （"1061 无法区分同名同构/异构，故不改判定逻辑"）及 `ExternalDatabaseBulkTests` 的
+  "二次迁移经 1061 兜底不抛"断言直接冲突，且会中断同批后续实体的迁移。
+  现恢复为警告日志 + 跳过，并在注释中登记"不得因日志不可见而改为抛异常"。
+  （本地 SQLite/PG 不触发该分支，CI 的 MySQL 容器用例是唯一防线——已在报告盲区登记）
+- **ITM-751：`[SensitiveData(Mask = "")]` 把脱敏静默关成明文**：空掩码写入
+  `p.SourceColumn = ""`，而读取侧以 `IsNullOrEmpty` 判"无掩码"→ 回落输出真实值。
+  现生成器把空白 Mask 归一为默认 `***MASKED***`。
+- **ITM-752：PALORM031 对 SQLite 误报 Error 阻断编译**：描述符断言"必抛 NotSupportedException"，
+  但 SQLite 已方言回退逐条路径（方法文档亦明写"SQLite 回退则支持"）。分析器无 Provider 信息，
+  降为 Warning 并订正文案。
+- **ITM-749：`ConnectionTimeout` 无上限**：`CancellationTokenSource.CancelAfter` 的 delay
+  上限是 uint.MaxValue-1 毫秒（约 49.7 天），超出抛与配置项无关的 `ArgumentOutOfRangeException`
+  （实测 49 天 OK、50/60 天均抛）。与已修的 ITM-695 同族，`DbOptions.Validate` 补齐上限。
+
+### 🐛 修复（方言与诊断）
+
+- **ITM-753：`IsBalancedParentheses` 漏判三类方言词法**——MySQL 反斜杠转义单引号
+  （`'it\'s'`）、方括号标识符（SQLite/T-SQL `[we(ird]`）、PG dollar-quoting（`$$a(b$$`）
+  被当作未闭合区间吞掉后续括号，合法 `[Computed]` 表达式被判不平衡 → PALORM044 Error 误拒
+- **ITM-754：PALORM046 漏检生成类名冲突**——同命名空间既有非 partial 的 `SqlTemplates`
+  类型时，生成的 partial 声明冲突以 CS0260 落在 `.g.cs`（属 ITM-573 家族要消灭的形态）
+- **ITM-755**：`SqlTemplateEmitter` 宿主形状判定的冗余合取条件（死条件）已简化
+
+### 📝 文档
+
+- **诊断口径三方一致**：`docs/API参考.md` 与 README 由"37 条 / PALORM001-045"
+  订正为"39 条（36 分析器 + 3 生成器）/ PALORM001-046"，明细表补齐 PALORM041/046 行
+- **ITM-746 补 XML doc**：`TestEnvironment` 两个公开 `Resolve*` 方法补 `InvalidDataException`
+  声明（模板格式非法；消息不回显模板内容以免泄露字面量凭据）
+- D10 计数同步（`docs/架构设计.md` / `docs/API参考.md`）
+
+### 🧪 测试
+
+- 新增 `ParenthesisScanAndTemplateCollisionTests`：方言词法参数化用例（11 组，含三类新增方言形态）
+  + PALORM044 端到端 + PALORM046 命名冲突三态（非 partial 冲突 / partial 不冲突 / global 不冲突）
+- PALORM031 用例补严重级断言（Error → Warning）
+
 ## [5.4.0] — 弹性只读管线 · 编译时诊断 PALORM045 · legacy SQL/DDL 收敛至方言单一真源
 
 > 变更规模：29 个提交 · 84 个文件 · +2893/−1112 行（v5.3.0…v5.4.0 实测）

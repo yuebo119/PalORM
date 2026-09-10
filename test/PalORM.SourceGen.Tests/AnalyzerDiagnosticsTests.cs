@@ -1229,9 +1229,9 @@ public sealed class AnalyzerDiagnosticsTests
     [Test]
     public async Task PALORM031_InferredGenericCall_Reports_VersionedEntity()
     {
-        // ITM-614 探针：推断式调用（无显式 <E>）的 ma.Name 是 IdentifierNameSyntax——
-        // 语法层 GenericNameSyntax 判定漏报。语义层（IMethodSymbol.TypeArguments）修复后应报。
-        // 泛型方法形态避免依赖具体 Provider 程序集（DataSession<TProvider> 约束即可编译）。
+        // ITM-752(r21)：严重级由 Error 降为 Warning——SQLite 方言回退逐条路径使
+        // BulkUpdateBatchAsync 在该方言合法（方法文档明写"SQLite 回退则支持"），
+        // 分析器无 Provider 信息，按 Error 会阻断纯 SQLite 项目的合法编译。
         const string source = """
             using PalORM;
             using System.Collections.Generic;
@@ -1254,6 +1254,8 @@ public sealed class AnalyzerDiagnosticsTests
             await AnalyzeAsync(source);
 
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM031")).IsTrue();
+        await Assert.That(diagnostics.Single(d => d.Id == "PALORM031").Severity)
+            .IsEqualTo(DiagnosticSeverity.Warning);
         await Assert.That(compileErrors).IsEmpty();
     }
 

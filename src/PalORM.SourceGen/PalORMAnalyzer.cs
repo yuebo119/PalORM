@@ -160,11 +160,16 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     // === v5.0 扩充：调用级 API 误用（PALORM031-033）===
 
-    // PALORM031：BulkUpdateBatchAsync<T> 对 [ConcurrencyCheck] 实体调用——
-    // DataSession_Bulk.cs:200-204 throw NotSupportedException，每次必崩。
+    // PALORM031：BulkUpdateBatchAsync<T> 对 [ConcurrencyCheck] 实体调用——PG/MySQL 路径
+    // 必抛 NotSupportedException（DataSession_Bulk.cs 的批量 SQL 分支）。
+    // ITM-752(r21)：原为 Error 且文案断言"always throws"——但 SQLite 在到达该分支前
+    // 已方言回退逐条路径（DataSession_Bulk.cs:182-183），方法文档亦明写
+    // "SQLite 回退到 BulkUpdateAsync 则支持"。分析器无 Provider 信息，无法判定方言，
+    // 对纯 SQLite 项目按 Error 阻断合法编译即误报。降为 Warning 并订正文案
+    //（与同族 PALORM032 因"多程序集/方言局限"取 Warning 的口径一致）。
     public static readonly DiagnosticDescriptor BulkUpdateBatchOnVersionedEntity = new(
-        "PALORM031", "BulkUpdateBatchAsync on [ConcurrencyCheck] entity always throws",
-        "BulkUpdateBatchAsync<{0}> is called but {0} has [ConcurrencyCheck], which always throws NotSupportedException at runtime", "PalORM", DiagnosticSeverity.Error, true);
+        "PALORM031", "BulkUpdateBatchAsync on [ConcurrencyCheck] entity throws on PostgreSQL/MySQL",
+        "BulkUpdateBatchAsync<{0}> is called but {0} has [ConcurrencyCheck]; the PostgreSQL/MySQL batch path throws NotSupportedException at runtime (SQLite falls back to row-by-row and is unaffected)", "PalORM", DiagnosticSeverity.Warning, true);
 
     // PALORM032：Include/Join 引用未注册实体——QueryBuilder.cs GetRegisteredTableName 的未注册实体 throw（r9-S-E：原字面锚本就指错，语义锚修正）。
     // Warning 级：多程序集场景同 PALORM003 局限。
