@@ -63,6 +63,12 @@ public sealed class RegistryFragment
 
     /// <summary>类型 → 编译期实体能力标志。</summary>
     public required IReadOnlyDictionary<Type, EntityFeatures> EntityFeatures { get; init; }
+
+    /// <summary>类型 → (敏感列名 → 掩码)。ITM-763/764(r21)：[SensitiveData] 的运行时载体——
+    /// 审计拦截器经 <see cref="QueryContext.SensitiveParameterMasks"/> 消费（Set 路径在
+    /// <c>QueryBuilder.Set</c> 查本表记录参数名→掩码）。可选键：无敏感列的片段可缺省。</summary>
+    public IReadOnlyDictionary<Type, IReadOnlyDictionary<string, string>> SensitiveColumnMasks { get; init; }
+        = FrozenDictionary<Type, IReadOnlyDictionary<string, string>>.Empty;
 }
 
 /// <summary>编译时注册表。各模型程序集的 ModuleInitializer 通过 <see cref="Register"/> 合并片段。</summary>
@@ -135,6 +141,11 @@ public static class PalORM_Runtime
     /// <summary>类型 → 编译期实体能力标志。</summary>
     public static FrozenDictionary<Type, EntityFeatures> EntityFeatures => Volatile.Read(ref _state)._entityFeatures;
 
+    /// <summary>类型 → (敏感列名 → 掩码)。ITM-763(r21)：[SensitiveData] 的运行时载体——
+    /// 供 QueryBuilder.Set 在创建参数时记录掩码，审计拦截器据 QueryContext 输出脱敏值。</summary>
+    public static FrozenDictionary<Type, IReadOnlyDictionary<string, string>> SensitiveColumnMasks
+        => Volatile.Read(ref _state)._sensitiveColumnMasks;
+
     /// <summary>原子验证并合并一个模型程序集生成的实体元数据片段。</summary>
     /// <exception cref="InvalidOperationException">同一实体类型已由另一个片段注册。</exception>
     public static void Register(RegistryFragment fragment)
@@ -167,6 +178,8 @@ public static class PalORM_Runtime
             ValidateRequiredKeys(entityTypes, fragment.CrudMetadatas.Keys, nameof(fragment.CrudMetadatas));
             ValidateRequiredKeys(entityTypes, fragment.EntityFeatures.Keys, nameof(fragment.EntityFeatures));
             ValidateOptionalKeys(entityTypes, fragment.SetIdDelegates.Keys, nameof(fragment.SetIdDelegates));
+            ValidateOptionalKeys(entityTypes, fragment.SensitiveColumnMasks.Keys,
+                nameof(fragment.SensitiveColumnMasks));
 
             Type? duplicate = entityTypes
                 .Where(current._tableNames.ContainsKey)
@@ -186,6 +199,11 @@ public static class PalORM_Runtime
             var crudMetadatas = new Dictionary<Type, CrudMetadata>(current._crudMetadatas);
             foreach (var pair in fragment.CrudMetadatas)
                 crudMetadatas.Add(pair.Key, pair.Value.Copy());
+
+            // ITM-763(r21)：敏感列掩码表——内层字典做防御性冻结快照（与 PropertyToColumn 同纪律）
+            var sensitiveMasks = new Dictionary<Type, IReadOnlyDictionary<string, string>>(current._sensitiveColumnMasks);
+            foreach (var pair in fragment.SensitiveColumnMasks)
+                sensitiveMasks.Add(pair.Key, pair.Value.ToFrozenDictionary(StringComparer.Ordinal));
 
             // 防御性拷贝（ITM-204，与 ColumnNames 纪律对齐）：片段传入的是生成代码
             // static readonly string[] 的裸引用，Get() 返回值可被向下转型修改——
@@ -218,7 +236,8 @@ public static class PalORM_Runtime
                 _createIndexSqlByDialect = createIndexSql.ToFrozenDictionary(),
                 _setIdDelegates = Merge(current._setIdDelegates, fragment.SetIdDelegates),
                 _crudMetadatas = crudMetadatas.ToFrozenDictionary(),
-                _entityFeatures = Merge(current._entityFeatures, fragment.EntityFeatures)
+                _entityFeatures = Merge(current._entityFeatures, fragment.EntityFeatures),
+                _sensitiveColumnMasks = sensitiveMasks.ToFrozenDictionary()
             };
 
             Volatile.Write(ref _state, next);
@@ -275,5 +294,7 @@ public static class PalORM_Runtime
         internal FrozenDictionary<Type, Action<object, long>> _setIdDelegates { get; init; } = FrozenDictionary<Type, Action<object, long>>.Empty;
         internal FrozenDictionary<Type, CrudMetadata> _crudMetadatas { get; init; } = FrozenDictionary<Type, CrudMetadata>.Empty;
         internal FrozenDictionary<Type, EntityFeatures> _entityFeatures { get; init; } = FrozenDictionary<Type, EntityFeatures>.Empty;
+        internal FrozenDictionary<Type, IReadOnlyDictionary<string, string>> _sensitiveColumnMasks { get; init; }
+            = FrozenDictionary<Type, IReadOnlyDictionary<string, string>>.Empty;
     }
 }

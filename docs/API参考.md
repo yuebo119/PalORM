@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.4.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 568 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 571 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -185,7 +185,7 @@
 |------|------|
 | `[Column(StoreAs=...)]` | 存储格式 |
 | `[Computed("SQL")]` | GENERATED ALWAYS AS ... STORED |
-| `[SensitiveData]` | 标记敏感字段——审计日志中该列参数值以 `Mask`（默认 `***MASKED***`）替代 |
+| `[SensitiveData]` | 标记敏感字段——`Set()` 写入该列的参数值在审计日志中以 `Mask`（默认 `***MASKED***`）替代（Where 手写 SQL 洞值为脱敏边界） |
 | `[Converter(typeof(T))]` | 自定义值转换器 |
 | `[OwnedJson]` / `[OwnedJson(typeof(Context))]` | JSON 序列化列 |
 | `[SqlFile("path.sql")]` | 编译时嵌入 SQL 文件 |
