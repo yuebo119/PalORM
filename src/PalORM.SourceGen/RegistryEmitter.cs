@@ -203,6 +203,28 @@ internal static class RegistryEmitter
                 sb.AppendLine($"            [typeof({m.EntityTypeName})] = (entity, id) => CommandFactory_{m.GeneratedTypeSuffix}.SetId(({m.EntityTypeName})entity, id),");
         }
         sb.AppendLine("        },");
+        sb.AppendLine();
+        // ITM-763(r21)：[SensitiveData] 掩码表——运行时载体。仅当存在敏感列时发射条目；
+        // 无敏感列的片段缺省该属性（可选键，旧片段兼容）。消费链：QueryBuilder.Set 查表
+        // → 记录参数名→掩码 → QueryContext.SensitiveParameterMasks → AuditInterceptor。
+        var sensitiveModels = models.AsSpan().ToArray()
+            .Where(static m => m.Columns.AsSpan().ToArray().Any(static c => c.SensitiveMask is not null))
+            .ToArray();
+        if (sensitiveModels.Length > 0)
+        {
+            sb.AppendLine("            SensitiveColumnMasks = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>>");
+            sb.AppendLine("        {");
+            foreach (var m in sensitiveModels)
+            {
+                sb.AppendLine($"            [typeof({m.EntityTypeName})] = new global::System.Collections.Generic.Dictionary<string, string>");
+                sb.AppendLine("            {");
+                foreach (var column in m.Columns.AsSpan())
+                    if (column.SensitiveMask is not null)
+                        sb.AppendLine($"                [{MigrationEmitter.ToCSharpLiteral(column.ColumnName)}] = {MigrationEmitter.ToCSharpLiteral(column.SensitiveMask)},");
+                sb.AppendLine("            },");
+            }
+            sb.AppendLine("        },");
+        }
         sb.AppendLine("        });");
         sb.AppendLine("    }");
         sb.AppendLine("}");

@@ -340,6 +340,14 @@ internal static class PalORM_RegistryInitializer
             [typeof(global::FullFeatureEntity)] = (entity, id) => CommandFactory_global__FullFeatureEntity_4964faa8.SetId((global::FullFeatureEntity)entity, id),
             [typeof(global::InheritedEntity)] = (entity, id) => CommandFactory_global__InheritedEntity_3f5411cb.SetId((global::InheritedEntity)entity, id),
         },
+
+            SensitiveColumnMasks = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>>
+        {
+            [typeof(global::FullFeatureEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+            {
+                ["sensitive_value"] = "***MASKED***",
+            },
+        },
         });
     }
 }

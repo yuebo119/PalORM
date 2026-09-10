@@ -21,7 +21,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 5); p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 6); p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 7); p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 8); p.Value = (object)entity.SensitiveValue; p.SourceColumn = "***MASKED***"; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 8); p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
@@ -50,7 +50,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p6"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.Value = (object)entity.SensitiveValue; p.SourceColumn = "***MASKED***"; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
@@ -64,7 +64,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p5"; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p6"; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.Value = (object)entity.SensitiveValue; p.SourceColumn = "***MASKED***"; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 

@@ -11,11 +11,11 @@ namespace PalORM;
 /// 这是 <see cref="IQueryInterceptor"/> 接口的既有限制，非 AuditInterceptor 独有。</para>
 /// <para><b>设计</b>：实现 <see cref="IQueryInterceptor"/>，把审计事件转发给 <see cref="ILogger"/>。
 /// 默认 Priority=200（让用户业务拦截器优先于审计执行，避免审计日志污染业务逻辑顺序）。</para>
-/// <para><b>敏感数据脱敏</b>（ITM-713）：参数值默认不写入日志（避免凭据/PII 泄露）。
-/// 调用方显式传 <c>logParameters: true</c> 时，带 <c>[SensitiveData]</c> 标注的列由源生成器
-/// 把掩码写入参数 <see cref="System.Data.Common.DbParameter.SourceColumn"/>，本拦截器据此
-/// 以掩码替代真实值（见 <see cref="GetLoggableValue"/>）；未标注列照常输出。
-/// 自定义拦截器可复用 <see cref="GetLoggableValue"/> 获得同一脱敏策略。
+/// <para><b>敏感数据脱敏</b>（ITM-713/763）：参数值默认不写入日志（避免凭据/PII 泄露）。
+/// 调用方显式传 <c>logParameters: true</c> 时，<c>Set(member, value)</c> 写入
+/// <c>[SensitiveData]</c> 列的参数值以该列掩码替代（见 <see cref="GetLoggableValue"/>）。
+/// <b>脱敏边界</b>：<c>Where(FormattableString)</c> 等手写 SQL 片段的洞值与列无映射关系，
+/// 无法自动脱敏——在 SQL 文本中内联敏感值的场景由调用方自行负责。
 /// 异常消息（OnError）在 logParameters=false 时也仅记录异常类型名，不记录可能含参数值的 Message。</para>
 /// <para><b>性能影响</b>：每次查询多一次 OnBefore + OnAfter 调用（含 Stopwatch.StartNew/Stop）。
 /// 无日志订阅者时（ILogger.IsEnabled=false），仍构造 QueryContext 字符串——不适用于超高频场景。
@@ -44,7 +44,7 @@ public sealed class AuditInterceptor : IQueryInterceptor
         if (!_logger.IsEnabled(LogLevel.Information)) return;
         if (_logParameters)
             _logger.LogInformation("PalORM Audit [Before]: {Sql} | Params: {Params}",
-                context.Sql, FormatParameters(context.Parameters));
+                context.Sql, FormatParameters(context.Parameters, context.SensitiveParameterMasks));
         else
             _logger.LogInformation("PalORM Audit [Before]: {Sql}", context.Sql);
     }
@@ -76,10 +76,12 @@ public sealed class AuditInterceptor : IQueryInterceptor
 
     /// <summary>参数格式化（仅 logParameters=true 时调用）。
     /// 用 StringBuilder 避免大参数列表的多重字符串分配。
-    /// <para><b>ITM-713 脱敏</b>：带 <c>[SensitiveData]</c> 的列由源生成器把掩码写入参数的
-    /// <see cref="System.Data.Common.DbParameter.SourceColumn"/>——此处据此替换真实值，
-    /// 无需解析 SQL 文本反查列。未标注的列照常输出。</para></summary>
-    private static string FormatParameters(IReadOnlyList<DbParameter> parameters)
+    /// <para><b>ITM-763(r21) 脱敏</b>：经 <see cref="QueryContext.SensitiveParameterMasks"/> 登记
+    /// 的参数（<c>Set(member, value)</c> 写入 [SensitiveData] 列）以掩码替代真实值；
+    /// 未登记的列照常输出。边界（Where 手写 SQL 洞值无列映射）见 QueryContext 文档。</para></summary>
+    private static string FormatParameters(
+        IReadOnlyList<DbParameter> parameters,
+        IReadOnlyDictionary<string, string>? sensitiveMasks)
     {
         if (parameters.Count == 0) return "(none)";
         var sb = new StringBuilder();
@@ -87,19 +89,23 @@ public sealed class AuditInterceptor : IQueryInterceptor
         for (int i = 0; i < parameters.Count; i++)
         {
             if (i > 0) sb.Append(", ");
-            sb.Append(parameters[i].ParameterName).Append('=').Append(GetLoggableValue(parameters[i]));
+            sb.Append(parameters[i].ParameterName).Append('=').Append(GetLoggableValue(parameters[i], sensitiveMasks));
         }
         sb.Append(']');
         return sb.ToString();
     }
 
-    /// <summary>取参数的可记录值：带 [SensitiveData] 掩码（经 SourceColumn 携带）的列以掩码替代。
-    /// 公开以便自定义拦截器复用同一脱敏策略（ITM-713）。</summary>
-    public static object? GetLoggableValue(DbParameter parameter)
+    /// <summary>取参数的可记录值：命中掩码表时以掩码替代真实值（ITM-763）。
+    /// 公开以便自定义拦截器复用同一脱敏策略——传入执行时的
+    /// <see cref="QueryContext.SensitiveParameterMasks"/> 即获得与 AuditInterceptor 一致的行为。</summary>
+    public static object? GetLoggableValue(
+        DbParameter parameter,
+        IReadOnlyDictionary<string, string>? sensitiveParameterMasks = null)
     {
         ArgumentNullException.ThrowIfNull(parameter);
-        return string.IsNullOrEmpty(parameter.SourceColumn)
-            ? parameter.Value
-            : parameter.SourceColumn;
+        return sensitiveParameterMasks is not null
+            && sensitiveParameterMasks.TryGetValue(parameter.ParameterName, out string? mask)
+            ? mask
+            : parameter.Value;
     }
 }

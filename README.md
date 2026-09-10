@@ -334,7 +334,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | `[SoftDelete]` | 软删除自动 WHERE 过滤 |
 | `[TenantAware]` | 多租户 `SetTenant(id)` 单库列隔离 |
 | `[ConcurrencyCheck]` | 乐观锁 `version` 字段自动检查 |
-| `AuditInterceptor`（v5.0） | SQL 审计拦截器（OnBefore/OnAfter/OnError；`logParameters:true` 时 `[SensitiveData]` 列经 `DbParameter.SourceColumn` 自动掩码） |
+| `AuditInterceptor`（v5.0） | SQL 审计拦截器（OnBefore/OnAfter/OnError；`logParameters:true` 时 `Set()` 写入 `[SensitiveData]` 列的参数值自动掩码——经 QueryContext 传递，覆盖 SELECT/UPDATE 拦截路径） |
 | `IQueryInterceptor` | 三阶段查询拦截器接口 |
 | `SessionSetupSql`（v5.0） | 连接首次激活后执行 SET 语句（`SET TIME ZONE` / `search_path`） |
 | `ForRead` | 读写分离（只读副本路由） |

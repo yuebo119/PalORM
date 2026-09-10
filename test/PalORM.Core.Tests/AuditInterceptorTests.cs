@@ -52,15 +52,17 @@ public sealed class AuditInterceptorTests
     }
 
     [Test]
-    public async Task OnBefore_WithLogParameters_MasksSensitiveSourceColumn()
+    public async Task OnBefore_WithLogParameters_MasksSensitiveParameters()
     {
-        // ITM-713：带 [SensitiveData] 的列由源生成器把掩码写入参数 SourceColumn，
-        // 拦截器据此替换真实值（不解析 SQL）
+        // ITM-763(r21)：Set() 写入 [SensitiveData] 列的参数经
+        // QueryContext.SensitiveParameterMasks 登记——拦截器据此替换真实值
         var logger = new StubLogger();
         var interceptor = new AuditInterceptor(logger, logParameters: true);
-        var sensitive = new SqliteParameter("@p0", "top-secret-value") { SourceColumn = "***MASKED***" };
+        var sensitive = new SqliteParameter("@p0", "top-secret-value");
         var normal = new SqliteParameter("@p1", 7);
-        var ctx = new QueryContext("SELECT @p0, @p1", [sensitive, normal]);
+        var ctx = new QueryContext("UPDATE t SET a=@p0, b=@p1 WHERE id=1",
+            [sensitive, normal],
+            new Dictionary<string, string> { ["@p0"] = "***MASKED***" });
 
         interceptor.OnBefore(ctx);
 
@@ -70,9 +72,9 @@ public sealed class AuditInterceptorTests
     }
 
     [Test]
-    public async Task GetLoggableValue_NoMask_ReturnsRawValue()
+    public async Task GetLoggableValue_NoMaskTable_ReturnsRawValue()
     {
-        // 未标注列透传真实值（掩码只在 SourceColumn 非空时生效）
+        // 未登记（无敏感列/掩码表为 null）透传真实值
         await Assert.That(AuditInterceptor.GetLoggableValue(new SqliteParameter("@p0", "plain")))
             .IsEqualTo("plain");
     }

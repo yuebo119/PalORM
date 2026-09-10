@@ -40,7 +40,7 @@ public static class QueryBuilderExtensions
                 "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
         string sql = builder.BuildSql();
         IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
-        var context = new QueryContext(sql, parameters);
+        var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
         const string operation = "select";
         string provider = builder._dialect.GetName();
         bool observed = builder._tracing || builder._metrics;
@@ -388,7 +388,7 @@ public static class QueryBuilderExtensions
         string outcome = "error";
         // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
         IReadOnlyList<DbParameter> updateParameters = builder.GetUpdateParameters();
-        var context = new QueryContext(sql, updateParameters);
+        var context = new QueryContext(sql, updateParameters, builder._sensitiveMasks);
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =

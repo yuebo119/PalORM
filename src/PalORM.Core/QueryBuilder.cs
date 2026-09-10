@@ -50,6 +50,10 @@ public struct QueryBuilder<T> where T : class, new()
     internal bool _splitQuery;
     internal bool _useReadRoute;
     internal DbTransaction? _transaction;
+    /// <summary>ITM-763(r21)：参数名 → [SensitiveData] 掩码。Set() 写入敏感列时登记，
+    /// 执行管线经 QueryContext.SensitiveParameterMasks 交给拦截器脱敏。null = 无敏感参数
+    /// （零分配；绝大多数实体无敏感列）。CloneForExecution 深拷贝（与 _parameters 同纪律）。</summary>
+    internal Dictionary<string, string>? _sensitiveMasks;
     internal readonly IQueryCache _queryCache;
 
     internal QueryBuilder(QueryBuilderContext<T> ctx)
@@ -85,6 +89,7 @@ public struct QueryBuilder<T> where T : class, new()
         _splitQuery = false;
         _useReadRoute = false;
         _transaction = null;
+        _sensitiveMasks = null;
     }
 
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
@@ -288,9 +293,16 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Set<TValue>(Expression<Func<T, TValue>> member, TValue value)
     {
         DbParameter parameter = CreateParameter(value);
+        string columnName = GetColumnName(member);
+        // ITM-763(r21)：敏感列掩码登记——执行管线经 QueryContext.SensitiveParameterMasks
+        // 交给拦截器（AuditInterceptor 据此以掩码替代真实值）。注册表由生成器发射
+        // （SensitiveColumnMasks），仅实体有敏感列时才产生分配。
+        if (PalORM_Runtime.SensitiveColumnMasks.TryGetValue(typeof(T), out var columnMasks)
+            && columnMasks.TryGetValue(columnName, out string? mask))
+            (_sensitiveMasks ??= new Dictionary<string, string>(4))[parameter.ParameterName] = mask;
         string prefix = HasClause(QueryClauseKind.Set) ? ", " : "SET ";
         AddClause(QueryClauseKind.Set,
-            $"{prefix}{_quoteIdentifier(GetColumnName(member))} = {parameter.ParameterName}", [parameter]);
+            $"{prefix}{_quoteIdentifier(columnName)} = {parameter.ParameterName}", [parameter]);
         return this;
     }
 
@@ -543,6 +555,7 @@ public struct QueryBuilder<T> where T : class, new()
             _splitQuery = _splitQuery,
             _useReadRoute = _useReadRoute,
             _transaction = _transaction,
+            _sensitiveMasks = _sensitiveMasks is null ? null : new Dictionary<string, string>(_sensitiveMasks),
             // v4.6：同步位掩码到克隆体
             _clauseBitmask = _clauseBitmask
         };

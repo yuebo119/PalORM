@@ -26,10 +26,15 @@ public interface IQueryInterceptor
 /// <param name="Sql">完整 SQL 文本。</param>
 /// <param name="Parameters">执行参数列表。
 /// <para><b>ITM-535 警告</b>: 这是即将执行的实际参数的引用，非防御性副本。拦截器<b>不得</b>修改任何
-/// <see cref="DbParameter.Value"/>——修改会直接改变随后执行的 SQL 语义。仅可读取用于日志/审计。</para>
-/// <para><b>脱敏边界</b>: 参数值以明文携带。框架内置日志对 <c>[SensitiveData]</c> 标注列脱敏，但该脱敏
-/// <b>不覆盖</b>自定义拦截器——若在拦截器中记录参数值，敏感数据脱敏由拦截器实现方自行负责。</para></param>
-public readonly record struct QueryContext(string Sql, IReadOnlyList<DbParameter> Parameters);
+/// <see cref="DbParameter.Value"/>——修改会直接改变随后执行的 SQL 语义。仅可读取用于日志/审计。</para></param>
+/// <param name="SensitiveParameterMasks">ITM-763(r21)：参数名 → 脱敏掩码。[SensitiveData] 列经
+/// <c>Set(member, value)</c> 写入的参数在此登记——记录参数值时以掩码替代真实值（可经
+/// <see cref="AuditInterceptor.GetLoggableValue"/> 统一处理）。<b>边界</b>：<c>Where(FormattableString)</c>
+/// 等用户手写 SQL 片段的洞值与列无映射关系，不在本表内（文档化为脱敏边界）；null = 无已知敏感参数。</param>
+public readonly record struct QueryContext(
+    string Sql,
+    IReadOnlyList<DbParameter> Parameters,
+    IReadOnlyDictionary<string, string>? SensitiveParameterMasks = null);
 
 /// <summary>健康检查结果。</summary>
 /// <param name="IsHealthy">DB 连接是否正常。</param>
