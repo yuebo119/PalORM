@@ -81,13 +81,25 @@ internal static class SqlTemplateEmitter
         if (method.IsGenericMethod)
             return new SqlTemplateModel(ns, templateName, "", methodIdentity,
                 "the method must not be generic (the generated field is a static readonly const)");
-        if (method.ContainingType is { TypeKind: not TypeKind.Class } host
-            && host.TypeKind != TypeKind.Class)
+        // ITM-755(r21)：原条件 `{ TypeKind: not TypeKind.Class } host && host.TypeKind != TypeKind.Class`
+        // 的第二合取恒为真（模式已保证），属冗余；简化为单模式匹配。
+        if (method.ContainingType is { TypeKind: not TypeKind.Class } host)
             return new SqlTemplateModel(ns, templateName, "", methodIdentity,
                 $"the containing type '{host.Name}' must be a class (the generated partial declaration is a class)");
         if (method.ContainingType is { IsRecord: true })
             return new SqlTemplateModel(ns, templateName, "", methodIdentity,
                 "the containing type must be a plain class, not a record (the generated partial declaration is a class)");
+        // ITM-754(r21)：生成类名硬编码为 SqlTemplates（Render）。同命名空间若已存在**非 partial**
+        // 的同名类型，生成的 partial 声明会报 CS0260（错误仍落在 .g.cs，正是 ITM-573 家族要消灭的形态）。
+        // 探针实证：`public class SqlTemplates {}` + 任意 [SqlTemplate] → CS0260 且无 PALORM046。
+        if (ctx.SemanticModel.Compilation.GetTypeByMetadataName($"{ns}.SqlTemplates") is { } existing
+            && existing.DeclaringSyntaxReferences
+                .Select(static r => r.GetSyntax())
+                .OfType<TypeDeclarationSyntax>()
+                .Any(static t => !t.Modifiers.Any(SyntaxKind.PartialKeyword)))
+            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
+                $"the namespace '{ns}' already declares a non-partial type named 'SqlTemplates', " +
+                "which conflicts with the generated partial declaration (rename it or make it partial)");
 
         var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef?.GetSyntax(ct) is not MethodDeclarationSyntax methodSyntax)

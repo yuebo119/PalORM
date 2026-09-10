@@ -131,6 +131,12 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PoolLifetimeMinutes, nameof(PoolLifetimeMinutes));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerThreshold, nameof(CircuitBreakerThreshold));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerResetAfter.Ticks, nameof(CircuitBreakerResetAfter));
+        // ITM-749(r21)：ConnectionTimeout 无上限——CreateAsync 用
+        // CancellationTokenSource.CancelAfter(TimeSpan)，该 API 的 delay 上限是 uint.MaxValue-1
+        // 毫秒（约 49.7 天），超出抛 ArgumentOutOfRangeException("delay") 且与配置项无关
+        //（实测 49 天 OK、50/60 天均抛）。与 ITM-695 同族，此处补齐上限。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            ConnectionTimeout.TotalMilliseconds, uint.MaxValue - 1, nameof(ConnectionTimeout));
     }
 
     /// <summary>连接池配置入口。所有数值必须为正数。</summary>

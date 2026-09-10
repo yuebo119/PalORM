@@ -193,19 +193,23 @@ internal static class SourceGenerationValidation
     /// <summary>括号配对词法扫描——跳过字符串/引用标识符/注释内的括号。
     /// <para>ITM-741(r20)：原实现只识别单引号字符串，双引号标识符（PG/SQLite）、反引号标识符
     /// （MySQL）与 <c>--</c>/<c>/* */</c> 注释内的括号会被误计入配对——合法计算列被拒或非法表达式放行。
-    /// 现按 SQL 词法跳过四类区间（不验证其闭合性，只保证括号不计入）。</para></summary>
+    /// 现按 SQL 词法跳过各区间（不验证其闭合性，只保证括号不计入）。</para>
+    /// <para>ITM-753(r21)：补三类漏判方言形态——① MySQL 反斜杠转义单引号 <c>'it\'s'</c>；
+    /// ② 方括号标识符 <c>[we(ird]</c>（SQLite/T-SQL）；③ PG dollar-quoting <c>$$a(b$$</c>。
+    /// 三者此前被当作未闭合区间吞掉后续括号，导致合法计算列被判不平衡（PALORM044 Error 误拒）。</para></summary>
     internal static bool IsBalancedParentheses(string expression)
     {
         int depth = 0;
         for (int i = 0; i < expression.Length; i++)
         {
             char c = expression[i];
-            // 单引号字符串——SQL 中以 '' 续写，遇成对单引号跳过
+            // 单引号字符串——SQL 以 '' 续写；MySQL 还支持反斜杠转义 \'
             if (c == '\'')
             {
                 i++;
                 while (i < expression.Length)
                 {
+                    if (expression[i] == '\\' && i + 1 < expression.Length) { i += 2; continue; }  // MySQL \'
                     if (expression[i] == '\'')
                     {
                         if (i + 1 < expression.Length && expression[i + 1] == '\'') { i += 2; continue; }
@@ -215,11 +219,23 @@ internal static class SourceGenerationValidation
                 }
                 continue;
             }
-            // 双引号标识符（PG/SQLite）与反引号标识符（MySQL）、方括号标识符（T-SQL 风格）
-            if (c is '"' or '`')
+            // dollar-quoting（PG）：$$...$$ 或 $tag$...$tag$——内部括号全部跳过
+            if (c == '$' && TrySkipDollarQuoted(expression, ref i)) continue;
+            // 双引号标识符（PG/SQLite，"" 续写）、反引号标识符（MySQL，`` 续写）、方括号（SQLite/T-SQL）
+            if (c is '"' or '`' or '[')
             {
+                char close = c == '[' ? ']' : c;
                 i++;
-                while (i < expression.Length && expression[i] != c) i++;
+                while (i < expression.Length)
+                {
+                    if (expression[i] == close)
+                    {
+                        if (close != ']' && i + 1 < expression.Length && expression[i + 1] == close)
+                        { i += 2; continue; }  // 双写引用符续写
+                        break;
+                    }
+                    i++;
+                }
                 continue;
             }
             // 行注释 -- 到行尾
@@ -241,6 +257,23 @@ internal static class SourceGenerationValidation
             else if (c == ')') { depth--; if (depth < 0) return false; }
         }
         return depth == 0;
+    }
+
+    /// <summary>ITM-753：PG dollar-quoting 跳过。命中时把 <paramref name="i"/> 推进到闭合 tag 末尾，
+    /// 返回 true；非 dollar-quote 起始则返回 false（i 不变）。</summary>
+    private static bool TrySkipDollarQuoted(string expression, ref int i)
+    {
+        int open = i + 1;
+        // tag 由字母/数字/下划线组成（可空 → $$）
+        while (open < expression.Length
+               && (char.IsLetterOrDigit(expression[open]) || expression[open] == '_')) open++;
+        if (open >= expression.Length || expression[open] != '$') return false;
+        // netstandard2.0 无 Range/Index——用 Substring
+        string tag = expression.Substring(i, open + 1 - i);  // 含首尾 $，如 "$$" 或 "$tag$"
+        int close = expression.IndexOf(tag, open + 1, StringComparison.Ordinal);
+        if (close < 0) { i = expression.Length; return true; }  // 未闭合：吞到末尾（fail-closed 于上层）
+        i = close + tag.Length - 1;
+        return true;
     }
 
     /// <summary>沿基类链枚举可映射属性（ITM-559，与 TableModel.GetMappableProperties 同一
