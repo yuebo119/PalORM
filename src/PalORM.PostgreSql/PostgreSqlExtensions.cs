@@ -18,6 +18,13 @@ public static class PostgreSqlExtensions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(column);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        // ITM-770(r21)：方言守卫——本扩展硬编码 PG 的 ->> 与双引号标识符；MySQL 默认
+        // sql_mode 下 "col" 是字符串字面量，误用会生成静默错误结果（G31 方言感知要求）。
+        // 扩展方法无法按接收者类型约束 Provider，运行时按构建器方言明确拒绝。
+        if (builder.Dialect != SqlDialect.PostgreSql)
+            throw new NotSupportedException(
+                $"WhereJson requires the PostgreSQL dialect (builder dialect: {builder.Dialect}). " +
+                "The '->>' operator and double-quoted identifiers are PostgreSQL-specific.");
         // NUL 显式拒绝（ITM-212）：PG 线协议不允许字符串含 0x00。column 进 SQL 文本
         // 格式串段（与 ValidateSqlComment 同侧防御）；path 是绑定参数——参数化已隔离
         // 注入面，但驱动层对 NUL 的错误形态不可控（ITM-644），库内统一明确失败。

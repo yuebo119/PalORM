@@ -863,6 +863,9 @@ public sealed class SessionConcurrencyTests
         // ITM-708(r20)：GetActiveTransaction 在外部事务被 Dispose 后会抛——此前它位于 try 之外，
         // 抛出时 ExitTransactionFlow 永不执行，_transactionOwner/_activeTransaction 永不清，
         // 会话后续操作永久失败且 DisposeAsync 挂到超时。修复后事务流必须正常释放。
+        // ITM-767(r21) 口径更新：外部事务失效状态现在**持续**（不再抛一次即清）——
+        // 第二次 WithTransaction 仍抛 ITM-640 失效错误，但错误是 "disposed externally"
+        // 而非 "nested transactions"（后者才是事务流泄漏的形态）→ 据此同时证明流已释放。
         await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
         DbTransaction external = await session.BeginTransactionAsync();
         session.UseTransaction(external);
@@ -871,7 +874,13 @@ public sealed class SessionConcurrencyTests
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await session.WithTransaction(_ => Task.CompletedTask));
 
-        // 事务流已释放：后续 WithTransaction 可正常自开事务执行（不再报嵌套/已有流）
+        // 第二次：仍抛 ITM-640 失效错误（持续失败语义），且**不是**嵌套错误（流已释放）
+        Exception? second = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await session.WithTransaction(_ => Task.CompletedTask));
+        await Assert.That(second!.Message).Contains("disposed externally");
+
+        // 逃生门：显式清场后完全恢复
+        session.UseTransaction(null);
         await session.WithTransaction(_ => Task.CompletedTask);
         await session.ExecuteAsync($"SELECT 1");
     }

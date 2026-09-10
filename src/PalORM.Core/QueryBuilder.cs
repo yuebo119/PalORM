@@ -487,6 +487,10 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>本构建器的 SQL 方言（只读）。ITM-770(r21)：方言敏感的扩展方法（如 PG 的
+    /// WhereJson）据此守卫——误用于其他方言的会话时明确失败而非生成静默错误的 SQL。</summary>
+    public SqlDialect Dialect => _dialect;
+
     /// <summary>不执行查询，返回构建好的 SQL 与参数快照（<see cref="DryRunResult"/>），用于预览/测试断言。
     /// 参数为防御性副本——修改快照参数不影响后续对同一 builder 的真实执行（ITM-511）。
     /// <para>ITM-563: 含 Set 子句时返回 UPDATE 预览（与 ExecuteNonQueryAsync 实际执行一致），

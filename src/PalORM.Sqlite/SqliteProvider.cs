@@ -76,6 +76,7 @@ public sealed class SqliteProvider : IDbProvider
         // 的真实文件库（Linux 合法文件名，如 /tmp/mem:memory:1.db）被误判为内存库，静默跳过
         // WAL/synchronous/mmap 配置。改走 SqliteConnectionStringBuilder 结构化解析。
         bool isInMemory;
+        bool isReadOnly;
         try
         {
             var builder = new SqliteConnectionStringBuilder(connection.ConnectionString);
@@ -84,16 +85,22 @@ public sealed class SqliteProvider : IDbProvider
             isInMemory = builder.Mode == SqliteOpenMode.Memory
                 || string.IsNullOrEmpty(builder.DataSource)
                 || string.Equals(builder.DataSource, ":memory:", StringComparison.Ordinal);
+            isReadOnly = builder.Mode == SqliteOpenMode.ReadOnly;
         }
         catch (ArgumentException)
         {
             // 非法连接串由后续命令执行报错；此处保守按文件库处理（不静默降级耐久性配置）
             isInMemory = false;
+            isReadOnly = false;
         }
 
         await using DbCommand command = connection.CreateCommand();
         // 单次往返执行全部 PRAGMA（用分号连接，SQLite 原生支持）。
-        command.CommandText = isInMemory
+        // ITM-766(r21)：只读库（Mode=ReadOnly / 只读副本）走窄分支——journal_mode=WAL 在只读
+        // 连接上抛 SqliteException Error 8（SQLite 真库探针实证），会使会话创建与读副本连接
+        // 整体失败。只读库本就不写入，WAL/synchronous/checkpoint 类治理无语义；
+        // foreign_keys 与 cache_size 是纯连接态设置，只读下安全。
+        command.CommandText = isInMemory || isReadOnly
             ? "PRAGMA foreign_keys = ON; PRAGMA cache_size=-65536"
             : "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; "
               + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "

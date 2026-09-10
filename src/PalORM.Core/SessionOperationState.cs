@@ -313,14 +313,15 @@ internal sealed class SessionOperationState
             // 与 ITM-596（设置时拒绝已释放事务）、ITM-524（QueryBuilder 绑定事务失效）同策略；
             // 逃生门：UseTransaction(null) 显式清场后恢复自动提交。
             // 内部事务残留（手动 begin→commit→dispose）走下方静默清理，正常流程不受影响。
+            // ITM-767(r21)：失效状态**不清除**——原实现在抛出前清 _transaction/_externalTransaction，
+            // 第一次命令抛出后第二次起静默返回 null（自动提交），"响亮失败"只有一次性，
+            // 后续写操作照旧脱离事务。保留失效标记使每次 GetActiveTransaction 都抛，
+            // 直至调用方 UseTransaction(null) 显式清场或重新赋活事务。
             if (_transaction is not null && _externalTransaction)
             {
-                _transaction = null;
-                _transactionOperationOwner = null;
-                _externalTransaction = false;
                 throw new InvalidOperationException(
                     "The transaction assigned via UseTransaction has been disposed externally " +
-                    "(its Connection is null); the next command would silently execute outside " +
+                    "(its Connection is null); commands would silently execute outside " +
                     "the intended transaction. Assign a live transaction via UseTransaction, " +
                     "or call UseTransaction(null) to clear explicitly.");
             }
