@@ -148,7 +148,11 @@ internal static class MigrationEmitter
         {
             foreach (string indexColumn in index.Columns.AsSpan())
             {
-                if (string.Equals(indexColumn, column.ColumnName, StringComparison.OrdinalIgnoreCase))  // r11.5-D4：与 PALORM020 knownColumns 口径对齐——大小写异形索引列需触发 VARCHAR(255) 改写
+                // ITM-791(r21) 口径登记：OrdinalIgnoreCase 匹配（r11.5-D4 与 PALORM020 对齐）——
+                // 决定 MySQL VARCHAR(255) 改写。DDL 侧（BuildCreateIndex）保留索引列原始大小写：
+                // PG 引号列名大小写敏感，[Index] 与 [Column] 大小写异形时 DDL 会引用错列——该
+                // 形态应由 PALORM020（knownColumns 匹配）在编译期拦截，此处不做二次大小写改写。
+                if (string.Equals(indexColumn, column.ColumnName, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
         }

@@ -30,7 +30,10 @@ internal static class MySqlBulkCopyInserter
         // ITM-710(r20)：按 batchSize 分批物化 + 提交——此前把整表一次性灌进 DataTable 单条
         // LOAD DATA（batchSize 未进入本方法签名，契约静默失效），百万行场景内存峰值可达 OOM。
         // 与 MultiValueBulkInsert 的分批语义对齐（每批一次 WriteToServer）。
-        int batchSize = Math.Max(1, ctx.BatchSize);
+        // ITM-779(r21)：与回退路径（MultiValueBulkInsert.ThrowIfNegativeOrZero）契约一致——
+        // 原 Math.Max(1,...) 静默钳制非正值，同参数两路径两种语义。
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ctx.BatchSize);
+        int batchSize = ctx.BatchSize;
         long totalInserted = 0;
         for (int start = 0; start < entities.Count; start += batchSize)
         {

@@ -64,14 +64,17 @@ public sealed class StoredProcBuilder
     {
         DbParameter p = _paramFactory(name, DBNull.Value);
         p.Direction = ParameterDirection.Output;
-        // 设置输出参数类型以帮助 ADO.NET provider 正确推断
-        if (typeof(T) == typeof(int)) p.DbType = DbType.Int32;
-        else if (typeof(T) == typeof(long)) p.DbType = DbType.Int64;
-        else if (typeof(T) == typeof(string)) p.DbType = DbType.String;
-        else if (typeof(T) == typeof(decimal)) p.DbType = DbType.Decimal;
-        else if (typeof(T) == typeof(bool)) p.DbType = DbType.Boolean;
-        else if (typeof(T) == typeof(DateTime)) p.DbType = DbType.DateTime;
-        else if (typeof(T) == typeof(Guid)) p.DbType = DbType.Guid;
+        // 设置输出参数类型以帮助 ADO.NET provider 正确推断。
+        // ITM-787(r21)：Nullable.GetUnderlyingType 解包——GetOutputValue<T> 支持可空泛型，
+        // 声明侧 typeof(T)== 链不识别 int?/long? 等会静默不设 DbType（两侧能力不对称）。
+        Type effectiveType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (effectiveType == typeof(int)) p.DbType = DbType.Int32;
+        else if (effectiveType == typeof(long)) p.DbType = DbType.Int64;
+        else if (effectiveType == typeof(string)) p.DbType = DbType.String;
+        else if (effectiveType == typeof(decimal)) p.DbType = DbType.Decimal;
+        else if (effectiveType == typeof(bool)) p.DbType = DbType.Boolean;
+        else if (effectiveType == typeof(DateTime)) p.DbType = DbType.DateTime;
+        else if (effectiveType == typeof(Guid)) p.DbType = DbType.Guid;
         _outputParams.Add(p);
         _parameters.Add(p);
         return this;

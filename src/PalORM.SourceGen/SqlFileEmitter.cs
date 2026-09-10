@@ -92,8 +92,13 @@ internal static class SqlFileEmitter
         // 无 ProjectDir（非 MSBuild 宿主）时无法解析相对路径——跳过（与原实现同口径）。
         // 模式判空而非 IsNullOrEmpty：netstandard2.0 引用程序集无 [NotNullWhen] 注解，
         // 流分析依赖模式匹配（评审 2026-09-02）。
+        // ITM-789(r21)：缺 ProjectDir（非 MSBuild 宿主）原 return null——partial 方法无实现
+        // 报 CS8795（缺实现），可定位性差于设计的 CS0619 占位（Obsolete error）。改为发
+        // 可检索错误占位，与 not-found 同型。
         if (projectDir is null || projectDir.Length == 0)
-            return null;
+            return GenerateError(model,
+                $"SqlFile 需要 MSBuild 属性 build_property.ProjectDir（经 PalORM.SourceGen targets " +
+                "或 CompilerVisibleProperty 注入）。自定义 Roslyn 宿主请注入该属性后重试。");
 
         string fullPath = Path.GetFullPath(Path.Combine(projectDir, model.RelativePath));
 
@@ -123,10 +128,13 @@ internal static class SqlFileEmitter
                 $"SqlFile Provider '{resolution.UnrecognizedProvider}' 不是有效的 provider 名；" +
                 "支持: postgresql/pg, mysql/my, sqlite/sq");
         if (resolution.HasDirectives && string.IsNullOrWhiteSpace(resolution.Resolved))
+            // ITM-790(r21)：补"-- @ 即指令"提示——普通注释（如 `-- @author x`）会被当作
+            // provider 指令切段，用户无从知道为什么"没有段匹配"。
             return GenerateError(model,
                 $"SqlFile '{model.RelativePath}' 声明了 provider 段但没有任何段匹配 " +
                 $"'{model.TargetProvider ?? "(未指定)"}'（也无 @all 段）；" +
-                "嵌入整份原文会在运行期执行异方言 SQL，已拒绝");
+                "注意：以 '-- @' 开头的行都会被解析为 provider 指令（如 -- @author 会被切段），" +
+                "普通注释请勿以 '-- @' 开头。嵌入整份原文会在运行期执行异方言 SQL，已拒绝");
         sqlContent = resolution.Resolved;
 
         return GenerateMethod(model, sqlContent, fullPath);

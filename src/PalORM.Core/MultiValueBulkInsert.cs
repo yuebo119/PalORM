@@ -189,7 +189,6 @@ public static class MultiValueBulkInsert
         int lastBatchLength = -1;
         // v4.6：满批参数池 -- 首次分配后跨批复用，只改 Value 不 CreateParameter
         DbParameter[]? paramPool = null;
-        bool poolAdded = false; // 首次 Add 后设 true，后续批次不清不重 Add（只改 Value）
         Exception? batchCommandException = null;
         try
         {
@@ -228,16 +227,9 @@ public static class MultiValueBulkInsert
                             batchCmd.Parameters.Add(p);
                             paramPool[i] = p;
                         }
-                        poolAdded = true;
                     }
-                    else if (!poolAdded)
-                    {
-                        // 末批后回到满批：重新 Add 参数
-                        batchCmd.Parameters.Clear();
-                        for (int i = 0; i < paramPool.Length; i++)
-                            batchCmd.Parameters.Add(paramPool[i]);
-                        poolAdded = true;
-                    }
+                    // ITM-785(r21)：删除原 `else if (!poolAdded)` 分支——循环按 start 单调递增，
+                    // 短批恒为末次迭代，"末批后回到满批"结构性不可达（覆盖分析确认从未命中）。
                     // valuesBinder 只改 Value，不 Clear/Add
                     for (int row = 0; row < batchLength; row++)
                         valuesBinder!(paramPool, entities[start + row], row * columnCount);
@@ -246,7 +238,6 @@ public static class MultiValueBulkInsert
                 {
                     // 末批或无 valuesBinder：走老路径
                     batchCmd.Parameters.Clear();
-                    poolAdded = false;
                     for (int row = 0; row < batchLength; row++)
                     {
                         int parameterOffset = row * columnCount;
@@ -278,7 +269,10 @@ public static class MultiValueBulkInsert
 }
 
 /// <summary>多值 INSERT 批量骨架的 provider 能力 + 批次配置聚合——消除 9 参参数列表（S107）。
-/// 每次调用 new 一个；批量内部多次复用。</summary>
+/// 每次调用 new 一个；批量内部多次复用。
+/// <para><b>ITM-785(r21) 说明</b>：<see cref="CreateParameter"/> 执行内核当前不消费
+/// （v4.6 参数复用路径改用 batchCmd.CreateParameter）——保留是公共契约（第三方
+/// Provider 传递参数工厂的既有形态），构造点仍要求非 null。</para></summary>
 public readonly record struct BulkContext(
     int BatchSize,
     int MaxParametersPerStatement,

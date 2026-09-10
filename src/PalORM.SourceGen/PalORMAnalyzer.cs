@@ -205,7 +205,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     // 但 RowFactoryEmitter 因 IsNullable=true 仍生成 IsDBNull 守卫，行为不一致。
     public static readonly DiagnosticDescriptor RequiredWithNullableAnnotation = new(
         "PALORM037", "[Required] conflicts with nullable reference type annotation",
-        "Property '{0}' has [Required] but is annotated as nullable ('{1}?'), which makes DDL and reader behavior inconsistent", "PalORM", DiagnosticSeverity.Warning, true);
+        // ITM-781(r21)：原模板 '{1}?' 硬编码问号，而 {1} 传 ToDisplayString()（可空值类型
+        // 已渲染为 "long?"）→ 消息出现 'long??'。去掉硬编码，{1} 自带可空标记。
+        "Property '{0}' has [Required] but is annotated as nullable ('{1}'), which makes DDL and reader behavior inconsistent", "PalORM", DiagnosticSeverity.Warning, true);
 
     // PALORM040：[TenantAware] 实体 tenant_id 列可空或无 [Required]——
     // 租户隔离完全靠实体 tenant_id 值承载（DataSession.cs:356-359），
@@ -743,8 +745,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
         bool isAutoIncrement = keyAttr is null
             ? false
-            : !keyAttr.NamedArguments.Any(na => na.Key == "AutoIncrement")  // 未显式设置→默认 true
-                || keyAttr.NamedArguments.Any(na => na.Key == "AutoIncrement" && na.Value.Value is true);
+            // ITM-782(r21)：补 int/long 类型限定（对齐 TableModel.FromContext 真源）——
+            // Guid/string 键默认 AutoIncrement=true 但真源不视为自增（无法自增），
+            // 原谓词分叉致 PALORM023 对 Guid 键实体多报一条 Error。
+            : property.Type.SpecialType is not (SpecialType.System_Int64 or SpecialType.System_Int32)
+                ? false
+                : !keyAttr.NamedArguments.Any(na => na.Key == "AutoIncrement")  // 未显式设置→默认 true
+                    || keyAttr.NamedArguments.Any(na => na.Key == "AutoIncrement" && na.Value.Value is true);
         bool hasComputed = property.GetAttributes().Any(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
         bool isTimestamp = property.GetAttributes().Any(a =>

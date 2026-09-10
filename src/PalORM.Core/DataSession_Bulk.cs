@@ -232,25 +232,34 @@ public partial class DataSession<TProvider>
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
         // probe 提取参数总数，作为生成器三处（SQL/Bind/元数据）漂移的运行时哨兵。
-        using DbCommand probe = CreateCommand();
-        metadata.BindUpdate(probe, firstEntity);
-        int totalParams = probe.Parameters.Count;
-        if (totalParams != setColumnCount + 1)
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' BindUpdate produced {totalParams} parameters but metadata " +
-                $"declares {setColumnCount} update columns (+1 primary key). Recompile the model assembly.");
-        string[] setColumns = metadata.UpdateColumns
-            .Select(TProvider.QuoteIdentifier).ToArray();
-        string quotedTable = TProvider.QuoteIdentifier(tableName);
-        // r19/ITM-684：缺 PkColumns 不再静默回退主键 "id"——错列更新比明确失败更危险。
-        // Register 的必填键校验使此分支经公共 API 不可达（防御纵深），但与 GetPkColumn/
-        // ITM-672 缺键拒绝族保持同口径：旧生成器/手工片段必须显式失败。
-        string quotedPk = state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
-            ? TProvider.QuoteIdentifier(pkCol)
-            : throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated primary key metadata; " +
-                "recompile the model assembly against the current PalORM source generator.");
-        return new BatchUpdateContext(setColumns, quotedTable, quotedPk, HasTenantFilter<T>());
+        // ITM-792(r21) 订正：本方法为同步（BindUpdate 无 IO）——await using 不适用，
+        // 用 try/finally 显式 Dispose 保证异常路径释放（与 peer 的异步释放语义等价）。
+        DbCommand probe = CreateCommand();
+        try
+        {
+            metadata.BindUpdate(probe, firstEntity);
+            int totalParams = probe.Parameters.Count;
+            if (totalParams != setColumnCount + 1)
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' BindUpdate produced {totalParams} parameters but metadata " +
+                    $"declares {setColumnCount} update columns (+1 primary key). Recompile the model assembly.");
+            string[] setColumns = metadata.UpdateColumns
+                .Select(TProvider.QuoteIdentifier).ToArray();
+            string quotedTable = TProvider.QuoteIdentifier(tableName);
+            // r19/ITM-684：缺 PkColumns 不再静默回退主键 "id"——错列更新比明确失败更危险。
+            // Register 的必填键校验使此分支经公共 API 不可达（防御纵深），但与 GetPkColumn/
+            // ITM-672 缺键拒绝族保持同口径：旧生成器/手工片段必须显式失败。
+            string quotedPk = state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
+                ? TProvider.QuoteIdentifier(pkCol)
+                : throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' has no generated primary key metadata; " +
+                    "recompile the model assembly against the current PalORM source generator.");
+            return new BatchUpdateContext(setColumns, quotedTable, quotedPk, HasTenantFilter<T>());
+        }
+        finally
+        {
+            probe.Dispose();
+        }
     }
 
     /// <summary>执行单批 UPDATE（构造 SQL + 绑定参数 + 执行）。</summary>

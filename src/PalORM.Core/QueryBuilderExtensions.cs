@@ -229,11 +229,14 @@ public static class QueryBuilderExtensions
                 : await paged._conn.BeginTransactionAsync(ct).ConfigureAwait(false));
         bool ownsTransaction = existingTransaction is null;
         Exception? primaryException = null;
-        if (ownsTransaction)
-            paged._operationState.PublishTransaction(transaction, operationLease.Owner);
-        paged._transaction = transaction;
+        // ITM-793(r21)：登记两步移入 try——PublishTransaction 可抛（ObjectDisposed，窄窗口），
+        // 原位置抛出会让刚开启的自有事务无 rollback 无 dispose（连接持开事务）。finally 已按
+        // ownsTransaction 处置，登记失败同样走该路径。
         try
         {
+            if (ownsTransaction)
+                paged._operationState.PublishTransaction(transaction, operationLease.Owner);
+            paged._transaction = transaction;
             string countSql = paged.BuildCountSql();
 
             await using var countCommand = paged._conn.CreateCommand();
