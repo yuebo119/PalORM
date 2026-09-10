@@ -137,6 +137,15 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 .OfType<SqlTemplateEmitter.SqlTemplateModel>()
                 .OrderBy(static m => m.MethodIdentity, StringComparer.Ordinal))
             {
+                // ITM-719(r20)：声明不受支持（关键字名/宿主形状/带参泛型）——报 PALORM046
+                // 且不生成字段（生成物会不可编译，错误指向 .g.cs）。
+                if (model.InvalidReason is not null)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        SqlTemplateEmitter.InvalidSqlTemplateDeclaration, Location.None,
+                        model.MethodIdentity, model.InvalidReason));
+                    continue;
+                }
                 if (!emitted.Add($"{model.Namespace}.{model.TemplateName}"))
                 {
                     // ITM-662：重名必须显式报错——静默 continue 让第二个模板的 SQL

@@ -105,7 +105,7 @@ internal sealed record TableModel(
             // 零反馈直到运行期 not registered）——现由 PALORM044 定位报错，此处防御性跳过。
             if (computedExpression is not null
                 && (computedExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
-                return EntityModelResult.Skipped(typeSymbol.Name,
+                return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                     $"[Computed] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM044)");
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
@@ -134,7 +134,7 @@ internal sealed record TableModel(
             // CS8785 生成器崩溃堆栈）；现按 PALORM022 分工——生成器静默跳过，
             // PALORM042 在编译期定位报错（Error 级阻断后续流程）。
             if (isTimestamp && computedExpression is not null)
-                return EntityModelResult.Skipped(typeSymbol.Name,
+                return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                     $"[Timestamp] and [Computed] conflict on property '{prop.Name}' (PALORM042)");
 
             var fkAttr = prop.GetAttributes().FirstOrDefault(a =>
@@ -205,7 +205,7 @@ internal sealed record TableModel(
             || foreignKeys.Any(fk => SourceGenerationValidation.HasUnsafeSqlIdentifier(fk.ReferencedTable)
                 || SourceGenerationValidation.HasUnsafeSqlIdentifier(fk.ReferencedColumn)))
         {
-            return EntityModelResult.Skipped(typeSymbol.Name,
+            return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 "a SQL identifier (table/column/index/FK name) contains a control character or is empty (PALORM043)");
         }
 

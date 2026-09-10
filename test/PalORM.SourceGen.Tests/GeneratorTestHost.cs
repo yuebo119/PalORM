@@ -12,7 +12,8 @@ internal static class GeneratorTestHost
 {
     internal sealed record GeneratorResult(
         CSharpCompilation OutputCompilation,
-        IReadOnlyDictionary<string, string> GeneratedSources);
+        IReadOnlyDictionary<string, string> GeneratedSources,
+        ImmutableArray<Diagnostic> Diagnostics = default);
 
     internal static GeneratorResult RunGenerator(string source, string assemblyName = "SnapshotConsumer")
         => RunGenerator(source, assemblyName, analyzerConfigOptions: null);
@@ -56,7 +57,9 @@ internal static class GeneratorTestHost
                 static generated => generated.HintName,
                 static generated => generated.SourceText.ToString(),
                 StringComparer.Ordinal);
-        return new GeneratorResult((CSharpCompilation)outputCompilation, generatedSources);
+        // ITM-719：生成器自身上报的诊断（如 PALORM045/046）——供失败面断言
+        ImmutableArray<Diagnostic> diagnostics = [.. driver.GetRunResult().Diagnostics];
+        return new GeneratorResult((CSharpCompilation)outputCompilation, generatedSources, diagnostics);
     }
 
     /// <summary>单趟运行并返回 SqlFile 生成源（指定 .sql 内容）。
