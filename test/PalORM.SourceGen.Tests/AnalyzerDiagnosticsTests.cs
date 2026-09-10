@@ -1312,6 +1312,156 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task PALORM032_NonPalORMInclude_DoesNotReport()
+    {
+        // ITM-716(r20)：消费者同时引用 EF Core 时，EF 的 Include/ThenInclude 与 PalORM 同名——
+        // 原按方法名直接分派会对 EF 查询误报（实体是 EF 实体、无 PalORM [Table]）。
+        const string source = """
+            using System.Linq;
+            namespace FakeOrm
+            {
+                public sealed class DbSet<T> { }
+                public static class Ext
+                {
+                    public static DbSet<T> Include<T>(this DbSet<T> set, System.Func<T, object?> path) => set;
+                }
+            }
+            public sealed class Blog { public long Id { get; set; } }
+            public static class C
+            {
+                static void M(FakeOrm.DbSet<Blog> blogs)
+                {
+                    _ = blogs.Include(b => b.Id);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM032")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM031_NonPalORMBulkUpdateBatchAsync_DoesNotReport()
+    {
+        // ITM-716(r20)：同型面——非 PalORM 接收者的同名 BulkUpdateBatchAsync 不得误报
+        const string source = """
+            namespace FakeOrm
+            {
+                public sealed class Repo
+                {
+                    public void BulkUpdateBatchAsync<T>(System.Collections.Generic.List<T> list) { }
+                }
+            }
+            [PalORM.Table("t")]
+            public sealed class E
+            {
+                [PalORM.Key] public long Id { get; set; }
+                [PalORM.ConcurrencyCheck] public long Version { get; set; }
+            }
+            public static class C
+            {
+                static void M(FakeOrm.Repo r, System.Collections.Generic.List<E> list)
+                {
+                    r.BulkUpdateBatchAsync(list);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM031")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM033_ReassignedBuilder_DoesNotReport()
+    {
+        // ITM-717(r20)：变量重赋值后终端调用属于新 builder——原按"同名标识符 + 后 5 条语句"
+        // 匹配会对第二处合法调用误报 Error（阻断编译）。
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            public static class C
+            {
+                static async System.Threading.Tasks.Task M<TProvider>(DataSession<TProvider> s)
+                    where TProvider : IDbProvider
+                {
+                    var b = s.From<E>();
+                    b.Select(x => x.Id);
+                    b = s.From<E>();
+                    await b.ToListAsync();
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM033")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM033_SameBuilderProjectionThenToList_StillReports()
+    {
+        // ITM-717 对照组：同一 builder（无重赋值）——修复后仍须报告（不得回归漏报）
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            public static class C
+            {
+                static async System.Threading.Tasks.Task M<TProvider>(DataSession<TProvider> s)
+                    where TProvider : IDbProvider
+                {
+                    var b = s.From<E>();
+                    b.Select(x => x.Id);
+                    await b.ToListAsync();
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM033")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM040_NonNullableStringWithoutRequired_DoesNotReport()
+    {
+        // ITM-718(r20)：非可空 NRT string 无 [Required]——MigrationEmitter 判据
+        // (IsRequired || !IsNullable || IsPrimaryKey) 落地 NOT NULL，DB 层不可能 NULL；
+        // 原判据对该形态报 Error，阻断合法代码。
+        const string source = """
+            using PalORM;
+            [Table("t")] [TenantAware]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("tenant_id")] public string TenantId { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM040")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM040_NullableWithRequired_DoesNotReport()
+    {
+        // ITM-718(r20)：可空注解 + [Required] → DDL 落地 NOT NULL，DB 层不可能 NULL
+        const string source = """
+            using PalORM;
+            [Table("t")] [TenantAware]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("tenant_id")] [Required] public string? TenantId { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM040")).IsFalse();
+    }
+
+    [Test]
     public async Task PALORM033_PalORMFooNamespace_DoesNotReport()
     {
         // ITM-649/662 锁定：用户命名空间 PalORMFoo 下自建 QueryBuilder 的 Select 不误报

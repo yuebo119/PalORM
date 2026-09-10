@@ -322,6 +322,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckBulkUpdateBatchConcurrency(
         SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma, InvocationExpressionSyntax invocation)
     {
+        // ITM-716(r20)：补 PalORM 归属确认——原仅按方法名分派，消费者同时引用 EF Core/MongoDB
+        // 时同名方法（如第三个库的 BulkUpdateBatchAsync）会误报。与 PALORM005/033 同口径
+        //（`IsPalORMInvocation` 的中文语义即"排除同名外部方法"）。
+        if (!IsPalORMInvocation(ctx, invocation)) return;
         // ITM-614：语义层取泛型实参（IMethodSymbol.TypeArguments）——推断式调用
         // （session.BulkUpdateBatchAsync(list)）的 ma.Name 是 IdentifierNameSyntax 而非
         // GenericNameSyntax，语法层判定漏报（探针实证，AnalyzerDiagnosticsTests 推断式用例）。
@@ -345,6 +349,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma,
         InvocationExpressionSyntax invocation, string methodName)
     {
+        // ITM-716(r20)：补 PalORM 归属确认——EF Core 的 Include/ThenInclude 与 PalORM 同名，
+        // 消费者同时引用两者时会对 EF Core 的 `db.Blogs.Include(b => b.Posts)` 误报
+        //（Blog 无 [Table]）。与 PALORM005/033 同口径。
+        if (!IsPalORMInvocation(ctx, invocation)) return;
         // ITM-614：同 CheckBulkUpdateBatchConcurrency——语义层 TypeArguments 覆盖推断式调用
         if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
             is not IMethodSymbol { IsGenericMethod: true } method)
@@ -362,11 +370,15 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM033：Select(projection) 后接 ToListAsync/FirstAsync——运行期必崩。
-    /// 策略：同一 IdentifierName 变量上 Select 后立即跟 To/First/Single 调用。
-    /// 已知限制：仅覆盖多语句模式（builder.Select(...); builder.ToListAsync();），
+    /// 策略：同一符号（ISymbol）的 builder 变量上 Select 后跟 To/First/Single 调用。
+    /// <para><b>ITM-717(r20)</b>：原按"同名标识符 + 后 5 条语句"匹配，不识别重赋值——
+    /// <c>b.Select(...); b = session.From&lt;E&gt;(); await b.ToListAsync();</c> 会对第二个
+    /// builder（无投影、运行正常）误报 Error 阻断编译。现改为按符号比对，且区间内若发生
+    /// 对同一符号的重赋值即放弃报告（无法确认终端调用属于同一 builder）。</para>
+    /// <para>已知限制：仅覆盖多语句模式（builder.Select(...); builder.ToListAsync();），
     /// 链式调用（session.From&lt;T&gt;().Select(...).ToListAsync()）不报告——
     /// 因 ma.Expression 是 InvocationExpressionSyntax 不是 IdentifierNameSyntax。
-    /// 链式追踪复杂度高且易误报，留作未来增强。</summary>
+    /// 链式追踪复杂度高且易误报，留作未来增强。</para></summary>
     private static void CheckSelectProjection(
         SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma, InvocationExpressionSyntax invocation)
     {
@@ -382,17 +394,18 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             || !(ns == "PalORM" || ns.StartsWith("PalORM.", StringComparison.Ordinal)))  // ITM-649(r4)：点边界，防 PalORMFoo 穿透（对齐同文件 032 判据）
             return;
 
-        // 追踪 Select 的接收者变量名
-        string varName = varRef.Identifier.Text;
+        // ITM-717：按符号（非同名）追踪 Select 的接收者——变量重赋值后符号相同，
+        // 故另需检测区间内重赋值（见下）。
+        ISymbol? selectReceiver = ctx.SemanticModel.GetSymbolInfo(varRef, ctx.CancellationToken).Symbol;
+        if (selectReceiver is null) return;
 
-        // 向后扫描：同一语句或 ExpressionStatement 后续是否存在 varName.ToListAsync/FirstAsync 调用
-        // 简化：找后续 ExpressionStatement 链中的同变量调用
+        // 向后扫描：同一语句块内后续是否存在同符号的 ToListAsync/FirstAsync/SingleAsync 调用
         SyntaxNode? parent = invocation.Parent;
         while (parent is not null and not BlockSyntax and not StatementSyntax)
             parent = parent.Parent;
         if (parent is not ExpressionStatementSyntax currentStmt) return;
 
-        // ITM-634：向后扫描加上限——原无距离上限，中间隔任意多语句仍误报（变量可能已重赋值）
+        // ITM-634：向后扫描加上限——原无距离上限，中间隔任意多语句仍误报
         SyntaxNode? sibling = currentStmt;
         int scanned = 0;
         while (sibling is not null && scanned < 5)
@@ -400,17 +413,27 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             scanned++;
             sibling = sibling.Parent?.ChildNodes()
                 .FirstOrDefault(n => n.SpanStart > sibling.SpanStart);
-            if (sibling is ExpressionStatementSyntax exprStmt
-                && exprStmt.DescendantNodes()
-                    .OfType<MemberAccessExpressionSyntax>()
-                    .Any(m => m.Expression is IdentifierNameSyntax id
-                              && id.Identifier.Text == varName
-                              && m.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync"))
+            if (sibling is not ExpressionStatementSyntax exprStmt) break;
+
+            // ITM-717：区间内对同一符号重赋值 → 终端调用可能属于新 builder，放弃报告，
+            // 避免误报（重赋值形态见 summary）。
+            bool reassigned = exprStmt.DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .Any(a => SymbolEqualityComparer.Default.Equals(
+                    ctx.SemanticModel.GetSymbolInfo(a.Left, ctx.CancellationToken).Symbol, selectReceiver));
+            if (reassigned) return;
+
+            bool terminal = exprStmt.DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>()
+                .Any(m => m.Expression is IdentifierNameSyntax id
+                          && m.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync"
+                          && SymbolEqualityComparer.Default.Equals(
+                              ctx.SemanticModel.GetSymbolInfo(id, ctx.CancellationToken).Symbol, selectReceiver));
+            if (terminal)
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(SelectProjectionWithToList, invocation.GetLocation()));
                 return;
             }
-            if (sibling is not ExpressionStatementSyntax) break;
         }
     }
 
@@ -598,10 +621,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         return string.Equals(effectiveColumnName, expected, StringComparison.Ordinal);
     }
 
-    /// <summary>PALORM040：[TenantAware] 实体的 tenant_id 列可空或无 [Required]。
+    /// <summary>PALORM040：[TenantAware] 实体的 tenant_id 列可空且无 [Required]。
     /// 租户隔离完全靠实体 tenant_id 值承载（DataSession.cs:356-359），NULL tenant_id 让跨租户数据可见。
-    /// 注：非可空值类型（long/int/Guid）天然不可能 null，不要求 [Required]；
-    /// 仅引用类型（string）需要 [Required] 或非可空 NRT 注解。</summary>
+    /// <para><b>ITM-718(r20) 判据收敛</b>：报告条件 = "该列在 DDL 层真的可为 NULL"，即
+    /// <c>可空注解 &amp;&amp; 无 [Required]</c>。MigrationEmitter 的 NOT NULL 判据是
+    /// <c>IsRequired || !IsNullable || IsPrimaryKey</c>——故非可空 NRT 的 <c>string</c> 与带
+    /// <c>[Required]</c> 的可空列均落地 NOT NULL，DB 层不可能写入 NULL。原判据
+    /// <c>可空注解 || (引用类型 &amp;&amp; 无 [Required])</c> 对"非可空 string 无 [Required]"
+    /// 报 Error，与本方法注释及 MigrationEmitter 事实均矛盾（阻断合法代码）。</para></summary>
     private static void CheckTenantColumnNullable(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool isTenantAware = type.GetAttributes().Any(attribute =>
@@ -614,16 +641,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // PALORM040 判据，可空形态不得借"无显式 [Column]"绕过安全守卫。
             if (!HasColumnNamed(property, "tenant_id")) continue;
 
-            // 仅引用类型需要 [Required]——值类型（long/Guid 等）天然不可 null
-            bool isReferenceType = property.Type.IsReferenceType
-                || property.Type.SpecialType == SpecialType.System_String;
+            // 可空注解：string?（Annotated）或 long?（Nullable<T>）——两者 DDL 才可能 NULL
             bool isNullableAnnotation = property.NullableAnnotation == NullableAnnotation.Annotated
                 || property.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
             bool hasRequired = property.GetAttributes().Any(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
 
-            // 报告条件：可空注解（string?/long?）或 引用类型无 [Required]
-            if (isNullableAnnotation || (isReferenceType && !hasRequired))
+            // 仅当列真的可为 NULL（可空注解且无 [Required]）才报
+            if (isNullableAnnotation && !hasRequired)
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(TenantColumnNullable,
                     property.Locations.FirstOrDefault() ?? type.Locations[0],

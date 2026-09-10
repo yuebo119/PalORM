@@ -22,10 +22,25 @@ internal static class SqlTemplateEmitter
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    /// <summary>PALORM046（ITM-719）：[SqlTemplate] 名称非法或宿主形状不受支持——生成物会不可编译
+    /// （错误指向 .g.cs，正是 ITM-573 家族要消灭的形态）。<c>SyntaxFacts.IsValidIdentifier</c>
+    /// 对 C# 关键字返回 true（已实测 <c>"class"</c>），关键字名会生成 <c>FormattableString class = ...</c>。</summary>
+    internal static readonly DiagnosticDescriptor InvalidSqlTemplateDeclaration = new(
+        id: "PALORM046",
+        title: "Invalid SqlTemplate declaration",
+        messageFormat: "[SqlTemplate] on '{0}' is not supported: {1}",
+        category: "PalORM",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     /// <summary>单个模板的生成模型——生成器端按 (Namespace, TemplateName) 聚合去重
     /// （ITM-573：两个方法挂同名模板会生成两个同名字段 → CS0102；ITM-662：重名现在
-    /// 发射 PALORM041 而非静默丢弃）。</summary>
-    internal sealed record SqlTemplateModel(string Namespace, string TemplateName, string Literal, string MethodIdentity);
+    /// 发射 PALORM041 而非静默丢弃）。
+    /// <para>ITM-719：<paramref name="InvalidReason"/> 非 null 表示声明不受支持（关键字名/
+    /// 宿主非 partial class/方法带参或泛型）——生成器据此报 PALORM046 且不生成该字段。</para></summary>
+    internal sealed record SqlTemplateModel(
+        string Namespace, string TemplateName, string Literal, string MethodIdentity,
+        string? InvalidReason = null);
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -43,9 +58,36 @@ internal static class SqlTemplateEmitter
             return null;
 
         string templateName = attr.ConstructorArguments[0].Value?.ToString() ?? "";
+        string methodIdentity = method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        string ns = method.ContainingNamespace?.IsGlobalNamespace == true
+            ? "PalORM.Generated"
+            : method.ContainingNamespace?.ToDisplayString() ?? "PalORM.Generated";
+
+        // ITM-719(r20)：IsValidIdentifier 对 C# 关键字返回 true（探针实测 "class"=true）——
+        // 关键字名会生成 `FormattableString class = ...`，错误落在 .g.cs。显式报诊断。
         if (string.IsNullOrEmpty(templateName)
             || !SyntaxFacts.IsValidIdentifier(templateName))
-            return null;
+            return null;  // 未填有效名——保持原"不生成"语义（非用户误以为合法的形态）
+        if (SyntaxFacts.GetKeywordKind(templateName) != SyntaxKind.None)
+            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
+                $"'{templateName}' is a C# keyword and cannot be used as a generated field name");
+
+        // ITM-719(r20)：宿主形状——Render 硬编码 `public static partial class SqlTemplates`，
+        // 方法须为无参非泛型且宿主支持 partial class（record/struct 宿主会 CS0261/CS0111，
+        // 错误落在 .g.cs）。此处显式报诊断并拒绝生成。
+        if (method.Parameters.Length != 0)
+            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
+                "the method must have no parameters (the generated field is a static readonly const)");
+        if (method.IsGenericMethod)
+            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
+                "the method must not be generic (the generated field is a static readonly const)");
+        if (method.ContainingType is { TypeKind: not TypeKind.Class } host
+            && host.TypeKind != TypeKind.Class)
+            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
+                $"the containing type '{host.Name}' must be a class (the generated partial declaration is a class)");
+        if (method.ContainingType is { IsRecord: true })
+            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
+                "the containing type must be a plain class, not a record (the generated partial declaration is a class)");
 
         var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef?.GetSyntax(ct) is not MethodDeclarationSyntax methodSyntax)
@@ -95,14 +137,12 @@ internal static class SqlTemplateEmitter
             }
         }
 
-        string ns = method.ContainingNamespace?.IsGlobalNamespace == true
-            ? "PalORM.Generated"
-            : method.ContainingNamespace?.ToDisplayString() ?? "PalORM.Generated";
-
-        // 原样搬运插值表达式语法——转义、嵌套引号、插值洞由 Roslyn 保证合法
-        string literal = interpolated.ToFullString().Trim();
-        return new SqlTemplateModel(ns, templateName, literal,
-            method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+        // 原样搬运插值表达式语法——转义、嵌套引号、插值洞由 Roslyn 保证合法。
+        // ITM-720(r20)：`ToFullString` 含首尾 trivia，`return // c⏎ $"..."` 或 `$"..." // c`
+        // 会把行注释一并带进初始值，生成的 `= $"..." // c;` 使分号被注释掉（语法错误落 .g.cs）。
+        // 用 `ToString()` 只取插值串本体（不含外层 trivia），并在无 trivia 后 Trim。
+        string literal = interpolated.ToString().Trim();
+        return new SqlTemplateModel(ns, templateName, literal, methodIdentity);
     }
 
     /// <summary>渲染单个模板文件（去重后由生成器逐个调用）。</summary>
