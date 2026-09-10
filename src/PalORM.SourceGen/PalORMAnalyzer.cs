@@ -634,18 +634,20 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM036：实体处于 #nullable disable 上下文——RowFactoryEmitter 不生成 IsDBNull 守卫。
-    /// 检测策略：编译期 Options.NullableContextOptions 不是 Enable 时报告（项目级未启用 NRT）。
-    /// 文件级 #nullable enable 无法在 SymbolAction 中可靠检测（GetNullableContext 是 internal API），
-    /// 退而检测项目级——绝大多数场景项目级 NRT 状态决定文件级行为。</summary>
+    /// 检测策略：编译期 Options.NullableContextOptions 未启用 Annotations 时报告（项目级注解上下文缺失）。
+    /// 文件级 #nullable enable 在 SymbolAction 中无法可靠检测，退而检测项目级——绝大多数场景
+    /// 项目级 NRT 状态决定文件级行为。</summary>
     private static void CheckNullableContext(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         if (ctx.Compilation is not CSharpCompilation csc) return;
-        // NullableContextOptions 是 [Flags]：Enable=1, Warnings=2, Annotations=4
-        // 仅当含 Enable 标记时才视为启用了 NRT
-        // ITM-648(r4)：Annotations-only 配置下 NullableAnnotation.Annotated 仍生效、
-        // IsDBNull 守卫仍生成——仅 Enable 判据在该配置误报。含 Annotations 位一并豁免。
-        if ((csc.Options.NullableContextOptions
-                & (NullableContextOptions.Enable | NullableContextOptions.Annotations)) != 0) return;
+        // NullableContextOptions 是 [Flags]：Disable=0, Warnings=1, Annotations=2, Enable=3（= Warnings|Annotations）
+        // IsDBNull 守卫的生成取决于 NullableAnnotation，而注解上下文仅在 Annotations 位启用时准确。
+        // ITM-648(r4)：Annotations-only 配置下 NullableAnnotation.Annotated 仍生效、守卫仍生成——须豁免。
+        // ITM-706(r20)：原判据 `& (Enable | Annotations)` 的值就是 Enable(3)——Warnings-only(1) 对 3
+        // 取与非 0 被误豁免；而 Warnings-only 下注解上下文未启用、string 属性 NullableAnnotation 为
+        // None、RowFactory 不生成守卫（正是本诊断要报的场景）却漏报。判据收敛为 Annotations 位：
+        // Disable(0)/Warnings(1) 不豁免，Annotations(2)/Enable(3) 豁免。
+        if ((csc.Options.NullableContextOptions & NullableContextOptions.Annotations) != 0) return;
 
         // ITM-634：纯值类型实体不受 NRT 语义影响（IsDBNull 守卫只对可空引用/值类型生成）——
         // 无引用类型属性时报告只是噪音。string 属引用类型（可空 string 同样受影响），保留判定。

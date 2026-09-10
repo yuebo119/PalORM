@@ -100,12 +100,19 @@ public sealed partial class DataSession<TProvider>
         IsolationLevel? level = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(action);
-        object owner = _operationState.EnterTransactionFlow();
-        DbTransaction? previousTransaction = GetActiveTransaction();
+        // ITM-708(r20)：EnterTransactionFlow 与 GetActiveTransaction 必须都在 try 内——
+        // GetActiveTransaction 在外部事务已被 Dispose 时会抛（ITM-640 响亮路径），
+        // 若它（或 EnterTransactionFlow 之后的任何语句）在 try 之外抛出，finally 的
+        // ExitTransactionFlow 永不执行 → _transactionOwner/_activeTransaction 永不清，
+        // 会话后续操作永久失败且 DisposeAsync 挂到超时。owner 先置 null，仅在登记成功后赋值。
+        object? owner = null;
+        DbTransaction? previousTransaction = null;
         DbTransaction? transaction = null;
         Exception? primaryException = null;
         try
         {
+            owner = _operationState.EnterTransactionFlow();
+            previousTransaction = GetActiveTransaction();
             transaction = await BeginTransactionAsync(level, ct).ConfigureAwait(false);
             try
             {
@@ -149,7 +156,8 @@ public sealed partial class DataSession<TProvider>
             }
             finally
             {
-                _operationState.ExitTransactionFlow(owner);
+                if (owner is not null)
+                    _operationState.ExitTransactionFlow(owner);
             }
         }
     }
@@ -236,9 +244,15 @@ public sealed partial class DataSession<TProvider>
         }
         finally
         {
-            _operationState.RestoreTransaction(transaction, previousTransaction);
+            // ITM-707(r20)：仅在自开事务时还原登记。非自开路径下 previousTransaction == transaction，
+            // 无条件 RestoreTransaction 会让 ReferenceEquals 成立并把 _externalTransaction 复位为 false
+            // ——外部 UseTransaction 设入的事务从此失效时不抛（ITM-640 保护被静默关闭）。
+            // 与 QueryBuilderExtensions.ToPageAsync 的 ownsTransaction 守卫口径一致。
             if (ownsTransaction)
+            {
+                _operationState.RestoreTransaction(transaction, previousTransaction);
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
+            }
         }
     }
 }

@@ -7,6 +7,9 @@ namespace PalORM;
 /// <summary>QueryBuilder 执行扩展方法——从 struct 分离避免装箱。</summary>
 public static class QueryBuilderExtensions
 {
+    /// <summary>结果列表的预分配容量上限（ITM-712）。Take/分页大小是查询结果上界而非预期行数，
+    /// 无上限的预分配可被单个超大值放大为进程级 OOM；封顶后超出部分依赖 List 均摊 O(1) 扩容。</summary>
+    private const int MaxPreallocatedCapacity = 4096;
     /// <summary>执行查询并返回全部实体列表。
     /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
     /// 未命中则执行查询并将副本写入缓存。</para></summary>
@@ -75,7 +78,11 @@ public static class QueryBuilderExtensions
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
             // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
             // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
-            List<T> list = builder._take.HasValue ? new(builder._take.Value) : new List<T>(16);
+            // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
+            // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源）。封顶后由均摊 O(1) 扩容兜底。
+            List<T> list = builder._take.HasValue
+                ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
+                : new List<T>(16);
             while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
             NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
             // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
