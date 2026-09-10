@@ -89,6 +89,12 @@ public static class TestEnvironment
 
     private static string ResolveWithFullOverride(string template, string fullEnvVar)
     {
+        // ITM-776(r21)：JSON 显式 null 会让 template 为 null——占位符展开首行 Contains 直接 NRE，
+        // 与公开方法声明的 InvalidDataException 形态不符。入口统一守卫。
+        if (template is null)
+            throw new InvalidDataException(
+                $"Connection string template in {_settingsFileName} is null (explicit JSON null). " +
+                "Provide a template string or set the full-override environment variable.");
         string? full = Environment.GetEnvironmentVariable(fullEnvVar);
         return string.IsNullOrEmpty(full) ? ExpandPlaceholders(template, fullEnvVar) : full;
     }

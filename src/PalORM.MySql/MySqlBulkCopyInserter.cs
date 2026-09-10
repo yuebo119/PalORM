@@ -129,9 +129,15 @@ internal static class MySqlBulkCopyInserter
                 // 报成成功——非空即显式失败，避免静默数据损坏。
                 if (result.Warnings.Count > 0)
                 {
+                    // ITM-777(r21)：不回显 Warnings[0].Message 原文——MySQL 1366 等告警内嵌
+                    // 被拒原始值（"Incorrect integer value: '<value>'"），若该列是 [SensitiveData]，
+                    // 真实值会随异常消息进日志（掩码只作用于参数面，不覆盖此路径）。
+                    // 只报数量/错误码/Level，内容留给调用方按需自查。
+                    var first = result.Warnings[0];
                     throw new InvalidOperationException(
                         $"MySqlBulkCopy reported {result.Warnings.Count} warning(s); data may have been " +
-                        $"truncated or converted incorrectly. First warning: {result.Warnings[0].Message}");
+                        $"truncated or converted incorrectly. First warning: ErrorCode={first.ErrorCode}, Level={first.Level} " +
+                        "(message content redacted to avoid echoing rejected values).");
                 }
                 // ITM-656(r4)：MySqlConnector 服务端不报行数时返 -1——规范化为本批实体数
                 long inserted = result.RowsInserted;

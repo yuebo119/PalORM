@@ -62,10 +62,22 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     /// 经此记录，避免监听器静默死亡后 NOTIFY 丢失无痕。</summary>
     public Microsoft.Extensions.Logging.ILogger? Logger { get; set; }
 
-    /// <summary>ITM-724(r20)：最近一次无 <see cref="OnError"/> 订阅者时的后台终止异常。
-    /// 未配置 <see cref="Logger"/>（默认构造）时，这是监听器静默死亡后唯一可观察的信号——
-    /// 监听循环结束（<see cref="StopAsync"/> 返回或 <see cref="StartAsync"/> 抛出）后查询。</summary>
-    public Exception? LastError { get; private set; }
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("IDE", "IDE0032:Use auto property",
+        Justification = "Volatile 发布需要显式支撑字段——后台线程写、外部线程读，"
+            + "自动属性无法表达 Volatile.Read/Write 语义（ITM-761）。")]
+    private Exception? _lastError;
+
+    /// <summary>ITM-724(r20)：最近一次后台终止且无 <see cref="OnError"/> 订阅者时的异常。
+    /// 未配置 <see cref="Logger"/>（默认构造）时，这是监听器静默死亡后唯一可观察的信号。
+    /// <para><b>ITM-761(r21) 生命周期</b>：①<see cref="StartAsync"/> 成功时清零（上一次
+    /// 运行期的失败不得污染新会话的判断）；②后台线程写、外部线程读——经 Volatile 发布
+    /// （引用写原子，但可见性需屏障）；③查询时机：监听循环结束后（StopAsync 返回），
+    /// <b>不含</b>首次启动失败——该异常由 StartAsync 直接抛出，不经本属性。</para></summary>
+    public Exception? LastError
+    {
+        get => Volatile.Read(ref _lastError);
+        private set => Volatile.Write(ref _lastError, value);
+    }
 
     /// <summary>创建监听器,重连退避为线性递增(第 n 次重连等待 n 秒,上限 5 次)。
     /// 构造不建立连接;调用 <see cref="StartAsync"/> 后才连接并 LISTEN。</summary>
@@ -114,6 +126,9 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         try
         {
             await started.Task.ConfigureAwait(false);
+            // ITM-761(r21)：新一次启动成功——上一次运行期的 LastError 清零，
+            // 避免已恢复的监听器被读为故障态。
+            LastError = null;
         }
         catch
         {

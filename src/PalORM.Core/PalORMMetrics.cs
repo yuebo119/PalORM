@@ -12,11 +12,16 @@ public static class PalORMMetrics
     /// <summary>Meter 名称。</summary>
     public const string MeterName = "PalORM";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "1.0.0");
+    /// <summary>ITM-773(r21)：instrumentation version 与包版本对齐（OTel 语义约定建议
+    /// instrumentation_scope.version = 库版本）——此前硬编码 "1.0.0" 与 5.4.0 漂移，
+    /// 观测端按版本过滤/关联失配。由 D11 同口径守护（生成物侧为 GeneratedCodeMetadata）。</summary>
+    internal const string InstrumentationVersion = "5.4.0";
+
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, InstrumentationVersion);
 
     /// <summary>共享 Meter——供其他模块（如 <see cref="BoundedQueryCache"/>）注册指标。
     /// 通过 <c>PalORM</c> 名称统一导出到 OpenTelemetry。</summary>
-    internal static Meter Meter { get; } = new(MeterName, "1.0.0");
+    internal static Meter Meter { get; } = new(MeterName, InstrumentationVersion);
 
     private static readonly Counter<long> _queryCounter = Meter.CreateCounter<long>(
         "palorm.query.executions", description: "Number of database commands executed");

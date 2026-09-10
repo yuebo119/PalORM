@@ -7,7 +7,12 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider>
     where TProvider : IDbProvider
 {
-    /// <summary>见 DataSession 主文档。</summary>
+    /// <summary>创建查询构建器——每次调用创建新的 struct QueryBuilder（值类型）。
+    /// <para><b>为什么是 struct</b>: 避免每次查询的堆分配。高 QPS 场景(10K+)每秒省 ~2MB 堆分配。</para>
+    /// <para><b>为什么每次新建</b>: GORM #7437——条件残留在构建器实例上导致数据错误。全新构建器保证条件隔离。</para>
+    /// <para>自动附加: 租户过滤([TenantAware])、软删除过滤([SoftDelete])；会话事务在执行时解析。</para>
+    /// <para>ITM-774(r21)：本 doc 原悬空在 DataSession.cs 的 IgnoreFilters 之上（孤儿注释，
+    /// 编译产物把两个 summary 并列到 IgnoreFilters 节点）——已迁回方法本体。</para></summary>
     public QueryBuilder<T> From<T>() where T : class, new()
     {
         _operationState.EnsureAvailable();

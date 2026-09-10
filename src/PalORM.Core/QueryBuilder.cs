@@ -758,6 +758,11 @@ public struct QueryBuilder<T> where T : class, new()
         ArgumentNullException.ThrowIfNull(onClause);  // ITM-664
         string joinTable = GetRegisteredTableName(typeof(TJoin));
         var (sql, parameters) = BindFormattableString(onClause);
+        // ITM-757(r21)：空/空白 ON 生成 `JOIN t ON ()` 非法 SQL 晚失败——入口拒绝
+        //（与 Where/OrWhere/Having/With 的 ITM-745 守卫同族，Join 一族此前漏覆盖）。
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException(
+                "JOIN ON clause must not be empty or whitespace; an empty clause produces invalid SQL.", nameof(onClause));
         AddClause(QueryClauseKind.Join,
             $"{joinType} JOIN {_quoteIdentifier(joinTable)} ON ({sql})", parameters);
         return this;
@@ -821,10 +826,11 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>ITM-715(r20)：是否存在"非子句形态的执行修饰符"——Take/Skip/Select/
     /// AsSplitQuery/WithCache 是字段而非子句，<see cref="CountUserSubstantiveClauses"/> 对它们
     /// 结构性失明。QueryMultipleAsync 逐字执行提供的 SQL，这些修饰符会被静默忽略；同族守卫
-    /// 在 BuildUpdateSql 已单独拒绝 Take/Skip（r8-D1），此处补齐查询入口的一致性。</summary>
-    internal bool HasIgnoredExecutionModifiers
-        => _take.HasValue || _skip.HasValue
-            || _selectColumns is not null || _splitQuery || _cacheKey is not null;
+    /// 在 BuildUpdateSql 已单独拒绝 Take/Skip（r8-D1），此处补齐查询入口的一致性。
+    /// <para>ITM-757(r21)：Take/Skip 用值判定（与 BuildUpdateSql 的 r8-D1 口径一致）——
+    /// Take(0)/Skip(0) 是明确 no-op，存在性判定会误拒合法形态。</para></summary>
+    internal bool HasIgnoredExecutionModifiers => _take > 0 || _skip > 0
+        || _selectColumns is not null || _splitQuery || _cacheKey is not null;
 
     // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
     private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
