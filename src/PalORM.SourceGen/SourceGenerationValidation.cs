@@ -190,18 +190,53 @@ internal static class SourceGenerationValidation
         return false;
     }
 
-    /// <summary>括号配对词法扫描——忽略单引号字符串内的括号
-    /// （如 <c>LOWER(')foo')</c> 的 <c>)</c> 在字符串内，不应计入配对）。
-    /// 自 TableModel 迁入共享：分析器 PALORM044 与 TableModel 发射前快检同一真源。</summary>
+    /// <summary>括号配对词法扫描——跳过字符串/引用标识符/注释内的括号。
+    /// <para>ITM-741(r20)：原实现只识别单引号字符串，双引号标识符（PG/SQLite）、反引号标识符
+    /// （MySQL）与 <c>--</c>/<c>/* */</c> 注释内的括号会被误计入配对——合法计算列被拒或非法表达式放行。
+    /// 现按 SQL 词法跳过四类区间（不验证其闭合性，只保证括号不计入）。</para></summary>
     internal static bool IsBalancedParentheses(string expression)
     {
         int depth = 0;
-        bool inString = false;
         for (int i = 0; i < expression.Length; i++)
         {
             char c = expression[i];
-            if (c == '\'') { inString = !inString; continue; }
-            if (inString) continue;
+            // 单引号字符串——SQL 中以 '' 续写，遇成对单引号跳过
+            if (c == '\'')
+            {
+                i++;
+                while (i < expression.Length)
+                {
+                    if (expression[i] == '\'')
+                    {
+                        if (i + 1 < expression.Length && expression[i + 1] == '\'') { i += 2; continue; }
+                        break;
+                    }
+                    i++;
+                }
+                continue;
+            }
+            // 双引号标识符（PG/SQLite）与反引号标识符（MySQL）、方括号标识符（T-SQL 风格）
+            if (c is '"' or '`')
+            {
+                i++;
+                while (i < expression.Length && expression[i] != c) i++;
+                continue;
+            }
+            // 行注释 -- 到行尾
+            if (c == '-' && i + 1 < expression.Length && expression[i + 1] == '-')
+            {
+                while (i < expression.Length && expression[i] is not ('\n' or '\r')) i++;
+                continue;
+            }
+            // 块注释 /* ... */
+            if (c == '/' && i + 1 < expression.Length && expression[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < expression.Length
+                       && !(expression[i] == '*' && expression[i + 1] == '/')) i++;
+                i++;  // 跳过收尾 '*'（越界时循环自然结束）
+                continue;
+            }
             if (c == '(') depth++;
             else if (c == ')') { depth--; if (depth < 0) return false; }
         }

@@ -112,6 +112,11 @@ public struct QueryBuilder<T> where T : class, new()
     private void AddParenthesizedClause(string prefix, FormattableString clause)
     {
         var (sql, parameters) = BindFormattableString(clause);
+        // ITM-745(r20)：空/空白子句生成 "()" / "AND ()" 非法 SQL，晚失败在 DB 侧——
+        // 入口显式拒绝（Raw 已有同类守卫，此处统一 Where/OrWhere/Having/With 一族）。
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException(
+                "Query clause must not be empty or whitespace; an empty clause produces invalid SQL.", nameof(clause));
         AddClause(QueryClauseKind.Where, $"{prefix}({sql})", parameters);
     }
 
@@ -341,6 +346,10 @@ public struct QueryBuilder<T> where T : class, new()
         ArgumentException.ThrowIfNullOrWhiteSpace(cteName);
         ArgumentNullException.ThrowIfNull(subquery);  // ITM-664
         var (sql, parameters) = BindFormattableString(subquery);
+        // ITM-745(r20)：空 CTE 子查询生成 `AS ()` 非法 SQL——入口拒绝
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException(
+                "CTE subquery must not be empty or whitespace.", nameof(subquery));
         _cteName = cteName;
         AddClause(QueryClauseKind.CommonTableExpression,
             $"{_quoteIdentifier(cteName)} AS ({sql})", parameters);
@@ -750,6 +759,10 @@ public struct QueryBuilder<T> where T : class, new()
     private void AddFormattableClause(QueryClauseKind kind, string prefix, FormattableString formattable)
     {
         var (sql, parameters) = BindFormattableString(formattable);
+        // ITM-745(r20)：同 AddParenthesizedClause——空子句生成 "HAVING " 无内容等非法 SQL
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException(
+                "Query clause must not be empty or whitespace; an empty clause produces invalid SQL.", nameof(formattable));
         AddClause(kind, prefix + sql, parameters);
     }
 

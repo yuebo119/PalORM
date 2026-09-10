@@ -100,14 +100,24 @@ public static class TestEnvironment
         int i = 0;
         while (i < template.Length)
         {
-            if (i + 2 < template.Length && template[i] == dollar && template[i + 1] == '{')
+            // ITM-746 附带：原条件 `i + 2 < template.Length` 漏检"模板恰以 ${ 结尾"（无第三字符）——
+            // 该形态此前静默原样输出，后续连接失败无格式错误提示。改为 i+1 判定，end<0 分支报错。
+            if (i + 1 < template.Length && template[i] == dollar && template[i + 1] == '{')
             {
                 int end = template.IndexOf('}', i + 2, StringComparison.Ordinal);
                 if (end < 0)
+                    // ITM-746(r20)：模板含字面量密码时，整串回显会把凭据写进异常消息/日志（P0 红线）。
+                    // 只报位置，不回显模板内容。
                     throw new InvalidDataException(
-                        $"Malformed placeholder in connection string template: '{template}'.");
+                        $"Malformed placeholder in connection string template (unclosed '{{' at offset {i}); " +
+                        "connection string values are redacted to avoid leaking credentials.");
 
+                // ITM-746：占位符名本身不含凭据，可安全回显；模板其余部分不回显
                 string varName = template[(i + 2)..end];
+                if (string.IsNullOrWhiteSpace(varName))
+                    throw new InvalidDataException(
+                        $"Malformed placeholder in connection string template (empty name at offset {i}); " +
+                        "connection string values are redacted to avoid leaking credentials.");
                 string? value = Environment.GetEnvironmentVariable(varName);
                 if (string.IsNullOrEmpty(value))
                     throw new InvalidOperationException(

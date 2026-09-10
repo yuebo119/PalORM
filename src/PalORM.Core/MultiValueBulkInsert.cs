@@ -271,7 +271,7 @@ public static class MultiValueBulkInsert
         finally
         {
             await BulkOperationFramework.DisposePreservingAsync(batchCmd, batchCommandException,
-                "PalORM.CommandCleanupException", ct).ConfigureAwait(false);
+                "PalORM.CommandCleanupException").ConfigureAwait(false);
         }
         return total;
     }

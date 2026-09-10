@@ -9,7 +9,10 @@ internal readonly struct EquatableArray<T> : IEquatable<EquatableArray<T>> where
     public EquatableArray(T[] items) => _items = items;
     public EquatableArray(System.Collections.Immutable.ImmutableArray<T> items) : this(items.AsSpan().ToArray()) { }
     public ReadOnlySpan<T> AsSpan() => _items;
-    public T[] ToArray() => _items;
+    /// <summary>返回元素的<b>防御性副本</b>（ITM-737：原实现直接返回内部数组，与
+    /// <c>ImmutableArray&lt;T&gt;.ToArray()</c> 的"复制"语义相反，
+    /// 调用方写入会污染本值对象并使增量缓存键与等值语义失效）。只读消费请用 <see cref="AsSpan"/> 零分配。</summary>
+    public T[] ToArray() => _items is null ? [] : (T[])_items.Clone();
     public bool Equals(EquatableArray<T> other) => AsSpan().SequenceEqual(other.AsSpan());
     public override bool Equals(object? obj) => obj is EquatableArray<T> other && Equals(other);
     public override int GetHashCode()

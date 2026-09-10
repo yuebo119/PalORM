@@ -20,6 +20,10 @@ public sealed class GridReader : IAsyncDisposable
     private Task? _disposeTask;
     private int _state;
     private readonly bool _validateColumnOrder;
+    /// <summary>ITM-748(r20)：是否还有可用结果集。初始为 true（首个结果集就绪），
+    /// 每次成功推进 <c>NextResultAsync</c> 后按其返回值更新——越界读取明确失败，
+    /// 不再静默返回空列表（与"类型未注册即抛"的既有口径一致）。</summary>
+    private bool _hasResultSet = true;
 
     internal GridReader(DbDataReader reader, DbCommand command, ConnectionLease lease,
         QueryObservation? observation = null,
@@ -44,6 +48,11 @@ public sealed class GridReader : IAsyncDisposable
         {
             if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
+            // ITM-748：越界读取明确失败，避免调用方把"无更多结果集"当成"该集合为空"
+            if (!_hasResultSet)
+                throw new InvalidOperationException(
+                    "No more result sets are available on this GridReader; the query returned fewer result " +
+                    "sets than read. Check the number and order of ReadAsync calls against the SQL.");
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             // v4.4：对齐 ExecuteQueryAsync/QueryAsync 的 16 起步容量
@@ -52,7 +61,7 @@ public sealed class GridReader : IAsyncDisposable
             while (await _reader.ReadAsync(ct).ConfigureAwait(false))
                 list.Add(typedFactory(_reader));
 
-            await _reader.NextResultAsync(ct).ConfigureAwait(false);
+            _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);
             return list;
         }
         catch (Exception exception)
@@ -76,16 +85,21 @@ public sealed class GridReader : IAsyncDisposable
         {
             if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
+            // ITM-748：越界读取明确失败（同 ReadAsync）
+            if (!_hasResultSet)
+                throw new InvalidOperationException(
+                    "No more result sets are available on this GridReader; the query returned fewer result " +
+                    "sets than read. Check the number and order of ReadFirstAsync calls against the SQL.");
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             var typedFactory = (Func<DbDataReader, T>)factory;
             if (await _reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 T result = typedFactory(_reader);
-                await _reader.NextResultAsync(ct).ConfigureAwait(false);
+                _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);
                 return result;
             }
-            await _reader.NextResultAsync(ct).ConfigureAwait(false);
+            _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);
             return default;
         }
         catch (Exception exception)

@@ -210,7 +210,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                         finally
                         {
                             await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
-                                "PalORM.RowCommandCleanupException", ct).ConfigureAwait(false);
+                                "PalORM.RowCommandCleanupException").ConfigureAwait(false);
                         }
                     }
                     catch (Exception exception)
@@ -221,7 +221,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                     finally
                     {
                         await BulkOperationFramework.DisposePreservingAsync(importer, importerException,
-                            "PalORM.ImporterCleanupException", ct).ConfigureAwait(false);
+                            "PalORM.ImporterCleanupException").ConfigureAwait(false);
                     }
                 }
                 finally
@@ -258,7 +258,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         {
             if (ownsTransaction)
                 await BulkOperationFramework.DisposePreservingAsync(bulkTransaction, primaryException,
-                    "PalORM.TransactionCleanupException", ct).ConfigureAwait(false);
+                    "PalORM.TransactionCleanupException").ConfigureAwait(false);
         }
     }
 
