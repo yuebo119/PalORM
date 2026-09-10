@@ -95,6 +95,13 @@ public sealed class StoredProcBuilder
         if (p.Value is null or DBNull) return default;
         if (p.Value is T t) return t;
         Type target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        // ITM-729(r20)：Convert.ChangeType 不支持 Guid（string 回填 Guid 输出参数会抛
+        // InvalidCastException）——显式补 Guid 分支，与"宽容拆箱"文档承诺一致。
+        if (target == typeof(Guid))
+        {
+            object guid = p.Value is Guid g ? g : Guid.Parse(p.Value.ToString()!);
+            return (T)guid;
+        }
         return (T?)Convert.ChangeType(p.Value, target, System.Globalization.CultureInfo.InvariantCulture);
     }
 

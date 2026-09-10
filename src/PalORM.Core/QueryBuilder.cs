@@ -414,7 +414,12 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>结果缓存。<b>浅拷贝契约</b>：命中返回新 List，但元素为共享实体实例——
-    /// 命中实体应视为只读；需要修改时先自行深拷贝，否则会污染缓存与其他调用方（ITM-308）。</summary>
+    /// 命中实体应视为只读；需要修改时先自行深拷贝，否则会污染缓存与其他调用方（ITM-308）。
+    /// <para><b>ITM-736(r20) 多租户警告</b>：缓存键<b>完全由调用方提供</b>，不含租户/软删维度，
+    /// 且未注入 <c>DbOptions.QueryCache</c> 时各会话共享进程级默认实例——同一 key 会在不同
+    /// 租户/过滤上下文中复用同一份数据。多租户或 <c>IgnoreFilters()</c> 场景必须把租户
+    /// 标识编入 key（如 <c>$"products:{tenantId}"</c>），或经 <c>DbOptions.QueryCache</c>
+    /// 为每租户注入独立缓存（ADR-C：隔离责任在调用方 key 约定）。</para></summary>
     public QueryBuilder<T> WithCache(string cacheKey, TimeSpan? ttl = null)
     {
         _cacheKey = cacheKey;
@@ -782,6 +787,14 @@ public struct QueryBuilder<T> where T : class, new()
         }
         return count;
     }
+
+    /// <summary>ITM-715(r20)：是否存在"非子句形态的执行修饰符"——Take/Skip/Select/
+    /// AsSplitQuery/WithCache 是字段而非子句，<see cref="CountUserSubstantiveClauses"/> 对它们
+    /// 结构性失明。QueryMultipleAsync 逐字执行提供的 SQL，这些修饰符会被静默忽略；同族守卫
+    /// 在 BuildUpdateSql 已单独拒绝 Take/Skip（r8-D1），此处补齐查询入口的一致性。</summary>
+    internal bool HasIgnoredExecutionModifiers
+        => _take.HasValue || _skip.HasValue
+            || _selectColumns is not null || _splitQuery || _cacheKey is not null;
 
     // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
     private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)

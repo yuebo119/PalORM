@@ -8,6 +8,10 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider>
     where TProvider : IDbProvider
 {
+    /// <summary>ITM-723：探活类命令在用户配置"零超时"（= ADO.NET 无限等待）时的兜底上限。
+    /// 健康检查/迁移的语义是"快速失败"，无界等待与意图相反。</summary>
+    private const int DefaultProbeTimeoutSeconds = 30;
+
     /// <summary>见 DataSession 主文档。</summary>
     public async ValueTask<List<string>> ValidateSchemaAsync<T>(CancellationToken ct = default) where T : class, new()
     {
@@ -72,7 +76,7 @@ public sealed partial class DataSession<TProvider>
             string ddl = sqls.Get(TProvider.Dialect);
             await using DbCommand cmd = CreateCommand();
             cmd.CommandText = ddl;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
             // ITM-672 定稿：与建表 DDL 缺键（ITM-569）对称——索引元数据缺键必须显式拒绝，
@@ -86,23 +90,46 @@ public sealed partial class DataSession<TProvider>
                     $"Type '{type.Name}' has no dialect-specific generated index DDL. " +
                     "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
             }
-            foreach (string indexDdl in indexSqls.Get(TProvider.Dialect))
+            await ApplyIndexDdlAsync(indexSqls.Get(TProvider.Dialect), ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>ITM-723：零超时配置（= ADO.NET 无限等待）下 DDL/探活的有限兜底上限。</summary>
+    private int ProbeCommandTimeoutSeconds
+        => _options.CommandTimeoutSeconds == 0 ? DefaultProbeTimeoutSeconds : _options.CommandTimeoutSeconds;
+
+    /// <summary>逐条执行索引 DDL，重名对象按幂等跳过（ITM-203/722）。</summary>
+    private async ValueTask ApplyIndexDdlAsync(
+        IEnumerable<string> indexDdlStatements, CancellationToken ct)
+    {
+        foreach (string indexDdl in indexDdlStatements)
+        {
+            await using DbCommand indexCmd = CreateCommand();
+            indexCmd.CommandText = indexDdl;
+            indexCmd.CommandTimeout = ProbeCommandTimeoutSeconds;
+            try
             {
-                await using DbCommand indexCmd = CreateCommand();
-                indexCmd.CommandText = indexDdl;
-                indexCmd.CommandTimeout = _options.CommandTimeoutSeconds;
-                try
+                await indexCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
+            {
+                // MySQL 重名索引（1061）通常 = 已建过（幂等跳过）；但同名异构索引（另一实体
+                // 占用同名）也触发 1061——记录警告以免唯一约束静默缺失（ITM-203）。
+                // ITM-722(r20)：默认会话的 _logger 是 NullLogger（IsEnabled 恒 false）——
+                // 警告会被丢弃，唯一约束静默缺失且无任何可观察信号。此时改为显式失败，
+                // 给出可定位信息与解法（改用唯一索引名 / 手动清理旧索引）。
+                if (!_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Warning))
                 {
-                    await indexCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    throw new InvalidOperationException(
+                        $"Index DDL was skipped as a duplicate object but no logger is configured to record it: " +
+                        $"{indexDdl}. A non-unique index with the same name may already exist, leaving a " +
+                        "[Unique] constraint silently unenforced. Rename the index or drop the conflicting " +
+                        "index manually; or configure DbOptions.LoggerFactory to receive the warning instead.",
+                        exception);
                 }
-                catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
-                {
-                    // MySQL 重名索引（1061）通常 = 已建过（幂等跳过）；但同名异构索引（另一实体
-                    // 占用同名）也触发 1061——记录警告以免唯一约束静默缺失（ITM-203）
-                    _logger.LogWarning(
-                        "Index DDL skipped as duplicate; verify no cross-entity index name collision: {IndexDdl}",
-                        indexDdl);
-                }
+                _logger.LogWarning(
+                    "Index DDL skipped as duplicate; verify no cross-entity index name collision: {IndexDdl}",
+                    indexDdl);
             }
         }
     }
@@ -119,7 +146,9 @@ public sealed partial class DataSession<TProvider>
             await using DbCommand cmd = CreateCommand();
             cmd.CommandText = "SELECT 1";
             // ITM-557：健康检查最需快速失败——不设超时会按驱动默认（约 30s）挂起
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            // ITM-723(r20)：CommandTimeout.Seconds==0 是 ADO.NET 的"无限等待"语义，与注释意图
+            // 相反（服务端/网络挂起时探活永不返回）。Zero 配置下改用有限默认值兜底。
+            cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
             await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return new HealthResult(true, sw.Elapsed, null);
         }

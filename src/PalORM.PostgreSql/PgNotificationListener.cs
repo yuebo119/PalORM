@@ -62,6 +62,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     /// 经此记录，避免监听器静默死亡后 NOTIFY 丢失无痕。</summary>
     public Microsoft.Extensions.Logging.ILogger? Logger { get; set; }
 
+    /// <summary>ITM-724(r20)：最近一次无 <see cref="OnError"/> 订阅者时的后台终止异常。
+    /// 未配置 <see cref="Logger"/>（默认构造）时，这是监听器静默死亡后唯一可观察的信号——
+    /// 监听循环结束（<see cref="StopAsync"/> 返回或 <see cref="StartAsync"/> 抛出）后查询。</summary>
+    public Exception? LastError { get; private set; }
+
     /// <summary>创建监听器,重连退避为线性递增(第 n 次重连等待 n 秒,上限 5 次)。
     /// 构造不建立连接;调用 <see cref="StartAsync"/> 后才连接并 LISTEN。</summary>
     public PgNotificationListener(string connectionString, params string[] channels)
@@ -239,7 +244,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         EventHandler<PgNotificationErrorEventArgs>? handlers = OnError;
         if (handlers is null)
         {
-            // 无订阅者时后台监听终止必须留痕——否则 NOTIFY 静默丢失（审计 ERR-02）
+            // 无订阅者时后台监听终止必须留痕——否则 NOTIFY 静默丢失（审计 ERR-02）。
+            // ITM-724(r20)：Logger 为 null（默认构造）时写入 NullLogger（IsEnabled 恒 false）
+            // 等于不留痕，监听器静默死亡且调用方无从察觉。此时记录到 LastError 供
+            // StopAsync/DisposeAsync 之后查询——默认会话下唯一的可观察信号。
+            LastError = exception;
             LogListenerTerminated(
                 Logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
                 exception);

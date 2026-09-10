@@ -12,7 +12,7 @@ internal static class CommandFactoryEmitter
         sb.AppendLine();
         sb.AppendLine($"namespace PalORM.Generated;");
         sb.AppendLine();
-        sb.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"PalORM.SourceGen\", \"2.0.0\")]");
+        sb.AppendLine(GeneratedCodeMetadata.GeneratedCodeAttribute);
         sb.AppendLine($"internal static class CommandFactory_{model.GeneratedTypeSuffix}");
         sb.AppendLine("{");
 

@@ -19,7 +19,7 @@ public sealed class MySqlProvider : IDbProvider
     /// ADO.NET 默认值（即用户未显式调优），则覆盖为推荐调优值：
     /// AutoEnlist: true→false（跳过 TransactionScope 检查）；
     /// ConnectionReset: true→false（跳过 COM_RESET_CONNECTION，归还池更快）；
-    /// UseCompression: 默认 false 不变，显式固定避免部署环境注入 Compress=true；
+    /// UseCompression: 默认 false 不变（本类不写该参数——见下方 ITM-730 订正）；
     /// CancellationTimeout: 2→5（软取消 5 秒后强制关闭，避免连接泄漏）；
     /// AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）；
     /// ServerRedirectionMode: Disabled→Preferred（Azure MySQL 直连后端）。</para>
@@ -47,7 +47,9 @@ public sealed class MySqlProvider : IDbProvider
             builder.AutoEnlist = false;
         if (builder.ConnectionReset)
             builder.ConnectionReset = false;
-        // UseCompression 默认 false 即目标值，无需改——仅防注入：用户若显式 true 不覆盖
+        // ITM-730(r20) 订正：UseCompression 不在此赋值。本方法签名只接收 connectionString，
+        // 无从区分"用户显式 true"与"部署环境注入"——原注释"显式固定防注入"无法实现（假承诺）。
+        // 当前行为 = 不干预（用户设置优先），如需强制策略请在传入前构造连接串。
         if (builder.CancellationTimeout == 2)
             builder.CancellationTimeout = 5;
         // AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）。

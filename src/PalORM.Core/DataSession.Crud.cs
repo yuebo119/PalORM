@@ -391,7 +391,7 @@ public sealed partial class DataSession<TProvider>
 
         return TProvider.SupportsReturningClause
             ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false)
-            : await UpsertWithMySqlAsync(cmd, sqls, entity, ct).ConfigureAwait(false);
+            : await UpsertWithMySqlAsync(cmd, sqls, state, entity, ct).ConfigureAwait(false);
     }
 
     /// <summary>PG/SQLite UPSERT--ON CONFLICT ... DO UPDATE/NOTHING + RETURNING 物化完整行。
@@ -408,9 +408,13 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>MySQL UPSERT--ON DUPLICATE KEY UPDATE，自增键用 LAST_INSERT_ID(expr) 回填。
-    /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertMySql）。</summary>
+    /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertMySql）。
+    /// ITM-725(r20)：<paramref name="state"/> 是调用方捕获的注册表快照（SaveCoreAsync:360），
+    /// 本方法此前直读 live <c>PalORM_Runtime.CurrentState</c>——Register/热重载窗口内会出现
+    /// "SQL 元数据来自快照 N、自增回填委托来自版本 N+1"的混用，破坏同文件自称的"单快照贯穿"纪律。</summary>
     private static async ValueTask<T> UpsertWithMySqlAsync<T>(
-        DbCommand cmd, CommandSqlSet sqls, T entity, CancellationToken ct)
+        DbCommand cmd, CommandSqlSet sqls, PalORM_Runtime.RuntimeRegistryState state,
+        T entity, CancellationToken ct)
         where T : class, new()
     {
         if (TProvider.Dialect != SqlDialect.MySql)
@@ -420,7 +424,6 @@ public sealed partial class DataSession<TProvider>
 
         cmd.CommandText = sqls.UpsertMySql;
 
-        var state = PalORM_Runtime.CurrentState;
         if (!state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? setId))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
