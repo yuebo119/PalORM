@@ -856,12 +856,16 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
     }
 
+    /// <summary>PALORM026 互斥特性清单（ITM-744：提为静态字段，避免每属性分配数组）。</summary>
+    private static readonly string[] NotMappedConflictAttributes =
+        ["Key", "Column", "Required", "ForeignKey", "Unique", "Index",
+         "ConcurrencyCheck", "Timestamp", "Computed", "OwnedJson",
+         "Converter", "SensitiveData", "DefaultValue", "IgnoreOnInsert"];
+
     /// <summary>PALORM026：[NotMapped] 与映射特性互斥。
     /// 用 type.GetMembers()（非 EnumerateMappedProperties）——后者跳过 [NotMapped] 属性。
-    /// 互斥清单 14 个：Key/Column/Required/ForeignKey/Unique/Index/ConcurrencyCheck/Timestamp/
-    /// Computed/OwnedJson/Converter/SensitiveData/DefaultValue/IgnoreOnInsert。</summary>
-    private static void CheckNotMappedConflicts(SymbolAnalysisContext ctx, INamedTypeSymbol type)
-    {
+    /// 互斥清单见 <see cref="NotMappedConflictAttributes"/>（14 个）。</summary>
+    private static void CheckNotMappedConflicts(SymbolAnalysisContext ctx, INamedTypeSymbol type)    {
         // 走基类链，但用 GetMembers 而非 EnumerateMappedProperties——保留 [NotMapped] 属性
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (INamedTypeSymbol? current = type;
@@ -878,14 +882,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                     SourceGenerationValidation.IsPalORMAttribute(a, "NotMapped"));
                 if (!isNotMapped) continue;
 
-                // 扫描 14 个互斥特性，命中第一个即报
-                string[] mappingAttributes =
-                    ["Key", "Column", "Required", "ForeignKey", "Unique", "Index",
-                     "ConcurrencyCheck", "Timestamp", "Computed", "OwnedJson",
-                     "Converter", "SensitiveData", "DefaultValue", "IgnoreOnInsert"];
-                foreach (string attrName in mappingAttributes)
+                // 扫描 14 个互斥特性，命中第一个即报。
+                // ITM-744(r20)：清单提为静态字段——原在循环内每属性分配一次 14 元素数组，
+                // 且对每属性最多 14 次 GetAttributes() 全量扫描。提静态后分配归零；
+                // 属性特性集只取一次（GetAttributes 每次调用都构造 ImmutableArray 迭代器）。
+                ImmutableArray<AttributeData> attributes = property.GetAttributes();
+                foreach (string attrName in NotMappedConflictAttributes)
                 {
-                    if (property.GetAttributes().Any(a =>
+                    if (attributes.Any(a =>
                         SourceGenerationValidation.IsPalORMAttribute(a, attrName)))
                     {
                         ctx.ReportDiagnostic(Diagnostic.Create(NotMappedConflict,
