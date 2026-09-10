@@ -2,7 +2,50 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] — r21 复检轮：回退上批过度修复 · 方言词法/诊断契约/文档三方一致
+## [未发布] — r21 复检轮 + 修复批：46 项全清偿（脱敏信道重构/方言词法/可观测性/契约对齐）
+
+### 🔒 安全（P1 级）
+- **[SensitiveData] 脱敏信道重构（ITM-763/764/794/751）**：掩码载体由生成器参数的
+  SourceColumn（挪用 ADO.NET DataAdapter 标准语义）迁移为运行时注册表
+  `PalORM_Runtime.SensitiveColumnMasks` → `QueryBuilder.Set` 登记参数名→掩码 →
+  `QueryContext.SensitiveParameterMasks` 传递 → `AuditInterceptor` 替换真实值。
+  端到端测试覆盖真实执行路径（此前 r20 实现信道断路、单测手工构造参数掩盖）；
+  空/空白 Mask 归一为默认掩码（防明文回退）
+- **BulkCopy Warnings 异常不回显服务端原文（ITM-777）**——MySQL 1366 内嵌被拒原始值
+- **TestEnvironment 模板 null 守卫 + 异常声明补齐（ITM-776/746 doc）**
+
+### ⚙️ 可靠性与契约
+- **回退 r20 的 ITM-722 过度修复（P0）**——MySQL 1061 幂等迁移恢复"警告+跳过"；
+  新增 `LastMigrationSkippedIndexes` 无副作用可观测通道（ITM-765）
+- **ITM-640 外部事务失效改持续失败（ITM-767）**——原一次性响亮失败后静默自动提交
+- **只读 SQLite（Mode=ReadOnly）修复（ITM-766）**——journal_mode=WAL 在只读连接抛 Error 8
+- **WhereJson 方言守卫（ITM-770）+ value 归一拒绝 enum/char/TimeSpan/byte[]（ITM-771）**
+- **DDL 尊重显式 Zero 无限等待；探活类保留 30s 兜底（ITM-769/762）**
+- **PG COPY 超时包装修正（ITM-759/760）**——cleanup 异常挂实际抛出对象；timeoutCts 确证判据；
+  CreateAsync 连接超时补 InfrastructureTimeout 标记
+- **ConnectionTimeout 补上限（ITM-749）**——CancelAfter 上限 ≈49.7 天
+- **半开探针非计数失败熔断复位（ITM-772）**——原 Open 谎言状态使熔断失效
+
+### 🧹 生成器与诊断（39 条口径）
+- **IsBalancedParentheses 补三类方言词法（ITM-753）**——MySQL `'`、方括号、PG dollar-quoting
+- **PALORM031 降 Warning（ITM-752，SQLite 回退使其在该方言合法）；PALORM046 补命名冲突
+  检查（ITM-754）；PALORM012/037 消息修正（ITM-780/781）；PALORM023 对齐 int/long 真源（ITM-782）**
+- **诊断口径三方一致**——37→39 条（36 分析器+3 生成器），明细表补 PALORM041/046
+
+### 📊 可观测性
+- `db.system.name` 改 OTel semconv 小写（ITM-768）；instrumentation version 5.4.0（ITM-773）；
+  PgNotificationListener.LastError 生命周期修正（ITM-761）；From\<T\> 孤儿 doc 归位（ITM-774）
+
+### 🧹 死码与防御（P3 18 项）
+AutoTaggingEmitter 头部残留/死分支/不可达守卫清理；AddJoin 空子句守卫（ITM-757）；
+EquatableArray 双向防御拷贝（ITM-737/783）；WithOutputParam 可空解包（ITM-787）等
+
+### 🧪 测试
+- 新增：SensitiveDataMaskingE2ETests（脱敏端到端 3）· ReadOnlyAndTransactionGuardTests（4）·
+  WhereJsonSqlGenerationTests（13，含方言守卫与归一拒绝）· ParenthesisScanAndTemplateCollisionTests（15）
+- 迁移：WhereJson DryRun 测试自 Integration 迁 Core.Tests（方言守卫使旧模式失效）
+
+## [未发布·r21 复检轮] — 回退上批过度修复 · 方言词法/诊断契约/文档三方一致
 
 > 本轮为 2026-09-10 r20 修复批（7 提交）的复检结果。独立分片评审发现并修复如下问题。
 
