@@ -291,7 +291,9 @@ public static class QueryBuilderExtensions
     {
         // ITM-523: 守卫只统计"用户实质子句"——Tag/TagWithCaller 产生的 Comment 类别与
         // From<T>() 注入的 DefaultFilter 均应豁免，否则加个 Tag 就误触误用异常。
-        if (builder.CountUserSubstantiveClauses() > 0)
+        // ITM-715(r20)：Take/Skip/Select/AsSplitQuery/WithCache 是字段不是子句，
+        // CountUserSubstantiveClauses 看不见——它们同样会被静默忽略，必须一并拒绝。
+        if (builder.CountUserSubstantiveClauses() > 0 || builder.HasIgnoredExecutionModifiers)
             throw new InvalidOperationException(
                 "QueryMultipleAsync executes the provided SQL verbatim and ignores builder clauses. " +
                 "Call it on a bare From<T>() (no Where/OrderBy/etc.), or embed conditions in the SQL itself.");

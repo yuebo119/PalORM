@@ -199,12 +199,13 @@ public sealed class UniqueAttribute : Attribute { }
 
 /// <summary>外置 SQL 文件标记。源生成器读取 .sql 文件生成静态 SQL 常量。
 /// 文件内可使用 -- @pg / -- @mysql / -- @sqlite / -- @all 条件分支。
-/// <para><b>增量编译限制（ITM-313）</b>: .sql 文件内容不参与增量比较——只改 .sql 不改 .cs 时
-/// 生成物复用缓存（陈旧 SQL），需 Rebuild 或触碰标记特性的 .cs 文件强制重新生成。</para></summary>
+/// <para><b>增量编译（ITM-313/734 r20 订正）</b>: .sql 内容经 AdditionalFiles 参与增量缓存键
+/// ——只改 .sql 即可触发重新生成，无需 Rebuild，也无需触碰标记特性的 .cs 文件。
+/// 旧文档"内容不参与增量比较/需 Rebuild"已废止。</para></summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
 public sealed class SqlFileAttribute : Attribute
 {
-    /// <summary>.sql 文件路径（相对项目根，按特性参数相对路径由源生成器编译期直读磁盘（RS1041 下不可用 AdditionalFiles——r14-S6 订正））。</summary>
+    /// <summary>.sql 文件路径（相对项目根，由构建 targets 自动注入 AdditionalFiles 经源生成器编译期读取）。</summary>
     public string Path { get; }
     /// <summary>可选：指定 Provider 名称（PostgreSql/MySql/Sqlite）。省略则使用 -- @all 段。</summary>
     public string? Provider { get; init; }

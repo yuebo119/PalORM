@@ -116,6 +116,11 @@ internal static class MySqlBulkCopyInserter
                 // 官方 issue #1375）。PK 非首列 / [Computed]/[Timestamp] 缺席形态均列序无关。
                 // 映射 = DataTable 序号（自构造，i 即列序）→ 目标表列名：目标侧按名匹配，
                 // 不再依赖目标表列序与 DataTable 列序一致。
+                // ITM-721(r20) 反证结案：曾疑"裸列名与仓库其余路径 QuoteIdentifier 不对称"。
+                // 核对驱动源码（MySqlConnector MySqlBulkCopy.cs）：ColumnMappings 的
+                // DestinationColumn 在非表达式形态下由驱动执行 QuoteIdentifier（反引号包裹 +
+                // 内嵌反引号翻倍）；此处传入已引用名会导致双重引用（`` `order` `` 被当作字面量）。
+                // 故裸名是正确契约，保留。
                 for (int i = 0; i < allColumns.Length; i++)
                     bulk.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, allColumns[i]));
                 MySqlBulkCopyResult result = await bulk.WriteToServerAsync(table, ct).ConfigureAwait(false);

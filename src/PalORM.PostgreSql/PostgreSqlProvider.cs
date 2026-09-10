@@ -239,6 +239,19 @@ public sealed class PostgreSqlProvider : IDbProvider
             primaryException = exception;
             if (ownsTransaction)
                 await RollbackPreservingAsync(bulkTransaction, exception).ConfigureAwait(false);
+            // ITM-726(r20)：COPY 无 CommandTimeout 挂点，超时经 CTS 触发，与调用方 ct 取消
+            // 在异常类型上不可区分——调用方无法判断"是我取消的"还是"基础设施超时"，
+            // 重试决策失据。超时（非调用方取消）包装为 TimeoutException 并打 Data 标记，
+            // 与 Resilience 的 ITM-647/667 口径一致。
+            if (exception is OperationCanceledException
+                && !ct.IsCancellationRequested
+                && commandTimeoutSeconds > 0)
+            {
+                var wrappedTimeout = new TimeoutException(
+                    $"COPY bulk insert timed out after {commandTimeoutSeconds}s per batch.", exception);
+                wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+                throw wrappedTimeout;
+            }
             throw;
         }
         finally

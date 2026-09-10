@@ -72,9 +72,24 @@ public sealed class SqliteProvider : IDbProvider
     {
         ArgumentNullException.ThrowIfNull(connection);
         // v5.0 阶段 3.5：检测 :memory: 数据库——文件 I/O 治理类 PRAGMA 仅对文件库有意义。
-        string cs = connection.ConnectionString;
-        bool isInMemory = cs.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase)
-            || cs.Contains(":memory:", StringComparison.OrdinalIgnoreCase);
+        // ITM-733(r20)：原用 ConnectionString.Contains(":memory:") 子串判定——DataSource 恰含该子串
+        // 的真实文件库（Linux 合法文件名，如 /tmp/mem:memory:1.db）被误判为内存库，静默跳过
+        // WAL/synchronous/mmap 配置。改走 SqliteConnectionStringBuilder 结构化解析。
+        bool isInMemory;
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder(connection.ConnectionString);
+            // Microsoft.Data.Sqlite 语义：Mode=Memory（含 ":memory:" 与命名共享内存库）
+            // 或省略 Data Source（临时内存库）均为内存库。
+            isInMemory = builder.Mode == SqliteOpenMode.Memory
+                || string.IsNullOrEmpty(builder.DataSource)
+                || string.Equals(builder.DataSource, ":memory:", StringComparison.Ordinal);
+        }
+        catch (ArgumentException)
+        {
+            // 非法连接串由后续命令执行报错；此处保守按文件库处理（不静默降级耐久性配置）
+            isInMemory = false;
+        }
 
         await using DbCommand command = connection.CreateCommand();
         // 单次往返执行全部 PRAGMA（用分号连接，SQLite 原生支持）。

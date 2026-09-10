@@ -163,7 +163,7 @@ public partial class DataSession<TProvider>
     /// <para><b>输入不可变约束</b>：调用方在方法返回前不得修改 <paramref name="entities"/> 集合
     /// （与 BulkInsertAsync / BulkUpdateAsync 的 IReadOnlyList&lt;T&gt; 契约一致）。</para>
     /// <para><b>租户过滤</b>：自动追加 <c>AND tenant_id = @p</c>（与 BulkUpdateAsync 对齐）。</para>
-    /// <para><b>参数上限</b>：按驱动上限分批执行（PG/MySQL 65535，SQLite 999），物理约束非性能阈值。</para></summary>
+    /// <para><b>参数上限</b>：按驱动上限分批执行（PG/MySQL 65535；SQLite 走上文逐条回退路径、不分批）。物理约束非性能阈值。</para></summary>
     public async ValueTask<long> BulkUpdateBatchAsync<T>(
         IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
