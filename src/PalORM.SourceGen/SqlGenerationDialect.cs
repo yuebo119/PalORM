@@ -23,9 +23,12 @@ internal static class SqlGeneration
         foreach (char ch in identifier)
         {
             if (ch < ' ' || (ch >= '\x7F' && ch <= '\x9F'))
-                throw new InvalidOperationException(
+                // ITM-739(r20)：异常类型与运行时 IdentifierSafety.ThrowIfUnsafe 对齐（ArgumentException
+                // 而非 InvalidOperationException）——两侧拒绝面/异常形态一致，避免调用方分流判据分叉。
+                throw new System.ArgumentException(
                     $"Identifier '{identifier}' contains control character U+{(int)ch:X4}; " +
-                    "generated SQL cannot embed control characters (mirrors runtime IdentifierSafety).");
+                    "generated SQL cannot embed control characters (mirrors runtime IdentifierSafety).",
+                    nameof(identifier));
         }
         char quote = dialect == SqlGenerationDialect.MySql ? '`' : '"';
         string escaped = identifier.Replace(

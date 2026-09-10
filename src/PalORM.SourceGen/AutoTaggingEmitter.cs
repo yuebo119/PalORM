@@ -149,9 +149,14 @@ internal static class AutoTaggingEmitter
             .Replace("\"", "\\\"")
             // ITM-669：C# 字符串字面量非法/破坏性字符——极端文件名（含换行/制表）不得
             // 破坏生成源；转义为 \n \t \r 字面量（同时避免 SQL 注释内的裸控制符）。
+            // ITM-742(r20)：补 C# new_line_character 家族其余成员（U+0085 NEL / U+2028 LS /
+            // U+2029 PS）——与 \n 同属 C# 规范行终止符，裸置会使字面量跨行而编译失败。
             .Replace("\r", "\\r")
             .Replace("\n", "\\n")
-            .Replace("\t", "\\t");
+            .Replace("\t", "\\t")
+            .Replace("\u0085", "\\u0085")
+            .Replace("\u2028", "\\u2028")
+            .Replace("\u2029", "\\u2029");
 
         // 方法签名：统一参数 (this QueryBuilder<T> builder, CancellationToken ct = default) + where T : class, new()
         sb.AppendLine($"        internal static async {returnType}");

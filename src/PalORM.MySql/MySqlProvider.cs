@@ -137,6 +137,16 @@ public sealed class MySqlProvider : IDbProvider
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
         if (entities.Count == 0) return 0;
 
+        // ITM-740(r20)：包装/装饰事务（非 MySqlTransaction）在连接上挂起时，能力探测会因
+        // "命令未挂接事务"抛异常并被吞掉 → 静默降级多值路径，BulkCopy 路径的近根因
+        // ArgumentException 永不触达（ITM-633 的显式拒绝形同虚设）。改在探测前显式拒绝，
+        // 与执行路径同口径（仅 MySqlConnection 的批量路径有此约束）。
+        if (conn is MySqlConnection && transaction is not null && transaction is not MySqlTransaction)
+            throw new ArgumentException(
+                $"External transaction must be a MySqlTransaction (got '{transaction.GetType().Name}'). "
+                + "Wrapped/decorated transactions are not supported by the MySQL bulk path.",
+                nameof(transaction));
+
         // local_infile 能力检测：开启走 BulkCopy（对齐 PG 永远 COPY），关闭走多值 INSERT。
         if (conn is MySqlConnection mySqlConnection
             && await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
@@ -249,7 +259,7 @@ public sealed class MySqlProvider : IDbProvider
             if (ownsTransaction)
             {
                 await BulkOperationFramework.DisposePreservingAsync(
-                    mySqlTransaction, primaryException, "PalORM.TransactionCleanupException", ct)
+                    mySqlTransaction, primaryException, "PalORM.TransactionCleanupException")
                     .ConfigureAwait(false);
             }
         }

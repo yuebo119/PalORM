@@ -46,24 +46,25 @@ public static class BulkOperationFramework
         }
         finally
         {
-            await DisposePreservingAsync(probeCommand, probeException, cleanupDataKey, ct).ConfigureAwait(false);
+            await DisposePreservingAsync(probeCommand, probeException, cleanupDataKey).ConfigureAwait(false);
         }
     }
 
     /// <summary>资源清理——cleanup 失败的异常挂到主异常 Data，不替换原始失败。
-    /// 通用接口（IAsyncDisposable）覆盖 DbCommand/DbTransaction/NpgsqlBinaryImporter 等全部资源。</summary>
+    /// 通用接口（IAsyncDisposable）覆盖 DbCommand/DbTransaction/NpgsqlBinaryImporter 等全部资源。
+    /// <para><b>无取消参数（ITM-747 r20）</b>：释放路径不接受 CancellationToken——原签名的
+    /// <c>ct</c> 从未被消费（仅透传），公共 API 带令牌会诱导调用方以为释放受取消约束。
+    /// 释放必须尽力完成，不受取消影响（CancellationToken.None 语义由实现固定）。</para></summary>
     /// <param name="resource">待释放的资源（DbCommand/DbTransaction/importer 等）。</param>
     /// <param name="primaryException">主异常；为 null（成功路径）时 cleanup 失败**向外传播**
     /// （ITM-660：when-filter false 不捕获——释放失败必须可见，不静默吞，B26）。</param>
     /// <param name="dataKey">cleanup 异常挂 Data 的键名（如 PalORM.CommandCleanupException）。</param>
-    /// <param name="ct">取消令牌。</param>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "释放是清理路径；异常附加到主异常，不能替换原始批量写失败。")]
     public static async ValueTask DisposePreservingAsync(
         IAsyncDisposable resource,
         Exception? primaryException,
-        string dataKey,
-        CancellationToken ct = default)
+        string dataKey)
     {
         try { await resource.DisposeAsync().ConfigureAwait(false); }
         catch (Exception cleanupException) when (primaryException is not null)

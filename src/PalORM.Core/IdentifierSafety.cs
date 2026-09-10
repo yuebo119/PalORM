@@ -14,9 +14,13 @@ public static class IdentifierSafety
     /// <summary>拒绝 NUL、C0 控制字符（U+0000-U+001F）、DEL（U+007F）以及 C1 控制字符
     /// （U+0080-U+009F）。引号/反引号转义不覆盖控制字符——它们在驱动 C 层或服务端 SQL 解析器
     /// 可能被解释为语句定界或截断信号（NUL 截断已证，ITM-584；C0 换行/制表符 ITM-593；
-    /// C1 NEL/RI 在多字节 UTF-8 序列下行为不稳，ITM-608 扩展覆盖）。</summary>
+    /// C1 NEL/RI 在多字节 UTF-8 序列下行为不稳，ITM-608 扩展覆盖）。
+    /// <para>ITM-738(r20)：补空/空白拒绝——本类是跨程序集 public 守卫（Provider 共享），
+    /// 直接调用 <c>ThrowIfUnsafe(null)</c> 此前抛 NRE、空/空白串此前放行；与生成侧
+    /// <c>SqlGeneration.QuoteIdentifier</c> 的拒绝面统一（ITM-739）。</para></summary>
     public static void ThrowIfUnsafe(string identifier)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
         foreach (char ch in identifier)
         {
             // ITM-608: 扩展 C1 控制字符（U+0080-U+009F）——NEL(U+0085) 等在多字节 UTF-8 下

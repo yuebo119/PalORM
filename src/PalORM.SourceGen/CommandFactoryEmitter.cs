@@ -107,7 +107,11 @@ internal static class CommandFactoryEmitter
                 // string/Guid 保持精确 cast——语义不同（不接受 int→string 隐式转换）
                 "string" or "global::System.String" => "((string)key)",
                 "global::System.Guid" => "((global::System.Guid)key)",
-                _ => col.ConverterTypeName is not null ? $"({col.ClrTypeName})key" : "key"
+                // ITM-743(r20)：decimal/DateTime 等 IConvertible 主键用 Convert.ChangeType 归一——
+                // 此前原样装箱（(object)key）与 int/long 的归一处理不对称，异型 key 靠驱动隐式转换。
+                // 同型装箱值 ChangeType 直返，行为不变。Converter 列保持原类型化 cast（先归一到 CLR 侧）。
+                _ when col.ConverterTypeName is not null => $"({col.ClrTypeName})key",
+                _ => $"global::System.Convert.ChangeType(key, typeof({col.ClrTypeName}), global::System.Globalization.CultureInfo.InvariantCulture)"
             };
             string providerValueExpr = col.ConverterTypeName is null
                 ? castExpr
