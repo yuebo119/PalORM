@@ -72,8 +72,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     // F5（消息精准化）：补"emitter 用 ++ 自增，需整型"理由说明。
     public static readonly DiagnosticDescriptor InvalidConcurrencyTokenType = new(
-        "PALORM012", "Concurrency token type is not supported",
-        "[ConcurrencyCheck] property '{0}' must be non-nullable int or long because the source generator emits '++' increment", "PalORM", DiagnosticSeverity.Error, true);
+        "PALORM012", "Concurrency token is not supported",
+        "[ConcurrencyCheck] property '{0}': {1}", "PalORM", DiagnosticSeverity.Error, true);
 
     public static readonly DiagnosticDescriptor MultipleConcurrencyTokens = new(
         "PALORM013", "Multiple concurrency tokens are not supported",
@@ -809,20 +809,25 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         foreach (IPropertySymbol concurrencyToken in concurrencyTokens)
         {
             // R7 修复：init-only setter 的 [ConcurrencyCheck] 属性无法被 IncrementVersion emit 修改（CS8852）
+            // ITM-780(r21)：①init-only 用 {1} 详情位而非把整句塞进"{0} 属性名"位（原文案渲染为
+            // "property 'Name: init-only ...' must be non-nullable int or long"，自相矛盾）；
+            // ②两分支 else if——init-only 且类型也不合规时原文双报同 ID。
             if (concurrencyToken.SetMethod?.IsInitOnly == true)
             {
                 // ITM-634：setter 问题补消息上下文——描述符文案讲的是类型限制，
                 // init-only 场景原文案误导（"must be non-nullable int or long"答非所问）
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidConcurrencyTokenType,
                     concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0],
-                    $"{concurrencyToken.Name}: init-only setter cannot be modified by the generated increment — use a set accessor"));
+                    concurrencyToken.Name,
+                    "init-only setter cannot be modified by the generated increment — use a set accessor"));
             }
-            if (concurrencyToken.NullableAnnotation == NullableAnnotation.Annotated
+            else if (concurrencyToken.NullableAnnotation == NullableAnnotation.Annotated
                 || concurrencyToken.Type.SpecialType is not SpecialType.System_Int32
                     and not SpecialType.System_Int64)
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidConcurrencyTokenType,
-                    concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0], concurrencyToken.Name));
+                    concurrencyToken.Locations.FirstOrDefault() ?? type.Locations[0], concurrencyToken.Name,
+                    "it must be a non-nullable int or long because the source generator emits '++' increment"));
             }
         }
     }

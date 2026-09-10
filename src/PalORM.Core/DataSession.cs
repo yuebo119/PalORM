@@ -132,10 +132,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             {
                 // 连接超时且重试耗尽：包装为 TimeoutException，与命令路径
                 // （ResilienceExecutor）对称——调用方可与"我被取消"区分（ITM-206）。
-                throw new TimeoutException(
+                var wrappedTimeout = new TimeoutException(
                     $"Connection open timed out after {options.ConnectionTimeout} " +
                     $"(attempt {attempt + 1}/{maxRetries + 1}).",
                     timeoutException);
+                // ITM-760(r21)：补 Data 标记——Resilience/PG COPY 的同类包装均带
+                // PalORM.InfrastructureTimeout，调用方按该键分基础设施超时；连接路径
+                // 此前缺失（同族三处口径不一致）。
+                wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+                throw wrappedTimeout;
             }
             finally
             {
@@ -159,11 +164,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         => exception is OperationCanceledException
             ? !callerToken.IsCancellationRequested
             : TProvider.IsTransient(exception);
-
-    /// <summary>创建查询构建器——每次调用创建新的 struct QueryBuilder（值类型）。
-    /// <para><b>为什么是 struct</b>: 避免每次查询的堆分配。高 QPS 场景(10K+)每秒省 ~2MB 堆分配。</para>
-    /// <para><b>为什么每次新建</b>: GORM #7437——条件残留在构建器实例上导致数据错误。全新构建器保证条件隔离。</para>
-    /// <para>自动附加: 租户过滤([TenantAware])、软删除过滤([SoftDelete])；会话事务在执行时解析。</para></summary>
 
     /// <summary>忽略全局过滤器（[SoftDelete]/[TenantAware]）。设置后本次会话所有查询跳过自动过滤。
     /// <para>ITM-568: 与 AddInterceptor 同受门禁保护——有查询在飞时调用会明确失败，

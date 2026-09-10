@@ -57,6 +57,14 @@ public static class PostgreSqlExtensions
                 "WhereJson does not accept DateOnly/TimeOnly values: the invariant-formatted text "
                 + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first "
                 + "(e.g. value.ToString(\"yyyy-MM-dd\") or value.ToString(\"HH:mm:ss\"))."),
+            // ITM-771(r21)：enum/char/TimeSpan/byte[] 与 DateOnly 同族——Convert.ToString 的
+            // 输出与 jsonb ->> 提取 text 恒不相等（enum 产符号名而 jsonb 存数字/字符串、
+            // byte[] 产类型名）→ 静默空结果（ITM-610/683 根因类）。显式拒绝。
+            Enum or char or TimeSpan => throw new NotSupportedException(
+                "WhereJson does not accept enum/char/TimeSpan values: the invariant-formatted text "
+                + "never matches the jsonb text extracted by '->>'. Serialize to the stored string form first."),
+            byte[] => throw new NotSupportedException(
+                "WhereJson does not accept byte[] values; serialize to the stored string form first."),
             _ => Convert.ToString(value, CultureInfo.InvariantCulture),
         };
         // ITM-701：value 与 column/path 同口径 NUL 显式拒绝——绑定参数虽已隔离注入面，

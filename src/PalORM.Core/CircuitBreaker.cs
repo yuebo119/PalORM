@@ -69,7 +69,19 @@ internal sealed class CircuitBreaker
                 _halfOpenProbeActive = false;
 
             if (!countsTowardCircuit)
+            {
+                // ITM-772(r21)：半开探针以"不计入熔断"的异常（确定性错误，如约束冲突/语法错）
+                // 失败时，原样保留 _isOpen=true/_openUntil 已过期——此后 Enter() 每次都走探针
+                // 分支放行，"Open"成为谎言状态（熔断语义失效）。确定性失败不是熔断的保护对象
+                // （熔断防瞬时故障风暴），显式复位为 Closed：状态诚实，瞬时故障再现时会重新计数开启。
+                if (isHalfOpenProbe)
+                {
+                    _isOpen = false;
+                    _failureCount = 0;
+                    _openUntil = default;
+                }
                 return;
+            }
 
             if (isHalfOpenProbe)
             {

@@ -16,13 +16,16 @@ public enum SqlDialect
 /// <summary>方言辅助——热路径上替代 Enum.ToString()（每次调用分配新串）。</summary>
 internal static class SqlDialectExtensions
 {
-    /// <summary>方言名常量。查询执行管线每次观测（tracing/metrics 标签）都取名——
-    /// switch 到 interned 常量为零分配。</summary>
+    /// <summary>方言名常量（小写）。查询执行管线每次观测（tracing/metrics 标签）都取名——
+    /// switch 到 interned 常量为零分配。
+    /// <para><b>ITM-768(r21)：返回小写</b>——唯一消费面是 <c>db.system.name</c> 标签
+    /// （PalORMMetrics），OTel DB semconv 规定其 well-known 值为小写（postgresql/mysql/sqlite），
+    /// 自定值 MUST 小写。PascalCase 会使标准后端/看板按约定值聚合失配。</para></summary>
     internal static string GetName(this SqlDialect dialect) => dialect switch
     {
-        SqlDialect.PostgreSql => nameof(SqlDialect.PostgreSql),
-        SqlDialect.MySql => nameof(SqlDialect.MySql),
-        SqlDialect.Sqlite => nameof(SqlDialect.Sqlite),
-        _ => dialect.ToString()
+        SqlDialect.PostgreSql => "postgresql",
+        SqlDialect.MySql => "mysql",
+        SqlDialect.Sqlite => "sqlite",
+        _ => dialect.ToString().ToLowerInvariant()
     };
 }

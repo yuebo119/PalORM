@@ -8,9 +8,19 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider>
     where TProvider : IDbProvider
 {
-    /// <summary>ITM-723：探活类命令在用户配置"零超时"（= ADO.NET 无限等待）时的兜底上限。
-    /// 健康检查/迁移的语义是"快速失败"，无界等待与意图相反。</summary>
+    /// <summary>ITM-723：探活类命令（HealthCheck/ValidateSchema）在用户配置"零超时"
+    /// （= ADO.NET 无限等待）时的兜底上限——探活语义是"快速失败"，无界等待与意图相反。
+    /// <para><b>ITM-769(r21) 契约</b>：DDL（建表/索引）<b>不</b>适用本兜底——大表 CREATE INDEX
+    /// 可合理超过 30s，显式配置 Zero（无限）的用户意图应被尊重；探活与 DDL 的超时语义不同。</para></summary>
     private const int DefaultProbeTimeoutSeconds = 30;
+
+    /// <summary>ITM-765(r21)：最近一次 MigrateAsync 因重名对象（如 MySQL 1061）跳过的索引 DDL。
+    /// 跳过是幂等设计（ITM-528 裁决，不得改为抛异常），但默认会话无日志时静默无痕——
+    /// 本属性是无副作用的事后可观测通道：迁移后检查非空即知有索引被跳过（可能存在
+    /// 同名异构冲突，参见 MySqlProvider.IsDuplicateSchemaObject 文档）。每次 MigrateAsync 开头清空。</summary>
+    public IReadOnlyList<string> LastMigrationSkippedIndexes => _lastMigrationSkippedIndexes;
+
+    private List<string> _lastMigrationSkippedIndexes = [];
 
     /// <summary>见 DataSession 主文档。</summary>
     public async ValueTask<List<string>> ValidateSchemaAsync<T>(CancellationToken ct = default) where T : class, new()
@@ -63,6 +73,7 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        _lastMigrationSkippedIndexes = [];  // ITM-765：每次迁移重置跳过清单
         // 评审 2026-09-02 第二批（ADR-J）：实体全集以 TableNames 为键源——legacy CreateTableSql
         // 已从生成物移除，方言 DDL（CreateTableSqlByDialect）是唯一执行真源。
         foreach (var type in PalORM_Runtime.TableNames.Keys)
@@ -80,7 +91,8 @@ public sealed partial class DataSession<TProvider>
             string ddl = sqls.Get(TProvider.Dialect);
             await using DbCommand cmd = CreateCommand();
             cmd.CommandText = ddl;
-            cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
+            // ITM-769(r21)：DDL 尊重显式 Zero（无限）——大表建索引可超任意兜底值
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
             // ITM-672 定稿：与建表 DDL 缺键（ITM-569）对称——索引元数据缺键必须显式拒绝，
@@ -118,7 +130,7 @@ public sealed partial class DataSession<TProvider>
         {
             await using DbCommand indexCmd = CreateCommand();
             indexCmd.CommandText = indexDdl;
-            indexCmd.CommandTimeout = ProbeCommandTimeoutSeconds;
+            indexCmd.CommandTimeout = _options.CommandTimeoutSeconds;  // ITM-769：同建表命令
             try
             {
                 await indexCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -127,9 +139,12 @@ public sealed partial class DataSession<TProvider>
             {
                 // MySQL 重名索引（1061）= 已建过（幂等跳过）；同名异构也触发 1061，
                 // 记录警告以便配置了 LoggerFactory 的会话审计（ITM-203）。
+                // ITM-765(r21)：同时写入 LastMigrationSkippedIndexes——默认会话（NullLogger）
+                // 下这是唯一的可观测通道。
                 _logger.LogWarning(
                     "Index DDL skipped as duplicate object; verify no cross-entity index name collision: {IndexDdl}",
                     indexDdl);
+                _lastMigrationSkippedIndexes.Add(indexDdl);
             }
         }
     }

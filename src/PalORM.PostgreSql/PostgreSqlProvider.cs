@@ -166,6 +166,10 @@ public sealed class PostgreSqlProvider : IDbProvider
             ?? await npgsqlConnection.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
         bool ownsTransaction = transaction is null;
         Exception? primaryException = null;
+        // ITM-760(r21)：超时判定线索提升到方法级——catch 原本拿不到循环内的 timeoutCts，
+        // 只能用 "!ct.IsCancellationRequested && timeout>0" 近似，驱动自抛 OCE 会被误标
+        // InfrastructureTimeout。现以方法级标志记录"本批超时 CTS 确已触发"。
+        bool[] timeoutFlag = [false];  // ITM-760：数组包装供 Register 回调写
 
         try
         {
@@ -178,6 +182,9 @@ public sealed class PostgreSqlProvider : IDbProvider
                 try
                 {
                     CancellationToken commandCt = timeoutCts.Token;
+                    // ITM-760：注册回调记录超时触发（回调先于 OCE 抛出点的传播）
+                    using CancellationTokenRegistration reg = commandCt.Register(
+                        static state => ((bool[])state!)[0] = true, timeoutFlag);
                     NpgsqlBinaryImporter importer = await npgsqlConnection.BeginBinaryImportAsync(
                         $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)", commandCt)
                         .ConfigureAwait(false);
@@ -236,23 +243,26 @@ public sealed class PostgreSqlProvider : IDbProvider
         }
         catch (Exception exception)
         {
-            primaryException = exception;
-            if (ownsTransaction)
-                await RollbackPreservingAsync(bulkTransaction, exception).ConfigureAwait(false);
-            // ITM-726(r20)：COPY 无 CommandTimeout 挂点，超时经 CTS 触发，与调用方 ct 取消
-            // 在异常类型上不可区分——调用方无法判断"是我取消的"还是"基础设施超时"，
-            // 重试决策失据。超时（非调用方取消）包装为 TimeoutException 并打 Data 标记，
-            // 与 Resilience 的 ITM-647/667 口径一致。
-            if (exception is OperationCanceledException
+            // ITM-759(r21)：rollback/cleanup 异常挂"实际抛出对象"——包装路径下挂原 OCE
+            // 会让顶层 TimeoutException.Data 丢失这些键（只能经 InnerException.Data 找回）。
+            // 先判定是否包装，再以最终抛出对象为主异常挂载。
+            bool wrapAsTimeout = exception is OperationCanceledException
                 && !ct.IsCancellationRequested
-                && commandTimeoutSeconds > 0)
+                && timeoutFlag[0];  // ITM-760：本批超时 CTS 确已触发（驱动自抛 OCE 不会置位）
+            Exception thrown = exception;
+            if (wrapAsTimeout)
             {
+                // ITM-726(r20)：COPY 无 CommandTimeout 挂点，超时经 CTS 触发，与调用方 ct 取消
+                // 在异常类型上不可区分——包装为 TimeoutException 并打 Data 标记（Resilience 口径）。
                 var wrappedTimeout = new TimeoutException(
                     $"COPY bulk insert timed out after {commandTimeoutSeconds}s per batch.", exception);
                 wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
-                throw wrappedTimeout;
+                thrown = wrappedTimeout;
             }
-            throw;
+            primaryException = thrown;
+            if (ownsTransaction)
+                await RollbackPreservingAsync(bulkTransaction, thrown).ConfigureAwait(false);
+            throw thrown;
         }
         finally
         {

@@ -6,116 +6,13 @@ namespace PalORM.Integration.Tests;
 
 public sealed class PostgreSqlIntegrationTests
 {
+    // r21/ITM-770：WhereJson 的 DryRun 测试已迁 Core.Tests（WhereJsonSqlGenerationTests）——
+    // 方言守卫使"SQLite 会话验证 PG SQL"的旧模式失效，新测试构造 PG 方言 builder（不触库）。
+
     private static DbOptions Opts => new()
     {
         ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString()
     };
-
-    [Test]
-    public async Task WhereJson_GeneratesQuotedColumnWithBoundPathAndValue()
-    {
-        // SQL 生成不依赖 PG 连接：扩展方法只操作 builder，DryRun 即可验证。
-        await using var db = await TestDb.SqliteAsync();
-        var dry = db.From<Product>()
-            .WhereJson("payload", "name", "Alice")
-            .AsDryRun();
-
-        await Assert.That(dry.Sql).Contains("\"payload\"->>@p0 = @p1");
-        await Assert.That(dry.Parameters.Count).IsEqualTo(2);
-        await Assert.That(dry.Parameters[0].Value).IsEqualTo("name");
-        await Assert.That(dry.Parameters[1].Value).IsEqualTo("Alice");
-    }
-
-    [Test]
-    public async Task WhereJson_QuotesColumnIdentifier_DoubleQuoteEscaped()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        var dry = db.From<Product>()
-            .WhereJson("payload\"x", "k", 1)
-            .AsDryRun();
-
-        // 双写转义：嵌入的 " 不能提前闭合标识符
-        await Assert.That(dry.Sql).Contains("\"payload\"\"x\"->>@p0");
-    }
-
-    [Test]
-    public async Task WhereJson_NonStringValue_NormalizedToInvariantString()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        var dry = db.From<Product>()
-            .WhereJson("payload", "count", 42)
-            .AsDryRun();
-
-        // ->> 返回 text：int 值归一为字符串绑定，避免 PG 端 text = integer 类型错误
-        await Assert.That(dry.Parameters[1].Value).IsEqualTo("42");
-    }
-
-    [Test]
-    public async Task WhereJson_BoolValue_NormalizedToLowercase_MatchesJsonbText()
-    {
-        // ITM-610：jsonb ->> 提取的布尔 text 恒为小写 "true"；Convert.ToString(bool) 产 "True"
-        // 首字母大写——text 相等比较大小写敏感，恒不匹配 → 静默空结果。bool 必须特判小写。
-        await using var db = await TestDb.SqliteAsync();
-        var dry = db.From<Product>()
-            .WhereJson("payload", "active", true)
-            .AsDryRun();
-
-        await Assert.That(dry.Parameters[1].Value).IsEqualTo("true");
-    }
-
-    [Test]
-    public async Task WhereJson_DateTimeValue_ThrowsExplicitly()
-    {
-        // ITM-641(r4)/662 锁定：DateTime 区域格式与 jsonb ISO text 恒不相等——
-        // 显式拒绝优于静默空结果（格式对齐留真库实现窗口）
-        await using var db = await TestDb.SqliteAsync();
-
-        await Assert.That(() => db.From<Product>()
-            .WhereJson("payload", "when", System.DateTime.Now))
-            .Throws<NotSupportedException>();
-    }
-
-    [Test]
-    public async Task WhereJson_DateOnlyValue_ThrowsExplicitly()
-    {
-        // r19/ITM-683：DateOnly invariant 输出 MM/dd/yyyy 与 jsonb ISO text 恒不相等
-        // （探针实证）——同 ITM-641 族显式拒绝，防静默空结果
-        await using var db = await TestDb.SqliteAsync();
-
-        await Assert.That(() => db.From<Product>()
-            .WhereJson("payload", "day", new System.DateOnly(2026, 8, 16)))
-            .Throws<NotSupportedException>();
-    }
-
-    [Test]
-    public async Task WhereJson_TimeOnlyValue_ThrowsExplicitly()
-    {
-        // r19/ITM-683：TimeOnly invariant 输出 H:mm 与 ISO HH:mm:ss 恒不相等——同族拒绝
-        await using var db = await TestDb.SqliteAsync();
-
-        await Assert.That(() => db.From<Product>()
-            .WhereJson("payload", "at", new System.TimeOnly(10, 30, 0)))
-            .Throws<NotSupportedException>();
-    }
-
-    [Test]
-    public async Task WhereJson_NulInValue_ThrowsArgumentException()
-    {
-        // r19/ITM-701：value 与 column/path 同口径 NUL 显式拒绝
-        await using var db = await TestDb.SqliteAsync();
-
-        await Assert.That(() => db.From<Product>().WhereJson("payload", "k", "a\0b"))
-            .Throws<ArgumentException>();
-    }
-
-    [Test]
-    public async Task WhereJson_NulInColumn_ThrowsArgumentException()
-    {
-        await using var db = await TestDb.SqliteAsync();
-
-        await Assert.That(() => db.From<Product>().WhereJson("pay\0load", "k", "v"))
-            .Throws<ArgumentException>();
-    }
 
     [Test]
     [Property("Category", "ExternalDatabase")]
