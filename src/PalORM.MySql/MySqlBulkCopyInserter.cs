@@ -27,6 +27,30 @@ internal static class MySqlBulkCopyInserter
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(entities);
 
+        // ITM-710(r20)：按 batchSize 分批物化 + 提交——此前把整表一次性灌进 DataTable 单条
+        // LOAD DATA（batchSize 未进入本方法签名，契约静默失效），百万行场景内存峰值可达 OOM。
+        // 与 MultiValueBulkInsert 的分批语义对齐（每批一次 WriteToServer）。
+        int batchSize = Math.Max(1, ctx.BatchSize);
+        long totalInserted = 0;
+        for (int start = 0; start < entities.Count; start += batchSize)
+        {
+            int end = Math.Min(start + batchSize, entities.Count);
+            totalInserted += await ExecuteBatchAsync(conn, transaction, entities, start, end, ctx, ct)
+                .ConfigureAwait(false);
+        }
+        return totalInserted;
+    }
+
+    private static async Task<long> ExecuteBatchAsync<T>(
+        MySqlConnection conn,
+        MySqlTransaction? transaction,
+        IReadOnlyList<T> entities,
+        int start,
+        int end,
+        MySqlBulkCopyContext ctx,
+        CancellationToken ct)
+        where T : class
+    {
         // MySqlBulkCopy 走 LOAD DATA LOCAL INFILE。DataTable 必须包含目标表全部列
         // （包括 AUTO_INCREMENT 主键列），主键列填 DBNull 让 MySQL 自增。
         // ITM-615：MySqlConnector 不指定 ColumnMappings 时按 DataTable 列序匹配目标表
@@ -53,7 +77,7 @@ internal static class MySqlBulkCopyInserter
             {
                 // probe：首次验证 binder 输出参数数与列数一致（与 MultiValueBulkInsert 对齐）。
                 rowCommand.Parameters.Clear();
-                ctx.Binder(rowCommand, entities[0], 0);
+                ctx.Binder(rowCommand, entities[start], 0);
                 if (rowCommand.Parameters.Count != columnCount)
                     throw new InvalidOperationException(
                         $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
@@ -62,7 +86,7 @@ internal static class MySqlBulkCopyInserter
                 table.BeginLoadData();
                 try
                 {
-                    for (int i = 0; i < entities.Count; i++)
+                    for (int i = start; i < end; i++)
                     {
                         rowCommand.Parameters.Clear();
                         ctx.Binder(rowCommand, entities[i], 0);
@@ -95,9 +119,18 @@ internal static class MySqlBulkCopyInserter
                 for (int i = 0; i < allColumns.Length; i++)
                     bulk.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, allColumns[i]));
                 MySqlBulkCopyResult result = await bulk.WriteToServerAsync(table, ct).ConfigureAwait(false);
-                // ITM-656(r4)：MySqlConnector 服务端不报行数时返 -1——规范化为已提交实体数
+                // ITM-709(r20)：驱动文档明示"MySqlBulkCopy 用户应检查 Warnings 为非空，
+                // 否则可能因数据类型转换失败静默丢数据"。当前只取行数会把"截断/转换失败"
+                // 报成成功——非空即显式失败，避免静默数据损坏。
+                if (result.Warnings.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"MySqlBulkCopy reported {result.Warnings.Count} warning(s); data may have been " +
+                        $"truncated or converted incorrectly. First warning: {result.Warnings[0].Message}");
+                }
+                // ITM-656(r4)：MySqlConnector 服务端不报行数时返 -1——规范化为本批实体数
                 long inserted = result.RowsInserted;
-                return inserted >= 0 ? inserted : entities.Count;
+                return inserted >= 0 ? inserted : end - start;
             }
             finally
             {
@@ -117,7 +150,8 @@ internal readonly struct MySqlBulkCopyContext(
     IReadOnlyList<string> insertColumns,
     IReadOnlyList<string> primaryKeyColumns,
     Action<DbCommand, object, int> binder,
-    int commandTimeoutSeconds)
+    int commandTimeoutSeconds,
+    int batchSize)
 {
     public readonly string QuotedTable = quotedTable;
     public readonly IReadOnlyList<string> InsertColumns = insertColumns;
@@ -125,4 +159,6 @@ internal readonly struct MySqlBulkCopyContext(
     public readonly IReadOnlyList<string> PrimaryKeyColumns = primaryKeyColumns;
     public readonly Action<DbCommand, object, int> Binder = binder;
     public readonly int CommandTimeoutSeconds = commandTimeoutSeconds;
+    /// <summary>ITM-710：每批最多物化的实体数——与回退多值路径同口径。</summary>
+    public readonly int BatchSize = batchSize;
 }

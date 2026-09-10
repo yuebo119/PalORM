@@ -24,6 +24,7 @@ internal static class RowFactory_global__FullFeatureEntity_4964faa8
             TotalDisplay = r.GetString(8),
             DeletedAt = r.IsDBNull(9) ? null : r.GetString(9),
             TenantId = r.GetString(10),
+            SensitiveValue = r.GetString(11),
         };
     };
 }

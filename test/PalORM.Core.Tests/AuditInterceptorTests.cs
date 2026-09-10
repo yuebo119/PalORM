@@ -52,6 +52,32 @@ public sealed class AuditInterceptorTests
     }
 
     [Test]
+    public async Task OnBefore_WithLogParameters_MasksSensitiveSourceColumn()
+    {
+        // ITM-713：带 [SensitiveData] 的列由源生成器把掩码写入参数 SourceColumn，
+        // 拦截器据此替换真实值（不解析 SQL）
+        var logger = new StubLogger();
+        var interceptor = new AuditInterceptor(logger, logParameters: true);
+        var sensitive = new SqliteParameter("@p0", "top-secret-value") { SourceColumn = "***MASKED***" };
+        var normal = new SqliteParameter("@p1", 7);
+        var ctx = new QueryContext("SELECT @p0, @p1", [sensitive, normal]);
+
+        interceptor.OnBefore(ctx);
+
+        await Assert.That(logger.Entries[0].Message).Contains("@p0=***MASKED***");
+        await Assert.That(logger.Entries[0].Message.Contains("top-secret-value", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(logger.Entries[0].Message).Contains("@p1=7");
+    }
+
+    [Test]
+    public async Task GetLoggableValue_NoMask_ReturnsRawValue()
+    {
+        // 未标注列透传真实值（掩码只在 SourceColumn 非空时生效）
+        await Assert.That(AuditInterceptor.GetLoggableValue(new SqliteParameter("@p0", "plain")))
+            .IsEqualTo("plain");
+    }
+
+    [Test]
     public async Task OnAfter_LogsRowCountAndElapsed()
     {
         var logger = new StubLogger();

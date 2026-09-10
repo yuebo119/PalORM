@@ -115,7 +115,7 @@ internal static class CommandFactoryEmitter
             string valueExpr = col.IsNullable
                 ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
                 : $"(object){providerValueExpr}";
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; {DbTypeHint(col)}p.Value = {valueExpr};{SensitiveSourceColumnSuffix(col)} cmd.Parameters.Add(p); }}");
             pi++;
         }
     }
@@ -325,7 +325,8 @@ internal static class CommandFactoryEmitter
     private static void GenerateBindUpsertBody(TableModel model, StringBuilder sb)
         => GenerateBindBody(model, sb, static column => column.IsUpsertable, withOffset: false);
 
-    /// <summary>共享 Bind 循环。v4.1：withOffset=true 时参数名用 @p{paramOffset+pi}（批量直绑），false 时用 @p{pi}（单行）。</summary>
+    /// <summary>共享 Bind 循环。v4.1：withOffset=true 时参数名用 @p{paramOffset+pi}（批量直绑），false 时用 @p{pi}（单行）。
+    /// ITM-713：带 [SensitiveData] 的列把掩码写入参数的 SourceColumn，供审计拦截器脱敏（无需解析 SQL）。</summary>
     private static void GenerateBindBody(TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate, bool withOffset)
     {
         int pi = 0;
@@ -335,10 +336,16 @@ internal static class CommandFactoryEmitter
             string valueExpr = GetParameterValueExpression(col);
             // withOffset=true 时生成 $\"@p{paramOffset + N}\"（插值表达式），false 时生成 \"@pN\"（字面量）
             string paramName = withOffset ? $"global::PalORM.ParameterNameCache.GetName(paramOffset + {pi})" : $"\"@p{pi}\"";
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; {DbTypeHint(col)}p.Value = {valueExpr};{SensitiveSourceColumnSuffix(col)} cmd.Parameters.Add(p); }}");
             pi++;
         }
     }
+
+    /// <summary>ITM-713：脱敏列把掩码写入参数 SourceColumn，审计拦截器据此替换值（无 SQL 解析）。</summary>
+    private static string SensitiveSourceColumnSuffix(ColumnModel col)
+        => col.SensitiveMask is null
+            ? string.Empty
+            : $" p.SourceColumn = {MigrationEmitter.ToCSharpLiteral(col.SensitiveMask)};";
 
     /// <summary>v4.6：仅设置预分配参数的 Value（无 CreateParameter/Add/ParameterName），用于跨批参数复用。</summary>
     private static void GenerateBindValuesBody(TableModel model, StringBuilder sb)
@@ -371,7 +378,7 @@ internal static class CommandFactoryEmitter
         foreach (var col in setCols)
         {
             string valueExpr = GetParameterValueExpression(col);
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; {DbTypeHint(col)}p.Value = {valueExpr};{SensitiveSourceColumnSuffix(col)} cmd.Parameters.Add(p); }}");
         }
         foreach (var col in pkCols)
         {

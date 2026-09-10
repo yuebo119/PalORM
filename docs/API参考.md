@@ -180,7 +180,7 @@
 |------|------|
 | `[Column(StoreAs=...)]` | 存储格式 |
 | `[Computed("SQL")]` | GENERATED ALWAYS AS ... STORED |
-| `[SensitiveData]` | 标记敏感字段 |
+| `[SensitiveData]` | 标记敏感字段——审计日志中该列参数值以 `Mask`（默认 `***MASKED***`）替代 |
 | `[Converter(typeof(T))]` | 自定义值转换器 |
 | `[OwnedJson]` / `[OwnedJson(typeof(Context))]` | JSON 序列化列 |
 | `[SqlFile("path.sql")]` | 编译时嵌入 SQL 文件 |

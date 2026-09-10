@@ -92,6 +92,8 @@ internal sealed class SnapshotTests
             public string TotalDisplay { get; set; } = "";
             [Column("deleted_at")] public string? DeletedAt { get; set; }
             [Column("tenant_id")] public string TenantId { get; set; } = "";
+            // ITM-713：脱敏列——生成器把 Mask 写入参数 SourceColumn，审计拦截器据此替换值
+            [Column("sensitive_value")] [SensitiveData] public string SensitiveValue { get; set; } = "";
         }
 
         // 实体 3：字符串主键 + 保留字标识符（引用符方言差异敏感面）
