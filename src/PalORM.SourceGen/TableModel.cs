@@ -87,6 +87,13 @@ internal sealed record TableModel(
             bool isConcurrencyToken = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck"));
             bool isTimestamp = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
             bool isRequired = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
+            // ITM-713(r20)：[SensitiveData] 的掩码随生成物携带，标注在参数的 SourceColumn 上供
+            // 审计拦截器脱敏——无需运行时解析 SQL 文本反查列（与 ITM-642 同一取向）。
+            string? sensitiveMask = prop.GetAttributes()
+                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "SensitiveData"))?
+                .NamedArguments.FirstOrDefault(static na => na.Key == "Mask").Value.Value as string
+                ?? (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "SensitiveData"))
+                    ? "***MASKED***" : null);
             // ITM-554：改用本文件 helper（ITM-512 引入），与其余注解判定一致，避免裸串命名空间比对
             string? computedExpression = prop.GetAttributes()
                 .FirstOrDefault(static attribute =>
@@ -156,7 +163,8 @@ internal sealed record TableModel(
                 prop.NullableAnnotation == NullableAnnotation.Annotated, isRequired,
                 ignoreOnInsert, isConcurrencyToken, isTimestamp, computedExpression, isOwnedJson,
                 ownedJsonContextTypeName,
-                converterType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)));
+                converterType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                sensitiveMask));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -276,7 +284,8 @@ internal sealed record ColumnModel(
     string DbTypeName, bool IsPrimaryKey, bool IsAutoIncrement, bool IsNullable,
     bool IsRequired,
     bool IgnoreOnInsert, bool IsConcurrencyToken, bool IsTimestamp, string? ComputedExpression,
-    bool IsOwnedJson, string? OwnedJsonContextTypeName, string? ConverterTypeName)
+    bool IsOwnedJson, string? OwnedJsonContextTypeName, string? ConverterTypeName,
+    string? SensitiveMask = null)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

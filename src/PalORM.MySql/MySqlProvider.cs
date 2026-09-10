@@ -140,7 +140,7 @@ public sealed class MySqlProvider : IDbProvider
             && await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
         {
             return await ExecuteBulkCopyAsync(
-                mySqlConnection, transaction, entities, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
+                mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
         }
 
         // 回退路径：local_infile=OFF 或非 MySqlConnection，走多值 INSERT。
@@ -181,10 +181,12 @@ public sealed class MySqlProvider : IDbProvider
     }
 
     /// <summary>v5.0 阶段 4.2：MySqlBulkCopy 路径。从 BulkInsertAsync 抽出以降低认知复杂度（S3776）。
-    /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时内部开新事务包整批。</para></summary>
+    /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时内部开新事务包整批。</para>
+    /// <para><b>分批</b>：ITM-710(r20)——<paramref name="batchSize"/> 透传到 Inserter 分块物化，
+    /// 与回退多值路径同口径（此前整表一次性灌入 DataTable，契约静默失效 + 内存峰值）。</para></summary>
     private static async Task<long> ExecuteBulkCopyAsync<T>(
         MySqlConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int commandTimeoutSeconds,
+        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds,
         System.Data.IsolationLevel isolationLevel, CancellationToken ct)  // r6-N2（CA1068 ct 末位）
         where T : class, new()
     {
@@ -227,7 +229,8 @@ public sealed class MySqlProvider : IDbProvider
                     metadata.InsertColumns,
                     pkColumns,
                     metadata.BindInsert,
-                    commandTimeoutSeconds),
+                    commandTimeoutSeconds,
+                    batchSize),
                 ct).ConfigureAwait(false);
             // 成功路径：自管事务需显式 commit（DisposeAsync 默认 rollback）。
             if (ownsTransaction)

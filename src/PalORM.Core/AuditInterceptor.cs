@@ -11,8 +11,11 @@ namespace PalORM;
 /// 这是 <see cref="IQueryInterceptor"/> 接口的既有限制，非 AuditInterceptor 独有。</para>
 /// <para><b>设计</b>：实现 <see cref="IQueryInterceptor"/>，把审计事件转发给 <see cref="ILogger"/>。
 /// 默认 Priority=200（让用户业务拦截器优先于审计执行，避免审计日志污染业务逻辑顺序）。</para>
-/// <para><b>敏感数据脱敏</b>：参数值默认不写入日志（避免凭据/PII 泄露）。
-/// 调用方如需调试参数，显式在构造函数传 <c>logParameters: true</c> 并自行承担合规风险。
+/// <para><b>敏感数据脱敏</b>（ITM-713）：参数值默认不写入日志（避免凭据/PII 泄露）。
+/// 调用方显式传 <c>logParameters: true</c> 时，带 <c>[SensitiveData]</c> 标注的列由源生成器
+/// 把掩码写入参数 <see cref="System.Data.Common.DbParameter.SourceColumn"/>，本拦截器据此
+/// 以掩码替代真实值（见 <see cref="GetLoggableValue"/>）；未标注列照常输出。
+/// 自定义拦截器可复用 <see cref="GetLoggableValue"/> 获得同一脱敏策略。
 /// 异常消息（OnError）在 logParameters=false 时也仅记录异常类型名，不记录可能含参数值的 Message。</para>
 /// <para><b>性能影响</b>：每次查询多一次 OnBefore + OnAfter 调用（含 Stopwatch.StartNew/Stop）。
 /// 无日志订阅者时（ILogger.IsEnabled=false），仍构造 QueryContext 字符串——不适用于超高频场景。
@@ -72,7 +75,10 @@ public sealed class AuditInterceptor : IQueryInterceptor
     }
 
     /// <summary>参数格式化（仅 logParameters=true 时调用）。
-    /// 用 StringBuilder 避免大参数列表的多重字符串分配。</summary>
+    /// 用 StringBuilder 避免大参数列表的多重字符串分配。
+    /// <para><b>ITM-713 脱敏</b>：带 <c>[SensitiveData]</c> 的列由源生成器把掩码写入参数的
+    /// <see cref="System.Data.Common.DbParameter.SourceColumn"/>——此处据此替换真实值，
+    /// 无需解析 SQL 文本反查列。未标注的列照常输出。</para></summary>
     private static string FormatParameters(IReadOnlyList<DbParameter> parameters)
     {
         if (parameters.Count == 0) return "(none)";
@@ -81,9 +87,19 @@ public sealed class AuditInterceptor : IQueryInterceptor
         for (int i = 0; i < parameters.Count; i++)
         {
             if (i > 0) sb.Append(", ");
-            sb.Append(parameters[i].ParameterName).Append('=').Append(parameters[i].Value);
+            sb.Append(parameters[i].ParameterName).Append('=').Append(GetLoggableValue(parameters[i]));
         }
         sb.Append(']');
         return sb.ToString();
+    }
+
+    /// <summary>取参数的可记录值：带 [SensitiveData] 掩码（经 SourceColumn 携带）的列以掩码替代。
+    /// 公开以便自定义拦截器复用同一脱敏策略（ITM-713）。</summary>
+    public static object? GetLoggableValue(DbParameter parameter)
+    {
+        ArgumentNullException.ThrowIfNull(parameter);
+        return string.IsNullOrEmpty(parameter.SourceColumn)
+            ? parameter.Value
+            : parameter.SourceColumn;
     }
 }
