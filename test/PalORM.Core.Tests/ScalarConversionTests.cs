@@ -58,4 +58,59 @@ public sealed class ScalarConversionTests
         await Assert.That(async () => await session.ScalarAsync<int>($"SELECT 'not-a-number'"))
             .Throws<FormatException>();
     }
+
+    [Test]
+    public async Task MaxAsync_NullableGeneric_UnwrapsUnderlyingType()
+    {
+        // ITM-711(r20)：TValue 为可空值类型时直接 Convert.ChangeType 会抛 InvalidCastException
+        //（实测 Convert.ChangeType(5L, typeof(long?)) 失败）——须先取底层类型（与 ScalarAsync 一致）。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await session.ExecuteAsync($"CREATE TABLE scalar_agg (Id INTEGER PRIMARY KEY, amount REAL NOT NULL)");
+        await session.ExecuteAsync($"INSERT INTO scalar_agg (Id, amount) VALUES (7, 1.5)");
+
+        long? max = await session.MaxAsync<ScalarAggEntity, long?>($"Id");
+
+        await Assert.That(max).IsEqualTo(7L);
+    }
+
+    [Test]
+    public async Task MinAsync_NullableGeneric_UnwrapsUnderlyingType()
+    {
+        // ITM-711(r20)：MinAsync 同型缺口
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await session.ExecuteAsync($"CREATE TABLE scalar_agg (Id INTEGER PRIMARY KEY, amount REAL NOT NULL)");
+        await session.ExecuteAsync($"INSERT INTO scalar_agg (Id, amount) VALUES (7, 1.5)");
+
+        long? min = await session.MinAsync<ScalarAggEntity, long?>($"Id");
+
+        await Assert.That(min).IsEqualTo(7L);
+    }
+
+    [Test]
+    public async Task ToListAsync_HugeTake_DoesNotPreallocateUnbounded()
+    {
+        // ITM-712(r20)：Take 是结果上界而非预期行数——曾直接作为 List 预分配容量，
+        // Take(1_000_000_000) 会立即触发巨量分配/OOM。封顶后必须正常返回。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await session.ExecuteAsync($"CREATE TABLE scalar_agg (Id INTEGER PRIMARY KEY, amount REAL NOT NULL)");
+        await session.ExecuteAsync($"INSERT INTO scalar_agg (Id, amount) VALUES (1, 1.0), (2, 2.0)");
+
+        List<ScalarAggEntity> rows = await session.From<ScalarAggEntity>()
+            .OrderBy(e => e.Id)
+            .Take(1_000_000_000)
+            .ToListAsync();
+
+        await Assert.That(rows.Count).IsEqualTo(2);
+    }
 }
+
+#region Test Entities
+[Table("scalar_agg")]
+internal sealed partial class ScalarAggEntity
+{
+    [Key]
+    public long Id { get; set; }
+    [Column("amount")]
+    public decimal Amount { get; set; }
+}
+#endregion

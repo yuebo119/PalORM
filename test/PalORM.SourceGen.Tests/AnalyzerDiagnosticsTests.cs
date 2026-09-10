@@ -895,7 +895,8 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     internal static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
-        AnalyzeAsync(string source)  // r17：internal 供 record 三支锁定测试复用
+        AnalyzeAsync(string source,  // r17：internal 供 record 三支锁定测试复用
+            NullableContextOptions nullableContextOptions = NullableContextOptions.Disable)
     {
         string[] trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
@@ -906,7 +907,9 @@ public sealed class AnalyzerDiagnosticsTests
             "AnalyzerDiagnosticsConsumer",
             [CSharpSyntaxTree.ParseText(source)],
             references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: nullableContextOptions));
 
         ImmutableArray<Diagnostic> analyzerDiagnostics = await compilation
             .WithAnalyzers([new PalORMAnalyzer()])
@@ -1346,6 +1349,44 @@ public sealed class AnalyzerDiagnosticsTests
             }
             """;
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM036")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM036_WarningsOnlyContext_WithReferenceProperty_Reports()
+    {
+        // ITM-706(r20)：Warnings-only(1) 未启用注解上下文——string 属性 NullableAnnotation 为 None、
+        // RowFactory 不生成 IsDBNull 守卫，正是本诊断要报的场景。原掩码 `Enable|Annotations`（值=Enable=3）
+        // 对 1 取与非 0 会误豁免而漏报；判据收敛为 Annotations 位后必须报。
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(
+            source, NullableContextOptions.Warnings);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM036")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM036_AnnotationsContext_WithReferenceProperty_DoesNotReport()
+    {
+        // ITM-648(r4) 保留：Annotations-only(2) 下 NullableAnnotation.Annotated 仍生效、守卫仍生成——须豁免
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                public string? Name { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(
+            source, NullableContextOptions.Annotations);
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM036")).IsFalse();
     }
 

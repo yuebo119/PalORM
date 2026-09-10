@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Data.Sqlite;
 using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
@@ -829,6 +830,50 @@ public sealed class SessionConcurrencyTests
         Exception? exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await session.ExecuteAsync($"SELECT 1"));
         await Assert.That(exception!.Message).Contains("disposed externally");
+    }
+
+    [Test]
+    public async Task RestoreTransaction_NonOwnedPath_PreservesExternalTransactionProtection()
+    {
+        // ITM-707(r20)：RunInTransactionScopeAsync 的 finally 曾无条件 RestoreTransaction——
+        // 非自开事务路径下 previous==transaction，ReferenceEquals 成立会把 _externalTransaction
+        // 复位为 false，ITM-640 的"外部事务被外部 Dispose 后响亮失败"保护被静默关闭。
+        // 本用例直锁 SessionOperationState 契约：模拟该路径不得复位外部性。
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbTransaction transaction = await connection.BeginTransactionAsync();
+
+        var state = new SessionOperationState();
+        state.UseTransaction(transaction);
+        // 修复前 RunInTransactionScopeAsync 在此调 RestoreTransaction(tx, tx) 复位外部性；
+        // 修复后非 owns 路径不还原。断言保护仍在：外部 Dispose 后必须响亮失败。
+        await transaction.DisposeAsync();
+
+        Exception? exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        {
+            _ = state.GetActiveTransaction();
+            return Task.CompletedTask;
+        });
+        await Assert.That(exception!.Message).Contains("disposed externally");
+    }
+
+    [Test]
+    public async Task WithTransaction_ActiveTransactionThrows_ReleasesTransactionFlow()
+    {
+        // ITM-708(r20)：GetActiveTransaction 在外部事务被 Dispose 后会抛——此前它位于 try 之外，
+        // 抛出时 ExitTransactionFlow 永不执行，_transactionOwner/_activeTransaction 永不清，
+        // 会话后续操作永久失败且 DisposeAsync 挂到超时。修复后事务流必须正常释放。
+        await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
+        DbTransaction external = await session.BeginTransactionAsync();
+        session.UseTransaction(external);
+        await external.DisposeAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await session.WithTransaction(_ => Task.CompletedTask));
+
+        // 事务流已释放：后续 WithTransaction 可正常自开事务执行（不再报嵌套/已有流）
+        await session.WithTransaction(_ => Task.CompletedTask);
+        await session.ExecuteAsync($"SELECT 1");
     }
 
     [Test]

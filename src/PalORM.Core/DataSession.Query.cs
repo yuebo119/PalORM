@@ -60,20 +60,19 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>MAX 聚合。TValue 限 IConvertible 基元类型（数值/字符串/DateTime）；
-    /// Guid/DateOnly/枚举等经 Convert.ChangeType 会抛 InvalidCastException。</summary>
+    /// Guid/DateOnly/枚举等经 Convert.ChangeType 会抛 InvalidCastException。
+    /// TValue 可为可空值类型（如 int?）——底层类型解包见 <see cref="ConvertScalar{T}"/>（ITM-711）。</summary>
     public async ValueTask<TValue?> MaxAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         object? r = await ExecuteAggregateScalarAsync<T>("MAX", expression, ct).ConfigureAwait(false);
-        // ITM-533: 补 InvariantCulture，与 ScalarAsync 一致——避免线程区域性影响数值/日期转换。
-        return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue), System.Globalization.CultureInfo.InvariantCulture);
+        return r is null or DBNull ? default : ConvertScalar<TValue>(r);
     }
 
     /// <summary>MIN 聚合。TValue 限制同 MaxAsync。</summary>
     public async ValueTask<TValue?> MinAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
         object? r = await ExecuteAggregateScalarAsync<T>("MIN", expression, ct).ConfigureAwait(false);
-        // ITM-533: 补 InvariantCulture，与 ScalarAsync 一致。
-        return r is null or DBNull ? default : (TValue)Convert.ChangeType(r, typeof(TValue), System.Globalization.CultureInfo.InvariantCulture);
+        return r is null or DBNull ? default : ConvertScalar<TValue>(r);
     }
 
     /// <summary>AVG 聚合。空表/全过滤时 AVG 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
@@ -99,6 +98,15 @@ public sealed partial class DataSession<TProvider>
             async token => await cmd.ExecuteScalarAsync(token).ConfigureAwait(false), ct)
             .ConfigureAwait(false);
     }
+
+    /// <summary>标量值到 CLR 类型的归一转换——解包可空泛型后统一走 Convert.ChangeType。
+    /// ITM-533：InvariantCulture 避免线程区域性影响数值/日期解析。
+    /// ITM-711：T 为可空值类型（如 int?）时直接转换会抛 InvalidCastException（已实测
+    /// Convert.ChangeType(5L, typeof(int?))）；须先取底层类型。ScalarAsync/MaxAsync/MinAsync 共用本助手。</summary>
+    private static T ConvertScalar<T>(object value)
+        => (T)Convert.ChangeType(
+            value, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T),
+            System.Globalization.CultureInfo.InvariantCulture);
 
     // 说明：保存点入口在 DataSession.Transactions.cs（SavepointAsync/RollbackToAsync）——
     // 此处原空"保存点"节头为拆分残留，v5.4 移除。
@@ -258,7 +266,7 @@ public sealed partial class DataSession<TProvider>
         object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         if (result is null or DBNull) return default;
         if (result is T t) return t;
-        return (T)Convert.ChangeType(result, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T), System.Globalization.CultureInfo.InvariantCulture);
+        return ConvertScalar<T>(result);
     }
 
     /// <summary>执行任意 DDL/DML。
