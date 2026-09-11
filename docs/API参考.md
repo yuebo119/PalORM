@@ -1,6 +1,6 @@
 # PalORM API 参考
 
-> v5.4.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
+> v5.5.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
 > 测试: 全仓库 579 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
