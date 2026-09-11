@@ -26,11 +26,12 @@ public static class IdentifierSafety
             // ITM-608: 扩展 C1 控制字符（U+0080-U+009F）——NEL(U+0085) 等在多字节 UTF-8 下
             // 驱动 C 层解析行为同样不稳。当前调用点全编译期常量，威胁面接近 0，防御性扩展。
             if (ch < ' ' || (ch >= '\x7F' && ch <= '\x9F'))
-                throw new ArgumentException(
-                    // r19/R-P3-03：M5 string.Format → 插值（string.Create 保持文化安全，S6618）
-                    string.Create(CultureInfo.InvariantCulture,
-                        $"标识符包含控制字符 U+{(int)ch:X4}——驱动/服务端 C 层解析行为不稳（NUL 截断 / 换行穿透引号定界等）。拒绝以保安全。"),
-                    nameof(identifier));
+            {
+                // r19/R-P3-03：M5 string.Format → 插值（string.Create 保持文化安全，S6618）
+                string message = string.Create(CultureInfo.InvariantCulture,
+                    $"标识符包含控制字符 U+{(int)ch:X4}——驱动/服务端 C 层解析行为不稳（NUL 截断 / 换行穿透引号定界等）。拒绝以保安全。");
+                throw new ArgumentException(message, nameof(identifier));
+            }
         }
     }
 }
