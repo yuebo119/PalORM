@@ -6,7 +6,9 @@
 
   <!-- ADO.NET Providers -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-preview.7.26381.103" />
+    <!-- ITM-依赖升级(2026-09-10)：preview.7 → rc.1（与 SDK 11.0.100-rc.1 同轨对齐；.NET 11 GA 后切 stable）
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-preview.7.26381.103" /> -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.1.26425.128" />
     <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.4.0" />
     <!-- v5.0 阶段 2.2：Npgsql 9.0.3→10.0.3。破坏性变更（date/time 默认映射 DateOnly/TimeOnly）
          仅影响 GetValue/ExecuteScalar 路径；RowFactoryEmitter 全部用 GetDateTime/GetFieldValue<T>，
@@ -32,8 +34,8 @@
 
   <!-- 测试 -->
   <ItemGroup>
-    <PackageVersion Include="TUnit" Version="1.65.0" />
-    <PackageVersion Include="TUnit.Assertions" Version="1.65.0" />
+    <PackageVersion Include="TUnit" Version="1.66.27" />
+    <PackageVersion Include="TUnit.Assertions" Version="1.66.27" />
     <!-- v5.0 阶段 1.3：移除 Microsoft.NET.Test.Sdk——TUnit 1.x 走 MTP 模式，
          dotnet run 直接执行，不再需要 VSTest 桥接（dotnet test 入口）。 -->
   </ItemGroup>
@@ -47,8 +49,8 @@
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
     <!-- 同类 micro-ORM 对照（Dapper 官方 benchmarks/ 同样多 ORM 对照）。
          RepoDb 主包 1.15.1 / Sqlite 1.15.0 是各自最新稳定版（RepoDb 发布节奏差异）。 -->
-    <PackageVersion Include="RepoDb" Version="1.15.1" />
-    <PackageVersion Include="RepoDb.Sqlite.Microsoft" Version="1.15.0" />
+    <PackageVersion Include="RepoDb" Version="1.16.0" />
+    <PackageVersion Include="RepoDb.Sqlite.Microsoft" Version="1.16.0" />
   </ItemGroup>
 
   <!-- 源生成器测试（Phase 2 启用） -->
@@ -61,12 +63,12 @@
 
   <!-- 质量分析器（v3.0：CI 守护层——让 SonarLint IDE 报告与 CI 编译错误对齐） -->
   <ItemGroup>
-    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.32.0.713" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.34.0.3385" />
   </ItemGroup>
 
   <!-- SourceLink（v5.0 发布管道：NuGet.org 包页源码链接 + F12 步入）。
        2026-08-15 升 8.0.0→10.0.400：源兼容性随本次全量升级验证（build 0 警告）。 -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.400" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.401" />
   </ItemGroup>
 </Project>
