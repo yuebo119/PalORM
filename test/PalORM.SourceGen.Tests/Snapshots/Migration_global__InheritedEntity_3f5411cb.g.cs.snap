@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "5.5.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "5.5.1")]
 internal static class Migration_global__InheritedEntity_3f5411cb
 {
     internal const string CreateTableSqlite = "CREATE TABLE IF NOT EXISTS \"inherited\" (\n    \"Id\" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,\n    \"name\" TEXT NOT NULL,\n    \"created_by\" TEXT NOT NULL,\n    \"created_at\" TEXT NOT NULL\n)";

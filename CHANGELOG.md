@@ -2,6 +2,24 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [5.5.1] — 依赖全量升级：Roslyn 5.9 · Sqlite.Core rc.1 对齐 SDK · 漏洞清零
+
+> 变更范围：v5.5.0 后 2 个提交，仅 Directory.Packages.props（无 API/行为变更）
+> 验证：CI -warnaserror 0/0 · Core 238 / SourceGen 188（快照字节级零漂移）/
+> Integration 172（PG/MySQL 真库）· AOT 三平台原生运行 PASSED · 漏洞/过时双归零
+
+### 📦 依赖升级（7 项）
+
+- **Microsoft.CodeAnalysis.CSharp/Analyzers**：5.6.0 → 5.9.0（源生成器构建基础；
+  13 份快照字节级对比确认生成物零漂移）
+- **Microsoft.Data.Sqlite.Core**：11.0.0-preview.7 → 11.0.0-rc.1（与 SDK 11.0.100-rc.1
+  同轨对齐；.NET 11 GA 后切 stable）
+- **SonarAnalyzer.CSharp**：10.32.0.713 → 10.34.0.3385（质量门禁）
+- **TUnit / TUnit.Assertions**：1.65.0 → 1.66.27
+- **Microsoft.SourceLink.GitHub**：10.0.400 → 10.0.401
+- **RepoDb / RepoDb.Sqlite.Microsoft**：1.15.x → 1.16.0（bench 对照）
+- **漏洞清零**：bench 的 SQLitePCLRaw NU1903（High，GHSA-2m69-gcr7-jv3q）随升级消除
+
 ## [5.5.0] — r20/r21 两轮评审全清偿 · [SensitiveData] 脱敏落地 · 方言词法与可观测性
 
 > 变更规模：v5.4.0 后 14 个提交 · 58 文件 · +1975/−383 行（实测）
