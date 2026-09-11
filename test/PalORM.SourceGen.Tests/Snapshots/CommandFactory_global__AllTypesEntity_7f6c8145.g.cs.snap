@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "5.5.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "5.5.1")]
 internal static class CommandFactory_global__AllTypesEntity_7f6c8145
 {
 
