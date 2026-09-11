@@ -24,12 +24,12 @@
 
   <!-- 源生成器 -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
-    <!-- 2026-08-15 升 5.3.0→5.6.0：v5.0 时点 dotnet-tools 源无 stable 5.6 的状态已解除
-         （dotnet list outdated 实测可解析，restore 验证通过）。
-         packageSourceMapping 规定 Microsoft.CodeAnalysis.* 只从 dotnet-tools 取，
-         不可改源（Microsoft.CodeAnalysis.CSharp net11 配套版只在 dnceng 内部源）。 -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.6.0" />
+    <!-- 2026-09-10 升 5.6.0→5.9.0（r21 依赖升级轮）：解析验证通过（nuget.org/dotnet-tools
+         双源均可达，5.6.0 时"dotnet-tools 无 stable"的源约束已过时——packageSourceMapping
+         现允许双源）。升级验证：SourceGen 188 测试（含 13 份快照字节级对比）+
+         全量 -warnaserror 构建全绿。 -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
   </ItemGroup>
 
   <!-- 测试 -->
