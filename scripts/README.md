@@ -24,7 +24,7 @@
 
 | 脚本 | 用途 |
 |------|------|
-| `set-test-env.sh` | 从 `.env.test` 加载 PG/MySQL 连接串（`source` 方式调用） |
+| `set-test-env.sh` | 从 `.env.test` 加载 PG/MySQL 连接串（`source` 方式调用）。**跑测试已不需要它**——`TestEnvironment` 会自动补入缺失的 `PALORM_*` 变量；本脚本保留给需要在当前 shell 里直接用连接串的场景 |
 
 ## 包验证
 

@@ -54,6 +54,26 @@ if [ "${1:-}" = "--selftest" ]; then
         echo "SELFTEST FAIL: 根 NuGet.Config 应豁免"
         self_fail=1
     fi
+    st_filename() { # $1=路径 $2=期望拦截(1)/豁免(0)——判定表达式与主流程逐字一致
+        if echo "$1" | grep -qiE "$FILE_BLACKLIST" 2>/dev/null \
+            && ! echo "$1" | grep -qxE 'NuGet\.Config' \
+            && ! echo "$1" | grep -qE '(^|/)\.env(\..+)?\.example$'; then got=1; else got=0; fi
+        if [ "$got" -ne "$2" ]; then
+            echo "SELFTEST FAIL: 文件名 [$1] 期望拦截=$2 实际=$got"
+            self_fail=1
+        fi
+    }
+    # 误报向量（实际触发过：修改 .env.test.example 被拦，阻断正常提交）
+    st_filename ".env.test.example" 0
+    st_filename ".env.example" 0
+    st_filename "scripts/.env.local.example" 0
+    # 真阳性向量（豁免不得放宽到真实凭据文件）
+    st_filename ".env" 1
+    st_filename ".env.production" 1
+    st_filename ".env.test" 1
+    st_filename "config/.env.local" 1
+    st_filename "secrets.yml" 1
+    st_filename "id_rsa" 1
     if ! echo "sub/dir/nuget.config" | grep -qiE "$FILE_BLACKLIST"; then
         echo "SELFTEST FAIL: 子路径 nuget.config 应在黑名单"
         self_fail=1
@@ -70,7 +90,7 @@ if [ "${1:-}" = "--selftest" ]; then
         self_fail=1
     fi
     if [ "$self_fail" -eq 0 ]; then
-        echo "SELFTEST PASS: secret-guard 自测全通过（2 误报 + 3 真阳性 + 2 文件名豁免 + 2 白名单过滤层 B53）"
+        echo "SELFTEST PASS: secret-guard 自测全通过（2 误报 + 3 真阳性 + 内容白名单过滤层 B53 + 文件名向量 11：3 误报豁免 + 8 真阳性拦截）"
     fi
     exit "$self_fail"
 fi
@@ -230,9 +250,14 @@ for file in $STAGED; do
     [ "$DEBUG" = "1" ] && echo "  [debug] checking: $file"
 
     if echo "$file" | grep -qiE "$FILE_BLACKLIST" 2>/dev/null \
-        && ! echo "$file" | grep -qxE 'NuGet\.Config'; then
-        # 豁免：仓库根的 NuGet.Config 是版本化受控配置（仅源映射，无凭据——G32 门禁对象）；
+        && ! echo "$file" | grep -qxE 'NuGet\.Config' \
+        && ! echo "$file" | grep -qE '(^|/)\.env(\..+)?\.example$'; then
+        # 豁免一：仓库根的 NuGet.Config 是版本化受控配置（仅源映射，无凭据——G32 门禁对象）；
         # 子目录或其他机器的 nuget.config（可能含 packageSourceCredentials）仍拦截
+        # 豁免二：.env 家族的 *.example 是占位模板（凭据位为 change-me/YOUR_..._HERE），
+        # 内容规则照常执行。黑名单里的 `\.env\.[^e]` 只能豁免 `.env.example` 这一种形态，
+        # `.env.<x>.example`（如仓库跟踪的 .env.test.example）会被误拦——误报会挡住对模板的
+        # 正常修改，并诱发 --no-verify 绕行（B41 族：误报的代价不只是噪音）。
         echo -e "${RED}✗ 文件名违规${NC}: $file"
         FAIL=$((FAIL+1))
         continue
