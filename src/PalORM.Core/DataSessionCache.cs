@@ -17,9 +17,27 @@ internal static class DataSessionCache
     /// 供 QueryBuilder.BuildSql 的 SELECT 列表使用（v5.6）。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> QualifiedSelectColumnsCache = new();
 
-    /// <summary>per-(Type, Dialect, softDelete, tenant) 缓存默认过滤条件，消除每次 QuoteIdentifier + 插值。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> FilterConditionCache = new();
+    /// <summary>per-(Type, Dialect, softDelete, tenant) 缓存默认过滤的三种拼接形态，消除每次
+    /// QuoteIdentifier + 插值。<b>v5.6</b>：值由「条件文本」升级为
+    /// <see cref="DefaultFilterForms"/>——三个调用点（COUNT 的裸条件、拼在既有 WHERE 之后的
+    /// 追加片段、独立 WHERE 子句）原本各自再做一次插值，现在一次查找同时拿到三种形态。</summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), DefaultFilterForms> FilterFormsCache = new();
+
     /// <summary>per-(Type, Dialect, hasTenant, !ignoreFilters) 缓存 GetAsync 完整 SQL，消除每次插值 + QuoteIdentifier。
     /// （ITM-640：第四元实义为 !ignoreFilters——key 由 DataSession.Crud 传入，注释修正）。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> GetByKeySqlCache = new();
+}
+
+/// <summary>默认过滤（软删/租户）的三种拼接形态。空过滤时为 <see cref="Empty"/>（三项全空串），
+/// 而非 default——后者三项为 null，调用点拼接前取 Length 会 NRE。</summary>
+internal readonly record struct DefaultFilterForms(string Condition, string AndFragment, string WhereClause)
+{
+    /// <summary>无默认过滤（实体既非 [SoftDelete] 也无租户会话）。</summary>
+    internal static readonly DefaultFilterForms Empty = new("", "", "");
+
+    /// <summary>由条件文本派生三种形态；空条件映射为 <see cref="Empty"/>。</summary>
+    internal static DefaultFilterForms FromCondition(string condition)
+        => condition.Length == 0
+            ? Empty
+            : new DefaultFilterForms(condition, " AND " + condition, " WHERE " + condition);
 }

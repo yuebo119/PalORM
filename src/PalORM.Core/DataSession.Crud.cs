@@ -264,18 +264,36 @@ public sealed partial class DataSession<TProvider>
 
     // v4.1 极致降内存：per-(Type, Dialect) 缓存 selectColumns，消除每次 Get/GetAll 的 N 次 QuoteIdentifier + string.Join
     // S2743：泛型类型中的 static 字段不跨 TProvider 共享，故用非泛型 DataSessionCache 持有
-    private static System.Collections.Concurrent.ConcurrentDictionary<(Type, SqlDialect), string> SelectColumnsCache
-        => DataSessionCache.SelectColumnsCache;
-
+    /// <summary>取裸列清单（不带表名限定），走共享缓存。
+    /// <b>v5.6</b>：命中走 <c>TryGetValue</c>——原 <c>GetOrAdd(key, 捕获 lambda)</c> 每次调用
+    /// 分配显示类与委托（实测 96B/次）；未命中才构建并 <c>TryAdd</c>。</summary>
     private static string GetSelectColumns<T>(IReadOnlyList<string> columnNames)
-        => SelectColumnsCache.GetOrAdd(
-            (typeof(T), TProvider.Dialect),
-            _ => string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier)));
+    {
+        (Type, SqlDialect) key = (typeof(T), TProvider.Dialect);
+        if (DataSessionCache.SelectColumnsCache.TryGetValue(key, out string? cached))
+            return cached;
+        string built = string.Join(", ", columnNames.Select(TProvider.QuoteIdentifier));
+        DataSessionCache.SelectColumnsCache.TryAdd(key, built);
+        return built;
+    }
 
-    // v4.6：缓存完整 GetAsync SQL（含表名/PK 引用），消除每次插值
-    // S2743：泛型中的 static 字段不共享，用非泛型 DataSessionCache 持有
-    private static System.Collections.Concurrent.ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> GetByKeySqlCache
-        => DataSessionCache.GetByKeySqlCache;
+    /// <summary>取 GetAsync 的完整 SQL（含表名/PK/过滤），走共享缓存。
+    /// key 含 hasTenant + ignoreFilters：两者影响 filter 后缀。
+    /// <b>v5.6</b>：命中走 <c>TryGetValue</c>（原 <c>GetOrAdd</c> 的 factory 捕获
+    /// columnNames/tableName/filter 三个方法局部，每次调用分配显示类与委托）。</summary>
+    private static string GetGetByKeySql<T>(IReadOnlyList<string> columnNames, string tableName,
+        string filter, bool hasTenant, bool ignoreFilters)
+        where T : class, new()
+    {
+        (Type, SqlDialect, bool, bool) key = (typeof(T), TProvider.Dialect, hasTenant, !ignoreFilters);
+        if (DataSessionCache.GetByKeySqlCache.TryGetValue(key, out string? cached))
+            return cached;
+        string selectColumns = GetSelectColumns<T>(columnNames);
+        string pkColumn = GetPkColumn<T>();
+        string built = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
+        DataSessionCache.GetByKeySqlCache.TryAdd(key, built);
+        return built;
+    }
 
     /// <summary>按主键查询。</summary>
     public async ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
@@ -295,16 +313,8 @@ public sealed partial class DataSession<TProvider>
             await using DbCommand cmd = CreateCommand();
             string filter = GetDefaultFilterFragment<T>();
             // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
-            // key 含 hasTenant + ignoreFilters：两者影响 filter 后缀
-            bool hasTenant = HasTenantFilter<T>();
-            cmd.CommandText = GetByKeySqlCache.GetOrAdd(
-                (typeof(T), TProvider.Dialect, hasTenant, !_ignoreFilters),
-                _ =>
-                {
-                    string selectColumns = GetSelectColumns<T>(columnNames);
-                    string pkColumn = GetPkColumn<T>();
-                    return $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
-                });
+            cmd.CommandText = GetGetByKeySql<T>(columnNames, tableName, filter,
+                HasTenantFilter<T>(), _ignoreFilters);
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
             BindDefaultFilterParameters<T>(cmd);
