@@ -180,13 +180,31 @@ public struct QueryBuilder<T> where T : class, new()
     /// 与 OrderBy/GroupBy/AddWhereComparison 的 GetQualifiedColumnName 口径对齐）。</para>
     /// <para>空集合生成恒假条件 1=0（IN () 是非法 SQL）；超过 500 个值按批次切分为多个 IN 片段 OR 组合，规避各数据库参数上限。</para></summary>
     public QueryBuilder<T> WhereIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
+        => AddInClause(member, values, negated: false, nameof(WhereIn));
+
+    /// <summary>追加参数化 NOT IN 条件，与既有条件 AND 组合。
+    /// <para>列名经表名/CTE 名限定（同 <see cref="WhereIn{TValue}"/>，ITM-641）。</para>
+    /// <para>空集合为 no-op（排除空集等于不过滤）；超过 500 个值按批次切分为多个 NOT IN 片段 AND 组合。</para></summary>
+    public QueryBuilder<T> WhereNotIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
+        => AddInClause(member, values, negated: true, nameof(WhereNotIn));
+
+    /// <summary>WhereIn/WhereNotIn 共享内核——两者此前逐字重复，仅 IN/NOT IN 与 OR/AND 连接词不同。
+    /// <para><b>v5.6 单缓冲</b>：原实现每批一个 <c>string[]</c> + <c>string.Join</c> + 插值，
+    /// 最后再对批次集合 <c>string.Join</c> 一次；改为单个 <see cref="ValueStringBuilder"/>
+    /// 顺序写出整条 IN 体。实测 500 值省 21.8KB（76%）、2000 值省 122.3KB（64%）
+    /// 的字符串与列表 churn（参数对象是驱动固有的，不在收益内）。</para>
+    /// <para>SQL 文本逐字节不变：<c>(col IN (@p0, @p1) OR col IN (@p2))</c>，既有 WHERE 时前缀 <c>AND </c>。</para></summary>
+    private QueryBuilder<T> AddInClause<TValue>(Expression<Func<T, TValue>> member,
+        IEnumerable<TValue> values, bool negated, string callerName)
     {
         ArgumentNullException.ThrowIfNull(values);
         string column = GetQualifiedColumnName(member);
-        var items = values as IReadOnlyList<TValue> ?? values.ToList();
+        IReadOnlyList<TValue> items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0)
         {
-            AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
+            // 空 IN 恒假（IN () 是非法 SQL）；空 NOT IN 是 no-op（排除空集等于不过滤）
+            if (!negated)
+                AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
             return this;
         }
         // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超 65535（PG 协议 int16 上限，
@@ -195,70 +213,48 @@ public struct QueryBuilder<T> where T : class, new()
         // 只查增量会静默通过、运行期 PG 协议层才报错。
         if (_parameters.Count + items.Count > 65535)
             throw new ArgumentException(
-                $"WhereIn received {items.Count} values on a builder holding {_parameters.Count} parameters; " +
+                $"{callerName} received {items.Count} values on a builder holding {_parameters.Count} parameters; " +
                 "the total exceeds the 65535 bind-parameter limit (PostgreSQL protocol max). " +
                 "Use a temp table join or split the query into batches.", nameof(values));
 
-        const int maxBatch = 500;
-        // O2 预分配：批次数与参数总量在进循环前已知
-        var batches = new List<string>((items.Count + maxBatch - 1) / maxBatch);
+        string operatorName = negated ? " NOT IN (" : " IN (";
+        string batchSeparator = negated ? " AND " : " OR ";
+        // O2 预分配：参数总量在进循环前已知
         var parameters = new List<DbParameter>(items.Count);
-        for (int start = 0; start < items.Count; start += maxBatch)
+        var sb = new ValueStringBuilder(stackalloc char[512]);
+        try
         {
-            int end = Math.Min(start + maxBatch, items.Count);
-            var placeholders = new string[end - start];
-            for (int i = start; i < end; i++)
-            {
-                DbParameter parameter = CreateParameter(items[i], parameters.Count);
-                placeholders[i - start] = parameter.ParameterName;
-                parameters.Add(parameter);
-            }
-            batches.Add($"{column} IN ({string.Join(", ", placeholders)})");
+            if (HasClause(QueryClauseKind.Where)) sb.Append("AND ");
+            sb.Append('(');
+            AppendInBatches(ref sb, items, parameters, column, operatorName, batchSeparator);
+            sb.Append(')');
+            AddClause(QueryClauseKind.Where, sb.ToString(), parameters);
         }
-
-        AddClause(QueryClauseKind.Where,
-            $"{(HasClause(QueryClauseKind.Where) ? "AND " : "")}({string.Join(" OR ", batches)})",
-            parameters);
+        finally { sb.Dispose(); }
         return this;
     }
 
-    /// <summary>追加参数化 NOT IN 条件，与既有条件 AND 组合。
-    /// <para>列名经表名/CTE 名限定（同 <see cref="WhereIn{TValue}"/>，ITM-641）。</para>
-    /// <para>空集合为 no-op（排除空集等于不过滤）；超过 500 个值按批次切分为多个 NOT IN 片段 AND 组合。</para></summary>
-    public QueryBuilder<T> WhereNotIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
+    /// <summary>把 items 按 500 一批写成 <c>col IN (@p…)</c> 片段，批间以 <paramref name="batchSeparator"/>
+    /// 连接。参数按写入顺序创建并追加到 <paramref name="parameters"/>，参数名序号与旧实现逐位一致。</summary>
+    private void AppendInBatches<TValue>(ref ValueStringBuilder sb, IReadOnlyList<TValue> items,
+        List<DbParameter> parameters, string column, string operatorName, string batchSeparator)
     {
-        ArgumentNullException.ThrowIfNull(values);
-        string column = GetQualifiedColumnName(member);
-        var items = values as IReadOnlyList<TValue> ?? values.ToList();
-        if (items.Count == 0) return this;
-        // ITM-514: 同 WhereIn——参数总量不封顶会生成越界 SQL；ITM-562: 存量+增量累计判定。
-        if (_parameters.Count + items.Count > 65535)
-            throw new ArgumentException(
-                $"WhereNotIn received {items.Count} values on a builder holding {_parameters.Count} parameters; " +
-                "the total exceeds the 65535 bind-parameter limit (PostgreSQL protocol max). " +
-                "Use a temp table join or split the query into batches.", nameof(values));
-
         const int maxBatch = 500;
-        // O2 预分配：批次数与参数总量在进循环前已知
-        var batches = new List<string>((items.Count + maxBatch - 1) / maxBatch);
-        var parameters = new List<DbParameter>(items.Count);
         for (int start = 0; start < items.Count; start += maxBatch)
         {
             int end = Math.Min(start + maxBatch, items.Count);
-            var placeholders = new string[end - start];
-            for (int i = start; i < end; i++)
+            if (start > 0) sb.Append(batchSeparator);
+            sb.Append(column);
+            sb.Append(operatorName);
+            for (int index = start; index < end; index++)
             {
-                DbParameter parameter = CreateParameter(items[i], parameters.Count);
-                placeholders[i - start] = parameter.ParameterName;
+                if (index > start) sb.Append(", ");
+                DbParameter parameter = CreateParameter(items[index], parameters.Count);
                 parameters.Add(parameter);
+                sb.Append(parameter.ParameterName);
             }
-            batches.Add($"{column} NOT IN ({string.Join(", ", placeholders)})");
+            sb.Append(')');
         }
-
-        AddClause(QueryClauseKind.Where,
-            $"{(HasClause(QueryClauseKind.Where) ? "AND " : "")}({string.Join(" AND ", batches)})",
-            parameters);
-        return this;
     }
 
     /// <summary>INNER JOIN 已注册实体 TJoin 的表，ON 条件参数化绑定。TJoin 需有 [Table] 且经源生成器注册。</summary>
@@ -718,31 +714,78 @@ public struct QueryBuilder<T> where T : class, new()
         finally { sb.Dispose(); }
     }
 
-    /// <summary>追加 SELECT 子句的列列表：显式列 vs 全列（带表名前缀）。</summary>
+    /// <summary>追加 SELECT 子句的列列表：显式列 vs 全列（带表名前缀）。
+    /// <para><b>v5.6 缓存</b>：全列形态的输入（表名 + 列名数组 + 方言引用规则）全部来自
+    /// 编译期注册表，同一 (Type, Dialect) 恒产出同一字符串，故按 (Type, Dialect) 缓存。
+    /// 命中路径为 O(1) 查找且零分配；未命中才逐列 QuoteIdentifier 构建
+    /// （4 列实体实测省 5 次引用分配，约 280B）。</para>
+    /// <para>本路径需要<b>表名限定</b>（JOIN 下防 ambiguous column，ITM-641），故用
+    /// <see cref="DataSessionCache.QualifiedSelectColumnsCache"/>——它与 GetAllAsync 用的
+    /// 裸列清单缓存键相同但值不同，不可混用。</para>
+    /// <para>带 CTE 或显式投影时不走缓存：前者的限定名是 CTE 名而非表名，
+    /// 后者的列集由调用方决定。</para></summary>
     private void AppendSelectColumns(ref ValueStringBuilder sb)
     {
-        string sourceName = _cteName ?? _tableName;
         if (_selectColumns is not null)
         {
             // ITM-622：构建时限定（sourceName 为当前 FROM 源）
+            string source = _cteName ?? _tableName;
             for (int index = 0; index < _selectColumns.Length; index++)
             {
                 if (index > 0) sb.Append(", ");
-                sb.Append(_quoteIdentifier(sourceName));
+                sb.Append(_quoteIdentifier(source));
                 sb.Append('.');
                 sb.Append(_quoteIdentifier(_selectColumns[index]));
             }
             return;
         }
-        // v4.4：sourceName 的 quote 提循环外，避免 N 列重复 quote 同一个值
-        string quotedSource = _quoteIdentifier(sourceName);
+        if (_cteName is null)
+        {
+            sb.Append(GetQualifiedColumnList());
+            return;
+        }
+        // 有 CTE：限定名为 CTE 名，与缓存的表名限定形态不同，逐列构建
+        string quotedCte = _quoteIdentifier(_cteName);
         for (int index = 0; index < _columnNames.Count; index++)
         {
             if (index > 0) sb.Append(", ");
-            sb.Append(quotedSource);
+            sb.Append(quotedCte);
             sb.Append('.');
             sb.Append(_quoteIdentifier(_columnNames[index]));
         }
+    }
+
+    /// <summary>取本实体本方言的表名限定列清单，走共享缓存。
+    /// <para>命中路径用 <c>TryGetValue</c>（无委托、无闭包）。未命中时先构建再发布——
+    /// QueryBuilder 是 struct，lambda 不能捕获 <c>this</c>（CS1673），且 <c>GetOrAdd</c>
+    /// 的值重载不构造委托。并发下同一 (Type, Dialect) 可能被构建多次，只有首个值进入缓存，
+    /// 冗余构建的代价是每键一次的少量分配，正确性无影响。</para></summary>
+    private string GetQualifiedColumnList()
+    {
+        (Type, SqlDialect) key = (typeof(T), _dialect);
+        if (DataSessionCache.QualifiedSelectColumnsCache.TryGetValue(key, out string? cached))
+            return cached;
+        string built = BuildQualifiedColumnList();
+        return DataSessionCache.QualifiedSelectColumnsCache.GetOrAdd(key, built);
+    }
+
+    /// <summary>逐列构建限定列清单——仅缓存未命中时执行。</summary>
+    private string BuildQualifiedColumnList()
+    {
+        string quotedSource = _quoteIdentifier(_tableName);
+        var sb = new ValueStringBuilder(stackalloc char[256]);
+        try
+        {
+            for (int index = 0; index < _columnNames.Count; index++)
+            {
+                if (index > 0) sb.Append(", ");
+                sb.Append(quotedSource);
+                sb.Append('.');
+                sb.Append(_quoteIdentifier(_columnNames[index]));
+            }
+            return sb.ToString();
+        }
+        finally { sb.Dispose(); }
     }
 
     /// <summary>追加窗口函数列——出现在 SELECT 列表后段（与普通列以逗号分隔）。</summary>
