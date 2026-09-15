@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Text;
 
 namespace PalORM;
@@ -42,6 +43,36 @@ internal static class BatchUpdateSqlBuilder
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>为批量 UPDATE 的目标命令建立参数池：<c>@p0…@p{rowParamCount-1}</c> 按行递增
+    /// （SET 列在前、主键在每行末尾），租户参数以固定名追加在末尾——与 <see cref="Build"/>
+    /// 的占位符逐位对应。
+    /// <para><b>为什么抽成静态可测</b>：调用方是 PG/MySQL 的批量 UPDATE，本地只有 SQLite
+    /// 环境（SQLite 走逐条回退，到不了该路径），故「参数名与顺序 == SQL 占位符」这条跨 Provider
+    /// 契约只能靠单测锁定——见 <c>BatchUpdateParameterContractTests</c>。</para></summary>
+    internal static DbParameter[] CreateParameterPool(
+        DbCommand cmd, int rowParamCount, bool hasTenantFilter,
+        string tenantParameterName, object? tenantId,
+        Func<string, object?, DbParameter> createParameter)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        ArgumentNullException.ThrowIfNull(createParameter);
+        ArgumentOutOfRangeException.ThrowIfNegative(rowParamCount);
+        var pool = new DbParameter[rowParamCount + (hasTenantFilter ? 1 : 0)];
+        for (int i = 0; i < rowParamCount; i++)
+        {
+            DbParameter pooled = createParameter(ParameterNameCache.GetName(i), DBNull.Value);
+            pool[i] = pooled;
+            cmd.Parameters.Add(pooled);
+        }
+        if (hasTenantFilter)
+        {
+            DbParameter tenant = createParameter(tenantParameterName, tenantId);
+            pool[rowParamCount] = tenant;
+            cmd.Parameters.Add(tenant);
+        }
+        return pool;
     }
 
     private static void BuildPostgreSql(StringBuilder sb, string quotedTable, string quotedPk,
