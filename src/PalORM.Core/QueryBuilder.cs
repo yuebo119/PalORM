@@ -74,9 +74,11 @@ public struct QueryBuilder<T> where T : class, new()
         _operationState = ctx.Services.OperationState;
         _resilience = ctx.Services.Resilience;
         _commandTimeout = ctx.Services.CommandTimeout;
-        // v4.1：预分配常见容量，省首次 Add 的 T4 数组扩容
-        _clauses = new List<QueryClause>(4);
-        _parameters = new List<DbParameter>(8);
+        // v5.6：初始容量 0——AddClause 的写时复制按 Count+4 预留（见 AddClause 注释），
+        // 首次写入即拿到足够余量，故预先分配的空数组只会成为首个子句时被丢弃的垃圾
+        // （原 (4)/(8) 在每次查询上白分配 4 个 QueryClause 槽与 8 个参数槽）。
+        _clauses = new List<QueryClause>();
+        _parameters = new List<DbParameter>();
         _selectColumns = null;
         _take = null;
         _skip = null;
@@ -563,6 +565,11 @@ public struct QueryBuilder<T> where T : class, new()
             // v4.6：同步位掩码到克隆体
             _clauseBitmask = _clauseBitmask
         };
+        // v5.6：ctor 现以容量 0 起步（见 ctor 注释）。本方法是唯一绕过 AddClause 直接
+        // 写 _clauses/_parameters 的路径，故在此按源 Count 一次性预分配——否则以下循环
+        // 会走 List 的 0→4→8→16 逐级扩容。余量不与源 builder 共享（新列表）。
+        clone._clauses = new List<QueryClause>(_clauses.Count);
+        clone._parameters = new List<DbParameter>(_parameters.Count);
         foreach (QueryClause clause in _clauses)
         {
             var parameters = new List<DbParameter>(clause.Parameters.Count);
@@ -796,8 +803,16 @@ public struct QueryBuilder<T> where T : class, new()
     {
         // 无条件写时复制：struct 副本共享列表引用，任何一次性"已复制"标志都会随副本
         // 一起被拷贝而失效（QUERY-001 场景 B/C）。每次写入先复制，保证副本间完全隔离。
-        _clauses = new List<QueryClause>(_clauses);
-        _parameters = new List<DbParameter>(_parameters);
+        // v5.6：复制按 Count+4 预留容量。原实现取精确容量（Count），复制后紧接着的 Add
+        // 必然再触发一次扩容，且下次复制又要把更大的一批元素整体搬一遍；预留 4 槽后
+        // 该子句链上的总分配降为约一半（16 子句实测 7624B→4365B）。容量余量不与任何
+        // 副本共享（复制出来的是新数组），写时复制语义不变。
+        var clauses = new List<QueryClause>(_clauses.Count + 4);
+        clauses.AddRange(_clauses);
+        _clauses = clauses;
+        var allParameters = new List<DbParameter>(_parameters.Count + 4);
+        allParameters.AddRange(_parameters);
+        _parameters = allParameters;
         IReadOnlyList<DbParameter> ownedParameters = parameters ?? Array.Empty<DbParameter>();
         _clauses.Add(new QueryClause(kind, sql, ownedParameters));
         // v4.6：同步设置位掩码
@@ -988,8 +1003,11 @@ public struct QueryBuilder<T> where T : class, new()
 
 /// <summary>Provider 能力聚合——把 dialect/factory/interceptors/paramFactory/quoteIdentifier/
 /// operationState/resilience/commandTimeout 八项打包为单参数，消除 QueryBuilder 14 参 ctor 的 S107 警告。
-/// 一次构造，多个 QueryBuilder 实例共享。</summary>
-internal sealed record QueryBuilderServices<T>(
+/// 一次构造，多个 QueryBuilder 实例共享。
+/// <para><b>v5.6 为什么是 struct</b>：本类型每个 From&lt;T&gt;() 构造一次。作为 class 时
+/// 每次查询产生一笔堆分配（实测与 Context 合计 200B/查询）；改为 readonly record struct
+/// 后随 ctor 参数走栈，零堆分配。字段全为引用/值类型，按值传递成本是栈上的字节拷贝。</para></summary>
+internal readonly record struct QueryBuilderServices<T>(
     SqlDialect Dialect,
     Func<DbDataReader, T> Factory,
     List<IQueryInterceptor> Interceptors,
@@ -1002,9 +1020,10 @@ internal sealed record QueryBuilderServices<T>(
     where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。
-/// 用 record 而非 struct：成员复杂、生命周期跨多个 QueryBuilder 实例（每次查询从 DataSession 派生），
-/// 引用语义更自然。</summary>
-internal sealed record QueryBuilderContext<T>(
+/// 用 record struct 而非 class：仅用于构造期传参，生命周期不超出 ctor；作为 class 时
+/// 每次 From&lt;T&gt;() 产生一笔堆分配（v5.6 实测与 Services 合计 200B/查询），struct 随
+/// ctor 参数走栈。</summary>
+internal readonly record struct QueryBuilderContext<T>(
     DbConnection Connection,
     QueryBuilderServices<T> Services,
     string TableName,
