@@ -188,7 +188,7 @@ var env = DbOptions.FromEnvironment("PALORM_CONNECTION");
 | `ValidateQueryColumnOrder` | `bool` | true | `QueryAsync` 首行列名与实体声明序比对，不匹配抛异常。使用列别名/表达式列的查询需关闭 | |
 | `QueryCache` | `IQueryCache?` | 默认 1024 条 | 查询缓存实现。注入独立实例可实现会话/租户级隔离。实现需线程安全 | |
 | `SessionSetupSql` | `string?` | null | 主连接首次激活后执行的 SQL（`SET TIME ZONE` / `search_path` / `statement_timeout`）。多条用分号分隔 | **v5.0** |
-| `ReadSessionSetupSql` | `string?` | null | 读副本连接首次激活后执行的 SQL。语义同 `SessionSetupSql`，作用于 `ForRead` 路由的只读副本 | **v5.0** |
+| `ReadSessionSetupSql` | `string?` | null | 读副本连接首次激活后执行的 SQL。语义同 `SessionSetupSql`，作用于 `ForRead` 路由的只读副本。**v5.6**：读连接按会话复用，故每个会话只执行一次 | **v5.0** |
 | `LoggerFactory` | `ILoggerFactory?` | null | 日志工厂。设置后 `DataSession` 创建 `ILogger`。日志级别过滤在 `LoggerFactory` 配置 | |
 
 ### v5.0 连接串自动调优

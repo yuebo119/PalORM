@@ -2,6 +2,46 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移
+
+> 变更范围：v5.5.1 后 5 个提交，src/PalORM.Core 六个文件 + 三个测试文件
+> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 250/250（新增 12 项）·
+> SourceGen 188/188（快照字节级零漂移）· Integration 162/172（10 项为 PG/MySQL
+> 连接串缺失，与改动前基线同为 10/162）· SQL 转储 22 场景与基线提交 b2e5741
+> 逐字节一致
+
+### ⚡ 性能（实测数据来自 .ai/perf-probe，分配字节数复现性优于 1%）
+
+- **读路由连接改为会话级复用**（行为变更）：原每次读查询都 `CreateConnection` +
+  `Open` + Provider 初始化（SQLite 为 7 条 PRAGMA），实测单查询 **33.75µs → 8.98µs
+  （−73%）**、分配 5815B → 2944B。读连接由 `DataSession` 持有并在会话释放时关闭；
+  连接失效时丢弃重建，Provider 初始化随新物理句柄补设。
+  `ConnectionLease` 随之简化为纯借用语义（移除 `OpenOwnedAsync`）。
+- **查询构建分配**：`From<T>()` 构建器基线 **440B → 64B**；`ToSql()` **984B → 392B**；
+  `WhereIn(500)` **89800B → 71456B**、`WhereIn(2000)` **432393B → 325537B**。
+  手段：`QueryBuilderServices`/`QueryBuilderContext` 改 `readonly record struct`；
+  `AddClause` 写时复制按 `Count+4` 预留容量；SELECT 列清单按 (Type, Dialect) 缓存；
+  IN 列表改单 `ValueStringBuilder` 拼接；会话侧三处 `ConcurrentDictionary.GetOrAdd`
+  捕获闭包改 `TryGetValue`，默认过滤三形态一次缓存。
+- **批量 UPDATE（PG/MySQL）**：目标命令参数池跨行复用，每行参数创建量减半。SQLite
+  走逐条回退路径，本地不可达，由 `BatchUpdateParameterContractTests` 锁定参数名与
+  顺序契约。
+- **10K 行物化保持在地板**：相对 ADO.NET 地板 +0.05% 分配（未改动该路径）。
+
+### 📝 行为变更
+
+- 读连接生命周期：由「每查询创建并释放」改为「每会话懒创建并复用」。影响面为
+  配置了 `ReadConnectionString` 的会话——读副本连接在会话存续期内保持打开。
+- `ReadSessionSetupSql` 的执行时机从"每次读连接建立"收敛为"每会话首次建立读连接"。
+- GridReader 释放不再级联释放被借用的连接（连接归会话所有）。
+
+### 🧪 新增测试（12 项）
+
+- `BatchUpdateParameterContractTests`（6）：批量 UPDATE 参数池 ↔ SQL 占位符跨 Provider 契约。
+- `ReadRouteConnectionReuseTests`（3）：用 `ReadSessionSetupSql` 作副作用探针证伪
+  "每查询新建连接"，含对照组证明计数有区分力。
+- `DefaultFilterFormsTests`（3）：软删 + 租户的三种拼接形态在 Count/GetAll/Get 上各钉一条。
+
 ## [5.5.1] — 依赖全量升级：Roslyn 5.9 · Sqlite.Core rc.1 对齐 SDK · 漏洞清零
 
 > 变更范围：v5.5.0 后 2 个提交，仅 Directory.Packages.props（无 API/行为变更）
