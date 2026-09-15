@@ -16,8 +16,9 @@ public struct QueryBuilder<T> where T : class, new()
     // v4.6：HasClause 位掩码 -- O(1) 判断子句存在，消除 List.Exists 的 O(n) 扫描 + Predicate 委托分配
     private int _clauseBitmask;
     internal DbConnection _conn;
-    internal readonly Func<DbConnection>? _readConnFactory;
-    internal readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
+    /// <summary>读路由连接提供者——v5.6 起由会话级复用：提供者首次建连并执行 Provider
+    /// 初始化，之后返回同一连接（原为每次查询新建连接的工厂 + 初始化器两件套）。</summary>
+    internal readonly Func<CancellationToken, ValueTask<DbConnection>>? _readConnProvider;
     internal readonly SqlDialect _dialect;
     /// <summary>r5-S2：会话隔离级别（WithIsolationLevel 透传，null=驱动默认）。</summary>
     internal readonly System.Data.IsolationLevel? _isolationLevel;
@@ -60,8 +61,7 @@ public struct QueryBuilder<T> where T : class, new()
     {
         _validateColumnOrder = ctx.ValidateColumnOrder;
         _conn = ctx.Connection;
-        _readConnFactory = ctx.ReadConnFactory;
-        _readConnInitializer = ctx.ReadConnInitializer;
+        _readConnProvider = ctx.ReadConnProvider;
         _queryCache = ctx.QueryCache ?? CacheStore.Default;
         _dialect = ctx.Services.Dialect;
         _isolationLevel = ctx.Services.IsolationLevel;
@@ -507,10 +507,19 @@ public struct QueryBuilder<T> where T : class, new()
         CancellationToken cancellationToken)
     {
         if (GetActiveTransaction() is not null || writeOperation
-            || !_useReadRoute || _readConnFactory is null)
+            || !_useReadRoute || _readConnProvider is null)
             return ValueTask.FromResult(ConnectionLease.Borrow(_conn));
 
-        return ConnectionLease.OpenOwnedAsync(_readConnFactory, cancellationToken, _readConnInitializer);
+        return AcquireReadLeaseAsync(cancellationToken);
+    }
+
+    /// <summary>读路由租约——连接来自会话级复用，租约只是借用标记（不释放连接）。
+    /// 抽为独立方法而非在 <see cref="AcquireConnectionLeaseAsync"/> 内 await：后者是每查询
+    /// 必经的热路径，同步返回分支不应被 async 状态机包裹。</summary>
+    private async ValueTask<ConnectionLease> AcquireReadLeaseAsync(CancellationToken cancellationToken)
+    {
+        DbConnection readConnection = await _readConnProvider!(cancellationToken).ConfigureAwait(false);
+        return ConnectionLease.Borrow(readConnection);
     }
 
     internal DbTransaction? GetActiveTransaction()
@@ -543,7 +552,7 @@ public struct QueryBuilder<T> where T : class, new()
             _conn,
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
                 _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
-            _tableName, _columnNames, _readConnFactory, _queryCache, _validateColumnOrder, _readConnInitializer))
+            _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder))
         {
             _selectColumns = _selectColumns,
             _take = _take,
@@ -1071,7 +1080,6 @@ internal readonly record struct QueryBuilderContext<T>(
     QueryBuilderServices<T> Services,
     string TableName,
     IReadOnlyList<string> ColumnNames,
-    Func<DbConnection>? ReadConnFactory = null,
+    Func<CancellationToken, ValueTask<DbConnection>>? ReadConnProvider = null,
     IQueryCache? QueryCache = null,
-    bool ValidateColumnOrder = false,
-    Func<DbConnection, CancellationToken, Task>? ReadConnInitializer = null) where T : class, new();
+    bool ValidateColumnOrder = false) where T : class, new();
