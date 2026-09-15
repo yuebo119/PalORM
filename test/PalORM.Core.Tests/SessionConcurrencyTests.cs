@@ -789,7 +789,7 @@ public sealed class SessionConcurrencyTests
                         }),
                         TimeSpan.FromSeconds(30)),
                     "session_concurrency", ["id", "name"],
-                    () => connection)).ForRead();
+                    _ => ValueTask.FromResult<System.Data.Common.DbConnection>(connection))).ForRead();
 
             Task<GridReader> query = builder
                 .QueryMultipleAsync($"SELECT 1").AsTask();
@@ -807,7 +807,9 @@ public sealed class SessionConcurrencyTests
                 "The active transaction flow is completing.");
             await Assert.That(connection.Reader.DisposeCount).IsEqualTo(1);
             await Assert.That(connection.CommandDisposeCount).IsEqualTo(1);
-            await Assert.That(connection.DisposeCount).IsEqualTo(1);
+            // v5.6：租约恒为借用语义——连接由会话（或本用例的 finally）持有，
+            // 登记的 GridReader 释放命令与读取器，不再级联释放被借用的连接。
+            await Assert.That(connection.DisposeCount).IsEqualTo(0);
         }
         finally
         {

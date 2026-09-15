@@ -42,7 +42,8 @@ public sealed class GridReaderLifecycleTests
         await dispose;
         await Assert.That(resources.Reader.DisposeCount).IsEqualTo(1);
         await Assert.That(resources.Command.DisposeCount).IsEqualTo(1);
-        await Assert.That(resources.Connection.DisposeCount).IsEqualTo(1);
+        // v5.6：连接归会话所有——GridReader 释放命令与读取器，但不释放被借用的连接
+        await Assert.That(resources.Connection.DisposeCount).IsEqualTo(0);
     }
 
     [Test]
@@ -65,7 +66,7 @@ public sealed class GridReaderLifecycleTests
         await Assert.That(firstException).IsSameReferenceAs(resources.ReaderDisposeFailure);
         await Assert.That(resources.Reader.DisposeCount).IsEqualTo(1);
         await Assert.That(resources.Command.DisposeCount).IsEqualTo(1);
-        await Assert.That(resources.Connection.DisposeCount).IsEqualTo(1);
+        await Assert.That(resources.Connection.DisposeCount).IsEqualTo(0);
     }
 }
 
@@ -82,12 +83,16 @@ internal sealed class GridFailureResources
     internal GridTrackingCommand Command { get; } = new();
     internal GridTrackingConnection Connection { get; } = new();
 
-    internal async ValueTask<GridReader> CreateGridReaderAsync()
+    // CA2000：GridReader 的所有权在本夹具中转移给调用方（测试以 await using 释放），
+    // 与方法是否 async 无关——分析器此前仅因方法体内含 await 边界而未告警。
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+        Justification = "GridReader ownership transfers to the test, which disposes it via await using.")]
+    internal ValueTask<GridReader> CreateGridReaderAsync()
     {
-        ConnectionLease lease = await ConnectionLease.OpenOwnedAsync(
-            () => Connection,
-            CancellationToken.None);
-        return new GridReader(Reader, Command, lease, null);
+        // v5.6：租约恒为借用语义（读连接由会话级复用持有，不再由租约释放），
+        // 故此处用 Borrow——断言随之从"连接被租约释放"改为"连接不被租约释放"。
+        ConnectionLease lease = ConnectionLease.Borrow(Connection);
+        return ValueTask.FromResult(new GridReader(Reader, Command, lease, null));
     }
 }
 

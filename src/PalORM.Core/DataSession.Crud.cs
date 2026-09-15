@@ -30,7 +30,8 @@ public sealed partial class DataSession<TProvider>
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated column metadata.");
 
-        // v4.1：使用实例字段缓存的读连接工厂，避免每次 From<T> 新建闭包
+        // v5.6：读连接提供者从实例字段取——会话级复用（含 ReadSessionSetupSql 与 Provider
+        // 初始化钩子），且方法组不在此处新建闭包。
         var builder = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(
@@ -38,9 +39,8 @@ public sealed partial class DataSession<TProvider>
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
                 _operationState, Volatile.Read(ref _resilience), _options.CommandTimeout,
                 _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
-            tableName, columnNames, _readConnFactory,
-            _options.QueryCache, _options.ValidateQueryColumnOrder,
-            _readConnInitializer));  // v5.0 阶段 5.2：从实例字段取（含 ReadSessionSetupSql）
+            tableName, columnNames, _readConnProvider,
+            _options.QueryCache, _options.ValidateQueryColumnOrder));
 
         // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）

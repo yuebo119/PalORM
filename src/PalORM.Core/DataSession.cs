@@ -30,11 +30,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         get => _operationState.DisposeWaitTimeout;
         set => _operationState.DisposeWaitTimeout = value;
     }
-    // v4.1：读连接工厂缓存为实例字段，避免每次 From<T> 新建闭包
-    private readonly Func<DbConnection>? _readConnFactory;
+    // v5.6：读路由连接改为会话级懒创建并复用。原实现（v4.1 起）每次读查询都经
+    // 工厂 CreateConnection + Open + Provider 初始化（SQLite 为 7 条 PRAGMA）——实测
+    // 建连 26.3µs / 2209B 每次，是读副本查询总耗时（37.2µs）的 3.5 倍。
+    private readonly string? _readConnectionString;
+    private DbConnection? _readConnection;
     // v5.0 阶段 5.2：读连接初始化器——包装 Provider 钩子 + ReadSessionSetupSql。
     // 仅当 ReadSessionSetupSql 非空时才捕获实例委托；否则用 static 委托（无闭包分配）。
     private readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
+    /// <summary>读连接提供者——会话级复用，无读连接串时为 null（读路由退化为主连接）。
+    /// 缓存为实例字段：方法组直接传给 QueryBuilderContext 会在每次 From&lt;T&gt;() 分配闭包。</summary>
+    private readonly Func<CancellationToken, ValueTask<DbConnection>>? _readConnProvider;
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
     {
@@ -45,13 +51,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         _resilience = new ResilienceExecutor(options, TProvider.IsTransient);
         _interceptors = interceptors.OrderBy(i => i.Priority).ToList();
         _logger = logger ?? NullLogger.Instance;
-        // v4.1：一次性创建读连接工厂闭包，避免每次 From<T> 分配
-        string? readCs = options.ResolveReadConnectionString();
-        // ITM-624 同型面（修复侧纪律卡第三问实证）：原 lambda 捕获构造期 options 整体，
-        // WithTimeout/WithRetry 后读连接仍用旧池参数/超时——改读 _options 字段保持口径一致。
-        _readConnFactory = readCs is not null
-            ? () => TProvider.CreateConnection(readCs, _options)
-            : null;
+        // ITM-624 同型面（修复侧纪律卡第三问实证）：读连接每次创建都读 _options 字段而非
+        // 捕获构造期 options——WithTimeout/WithRetry 后读连接与主连接的池参数/超时口径一致。
+        _readConnectionString = options.ResolveReadConnectionString();
+        _readConnProvider = _readConnectionString is not null ? AcquireReadConnectionAsync : null;
         // v5.0 阶段 5.2：读连接初始化器——无 ReadSessionSetupSql 时用 static 委托（零闭包分配），
         // 有时包装一层实例委托追加执行 ReadSessionSetupSql。
         _readConnInitializer = string.IsNullOrWhiteSpace(options.ReadSessionSetupSql)
@@ -164,6 +167,58 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         => exception is OperationCanceledException
             ? !callerToken.IsCancellationRequested
             : TProvider.IsTransient(exception);
+
+    /// <summary>取读路由连接（会话级复用）。
+    /// <para><b>为什么无需额外同步</b>：本方法只在会话持有操作租约期间被调用（读租约在
+    /// <c>QueryBuilder.AcquireConnectionLeaseAsync</c> 内取得，而该调用点在
+    /// <c>SessionOperationState.Enter</c> 之后），操作门禁保证同一会话同时最多一个操作。</para>
+    /// <para><b>失效重建</b>：连接被外部关闭或断开时丢弃并按全新连接重建——Provider 初始化
+    /// 随新物理句柄一并补设（ITM-207 的初始化契约不因复用而豁免）。</para></summary>
+    private async ValueTask<DbConnection> AcquireReadConnectionAsync(CancellationToken cancellationToken)
+    {
+        DbConnection? existing = _readConnection;
+        if (existing is not null)
+        {
+            if (existing.State == ConnectionState.Open)
+                return existing;
+            await DisposeReadConnectionAsync().ConfigureAwait(false);
+        }
+
+        DbConnection created = TProvider.CreateConnection(_readConnectionString!, _options);
+        try
+        {
+            await created.OpenAsync(cancellationToken).ConfigureAwait(false);
+            if (_readConnInitializer is not null)
+                await _readConnInitializer(created, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            try { await created.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { exception.Data["PalORM.ConnectionCleanupException"] = cleanupException; }
+            throw;
+        }
+        _readConnection = created;
+        return created;
+    }
+
+    /// <summary>释放并清空会话持有的读连接，返回释放异常（无异常返回 null）。
+    /// 返回而非抛出：两个调用方对失败的处理不同——重建路径下连接已被判定不可用，
+    /// 其释放失败无诊断价值；会话释放路径须按"主异常保留"约定挂到 Data 上。</summary>
+    private async Task<Exception?> DisposeReadConnectionAsync()
+    {
+        DbConnection? connection = _readConnection;
+        _readConnection = null;
+        if (connection is null) return null;
+        try
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+    }
 
     /// <summary>忽略全局过滤器（[SoftDelete]/[TenantAware]）。设置后本次会话所有查询跳过自动过滤。
     /// <para>ITM-568: 与 AddInterceptor 同受门禁保护——有查询在飞时调用会明确失败，
@@ -339,6 +394,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         try { await _conn.DisposeAsync().ConfigureAwait(false); }
         catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
+
+        // v5.6：读连接由会话持有，在此统一释放（DisposeAsync 先等待全部活动操作结束，
+        // 故不存在无飞行查询仍持有该连接的情形）。
+        if (await DisposeReadConnectionAsync().ConfigureAwait(false) is { } readConnectionException)
+            RecordCleanupException(ref cleanupException, readConnectionException);
 
         if (cleanupException is not null)
             ExceptionDispatchInfo.Capture(cleanupException).Throw();
