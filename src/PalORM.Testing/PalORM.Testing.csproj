@@ -12,6 +12,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 测试需覆盖两个纯函数内部件：ParseDotEnv（.env.test 解析）与 FindFileUpwards（向上回溯深度）。
+         后者是"尾部分隔符偷走一次迭代"这一差一错误的唯一可锁定入口——只按公开行为测不出来
+         （输出目录层级有余量时两种实现都能找到文件）。 -->
+    <InternalsVisibleTo Include="PalORM.Integration.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\PalORM.Core\PalORM.Core.csproj" />
     <ProjectReference Include="..\PalORM.Sqlite\PalORM.Sqlite.csproj" />
     <ProjectReference Include="..\PalORM.PostgreSql\PalORM.PostgreSql.csproj" />

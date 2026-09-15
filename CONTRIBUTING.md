@@ -25,12 +25,17 @@ dotnet run --project test/PalORM.Integration.Tests -c Debug
 
 # 可选：设置外部数据库连接串
 cp .env.test.example .env.test
-# 编辑 .env.test 填入本地 PG/MySQL 凭据
-source scripts/set-test-env.sh
+# 编辑 .env.test 填入本地 PG/MySQL 凭据——无需再手动 source，
+# TestEnvironment 会在解析连接串时自动补入其中缺失的 PALORM_* 变量
 ```
 
-> **注意**：未配置 `.env.test` 时外部数据库集成测试会显式失败（fail-fast 设计），
-> 单元测试与 SQLite 集成测试不受影响。
+> **注意**：未配置 `.env.test`（且未设置 `PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION`）时
+> 外部数据库集成测试会显式失败（fail-fast 设计），单元测试与 SQLite 集成测试不受影响。
+>
+> **优先级**：显式环境变量 > `.env.test` > 报错。已设置的环境变量恒不被文件覆盖，
+> 故 CI 注入 secret 的路径完全不读该文件。
+>
+> `source scripts/set-test-env.sh` 仍可用（例如想在 shell 里跑 `psql`），但已不是跑测试的必需步骤。
 
 ## 代码规范
 

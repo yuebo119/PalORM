@@ -2,13 +2,13 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移
+## [未发布·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移 · 测试凭据自动加载
 
-> 变更范围：v5.5.1 后 5 个提交，src/PalORM.Core 六个文件 + 三个测试文件
+> 变更范围：v5.5.1 后 6 个提交，src/PalORM.Core 六个文件 + src/PalORM.Testing +
+> 三个测试项目
 > 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 250/250（新增 12 项）·
-> SourceGen 188/188（快照字节级零漂移）· Integration 162/172（10 项为 PG/MySQL
-> 连接串缺失，与改动前基线同为 10/162）· SQL 转储 22 场景与基线提交 b2e5741
-> 逐字节一致
+> SourceGen 188/188（快照字节级零漂移）· Integration 178/178（含 PG/MySQL 真库，
+> 无需手动 source 凭据）· SQL 转储 22 场景与基线提交 b2e5741 逐字节一致
 
 ### ⚡ 性能（实测数据来自 .ai/perf-probe，分配字节数复现性优于 1%）
 
@@ -35,12 +35,39 @@
 - `ReadSessionSetupSql` 的执行时机从"每次读连接建立"收敛为"每会话首次建立读连接"。
 - GridReader 释放不再级联释放被借用的连接（连接归会话所有）。
 
-### 🧪 新增测试（12 项）
+### 🧪 新增测试（18 项）
 
 - `BatchUpdateParameterContractTests`（6）：批量 UPDATE 参数池 ↔ SQL 占位符跨 Provider 契约。
 - `ReadRouteConnectionReuseTests`（3）：用 `ReadSessionSetupSql` 作副作用探针证伪
   "每查询新建连接"，含对照组证明计数有区分力。
 - `DefaultFilterFormsTests`（3）：软删 + 租户的三种拼接形态在 Count/GetAll/Get 上各钉一条。
+
+### 🔧 修复（测试基础设施）
+
+- **集成测试必须先手动 `source scripts/set-test-env.sh` 才会通过**：`TestEnvironment`
+  现于解析连接串前自动从仓库根 `.env.test` 补入**缺失**的 `PALORM_*` 变量。
+  优先级为「显式环境变量 > `.env.test` > 报错」，已设置的值恒不被覆盖，故 CI 注入
+  secret 的路径完全不读该文件；文件缺失时保持原有显式报错。
+  <br>此前的失败信息是"环境变量未设置"，容易被误读为"没有可用数据库实例"——本轮实测
+  发生过一次该误判，并据此错误地推迟了两项远程 Provider 优化。
+- **`FindFileUpwards` 的深度差一错误**：`AppContext.BaseDirectory` 以目录分隔符结尾，
+  `Path.GetDirectoryName` 首次调用只剥掉它、返回同一层，白耗一次迭代，深度上限实际
+  少一层。该缺陷此前被 `appsettings.test.json` 的"复制到输出目录"（i=0 即命中）掩盖，
+  只在查找未被复制的 `.env.test` 时显形。已用 `Path.TrimEndingDirectorySeparator`
+  归一化起点，上限 6 → 8（RID 特定输出 / AOT publish 更深一层）。
+- 新增 6 项单测锁定上述两点
+- **secret-guard 文件名黑名单误拦 `.env` 家族模板**：黑名单的 `\.env\.[^e]` 只能豁免
+  `.env.example` 这一种形态，`.env.<x>.example`（如仓库跟踪的 `.env.test.example`）被拦，
+  挡住了对模板的正常修改。已加 `*.example` 豁免（仅文件名规则；内容规则照常执行），
+  并补 11 条文件名自测向量（3 误报豁免 + 8 真阳性拦截，含 `.env.production`/`.env.local`/
+  `id_rsa` 必须仍被拦截）。守卫自身变异探针：摘掉豁免后自测退出码 1，抓不到才算失败。
+- **架构文档测试计数漂移**：`docs/架构设计.md` 与 `docs/API参考.md` 声明的 `[Test]` 标记数
+  落后于实测（579 vs 实际 594），D10 门禁已红——上一批新增 12 项测试时未跑
+  `doc-consistency-check.sh` 所致。已用该脚本的 `--fix` 机械同步（项目为此漂移提供的
+  正规入口），D10 转绿。
+：`FindFileUpwards` 用"恰好需要的层数"作上限以区分两种实现
+  （变异探针实测：摘掉归一化后仅该用例失败，另 5 项通过），`ParseDotEnv` 覆盖注释/空行/
+  引号剥离/非 `PALORM_` 键拒绝。
 
 ## [5.5.1] — 依赖全量升级：Roslyn 5.9 · Sqlite.Core rc.1 对齐 SDK · 漏洞清零
 

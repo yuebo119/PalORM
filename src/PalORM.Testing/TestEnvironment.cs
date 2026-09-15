@@ -10,15 +10,28 @@ namespace PalORM.Testing;
 /// （不静默回退到 localhost 等默认值——避免误写系统库，ITM-428 凭据卫生）。</para>
 /// <para><b>完整连接串覆盖</b>：设置 <c>PALORM_PG_CONNECTION</c> / <c>PALORM_MYSQL_CONNECTION</c>
 /// 直接返回该值，绕过 JSON 模板与拆分项。</para>
+/// <para><b>本地凭据兜底（v5.6）</b>：解析前自动尝试从仓库根 <c>.env.test</c>（gitignored）补入
+/// <b>缺失</b>的 <c>PALORM_*</c> 环境变量，见 <see cref="LoadDotEnvIfPresent"/>。此前该文件只能靠
+/// 手工 <c>source scripts/set-test-env.sh</c> 生效——漏做时集成测试以"环境变量未设置"失败，
+/// 而该报错容易被误读为"没有可用数据库实例"（实测已发生一次误判）。</para>
 /// <para><b>查找路径</b>：从 <see cref="AppContext.BaseDirectory"/> 向上回溯最多 6 层；
-/// 找到第一个 appsettings.test.json 即停止（便于从 test/&lt;proj&gt;/bin/Debug/net11.0/ 反向定位到仓库根）。</para>
+/// 找到第一个 appsettings.test.json 即停止（便于从 test/&lt;proj&gt;/bin/Debug/net11.0/ 反向定位到仓库根）。
+/// 上限 8 层：常规输出路径需 6 层（net11.0→Release→bin→&lt;proj&gt;→test→仓库根），RID 特定输出或 AOT publish 会再深一层。</para>
 /// <para>线程安全：首次调用懒加载并缓存；进程内同一实例返回。</para></summary>
 public static class TestEnvironment
 {
     private const string _settingsFileName = "appsettings.test.json";
-    private const int _maxDirectoryDepth = 6;
+    private const string _dotEnvFileName = ".env.test";
+    private const int _maxDirectoryDepth = 8;
     private const string _pgFullEnvVar = "PALORM_PG_CONNECTION";
     private const string _mySqlFullEnvVar = "PALORM_MYSQL_CONNECTION";
+
+    /// <summary>只接受 <c>PALORM_</c> 前缀的键——该文件是测试配置载体，不应成为注入任意
+    /// 进程环境变量的通道。</summary>
+    private const string _dotEnvKeyPrefix = "PALORM_";
+
+    /// <summary>0 = 未尝试，1 = 已尝试。只做一次，避免每次解析都走文件系统。</summary>
+    private static int _dotEnvAttempted;
 
     // ITM-648：惰性加载 + 失败可重试——静态字段初始化抛异常会以 TypeInitializationException
     // 永久污染类型（文件后补也无法自愈）。Lazy(PublicationOnly) 不缓存异常：加载失败后
@@ -27,6 +40,32 @@ public static class TestEnvironment
         Load, LazyThreadSafetyMode.PublicationOnly);
 
     private static TestSettings Settings => _settings.Value;
+
+    /// <summary>从仓库根 <c>.env.test</c> 补入缺失的 <c>PALORM_*</c> 环境变量。
+    /// <para><b>只补缺失，绝不覆盖</b>：显式设置的环境变量（CI secret、手工 export、
+    /// <c>source scripts/set-test-env.sh</c>）恒优先，故 CI 路径不会读到该文件——那两处都
+    /// 已注入完整连接串时本方法直接返回，零文件 IO。</para>
+    /// <para><b>失败静默</b>：文件缺失/不可读时不抛异常——兜底路径不该把"没配本地凭据"
+    /// 变成新的失败点，后续占位符解析仍会给出显式且可操作的报错。</para>
+    /// <para><b>凭据卫生</b>：只写环境变量，不回显键值，异常不携带文件内容（P0 红线）。</para>
+    /// <para>只尝试一次（进程级），后续调用为一次原子读。</para></summary>
+    public static void LoadDotEnvIfPresent()
+    {
+        if (Interlocked.Exchange(ref _dotEnvAttempted, 1) != 0) return;
+        try
+        {
+            string? path = FindFileUpwards(_dotEnvFileName);
+            if (path is null) return;
+            foreach ((string key, string value) in ParseDotEnv(File.ReadAllLines(path)))
+            {
+                if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                    Environment.SetEnvironmentVariable(key, value);
+            }
+        }
+        catch (IOException) { /* 兜底路径：交给后续占位符解析给出显式报错 */ }
+        catch (UnauthorizedAccessException) { /* 同上 */ }
+        catch (ArgumentException) { /* 键/值含非法字符——同上，不覆盖既有报错 */ }
+    }
 
     /// <summary>解析 PostgreSQL 连接串。
     /// 优先级：<c>PALORM_PG_CONNECTION</c> &gt; JSON 模板 + <c>${PALORM_PG_*}</c> 占位符替换。</summary>
@@ -59,7 +98,7 @@ public static class TestEnvironment
 
     private static TestSettings Load()
     {
-        string path = FindSettingsFile()
+        string path = FindFileUpwards(_settingsFileName)
             ?? throw new FileNotFoundException(
                 $"{_settingsFileName} not found within {_maxDirectoryDepth} parent directories " +
                 $"of {AppContext.BaseDirectory}. Expected at repository root.");
@@ -74,18 +113,6 @@ public static class TestEnvironment
         return settings;
     }
 
-    private static string? FindSettingsFile()
-    {
-        string dir = AppContext.BaseDirectory;
-        for (int i = 0; i < _maxDirectoryDepth && !string.IsNullOrEmpty(dir); i++)
-        {
-            string candidate = Path.Combine(dir, _settingsFileName);
-            if (File.Exists(candidate))
-                return candidate;
-            dir = Path.GetDirectoryName(dir) ?? string.Empty;
-        }
-        return null;
-    }
 
     private static string ResolveWithFullOverride(string template, string fullEnvVar)
     {
@@ -95,6 +122,9 @@ public static class TestEnvironment
             throw new InvalidDataException(
                 $"Connection string template in {_settingsFileName} is null (explicit JSON null). " +
                 "Provide a template string or set the full-override environment variable.");
+        // v5.6：本地凭据兜底——在读环境变量之前补入 .env.test 中缺失的 PALORM_* 键。
+        // 放在此处而非调用方：两个 Resolve 方法、整串覆盖与占位符展开两条路径一次覆盖。
+        LoadDotEnvIfPresent();
         string? full = Environment.GetEnvironmentVariable(fullEnvVar);
         return string.IsNullOrEmpty(full) ? ExpandPlaceholders(template, fullEnvVar) : full;
     }
@@ -132,7 +162,9 @@ public static class TestEnvironment
                 if (string.IsNullOrEmpty(value))
                     throw new InvalidOperationException(
                         $"Environment variable '{varName}' (referenced in {_settingsFileName}) is not set. " +
-                        $"Run: source scripts/set-test-env.sh, or set {contextEnvVar} to bypass the template.");
+                        $"Set it, or add it to the repository-root {_dotEnvFileName} " +
+                        $"(auto-loaded for unset {_dotEnvKeyPrefix}* keys), " +
+                        $"or set {contextEnvVar} to bypass the template.");
 
                 sb.Append(value);
                 i = end + 1;
@@ -144,6 +176,61 @@ public static class TestEnvironment
             }
         }
         return sb.ToString();
+    }
+
+    /// <summary>从 <see cref="AppContext.BaseDirectory"/> 向上回溯最多 <see cref="_maxDirectoryDepth"/>
+    /// 层查找指定文件，未找到返回 null。appsettings 与 .env.test 共用同一回溯口径。
+    /// <para><b>为什么先 TrimEndingDirectorySeparator</b>：<see cref="AppContext.BaseDirectory"/>
+    /// 以目录分隔符结尾（<c>...\net11.0\</c>），而 <see cref="Path.GetDirectoryName(string)"/>
+    /// 首次调用只会剥掉该分隔符、返回<b>同一层</b>——不归一化就等于白耗一次迭代，深度上限
+    /// 实际少一层。该差一错误此前被 <c>appsettings.test.json</c> 的"复制到输出目录"（i=0 即命中）
+    /// 掩盖，只在查找未被复制的 <c>.env.test</c> 时显形。</para></summary>
+    internal static string? FindFileUpwards(string fileName) => FindFileUpwards(fileName, _maxDirectoryDepth);
+
+    /// <summary>以指定深度上限回溯查找（起点固定为 <see cref="AppContext.BaseDirectory"/>）。</summary>
+    internal static string? FindFileUpwards(string fileName, int maxDepth)
+        => FindFileUpwards(fileName, maxDepth, AppContext.BaseDirectory);
+
+    /// <summary>以指定起点与深度上限回溯查找。
+    /// <para><b>为什么暴露起点</b>：只有让测试用「已知层数的临时目录树 + 带尾部分隔符的起点」
+    /// 作基准，才能独立于本仓库的输出布局锁定"尾部分隔符偷走一次迭代"的差一错误。
+    /// 依赖真实仓库布局的断言会随 <c>bin/&lt;cfg&gt;/&lt;tfm&gt;</c> 形状变化而误报；
+    /// 而"先量出实现深度再自洽验证"的断言没有区分力（两种实现都自洽，实测假阴性）。</para></summary>
+    internal static string? FindFileUpwards(string fileName, int maxDepth, string startDirectory)
+    {
+        // 归一化起点：调用方传入的起点常以分隔符结尾（AppContext.BaseDirectory 即如此），
+        // Path.GetDirectoryName 首次调用只剥该分隔符、返回同一层，不归一化就白耗一次迭代。
+        string dir = Path.TrimEndingDirectorySeparator(startDirectory);
+        for (int i = 0; i < maxDepth && !string.IsNullOrEmpty(dir); i++)
+        {
+            string candidate = Path.Combine(dir, fileName);
+            if (File.Exists(candidate)) return candidate;
+            dir = Path.GetDirectoryName(dir) ?? string.Empty;
+        }
+        return null;
+    }
+
+    /// <summary>解析 <c>.env.test</c> 行——<c>KEY=VALUE</c>，跳过空行与 <c>#</c> 注释，
+    /// 剥掉成对的外层引号（<c>set -a</c> 加载的写法）。只产出 <c>PALORM_</c> 前缀的键。
+    /// <para>值不参与任何日志或异常——调用方只把结果写进环境变量。</para></summary>
+    internal static IEnumerable<(string Key, string Value)> ParseDotEnv(IEnumerable<string> lines)
+    {
+        foreach (string raw in lines)
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line[0] == '#') continue;
+            int separator = line.IndexOf('=', StringComparison.Ordinal);
+            if (separator <= 0) continue;
+            string key = line[..separator].Trim();
+            if (!key.StartsWith(_dotEnvKeyPrefix, StringComparison.Ordinal)) continue;
+            string value = line[(separator + 1)..].Trim();
+            if (value.Length >= 2
+                && ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\'')))
+            {
+                value = value[1..^1];
+            }
+            yield return (key, value);
+        }
     }
 }
 
