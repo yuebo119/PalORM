@@ -372,39 +372,45 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     // v4.1 cache key includes softDelete/tenant flags; _ignoreFilters changes the key (not cached when ignoring)
     // S2743：用非泛型 DataSessionCache 持有，跨 TProvider 共享
-    private static System.Collections.Concurrent.ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> FilterConditionCache
-        => DataSessionCache.FilterConditionCache;
-
-    private string GetDefaultFilterCondition<T>() where T : class, new()
+    /// <summary>取默认过滤的三种拼接形态（缓存）。<b>v5.6</b>：命中路径走 <c>TryGetValue</c>——
+    /// 原实现用 <c>GetOrAdd(key, 捕获 lambda)</c>，factory 捕获 <c>_tenantParameterName</c> 所在
+    /// 实例语境，每次调用都分配一个显示类与委托（实测 96B/次），即使缓存命中。未命中才构建并
+    /// <c>TryAdd</c>；并发下同键可能被构建多次，但同输入恒同输出，正确性无影响。</summary>
+    private DefaultFilterForms GetDefaultFilterForms<T>() where T : class, new()
     {
         bool hasSoftDelete = !_ignoreFilters && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
         bool hasTenant = HasTenantFilter<T>();
-        if (!hasSoftDelete && !hasTenant) return "";
-        return FilterConditionCache.GetOrAdd(
-            (typeof(T), TProvider.Dialect, hasSoftDelete, hasTenant),
-            key =>
-            {
-                var (_, _, sd, tn) = key;
-                string softDelete = sd ? $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL" : "";
-                if (!tn) return softDelete;
-                string tenant = $"{TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
-                return softDelete.Length == 0 ? tenant : $"{softDelete} AND {tenant}";
-            });
+        if (!hasSoftDelete && !hasTenant) return DefaultFilterForms.Empty;
+        (Type, SqlDialect, bool, bool) key = (typeof(T), TProvider.Dialect, hasSoftDelete, hasTenant);
+        if (DataSessionCache.FilterFormsCache.TryGetValue(key, out DefaultFilterForms cached))
+            return cached;
+        string softDelete = hasSoftDelete ? $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL" : "";
+        string condition;
+        if (!hasTenant)
+        {
+            condition = softDelete;
+        }
+        else
+        {
+            string tenant = $"{TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
+            condition = softDelete.Length == 0 ? tenant : $"{softDelete} AND {tenant}";
+        }
+        DefaultFilterForms forms = DefaultFilterForms.FromCondition(condition);
+        DataSessionCache.FilterFormsCache.TryAdd(key, forms);
+        return forms;
     }
+
+    /// <summary>默认过滤的裸条件（COUNT 等直接拼 WHERE 的调用点用）。</summary>
+    private string GetDefaultFilterCondition<T>() where T : class, new()
+        => GetDefaultFilterForms<T>().Condition;
 
     /// <summary>已有 WHERE 时的追加片段：" AND cond" 或空。</summary>
     private string GetDefaultFilterFragment<T>() where T : class, new()
-    {
-        string condition = GetDefaultFilterCondition<T>();
-        return condition.Length == 0 ? "" : $" AND {condition}";
-    }
+        => GetDefaultFilterForms<T>().AndFragment;
 
     /// <summary>独立 WHERE 子句：" WHERE cond" 或空。</summary>
     private string GetDefaultFilterWhereClause<T>() where T : class, new()
-    {
-        string condition = GetDefaultFilterCondition<T>();
-        return condition.Length == 0 ? "" : $" WHERE {condition}";
-    }
+        => GetDefaultFilterForms<T>().WhereClause;
 
     /// <summary>为默认过滤条件绑定参数。任何拼接了 GetDefaultFilter* 结果的命令都必须调用。</summary>
     private void BindDefaultFilterParameters<T>(DbCommand cmd) where T : class, new()
