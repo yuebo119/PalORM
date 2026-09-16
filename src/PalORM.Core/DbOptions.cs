@@ -46,8 +46,14 @@ public sealed record DbOptions
     /// <summary>连接池最大连接数（默认 100）。</summary>
     public int MaxPoolSize { get; init; } = 100;
 
-    /// <summary>连接池空闲超时（默认 30 秒）。</summary>
-    public int PoolIdleTimeoutSeconds { get; init; } = 30;
+    /// <summary>连接池空闲超时（秒）。
+    /// <para><b>0（默认）= 不覆盖驱动默认值</b>（Npgsql 300 秒 / MySqlConnector 180 秒）——
+    /// 由 Provider 原样保留。正数才覆盖。</para>
+    /// <para>为什么默认不再取 30：v5.6 实测该值会把驱动的空闲超时砍到 1/10~1/6，代价是
+    /// 间隔超过它之后的首次查询必须重建物理连接——跨网段实测 <c>SELECT 1</c> 池内 0.300 ms
+    /// vs 新建连接 13.523 ms（**多付 13.2 ms，44 倍**）。稀疏流量（查询间隔 &gt; 30 秒）会稳定踩到，
+    /// 且现象是"PalORM 慢"而非"配置不当"，极难归因。省服务端连接的收益改由显式配置获取。</para></summary>
+    public int PoolIdleTimeoutSeconds { get; init; }
 
     /// <summary>连接最大生命周期（默认 60 分钟）。</summary>
     public int PoolLifetimeMinutes { get; init; } = 60;
@@ -126,7 +132,8 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PoolIdleTimeoutSeconds, nameof(PoolIdleTimeoutSeconds));
+        // 0 = 不覆盖驱动默认值（合法值，见属性文档）；仅负数非法
+        ArgumentOutOfRangeException.ThrowIfNegative(PoolIdleTimeoutSeconds, nameof(PoolIdleTimeoutSeconds));
         // r19/ITM-695：PG 侧 checked(分钟*60) 会在极大值抛 OverflowException（Npgsql 连接串
         // 的 ConnectionLifetime 为 int 秒）——Validate 统一兜底上限，三 Provider 行为一致。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
@@ -142,11 +149,12 @@ public sealed record DbOptions
             ConnectionTimeout.TotalMilliseconds, uint.MaxValue - 1, nameof(ConnectionTimeout));
     }
 
-    /// <summary>连接池配置入口。所有数值必须为正数。</summary>
-    public DbOptions WithPool(int maxSize, int idleTimeoutSeconds = 30, int lifetimeMinutes = 60)
+    /// <summary>连接池配置入口。<paramref name="maxSize"/> 与 <paramref name="lifetimeMinutes"/>
+    /// 必须为正数；<paramref name="idleTimeoutSeconds"/> 可为 0（= 不覆盖驱动默认值，见属性文档）。</summary>
+    public DbOptions WithPool(int maxSize, int idleTimeoutSeconds = 0, int lifetimeMinutes = 60)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSize);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(idleTimeoutSeconds);
+        ArgumentOutOfRangeException.ThrowIfNegative(idleTimeoutSeconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(lifetimeMinutes);
         return this with
         {

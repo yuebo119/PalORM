@@ -115,6 +115,43 @@ public sealed class ProviderTests
     }
 
     [Test]
+    public async Task ProviderConnectionFactories_LeaveDriverIdleTimeoutAtDriverDefault_WhenNotConfigured()
+    {
+        // v5.6 契约：PoolIdleTimeoutSeconds 默认 0 = **不覆盖驱动默认值**（Npgsql 300 /
+        // MySqlConnector 180）。观察方式是连接串里该键的有无——builder 只序列化显式设过的键，
+        // 键缺席即"驱动默认原样保留"；一旦出现就说明被 PalORM 改写。
+        // 为什么值得一条用例：实测被改写时的代价是间隔超过该值后的首次查询多付 13.2 ms 重连
+        // （跨网段 SELECT 1 池内 0.300 ms vs 新建连接 13.523 ms），而这在应用侧表现为
+        // "PalORM 慢"，不会有人想到去查池空闲超时。
+        var defaults = new DbOptions { ConnectionString = "x" };
+        await using var postgres = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Database=test", defaults);
+        await using var mysql = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", defaults);
+
+        await Assert.That(postgres.ConnectionString).DoesNotContain("Connection Idle Lifetime");
+        await Assert.That(mysql.ConnectionString).DoesNotContain("Connection Idle Timeout");
+
+        // WithPool 只给池大小（Production 预设的形态）同样不覆盖空闲超时
+        var sized = new DbOptions { ConnectionString = "x" }.WithPool(maxSize: 100);
+        await using var postgresSized = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Database=test", sized);
+        await using var mysqlSized = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", sized);
+        await Assert.That(postgresSized.ConnectionString).DoesNotContain("Connection Idle Lifetime");
+        await Assert.That(mysqlSized.ConnectionString).DoesNotContain("Connection Idle Timeout");
+
+        // 显式给出正数才覆盖
+        var explicitIdle = new DbOptions { ConnectionString = "x" }.WithPool(23, 17);
+        await using var postgresExplicit = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Database=test", explicitIdle);
+        await using var mysqlExplicit = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", explicitIdle);
+        await Assert.That(postgresExplicit.ConnectionString).Contains("Connection Idle Lifetime=17");
+        await Assert.That(mysqlExplicit.ConnectionString).Contains("Connection Idle Timeout=17");
+    }
+
+    [Test]
     public async Task SqliteConnectionFactory_IgnoresUnsupportedPoolOptions()
     {
         // v5.6 契约变更：原实现抛 NotSupportedException，但 DbOptions.Production(...) 内部

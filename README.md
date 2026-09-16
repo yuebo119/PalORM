@@ -178,7 +178,7 @@ var env = DbOptions.FromEnvironment("PALORM_CONNECTION");
 | `MaxRetries` | `int` | 3 | 瞬时故障（连接失败/超时/死锁）最大重试次数。0=禁用重试。v5.4 起覆盖只读查询内置管线；写入路径不自动重试 | |
 | `RetryBackoff` | `Func<int, TimeSpan>?` | 指数退避 | 自定义重试间隔（参数=重试次数）。返回负值抛异常 | |
 | `MaxPoolSize` | `int` | 100 | 连接池最大连接数。**SQLite 忽略此项**（嵌入式库无服务端池可调） | |
-| `PoolIdleTimeoutSeconds` | `int` | 30 | 连接池空闲超时（秒）。超时后空闲连接被关闭。**该默认值会覆盖驱动的默认值**（Npgsql 300 / MySqlConnector 180），即比驱动更快回收空闲连接——好处是少占服务端连接，代价是间隔超过该值后的首个查询要重建物理连接：实测跨网段 `SELECT 1` 池内 **0.300 ms** vs 新建连接 **13.523 ms**（v5.6，远程库）。查询间隔常大于 30 秒的稀疏流量场景建议调大 | |
+| `PoolIdleTimeoutSeconds` | `int` | **0** | 连接池空闲超时（秒）。**0 = 不覆盖驱动默认值**（Npgsql 300 秒 / MySqlConnector 180 秒，原样保留）；正数才覆盖。v5.6 起默认由 30 改为 0——被覆盖时的代价是间隔超过该值后的首个查询必须重建物理连接：实测跨网段 `SELECT 1` 池内 **0.300 ms** vs 新建连接 **13.523 ms**（多付 13.2 ms）。若你的部署受服务端 `max_connections` 挤压、希望更快释放空闲连接，显式设一个较小值即可 | |
 | `PoolLifetimeMinutes` | `int` | 60 | 连接最大生命周期（分钟）。到期后强制重建，避免长期持有陈旧连接 | |
 | `PoolExplicitlyConfigured` | `bool` | false | `WithPool()` 设置后为 true。标记「池参数由调用方显式给出」 | |
 | `CircuitBreakerThreshold` | `int` | 5 | 断路器：连续失败次数阈值。0=禁用熔断 | |

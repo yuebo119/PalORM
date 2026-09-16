@@ -114,6 +114,22 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### 💔 行为变更（池空闲超时默认值）
+
+- **`DbOptions.PoolIdleTimeoutSeconds` 默认值 30 → 0**，`0` 语义为**不覆盖驱动默认值**
+  （Npgsql 300 秒 / MySqlConnector 180 秒原样保留）。`WithPool(...)` 的
+  `idleTimeoutSeconds` 默认同步改为 0，故 `Production(...)` 预设（只传池大小）也不再改空闲超时。
+  <br>**为什么改**：实测被覆盖时的代价是"间隔超过该值之后的首次查询必须重建物理连接"——
+  跨网段 `SELECT 1` 池内 **0.300 ms** vs 新建连接 **13.523 ms**，即**多付 13.2 ms（44 倍）**。
+  稀疏流量（查询间隔 &gt; 30 秒）会稳定踩到，而现象是"PalORM 慢"或"数据库慢"，
+  几乎不可能归因到池参数。省服务端连接的收益（原 30 秒的动机）改为由显式配置获取。
+  <br>**迁移**：依赖"30 秒回收空闲连接"的部署显式写
+  `WithPool(maxSize, idleTimeoutSeconds: 30, lifetimeMinutes)`；不写即为驱动默认。
+  合法值域由"正数"放宽为"非负"（0 合法）。
+  <br>**契约测试**：`ProviderConnectionFactories_LeaveDriverIdleTimeoutAtDriverDefault_WhenNotConfigured`
+  以"连接串里该键的有无"为观察面（builder 只序列化显式设过的键）——
+  默认与"只给池大小"两种形态断言键缺席，显式 17 断言键出现，双向可判。
+
 ### ⚡ 性能（MySQL BulkCopy：去掉 DataRow 层）
 
 - **批量插入的取值载体由 DataTable 换成 `EntityDataReader`**（新增 `src/PalORM.MySql/EntityDataReader.cs`）：

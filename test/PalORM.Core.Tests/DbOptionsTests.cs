@@ -27,10 +27,30 @@ public sealed class DbOptionsTests
     [Test]
     public async Task WithPool_RejectsNonPositiveValues()
     {
+        // v5.6：idleTimeoutSeconds 的合法值域由"正数"放宽为"非负"——0 = 不覆盖驱动默认值
+        // （见 DbOptions.PoolIdleTimeoutSeconds 文档）。maxSize 与 lifetimeMinutes 仍必须为正。
         var options = new DbOptions { ConnectionString = "test" };
         await Assert.That(() => options.WithPool(0)).Throws<ArgumentOutOfRangeException>();
-        await Assert.That(() => options.WithPool(1, 0)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => options.WithPool(1, -1)).Throws<ArgumentOutOfRangeException>();
         await Assert.That(() => options.WithPool(1, 1, 0)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task WithPool_IdleTimeoutZero_MeansDoNotOverrideDriverDefault()
+    {
+        var options = new DbOptions { ConnectionString = "test" };
+
+        // 缺省与显式 0 同义：两者都表示"不覆盖"，且都必须合法（原契约在此抛异常，
+        // 使「Production 预设 + 只想设池大小」这类调用无法表达意图）
+        await Assert.That(options.WithPool(1).PoolIdleTimeoutSeconds).IsEqualTo(0);
+        await Assert.That(options.WithPool(1, 0).PoolIdleTimeoutSeconds).IsEqualTo(0);
+        // 正数照常写入
+        await Assert.That(options.WithPool(1, 45).PoolIdleTimeoutSeconds).IsEqualTo(45);
+
+        // Validate 同步放宽：0 合法、负数仍拒绝
+        options.WithPool(1, 0).Validate();
+        await Assert.That(() => new DbOptions { ConnectionString = "test", PoolIdleTimeoutSeconds = -1 }.Validate())
+            .Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
