@@ -9,159 +9,46 @@ internal static class PalORM_RegistryInitializer
     [global::System.Runtime.CompilerServices.ModuleInitializer]
     internal static void Initialize()
     {
-        global::PalORM.PalORM_Runtime.Register(new global::PalORM.RegistryFragment
-        {
-            RowFactories = new global::System.Collections.Generic.Dictionary<global::System.Type, object>
-        {
-            [typeof(global::AllTypesEntity)] = RowFactory_global__AllTypesEntity_7f6c8145.Read,
-            [typeof(global::FullFeatureEntity)] = RowFactory_global__FullFeatureEntity_4964faa8.Read,
-            [typeof(global::ReservedWordEntity)] = RowFactory_global__ReservedWordEntity_c143a9c9.Read,
-            [typeof(global::InheritedEntity)] = RowFactory_global__InheritedEntity_3f5411cb.Read,
-        },
+        var draft = new RegistryDraft();
+        AddChunk0(draft);
+        Register(draft);
+    }
 
-            TableNames = new global::System.Collections.Generic.Dictionary<global::System.Type, string>
-        {
-            [typeof(global::AllTypesEntity)] = "all_types",
-            [typeof(global::FullFeatureEntity)] = "full_feature",
-            [typeof(global::ReservedWordEntity)] = "order",
-            [typeof(global::InheritedEntity)] = "inherited",
-        },
-
-            CommandSqlsByDialect = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CommandSqlByDialect>
-        {
-            [typeof(global::AllTypesEntity)] = new global::PalORM.CommandSqlByDialect(
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)",
-                    "UPDATE \"all_types\" SET \"int_value\" = @p0, \"short_value\" = @p1, \"byte_value\" = @p2, \"string_value\" = @p3, \"char_value\" = @p4, \"bool_value\" = @p5, \"decimal_value\" = @p6, \"double_value\" = @p7, \"float_value\" = @p8, \"datetime_value\" = @p9, \"guid_value\" = @p10, \"dto_value\" = @p11, \"date_value\" = @p12, \"time_value\" = @p13, \"bytes_value\" = @p14, \"nullable_int\" = @p15, \"nullable_string\" = @p16, \"nullable_guid\" = @p17, \"nullable_time\" = @p18, \"nullable_bytes\" = @p19 WHERE \"Id\" = @p20",
-                    "DELETE FROM \"all_types\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19) RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
-                    "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON CONFLICT (\"Id\") DO UPDATE SET \"int_value\" = excluded.\"int_value\", \"short_value\" = excluded.\"short_value\", \"byte_value\" = excluded.\"byte_value\", \"string_value\" = excluded.\"string_value\", \"char_value\" = excluded.\"char_value\", \"bool_value\" = excluded.\"bool_value\", \"decimal_value\" = excluded.\"decimal_value\", \"double_value\" = excluded.\"double_value\", \"float_value\" = excluded.\"float_value\", \"datetime_value\" = excluded.\"datetime_value\", \"guid_value\" = excluded.\"guid_value\", \"dto_value\" = excluded.\"dto_value\", \"date_value\" = excluded.\"date_value\", \"time_value\" = excluded.\"time_value\", \"bytes_value\" = excluded.\"bytes_value\", \"nullable_int\" = excluded.\"nullable_int\", \"nullable_string\" = excluded.\"nullable_string\", \"nullable_guid\" = excluded.\"nullable_guid\", \"nullable_time\" = excluded.\"nullable_time\", \"nullable_bytes\" = excluded.\"nullable_bytes\" RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
-                    "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON DUPLICATE KEY UPDATE \"int_value\" = VALUES(\"int_value\"), \"short_value\" = VALUES(\"short_value\"), \"byte_value\" = VALUES(\"byte_value\"), \"string_value\" = VALUES(\"string_value\"), \"char_value\" = VALUES(\"char_value\"), \"bool_value\" = VALUES(\"bool_value\"), \"decimal_value\" = VALUES(\"decimal_value\"), \"double_value\" = VALUES(\"double_value\"), \"float_value\" = VALUES(\"float_value\"), \"datetime_value\" = VALUES(\"datetime_value\"), \"guid_value\" = VALUES(\"guid_value\"), \"dto_value\" = VALUES(\"dto_value\"), \"date_value\" = VALUES(\"date_value\"), \"time_value\" = VALUES(\"time_value\"), \"bytes_value\" = VALUES(\"bytes_value\"), \"nullable_int\" = VALUES(\"nullable_int\"), \"nullable_string\" = VALUES(\"nullable_string\"), \"nullable_guid\" = VALUES(\"nullable_guid\"), \"nullable_time\" = VALUES(\"nullable_time\"), \"nullable_bytes\" = VALUES(\"nullable_bytes\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)",
-                    "UPDATE \"all_types\" SET \"int_value\" = @p0, \"short_value\" = @p1, \"byte_value\" = @p2, \"string_value\" = @p3, \"char_value\" = @p4, \"bool_value\" = @p5, \"decimal_value\" = @p6, \"double_value\" = @p7, \"float_value\" = @p8, \"datetime_value\" = @p9, \"guid_value\" = @p10, \"dto_value\" = @p11, \"date_value\" = @p12, \"time_value\" = @p13, \"bytes_value\" = @p14, \"nullable_int\" = @p15, \"nullable_string\" = @p16, \"nullable_guid\" = @p17, \"nullable_time\" = @p18, \"nullable_bytes\" = @p19 WHERE \"Id\" = @p20",
-                    "DELETE FROM \"all_types\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19) RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
-                    "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON CONFLICT (\"Id\") DO UPDATE SET \"int_value\" = excluded.\"int_value\", \"short_value\" = excluded.\"short_value\", \"byte_value\" = excluded.\"byte_value\", \"string_value\" = excluded.\"string_value\", \"char_value\" = excluded.\"char_value\", \"bool_value\" = excluded.\"bool_value\", \"decimal_value\" = excluded.\"decimal_value\", \"double_value\" = excluded.\"double_value\", \"float_value\" = excluded.\"float_value\", \"datetime_value\" = excluded.\"datetime_value\", \"guid_value\" = excluded.\"guid_value\", \"dto_value\" = excluded.\"dto_value\", \"date_value\" = excluded.\"date_value\", \"time_value\" = excluded.\"time_value\", \"bytes_value\" = excluded.\"bytes_value\", \"nullable_int\" = excluded.\"nullable_int\", \"nullable_string\" = excluded.\"nullable_string\", \"nullable_guid\" = excluded.\"nullable_guid\", \"nullable_time\" = excluded.\"nullable_time\", \"nullable_bytes\" = excluded.\"nullable_bytes\" RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
-                    "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON DUPLICATE KEY UPDATE \"int_value\" = VALUES(\"int_value\"), \"short_value\" = VALUES(\"short_value\"), \"byte_value\" = VALUES(\"byte_value\"), \"string_value\" = VALUES(\"string_value\"), \"char_value\" = VALUES(\"char_value\"), \"bool_value\" = VALUES(\"bool_value\"), \"decimal_value\" = VALUES(\"decimal_value\"), \"double_value\" = VALUES(\"double_value\"), \"float_value\" = VALUES(\"float_value\"), \"datetime_value\" = VALUES(\"datetime_value\"), \"guid_value\" = VALUES(\"guid_value\"), \"dto_value\" = VALUES(\"dto_value\"), \"date_value\" = VALUES(\"date_value\"), \"time_value\" = VALUES(\"time_value\"), \"bytes_value\" = VALUES(\"bytes_value\"), \"nullable_int\" = VALUES(\"nullable_int\"), \"nullable_string\" = VALUES(\"nullable_string\"), \"nullable_guid\" = VALUES(\"nullable_guid\"), \"nullable_time\" = VALUES(\"nullable_time\"), \"nullable_bytes\" = VALUES(\"nullable_bytes\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO `all_types` (`int_value`, `short_value`, `byte_value`, `string_value`, `char_value`, `bool_value`, `decimal_value`, `double_value`, `float_value`, `datetime_value`, `guid_value`, `dto_value`, `date_value`, `time_value`, `bytes_value`, `nullable_int`, `nullable_string`, `nullable_guid`, `nullable_time`, `nullable_bytes`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)",
-                    "UPDATE `all_types` SET `int_value` = @p0, `short_value` = @p1, `byte_value` = @p2, `string_value` = @p3, `char_value` = @p4, `bool_value` = @p5, `decimal_value` = @p6, `double_value` = @p7, `float_value` = @p8, `datetime_value` = @p9, `guid_value` = @p10, `dto_value` = @p11, `date_value` = @p12, `time_value` = @p13, `bytes_value` = @p14, `nullable_int` = @p15, `nullable_string` = @p16, `nullable_guid` = @p17, `nullable_time` = @p18, `nullable_bytes` = @p19 WHERE `Id` = @p20",
-                    "DELETE FROM `all_types` WHERE `Id` = @p0",
-                    "",
-                    "",
-                    "INSERT INTO `all_types` (`Id`, `int_value`, `short_value`, `byte_value`, `string_value`, `char_value`, `bool_value`, `decimal_value`, `double_value`, `float_value`, `datetime_value`, `guid_value`, `dto_value`, `date_value`, `time_value`, `bytes_value`, `nullable_int`, `nullable_string`, `nullable_guid`, `nullable_time`, `nullable_bytes`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON DUPLICATE KEY UPDATE `int_value` = VALUES(`int_value`), `short_value` = VALUES(`short_value`), `byte_value` = VALUES(`byte_value`), `string_value` = VALUES(`string_value`), `char_value` = VALUES(`char_value`), `bool_value` = VALUES(`bool_value`), `decimal_value` = VALUES(`decimal_value`), `double_value` = VALUES(`double_value`), `float_value` = VALUES(`float_value`), `datetime_value` = VALUES(`datetime_value`), `guid_value` = VALUES(`guid_value`), `dto_value` = VALUES(`dto_value`), `date_value` = VALUES(`date_value`), `time_value` = VALUES(`time_value`), `bytes_value` = VALUES(`bytes_value`), `nullable_int` = VALUES(`nullable_int`), `nullable_string` = VALUES(`nullable_string`), `nullable_guid` = VALUES(`nullable_guid`), `nullable_time` = VALUES(`nullable_time`), `nullable_bytes` = VALUES(`nullable_bytes`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO `all_types` (`int_value`, `short_value`, `byte_value`, `string_value`, `char_value`, `bool_value`, `decimal_value`, `double_value`, `float_value`, `datetime_value`, `guid_value`, `dto_value`, `date_value`, `time_value`, `bytes_value`, `nullable_int`, `nullable_string`, `nullable_guid`, `nullable_time`, `nullable_bytes`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19); SELECT LAST_INSERT_ID()")
-            ),
-            [typeof(global::FullFeatureEntity)] = new global::PalORM.CommandSqlByDialect(
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-                    "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7, \"sensitive_value\" = @p8 WHERE \"Id\" = @p9",
-                    "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
-                    "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
-                    "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON DUPLICATE KEY UPDATE \"code\" = VALUES(\"code\"), \"kind\" = VALUES(\"kind\"), \"external_id\" = VALUES(\"external_id\"), \"payload\" = VALUES(\"payload\"), \"raw_json\" = VALUES(\"raw_json\"), \"uniq_token\" = VALUES(\"uniq_token\"), \"deleted_at\" = VALUES(\"deleted_at\"), \"tenant_id\" = VALUES(\"tenant_id\"), \"sensitive_value\" = VALUES(\"sensitive_value\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-                    "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7, \"sensitive_value\" = @p8 WHERE \"Id\" = @p9",
-                    "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
-                    "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
-                    "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON DUPLICATE KEY UPDATE \"code\" = VALUES(\"code\"), \"kind\" = VALUES(\"kind\"), \"external_id\" = VALUES(\"external_id\"), \"payload\" = VALUES(\"payload\"), \"raw_json\" = VALUES(\"raw_json\"), \"uniq_token\" = VALUES(\"uniq_token\"), \"deleted_at\" = VALUES(\"deleted_at\"), \"tenant_id\" = VALUES(\"tenant_id\"), \"sensitive_value\" = VALUES(\"sensitive_value\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-                    "UPDATE `full_feature` SET `code` = @p0, `kind` = @p1, `external_id` = @p2, `payload` = @p3, `raw_json` = @p4, `uniq_token` = @p5, `deleted_at` = @p6, `tenant_id` = @p7, `sensitive_value` = @p8 WHERE `Id` = @p9",
-                    "DELETE FROM `full_feature` WHERE `Id` = @p0",
-                    "",
-                    "",
-                    "INSERT INTO `full_feature` (`Id`, `code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON DUPLICATE KEY UPDATE `code` = VALUES(`code`), `kind` = VALUES(`kind`), `external_id` = VALUES(`external_id`), `payload` = VALUES(`payload`), `raw_json` = VALUES(`raw_json`), `uniq_token` = VALUES(`uniq_token`), `deleted_at` = VALUES(`deleted_at`), `tenant_id` = VALUES(`tenant_id`), `sensitive_value` = VALUES(`sensitive_value`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8); SELECT LAST_INSERT_ID()")
-            ),
-            [typeof(global::ReservedWordEntity)] = new global::PalORM.CommandSqlByDialect(
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1)",
-                    "UPDATE \"order\" SET \"select\" = @p0 WHERE \"Id\" = @p1",
-                    "DELETE FROM \"order\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) RETURNING \"Id\", \"select\"",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON CONFLICT (\"Id\") DO UPDATE SET \"select\" = excluded.\"select\" RETURNING \"Id\", \"select\"",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE \"select\" = VALUES(\"select\")",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1)",
-                    "UPDATE \"order\" SET \"select\" = @p0 WHERE \"Id\" = @p1",
-                    "DELETE FROM \"order\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) RETURNING \"Id\", \"select\"",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON CONFLICT (\"Id\") DO UPDATE SET \"select\" = excluded.\"select\" RETURNING \"Id\", \"select\"",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE \"select\" = VALUES(\"select\")",
-                    "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO `order` (`Id`, `select`) VALUES (@p0, @p1)",
-                    "UPDATE `order` SET `select` = @p0 WHERE `Id` = @p1",
-                    "DELETE FROM `order` WHERE `Id` = @p0",
-                    "",
-                    "",
-                    "INSERT INTO `order` (`Id`, `select`) VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE `select` = VALUES(`select`)",
-                    "INSERT INTO `order` (`Id`, `select`) VALUES (@p0, @p1); SELECT LAST_INSERT_ID()")
-            ),
-            [typeof(global::InheritedEntity)] = new global::PalORM.CommandSqlByDialect(
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2)",
-                    "UPDATE \"inherited\" SET \"name\" = @p0, \"created_by\" = @p1, \"created_at\" = @p2 WHERE \"Id\" = @p3",
-                    "DELETE FROM \"inherited\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2) RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
-                    "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (\"Id\") DO UPDATE SET \"name\" = excluded.\"name\", \"created_by\" = excluded.\"created_by\", \"created_at\" = excluded.\"created_at\" RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
-                    "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE \"name\" = VALUES(\"name\"), \"created_by\" = VALUES(\"created_by\"), \"created_at\" = VALUES(\"created_at\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2)",
-                    "UPDATE \"inherited\" SET \"name\" = @p0, \"created_by\" = @p1, \"created_at\" = @p2 WHERE \"Id\" = @p3",
-                    "DELETE FROM \"inherited\" WHERE \"Id\" = @p0",
-                    "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2) RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
-                    "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (\"Id\") DO UPDATE SET \"name\" = excluded.\"name\", \"created_by\" = excluded.\"created_by\", \"created_at\" = excluded.\"created_at\" RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
-                    "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE \"name\" = VALUES(\"name\"), \"created_by\" = VALUES(\"created_by\"), \"created_at\" = VALUES(\"created_at\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()"),
-                new global::PalORM.CommandSqlSet(
-                    "INSERT INTO `inherited` (`name`, `created_by`, `created_at`) VALUES (@p0, @p1, @p2)",
-                    "UPDATE `inherited` SET `name` = @p0, `created_by` = @p1, `created_at` = @p2 WHERE `Id` = @p3",
-                    "DELETE FROM `inherited` WHERE `Id` = @p0",
-                    "",
-                    "",
-                    "INSERT INTO `inherited` (`Id`, `name`, `created_by`, `created_at`) VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `created_by` = VALUES(`created_by`), `created_at` = VALUES(`created_at`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
-                    "INSERT INTO `inherited` (`name`, `created_by`, `created_at`) VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()")
-            ),
-        },
-
-            BindInsert = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object, int>>
-        {
-            [typeof(global::AllTypesEntity)] = (cmd, obj, off) => CommandFactory_global__AllTypesEntity_7f6c8145.BindInsertToBatch(cmd, (global::AllTypesEntity)obj, off),
-            [typeof(global::FullFeatureEntity)] = (cmd, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindInsertToBatch(cmd, (global::FullFeatureEntity)obj, off),
-            [typeof(global::ReservedWordEntity)] = (cmd, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindInsertToBatch(cmd, (global::ReservedWordEntity)obj, off),
-            [typeof(global::InheritedEntity)] = (cmd, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindInsertToBatch(cmd, (global::InheritedEntity)obj, off),
-        },
-
-            BindUpdate = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object>>
-        {
-            [typeof(global::AllTypesEntity)] = (cmd, obj) => CommandFactory_global__AllTypesEntity_7f6c8145.BindUpdate(cmd, (global::AllTypesEntity)obj),
-            [typeof(global::FullFeatureEntity)] = (cmd, obj) => CommandFactory_global__FullFeatureEntity_4964faa8.BindUpdate(cmd, (global::FullFeatureEntity)obj),
-            [typeof(global::ReservedWordEntity)] = (cmd, obj) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindUpdate(cmd, (global::ReservedWordEntity)obj),
-            [typeof(global::InheritedEntity)] = (cmd, obj) => CommandFactory_global__InheritedEntity_3f5411cb.BindUpdate(cmd, (global::InheritedEntity)obj),
-        },
-
-            BindDelete = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object>>
-        {
-            [typeof(global::AllTypesEntity)] = (cmd, key) => CommandFactory_global__AllTypesEntity_7f6c8145.BindDelete(cmd, key),
-            [typeof(global::FullFeatureEntity)] = (cmd, key) => CommandFactory_global__FullFeatureEntity_4964faa8.BindDelete(cmd, key),
-            [typeof(global::ReservedWordEntity)] = (cmd, key) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindDelete(cmd, key),
-            [typeof(global::InheritedEntity)] = (cmd, key) => CommandFactory_global__InheritedEntity_3f5411cb.BindDelete(cmd, key),
-        },
-
-            CrudMetadatas = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CrudMetadata>
-        {
-            [typeof(global::AllTypesEntity)] = new global::PalORM.CrudMetadata(
+    /// <summary>注册 4 个实体（估算 IL ≈5940 B）——分块边界即单方法 IL 的上界。</summary>
+    private static void AddChunk0(RegistryDraft draft)
+    {
+        draft.RowFactories[typeof(global::AllTypesEntity)] = RowFactory_global__AllTypesEntity_7f6c8145.Read;
+        draft.TableNames[typeof(global::AllTypesEntity)] = "all_types";
+        draft.CommandSqlsByDialect[typeof(global::AllTypesEntity)] = new global::PalORM.CommandSqlByDialect(
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)",
+                "UPDATE \"all_types\" SET \"int_value\" = @p0, \"short_value\" = @p1, \"byte_value\" = @p2, \"string_value\" = @p3, \"char_value\" = @p4, \"bool_value\" = @p5, \"decimal_value\" = @p6, \"double_value\" = @p7, \"float_value\" = @p8, \"datetime_value\" = @p9, \"guid_value\" = @p10, \"dto_value\" = @p11, \"date_value\" = @p12, \"time_value\" = @p13, \"bytes_value\" = @p14, \"nullable_int\" = @p15, \"nullable_string\" = @p16, \"nullable_guid\" = @p17, \"nullable_time\" = @p18, \"nullable_bytes\" = @p19 WHERE \"Id\" = @p20",
+                "DELETE FROM \"all_types\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19) RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
+                "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON CONFLICT (\"Id\") DO UPDATE SET \"int_value\" = excluded.\"int_value\", \"short_value\" = excluded.\"short_value\", \"byte_value\" = excluded.\"byte_value\", \"string_value\" = excluded.\"string_value\", \"char_value\" = excluded.\"char_value\", \"bool_value\" = excluded.\"bool_value\", \"decimal_value\" = excluded.\"decimal_value\", \"double_value\" = excluded.\"double_value\", \"float_value\" = excluded.\"float_value\", \"datetime_value\" = excluded.\"datetime_value\", \"guid_value\" = excluded.\"guid_value\", \"dto_value\" = excluded.\"dto_value\", \"date_value\" = excluded.\"date_value\", \"time_value\" = excluded.\"time_value\", \"bytes_value\" = excluded.\"bytes_value\", \"nullable_int\" = excluded.\"nullable_int\", \"nullable_string\" = excluded.\"nullable_string\", \"nullable_guid\" = excluded.\"nullable_guid\", \"nullable_time\" = excluded.\"nullable_time\", \"nullable_bytes\" = excluded.\"nullable_bytes\" RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
+                "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON DUPLICATE KEY UPDATE \"int_value\" = VALUES(\"int_value\"), \"short_value\" = VALUES(\"short_value\"), \"byte_value\" = VALUES(\"byte_value\"), \"string_value\" = VALUES(\"string_value\"), \"char_value\" = VALUES(\"char_value\"), \"bool_value\" = VALUES(\"bool_value\"), \"decimal_value\" = VALUES(\"decimal_value\"), \"double_value\" = VALUES(\"double_value\"), \"float_value\" = VALUES(\"float_value\"), \"datetime_value\" = VALUES(\"datetime_value\"), \"guid_value\" = VALUES(\"guid_value\"), \"dto_value\" = VALUES(\"dto_value\"), \"date_value\" = VALUES(\"date_value\"), \"time_value\" = VALUES(\"time_value\"), \"bytes_value\" = VALUES(\"bytes_value\"), \"nullable_int\" = VALUES(\"nullable_int\"), \"nullable_string\" = VALUES(\"nullable_string\"), \"nullable_guid\" = VALUES(\"nullable_guid\"), \"nullable_time\" = VALUES(\"nullable_time\"), \"nullable_bytes\" = VALUES(\"nullable_bytes\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
+                "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)",
+                "UPDATE \"all_types\" SET \"int_value\" = @p0, \"short_value\" = @p1, \"byte_value\" = @p2, \"string_value\" = @p3, \"char_value\" = @p4, \"bool_value\" = @p5, \"decimal_value\" = @p6, \"double_value\" = @p7, \"float_value\" = @p8, \"datetime_value\" = @p9, \"guid_value\" = @p10, \"dto_value\" = @p11, \"date_value\" = @p12, \"time_value\" = @p13, \"bytes_value\" = @p14, \"nullable_int\" = @p15, \"nullable_string\" = @p16, \"nullable_guid\" = @p17, \"nullable_time\" = @p18, \"nullable_bytes\" = @p19 WHERE \"Id\" = @p20",
+                "DELETE FROM \"all_types\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19) RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
+                "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON CONFLICT (\"Id\") DO UPDATE SET \"int_value\" = excluded.\"int_value\", \"short_value\" = excluded.\"short_value\", \"byte_value\" = excluded.\"byte_value\", \"string_value\" = excluded.\"string_value\", \"char_value\" = excluded.\"char_value\", \"bool_value\" = excluded.\"bool_value\", \"decimal_value\" = excluded.\"decimal_value\", \"double_value\" = excluded.\"double_value\", \"float_value\" = excluded.\"float_value\", \"datetime_value\" = excluded.\"datetime_value\", \"guid_value\" = excluded.\"guid_value\", \"dto_value\" = excluded.\"dto_value\", \"date_value\" = excluded.\"date_value\", \"time_value\" = excluded.\"time_value\", \"bytes_value\" = excluded.\"bytes_value\", \"nullable_int\" = excluded.\"nullable_int\", \"nullable_string\" = excluded.\"nullable_string\", \"nullable_guid\" = excluded.\"nullable_guid\", \"nullable_time\" = excluded.\"nullable_time\", \"nullable_bytes\" = excluded.\"nullable_bytes\" RETURNING \"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\"",
+                "INSERT INTO \"all_types\" (\"Id\", \"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON DUPLICATE KEY UPDATE \"int_value\" = VALUES(\"int_value\"), \"short_value\" = VALUES(\"short_value\"), \"byte_value\" = VALUES(\"byte_value\"), \"string_value\" = VALUES(\"string_value\"), \"char_value\" = VALUES(\"char_value\"), \"bool_value\" = VALUES(\"bool_value\"), \"decimal_value\" = VALUES(\"decimal_value\"), \"double_value\" = VALUES(\"double_value\"), \"float_value\" = VALUES(\"float_value\"), \"datetime_value\" = VALUES(\"datetime_value\"), \"guid_value\" = VALUES(\"guid_value\"), \"dto_value\" = VALUES(\"dto_value\"), \"date_value\" = VALUES(\"date_value\"), \"time_value\" = VALUES(\"time_value\"), \"bytes_value\" = VALUES(\"bytes_value\"), \"nullable_int\" = VALUES(\"nullable_int\"), \"nullable_string\" = VALUES(\"nullable_string\"), \"nullable_guid\" = VALUES(\"nullable_guid\"), \"nullable_time\" = VALUES(\"nullable_time\"), \"nullable_bytes\" = VALUES(\"nullable_bytes\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
+                "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO `all_types` (`int_value`, `short_value`, `byte_value`, `string_value`, `char_value`, `bool_value`, `decimal_value`, `double_value`, `float_value`, `datetime_value`, `guid_value`, `dto_value`, `date_value`, `time_value`, `bytes_value`, `nullable_int`, `nullable_string`, `nullable_guid`, `nullable_time`, `nullable_bytes`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)",
+                "UPDATE `all_types` SET `int_value` = @p0, `short_value` = @p1, `byte_value` = @p2, `string_value` = @p3, `char_value` = @p4, `bool_value` = @p5, `decimal_value` = @p6, `double_value` = @p7, `float_value` = @p8, `datetime_value` = @p9, `guid_value` = @p10, `dto_value` = @p11, `date_value` = @p12, `time_value` = @p13, `bytes_value` = @p14, `nullable_int` = @p15, `nullable_string` = @p16, `nullable_guid` = @p17, `nullable_time` = @p18, `nullable_bytes` = @p19 WHERE `Id` = @p20",
+                "DELETE FROM `all_types` WHERE `Id` = @p0",
+                "",
+                "",
+                "INSERT INTO `all_types` (`Id`, `int_value`, `short_value`, `byte_value`, `string_value`, `char_value`, `bool_value`, `decimal_value`, `double_value`, `float_value`, `datetime_value`, `guid_value`, `dto_value`, `date_value`, `time_value`, `bytes_value`, `nullable_int`, `nullable_string`, `nullable_guid`, `nullable_time`, `nullable_bytes`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20) ON DUPLICATE KEY UPDATE `int_value` = VALUES(`int_value`), `short_value` = VALUES(`short_value`), `byte_value` = VALUES(`byte_value`), `string_value` = VALUES(`string_value`), `char_value` = VALUES(`char_value`), `bool_value` = VALUES(`bool_value`), `decimal_value` = VALUES(`decimal_value`), `double_value` = VALUES(`double_value`), `float_value` = VALUES(`float_value`), `datetime_value` = VALUES(`datetime_value`), `guid_value` = VALUES(`guid_value`), `dto_value` = VALUES(`dto_value`), `date_value` = VALUES(`date_value`), `time_value` = VALUES(`time_value`), `bytes_value` = VALUES(`bytes_value`), `nullable_int` = VALUES(`nullable_int`), `nullable_string` = VALUES(`nullable_string`), `nullable_guid` = VALUES(`nullable_guid`), `nullable_time` = VALUES(`nullable_time`), `nullable_bytes` = VALUES(`nullable_bytes`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
+                "INSERT INTO `all_types` (`int_value`, `short_value`, `byte_value`, `string_value`, `char_value`, `bool_value`, `decimal_value`, `double_value`, `float_value`, `datetime_value`, `guid_value`, `dto_value`, `date_value`, `time_value`, `bytes_value`, `nullable_int`, `nullable_string`, `nullable_guid`, `nullable_time`, `nullable_bytes`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19); SELECT LAST_INSERT_ID()")
+        );
+        draft.BindInsert[typeof(global::AllTypesEntity)] = (cmd, obj, off) => CommandFactory_global__AllTypesEntity_7f6c8145.BindInsertToBatch(cmd, (global::AllTypesEntity)obj, off);
+        draft.BindUpdate[typeof(global::AllTypesEntity)] = (cmd, obj) => CommandFactory_global__AllTypesEntity_7f6c8145.BindUpdate(cmd, (global::AllTypesEntity)obj);
+        draft.BindDelete[typeof(global::AllTypesEntity)] = (cmd, key) => CommandFactory_global__AllTypesEntity_7f6c8145.BindDelete(cmd, key);
+        draft.CrudMetadatas[typeof(global::AllTypesEntity)] = new global::PalORM.CrudMetadata(
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__AllTypesEntity_7f6c8145.BindInsertToBatch(cmd, (global::AllTypesEntity)obj, off),
                     (parameters, obj, off) => CommandFactory_global__AllTypesEntity_7f6c8145.BindInsertValues(parameters, (global::AllTypesEntity)obj, off),
@@ -174,8 +61,76 @@ internal static class PalORM_RegistryInitializer
                     new[] { "Id", "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "bytes_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time", "nullable_bytes" },
                     new[] { "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "bytes_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time", "nullable_bytes" }),
                 null,
-                obj => CommandFactory_global__AllTypesEntity_7f6c8145.HasDefaultKey((global::AllTypesEntity)obj)),
-            [typeof(global::FullFeatureEntity)] = new global::PalORM.CrudMetadata(
+                obj => CommandFactory_global__AllTypesEntity_7f6c8145.HasDefaultKey((global::AllTypesEntity)obj));
+        draft.EntityFeatures[typeof(global::AllTypesEntity)] = global::PalORM.EntityFeatures.None;
+        draft.PkColumns[typeof(global::AllTypesEntity)] = "Id";
+        draft.ColumnNames[typeof(global::AllTypesEntity)] = new[] { "Id", "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "bytes_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time", "nullable_bytes" };
+        draft.PropertyToColumn[typeof(global::AllTypesEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+        {
+            ["Id"] = "Id",
+            ["IntValue"] = "int_value",
+            ["ShortValue"] = "short_value",
+            ["ByteValue"] = "byte_value",
+            ["StringValue"] = "string_value",
+            ["CharValue"] = "char_value",
+            ["BoolValue"] = "bool_value",
+            ["DecimalValue"] = "decimal_value",
+            ["DoubleValue"] = "double_value",
+            ["FloatValue"] = "float_value",
+            ["DateTimeValue"] = "datetime_value",
+            ["GuidValue"] = "guid_value",
+            ["DateTimeOffsetValue"] = "dto_value",
+            ["DateOnlyValue"] = "date_value",
+            ["TimeOnlyValue"] = "time_value",
+            ["BytesValue"] = "bytes_value",
+            ["NullableInt"] = "nullable_int",
+            ["NullableString"] = "nullable_string",
+            ["NullableGuid"] = "nullable_guid",
+            ["NullableTimeOnly"] = "nullable_time",
+            ["NullableBytes"] = "nullable_bytes",
+        };
+        draft.CreateTableSqlByDialect[typeof(global::AllTypesEntity)] = new global::PalORM.CreateTableSqlSet(
+                Migration_global__AllTypesEntity_7f6c8145.CreateTableSqlite,
+                Migration_global__AllTypesEntity_7f6c8145.CreateTablePostgreSql,
+                Migration_global__AllTypesEntity_7f6c8145.CreateTableMySql);
+        draft.CreateIndexSqlByDialect[typeof(global::AllTypesEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesSqlite,
+                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesPostgreSql,
+                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesMySql);
+        draft.SetIdDelegates[typeof(global::AllTypesEntity)] = (entity, id) => CommandFactory_global__AllTypesEntity_7f6c8145.SetId((global::AllTypesEntity)entity, id);
+
+        draft.RowFactories[typeof(global::FullFeatureEntity)] = RowFactory_global__FullFeatureEntity_4964faa8.Read;
+        draft.TableNames[typeof(global::FullFeatureEntity)] = "full_feature";
+        draft.CommandSqlsByDialect[typeof(global::FullFeatureEntity)] = new global::PalORM.CommandSqlByDialect(
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
+                "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7, \"sensitive_value\" = @p8 WHERE \"Id\" = @p9",
+                "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON DUPLICATE KEY UPDATE \"code\" = VALUES(\"code\"), \"kind\" = VALUES(\"kind\"), \"external_id\" = VALUES(\"external_id\"), \"payload\" = VALUES(\"payload\"), \"raw_json\" = VALUES(\"raw_json\"), \"uniq_token\" = VALUES(\"uniq_token\"), \"deleted_at\" = VALUES(\"deleted_at\"), \"tenant_id\" = VALUES(\"tenant_id\"), \"sensitive_value\" = VALUES(\"sensitive_value\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
+                "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7, \"sensitive_value\" = @p8 WHERE \"Id\" = @p9",
+                "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON DUPLICATE KEY UPDATE \"code\" = VALUES(\"code\"), \"kind\" = VALUES(\"kind\"), \"external_id\" = VALUES(\"external_id\"), \"payload\" = VALUES(\"payload\"), \"raw_json\" = VALUES(\"raw_json\"), \"uniq_token\" = VALUES(\"uniq_token\"), \"deleted_at\" = VALUES(\"deleted_at\"), \"tenant_id\" = VALUES(\"tenant_id\"), \"sensitive_value\" = VALUES(\"sensitive_value\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
+                "UPDATE `full_feature` SET `code` = @p0, `kind` = @p1, `external_id` = @p2, `payload` = @p3, `raw_json` = @p4, `uniq_token` = @p5, `deleted_at` = @p6, `tenant_id` = @p7, `sensitive_value` = @p8 WHERE `Id` = @p9",
+                "DELETE FROM `full_feature` WHERE `Id` = @p0",
+                "",
+                "",
+                "INSERT INTO `full_feature` (`Id`, `code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON DUPLICATE KEY UPDATE `code` = VALUES(`code`), `kind` = VALUES(`kind`), `external_id` = VALUES(`external_id`), `payload` = VALUES(`payload`), `raw_json` = VALUES(`raw_json`), `uniq_token` = VALUES(`uniq_token`), `deleted_at` = VALUES(`deleted_at`), `tenant_id` = VALUES(`tenant_id`), `sensitive_value` = VALUES(`sensitive_value`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
+                "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8); SELECT LAST_INSERT_ID()")
+        );
+        draft.BindInsert[typeof(global::FullFeatureEntity)] = (cmd, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindInsertToBatch(cmd, (global::FullFeatureEntity)obj, off);
+        draft.BindUpdate[typeof(global::FullFeatureEntity)] = (cmd, obj) => CommandFactory_global__FullFeatureEntity_4964faa8.BindUpdate(cmd, (global::FullFeatureEntity)obj);
+        draft.BindDelete[typeof(global::FullFeatureEntity)] = (cmd, key) => CommandFactory_global__FullFeatureEntity_4964faa8.BindDelete(cmd, key);
+        draft.CrudMetadatas[typeof(global::FullFeatureEntity)] = new global::PalORM.CrudMetadata(
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindInsertToBatch(cmd, (global::FullFeatureEntity)obj, off),
                     (parameters, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindInsertValues(parameters, (global::FullFeatureEntity)obj, off),
@@ -188,8 +143,71 @@ internal static class PalORM_RegistryInitializer
                     new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id", "sensitive_value" },
                     new[] { "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id", "sensitive_value" }),
                 null,
-                obj => CommandFactory_global__FullFeatureEntity_4964faa8.HasDefaultKey((global::FullFeatureEntity)obj)),
-            [typeof(global::ReservedWordEntity)] = new global::PalORM.CrudMetadata(
+                obj => CommandFactory_global__FullFeatureEntity_4964faa8.HasDefaultKey((global::FullFeatureEntity)obj));
+        draft.EntityFeatures[typeof(global::FullFeatureEntity)] = global::PalORM.EntityFeatures.SoftDelete | global::PalORM.EntityFeatures.TenantAware;
+        draft.PkColumns[typeof(global::FullFeatureEntity)] = "Id";
+        draft.ColumnNames[typeof(global::FullFeatureEntity)] = new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "row_updated_at", "total_display", "deleted_at", "tenant_id", "sensitive_value" };
+        draft.PropertyToColumn[typeof(global::FullFeatureEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+        {
+            ["Id"] = "Id",
+            ["Code"] = "code",
+            ["Kind"] = "kind",
+            ["ExternalId"] = "external_id",
+            ["Payload"] = "payload",
+            ["RawJson"] = "raw_json",
+            ["UniqueToken"] = "uniq_token",
+            ["RowUpdatedAt"] = "row_updated_at",
+            ["TotalDisplay"] = "total_display",
+            ["DeletedAt"] = "deleted_at",
+            ["TenantId"] = "tenant_id",
+            ["SensitiveValue"] = "sensitive_value",
+        };
+        draft.CreateTableSqlByDialect[typeof(global::FullFeatureEntity)] = new global::PalORM.CreateTableSqlSet(
+                Migration_global__FullFeatureEntity_4964faa8.CreateTableSqlite,
+                Migration_global__FullFeatureEntity_4964faa8.CreateTablePostgreSql,
+                Migration_global__FullFeatureEntity_4964faa8.CreateTableMySql);
+        draft.CreateIndexSqlByDialect[typeof(global::FullFeatureEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__FullFeatureEntity_4964faa8.CreateIndexesSqlite,
+                Migration_global__FullFeatureEntity_4964faa8.CreateIndexesPostgreSql,
+                Migration_global__FullFeatureEntity_4964faa8.CreateIndexesMySql);
+        draft.SetIdDelegates[typeof(global::FullFeatureEntity)] = (entity, id) => CommandFactory_global__FullFeatureEntity_4964faa8.SetId((global::FullFeatureEntity)entity, id);
+        draft.SensitiveColumnMasks[typeof(global::FullFeatureEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+        {
+            ["sensitive_value"] = "***MASKED***",
+        };
+
+        draft.RowFactories[typeof(global::ReservedWordEntity)] = RowFactory_global__ReservedWordEntity_c143a9c9.Read;
+        draft.TableNames[typeof(global::ReservedWordEntity)] = "order";
+        draft.CommandSqlsByDialect[typeof(global::ReservedWordEntity)] = new global::PalORM.CommandSqlByDialect(
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1)",
+                "UPDATE \"order\" SET \"select\" = @p0 WHERE \"Id\" = @p1",
+                "DELETE FROM \"order\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) RETURNING \"Id\", \"select\"",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON CONFLICT (\"Id\") DO UPDATE SET \"select\" = excluded.\"select\" RETURNING \"Id\", \"select\"",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE \"select\" = VALUES(\"select\")",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1)",
+                "UPDATE \"order\" SET \"select\" = @p0 WHERE \"Id\" = @p1",
+                "DELETE FROM \"order\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) RETURNING \"Id\", \"select\"",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON CONFLICT (\"Id\") DO UPDATE SET \"select\" = excluded.\"select\" RETURNING \"Id\", \"select\"",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE \"select\" = VALUES(\"select\")",
+                "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO `order` (`Id`, `select`) VALUES (@p0, @p1)",
+                "UPDATE `order` SET `select` = @p0 WHERE `Id` = @p1",
+                "DELETE FROM `order` WHERE `Id` = @p0",
+                "",
+                "",
+                "INSERT INTO `order` (`Id`, `select`) VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE `select` = VALUES(`select`)",
+                "INSERT INTO `order` (`Id`, `select`) VALUES (@p0, @p1); SELECT LAST_INSERT_ID()")
+        );
+        draft.BindInsert[typeof(global::ReservedWordEntity)] = (cmd, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindInsertToBatch(cmd, (global::ReservedWordEntity)obj, off);
+        draft.BindUpdate[typeof(global::ReservedWordEntity)] = (cmd, obj) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindUpdate(cmd, (global::ReservedWordEntity)obj);
+        draft.BindDelete[typeof(global::ReservedWordEntity)] = (cmd, key) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindDelete(cmd, key);
+        draft.CrudMetadatas[typeof(global::ReservedWordEntity)] = new global::PalORM.CrudMetadata(
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindInsertToBatch(cmd, (global::ReservedWordEntity)obj, off),
                     (parameters, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindInsertValues(parameters, (global::ReservedWordEntity)obj, off),
@@ -202,8 +220,56 @@ internal static class PalORM_RegistryInitializer
                     new[] { "Id", "select" },
                     new[] { "select" }),
                 null,
-                obj => CommandFactory_global__ReservedWordEntity_c143a9c9.HasDefaultKey((global::ReservedWordEntity)obj)),
-            [typeof(global::InheritedEntity)] = new global::PalORM.CrudMetadata(
+                obj => CommandFactory_global__ReservedWordEntity_c143a9c9.HasDefaultKey((global::ReservedWordEntity)obj));
+        draft.EntityFeatures[typeof(global::ReservedWordEntity)] = global::PalORM.EntityFeatures.None;
+        draft.PkColumns[typeof(global::ReservedWordEntity)] = "Id";
+        draft.ColumnNames[typeof(global::ReservedWordEntity)] = new[] { "Id", "select" };
+        draft.PropertyToColumn[typeof(global::ReservedWordEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+        {
+            ["Id"] = "Id",
+            ["Value"] = "select",
+        };
+        draft.CreateTableSqlByDialect[typeof(global::ReservedWordEntity)] = new global::PalORM.CreateTableSqlSet(
+                Migration_global__ReservedWordEntity_c143a9c9.CreateTableSqlite,
+                Migration_global__ReservedWordEntity_c143a9c9.CreateTablePostgreSql,
+                Migration_global__ReservedWordEntity_c143a9c9.CreateTableMySql);
+        draft.CreateIndexSqlByDialect[typeof(global::ReservedWordEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesSqlite,
+                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesPostgreSql,
+                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesMySql);
+
+        draft.RowFactories[typeof(global::InheritedEntity)] = RowFactory_global__InheritedEntity_3f5411cb.Read;
+        draft.TableNames[typeof(global::InheritedEntity)] = "inherited";
+        draft.CommandSqlsByDialect[typeof(global::InheritedEntity)] = new global::PalORM.CommandSqlByDialect(
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2)",
+                "UPDATE \"inherited\" SET \"name\" = @p0, \"created_by\" = @p1, \"created_at\" = @p2 WHERE \"Id\" = @p3",
+                "DELETE FROM \"inherited\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2) RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
+                "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (\"Id\") DO UPDATE SET \"name\" = excluded.\"name\", \"created_by\" = excluded.\"created_by\", \"created_at\" = excluded.\"created_at\" RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
+                "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE \"name\" = VALUES(\"name\"), \"created_by\" = VALUES(\"created_by\"), \"created_at\" = VALUES(\"created_at\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
+                "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2)",
+                "UPDATE \"inherited\" SET \"name\" = @p0, \"created_by\" = @p1, \"created_at\" = @p2 WHERE \"Id\" = @p3",
+                "DELETE FROM \"inherited\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2) RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
+                "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (\"Id\") DO UPDATE SET \"name\" = excluded.\"name\", \"created_by\" = excluded.\"created_by\", \"created_at\" = excluded.\"created_at\" RETURNING \"Id\", \"name\", \"created_by\", \"created_at\"",
+                "INSERT INTO \"inherited\" (\"Id\", \"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE \"name\" = VALUES(\"name\"), \"created_by\" = VALUES(\"created_by\"), \"created_at\" = VALUES(\"created_at\"), \"Id\" = LAST_INSERT_ID(\"Id\"); SELECT LAST_INSERT_ID()",
+                "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()"),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO `inherited` (`name`, `created_by`, `created_at`) VALUES (@p0, @p1, @p2)",
+                "UPDATE `inherited` SET `name` = @p0, `created_by` = @p1, `created_at` = @p2 WHERE `Id` = @p3",
+                "DELETE FROM `inherited` WHERE `Id` = @p0",
+                "",
+                "",
+                "INSERT INTO `inherited` (`Id`, `name`, `created_by`, `created_at`) VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `created_by` = VALUES(`created_by`), `created_at` = VALUES(`created_at`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
+                "INSERT INTO `inherited` (`name`, `created_by`, `created_at`) VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()")
+        );
+        draft.BindInsert[typeof(global::InheritedEntity)] = (cmd, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindInsertToBatch(cmd, (global::InheritedEntity)obj, off);
+        draft.BindUpdate[typeof(global::InheritedEntity)] = (cmd, obj) => CommandFactory_global__InheritedEntity_3f5411cb.BindUpdate(cmd, (global::InheritedEntity)obj);
+        draft.BindDelete[typeof(global::InheritedEntity)] = (cmd, key) => CommandFactory_global__InheritedEntity_3f5411cb.BindDelete(cmd, key);
+        draft.CrudMetadatas[typeof(global::InheritedEntity)] = new global::PalORM.CrudMetadata(
                 new global::PalORM.CrudBindings(
                     (cmd, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindInsertToBatch(cmd, (global::InheritedEntity)obj, off),
                     (parameters, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindInsertValues(parameters, (global::InheritedEntity)obj, off),
@@ -216,142 +282,68 @@ internal static class PalORM_RegistryInitializer
                     new[] { "Id", "name", "created_by", "created_at" },
                     new[] { "name", "created_by", "created_at" }),
                 null,
-                obj => CommandFactory_global__InheritedEntity_3f5411cb.HasDefaultKey((global::InheritedEntity)obj)),
-        },
-
-            EntityFeatures = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.EntityFeatures>
+                obj => CommandFactory_global__InheritedEntity_3f5411cb.HasDefaultKey((global::InheritedEntity)obj));
+        draft.EntityFeatures[typeof(global::InheritedEntity)] = global::PalORM.EntityFeatures.None;
+        draft.PkColumns[typeof(global::InheritedEntity)] = "Id";
+        draft.ColumnNames[typeof(global::InheritedEntity)] = new[] { "Id", "name", "created_by", "created_at" };
+        draft.PropertyToColumn[typeof(global::InheritedEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
         {
-            [typeof(global::AllTypesEntity)] = global::PalORM.EntityFeatures.None,
-            [typeof(global::FullFeatureEntity)] = global::PalORM.EntityFeatures.SoftDelete | global::PalORM.EntityFeatures.TenantAware,
-            [typeof(global::ReservedWordEntity)] = global::PalORM.EntityFeatures.None,
-            [typeof(global::InheritedEntity)] = global::PalORM.EntityFeatures.None,
-        },
-
-            PkColumns = new global::System.Collections.Generic.Dictionary<global::System.Type, string>
-        {
-            [typeof(global::AllTypesEntity)] = "Id",
-            [typeof(global::FullFeatureEntity)] = "Id",
-            [typeof(global::ReservedWordEntity)] = "Id",
-            [typeof(global::InheritedEntity)] = "Id",
-        },
-
-            ColumnNames = new global::System.Collections.Generic.Dictionary<global::System.Type, string[]>
-        {
-            [typeof(global::AllTypesEntity)] = new[] { "Id", "int_value", "short_value", "byte_value", "string_value", "char_value", "bool_value", "decimal_value", "double_value", "float_value", "datetime_value", "guid_value", "dto_value", "date_value", "time_value", "bytes_value", "nullable_int", "nullable_string", "nullable_guid", "nullable_time", "nullable_bytes" },
-            [typeof(global::FullFeatureEntity)] = new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "row_updated_at", "total_display", "deleted_at", "tenant_id", "sensitive_value" },
-            [typeof(global::ReservedWordEntity)] = new[] { "Id", "select" },
-            [typeof(global::InheritedEntity)] = new[] { "Id", "name", "created_by", "created_at" },
-        },
-
-            PropertyToColumn = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>>
-        {
-            [typeof(global::AllTypesEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
-            {
-                ["Id"] = "Id",
-                ["IntValue"] = "int_value",
-                ["ShortValue"] = "short_value",
-                ["ByteValue"] = "byte_value",
-                ["StringValue"] = "string_value",
-                ["CharValue"] = "char_value",
-                ["BoolValue"] = "bool_value",
-                ["DecimalValue"] = "decimal_value",
-                ["DoubleValue"] = "double_value",
-                ["FloatValue"] = "float_value",
-                ["DateTimeValue"] = "datetime_value",
-                ["GuidValue"] = "guid_value",
-                ["DateTimeOffsetValue"] = "dto_value",
-                ["DateOnlyValue"] = "date_value",
-                ["TimeOnlyValue"] = "time_value",
-                ["BytesValue"] = "bytes_value",
-                ["NullableInt"] = "nullable_int",
-                ["NullableString"] = "nullable_string",
-                ["NullableGuid"] = "nullable_guid",
-                ["NullableTimeOnly"] = "nullable_time",
-                ["NullableBytes"] = "nullable_bytes",
-            },
-            [typeof(global::FullFeatureEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
-            {
-                ["Id"] = "Id",
-                ["Code"] = "code",
-                ["Kind"] = "kind",
-                ["ExternalId"] = "external_id",
-                ["Payload"] = "payload",
-                ["RawJson"] = "raw_json",
-                ["UniqueToken"] = "uniq_token",
-                ["RowUpdatedAt"] = "row_updated_at",
-                ["TotalDisplay"] = "total_display",
-                ["DeletedAt"] = "deleted_at",
-                ["TenantId"] = "tenant_id",
-                ["SensitiveValue"] = "sensitive_value",
-            },
-            [typeof(global::ReservedWordEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
-            {
-                ["Id"] = "Id",
-                ["Value"] = "select",
-            },
-            [typeof(global::InheritedEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
-            {
-                ["Id"] = "Id",
-                ["Name"] = "name",
-                ["CreatedBy"] = "created_by",
-                ["CreatedAt"] = "created_at",
-            },
-        },
-
-            CreateTableSqlByDialect = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateTableSqlSet>
-        {
-            [typeof(global::AllTypesEntity)] = new global::PalORM.CreateTableSqlSet(
-                Migration_global__AllTypesEntity_7f6c8145.CreateTableSqlite,
-                Migration_global__AllTypesEntity_7f6c8145.CreateTablePostgreSql,
-                Migration_global__AllTypesEntity_7f6c8145.CreateTableMySql),
-            [typeof(global::FullFeatureEntity)] = new global::PalORM.CreateTableSqlSet(
-                Migration_global__FullFeatureEntity_4964faa8.CreateTableSqlite,
-                Migration_global__FullFeatureEntity_4964faa8.CreateTablePostgreSql,
-                Migration_global__FullFeatureEntity_4964faa8.CreateTableMySql),
-            [typeof(global::ReservedWordEntity)] = new global::PalORM.CreateTableSqlSet(
-                Migration_global__ReservedWordEntity_c143a9c9.CreateTableSqlite,
-                Migration_global__ReservedWordEntity_c143a9c9.CreateTablePostgreSql,
-                Migration_global__ReservedWordEntity_c143a9c9.CreateTableMySql),
-            [typeof(global::InheritedEntity)] = new global::PalORM.CreateTableSqlSet(
+            ["Id"] = "Id",
+            ["Name"] = "name",
+            ["CreatedBy"] = "created_by",
+            ["CreatedAt"] = "created_at",
+        };
+        draft.CreateTableSqlByDialect[typeof(global::InheritedEntity)] = new global::PalORM.CreateTableSqlSet(
                 Migration_global__InheritedEntity_3f5411cb.CreateTableSqlite,
                 Migration_global__InheritedEntity_3f5411cb.CreateTablePostgreSql,
-                Migration_global__InheritedEntity_3f5411cb.CreateTableMySql),
-        },
-
-            CreateIndexSqlByDialect = new global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateIndexSqlSet>
-        {
-            [typeof(global::AllTypesEntity)] = new global::PalORM.CreateIndexSqlSet(
-                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesSqlite,
-                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesPostgreSql,
-                Migration_global__AllTypesEntity_7f6c8145.CreateIndexesMySql),
-            [typeof(global::FullFeatureEntity)] = new global::PalORM.CreateIndexSqlSet(
-                Migration_global__FullFeatureEntity_4964faa8.CreateIndexesSqlite,
-                Migration_global__FullFeatureEntity_4964faa8.CreateIndexesPostgreSql,
-                Migration_global__FullFeatureEntity_4964faa8.CreateIndexesMySql),
-            [typeof(global::ReservedWordEntity)] = new global::PalORM.CreateIndexSqlSet(
-                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesSqlite,
-                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesPostgreSql,
-                Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesMySql),
-            [typeof(global::InheritedEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__InheritedEntity_3f5411cb.CreateTableMySql);
+        draft.CreateIndexSqlByDialect[typeof(global::InheritedEntity)] = new global::PalORM.CreateIndexSqlSet(
                 Migration_global__InheritedEntity_3f5411cb.CreateIndexesSqlite,
                 Migration_global__InheritedEntity_3f5411cb.CreateIndexesPostgreSql,
-                Migration_global__InheritedEntity_3f5411cb.CreateIndexesMySql),
-        },
+                Migration_global__InheritedEntity_3f5411cb.CreateIndexesMySql);
+        draft.SetIdDelegates[typeof(global::InheritedEntity)] = (entity, id) => CommandFactory_global__InheritedEntity_3f5411cb.SetId((global::InheritedEntity)entity, id);
 
-            SetIdDelegates = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<object, long>>
-        {
-            [typeof(global::AllTypesEntity)] = (entity, id) => CommandFactory_global__AllTypesEntity_7f6c8145.SetId((global::AllTypesEntity)entity, id),
-            [typeof(global::FullFeatureEntity)] = (entity, id) => CommandFactory_global__FullFeatureEntity_4964faa8.SetId((global::FullFeatureEntity)entity, id),
-            [typeof(global::InheritedEntity)] = (entity, id) => CommandFactory_global__InheritedEntity_3f5411cb.SetId((global::InheritedEntity)entity, id),
-        },
+    }
 
-            SensitiveColumnMasks = new global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>>
+    private static void Register(RegistryDraft draft)
+    {
+        global::PalORM.PalORM_Runtime.Register(new global::PalORM.RegistryFragment
         {
-            [typeof(global::FullFeatureEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
-            {
-                ["sensitive_value"] = "***MASKED***",
-            },
-        },
+            RowFactories = draft.RowFactories,
+            TableNames = draft.TableNames,
+            CommandSqlsByDialect = draft.CommandSqlsByDialect,
+            BindInsert = draft.BindInsert,
+            BindUpdate = draft.BindUpdate,
+            BindDelete = draft.BindDelete,
+            CrudMetadatas = draft.CrudMetadatas,
+            EntityFeatures = draft.EntityFeatures,
+            PkColumns = draft.PkColumns,
+            ColumnNames = draft.ColumnNames,
+            PropertyToColumn = draft.PropertyToColumn,
+            CreateTableSqlByDialect = draft.CreateTableSqlByDialect,
+            CreateIndexSqlByDialect = draft.CreateIndexSqlByDialect,
+            SetIdDelegates = draft.SetIdDelegates,
+            SensitiveColumnMasks = draft.SensitiveColumnMasks,
         });
+    }
+
+    /// <summary>分块构建期的可变载体（生成器私有）——最后整体交给 RegistryFragment。</summary>
+    private sealed class RegistryDraft
+    {
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, object> RowFactories = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, string> TableNames = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CommandSqlByDialect> CommandSqlsByDialect = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object, int>> BindInsert = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object>> BindUpdate = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbCommand, object>> BindDelete = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CrudMetadata> CrudMetadatas = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.EntityFeatures> EntityFeatures = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, string> PkColumns = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, string[]> ColumnNames = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>> PropertyToColumn = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateTableSqlSet> CreateTableSqlByDialect = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateIndexSqlSet> CreateIndexSqlByDialect = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<object, long>> SetIdDelegates = new();
+        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>> SensitiveColumnMasks = new();
     }
 }

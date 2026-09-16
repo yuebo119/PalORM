@@ -4,11 +4,11 @@
 
 ## [未发布·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移 · 测试凭据自动加载
 
-> 变更范围：v5.5.1 后 7 个提交，src/PalORM.Core 七个文件 + src/PalORM.Sqlite +
-> src/PalORM.Testing + 三个测试项目
-> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 253/253（新增 15 项）·
-> SourceGen 188/188（快照字节级零漂移）· Integration 178/178（含 PG/MySQL 真库，
-> 无需手动 source 凭据）· SQL 转储 22 场景与基线提交 b2e5741 逐字节一致
+> 变更范围：v5.5.1 后 8 个提交，src/PalORM.Core 七个文件 + src/PalORM.Sqlite +
+> src/PalORM.SourceGen + src/PalORM.Testing + 四个测试项目
+> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 253/253 · SourceGen 190/190（快照语义等价已机器校验）·
+> Integration 179/179（含 PG/MySQL 真库，无需手动 source 凭据）· 三个 AOT 程序
+> `publish -p:PublishAot=true` 后原生运行 PASSED · SQL 转储 22 场景与基线提交 b2e5741 逐字节一致
 
 ### ⚡ 性能（实测数据来自 .ai/perf-probe，分配字节数复现性优于 1%）
 
@@ -114,15 +114,41 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
-### 🧪 新增测试（12 项）
+### 🧩 生成器（B1：注册表分块）
+
+- **注册表生成由单个巨型方法改为按 IL 预算分块**：原先全部注册代码落在单个
+  `[ModuleInitializer] Initialize()` 里，IL 随实体数线性增长——实测 **500 实体（4 列）
+  即单方法 611,449 B IL**。现在按**估算 IL**（每实体固定 ≈900 B + 每列 ≈60 B，由 4 列/30 列
+  两个实测点反解）切成 `AddChunk{N}` 方法，每块写同一个可变 `RegistryDraft`，最后仍是一次
+  `PalORM_Runtime.Register`。
+  <br>为什么不是"每块各自调 Register"：`Register` 每次都复制并重建累计状态，逐块调用会把
+  17 个字典反复拷贝，N 块累计 O(N²/块) 次插入。分块只切**构建**。
+  <br>为什么按估算 IL 而不是固定实体数：单实体 IL 随列数增长，固定"每块 25 个实体"在宽表上
+  会重新撑破方法体（30 列实体单块可达 143 KB）。
+  <br>实测（`RegistryScaleTests`，3 样本/侧，500 实体 × 4 列）：单方法 IL **611,449 → 21,632 B**；
+  注册初始化器**全部方法**的 JIT 编译耗时中位数 **1299.2 → 376.8 ms（−71%）**——
+  超大方法的 JIT 代价是超线性的，分块不只是把风险摊开。切块是列宽感知的：4 列实体每块 18 个、
+  30 列实体每块 7 个，单方法 IL 稳定在 ≈21.5 KB。
+  <br>新增规模守卫 `RegistryScaleTests`：两维（实体数 × 列宽）断言"无生成方法超过 64 KB IL"。
+  变异探针实测其有区分力——把块预算调到 10 MB（退回单体）后两个用例都失败（123,842 / 143,522 B）。
+- **`docs/API参考.md` 的注册字典计数订正**：原称"16 个注册字典"且列表漏 `SensitiveColumnMasks`
+  ——`RegistryFragment` 实为 17 个属性。计数与列表已同步。
+
+### 🧪 新增测试
 
 - `ReadRouteConnectionReuseTests`（3）：用 `ReadSessionSetupSql` 作副作用探针证伪
   "每查询新建连接"，含对照组证明计数有区分力。
 - `DefaultFilterFormsTests`（3）：软删 + 租户的三种拼接形态在 Count/GetAll/Get 上各钉一条。
 - `SqlitePoolParameterTests`（3）：`Production` 预设在 SQLite 上能构造会话、
   `WithPool` 被忽略而非拒绝、配了池参数的会话仍能正常执行查询。
+- `RegistryScaleTests`（1 个用例 × 2 组参数）：生成 120 实体 × 4 列 与 60 实体 × 30 列，
+  编译后直读 PE 元数据，断言**无生成方法超过 64 KB IL**。变异探针：块预算调到 10 MB
+  （退回单体）→ 两个用例都失败（123,842 / 143,522 B）。
 - 既有用例改名随契约变更：`SqliteConnectionFactory_RejectsUnsupportedPoolOptions`
   → `..._IgnoresUnsupportedPoolOptions`（原断言 `Throws<NotSupportedException>`）。
+- 既有用例定位器随分块变更：`NonNumericPrimaryKeys_AreNotMarkedAsGenerated` 原按
+  `IndexOf("SetIdDelegates =")` 切片——分块后条目不再连续，切片会落在片段赋值处，
+  两条负向断言将在空集上**静默通过**。改为按行提取并先断言"恰好一条"，定位失效即失败。
 
 ### 🧪 性能门禁重做与基线重录
 

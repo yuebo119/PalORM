@@ -987,13 +987,16 @@ internal sealed class GeneratorPhase2Tests
         GeneratorResult result = RunGenerator(source);
         string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
 
-        string setIdDelegates = registry[
-            registry.IndexOf("SetIdDelegates =", StringComparison.Ordinal)..];
+        // 注册代码按 IL 预算分块后，SetIdDelegates 的条目不再是一段连续区块——按行提取。
+        // 必须先断言提取到内容：定位失效时下面"不含某实体"的负向断言会在空集上静默通过。
+        string[] setIdDelegates = [.. registry.Split('\n')
+            .Where(static line => line.Contains("draft.SetIdDelegates[", StringComparison.Ordinal))];
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
-        await Assert.That(setIdDelegates).DoesNotContain("global::StringEntity");
-        await Assert.That(setIdDelegates).DoesNotContain("global::ConvertedEntity");
-        await Assert.That(setIdDelegates).Contains("global::GeneratedEntity");
+        await Assert.That(setIdDelegates.Length).IsEqualTo(1);
+        await Assert.That(setIdDelegates[0]).Contains("global::GeneratedEntity");
+        await Assert.That(setIdDelegates[0]).DoesNotContain("global::StringEntity");
+        await Assert.That(setIdDelegates[0]).DoesNotContain("global::ConvertedEntity");
     }
 
     [Test]
