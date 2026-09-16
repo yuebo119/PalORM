@@ -50,6 +50,24 @@
   正确性两方言 `BulkUpdateBatchAsync` 均返回全行数且值校验通过。S3 反向验证一致。
   <br>注：上一轮（T15）只把参数创建挪进池、取值仍逐行建参数，创建总量不变，真库 A/B 判定为
   净负收益并已回退——零分配绑定器到位后池才有意义，两条合并才是完整的优化。
+- **MySQL BulkCopy 参数复用（T20，真库实测）**：`MySqlBulkCopyInserter` 行循环原先每行
+  `Parameters.Clear()` + `Binder` 重建 `columnCount` 个 `MySqlParameter`。现改为每批建一次、
+  逐行只写 Value，取值走生成器已产出的 `BindInsertValues`（零 `CreateParameter`，
+  与 `MultiValueBulkInsert` 的 v4.6 池同机制；旧模型程序集回退逐行 `Binder`）。
+  <br>真库实测（10K 行）：4 列实体 **671.7 → 294.1 B/行（−56%）**；
+  19 列实体 **3100.3 → 940.3 B/行（−70%）**，时间 161 → 141 ms。
+  <br><b>该改动翻转了两条路径的优劣</b>：改前 BulkCopy 分配比多值 INSERT 回退路径更差
+  （4 列 671.7 vs 359.1 = 贵 87%；19 列 3100.3 vs 2307.0 = 贵 34%），改后反超
+  （4 列 294.1 vs 359.1 = 便宜 18%；19 列 940.3 vs 2307.0 = 便宜 59%）。O25 的
+  「能力检测替代行数阈值」判据因此成立——原先差的是实现，不是判据。
+  正确性：`MySql_BulkInsert_LocalInfileOn_InsertsAllRows` 通过（其 `name='row-9'` → 9
+  的跨列断言可捕获池下标错位导致的静默串列）。S3 反向验证一致。AOT 复验 PASSED。
+- **MySQL `local_infile` 配置补记**：BulkCopy 路径以 `local_infile=ON` 为唯一前置，而
+  MySQL 8 默认 OFF——`bench/PalORM.Benchmarks/docker-compose.yml` 的 mysql 服务原先未开，
+  任何人按该文件起库都只会走多值 INSERT 回退，BulkCopy 与 PG COPY 都测不到。已补
+  `command: ["--local-infile=1"]`。<b>注意</b>：本次在真库上是用 `SET GLOBAL local_infile=ON`
+  于运行时开启，<b>不随 MySQL 重启保留</b>；要持久化需在服务端 `my.cnf` 写 `local-infile=1`
+  并重启（该实例不在本仓库管辖范围）。
 - **AOT 三 Provider 首次全部本地验证通过**：生成器改动影响全部实体的生成代码，据此重跑
   `dotnet publish -r win-x64 -p:PublishAot=true` + 原生运行——SQLite / PostgreSQL / MySQL
   三个 AotTest 应用均 `PASSED`（此前 PG/MySQL 一直标注「CI 待验证」，本次借真库可用补齐）。

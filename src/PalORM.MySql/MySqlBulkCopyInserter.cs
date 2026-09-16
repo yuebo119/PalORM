@@ -89,19 +89,21 @@ internal static class MySqlBulkCopyInserter
                 table.BeginLoadData();
                 try
                 {
-                    for (int i = start; i < end; i++)
+                    // v5.6 参数复用：参数对象每批建一次、逐行只写 Value。原实现每行
+                    // Parameters.Clear() + Binder 重建 columnCount 个 MySqlParameter——
+                    // 真库实测 BulkCopy 路径 671.7 B/行（同一实体走多值 INSERT 只要 359.1），
+                    // 每行参数创建是主项。取值走生成器已产出的 BindInsertValues（零
+                    // CreateParameter），与 MultiValueBulkInsert 的 v4.6 池同一机制。
+                    // 旧版生成器模型程序集该绑定器为 null 时回退逐行 Binder。
+                    DbParameter[]? pool = null;
+                    if (ctx.ValuesBinder is not null)
                     {
-                        rowCommand.Parameters.Clear();
-                        ctx.Binder(rowCommand, entities[i], 0);
-                        DataRow row = table.NewRow();
-                        // 补位 PK 列填 DBNull（AUTO_INCREMENT 自增；非自增 PK 已在参数值内）
-                        for (int p = 0; p < pksToAdd.Length; p++)
-                            row[p] = DBNull.Value;
-                        // InsertColumns 列从 rowCommand.Parameters 按序填入
+                        // probe 已把首行绑到 rowCommand——直接取其参数对象作池（不再新建）
+                        pool = new DbParameter[columnCount];
                         for (int c = 0; c < columnCount; c++)
-                            row[c + pksToAdd.Length] = rowCommand.Parameters[c].Value;
-                        table.Rows.Add(row);
+                            pool[c] = rowCommand.Parameters[c];
                     }
+                    FillDataTable(table, rowCommand, entities, start, end, ctx, pool);
                 }
                 finally
                 {
@@ -156,6 +158,51 @@ internal static class MySqlBulkCopyInserter
             table.Dispose();
         }
     }
+
+    /// <summary>把 [start, end) 区间的实体逐行填入 DataTable。抽为独立方法降低
+    /// <see cref="ExecuteBatchAsync"/> 的认知复杂度（S3776）。
+    /// <para><paramref name="pool"/> 非空时走参数复用路径：只写 Value，首行的值已由调用方 probe
+    /// 绑定；为空（旧版生成器模型程序集）时回退逐行 <c>ctx.Binder</c> 重建参数。</para></summary>
+    private static void FillDataTable<T>(
+        DataTable table,
+        DbCommand rowCommand,
+        IReadOnlyList<T> entities,
+        int start,
+        int end,
+        MySqlBulkCopyContext ctx,
+        DbParameter[]? pool)
+        where T : class
+    {
+        int columnCount = ctx.InsertColumns.Count;
+        int pkColumnCount = ctx.PrimaryKeyColumns.Count(
+            pk => !ctx.InsertColumns.Contains(pk, StringComparer.Ordinal));
+        for (int i = start; i < end; i++)
+        {
+            if (pool is not null)
+            {
+                // 首行的值已由调用方 probe 绑定，不重复写
+                if (i > start) ctx.ValuesBinder!(pool, entities[i], 0);
+            }
+            else
+            {
+                rowCommand.Parameters.Clear();
+                ctx.Binder(rowCommand, entities[i], 0);
+            }
+
+            DataRow row = table.NewRow();
+            // 补位 PK 列填 DBNull（AUTO_INCREMENT 自增；非自增 PK 已在参数值内）
+            for (int p = 0; p < pkColumnCount; p++)
+                row[p] = DBNull.Value;
+            // InsertColumns 列按序填入（池优先，回退路径读命令参数集合）
+            for (int c = 0; c < columnCount; c++)
+            {
+                row[c + pkColumnCount] = pool is not null
+                    ? pool[c].Value
+                    : rowCommand.Parameters[c].Value;
+            }
+            table.Rows.Add(row);
+        }
+    }
 }
 
 /// <summary>MySqlBulkCopy 上下文——参数打包避免 S107（>7 参数方法）。</summary>
@@ -165,7 +212,8 @@ internal readonly struct MySqlBulkCopyContext(
     IReadOnlyList<string> primaryKeyColumns,
     Action<DbCommand, object, int> binder,
     int commandTimeoutSeconds,
-    int batchSize)
+    int batchSize,
+    Action<DbParameter[], object, int>? valuesBinder = null)
 {
     public readonly string QuotedTable = quotedTable;
     public readonly IReadOnlyList<string> InsertColumns = insertColumns;
@@ -175,4 +223,7 @@ internal readonly struct MySqlBulkCopyContext(
     public readonly int CommandTimeoutSeconds = commandTimeoutSeconds;
     /// <summary>ITM-710：每批最多物化的实体数——与回退多值路径同口径。</summary>
     public readonly int BatchSize = batchSize;
+    /// <summary>v5.6：仅设置预分配 INSERT 参数 Value 的委托（零 CreateParameter）。
+    /// 旧版生成器模型程序集为 null——行循环回退逐行 <see cref="Binder"/>。</summary>
+    public readonly Action<DbParameter[], object, int>? ValuesBinder = valuesBinder;
 }

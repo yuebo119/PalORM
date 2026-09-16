@@ -236,7 +236,8 @@ public sealed class MySqlProvider : IDbProvider
                     pkColumns,
                     metadata.BindInsert,
                     commandTimeoutSeconds,
-                    batchSize),
+                    batchSize,
+                    metadata.BindInsertValues),
                 ct).ConfigureAwait(false);
             // 成功路径：自管事务需显式 commit（DisposeAsync 默认 rollback）。
             if (ownsTransaction)
