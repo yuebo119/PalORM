@@ -34,7 +34,7 @@ internal static class GeneratorTestHost
         IReadOnlyDictionary<string, string>? analyzerConfigOptions,
         IEnumerable<AdditionalText>? additionalTexts)
     {
-        CSharpCompilation compilation = CreateCompilation(source, assemblyName);
+        CSharpCompilation compilation = CreateCompilation([source], assemblyName);
         var parseOptions = (CSharpParseOptions)compilation.SyntaxTrees.Single().Options;
 
         // 构造 AnalyzerConfigOptionsProvider——源生成器经 context.AnalyzerConfigOptionsProvider 读取
@@ -74,7 +74,7 @@ internal static class GeneratorTestHost
         string sqlPath,
         string content)
     {
-        CSharpCompilation compilation = CreateCompilation(source, assemblyName);
+        CSharpCompilation compilation = CreateCompilation([source], assemblyName);
         var parseOptions = (CSharpParseOptions)compilation.SyntaxTrees.Single().Options;
         AnalyzerConfigOptionsProvider configProvider = TestConfigOptionsProvider.Create(analyzerConfigOptions);
 
@@ -91,7 +91,13 @@ internal static class GeneratorTestHost
             .SourceText.ToString();
     }
 
+    /// <summary>单源版本——委托给多语法树版本，两条路径共用同一套引用与选项。</summary>
     internal static CSharpCompilation CreateCompilation(string source, string assemblyName)
+        => CreateCompilation([source], assemblyName);
+
+    /// <summary>一实体一语法树的 compilation——增量缓存按语法树粒度生效，
+    /// 单文件布局测不出真实工程的增量行为（见 RegistryIncrementalCostTests）。</summary>
+    internal static CSharpCompilation CreateCompilation(IEnumerable<string> sources, string assemblyName)
     {
         string[] trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
@@ -102,7 +108,7 @@ internal static class GeneratorTestHost
 
         return CSharpCompilation.Create(
             assemblyName,
-            [CSharpSyntaxTree.ParseText(source, parseOptions)],
+            [.. sources.Select(text => CSharpSyntaxTree.ParseText(text, parseOptions))],
             references.DistinctBy(static reference => reference.Display, StringComparer.Ordinal),
             new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,

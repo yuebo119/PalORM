@@ -28,9 +28,13 @@ internal sealed class RegistryIncrementalCostTests
         // 确定性替代：Roslyn 增量管线命中缓存时会**复用同一批输出对象**，
         // 于是"未变化 → 输出实例不变"与"只改一个实体 → 其它实体的输出实例不变"
         // 都可以用 ReferenceEquals 判定，完全不受机器负载影响。
-        string source = BuildEntitySource(EntityCount);
-        CSharpCompilation compilation = GeneratorTestHost.CreateCompilation(source, "IncrementalConsumer");
-        var parseOptions = (CSharpParseOptions)compilation.SyntaxTrees.Single().Options;
+        // **一实体一语法树**：真实工程几乎不会把 120 个实体写在同一个文件里，而
+        // ForAttributeWithMetadataName 的缓存粒度是语法树——单文件布局会让"改一个实体"
+        // 变成"整棵树变了"，从而把所有实体都标记为变更。用单文件测出的代价是量具假象。
+        string[] entitySources = BuildEntitySources(EntityCount);
+        CSharpCompilation compilation = GeneratorTestHost.CreateCompilation(
+            entitySources, "IncrementalConsumer");
+        var parseOptions = (CSharpParseOptions)compilation.SyntaxTrees.First().Options;
 
         GeneratorDriver driver = CSharpGeneratorDriver.Create(
             [new PalORMGenerator().AsSourceGenerator()],
@@ -46,12 +50,13 @@ internal sealed class RegistryIncrementalCostTests
         double unchanged = clock.Elapsed.TotalMilliseconds;
         Dictionary<string, SourceText> afterUnchanged = SnapshotOutputs(driver);
 
-        // 只改一个实体的一个列名 → 新语法树 → 新 compilation
-        string changedSource = source.Replace(
+        // 只改一个实体的一个列名——只替换它那一棵树，其余 119 棵树原样重用
+        string[] changedSources = (string[])entitySources.Clone();
+        changedSources[0] = changedSources[0].Replace(
             "[Column(\"name\")] public string Name", "[Column(\"renamed\")] public string Name",
             StringComparison.Ordinal);
         CSharpCompilation changedCompilation = GeneratorTestHost.CreateCompilation(
-            changedSource, "IncrementalConsumer");
+            changedSources, "IncrementalConsumer");
         clock.Restart();
         driver = driver.RunGeneratorsAndUpdateCompilation(changedCompilation, out _, out _);
         double singleChange = clock.Elapsed.TotalMilliseconds;
@@ -66,22 +71,23 @@ internal sealed class RegistryIncrementalCostTests
             && ReferenceEquals(pair.Value, next));
         await Assert.That(reused).IsEqualTo(afterCold.Count);
 
-        // ② 只改一个实体 → 实测全部文件都是新实例（见下方注释，原假设"逐实体产物复用"被否掉）。
+        // ② 只改一个实体 → 只有受影响实体的 3 份产物 + 聚合注册表被重发，其余逐实体产物复用。
+        //    这是生成器增量设计的**正向证据**：值比较器（TableModel 全字段 EquatableArray）
+        //    与每实体输出节点确实按实体生效。
         int reusedAfterChange = afterUnchanged.Count(pair => afterChange.TryGetValue(pair.Key, out SourceText? next)
             && ReferenceEquals(pair.Value, next));
         int republished = afterChange.Count - reusedAfterChange;
         Log(string.Create(CultureInfo.InvariantCulture,
             $"[增量量具] 改一个实体后：复用 {reusedAfterChange} 个文件 · 重发 {republished} 个"));
 
-        // ② 的期望曾经写成"只有 4 个文件重发（该实体 3 份 + 聚合注册表）"——**实测否掉了这个假设**：
-        //    改一个实体后 361 个文件**全部**是新实例，一个都没复用。即生成器把所有逐实体产物
-        //    与聚合注册表放在**同一个输出节点**上，任何实体变化都会让该节点整体重跑、全部重新物化。
-        //    但代价远低于冷跑（154ms vs 829ms，约 1/5）——上游（模型构造、SQL 构建、语法解析）
-        //    确实被缓存，重跑的只是"把结果重新物化成一堆 SourceText"。
-        //    ⇒ 这修正了"逐实体产物按实体缓存"的推断；真正的增量粒度是"全有或全无"。
-        //    断言取"至少有一个文件变化"（严格真），并把精确分布打出来供评估；
-        //    若将来改为按实体注册输出节点，复用数会上升，本用例的打印会立刻反映出来。
-        await Assert.That(republished).IsGreaterThan(0);
+        // 复现提示：把 BuildEntitySources 换回"全部实体拼成一个字符串"的单树布局，
+        // 这里的复用数会掉到 0——那是**量具假象**而非生成器缺陷：被改的那棵树是全量实体，
+        // 于是全部模型都判为变更。测增量务必用真实布局（一实体一文件）。
+        // 一树一实体布局下的精确契约：重发面 = 该实体的 3 份产物（RowFactory/CommandFactory/
+        // Migration）+ 1 份聚合注册表 = 4。这条断言依赖"每实体一个语法树"的布局——正是本用例
+        // 特意构造的布局（见开头注释）；若未来生成器增加逐实体产物种类，此数会变，用例会红，
+        // 届时同步该数与文档即可。
+        await Assert.That(republished).IsEqualTo(4);
         await Assert.That(reusedAfterChange).IsLessThan(afterChange.Count);
     }
 
@@ -93,15 +99,14 @@ internal sealed class RegistryIncrementalCostTests
                 static generated => generated.SourceText,
                 StringComparer.Ordinal);
 
-    private static string BuildEntitySource(int count)
+    /// <summary>每个实体一个源文件（一语法树）——贴近真实工程布局，也是增量缓存的有效粒度。</summary>
+    private static string[] BuildEntitySources(int count)
     {
-        const string usingDirectives = """
-            using PalORM;
-
-            """;
-        var builder = new StringBuilder(usingDirectives);
+        var sources = new string[count];
         for (int i = 0; i < count; i++)
         {
+            var builder = new StringBuilder(64);
+            builder.AppendLine("using PalORM;");
             builder.AppendLine(CultureInfo.InvariantCulture, $"[Table(\"inc_entity_{i}\")]");
             builder.AppendLine(CultureInfo.InvariantCulture, $"public sealed partial class IncEntity{i}");
             builder.AppendLine("{");
@@ -109,9 +114,9 @@ internal sealed class RegistryIncrementalCostTests
             builder.AppendLine("    [Column(\"name\")] public string Name { get; set; } = \"\";");
             builder.AppendLine("    [Column(\"qty\")] public int Qty { get; set; }");
             builder.AppendLine("}");
-            builder.AppendLine();
+            sources[i] = builder.ToString();
         }
-        return builder.ToString();
+        return sources;
     }
 
     private static void Log(string message) => Console.WriteLine(message);
