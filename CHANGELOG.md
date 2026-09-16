@@ -27,9 +27,12 @@
   `binder` 重建 `columnCount` 个参数（1 万行 × 4 列 = 4 万个 `NpgsqlParameter`）。现改为每批
   建一次、逐行只写 Value，取值走生成器已产出的 `BindInsertValues`（与 `MultiValueBulkInsert`
   的 v4.6 池同一机制，<b>无需改生成器</b>；旧模型程序集该绑定器为 null 时自动回退逐行路径）。
-  实测 **882.3 → 211.1 B/行（−76%）**，时间 77.7 → 70.0 ms；PG 由「比 MySQL 多值 INSERT
-  贵 2.4 倍」（882 vs 361）变为「便宜 1.7 倍」。参数对象仍留在命令集合内——`WriteRowAsync`
-  读 `NpgsqlParameter.NpgsqlDbType`，脱离集合会丢类型推断。
+  实测（10K 行，4 列实体）：**882.3 → 211.1 B/行（−76%）**，时间 77.7 → 70.0 ms；PG 由
+  「比 MySQL 多值 INSERT 贵 2.4 倍」（882 vs 361）变为「便宜 1.7 倍」。
+  收益随列宽放大——19 列实体（18 个插入列）：**4844.7 → 816.9 B/行（−83%）**，
+  即原始分析所引「1 万行 × 20 列 = 20 万参数对象」的规模上，单次批量插入少分配约 40 MB。
+  参数对象仍留在命令集合内——`WriteRowAsync` 读 `NpgsqlParameter.NpgsqlDbType`，
+  脱离集合会丢类型推断。
   <br>新增 `PG_BinaryCopy_NullFirstThenValue_KeepsTypeInference`：参数类型由首个绑定行推断，
   现有用例的行序是「先全非空、后全 null」，覆盖不到反向顺序，该用例把顺序倒过来钉住该风险。
   AOT 全链路复验：`dotnet publish -r win-x64 -p:PublishAot=true` 后原生运行
