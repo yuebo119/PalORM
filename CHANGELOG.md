@@ -23,9 +23,6 @@
   `AddClause` 写时复制按 `Count+4` 预留容量；SELECT 列清单按 (Type, Dialect) 缓存；
   IN 列表改单 `ValueStringBuilder` 拼接；会话侧三处 `ConcurrentDictionary.GetOrAdd`
   捕获闭包改 `TryGetValue`，默认过滤三形态一次缓存。
-- **批量 UPDATE（PG/MySQL）**：目标命令参数池跨行复用，每行参数创建量减半。SQLite
-  走逐条回退路径，本地不可达，由 `BatchUpdateParameterContractTests` 锁定参数名与
-  顺序契约。
 - **10K 行物化保持在地板**：相对 ADO.NET 地板 +0.05% 分配（未改动该路径）。
 
 ### 📝 行为变更
@@ -35,9 +32,8 @@
 - `ReadSessionSetupSql` 的执行时机从"每次读连接建立"收敛为"每会话首次建立读连接"。
 - GridReader 释放不再级联释放被借用的连接（连接归会话所有）。
 
-### 🧪 新增测试（18 项）
+### 🧪 新增测试（12 项）
 
-- `BatchUpdateParameterContractTests`（6）：批量 UPDATE 参数池 ↔ SQL 占位符跨 Provider 契约。
 - `ReadRouteConnectionReuseTests`（3）：用 `ReadSessionSetupSql` 作副作用探针证伪
   "每查询新建连接"，含对照组证明计数有区分力。
 - `DefaultFilterFormsTests`（3）：软删 + 租户的三种拼接形态在 Count/GetAll/Get 上各钉一条。
@@ -56,6 +52,13 @@
   只在查找未被复制的 `.env.test` 时显形。已用 `Path.TrimEndingDirectorySeparator`
   归一化起点，上限 6 → 8（RID 特定输出 / AOT publish 更深一层）。
 - 新增 6 项单测锁定上述两点
+- **批量 UPDATE 参数池（T15）经真库实测否决并回退**：原方案假定参数池在整个
+  `BulkUpdateBatchAsync` 调用内建一次、跨批复用；实际 `ExecuteBatchUpdateAsync` 是
+  **每批调用一次**，池随之为每批新建，参数创建总量不变，还多出 `DbParameter[]` 数组。
+  真库 A/B（PG 与 MySQL 各 40000 行 = 3 批）：含改动 2779.6 / 2689.9 B/行，回退后
+  2750.1 / 2582.9 B/行——**改动是净负收益**。单批 1000 行两侧同为约 2670 B/行（无变化）。
+  <br>真正的削减点在 probe 命令逐行 `BindUpdate` 建参数（40000 行 × 4 列 = 16 万次），
+  需生成器发射 `BindUpdateValues`（对齐既有 `BindInsertValues`）才能消除，属后续项。
 - **secret-guard 文件名黑名单误拦 `.env` 家族模板**：黑名单的 `\.env\.[^e]` 只能豁免
   `.env.example` 这一种形态，`.env.<x>.example`（如仓库跟踪的 `.env.test.example`）被拦，
   挡住了对模板的正常修改。已加 `*.example` 豁免（仅文件名规则；内容规则照常执行），
