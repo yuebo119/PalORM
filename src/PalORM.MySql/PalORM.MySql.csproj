@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PalORM.Core\PalORM.Core.csproj" />
+    <!-- EntityDataReader（internal）的 DbDataReader 契约需要确定性单测覆盖：
+         只靠真库集成用例时，服务端 local_infile=OFF 会让 provider 静默回退多值 INSERT，
+         该用例就不再经过读取器——测试通过但什么都没验证。 -->
+    <InternalsVisibleTo Include="PalORM.Core.Tests" />
   </ItemGroup>
 
   <ItemGroup>

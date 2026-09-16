@@ -6,8 +6,8 @@
 
 > 变更范围：v5.5.1 后 8 个提交，src/PalORM.Core 七个文件 + src/PalORM.Sqlite +
 > src/PalORM.SourceGen + src/PalORM.Testing + 四个测试项目
-> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 253/253 · SourceGen 190/190（快照语义等价已机器校验）·
-> Integration 179/179（含 PG/MySQL 真库，无需手动 source 凭据）· 三个 AOT 程序
+> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 260/260 · SourceGen 190/190（快照语义等价已机器校验）·
+> Integration 180/180（含 PG/MySQL 真库，无需手动 source 凭据）· 三个 AOT 程序
 > `publish -p:PublishAot=true` 后原生运行 PASSED · SQL 转储 22 场景与基线提交 b2e5741 逐字节一致
 
 ### ⚡ 性能（实测数据来自 .ai/perf-probe，分配字节数复现性优于 1%）
@@ -113,6 +113,33 @@
   <br>同时钉住直通配置的语义代价：`MaxRetries=0` + `CircuitBreakerThreshold=0` 下读路径
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
+
+### ⚡ 性能（MySQL BulkCopy：去掉 DataRow 层）
+
+- **批量插入的取值载体由 DataTable 换成 `EntityDataReader`**（新增 `src/PalORM.MySql/EntityDataReader.cs`）：
+  原实现逐行 `table.NewRow()` + 逐列写值，实测每行 372.0/360.0 B（10K 行 × 4 列，两次采样）；
+  读取器按序号直读参数池，每行 **57.0 B**（两次采样逐位一致），时间同向更快
+  （114.2/112.7 ms → 100.9/100.4 ms）。**分配 −84%、时间 −11%，两条轴都赢**。
+  <br>真库经真实 API 复核（同一探针口径）：4 列 **294.1 → 105.9/106.4 B/行（−64%）**；
+  19 列 **940.3 → 502.0/526.9 B/行（−46%~−47%）**。
+  <br>源码原注释称"MySqlBulkCopy 对 DataTable 路径有专门优化"——**该判断被实测证伪**，
+  注释已按实测更正。取值仍走生成器发射的 `BindInsertValues`（零 `CreateParameter`），
+  与 v5.6 的参数池是同一条链的两半：池到位后 DataRow 层就是唯一的每行分配主项。
+- **保留的既有守卫一条未减**：`ITM-709` Warnings 非空即失败（防静默数据损坏）、`ITM-615`
+  显式列名映射、自增 PK 前置补 DBNull、`ITM-710` 分批、`ITM-655` 超时 0=无限、
+  `ITM-656` 行数规范化、旧模型程序集的 `Binder` 回退路径（读取器只多一步"把新建参数引用抄进池"）。
+- **新增 7 项读取器契约单测**（`EntityDataReaderTests`，不依赖数据库）：逐行绑定与耗尽语义、
+  前置主键列恒 DBNull、C# null → DBNull、列名/序号/形状、空范围、未知列名、分块读取不静默返回 0。
+  <br>为什么必须有它：服务端 `local_infile=OFF` 时 provider 静默回退多值 INSERT（不经过读取器），
+  真库用例照样通过——读取器契约必须有**不依赖服务端能力**的覆盖。为此给 `PalORM.MySql`
+  加了 `InternalsVisibleTo("PalORM.Core.Tests")`（与 `PalORM.Core` 同例）。
+  <br>**变异探针**：把读取器的列偏移故意改错 → 真库用例 2/5 失败，证明新增覆盖确实经过读取器。
+- **新增真库值保真用例**：`MySql_BulkCopy_AllWhitelistedTypes_RoundTripPreservesValues`
+  覆盖 `AllTypesEntity` 全部白名单类型（bool/Guid/DateTimeOffset/DateOnly/TimeOnly/float/byte[]/
+  可空变体）——既有 BulkCopy 用例只覆盖 string/decimal/DateTime/byte[]。读取器把值统一以
+  `object` 交给驱动按运行时类型格式化，格式错误即静默数据损坏，这是本次换路径的主要风险面。
+- 顺带修探针自身缺陷：宽表 DDL 对 PG 用了 MySQL 的 `AUTO_INCREMENT`（历史遗留），
+  使 PG 侧的宽实体对照此前直接抛 42601——现按方言分支。
 
 ### 🧩 生成器（B1：注册表分块）
 
