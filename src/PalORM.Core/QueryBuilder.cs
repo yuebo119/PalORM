@@ -134,6 +134,18 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>降序排序——<see cref="OrderBy{TKey}"/> 的 <c>descending: true</c> 便捷形态。
+    /// <para>补此方法是因为 <c>docs/API参考.md</c> 一直把它和 <see cref="ThenByDescending{TKey}"/>
+    /// 列为可用 API，而源码里从未存在：调用方写出 <c>.OrderByDescending(x =&gt; x.Id)</c> 时，
+    /// 编译器会去匹配 LINQ 的 <c>OrderByDescending</c> 扩展并抛出难以归因的
+    /// CS0411「无法推断类型参数」，而不是"方法不存在"。</para></summary>
+    public QueryBuilder<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> member)
+        => OrderBy(member, descending: true);
+
+    /// <summary>降序次级排序键——<see cref="ThenBy{TKey}"/> 的 <c>descending: true</c> 便捷形态。</summary>
+    public QueryBuilder<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> member)
+        => ThenBy(member, descending: true);
+
     /// <summary>在既有排序上追加次级排序键。无前置 <see cref="OrderBy{TKey}"/> 时抛 <see cref="InvalidOperationException"/>。</summary>
     public QueryBuilder<T> ThenBy<TKey>(Expression<Func<T, TKey>> member, bool descending = false)
     {

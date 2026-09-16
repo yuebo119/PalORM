@@ -114,6 +114,28 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### 🧪 AOT 覆盖（表达式构建器此前从未被原生验证）
+
+- **补上 P0 级验证缺口**：三个 AOT 验收程序此前只走 CRUD/Bulk/OwnedJson/软删路径——
+  `OrderBy`/`ThenBy`/`OrderByDescending`/`Select`/`GroupBy`/`Having`/`WhereIn`/`WhereNotIn`/
+  `Set`/`Include`/`ThenInclude`/`With(CTE)`/`UnsafeWindowOver`/`ForUpdate`/`ForShare`/
+  `WithCache`/`AsPrepared`/`Tag` **一次都没被调用过**，即"它们 AOT 兼容"从未被原生运行验证。
+  <br>做法：先在 JIT 侧写冒烟（`ExpressionBuilderSmokeTests`，迭代快、失败定位准），
+  跑绿后原样搬进 `PalORM.AotTest`，`publish -p:PublishAot=true` 后**原生运行 PASSED**。
+  断言口径双轨：可执行的断结果（排序/筛选/CTE 行数、`Set` 影响行数、Include 行数），
+  只影响 SQL 的断形态（投影列、GROUP BY/HAVING、锁子句、标签）。
+- **修一处文档与 API 不符**：`docs/API参考.md` 一直把 `.OrderByDescending` / `.ThenByDescending`
+  列为可用 API，而源码里**从未存在**（`git log -S` 确认）——调用方写出
+  `.OrderByDescending(x => x.Id)` 时编译器会去匹配 LINQ 扩展并抛难以归因的 CS0411
+  「无法推断类型参数」。已补两个便捷方法（转调 `OrderBy(member, descending: true)`），
+  并纳入上述 AOT 冒烟。
+- **锁语句按 ITM-639 登记契约验证**：`ForUpdate`/`ForShare` 在 SQLite 上**故意不在构建期拒绝**
+  （既定契约允许在 SQLite 上预览面向 PG/MySQL 的锁语句形态），执行才报语法错误。
+  冒烟因此只断言 SQL 形态——我第一版直接执行并撞上 `SQLite Error 1: near "FOR"`，
+  核实到该登记后按契约改正（这类"看起来是缺陷、实为登记取舍"的行为，改动前必须先查登记）。
+- 冒烟用例自身的两处断言错误由用例当场抓出并订正：`Select` 投影被写成"应含未列出的列"、
+  CTE 结果行数写成总数而非筛选后行数。
+
 ### ⚡ 性能（B2：只发射会被读到的 SQL 载荷）
 
 - **生成器按方言族只发射会被读到的 `CommandSqlSet` 字段**，另一族与本族无关字段置 `""`：

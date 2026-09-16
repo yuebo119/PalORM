@@ -44,6 +44,23 @@ internal sealed class AotDetails
 [JsonSerializable(typeof(AotDetails), TypeInfoPropertyName = "AotDetailsInfo")]
 internal sealed partial class AotJsonContext : JsonSerializerContext;
 
+// 表达式构建器冒烟用的父子对（Include/ThenInclude 只发 JOIN，不要求导航属性）
+[Table("aot_parent")]
+internal sealed partial class AotParentEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+}
+
+[Table("aot_child")]
+internal sealed partial class AotChildEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("parent_id")] public long ParentId { get; set; }
+    [Column("label")] public string Label { get; set; } = "";
+    [Column("weight")] public long Weight { get; set; }
+}
+
 internal static class Program
 {
     internal static async Task Main()
@@ -149,12 +166,136 @@ internal static class Program
             if (softDeleted?.DeletedAt is null)
                 throw new InvalidOperationException("Bulk soft DELETE metadata failed");
 
+            await VerifyExpressionBuildersAsync(db).ConfigureAwait(false);
+
             int deleted = await db.DeleteAsync<AotEntity>(inserted.Id).ConfigureAwait(false);
             if (deleted != 1 || await db.GetAsync<AotEntity>(inserted.Id).ConfigureAwait(false) is not null)
                 throw new InvalidOperationException("DELETE failed");
         }
 
         Console.WriteLine("PalORM AOT verification PASSED");
+    }
+
+    /// <summary>表达式构建器的原生 AOT 覆盖。
+    /// <para>此前 <c>OrderBy</c>/<c>ThenBy</c>/<c>OrderByDescending</c>/<c>Select</c>/<c>GroupBy</c>/
+    /// <c>Having</c>/<c>WhereIn</c>/<c>WhereNotIn</c>/<c>Set</c>/<c>Include</c>/<c>ThenInclude</c>/<c>With(CTE)</c>/
+    /// <c>UnsafeWindowOver</c>/<c>ForUpdate</c>/<c>ForShare</c>/<c>WithCache</c>/<c>AsPrepared</c>/<c>Tag</c>
+    /// 从未被任何 AOT 程序调用——它们的 AOT 兼容性此前是**未验证的声明**。本方法在原生二进制里
+    /// 执行这些路径并校验结果（与 JIT 侧 <c>ExpressionBuilderSmokeTests</c> 同一套断言）。</para>
+    /// <para>锁语句按 ITM-639 的登记契约**只验形态不执行**：SQLite 不支持 FOR UPDATE/SHARE，
+    /// 构建期故意不拒绝（既定契约允许在 SQLite 上预览面向 PG/MySQL 的锁语句形态），
+    /// 执行会报 <c>SQLite Error 1: near "FOR": syntax error</c>。</para></summary>
+    private static async Task VerifyExpressionBuildersAsync(DataSession<SqliteProvider> db)
+    {
+        AotParentEntity parent = await db.InsertAsync(new AotParentEntity { Name = "p0" }).ConfigureAwait(false);
+        // 逐条插入：循环内 DB 调用会被 PALORM005（N+1 检测）拦下——分析器行为正确，
+        // 冒烟只需 3 行数据，展开即可，不必为此改走 bulk 路径（那会混淆本方法的覆盖点）。
+        await db.InsertAsync(new AotChildEntity { ParentId = parent.Id, Label = "c0", Weight = 0 }).ConfigureAwait(false);
+        await db.InsertAsync(new AotChildEntity { ParentId = parent.Id, Label = "c1", Weight = 1 }).ConfigureAwait(false);
+        await db.InsertAsync(new AotChildEntity { ParentId = parent.Id, Label = "c2", Weight = 2 }).ConfigureAwait(false);
+
+        await VerifySortingFilteringAndProjectionAsync(db, parent).ConfigureAwait(false);
+        await VerifyJoinsAndCteAsync(db).ConfigureAwait(false);
+        await VerifyLocksCachingAndSplitQueryAsync(db).ConfigureAwait(false);
+    }
+
+    private static async Task VerifySortingFilteringAndProjectionAsync(
+        DataSession<SqliteProvider> db, AotParentEntity parent)
+    {
+        List<AotChildEntity> page = await db.From<AotChildEntity>()
+            .Where($"parent_id = {parent.Id}")
+            .OrderByDescending(x => x.Label)
+            .ThenBy(x => x.Id)
+            .Skip(1)
+            .Take(1)
+            .ToListAsync().ConfigureAwait(false);
+        if (page.Count != 1 || page[0].Label != "c1")
+            throw new InvalidOperationException("OrderByDescending/ThenBy/Skip/Take failed");
+
+        List<AotChildEntity> inList = await db.From<AotChildEntity>()
+            .WhereIn(x => x.Label, ["c0", "c2"]).ToListAsync().ConfigureAwait(false);
+        List<AotChildEntity> notInList = await db.From<AotChildEntity>()
+            .WhereNotIn(x => x.Label, ["c0"]).ToListAsync().ConfigureAwait(false);
+        if (inList.Count != 2 || notInList.Count != 2)
+            throw new InvalidOperationException("WhereIn/WhereNotIn failed");
+
+        int renamed = await db.From<AotChildEntity>()
+            .Set(x => x.Label, "renamed")
+            .Where($"label = {"c2"}")
+            .ExecuteNonQueryAsync().ConfigureAwait(false);
+        if (renamed != 1)
+            throw new InvalidOperationException("Set/ExecuteNonQueryAsync failed");
+
+        string projectionSql = db.From<AotChildEntity>().Select(x => x.Id, x => x.Label).AsDryRun().Sql;
+        if (!projectionSql.Contains("label", StringComparison.Ordinal)
+            || projectionSql.Contains("weight", StringComparison.Ordinal))
+            throw new InvalidOperationException("Select projection failed");
+
+        string groupedSql = db.From<AotChildEntity>()
+            .GroupBy(x => x.ParentId).Having($"COUNT(*) > {0}").AsDryRun().Sql;
+        if (!groupedSql.Contains("GROUP BY", StringComparison.Ordinal)
+            || !groupedSql.Contains("HAVING", StringComparison.Ordinal))
+            throw new InvalidOperationException("GroupBy/Having failed");
+    }
+
+    private static async Task VerifyJoinsAndCteAsync(DataSession<SqliteProvider> db)
+    {
+        var withInclude = db.From<AotChildEntity>()
+            .Include<AotParentEntity>(c => c.ParentId, p => p.Id)
+            .Where($"label = {"c0"}");
+        if (!withInclude.AsDryRun().Sql.Contains("aot_parent", StringComparison.Ordinal)
+            || (await withInclude.ToListAsync().ConfigureAwait(false)).Count != 1)
+            throw new InvalidOperationException("Include failed");
+
+        var withThenInclude = db.From<AotChildEntity>()
+            .ThenInclude<AotParentEntity, AotChildEntity>(p => p.Id, c => c.ParentId);
+        if ((await withThenInclude.ToListAsync().ConfigureAwait(false)).Count == 0)
+            throw new InvalidOperationException("ThenInclude failed");
+
+        List<AotChildEntity> cteRows = await db.From<AotChildEntity>()
+            .With("aot_cte", $"SELECT * FROM aot_child WHERE weight >= {1}")
+            .ToListAsync().ConfigureAwait(false);
+        if (cteRows.Count != 2 || cteRows.Any(static row => row.Weight < 1))
+            throw new InvalidOperationException("With(CTE) failed");
+
+        List<AotChildEntity> window = await db.From<AotChildEntity>()
+            .UnsafeWindowOver("ROW_NUMBER()", "PARTITION BY parent_id ORDER BY id")
+            .Take(1).ToListAsync().ConfigureAwait(false);
+        if (window.Count != 1)
+            throw new InvalidOperationException("UnsafeWindowOver failed");
+    }
+
+    private static async Task VerifyLocksCachingAndSplitQueryAsync(DataSession<SqliteProvider> db)
+    {
+        // 锁语句：只验形态（ITM-639）——SQLite 执行期报语法错误是登记契约
+        if (!db.From<AotChildEntity>().ForUpdate().AsDryRun().Sql.Contains("FOR UPDATE", StringComparison.Ordinal)
+            || !db.From<AotChildEntity>().ForUpdate(skipLocked: true).AsDryRun().Sql
+                .Contains("SKIP LOCKED", StringComparison.Ordinal)
+            || !db.From<AotChildEntity>().ForShare().AsDryRun().Sql.Contains("FOR SHARE", StringComparison.Ordinal))
+            throw new InvalidOperationException("ForUpdate/ForShare SQL shape failed");
+
+        var cached = db.From<AotChildEntity>()
+            .WithCache("aot-cache", TimeSpan.FromSeconds(5)).Where($"label = {"c0"}");
+        List<AotChildEntity> cacheFirst = await cached.ToListAsync().ConfigureAwait(false);
+        List<AotChildEntity> cacheSecond = await cached.ToListAsync().ConfigureAwait(false); // 第二次走缓存
+        if (cacheFirst.Count != 1 || cacheSecond.Count != 1)
+            throw new InvalidOperationException("WithCache failed");
+
+        if ((await db.From<AotChildEntity>().AsPrepared().Where($"label = {"c0"}")
+                .ToListAsync().ConfigureAwait(false)).Count != 1)
+            throw new InvalidOperationException("AsPrepared failed");
+
+        if (!db.From<AotChildEntity>().Tag("aot-smoke").AsDryRun().Sql
+                .Contains("aot-smoke", StringComparison.Ordinal))
+            throw new InvalidOperationException("Tag failed");
+
+        var split = db.From<AotChildEntity>()
+            .Include<AotParentEntity>(c => c.ParentId, p => p.Id)
+            .Where($"label = {"c0"}")
+            .AsSplitQuery();
+        if (split.AsDryRun().Sql.Contains("JOIN", StringComparison.Ordinal)
+            || (await split.ToListAsync().ConfigureAwait(false)).Count != 1)
+            throw new InvalidOperationException("AsSplitQuery failed");
     }
 
     /// <summary>byte[] 列的 AOT 全链验证：参数化等值过滤（含 0x00 字节）+ 物化往返 + 可空列 NULL 守卫。</summary>
