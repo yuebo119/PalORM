@@ -55,7 +55,20 @@ public static class QueryBuilderExtensions
         // 只读 SELECT 管线现经会话弹性策略执行。接入条件：
         // ① 命令不带事务——事务内重试会在语句失败后二次失败（如 PG aborted transaction）
         //   并以次生异常掩盖根因，且跨尝试的快照语义不成立；
-        // ② 策非直通（零重试且熔断禁用）——保持 Testing 预设与默认直通路径零开销。
+        // ② 策略非直通（MaxRetries=0 且 CircuitBreakerThreshold=0，即 Testing 预设）。
+        //    注意：默认配置（MaxRetries=3 / 熔断阈值 5）**不是**直通——只读查询默认就走执行器，
+        //    此前这里"默认直通路径零开销"的说法不成立（v5.6 实测更正）。
+        //    实测常数开销 ≈272 B/查询，与结果行数无关（单行查询 +8% 分配，千行 +0.2%）。
+        //    三项独立测量之和与 in-situ A/B 之差逐字节吻合（168+56+48 = 272，实测 272~278）：
+        //      · 超时 CTS + CancelAfter 定时器 ≈168 B，每次尝试一份——这正是 CommandTimeout
+        //        语义本身，且覆盖连接获取与读取器迭代，不是驱动侧 CommandTimeout 的子集，不能省
+        //      · 调用点把单次尝试内核转成委托 1 次 = 56 B（内核是捕获 builder 的 async 局部函数，
+        //        目标实例每次不同，无法缓存委托）
+        //      · 执行器机械（熔断进出 + 异步状态机 ≈48 B），量级最小且与重试/熔断语义耦合
+        //    后两项合计 104 B 是唯一可剥的部分，须把只读内核从 async 局部函数改成 struct 内核 +
+        //    泛型约束（顺带消掉两分支共有的 ~250 B display class）；实测耗时无变化，未做。
+        //    直通配置下三项都不发生，但同时也失去超时包装：慢命令抛驱动自身异常，
+        //    不再是带 PalORM.InfrastructureTimeout 标记的 TimeoutException。
         // 写入路径（ExecuteNonQueryAsync/Bulk/StoredProc/原始 SQL 家族）维持直连：
         // 重试非幂等写有重复执行风险（ITM-310 契约），显式需求请用 ExecuteWithResilience 包裹。
         DbTransaction? boundTransaction = builder.GetActiveTransaction();

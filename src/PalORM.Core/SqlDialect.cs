@@ -9,7 +9,7 @@ public enum SqlDialect
     /// <summary>MySQL——标识符反引号、多值 INSERT 批量写入。</summary>
     MySql,
 
-    /// <summary>SQLite——标识符双引号、单文件库、不支持连接池配置。</summary>
+    /// <summary>SQLite——标识符双引号、单文件库、池参数被忽略（进程内嵌入式，无服务端池可调）。</summary>
     Sqlite
 }
 

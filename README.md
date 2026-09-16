@@ -177,10 +177,10 @@ var env = DbOptions.FromEnvironment("PALORM_CONNECTION");
 | `CommandTimeout` | `TimeSpan` | 30s | 每条 SQL 命令的执行超时。亚秒值向上取整为 1 秒（避免塌缩为 0=无限等待） | |
 | `MaxRetries` | `int` | 3 | 瞬时故障（连接失败/超时/死锁）最大重试次数。0=禁用重试。v5.4 起覆盖只读查询内置管线；写入路径不自动重试 | |
 | `RetryBackoff` | `Func<int, TimeSpan>?` | 指数退避 | 自定义重试间隔（参数=重试次数）。返回负值抛异常 | |
-| `MaxPoolSize` | `int` | 100 | 连接池最大连接数。SQLite 不支持（抛 `NotSupportedException`） | |
+| `MaxPoolSize` | `int` | 100 | 连接池最大连接数。**SQLite 忽略此项**（嵌入式库无服务端池可调） | |
 | `PoolIdleTimeoutSeconds` | `int` | 30 | 连接池空闲超时（秒）。超时后空闲连接被关闭 | |
 | `PoolLifetimeMinutes` | `int` | 60 | 连接最大生命周期（分钟）。到期后强制重建，避免长期持有陈旧连接 | |
-| `PoolExplicitlyConfigured` | `bool` | false | `WithPool()` 设置后为 true。SQLite 据此拒绝池配置 | |
+| `PoolExplicitlyConfigured` | `bool` | false | `WithPool()` 设置后为 true。标记「池参数由调用方显式给出」 | |
 | `CircuitBreakerThreshold` | `int` | 5 | 断路器：连续失败次数阈值。0=禁用熔断 | |
 | `CircuitBreakerResetAfter` | `TimeSpan` | 30s | 熔断后恢复等待时间。超时后进入半开状态（允许一次试探请求） | |
 | `NamingConvention` | `enum` | None | 命名策略（None=原样 / SnakeCase / LowerCase）。仅影响自定义 SQL 中的标识符归一化，不影响源生成器列映射 | |
@@ -327,6 +327,8 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 默认 `DbOptions`（MaxRetries=3 / CircuitBreakerThreshold=5）即生效；`Testing` 预设零重试零熔断，测试确定性不受影响。
 
+**每查询常数开销（v5.6 实测）**：只读查询走弹性策略的代价 ≈272 B 分配/查询，**与结果行数无关**（单行查询 +8%，千行查询 +0.2%）。构成：超时 CTS + 定时器 ≈168 B（`CommandTimeout` 语义本身）、调用点委托 56 B、执行器机械 ≈48 B。其中只有后两项（104 B）原则上可剥，需把只读内核从 async 局部函数改成 struct 内核 + 泛型约束，而实测耗时无变化，故未做。想一点开销都不出就用直通配置（`MaxRetries=0` + `CircuitBreakerThreshold=0`）——代价是同时失去超时包装：慢命令抛驱动自身异常，不再是带 `PalORM.InfrastructureTimeout` 标记的 `TimeoutException`。
+
 ### 横切关注点
 
 | 功能 | 说明 |
@@ -454,6 +456,35 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | SQLite | 4.5 MB | 26 MB |
 | PostgreSQL | 11.6 MB | 61 MB |
 | MySQL | 9.5 MB | 47 MB |
+
+### 查询构建的性能提示：表达式树提到静态字段
+
+`OrderBy` / `ThenBy` / `Select` / `GroupBy` / `WhereIn` / `WhereNotIn` / `Set` / `Include` /
+`ThenInclude` 接收 `Expression<Func<T, ...>>`。C# 在**调用点**构造表达式树，库拿到时成本已付，
+**无法在库内缓存**——每次调用都要重建，实测每棵树 512 字节加 0.5~1.6 µs。
+把 lambda 提到静态字段即可完全消除这笔开销：
+
+```csharp
+// ❌ 每次调用都重建表达式树
+await db.From<Order>().OrderBy(o => o.CreatedAt).ToListAsync();
+
+// ✅ 表达式树只构造一次，之后复用
+private static readonly Expression<Func<Order, DateTime>> ByCreatedAt = o => o.CreatedAt;
+await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
+```
+
+收益随查询规模变化（SQLite 实测）：
+
+| 场景 | 分配降幅 | 时间降幅 |
+|------|:---:|:---:|
+| `UPDATE` + `Set(...)` | −18.0% | −18.3% |
+| 单行查询 + `OrderBy(...)` | −12.4% | −7.2% |
+| `WhereIn(500)` | −0.72% | −1.7% |
+| 10K 行查询 | 被结果集摊薄到可忽略 | 同 |
+
+**什么时候值得改**：查询次数多、单次行数少，且热路径上用到上述构建器方法。
+批量与报表型负载不必改。`Where` / `OrWhere` / `Having` 接收 `FormattableString`，
+本来就不构造表达式树，无需处理。
 
 ---
 
