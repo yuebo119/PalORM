@@ -9,6 +9,62 @@
 
 ---
 
+## v5.6 性能轮（2026-09-16）
+
+> 本节记录 2026-09 优化轮的结果与**新的门禁机制**；下文 v5.0.0 的表格是历史报告，未重跑，
+> 其绝对毫秒不可与本轮数字直接对比（见"为什么不设绝对毫秒阈值"）。
+
+### 三项批量路径优化的实测效果
+
+数据来自 `.ai/perf-probe`（轻量探针：`GC.GetTotalAllocatedBytes` + 数据准备置于计时区外，
+分配数字复现性优于 1%），单位为每行分配字节数：
+
+| 路径（10K 行） | 改前 | 改后 | 降幅 |
+|---|---|---|---|
+| PG Binary COPY（4 列） | 882.3 B/行 | **211.1 B/行** | −76% |
+| PG Binary COPY（19 列） | 4844.7 B/行 | **816.9 B/行** | −83% |
+| MySQL BulkCopy（4 列） | 671.7 B/行 | **294.1 B/行** | −56% |
+| MySQL BulkCopy（19 列） | 3100.3 B/行 | **940.3 B/行** | −70% |
+| 批量 UPDATE 单语句（PG，40000 行） | 2750.0 B/行 | **1609.2 B/行** | −41% |
+| 批量 UPDATE 单语句（MySQL，40000 行） | 2457.0 B/行 | **2006.4 B/行** | −18% |
+
+共同的根因与修法：三条路径原先都在**每行重建参数对象**（`CreateParameter` 逐个调用），
+改为「参数对象每批建一次、逐行只写 `Value`」。PG/MySQL 的 COPY 路径复用生成器已产出的
+`BindInsertValues`；批量 UPDATE 另需生成器新发射的 `BindUpdateValues`（对齐前者形态）。
+
+### 门禁机制（v5.6 重做）
+
+- **判定数据源**：BDN 的 `-report*.json`（稳定契约）。原实现 grep 控制台表格
+  （`grep 'PalORM_QueryAll' | grep 'ms |'`），列宽/单位随 BDN 版本变化，一旦抓不到
+  就落到 `::warning::` 分支放行——门禁结构上不可能变红。
+- **范围**：`CrudBenchmarks` + `OrmComparisonBenchmarks`（27 项，约 5 分钟）。
+  原过滤器 `*SqliteBenchmarks*` 匹配不到任何类名（最接近的是 `SqliteSpeedBenchmarks`，
+  中间隔着 `Speed`），实测 BDN 跑 0 个基准并以**退出码 0** 结束。
+- **阈值**：只对**分配字节数**（+20%）与**相对同轮手写对照的比值**（+10%）设阈值。
+  **不设绝对毫秒阈值**——实测同机两次运行的 ADO.NET 地板从 6.97ms 漂到 10.0ms（43%），
+  绝对时间做门禁必然误报；比值在同轮内计算，把机器差异约掉，跨机器可比。
+- **失败即失败**：缺基准、缺对照、基线 schema 不符、哨兵（`PalORM_*` / `ADO_NET_*`）
+  缺失，一律 `exit 1`，没有"不可判定即放行"的分支。
+- **仪器已验证**：阳性对照通过（27 项 `exit 0`）；三处变异全部被抓到——
+  ① 分配抬高 50% → `exit 1`（分配与比值双触发）；② 删掉 Crud 类 → `exit 1`（哨兵）；
+  ③ 结果目录为空 → `exit 1`。
+
+### 基线记录（2026-09-16，`bench/baselines/perf-baseline.json`）
+
+`PalORM_QueryAll` 的分配是同轮手写 ADO.NET 的 **1.137 倍**；单行路径的"ORM 税"更重：
+`GetByKey` 3.29× · `Insert` 4.34× · `Update` 8.10×（相对 ADO.NET 的分配比）。
+`OrmComparison` 组相对 Dapper：`StableShape` 2.98× · `VaryingShape` 3.38×。
+
+本地运行与重录：
+
+```bash
+bash scripts/run-benchmarks.sh sqlite          # 全组（约 30 分钟）
+python scripts/perf-baseline.py record ...     # 从 BDN JSON 重录基线
+python scripts/perf-baseline.py check ...      # 对照基线判定回归
+```
+
+---
+
 ## 📋 基准方法论
 
 ### BenchmarkDotNet fork 说明

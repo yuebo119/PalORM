@@ -86,6 +86,36 @@
   "每查询新建连接"，含对照组证明计数有区分力。
 - `DefaultFilterFormsTests`（3）：软删 + 租户的三种拼接形态在 Count/GetAll/Get 上各钉一条。
 
+### 🧪 性能门禁重做与基线重录
+
+- **门禁原先结构上不可能变红**（三处叠加）：
+  ① 过滤器 `*SqliteBenchmarks*` 匹配不到任何类名——仓库里最接近的是
+  `SqliteSpeedBenchmarks`，中间隔着 `Speed`；实测 BDN 打印可用列表并以**退出码 0** 结束，
+  跑 0 个基准；
+  ② 回归判定 grep 控制台表格（`grep 'PalORM_QueryAll' | grep 'ms |'`），列宽/单位随 BDN
+  版本变化，抓不到就落 `::warning::` 分支；
+  ③ 基线阈值是绝对毫秒，而实测同机两次运行的 ADO.NET 地板从 6.97ms 漂到 10.0ms（43%）。
+  另有第四处：artifact 上传路径写成 `bench/PalORM.Benchmarks/BenchmarkDotNet.Artifacts/`，
+  而 `dotnet run --project` 的 CWD 是仓库根，真实位置是仓库根的 `BenchmarkDotNet.Artifacts/`。
+- **重做**：判定改读 BDN 的 `-report*.json`（稳定契约）；范围收为
+  `CrudBenchmarks` + `OrmComparisonBenchmarks`（27 项，约 5 分钟，CI 40 分钟预算内）；
+  阈值只对**分配字节数（+20%）**与**相对同轮手写对照的比值（+10%）**设——比值在同轮内计算，
+  把机器差异约掉，跨机器可比；缺基准/缺对照/schema 不符/哨兵缺失一律 `exit 1`，
+  删掉"不可判定即放行"分支。
+- **仪器已验证**（此前从未验证过它能否失败）：阳性对照 27 项 `exit 0`；三处变异全部被抓到
+  ——分配抬高 50%（分配+比值双触发）、删掉 Crud 类（哨兵）、结果目录为空，均 `exit 1`。
+  过程中阳性对照还抓出脚本自身一个恒红缺陷：哨兵按 `CrudBenchmarks.PalORM_` 做前缀匹配，
+  而 `FullName` 是 `PalORM.Benchmarks.CrudBenchmarks.PalORM_QueryAll`——改为按叶子名判定。
+- **基线重录**：新增 `bench/baselines/perf-baseline.json`（schema 1，27 项，6 项带比值），
+  由新脚本 `scripts/perf-baseline.py`（`record` / `check` 两个子命令，供门禁与
+  `run-benchmarks.sh` 共用，避免两套解析漂移）生成。v5.0.json 保留为历史记录。
+  录得的关键比值：`PalORM_QueryAll` 分配是同轮手写 ADO.NET 的 **1.137×**；
+  单行路径 ORM 税更重——`GetByKey` 3.29× · `Insert` 4.34× · `Update` 8.10×。
+- `scripts/run-benchmarks.sh` 同步：`sqlite` 与 `scale` 的过滤器改为实际类名，
+  报告路径改到仓库根，基线保存从「读 CSV 拼 JSON」改为调用同一脚本
+  （原实现还有个真 bug：`tail | while` 的子 shell 使 `FIRST` 标志失效，
+  条目间不输出逗号，生成的是非法 JSON）。
+
 ### 🔧 修复（测试基础设施）
 
 - **集成测试必须先手动 `source scripts/set-test-env.sh` 才会通过**：`TestEnvironment`
