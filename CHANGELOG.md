@@ -134,6 +134,18 @@
 - **`docs/API参考.md` 的注册字典计数订正**：原称"16 个注册字典"且列表漏 `SensitiveColumnMasks`
   ——`RegistryFragment` 实为 17 个属性。计数与列表已同步。
 
+### 📝 文档（AOT 验收）
+
+- `docs/AOT部署指南.md` 的 PG / MySQL 两节原先只有 publish 命令、**没有运行命令与凭据要求**
+  ——按文档操作会在原生程序启动后拿到一串连接失败的堆栈，无从判断是"环境没配好"还是"AOT 链路坏了"
+  （本轮实际发生过）。现已补上带 `PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION` 的完整命令，
+  并说明本地可用 `set -a && . ./.env.test && set +a` 载入。
+- 明确记录取向：这两个程序**刻意不自己读 `.env.test`**——它们是 AOT 验收程序，凭据应由环境显式注入
+  （CI 直接注入 secret）；自动读仓库本地文件会让"从仓库跑"与"从 CI 跑"在凭据环节分叉。
+- 状态表更新：PG / MySQL 由"原生 publish 通过，CI 运行待验证"改为"本机原生运行通过
+  （2026-09-16，对远程开发库）· CI 容器运行待验证"——本轮三个 AOT 程序 publish 后原生运行均 PASSED，
+  但按本文档既有口径，最终状态仍以 CI 服务容器为准。
+
 ### 🧪 新增测试
 
 - `ReadRouteConnectionReuseTests`（3）：用 `ReadSessionSetupSql` 作副作用探针证伪

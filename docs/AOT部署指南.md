@@ -24,8 +24,8 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 | Provider | AOT 状态 | NuGet 包 | 原生依赖 |
 |----------|---------|----------|---------|
 | **SQLite** | ✅ 本机原生运行通过 | `Microsoft.Data.Sqlite.Core` | `e_sqlite3mc`（随发布目录部署） |
-| **PostgreSQL** | ⚠️ 原生 publish 通过，CI 运行待验证 | `Npgsql` | 无 (纯托管) |
-| **MySQL** | ⚠️ 原生 publish 通过，CI 运行待验证 | `MySqlConnector` | 无 (纯托管) |
+| **PostgreSQL** | ✅ 本机原生运行通过（2026-09-16，对远程开发库）· CI 容器运行待验证 | `Npgsql` | 无 (纯托管) |
+| **MySQL** | ✅ 本机原生运行通过（2026-09-16，对远程开发库）· CI 容器运行待验证 | `MySqlConnector` | 无 (纯托管) |
 
 ### SQLite — 推荐 AOT 首选
 
@@ -44,11 +44,36 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 
 `Npgsql` 是纯托管 ADO.NET Provider，不依赖 `libpq`。PalORM 不启用 Npgsql 运行时 JSON 类型映射；OwnedJson 只走 PalORM Source Generator 与 STJ `JsonTypeInfo<T>`。任何 Npgsql 路径产生的 IL/AOT 警告都阻断验收；不得通过抑制继续发布。最终状态以 CI 服务容器中的原生二进制 CRUD、并发、OwnedJson、批量插入和批量软删除运行结果为准。
 
+**运行前必须注入凭据**（缺 `PALORM_PG_CONNECTION` 时程序以明确错误退出，不会静默跳过）：
+
+```bash
+export PALORM_PG_CONNECTION="Host=<host>;Port=5432;Username=<user>;Password=<pwd>;Database=<db>"
+dotnet publish test/PalORM.AotTest.Pg -c Release -r win-x64   --self-contained true -p:PublishAot=true -p:PublishTrimmed=true -o artifacts/aot/pg
+./artifacts/aot/pg/PalORM.AotTest.Pg.exe
+# 预期：PalORM AOT PG verification PASSED
+```
+
+仓库本地检出可用 gitignored 的 `.env.test` 一次载入两个 Provider 的连接串：
+`set -a && . ./.env.test && set +a`。
+
+> 这两个程序**刻意不自己读 `.env.test`**：它们是 AOT 验收程序，凭据必须由环境显式注入
+> （CI 直接注入 secret）。自动读仓库本地文件会让"从仓库跑"与"从 CI 跑"行为分叉，
+> 而分叉点恰好是在验收最关键的凭据环节。
+
 ### MySQL — MySqlConnector AOT
 
 `MySqlConnector` 纯托管实现，无原生依赖。理论上 AOT 兼容性最好，但未在生产中大规模验证。
 
 ⚠️ MySqlConnector 的连接池和 SSL/TLS 路径需要 AOT 链路验证。
+
+**运行前必须注入凭据**（同上，缺 `PALORM_MYSQL_CONNECTION` 时明确报错退出）：
+
+```bash
+export PALORM_MYSQL_CONNECTION="Server=<host>;Port=3306;User ID=<user>;Password=<pwd>;Database=<db>"
+dotnet publish test/PalORM.AotTest.MySql -c Release -r win-x64   --self-contained true -p:PublishAot=true -p:PublishTrimmed=true -o artifacts/aot/mysql
+./artifacts/aot/mysql/PalORM.AotTest.MySql.exe
+# 预期：PalORM AOT MySQL verification PASSED
+```
 
 ## AOT 限制（PalORM 通用）
 
