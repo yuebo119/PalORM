@@ -118,6 +118,71 @@ public sealed class ExternalDatabaseBulkTests
         }
     }
 
+    /// <summary>MySQL 批量插入的**值保真**用例——覆盖 <see cref="AllTypesEntity"/> 的全部白名单类型。
+    /// <para><b>为什么需要它</b>：v5.6 把 BulkCopy 的取值载体从 DataTable 换成
+    /// <c>EntityDataReader</c>，值统一经 <c>GetValue</c> 以 <c>object</c> 交给驱动按运行时类型
+    /// 格式化为文本。DataTable 路径按列声明 <c>typeof(object)</c> 时的行为与读取器一致，
+    /// 但这是一条**新代码路径**：bool/Guid/DateTimeOffset/DateOnly/TimeOnly/float 等类型
+    /// 一旦被驱动按错误格式写出，就是静默的数据损坏（列值看起来"有值"）。
+    /// 既有 BulkCopy 用例只覆盖 string/decimal/DateTime/byte[]/可空。</para>
+    /// <para><b>覆盖率自述</b>：服务端 <c>local_infile=OFF</c> 时 provider 会静默回退多值 INSERT，
+    /// 本用例就不经过读取器（值往返仍被验证）。读取器自身的契约由 Core.Tests 的
+    /// <c>EntityDataReaderTests</c> 确定性覆盖，不依赖服务端能力。</para></summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_BulkCopy_AllWhitelistedTypes_RoundTripPreservesValues()
+    {
+        await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS all_types_entities");
+        await db.MigrateAsync();
+
+        var sample = new AllTypesEntity
+        {
+            VInt = 42,
+            VShort = 7,
+            VByte = 255,
+            VString = "端到端",
+            VChar = 'Z',
+            VBool = true,
+            VDecimal = 12.34m,
+            VDouble = 3.14159,
+            VFloat = 2.5f,
+            VDateTime = new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc),
+            VGuid = Guid.Parse("11111111-2222-3333-4444-555555555555"),
+            VDto = new DateTimeOffset(2026, 7, 18, 10, 30, 0, TimeSpan.FromHours(8)),
+            VDateOnly = new DateOnly(2026, 7, 18),
+            VTimeOnly = new TimeOnly(10, 30, 45),
+            VBytes = [0x00, 0x01, 0xFF, 0x00, 0x41],
+            VNullableInt = null,
+            VNullableTimeOnly = new TimeOnly(23, 59, 59),
+            VNullableBytes = [9, 8, 7],
+        };
+
+        long inserted = await db.BulkInsertAsync([sample]);
+
+        await Assert.That(inserted).IsEqualTo(1);
+        var read = (await db.GetAllAsync<AllTypesEntity>()).Single();
+        await Assert.That(read.Id).IsGreaterThan(0); // 自增主键由 MySQL 生成（读取器返回 DBNull）
+        await Assert.That(read.VInt).IsEqualTo(sample.VInt);
+        await Assert.That(read.VShort).IsEqualTo(sample.VShort);
+        await Assert.That(read.VByte).IsEqualTo(sample.VByte);
+        await Assert.That(read.VString).IsEqualTo(sample.VString);
+        await Assert.That(read.VChar).IsEqualTo(sample.VChar);
+        await Assert.That(read.VBool).IsEqualTo(sample.VBool);
+        await Assert.That(read.VDecimal).IsEqualTo(sample.VDecimal);
+        await Assert.That(read.VDouble).IsEqualTo(sample.VDouble);
+        await Assert.That(read.VFloat).IsEqualTo(sample.VFloat);
+        await Assert.That(read.VDateTime).IsEqualTo(sample.VDateTime);
+        await Assert.That(read.VGuid).IsEqualTo(sample.VGuid);
+        await Assert.That(read.VDto.UtcDateTime).IsEqualTo(sample.VDto.UtcDateTime);
+        await Assert.That(read.VDateOnly).IsEqualTo(sample.VDateOnly);
+        await Assert.That(read.VTimeOnly).IsEqualTo(sample.VTimeOnly);
+        await Assert.That(read.VBytes.SequenceEqual(sample.VBytes)).IsTrue();
+        await Assert.That(read.VNullableInt).IsNull();
+        await Assert.That(read.VNullableTimeOnly).IsEqualTo(sample.VNullableTimeOnly);
+        await Assert.That(read.VNullableBytes.SequenceEqual(sample.VNullableBytes)).IsTrue();
+    }
+
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_MigrateWithUniqueIndexOnString_AndDecimalPrecision_RoundTrip()
