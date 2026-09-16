@@ -10,7 +10,7 @@
 #   严格（SqlBuild/Speed）：5/10/15
 #
 # 输出：
-#   bench/PalORM.Benchmarks/BenchmarkDotNet.Artifacts/（JSON + MD 报告）
+#   BenchmarkDotNet.Artifacts/（仓库根；JSON + MD 报告）
 #   bench/baselines/（基线 JSON，入 git）
 #   控制台统计有效性检查（Error/Mean 比值）
 
@@ -18,6 +18,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_DIR="$ROOT_DIR/bench/PalORM.Benchmarks"
+# BDN 把报告写在**仓库根**（dotnet run --project 的 CWD 是仓库根），不在基准项目目录下
+ARTIFACTS_DIR="$ROOT_DIR/BenchmarkDotNet.Artifacts"
 BASELINE_DIR="$ROOT_DIR/bench/baselines"
 TARGET="${1:-sqlite}"
 EXTRA="${2:-}"
@@ -37,17 +39,20 @@ case "$TARGET" in
   sqlite)
     echo ">>> 运行 SQLite 基准（CRUD + Bulk + Transaction + Advanced）..."
     dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
-      --filter '*SqliteBenchmarks*' 2>&1 | tee /tmp/bench-sqlite-$(date +%Y%m%d-%H%M%S).log
+      --filter '*CrudBenchmarks*' '*BulkBenchmarksFixed*' '*BulkBenchmarks*' \
+               '*GcBenchmarks*' '*SqlBuildBenchmarks*' '*SqliteSpeedBenchmarks*' \
+               '*FeatureBenchmarks*' '*OrmComparisonBenchmarks*' '*BinaryBenchmarks*' \
+      --exporters json 2>&1 | tee /tmp/bench-sqlite-$(date +%Y%m%d-%H%M%S).log
     ;;
   scale)
     echo ">>> 运行 BulkInsert 拐点扫描（100/1K/10K/100K）..."
     dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
-      --filter '*BulkInsertScaleBenchmarks*' 2>&1 | tee /tmp/bench-scale-$(date +%Y%m%d-%H%M%S).log
+      --filter '*BulkBenchmarks*' 2>&1 | tee /tmp/bench-scale-$(date +%Y%m%d-%H%M%S).log
     ;;
   build)
     echo ">>> 运行 SQL 构建微基准（严格配置 5/10/15）..."
     dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
-      --filter '*SqlBuildBenchmarks*' 2>&1 | tee /tmp/bench-build-$(date +%Y%m%d-%H%M%S).log
+      --filter '*SqlBuildBenchmarks*' --exporters json 2>&1 | tee /tmp/bench-build-$(date +%Y%m%d-%H%M%S).log
     ;;
   pg)
     if [ -z "${PALORM_BENCH_PG:-}" ]; then
@@ -93,32 +98,18 @@ if [ "$EXTRA" = "--save-baseline" ]; then
   BASELINE_FILE="$BASELINE_DIR/snapshot-$TIMESTAMP.json"
   mkdir -p "$BASELINE_DIR"
 
-  # 从 BenchmarkDotNet CSV 报告提取 Median + Allocated 生成精简 JSON
-  CSV_FILE="$BENCH_DIR/BenchmarkDotNet.Artifacts/results/PalORM.Benchmarks.SqliteBenchmarks-report.csv"
-  if [ -f "$CSV_FILE" ]; then
-    echo ""> "$BASELINE_FILE"
-    echo "{" >> "$BASELINE_FILE"
-    echo "  \"snapshot\": \"$TIMESTAMP\"," >> "$BASELINE_FILE"
-    echo "  \"source\": \"run-benchmarks.sh $TARGET\"," >> "$BASELINE_FILE"
-    echo "  \"benchmarks\": [" >> "$BASELINE_FILE"
-    FIRST=true
-    # CSV 格式: Method,Mean,Error,StdDev,Median,Ratio,...,Allocated
-    tail -n +2 "$CSV_FILE" | while IFS=',' read -r method mean error stddev median ratio _gen0 _gen1 _gen2 allocated _allocratio; do
-      # 清理引号
-      method="${method//\"/}"
-      if [ "$FIRST" = true ]; then
-        FIRST=false
-      else
-        echo "    ," >> "$BASELINE_FILE"
-      fi
-      echo -n "    { \"name\": \"$method\", \"mean\": \"$mean\", \"median\": \"$median\", \"allocated\": \"$allocated\" }" >> "$BASELINE_FILE"
-    done
-    echo "" >> "$BASELINE_FILE"
-    echo "  ]" >> "$BASELINE_FILE"
-    echo "}" >> "$BASELINE_FILE"
+  # 从 BenchmarkDotNet 的 JSON 报告生成基线（与 perf-gate 同一数据源，避免 CSV 解析漂移）。
+  # 说明：原实现读 CSV 并以 `tail | while` 拼接 JSON——管道使 while 在子 shell 中执行，
+  # FIRST 标志无法跨迭代保持，条目之间不输出逗号，生成的是非法 JSON。
+  JSON_DIR="$ARTIFACTS_DIR/results"
+  mapfile -t JSONS < <(ls "$JSON_DIR"/*-report*.json 2>/dev/null || true)
+  if [ "${#JSONS[@]}" -gt 0 ]; then
+    dotnet run --project "$ROOT_DIR/tools/PalORM.PerfGate" -c Release -- \
+      record --results "$JSON_DIR" --out "$BASELINE_FILE" \
+      || { echo "❌ 基线生成失败"; exit 1; }
     echo "✅ 基线已保存: $BASELINE_FILE"
   else
-    echo "⚠ 未找到 CSV 报告，跳过基线保存"
+    echo "⚠ 未找到 BDN JSON 报告，跳过基线保存"
   fi
 fi
 
@@ -142,5 +133,5 @@ fi
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo " 基准运行完成"
-echo " 报告: $BENCH_DIR/BenchmarkDotNet.Artifacts/results/"
+echo " 报告: $ARTIFACTS_DIR/results/"
 echo "═══════════════════════════════════════════════════════════════"
