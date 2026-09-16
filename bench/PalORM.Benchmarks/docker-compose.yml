@@ -24,6 +24,12 @@ services:
 
   mysql:
     image: mysql:8.4
+    # --local-infile=1：MySQL 8 默认 OFF，而 PalORM 的 MySqlBulkCopyInserter
+    # （mySqlProvider 的 LOAD DATA LOCAL INFILE 路径）以它为唯一前置——不开则
+    # BulkInsertAsync 静默回退多值 INSERT，基准里 BulkCopy 与 PG COPY 都测不到。
+    # 权衡见 ADR-G（客户端侧 AllowLoadLocalInfile 已置 true）；本容器为本地基准用，
+    # 不暴露到生产网络。
+    command: ["--local-infile=1"]
     environment:
       MYSQL_ALLOW_EMPTY_PASSWORD: yes
       MYSQL_DATABASE: bench
