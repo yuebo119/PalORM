@@ -195,14 +195,40 @@ public sealed class PostgreSqlProvider : IDbProvider
                         Exception? rowCommandException = null;
                         try
                         {
+                            // v5.6 参数复用：参数对象每批建一次，逐行只写 Value。
+                            // 原实现每行 Parameters.Clear() + binder 重建 columnCount 个参数
+                            // （1 万行 × 4 列 = 4 万个 NpgsqlParameter），是 COPY 路径每行分配的
+                            // 主项——实测 882 B/行，而已在用参数池的 MySQL 多值 INSERT 只要
+                            // 361 B/行。绑定改用生成器已产出的 BindInsertValues（只写 Value、
+                            // 零创建），与 MultiValueBulkInsert 的 v4.6 池同一机制，无需改生成器。
+                            // 旧版生成器模型程序集 BindInsertValues 为 null 时回退逐行 binder。
+                            Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
+                            // 池的引用数组：参数对象仍留在 rowCommand.Parameters 内——
+                            // WriteRowAsync 读 parameter.NpgsqlDbType，脱离集合会丢失类型推断。
+                            DbParameter[]? pool = null;
                             for (int index = start; index < end; index++)
                             {
-                                rowCommand.Parameters.Clear();
-                                binder(rowCommand, entities[index], 0);
-                                if (rowCommand.Parameters.Count != columnCount)
-                                    throw new InvalidOperationException(
-                                        $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                                        $"{rowCommand.Parameters.Count} parameters.");
+                                if (valuesBinder is not null && pool is not null)
+                                {
+                                    valuesBinder(pool, entities[index], 0);
+                                }
+                                else
+                                {
+                                    rowCommand.Parameters.Clear();
+                                    binder(rowCommand, entities[index], 0);
+                                    if (rowCommand.Parameters.Count != columnCount)
+                                        throw new InvalidOperationException(
+                                            $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
+                                            $"{rowCommand.Parameters.Count} parameters.");
+                                    // 首行绑定成功后建池：参数数已校验，后续行不再重复校验
+                                    // （列数由生成器保证且池大小固定，逐行重验是纯开销）。
+                                    if (valuesBinder is not null)
+                                    {
+                                        pool = new DbParameter[columnCount];
+                                        for (int column = 0; column < columnCount; column++)
+                                            pool[column] = rowCommand.Parameters[column];
+                                    }
+                                }
 
                                 await WriteRowAsync(importer, rowCommand, columnCount, commandCt).ConfigureAwait(false);
                                 total++;

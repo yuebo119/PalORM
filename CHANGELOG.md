@@ -23,6 +23,17 @@
   `AddClause` 写时复制按 `Count+4` 预留容量；SELECT 列清单按 (Type, Dialect) 缓存；
   IN 列表改单 `ValueStringBuilder` 拼接；会话侧三处 `ConcurrentDictionary.GetOrAdd`
   捕获闭包改 `TryGetValue`，默认过滤三形态一次缓存。
+- **PG Binary COPY 参数复用（T19，真库实测）**：COPY 行循环原先每行 `Parameters.Clear()` +
+  `binder` 重建 `columnCount` 个参数（1 万行 × 4 列 = 4 万个 `NpgsqlParameter`）。现改为每批
+  建一次、逐行只写 Value，取值走生成器已产出的 `BindInsertValues`（与 `MultiValueBulkInsert`
+  的 v4.6 池同一机制，<b>无需改生成器</b>；旧模型程序集该绑定器为 null 时自动回退逐行路径）。
+  实测 **882.3 → 211.1 B/行（−76%）**，时间 77.7 → 70.0 ms；PG 由「比 MySQL 多值 INSERT
+  贵 2.4 倍」（882 vs 361）变为「便宜 1.7 倍」。参数对象仍留在命令集合内——`WriteRowAsync`
+  读 `NpgsqlParameter.NpgsqlDbType`，脱离集合会丢类型推断。
+  <br>新增 `PG_BinaryCopy_NullFirstThenValue_KeepsTypeInference`：参数类型由首个绑定行推断，
+  现有用例的行序是「先全非空、后全 null」，覆盖不到反向顺序，该用例把顺序倒过来钉住该风险。
+  AOT 全链路复验：`dotnet publish -r win-x64 -p:PublishAot=true` 后原生运行
+  `PalORM AOT PG verification PASSED`（该程序含 BulkInsert COPY 路径）。
 - **10K 行物化保持在地板**：相对 ADO.NET 地板 +0.05% 分配（未改动该路径）。
 
 ### 📝 行为变更
