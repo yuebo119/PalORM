@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace PalORM.PerfGate;
@@ -13,6 +14,22 @@ namespace PalORM.PerfGate;
 internal static class Program
 {
     private const int Schema = 1;
+
+    /// <summary>OS 描述归一到平台族——用于"基线录在别的平台"的提示。
+    /// 只认三族：判不出时返回描述原文，宁可提示也不要静默当作同平台。</summary>
+    private static string PlatformFamily(string osDescription)
+    {
+        if (osDescription.Contains("Windows", StringComparison.OrdinalIgnoreCase)) return "Windows";
+        if (osDescription.Contains("Darwin", StringComparison.OrdinalIgnoreCase)
+            || osDescription.Contains("macOS", StringComparison.OrdinalIgnoreCase)) return "macOS";
+        // Linux 的 OSDescription 是发行版名（"Ubuntu 24.04.1 LTS" / "Debian GNU/Linux 12"），
+        // 字面常不含 "Linux"——只认 "Linux" 会把两个 Ubuntu 补丁版本判成不同族而误报。
+        string[] linuxMarkers =
+            ["Linux", "Ubuntu", "Debian", "Alpine", "CentOS", "Fedora", "Red Hat", "Rocky", "SUSE"];
+        return linuxMarkers.Any(marker => osDescription.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            ? "Linux"
+            : osDescription;
+    }
 
     /// <summary>哨兵：按基准名的**最后一段**判定，与根命名空间无关。
     /// <para>FullName 形如 <c>PalORM.Benchmarks.CrudBenchmarks.PalORM_QueryAll</c>——
@@ -163,6 +180,18 @@ internal static class Program
         EnsureSentinel(results);
 
         Console.WriteLine($"基线: {baselinePath}（{baseline.Version} / {baseline.Date}）");
+        // 基线可能录在别的 OS 上（本仓库基线录于 Windows，workflow 跑在 ubuntu-latest）。
+        // 分配字节数在 Windows 上四轮逐位相同（仅 QueryAll ±0.002%），跨平台是否相同**未验证**——
+        // 分配阈值放宽到 +20% 的一部分原因即此。差异出现时先提示，避免把平台差读成真回归。
+        string currentPlatform = PlatformFamily(RuntimeInformation.OSDescription);
+        if (baseline.Environment.Os is { Length: > 0 } recordedOs
+            && PlatformFamily(recordedOs) != currentPlatform)
+        {
+            Console.WriteLine(
+                $"⚠ 录制平台与当前不同：基线 {recordedOs}（{PlatformFamily(recordedOs)}）"
+                + $" / 当前 {currentPlatform}。跨平台差异可能造成误报——判定前先确认差异是否为平台性。");
+        }
+
         Console.WriteLine(
             $"阈值: 分配 +{baseline.Thresholds.AllocatedPct.ToString("F0", CultureInfo.InvariantCulture)}%"
             + $" · 分配比 +{baseline.Thresholds.AllocRatioPct.ToString("F0", CultureInfo.InvariantCulture)}%"
