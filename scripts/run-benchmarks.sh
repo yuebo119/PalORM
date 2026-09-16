@@ -106,6 +106,9 @@ if [ "$EXTRA" = "--save-baseline" ]; then
   if [ "${#JSONS[@]}" -gt 0 ]; then
     dotnet run --project "$ROOT_DIR/tools/PalORM.PerfGate" -c Release -- \
       record --results "$JSON_DIR" --out "$BASELINE_FILE" \
+        --version "$(git -C "$ROOT_DIR" describe --tags --abbrev=0 2>/dev/null || echo dev)" \
+        --date "$(date +%Y-%m-%d)" \
+        --scope "run-benchmarks.sh $TARGET" \
       || { echo "❌ 基线生成失败"; exit 1; }
     echo "✅ 基线已保存: $BASELINE_FILE"
   else

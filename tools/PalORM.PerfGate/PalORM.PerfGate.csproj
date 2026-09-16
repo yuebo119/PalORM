@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- 仓库内部工具，经 dotnet run 调用（perf-gate workflow 与 run-benchmarks.sh）。
+         与 PalORM.Scaffold 同例：CLI 输出无需本地化、Console 同步调用可接受。 -->
+    <NoWarn>$(NoWarn);CA1303;CA1849;S6966;IDE0028;IDE0061;CA1307;S1135</NoWarn>
+  </PropertyGroup>
+
+</Project>

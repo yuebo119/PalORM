@@ -16,6 +16,7 @@
       "test/PalORM.Core.Tests/PalORM.Core.Tests.csproj",
       "test/PalORM.Integration.Tests/PalORM.Integration.Tests.csproj",
       "test/PalORM.SourceGen.Tests/PalORM.SourceGen.Tests.csproj",
+      "tools/PalORM.PerfGate/PalORM.PerfGate.csproj",
       "tools/PalORM.Scaffold/PalORM.Scaffold.csproj"
     ]
   }
