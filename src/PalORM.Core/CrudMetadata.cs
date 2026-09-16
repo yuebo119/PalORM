@@ -14,6 +14,9 @@ public readonly struct CrudBindings
     public readonly Action<DbCommand, object> BindUpsert;
     /// <summary>Update 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpdate;
+    /// <summary>v5.6：仅设置预分配 UPDATE 参数 Value 的委托（批量 UPDATE 参数池路径，
+    /// 零 CreateParameter 分配）。旧版生成器模型程序集为 null，消费方应回退逐行绑定。</summary>
+    public readonly Action<DbParameter[], object, int>? BindUpdateValues;
     /// <summary>行读取工厂委托（装箱为 object）。</summary>
     public readonly object RowFactory;
 
@@ -23,13 +26,15 @@ public readonly struct CrudBindings
         Action<DbParameter[], object, int>? bindInsertValues,
         Action<DbCommand, object> bindUpsert,
         Action<DbCommand, object> bindUpdate,
-        object rowFactory)
+        object rowFactory,
+        Action<DbParameter[], object, int>? bindUpdateValues = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
         BindUpsert = bindUpsert;
         BindUpdate = bindUpdate;
         RowFactory = rowFactory;
+        BindUpdateValues = bindUpdateValues;
     }
 }
 
@@ -68,6 +73,9 @@ public readonly struct CrudMetadata
     public readonly Action<DbCommand, object> BindUpsert;
     /// <summary>Update 参数绑定委托。</summary>
     public readonly Action<DbCommand, object> BindUpdate;
+    /// <summary>v5.6：仅设置预分配 UPDATE 参数 Value 的委托（批量 UPDATE 参数池路径，
+    /// 零 CreateParameter 分配）。旧版生成器模型程序集为 null，消费方应回退逐行绑定。</summary>
+    public readonly Action<DbParameter[], object, int>? BindUpdateValues;
     /// <summary>行读取工厂委托（装箱为 object）。</summary>
     public readonly object RowFactory;
     /// <summary>INSERT 涉及的列名（排除自增主键与计算列）。</summary>
@@ -101,6 +109,7 @@ public readonly struct CrudMetadata
         BindInsertValues = bindings.BindInsertValues;
         BindUpsert = bindings.BindUpsert;
         BindUpdate = bindings.BindUpdate;
+        BindUpdateValues = bindings.BindUpdateValues;
         RowFactory = bindings.RowFactory;
         // CrudColumns ctor 已做只读快照；这里直接复用，避免二次拷贝。
         InsertColumns = columns.Insert;
@@ -134,7 +143,7 @@ public readonly struct CrudMetadata
 
     internal CrudMetadata Copy()
         => new(Sqls,
-            new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory),
+            new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }

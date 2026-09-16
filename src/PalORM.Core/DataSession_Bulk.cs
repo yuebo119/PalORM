@@ -262,7 +262,15 @@ public partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>执行单批 UPDATE（构造 SQL + 绑定参数 + 执行）。</summary>
+    /// <summary>执行单批 UPDATE（构造 SQL + 绑定参数 + 执行）。
+    /// <para><b>v5.6 参数池</b>：目标命令的参数对象一次建好（<c>@p0…@p{n-1}</c> 按行递增，
+    /// SET 列在前、主键在每行末尾，租户参数固定名追加末尾），逐行只写 <c>Value</c>。
+    /// 取值优先走生成器新发射的 <see cref="CrudMetadata.BindUpdateValues"/>（零 CreateParameter）
+    /// ——原先经 probe 命令逐行 <c>BindUpdate</c> 建参数，40000 行 × 4 列即 16 万次创建，
+    /// 是真库实测 2671 B/行（PG）的主项。旧版模型程序集该绑定器为 null 时回退 probe 路径，
+    /// 参数创建量回到改前水平但语义不变。</para>
+    /// <para>参数名与顺序与 <see cref="BatchUpdateSqlBuilder"/> 的占位符逐位对应，由
+    /// <c>BatchUpdateParameterContractTests</c> 锁定跨 Provider 契约。</para></summary>
     private async ValueTask<long> ExecuteBatchUpdateAsync<T>(
         IReadOnlyList<T> entities, int batchStart, int batchEnd,
         CrudMetadata metadata, BatchUpdateContext ctx,
@@ -271,6 +279,7 @@ public partial class DataSession<TProvider>
     {
         int batchLen = batchEnd - batchStart;
         int paramsPerRow = ctx.SetColumnCount + 1;
+        int rowParamCount = batchLen * paramsPerRow;
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
@@ -279,20 +288,29 @@ public partial class DataSession<TProvider>
             TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
             batchLen, ctx.HasTenantFilter, _tenantParameterName);
 
-        // probe 复用：逐行绑定提取参数值
-        await using DbCommand probe = CreateCommand();
-        for (int i = batchStart; i < batchEnd; i++)
+        DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterPool(
+            cmd, rowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
+            TProvider.CreateParameter);
+
+        Action<DbParameter[], object, int>? valuesBinder = metadata.BindUpdateValues;
+        if (valuesBinder is not null)
         {
-            probe.Parameters.Clear();
-            metadata.BindUpdate(probe, entities[i]);
-            for (int c = 0; c <= ctx.SetColumnCount; c++)
+            for (int i = batchStart; i < batchEnd; i++)
+                valuesBinder(pool, entities[i], (i - batchStart) * paramsPerRow);
+        }
+        else
+        {
+            // 旧版生成器模型程序集：无零分配绑定器，退回 probe 取值再写进池
+            await using DbCommand probe = CreateCommand();
+            for (int i = batchStart; i < batchEnd; i++)
             {
-                int globalIdx = (i - batchStart) * paramsPerRow + c;
-                cmd.Parameters.Add(TProvider.CreateParameter($"@p{globalIdx}", probe.Parameters[c].Value));
+                probe.Parameters.Clear();
+                metadata.BindUpdate(probe, entities[i]);
+                int baseIndex = (i - batchStart) * paramsPerRow;
+                for (int c = 0; c < paramsPerRow; c++)
+                    pool[baseIndex + c].Value = probe.Parameters[c].Value;
             }
         }
-        if (ctx.HasTenantFilter)
-            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
 
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
