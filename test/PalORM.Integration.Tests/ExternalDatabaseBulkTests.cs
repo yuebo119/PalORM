@@ -65,6 +65,59 @@ public sealed class ExternalDatabaseBulkTests
         }
     }
 
+    /// <summary>可空列「首行为 null、后续行非 null」的 COPY 参数复用回归。
+    /// <para><b>为什么单列一条</b>：v5.6 把 COPY 的参数对象改为每批建一次、逐行只写 Value，
+    /// 参数类型由<b>首个</b>绑定行的值推断。现有 <c>PG_MigrateAndBinaryCopy_...</c> 的行序是
+    /// 「先全非空、后全 null」，覆盖不到反向顺序——若首行可空列为 null、后续行有值，
+    /// 类型推断可能停在首行的形态（ITM-318/ITM-527 登记的 DBNull→NpgsqlDbType 疑点族）。
+    /// 本用例把顺序倒过来，是该风险的唯一可证伪入口。</para></summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BinaryCopy_NullFirstThenValue_KeepsTypeInference()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
+        await db.MigrateAsync();
+        try
+        {
+            // 顺序刻意反转：全 null 行在前，有值行在后
+            ExtBulkEntity[] rows =
+            [
+                new()
+                {
+                    Code = "NULLS", Note = null, Amount = 0m,
+                    CreatedAt = new DateTime(2026, 7, 18, 9, 0, 0, DateTimeKind.Utc),
+                    OptionalCount = null, Payload = null
+                },
+                new()
+                {
+                    Code = "VALUED", Note = "note-v", Amount = 12.345678m,
+                    CreatedAt = new DateTime(2026, 7, 18, 10, 0, 0, DateTimeKind.Utc),
+                    OptionalCount = 7, Payload = [0x00, 0x01, 0xFF, 0x00]
+                },
+            ];
+
+            long inserted = await db.BulkInsertAsync(rows);
+            await Assert.That(inserted).IsEqualTo(2);
+
+            List<ExtBulkEntity> read = [.. (await db.GetAllAsync<ExtBulkEntity>()).OrderBy(r => r.Code)];
+            await Assert.That(read.Count).IsEqualTo(2);
+            // 前一行（首行、全 null）必须原样还原为 null
+            await Assert.That(read[0].Note).IsNull();
+            await Assert.That(read[0].OptionalCount).IsNull();
+            await Assert.That(read[0].Payload).IsNull();
+            // 后一行（非首行、有值）必须完整还原——参数类型若停在首行的 null 形态，此处退化
+            await Assert.That(read[1].Note).IsEqualTo("note-v");
+            await Assert.That(read[1].OptionalCount).IsEqualTo(7);
+            await Assert.That(read[1].Amount).IsEqualTo(12.345678m);
+            await Assert.That(read[1].Payload.SequenceEqual((byte[])[0x00, 0x01, 0xFF, 0x00])).IsTrue();
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
+        }
+    }
+
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_MigrateWithUniqueIndexOnString_AndDecimalPrecision_RoundTrip()
