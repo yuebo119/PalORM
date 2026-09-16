@@ -85,10 +85,6 @@ public partial class DataSession<TProvider>
                     // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
                     // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
                     // 经暂存命令中转取值，按批内序号重建参数。
-                    // v5.6 注记：曾尝试「目标参数池 + 逐键只写 Value」——实测反而变差
-                    // （78312B → 79936B/200 键）。原因是本路径每键本就只建一个目标参数，
-                    // 池化只多出一个 DbParameter[] 数组（200×8+16B）而无任何削减；
-                    // 真正的削减点在 PG/MySQL 的 ExecuteBatchUpdateAsync（那里每行建两遍参数）。
                     for (int index = 0; index < batchLen; index++)
                     {
                         scratch.Parameters.Clear();
@@ -266,13 +262,7 @@ public partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>执行单批 UPDATE（构造 SQL + 绑定参数 + 执行）。
-    /// <para><b>v5.6 参数复用</b>：目标语句的 <c>batchLen × paramsPerRow</c> 个参数对象一次建好并
-    /// 跨行复用，循环内只写 <c>Value</c>。原实现每行对目标命令再 <c>CreateParameter</c> 一整行，
-    /// 200 行 × 4 列即 800 个参数对象。scratch 命令保留——<c>BindUpdate</c> 固定产出 @p0…@pN 且
-    /// 逐行新建参数，它是取值与类型转换（如 <c>[Converter]</c> 主键）的唯一来源，不能绕过。</para>
-    /// <para>参数名与顺序不变：<c>@p0…@p{rowParams-1}</c> 按行递增（SET 列在前、主键在每行末尾），
-    /// 租户参数固定名追加在末尾——与 <see cref="BatchUpdateSqlBuilder"/> 的占位符逐位对应。</para></summary>
+    /// <summary>执行单批 UPDATE（构造 SQL + 绑定参数 + 执行）。</summary>
     private async ValueTask<long> ExecuteBatchUpdateAsync<T>(
         IReadOnlyList<T> entities, int batchStart, int batchEnd,
         CrudMetadata metadata, BatchUpdateContext ctx,
@@ -281,7 +271,6 @@ public partial class DataSession<TProvider>
     {
         int batchLen = batchEnd - batchStart;
         int paramsPerRow = ctx.SetColumnCount + 1;
-        int rowParamCount = batchLen * paramsPerRow;
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
@@ -290,23 +279,20 @@ public partial class DataSession<TProvider>
             TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
             batchLen, ctx.HasTenantFilter, _tenantParameterName);
 
-        // v5.6：目标参数池——一次建好，跨行复用（ParameterNameCache 对 <1024 的序号零分配）。
-        // 原实现每行对目标命令再 CreateParameter 一整行，200 行 × 4 列即 800 个参数对象。
-        DbParameter[] target = BatchUpdateSqlBuilder.CreateParameterPool(
-            cmd, rowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
-            TProvider.CreateParameter);
-
-        // probe 复用：逐行绑定提取参数值，再写进池化参数。scratch 不能绕过——BindUpdate
-        // 固定产出 @p0…@pN 且逐行新建参数，它是取值与类型转换（如 [Converter] 主键）的唯一来源。
+        // probe 复用：逐行绑定提取参数值
         await using DbCommand probe = CreateCommand();
         for (int i = batchStart; i < batchEnd; i++)
         {
             probe.Parameters.Clear();
             metadata.BindUpdate(probe, entities[i]);
-            int baseIndex = (i - batchStart) * paramsPerRow;
-            for (int c = 0; c < paramsPerRow; c++)
-                target[baseIndex + c].Value = probe.Parameters[c].Value;
+            for (int c = 0; c <= ctx.SetColumnCount; c++)
+            {
+                int globalIdx = (i - batchStart) * paramsPerRow + c;
+                cmd.Parameters.Add(TProvider.CreateParameter($"@p{globalIdx}", probe.Parameters[c].Value));
+            }
         }
+        if (ctx.HasTenantFilter)
+            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
 
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
