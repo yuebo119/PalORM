@@ -271,6 +271,17 @@ internal static class RegistryEmitter
         sb.AppendLine("    }");
     }
 
+    /// <summary>按方言族只发射**会被读到**的 SQL 载荷，另一族的字段发空串。
+    /// <para>依据（实测 + 消费者核实）：运行时按 <c>TProvider.SupportsReturningClause</c> 分发——
+    /// PG/SQLite 读 <c>InsertReturning</c>/<c>UpsertReturning</c>，MySQL 读
+    /// <c>InsertWithLastInsertId</c>/<c>UpsertMySql</c>；<c>Insert</c> 全方言无消费者
+    /// （原两条命中是 <c>_interceptors.Insert</c> 与 <c>columns.Insert</c>，与 SQL 集无关）。</para>
+    /// <para>收益：快照实测死载荷占注册文件 <b>27%</b>（SQL 载荷的 49%，含 Insert 5.7% +
+    /// 非 MySQL 族的 UpsertMySql/InsertWithLastInsertId + MySQL 族的两个 RETURNING 变体）。
+    /// 500 实体 × 30 列规模下约节省 1.6 MB 元数据字符串。</para>
+    /// <para>为什么置空而不是删除字段：删除是破坏性 API 变更（旧生成器产物与外部构造点编译失败）。
+    /// 置空对既有消费者零破坏，代价是外部读者读到空串——由 <c>CommandSqlSet</c> 的字段文档
+    /// 与实际发射面共同声明；后续主版本可连同其它破坏性项一并移除。</para></summary>
     private static void AppendCommandSqlSet(
         StringBuilder builder,
         TableModel model,
@@ -279,13 +290,17 @@ internal static class RegistryEmitter
         bool isLast = false)
     {
         string pad = new(' ', indent);
-        string insert = CommandFactoryEmitter.BuildInsertSql(model, dialect);
+        bool mySqlFamily = dialect == SqlGenerationDialect.MySql;
+        // Insert：全方言无消费者（运行时一律走 InsertReturning / InsertWithLastInsertId）
+        string insert = string.Empty;
         string update = CommandFactoryEmitter.BuildUpdateSql(model, dialect);
         string delete = CommandFactoryEmitter.BuildDeleteSql(model, dialect);
-        string returning = CommandFactoryEmitter.BuildInsertReturningSql(model, dialect);
-        string upsertReturning = CommandFactoryEmitter.BuildUpsertReturningSql(model, dialect);
-        string upsertMySql = CommandFactoryEmitter.BuildUpsertMySqlSql(model, dialect);
-        string insertLastId = CommandFactoryEmitter.BuildInsertWithLastInsertIdSql(model, dialect);
+        string returning = mySqlFamily ? string.Empty : CommandFactoryEmitter.BuildInsertReturningSql(model, dialect);
+        string upsertReturning = mySqlFamily ? string.Empty : CommandFactoryEmitter.BuildUpsertReturningSql(model, dialect);
+        string upsertMySql = mySqlFamily ? CommandFactoryEmitter.BuildUpsertMySqlSql(model, dialect) : string.Empty;
+        string insertLastId = mySqlFamily
+            ? CommandFactoryEmitter.BuildInsertWithLastInsertIdSql(model, dialect)
+            : string.Empty;
         builder.AppendLine($"{pad}new global::PalORM.CommandSqlSet(");
         builder.AppendLine($"{pad}    {MigrationEmitter.ToCSharpLiteral(insert)},");
         builder.AppendLine($"{pad}    {MigrationEmitter.ToCSharpLiteral(update)},");

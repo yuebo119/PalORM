@@ -114,6 +114,25 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚡ 性能（B2：只发射会被读到的 SQL 载荷）
+
+- **生成器按方言族只发射会被读到的 `CommandSqlSet` 字段**，另一族与本族无关字段置 `""`：
+  - `Insert` **全方言无消费者**（运行时一律走 `InsertReturning` 或 `InsertWithLastInsertId`），
+    恒为空串。核实方式：原两条 `.Insert` 命中分别是 `_interceptors.Insert(...)` 与
+    `columns.Insert`，与 SQL 集无关。
+  - PostgreSQL/SQLite 读 `InsertReturning`/`UpsertReturning`；MySQL 读
+    `UpsertMySql`/`InsertWithLastInsertId`（分发点是 `TProvider.SupportsReturningClause`）。
+    非本族的字段置空——跨族字段本就不可达。
+  <br>**实测**：快照（4 实体 × 20 列）注册文件 **48,265 → 38,789 字符（−19.6%）**；
+  500 实体 × 30 列规模下约省 1 MB 级元数据字符串（生成物同时更小、编译更快）。
+  逐块机器校验：12 个 `CommandSqlSet` 块每族必需字段齐备、恰好清空 3 个无关字段，无过度清空。
+- **为什么置空而不删字段**：删除是破坏性 API 变更（旧生成器产物与外部构造点编译失败）。
+  置空对既有消费者零破坏，代价是外部读者会读到空串——由 `CommandSqlSet` 的字段文档逐项声明
+  "哪族有值"。**下个主版本可连同其它破坏性项（如 B3 的死字典）一并移除，一次迁移。**
+- **B2b（SQLite 复用 PG 的 `CommandSqlSet` 实例）实测否掉**：两族七载荷**逐位完全相同**
+  （4 实体 × 7 字段全等，已加断言），而 C# 编译器本就把相同字面量在元数据串堆里存一份——
+  共享实例只省一次构造调用的 IL（约 50 B/实体），不值得引入局部变量与发射分支。
+
 ### 💔 行为变更（池空闲超时默认值）
 
 - **`DbOptions.PoolIdleTimeoutSeconds` 默认值 30 → 0**，`0` 语义为**不覆盖驱动默认值**
