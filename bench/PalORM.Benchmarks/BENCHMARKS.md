@@ -40,27 +40,43 @@
 - **范围**：`CrudBenchmarks` + `OrmComparisonBenchmarks`（27 项，约 5 分钟）。
   原过滤器 `*SqliteBenchmarks*` 匹配不到任何类名（最接近的是 `SqliteSpeedBenchmarks`，
   中间隔着 `Speed`），实测 BDN 跑 0 个基准并以**退出码 0** 结束。
-- **阈值**：只对**分配字节数**（+20%）与**相对同轮手写对照的比值**（+10%）设阈值。
+- **阈值**（三个维度，档位写在基线文件里）：
+  | 维度 | 阈值 | 为什么 |
+  |---|---|---|
+  | 分配字节数 | +20% | 确定性指标，与迭代次数无关 |
+  | 分配比（同轮 PalORM/手写对照） | +10% | 同轮内计算，机器差异被约掉 |
+  | **耗时比**（同轮中位数之比） | +30% | 短 job 的中位数本身有可观方差，卡紧会把抖动判成回归；它挡的是量级性 CPU 退化 |
   **不设绝对毫秒阈值**——实测同机两次运行的 ADO.NET 地板从 6.97ms 漂到 10.0ms（43%），
-  绝对时间做门禁必然误报；比值在同轮内计算，把机器差异约掉，跨机器可比。
+  绝对时间做门禁必然误报。
 - **失败即失败**：缺基准、缺对照、基线 schema 不符、哨兵（`PalORM_*` / `ADO_NET_*`）
   缺失，一律 `exit 1`，没有"不可判定即放行"的分支。
-- **仪器已验证**：阳性对照通过（27 项 `exit 0`）；三处变异全部被抓到——
-  ① 分配抬高 50% → `exit 1`（分配与比值双触发）；② 删掉 Crud 类 → `exit 1`（哨兵）；
-  ③ 结果目录为空 → `exit 1`。
+- **仪器已验证**：阳性对照通过（27 项 `exit 0`）；四处变异全部被抓到——
+  ① 分配抬高 50% → `exit 1`；② **中位耗时 ×2 → `exit 1`（仅耗时比触发，独立于分配维度）**；
+  ③ 删掉 Crud 类 → `exit 1`（哨兵）；④ 结果目录为空 → `exit 1`。
 
 ### 基线记录（2026-09-16，`bench/baselines/perf-baseline.json`）
 
-`PalORM_QueryAll` 的分配是同轮手写 ADO.NET 的 **1.137 倍**；单行路径的"ORM 税"更重：
-`GetByKey` 3.29× · `Insert` 4.34× · `Update` 8.10×（相对 ADO.NET 的分配比）。
-`OrmComparison` 组相对 Dapper：`StableShape` 2.98× · `VaryingShape` 3.38×。
+分配比与耗时比一起看，能看出一个结构性事实：**分配差距远大于时间差距**。
 
-本地运行与重录：
+| 基准 | 分配比 vs 手写对照 | 耗时比 vs 同轮对照 |
+|---|---|---|
+| `PalORM_QueryAll`（10K 行） | 1.137 | 1.161 |
+| `PalORM_StableShape` | 2.979 | 1.214 |
+| `PalORM_VaryingShape` | 3.383 | 1.294 |
+| `PalORM_Update` | 8.095 | 1.281 |
+| `PalORM_Insert` | 4.335 | 1.463 |
+| `PalORM_GetByKey` | 3.288 | （见门禁输出） |
+
+单行写路径的分配是手写 ADO.NET 的 4~8 倍，耗时只慢 1.3~1.5 倍——这些对象都是短命
+Gen0 分配，回收成本没有等比体现。**要提高单行路径的竞争力，看分配；要判断用户感知的
+退化，看耗时比。** 两个维度门禁都守。
+
+本地运行与重录（工具在 `tools/PalORM.PerfGate`）：
 
 ```bash
 bash scripts/run-benchmarks.sh sqlite          # 全组（约 30 分钟）
-python scripts/perf-baseline.py record ...     # 从 BDN JSON 重录基线
-python scripts/perf-baseline.py check ...      # 对照基线判定回归
+dotnet run --project tools/PalORM.PerfGate -c Release --   record --results BenchmarkDotNet.Artifacts/results --out bench/baselines/perf-baseline.json          --version <v> --date <yyyy-MM-dd>
+dotnet run --project tools/PalORM.PerfGate -c Release --   check --results BenchmarkDotNet.Artifacts/results --baseline bench/baselines/perf-baseline.json
 ```
 
 ---

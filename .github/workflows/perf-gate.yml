@@ -48,7 +48,9 @@ jobs:
 
       - name: Restore
         # 只 restore 基准项目及其依赖链——restore 整个 slnx 会拖入全部测试项目（无谓耗时）
-        run: dotnet restore bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj
+        run: |
+          dotnet restore bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj
+          dotnet restore tools/PalORM.PerfGate/PalORM.PerfGate.csproj
 
       - name: Build Benchmarks (Release)
         run: dotnet build bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj -c Release --no-restore
@@ -88,14 +90,16 @@ jobs:
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Check Regression (vs baseline)
-        # 判定读 BDN 的 JSON（稳定契约），不读控制台表格。
-        # 回归判定 = 分配字节数超基线阈值，或"相对同轮 ADO.NET 的比值"超基线阈值。
-        # 不设绝对毫秒阈值：实测同机两次运行的 ADO.NET 地板可漂 43%，绝对时间做门禁必然误报；
+        # 判定由 tools/PalORM.PerfGate 执行（C#，与 run-benchmarks.sh 共用同一实现）。
+        # 读 BDN 的 JSON（稳定契约），不读控制台表格。
+        # 三个维度：分配字节数、分配比（同轮 PalORM/手写对照）、耗时比（同轮中位数之比）。
+        # 不设绝对耗时阈值：实测同机两次运行的 ADO.NET 地板可漂 43%，绝对时间做门禁必然误报；
         # 比值在同轮内计算，把机器差异约掉。
         # 缺基准、缺对照、基线 schema 不符、或哨兵（PalORM_*/ADO_NET_*）缺失 → 一律 exit 1，
         # 不存在"不可判定即放行"的分支。
         run: |
-          python3 scripts/perf-baseline.py check \
+          dotnet run --project tools/PalORM.PerfGate -c Release -- \
+            check \
             --results BenchmarkDotNet.Artifacts/results \
             --baseline bench/baselines/perf-baseline.json
 

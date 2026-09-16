@@ -102,15 +102,26 @@
   阈值只对**分配字节数（+20%）**与**相对同轮手写对照的比值（+10%）**设——比值在同轮内计算，
   把机器差异约掉，跨机器可比；缺基准/缺对照/schema 不符/哨兵缺失一律 `exit 1`，
   删掉"不可判定即放行"分支。
-- **仪器已验证**（此前从未验证过它能否失败）：阳性对照 27 项 `exit 0`；三处变异全部被抓到
-  ——分配抬高 50%（分配+比值双触发）、删掉 Crud 类（哨兵）、结果目录为空，均 `exit 1`。
+- **仪器已验证**（此前从未验证过它能否失败）：阳性对照 27 项 `exit 0`；**四处**变异全部被抓到
+  ——分配抬高 50%、**中位耗时 ×2（仅耗时比触发，独立于分配维度）**、删掉 Crud 类（哨兵）、
+  结果目录为空，均 `exit 1`。
   过程中阳性对照还抓出脚本自身一个恒红缺陷：哨兵按 `CrudBenchmarks.PalORM_` 做前缀匹配，
   而 `FullName` 是 `PalORM.Benchmarks.CrudBenchmarks.PalORM_QueryAll`——改为按叶子名判定。
+- **门禁脚本改为 C#**（`tools/PalORM.PerfGate`，已加入 `PalORM.slnx` 与 `PalORM.ci.slnf`）：
+  与 `PalORM.Scaffold` 同例的仓库内部工具，用 STJ 源生成上下文序列化（与仓库 AOT 纪律一致）。
+  原先的 `python3` 内联片段读控制台表格、失败落 warning 分支——即"仪器本身从未被验证"；
+  抽成工具后可本地对同一份 BDN 产物反复跑阳性对照与变异探针。`scripts/perf-baseline.py` 已删。
 - **基线重录**：新增 `bench/baselines/perf-baseline.json`（schema 1，27 项，6 项带比值），
-  由新脚本 `scripts/perf-baseline.py`（`record` / `check` 两个子命令，供门禁与
+  由新工具 `tools/PalORM.PerfGate`（`record` / `check` 两个子命令，供门禁与
   `run-benchmarks.sh` 共用，避免两套解析漂移）生成。v5.0.json 保留为历史记录。
-  录得的关键比值：`PalORM_QueryAll` 分配是同轮手写 ADO.NET 的 **1.137×**；
-  单行路径 ORM 税更重——`GetByKey` 3.29× · `Insert` 4.34× · `Update` 8.10×。
+  <br>**判定维度扩到三个**：分配字节数（+20%）、分配比（+10%）、**耗时比（+30%）**。
+  耗时比取同轮 PalORM 与手写对照的中位数之比，阈值放宽是因为门禁用 1/3/5 短 job、
+  中位数本身有可观方差——它挡的是量级性 CPU 退化而非几个百分点的波动。
+  <br>录得的分配比与耗时比揭示一个结构性事实：**分配差距远大于时间差距**——
+  `PalORM_QueryAll` 1.137× / 1.161×，`PalORM_Update` 8.095× / 1.281×，
+  `PalORM_Insert` 4.335× / 1.463×，`PalORM_GetByKey` 3.288×。
+  单行写路径分配是手写 ADO.NET 的 4~8 倍而耗时只慢 1.3~1.5 倍（短命 Gen0 分配，
+  回收成本未等比体现）：看分配判断优化空间，看耗时比判断用户感知退化。
 - `scripts/run-benchmarks.sh` 同步：`sqlite` 与 `scale` 的过滤器改为实际类名，
   报告路径改到仓库根，基线保存从「读 CSV 拼 JSON」改为调用同一脚本
   （原实现还有个真 bug：`tail | while` 的子 shell 使 `FIRST` 标志失效，

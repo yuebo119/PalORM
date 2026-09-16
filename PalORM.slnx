@@ -21,6 +21,7 @@
     <Project Path="bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/PalORM.PerfGate/PalORM.PerfGate.csproj" />
     <Project Path="tools/PalORM.Scaffold/PalORM.Scaffold.csproj" />
   </Folder>
 </Solution>
