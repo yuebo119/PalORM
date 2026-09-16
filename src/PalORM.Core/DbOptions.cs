@@ -52,8 +52,11 @@ public sealed record DbOptions
     /// <summary>连接最大生命周期（默认 60 分钟）。</summary>
     public int PoolLifetimeMinutes { get; init; } = 60;
 
-    /// <summary>池配置是否被显式设置（WithPool 置位）。SQLite Provider 据此拒绝
-    /// 不支持的池配置——不与默认值比对，避免默认值漂移时误判（ITM-315）。</summary>
+    /// <summary>池配置是否被显式设置（<see cref="WithPool"/>、<c>PALORM_MAX_POOL_SIZE</c> 置位）。
+    /// 标记「这三个池参数由调用方显式给出」，不与默认值比对以避免默认值漂移时误判（ITM-315）。
+    /// <para><b>v5.6 起无消费者</b>：SQLite Provider 曾据此抛 <c>NotSupportedException</c>，
+    /// 但那使「<see cref="Production"/> 预设 + SQLite」必然在构造期失败（Production 内部调用
+    /// WithPool），已改为忽略池参数。字段保留为对外可读的配置事实。</para></summary>
     public bool PoolExplicitlyConfigured { get; init; }
 
     /// <summary>断路器：连续失败次数阈值（0 = 禁用）。</summary>

@@ -20,16 +20,25 @@ public sealed class SqliteProvider : IDbProvider
     /// <summary>SQL 方言标识:<see cref="SqlDialect.Sqlite"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.Sqlite;
 
-    /// <summary>创建连接。SQLite 为进程内嵌入式库,无服务端连接池——
-    /// 显式配置池参数时抛 <see cref="NotSupportedException"/>,而非静默忽略。
+    /// <summary>创建连接。<b>池参数在 SQLite 上被忽略</b>（不再抛异常）——依据与取舍见方法体注释。
     /// 静态构造已保证 SQLitePCL bundle 在首次使用前初始化。</summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        // 以显式标记位判定，而非与 DbOptions 默认值比对——魔法数字随默认值漂移（ITM-315）
-        if (options.PoolExplicitlyConfigured)
-            throw new NotSupportedException(
-                "The SQLite provider does not support connection pool size, idle timeout, or lifetime configuration.");
+        // v5.6：池参数在此被忽略，不再抛 NotSupportedException。
+        //
+        // 原实现见 PoolExplicitlyConfigured 即抛——但该标记由 WithPool(...) 与
+        // PALORM_MAX_POOL_SIZE 环境变量设置，而 DbOptions.Production(...) 内部就调用 WithPool，
+        // 于是「Production 预设 + SQLite」必然在构造期失败：走预设或走环境变量的 SQLite 部署
+        // 全都装不起来。（ITM-315 把「与默认值比对」改成显式标记位是对的，误的是把
+        // 「无意义的配置」升级成了「不可用的部署」。）
+        //
+        // 忽略的依据：SQLite 是进程内嵌入式库，没有服务端连接池可供调这三个旋钮——
+        // 驱动自带的池只有 Pooling=on/off 一个开关，无法表达最大连接数/空闲寿命/存活期，
+        // 故 MaxPoolSize / PoolIdleTimeoutSeconds / PoolLifetimeMinutes 在 SQLite 上
+        // 没有可映射的目标。它们对 PostgreSQL / MySQL 仍然生效。
+        //
+        // 这不是静默失效：本类型与 README 的配置项表都显式标注了这三项在 SQLite 上无效。
         return new SqliteConnection(connectionString);
     }
 

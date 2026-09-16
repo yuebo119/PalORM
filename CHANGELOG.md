@@ -4,9 +4,9 @@
 
 ## [未发布·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移 · 测试凭据自动加载
 
-> 变更范围：v5.5.1 后 6 个提交，src/PalORM.Core 六个文件 + src/PalORM.Testing +
-> 三个测试项目
-> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 250/250（新增 12 项）·
+> 变更范围：v5.5.1 后 7 个提交，src/PalORM.Core 七个文件 + src/PalORM.Sqlite +
+> src/PalORM.Testing + 三个测试项目
+> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 253/253（新增 15 项）·
 > SourceGen 188/188（快照字节级零漂移）· Integration 178/178（含 PG/MySQL 真库，
 > 无需手动 source 凭据）· SQL 转储 22 场景与基线提交 b2e5741 逐字节一致
 
@@ -79,12 +79,50 @@
   配置了 `ReadConnectionString` 的会话——读副本连接在会话存续期内保持打开。
 - `ReadSessionSetupSql` 的执行时机从"每次读连接建立"收敛为"每会话首次建立读连接"。
 - GridReader 释放不再级联释放被借用的连接（连接归会话所有）。
+- **SQLite 上的池参数由「抛 `NotSupportedException`」改为「忽略」**（缺陷修复）：
+  原实现 `SqliteProvider.CreateConnection` 见 `DbOptions.PoolExplicitlyConfigured` 即抛，
+  而该标记由 `WithPool(...)` 与 `PALORM_MAX_POOL_SIZE` 环境变量置位，`DbOptions.Production(...)`
+  预设内部就调用 `WithPool`——于是**任何走生产预设或环境变量的 SQLite 部署都在会话构造期
+  必失败**，等于装不起来。（ITM-315 把「与默认值比对」改成显式标记位是对的判断，
+  错在把"无意义的配置"升级成了"不可用的部署"。）
+  忽略的依据：SQLite 是进程内嵌入式库，没有服务端连接池可承接这三个旋钮——驱动自带的池
+  只有 `Pooling=on/off` 一个开关，无法表达最大连接数/空闲寿命/存活期。
+  `MaxPoolSize` / `PoolIdleTimeoutSeconds` / `PoolLifetimeMinutes` 对 PG / MySQL 照常生效。
+  非静默：Provider 方法注释与 README 配置表均标注"SQLite 忽略"。
+
+### 📝 文档
+
+- **表达式树可提到静态字段**（README + `docs/API参考.md`）：表达式树在调用点构造，
+  库无法替调用方缓存，内联 lambda 在每查询都会重建树与闭包。in-situ 实测（同一查询，
+  唯一差异是 lambda 内联还是来自 `static readonly` 字段）：`Set(expr, value)` −18.0% 分配 /
+  −18.3% 耗时，单行查询 `+OrderBy` −12.4% / −7.2%，`WhereIn(500)` −0.72%，
+  万行结果可忽略——即"表达式树占比随查询本身变重而摊薄"。给出
+  `private static readonly Expression<Func<Order, DateTime>> ByCreatedAt = o => o.CreatedAt;` 模式。
+- **弹性管线的每查询开销更正**（源码注释 + README）：`QueryBuilderExtensions` 原注释称
+  "默认直通路径零开销"，两处都不成立——默认配置（`MaxRetries=3` / 熔断阈值 5）**不是**直通，
+  只读查询默认就走执行器。实测为**常数 ≈272 B/查询，与结果行数无关**（单行查询 +8% 分配，
+  千行 +0.2%）。三项独立测量之和与 in-situ A/B 之差逐字节吻合（168 + 56 + 48 = 272，
+  实测 272~278）：超时 `CTS` + `CancelAfter` 定时器 ≈168 B（每次尝试一份，这是
+  `CommandTimeout` 语义本身，覆盖连接获取与读取器迭代，非驱动侧 `CommandTimeout` 的子集）、
+  调用点把单次尝试内核转成委托 56 B、执行器机械（熔断进出 + 异步状态机）≈48 B。
+  <br>可剥的只有后两项（104 B），须把只读内核从 async 局部函数改成 struct 内核 + 泛型约束
+  （顺带消掉两条分支共有的 ≈250 B display class）；实测耗时无差异，故记录而不实施。
+  <br>另一项实测更正：`CancellationTokenSource.CreateLinkedTokenSource(ct)` 换 `new CTS()`
+  在 `ct` 不可取消时**零收益**（两者同为 168 B）——联动源对不可取消的父令牌不注册，
+  尺寸等价。原以为的优化路径经测量为死路，未改代码。
+  <br>同时钉住直通配置的语义代价：`MaxRetries=0` + `CircuitBreakerThreshold=0` 下读路径
+  既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
+  标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
 ### 🧪 新增测试（12 项）
 
 - `ReadRouteConnectionReuseTests`（3）：用 `ReadSessionSetupSql` 作副作用探针证伪
   "每查询新建连接"，含对照组证明计数有区分力。
 - `DefaultFilterFormsTests`（3）：软删 + 租户的三种拼接形态在 Count/GetAll/Get 上各钉一条。
+- `SqlitePoolParameterTests`（3）：`Production` 预设在 SQLite 上能构造会话、
+  `WithPool` 被忽略而非拒绝、配了池参数的会话仍能正常执行查询。
+- 既有用例改名随契约变更：`SqliteConnectionFactory_RejectsUnsupportedPoolOptions`
+  → `..._IgnoresUnsupportedPoolOptions`（原断言 `Throws<NotSupportedException>`）。
 
 ### 🧪 性能门禁重做与基线重录
 

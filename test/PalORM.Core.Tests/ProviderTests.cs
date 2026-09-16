@@ -115,11 +115,17 @@ public sealed class ProviderTests
     }
 
     [Test]
-    public async Task SqliteConnectionFactory_RejectsUnsupportedPoolOptions()
+    public async Task SqliteConnectionFactory_IgnoresUnsupportedPoolOptions()
     {
+        // v5.6 契约变更：原实现抛 NotSupportedException，但 DbOptions.Production(...) 内部
+        // 就调用 WithPool——「Production 预设 + SQLite」因此在构造期必然失败，走预设或走
+        // PALORM_MAX_POOL_SIZE 的 SQLite 部署全都装不起来。改为忽略池参数（SQLite 无服务端
+        // 池可调这三个旋钮）。本用例与 SqlitePoolParameterTests 共同锁定新契约。
         var options = new DbOptions { ConnectionString = "Data Source=:memory:" }.WithPool(10);
-        await Assert.That(() => PalORM.Sqlite.SqliteProvider.CreateConnection(options.ConnectionString, options))
-            .Throws<NotSupportedException>();
+
+        using var connection = PalORM.Sqlite.SqliteProvider.CreateConnection(options.ConnectionString, options);
+        await Assert.That(connection).IsNotNull();
+        await Assert.That(connection.GetType().Name).IsEqualTo("SqliteConnection");
     }
 
     [Test]
