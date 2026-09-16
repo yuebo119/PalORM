@@ -37,6 +37,22 @@
   现有用例的行序是「先全非空、后全 null」，覆盖不到反向顺序，该用例把顺序倒过来钉住该风险。
   AOT 全链路复验：`dotnet publish -r win-x64 -p:PublishAot=true` 后原生运行
   `PalORM AOT PG verification PASSED`（该程序含 BulkInsert COPY 路径）。
+- **批量 UPDATE 取值走零分配绑定器（T15-v2，生成器新增 `BindUpdateValues`）**：
+  单语句批量 UPDATE 的目标参数池本身没问题，真正的削减点在 probe 命令**逐行 `BindUpdate`
+  建参数**（40000 行 × 4 列 = 16 万次创建）。生成器现按 `BindInsertValues` 同一形态发射
+  `BindUpdateValues(DbParameter[], entity, int paramOffset)`——只写 Value、零 `CreateParameter`，
+  列序与 `BindUpdate` 逐位一致（SET 列 → 主键 → 并发令牌）。
+  `CrudBindings`/`CrudMetadata` 新增可选字段（追加参数，不破既有调用点；旧模型程序集为 null 时
+  `ExecuteBatchUpdateAsync` 回退 probe 路径）。
+  <br>真库实测（数据准备置于计时区外，两侧同规模）：
+  PG 单批 2671.6 → **1512.7 B/行**（−43%），多批 2750.0 → **1609.2 B/行**（−41%）；
+  MySQL 单批 2291.7 → **1810.0 B/行**（−21%），多批 2457.0 → **2006.4 B/行**（−18%）；
+  正确性两方言 `BulkUpdateBatchAsync` 均返回全行数且值校验通过。S3 反向验证一致。
+  <br>注：上一轮（T15）只把参数创建挪进池、取值仍逐行建参数，创建总量不变，真库 A/B 判定为
+  净负收益并已回退——零分配绑定器到位后池才有意义，两条合并才是完整的优化。
+- **AOT 三 Provider 首次全部本地验证通过**：生成器改动影响全部实体的生成代码，据此重跑
+  `dotnet publish -r win-x64 -p:PublishAot=true` + 原生运行——SQLite / PostgreSQL / MySQL
+  三个 AotTest 应用均 `PASSED`（此前 PG/MySQL 一直标注「CI 待验证」，本次借真库可用补齐）。
 - **10K 行物化保持在地板**：相对 ADO.NET 地板 +0.05% 分配（未改动该路径）。
 
 ### 📝 行为变更

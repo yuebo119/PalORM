@@ -84,7 +84,10 @@ internal static class RegistryEmitter
             sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(parameters, ({m.EntityTypeName})obj, off),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
             sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
-            sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read),");
+            sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read,");
+            // v5.6：批量 UPDATE 参数池的取值绑定器（只写 Value，不建参数）。放在末位可选参数，
+            // 与 BindInsertValues 同机制；消费点 ExecuteBatchUpdateAsync 在 null 时回退逐行 BindUpdate。
+            sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateValues(parameters, ({m.EntityTypeName})obj, off)),");
             // ITM-640：单次物化 Columns（本块原 3 处 AsSpan().ToArray() 重复分配；另 3 处
             // 分属独立 per-model 循环无法共用——复检轮计数订正）
             var columns = m.Columns.AsSpan().ToArray();

@@ -62,6 +62,17 @@ internal static class CommandFactoryEmitter
         GenerateBindUpdateBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // v5.6：参数复用路径——接收预分配的 DbParameter[]，只改 Value，不 CreateParameter/Add。
+        // 与 BindInsertValues 同一机制。消费点是 BulkUpdateBatchAsync 的单语句批量 UPDATE：
+        // 其 probe 命令原先逐行 BindUpdate 建参数（40000 行 × 4 列 = 16 万次创建），
+        // 而目标参数池本身没问题——真库实测该路径 2671 B/行（PG），远超 MySQL 多值 INSERT 的 359。
+        // paramOffset 供扁平池的按行基址使用（池长 batchLen × paramsPerRow）。
+        sb.AppendLine($"    /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>");
+        sb.AppendLine($"    internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, {model.EntityTypeName} entity, int paramOffset)");
+        sb.AppendLine("    {");
+        GenerateBindUpdateValuesBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定主键到 DELETE 参数。</summary>");
         sb.AppendLine($"    internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)");
         sb.AppendLine("    {");
@@ -389,6 +400,37 @@ internal static class CommandFactoryEmitter
         if (cc is not null)
         {
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; p.Value = entity.{cc.EscapedPropertyName}; cmd.Parameters.Add(p); }}");
+        }
+    }
+
+    /// <summary>BindUpdateValues 的发射体——列序与 <see cref="GenerateBindUpdateBody"/> 逐字一致
+    /// （SET 列 → 主键 → 并发令牌），否则参数序与 <c>BatchUpdateSqlBuilder</c> 的占位符错位。
+    /// 差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。</summary>
+    private static void GenerateBindUpdateValuesBody(TableModel model, StringBuilder sb)
+    {
+        var cols = model.Columns.AsSpan().ToArray();
+        var setCols = cols.Where(c => IsUpdatableColumn(c)).ToArray();
+        var pkCols = cols.Where(c => c.IsPrimaryKey).ToArray();
+        var cc = cols.FirstOrDefault(c => c.IsConcurrencyToken);
+
+        int pi = 0;
+        foreach (var col in setCols)
+        {
+            string valueExpr = GetParameterValueExpression(col);
+            if (IsBinaryColumn(col))
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
+            sb.AppendLine($"        parameters[paramOffset + {pi++}].Value = {valueExpr};");
+        }
+        foreach (var col in pkCols)
+        {
+            string valueExpr = GetParameterValueExpression(col);
+            if (IsBinaryColumn(col))
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
+            sb.AppendLine($"        parameters[paramOffset + {pi++}].Value = {valueExpr};");
+        }
+        if (cc is not null)
+        {
+            sb.AppendLine($"        parameters[paramOffset + {pi}].Value = entity.{cc.EscapedPropertyName};");
         }
     }
 
