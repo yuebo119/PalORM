@@ -1,13 +1,23 @@
 namespace PalORM;
 
-/// <summary>编译期生成的单方言 CRUD SQL 集。</summary>
-/// <param name="Insert">INSERT 语句（不含主键回填）。</param>
-/// <param name="Update">按主键 UPDATE 语句。</param>
-/// <param name="Delete">按主键 DELETE 语句。</param>
-/// <param name="InsertReturning">带主键回填的 INSERT 语句（如 RETURNING/LAST_INSERT_ID）。</param>
-/// <param name="UpsertReturning">PG/SQLite UPSERT + RETURNING 语句（ON CONFLICT ... DO UPDATE/NOTHING RETURNING）。</param>
-/// <param name="UpsertMySql">MySQL UPSERT 语句（ON DUPLICATE KEY UPDATE）。</param>
-/// <param name="InsertWithLastInsertId">MySQL INSERT + SELECT LAST_INSERT_ID() 语句。</param>
+/// <summary>编译期生成的单方言 CRUD SQL 集。
+/// <para><b>哪些字段有值取决于方言族（v5.6 起）</b>：运行时按
+/// <c>TProvider.SupportsReturningClause</c> 分发——PostgreSQL/SQLite 读
+/// <see cref="InsertReturning"/> 与 <see cref="UpsertReturning"/>，MySQL 读
+/// <see cref="InsertWithLastInsertId"/> 与 <see cref="UpsertMySql"/>。
+/// 生成器**只发射本族会被读的载荷**，另一族字段为 <c>""</c>（实测此举省下注册文件 27% 的字符，
+/// SQL 载荷的 49%）——跨族字段本就不可达，故这不影响任何运行路径。</para>
+/// <para>读这两个族之外的字段请先确认方言：拿到 <c>""</c> 表示"该字段与本方言无关"，
+/// 而不是"SQL 生成失败"。<see cref="Update"/>/<see cref="Delete"/> 两族皆有值。</para></summary>
+/// <param name="Insert">INSERT 语句。<b>v5.6 起恒为 <c>""</c></b>：全方言无消费者（运行时一律走
+/// <see cref="InsertReturning"/> 或 <see cref="InsertWithLastInsertId"/>）。字段保留是为了不破坏
+/// 既有构造点；计划在下个主版本随其它破坏性项一并移除。</param>
+/// <param name="Update">按主键 UPDATE 语句。两族皆有值。</param>
+/// <param name="Delete">按主键 DELETE 语句。两族皆有值。</param>
+/// <param name="InsertReturning">带主键回填的 INSERT 语句（RETURNING）。仅 PostgreSQL/SQLite 有值。</param>
+/// <param name="UpsertReturning">UPSERT + RETURNING（ON CONFLICT ... DO UPDATE/NOTHING RETURNING）。仅 PostgreSQL/SQLite 有值。</param>
+/// <param name="UpsertMySql">MySQL UPSERT 语句（ON DUPLICATE KEY UPDATE）。仅 MySQL 有值。</param>
+/// <param name="InsertWithLastInsertId">MySQL INSERT + SELECT LAST_INSERT_ID()。仅 MySQL 有值。</param>
 public readonly record struct CommandSqlSet(
     string Insert,
     string Update,

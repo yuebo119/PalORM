@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 609 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 611 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -251,7 +251,7 @@
 源生成器为每个模型程序集生成 `RegistryFragment`，通过 `PalORM_Runtime.Register(fragment)` 注册。运行时一次发布不可变快照（FrozenDictionary），外部只读。
 
 17 个注册字典：RowFactories / TableNames / CommandSqls（legacy 兼容载荷——运行时不消费，
-当前生成器不再发射，仅为旧版本生成器片段保留可选注册）/ CommandSqlsByDialect / BindInsert / BindUpdate / BindDelete / PkColumns / ColumnNames / PropertyToColumn / CreateTableSql（legacy 兼容载荷——同 CommandSqls，ADR-J）/ CreateTableSqlByDialect / CreateIndexSqlByDialect / SetIdDelegates / CrudMetadatas / EntityFeatures / SensitiveColumnMasks（`[SensitiveData]` 脱敏掩码，v5.5.0 起）。
+当前生成器不再发射，仅为旧版本生成器片段保留可选注册）/ CommandSqlsByDialect（v5.6 起按方言族只发射会被读到的字段，跨族与本族无关字段为空串）/ BindInsert / BindUpdate / BindDelete / PkColumns / ColumnNames / PropertyToColumn / CreateTableSql（legacy 兼容载荷——同 CommandSqls，ADR-J）/ CreateTableSqlByDialect / CreateIndexSqlByDialect / SetIdDelegates / CrudMetadatas / EntityFeatures / SensitiveColumnMasks（`[SensitiveData]` 脱敏掩码，v5.5.0 起）。
 
 **分块构建**（v5.6）：注册条目按**估算 IL 预算**切成若干 `AddChunk{N}` 方法，块内写一个可变
 `RegistryDraft`，最后仍是一次 `Register`。原因：注册代码原先全落在单个 `[ModuleInitializer]
