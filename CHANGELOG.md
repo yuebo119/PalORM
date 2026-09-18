@@ -114,6 +114,22 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### 🧪 AOT：PG/MySQL 原生程序补锁子句的"原生执行"验证
+
+- 两个 AOT 验收程序（`PalORM.AotTest.Pg` / `PalORM.AotTest.MySql`）新增
+  `VerifyPessimisticLocksAsync`：事务内**真执行** `FOR UPDATE` / `FOR SHARE` /
+  `SKIP LOCKED` 并取回行。此前锁子句的原生验证是空的——SQLite 执行不了锁语句（ITM-639），
+  SQLite AOT 程序只能验形态；而 PG/MySQL 这两个真正支持锁的方言，其 AOT 程序从未执行过锁。
+  <br>**验证状态（如实记录）**：
+  · 代码与探针行的过滤器缺陷（原过滤串与实际插入行不匹配，且 MySQL 的探针行在验证前已被删除）
+    已修正——改用验证内部自插的专用探针行，按主键过滤；
+  · 两程序 Release 构建与 `publish -p:PublishAot=true` 均 0 警告 0 错误；
+  · **原生运行pending**：提交时共享库服务器（192.168.200.120）PG/MySQL 同时握手超时
+    （TCP 可达、认证超时；JIT 侧同库用例同样超时，确认是服务器状况而非代码问题——
+    此前已有征兆：多批 UPDATE 耗时从 0.4s 涨到 6s）。锁子句的**执行**本身此前已在
+    JIT 侧对真库验证通过（`PessimisticLockTests` 2/2）；原生运行的复验待服务器恢复后执行，
+    在那之前不声称这两个程序的新增路径"AOT 兼容已验证"。
+
 ### 🐛 修复（测试）：时间比值断言导致 flaky —— 换成对象同一性判定 + 订正 B4 解读
 
 - **上一轮新增的 `RegistryIncrementalCostTests` 是 flaky 的**（5 轮红 4）：它用同一进程内的

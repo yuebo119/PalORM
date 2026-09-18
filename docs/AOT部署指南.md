@@ -44,6 +44,9 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 
 `Npgsql` 是纯托管 ADO.NET Provider，不依赖 `libpq`。PalORM 不启用 Npgsql 运行时 JSON 类型映射；OwnedJson 只走 PalORM Source Generator 与 STJ `JsonTypeInfo<T>`。任何 Npgsql 路径产生的 IL/AOT 警告都阻断验收；不得通过抑制继续发布。最终状态以 CI 服务容器中的原生二进制 CRUD、并发、OwnedJson、批量插入和批量软删除运行结果为准。
 
+程序覆盖：CRUD 往返、BulkCopy、OwnedJson、`MigrateAsync` 建表、悲观锁子句的事务内执行
+（`FOR UPDATE` / `FOR SHARE` / `SKIP LOCKED`——SQLite 执行不了锁语句，锁的原生验证只在 PG/MySQL 程序里）。
+
 **运行前必须注入凭据**（缺 `PALORM_PG_CONNECTION` 时程序以明确错误退出，不会静默跳过）：
 
 ```bash
@@ -65,6 +68,9 @@ dotnet publish test/PalORM.AotTest.Pg -c Release -r win-x64   --self-contained t
 `MySqlConnector` 纯托管实现，无原生依赖。理论上 AOT 兼容性最好，但未在生产中大规模验证。
 
 ⚠️ MySqlConnector 的连接池和 SSL/TLS 路径需要 AOT 链路验证。
+
+程序覆盖：CRUD 往返、BulkCopy、OwnedJson、`MigrateAsync` 建表、AutoTagging 拦截器、
+悲观锁子句的事务内执行（`FOR SHARE` 需 MySQL 8.0+，目标 8.4）。
 
 **运行前必须注入凭据**（同上，缺 `PALORM_MYSQL_CONNECTION` 时明确报错退出）：
 

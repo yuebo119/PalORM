@@ -151,6 +151,8 @@ internal static class Program
                 ?? throw new InvalidOperationException("PostgreSQL migrated-table GET failed");
             if (migratedBack.Label != "migrated" || migratedBack.Amount != 12.5m)
                 throw new InvalidOperationException("PostgreSQL migrated-table round trip failed");
+
+            await VerifyPessimisticLocksAsync(db).ConfigureAwait(false);
             }
             finally
             {
@@ -162,5 +164,32 @@ internal static class Program
         }
 
         Console.WriteLine("PalORM AOT PG verification PASSED");
+    }
+
+    /// <summary>悲观锁子句的**原生执行**验证——SQLite 执行不了锁语句（ITM-639：只支持预览形态），
+    /// JIT 侧由 PessimisticLockTests 覆盖；这里是 PG 上的原生二进制等价验证：
+    /// 锁子句拼进语句的位置合法、PG 真库接受，且在 AOT 链路下照常工作。</summary>
+    private static async Task VerifyPessimisticLocksAsync(DataSession<PostgreSqlProvider> db)
+    {
+        // 专用探针行：不依赖前序步骤插入的行（其 Name 与生命周期都不归本验证管）
+        AotPgEntity probe = await db.InsertAsync(new AotPgEntity
+        {
+            Name = "lock probe",
+            Value = 1,
+            Version = 0
+        }).ConfigureAwait(false);
+
+        await db.WithTransaction(async ct =>
+        {
+            List<AotPgEntity> forUpdate = await db.From<AotPgEntity>()
+                .Where($"id = {probe.Id}").ForUpdate().ToListAsync(ct).ConfigureAwait(false);
+            List<AotPgEntity> forShare = await db.From<AotPgEntity>()
+                .Where($"id = {probe.Id}").ForShare().ToListAsync(ct).ConfigureAwait(false);
+            List<AotPgEntity> skipLocked = await db.From<AotPgEntity>()
+                .Where($"id = {probe.Id}").ForUpdate(skipLocked: true).ToListAsync(ct).ConfigureAwait(false);
+            if (forUpdate.Count != 1 || forShare.Count != 1 || skipLocked.Count != 1)
+                throw new InvalidOperationException("PostgreSQL pessimistic lock execution failed");
+            return true;
+        }).ConfigureAwait(false);
     }
 }
