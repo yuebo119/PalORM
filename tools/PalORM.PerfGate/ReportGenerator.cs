@@ -52,11 +52,17 @@ internal static partial class ReportGenerator
         PerfBaseline baseline,
         string? workloadJsonPath,
         string? memoryJsonPath,
-        string outputPath)
+        string outputPath,
+        string? startupStatus = null)
     {
         ResultSet results = ResultReader.Read(resultsDirectory);
         var md = new StringBuilder(8_192);
         AppendHeader(md, baseline);
+        AppendDimensionOverview(
+            md,
+            hasWorkload: File.Exists(workloadJsonPath ?? string.Empty),
+            hasMemory: File.Exists(memoryJsonPath ?? string.Empty),
+            startupPassed: string.Equals(startupStatus, "ok", StringComparison.OrdinalIgnoreCase));
         int passed = AppendBdnSection(md, baseline, results);
         AppendOptionalSection(md, workloadJsonPath, AppendWorkloadSection);
         AppendOptionalSection(md, memoryJsonPath, AppendMemorySection);
@@ -67,6 +73,39 @@ internal static partial class ReportGenerator
         Directory.CreateDirectory(directory);
         File.WriteAllText(outputPath, md.ToString());
         return (passed, baseline.Benchmarks.Count);
+    }
+
+    /// <summary>12 维总览——每维一行：状态 + 本轮数据来源。未测维度如实列出，
+    /// 防止"报告只有绿项"掩盖覆盖缺口（规范 §1 的矩阵即为本表的真源）。</summary>
+    private static void AppendDimensionOverview(StringBuilder md, bool hasWorkload, bool hasMemory, bool startupPassed)
+    {
+        md.AppendLine("## 12 维总览");
+        md.AppendLine();
+        md.AppendLine("| # | 维度 | 本轮状态 | 本轮结果 / 缺口 |");
+        md.AppendLine($"|---|---|---|---|");
+        md.AppendLine(CultureInfo.InvariantCulture, $"| 1 | 单操作微基准 | ✅ 已测 | BDN 27 项，见下表 |");
+        md.AppendLine(CultureInfo.InvariantCulture, $"| 2 | 批量吞吐 | ⚠️ 部分 | 分配维度见基线；远程真库档属本地探针（WITH_REMOTE），本轮未采 |");
+        md.AppendLine(hasWorkload
+            ? "| 3 | 延迟分布 | ✅ 已测 | p50/p95/p99 见负载表 |"
+            : "| 3 | 延迟分布 | ❌ 未采集 | 缺 --workload JSON |");
+        md.AppendLine(hasWorkload
+            ? "| 4 | 并发扩展 | ✅ 已测 | 线程档 1/2/4/8 曲线见负载表 |"
+            : "| 4 | 并发扩展 | ❌ 未采集 | 缺 --workload JSON |");
+        md.AppendLine("| 5 | 数据形状敏感性 | ⚠️ 部分 | 本轮仅 S1；S2–S5 待各基准接入 |");
+        md.AppendLine("| 6 | 连接与池 | ❌ 未测 | 建连/空闲回收/churn 专项探针（D3 先例） |");
+        md.AppendLine(hasMemory
+            ? "| 7 | 资源效率 | ✅ 部分 | 分配/存活曲线见内存表；流式对比不可做（无真流式公共 API） |"
+            : "| 7 | 资源效率 | ❌ 未采集 | 缺 --memory JSON |");
+        md.AppendLine("| 8 | 往返与语句效率 | ❌ 未测 | 需 Provider 往返计数器（未实现） |");
+        md.AppendLine(startupPassed
+            ? "| 9 | 启动与冷路径 | ✅ 已测 | 规模量具全绿（单方法 IL ≤64KB 上界，两维） |"
+            : "| 9 | 启动与冷路径 | ⚠️ 未采集 | 启动量具结果未传入（--startup ok） |");
+        md.AppendLine("| 10 | 长时稳定 | ❌ 未测 | 30 min+ 持续负载（未实现） |");
+        md.AppendLine(hasWorkload
+            ? "| 11 | 混合负载 | ✅ 已测 | 80/20 读写混合（见负载表） |"
+            : "| 11 | 混合负载 | ❌ 未采集 | 缺 --workload JSON |");
+        md.AppendLine("| 12 | 统计纪律 | ✅ | 阈值余量按实测噪声底标定（规范 §4） |");
+        md.AppendLine();
     }
 
     private static void AppendHeader(StringBuilder md, PerfBaseline baseline)
@@ -82,7 +121,7 @@ internal static partial class ReportGenerator
 
     private static int AppendBdnSection(StringBuilder md, PerfBaseline baseline, ResultSet results)
     {
-        md.AppendLine("## 微基准（BDN，vs 基线）");
+        md.AppendLine("## 维度 1 · 单操作微基准（BDN，vs 基线）");
         md.AppendLine();
         md.AppendLine("| 基准 | 分配 B/op | Δ分配 | 分配比（现/基线） | 耗时比（现/基线） | 判定 |");
         md.AppendLine("|---|---:|---:|---|---|---|");
@@ -155,7 +194,7 @@ internal static partial class ReportGenerator
         }
 
         md.AppendLine(CultureInfo.InvariantCulture,
-            $"## 并发负载（{workload.Shape} × {workload.Rows:N0}，读写比 {workload.WriteRatio:P0}）");
+            $"## 维度 3/4/11 · 并发负载——延迟分布 / 扩展曲线 / 80:20 混合（{workload.Shape} × {workload.Rows:N0}）");
         md.AppendLine();
         md.AppendLine("| 线程 | ops/s | p50 (ms) | p95 (ms) | p99 (ms) |");
         md.AppendLine("|---:|---:|---:|---:|---:|");
@@ -176,7 +215,7 @@ internal static partial class ReportGenerator
             return;
         }
 
-        md.AppendLine(CultureInfo.InvariantCulture, $"## 大结果集内存（{memory.Shape}，全量物化）");
+        md.AppendLine(CultureInfo.InvariantCulture, $"## 维度 7 · 大结果集内存（{memory.Shape}，全量物化）");
         md.AppendLine();
         md.AppendLine("| 档位 | 分配总量 | 实体存活 | 耗时 |");
         md.AppendLine("|---:|---:|---:|---:|");

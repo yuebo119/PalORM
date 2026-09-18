@@ -178,7 +178,8 @@ internal static class Program
             baseline,
             line.Optional("workload"),
             line.Optional("memory"),
-            line.Require("out"));
+            line.Require("out"),
+            line.Optional("startup"));
         Console.WriteLine($"报告已生成：{line.Require("out")}（门禁判定 {passed}/{total} 阈值内）");
         return passed == total ? 0 : 1;
     }
