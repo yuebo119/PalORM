@@ -51,6 +51,7 @@ internal static class Program
             {
                 "record" => Record(CommandLine.Parse(args[1..])),
                 "check" => Check(CommandLine.Parse(args[1..])),
+                "report" => Report(CommandLine.Parse(args[1..])),
                 _ => Fail($"未知子命令: {args[0]}"),
             };
         }
@@ -66,6 +67,8 @@ internal static class Program
         Console.WriteLine("  record --results <BDN结果目录> --out <基线路径> --version <v> --date <yyyy-MM-dd>");
         Console.WriteLine("         [--scope <说明>] [--notes <说明>] [--exclude <基准全名> ...]");
         Console.WriteLine("  check  --results <BDN结果目录> --baseline <基线路径>");
+        Console.WriteLine("  report --results <BDN结果目录> --baseline <基线路径> --workload <json> --memory <json> --out <md>");
+        Console.WriteLine("         （workload/memory/out 可选；缺省只含微基准节）");
     }
 
     private static int Fail(string message)
@@ -157,6 +160,28 @@ internal static class Program
 
     private static double? Ratio(double value, double peer)
         => peer == 0 ? null : Math.Round(value / peer, 4);
+
+    // ─── report ────────────────────────────────────────────────────────────
+
+    private static int Report(CommandLine line)
+    {
+        string baselinePath = line.Require("baseline");
+        PerfBaseline baseline;
+        using (FileStream stream = File.OpenRead(baselinePath))
+        {
+            baseline = JsonSerializer.Deserialize(stream, BaselineJsonContext.Default.PerfBaseline)
+                ?? throw new InvalidOperationException($"基线 {baselinePath} 反序列化为 null");
+        }
+
+        (int passed, int total) = ReportGenerator.Generate(
+            line.Require("results"),
+            baseline,
+            line.Optional("workload"),
+            line.Optional("memory"),
+            line.Require("out"));
+        Console.WriteLine($"报告已生成：{line.Require("out")}（门禁判定 {passed}/{total} 阈值内）");
+        return passed == total ? 0 : 1;
+    }
 
     // ─── check ─────────────────────────────────────────────────────────────
 

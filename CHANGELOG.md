@@ -114,6 +114,18 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚙️ 测评流程：一键全量 + 报告生成器
+
+- **`scripts/run-full-perf.sh`**：单命令跑完整测评（构建 → 负载×2 → 内存曲线 → 启动量具 →
+  BDN 微基准 → 门禁判定），产出 `bench/reports/perf-report-<时间戳>.md`（bench/reports/ 已
+  gitignore——报告按需人工登记进 BENCHMARKS.md，不入库）。
+- **门禁工具新增 `report` 子命令**：读取 BDN 结果 + 负载/内存 JSON，生成带表格的 markdown
+  报告（环境头 + 微基准判定表 + 并发分位数表 + 内存曲线表）。
+- **基准项目新增 `--memory` 模式**：大结果集内存曲线（10K/100K）+ 查询构建分配，
+  复用 StandardShapes（S1），产出 memory-sqlite.json。
+- 流程加固：BDN 步骤前清空结果目录——混入陈旧/截断报告会让门禁解析失败
+  （本日实测：被中断的运行留下半截 JSON，check 直接 FATAL）。
+
 ### 📐 性能测评体系（规范 + 标准数据 + 并发负载测试）
 
 - **新增规范真源 `docs/性能基准规范.md`**：12 维度矩阵（含逐项归属与状态）、标准数据形状

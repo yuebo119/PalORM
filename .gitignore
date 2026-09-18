@@ -100,3 +100,4 @@ kubeconfig
 *credentials*
 *token*.txt
 *apikey*.txt
+bench/reports/
