@@ -36,8 +36,12 @@ dotnet run --project "$BENCH_DIR" -c Release --no-build -- --memory 2>&1 | tee "
 MEMORY_JSON="$(ls -t "$BENCH_DIR/bin/Release/net11.0/"memory-sqlite.json | head -1)"
 
 step "[3/6] 启动量具（维度 9：单方法 IL 上界，两维）"
-dotnet run --project "$ROOT_DIR/test/PalORM.SourceGen.Tests" -c Release --no-build -- \
-  --treenode-filter "/*/*/RegistryScaleTests/*" 2>&1 | grep -E "失败:|成功:" || true
+STARTUP="fail"
+if dotnet run --project "$ROOT_DIR/test/PalORM.SourceGen.Tests" -c Release --no-build -- \
+  --treenode-filter "/*/*/RegistryScaleTests/*" 2>&1 | grep -q "成功: 2"; then
+  STARTUP="ok"
+fi
+echo "启动量具: $STARTUP"
 
 step "[4/6] BDN 微基准（维度 1，与门禁同参 1/3/5，约 5 分钟）"
 # 先清结果目录——混入陈旧报告会让门禁读到截断/异构 JSON（实测先例）
@@ -57,7 +61,7 @@ step "[6/6] 生成 markdown 报告"
 set +e
 dotnet run --project "$ROOT_DIR/$GATE" -c Release --no-build -- \
   report --results "$RESULTS_DIR" --baseline "$ROOT_DIR/bench/baselines/perf-baseline.json" \
-  --workload "$WORKLOAD_JSON" --memory "$MEMORY_JSON" --out "$REPORT_MD"
+  --workload "$WORKLOAD_JSON" --memory "$MEMORY_JSON" --startup "$STARTUP" --out "$REPORT_MD"
 set -e
 
 if [ "${WITH_REMOTE:-0}" = "1" ] && [ -f "$ROOT_DIR/.env.test" ]; then
