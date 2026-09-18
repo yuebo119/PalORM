@@ -37,7 +37,11 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly ResilienceExecutor _resilience;
     internal TimeSpan _commandTimeout;
     internal List<QueryClause> _clauses;
-    internal List<DbParameter> _parameters;
+    // T5a：平铺参数列表已删除——QueryClause 自带本子句参数（Parameters），扁平视图
+    // 只在执行期按 Kind 过滤时组装（GetParametersForKinds 本就从子句读取）。
+    // 此处仅保留计数，供参数全局编号（@pN 跨子句递增）与 WhereIn 65535 守卫使用。
+    // 删除它使 AddClause 的写时复制从两列表降为单列表（每次 AddClause 少 2 次分配）。
+    internal int _parameterCount;
     /// <summary>显式投影的裸列名（构建时才限定表/CTE 名）。</summary>
     internal string[]? _selectColumns;
     internal int? _take;
@@ -53,7 +57,7 @@ public struct QueryBuilder<T> where T : class, new()
     internal DbTransaction? _transaction;
     /// <summary>ITM-763(r21)：参数名 → [SensitiveData] 掩码。Set() 写入敏感列时登记，
     /// 执行管线经 QueryContext.SensitiveParameterMasks 交给拦截器脱敏。null = 无敏感参数
-    /// （零分配；绝大多数实体无敏感列）。CloneForExecution 深拷贝（与 _parameters 同纪律）。</summary>
+    /// （零分配；绝大多数实体无敏感列）。CloneForExecution 深拷贝（与子句参数同纪律）。</summary>
     internal Dictionary<string, string>? _sensitiveMasks;
     internal readonly IQueryCache _queryCache;
 
@@ -78,7 +82,7 @@ public struct QueryBuilder<T> where T : class, new()
         // 首次写入即拿到足够余量，故预先分配的空数组只会成为首个子句时被丢弃的垃圾
         // （原 (4)/(8) 在每次查询上白分配 4 个 QueryClause 槽与 8 个参数槽）。
         _clauses = new List<QueryClause>();
-        _parameters = new List<DbParameter>();
+        _parameterCount = 0;
         _selectColumns = null;
         _take = null;
         _skip = null;
@@ -223,9 +227,9 @@ public struct QueryBuilder<T> where T : class, new()
         // 最严方言）应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
         // ITM-562: 判定按"存量 + 增量"累计——两次 40k 的 WhereIn 各自增量合规但总量越界，
         // 只查增量会静默通过、运行期 PG 协议层才报错。
-        if (_parameters.Count + items.Count > 65535)
+        if (_parameterCount + items.Count > 65535)
             throw new ArgumentException(
-                $"{callerName} received {items.Count} values on a builder holding {_parameters.Count} parameters; " +
+                $"{callerName} received {items.Count} values on a builder holding {_parameterCount} parameters; " +
                 "the total exceeds the 65535 bind-parameter limit (PostgreSQL protocol max). " +
                 "Use a temp table join or split the query into batches.", nameof(values));
 
@@ -583,10 +587,9 @@ public struct QueryBuilder<T> where T : class, new()
             _clauseBitmask = _clauseBitmask
         };
         // v5.6：ctor 现以容量 0 起步（见 ctor 注释）。本方法是唯一绕过 AddClause 直接
-        // 写 _clauses/_parameters 的路径，故在此按源 Count 一次性预分配——否则以下循环
+        // 写 _clauses/子句参数的路径，故在此按源 Count 一次性预分配——否则以下循环
         // 会走 List 的 0→4→8→16 逐级扩容。余量不与源 builder 共享（新列表）。
         clone._clauses = new List<QueryClause>(_clauses.Count);
-        clone._parameters = new List<DbParameter>(_parameters.Count);
         foreach (QueryClause clause in _clauses)
         {
             var parameters = new List<DbParameter>(clause.Parameters.Count);
@@ -594,8 +597,8 @@ public struct QueryBuilder<T> where T : class, new()
             {
                 DbParameter copy = clone._paramFactory(parameter.ParameterName, parameter.Value);
                 parameters.Add(copy);
-                clone._parameters.Add(copy);
             }
+            clone._parameterCount += parameters.Count;
             clone._clauses.Add(new QueryClause(clause.Kind, clause.Sql, parameters));
         }
         return clone;
@@ -841,7 +844,7 @@ public struct QueryBuilder<T> where T : class, new()
 
     private (string Sql, IReadOnlyList<DbParameter> Parameters) BindFormattableString(FormattableString sql)
     {
-        int baseIndex = _parameters.Count;
+        int baseIndex = _parameterCount;
         string formatted = FormatFormattableSql(sql, baseIndex);
         var parameters = new List<DbParameter>(sql.ArgumentCount);
         for (int i = 0; i < sql.ArgumentCount; i++)
@@ -860,7 +863,7 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     private DbParameter CreateParameter(object? value, int localOffset = 0)
-        => _paramFactory(GetParameterName(_parameters.Count + localOffset), value);
+        => _paramFactory(GetParameterName(_parameterCount + localOffset), value);
 
     private void AddClause(QueryClauseKind kind, string sql,
         IReadOnlyList<DbParameter>? parameters = null)
@@ -874,14 +877,11 @@ public struct QueryBuilder<T> where T : class, new()
         var clauses = new List<QueryClause>(_clauses.Count + 4);
         clauses.AddRange(_clauses);
         _clauses = clauses;
-        var allParameters = new List<DbParameter>(_parameters.Count + 4);
-        allParameters.AddRange(_parameters);
-        _parameters = allParameters;
         IReadOnlyList<DbParameter> ownedParameters = parameters ?? Array.Empty<DbParameter>();
         _clauses.Add(new QueryClause(kind, sql, ownedParameters));
         // v4.6：同步设置位掩码
         _clauseBitmask |= 1 << (int)kind;
-        foreach (DbParameter parameter in ownedParameters) _parameters.Add(parameter);
+        _parameterCount += ownedParameters.Count;
     }
 
     // v4.6：位掩码 O(1) 判断，消除 List.Exists 的 O(n) 扫描 + Predicate 委托分配
@@ -915,7 +915,7 @@ public struct QueryBuilder<T> where T : class, new()
     private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
         // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
-        var parameters = new List<DbParameter>(_parameters.Count);
+        var parameters = new List<DbParameter>(_parameterCount);
         foreach (QueryClause clause in _clauses)
         {
             if (Array.IndexOf(kinds, clause.Kind) < 0) continue;

@@ -114,6 +114,22 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚡ 性能（T5a：删除冗余平铺参数列表，COW 减半）
+
+- **`QueryBuilder` 删除冗余的平铺参数列表（`_parameters` List）**，代之以 `int _parameterCount`：
+  每个子句本就自带参数（`QueryClause.Parameters`），扁平视图唯一被读取处
+  （`GetParametersForKinds`）本来就从子句遍历——平铺列表是纯粹的重复状态，
+  却让每次 `AddClause` 的写时复制要**复制两个列表**（子句表 + 参数表，各带 +4 槽）。
+  删除后 COW 减半（每次 AddClause 少 2 次分配），单行查询实测 **−120 B**：
+  `ToListAsync` 单行 2,936 → 2,816、`FirstOrDefault` 2,873 → 2,752；
+  `GetAsync`/`Insert`/`Update` 不变（不走 AddClause 路径，确认无副作用）。
+  S3 反向验证：摘掉改动 → 2,936/2,873（退化回基线），复用 → 2,816/2,752。
+  平铺计数语义保留（参数全局编号 @pN 跨子句递增、WhereIn 65535 守卫）。
+- 累计：构建器路径单行查询自本轮起点 2,936 B → **2,816 B**，加上 T1 前 2,976 →
+  全程 **−160 B（−5.4%）**。与专用路径（GetAsync 1,656 B）的剩余差距
+  在 COW 的另一半（子句表）、BuildSql 拼接与执行器包装——下一轮候选，
+  仍需先量化再动手。
+
 ### ⚡ 性能（T4 流式终结器 ForEachAsync）+ T2 参数池化的实测裁决
 
 - **新增 `ForEachAsync(action, ct)`**——流式消费查询结果，逐行回调**不物化列表**。
