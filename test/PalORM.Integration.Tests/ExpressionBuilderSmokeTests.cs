@@ -120,6 +120,41 @@ internal sealed class ExpressionBuilderSmokeTests
         await Assert.That((await split.ToListAsync()).Count).IsEqualTo(1);
 
     }
+    [Test]
+    public async Task ForEachAsync_StreamsAllRows_WithoutMaterializingList()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        var parent = await db.InsertAsync(new SmokeParent { Name = "fp" });
+        await db.InsertAsync(new SmokeChild { ParentId = parent.Id, Label = "c0", Weight = 1 });
+        await db.InsertAsync(new SmokeChild { ParentId = parent.Id, Label = "c1", Weight = 2 });
+        await db.InsertAsync(new SmokeChild { ParentId = parent.Id, Label = "c2", Weight = 4 });
+
+        long count = 0;
+        long weightSum = 0;
+        await db.From<SmokeChild>()
+            .Where($"parent_id = {parent.Id}")
+            .ForEachAsync((child, _) =>
+            {
+                count++;
+                weightSum += child.Weight;
+                return default;
+            });
+
+        await Assert.That(count).IsEqualTo(3);
+        await Assert.That(weightSum).IsEqualTo(7);
+
+        // 与 Where 组合的过滤必须生效（回调只见到匹配行）
+        long filtered = 0;
+        await db.From<SmokeChild>()
+            .Where($"parent_id = {parent.Id}").Where($"weight >= {2}")
+            .ForEachAsync((_, _) =>
+            {
+                filtered++;
+                return default;
+            });
+        await Assert.That(filtered).IsEqualTo(2);
+    }
 }
 
 [Table("smoke_parent")]

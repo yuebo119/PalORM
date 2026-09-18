@@ -26,6 +26,101 @@ public static class QueryBuilderExtensions
             builder, ct, operationLease.Owner).ConfigureAwait(false);
     }
 
+    /// <summary>流式消费查询结果——每行经回调处理，<b>不物化列表</b>。
+    /// <para><b>与 ToListAsync 的取舍</b>：大结果集（10 万行级）下省去整表 List 分配与
+    /// 实体存活内存（实测 100K 行：分配 15.5MB/存活 10.8MB → 回调形态仅剩每行实体本身）；
+    /// 小结果集二者等价。回调逐行同步执行——回调里的 DB 调用会触发 PALORM005（那是正确的）。</para>
+    /// <para><b>语义契约</b>：① 不写 <c>WithCache</c> 缓存（流式结果没有可缓存的列表，
+    /// 与 First 族的截断防护同理）；② 拦截器语义与 ToListAsync 一致——OnBefore 按尝试触发、
+    /// OnAfter 携带实际行数、OnError 通知；③ 弹性管线覆盖与 ToListAsync 同口径
+    /// （无事务、非直通）；④ 回调抛出的异常原样上抛并终止枚举（reader/连接经 using 释放）。</para></summary>
+    public static async ValueTask<long> ForEachAsync<T>(
+        this QueryBuilder<T> builder,
+        Func<T, CancellationToken, ValueTask> action,
+        CancellationToken ct = default) where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        using SessionOperationState.SessionOperationLease operationLease =
+            builder._operationState.Enter();
+        return await ExecuteForEachAsync(builder, action, ct, operationLease.Owner).ConfigureAwait(false);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "与 ExecuteQueryAsync 同构的管线形态（执行/拦截器/观测性三段式）——"
+            + "流式变体必须保持同一语义结构，抽公共化会为两处调用各引入一层间接。")]
+    private static async ValueTask<long> ExecuteForEachAsync<T>(
+        QueryBuilder<T> builder,
+        Func<T, CancellationToken, ValueTask> action,
+        CancellationToken ct,
+        object? operationOwner = null) where T : class, new()
+    {
+        if (builder._selectColumns is not null)
+            throw new NotSupportedException(
+                "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
+        string sql = builder.BuildSql();
+        IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
+        var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
+        const string operation = "select";
+        string provider = builder._dialect.GetName();
+        bool observed = builder._tracing || builder._metrics;
+        Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        bool needStopwatch = observed || interceptors.Count > 0;
+        Stopwatch? sw = needStopwatch ? Stopwatch.StartNew() : null;
+        string outcome = "error";
+        DbTransaction? boundTransaction = builder.GetActiveTransaction();
+        ResilienceExecutor resilience = builder._resilience;
+        bool resilient = boundTransaction is null && !resilience.IsPassThrough;
+
+        // 单次尝试内核——每行经回调消费，不物化列表；拦截器语义与 ToListAsync 一致
+        async Task<long> ExecuteCoreAsync(CancellationToken token)
+        {
+            await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(false, token).ConfigureAwait(false);
+            await using DbCommand cmd = lease.Connection.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+            cmd.Transaction = boundTransaction;
+            AddParameters(cmd, parameters);
+            NotifyInterceptorsOnBefore(interceptors, context);
+            await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+            long rowCount = 0;
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                await action(builder._factory(reader), token).ConfigureAwait(false);
+                rowCount++;
+            }
+            NotifyInterceptorsOnAfter(interceptors, context, sw, (int)rowCount);
+            return rowCount;
+        }
+
+        try
+        {
+            using SessionOperationState.SessionOperationLease operationStateLease =
+                builder._operationState.Enter(operationOwner);
+            long count = resilient
+                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
+                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
+            outcome = "success";
+            return count;
+        }
+        catch (Exception exception)
+        {
+            if (exception is OperationCanceledException && ct.IsCancellationRequested)
+                outcome = "cancelled";
+            NotifyInterceptorsOnError(builder._interceptors, context, exception);
+            throw;
+        }
+        finally
+        {
+            sw?.Stop();
+            PalORMMetrics.CompleteActivity(activity, outcome);
+            if (builder._metrics && sw is not null)
+                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
+        }
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
         Justification = "查询执行管线的 try/catch/finally 三段式（执行/拦截器错误通知/观测性收尾）"
