@@ -114,6 +114,23 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### 📐 性能测评体系（规范 + 标准数据 + 并发负载测试）
+
+- **新增规范真源 `docs/性能基准规范.md`**：12 维度矩阵（含逐项归属与状态）、标准数据形状
+  S1–S5 的权威定义、行数档位、环境记录要求、测量口径、流程（日常/门禁/优化轮/基线重录）、
+  新增基准准入清单、禁止事项。BENCHMARKS.md 自此只登记结果，"怎么测"以本文件为准。
+- **新增标准数据形状**（`bench/PalORM.Benchmarks/StandardShapes.cs`，唯一权威定义）：
+  S1 Narrow（4 列基线）/ S2 Wide（19 列全类型）/ S3 Sparse（确定性 70% null）/
+  S4 Blob（32B/1KB/64KB）/ S5 LongText（2000 字符）。种子完全确定（值由行号派生、无随机），
+  任何一次生成的库内容逐位相同；DDL 一律经 `MigrateAsync`，禁止手写建表。
+- **补齐维度 3/4/11：并发负载测试**（`--workload`，此前全部结论都是单线程中位数）：
+  N 线程 × 80/20 读写混合，每操作采样 → 近邻秩 p50/p95/p99 + ops/s，输出 schema 2 草案 JSON。
+  首跑（S1 × 10K，SQLite WAL，Windows/.NET 11）：吞吐峰值在 2 线程（71,711 ops/s，+31%），
+  8 线程回落到单线程一半以下——SQLite 单写者锁竞争的典型形状；
+  p50 ≈ 0.01 ms 与读路由优化后的 8.98 µs 独立互证。**首跑数据只登记不设阈值**
+  （分位数噪声底待积累，规范 §6）。
+- `scripts/run-benchmarks.sh` 新增 `workload` 目标。
+
 ### 🧪 覆盖审计：会话级弹性配置器与 TagWithCaller（此前零覆盖）
 
 - **系统审计"文档声明的 API 是否被测试执行过"**（ForUpdate 空白的同类排查）：39 个文档声明

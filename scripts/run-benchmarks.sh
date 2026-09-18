@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PalORM 性能基准标准运行脚本
 # 用法：
-#   bash scripts/run-benchmarks.sh [sqlite|pg|mysql|all|scale|build|speed]
+#   bash scripts/run-benchmarks.sh [sqlite|pg|mysql|all|scale|build|workload|speed]
 #   bash scripts/run-benchmarks.sh sqlite --save-baseline  # 保存基线 JSON
 #   bash scripts/run-benchmarks.sh sqlite --compare v4.0   # 与基线对比
 #
@@ -78,6 +78,10 @@ case "$TARGET" in
     echo ">>> 运行全部 SQLite + Scale + Build + Speed 基准（约 30 分钟）..."
     dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
       --filter '*' 2>&1 | tee /tmp/bench-all-$(date +%Y%m%d-%H%M%S).log
+    ;;
+  workload)
+    echo ">>> 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md；SQLite 档）..."
+    dotnet run --project "$BENCH_DIR" -c Release --no-build --       --workload 2>&1 | tee /tmp/bench-workload-$(date +%Y%m%d-%H%M%S).log
     ;;
   speed)
     echo ">>> 运行纯速度基准（无 MemoryDiagnoser 交叉验证）..."
