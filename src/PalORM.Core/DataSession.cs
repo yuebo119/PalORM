@@ -290,7 +290,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
     private IsolationLevel _isolationLevel = IsolationLevel.ReadCommitted;
 
-    /// <summary>设置会话默认命令超时，并重置当前弹性策略状态。</summary>
+    /// <summary>设置会话默认命令超时，并以**合并后的当前配置**重建弹性执行器。
+    /// <para>"重建"意味着：此前经 <see cref="WithRetry"/>/<see cref="WithCircuitBreaker"/>
+    /// 做过的会话级配置**保留**（三者都落到同一份 <c>_options</c>，叠加而非互相清空）；
+    /// 已通过 <c>From&lt;T&gt;()</c> 创建的 builder 因快照语义不受影响（继续用旧执行器）。</para></summary>
     public DataSession<TProvider> WithTimeout(TimeSpan timeout)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout.Ticks, 0, nameof(timeout));
