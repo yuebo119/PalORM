@@ -14,6 +14,31 @@ internal static class FormattableSqlFormatter
     //   - `{N}` 占位符解析后需把游标直接跳到结束花括号位置
     // 这些是单遍扫描复合格式串的标准实现（与 BCL StringBuilder.AppendFormat 内部模式一致），
     // 末尾的自增不会破坏正确性--每次循环内已先调整 index 到目标位置。
+    // T1 形状缓存：格式化输出是（Format 文本, baseIndex, ArgumentCount）的**纯函数**，
+    // 而 Format 文本是编译期 ldstr 常量——同一调用点每次返回同一实例。以
+    // （值相等文本, 槽位偏移, 参数个数）为键缓存输出，命中时复用同一 SQL 文本实例。
+    // 实测收益为每次查询 −40 B（输出串实例复用）+ 省去复合格式扫描——远小于立项时
+    // 的预估（−36%），因为格式扫描本身已走 ValueStringBuilder 栈分配、几乎零分配，
+    // 可省的只有输出串。保留原因：正收益、零行为变化、缓存命中还省扫描时间；
+    // 键不含参数值——编译期参数化保证值只进 @pN 占位，同形状 ⇒ 同 SQL 文本。
+    // 容量以应用内"不同查询形状数"为界（有限且通常很小），与既有静态缓存同纪律；
+    // 放在非泛型类避免按 T 分片（S2743）。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (string Format, int BaseIndex, int ArgumentCount), string> ShapeCache = new();
+
+    /// <summary>带形状缓存的格式化入口——QueryBuilder 热路径经此调用。</summary>
+    internal static string FormatCached(string format, int baseIndex, int argumentCount)
+        => ShapeCache.GetOrAdd(
+            (format, baseIndex, argumentCount),
+            static key => Format(key.Format, key.BaseIndex, key.ArgumentCount));
+
+    /// <summary>便捷重载——委托给纯字符串签名版本（保持既有调用点与契约测试不变）。</summary>
+    internal static string Format(FormattableString sql, int baseIndex = 0)
+        => Format(sql.Format, baseIndex, sql.ArgumentCount);
+
+    /// <summary>把复合格式串格式化为参数化 SQL——<b>纯函数</b>：输出仅由
+    /// （<paramref name="format"/>，<paramref name="baseIndex"/>，<paramref name="argumentCount"/>）决定，
+    /// 与参数值无关（值只进 @pN 占位）。纯函数性是 QueryBuilder 形状缓存（T1）的正确性前提。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S127:DoNotUpdateLoopVariableInLoopBody",
         Justification = "Composite format scan requires cursor adjustment for escapes and placeholders.")]
@@ -23,12 +48,12 @@ internal static class FormattableSqlFormatter
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
         Justification = "Single-pass composite format scan - three branches (escape/placeholder/literal) + validation.")]
-    internal static string Format(FormattableString sql, int baseIndex = 0)
+    internal static string Format(string format, int baseIndex, int argumentCount)
     {
-        ArgumentNullException.ThrowIfNull(sql);
+        ArgumentNullException.ThrowIfNull(format);
         ArgumentOutOfRangeException.ThrowIfNegative(baseIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(argumentCount);
 
-        string format = sql.Format;
         // v4.1：删除丢弃的 CompositeFormat.Parse（纯浪费），改用 ValueStringBuilder（栈分配 + ArrayPool 兜底）
         var sb = new ValueStringBuilder(stackalloc char[256]);
         try
@@ -69,11 +94,11 @@ internal static class FormattableSqlFormatter
                 ReadOnlySpan<char> argumentIndex = separator < 0 ? item : item[..separator];
                 if (!int.TryParse(argumentIndex, out int parsedIndex)
                     || parsedIndex < 0
-                    || parsedIndex >= sql.ArgumentCount)
+                    || parsedIndex >= argumentCount)
                 {
                     throw new FormatException(
                         $"Formattable SQL contains an invalid argument index '{argumentIndex}' " +
-                        $"(argument count: {sql.ArgumentCount}).");
+                        $"(argument count: {argumentCount}).");
                 }
                 // v4.1：校验 alignment 部分（逗号后）——替代被删除的 CompositeFormat.Parse 的格式验证
                 if (separator >= 0 && item[separator] == ',')

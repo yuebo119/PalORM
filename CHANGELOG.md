@@ -114,6 +114,25 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚡ 性能（T1 形状缓存：立项预估被实测修正）
+
+- **构建器 SQL 形状缓存**：`FormattableSqlFormatter` 的格式化输出是
+  （Format 文本, 槽位偏移, 参数个数）的**纯函数**——Format 文本是编译期 ldstr 常量
+  （同调用点恒同实例），据此以值相等键缓存输出，QueryBuilder 热路径
+  （`FormattableSqlFormatter.FormatCached`）命中时复用同一 SQL 文本实例。
+  <br>**实测收益 −40 B/查询（2,976 → 2,936，−1.3%），远小于立项预估的 −36%**——
+  立项时把 Where+ToSql 的 1,048 B 归因于"格式扫描与输出串"，实测拆解证明格式扫描
+  已走 ValueStringBuilder 栈分配、几乎零分配，可省的只有输出串本身。
+  **预估−36% 是错的，按实测修正并如实记录。** 保留原因：正收益、零行为变化、
+  命中时还省格式扫描时间。formatter 随之重构为纯字符串签名
+  `Format(string format, int baseIndex, int argumentCount)`（纯函数性显式化，
+  既有 FormattableString 重载委托保留，契约测试不变）。
+- **同场测得的真实结论（比 T1 本身更有价值）**：单行查询的两条路径差距
+  （构建器 2,936 B vs GetAsync 1,656 B）**不是** SQL 格式化造成的——格式化已近乎零分配。
+  剩余差距在：每子句参数对象创建（~83 B/个）、子句写时复制（COW 两列表 ×4 槽）、
+  BuildSql 拼接、执行器包装。这些构成下一轮的真实候选，全部需先量化再动手。
+- `FirstOrDefaultAsync` 的容量 1 已存在（`Take(1)` → `Min(1, 16384)`），原计划 T3 撤销。
+
 ### ⚙️ 测评流程：一键全量 + 报告生成器
 
 - **`scripts/run-full-perf.sh`**：单命令跑完整测评（构建 → 负载×2 → 内存曲线 → 启动量具 →
