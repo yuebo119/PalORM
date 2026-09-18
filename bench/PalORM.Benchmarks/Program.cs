@@ -28,6 +28,12 @@ public static class Program
             BoxingMicroBenchmark.RunAsync().GetAwaiter().GetResult();
             return;
         }
+        // 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md）——BDN 单线程测不了锁/池/调度
+        if (args.Length > 0 && args[0] == "--workload")
+        {
+            WorkloadHarness.RunAsync(new WorkloadOptions()).GetAwaiter().GetResult();
+            return;
+        }
         // 诊断 BDN RuntimeMoniker 推断
         if (args.Length > 0 && args[0] == "--bdn-debug")
         {
