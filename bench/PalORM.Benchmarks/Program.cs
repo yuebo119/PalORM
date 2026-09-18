@@ -34,6 +34,12 @@ public static class Program
             WorkloadHarness.RunAsync(new WorkloadOptions()).GetAwaiter().GetResult();
             return;
         }
+        // 大结果集内存曲线 + 查询构建分配（维度 1/7）
+        if (args.Length > 0 && args[0] == "--memory")
+        {
+            MemoryProbe.RunAsync(new MemoryOptions()).GetAwaiter().GetResult();
+            return;
+        }
         // 诊断 BDN RuntimeMoniker 推断
         if (args.Length > 0 && args[0] == "--bdn-debug")
         {
