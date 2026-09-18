@@ -164,6 +164,8 @@ public sealed class FlakyConnection : DbConnection
     internal int FailFirstNReads { get; set; }
     internal int FailFirstNScalars { get; set; }
     internal bool FailEveryNonQuery { get; set; }
+    /// <summary>最近一次创建的命令——供 WithTimeout 用例断言 CommandTimeout 真的到达命令。</summary>
+    internal FlakyCommand? LastCreatedCommand { get; private set; }
 
     [AllowNull]
     public override string ConnectionString { get; set; } = "flaky";
@@ -177,7 +179,12 @@ public sealed class FlakyConnection : DbConnection
     public override void Open() { }
     protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
         => new FlakyTransaction(this);
-    protected override DbCommand CreateDbCommand() => new FlakyCommand(this);
+    protected override DbCommand CreateDbCommand()
+    {
+        FlakyCommand command = new(this);
+        LastCreatedCommand = command;
+        return command;
+    }
 
     internal void CountReaderAttempt()
     {

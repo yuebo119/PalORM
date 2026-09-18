@@ -114,6 +114,24 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### 🧪 覆盖审计：会话级弹性配置器与 TagWithCaller（此前零覆盖）
+
+- **系统审计"文档声明的 API 是否被测试执行过"**（ForUpdate 空白的同类排查）：39 个文档声明
+  的调用式 API 里，`SingleAsync`/`SingleOrDefaultAsync` 经核实有覆盖（首轮启发式误报）；
+  真缺口是 4 个**从未在任何测试中出现**的 API：会话级 `WithRetry` / `WithCircuitBreaker` /
+  `WithTimeout`（v5.4 弹性特性的**运行期入口**——既有弹性测试全部走 `DbOptions` 构造期配置，
+  若热替换 `UpdateResilience` 回归，既有测试全绿而生产配置路径失效）与 `TagWithCaller`。
+  新增 `SessionResilienceConfiguratorTests`（4 项）补上。
+- **实测钉住会话弹性方法的真实语义——是"叠加"而非"清空"**：`UpdateResilience` 把合并后的
+  配置写回 `_options`（DataSession.cs:352），所以 `WithRetry(3)` 之后再 `WithTimeout(...)`，
+  重试**仍然生效**。三个方法的 XML 文档写的是"重置当前弹性策略状态"——这个措辞有歧义，
+  我第一版测试就按"重置=清空"断言、被当场否掉；文档已改写为准确表述
+  （"以合并后的当前配置重建执行器；既有 builder 因快照语义不受影响"）。
+  <br>另钉住 `resetAfter` 语义：`TimeSpan.Zero` 意味着开闸即半开、探针永远放行，
+  看不到 `CircuitBreakerOpenException`（用例注释里留了这条）。
+- 假连接（`FlakyConnection`）补了一个 `LastCreatedCommand` 捕获点，
+  使 `WithTimeout` 的秒数能被断言"真的到达命令对象"。
+
 ### 🧪 AOT：PG/MySQL 原生程序补锁子句的"原生执行"验证
 
 - 两个 AOT 验收程序（`PalORM.AotTest.Pg` / `PalORM.AotTest.MySql`）新增
