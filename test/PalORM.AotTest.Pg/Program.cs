@@ -179,14 +179,16 @@ internal static class Program
             Version = 0
         }).ConfigureAwait(false);
 
+        // 过滤用显式映射的 name 列（[Column("name")]）而非主键——Id 无 [Column] 特性，
+        // PG 的实际列名是带引号的大小写敏感 "Id"，手写小写 id 会撞 42703（本程序首跑即踩）。
         await db.WithTransaction(async ct =>
         {
             List<AotPgEntity> forUpdate = await db.From<AotPgEntity>()
-                .Where($"id = {probe.Id}").ForUpdate().ToListAsync(ct).ConfigureAwait(false);
+                .Where($"name = {"lock probe"}").ForUpdate().ToListAsync(ct).ConfigureAwait(false);
             List<AotPgEntity> forShare = await db.From<AotPgEntity>()
-                .Where($"id = {probe.Id}").ForShare().ToListAsync(ct).ConfigureAwait(false);
+                .Where($"name = {"lock probe"}").ForShare().ToListAsync(ct).ConfigureAwait(false);
             List<AotPgEntity> skipLocked = await db.From<AotPgEntity>()
-                .Where($"id = {probe.Id}").ForUpdate(skipLocked: true).ToListAsync(ct).ConfigureAwait(false);
+                .Where($"name = {"lock probe"}").ForUpdate(skipLocked: true).ToListAsync(ct).ConfigureAwait(false);
             if (forUpdate.Count != 1 || forShare.Count != 1 || skipLocked.Count != 1)
                 throw new InvalidOperationException("PostgreSQL pessimistic lock execution failed");
             return true;
