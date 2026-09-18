@@ -821,7 +821,7 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     internal static string FormatFormattableSql(FormattableString sql, int baseIndex)
-        => FormattableSqlFormatter.Format(sql, baseIndex);
+        => FormattableSqlFormatter.FormatCached(sql.Format, baseIndex, sql.ArgumentCount);
 
     private QueryBuilder<T> AddJoin<TJoin>(string joinType, FormattableString onClause)
         where TJoin : class, new()
