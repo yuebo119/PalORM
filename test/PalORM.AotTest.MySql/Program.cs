@@ -171,6 +171,8 @@ internal static class Program
             if (taggedFirst is null || taggedFirst.Id != probe.Id)
                 throw new InvalidOperationException("AutoTagged FirstOrDefaultAsync materialization failed");
             await db.DeleteAsync<AotMySqlEntity>(probe.Id).ConfigureAwait(false);
+
+            await VerifyPessimisticLocksAsync(db).ConfigureAwait(false);
             }
             finally
             {
@@ -182,5 +184,32 @@ internal static class Program
         }
 
         Console.WriteLine("PalORM AOT MySQL verification PASSED");
+    }
+
+    /// <summary>悲观锁子句的**原生执行**验证（FOR SHARE 需 MySQL 8.0+，目标 8.4）——
+    /// SQLite 执行不了锁语句（ITM-639），JIT 侧由 PessimisticLockTests 覆盖；
+    /// 这里是 MySQL 上的原生二进制等价验证。</summary>
+    private static async Task VerifyPessimisticLocksAsync(DataSession<MySqlProvider> db)
+    {
+        // 专用探针行：前面的 "tag probe" 行在锁验证前已被删除，不能依赖
+        AotMySqlEntity probe = await db.InsertAsync(new AotMySqlEntity
+        {
+            Name = "lock probe",
+            Value = 1,
+            Version = 0
+        }).ConfigureAwait(false);
+
+        await db.WithTransaction(async ct =>
+        {
+            List<AotMySqlEntity> forUpdate = await db.From<AotMySqlEntity>()
+                .Where($"id = {probe.Id}").ForUpdate().ToListAsync(ct).ConfigureAwait(false);
+            List<AotMySqlEntity> forShare = await db.From<AotMySqlEntity>()
+                .Where($"id = {probe.Id}").ForShare().ToListAsync(ct).ConfigureAwait(false);
+            List<AotMySqlEntity> skipLocked = await db.From<AotMySqlEntity>()
+                .Where($"id = {probe.Id}").ForUpdate(skipLocked: true).ToListAsync(ct).ConfigureAwait(false);
+            if (forUpdate.Count != 1 || forShare.Count != 1 || skipLocked.Count != 1)
+                throw new InvalidOperationException("MySQL pessimistic lock execution failed");
+            return true;
+        }).ConfigureAwait(false);
     }
 }
