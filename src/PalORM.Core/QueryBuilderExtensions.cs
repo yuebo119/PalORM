@@ -227,8 +227,10 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>通知所有拦截器 OnError——单个拦截器抛出的异常被吞掉，
-    /// 不覆盖原始执行异常、不阻断其他拦截器或后续资源清理。</summary>
-    private static void NotifyInterceptorsOnError(
+    /// 不覆盖原始执行异常、不阻断其他拦截器或后续资源清理；
+    /// 吞掉的同时计入 <see cref="PalORMMetrics.InterceptorOnErrorFailures"/>（审计 ERR-010：
+    /// 原"零痕迹吞"使审计拦截器自身 bug 永不可见）。internal 供契约测试直调。</summary>
+    internal static void NotifyInterceptorsOnError(
         List<IQueryInterceptor> interceptors, QueryContext context, Exception exception)
     {
         // v3.1：默认会话无拦截器——空列表直接返回，避免 foreach 迭代与方法调用开销。
@@ -236,7 +238,7 @@ public static class QueryBuilderExtensions
         foreach (IQueryInterceptor interceptor in interceptors)
         {
             try { interceptor.OnError(context, exception); }
-            catch { /* 拦截器不能覆盖原始执行异常，也不能阻断资源清理。 */ }
+            catch { PalORMMetrics.RecordInterceptorOnErrorFailure(); }
         }
     }
 

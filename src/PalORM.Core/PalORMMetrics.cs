@@ -28,6 +28,17 @@ public static class PalORMMetrics
     private static readonly Histogram<double> _queryDuration = Meter.CreateHistogram<double>(
         "palorm.query.duration", "s", "Database command duration in seconds");
 
+    private static long _interceptorOnErrorFailures;
+
+    /// <summary>OnError 通知中拦截器自身抛异常的累计次数（审计 ERR-010 观测挂点）。
+    /// OnError 处于异常处理通路，拦截器异常被吞以保护原始异常与资源清理（契约见
+    /// <see cref="IQueryInterceptor.OnError"/>）——本计数让"吞"可观测：正常运行应恒为 0，
+    /// 增长即审计拦截器自身有 bug。纯进程内计数，不依赖 WithMetrics 启用。</summary>
+    internal static long InterceptorOnErrorFailures => Volatile.Read(ref _interceptorOnErrorFailures);
+
+    internal static void RecordInterceptorOnErrorFailure()
+        => Interlocked.Increment(ref _interceptorOnErrorFailures);
+
     internal static Activity? StartActivity(string operation, string provider)
     {
         Activity? activity = ActivitySource.StartActivity("PalORM.Query", ActivityKind.Client);

@@ -30,7 +30,8 @@ internal sealed record TableModel(
                 "the [Table] target symbol is not a named type");
         if (typeSymbol.TypeKind != TypeKind.Class)
             return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                "the [Table] target is not a class or record (interfaces/structs/enums are not supported)");
+                "the [Table] target is not a class or record (interfaces/enums are not supported; "
+                + "structs are rejected earlier by the attribute's AttributeUsage)");
         if (!SourceGenerationValidation.CanGenerateEntity(typeSymbol))
             return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 "entity declaration or primary key shape is not supported (generic/nested/abstract/static type, "

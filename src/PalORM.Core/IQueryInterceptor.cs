@@ -12,13 +12,19 @@ public interface IQueryInterceptor
     /// <summary>拦截器优先级——数值越小越先执行（默认 100）。</summary>
     int Priority => 100;
 
-    /// <summary>查询执行前调用。<paramref name="context"/> 携带即将执行的 SQL 与参数，可用于日志/审计。</summary>
+    /// <summary>查询执行前调用。<paramref name="context"/> 携带即将执行的 SQL 与参数，可用于日志/审计。
+    /// <para><b>异常契约</b>：本方法抛出的异常会传播并使该查询失败（审计 ERR-010 文档化）。</para></summary>
     void OnBefore(QueryContext context);
 
-    /// <summary>查询成功完成后调用。<paramref name="elapsed"/> 为执行耗时，<paramref name="rowCount"/> 为返回行数。</summary>
+    /// <summary>查询成功完成后调用。<paramref name="elapsed"/> 为执行耗时，<paramref name="rowCount"/> 为返回行数。
+    /// <para><b>异常契约</b>：同 <see cref="OnBefore"/>——抛出的异常传播并使查询调用方失败。</para></summary>
     void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount);
 
-    /// <summary>查询抛出异常时调用（此时不调用 OnAfter）。<paramref name="exception"/> 为原始执行异常，方法返回后照常向调用方抛出。</summary>
+    /// <summary>查询抛出异常时调用（此时不调用 OnAfter）。<paramref name="exception"/> 为原始执行异常，方法返回后照常向调用方抛出。
+    /// <para><b>异常契约（与 OnBefore/OnAfter 不对称）</b>：本方法处于异常处理通路上，实现抛出的异常
+    /// 会被<b>吞掉</b>——以保护原始执行异常不被覆盖、后续拦截器与资源清理不被阻断；吞掉的同时
+    /// 计入 <see cref="PalORMMetrics.InterceptorOnErrorFailures"/> 诊断计数（审计 ERR-010）。
+    /// 实现方应自行 try-catch 并记录自身失败，不要依赖本契约静默。</para></summary>
     void OnError(QueryContext context, Exception exception);
 }
 
