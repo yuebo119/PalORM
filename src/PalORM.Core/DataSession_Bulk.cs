@@ -326,6 +326,11 @@ public partial class DataSession<TProvider>
     /// <para>ITM-556 注记: 自增 ID 回填随每条 UPSERT 立即发生；中途失败整批回滚时，
     /// 已回填的内存 ID 对应的行不存在于 DB——异常路径下不要继续使用输入实体的 ID，
     /// 重试应重新走 BulkMergeAsync（UPSERT 幂等）。</para></summary>
+    /// <returns><b>成功处理的实体数</b>（按输入计数），<b>非</b>数据库受影响行数——与
+    /// BulkInsert/Update/Delete 返回真实受影响行数的语义不同（审计 API-010 文档化）。
+    /// 选择该语义的原因：UPSERT 的受影响行数跨方言语义不稳（MySQL ON DUPLICATE KEY
+    /// 对更新行计 2、PG ON CONFLICT 计 1），处理实体数是唯一跨方言可预测的口径。
+    /// 语义是否对齐家族，留待 3.0 决策。</returns>
     public async ValueTask<long> BulkMergeAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {
