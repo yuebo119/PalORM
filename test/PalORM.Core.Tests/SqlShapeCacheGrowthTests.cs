@@ -15,33 +15,37 @@ namespace PalORM.Core.Tests;
 [NotInParallel("SqlShapeCache")]
 public sealed class SqlShapeCacheGrowthTests
 {
-    private const int MaxEntries = 1024;
-
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
         => await DataSession<SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = "Data Source=:memory:" });
 
     [Test]
-    public async Task DynamicSkipValues_KeepCacheBounded()
+    public async Task DynamicSkipValues_OffsetShapesNeverCached()
     {
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
-        // 增量断言：静态缓存被并行测试组共享，绝对值不可控（账本 SHAPE-001 陷阱栏）
-        int before = SqlShapeCache.TotalEntryCount;
-        // 动态 OFFSET 分页：页码递增 → Skip 值无界。每个值生成不同 LIMIT/OFFSET 文本
+        // 动态 OFFSET 分页：页码递增 → Skip 值无界。行为断言：循环内任意一页的 SQL
+        // 不出现在缓存（OFFSET 形状不入缓存是 BuildSql 全路径行为）。
+        // 注意不能断言"缓存无 OFFSET 文本"——Take 有值 Skip 无值时输出 `OFFSET 0` 字面量，
+        // 其入缓存合法。
         // PALORM005 豁免：ToSql() 是纯构建不打数据库——本测试钉的是缓存容量而非查询形态
 #pragma warning disable PALORM005
-            for (int i = 0; i < 10_000; i++)
-                _ = session.From<ShapeProbeEntity>().OrderBy(x => x.Id).Skip(i).Take(10).ToSql();
+        for (int i = 0; i < 10_000; i++)
+            _ = session.From<ShapeProbeEntity>().OrderBy(x => x.Id).Skip(i).Take(10).ToSql();
+
+        // 探针：本循环独有形状（表名全库唯一 + OFFSET 值独有），对并行测试噪声免疫
+        string page9999 = session.From<ShapeProbeEntity>().OrderBy(x => x.Id).Skip(9_999).Take(10).ToSql();
 #pragma warning restore PALORM005
 
-        await Assert.That(SqlShapeCache.TotalEntryCount - before).IsLessThanOrEqualTo(MaxEntries);
+        await Assert.That(SqlShapeCache.Entries.Count(
+            e => e.FullSql == page9999)).IsEqualTo(0);
     }
 
     [Test]
     public async Task ClonedBuilder_ReusesCacheEntryOfOriginalShape()
     {
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
-        int before = SqlShapeCache.TotalEntryCount;
+        // 组内先跑的容量测试会把缓存填满拒写——先清空保证本形状确实被缓存
+        SqlShapeCache.Clear();
         QueryBuilder<ShapeProbeEntity> builder = session.From<ShapeProbeEntity>()
             .Where($"name = {"probe-a"}")
             .OrderBy(x => x.Id)
@@ -52,10 +56,31 @@ public sealed class SqlShapeCacheGrowthTests
         QueryBuilder<ShapeProbeEntity> clone = builder.CloneForExecution();
         string fromClone = clone.ToSql();
 
-        // 克隆体与原生路径形状相同：SQL 相同，且本形状只允许新增一个缓存条目
+        // 克隆体与原生路径形状相同：SQL 相同；行为断言——缓存中同 SQL 文本的条目仅一条
+        //（对并行测试噪声免疫：其它测试不可能产出本形状的 SQL 文本）
         await Assert.That(fromClone).IsEqualTo(original);
         await Assert.That(cachedAgain).IsEqualTo(original);
-        await Assert.That(SqlShapeCache.TotalEntryCount - before).IsEqualTo(1);
+        await Assert.That(SqlShapeCache.Entries.Count(
+            e => e.FullSql == original)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DynamicTagValues_NewShapeRejectedWhenCacheFull()
+    {
+        // A1 的残余无界源（OFFSET 排除之外）：Tag 的业务标识是裸文本子句，动态值
+        // 每个都是新形状。行为断言：填满上限后新形状被拒（对齐 BoundedQueryCache 1024 纪律）
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+#pragma warning disable PALORM005 // ToSql() 纯构建不打数据库
+        for (int i = 0; i < 10_000; i++)
+            _ = session.From<ShapeProbeEntity>().Where($"id > {i}").Tag($"biz-{i}").ToSql();
+
+        // 全新形状：缓存已满（1024 上限拒写）则它不进缓存
+        string freshShape = session.From<ShapeProbeEntity>()
+            .Where($"name = {"fresh-probe-x"}").ToSql();
+#pragma warning restore PALORM005
+
+        await Assert.That(SqlShapeCache.Entries.Count(
+            e => e.FullSql == freshShape)).IsEqualTo(0);
     }
 }
 

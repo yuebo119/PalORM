@@ -10,11 +10,23 @@ namespace PalORM;
 /// 参数<b>不</b>在键内——编译期参数化保证值只进 @pN 占位，同形状 ⇒ 同 SQL 文本，
 /// 参数值由调用方逐次绑定。</para>
 /// <para><b>正确性</b>：哈希只用于选桶；命中后逐条核对子句序列（值相等）与字段包
-/// （记录结构体值相等），碰撞只会落到"未命中重建"，不会产出错误 SQL。容量以应用内
-/// "不同查询形状数"为界（有限，通常远小于查询数），与既有静态缓存同纪律；
-/// 跨会话共享（形状与具体会话无关）。</para></summary>
+/// （记录结构体值相等），碰撞只会落到"未命中重建"，不会产出错误 SQL。
+/// 跨会话共享（形状与具体会话无关）。</para>
+/// <para><b>容量纪律（审计 2026-09-19 A1 整改）</b>：总量上限 <see cref="MaxEntries"/>
+/// 条（对齐 BoundedQueryCache 的 1024 纪律），满则拒写——新形状逐次重建（回到缓存前
+/// 的行为），既有条目继续命中。带 OFFSET（Skip 有值）的形状由调用方排除在缓存外：
+/// OFFSET 值随页码无界，入缓存必然绕过任何容量上限；LIMIT 参数化（值改绑 @pN、形状
+/// 回归有限集）是根解，待评审动基线后可移除该排除。</para></summary>
 internal static class SqlShapeCache
 {
+    /// <summary>总量上限——满则拒写（与 BoundedQueryCache 同纪律）。竞态窗口下可略超（并发
+    /// 同时通过上限检查），偏差量为并发 Add 数，无害。</summary>
+    internal const int MaxEntries = 1024;
+
+    private static readonly ConcurrentDictionary<int, ConcurrentQueue<SqlShapeEntry>> Buckets = new();
+
+    private static int _totalEntries;
+
     /// <summary>形状中"子句序列之外"的字段——全部参与键与核对。
     /// <para><b>Dialect 必须在内</b>：SELECT 列清单的引用符随方言不同（PG 双引号 / MySQL 反引号），
     /// 而用户手写的 WHERE 子句文本跨方言可能完全相同（无引用符差异）——缺方言会让
@@ -22,8 +34,6 @@ internal static class SqlShapeCache
     internal readonly record struct ShapeFields(SqlDialect Dialect, bool SplitQuery, int? Take, int? Skip, string TableName, string? CteName);
 
     internal sealed record SqlShapeEntry(string[] SqlSequence, ShapeFields Fields, string FullSql);
-
-    private static readonly ConcurrentDictionary<int, ConcurrentQueue<SqlShapeEntry>> Buckets = new();
 
     public static IEnumerable<SqlShapeEntry> GetBucket(int shapeHash)
         => Buckets.TryGetValue(shapeHash, out ConcurrentQueue<SqlShapeEntry>? bucket)
@@ -54,6 +64,11 @@ internal static class SqlShapeCache
         IReadOnlyList<QueryClause> clauses,
         ShapeFields fields, string fullSql)
     {
+        // 容量纪律（审计 A1）：满则拒写。被拒的形状此后逐次重建——行为等同于缓存不存在，
+        // 正确性不受影响；动态 Tag/Raw 值等残余无界源由此兜底。
+        if (Volatile.Read(ref _totalEntries) >= MaxEntries) return;
+        Interlocked.Increment(ref _totalEntries);
+
         var sequence = new string[clauses.Count];
         for (int i = 0; i < clauses.Count; i++)
         {
@@ -64,21 +79,28 @@ internal static class SqlShapeCache
         Buckets.GetOrAdd(shapeHash, static _ => new ConcurrentQueue<SqlShapeEntry>()).Enqueue(entry);
     }
 
-    /// <summary>全缓存条目总数——诊断与测试观测点（遍历 O(桶数)，不进查询热路径）。
+    /// <summary>全缓存条目总数——诊断与测试观测点（O(1) 读计数器）。
     /// 审计 2026-09-19 A1 防线：进程级缓存必须有界，本计数让上界可断言。</summary>
-    internal static int TotalEntryCount
+    internal static int TotalEntryCount => Volatile.Read(ref _totalEntries);
+
+    /// <summary>枚举全部条目——测试/诊断观测（分配枚举，不进热路径）。
+    /// 行为断言用（如"同 SQL 文本仅一条目""无 OFFSET 形状入缓存"），对并行测试噪声免疫。</summary>
+    internal static IEnumerable<SqlShapeEntry> Entries
     {
         get
         {
-            int total = 0;
             foreach (ConcurrentQueue<SqlShapeEntry> bucket in Buckets.Values)
-                total += bucket.Count;
-            return total;
+                foreach (SqlShapeEntry entry in bucket)
+                    yield return entry;
         }
     }
 
-    /// <summary>清空全部条目——测试隔离专用（与 CacheStore.Clear 同纪律）。</summary>
-    internal static void Clear() => Buckets.Clear();
+    /// <summary>清空全部条目——测试隔离专用（非线程安全，仅测试单线程调用；与 CacheStore.Clear 同纪律）。</summary>
+    internal static void Clear()
+    {
+        Buckets.Clear();
+        Volatile.Write(ref _totalEntries, 0);
+    }
 }
 
 internal static class SqlShapeCacheExtensions

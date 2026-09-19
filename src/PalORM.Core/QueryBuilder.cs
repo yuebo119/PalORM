@@ -744,7 +744,10 @@ public struct QueryBuilder<T> where T : class, new()
         if (_take.HasValue) shapeHash = System.HashCode.Combine(shapeHash, _take.Value);
         if (_skip.HasValue) shapeHash = System.HashCode.Combine(shapeHash, _skip.Value);
         shapeHash = System.HashCode.Combine(shapeHash, _dialect);
-        if (_selectColumns is null)
+        // 带 OFFSET（Skip 有值）的形状不入缓存（审计 A1）：OFFSET 值随页码无界，任何有限
+        // 容量都拦不住它入缓存后的条目数；每次重建回到缓存前行为，正确性不变。
+        // keyset 分页（ToPageAsync）Skip 置 null 不受影响。LIMIT 参数化落地后可移除本排除。
+        if (_selectColumns is null && _skip is null)
         {
             string? cachedSql = SqlShapeCache.FindMatch(shapeHash, MaterializeClauses(), shapeFields);
             if (cachedSql is not null)
@@ -774,7 +777,7 @@ public struct QueryBuilder<T> where T : class, new()
             // v4.4：先 TrimEnd 再 ToString，省 1 次 string 分配（TrimEnd 前已用 VSB 原地裁剪）
             sb.TrimEnd();
             string built = sb.ToString();
-            if (_selectColumns is null)
+            if (_selectColumns is null && _skip is null)
             {
                 SqlShapeCache.Add(shapeHash, MaterializeClauses(), shapeFields, built);
             }
