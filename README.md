@@ -271,7 +271,7 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 
 ### 编译时源生成
 
-Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）。`FormattableString` 参数化杜绝 SQL 注入，`WithComparer` 优化增量缓存命中率。Native AOT 全链路零 IL。
+Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门——`Raw()`、`ExecuteNonQuery(string)`、`SessionSetupSql`——由调用方负责内容（`Raw` 拒绝控制字符防线，其余不验证）。`WithComparer` 优化增量缓存命中率。Native AOT 全链路零 IL。
 
 ### 注解
 
