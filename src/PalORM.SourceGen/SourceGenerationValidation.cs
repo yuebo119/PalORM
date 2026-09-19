@@ -53,6 +53,27 @@ internal static class SourceGenerationValidation
         if (keyProperty.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T })
             return false;
 
+        // 审计 2026-09-19 GEN-011（M6）：并发令牌镜像 PALORM012/013 口径的生成器自守卫——
+        // [Key] 有双层防线（上文注释），令牌族此前只有分析器一层；被 .editorconfig 降级时
+        // 坏令牌穿透到 GenerateIncrementVersionBody 的 `entity.X++`，产出落在 .g.cs 的
+        // CS0019/CS8852（ITM-640 家族要消灭的形态），多令牌则 FirstOrDefault 静默只递增其一。
+        List<IPropertySymbol> concurrencyTokens = EnumerateMappedProperties(type)
+            .Where(static property => property.GetAttributes().Any(static attribute =>
+                IsPalORMAttribute(attribute, "ConcurrencyCheck")))  // ITM-512
+            .ToList();
+        if (concurrencyTokens.Count > 1)
+            return false;
+        if (concurrencyTokens.Count == 1)
+        {
+            IPropertySymbol token = concurrencyTokens[0];
+            if (token.SetMethod is null || token.SetMethod.IsInitOnly)
+                return false;
+            if (token.NullableAnnotation == NullableAnnotation.Annotated
+                || token.Type.SpecialType is not SpecialType.System_Int32
+                    and not SpecialType.System_Int64)
+                return false;
+        }
+
         // ITM-617：OwnedJson/值映射校验走基类链（同上）——声明成员判定会漏检基类的
         // int[]/TimeSpan/非法 OwnedJson 属性，使其未经校验流入列收集。
         foreach (IPropertySymbol property in EnumerateMappedProperties(type))
