@@ -59,7 +59,7 @@ public sealed class SqlShapeCacheGrowthTests
     public async Task ClonedBuilder_ReusesCacheEntryOfOriginalShape()
     {
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
-        // 组内先跑的容量测试会把缓存填满拒写——先清空保证本形状确实被缓存
+        // 防御性清空（M3-4 解耦后非必需——Tag 测试已自清；保留兜底并行组噪声）
         SqlShapeCache.Clear();
         QueryBuilder<ShapeProbeEntity> builder = session.From<ShapeProbeEntity>()
             .Where($"name = {"probe-a"}")
@@ -83,19 +83,25 @@ public sealed class SqlShapeCacheGrowthTests
     public async Task DynamicTagValues_NewShapeRejectedWhenCacheFull()
     {
         // A1 的残余无界源（OFFSET 排除之外）：Tag 的业务标识是裸文本子句，动态值
-        // 每个都是新形状。行为断言：填满上限后新形状被拒（对齐 BoundedQueryCache 1024 纪律）
-        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        // 每个都是新形状。行为断言：填满上限后新形状被拒（对齐 BoundedQueryCache 1024 纪律）。
+        // M3-4：finally 自清——填满状态不外溢给组内后跑的测试（此前靠后跑者自行 Clear，
+        // 顺序耦合写进源码）
+        try
+        {
+            await using DataSession<SqliteProvider> session = await CreateSessionAsync();
 #pragma warning disable PALORM005 // ToSql() 纯构建不打数据库
-        for (int i = 0; i < 10_000; i++)
-            _ = session.From<ShapeProbeEntity>().Where($"id > {i}").Tag($"biz-{i}").ToSql();
+            for (int i = 0; i < 10_000; i++)
+                _ = session.From<ShapeProbeEntity>().Where($"id > {i}").Tag($"biz-{i}").ToSql();
 
-        // 全新形状：缓存已满（1024 上限拒写）则它不进缓存
-        string freshShape = session.From<ShapeProbeEntity>()
-            .Where($"name = {"fresh-probe-x"}").ToSql();
+            // 全新形状：缓存已满（1024 上限拒写）则它不进缓存
+            string freshShape = session.From<ShapeProbeEntity>()
+                .Where($"name = {"fresh-probe-x"}").ToSql();
 #pragma warning restore PALORM005
 
-        await Assert.That(SqlShapeCache.Entries.Count(
-            e => e.FullSql == freshShape)).IsEqualTo(0);
+            await Assert.That(SqlShapeCache.Entries.Count(
+                e => e.FullSql == freshShape)).IsEqualTo(0);
+        }
+        finally { SqlShapeCache.Clear(); }
     }
 }
 
