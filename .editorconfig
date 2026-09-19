@@ -63,7 +63,7 @@ dotnet_diagnostic.S4144.severity = error   # 方法同体（Commit/Rollback）
 # 项目级豁免（设计本意，非违规）
 dotnet_diagnostic.S101.severity = none     # PalORM 是项目品牌名，不改 PascalCase
 dotnet_diagnostic.S1133.severity = none    # Obsolete 已附移除版本注释（3.0）
-dotnet_diagnostic.S2077.severity = none    # FormattableString + 源生成器自动参数化，非字符串拼接
+dotnet_diagnostic.S2077.severity = error    # SQL 格式串注入检测(M1-5):规则保持 error,合法标识符/常量插值点逐处 #pragma 报备    # FormattableString + 源生成器自动参数化，非字符串拼接
 dotnet_diagnostic.S3236.severity = none    # CallerArgumentExpression 用法是项目诊断设计
 dotnet_diagnostic.S6667.severity = none    # LoggerMessage 源生成器已用，模板参数符合规范
 

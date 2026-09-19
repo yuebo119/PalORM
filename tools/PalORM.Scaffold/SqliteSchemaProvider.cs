@@ -32,7 +32,11 @@ internal sealed class SqliteSchemaProvider : ISchemaProvider
             using DbCommand colCmd = connection.CreateCommand();
             // PRAGMA 参数化不可靠（部分 SQLite 版本不支持参数），用引号包裹标识符。
             // 表名来自 sqlite_master，不含注入风险（数据库自身结构）。
+        // S2077 报备（M1-5）：PRAGMA 参数化不可靠（部分 SQLite 版本），表名来自
+        // sqlite_master 且经引号翻倍转义——工具进程内读取自身库结构，无注入面
+#pragma warning disable S2077
             colCmd.CommandText = $"PRAGMA table_info(\"{tableName.Replace("\"", "\"\"", StringComparison.Ordinal)}\")";
+#pragma warning restore S2077
             using DbDataReader colReader = await colCmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
             while (await colReader.ReadAsync(ct).ConfigureAwait(false))
