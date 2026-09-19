@@ -539,3 +539,4 @@ public partial class DataSession<TProvider>
         await BulkMergeAsync(items, ct).ConfigureAwait(false);
     }
 }
+
