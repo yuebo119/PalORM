@@ -52,7 +52,7 @@ public partial class DataSession<TProvider>
         string tenantFilter = HasTenantFilter<T>()
             ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
             : "";
-        const int batchSize = 500;
+        const int batchSize = SqlLimits.InClauseBatchSize;
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
         // RunInTransactionScopeAsync 单点。
         return await RunInTransactionScopeAsync(
@@ -196,7 +196,7 @@ public partial class DataSession<TProvider>
         // 准备批量上下文：SET 列集、引号包裹标识符、租户过滤标记。
         BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, metadata, tableName, entities[0]);
         // ITM-640：SQLite 已在上方回退逐条路径，此处恒非 SQLite——原三元的 999 分支不可达。
-        const int driverLimit = 65535;
+        const int driverLimit = SqlLimits.MaxBindParameters;
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
         int rowsPerBatch = Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1));
 

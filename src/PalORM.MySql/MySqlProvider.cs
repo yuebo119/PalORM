@@ -129,13 +129,9 @@ public sealed class MySqlProvider : IDbProvider
         ArgumentNullException.ThrowIfNull(entities);
         // batchSize 校验优先于 entities.Count 检查——调用方契约（ProviderTests 验证）。
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(batchSize, 0);
-        // ITM-637 同型面（第五处，r4）：元数据检查先于空列表短路——未注册类型与空/非空
-        // 列表一致抛（BulkCopy 与多值 fallback 两分支共用此前置）
-        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
-            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out _)
-            || metadata.InsertColumns.Count == 0)
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated insert metadata.");
+        // ITM-637 同型面：元数据检查先于空列表短路——未注册类型与空/非空列表一致抛
+        //（BulkCopy 与多值 fallback 两分支共用此前置；PROV-010：守卫收敛至单一实现点）
+        _ = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
         // ITM-740(r20)/778(r21)：包装/装饰事务（非 MySqlTransaction）在连接上挂起时，能力探测
         // 会因"命令未挂接事务"抛异常并被吞掉 → 静默降级多值路径。守卫置于**空列表短路之前**
         // （ITM-637 口径：契约校验先于短路）——原顺序下空列表+包装事务静默返 0、非空则抛，
@@ -160,7 +156,7 @@ public sealed class MySqlProvider : IDbProvider
             conn, transaction, entities,
             new BulkContext(
                 batchSize,
-                MaxParametersPerStatement: 65535,
+                MaxParametersPerStatement: SqlLimits.MaxBindParameters,
                 QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
                 IsolationLevel: isolationLevel),  // r7-S1：回退分支同透传
             ct).ConfigureAwait(false);
@@ -202,11 +198,9 @@ public sealed class MySqlProvider : IDbProvider
         System.Data.IsolationLevel isolationLevel, CancellationToken ct)  // r6-N2（CA1068 ct 末位）
         where T : class, new()
     {
-        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
-            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
-            || metadata.InsertColumns.Count == 0)
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated insert metadata.");
+        // PROV-010：守卫收敛至单一实现点（唯一调用方 BulkInsertAsync 入口已检，此处经
+        // helper 取值而非复制实现——防御语义保留，重复实现消除）
+        (CrudMetadata metadata, string tableName) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
 
         // MySQL schema=database；当前会话已在连接串指定的库里，表名直接引用。
         string quotedTable = QuoteIdentifier(tableName);
