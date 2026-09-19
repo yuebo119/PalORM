@@ -217,7 +217,10 @@ internal static class AutoTaggingEmitter
     private readonly record struct TerminalMethod(string Name, string ReturnType);
 
     /// <summary>
-    /// 拦截目标（sealed record，值相等用于增量缓存命中）。
+    /// 拦截目标。增量缓存相等性（审计 GEN-014 修正注释）：成员 <see cref="InterceptableLocation"/>
+    /// 是 Roslyn 类型且未重写 Equals——record 合成相等对它退化为<b>引用相等</b>，
+    /// 故 <c>WithComparer(Default)</c> 实际按引用比较，候选节点一变即整体重渲染
+    /// PalORM_AutoTagging.g.cs。方向安全（只过度失效、不漏失效），非值相等命中。
     /// </summary>
     public sealed record InterceptionTarget(
         string MethodName,

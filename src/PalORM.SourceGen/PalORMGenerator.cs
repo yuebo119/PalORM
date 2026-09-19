@@ -173,7 +173,8 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 provider.GlobalOptions.TryGetValue("build_property.PalORMAutoTagging", out string? v)
                 && string.Equals(v, "true", System.StringComparison.OrdinalIgnoreCase));
 
-        // 检测 6 个终态方法调用点；InterceptionTarget 是 sealed record（值相等），增量缓存按值命中。
+        // 检测 6 个终态方法调用点；InterceptionTarget 的 Location 成员是引用相等（见其
+        // 注释，GEN-014 修正）——缓存命中退化为准引用级，候选一变即重渲染（过度失效方向安全）。
         var terminalCalls = context.SyntaxProvider.CreateSyntaxProvider(
             predicate: static (node, _) => AutoTaggingEmitter.IsTerminalCall(node),
             transform: static (ctx, ct) => AutoTaggingEmitter.ExtractTarget(ctx, ct))
