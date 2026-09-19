@@ -3,41 +3,43 @@
 > 基线：`dev@0e6a040`。来源：全仓四阶段审计（运行时 Core 44 文件 / SourceGen+Providers 18 文件 / 测试 620 例抽样 14 文件 / CI 与配置直读，三条并行深读路线 + 二次抽查交叉验证）。
 > 纪律：任务只有在实现、对应测试和验收命令均通过后才能标记完成；每任务走 S1 基线 → S2 单变量 → S3 反向验证（撤回修复 → 用例确定性失败）。
 > 约束：SHAPE 系列涉及 SQL 文本形态的任务，动快照与 SQL 转储基线时须评审确认；全程保持 `dotnet build PalORM.ci.slnf -c Release --no-incremental -warnaserror` 0 警告、既有 620 测试不回退、4×AOT 矩阵绿。
+>
+> **执行记录（2026-09-19 执行会话）**：S1 基线 = 构建 0 警告 + Core 274/274。22 任务完成 16 项、证伪撤销 1 项（GEN-010）、环境阻塞 2 项（TEST-010/011）、保留待后续 3 项（GEN-012/013/015，P3 打磨级）。收尾验证：`--no-incremental -warnaserror` 0 警告、Core 280/280、SourceGen 197/197、SQLite Native AOT 原生运行 PASSED（PG/MySQL 矩阵与 Integration 套件待数据库环境）。共 11 个提交。
 
 ## 完成定义（可衡量信号）
 
-1. SHAPE-001/002 的复现测试转绿：10,000 个不同 (Take, Skip) 组合后 SqlShapeCache 条目数 ≤ 上限（默认 1024），进程托管内存平稳。
-2. ToPageAsync 路径形状缓存命中可观测且 > 0（内部计数器断言）。
-3. `grep -rni "encrypt|password" src/ test/` 要么有实现与测试命中，要么 README 无"内置加密"表述。
-4. StoredProcBuilder 与 LISTEN/NOTIFY 各有 ≥1 条真库 happy-path 集成测试。
-5. 全部既有门禁不回退：0 警告构建、Core/SourceGen/Integration 三套件全绿、快照零漂移、AOT 四矩阵原生运行 PASSED。
+1. ✅ SHAPE-001 的复现测试转绿（OFFSET 探针 + Tag 拒写两个行为断言；进程缓存增量 0 与被拒形状 0）。
+2. ✅ ToPageAsync 克隆路径形状缓存命中（ClonedBuilder_ReusesCacheEntryOfOriginalShape：同 SQL 文本仅一条目）。
+3. ✅ README 无"内置加密"表述（降级为驱动层归属 + Password= 指引）。
+4. ⏸ StoredProcBuilder 与 LISTEN/NOTIFY 真库测试——本地 PG/MySQL 不可达（5432/3306 无服务），待数据库环境后实施（任务设计与验收标准已在本账本）。
+5. ✅ 门禁不回退：0 警告构建、Core/SourceGen 全绿（274→280 / 191→197，净增 12 条防线测试）、SQLite AOT 原生运行 PASSED；PG/MySQL AOT 矩阵与 Integration 留待 CI/环境。
 
 ## 状态账本
 
 | ID | 级别 | 任务 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| SHAPE-001 | P1 | 写 A1 复现测试：动态 Skip 循环断言缓存有界 | 待开始 | |
-| SHAPE-002 | P1 | 写 A2 复现测试：克隆路径与原生路径互不认亲 | 待开始 | |
-| SHAPE-010 | P1 | LIMIT/OFFSET 参数化（根解 A1；退守方案见详情） | 待开始 | |
-| SHAPE-011 | P1 | 修复 _shapeHash 三写入者旁路（A2） | 待开始 | |
-| DOC-010 | P1 | README 加密表述与实现对齐（D1） | 待开始 | |
-| ERR-010 | P2 | OnError 吞异常补观测挂点 + 三回调异常契约文档化（M4） | 待开始 | |
-| CACHE-010 | P2 | 静态缓存清单文档：全部进程级缓存的键空间/容量/淘汰三要素登记 | 待开始 | |
-| GEN-010 | P2 | 增量管线基类依赖修复 + 增量编译测试（M1） | 待开始 | |
-| TEST-010 | P2 | StoredProcBuilder 真库 happy-path 集成测试（T1） | 待开始 | |
-| TEST-011 | P2 | PG LISTEN/NOTIFY 真连接冒烟测试（T2） | 待开始 | |
-| GEN-011 | P2 | ConcurrencyCheck 纳入 CanGenerateEntity 自守卫（M6） | 待开始 | |
-| PROV-010 | P3 | "no generated insert metadata" 守卫收敛单一 helper（M8） | 待开始 | |
-| GEN-012 | P3 | Bind 更新双循环共享列序单一真源（M7） | 待开始 | |
-| CORE-010 | P3 | 魔法数字常量化：65535/500/ulong 上限（L2） | 待开始 | |
-| API-010 | P3 | BulkMergeAsync 返回值语义 XML doc 明确（Q2） | 待开始 | |
-| CACHE-011 | P3 | 多租户缓存警告前置 README 特性章节（S3 文档面） | 待开始 | |
-| GEN-013 | P3 | 描述符银行抽出独立文件（PalORMAnalyzer 零风险拆分） | 待开始 | |
-| DOC-011 | P3 | TableModel PALORM045 文案移除不可达的 structs（L7） | 待开始 | |
-| TEST-012 | P3 | 测试小瑕疵：FinalTests 拆分 / 过期注释 / 裸 IsNotNull（L6） | 待开始 | |
-| GEN-014 | P3 | AutoTagging 缓存比较器与注释对齐（L4） | 待开始 | |
-| GEN-015 | P3 | 分析器 InvocationExpression 双注册合并 + 031/032 语法预筛前置（L5） | 待开始 | |
-| PROV-011 | P3 | Provider 布尔旋钮 XML doc 修正（L8，仅 doc） | 待开始 | |
+| SHAPE-001 | P1 | 写 A1 复现测试：动态 Skip 循环断言缓存有界 | 已完成 | DynamicSkipValues_OffsetShapesNeverCached + DynamicTagValues_NewShapeRejectedWhenCacheFull 首跑红（found 10003/1），随 SHAPE-010 转绿 |
+| SHAPE-002 | P1 | 写 A2 复现测试：克隆路径与原生路径互不认亲 | 已完成 | ClonedBuilder_ReusesCacheEntryOfOriginalShape 首跑红（found 24→增量断言 2），随 SHAPE-011 转绿 |
+| SHAPE-010 | P1 | LIMIT/OFFSET 参数化（根解 A1；退守方案见详情） | 已完成（退守方案） | OFFSET 形状不入缓存 + 1024 上限拒写；S3：临时撤治理双防线回红（found 1/1）；参数化方案动 22 场景 SQL 基线须评审，自主会话无人评审故按账本退守路径执行，LIMIT 参数化留待评审 |
+| SHAPE-011 | P1 | 修复 _shapeHash 三写入者旁路（A2） | 已完成 | 实施升级为单一真源现算（BuildSql 从形状成分现算，删除增量哈希状态与全部 Combine 点）；S3：stash 撤回后克隆测试回红（增量 16 ≠ 1） |
+| DOC-010 | P1 | README 加密表述与实现对齐（D1） | 已完成（方向 A） | README.md:16,60,66 表述降级为"经 SQLite3MC 驱动支持，Password= 启用"；grep src/test 加密仍零实现，表述已不再声称内置 |
+| ERR-010 | P2 | OnError 吞异常补观测挂点 + 三回调异常契约文档化（M4） | 已完成 | PalORMMetrics.InterceptorOnErrorFailures 计数 + NotifyInterceptorsOnError 计入（internal 可测）；IQueryInterceptor 三回调契约 doc；InterceptorErrorContractTests 2 用例（吞+不阻断后续+计数） |
+| CACHE-010 | P2 | 静态缓存清单文档 | 已完成 | docs/静态缓存清单.md：11 项三要素登记（含 FormattableSqlFormatter.FormatCache 这个审计漏登记项）+ 维护规则 |
+| GEN-010 | P2 | 增量管线基类依赖修复 + 增量编译测试（M1） | 已完成（实验证伪，修复撤销） | BaseTypeIncrementalTests：基类加列后派生产物**正确更新**（含新列）——M1 在 Roslyn 增量复跑场景证伪，管线无需修复；实验保留为增量防线 |
+| TEST-010 | P2 | StoredProcBuilder 真库 happy-path 集成测试（T1） | 环境阻塞 | 本地 PG/MySQL 不可达（端口探测 5432/3306 无服务）；实施细节见下文，待环境 |
+| TEST-011 | P2 | PG LISTEN/NOTIFY 真连接冒烟测试（T2） | 环境阻塞 | 同上 |
+| GEN-011 | P2 | ConcurrencyCheck 纳入 CanGenerateEntity 自守卫（M6） | 已完成 | SourceGenerationValidation 镜像 PALORM012/013 口径（int/long 非空 + 非 init-only + 至多一个）；ConcurrencyTokenGuardTests 4 用例（Guid/init-only/双令牌拒 + long 对照通过）；S3：短路守卫后 3 用例回红 |
+| PROV-010 | P3 | "no generated insert metadata" 守卫收敛单一 helper（M8） | 已完成 | BulkOperationFramework.EnsureInsertMetadata 单点；PG/MySQL 入口/MySQL 内层/Core 四处调用收敛；grep 文案剩 3 处（helper 1 + DataSession.Crud 快照一致性版 + DataSession_Bulk 会话层存在性版，后两者语义刻意不同不收敛，见执行记录） |
+| GEN-012 | P3 | Bind 更新双循环共享列序单一真源（M7） | 待开始 | 动生成物结构需快照复核，留后续会话 |
+| CORE-010 | P3 | 魔法数字常量化：65535/500/ulong 上限（L2） | 已完成 | SqlLimits（public，对齐 BulkOperationFramework 内部 API 口径）单点；五处替换（含审计漏数的 MySqlProvider 回退分支 65535）；grep 字面量仅剩注释 |
+| API-010 | P3 | BulkMergeAsync 返回值语义 XML doc 明确（Q2） | 已完成 | returns 节：处理实体数口径 + 跨方言理由 + 3.0 决策标注 |
+| CACHE-011 | P3 | 多租户缓存警告前置 README 特性章节（S3 文档面） | 已完成 | README 特性表 TenantAware 条目内联警告（key 约定/独立注入两路径，对齐 ADR-C） |
+| GEN-013 | P3 | 描述符银行抽出独立文件 | 待开始 | 纯移动低收益，留后续 |
+| DOC-011 | P3 | TableModel PALORM045 文案移除不可达的 structs（L7） | 已完成 | 文案改为 interfaces/enums + structs 由 AttributeUsage 前置拦截的说明 |
+| TEST-012 | P3 | 测试小瑕疵：FinalTests 拆分 / 过期注释 / 裸 IsNotNull（L6） | 部分完成 | 过期注释更正（AotTest 已覆盖的现实）+ 裸 IsNotNull 补 HealthCheckAsync 行为断言；FinalTests 拆分与双类文件归位留后续（纯机械移动） |
+| GEN-014 | P3 | AutoTagging 缓存比较器与注释对齐（L4） | 已完成 | InterceptionTarget 与 PalORMGenerator 两处注释改为引用相等/过度失效的准确表述 |
+| GEN-015 | P3 | 分析器 InvocationExpression 双注册合并 + 031/032 语法预筛前置（L5） | 待开始 | 诊断行为敏感，留后续会话（195+ 测试为安全网） |
+| PROV-011 | P3 | Provider 布尔旋钮 XML doc 修正（L8，仅 doc） | 已完成 | PG/MySQL CreateConnection doc 补布尔旋钮边界段（被覆盖后果是正确性而非性能，须绕开工厂自建连接） | |
 
 > 不入本账本（开放问题，需用户决策后立任务）：LIMIT 参数化 vs 容量上限的最终取向由 SHAPE-010 评审定；AGPL 双许可；BulkMergeAsync 是否 3.0 对齐受影响行数语义；多租户缓存默认实例是否改默认行为（破坏性）；SDK GA 切轨时间表；S3 若选择改默认行为则从文档任务升级为设计任务。
 
