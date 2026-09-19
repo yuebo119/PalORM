@@ -53,6 +53,16 @@ public sealed partial class DataSession<TProvider>
             builder.AddDefaultFilter(System.Runtime.CompilerServices.FormattableStringFactory.Create(
                 $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}", _tenantId));
         }
+        // ADR-L：缓存租户作用域与过滤注入同点冻结——查询的租户可见性在此刻定型
+        //（DefaultFilter 已上链），key 作用域同拍快照则二者永不漂移。租户过滤 → 每租户
+        // 命名空间；多租户会话的 IgnoreFilters / 非 TenantAware 实体（全量数据）→ __all__
+        // 独立命名空间（全量与过滤数据互不可见）；单租户（_tenantId null）→ key 原样。
+        if (_tenantId is not null)
+        {
+            builder._cacheTenantScope = !_ignoreFilters && (features & EntityFeatures.TenantAware) != 0
+                ? $"__t:{_tenantId}"
+                : "__all__";
+        }
         return builder;
     }
 

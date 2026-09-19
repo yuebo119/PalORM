@@ -7,6 +7,9 @@ namespace PalORM;
 public partial class DataSession<TProvider>
 {
     /// <summary>批量插入——委托 Provider 使用源生成 InsertColumns 与 binder，并复用会话事务。</summary>
+    /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径）——与本家族
+    /// BulkUpdate/BulkDelete 同口径；BulkMerge 例外（返回处理实体数，跨方言可预测，见其
+    /// returns 说明）。</returns>
     public async ValueTask<long> BulkInsertAsync<T>(IReadOnlyList<T> entities, int batchSize = 1000, CancellationToken ct = default)
         where T : class, new()
     {
@@ -25,6 +28,8 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>批量删除——每 500 个生成主键 IN 批次；软删除实体更新 deleted_at，其他实体物理删除。</summary>
+    /// <returns><b>数据库受影响行数</b>（各批次 ExecuteNonQuery 之和，驱动口径）。
+    /// 软删除路径返回被标记删除的行数（UPDATE 计数），与物理删除的 DELETE 计数口径一致。</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
         Justification = "批量删除的双路径（软删 UPDATE / 物理 DELETE）+ 事务包装+批次循环是必然复杂度。"
@@ -110,6 +115,8 @@ public partial class DataSession<TProvider>
     /// 中途冲突整批回滚时，已成功条目的内存状态与 DB 保持一致，重试不产生假冲突。
     /// 复用外部事务时回填发生在本方法返回前；若调用方随后回滚该外部事务，
     /// 内存 version 需重新查询同步（与单条 UpdateAsync 在外部事务中回滚的既有语义一致）。</para></summary>
+    /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径；单语句多行 UPDATE 形态
+    /// 或逐条批次，均按驱动计数累加）。BulkMerge 的返回口径例外，见其 returns 说明。</returns>
     public async ValueTask<long> BulkUpdateAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {
@@ -327,10 +334,12 @@ public partial class DataSession<TProvider>
     /// 已回填的内存 ID 对应的行不存在于 DB——异常路径下不要继续使用输入实体的 ID，
     /// 重试应重新走 BulkMergeAsync（UPSERT 幂等）。</para></summary>
     /// <returns><b>成功处理的实体数</b>（按输入计数），<b>非</b>数据库受影响行数——与
-    /// BulkInsert/Update/Delete 返回真实受影响行数的语义不同（审计 API-010 文档化）。
-    /// 选择该语义的原因：UPSERT 的受影响行数跨方言语义不稳（MySQL ON DUPLICATE KEY
-    /// 对更新行计 2、PG ON CONFLICT 计 1），处理实体数是唯一跨方言可预测的口径。
-    /// 语义是否对齐家族，留待 3.0 决策。</returns>
+    /// BulkInsert/Update/Delete 返回驱动行数的语义不同（审计 API-010 文档化）。
+    /// 选择该语义的原因（2026-09-19 论证后裁决维持）：① MySQL ON DUPLICATE KEY 的
+    /// affectedRows 对更新行计 2、插入行计 1——返回值将依赖数据历史（同输入重放返回不同值），
+    /// 调用方的对账逻辑会静默错；② PG/SQLite 的 ON CONFLICT 每行计 1、恰等于实体数，
+    /// 处理实体数是唯一跨方言可预测口径；③ 混合路径（默认键逐条 INSERT + 批量 UPSERT）
+    /// 下两种驱动口径不可加总。BulkMergeSetBasedTests 已锁定本口径。</returns>
     public async ValueTask<long> BulkMergeAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {

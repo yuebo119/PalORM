@@ -283,7 +283,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | `[ForeignKey]` | 外键引用（支持 `OnDelete` 级联策略） |
 | `[ConcurrencyCheck]` | 乐观锁版本检查 |
 | `[SoftDelete]` | 软删除自动过滤 |
-| `[TenantAware]` | 多租户自动隔离（`SetTenant(id)` 单库列过滤） |
+| `[TenantAware]` | 多租户自动隔离（`WithTenant(id)` 单库列过滤） |
 | `[OwnedJson(typeof(Ctx))]` | 编译时安全 JSON 序列化 |
 | `[Index(name, cols, Unique = true)]` | 复合索引 |
 | `[Unique]` | 唯一约束 |
@@ -334,7 +334,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | 功能 | 说明 |
 |------|------|
 | `[SoftDelete]` | 软删除自动 WHERE 过滤 |
-| `[TenantAware]` | 多租户 `SetTenant(id)` 单库列隔离。⚠️ 该隔离**不覆盖查询结果缓存**：`WithCache(key)` 的键完全由调用方提供，未注入 `DbOptions.QueryCache` 时各会话共享进程级默认缓存——多租户场景必须把租户标识编入 key（如 `$"products:{tenantId}"`）或为每租户注入独立缓存（ADR-C） |
+| `[TenantAware]` | 多租户 `WithTenant(id)` 单库列隔离。查询结果缓存（`WithCache`）经 ADR-L 结构性隔离：多租户会话的实际缓存 key 由框架自动加租户前缀（`__t:{tenantId}:`），`IgnoreFilters()` 全量查询走独立 `__all__:` 命名空间——跨租户命中不可能；需要按租户控制缓存容量/TTL 时，经 `DbOptions.QueryCache` 为每租户注入独立实例（推荐路径） |
 | `[ConcurrencyCheck]` | 乐观锁 `version` 字段自动检查 |
 | `AuditInterceptor`（v5.0） | SQL 审计拦截器（OnBefore/OnAfter/OnError；`logParameters:true` 时 `Set()` 写入 `[SensitiveData]` 列的参数值自动掩码——经 QueryContext 传递，覆盖 SELECT/UPDATE 拦截路径） |
 | `IQueryInterceptor` | 三阶段查询拦截器接口 |
