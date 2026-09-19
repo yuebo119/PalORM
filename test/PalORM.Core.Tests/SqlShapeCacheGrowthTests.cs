@@ -25,44 +25,37 @@ public sealed class SqlShapeCacheGrowthTests
     public async Task DynamicSkipValues_KeepCacheBounded()
     {
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
-        SqlShapeCache.Clear();
-        try
-        {
-            // 动态 OFFSET 分页：页码递增 → Skip 值无界。每个值生成不同 LIMIT/OFFSET 文本
-            // PALORM005 豁免：ToSql() 是纯构建不打数据库——本测试钉的是缓存容量而非查询形态
+        // 增量断言：静态缓存被并行测试组共享，绝对值不可控（账本 SHAPE-001 陷阱栏）
+        int before = SqlShapeCache.TotalEntryCount;
+        // 动态 OFFSET 分页：页码递增 → Skip 值无界。每个值生成不同 LIMIT/OFFSET 文本
+        // PALORM005 豁免：ToSql() 是纯构建不打数据库——本测试钉的是缓存容量而非查询形态
 #pragma warning disable PALORM005
             for (int i = 0; i < 10_000; i++)
                 _ = session.From<ShapeProbeEntity>().OrderBy(x => x.Id).Skip(i).Take(10).ToSql();
 #pragma warning restore PALORM005
 
-            await Assert.That(SqlShapeCache.TotalEntryCount).IsLessThanOrEqualTo(MaxEntries);
-        }
-        finally { SqlShapeCache.Clear(); }
+        await Assert.That(SqlShapeCache.TotalEntryCount - before).IsLessThanOrEqualTo(MaxEntries);
     }
 
     [Test]
     public async Task ClonedBuilder_ReusesCacheEntryOfOriginalShape()
     {
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
-        SqlShapeCache.Clear();
-        try
-        {
-            QueryBuilder<ShapeProbeEntity> builder = session.From<ShapeProbeEntity>()
-                .Where($"name = {"probe-a"}")
-                .OrderBy(x => x.Id)
-                .Take(5);
+        int before = SqlShapeCache.TotalEntryCount;
+        QueryBuilder<ShapeProbeEntity> builder = session.From<ShapeProbeEntity>()
+            .Where($"name = {"probe-a"}")
+            .OrderBy(x => x.Id)
+            .Take(5);
 
-            string original = builder.ToSql();
-            string cachedAgain = builder.ToSql();
-            QueryBuilder<ShapeProbeEntity> clone = builder.CloneForExecution();
-            string fromClone = clone.ToSql();
+        string original = builder.ToSql();
+        string cachedAgain = builder.ToSql();
+        QueryBuilder<ShapeProbeEntity> clone = builder.CloneForExecution();
+        string fromClone = clone.ToSql();
 
-            // 克隆体与原生路径形状相同：SQL 相同，且只允许存在一个缓存条目
-            await Assert.That(fromClone).IsEqualTo(original);
-            await Assert.That(cachedAgain).IsEqualTo(original);
-            await Assert.That(SqlShapeCache.TotalEntryCount).IsEqualTo(1);
-        }
-        finally { SqlShapeCache.Clear(); }
+        // 克隆体与原生路径形状相同：SQL 相同，且本形状只允许新增一个缓存条目
+        await Assert.That(fromClone).IsEqualTo(original);
+        await Assert.That(cachedAgain).IsEqualTo(original);
+        await Assert.That(SqlShapeCache.TotalEntryCount - before).IsEqualTo(1);
     }
 }
 

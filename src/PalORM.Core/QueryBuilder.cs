@@ -16,11 +16,10 @@ public struct QueryBuilder<T> where T : class, new()
     // v4.6：HasClause 位掩码 -- O(1) 判断子句存在，消除 List.Exists 的 O(n) 扫描 + Predicate 委托分配
     private int _clauseBitmask;
 
-    // T5c 形状哈希：BuildSql 输出仅由「子句 Sql 文本序列 + _splitQuery + _take/_skip 值」决定
-    // （LIMIT/OFFSET 的值直接内联进文本，故键必须含值；Take(0)/Skip(0) 是 no-op 不更新——
-    // 与字段 mutation 逻辑严格同步）。AddClause/Take/Skip/AsSplitQuery 增量 Combine。
-    // 命中后仍按候选条目逐一核对子句序列与字段值（哈希桶内验证），碰撞无害。
-    private int _shapeHash = 17;
+    // T5c 形状哈希：BuildSql 时由形状成分现算（见 BuildSql）——不维护增量状态。
+    // 审计 2026-09-19 A2 整改：原增量维护有三个写入者（AddClause/API/克隆重建+扩展方法
+    // 字段直赋），克隆与直赋路径旁路 Combine 产生残缺哈希。哈希是形状的纯函数后，
+    // 任意构建路径（含 CloneForExecution 重建链、ToPageAsync 覆写字段）自动一致。
     internal DbConnection _conn;
     /// <summary>读路由连接提供者——v5.6 起由会话级复用：提供者首次建连并执行 Provider
     /// 初始化，之后返回同一连接（原为每次查询新建连接的工厂 + 初始化器两件套）。</summary>
@@ -85,10 +84,6 @@ public struct QueryBuilder<T> where T : class, new()
         _interceptors = ctx.Services.Interceptors;
         _paramFactory = ctx.Services.ParamFactory;
         _tableName = ctx.TableName;
-        // T5c：表名必须进形状哈希——零子句查询（GetAllAsync 族）的子句序列为空，
-        // 不同实体若不入键会共享同一缓存条目、互相收到对方的表名（真机实测：
-        // Core 套件 4 例 no such table）。_cteName 由 With() 设置时单独入键。
-        _shapeHash = System.HashCode.Combine(_shapeHash, _tableName);
         _columnNames = ctx.ColumnNames;
         _operationState = ctx.Services.OperationState;
         _resilience = ctx.Services.Resilience;
@@ -196,7 +191,6 @@ public struct QueryBuilder<T> where T : class, new()
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(n);
         _take = n;
-        _shapeHash = System.HashCode.Combine(_shapeHash, n);
         return this;
     }
 
@@ -205,7 +199,6 @@ public struct QueryBuilder<T> where T : class, new()
     {
         ArgumentOutOfRangeException.ThrowIfNegative(n);
         _skip = n;
-        _shapeHash = System.HashCode.Combine(_shapeHash, n);
         return this;
     }
 
@@ -395,7 +388,6 @@ public struct QueryBuilder<T> where T : class, new()
             throw new ArgumentException(
                 "CTE subquery must not be empty or whitespace.", nameof(subquery));
         _cteName = cteName;
-        _shapeHash = System.HashCode.Combine(_shapeHash, _cteName);
         AddClause(QueryClauseKind.CommonTableExpression,
             $"{_quoteIdentifier(cteName)} AS ({sql})", parameters);
         return this;
@@ -406,7 +398,6 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> AsSplitQuery()
     {
         _splitQuery = true;
-        _shapeHash = System.HashCode.Combine(_shapeHash, true);
         return this;
     }
 
@@ -738,10 +729,21 @@ public struct QueryBuilder<T> where T : class, new()
         // 决定（LIMIT/OFFSET 值内联进文本），同一形状的输出恒等且可复用同一 string 实例。
         // 命中核对是全量的（子句序列值相等 + 三字段值相等），哈希碰撞不会产出错误 SQL；
         // 带显式投影（Select）的预览不走缓存（投影列集由调用方决定）。
-        // 方言参与键与哈希（理由见 ShapeFields 文档）；哈希现算零分配
+        // 方言参与键与哈希（理由见 ShapeFields 文档）。
         var shapeFields = new SqlShapeCache.ShapeFields(
             _dialect, _splitQuery, _take, _skip, _tableName, _cteName);
-        int shapeHash = System.HashCode.Combine(_shapeHash, _dialect);
+        // 哈希由形状成分现算（单一真源，规范顺序：表名→子句→CTE→Split→Take→Skip→方言）——
+        // 克隆重建链、ToPageAsync/First 族字段直赋等任意构建路径自动一致（审计 A2 整改：
+        // 原增量维护在克隆路径丢子句成分，同表分页查询全部挤进同一桶）。
+        // 表名必须在内：零子句查询（GetAllAsync 族）不同实体否则共享条目（T5c 实测）。
+        int shapeHash = System.HashCode.Combine(17, _tableName);
+        foreach (QueryClause clause in MaterializeClauses())
+            shapeHash = System.HashCode.Combine(shapeHash, clause.Sql);
+        if (_cteName is not null) shapeHash = System.HashCode.Combine(shapeHash, _cteName);
+        if (_splitQuery) shapeHash = System.HashCode.Combine(shapeHash, true);
+        if (_take.HasValue) shapeHash = System.HashCode.Combine(shapeHash, _take.Value);
+        if (_skip.HasValue) shapeHash = System.HashCode.Combine(shapeHash, _skip.Value);
+        shapeHash = System.HashCode.Combine(shapeHash, _dialect);
         if (_selectColumns is null)
         {
             string? cachedSql = SqlShapeCache.FindMatch(shapeHash, MaterializeClauses(), shapeFields);
@@ -919,8 +921,6 @@ public struct QueryBuilder<T> where T : class, new()
         // v4.6：同步设置位掩码
         _clauseBitmask |= 1 << (int)kind;
         _parameterCount += ownedParameters.Count;
-        // T5c：子句 Sql 文本进形状哈希（值哈希——输出只依赖文本）
-        _shapeHash = System.HashCode.Combine(_shapeHash, sql);
     }
 
     /// <summary>把持久化链倒排物化为数组（调用顺序）——惰性缓存，子句数为有效期哨兵：
