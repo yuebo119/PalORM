@@ -21,6 +21,10 @@ public sealed class SqlitePoolParameterTests
 
         await using var session = await DataSession<SqliteProvider>.CreateAsync(options);
         await Assert.That(session).IsNotNull();
+        // T14：裸 IsNotNull 之外补行为断言——会话真实应答 SELECT 1（:memory: 零外部依赖），
+        // "Production 预设 + SQLite 可用"由此坐实为运行行为而非仅构造不抛
+        PalORM.HealthResult health = await session.HealthCheckAsync();
+        await Assert.That(health.IsHealthy).IsTrue();
     }
 
     [Test]

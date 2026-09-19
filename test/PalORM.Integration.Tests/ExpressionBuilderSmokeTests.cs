@@ -3,12 +3,13 @@ using PalORM.Testing;
 namespace PalORM.Integration.Tests;
 
 /// <summary>表达式构建器的端到端冒烟——<b>目的是 AOT 覆盖而非功能回归</b>。
-/// <para>背景：三个 AOT 验收程序只走了 CRUD/Bulk/OwnedJson/软删路径，
+/// <para>背景（审计 TEST-012 更正）：历史上三个 AOT 验收程序只走 CRUD/Bulk/OwnedJson/软删路径，
 /// <c>OrderBy</c>/<c>ThenBy</c>/<c>Select</c>/<c>GroupBy</c>/<c>Having</c>/<c>WhereIn</c>/<c>WhereNotIn</c>/
 /// <c>Set</c>/<c>Include</c>/<c>ThenInclude</c>/<c>With(CTE)</c>/<c>UnsafeWindowOver</c>/
-/// <c>ForUpdate</c>/<c>WithCache</c>/<c>AsPrepared</c>/<c>Tag</c> 全部**从未被 AOT 程序调用过**——
-/// 即"这些构建器 AOT 兼容"从未被原生运行验证。本用例先在 JIT 侧把同一段验证跑绿
-/// （迭代快、失败定位准），再原样搬进 <c>PalORM.AotTest</c> 由原生二进制执行。</para>
+/// <c>ForUpdate</c>/<c>WithCache</c>/<c>AsPrepared</c>/<c>Tag</c> 曾全部未被 AOT 程序调用；
+/// 该缺口已由 <c>PalORM.AotTest/Program.cs</c> 的 VerifyExpressionBuildersAsync 补上
+/// （JIT/AOT 镜像对）。本用例保留 JIT 侧同源验证：迭代快、失败定位准，
+/// 与 AOT 侧共同构成"构建器原生运行验证"的双面防线。</para>
 /// <para>断言口径：能执行出正确结果的必须断言结果；只影响 SQL 的断言 SQL 片段。
 /// 两者都必要——纯 SQL 断言会让"能生成但执行炸"漏网，纯结果断言会让窗口函数/锁子句没进过语句。</para></summary>
 internal sealed class ExpressionBuilderSmokeTests
