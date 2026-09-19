@@ -337,21 +337,176 @@ public partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
 
-        // v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。
+        // v5.7 集合化：按键状态分区——默认键行走逐条 INSERT（保留 ID 回填契约，
+        // InsertCoreAsync 的物化/回填无法在多值形态下按行还原）；非默认键行
+        // （bulk-merge 的主流场景：既有键的重复执行更新）改为**多行 UPSERT**，
+        // 每批一条语句。原实现 N 行 = N 次往返（每行一次 SaveCoreAsync），
+        // 10K 行在远程库（RTT ~1ms）约 10s，集合化后约 12 条语句（900 参数/批上限）。
+        // 单行语义保持：ON CONFLICT/ON DUPLICATE KEY 与 SaveCoreAsync 的单行
+        // upsert 用同一谓词列集（UpsertColumns，含 PK）；[ConcurrencyCheck] 实体
+        // 维持逐条路径——SaveCoreAsync 会以同消息拒绝（UPSERT 无法尊重乐观锁，ITM-503）。
+        PalORM_Runtime.RuntimeRegistryState mergeState = PalORM_Runtime.CurrentState;
+        if (!mergeState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata mergeMetadata))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        bool rowByRow = mergeMetadata.IncrementVersion is not null
+            || mergeMetadata.UpsertColumns.Count == 0;
+
         return await RunInTransactionScopeAsync(
             operation.Owner,
             async (transaction, token) =>
             {
                 long affected = 0;
+                if (rowByRow)
+                {
+                    foreach (T entity in entities)
+                    {
+                        await SaveCoreAsync(entity, operation.Owner, token).ConfigureAwait(false);
+                        affected++;
+                    }
+                    return affected;
+                }
+
+                List<T> upsertBatch = new(entities.Count);
                 foreach (T entity in entities)
                 {
-                    await SaveCoreAsync(
-                        entity, operation.Owner, token).ConfigureAwait(false);
-                    affected++;
+                    if (mergeMetadata.HasDefaultKey(entity))
+                    {
+                        await SaveCoreAsync(entity, operation.Owner, token).ConfigureAwait(false);
+                        affected++;
+                    }
+                    else
+                    {
+                        upsertBatch.Add(entity);
+                    }
                 }
+
+                affected += await BatchUpsertAsync(
+                    transaction, upsertBatch, mergeMetadata, token).ConfigureAwait(false);
                 return affected;
             },
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>多行 UPSERT 分批执行——PG/SQLite 走 ON CONFLICT (...) DO UPDATE SET c=excluded.c，
+    /// MySQL 走 ON DUPLICATE KEY UPDATE c=VALUES(c)（与单行 upsert 的既有 SQL 形态一致）。
+    /// <para><b>批次上限</b>：每语句参数总数钳制在 900（SQLite 默认变量上限 999 的安全余量；
+    /// PG/MySQL 上限更高但不依赖方言探测——统一保守值，批数已足够少）。</para>
+    /// <para><b>批内重复主键的语义边界（如实登记）</b>：单行逐条形态下后行静默覆盖前行
+    /// （last-wins）。集合化后 MySQL 保持 last-wins（ON DUPLICATE KEY 天然如此）；
+    /// PG/SQLite 对同一语句内影响同一行会报错（PG: "cannot affect row a second time"）。
+    /// 旧行为的 last-wins 依赖执行顺序，属于未定义边界的巧合而非契约——集合化把它
+    /// 变成明确失败。需要确定性 last-wins 时请先按主键去重再调用。</para>
+    /// <para><b>返回值</b>：与原实现一致，返回处理的行数（不依赖驱动的 affectedRows——
+    /// MySQL ON DUPLICATE KEY 的 affectedRows 对 insert/update 取值不同，不可比）。</para></summary>
+    private async Task<long> BatchUpsertAsync<T>(
+        DbTransaction transaction,
+        List<T> entities,
+        CrudMetadata metadata,
+        CancellationToken ct) where T : class, new()
+    {
+        if (entities.Count == 0) return 0;
+
+        int columnCount = metadata.UpsertColumns.Count;
+        const int maxParametersPerStatement = 900;
+        int batchSize = Math.Max(1, maxParametersPerStatement / columnCount);
+
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        string tableName = state._tableNames[typeof(T)];
+        if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
+        UpsertSqlShape shape = BuildUpsertSqlShape(tableName, metadata, pkColumn);
+
+        // 绑定策略：BindUpsert 每行从 @p0 起命名且 MySQL 参数集合在 Add 时校验重名——
+        // 不能直接往批命令里逐行 Append。改为 scratch 命令绑定 → 值拷贝进预建参数池
+        // （池参数以批内连续下标命名，创建一次逐行只写 Value）。
+        await using DbCommand scratch = CreateCommand();
+
+        long processed = 0;
+        for (int start = 0; start < entities.Count; start += batchSize)
+        {
+            int end = Math.Min(start + batchSize, entities.Count);
+            int rowCount = end - start;
+            await using DbCommand cmd = CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+
+            var pool = new System.Data.Common.DbParameter[rowCount * columnCount];
+            for (int i = 0; i < pool.Length; i++)
+            {
+                System.Data.Common.DbParameter parameter = cmd.CreateParameter();
+                parameter.ParameterName = QueryBuilder<T>.GetParameterName(i);
+                pool[i] = parameter;
+                _ = cmd.Parameters.Add(parameter);
+            }
+
+            for (int row = start; row < end; row++)
+            {
+                scratch.Parameters.Clear();
+                metadata.BindUpsert(scratch, entities[row]);
+                if (scratch.Parameters.Count != columnCount)
+                    throw new InvalidOperationException(
+                        $"Type '{typeof(T).Name}' upsert binder produced {scratch.Parameters.Count} " +
+                        $"parameters for {columnCount} upsert columns.");
+                int rowBase = (row - start) * columnCount;
+                for (int c = 0; c < columnCount; c++)
+                    pool[rowBase + c].Value = scratch.Parameters[c].Value;
+            }
+
+            cmd.CommandText = BuildUpsertBatchSql(rowCount, columnCount, shape);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            processed += rowCount;
+        }
+        return processed;
+    }
+
+    /// <summary>UPSERT 语句的可复用片段（方言分派一次，逐批复用）。</summary>
+    private readonly record struct UpsertSqlShape(string QuotedTable, string QuotedColumns, string ConflictClause);
+
+    /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键
+    /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身）；MySQL 用 VALUES(c) 形态
+    /// （与单行 upsert 的既有生成 SQL 一致）。</summary>
+    private UpsertSqlShape BuildUpsertSqlShape(string tableName, CrudMetadata metadata, string pkColumn)
+    {
+        string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
+        List<string> updateColumns =
+        [
+            .. metadata.UpsertColumns.Where(c => !string.Equals(c, pkColumn, StringComparison.Ordinal))
+        ];
+        if (updateColumns.Count == 0)
+            throw new NotSupportedException(
+                $"Set-based upsert on '{tableName}' has no updatable columns " +
+                "(upsert columns minus primary key is empty); use BulkInsertAsync instead.");
+        string conflictClause = TProvider.Dialect == SqlDialect.MySql
+            ? " ON DUPLICATE KEY UPDATE " + string.Join(", ",
+                updateColumns.Select(c => $"{quote(c)} = VALUES({quote(c)})"))
+            : $" ON CONFLICT ({quote(pkColumn)}) DO UPDATE SET " + string.Join(", ",
+                updateColumns.Select(c => $"{quote(c)} = excluded.{quote(c)}"));
+        return new UpsertSqlShape(
+            quote(tableName),
+            string.Join(", ", metadata.UpsertColumns.Select(quote)),
+            conflictClause);
+    }
+
+    /// <summary>构建单批的多值 UPSERT SQL——参数已由调用方按批内连续下标预建绑定，
+    /// 此处只生成与之一一对应的 VALUES 占位符。</summary>
+    private static string BuildUpsertBatchSql(int rowCount, int columnCount, UpsertSqlShape shape)
+    {
+        var sql = new System.Text.StringBuilder(64 + rowCount * (columnCount * 8 + 4));
+        sql.Append("INSERT INTO ").Append(shape.QuotedTable).Append(" (")
+            .Append(shape.QuotedColumns).Append(") VALUES ");
+        for (int row = 0; row < rowCount; row++)
+        {
+            sql.Append(row > 0 ? ", (" : "(");
+            for (int c = 0; c < columnCount; c++)
+            {
+                if (c > 0) sql.Append(", ");
+                sql.Append(ParameterNameCache.GetName(row * columnCount + c));
+            }
+            sql.Append(')');
+        }
+        sql.Append(shape.ConflictClause);
+        return sql.ToString();
     }
 
     /// <summary>种子数据。要求每个实体具有非默认稳定主键，重复执行按主键更新。</summary>

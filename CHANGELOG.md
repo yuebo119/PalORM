@@ -114,6 +114,32 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚡ 性能（①：BulkMergeAsync 集合化——远程库 8~10×，往返维度首个大项）
+
+- **`BulkMergeAsync` 由「N 行 = N 次往返」改为分区集合化**：源码核实原实现是
+  `foreach → SaveCoreAsync → 每行一次 ExecuteNonQueryAsync`（包在一个事务里）。
+  现按键状态分区——默认键行走逐条 INSERT（保留 ID 回填契约：多值形态无法按行还原
+  InsertCoreAsync 的物化/回填）；非默认键行（bulk-merge 主流场景）改为**多行 UPSERT**
+  分批（每语句 ≤900 参数）：PG/SQLite `ON CONFLICT (pk) DO UPDATE SET c=excluded.c`，
+  MySQL `ON DUPLICATE KEY UPDATE c=VALUES(c)`（与单行 upsert 生成 SQL 同形态）。
+  <br>**真库实测（1,000 行）**：MySQL **588 → 57 ms（10.3×）**、分配 3250 → 1448 KB（−55%）；
+  PG **571 → 71 ms（8.0×）**、分配 2362 → 1951 KB（−17%）。
+  本地 SQLite（往返免费）：分配 −47%（8753 → 4623 KB/5K 行），耗时持平（72→83 ms，
+  集合化的 SQL 构建抵消了省下的往返——本地收益有限是预期内，主战场是远程库）。
+  <br>语义契约（6 项用例锁定）：既有键更新+新键插入、混合键分区+自增键 ID 回填、
+  400 行跨批（>900 参数）、重复执行幂等、返回值=处理行数（不依赖 MySQL
+  ON DUPLICATE KEY 的 affectedRows 口径）、[ConcurrencyCheck] 实体保持逐条路径的
+  ITM-503 拒绝。
+  <br>实现要点：`BindUpsert` 每行从 @p0 起命名且 **MySQL 参数集合在 Add 时校验重名**
+  （实测撞出 ArgumentException）——不能直接往批命令逐行追加；改为 scratch 命令绑定 →
+  值拷贝进预建参数池（池参数批内连续下标命名，逐行只写 Value）。
+  <br>批内重复主键的语义边界（如实登记）：旧行为后行静默覆盖前行（last-wins 巧合，
+  非契约）；集合化后 MySQL 保持 last-wins，PG/SQLite 对同语句影响同一行**明确报错**。
+- **顺带根治一类 E1 同源 flaky**：多个 PG 集成用例并行调 `MigrateAsync`（全实体建表），
+  PG 并发 DDL 在系统目录（pg_type/pg_class）竞态 → 23505 偶发失败。实测 3 轮 1 次
+  （PessimisticLockTests 撞 ExtBulk 组用例）。已把两个锁用例编入 `ExtBulkTable` 编组，
+  3 轮连绿。
+
 ### 📄 性能测试报告（2026-09-19）
 
 - **`docs/性能测试报告-2026-09-19.md`**：优化前后对比总报告——批量路径 −47~84%、
