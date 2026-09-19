@@ -1,0 +1,203 @@
+# PalORM 审计整改任务账本（2026-09-19）
+
+> 基线：`dev@0e6a040`。来源：全仓四阶段审计（运行时 Core 44 文件 / SourceGen+Providers 18 文件 / 测试 620 例抽样 14 文件 / CI 与配置直读，三条并行深读路线 + 二次抽查交叉验证）。
+> 纪律：任务只有在实现、对应测试和验收命令均通过后才能标记完成；每任务走 S1 基线 → S2 单变量 → S3 反向验证（撤回修复 → 用例确定性失败）。
+> 约束：SHAPE 系列涉及 SQL 文本形态的任务，动快照与 SQL 转储基线时须评审确认；全程保持 `dotnet build PalORM.ci.slnf -c Release --no-incremental -warnaserror` 0 警告、既有 620 测试不回退、4×AOT 矩阵绿。
+
+## 完成定义（可衡量信号）
+
+1. SHAPE-001/002 的复现测试转绿：10,000 个不同 (Take, Skip) 组合后 SqlShapeCache 条目数 ≤ 上限（默认 1024），进程托管内存平稳。
+2. ToPageAsync 路径形状缓存命中可观测且 > 0（内部计数器断言）。
+3. `grep -rni "encrypt|password" src/ test/` 要么有实现与测试命中，要么 README 无"内置加密"表述。
+4. StoredProcBuilder 与 LISTEN/NOTIFY 各有 ≥1 条真库 happy-path 集成测试。
+5. 全部既有门禁不回退：0 警告构建、Core/SourceGen/Integration 三套件全绿、快照零漂移、AOT 四矩阵原生运行 PASSED。
+
+## 状态账本
+
+| ID | 级别 | 任务 | 状态 | 验收证据 |
+|---|---|---|---|---|
+| SHAPE-001 | P1 | 写 A1 复现测试：动态 Skip 循环断言缓存有界 | 待开始 | |
+| SHAPE-002 | P1 | 写 A2 复现测试：克隆路径与原生路径互不认亲 | 待开始 | |
+| SHAPE-010 | P1 | LIMIT/OFFSET 参数化（根解 A1；退守方案见详情） | 待开始 | |
+| SHAPE-011 | P1 | 修复 _shapeHash 三写入者旁路（A2） | 待开始 | |
+| DOC-010 | P1 | README 加密表述与实现对齐（D1） | 待开始 | |
+| ERR-010 | P2 | OnError 吞异常补观测挂点 + 三回调异常契约文档化（M4） | 待开始 | |
+| CACHE-010 | P2 | 静态缓存清单文档：全部进程级缓存的键空间/容量/淘汰三要素登记 | 待开始 | |
+| GEN-010 | P2 | 增量管线基类依赖修复 + 增量编译测试（M1） | 待开始 | |
+| TEST-010 | P2 | StoredProcBuilder 真库 happy-path 集成测试（T1） | 待开始 | |
+| TEST-011 | P2 | PG LISTEN/NOTIFY 真连接冒烟测试（T2） | 待开始 | |
+| GEN-011 | P2 | ConcurrencyCheck 纳入 CanGenerateEntity 自守卫（M6） | 待开始 | |
+| PROV-010 | P3 | "no generated insert metadata" 守卫收敛单一 helper（M8） | 待开始 | |
+| GEN-012 | P3 | Bind 更新双循环共享列序单一真源（M7） | 待开始 | |
+| CORE-010 | P3 | 魔法数字常量化：65535/500/ulong 上限（L2） | 待开始 | |
+| API-010 | P3 | BulkMergeAsync 返回值语义 XML doc 明确（Q2） | 待开始 | |
+| CACHE-011 | P3 | 多租户缓存警告前置 README 特性章节（S3 文档面） | 待开始 | |
+| GEN-013 | P3 | 描述符银行抽出独立文件（PalORMAnalyzer 零风险拆分） | 待开始 | |
+| DOC-011 | P3 | TableModel PALORM045 文案移除不可达的 structs（L7） | 待开始 | |
+| TEST-012 | P3 | 测试小瑕疵：FinalTests 拆分 / 过期注释 / 裸 IsNotNull（L6） | 待开始 | |
+| GEN-014 | P3 | AutoTagging 缓存比较器与注释对齐（L4） | 待开始 | |
+| GEN-015 | P3 | 分析器 InvocationExpression 双注册合并 + 031/032 语法预筛前置（L5） | 待开始 | |
+| PROV-011 | P3 | Provider 布尔旋钮 XML doc 修正（L8，仅 doc） | 待开始 | |
+
+> 不入本账本（开放问题，需用户决策后立任务）：LIMIT 参数化 vs 容量上限的最终取向由 SHAPE-010 评审定；AGPL 双许可；BulkMergeAsync 是否 3.0 对齐受影响行数语义；多租户缓存默认实例是否改默认行为（破坏性）；SDK GA 切轨时间表；S3 若选择改默认行为则从文档任务升级为设计任务。
+
+---
+
+## 里程碑 0：安全网（先红后绿）
+
+### SHAPE-001 · A1 复现测试（P1 · S · 依赖无）
+
+新文件 `test/PalORM.Core.Tests/SqlShapeCacheGrowthTests.cs`。
+
+- 方法：循环 10,000 个不同 `Skip(i).Take(10)` 调 `ToSql()`，断言 `SqlShapeCache.Buckets` 总条目数增量 ≤ 1,024。Core.Tests 已引用 internal 成员（若 InternalsVisibleTo 未覆盖 `SqlShapeCache` 则补声明）。
+- 陷阱：静态缓存与同程序集其它测试共享，断言用增量非绝对值；`ToSql()` 必须走 BuildSql 缓存路径（不要经 AsDryRun 中转）。
+- 验收：当前为红（条目数 ≈ 10,000）；SHAPE-010 完成后转绿；S3 反向验证：撤回修复 → 本用例确定性失败。
+
+### SHAPE-002 · A2 复现测试（P1 · S · 依赖无）
+
+同文件。
+
+- 方法：同一 builder 形状，路径一直接 `ToSql()`（原生条目），路径二经 `ToPageAsync` 克隆后内部 Build；断言两条路径命中同一缓存条目（可用桶条目数增量断言：修复后应为 1，当前为 2）。另加"同表两个不同 Where 的 ToPageAsync 落同一桶"的桶大小断言。
+- 验收：当前为红；SHAPE-011 完成后转绿；反向验证同上。
+
+## 里程碑 1：关键修复（性能轮发布前完成）
+
+### SHAPE-010 · LIMIT/OFFSET 参数化（P1 · L · 依赖 SHAPE-001 · 风险中）
+
+`src/PalORM.Core/QueryBuilder.cs:195-210,1057-1095`、`src/PalORM.Core/SqlShapeCache.cs`。
+
+- 方法：`AppendLimitClause` 从拼值改为 `LIMIT @pN OFFSET @pM`，参数经既有 `_paramFactory` 创建（建议新增 `QueryClauseKind.Limit` 子句或独立参数槽，使 AsDryRun 参数快照自然包含）；`Take/Skip` 不再 Combine 进 `_shapeHash`；`ShapeFields` 删除 Take/Skip 字段。
+- 连锁（逐项过，任何一项不过即升级评审）：① SQL 转储 22 场景与 DryRun 断言基线更新；② 三方言集成确认驱动接受 long/int 参数于 LIMIT 位（PG/SQLite/MySQL 均支持，需实测确认类型收窄无异常）；③ 性能门禁关注每查询 +0~2 个参数对象的分配回归（Take/Skip 未设置时零新增）；④ PG prepared 语句 plan 形态变化在门禁比值内。
+- 退守方案（若评审否决参数化）：SqlShapeCache 容量 1024 + 桶内去重 + 淘汰，对齐 BoundedQueryCache 纪律（CacheStore.cs:146-153 同款"满则拒写"策略）。代价：动态分页形状不再命中缓存。
+- 验收：SHAPE-001 转绿；快照/SQL 基线更新有评审记录；性能门禁无回退；三方言集成全绿。
+
+### SHAPE-011 · 修复 _shapeHash 旁路（P1 · M · 依赖 SHAPE-002 · 风险低）
+
+`src/PalORM.Core/QueryBuilder.cs:585-628`、`src/PalORM.Core/QueryBuilderExtensions.cs:277,289,298,321-327`。
+
+- 方法：① CloneForExecution 链重建循环内对每条 `clause.Sql` 做 `HashCode.Combine`（与 AddClause:923 同式），或克隆末尾整链重算；② 扩展方法三处 `limited._take = n` 直赋改走新增 internal setter（同步 Combine；ToPageAsync 为覆写语义，在克隆完成后统一经 setter，克隆体内不再手算哈希）。
+- 验收：SHAPE-002 转绿；620 既有测试全绿（哈希只选桶，不碰 SQL 文本）；分页路径命中计数 > 0。
+
+### DOC-010 · README 加密表述与实现对齐（P1 · S · 阻塞：待决策表述方向）
+
+`README.md:16,56-66`。
+
+- 两个方向由用户裁决：A（推荐，零成本）表述降级为"经 SQLite3MC 驱动支持 AES-256：连接字符串 `Password=` 启用"并附示例与注意事项；B 补 PalORM 层支持（加密往返冒烟集成测试 + 文档专章，约 1 天）。
+- 验收：完成定义信号 3 达成；README 同句列举的其余六项特性维持"内置"表述且各自可 grep 到实现与测试。
+
+### ERR-010 · OnError 观测挂点 + 契约文档化（P2 · S）
+
+`src/PalORM.Core/QueryBuilderExtensions.cs:233-243`、`src/PalORM.Core/IQueryInterceptor.cs`。
+
+- 方法：保持"不传播"（正当，见审计论证 M4），补内部计数器或可选诊断挂点（对齐 PgNotificationListener 的 Logger 兜底先例，ERR-002 历史整改同款）；IQueryInterceptor XML doc 写明三回调异常契约差异（OnBefore/OnAfter 传播失败查询；OnError 吞且计数）。
+- 验收：新用例断言挂点被调用（反向验证：静默化 → 确定性失败）；doc 三回调各有一句契约描述。
+
+## 里程碑 2：高杠杆改进
+
+### CACHE-010 · 静态缓存清单文档（P2 · S · 部分被 SHAPE-010 吸收）
+
+新文件 `docs/静态缓存清单.md`。
+
+- 登记 PalORM_Runtime / DataSessionCache×5 / CacheStore.Default / SqlShapeCache / ParameterNameCache 各自的键空间基数、容量策略、淘汰策略、所属纪律依据（快照范本 / 有限键集 / 1024 上限 / SHAPE-010 结果）。
+- 验收：src 内每个 `static` 可变集合 grep 可对照到清单条目；清单含"新增静态缓存必登记"的维护规则（可入 .editorconfig 注释或编码规范 §）。
+
+### GEN-010 · 增量管线基类依赖修复（P2 · L · 风险中）
+
+`src/PalORM.SourceGen/PalORMGenerator.cs:39-43`、`src/PalORM.SourceGen/TableModel.cs:237-251`。
+
+- 前置：先写增量编译测试收口 [推断]（审计论证 M1 明确此条未实证）：模拟两轮编译，第一轮含 `InheritedEntity : AuditBase`（基线场景见 SnapshotTests.cs:107-118），第二轮仅修改基类文件加一列，断言派生实体生成物含新列。测试若证伪（Roslyn 实际会重跑 transform），本任务撤销并在账本记录。
+- 方法（测试证实后）：谓词补基类声明节点扫描，或该管线段转 CompilationProvider 联合（以 Roslyn 增量管线 cookbook 的跨树依赖模式为准，实施前查证当前 Roslyn 5.9 的推荐 API，不凭记忆写）。
+- 陷阱：改谓词会动增量缓存粒度，快照 13 份须零漂移；IDE 手测派生实体不陈旧。
+- 验收：增量测试绿；全量快照零漂移；CI 全绿。
+
+### TEST-010 · StoredProc 真库 happy-path（P2 · M）
+
+`test/PalORM.Integration.Tests/` 新增 StoredProcTests.cs。
+
+- 方法：PG 建一个带 in/out 参数的 proc（CREATE OR REPLACE，try/finally DROP 清理，对齐 AotTest.Pg:156-163 的 DDL 清理先例），StoredProcBuilder 执行并断言参数绑定与结果映射往返；MySQL 同型一条。SQLite 无存储过程，跳过并注释。
+- 验收：两方言各 ≥1 条真库行为断言（值往返，非仅行数）；现有 2 条边界测试保留。
+
+### TEST-011 · LISTEN/NOTIFY 真连接冒烟（P2 · M）
+
+`test/PalORM.Integration.Tests/` 新增。
+
+- 方法：PG 真连接 LISTEN 通道 → 同/异连接 NOTIFY payload → 断言订阅回调收到且 payload 相等（超时护栏用 CancellationToken 而非 Sleep，对齐全库反 flake 纪律）。重连风暴类深路径不要求（Fake 层已覆盖协议解析）。
+- 验收：真库收到断言通过；无墙钟依赖。
+
+### GEN-011 · ConcurrencyCheck 自守卫（P2 · S）
+
+`src/PalORM.SourceGen/SourceGenerationValidation.cs:50-54 之后`、对照 `CommandFactoryEmitter.cs:150-155`。
+
+- 方法：CanGenerateEntity 增加：并发令牌类型必须支持 `++`（int/long 家族）、setter 非 init-only、至多一个令牌。命中失败由既有 PALORM045 兜底文案呈现（或新增 PALORM 编号，与 012/013 消息对齐但独立于分析器可降级性）。
+- 依据：双层防线原则是库自设（SourceGenerationValidation.cs:33-37 注释明文），[Key] 已双层，令牌族漏配（审计论证 M6 证据链）。
+- 验收：抑制 PALORM012/013 的坏令牌实体（Guid 令牌 / init-only / 双令牌）在生成器层得到 Skipped + 诊断，不再产出 `.g.cs` 内 CS0019/CS8852；多令牌不再静默只递增其一。
+
+## 里程碑 3：质量与润色
+
+### PROV-010 · 守卫收敛（P3 · S）
+
+四处同文案守卫（PostgreSqlProvider.cs:142-146；MySqlProvider.cs:134-138,205-209；MultiValueBulkInsert.cs:43-48）收敛为共享 helper（Core 放点：BulkOperationFramework 或 CrudMetadata 旁）。MySQL 内层冗余检查（调用链上入口已检，见 MySqlProvider.cs:199 注释的抽取史）一并移除。验收：grep `has no generated insert metadata` 单一实现点；三 Provider 批量路径测试全绿。
+
+### GEN-012 · Bind 双循环列序单一真源（P3 · M）
+
+`CommandFactoryEmitter.cs:382-435`：提取"SET 列 → 主键 → 并发令牌"序列描述（静态数据），两个 emitter 循环消费同一序列、各自保留循环体差异（创建参数 vs 只写 Value）。验收：快照零漂移（重构不改输出）；新增一条"两 binder 参数序一致"的结构性测试防回归。
+
+### CORE-010 · 魔法数字常量化（P3 · S）
+
+65535（QueryBuilder.cs:248；DataSession_Bulk.cs:199）、500（QueryBuilder.cs:276；DataSession_Bulk.cs:55）、18446744073709551615（QueryBuilder.cs:1067）收敛为命名常量（单点定义，含依据注释：PG 协议 int16 上限 / 批参数上限 / MySQL LIMIT 哨兵）。验收：grep 三字面量仅命中常量定义处。
+
+### API-010 · BulkMergeAsync 返回值 doc（P3 · S）
+
+`DataSession_Bulk.cs:325-329` 补 `<returns>`：明确"返回成功处理的实体数，非数据库受影响行数"及跨方言理由（审计论证 Q2 反方）。语义是否 3.0 对齐属开放问题，不在本任务内。验收：doc 编译无 CS1591 增量；CHANGELOG 记一句文档澄清。
+
+### CACHE-011 · 多租户缓存警告前置（P3 · S）
+
+README 多租户/特性章节前置 WithCache 的租户 key 警告（内容取 QueryBuilder.cs:473-477 XML doc），指引"每租户独立 QueryCache 注入或 key 前缀"。验收：README grep `tenant` 命中缓存警告；与 ADR-C 表述一致。
+
+### GEN-013 · 描述符银行抽出（P3 · S）
+
+PalORMAnalyzer.cs:20-253 的 37 个 DiagnosticDescriptor 抽到独立 `Diagnostics.cs`（纯移动零逻辑变化）。验收：diff 仅移动；全量测试绿；PALORM 编号清单不变。
+
+### DOC-011 · PALORM045 文案修正（P3 · S）
+
+`TableModel.cs:34-36` 文案移除 structs（AttributeUsage 已在用户侧 CS0592 拦截，见审计论证 L7），或改为"interfaces/enums"并注明 struct 由 AttributeUsage 前置拦截。验收：文案与可达路径一致；相关单测（若有断言文案）同步。
+
+### TEST-012 · 测试小瑕疵（P3 · S）
+
+FinalTests.cs 按特性拆三文件（窗口/tracing/metrics）；ParenthesisScanAndTemplateCollisionTests.cs 双类归位两文件；ExpressionBuilderSmokeTests.cs:5-10 过期注释改为现实（AotTest/Program.cs:169,188-299 已覆盖）；SqlitePoolParameterTests.cs:23 裸 IsNotNull 补行为断言。验收：文件名↔类名一一对应；grep 无过期表述。
+
+### GEN-014 · AutoTagging 比较器对齐（P3 · S）
+
+`AutoTaggingEmitter.cs:222-227` 的 InterceptionTarget：或实现值相等（InterceptableLocation 的相等语义需查证 Roslyn 5.9 是否提供），或修正 `PalORMGenerator.cs:176` 注释为"引用相等，过度失效方向安全"。验收：注释与行为一致（二选一落地）。
+
+### GEN-015 · 分析器注册合并（P3 · S）
+
+`PalORMAnalyzer.cs:295-303,307-325` 两处 `SyntaxKind.InvocationExpression` 注册合并为一处；031/032（335,362 行）第一步的 GetSymbolInfo 语义查询前置廉价语法预筛（名字 → 循环 → 语义，对齐 PALORM005/033 的 ITM-634 口径）。验收：诊断输出不变（现有分析器测试全绿）；无新增分配路径。
+
+### PROV-011 · 布尔旋钮 doc 修正（P3 · S）
+
+PostgreSqlProvider.cs:56-57,65-66、MySqlProvider.cs:47-50,61-62 的"仅默认时覆盖"XML doc 修正为准确表述（显式设为默认值与未设置不可区分；ITM-652/643 登记的取舍）。验收：doc 与行为一致；sentinel API 留待 3.0（开放问题）。
+
+---
+
+## 执行顺序与依赖
+
+```
+SHAPE-001 ─┬→ SHAPE-010 ─→ CACHE-010
+SHAPE-002 ─┴→ SHAPE-011
+DOC-010（待决策即行）
+ERR-010 / GEN-011 / PROV-010 / CORE-010 / API-010 / CACHE-011：无依赖，随取随做
+GEN-010（先测试证实/证伪，再决定是否实施）
+TEST-010 / TEST-011：无依赖
+其余里程碑 3 项：无依赖，低峰批量做
+```
+
+## 快速获胜（高影响 × S 工作量，建议立即执行）
+
+SHAPE-001、SHAPE-002（半小时让两个隐性缺陷变可见红灯）、DOC-010、ERR-010、GEN-011、CORE-010、PROV-010、CACHE-011、DOC-011。
+
+## 反向验证计划（项目 S1/S2/S3 纪律）
+
+- S1 基线：每任务动手前记录 `dotnet run --project test/PalORM.Core.Tests -c Release`（及对应套件）的通过数与退出码；SHAPE 系列另记录 SQL 转储基线指纹。
+- S2 单变量：SHAPE-010 与 SHAPE-011 不得同分支同批提交后一次验证；先 010 验证再 011（或反之），每步全量测试。
+- S3 反向验证：SHAPE-010/011 完成后各自撤回，确认 SHAPE-001/002 确定性回到红；GEN-011 撤回后坏令牌实体重现 .g.cs 编译错误；ERR-010 撤回挂点后观测用例失败。未做 S3 的修复不得标记已完成。

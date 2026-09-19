@@ -63,6 +63,22 @@ internal static class SqlShapeCache
         var entry = new SqlShapeEntry(sequence, fields, fullSql);
         Buckets.GetOrAdd(shapeHash, static _ => new ConcurrentQueue<SqlShapeEntry>()).Enqueue(entry);
     }
+
+    /// <summary>全缓存条目总数——诊断与测试观测点（遍历 O(桶数)，不进查询热路径）。
+    /// 审计 2026-09-19 A1 防线：进程级缓存必须有界，本计数让上界可断言。</summary>
+    internal static int TotalEntryCount
+    {
+        get
+        {
+            int total = 0;
+            foreach (ConcurrentQueue<SqlShapeEntry> bucket in Buckets.Values)
+                total += bucket.Count;
+            return total;
+        }
+    }
+
+    /// <summary>清空全部条目——测试隔离专用（与 CacheStore.Clear 同纪律）。</summary>
+    internal static void Clear() => Buckets.Clear();
 }
 
 internal static class SqlShapeCacheExtensions
