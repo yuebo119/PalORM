@@ -18,6 +18,9 @@ internal sealed class PessimisticLockTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
+    // 编入 ExtBulkTable 组：本组所有 PG 用例都调 MigrateAsync（全实体建表），
+    // PG 并发 DDL 在系统目录（pg_type/pg_class）上竞态 → 23505 偶发失败（E1 同类 flaky）
+    [NotInParallel("ExtBulkTable")]
     public async Task PostgreSql_LockClauses_ExecuteInsideTransaction()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
@@ -57,6 +60,7 @@ internal sealed class PessimisticLockTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
+    [NotInParallel("ExtBulkTable")]
     public async Task MySql_LockClauses_ExecuteInsideTransaction()
     {
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
