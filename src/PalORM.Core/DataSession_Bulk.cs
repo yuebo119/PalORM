@@ -6,6 +6,7 @@ namespace PalORM;
 // Bulk operations (partial class — 从 DataSession.cs 拆分)
 public partial class DataSession<TProvider>
 {
+
     /// <summary>批量插入——委托 Provider 使用源生成 InsertColumns 与 binder，并复用会话事务。</summary>
     /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径）——与本家族
     /// BulkUpdate/BulkDelete 同口径；BulkMerge 例外（返回处理实体数，跨方言可预测，见其
