@@ -31,7 +31,11 @@ public static class Program
         // 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md）——BDN 单线程测不了锁/池/调度
         if (args.Length > 0 && args[0] == "--workload")
         {
-            WorkloadHarness.RunAsync(new WorkloadOptions()).GetAwaiter().GetResult();
+            // --workload [sqlite|pg|mysql]：方言档（默认 sqlite；pg/mysql 读 PALORM_*_CONNECTION）
+            WorkloadHarness.RunAsync(new WorkloadOptions
+            {
+                Dialect = args.Length > 1 ? args[1] : "sqlite"
+            }).GetAwaiter().GetResult();
             return;
         }
         // 大结果集内存曲线 + 查询构建分配（维度 1/7）

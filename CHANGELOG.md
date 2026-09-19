@@ -114,6 +114,18 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### 🌐 测评（③b：负载测试方言化——PG/MySQL 并发首数据）
+
+- **`--workload [sqlite|pg|mysql]`**：负载 harness 方言化（连接串来自
+  `PALORM_PG_CONNECTION`/`PALORM_MYSQL_CONNECTION`，引用符按方言分派——`"Id"` 在
+  MySQL 是语法错误；远程档关弹性重试避免退避污染 p99；种子经泛型 `SeedAsync` 走各方言
+  最优批量路径）。SQLite 档重构后回归验证（88K ops/s @1 线程，与历史一致）。
+- **维度 4 跨方言首数据**（详见 BENCHMARKS.md）：PG 1→8 线程 **6.8× 近线性扩展**、
+  MySQL **4.5×**——证明此前登记的"8 线程回落"是 SQLite 单写者方言形状而非 ORM 瓶颈。
+- ③a 往返计数器评估结论：**完整计数需要连接装饰器级别设计**（会话级计数覆盖不了
+  Provider 内部 COPY/批量命令，部分计数比没有更糟——仪器可信性纪律），登记为设计议题
+  待专项，不仓促实现。
+
 ### ⚡ 性能（①：BulkMergeAsync 集合化——远程库 8~10×，往返维度首个大项）
 
 - **`BulkMergeAsync` 由「N 行 = N 次往返」改为分区集合化**：源码核实原实现是
