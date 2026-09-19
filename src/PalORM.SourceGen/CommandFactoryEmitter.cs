@@ -405,20 +405,28 @@ internal static class CommandFactoryEmitter
         TableModel model, SqlGenerationDialect dialect)
         => BuildInsertSql(model, dialect) + "; SELECT LAST_INSERT_ID()";
 
-    private static void GenerateBindUpdateBody(TableModel model, StringBuilder sb)
+    /// <summary>UPDATE 参数列序的<b>单一真源</b>（审计 GEN-012）：SET 列 → 主键 → 并发令牌。
+    /// <para><see cref="GenerateBindUpdateBody"/> 与 <see cref="GenerateBindUpdateValuesBody"/> 的
+    /// 发射循环必须消费同一序列——参数序与 <c>BatchUpdateSqlBuilder</c> 的占位符一旦错位，
+    /// 后果是<b>错误数据写入而非编译失败</b>。原先两处手写同序计算靠"逐字一致"注释契约维系
+    /// （CommandFactoryEmitter 内即可分叉），收敛后只此一处可改。</para></summary>
+    private static (ColumnModel[] SetCols, ColumnModel[] PkCols, ColumnModel? ConcurrencyToken)
+        GetUpdateColumnOrder(TableModel model)
     {
         var cols = model.Columns.AsSpan().ToArray();
-        var setCols = cols.Where(c => IsUpdatableColumn(c)).ToArray();
-        var pkCols = cols.Where(c => c.IsPrimaryKey).ToArray();
-        var cc = cols.FirstOrDefault(c => c.IsConcurrencyToken);
+        return (
+            cols.Where(IsUpdatableColumn).ToArray(),
+            cols.Where(static c => c.IsPrimaryKey).ToArray(),
+            cols.FirstOrDefault(static c => c.IsConcurrencyToken));
+    }
 
+    private static void GenerateBindUpdateBody(TableModel model, StringBuilder sb)
+    {
+        var (setCols, pkCols, cc) = GetUpdateColumnOrder(model);
+
+        // SET 列→主键两段发射体同构（仅集合不同），Concat 保序合并；并发令牌恒末位
         int pi = 0;
-        foreach (var col in setCols)
-        {
-            string valueExpr = GetParameterValueExpression(col);
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
-        }
-        foreach (var col in pkCols)
+        foreach (var col in setCols.Concat(pkCols))
         {
             string valueExpr = GetParameterValueExpression(col);
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi++}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
@@ -429,25 +437,15 @@ internal static class CommandFactoryEmitter
         }
     }
 
-    /// <summary>BindUpdateValues 的发射体——列序与 <see cref="GenerateBindUpdateBody"/> 逐字一致
-    /// （SET 列 → 主键 → 并发令牌），否则参数序与 <c>BatchUpdateSqlBuilder</c> 的占位符错位。
-    /// 差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。</summary>
+    /// <summary>BindUpdateValues 的发射体——列序与 <see cref="GenerateBindUpdateBody"/> 由
+    /// <see cref="GetUpdateColumnOrder"/> 单一真源保证一致（GEN-012：原"逐字一致"注释契约
+    /// 已被结构化收敛替代）。差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。</summary>
     private static void GenerateBindUpdateValuesBody(TableModel model, StringBuilder sb)
     {
-        var cols = model.Columns.AsSpan().ToArray();
-        var setCols = cols.Where(c => IsUpdatableColumn(c)).ToArray();
-        var pkCols = cols.Where(c => c.IsPrimaryKey).ToArray();
-        var cc = cols.FirstOrDefault(c => c.IsConcurrencyToken);
+        var (setCols, pkCols, cc) = GetUpdateColumnOrder(model);
 
         int pi = 0;
-        foreach (var col in setCols)
-        {
-            string valueExpr = GetParameterValueExpression(col);
-            if (IsBinaryColumn(col))
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
-            sb.AppendLine($"        parameters[paramOffset + {pi++}].Value = {valueExpr};");
-        }
-        foreach (var col in pkCols)
+        foreach (var col in setCols.Concat(pkCols))
         {
             string valueExpr = GetParameterValueExpression(col);
             if (IsBinaryColumn(col))
