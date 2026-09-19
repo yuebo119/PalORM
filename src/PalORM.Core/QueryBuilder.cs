@@ -424,13 +424,28 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>追加调用方负责安全性的原始 SQL 片段。不得传入不可信内容。
+    /// <para><b>控制字符防线（独立审计 M1-1，breaking-behavior）</b>：拒绝 NUL 与 C0/C1/DEL
+    /// 控制字符（与 <see cref="IdentifierSafety"/> 同一谓词，NUL 截断向量 ITM-584 已证——
+    /// 片段含 NUL 时驱动截断语句可使后续条件失效、扩大 UPDATE 影响面）。引号/反引号不拒——
+    /// Raw 的合法用途必然含它们；引号平衡与关键字检查不可判定，不在本防线内。</para>
     /// <para>ITM-645(r4) 契约登记：Raw 在 SELECT 构建中追加于 OrderBy 之后（全句尾、
     /// LIMIT 前——测试锁定的既定位置）；COUNT 构建中位于 Having 后（过滤段语义）。
     /// 组合 OrderBy+Raw 且 Raw 为 WHERE 补充形态（如 "AND deleted=0"）时页 SQL 会产
     /// 无效后缀——WHERE 补充请用 Where()，Raw 的位置语义是"尾部追加"。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3267:LoopsShouldBeSimplifiedWithLinq",
+        Justification = "构建器热路径上的防线：LINQ Where+Any 分配委托+迭代器。手写循环零分配（同 SqlShapeCache.FindMatch 口径）。")]
     public QueryBuilder<T> Raw(string literal)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(literal);
+        foreach (char ch in literal)
+        {
+            if (IdentifierSafety.IsControlChar(ch))
+                throw new ArgumentException(
+                    $"Raw SQL fragment contains control character U+{(int)ch:X4} — control characters "
+                    + "can truncate or re-delimit the statement at the driver/server C layer (NUL truncation proven, ITM-584). "
+                    + "Remove control characters from the fragment.", nameof(literal));
+        }
         AddClause(QueryClauseKind.Raw, literal);
         return this;
     }
