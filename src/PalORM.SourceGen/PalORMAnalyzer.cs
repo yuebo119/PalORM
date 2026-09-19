@@ -287,40 +287,42 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             }, SymbolKind.NamedType);
         });
 
-        // PALORM005: N+1 检测 — 循环中 From<T>() / ORM 调用
-        // ITM-574：语法名匹配会误报 EF Core/MongoDB 等第三方库的同名方法（ToListAsync 等），
-        // TreatWarningsAsErrors 项目直接阻断——语义模型确认接收者/方法归属 PalORM 后才报。
-        // 评审 2026-09-02（ITM-634 同型）：语法圈检查先行——绝大多数调用不在循环内，
-        // 昂贵的语义确认只对候选付费（与 PALORM033 修复口径一致）。
-        context.RegisterSyntaxNodeAction(ctx =>
-        {
-            var invocation = (InvocationExpressionSyntax)ctx.Node;
-            if (invocation.Expression is not MemberAccessExpressionSyntax ma) return;
-            if (!IsPalORMQueryMethod(ma.Name.Identifier.Text)) return;
-            if (TryFindEnclosingLoop(invocation) is not { } loopLocation) return;
-            if (!IsPalORMInvocation(ctx, invocation)) return;
-            ctx.ReportDiagnostic(Diagnostic.Create(NPlusOneDetected, loopLocation));
-        }, SyntaxKind.InvocationExpression);
-
-        // PALORM031: BulkUpdateBatchAsync<T> 对 [ConcurrencyCheck] 实体调用——必崩
-        // PALORM032: Include/Join/ThenInclude 引用未注册实体
+        // PALORM005 + PALORM031/032/Select 共用一次注册（审计 GEN-015：原两处对同一
+        // SyntaxKind 各注册一个回调，全编译每个调用表达式跑两遍回调；名字集互斥，合并后
+        // 单回调按方法名分派，行为不变——005 保持"语法圈检查先行"（ITM-634）口径）。
         context.RegisterSyntaxNodeAction(ctx =>
         {
             var invocation = (InvocationExpressionSyntax)ctx.Node;
             if (invocation.Expression is not MemberAccessExpressionSyntax ma) return;
             string methodName = ma.Name.Identifier.Text;
 
-            if (methodName is "BulkUpdateBatchAsync")
+            // PALORM005: N+1 检测 — 循环中 From<T>() / ORM 调用
+            // ITM-574：语义模型确认接收者/方法归属 PalORM 后才报（语法名匹配会误报
+            // EF Core/MongoDB 等第三方库的同名方法，TreatWarningsAsErrors 项目直接阻断）。
+            // ITM-634：绝大多数调用不在循环内——纯语法的循环检查先于昂贵的语义确认。
+            if (IsPalORMQueryMethod(methodName))
             {
-                CheckBulkUpdateBatchConcurrency(ctx, ma, invocation);
+                if (TryFindEnclosingLoop(invocation) is { } loopLocation
+                    && IsPalORMInvocation(ctx, invocation))
+                {
+                    ctx.ReportDiagnostic(Diagnostic.Create(NPlusOneDetected, loopLocation));
+                }
+                return;
             }
-            else if (methodName is "Include" or "InnerJoin" or "LeftJoin" or "RightJoin" or "ThenInclude")
+
+            // PALORM031: BulkUpdateBatchAsync<T> 对 [ConcurrencyCheck] 实体调用——必崩
+            // PALORM032: Include/Join/ThenInclude 引用未注册实体
+            switch (methodName)
             {
-                CheckJoinUnregisteredEntity(ctx, ma, invocation, methodName);
-            }
-            else if (methodName is "Select")
-            {
-                CheckSelectProjection(ctx, ma, invocation);
+                case "BulkUpdateBatchAsync":
+                    CheckBulkUpdateBatchConcurrency(ctx, ma, invocation);
+                    break;
+                case "Include" or "InnerJoin" or "LeftJoin" or "RightJoin" or "ThenInclude":
+                    CheckJoinUnregisteredEntity(ctx, ma, invocation, methodName);
+                    break;
+                case "Select":
+                    CheckSelectProjection(ctx, ma, invocation);
+                    break;
             }
         }, SyntaxKind.InvocationExpression);
     }
