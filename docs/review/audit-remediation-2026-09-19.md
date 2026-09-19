@@ -4,7 +4,7 @@
 > 纪律：任务只有在实现、对应测试和验收命令均通过后才能标记完成；每任务走 S1 基线 → S2 单变量 → S3 反向验证（撤回修复 → 用例确定性失败）。
 > 约束：SHAPE 系列涉及 SQL 文本形态的任务，动快照与 SQL 转储基线时须评审确认；全程保持 `dotnet build PalORM.ci.slnf -c Release --no-incremental -warnaserror` 0 警告、既有 620 测试不回退、4×AOT 矩阵绿。
 >
-> **执行记录（2026-09-19 执行会话）**：S1 基线 = 构建 0 警告 + Core 274/274。22 任务完成 16 项、证伪撤销 1 项（GEN-010）、环境阻塞 2 项（TEST-010/011）、保留待后续 3 项（GEN-012/013/015，P3 打磨级）。收尾验证：`--no-incremental -warnaserror` 0 警告、Core 279/279、SourceGen 196/196、SQLite Native AOT 原生运行 PASSED（PG/MySQL 矩阵与 Integration 套件待数据库环境）。共 12 个提交（SHAPE-001/002 立项 + SHAPE-011 + SHAPE-010 + DOC-010/CACHE-011 + ERR-010/DOC-011 + GEN-011 + CORE-010/PROV-010 + CACHE-010/API-010/PROV-011 + GEN-010 实验 + GEN-014/TEST-012 + 账本回填 ×2）。
+> **执行记录（2026-09-19 执行会话）**：S1 基线 = 构建 0 警告 + Core 274/274。22 任务完成 19 项、证伪撤销 1 项（GEN-010）、环境阻塞 2 项（TEST-010/011，本地 PG/MySQL 端口探测不可达，二次复测仍不可达）。收尾验证：`--no-incremental -warnaserror` 0 警告 0 错误、Core 279/279、SourceGen 197/197、Integration 192/192（TestDb 环境缺失回退 SQLite）、SQLite Native AOT 原生运行 PASSED（PG/MySQL AOT 矩阵待 CI/环境）。共 17 个提交。
 
 ## 完成定义（可衡量信号）
 
@@ -30,15 +30,15 @@
 | TEST-011 | P2 | PG LISTEN/NOTIFY 真连接冒烟测试（T2） | 环境阻塞 | 同上 |
 | GEN-011 | P2 | ConcurrencyCheck 纳入 CanGenerateEntity 自守卫（M6） | 已完成 | SourceGenerationValidation 镜像 PALORM012/013 口径（int/long 非空 + 非 init-only + 至多一个）；ConcurrencyTokenGuardTests 4 用例（Guid/init-only/双令牌拒 + long 对照通过）；S3：短路守卫后 3 用例回红 |
 | PROV-010 | P3 | "no generated insert metadata" 守卫收敛单一 helper（M8） | 已完成 | BulkOperationFramework.EnsureInsertMetadata 单点；PG/MySQL 入口/MySQL 内层/Core 四处调用收敛；grep 文案剩 3 处（helper 1 + DataSession.Crud 快照一致性版 + DataSession_Bulk 会话层存在性版，后两者语义刻意不同不收敛，见执行记录） |
-| GEN-012 | P3 | Bind 更新双循环共享列序单一真源（M7） | 待开始 | 动生成物结构需快照复核，留后续会话 |
+| GEN-012 | P3 | Bind 更新双循环共享列序单一真源（M7） | 已完成 | GetUpdateColumnOrder 单一真源 + 同构段 Concat 保序合并；13 份快照零漂移；新增 BindUpdateColumnOrderTests（产物级列序一致性）；S3 注入反转漂移后新防线+快照双红 |
 | CORE-010 | P3 | 魔法数字常量化：65535/500/ulong 上限（L2） | 已完成 | SqlLimits（public，对齐 BulkOperationFramework 内部 API 口径）单点；五处替换（含审计漏数的 MySqlProvider 回退分支 65535）；grep 字面量仅剩注释 |
 | API-010 | P3 | BulkMergeAsync 返回值语义 XML doc 明确（Q2） | 已完成 | returns 节：处理实体数口径 + 跨方言理由 + 3.0 决策标注 |
 | CACHE-011 | P3 | 多租户缓存警告前置 README 特性章节（S3 文档面） | 已完成 | README 特性表 TenantAware 条目内联警告（key 约定/独立注入两路径，对齐 ADR-C） |
 | GEN-013 | P3 | 描述符银行抽出独立文件 | 待开始 | 纯移动低收益，留后续 |
 | DOC-011 | P3 | TableModel PALORM045 文案移除不可达的 structs（L7） | 已完成 | 文案改为 interfaces/enums + structs 由 AttributeUsage 前置拦截的说明 |
-| TEST-012 | P3 | 测试小瑕疵：FinalTests 拆分 / 过期注释 / 裸 IsNotNull（L6） | 部分完成 | 过期注释更正（AotTest 已覆盖的现实）+ 裸 IsNotNull 补 HealthCheckAsync 行为断言；FinalTests 拆分与双类文件归位留后续（纯机械移动） |
+| TEST-012 | P3 | 测试小瑕疵：FinalTests 拆分 / 过期注释 / 裸 IsNotNull（L6） | 已完成 | FinalTests 按特性拆三文件（QueryFeatureSmoke/TracingSanitization/QueryMetrics，listener 命名组隔离）+ 双类文件归位（ParenthesisScan/SqlTemplateNamespaceCollision 各归一文件）+ 过期注释更正 + 裸 IsNotNull 补 HealthCheck 行为断言；Integration 192/192 |
 | GEN-014 | P3 | AutoTagging 缓存比较器与注释对齐（L4） | 已完成 | InterceptionTarget 与 PalORMGenerator 两处注释改为引用相等/过度失效的准确表述 |
-| GEN-015 | P3 | 分析器 InvocationExpression 双注册合并 + 031/032 语法预筛前置（L5） | 待开始 | 诊断行为敏感，留后续会话（195+ 测试为安全网） |
+| GEN-015 | P3 | 分析器 InvocationExpression 双注册合并 + 031/032 语法预筛前置（L5） | 已完成（注册合并） | 两注册合并为单回调按名分派（名字集互斥已核实：005 集与 031/032/Select 集零重叠），每调用节点省一遍回调；005 的"语法圈先行"顺序保持；197 测试（含各诊断正反用例）全绿验证行为不变。CheckJoinUnregisteredEntity 内 IsPalORMInvocation 与 GetSymbolInfo 的双语义查询合并留原样（次要优化，改动面大收益小） |
 | PROV-011 | P3 | Provider 布尔旋钮 XML doc 修正（L8，仅 doc） | 已完成 | PG/MySQL CreateConnection doc 补布尔旋钮边界段（被覆盖后果是正确性而非性能，须绕开工厂自建连接） | |
 
 > 不入本账本（开放问题，需用户决策后立任务）：LIMIT 参数化 vs 容量上限的最终取向由 SHAPE-010 评审定；AGPL 双许可；BulkMergeAsync 是否 3.0 对齐受影响行数语义；多租户缓存默认实例是否改默认行为（破坏性）；SDK GA 切轨时间表；S3 若选择改默认行为则从文档任务升级为设计任务。
