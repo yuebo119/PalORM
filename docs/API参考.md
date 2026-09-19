@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 628 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 634 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -100,6 +100,7 @@
 | `.WithTracing()` / `.WithMetrics(name)` | ActivitySource + Meter |
 | `.AsDryRun()` → `DryRunResult` | SQL + 参数预览 |
 | `.ForEachAsync(action, ct?)` | 流式消费——逐行回调不物化列表（大结果集省整表 List 分配；不写 WithCache；语义契约见 XML doc） |
+| `CreateBatch().Append(...).ExecuteNonQueryAsync()` | 显式批量——N 条非查询语句一次往返（PG 实测 3.4×/10 语句；MySQL 驱动批；SQLite 回退顺序执行）；自动绑定活跃事务 |
 
 > **性能提示（表达式类构建器）**：上表中标注 `expr` 的方法接收 `Expression<Func<T, ...>>`。
 > C# 在调用点构造表达式树，库无法缓存——每次调用都重建，实测每棵树 512 字节加 0.5~1.6 µs。

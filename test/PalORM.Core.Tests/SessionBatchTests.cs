@@ -1,0 +1,80 @@
+using PalORM.Sqlite;
+
+namespace PalORM.Core.Tests;
+
+/// <summary>SessionBatch 的行为契约（B1）——SQLite 档（回退路径：无批量 API，顺序执行）。
+/// PG/MySQL 真 DbBatch 路径的契约在 PalORM.Integration.Tests.SessionBatchDialectTests。
+/// <para>钉住：① 语句真实生效；② 事务原子性（整批回滚）；③ 空批 no-op；
+/// ④ 空白语句 Append 期拒绝（ITM-745 同口径）。</para></summary>
+internal sealed class SessionBatchTests
+{
+    private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
+    {
+        DataSession<SqliteProvider> session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = $"Data Source=batch_{Guid.NewGuid():N};Mode=Memory;Cache=Shared" });
+        await session.ExecuteAsync(
+            $"CREATE TABLE batch_rows (id INTEGER PRIMARY KEY, v INTEGER NOT NULL, tag TEXT NOT NULL)");
+        return session;
+    }
+
+    [Test]
+    public async Task Append_Parameterized_ExecutesAllAndIsReadable()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+
+        using SessionBatch<SqliteProvider> batch = session.CreateBatch();
+        int affected = await batch
+            .Append($"INSERT INTO batch_rows (id, v, tag) VALUES ({1}, {10}, {"a"})")
+            .Append($"INSERT INTO batch_rows (id, v, tag) VALUES ({2}, {20}, {"b"})")
+            .Append($"UPDATE batch_rows SET v = {11} WHERE id = {1}")
+            .ExecuteNonQueryAsync();
+
+        await Assert.That(affected).IsEqualTo(3);
+        var rows = (await session.From<BatchRow>().ToListAsync()).OrderBy(static r => r.Id).ToList();
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(rows[0].V).IsEqualTo(11); // UPDATE 生效
+        await Assert.That(rows[1].Tag).IsEqualTo("b");
+    }
+
+    [Test]
+    public async Task BatchInsideTransaction_RollsBackAllOnFailure()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+
+        await Assert.That(async () => await session.WithTransaction(async ct =>
+        {
+            using SessionBatch<SqliteProvider> batch = session.CreateBatch();
+            await batch
+                .Append($"INSERT INTO batch_rows (id, v, tag) VALUES ({1}, {1}, {"ok"})")
+                .Append($"INSERT INTO nonexistent_table (x) VALUES ({1})") // 第二条失败 → 整批回滚
+                .ExecuteNonQueryAsync(ct);
+            return true;
+        })).Throws<Exception>();
+
+        await Assert.That(await session.CountAsync<BatchRow>()).IsEqualTo(0); // 第一条也回滚
+    }
+
+    [Test]
+    public async Task EmptyBatch_IsNoOp()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        using SessionBatch<SqliteProvider> batch = session.CreateBatch();
+        await Assert.That(await batch.ExecuteNonQueryAsync()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task BlankStatement_RejectedAtAppend()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        using SessionBatch<SqliteProvider> batch = session.CreateBatch();
+        await Assert.That(() => batch.Append($"   ")).Throws<ArgumentException>();
+    }
+}
+
+[Table("batch_rows")]
+internal sealed partial class BatchRow
+{
+    [Key] public long Id { get; set; }
+    [Column("v")] public int V { get; set; }
+    [Column("tag")] public string Tag { get; set; } = "";
+}

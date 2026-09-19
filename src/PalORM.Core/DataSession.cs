@@ -486,6 +486,20 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         object? operationOwner = null)
         => _operationState.Enter(operationOwner);
 
+    /// <summary>创建批量执行器——把 N 条非查询语句压成一次往返（方言支持时，实测 PG 3.4×/10 语句）。
+    /// 见 <see cref="SessionBatch{TProvider}"/> 的语义契约。</summary>
+    public SessionBatch<TProvider> CreateBatch() => new(this);
+
+    internal DbCommand CreateCommandForBatch() => CreateCommand();
+
+    internal SessionOperationState.SessionOperationLease EnterBatchOperation() => EnterOperation();
+
+    internal DbConnection BatchConnection => _conn;
+
+    internal DbTransaction? GetActiveBatchTransaction() => GetActiveTransaction();
+
+    internal int BatchCommandTimeoutSeconds => _options.CommandTimeoutSeconds;
+
     private DbCommand CreateCommand()
     {
         DbCommand command = _conn.CreateCommand();
