@@ -13,7 +13,7 @@
 
 - **.NET 生态唯一完整支持全链路 Native AOT 的 ORM**
 - **编译时生成一切**——Roslyn 在编译期产出 SQL 构造、参数绑定、对象映射、表结构迁移，运行时零反射、零 IL Emit。Native AOT 全链路验证，原生二进制部署
-- **支持 PostgreSQL / MySQL / SQLite**。内置多租户隔离、乐观锁、软删除、AES-256 透明加密（SQLite）、审计拦截器、咨询锁、编译时诊断——企业级特性开箱即用，无需样板代码
+- **支持 PostgreSQL / MySQL / SQLite**。内置多租户隔离、乐观锁、软删除、审计拦截器、咨询锁、编译时诊断——企业级特性开箱即用，无需样板代码；SQLite 经 SQLite3MC 驱动支持 AES-256 静态加密（连接字符串 `Password=` 启用，属驱动层能力，见下表）
 
 ---
 
@@ -57,13 +57,13 @@
 |--------|------|------|:---:|
 | **PostgreSQL** | 14+（推荐 18） | Npgsql 10.0.3 | SSL/TLS |
 | **MySQL** | 8.0+（推荐 8.4 LTS） | MySqlConnector 2.6.2 | SSL/TLS |
-| **SQLite** | 3.47+（via SQLite3MC 2.4.0） | Microsoft.Data.Sqlite.Core 11.0-p7 | ✓ AES-256 |
+| **SQLite** | 3.47+（via SQLite3MC 2.4.0） | Microsoft.Data.Sqlite.Core 11.0-p7 | ✓ AES-256（驱动层，`Password=`） |
 
 ### 为什么选择这些版本
 
 - **Npgsql 10.0.3**：原生支持 PG `date/time` → `DateOnly/TimeOnly`、`NpgsqlSlimDataSourceBuilder`（AOT 友好）、Binary COPY 批量写入
 - **MySqlConnector 2.6.2**：含安全修复 GHSA-473q（zero-config TLS MitM）、`MySqlBulkCopy`（LOAD DATA LOCAL INFILE）、VECTOR 类型准备
-- **SQLite3MC 2.4.0**：内嵌 SQLite + AES-256 加密，PCLRaw 跨平台原生二进制加载
+- **SQLite3MC 2.4.0**：内嵌 SQLite + AES-256 加密（连接字符串 `Password=` 启用静态加密——驱动层透传，PalORM 不解析该参数），PCLRaw 跨平台原生二进制加载
 
 ---
 
@@ -334,7 +334,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | 功能 | 说明 |
 |------|------|
 | `[SoftDelete]` | 软删除自动 WHERE 过滤 |
-| `[TenantAware]` | 多租户 `SetTenant(id)` 单库列隔离 |
+| `[TenantAware]` | 多租户 `SetTenant(id)` 单库列隔离。⚠️ 该隔离**不覆盖查询结果缓存**：`WithCache(key)` 的键完全由调用方提供，未注入 `DbOptions.QueryCache` 时各会话共享进程级默认缓存——多租户场景必须把租户标识编入 key（如 `$"products:{tenantId}"`）或为每租户注入独立缓存（ADR-C） |
 | `[ConcurrencyCheck]` | 乐观锁 `version` 字段自动检查 |
 | `AuditInterceptor`（v5.0） | SQL 审计拦截器（OnBefore/OnAfter/OnError；`logParameters:true` 时 `Set()` 写入 `[SensitiveData]` 列的参数值自动掩码——经 QueryContext 传递，覆盖 SELECT/UPDATE 拦截路径） |
 | `IQueryInterceptor` | 三阶段查询拦截器接口 |
