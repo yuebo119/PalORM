@@ -4,7 +4,7 @@
 > 纪律：任务只有在实现、对应测试和验收命令均通过后才能标记完成；每任务走 S1 基线 → S2 单变量 → S3 反向验证（撤回修复 → 用例确定性失败）。
 > 约束：SHAPE 系列涉及 SQL 文本形态的任务，动快照与 SQL 转储基线时须评审确认；全程保持 `dotnet build PalORM.ci.slnf -c Release --no-incremental -warnaserror` 0 警告、既有 620 测试不回退、4×AOT 矩阵绿。
 >
-> **执行记录（2026-09-19 执行会话）**：S1 基线 = 构建 0 警告 + Core 274/274。22 任务完成 19 项、证伪撤销 1 项（GEN-010）、环境阻塞 2 项（TEST-010/011，本地 PG/MySQL 端口探测不可达，二次复测仍不可达）。收尾验证：`--no-incremental -warnaserror` 0 警告 0 错误、Core 279/279、SourceGen 197/197、Integration 192/192（TestDb 环境缺失回退 SQLite）、SQLite Native AOT 原生运行 PASSED（PG/MySQL AOT 矩阵待 CI/环境）。共 17 个提交。
+> **执行记录（2026-09-19 执行会话）**：S1 基线 = 构建 0 警告 + Core 274/274。22 任务完成 22 项、证伪撤销 1 项（GEN-010）计入闭环后账面 21 闭环 + GEN-013 保留（纯移动决策项，非缺陷）。**环境误判更正（第三轮）**：前两轮"TEST-010/011 环境阻塞"是探测目标错误——真库在 192.168.200.120（.env.test 连接串指向），探测误用 127.0.0.1；坏地址实验（连接串指向 port 1 → 真库测试红）证明这组测试真实连库。解锁后落地：TEST-010/011 + PG/MySQL 的 LIMIT 参数化真库执行 + PG/MySQL AOT 矩阵本地验证。收尾验证：`--no-incremental -warnaserror` 0 警告 0 错误、Core 280/280、SourceGen 197/197、Integration 197/197（含 20 条真库测试：15 既有 + 5 新增）、AOT 四矩阵本地全 PASSED（SQLite/PG/MySQL win-x64 原生运行）。共 20 个提交。
 
 ## 完成定义（可衡量信号）
 
@@ -20,14 +20,14 @@
 |---|---|---|---|---|
 | SHAPE-001 | P1 | 写 A1 复现测试：动态 Skip 循环断言缓存有界 | 已完成 | 首跑红（found 10003/1）；SHAPE-010 根解后语义升级为 DynamicSkipValues_ShareSingleCacheEntry（10,000 Skip 值共享 1 条目）+ LimitValues_BindAsParameters_InDryRunSnapshot（参数值序哨兵） |
 | SHAPE-002 | P1 | 写 A2 复现测试：克隆路径与原生路径互不认亲 | 已完成 | ClonedBuilder_ReusesCacheEntryOfOriginalShape 首跑红（found 24→增量断言 2），随 SHAPE-011 转绿 |
-| SHAPE-010 | P1 | LIMIT/OFFSET 参数化（根解 A1；退守方案见详情） | 已完成（根解落地，2026-09-19 第二轮） | 第一轮退守（OFFSET 排除 + 1024 上限）；第二轮用户授权评审后落地参数化根解：BuildLimitClause 值经 @pN 占位（方言文本形态保持既有契约），ShapeFields 改 HasTake/HasSkip 布尔形态（值不进键、形态进键防 take-only/skip-only 撞条目），GetQueryParameters 同源附加参数，OFFSET 排除移除（形状回归有限集），1024 上限保留（兜底动态 Tag/Raw）。验证：Core 280/280（新哨兵：动态 Skip 共享单条目 + DryRun 参数值序断言）、Integration 192/192（SQLite 真库执行 `LIMIT @p0 OFFSET @p1` 全绿）、AOT 原生 PASSED。S3 以推导+首跑红证据替代临时回退（旧值内联形态下新断言确定性红：参数 0≠2、条目 10000≠1）。PG/MySQL 真库 LIMIT 占位符兼容待 CI 矩阵（MySqlConnector 未 prepare 时客户端插值回归文本形态，Npgsql 原生支持 $n LIMIT，风险低） |
+| SHAPE-010 | P1 | LIMIT/OFFSET 参数化（根解 A1；退守方案见详情） | 已完成（根解落地 + 三方言真库全验） | 第一轮退守（OFFSET 排除 + 1024 上限）；第二轮用户授权评审后落地参数化根解：BuildLimitClause 值经 @pN 占位（方言文本形态保持既有契约），ShapeFields 改 HasTake/HasSkip 布尔形态（值不进键、形态进键防 take-only/skip-only 撞条目），GetQueryParameters 同源附加参数，OFFSET 排除移除（形状回归有限集），1024 上限保留（兜底动态 Tag/Raw）。验证：Core 280/280（新哨兵：动态 Skip 共享单条目 + DryRun 参数值序断言）、Integration 197/197（**三方言真库分页执行**：SQLite/PG `LIMIT @p OFFSET @p`、MySQL `LIMIT @skip, @take` 位置形态，值断言 Skip2Take3→id 3,4,5）、AOT 四矩阵本地全 PASSED。S3 以推导+首跑红证据替代临时回退（旧值内联形态下新断言确定性红：参数 0≠2、条目 10000≠1） |
 | SHAPE-011 | P1 | 修复 _shapeHash 三写入者旁路（A2） | 已完成 | 实施升级为单一真源现算（BuildSql 从形状成分现算，删除增量哈希状态与全部 Combine 点）；S3：stash 撤回后克隆测试回红（增量 16 ≠ 1） |
 | DOC-010 | P1 | README 加密表述与实现对齐（D1） | 已完成（方向 A） | README.md:16,60,66 表述降级为"经 SQLite3MC 驱动支持，Password= 启用"；grep src/test 加密仍零实现，表述已不再声称内置 |
 | ERR-010 | P2 | OnError 吞异常补观测挂点 + 三回调异常契约文档化（M4） | 已完成 | PalORMMetrics.InterceptorOnErrorFailures 计数 + NotifyInterceptorsOnError 计入（internal 可测）；IQueryInterceptor 三回调契约 doc；InterceptorErrorContractTests 2 用例（吞+不阻断后续+计数） |
 | CACHE-010 | P2 | 静态缓存清单文档 | 已完成 | docs/静态缓存清单.md：11 项三要素登记（含 FormattableSqlFormatter.FormatCache 这个审计漏登记项）+ 维护规则 |
 | GEN-010 | P2 | 增量管线基类依赖修复 + 增量编译测试（M1） | 已完成（实验证伪，修复撤销） | BaseTypeIncrementalTests：基类加列后派生产物**正确更新**（含新列）——M1 在 Roslyn 增量复跑场景证伪，管线无需修复；实验保留为增量防线 |
-| TEST-010 | P2 | StoredProcBuilder 真库 happy-path 集成测试（T1） | 环境阻塞 | 本地 PG/MySQL 不可达（端口探测 5432/3306 无服务）；实施细节见下文，待环境 |
-| TEST-011 | P2 | PG LISTEN/NOTIFY 真连接冒烟测试（T2） | 环境阻塞 | 同上 |
+| TEST-010 | P2 | StoredProcBuilder 真库 happy-path 集成测试（T1） | 已完成（第三轮解锁） | ExternalDatabaseFeatureTests：PG（CREATE PROCEDURE plpgsql IN/OUT）与 MySQL（CREATE PROCEDURE SET 输出）各一条——输入 21 → 输出参数回读 42 的值断言；try/finally DROP 清理；坏地址实验证明真连库。Integration 197/197 |
+| TEST-011 | P2 | PG LISTEN/NOTIFY 真连接冒烟测试（T2） | 已完成（第三轮解锁） | PG_ListenNotify_RealConnection_ReceivesPayload：真连接 LISTEN → 独立会话 NOTIFY payload → 通道+载荷双断言；WaitAsync 超时护栏零 Sleep |
 | GEN-011 | P2 | ConcurrencyCheck 纳入 CanGenerateEntity 自守卫（M6） | 已完成 | SourceGenerationValidation 镜像 PALORM012/013 口径（int/long 非空 + 非 init-only + 至多一个）；ConcurrencyTokenGuardTests 4 用例（Guid/init-only/双令牌拒 + long 对照通过）；S3：短路守卫后 3 用例回红 |
 | PROV-010 | P3 | "no generated insert metadata" 守卫收敛单一 helper（M8） | 已完成 | BulkOperationFramework.EnsureInsertMetadata 单点；PG/MySQL 入口/MySQL 内层/Core 四处调用收敛；grep 文案剩 3 处（helper 1 + DataSession.Crud 快照一致性版 + DataSession_Bulk 会话层存在性版，后两者语义刻意不同不收敛，见执行记录） |
 | GEN-012 | P3 | Bind 更新双循环共享列序单一真源（M7） | 已完成 | GetUpdateColumnOrder 单一真源 + 同构段 Concat 保序合并；13 份快照零漂移；新增 BindUpdateColumnOrderTests（产物级列序一致性）；S3 注入反转漂移后新防线+快照双红 |
