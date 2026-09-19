@@ -34,30 +34,35 @@ public sealed class BulkUpdateBatchDialectTests
         ConnectionString = TestEnvironment.ResolveMySqlConnectionString()
     };
 
-    private const string TableName = "palorm_batch_upd";
-
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task PG_BulkUpdateBatch_WritesCorrectValuesPerRow()
-        => await RunRoundTripAsync(await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts), "INT");
+        => await RunRoundTripAsync(await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts));
 
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_BulkUpdateBatch_WritesCorrectValuesPerRow()
-        => await RunRoundTripAsync(await DataSession<MySqlProvider>.CreateAsync(MySqlOpts), "INT");
+        => await RunRoundTripAsync(await DataSession<MySqlProvider>.CreateAsync(MySqlOpts));
 
     /// <summary>共享端到端：4 行 2 列批量更新后逐行逐列断言最终值（非仅行数）——
-    /// 参数错位（第 i 行的值绑到第 j 行）即刻暴露为值断言失败。</summary>
-    private static async Task RunRoundTripAsync<TProvider>(DataSession<TProvider> db, string intType)
+    /// 参数错位（第 i 行的值绑到第 j 行）即刻暴露为值断言失败。
+    /// <para><b>根因终章（2026-09-20）</b>：此前的"42601 真缺陷"是<b>本测试自身的 DDL 缺陷</b>——
+    /// 表名曾写在 FormattableString 洞里（<c>$"DROP TABLE IF EXISTS {TableName}"</c> → 参数化
+    /// <c>DROP TABLE IF EXISTS @p0</c>，PG 的 DDL 不接受参数化标识符；POSITION 22 恰是
+    /// "$1" 在 <c>DROP TABLE IF EXISTS </c>（21 字符）之后的位置，MySqlConnector 客户端插值
+    /// 则成单引号表名）。表名改字面量后产品路径全绿——BulkUpdateBatchAsync 本身无缺陷
+    /// （十六项排除矩阵的全部弯路源于"失败点在 UPDATE"的错误公设）。教训：标识符必须
+    /// 写字面量（全项目真库测试先例皆如此），只有值才进洞。</para></summary>
+    private static async Task RunRoundTripAsync<TProvider>(DataSession<TProvider> db)
         where TProvider : IDbProvider
     {
         try
         {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_batch_upd");
             await db.ExecuteAsync(
-                $"CREATE TABLE {TableName} (id {intType} PRIMARY KEY, qty {intType} NOT NULL, label VARCHAR(32) NOT NULL)");
+                $"CREATE TABLE palorm_batch_upd (id INT PRIMARY KEY, qty INT NOT NULL, label VARCHAR(32) NOT NULL)");
             for (int i = 1; i <= 4; i++)
-                await db.ExecuteAsync($"INSERT INTO {TableName} (id, qty, label) VALUES ({(long)i}, {0L}, {"seed" + i})");
+                await db.ExecuteAsync($"INSERT INTO palorm_batch_upd (id, qty, label) VALUES ({(long)i}, {0L}, {"seed" + i})");
 
             var rows = new List<BatchUpdEntity>();
             for (int i = 1; i <= 4; i++)
@@ -77,7 +82,7 @@ public sealed class BulkUpdateBatchDialectTests
         }
         finally
         {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS {TableName}");
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_batch_upd");
             await db.DisposeAsync();
         }
     }
