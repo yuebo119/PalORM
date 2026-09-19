@@ -114,6 +114,26 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚡ 性能（②：INSERT RETURNING 收窄——满足保守条件的实体只回主键）
+
+- **生成器静态判定 + SQL 收窄 + 标量读取路径**：当实体满足保守条件（恰一个自增主键；
+  其余全部列可直接插入且无转换器/OwnedJson/IgnoreOnInsert/Computed/Timestamp——
+  即 RETURNING 的整行与插入值**恒等**）时：① `InsertReturning` SQL 从全部列收窄为
+  `RETURNING "Id"`；② `InsertWithReturningAsync` 走 `ExecuteScalarAsync` 标量路径，
+  返回**调用方实体**（引用相等）+ 回填 ID，省整行 reader 行缓冲与实体重建；
+  远程库还省 RETURNING 的网络字节（宽表显著）。
+  <br>实测（SQLite 本机，同批 DELETE 重插，2 万次/点）：收窄路径 3 列实体 **1,920 B/次** vs
+  整行物化路径 4 列实体 2,784 B/次（**−31%**；对照非严格同形——宽实体多一列，
+  差异主体是 reader 行缓冲 + 物化重建）。快照机器校验：4/12 块收窄（有转换器/
+  OwnedJson/非自增键的实体正确保持整行），flag 2 true/2 false 与实体数一致。
+  <br>契约用例 2 项：收窄路径返回引用相等实体且值真实落库；IgnoreOnInsert 实体保持
+  **物化返回 DB 默认值**（'database' 而非调用方的 'client'——DB 默认值以返回实例为真源，
+  收窄条件正确排除了此类实体）。
+  <br>**过程缺陷（测试当场抓出）**：`CrudMetadata.Copy()`（注册时逐类型快照）重建
+  `CrudBindings` 时漏传新 flag → 运行时恒 false，127 个用例瞬间红（SQL 已收窄但走了整行
+  reader → ordinal 越界）。修复后全绿——这正是"新增元数据字段必须核对 Copy/快照路径"的
+  教训，已随修复落入代码。
+
 ### 🌐 测评（③b：负载测试方言化——PG/MySQL 并发首数据）
 
 - **`--workload [sqlite|pg|mysql]`**：负载 harness 方言化（连接串来自

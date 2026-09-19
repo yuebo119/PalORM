@@ -107,6 +107,18 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = sqls.InsertReturning;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         metadata.BindInsert(cmd, entity, 0);
+        // v5.7 收窄路径：RETURNING 只回主键（生成器保守判定，见 CrudBindings.InsertReturningKeyOnly）。
+        // 结果集与插入值恒等——整行物化等价于返回调用方实体 + 回填 ID；
+        // 标量读取省去 reader 行缓冲与整行物化（宽表实体分配 −1 实体 −N 列读取）。
+        if (metadata.InsertReturningKeyOnly)
+        {
+            long? narrowId = NormalizeGeneratedId(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
+            if (narrowId is null)
+                throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
+            if (state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? narrowBackfill))
+                narrowBackfill(entity, narrowId.Value);
+            return entity;
+        }
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
