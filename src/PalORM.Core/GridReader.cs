@@ -11,7 +11,6 @@ public sealed class GridReader : IAsyncDisposable
 {
     private readonly DbDataReader _reader;
     private readonly DbCommand _command;
-    private readonly ConnectionLease _lease;
     private readonly SessionOperationState.SessionOperationLease _operation;
     private readonly SessionOperationState? _operationState;
     private readonly QueryObservation? _observation;
@@ -25,7 +24,7 @@ public sealed class GridReader : IAsyncDisposable
     /// 不再静默返回空列表（与"类型未注册即抛"的既有口径一致）。</summary>
     private bool _hasResultSet = true;
 
-    internal GridReader(DbDataReader reader, DbCommand command, ConnectionLease lease,
+    internal GridReader(DbDataReader reader, DbCommand command,
         QueryObservation? observation = null,
         SessionOperationState.SessionOperationLease operation = default,
         bool validateColumnOrder = false,
@@ -34,7 +33,6 @@ public sealed class GridReader : IAsyncDisposable
         _validateColumnOrder = validateColumnOrder;
         _reader = reader;
         _command = command;
-        _lease = lease;
         _operation = operation;
         _operationState = operationState;
         _observation = observation;
@@ -201,13 +199,6 @@ public sealed class GridReader : IAsyncDisposable
         {
             if (cleanupException is null) cleanupException = exception;
             else cleanupException.Data["PalORM.CommandCleanupException"] = exception;
-        }
-
-        try { await _lease.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception exception)
-        {
-            if (cleanupException is null) cleanupException = exception;
-            else cleanupException.Data["PalORM.ConnectionCleanupException"] = exception;
         }
 
         try { await _operation.DisposeAsync().ConfigureAwait(false); }
