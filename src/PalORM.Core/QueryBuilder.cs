@@ -238,10 +238,10 @@ public struct QueryBuilder<T> where T : class, new()
         // 最严方言）应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
         // ITM-562: 判定按"存量 + 增量"累计——两次 40k 的 WhereIn 各自增量合规但总量越界，
         // 只查增量会静默通过、运行期 PG 协议层才报错。
-        if (_parameterCount + items.Count > 65535)
+        if (_parameterCount + items.Count > SqlLimits.MaxBindParameters)
             throw new ArgumentException(
                 $"{callerName} received {items.Count} values on a builder holding {_parameterCount} parameters; " +
-                "the total exceeds the 65535 bind-parameter limit (PostgreSQL protocol max). " +
+                $"the total exceeds the {SqlLimits.MaxBindParameters} bind-parameter limit (PostgreSQL protocol max). " +
                 "Use a temp table join or split the query into batches.", nameof(values));
 
         string operatorName = negated ? " NOT IN (" : " IN (";
@@ -266,7 +266,7 @@ public struct QueryBuilder<T> where T : class, new()
     private void AppendInBatches<TValue>(ref ValueStringBuilder sb, IReadOnlyList<TValue> items,
         List<DbParameter> parameters, string column, string operatorName, string batchSeparator)
     {
-        const int maxBatch = 500;
+        const int maxBatch = SqlLimits.InClauseBatchSize;
         for (int start = 0; start < items.Count; start += maxBatch)
         {
             int end = Math.Min(start + maxBatch, items.Count);
@@ -1067,7 +1067,8 @@ public struct QueryBuilder<T> where T : class, new()
                 case SqlDialect.MySql:
                     sb.Append("LIMIT ");
                     sb.Append(_skip!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    sb.Append(", 18446744073709551615");
+                    sb.Append(", ");
+                    sb.Append(SqlLimits.MySqlOffsetOnlyLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     break;
                 case SqlDialect.Sqlite:
                     sb.Append("LIMIT -1 OFFSET ");

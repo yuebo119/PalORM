@@ -11,6 +11,21 @@ namespace PalORM;
 /// 是独立程序集，需跨程序集访问。仍是 PalORM 内部 API（不写入公共文档/不保证兼容）。</para></summary>
 public static class BulkOperationFramework
 {
+    /// <summary>批量写入共用的插入元数据前置守卫——审计 2026-09-19 PROV-010：四处同型守卫
+    /// （PG 入口 / MySQL 入口 / MySQL ExecuteBulkCopyAsync / Core MultiValueBulkInsert）收敛为
+    /// 单一实现点，消除复制粘贴漂移（MySQL 同文件双份守卫是漂移实证）。
+    /// ITM-637 口径：守卫先于空列表短路——未注册类型与空/非空列表一致抛。</summary>
+    /// <returns>已验证的写入元数据与表名（InsertColumns 非空）。</returns>
+    public static (CrudMetadata Metadata, string TableName) EnsureInsertMetadata(Type entityType)
+    {
+        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(entityType, out CrudMetadata metadata)
+            || !PalORM_Runtime.TableNames.TryGetValue(entityType, out string? tableName)
+            || metadata.InsertColumns.Count == 0)
+            throw new InvalidOperationException(
+                $"Type '{entityType.Name}' has no generated insert metadata.");
+        return (metadata, tableName);
+    }
+
     /// <summary>探测 binder 生成的参数数量与列数一致——不一致即抛 InvalidOperationException。
     /// 探测命令独立释放，cleanup 异常挂 Data 不替换原始失败。</summary>
     /// <param name="conn">用于创建 probe 命令的连接。</param>

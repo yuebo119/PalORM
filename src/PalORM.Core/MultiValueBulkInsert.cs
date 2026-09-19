@@ -39,12 +39,8 @@ public static class MultiValueBulkInsert
         Func<string, string> quoteIdentifier = ctx.QuoteIdentifier;
         int commandTimeoutSeconds = ctx.CommandTimeoutSeconds;
         // ITM-637：元数据检查先于空列表短路——未注册类型 + 空列表与 + 非空列表应一致抛
-        // （原顺序下空列表静默返回 0，同一非法输入两种结果）。
-        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
-            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName)
-            || metadata.InsertColumns.Count == 0)
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated insert metadata.");
+        //（PROV-010：守卫收敛至 BulkOperationFramework.EnsureInsertMetadata 单一实现点）
+        (CrudMetadata metadata, string tableName) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
         if (entities.Count == 0) return 0;
 
         // v4.1：BindInsertToBatch 直绑--binder 支持 paramOffset，消除 rowCommand scratch
