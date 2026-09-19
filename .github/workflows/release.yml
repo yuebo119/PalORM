@@ -21,10 +21,21 @@ env:
     DOTNET_NOLOGO: true
 
 jobs:
+    # 独立审计 M0-1：发布前跑完整 PR 验证（security/gates/4×AOT/包契约）——此前 release
+    # 只 build+test+pack，AOT 与密钥扫描只在 PR 流水线存在，NuGet 用户拿到的是从未在
+    # 发布路径上被证明可 Native AOT 编译运行的包。与 ci.yml 调用同一 verify.yml（单一真源）。
+    verify:
+        name: Full PR verification before publish
+        uses: ./.github/workflows/verify.yml
+
     publish:
         name: Build + Test + Pack + Push
+        needs: verify # 发布即证据：不经验证链不推送
         runs-on: ubuntu-latest
         timeout-minutes: 30
+        # M1-2：发布审批门——需在 GitHub Settings → Environments 配置 production 的
+        # required reviewers（仓库内不可声明审批人，这是仓库侧的接入点）。
+        environment: production
         permissions:
             contents: write # 用于创建 GitHub Release
         services:
@@ -106,6 +117,20 @@ jobs:
               run: |
                   dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --no-restore
 
+            - name: Verify CHANGELOG entry exists (before pack)
+              # M1-3：唯一有真断言的发布校验前置到 pack/push 之前（原"Verify Release
+              # Accuracy"位于 push 之后——其数字回显经 $(...) 捕获时 grep 空匹配 echo 恒
+              # exit 0，结构上不可能让发布变红，还把三套测试重跑了一遍；数字口径由
+              # verify.yml 的测试数地板断言（M0-3）接管）。
+              run: |
+                  VERSION="${{ steps.ver.outputs.version }}"
+                  if grep -q "\[$VERSION\]" CHANGELOG.md; then
+                      echo "✓ CHANGELOG 含 [$VERSION] 条目"
+                  else
+                      echo "::error::CHANGELOG 缺少 [$VERSION] 条目——禁止发布"
+                      exit 1
+                  fi
+
             - name: Pack all src projects
               run: |
                   VERSION="${{ steps.ver.outputs.version }}"
@@ -128,29 +153,16 @@ jobs:
                   ls -la artifacts/packages/
 
             - name: Push to NuGet.org
+              # M1-2：密钥经 env 注入而非命令行内联——run: 内联会进入 shell 进程参数表
+              # （进程枚举/崩溃回显可读）。完整 OIDC（trusted publishing，免静态 key）
+              # 需在 NuGet.org 侧配置后切换 dotnet nuget push 的 --api-key 省略形态。
+              env:
+                  NUGET_KEY: ${{ secrets.NUGET_API_KEY }}
               run: >-
                   dotnet nuget push "artifacts/packages/*.nupkg"
                   --source https://api.nuget.org/v3/index.json
-                  --api-key ${{ secrets.NUGET_API_KEY }}
+                  --api-key "$NUGET_KEY"
                   --skip-duplicate
-
-            - name: Verify Release Accuracy
-              run: |
-                  # §三 数字准确性检查（docs/发布变更日志规范.md）
-                  echo "═══ 数字准确性验证 ═══"
-                  echo "版本号: $(grep '<Version>' Directory.Build.props | grep -oP '\d+\.\d+\.\d+')"
-                  echo "Core 测试: $(dotnet run --project test/PalORM.Core.Tests -c Release --no-build --no-restore 2>&1 | grep -oP '成功: \K\d+')"
-                  echo "SourceGen 测试: $(dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build --no-restore 2>&1 | grep -oP '成功: \K\d+')"
-                  echo "Integration 测试: $(dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --no-restore 2>&1 | grep -oP '成功: \K\d+')"
-                  echo "快照基线: $(ls test/PalORM.SourceGen.Tests/Snapshots/*.snap | wc -l)"
-                  echo "═══ CHANGELOG 与版本号一致性 ═══"
-                  VERSION="${GITHUB_REF_NAME#v}"
-                  if grep -q "\[$VERSION\]" CHANGELOG.md; then
-                      echo "✓ CHANGELOG 含 [$VERSION] 条目"
-                  else
-                      echo "✗ CHANGELOG 缺少 [$VERSION] 条目——禁止发布"
-                      exit 1
-                  fi
 
             - name: Extract Release Notes
               if: github.event_name == 'push'
