@@ -114,6 +114,20 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚡ 性能（T5b：子句持久化链表，彻底删除子句 COW）
+
+- **`QueryBuilder` 子句存储由 List+COW 改为持久化链表（cons list）**：每次
+  `AddClause` 只分配一个不可变节点（48 B：前驱引用 + 子句 + 计数），零复制。
+  struct 副本共享链引用——链不可变，副本隔离天然成立；这正是原 COW 存在的原因
+  （QUERY-001：List 原地修改会泄漏到副本），链结构以更小的常量分配满足同一契约。
+  只读遍历经 `MaterializeClauses()` 惰性物化为数组（每执行一次、此后复用；
+  子句数为缓存有效期哨兵——链增长后长度必然不符而重建）。
+  <br>实测（S1 单行查询，直通配置，5 万次/点，S3 双向确认）：
+  `ToListAsync` 单行 **2,528 → 2,456（−72 B）**，`FirstOrDefault` **2,752 → 2,352（−14.5%）**；
+  GetAsync/Insert/Update 不变 ✓。
+  <br>**构建器路径单行查询本轮累计：2,976 → 2,456 B（−17.5%）**。
+  CloneForExecution 语义不变（参数深拷贝保留），链重建仅为挂载拷贝参数。
+
 ### ⚡ 性能（T5c：BuildSql 输出缓存 + 据此修复跨方言缓存污染缺陷）
 
 - **BuildSql 输出按形状缓存**：BuildSql 输出仅由「子句 Sql 文本序列 + 方言 + SplitQuery +

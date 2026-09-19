@@ -42,7 +42,12 @@ public struct QueryBuilder<T> where T : class, new()
     /// builder（门禁禁止与飞行查询并发变更，快照语义见 WithRetry 文档）。</summary>
     internal readonly ResilienceExecutor _resilience;
     internal TimeSpan _commandTimeout;
-    internal List<QueryClause> _clauses;
+    // T5b：持久化链表（cons list）替代 List——AddClause 每次只分配一个节点、零复制。
+    // struct 副本共享链引用且链不可变，副本隔离天然成立（List 版必须 COW 整表复制）。
+    // 只读遍历经 MaterializeClauses() 取倒排数组（惰性物化、按 builder 缓存，
+    // 子句数作有效期哨兵：链增长后缓存必然长度不符而重建）。
+    internal ClauseNode? _clauseChain;
+    internal QueryClause[]? _materializedClauses;
     // T5a：平铺参数列表已删除——QueryClause 自带本子句参数（Parameters），扁平视图
     // 只在执行期按 Kind 过滤时组装（GetParametersForKinds 本就从子句读取）。
     // 此处仅保留计数，供参数全局编号（@pN 跨子句递增）与 WhereIn 65535 守卫使用。
@@ -91,7 +96,8 @@ public struct QueryBuilder<T> where T : class, new()
         // v5.6：初始容量 0——AddClause 的写时复制按 Count+4 预留（见 AddClause 注释），
         // 首次写入即拿到足够余量，故预先分配的空数组只会成为首个子句时被丢弃的垃圾
         // （原 (4)/(8) 在每次查询上白分配 4 个 QueryClause 槽与 8 个参数槽）。
-        _clauses = new List<QueryClause>();
+        _clauseChain = null;
+        _materializedClauses = null;
         _parameterCount = 0;
         _selectColumns = null;
         _take = null;
@@ -603,8 +609,10 @@ public struct QueryBuilder<T> where T : class, new()
         // v5.6：ctor 现以容量 0 起步（见 ctor 注释）。本方法是唯一绕过 AddClause 直接
         // 写 _clauses/子句参数的路径，故在此按源 Count 一次性预分配——否则以下循环
         // 会走 List 的 0→4→8→16 逐级扩容。余量不与源 builder 共享（新列表）。
-        clone._clauses = new List<QueryClause>(_clauses.Count);
-        foreach (QueryClause clause in _clauses)
+        // 深拷贝参数（克隆体的参数对象必须与源隔离），但链结构本身不可变可安全共享——
+        // 重建链仅为挂载拷贝后的参数列表。克隆的物化缓存置空（参数实例已不同）。
+        ClauseNode? chain = null;
+        foreach (QueryClause clause in MaterializeClauses())
         {
             var parameters = new List<DbParameter>(clause.Parameters.Count);
             foreach (DbParameter parameter in clause.Parameters)
@@ -613,8 +621,10 @@ public struct QueryBuilder<T> where T : class, new()
                 parameters.Add(copy);
             }
             clone._parameterCount += parameters.Count;
-            clone._clauses.Add(new QueryClause(clause.Kind, clause.Sql, parameters));
+            chain = new ClauseNode(chain, new QueryClause(clause.Kind, clause.Sql, parameters));
         }
+        clone._clauseChain = chain;
+        clone._materializedClauses = null;
         return clone;
     }
 
@@ -734,7 +744,7 @@ public struct QueryBuilder<T> where T : class, new()
         int shapeHash = System.HashCode.Combine(_shapeHash, _dialect);
         if (_selectColumns is null)
         {
-            string? cachedSql = SqlShapeCache.FindMatch(shapeHash, _clauses, shapeFields);
+            string? cachedSql = SqlShapeCache.FindMatch(shapeHash, MaterializeClauses(), shapeFields);
             if (cachedSql is not null)
                 return cachedSql;
         }
@@ -764,7 +774,7 @@ public struct QueryBuilder<T> where T : class, new()
             string built = sb.ToString();
             if (_selectColumns is null)
             {
-                SqlShapeCache.Add(shapeHash, _clauses, shapeFields, built);
+                SqlShapeCache.Add(shapeHash, MaterializeClauses(), shapeFields, built);
             }
             return built;
         }
@@ -848,7 +858,7 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>追加窗口函数列——出现在 SELECT 列表后段（与普通列以逗号分隔）。</summary>
     private void AppendWindowClauses(ref ValueStringBuilder sb)
     {
-        foreach (QueryClause window in _clauses)
+        foreach (QueryClause window in MaterializeClauses())
         {
             if (window.Kind != QueryClauseKind.Window) continue;
             sb.Append(", ");
@@ -901,22 +911,33 @@ public struct QueryBuilder<T> where T : class, new()
     private void AddClause(QueryClauseKind kind, string sql,
         IReadOnlyList<DbParameter>? parameters = null)
     {
-        // 无条件写时复制：struct 副本共享列表引用，任何一次性"已复制"标志都会随副本
-        // 一起被拷贝而失效（QUERY-001 场景 B/C）。每次写入先复制，保证副本间完全隔离。
-        // v5.6：复制按 Count+4 预留容量。原实现取精确容量（Count），复制后紧接着的 Add
-        // 必然再触发一次扩容，且下次复制又要把更大的一批元素整体搬一遍；预留 4 槽后
-        // 该子句链上的总分配降为约一半（16 子句实测 7624B→4365B）。容量余量不与任何
-        // 副本共享（复制出来的是新数组），写时复制语义不变。
-        var clauses = new List<QueryClause>(_clauses.Count + 4);
-        clauses.AddRange(_clauses);
-        _clauses = clauses;
+        // T5b：链节点替代 List+COW——struct 副本共享的链不可变，副本隔离天然成立
+        // （原 COW 注释：QUERY-001 副本隔离需求；v5.6 的 Count+4 预留容量优化随 COW 一并废弃）。
         IReadOnlyList<DbParameter> ownedParameters = parameters ?? Array.Empty<DbParameter>();
-        _clauses.Add(new QueryClause(kind, sql, ownedParameters));
+        _clauseChain = new ClauseNode(_clauseChain, new QueryClause(kind, sql, ownedParameters));
+        _materializedClauses = null;
         // v4.6：同步设置位掩码
         _clauseBitmask |= 1 << (int)kind;
         _parameterCount += ownedParameters.Count;
         // T5c：子句 Sql 文本进形状哈希（值哈希——输出只依赖文本）
         _shapeHash = System.HashCode.Combine(_shapeHash, sql);
+    }
+
+    /// <summary>把持久化链倒排物化为数组（调用顺序）——惰性缓存，子句数为有效期哨兵：
+    /// 链增长后缓存长度必然不符而重建；struct 副本共享缓存数组，但链相同时内容恒同。</summary>
+    internal QueryClause[] MaterializeClauses()
+    {
+        if (_materializedClauses is not null)
+            return _materializedClauses;
+        var array = new QueryClause[_clauseChain?.Count ?? 0];
+        var node = _clauseChain;
+        for (int i = array.Length - 1; i >= 0; i--)
+        {
+            array[i] = node!.Clause;
+            node = node.Previous;
+        }
+        _materializedClauses = array;
+        return array;
     }
 
     // v4.6：位掩码 O(1) 判断，消除 List.Exists 的 O(n) 扫描 + Predicate 委托分配
@@ -929,7 +950,7 @@ public struct QueryBuilder<T> where T : class, new()
     internal int CountUserSubstantiveClauses()
     {
         int count = 0;
-        foreach (QueryClause clause in _clauses)
+        foreach (QueryClause clause in MaterializeClauses())
         {
             if (clause.Kind is QueryClauseKind.Comment or QueryClauseKind.DefaultFilter) continue;
             count++;
@@ -951,7 +972,7 @@ public struct QueryBuilder<T> where T : class, new()
     {
         // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
         var parameters = new List<DbParameter>(_parameterCount);
-        foreach (QueryClause clause in _clauses)
+        foreach (QueryClause clause in MaterializeClauses())
         {
             if (Array.IndexOf(kinds, clause.Kind) < 0) continue;
             parameters.AddRange(clause.Parameters);
@@ -962,7 +983,7 @@ public struct QueryBuilder<T> where T : class, new()
     private void AppendComments(ref ValueStringBuilder builder)
     {
         // BuildSql 热路径：手写循环替代 LINQ Where（每次查询省委托+迭代器分配）
-        foreach (QueryClause clause in _clauses)
+        foreach (QueryClause clause in MaterializeClauses())
         {
             if (clause.Kind != QueryClauseKind.Comment) continue;
             builder.Append(clause.Sql);
@@ -973,7 +994,7 @@ public struct QueryBuilder<T> where T : class, new()
     private void AppendCtes(ref ValueStringBuilder builder)
     {
         bool first = true;
-        foreach (QueryClause clause in _clauses)
+        foreach (QueryClause clause in MaterializeClauses())
         {
             if (clause.Kind != QueryClauseKind.CommonTableExpression) continue;
             builder.Append(first ? "WITH " : ", ");
@@ -1012,7 +1033,7 @@ public struct QueryBuilder<T> where T : class, new()
         ref ValueStringBuilder builder, QueryClauseKind kind, string? separator)
     {
         bool first = true;
-        foreach (QueryClause clause in _clauses)
+        foreach (QueryClause clause in MaterializeClauses())
         {
             if (clause.Kind != kind) continue;
             if (!first && separator is not null) builder.Append(separator);
@@ -1024,7 +1045,7 @@ public struct QueryBuilder<T> where T : class, new()
 
     private void AppendClauses(ref ValueStringBuilder builder, QueryClauseKind kind)
     {
-        foreach (QueryClause clause in _clauses)
+        foreach (QueryClause clause in MaterializeClauses())
         {
             if (clause.Kind != kind) continue;
             builder.Append(clause.Sql);
