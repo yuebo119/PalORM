@@ -20,24 +20,39 @@ public sealed class SqlShapeCacheGrowthTests
             new DbOptions { ConnectionString = "Data Source=:memory:" });
 
     [Test]
-    public async Task DynamicSkipValues_OffsetShapesNeverCached()
+    public async Task DynamicSkipValues_ShareSingleCacheEntry()
     {
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
-        // 动态 OFFSET 分页：页码递增 → Skip 值无界。行为断言：循环内任意一页的 SQL
-        // 不出现在缓存（OFFSET 形状不入缓存是 BuildSql 全路径行为）。
-        // 注意不能断言"缓存无 OFFSET 文本"——Take 有值 Skip 无值时输出 `OFFSET 0` 字面量，
-        // 其入缓存合法。
-        // PALORM005 豁免：ToSql() 是纯构建不打数据库——本测试钉的是缓存容量而非查询形态
+        // SHAPE-010 参数化根解的收益证明：10,000 个不同 Skip 值的 SQL 文本恒同（值经 @pN
+        // 绑定），缓存仅 1 个该形态条目——动态 OFFSET 分页不再产生形状膨胀。
+        // PALORM005 豁免：ToSql() 是纯构建不打数据库
 #pragma warning disable PALORM005
         for (int i = 0; i < 10_000; i++)
             _ = session.From<ShapeProbeEntity>().OrderBy(x => x.Id).Skip(i).Take(10).ToSql();
 
-        // 探针：本循环独有形状（表名全库唯一 + OFFSET 值独有），对并行测试噪声免疫
-        string page9999 = session.From<ShapeProbeEntity>().OrderBy(x => x.Id).Skip(9_999).Take(10).ToSql();
+        // 探针：同形态任一页的 SQL（占位符文本全库唯一——表名唯一），断言仅 1 条缓存条目
+        string pageAny = session.From<ShapeProbeEntity>().OrderBy(x => x.Id).Skip(9_999).Take(10).ToSql();
 #pragma warning restore PALORM005
 
+        await Assert.That(pageAny.Contains("@p", StringComparison.Ordinal)).IsTrue();
         await Assert.That(SqlShapeCache.Entries.Count(
-            e => e.FullSql == page9999)).IsEqualTo(0);
+            e => e.FullSql == pageAny)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task LimitValues_BindAsParameters_InDryRunSnapshot()
+    {
+        // 参数化行为断言：值必须进参数快照（丢值/错位即刻暴露）。
+        // SQLite 方言文本形态：LIMIT @pN OFFSET @pM（take 先 skip 后），无子句参数 → 恰 2 个
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        DryRunResult dry = session.From<ShapeProbeEntity>()
+            .OrderBy(x => x.Id).Skip(20).Take(10).AsDryRun();
+
+        await Assert.That(dry.Sql).Contains("LIMIT @p");
+        await Assert.That(dry.Sql).Contains("OFFSET @p");
+        await Assert.That(dry.Parameters.Count).IsEqualTo(2);
+        await Assert.That((int)dry.Parameters[0].Value!).IsEqualTo(10);
+        await Assert.That((int)dry.Parameters[1].Value!).IsEqualTo(20);
     }
 
     [Test]

@@ -6,17 +6,17 @@ namespace PalORM;
 
 /// <summary>BuildSql 输出的形状缓存（T5c）——同一形状的查询复用同一 SQL 文本实例。
 /// <para><b>形状定义</b>：子句 Sql 文本序列（值相等）+ <see cref="SqlShapeCache.ShapeFields"/>
-/// （SplitQuery 改变 JOIN 拼接；Take/Skip 的值直接内联进 LIMIT/OFFSET 文本；表名/CTE 名决定 FROM）。
-/// 参数<b>不</b>在键内——编译期参数化保证值只进 @pN 占位，同形状 ⇒ 同 SQL 文本，
-/// 参数值由调用方逐次绑定。</para>
+/// （SplitQuery 改变 JOIN 拼接；LIMIT/OFFSET 的值经参数化绑定 @pN 占位——
+/// <b>值不进形状键</b>，仅"有无 Take/Skip"的形态进键；表名/CTE 名决定 FROM）。
+/// 参数不在键内——同形状 ⇒ 同 SQL 文本，参数值由调用方逐次绑定。</para>
 /// <para><b>正确性</b>：哈希只用于选桶；命中后逐条核对子句序列（值相等）与字段包
 /// （记录结构体值相等），碰撞只会落到"未命中重建"，不会产出错误 SQL。
 /// 跨会话共享（形状与具体会话无关）。</para>
 /// <para><b>容量纪律（审计 2026-09-19 A1 整改）</b>：总量上限 <see cref="MaxEntries"/>
 /// 条（对齐 BoundedQueryCache 的 1024 纪律），满则拒写——新形状逐次重建（回到缓存前
-/// 的行为），既有条目继续命中。带 OFFSET（Skip 有值）的形状由调用方排除在缓存外：
-/// OFFSET 值随页码无界，入缓存必然绕过任何容量上限；LIMIT 参数化（值改绑 @pN、形状
-/// 回归有限集）是根解，待评审动基线后可移除该排除。</para></summary>
+/// 的行为），既有条目继续命中。LIMIT/OFFSET 参数化（SHAPE-010 根解）落地后，
+/// 动态分页的 OFFSET 值回归有限形态集（HasTake/HasSkip 布尔），残余无界源
+/// （动态 Tag/Raw 值）由上限兜底。</para></summary>
 internal static class SqlShapeCache
 {
     /// <summary>总量上限——满则拒写（与 BoundedQueryCache 同纪律）。竞态窗口下可略超（并发
@@ -30,8 +30,17 @@ internal static class SqlShapeCache
     /// <summary>形状中"子句序列之外"的字段——全部参与键与核对。
     /// <para><b>Dialect 必须在内</b>：SELECT 列清单的引用符随方言不同（PG 双引号 / MySQL 反引号），
     /// 而用户手写的 WHERE 子句文本跨方言可能完全相同（无引用符差异）——缺方言会让
-    /// PG 会话的缓存 SQL 发给 MySQL（本缺陷由 PessimisticLockTests 跨方言同形状用例实测暴露）。</para></summary>
-    internal readonly record struct ShapeFields(SqlDialect Dialect, bool SplitQuery, int? Take, int? Skip, string TableName, string? CteName);
+    /// PG 会话的缓存 SQL 发给 MySQL（本缺陷由 PessimisticLockTests 跨方言同形状用例实测暴露）。</para>
+    /// <para><b>HasTake/HasSkip 是形态而非值</b>（SHAPE-010 参数化根解）：LIMIT/OFFSET 值经
+    /// @pN 占位绑定，值不影响 SQL 文本；但 take-only / skip-only / take+skip 产出**不同文本形态**
+    /// （如 SQLite skip-only 是 <c>LIMIT -1 OFFSET @pN</c>），缺形态标记会让不同形态互相复用条目。</para></summary>
+    internal readonly record struct ShapeFields(
+        SqlDialect Dialect,
+        bool SplitQuery,
+        bool HasTake,
+        bool HasSkip,
+        string TableName,
+        string? CteName);
 
     internal sealed record SqlShapeEntry(string[] SqlSequence, ShapeFields Fields, string FullSql);
 
