@@ -33,7 +33,7 @@
 | M1-3 | P2 | 发布验证前置（push 之前），去重复跑测 | 已完成 | CHANGELOG 校验前置到 pack 前；删除 push 后"Verify Release Accuracy"（echo 恒 0+三套件重跑）——数字口径由 M0-3 地板接管。注：verify 与 publish job 各跑一遍测试是 workflow_call 结构的自然成本（独立 runner 不共享工作区），发布 job 自包含可审计 |
 | M1-5 | P2 | S2077 恢复 error + 逐调用点 #pragma 报备 | 已完成 | editorconfig S2077 none→error；7 处合法点报备（Crud 软删/GetByKey、Transactions savepoint×2、MySql SHOW COLUMNS、Sqlite PRAGMA、Scaffold PRAGMA）各带理由 |
 | M1-4 | P2 | 发布 v5.6/v5.7 + README 对齐已发布物 | 阻塞：待发布节奏裁决（开放问题 1） | |
-| M2-2 | P2 | 批量 UPDATE 参数化分支真库端到端（PG+MySQL 各 ≥3，逐行逐列断言） | 首跑即红——抓到真缺陷，修复跟进 | 真库健康期首跑即暴露独立审计 T3 预言的缺陷：PG 42601（参数版语法错；同形态字面量版 ExecuteAsync 成功、CommandText dump 正常→根因在参数绑定层）、MySQL 表名引号错。定位中断于远端库连接饱和（HealthCheck 都超时）。红灯测试保留为缺陷证据（注释含诊断结论）；数据库恢复后继续根因 |
+| M2-2 | P2 | 批量 UPDATE 参数化分支真库端到端（PG+MySQL 各 ≥3，逐行逐列断言） | 测试已立，根因排查矩阵完成大半 | 稳定复现：多行（4 实体）PG 42601/MySQL 语法错；**单行经 PalORM 真库成功**。Npgsql 原生对照已排除：SQL 文本/参数名与数/绑定方式/事务/连接调优（MaxAutoPrepare 复刻）全部成功。剩余两个假说待分离：①NpgsqlParameter(name, DBNull) 构造器路径 ②auto-prepare 跨执行计数（PalORM 测试语句在会话内重复执行达 MinUsages=2 触发 PREPARE 失败，原生对照语句唯一永不触发——与"单行成功多行失败"的相容解释待构造：单行语句与多行语句文本不同、各自计数，多行语句恰因测试重复跑达阈值）。下一轮：原生复刻"同语句执行两次"即可裁决假说② |
 | M3-8 | P3 | 文档一致性小项（release-body.md 删除 / ADR-C 编号 / 依赖表） | 已完成 | release-body.md 已删（release.yml 的 full-release-body.md 是运行时生成物无关联）；ADR-C C3→C2 编号勘误；CONTRIBUTING latest-all 陈述对齐分层现实（DOC2） |
 | M3-4 | P3 | 解耦 SqlShapeCacheGrowthTests 顺序依赖（独立隔离计数器） | 已完成 | Tag 填满测试 finally 自清（不外溢给后跑者）；克隆测试 Clear 改防御性（注释更新）；"先清空"顺序耦合消除 |
 | M3-7 | P3 | 测试计数口径单一真源（声明执行口径 + 一处生成） | 待开始 | |

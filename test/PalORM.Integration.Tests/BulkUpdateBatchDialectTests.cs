@@ -11,12 +11,14 @@ namespace PalORM.Integration.Tests;
 /// 在 CI 中零执行覆盖"）；参数序错位是"静默写错行"型缺陷（每行 SET 值绑到相邻行的键），
 /// 字符串比较无法发现执行期错绑。本组用例在 PG/MySQL 真库上逐行逐列断言<b>最终值</b>。
 /// SQLite 按设计回退逐行路径（BatchUpdateParameterContractTests:9），不在此重复。
-/// <para><b>当前状态（2026-09-19 首跑即红——这是本测试的价值所在）</b>：真库健康期抓到
-/// 独立审计 T3 预言的真实缺陷——PG 报 42601 语法错（参数版；同形态字面量版经
-/// ExecuteAsync 真库成功，且 CommandText dump 显示 SQL 形态正常，指向参数绑定层）、
-/// MySQL 报表名引号错。已确认：SQL 生成正确、最小复现字面量版通过、真实 CommandText
-/// 正常——根因聚焦在参数化交互。定位中断于数据库环境故障（远端库连接饱和）。修复任务
-/// 在整改账本 M2-2 跟进；本红灯是缺陷存在的证据，不得跳过或删除。</para></summary>
+/// <para><b>当前状态（2026-09-19，根因排查矩阵见下——本红灯是缺陷存在的证据，不得跳过或删除）</b>：
+/// PG 42601（at "$1", POSITION 22）/ MySQL 语法错，稳定复现于<b>多行</b>（4 行）；
+/// <b>单行（1 实体）经 PalORM 真库成功</b>。已用 Npgsql 原生命令排除：SQL 文本（1/4 行
+/// 均 dump 且与原生成功版逐字同构）、参数名/数量（@p0-@p11）、绑定方式（DBNull 初值后写
+/// long/string）、事务（有/无均成功）、连接调优（MaxAutoPrepare=100 复刻亦成功）。
+/// 剩余未排除差异：NpgsqlParameter(name, DBNull) 构造器路径 + 会话级语句状态（auto-prepare
+/// 的跨执行计数假说：PalORM 语句在测试会话内重复出现触发 PREPARE，原生对照语句文本唯一
+/// 永不达 MinUsages=2——待下一轮实验分离）。修复任务在整改账本 M2-2 跟进。</para></summary>
 public sealed class BulkUpdateBatchDialectTests
 {
     private static DbOptions PgOpts => new()
