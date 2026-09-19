@@ -16,9 +16,10 @@ namespace PalORM.Integration.Tests;
 /// <b>单行（1 实体）经 PalORM 真库成功</b>。已用 Npgsql 原生命令排除：SQL 文本（1/4 行
 /// 均 dump 且与原生成功版逐字同构）、参数名/数量（@p0-@p11）、绑定方式（DBNull 初值后写
 /// long/string）、事务（有/无均成功）、连接调优（MaxAutoPrepare=100 复刻亦成功）。
-/// 剩余未排除差异：NpgsqlParameter(name, DBNull) 构造器路径 + 会话级语句状态（auto-prepare
-/// 的跨执行计数假说：PalORM 语句在测试会话内重复出现触发 PREPARE，原生对照语句文本唯一
-/// 永不达 MinUsages=2——待下一轮实验分离）。修复任务在整改账本 M2-2 跟进。</para></summary>
+/// 剩余未排除差异（七项原生对照全过后唯一收敛点）：<b>DataSession 连接生命周期层</b>——
+/// PostgreSqlProvider.CreateConnection 的完整连接串调优（NoResetOnClose/Enlist/缓冲区等，
+/// 原生仅复刻了 auto-prepare 两项）与 InitializeConnectionAsync 初始化钩子、会话复用状态。
+/// 下一轮实验：原生复刻完整连接构造+初始化序列。修复任务在整改账本 M2-2 跟进。</para></summary>
 public sealed class BulkUpdateBatchDialectTests
 {
     private static DbOptions PgOpts => new()
