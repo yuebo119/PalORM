@@ -10,6 +10,15 @@ public static class QueryBuilderExtensions
     /// <summary>结果列表的预分配容量上限（ITM-712）。Take/分页大小是查询结果上界而非预期行数，
     /// 无上限的预分配可被单个超大值放大为进程级 OOM；封顶后超出部分依赖 List 均摊 O(1) 扩容。</summary>
     private const int MaxPreallocatedCapacity = 4096;
+
+    /// <summary>实际缓存 key 组装（ADR-L 结构性隔离）：租户作用域非空时前缀化——
+    /// <c>__t:{tenantId}:{userKey}</c>（租户过滤查询）或 <c>__all__:{userKey}</c>（多租户会话的
+    /// IgnoreFilters / 非 TenantAware 实体，全量数据独立命名空间）；单租户会话（作用域 null）
+    /// key 原样。调用方仍按自己的 userKey 推理缓存，前缀是框架内部命名空间。</summary>
+    private static string EffectiveCacheKey<T>(in QueryBuilder<T> builder) where T : class, new()
+        => builder._cacheTenantScope is { } scope
+            ? $"{scope}:{builder._cacheKey}"
+            : builder._cacheKey!;
     /// <summary>执行查询并返回全部实体列表。
     /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
     /// 未命中则执行查询并将副本写入缓存。</para></summary>
@@ -19,7 +28,9 @@ public static class QueryBuilderExtensions
             builder._operationState.Enter();
         // 缓存命中返回列表副本——List 本身隔离，但元素是共享实体实例（浅拷贝，ITM-308）：
         // 调用方修改命中实体会污染缓存与其他调用方。契约声明见 WithCache 文档。
-        if (builder._cacheKey is not null && builder._queryCache.TryGet(builder._cacheKey, out List<T>? cached) && cached is not null)
+        // ADR-L：实际 key 经租户作用域前缀组装（跨租户命中结构性不可能）
+        if (builder._cacheKey is not null
+            && builder._queryCache.TryGet(EffectiveCacheKey(builder), out List<T>? cached) && cached is not null)
             return new List<T>(cached);
 
         return await ExecuteQueryAsync(
@@ -194,7 +205,9 @@ public static class QueryBuilderExtensions
             while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
             NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
             // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
-            if (builder._cacheKey is not null) builder._queryCache.Set(builder._cacheKey, new List<T>(list), builder._cacheTtl);
+            // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）
+            if (builder._cacheKey is not null)
+                builder._queryCache.Set(EffectiveCacheKey(builder), new List<T>(list), builder._cacheTtl);
             return list;
         }
 

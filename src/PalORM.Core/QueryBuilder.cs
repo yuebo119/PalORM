@@ -58,6 +58,11 @@ public struct QueryBuilder<T> where T : class, new()
     internal int? _skip;
     internal string? _cacheKey;
     internal TimeSpan? _cacheTtl;
+    /// <summary>缓存租户作用域（ADR-L 结构性隔离，From&lt;T&gt;() 时与租户过滤注入同点冻结）：
+    /// 租户过滤会话 = <c>__t:{tenantId}</c>；多租户会话 IgnoreFilters/非 TenantAware 实体（全量
+    /// 数据）= <c>__all__</c>；单租户会话 = null（key 原样）。执行管线据此组装实际缓存 key，
+    /// 跨租户命中结构性不可能——与 DefaultFilter 子句同时点冻结保证 key 作用域与查询过滤永不漂移。</summary>
+    internal string? _cacheTenantScope;
     internal string? _cteName;
     internal bool _prepared;
     internal bool _tracing;
@@ -461,11 +466,13 @@ public struct QueryBuilder<T> where T : class, new()
 
     /// <summary>结果缓存。<b>浅拷贝契约</b>：命中返回新 List，但元素为共享实体实例——
     /// 命中实体应视为只读；需要修改时先自行深拷贝，否则会污染缓存与其他调用方（ITM-308）。
-    /// <para><b>ITM-736(r20) 多租户警告</b>：缓存键<b>完全由调用方提供</b>，不含租户/软删维度，
-    /// 且未注入 <c>DbOptions.QueryCache</c> 时各会话共享进程级默认实例——同一 key 会在不同
-    /// 租户/过滤上下文中复用同一份数据。多租户或 <c>IgnoreFilters()</c> 场景必须把租户
-    /// 标识编入 key（如 <c>$"products:{tenantId}"</c>），或经 <c>DbOptions.QueryCache</c>
-    /// 为每租户注入独立缓存（ADR-C：隔离责任在调用方 key 约定）。</para></summary>
+    /// <para><b>多租户结构性隔离（ADR-L）</b>：多租户会话（<see cref="DataSession{TProvider}.WithTenant"/>）
+    /// 下实际缓存 key 由框架自动前缀化——租户过滤查询用 <c>__t:{tenantId}:</c> 前缀，
+    /// <c>IgnoreFilters()</c> 的全量查询用 <c>__all__:</c> 独立命名空间，跨租户命中结构性不可能；
+    /// 调用方仍按传入的 <paramref name="cacheKey"/> 推理缓存（前缀是框架内部命名空间，缓存
+    /// 诊断工具中可见）。单租户会话 key 原样。进程级默认实例（未注入
+    /// <c>DbOptions.QueryCache</c>）仍为全局共享——需要按租户控制容量/TTL 时，为每租户注入
+    /// 独立缓存实例（推荐路径，容量语义按租户独立）。</para></summary>
     public QueryBuilder<T> WithCache(string cacheKey, TimeSpan? ttl = null)
     {
         _cacheKey = cacheKey;
@@ -585,6 +592,7 @@ public struct QueryBuilder<T> where T : class, new()
             _take = _take,
             _skip = _skip,
             _cacheKey = _cacheKey,
+            _cacheTenantScope = _cacheTenantScope,  // ADR-L：克隆体执行路径消费同一作用域
             _cacheTtl = _cacheTtl,
             _cteName = _cteName,
             _prepared = _prepared,
