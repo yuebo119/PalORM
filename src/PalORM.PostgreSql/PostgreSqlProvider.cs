@@ -25,7 +25,10 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 用户场景各异，应由用户按需显式设置。</para>
     /// <para><b>判断策略说明</b>：用"属性当前值 == ADO.NET 默认值"作为"用户未显式设置"的判据。
     /// 该判据在罕见场景（用户显式设置成默认值）下会把用户意图当作默认覆盖，但调优参数
-    /// 主动设成低性能默认值的实际场景极少，收益（透明调优）大于风险。</para></summary>
+    /// 主动设成低性能默认值的实际场景极少，收益（透明调优）大于风险。
+    /// <b>布尔旋钮边界（审计 PROV-011）</b>：对 NoResetOnClose/Enlist 这类布尔参数，被覆盖的
+    /// 后果不是性能而是正确性（会话状态泄漏 ITM-652 / 环境事务脱离 ITM-643），上述
+    /// "收益大于风险"论证不适用于它们——需要这些语义的用户必须绕开本工厂自建连接。</para></summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);

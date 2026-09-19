@@ -24,7 +24,12 @@ public sealed class MySqlProvider : IDbProvider
     /// AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）；
     /// ServerRedirectionMode: Disabled→Preferred（Azure MySQL 直连后端）。</para>
     /// <para><b>判断策略</b>：用"属性当前值 == ADO.NET 默认值"作为"用户未显式设置"的判据
-    /// （同 PostgreSqlProvider，详见其注释）。</para></summary>
+    /// （同 PostgreSqlProvider，详见其注释）。
+    /// <b>布尔旋钮边界（审计 PROV-011 文档化）</b>：该判据对布尔参数意味着显式设置与
+    /// 未设置完全不可区分——AutoEnlist/ConnectionReset 的显式 true（环境事务/会话状态
+    /// 隔离需求，ITM-643）会被本调优静默改写为 false；AllowLoadLocalInfile 的显式 false
+    /// （安全加固）会被改写为 true（ADR-G 三层兜底裁决在案）。需要这些语义的用户必须
+    /// 绕开本工厂自建连接。</para></summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
