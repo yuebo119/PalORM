@@ -13,11 +13,20 @@
 git clone <repo-url>
 cd Pal.ORM
 
+# 可选但推荐：BenchmarkDotNet 本地 fork（仅基准项目需要）。
+# bench/PalORM.Benchmarks 以 ProjectReference 引用 bench/BenchmarkDotNet（gitignore 排除，
+# 不入仓库——上游 master 已含 net11 支持）。不跑基准/性能门禁可跳过本步，
+# 但跳过时请用下方 PalORM.dev.slnf 构建（见"构建"两路径说明）。
+git clone --depth 1 https://github.com/dotnet/BenchmarkDotNet.git bench/BenchmarkDotNet
+
 # 安装本地提交防线（敏感信息拦截 + stub 门禁）——一次性，必须执行
 git config core.hooksPath .githooks
 
-# 构建全部项目
+# 构建——两条路径任选其一：
+# ① 全量（含基准项目，需先克隆 BDN fork，见上）：
 dotnet build PalORM.slnx -c Debug
+# ② 核心开发（CI 同款，不含 bench，全新克隆零额外依赖即可成功）：
+dotnet build PalORM.ci.slnf -c Debug
 
 # 运行 SQLite 测试（无需外部数据库）
 dotnet run --project test/PalORM.Core.Tests -c Debug
@@ -41,7 +50,11 @@ cp .env.test.example .env.test
 
 ### 编译纪律（强制）
 - `TreatWarningsAsErrors=true`——构建零警告零错误
-- `AnalysisLevel=latest-all`——所有分析器规则启用
+- 分析器分层（独立审计 DOC2 修正，对齐各 csproj 实际值）：Directory.Build.props 设
+  `latest-all`；**PalORM.Core 当前放宽为 `latest-minimum`**（Phase 1 的历史 TODO，
+  拉回 `latest-all` 分批节奏见整改账本 M1-6）；**PalORM.SourceGen 因 netstandard2.0 +
+  Roslyn 分析器宿主不兼容 SonarAnalyzer 而整体 `none`**（csproj 注释有据）——其余项目
+  继承 `latest-all`
 - `GenerateDocumentationFile=true`——src/ 公共 API 必须有 XML 注释
 - SonarAnalyzer.CSharp P0 + P1 规则为 error
 
