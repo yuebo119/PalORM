@@ -184,6 +184,21 @@ jobs:
             - name: Run stub gate
               run: bash scripts/stub-check.sh
 
+            # 独立审计 M0-4：依赖 CVE 信号（此前完全空白——4 个运行时第三方包 +
+            # Roslyn 的新 CVE 只能靠人工升级轮发现，GHSA-473q 类事件已实际发生过）。
+            # NuGetAudit 在还原期报 NU1903/NU1904，但中央包管理 + 显式钉版本下
+            # 传递面仍需 --include-transitive 覆盖；Critical/High 即失败。
+            - name: Vulnerable dependency scan (transitive included)
+              run: |
+                  set -euo pipefail
+                  ISSUES=$(dotnet list PalORM.ci.slnf package --vulnerable --include-transitive 2>&1 || true)
+                  echo "$ISSUES"
+                  CRITICAL_HIGH=$(echo "$ISSUES" | grep -cEi 'Severity:\s*(Critical|High)' || true)
+                  if [ "$CRITICAL_HIGH" -gt 0 ]; then
+                    echo "::error::发现 $CRITICAL_HIGH 个 Critical/High 级漏洞依赖——修复后再合并"
+                    exit 1
+                  fi
+
             - name: Run quality-script fixtures
               # v7.2 接线：夹具在 CI 自动跳过 .ai 段（本地工具不入库），
               # 仍回归仓库内防线——stub-check / SDK 固定 / secret-guard 自测
