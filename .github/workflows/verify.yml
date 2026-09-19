@@ -96,8 +96,18 @@ jobs:
             - name: Core tests
               run: dotnet run --project test/PalORM.Core.Tests -c Release --no-build
 
+            - name: Assert Core test counts (M0-3)
+              run: >-
+                  bash scripts/assert-test-counts.sh PalORM.Core.Tests
+                  "$(find test/PalORM.Core.Tests/bin -name '*.tunit-report.json' | head -1)"
+
             - name: Source generator tests
               run: dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build
+
+            - name: Assert SourceGen test counts (M0-3)
+              run: >-
+                  bash scripts/assert-test-counts.sh PalORM.SourceGen.Tests
+                  "$(find test/PalORM.SourceGen.Tests/bin -name '*.tunit-report.json' | head -1)"
 
     integration:
         name: Integration Tests
@@ -143,6 +153,11 @@ jobs:
 
             - name: Run complete integration suite
               run: dotnet run --project test/PalORM.Integration.Tests -c Release --no-build
+
+            - name: Assert Integration test counts + real-db floor (M0-3)
+              run: >-
+                  bash scripts/assert-test-counts.sh PalORM.Integration.Tests
+                  "$(find test/PalORM.Integration.Tests/bin -name '*.tunit-report.json' | head -1)"
 
     gate:
         name: Quality Gates

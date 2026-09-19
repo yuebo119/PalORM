@@ -1,0 +1,13 @@
+{
+  "_comment": "独立审计 M0-3 测试数地板——防退化基线（非达标目标）。口径 = TUnit 报告执行数（含 [Arguments] 展开），当前实测约 289/197/197、真库 20 条，地板留 5-9 条余量吸收正常增删。调整规则：只在用例有意删除时下调并注明理由；新增用例无需上调。",
+  "PalORM.Core.Tests": {
+    "passed": 280
+  },
+  "PalORM.SourceGen.Tests": {
+    "passed": 188
+  },
+  "PalORM.Integration.Tests": {
+    "passed": 190,
+    "externalDatabase": 20
+  }
+}
