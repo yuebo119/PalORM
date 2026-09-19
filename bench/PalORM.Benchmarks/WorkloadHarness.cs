@@ -5,6 +5,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using PalORM.MySql;
+using PalORM.PostgreSql;
 using PalORM.Sqlite;
 
 namespace PalORM.Benchmarks;
@@ -31,6 +33,9 @@ internal sealed record WorkloadOptions
 
     /// <summary>读写混合比：写操作占比（默认 20%——读多写少的典型业务形态）。</summary>
     public double WriteRatio { get; init; } = 0.20;
+
+    /// <summary>目标方言（sqlite/pg/mysql）——决定连接串来源与 PRAGMA/引用符分支。</summary>
+    public string Dialect { get; init; } = "sqlite";
 }
 
 internal static class WorkloadHarness
@@ -39,21 +44,58 @@ internal static class WorkloadHarness
         Justification = "负载测试的表格输出是机器可读报告，固定文本。")]
     public static async Task RunAsync(WorkloadOptions options)
     {
-        string dbPath = Path.Combine(Path.GetTempPath(), $"palorm-workload-{Environment.ProcessId}.db");
-        var sessionOptions = new DbOptions { ConnectionString = $"Data Source={dbPath}" };
+        switch (options.Dialect.ToLowerInvariant())
+        {
+            case "pg":
+            case "postgresql":
+                await RunDialectAsync<PostgreSqlProvider>(options,
+                    Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
+                        ?? throw new InvalidOperationException("PALORM_PG_CONNECTION 未设置（pg 负载档需远程库）"),
+                    sqlite: false).ConfigureAwait(false);
+                return;
+            case "mysql":
+                await RunDialectAsync<MySqlProvider>(options,
+                    Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
+                        ?? throw new InvalidOperationException("PALORM_MYSQL_CONNECTION 未设置（mysql 负载档需远程库）"),
+                    sqlite: false).ConfigureAwait(false);
+                return;
+            default:
+                string dbPath = Path.Combine(Path.GetTempPath(), $"palorm-workload-{Environment.ProcessId}.db");
+                await RunDialectAsync<SqliteProvider>(options, $"Data Source={dbPath}", sqlite: true)
+                    .ConfigureAwait(false);
+                return;
+        }
+    }
+
+    private static async Task RunDialectAsync<TProvider>(WorkloadOptions options, string connectionString, bool sqlite)
+        where TProvider : IDbProvider
+    {
+        string dbPath = sqlite
+            ? Path.Combine(Path.GetTempPath(), $"palorm-workload-{Environment.ProcessId}.db")
+            : string.Empty;
+        var sessionOptions = new DbOptions
+        {
+            ConnectionString = connectionString,
+            // 远程负载档不叠加重试/熔断——测的是稳态吞吐与分位数，弹性退避会污染 p99
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 0
+        };
         var allTiers = new List<WorkloadTierResult>(options.ThreadTiers.Length);
         try
         {
-            await using DataSession<SqliteProvider> setup = await DataSession<SqliteProvider>.CreateAsync(sessionOptions).ConfigureAwait(false);
-            // WAL：允许并发读与单写交叠（SQLite 默认 journal 模式下写会阻塞全部读）
-            await setup.ExecuteAsync(FormattableStringFactory.Create("PRAGMA journal_mode=WAL")).ConfigureAwait(false);
-            await StandardShapes.SeedAsync<BenchNarrow>(setup, options.Rows).ConfigureAwait(false);
+            await using DataSession<TProvider> setup = await DataSession<TProvider>.CreateAsync(sessionOptions).ConfigureAwait(false);
+            // WAL：允许并发读与单写交叠（SQLite 默认 journal 模式下写会阻塞全部读）——仅 SQLite
+            if (sqlite)
+                await setup.ExecuteAsync(FormattableStringFactory.Create("PRAGMA journal_mode=WAL")).ConfigureAwait(false);
+            await setup.ExecuteAsync(FormattableStringFactory.Create(
+                "DROP TABLE IF EXISTS " + TProvider.QuoteIdentifier("bench_s1_narrow"))).ConfigureAwait(false);
+            await StandardShapes.SeedAsync<TProvider, BenchNarrow>(setup, options.Rows).ConfigureAwait(false);
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"[workload] 种子 S1 Narrow × {options.Rows:N0} 完成，开始负载测试"));
 
             foreach (int threads in options.ThreadTiers)
             {
-                WorkloadTierResult result = await RunTierAsync(sessionOptions, threads, options).ConfigureAwait(false);
+                WorkloadTierResult result = await RunTierAsync<TProvider>(sessionOptions, threads, options).ConfigureAwait(false);
                 allTiers.Add(result);
                 Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                     $"[workload] threads={threads,2}  ops/s={result.OpsPerSecond,9:N0}  " +
@@ -69,36 +111,40 @@ internal static class WorkloadHarness
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            File.Delete(dbPath);
-            File.Delete(dbPath + "-wal");
-            File.Delete(dbPath + "-shm");
+            if (sqlite)
+            {
+                SqliteConnection.ClearAllPools();
+                File.Delete(dbPath);
+                File.Delete(dbPath + "-wal");
+                File.Delete(dbPath + "-shm");
+            }
         }
     }
 
-    private static async Task<WorkloadTierResult> RunTierAsync(
+    private static async Task<WorkloadTierResult> RunTierAsync<TProvider>(
         DbOptions options, int threads, WorkloadOptions workload)
+        where TProvider : IDbProvider
     {
         // 每线程独立会话（真实业务的连接形态）；SQLite 文件库 + WAL 下并发读并行、写串行
-        var sessions = new DataSession<SqliteProvider>[threads];
+        var sessions = new DataSession<TProvider>[threads];
         var barriers = new Task[threads];
         var samplesByThread = new ConcurrentQueue<long>[threads];
         using var stopSignal = new CancellationTokenSource(TimeSpan.FromSeconds(workload.SecondsPerTier));
 
         for (int t = 0; t < threads; t++)
         {
-            sessions[t] = await DataSession<SqliteProvider>.CreateAsync(options).ConfigureAwait(false);
+            sessions[t] = await DataSession<TProvider>.CreateAsync(options).ConfigureAwait(false);
         }
 
         try
         {
             // 预热 1.5 s（规范 §4：无预热的数字不得发布）
-            var warmup = RunWorkers(sessions, samplesByThread, workload, TimeSpan.FromSeconds(1.5));
+            var warmup = RunWorkers<TProvider>(sessions, samplesByThread, workload, TimeSpan.FromSeconds(1.5));
             await Task.WhenAll(warmup).ConfigureAwait(false);
             Array.Clear(samplesByThread);
 
             var clock = Stopwatch.StartNew();
-            Task[] workers = RunWorkers(sessions, samplesByThread, workload, stopSignal.Token);
+            Task[] workers = RunWorkers<TProvider>(sessions, samplesByThread, workload, stopSignal.Token);
             await Task.WhenAll(workers).ConfigureAwait(false);
             clock.Stop();
 
@@ -114,25 +160,25 @@ internal static class WorkloadHarness
         }
         finally
         {
-            foreach (DataSession<SqliteProvider> session in sessions)
+            foreach (DataSession<TProvider> session in sessions)
             {
                 await session.DisposeAsync().ConfigureAwait(false);
             }
         }
     }
 
-    private static Task[] RunWorkers(
-        DataSession<SqliteProvider>[] sessions,
+    private static Task[] RunWorkers<TProvider>(
+        DataSession<TProvider>[] sessions,
         ConcurrentQueue<long>[] samplesByThread,
         WorkloadOptions workload,
-        TimeSpan duration)
+        TimeSpan duration) where TProvider : IDbProvider
         => RunWorkers(sessions, samplesByThread, workload, new CancellationTokenSource(duration).Token);
 
-    private static Task[] RunWorkers(
-        DataSession<SqliteProvider>[] sessions,
+    private static Task[] RunWorkers<TProvider>(
+        DataSession<TProvider>[] sessions,
         ConcurrentQueue<long>[] samplesByThread,
         WorkloadOptions workload,
-        CancellationToken stop)
+        CancellationToken stop) where TProvider : IDbProvider
     {
         var tasks = new Task[sessions.Length];
         for (int t = 0; t < sessions.Length; t++)
@@ -147,16 +193,19 @@ internal static class WorkloadHarness
 
     /// <summary>混合负载工作循环：80% 主键点读 + 20% 定点更新（规范 §1 维度 11 的 80/20 形态）。
     /// 随机数按线程号确定性播种——每次运行的操作序列相同（可复现），但与被测系统行为无耦合。</summary>
-    private static async Task WorkerLoop(
-        DataSession<SqliteProvider> session,
+    private static async Task WorkerLoop<TProvider>(
+        DataSession<TProvider> session,
         ConcurrentQueue<long> samples,
         int threadIndex,
         WorkloadOptions workload,
-        CancellationToken stop)
+        CancellationToken stop) where TProvider : IDbProvider
     {
         var random = new Random(42 + threadIndex);
         long maxId = workload.Rows;
         var stopwatch = new Stopwatch();
+        // 引用符按方言（PG/SQLite 双引号、MySQL 反引号）——"Id" 在 MySQL 是语法错误
+        string quotedId = TProvider.QuoteIdentifier("Id");
+        string quotedTable = TProvider.QuoteIdentifier("bench_s1_narrow");
         while (!stop.IsCancellationRequested)
         {
             long id = random.NextInt64(1, maxId + 1);
@@ -165,7 +214,8 @@ internal static class WorkloadHarness
             if (write)
             {
                 await session.ExecuteAsync(
-                    FormattableStringFactory.Create($"UPDATE bench_s1_narrow SET qty = qty + 1 WHERE \"Id\" = {id}"))
+                    FormattableStringFactory.Create(
+                        $"UPDATE {quotedTable} SET qty = qty + 1 WHERE {quotedId} = {id}"))
                     .ConfigureAwait(false);
             }
             else

@@ -180,7 +180,13 @@ public static class StandardShapes
     /// <summary>确定性种子 N 行并落库（单次 BulkInsert——内部自带 batchSize 节流与方言分派；
     /// 10 万行档位约 60 MB 实体内存，如需更低峰值再引入分批，不得在循环里逐条插——PALORM005）。
     /// 先清表再种，保证任何一次调用后库内容逐位相同。</summary>
-    public static async Task SeedAsync<T>(DataSession<SqliteProvider> session, long rows, CancellationToken ct = default)
+    public static Task SeedAsync<T>(DataSession<SqliteProvider> session, long rows, CancellationToken ct = default)
+        where T : class, new()
+        => SeedAsync<SqliteProvider, T>(session, rows, ct);
+
+    /// <summary>方言无关种子——PG/MySQL 负载档经此入口（BulkInsertAsync 自动分派 COPY/BulkCopy/多值）。</summary>
+    public static async Task SeedAsync<TProvider, T>(DataSession<TProvider> session, long rows, CancellationToken ct = default)
+        where TProvider : IDbProvider
         where T : class, new()
     {
         await session.MigrateAsync(ct).ConfigureAwait(false);
