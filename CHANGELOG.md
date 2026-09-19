@@ -114,6 +114,14 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### 📄 报告增补（2026-09-19 同日）：往返优化轮复测入正式报告
+
+- `docs/性能测试报告-2026-09-19.md` 增补节：①②B1 三项复测数据 + PG 64T 深测
+  （35,878 ops/s 仍扩展，p50 上升显示接近拐点）+ 四方向收官状态。
+  **② 在标准门禁基准显形：PalORM_Insert 6,000 → 5,136 B（−14.4%），
+  vs ADO 分配比 4.335 → 3.711、耗时比 1.206（基线 1.463）**；
+  SQLite 负载 92,031 ops/s @1T（会话最好成绩，p99 0.019 ms）。
+
 ### ⚡ 性能（B1：SessionBatch——事务内 N 语句压成一次往返，PG 实测 3.4×）
 
 - **新增 `session.CreateBatch()` 显式批量 API**：`Append(FormattableString)` 链式追加
