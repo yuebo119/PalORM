@@ -110,7 +110,10 @@ public sealed class MySqlProvider : IDbProvider
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
         ArgumentNullException.ThrowIfNull(command);
+        // S2077 报备（M1-5）：表名/schema 经 QuoteQualifiedIdentifier 标识符转义（标识符面）
+#pragma warning disable S2077
         command.CommandText = $"SHOW COLUMNS FROM {QuoteQualifiedIdentifier(schema, tableName)}";
+#pragma warning restore S2077
         return 0;
     }
 

@@ -24,7 +24,10 @@ public sealed partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        // S2077 报备（M1-5）：savepoint 名经 Provider QuoteIdentifier 标识符转义（标识符面，无值拼接）
+#pragma warning disable S2077
         cmd.CommandText = $"SAVEPOINT {TProvider.QuoteIdentifier(name)}";
+#pragma warning restore S2077
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -43,7 +46,10 @@ public sealed partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        // S2077 报备（M1-5）：同 SavepointAsync——标识符面，无值拼接
+#pragma warning disable S2077
         cmd.CommandText = $"ROLLBACK TO SAVEPOINT {TProvider.QuoteIdentifier(name)}";
+#pragma warning restore S2077
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 

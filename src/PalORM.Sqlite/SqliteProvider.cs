@@ -125,7 +125,10 @@ public sealed class SqliteProvider : IDbProvider
         ArgumentNullException.ThrowIfNull(command);
         if (!string.IsNullOrWhiteSpace(schema))
             throw new NotSupportedException("The SQLite provider does not support entity schema configuration.");
+        // S2077 报备（M1-5）：PRAGMA 不支持参数占位——表名经 QuoteIdentifier 转义（标识符面）
+#pragma warning disable S2077
         command.CommandText = $"PRAGMA table_info({QuoteIdentifier(tableName)})";
+#pragma warning restore S2077
         return 1;
     }
 

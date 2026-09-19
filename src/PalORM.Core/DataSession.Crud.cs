@@ -267,7 +267,11 @@ public sealed partial class DataSession<TProvider>
             string tenantFilter = HasTenantFilter<T>()
                 ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
                 : "";
+            // S2077 报备（M1-5）：插值成分全为 QuoteIdentifier 标识符与 const 参数名——
+            // 用户值经 @p0 绑定（BindGeneratedKeyParameter），无字符串面拼接值
+#pragma warning disable S2077
             cmd.CommandText = $"UPDATE {TProvider.QuoteIdentifier(tn)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
+#pragma warning restore S2077
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
             BindDefaultFilterParameters<T>(cmd);
@@ -365,7 +369,11 @@ public sealed partial class DataSession<TProvider>
             await using DbCommand cmd = CreateCommand();
             // v4.1：缓存 selectColumns
             string selectColumns = GetSelectColumns<T>(columnNames);
+            // S2077 报备（M1-5）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
+            // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
+#pragma warning disable S2077
             cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
+#pragma warning restore S2077
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindDefaultFilterParameters<T>(cmd);
 
