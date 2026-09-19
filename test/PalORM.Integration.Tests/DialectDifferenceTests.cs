@@ -45,26 +45,34 @@ public sealed class DialectDifferenceTests
 
     // ─── LIMIT OFFSET 方言差异 ─────────────────────────────
 
-    /// <summary>SQLite/PG: LIMIT take OFFSET skip（当前实现 skip=0 也输出 OFFSET 0——见 TakeOnly 锁定）
-    /// MySQL: LIMIT skip, take（skip=0 用 LIMIT 0, take）</summary>
+    /// <summary>SQLite/PG: LIMIT @take OFFSET @skip（SHAPE-010 参数化根解：值经 @pN 绑定，
+    /// skip 缺省绑 0）；MySQL: LIMIT @skip, @take 位置形态（真库契约由 PG/MySQL CI 矩阵验证）。
+    /// DryRun 同时断言参数快照的值与序（take 先 skip 后），值丢失/错位即刻暴露。</summary>
     [Test]
     public async Task LimitOffset_DryRun_ProducesCorrectDialectSql()
     {
         // 用 SQLite 验证 SQL 生成（不依赖 PG/MySQL 连接）
         await using var db = await TestDb.SqliteAsync();
         var dry = db.From<Product>().Take(10).Skip(20).AsDryRun();
-        await Assert.That(dry.Sql).Contains("LIMIT 10");
-        await Assert.That(dry.Sql).Contains("OFFSET 20");
+        await Assert.That(dry.Sql).Contains("LIMIT @p");
+        await Assert.That(dry.Sql).Contains("OFFSET @p");
+        await Assert.That(dry.Parameters.Count).IsEqualTo(2);
+        await Assert.That((int)dry.Parameters[0].Value!).IsEqualTo(10);
+        await Assert.That((int)dry.Parameters[1].Value!).IsEqualTo(20);
     }
 
     [Test]
-    public async Task LimitOffset_TakeOnly_GeneratesOffsetZero()
+    public async Task LimitOffset_TakeOnly_BindsOffsetZeroParameter()
     {
         await using var db = await TestDb.SqliteAsync();
         var dry = db.From<Product>().Take(5).AsDryRun();
-        await Assert.That(dry.Sql).Contains("LIMIT 5");
-        // SQLite/PG 生成 "LIMIT 5 OFFSET 0"（_skip ?? 0 默认 0）——OFFSET 0 合规
-        await Assert.That(dry.Sql).Contains("OFFSET 0");
+        // SQLite/PG 生成 "LIMIT @pN OFFSET @pM"（skip 缺省绑 0——SHAPE-010 前是文本
+        // OFFSET 0，语义等价迁移：占位符必须绑 0）
+        await Assert.That(dry.Sql).Contains("LIMIT @p");
+        await Assert.That(dry.Sql).Contains("OFFSET @p");
+        await Assert.That(dry.Parameters.Count).IsEqualTo(2);
+        await Assert.That((int)dry.Parameters[0].Value!).IsEqualTo(5);
+        await Assert.That((int)dry.Parameters[1].Value!).IsEqualTo(0);
     }
 
     // ─── 参数占位符统一性 ─────────────────────────────────

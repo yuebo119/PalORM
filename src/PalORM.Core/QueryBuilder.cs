@@ -637,7 +637,16 @@ public struct QueryBuilder<T> where T : class, new()
             $"{GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
 
     internal IReadOnlyList<DbParameter> GetQueryParameters()
-        => GetParametersForKinds(_splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
+    {
+        List<DbParameter> parameters = GetParametersForKinds(
+            _splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
+        if (!_take.HasValue && !_skip.HasValue) return parameters;
+        // SHAPE-010 根解：LIMIT/OFFSET 值参数化后必须随查询绑定。占位符名从 _parameterCount
+        // 推导，与 BuildSql 内 BuildLimitClause 同源恒一致；每次现建（builder 可变，缓存参数
+        // 对象会在 Take/Skip 改值后失真），0-2 个对象的成本已在方案评审接受。
+        parameters.AddRange(BuildLimitClause().Parameters);
+        return parameters;
+    }
 
     internal IReadOnlyList<DbParameter> GetCountParameters()
         => GetParametersForKinds(_splitQuery ? QueryClauseKinds.CountSplit : QueryClauseKinds.Count);
@@ -731,23 +740,23 @@ public struct QueryBuilder<T> where T : class, new()
         // 带显式投影（Select）的预览不走缓存（投影列集由调用方决定）。
         // 方言参与键与哈希（理由见 ShapeFields 文档）。
         var shapeFields = new SqlShapeCache.ShapeFields(
-            _dialect, _splitQuery, _take, _skip, _tableName, _cteName);
-        // 哈希由形状成分现算（单一真源，规范顺序：表名→子句→CTE→Split→Take→Skip→方言）——
+            _dialect, _splitQuery, _take.HasValue, _skip.HasValue, _tableName, _cteName);
+        // 哈希由形状成分现算（单一真源，规范顺序：表名→子句→CTE→Split→Take形态→Skip形态→方言）——
         // 克隆重建链、ToPageAsync/First 族字段直赋等任意构建路径自动一致（审计 A2 整改：
         // 原增量维护在克隆路径丢子句成分，同表分页查询全部挤进同一桶）。
         // 表名必须在内：零子句查询（GetAllAsync 族）不同实体否则共享条目（T5c 实测）。
+        // Take/Skip 只进<b>形态</b>（有无）而非值（SHAPE-010 参数化根解）：值经 @pN 绑定
+        // 不影响 SQL 文本，动态 OFFSET 分页的形状由此回归有限集；但 take-only/skip-only/
+        // take+skip 产出不同文本形态，形态必须进键防互相复用条目。
         int shapeHash = System.HashCode.Combine(17, _tableName);
         foreach (QueryClause clause in MaterializeClauses())
             shapeHash = System.HashCode.Combine(shapeHash, clause.Sql);
         if (_cteName is not null) shapeHash = System.HashCode.Combine(shapeHash, _cteName);
         if (_splitQuery) shapeHash = System.HashCode.Combine(shapeHash, true);
-        if (_take.HasValue) shapeHash = System.HashCode.Combine(shapeHash, _take.Value);
-        if (_skip.HasValue) shapeHash = System.HashCode.Combine(shapeHash, _skip.Value);
+        if (_take.HasValue) shapeHash = System.HashCode.Combine(shapeHash, true);
+        if (_skip.HasValue) shapeHash = System.HashCode.Combine(shapeHash, true);
         shapeHash = System.HashCode.Combine(shapeHash, _dialect);
-        // 带 OFFSET（Skip 有值）的形状不入缓存（审计 A1）：OFFSET 值随页码无界，任何有限
-        // 容量都拦不住它入缓存后的条目数；每次重建回到缓存前行为，正确性不变。
-        // keyset 分页（ToPageAsync）Skip 置 null 不受影响。LIMIT 参数化落地后可移除本排除。
-        if (_selectColumns is null && _skip is null)
+        if (_selectColumns is null)
         {
             string? cachedSql = SqlShapeCache.FindMatch(shapeHash, MaterializeClauses(), shapeFields);
             if (cachedSql is not null)
@@ -770,14 +779,16 @@ public struct QueryBuilder<T> where T : class, new()
             AppendClauses(ref sb, QueryClauseKind.Having);
             AppendClauses(ref sb, QueryClauseKind.OrderBy);
             AppendClauses(ref sb, QueryClauseKind.Raw);
-            // v4.4：直接写 VSB，消除中间 string 分配
-            AppendLimitClause(ref sb);
+            // v4.4：直接写 VSB，消除中间 string 分配。
+            // SHAPE-010 根解：LIMIT/OFFSET 值经 @pN 占位（BuildLimitClause），不再内联——
+            // 文本进形状缓存后动态分页的 OFFSET 值回归有限形态集
+            sb.Append(BuildLimitClause().Text);
             sb.Append(' ');
             AppendClauses(ref sb, QueryClauseKind.Lock);
             // v4.4：先 TrimEnd 再 ToString，省 1 次 string 分配（TrimEnd 前已用 VSB 原地裁剪）
             sb.TrimEnd();
             string built = sb.ToString();
-            if (_selectColumns is null && _skip is null)
+            if (_selectColumns is null)
             {
                 SqlShapeCache.Add(shapeHash, MaterializeClauses(), shapeFields, built);
             }
@@ -1056,46 +1067,78 @@ public struct QueryBuilder<T> where T : class, new()
         }
     }
 
-    // v4.4：直接写 ValueStringBuilder，消除中间 string 分配
-    private void AppendLimitClause(ref ValueStringBuilder sb)
+    /// <summary>LIMIT/OFFSET 子句的参数化构建（SHAPE-010 根解，v4.4 的 VSB 直写基础上改造）——
+    /// 值经 @pN 占位绑定（不再内联进 SQL 文本），动态分页（页码无界）的形状由此回归有限集。
+    /// 占位符编号从 <see cref="_parameterCount"/> 起排（子句参数之后），同形态恒同编号，
+    /// 故文本稳定可进形状缓存；<see cref="GetQueryParameters"/> 同源附加参数对象。
+    /// 方言文本形态保持既有契约（DialectDifferenceTests 锁定）：MySQL 用
+    /// <c>LIMIT skip, take</c> 位置形态、skip-only 用上限哨兵字面量；SQLite skip-only 用
+    /// <c>LIMIT -1</c>；PG skip-only 裸 <c>OFFSET</c>。参数对象每次现建（builder 可变，
+    /// 缓存参数对象会在 Take/Skip 改值后失真）。</summary>
+    private (string Text, DbParameter[] Parameters) BuildLimitClause()
     {
-        if (!_take.HasValue && !_skip.HasValue) return;
-        if (!_take.HasValue)
+        if (!_take.HasValue && !_skip.HasValue) return ("", System.Array.Empty<DbParameter>());
+        var parameters = new List<DbParameter>(2);
+        var sb = new ValueStringBuilder(stackalloc char[64]);
+        try
         {
-            switch (_dialect)
+            // 局部函数不可用（struct 内不能捕获 this，闭包又产生热路径分配）——
+            // 参数创建+占位符回写按分支内联（编号 = _parameterCount + 已建数）
+            if (!_take.HasValue)
             {
-                case SqlDialect.MySql:
-                    sb.Append("LIMIT ");
-                    sb.Append(_skip!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    sb.Append(", ");
-                    sb.Append(SqlLimits.MySqlOffsetOnlyLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    break;
-                case SqlDialect.Sqlite:
-                    sb.Append("LIMIT -1 OFFSET ");
-                    sb.Append(_skip!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    break;
-                default:
-                    sb.Append("OFFSET ");
-                    sb.Append(_skip!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    break;
+                switch (_dialect)
+                {
+                    case SqlDialect.MySql:
+                        sb.Append("LIMIT ");
+                        DbParameter skipParam = CreateParameter(_skip!.Value, parameters.Count);
+                        parameters.Add(skipParam);
+                        sb.Append(skipParam.ParameterName);
+                        sb.Append(", ");
+                        sb.Append(SqlLimits.MySqlOffsetOnlyLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+                    case SqlDialect.Sqlite:
+                        sb.Append("LIMIT -1 OFFSET ");
+                        DbParameter sqliteSkip = CreateParameter(_skip!.Value, parameters.Count);
+                        parameters.Add(sqliteSkip);
+                        sb.Append(sqliteSkip.ParameterName);
+                        break;
+                    default:
+                        sb.Append("OFFSET ");
+                        DbParameter pgSkip = CreateParameter(_skip!.Value, parameters.Count);
+                        parameters.Add(pgSkip);
+                        sb.Append(pgSkip.ParameterName);
+                        break;
+                }
             }
-            return;
+            else
+            {
+                switch (_dialect)
+                {
+                    case SqlDialect.MySql:
+                        sb.Append("LIMIT ");
+                        DbParameter mysqlSkip = CreateParameter(_skip ?? 0, parameters.Count);
+                        parameters.Add(mysqlSkip);
+                        sb.Append(mysqlSkip.ParameterName);
+                        sb.Append(", ");
+                        DbParameter mysqlTake = CreateParameter(_take.Value, parameters.Count);
+                        parameters.Add(mysqlTake);
+                        sb.Append(mysqlTake.ParameterName);
+                        break;
+                    default:
+                        sb.Append("LIMIT ");
+                        DbParameter takeParam = CreateParameter(_take.Value, parameters.Count);
+                        parameters.Add(takeParam);
+                        sb.Append(takeParam.ParameterName);
+                        sb.Append(" OFFSET ");
+                        DbParameter skipParam2 = CreateParameter(_skip ?? 0, parameters.Count);
+                        parameters.Add(skipParam2);
+                        sb.Append(skipParam2.ParameterName);
+                        break;
+                }
+            }
+            return (sb.ToString(), [.. parameters]);
         }
-        switch (_dialect)
-        {
-            case SqlDialect.MySql:
-                sb.Append("LIMIT ");
-                sb.Append((_skip ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
-                sb.Append(", ");
-                sb.Append(_take.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                break;
-            default:
-                sb.Append("LIMIT ");
-                sb.Append(_take.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                sb.Append(" OFFSET ");
-                sb.Append((_skip ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
-                break;
-        }
+        finally { sb.Dispose(); }
     }
 
     private static string GetRegisteredTableName(Type entityType)

@@ -18,9 +18,9 @@
 
 | ID | 级别 | 任务 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| SHAPE-001 | P1 | 写 A1 复现测试：动态 Skip 循环断言缓存有界 | 已完成 | DynamicSkipValues_OffsetShapesNeverCached + DynamicTagValues_NewShapeRejectedWhenCacheFull 首跑红（found 10003/1），随 SHAPE-010 转绿 |
+| SHAPE-001 | P1 | 写 A1 复现测试：动态 Skip 循环断言缓存有界 | 已完成 | 首跑红（found 10003/1）；SHAPE-010 根解后语义升级为 DynamicSkipValues_ShareSingleCacheEntry（10,000 Skip 值共享 1 条目）+ LimitValues_BindAsParameters_InDryRunSnapshot（参数值序哨兵） |
 | SHAPE-002 | P1 | 写 A2 复现测试：克隆路径与原生路径互不认亲 | 已完成 | ClonedBuilder_ReusesCacheEntryOfOriginalShape 首跑红（found 24→增量断言 2），随 SHAPE-011 转绿 |
-| SHAPE-010 | P1 | LIMIT/OFFSET 参数化（根解 A1；退守方案见详情） | 已完成（退守方案） | OFFSET 形状不入缓存 + 1024 上限拒写；S3：临时撤治理双防线回红（found 1/1）；参数化方案动 22 场景 SQL 基线须评审，自主会话无人评审故按账本退守路径执行，LIMIT 参数化留待评审 |
+| SHAPE-010 | P1 | LIMIT/OFFSET 参数化（根解 A1；退守方案见详情） | 已完成（根解落地，2026-09-19 第二轮） | 第一轮退守（OFFSET 排除 + 1024 上限）；第二轮用户授权评审后落地参数化根解：BuildLimitClause 值经 @pN 占位（方言文本形态保持既有契约），ShapeFields 改 HasTake/HasSkip 布尔形态（值不进键、形态进键防 take-only/skip-only 撞条目），GetQueryParameters 同源附加参数，OFFSET 排除移除（形状回归有限集），1024 上限保留（兜底动态 Tag/Raw）。验证：Core 280/280（新哨兵：动态 Skip 共享单条目 + DryRun 参数值序断言）、Integration 192/192（SQLite 真库执行 `LIMIT @p0 OFFSET @p1` 全绿）、AOT 原生 PASSED。S3 以推导+首跑红证据替代临时回退（旧值内联形态下新断言确定性红：参数 0≠2、条目 10000≠1）。PG/MySQL 真库 LIMIT 占位符兼容待 CI 矩阵（MySqlConnector 未 prepare 时客户端插值回归文本形态，Npgsql 原生支持 $n LIMIT，风险低） |
 | SHAPE-011 | P1 | 修复 _shapeHash 三写入者旁路（A2） | 已完成 | 实施升级为单一真源现算（BuildSql 从形状成分现算，删除增量哈希状态与全部 Combine 点）；S3：stash 撤回后克隆测试回红（增量 16 ≠ 1） |
 | DOC-010 | P1 | README 加密表述与实现对齐（D1） | 已完成（方向 A） | README.md:16,60,66 表述降级为"经 SQLite3MC 驱动支持，Password= 启用"；grep src/test 加密仍零实现，表述已不再声称内置 |
 | ERR-010 | P2 | OnError 吞异常补观测挂点 + 三回调异常契约文档化（M4） | 已完成 | PalORMMetrics.InterceptorOnErrorFailures 计数 + NotifyInterceptorsOnError 计入（internal 可测）；IQueryInterceptor 三回调契约 doc；InterceptorErrorContractTests 2 用例（吞+不阻断后续+计数） |
@@ -41,7 +41,7 @@
 | GEN-015 | P3 | 分析器 InvocationExpression 双注册合并 + 031/032 语法预筛前置（L5） | 已完成（注册合并） | 两注册合并为单回调按名分派（名字集互斥已核实：005 集与 031/032/Select 集零重叠），每调用节点省一遍回调；005 的"语法圈先行"顺序保持；197 测试（含各诊断正反用例）全绿验证行为不变。CheckJoinUnregisteredEntity 内 IsPalORMInvocation 与 GetSymbolInfo 的双语义查询合并留原样（次要优化，改动面大收益小） |
 | PROV-011 | P3 | Provider 布尔旋钮 XML doc 修正（L8，仅 doc） | 已完成 | PG/MySQL CreateConnection doc 补布尔旋钮边界段（被覆盖后果是正确性而非性能，须绕开工厂自建连接） | |
 
-> 不入本账本（开放问题，需用户决策后立任务）：LIMIT 参数化 vs 容量上限的最终取向由 SHAPE-010 评审定；AGPL 双许可；BulkMergeAsync 是否 3.0 对齐受影响行数语义；多租户缓存默认实例是否改默认行为（破坏性）；SDK GA 切轨时间表；S3 若选择改默认行为则从文档任务升级为设计任务。
+> 已裁决的开放问题（2026-09-19 第二轮）：LIMIT 参数化由用户授权落地（见 SHAPE-010）。仍开放：AGPL 双许可；BulkMergeAsync 是否 3.0 对齐受影响行数语义；多租户缓存默认实例是否改默认行为（破坏性）；SDK GA 切轨时间表。
 
 ---
 
