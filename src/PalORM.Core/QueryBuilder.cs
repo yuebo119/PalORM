@@ -552,24 +552,24 @@ public struct QueryBuilder<T> where T : class, new()
         return new(isUpdate ? BuildUpdateSql() : BuildSql(), Array.AsReadOnly(snapshot));
     }
 
-    internal ValueTask<ConnectionLease> AcquireConnectionLeaseAsync(bool writeOperation,
+    /// <summary>M3-6（独立审计 A5）：取得本次执行的连接——原 ConnectionLease 自 v5.6 起
+    /// 恒为借用语义（主连接与会话级复用的读连接都由会话持有，租约无资源可释放却每查询
+    /// 分配一次并保留一段不可达异常处理），已退场为直传连接。同步分支零分配。</summary>
+    internal ValueTask<DbConnection> AcquireExecutionConnectionAsync(bool writeOperation,
         CancellationToken cancellationToken)
     {
         if (GetActiveTransaction() is not null || writeOperation
             || !_useReadRoute || _readConnProvider is null)
-            return ValueTask.FromResult(ConnectionLease.Borrow(_conn));
+            return ValueTask.FromResult(_conn);
 
-        return AcquireReadLeaseAsync(cancellationToken);
+        return AcquireRoutedConnectionAsync(cancellationToken);
     }
 
-    /// <summary>读路由租约——连接来自会话级复用，租约只是借用标记（不释放连接）。
-    /// 抽为独立方法而非在 <see cref="AcquireConnectionLeaseAsync"/> 内 await：后者是每查询
+    /// <summary>读路由连接——来自会话级复用（不释放，归会话持有）。
+    /// 抽为独立方法而非在 <see cref="AcquireExecutionConnectionAsync"/> 内 await：后者是每查询
     /// 必经的热路径，同步返回分支不应被 async 状态机包裹。</summary>
-    private async ValueTask<ConnectionLease> AcquireReadLeaseAsync(CancellationToken cancellationToken)
-    {
-        DbConnection readConnection = await _readConnProvider!(cancellationToken).ConfigureAwait(false);
-        return ConnectionLease.Borrow(readConnection);
-    }
+    private async ValueTask<DbConnection> AcquireRoutedConnectionAsync(CancellationToken cancellationToken)
+        => await _readConnProvider!(cancellationToken).ConfigureAwait(false);
 
     internal DbTransaction? GetActiveTransaction()
     {

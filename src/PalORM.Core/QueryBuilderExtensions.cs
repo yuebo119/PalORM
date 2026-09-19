@@ -87,8 +87,8 @@ public static class QueryBuilderExtensions
         // 单次尝试内核——每行经回调消费，不物化列表；拦截器语义与 ToListAsync 一致
         async Task<long> ExecuteCoreAsync(CancellationToken token)
         {
-            await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(false, token).ConfigureAwait(false);
-            await using DbCommand cmd = lease.Connection.CreateCommand();
+            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
+            await using DbCommand cmd = connection.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             cmd.Transaction = boundTransaction;
@@ -185,8 +185,8 @@ public static class QueryBuilderExtensions
         // 拦截器 OnBefore/OnError 按尝试触发（失败的尝试确实发生了），OnAfter 仅成功尝试。
         async Task<List<T>> ExecuteCoreAsync(CancellationToken token)
         {
-            await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(false, token).ConfigureAwait(false);
-            await using DbCommand cmd = lease.Connection.CreateCommand();
+            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
+            await using DbCommand cmd = connection.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             cmd.Transaction = boundTransaction;
@@ -425,7 +425,6 @@ public static class QueryBuilderExtensions
                 "Call it on a bare From<T>() (no Where/OrderBy/etc.), or embed conditions in the SQL itself.");
         const string operation = "query_multiple";
         QueryObservation? observation = StartObservation(builder, operation);
-        ConnectionLease? lease = null;
         DbCommand? command = null;
         GridReader? grid = null;
         SessionOperationState.SessionOperationLease operationLease =
@@ -433,8 +432,8 @@ public static class QueryBuilderExtensions
         bool operationTransferred = false;
         try
         {
-            lease = await builder.AcquireConnectionLeaseAsync(false, ct).ConfigureAwait(false);
-            command = lease.Connection.CreateCommand();
+            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, ct).ConfigureAwait(false);
+            command = connection.CreateCommand();
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0);
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
@@ -443,7 +442,7 @@ public static class QueryBuilderExtensions
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             grid = new GridReader(
-                reader, command, lease, observation, operationLease,
+                reader, command, observation, operationLease,
                 builder._validateColumnOrder, builder._operationState);
             operationTransferred = true;
             builder._operationState.RegisterTransactionResource(grid);
@@ -454,7 +453,7 @@ public static class QueryBuilderExtensions
             observation?.Complete(exception is OperationCanceledException && ct.IsCancellationRequested
                 ? "cancelled"
                 : "error");
-            await CleanupQueryResourcesAsync(grid, command, lease, exception).ConfigureAwait(false);
+            await CleanupQueryResourcesAsync(grid, command, exception).ConfigureAwait(false);
             throw;
         }
         finally
@@ -471,10 +470,11 @@ public static class QueryBuilderExtensions
             : null;
 
     /// <summary>查询失败时的资源清理——按"grid 已建/未建"两路径释放。
-    /// 异常挂 Data 键不替换原始失败：GridCleanupException / CommandCleanupException / ConnectionCleanupException。
-    /// grid 已建时其 DisposeAsync 内部级联释放 command + lease。</summary>
+    /// 异常挂 Data 键不替换原始失败：GridCleanupException / CommandCleanupException。
+    /// grid 已建时其 DisposeAsync 内部级联释放 command。连接为借用语义（M3-6：租约已退场，
+    /// 主连接与会话级复用的读连接均由 DataSession 持有并释放），本清理不触连接。</summary>
     private static async ValueTask CleanupQueryResourcesAsync(
-        GridReader? grid, DbCommand? command, ConnectionLease? lease, Exception primaryException)
+        GridReader? grid, DbCommand? command, Exception primaryException)
     {
         if (grid is not null)
         {
@@ -489,11 +489,6 @@ public static class QueryBuilderExtensions
         {
             try { await command.DisposeAsync().ConfigureAwait(false); }
             catch (Exception cleanupException) { primaryException.Data["PalORM.CommandCleanupException"] = cleanupException; }
-        }
-        if (lease is not null)
-        {
-            try { await lease.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception cleanupException) { primaryException.Data["PalORM.ConnectionCleanupException"] = cleanupException; }
         }
     }
 
@@ -519,8 +514,8 @@ public static class QueryBuilderExtensions
         {
             using SessionOperationState.SessionOperationLease operationLease =
                 builder._operationState.Enter();
-            await using ConnectionLease lease = await builder.AcquireConnectionLeaseAsync(true, ct).ConfigureAwait(false);
-            await using DbCommand command = lease.Connection.CreateCommand();
+            DbConnection connection = await builder.AcquireExecutionConnectionAsync(true, ct).ConfigureAwait(false);
+            await using DbCommand command = connection.CreateCommand();
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = sql;
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);

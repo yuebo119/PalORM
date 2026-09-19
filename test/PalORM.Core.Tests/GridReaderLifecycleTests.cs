@@ -89,10 +89,9 @@ internal sealed class GridFailureResources
         Justification = "GridReader ownership transfers to the test, which disposes it via await using.")]
     internal ValueTask<GridReader> CreateGridReaderAsync()
     {
-        // v5.6：租约恒为借用语义（读连接由会话级复用持有，不再由租约释放），
-        // 故此处用 Borrow——断言随之从"连接被租约释放"改为"连接不被租约释放"。
-        ConnectionLease lease = ConnectionLease.Borrow(Connection);
-        return ValueTask.FromResult(new GridReader(Reader, Command, lease, null));
+        // M3-6：租约已退场（借用语义无资源可释放，连接由会话持有）——
+        // GridReader 构造不再收连接参数，释放链为 reader→command→operation。
+        return ValueTask.FromResult(new GridReader(Reader, Command, null));
     }
 }
 

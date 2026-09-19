@@ -37,14 +37,14 @@
 /U+00A0 等不可见字符不显示——下一轮 dump 逐字符码点即可裁决）；②"单行成功/多行失败"与语句文本唯一性之外的状态交互。下一轮首选实验：码点 dump |
 | M3-8 | P3 | 文档一致性小项（release-body.md 删除 / ADR-C 编号 / 依赖表） | 已完成 | release-body.md 已删（release.yml 的 full-release-body.md 是运行时生成物无关联）；ADR-C C3→C2 编号勘误；CONTRIBUTING latest-all 陈述对齐分层现实（DOC2） |
 | M3-4 | P3 | 解耦 SqlShapeCacheGrowthTests 顺序依赖（独立隔离计数器） | 已完成 | Tag 填满测试 finally 自清（不外溢给后跑者）；克隆测试 Clear 改防御性（注释更新）；"先清空"顺序耦合消除 |
-| M3-7 | P3 | 测试计数口径单一真源（声明执行口径 + 一处生成） | 待开始 | |
+| M3-7 | P3 | 测试计数口径单一真源（声明执行口径 + 一处生成） | 已完成 | 活文档(测试体系规范/路线图)改为 CI 执行数口径声明+test-counts.json 指针;历史快照(CHANGELOG/账本)不回改 |
 | M2-8 | P3 | 依赖来源与 RID 卫生（Roslyn 仅 nuget.org；GA 切轨跟踪项） | 已完成 | NuGet.Config：dotnet-tools 的 Roslyn pattern 移除（nuget.org 单一来源）；还原实测通过。GA 切轨已有既定裁决（等 .NET 11 正式版） |
 | M0-2b | P3 | （若选拆分路径）slnx 拆 CI/全量两个方案文件 | 视 M0-2 路径 | |
 | M3-1 | P3 | 覆盖率地板（line ≥70% / branch ≥60%，防退化非达标） | 待开始 | |
 | M3-2 | P3 | 变异测试扩面（Core 全部 ≥200 行文件） | 待开始 | |
 | M3-3 | P3 | 高扇出压力测试（64 交错 + 64 会话并发） | 待开始 | |
 | M3-5 | P3 | ArchitectureInvariantTests 转行为断言 | 待开始 | |
-| M3-6 | P3 | 删除 no-op 抽象（ConnectionLease）与 legacy 载荷处置 | 待开始 | |
+| M3-6 | P3 | 删除 no-op 抽象（ConnectionLease）与 legacy 载荷处置 | 已完成（ConnectionLease 部分;legacy 载荷见弃用裁决） | ConnectionLease 退场:AcquireExecutionConnectionAsync 直传 DbConnection(同步分支零分配,每查询 -1 对象 -1 虚调用);4 执行调用点去 using(无资源);GridReader 释放链 reader→command→operation(连接清理段删);CleanupQueryResourcesAsync 签名收窄;GridReaderLifecycleTests 夹具同步。验证:685 全绿(含 199 真库)+AOT 原生 PASSED+严格构建 0 警告 |
 | M2-1 | P2 | 真库测试面从 12% 扩容 + TestDb 方言夹具复活（≥20 调用点） | 待开始 | |
 | M2-3 | P3 | CloneForExecution 字段全集机械化（编译期守卫） | 待开始 | |
 | M2-4 | P3 | 执行管线单实现化（RunPipelineAsync + 物化策略） | 待开始 | |
