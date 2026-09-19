@@ -127,13 +127,18 @@ internal static class WorkloadHarness
     {
         // 每线程独立会话（真实业务的连接形态）；SQLite 文件库 + WAL 下并发读并行、写串行
         var sessions = new DataSession<TProvider>[threads];
-        var barriers = new Task[threads];
         var samplesByThread = new ConcurrentQueue<long>[threads];
         using var stopSignal = new CancellationTokenSource(TimeSpan.FromSeconds(workload.SecondsPerTier));
 
+        // A2 连接池预热：每线程会话的底层连接在测量前全部建立并打开过一次——
+        // 消除首档测量期的池生长噪声（实测 PG 首档 p95=2.47ms vs 第 2 档 0.85ms，
+        // 双峰即每建连 8.5ms 的远程握手混进了样本）。会话创建即从池取连接，
+        // 这里用一次轻量查询确保物理连接真实建立。
         for (int t = 0; t < threads; t++)
         {
             sessions[t] = await DataSession<TProvider>.CreateAsync(options).ConfigureAwait(false);
+            _ = await sessions[t].ScalarAsync<long>(
+                FormattableStringFactory.Create("SELECT 1")).ConfigureAwait(false);
         }
 
         try

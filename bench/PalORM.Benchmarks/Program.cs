@@ -31,10 +31,14 @@ public static class Program
         // 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md）——BDN 单线程测不了锁/池/调度
         if (args.Length > 0 && args[0] == "--workload")
         {
-            // --workload [sqlite|pg|mysql]：方言档（默认 sqlite；pg/mysql 读 PALORM_*_CONNECTION）
+            // --workload [sqlite|pg|mysql] [线程档位CSV]：方言默认 sqlite（pg/mysql 读
+            // PALORM_*_CONNECTION）；档位默认 1,2,4,8——找并发拐点时传 1,4,8,16,32,64
             WorkloadHarness.RunAsync(new WorkloadOptions
             {
-                Dialect = args.Length > 1 ? args[1] : "sqlite"
+                Dialect = args.Length > 1 ? args[1] : "sqlite",
+                ThreadTiers = args.Length > 2
+                    ? [.. args[2].Split(',').Select(static tier => int.Parse(tier.Trim()))]
+                    : [1, 2, 4, 8]
             }).GetAwaiter().GetResult();
             return;
         }
