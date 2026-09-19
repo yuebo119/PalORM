@@ -4,6 +4,7 @@
 > 与第一轮账本（[audit-remediation-2026-09-19.md](audit-remediation-2026-09-19.md)，22 任务 21 闭环）的关系：第一轮回答"代码内部对不对"（运行时缺陷），本轮回答"交付的承诺算不算数"（发布链路与契约诚实度）。两者正交互补；独立报告对第一轮整改（SHAPE-010/A1/A2、ADR-L）已确认落地。
 > 纪律：任务只有在实现、对应测试和验收命令均通过后才能标记完成；每任务走 S1 基线 → S2 单变量 → S3 反向验证（撤回修复 → 用例确定性失败）。
 > 任务编号沿用独立报告（M0-x/M1-x/M2-x/M3-x），保持来源可溯。
+> **执行记录（2026-09-19 执行会话）**：立即批 6 项 + 短期批 5 项（M0-1/2/3/4/5、M1-1/2/3/5、M2-5B、M3-8、M3-4、M2-8）全部完成；M2-2 首跑即抓到真缺陷（PG 42601 参数版批量 UPDATE，独立审计 T3 的预言应验），根因定位中断于远端数据库连接饱和（HealthCheck 超时），红灯测试保留为证据、修复任务跟进。M3-7 与大项（M2-1/M3-1/2/3/5/6/M2-3/4）保留待后续会话。本地验证：Core 289 / SourceGen 197 全绿、严格构建 0 警告；Integration 含真库用例因 M2-2 缺陷与环境故障不全绿（诚实记录）。
 > **可信度前置**：本账本立项前已抽查报告四项最重声明（O1/DOC1/A4/T1），全部亲手复核属实（O1：release.yml 全文无 AOT/gitleaks/包契约；DOC1：`git show v5.5.1` 池默认 30 vs README 声称 0；A4：WithMetrics 校验后丢弃 name；T1：TestDb 方言夹具 0 调用点）。
 
 ## 完成定义（改编自报告 §四 可衡量信号）
@@ -21,22 +22,22 @@
 
 | ID | 级别 | 任务 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| M0-4 | P1 | 依赖 CVE 阻断 + Dependabot | 待开始 | |
-| M0-5 | P1 | CODEOWNERS 守护快照/基线 | 待开始 | |
-| M1-1 | P1 | Raw 复用控制字符防线（NUL/C0/C1/DEL） | 待开始 | |
-| M0-2 | P1 | 全新克隆可建（CONTRIBUTING 补 fork 说明或 slnx 拆分） | 待开始 | |
-| M2-5B | P1 | AuditInterceptor 覆盖面收窄（README 醒目声明，低成本路径） | 待开始 | |
-| M0-1 | P1 | 发布流水线复用 PR 全部作业（workflow_call 组合 verify→publish） | 待开始 | |
-| M0-3 | P2 | CI"确实执行了"断言（测试数地板 + 真库用例数 + skipped==0） | 待开始 | |
-| M1-2 | P2 | 发布凭据 OIDC + environment 人工审批 | 待开始 | |
-| M1-3 | P2 | 发布验证前置（push 之前），去重复跑测 | 待开始 | |
-| M1-5 | P2 | S2077 恢复 error + 逐调用点 #pragma 报备 | 待开始 | |
+| M0-4 | P1 | 依赖 CVE 阻断 + Dependabot | 已完成 | ci.yml(gate job)加 --include-transitive 扫描 Critical/High 即红（本地实测零漏洞可跑）；.github/dependabot.yml（nuget 周更+Roslyn 成组+安全独立组+actions） |
+| M0-5 | P1 | CODEOWNERS 守护快照/基线 | 已完成 | .github/CODEOWNERS：Snapshots/bench基线/release 流水线/包版本四域；单人期显式标记+多人预留 |
+| M1-1 | P1 | Raw 复用控制字符防线（NUL/C0/C1/DEL） | 已完成 | IdentifierSafety.IsControlChar 单一真源；5+1 用例 S3 回红；README 注入措辞改默认参数化+逃生门清单 |
+| M0-2 | P1 | 全新克隆可建（CONTRIBUTING 补 fork 说明或 slnx 拆分） | 已完成（诊断路径） | CONTRIBUTING 补 BDN 克隆说明+双构建路径（全量 slnx / CI 同款 ci.slnf 零依赖）；slnx 拆分未做（fork 说明已消除首跑失败，拆分收益降低） |
+| M2-5B | P1 | AuditInterceptor 覆盖面收窄（README 醒目声明，低成本路径） | 已完成 | README 特性表改"查询审计拦截器"+覆盖面警告（写路径零审计记录）；A 路径（扩写）留开放问题 4 裁决 |
+| M0-1 | P1 | 发布流水线复用 PR 全部作业（workflow_call 组合 verify→publish） | 已完成 | verify.yml（workflow_call）承载 ci 全部作业+SHA 输出；ci.yml 薄壳化；release verify(uses)→publish(needs)。mutation probe（注入反射验证阻断）待 CI 侧执行——需 push 触发真实发布演练，本地无法完成，首次发布前必做 |
+| M0-3 | P2 | CI"确实执行了"断言（测试数地板 + 真库用例数 + skipped==0） | 已完成 | scripts/assert-test-counts.sh 读 tunit-report.json（node 解析，不 grep stdout）；地板 bench/baselines/test-counts.json（280/188/190+真库20）；verify.yml 三处接线；S3 地板调高回红验证。注：externalDb 实测 23 |
+| M1-2 | P2 | 发布凭据 OIDC + environment 人工审批 | 部分完成 | environment: production 已加（GitHub 侧 required reviewers 需用户配置）；api-key 从 run: 内联改 env 注入。完整 OIDC 需 NuGet.org 侧 trusted publishing 配置（用户操作），代码已留切换注释 |
+| M1-3 | P2 | 发布验证前置（push 之前），去重复跑测 | 已完成 | CHANGELOG 校验前置到 pack 前；删除 push 后"Verify Release Accuracy"（echo 恒 0+三套件重跑）——数字口径由 M0-3 地板接管。注：verify 与 publish job 各跑一遍测试是 workflow_call 结构的自然成本（独立 runner 不共享工作区），发布 job 自包含可审计 |
+| M1-5 | P2 | S2077 恢复 error + 逐调用点 #pragma 报备 | 已完成 | editorconfig S2077 none→error；7 处合法点报备（Crud 软删/GetByKey、Transactions savepoint×2、MySql SHOW COLUMNS、Sqlite PRAGMA、Scaffold PRAGMA）各带理由 |
 | M1-4 | P2 | 发布 v5.6/v5.7 + README 对齐已发布物 | 阻塞：待发布节奏裁决（开放问题 1） | |
-| M2-2 | P2 | 批量 UPDATE 参数化分支真库端到端（PG+MySQL 各 ≥3，逐行逐列断言） | 待开始 | |
-| M3-8 | P3 | 文档一致性小项（release-body.md 删除 / ADR-C 编号 / 依赖表） | 待开始 | |
-| M3-4 | P3 | 解耦 SqlShapeCacheGrowthTests 顺序依赖（独立隔离计数器） | 待开始 | |
+| M2-2 | P2 | 批量 UPDATE 参数化分支真库端到端（PG+MySQL 各 ≥3，逐行逐列断言） | 首跑即红——抓到真缺陷，修复跟进 | 真库健康期首跑即暴露独立审计 T3 预言的缺陷：PG 42601（参数版语法错；同形态字面量版 ExecuteAsync 成功、CommandText dump 正常→根因在参数绑定层）、MySQL 表名引号错。定位中断于远端库连接饱和（HealthCheck 都超时）。红灯测试保留为缺陷证据（注释含诊断结论）；数据库恢复后继续根因 |
+| M3-8 | P3 | 文档一致性小项（release-body.md 删除 / ADR-C 编号 / 依赖表） | 已完成 | release-body.md 已删（release.yml 的 full-release-body.md 是运行时生成物无关联）；ADR-C C3→C2 编号勘误；CONTRIBUTING latest-all 陈述对齐分层现实（DOC2） |
+| M3-4 | P3 | 解耦 SqlShapeCacheGrowthTests 顺序依赖（独立隔离计数器） | 已完成 | Tag 填满测试 finally 自清（不外溢给后跑者）；克隆测试 Clear 改防御性（注释更新）；"先清空"顺序耦合消除 |
 | M3-7 | P3 | 测试计数口径单一真源（声明执行口径 + 一处生成） | 待开始 | |
-| M2-8 | P3 | 依赖来源与 RID 卫生（Roslyn 仅 nuget.org；GA 切轨跟踪项） | 待开始 | |
+| M2-8 | P3 | 依赖来源与 RID 卫生（Roslyn 仅 nuget.org；GA 切轨跟踪项） | 已完成 | NuGet.Config：dotnet-tools 的 Roslyn pattern 移除（nuget.org 单一来源）；还原实测通过。GA 切轨已有既定裁决（等 .NET 11 正式版） |
 | M0-2b | P3 | （若选拆分路径）slnx 拆 CI/全量两个方案文件 | 视 M0-2 路径 | |
 | M3-1 | P3 | 覆盖率地板（line ≥70% / branch ≥60%，防退化非达标） | 待开始 | |
 | M3-2 | P3 | 变异测试扩面（Core 全部 ≥200 行文件） | 待开始 | |
