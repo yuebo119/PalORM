@@ -120,6 +120,8 @@ internal static class RegistryEmitter
         // CrudMetadata 用聚合 ctor（CrudBindings + CrudColumns）避免 9 参参数列表（S107）。
         // 评审 2026-09-02：用不含 legacy SQL 载荷的新 ctor——方言 SQL 走 CommandSqlsByDialect。
         sb.AppendLine($"        draft.CrudMetadatas[typeof({m.EntityTypeName})] = new global::PalORM.CrudMetadata(");
+        // v5.7：RETURNING 收窄判定（保守条件见 SupportsKeyOnlyReturning 文档）
+        bool keyOnlyReturning = CommandFactoryEmitter.SupportsKeyOnlyReturning(m);
         sb.AppendLine("                new global::PalORM.CrudBindings(");
         sb.AppendLine($"                    (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
         sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(parameters, ({m.EntityTypeName})obj, off),");
@@ -128,7 +130,8 @@ internal static class RegistryEmitter
         sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read,");
         // v5.6：批量 UPDATE 参数池的取值绑定器（只写 Value，不建参数）。放在末位可选参数，
         // 与 BindInsertValues 同机制；消费点 ExecuteBatchUpdateAsync 在 null 时回退逐行 BindUpdate。
-        sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateValues(parameters, ({m.EntityTypeName})obj, off)),");
+        sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateValues(parameters, ({m.EntityTypeName})obj, off),");
+        sb.AppendLine($"                    insertReturningKeyOnly: {(keyOnlyReturning ? "true" : "false")}),");
         // ITM-640：单次物化 Columns（本块原 3 处 AsSpan().ToArray() 重复分配；另 3 处
         // 分属独立 per-model 循环无法共用——复检轮计数订正）
         var columns = m.Columns.AsSpan().ToArray();

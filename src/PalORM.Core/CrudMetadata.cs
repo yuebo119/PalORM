@@ -19,6 +19,11 @@ public readonly struct CrudBindings
     public readonly Action<DbParameter[], object, int>? BindUpdateValues;
     /// <summary>行读取工厂委托（装箱为 object）。</summary>
     public readonly object RowFactory;
+    /// <summary>v5.7：INSERT ... RETURNING 只回主键（生成器静态判定：唯一自增主键之外
+    /// 全部列可直接插入且无转换器/OwnedJson/IgnoreOnInsert/Computed/Timestamp——
+    /// RETURNING 的整行与插入值恒等，物化等价于返回调用方实体+回填 ID）。
+    /// 消费方（InsertCoreAsync）据此走标量读取路径；旧生成器缺省 false 走整行物化。</summary>
+    public readonly bool InsertReturningKeyOnly;
 
     /// <summary>构造 CRUD 委托聚合。</summary>
     public CrudBindings(
@@ -27,7 +32,8 @@ public readonly struct CrudBindings
         Action<DbCommand, object> bindUpsert,
         Action<DbCommand, object> bindUpdate,
         object rowFactory,
-        Action<DbParameter[], object, int>? bindUpdateValues = null)
+        Action<DbParameter[], object, int>? bindUpdateValues = null,
+        bool insertReturningKeyOnly = false)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -35,6 +41,7 @@ public readonly struct CrudBindings
         BindUpdate = bindUpdate;
         RowFactory = rowFactory;
         BindUpdateValues = bindUpdateValues;
+        InsertReturningKeyOnly = insertReturningKeyOnly;
     }
 }
 
@@ -90,6 +97,8 @@ public readonly struct CrudMetadata
     public readonly Func<object, bool> HasDefaultKey;
     /// <summary>v4.3：源生成器保证 binder 参数数 == 列数，probe 只需验证一次。注册时设 true。</summary>
     public readonly bool InsertBinderValidated;
+    /// <summary>v5.7：INSERT ... RETURNING 只回主键（判定条件与消费路径见 CrudBindings.InsertReturningKeyOnly）。</summary>
+    public readonly bool InsertReturningKeyOnly;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
@@ -118,6 +127,7 @@ public readonly struct CrudMetadata
         IncrementVersion = incrementVersion;
         HasDefaultKey = hasDefaultKey;
         InsertBinderValidated = insertBinderValidated;
+        InsertReturningKeyOnly = bindings.InsertReturningKeyOnly;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
@@ -143,7 +153,8 @@ public readonly struct CrudMetadata
 
     internal CrudMetadata Copy()
         => new(Sqls,
-            new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues),
+            new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues,
+                InsertReturningKeyOnly),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }

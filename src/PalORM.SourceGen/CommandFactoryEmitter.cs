@@ -244,9 +244,35 @@ internal static class CommandFactoryEmitter
         if (dialect == SqlGenerationDialect.MySql)
             return string.Empty;
         string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
+        // v5.7 收窄：满足 SupportsKeyOnlyReturning 时只回主键——整行物化等价于
+        // 返回调用方实体+回填 ID（判定条件见该方法文档），省整行网络与物化。
+        if (SupportsKeyOnlyReturning(model))
+        {
+            ColumnModel pk = model.Columns.AsSpan().ToArray()
+                .First(static c => c.IsPrimaryKey);
+            return BuildInsertSql(model, dialect) + " RETURNING " + Quote(pk.ColumnName);
+        }
         return BuildInsertSql(model, dialect) + " RETURNING " +
             string.Join(", ", model.Columns.AsSpan().ToArray()
                 .Select(column => Quote(column.ColumnName)));
+    }
+
+    /// <summary>「RETURNING 只回主键」的静态判定——保守条件，全部满足才收窄：
+    /// ① 恰一个主键且自增（唯一需要从 DB 取回的值）；
+    /// ② 其余全部列 IsInsertable（无 IgnoreOnInsert——该类列不进 INSERT，
+    ///   DB 默认值与调用方实体值**可能不同**，物化返回才是真源；无 Computed/Timestamp——
+    ///   DB 计算值必然与插入值不同）；
+    /// ③ 无转换器列、无 OwnedJson——值经 f→g 往返不保证恒等。
+    /// 任一不满足 → 保持整行 RETURNING + 物化（既有契约）。</summary>
+    internal static bool SupportsKeyOnlyReturning(TableModel model)
+    {
+        var columns = model.Columns.AsSpan().ToArray();
+        ColumnModel[] primaryKeys = [.. columns.Where(static c => c.IsPrimaryKey)];
+        if (primaryKeys.Length != 1 || !primaryKeys[0].IsAutoIncrement)
+            return false;
+        return columns.All(static c =>
+            (c.IsInsertable && c.ConverterTypeName is null && !c.IsOwnedJson)
+            || (c.IsPrimaryKey && c.IsAutoIncrement));
     }
 
     // ── Upsert SQL 预构建（v4.1 性能优化：消除运行时 LINQ + string.Join 拼接）──
