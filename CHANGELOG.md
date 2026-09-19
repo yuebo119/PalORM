@@ -114,6 +114,27 @@
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
+### ⚡ 性能（T5c：BuildSql 输出缓存 + 据此修复跨方言缓存污染缺陷）
+
+- **BuildSql 输出按形状缓存**：BuildSql 输出仅由「子句 Sql 文本序列 + 方言 + SplitQuery +
+  Take/Skip 值」决定（LIMIT/OFFSET 的值直接内联进文本——键必须含值）。同一形状的查询
+  复用同一 SQL string 实例，命中时跳过整个分段拼接。
+  <br>实测（S1 单行查询，直通配置，5 万次/点）：
+  `ToListAsync` 单行 **2,816 → 2,528（−288 B，−10.2%）**；
+  `FirstOrDefault` **2,752 → 2,424（−11.9%）**；GetAsync/Insert/Update 不变 ✓。
+  本轮起点 2,976 → **2,528，T1+T5a+T5c 合计 −15.0%**。
+  <br>正确性设计：哈希只用于选桶，命中后**全量核对**——子句序列逐条值相等 +
+  字段包（`SqlShapeCache.ShapeFields` 记录结构体：方言/SplitQuery/Take/Skip/表名/CTE 名）值相等；
+  任一不等即未命中重建，哈希碰撞不会产出错误 SQL。容量以应用内"不同形状数"为界。
+  S3 反向验证：禁用命中 → 2,816/2,752（退化确认），恢复 → 2,528/2,424。
+- **T5c 暴露并修复一个此前不可见的真实缺陷：跨方言缓存污染**。形状键若无方言，
+  PG 会话与 MySQL 会话的同形状查询（用户手写的 WHERE 文本无引用符差异）会互相复用
+  对方方言的 SQL——`PessimisticLockTests`（上一轮新增的 PG/MySQL 同形状锁用例）
+  实测捕获：MySQL 收到 PG 双引号 SQL 报语法错误。根因是 SELECT 列清单的引用符随方言
+  不同，而它不在子句序列内。修复：`ShapeFields` 加入 `Dialect` 并参与哈希与核对。
+  变异探针：禁用文本核对 + 恒定哈希 → 集成套件 5 例失败（错表 SQL 被当场抓出）；
+  同时实证核对层的碰撞防护设计有效（恒定哈希单独注入时 184 全过——只损失性能不出错）。
+
 ### ⚡ 性能（T5a：删除冗余平铺参数列表，COW 减半）
 
 - **`QueryBuilder` 删除冗余的平铺参数列表（`_parameters` List）**，代之以 `int _parameterCount`：
