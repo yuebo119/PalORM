@@ -21,7 +21,7 @@ namespace PalORM.Integration.Tests;
 /// <b>CreateConnection 全量调优复刻</b>（NoResetOnClose/16384 缓冲区/Enlist=false）——原生
 /// 路径不可复现。PG 侧 InitializeConnectionAsync 未覆写（no-op）已核实。剩余假说：dump 的
 /// CommandText 与实际发送文本存在<b>不可见差异</b>（sink 按字符串 dump，回车符与 U+00A0 等不可见字符不显示；
-/// POSITION 22 与表名字节区吻合）——下一轮 dump 逐字符码点裁决。修复任务在账本 M2-2 跟进。</para></summary>
+/// POSITION 22 与表名字节区吻合）——下一轮 dump 逐字符码点裁决。修复任务在账本 M2-2 跟进（十一项矩阵定格，下一招 cmd.Clone 换连接/Npgsql 网络日志）。</para></summary>
 public sealed class BulkUpdateBatchDialectTests
 {
     private static DbOptions PgOpts => new()
