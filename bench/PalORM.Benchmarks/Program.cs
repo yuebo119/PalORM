@@ -20,6 +20,9 @@ namespace PalORM.Benchmarks;
 
 public static class Program
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "CLI 模式分派是顺序 if-return 的天然形态（--boxing/--workload/--memory/--stability/--bdn-debug），分支间无嵌套逻辑。")]
     public static void Main(string[] args)
     {
         // v5.0 阶段 3.4：--boxing 切到手写微基准（绕过 BDN .NET 11 preview 不兼容）
@@ -42,8 +45,16 @@ public static class Program
             }).GetAwaiter().GetResult();
             return;
         }
+        // 长稳测试（维度 10：持续负载抓泄漏/衰减）——--stability <秒> [dialect]
+        if (args.Length > 0 && args[0] == "--stability")
+        {
+            StabilityHarness.RunAsync(
+                seconds: args.Length > 1 ? int.Parse(args[1]) : 180,
+                dialect: args.Length > 2 ? args[2] : "sqlite").GetAwaiter().GetResult();
+            return;
+        }
         // 大结果集内存曲线 + 查询构建分配（维度 1/7）
-        if (args.Length > 0 && args[0] == "--memory")
+        if (args.Length > 0 && args[0] is string mode && mode == "--memory")
         {
             MemoryProbe.RunAsync(new MemoryOptions()).GetAwaiter().GetResult();
             return;
