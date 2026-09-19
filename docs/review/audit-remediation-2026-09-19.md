@@ -4,7 +4,7 @@
 > 纪律：任务只有在实现、对应测试和验收命令均通过后才能标记完成；每任务走 S1 基线 → S2 单变量 → S3 反向验证（撤回修复 → 用例确定性失败）。
 > 约束：SHAPE 系列涉及 SQL 文本形态的任务，动快照与 SQL 转储基线时须评审确认；全程保持 `dotnet build PalORM.ci.slnf -c Release --no-incremental -warnaserror` 0 警告、既有 620 测试不回退、4×AOT 矩阵绿。
 >
-> **执行记录（2026-09-19 执行会话）**：S1 基线 = 构建 0 警告 + Core 274/274。22 任务完成 16 项、证伪撤销 1 项（GEN-010）、环境阻塞 2 项（TEST-010/011）、保留待后续 3 项（GEN-012/013/015，P3 打磨级）。收尾验证：`--no-incremental -warnaserror` 0 警告、Core 280/280、SourceGen 197/197、SQLite Native AOT 原生运行 PASSED（PG/MySQL 矩阵与 Integration 套件待数据库环境）。共 11 个提交。
+> **执行记录（2026-09-19 执行会话）**：S1 基线 = 构建 0 警告 + Core 274/274。22 任务完成 16 项、证伪撤销 1 项（GEN-010）、环境阻塞 2 项（TEST-010/011）、保留待后续 3 项（GEN-012/013/015，P3 打磨级）。收尾验证：`--no-incremental -warnaserror` 0 警告、Core 279/279、SourceGen 196/196、SQLite Native AOT 原生运行 PASSED（PG/MySQL 矩阵与 Integration 套件待数据库环境）。共 12 个提交（SHAPE-001/002 立项 + SHAPE-011 + SHAPE-010 + DOC-010/CACHE-011 + ERR-010/DOC-011 + GEN-011 + CORE-010/PROV-010 + CACHE-010/API-010/PROV-011 + GEN-010 实验 + GEN-014/TEST-012 + 账本回填 ×2）。
 
 ## 完成定义（可衡量信号）
 
@@ -12,7 +12,7 @@
 2. ✅ ToPageAsync 克隆路径形状缓存命中（ClonedBuilder_ReusesCacheEntryOfOriginalShape：同 SQL 文本仅一条目）。
 3. ✅ README 无"内置加密"表述（降级为驱动层归属 + Password= 指引）。
 4. ⏸ StoredProcBuilder 与 LISTEN/NOTIFY 真库测试——本地 PG/MySQL 不可达（5432/3306 无服务），待数据库环境后实施（任务设计与验收标准已在本账本）。
-5. ✅ 门禁不回退：0 警告构建、Core/SourceGen 全绿（274→280 / 191→197，净增 12 条防线测试）、SQLite AOT 原生运行 PASSED；PG/MySQL AOT 矩阵与 Integration 留待 CI/环境。
+5. ✅ 门禁不回退：0 警告构建、Core/SourceGen 全绿（274→279 / 191→196，净增 10 条防线测试：缓存 3 + 拦截器契约 2 + 令牌守卫 4 + 基类增量 1，另 1 处既有测试断言增强）、SQLite AOT 原生运行 PASSED；PG/MySQL AOT 矩阵与 Integration 留待 CI/环境。
 
 ## 状态账本
 
