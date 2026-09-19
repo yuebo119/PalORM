@@ -1,55 +1,5 @@
-using System.Collections.Immutable;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-
 namespace PalORM.SourceGen.Tests;
 
-/// <summary>ITM-753(r21)：IsBalancedParentheses 方言词法覆盖。
-/// <para>背景：ITM-741(r20) 重写扫描器后仍漏三类方言形态——MySQL 反斜杠转义单引号、
-/// 方括号标识符（SQLite/T-SQL）、PG dollar-quoting。三者被当作未闭合区间吞掉后续括号，
-/// 合法 [Computed] 表达式被判不平衡 → PALORM044 Error 误拒。</para></summary>
-public sealed class ParenthesisScanTests
-{
-    [Test]
-    [Arguments("COALESCE(a, b)", true)]
-    [Arguments("LOWER(')x')", true)]
-    [Arguments("('a' || ')')", true)]
-    [Arguments("COALESCE(\"a)b\", 0)", true)]
-    [Arguments("-- c )\n(1+1)", true)]
-    [Arguments("COALESCE(a, b", false)]
-    [Arguments("COALESCE(a, b))", false)]
-    // ITM-753 新增三类方言形态
-    [Arguments("CONCAT('it\\'s (x)', col)", true)]
-    [Arguments("[we(ird] + 1", true)]
-    [Arguments("$$a(b$$ + 1", true)]
-    [Arguments("$tag$a(b$tag$ + 1", true)]
-    public async Task IsBalancedParentheses_HandlesDialectLexemes(string expression, bool expected)
-    {
-        await Assert.That(
-            SourceGenerationValidation.IsBalancedParentheses(expression)).IsEqualTo(expected);
-    }
-
-    [Test]
-    public async Task PALORM044_MySqlEscapedQuote_DoesNotReport()
-    {
-        // ITM-753：MySQL 反斜杠转义单引号里的括号不得被计入配对
-        const string source = """
-            using PalORM;
-            [Table("t")]
-            public sealed class E
-            {
-                [Key] public long Id { get; set; }
-                [Computed("CONCAT('it\\'s (x)', code)")]
-                public string Slug { get; set; } = "";
-            }
-            """;
-        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(source, "ParenScan");
-        await Assert.That(GeneratorTestHost.FormatErrors(result.OutputCompilation)).IsEmpty();
-    }
-}
-
-/// <summary>ITM-754(r21)：[SqlTemplate] 生成类名 SqlTemplates 与同命名空间既有类型冲突时须报 PALORM046
-/// （否则 partial 声明冲突以 CS0260 落在 .g.cs，违反 ITM-573 家族"错误不得指向 .g.cs"）。</summary>
 public sealed class SqlTemplateNamespaceCollisionTests
 {
     [Test]

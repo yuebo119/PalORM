@@ -1,55 +1,13 @@
-using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-[NotInParallel]
-public sealed class FinalTests
+/// <summary>查询指标契约——低基数 outcome 标签、错误/取消分类、GridReader 收尾（原 FinalTests 拆分，审计 TEST-012）。
+/// MeterListener 是进程级广播：executions == 1 等精确计数断言要求组内串行（命名组隔离）。</summary>
+[NotInParallel("PalORMMetrics")]
+public sealed class QueryMetricsTests
 {
-    [Test]
-    public async Task WindowOver_Execution_ReturnsRows()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-        await db.InsertAsync(new Product { Name = "W1", Price = 10m, Stock = 0 });
-        var r = await db.From<Product>().UnsafeWindowOver("ROW_NUMBER()", "ORDER BY price DESC").ToListAsync();
-        await Assert.That(r.Count).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task WithCommandTimeout_ExecutesSuccessfully()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-        var r = await db.From<Product>().WithCommandTimeout(30).ToListAsync();
-        await Assert.That(r.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task WithTracing_EmitsSanitizedActivity()
-    {
-        Activity? captured = null;
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == PalORMMetrics.ActivitySourceName,
-            Sample = static (ref _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => captured = activity
-        };
-        ActivitySource.AddActivityListener(listener);
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-
-        await db.From<Product>().Where($"name = {"secret-value"}").WithTracing().ToListAsync();
-
-        await Assert.That(captured).IsNotNull();
-        await Assert.That(captured!.OperationName).IsEqualTo("PalORM.Query");
-        await Assert.That(captured.GetTagItem("db.operation.name")).IsEqualTo("select");
-        await Assert.That(captured.GetTagItem("palorm.outcome")).IsEqualTo("success");
-        await Assert.That(string.Join('|', captured.TagObjects.Select(tag => $"{tag.Key}={tag.Value}")))
-            .DoesNotContain("secret-value");
-    }
-
     [Test]
     public async Task WithMetrics_EmitsLowCardinalityOutcomeTags()
     {
@@ -228,26 +186,6 @@ public sealed class FinalTests
 
         await Assert.That(outcomes).Contains("error");
         await Assert.That(outcomes).Contains("cancelled");
-    }
-
-    [Test]
-    public async Task CTE_SimpleQuery_ReturnsRows()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-        await db.InsertAsync(new Product { Name = "C", Price = 10m, Stock = 0 });
-        var r = await db.From<Product>().With("c", $"SELECT * FROM products WHERE price > {5m}").ToListAsync();
-        await Assert.That(r.Count).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task AsSplitQuery_ExecutesWithoutJoin()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-        await db.InsertAsync(new Product { Name = "S", Price = 1m, Stock = 0 });
-        var r = await db.From<Product>().AsSplitQuery().ToListAsync();
-        await Assert.That(r.Count).IsEqualTo(1);
     }
 
     private sealed class UnregisteredResult;
