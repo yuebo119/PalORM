@@ -126,6 +126,19 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### ⚡ 性能（M1：租户过滤写路径 SQL 缓存——四处缓存外重建收口）
+
+- **写路径租户片段缓存**：SELECT 家族三形态 v5.6 已缓存（`FilterFormsCache`），但四个
+  写路径调用点仍在缓存外逐次重建——软删 `DeleteAsync` 每次调用 **5 次 QuoteIdentifier +
+  全句插值**重建 UPDATE 语句；`UpdateCoreAsync`/物理 `DeleteAsync` 每次拼接
+  `sqls.Update/Delete + 租户后缀`；`BulkDeleteAsync` 每次重建后缀。现在：
+  软删全句 per-(Type, Dialect, hasTenant) 缓存、Update/Delete 带租户形态 per-(Type, Dialect)
+  缓存、租户后缀 per-Dialect 缓存（BulkDelete 语句随批次占位符变化，仅后缀可缓存）。
+  稳态命中路径为一次字典查找，构建期成本不变；键含 Dialect（跨方言缓存污染教训在案）。
+- 测试：`TenantWritePaths_IsolateAcrossTenants_AfterSqlCaching`——Update/软删/BulkDelete
+  三入口的租户隔离（本租户 1 行、跨租户 0 行、幂等 0）+ 二次调用（缓存命中）结果一致。
+  验证：Core 300/300 · Integration 203/203 · AOT 原生运行 PASSED。
+
 ### 🔒 可靠性（T1 后半：Commit 失败后跳过已终结事务的回滚）
 
 - **提交失败 → 跳过徒劳回滚**（`WithTransaction` / Bulk 内核 `RunInTransactionScopeAsync` /
