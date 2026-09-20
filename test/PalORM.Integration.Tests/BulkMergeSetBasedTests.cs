@@ -12,6 +12,7 @@ namespace PalORM.Integration.Tests;
 /// ④ 重复执行幂等（upsert）；⑤ [ConcurrencyCheck] 实体保持逐条路径的显式拒绝（ITM-503）。</para>
 /// <para>跨批上限（900 参数/语句）由 4 列实体 × 200+ 行隐式覆盖（200 行 × 4 列 &gt; 900
 /// → 分两批），覆盖多批路径。</para></summary>
+[NotInParallel("ExtBulkTable")]
 internal sealed class BulkMergeSetBasedTests
 {
     [Test]

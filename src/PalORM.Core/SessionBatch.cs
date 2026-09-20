@@ -57,14 +57,33 @@ public sealed class SessionBatch<TProvider> : IDisposable
         return this;
     }
 
+    /// <summary>追加一条无参数原语语句（L4，v5.7，internal）——DDL 等运行时字符串不能经
+    /// <see cref="Append"/>（<c>$"{ddl}"</c> 会把整句变成插值参数）。守卫与 Append 同口径。</summary>
+    internal SessionBatch<TProvider> AppendRaw(string sql)
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException(
+                "Batch statement must not be empty or whitespace; an empty statement produces invalid SQL.",
+                nameof(sql));
+        _statements.Add((sql, Array.Empty<DbParameter>()));
+        return this;
+    }
+
     /// <summary>执行全部已追加语句，返回累计受影响行数。
     /// 批量可重复执行（每次执行全部当前语句）。</summary>
-    public async ValueTask<int> ExecuteNonQueryAsync(CancellationToken ct = default)
+    public ValueTask<int> ExecuteNonQueryAsync(CancellationToken ct = default)
+        => ExecuteNonQueryAsync(operationOwner: null, ct);
+
+    /// <summary>L4（v5.7）：携带外层操作 owner 的执行入口——持有操作租约的内部路径
+    /// （如 MigrateAsync）经 owner 重入，不再与外层租约冲突。</summary>
+    internal async ValueTask<int> ExecuteNonQueryAsync(object? operationOwner, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_statements.Count == 0) return 0;
 
-        using SessionOperationState.SessionOperationLease operation = _session.EnterBatchOperation();
+        using SessionOperationState.SessionOperationLease operation =
+            _session.EnterBatchOperation(operationOwner);
         DbConnection connection = _session.BatchConnection;
         DbTransaction? transaction = _session.GetActiveBatchTransaction();
 
@@ -74,6 +93,9 @@ public sealed class SessionBatch<TProvider> : IDisposable
         {
             try
             {
+                // 边界（L4 核实）：System.Data.Common.DbBatch 无 CommandTimeout 面——批路径
+                // 超时由驱动默认决定；回退路径按会话 CommandTimeout（含显式 Zero=无限）。
+                // 慢 DDL 场景（大表 CREATE INDEX）不应走批——MigrateAsync 的索引 DDL 保持逐条。
                 foreach ((string sql, IReadOnlyList<DbParameter> parameters) in _statements)
                 {
                     DbBatchCommand command = batch.CreateBatchCommand();

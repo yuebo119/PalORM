@@ -126,6 +126,27 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### ⚡ 性能（L4：MigrateAsync 批量化——N 表 N 次往返 → 1 次）+ 测试基建修复（外库 DDL 全量串行）
+
+- **MigrateAsync 两阶段重构**：先全集校验（表/索引方言 DDL 键齐全）再执行——原实现
+  边校验边执行，type B 缺键在 type A 的 DDL 已执行后才抛，留半成品 schema；现在缺键时
+  零副作用。建表 DDL 经 `SessionBatch` 单次往返（PG 真 DbBatch / MySQL 驱动侧批处理 /
+  SQLite 顺序回退）；索引 DDL 保持逐条（MySQL 1061 幂等跳过是逐条 catch 语义）。
+  配套：`SessionBatch.AppendRaw`（internal，DDL 运行时字符串不能走 FormattableString
+  插值洞）、owner 重入的 `ExecuteNonQueryAsync` 内部重载（迁移持租约内执行批量）。
+  边界核实：`System.Data.Common.DbBatch` 无 CommandTimeout 面——批路径超时由驱动默认
+  决定；慢 DDL（大表 CREATE INDEX）不在批内。
+- **测试基建修复（根因实证）**：外库集成测试存在**同库并发 DDL 竞态**——
+  `information_schema.PROCESSLIST` 快照实证多连接同时执行 DROP/CREATE。失败机制：
+  测试 A 的 DROP 落地后、CREATE 发出前，并发测试 B 的 MigrateAsync（注册表含全部实体）
+  以 `CREATE TABLE IF NOT EXISTS` 重建刚被 DROP 的表 → A 的 CREATE 撞 1050；
+  PG 侧并发迁移的建表突发在 pg_type 系统目录互撞 23505。此前仅部分测试归
+  `ExtBulkTable` 组（靠时序运气掩盖，基线即有 ~1/9 偶发）。现在**全部 10 个触外库
+  测试类类级归组**串行。L4 批量化使迁移 DDL 更密集、撞窗概率放大，是本轮实证定位
+  的触发器而非根因。
+  验证：Integration 连续 8 轮默认并行度全绿（203/203）· Core 303/303 ·
+  SourceGen 197/197 · AOT 原生运行 PASSED。
+
 ### 🔭 可观测性（R3：ExecuteAsync 接入拦截器三段式——覆盖面缺口补齐）
 
 - **`ExecuteAsync`（原始 DDL/DML）拦截器接入**：此前仅实体 SELECT 管线与 QueryBuilder

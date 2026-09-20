@@ -69,13 +69,21 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>从编译时生成的 DDL 执行迁移——零运行时反射。
     /// 建表后执行 [Index]/[Unique] 索引 DDL（ADR-B）；SQLite/PG 走 IF NOT EXISTS，
-    /// MySQL 靠 IsDuplicateSchemaObject 识别重名索引实现幂等。</summary>
+    /// MySQL 靠 IsDuplicateSchemaObject 识别重名索引实现幂等。
+    /// <para><b>L4（v5.7）两阶段</b>：先全集校验（表/索引方言 DDL 键齐全）再执行——
+    /// 原实现边校验边执行，type B 缺键在 type A 的 DDL 已执行后才抛，留半成品 schema；
+    /// 现在缺键时零副作用。建表 DDL 经 <see cref="CreateBatch"/> 单次往返
+    /// （PG 真 DbBatch / MySQL 驱动侧批处理 / SQLite 顺序回退），N 表 N 次往返 → 1 次；
+    /// 索引 DDL 保持逐条——MySQL 1061 幂等跳过是逐条 catch 语义，批内单条失败无法定位跳过项。</para></summary>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         _lastMigrationSkippedIndexes = [];  // ITM-765：每次迁移重置跳过清单
         // 评审 2026-09-02 第二批（ADR-J）：实体全集以 TableNames 为键源——legacy CreateTableSql
         // 已从生成物移除，方言 DDL（CreateTableSqlByDialect）是唯一执行真源。
+        int entityCount = PalORM_Runtime.TableNames.Count;
+        var tableDdls = new List<string>(entityCount);
+        var indexDdlGroups = new List<IReadOnlyList<string>>(entityCount);
         foreach (var type in PalORM_Runtime.TableNames.Keys)
         {
             // ITM-569：拒绝回退 legacy 单方言 DDL（与 GetCommandSqls 对称）——旧生成器片段缺
@@ -88,13 +96,6 @@ public sealed partial class DataSession<TProvider>
                     $"Type '{type.Name}' has no dialect-specific generated DDL. " +
                     "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
             }
-            string ddl = sqls.Get(TProvider.Dialect);
-            await using DbCommand cmd = CreateCommand();
-            cmd.CommandText = ddl;
-            // ITM-769(r21)：DDL 尊重显式 Zero（无限）——大表建索引可超任意兜底值
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-
             // ITM-672 定稿：与建表 DDL 缺键（ITM-569）对称——索引元数据缺键必须显式拒绝，
             // 不能建表成功、索引静默缺失（中间版本生成器的表会以"无索引"形态运行）。
             // r18 配套契约：RegistryEmitter 对零索引实体也发射空 CreateIndexSqlSet，
@@ -106,8 +107,21 @@ public sealed partial class DataSession<TProvider>
                     $"Type '{type.Name}' has no dialect-specific generated index DDL. " +
                     "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
             }
-            await ApplyIndexDdlAsync(indexSqls.Get(TProvider.Dialect), ct).ConfigureAwait(false);
+            tableDdls.Add(sqls.Get(TProvider.Dialect));
+            indexDdlGroups.Add(indexSqls.Get(TProvider.Dialect));
         }
+
+        // L4：建表 DDL 一次往返（owner 重入外层迁移租约）
+        if (tableDdls.Count > 0)
+        {
+            using SessionBatch<TProvider> batch = CreateBatch();
+            foreach (string ddl in tableDdls)
+                _ = batch.AppendRaw(ddl);
+            _ = await batch.ExecuteNonQueryAsync(operation.Owner, ct).ConfigureAwait(false);
+        }
+
+        foreach (IReadOnlyList<string> indexDdls in indexDdlGroups)
+            await ApplyIndexDdlAsync(indexDdls, ct).ConfigureAwait(false);
     }
 
     /// <summary>ITM-723：零超时配置（= ADO.NET 无限等待）下 DDL/探活的有限兜底上限。</summary>

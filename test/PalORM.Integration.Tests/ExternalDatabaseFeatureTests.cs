@@ -12,6 +12,7 @@ namespace PalORM.Integration.Tests;
 /// <para>清理纪律：try/finally DROP（对齐 PostgreSqlIntegrationTests 先例）；超时护栏用
 /// WaitAsync + CancellationTokenSource，零 Sleep/轮询。坏地址实验（连接串指向 port 1）已证
 /// 本组测试真实连库，非静默跳过。</para></summary>
+[NotInParallel("ExtBulkTable")]
 public sealed class ExternalDatabaseFeatureTests
 {
     // M2-1：统一走 TestDb 方言夹具（复活死代码 + 三行代码写真库测试的设计意图）

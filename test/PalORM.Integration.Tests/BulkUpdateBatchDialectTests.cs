@@ -19,6 +19,7 @@ namespace PalORM.Integration.Tests;
 /// 路径不可复现。PG 侧 InitializeConnectionAsync 未覆写（no-op）已核实。剩余假说：dump 的
 /// CommandText 与实际发送文本存在<b>不可见差异</b>（sink 按字符串 dump，回车符与 U+00A0 等不可见字符不显示；
 /// POSITION 22 与表名字节区吻合）——下一轮 dump 逐字符码点裁决。修复任务在账本 M2-2 跟进（十一项矩阵定格，下一招 cmd.Clone 换连接/Npgsql 网络日志）。</para></summary>
+[NotInParallel("ExtBulkTable")]
 public sealed class BulkUpdateBatchDialectTests
 {
     // M2-1：改用 TestDb 方言夹具（原手动构造使 TestDb.PostgreSqlAsync/MySqlAsync 成死代码——

@@ -11,6 +11,7 @@ namespace PalORM.Integration.Tests;
 /// （ITM-639：SQLite 上只支持预览形态），所以必须在 PG/MySQL 真库上验证。</para>
 /// <para>断言口径：事务内执行并取回行（真跑通）；同时断言锁子句出现在 WHERE **之后**
 /// （位置是子句拼接顺序的函数，顺序回归会让语句非法）。</para></summary>
+[NotInParallel("ExtBulkTable")]
 internal sealed class PessimisticLockTests
 {
     private static DbOptions PgOpts => new() { ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString() };
