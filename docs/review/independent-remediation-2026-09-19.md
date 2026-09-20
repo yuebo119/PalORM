@@ -46,7 +46,7 @@
 | M3-5 | P3 | ArchitectureInvariantTests 转行为断言 | 已完成（行为面新增;源码扫描保留为结构面） | DefaultFilterBehaviorTests 三用例:①GetAllAsync 与等价手写过滤 SQL 同结果集(四象限种子:软删×租户) ②OrWhere 无法穿透默认过滤(ITM-401 行为面) ③CountAsync 与 ToListAsync 计数一致。源码扫描(ArchitectureInvariantTests)保留——结构挡"消失"、行为挡"漂移",两面互补(报告原方案是替换,实施升级为互补) |
 | M3-6 | P3 | 删除 no-op 抽象（ConnectionLease）与 legacy 载荷处置 | 已完成（ConnectionLease 部分;legacy 载荷见弃用裁决） | ConnectionLease 退场:AcquireExecutionConnectionAsync 直传 DbConnection(同步分支零分配,每查询 -1 对象 -1 虚调用);4 执行调用点去 using(无资源);GridReader 释放链 reader→command→operation(连接清理段删);CleanupQueryResourcesAsync 签名收窄;GridReaderLifecycleTests 夹具同步。验证:685 全绿(含 199 真库)+AOT 原生 PASSED+严格构建 0 警告 |
 | M2-1 | P2 | 真库测试面从 12% 扩容 + TestDb 方言夹具复活（≥20 调用点） | 待开始 | |
-| M2-3 | P3 | CloneForExecution 字段全集机械化（编译期守卫） | 待开始 | |
+| M2-3 | P3 | CloneForExecution 字段全集机械化（编译期守卫） | 已完成（守卫型测试方案） | QueryBuilderCloneCompletenessTests:源码机械比对「全部实例字段 = ctor 赋值集 ∪ 克隆体赋值集」——新增字段两者都不在即红(r6-N1 断裂事故同型防线;CallerFilePath 定位同 ArchitectureInvariantTests 先例)。S3:注释克隆体 _cacheTenantScope → 守卫确定性报"_cacheTenantScope"回红。报告原方案(反射-free 生成侧克隆/状态 record 收编)被评估为过度——热路径 struct + 33 字段,守卫测试以最小改动达成同一目标 |
 | M2-4 | P3 | 执行管线单实现化（RunPipelineAsync + 物化策略） | 待开始 | |
 | **先裁决** | — | M2-6（公共旋钮处置，破坏 API） | 阻塞：开放问题 5 | |
 | **先裁决** | — | M2-7 / P4（WithCache 值语义 CloneOnRead） | 阻塞：开放问题 3 | |
