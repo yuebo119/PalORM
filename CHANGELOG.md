@@ -126,6 +126,16 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### ⚡ 性能（L1：BulkUpdateAsync 自动路由批量——满足条件时 N 行 N 次 RTT → 分批单语句）
+
+- **`BulkUpdateAsync` 智能路由**：满足全部保守条件时自动走单语句批量路径
+  （`PrepareBatchUpdateContext` + 分批 `ExecuteBatchUpdateAsync`，与 `BulkUpdateBatchAsync`
+  同核心），**N 行 N 次往返 → 分批单语句**（与 BulkMerge 集合化同构收益）。
+  条件（任一不满足即保持逐条）：方言非 SQLite（CASE WHEN 实测慢 6.4×）、实体数 >1、
+  无 `[ConcurrencyCheck]`（批量无法表达每行 version 匹配）、无软删、无租户过滤。
+  逐条路径的乐观锁/软删/租户语义**完全保留**——不满足条件的用户零感知。
+  <br>用户不再需要知道"有 BulkUpdateBatchAsync 这个更快的选项"——默认路径在安全时自动加速。
+
 ### 🔒 可靠性（R1+L2+T5：写路径超时包装——异常统一 + 事务上界）
 
 - **新增 `ResilienceExecutor.ExecuteWithTimeoutAsync`**：仅超时包装、不重试不熔断——

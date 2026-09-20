@@ -128,6 +128,41 @@ public partial class DataSession<TProvider>
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
+
+        // v5.7 自动路由（L1）：满足全部条件时走单语句批量（远程 N 行 N 次 RTT → 1 次，
+        // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / 软删 / 租户 / SQLite）。
+        // 每个条件不自动路由的理由：
+        //   乐观锁（IncrementVersion）→ 批量无法表达"每行 version 匹配"；
+        //   软删/租户 → 逐条路径追加默认过滤，批量路径的过滤追加需另做（当前不支持）；
+        //   SQLite → CASE WHEN 在 SQLite 实测慢 6.4×（BulkUpdateBatchAsync 已有同判）。
+        if (TProvider.Dialect != SqlDialect.Sqlite
+            && entities.Count > 1
+            && PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata routeMetadata)
+            && routeMetadata.IncrementVersion is null
+            && !IsSoftDeletable<T>()
+            && !HasTenantFilter<T>())
+        {
+            // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
+            PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+            string tableName = state._tableNames[typeof(T)];
+            BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, routeMetadata, tableName, entities[0]);
+            int rowsPerBatch = Math.Max(1, SqlLimits.MaxBindParameters / (ctx.SetColumnCount + 1));
+            return await RunInTransactionScopeAsync(
+                operation.Owner,
+                async (tran, token) =>
+                {
+                    long totalAffected = 0;
+                    for (int batchStart = 0; batchStart < entities.Count; batchStart += rowsPerBatch)
+                    {
+                        int batchEnd = Math.Min(batchStart + rowsPerBatch, entities.Count);
+                        totalAffected += await ExecuteBatchUpdateAsync(
+                            entities, batchStart, batchEnd, routeMetadata, ctx, tran, token).ConfigureAwait(false);
+                    }
+                    return totalAffected;
+                },
+                ct).ConfigureAwait(false);
+        }
+
         return await ExecuteBulkUpdateRowByRowAsync<T>(entities, operation.Owner, ct).ConfigureAwait(false);
     }
 
@@ -224,6 +259,12 @@ public partial class DataSession<TProvider>
             },
             ct).ConfigureAwait(false);
     }
+
+    /// <summary>实体是否标注 [SoftDelete] 且未被 IgnoreFilters——按注册表 EntityFeatures
+    /// 判定（与 BulkDeleteAsync 的软删分派同源）。</summary>
+    private bool IsSoftDeletable<T>() where T : class, new()
+        => !_ignoreFilters
+            && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
 
     /// <summary>准备批量 UPDATE 上下文：SET 列集取自 CrudMetadata 真源、引号包裹、租户过滤。
     /// probe 命令验证 BindUpdate 参数序与元数据列集一致（ITM-642——原实现解析生成 SQL 文本
