@@ -9,5 +9,9 @@
   "PalORM.Integration.Tests": {
     "passed": 190,
     "externalDatabase": 20
+  },
+  "coverage": {
+    "core": 60.0,
+    "_comment": "M3-1 地板=当前实测-5(Core line 65.35%,2026-09-20);防退化非达标,调整只在用例有意删除时"
   }
 }
