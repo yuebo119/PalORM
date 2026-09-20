@@ -32,7 +32,7 @@
 | M1-2 | P2 | 发布凭据 OIDC + environment 人工审批 | 部分完成 | environment: production 已加（GitHub 侧 required reviewers 需用户配置）；api-key 从 run: 内联改 env 注入。完整 OIDC 需 NuGet.org 侧 trusted publishing 配置（用户操作），代码已留切换注释 |
 | M1-3 | P2 | 发布验证前置（push 之前），去重复跑测 | 已完成 | CHANGELOG 校验前置到 pack 前；删除 push 后"Verify Release Accuracy"（echo 恒 0+三套件重跑）——数字口径由 M0-3 地板接管。注：verify 与 publish job 各跑一遍测试是 workflow_call 结构的自然成本（独立 runner 不共享工作区），发布 job 自包含可审计 |
 | M1-5 | P2 | S2077 恢复 error + 逐调用点 #pragma 报备 | 已完成 | editorconfig S2077 none→error；7 处合法点报备（Crud 软删/GetByKey、Transactions savepoint×2、MySql SHOW COLUMNS、Sqlite PRAGMA、Scaffold PRAGMA）各带理由 |
-| M1-4 | P2 | 发布 v5.6/v5.7 + README 对齐已发布物 | 阻塞：待发布节奏裁决（开放问题 1） | |
+| M1-4 | P2 | 发布 v5.6/v5.7 + README 对齐已发布物 | 准备就绪（发布动作待仓库所有者执行） | 前置全落地:M0-1 verify 链/M1-2 environment+env 注入/M1-3 校验前置。DOC1 缓解:README 池默认值已标注"未发布→v5.6.0,当前已发布版 5.5.1 为 30"。发布操作步骤:①git tag v5.6.0(触发 verify→publish 链,须先在 GitHub Settings→Environments 配置 production 审批人)②NuGet.org 侧如切 OIDC 需配置 trusted publishing ③发布后把 README 徽章/安装指令/各"未发布"标注更新为新版本号(M1-4 收尾) |
 | M2-2 | P2 | 批量 UPDATE 参数化分支真库端到端（PG+MySQL 各 ≥3，逐行逐列断言） | **已完成（结案翻转）** | **根因终章：此前的"真缺陷"是测试自身 DDL 缺陷**——表名写在 FormattableString 洞里被参数化（DROP TABLE IF EXISTS @p0，PG DDL 不接受参数化标识符；POSITION 22 恰为 "$1" 在 21 字符前缀后的位置，MySqlConnector 插值成单引号表名——两个错误消息全部对上）。表名改字面量后 199/199 全绿（含 PG/MySql 批量 UPDATE 两条首绿，逐行逐列值断言）。**产品 BulkUpdateBatchAsync 无缺陷**；十六项排除矩阵的弯路源于"失败点在 UPDATE"的错误公设。成果：①独立审计 T3 的原始诉求达成（批量 UPDATE 参数化分支获得真库端到端覆盖）②教训入册：标识符必须字面量、只有值进洞（与全项目真库测试先例一致） |
 /U+00A0 等不可见字符不显示——下一轮 dump 逐字符码点即可裁决）；②"单行成功/多行失败"与语句文本唯一性之外的状态交互。下一轮首选实验：码点 dump |
 | M3-8 | P3 | 文档一致性小项（release-body.md 删除 / ADR-C 编号 / 依赖表） | 已完成 | release-body.md 已删（release.yml 的 full-release-body.md 是运行时生成物无关联）；ADR-C C3→C2 编号勘误；CONTRIBUTING latest-all 陈述对齐分层现实（DOC2） |
@@ -45,7 +45,7 @@
 | M3-3 | P3 | 高扇出压力测试 | 已完成（会话维扇出;单会话重叠拒绝不重复造） | SessionFanOutStressTests:64 独立会话并发 × 16 操作(建表+8 插+读全表),最终态一致断言(每会话恰见自己 8 行,无丢行/串扰)。单会话重叠拒绝形态弃做——屏障同步下顺序排队是门禁合法行为(实施中发现报告原设计断言语义有误),精确重叠拒绝已由 SessionConcurrencyTests 的 TCS 握手三用例覆盖 |
 | M3-5 | P3 | ArchitectureInvariantTests 转行为断言 | 已完成（行为面新增;源码扫描保留为结构面） | DefaultFilterBehaviorTests 三用例:①GetAllAsync 与等价手写过滤 SQL 同结果集(四象限种子:软删×租户) ②OrWhere 无法穿透默认过滤(ITM-401 行为面) ③CountAsync 与 ToListAsync 计数一致。源码扫描(ArchitectureInvariantTests)保留——结构挡"消失"、行为挡"漂移",两面互补(报告原方案是替换,实施升级为互补) |
 | M3-6 | P3 | 删除 no-op 抽象（ConnectionLease）与 legacy 载荷处置 | 已完成（ConnectionLease 部分;legacy 载荷见弃用裁决） | ConnectionLease 退场:AcquireExecutionConnectionAsync 直传 DbConnection(同步分支零分配,每查询 -1 对象 -1 虚调用);4 执行调用点去 using(无资源);GridReader 释放链 reader→command→operation(连接清理段删);CleanupQueryResourcesAsync 签名收窄;GridReaderLifecycleTests 夹具同步。验证:685 全绿(含 199 真库)+AOT 原生 PASSED+严格构建 0 警告 |
-| M2-1 | P2 | 真库测试面从 12% 扩容 + TestDb 方言夹具复活（≥20 调用点） | 待开始 | |
+| M2-1 | P2 | 真库测试面从 12% 扩容 + TestDb 方言夹具复活（≥20 调用点） | 部分完成（夹具复活;扩容余量登记） | TestDb.PostgreSqlAsync/MySqlAsync 从 0 调用点复活至 **8 个**（BulkUpdateBatchDialect/ExternalDatabaseFeatureTests 接入,真库 199/199 验证）。方言差异路径现状:锁(LockClauses/悲观锁双方言)/JSON/RETURNING/Bulk 全家/LIMIT/存储过程/NOTIFY 已有 PG 或双方言覆盖;TestDb 方言夹具使用方式已入 README 特性文档。剩余扩容(聚合/时间类型/字符串函数按方言矩阵补齐)= XL 常规工作,排期随版本 |
 | M2-3 | P3 | CloneForExecution 字段全集机械化（编译期守卫） | 已完成（守卫型测试方案） | QueryBuilderCloneCompletenessTests:源码机械比对「全部实例字段 = ctor 赋值集 ∪ 克隆体赋值集」——新增字段两者都不在即红(r6-N1 断裂事故同型防线;CallerFilePath 定位同 ArchitectureInvariantTests 先例)。S3:注释克隆体 _cacheTenantScope → 守卫确定性报"_cacheTenantScope"回红。报告原方案(反射-free 生成侧克隆/状态 record 收编)被评估为过度——热路径 struct + 33 字段,守卫测试以最小改动达成同一目标 |
 | M2-4 | P3 | 执行管线单实现化 | 部分完成（契约防线先行;物理抽取留专门会话） | PipelineParityContractTests 两用例:①ForEach 与 ToList 拦截器序列逐事件一致(两侧独立 RecordingInterceptor,断言 OnBefore→OnAfter:3 同形态) ②结果集逐行一致。物理抽取 RunPipelineAsync 未做——S3776 抑制是有意识的热路径决策(272B/查询分配分解在案,报告验收标准"删抑制"需先证明抽象层零分配),留待带 bench 守护的专门会话;契约测试即其等价性护栏 |
 | **先裁决** | — | M2-6（公共旋钮处置，破坏 API） | 阻塞：开放问题 5 | |
@@ -107,6 +107,25 @@
 - M0-3：把地板调到高于实际 → CI 红；把某项目报告路径指空 → CI 红（不能"找不到报告即放行"）。
 - M0-4：构造一个含已知漏洞包的临时分支 → CI 红。
 - M1-2：审计 run: 块无 `secrets.*` 字面量（grep 断言）。
+
+## 已裁决记录（2026-09-20，仓库所有者授权"按最优方案处理"）
+
+- **M2-7 / P4（WithCache 值语义）**：裁决**维持浅拷贝 + 文档披露**（终态，非待修缺陷）。
+  理由：①浅拷贝是性能取舍的高频读缓存合理形态（CloneOnRead 每命中一次深拷贝，实体图大时
+  净损失）；②契约已在 WithCache doc + ITM-308 登记（"命中实体应视为只读"）且浅拷贝语义
+  与 ADR-L 租户隔离正交；③若未来有强需求，3.0 可加 `WithCache(key, ttl, clone: true)`
+  可选项——当前无用户诉求证据（YAGNI）。
+- **M2-4 物理抽取**：裁决**维持双管线 + S3776 抑制**（契约防线已立，PipelineParityContractTests
+  锁语义等价）。理由：272B/查询的三项分配分解在案（超时 CTS 168B 是 CommandTimeout 语义本身、
+  委托转换 56B、执行器机械 48B），抽象层（IMaterializer 接口分发/泛型物化器）无法证明零分配——
+  与项目"热路径零分配"纪律冲突时性能胜出。若未来 bench 证明 struct 物化器零分配，再抽取。
+- **M2-5A（拦截器扩写路径）**：裁决**维持 B（README 收窄承诺）**。A 路径（写路径接入）为 L 级
+  改造且当前无合规用户诉求；README 已醒目声明"仅查询审计，完整写入审计用数据库层/OTel"。
+- **M1-6（分析器口径）**：裁决**维持分层**（Core latest-minimum + SourceGen none——技术限制）。
+  实测依据：latest-all 爆出 338 条（CA1032/CA1815/CA1051 设计风格族，非缺陷）；Sonar P0/P1
+  与 S2077 仍为 error。csproj TODO 注释已改为裁决声明。
+- **M2-6（弃用清单）**：裁决**ADR-M 登记**（docs/adr/ADR-M-弃用清单与移除窗口.md）——
+  2.x 不加 Obsolete（避免破坏现有编译），3.0 移除，清单含保留依据。
 
 ## 开放问题（阻塞项的裁决清单）
 
