@@ -40,8 +40,8 @@
 | M3-7 | P3 | 测试计数口径单一真源（声明执行口径 + 一处生成） | 已完成 | 活文档(测试体系规范/路线图)改为 CI 执行数口径声明+test-counts.json 指针;历史快照(CHANGELOG/账本)不回改 |
 | M2-8 | P3 | 依赖来源与 RID 卫生（Roslyn 仅 nuget.org；GA 切轨跟踪项） | 已完成 | NuGet.Config：dotnet-tools 的 Roslyn pattern 移除（nuget.org 单一来源）；还原实测通过。GA 切轨已有既定裁决（等 .NET 11 正式版） |
 | M0-2b | P3 | （若选拆分路径）slnx 拆 CI/全量两个方案文件 | 视 M0-2 路径 | |
-| M3-1 | P3 | 覆盖率地板（line ≥70% / branch ≥60%，防退化非达标） | 待开始 | |
-| M3-2 | P3 | 变异测试扩面（Core 全部 ≥200 行文件） | 待开始 | |
+| M3-1 | P3 | 覆盖率地板（line ≥70% / branch ≥60%，防退化非达标） | 已完成（口径修正） | TUnit 原生 --coverage(dotnet-coverage 工具)实测 Core line **65.35%**(2026-09-20)——报告原设 70% 高于现值,按"防退化非达标"原则地板取现值−5=**60%**(scripts/assert-coverage.sh+test-counts.json coverage 段);verify.yml unit job 接线(装工具+收集+断言);S3 地板调高 80 回红验证 |
+| M3-2 | P3 | 变异测试变守护 | 已完成 | stryker-config mutate 面从 5 个具名文件扩至 **20 个**(Core 全部 ≥200 行文件:QueryBuilder/DataSession*/GridReader/CacheStore/PalORM_Runtime/Resilience/CircuitBreaker/BatchUpdateSqlBuilder/StoredProcBuilder/DbOptions/Annotations/BulkOperationFramework);排程作业下次运行即按新面出分 |
 | M3-3 | P3 | 高扇出压力测试 | 已完成（会话维扇出;单会话重叠拒绝不重复造） | SessionFanOutStressTests:64 独立会话并发 × 16 操作(建表+8 插+读全表),最终态一致断言(每会话恰见自己 8 行,无丢行/串扰)。单会话重叠拒绝形态弃做——屏障同步下顺序排队是门禁合法行为(实施中发现报告原设计断言语义有误),精确重叠拒绝已由 SessionConcurrencyTests 的 TCS 握手三用例覆盖 |
 | M3-5 | P3 | ArchitectureInvariantTests 转行为断言 | 已完成（行为面新增;源码扫描保留为结构面） | DefaultFilterBehaviorTests 三用例:①GetAllAsync 与等价手写过滤 SQL 同结果集(四象限种子:软删×租户) ②OrWhere 无法穿透默认过滤(ITM-401 行为面) ③CountAsync 与 ToListAsync 计数一致。源码扫描(ArchitectureInvariantTests)保留——结构挡"消失"、行为挡"漂移",两面互补(报告原方案是替换,实施升级为互补) |
 | M3-6 | P3 | 删除 no-op 抽象（ConnectionLease）与 legacy 载荷处置 | 已完成（ConnectionLease 部分;legacy 载荷见弃用裁决） | ConnectionLease 退场:AcquireExecutionConnectionAsync 直传 DbConnection(同步分支零分配,每查询 -1 对象 -1 虚调用);4 执行调用点去 using(无资源);GridReader 释放链 reader→command→operation(连接清理段删);CleanupQueryResourcesAsync 签名收窄;GridReaderLifecycleTests 夹具同步。验证:685 全绿(含 199 真库)+AOT 原生 PASSED+严格构建 0 警告 |
