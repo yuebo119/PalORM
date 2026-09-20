@@ -55,9 +55,8 @@ public partial class DataSession<TProvider>
         string quotedTable = TProvider.QuoteIdentifier(tableName);
         string quotedPrimaryKey = TProvider.QuoteIdentifier(pkCol);
         // 租户过滤与单条 DeleteAsync 对齐（ITM-404）：跨租户主键命中 0 行
-        string tenantFilter = HasTenantFilter<T>()
-            ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
-            : "";
+        // M1（v5.7）：后缀 per-Dialect 缓存（语句随批次占位符变化，仅后缀可缓存）
+        string tenantFilter = HasTenantFilter<T>() ? GetTenantAppendFragment() : "";
         const int batchSize = SqlLimits.InClauseBatchSize;
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
         // RunInTransactionScopeAsync 单点。

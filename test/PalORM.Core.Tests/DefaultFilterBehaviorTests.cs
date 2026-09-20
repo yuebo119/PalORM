@@ -72,6 +72,38 @@ public sealed class DefaultFilterBehaviorTests
         await Assert.That(list.Count).IsEqualTo(1);
         await Assert.That(list[0].Name).IsEqualTo("keep-b");
     }
+
+    // M1（v5.7）：写路径租户过滤走缓存后的行为锁定——Update/软删 Delete/BulkDelete
+    // 三入口的租户隔离不因缓存引入而漂移；二次调用命中缓存路径，结果须与首调一致
+    [Test]
+    public async Task TenantWritePaths_IsolateAcrossTenants_AfterSqlCaching()
+    {
+        await using DataSession<SqliteProvider> db = await CreateSessionAsync();
+        await SeedAsync(db);
+        db.WithTenant("a");
+
+        // Update（缓存 sqls.Update + 租户后缀）：本租户行改名成功、跨租户行命中 0 行；
+        // 二次调用（命中缓存）结果一致
+        FilterProbe row = (await db.GetAllAsync<FilterProbe>())[0];
+        row.Name = "renamed";
+        await Assert.That(await db.UpdateAsync(row)).IsEqualTo(1);
+        FilterProbe crossRow = new() { Id = 3L, Name = "hijack", TenantId = "b" };
+        await Assert.That(await db.UpdateAsync(crossRow)).IsEqualTo(0);
+        row.Name = "renamed2";
+        await Assert.That(await db.UpdateAsync(row)).IsEqualTo(1);
+
+        // 软删 Delete（缓存全句 + 租户两形态）：删本租户行成功；重复删幂等 0；跨租户主键 0
+        await Assert.That(await db.DeleteAsync<FilterProbe>(1L)).IsEqualTo(1);
+        await Assert.That(await db.DeleteAsync<FilterProbe>(1L)).IsEqualTo(0);
+        await Assert.That(await db.DeleteAsync<FilterProbe>(3L)).IsEqualTo(0);
+
+        // BulkDelete（缓存租户后缀）：新插本租户行 + 跨租户主键混合批量，只删本租户的
+        FilterProbe bulkRow = new() { Name = "bulk-a", TenantId = "a" };
+        await db.InsertAsync(bulkRow); // InsertAsync 回填自增 Id
+        long bulk = await db.BulkDeleteAsync<FilterProbe>([bulkRow.Id, 3L]);
+        await Assert.That(bulk).IsEqualTo(1);
+        await Assert.That(await db.CountAsync<FilterProbe>()).IsEqualTo(0);
+    }
 }
 
 [SoftDelete]

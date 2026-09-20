@@ -218,7 +218,8 @@ public sealed partial class DataSession<TProvider>
         // 生成的 UPDATE 以 "WHERE pk = @pN [AND version = @pM]" 结尾，可安全追加租户过滤；
         // 跨租户主键的更新命中 0 行（并发实体表现为 ConcurrencyConflictException，失败关闭）
         if (HasTenantFilter<T>())
-            updateSql += $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
+            updateSql = GetTenantWrappedSql<T>(
+                DataSessionCache.UpdateWithTenantSqlCache, updateSql);
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = updateSql;
@@ -266,14 +267,8 @@ public sealed partial class DataSession<TProvider>
         {
             await using DbCommand cmd = CreateCommand();
             // AND deleted_at IS NULL：与 BulkDeleteAsync 幂等语义对齐——重复删除不刷新时间戳且返回 0
-            string tenantFilter = HasTenantFilter<T>()
-                ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
-                : "";
-            // S2077 报备（M1-5）：插值成分全为 QuoteIdentifier 标识符与 const 参数名——
-            // 用户值经 @p0 绑定（BindGeneratedKeyParameter），无字符串面拼接值
-#pragma warning disable S2077
-            cmd.CommandText = $"UPDATE {TProvider.QuoteIdentifier(tn)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
-#pragma warning restore S2077
+            // M1（v5.7）：全句 per-(Type, Dialect, hasTenant) 缓存（含租户两形态），见 GetSoftDeleteUpdateSql
+            cmd.CommandText = GetSoftDeleteUpdateSql<T>(tn, HasTenantFilter<T>());
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
             BindDefaultFilterParameters<T>(cmd);
@@ -283,8 +278,9 @@ public sealed partial class DataSession<TProvider>
         }
 
         await using DbCommand delCmd = CreateCommand();
+        // M1（v5.7）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
         delCmd.CommandText = HasTenantFilter<T>()
-            ? $"{sqls.Delete} AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
+            ? GetTenantWrappedSql<T>(DataSessionCache.DeleteWithTenantSqlCache, sqls.Delete)
             : sqls.Delete;
         delCmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(delCmd, key);

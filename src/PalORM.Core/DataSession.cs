@@ -520,6 +520,55 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
     }
 
+    // ─── 租户过滤 SQL 片段缓存（M1，v5.7）──────────────────────
+    // GetDefaultFilterForms 覆盖 SELECT 家族的三形态；以下三个入口覆盖写路径的
+    // 四处缓存外重建（UpdateCoreAsync 追加 / DeleteAsync 软删全句 / DeleteAsync
+    // 物理追加 / BulkDeleteAsync 后缀）。命中走 TryGetValue（v5.6 口径，无闭包分配），
+    // 并发下同键可能被构建多次，同输入恒同输出，正确性无影响。
+
+    /// <summary>租户过滤追加片段（per-Dialect 缓存）：" AND {quote(tenant_id)} = @__tenant0"。</summary>
+    private static string GetTenantAppendFragment()
+    {
+        SqlDialect dialect = TProvider.Dialect;
+        if (DataSessionCache.TenantAppendFragmentCache.TryGetValue(dialect, out string? cached))
+            return cached;
+        string fragment = $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
+        DataSessionCache.TenantAppendFragmentCache.TryAdd(dialect, fragment);
+        return fragment;
+    }
+
+    /// <summary>带租户过滤的 Update/Delete 语句（per-(Type, Dialect) 缓存）——
+    /// baseSql 为已缓存的生成语句，与租户后缀的拼接结果原先每次调用重建。</summary>
+    private static string GetTenantWrappedSql<T>(
+        System.Collections.Concurrent.ConcurrentDictionary<(Type, SqlDialect), string> cache,
+        string baseSql)
+        where T : class, new()
+    {
+        (Type, SqlDialect) key = (typeof(T), TProvider.Dialect);
+        if (cache.TryGetValue(key, out string? cached))
+            return cached;
+        string sql = baseSql + GetTenantAppendFragment();
+        cache.TryAdd(key, sql);
+        return sql;
+    }
+
+    /// <summary>软删 UPDATE 全句（per-(Type, Dialect, hasTenant) 缓存）——原先 DeleteAsync
+    /// 软删路径每次调用 5 次 QuoteIdentifier + 全句插值。</summary>
+    private static string GetSoftDeleteUpdateSql<T>(string tableName, bool hasTenant) where T : class, new()
+    {
+        (Type, SqlDialect, bool) key = (typeof(T), TProvider.Dialect, hasTenant);
+        if (DataSessionCache.SoftDeleteUpdateSqlCache.TryGetValue(key, out string? cached))
+            return cached;
+        string tenantFilter = hasTenant ? GetTenantAppendFragment() : "";
+        // S2077 报备（M1-5，与原调用点同）：插值成分全为 QuoteIdentifier 标识符、
+        // CurrentTimestampExpression 与 const 参数名——用户值经 @p0 绑定
+#pragma warning disable S2077
+        string sql = $"UPDATE {TProvider.QuoteIdentifier(tableName)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
+#pragma warning restore S2077
+        DataSessionCache.SoftDeleteUpdateSqlCache.TryAdd(key, sql);
+        return sql;
+    }
+
     private SessionOperationState.SessionOperationLease EnterOperation(
         object? operationOwner = null)
         => _operationState.Enter(operationOwner);
