@@ -47,7 +47,7 @@
 | M3-6 | P3 | 删除 no-op 抽象（ConnectionLease）与 legacy 载荷处置 | 已完成（ConnectionLease 部分;legacy 载荷见弃用裁决） | ConnectionLease 退场:AcquireExecutionConnectionAsync 直传 DbConnection(同步分支零分配,每查询 -1 对象 -1 虚调用);4 执行调用点去 using(无资源);GridReader 释放链 reader→command→operation(连接清理段删);CleanupQueryResourcesAsync 签名收窄;GridReaderLifecycleTests 夹具同步。验证:685 全绿(含 199 真库)+AOT 原生 PASSED+严格构建 0 警告 |
 | M2-1 | P2 | 真库测试面从 12% 扩容 + TestDb 方言夹具复活（≥20 调用点） | 待开始 | |
 | M2-3 | P3 | CloneForExecution 字段全集机械化（编译期守卫） | 已完成（守卫型测试方案） | QueryBuilderCloneCompletenessTests:源码机械比对「全部实例字段 = ctor 赋值集 ∪ 克隆体赋值集」——新增字段两者都不在即红(r6-N1 断裂事故同型防线;CallerFilePath 定位同 ArchitectureInvariantTests 先例)。S3:注释克隆体 _cacheTenantScope → 守卫确定性报"_cacheTenantScope"回红。报告原方案(反射-free 生成侧克隆/状态 record 收编)被评估为过度——热路径 struct + 33 字段,守卫测试以最小改动达成同一目标 |
-| M2-4 | P3 | 执行管线单实现化（RunPipelineAsync + 物化策略） | 待开始 | |
+| M2-4 | P3 | 执行管线单实现化 | 部分完成（契约防线先行;物理抽取留专门会话） | PipelineParityContractTests 两用例:①ForEach 与 ToList 拦截器序列逐事件一致(两侧独立 RecordingInterceptor,断言 OnBefore→OnAfter:3 同形态) ②结果集逐行一致。物理抽取 RunPipelineAsync 未做——S3776 抑制是有意识的热路径决策(272B/查询分配分解在案,报告验收标准"删抑制"需先证明抽象层零分配),留待带 bench 守护的专门会话;契约测试即其等价性护栏 |
 | **先裁决** | — | M2-6（公共旋钮处置，破坏 API） | 阻塞：开放问题 5 | |
 | **先裁决** | — | M2-7 / P4（WithCache 值语义 CloneOnRead） | 阻塞：开放问题 3 | |
 | **先裁决** | — | M1-6（分析器口径 latest-all，高爆量分批） | 阻塞：开放问题 9 | |
