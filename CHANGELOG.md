@@ -126,6 +126,19 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### 🔭 可观测性（R3：ExecuteAsync 接入拦截器三段式——覆盖面缺口补齐）
+
+- **`ExecuteAsync`（原始 DDL/DML）拦截器接入**：此前仅实体 SELECT 管线与 QueryBuilder
+  UPDATE 经过拦截器（ITM-513/547 的文档化边界），经 `ExecuteAsync` 执行的建表/数据变更
+  对审计拦截器完全不可见——是审计场景的实际盲点。现在 OnBefore（SQL 全文 + 绑定参数表）/
+  OnAfter（受影响行数 + 耗时）/OnError（原始异常透传，拦截器自身异常吞掉计数）与
+  ToListAsync 完全同语义。参数表与计时**仅在拦截器非空时物化**——默认会话零开销
+  （与 SELECT 管线"空列表跳过"同口径）。`IQueryInterceptor`/README 覆盖面文档同步；
+  PipelineParityContractTests 序列断言纳入种子的 DDL 事件。
+- 测试：ExecuteAsyncInterceptorTests +3——三段式与参数表可见性、失败路径 OnError
+  且原始异常同一性、无拦截器会话行为不变。
+  验证：Core 303/303 · Integration 203/203 · AOT 原生运行 PASSED。
+
 ### ⚡ 性能（M1：租户过滤写路径 SQL 缓存——四处缓存外重建收口）
 
 - **写路径租户片段缓存**：SELECT 家族三形态 v5.6 已缓存（`FilterFormsCache`），但四个

@@ -344,7 +344,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | `[SoftDelete]` | 软删除自动 WHERE 过滤 |
 | `[TenantAware]` | 多租户 `WithTenant(id)` 单库列隔离。查询结果缓存（`WithCache`）经 ADR-L 结构性隔离：多租户会话的实际缓存 key 由框架自动加租户前缀（`__t:{tenantId}:`），`IgnoreFilters()` 全量查询走独立 `__all__:` 命名空间——跨租户命中不可能；需要按租户控制缓存容量/TTL 时，经 `DbOptions.QueryCache` 为每租户注入独立实例（推荐路径） |
 | `[ConcurrencyCheck]` | 乐观锁 `version` 字段自动检查 |
-| `AuditInterceptor`（v5.0） | **查询**审计拦截器（⚠️ 覆盖面：仅实体 SELECT 管线与 QueryBuilder UPDATE 的 OnBefore/OnAfter/OnError——`InsertAsync`/`DeleteAsync`/`SaveAsync`/Bulk 家族/存储过程/迁移**不产生审计记录**，完整写入审计请用数据库层审计或 OpenTelemetry。`logParameters:true` 时 `Set()` 写入 `[SensitiveData]` 列的参数值自动掩码——经 QueryContext 传递） |
+| `AuditInterceptor`（v5.0） | **查询**审计拦截器（⚠️ 覆盖面：实体 SELECT 管线、QueryBuilder UPDATE 与 `ExecuteAsync`（原始 DDL/DML，v5.7 接入）的 OnBefore/OnAfter/OnError——`InsertAsync`/`DeleteAsync`/`SaveAsync`/Bulk 家族/存储过程/迁移**不产生审计记录**，完整写入审计请用数据库层审计或 OpenTelemetry。`logParameters:true` 时 `Set()` 写入 `[SensitiveData]` 列的参数值自动掩码——经 QueryContext 传递） |
 | `IQueryInterceptor` | 三阶段查询拦截器接口 |
 | `SessionSetupSql`（v5.0） | 连接首次激活后执行 SET 语句（`SET TIME ZONE` / `search_path`） |
 | `ForRead` | 读写分离（只读副本路由） |

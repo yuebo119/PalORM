@@ -255,8 +255,9 @@ public static class QueryBuilderExtensions
         }
     }
 
-    /// <summary>触发所有拦截器的 OnBefore——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。</summary>
-    private static void NotifyInterceptorsOnBefore(
+    /// <summary>触发所有拦截器的 OnBefore——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。
+    /// R3（v5.7）改 internal：DataSession.ExecuteAsync（原始 DDL/DML）接入同一三段式。</summary>
+    internal static void NotifyInterceptorsOnBefore(
         List<IQueryInterceptor> interceptors, QueryContext context)
     {
         if (interceptors.Count == 0) return;
@@ -264,8 +265,9 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>触发所有拦截器的 OnAfter——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。
-    /// Stopwatch 由调用方传入，仅当拦截器非空时才会读取 Elapsed（调用方需保证拦截器非空时 sw 也非 null）。</summary>
-    private static void NotifyInterceptorsOnAfter(
+    /// Stopwatch 由调用方传入，仅当拦截器非空时才会读取 Elapsed（调用方需保证拦截器非空时 sw 也非 null）。
+    /// R3（v5.7）改 internal：DataSession.ExecuteAsync 接入。</summary>
+    internal static void NotifyInterceptorsOnAfter(
         List<IQueryInterceptor> interceptors, QueryContext context, Stopwatch? sw, int count)
     {
         if (interceptors.Count == 0) return;
