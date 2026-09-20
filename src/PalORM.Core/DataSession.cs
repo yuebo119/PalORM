@@ -154,6 +154,44 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         throw new InvalidOperationException("Unreachable");
     }
 
+    /// <summary>预热连接池（C4，v5.7）：逐条打开 <paramref name="count"/> 条连接随即归还池，
+    /// 使首批查询命中暖连接而非新建物理连接（远程建连实测 ~8.5 ms/条）。
+    /// <para><b>与 <see cref="DbOptions.MinPoolSize"/> 的关系</b>：本方法是启动期一次性灌暖；
+    /// MinPoolSize 是空闲修剪保留下限（稀疏流量下池不被清空）。两者配合才保持暖态——
+    /// 只预热不设下限，空闲超时到期后预热成果仍会被修剪清空。</para>
+    /// <para><b>SQLite</b>：无连接池，无暖态可留——直接返回，不报错（与池参数被
+    /// SqliteProvider 忽略的既有契约一致）。</para>
+    /// <para><b>失败语义</b>：建连异常原样抛出（不套用重试管线）——预热是优化，
+    /// 是否容忍失败由调用方决定（catch 后降级启动或直接失败均可）。</para></summary>
+    public static async Task PreWarmAsync(DbOptions options, int count, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        if (TProvider.Dialect == SqlDialect.Sqlite) return;
+
+        string cs = options.ResolveConnectionString();
+        for (int i = 0; i < count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            DbConnection? connection = null;
+            try
+            {
+                connection = TProvider.CreateConnection(cs, options);
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(options.ConnectionTimeout);
+                await connection.OpenAsync(cts.Token).ConfigureAwait(false);
+                // 与 CreateAsync 同口径：预热连接也过 Provider 初始化钩子（SQLite 无此路径，
+                // PG/MySQL 钩子为方言初始化），归还池后的首用行为与正常连接一致。
+                await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Dispose = 归还池（这正是预热动作本身）；清理失败不覆盖建连异常。
+                await DisposeConnectionSafelyAsync(connection).ConfigureAwait(false);
+            }
+        }
+    }
+
     /// <summary>连接清理——清理失败不能覆盖连接或初始化异常。
     /// 重试 catch 与 finally 共享，消除 try/catch 重复（G-4 重构）。</summary>
     private static async ValueTask DisposeConnectionSafelyAsync(DbConnection? connection)

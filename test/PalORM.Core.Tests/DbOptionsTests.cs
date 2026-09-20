@@ -54,6 +54,29 @@ public sealed class DbOptionsTests
     }
 
     [Test]
+    public async Task WithPool_MinSize_ValidationAndPassthrough()
+    {
+        // C4（v5.7）：minSize 默认 0 = 不覆盖驱动默认（与 idleTimeoutSeconds 的 0 语义同族）。
+        var options = new DbOptions { ConnectionString = "test" };
+
+        // 缺省与显式 0 同义：0 合法（Validate 通过），字段可读
+        await Assert.That(options.WithPool(10).MinPoolSize).IsEqualTo(0);
+        await Assert.That(options.WithPool(10, minSize: 0).MinPoolSize).IsEqualTo(0);
+        options.WithPool(10, minSize: 0).Validate();
+
+        // 正数照常写入且不改动原实例
+        var updated = options.WithPool(10, minSize: 5);
+        await Assert.That(updated.MinPoolSize).IsEqualTo(5);
+        await Assert.That(options.MinPoolSize).IsEqualTo(0);
+
+        // minSize > maxSize 在 WithPool 与 Validate 双入口一致拒绝（init 直设可绕过构造校验，
+        // Validate 是 CreateAsync 前的兜底，ITM-517 模式）
+        await Assert.That(() => options.WithPool(10, minSize: 11)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => (options with { MinPoolSize = -1 }).Validate()).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => (options with { MinPoolSize = 101 }).Validate()).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task With_ReturnsNewInstance_Immutable()
     {
         var a = new DbOptions { ConnectionString = "dsn1" };

@@ -39,6 +39,11 @@ public sealed class PostgreSqlProvider : IDbProvider
         //（注意 Lifetime 默认非 0——曾按 0 写判据致 WithPool 值永不应用，实证修正）。
         if (builder.MaxPoolSize == 100)
             builder.MaxPoolSize = options.MaxPoolSize;
+        // C4（v5.7）：空闲保留下限——0 = 不覆盖（Npgsql 默认 0）。>0 时空闲修剪
+        // （ConnectionIdleLifetime 到期）至少保留这么多条连接，避免稀疏流量清池后
+        // 突发查询重建物理连接（远程建连实测 ~8.5 ms/条）。
+        if (options.MinPoolSize > 0 && builder.MinPoolSize == 0)
+            builder.MinPoolSize = options.MinPoolSize;
         // v5.6：0 = 不覆盖（保留 Npgsql 默认 300 秒）——原默认 30 秒把驱动的空闲超时砍到 1/10，
         // 间隔超过 30 秒的首次查询须重建物理连接（跨网段实测多付 13.2 ms）。
         if (options.PoolIdleTimeoutSeconds > 0 && builder.ConnectionIdleLifetime == 300)

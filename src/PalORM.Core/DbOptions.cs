@@ -46,6 +46,14 @@ public sealed record DbOptions
     /// <summary>连接池最大连接数（默认 100）。</summary>
     public int MaxPoolSize { get; init; } = 100;
 
+    /// <summary>连接池空闲保留下限（默认 0 = 驱动默认）。PG 透传 MinPoolSize、MySQL 透传
+    /// MinimumPoolSize——两驱动的语义均为<b>空闲修剪保留下限</b>：空闲超时到期时池内至少
+    /// 保留这么多条连接不关（依据：Npgsql/MySqlConnector 10.0/2.6 官方 XML 文档）。
+    /// 配合空闲超时使用可消除「稀疏流量 + 空闲修剪清池 → 突发查询重建物理连接」的延迟尖峰
+    /// （远程建连实测 ~8.5 ms/条）。启动即预热请用 DataSession.PreWarmAsync。
+    /// SQLite 无池不适用。C4（v5.7）。</summary>
+    public int MinPoolSize { get; init; } = 0;
+
     /// <summary>连接池空闲超时（秒）。
     /// <para><b>0（默认）= 不覆盖驱动默认值</b>（Npgsql 300 秒 / MySqlConnector 180 秒）——
     /// 由 Provider 原样保留。正数才覆盖。</para>
@@ -132,6 +140,9 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
+        // C4：MinPoolSize 负数非法；大于 MaxPoolSize 是配置矛盾（透传后驱动行为未定义），提前报错
+        ArgumentOutOfRangeException.ThrowIfNegative(MinPoolSize, nameof(MinPoolSize));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MinPoolSize, MaxPoolSize, nameof(MinPoolSize));
         // 0 = 不覆盖驱动默认值（合法值，见属性文档）；仅负数非法
         ArgumentOutOfRangeException.ThrowIfNegative(PoolIdleTimeoutSeconds, nameof(PoolIdleTimeoutSeconds));
         // r19/ITM-695：PG 侧 checked(分钟*60) 会在极大值抛 OverflowException（Npgsql 连接串
@@ -150,15 +161,19 @@ public sealed record DbOptions
     }
 
     /// <summary>连接池配置入口。<paramref name="maxSize"/> 与 <paramref name="lifetimeMinutes"/>
-    /// 必须为正数；<paramref name="idleTimeoutSeconds"/> 可为 0（= 不覆盖驱动默认值，见属性文档）。</summary>
-    public DbOptions WithPool(int maxSize, int idleTimeoutSeconds = 0, int lifetimeMinutes = 60)
+    /// 必须为正数；<paramref name="idleTimeoutSeconds"/> 可为 0（= 不覆盖驱动默认值，见属性文档）；
+    /// <paramref name="minSize"/> 可为 0（= 不预热，见 <see cref="MinPoolSize"/>），不得大于 maxSize。</summary>
+    public DbOptions WithPool(int maxSize, int idleTimeoutSeconds = 0, int lifetimeMinutes = 60, int minSize = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSize);
         ArgumentOutOfRangeException.ThrowIfNegative(idleTimeoutSeconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(lifetimeMinutes);
+        ArgumentOutOfRangeException.ThrowIfNegative(minSize);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(minSize, maxSize);
         return this with
         {
             MaxPoolSize = maxSize,
+            MinPoolSize = minSize,
             PoolIdleTimeoutSeconds = idleTimeoutSeconds,
             PoolLifetimeMinutes = lifetimeMinutes,
             PoolExplicitlyConfigured = true
@@ -275,7 +290,7 @@ public sealed record DbOptions
            $"SessionSetupSql = {(SessionSetupSql is null ? "null" : "***MASKED***")}, " +
            $"ReadSessionSetupSql = {(ReadSessionSetupSql is null ? "null" : "***MASKED***")}, " +
            $"ConnectionTimeout = {ConnectionTimeout}, CommandTimeout = {CommandTimeout}, " +
-           $"MaxRetries = {MaxRetries}, MaxPoolSize = {MaxPoolSize}, " +
+           $"MaxRetries = {MaxRetries}, MaxPoolSize = {MaxPoolSize}, MinPoolSize = {MinPoolSize}, " +
            $"CircuitBreakerThreshold = {CircuitBreakerThreshold}, " +
            $"NamingConvention = {NamingConvention} }}";
 }

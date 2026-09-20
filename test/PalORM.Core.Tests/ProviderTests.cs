@@ -115,6 +115,35 @@ public sealed class ProviderTests
     }
 
     [Test]
+    public async Task ProviderConnectionFactories_ApplyMinPoolSizeOnlyWhenConfigured()
+    {
+        // C4（v5.7）契约：MinPoolSize 默认 0 = 不覆盖驱动默认（键缺席即保留）；显式 >0 才透传。
+        // 语义为空闲修剪保留下限（Npgsql ConnectionIdleLifetime / MySqlConnector
+        // ConnectionIdleTimeout 到期时至少保留这么多条），非启动预热——启动预热是
+        // DataSession.PreWarmAsync 的职责，与本参数正交。
+        var defaults = new DbOptions { ConnectionString = "x" };
+        await using var postgresDefault = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Database=test", defaults);
+        await using var mysqlDefault = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", defaults);
+        await Assert.That(postgresDefault.ConnectionString).DoesNotContain("Minimum Pool Size");
+        await Assert.That(mysqlDefault.ConnectionString).DoesNotContain("Minimum Pool Size");
+
+        var options = new DbOptions { ConnectionString = "x" }.WithPool(23, minSize: 8);
+        await using var postgres = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Database=test", options);
+        await using var mysql = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", options);
+        await Assert.That(postgres.ConnectionString).Contains("Minimum Pool Size=8");
+        await Assert.That(mysql.ConnectionString).Contains("Minimum Pool Size=8");
+
+        // 「仅默认时覆盖」策略：用户连接串已显式给出下限时（此处 3），DbOptions 值不改写
+        await using var explicitUser = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Database=test;Minimum Pool Size=3", options);
+        await Assert.That(explicitUser.ConnectionString).Contains("Minimum Pool Size=3");
+    }
+
+    [Test]
     public async Task ProviderConnectionFactories_LeaveDriverIdleTimeoutAtDriverDefault_WhenNotConfigured()
     {
         // v5.6 契约：PoolIdleTimeoutSeconds 默认 0 = **不覆盖驱动默认值**（Npgsql 300 /
