@@ -127,7 +127,7 @@ public sealed class ResilienceExecutor
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _circuitBreaker.ReleaseCancelledProbe(isHalfOpenProbe);
+            _circuitBreaker.ReleaseCancelledProbe(isHalfOpenProbe, generation);
             throw;
         }
         catch (Exception exception)

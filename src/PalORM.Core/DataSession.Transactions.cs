@@ -211,8 +211,8 @@ public sealed partial class DataSession<TProvider>
             // reader 时驱动可能再次拒绝，成败都以结构化 Data 记录，不静默跳过。
             try
             {
-                await transaction.RollbackAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(
+                    transaction, primaryException, RollbackTimeoutSeconds).ConfigureAwait(false);
             }
             catch (Exception directRollbackException)
             {
@@ -226,18 +226,14 @@ public sealed partial class DataSession<TProvider>
 
         using (operation)
         {
-            try
-            {
-                await transaction.RollbackAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception rollbackException)
-            {
-                primaryException.Data["PalORM.RollbackException"] =
-                    rollbackException;
-            }
+            await TransactionCleanup.RollbackPreservingAsync(
+                transaction, primaryException, RollbackTimeoutSeconds).ConfigureAwait(false);
         }
     }
+
+    /// <summary>R3：回滚的有界上限——沿用会话 CommandTimeout 口径；Zero（无限）透传为 0
+    /// 表示调用方显式要求无界等待。</summary>
+    private int RollbackTimeoutSeconds => _options.CommandTimeoutSeconds;
 
     /// <summary>事务作用域内核（Bulk 家族共享，v5.4 精炼 L1）——复用会话活动事务或自开事务，
     /// 统一承载"commit / rollback-preserving / RestoreTransaction / 释放"四段骨架。
@@ -280,7 +276,8 @@ public sealed partial class DataSession<TProvider>
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
                         TProvider.Dialect, exception)))
             {
-                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(
+                    transaction, exception, RollbackTimeoutSeconds).ConfigureAwait(false);
             }
             throw;
         }

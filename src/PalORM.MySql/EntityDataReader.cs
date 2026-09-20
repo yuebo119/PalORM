@@ -69,7 +69,12 @@ internal sealed class EntityDataReader(
         return count;
     }
 
-    public override bool IsDBNull(int ordinal) => GetValue(ordinal) is DBNull;
+    /// <summary>M9：直接读参数值判空——原实现经 <see cref="GetValue"/> 取值，驱动对每列可能
+    /// 先 IsDBNull 再 GetValue，同一 ordinal 两次解引用 + 两次 null 合并分支。
+    /// 越界序号仍按 ADO.NET 契约从数组抛 IndexOutOfRangeException（与 GetOrdinal 同族）。</summary>
+    public override bool IsDBNull(int ordinal)
+        => ordinal < missingPrimaryKeyCount
+            || parameters[ordinal - missingPrimaryKeyCount].Value is null or DBNull;
 
     public override string GetName(int ordinal) => columnNames[ordinal];
 

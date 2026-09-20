@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 
 namespace PalORM.Sqlite;
@@ -6,11 +7,27 @@ namespace PalORM.Sqlite;
 /// <summary>SQLite Provider —— Microsoft.Data.Sqlite 适配。</summary>
 public sealed class SqliteProvider : IDbProvider
 {
-    static SqliteProvider()
+    /// <summary>C5：SQLitePCL bundle 初始化改走 <see cref="ModuleInitializerAttribute"/>。
+    /// <para><b>为什么</b>：显式静态构造器使类型失去 <c>beforefieldinit</c>，CLR 在<b>每次</b>
+    /// 静态成员访问前都要插入类型初始化检查——<see cref="Name"/>、<see cref="QuoteIdentifier"/>、
+    /// <see cref="CreateParameter"/> 等静态方法在批量路径上被作为方法组反复传递
+    /// （<c>MultiValueBulkInsert</c> 的 BulkContext、<c>DataSession_Bulk</c> 的
+    /// <c>TProvider.CreateParameter</c> 传参），每次都白付一次检查。</para>
+    /// <para><b>语义等价</b>：ModuleInitializer 在程序集加载后、任何类型被触达前由运行时
+    /// 保证恰好执行一次，与原静态构造器的"首次使用前恰好一次"等价；且不含在
+    /// "首次静态访问"路径上。</para></summary>
+    // CA2255 的适用面是"库代码不应依赖模块初始化副作用"；本场景是 Provider 自身的原生
+    // bundle 初始化（SQLite3MC README 明示要求显式 Init，ITM-317），属正当例外：初始化
+    // 必须在任何连接创建前完成，且必须是库侧而非应用侧行为（应用引用 PalORM.Sqlite 时
+    // 不可能知道要 Init SQLitePCL）。
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2255",
+        Justification = "SQLite3MC bundle must be initialized by the provider assembly before any connection is created (ITM-317); ModuleInitializer gives once-only semantics without the per-static-access type-init check of an explicit static ctor.")]
+    [ModuleInitializer]
+    internal static void InitializeSqliteNativeBundle()
     {
         // SQLite3MC.PCLRaw.bundle 要求显式初始化（其 README 明示）；Microsoft.Data.Sqlite.Core
         // 不含自动 bundle 探测，NativeAOT/裁剪下更不能依赖反射发现（ITM-317）。
-        // Init 幂等，静态构造保证首次使用前恰好执行一次。
+        // Init 幂等，本方法由运行时保证恰好执行一次。
         SQLitePCL.Batteries_V2.Init();
     }
 
@@ -21,7 +38,7 @@ public sealed class SqliteProvider : IDbProvider
     public static SqlDialect Dialect => SqlDialect.Sqlite;
 
     /// <summary>创建连接。<b>池参数在 SQLite 上被忽略</b>（不再抛异常）——依据与取舍见方法体注释。
-    /// 静态构造已保证 SQLitePCL bundle 在首次使用前初始化。</summary>
+    /// 原生 bundle 由 <see cref="InitializeSqliteNativeBundle"/>（ModuleInitializer）保证就绪。</summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -49,7 +66,10 @@ public sealed class SqliteProvider : IDbProvider
         // ITM-584/593: NUL 会截断驱动/服务端 C 层语句；C0 控制字符族 + DEL 同样不稳。
         // 三方言共享 IdentifierSafety 守卫（替换 ITM-584 仅查 NUL 的补丁式实现）。
         IdentifierSafety.ThrowIfUnsafe(identifier);
-        return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+        // L3：无内嵌引号时 string.Replace 仍返回新实例——走 Concat 免掉一次纯拷贝。
+        return identifier.Contains('"', StringComparison.Ordinal)
+            ? $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\""
+            : string.Concat("\"", identifier, "\"");
     }
 
     /// <summary>schema 与表名分别引用后以点连接;SQLite 中 schema 对应 ATTACH 数据库别名(main/temp/自定义)。</summary>

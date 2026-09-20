@@ -36,61 +36,78 @@ internal static class MySqlBulkCopyInserter
         // 原 Math.Max(1,...) 静默钳制非正值，同参数两路径两种语义。
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ctx.BatchSize);
         int batchSize = ctx.BatchSize;
+        // B1/L4：列布局只由 ctx 决定，原实现每批重算一次 LINQ + 两个集合分配
+        // （千批 = 千次无谓分配，且 Contains 是 O(pk×cols) 线性扫描）。此处算一次，逐批复用。
+        ColumnLayout layout = ColumnLayout.Build(ctx);
         long totalInserted = 0;
         for (int start = 0; start < entities.Count; start += batchSize)
         {
+            // C4：批间取消检查点——ct 已取消时不再进入下一批的建连/写盘
+            ct.ThrowIfCancellationRequested();
             int end = Math.Min(start + batchSize, entities.Count);
-            totalInserted += await ExecuteBatchAsync(conn, transaction, entities, start, end, ctx, ct)
+            totalInserted += await ExecuteBatchAsync(
+                conn, transaction, entities, new BatchRange(start, end), ctx, layout, ct)
                 .ConfigureAwait(false);
         }
         return totalInserted;
+    }
+
+    /// <summary>本批实体的起止区间（左闭右开）。</summary>
+    private readonly record struct BatchRange(int Start, int End);
+
+    /// <summary>目标表列布局 + 参数池宽度——由 ctx 一次性推出，逐批复用（B1/L4）。
+    /// <para>复检轮发现（预存缺陷）：非自增 PK（Guid/string 键）实体的 PK 已含于 InsertColumns
+    /// ——原构造重复添加列名致 DataTable 抛 DuplicateNameException（读取器路径下改用
+    /// Array.IndexOf 定位，同一约束仍然适用）。仅补 InsertColumns 缺席的 PK（= 自增 PK，
+    /// 生成器已将其排除于 InsertColumns）。补位列仍在最前（对齐 MySQL 表定义：
+    /// AUTO_INCREMENT 通常首列），DBNull 占位与参数取值的偏移配对不变。</para>
+    /// <para>ITM-615：MySqlConnector 不指定 ColumnMappings 时按序号匹配目标表
+    /// （官方 issue #1375 确认）——故此处必须显式按列名映射，列序不再是契约。</para></summary>
+    private readonly record struct ColumnLayout(int ParameterCount, string[] AllColumns, int PrimaryKeyPrefixLength)
+    {
+        public static ColumnLayout Build(MySqlBulkCopyContext ctx)
+        {
+            int primaryKeyPrefixLength = ctx.PrimaryKeyColumns
+                .Count(pk => !ctx.InsertColumns.Contains(pk, StringComparer.Ordinal));
+            string[] allColumns = [.. ctx.PrimaryKeyColumns
+                .Where(pk => !ctx.InsertColumns.Contains(pk, StringComparer.Ordinal)),
+                .. ctx.InsertColumns];
+            return new ColumnLayout(ctx.InsertColumns.Count, allColumns, primaryKeyPrefixLength);
+        }
     }
 
     private static async Task<long> ExecuteBatchAsync<T>(
         MySqlConnection conn,
         MySqlTransaction? transaction,
         IReadOnlyList<T> entities,
-        int start,
-        int end,
+        BatchRange range,
         MySqlBulkCopyContext ctx,
+        ColumnLayout layout,
         CancellationToken ct)
         where T : class
     {
-        // MySqlBulkCopy 走 LOAD DATA LOCAL INFILE。读取器必须覆盖目标表全部列
-        // （包括 AUTO_INCREMENT 主键列），主键列返回 DBNull 让 MySQL 自增。
-        // ITM-615：MySqlConnector 不指定 ColumnMappings 时按序号匹配目标表
-        // （官方 issue #1375 确认，此前"按列名匹配"注释结论错误已订正）——下方显式按列名
-        // 映射，列序不再是契约。
-        // 源生成器 InsertColumns 已排除自增主键，需补齐主键列到读取器列布局。
-        int columnCount = ctx.InsertColumns.Count;
-        // 复检轮发现（预存缺陷）：非自增 PK（Guid/string 键）实体的 PK 已含于 InsertColumns
-        // ——原构造重复添加列名致 DataTable 抛 DuplicateNameException（读取器路径下改用
-        // Array.IndexOf 定位，同一约束仍然适用）。仅补 InsertColumns 缺席的 PK（= 自增 PK，
-        // 生成器已将其排除于 InsertColumns）。补位列仍在最前（对齐 MySQL 表定义：
-        // AUTO_INCREMENT 通常首列），DBNull 占位与参数取值的偏移配对不变。
-        string[] pksToAdd = [.. ctx.PrimaryKeyColumns
-            .Where(pk => !ctx.InsertColumns.Contains(pk, StringComparer.Ordinal))];
-        string[] allColumns = [.. pksToAdd, .. ctx.InsertColumns];
-
+        int start = range.Start;
+        int end = range.End;
+        int columnCount = layout.ParameterCount;
+        string[] allColumns = layout.AllColumns;
+        // v5.6 参数复用：参数对象每批建一次、逐行只写 Value。原实现每行
+        // Parameters.Clear() + Binder 重建 columnCount 个 MySqlParameter——
+        // 真库实测 BulkCopy 路径 671.7 B/行（同一实体走多值 INSERT 只要 359.1），
+        // 每行参数创建是主项。取值走生成器已产出的 BindInsertValues（零
+        // CreateParameter），与 MultiValueBulkInsert 的 v4.6 池同一机制。
+        // 旧版生成器模型程序集该绑定器为 null 时回退逐行 Binder。
+        DbParameter[] pool = new DbParameter[columnCount];
+        Action<int> bindRow;
         DbCommand rowCommand = conn.CreateCommand();
         try
         {
             // probe：首次验证 binder 输出参数数与列数一致（与 MultiValueBulkInsert 对齐）。
-            rowCommand.Parameters.Clear();
             ctx.Binder(rowCommand, entities[start], 0);
             if (rowCommand.Parameters.Count != columnCount)
                 throw new InvalidOperationException(
                     $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
                     $"{rowCommand.Parameters.Count} parameters.");
 
-            // v5.6 参数复用：参数对象每批建一次、逐行只写 Value。原实现每行
-            // Parameters.Clear() + Binder 重建 columnCount 个 MySqlParameter——
-            // 真库实测 BulkCopy 路径 671.7 B/行（同一实体走多值 INSERT 只要 359.1），
-            // 每行参数创建是主项。取值走生成器已产出的 BindInsertValues（零
-            // CreateParameter），与 MultiValueBulkInsert 的 v4.6 池同一机制。
-            // 旧版生成器模型程序集该绑定器为 null 时回退逐行 Binder。
-            DbParameter[] pool = new DbParameter[columnCount];
-            Action<int> bindRow;
             if (ctx.ValuesBinder is not null)
             {
                 // probe 已把首行绑到 rowCommand——直接取其参数对象作池（不再新建）
@@ -117,10 +134,6 @@ internal static class MySqlBulkCopyInserter
                 // ITM-655(r4)：0=无限（全库契约，非 30 秒）；正数透传
                 BulkCopyTimeout = ctx.CommandTimeoutSeconds,
             };
-            // ITM-615：显式按列名映射（读取器列名 == 目标表列名，裸名由驱动处理标识符）——
-            // 消除对列序与表列序一致的隐式依赖（默认按序匹配，官方 issue #1375）。
-            // PK 非首列 / [Computed]/[Timestamp] 缺席形态均列序无关。
-            // 映射 = 读取器序号（自构造，i 即列序）→ 目标表列名：目标侧按名匹配。
             // ITM-721(r20) 反证结案：曾疑"裸列名与仓库其余路径 QuoteIdentifier 不对称"。
             // 核对驱动源码（MySqlConnector MySqlBulkCopy.cs）：ColumnMappings 的
             // DestinationColumn 在非表达式形态下由驱动执行 QuoteIdentifier（反引号包裹 +
@@ -129,7 +142,8 @@ internal static class MySqlBulkCopyInserter
             for (int i = 0; i < allColumns.Length; i++)
                 bulk.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, allColumns[i]));
             // v5.6：DataTable → EntityDataReader（每行 372/360 B → 57 B，−84%；时间 −11%）
-            using var reader = new EntityDataReader(start, end, pool, bindRow, allColumns, pksToAdd.Length);
+            using var reader = new EntityDataReader(start, end, pool, bindRow, allColumns,
+                layout.PrimaryKeyPrefixLength);
             MySqlBulkCopyResult result = await bulk.WriteToServerAsync(reader, ct).ConfigureAwait(false);
             // ITM-709(r20)：驱动文档明示"MySqlBulkCopy 用户应检查 Warnings 为非空，
             // 否则可能因数据类型转换失败静默丢数据"。当前只取行数会把"截断/转换失败"

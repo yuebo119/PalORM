@@ -2,6 +2,109 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮二] — 批量路径收敛 INSERT 范式 · 事务收口三分支裁决 · 熔断无锁快路径
+
+> 变更范围：src/PalORM.Core 六个文件 + 三 Provider + 两个测试项目（新增 39 个测试）
+> 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 342/342 · SourceGen 197/197 ·
+> Integration 203 项（28 项需外部库，与基线一致）· 三个 AOT 程序 `publish` 全通过 ·
+> tech-debt-scan 13/13 · stub-check 零发现
+
+### ⚡ 性能
+
+- **批量 UPDATE 收敛 INSERT 路径的三件套（M1/L2）**：原实现是「调用方循环 + 每批一个
+  `ExecuteBatchUpdateAsync`」，每批新建 `DbCommand`、每批重建全部参数、每批重建一份逐位
+  相同的 SQL 文本。现收敛为 `ExecuteBulkUpdateBatchesAsync`：命令与参数池在进入循环前建
+  一次（池按本调用实际最大批预留），逐批只写 `Value`；SQL 文本仅在批大小变化时重建
+  （满批恒等，仅末批可能不同）。命令参数集合随批大小收敛——末批缩短时清空后按池内前缀
+  重挂，参数对象全部来自池，无新分配。
+  新增 `BatchUpdateSqlBuilder.CreateParameterArray`（仅建数组不挂集合）与
+  `AttachParameters`（池 ↔ 命令集合收敛），`CreateParameterPool` 委托同一实现保证命名
+  契约不漂移。
+- **PG Binary COPY 的 `rowCommand` 与参数池外提到批循环外（M2）**：COPY 路径下
+  `rowCommand` 只是参数容器（从不执行），原每批 `CreateCommand` + 异步释放，千批即千次
+  `DbCommand` 与 `NpgsqlParameterCollection` 分配。`WriteRowAsync` 改收 `pool` 参数，
+  满批直传避开 `DbParameterCollection` 索引器的跨接口虚调用与硬转型（P1）。
+- **MySQL BulkCopy 的列布局与每批计算项外提（B1/L4）**：`pksToAdd`/`allColumns` 只由 ctx
+  决定，原每批重算一次 LINQ + 两个集合分配（`Contains` 还是 O(pk×cols) 线性扫描）；
+  现提为 `ColumnLayout` 一次算好逐批复用。批循环首行加 `ct.ThrowIfCancellationRequested()`
+  检查点（C4）。
+- **`local_infile` 探测按连接缓存（L1）**：原每次 `BulkInsertAsync` 都付一次
+  `SHOW VARIABLES` RTT。改为 `ConditionalWeakTable<MySqlConnection, …>` 按连接实例缓存
+  （60s TTL，探测异常不写入缓存）。每请求只插 5 行的短事务场景下这 1 次 RTT 与业务写入
+  同量级。探测失败经 `BulkOperationFramework.CapabilityProbeFailures` 计数留痕（R14）——
+  此前「探测故障」与「能力关闭」在慢路径上行为一致且都静默无痕，生产上突然变慢无从归因。
+- **标识符引用免一次纯拷贝（L3）**：三方言 `QuoteIdentifier` 在无内嵌引号时
+  `string.Replace` 仍返回新实例，改走 `string.Concat`。
+- **BulkDelete 批语句单 VSB 构建（L5）**：替代「每批一个 `string[]` + `string.Join` +
+  多重插值」的中间串；满批占位符名与语句文本预建，仅末批另建。
+- **`BatchUpdateSqlBuilder` 改 `ValueStringBuilder` + `@pN` 数字直写（M7）**：原
+  `new StringBuilder()` 默认容量 16，大块 SQL 需 ~16 次倍增并产生 chunk 链。
+- **`ValueStringBuilder.Append(string)` 扩容封顶（M8）**：目标只需 520 字符时不再翻倍到
+  1024，「至少 2 倍」封顶在 4096，超过的增量按需增长。
+- **熔断拒绝消息预构造（M6）**：Open 态下每次请求都格式化 `DateTime` 是纯垃圾，改为开闸时
+  生成一次缓存到字段，并暴露 `OpenUntil` 供诊断查询。
+- **熔断 Closed 态无锁快路径（C1）**：`Enter`/`RecordSuccess`/`RecordFinalFailure` 原先每次
+  DB 操作都抢同一把锁；现加 volatile 镜像，Closed 态（绝大多数时间）只读镜像 + generation。
+
+### 🔒 可靠性
+
+- **失败提交的回滚裁决从「方言非 SQLite」收紧为「失败看起来是服务端错误」（T1/R1）**：
+  原依据只覆盖 PG/MySQL 文档的「COMMIT 出错即服务端回滚」。若 COMMIT 因连接断开/取消/超时
+  失败，事务在服务端的最终状态未知，跳过回滚会让它悬置到连接归还，继续占锁与 undo 日志。
+  裁决改为沿 InnerException 链查找 `OperationCanceledException`/`TimeoutException`/
+  `IOException`/`SocketException`，命中即照常尝试回滚。判据保守偏向回滚：多回滚一次的代价
+  是一次失败往返挂 Data，少回滚的代价是服务端事务悬置。
+  配套修正 `MultiValueBulkInsert`：原先把「批执行失败」与「提交失败」混在一起判定，会把
+  执行失败误判为「服务端已终止事务」而跳过回滚——新增 `commitAttempted` 标志区分。
+- **自管事务的 COMMIT 纳入 commandTimeout 超时窗口（T2/R2）**：PG COPY / MySQL LOAD DATA
+  每批已有 per-batch 超时，但整批收尾的 COMMIT 此前只受调用方 ct 约束，`ct == default` 时
+  网络黑洞可让提交永久挂起。新增两 Provider 的 `CommitWithTimeoutAsync`，超时包装为带
+  `PalORM.InfrastructureTimeout` 标记的 `TimeoutException`（与 COPY 路径同口径）。
+- **回滚改为有界取消（T3/R3）**：原用 `CancellationToken.None` 无界等待。ITM-747 的论证
+  （「释放必须尽力完成」）对本地句柄 Dispose 成立，但 Rollback 是网络往返且发生在异常传播
+  路径的 finally 里。改为按会话 CommandTimeout 设有界取消，超时后把 `TimeoutException` 挂
+  主异常 Data。`DataSession` 内两处绕过门禁的直连回滚一并收敛。
+- **熔断半开探针槽位兜底回收（R5）**：`_halfOpenProbeActive` 原先只由
+  `RecordSuccess`/`RecordFinalFailure` 释放，调用方在两次记录之间崩溃/取消且未调
+  `ReleaseCancelledProbe` 时槽位永久泄漏，熔断器永久 Open。现按 5 分钟下限回收（**不用
+  `resetAfter`**——`resetAfter=Zero` 是合法配置，以它为界会让探针一获取就算过期，破坏半开
+  单探针不变式）。
+- **`ReleaseCancelledProbe` 带 generation（C2）**：原实现不带 generation，序列「探针 P 进入
+  (gen N) → 探针失败重开(gen N+1) → P 的调用方取消」会把 `_openUntil` 改写为「现在」，
+  新窗口瞬间到期，实际冷却期被旧探针的取消单方面抹掉。
+- **批量家族单次注册表快照（R8）**：`BulkUpdateAsync`/`BulkUpdateBatchAsync`/`BulkMergeAsync`
+  入口原先多次独立读 `CurrentState`（每次一次 `Volatile.Read`），Register/热重载窗口内可能
+  跨版本混用元数据。与 Insert/Update/Delete 的 r19/ITM-703 单快照纪律对齐。
+- **`BatchUpdateSqlBuilder` 入口守卫补齐（R9/R10）**：空 SET 集会生成
+  `UPDATE t SET  FROM …`，`rowCount=0` 会生成 `FROM (VALUES )` / `IN ()`；租户参数名未经
+  校验即拼进 SQL。三者现都在入口显式拒绝。
+- **`BulkInsertAsync` 元数据守卫复用单一实现点（R13）**：会话层自写的两键检查改为调用
+  `BulkOperationFramework.EnsureInsertMetadata`，与三 Provider 同源。
+- **SQLite Provider 原生 bundle 初始化改 `[ModuleInitializer]`（C5）**：显式静态构造器使
+  类型失去 `beforefieldinit`，CLR 在每次静态成员访问前插初始化检查——这些静态方法在批量
+  路径上作为方法组反复传递，每次都白付一次。ModuleInitializer 在程序集加载后、任何类型被
+  触达前由运行时保证恰好执行一次，语义与原静态构造器等价。
+- **`EntityDataReader.IsDBNull` 直读参数值（M9）**：原经 `GetValue` 取值，驱动对每列可能
+  先 `IsDBNull` 再 `GetValue`，同一 ordinal 两次解引用 + 两次 null 合并分支。
+
+### 🧪 测试
+
+- 新增 `BulkUpdateBatchReuseTests`（14 个）：池 ↔ 命令集合收敛契约（满批全挂/末批保留前缀/
+  再增长/租户参数末位/尺寸不变 no-op）、`CreateParameterArray` 与 `CreateParameterPool` 命名
+  一致性、`Build` 入口守卫、批量路径端到端（方言夹具跑真 SQL，逐行断言最终值）、租户过滤
+  只改本租户行。
+  方言夹具 `BatchedDialectProvider` 报 MySql 方言而底层连接仍是 SQLite——批量 UPDATE 的
+  CASE WHEN 形态是 SQLite 原生支持的语法子集，使该路径首次在本地获得真实执行覆盖
+  （此前只有字符串层锁定）。
+- 新增 `TransactionCleanupTests`（14 个）：裁决的异常形态分类（服务端错误跳过 /
+  传输与取消回滚 / 驱动异常内层含 IO 回滚 / SQLite 恒回滚）、有界回滚（超时转 Data 而非
+  挂起 / 正常完成无记录 / 失败保留 / Zero 透传无界）。
+- 新增 `ProviderHotPathTests`（11 个）：三方言 `QuoteIdentifier` 的正确性与控制字符守卫、
+  SQLite Provider 无显式静态构造器（C5 的反射锁定）、`EntityDataReader.IsDBNull` 与
+  `GetValue` 判空结论一致（含主键补位列恒空）。
+- 变异探针：把 `AttachParameters` 临时改为恒挂满批，`ShrunkBatch` 与 `WithTenant` 两个用例
+  如期失败，确认新测试不是空转。
+
 ## [未发布·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移 · 测试凭据自动加载
 
 > 变更范围：v5.5.1 后 8 个提交，src/PalORM.Core 七个文件 + src/PalORM.Sqlite +
