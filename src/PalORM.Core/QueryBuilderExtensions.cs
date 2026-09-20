@@ -352,6 +352,8 @@ public static class QueryBuilderExtensions
                 : await paged._conn.BeginTransactionAsync(ct).ConfigureAwait(false));
         bool ownsTransaction = existingTransaction is null;
         Exception? primaryException = null;
+        // T1（v5.7）：同 WithTransaction——提交尝试标志区分提交失败与查询失败
+        bool commitAttempted = false;
         // ITM-793(r21)：登记两步移入 try——PublishTransaction 可抛（ObjectDisposed，窄窗口），
         // 原位置抛出会让刚开启的自有事务无 rollback 无 dispose（连接持开事务）。finally 已按
         // ownsTransaction 处置，登记失败同样走该路径。
@@ -384,14 +386,23 @@ public static class QueryBuilderExtensions
             List<T> rows = await ExecuteQueryAsync(
                 paged, ct, operationLease.Owner).ConfigureAwait(false);
             if (ownsTransaction)
+            {
+                // T1（v5.7）：提交尝试标志——裁决依据见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
+                commitAttempted = true;
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
+            }
             return (rows, total);
         }
         catch (Exception exception)
         {
             primaryException = exception;
-            if (ownsTransaction)
+            if (ownsTransaction
+                && (!commitAttempted
+                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                        paged._dialect, exception)))
+            {
                 await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+            }
             throw;
         }
         finally

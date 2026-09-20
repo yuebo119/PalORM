@@ -126,6 +126,22 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### 🔒 可靠性（T1 后半：Commit 失败后跳过已终结事务的回滚）
+
+- **提交失败 → 跳过徒劳回滚**（`WithTransaction` / Bulk 内核 `RunInTransactionScopeAsync` /
+  `ToPageAsync` 三个提交点）：提交尝试标志（置于 CommitAsync 紧前）区分「提交失败」与
+  「回调失败」——PG/MySQL 的失败 COMMIT 由服务端终止事务（PG 文档：COMMIT 出错即回滚），
+  此前仍发起 RollbackAsync，得到 "transaction already completed" 驱动噪音挂进
+  `PalORM.RollbackException` 并多一次徒劳往返。现在跳过回滚、以 `PalORM.RollbackSkipped`
+  标记留痕（跳过的回滚 ≠ 失败的回滚，诊断不再误指向回滚）。**SQLite 例外**：失败的
+  COMMIT（如 SQLITE_BUSY）保留活动事务，必须回滚释放写锁——方言守卫排除。
+  MultiValueBulkInsert 的提交点无方言管道（上下文只有 QuoteIdentifier 委托），暂不接入
+  ——其回滚失败本就以 Data 挂主异常不掩盖，噪音代价可接受。
+- 测试：CommitFailureDialectTests +1——PG `DEFERRABLE INITIALLY DEFERRED` 唯一约束
+  确定性触发 COMMIT 失败（唯一可靠手段），锁定 RollbackSkipped 在场、RollbackException
+  缺席、事务终结后连接可用三契约。
+  验证：Core 299/299 · Integration 203/203 · AOT 原生运行 PASSED。
+
 ### 🔒 可靠性（R4+T1 前半：保存点名校验 + 已释放事务跨驱动一致处理）
 
 - **保存点名校验（R4）**：`SavepointAsync`/`RollbackToAsync` 统一拒绝空名/空白名/含 NUL

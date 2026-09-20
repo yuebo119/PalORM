@@ -130,6 +130,9 @@ public sealed partial class DataSession<TProvider>
         DbTransaction? previousTransaction = null;
         DbTransaction? transaction = null;
         Exception? primaryException = null;
+        // T1（v5.7）：置于 CommitAsync 紧前——异常到达 catch 且此标志为 true 即"提交已尝试
+        // 且失败"，与 action 失败可区分（提交成功不会进 catch）
+        bool commitAttempted = false;
         try
         {
             owner = _operationState.EnterTransactionFlow();
@@ -142,6 +145,7 @@ public sealed partial class DataSession<TProvider>
                     .ConfigureAwait(false);
                 using SessionOperationState.SessionOperationLease operation =
                     _operationState.EnterTransactionOperation();
+                commitAttempted = true;
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
                 return result;
             }
@@ -150,8 +154,15 @@ public sealed partial class DataSession<TProvider>
                 primaryException = exception;
                 await _operationState.DisposeTransactionResourcesAsync(exception)
                     .ConfigureAwait(false);
-                await RollbackTransactionPreservingAsync(transaction, exception)
-                    .ConfigureAwait(false);
+                // T1（v5.7）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
+                // 裁决依据与 SQLite 例外见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
+                if (!commitAttempted
+                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                        TProvider.Dialect, exception))
+                {
+                    await RollbackTransactionPreservingAsync(transaction, exception)
+                        .ConfigureAwait(false);
+                }
                 throw;
             }
         }
@@ -249,18 +260,28 @@ public sealed partial class DataSession<TProvider>
                 null, operationOwner, ct).ConfigureAwait(false);
         bool ownsTransaction = previousTransaction is null;
         Exception? primaryException = null;
+        // T1（v5.7）：同 WithTransaction——提交尝试标志区分提交失败与 work 失败
+        bool commitAttempted = false;
         try
         {
             T result = await work(transaction, ct).ConfigureAwait(false);
             if (ownsTransaction)
+            {
+                commitAttempted = true;
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
+            }
             return result;
         }
         catch (Exception exception)
         {
             primaryException = exception;
-            if (ownsTransaction)
+            if (ownsTransaction
+                && (!commitAttempted
+                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                        TProvider.Dialect, exception)))
+            {
                 await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+            }
             throw;
         }
         finally

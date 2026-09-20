@@ -7,6 +7,23 @@ namespace PalORM;
 /// PG Provider 的同名助手是跨程序集刻意独立（Provider 不依赖 Core 内部），不合并。</summary>
 internal static class TransactionCleanup
 {
+    /// <summary>失败提交后跳过回滚时写主异常 Data 的键（T1，v5.7）。</summary>
+    internal const string RollbackSkippedDataKey = "PalORM.RollbackSkipped";
+
+    /// <summary>失败提交后的回滚裁决（T1，v5.7）：PG/MySQL 的失败 COMMIT 由服务端终止
+    /// 事务（PG 文档：COMMIT 出错即回滚；MySQL 错误处理同义）——后续 RollbackAsync 只会
+    /// 得到"transaction already completed"类驱动噪音并多一次徒劳往返。SQLite 相反：
+    /// 失败的 COMMIT（如 SQLITE_BUSY）保留活动事务，必须回滚释放写锁。
+    /// 返回 true = 已在主异常 Data 标记跳过（调用方不再回滚）；false = 照常回滚。</summary>
+    internal static bool TrySkipRollbackAfterCommitFailure(
+        SqlDialect dialect, Exception primaryException)
+    {
+        if (dialect == SqlDialect.Sqlite) return false;
+        primaryException.Data[RollbackSkippedDataKey] =
+            "Rollback skipped: CommitAsync failed; the server already terminated the transaction.";
+        return true;
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "回滚是清理路径；异常附加到主异常，不能替换原始执行失败。")]
     internal static async ValueTask RollbackPreservingAsync(
