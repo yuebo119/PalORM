@@ -24,6 +24,9 @@ public sealed class PostgreSqlIntegrationTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
+    // ExtBulkTable：PG 系统目录（pg_type）并发写竞态——与 ExtBulkTable 组的其他 DDL 串行
+    //（L4 批量化迁移后时序窗口变化，此前靠时序运气掩盖，实测复现 23505）
+    [NotInParallel("ExtBulkTable")]
     public async Task PG_DDL_Insert_Query_RoundTripsData()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(Opts);
