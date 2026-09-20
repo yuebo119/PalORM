@@ -223,7 +223,11 @@ public class CrudBenchmarks : IAsyncDisposable
         using var cmd = c.CreateCommand();
         cmd.CommandText = "INSERT INTO bench_orders (status, total, created_at) VALUES ('DEL', 1, 0); SELECT last_insert_rowid();";
         long id = (long)(await cmd.ExecuteScalarAsync())!;
+        // S2077 报备：id 是本方法上一行刚取回的 last_insert_rowid()，非外部输入；
+        // 基准的 ADO.NET 对照组按定义走原始 SQL（对照组要测的就是无参数化的裸路径）
+#pragma warning disable S2077
         cmd.CommandText = $"DELETE FROM bench_orders WHERE id = {id}";
+#pragma warning restore S2077
         return await cmd.ExecuteNonQueryAsync();
     }
 
