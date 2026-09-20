@@ -126,6 +126,23 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### 🔒 可靠性（R4+T1 前半：保存点名校验 + 已释放事务跨驱动一致处理）
+
+- **保存点名校验（R4）**：`SavepointAsync`/`RollbackToAsync` 统一拒绝空名/空白名/含 NUL
+  的名字（`ArgumentException` 指向参数）——这些形态经 QuoteIdentifier 转义后跨方言行为
+  发散（PG 接受空引用标识符、MySQL 拒绝；NUL 截断命令文本），库内提前拒绝。
+- **`IsTransactionAlive` 探测（T1 家族，6 处）**：Npgsql 在已释放事务上取 `Connection`
+  抛 `ObjectDisposedException`（Microsoft.Data.Sqlite 返回 null 不抛）——此前
+  `GetActiveTransaction`（内部残留的「静默清理」）/`UseTransaction` 双入口（「已释放」
+  精确报错）/`RestoreTransaction`（还原空值）/会话 `DisposeAsync`（跳过「先完成事务」
+  警告）/保存点双方法的已释放检查，在 PG 路径全被驱动异常抢先崩溃，设计语义
+  （静默清理/响亮失败）从未完整触发。统一探测后已释放事务跨驱动一致视同
+  `Connection=null`。**由 PG 保存点集成测试首次暴露**（Sqlite 宽松性掩盖了全族）。
+- 测试：SavepointDialectTests 新增 3 例——PG/MySQL 真库锁定方言引号字符嵌入名的
+  SAVEPOINT/ROLLBACK TO 转义往返（两侧转义不一致即「保存点不存在」失败）、
+  非法名三形态双方法拒绝。
+  验证：Core 299/299 · Integration 202/202 · AOT publish + 原生运行 PASSED。
+
 ### ⚡ 性能（C4：池下限透传 + PreWarmAsync——消除修剪清池与冷启动的建连尖峰）
 
 - **`DbOptions.MinPoolSize`（新增，默认 0 = 不覆盖驱动默认）**：正数透传

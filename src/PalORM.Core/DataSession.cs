@@ -294,7 +294,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         // ITM-606: 先查 disposed——tran.Connection == null 时下方 ReferenceEquals 永远 false，
         // 会遮蔽 SessionOperationState.UseTransaction 中"Cannot use a disposed transaction"的精确消息。
-        if (tran is not null && tran.Connection is null)
+        if (tran is not null && !SessionOperationState.IsTransactionAlive(tran))
             throw new ArgumentException("Cannot use a disposed transaction (its Connection is null). "
                 + "Pass a transaction from an open DbConnection, or null to clear.", nameof(tran));
         if (tran is not null && !ReferenceEquals(tran.Connection, _conn))

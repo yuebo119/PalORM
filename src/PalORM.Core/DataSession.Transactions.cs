@@ -7,14 +7,27 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider>
     where TProvider : IDbProvider
 {
+    /// <summary>保存点名合法性校验（R4，v5.7）：空名/空白名/含 NUL 的名字经 QuoteIdentifier
+    /// 转义后跨方言行为发散（PG 接受空引用标识符、MySQL 拒绝；NUL 截断命令文本）——
+    /// 库内统一提前拒绝，错误消息指向参数而非驱动语法报错。</summary>
+    private static void ValidateSavepointName(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (name.Contains('\0'))
+            throw new ArgumentException("Savepoint name cannot contain NUL characters.", nameof(name));
+    }
+
     /// <summary>见 DataSession 主文档。</summary>
     public async ValueTask SavepointAsync(DbTransaction tran, string name, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(tran);
+        ValidateSavepointName(name);
         // ITM-637 同型面（复检发现）：已释放事务（Connection null）先于归属检查——
-        // 原统一报"不属于主连接"误导排查方向（与 WithTransaction 同口径）
-        if (tran.Connection is null)
+        // 原统一报"不属于主连接"误导排查方向（与 WithTransaction 同口径）。
+        // R4/T1（v5.7）：探测走 IsTransactionAlive——Npgsql 已释放事务取 Connection 抛
+        // ObjectDisposedException，会抢在本 ArgumentException 之前崩溃
+        if (!SessionOperationState.IsTransactionAlive(tran))
             throw new ArgumentException(
                 "Cannot create a savepoint: the transaction has been disposed (its Connection is null).", nameof(tran));
         // ITM-575: 与 UseTransaction 对称——异连接事务在驱动层的错误形态不可控，库内明确失败
@@ -36,8 +49,10 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(tran);
-        // ITM-637 同型面（复检发现，同 SavepointAsync）
-        if (tran.Connection is null)
+        ValidateSavepointName(name);
+        // ITM-637 同型面（复检发现，同 SavepointAsync）；R4/T1（v5.7）探测走
+        // IsTransactionAlive，理由同 SavepointAsync 注释
+        if (!SessionOperationState.IsTransactionAlive(tran))
             throw new ArgumentException(
                 "Cannot roll back to a savepoint: the transaction has been disposed (its Connection is null).", nameof(tran));
         if (!ReferenceEquals(tran.Connection, _conn))
