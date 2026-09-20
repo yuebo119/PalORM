@@ -43,7 +43,7 @@
 | M3-1 | P3 | 覆盖率地板（line ≥70% / branch ≥60%，防退化非达标） | 待开始 | |
 | M3-2 | P3 | 变异测试扩面（Core 全部 ≥200 行文件） | 待开始 | |
 | M3-3 | P3 | 高扇出压力测试（64 交错 + 64 会话并发） | 待开始 | |
-| M3-5 | P3 | ArchitectureInvariantTests 转行为断言 | 待开始 | |
+| M3-5 | P3 | ArchitectureInvariantTests 转行为断言 | 已完成（行为面新增;源码扫描保留为结构面） | DefaultFilterBehaviorTests 三用例:①GetAllAsync 与等价手写过滤 SQL 同结果集(四象限种子:软删×租户) ②OrWhere 无法穿透默认过滤(ITM-401 行为面) ③CountAsync 与 ToListAsync 计数一致。源码扫描(ArchitectureInvariantTests)保留——结构挡"消失"、行为挡"漂移",两面互补(报告原方案是替换,实施升级为互补) |
 | M3-6 | P3 | 删除 no-op 抽象（ConnectionLease）与 legacy 载荷处置 | 已完成（ConnectionLease 部分;legacy 载荷见弃用裁决） | ConnectionLease 退场:AcquireExecutionConnectionAsync 直传 DbConnection(同步分支零分配,每查询 -1 对象 -1 虚调用);4 执行调用点去 using(无资源);GridReader 释放链 reader→command→operation(连接清理段删);CleanupQueryResourcesAsync 签名收窄;GridReaderLifecycleTests 夹具同步。验证:685 全绿(含 199 真库)+AOT 原生 PASSED+严格构建 0 警告 |
 | M2-1 | P2 | 真库测试面从 12% 扩容 + TestDb 方言夹具复活（≥20 调用点） | 待开始 | |
 | M2-3 | P3 | CloneForExecution 字段全集机械化（编译期守卫） | 待开始 | |
