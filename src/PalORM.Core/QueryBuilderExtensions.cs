@@ -401,9 +401,12 @@ public static class QueryBuilderExtensions
             if (ownsTransaction
                 && (!commitAttempted
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
-                        paged._dialect, exception)))
+                        builder._dialect, exception)))
             {
-                await TransactionCleanup.RollbackPreservingAsync(transaction, exception).ConfigureAwait(false);
+                await TransactionCleanup.RollbackPreservingAsync(
+                    transaction, exception,
+                    DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout))
+                    .ConfigureAwait(false);
             }
             throw;
         }

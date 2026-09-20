@@ -82,7 +82,12 @@ public sealed class PostgreSqlProvider : IDbProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
         // ITM-584/593: 三方言共享 IdentifierSafety 守卫（C0 控制字符族 + DEL）。
         IdentifierSafety.ThrowIfUnsafe(identifier);
-        return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+        // L3：无内嵌引号时 string.Replace 仍返回新实例——标识符引用在 SQL 构造路径上
+        // 被反复调用（MultiValueBulkInsert/BatchUpdateSqlBuilder 的列名清单即由它产出），
+        // 无引号场景走 Concat 免掉一次纯拷贝。
+        return identifier.Contains('"', StringComparison.Ordinal)
+            ? $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\""
+            : string.Concat("\"", identifier, "\"");
     }
 
     /// <summary>schema 与表名分别引用后以点连接;schema 为空时省略,落到 search_path 解析。
@@ -179,39 +184,42 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         try
         {
-            for (int start = 0; start < entities.Count; start += batchSize)
+            // M2：rowCommand 与参数池提升到批循环外——COPY 路径下 rowCommand 只是参数容器
+            // （从不执行），原实现每批 CreateCommand + 每批分配异步释放，千批即千次 DbCommand
+            // 与 NpgsqlParameterCollection 分配（与 MultiValueBulkInsert 的跨批复用同范式）。
+            DbCommand rowCommand = conn.CreateCommand();
+            Exception? rowCommandException = null;
+            try
             {
-                int end = Math.Min(start + batchSize, entities.Count);
-                // ITM-643：每次 COPY 一个独立超时窗口（对齐 ADO.NET 每命令超时语义，非整批累计）。
-                CancellationTokenSource timeoutCts =
-                    CreateCopyTimeoutTokenSource(commandTimeoutSeconds, ct);
-                try
+                // v5.6 参数复用：参数对象整批只建一次，逐行只写 Value。
+                // 原实现每行 Parameters.Clear() + binder 重建 columnCount 个参数
+                // （1 万行 × 4 列 = 4 万个 NpgsqlParameter），是 COPY 路径每行分配的
+                // 主项——实测 882 B/行，而已在用参数池的 MySQL 多值 INSERT 只要
+                // 361 B/行。绑定改用生成器已产出的 BindInsertValues（只写 Value、
+                // 零创建），与 MultiValueBulkInsert 的 v4.6 池同一机制，无需改生成器。
+                // 旧版生成器模型程序集 BindInsertValues 为 null 时回退逐行 binder。
+                Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
+                // 池的引用数组：参数对象仍留在 rowCommand.Parameters 内——
+                // WriteRowAsync 读 parameter.NpgsqlDbType，脱离集合会丢失类型推断。
+                DbParameter[]? pool = null;
+                for (int start = 0; start < entities.Count; start += batchSize)
                 {
-                    CancellationToken commandCt = timeoutCts.Token;
-                    // ITM-760：注册回调记录超时触发（回调先于 OCE 抛出点的传播）
-                    using CancellationTokenRegistration reg = commandCt.Register(
-                        static state => ((bool[])state!)[0] = true, timeoutFlag);
-                    NpgsqlBinaryImporter importer = await npgsqlConnection.BeginBinaryImportAsync(
-                        $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)", commandCt)
-                        .ConfigureAwait(false);
-                    Exception? importerException = null;
+                    int end = Math.Min(start + batchSize, entities.Count);
+                    // ITM-643：每次 COPY 一个独立超时窗口（对齐 ADO.NET 每命令超时语义，非整批累计）。
+                    CancellationTokenSource timeoutCts =
+                        CreateCopyTimeoutTokenSource(commandTimeoutSeconds, ct);
                     try
                     {
-                        DbCommand rowCommand = conn.CreateCommand();
-                        Exception? rowCommandException = null;
+                        CancellationToken commandCt = timeoutCts.Token;
+                        // ITM-760：注册回调记录超时触发（回调先于 OCE 抛出点的传播）
+                        using CancellationTokenRegistration reg = commandCt.Register(
+                            static state => ((bool[])state!)[0] = true, timeoutFlag);
+                        NpgsqlBinaryImporter importer = await npgsqlConnection.BeginBinaryImportAsync(
+                            $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)", commandCt)
+                            .ConfigureAwait(false);
+                        Exception? importerException = null;
                         try
                         {
-                            // v5.6 参数复用：参数对象每批建一次，逐行只写 Value。
-                            // 原实现每行 Parameters.Clear() + binder 重建 columnCount 个参数
-                            // （1 万行 × 4 列 = 4 万个 NpgsqlParameter），是 COPY 路径每行分配的
-                            // 主项——实测 882 B/行，而已在用参数池的 MySQL 多值 INSERT 只要
-                            // 361 B/行。绑定改用生成器已产出的 BindInsertValues（只写 Value、
-                            // 零创建），与 MultiValueBulkInsert 的 v4.6 池同一机制，无需改生成器。
-                            // 旧版生成器模型程序集 BindInsertValues 为 null 时回退逐行 binder。
-                            Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
-                            // 池的引用数组：参数对象仍留在 rowCommand.Parameters 内——
-                            // WriteRowAsync 读 parameter.NpgsqlDbType，脱离集合会丢失类型推断。
-                            DbParameter[]? pool = null;
                             for (int index = start; index < end; index++)
                             {
                                 if (valuesBinder is not null && pool is not null)
@@ -236,41 +244,46 @@ public sealed class PostgreSqlProvider : IDbProvider
                                     }
                                 }
 
-                                await WriteRowAsync(importer, rowCommand, columnCount, commandCt).ConfigureAwait(false);
+                                // P1：满批路径直传 pool——原实现经 rowCommand.Parameters 索引器
+                                // 取值，每行每列一次跨接口虚调用 + 一次硬转型（10 万行 × 10 列
+                                // = 100 万次），而 pool 与 Parameters 持有的是同一批对象。
+                                await WriteRowAsync(importer, rowCommand, pool, columnCount, commandCt)
+                                    .ConfigureAwait(false);
                                 total++;
                             }
                             await importer.CompleteAsync(commandCt).ConfigureAwait(false);
                         }
                         catch (Exception exception)
                         {
-                            rowCommandException = exception;
+                            importerException = exception;
                             throw;
                         }
                         finally
                         {
-                            await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
-                                "PalORM.RowCommandCleanupException").ConfigureAwait(false);
+                            await BulkOperationFramework.DisposePreservingAsync(importer, importerException,
+                                "PalORM.ImporterCleanupException").ConfigureAwait(false);
                         }
-                    }
-                    catch (Exception exception)
-                    {
-                        importerException = exception;
-                        throw;
                     }
                     finally
                     {
-                        await BulkOperationFramework.DisposePreservingAsync(importer, importerException,
-                            "PalORM.ImporterCleanupException").ConfigureAwait(false);
+                        timeoutCts.Dispose();
                     }
                 }
-                finally
-                {
-                    timeoutCts.Dispose();
-                }
+            }
+            catch (Exception exception)
+            {
+                rowCommandException = exception;
+                throw;
+            }
+            finally
+            {
+                await BulkOperationFramework.DisposePreservingAsync(rowCommand, rowCommandException,
+                    "PalORM.RowCommandCleanupException").ConfigureAwait(false);
             }
 
             if (ownsTransaction)
-                await bulkTransaction.CommitAsync(ct).ConfigureAwait(false);
+                await CommitWithTimeoutAsync(bulkTransaction, commandTimeoutSeconds, ct)
+                    .ConfigureAwait(false);
             return total;
         }
         catch (Exception exception)
@@ -293,7 +306,7 @@ public sealed class PostgreSqlProvider : IDbProvider
             }
             primaryException = thrown;
             if (ownsTransaction)
-                await RollbackPreservingAsync(bulkTransaction, thrown).ConfigureAwait(false);
+                await RollbackPreservingAsync(bulkTransaction, thrown, commandTimeoutSeconds).ConfigureAwait(false);
             throw thrown;
         }
         finally
@@ -316,28 +329,94 @@ public sealed class PostgreSqlProvider : IDbProvider
         return timeoutCts;
     }
 
-    /// <summary>把单行参数写入 PG Binary importer——DBNull 转换为 null 让 importer 用列默认类型。</summary>
+    /// <summary>把单行参数写入 PG Binary importer——DBNull 转换为 null 让 importer 用列默认类型。
+    /// <para>P1：<paramref name="pool"/> 非 null（满批复用路径）时直接索引取值，避开
+    /// <see cref="DbParameterCollection"/> 索引器的跨接口虚调用与硬转型；池尚未建立
+    /// （首行）或旧版生成器回退路径下走 rowCommand.Parameters。</para></summary>
     private static async ValueTask WriteRowAsync(
-        NpgsqlBinaryImporter importer, DbCommand rowCommand, int columnCount, CancellationToken ct)
+        NpgsqlBinaryImporter importer, DbCommand rowCommand, DbParameter[]? pool,
+        int columnCount, CancellationToken ct)
     {
         await importer.StartRowAsync(ct).ConfigureAwait(false);
         for (int parameterIndex = 0; parameterIndex < columnCount; parameterIndex++)
         {
-            var parameter = (NpgsqlParameter)rowCommand.Parameters[parameterIndex];
+            var parameter = (NpgsqlParameter)(pool is not null
+                ? pool[parameterIndex]
+                : rowCommand.Parameters[parameterIndex]);
             object? value = parameter.Value is DBNull ? null : parameter.Value;
             await importer.WriteAsync(value, parameter.NpgsqlDbType, ct).ConfigureAwait(false);
         }
     }
 
+    /// <summary>R2/T2：自管事务的 COMMIT 纳入 <paramref name="commandTimeoutSeconds"/> 超时窗口。
+    /// COPY/LOAD DATA 每批已有 per-batch 超时（ITM-643），但整批收尾的 COMMIT 此前只受
+    /// 调用方 ct 约束——<c>ct == default</c> 时网络黑洞可让提交永久挂起。超时包装为
+    /// <see cref="TimeoutException"/> 并打 <c>PalORM.InfrastructureTimeout</c> 标记（与
+    /// COPY 路径的 wrapAsTimeout 同口径），调用方据此判定"服务端状态未知"并尝试回滚。</summary>
+    private static async ValueTask CommitWithTimeoutAsync(
+        DbTransaction transaction, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        if (commandTimeoutSeconds <= 0)
+        {
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
+        try
+        {
+            await transaction.CommitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException timeoutException) when (timeoutCts.IsCancellationRequested)
+        {
+            var wrappedTimeout = new TimeoutException(
+                $"Bulk insert commit timed out after {commandTimeoutSeconds}s.", timeoutException);
+            wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+            throw wrappedTimeout;
+        }
+    }
+
     // ITM-412 防漂移锚点：以下清理助手与 Core 的 DataSession.RollbackPreservingAsync 是同一
     // "主异常保留"骨架的复制体（Provider 不得反向依赖 Core 内部实现，故刻意复制）。
-    // 修改任一侧语义（异常挂载键、CancellationToken.None）时必须同步核对另一侧——两侧分叉即 ITM-304 同型温床。
+    // 修改任一侧语义（异常挂载键、有界回滚）时必须同步核对另一侧——两侧分叉即 ITM-304 同型温床。
     // 注：DisposePreservingAsync 已抽到 BulkOperationFramework（v3.0），三 Provider 共享同一实现。
+    /// <summary>R3：有界回滚——原实现用 CancellationToken.None 无界等待，网络黑洞下会把一次
+    /// COPY 失败拖成永久卡死（且发生在异常传播路径）。超时异常挂主异常 Data，不替换原始失败。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "回滚是清理路径；异常附加到主异常，不能替换原始 COPY 失败。")]
-    private static async ValueTask RollbackPreservingAsync(DbTransaction transaction, Exception primaryException)
+    private static async ValueTask RollbackPreservingAsync(
+        DbTransaction transaction, Exception primaryException, int rollbackTimeoutSeconds = 30)
     {
-        try { await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
-        catch (Exception rollbackException) { primaryException.Data["PalORM.RollbackException"] = rollbackException; }
+        CancellationToken ct = CancellationToken.None;
+        CancellationTokenSource? timeoutCts = null;
+        if (rollbackTimeoutSeconds > 0)
+        {
+            timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(rollbackTimeoutSeconds));
+            ct = timeoutCts.Token;
+        }
+        try
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException timeoutException) when (ct.IsCancellationRequested)
+        {
+            primaryException.Data["PalORM.RollbackTimeoutException"] = new TimeoutException(
+                $"Rollback timed out after {rollbackTimeoutSeconds}s; the server-side transaction may still be open.",
+                timeoutException);
+        }
+        catch (Exception rollbackException)
+        {
+            primaryException.Data["PalORM.RollbackException"] = rollbackException;
+        }
+        finally
+        {
+            timeoutCts?.Dispose();
+        }
     }
 }

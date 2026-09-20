@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Runtime.CompilerServices;
 using MySqlConnector;
 
 namespace PalORM.MySql;
@@ -82,7 +83,10 @@ public sealed class MySqlProvider : IDbProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
         // ITM-584/593: 三方言共享 IdentifierSafety 守卫（C0 控制字符族 + DEL）。
         IdentifierSafety.ThrowIfUnsafe(identifier);
-        return $"`{identifier.Replace("`", "``", StringComparison.Ordinal)}`";
+        // L3：无内嵌反引号时 string.Replace 仍返回新实例——走 Concat 免掉一次纯拷贝。
+        return identifier.Contains('`', StringComparison.Ordinal)
+            ? $"`{identifier.Replace("`", "``", StringComparison.Ordinal)}`"
+            : string.Concat("`", identifier, "`");
     }
 
     /// <summary>schema 与表名分别反引号引用后以点连接;MySQL 中 schema 即数据库名。
@@ -175,14 +179,42 @@ public sealed class MySqlProvider : IDbProvider
             ct).ConfigureAwait(false);
     }
 
-    /// <summary>检测服务端 local_infile 是否开启（每次执行检测，无静态缓存，符合零全局状态原则）。
-    /// BulkCopy 走 LOAD DATA LOCAL INFILE，需要 local_infile=ON（MySQL 默认 OFF）。
+    /// <summary>检测服务端 local_infile 是否开启。
+    /// <para><b>L1：按连接缓存探测结果</b>——原实现每次 BulkInsertAsync 都付一次
+    /// <c>SHOW VARIABLES</c> RTT。注释以"&lt;1ms，批量场景占比可忽略"论证，但每请求只插
+    /// 5 行的短事务场景下这一次 RTT 与业务写入同量级（跨网段 0.3~2ms，可占总延迟三成以上）。
+    /// 探测结果是连接级事实（同一连接的 <c>local_infile</c> 由连接串与账号决定），
+    /// 不是进程级可变状态，缓存不违反零全局状态原则。</para>
+    /// <para><b>TTL 与失效</b>：默认 60 秒——服务端变量可运行时变更，短 TTL 让托管环境
+    /// 的配置刷新在一分钟内生效；探测异常不写入缓存（下次重探，不把瞬时故障固化为 OFF）。</para>
+    /// <para><b>R14：降级可观测</b>——探测故障 vs 能力关闭都会走多值路径（慢约 4.84×），
+    /// 原实现静默无痕。故障经 <see cref="BulkOperationFramework.RecordCapabilityProbeFailure"/>
+    /// 计数，运行期"突然变慢"有归因线索。</para>
     /// <para>ITM-633：检测命令挂接外部事务（连接 pending 事务下未挂接命令 MySqlConnector
     /// 会抛 InvalidOperationException）；检测自身故障（网络抖动/超时）降级为 OFF 走多值
     /// INSERT——能力探测不应终止整批插入。</para></summary>
+    private static readonly ConditionalWeakTable<MySqlConnection, LocalInfileProbe> LocalInfileCache = [];
+
+    /// <summary>探测结果缓存条目——<see cref="ExpiresAtTicks"/> 用 <see cref="Environment.TickCount64"/>
+    /// 单调钟，不受系统时间回拨影响。必须是引用类型：ConditionalWeakTable 的 TValue 约束为
+    /// class（键才是弱引用，值随键一起回收）。</summary>
+    private sealed class LocalInfileProbe(bool enabled, long expiresAtTicks)
+    {
+        public bool Enabled { get; } = enabled;
+        public long ExpiresAtTicks { get; } = expiresAtTicks;
+    }
+
+    private const int LocalInfileProbeTtlMilliseconds = 60_000;
+
     private static async ValueTask<bool> IsLocalInfileEnabledAsync(
         MySqlConnection conn, MySqlTransaction? transaction, CancellationToken ct)
     {
+        if (LocalInfileCache.TryGetValue(conn, out LocalInfileProbe? cached)
+            && Environment.TickCount64 < cached.ExpiresAtTicks)
+        {
+            return cached.Enabled;
+        }
+
         try
         {
             using DbCommand cmd = conn.CreateCommand();
@@ -193,10 +225,15 @@ public sealed class MySqlProvider : IDbProvider
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return false;
             string value = reader.GetString(1);
-            return string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
+            bool enabled = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
+            LocalInfileCache.AddOrUpdate(conn, new LocalInfileProbe(
+                enabled, Environment.TickCount64 + LocalInfileProbeTtlMilliseconds));
+            return enabled;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            // R14：探测故障与能力关闭在多值路径上行为一致，但归因完全不同——计数留痕
+            BulkOperationFramework.RecordCapabilityProbeFailure();
             return false;  // 探测故障降级多值路径（见 summary）；取消原样上抛
         }
     }
@@ -218,6 +255,8 @@ public sealed class MySqlProvider : IDbProvider
         // MySQL schema=database；当前会话已在连接串指定的库里，表名直接引用。
         string quotedTable = QuoteIdentifier(tableName);
         // 主键列——DataTable 中放首列填 NULL（AUTO_INCREMENT 自增）。
+        // L4：表名/主键列的引用只由 (Type, Provider) 决定，原实现每批重算一次
+        // （MySqlBulkCopyInserter 按 batchSize 分块调用本方法，千批 = 千次无谓分配）
         string? pkColumn = PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pk) ? pk : null;
         IReadOnlyList<string> pkColumns = pkColumn is not null ? [pkColumn] : [];
 
@@ -247,9 +286,13 @@ public sealed class MySqlProvider : IDbProvider
                     batchSize,
                     metadata.BindInsertValues),
                 ct).ConfigureAwait(false);
-            // 成功路径：自管事务需显式 commit（DisposeAsync 默认 rollback）。
+            // R2/T2：自管事务的 COMMIT 纳入 commandTimeoutSeconds 超时窗口。
+            // BulkCopyTimeout 只覆盖 LOAD DATA，不覆盖 COMMIT——此前 ct == default 时提交
+            // 无界等待。超时包装为 TimeoutException 并打 InfrastructureTimeout 标记，
+            // 与 PG 路径同口径；同时让 TransactionCleanup 判定"服务端状态未知"以尝试回滚。
             if (ownsTransaction)
-                await mySqlTransaction.CommitAsync(ct).ConfigureAwait(false);
+                await CommitWithTimeoutAsync(mySqlTransaction, commandTimeoutSeconds, ct)
+                    .ConfigureAwait(false);
             return inserted;
         }
         catch (Exception ex)
@@ -265,6 +308,38 @@ public sealed class MySqlProvider : IDbProvider
                     mySqlTransaction, primaryException, "PalORM.TransactionCleanupException")
                     .ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>COMMIT 的超时包装——与 PG 路径（<c>PostgreSqlProvider.CommitWithTimeoutAsync</c>）
+    /// 同口径：仅超时触发时包装为带 <c>PalORM.InfrastructureTimeout</c> 标记的
+    /// <see cref="TimeoutException"/>，调用方取消原样上抛；commandTimeoutSeconds ≤ 0
+    /// （全库 Zero = 无限等待契约）时不设超时。</summary>
+    private static async ValueTask CommitWithTimeoutAsync(
+        MySqlTransaction transaction, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        if (commandTimeoutSeconds <= 0)
+        {
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        using var timeoutCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(System.TimeSpan.FromSeconds(commandTimeoutSeconds));
+        try
+        {
+            await transaction.CommitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (System.OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (System.OperationCanceledException timeoutException) when (timeoutCts.IsCancellationRequested)
+        {
+            var wrappedTimeout = new System.TimeoutException(
+                $"Bulk insert commit timed out after {commandTimeoutSeconds}s.", timeoutException);
+            wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+            throw wrappedTimeout;
         }
     }
 }

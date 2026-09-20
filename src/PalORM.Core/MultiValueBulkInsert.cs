@@ -73,6 +73,10 @@ public static class MultiValueBulkInsert
             ?? await conn.BeginTransactionAsync(ctx.IsolationLevel, ct).ConfigureAwait(false);
         bool ownsTransaction = transaction is null;
         Exception? primaryException = null;
+        // R1：提交尝试标志——只有 CommitAsync 自身失败才做"跳过回滚"裁决；
+        // 批执行失败时提交从未发生，必须照常回滚（旧代码把两种异常混在一起，
+        // 会把执行失败误判为"服务端已终止事务"而跳过回滚）
+        bool commitAttempted = false;
         try
         {
             // v4.1：BindInsertToBatch 直接写入 batchCmd，不再需要 rowCommand scratch
@@ -81,13 +85,25 @@ public static class MultiValueBulkInsert
                 quotedTable, quotedColumns, binder, valuesBinder, commandTimeoutSeconds,
                 typeof(T).Name, ct).ConfigureAwait(false);
             if (ownsTransaction)
+            {
+                commitAttempted = true;
                 await tran.CommitAsync(ct).ConfigureAwait(false);
+            }
         }
         catch (Exception exception)
         {
             primaryException = exception;
-            if (ownsTransaction)
-                await TransactionCleanup.RollbackPreservingAsync(tran, exception).ConfigureAwait(false);
+            // R1/T3：裁决只针对提交失败；批执行失败一律回滚。回滚本身有界
+            // （TransactionCleanup.DefaultRollbackTimeoutSeconds）。
+            // BulkContext 不带方言（多值骨架被三 Provider 共享），此处只按异常形态裁决——
+            // 传输类失败在三个方言上都应回滚。
+            if (ownsTransaction
+                && (!commitAttempted
+                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(exception)))
+            {
+                await TransactionCleanup.RollbackPreservingAsync(
+                    tran, exception, commandTimeoutSeconds).ConfigureAwait(false);
+            }
             throw;
         }
         finally

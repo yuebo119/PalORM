@@ -15,6 +15,9 @@ namespace PalORM;
 /// build-then-tostring 单段使用即可。</para></summary>
 internal ref struct ValueStringBuilder
 {
+    /// <summary><see cref="Append(string)"/> 的倍增封顶——超过它的增量按需增长（见 Append 注释）。</summary>
+    private const int MaxDoublingCap = 4096;
+
     private char[]? _pooled;
     private Span<char> _buffer;
     private int _pos;
@@ -37,9 +40,35 @@ internal ref struct ValueStringBuilder
     public void Append(string? s)
     {
         if (s is null) return;
-        if (_pos + s.Length > _buffer.Length) Grow(Math.Max(_pos + s.Length, _buffer.Length * 2));
+        int required = _pos + s.Length;
+        if (required > _buffer.Length)
+            // M8：目标只需 520 字符时不要翻倍到 1024——"至少 2 倍"封顶在 MaxDoublingCap，
+            // 超过它的增量按需增长。大批量 SQL（数百 KB）由 ArrayPool 兜底，不受封顶限制
+            // （封顶只压小目标，required 本身仍是保底）。
+            Grow(Math.Max(Math.Min(_buffer.Length * 2, MaxDoublingCap), required));
         s.AsSpan().CopyTo(_buffer.Slice(_pos));
         _pos += s.Length;
+    }
+
+    /// <summary>追加非负整数的十进制数字——@p{N} 占位符等热路径免去 int→string 的中间分配。</summary>
+    public void Append(int value)
+    {
+        if ((uint)value < 10)
+        {
+            Append((char)('0' + value));
+            return;
+        }
+        Span<char> digits = stackalloc char[10];
+        int count = 0;
+        uint remaining = (uint)value;
+        while (remaining > 0)
+        {
+            digits[count++] = (char)('0' + (remaining % 10));
+            remaining /= 10;
+        }
+        if (_pos + count > _buffer.Length) Grow(_pos + count);
+        for (int i = count - 1; i >= 0; i--)
+            _buffer[_pos++] = digits[i];
     }
 
     private void Grow(int? min = null)

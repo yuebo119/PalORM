@@ -19,10 +19,8 @@ public partial class DataSession<TProvider>
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         // r11.5-D3（ITM-637 同型第六处）：元数据检查先于空列表短路——会话层短路使
         // Provider 层（r4 批次已修）的三方言一致性检查对空列表不可达
-        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out _)
-            || !PalORM_Runtime.TableNames.TryGetValue(typeof(T), out _))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated insert metadata.");
+        // R13：复用 BulkOperationFramework 的单一实现点（PG/MySQL/多值骨架共用同一守卫）
+        _ = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
         if (entities.Count == 0) return 0;
         return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
             _options.CommandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
@@ -57,7 +55,14 @@ public partial class DataSession<TProvider>
         // 租户过滤与单条 DeleteAsync 对齐（ITM-404）：跨租户主键命中 0 行
         // M1（v5.7）：后缀 per-Dialect 缓存（语句随批次占位符变化，仅后缀可缓存）
         string tenantFilter = HasTenantFilter<T>() ? GetTenantAppendFragment() : "";
+        // L5：标识符与时间表达式集合一次算好——原实现每批重算
+        // （QuoteIdentifier("deleted_at") × 2 + CurrentTimestampExpression 取值）
+        DeleteIdentifiers identifiers = new(
+            quotedTable, quotedPrimaryKey, TProvider.QuoteIdentifier("deleted_at"),
+            TProvider.CurrentTimestampExpression, tenantFilter);
         const int batchSize = SqlLimits.InClauseBatchSize;
+        // 满批占位符名在批大小不变时逐位相同——预建一次，末批另建
+        string[] fullBatchPlaceholders = BuildPlaceholderNames(TProvider.GetParameterPlaceholder, batchSize);
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
         // RunInTransactionScopeAsync 单点。
         return await RunInTransactionScopeAsync(
@@ -68,24 +73,28 @@ public partial class DataSession<TProvider>
                 // 仍执行 Restore+事务释放；await using 覆盖批间清理。
                 // R10：scratch 跨批次复用（对齐 MultiValueBulkInsert rowCommand 模式）。
                 await using DbCommand scratch = CreateCommand();
+                // 语句文本在批大小不变时逐位相同，末批不同——只在变化时重建
+                string? lastBatchSql = null;
+                int lastBatchLength = -1;
                 long total = 0;
                 for (int start = 0; start < keys.Count; start += batchSize)
                 {
                     int end = Math.Min(start + batchSize, keys.Count);
                     int batchLen = end - start;
-                    var placeholders = new string[batchLen];
-                    for (int index = 0; index < batchLen; index++)
-                        placeholders[index] = TProvider.GetParameterPlaceholder(index);
+                    string[] placeholders = batchLen == batchSize
+                        ? fullBatchPlaceholders
+                        : BuildPlaceholderNames(TProvider.GetParameterPlaceholder, batchLen);
+
+                    if (batchLen != lastBatchLength)
+                    {
+                        lastBatchSql = BuildBulkDeleteSql(
+                            batchLen, placeholders, identifiers, isSoftDelete);
+                        lastBatchLength = batchLen;
+                    }
 
                     await using DbCommand cmd = CreateCommand();
                     cmd.Transaction = tran;
-                    string predicate =
-                        $"{quotedPrimaryKey} IN ({string.Join(", ", placeholders)})";
-                    cmd.CommandText = isSoftDelete
-                        ? $"UPDATE {quotedTable} SET {TProvider.QuoteIdentifier("deleted_at")} = " +
-                          $"{TProvider.CurrentTimestampExpression} WHERE {predicate} AND " +
-                          $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}"
-                        : $"DELETE FROM {quotedTable} WHERE {predicate}{tenantFilter}";
+                    cmd.CommandText = lastBatchSql!;
 
                     // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
                     // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
@@ -110,6 +119,67 @@ public partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>批内参数名（<see cref="IDbProvider.GetParameterPlaceholder"/> 形态，三方言一致）。
+    /// 驱动在 Add 时校验集合内重名，故名字必须真实存在而非仅占位。</summary>
+    private static string[] BuildPlaceholderNames(Func<int, string> placeholderFactory, int batchLen)
+    {
+        var placeholders = new string[batchLen];
+        for (int index = 0; index < batchLen; index++)
+            placeholders[index] = placeholderFactory(index);
+        return placeholders;
+    }
+
+    /// <summary>删除语句的标识符与表达式集合——L5 提取到方法外，避免每批重算
+    /// （QuoteIdentifier("deleted_at") × 2 + 时间表达式取值）。</summary>
+    private readonly record struct DeleteIdentifiers(
+        string QuotedTable, string QuotedPrimaryKey, string QuotedDeletedAt,
+        string TimestampExpression, string TenantFilter);
+
+    /// <summary>L5：单批删除/软删语句——单个 <see cref="ValueStringBuilder"/> 顺序写出，
+    /// 替代原「string[] + string.Join + 多重插值」的中间串。SQL 文本与旧实现逐字节一致。</summary>
+    private static string BuildBulkDeleteSql(
+        int batchLen, string[] placeholders, in DeleteIdentifiers identifiers, bool isSoftDelete)
+    {
+        var sb = new ValueStringBuilder(stackalloc char[256]);
+        try
+        {
+            if (isSoftDelete)
+            {
+                sb.Append("UPDATE ");
+                sb.Append(identifiers.QuotedTable);
+                sb.Append(" SET ");
+                sb.Append(identifiers.QuotedDeletedAt);
+                sb.Append(" = ");
+                sb.Append(identifiers.TimestampExpression);
+                sb.Append(" WHERE ");
+            }
+            else
+            {
+                sb.Append("DELETE FROM ");
+                sb.Append(identifiers.QuotedTable);
+                sb.Append(" WHERE ");
+            }
+            sb.Append(identifiers.QuotedPrimaryKey);
+            sb.Append(" IN (");
+            for (int index = 0; index < batchLen; index++)
+            {
+                if (index > 0) sb.Append(", ");
+                sb.Append(placeholders[index]);
+            }
+            sb.Append(')');
+            if (isSoftDelete)
+            {
+                sb.Append(" AND ");
+                sb.Append(identifiers.QuotedDeletedAt);
+                sb.Append(" IS NULL");
+            }
+            sb.Append(identifiers.TenantFilter);
+            sb.TrimEnd();
+            return sb.ToString();
+        }
+        finally { sb.Dispose(); }
+    }
+
     /// <summary>批量更新。复用源生成 UPDATE 与并发语义，整个输入在同一事务内执行。
     /// <para>ITM-556: [ConcurrencyCheck] 实体的内存 version 回填延迟到事务提交成功后统一执行——
     /// 中途冲突整批回滚时，已成功条目的内存状态与 DB 保持一致，重试不产生假冲突。
@@ -122,8 +192,11 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
-        // r15-DB1（D3 族第五侧一致性收口——同四侧口径）
-        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out _))
+        // R8：单次注册表快照贯穿路由判定与后续取值——原实现入口三次独立读
+        // CurrentState（三次 Volatile.Read），Register/热重载窗口内可能跨版本混用元数据
+        // （与 Insert/Update/Delete 的 r19/ITM-703 单快照纪律对齐）。
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata routeMetadata))
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
@@ -136,29 +209,19 @@ public partial class DataSession<TProvider>
         //   SQLite → CASE WHEN 在 SQLite 实测慢 6.4×（BulkUpdateBatchAsync 已有同判）。
         if (TProvider.Dialect != SqlDialect.Sqlite
             && entities.Count > 1
-            && PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata routeMetadata)
             && routeMetadata.IncrementVersion is null
             && !IsSoftDeletable<T>()
             && !HasTenantFilter<T>())
         {
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
-            PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
             string tableName = state._tableNames[typeof(T)];
             BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, routeMetadata, tableName, entities[0]);
             int rowsPerBatch = Math.Max(1, SqlLimits.MaxBindParameters / (ctx.SetColumnCount + 1));
             return await RunInTransactionScopeAsync(
                 operation.Owner,
                 async (tran, token) =>
-                {
-                    long totalAffected = 0;
-                    for (int batchStart = 0; batchStart < entities.Count; batchStart += rowsPerBatch)
-                    {
-                        int batchEnd = Math.Min(batchStart + rowsPerBatch, entities.Count);
-                        totalAffected += await ExecuteBatchUpdateAsync(
-                            entities, batchStart, batchEnd, routeMetadata, ctx, tran, token).ConfigureAwait(false);
-                    }
-                    return totalAffected;
-                },
+                    await ExecuteBulkUpdateBatchesAsync(entities, routeMetadata, ctx, tran, rowsPerBatch, token)
+                        .ConfigureAwait(false),
                 ct).ConfigureAwait(false);
         }
 
@@ -212,7 +275,9 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
-        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out _))
+        // R8：单次注册表快照——原实现入口先读 CurrentState 检查、随后又独立读一次取元数据
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         // r12-B1（D3 残留族）：空短路后置（三方言/两路径统一口径——SQLite 回退路径同样
@@ -224,9 +289,7 @@ public partial class DataSession<TProvider>
         if (TProvider.Dialect == SqlDialect.Sqlite)
             return await ExecuteBulkUpdateRowByRowAsync(entities, operation.Owner, ct).ConfigureAwait(false);
 
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata)
-            || !state._tableNames.TryGetValue(typeof(T), out string? tableName))
+        if (!state._tableNames.TryGetValue(typeof(T), out string? tableName))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
         // 乐观锁实体拒绝——批量 UPDATE 无法表达"每行 version 匹配"语义。
         if (metadata.IncrementVersion is not null)
@@ -246,16 +309,8 @@ public partial class DataSession<TProvider>
         return await RunInTransactionScopeAsync(
             operation.Owner,
             async (tran, token) =>
-            {
-                long totalAffected = 0;
-                for (int batchStart = 0; batchStart < entities.Count; batchStart += rowsPerBatch)
-                {
-                    int batchEnd = Math.Min(batchStart + rowsPerBatch, entities.Count);
-                    totalAffected += await ExecuteBatchUpdateAsync(
-                        entities, batchStart, batchEnd, metadata, ctx, tran, token).ConfigureAwait(false);
-                }
-                return totalAffected;
-            },
+                await ExecuteBulkUpdateBatchesAsync(entities, metadata, ctx, tran, rowsPerBatch, token)
+                    .ConfigureAwait(false),
             ct).ConfigureAwait(false);
     }
 
@@ -310,57 +365,115 @@ public partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>执行单批 UPDATE（构造 SQL + 绑定参数 + 执行）。
-    /// <para><b>v5.6 参数池</b>：目标命令的参数对象一次建好（<c>@p0…@p{n-1}</c> 按行递增，
-    /// SET 列在前、主键在每行末尾，租户参数固定名追加末尾），逐行只写 <c>Value</c>。
-    /// 取值优先走生成器新发射的 <see cref="CrudMetadata.BindUpdateValues"/>（零 CreateParameter）
-    /// ——原先经 probe 命令逐行 <c>BindUpdate</c> 建参数，40000 行 × 4 列即 16 万次创建，
-    /// 是真库实测 2671 B/行（PG）的主项。旧版模型程序集该绑定器为 null 时回退 probe 路径，
-    /// 参数创建量回到改前水平但语义不变。</para>
+    /// <summary><b>M1/L2</b>：批量 UPDATE 的分批执行内核——拥有批次循环，命令、参数池与
+    /// SQL 文本在批间复用。
+    /// <para><b>为什么收敛成单方法</b>：原实现是「调用方循环 + 每批一个 ExecuteBatchUpdateAsync」，
+    /// 每批新建 DbCommand、每批重建 rowParamCount 个参数、每批重建一份逐位相同的 SQL 文本。
+    /// INSERT 路径自 v4.6 起就有「命令跨批复用 + 满批参数池 + CommandText 仅批大小变化时重建」
+    /// 三件套（<see cref="MultiValueBulkInsert.ExecuteBatchesAsync"/>），UPDATE 路径是同类未收敛点。
+    /// 本方法把整套范式搬过来：命令与参数池在进入循环前建一次，逐批只写 <c>Value</c>；
+    /// SQL 文本仅在批大小变化时重建（满批恒等，仅末批可能不同）。</para>
+    /// <para><b>取值路径</b>：优先走生成器发射的 <see cref="CrudMetadata.BindUpdateValues"/>
+    /// （零 CreateParameter）。旧版模型程序集该绑定器为 null 时回退 probe 取值，语义不变、
+    /// 参数创建量回到改前水平。</para>
     /// <para>参数名与顺序与 <see cref="BatchUpdateSqlBuilder"/> 的占位符逐位对应，由
     /// <c>BatchUpdateParameterContractTests</c> 锁定跨 Provider 契约。</para></summary>
-    private async ValueTask<long> ExecuteBatchUpdateAsync<T>(
-        IReadOnlyList<T> entities, int batchStart, int batchEnd,
-        CrudMetadata metadata, BatchUpdateContext ctx,
-        DbTransaction tran, CancellationToken ct)
+    private async ValueTask<long> ExecuteBulkUpdateBatchesAsync<T>(
+        IReadOnlyList<T> entities, CrudMetadata metadata, BatchUpdateContext ctx,
+        DbTransaction tran, int rowsPerBatch, CancellationToken ct)
         where T : class, new()
     {
-        int batchLen = batchEnd - batchStart;
-        int paramsPerRow = ctx.SetColumnCount + 1;
-        int rowParamCount = batchLen * paramsPerRow;
+        int setColumnCount = ctx.SetColumnCount;
+        int paramsPerRow = setColumnCount + 1;
+        int tenantParams = ctx.HasTenantFilter ? 1 : 0;
+        // 池按"本调用实际出现的最大批"建——输入不足一个满批时不为不存在的行预留
+        int poolRows = Math.Min(rowsPerBatch, entities.Count);
+        int poolRowParamCount = poolRows * paramsPerRow;
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        cmd.CommandText = BatchUpdateSqlBuilder.Build(
-            TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
-            batchLen, ctx.HasTenantFilter, _tenantParameterName);
 
-        DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterPool(
-            cmd, rowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
+        // 参数池与命令参数集合一次建好；末批缩短时只收敛集合、不新建参数对象
+        DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
+            poolRowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
             TProvider.CreateParameter);
+        AttachParameters(cmd, pool, poolRowParamCount, poolRowParamCount, tenantParams);
 
         Action<DbParameter[], object, int>? valuesBinder = metadata.BindUpdateValues;
-        if (valuesBinder is not null)
+        string? lastBatchSql = null;
+        int lastBatchLength = -1;
+        long totalAffected = 0;
+
+        for (int start = 0; start < entities.Count; start += rowsPerBatch)
         {
-            for (int i = batchStart; i < batchEnd; i++)
-                valuesBinder(pool, entities[i], (i - batchStart) * paramsPerRow);
-        }
-        else
-        {
-            // 旧版生成器模型程序集：无零分配绑定器，退回 probe 取值再写进池
-            await using DbCommand probe = CreateCommand();
-            for (int i = batchStart; i < batchEnd; i++)
+            int end = Math.Min(start + rowsPerBatch, entities.Count);
+            int batchLen = end - start;
+            int rowParamCount = batchLen * paramsPerRow;
+
+            if (batchLen != lastBatchLength)
             {
-                probe.Parameters.Clear();
-                metadata.BindUpdate(probe, entities[i]);
-                int baseIndex = (i - batchStart) * paramsPerRow;
-                for (int c = 0; c < paramsPerRow; c++)
-                    pool[baseIndex + c].Value = probe.Parameters[c].Value;
+                lastBatchSql = BatchUpdateSqlBuilder.Build(
+                    TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
+                    batchLen, ctx.HasTenantFilter, _tenantParameterName);
+                lastBatchLength = batchLen;
+                AttachParameters(cmd, pool, rowParamCount, poolRowParamCount, tenantParams);
             }
+            cmd.CommandText = lastBatchSql!;
+
+            if (valuesBinder is not null)
+            {
+                // 零分配路径：只写 Value
+                for (int i = start; i < end; i++)
+                    valuesBinder(pool, entities[i], (i - start) * paramsPerRow);
+            }
+            else
+            {
+                await BindRowValuesViaProbeAsync(
+                    metadata, pool, entities, start, end, paramsPerRow).ConfigureAwait(false);
+            }
+
+            totalAffected += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
-        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return totalAffected;
+    }
+
+    /// <summary>旧版生成器模型程序集的回退取值：probe 命令逐行 <c>BindUpdate</c> 建参数，
+    /// 再把值写进池。语义与 <see cref="CrudMetadata.BindUpdateValues"/> 一致，参数创建量回到
+    /// 改前水平（这是旧程序集的既有成本，不是本路径的回归）。
+    /// probe 命令由会话连接创建（<see cref="CreateCommand"/> 带事务/超时口径）。</summary>
+    private async ValueTask BindRowValuesViaProbeAsync<T>(
+        CrudMetadata metadata, DbParameter[] pool,
+        IReadOnlyList<T> entities, int start, int end, int paramsPerRow)
+        where T : class, new()
+    {
+        await using DbCommand probe = CreateCommand();
+        for (int i = start; i < end; i++)
+        {
+            probe.Parameters.Clear();
+            metadata.BindUpdate(probe, entities[i]);
+            int baseIndex = (i - start) * paramsPerRow;
+            for (int c = 0; c < paramsPerRow; c++)
+                pool[baseIndex + c].Value = probe.Parameters[c].Value;
+        }
+    }
+
+    /// <summary>把参数池的前 <paramref name="rowParamCount"/> 个（+ 末尾租户参数）挂到命令集合。
+    /// 批大小未变时集合元素数一致，直接返回；末批缩短时清空后按池内前缀重挂——
+    /// 参数对象全部来自池，无新分配（参数集合本身的重建是驱动固有成本）。
+    /// <para><b>internal for testing</b>：本方法是 M1 跨批复用的契约点（池按满批建、命令集合按
+    /// 实际批收敛），PG/MySQL 批量路径本地跑不到，靠单测锁定。</para></summary>
+    internal static void AttachParameters(
+        DbCommand cmd, DbParameter[] pool, int rowParamCount, int poolRowParamCount, int tenantParams)
+    {
+        int required = rowParamCount + tenantParams;
+        if (cmd.Parameters.Count == required) return;
+        cmd.Parameters.Clear();
+        for (int i = 0; i < rowParamCount; i++)
+            cmd.Parameters.Add(pool[i]);
+        if (tenantParams > 0)
+            cmd.Parameters.Add(pool[poolRowParamCount]);
     }
 
     /// <summary>批量 UPDATE 上下文（避免方法参数过多 S107）。</summary>
@@ -386,8 +499,9 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
-        // r15-DB2（第六侧：公共 API 直调路径——Seed 侧已有自身入口保护）
-        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out _))
+        // R8：单次注册表快照——原实现入口与路由各读一次 CurrentState（两次 Volatile.Read）
+        PalORM_Runtime.RuntimeRegistryState mergeState = PalORM_Runtime.CurrentState;
+        if (!mergeState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata mergeMetadata))
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
@@ -400,9 +514,6 @@ public partial class DataSession<TProvider>
         // 单行语义保持：ON CONFLICT/ON DUPLICATE KEY 与 SaveCoreAsync 的单行
         // upsert 用同一谓词列集（UpsertColumns，含 PK）；[ConcurrencyCheck] 实体
         // 维持逐条路径——SaveCoreAsync 会以同消息拒绝（UPSERT 无法尊重乐观锁，ITM-503）。
-        PalORM_Runtime.RuntimeRegistryState mergeState = PalORM_Runtime.CurrentState;
-        if (!mergeState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata mergeMetadata))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
         bool rowByRow = mergeMetadata.IncrementVersion is not null
             || mergeMetadata.UpsertColumns.Count == 0;
 

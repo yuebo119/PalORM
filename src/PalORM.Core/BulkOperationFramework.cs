@@ -66,6 +66,21 @@ public static class BulkOperationFramework
         }
     }
 
+    /// <summary>R14：Provider 能力探测（如 MySQL <c>local_infile</c>）失败计数。
+    /// <para><b>为什么需要</b>：探测故障与"能力关闭"都会让批量路径降级到慢形态
+    /// （MySQL 多值 INSERT vs BulkCopy 差约 4.84×），原降级路径静默无痕——生产上
+    /// "突然变慢"无从归因。纯进程内计数，不依赖 LoggerFactory（默认会话是 NullLogger）。</para>
+    /// <para>公开为 public 是为了让三个独立 Provider 程序集都能上报（Provider 不依赖
+    /// Core 的内部可见成员），仍是 PalORM 内部 API，不写入公共文档、不保证兼容。</para></summary>
+    public static void RecordCapabilityProbeFailure()
+        => System.Threading.Interlocked.Increment(ref _capabilityProbeFailures);
+
+    private static long _capabilityProbeFailures;
+
+    /// <summary>累计能力探测失败次数——正常运行应恒为 0，增长即批量写入在静默降级。</summary>
+    public static long CapabilityProbeFailures =>
+        System.Threading.Interlocked.Read(ref _capabilityProbeFailures);
+
     /// <summary>资源清理——cleanup 失败的异常挂到主异常 Data，不替换原始失败。
     /// 通用接口（IAsyncDisposable）覆盖 DbCommand/DbTransaction/NpgsqlBinaryImporter 等全部资源。
     /// <para><b>无取消参数（ITM-747 r20）</b>：释放路径不接受 CancellationToken——原签名的
