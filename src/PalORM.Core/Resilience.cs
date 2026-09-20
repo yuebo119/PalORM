@@ -139,6 +139,7 @@ public sealed class ResilienceExecutor
     }
 
     /// <summary>执行带重试和熔断的异步操作（无返回值）。</summary>
+    /// <summary>使用会话级弹性策略执行操作（自动重试+熔断，无返回值重载）。</summary>
     public async ValueTask ExecuteAsync(Func<CancellationToken, Task> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
@@ -160,4 +161,39 @@ public sealed class ResilienceExecutor
         => (exception is TimeoutException timeoutException
                 && timeoutException.Data.Contains("PalORM.InfrastructureTimeout"))
             || _isTransient(exception);
+    /// <summary>仅超时包装（不重试不熔断）——非幂等写路径的超时语义统一入口。
+    /// <para><b>与 ExecuteAsync 的区别</b>：ExecuteAsync 会重试瞬时故障（幂等性契约，ITM-310）——
+    /// 写操作不能重试（INSERT 重试 = 重复写入）。但写路径此前<b>连超时包装都没有</b>：
+    /// 命令设置了驱动级 CommandTimeout，但超时抛的是驱动原始异常（如 NpgsqlException 包装的
+    /// TimeoutException），调用方无法用统一模式匹配超时。本方法提供与读路径一致的
+    /// <c>TimeoutException</c> + <c>Data["PalORM.InfrastructureTimeout"]=true</c> 契约——只是不重试。</para>
+    /// <para>事务内语句挂起时，整个事务的持锁时间由本超时限定上界（长事务风险）。</para></summary>
+    public async ValueTask<T> ExecuteWithTimeoutAsync<T>(
+        Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        try
+        {
+            timeout.CancelAfter(_timeout);
+            return await operation(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException timeoutException) when (timeout.IsCancellationRequested)
+        {
+            var wrappedTimeout = new TimeoutException(
+                $"Command timed out after {_timeout} (non-idempotent write; no retry attempted).",
+                timeoutException);
+            wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+            throw wrappedTimeout;
+        }
+        finally
+        {
+            timeout.Dispose();
+        }
+    }
+
 }

@@ -523,6 +523,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 连接建立的重试由 <see cref="CreateAsync"/> 自有循环承担；写入/Bulk/StoredProc/
     /// 原始 SQL 家族维持直连（幂等性契约见 <see cref="ResilienceExecutor.ExecuteAsync{T}"/>，
     /// 显式需求用 <see cref="ExecuteWithResilience{T}"/> 包裹）。</para></summary>
+    /// <summary>非幂等写路径的超时统一入口——不重试（ITM-310 契约），但提供与读路径
+    /// 一致的 TimeoutException + InfrastructureTimeout 标记（R1/L2/T5）。
+    /// 事务内直通（事务已有自己的上界语义）；直通配置也直通（零开销契约保持）。</summary>
+    private async ValueTask<T> ExecuteWritePipelineAsync<T>(
+        Func<CancellationToken, Task<T>> writeCore, CancellationToken ct)
+    {
+        ResilienceExecutor executor = Volatile.Read(ref _resilience);
+        if (executor.IsPassThrough || GetActiveTransaction() is not null)
+            return await writeCore(ct).ConfigureAwait(false);
+        return await executor.ExecuteWithTimeoutAsync(writeCore, ct).ConfigureAwait(false);
+    }
+
     private async ValueTask<T> ExecuteReadPipelineAsync<T>(
         Func<CancellationToken, Task<T>> attemptCore, CancellationToken ct)
     {

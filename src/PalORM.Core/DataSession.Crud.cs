@@ -225,7 +225,9 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         metadata.BindUpdate(cmd, entity);
         BindDefaultFilterParameters<T>(cmd);
-        int affectedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        int affectedRows = (int)await ExecuteWritePipelineAsync(
+            async token => (long)await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
         if (metadata.IncrementVersion is not null)
         {
             if (affectedRows == 0)
@@ -275,7 +277,9 @@ public sealed partial class DataSession<TProvider>
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
             BindDefaultFilterParameters<T>(cmd);
-            return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            return (int)await ExecuteWritePipelineAsync(
+                async token => (long)await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false),
+                ct).ConfigureAwait(false);
         }
 
         await using DbCommand delCmd = CreateCommand();
@@ -285,7 +289,9 @@ public sealed partial class DataSession<TProvider>
         delCmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(delCmd, key);
         BindDefaultFilterParameters<T>(delCmd);
-        return await delCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return (int)await ExecuteWritePipelineAsync(
+            async token => (long)await delCmd.ExecuteNonQueryAsync(token).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
     }
 
     // v4.1 极致降内存：per-(Type, Dialect) 缓存 selectColumns，消除每次 Get/GetAll 的 N 次 QuoteIdentifier + string.Join
