@@ -1,4 +1,4 @@
-using Npgsql;
+﻿using Npgsql;
 using NpgsqlTypes;
 
 namespace PalORM.PostgreSql;
@@ -44,16 +44,16 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     private readonly Func<IPgNotificationConnection> _connectionFactory;
     private readonly Func<int, TimeSpan> _reconnectDelay;
     private readonly string[] _channels;
+    /// <summary>B7：channel 的引用形态在构造期预计算——原每次重连都对全部 channel 重跑
+    /// <see cref="PostgreSqlProvider.QuoteIdentifier"/>（含 IdentifierSafety 校验 + 字符串拼接），
+    /// 而 channel 集合构造后不变。</summary>
+    private readonly IReadOnlyList<string> _quotedChannels;
     private readonly Lock _lock = new();
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2213",
         Justification = "RunAsync finally owns and disposes the active CancellationTokenSource after the run task exits.")]
     private CancellationTokenSource? _cts;
     private Task? _runTask;
     private bool _disposed;
-
-    /// <summary>收到 NOTIFY 时触发。回调在后台监听任务线程上执行——耗时处理请自行转移到其他线程。
-    /// 单个订阅者抛出的异常被吞掉,不会阻断其他订阅者,也不会终止监听循环。</summary>
-    public event EventHandler<PgNotificationEventArgs>? OnNotification;
 
     /// <summary>首次启动成功后，后台监听因非取消异常终止时触发。</summary>
     public event EventHandler<PgNotificationErrorEventArgs>? OnError;
@@ -79,20 +79,50 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         private set => Volatile.Write(ref _lastError, value);
     }
 
-    /// <summary>创建监听器,重连退避为线性递增(第 n 次重连等待 n 秒,上限 5 次)。
-    /// 构造不建立连接;调用 <see cref="StartAsync"/> 后才连接并 LISTEN。</summary>
+    /// <summary>创建监听器,重连退避为线性递增 + 全量抖动(第 n 次重连等待 n 秒 ± 抖动,上限 5 次)。
+    /// 构造不建立连接;调用 <see cref="StartAsync"/> 后才连接并 LISTEN。
+    /// <para><b>A5 为什么加抖动</b>：无抖动的线性退避在 PG 重启/网络恢复瞬间会让同进程或同机的
+    /// 大量监听器以完全同步的 1s/2s/3s 节奏重连，对刚恢复的服务端形成二次冲击，可能把瞬时
+    /// 故障放大成持续故障。抖动把重连时刻打散。</para></summary>
     public PgNotificationListener(string connectionString, params string[] channels)
         : this(() => new NpgsqlNotificationConnection(connectionString),
             channels,
-            attempt => TimeSpan.FromSeconds(attempt))
+            DefaultReconnectDelay)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
     }
 
+    /// <summary>A5：默认重连退避——线性递增（第 n 次 n 秒）+ 全量抖动（0~100% 随机乘子），
+    /// 上限 30 秒。全量抖动而非固定小额的原因是：监听器数量与启动时刻都不可控，
+    /// 只有打散到整个区间才能避免同步。</summary>
+    // CA5394：此处要的是抖动（打散重连时刻），不是密码学随机——用 RandomNumberGenerator
+    // 反而给热路径增加不必要的开销。
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA5394",
+        Justification = "Jitter for reconnect backoff, not a security-sensitive random value.")]
+    private static readonly Func<int, TimeSpan> DefaultReconnectDelay = attempt =>
+    {
+        double baseSeconds = Math.Min(Math.Max(attempt, 1), MaxReconnectDelaySeconds);
+        double jittered = baseSeconds * Random.Shared.NextDouble();
+        return TimeSpan.FromSeconds(Math.Max(jittered, 0.05));
+    };
+
+    /// <summary>重连退避的上限（秒）——与 <see cref="DefaultReconnectDelay"/> 共用。</summary>
+    private const double MaxReconnectDelaySeconds = 30;
+
+    /// <summary>A2：心跳间隔默认值——LISTEN 连接的静默断线检测周期。30 秒远小于常见
+    /// NAT/LB 空闲超时（通常 60~350s），又不足以对服务端造成可感知负担
+    /// （每 30 秒一次 SELECT 1）。</summary>
+    internal static readonly TimeSpan DefaultKeepaliveInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>A2：本实例的心跳间隔——可注入以便测试与按部署调整（见内部构造的
+    /// <c>keepaliveInterval</c> 参数）。</summary>
+    private readonly TimeSpan _keepaliveInterval;
+
     internal PgNotificationListener(
         Func<IPgNotificationConnection> connectionFactory,
         string[] channels,
-        Func<int, TimeSpan>? reconnectDelay = null)
+        Func<int, TimeSpan>? reconnectDelay = null,
+        TimeSpan? keepaliveInterval = null)
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
         ArgumentNullException.ThrowIfNull(channels);
@@ -102,7 +132,12 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
 
         _connectionFactory = connectionFactory;
         _channels = (string[])channels.Clone();
-        _reconnectDelay = reconnectDelay ?? (attempt => TimeSpan.FromSeconds(attempt));
+        // B7：引用形态预计算一次，重连直接用
+        _quotedChannels = [.. _channels.Select(PostgreSqlProvider.QuoteIdentifier)];
+        _reconnectDelay = reconnectDelay ?? DefaultReconnectDelay;
+        _keepaliveInterval = keepaliveInterval is { } interval && interval > TimeSpan.Zero
+            ? interval
+            : DefaultKeepaliveInterval;
     }
 
     /// <summary>启动后台监听:首次连接成功并对全部 channel 执行 LISTEN 后返回;
@@ -117,6 +152,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_runTask is not null) throw new InvalidOperationException("Listener is already started.");
+            // A6：入口即清零——原实现只在 started.Task 成功后清零，首次启动就失败的路径
+            // 会把上一次会话的 LastError 留给调用方（与本次失败无关的陈旧故障态）。
+            // 语义变为「本次启动尝试前的清零」，与 ITM-761 的成功路径清零不冲突
+            // （成功后此处已清零，运行期故障仍会写入新值）。
+            LastError = null;
             cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _cts = cts;
             runTask = RunAsync(cts, started);
@@ -170,11 +210,9 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                     // R9 修复：Open 成功即标记 initialConnection=false——LISTEN 阶段 transient 失败
                     // 也应走重连逻辑而非直接终止监听（review R9：首次 LISTEN 失败永久退出）。
                     initialConnection = false;  // r5-S1 后 wasInitial 无消费者——S1481 移除
-                    foreach (string channel in _channels)
-                    {
-                        string safeChannel = PostgreSqlProvider.QuoteIdentifier(channel);
-                        await connection.ListenAsync(safeChannel, owner.Token).ConfigureAwait(false);
-                    }
+                    // B7：全部 channel 一次往返（原逐 channel 各一次 RTT + 各建一个命令）；
+                    // 引用名在构造期预计算（重连不重跑 IdentifierSafety 校验与拼接）。
+                    await connection.ListenAllAsync(_quotedChannels, owner.Token).ConfigureAwait(false);
 
                     // r5-S1：完成信号锚定 startupPhase（与异常路径判定一致）——原 wasInitial 在
                     // R9 提前置 false 后，"首连 LISTEN 瞬态失败→重连成功"路径永不 TrySetResult，
@@ -189,9 +227,31 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                     // 第 N+1 次断开监听器永久死亡。上限语义 = 连续失败次数，与文档直觉一致。
                     reconnectAttempt = 0;
 
+                    // A2：心跳保活——原实现单次无限期 WaitAsync，连接被中间设备静默掐断
+                    // （NAT 超时、LB 空闲切断、无 FIN/RST）时不返回也不抛错，重连逻辑
+                    // 完全不触发；该线程同时承担断线感知，低频通道上 NOTIFY 丢失可持續
+                    // 数小时无痕。改为周期性向服务端发 SELECT 1，
+                    // 失败即退出内层循环走既有 transient 重连路径。
+                    using var keepaliveCts = CancellationTokenSource.CreateLinkedTokenSource(owner.Token);
+                    keepaliveCts.CancelAfter(_keepaliveInterval);
                     while (!owner.IsCancellationRequested)
                     {
-                        await connection.WaitAsync(owner.Token).ConfigureAwait(false);
+                        Task waitTask = connection.WaitAsync(keepaliveCts.Token);
+                        Task delayTask = Task.Delay(_keepaliveInterval, CancellationToken.None);
+                        Task completed = await Task.WhenAny(waitTask, delayTask).ConfigureAwait(false);
+
+                        if (completed == delayTask)
+                        {
+                            // 心跳到期：探测连接是否仍活着（静默断线的唯一可靠信号）
+                            keepaliveCts.CancelAfter(_keepaliveInterval);
+                            if (!await ProbeConnectionAsync(connection, owner.Token).ConfigureAwait(false))
+                                throw CreateKeepaliveFailure();
+                            continue;
+                        }
+
+                        // 有通知到达（或连接已断）——WaitAsync 的异常在此传播
+                        await waitTask.ConfigureAwait(false);
+                        keepaliveCts.CancelAfter(_keepaliveInterval);
                     }
                 }
                 catch (OperationCanceledException) when (owner.IsCancellationRequested)
@@ -254,6 +314,32 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     private static bool IsTransient(Exception exception)
         => exception.Data["PalORM.IsTransient"] is true;
 
+    /// <summary>A2：心跳探测——向服务端发 <c>SELECT 1</c> 验证连接仍活着。
+    /// 静默断线（无 FIN/RST）时 WaitAsync 不返回也不抛错，只有主动探测能发现。</summary>
+    private static async Task<bool> ProbeConnectionAsync(
+        IPgNotificationConnection connection, CancellationToken ct)
+    {
+        try
+        {
+            await connection.ProbeAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A2：心跳失败构造的异常——带 <c>PalORM.IsTransient</c> 标记，使既有
+    /// transient 重连路径接管（与 <c>NpgsqlNotificationConnection.WrapConnectionException</c> 同口径）。</summary>
+    private static InvalidOperationException CreateKeepaliveFailure()
+    {
+        var exception = new InvalidOperationException(
+            "PostgreSQL notification connection failed keepalive probe; the connection is assumed dead.");
+        exception.Data["PalORM.IsTransient"] = true;
+        return exception;
+    }
+
     private void RaiseError(Exception exception)
     {
         EventHandler<PgNotificationErrorEventArgs>? handlers = OnError;
@@ -292,12 +378,18 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
 
     private void OnConnectionNotification(string channel, string payload)
     {
-        EventHandler<PgNotificationEventArgs>? handlers = OnNotification;
-        if (handlers is null)
+        // B6：缓存调用列表快照——原实现每次通知都调 handlers.GetInvocationList()，
+        // 每收到一条 NOTIFY 即一次 Delegate[] 分配（订阅者越多数组越大；10k 通知/秒
+        // = 10k 数组/秒纯 GC 垃圾）。自定义 add/remove 在变更时换新数组（Interlocked
+        // 保证原子发布），分发路径直接 foreach 缓存数组：零分配且天然是安全快照。
+        // 注意：分发仍在泵任务线程上同步执行（既有契约）——订阅者慢会阻塞后续通知，
+        // 那是 A3 的改造面，涉及回调线程语义变更，未在本次落地。
+        Delegate[]? handlers = Volatile.Read(ref _notificationHandlers);
+        if (handlers is null || handlers.Length == 0)
             return;
 
         var args = new PgNotificationEventArgs(channel, payload);
-        foreach (Delegate candidate in handlers.GetInvocationList())
+        foreach (Delegate candidate in handlers)
         {
             var handler = (EventHandler<PgNotificationEventArgs>)candidate;
             try { handler(this, args); }
@@ -306,6 +398,55 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                 // 记录但不传播订阅者异常，确保其他订阅者和监听循环不受影响
                 if (Logger is { } logger1)
                     LogOnNotificationSubscriberThrew(logger1, ex);
+            }
+        }
+    }
+
+    /// <summary>B6：<see cref="OnNotification"/> 的调用列表缓存——add/remove 时经
+    /// Interlocked.CompareExchange 换新数组（交换失败重试），分发路径只读。
+    /// 支撑字段 <c>_notification</c>（委托本体）与 <c>_notificationHandlers</c>（分发快照）
+    /// 成对维护：访问器内只能操作字段，不能对事件自身 +=（会递归）。</summary>
+    private EventHandler<PgNotificationEventArgs>? _notification;
+    private Delegate[]? _notificationHandlers;
+
+    /// <summary>收到 NOTIFY 时触发。回调在后台监听任务线程上执行——耗时处理请自行转移到其他线程。
+    /// 单个订阅者抛出的异常被吞掉,不会阻断其他订阅者,也不会终止监听循环。
+    /// <para><b>B6</b>：自定义 add/remove 缓存调用列表快照——分发路径零分配
+    /// （原每次通知都 <c>GetInvocationList()</c> 分配一个 <see cref="Delegate"/> 数组）。</para></summary>
+    // CA1030：访问器名 add_/remove_ 被建议改为事件——这是 C# 事件的标准命名形态，
+    // 规则在此为误报（本意是防「看起来像事件的普通方法」）。
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1030",
+        Justification = "Standard C# event accessor naming (add_/remove_); the rule targets methods that merely look like events.")]
+    public event EventHandler<PgNotificationEventArgs>? OnNotification
+    {
+        add
+        {
+            while (true)
+            {
+                EventHandler<PgNotificationEventArgs>? current = Volatile.Read(ref _notification);
+                EventHandler<PgNotificationEventArgs>? updated = current + value;
+                Delegate[]? snapshot = updated?.GetInvocationList();
+                if (Interlocked.CompareExchange(
+                        ref _notification, updated, current) == current)
+                {
+                    Volatile.Write(ref _notificationHandlers, snapshot);
+                    return;
+                }
+            }
+        }
+        remove
+        {
+            while (true)
+            {
+                EventHandler<PgNotificationEventArgs>? current = Volatile.Read(ref _notification);
+                EventHandler<PgNotificationEventArgs>? updated = current - value;
+                Delegate[]? snapshot = updated?.GetInvocationList();
+                if (Interlocked.CompareExchange(
+                        ref _notification, updated, current) == current)
+                {
+                    Volatile.Write(ref _notificationHandlers, snapshot);
+                    return;
+                }
             }
         }
     }
@@ -359,6 +500,10 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         await conn.OpenAsync(ct).ConfigureAwait(false);
 
         await using var cmd = new NpgsqlCommand("SELECT pg_notify(@channel, @payload)", conn);
+        // A6：显式设 CommandTimeout——原实现走驱动默认 30s，与 DataSession.CreateCommand
+        // 声明的「超时权威源」（DataSession.cs:596-600）脱钩，用户调大/调小
+        // CommandTimeoutSeconds 在此处静默失效。
+        cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(DbOptions.DefaultCommandTimeout);
         ConfigureNotifyParameters(cmd, channel, payload);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }

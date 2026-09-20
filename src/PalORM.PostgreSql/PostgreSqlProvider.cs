@@ -152,7 +152,8 @@ public sealed class PostgreSqlProvider : IDbProvider
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         // ITM-637 同型面：元数据检查先于空列表短路——未注册类型与空/非空列表一致抛
         //（PROV-010：守卫收敛至 BulkOperationFramework.EnsureInsertMetadata 单一实现点）
-        (CrudMetadata metadata, string tableName) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
+        // tableName 弃元：B3 起 COPY 目标的引用形态由 GetQuotedInsertTarget 缓存提供
+        (CrudMetadata metadata, _) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
         if (entities.Count == 0) return 0;
 
         if (conn is not NpgsqlConnection npgsqlConnection)
@@ -169,9 +170,9 @@ public sealed class PostgreSqlProvider : IDbProvider
                 "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
         }
 
-        string quotedColumns = string.Join(", ",
-            metadata.InsertColumns.Select(QuoteIdentifier));
-        string quotedTable = QuoteIdentifier(tableName);
+        // B3：引号后的表名与列清单只由 (Type, Dialect) 决定，是纯函数——原每次调用重算
+        // （方法组转委托 + LINQ 迭代器 + string.Join 中间数组 + 每列一次 QuoteIdentifier）。
+        (string quotedTable, string quotedColumns) = GetQuotedInsertTarget(typeof(T));
         long total = 0;
         DbTransaction bulkTransaction = transaction
             ?? await npgsqlConnection.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
@@ -315,6 +316,38 @@ public sealed class PostgreSqlProvider : IDbProvider
                 await BulkOperationFramework.DisposePreservingAsync(bulkTransaction, primaryException,
                     "PalORM.TransactionCleanupException").ConfigureAwait(false);
         }
+    }
+
+    /// <summary>B3：COPY 目标表的引用形态缓存——key 为 (Type, Dialect)，值为 (quotedTable, quotedColumns)。
+    /// <para><b>键空间有限</b>：Type 由注册表决定（<c>Register</c> 对重复类型抛异常，故 Type→metadata
+    /// 是 1:1 稳定映射），Dialect 只有 3 个值。因此键集上限 = 实体数 × 3，天然有限，只增不减，
+    /// 与 <c>DataSessionCache</c> 的有限键集豁免同口径（已登记 docs/静态缓存清单.md）。</para>
+    /// <para><b>为什么不在 Core 的 DataSessionCache</b>：那个类是 internal，Provider 是独立程序集
+    /// 访问不到；且本缓存的值含 PG 方言引用符，本就该留在 PG 程序集内。</para></summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect), (string QuotedTable, string QuotedColumns)>
+        QuotedInsertTargetCache = new();
+
+    /// <summary>取（或构建并缓存）指定实体类型的 COPY 目标引用形态。</summary>
+    private static (string QuotedTable, string QuotedColumns) GetQuotedInsertTarget(Type entityType)
+    {
+        (Type, SqlDialect) key = (entityType, Dialect);
+        if (QuotedInsertTargetCache.TryGetValue(key, out var cached))
+            return cached;
+
+        string tableName = PalORM_Runtime.TableNames.TryGetValue(entityType, out string? tn)
+            ? tn
+            : throw new InvalidOperationException(
+                $"Type '{entityType.Name}' has no generated table metadata.");
+        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(entityType, out CrudMetadata crud))
+            throw new InvalidOperationException(
+                $"Type '{entityType.Name}' has no generated CRUD.");
+
+        var built = (
+            QuoteIdentifier(tableName),
+            string.Join(", ", crud.InsertColumns.Select(QuoteIdentifier)));
+        QuotedInsertTargetCache.TryAdd(key, built);
+        return built;
     }
 
     /// <summary>创建单次 COPY 的超时令牌源——ITM-643：COPY 无 CommandTimeout 挂点，

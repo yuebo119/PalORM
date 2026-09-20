@@ -171,8 +171,9 @@ public static class QueryBuilderExtensions
         //      · 调用点把单次尝试内核转成委托 1 次 = 56 B（内核是捕获 builder 的 async 局部函数，
         //        目标实例每次不同，无法缓存委托）
         //      · 执行器机械（熔断进出 + 异步状态机 ≈48 B），量级最小且与重试/熔断语义耦合
-        //    后两项合计 104 B 是唯一可剥的部分，须把只读内核从 async 局部函数改成 struct 内核 +
-        //    泛型约束（顺带消掉两分支共有的 ~250 B display class）；实测耗时无变化，未做。
+        //    B2（2026-09-20）：后两项已剥掉——只读内核改为 static 局部函数 + QueryExecutionState<T>
+        //    （readonly record struct，走栈），display class（~250B）与委托转换（56B）归零。
+        //    剩余 48B 执行器机械与重试/熔断语义耦合，保留。
         //    直通配置下三项都不发生，但同时也失去超时包装：慢命令抛驱动自身异常，
         //    不再是带 PalORM.InfrastructureTimeout 标记的 TimeoutException。
         // 写入路径（ExecuteNonQueryAsync/Bulk/StoredProc/原始 SQL 家族）维持直连：
@@ -183,33 +184,41 @@ public static class QueryBuilderExtensions
 
         // 单次尝试内核——每次重试重建连接租约/命令/读取器；缓存写入仅在成功尝试发生；
         // 拦截器 OnBefore/OnError 按尝试触发（失败的尝试确实发生了），OnAfter 仅成功尝试。
-        async Task<List<T>> ExecuteCoreAsync(CancellationToken token)
+        // B2：static 局部函数 + 显式传参——原实现是捕获 builder/sql/parameters/context/
+        // interceptors/sw/boundTransaction 七项的 async 局部函数，每次查询分配一个 display
+        // class（~250B）+ 一次委托转换（56B）。static 局部函数不产生 display class，
+        // 捕获项改为显式参数（QueryExecutionState 是 readonly record struct，走栈）。
+        // 语义与行为逐位不变：仍是「每次重试重建命令与读取器」。
+        static async Task<List<T>> ExecuteCoreAsync(CancellationToken token, QueryExecutionState<T> state)
         {
-            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
+            DbConnection connection = await state.Builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
             await using DbCommand cmd = connection.CreateCommand();
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            cmd.Transaction = boundTransaction;
-            AddParameters(cmd, parameters);
+            cmd.CommandText = state.Sql;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.Builder._commandTimeout);
+            cmd.Transaction = state.BoundTransaction;
+            AddParameters(cmd, state.Parameters);
             // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
-            NotifyInterceptorsOnBefore(interceptors, context);
-            await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+            NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
+            await PrepareCommandAsync(cmd, state.Builder._prepared, token).ConfigureAwait(false);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
             // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
             // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
             // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
             // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源）。封顶后由均摊 O(1) 扩容兜底。
-            List<T> list = builder._take.HasValue
-                ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
+            List<T> list = state.Builder._take.HasValue
+                ? new List<T>(Math.Min(state.Builder._take.Value, MaxPreallocatedCapacity))
                 : new List<T>(16);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
-            NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
+            while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(state.Builder._factory(reader));
+            NotifyInterceptorsOnAfter(state.Interceptors, state.Context, state.Stopwatch, list.Count);
             // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
             // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）
-            if (builder._cacheKey is not null)
-                builder._queryCache.Set(EffectiveCacheKey(builder), new List<T>(list), builder._cacheTtl);
+            if (state.Builder._cacheKey is not null)
+                state.Builder._queryCache.Set(EffectiveCacheKey(state.Builder), new List<T>(list), state.Builder._cacheTtl);
             return list;
         }
+
+        var executionState = new QueryExecutionState<T>(
+            builder, sql, parameters, context, interceptors, sw, boundTransaction);
 
         try
         {
@@ -218,8 +227,9 @@ public static class QueryBuilderExtensions
             // 操作门禁横跨全部重试尝试持有——一次用户操作仍是一次门禁占用，
             // 与 SessionOperationState 的单活动操作契约一致。
             List<T> list = resilient
-                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
-                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
+                ? await resilience.ExecuteAsync(
+                    token => ExecuteCoreAsync(token, executionState), ct).ConfigureAwait(false)
+                : await ExecuteCoreAsync(ct, executionState).ConfigureAwait(false);
             outcome = "success";
             return list;
         }
@@ -238,6 +248,20 @@ public static class QueryBuilderExtensions
                 PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
         }
     }
+
+    /// <summary>B2：只读查询单次尝试的显式状态包——替代 async 局部函数的捕获 display class。
+    /// <para><b>为什么是 readonly record struct</b>：字段全为引用/值类型，按值传递是栈上字节拷贝，
+    /// 零堆分配（与 <see cref="QueryBuilderServices{T}"/> 的 v5.6 决策同源）。
+    /// <see cref="Builder"/> 是 struct 副本，共享子句链与列名数组引用，不可变消费安全。</para></summary>
+    private readonly record struct QueryExecutionState<T>(
+        QueryBuilder<T> Builder,
+        string Sql,
+        IReadOnlyList<DbParameter> Parameters,
+        QueryContext Context,
+        List<IQueryInterceptor> Interceptors,
+        Stopwatch? Stopwatch,
+        DbTransaction? BoundTransaction)
+        where T : class, new();
 
     /// <summary>通知所有拦截器 OnError——单个拦截器抛出的异常被吞掉，
     /// 不覆盖原始执行异常、不阻断其他拦截器或后续资源清理；

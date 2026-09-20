@@ -2,6 +2,80 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮三] — 事务前置校验 · 只读内核零 display class · 通知监听器保活
+
+> 变更范围：src/PalORM.Core 五个文件 + 三 Provider + 两个测试项目（新增 15 个测试）
+> 验证：`PalORM.ci.slnf --no-incremental` 0 警告 0 错误 · Core 352/352 · SourceGen 197/197 ·
+> 三个 AOT 程序 `publish` 全通过 · tech-debt-scan 13/13 · stub-check 零发现
+
+### 🔒 可靠性
+
+- **PG 咨询锁新增事务前置校验（A1，行为变更）**：`pg_advisory_xact_lock` 是事务级锁，
+  事务外调用会获得锁但立即释放，而方法原先正常返回——调用方以为临界区已持锁，
+  跨进程互斥形同虚设且无任何错误信号。四个入口（单/双键的获取与尝试）统一显式失败，
+  错误消息指向 `BeginTransactionAsync`/`WithTransaction`。类文档同步改写，
+  并补「会话级 `pg_advisory_lock` 在连接断开时不释放」的警告。
+- **`DataSession.IsInTransaction` 公开（新增 API）**：事务级语义的 API 需要调用方自查
+  前置条件。返回 true 覆盖自开与 `UseTransaction` 外部设入两种来源；外部事务失效时
+  （ITM-640）返回 false。
+- **LISTEN 连接新增心跳保活（A2）**：原等待循环单次无限期 `WaitAsync`，连接被中间设备
+  静默掐断（NAT 超时、LB 空闲切断、无 FIN/RST）时不返回也不抛错，重连逻辑完全不触发，
+  低频通道上 NOTIFY 丢失可持续数小时无痕。改为周期性 `SELECT 1` 探测，失败即走既有
+  transient 重连路径。间隔默认 30 秒（远小于常见 NAT/LB 空闲超时 60~350s），
+  可经内部构造的 `keepaliveInterval` 注入以便测试与按部署调整。
+- **重连退避加全量抖动（A5）**：原 `attempt => TimeSpan.FromSeconds(attempt)` 无抖动，
+  PG 恢复瞬间同进程/同机的大量监听器以完全同步的 1s/2s/3s 节奏重连，对刚恢复的
+  服务端形成二次冲击。改为线性 + 0~100% 随机乘子，上限 30 秒。
+- **`NpgsqlNotificationConnection.OpenAsync` 清理失败静默（A4）**：原 `DisposeAsync`
+  在连接半开状态下抛异常时会 (a) 顶掉原始 `NpgsqlException` 使根因湮灭，
+  (b) 更严重的是它不带 `PalORM.IsTransient` 标记，被 `IsTransient` 判为非瞬时，
+  把本可重连的瞬时开锁失败升级为监听器永久死亡。
+- **`LastError` 入口清零（A6）**：原只在 `started.Task` 成功后清零，首次启动就失败的
+  路径会把上一次会话的异常留给调用方（与本次失败无关的陈旧故障态）。
+- **`NotifyAsync` 显式设 CommandTimeout（A6）**：原走驱动默认 30s，与
+  `DataSession.CreateCommand` 声明的「超时权威源」脱钩。
+  配套 `DbOptions.ToCommandTimeoutSeconds` 与新增的 `DbOptions.DefaultCommandTimeout`
+  改为公开（Provider 是独立程序集，需要同一套 TimeSpan→秒口径）。
+
+### ⚡ 性能
+
+- **参数名缓存扩容到 65535（B1）**：`ParameterNameCache` 原上界 1024，而 MySQL 多值
+  INSERT 的满批参数池上限是 `SqlLimits.MaxBindParameters`(65535)——2 列实体
+  `poolSize` 即 2000，索引 1024..1999 全部落入 `$"@p{index}"` 插值分支，
+  每次 `BulkInsertAsync` 约 2*(poolSize-1024) 次字符串分配。SQLite 上限 999 不越界、
+  PG 走 COPY 不建该池，**仅 MySQL 受益**。代价是常驻约 1.3 MB 字符串表。
+- **只读查询内核零 display class（B2）**：`ExecuteQueryAsync` 的单次尝试内核原为捕获
+  七项的 async 局部函数，每次查询分配一个 display class（~250B）+ 一次委托转换（56B）。
+  改为 `static` 局部函数 + `QueryExecutionState<T>`（readonly record struct，走栈），
+  两者归零。这是代码注释里登记的已知未做项，本次清偿；剩余 48B 执行器机械与
+  重试/熔断语义耦合，保留。**行为与 SQL 逐位不变。**
+- **PG COPY 目标引用形态按 (Type, Dialect) 缓存（B3）**：原每次调用重算
+  `string.Join(", ", InsertColumns.Select(QuoteIdentifier))`（方法组转委托 + LINQ
+  迭代器 + Join 中间数组 + 每列一次引用）。键空间 = 实体数 × 3，天然有限。
+- **通知监听器分发零分配（B6）**：`OnNotification` 改自定义 add/remove 缓存调用列表
+  快照（Interlocked 换数组），分发路径不再每次 `GetInvocationList()`——原每收到一条
+  NOTIFY 即一次 `Delegate[]` 分配。
+- **LISTEN 多 channel 合并单次往返（B7）**：原逐 channel 各一次
+  `ExecuteNonQueryAsync`（各建一个 `NpgsqlCommand`），N 个 channel 的启动/重连延迟
+  = N × RTT。PG 的 LISTEN 可在一条命令里用 `;` 拼接多条，压成 1 次；
+  引用名同时在构造期预计算（重连不重跑 `IdentifierSafety` 校验与拼接）。
+
+### 🧪 测试
+
+- 新增 `TransactionGuardTests`（5 个）：`IsInTransaction` 在无事务/事务内/外部
+  `UseTransaction`/回滚后/`WithTransaction` 内的五种形态。
+- 新增 `PgNotificationListenerHotPathTests`（5 个）：B7 合并 LISTEN 后全部 channel
+  仍被监听、B6 多订阅者都收到且取消订阅后不再收到、A2 心跳失败触发重连、
+  A2 心跳成功不重连。
+- A2 的用例暴露了实现缺陷：心跳间隔原为硬编码 30 秒，测试无法在合理时间内验证，
+  也无法按部署调整——改为可注入参数后两用例通过。
+
+### 未实施（记录在案）
+
+- **A3 Channel 分发**：慢订阅者会阻塞整个通知泵（到达率 > 1/T 时积压无界）。
+  本次未做：它改变「回调在后台监听任务线程上执行」这一既有契约，需要先与调用方
+  确认线程语义变更的影响面，不适合与上述改动混在一批。
+
 ## [未发布·性能轮二] — 批量路径收敛 INSERT 范式 · 事务收口三分支裁决 · 熔断无锁快路径
 
 > 变更范围：src/PalORM.Core 六个文件 + 三 Provider + 两个测试项目（新增 39 个测试）

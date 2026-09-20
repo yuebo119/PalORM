@@ -356,7 +356,7 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 | `PgNotificationListener` | 异步通知监听（自动重连 + 半开探针） |
 | `WhereJson` | JSONB 路径查询 |
 | Binary COPY | `BulkInsertAsync` 内部使用 |
-| `AcquireXactLockAsync`（v5.0） | 事务级咨询锁 `pg_advisory_xact_lock` |
+| `AcquireXactLockAsync`（v5.0） | 事务级咨询锁 `pg_advisory_xact_lock`。**必须在事务内调用**——事务外获取会立即释放，库内显式失败而非静默无效 |
 | `TryAcquireXactLockAsync`（v5.0） | 非阻塞咨询锁 |
 
 ### 编译时诊断（PALORM001-046）

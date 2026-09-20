@@ -27,13 +27,20 @@ public sealed record DbOptions
     internal int CommandTimeoutSeconds => ToCommandTimeoutSeconds(CommandTimeout);
 
     /// <summary>TimeSpan → ADO.NET 命令超时秒值：正的亚秒值向上取整为 1 秒，
-    /// Zero 透传为 0（无限），负值按 0 处理。</summary>
-    internal static int ToCommandTimeoutSeconds(TimeSpan timeout)
+    /// Zero 透传为 0（无限），负值按 0 处理。
+    /// <para><b>公开而非 internal</b>：Provider 是独立程序集，其自带命令构造点
+    /// （如 PG 的 <c>NotifyAsync</c>）需要同一套 TimeSpan→秒的归一口径，
+    /// 否则各处的超时语义会漂移。</para></summary>
+    public static int ToCommandTimeoutSeconds(TimeSpan timeout)
     {
         if (timeout <= TimeSpan.Zero) return 0;
         double seconds = Math.Ceiling(timeout.TotalSeconds);
         return seconds >= int.MaxValue ? int.MaxValue : (int)seconds;
     }
+
+    /// <summary>命令超时的库级默认值（30 秒）——Provider 自带命令构造点在调用方未提供
+    /// <see cref="DbOptions"/> 时的兜底，与 <see cref="CommandTimeout"/> 的初始值同源。</summary>
+    public static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>最大重试次数（默认 3 次）。
     /// <para><b>v5.4 作用域</b>: 连接建立与只读查询内置管线（From&lt;T&gt;() SELECT 家族/
