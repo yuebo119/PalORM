@@ -11,6 +11,7 @@ namespace PalORM.Integration.Tests;
 /// <para><b>SQLite 例外</b>：失败的 COMMIT（SQLITE_BUSY）保留活动事务、必须回滚——
 /// Core.Tests 的常规回滚用例覆盖该分支；MySQL 无 DEFERRABLE 语义，无法确定性触发，
 /// 与 PG 共享同一服务端终结行为，不单列用例。</para></summary>
+[NotInParallel("ExtBulkTable")]
 internal sealed class CommitFailureDialectTests
 {
     [Test]

@@ -6,6 +6,7 @@ namespace PalORM.Integration.Tests;
 
 /// <summary>SessionBatch 的真 DbBatch 路径契约（PG/MySQL）——与 Core.Tests 的 SQLite 回退
 /// 路径互补：同四条断言在真批量驱动上锁定（PG 单往返、MySQL 驱动侧批处理）。</summary>
+[NotInParallel("ExtBulkTable")]
 internal sealed class SessionBatchDialectTests
 {
     [Test]

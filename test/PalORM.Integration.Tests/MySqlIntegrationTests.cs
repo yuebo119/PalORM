@@ -3,6 +3,7 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
+[NotInParallel("ExtBulkTable")]
 public sealed class MySqlIntegrationTests
 {
     private static DbOptions Opts => new()

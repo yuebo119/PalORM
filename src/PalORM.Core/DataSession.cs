@@ -579,7 +579,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     internal DbCommand CreateCommandForBatch() => CreateCommand();
 
-    internal SessionOperationState.SessionOperationLease EnterBatchOperation() => EnterOperation();
+    internal SessionOperationState.SessionOperationLease EnterBatchOperation(
+        object? operationOwner = null)
+        => EnterOperation(operationOwner);
 
     internal DbConnection BatchConnection => _conn;
 

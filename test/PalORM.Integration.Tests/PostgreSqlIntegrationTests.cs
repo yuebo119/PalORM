@@ -4,6 +4,7 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
+[NotInParallel("ExtBulkTable")]
 public sealed class PostgreSqlIntegrationTests
 {
     // r21/ITM-770：WhereJson 的 DryRun 测试已迁 Core.Tests（WhereJsonSqlGenerationTests）——
