@@ -1,6 +1,3 @@
-using System.Data.Common;
-using PalORM.MySql;
-using PalORM.PostgreSql;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
@@ -24,25 +21,18 @@ namespace PalORM.Integration.Tests;
 /// POSITION 22 与表名字节区吻合）——下一轮 dump 逐字符码点裁决。修复任务在账本 M2-2 跟进（十一项矩阵定格，下一招 cmd.Clone 换连接/Npgsql 网络日志）。</para></summary>
 public sealed class BulkUpdateBatchDialectTests
 {
-    private static DbOptions PgOpts => new()
-    {
-        ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString()
-    };
-
-    private static DbOptions MySqlOpts => new()
-    {
-        ConnectionString = TestEnvironment.ResolveMySqlConnectionString()
-    };
+    // M2-1：改用 TestDb 方言夹具（原手动构造使 TestDb.PostgreSqlAsync/MySqlAsync 成死代码——
+    // 独立审计 T1 指出后统一复活；行为等价：夹具内部就是 Resolve+CreateAsync）
 
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task PG_BulkUpdateBatch_WritesCorrectValuesPerRow()
-        => await RunRoundTripAsync(await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts));
+        => await RunRoundTripAsync(await TestDb.PostgreSqlAsync());
 
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_BulkUpdateBatch_WritesCorrectValuesPerRow()
-        => await RunRoundTripAsync(await DataSession<MySqlProvider>.CreateAsync(MySqlOpts));
+        => await RunRoundTripAsync(await TestDb.MySqlAsync());
 
     /// <summary>共享端到端：4 行 2 列批量更新后逐行逐列断言最终值（非仅行数）——
     /// 参数错位（第 i 行的值绑到第 j 行）即刻暴露为值断言失败。

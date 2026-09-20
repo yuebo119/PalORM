@@ -1,5 +1,3 @@
-using System.Data.Common;
-using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Testing;
 
@@ -16,15 +14,7 @@ namespace PalORM.Integration.Tests;
 /// 本组测试真实连库，非静默跳过。</para></summary>
 public sealed class ExternalDatabaseFeatureTests
 {
-    private static DbOptions PgOpts => new()
-    {
-        ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString()
-    };
-
-    private static DbOptions MySqlOpts => new()
-    {
-        ConnectionString = TestEnvironment.ResolveMySqlConnectionString()
-    };
+    // M2-1：统一走 TestDb 方言夹具（复活死代码 + 三行代码写真库测试的设计意图）
 
     // ─── SHAPE-010 参数化 LIMIT 的真库分页执行 ───────────────
 
@@ -32,7 +22,7 @@ public sealed class ExternalDatabaseFeatureTests
     [Property("Category", "ExternalDatabase")]
     public async Task PG_ParameterizedLimit_TakeSkip_ReturnsCorrectPage()
     {
-        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await using var db = await TestDb.PostgreSqlAsync();
         try
         {
             await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_limit_probe CASCADE");
@@ -52,7 +42,7 @@ public sealed class ExternalDatabaseFeatureTests
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_ParameterizedLimit_TakeSkip_ReturnsCorrectPage()
     {
-        await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
+        await using var db = await TestDb.MySqlAsync();
         try
         {
             await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_limit_probe");
@@ -74,7 +64,7 @@ public sealed class ExternalDatabaseFeatureTests
     [Property("Category", "ExternalDatabase")]
     public async Task PG_StoredProcedure_InOutParams_RoundTrip()
     {
-        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await using var db = await TestDb.PostgreSqlAsync();
         try
         {
             await db.ExecuteAsync(
@@ -97,7 +87,7 @@ public sealed class ExternalDatabaseFeatureTests
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_StoredProcedure_InOutParams_RoundTrip()
     {
-        await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
+        await using var db = await TestDb.MySqlAsync();
         try
         {
             await db.ExecuteAsync(
@@ -124,14 +114,14 @@ public sealed class ExternalDatabaseFeatureTests
     {
         var received = new TaskCompletionSource<(string Channel, string Payload)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var listener = new PgNotificationListener(PgOpts.ConnectionString, "palorm_notify_probe");
+        await using var listener = new PgNotificationListener(TestEnvironment.ResolvePostgreSqlConnectionString(), "palorm_notify_probe");
         listener.OnNotification += (_, e) => received.TrySetResult((e.Channel, e.Payload));
         try
         {
             await listener.StartAsync();
 
             // LISTEN 就绪后经独立会话发通知（payload 为 NOTIFY 语法字面量，不可参数化）
-            await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+            await using var db = await TestDb.PostgreSqlAsync();
             await db.ExecuteAsync($"NOTIFY palorm_notify_probe, 'probe-payload'");
 
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));

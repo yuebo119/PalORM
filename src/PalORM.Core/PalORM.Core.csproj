@@ -7,7 +7,11 @@
     <!-- Version 由 Directory.Build.props 集中管理 -->
     <!-- SQL 构建使用 FormattableString 编译时参数化，CA2100 为误报 -->
     <!-- CA1000: DataSession<TProvider> 泛型静态方法是核心 API 设计 -->
-    <!-- Phase 1 放宽 CA 规则至建议，Phase 4 收紧 -->
+    <!-- 分析器口径裁决（独立审计 M1-6/DOC2，2026-09-20）：
+         latest-all 实测爆出 338 条诊断（CA1032 异常构造函数族/CA1815 值相等/CA1051 可见字段等
+         设计风格规则——非缺陷，修复或逐条抑制均为大工程且与热路径字段布局冲突）。
+         有意维持 latest-minimum：NoWarn 清单显式、SonarAnalyzer P0/P1 仍为 error（editorconfig）、
+         S2077 已恢复 error（M1-5）。若未来收紧，分批计划见整改账本 M1-6。 -->
     <NoWarn>$(NoWarn);CA2100;CA1000;CA2007;CS8425</NoWarn>
     <AnalysisLevel>latest-minimum</AnalysisLevel>
   </PropertyGroup>
