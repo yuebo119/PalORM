@@ -90,16 +90,24 @@ jobs:
               with:
                   global-json-file: global.json
 
+            - name: Install dotnet-coverage (M3-1)
+              run: dotnet tool install -g dotnet-coverage
+
             - name: Build
               run: dotnet build PalORM.ci.slnf -c Release --no-incremental
 
-            - name: Core tests
-              run: dotnet run --project test/PalORM.Core.Tests -c Release --no-build
+            - name: Core tests (with coverage, M3-1)
+              run: >-
+                  dotnet run --project test/PalORM.Core.Tests -c Release --no-build --
+                  --coverage --coverage-output-format xml --coverage-output cov-core.xml
 
             - name: Assert Core test counts (M0-3)
               run: >-
                   bash scripts/assert-test-counts.sh PalORM.Core.Tests
                   "$(find test/PalORM.Core.Tests/bin -name '*.tunit-report.json' | head -1)"
+
+            - name: Assert Core coverage floor (M3-1)
+              run: bash scripts/assert-coverage.sh PalORM.Core cov-core.xml core
 
             - name: Source generator tests
               run: dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build
