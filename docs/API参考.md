@@ -159,6 +159,7 @@
 |------|------|
 | `BeginTransactionAsync()` | 创建事务 |
 | `UseTransaction(tran)` | 绑定外部事务 |
+| `IsInTransaction` | 当前是否有活动事务（含自开与外部设入）。事务级语义 API 的前置自查点 |
 | `WithTransaction(action)` / `WithTransaction<T>(func)` | 自动 Commit/Rollback + 异常保留 |
 | `SavepointAsync(tran, name)` / `RollbackToAsync(tran, name)` | 保存点 |
 | `WithIsolationLevel(level)` | 隔离级别 |

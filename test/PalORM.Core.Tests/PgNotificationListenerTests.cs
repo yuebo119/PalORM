@@ -1,4 +1,4 @@
-using Npgsql;
+﻿using Npgsql;
 using NpgsqlTypes;
 using PalORM.PostgreSql;
 
@@ -257,6 +257,23 @@ internal sealed class FakePgNotificationConnection : IPgNotificationConnection
         return Task.CompletedTask;
     }
 
+    // B7：合并 LISTEN——Fake 记录全部 channel（契约与逐条版一致：都进 ListenedChannels）
+    public Task ListenAllAsync(IReadOnlyList<string> quotedChannels, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (string channel in quotedChannels) ListenedChannels.Add(channel);
+        return Task.CompletedTask;
+    }
+
+    // A2：保活探测——Fake 默认成功；测试可经 ProbeException 制造探测失败
+    internal Exception? ProbeException { get; init; }
+
+    public Task ProbeAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ProbeException is not null ? Task.FromException(ProbeException) : Task.CompletedTask;
+    }
+
     public async Task WaitAsync(CancellationToken cancellationToken)
     {
         WaitEntered.TrySetResult();
@@ -274,5 +291,114 @@ internal sealed class FakePgNotificationConnection : IPgNotificationConnection
     {
         DisposeCount++;
         return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>B6/B7/A2（2026-09-20）：通知监听器的分配与保活改造。
+/// <para><b>B6</b>：调用列表缓存——分发路径不再每次 <c>GetInvocationList()</c>。</para>
+/// <para><b>B7</b>：多 channel 合并为一次 LISTEN 往返 + 引用名构造期预计算。</para>
+/// <para><b>A2</b>：心跳探测——静默断线（WaitAsync 不返回也不抛错）时主动发现。</para></summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+    Justification = "Fake connection ownership is transferred to the listener factory and verified through DisposeCount.")]
+[NotInParallel]
+public sealed class PgNotificationListenerHotPathTests
+{
+    [Test]
+    public async Task B7_ListenAll_SendsEveryChannel()
+    {
+        var connection = new FakePgNotificationConnection();
+        await using var listener = new PgNotificationListener(
+            () => connection, ["events", "audit", "metrics"], _ => TimeSpan.Zero);
+
+        await listener.StartAsync();
+        await listener.StopAsync();
+
+        // B7：合并往返不改变契约——全部 channel 仍被 LISTEN
+        await Assert.That(connection.ListenedChannels)
+            .IsEquivalentTo(["\"events\"", "\"audit\"", "\"metrics\""]);
+    }
+
+    [Test]
+    public async Task B6_MultipleSubscribers_AllReceiveNotification()
+    {
+        var connection = new FakePgNotificationConnection();
+        await using var listener = new PgNotificationListener(
+            () => connection, ["events"], _ => TimeSpan.Zero);
+
+        int firstCalls = 0, secondCalls = 0;
+        listener.OnNotification += (_, _) => Interlocked.Increment(ref firstCalls);
+        listener.OnNotification += (_, _) => Interlocked.Increment(ref secondCalls);
+
+        await listener.StartAsync();
+        await connection.WaitEntered.Task;
+        connection.Emit("events", "payload-1");
+        connection.Emit("events", "payload-2");
+        await listener.StopAsync();
+
+        // B6：缓存的调用列表快照必须包含全部订阅者（不能只存最后一个）
+        await Assert.That(firstCalls).IsEqualTo(2);
+        await Assert.That(secondCalls).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task B6_Unsubscribe_StopsDeliveryToThatHandler()
+    {
+        var connection = new FakePgNotificationConnection();
+        await using var listener = new PgNotificationListener(
+            () => connection, ["events"], _ => TimeSpan.Zero);
+
+        int calls = 0;
+        void Handler(object? sender, PgNotificationEventArgs args)
+        {
+            Interlocked.Increment(ref calls);
+        }
+        listener.OnNotification += Handler;
+        await listener.StartAsync();
+        await connection.WaitEntered.Task;
+
+        connection.Emit("events", "before");
+        listener.OnNotification -= Handler;
+        connection.Emit("events", "after");
+        await listener.StopAsync();
+
+        // B6：remove 后快照必须同步更新（否则取消订阅失效）
+        await Assert.That(calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A2_KeepaliveFailure_TriggersReconnect()
+    {
+        // A2：连接被静默掐断时 WaitAsync 永不返回——只有心跳探测能发现
+        var dead = new FakePgNotificationConnection { ProbeException = new IOException("connection reset") };
+        var recovered = new FakePgNotificationConnection();
+        var connections = new Queue<IPgNotificationConnection>([dead, recovered]);
+        await using var listener = new PgNotificationListener(
+            connections.Dequeue, ["events"], _ => TimeSpan.Zero,
+            keepaliveInterval: TimeSpan.FromMilliseconds(50));
+
+        await listener.StartAsync();
+        await recovered.WaitEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await listener.StopAsync();
+
+        await Assert.That(dead.DisposeCount).IsEqualTo(1);
+        await Assert.That(recovered.ListenedChannels).Contains("\"events\"");
+        await Assert.That(recovered.DisposeCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A2_KeepaliveSuccess_KeepsSameConnection()
+    {
+        var connection = new FakePgNotificationConnection();
+        await using var listener = new PgNotificationListener(
+            () => connection, ["events"], _ => TimeSpan.Zero,
+            keepaliveInterval: TimeSpan.FromMilliseconds(50));
+
+        await listener.StartAsync();
+        await connection.WaitEntered.Task;
+        // 心跳成功不应触发重连—— DisposeCount 恒为 1（StopAsync 释放的那次）
+        await Task.Delay(400);
+        await listener.StopAsync();
+
+        await Assert.That(connection.DisposeCount).IsEqualTo(1);
     }
 }

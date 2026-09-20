@@ -283,6 +283,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return this;
     }
 
+    /// <summary>当前会话是否有活动事务（含经 <see cref="BeginTransactionAsync"/> 自开与
+    /// <see cref="UseTransaction"/> 外部设入两种来源）。
+    /// <para><b>为什么需要公开</b>：事务级语义的 API 需要调用方自查前置条件。典型是
+    /// PG 咨询锁（<c>pg_advisory_xact_lock</c>）——事务外调用会获得锁但立即释放，
+    /// 方法却正常返回，调用方以为临界区已持锁，跨进程互斥形同虚设且无任何错误信号。
+    /// 有本属性后这类 API 可以显式失败而非静默无效。</para>
+    /// <para><b>与失效契约的关系</b>：外部设入的事务被 Dispose 时（ITM-640），
+    /// <see cref="GetActiveTransaction"/> 会响亮抛异常；本属性返回 false（该状态下
+    /// 没有可用事务）。</para></summary>
+    public bool IsInTransaction => GetActiveTransaction() is not null;
+
     /// <summary>设置当前会话的事务。设置后所有后续查询在此事务内执行。
     /// 调用 CommitAsync()/RollbackAsync() 后需再次设置或清空 (UseTransaction(null))。
     /// <para><b>失效契约（ITM-640）</b>: 设入的事务若在会话外被 Dispose（Connection 置 null），
