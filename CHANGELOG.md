@@ -126,6 +126,24 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### ⚡ 性能（C4：池下限透传 + PreWarmAsync——消除修剪清池与冷启动的建连尖峰）
+
+- **`DbOptions.MinPoolSize`（新增，默认 0 = 不覆盖驱动默认）**：正数透传
+  （PG `MinPoolSize` / MySQL `MinimumPoolSize`，`WithPool(maxSize, ..., minSize:)` 或
+  init 直设均可；`Validate` 拒绝负数与 > MaxPoolSize）。语义按驱动官方文档为
+  **空闲修剪保留下限**——空闲超期时池内至少保留这么多条，消除「稀疏流量 + 空闲修剪
+  清池 → 突发查询重建物理连接」的延迟尖峰（远程建连实测 ~8.5 ms/条；v5.6 默认不再
+  覆盖空闲超时后，显式配置空闲超时的部署仍会踩到修剪，本参数是配套的保留下限）。
+  SQLite 无池忽略（与既有池参数契约一致）。
+- **`DataSession<TProvider>.PreWarmAsync(options, count)`（新增）**：启动期逐条打开
+  count 条连接随即归还池——首批突发查询命中暖连接。过 Provider 初始化钩子（与
+  `CreateAsync` 同口径）；SQLite 直接返回；建连异常原样抛（预热是优化，容错由调用方
+  决定）。与 `MinPoolSize` 正交：前者灌暖、后者防修剪清空，配合使用才保持暖态。
+- 测试：Core.Tests +4（WithPool/Validate 双入口校验、两 Provider 透传与
+  「仅默认时覆盖」、SQLite 无操作契约）；架构登记 `PreWarmAsync`（不触表豁免）。
+  验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 299/299 · Integration 199/199 ·
+  AOT publish + 原生运行 PASSED。
+
 ### ⚡ 性能（L1：BulkUpdateAsync 自动路由批量——满足条件时 N 行 N 次 RTT → 分批单语句）
 
 - **`BulkUpdateAsync` 智能路由**：满足全部保守条件时自动走单语句批量路径

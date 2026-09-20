@@ -39,6 +39,11 @@ public sealed class MySqlProvider : IDbProvider
         // MySqlConnector 默认：MaximumPoolSize=100 / ConnectionIdleTimeout=180 / ConnectionLifeTime=0。
         if (builder.MaximumPoolSize == 100)
             builder.MaximumPoolSize = checked((uint)options.MaxPoolSize);
+        // C4（v5.7）：空闲保留下限——0 = 不覆盖（MySqlConnector 默认 0）。>0 时
+        // ConnectionIdleTimeout 到期修剪至少保留这么多条（官方 XML 文档语义），
+        // 避免稀疏流量清池后突发查询重建物理连接。uint 池参数 checked 转换。
+        if (options.MinPoolSize > 0 && builder.MinimumPoolSize == 0)
+            builder.MinimumPoolSize = checked((uint)options.MinPoolSize);
         // v5.6：0 = 不覆盖（保留 MySqlConnector 默认 180 秒）——理由同 PostgreSqlProvider。
         if (options.PoolIdleTimeoutSeconds > 0 && builder.ConnectionIdleTimeout == 180)
             builder.ConnectionIdleTimeout = checked((uint)options.PoolIdleTimeoutSeconds);
