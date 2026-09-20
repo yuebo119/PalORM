@@ -302,11 +302,29 @@ internal sealed class SessionOperationState
         }
     }
 
+    /// <summary>事务存活性探测（R4/T1，v5.7）：Npgsql 的 Connection 取值在已释放事务上抛
+    /// ObjectDisposedException（Microsoft.Data.Sqlite 返回 null 不抛）——所有
+    /// 「Connection == null 即已终结」的判定统一走本方法，把已释放事务跨驱动一致地
+    /// 视同 Connection=null，使各判定分支的设计语义（静默清理/响亮失败/还原空值）
+    /// 完整触发而非被驱动异常抢先崩溃。锁外只读探测，无并发面。</summary>
+    internal static bool IsTransactionAlive(DbTransaction? transaction)
+    {
+        if (transaction is null) return false;
+        try
+        {
+            return transaction.Connection is not null;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
     internal DbTransaction? GetActiveTransaction()
     {
         lock (_sync)
         {
-            if (_transaction?.Connection is not null)
+            if (IsTransactionAlive(_transaction))
                 return _transaction;
             // ITM-640：外部 UseTransaction 设入的事务被外部 Dispose（Connection 置空）——
             // 静默降级为自动提交会让"我设了事务"的调用方数据脱离事务写入。响亮失败，
@@ -345,7 +363,7 @@ internal sealed class SessionOperationState
             // ITM-596: 传入已 dispose 的事务（Connection == null）会让 GetActiveTransaction
             // 静默清空 _transaction--调用方"我设了事务"的期望与实际"命令不带事务执行"不符，
             // 数据可能在非事务上下文写入。明确拒绝并提示正确用法。
-            if (transaction is not null && transaction.Connection is null)
+            if (transaction is not null && !IsTransactionAlive(transaction))
                 throw new ArgumentException(
                     "Cannot use a disposed transaction (its Connection is null). " +
                     "Pass a transaction from an open DbConnection, or null to clear.",
@@ -394,7 +412,7 @@ internal sealed class SessionOperationState
                 // 还原目标恒为内部事务或空（见字段说明）——外部性标记复位为内部语义。
                 // ITM-640：若未来允许 WithTransaction 包裹外部事务，此处须同步还原其
                 // 外部性判定，否则收口后外部事务失效会退回静默降级。
-                _transaction = previousTransaction?.Connection is not null
+                _transaction = IsTransactionAlive(previousTransaction)
                     ? previousTransaction
                     : null;
                 _externalTransaction = false;
@@ -416,7 +434,9 @@ internal sealed class SessionOperationState
                 _transactionOperationOwner is not null
                 && ReferenceEquals(
                     _transactionOperationOwner, _activeOperationOwner);
-            if (_transaction?.Connection is not null
+            // R4/T1（v5.7）：已释放事务（IsTransactionAlive=false，含 Npgsql 取值抛 ODE 的
+            // 形态）不触发"先完成事务"警告——会话释放不能因调用方先行释放事务而崩溃
+            if (IsTransactionAlive(_transaction)
                 && _activeTransaction is null
                 && !operationOwnsTransaction)
             {
