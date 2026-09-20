@@ -126,6 +126,27 @@
   流控状态敏感（LOAD DATA 缓冲随包大小分配），跨状态对比需注明服务器健康度。
   PG 侧 211.1 B/行与旧基线逐位一致（零回归确认）。
 
+### 🔒 可靠性（R1+L2+T5：写路径超时包装——异常统一 + 事务上界）
+
+- **新增 `ResilienceExecutor.ExecuteWithTimeoutAsync`**：仅超时包装、不重试不熔断——
+  非幂等写路径（ITM-310 契约禁止重试）此前<b>连超时包装都没有</b>，命令超时抛驱动原始异常，
+  调用方无法用统一模式匹配。本方法提供与读路径一致的 `TimeoutException` +
+  `Data["PalORM.InfrastructureTimeout"]=true` 契约。
+- **接入三条写路径**（DataSession 新增 `ExecuteWritePipelineAsync`）：
+  `UpdateCoreAsync`（单行 UPDATE）、`DeleteAsync`（软删 + 物理删双路径）、
+  `ExecuteAsync`（原始 DDL/DML）。事务内直通（事务有自己的上界语义）；
+  直通配置直通（零开销契约保持）。
+  <br>事务内语句挂起时，整个事务的持锁时间由本超时限定上界（长事务风险消除）。
+- **事务可靠性专项审查结论**（源码级核实，修正初始分析中的两处误判）：
+  - T3「BulkInsert 无事务自建」——**伪缺陷**：MySQL Provider 层（MySqlProvider:222-227）
+    已有正确的自建事务+commit+rollback，Inserter 层不加事务是正确的单一权责设计；
+    PG COPY / SQLite MultiValueBulkInsert 同样正确。三方言 `ownsTransaction` 全在。
+  - T2「外部事务不自动 Rollback」——**伪缺陷**：`WithTransaction` 总是自建事务
+    （BeginTransactionAsync + 嵌套守卫拒绝外部），`RunInTransactionScopeAsync` 已有
+    `ownsTransaction` 守卫——复用外部时不 Commit 不 Rollback。
+  - 修正的教训：初始审查只看了 Inserter 层就断定缺陷——没有沿调用链上溯到 Provider 层。
+    以后审查事务语义必须从 DataSession → Provider → Inserter 全链走通。
+
 ### 🧪 维度 10 落地：`--stability` 长稳仪器（规范最后一个 ❌ 测量维度）
 
 - **新增 `--stability <秒> [dialect]`**：持续负载 + 10s 窗口采样（窗口吞吐/p95/累计分配/

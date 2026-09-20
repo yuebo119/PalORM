@@ -278,6 +278,8 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
-        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return (int)await ExecuteWritePipelineAsync(
+            async token => (long)await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
     }
 }
