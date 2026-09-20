@@ -270,7 +270,9 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>执行任意 DDL/DML。
-    /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para></summary>
+    /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para>
+    /// <para><b>R3（v5.7）</b>：拦截器三段式接入（此前为覆盖面缺口）——OnBefore/OnAfter/OnError
+    /// 与 ToListAsync 同语义；参数表仅在拦截器非空时物化，默认会话零开销。</para></summary>
     public async ValueTask<int> ExecuteAsync(FormattableString sql, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
@@ -278,8 +280,35 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
-        return (int)await ExecuteWritePipelineAsync(
-            async token => (long)await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false),
-            ct).ConfigureAwait(false);
+        // R3（v5.7）：拦截器非空才物化参数表与计时——与 SELECT 管线"空列表跳过"同口径
+        QueryContext context = default;
+        System.Diagnostics.Stopwatch? stopwatch = null;
+        if (_interceptors.Count > 0)
+        {
+            var parameters = new List<System.Data.Common.DbParameter>(cmd.Parameters.Count);
+            foreach (System.Data.Common.DbParameter parameter in cmd.Parameters) parameters.Add(parameter);
+            context = new QueryContext(cmd.CommandText, parameters);
+            stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            QueryBuilderExtensions.NotifyInterceptorsOnBefore(_interceptors, context);
+        }
+        int affected;
+        try
+        {
+            affected = (int)await ExecuteWritePipelineAsync(
+                async token => (long)await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false),
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            if (stopwatch is not null)
+                QueryBuilderExtensions.NotifyInterceptorsOnError(_interceptors, context, exception);
+            throw;
+        }
+        if (stopwatch is not null)
+        {
+            stopwatch.Stop();
+            QueryBuilderExtensions.NotifyInterceptorsOnAfter(_interceptors, context, stopwatch, affected);
+        }
+        return affected;
     }
 }

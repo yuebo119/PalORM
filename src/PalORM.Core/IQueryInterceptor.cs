@@ -3,8 +3,9 @@ using System.Data.Common;
 namespace PalORM;
 
 /// <summary>查询拦截器接口——在查询执行前后注入自定义行为。
-/// <para><b>覆盖面（ITM-513/547）</b>: 作用于实体 SELECT 执行管线（ToListAsync/FirstOrDefault 族）
-/// 与 QueryBuilder UPDATE（ExecuteNonQueryAsync）——两者均三段式 OnBefore/OnAfter/OnError。
+/// <para><b>覆盖面（ITM-513/547；R3/v5.7 扩展）</b>: 作用于实体 SELECT 执行管线（ToListAsync/FirstOrDefault 族）、
+/// QueryBuilder UPDATE（ExecuteNonQueryAsync）与 <see cref="DataSession{TProvider}.ExecuteAsync"/>
+/// （原始 DDL/DML，R3 接入）——三者均三段式 OnBefore/OnAfter/OnError。
 /// INSERT/DELETE/Bulk/存储过程/QueryMultiple（流式多结果集）<b>不经过</b>拦截器——
 /// 完整审计请用数据库层审计或 OpenTelemetry（WithTracing）。</para></summary>
 public interface IQueryInterceptor
