@@ -40,18 +40,40 @@
 ### ⚡ 性能
 
 - **参数名缓存扩容到 65535（B1）**：`ParameterNameCache` 原上界 1024，而 MySQL 多值
-  INSERT 的满批参数池上限是 `SqlLimits.MaxBindParameters`(65535)——2 列实体
-  `poolSize` 即 2000，索引 1024..1999 全部落入 `$"@p{index}"` 插值分支，
-  每次 `BulkInsertAsync` 约 2*(poolSize-1024) 次字符串分配。SQLite 上限 999 不越界、
-  PG 走 COPY 不建该池，**仅 MySQL 受益**。代价是常驻约 1.3 MB 字符串表。
-- **只读查询内核零 display class（B2）**：`ExecuteQueryAsync` 的单次尝试内核原为捕获
-  七项的 async 局部函数，每次查询分配一个 display class（~250B）+ 一次委托转换（56B）。
-  改为 `static` 局部函数 + `QueryExecutionState<T>`（readonly record struct，走栈），
-  两者归零。这是代码注释里登记的已知未做项，本次清偿；剩余 48B 执行器机械与
-  重试/熔断语义耦合，保留。**行为与 SQL 逐位不变。**
+  INSERT 的满批参数池上限是 `SqlLimits.MaxBindParameters`(65535)——4 列实体默认
+  `batchSize=1000` 时 `poolSize=4000`，索引 1024..3999 共 2976 个全部落入
+  `$"@p{index}"` 插值分支。SQLite 上限 999 不越界、PG 走 COPY 不建该池，
+  **仅 MySQL 受益**。代价是常驻约 1.3 MB 字符串表。
+  <br>**实测（2026-09-21）**：隔离微基准（确定性，`GC.GetTotalAllocatedBytes`）建池一次
+  base 151,064 B → HEAD 32,024 B，净省约 **95 KB/次 BulkInsertAsync**（4 列实体、
+  1000 行/批）。真库 MySQL 交替 A/B 四轮：4.39 MB → 4.31 MB（**−80 KB，−1.8%**），
+  与微基准吻合；但真库分配的轮次间波动本身有 60~70 KB，信号仅为噪声的 1.2 倍，
+  故以微基准为准。**耗时无结论**——同配置连跑方差 ±30%。
+- ~~**只读查询内核零 display class（B2）**~~ **已回退（2026-09-21 实测结论）**：
+  原计划把 `ExecuteQueryAsync` 的单次尝试内核从「捕获七项的 async 局部函数」改为
+  `static` 局部函数 + `QueryExecutionState<T>`，期望消除 display class（~250B）与
+  委托转换（56B）。**实测未获任何收益，已回退。**
+  实测（SQLite，`From<T>().FirstOrDefaultAsync()` 会话复用，`GC.GetTotalAllocatedBytes`
+  精确计数，2000 次）：改造前后均为 **2,552.2 B/op**，逐字节相同。
+  隔离实验（同量具，10 万次）揭示原因：三种写法分别为
+  「局部函数捕获 7 变量」483.78 B/op、「static + struct 参数但经 lambda 传给
+  `ResilienceExecutor.ExecuteAsync(Func<…>)`」531.15 B/op、「static + struct 直接调用」
+  301.36 B/op。**display class 并没有被消除**——`token => ExecuteCoreAsync(token, state)`
+  仍捕获局部变量 `state`，只是把七次捕获换成一次（且 `QueryExecutionState<T>` 内嵌
+  `QueryBuilder<T>` 大 struct，display class 反而更大）。真正能省 182 B/op 的第三条路
+  要求不经委托，而函数指针方案需要 C# 预览版内存安全规则（CS8652），对生产 AOT 库
+  不可接受。
+  结论：经 `ResilienceExecutor` 的委托式 API 无法消除该分配；代码注释里「未做」的
+  登记仍然成立，保留原实现。
 - **PG COPY 目标引用形态按 (Type, Dialect) 缓存（B3）**：原每次调用重算
   `string.Join(", ", InsertColumns.Select(QuoteIdentifier))`（方法组转委托 + LINQ
   迭代器 + Join 中间数组 + 每列一次引用）。键空间 = 实体数 × 3，天然有限。
+  <br>**实测（2026-09-21）**：分配 2.94 MB → 2.93 MB（**−10 KB**，三轮均确定性一致）。
+  这 10 KB 主要来自同批落地的 **M2**（COPY 的 `rowCommand` 从每批新建改为整批一次，
+  10 批省 9 个 `DbCommand`），B3 本身省的 `string.Join` 只有数百字节。
+  **耗时无差异**——交替 A/B 四轮 BASE 33.52 ms vs HEAD 33.76 ms，互相交错。
+  （首轮非交替测量曾显示 BASE 38 ms / HEAD 33.6 ms 的 10% 优势，那是 BASE 撞上慢时段
+  的假象，交替设计控制住后消失。）
 - **通知监听器分发零分配（B6）**：`OnNotification` 改自定义 add/remove 缓存调用列表
   快照（Interlocked 换数组），分发路径不再每次 `GetInvocationList()`——原每收到一条
   NOTIFY 即一次 `Delegate[]` 分配。
