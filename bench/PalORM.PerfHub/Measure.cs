@@ -115,8 +115,8 @@ internal static class Measure
     public static async Task<Measurement> SingleAsync(
         DialectInfo dialect, IPerfImplementation impl, string operation, string group, int rows,
         Func<IPerfImplementation, DbConnection, int, Task> action,
-        DbConnection conn, int iterations, CancellationToken ct,
-        Func<DbConnection, Task>? prepare = null)
+        DbConnection conn, int maxIterations, CancellationToken ct,
+        Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5)
     {
         // 预热（JIT + 驱动缓冲 + 缓存填充）——不计入样本
         if (prepare is not null)
@@ -124,7 +124,7 @@ internal static class Measure
             await prepare(conn).ConfigureAwait(false);
         }
 
-        for (int i = 0; i < Math.Max(3, iterations / 5); i++)
+        for (int i = 0; i < Math.Max(3, maxIterations / 5); i++)
         {
             await action(impl, conn, i).ConfigureAwait(false);
         }
@@ -134,6 +134,16 @@ internal static class Measure
         {
             await prepare(conn).ConfigureAwait(false);
         }
+
+        // 阶段 3.1 自适应迭代：重置后用一次探针（i=0）测单次耗时，迭代数收敛到时间预算。
+        // 探针占用 i=0 的主键段，计时轮从 i=1 起——写操作的每轮主键互不重叠
+        //（探针在重置前跑会与预热轮撞主键，实测 Insert 类 UNIQUE 冲突）。
+        var probe = System.Diagnostics.Stopwatch.StartNew();
+        await action(impl, conn, 0).ConfigureAwait(false);
+        probe.Stop();
+        double perOpSeconds = Math.Max(probe.Elapsed.TotalSeconds, 1e-7);
+        int iterations = Math.Clamp(
+            (int)(budgetSeconds / perOpSeconds), 3, Math.Max(3, maxIterations));
 
         var samples = new List<double>(iterations);
         int gen0Before = GC.CollectionCount(0);
@@ -147,7 +157,7 @@ internal static class Measure
         using (var sampler = PeakSampler.Start())
         {
             var sw = new Stopwatch();
-            for (int i = 0; i < iterations; i++)
+            for (int i = 1; i <= iterations; i++)
             {
                 sw.Restart();
                 await action(impl, conn, i).ConfigureAwait(false);
@@ -239,7 +249,7 @@ internal static class Measure
             // 预热与计时的取消源必须分别构造：若 stop 在预热前就开始倒计时，预热一旦超过
             // seconds，计时窗口开跑时令牌已取消——每个 worker 第一次 await 就抛
             // OperationCanceledException 直接返回，采到 0 个样本（实测 8 线程 SQLite 踩中）。
-            using (var warmup = new CancellationTokenSource(TimeSpan.FromSeconds(1.5)))
+            using (var warmup = new CancellationTokenSource(TimeSpan.FromSeconds(1.0)))
             {
                 await RunWorkers(conns, samples, threads, rows, writeRatio, impl,
                     warmup.Token).ConfigureAwait(false);

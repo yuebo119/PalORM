@@ -200,7 +200,7 @@ internal static class Program
                         {
                             try
                             {
-                                Measurement m = await Measure.ConcurrentAsync(info, impl, rows, threads, 3.0, 0.20,
+                                Measurement m = await Measure.ConcurrentAsync(info, impl, rows, threads, 2.0, 0.20,
                                     cts.Token).ConfigureAwait(false);
                                 results.Add(m);
                                 Console.WriteLine($"    {impl.Name,-9} {threads,2} 线程  {m.OpsPerSecond,10:N0} ops/s  "
@@ -341,7 +341,7 @@ internal static class Program
 
         long[] keys = Dataset.KeySet(rows);
         long[] whereInIds = BuildWhereInIds(rows);
-        int bulkDeleteIters = ItersFor("BulkDelete", rows, scale);
+        int bulkDeleteIters = BulkDeleteSeedRounds(scale);
 
         // ── Build：纯 SQL 构建开销，不执行、不碰库 ──
         await MeasAsync(info, impl, "BuildGetByKeySql", "Build", rows, conn, results, scale, null,
@@ -482,7 +482,7 @@ internal static class Program
         // 无上限会让 20000 档的回滚测量耗时失控。
         await MeasAsync(info, impl, "TxRollback", "Transaction", rows, conn, results, scale, reset,
             async (im, c, i) => await im.TxRollbackAsync(
-                c, Dataset.SeedRows(Math.Min(rows, 1000), 0), ct).ConfigureAwait(false),
+                c, Dataset.SeedRows(Math.Min(rows, 500), 0), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
     }
@@ -494,11 +494,11 @@ internal static class Program
         Func<DbConnection, Task>? prepare,
         Func<IPerfImplementation, DbConnection, int, Task> action, CancellationToken ct)
     {
-        int iterations = ItersFor(operation, rows, scale);
+        _ = (rows, scale);
         try
         {
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
-                iterations, ct, prepare).ConfigureAwait(false);
+                MaxIterations(operation), ct, prepare, BudgetSeconds(operation)).ConfigureAwait(false);
             results.Add(m);
             PrintRow([m]);
         }
@@ -510,26 +510,29 @@ internal static class Program
         }
     }
 
-    /// <summary>迭代次数基准表——按操作的成本量级分档，再按 <paramref name="scale"/> 缩放。</summary>
-    private static int ItersFor(string operation, int rows, double scale)
-        => Math.Max(3, (int)Math.Ceiling(BaseIters(operation, rows) * scale));
+    /// <summary>BulkDelete 播种规模的迭代上界——自适应迭代后实际轮数由预算决定，
+    /// 播种按最坏情况（上限轮数 × 每轮删除行数）准备主键空间。</summary>
+    private static int BulkDeleteSeedRounds(double scale)
+        => Math.Max(3, (int)Math.Ceiling(MaxIterations("BulkDelete") * scale));
 
-    private static int BaseIters(string operation, int rows) => operation switch
+    /// <summary>测项的时间预算（秒）——阶段 3.1 的自适应迭代上限基准。
+    /// 迭代数 = clamp(预算 ÷ 预热后单次耗时, 3, 上限)，单测量耗时结构性有界。</summary>
+    private static double BudgetSeconds(string operation) => operation switch
     {
-        // 纯 CPU 构建——给足样本让中位数稳定
+        // 纯 CPU 构建——亚微秒级，1s 预算自然收敛到数千次迭代
+        "BuildGetByKeySql" or "BuildComplexQuerySql" => 1.0,
+        // 批量为档位行数——每次成本高，给足 4s 让中位数有足够样本
+        "BulkInsert" or "BulkUpdate" or "BulkDelete" or "TxBulkInsert" or "UpsertBatch" => 4.0,
+        "TxRollback" or "WideQueryAll" => 2.0,
+        _ => 1.5
+    };
+
+    /// <summary>迭代数上限——防止极快操作（Build 类亚微秒）在 1s 预算内跑出
+    /// 无意义的十万次迭代（计时循环自身的开销会污染测量）。</summary>
+    private static int MaxIterations(string operation) => operation switch
+    {
         "BuildGetByKeySql" or "BuildComplexQuerySql" => 2_000,
-        // 一次往返拉全表/全量流式——样本少但每次成本高
-        "QueryAll" or "StreamAll" => rows <= 2_000 ? 20 : 10,
-        // 批量为档位行数——每轮成本最高
-        "BulkInsert" or "BulkUpdate" or "TxBulkInsert" => rows <= 2_000 ? 5 : 3,
-        "BulkDelete" => rows <= 2_000 ? 5 : 3,
-        "TxHundredInserts" or "TxRollback" => rows <= 2_000 ? 20 : 10,
-        "TxTenInserts" => rows <= 2_000 ? 50 : 20,
-        "TxSingleInsert" => rows <= 2_000 ? 100 : 50,
-        "KeysetPage" or "WhereIn" => rows <= 2_000 ? 100 : 50,
-        "Count" => rows <= 2_000 ? 200 : 100,
-        // GetByKey / Insert / Update
-        _ => rows <= 2_000 ? 200 : 100
+        _ => 200
     };
 
     /// <summary>WhereIn 的 100 个键——按档位步长均匀取样，三实现三方言完全相同。</summary>
