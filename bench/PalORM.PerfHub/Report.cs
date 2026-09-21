@@ -85,6 +85,12 @@ internal static class Report
             sb.Append(VersionCompare(runs));
         }
 
+        string ab = AbCompare(runs);
+        if (ab.Length > 0)
+        {
+            sb.Append(ab);
+        }
+
         if (runs.Count >= 2)
         {
             sb.Append(GrowthCurves(runs));
@@ -346,6 +352,39 @@ internal static class Report
     }
 
     /// <summary>比值配色——优于阈值 5% 绿，劣于 10% 红，其余中性。</summary>
+    /// <summary>A/B 判定四档：显著变快/显著变慢（全轮同向且越阈值）、
+    /// 不可分辨（散布跨 1.0）、方向偏快/偏慢（其余）。</summary>
+    private static string AbVerdict((string Dialect, string Tier, string Operation, string Impl,
+        double Median, double Min, double Max, int Rounds) row)
+    {
+        if (row.Max < 0.90)
+        {
+            return "<span class=\"good\">显著变快</span>";
+        }
+
+        if (row.Min > 1.10)
+        {
+            return "<span class=\"bad\">显著变慢</span>";
+        }
+
+        if (row.Max >= 1.0 && row.Min <= 1.0)
+        {
+            return "<span class=\"mut\">不可分辨</span>";
+        }
+
+        return DirectionalVerdict(row.Median);
+    }
+
+    private static string DirectionalVerdict(double median)
+    {
+        if (median < 1.0)
+        {
+            return "方向偏快";
+        }
+
+        return "方向偏慢";
+    }
+
     private static string RatioClass(double ratio, double goodBelow, double badAbove)
     {
         if (ratio < goodBelow) return " class=\"n good\"";
@@ -480,6 +519,101 @@ internal static class Report
             .Append('（').Append(baseRun.Timestamp).Append("），最新 = ").Append(Esc(headRun.Version))
             .Append('（').Append(headRun.Timestamp).Append("）。</div></div>");
         sb.Append(NormalizedCompare(baseRun, headRun));
+        return sb.ToString();
+    }
+
+    /// <summary>交替 A/B 配对比值（阶段 4.2）——跨版本对比的黄金口径。
+    /// <para>数据源：label 形如 <c>ab/&lt;round&gt;/&lt;dialect&gt;/&lt;tier&gt;</c> 的历史运行
+    ///（由 <c>scripts/perfhub-ab.sh</c> 产出，块内两版背靠背）。每个 (方言, 档位, 操作, 实现)
+    /// 按轮配对求 HEAD/基线比值，取<b>逐轮中位</b>并展示轮间散布——散布跨 1.0 即判
+    /// "不可分辨"，不硬出结论。</para></summary>
+    private static string AbCompare(List<PerfRun> runs)
+    {
+        List<PerfRun> abRuns = [.. runs
+            .Where(static r => r.Label.StartsWith("ab/", StringComparison.Ordinal))];
+        if (abRuns.Count == 0)
+        {
+            return "";
+        }
+
+        var byDialectTier = new Dictionary<(string Dialect, string Tier), List<(int Round, PerfRun Run)>>();
+        foreach (PerfRun run in abRuns)
+        {
+            string[] parts = run.Label.Split('/');
+            if (parts.Length < 4 || !int.TryParse(parts[1], out int round))
+            {
+                continue;
+            }
+
+            var key = (parts[2], parts[3]);
+            if (!byDialectTier.TryGetValue(key, out var list))
+            {
+                list = [];
+                byDialectTier[key] = list;
+            }
+            list.Add((round, run));
+        }
+
+        var rows = new List<(string Dialect, string Tier, string Operation, string Impl,
+            double Median, double Min, double Max, int Rounds)>();
+        foreach (((string dialect, string tier), List<(int Round, PerfRun Run)> roundRuns) in byDialectTier)
+        {
+            var paired = roundRuns
+                .SelectMany(static rr => rr.Run.Measurements
+                    .Where(static m => !m.Operation.StartsWith("Concurrent", StringComparison.Ordinal))
+                    .Select(m => (rr.Round, rr.Run.Version, m)))
+                .GroupBy(static x => (x.m.Operation, x.m.Implementation, x.Round))
+                .Where(static g => g.Select(static x => x.Version).Distinct().Count() == 2)
+                .GroupBy(static g => (g.Key.Operation, g.Key.Implementation));
+            foreach (var opGroup in paired)
+            {
+                var ratios = new List<double>();
+                foreach (var roundGroup in opGroup)
+                {
+                    double head = roundGroup.First(static x => x.Version != "v5.5.1").m.MedianNs;
+                    double baseline = roundGroup.First(static x => x.Version == "v5.5.1").m.MedianNs;
+                    if (baseline > 0 && head > 0)
+                    {
+                        ratios.Add(head / baseline);
+                    }
+                }
+
+                if (ratios.Count >= 2)
+                {
+                    ratios.Sort();
+                    rows.Add((dialect, tier, opGroup.Key.Operation, opGroup.Key.Implementation,
+                        ratios[ratios.Count / 2], ratios[0], ratios[^1], ratios.Count));
+                }
+            }
+        }
+
+        if (rows.Count == 0)
+        {
+            return "";
+        }
+
+        var sb = new StringBuilder();
+        sb.Append("<h2>⑤b 交替 A/B 配对比值（逐轮中位 · 黄金口径）</h2>")
+            .Append("<div class=\"note\">数据源 label=<code>ab/轮/方言/档位</code>——块内两版背靠背，")
+            .Append("机器漂移在两版间对称分摊。散布 = 轮间最小–最大比；<b>散布跨 1.0 即判不可分辨</b>。</div>")
+            .Append("<div class=\"card\"><table>")
+            .Append("<tr><th>方言</th><th>档位</th><th>操作</th><th>实现</th>")
+            .Append("<th class=\"n\">中位比</th><th class=\"n\">散布</th><th class=\"n\">轮数</th><th>判定</th></tr>");
+        foreach (var row in rows.OrderBy(static r => r.Median))
+        {
+            string verdict = AbVerdict(row);
+
+            string cls = RatioClass(row.Median, 0.90, 1.10);
+            sb.Append("<tr><td>").Append(row.Dialect).Append("</td><td class=\"n\">").Append(row.Tier)
+                .Append("</td><td>").Append(Esc(row.Operation)).Append("</td><td>").Append(row.Impl)
+                .Append("</td><td class=\"").Append(cls).Append("\"><b>").Append(row.Median.ToString("F3"))
+                .Append("×</b></td><td class=\"n\">").Append(row.Min.ToString("F2"))
+                .Append('–').Append(row.Max.ToString("F2"))
+                .Append("</td><td class=\"n\">").Append(row.Rounds)
+                .Append("</td><td>").Append(verdict).Append("</td></tr>");
+        }
+
+        sb.Append("</table></div>");
         return sb.ToString();
     }
 
