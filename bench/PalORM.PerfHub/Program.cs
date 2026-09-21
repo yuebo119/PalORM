@@ -179,6 +179,9 @@ internal static class Program
                 Console.WriteLine();
                 Console.WriteLine($"── 行数档位 {rows:N0} ──");
 
+                // 阶段 2 新表：每 (方言 × 档位) 播一次，臂无关——测量只读或自清理
+                await SetupV2TablesAsync(info, conn, rows, cts.Token).ConfigureAwait(false);
+
                 foreach (IPerfImplementation impl in impls)
                 {
                     await RunOneImplAsync(info, impl, rows, conn, results, scale, cts.Token)
@@ -225,7 +228,103 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部 19 个单操作测量。
+    /// <summary>阶段 2 新表播种——每 (方言 × 档位) 一次：宽表全量、子表前 500 父 × 3 子、
+    /// 自增表建空。播种走 ADO 多值 VALUES（臂无关的地板路径，不计入任何测量）。</summary>
+    private static async Task SetupV2TablesAsync(
+        DialectInfo info, DbConnection conn, int rows, CancellationToken ct)
+    {
+        Dialect d = info.Dialect;
+        await AdoNetImpl.ExecAsync(conn, Dataset.DropWideTableSql(d), ct).ConfigureAwait(false);
+        await AdoNetImpl.ExecAsync(conn, Dataset.CreateWideTableSql(d), ct).ConfigureAwait(false);
+        await AdoNetImpl.ExecAsync(conn, Dataset.DropChildTableSql(d), ct).ConfigureAwait(false);
+        await AdoNetImpl.ExecAsync(conn, Dataset.CreateChildTableSql(d), ct).ConfigureAwait(false);
+        await AdoNetImpl.ExecAsync(conn, Dataset.DropAutoIncTableSql(d), ct).ConfigureAwait(false);
+        await AdoNetImpl.ExecAsync(conn, Dataset.CreateAutoIncTableSql(d), ct).ConfigureAwait(false);
+
+        // 宽表播种：多值 VALUES（20 列 → 批宽收敛到 100 行/语句）
+        const int wideBatch = 100;
+        string wideCols = Dataset.WideSelectColumns(d);
+        for (int start = 0; start < rows; start += wideBatch)
+        {
+            int end = Math.Min(start + wideBatch, rows);
+            var sql = new System.Text.StringBuilder();
+            sql.Append("INSERT INTO ").Append(Dataset.WideTable(d)).Append(" (").Append(wideCols)
+                .Append(") VALUES ");
+            await using DbCommand cmd = conn.CreateCommand();
+            int p = 0;
+            for (int r = start; r < end; r++)
+            {
+                if (r > start)
+                {
+                    sql.Append(", ");
+                }
+
+                sql.Append('(');
+                for (int c = 0; c < 20; c++)
+                {
+                    if (c > 0)
+                    {
+                        sql.Append(", ");
+                    }
+
+                    sql.Append(Dataset.P(p + c));
+                }
+                sql.Append(')');
+                WideRow w = WideRow.Seed(r);
+                object?[] vals =
+                [
+                    w.Id, w.C01, w.C02, w.C03, w.C04, w.C05, w.C06, w.C07, w.C08, w.C09,
+                    w.C10, w.C11, w.C12, w.C13, w.C14, w.C15, w.C16, w.C17, w.C18, w.C19
+                ];
+                for (int c = 0; c < 20; c++)
+                {
+                    DbParameter par = cmd.CreateParameter();
+                    par.ParameterName = Dataset.P(p + c);
+                    par.Value = vals[c] ?? DBNull.Value;
+                    cmd.Parameters.Add(par);
+                }
+                p += 20;
+            }
+            cmd.CommandText = sql.ToString();
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        // 子表播种：前 500 父 × 3 子（IncludeJoin 查 50 父，500 留足上界）
+        const int childParents = 500;
+        var childSql = new System.Text.StringBuilder();
+        childSql.Append("INSERT INTO ").Append(Dataset.ChildTable(d)).Append(" (")
+            .Append(Dataset.Q(d, "ChildId")).Append(", ").Append(Dataset.Q(d, "ParentId")).Append(", ")
+            .Append(Dataset.Q(d, "Note")).Append(") VALUES ");
+        await using DbCommand childCmd = conn.CreateCommand();
+        int cp = 0;
+        foreach (ChildRow child in Dataset.SeedChildren(childParents))
+        {
+            if (cp > 0)
+            {
+                childSql.Append(", ");
+            }
+
+            childSql.Append('(').Append(Dataset.P(cp * 3)).Append(", ")
+                .Append(Dataset.P((cp * 3) + 1)).Append(", ").Append(Dataset.P((cp * 3) + 2)).Append(')');
+            DbParameter p1 = childCmd.CreateParameter();
+            p1.ParameterName = Dataset.P(cp * 3);
+            p1.Value = child.ChildId;
+            childCmd.Parameters.Add(p1);
+            DbParameter p2 = childCmd.CreateParameter();
+            p2.ParameterName = Dataset.P((cp * 3) + 1);
+            p2.Value = child.ParentId;
+            childCmd.Parameters.Add(p2);
+            DbParameter p3 = childCmd.CreateParameter();
+            p3.ParameterName = Dataset.P((cp * 3) + 2);
+            p3.Value = child.Note;
+            childCmd.Parameters.Add(p3);
+            cp++;
+        }
+        childCmd.CommandText = childSql.ToString();
+        await childCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部 23 个单操作测量。
     /// <para>顺序即状态依赖：Build/查询类先跑（要求表内恰好 <paramref name="rows"/> 行），
     /// 写类后跑（每轮用不同主键段，表会增长，但已不影响后续查询类——
     /// 下一个实现进场时 <c>SetupAsync</c> 会重建表）。</para></summary>
@@ -323,6 +422,41 @@ internal static class Program
         await MeasAsync(info, impl, "Count", "Query", rows, conn, results, scale, null,
             async (im, c, i) => _ = await im.CountAsync(c, ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
+
+        // ── 阶段 2 新增测项 ──
+        await MeasAsync(info, impl, "UpsertBatch", "CRUD", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                // 每轮对已存在的主键段整批 UPSERT——首轮含插入、后续以更新为主。
+                // MySQL ON DUPLICATE KEY 对更新行计数 2 而产品 BulkMerge 返回实体数，
+                // 三臂返回口径不同：此处只计时延与分配，不比返回值
+                _ = await im.UpsertBatchAsync(c, Dataset.SeedRows(rows, 0), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+
+        async Task ClearAutoInc(DbConnection c)
+        {
+            await AdoNetImpl.ExecAsync(c, "DELETE FROM " + Dataset.AutoIncTable(info.Dialect), ct)
+                .ConfigureAwait(false);
+        }
+        await MeasAsync(info, impl, "InsertReturningId", "CRUD", rows, conn, results, scale, ClearAutoInc,
+            async (im, c, i) =>
+            {
+                _ = await im.InsertReturningIdAsync(c, $"row-{i}", i, ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+
+        await MeasAsync(info, impl, "WideQueryAll", "Query", rows, conn, results, scale, null,
+            async (im, c, i) => _ = await im.WideQueryAllAsync(c, ct).ConfigureAwait(false), ct)
+            .ConfigureAwait(false);
+
+        // IncludeJoin 的策略不同构已标注（ADO 全手工 / Dapper multi-mapping / PalORM JOIN 生成）
+        await MeasAsync(info, impl, "IncludeJoin", "Query", rows, conn, results, scale, null,
+            async (im, c, i) =>
+            {
+                (int parents, int children) = await im.IncludeJoinAsync(c, 50, ct).ConfigureAwait(false);
+                if (parents != 50 || children != 150)
+                    throw new InvalidOperationException(
+                        $"IncludeJoin 结果集不等价：parents={parents}(期望 50), children={children}(期望 150)");
+            }, ct).ConfigureAwait(false);
 
         // ── Transaction：真实业务形态（开启事务 → N 条写 → 提交/回滚）──
         await MeasAsync(info, impl, "TxSingleInsert", "Transaction", rows, conn, results, scale, reset,
