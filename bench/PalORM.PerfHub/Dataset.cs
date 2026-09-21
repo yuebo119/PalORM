@@ -174,6 +174,122 @@ internal enum Dialect
     PostgreSql
 }
 
+internal static class MySqlConnString
+{
+    /// <summary>连接串缺 AllowLoadLocalInfile 时追加（存在则原样返回）。</summary>
+    public static string WithLocalInfile(string cs)
+    {
+        if (cs.Contains("AllowLoadLocalInfile", StringComparison.OrdinalIgnoreCase))
+        {
+            return cs;
+        }
+
+        string trimmed = cs.TrimEnd(';');
+        return trimmed + ";AllowLoadLocalInfile=true";
+    }
+}
+
+/// <summary>批量写路径的三臂共用 SQL 真源（PerfHub v2 三臂契约）。
+/// <para>ADO 地板与 Dapper 臂必须发与 PalORM 同构的方言最优 SQL，此处集中生成，
+/// 杜绝两臂各拼各的漂移。参数顺序统一为 [Name, Qty, Price, Marker, Id]——Id 在行尾，
+/// 与产品 <c>BatchUpdateSqlBuilder</c> 的 BindUpdate 序一致。</para>
+/// <para><b>SQLite 不走集合式</b>：CASE WHEN 在 SQLite 实测比逐条慢 6.4×（产品既有结论），
+/// SQLite 的批量更新最优路径是逐条裹单事务（autocommit 每行一次 journal 同步）。</para></summary>
+internal static class BulkSql
+{
+    public const int ParamsPerRow = 5;
+    public const int PkOffsetInRow = 4;
+
+    /// <summary>分批行数基准——与 PalORM 产品的批量插入批宽对齐（1000 行 × 5 参数 = 5000 参数，
+    /// PG/MySQL 参数上限 65535 内）。</summary>
+    public const int BatchRows = 1000;
+
+    /// <summary>方言有效批宽——SQLite 沿用产品的 999 参数上限口径
+    /// （min(1000, 999 ÷ 5) = 199 行/语句），其余方言 1000。</summary>
+    public static int EffectiveBatchRows(Dialect dialect)
+        => dialect == Dialect.Sqlite ? 199 : BatchRows;
+
+    private static readonly string[] SetColumns = ["Name", "Qty", "Price", "Marker"];
+
+    /// <summary>集合式批量 UPDATE。PG：UPDATE FROM VALUES（产品实测 4×）；
+    /// MySQL：CASE WHEN（可移植主流）。SQLite 调用方不得使用。</summary>
+    public static string UpdateBatch(Dialect dialect, int rowCount)
+    {
+        if (dialect == Dialect.Sqlite)
+            throw new NotSupportedException("SQLite 批量更新走逐条裹事务（CASE WHEN 慢 6.4×）。");
+        string q(string c)
+        {
+            return Dataset.Q(dialect, c);
+        }
+
+        string table = Dataset.Table(dialect);
+        var sb = new System.Text.StringBuilder(96 + (rowCount * 48));
+        if (dialect == Dialect.PostgreSql)
+        {
+            sb.Append("UPDATE ").Append(table).Append(" AS tgt SET ");
+            for (int c = 0; c < SetColumns.Length; c++)
+            {
+                if (c > 0) sb.Append(", ");
+                sb.Append(q(SetColumns[c])).Append(" = v.col").Append(c);
+            }
+            sb.Append(" FROM (VALUES ");
+            for (int r = 0; r < rowCount; r++)
+            {
+                if (r > 0) sb.Append(", ");
+                AppendRowPlaceholders(sb, r * ParamsPerRow);
+            }
+            sb.Append(") AS v(col0, col1, col2, col3, col_pk) WHERE tgt.")
+                .Append(q("Id")).Append(" = v.col_pk");
+            return sb.ToString();
+        }
+
+        sb.Append("UPDATE ").Append(table).Append(" SET ");
+        for (int c = 0; c < SetColumns.Length; c++)
+        {
+            if (c > 0) sb.Append(", ");
+            sb.Append(q(SetColumns[c])).Append(" = CASE ").Append(q("Id"));
+            for (int r = 0; r < rowCount; r++)
+            {
+                int b = r * ParamsPerRow;
+                sb.Append(" WHEN ").Append(Dataset.P(b + PkOffsetInRow))
+                    .Append(" THEN ").Append(Dataset.P(b + c));
+            }
+            sb.Append(" END");
+        }
+        sb.Append(" WHERE ").Append(q("Id")).Append(" IN (");
+        for (int r = 0; r < rowCount; r++)
+        {
+            if (r > 0) sb.Append(", ");
+            sb.Append(Dataset.P((r * ParamsPerRow) + PkOffsetInRow));
+        }
+        sb.Append(')');
+        return sb.ToString();
+    }
+
+    /// <summary>多值 INSERT 的 VALUES 段（含每行占位符）——批量插入三臂共用。</summary>
+    public static string ValuesRows(int rowCount)
+    {
+        var sb = new System.Text.StringBuilder(16 + (rowCount * 32));
+        for (int r = 0; r < rowCount; r++)
+        {
+            if (r > 0) sb.Append(", ");
+            AppendRowPlaceholders(sb, r * ParamsPerRow);
+        }
+        return sb.ToString();
+    }
+
+    private static void AppendRowPlaceholders(System.Text.StringBuilder sb, int baseIdx)
+    {
+        sb.Append('(');
+        for (int c = 0; c < ParamsPerRow; c++)
+        {
+            if (c > 0) sb.Append(", ");
+            sb.Append(Dataset.P(baseIdx + c));
+        }
+        sb.Append(')');
+    }
+}
+
 /// <summary>方言元数据与连接工厂。</summary>
 internal sealed class DialectInfo
 {
@@ -194,7 +310,9 @@ internal sealed class DialectInfo
         new()
         {
             Dialect = Dialect.MySql, DisplayName = "MySQL",
-            OpenConnection = cs => new MySqlConnector.MySqlConnection(cs)
+            // AllowLoadLocalInfile=true：MySqlBulkCopy（LOAD DATA 协议）的前提——地板与
+            // PalORM 的 MySQL 批量天花板路径都依赖它。基准环境统一追加，三臂同等生效。
+            OpenConnection = cs => new MySqlConnector.MySqlConnection(MySqlConnString.WithLocalInfile(cs))
         },
         new()
         {

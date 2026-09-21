@@ -241,6 +241,7 @@ internal static class Report
 
     private static string RatioAndConcurrency(PerfRun run)
     {
+        int suspectFloors = 0;
         Measurement[] single = [.. run.Measurements
             .Where(static m => m.Operation != ConcurrentOp)];
         IEnumerable<IGrouping<(int Rows, string Operation, string Dialect), Measurement>> groups = single.GroupBy(static m => (m.Rows, m.Operation, m.Dialect));
@@ -265,8 +266,18 @@ internal static class Report
             sb.Append("<tr><td class=\"n\">").Append(g.Key.Rows.ToString("N0"))
                 .Append("</td><td>").Append(g.Key.Operation)
                 .Append("</td><td>").Append(g.Key.Dialect).Append("</td>");
-            sb.Append(RatioCell(dapper is null ? null : dapper.MedianNs / floor.MedianNs));
-            sb.Append(RatioCell(palorm is null ? null : palorm.MedianNs / floor.MedianNs));
+            double? dapperRatio = dapper is null ? null : dapper.MedianNs / floor.MedianNs;
+            double? palormRatio = palorm is null ? null : palorm.MedianNs / floor.MedianNs;
+            // Build 组不入门禁：ADO/Dapper 臂只是返回预写字面量，与 ORM 真实构建非同类
+            // 对比（三臂契约已声明），其比值在此口径下无物理意义
+            if (!g.Key.Operation.StartsWith("Build", StringComparison.Ordinal)
+                && ((dapperRatio is < 0.90) || (palormRatio is < 0.90)))
+            {
+                suspectFloors++;
+            }
+
+            sb.Append(RatioCell(dapperRatio));
+            sb.Append(RatioCell(palormRatio));
             sb.Append(RatioCell(dapper is null || floor.AllocatedBytesPerOp <= 0
                 ? null : dapper.AllocatedBytesPerOp / floor.AllocatedBytesPerOp));
             sb.Append(RatioCell(palorm is null || floor.AllocatedBytesPerOp <= 0
@@ -275,7 +286,10 @@ internal static class Report
         }
         sb.Append("</table><div class=\"note\"><b>读法</b>：时延比 &lt; 1 表示比 ADO.NET 地板快；"
             + "分配比 &lt; 1 表示比地板省。跨机器绝对值不可比（同机 ADO.NET 地板漂移可达 43%），"
-            + "<b>跨环境只比比值</b>（规范 §3）。</div></div>");
+            + "<b>跨环境只比比值</b>（规范 §3）。"
+            + "<b>健全性门禁</b>：" + suspectFloors + " 组出现 ORM 快过地板 >10%（标 ⚠地板?）——"
+            + "物理上不成立，出现即该组地板实现有缺陷（低性能写法），须对照三臂契约修正地板后重测，"
+            + "不得当 ORM 优势解读。</div></div>");
 
         Measurement[] conc = [.. run.Measurements.Where(static m => m.Operation == ConcurrentOp)];
         if (conc.Length > 0)
@@ -320,6 +334,13 @@ internal static class Report
         }
 
         double r = ratio.Value;
+        // v2 健全性门禁：手写 ADO.NET 是天花板，ORM 比它快 10% 以上在物理上不成立——
+        // 出现即地板实现有缺陷（低性能写法），标 ⚠ 提示检查三臂契约，不再误标成"绿色优势"。
+        if (r < 0.90)
+        {
+            return "<td class=\"n warn\">" + r.ToString("F2") + "× ⚠地板?</td>";
+        }
+
         string cls = RatioClass(r, 0.95, 1.10);
         return "<td" + cls + ">" + r.ToString("F2") + "×</td>";
     }
