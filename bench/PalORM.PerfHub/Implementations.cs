@@ -72,10 +72,28 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     private string Cols => Dataset.SelectColumns(dialect.Dialect);
     private Dialect D => dialect.Dialect;
 
+    /// <summary>快照播种缓存——键 (连接, 行数)。同一组合的第二次起 prepare 走服务端
+    /// DELETE + INSERT..SELECT 快照拷贝，替代客户端逐行重播（阶段 3.2）。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(DbConnection Conn, int Rows), bool>
+        SeedSnapshots = [];
+
     public async Task SetupAsync(DbConnection conn, int rows, CancellationToken ct)
     {
+        string snapshot = Q("perf_s1_seed");
+        if (SeedSnapshots.ContainsKey((conn, rows)))
+        {
+            // 快照重置：服务端两条 SQL 完成全表复原——客户端零往返逐行成本
+            await ExecAsync(conn, $"DELETE FROM {T}", ct).ConfigureAwait(false);
+            await ExecAsync(conn, $"INSERT INTO {T} SELECT * FROM {snapshot} WHERE {Q("Id")} <= {rows}",
+                ct).ConfigureAwait(false);
+            return;
+        }
+
         await ExecAsync(conn, Dataset.DropTableSql(D), ct).ConfigureAwait(false);
         await ExecAsync(conn, Dataset.CreateTableSql(D), ct).ConfigureAwait(false);
+        await ExecAsync(conn, $"DROP TABLE IF EXISTS {snapshot}", ct).ConfigureAwait(false);
+        await ExecAsync(conn, "CREATE TABLE " + snapshot + " AS SELECT * FROM " + T + " WHERE 1=0",
+            ct).ConfigureAwait(false);
         const int batch = 500;
         for (int start = 0; start < rows; start += batch)
         {
@@ -115,6 +133,9 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             }
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+
+        await ExecAsync(conn, $"INSERT INTO {snapshot} SELECT * FROM {T}", ct).ConfigureAwait(false);
+        SeedSnapshots[(conn, rows)] = true;
     }
 
     public async Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
