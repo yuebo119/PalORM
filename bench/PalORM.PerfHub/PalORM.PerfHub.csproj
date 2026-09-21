@@ -4,7 +4,15 @@
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <NoWarn>$(NoWarn);CA2007;CA1062;CA1031;S107;CA2100;S2077;CA1303;CA1305;S1215;PALORM005;CA1849;S6966;CA2213;S3903;IDE0055;S3776;S3267;S1481;CA1502;CA1852;S1144</NoWarn>
+    <!-- 设计固有的分析器抑制（PerfHub 是基准夹具，不是产品代码）——每条对应一个
+         「测什么就必须这样写」的约束，逐条列明而非宽泛屏蔽：
+         DAP043/DAP005  Dapper.AOT 要求 [UseColumnAttribute]，但 S1Row 的列映射真源是
+                        PalORM SourceGen 的 [Column]（三实现必须共用同一实体）；Dapper
+                        按列名匹配即满足对照口径。PerfHub 不声称 AOT 兼容——它的目的是
+                        对照 ADO.NET/Dapper 的运行时行为，不是验证 AOT。
+         CA5394/S2245   并发测试用 Random(42 + 线程号) 确定性播种，要的是可复现而非
+                        安全随机；换加密随机会让每轮负载不可比。 -->
+    <NoWarn>$(NoWarn);CA2007;CA1062;CA1031;S107;CA2100;S2077;CA1303;CA1305;S1215;PALORM005;CA1849;S6966;CA2213;S3903;IDE0055;S3776;S3267;S1481;CA1502;CA1852;S1144;DAP043;DAP005;CA5394;S2245</NoWarn>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
@@ -12,6 +20,7 @@
     <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
     <ProjectReference Include="..\..\src\PalORM.Sqlite\PalORM.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\PalORM.PostgreSql\PalORM.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.Testing\PalORM.Testing.csproj" />
     <ProjectReference Include="..\..\src\PalORM.MySql\PalORM.MySql.csproj" />
     <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
