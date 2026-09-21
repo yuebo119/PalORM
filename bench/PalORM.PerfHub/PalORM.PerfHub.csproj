@@ -12,7 +12,9 @@
                         对照 ADO.NET/Dapper 的运行时行为，不是验证 AOT。
          CA5394/S2245   并发测试用 Random(42 + 线程号) 确定性播种，要的是可复现而非
                         安全随机；换加密随机会让每轮负载不可比。 -->
-    <NoWarn>$(NoWarn);CA2007;CA1062;CA1031;S107;CA2100;S2077;CA1303;CA1305;S1215;PALORM005;CA1849;S6966;CA2213;S3903;IDE0055;S3776;S3267;S1481;CA1502;CA1852;S1144;DAP043;DAP005;CA5394;S2245</NoWarn>
+        <!-- CA1515/CS1591：PerfHub 是基准夹具（Exe），实体必须 public 供 PalORM 源生成器
+         识别，但无程序集外消费者——可见性与 XML 文档要求对夹具实体无意义。 -->
+    <NoWarn>$(NoWarn);CA2007;CA1062;CA1031;S107;CA2100;S2077;CA1303;CA1305;S1215;PALORM005;CA1849;S6966;CA2213;S3903;IDE0055;S3776;S3267;S1481;CA1502;CA1852;S1144;DAP043;DAP005;CA5394;S2245;CA1515;CS1591</NoWarn>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <IsPackable>false</IsPackable>
   </PropertyGroup>

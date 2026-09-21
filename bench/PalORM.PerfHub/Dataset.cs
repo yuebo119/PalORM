@@ -104,6 +104,75 @@ internal static class Dataset
         _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null)
     };
 
+    // ── 阶段 2 新表 DDL（三方言同构；SQLite 动态类型按存储类映射）──
+
+    public static string DropWideTableSql(Dialect dialect)
+        => $"DROP TABLE IF EXISTS {Q(dialect, "perf_wide")}";
+
+    public static string CreateWideTableSql(Dialect dialect) => dialect switch
+    {
+        Dialect.Sqlite => "CREATE TABLE perf_wide (\"Id\" INTEGER PRIMARY KEY, \"c01\" INTEGER NOT NULL, \"c02\" INTEGER NOT NULL, \"c03\" INTEGER NOT NULL, \"c04\" TEXT NOT NULL, \"c05\" INTEGER NOT NULL, \"c06\" TEXT NOT NULL, \"c07\" REAL NOT NULL, \"c08\" REAL NOT NULL, \"c09\" TEXT NOT NULL, \"c10\" TEXT NOT NULL, \"c11\" INTEGER, \"c12\" INTEGER, \"c13\" TEXT, \"c14\" TEXT, \"c15\" INTEGER, \"c16\" INTEGER NOT NULL, \"c17\" INTEGER, \"c18\" REAL, \"c19\" TEXT NOT NULL)",
+        Dialect.MySql => "CREATE TABLE perf_wide (`Id` BIGINT PRIMARY KEY, `c01` BIGINT NOT NULL, `c02` INT NOT NULL, `c03` SMALLINT NOT NULL, `c04` TEXT NOT NULL, `c05` TINYINT(1) NOT NULL, `c06` DECIMAL(38,9) NOT NULL, `c07` DOUBLE NOT NULL, `c08` FLOAT NOT NULL, `c09` DATETIME(6) NOT NULL, `c10` CHAR(36) NOT NULL, `c11` INT, `c12` BIGINT, `c13` TEXT, `c14` DECIMAL(38,9), `c15` TINYINT(1), `c16` TINYINT UNSIGNED NOT NULL, `c17` SMALLINT, `c18` DOUBLE, `c19` DATETIME(6) NOT NULL)",
+        Dialect.PostgreSql => "CREATE TABLE perf_wide (\"Id\" BIGINT PRIMARY KEY, \"c01\" BIGINT NOT NULL, \"c02\" INTEGER NOT NULL, \"c03\" SMALLINT NOT NULL, \"c04\" TEXT NOT NULL, \"c05\" BOOLEAN NOT NULL, \"c06\" NUMERIC(38,9) NOT NULL, \"c07\" DOUBLE PRECISION NOT NULL, \"c08\" REAL NOT NULL, \"c09\" TIMESTAMP NOT NULL, \"c10\" UUID NOT NULL, \"c11\" INTEGER, \"c12\" BIGINT, \"c13\" TEXT, \"c14\" NUMERIC(38,9), \"c15\" BOOLEAN, \"c16\" SMALLINT NOT NULL, \"c17\" SMALLINT, \"c18\" DOUBLE PRECISION, \"c19\" TIMESTAMP NOT NULL)",
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null)
+    };
+
+    public static string DropAutoIncTableSql(Dialect dialect)
+        => $"DROP TABLE IF EXISTS {Q(dialect, "perf_autoinc")}";
+
+    public static string CreateAutoIncTableSql(Dialect dialect) => dialect switch
+    {
+        Dialect.Sqlite => "CREATE TABLE perf_autoinc (\"Id\" INTEGER PRIMARY KEY AUTOINCREMENT, \"Name\" TEXT NOT NULL, \"Qty\" INTEGER NOT NULL)",
+        Dialect.MySql => "CREATE TABLE perf_autoinc (`Id` BIGINT PRIMARY KEY AUTO_INCREMENT, `Name` TEXT NOT NULL, `Qty` INT NOT NULL)",
+        Dialect.PostgreSql => "CREATE TABLE perf_autoinc (\"Id\" BIGSERIAL PRIMARY KEY, \"Name\" TEXT NOT NULL, \"Qty\" INTEGER NOT NULL)",
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null)
+    };
+
+    public static string DropChildTableSql(Dialect dialect)
+        => $"DROP TABLE IF EXISTS {Q(dialect, "perf_child")}";
+
+    public static string CreateChildTableSql(Dialect dialect) => dialect switch
+    {
+        Dialect.Sqlite => "CREATE TABLE perf_child (\"ChildId\" INTEGER PRIMARY KEY, \"ParentId\" INTEGER NOT NULL, \"Note\" TEXT NOT NULL)",
+        Dialect.MySql => "CREATE TABLE perf_child (`ChildId` BIGINT PRIMARY KEY, `ParentId` BIGINT NOT NULL, `Note` TEXT NOT NULL)",
+        Dialect.PostgreSql => "CREATE TABLE perf_child (\"ChildId\" BIGINT PRIMARY KEY, \"ParentId\" BIGINT NOT NULL, \"Note\" TEXT NOT NULL)",
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null)
+    };
+
+    /// <summary>宽表列名——三方言 SELECT 列表的唯一真源（CA1861：static readonly）。</summary>
+    private static readonly string[] WideColumnNames =
+    [
+        "Id", "c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09",
+        "c10", "c11", "c12", "c13", "c14", "c15", "c16", "c17", "c18", "c19"
+    ];
+
+    public static string WideSelectColumns(Dialect dialect)
+        => string.Join(", ", WideColumnNames.Select(c => Q(dialect, c)));
+
+    public static string WideTable(Dialect dialect) => Q(dialect, "perf_wide");
+    public static string AutoIncTable(Dialect dialect) => Q(dialect, "perf_autoinc");
+    public static string ChildTable(Dialect dialect) => Q(dialect, "perf_child");
+
+    /// <summary>子表种子——每父确定性 3 子（parent p 的子键为 p*3+1..p*3+3）。</summary>
+    public static List<ChildRow> SeedChildren(int parents)
+    {
+        var list = new List<ChildRow>(parents * 3);
+        for (long parent = 1; parent <= parents; parent++)
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                list.Add(new ChildRow
+                {
+                    ChildId = (parent * 3) + k,
+                    ParentId = parent,
+                    Note = $"c{parent}-{k}",
+                });
+            }
+        }
+        return list;
+    }
+
+
     /// <summary>点查条件——列名拼进文本段（经 QuoteIdentifier 转义），只有值是插值项。
     /// <para>踩坑记录（B78）：若写成 <c>$"{Q("Id")} = {id}"</c>，列名也会变成插值项并被参数化，
     /// 生成 <c>WHERE (@p0 = @p1)</c> 且 @p0 是字符串——PG 报 "operator does not exist:
@@ -123,6 +192,10 @@ internal static class Dataset
     public static FormattableString WhereIdGt(SqlDialect dialect, long id)
         => WhereIdGt(Of(dialect), id);
 
+    /// <summary>父页过滤 <c>Id &lt;= @p0</c>——IncludeJoin 的父行上界（列名进文本段）。</summary>
+    public static FormattableString WhereIdLe(Dialect dialect, long id)
+        => FormattableStringFactory.Create(Q(dialect, "Id") + " <= {0}", id);
+
     /// <summary>IN 条件（列名进文本段，值集合进插值项）。</summary>
     public static FormattableString WhereInIds(Dialect dialect, long[] ids)
     {
@@ -135,6 +208,91 @@ internal static class Dataset
 
         return FormattableStringFactory.Create(quoted + " IN (" + string.Join(", ", Enumerable.Range(0, ids.Length).Select(i => "{" + i + "}")) + ")", args);
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 阶段 2 新数据集：宽表 / 自增回填 / 1:N 子表（v2 方案 §3）
+// ═══════════════════════════════════════════════════════════════════════
+
+/// <summary>宽表实体（19 列）——物化器按列数伸缩性的测量载体。
+/// 列型与 StandardShapes.S2 Wide 对齐，仅两处偏差：
+/// ① DateTimeOffset → DateTime（MySQL 无带偏移类型，跨方言往返有损）；
+/// ② 表名 perf_wide（PerfHub 命名域）。</summary>
+[Table("perf_wide")]
+public sealed partial class WideRow
+{
+    [Key(AutoIncrement = false)]
+    [Column("Id")]
+    public long Id { get; set; }
+
+    [Column("c01")] public long C01 { get; set; }
+    [Column("c02")] public int C02 { get; set; }
+    [Column("c03")] public short C03 { get; set; }
+    [Column("c04")] public string C04 { get; set; } = "";
+    [Column("c05")] public bool C05 { get; set; }
+    [Column("c06")] public decimal C06 { get; set; }
+    [Column("c07")] public double C07 { get; set; }
+    [Column("c08")] public float C08 { get; set; }
+    [Column("c09")] public DateTime C09 { get; set; }
+    [Column("c10")] public Guid C10 { get; set; }
+    [Column("c11")] public int? C11 { get; set; }
+    [Column("c12")] public long? C12 { get; set; }
+    [Column("c13")] public string? C13 { get; set; }
+    [Column("c14")] public decimal? C14 { get; set; }
+    [Column("c15")] public bool? C15 { get; set; }
+    [Column("c16")] public byte C16 { get; set; }
+    [Column("c17")] public short? C17 { get; set; }
+    [Column("c18")] public double? C18 { get; set; }
+    [Column("c19")] public DateTime C19 { get; set; }
+
+    /// <summary>确定性种子——列型白名单主力类型全覆盖，与 S2 Wide 同式。</summary>
+    public static WideRow Seed(long i) => new()
+    {
+        Id = i + 1,
+        C01 = i,
+        C02 = (int)(i % int.MaxValue),
+        C03 = (short)(i % short.MaxValue),
+        C04 = $"w{i}",
+        C05 = i % 2 == 0,
+        C06 = i * 0.5m,
+        C07 = i * 1.5,
+        C08 = i * 0.5f,
+        C09 = DateTime.UnixEpoch.AddSeconds(i),
+        C10 = new Guid((int)(i % int.MaxValue), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        C11 = i % 3 == 0 ? null : (int)i,
+        C12 = i % 5 == 0 ? null : i,
+        C13 = i % 4 == 0 ? null : $"n{i}",
+        C14 = i % 6 == 0 ? null : i * 0.1m,
+        C15 = i % 7 == 0 ? null : i % 2 == 0,
+        C16 = (byte)(i % byte.MaxValue),
+        C17 = i % 8 == 0 ? null : (short)(i % 100),
+        C18 = i % 9 == 0 ? null : i * 0.25,
+        C19 = DateTime.UnixEpoch.AddMinutes(i)
+    };
+}
+
+/// <summary>自增回填实体——InsertReturningId 测量载体（主键由数据库生成）。</summary>
+[Table("perf_autoinc")]
+public sealed partial class AutoIncRow
+{
+    [Key(AutoIncrement = true)]
+    [Column("Id")]
+    public long Id { get; set; }
+
+    [Column("Name")] public string Name { get; set; } = "";
+    [Column("Qty")] public int Qty { get; set; }
+}
+
+/// <summary>1:N 子实体——IncludeJoin 测量载体（每父确定性 3 子）。</summary>
+[Table("perf_child")]
+public sealed partial class ChildRow
+{
+    [Key(AutoIncrement = false)]
+    [Column("ChildId")]
+    public long ChildId { get; set; }
+
+    [Column("ParentId")] public long ParentId { get; set; }
+    [Column("Note")] public string Note { get; set; } = "";
 }
 
 /// <summary>PerfHub 统一实体 S1 Narrow——与 bench_s1_narrow 同构。
@@ -276,6 +434,27 @@ internal static class BulkSql
             AppendRowPlaceholders(sb, r * ParamsPerRow);
         }
         return sb.ToString();
+    }
+
+    /// <summary>多行 UPSERT 的完整 SQL——PG/SQLite 用 ON CONFLICT DO UPDATE（excluded 引用），
+    /// MySQL 用 ON DUPLICATE KEY UPDATE（VALUES(c) 引用，与产品 BuildUpsertSqlShape 同形态）。
+    /// 与产品差异说明：产品注释称 MySQL 8.0.20+ 推荐行别名语法（AS new），但产品实现
+    /// 维持 VALUES(c) 形态与其单行 upsert 一致——三臂共用本形态保证同构。</summary>
+    public static string UpsertBatch(Dialect dialect, int rowCount)
+    {
+        string q(string c)
+        {
+            return Dataset.Q(dialect, c);
+        }
+
+        string[] upsertColumns = ["Name", "Qty", "Price", "Marker"];
+        string conflict = dialect == Dialect.MySql
+            ? " ON DUPLICATE KEY UPDATE " + string.Join(", ",
+                upsertColumns.Select(c => $"{q(c)} = VALUES({q(c)})"))
+            : " ON CONFLICT (" + q("Id") + ") DO UPDATE SET " + string.Join(", ",
+                upsertColumns.Select(c => $"{q(c)} = excluded.{q(c)}"));
+        return "INSERT INTO " + Dataset.Table(dialect) + " (" + Dataset.SelectColumns(dialect)
+            + ") VALUES " + ValuesRows(rowCount) + conflict;
     }
 
     private static void AppendRowPlaceholders(System.Text.StringBuilder sb, int baseIdx)

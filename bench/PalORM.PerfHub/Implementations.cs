@@ -35,6 +35,16 @@ internal interface IPerfImplementation
     Task<List<S1Row>> WhereInAsync(DbConnection conn, long[] ids, CancellationToken ct);
     Task<long> CountAsync(DbConnection conn, CancellationToken ct);
 
+    // ── 阶段 2 新增（v2 方案 §2 #11/12/16/17）──
+    /// <summary>批量 UPSERT（方言：ON CONFLICT / ON DUPLICATE KEY）。</summary>
+    Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct);
+    /// <summary>自增插入并回填主键——三臂各 1 RTT。</summary>
+    Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct);
+    /// <summary>宽表（19 列）全表物化——物化器按列数伸缩。</summary>
+    Task<int> WideQueryAllAsync(DbConnection conn, CancellationToken ct);
+    /// <summary>1:N 装配（父页 × 每父 3 子）——JOIN + 客户端装配，返回 (父数, 子总数)。</summary>
+    Task<(int Parents, int Children)> IncludeJoinAsync(DbConnection conn, int parentCount, CancellationToken ct);
+
     // ── 事务场景（真实业务形态）──
     Task TxSingleInsertAsync(DbConnection conn, S1Row row, CancellationToken ct);
     Task TxTenInsertsAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct);
@@ -596,6 +606,150 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    // ── 阶段 2 新增 ──
+
+    /// <summary>批量 UPSERT——共用 BulkSql.UpsertBatch（与产品 BuildUpsertSqlShape 同形态），
+    /// 参数池数组直写，整批裹事务。</summary>
+    public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+    {
+        DbTransaction tx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            long total = 0;
+            int batch = BulkSql.EffectiveBatchRows(D);
+            await using DbCommand cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            int lastBatchLength = -1;
+            DbParameter[]? pool = null;
+            for (int start = 0; start < rows.Count; start += batch)
+            {
+                int end = Math.Min(start + batch, rows.Count);
+                int len = end - start;
+                if (len != lastBatchLength)
+                {
+                    cmd.CommandText = BulkSql.UpsertBatch(D, len);
+                    lastBatchLength = len;
+                    cmd.Parameters.Clear();
+                    for (int r = start; r < end; r++)
+                    {
+                        S1Row row = rows[r];
+                        AddP(cmd, (r - start) * 5, row.Id);
+                        AddP(cmd, ((r - start) * 5) + 1, row.Name);
+                        AddP(cmd, ((r - start) * 5) + 2, row.Qty);
+                        AddP(cmd, ((r - start) * 5) + 3, row.Price);
+                        AddP(cmd, ((r - start) * 5) + 4, row.Marker);
+                    }
+                    pool = SnapshotParameters(cmd);
+                }
+                else if (pool is not null)
+                {
+                    for (int r = start; r < end; r++)
+                    {
+                        S1Row row = rows[r];
+                        SetP(pool, (r - start) * 5, row.Id);
+                        SetP(pool, ((r - start) * 5) + 1, row.Name);
+                        SetP(pool, ((r - start) * 5) + 2, row.Qty);
+                        SetP(pool, ((r - start) * 5) + 3, row.Price);
+                        SetP(pool, ((r - start) * 5) + 4, row.Marker);
+                    }
+                }
+
+                // MySQL ON DUPLICATE KEY 的 affectedRows 对更新行计 2——此处取驱动原始口径
+                await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                total += len;
+            }
+
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+            return total;
+        }
+        finally
+        {
+            await tx.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>自增插入并回填主键——PG/SQLite 走 RETURNING 单 RTT，
+    /// MySQL 走 INSERT;SELECT LAST_INSERT_ID() 合并单命令（同为 1 RTT）。</summary>
+    public async Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = D == Dialect.MySql
+            ? $"INSERT INTO {Dataset.AutoIncTable(D)} ({Q("Name")}, {Q("Qty")}) "
+                + $"VALUES ({Dataset.P(0)}, {Dataset.P(1)}); SELECT LAST_INSERT_ID();"
+            : $"INSERT INTO {Dataset.AutoIncTable(D)} ({Q("Name")}, {Q("Qty")}) "
+                + $"VALUES ({Dataset.P(0)}, {Dataset.P(1)}) RETURNING {Q("Id")}";
+        AddP(cmd, 0, name);
+        AddP(cmd, 1, qty);
+        object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>宽表全表物化——19 列按序号取（按名取列是慢路径，S1 测不出的列数伸缩在此放大）。</summary>
+    public async Task<int> WideQueryAllAsync(DbConnection conn, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {Dataset.WideSelectColumns(D)} FROM {Dataset.WideTable(D)}";
+        await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        int n = 0;
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            _ = MapWide(r);
+            n++;
+        }
+        return n;
+    }
+
+    /// <summary>1:N 装配——JOIN 单查询 + 客户端按父去重分组（无行放大的手工天花板形态）。</summary>
+    public async Task<(int Parents, int Children)> IncludeJoinAsync(
+        DbConnection conn, int parentCount, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {Cols}, {Q("ChildId")}, {Q("Note")} FROM {T} "
+            + $"INNER JOIN {Dataset.ChildTable(D)} ON {Dataset.ChildTable(D)}.{Q("ParentId")} = {T}.{Q("Id")} "
+            + $"WHERE {T}.{Q("Id")} <= {Dataset.P(0)} ORDER BY {T}.{Q("Id")}";
+        AddP(cmd, 0, (long)parentCount);
+        await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        long lastParent = 0;
+        int parents = 0, children = 0;
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            long id = r.GetInt64(0);
+            if (id != lastParent)
+            {
+                parents++;
+                lastParent = id;
+            }
+            _ = r.GetString(6);
+            children++;
+        }
+        return (parents, children);
+    }
+
+    /// <summary>宽表行物化——19 列全读（测量物化成本，不物化成实体会被优化掉）。</summary>
+    internal static WideRow MapWide(DbDataReader r) => new()
+    {
+        Id = r.GetInt64(0),
+        C01 = r.GetInt64(1),
+        C02 = r.GetInt32(2),
+        C03 = r.GetInt16(3),
+        C04 = r.GetString(4),
+        C05 = r.GetBoolean(5),
+        C06 = r.GetDecimal(6),
+        C07 = r.GetDouble(7),
+        C08 = r.GetFloat(8),
+        C09 = r.GetDateTime(9),
+        C10 = r.GetGuid(10),
+        C11 = r.IsDBNull(11) ? null : r.GetInt32(11),
+        C12 = r.IsDBNull(12) ? null : r.GetInt64(12),
+        C13 = r.IsDBNull(13) ? null : r.GetString(13),
+        C14 = r.IsDBNull(14) ? null : r.GetDecimal(14),
+        C15 = r.IsDBNull(15) ? null : r.GetBoolean(15),
+        C16 = r.GetByte(16),
+        C17 = r.IsDBNull(17) ? null : r.GetInt16(17),
+        C18 = r.IsDBNull(18) ? null : r.GetDouble(18),
+        C19 = r.GetDateTime(19)
+    };
+
     // ── 事务场景 ──
     public async Task TxSingleInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
     {
@@ -716,6 +870,29 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
 internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
 {
     public string Name => "Dapper";
+
+    static DapperImpl()
+    {
+        // SQLite 把 Guid 存 TEXT、MySQL CHAR(36) 返回 string——Dapper 默认不做 string→Guid
+        // 转换，注册 TypeHandler 是 Dapper 用户在方言库上的标准做法（真实用法的一部分）
+        SqlMapper.AddTypeHandler(new StringToGuidHandler());
+    }
+
+    /// <summary>string ↔ Guid 的 Dapper 类型处理器——覆盖 SQLite TEXT 与 MySQL CHAR(36)
+    /// 两种存储形态；PG UUID 由 Npgsql 原生返回 Guid，Parse 的 Guid 分支直通。</summary>
+    private sealed class StringToGuidHandler : SqlMapper.TypeHandler<Guid>
+    {
+        public override Guid Parse(object value)
+            => value switch
+            {
+                Guid guid => guid,
+                string text => new Guid(text),
+                _ => throw new InvalidCastException($"无法把 {value.GetType().Name} 转为 Guid"),
+            };
+
+        public override void SetValue(System.Data.IDbDataParameter parameter, Guid value)
+            => parameter.Value = value.ToString();
+    }
 
     private string T => Dataset.Table(dialect.Dialect);
     private string C(string c) => Dataset.Q(dialect.Dialect, c);
@@ -911,6 +1088,86 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
 
     public async Task<long> CountAsync(DbConnection conn, CancellationToken ct)
         => await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {T}").ConfigureAwait(false);
+
+    // ── 阶段 2 新增 ──
+
+    /// <summary>批量 UPSERT——共用 BulkSql.UpsertBatch，整批裹事务（Dapper 无 UPSERT 封装，
+    /// 真实 Dapper 用户同样手拼 ON CONFLICT / ON DUPLICATE KEY）。</summary>
+    public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+    {
+        await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        long total = 0;
+        int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
+        for (int start = 0; start < rows.Count; start += batch)
+        {
+            int end = Math.Min(start + batch, rows.Count);
+            await conn.ExecuteAsync(
+                BulkSql.UpsertBatch(dialect.Dialect, end - start),
+                InsertParameters(rows, start, end), tran).ConfigureAwait(false);
+            total += end - start;
+        }
+
+        await tran.CommitAsync(ct).ConfigureAwait(false);
+        return total;
+    }
+
+    /// <summary>自增插入并回填主键——与 ADO 地板同 SQL 同 1 RTT 形态。</summary>
+    public async Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct)
+    {
+        string sql = dialect.Dialect == Dialect.MySql
+            ? $"INSERT INTO {T0()} ({C("Name")}, {C("Qty")}) VALUES (@name, @qty); SELECT LAST_INSERT_ID();"
+            : $"INSERT INTO {T0()} ({C("Name")}, {C("Qty")}) VALUES (@name, @qty) RETURNING {C("Id")}";
+        return await conn.ExecuteScalarAsync<long>(sql, new { name, qty }).ConfigureAwait(false);
+    }
+
+    private string T0() => Dataset.AutoIncTable(dialect.Dialect);
+
+    /// <summary>宽表全表物化——Dapper 按列名映射（首行构建列映射，后续按序号读）。</summary>
+    public async Task<int> WideQueryAllAsync(DbConnection conn, CancellationToken ct)
+    {
+        IEnumerable<WideRow> rows = await conn.QueryAsync<WideRow>(
+            $"SELECT {Dataset.WideSelectColumns(dialect.Dialect)} FROM {Dataset.WideTable(dialect.Dialect)}")
+            .ConfigureAwait(false);
+        int n = 0;
+        foreach (WideRow _ in rows)
+        {
+            n++;
+        }
+        return n;
+    }
+
+    /// <summary>1:N 装配——multi-mapping JOIN（Dapper 的招牌能力：Query&lt;TParent,TChild&gt; +
+    /// splitOn 按父去重），客户端字典配对。</summary>
+    public async Task<(int Parents, int Children)> IncludeJoinAsync(
+        DbConnection conn, int parentCount, CancellationToken ct)
+    {
+        string sql = $"SELECT {Cols}, {C("ChildId")}, {C("Note")} FROM {T} "
+            + $"INNER JOIN {Dataset.ChildTable(dialect.Dialect)} ON "
+            + $"{Dataset.ChildTable(dialect.Dialect)}.{C("ParentId")} = {T}.{C("Id")} "
+            + $"WHERE {T}.{C("Id")} <= @parentCount ORDER BY {T}.{C("Id")}";
+        Dictionary<long, S1Row> map = [];
+        IEnumerable<S1Row> rows = await conn.QueryAsync<S1Row, ChildRow, S1Row>(
+            sql,
+            (parent, child) =>
+            {
+                if (map.TryGetValue(parent.Id, out S1Row? existing))
+                {
+                    return existing;
+                }
+
+                map.Add(parent.Id, parent);
+                return parent;
+            },
+            new { parentCount },
+            splitOn: "ChildId")
+            .ConfigureAwait(false);
+        int children = 0;
+        foreach (S1Row _ in rows)
+        {
+            children++;
+        }
+        return (map.Count, children);
+    }
 
     public async Task TxSingleInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
     {
@@ -1253,14 +1510,114 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         => Session<TProvider>(conn).CountAsync<S1Row>(ct: ct).AsTask();
 
     // ── 事务场景：真实业务形态（开启事务 → N 条写 → 提交/回滚）──
-    public Task TxSingleInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
+    // ── 阶段 2 新增 ──
+
+    /// <summary>批量 UPSERT——产品的 BulkMergeAsync（集合化 ON CONFLICT / ON DUPLICATE KEY，
+    /// BulkMergeSetBasedTests 锁口径：返回处理实体数而非驱动行数）。</summary>
+    public Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => D switch
         {
-            Dialect.Sqlite => TxSingleCoreAsync<SqliteProvider>(conn, row, ct),
-            Dialect.MySql => TxSingleCoreAsync<MySqlProvider>(conn, row, ct),
-            Dialect.PostgreSql => TxSingleCoreAsync<PostgreSqlProvider>(conn, row, ct),
+            Dialect.Sqlite => Session<SqliteProvider>(conn).BulkMergeAsync(rows, ct).AsTask(),
+            Dialect.MySql => Session<MySqlProvider>(conn).BulkMergeAsync(rows, ct).AsTask(),
+            Dialect.PostgreSql => Session<PostgreSqlProvider>(conn).BulkMergeAsync(rows, ct).AsTask(),
             _ => throw UnsupportedDialect(D)
         };
+
+    /// <summary>自增插入并回填主键——产品 InsertAsync 的回填路径
+    /// （PG/SQLite 经 RETURNING 返回完整行，MySQL 走 LAST_INSERT_ID 单往返合并；
+    /// 回填后实体 Id 即生成主键）。</summary>
+    public async Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct)
+    {
+        AutoIncRow row = new() { Name = name, Qty = qty };
+        switch (D)
+        {
+            case Dialect.Sqlite:
+                _ = await Session<SqliteProvider>(conn).InsertAsync(row, ct).ConfigureAwait(false);
+                break;
+            case Dialect.MySql:
+                _ = await Session<MySqlProvider>(conn).InsertAsync(row, ct).ConfigureAwait(false);
+                break;
+            case Dialect.PostgreSql:
+                _ = await Session<PostgreSqlProvider>(conn).InsertAsync(row, ct).ConfigureAwait(false);
+                break;
+            default:
+                throw UnsupportedDialect(D);
+        }
+
+        return row.Id;
+    }
+
+    /// <summary>宽表全表物化——产品 ToListAsync（源生成绑定器按列数伸缩的测量点）。</summary>
+    public Task<int> WideQueryAllAsync(DbConnection conn, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => WideCoreAsync<SqliteProvider>(conn, ct),
+            Dialect.MySql => WideCoreAsync<MySqlProvider>(conn, ct),
+            Dialect.PostgreSql => WideCoreAsync<PostgreSqlProvider>(conn, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static async Task<int> WideCoreAsync<TProvider>(DbConnection conn, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        List<WideRow> rows = await Session<TProvider>(conn).From<WideRow>().ToListAsync(ct)
+            .ConfigureAwait(false);
+        return rows.Count;
+    }
+
+    /// <summary>1:N 装配——产品的 Include（生成 INNER JOIN）+ 客户端分组。
+    /// <para><b>策略标注</b>：PalORM 的 Include 仅生成 JOIN 子句、不装配导航对象
+    /// （与 EF 不同），客户端配对是调用方责任——三臂在此项都是 JOIN + 客户端装配，
+    /// 差异在库帮你做多少（Dapper multi-mapping 半自动 / ADO 全手工 / PalORM JOIN 生成）。</para></summary>
+    public async Task<(int Parents, int Children)> IncludeJoinAsync(
+        DbConnection conn, int parentCount, CancellationToken ct)
+    {
+        switch (D)
+        {
+            case Dialect.Sqlite:
+                return await JoinCoreAsync<SqliteProvider>(conn, parentCount, ct).ConfigureAwait(false);
+            case Dialect.MySql:
+                return await JoinCoreAsync<MySqlProvider>(conn, parentCount, ct).ConfigureAwait(false);
+            case Dialect.PostgreSql:
+                return await JoinCoreAsync<PostgreSqlProvider>(conn, parentCount, ct).ConfigureAwait(false);
+            default:
+                throw UnsupportedDialect(D);
+        }
+    }
+
+    private static async Task<(int Parents, int Children)> JoinCoreAsync<TProvider>(
+        DbConnection conn, int parentCount, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        // Include 生成 INNER JOIN；Select 列含父全列 + 子两列，行按父 Id 去重计数
+        List<S1Row> flat = await Session<TProvider>(conn).From<S1Row>()
+            .Include<ChildRow>(static p => p.Id, static c => c.ParentId)
+            .Where(Dataset.WhereIdLe(DialectOf<TProvider>(), parentCount))
+            .ToListAsync(ct).ConfigureAwait(false);
+        long last = 0;
+        int parents = 0;
+        foreach (S1Row row in flat)
+        {
+            if (row.Id != last)
+            {
+                parents++;
+                last = row.Id;
+            }
+        }
+        return (parents, flat.Count);
+    }
+
+    private static Dialect DialectOf<TProvider>() where TProvider : IDbProvider, new()
+        => Dataset.Of(TProvider.Dialect);
+
+    public Task TxSingleInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
+    => D switch
+    {
+        Dialect.Sqlite => TxSingleCoreAsync<SqliteProvider>(conn, row, ct),
+        Dialect.MySql => TxSingleCoreAsync<MySqlProvider>(conn, row, ct),
+        Dialect.PostgreSql => TxSingleCoreAsync<PostgreSqlProvider>(conn, row, ct),
+        _ => throw UnsupportedDialect(D)
+    };
 
     private static async Task TxSingleCoreAsync<TProvider>(DbConnection conn, S1Row row, CancellationToken ct)
         where TProvider : IDbProvider, new()
