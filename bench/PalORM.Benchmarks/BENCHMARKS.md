@@ -243,6 +243,44 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
 - `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存对照（Dapper/PalORM，无 RepoDb）
 - `08_BinaryBenchmarks.cs`（6 方法）— 二进制列专项：原生 BLOB vs Base64 TEXT（含手工编解码全成本）× 256B/64KB
 - `PgBenchmarks.cs` / `MySqlBenchmarks.cs` — 方言基准（独立）
+- `MySqlBulkColumnWidthBenchmarks.cs`（2 方法）— **2 列实体批量插入**（Dapper 基线 vs PalORM），
+  专为观测 `ParameterNameCache` 扩容（B1）的真库分配收益而建
+
+### MySqlBulkColumnWidthBenchmarks：为什么单独一个类
+
+`BenchOrder` 的主键是自增（`[Key]` 默认 `AutoIncrement=true`），**不计入 `InsertColumns`**，
+所以 4 列实体的实际插入列是 3 个，满批 `poolSize = 1000×3 = 3000`，越界段 1976 个。
+单批 SQL 文本与参数对象的绝对量大，参数名那部分分配被淹没——4 列实体的真库 A/B 只能测出
+−80 KB，而轮次间波动本身有 60~70 KB，信噪比仅 1.2:1。
+
+`BenchOrder2Col` 用 `[Key(AutoIncrement = false)]` 让**两列都进插入列**，`poolSize = 2000`，
+越界 976 个占该批参数 49%，参数名在总分配中的比例显著抬高。应用侧赋值主键也是真实场景
+（雪花 ID、外部系统 ID）。
+
+**独立成类而非并进 `MySqlBenchmarks`**：后者有一个**参数级** `[IterationSetup]`，对类内全部
+用例生效——每次迭代都 DROP+CREATE+重插 10K 行 `bench_orders`。若并进去，本基准每次迭代都要
+白付那 10K 行重置，耗时会稀释待测差异、分配会掺入重置本身的垃圾。
+
+#### 实测（2026-09-21，真库，交替 A/B 四轮）
+
+| 臂 | Mean | Allocated |
+|---|---|---|
+| Dapper 多行 INSERT（基线） | 15,929 ms | 16.05 MB |
+| PalORM 多值 INSERT | 63.6 ms（Ratio 0.004） | 2.92 MB（Alloc Ratio 0.18） |
+
+PalORM 比 Dapper 快 **250×**、分配少 **82%**（Dapper 的多行 INSERT 走逐条执行，非批量协议）。
+
+`ParameterNameCache` 扩容的分配收益（交替四轮）：
+
+- BASE（1024 封顶）：2.96 / 2.95 / 2.96 / 2.96 MB —— 自身仅波动 10 KB
+- HEAD（65535 封顶）：2.89 / 2.92 / 2.92 / 2.92 MB —— 波动 30 KB
+- 差 **45 KB**，信噪比约 4.5:1（4 列实体仅 1.2:1）
+
+理论核算（976 个越界名 × 40 B/字符串）= **39,040 B**，与实测 45 KB 吻合（差 6 KB 在 HEAD
+自身 30 KB 波动内）。
+
+> **前提**：服务端 `local_infile=OFF` 时 PalORM 走多值 INSERT 回退路径（才有满批参数池）；
+> 若为 ON 则走 `MySqlBulkCopy`，本基准不适用。
 
 ---
 

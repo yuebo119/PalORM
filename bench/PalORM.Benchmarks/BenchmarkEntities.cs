@@ -2,6 +2,26 @@ namespace PalORM.Benchmarks;
 
 // ─── 基准实体（属性名 = 列名，不加 [Column] 别名——让 Dapper 和 PalORM 都按属性名映射）───
 
+/// <summary>2 列实体：应用侧赋值主键 + 1 个数据列。<b>两列都进 InsertColumns</b>
+/// （<c>AutoIncrement = false</c> 使主键不被排除），因此默认 <c>batchSize=1000</c> 时
+/// 满批参数池 <c>poolSize = 1000 × 2 = 2000</c>——索引 1024..1999 共 976 个越过
+/// <see cref="ParameterNameCache"/> 扩容前的 1024 上界，占该批参数的 49%。
+/// <para><b>为什么单独做这个实体</b>：<see cref="BenchOrder"/> 的自增主键不计入插入列，
+/// 实际插入列是 3 个（poolSize 3000，越界 1976 个占 66%），但单批 SQL 文本与参数对象
+/// 的绝对量大，参数名分配被淹没。2 列实体把参数名占分配的比例抬高，
+/// 使 <c>ParameterNameCache</c> 扩容（B1）的收益在真库分配上可分辨。</para>
+/// <para>应用侧赋值主键也是真实场景（雪花 ID、外部系统 ID）。</para></summary>
+[Table("bench_orders_2col")]
+public sealed partial class BenchOrder2Col
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public long id { get; set; }
+
+    [Column("payload")]
+    public string payload { get; set; } = "";
+}
+
 /// <summary>主基准实体：4 列（long/string/decimal/long），覆盖常见 CRUD 类型组合。</summary>
 [Table("bench_orders")]
 public sealed partial class BenchOrder
