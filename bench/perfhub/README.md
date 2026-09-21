@@ -1,108 +1,97 @@
-# PerfHub — PalORM 统一性能测试系统
+# PerfHub — PalORM 统一性能测试系统（v2）
 
-> 定位：一个命令跑完**三方言 × 三实现 × 统一数据集 × 18 个专业测试项**的全套性能指标，
-> 输出单一 HTML 报告（含 SVG 增长曲线与版本对比），原始数据按次留存为 JSON。
->
-> **v2 方案已定稿待实施**：22 项矩阵（+UPSERT / 自增回填 / 宽表 / 导航装配）、
-> 三臂行业最优实现契约、自适应迭代、交替 A/B——完整设计与任务清单见
-> [docs/v5.8-perfhub-v2-plan.md](../../docs/v5.8-perfhub-v2-plan.md)。
+> 定位：一个命令跑完**三方言 × 三实现 × 统一数据集 × 22 个专业测试项**的全套性能指标，
+> 输出单一 HTML 报告（含 SVG 增长曲线、版本对比、A/B 配对比值），原始数据按次留存为 JSON。
+> v2 完整设计（含三臂契约与任务清单）见 [docs/v5.8-perfhub-v2-plan.md](../../docs/v5.8-perfhub-v2-plan.md)——**已按任务清单 1-5 阶段全部实施**。
 
 ## 快速开始
 
 ```bash
-# 完整跑（三方言 × 2000/20000 行 × 18 项 + 3 线程档并发），约 30~35 分钟
+# 全量（三方言 × 2000/20000 × 22 项 + 并发）
 dotnet run --project bench/PalORM.PerfHub -- run --concurrency --threads 1,4,8 --version HEAD
 
-# 只跑 SQLite 冒烟（迭代次数降到 30%）
-dotnet run --project bench/PalORM.PerfHub -- run --dialects sqlite --tiers 2000 --quick
+# 只 SQLite 冒烟
+dotnet run --project bench/PalORM.PerfHub -- run --dialects sqlite --tiers 2000
+
+# 交替 A/B（跨版本对比的唯一可信执行方式，基线 worktree 需按脚本头注释就绪）
+bash scripts/perfhub-ab.sh /c/v551 3 --dialects pg,mysql --tiers 2000,20000
 
 # 从历史 JSON 重新生成报告（不重跑）
 dotnet run --project bench/PalORM.PerfHub -- report
 ```
 
-`--version` 记入 JSON，是版本对比与增长曲线的横轴。语义化版本号（`v5.5.1`）按版本号升序
-排在前面当基线，非语义化标识（`HEAD`/`main`）排最后当最新——与两轮实测谁先跑无关。
+`--version` 记入 JSON，是版本对比与增长曲线的横轴；语义化版本号升序在前当基线，
+非语义化标识（`HEAD`）最后当最新——与两轮执行顺序无关。
 
-环境变量（PG/MySQL 档必需，与集成测试同一口径，见 `CONTRIBUTING.md`）：
-`PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION`；未设置时从仓库根 `.env.test`
-补入缺失项。凭据不入 git、不回显。
+环境变量（与集成测试同一口径）：`PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION`，
+未设置时从仓库根 `.env.test` 补入缺失项。**MySQL 连接串会统一追加
+`AllowLoadLocalInfile=true`**（MySqlBulkCopy 协议前提，三臂同等生效）。
 
-## 18 个测试项（按分组）
+## 22 个测试项（v2 矩阵）
 
-| 分组 | 测试项 | 测什么 |
+| 组 | 测试项 | 行业最优实现（三臂契约摘要） |
 |---|---|---|
-| **Build** | `BuildGetByKeySql` / `BuildComplexQuerySql` | 纯 SQL 构建开销（不执行）——ORM 构建税 |
-| **CRUD** | `GetByKey` / `QueryAll` / `StreamAll` / `Insert` / `Update` / `BulkInsert` / `BulkUpdate` / `BulkDelete` | 点查、全查、流式、单条写、批量写删 |
-| **Query** | `KeysetPage` / `WhereIn` / `Count` | 键集分页、IN 查询（100 键）、计数 |
-| **Transaction** | `TxSingleInsert` / `TxTenInserts` / `TxHundredInserts` / `TxBulkInsert` / `TxRollback` | 真实事务形态：1/10/100/批量条提交，以及更新后回滚 |
-| **Baseline** | `GenerateRows` | 数据生成自身内存（不含 ORM 与数据库），每档位一条 |
-| **Concurrency** | `Concurrent_Mixed80_20` | 80/20 读写混合吞吐，`--concurrency` 时启用 |
+| **Build** | `BuildGetByKeySql` / `BuildComplexQuerySql` | 纯 SQL 构建（ORM 构建税，**非同类对比**：ADO/Dapper 返回预写字面量） |
+| **CRUD** | `GetByKey` / `QueryAll` / `StreamAll` / `Insert` / `Update` | 显式列 + 参数化 + 键集 seek；流式不物化再枚举 |
+| | `BulkInsert` | PG Binary COPY · MySQL MySqlBulkCopy（`local_infile=ON` 分流）· SQLite 多值 VALUES；Dapper 多值 VALUES |
+| | `BulkUpdate` | PG `UPDATE FROM VALUES` · MySQL `CASE WHEN` · SQLite 逐条裹单事务 |
+| | `BulkDelete` | `IN` 分批裹事务 |
+| | `UpsertBatch` | PG/SQLite `ON CONFLICT excluded` · MySQL `ON DUPLICATE KEY VALUES(c)`；PalORM 走 `BulkMergeAsync` |
+| | `InsertReturningId` | 三臂各 1 RTT：PG/SQLite `RETURNING`；MySQL `INSERT;SELECT LAST_INSERT_ID()` 合并 |
+| **Query** | `KeysetPage` / `WhereIn` / `Count` | seek 分页（OFFSET 是反模式不测）；IN 显式占位符分批 |
+| | `WideQueryAll` | 19 列宽表全物化——物化器按列数伸缩（ADO/PalORM 按序号，Dapper 按列名） |
+| | `IncludeJoin` | 1:N 装配三策略对照（标注不同构）：ADO JOIN+手工 / Dapper multi-mapping / PalORM Include JOIN；带结果集等价断言 |
+| **Transaction** | `TxSingleInsert` / `TxTenInserts` / `TxHundredInserts` / `TxBulkInsert` / `TxRollback` | 命令复用重绑参数；批内走 loader/VALUES；回滚撤销量上限 500 |
+| **Baseline** | `GenerateRows` | 不碰库，数据生成内存基线 |
+| **Concurrency** | `Concurrent_Mixed80_20` | 预热 1 s + 计时 2 s，池化连接每线程一条 |
 
-**Build 组不是同类对比**：ADO.NET / Dapper 两臂只是返回预先写好的字面量 SQL，测的是
-「不构建」的下限；PalORM 臂测的是 `From<T>()/Where/OrderBy/Take` 链式构建 + 方言引用符 +
-DryRun 出参的完整开销。该组差值读作「ORM 构建税」，不是「PalORM 查询慢 N 倍」。
+**规模**：22 × 3 库 × 2 档 × 3 臂 = 396 单操作项 + 并发 + 基线。
 
-**写操作的主键空间**：每轮用互不相同的主键段（`SeedRows(count, offset)` 的 offset 按轮次递增），
-第二轮不会撞主键；`prepare` 回调在预热前与计时前各重置一次库状态，不计入时延与分配。
-
-## 统一口径（为什么可信）
+## 测量口径（v2）
 
 | 维度 | 口径 |
 |---|---|
-| 数据集 | S1 Narrow（主键 + 4 数据列），种子由行号**确定性派生**——任何一次生成的库内容逐位相同 |
-| 行数档位 | 2,000 / 20,000（`--tiers` 可覆盖），覆盖中小表与中大表两个量级 |
-| 三方言 | 同一实体、同构 DDL（列名/类型对齐），仅引用符与参数占位符按方言分叉 |
-| 三实现 | **ADO_NET**（地板基线，手写参数化 SQL + 手工物化）· **Dapper**（主流 micro-ORM）· **PalORM**（被测对象） |
-| 连接 | 三实现复用**同一条已打开连接**（建连口径一致，否则 ORM/地板比值被污染，见 lessons B76） |
-| 时延 | **全路径**——被测动作内部含 SQL 构建 → 执行 → 物化，测量引擎不剥离任何段；种子数据生成在测量前，不计入。预热后测 N 轮取**中位数**，Error/Mean > 5% 标黄 |
-| 内存 | `GC.GetTotalAllocatedBytes` 精确计数（确定性，复现性优于 1%）+ `GC.GetGCMemoryInfo` **采样堆峰** + Gen0 次数 |
-| 并发 | 每线程独立连接，80/20 读写混合，预热 1.5s 不计数，近邻秩 p50/p95/p99 |
-| 会话生命周期 | PalORM 臂**按操作新建** `DataSession`——与 Dapper 的无状态扩展方法对等；会话不释放，因为 `DisposeAsync` 会关闭三实现共用的那条连接 |
+| 迭代 | **自适应**：预热后探针测单次耗时，`clamp(预算 ÷ 单次, 3, 上限)`——单测量耗时结构性有界（Build 1 s / 普通 1.5 s / 批量 4 s） |
+| 时延 | 全路径（SQL 构建→执行→物化）中位数；预热、探针、prepare 播种不计时 |
+| 内存 | `GetTotalAllocatedBytes` 精确计数 + `GC.GetGCMemoryInfo` 采样堆峰 + Gen0 |
+| 播种 | (连接, 行数) 级快照缓存——首次全量播进 `perf_s1_seed`，后续 prepare 走服务端 `DELETE + INSERT..SELECT` 两条 SQL |
+| 写操作主键 | 每轮互不重叠的确定性主键段；探针占 i=0、计时轮从 i=1 起 |
+| 会话生命周期 | PalORM 每操作新建 `DataSession`（与 Dapper 无状态对等）；不释放（`DisposeAsync` 会关闭共用连接） |
+
+## 公平性（三臂契约 + 机械门禁）
+
+1. **三臂契约前置**：每项先定义三臂各自的行业最优写法（上表），违反即 bug
+2. **地板健全性门禁**：报告自动检查"任一 ORM 比地板快 >10%"即标 `⚠地板?` 并汇总命中组数——
+   真地板不可能被 ORM 超过，出现即地板实现有缺陷。该门禁在 v2 实施过程中抓出并修正了
+   六处真地板缺陷（逐行逐批新建参数对象、批量插入未裹事务、SQLite 批宽未对齐产品口径、
+   local_infile 探测未缓存、UpsertBatch 巨型语句、PalORM 事务内批量误用逐行）
+3. Build 组与 IncludeJoin 的"策略不同构"显式标注
+
+## 科学性（三层）
+
+| 口径 | 抵消什么 | 怎么算 |
+|---|---|---|
+| 同轮地板比值 | 跨环境机器差 | ORM ÷ 同轮 ADO.NET |
+| 地板归一化 | 跨版本机器漂移 | `(新_PalORM/新_地板) ÷ (旧_PalORM/旧_地板)`；漂移 >18% 标 ⚠ |
+| **交替 A/B（黄金）** | 机器漂移 + 起跑顺序 | 块 = 库 × 档，两版背靠背轮流，奇偶轮换起跑序；逐轮配对比值取中位 + 轮间散布，散布跨 1.0 判"不可分辨" |
 
 ## 输出
 
 ```
 bench/perfhub/
-  results/history-<yyyyMMdd-HHmmss>.json   每次运行的完整原始数据（schema 3，含 Version）
-  results/latest.json                      最近一次（供回归对比）
-  report.html                              统一报告（①总览 ②ORM vs 地板 ③并发 ④版本对比 ⑤增长曲线 ⑥说明）
+  results/history-<yyyyMMdd-HHmmss>.json   每次运行完整原始数据（schema 3，含 Version 与 label）
+  results/latest.json                      最近一次
+  report.html                              ①按组总览 ②ORM vs 地板（含门禁）③并发
+                                           ④版本对比+地板归一化 ⑤b A/B 配对 ⑤增长曲线 ⑥口径声明
 ```
-
-## 报告区块
-
-1. **单操作指标总览**——按 Build/CRUD/Query/Transaction/Baseline 分组，时延中位数/均值、Error/Mean、分配/op、采样堆峰、Gen0
-2. **ORM vs ADO.NET 地板**——以同轮 ADO.NET 为分母的时延比/分配比（跨环境只比比值，规范 §3）
-3. **并发吞吐**——ops/s + p50/p95/p99，按 方言 × 实现 × 线程档
-4. **版本对比**——同项时延/分配变化率，外加**地板归一化对比**（见下）
-5. **增长曲线**——跨历史运行的 SVG 折线（对数轴），每项测量一条线，向下 = 优化生效
-6. **说明与未覆盖维度**——如实标注未测项
-
-## 跨版本对比为什么必须「地板归一化」
-
-两轮实测相隔数十分钟，**同机 ADO.NET 地板本身会漂移**（实测单项漂移可达 50%）。
-直接比绝对时延会把「机器那轮更快」误读成「ORM 那轮更快」。
-
-报告④的地板归一化算式：
-
-```
-(新_PalORM / 新_地板) ÷ (旧_PalORM / 旧_地板)
-```
-
-对机器漂移取一阶抵消，只有 ORM 相对地板的变化被保留下来——这是跨版本唯一可信的口径。
-归一化后仍会残留噪声：地板自身波动大的项在表里标 **⚠ 地板漂移 >18%**，这些行只能当方向性参考。
-要拿硬结论，需对关注项做**交替 A/B 重测**（两版轮流跑、多轮取中位）。
 
 ## 未覆盖维度（如实声明）
 
-- 方言特有类型（JSON/数组/枚举）——三方言表结构同构，未测方言扩展类型
-- 连接池行为——PerfHub 用单连接，池参数（MaxPoolSize/MinPoolSize/空闲超时）不在范围
-- 长时衰减——单次运行无衰减数据，需连续多轮对比（增长曲线区可观测）
-- 并发态分配——多线程下 `GetTotalAllocatedBytes` 被干扰，不测（见 lessons B74）
-- `ForEachAsync` 流式终结器——v5.8 才加，v5.5.1 基线没有，故 `StreamAll` 用两版都有的
-  `QueryAsyncEnumerable` 做共同口径
+方言特有类型（JSON/数组/全文）、连接池参数、断连重试、10 万行以上规模、隔离级别与锁行为、
+并发态分配（B74）、`ForEachAsync` 流式终结器（v5.8 新增，v5.5.1 基线无，StreamAll 用两版
+都有的 `QueryAsyncEnumerable` 共同口径）。
 
 ## 与 BDN 基准的分工
 
-BDN（`bench/PalORM.Benchmarks`）测**单线程微基准**的精细统计；PerfHub 测**跨方言跨实现的一致口径**。
-两者互补：BDN 的绝对精度高，PerfHub 的可比性强（同一数据集、同一连接、同一指标定义）。
+BDN（`bench/PalORM.Benchmarks`）测单线程微基准的精细统计；PerfHub 测跨方言跨实现的一致口径。
 规范见 `docs/性能基准规范.md`。
