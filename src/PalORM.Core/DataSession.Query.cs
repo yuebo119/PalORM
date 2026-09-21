@@ -294,9 +294,7 @@ public sealed partial class DataSession<TProvider>
         int affected;
         try
         {
-            affected = (int)await ExecuteWritePipelineAsync(
-                async token => (long)await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false),
-                ct).ConfigureAwait(false);
+            affected = await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
         }
         catch (Exception exception)
         {

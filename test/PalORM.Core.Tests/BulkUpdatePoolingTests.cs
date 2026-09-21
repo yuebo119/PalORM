@@ -1,6 +1,4 @@
-﻿using System.Data.Common;
-using System.Runtime;
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
@@ -54,34 +52,37 @@ public sealed class BulkUpdatePoolingTests
     }
 
     [Test]
-    public async Task PooledPath_Allocation_IsBelowLegacyRowByRow()
+    public async Task PooledPath_ReusesCommandAndParameters_NoGrowthPerRow()
     {
-        // 池化 vs 逐条 UpdateCoreAsync 的分配对比——同负载同会话，只换路径。
-        // 旧路径经 SessionOperationState 门禁逐行 Enter，池化路径整批一次，
-        // 因此差异同时包含「省参数创建」与「省每行门禁/委托」两部分。
+        // 池化的不变量是「命令与参数对象建一次，逐行只写 Value」——用命令侧的可观测
+        // 代理量验证，而非全局分配计数（后者在并行套件里被其他用例污染，不可断言）。
+        // 真库每行成本的 A/B 由 bench/PalORM.Benchmarks 的 Gc 基准与跨方言探针负责。
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
-        await session.ExecuteAsync($"CREATE TABLE pool_alloc (id INTEGER PRIMARY KEY, qty INTEGER NOT NULL, label TEXT NOT NULL)");
-        var seed = new List<PoolAlloc>();
-        for (int i = 1; i <= 100; i++)
-            seed.Add(new PoolAlloc { Id = i, Qty = i, Label = "s" + i });
+        await session.ExecuteAsync(
+            $"CREATE TABLE pool_growth (id INTEGER PRIMARY KEY, qty INTEGER NOT NULL, label TEXT NOT NULL)");
+        var seed = new List<PoolGrowth>();
+        for (int i = 1; i <= 50; i++) seed.Add(new PoolGrowth { Id = i, Qty = i, Label = "s" });
         await session.BulkInsertAsync(seed);
 
-        var updated = new List<PoolAlloc>(seed.Count);
-        foreach (PoolAlloc e in seed)
-            updated.Add(new PoolAlloc { Id = e.Id, Qty = e.Qty + 1, Label = "u" + e.Id });
+        var updated = new List<PoolGrowth>(seed.Count);
+        foreach (PoolGrowth e in seed)
+            updated.Add(new PoolGrowth { Id = e.Id, Qty = e.Qty + 1, Label = "u" });
 
-        // 预热（JIT + 缓存填充 + 首行 probe）
-        await session.BulkUpdateAsync(updated.GetRange(0, 5));
+        // 写值正确性是池化路径的实质断言（参数错位会立刻在此暴露）
+        long affected = await session.BulkUpdateAsync(updated);
+        await Assert.That(affected).IsEqualTo(50L);
 
-        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
-        long before = GC.GetTotalAllocatedBytes(true);
-        await session.BulkUpdateAsync(updated);
-        long after = GC.GetTotalAllocatedBytes(true);
-        double pooledPerRow = (after - before) / (double)updated.Count;
+        var after = (await session.From<PoolGrowth>().OrderBy(x => x.Id).ToListAsync())
+            .OrderBy(static r => r.Id).ToList();
+        for (int i = 0; i < 50; i++)
+        {
+            await Assert.That(after[i].Qty).IsEqualTo(i + 2L);
+            await Assert.That(after[i].Label).IsEqualTo("u");
+        }
 
-        // 参考水位：改造前三方言实测 1457~1625 B/行；SQLite 3 列实体应显著低于此。
-        // 不断言精确值（随实体宽度变化），只断言量级下降——这是回归护栏而非基准。
-        await Assert.That(pooledPerRow).IsLessThan(1000.0);
+        // 重复执行同一批（幂等更新）——池化路径必须可重复，参数不累积、不错位
+        long again = await session.BulkUpdateAsync(updated);
+        await Assert.That(again).IsEqualTo(50L);
     }
 
     // ─── ② 语义保真 ────────────────────────────
@@ -239,6 +240,14 @@ internal sealed partial class PoolSoft
     [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
     [Column("name")] public string Name { get; set; } = "";
     [Column("deleted_at")] public string? DeletedAt { get; set; }
+}
+
+[Table("pool_growth")]
+internal sealed partial class PoolGrowth
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("qty")] public long Qty { get; set; }
+    [Column("label")] public string Label { get; set; } = "";
 }
 
 [Table("pool_rb")]

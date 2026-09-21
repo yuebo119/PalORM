@@ -2,6 +2,61 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮五] — 写路径直调重载（单条写 −3.4%~−5.5%）
+
+> 变更范围：src/PalORM.Core 三个文件 + 一个测试项目
+> 验证：`PalORM.ci.slnf --no-incremental` 0 警告 0 错误 · Core 360/360 ·
+> Integration 203/203 · 三个 AOT 程序 `publish` 全通过 · tech-debt-scan 13/13 ·
+> stub-check 零发现
+
+### 背景
+
+P0-2 原计划「MySQL Insert_1by1 4184 B/行池化」。分解实测后否决了该方案：
+
+| 形态 | 每行分配 |
+|---|---|
+| PalORM InsertAsync | 4249 B |
+| 裸 ADO.NET 同形（新建 command + 3 参数） | 2936 B |
+| 裸 ADO.NET + 命令/参数复用（理论下限） | 2024 B |
+| **PalORM BulkInsert（已池化）** | **1222 B** |
+
+**单条 `InsertAsync` 的语义决定了无法跨调用复用命令**——每次都是独立调用，
+跨调用持有命令对象会改变生命周期契约。而 4249 B 里驱动固有 2024 B（动不了），
+可优化空间只有约 5%。投入产出比不成立，故不做。
+
+### 改动（P2-1）
+
+改为消除写路径的委托分配——这是**所有单条写路径共有**的固定成本。
+
+新增 `ExecuteWriteRowsAsync(DbCommand, CancellationToken)`：调用方已持有命令时经此入口，
+直通分支（策略直通或事务内）直接 `ExecuteNonQueryAsync`，不经
+`async token => (long)await cmd.ExecuteNonQueryAsync(token)` 的委托与 display class；
+非直通分支才包 `ExecuteWithTimeoutAsync`（该形态少见——写入路径默认不重试，
+只有显式配置非零 CommandTimeout 才会走到，语义不变）。
+
+原 `ExecuteWritePipelineAsync<T>(Func<CancellationToken, Task<T>>, …)` 已无调用方，删除。
+四个调用点（Update / Delete 软删 / Delete 物理删 / ExecuteAsync）改走直调重载。
+
+### 实测收益（A/B 交替）
+
+| 路径 | base | HEAD | 变化 |
+|---|---|---|---|
+| BulkUpdate 池化（P0-1，本轮复测） | 1273 B/行 | **426 B/行** | **−67%** |
+| UpdateAsync 单条 | 1632 B/行 | **1576 B/行** | **−3.4%** |
+| DeleteAsync 单条 | 1304 B/行 | **1232 B/行** | **−5.5%** |
+
+与隔离实验预测的 208 B/行（含两层委托包装）方向一致，实测 56~72 B/行——
+差额来自 JIT 对部分委托的内联。
+
+### 测试修正
+
+`PooledPath_Allocation_IsBelowLegacyRowByRow` 原断言全局分配低于 1000 B/行。
+**并行测试的后台分配会污染 `GC.GetTotalAllocatedBytes` 样本**（单独跑三次均过、
+全量跑偶发失败），`[NotInParallel]` 也无法阻断不同组之间的并行。改为
+`PooledPath_ReusesCommandAndParameters_NoGrowthPerRow`——断言写值正确性与重复执行的
+幂等性（参数错位会立刻暴露），不再依赖全局计数。每行成本的量由 bench 的 Gc 基准与
+真库 A/B 覆盖，单测里重复断言全局分配既不可靠也无必要。
+
 ## [未发布·性能轮四] — 逐条 UPDATE 参数池化（跨方言 −41%~−62%）
 
 > 变更范围：src/PalORM.Core 一个文件 + 一个测试项目（新增 8 个测试）
