@@ -117,9 +117,39 @@ public sealed class PostgreSqlProvider : IDbProvider
         return 0;
     }
 
-    /// <summary>创建 NpgsqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。</summary>
+    /// <summary>创建 NpgsqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。
+    /// <para><b>R5（2026-09-21）：显式 DbType</b>——<c>new NpgsqlParameter(name, object)</c> 对装箱的
+    /// 值类型<b>不做类型映射</b>，NpgsqlDbType 落在 Unknown，服务端按 text 推断，于是
+    /// <c>WHERE "Id" = @p0</c>（@p0 是装箱 long）报 "operator does not exist: text = bigint"。
+    /// 该路径覆盖所有手写 SQL 的 Where 条件与原始 SQL 入口，属跨方言通用缺陷
+    /// （MySQL/SQLite 容忍弱类型故未暴露）。</para></summary>
     public static DbParameter CreateParameter(string name, object? value)
-        => new NpgsqlParameter(name, value ?? DBNull.Value);
+    {
+        var parameter = new NpgsqlParameter(name, value ?? DBNull.Value);
+        // 仅对已知基元显式映射——未知类型留给驱动推断（保持既有行为）
+        switch (value)
+        {
+            case bool: parameter.DbType = System.Data.DbType.Boolean; break;
+            case byte: parameter.DbType = System.Data.DbType.Byte; break;
+            case sbyte: parameter.DbType = System.Data.DbType.SByte; break;
+            case short: parameter.DbType = System.Data.DbType.Int16; break;
+            case ushort: parameter.DbType = System.Data.DbType.UInt16; break;
+            case int: parameter.DbType = System.Data.DbType.Int32; break;
+            case uint: parameter.DbType = System.Data.DbType.UInt32; break;
+            case long: parameter.DbType = System.Data.DbType.Int64; break;
+            case ulong: parameter.DbType = System.Data.DbType.UInt64; break;
+            case float: parameter.DbType = System.Data.DbType.Single; break;
+            case double: parameter.DbType = System.Data.DbType.Double; break;
+            case decimal: parameter.DbType = System.Data.DbType.Decimal; break;
+            case string: parameter.DbType = System.Data.DbType.String; break;
+            case char: parameter.DbType = System.Data.DbType.String; break;
+            case DateTime: parameter.DbType = System.Data.DbType.DateTime; break;
+            case DateTimeOffset: parameter.DbType = System.Data.DbType.DateTimeOffset; break;
+            case Guid: parameter.DbType = System.Data.DbType.Guid; break;
+            default: break;  // 未知类型留给驱动推断（保持既有行为）
+        }
+        return parameter;
+    }
 
     /// <summary>批量插入——按源生成 InsertColumns 与 BindInsert 执行 Npgsql Binary COPY。
     /// <para>BeginBinaryImportAsync → StartRowAsync → WriteAsync(value, NpgsqlDbType) → CompleteAsync。</para>

@@ -17,6 +17,9 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PalORM.Core.Tests" />
+    <!-- PerfHub 统一性能测试运行器：需复用调用方已打开的连接（避免建连口径不一致
+         污染 ORM/地板比值，见 .ai/lessons.md B76），故需访问 internal ctor。 -->
+    <InternalsVisibleTo Include="PalORM.PerfHub" />
   </ItemGroup>
   <!-- SourceLink：PrivateAssets=all 防止消费者拉到 -->
   <ItemGroup>
