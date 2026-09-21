@@ -52,6 +52,11 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
 {
     public string Name => "ADO_NET";
 
+    /// <summary>local_infile 探测结果缓存——PerfHub 全程共用一条连接，实例级字段即等效于
+    /// 产品的按连接缓存（ConditionalWeakTable + 60s TTL 的简化形态）。不缓存则每次批量
+    /// 插入都付一次额外 RTT，地板被 PalORM 反超（门禁抓出后修正）。</summary>
+    private bool? _mysqlLocalInfile;
+
     private string T => Dataset.Table(dialect.Dialect);
     private string Q(string c) => Dataset.Q(dialect.Dialect, c);
     private string Cols => Dataset.SelectColumns(dialect.Dialect);
@@ -160,49 +165,193 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     public async Task<long> BulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => await BulkInsertAsync(conn, rows, null, ct).ConfigureAwait(false);
 
-    /// <summary>多值 INSERT；<paramref name="tran"/> 非 null 时每个命令显式挂到该事务。</summary>
+    /// <summary>批量插入——按方言走驱动最优（v2 三臂契约：地板必须是天花板）：
+    /// PG 走 Npgsql Binary COPY，MySQL 走 MySqlBulkCopy（LOAD DATA LOCAL INFILE 协议），
+    /// SQLite 走多值 VALUES 单命令（进程内库无协议可省，多值即最快）。</summary>
     public async Task<long> BulkInsertAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
     {
+        return D switch
+        {
+            Dialect.Sqlite => await MultiValueInsertAsync(conn, rows, tran, ct).ConfigureAwait(false),
+            Dialect.MySql => await BulkInsertMySqlAsync(conn, rows, tran, ct).ConfigureAwait(false),
+            Dialect.PostgreSql => await BulkInsertCopyAsync(conn, rows, ct).ConfigureAwait(false),
+            _ => throw new NotSupportedException($"方言 '{D}' 不在 PerfHub 覆盖范围内。"),
+        };
+    }
+
+    /// <summary>MySQL 批量插入路由——与产品 MySqlProvider 同分流：服务端 <c>@@local_infile</c>
+    /// 为 ON 走 MySqlBulkCopy（LOAD DATA 协议），否则回退多值 VALUES。地板与 PalORM 臂
+    /// 走同一路径才可比——只开客户端 AllowLoadLocalInfile 而服务端关着时，
+    /// 驱动直接抛 "Loading local data is disabled"（实测）。</summary>
+    private async Task<long> BulkInsertMySqlAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
+    {
+        if (_mysqlLocalInfile is { } cached)
+        {
+            return cached
+                ? await BulkInsertMySqlCopyAsync(conn, rows, tran, ct).ConfigureAwait(false)
+                : await MultiValueInsertAsync(conn, rows, tran, ct).ConfigureAwait(false);
+        }
+
+        await using DbCommand probe = conn.CreateCommand();
+        probe.Transaction = tran;
+        probe.CommandText = "SELECT @@local_infile";
+        object? result = await probe.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        _mysqlLocalInfile = Convert.ToInt64(
+            result, System.Globalization.CultureInfo.InvariantCulture) == 1;
+        return _mysqlLocalInfile.Value
+            ? await BulkInsertMySqlCopyAsync(conn, rows, tran, ct).ConfigureAwait(false)
+            : await MultiValueInsertAsync(conn, rows, tran, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>PG Binary COPY——与产品 PostgreSqlProvider 同路径；显式事务（TxBulkInsert）
+    /// 由调用方持有时，COPY 自动参与该连接上的事务。</summary>
+    private async Task<long> BulkInsertCopyAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+    {
+        Npgsql.NpgsqlConnection npg = (Npgsql.NpgsqlConnection)conn;
+        await using Npgsql.NpgsqlBinaryImporter importer = await npg.BeginBinaryImportAsync(
+            $"COPY {T} ({Cols}) FROM STDIN (FORMAT BINARY)", ct).ConfigureAwait(false);
+        foreach (S1Row row in rows)
+        {
+            await importer.StartRowAsync(ct).ConfigureAwait(false);
+            await importer.WriteAsync(row.Id, NpgsqlTypes.NpgsqlDbType.Bigint, ct).ConfigureAwait(false);
+            await importer.WriteAsync(row.Name, NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+            await importer.WriteAsync(row.Qty, NpgsqlTypes.NpgsqlDbType.Integer, ct).ConfigureAwait(false);
+            await importer.WriteAsync(row.Price, NpgsqlTypes.NpgsqlDbType.Numeric, ct).ConfigureAwait(false);
+            await importer.WriteAsync(row.Marker, NpgsqlTypes.NpgsqlDbType.Bigint, ct).ConfigureAwait(false);
+        }
+        return (long)await importer.CompleteAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>MySQL MySqlBulkCopy——LOAD DATA LOCAL INFILE 协议（连接串已统一追加
+    /// AllowLoadLocalInfile）。未传事务时自开事务包整批（与产品同语义）；
+    /// Warnings 非空即显式失败（驱动文档要求检查，否则类型截断会静默丢数据）。</summary>
+    private async Task<long> BulkInsertMySqlCopyAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
+    {
+        using System.Data.DataTable table = new();
+        table.Columns.Add("Id", typeof(long));
+        table.Columns.Add("Name", typeof(string));
+        table.Columns.Add("Qty", typeof(int));
+        table.Columns.Add("Price", typeof(decimal));
+        table.Columns.Add("Marker", typeof(long));
+        foreach (S1Row row in rows)
+        {
+            table.Rows.Add(row.Id, row.Name, row.Qty, row.Price, row.Marker);
+        }
+
+        MySqlConnector.MySqlTransaction? myTran =
+            tran as MySqlConnector.MySqlTransaction;
+        bool ownsTransaction = false;
+        if (myTran is null)
+        {
+            myTran = (MySqlConnector.MySqlTransaction)await conn
+                .BeginTransactionAsync(ct).ConfigureAwait(false);
+            ownsTransaction = true;
+        }
+
+        try
+        {
+            MySqlConnector.MySqlBulkCopy bulk = new(
+                (MySqlConnector.MySqlConnection)conn, myTran)
+            {
+                DestinationTableName = T,
+            };
+            string[] columns = ["Id", "Name", "Qty", "Price", "Marker"];
+            for (int i = 0; i < columns.Length; i++)
+            {
+                // 不指定 ColumnMappings 时驱动按序号匹配目标表——显式映射防列序漂移（ITM-615）
+                bulk.ColumnMappings.Add(new MySqlConnector.MySqlBulkCopyColumnMapping(i, columns[i]));
+            }
+
+            MySqlConnector.MySqlBulkCopyResult result =
+                await bulk.WriteToServerAsync(table, ct).ConfigureAwait(false);
+            if (result.Warnings.Count > 0)
+                throw new InvalidOperationException(
+                    $"MySqlBulkCopy produced {result.Warnings.Count} warnings");
+            long inserted = result.RowsInserted;
+            if (ownsTransaction)
+                await myTran.CommitAsync(ct).ConfigureAwait(false);
+            return inserted;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await myTran.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>多值 INSERT——天花板写法，与产品 MultiValueBulkInsert 同语义：
+    /// ① 命令与参数池一次建好，跨批只写 Value；② <b>整批裹一个事务</b>（未传事务时自开）
+    /// ——每语句 autocommit 各一次 journal 同步，是量具早期实测被 PalORM 反超 6× 的直接原因
+    /// （门禁抓出后修正）。</summary>
+    private async Task<long> MultiValueInsertAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
+    {
+        bool ownsTransaction = tran is null;
+        DbTransaction tx = tran ?? await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        long total;
+        try
+        {
+            total = await ExecuteMultiValueInsertCoreAsync(conn, rows, tx, ct).ConfigureAwait(false);
+            if (ownsTransaction)
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await tx.DisposeAsync().ConfigureAwait(false);
+        }
+
+        return total;
+    }
+
+    private async Task<long> ExecuteMultiValueInsertCoreAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction tx, CancellationToken ct)
+    {
         long total = 0;
-        const int batch = 500;
+        // SQLite 批宽对齐产品口径：min(1000, 999 参数上限 ÷ 5 列) = 199 行/语句
+        int batch = BulkSql.EffectiveBatchRows(D);
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        int lastBatchLength = -1;
+        DbParameter[]? insertPool = null;
         for (int start = 0; start < rows.Count; start += batch)
         {
             int end = Math.Min(start + batch, rows.Count);
-            var sb = new StringBuilder();
-            sb.Append("INSERT INTO ").Append(T).Append(" (").Append(Cols).Append(") VALUES ");
-            await using DbCommand cmd = conn.CreateCommand();
-            cmd.Transaction = tran;
-            for (int r = start; r < end; r++)
+            int len = end - start;
+            if (len != lastBatchLength)
             {
-                if (r > start)
+                cmd.CommandText = "INSERT INTO " + T + " (" + Cols + ") VALUES "
+                    + BulkSql.ValuesRows(len);
+                lastBatchLength = len;
+                cmd.Parameters.Clear();
+                for (int r = start; r < end; r++)
                 {
-                    sb.Append(", ");
+                    S1Row row = rows[r];
+                    AddP(cmd, (r - start) * 5, row.Id);
+                    AddP(cmd, ((r - start) * 5) + 1, row.Name);
+                    AddP(cmd, ((r - start) * 5) + 2, row.Qty);
+                    AddP(cmd, ((r - start) * 5) + 3, row.Price);
+                    AddP(cmd, ((r - start) * 5) + 4, row.Marker);
                 }
-
-                sb.Append('(');
-                for (int c = 0; c < 5; c++)
-                {
-                    if (c > 0)
-                    {
-                        sb.Append(", ");
-                    }
-
-                    sb.Append(Dataset.P(((r - start) * 5) + c));
-                }
-                sb.Append(')');
+                insertPool = SnapshotParameters(cmd);
             }
-            cmd.CommandText = sb.ToString();
-            int p = 0;
-            for (int r = start; r < end; r++)
+            else if (insertPool is not null)
             {
-                S1Row row = rows[r];
-                AddP(cmd, p++, row.Id);
-                AddP(cmd, p++, row.Name);
-                AddP(cmd, p++, row.Qty);
-                AddP(cmd, p++, row.Price);
-                AddP(cmd, p++, row.Marker);
+                for (int r = start; r < end; r++)
+                {
+                    S1Row row = rows[r];
+                    SetP(insertPool, (r - start) * 5, row.Id);
+                    SetP(insertPool, ((r - start) * 5) + 1, row.Name);
+                    SetP(insertPool, ((r - start) * 5) + 2, row.Qty);
+                    SetP(insertPool, ((r - start) * 5) + 3, row.Price);
+                    SetP(insertPool, ((r - start) * 5) + 4, row.Marker);
+                }
             }
+
             total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         return total;
@@ -229,36 +378,142 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     public async Task<long> BulkUpdateAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => await BulkUpdateAsync(conn, rows, null, ct).ConfigureAwait(false);
 
-    /// <summary>逐条 UPDATE；<paramref name="tran"/> 非 null 时每条命令显式挂到该事务。</summary>
+    /// <summary>批量更新——方言最优（v2 三臂契约）：PG 发 UPDATE FROM VALUES、
+    /// MySQL 发 CASE WHEN（均单语句单往返，SQL 与产品 BatchUpdateSqlBuilder 同构）；
+    /// SQLite 逐条但必须裹单事务（autocommit 每行一次 journal 同步，差一个数量级）。</summary>
     public async Task<long> BulkUpdateAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
     {
-        // ADO.NET 无批量 UPDATE 抽象——逐条执行（这正是 ORM 批量路径要对比的地板）
+        if (D == Dialect.Sqlite)
+            return await BulkUpdateRowByRowAsync(conn, rows, tran, ct).ConfigureAwait(false);
+
         long total = 0;
-        foreach (S1Row row in rows)
+        const int batch = BulkSql.BatchRows;
+        int lastBatchLength = -1;
+        string sql = "";
+        DbParameter[]? updatePool = null;
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tran;
+        for (int start = 0; start < rows.Count; start += batch)
         {
-            total += await UpdateAsync(conn, row, tran, ct).ConfigureAwait(false);
+            int end = Math.Min(start + batch, rows.Count);
+            int len = end - start;
+            if (len != lastBatchLength)
+            {
+                sql = BulkSql.UpdateBatch(D, len);
+                lastBatchLength = len;
+                cmd.Parameters.Clear();
+                int p = 0;
+                for (int r = start; r < end; r++)
+                {
+                    S1Row row = rows[r];
+                    AddP(cmd, p++, row.Name);
+                    AddP(cmd, p++, row.Qty);
+                    AddP(cmd, p++, row.Price);
+                    AddP(cmd, p++, row.Marker);
+                    AddP(cmd, p++, row.Id);
+                }
+                updatePool = SnapshotParameters(cmd);
+            }
+            else if (updatePool is not null)
+            {
+                int p = 0;
+                for (int r = start; r < end; r++)
+                {
+                    S1Row row = rows[r];
+                    SetP(updatePool, p++, row.Name);
+                    SetP(updatePool, p++, row.Qty);
+                    SetP(updatePool, p++, row.Price);
+                    SetP(updatePool, p++, row.Marker);
+                    SetP(updatePool, p++, row.Id);
+                }
+            }
+
+            cmd.CommandText = sql;
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         return total;
     }
 
+    /// <summary>SQLite 批量更新——逐条裹单事务（该方言实测最优：CASE WHEN 慢 6.4×）。
+    /// 天花板写法：单命令跨行复用，每行只写参数 Value——逐行 CreateCommand/重加参数
+    /// 是被 Dapper 反超的直接原因（门禁抓出后修正）。未传事务时自开，提交一次。</summary>
+    private async Task<long> BulkUpdateRowByRowAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
+    {
+        bool ownsTransaction = tran is null;
+        DbTransaction tx = tran ?? await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using DbCommand cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = $"UPDATE {T} SET {Q("Name")} = {Dataset.P(0)}, {Q("Qty")} = {Dataset.P(1)}, "
+                + $"{Q("Price")} = {Dataset.P(2)}, {Q("Marker")} = {Dataset.P(3)} WHERE {Q("Id")} = {Dataset.P(4)}";
+            AddP(cmd, 0, default(string));
+            AddP(cmd, 1, 0);
+            AddP(cmd, 2, 0m);
+            AddP(cmd, 3, 0L);
+            AddP(cmd, 4, 0L);
+            DbParameter[] rowPool = SnapshotParameters(cmd);
+            long total = 0;
+            foreach (S1Row row in rows)
+            {
+                SetP(rowPool, 0, row.Name);
+                SetP(rowPool, 1, row.Qty);
+                SetP(rowPool, 2, row.Price);
+                SetP(rowPool, 3, row.Marker);
+                SetP(rowPool, 4, row.Id);
+                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            if (ownsTransaction)
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+            return total;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await tx.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
     public async Task<long> BulkDeleteAsync(DbConnection conn, IReadOnlyList<object> keys, CancellationToken ct)
         => await BulkDeleteAsync(conn, keys, null, ct).ConfigureAwait(false);
 
-    /// <summary>IN 分批删除；<paramref name="tran"/> 非 null 时每个命令显式挂到该事务。</summary>
+    /// <summary>IN 分批删除，整批裹一个事务（与产品 BulkDeleteAsync 同语义——
+    /// SQLite 上逐批 autocommit 每批一次 journal 同步，裹事务是数量级差异）。</summary>
     public async Task<long> BulkDeleteAsync(
         DbConnection conn, IReadOnlyList<object> keys, DbTransaction? tran, CancellationToken ct)
     {
+        bool ownsTransaction = tran is null;
+        DbTransaction tx = tran ?? await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            long total = await ExecuteBulkDeleteCoreAsync(conn, keys, tx, ct).ConfigureAwait(false);
+            if (ownsTransaction)
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+            return total;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await tx.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task<long> ExecuteBulkDeleteCoreAsync(
+        DbConnection conn, IReadOnlyList<object> keys, DbTransaction tx, CancellationToken ct)
+    {
         long total = 0;
-        const int batch = 500;
+        const int batch = BulkSql.BatchRows;
         for (int start = 0; start < keys.Count; start += batch)
         {
             int end = Math.Min(start + batch, keys.Count);
             var sb = new StringBuilder();
             sb.Append("DELETE FROM ").Append(T).Append(" WHERE ").Append(Q("Id")).Append(" IN (");
             await using DbCommand cmd = conn.CreateCommand();
-            cmd.Transaction = tran;
+            cmd.Transaction = tx;
             for (int i = start; i < end; i++)
             {
                 if (i > start)
@@ -396,6 +651,29 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         await tran.RollbackAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>批量路径的参数复用——命令参数池一次建好，逐批只写 Value（零新参数对象）。</summary>
+    /// <summary>批量路径的参数复用——参数池数组直写（对齐产品的 CreateParameterArray +
+    /// valuesBinder 模式）。不走 cmd.Parameters[index] 索引器：每次索引都是一次集合查找
+    /// 与校验，批量路径每行 5 次 × 数千行会放大成可测差距（门禁抓出后修正）。</summary>
+    private static void SetP(DbParameter[] pool, int index, object? value)
+    {
+        pool[index].Value = value ?? DBNull.Value;
+    }
+
+    /// <summary>命令当前参数快照为数组——批量路径的直写池。</summary>
+    private static DbParameter[] SnapshotParameters(DbCommand cmd)
+    {
+        // 不用 CopyTo：SqliteParameterCollection.CopyTo 只接受 SqliteParameter[]，
+        // DbParameter[] 会 InvalidCastException——逐项索引赋值三驱动通吃
+        DbParameter[] pool = new DbParameter[cmd.Parameters.Count];
+        for (int i = 0; i < pool.Length; i++)
+        {
+            pool[i] = cmd.Parameters[i];
+        }
+
+        return pool;
+    }
+
     private static void AddP(DbCommand cmd, int index, object? value)
     {
         DbParameter p = cmd.CreateParameter();
@@ -472,32 +750,107 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         => await conn.ExecuteAsync(
             $"INSERT INTO {T} ({Cols}) VALUES (@Id,@Name,@Qty,@Price,@Marker)", row).ConfigureAwait(false);
 
+    /// <summary>批量插入——多值 VALUES 分批（v2 三臂契约）。
+    /// <para><b>弃 Dapper multi-exec</b>（对 IEnumerable 逐行执行同一条 SQL = N 次往返）：
+    /// 20000 行 MySQL 是 31 s/次，而手拼 VALUES 批是亚秒级——multi-exec 只在"顺手写 200 行"
+    /// 的场景成立，不是批量插入的常规写法。Dapper 无 loader 封装，要用 COPY/LOAD DATA
+    /// 的 Dapper 用户本来就直接写 ADO。</para></summary>
     public async Task<long> BulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
-        => await conn.ExecuteAsync(
-            $"INSERT INTO {T} ({Cols}) VALUES (@Id,@Name,@Qty,@Price,@Marker)", rows).ConfigureAwait(false);
+    {
+        long total = 0;
+        int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
+        for (int start = 0; start < rows.Count; start += batch)
+        {
+            int end = Math.Min(start + batch, rows.Count);
+            total += await conn.ExecuteAsync(
+                $"INSERT INTO {T} ({Cols}) VALUES {BulkSql.ValuesRows(end - start)}",
+                InsertParameters(rows, start, end)).ConfigureAwait(false);
+        }
+
+        return total;
+    }
+
+    /// <summary>把一个批次的行装进 DynamicParameters——按列序（Id 在前，INSERT 序）。</summary>
+    private static DynamicParameters InsertParameters(
+        IReadOnlyList<S1Row> rows, int start, int end)
+    {
+        DynamicParameters dp = new();
+        int p = 0;
+        for (int r = start; r < end; r++)
+        {
+            S1Row row = rows[r];
+            dp.Add(Dataset.P(p++), row.Id);
+            dp.Add(Dataset.P(p++), row.Name);
+            dp.Add(Dataset.P(p++), row.Qty);
+            dp.Add(Dataset.P(p++), row.Price);
+            dp.Add(Dataset.P(p++), row.Marker);
+        }
+
+        return dp;
+    }
+
+    /// <summary>把一个批次的行装进 DynamicParameters——按 UPDATE 序（Name/Qty/Price/Marker/Id，Id 在尾）。</summary>
+    private static DynamicParameters UpdateParameters(
+        IReadOnlyList<S1Row> rows, int start, int end)
+    {
+        DynamicParameters dp = new();
+        int p = 0;
+        for (int r = start; r < end; r++)
+        {
+            S1Row row = rows[r];
+            dp.Add(Dataset.P(p++), row.Name);
+            dp.Add(Dataset.P(p++), row.Qty);
+            dp.Add(Dataset.P(p++), row.Price);
+            dp.Add(Dataset.P(p++), row.Marker);
+            dp.Add(Dataset.P(p++), row.Id);
+        }
+
+        return dp;
+    }
 
     public async Task<int> UpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
         => await conn.ExecuteAsync(
             $"UPDATE {T} SET {C("Name")}=@Name, {C("Qty")}=@Qty, {C("Price")}=@Price, {C("Marker")}=@Marker WHERE {C("Id")}=@Id",
             row).ConfigureAwait(false);
 
-    public Task<long> BulkUpdateAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+    /// <summary>批量更新——方言最优（v2 三臂契约，SQL 与 ADO 地板共用 BulkSql 真源）：
+    /// PG 发 UPDATE FROM VALUES、MySQL 发 CASE WHEN；SQLite 逐条裹单事务
+    /// （Dapper 无集合式封装，真实 Dapper 用户同样手拼这两类 SQL）。</summary>
+    public async Task<long> BulkUpdateAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
-        long total = 0;
-        foreach (S1Row row in rows)
+        if (dialect.Dialect == Dialect.Sqlite)
         {
-            total += conn.Execute(
-                $"UPDATE {T} SET {C("Name")}=@Name, {C("Qty")}=@Qty, {C("Price")}=@Price, {C("Marker")}=@Marker WHERE {C("Id")}=@Id",
-                row);
+            await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            long rowTotal = 0;
+            foreach (S1Row row in rows)
+            {
+                rowTotal += await conn.ExecuteAsync(
+                    $"UPDATE {T} SET {C("Name")}=@Name, {C("Qty")}=@Qty, {C("Price")}=@Price, {C("Marker")}=@Marker WHERE {C("Id")}=@Id",
+                    row, tran).ConfigureAwait(false);
+            }
+
+            await tran.CommitAsync(ct).ConfigureAwait(false);
+            return rowTotal;
         }
 
-        return Task.FromResult(total);
+        long total = 0;
+        int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
+        for (int start = 0; start < rows.Count; start += batch)
+        {
+            int end = Math.Min(start + batch, rows.Count);
+            total += await conn.ExecuteAsync(
+                BulkSql.UpdateBatch(dialect.Dialect, end - start),
+                UpdateParameters(rows, start, end)).ConfigureAwait(false);
+        }
+
+        return total;
     }
 
     public async Task<long> BulkDeleteAsync(DbConnection conn, IReadOnlyList<object> keys, CancellationToken ct)
     {
+        await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         long total = 0;
-        const int batch = 500;
+        const int batch = BulkSql.BatchRows;
         for (int start = 0; start < keys.Count; start += batch)
         {
             int end = Math.Min(start + batch, keys.Count);
@@ -508,9 +861,11 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
             }
 
             total += await conn.ExecuteAsync(
-                $"DELETE FROM {T} WHERE {C("Id")} IN ({Placeholders(ids.Length)})", Parameters(ids))
+                $"DELETE FROM {T} WHERE {C("Id")} IN ({Placeholders(ids.Length)})", Parameters(ids), tran)
                 .ConfigureAwait(false);
         }
+
+        await tran.CommitAsync(ct).ConfigureAwait(false);
         return total;
     }
 
@@ -592,7 +947,19 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     public async Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(rows);
-        await TxInsertManyAsync(conn, rows, ct).ConfigureAwait(false);
+        // 事务内批量提交与无事务批量插入同构（多值 VALUES 分批），不再走 TxInsertManyAsync
+        // 的 multi-exec——那是逐条提交语义的路径，10/100 条档专用。
+        await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
+        for (int start = 0; start < rows.Count; start += batch)
+        {
+            int end = Math.Min(start + batch, rows.Count);
+            await conn.ExecuteAsync(
+                $"INSERT INTO {T} ({Cols}) VALUES {BulkSql.ValuesRows(end - start)}",
+                InsertParameters(rows, start, end), tran).ConfigureAwait(false);
+        }
+
+        await tran.CommitAsync(ct).ConfigureAwait(false);
     }
 
     public async Task TxRollbackAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
@@ -924,11 +1291,24 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     public Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => D switch
         {
-            Dialect.Sqlite => TxInsertManyCoreAsync<SqliteProvider>(conn, rows, ct),
-            Dialect.MySql => TxInsertManyCoreAsync<MySqlProvider>(conn, rows, ct),
-            Dialect.PostgreSql => TxInsertManyCoreAsync<PostgreSqlProvider>(conn, rows, ct),
+            Dialect.Sqlite => TxBulkCoreAsync<SqliteProvider>(conn, rows, ct),
+            Dialect.MySql => TxBulkCoreAsync<MySqlProvider>(conn, rows, ct),
+            Dialect.PostgreSql => TxBulkCoreAsync<PostgreSqlProvider>(conn, rows, ct),
             _ => throw UnsupportedDialect(D)
         };
+
+    /// <summary>事务内批量提交——走产品的 BulkInsertAsync（PG COPY / MySQL 能力分流 /
+    /// SQLite 多值），与 v2 三臂契约一致。此前误用逐行 InsertAsync（2000 行 = 2000 次往返，
+    /// MySQL 实测 706 ms vs 地板 21.7 ms，门禁方向的对称暴露）。</summary>
+    private static async Task TxBulkCoreAsync<TProvider>(
+        DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = Session<TProvider>(conn);
+        await session.WithTransaction(
+            async _ => await session.BulkInsertAsync(rows, 1000, ct).ConfigureAwait(false), ct: ct)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>事务内 N 条插入——10 / 100 / 批量三档共用同一路径，规模差异由调用方传入的
     /// <paramref name="rows"/> 决定（PalORM 没有独立的 bulk-in-transaction 入口，
