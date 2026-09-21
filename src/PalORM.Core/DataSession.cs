@@ -623,17 +623,28 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 连接建立的重试由 <see cref="CreateAsync"/> 自有循环承担；写入/Bulk/StoredProc/
     /// 原始 SQL 家族维持直连（幂等性契约见 <see cref="ResilienceExecutor.ExecuteAsync{T}"/>，
     /// 显式需求用 <see cref="ExecuteWithResilience{T}"/> 包裹）。</para></summary>
-    /// <summary>非幂等写路径的超时统一入口——不重试（ITM-310 契约），但提供与读路径
-    /// 一致的 TimeoutException + InfrastructureTimeout 标记（R1/L2/T5）。
-    /// 事务内直通（事务已有自己的上界语义）；直通配置也直通（零开销契约保持）。</summary>
-    private async ValueTask<T> ExecuteWritePipelineAsync<T>(
-        Func<CancellationToken, Task<T>> writeCore, CancellationToken ct)
+    /// <summary>P2-1：写路径的直调重载（行数形态）——调用方已持有命令时经此入口，省掉
+    /// <c>async token => (long)await cmd.ExecuteNonQueryAsync(token)</c> 的委托与
+    /// display class（实测约 208 B/行，含两层包装）。
+    /// <para><b>语义与委托版逐位一致</b>：直通分支（策略直通或事务内）直接执行并返回；
+    /// 非直通分支才包 <see cref="ResilienceExecutor.ExecuteWithTimeoutAsync"/>——
+    /// 此时仍需委托（超时包装要求），该形态本就少见（写入路径默认不重试，
+    /// 只有显式配置了非零 CommandTimeout 才会走到）。</para>
+    /// <para><b>为什么值得单独一个重载</b>：单条写路径（Update/Delete/ExecuteAsync）
+    /// 每次调用都过这里，是每操作固定成本；208 B 在 MySQL Insert 的 4241 B/行上约 5%，
+    /// 在 BulkInsert 的 1222 B/行上约 17%。</para></summary>
+    private ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, CancellationToken ct)
     {
         ResilienceExecutor executor = Volatile.Read(ref _resilience);
         if (executor.IsPassThrough || GetActiveTransaction() is not null)
-            return await writeCore(ct).ConfigureAwait(false);
-        return await executor.ExecuteWithTimeoutAsync(writeCore, ct).ConfigureAwait(false);
+            return ExecuteRowsCoreAsync(command, ct);
+        return executor.ExecuteWithTimeoutAsync(
+            token => ExecuteRowsCoreAsync(command, token).AsTask(), ct);
     }
+
+    private static async ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
+        => await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
 
     private async ValueTask<T> ExecuteReadPipelineAsync<T>(
         Func<CancellationToken, Task<T>> attemptCore, CancellationToken ct)
