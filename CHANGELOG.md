@@ -2,6 +2,79 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮四] — 逐条 UPDATE 参数池化（跨方言 −41%~−62%）
+
+> 变更范围：src/PalORM.Core 一个文件 + 一个测试项目（新增 8 个测试）
+> 验证：`PalORM.ci.slnf --no-incremental` 0 警告 0 错误 · Core 360/360 ·
+> Integration 203/203 · 三个 AOT 程序 `publish` 全通过 · tech-debt-scan 13/13 ·
+> stub-check 零发现 · 变异探针通过
+
+### 背景：全面性能测试定位到的系统性缺陷
+
+三方言每行分配成本实测（2000 行，`GC.GetTotalAllocatedBytes` 精确计数）：
+
+| 路径 | PG | MySQL | SQLite |
+|---|---|---|---|
+| BulkInsert（多值/COPY） | 148 B | 736 B | 415 B |
+| **BulkUpdate 逐条** | **1618 B** | **1577 B** | **1457 B** |
+| **乐观锁实体逐条** | **2488 B** | **3830 B** | **1568 B** |
+| QueryAll | 90 B | 139 B | 90 B |
+
+逐条 UPDATE 是 BulkInsert 的 2.2~11 倍。根因：`UpdateCoreAsync` 每行新建
+`DbCommand`、`BindUpdate` 重建全部参数、`ExecuteWritePipelineAsync` 新建 async 委托。
+同一文件的 `MultiValueBulkInsert` 自 v4.6 就有「命令跨批复用 + 参数池 + 只写 Value」
+三件套，逐条 UPDATE 是漏项。
+
+### 改动（P0-1）
+
+`ExecuteBulkUpdateRowByRowAsync` 按 `CrudMetadata.BindUpdateValues` 是否为 null 分派：
+
+- **有**（当前生成器）：走 `ExecuteBulkUpdatePooledAsync`——命令与参数池建一次，
+  逐行只写 Value（零 `CreateParameter`），复用 `BatchUpdateSqlBuilder.CreateParameterArray`
+  的命名契约与 `AttachParameters` 的池↔集合收敛。
+- **无**（旧版模型程序集）：回退 `ExecuteBulkUpdateLegacyAsync`，逐行 `UpdateCoreAsync`，
+  语义与改前逐位一致。
+
+**参数数由 probe 提取而非硬算**：`BindUpdateValues` 的参数序是
+`[SET 列…, 主键…, 并发令牌?]`（见 `CommandFactoryEmitter.GenerateBindUpdateValuesBody`），
+带 `[ConcurrencyCheck]` 的实体比 `setColumnCount+1` 多一个 version 参数。硬算会让乐观锁
+实体的 version 参数拿不到值，**静默写错数据**。probe 同时是生成器三处
+（SQL/Bind/元数据）漂移的运行时哨兵，与 `PrepareBatchUpdateContext` 同范式。
+
+**乐观锁语义保持不变**：affectedRows 的 0 行/多行检查、`ConcurrencyConflictException`、
+以及 version 内存回填的时机（ITM-556：提交成功后统一执行）都按原契约保留。
+池化只改「参数怎么来」，不改判定。
+
+### 实测收益（真库，A/B 交替）
+
+| 路径 | base | HEAD | 变化 |
+|---|---|---|---|
+| SQLite BulkUpdate | 1457 B/行 | **522 B/行** | **−64%** |
+| SQLite 乐观锁实体 | 1568 B/行 | **602 B/行** | **−62%** |
+| PG 乐观锁实体 | 2488 B/行 | **952 B/行** | **−62%** |
+| MySQL 乐观锁实体 | 3830 B/行 | **2267 B/行** | **−41%** |
+| PG BulkUpdate（普通实体） | 1618 B/行 | 1592 B/行 | −1.6%（噪声内） |
+| MySQL BulkUpdate（普通实体） | 1577 B/行 | 1496 B/行 | −5.1%（噪声内） |
+
+普通实体在 PG/MySQL 上走**单语句批量路径**（`BulkUpdateAsync` 的自动路由），
+本改动不作用于该路径，故无差异——这与设计一致：池化只惠及逐条路径。
+
+### 踩坑：闭包捕获循环变量
+
+首版 `increments.Add(() => metadata.IncrementVersion(entities[i]))` 抛
+`IndexOutOfRangeException`——lambda 在提交成功后统一执行，届时 `i` 已越界
+（ITM-556 的延迟回放语义）。修为每次迭代捕获局部实体变量。测试
+`OptimisticLock_Success_IncrementsVersionInMemory` 立即暴露。
+
+### 测试
+
+新增 `BulkUpdatePoolingTests`（8 个）：池化路径写值正确性、分配低于 1000 B/行的回归
+护栏、乐观锁冲突仍抛、乐观锁成功 version 回填、租户隔离、软删不碰 `deleted_at`、
+空列表零副作用、批次中途失败整批回滚。
+
+变异探针：把 `valuesBinder(pool, entities[i], 0)` 的偏移改为 1（模拟参数错位），
+8 个用例中 6 个失败——确认测试不是空转。
+
 ## [未发布·性能轮三] — 事务前置校验 · 只读内核零 display class · 通知监听器保活
 
 > 变更范围：src/PalORM.Core 五个文件 + 三 Provider + 两个测试项目（新增 15 个测试）

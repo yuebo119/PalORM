@@ -229,24 +229,32 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>BulkUpdate 逐条核心逻辑（不含 EnterOperation）——供 BulkUpdateAsync 和 BulkUpdateBatchAsync SQLite 回退复用。
-    /// v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。</summary>
+    /// v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。
+    /// <para><b>P0-1（2026-09-21）参数池化路径</b>：原实现每行走 <c>UpdateCoreAsync</c>，
+    /// 每行新建 DbCommand + 重建全部参数 + 新建 async 委托。三方言实测每行
+    /// 1457~1625 B，是 BulkInsert（148~736 B）的 2.2~11 倍——同一文件的
+    /// <see cref="MultiValueBulkInsert"/> 早有「命令跨批复用 + 参数池 + 只写 Value」范式，
+    /// 逐条 UPDATE 是漏项。现按生成器是否发射 <see cref="CrudMetadata.BindUpdateValues"/>
+    /// 分派：有则走池化路径（零 CreateParameter），无则回退原逐条路径（旧模型程序集）。</para>
+    /// <para><b>乐观锁语义保持不变</b>：affectedRows 的 0 行 / 多行检查与 version 内存回填
+    /// 的时机（提交成功后统一执行）都按原契约保留——池化只改「参数怎么来」，不改判定。</para></summary>
     private async ValueTask<long> ExecuteBulkUpdateRowByRowAsync<T>(
         IReadOnlyList<T> entities, object? operationOwner, CancellationToken ct)
         where T : class, new()
     {
+        // P0-1：单次注册表快照（与 BulkUpdateAsync 的 R8 同口径）
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no generated CRUD.");
+
         var (total, deferredVersionIncrements) = await RunInTransactionScopeAsync(
             operationOwner,
-            async (transaction, token) =>
-            {
-                long total = 0;
-                List<Action> increments = [];
-                foreach (T entity in entities)
-                {
-                    total += await UpdateCoreAsync(
-                        entity, operationOwner, token, increments).ConfigureAwait(false);
-                }
-                return (total, increments);
-            },
+            async (transaction, token) => metadata.BindUpdateValues is { } valuesBinder
+                ? await ExecuteBulkUpdatePooledAsync(
+                    entities, metadata, valuesBinder, transaction, token).ConfigureAwait(false)
+                : await ExecuteBulkUpdateLegacyAsync(
+                    entities, operationOwner, token).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
         // ITM-556：内存 version 回填在提交成功后统一执行——中途冲突整批回滚时，
@@ -255,6 +263,105 @@ public partial class DataSession<TProvider>
         // 调用方随后回滚该外部事务的既有语义不变）。
         foreach (Action increment in deferredVersionIncrements) increment();
         return total;
+    }
+
+    /// <summary>P0-1：池化逐条 UPDATE——命令与参数池建一次，逐行只写 Value。
+    /// <para><b>为什么命令能跨行复用</b>：所有行的 UPDATE 语句逐位相同（同表同 SET 列集），
+    /// 变的只是参数值；生成的 UPDATE 恒以 <c>WHERE pk = @pN [AND version = @pM]</c> 结尾，
+    /// 参数序固定。因此 CommandText 设一次、参数对象建一次，逐行只写 Value。</para>
+    /// <para><b>与 <see cref="ExecuteBulkUpdateBatchesAsync{T}"/> 的关系</b>：后者是「一条 SQL 更新 N 行」，
+    /// 本方法是「N 条 SQL 各更新 1 行」——参数布局相同（每行 paramsPerRow 个），故直接复用
+    /// <see cref="BatchUpdateSqlBuilder.CreateParameterArray"/> 的命名契约。</para></summary>
+    private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledAsync<T>(
+        IReadOnlyList<T> entities, CrudMetadata metadata,
+        Action<DbParameter[], object, int> valuesBinder,
+        DbTransaction tran, CancellationToken ct)
+        where T : class, new()
+    {
+        List<Action> increments = [];
+        if (entities.Count == 0) return (0, increments);
+
+        // P0-1：参数数从 probe 提取而非硬算——BindUpdateValues 的参数序是
+        // [SET 列…, 主键…, 并发令牌?]（见 CommandFactoryEmitter.GenerateBindUpdateValuesBody），
+        // 带 [ConcurrencyCheck] 的实体比 setColumnCount+1 多一个。硬算会让乐观锁实体
+        // 的 version 参数拿不到值，静默写错数据。probe 同时是生成器三处
+        // （SQL/Bind/元数据）漂移的运行时哨兵（与 PrepareBatchUpdateContext 同范式）。
+        DbCommand probe = CreateCommand();
+        int paramsPerRow;
+        try
+        {
+            metadata.BindUpdate(probe, entities[0]);
+            paramsPerRow = probe.Parameters.Count;
+        }
+        finally
+        {
+            await probe.DisposeAsync().ConfigureAwait(false);
+        }
+        if (paramsPerRow <= 0)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' BindUpdate produced {paramsPerRow} parameters; recompile the model assembly.");
+
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        // 生成的 UPDATE 语句：复用 GetCommandSqls 的单一真源（含租户后缀的两形态由缓存提供）
+        string updateSql = GetCommandSqls<T>(PalORM_Runtime.CurrentState).Update;
+        if (updateSql.Length == 0)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no updatable columns.");
+        if (HasTenantFilter<T>())
+            updateSql = GetTenantWrappedSql<T>(
+                DataSessionCache.UpdateWithTenantSqlCache, updateSql);
+        cmd.CommandText = updateSql;
+
+        // 参数池：一行 paramsPerRow 个 + 可选租户参数（固定名追加末尾）
+        bool hasTenant = HasTenantFilter<T>();
+        DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
+            paramsPerRow, hasTenant, _tenantParameterName, _tenantId,
+            TProvider.CreateParameter);
+        AttachParameters(cmd, pool, paramsPerRow, paramsPerRow, hasTenant ? 1 : 0);
+
+        long total = 0;
+        for (int i = 0; i < entities.Count; i++)
+        {
+            // 只写 Value——零 CreateParameter（P0-1 的核心）
+            valuesBinder(pool, entities[i], 0);
+
+            int affectedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+            if (metadata.IncrementVersion is { } incrementVersion)
+            {
+                if (affectedRows == 0)
+                    throw new ConcurrencyConflictException(
+                        $"Entity '{typeof(T).Name}' was modified by another transaction.");
+                if (affectedRows != 1)
+                    throw new InvalidOperationException(
+                        $"Concurrency update for '{typeof(T).Name}' affected {affectedRows} rows.");
+                // 闭包必须捕获本次迭代的实体而非循环变量 i——lambda 在提交成功后统一执行，
+                // 届时 i 已越界（ITM-556 的延迟回放语义）
+                T entity = entities[i];
+                increments.Add(() => incrementVersion(entity));
+            }
+            total += affectedRows;
+        }
+        return (total, increments);
+    }
+
+    /// <summary>P0-1 的旧版模型程序集回退路径：无 <see cref="CrudMetadata.BindUpdateValues"/>
+    /// 时逐行 <c>UpdateCoreAsync</c>（每行新建命令与参数）。语义与池化路径逐位一致，
+    /// 参数创建量回到改前水平——这是旧程序集的既有成本，不是回归。</summary>
+    private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdateLegacyAsync<T>(
+        IReadOnlyList<T> entities, object? operationOwner, CancellationToken token)
+        where T : class, new()
+    {
+        long total = 0;
+        List<Action> increments = [];
+        foreach (T entity in entities)
+        {
+            total += await UpdateCoreAsync(
+                entity, operationOwner, token, increments).ConfigureAwait(false);
+        }
+        return (total, increments);
     }
 
     /// <summary>v5.0 阶段 4.3b：批量更新（单语句批量 UPDATE，方案 Y 严格版）。
