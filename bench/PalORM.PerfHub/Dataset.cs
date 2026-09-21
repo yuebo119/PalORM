@@ -1,8 +1,6 @@
 using System.Globalization;
-using PalORM;
-using PalORM.MySql;
-using PalORM.PostgreSql;
-using PalORM.Sqlite;
+using System.Runtime.CompilerServices;
+using PalORM.Testing;
 
 namespace PalORM.PerfHub;
 
@@ -11,25 +9,15 @@ namespace PalORM.PerfHub;
 ///
 /// 设计纪律（对应 docs/性能基准规范.md §2）：
 ///  · 种子完全确定：所有列值由行号 i 派生，无 Random。任何一次生成的库内容逐位相同，
-///    这是"三次测量可比"以及"跨方言可比"的前提；
-///  · 行数档位统一：100 / 1_000 / 10_000；
-///  · DDL 一律手写但**三方言逐位同构**（列名/类型/约束一致）——PerfHub 不走 MigrateAsync，
-///    因为它要在同一进程里对三个方言建同构表，而 MigrateAsync 依赖注册表与方言 DDL 真源；
-///    表结构与 bench_s1_narrow 保持一致，使历史数字可延续比较；
-///  · 三方言用同一实体同一 SQL 模板，只有引用符与参数占位符按方言分叉。
+///    这是"两次测量可比"以及"跨方言可比"的前提；
+///  · 行数档位统一：2_000 / 20_000（v5.8 起，覆盖中小表与中大表两个量级）；
+///  · DDL 三方言逐位同构（列名/类型/约束一致）；
+///  · 三方言用同一实体、同一 SQL 模板，只有引用符与参数占位符按方言分叉。
 /// </summary>
 internal static class Dataset
 {
     /// <summary>统一行数档位（规范 §2）。</summary>
-    public static readonly int[] Tiers = [100, 1_000, 10_000];
-
-    /// <summary>点查用的主键集合——由行号确定性派生，三方言三实现完全相同。</summary>
-    public static long[] KeySet(int rows)
-    {
-        var keys = new long[rows];
-        for (int i = 0; i < rows; i++) keys[i] = i + 1;   // 主键从 1 起
-        return keys;
-    }
+    public static readonly int[] Tiers = [2_000, 20_000];
 
     /// <summary>确定性构造一行（i 从 0 起）——与 StandardShapes.BenchNarrow.Seed 同口径。</summary>
     public static S1Row Seed(long i) => new()
@@ -44,11 +32,41 @@ internal static class Dataset
     public static List<S1Row> SeedRows(int count)
     {
         var list = new List<S1Row>(count);
-        for (long i = 0; i < count; i++) list.Add(Seed(i));
+        for (long i = 0; i < count; i++)
+        {
+            list.Add(Seed(i));
+        }
+
         return list;
     }
 
-    /// <summary>三方言同构 DDL——列名/类型/约束逐位一致，仅保留字面类型名。</summary>
+    /// <summary>确定性构造 count 行，主键从 <paramref name="idOffset"/>+1 起。
+    /// <para>写操作测量每轮必须用互不相同的主键段，否则第二轮撞主键；
+    /// 该重载把「第 i 轮用哪段键」变成显式参数，避免用 Random 造成不可复现。</para></summary>
+    public static List<S1Row> SeedRows(int count, long idOffset)
+    {
+        var list = new List<S1Row>(count);
+        for (long i = 0; i < count; i++)
+        {
+            list.Add(Seed(idOffset + i));
+        }
+
+        return list;
+    }
+
+    /// <summary>主键集合——由行号确定性派生，三方言三实现完全相同。</summary>
+    public static long[] KeySet(int rows)
+    {
+        long[] keys = new long[rows];
+        for (int i = 0; i < rows; i++)
+        {
+            keys[i] = i + 1;   // 主键从 1 起
+        }
+
+        return keys;
+    }
+
+    /// <summary>三方言同构 DDL——列名/类型/约束逐位一致。</summary>
     public static string CreateTableSql(Dialect dialect) => dialect switch
     {
         Dialect.Sqlite => "CREATE TABLE perf_s1 (\"Id\" INTEGER PRIMARY KEY, \"Name\" TEXT NOT NULL, \"Qty\" INTEGER NOT NULL, \"Price\" TEXT NOT NULL, \"Marker\" INTEGER NOT NULL)",
@@ -67,24 +85,74 @@ internal static class Dataset
     /// <summary>参数占位符——三方言统一 @pN（驱动层各自接受）。</summary>
     public static string P(int index) => $"@p{index}";
 
-    /// <summary>SELECT 列清单（同构）。</summary>
+    /// <summary>实体列名——三方言 SELECT 列表的唯一真源，避免每次调用重建数组（CA1861）。</summary>
+    private static readonly string[] ColumnNames = ["Id", "Name", "Qty", "Price", "Marker"];
+
     public static string SelectColumns(Dialect dialect)
-        => string.Join(", ", new[] { "Id", "Name", "Qty", "Price", "Marker" }.Select(c => Q(dialect, c)));
+        => string.Join(", ", ColumnNames.Select(c => Q(dialect, c)));
+
+    public static string Table(Dialect dialect) => Q(dialect, "perf_s1");
+
+    /// <summary>PalORM 的 <see cref="SqlDialect"/> 映射到 PerfHub 内部 <see cref="Dialect"/>。
+    /// <para>泛型核心方法拿得到的是 <c>TProvider.Dialect</c>（PalORM 侧枚举），
+    /// 而 Dataset 的 SQL 模板按 PerfHub 侧枚举分叉——这一层是两套枚举的唯一转换点。</para></summary>
+    public static Dialect Of(SqlDialect dialect) => dialect switch
+    {
+        SqlDialect.Sqlite => Dialect.Sqlite,
+        SqlDialect.MySql => Dialect.MySql,
+        SqlDialect.PostgreSql => Dialect.PostgreSql,
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null)
+    };
+
+    /// <summary>点查条件——列名拼进文本段（经 QuoteIdentifier 转义），只有值是插值项。
+    /// <para>踩坑记录（B78）：若写成 <c>$"{Q("Id")} = {id}"</c>，列名也会变成插值项并被参数化，
+    /// 生成 <c>WHERE (@p0 = @p1)</c> 且 @p0 是字符串——PG 报 "operator does not exist:
+    /// text = bigint"。列名是标识符面，必须走文本段。</para></summary>
+    public static FormattableString WhereId(Dialect dialect, long id)
+        => FormattableStringFactory.Create(Q(dialect, "Id") + " = {0}", id);
+
+    /// <summary>点查条件（PalORM 侧方言枚举重载）。</summary>
+    public static FormattableString WhereId(SqlDialect dialect, long id)
+        => WhereId(Of(dialect), id);
+
+    /// <summary>键集分页条件 <c>Id &gt; @p0</c>——列名进文本段。</summary>
+    public static FormattableString WhereIdGt(Dialect dialect, long id)
+        => FormattableStringFactory.Create(Q(dialect, "Id") + " > {0}", id);
+
+    /// <summary>键集分页条件（PalORM 侧方言枚举重载）。</summary>
+    public static FormattableString WhereIdGt(SqlDialect dialect, long id)
+        => WhereIdGt(Of(dialect), id);
+
+    /// <summary>IN 条件（列名进文本段，值集合进插值项）。</summary>
+    public static FormattableString WhereInIds(Dialect dialect, long[] ids)
+    {
+        string quoted = Q(dialect, "Id");
+        object?[] args = new object?[ids.Length];
+        for (int i = 0; i < ids.Length; i++)
+        {
+            args[i] = ids[i];
+        }
+
+        return FormattableStringFactory.Create(quoted + " IN (" + string.Join(", ", Enumerable.Range(0, ids.Length).Select(i => "{" + i + "}")) + ")", args);
+    }
 }
 
 /// <summary>PerfHub 统一实体 S1 Narrow——与 bench_s1_narrow 同构。
-/// 同时被 PalORM（源生成）与 Dapper/ADO.NET（反射或手工映射）使用，
+/// 同时被 PalORM（源生成）与 Dapper/ADO.NET（手工映射）使用，
 /// 保证三实现测的是同一份数据、同一个 CLR 形态。</summary>
 [Table("perf_s1")]
-public sealed partial class S1Row
+internal sealed partial class S1Row
 {
+    /// <inheritdoc/>
     [Key(AutoIncrement = false)]
     [Column("Id")]
     public long Id { get; set; }
 
+    /// <summary>可变长文本列——三方言同构，长度随行号确定性增长。</summary>
     [Column("Name")]
     public string Name { get; set; } = "";
 
+    /// <summary>整型数量列——WHERE 条件的另一面，用于范围查询测试。</summary>
     [Column("Qty")]
     public int Qty { get; set; }
 
@@ -93,6 +161,7 @@ public sealed partial class S1Row
     [Column("Price")]
     public decimal Price { get; set; }
 
+    /// <summary>顺序标记列——ORDER BY / 键集分页的排序列，值等于行号。</summary>
     [Column("Marker")]
     public long Marker { get; set; }
 }
@@ -110,7 +179,6 @@ internal sealed class DialectInfo
 {
     public required Dialect Dialect { get; init; }
     public required string DisplayName { get; init; }
-    public required string EnvVar { get; init; }
     public required Func<string, System.Data.Common.DbConnection> OpenConnection { get; init; }
 
     /// <summary>SQLite 是进程内库，无"服务器版本"概念。</summary>
@@ -120,17 +188,17 @@ internal sealed class DialectInfo
     [
         new()
         {
-            Dialect = Dialect.Sqlite, DisplayName = "SQLite", EnvVar = "",
+            Dialect = Dialect.Sqlite, DisplayName = "SQLite",
             OpenConnection = cs => new Microsoft.Data.Sqlite.SqliteConnection(cs)
         },
         new()
         {
-            Dialect = Dialect.MySql, DisplayName = "MySQL", EnvVar = "PALORM_BENCH_MYSQL",
+            Dialect = Dialect.MySql, DisplayName = "MySQL",
             OpenConnection = cs => new MySqlConnector.MySqlConnection(cs)
         },
         new()
         {
-            Dialect = Dialect.PostgreSql, DisplayName = "PostgreSQL", EnvVar = "PALORM_BENCH_PG",
+            Dialect = Dialect.PostgreSql, DisplayName = "PostgreSQL",
             OpenConnection = cs => new Npgsql.NpgsqlConnection(cs)
         },
     ];
@@ -142,19 +210,22 @@ internal sealed class DialectInfo
 /// PG/MySQL 从环境变量读。任何凭据不入 git。</summary>
 internal static class Connections
 {
-    public static string Resolve(DialectInfo info)
+    /// <summary>凭据口径与集成测试完全一致：环境变量 PALORM_PG_CONNECTION /
+    /// PALORM_MYSQL_CONNECTION 优先，仓库根 .env.test 兜底补缺失项（见
+    /// <see cref="TestEnvironment.LoadDotEnvIfPresent"/>）。任何凭据不入 git、不回显。</summary>
+    public static string Resolve(DialectInfo info) => info.Dialect switch
     {
-        if (info.Dialect == Dialect.Sqlite)
-        {
-            string dir = Path.Combine(Path.GetTempPath(), "palorm-perfhub");
-            Directory.CreateDirectory(dir);
-            return $"Data Source={Path.Combine(dir, $"perf-{Environment.ProcessId}.db")}";
-        }
-        string? cs = Environment.GetEnvironmentVariable(info.EnvVar);
-        if (string.IsNullOrWhiteSpace(cs))
-            throw new InvalidOperationException(
-                $"未设置 {info.EnvVar}——{info.DisplayName} 档需要远程库连接串（见 .env.test）。");
-        return cs;
+        Dialect.Sqlite => SqlitePath(),
+        Dialect.MySql => TestEnvironment.ResolveMySqlConnectionString(),
+        Dialect.PostgreSql => TestEnvironment.ResolvePostgreSqlConnectionString(),
+        _ => throw new ArgumentOutOfRangeException(nameof(info), info, null)
+    };
+
+    private static string SqlitePath()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "palorm-perfhub");
+        Directory.CreateDirectory(dir);
+        return $"Data Source={Path.Combine(dir, $"perf-{Environment.ProcessId}.db")}";
     }
 }
 
@@ -182,5 +253,8 @@ internal static class Fmt
         _ => $"{ns / 1_000_000_000:N2} s"
     };
 
-    public static string Pct(double v) => $"{(v >= 0 ? "+" : "")}{v:N1}%";
+    /// <summary>比例格式化——入参是比例（0.983），输出百分比（+98.3%）。
+    /// 负数自带符号，不再额外加正负号（避免出现 "+-1.0%"）。</summary>
+    public static string Pct(double fraction)
+        => $"{(fraction >= 0 ? "+" : "")}{fraction * 100:N1}%";
 }

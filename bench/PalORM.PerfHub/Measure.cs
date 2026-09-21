@@ -4,33 +4,37 @@ using System.Diagnostics;
 
 namespace PalORM.PerfHub;
 
-/// <summary>一次测量的原始结果——三类核心指标（时延 / 峰值内存 / 并发吞吐）。</summary>
+/// <summary>一次测量的完整结果。</summary>
 internal sealed class Measurement
 {
     public required string Dialect { get; init; }
     public required string Implementation { get; init; }
+    /// <summary>测试项标识（如 GetByKey / BulkInsert / Tx_TenInserts）。</summary>
     public required string Operation { get; init; }
+    /// <summary>测试项分组（Build / CRUD / Query / Bulk / Transaction / Baseline）。</summary>
+    public required string Group { get; init; }
     public required int Rows { get; init; }
 
-    // ── 指标 1：时延（单操作，多次取中位数）──
-    /// <summary>每次操作的耗时中位数（纳秒）。</summary>
+    // ── 指标 1：全路径时延 ──
+    /// <summary>时延测量区间为「SQL 构建开始 → 构建完成 → 执行 → 测试完成」的全路径，
+    /// 不含测试夹具自身的数据准备（种子数据在测量前生成）。</summary>
+    /// <summary>每次操作的全路径耗时中位数（纳秒）。</summary>
     public double MedianNs { get; set; }
-    /// <summary>每次操作的耗时均值（纳秒）——BDN 口径的 Mean。</summary>
     public double MeanNs { get; set; }
     /// <summary>Error/Mean（BDN 的 StdErr/Mean）——量具自检指标，>5% 标黄。</summary>
     public double ErrorRatio { get; set; }
     public int Iterations { get; set; }
 
-    // ── 指标 2：内存（每次操作的分配 + 峰值）──
-    /// <summary>每次操作的托管分配字节数（GC.GetTotalAllocatedBytes 口径）。</summary>
+    // ── 指标 2：内存 ──
+    /// <summary>每次操作的托管分配字节数（GC.GetTotalAllocatedBytes 精确计数，确定性指标）。</summary>
     public double AllocatedBytesPerOp { get; set; }
-    /// <summary>该操作的托管堆峰值字节（GC.GetGCMemoryInfo 口径，采样于操作后）。</summary>
+    /// <summary>操作期间的托管堆峰值（采样近似）——含 ORM 内部与数据对象的真实驻留。</summary>
     public long PeakHeapBytes { get; set; }
-    /// <summary>Gen0 回收次数（操作期间）。</summary>
+    /// <summary>操作结束后的堆大小（保留量）。</summary>
+    public long LiveHeapAfterBytes { get; set; }
     public int Gen0Collections { get; set; }
 
     // ── 指标 3：并发吞吐 ──
-    /// <summary>多线程混合负载下的 ops/s（0 = 未测该项）。</summary>
     public double OpsPerSecond { get; set; }
     public double P50Ms { get; set; }
     public double P95Ms { get; set; }
@@ -38,42 +42,120 @@ internal sealed class Measurement
     public int ConcurrencyThreads { get; set; }
 }
 
-/// <summary>测量引擎——统一口径的三类指标采集。
-///
-/// 口径纪律（对应 docs/性能基准规范.md §3/§4）：
-///  · 时延：预热后测 N 轮，取中位数（分配是确定性指标，耗时比同轮对照中位数之比）；
-///  · 分配：GC.GetTotalAllocatedBytes 精确计数（确定性，复现性优于 1%）；
-///  · 峰值内存：GC.GetGCMemoryInfo().HeapSizeBytes 采样——注意它是"当前堆大小"而非
-///    "操作期间曾达到的最大值"，.NET 无后者 API，故报告里明确标注为「采样堆峰值」；
-///  · 并发：每线程独立连接，预热 1.5s 不计数，近邻秩分位数。
-/// </summary>
+/// <summary>峰值内存采样器——后台线程高频轮询堆大小，取操作期间的最大值。
+/// <para><b>为什么需要采样</b>：.NET 不提供「操作期间曾达到的堆峰值」API，
+/// <see cref="GC.GetGCMemoryInfo()"/> 只返回当前堆大小。故用独立线程高频采样取上界。</para>
+/// <para><b>口径诚实声明</b>：采样间隔内的瞬时尖峰可能被漏采，故报告标注为「采样堆峰」。
+/// 与之互补的 <see cref="GC.GetTotalAllocatedBytes(bool)"/> 是精确分配量（确定性、可复现），
+/// 两者共同刻画内存：前者是驻留峰值，后者是分配吞吐。</para></summary>
+internal sealed class PeakSampler : IDisposable
+{
+    private readonly Thread _thread;
+    private readonly ManualResetEventSlim _stop = new(false);
+    private long _peak;   // volatile 语义经 Volatile.Read/Write 保证
+    private volatile bool _running;
+
+    /// <summary>采样间隔 100µs——在「不漏太多尖峰」与「采样器自身开销可忽略」之间平衡，
+    /// 毫秒级操作的采样点约 10~50 个。</summary>
+    private const int SampleIntervalUs = 100;
+
+    public long Peak => Volatile.Read(ref _peak);
+
+    private PeakSampler()
+    {
+        _thread = new Thread(Loop) { IsBackground = true, Name = "PerfHub-PeakSampler" };
+    }
+
+    public static PeakSampler Start()
+    {
+        var sampler = new PeakSampler { _running = true };
+        sampler._thread.Start();
+        return sampler;
+    }
+
+    private void Loop()
+    {
+        // 先取一次基线，避免把「操作前就存在的堆」算进来
+        _peak = GC.GetGCMemoryInfo().HeapSizeBytes;
+        var sw = new Stopwatch();
+        while (_running)
+        {
+            sw.Restart();
+            long heap = GC.GetGCMemoryInfo().HeapSizeBytes;
+            if (heap > _peak)
+            {
+                Volatile.Write(ref _peak, heap);
+            }
+
+            while (sw.Elapsed.TotalMilliseconds * 1000 < SampleIntervalUs && _running)
+            {
+                Thread.SpinWait(20);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _running = false;
+        _stop.Set();
+        _thread.Join(200);
+        _stop.Dispose();
+    }
+}
+
+/// <summary>测量引擎——统一口径的三类指标采集。</summary>
 internal static class Measure
 {
-    /// <summary>测单操作：时延中位数 + 每次分配 + 采样堆峰值 + Gen0 次数。</summary>
+    /// <summary>测单操作：全路径时延（构建→执行→完成）+ 分配量 + 采样堆峰 + Gen0。
+    /// <para><b>全路径口径</b>：被测 <paramref name="action"/> 内部必须包含 SQL 构建
+    /// （From&lt;T&gt;()/Where/BuildSql）→ 执行 → 物化的完整链路；测量引擎不额外剥离任何段。</para>
+    /// <para><b>prepare 语义</b>：在预热前与计时循环前各调用一次，用于把库重置到确定状态
+    /// （写操作每轮要用不同主键，否则第二轮撞主键；删操作每轮要有行可删）。
+    /// prepare 不计入时延与分配。</para></summary>
     public static async Task<Measurement> SingleAsync(
-        DialectInfo dialect, IPerfImplementation impl, string operation, int rows,
-        Func<IPerfImplementation, DbConnection, Task> action,
-        DbConnection conn, int iterations, CancellationToken ct)
+        DialectInfo dialect, IPerfImplementation impl, string operation, string group, int rows,
+        Func<IPerfImplementation, DbConnection, int, Task> action,
+        DbConnection conn, int iterations, CancellationToken ct,
+        Func<DbConnection, Task>? prepare = null)
     {
         // 预热（JIT + 驱动缓冲 + 缓存填充）——不计入样本
+        if (prepare is not null)
+        {
+            await prepare(conn).ConfigureAwait(false);
+        }
+
         for (int i = 0; i < Math.Max(3, iterations / 5); i++)
-            await action(impl, conn).ConfigureAwait(false);
+        {
+            await action(impl, conn, i).ConfigureAwait(false);
+        }
+
+        // 预热已改变库状态（插入/删除），计时前再重置一次，保证每轮起点一致
+        if (prepare is not null)
+        {
+            await prepare(conn).ConfigureAwait(false);
+        }
 
         var samples = new List<double>(iterations);
         int gen0Before = GC.CollectionCount(0);
+        long peakSeen;
+        long liveAfter;
+
+        // 分配量用「整轮一次计数 / 轮数」——比每次前后计数更稳（避免单次测量被 GC 干扰）
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
         long allocBefore = GC.GetTotalAllocatedBytes(true);
-        long peak = 0;
-        var sw = new Stopwatch();
 
-        for (int i = 0; i < iterations; i++)
+        using (var sampler = PeakSampler.Start())
         {
-            sw.Restart();
-            await action(impl, conn).ConfigureAwait(false);
-            sw.Stop();
-            samples.Add(sw.Elapsed.TotalMilliseconds);
-            long heap = GC.GetGCMemoryInfo().HeapSizeBytes;
-            if (heap > peak) peak = heap;
+            var sw = new Stopwatch();
+            for (int i = 0; i < iterations; i++)
+            {
+                sw.Restart();
+                await action(impl, conn, i).ConfigureAwait(false);
+                sw.Stop();
+                samples.Add(sw.Elapsed.TotalMilliseconds);
+            }
+            peakSeen = sampler.Peak;
+            liveAfter = GC.GetGCMemoryInfo().HeapSizeBytes;
         }
 
         long allocAfter = GC.GetTotalAllocatedBytes(true);
@@ -89,14 +171,51 @@ internal static class Measure
             Dialect = dialect.DisplayName,
             Implementation = impl.Name,
             Operation = operation,
+            Group = group,
             Rows = rows,
             MedianNs = median * 1_000_000,
             MeanNs = mean * 1_000_000,
             ErrorRatio = mean > 0 ? stdErr / mean : 0,
             Iterations = iterations,
             AllocatedBytesPerOp = (allocAfter - allocBefore) / (double)iterations,
-            PeakHeapBytes = peak,
+            PeakHeapBytes = peakSeen,
+            LiveHeapAfterBytes = liveAfter,
             Gen0Collections = gen0
+        };
+    }
+
+    /// <summary>测量「数据生成」本身的成本——不涉及数据库，纯粹是构造 N 个实体对象。
+    /// 这一项与实现无关（三实现相同），作为内存基线登记：它回答「测试数据自身的真实内存占用」。</summary>
+    public static Measurement MeasureDataGeneration(int rows, int iterations = 20)
+    {
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        long allocBefore = GC.GetTotalAllocatedBytes(true);
+        long peak;
+        using (var sampler = PeakSampler.Start())
+        {
+            for (int i = 0; i < iterations; i++)
+            {
+                _ = Dataset.SeedRows(rows);
+            }
+
+            peak = sampler.Peak;
+        }
+        long allocAfter = GC.GetTotalAllocatedBytes(true);
+        return new Measurement
+        {
+            Dialect = "—",
+            Implementation = "DataGen",
+            Operation = "GenerateRows",
+            Group = "Baseline",
+            Rows = rows,
+            MedianNs = 0,
+            MeanNs = 0,
+            ErrorRatio = 0,
+            Iterations = iterations,
+            AllocatedBytesPerOp = (allocAfter - allocBefore) / (double)iterations,
+            PeakHeapBytes = peak,
+            LiveHeapAfterBytes = GC.GetGCMemoryInfo().HeapSizeBytes,
+            Gen0Collections = 0
         };
     }
 
@@ -105,12 +224,11 @@ internal static class Measure
         DialectInfo dialect, IPerfImplementation impl, int rows, int threads,
         double seconds, double writeRatio, CancellationToken ct)
     {
-        var cs = Connections.Resolve(dialect);
+        string cs = Connections.Resolve(dialect);
         var conns = new DbConnection[threads];
         var samples = new ConcurrentQueue<double>[threads];
         try
         {
-            // 每线程独立连接 + 轻量查询确保物理连接真实建立（消除池生长噪声）
             for (int t = 0; t < threads; t++)
             {
                 conns[t] = dialect.OpenConnection(cs);
@@ -118,9 +236,9 @@ internal static class Measure
                 await impl.GetByKeyAsync(conns[t], 1, ct).ConfigureAwait(false);
             }
 
-            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
-
-            // 预热 1.5s（规范 §4：无预热的数字不得发布）
+            // 预热与计时的取消源必须分别构造：若 stop 在预热前就开始倒计时，预热一旦超过
+            // seconds，计时窗口开跑时令牌已取消——每个 worker 第一次 await 就抛
+            // OperationCanceledException 直接返回，采到 0 个样本（实测 8 线程 SQLite 踩中）。
             using (var warmup = new CancellationTokenSource(TimeSpan.FromSeconds(1.5)))
             {
                 await RunWorkers(conns, samples, threads, rows, writeRatio, impl,
@@ -128,22 +246,25 @@ internal static class Measure
             }
             Array.Clear(samples);
 
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
             var clock = Stopwatch.StartNew();
             await RunWorkers(conns, samples, threads, rows, writeRatio, impl, stop.Token).ConfigureAwait(false);
             clock.Stop();
 
-            // 过滤空队列：worker 在取消路径提前 return 时该线程可能零样本
-            var all = samples.Where(static q => q is not null && !q.IsEmpty)
-                .SelectMany(static q => q!).ToArray();
+            double[] all = [.. samples.Where(static q => q is not null && !q.IsEmpty).SelectMany(static q => q)];
             if (all.Length == 0)
+            {
                 throw new InvalidOperationException(
                     $"并发测量未采到样本（threads={threads}, rows={rows}）——所有 worker 均在取消路径退出。");
+            }
+
             Array.Sort(all);
             return new Measurement
             {
                 Dialect = dialect.DisplayName,
                 Implementation = impl.Name,
                 Operation = "Concurrent_Mixed80_20",
+                Group = "Concurrency",
                 Rows = rows,
                 OpsPerSecond = all.Length / clock.Elapsed.TotalSeconds,
                 P50Ms = Pct(all, 0.50) / 1000.0,
@@ -160,8 +281,13 @@ internal static class Measure
         }
         finally
         {
-            foreach (var c in conns)
-                if (c is not null) await c.DisposeAsync().ConfigureAwait(false);
+            foreach (DbConnection? c in conns)
+            {
+                if (c is not null)
+                {
+                    await c.DisposeAsync().ConfigureAwait(false);
+                }
+            }
         }
     }
 
@@ -174,7 +300,11 @@ internal static class Measure
         {
             int ti = t;
             samples[ti] = new ConcurrentQueue<double>();
-            tasks[t] = Task.Run(() => Worker(conns[ti], samples[ti], ti, rows, writeRatio, impl, stop));
+            // 令牌由 Worker 自行轮询（stop.IsCancellationRequested），不传给 Task.Run——
+            // 传了会让已取消时的 Task.Run 直接返回已取消任务，worker 根本不启动。
+            tasks[t] = Task.Run(
+                () => Worker(conns[ti], samples[ti], ti, rows, writeRatio, impl, stop),
+                CancellationToken.None);
         }
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
@@ -195,8 +325,7 @@ internal static class Measure
             {
                 if (write)
                 {
-                    var row = Dataset.Seed(id - 1);
-                    await impl.UpdateAsync(conn, row, stop).ConfigureAwait(false);
+                    await impl.UpdateAsync(conn, Dataset.Seed(id - 1), stop).ConfigureAwait(false);
                 }
                 else
                 {
@@ -205,8 +334,7 @@ internal static class Measure
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested)
             {
-                // 测量窗口关闭——优雅退出，不把取消当失败
-                return;
+                return;   // 测量窗口关闭——优雅退出
             }
             sw.Stop();
             samples.Enqueue(sw.Elapsed.TotalMilliseconds * 1000);   // 微秒
@@ -220,7 +348,11 @@ internal static class Measure
     {
         double mean = values.Average();
         double sum = 0;
-        foreach (double v in values) sum += (v - mean) * (v - mean);
+        foreach (double v in values)
+        {
+            sum += (v - mean) * (v - mean);
+        }
+
         return Math.Sqrt(sum / values.Count);
     }
 }
