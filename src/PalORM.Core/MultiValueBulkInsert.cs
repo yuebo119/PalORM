@@ -87,7 +87,8 @@ public static class MultiValueBulkInsert
             if (ownsTransaction)
             {
                 commitAttempted = true;
-                await tran.CommitAsync(ct).ConfigureAwait(false);
+                await TransactionCleanup.CommitWithTimeoutAsync(tran, commandTimeoutSeconds, ct)
+                    .ConfigureAwait(false);
             }
         }
         catch (Exception exception)

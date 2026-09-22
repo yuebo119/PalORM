@@ -146,7 +146,8 @@ public sealed partial class DataSession<TProvider>
                 using SessionOperationState.SessionOperationLease operation =
                     _operationState.EnterTransactionOperation();
                 commitAttempted = true;
-                await transaction.CommitAsync(ct).ConfigureAwait(false);
+                await TransactionCleanup.CommitWithTimeoutAsync(
+                    transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
                 return result;
             }
             catch (Exception exception)
@@ -264,7 +265,8 @@ public sealed partial class DataSession<TProvider>
             if (ownsTransaction)
             {
                 commitAttempted = true;
-                await transaction.CommitAsync(ct).ConfigureAwait(false);
+                await TransactionCleanup.CommitWithTimeoutAsync(
+                    transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
             }
             return result;
         }

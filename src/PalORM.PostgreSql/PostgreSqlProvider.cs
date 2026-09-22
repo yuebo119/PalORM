@@ -337,7 +337,8 @@ public sealed class PostgreSqlProvider : IDbProvider
             }
             primaryException = thrown;
             if (ownsTransaction)
-                await RollbackPreservingAsync(bulkTransaction, thrown, commandTimeoutSeconds).ConfigureAwait(false);
+                await BulkOperationFramework.RollbackPreservingAsync(bulkTransaction, thrown, commandTimeoutSeconds)
+                    .ConfigureAwait(false);
             throw thrown;
         }
         finally
@@ -444,42 +445,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         }
     }
 
-    // ITM-412 防漂移锚点：以下清理助手与 Core 的 DataSession.RollbackPreservingAsync 是同一
-    // "主异常保留"骨架的复制体（Provider 不得反向依赖 Core 内部实现，故刻意复制）。
-    // 修改任一侧语义（异常挂载键、有界回滚）时必须同步核对另一侧——两侧分叉即 ITM-304 同型温床。
-    // 注：DisposePreservingAsync 已抽到 BulkOperationFramework（v3.0），三 Provider 共享同一实现。
-    /// <summary>R3：有界回滚——原实现用 CancellationToken.None 无界等待，网络黑洞下会把一次
-    /// COPY 失败拖成永久卡死（且发生在异常传播路径）。超时异常挂主异常 Data，不替换原始失败。</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
-        Justification = "回滚是清理路径；异常附加到主异常，不能替换原始 COPY 失败。")]
-    private static async ValueTask RollbackPreservingAsync(
-        DbTransaction transaction, Exception primaryException, int rollbackTimeoutSeconds = 30)
-    {
-        CancellationToken ct = CancellationToken.None;
-        CancellationTokenSource? timeoutCts = null;
-        if (rollbackTimeoutSeconds > 0)
-        {
-            timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(rollbackTimeoutSeconds));
-            ct = timeoutCts.Token;
-        }
-        try
-        {
-            await transaction.RollbackAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException timeoutException) when (ct.IsCancellationRequested)
-        {
-            primaryException.Data["PalORM.RollbackTimeoutException"] = new TimeoutException(
-                $"Rollback timed out after {rollbackTimeoutSeconds}s; the server-side transaction may still be open.",
-                timeoutException);
-        }
-        catch (Exception rollbackException)
-        {
-            primaryException.Data["PalORM.RollbackException"] = rollbackException;
-        }
-        finally
-        {
-            timeoutCts?.Dispose();
-        }
-    }
+    // ITM-412 防漂移锚点（r22 收敛）：有界回滚与 DisposePreservingAsync 同族，已抽到
+    // BulkOperationFramework 单一实现（跨程序集 public 入口，委派 Core 的 TransactionCleanup），
+    // 三 Provider 与 Core 共享同一份语义——不再存在需要两侧同步核对的复制体。
 }

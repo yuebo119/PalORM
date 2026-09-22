@@ -103,4 +103,17 @@ public static class BulkOperationFramework
             primaryException.Data[dataKey] = cleanupException;
         }
     }
+
+    /// <summary>有界回滚的跨程序集入口——Provider 批量路径（PG COPY / MySQL LOAD DATA）复用 Core 的
+    /// 单一实现（<see cref="TransactionCleanup.RollbackPreservingAsync"/>），不各自复制。
+    /// <para><b>为什么需要它</b>：MySQL 批量失败路径此前只依赖驱动 Dispose 的隐式回滚，而隐式回滚
+    /// 发生在异常传播路径上且无超时上界——网络黑洞下把一次快速失败拖成永久卡死；回滚失败与未尝试
+    /// 回滚在诊断上也不可区分（PalORM.RollbackException / RollbackTimeoutException 永不出现）。</para>
+    /// <para><b>语义</b>与 Core 侧完全一致：<paramref name="rollbackTimeoutSeconds"/> ≤ 0 表示无限等待
+    /// （CommandTimeout Zero 契约同口径）；超时挂 PalORM.RollbackTimeoutException，回滚自身失败挂
+    /// PalORM.RollbackException，两者都附加到主异常 Data，不替换原始失败。</para></summary>
+    public static ValueTask RollbackPreservingAsync(
+        DbTransaction transaction, Exception primaryException,
+        int rollbackTimeoutSeconds = TransactionCleanup.DefaultRollbackTimeoutSeconds)
+        => TransactionCleanup.RollbackPreservingAsync(transaction, primaryException, rollbackTimeoutSeconds);
 }
