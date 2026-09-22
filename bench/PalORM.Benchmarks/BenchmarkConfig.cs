@@ -20,6 +20,18 @@ internal static class BenchmarkConfig
     public const string CacheSqliteCs = "Data Source=bench_cache;Mode=Memory;Cache=Shared";
     public const int SeedRows = 10000;
 
+    // ── 连接配置口径（规范 v2 §4.1）——三套夹具与三条路径各自登记，避免"跨口径比较" ──
+    /// <summary>BDN 微基准与 GC/构建类基准：shared-cache 内存库（无 I/O 治理 PRAGMA）。</summary>
+    public const string RegimeBdnMemory =
+        "sqlite: shared-cache 内存库（Data Source=bench;Mode=Memory;Cache=Shared），"
+        + "未开 WAL/mmap（内存库无 I/O 治理语义）；pg/mysql: 驱动默认";
+
+    /// <summary>负载/长稳/内存曲线：临时目录文件库，经产品 Provider 初始化自动治理。</summary>
+    public const string RegimeFileDb =
+        "sqlite: 临时目录文件库，经产品 Provider 初始化（foreign_keys + journal_mode=WAL + "
+        + "synchronous=NORMAL + cache_size=-65536 + temp_store=MEMORY + wal_autocheckpoint=1000 + "
+        + "mmap_size=268435456）；pg/mysql: 驱动默认 + MySQL 追加 AllowLoadLocalInfile";
+
     // ── Job 配置（消除 magic number 散落各处）──
     // 标准：正式报告用，统计可信度高（Adam Sitnik 推荐 ≥15 迭代总量）
     public const int StandardLaunch = 3, StandardWarmup = 5, StandardIterations = 10;

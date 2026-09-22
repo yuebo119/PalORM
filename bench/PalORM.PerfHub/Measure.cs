@@ -268,7 +268,9 @@ internal static class Measure
         {
             for (int t = 0; t < threads; t++)
             {
-                conns[t] = dialect.OpenConnection(cs);
+                // 维度 8：并发项也包计数装饰器（每线程一条，计数走 Interlocked，
+                // 读取时跨线程求和）——否则 7 个并发项是维度 8 的覆盖缺口
+                conns[t] = new CountingConnection(dialect.OpenConnection(cs));
                 await conns[t].OpenAsync(ct).ConfigureAwait(false);
                 await impl.GetByKeyAsync(conns[t], 1, ct).ConfigureAwait(false);
             }
@@ -296,6 +298,19 @@ internal static class Measure
             }
 
             Array.Sort(all);
+
+            // 维度 8：跨线程求和后按采样操作数摊平。分母用采样数而非执行数——
+            // 取消路径上未完成的尝试不计入样本，故该值是"每个完成操作的往返数"上界。
+            long executes = 0, prepares = 0;
+            foreach (DbConnection c in conns)
+            {
+                if (c is CountingConnection cc)
+                {
+                    executes += cc.Executes;
+                    prepares += cc.Prepares;
+                }
+            }
+
             return new Measurement
             {
                 Dialect = dialect.DisplayName,
@@ -313,7 +328,9 @@ internal static class Measure
                 MeanNs = all.Average() * 1_000_000,
                 ErrorRatio = all.Length > 1 ? StdDev(all) / Math.Sqrt(all.Length) / all.Average() : 0,
                 AllocatedBytesPerOp = 0,   // 并发态分配计数被多线程干扰，不测（B74）
-                PeakHeapBytes = GC.GetGCMemoryInfo().HeapSizeBytes
+                PeakHeapBytes = GC.GetGCMemoryInfo().HeapSizeBytes,
+                RoundTripsPerOp = executes / (double)all.Length,
+                PreparedReuse = executes == 0 ? 0 : prepares / (double)executes
             };
         }
         finally

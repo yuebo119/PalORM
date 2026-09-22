@@ -104,8 +104,7 @@ public static class Program
             Environment = PerfResultWriter.CaptureEnvironment("PalORM.Benchmarks"),
             Regime = new PerfResultRegime
             {
-                ConnectionConfig = "sqlite: shared-cache 内存库（Data Source=bench;Mode=Memory;Cache=Shared），"
-                    + "未开 WAL/mmap（内存库无 I/O 治理语义）；pg/mysql: 驱动默认（真库档由 --workload/真库基准类覆盖）",
+                ConnectionConfig = BenchmarkConfig.RegimeBdnMemory,
                 SessionLifecycle = "混合（各基准类自述：单操作类每操作建会话，负载/长稳类复用会话）",
                 HealthRatio = healthRatio,
                 HealthThreshold = HealthThreshold,
