@@ -69,7 +69,9 @@ internal static class Program
 
         foreach (BenchmarkReport r in reports)
         {
-            double mean = r.ResultStatistics?.Mean ?? 0;
+            // NA 行（无连接/被跳过/失败）不该进结果库：0 均值会被读成"极快"
+            if (r.ResultStatistics is not { Mean: > 0 } stats) continue;
+            double mean = stats.Mean;
             envelope.Items.Add(new PerfResultItem
             {
                 Name = NameOf(r),

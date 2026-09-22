@@ -617,7 +617,12 @@ internal static class Program
         string json = JsonSerializer.Serialize(run, PerfJsonContext.Default.PerfRun);
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         File.WriteAllText(Path.Combine(dir, $"history-{stamp}.json"), json);
-        File.WriteAllText(Path.Combine(dir, "latest.json"), json);
+        // 冒烟批次不顶 latest：否则 HTML 报告的"当前数字"会变成 quick 值，而它不可引用
+        if (!label.Contains("quick", StringComparison.OrdinalIgnoreCase))
+        {
+            File.WriteAllText(Path.Combine(dir, "latest.json"), json);
+        }
+
         Console.WriteLine($"[PerfHub] 原始数据已写入 bench/perfhub/results/history-{stamp}.json");
 
         // 结果库信封（规范 v2 §6）：跨夹具可查询的最小集 + 口径登记 + 健康度
