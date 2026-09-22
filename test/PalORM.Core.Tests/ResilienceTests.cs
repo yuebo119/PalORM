@@ -107,6 +107,82 @@ public sealed class ResilienceTests
         await Assert.That(thrown!.Message).Contains("Command timed out");
     }
 
+    // ─── RES-002（2026-09-23）：熔断器作用域 ───────────────
+
+    private static Task<int> TransientFailure(CancellationToken _)
+        => Task.FromException<int>(new InvalidOperationException("transient"));
+
+    [Test]
+    public async Task CircuitBreakerScope_Process_SharesFailuresAcrossExecutors()
+    {
+        // 会话级熔断器的失败计数随会话销毁：一请求一会话时阈值 5 几乎不可达，熔断器形同虚设。
+        // 进程级按 (Provider, 连接串, 阈值, 冷却) 共享——第二个执行器（等价于新会话）必须看到已开闸。
+        var opts = new DbOptions
+        {
+            ConnectionString = $"scope-process-{Guid.NewGuid():N}",
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 2,
+            CircuitBreakerScope = CircuitBreakerScope.Process
+        };
+        var first = new ResilienceExecutor(opts, static _ => true, typeof(ResilienceTests));
+        var second = new ResilienceExecutor(opts, static _ => true, typeof(ResilienceTests));
+
+        for (int i = 0; i < 2; i++)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await first.ExecuteAsync(TransientFailure));
+        }
+
+        await Assert.ThrowsAsync<CircuitBreakerOpenException>(async () =>
+            await second.ExecuteAsync(_ => Task.FromResult(1)));
+    }
+
+    [Test]
+    public async Task CircuitBreakerScope_Session_DoesNotShareAcrossExecutors()
+    {
+        // 默认作用域保持历史行为：每个执行器独立计数，互不影响
+        var opts = new DbOptions
+        {
+            ConnectionString = $"scope-session-{Guid.NewGuid():N}",
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 2
+        };
+        var first = new ResilienceExecutor(opts, static _ => true, typeof(ResilienceTests));
+        var second = new ResilienceExecutor(opts, static _ => true, typeof(ResilienceTests));
+
+        for (int i = 0; i < 2; i++)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await first.ExecuteAsync(TransientFailure));
+        }
+
+        int result = await second.ExecuteAsync(_ => Task.FromResult(7));
+        await Assert.That(result).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task CircuitBreakerScope_Process_ConfigChangeGetsFreshBreaker()
+    {
+        // 键含阈值/冷却：改配置后必须拿到新熔断器，否则 WithCircuitBreaker 的新阈值静默失效
+        string connectionString = $"scope-config-{Guid.NewGuid():N}";
+        var openAtOne = new DbOptions
+        {
+            ConnectionString = connectionString,
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 1,
+            CircuitBreakerScope = CircuitBreakerScope.Process
+        };
+        var openAtTen = openAtOne with { CircuitBreakerThreshold = 10 };
+
+        var first = new ResilienceExecutor(openAtOne, static _ => true, typeof(ResilienceTests));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await first.ExecuteAsync(TransientFailure));
+
+        var second = new ResilienceExecutor(openAtTen, static _ => true, typeof(ResilienceTests));
+        int result = await second.ExecuteAsync(_ => Task.FromResult(3));
+        await Assert.That(result).IsEqualTo(3);
+    }
+
     [Test]
     public async Task ExecuteAsync_RetriesOnFailure()
     {

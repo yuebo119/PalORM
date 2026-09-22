@@ -27,7 +27,7 @@ public sealed class ResilienceExecutor
     {
     }
 
-    internal ResilienceExecutor(DbOptions options, Func<Exception, bool> isTransient)
+    internal ResilienceExecutor(DbOptions options, Func<Exception, bool> isTransient, Type? providerType = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(isTransient);
@@ -61,7 +61,12 @@ public sealed class ResilienceExecutor
             ? Timeout.InfiniteTimeSpan
             : options.CommandTimeout;
         _isTransient = isTransient;
-        _circuitBreaker = new CircuitBreaker(options.CircuitBreakerThreshold, options.CircuitBreakerResetAfter);
+        // RES-002（2026-09-23）：会话级（默认）每个执行器一个熔断器；进程级按
+        // (Provider, 连接串, 阈值, 冷却) 共享——否则"一请求一会话"下阈值永远达不到。
+        // providerType 为 null（如直接构造执行器的测试）时退化为会话级，避免无键可用。
+        _circuitBreaker = options.CircuitBreakerScope == CircuitBreakerScope.Process && providerType is not null
+            ? CircuitBreakerRegistry.GetOrAdd(providerType, options)
+            : new CircuitBreaker(options.CircuitBreakerThreshold, options.CircuitBreakerResetAfter);
     }
 
     /// <summary>执行带重试和熔断的异步操作。
