@@ -29,7 +29,9 @@ internal static class Program
         }
 
         IEnumerable<Summary> summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, new Config());
-        WriteEnvelope(summaries);
+        // 过滤批次带标记（规范 §6）：`perf.sh smoke` 走过滤跑，未标记的子集会顶掉 latest 并被当全量
+        bool filtered = Array.Exists(args, static a => a.Contains("filter", StringComparison.OrdinalIgnoreCase));
+        WriteEnvelope(summaries, filtered ? Database.Dialect + "+filtered" : Database.Dialect);
         return 0;
     }
 
@@ -39,7 +41,7 @@ internal static class Program
 
     /// <summary>结果库信封（规范 v2 §6）——本夹具不测维度 8（往返计数在 PerfHub），
     /// RoundTripsPerOp/PreparedReuse 留 0 表示未测；比值以同批次 HandCoded/SqlCommand 为地板现算。</summary>
-    private static void WriteEnvelope(IEnumerable<Summary> summaries)
+    private static void WriteEnvelope(IEnumerable<Summary> summaries, string label)
     {
         List<BenchmarkReport> reports = [.. summaries.SelectMany(static s => s.Reports)];
         if (reports.Count == 0) return;
@@ -54,7 +56,7 @@ internal static class Program
         {
             Harness = "dappersuite",
             Version = Environment.GetEnvironmentVariable("DAPPER_SUITE_VERSION") ?? "HEAD",
-            Label = Database.Dialect,
+            Label = label,
             DetailPath = "BenchmarkDotNet.Artifacts/results",
             Environment = PerfResultWriter.CaptureEnvironment("DapperSuite"),
             Regime = new PerfResultRegime
