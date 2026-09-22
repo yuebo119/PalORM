@@ -147,6 +147,12 @@ public sealed class SessionBatch<TProvider> : IDisposable
 
     private static DbBatch? TryCreateBatch(DbConnection connection, DbTransaction? transaction)
     {
+        // BATCH-002（2026-09-23）：先做方言静态判定。Microsoft.Data.Sqlite 不覆写 CreateBatch，
+        // 基类实现直接抛 NotSupportedException——每批一次异常抛出 + 栈捕获（约 10-50µs）是纯固定成本，
+        // 而 SQLite 本地 RTT≈0、回退路径行为等价（见 ExecuteNonQueryAsync 注释）。
+        // 未知方言（未来第三方 Provider）保留 try/catch 兜底，行为不变。
+        if (TProvider.Dialect == SqlDialect.Sqlite) return null;
+
         try
         {
             DbBatch batch = connection.CreateBatch();
