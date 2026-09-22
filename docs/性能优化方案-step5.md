@@ -1,11 +1,13 @@
 # 性能优化方案 step5
 
+> 复核注记（2026-09-22）：本报告部分"已排除项"经复核为假阴性（ShapeCache 键空间、缓存无界增长、PG/MySQL 连接池映射），P2-43 的 `DbBatch` 表述与参考程序集不符；实施前请对照 `docs/review/性能优化任务清单-2026-09-22.md` §六 与 §九。
+
 > 基线：9b22ebf（dev 分支）｜ 审查日期：2026-09-22 ｜ 审查范围：src/ 全部手写源码 16.4K 行 + 三 Provider + SourceGen 生成代码产物
 > 审查方法：5 个并行专项（延迟 / 内存 / 并发 / 可靠性 / SourceGen）逐文件精读 + 主审对关键证据逐条复核（含 P0 级发现的跨文件不对称性比对）
 
 ## 一、结论
 
-共 43 个可动优化点：P0 级 1 个，P1 级 20 个，P2 级 22 个。
+共 52 个可动优化点：P0 级 1 个，P1 级 20 个，P2 级 31 个。
 
 首要结论：**代码库不存在"必须修"的性能缺陷结构**。SELECT 单查询主路径已被形状缓存、参数名缓存、编译期 ordinal 内联、流式终结器多轮收敛，剩余项多为固定开销与批量写入路径的分配热点。唯一 P0 在事务可靠性面：MySQL BulkCopy 失败后不显式回滚，是三 Provider 批量路径中唯一的漏网实现。
 
@@ -194,11 +196,11 @@
 - 依据：[事实]
 - 建议：有界并发预热（并行度取 Min(ProcessorCount, count) 或与 MinPoolSize 对齐）Task.WhenAll 扇出，失败语义（建连异常原样抛出）不变。
 
-### P1-27 重试放大最坏延迟（与 P1-33 同一根因，合并处理）
+### P1-27 重试放大最坏延迟（与 P1-35 同一根因，合并处理）
 - 位置：`src/PalORM.Core/Resilience.cs:81`
 - 问题：CommandTimeout=30s + MaxRetries=3 单查询最坏约 90-122s 才抛，整段独占连接与操作租约。无 jitter 的固定退避（100→200→400ms）在故障风暴下惊群，把池连接慢性占满，正常请求排队等池。重试放大与池饥饿的经典组合。
 - 依据：[事实]（时间乘法关系）
-- 建议：见 P1-33 的总预算 CTS；退避加 jitter；XML doc 写出最坏延迟公式，让延迟敏感路径可配 MaxRetries=0。
+- 建议：见 P1-35 的总预算 CTS；退避加 jitter；XML doc 写出最坏延迟公式，让延迟敏感路径可配 MaxRetries=0。
 
 ### P2-28 GetActiveTransaction 每命令创建都过锁 + 驱动探针
 - 位置：`src/PalORM.Core/DataSession.cs:603`、`src/PalORM.Core/SessionOperationState.cs:323`

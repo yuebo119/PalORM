@@ -320,6 +320,23 @@ internal sealed class SessionOperationState
         }
     }
 
+    /// <summary>是否存在可用事务——不抛异常的查询形式（API-002，2026-09-22）。
+    /// <see cref="GetActiveTransaction"/> 在"外部设入的事务被外部释放"时响亮抛异常（ITM-640/767），
+    /// 那是给<b>执行路径</b>的保护；而"当前有没有可用事务"这一事实查询（如
+    /// <c>DataSession.IsInTransaction</c>、咨询锁前置检查）若跟着抛，调用方会拿到与自身语义
+    /// 无关的 ITM-640 异常。判定与 GetActiveTransaction 一致，仅把该分支折叠为 false；
+    /// 且本查询只读，不触发 GetActiveTransaction 的静默清理副作用。</summary>
+    internal bool HasUsableTransaction
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return IsTransactionAlive(_transaction);
+            }
+        }
+    }
+
     internal DbTransaction? GetActiveTransaction()
     {
         lock (_sync)

@@ -72,4 +72,20 @@ public sealed class TransactionGuardTests
         await Assert.That(observed).IsTrue();
         await Assert.That(session.IsInTransaction).IsFalse();
     }
+
+    [Test]
+    public async Task IsInTransaction_FalseAfterExternalTransactionDisposed()
+    {
+        // API-002（2026-09-22）：外部设入的事务被外部 Dispose 后，执行路径继续响亮失败
+        // （ITM-640/767，另由 SessionConcurrencyTests 锁定），但本属性是事实查询，必须返回
+        // false——原实现直接调 GetActiveTransaction，与本属性 XML doc 的承诺矛盾（文档说 false，
+        // 实现抛异常），并让 EnsureInTransaction 之类的自查拿到无关的 ITM-640 异常。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await using var tran = await session.GetRawConnection().BeginTransactionAsync();
+        session.UseTransaction(tran);
+
+        await tran.DisposeAsync();
+
+        await Assert.That(session.IsInTransaction).IsFalse();
+    }
 }
