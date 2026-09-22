@@ -60,7 +60,10 @@ public partial class DataSession<TProvider>
         DeleteIdentifiers identifiers = new(
             quotedTable, quotedPrimaryKey, TProvider.QuoteIdentifier("deleted_at"),
             TProvider.CurrentTimestampExpression, tenantFilter);
-        const int batchSize = SqlLimits.InClauseBatchSize;
+        // BULK-001（2026-09-23）：本路径每批一次独立往返，批大小取"方言参数上限"与"单批行数上限"
+        // 的较小者。原用 InClauseBatchSize（500，单语句内拼 IN 片段的约束）把 10 万键放大成 200 次往返；
+        // PG/MySQL 现为 5000（20 次），SQLite 受 999 参数上限约束（100 次）。
+        int batchSize = Math.Min(SqlLimits.MaxBindParametersFor(TProvider.Dialect), SqlLimits.MaxRowsPerBatch);
         // 满批占位符名在批大小不变时逐位相同——预建一次，末批另建
         string[] fullBatchPlaceholders = BuildPlaceholderNames(TProvider.GetParameterPlaceholder, batchSize);
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
@@ -216,7 +219,10 @@ public partial class DataSession<TProvider>
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
             string tableName = state._tableNames[typeof(T)];
             BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, routeMetadata, tableName, entities[0]);
-            int rowsPerBatch = Math.Max(1, SqlLimits.MaxBindParameters / (ctx.SetColumnCount + 1));
+            // BULK-001：方言参数上限 + 单批行数上限（文本规模）双约束
+            int rowsPerBatch = Math.Min(
+                Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) / (ctx.SetColumnCount + 1)),
+                SqlLimits.MaxRowsPerBatch);
             return await RunInTransactionScopeAsync(
                 operation.Owner,
                 async (tran, token) =>
@@ -410,7 +416,11 @@ public partial class DataSession<TProvider>
         // ITM-640：SQLite 已在上方回退逐条路径，此处恒非 SQLite——原三元的 999 分支不可达。
         const int driverLimit = SqlLimits.MaxBindParameters;
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
-        int rowsPerBatch = Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1));
+        // BULK-001（2026-09-23）：再取单批行数上限——本路径在 MySQL 走 CASE WHEN 形态，
+        // 文本按 O(行数×列数) 增长，仅受参数上限约束会生成 MB 级单语句。
+        int rowsPerBatch = Math.Min(
+            Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1)),
+            SqlLimits.MaxRowsPerBatch);
 
         // v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。
         return await RunInTransactionScopeAsync(
@@ -680,7 +690,12 @@ public partial class DataSession<TProvider>
         if (entities.Count == 0) return 0;
 
         int columnCount = metadata.UpsertColumns.Count;
-        const int maxParametersPerStatement = 900;
+        // BULK-001（2026-09-23）：按方言取参数上限——原硬编码 900（SQLite 999 的余量）把 PG/MySQL
+        // 的 65535 上限钳到 900：20 列实体 45 行/批、10K 行 223 次往返（同上限只需 4 批）。
+        // 再叠加单批行数上限约束语句文本规模。
+        int maxParametersPerStatement = Math.Min(
+            SqlLimits.MaxBindParametersFor(TProvider.Dialect),
+            SqlLimits.MaxRowsPerBatch * columnCount);
         int batchSize = Math.Max(1, maxParametersPerStatement / columnCount);
 
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
