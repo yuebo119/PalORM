@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PalORM.Bench.Shared;
 
 namespace PalORM.PerfHub;
 
@@ -114,6 +115,7 @@ internal static class Program
                     break;
                 case "--quick":
                     scale = 0.3;
+                    label = label.Length == 0 ? "quick" : label;   // 冒烟批次进结果库时带标记，避免被当可引用数字
                     break;
                 case "--label":
                     label = args[++i];
@@ -168,8 +170,24 @@ internal static class Program
             Console.WriteLine();
             Console.WriteLine($"══════ {info.DisplayName} ══════");
             string cs = Connections.Resolve(info);
-            await using DbConnection conn = info.OpenConnection(cs);
-            await conn.OpenAsync(cts.Token).ConfigureAwait(false);
+            await using DbConnection rawConn = info.OpenConnection(cs);
+            await rawConn.OpenAsync(cts.Token).ConfigureAwait(false);
+
+            // 连接配置口径（规范 §4.1）：三臂共用这一条连接，故此处一次治理即全臂同值。
+            // 与 DapperSuite 的口径差 D10 逐项一致——SQLite 上不开 WAL/mmap，整档会落在
+            // I/O 主导区间，8 µs 级差异不可分辨（2026-09-22 实测：同一修复在两种配置下
+            // 分别是 −30% 与 0%）。
+            if (info.Dialect == Dialect.Sqlite)
+            {
+                await using DbCommand pragma = rawConn.CreateCommand();
+                pragma.CommandText = SqliteGovernancePragma;
+                await pragma.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
+            }
+
+            // 维度 8（往返与语句效率）：包一层计数装饰器。包在连接上而不是各臂内部，
+            // 三臂（ADO 自建命令 / Dapper 在传入连接上建 / PalORM 会话在调用方连接上建）
+            // 才能用同一把尺子量，且能抓到意外 N+1。
+            await using var conn = new CountingConnection(rawConn);
 
             // 三实现共用同一连接（B76：建连口径一致）
             IPerfImplementation[] impls = [new AdoNetImpl(info), new DapperImpl(info), new PalormImpl(info)];
@@ -601,7 +619,92 @@ internal static class Program
         File.WriteAllText(Path.Combine(dir, $"history-{stamp}.json"), json);
         File.WriteAllText(Path.Combine(dir, "latest.json"), json);
         Console.WriteLine($"[PerfHub] 原始数据已写入 bench/perfhub/results/history-{stamp}.json");
+
+        // 结果库信封（规范 v2 §6）：跨夹具可查询的最小集 + 口径登记 + 健康度
+        WriteEnvelope(results, label, version, elapsed, Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"));
     }
+
+    /// <summary>把本批次映射成结果库信封。Ratio 以同方言同档位的 ADO_NET 行为地板现算
+    /// （与报告口径一致）；健康度取**地板行散布的中位数**（取最大值会被 sub-µs 项的调度抖动
+    /// 支配，取最小值会漏掉只影响慢项的争用），阈值为本夹具实测噪声底上界。</summary>
+    private static void WriteEnvelope(
+        List<Measurement> results, string label, string version, TimeSpan elapsed, string detailPath)
+    {
+        var spreads = new List<double>();
+        foreach (Measurement m in results)
+        {
+            if (m.Implementation != "ADO_NET" || m.ErrorRatio <= 0) continue;
+            spreads.Add(m.ErrorRatio * Math.Sqrt(Math.Max(m.Iterations, 1)));
+        }
+
+        double floorRatio = 0;
+        if (spreads.Count > 0)
+        {
+            spreads.Sort();
+            floorRatio = spreads[spreads.Count / 2];
+        }
+
+        var envelope = new PerfResultEnvelope
+        {
+            Harness = "perfhub",
+            Version = version,
+            Label = label,
+            ElapsedSeconds = elapsed.TotalSeconds,
+            DetailPath = detailPath.Replace('\\', '/'),
+            Environment = PerfResultWriter.CaptureEnvironment("PerfHub " + version),
+            Regime = new PerfResultRegime
+            {
+                ConnectionConfig = RegimeDescription,
+                SessionLifecycle = "per-operation（每操作新建 DataSession，与 Dapper 无状态扩展方法对等）",
+                HealthRatio = floorRatio,
+                HealthThreshold = HealthThreshold,
+                Health = PerfResultWriter.Verdict(floorRatio, HealthThreshold)
+            }
+        };
+
+        foreach (Measurement m in results)
+        {
+            Measurement? floor = results.Find(b => b.Implementation == "ADO_NET"
+                && b.Dialect == m.Dialect && b.Operation == m.Operation && b.Rows == m.Rows);
+            envelope.Items.Add(new PerfResultItem
+            {
+                Name = m.Operation,
+                Dialect = m.Dialect,
+                Arm = m.Implementation,
+                Tier = m.Rows,
+                MeanUs = m.MeanNs / 1000.0,
+                AllocBytes = (long)m.AllocatedBytesPerOp,
+                Ratio = floor is null || floor.MeanNs <= 0 ? 0 : m.MeanNs / floor.MeanNs,
+                RoundTripsPerOp = m.RoundTripsPerOp,
+                PreparedReuse = m.PreparedReuse,
+                Note = m.Group
+            });
+        }
+
+        string? path = PerfResultWriter.Write(envelope);
+        Console.WriteLine(path is null
+            ? "[PerfHub] 结果库信封写入失败（明细已落盘，不影响本次测量）"
+            : $"[PerfHub] 结果库信封已写入 {path}");
+    }
+
+    /// <summary>健康度阈值（规范 §4.2）——本夹具自适应短跑的地板散布实测 0.21 / 0.26 / 0.31
+    ///（2026-09-22 三批 --quick），取上界加余量作阈值；越界即判 noisy。
+    /// 不借用 BDN 长跑的 0.10：两者散布不是一个量级（BDN unroll 500 × 10 迭代 vs 自适应 3-50 迭代）。
+    /// <para><b>口径提醒</b>：quick 模式只用于冒烟，可引用的数字必须来自全量模式（迭代预算更高）。</para></summary>
+    private const double HealthThreshold = 0.35;
+
+    /// <summary>SQLite 连接治理（规范 §4.1 的连接配置口径）——与产品
+    /// <c>SqliteProvider.InitializeConnectionAsync</c> 逐条一致，也与 DapperSuite 同值。</summary>
+    private const string SqliteGovernancePragma =
+        "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; PRAGMA synchronous = NORMAL; "
+        + "PRAGMA cache_size = -65536; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 1000; "
+        + "PRAGMA mmap_size = 268435456";
+
+    /// <summary>连接配置口径（规范 §4.1）——三臂同值，改这里必须同步报告与文档。</summary>
+    internal const string RegimeDescription =
+        "sqlite: 三臂同一组 PRAGMA（foreign_keys=ON / journal_mode=WAL / synchronous=NORMAL / "
+        + "cache_size=-65536 / temp_store=MEMORY / wal_autocheckpoint=1000 / mmap_size=268435456）；"
+        + "pg/mysql: 驱动默认 + MySQL 追加 AllowLoadLocalInfile=true（三臂同值）";
 
     private static string FindRepoRoot()
     {

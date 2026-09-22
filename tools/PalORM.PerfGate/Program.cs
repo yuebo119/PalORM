@@ -52,6 +52,9 @@ internal static class Program
                 "record" => Record(CommandLine.Parse(args[1..])),
                 "check" => Check(CommandLine.Parse(args[1..])),
                 "report" => Report(CommandLine.Parse(args[1..])),
+                "index" => Index(CommandLine.Parse(args[1..])),
+                "record-index" => RecordIndex(CommandLine.Parse(args[1..])),
+                "check-index" => CheckIndex(CommandLine.Parse(args[1..])),
                 _ => Fail($"未知子命令: {args[0]}"),
             };
         }
@@ -69,6 +72,52 @@ internal static class Program
         Console.WriteLine("  check  --results <BDN结果目录> --baseline <基线路径>");
         Console.WriteLine("  report --results <BDN结果目录> --baseline <基线路径> --workload <json> --memory <json> --out <md>");
         Console.WriteLine("         （workload/memory/out 可选；缺省只含微基准节）");
+        Console.WriteLine("  index  --results <结果库目录> --out <md>");
+        Console.WriteLine("         （扫三套夹具的信封 JSON，生成跨夹具索引报告；默认 bench/results → bench/reports/perf-index.md）");
+        Console.WriteLine("  record-index --out <基线路径> [--results <结果库目录>]");
+        Console.WriteLine("         （把结果库里 PerfHub 的 PalORM 比值录成基线；DapperSuite 只作哨兵不进基线）");
+        Console.WriteLine("  check-index --baseline <基线路径> [--results <结果库目录>]");
+        Console.WriteLine("         （比对最近一批的比值，恶化超阈值即失败；缺项不判失败，全缺项判失败）");
+    }
+
+    /// <summary>结果库索引（规范 v2 §6）：默认目录与默认输出都可被命令行覆盖。</summary>
+    private static int Index(CommandLine line)
+    {
+        string resultsDir = line.Optional("results") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(RepoRoot(), "bench", "results");
+        string output = line.Optional("out") is { Length: > 0 } outPath
+            ? outPath
+            : Path.Combine(RepoRoot(), "bench", "reports", "perf-index.md");
+        return IndexGenerator.Generate(resultsDir, output);
+    }
+
+    private static int RecordIndex(CommandLine line)
+    {
+        string resultsDir = line.Optional("results") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(RepoRoot(), "bench", "results");
+        return IndexGate.Record(resultsDir, line.Require("out"));
+    }
+
+    private static int CheckIndex(CommandLine line)
+    {
+        string resultsDir = line.Optional("results") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(RepoRoot(), "bench", "results");
+        return IndexGate.Check(resultsDir, line.Require("baseline"));
+    }
+
+    /// <summary>仓库根：向上找 PalORM.slnx（与 run-full-perf.sh 的定位方式一致）。</summary>
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "PalORM.slnx")))
+        {
+            dir = dir.Parent;
+        }
+
+        return dir?.FullName ?? AppContext.BaseDirectory;
     }
 
     private static int Fail(string message)

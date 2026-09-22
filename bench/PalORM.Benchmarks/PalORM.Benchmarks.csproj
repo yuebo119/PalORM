@@ -33,6 +33,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 结果库统一信封（规范 v2 §6）——三套夹具共用同一份定义，避免 schema 各自漂移 -->
+    <Compile Include="..\shared\PerfResultEnvelope.cs" Link="PerfResultEnvelope.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Dapper 对照 -->
     <PackageReference Include="Dapper" />
     <PackageReference Include="Dapper.AOT" />

@@ -8,4 +8,9 @@
     <NoWarn>$(NoWarn);CA1303;CA1849;S6966;IDE0028;IDE0061;CA1307;S1135</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 结果库信封模型（规范 v2 §6）——与三套夹具共用同一份定义，避免 schema 漂移 -->
+    <Compile Include="..\..\bench\shared\PerfResultEnvelope.cs" Link="PerfResultEnvelope.cs" />
+  </ItemGroup>
+
 </Project>

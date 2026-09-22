@@ -40,6 +40,14 @@ internal sealed class Measurement
     public double P95Ms { get; set; }
     public double P99Ms { get; set; }
     public int ConcurrencyThreads { get; set; }
+
+    // ── 指标 4：往返与语句效率（维度 8，规范 §1）──
+    /// <summary>每操作命令执行次数（往返次数）。由 CountingConnection 装饰器实测，
+    /// 非"按实现形态声明"——它能抓到意外 N+1（Dapper 的 multi-exec 会如实计入）。</summary>
+    public double RoundTripsPerOp { get; set; }
+
+    /// <summary>prepared 复用率 = Prepare 调用次数 / 执行次数（0 表示从不 prepare）。</summary>
+    public double PreparedReuse { get; set; }
 }
 
 /// <summary>峰值内存采样器——后台线程高频轮询堆大小，取操作期间的最大值。
@@ -154,6 +162,15 @@ internal static class Measure
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
         long allocBefore = GC.GetTotalAllocatedBytes(true);
 
+        // 维度 8：往返次数与 prepared 复用同样按「整轮一次计数 / 轮数」——连接被装饰时才计
+        long execBefore = 0, prepareBefore = 0;
+        bool counting = conn is CountingConnection;
+        if (conn is CountingConnection cc0)
+        {
+            execBefore = cc0.Executes;
+            prepareBefore = cc0.Prepares;
+        }
+
         using (var sampler = PeakSampler.Start())
         {
             var sw = new Stopwatch();
@@ -170,6 +187,14 @@ internal static class Measure
 
         long allocAfter = GC.GetTotalAllocatedBytes(true);
         int gen0 = GC.CollectionCount(0) - gen0Before;
+
+        double roundTrips = 0, preparedReuse = 0;
+        if (counting && conn is CountingConnection cc1)
+        {
+            long execs = cc1.Executes - execBefore;
+            roundTrips = execs / (double)iterations;
+            preparedReuse = execs == 0 ? 0 : (cc1.Prepares - prepareBefore) / (double)execs;
+        }
 
         samples.Sort();
         double median = samples[samples.Count / 2];
@@ -190,7 +215,9 @@ internal static class Measure
             AllocatedBytesPerOp = (allocAfter - allocBefore) / (double)iterations,
             PeakHeapBytes = peakSeen,
             LiveHeapAfterBytes = liveAfter,
-            Gen0Collections = gen0
+            Gen0Collections = gen0,
+            RoundTripsPerOp = roundTrips,
+            PreparedReuse = preparedReuse
         };
     }
 

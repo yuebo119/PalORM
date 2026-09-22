@@ -2,11 +2,14 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Parameters;
+using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using Dapper;
 using Microsoft.Data.Sqlite;
 using MySqlConnector;
 using Npgsql;
+using PalORM.Bench.Shared;
 using PalORM.Sqlite;
 using PalORM.PostgreSql;
 using PalORM.MySql;
@@ -69,7 +72,96 @@ public static class Program
             Console.WriteLine($"RuntimeInformation.FrameworkDescription: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
             return;
         }
-        BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+        IEnumerable<Summary> summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+        WriteEnvelope(summaries);
+    }
+
+    /// <summary>健康度阈值（规范 §4.2）——BDN 标准跑（launch 3 × warmup 5 × 迭代 10）
+    /// 的实测噪声底 ±11%（规范 §4 先例），取 0.10 作阈值。</summary>
+    private const double HealthThreshold = 0.10;
+
+    /// <summary>结果库信封（规范 v2 §6）。本夹具不测维度 8（往返计数在 PerfHub），
+    /// RoundTripsPerOp/PreparedReuse 留 0 表示未测；比值以同批次同操作的 ADO_NET 行为地板现算。</summary>
+    private static void WriteEnvelope(IEnumerable<Summary> summaries)
+    {
+        List<BenchmarkReport> reports = [.. summaries.SelectMany(static s => s.Reports)];
+        if (reports.Count == 0) return;
+
+        double healthRatio = 0;
+        foreach (BenchmarkReport r in reports)
+        {
+            if (ArmOf(r) != "ADO_NET" || r.ResultStatistics is not { Mean: > 0 } st) continue;
+            healthRatio = Math.Max(healthRatio, st.StandardDeviation / st.Mean);
+        }
+
+        var envelope = new PerfResultEnvelope
+        {
+            Harness = "benchmarks",
+            Version = Environment.GetEnvironmentVariable("PALORM_BENCH_VERSION") ?? "HEAD",
+            Label = "bdn",
+            DetailPath = "BenchmarkDotNet.Artifacts/results",
+            Environment = PerfResultWriter.CaptureEnvironment("PalORM.Benchmarks"),
+            Regime = new PerfResultRegime
+            {
+                ConnectionConfig = "sqlite: shared-cache 内存库（Data Source=bench;Mode=Memory;Cache=Shared），"
+                    + "未开 WAL/mmap（内存库无 I/O 治理语义）；pg/mysql: 驱动默认（真库档由 --workload/真库基准类覆盖）",
+                SessionLifecycle = "混合（各基准类自述：单操作类每操作建会话，负载/长稳类复用会话）",
+                HealthRatio = healthRatio,
+                HealthThreshold = HealthThreshold,
+                Health = PerfResultWriter.Verdict(healthRatio, HealthThreshold)
+            }
+        };
+
+        foreach (BenchmarkReport r in reports)
+        {
+            double mean = r.ResultStatistics?.Mean ?? 0;
+            string operation = OperationOf(r);
+            BenchmarkReport? floor = reports.Find(b => ArmOf(b) == "ADO_NET" && OperationOf(b) == operation);
+            double floorMean = floor?.ResultStatistics?.Mean ?? 0;
+            envelope.Items.Add(new PerfResultItem
+            {
+                Name = operation,
+                Dialect = "sqlite",
+                Arm = ArmOf(r),
+                Tier = TierOf(r),
+                MeanUs = mean / 1000.0,
+                AllocBytes = r.GcStats.GetBytesAllocatedPerOperation(r.BenchmarkCase) ?? 0,
+                Ratio = floorMean > 0 ? mean / floorMean : 0,
+                Note = r.BenchmarkCase.Descriptor.Type.Name
+            });
+        }
+
+        string? path = PerfResultWriter.Write(envelope);
+        Console.WriteLine(path is null
+            ? "[Benchmarks] 结果库信封写入失败（不影响本次测量）"
+            : $"[Benchmarks] 结果库信封已写入 {path}");
+    }
+
+    /// <summary>臂名：方法名前缀（ADO_NET_/Dapper_/PalORM_/RepoDb_），无前缀则退回类名。</summary>
+    private static string ArmOf(BenchmarkReport report)
+    {
+        string method = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
+        int underscore = method.IndexOf('_', StringComparison.Ordinal);
+        return underscore > 0 ? method[..underscore] : report.BenchmarkCase.Descriptor.Type.Name;
+    }
+
+    /// <summary>操作名：方法名去掉臂前缀（ADO_NET_QueryAll → QueryAll）；无前缀则用方法名。</summary>
+    private static string OperationOf(BenchmarkReport report)
+    {
+        string method = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
+        int underscore = method.IndexOf('_', StringComparison.Ordinal);
+        return underscore > 0 && underscore < method.Length - 1 ? method[(underscore + 1)..] : method;
+    }
+
+    /// <summary>行数档位：有 [Params] 取第一个 int 参数；没有则用种子行数（固定 10000）。</summary>
+    private static int TierOf(BenchmarkReport report)
+    {
+        foreach (ParameterInstance p in report.BenchmarkCase.Parameters.Items)
+        {
+            if (p.Value is int rows) return rows;
+        }
+
+        return BenchmarkConfig.SeedRows;
     }
 }
 
