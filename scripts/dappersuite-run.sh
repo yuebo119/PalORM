@@ -25,17 +25,28 @@ mkdir -p "$OUT_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 IFS=',' read -r -a LIST <<< "$DIALECTS"
+FAILED=()
 for dialect in "${LIST[@]}"; do
     echo "=== [$dialect] 开始（$STAMP） ==="
     LOG="$OUT_DIR/$dialect-$STAMP.log"
     if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
-        DAPPER_SUITE_DIALECT="$dialect" dotnet run --project "$ROOT_DIR/bench/PalORM.DapperSuite" \
-            -c Release -- "${EXTRA_ARGS[@]}" 2>&1 | tee "$LOG"
+        RUN=("${EXTRA_ARGS[@]}")
     else
-        DAPPER_SUITE_DIALECT="$dialect" dotnet run --project "$ROOT_DIR/bench/PalORM.DapperSuite" \
-            -c Release -- -f '*' --join 2>&1 | tee "$LOG"
+        RUN=(-f '*' --join)
     fi
-    echo "=== [$dialect] 完成，日志 $LOG ==="
+    # 单方言失败不中断整批：一个库不可达（实测：托管库的虚拟机停机）不该让已跑方言的结果作废
+    if DAPPER_SUITE_DIALECT="$dialect" dotnet run --project "$ROOT_DIR/bench/PalORM.DapperSuite" \
+        -c Release -- "${RUN[@]}" 2>&1 | tee "$LOG"; then
+        echo "=== [$dialect] 完成，日志 $LOG ==="
+    else
+        echo "=== [$dialect] 失败（日志 $LOG）+ 继续下一方言 ===" >&2
+        FAILED+=("$dialect")
+    fi
 done
+
+if [ ${#FAILED[@]} -gt 0 ]; then
+    echo "失败方言：${FAILED[*]}（其余方言已跑完，结果库仍有登记）" >&2
+    exit 1
+fi
 
 echo "全部方言跑测完成。BDN 报告在 $ROOT_DIR/BenchmarkDotNet.Artifacts/results/"

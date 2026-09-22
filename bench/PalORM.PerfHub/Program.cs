@@ -153,6 +153,7 @@ internal static class Program
         }
 
         var results = new List<Measurement>();
+        var dialectFailures = new List<(string Dialect, string Reason)>();
         var swTotal = Stopwatch.StartNew();
         using var cts = new CancellationTokenSource();
 
@@ -170,81 +171,110 @@ internal static class Program
         {
             Console.WriteLine();
             Console.WriteLine($"══════ {info.DisplayName} ══════");
-            string cs = Connections.Resolve(info);
-            await using DbConnection rawConn = info.OpenConnection(cs);
-            await rawConn.OpenAsync(cts.Token).ConfigureAwait(false);
-
-            // 连接配置口径（规范 §4.1）：三臂共用这一条连接，故此处一次治理即全臂同值。
-            // 与 DapperSuite 的口径差 D10 逐项一致——SQLite 上不开 WAL/mmap，整档会落在
-            // I/O 主导区间，8 µs 级差异不可分辨（2026-09-22 实测：同一修复在两种配置下
-            // 分别是 −30% 与 0%）。
-            if (info.Dialect == Dialect.Sqlite)
+            // 单方言失败必须被隔离：一个库不可达（实测：托管 MySQL/PG 的虚拟机停机）时，
+            // 若整批中断，已测方言的结果会连同未写的信封一起丢。故此处捕获并登记失败，
+            // 继续跑其余方言——失败进信封的 sections（kind=dialect-failure），退出码在末尾汇总。
+            try
             {
-                await using DbCommand pragma = rawConn.CreateCommand();
-                pragma.CommandText = SqliteGovernancePragma;
-                await pragma.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
+                await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, cts.Token)
+                    .ConfigureAwait(false);
             }
-
-            // 维度 8（往返与语句效率）：包一层计数装饰器。包在连接上而不是各臂内部，
-            // 三臂（ADO 自建命令 / Dapper 在传入连接上建 / PalORM 会话在调用方连接上建）
-            // 才能用同一把尺子量，且能抓到意外 N+1。
-            await using var conn = new CountingConnection(rawConn);
-
-            // 三实现共用同一连接（B76：建连口径一致）
-            IPerfImplementation[] impls = [new AdoNetImpl(info), new DapperImpl(info), new PalormImpl(info)];
-
-            foreach (int rows in tiers)
+            catch (Exception ex) when (ex is not OperationCanceledException || !cts.IsCancellationRequested)
             {
-                Console.WriteLine();
-                Console.WriteLine($"── 行数档位 {rows:N0} ──");
-
-                // 阶段 2 新表：每 (方言 × 档位) 播一次，臂无关——测量只读或自清理
-                await SetupV2TablesAsync(info, conn, rows, cts.Token).ConfigureAwait(false);
-
-                foreach (IPerfImplementation impl in impls)
-                {
-                    await RunOneImplAsync(info, impl, rows, conn, results, scale, cts.Token)
-                        .ConfigureAwait(false);
-                }
-
-                // 并发吞吐（三实现 × 线程档位）
-                if (concurrency)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine("  并发吞吐（80/20 读写混合，3s）");
-                    foreach (IPerfImplementation impl in impls)
-                    {
-                        await impl.SetupAsync(conn, rows, cts.Token).ConfigureAwait(false);
-                        foreach (int threads in threadTiers)
-                        {
-                            try
-                            {
-                                Measurement m = await Measure.ConcurrentAsync(info, impl, rows, threads, 2.0, 0.20,
-                                    cts.Token).ConfigureAwait(false);
-                                results.Add(m);
-                                Console.WriteLine($"    {impl.Name,-9} {threads,2} 线程  {m.OpsPerSecond,10:N0} ops/s  "
-                                    + $"p50={m.P50Ms,6:F2}ms p95={m.P95Ms,6:F2}ms p99={m.P99Ms,6:F2}ms");
-                            }
-                            catch (InvalidOperationException ex)
-                            {
-                                // 3 秒的并发探针不该中断整轮测量——记明跳过原因继续跑
-                                Console.WriteLine($"    {impl.Name,-9} {threads,2} 线程  跳过 — {ex.Message}");
-                            }
-                        }
-                    }
-                }
+                string reason = $"{ex.GetType().Name}: {Shorten(ex.Message)}";
+                Console.Error.WriteLine($"[PerfHub] {info.DisplayName} 方言失败，跳过并登记：{reason}");
+                dialectFailures.Add((info.DisplayName, reason));
             }
+        }
 
-            await conn.CloseAsync().ConfigureAwait(false);
+        foreach ((string dialect, string reason) in dialectFailures)
+        {
+            Console.Error.WriteLine($"[PerfHub] 失败方言登记：{dialect} — {reason}");
         }
 
         swTotal.Stop();
         Console.WriteLine();
         Console.WriteLine($"[PerfHub] 完成，共 {results.Count} 项测量，耗时 {swTotal.Elapsed.TotalMinutes:F1} 分钟");
 
-        Save(results, label, version, swTotal.Elapsed);
+        Save(results, label, version, swTotal.Elapsed, dialectFailures);
         Report.Build();
-        return 0;
+        return dialectFailures.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>异常消息截断——信封里只留可读的短原因，避免把驱动的长堆栈文本带进结果库。</summary>
+    private static string Shorten(string text)
+        => text.Length <= 200 ? text : text[..200] + "...";
+
+    /// <summary>单方言全量（档位 × 三臂 + 并发档）——由外层 try 包住，失败只影响本方言。</summary>
+    private static async Task RunDialectAsync(
+        DialectInfo info, List<int> tiers, bool concurrency, List<int> threadTiers, double scale,
+        List<Measurement> results, CancellationToken ct)
+    {
+        string cs = Connections.Resolve(info);
+        await using DbConnection rawConn = info.OpenConnection(cs);
+        await rawConn.OpenAsync(ct).ConfigureAwait(false);
+
+        // 连接配置口径（规范 §4.1）：三臂共用这一条连接，故此处一次治理即全臂同值。
+        // 与 DapperSuite 的口径差 D10 逐项一致——SQLite 上不开 WAL/mmap，整档会落在
+        // I/O 主导区间，8 µs 级差异不可分辨（2026-09-22 实测：同一修复在两种配置下
+        // 分别是 −30% 与 0%）。
+        if (info.Dialect == Dialect.Sqlite)
+        {
+            await using DbCommand pragma = rawConn.CreateCommand();
+            pragma.CommandText = SqliteGovernancePragma;
+            await pragma.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        // 维度 8（往返与语句效率）：包一层计数装饰器。包在连接上而不是各臂内部，
+        // 三臂（ADO 自建命令 / Dapper 在传入连接上建 / PalORM 会话在调用方连接上建）
+        // 才能用同一把尺子量，且能抓到意外 N+1。
+        await using var conn = new CountingConnection(rawConn);
+
+        // 三实现共用同一连接（B76：建连口径一致）
+        IPerfImplementation[] impls = [new AdoNetImpl(info), new DapperImpl(info), new PalormImpl(info)];
+
+        foreach (int rows in tiers)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"── 行数档位 {rows:N0} ──");
+
+            // 阶段 2 新表：每 (方言 × 档位) 播一次，臂无关——测量只读或自清理
+            await SetupV2TablesAsync(info, conn, rows, ct).ConfigureAwait(false);
+
+            foreach (IPerfImplementation impl in impls)
+            {
+                await RunOneImplAsync(info, impl, rows, conn, results, scale, ct).ConfigureAwait(false);
+            }
+
+            // 并发吞吐（三实现 × 线程档位）
+            if (concurrency)
+            {
+                Console.WriteLine();
+                Console.WriteLine("  并发吞吐（80/20 读写混合，3s）");
+                foreach (IPerfImplementation impl in impls)
+                {
+                    await impl.SetupAsync(conn, rows, ct).ConfigureAwait(false);
+                    foreach (int threads in threadTiers)
+                    {
+                        try
+                        {
+                            Measurement m = await Measure.ConcurrentAsync(info, impl, rows, threads, 2.0, 0.20, ct)
+                                .ConfigureAwait(false);
+                            results.Add(m);
+                            Console.WriteLine($"    {impl.Name,-9} {threads,2} 线程  {m.OpsPerSecond,10:N0} ops/s  "
+                                + $"p50={m.P50Ms,6:F2}ms p95={m.P95Ms,6:F2}ms p99={m.P99Ms,6:F2}ms");
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            // 3 秒的并发探针不该中断整轮测量——记明跳过原因继续跑
+                            Console.WriteLine($"    {impl.Name,-9} {threads,2} 线程  跳过 — {ex.Message}");
+                        }
+                    }
+                }
+            }
+        }
+
+        await conn.CloseAsync().ConfigureAwait(false);
     }
 
     /// <summary>阶段 2 新表播种——每 (方言 × 档位) 一次：宽表全量、子表前 500 父 × 3 子、
@@ -592,7 +622,9 @@ internal static class Program
     private static List<T> ParseList<T>(string csv, Func<string, T> parse)
         => [.. csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(parse)];
 
-    private static void Save(List<Measurement> results, string label, string version, TimeSpan elapsed)
+    private static void Save(
+        List<Measurement> results, string label, string version, TimeSpan elapsed,
+        List<(string Dialect, string Reason)> dialectFailures)
     {
         string dir = Path.Combine(FindRepoRoot(), "bench", "perfhub", "results");
         Directory.CreateDirectory(dir);
@@ -627,14 +659,18 @@ internal static class Program
         Console.WriteLine($"[PerfHub] 原始数据已写入 bench/perfhub/results/history-{stamp}.json");
 
         // 结果库信封（规范 v2 §6）：跨夹具可查询的最小集 + 口径登记 + 健康度
-        WriteEnvelope(results, label, version, elapsed, Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"));
+        WriteEnvelope(results, label, version, elapsed,
+            Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"), dialectFailures);
     }
 
     /// <summary>把本批次映射成结果库信封。Ratio 以同方言同档位的 ADO_NET 行为地板现算
     /// （与报告口径一致）；健康度取**地板行散布的中位数**（取最大值会被 sub-µs 项的调度抖动
-    /// 支配，取最小值会漏掉只影响慢项的争用），阈值为本夹具实测噪声底上界。</summary>
+    /// 支配，取最小值会漏掉只影响慢项的争用），阈值为本夹具实测噪声底上界。
+    /// <para>失败方言进 <c>sections</c>（kind=<c>dialect-failure</c>）：部分方言不可达时，
+    /// 已测方言的结果照常落库，失败被显式登记而不是静默丢失。</para></summary>
     private static void WriteEnvelope(
-        List<Measurement> results, string label, string version, TimeSpan elapsed, string detailPath)
+        List<Measurement> results, string label, string version, TimeSpan elapsed, string detailPath,
+        List<(string Dialect, string Reason)> dialectFailures)
     {
         var spreads = new List<double>();
         foreach (Measurement m in results)
@@ -684,6 +720,17 @@ internal static class Program
                 RoundTripsPerOp = m.RoundTripsPerOp,
                 PreparedReuse = m.PreparedReuse,
                 Note = m.Group
+            });
+        }
+
+        foreach ((string dialect, string reason) in dialectFailures)
+        {
+            envelope.Sections.Add(new PerfResultSection
+            {
+                Kind = "dialect-failure",
+                Dialect = dialect,
+                Label = "connect/open",
+                Note = reason
             });
         }
 
