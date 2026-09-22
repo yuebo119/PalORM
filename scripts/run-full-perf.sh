@@ -46,7 +46,8 @@ echo "启动量具: $STARTUP"
 step "[4/6] BDN 微基准（维度 1，与门禁同参 1/3/5，约 5 分钟）"
 # 先清结果目录——混入陈旧报告会让门禁读到截断/异构 JSON（实测先例）
 rm -rf "$ROOT_DIR/BenchmarkDotNet.Artifacts"
-dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
+# PALORM_BENCH_LABEL：显式声明这是"门禁同参集"（可复现的操作性子集，与临时单基准跑区分开）
+PALORM_BENCH_LABEL=gate-set dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
   --filter '*CrudBenchmarks*' '*OrmComparisonBenchmarks*' \
   --launchCount 1 --warmupCount 3 --iterationCount 5 --exporters json \
   2>&1 | tee "$LOG_DIR/bdn.log" | grep -E "Global total"

@@ -37,7 +37,14 @@ for dialect in "${LIST[@]}"; do
     # 单方言失败不中断整批：一个库不可达（实测：托管库的虚拟机停机）不该让已跑方言的结果作废
     if DAPPER_SUITE_DIALECT="$dialect" dotnet run --project "$ROOT_DIR/bench/PalORM.DapperSuite" \
         -c Release -- "${RUN[@]}" 2>&1 | tee "$LOG"; then
-        echo "=== [$dialect] 完成，日志 $LOG ==="
+        # BDN 在"全部基准 NA"（库不可达）时仍退 0 并打印 "Benchmarks with issues"——
+        # 只看退出码会把这种情况误报成成功，故追加日志检查
+        if grep -q "Benchmarks with issues" "$LOG"; then
+            echo "=== [$dialect] 基准未产出有效结果（库不可达或设置错误，见 $LOG）+ 继续下一方言 ===" >&2
+            FAILED+=("$dialect")
+        else
+            echo "=== [$dialect] 完成，日志 $LOG ==="
+        fi
     else
         echo "=== [$dialect] 失败（日志 $LOG）+ 继续下一方言 ===" >&2
         FAILED+=("$dialect")
