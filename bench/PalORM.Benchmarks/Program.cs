@@ -73,7 +73,9 @@ public static class Program
             return;
         }
         IEnumerable<Summary> summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
-        WriteEnvelope(summaries);
+        // 过滤批次带标记：`perf.sh smoke` 走的就是过滤跑，未标记的子集会被误读成全量批次
+        bool filtered = Array.Exists(args, static a => a.Contains("filter", StringComparison.OrdinalIgnoreCase));
+        WriteEnvelope(summaries, filtered ? "filtered" : "bdn");
     }
 
     /// <summary>健康度阈值（规范 §4.2）——BDN 标准跑（launch 3 × warmup 5 × 迭代 10）
@@ -82,7 +84,7 @@ public static class Program
 
     /// <summary>结果库信封（规范 v2 §6）。本夹具不测维度 8（往返计数在 PerfHub），
     /// RoundTripsPerOp/PreparedReuse 留 0 表示未测；比值以同批次同操作的 ADO_NET 行为地板现算。</summary>
-    private static void WriteEnvelope(IEnumerable<Summary> summaries)
+    private static void WriteEnvelope(IEnumerable<Summary> summaries, string label)
     {
         List<BenchmarkReport> reports = [.. summaries.SelectMany(static s => s.Reports)];
         if (reports.Count == 0) return;
@@ -98,7 +100,7 @@ public static class Program
         {
             Harness = "benchmarks",
             Version = Environment.GetEnvironmentVariable("PALORM_BENCH_VERSION") ?? "HEAD",
-            Label = "bdn",
+            Label = label,
             DetailPath = "BenchmarkDotNet.Artifacts/results",
             Environment = PerfResultWriter.CaptureEnvironment("PalORM.Benchmarks"),
             Regime = new PerfResultRegime
@@ -114,7 +116,9 @@ public static class Program
 
         foreach (BenchmarkReport r in reports)
         {
-            double mean = r.ResultStatistics?.Mean ?? 0;
+            // NA 行（无连接/被跳过/失败）不该进结果库：0 均值会被读成"极快"
+            if (r.ResultStatistics is not { Mean: > 0 } stats) continue;
+            double mean = stats.Mean;
             string operation = OperationOf(r);
             BenchmarkReport? floor = reports.Find(b => ArmOf(b) == "ADO_NET" && OperationOf(b) == operation);
             double floorMean = floor?.ResultStatistics?.Mean ?? 0;
@@ -137,20 +141,31 @@ public static class Program
             : $"[Benchmarks] 结果库信封已写入 {path}");
     }
 
-    /// <summary>臂名：方法名前缀（ADO_NET_/Dapper_/PalORM_/RepoDb_），无前缀则退回类名。</summary>
+    /// <summary>臂前缀（长的在前：ADO_NET_ 自带下划线，不能按第一个 '_' 切）。</summary>
+    private static readonly string[] ArmPrefixes = ["ADO_NET_", "RepoDb_", "Dapper_", "PalORM_"];
+
+    /// <summary>臂名：按已知前缀匹配；无前缀则退回类名。</summary>
     private static string ArmOf(BenchmarkReport report)
     {
         string method = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
-        int underscore = method.IndexOf('_', StringComparison.Ordinal);
-        return underscore > 0 ? method[..underscore] : report.BenchmarkCase.Descriptor.Type.Name;
+        foreach (string prefix in ArmPrefixes)
+        {
+            if (method.StartsWith(prefix, StringComparison.Ordinal)) return prefix[..^1];
+        }
+
+        return report.BenchmarkCase.Descriptor.Type.Name;
     }
 
     /// <summary>操作名：方法名去掉臂前缀（ADO_NET_QueryAll → QueryAll）；无前缀则用方法名。</summary>
     private static string OperationOf(BenchmarkReport report)
     {
         string method = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
-        int underscore = method.IndexOf('_', StringComparison.Ordinal);
-        return underscore > 0 && underscore < method.Length - 1 ? method[(underscore + 1)..] : method;
+        foreach (string prefix in ArmPrefixes)
+        {
+            if (method.StartsWith(prefix, StringComparison.Ordinal)) return method[prefix.Length..];
+        }
+
+        return method;
     }
 
     /// <summary>行数档位：有 [Params] 取第一个 int 参数；没有则用种子行数（固定 10000）。</summary>
