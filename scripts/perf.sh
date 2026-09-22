@@ -19,6 +19,13 @@ BDN_RESULTS="$ROOT_DIR/BenchmarkDotNet.Artifacts/results"
 BASELINE_BDN="$ROOT_DIR/bench/baselines/perf-baseline.json"
 BASELINE_INDEX="$ROOT_DIR/bench/baselines/perfhub-index-baseline.json"
 
+# 三方言凭证：与集成测试同一口径，从 gitignored 的 .env.test 读入（不回显值）。
+# 缺文件时不中断——sqlite 档不需要凭证，pg/mysql 档由各自夹具自行报"未设置"。
+if [ -f "$ROOT_DIR/scripts/set-test-env.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$ROOT_DIR/scripts/set-test-env.sh" >/dev/null 2>&1 || echo "（.env.test 未就绪：pg/mysql 档将报缺凭证）"
+fi
+
 usage() {
     cat <<'EOF'
 用法:
@@ -84,21 +91,36 @@ case "$cmd" in
         index
         ;;
     full)
-        step "[1/5] 微基准全量 + 负载 + 内存 + 启动 + BDN 门禁"
-        bash "$ROOT_DIR/scripts/run-full-perf.sh"
+        STEP_FAILED=()
+        run_step() {
+            local name="$1"
+            shift
+            step "$name"
+            # 单步失败不中断全量：全量的价值是最大覆盖，每步的结果库登记与健康度会如实反映状态；
+            # 失败汇总到末尾并以非零退出（不静默吞掉）。
+            if "$@"; then
+                echo "  ✓ $name"
+            else
+                echo "  ✗ $name（继续后续步骤）" >&2
+                STEP_FAILED+=("$name")
+            fi
+        }
 
-        step "[2/5] PerfHub 三方言全量"
-        dotnet run --project "$ROOT_DIR/bench/PalORM.PerfHub" -c Release -- \
-            run --dialects sqlite,mysql,pg --tiers 2000,20000
+        run_step "[1/5] 微基准全量 + 负载 + 内存 + 启动 + BDN 门禁" bash "$ROOT_DIR/scripts/run-full-perf.sh"
+        run_step "[2/5] PerfHub 三方言全量（含并发扩展档）" \
+            dotnet run --project "$ROOT_DIR/bench/PalORM.PerfHub" -c Release -- \
+            run --dialects sqlite,mysql,pg --tiers 2000,20000 --concurrency --threads 1,4,8
+        run_step "[3/5] DapperSuite 三方言（官方形状锚点）" bash "$ROOT_DIR/scripts/dappersuite-run.sh"
+        run_step "[4/5] 门禁（BDN 基线 + 结果库基线）" gate
+        run_step "[5/5] 索引报告" index
 
-        step "[3/5] DapperSuite 三方言（官方形状锚点）"
-        bash "$ROOT_DIR/scripts/dappersuite-run.sh"
-
-        step "[4/5] 门禁（BDN 基线 + 结果库基线）"
-        gate
-
-        step "[5/5] 索引报告"
-        index
+        if [ ${#STEP_FAILED[@]} -gt 0 ]; then
+            echo ""
+            echo "全量跑测有失败步骤：${STEP_FAILED[*]}" >&2
+            exit 1
+        fi
+        echo ""
+        echo "全量跑测完成：五步全通过。"
         ;;
     compare)
         # 交替 A/B 是跨版本对比的唯一可信方式（规范 §5），直接转发编排器
