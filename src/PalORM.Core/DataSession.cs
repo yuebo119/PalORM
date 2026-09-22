@@ -225,9 +225,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         DbConnection created = TProvider.CreateConnection(_readConnectionString!, _options);
         try
         {
-            await created.OpenAsync(cancellationToken).ConfigureAwait(false);
+            // READ-003（2026-09-22）：与主连接 CreateAsync 同口径——连接建立与初始化共享连接
+            // 超时和调用方取消。此前只吃调用方 ct，ct == default 时读连接建立可无界挂起。
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(_options.ConnectionTimeout);
+            await created.OpenAsync(cts.Token).ConfigureAwait(false);
             if (_readConnInitializer is not null)
-                await _readConnInitializer(created, cancellationToken).ConfigureAwait(false);
+                await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -289,10 +293,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// PG 咨询锁（<c>pg_advisory_xact_lock</c>）——事务外调用会获得锁但立即释放，
     /// 方法却正常返回，调用方以为临界区已持锁，跨进程互斥形同虚设且无任何错误信号。
     /// 有本属性后这类 API 可以显式失败而非静默无效。</para>
-    /// <para><b>与失效契约的关系</b>：外部设入的事务被 Dispose 时（ITM-640），
-    /// <see cref="GetActiveTransaction"/> 会响亮抛异常；本属性返回 false（该状态下
-    /// 没有可用事务）。</para></summary>
-    public bool IsInTransaction => GetActiveTransaction() is not null;
+    /// <para><b>与失效契约的关系</b>：外部设入的事务被 Dispose 时（ITM-640），执行路径的
+    /// <see cref="GetActiveTransaction"/> 会响亮抛异常；本属性是事实查询，返回 false（该状态下
+    /// 没有可用事务），不跟着抛——调用方自查前置条件不该拿到与自身语义无关的 ITM-640 异常
+    /// （API-002，2026-09-22：此前实现直接调 GetActiveTransaction，与本文档矛盾）。</para></summary>
+    public bool IsInTransaction => _operationState.HasUsableTransaction;
 
     /// <summary>设置当前会话的事务。设置后所有后续查询在此事务内执行。
     /// 调用 CommitAsync()/RollbackAsync() 后需再次设置或清空 (UseTransaction(null))。
