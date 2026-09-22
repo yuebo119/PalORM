@@ -27,6 +27,16 @@ dotnet run --project bench/PalORM.PerfHub -- report
 未设置时从仓库根 `.env.test` 补入缺失项。**MySQL 连接串会统一追加
 `AllowLoadLocalInfile=true`**（MySqlBulkCopy 协议前提，三臂同等生效）。
 
+## 口径与结果登记（规范 v2 §4.1 / §6）
+
+| 项 | 本夹具的值 | 为什么记在这 |
+|---|---|---|
+| 连接配置口径 | SQLite：三臂共用同一条连接，建连后统一执行 7 项 PRAGMA（WAL + 64MB cache + mmap 等，与产品 `SqliteProvider` 逐条一致）；PG/MySQL：驱动默认 | 只给 ORM 臂配会让比较变成"连接配置差异"：同一修复在 I/O 主导与 CPU 主导两种配置下分别是 0% 与 −30%（2026-09-22 实测） |
+| 会话生命周期口径 | `per-operation`（每操作新建 `DataSession`，与 Dapper 无状态扩展方法对等） | 与 DapperSuite 的 `per-scope` 不同，故两套的分配量不可互比（规范 §4.1） |
+| 维度 8 计数 | 三臂共用 `CountingConnection` 装饰器，实测**往返次数/op** 与 **prepared 复用率**（60/67 项有值，并发项未接） | 抓 N+1：实测 ADO 臂 `BulkUpdate` = 2000 次往返/op、`BulkInsert` = 11 次/op |
+| 健康度 | 地板行散布中位数，阈值 0.35（本夹具自适应短跑实测 0.21/0.26/0.31） | `--quick` 批次在 label 里带 `quick` 标记，只作冒烟、不进基线 |
+| 结果登记 | 除自身 `results/history-*.json` 外，另写结果库信封 `bench/results/perfhub-*.json` | 统一登记处见 `bench/results/README.md`；索引报告 `bash scripts/perf.sh report` |
+
 ## 22 个测试项（v2 矩阵）
 
 | 组 | 测试项 | 行业最优实现（三臂契约摘要） |

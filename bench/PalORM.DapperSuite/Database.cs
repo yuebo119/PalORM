@@ -36,6 +36,13 @@ internal static class Database
         _ => throw new InvalidOperationException($"未知方言 '{Dialect}'（sqlite/mysql/pg）")
     };
 
+    /// <summary>连接配置口径（规范 §4.1）——三臂同值，逐项与产品
+    /// <c>SqliteProvider.InitializeConnectionAsync</c> 一致（口径差 D10）。</summary>
+    public const string ConnectionConfigDescription =
+        "sqlite: 三臂同一组 PRAGMA（foreign_keys=ON / journal_mode=WAL / synchronous=NORMAL / "
+        + "cache_size=-65536 / temp_store=MEMORY / wal_autocheckpoint=1000 / mmap_size=268435456）；"
+        + "pg/mysql: 驱动默认 + MySQL 追加 AllowLoadLocalInfile=true（三臂同值）";
+
     /// <summary>SQLite 连接治理——与产品 <c>SqliteProvider.InitializeConnectionAsync</c> 同一组 PRAGMA。
     /// <para>三臂统一是硬要求：PalORM 会话经 Provider 初始化自动拿到 WAL + 64MB cache + mmap，
     /// 若只给它配、不给裸连接配，比较就不是"ORM 层差异"而是"连接配置差异"。</para></summary>

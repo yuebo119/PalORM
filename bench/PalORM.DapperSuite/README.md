@@ -31,8 +31,13 @@ bash scripts/dappersuite-run.sh pg
 
 凭证经 `scripts/set-test-env.sh` 从仓库根 `.env.test` 读入（不回显值）；`sqlite` 档不需要连接串
 （库文件落在系统临时目录）。方言由 `DAPPER_SUITE_DIALECT`（`sqlite` / `mysql` / `pg`）选择。
+版本标识可用 `DAPPER_SUITE_VERSION` 覆盖（默认 `HEAD`），写入结果库信封的 `version` 字段。
 
 **必须串行跑**：BDN 计时对 CPU 争用敏感，三库并行会同时污染三份数字。
+
+**结果登记**：除 BDN 工件与本文档的结果表外，每次跑测写一份结果库信封
+（`bench/results/dappersuite-*.json`，含提交号、口径登记、健康度），统一登记处见
+`bench/results/README.md`。跨夹具索引：`bash scripts/perf.sh report`。
 
 ## 3. 口径差登记（与官方的全部偏离，逐条给理由）
 
