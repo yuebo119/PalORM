@@ -291,6 +291,7 @@ public static class QueryBuilderExtensions
     {
         var limited = builder;
         limited._take = 1;
+        limited._takeLiteral = true;   // SQLite 上内联成 LIMIT 1（理由与实测见 QueryBuilder.LiteralTakeValue）
         // First/Single 族的 _take 截断列表不得写入用户缓存键——后续同键 ToListAsync
         // 会命中截断数据静默丢行（ITM-406）
         limited._cacheKey = null;
@@ -304,6 +305,7 @@ public static class QueryBuilderExtensions
     {
         var limited = builder;
         limited._take = 2;
+        limited._takeLiteral = true;   // SQLite 上内联成 LIMIT 2（同 FirstOrDefaultAsync）
         limited._cacheKey = null;
         List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
         if (results.Count == 1) return results[0];
@@ -316,6 +318,7 @@ public static class QueryBuilderExtensions
     {
         var limited = builder;
         limited._take = 2;
+        limited._takeLiteral = true;   // SQLite 上内联成 LIMIT 2（同 FirstOrDefaultAsync）
         limited._cacheKey = null;
         List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
         return results.Count <= 1 ? results.FirstOrDefault() : throw new InvalidOperationException("More than one.");
@@ -338,6 +341,7 @@ public static class QueryBuilderExtensions
         paged._useReadRoute = false;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
         paged._take = pageSize;
+        paged._takeLiteral = false;   // pageSize 由调用方给、值域无界：必须参数化，保住 SHAPE-010 的有限形状集
         paged._skip = null;
         // r9-S-A(P1)：页截断结果不得写入用户缓存键——同键 ToListAsync 将静默命中单页子集
         // （ITM-406 同型面唯一漏口，First/Single/SingleOrDefault 三入口均已清）

@@ -2,6 +2,70 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮七] — SQLite 单行查询 LIMIT 字面量内联（First/Single 族）
+
+> 变更范围：`src/PalORM.Core/QueryBuilder.cs`（BuildLimitClause / 形状键 / 新字段）+
+> `QueryBuilderExtensions.cs`（First/Single 族置标志）+ `SqlShapeCache.cs`（ShapeFields 加字面量维度）+
+> 测试两处 + `bench/PalORM.DapperSuite/README.md`。
+
+### 问题
+
+SQLite 上 PalORM 的单行查询明显慢于自己的无 LIMIT 查询：`FirstOrDefault<T>` 4.71× 地板、
+`QueryFirst<T>` 4.21×，而同臂 `Query<T> (buffered)` 只有 2.31×（同一批次内比值）。
+
+### 归因（两步独立测量，非推测）
+
+第一步在 ADO.NET 层隔离 SQL 形状（同一条连接、同一物化路径，只差 SQL 文本）：
+
+| SQL | Mean | Allocated |
+|---|---:|---:|
+| `where "Id" = @Id` | 5.534 µs | 778 B |
+| 同上 + ` limit 1`（字面量） | 5.658 µs | 778 B |
+| 同上 + ` limit @L offset @O`（PalORM 实际形状） | 13.557 µs | 970 B |
+| 同上 + ` limit @L`（不带 OFFSET） | 14.289 µs | 874 B |
+
+字面量与无 LIMIT 同价，**参数化 LIMIT 多付 7.90 µs**，OFFSET 无贡献。
+第二步走 PalORM 原始 SQL 通道端到端复核：字面量 12.793 µs 对参数化 22.571 µs，
+且字面量落回无 LIMIT 档（12.902 µs），即该差值不掺 ORM 机械。
+两步与产品侧观测吻合：探针批次内 `单行族 − buffered` 为 +7.99 µs。
+
+### 改动
+
+`FirstAsync` / `FirstOrDefaultAsync` / `SingleAsync` / `SingleOrDefaultAsync` 的 take 由 API 固定为
+1 或 2 且不带 `Skip`，故在 **SQLite** 上把该值内联为字面量（`LIMIT 1` / `LIMIT 2`）并不再发 OFFSET。
+边界刻意收窄，以保住 SHAPE-010 的有限形状集：
+
+- 用户 `Take(n)`（值域无界）与 `ToPageAsync`（pageSize 无界）维持参数化；
+- 带 `Skip` 的 First/Single 族（动态分页）维持参数化；
+- PG/MySQL 维持参数化：该形状差异在联网库上被网络往返淹没到不可测量（PG 地板自身行间差曾达 9%），
+  无证据支持改其文本；
+- 形状缓存键新增字面量维度（`ShapeFields.TakeLiteral`），字面量值进键与哈希，
+  避免 `LIMIT 1` 与 `LIMIT 2` 互相复用条目；`CloneForExecution` 同步复制该字段。
+
+### 实测（配对复测，同机 3 分钟内，因子开/关）
+
+| 项 | 因子关 | 因子开 | 差值 |
+|---|---:|---:|---:|
+| `FirstOrDefault<T>` | 20.538 µs | 14.823 µs | −5.72 µs（−28%） |
+| `QueryFirst<T>` | 23.099 µs | 14.939 µs | −8.16 µs（−35%） |
+| 每操作分配（单行族） | 3506 B | 2946 B | −560 B（两个 limit 参数消失） |
+| 对照项 `Query<T> (buffered)`（无 take，不受改动影响） | 11.897 µs | 12.701 µs | 噪声内 |
+
+三方言正式批次（修复后）的比值：SQLite PalORM 2.06 / 2.10 / 2.18 对 Dapper 1.89–1.99；
+MySQL 1.06–1.09 对 Dapper 1.03–1.07；PG 1.06–1.08 对 Dapper 1.12。
+
+### 测试
+
+- Core 新增 5 例：字面量形态与参数快照（无 limit 参数）、`Single` 用 `LIMIT 2`、带 `Skip` 退回参数化、
+  用户 `Take` 维持参数化、`LIMIT 1` 与 `LIMIT 2` 占两条形状缓存条目。
+- Integration 新增 2 例（真库）：PG/MySQL 的 `FirstOrDefaultAsync` 保持参数化 LIMIT 且取值正确。
+- 三套实测：Core 365 / SourceGen 197 / Integration 205（合计 767），全绿。
+
+### 未隔离
+
+SQLite 为何对参数化 LIMIT 多收约 8 µs，机制未查明 [推断：参数化值在 prepare 期无法常量折叠]。
+故本项收益在换驱动版本后需复测；`bench/PalORM.DapperSuite` 的 SQLite 档即是该复测口。
+
 ## [未发布·性能轮六] — MySQL QueryAll 归因修正 · SQLite 并发边界文档化
 
 > 变更范围：docs/架构设计.md + README.md + CHANGELOG.md（纯文档，无代码改动）

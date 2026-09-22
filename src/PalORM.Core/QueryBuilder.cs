@@ -56,6 +56,9 @@ public struct QueryBuilder<T> where T : class, new()
     internal string[]? _selectColumns;
     internal int? _take;
     internal int? _skip;
+    /// <summary>Take 是否内联为 SQL 字面量而非 @pN 占位——仅 First/Single 族设置
+    ///（它们的 take 由 API 固定为 1/2 且不带 Skip），见 <see cref="LiteralTakeValue"/>。</summary>
+    internal bool _takeLiteral;
     internal string? _cacheKey;
     internal TimeSpan? _cacheTtl;
     /// <summary>缓存租户作用域（ADR-L 结构性隔离，From&lt;T&gt;() 时与租户过滤注入同点冻结）：
@@ -606,6 +609,7 @@ public struct QueryBuilder<T> where T : class, new()
             _selectColumns = _selectColumns,
             _take = _take,
             _skip = _skip,
+            _takeLiteral = _takeLiteral,   // 克隆漏传会让字面量形态静默退回参数化
             _cacheKey = _cacheKey,
             _cacheTenantScope = _cacheTenantScope,  // ADR-L：克隆体执行路径消费同一作用域
             _cacheTtl = _cacheTtl,
@@ -757,20 +761,23 @@ public struct QueryBuilder<T> where T : class, new()
             throw new InvalidOperationException(
                 "This builder has Set() clauses; SELECT execution/preview would silently discard them. " +
                 "Use ExecuteNonQueryAsync for UPDATE, or remove Set() for SELECT.");
-        // T5c SQL 文本缓存：BuildSql 输出仅由「子句 Sql 文本序列 + _splitQuery + _take/_skip 值」
-        // 决定（LIMIT/OFFSET 值内联进文本），同一形状的输出恒等且可复用同一 string 实例。
-        // 命中核对是全量的（子句序列值相等 + 三字段值相等），哈希碰撞不会产出错误 SQL；
+        // T5c SQL 文本缓存：BuildSql 输出由「子句 Sql 文本序列 + _splitQuery + LIMIT/OFFSET 形状」
+        // 决定——参数化形状的 Take/Skip 值经 @pN 绑定不进文本；First/Single 族的字面量形状
+        // 把值内联进文本（LiteralTakeValue），该值必须进键。
+        // 命中核对是全量的（子句序列值相等 + 字段包值相等），哈希碰撞不会产出错误 SQL；
         // 带显式投影（Select）的预览不走缓存（投影列集由调用方决定）。
         // 方言参与键与哈希（理由见 ShapeFields 文档）。
+        int literalTake = LiteralTakeValue;
         var shapeFields = new SqlShapeCache.ShapeFields(
-            _dialect, _splitQuery, _take.HasValue, _skip.HasValue, _tableName, _cteName);
-        // 哈希由形状成分现算（单一真源，规范顺序：表名→子句→CTE→Split→Take形态→Skip形态→方言）——
+            _dialect, _splitQuery, _take.HasValue, _skip.HasValue, _tableName, _cteName, literalTake);
+        // 哈希由形状成分现算（单一真源，规范顺序：表名→子句→CTE→Split→Take形态→Skip形态→字面量take→方言）——
         // 克隆重建链、ToPageAsync/First 族字段直赋等任意构建路径自动一致（审计 A2 整改：
         // 原增量维护在克隆路径丢子句成分，同表分页查询全部挤进同一桶）。
         // 表名必须在内：零子句查询（GetAllAsync 族）不同实体否则共享条目（T5c 实测）。
-        // Take/Skip 只进<b>形态</b>（有无）而非值（SHAPE-010 参数化根解）：值经 @pN 绑定
+        // Take/Skip 进键的默认是<b>形态</b>（有无）而非值（SHAPE-010 参数化根解）：值经 @pN 绑定
         // 不影响 SQL 文本，动态 OFFSET 分页的形状由此回归有限集；但 take-only/skip-only/
         // take+skip 产出不同文本形态，形态必须进键防互相复用条目。
+        // 例外：字面量形状把值写进文本，故字面量值本身也必须进键（有界：仅 First/Single 族的 1/2）。
         int shapeHash = System.HashCode.Combine(17, _tableName);
         foreach (QueryClause clause in MaterializeClauses())
             shapeHash = System.HashCode.Combine(shapeHash, clause.Sql);
@@ -778,6 +785,7 @@ public struct QueryBuilder<T> where T : class, new()
         if (_splitQuery) shapeHash = System.HashCode.Combine(shapeHash, true);
         if (_take.HasValue) shapeHash = System.HashCode.Combine(shapeHash, true);
         if (_skip.HasValue) shapeHash = System.HashCode.Combine(shapeHash, true);
+        if (literalTake != 0) shapeHash = System.HashCode.Combine(shapeHash, literalTake);
         shapeHash = System.HashCode.Combine(shapeHash, _dialect);
         if (_selectColumns is null)
         {
@@ -1090,6 +1098,18 @@ public struct QueryBuilder<T> where T : class, new()
         }
     }
 
+    /// <summary>LIMIT 走字面量时应内联的值（0 = 走参数化）。三个条件同时成立才内联：
+    /// 由 First/Single 族设置了 <see cref="_takeLiteral"/>、没有 Skip、且方言是 SQLite。
+    /// <para><b>为什么只有 First/Single 族</b>：它们的 take 由 API 固定为 1/2，内联后形状仍是有界集，
+    /// 不违背 SHAPE-010（用户 <see cref="Take"/> 的值域无界，保持参数化；带 Skip 的动态分页同理）。</para>
+    /// <para><b>为什么只有 SQLite</b>：实测（2026-09-22，ADO.NET 层同连接同物化）字面量
+    /// <c>limit 1</c> 5.658 µs 对参数化 <c>limit @L offset @O</c> 13.557 µs；PG/MySQL 上该项被
+    /// 网络往返淹没到不可测量（PG 地板自身行间差 9%），无证据支持改动其文本。</para></summary>
+    private int LiteralTakeValue
+        => _takeLiteral && !_skip.HasValue && _take.HasValue && _dialect == SqlDialect.Sqlite
+            ? _take.Value
+            : 0;
+
     /// <summary>LIMIT/OFFSET 子句的参数化构建（SHAPE-010 根解，v4.4 的 VSB 直写基础上改造）——
     /// 值经 @pN 占位绑定（不再内联进 SQL 文本），动态分页（页码无界）的形状由此回归有限集。
     /// 占位符编号从 <see cref="_parameterCount"/> 起排（子句参数之后），同形态恒同编号，
@@ -1097,10 +1117,24 @@ public struct QueryBuilder<T> where T : class, new()
     /// 方言文本形态保持既有契约（DialectDifferenceTests 锁定）：MySQL 用
     /// <c>LIMIT skip, take</c> 位置形态、skip-only 用上限哨兵字面量；SQLite skip-only 用
     /// <c>LIMIT -1</c>；PG skip-only 裸 <c>OFFSET</c>。参数对象每次现建（builder 可变，
-    /// 缓存参数对象会在 Take/Skip 改值后失真）。</summary>
+    /// 缓存参数对象会在 Take/Skip 改值后失真）。
+    /// <para><b>例外：First/Single 族的字面量形态</b>（见 <see cref="LiteralTakeValue"/>）——
+    /// SQLite 上该族发 <c>LIMIT 1</c> 字面量且不带 OFFSET，理由与实测数据记在 LiteralTakeValue。</para></summary>
     private (string Text, DbParameter[] Parameters) BuildLimitClause()
     {
         if (!_take.HasValue && !_skip.HasValue) return ("", System.Array.Empty<DbParameter>());
+        int literalTake = LiteralTakeValue;
+        if (literalTake != 0)
+        {
+            var literal = new ValueStringBuilder(stackalloc char[24]);
+            try
+            {
+                literal.Append("LIMIT ");
+                literal.Append(literalTake.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                return (literal.ToString(), System.Array.Empty<DbParameter>());
+            }
+            finally { literal.Dispose(); }
+        }
         var parameters = new List<DbParameter>(2);
         var sb = new ValueStringBuilder(stackalloc char[64]);
         try
