@@ -89,12 +89,11 @@ public static class Program
         List<BenchmarkReport> reports = [.. summaries.SelectMany(static s => s.Reports)];
         if (reports.Count == 0) return;
 
-        double healthRatio = 0;
-        foreach (BenchmarkReport r in reports)
-        {
-            if (ArmOf(r) != "ADO_NET" || r.ResultStatistics is not { Mean: > 0 } st) continue;
-            healthRatio = Math.Max(healthRatio, st.StandardDeviation / st.Mean);
-        }
+        double healthRatio = reports
+            .Where(static r => ArmOf(r) == "ADO_NET" && r.ResultStatistics is { Mean: > 0 })
+            .Select(static r => r.ResultStatistics!.StandardDeviation / r.ResultStatistics.Mean)
+            .DefaultIfEmpty(0)
+            .Max();
 
         var envelope = new PerfResultEnvelope
         {
@@ -114,11 +113,10 @@ public static class Program
             }
         };
 
-        foreach (BenchmarkReport r in reports)
+        // NA 行（无连接/被跳过/失败）不该进结果库：0 均值会被读成"极快"
+        foreach (BenchmarkReport r in reports.Where(static r => r.ResultStatistics is { Mean: > 0 }))
         {
-            // NA 行（无连接/被跳过/失败）不该进结果库：0 均值会被读成"极快"
-            if (r.ResultStatistics is not { Mean: > 0 } stats) continue;
-            double mean = stats.Mean;
+            double mean = r.ResultStatistics!.Mean;
             string operation = OperationOf(r);
             BenchmarkReport? floor = reports.Find(b => ArmOf(b) == "ADO_NET" && OperationOf(b) == operation);
             double floorMean = floor?.ResultStatistics?.Mean ?? 0;
@@ -144,28 +142,24 @@ public static class Program
     /// <summary>臂前缀（长的在前：ADO_NET_ 自带下划线，不能按第一个 '_' 切）。</summary>
     private static readonly string[] ArmPrefixes = ["ADO_NET_", "RepoDb_", "Dapper_", "PalORM_"];
 
+    /// <summary>命中臂前缀（长的在前，ADO_NET_ 自带下划线）；无命中返回 null。</summary>
+    private static string? MatchArmPrefix(string method)
+        => Array.Find(ArmPrefixes, prefix => method.StartsWith(prefix, StringComparison.Ordinal));
+
     /// <summary>臂名：按已知前缀匹配；无前缀则退回类名。</summary>
     private static string ArmOf(BenchmarkReport report)
     {
         string method = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
-        foreach (string prefix in ArmPrefixes)
-        {
-            if (method.StartsWith(prefix, StringComparison.Ordinal)) return prefix[..^1];
-        }
-
-        return report.BenchmarkCase.Descriptor.Type.Name;
+        string? prefix = MatchArmPrefix(method);
+        return prefix is null ? report.BenchmarkCase.Descriptor.Type.Name : prefix[..^1];
     }
 
     /// <summary>操作名：方法名去掉臂前缀（ADO_NET_QueryAll → QueryAll）；无前缀则用方法名。</summary>
     private static string OperationOf(BenchmarkReport report)
     {
         string method = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
-        foreach (string prefix in ArmPrefixes)
-        {
-            if (method.StartsWith(prefix, StringComparison.Ordinal)) return method[prefix.Length..];
-        }
-
-        return method;
+        string? prefix = MatchArmPrefix(method);
+        return prefix is null ? method : method[prefix.Length..];
     }
 
     /// <summary>行数档位：有 [Params] 取第一个 int 参数；没有则用种子行数（固定 10000）。</summary>
