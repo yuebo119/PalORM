@@ -8,8 +8,8 @@ using PalORM.Sqlite;
 
 namespace PalORM.DapperSuite;
 
-/// <summary>方言注册与 Posts 表播种——幂等（表内非 5000 行才重建），
-/// BDN 每个基准方法一个进程，只有首个进程付播种成本。</summary>
+/// <summary>方言注册、连接治理（SQLite 三臂同一组 PRAGMA）与 Posts 表播种——播种幂等
+///（表内非 5000 行才重建），BDN 每个基准方法一个进程，只有首个进程付播种成本。</summary>
 internal static class Database
 {
     public const int RowCount = 5000;   // 官方 Step() 的轮转上界
@@ -26,28 +26,51 @@ internal static class Database
     /// <para>静态初始化顺序：本字段必须声明在 <see cref="Dialect"/> 之后（文本序即初始化序）。</para></summary>
     public static string SelectByIdSql { get; } = $"select * from {Q("Posts")} where {Q("Id")} = @Id";
 
+    /// <summary>连接串——<see cref="Open"/> 与 <see cref="CreateSessionAsync{TProvider}"/> 共用，
+    /// 保证 PalORM 会话与另两臂的裸连接拿到完全相同的连接配置。</summary>
+    private static string ConnectionString() => Dialect switch
+    {
+        "sqlite" => $"Data Source={Path.Combine(Path.GetTempPath(), "palorm-dappersuite.db")}",
+        "mysql" => MySqlConnString.WithLocalInfile(Env("PALORM_MYSQL_CONNECTION")),
+        "pg" => Env("PALORM_PG_CONNECTION"),
+        _ => throw new InvalidOperationException($"未知方言 '{Dialect}'（sqlite/mysql/pg）")
+    };
+
+    /// <summary>SQLite 连接治理——与产品 <c>SqliteProvider.InitializeConnectionAsync</c> 同一组 PRAGMA。
+    /// <para>三臂统一是硬要求：PalORM 会话经 Provider 初始化自动拿到 WAL + 64MB cache + mmap，
+    /// 若只给它配、不给裸连接配，比较就不是"ORM 层差异"而是"连接配置差异"。</para></summary>
+    private const string SqliteGovernance =
+        "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; PRAGMA synchronous = NORMAL; "
+        + "PRAGMA cache_size = -65536; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 1000; "
+        + "PRAGMA mmap_size = 268435456";
+
     public static DbConnection Open()
     {
         DbConnection conn = Dialect switch
         {
-            "sqlite" => new SqliteConnection(
-                $"Data Source={Path.Combine(Path.GetTempPath(), "palorm-dappersuite.db")}"),
-            "mysql" => new MySqlConnection(
-                MySqlConnString.WithLocalInfile(Env("PALORM_MYSQL_CONNECTION"))),
-            "pg" => new NpgsqlConnection(Env("PALORM_PG_CONNECTION")),
+            "sqlite" => new SqliteConnection(ConnectionString()),
+            "mysql" => new MySqlConnection(ConnectionString()),
+            "pg" => new NpgsqlConnection(ConnectionString()),
             _ => throw new InvalidOperationException($"未知方言 '{Dialect}'（sqlite/mysql/pg）")
         };
         conn.Open();
+        if (Dialect == "sqlite")
+        {
+            using DbCommand cmd = conn.CreateCommand();
+            cmd.CommandText = SqliteGovernance;
+            cmd.ExecuteNonQuery();
+        }
         return conn;
     }
 
-    /// <summary>PalORM 会话工厂——按方言分派到具体 Provider（官方基准单连接复用口径）。</summary>
-    public static DataSession<TProvider> Session<TProvider>(DbConnection conn) where TProvider : IDbProvider, new()
-        => new(conn, new DbOptions { ConnectionString = conn.ConnectionString ?? "" }, [], null);
-
-    public static DataSession<SqliteProvider> SqliteSession(DbConnection c) => Session<SqliteProvider>(c);
-    public static DataSession<MySqlProvider> MySqlSession(DbConnection c) => Session<MySqlProvider>(c);
-    public static DataSession<PostgreSqlProvider> PgSession(DbConnection c) => Session<PostgreSqlProvider>(c);
+    /// <summary>PalORM 会话创建——README「创建会话」一节的最佳实践形态：
+    /// <c>await DataSession&lt;TProvider&gt;.CreateAsync(new DbOptions { ConnectionString = ... })</c>，
+    /// 按范围创建一次、在范围内服务多次操作（编码规范 STD-ARCH-003：using-scoped 无状态，
+    /// 用完即弃）。本套件的"范围"就是一个基准类的 Setup→Cleanup，与官方基准"连接建一次、
+    /// 全过程复用"口径一致（B76：两臂建连口径不同会让 Ratio 失真）。</summary>
+    public static Task<DataSession<TProvider>> CreateSessionAsync<TProvider>()
+        where TProvider : IDbProvider, new()
+        => DataSession<TProvider>.CreateAsync(new DbOptions { ConnectionString = ConnectionString() });
 
     private static string Env(string name)
     {
