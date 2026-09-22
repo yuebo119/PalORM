@@ -61,10 +61,16 @@ MySQL 1.06–1.09 对 Dapper 1.03–1.07；PG 1.06–1.08 对 Dapper 1.12。
 - Integration 新增 2 例（真库）：PG/MySQL 的 `FirstOrDefaultAsync` 保持参数化 LIMIT 且取值正确。
 - 三套实测：Core 365 / SourceGen 197 / Integration 205（合计 767），全绿。
 
-### 未隔离
+### 未隔离与适用边界
 
 SQLite 为何对参数化 LIMIT 多收约 8 µs，机制未查明 [推断：参数化值在 prepare 期无法常量折叠]。
 故本项收益在换驱动版本后需复测；`bench/PalORM.DapperSuite` 的 SQLite 档即是该复测口。
+
+**收益随环境而变，报告时必须带环境**：本项只在 CPU 主导的 SQLite 配置下可见。
+用 PerfHub 的 SQLite 档做交叉验证（2000 行档，默认 journal 模式 + 2MB 缓存，
+地板与三臂同在 129–144 µs/op 的 I/O 主导区间）时，因子开/关无差别（138.3 对 134.8 µs），
+页 I/O 把 8 µs 的 CPU 节省淹没了。DapperSuite 的 SQLite 档启用 WAL + 64MB 缓存 + mmap
+（三臂同一组 PRAGMA，见其 README 口径差 D10），属 CPU 主导，故能分辨。
 
 ## [未发布·性能轮六] — MySQL QueryAll 归因修正 · SQLite 并发边界文档化
 
