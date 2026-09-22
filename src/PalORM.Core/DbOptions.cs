@@ -47,8 +47,18 @@ public sealed record DbOptions
     /// GetAsync/GetAllAsync/聚合）。写入路径不自动重试（幂等性契约，见 DataSession.WithRetry）。</para></summary>
     public int MaxRetries { get; init; } = 3;
 
-    /// <summary>重试退避策略（默认 100ms→200ms→400ms）。</summary>
+    /// <summary>重试退避策略（默认 100ms→200ms→400ms，含 50%~100% 抖动）。</summary>
     public Func<int, TimeSpan>? RetryBackoff { get; init; }
+
+    /// <summary>整次操作的总预算（默认 <see cref="TimeSpan.Zero"/> = 不设）。
+    /// <para><b>为什么需要</b>：单次尝试超时（<see cref="CommandTimeout"/>）不是总时长上界——
+    /// 默认 MaxRetries=3 时最坏墙钟 = 4 × CommandTimeout + Σ退避（默认约 120 秒），调用方除
+    /// 取消令牌外无从表达"本请求最多 10 秒"。设本项后总预算到期即停止重试，并抛带
+    /// <c>PalORM.InfrastructureTimeout</c> 标记的 <see cref="TimeoutException"/>（与单次命令
+    /// 超时同口径，可与"我被取消"区分）。</para>
+    /// <para>RES-003（2026-09-23）。建议按调用方请求预算设置，取值应大于单次
+    /// <see cref="CommandTimeout"/>，否则首次尝试就会被总预算掐断。</para></summary>
+    public TimeSpan OverallDeadline { get; init; }
 
     /// <summary>连接池最大连接数（默认 100）。</summary>
     public int MaxPoolSize { get; init; } = 100;
@@ -146,6 +156,7 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfNegative(CommandTimeout.Ticks, nameof(CommandTimeout));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
+        ArgumentOutOfRangeException.ThrowIfNegative(OverallDeadline.Ticks, nameof(OverallDeadline));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
         // C4：MinPoolSize 负数非法；大于 MaxPoolSize 是配置矛盾（透传后驱动行为未定义），提前报错
         ArgumentOutOfRangeException.ThrowIfNegative(MinPoolSize, nameof(MinPoolSize));

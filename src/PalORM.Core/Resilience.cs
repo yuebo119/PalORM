@@ -9,6 +9,8 @@ public sealed class ResilienceExecutor
     private readonly int _maxRetries;
     private readonly Func<int, TimeSpan> _backoff;
     private readonly TimeSpan _timeout;
+    /// <summary>整次操作的总预算（RES-003，2026-09-23）；Zero = 不设（既有最坏墙钟语义不变）。</summary>
+    private readonly TimeSpan _overallDeadline;
     private readonly Func<Exception, bool> _isTransient;
     private readonly CircuitBreaker _circuitBreaker;
 
@@ -33,6 +35,8 @@ public sealed class ResilienceExecutor
         ArgumentOutOfRangeException.ThrowIfNegative(options.CircuitBreakerThreshold);
 
         _maxRetries = options.MaxRetries;
+        // RES-003（2026-09-23）：总预算默认 Zero = 不设（保持既有最坏墙钟语义不变）。
+        _overallDeadline = options.OverallDeadline;
         // ITM-605: 包装 _backoff 统一覆盖两路径（DataSession.CreateAsync 连接重试 +
         // ResilienceExecutor.ExecuteAsync 命令重试）——此前 ITM-603 只在 CreateAsync 调用点
         // 加守卫，命令路径 Task.Delay(_backoff(attempt)) 抛 AOORE("delay") 不指向 RetryBackoff 配置。
@@ -71,10 +75,23 @@ public sealed class ResilienceExecutor
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S1994:ForLoopConditionChanged",
         Justification = "同 S2189——for(;;) 退出靠 return/throw，attempt 不进入 stop 条件。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "RES-003 起本方法有 6 条异常分支（调用方取消 / 总预算到期 / 超时重试 / "
+            + "瞬时重试 / 超时耗尽包装 / 外层熔断记账），每条过滤条件都必须与异常形态严格对应；"
+            + "拆分会把重试语义打散到多处、降低可审性（与同方法 S2189/S1994 同因）。")]
     public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
         var (isHalfOpenProbe, generation) = _circuitBreaker.Enter();
+
+        // RES-003（2026-09-23）：总预算（Zero = 不设）——比单次尝试超时更强的上界，到期即停重试。
+        // 默认不设时本块零开销（overall 为 null，attemptScope 就是调用方 ct）。
+        using CancellationTokenSource? overall = _overallDeadline > TimeSpan.Zero
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : null;
+        overall?.CancelAfter(_overallDeadline);
+        CancellationToken attemptScope = overall?.Token ?? ct;
 
         try
         {
@@ -83,7 +100,7 @@ public sealed class ResilienceExecutor
                 CancellationTokenSource? timeout = null;
                 try
                 {
-                    timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeout = CancellationTokenSource.CreateLinkedTokenSource(attemptScope);
                     timeout.CancelAfter(_timeout);
                     T result = await operation(timeout.Token).ConfigureAwait(false);
                     _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
@@ -92,6 +109,18 @@ public sealed class ResilienceExecutor
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     throw;
+                }
+                catch (OperationCanceledException overallException) when (overall is not null
+                    && overall.IsCancellationRequested)
+                {
+                    // RES-003：总预算到期不再重试——最坏墙钟由 (MaxRetries+1)×CommandTimeout+Σ退避
+                    // 收敛为 OverallDeadline。与单次命令超时同口径包装（Data 标记可识别）。
+                    var wrappedOverall = new TimeoutException(
+                        $"Operation exceeded the overall deadline of {_overallDeadline} "
+                        + $"(attempt {attempt + 1} of {_maxRetries + 1}).",
+                        overallException);
+                    wrappedOverall.Data["PalORM.InfrastructureTimeout"] = true;
+                    throw wrappedOverall;
                 }
                 catch (OperationCanceledException) when (timeout is not null
                     && timeout.IsCancellationRequested && attempt < _maxRetries)
@@ -151,7 +180,11 @@ public sealed class ResilienceExecutor
         ArgumentOutOfRangeException.ThrowIfNegative(attempt);
         int shift = Math.Min(attempt, 18);
         long milliseconds = Math.Min(100L << shift, 30_000L);
-        return TimeSpan.FromMilliseconds(milliseconds);
+        // RES-003（2026-09-23）：默认退避加 50%~100% 抖动。纯指数退避在多实例同时恢复时让
+        // 所有客户端对齐到达，把刚恢复的服务二次打垮；同仓 PgNotificationListener 的重连退避
+        // 早已加抖动，理由相同。
+        double jitter = 0.5 + (Random.Shared.NextDouble() * 0.5);
+        return TimeSpan.FromMilliseconds(milliseconds * jitter);
     }
 
     /// <summary>ITM-506/658(r4)：仅瞬时故障与本类型包装的基础设施超时（ITM-667 起用
