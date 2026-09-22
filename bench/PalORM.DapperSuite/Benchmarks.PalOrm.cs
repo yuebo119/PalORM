@@ -99,7 +99,8 @@ public class PalOrmBenchmarks : BenchmarkBase
 
     /// <summary>Id = @p0 条件——列名走文本段（与 PerfHub Dataset.WhereId 同防 B78 坑）。</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static FormattableString WhereId(int id)    {
+    private static FormattableString WhereId(int id)
+    {
         string quoted = Database.Dialect == "mysql" ? "`Id`" : "\"Id\"";
         return FormattableStringFactory.Create(quoted + " = {0}", id);
     }
