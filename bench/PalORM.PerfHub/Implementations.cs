@@ -241,7 +241,8 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     private async Task<long> BulkInsertCopyAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
-        Npgsql.NpgsqlConnection npg = (Npgsql.NpgsqlConnection)conn;
+        // 驱动专有快路径要求自己的连接类型——先脱掉计数装饰器（该路径的往返数不计入维度 8）
+        Npgsql.NpgsqlConnection npg = (Npgsql.NpgsqlConnection)CountingConnection.Unwrap(conn);
         await using Npgsql.NpgsqlBinaryImporter importer = await npg.BeginBinaryImportAsync(
             $"COPY {T} ({Cols}) FROM STDIN (FORMAT BINARY)", ct).ConfigureAwait(false);
         foreach (S1Row row in rows)
@@ -262,17 +263,6 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     private async Task<long> BulkInsertMySqlCopyAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
     {
-        using System.Data.DataTable table = new();
-        table.Columns.Add("Id", typeof(long));
-        table.Columns.Add("Name", typeof(string));
-        table.Columns.Add("Qty", typeof(int));
-        table.Columns.Add("Price", typeof(decimal));
-        table.Columns.Add("Marker", typeof(long));
-        foreach (S1Row row in rows)
-        {
-            table.Rows.Add(row.Id, row.Name, row.Qty, row.Price, row.Marker);
-        }
-
         MySqlConnector.MySqlTransaction? myTran =
             tran as MySqlConnector.MySqlTransaction;
         bool ownsTransaction = false;
@@ -285,8 +275,10 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
 
         try
         {
+            // 同 PG：MySqlBulkCopy 要求真实 MySqlConnection，先脱装饰器（否则连接被搞坏，
+            // 后续项全部报 Connection must be Open; state is Broken——实测先例）
             MySqlConnector.MySqlBulkCopy bulk = new(
-                (MySqlConnector.MySqlConnection)conn, myTran)
+                (MySqlConnector.MySqlConnection)CountingConnection.Unwrap(conn), myTran)
             {
                 DestinationTableName = T,
             };
@@ -297,8 +289,11 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
                 bulk.ColumnMappings.Add(new MySqlConnector.MySqlBulkCopyColumnMapping(i, columns[i]));
             }
 
+            // 喂数据走读取器而不是 DataTable：与产品 v5.6 后的形态一致（DataTable 每行 372 B、
+            // 且在本环境实测把连接置为 Broken，后续 BulkDelete 报 SocketException 995）
+            using var reader = new S1RowDataReader(rows);
             MySqlConnector.MySqlBulkCopyResult result =
-                await bulk.WriteToServerAsync(table, ct).ConfigureAwait(false);
+                await bulk.WriteToServerAsync(reader, ct).ConfigureAwait(false);
             if (result.Warnings.Count > 0)
                 throw new InvalidOperationException(
                     $"MySqlBulkCopy produced {result.Warnings.Count} warnings");
