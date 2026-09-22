@@ -26,6 +26,9 @@ Thumbs.db
 BenchmarkDotNet.Artifacts/
 nupkgs/
 
+## 基准跑测日志（dappersuite-run.sh 输出，本地产物）
+bench/PalORM.DapperSuite/results/
+
 ## BenchmarkDotNet fork（v5.0 阶段 3.4：本地引用，独立 git 仓库，不入 PalORM 仓库）
 ## 其他开发者需自行 clone BDN fork 到此目录（支持 net11 的版本）
 bench/BenchmarkDotNet/
