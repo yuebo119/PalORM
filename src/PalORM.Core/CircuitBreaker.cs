@@ -50,11 +50,18 @@ internal sealed class CircuitBreaker
     /// 返回 (isHalfOpenProbe, generation) 记录，供后续 RecordSuccess/RecordFailure 判定。
     /// <para><b>C1 无锁快路径</b>：Closed 态（绝大多数时间）只读 volatile 镜像 + generation，
     /// 不进入锁。会话级单活动操作契约下同一执行器极少被并发使用，收益是省掉锁本身的开销
-    /// （每次 DB 操作两次）。</para></summary>
+    /// （每次 DB 操作两次）。</para>
+    /// <para><b>读序契约（RES-001，2026-09-22）</b>：generation 必须先于 flag 读取，且与
+    /// <see cref="Open"/> 的写序（先 flag 后 generation）配对。反序时存在窗口：本线程读到
+    /// flag=false（闸未开）之后 Open 已推进 generation，于是携带"新 generation + 未开闸"
+    /// 返回，操作成功后 RecordSuccess 会关闭刚开闸的熔断器，resetAfter 冷却静默失效。
+    /// 先读 generation 则保证：只要后读的 flag 仍是 false，先读的 generation 必然早于本次
+    /// Open 的自增（自增发生在 flag 写之后），陈旧记录会被 RecordSuccess 的 generation 核对拦下。</para></summary>
     internal (bool IsHalfOpenProbe, long Generation) Enter()
     {
+        long generation = Volatile.Read(ref _generation);
         if (!IsEnabled || !_isOpenFlag)
-            return (false, Volatile.Read(ref _generation));
+            return (false, generation);
 
         lock (_lock)
         {

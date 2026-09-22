@@ -136,6 +136,47 @@ public sealed class TransactionCleanupTests
 
         await Assert.That(primary.Data.Contains("PalORM.RollbackTimeoutException")).IsFalse();
     }
+
+    // ─── TX-003：提交超时统一包装 ────────────────────────────
+
+    [Test]
+    public async Task Commit_Bounded_RecordsInfrastructureTimeout()
+    {
+        // 提交不受 CommandTimeout 治理：ct == default 时网络黑洞会让提交永久挂起。
+        // 包装后必须变成带 PalORM.InfrastructureTimeout 标记的 TimeoutException（与 Provider
+        // 批量路径同口径），且耗时受 commandTimeoutSeconds 约束而非等满假事务的 30 秒。
+        await using var transaction = new SlowCommitTransaction(delaySeconds: 30);
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+
+        Exception? thrown = await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await TransactionCleanup.CommitWithTimeoutAsync(
+                transaction, commandTimeoutSeconds: 1, CancellationToken.None));
+
+        await Assert.That((bool)thrown!.Data["PalORM.InfrastructureTimeout"]!).IsTrue();
+        await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    [Test]
+    public async Task Commit_ZeroTimeout_IsUnboundedAndNotWrapped()
+    {
+        // Zero 契约：调用方显式要求无限等待时不设超时（与 CommandTimeout Zero 同口径）
+        await using var transaction = new SlowCommitTransaction(delaySeconds: 0);
+
+        await TransactionCleanup.CommitWithTimeoutAsync(
+            transaction, commandTimeoutSeconds: 0, CancellationToken.None);
+    }
+
+    [Test]
+    public async Task Commit_CallerCancellation_PropagatesCancellation_NotTimeout()
+    {
+        // 调用方取消与超时必须可区分：前者原样上抛 OCE，不得被包装成 InfrastructureTimeout
+        await using var transaction = new SlowCommitTransaction(delaySeconds: 30);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await TransactionCleanup.CommitWithTimeoutAsync(
+                transaction, commandTimeoutSeconds: 30, cts.Token));
+    }
 }
 
 /// <summary>回滚延迟可编程的假事务——用于验证有界回滚（真实连接断开无法稳定制造）。</summary>
@@ -201,6 +242,33 @@ internal sealed class FailingRollbackTransaction : DbTransaction
     public override void Rollback() => throw new InvalidOperationException("rollback failed");
     public override Task RollbackAsync(CancellationToken cancellationToken = default)
         => Task.FromException(new InvalidOperationException("rollback failed"));
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _connection.Dispose();
+        base.Dispose(disposing);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await _connection.DisposeAsync().ConfigureAwait(false);
+        await base.DisposeAsync().ConfigureAwait(false);
+    }
+}
+
+/// <summary>提交延迟可编程的假事务——验证提交的有界包装（真实网络黑洞无法在单测里制造）。</summary>
+internal sealed class SlowCommitTransaction(int delaySeconds) : DbTransaction
+{
+    private readonly SlowRollbackConnection _connection = new();
+    public override IsolationLevel IsolationLevel => IsolationLevel.Unspecified;
+    protected override DbConnection DbConnection => _connection;
+
+    public override void Commit() { }
+    public override void Rollback() { }
+    public override Task CommitAsync(CancellationToken cancellationToken = default)
+        => delaySeconds <= 0
+            ? Task.CompletedTask
+            : Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
 
     protected override void Dispose(bool disposing)
     {

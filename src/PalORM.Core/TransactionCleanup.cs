@@ -111,6 +111,42 @@ internal static class TransactionCleanup
     /// <summary>回滚的有界上限默认值（秒）——正常回滚是毫秒级本地往返；触发即异常路径。</summary>
     internal const int DefaultRollbackTimeoutSeconds = 30;
 
+    /// <summary>提交的超时包装（T1/TX-003，2026-09-22）：事务提交不受 CommandTimeout 治理，
+    /// 调用方 ct 为 default 时网络黑洞会让提交永久挂起。Provider 批量路径早已为同一问题实现
+    /// 同款包装（PostgreSqlProvider / MySqlProvider 的 CommitWithTimeoutAsync），事务主 API
+    /// 此前未对齐——本方法把它收敛为全库单一实现。
+    /// <para>口径：<paramref name="commandTimeoutSeconds"/> ≤ 0（Zero 契约）不设超时；调用方取消
+    /// 原样上抛（OCE）；仅本方法引入的超时包装为带 <c>PalORM.InfrastructureTimeout</c> 标记的
+    /// <see cref="TimeoutException"/>——调用方据此判定"服务端状态未知"并照常尝试回滚。</para></summary>
+    internal static async ValueTask CommitWithTimeoutAsync(
+        DbTransaction transaction, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        if (commandTimeoutSeconds <= 0)
+        {
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
+        try
+        {
+            await transaction.CommitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException timeoutException) when (timeoutCts.IsCancellationRequested)
+        {
+            var wrappedTimeout = new TimeoutException(
+                $"Commit timed out after {commandTimeoutSeconds}s; the server-side transaction state is unknown.",
+                timeoutException);
+            wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+            throw wrappedTimeout;
+        }
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "释放是清理路径；异常附加到主异常，不能替换原始执行失败。")]
     internal static async ValueTask DisposeTransactionPreservingAsync(

@@ -298,6 +298,15 @@ public sealed class MySqlProvider : IDbProvider
         catch (Exception ex)
         {
             primaryException = ex;
+            // T2/P0-32（2026-09-22）：自管事务失败时显式有界回滚，不依赖驱动 Dispose 的隐式语义。
+            // 与 PG 路径（PostgreSqlProvider 的 COPY catch）同口径：隐式回滚发生在异常传播路径上
+            // 且无超时上界，网络黑洞下把一次快速失败拖成永久卡死；不发起回滚则服务端事务悬置到
+            // 连接归还，继续持锁与 undo 日志。显式回滚让"回滚失败"与"未尝试回滚"在诊断上可区分。
+            if (ownsTransaction)
+            {
+                await BulkOperationFramework.RollbackPreservingAsync(
+                    mySqlTransaction, ex, commandTimeoutSeconds).ConfigureAwait(false);
+            }
             throw;
         }
         finally

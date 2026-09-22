@@ -91,10 +91,13 @@ public sealed class SessionBatch<TProvider> : IDisposable
         DbBatch? batch = TryCreateBatch(connection, transaction);
         if (batch is not null)
         {
+            // 更正（2026-09-22，BATCH-001）：此前注释称"System.Data.Common.DbBatch 无 CommandTimeout 面"，
+            // 实为误读——DbBatch.Timeout 自 .NET 8 起存在（8.0/9.0/10.0/11.0 参考程序集均有该属性），
+            // 缺的是"设值"而非"API 面"：不设即按驱动默认（Npgsql 30s），会话 WithTimeout 在批路径静默失效。
+            // 与回退路径同口径（含显式 Zero = 无限等待）。
+            batch.Timeout = _session.BatchCommandTimeoutSeconds;
             try
             {
-                // 边界（L4 核实）：System.Data.Common.DbBatch 无 CommandTimeout 面——批路径
-                // 超时由驱动默认决定；回退路径按会话 CommandTimeout（含显式 Zero=无限）。
                 // 慢 DDL 场景（大表 CREATE INDEX）不应走批——MigrateAsync 的索引 DDL 保持逐条。
                 foreach ((string sql, IReadOnlyList<DbParameter> parameters) in _statements)
                 {

@@ -232,26 +232,35 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                     // 完全不触发；该线程同时承担断线感知，低频通道上 NOTIFY 丢失可持續
                     // 数小时无痕。改为周期性向服务端发 SELECT 1，
                     // 失败即退出内层循环走既有 transient 重连路径。
-                    using var keepaliveCts = CancellationTokenSource.CreateLinkedTokenSource(owner.Token);
-                    keepaliveCts.CancelAfter(_keepaliveInterval);
+                    // NOTIF-001（2026-09-22）：原实现复用一个 CTS 并在循环内 CancelAfter 重臂，
+                    // 但 CTS 一经取消即不可复用（重臂是 no-op），且 waitTask 因它取消产生的 OCE
+                    // 没有任何 catch filter 接住（owner 未取消 + 无 PalORM.IsTransient 标记）——
+                    // 空闲通道（监听器常态）在 1~2 个心跳周期内静默死亡；每轮还遗留一个不可取消的
+                    // 心跳 Task.Delay 定时器。改用 WaitAsync(TimeSpan) 表达超时：
+                    //   ① 无 delayTask，超时不再依赖第二个定时器，也不存在取消语义复用；
+                    //   ② 超时分支先 Cancel 取消悬挂的 wait——不留同一连接上的并发等待；
+                    //   ③ 通知到达走原路径，连接故障仍按 transient 走既有重连。
                     while (!owner.IsCancellationRequested)
                     {
-                        Task waitTask = connection.WaitAsync(keepaliveCts.Token);
-                        Task delayTask = Task.Delay(_keepaliveInterval, CancellationToken.None);
-                        Task completed = await Task.WhenAny(waitTask, delayTask).ConfigureAwait(false);
-
-                        if (completed == delayTask)
+                        using var beat = CancellationTokenSource.CreateLinkedTokenSource(owner.Token);
+                        Task waitTask = connection.WaitAsync(beat.Token);
+                        try
                         {
-                            // 心跳到期：探测连接是否仍活着（静默断线的唯一可靠信号）
-                            keepaliveCts.CancelAfter(_keepaliveInterval);
-                            if (!await ProbeConnectionAsync(connection, owner.Token).ConfigureAwait(false))
-                                throw CreateKeepaliveFailure();
-                            continue;
+                            // 超时是本分支唯一的取消源：owner 取消经 beat 联动 waitTask 传播，
+                            // 由外层 catch filter（owner.IsCancellationRequested）收口。
+                            await waitTask.WaitAsync(_keepaliveInterval, CancellationToken.None)
+                                .ConfigureAwait(false);
+                            continue;  // 通知到达
+                        }
+                        catch (TimeoutException)
+                        {
+                            // 心跳到期：取消悬挂的 wait，避免下一轮对同一连接并发等待
+                            await beat.CancelAsync().ConfigureAwait(false);
                         }
 
-                        // 有通知到达（或连接已断）——WaitAsync 的异常在此传播
-                        await waitTask.ConfigureAwait(false);
-                        keepaliveCts.CancelAfter(_keepaliveInterval);
+                        // 探测连接是否仍活着（静默断线的唯一可靠信号）
+                        if (!await ProbeConnectionAsync(connection, owner.Token).ConfigureAwait(false))
+                            throw CreateKeepaliveFailure();
                     }
                 }
                 catch (OperationCanceledException) when (owner.IsCancellationRequested)

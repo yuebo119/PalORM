@@ -268,21 +268,49 @@ internal sealed class FakePgNotificationConnection : IPgNotificationConnection
     // A2：保活探测——Fake 默认成功；测试可经 ProbeException 制造探测失败
     internal Exception? ProbeException { get; init; }
 
-    public Task ProbeAsync(CancellationToken cancellationToken)
+    // NOTIF-001（2026-09-22）：真实探测是一次网络往返（非零延迟）。零延迟会掩盖心跳循环的
+    // 定时器竞态——CTS 重臂与下一轮 delayTask 落在同一 tick 时延时会赢，真实往返下 CTS 先到期。
+    internal TimeSpan ProbeDelay { get; init; }
+
+    private int _pendingWaits;
+    private int _maxWaitConcurrency;
+    private readonly Lock _waitGate = new();
+
+    /// <summary>并发等待峰值——心跳循环若遗留未取消的 WaitAsync，该值会 &gt; 1。</summary>
+    internal int MaxWaitConcurrency
+    {
+        get { lock (_waitGate) return _maxWaitConcurrency; }
+    }
+
+    public async Task ProbeAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ProbeException is not null ? Task.FromException(ProbeException) : Task.CompletedTask;
+        if (ProbeDelay > TimeSpan.Zero)
+            await Task.Delay(ProbeDelay, cancellationToken).ConfigureAwait(false);
+        if (ProbeException is not null) throw ProbeException;
     }
 
     public async Task WaitAsync(CancellationToken cancellationToken)
     {
         WaitEntered.TrySetResult();
-        if (WaitSteps.Count > 0)
+        lock (_waitGate)
         {
-            await WaitSteps.Dequeue()(cancellationToken);
-            return;
+            _pendingWaits++;
+            if (_pendingWaits > _maxWaitConcurrency) _maxWaitConcurrency = _pendingWaits;
         }
-        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        try
+        {
+            if (WaitSteps.Count > 0)
+            {
+                await WaitSteps.Dequeue()(cancellationToken);
+                return;
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+        finally
+        {
+            lock (_waitGate) _pendingWaits--;
+        }
     }
 
     internal void Emit(string channel, string payload) => Notification?.Invoke(channel, payload);
@@ -400,5 +428,67 @@ public sealed class PgNotificationListenerHotPathTests
         await listener.StopAsync();
 
         await Assert.That(connection.DisposeCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A2_Keepalive_ListenerSurvivesMultipleIdleHeartbeatIntervals()
+    {
+        // 2026-09-22 审计 R1（NOTIF-001）：空闲通道是通知监听器的常态，而原心跳循环里
+        // keepaliveCts 只能取消一次（CancelAfter 在已取消的 CTS 上是 no-op），waitTask 的内部
+        // OCE 又没有任何 catch filter 接住（owner 未取消 + 无 PalORM.IsTransient 标记）——
+        // 心跳先于通知到期时 OCE 落到外层 RaiseError，监听器在 1~2 个心跳周期内静默死亡。
+        // 本用例锁定"跨多个空闲心跳周期后仍存活且仍能收通知"：旧实现的死亡路径会在 finally
+        // 退订连接并触发 OnError，两条断言都失败。
+        var connection = new FakePgNotificationConnection();
+        var errors = new List<Exception>();
+        await using var listener = new PgNotificationListener(
+            () => connection, ["events"], _ => TimeSpan.Zero,
+            keepaliveInterval: TimeSpan.FromMilliseconds(50));
+        listener.OnError += (_, args) => errors.Add(args.Exception);
+        int delivered = 0;
+        listener.OnNotification += (_, _) => Interlocked.Increment(ref delivered);
+
+        await listener.StartAsync();
+        await connection.WaitEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 空闲跨越 8 个心跳周期（每轮心跳触发一次探测，Fake 默认成功）
+        await Task.Delay(400);
+
+        await Assert.That(errors).IsEmpty();
+
+        // 行为证据：心跳之后到达的通知仍能送达（死亡路径已退订连接，收不到）
+        connection.Emit("events", "after-idle");
+        await Assert.That(delivered).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A2_Keepalive_ListenerSurvivesIdleHeartbeats_WhenProbeHasLatency()
+    {
+        // NOTIF-001（2026-09-22）：本用例是心跳循环的判别性判据。零延迟探测下 CTS 重臂与
+        // 下一轮 delayTask 落在同一 tick，延时分支赢，掩盖了竞态；真实探测有网络往返
+        // （这里注入 20ms），于是每轮 CTS 都比下一轮 delayTask 早到期：CTS 取消 waitTask 后，
+        // 内部 OCE 没有 catch filter 接住（owner 未取消、无 PalORM.IsTransient 标记），
+        // 旧实现落到外层 RaiseError，监听器在第二个心跳周期静默死亡。
+        // 同时锁定"不遗留未取消的 WaitAsync"（旧实现每轮遗留一个，峰值并发 > 1）。
+        var connection = new FakePgNotificationConnection { ProbeDelay = TimeSpan.FromMilliseconds(20) };
+        var errors = new List<Exception>();
+        await using var listener = new PgNotificationListener(
+            () => connection, ["events"], _ => TimeSpan.Zero,
+            keepaliveInterval: TimeSpan.FromMilliseconds(100));
+        listener.OnError += (_, args) => errors.Add(args.Exception);
+        int delivered = 0;
+        listener.OnNotification += (_, _) => Interlocked.Increment(ref delivered);
+
+        await listener.StartAsync();
+        await connection.WaitEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 空闲跨越约 6 个心跳周期（每轮 = 100ms 等待 + 20ms 探测）
+        await Task.Delay(800);
+
+        await Assert.That(errors).IsEmpty();
+        await Assert.That(connection.MaxWaitConcurrency).IsEqualTo(1);
+
+        connection.Emit("events", "after-idle");
+        await Assert.That(delivered).IsEqualTo(1);
     }
 }

@@ -127,6 +127,32 @@ public sealed class BulkCleanupTests
     }
 
     [Test]
+    public async Task BulkOperationFramework_RollbackPreserving_IsBoundedAndPreservesPrimary()
+    {
+        // TX-002（2026-09-22）：Provider 批量路径的跨程序集回滚入口必须与 Core 同一实现——
+        // 有界（超时挂主异常 Data 而非无限等待），且不替换原始失败。MySQL LOAD DATA 失败
+        // 路径与 PG COPY 失败路径都经此入口（此前 MySQL 依赖驱动 Dispose 的隐式回滚）。
+        var primary = new InvalidOperationException("bulk failed");
+        await using var hanging = new SlowRollbackTransaction(delaySeconds: 30);
+
+        await BulkOperationFramework.RollbackPreservingAsync(hanging, primary, rollbackTimeoutSeconds: 1);
+
+        await Assert.That(primary.Data.Contains("PalORM.RollbackTimeoutException")).IsTrue();
+        await Assert.That(primary.Data.Contains("PalORM.RollbackException")).IsFalse();
+    }
+
+    [Test]
+    public async Task BulkOperationFramework_RollbackFailure_IsAttachedNotThrown()
+    {
+        var primary = new InvalidOperationException("bulk failed");
+        await using var failing = new FailingRollbackTransaction();
+
+        await BulkOperationFramework.RollbackPreservingAsync(failing, primary, rollbackTimeoutSeconds: 5);
+
+        await Assert.That(primary.Data["PalORM.RollbackException"]).IsTypeOf<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task MultiValueBulkInsert_ParameterLimitAboveFiveDigits_Throws()
     {
         // ITM-668：占位符下标 5 位上限——入口显式拒绝而非第 100000 个参数处越界。
