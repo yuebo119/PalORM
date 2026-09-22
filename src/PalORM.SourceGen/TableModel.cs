@@ -172,7 +172,11 @@ internal sealed record TableModel(
                 ignoreOnInsert, isConcurrencyToken, isTimestamp, computedExpression, isOwnedJson,
                 ownedJsonContextTypeName,
                 converterType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                sensitiveMask));
+                sensitiveMask,
+                // GEN-007（2026-09-23）：引用类型且 NRT 未启用（NullableAnnotation.None）——
+                // 可空性无从判断。注意与 NotAnnotated 区分：后者是"NRT 开启且显式声明非空"，
+                // 属契约而非缺陷，读路径保持直读（零额外 reader 访问）。
+                prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -293,7 +297,8 @@ internal sealed record ColumnModel(
     bool IsRequired,
     bool IgnoreOnInsert, bool IsConcurrencyToken, bool IsTimestamp, string? ComputedExpression,
     bool IsOwnedJson, string? OwnedJsonContextTypeName, string? ConverterTypeName,
-    string? SensitiveMask = null)
+    string? SensitiveMask = null,
+    bool IsNullabilityUnknown = false)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

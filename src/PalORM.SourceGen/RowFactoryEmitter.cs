@@ -89,16 +89,28 @@ internal static class RowFactoryEmitter
 
     private static string GetReadExpression(ColumnModel col, int ordinal, string generatedTypeSuffix)
     {
-        // ITM-536 已知限制：可空判定依赖 NRT 注解（IsNullable ← NullableAnnotation.Annotated）。
-        // 在 `#nullable disable` 上下文里，引用类型（string 等）无 Annotated 注解，会被当作非空、
-        // 不生成 IsDBNull 守卫；若该列在 DB 里为 NULL，GetString 会抛 SqlNullValueException。
-        // 规避方法：实体所在文件启用 `#nullable enable`，把真正可空的列显式标为 `string?`。
-        // 此处不改可空推断逻辑——放宽会波及所有列的守卫生成，影响面过大。
+        // GEN-007（2026-09-23）：可空性判定分三态，不再只认 NRT 注解。
+        //   ① Annotated（`string?`）→ IsNullable：DB NULL 物化为 null（既有行为）。
+        //   ② None（`#nullable disable` 的引用类型）→ IsNullabilityUnknown：可空性无从判断，
+        //      此前直读会让 DB NULL 落到驱动层 SqlNullValueException（无列名无实体名）。
+        //      现改为命名化响亮失败：消息带列名与属性名，指向"启用 NRT 标注可空或让列 NOT NULL"。
+        //      不向非空属性注入 null——那会违反实体契约并把失败推给下游 NRE（防静默错误优先）。
+        //   ③ NotAnnotated（NRT 开启且声明非空）→ 直读：非空是显式契约，不加每行 IsDBNull 开销
+        //      （可空列双读的代价见 L44 登记，不扩大到非空列）。
         // 可空类型处理
         if (col.IsNullable)
         {
             string nonNullRead = GetNonNullReadExpression(col, ordinal, generatedTypeSuffix);
             return $"r.IsDBNull({ordinal}) ? null : {nonNullRead}";
+        }
+
+        if (col.IsNullabilityUnknown)
+        {
+            string nonNullRead = GetNonNullReadExpression(col, ordinal, generatedTypeSuffix);
+            return $"r.IsDBNull({ordinal}) ? throw new global::System.InvalidOperationException("
+                + $"\"Column '{col.ColumnName}' (property '{col.PropertyName}') returned NULL, but the "
+                + $"nullability of the property is unknown: enable nullable reference types on the entity "
+                + $"and mark it nullable, or make the column NOT NULL.\") : {nonNullRead}";
         }
 
         return GetNonNullReadExpression(col, ordinal, generatedTypeSuffix);
