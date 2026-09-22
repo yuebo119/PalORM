@@ -126,7 +126,7 @@ public sealed partial class DataSession<TProvider>
             if (narrowId is null)
                 throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
             if (state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? narrowBackfill))
-                narrowBackfill(entity, narrowId.Value);
+                BackfillGeneratedId(narrowBackfill, entity, narrowId.Value);
             return entity;
         }
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -140,9 +140,25 @@ public sealed partial class DataSession<TProvider>
         {
             int pkOrdinal = reader.GetOrdinal(pkColumn);
             if (!await reader.IsDBNullAsync(pkOrdinal, ct).ConfigureAwait(false))
-                backfill(entity, reader.GetInt64(pkOrdinal));
+                BackfillGeneratedId(backfill, entity, reader.GetInt64(pkOrdinal));
         }
         return materialized;
+    }
+
+    /// <summary>生成 ID 回填（TX-004，2026-09-23）：会话处于<b>自开事务</b>（提交权在 PalORM）时
+    /// 延迟到提交成功后回放——中途回滚会让实体持有已不存在行的 ID，再 SaveAsync 因
+    /// HasDefaultKey=false 改走 UPSERT/UPDATE 打向不存在主键（静默数据损坏）。
+    /// 外部事务（提交权在调用方）与无事务路径保持立即回填：提交时点不可知，延迟会让回填永不发生。
+    /// <para><b>version 不延迟</b>：单条 UpdateAsync 的内存 version 仍立即抬升。同一事务内对同一实体
+    /// 连续两次 Update 时，延迟会让第二次用旧 version 匹配已抬升的行（0 行 → 假冲突）；
+    /// 而回滚后 version 领先只是响亮且可恢复的假冲突，不是静默损坏（与批量路径 ITM-556 的取舍不同）。</para></summary>
+    private void BackfillGeneratedId<TEntity>(Action<object, long> backfill, TEntity entity, long id)
+        where TEntity : class
+    {
+        if (_operationState.DefersPostCommitActions)
+            _operationState.AddPostCommitAction(() => backfill(entity, id));
+        else
+            backfill(entity, id);
     }
 
     /// <summary>MySQL 路径——INSERT + SELECT LAST_INSERT_ID() 合并为单次 ExecuteScalarAsync。

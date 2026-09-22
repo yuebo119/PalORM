@@ -66,6 +66,69 @@ internal sealed class InsertReturningNarrowTests
             await session.ExecuteAsync($"DROP TABLE IF EXISTS wide_insert");
         }
     }
+
+    [Test]
+    public async Task Insert_InsideOwnedTransaction_RollbackDoesNotBackfillId()
+    {
+        // TX-004（2026-09-23）：事务回滚后实体不得持有已不存在行的 ID——原实现语句成功即回填，
+        // 回滚后再 SaveAsync 会因 HasDefaultKey=false 改走 UPSERT/UPDATE 打向不存在主键
+        // （静默数据损坏）。自开事务（WithTransaction）下回填延迟到提交成功后回放。
+        using var keeper = new Microsoft.Data.Sqlite.SqliteConnection(
+            "Data Source=narrow_tx;Mode=Memory;Cache=Shared");
+        await keeper.OpenAsync();
+        await using DataSession<SqliteProvider> session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "Data Source=narrow_tx;Mode=Memory;Cache=Shared" });
+        await session.ExecuteAsync(
+            $"CREATE TABLE narrow_insert (Id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, qty INTEGER NOT NULL)");
+        try
+        {
+            var entity = new NarrowInsertEntity { Name = "rollback", Qty = 1 };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await session.WithTransaction(async ct =>
+                {
+                    await session.InsertAsync(entity, ct);
+                    throw new InvalidOperationException("rollback");
+                }));
+
+            await Assert.That(entity.Id).IsEqualTo(0);
+            await Assert.That((await session.GetAllAsync<NarrowInsertEntity>()).Count).IsEqualTo(0);
+        }
+        finally
+        {
+            await session.ExecuteAsync($"DROP TABLE IF EXISTS narrow_insert");
+        }
+    }
+
+    [Test]
+    public async Task Insert_InsideOwnedTransaction_CommitBackfillsId()
+    {
+        // 提交成功路径：回放延迟回填——事务外看到的 ID 与落库行一致
+        using var keeper = new Microsoft.Data.Sqlite.SqliteConnection(
+            "Data Source=narrow_tx_commit;Mode=Memory;Cache=Shared");
+        await keeper.OpenAsync();
+        await using DataSession<SqliteProvider> session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "Data Source=narrow_tx_commit;Mode=Memory;Cache=Shared" });
+        await session.ExecuteAsync(
+            $"CREATE TABLE narrow_insert (Id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, qty INTEGER NOT NULL)");
+        try
+        {
+            var entity = new NarrowInsertEntity { Name = "commit", Qty = 2 };
+
+            await session.WithTransaction(async ct =>
+            {
+                await session.InsertAsync(entity, ct);
+            });
+
+            await Assert.That(entity.Id).IsGreaterThan(0);
+            NarrowInsertEntity? stored = await session.GetAsync<NarrowInsertEntity>(entity.Id);
+            await Assert.That(stored).IsNotNull();
+        }
+        finally
+        {
+            await session.ExecuteAsync($"DROP TABLE IF EXISTS narrow_insert");
+        }
+    }
 }
 
 [Table("narrow_insert")]
