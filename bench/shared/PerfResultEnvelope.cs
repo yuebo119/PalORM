@@ -103,7 +103,10 @@ internal static class PerfResultWriter
         return ratio <= threshold ? "clean" : "noisy";
     }
 
-    /// <summary>写信封并返回落盘路径；写失败返回 null（基准结果不该因登记失败而丢）。</summary>
+    /// <summary>写信封并返回落盘路径；写失败返回 null（基准结果不该因登记失败而丢）。
+    /// <para><b>子集批次不顶 latest</b>：label 带 <c>quick</c>/<c>filtered</c> 的跑测只写批次文件，
+    /// 不更新 <c>latest-&lt;harness&gt;.json</c>——否则门禁与索引会读到不可引用的子集
+    ///（规范 §6：子集批次必须带标记，门禁跳过带标记的批次）。</para></summary>
     public static string? Write(PerfResultEnvelope envelope)
     {
         try
@@ -116,7 +119,11 @@ internal static class PerfResultWriter
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
             string path = Path.Combine(dir, envelope.Harness + "-" + stamp + ".json");
             File.WriteAllText(path, json);
-            File.WriteAllText(Path.Combine(dir, "latest-" + envelope.Harness + ".json"), json);
+            if (!IsSubsetLabel(envelope.Label))
+            {
+                File.WriteAllText(Path.Combine(dir, "latest-" + envelope.Harness + ".json"), json);
+            }
+
             return path;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -124,6 +131,11 @@ internal static class PerfResultWriter
             return null;
         }
     }
+
+    /// <summary>子集批次标记（规范 §6）：冒烟与过滤跑出的子集不得顶 latest、不得进基线。</summary>
+    public static bool IsSubsetLabel(string label)
+        => label.Contains("quick", StringComparison.OrdinalIgnoreCase)
+        || label.Contains("filtered", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>仓库根：向上找 PalORM.slnx。</summary>
     public static string RepoRoot()

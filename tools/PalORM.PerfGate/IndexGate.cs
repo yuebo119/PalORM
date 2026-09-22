@@ -100,10 +100,11 @@ internal static class IndexGate
         foreach (string failure in failures) Console.Error.WriteLine("  FAIL " + failure);
 
         // 缺项不判失败：基线里的项可能因本轮方言/档位未跑而缺席（例如只跑了 sqlite）。
-        // 但"全部缺项"说明跑错夹具，按失败处理。
+        // 但"全部缺项"说明没有可引用的批次（只跑了冒烟/过滤批次，或跑错了夹具），按失败处理。
         if (failures.Count == 0 && compared == 0)
         {
-            Console.Error.WriteLine("FATAL: 没有任何可比对项——检查本轮跑的是不是同一套夹具与方言");
+            Console.Error.WriteLine("FATAL: 没有任何可比对项——检查本轮跑的是不是同一套夹具与方言，"
+                + "以及结果库里是否存在**非子集标记**的批次（冒烟批次带 quick/filtered 标记，门禁会跳过）");
             return 1;
         }
 
@@ -134,9 +135,9 @@ internal static class IndexGate
         {
             // 只有 PerfHub 的 PalORM 臂进基线：微基准由 BDN 门禁覆盖，DapperSuite 只作哨兵
             if (run.Harness != "perfhub") continue;
-            if (run.Label.Contains("quick", StringComparison.OrdinalIgnoreCase))
+            if (PerfResultWriter.IsSubsetLabel(run.Label))
             {
-                Console.Error.WriteLine($"[PerfGate] 跳过冒烟批次（label={run.Label}）: {run.Timestamp}");
+                Console.Error.WriteLine($"[PerfGate] 跳过子集批次（label={run.Label}）: {run.Timestamp}");
                 continue;
             }
 
