@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalORM.DapperSuite</RootNamespace>
+    <AssemblyName>PalORM.DapperSuite</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- 与 PalORM.Benchmarks 同口径：BDN 需要反射，基准项目不是 AOT 目标 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <!-- 官方 Post POCO 无 XML 文档、基准类经反射实例化（CA1812）、SQL 为编译期常量（CA2100） -->
+        <!-- CA2000：PalORM 按操作新建 DataSession 不释放（DisposeAsync 会关闭官方口径的
+         单连接复用，与 PerfHub 同裁决）；CA1508/CA1051/CA1822/S2325/CA1001：基准夹具形态。 -->
+    <NoWarn>$(NoWarn);CS1591;CA1303;CA1305;CA1308;CA2007;CA1062;CA1031;CA1515;CA1812;CA2100;CA1852;CA1849;CA2213;CA2255;CA1001;CA1051;CA1508;CA2000;CA1822;S107;S108;S1186;S2325;S3267;S3776;S1481;S1144;S3928;S3971;S4144;S6966;S1215;S2077;IDE0055;DAP043;DAP005;DAP027;CA5394;S2245</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.Sqlite\PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.PostgreSql\PalORM.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.MySql\PalORM.MySql.csproj" />
+    <ProjectReference Include="..\..\src\PalORM.SourceGen\PalORM.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 与 PalORM.Benchmarks 同源：BDN fork（bench/BenchmarkDotNet，gitignored） -->
+    <ProjectReference Include="..\BenchmarkDotNet\src\BenchmarkDotNet\BenchmarkDotNet.csproj" />
+    <ProjectReference Include="..\BenchmarkDotNet\src\BenchmarkDotNet.Annotations\BenchmarkDotNet.Annotations.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="MySqlConnector" />
+  </ItemGroup>
+
+</Project>
