@@ -48,7 +48,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         _conn = conn;
         _options = options;
-        _resilience = new ResilienceExecutor(options, TProvider.IsTransient);
+        _resilience = new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider));
         _interceptors = interceptors.OrderBy(i => i.Priority).ToList();
         _logger = logger ?? NullLogger.Instance;
         // ITM-624 同型面（修复侧纪律卡第三问实证）：读连接每次创建都读 _options 字段而非
@@ -407,7 +407,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 现一致性由 UpdateResilience 的操作门禁保证（配置变更与飞行查询互斥）；
         // Volatile.Write 保留为跨线程发布的最低保障。
         Volatile.Write(ref _options, options);
-        Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient));
+        Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider)));
     }
 
     /// <summary>停止后台操作，释放连接。幂等。</summary>

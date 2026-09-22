@@ -96,6 +96,16 @@ public sealed record DbOptions
     /// <summary>断路器：熔断后恢复等待时间（默认 30 秒）。</summary>
     public TimeSpan CircuitBreakerResetAfter { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>熔断器作用域（默认 <see cref="CircuitBreakerScope.Session"/>）。
+    /// <para><b>为什么需要选择</b>：会话级熔断器的失败计数随会话销毁——"一个请求一个会话"的
+    /// 推荐用法下默认阈值 5 几乎不可能达到，数据库真挂时每个请求各自重试再失败，熔断器形同虚设。
+    /// <see cref="CircuitBreakerScope.Process"/> 让同一 (Provider, 连接串) 的失败跨会话累计。</para>
+    /// <para>进程级的键含阈值与冷却时间——不同配置视为不同熔断器，避免 WithCircuitBreaker
+    /// 改配置后仍复用旧阈值。代价：同一连接串上的所有会话共享开闸状态，多库/多租户部署请用
+    /// 独立连接串或保持会话级。</para>
+    /// <para>RES-002（2026-09-23）。</para></summary>
+    public CircuitBreakerScope CircuitBreakerScope { get; init; } = CircuitBreakerScope.Session;
+
     /// <summary>命名策略（默认保持原样）。
     /// <para><b>作用域限制（ITM-516）</b>：列名/表名映射在**编译期**由源生成器按 [Table]/[Column]
     /// 注解确定，本运行时选项不参与该映射——设置本项不会改变已生成的列名。仅供调用方在
@@ -311,6 +321,18 @@ public sealed record DbOptions
            $"MaxRetries = {MaxRetries}, MaxPoolSize = {MaxPoolSize}, MinPoolSize = {MinPoolSize}, " +
            $"CircuitBreakerThreshold = {CircuitBreakerThreshold}, " +
            $"NamingConvention = {NamingConvention} }}";
+}
+
+/// <summary>熔断器作用域（RES-002，2026-09-23）。</summary>
+public enum CircuitBreakerScope
+{
+    /// <summary>每个 <c>DataSession</c> 一个熔断器（默认，历史行为）。失败计数随会话销毁——
+    /// 长生命周期会话（一个会话跑多批操作）能正常累计；"一请求一会话"下几乎不可能达到阈值。</summary>
+    Session,
+
+    /// <summary>按 (Provider, 连接串, 阈值, 冷却) 进程级共享。适用于短生命周期会话
+    /// （每请求一个）——否则熔断器不会触发。</summary>
+    Process
 }
 
 /// <summary>命名策略。</summary>
