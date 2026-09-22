@@ -100,6 +100,8 @@ public sealed class ArchitectureInvariantTests
                 "UpdateAsync", "ValidateSchemaAsync", "DiffAsync", "MigrateAsync",
                 "SavepointAsync", "RollbackToAsync", "ExecuteWithResilience",
                 "BeginTransactionAsync", "WithTransaction", "HealthCheckAsync",
+                // API-003（2026-09-23）：整事务重放——事务编排入口，不触表、不走过滤路由
+                "WithTransactionRetry",
                 "ForRead", "DisposeAsync", "QueryMultipleAsync",
                 "CreateAsync",
             ])

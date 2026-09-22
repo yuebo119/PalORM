@@ -212,6 +212,63 @@ public sealed partial class DataSession<TProvider>
         }
     }
 
+    /// <summary>整事务重放（API-003，2026-09-23）：把 <paramref name="action"/> 包在自开事务里执行，
+    /// 遇到可重放的失败（PG 序列化失败 40001 / 死锁 40P01、MySQL 1213·1205、SQLITE_BUSY·LOCKED）时
+    /// <b>整事务</b>重放——回滚后从头再来，等价于调用方自写 while 循环。
+    /// <para><b>与 WithRetry 的区别</b>：弹性执行器与 WithRetry 重试的是<b>语句</b>，且事务内默认关闭
+    /// 重试（PG aborted transaction 会以次生异常掩盖根因）；本方法重试的是<b>整个事务</b>。</para>
+    /// <para><b>重放语义 = at-least-once</b>：action 必须可重复执行（含其中全部写入；唯一键 upsert 或
+    /// 条件更新是安全形态）。提交结果未知（如 COMMIT 超时）同样会触发重放——非幂等副作用
+    /// （发消息、调外部 API）请放在事务外。重放判据用 Provider 的瞬时判定
+    /// （<c>TProvider.IsTransient</c>，上述错误码均已覆盖），因此连接级瞬时故障也触发重放。</para>
+    /// <para>退避复用弹性执行器的默认策略（含抖动）；调用方取消原样传播，不重放。</para></summary>
+    public async ValueTask WithTransactionRetry(Func<CancellationToken, Task> action,
+        int maxRetries = 3, IsolationLevel? level = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxRetries);
+        int attempt = 0;
+        while (true)
+        {
+            try
+            {
+                await WithTransaction(action, level, ct).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception exception) when (attempt < maxRetries
+                && exception is not OperationCanceledException
+                && TProvider.IsTransient(exception))
+            {
+                await Task.Delay(ResilienceExecutor.GetDefaultBackoff(attempt), ct).ConfigureAwait(false);
+                attempt++;
+            }
+        }
+    }
+
+    /// <summary>整事务重放（带返回值）——语义见
+    /// <see cref="WithTransactionRetry(Func{CancellationToken, Task}, int, IsolationLevel?, CancellationToken)"/>。</summary>
+    public async ValueTask<T> WithTransactionRetry<T>(Func<CancellationToken, Task<T>> action,
+        int maxRetries = 3, IsolationLevel? level = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxRetries);
+        int attempt = 0;
+        while (true)
+        {
+            try
+            {
+                return await WithTransaction(action, level, ct).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (attempt < maxRetries
+                && exception is not OperationCanceledException
+                && TProvider.IsTransient(exception))
+            {
+                await Task.Delay(ResilienceExecutor.GetDefaultBackoff(attempt), ct).ConfigureAwait(false);
+                attempt++;
+            }
+        }
+    }
+
     private async ValueTask RollbackTransactionPreservingAsync(
         DbTransaction transaction,
         Exception primaryException)
