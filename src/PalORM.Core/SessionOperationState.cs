@@ -320,6 +320,30 @@ internal sealed class SessionOperationState
         }
     }
 
+    /// <summary>事务流内是否延迟"提交后回填"（TX-004，2026-09-23）。仅由<b>自开事务</b>的收口路径
+    /// （WithTransaction / RunInTransactionScopeAsync 且 ownsTransaction）在动作执行前置 true、
+    /// 收口后复位；外部事务（提交权在调用方）保持 false——提交时点不可知，延迟会让回填永不发生。
+    /// 复用外部事务的内层路径（owns=false）不读写本标记，不会清掉外层的设置。</summary>
+    internal bool DefersPostCommitActions { get; set; }
+
+    private List<Action>? _postCommitActions;
+
+    /// <summary>登记"提交成功后回放"的动作（TX-004）——事务回滚时整体丢弃。
+    /// 事务流内单线执行（单活动操作契约），无需加锁。</summary>
+    internal void AddPostCommitAction(Action action)
+        => (_postCommitActions ??= []).Add(action);
+
+    /// <summary>取走并清空待回放动作（成功提交后调用）。</summary>
+    internal List<Action>? TakePostCommitActions()
+    {
+        List<Action>? actions = _postCommitActions;
+        _postCommitActions = null;
+        return actions;
+    }
+
+    /// <summary>丢弃待回放动作（回滚路径调用）——未提交的写入不得体现在内存实体上。</summary>
+    internal void DiscardPostCommitActions() => _postCommitActions = null;
+
     /// <summary>是否存在可用事务——不抛异常的查询形式（API-002，2026-09-22）。
     /// <see cref="GetActiveTransaction"/> 在"外部设入的事务被外部释放"时响亮抛异常（ITM-640/767），
     /// 那是给<b>执行路径</b>的保护；而"当前有没有可用事务"这一事实查询（如

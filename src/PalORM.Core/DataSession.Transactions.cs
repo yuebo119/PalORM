@@ -138,6 +138,9 @@ public sealed partial class DataSession<TProvider>
             owner = _operationState.EnterTransactionFlow();
             previousTransaction = GetActiveTransaction();
             transaction = await BeginTransactionAsync(level, ct).ConfigureAwait(false);
+            // TX-004（2026-09-23）：本方法持有提交权——生成 ID 等回填延迟到提交成功后回放，
+            // 否则 action 中途失败回滚会让实体持有已不存在行的 ID。
+            _operationState.DefersPostCommitActions = true;
             try
             {
                 T result = await action(ct).ConfigureAwait(false);
@@ -148,11 +151,13 @@ public sealed partial class DataSession<TProvider>
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
                     transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                ReplayPostCommitActions();
                 return result;
             }
             catch (Exception exception)
             {
                 primaryException = exception;
+                _operationState.DiscardPostCommitActions();
                 await _operationState.DisposeTransactionResourcesAsync(exception)
                     .ConfigureAwait(false);
                 // T1（v5.7）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
@@ -169,6 +174,8 @@ public sealed partial class DataSession<TProvider>
         }
         finally
         {
+            // TX-004：无论提交/回滚/异常，收口后必须复位——否则会话后续的无事务写入也会被延迟回填。
+            _operationState.DefersPostCommitActions = false;
             try
             {
                 if (transaction is not null)
@@ -192,6 +199,16 @@ public sealed partial class DataSession<TProvider>
                 if (owner is not null)
                     _operationState.ExitTransactionFlow(owner);
             }
+        }
+    }
+
+    /// <summary>提交成功后回放延迟的提交后动作（TX-004）——空清单零开销。</summary>
+    private void ReplayPostCommitActions()
+    {
+        if (_operationState.TakePostCommitActions() is { } actions)
+        {
+            foreach (Action action in actions)
+                action();
         }
     }
 
@@ -259,6 +276,9 @@ public sealed partial class DataSession<TProvider>
         Exception? primaryException = null;
         // T1（v5.7）：同 WithTransaction——提交尝试标志区分提交失败与 work 失败
         bool commitAttempted = false;
+        // TX-004（2026-09-23）：自开事务时持有提交权——生成 ID 等回填延迟到提交成功后回放。
+        if (ownsTransaction)
+            _operationState.DefersPostCommitActions = true;
         try
         {
             T result = await work(transaction, ct).ConfigureAwait(false);
@@ -267,12 +287,14 @@ public sealed partial class DataSession<TProvider>
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
                     transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                ReplayPostCommitActions();
             }
             return result;
         }
         catch (Exception exception)
         {
             primaryException = exception;
+            _operationState.DiscardPostCommitActions();
             if (ownsTransaction
                 && (!commitAttempted
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
@@ -291,6 +313,7 @@ public sealed partial class DataSession<TProvider>
             // 与 QueryBuilderExtensions.ToPageAsync 的 ownsTransaction 守卫口径一致。
             if (ownsTransaction)
             {
+                _operationState.DefersPostCommitActions = false;
                 _operationState.RestoreTransaction(transaction, previousTransaction);
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
             }
