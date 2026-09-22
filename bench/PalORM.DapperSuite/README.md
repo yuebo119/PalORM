@@ -59,78 +59,84 @@ bash scripts/dappersuite-run.sh pg
 
 | ORM | Method | Mean | Ratio | Allocated |
 |---|---|---:|---:|---:|
-| HandCoded | SqlCommand | 5.175 us | 1.00 | 778 B |
-| HandCoded | DataTable | 6.282 us | 1.21 | 2892 B |
-| Dapper | Query&lt;T&gt; (buffered) | 9.755 us | 1.89 | 3347 B |
-| Dapper | Query&lt;dynamic&gt; (buffered) | 10.413 us | 2.01 | 3339 B |
-| Dapper | QueryFirstOrDefault&lt;T&gt; | 10.782 us | 2.08 | 3067 B |
-| Dapper | Query&lt;T&gt; (unbuffered) | 11.377 us | 2.20 | 3259 B |
-| PalORM | Query&lt;T&gt; (buffered) | 11.944 us | 2.31 | 3018 B |
-| PalORM | QueryFirst&lt;T&gt; | 21.800 us | 4.21 | 3506 B |
-| PalORM | FirstOrDefault&lt;T&gt; | 24.361 us | 4.71 | 3506 B |
+| HandCoded | SqlCommand | 5.046 us | 1.00 | 778 B |
+| HandCoded | DataTable | 5.744 us | 1.14 | 2892 B |
+| Dapper | Query&lt;dynamic&gt; (buffered) | 9.538 us | 1.89 | 3339 B |
+| Dapper | Query&lt;T&gt; (unbuffered) | 9.876 us | 1.96 | 3259 B |
+| Dapper | QueryFirstOrDefault&lt;T&gt; | 10.013 us | 1.98 | 3067 B |
+| Dapper | Query&lt;T&gt; (buffered) | 10.015 us | 1.99 | 3347 B |
+| PalORM | Query&lt;T&gt; (buffered) | 10.394 us | 2.06 | 3018 B |
+| PalORM | QueryFirst&lt;T&gt; | 10.582 us | 2.10 | 2946 B |
+| PalORM | FirstOrDefault&lt;T&gt; | 10.998 us | 2.18 | 2946 B |
 
-### MySQL（网络往返 ~565 µs/op）
-
-| ORM | Method | Mean | Ratio | Allocated |
-|---|---|---:|---:|---:|
-| HandCoded | DataTable | 562.4 us | 1.00 | 2788 B |
-| HandCoded | SqlCommand | 563.8 us | 1.00 | 674 B |
-| PalORM | QueryFirst&lt;T&gt; | 563.9 us | 1.00 | 5996 B |
-| PalORM | FirstOrDefault&lt;T&gt; | 567.8 us | 1.01 | 5942 B |
-| Dapper | Query&lt;dynamic&gt; (buffered) | 570.6 us | 1.01 | 4988 B |
-| PalORM | Query&lt;T&gt; (buffered) | 572.6 us | 1.02 | 5462 B |
-| Dapper | Query&lt;T&gt; (buffered) | 575.3 us | 1.02 | 4948 B |
-| Dapper | QueryFirstOrDefault&lt;T&gt; | 576.6 us | 1.02 | 4668 B |
-| Dapper | Query&lt;T&gt; (unbuffered) | 8,664.2 us | 15.37 | 69413 B |
-
-### PostgreSQL（网络往返 ~545 µs/op）
+### MySQL（网络往返 ~525 µs/op）
 
 | ORM | Method | Mean | Ratio | Allocated |
 |---|---|---:|---:|---:|
-| HandCoded | DataTable | 509.6 us | 0.91 | 2340 B |
-| PalORM | Query&lt;T&gt; (buffered) | 534.0 us | 0.95 | 3901 B |
-| HandCoded | SqlCommand | 562.9 us | 1.00 | 372 B |
-| PalORM | QueryFirst&lt;T&gt; | 568.4 us | 1.01 | 4627 B |
-| PalORM | FirstOrDefault&lt;T&gt; | 568.9 us | 1.01 | 4573 B |
-| Dapper | Query&lt;T&gt; (buffered) | 570.9 us | 1.02 | 1660 B |
-| Dapper | Query&lt;dynamic&gt; (buffered) | 575.1 us | 1.02 | 1700 B |
-| Dapper | QueryFirstOrDefault&lt;T&gt; | 583.2 us | 1.04 | 1380 B |
-| Dapper | Query&lt;T&gt; (unbuffered) | 15,003.2 us | 26.68 | 70676 B |
+| HandCoded | DataTable | 515.8 us | 0.98 | 2788 B |
+| HandCoded | SqlCommand | 525.3 us | 1.00 | 674 B |
+| Dapper | Query&lt;T&gt; (buffered) | 540.3 us | 1.03 | 4948 B |
+| Dapper | QueryFirstOrDefault&lt;T&gt; | 551.1 us | 1.05 | 4668 B |
+| PalORM | QueryFirst&lt;T&gt; | 555.0 us | 1.06 | 5997 B |
+| Dapper | Query&lt;dynamic&gt; (buffered) | 560.0 us | 1.07 | 4988 B |
+| PalORM | Query&lt;T&gt; (buffered) | 569.3 us | 1.09 | 5461 B |
+| PalORM | FirstOrDefault&lt;T&gt; | 570.4 us | 1.09 | 5942 B |
+| Dapper | Query&lt;T&gt; (unbuffered) | 6,324.2 us | 12.06 | 69412 B |
 
-**联网两库的判别力上限**：PG 上两个地板行（`SqlCommand` 与 `DataTable`）相差 9%——
-同一条连接、同一份 SQL、只差 13 列的物化方式。这个 9% 是网络往返占主导的直接证据，
-故 MySQL/PG 上 1.05 以内的差异不具判别力，只有同方言同运行内的比值才有意义。
+### PostgreSQL（网络往返 ~523 µs/op）
 
-**PalORM 分配量**：会话在范围入口创建一次（D9）→ 3.9–6.0 KB/op
-（SQLite 臂 3018 B，同臂 Dapper 3347 B，ADO.NET 地板 778 B）。
+| ORM | Method | Mean | Ratio | Allocated |
+|---|---|---:|---:|---:|
+| HandCoded | SqlCommand | 522.9 us | 1.00 | 372 B |
+| HandCoded | DataTable | 523.4 us | 1.00 | 2340 B |
+| PalORM | Query&lt;T&gt; (buffered) | 556.6 us | 1.06 | 3901 B |
+| PalORM | FirstOrDefault&lt;T&gt; | 564.4 us | 1.08 | 4573 B |
+| PalORM | QueryFirst&lt;T&gt; | 565.5 us | 1.08 | 4629 B |
+| Dapper | QueryFirstOrDefault&lt;T&gt; | 583.5 us | 1.12 | 1380 B |
+| Dapper | Query&lt;T&gt; (buffered) | 583.7 us | 1.12 | 1660 B |
+| Dapper | Query&lt;dynamic&gt; (buffered) | 585.5 us | 1.12 | 1700 B |
+| Dapper | Query&lt;T&gt; (unbuffered) | 14,615.0 us | 27.96 | 70676 B |
+
+**联网两库的判别力上限**：本批次 PG 上两个地板行只差 0.1%（522.9 对 523.4 µs，同连接同 SQL
+只差 13 列物化方式），此前批次这一差值到过 9%——即联网库自身的行间散布与"ORM 之间的差"
+同量级。故 MySQL/PG 上 1.1 以内的差异不具判别力，只有同方言同运行内的比值才有意义。
+
+**PalORM 分配量**：会话在范围入口创建一次（D9）→ 3.0–6.0 KB/op
+（SQLite 臂 2946–3018 B，同臂 Dapper 3067–3347 B，ADO.NET 地板 778 B）。
 
 ## 5. 已知仪器伪影与探针归因
 
-### 5.1 `Query<T> (unbuffered)` 在联网驱动上退化（MySQL 15.4×、PG 26.7×，SQLite 无量级变化）
+### 5.1 `Query<T> (unbuffered)` 在联网驱动上退化（MySQL 12.1×、PG 28.0×，SQLite 无量级变化）
 
 官方基准写的是 `Connection.Query<Post>(sql, param, buffered: false).First()`——**提前取一行就放弃
-未读完的流式读取器**。这个形状在 SQLite（进程内）只比 buffered 慢 16%（2.20 对 1.89），
-在 MySQL/PG 上代价达 15.4×/26.7×，且分配量从 ~5 KB/op 涨到 ~69 KB/op。
+未读完的流式读取器**。这个形状在 SQLite（进程内）与 buffered 同档（1.96 对 1.99），
+在 MySQL/PG 上代价达 12.1×/28.0×，且分配量从 ~5 KB/op 涨到 ~69 KB/op。
 
 **这不是 Dapper 或 PalORM 的问题**——该项只存在于 Dapper 臂，PalORM 臂没有对应形状。
 它是**官方基准形状与联网驱动的交互**。探针（§6.2）证明代价来自"提前放弃读取器"这一步本身。
-MySQL 档该项轮间不稳定（三轮实测 6.22 / 6.66 / 8.66 ms，StdDev 最高 31%），
+MySQL 档该项轮间不稳定（四轮实测 6.22 / 6.66 / 8.66 / 6.32 ms，StdDev 最高 31%），
 本身就说明它是驱动级清理而非稳定工作负载。
 
-> 定性为"仪器伪影"而非"被测系统的性能"，是为了防止把这一行读成"Dapper 比 PalORM 慢 15 倍"。
+> 定性为"仪器伪影"而非"被测系统的性能"，是为了防止把这一行读成"Dapper 比 PalORM 慢 12 倍"。
 > 该行保留在报告里（它是官方项），但不参与任何三臂结论。
 
-### 5.2 PalORM 单行族比同臂 buffered 高 83%（仅 SQLite 可见，成因见 §6.1）
+### 5.2 PalORM 单行族的 SQL 形状代价（已修，证据链保留）
 
-SQLite 上 `FirstOrDefault<T>`（4.71）与 `QueryFirst<T>`（4.21）都明显慢于同臂的
-`Query<T> (buffered)`（2.31）；MySQL/PG 上该差异被网络往返淹没（1.00/1.01 对 1.02/0.95）。
-两项独立探针把这一差距完整归因到 **SQL 形状**：探针批次内 `PalORM 单行族 − buffered` 为 +7.99 µs，
-ADO.NET 层隔离出的参数化 LIMIT 成本为 +7.90 µs（§6.1），两者吻合；
-终端操作符与 ORM 机械都不额外收费（§6.3）。
+修复前 SQLite 上 `FirstOrDefault<T>`（4.71）与 `QueryFirst<T>`（4.21）明显慢于同臂的
+`Query<T> (buffered)`（2.31）。两项独立探针把它完整归因到 **SQL 形状**：探针批次内
+`PalORM 单行族 − buffered` 为 +7.99 µs，ADO.NET 层隔离出的参数化 LIMIT 成本为 +7.90 µs（§6.1），
+两者吻合；终端操作符与 ORM 机械都不额外收费（§6.3）。
+
+修复已落地：First/Single 族（take 由 API 固定为 1/2 且不带 Skip）在 SQLite 上内联 `LIMIT 1`/`LIMIT 2`
+字面量且不发 OFFSET；用户 `Take`/`Skip` 与 PG/MySQL 维持参数化（SHAPE-010 的有限形状集不破）。
+配对复测（同机 3 分钟内，因子开/关）：`FirstOrDefault` 20.538 → 14.823 µs，`QueryFirst` 23.099 → 14.939 µs，
+分配量 3506 → 2946 B；对照项 `Query<T> (buffered)` 在噪声内不动。§4 的三方言表即修复后的正式批次。
 
 ## 6. 探针记录（临时基准，测完已删除）
 
-### 6.1 探针一：ADO.NET 层隔离 SQL 形状（SQLite · 最终配置 · 同连接 · 同物化）
+### 6.1 探针一：ADO.NET 层隔离 SQL 形状（SQLite · 同连接 · 同物化）
+
+> 本项已落地为产品改动（见 §5.2），探针数据保留为证据链。
 
 | SQL | Mean | Allocated |
 |---|---:|---:|

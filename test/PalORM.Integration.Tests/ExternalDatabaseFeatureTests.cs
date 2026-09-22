@@ -59,6 +59,71 @@ public sealed class ExternalDatabaseFeatureTests
         finally { await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_limit_probe"); }
     }
 
+    // ─── First/Single 族字面量 LIMIT 的方言边界：只有 SQLite 走字面量 ───────
+    // 依据（2026-09-22 实测）：SQLite 上参数化 LIMIT 比字面量每次多付约 8 µs；PG/MySQL 上该项
+    // 被网络往返淹没到不可测量（PG 地板自身行间差 9%），故不改其文本——本组钉住"没被顺手改到"。
+
+    private sealed class SqlRecorder : IQueryInterceptor
+    {
+        public List<string> Sql { get; } = [];
+
+        public void OnBefore(QueryContext context) => Sql.Add(context.Sql);
+
+        public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) { }
+
+        public void OnError(QueryContext context, Exception exception) { }
+    }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_FirstOrDefault_KeepsParameterizedLimit()
+    {
+        await using var db = await TestDb.PostgreSqlAsync();
+        var recorder = new SqlRecorder();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_limit_probe CASCADE");
+            await db.ExecuteAsync($"CREATE TABLE palorm_limit_probe (id BIGINT PRIMARY KEY, label VARCHAR(32) NOT NULL)");
+            for (int i = 1; i <= 5; i++)
+                await db.ExecuteAsync($"INSERT INTO palorm_limit_probe (id, label) VALUES ({(long)i}, {"row" + i})");
+            _ = db.AddInterceptor(recorder);   // 建表/插数后再挂，只捕获被测查询
+
+            LimitProbeEntity? row = await db.From<LimitProbeEntity>()
+                .Where($"id = {3L}").FirstOrDefaultAsync();
+
+            await Assert.That(row!.Label).IsEqualTo("row3");
+            await Assert.That(recorder.Sql.Count).IsEqualTo(1);
+            await Assert.That(recorder.Sql[0]).Contains("LIMIT @");
+            await Assert.That(recorder.Sql[0]).DoesNotContain("LIMIT 1");
+        }
+        finally { await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_limit_probe CASCADE"); }
+    }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_FirstOrDefault_KeepsParameterizedLimit()
+    {
+        await using var db = await TestDb.MySqlAsync();
+        var recorder = new SqlRecorder();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_limit_probe");
+            await db.ExecuteAsync($"CREATE TABLE palorm_limit_probe (id BIGINT PRIMARY KEY, label VARCHAR(32) NOT NULL)");
+            for (int i = 1; i <= 5; i++)
+                await db.ExecuteAsync($"INSERT INTO palorm_limit_probe (id, label) VALUES ({(long)i}, {"row" + i})");
+            _ = db.AddInterceptor(recorder);   // 建表/插数后再挂，只捕获被测查询
+
+            LimitProbeEntity? row = await db.From<LimitProbeEntity>()
+                .Where($"id = {3L}").FirstOrDefaultAsync();
+
+            await Assert.That(row!.Label).IsEqualTo("row3");
+            await Assert.That(recorder.Sql.Count).IsEqualTo(1);
+            await Assert.That(recorder.Sql[0]).Contains("LIMIT @");
+            await Assert.That(recorder.Sql[0]).DoesNotContain("LIMIT 1");
+        }
+        finally { await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_limit_probe"); }
+    }
+
     // ─── TEST-010：存储过程 happy-path（输入/输出参数往返） ───────────────
 
     [Test]

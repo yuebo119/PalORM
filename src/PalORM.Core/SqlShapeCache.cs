@@ -7,7 +7,8 @@ namespace PalORM;
 /// <summary>BuildSql 输出的形状缓存（T5c）——同一形状的查询复用同一 SQL 文本实例。
 /// <para><b>形状定义</b>：子句 Sql 文本序列（值相等）+ <see cref="SqlShapeCache.ShapeFields"/>
 /// （SplitQuery 改变 JOIN 拼接；LIMIT/OFFSET 的值经参数化绑定 @pN 占位——
-/// <b>值不进形状键</b>，仅"有无 Take/Skip"的形态进键；表名/CTE 名决定 FROM）。
+/// <b>值不进形状键</b>，仅"有无 Take/Skip"的形态进键；First/Single 族的 SQLite 字面量形态例外，
+/// 其 take 值写进文本故值进键，见 <see cref="ShapeFields.TakeLiteral"/>；表名/CTE 名决定 FROM）。
 /// 参数不在键内——同形状 ⇒ 同 SQL 文本，参数值由调用方逐次绑定。</para>
 /// <para><b>正确性</b>：哈希只用于选桶；命中后逐条核对子句序列（值相等）与字段包
 /// （记录结构体值相等），碰撞只会落到"未命中重建"，不会产出错误 SQL。
@@ -33,14 +34,18 @@ internal static class SqlShapeCache
     /// PG 会话的缓存 SQL 发给 MySQL（本缺陷由 PessimisticLockTests 跨方言同形状用例实测暴露）。</para>
     /// <para><b>HasTake/HasSkip 是形态而非值</b>（SHAPE-010 参数化根解）：LIMIT/OFFSET 值经
     /// @pN 占位绑定，值不影响 SQL 文本；但 take-only / skip-only / take+skip 产出**不同文本形态**
-    /// （如 SQLite skip-only 是 <c>LIMIT -1 OFFSET @pN</c>），缺形态标记会让不同形态互相复用条目。</para></summary>
+    /// （如 SQLite skip-only 是 <c>LIMIT -1 OFFSET @pN</c>），缺形态标记会让不同形态互相复用条目。</para>
+    /// <para><b>TakeLiteral 是值</b>：First/Single 族的 SQLite 字面量形态把 take 写进 SQL 文本
+    /// （<c>LIMIT 1</c>），值不同文本就不同，故必须进键。取值有界（该族的 take 恒为 1 或 2），
+    /// 0 表示不是字面量形态。</para></summary>
     internal readonly record struct ShapeFields(
         SqlDialect Dialect,
         bool SplitQuery,
         bool HasTake,
         bool HasSkip,
         string TableName,
-        string? CteName);
+        string? CteName,
+        int TakeLiteral);
 
     internal sealed record SqlShapeEntry(string[] SqlSequence, ShapeFields Fields, string FullSql);
 
