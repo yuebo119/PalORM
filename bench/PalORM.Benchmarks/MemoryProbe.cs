@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using PalORM;
 using Microsoft.Data.Sqlite;
+using PalORM.Bench.Shared;
 using PalORM.Sqlite;
 
 namespace PalORM.Benchmarks;
@@ -104,6 +105,62 @@ internal static class MemoryProbe
         string outputPath = Path.Combine(AppContext.BaseDirectory, "memory-sqlite.json");
         await File.WriteAllTextAsync(outputPath, json).ConfigureAwait(false);
         Console.WriteLine($"[memory] 结果已写入 {outputPath}");
+        WriteEnvelope(options, build, tiers);
+    }
+
+    /// <summary>结果库信封（规范 v2 §6）：内存曲线节的指标进 sections（每档位一行）。</summary>
+    private static void WriteEnvelope(MemoryOptions options, BuildAllocs build, IReadOnlyList<MemoryTierResult> tiers)
+    {
+        var envelope = new PerfResultEnvelope
+        {
+            Harness = "benchmarks",
+            Version = Environment.GetEnvironmentVariable("PALORM_BENCH_VERSION") ?? "HEAD",
+            Label = "memory",
+            DetailPath = "memory-sqlite.json",
+            Environment = PerfResultWriter.CaptureEnvironment("PalORM.Benchmarks --memory"),
+            Regime = new PerfResultRegime
+            {
+                ConnectionConfig = BenchmarkConfig.RegimeFileDb,
+                SessionLifecycle = "per-query（内存曲线每档位独立测量，无跨档复用）",
+                Health = "unknown"
+            }
+        };
+
+        envelope.Sections.Add(new PerfResultSection
+        {
+            Kind = "memory",
+            Dialect = "sqlite",
+            Label = "build",
+            Note = "SQL 构建路径的每操作分配",
+            Metrics = new Dictionary<string, double>(StringComparer.Ordinal)
+            {
+                ["fromBytesPerOp"] = build.FromBytes,
+                ["whereToSqlBytesPerOp"] = build.WhereToSqlBytes,
+                ["iterations"] = options.BuildIterations
+            }
+        });
+
+        foreach (MemoryTierResult tier in tiers)
+        {
+            envelope.Sections.Add(new PerfResultSection
+            {
+                Kind = "memory",
+                Dialect = "sqlite",
+                Label = tier.Rows.ToString("N0", CultureInfo.InvariantCulture) + "行",
+                Metrics = new Dictionary<string, double>(StringComparer.Ordinal)
+                {
+                    ["rows"] = tier.Rows,
+                    ["allocMb"] = tier.AllocMb,
+                    ["liveMb"] = tier.LiveMb,
+                    ["milliseconds"] = tier.Milliseconds
+                }
+            });
+        }
+
+        string? path = PerfResultWriter.Write(envelope);
+        Console.WriteLine(path is null
+            ? "[memory] 结果库信封写入失败（不影响本次测量）"
+            : $"[memory] 结果库信封已写入 {path}");
     }
 
     private static long Alloc(Action body)

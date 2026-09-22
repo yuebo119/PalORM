@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using PalORM.Bench.Shared;
 using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Sqlite;
@@ -108,6 +109,8 @@ internal static class WorkloadHarness
                 [WorkloadJson(allTiers, options)]).ConfigureAwait(false);
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"[workload] 结果已写入 workload-sqlite-{options.Rows}.json"));
+
+            WriteEnvelope(allTiers, options);
         }
         finally
         {
@@ -242,6 +245,51 @@ internal static class WorkloadHarness
         }
         int rank = (int)Math.Ceiling(percentile * sortedMicros.Length);
         return sortedMicros[Math.Min(rank, sortedMicros.Length) - 1] / 1000.0;
+    }
+
+    /// <summary>结果库信封（规范 v2 §6）：负载节的指标进 <c>sections</c>，与"项 × 臂"的 items 分开；
+    /// 健康度留 unknown——负载路径的判据是 p95/p99 与吞吐稳定性，不是地板行散布。</summary>
+    private static void WriteEnvelope(IReadOnlyList<WorkloadTierResult> tiers, WorkloadOptions options)
+    {
+        var envelope = new PerfResultEnvelope
+        {
+            Harness = "benchmarks",
+            Version = Environment.GetEnvironmentVariable("PALORM_BENCH_VERSION") ?? "HEAD",
+            Label = "workload",
+            DetailPath = $"workload-sqlite-{options.Rows}.json",
+            Environment = PerfResultWriter.CaptureEnvironment("PalORM.Benchmarks --workload"),
+            Regime = new PerfResultRegime
+            {
+                ConnectionConfig = BenchmarkConfig.RegimeFileDb,
+                SessionLifecycle = "per-request（每 worker 一条会话，迭代间复用；与并发扩展负载的行业用法一致）",
+                Health = "unknown"
+            }
+        };
+
+        foreach (WorkloadTierResult tier in tiers)
+        {
+            envelope.Sections.Add(new PerfResultSection
+            {
+                Kind = "load",
+                Dialect = options.Dialect,
+                Label = "t" + tier.Threads.ToString(CultureInfo.InvariantCulture),
+                Metrics = new Dictionary<string, double>(StringComparer.Ordinal)
+                {
+                    ["opsPerSecond"] = tier.OpsPerSecond,
+                    ["p50Ms"] = tier.P50,
+                    ["p95Ms"] = tier.P95,
+                    ["p99Ms"] = tier.P99,
+                    ["samples"] = tier.SampleCount,
+                    ["writeRatio"] = options.WriteRatio,
+                    ["rows"] = options.Rows
+                }
+            });
+        }
+
+        string? path = PerfResultWriter.Write(envelope);
+        Console.WriteLine(path is null
+            ? "[workload] 结果库信封写入失败（不影响本次测量）"
+            : $"[workload] 结果库信封已写入 {path}");
     }
 
     private static string WorkloadJson(IReadOnlyList<WorkloadTierResult> tiers, WorkloadOptions options)

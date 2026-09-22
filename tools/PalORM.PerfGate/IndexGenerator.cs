@@ -78,13 +78,18 @@ internal static class IndexGenerator
 
     private static void AppendLatest(StringBuilder md, List<PerfResultEnvelope> runs)
     {
-        md.AppendLine("## 各夹具最近一批");
+        md.AppendLine("## 各夹具最近一批（可引用）");
+        md.AppendLine();
+        md.AppendLine("> 子集批次（label 带 `quick`/`filtered`/`workload`/`memory`/`stability`）不在此表，"
+            + "它们不是该夹具的完整矩阵；全部批次见下一节。");
         md.AppendLine();
         md.AppendLine("| 夹具 | 时间 | 提交 | 版本 | 标签 | 连接配置口径 | 会话口径 | 健康度 | 项数 | 明细 |");
         md.AppendLine("|---|---|---|---|---|---|---|---|---:|---|");
         foreach (IGrouping<string, PerfResultEnvelope> group in runs.GroupBy(static r => r.Harness))
         {
-            PerfResultEnvelope r = group.First();
+            // 优先取最近一次非子集批次；该夹具若只有子集批次则整组跳过（宁缺勿误导）
+            PerfResultEnvelope? r = group.FirstOrDefault(static x => !PerfResultWriter.IsSubsetLabel(x.Label));
+            if (r is null) continue;
             md.AppendLine(CultureInfo.InvariantCulture,
                 $"| {r.Harness} | {r.Timestamp} | `{r.Commit}` | {r.Version} | {r.Label} | "
                 + $"{Shorten(r.Regime.ConnectionConfig)} | {Shorten(r.Regime.SessionLifecycle)} | "

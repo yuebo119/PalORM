@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
+using PalORM.Bench.Shared;
 using PalORM.Sqlite;
 
 namespace PalORM.Benchmarks;
@@ -86,8 +87,7 @@ internal static class StabilityHarness
             foreach (DataSession<SqliteProvider> session in sessions) await session.DisposeAsync().ConfigureAwait(false);
 
             ReportTrend(samplesPerWindow, totalAllocBase, options);
-        }
-        finally
+        }        finally
         {
             SqliteConnection.ClearAllPools();
             File.Delete(dbPath);
@@ -105,6 +105,8 @@ internal static class StabilityHarness
         if (samples.Count < 3)
         {
             Log("[stability] 窗口数不足 3，趋势判定跳过（延长时长）");
+            // 仍要登记：短跑批次也是"跑过了"的事实，缺登记会让结果库看起来没跑过
+            WriteEnvelope(samples, 0, 0, options, "窗口数不足，趋势判定跳过");
             return;
         }
         int third = samples.Count / 3;
@@ -123,6 +125,52 @@ internal static class StabilityHarness
                 ? "⚠ 工作集增长超 30%——疑似泄漏，需排查"
                 : "✓ 无衰减迹象（初筛）";
         Log($"[stability] 判定：{verdict}");
+        WriteEnvelope(samples, throughputDelta, wsDelta, options, verdict);
+    }
+
+    /// <summary>结果库信封（规范 v2 §6）：长稳节的指标进 sections（吞吐衰减与工作集增量是核心判据）。</summary>
+    private static void WriteEnvelope(
+        IReadOnlyList<(int Window, long Ops, double P95Micros, double AllocMb, int Gen0, int Gen1, int Gen2, double WorkingSetMb)> samples,
+        double throughputDelta, double wsDelta, StabilityOptions options, string verdict)
+    {
+        var envelope = new PerfResultEnvelope
+        {
+            Harness = "benchmarks",
+            Version = Environment.GetEnvironmentVariable("PALORM_BENCH_VERSION") ?? "HEAD",
+            Label = "stability",
+            DetailPath = "（长稳无独立明细产物：窗口样本只打印到控制台）",
+            Environment = PerfResultWriter.CaptureEnvironment("PalORM.Benchmarks --stability"),
+            Regime = new PerfResultRegime
+            {
+                ConnectionConfig = BenchmarkConfig.RegimeFileDb,
+                SessionLifecycle = "per-request（每 worker 一条会话，窗口间复用）",
+                Health = "unknown"
+            }
+        };
+
+        envelope.Sections.Add(new PerfResultSection
+        {
+            Kind = "stability",
+            Dialect = "sqlite",
+            Label = options.Seconds.ToString(CultureInfo.InvariantCulture) + "s",
+            Note = verdict,
+            Metrics = new Dictionary<string, double>(StringComparer.Ordinal)
+            {
+                ["windows"] = samples.Count,
+                ["throughputDeltaPercent"] = throughputDelta,
+                ["workingSetDeltaPercent"] = wsDelta,
+                ["threads"] = options.Threads,
+                ["rows"] = options.Rows,
+                ["writeRatio"] = options.WriteRatio,
+                ["p95MicrosLast"] = samples.Count > 0 ? samples[^1].P95Micros : 0,
+                ["workingSetMbLast"] = samples.Count > 0 ? samples[^1].WorkingSetMb : 0
+            }
+        });
+
+        string? path = PerfResultWriter.Write(envelope);
+        Log(path is null
+            ? "[stability] 结果库信封写入失败（不影响本次测量）"
+            : $"[stability] 结果库信封已写入 {path}");
     }
 
     private static async Task StabilityWorker(

@@ -15,22 +15,29 @@ namespace PalORM.PerfHub;
 internal sealed class CountingConnection(DbConnection inner) : DbConnection
 {
     private readonly DbConnection _inner = inner;
+    private long _executes;
+    private long _prepares;
 
-    /// <summary>命令执行次数（自上次 <see cref="Reset"/> 起）。</summary>
-    public long Executes;
+    /// <summary>命令执行次数（自上次 <see cref="Reset"/> 起）。并发路径下由多线程累加，
+    /// 故走 Interlocked（并发项每线程一条被包装的连接，读取时跨线程求和）。</summary>
+    public long Executes => Interlocked.Read(ref _executes);
 
     /// <summary>Prepare 调用次数（自上次 <see cref="Reset"/> 起）。</summary>
-    public long Prepares;
+    public long Prepares => Interlocked.Read(ref _prepares);
 
-    /// <summary>清零计数——每个测量项开始时调用。</summary>
+    /// <summary>清零计数——每个测量项开始时调用（须在无并发访问时调用）。</summary>
     public void Reset()
     {
-        Executes = 0;
-        Prepares = 0;
+        Interlocked.Exchange(ref _executes, 0);
+        Interlocked.Exchange(ref _prepares, 0);
     }
 
     /// <summary>prepared 复用率：Prepare 次数 / 执行次数（0 表示从不 prepare）。</summary>
     public double PreparedReuse => Executes == 0 ? 0 : (double)Prepares / Executes;
+
+    internal void CountExecute() => Interlocked.Increment(ref _executes);
+
+    internal void CountPrepare() => Interlocked.Increment(ref _prepares);
 
     [System.Diagnostics.CodeAnalysis.AllowNull]
     public override string ConnectionString
@@ -136,37 +143,37 @@ internal sealed class CountingConnection(DbConnection inner) : DbConnection
 
         public override int ExecuteNonQuery()
         {
-            _owner.Executes++;
+            _owner.CountExecute();
             return _inner.ExecuteNonQuery();
         }
 
         public override Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
         {
-            _owner.Executes++;
+            _owner.CountExecute();
             return _inner.ExecuteNonQueryAsync(cancellationToken);
         }
 
         public override object? ExecuteScalar()
         {
-            _owner.Executes++;
+            _owner.CountExecute();
             return _inner.ExecuteScalar();
         }
 
         public override Task<object?> ExecuteScalarAsync(CancellationToken cancellationToken)
         {
-            _owner.Executes++;
+            _owner.CountExecute();
             return _inner.ExecuteScalarAsync(cancellationToken);
         }
 
         public override void Prepare()
         {
-            _owner.Prepares++;
+            _owner.CountPrepare();
             _inner.Prepare();
         }
 
         public override Task PrepareAsync(CancellationToken cancellationToken = default)
         {
-            _owner.Prepares++;
+            _owner.CountPrepare();
             return _inner.PrepareAsync(cancellationToken);
         }
 
@@ -174,14 +181,14 @@ internal sealed class CountingConnection(DbConnection inner) : DbConnection
 
         protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
         {
-            _owner.Executes++;
+            _owner.CountExecute();
             return _inner.ExecuteReader(behavior);
         }
 
         protected override Task<DbDataReader> ExecuteDbDataReaderAsync(
             CommandBehavior behavior, CancellationToken cancellationToken)
         {
-            _owner.Executes++;
+            _owner.CountExecute();
             return _inner.ExecuteReaderAsync(behavior, cancellationToken);
         }
 

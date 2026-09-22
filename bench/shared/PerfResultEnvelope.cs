@@ -40,6 +40,22 @@ internal sealed class PerfResultEnvelope
     public PerfResultRegime Regime { get; set; } = new();
 
     public List<PerfResultItem> Items { get; set; } = [];
+
+    /// <summary>非"项 × 臂"形态的测量节（规范 §6 schema 2：负载/长稳/内存曲线）。
+    /// 用 kind + 自由指标字典而不是三套并行模型——三条路径的指标集本来就不同，
+    /// 强行统一字段名会让每次新增指标都改 schema。</summary>
+    public List<PerfResultSection> Sections { get; set; } = [];
+}
+
+/// <summary>测量节：<c>kind</c> = load / stability / memory；
+/// <c>label</c> 为该节的档位标识（线程档 / 秒数 / 行数）；指标进 <see cref="Metrics"/>。</summary>
+internal sealed class PerfResultSection
+{
+    public string Kind { get; set; } = "";
+    public string Dialect { get; set; } = "";
+    public string Label { get; set; } = "";
+    public Dictionary<string, double> Metrics { get; set; } = [];
+    public string Note { get; set; } = "";
 }
 
 /// <summary>环境节（规范 §3 要求项的子集 + 工具版本）。</summary>
@@ -132,10 +148,17 @@ internal static class PerfResultWriter
         }
     }
 
-    /// <summary>子集批次标记（规范 §6）：冒烟与过滤跑出的子集不得顶 latest、不得进基线。</summary>
+    /// <summary>子集批次标记（规范 §6）：以下批次不得顶 latest、不得进基线——
+    /// 它们不是该夹具的完整矩阵，顶掉 latest 会让索引与门禁读到残缺视图。
+    /// <list type="bullet">
+    /// <item><c>quick</c>：PerfHub 冒烟（迭代降到 30%）</item>
+    /// <item><c>filtered</c>：BDN/官方套件的过滤跑（只跑子集基准）</item>
+    /// <item><c>workload</c>/<c>memory</c>/<c>stability</c>：微基准的三条旁路模式（各只覆盖一个维度）</item>
+    /// </list></summary>
     public static bool IsSubsetLabel(string label)
         => label.Contains("quick", StringComparison.OrdinalIgnoreCase)
-        || label.Contains("filtered", StringComparison.OrdinalIgnoreCase);
+        || label.Contains("filtered", StringComparison.OrdinalIgnoreCase)
+        || label is "workload" or "memory" or "stability";
 
     /// <summary>仓库根：向上找 PalORM.slnx。</summary>
     public static string RepoRoot()
