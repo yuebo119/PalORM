@@ -135,7 +135,11 @@ internal static class PerfResultWriter
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
             string path = Path.Combine(dir, envelope.Harness + "-" + stamp + ".json");
             File.WriteAllText(path, json);
-            if (!IsSubsetLabel(envelope.Label))
+            // latest 只指向"可引用的最近状态"：子集批次（quick/filtered/workload/memory/stability）
+            // 与**空批次**（无 items 且无 sections，例如库不可达导致全部 NA 的方言跑）都不顶它。
+            // 空批次本身仍然落盘——"这次什么都没测到"是事实，只是不该被当成当前状态。
+            bool hasData = envelope.Items.Count > 0 || envelope.Sections.Count > 0;
+            if (!IsSubsetLabel(envelope.Label) && hasData)
             {
                 File.WriteAllText(Path.Combine(dir, "latest-" + envelope.Harness + ".json"), json);
             }
