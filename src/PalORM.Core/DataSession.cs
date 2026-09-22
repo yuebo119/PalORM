@@ -10,7 +10,13 @@ namespace PalORM;
 
 /// <summary>数据库会话 —— 封装连接生命周期。using-scoped 无状态，用完即弃。
 /// 类似 Dapper 的 SqlConnection 扩展 + EF Core 的 DbContext，但零状态追踪。
-/// 一个会话仅支持一个活动数据库操作；重叠操作会明确失败。</summary>
+/// 一个会话仅支持一个活动数据库操作；重叠操作会明确失败。
+/// <para><b>生命周期契约（LIFE-002，2026-09-23）</b>：主连接在构造期建立并持有到
+/// <see cref="DisposeAsync"/>，<b>会话级重连不受支持</b>——连接被中间设备静默掐断后，该会话的
+/// 后续操作会持续失败（弹性重试不会重建主连接）。推荐用法是<b>一个请求一个会话</b>
+/// （per-request scope）：长生命周期会话请显式处理重建（新建会话）或使用
+/// <c>DbOptions.ReadConnectionString</c> 的读路由。并发能力由"会话数 = 并发度"表达，
+/// 多个会话共享同一 <see cref="DbOptions"/> 实例即可。</para></summary>
 /// <typeparam name="TProvider">数据库 Provider 类型（PostgreSqlProvider / MySqlProvider / SqliteProvider）。</typeparam>
 public sealed partial class DataSession<TProvider> : IAsyncDisposable
     where TProvider : IDbProvider
@@ -384,7 +390,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return this;
     }
 
-    /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。</summary>
+    /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。
+    /// <para><b>并发契约（OPS-001，2026-09-23）</b>：本入口<b>不占操作门禁</b>——它是给调用方
+    /// 自带编排（并行扇出、自定义批处理）的逃生门，可被多线程并发调用，因此：(1) 不要与会话的
+    /// 其他操作（<c>From&lt;T&gt;()</c> 管线、Bulk 家族、事务 API）交错使用，那些路径受单活动操作
+    /// 门禁保护，混合使用会让门禁失去意义；(2) 会话级配置变更（<c>WithRetry</c>/<c>WithTimeout</c>/
+    /// <c>WithCircuitBreaker</c>）与飞行中的本入口调用互斥由调用方负责；(3) 熔断器与执行器的
+    /// 状态访问已按并发加固（无锁快路径 + 锁内计数），但<b>熔断作用域为会话级</b>时并发调用的
+    /// 失败计数共享同一实例，若需跨会话共享请设 <see cref="DbOptions.CircuitBreakerScope"/> 为
+    /// <see cref="CircuitBreakerScope.Process"/>。</para></summary>
     public async ValueTask<T> ExecuteWithResilience<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
         => await Volatile.Read(ref _resilience).ExecuteAsync(operation, ct).ConfigureAwait(false);
 
