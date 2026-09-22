@@ -154,6 +154,7 @@ internal static class Program
 
         var results = new List<Measurement>();
         var dialectFailures = new List<(string Dialect, string Reason)>();
+        var itemFailures = new List<(string Dialect, int Rows, string Context, string Cause)>();
         var swTotal = Stopwatch.StartNew();
         using var cts = new CancellationTokenSource();
 
@@ -176,7 +177,7 @@ internal static class Program
             // 继续跑其余方言——失败进信封的 sections（kind=dialect-failure），退出码在末尾汇总。
             try
             {
-                await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, cts.Token)
+                await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, itemFailures, cts.Token)
                     .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cts.IsCancellationRequested)
@@ -196,9 +197,17 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine($"[PerfHub] 完成，共 {results.Count} 项测量，耗时 {swTotal.Elapsed.TotalMinutes:F1} 分钟");
 
-        Save(results, label, version, swTotal.Elapsed, dialectFailures);
+        Save(results, label, version, swTotal.Elapsed, dialectFailures, itemFailures);
         Report.Build();
         return dialectFailures.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>取最内层异常的类型与消息——单项失败的定位信息就在那里，包装层只有上下文。</summary>
+    private static string RootCause(Exception ex)
+    {
+        Exception inner = ex;
+        while (inner.InnerException is not null) inner = inner.InnerException;
+        return inner == ex ? ex.GetType().Name : $"{inner.GetType().Name}: {Shorten(inner.Message)}";
     }
 
     /// <summary>异常消息截断——信封里只留可读的短原因，避免把驱动的长堆栈文本带进结果库。</summary>
@@ -206,9 +215,14 @@ internal static class Program
         => text.Length <= 200 ? text : text[..200] + "...";
 
     /// <summary>单方言全量（档位 × 三臂 + 并发档）——由外层 try 包住，失败只影响本方言。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability",
+        "CA2000:DisposeObjectsBeforeLosingScope",
+        Justification = "SQLite 分支的 CountingConnection 与 rawConn 共用同一底层连接，实际释放由 rawConn 的 "
+            + "await using 负责；包装层只持计数器，无终结器无资源，故不重复释放。")]
     private static async Task RunDialectAsync(
         DialectInfo info, List<int> tiers, bool concurrency, List<int> threadTiers, double scale,
-        List<Measurement> results, CancellationToken ct)
+        List<Measurement> results, List<(string Dialect, int Rows, string Context, string Cause)> itemFailures,
+        CancellationToken ct)
     {
         string cs = Connections.Resolve(info);
         await using DbConnection rawConn = info.OpenConnection(cs);
@@ -228,7 +242,18 @@ internal static class Program
         // 维度 8（往返与语句效率）：包一层计数装饰器。包在连接上而不是各臂内部，
         // 三臂（ADO 自建命令 / Dapper 在传入连接上建 / PalORM 会话在调用方连接上建）
         // 才能用同一把尺子量，且能抓到意外 N+1。
-        await using var conn = new CountingConnection(rawConn);
+        //
+        // **只对 SQLite 生效**（2026-09-22 实测）：PG 与 MySQL 的驱动专有协议路径与包装层不兼容——
+        // PG 上产品的 PostgreSqlProvider.BulkInsertAsync 直接要求 NpgsqlConnection
+        //（ArgumentException: requires an NpgsqlConnection），MySQL 的 LOAD DATA 路径把连接置为
+        // Broken 并让后续项全部失败。脱装饰器只能救我方臂（CountingConnection.Unwrap），
+        // 救不了产品 Provider 的类型要求，故这两个方言不做维度 8 计数（登记为覆盖缺口）。
+        // 不在此处 await using：SQLite 分支的包装层与 rawConn 是同一底层对象，
+        // 双份释放虽幂等但会触发 CA2000 误报；实际释放由 rawConn 的 await using 负责
+        //（包装层只持有计数器，无终结器、无资源）。
+        DbConnection conn = info.Dialect == Dialect.Sqlite
+            ? new CountingConnection(rawConn)
+            : rawConn;
 
         // 三实现共用同一连接（B76：建连口径一致）
         IPerfImplementation[] impls = [new AdoNetImpl(info), new DapperImpl(info), new PalormImpl(info)];
@@ -243,7 +268,28 @@ internal static class Program
 
             foreach (IPerfImplementation impl in impls)
             {
-                await RunOneImplAsync(info, impl, rows, conn, results, scale, ct).ConfigureAwait(false);
+                // 单项失败不杀方言：一个 (实现 × 操作 × 方言) 组合失败（实测 MySQL BulkDelete、
+                // PG BulkInsert）时，若整段中断，该方言其余 20 项全部丢失。改为记录失败项、继续下一臂，
+                // 并把内因（包装异常里的 InnerException）打出来——否则只剩"某某失败"无法定位。
+                try
+                {
+                    await RunOneImplAsync(info, impl, rows, conn, results, scale, ct).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    string cause = RootCause(ex);
+                    Console.Error.WriteLine($"    {impl.Name,-9} 跳过 — {ex.Message}｜内因：{cause}");
+                    itemFailures.Add((info.DisplayName, rows, $"{impl.Name}: {ex.Message}", cause));
+                    // 坏连接会吃掉后续全部项（实测 MySQL：ADO BulkDelete 抛 SocketException 后
+                    // 连接变 Broken，Dapper/PalORM 的同档项全被跳过）。重开一次连接继续——
+                    // 表在服务端，重连不丢数据；重连失败才算方言级失败（交给外层 catch）。
+                    if (conn.State != System.Data.ConnectionState.Open)
+                    {
+                        Console.Error.WriteLine($"    → 连接状态 {conn.State}，重开连接后继续");
+                        await conn.CloseAsync().ConfigureAwait(false);
+                        await conn.OpenAsync(ct).ConfigureAwait(false);
+                    }
+                }
             }
 
             // 并发吞吐（三实现 × 线程档位）
@@ -624,7 +670,8 @@ internal static class Program
 
     private static void Save(
         List<Measurement> results, string label, string version, TimeSpan elapsed,
-        List<(string Dialect, string Reason)> dialectFailures)
+        List<(string Dialect, string Reason)> dialectFailures,
+        List<(string Dialect, int Rows, string Context, string Cause)> itemFailures)
     {
         string dir = Path.Combine(FindRepoRoot(), "bench", "perfhub", "results");
         Directory.CreateDirectory(dir);
@@ -660,17 +707,18 @@ internal static class Program
 
         // 结果库信封（规范 v2 §6）：跨夹具可查询的最小集 + 口径登记 + 健康度
         WriteEnvelope(results, label, version, elapsed,
-            Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"), dialectFailures);
+            Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"), dialectFailures, itemFailures);
     }
 
     /// <summary>把本批次映射成结果库信封。Ratio 以同方言同档位的 ADO_NET 行为地板现算
     /// （与报告口径一致）；健康度取**地板行散布的中位数**（取最大值会被 sub-µs 项的调度抖动
     /// 支配，取最小值会漏掉只影响慢项的争用），阈值为本夹具实测噪声底上界。
-    /// <para>失败方言进 <c>sections</c>（kind=<c>dialect-failure</c>）：部分方言不可达时，
-    /// 已测方言的结果照常落库，失败被显式登记而不是静默丢失。</para></summary>
+    /// <para>失败进 <c>sections</c>：<c>dialect-failure</c>（整个方言不可达）与
+    /// <c>item-failure</c>（单个"实现 × 操作"组合失败，含内因）——部分失败时已测项照常落库。</para></summary>
     private static void WriteEnvelope(
         List<Measurement> results, string label, string version, TimeSpan elapsed, string detailPath,
-        List<(string Dialect, string Reason)> dialectFailures)
+        List<(string Dialect, string Reason)> dialectFailures,
+        List<(string Dialect, int Rows, string Context, string Cause)> itemFailures)
     {
         var spreads = new List<double>();
         foreach (Measurement m in results)
@@ -735,6 +783,21 @@ internal static class Program
                 Dialect = dialect,
                 Label = "connect/open",
                 Note = reason
+            });
+        }
+
+        foreach ((string dialect, int rows, string context, string cause) in itemFailures)
+        {
+            envelope.Sections.Add(new PerfResultSection
+            {
+                Kind = "item-failure",
+                Dialect = dialect,
+                Label = rows.ToString(CultureInfo.InvariantCulture),
+                Note = context + "｜内因：" + cause,
+                Metrics = new Dictionary<string, double>(StringComparer.Ordinal)
+                {
+                    ["rows"] = rows
+                }
             });
         }
 

@@ -17,26 +17,29 @@ internal static class IndexGate
 
     internal static int Record(string resultsDir, string outputPath)
     {
-        List<PerfResultEnvelope> latest = LoadLatest(resultsDir);
-        if (latest.Count == 0)
+        List<PerfResultEnvelope> batches = LoadBatches(resultsDir);
+        if (batches.Count == 0)
         {
             Console.Error.WriteLine($"FATAL: 结果库里没有可解析的批次（{resultsDir}）");
             return 1;
         }
 
+        // 与 Check 共用 LoadCurrentItems：两侧同源，基线条目数与比对口径才对得上
+        var current = LoadCurrentItems(batches);
         var baseline = new IndexBaseline
         {
             Schema = 1,
             Date = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            Environment = DescribeEnvironment(batches[0]),
             Thresholds = new IndexThresholds { RatioDelta = DefaultRatioThreshold },
-            Items = [.. KeyItems(latest).Select(static i => new IndexBaselineItem
+            Items = [.. current.Select(static entry => new IndexBaselineItem
             {
-                Harness = i.Harness,
-                Name = i.Item.Name,
-                Dialect = i.Item.Dialect,
-                Tier = i.Item.Tier,
-                Ratio = i.Item.Ratio,
-                MeanUs = i.Item.MeanUs
+                Harness = entry.Value.Harness,
+                Name = entry.Value.Item.Name,
+                Dialect = entry.Value.Item.Dialect,
+                Tier = entry.Value.Item.Tier,
+                Ratio = entry.Value.Item.Ratio,
+                MeanUs = entry.Value.Item.MeanUs
             })]
         };
 
@@ -64,14 +67,14 @@ internal static class IndexGate
             return 1;
         }
 
-        List<PerfResultEnvelope> latest = LoadLatest(resultsDir);
-        if (latest.Count == 0)
+        List<PerfResultEnvelope> batches = LoadBatches(resultsDir);
+        if (batches.Count == 0)
         {
             Console.Error.WriteLine($"FATAL: 结果库里没有可解析的批次（{resultsDir}）");
             return 1;
         }
 
-        var current = LoadCurrentRatios(latest);
+        var current = LoadCurrentItems(batches);
 
         var failures = new List<string>();
         int compared = 0, missing = 0;
@@ -79,11 +82,13 @@ internal static class IndexGate
         {
             if (!current.TryGetValue(
                 Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier),
-                out (double Ratio, double MeanUs) actual))
+                out (string Harness, PerfResultItem Item) found))
             {
                 missing++;
                 continue;
             }
+
+            (double Ratio, double MeanUs) actual = (found.Item.Ratio, found.Item.MeanUs);
 
             compared++;
             double limit = expected.Ratio * (1 + baseline.Thresholds.RatioDelta);
@@ -93,7 +98,7 @@ internal static class IndexGate
             }
         }
 
-        ReportSentinel(latest);
+        ReportSentinel(batches);
 
         Console.WriteLine($"[PerfGate] 结果库门禁: 比对 {compared} 项（基线 {baseline.Items.Count} 项，"
             + $"缺项 {missing}），失败 {failures.Count}");
@@ -111,18 +116,48 @@ internal static class IndexGate
         return failures.Count == 0 ? 0 : 1;
     }
 
-    /// <summary>当前比值表：同名键取**最差比值**。结果库里同一键出现多次（历史遗留的同名并发行，
-    /// 或实现侧漏了唯一化标识）时，取最差才是安全方向——门禁宁可提示也不该因重复键直接崩。</summary>
-    private static Dictionary<string, (double Ratio, double MeanUs)> LoadCurrentRatios(List<PerfResultEnvelope> latest)
-        => KeyItems(latest)
-            .GroupBy(static i => Key(i.Harness, i.Item.Name, i.Item.Dialect, i.Item.Tier))
-            .ToDictionary(
-                static g => g.Key,
-                static g =>
+    /// <summary>当前比值表：**逐键取最新可得值**（批次按时间倒序，先到先得），同名键取最差比值。
+    /// <para>为什么不是"只看最近一批"：最近一批可能只覆盖某个方言（实测：一次 MySQL 单方言跑测
+    /// 让 50 项 SQLite 基线全部"缺项"，门禁误报 FATAL）。逐键取最新值后，只有"某个键在所有批次里
+    /// 都没有"才算缺项。</para>
+    /// <para>同名键取最差：结果库里同一键出现多次（历史遗留的同名并发行，或实现侧漏了唯一化标识）时，
+    /// 取最差才是安全方向——门禁宁可提示也不该因重复键直接崩。</para></summary>
+    /// <summary>当前项表：**逐键取最新可得项**（批次按时间倒序，先到先得），同名键取最差比值。
+    /// <para>为什么不是"只看最近一批"：最近一批可能只覆盖某个方言（实测：一次 MySQL 单方言跑测
+    /// 让 50 项 SQLite 基线全部"缺项"，门禁误报 FATAL）。逐键取最新值后，只有"某个键在所有批次里
+    /// 都没有"才算缺项。</para>
+    /// <para><b>录制与读回必须共用本方法</b>：两侧若用不同口径（例如录制遍历全部批次、读回取最新），
+    /// 基线条目数与比对口径就对不上，门禁会因口径错配而红——本方法的存在就是为了让两者同源。</para>
+    /// <para>同名键取最差：结果库里同一键出现多次（历史遗留的同名并发行，或实现侧漏了唯一化标识）时，
+    /// 取最差才是安全方向——门禁宁可提示也不该因重复键直接崩。</para></summary>
+    private static Dictionary<string, (string Harness, PerfResultItem Item)> LoadCurrentItems(
+        List<PerfResultEnvelope> batches)
+    {
+        var map = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
+        foreach (PerfResultEnvelope run in batches)
+        {
+            // 批内：同名键取最差（安全方向）
+            var perBatch = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
+            foreach ((string harness, PerfResultItem item) in KeyItems([run]))
+            {
+                string key = Key(harness, item.Name, item.Dialect, item.Tier);
+                if (!perBatch.TryGetValue(key, out (string Harness, PerfResultItem Item) existing)
+                    || item.Ratio > existing.Item.Ratio)
                 {
-                    (_, PerfResultItem worst) = g.MaxBy(static i => i.Item.Ratio);
-                    return (worst.Ratio, worst.MeanUs);
-                });
+                    perBatch[key] = (harness, item);
+                }
+            }
+
+            // 跨批次：**新的优先**（batches 已按时间倒序，先到先得），旧批次只补新批次缺的键。
+            // 若这里改成"比值大者胜"，旧批次的高比值会盖掉最新值——那测的是历史最差而不是当前状态
+            foreach (KeyValuePair<string, (string Harness, PerfResultItem Item)> entry in perBatch)
+            {
+                map.TryAdd(entry.Key, entry.Value);
+            }
+        }
+
+        return map;
+    }
 
     /// <summary>失败描述必须自解释：两侧均值与隐含地板一起打印，否则无法分辨"本项退化"
     /// 与"地板移动"（实测先例：StreamAll 三臂都变快，但地板快得更多，比值上升 0.48→0.64）。</summary>
@@ -183,12 +218,22 @@ internal static class IndexGate
     }
 
     /// <summary>每个夹具取最近一批（含 quick 标记的批次由调用方过滤）。</summary>
-    private static List<PerfResultEnvelope> LoadLatest(string resultsDir)
+    /// <summary>环境一句话——写进基线的 environment 字段。</summary>
+    private static string DescribeEnvironment(PerfResultEnvelope run)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"{run.Environment.Processor} / {run.Environment.Runtime} / GC {run.Environment.GcMode}；"
+            + $"录制批次 {run.Timestamp}（健康度 {run.Regime.Health} {run.Regime.HealthRatio:P1}）");
+
+    /// <summary>结果库全部批次（按时间倒序）——门禁逐键取最新可得值，故需要全量而非只读 latest-*。
+    /// 子集标记批次在 <see cref="KeyItems"/> 里被过滤掉。</summary>
+    private static List<PerfResultEnvelope> LoadBatches(string resultsDir)
     {
         var runs = new List<PerfResultEnvelope>();
         if (!Directory.Exists(resultsDir)) return runs;
-        foreach (string file in Directory.EnumerateFiles(resultsDir, "latest-*.json"))
+        foreach (string file in Directory.EnumerateFiles(resultsDir, "*.json"))
         {
+            // latest-* 是副本，读了会让同一批出现两次
+            if (Path.GetFileName(file).StartsWith("latest-", StringComparison.Ordinal)) continue;
             try
             {
                 PerfResultEnvelope? run = JsonSerializer.Deserialize(
@@ -201,6 +246,7 @@ internal static class IndexGate
             }
         }
 
+        runs.Sort(static (a, b) => string.CompareOrdinal(b.Timestamp, a.Timestamp));
         return runs;
     }
 
@@ -212,6 +258,12 @@ internal sealed class IndexBaseline
 {
     public int Schema { get; set; } = 1;
     public string Date { get; set; } = "";
+
+    /// <summary>录制时的环境说明（进程数、健康度、宿主负载状态）——比值门禁隐含"环境可比"假设，
+    /// 实测宿主机跑着数据库虚机时 SQLite 进程内项整体变慢（地板 +45%、CPU 密集项 +156%），
+    /// 故环境必须与基线同存亡，否则失败无法区分"退化"与"换了环境"。</summary>
+    public string Environment { get; set; } = "";
+
     public IndexThresholds Thresholds { get; set; } = new();
     public List<IndexBaselineItem> Items { get; set; } = [];
 }

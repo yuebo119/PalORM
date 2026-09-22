@@ -39,6 +39,15 @@ internal sealed class CountingConnection(DbConnection inner) : DbConnection
 
     internal void CountPrepare() => Interlocked.Increment(ref _prepares);
 
+    /// <summary>取回被包装的驱动连接——驱动专有快路径（PG 的 <c>NpgsqlBinaryImporter</c>、
+    /// MySQL 的 <c>MySqlBulkCopy</c>）要求连接是自己的类型，包装层必须让路。
+    /// <para><b>实测先例</b>：P2 引入本装饰器后，PG 的 ADO 批量插入报
+    /// <c>InvalidCastException: Unable to cast 'CountingConnection' to 'NpgsqlConnection'</c>；
+    /// MySQL 更隐蔽——连接被 bulk 路径搞坏，后续项报 <c>Connection must be Open; state is Broken</c>。
+    /// 这两条路径的往返次数因此不计入维度 8（它们在协议层不是"命令执行"）。</para></summary>
+    public static DbConnection Unwrap(DbConnection conn)
+        => conn is CountingConnection counting ? counting._inner : conn;
+
     [System.Diagnostics.CodeAnalysis.AllowNull]
     public override string ConnectionString
     {
