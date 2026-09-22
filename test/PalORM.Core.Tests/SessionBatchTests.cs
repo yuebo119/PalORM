@@ -69,6 +69,21 @@ internal sealed class SessionBatchTests
         using SessionBatch<SqliteProvider> batch = session.CreateBatch();
         await Assert.That(() => batch.Append($"   ")).Throws<ArgumentException>();
     }
+
+    [Test]
+    public async Task Append_AfterDispose_ThrowsObjectDisposed()
+    {
+        // OPS-002（2026-09-22）：Dispose 后 Append 此前会拿已释放的 _scratch 建参数、语句静默累积
+        // （下一次 Execute 才在驱动侧炸）。补零成本守卫，把失败点前移到调用处。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        SessionBatch<SqliteProvider> batch = session.CreateBatch();
+        batch.Dispose();
+
+        await Assert.That(() => batch.Append($"INSERT INTO batch_rows (v, tag) VALUES (1, 'x')"))
+            .Throws<ObjectDisposedException>();
+        await Assert.That(() => batch.AppendRaw("CREATE TABLE batch_probe (id INTEGER)"))
+            .Throws<ObjectDisposedException>();
+    }
 }
 
 [Table("batch_rows")]

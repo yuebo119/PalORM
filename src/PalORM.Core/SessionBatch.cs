@@ -26,6 +26,9 @@ public sealed class SessionBatch<TProvider> : IDisposable
     private readonly DataSession<TProvider> _session;
     private readonly List<(string Sql, IReadOnlyList<DbParameter> Parameters)> _statements = [];
     private readonly DbCommand _scratch;
+    /// <summary>Append 与执行期快照的互斥门（OPS-002，2026-09-22）——门内只做 List 增删与拷贝，
+    /// 不做 await（本仓库"lock 内无 await"纪律）。</summary>
+    private readonly Lock _gate = new();
     private bool _disposed;
 
     internal SessionBatch(DataSession<TProvider> session)
@@ -39,6 +42,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
     public SessionBatch<TProvider> Append(FormattableString sql)
     {
         ArgumentNullException.ThrowIfNull(sql);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         // 每条语句参数从 @p0 起命名（批量内每条命令的参数集合独立），复用格式化纯函数缓存
         string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 0);
         if (string.IsNullOrWhiteSpace(formatted))
@@ -53,7 +57,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
             parameter.Value = sql.GetArgument(i) ?? DBNull.Value;
             parameters[i] = parameter;
         }
-        _statements.Add((formatted, parameters));
+        lock (_gate) _statements.Add((formatted, parameters));
         return this;
     }
 
@@ -62,11 +66,12 @@ public sealed class SessionBatch<TProvider> : IDisposable
     internal SessionBatch<TProvider> AppendRaw(string sql)
     {
         ArgumentNullException.ThrowIfNull(sql);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (string.IsNullOrWhiteSpace(sql))
             throw new ArgumentException(
                 "Batch statement must not be empty or whitespace; an empty statement produces invalid SQL.",
                 nameof(sql));
-        _statements.Add((sql, Array.Empty<DbParameter>()));
+        lock (_gate) _statements.Add((sql, Array.Empty<DbParameter>()));
         return this;
     }
 
@@ -80,7 +85,17 @@ public sealed class SessionBatch<TProvider> : IDisposable
     internal async ValueTask<int> ExecuteNonQueryAsync(object? operationOwner, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_statements.Count == 0) return 0;
+
+        // OPS-002（2026-09-22）：门内只做快照，不在锁内 await（"lock 内无 await"纪律）。
+        // 此前直接迭代 _statements：与并发 Append 竞争会结构性损坏 List，或抛
+        // "Collection was modified"——后者在批量执行中途让整批事务回滚。
+        // 快照语义：执行期间新追加的语句由下一次 Execute 执行。
+        List<(string Sql, IReadOnlyList<DbParameter> Parameters)> statements;
+        lock (_gate)
+        {
+            statements = [.. _statements];
+        }
+        if (statements.Count == 0) return 0;
 
         using SessionOperationState.SessionOperationLease operation =
             _session.EnterBatchOperation(operationOwner);
@@ -99,7 +114,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
             try
             {
                 // 慢 DDL 场景（大表 CREATE INDEX）不应走批——MigrateAsync 的索引 DDL 保持逐条。
-                foreach ((string sql, IReadOnlyList<DbParameter> parameters) in _statements)
+                foreach ((string sql, IReadOnlyList<DbParameter> parameters) in statements)
                 {
                     DbBatchCommand command = batch.CreateBatchCommand();
                     command.CommandText = sql;
@@ -117,7 +132,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
 
         // 回退：逐条顺序执行（语句顺序 = 追加顺序，行为与分别 ExecuteAsync 等价）
         int total = 0;
-        foreach ((string sql, IReadOnlyList<DbParameter> parameters) in _statements)
+        foreach ((string sql, IReadOnlyList<DbParameter> parameters) in statements)
         {
             await using DbCommand cmd = connection.CreateCommand();
             cmd.Transaction = transaction;
