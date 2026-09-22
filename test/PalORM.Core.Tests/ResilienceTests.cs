@@ -29,6 +29,84 @@ public sealed class ResilienceTests
         await Assert.That(() => new ResilienceExecutor(opts)).Throws<ArgumentOutOfRangeException>();
     }
 
+    // ─── RES-003（2026-09-23）：退避抖动与整次操作总预算 ───────────────
+
+    [Test]
+    public async Task DefaultBackoff_HasJitterWithinHalfToFullBounds()
+    {
+        // 纯指数退避在多实例同时恢复时让所有客户端对齐到达、二次打垮刚恢复的服务；
+        // 抖动把到达时间摊开（50%~100% 区间），上界不变。
+        TimeSpan attempt0 = ResilienceExecutor.GetDefaultBackoff(0);
+        TimeSpan attempt3 = ResilienceExecutor.GetDefaultBackoff(3);
+        TimeSpan attempt18 = ResilienceExecutor.GetDefaultBackoff(18);
+
+        await Assert.That(attempt0 >= TimeSpan.FromMilliseconds(50) && attempt0 <= TimeSpan.FromMilliseconds(100))
+            .IsTrue();
+        await Assert.That(attempt3 >= TimeSpan.FromMilliseconds(400) && attempt3 <= TimeSpan.FromMilliseconds(800))
+            .IsTrue();
+        await Assert.That(attempt18 >= TimeSpan.FromSeconds(15) && attempt18 <= TimeSpan.FromSeconds(30))
+            .IsTrue();
+
+        var seen = new HashSet<long>();
+        for (int i = 0; i < 50; i++) seen.Add(ResilienceExecutor.GetDefaultBackoff(0).Ticks);
+        await Assert.That(seen.Count).IsGreaterThan(1);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_OverallDeadline_StopsRetryingAndWrapsTimeout()
+    {
+        // 单次尝试超时不是总时长上界：默认 MaxRetries=3 时最坏墙钟 ≈ 4 × CommandTimeout + Σ退避。
+        // 设总预算后必须收敛到预算，且不再重试。
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            CommandTimeout = TimeSpan.FromSeconds(30),
+            MaxRetries = 3,
+            RetryBackoff = _ => TimeSpan.Zero,
+            CircuitBreakerThreshold = 0,
+            OverallDeadline = TimeSpan.FromSeconds(1)
+        };
+        var executor = new ResilienceExecutor(opts, static _ => true);
+        int attempts = 0;
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+
+        Exception? thrown = await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await executor.ExecuteAsync(async ct =>
+            {
+                attempts++;
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return 0;
+            }));
+
+        await Assert.That((bool)thrown!.Data["PalORM.InfrastructureTimeout"]!).IsTrue();
+        await Assert.That(thrown!.Message).Contains("overall deadline");
+        await Assert.That(attempts).IsEqualTo(1);
+        await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_NoOverallDeadline_WrapsCommandTimeoutInstead()
+    {
+        // 总预算未设（Zero）时既有语义不变：仍按单次尝试超时包装（两条路径的消息口径可区分）
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            CommandTimeout = TimeSpan.FromMilliseconds(300),
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 0
+        };
+        var executor = new ResilienceExecutor(opts, static _ => true);
+
+        Exception? thrown = await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await executor.ExecuteAsync(async ct =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return 0;
+            }));
+
+        await Assert.That(thrown!.Message).Contains("Command timed out");
+    }
+
     [Test]
     public async Task ExecuteAsync_RetriesOnFailure()
     {
