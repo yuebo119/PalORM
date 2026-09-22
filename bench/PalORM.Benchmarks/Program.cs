@@ -73,9 +73,12 @@ public static class Program
             return;
         }
         IEnumerable<Summary> summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
-        // 过滤批次带标记：`perf.sh smoke` 走的就是过滤跑，未标记的子集会被误读成全量批次
+        // 批次标签优先级：调用方显式声明（PALORM_BENCH_LABEL，如全量脚本的 gate-set）> 过滤跑标记 >
+        // 默认 bdn。显式声明让"可复现的操作性子集"（门禁同参集）与"临时单基准跑"在结果库里有区别。
+        string? declared = Environment.GetEnvironmentVariable("PALORM_BENCH_LABEL");
         bool filtered = Array.Exists(args, static a => a.Contains("filter", StringComparison.OrdinalIgnoreCase));
-        WriteEnvelope(summaries, filtered ? "filtered" : "bdn");
+        string label = !string.IsNullOrWhiteSpace(declared) ? declared : filtered ? "filtered" : "bdn";
+        WriteEnvelope(summaries, label);
     }
 
     /// <summary>健康度阈值（规范 §4.2）——BDN 标准跑（launch 3 × warmup 5 × 迭代 10）

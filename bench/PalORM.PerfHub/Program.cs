@@ -710,7 +710,11 @@ internal static class Program
                 && b.Dialect == m.Dialect && b.Operation == m.Operation && b.Rows == m.Rows);
             envelope.Items.Add(new PerfResultItem
             {
-                Name = m.Operation,
+                // 并发行的唯一标识必须含线程档：同一 (operation, 方言, 档位) 下有 1/4/8 三行，
+                // 名字不带线程会让结果库与门禁的"同名键"相撞（实测 ToDictionary 抛 Key 重复）
+                Name = m.ConcurrencyThreads > 0
+                    ? $"{m.Operation} (t{m.ConcurrencyThreads})"
+                    : m.Operation,
                 Dialect = m.Dialect,
                 Arm = m.Implementation,
                 Tier = m.Rows,

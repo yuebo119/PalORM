@@ -35,7 +35,8 @@ internal static class IndexGate
                 Name = i.Item.Name,
                 Dialect = i.Item.Dialect,
                 Tier = i.Item.Tier,
-                Ratio = i.Item.Ratio
+                Ratio = i.Item.Ratio,
+                MeanUs = i.Item.MeanUs
             })]
         };
 
@@ -70,14 +71,15 @@ internal static class IndexGate
             return 1;
         }
 
-        var current = KeyItems(latest).ToDictionary(
-            static i => Key(i.Harness, i.Item.Name, i.Item.Dialect, i.Item.Tier), static i => i.Item.Ratio);
+        var current = LoadCurrentRatios(latest);
 
         var failures = new List<string>();
         int compared = 0, missing = 0;
         foreach (IndexBaselineItem expected in baseline.Items)
         {
-            if (!current.TryGetValue(Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier), out double actual))
+            if (!current.TryGetValue(
+                Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier),
+                out (double Ratio, double MeanUs) actual))
             {
                 missing++;
                 continue;
@@ -85,11 +87,9 @@ internal static class IndexGate
 
             compared++;
             double limit = expected.Ratio * (1 + baseline.Thresholds.RatioDelta);
-            if (actual > limit)
+            if (actual.Ratio > limit)
             {
-                failures.Add(string.Create(CultureInfo.InvariantCulture,
-                    $"{expected.Harness}/{expected.Name}/{expected.Dialect}/{expected.Tier}: "
-                    + $"比值 {actual:F2} 超过基线 {expected.Ratio:F2} × (1+{baseline.Thresholds.RatioDelta:P0}) = {limit:F2}"));
+                failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta));
             }
         }
 
@@ -109,6 +109,35 @@ internal static class IndexGate
         }
 
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>当前比值表：同名键取**最差比值**。结果库里同一键出现多次（历史遗留的同名并发行，
+    /// 或实现侧漏了唯一化标识）时，取最差才是安全方向——门禁宁可提示也不该因重复键直接崩。</summary>
+    private static Dictionary<string, (double Ratio, double MeanUs)> LoadCurrentRatios(List<PerfResultEnvelope> latest)
+        => KeyItems(latest)
+            .GroupBy(static i => Key(i.Harness, i.Item.Name, i.Item.Dialect, i.Item.Tier))
+            .ToDictionary(
+                static g => g.Key,
+                static g =>
+                {
+                    (_, PerfResultItem worst) = g.MaxBy(static i => i.Item.Ratio);
+                    return (worst.Ratio, worst.MeanUs);
+                });
+
+    /// <summary>失败描述必须自解释：两侧均值与隐含地板一起打印，否则无法分辨"本项退化"
+    /// 与"地板移动"（实测先例：StreamAll 三臂都变快，但地板快得更多，比值上升 0.48→0.64）。</summary>
+    private static string DescribeFailure(
+        IndexBaselineItem expected, (double Ratio, double MeanUs) actual, double limit, double ratioDelta)
+    {
+        double floorBase = expected.Ratio > 0 ? expected.MeanUs / expected.Ratio : 0;
+        double floorNow = actual.Ratio > 0 ? actual.MeanUs / actual.Ratio : 0;
+        double meanDelta = expected.MeanUs > 0 ? ((actual.MeanUs / expected.MeanUs) - 1) * 100 : 0;
+        double floorDelta = floorBase > 0 ? ((floorNow / floorBase) - 1) * 100 : 0;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{expected.Harness}/{expected.Name}/{expected.Dialect}/{expected.Tier}: "
+            + $"比值 {actual.Ratio:F2} 超过基线 {expected.Ratio:F2} × (1+{ratioDelta:P0}) = {limit:F2}"
+            + $"｜本项均值 {expected.MeanUs:F2} → {actual.MeanUs:F2} µs（{meanDelta:+0.0;-0.0}%）"
+            + $"｜隐含地板 {floorBase:F2} → {floorNow:F2} µs（{floorDelta:+0.0;-0.0}%）");
     }
 
     /// <summary>哨兵报告：DapperSuite 不卡阈值，但它的健康度与地板比值要打印出来供人工判读。</summary>
@@ -200,6 +229,10 @@ internal sealed class IndexBaselineItem
     public string Dialect { get; set; } = "";
     public int Tier { get; set; }
     public double Ratio { get; set; }
+
+    /// <summary>本项的绝对均值（µs）——失败时用来分辨"本项退化"与"地板移动"：
+    /// 比值上升可能只是分母（同批地板）变快，看均值才能判定方向。</summary>
+    public double MeanUs { get; set; }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
