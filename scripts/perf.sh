@@ -3,13 +3,15 @@
 #
 # 用法:
 #   bash scripts/perf.sh smoke                    # 三套夹具最小档冒烟（SQLite，约 5 分钟）
-#   bash scripts/perf.sh full                     # 全量（约 30-40 分钟，含三方言）
+#   bash scripts/perf.sh full                     # 全量（三方言）+ 门禁 + 唯一报告
 #   bash scripts/perf.sh compare <基线worktree> <轮数> [选项]   # 交替 A/B（转发 perfhub-ab.sh）
 #   bash scripts/perf.sh gate                     # 只跑门禁（BDN 基线 + 结果库基线）
-#   bash scripts/perf.sh report                   # 只从结果库重建索引报告
+#   bash scripts/perf.sh report                   # 只重建统一报告（不重跑夹具）
+#   bash scripts/perf.sh index                    # 只重建跨夹具索引（单独查看用）
 #
 # 设计：本脚本只做编排，不改任何夹具的口径——每步都调用该夹具自己的既有入口，
 # 保证"从统一入口跑"与"单独跑某套夹具"得到同样的结果。
+# 报告只有一个产物：bench/reports/perf-report-<时间戳>.md（在全部夹具写完成结果库之后生成）。
 
 set -euo pipefail
 
@@ -30,13 +32,15 @@ usage() {
     cat <<'EOF'
 用法:
   bash scripts/perf.sh smoke                    # 三套夹具最小档冒烟（SQLite，约 5 分钟）
-  bash scripts/perf.sh full                     # 全量（约 30-40 分钟，含三方言）
+  bash scripts/perf.sh full                     # 全量（三方言）+ 门禁 + 唯一报告
   bash scripts/perf.sh compare <基线worktree> <轮数> [选项]   # 交替 A/B（转发 perfhub-ab.sh）
   bash scripts/perf.sh gate                     # 只跑门禁（BDN 基线 + 结果库基线）
-  bash scripts/perf.sh report                   # 只从结果库重建索引报告
+  bash scripts/perf.sh report                   # 只重建统一报告（不重跑夹具）
+  bash scripts/perf.sh index                    # 只重建跨夹具索引（单独查看用）
 
 设计：本脚本只做编排，不改任何夹具的口径——每步都调用该夹具自己的既有入口，
 保证"从统一入口跑"与"单独跑某套夹具"得到同样的结果。
+报告只有一个产物：bench/reports/perf-report-<时间戳>.md（在全部夹具写完成结果库之后生成）。
 EOF
 }
 
@@ -68,6 +72,32 @@ gate() {
 index() {
     step "[索引] 从结果库重建 bench/reports/perf-index.md"
     dotnet run --project "$GATE_PROJECT" -c Release -- index
+}
+
+# 唯一报告产物（规范 §6）：BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览，一份文件。
+# 负载/内存 JSON 与启动量具结果由 run-full-perf.sh 留在固定位置，此处按最新取用。
+report() {
+    step "[报告] 统一报告（BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览）"
+    local bench_bin="$ROOT_DIR/bench/PalORM.Benchmarks/bin/Release/net11.0"
+    local workload memory startup
+    workload="$(ls -t "$bench_bin"/workload-sqlite-*.json 2>/dev/null | head -1 || true)"
+    memory="$(ls -t "$bench_bin"/memory-sqlite.json 2>/dev/null | head -1 || true)"
+    startup="$(cat "$ROOT_DIR/bench/reports/last-startup-status.txt" 2>/dev/null || true)"
+    mkdir -p "$ROOT_DIR/bench/reports"
+    local out="$ROOT_DIR/bench/reports/perf-report-$(date +%Y%m%d-%H%M%S).md"
+
+    local args=(--results "$BDN_RESULTS" --baseline "$BASELINE_BDN"
+        --envelopes "$ROOT_DIR/bench/results" --index-baseline "$BASELINE_INDEX"
+        --out "$out")
+    [ -n "$workload" ] && args+=(--workload "$workload")
+    [ -n "$memory" ] && args+=(--memory "$memory")
+    [ -n "$startup" ] && args+=(--startup "$startup")
+
+    # 报告步不因门禁有回归而失败——报告的价值恰恰在于如实呈现回归；退出码由 gate 步负责
+    set +e
+    dotnet run --project "$GATE_PROJECT" -c Release -- report "${args[@]}"
+    set -e
+    echo "报告: $out"
 }
 
 cmd="${1:-}"
@@ -106,13 +136,17 @@ case "$cmd" in
             fi
         }
 
-        run_step "[1/5] 微基准全量 + 负载 + 内存 + 启动 + BDN 门禁" bash "$ROOT_DIR/scripts/run-full-perf.sh"
+        # 步骤 1 跳过其内部报告：统一报告必须等三套夹具都写完结果库信封后再生成
+        #（否则报告里的跨夹具节只含上一轮的批次——顺序错了就会得出"PerfHub 未采集"的假缺口）。
+        run_step "[1/5] 微基准全量 + 负载 + 内存 + 启动 + BDN 门禁" \
+            env SKIP_REPORT=1 bash "$ROOT_DIR/scripts/run-full-perf.sh"
         run_step "[2/5] PerfHub 三方言全量（含并发扩展档）" \
             dotnet run --project "$ROOT_DIR/bench/PalORM.PerfHub" -c Release -- \
             run --dialects sqlite,mysql,pg --tiers 2000,20000 --concurrency --threads 1,4,8
         run_step "[3/5] DapperSuite 三方言（官方形状锚点）" bash "$ROOT_DIR/scripts/dappersuite-run.sh"
         run_step "[4/5] 门禁（BDN 基线 + 结果库基线）" gate
-        run_step "[5/5] 索引报告" index
+        # [5/5] 唯一报告产物：BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览
+        run_step "[5/5] 统一报告" report
 
         if [ ${#STEP_FAILED[@]} -gt 0 ]; then
             echo ""
@@ -130,6 +164,9 @@ case "$cmd" in
         gate
         ;;
     report)
+        report
+        ;;
+    index)
         index
         ;;
     *)

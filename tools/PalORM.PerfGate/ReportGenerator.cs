@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PalORM.Bench.Shared;
 
 namespace PalORM.PerfGate;
 
@@ -50,22 +51,27 @@ internal static partial class ReportGenerator
     internal static (int Passed, int Total) Generate(
         string resultsDirectory,
         PerfBaseline baseline,
-        string? workloadJsonPath,
-        string? memoryJsonPath,
-        string outputPath,
-        string? startupStatus = null)
+        ReportInputs inputs,
+        string outputPath)
     {
         ResultSet results = ResultReader.Read(resultsDirectory);
+        // 结果库批次——维度总览与跨夹具节都据此判定，避免"报告只有绿项"或"标了未实现其实已实现"
+        List<PerfResultEnvelope> runs = string.IsNullOrEmpty(inputs.EnvelopesDirectory)
+            ? []
+            : IndexGenerator.LoadAll(inputs.EnvelopesDirectory);
+
         var md = new StringBuilder(8_192);
         AppendHeader(md, baseline);
         AppendDimensionOverview(
             md,
-            hasWorkload: File.Exists(workloadJsonPath ?? string.Empty),
-            hasMemory: File.Exists(memoryJsonPath ?? string.Empty),
-            startupPassed: string.Equals(startupStatus, "ok", StringComparison.OrdinalIgnoreCase));
+            hasWorkload: File.Exists(inputs.WorkloadJsonPath ?? string.Empty),
+            hasMemory: File.Exists(inputs.MemoryJsonPath ?? string.Empty),
+            startupPassed: string.Equals(inputs.StartupStatus, "ok", StringComparison.OrdinalIgnoreCase),
+            runs);
         int passed = AppendBdnSection(md, baseline, results);
-        AppendOptionalSection(md, workloadJsonPath, AppendWorkloadSection);
-        AppendOptionalSection(md, memoryJsonPath, AppendMemorySection);
+        AppendOptionalSection(md, inputs.WorkloadJsonPath, AppendWorkloadSection);
+        AppendOptionalSection(md, inputs.MemoryJsonPath, AppendMemorySection);
+        AppendCrossFixtureSection(md, inputs.EnvelopesDirectory, inputs.IndexBaselinePath);
         md.AppendLine();
         md.AppendLine("> 本报告由 `tools/PalORM.PerfGate report` 生成；口径与阈值定义见 docs/性能基准规范.md。");
 
@@ -75,38 +81,105 @@ internal static partial class ReportGenerator
         return (passed, baseline.Benchmarks.Count);
     }
 
-    /// <summary>12 维总览——每维一行：状态 + 本轮数据来源。未测维度如实列出，
-    /// 防止"报告只有绿项"掩盖覆盖缺口（规范 §1 的矩阵即为本表的真源）。</summary>
-    private static void AppendDimensionOverview(StringBuilder md, bool hasWorkload, bool hasMemory, bool startupPassed)
+    /// <summary>可选输入路径——统一报告的数据来源。缺项即"该节未采集"，不是错误。</summary>
+    internal sealed record ReportInputs(
+        string? WorkloadJsonPath,
+        string? MemoryJsonPath,
+        string? StartupStatus,
+        string? EnvelopesDirectory,
+        string? IndexBaselinePath);
+
+    /// <summary>跨夹具节——把结果库里三套夹具的批次、口径登记、健康度与关键项追加到同一份报告。
+    /// 这是"一次跑测出一份报告"的落点：此前 BDN 明细在 perf-report-*.md、跨夹具登记在
+    /// perf-index.md，读者要自己拼。</summary>
+    private static void AppendCrossFixtureSection(
+        StringBuilder md, string? envelopesDirectory, string? indexBaselinePath)
     {
+        md.AppendLine();
+        md.AppendLine("---");
+        md.AppendLine();
+        md.AppendLine("## 跨夹具批次登记");
+        md.AppendLine();
+
+        if (string.IsNullOrEmpty(envelopesDirectory))
+        {
+            md.AppendLine("（未传入 `--envelopes`，本节未采集）");
+            return;
+        }
+
+        if (!IndexGenerator.TryAppend(md, envelopesDirectory, out string reason))
+        {
+            md.AppendLine(CultureInfo.InvariantCulture, $"（{reason}）");
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(indexBaselinePath) && File.Exists(indexBaselinePath))
+        {
+            md.AppendLine();
+            md.AppendLine(CultureInfo.InvariantCulture, $"索引门禁基线：`{indexBaselinePath}`。");
+            md.AppendLine("判定命令 `tools/PalORM.PerfGate check-index --baseline <该文件>`"
+                + "（本报告不重复其退出码）。");
+        }
+    }
+
+    /// <summary>12 维总览——每维一行：状态 + 本轮数据来源。未测维度如实列出，
+    /// 防止"报告只有绿项"掩盖覆盖缺口（规范 §1 的矩阵即为本表的真源）。
+    /// <para>状态由**本轮实测批次**推导（<paramref name="runs"/>），不按"功能是否存在"写死：
+    /// 硬编码曾把已实现的维度 8（PerfHub 往返计数）与维度 10（长稳量具）标成"未实现"。</para></summary>
+    private static void AppendDimensionOverview(
+        StringBuilder md, bool hasWorkload, bool hasMemory, bool startupPassed,
+        List<PerfResultEnvelope> runs)
+    {
+        PerfResultEnvelope? perfhub = Latest(runs, "perfhub");
+        PerfResultEnvelope? dappersuite = Latest(runs, "dappersuite");
+        PerfResultEnvelope? stability = runs.FirstOrDefault(static r =>
+            r.Label.Contains("stability", StringComparison.OrdinalIgnoreCase));
+        bool hasRoundTrips = perfhub?.Items.Any(static i => i.RoundTripsPerOp > 0) == true;
+
         md.AppendLine("## 12 维总览");
         md.AppendLine();
         md.AppendLine("| # | 维度 | 本轮状态 | 本轮结果 / 缺口 |");
-        md.AppendLine($"|---|---|---|---|");
-        md.AppendLine(CultureInfo.InvariantCulture, $"| 1 | 单操作微基准 | ✅ 已测 | BDN 27 项，见下表 |");
-        md.AppendLine(CultureInfo.InvariantCulture, $"| 2 | 批量吞吐 | ⚠️ 部分 | 分配维度见基线；远程真库档属本地探针（WITH_REMOTE），本轮未采 |");
+        md.AppendLine("|---|---|---|---|");
+        md.AppendLine("| 1 | 单操作微基准 | ✅ 已测 | BDN 基线项见下表 |");
+        md.AppendLine(perfhub is not null
+            ? "| 2 | 批量吞吐 | ✅ 已测 | PerfHub 跨方言批量五形态（BulkInsert/Update/Delete/UpsertBatch/TxBulkInsert） |"
+            : "| 2 | 批量吞吐 | ⚠️ 部分 | 仅 BDN SQLite 档；PerfHub 批次缺失 |");
         md.AppendLine(hasWorkload
             ? "| 3 | 延迟分布 | ✅ 已测 | p50/p95/p99 见负载表 |"
             : "| 3 | 延迟分布 | ❌ 未采集 | 缺 --workload JSON |");
         md.AppendLine(hasWorkload
-            ? "| 4 | 并发扩展 | ✅ 已测 | 线程档 1/2/4/8 曲线见负载表 |"
+            ? "| 4 | 并发扩展 | ✅ 已测 | 线程档曲线见负载表 |"
             : "| 4 | 并发扩展 | ❌ 未采集 | 缺 --workload JSON |");
-        md.AppendLine("| 5 | 数据形状敏感性 | ⚠️ 部分 | 本轮仅 S1；S2–S5 待各基准接入 |");
+        md.AppendLine("| 5 | 数据形状敏感性 | ⚠️ 部分 | S1 全档 + S2 宽表；S3/S4/S5 仅在 BDN 专项类覆盖 |");
         md.AppendLine("| 6 | 连接与池 | ❌ 未测 | 建连/空闲回收/churn 专项探针（D3 先例） |");
         md.AppendLine(hasMemory
-            ? "| 7 | 资源效率 | ✅ 部分 | 分配/存活曲线见内存表；流式对比不可做（无真流式公共 API） |"
+            ? "| 7 | 资源效率 | ✅ 部分 | 分配/存活曲线见内存表；流式对比仅在 PerfHub StreamAll |"
             : "| 7 | 资源效率 | ❌ 未采集 | 缺 --memory JSON |");
-        md.AppendLine("| 8 | 往返与语句效率 | ❌ 未测 | 需 Provider 往返计数器（未实现） |");
+        md.AppendLine(hasRoundTrips
+            ? "| 8 | 往返与语句效率 | ✅ 已测 | PerfHub 计数装饰器实测往返/op 与 prepared 复用（见关键项表） |"
+            : "| 8 | 往返与语句效率 | ❌ 未采集 | 缺 PerfHub 批次（计数装饰器仅 SQLite 方言生效） |");
         md.AppendLine(startupPassed
             ? "| 9 | 启动与冷路径 | ✅ 已测 | 规模量具全绿（单方法 IL ≤64KB 上界，两维） |"
             : "| 9 | 启动与冷路径 | ⚠️ 未采集 | 启动量具结果未传入（--startup ok） |");
-        md.AppendLine("| 10 | 长时稳定 | ❌ 未测 | 30 min+ 持续负载（未实现） |");
+        md.AppendLine(stability is not null
+            ? $"| 10 | 长时稳定 | ⚠️ 见时间 | 量具已实现（规范 §5）；最近长稳批次 {stability.Timestamp}，"
+                + "早于本轮即视为本轮未采集 |"
+            : "| 10 | 长时稳定 | ❌ 未采集 | 本批未跑 --stability（量具已实现，见规范 §5） |");
         md.AppendLine(hasWorkload
             ? "| 11 | 混合负载 | ✅ 已测 | 80/20 读写混合（见负载表） |"
             : "| 11 | 混合负载 | ❌ 未采集 | 缺 --workload JSON |");
-        md.AppendLine("| 12 | 统计纪律 | ✅ | 阈值余量按实测噪声底标定（规范 §4） |");
+        md.AppendLine(dappersuite is not null
+            ? "| 12 | 统计纪律 | ✅ | 阈值余量按实测噪声底标定（规范 §4）；官方形状哨兵批次已在结果库 |"
+            : "| 12 | 统计纪律 | ✅ | 阈值余量按实测噪声底标定（规范 §4） |");
         md.AppendLine();
     }
+
+    /// <summary>结果库中某夹具最近一批（含子集标记——这里要的是"本轮有没有采到"，不是"能不能引用"）。
+    /// <para>跳过有失败登记的批次：方言全失败时批次只剩基线项，用它判定会把"没采到"读成"已采集"。</para></summary>
+    private static PerfResultEnvelope? Latest(List<PerfResultEnvelope> runs, string harness)
+        => runs.FirstOrDefault(r =>
+            r.Harness.Equals(harness, StringComparison.OrdinalIgnoreCase)
+            && !r.Sections.Any(static s => s.Kind.Contains("failure", StringComparison.OrdinalIgnoreCase)));
 
     private static void AppendHeader(StringBuilder md, PerfBaseline baseline)
     {

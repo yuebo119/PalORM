@@ -37,7 +37,7 @@ bash scripts/dappersuite-run.sh pg
 
 **结果登记**：除 BDN 工件与本文档的结果表外，每次跑测写一份结果库信封
 （`bench/results/dappersuite-*.json`，含提交号、口径登记、健康度），统一登记处见
-`bench/results/README.md`。跨夹具索引：`bash scripts/perf.sh report`。
+`bench/results/README.md`。跨夹具索引：`bash scripts/perf.sh index`（同一内容已含在唯一报告里）。
 
 ## 3. 口径差登记（与官方的全部偏离，逐条给理由）
 
