@@ -1015,6 +1015,9 @@ public struct QueryBuilder<T> where T : class, new()
     // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
     private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
+        // PERF-005（2026-09-23）：零参数查询直接返回空表——原先仍分配 List（约 32B/查询），
+        // 而 _parameterCount == 0 时任何类别过滤的结果必然为空。
+        if (_parameterCount == 0) return [];
         // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
         var parameters = new List<DbParameter>(_parameterCount);
         foreach (QueryClause clause in MaterializeClauses())
@@ -1135,7 +1138,10 @@ public struct QueryBuilder<T> where T : class, new()
             }
             finally { literal.Dispose(); }
         }
-        var parameters = new List<DbParameter>(2);
+        // PERF-005（2026-09-23）：2 元素数组直填替代 List + [.. parameters] 二次拷贝——
+        // 每页查询省一个 List（对象 + 内部数组）与一次数组拷贝。
+        var parameters = new DbParameter[2];
+        int parameterIndex = 0;
         var sb = new ValueStringBuilder(stackalloc char[64]);
         try
         {
@@ -1147,22 +1153,22 @@ public struct QueryBuilder<T> where T : class, new()
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        DbParameter skipParam = CreateParameter(_skip!.Value, parameters.Count);
-                        parameters.Add(skipParam);
+                        DbParameter skipParam = CreateParameter(_skip!.Value, parameterIndex);
+                        parameters[parameterIndex++] = skipParam;
                         sb.Append(skipParam.ParameterName);
                         sb.Append(", ");
                         sb.Append(SqlLimits.MySqlOffsetOnlyLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         break;
                     case SqlDialect.Sqlite:
                         sb.Append("LIMIT -1 OFFSET ");
-                        DbParameter sqliteSkip = CreateParameter(_skip!.Value, parameters.Count);
-                        parameters.Add(sqliteSkip);
+                        DbParameter sqliteSkip = CreateParameter(_skip!.Value, parameterIndex);
+                        parameters[parameterIndex++] = sqliteSkip;
                         sb.Append(sqliteSkip.ParameterName);
                         break;
                     default:
                         sb.Append("OFFSET ");
-                        DbParameter pgSkip = CreateParameter(_skip!.Value, parameters.Count);
-                        parameters.Add(pgSkip);
+                        DbParameter pgSkip = CreateParameter(_skip!.Value, parameterIndex);
+                        parameters[parameterIndex++] = pgSkip;
                         sb.Append(pgSkip.ParameterName);
                         break;
                 }
@@ -1173,27 +1179,33 @@ public struct QueryBuilder<T> where T : class, new()
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        DbParameter mysqlSkip = CreateParameter(_skip ?? 0, parameters.Count);
-                        parameters.Add(mysqlSkip);
+                        DbParameter mysqlSkip = CreateParameter(_skip ?? 0, parameterIndex);
+                        parameters[parameterIndex++] = mysqlSkip;
                         sb.Append(mysqlSkip.ParameterName);
                         sb.Append(", ");
-                        DbParameter mysqlTake = CreateParameter(_take.Value, parameters.Count);
-                        parameters.Add(mysqlTake);
+                        DbParameter mysqlTake = CreateParameter(_take.Value, parameterIndex);
+                        parameters[parameterIndex++] = mysqlTake;
                         sb.Append(mysqlTake.ParameterName);
                         break;
                     default:
                         sb.Append("LIMIT ");
-                        DbParameter takeParam = CreateParameter(_take.Value, parameters.Count);
-                        parameters.Add(takeParam);
+                        DbParameter takeParam = CreateParameter(_take.Value, parameterIndex);
+                        parameters[parameterIndex++] = takeParam;
                         sb.Append(takeParam.ParameterName);
                         sb.Append(" OFFSET ");
-                        DbParameter skipParam2 = CreateParameter(_skip ?? 0, parameters.Count);
-                        parameters.Add(skipParam2);
+                        DbParameter skipParam2 = CreateParameter(_skip ?? 0, parameterIndex);
+                        parameters[parameterIndex++] = skipParam2;
                         sb.Append(skipParam2.ParameterName);
                         break;
                 }
             }
-            return (sb.ToString(), [.. parameters]);
+            DbParameter[] result = parameterIndex switch
+            {
+                0 => System.Array.Empty<DbParameter>(),
+                1 => [parameters[0]],
+                _ => parameters,
+            };
+            return (sb.ToString(), result);
         }
         finally { sb.Dispose(); }
     }
