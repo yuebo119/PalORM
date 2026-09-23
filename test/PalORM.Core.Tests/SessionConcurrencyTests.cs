@@ -81,7 +81,7 @@ public sealed class SessionConcurrencyTests
                 await session.WithTransaction(async ct =>
                 {
                     abandoned = session.QueryAsyncEnumerable<SessionConcurrencyEntity>(
-                        $"SELECT * FROM session_concurrency", ct).GetAsyncEnumerator(ct);
+                        $"SELECT * FROM session_concurrency", ct: ct).GetAsyncEnumerator(ct);
                     // 必须 MoveNextAsync 一次才真正进入迭代器体并持有操作租约——
                     // GetAsyncEnumerator 本身不执行体，租约不会被占
                     if (!await abandoned.MoveNextAsync())
