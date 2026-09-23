@@ -120,6 +120,11 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
+            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
+            // （NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
+            // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
+            if (builder._resilience.IsTransient(exception))
+                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
             NotifyInterceptorsOnError(builder._interceptors, context, exception);
             throw;
         }
@@ -227,6 +232,11 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
+            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
+            // （NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
+            // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
+            if (builder._resilience.IsTransient(exception))
+                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
             NotifyInterceptorsOnError(builder._interceptors, context, exception);
             throw;
         }
@@ -475,6 +485,9 @@ public static class QueryBuilderExtensions
             observation?.Complete(exception is OperationCanceledException && ct.IsCancellationRequested
                 ? "cancelled"
                 : "error");
+            // READ-001（2026-09-23）：同 SELECT 管线——读路由瞬时故障丢弃会话缓存的读连接
+            if (builder._resilience.IsTransient(exception))
+                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
             await CleanupQueryResourcesAsync(grid, command, exception).ConfigureAwait(false);
             throw;
         }

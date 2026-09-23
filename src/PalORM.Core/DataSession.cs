@@ -47,6 +47,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>读连接提供者——会话级复用，无读连接串时为 null（读路由退化为主连接）。
     /// 缓存为实例字段：方法组直接传给 QueryBuilderContext 会在每次 From&lt;T&gt;() 分配闭包。</summary>
     private readonly Func<CancellationToken, ValueTask<DbConnection>>? _readConnProvider;
+    /// <summary>读连接失效上报（READ-001，2026-09-23）——配置读路由时非 null，
+    /// 由读路径在瞬时失败时调用（见 <see cref="InvalidateReadConnectionAsync"/>）。</summary>
+    private readonly Func<ValueTask>? _readConnInvalidator;
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
     {
@@ -61,6 +64,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 捕获构造期 options——WithTimeout/WithRetry 后读连接与主连接的池参数/超时口径一致。
         _readConnectionString = options.ResolveReadConnectionString();
         _readConnProvider = _readConnectionString is not null ? AcquireReadConnectionAsync : null;
+        // READ-001（2026-09-23）：读连接失效上报——只在配置了读路由时挂接（方法组一次性缓存，
+        // 不在 From<T>() 里新建委托）。见 InvalidateReadConnectionIfCurrentAsync。
+        _readConnInvalidator = _readConnectionString is not null ? InvalidateReadConnectionAsync : null;
         // v5.0 阶段 5.2：读连接初始化器——无 ReadSessionSetupSql 时用 static 委托（零闭包分配），
         // 有时包装一层实例委托追加执行 ReadSessionSetupSql。
         _readConnInitializer = string.IsNullOrWhiteSpace(options.ReadSessionSetupSql)
@@ -247,6 +253,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
         _readConnection = created;
         return created;
+    }
+
+    /// <summary>丢弃会话持有的读连接（READ-001，2026-09-23）——读路径瞬时失败时经
+    /// <see cref="QueryBuilder{T}.InvalidateReadConnectionAsync"/> 上报：静默掐断（NAT 超时 /
+    /// LB 空闲切断、无 FIN/RST）后 <c>State</c> 仍为 Open，不丢弃则后续查询复用同一条死连接。
+    /// 幂等：无读连接或已丢弃时为空操作。</summary>
+    internal async ValueTask InvalidateReadConnectionAsync()
+    {
+        if (_readConnection is null) return;
+        // 释放结果忽略：连接已不可用，清理异常无诊断价值（与 AcquireReadConnectionAsync
+        // 丢弃失效连接时同口径）。
+        await DisposeReadConnectionAsync().ConfigureAwait(false);
     }
 
     /// <summary>释放并清空会话持有的读连接，返回释放异常（无异常返回 null）。
