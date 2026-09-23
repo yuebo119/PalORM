@@ -80,6 +80,29 @@ public sealed class SqlShapeCacheGrowthTests
     }
 
     [Test]
+    public async Task DuplicateShape_SecondAdd_DoesNotConsumeCapacity()
+    {
+        // CACHE-001（2026-09-23）：Add 原实现计数先行且不查重——并发同形状双写会留下全等重复条目，
+        // 侵蚀 1024 名额（计数到顶后新形状永远拒写，等于缓存冻结）。入队前查重后，同形状第二次写入
+        // 不再占名额。直接调 Add 构造该场景：顺序构建会被 FindMatch 命中，走不到 Add。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        SqlShapeCache.Clear();
+#pragma warning disable PALORM005 // ToSql() 纯构建不打数据库
+        QueryBuilder<ShapeProbeEntity> builder = session.From<ShapeProbeEntity>()
+            .Where($"name = {"dup-probe"}");
+        _ = builder.ToSql();
+#pragma warning restore PALORM005
+        QueryClause[] clauses = builder._materializedClauses!;
+        var fields = new SqlShapeCache.ShapeFields(SqlDialect.Sqlite, false, false, false, "shape_probe", null, 0);
+
+        SqlShapeCache.Add(4242, clauses, fields, "SELECT dup-probe");
+        SqlShapeCache.Add(4242, clauses, fields, "SELECT dup-probe");
+
+        await Assert.That(SqlShapeCache.Entries.Count(
+            e => e.FullSql == "SELECT dup-probe")).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task DynamicTagValues_NewShapeRejectedWhenCacheFull()
     {
         // A1 的残余无界源（OFFSET 排除之外）：Tag 的业务标识是裸文本子句，动态值
@@ -93,9 +116,11 @@ public sealed class SqlShapeCacheGrowthTests
             for (int i = 0; i < 10_000; i++)
                 _ = session.From<ShapeProbeEntity>().Where($"id > {i}").Tag($"biz-{i}").ToSql();
 
-            // 全新形状：缓存已满（1024 上限拒写）则它不进缓存
+            // 全新形状：缓存已满（1024 上限拒写）则它不进缓存。
+            // CACHE-001（2026-09-23）：形状含 Tag 注释文本，用唯一 Tag 保证"全新"由构造决定——
+            // 此前依赖"本进程没人建过 name=@p0 这个形状"，会被同组其它用例（如 ClonedBuilder）撞掉。
             string freshShape = session.From<ShapeProbeEntity>()
-                .Where($"name = {"fresh-probe-x"}").ToSql();
+                .Where($"name = {"fresh-probe-x"}").Tag($"fresh-{Guid.NewGuid():N}").ToSql();
 #pragma warning restore PALORM005
 
             await Assert.That(SqlShapeCache.Entries.Count(

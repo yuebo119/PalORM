@@ -73,11 +73,25 @@ internal static class SqlShapeCache
         return null;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3267:LoopsShouldBeSimplifiedWithLinq",
+        Justification = "查重与查找同在查询热路径上：LINQ 形式每次分配委托+迭代器，抵消缓存收益。"
+            + "手写循环零分配（与 FindMatch 同口径）。")]
     public static void Add(
         int shapeHash,
         IReadOnlyList<QueryClause> clauses,
         ShapeFields fields, string fullSql)
     {
+        ConcurrentQueue<SqlShapeEntry> bucket =
+            Buckets.GetOrAdd(shapeHash, static _ => new ConcurrentQueue<SqlShapeEntry>());
+        // CACHE-001（2026-09-23）：入队前查重——并发同形状双写会留下全等重复条目，侵蚀 1024 名额
+        // （计数先行且到顶后新形状永远拒写，等于缓存冻结）。桶内条目极少（通常 1-2 条），
+        // 手写循环零分配（与 FindMatch 同口径，不用 LINQ）。
+        foreach (SqlShapeEntry existing in bucket)
+        {
+            if (existing.Matches(clauses, fields)) return;
+        }
+
         // 容量纪律（审计 A1）：满则拒写。被拒的形状此后逐次重建——行为等同于缓存不存在，
         // 正确性不受影响；动态 Tag/Raw 值等残余无界源由此兜底。
         if (Volatile.Read(ref _totalEntries) >= MaxEntries) return;
@@ -89,8 +103,7 @@ internal static class SqlShapeCache
             sequence[i] = clauses[i].Sql;
         }
 
-        var entry = new SqlShapeEntry(sequence, fields, fullSql);
-        Buckets.GetOrAdd(shapeHash, static _ => new ConcurrentQueue<SqlShapeEntry>()).Enqueue(entry);
+        bucket.Enqueue(new SqlShapeEntry(sequence, fields, fullSql));
     }
 
     /// <summary>全缓存条目总数——诊断与测试观测点（O(1) 读计数器）。

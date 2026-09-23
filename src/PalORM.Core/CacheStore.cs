@@ -43,6 +43,9 @@ public sealed class BoundedQueryCache : IQueryCache
     // ObservableGauge 在 Pull 模式下被 OTel 主动轮询——缓存读取路径零开销（不每次 Set/TryGet 计数）。
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
     private readonly int _maxEntries;
+    /// <summary>条目数近似计数（CACHE-001，2026-09-23）——容量判定用，避免每次 Set 付
+    /// ConcurrentDictionary.Count 的全分段锁扫描。诊断口径（gauge）仍读精确的 <c>_cache.Count</c>。</summary>
+    private int _approximateCount;
     private readonly string _instanceId = Guid.NewGuid().ToString("N");
 
     // 评审 2026-09-02 结构化：gauge 注册从"每实例"改为"进程级单次 + 弱引用实例表"。
@@ -136,6 +139,7 @@ public sealed class BoundedQueryCache : IQueryCache
                 _evictions.Add(1);  // 过期淘汰
             }
             _cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry));
+            Interlocked.Decrement(ref _approximateCount);
         }
         _requests.Add(1, MissTag);
         value = default;
@@ -145,16 +149,33 @@ public sealed class BoundedQueryCache : IQueryCache
     /// <inheritdoc />
     public void Set<T>(string key, T value, TimeSpan? ttl = null) where T : class
     {
-        if (_cache.Count >= _maxEntries && !_cache.ContainsKey(key))
+        // CACHE-001（2026-09-23）：容量判定改用 Interlocked 近似计数——原实现每次 Set 付一次
+        // ConcurrentDictionary.Count（全分段锁扫描）加一次 ContainsKey，是写入路径上唯一的全局争用点。
+        // 计数在"新键成功入表"时自增、在任何移除路径上自减，语义为近似值：漂移方向只会偏保守
+        // （漏减 → 提前拒写），不会无界放行。
+        // 满员时只拒新键：既有键的更新必须放行（原语义——读路径依赖"后写者胜"，且
+        // ContainsKey 是 O(1) 查表，比原实现每次付的 Count 全分段锁扫描便宜得多）。
+        if (Volatile.Read(ref _approximateCount) >= _maxEntries && !_cache.ContainsKey(key))
         {
             EvictExpired();
-            if (_cache.Count >= _maxEntries) return;
+            if (Volatile.Read(ref _approximateCount) >= _maxEntries) return;
         }
-        _cache[key] = new CacheEntry(value, ttl ?? TimeSpan.FromMinutes(5));
+        var entry = new CacheEntry(value, ttl ?? TimeSpan.FromMinutes(5));
+        if (_cache.TryAdd(key, entry))
+        {
+            Interlocked.Increment(ref _approximateCount);
+            return;
+        }
+        // 已存在的键：覆盖更新，计数不变（原语义：满员时仍允许更新既有键）
+        _cache[key] = entry;
     }
 
     /// <inheritdoc />
-    public void Clear() => _cache.Clear();
+    public void Clear()
+    {
+        _cache.Clear();
+        Volatile.Write(ref _approximateCount, 0);
+    }
 
     private void EvictExpired()
     {
@@ -163,8 +184,11 @@ public sealed class BoundedQueryCache : IQueryCache
         if (expired.Count > 0)
         {
             _evictions.Add(expired.Count);
+            int removed = 0;
             foreach (var pair in expired)
-                _cache.TryRemove(pair);
+                removed += _cache.TryRemove(pair) ? 1 : 0;
+            if (removed > 0)
+                Interlocked.Add(ref _approximateCount, -removed);
         }
     }
 
