@@ -158,12 +158,22 @@ internal static class Program
         var swTotal = Stopwatch.StartNew();
         using var cts = new CancellationTokenSource();
 
+        // 档位策略：行数不进测量的项只在最小档跑（见 RowCountSensitive）。
+        // 进度条的分母同时确定，每项测量后更新分子。
+        _minTier = tiers.Min();
+        _planned = PlannedMeasurements(available, tiers, concurrency, threadTiers);
+        Console.WriteLine($"[PerfHub] 计划 {_planned} 项测量"
+            + $"（{available.Count} 方言 × {tiers.Count} 档 × {ImplCount} 臂"
+            + (concurrency ? $" + 并发 {threadTiers.Count} 线程档" : "")
+            + $"；行数不进测量的 {OperationNames.Count(op => !RowCountSensitive(op))} 项只在 {_minTier:N0} 档跑）");
+
         // ── 数据生成基线：与实现、方言无关，每档位一条 ──
         // 回答「测试数据自身的真实内存占用峰值」——不含 ORM、不含数据库。
         foreach (int rows in tiers)
         {
             Measurement gen = Measure.MeasureDataGeneration(rows);
             results.Add(gen);
+            _done++;
             Console.WriteLine($"[PerfHub] 数据生成基线 {rows:N0} 行: "
                 + $"{Fmt.Bytes(gen.AllocatedBytesPerOp)}/行 · 堆峰 {Fmt.Bytes(gen.PeakHeapBytes)}");
         }
@@ -195,7 +205,17 @@ internal static class Program
 
         swTotal.Stop();
         Console.WriteLine();
-        Console.WriteLine($"[PerfHub] 完成，共 {results.Count} 项测量，耗时 {swTotal.Elapsed.TotalMinutes:F1} 分钟");
+        // 计划数与实际数对账——进度条说谎比没有进度条更糟。差值通常来自失败项
+        //（失败项不进 results）或并发探针跳过，故只警告不判失败。
+        if (_planned > 0 && _done != _planned)
+        {
+            Console.Error.WriteLine($"[PerfHub] ⚠ 进度对账不符：计划 {_planned} 项，实际 {_done} 项"
+                + $"（差 {_done - _planned:+0;-0}）——常见原因是失败项或并发探针被跳过；"
+                + "若差值持续存在，检查 OperationNames 是否与 RunOneImplAsync 的调用点同步");
+        }
+
+        Console.WriteLine($"[PerfHub] 完成，共 {results.Count} 项测量，耗时 {Fmt.Duration(swTotal.Elapsed)}"
+            + $"（{swTotal.Elapsed.TotalMinutes:F1} 分钟）");
 
         Save(results, label, version, swTotal.Elapsed, dialectFailures, itemFailures);
         Report.Build();
@@ -307,13 +327,18 @@ internal static class Program
                             Measurement m = await Measure.ConcurrentAsync(info, impl, rows, threads, 2.0, 0.20, ct)
                                 .ConfigureAwait(false);
                             results.Add(m);
-                            Console.WriteLine($"    {impl.Name,-9} {threads,2} 线程  {m.OpsPerSecond,10:N0} ops/s  "
+                            Console.WriteLine($"{ProgressPrefix()} {impl.Name,-9} {threads,2} 线程  "
+                                + $"{m.OpsPerSecond,10:N0} ops/s  "
                                 + $"p50={m.P50Ms,6:F2}ms p95={m.P95Ms,6:F2}ms p99={m.P99Ms,6:F2}ms");
                         }
                         catch (InvalidOperationException ex)
                         {
                             // 3 秒的并发探针不该中断整轮测量——记明跳过原因继续跑
                             Console.WriteLine($"    {impl.Name,-9} {threads,2} 线程  跳过 — {ex.Message}");
+                        }
+                        finally
+                        {
+                            _done++;
                         }
                     }
                 }
@@ -447,7 +472,6 @@ internal static class Program
         long[] keys = Dataset.KeySet(rows);
         long[] whereInIds = BuildWhereInIds(rows);
         int bulkDeleteIters = BulkDeleteRounds(rows);
-
         // ── Build：纯 SQL 构建开销，不执行、不碰库 ──
         await MeasAsync(info, impl, "BuildGetByKeySql", "Build", rows, conn, results, scale, null,
             (im, c, i) =>
@@ -571,14 +595,11 @@ internal static class Program
             }, ct).ConfigureAwait(false);
 
         // ── Transaction：真实业务形态（开启事务 → N 条写 → 提交/回滚）──
+        // 1 条 / 100 条两点已能分离「事务固定开销」与「每条约边际成本」，故不测 10 条那一点
+        //（2026-09-23 精简：三点系列的中间点信息量最小）。
         await MeasAsync(info, impl, "TxSingleInsert", "Transaction", rows, conn, results, scale, reset,
             async (im, c, i) => await im.TxSingleInsertAsync(c, Dataset.Seed(rows + i), ct)
                 .ConfigureAwait(false), ct).ConfigureAwait(false);
-
-        await MeasAsync(info, impl, "TxTenInserts", "Transaction", rows, conn, results, scale, reset,
-            async (im, c, i) => await im.TxTenInsertsAsync(
-                c, Dataset.SeedRows(10, rows + ((long)i * 10)), ct).ConfigureAwait(false),
-            ct).ConfigureAwait(false);
 
         await MeasAsync(info, impl, "TxHundredInserts", "Transaction", rows, conn, results, scale, reset,
             async (im, c, i) => await im.TxHundredInsertsAsync(
@@ -599,14 +620,19 @@ internal static class Program
 
     }
 
-    /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。</summary>
+    /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。
+    /// 行数不进测量的项在非最小档直接跳过（见 <see cref="RunsAtTier"/>）。</summary>
     private static async Task MeasAsync(
         DialectInfo info, IPerfImplementation impl, string operation, string group, int rows,
         DbConnection conn, List<Measurement> results, double scale,
         Func<DbConnection, Task>? prepare,
         Func<IPerfImplementation, DbConnection, int, Task> action, CancellationToken ct)
     {
-        _ = (rows, scale);
+        if (!RunsAtTier(operation, rows))
+        {
+            return;
+        }
+
         try
         {
             // 单测量墙钟耗时——只进控制台，不进结果信封（信封 schema 与门禁都读不到它）。
@@ -626,6 +652,64 @@ internal static class Program
                 $"{impl.Name} / {operation} / {info.DisplayName} / {rows} 行 失败", ex);
         }
     }
+
+    /// <summary>本轮的最小档位——"行数不进测量"的项只在它上面跑一次（<see cref="RunAsync"/> 设置）。</summary>
+    private static int _minTier = Dataset.Tiers[0];
+
+    /// <summary>进度条的分子/分母——实时标示"跑到哪了、用了多久"。</summary>
+    private static int _done;
+    private static int _planned;
+    private static readonly Stopwatch _progressClock = Stopwatch.StartNew();
+
+    /// <summary>行数是否真的进入该项的测量。判据是操作的签名与动作里有没有用到行数：
+    /// <list type="bullet">
+    /// <item><c>Build*</c>：不碰库，签名里只有 id / 没有参数——两档是**同一个测量的复制品**</item>
+    /// <item><c>InsertReturningId</c>：用每次清空的独立自增表，行数不进测量</item>
+    /// <item><c>IncludeJoin</c>：固定 50 父 × 每父 3 子</item>
+    /// <item><c>TxSingleInsert</c>/<c>TxHundredInserts</c>：事务内条数固定（1 / 100 条）</item>
+    /// <item><c>TxRollback</c>：撤销量上限固定 500（规范已登记"回滚成本由撤销量决定"）</item>
+    /// <item><c>TxBulkInsert</c>：与 <c>BulkInsert</c> 近重复（地板臂的 BulkInsert 本身就自开事务包整批），
+    /// 保留它是为覆盖"批量装载器在显式事务内"这条产品路径，属语义检查而非规模问题</item>
+    /// </list>
+    /// <para>2026-09-23 精简：这些项原本两档都跑，等于把同一个测量做两遍——按实测逐项耗时，
+    /// 砍掉它们的第二档只省约 1.6% 时间，但省下 7 项 × 3 臂 = 每方言 21 个重复测量。</para></summary>
+    private static bool RowCountSensitive(string operation) => operation is not (
+        "BuildGetByKeySql" or "BuildComplexQuerySql" or "InsertReturningId" or "IncludeJoin"
+        or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert");
+
+    /// <summary>该项是否在给定档位测量。</summary>
+    private static bool RunsAtTier(string operation, int rows)
+        => rows <= _minTier || RowCountSensitive(operation);
+
+    /// <summary>本轮的测试项名——**必须与 <see cref="RunOneImplAsync"/> 里的 MeasAsync 调用一一对应**。
+    /// 它只用于算进度条的分母；结束时会把实际测量数与计划数对账，不一致就打警告
+    /// （进度条说谎比没有进度条更糟）。</summary>
+    private static readonly string[] OperationNames =
+    [
+        "BuildGetByKeySql", "BuildComplexQuerySql",
+        "GetByKey", "QueryAll", "StreamAll", "Insert", "Update",
+        "BulkInsert", "BulkUpdate", "BulkDelete",
+        "KeysetPage", "WhereIn", "Count",
+        "UpsertBatch", "InsertReturningId", "WideQueryAll", "IncludeJoin",
+        "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback"
+    ];
+
+    /// <summary>本轮计划的测量数——进度条的分母。跳过项与未启用的并发档不计入。</summary>
+    private static int PlannedMeasurements(
+        List<DialectInfo> dialects, List<int> tiers, bool concurrency, List<int> threadTiers)
+    {
+        int perDialect = tiers.Sum(rows => OperationNames.Count(op => RunsAtTier(op, rows)) * ImplCount);
+        perDialect += tiers.Count;   // 每档 1 条数据生成基线
+        if (concurrency)
+        {
+            perDialect += tiers.Count * threadTiers.Count * ImplCount;
+        }
+
+        return perDialect * dialects.Count;
+    }
+
+    /// <summary>三臂（ADO.NET / Dapper / PalORM）。</summary>
+    private const int ImplCount = 3;
 
     /// <summary>BulkDelete 的播种轮数——**等于它的迭代上限**（两者必须严格相等，见
     /// <see cref="BulkDeleteMaxRounds"/> 与 <see cref="BulkDeleteSeedRowBudget"/> 的注释）。
@@ -694,14 +778,18 @@ internal static class Program
         return ids;
     }
 
-    /// <summary>打印一行测量结果。<paramref name="elapsed"/> 是本测量（预热 + 探针 + 计时）的墙钟耗时，
-    /// 用于归因"哪一项吃掉跑测时间"——它是调预算与砍项的依据，不参与任何判定。</summary>
+    /// <summary>打印一行测量结果。前缀是进度（<c>[k/n] 已用 Xm Ys</c>），后缀是本测量
+    /// （预热 + 探针 + 计时）的墙钟耗时——两者都只进控制台，不进结果信封，不参与任何判定。
+    /// <para>进度与耗时回答"跑到哪了、还要多久、时间花在哪"，是调预算与砍项的依据；
+    /// 只报指标不报这两项，优化就只能靠猜。ETA 按"已完成项的平均耗时 × 剩余项数"估算，
+    /// 而各项成本差三个量级（亚微秒的 Build 到秒级的批量），故它只作量级参考、会跳变。</para></summary>
     private static void PrintRow(Measurement[] rows, TimeSpan elapsed = default)
     {
         foreach (Measurement m in rows)
         {
+            _done++;
             string warn = m.ErrorRatio > 0.05 ? " !" : "";
-            string line = "    " + m.Implementation.PadRight(9) + " " + m.Operation.PadRight(20)
+            string line = ProgressPrefix() + " " + m.Implementation.PadRight(9) + " " + m.Operation.PadRight(20)
                 + " " + Fmt.Time(m.MedianNs).PadLeft(12) + "  "
                 + Fmt.Bytes(m.AllocatedBytesPerOp).PadLeft(10) + "/op  堆峰 "
                 + Fmt.Bytes(m.PeakHeapBytes).PadLeft(10) + "  Gen0=" + m.Gen0Collections.ToString().PadLeft(3)
@@ -710,6 +798,27 @@ internal static class Program
             Console.WriteLine(line);
         }
     }
+
+    /// <summary>进度前缀：<c>[ 47/118] 已用 3m12s 余约 5m40s</c>。分母为 0 时（未规划）只报已用时长。</summary>
+    private static string ProgressPrefix()
+    {
+        TimeSpan used = _progressClock.Elapsed;
+        if (_planned <= 0)
+        {
+            return $"[    已用 {Fmt.Duration(used)}]";
+        }
+
+        string eta = "—";
+        if (_done > 0 && used.TotalSeconds > 2)
+        {
+            double perItem = used.TotalSeconds / _done;
+            int remain = Math.Max(0, _planned - _done);
+            eta = Fmt.Duration(TimeSpan.FromSeconds(perItem * remain));
+        }
+
+        return $"[{_done,4}/{_planned}] 已用 {Fmt.Duration(used)} 余约 {eta}";
+    }
+
 
     private static Dialect ParseDialect(string s) => s.ToUpperInvariant() switch
     {

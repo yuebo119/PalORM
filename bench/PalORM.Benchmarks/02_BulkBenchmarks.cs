@@ -46,14 +46,6 @@ public class BulkBenchmarksFixed : IAsyncDisposable
         if (_keeper is not null) await _keeper.DisposeAsync();
     }
 
-    private void ResetTable()
-    {
-        // v5.0 优化：DROP+CREATE 替代 DELETE FROM——快 100x
-        using var cmd = _keeper!.CreateCommand();
-        cmd.CommandText = CreateTableSql;
-        cmd.ExecuteNonQuery();
-    }
-
     private async Task InsertFixedRowsAsync(int count)
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
@@ -63,30 +55,10 @@ public class BulkBenchmarksFixed : IAsyncDisposable
         await db.BulkInsertAsync(items);
     }
 
-    [IterationSetup(Target = nameof(Dapper_MultiRowInsert_10000))]
-    public void DapperMultiRowInsertSetup() => ResetTable();
-
-    [Benchmark, BenchmarkCategory("BulkInsert")]
-    public async Task<int> Dapper_MultiRowInsert_10000()
-    {
-        using var c = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
-        var items = Enumerable.Range(0, 10000)
-            .Select(i => new BenchOrder { status = $"D{i}", total = i * 10m, created_at = 0 }).ToArray();
-        return await c.ExecuteAsync(
-            "INSERT INTO bench_orders (status, total, created_at) VALUES (@status, @total, @created_at)", items);
-    }
-
-    [IterationSetup(Target = nameof(PalORM_BulkInsert_10000))]
-    public void PalORMBulkInsertSetup() => ResetTable();
-
-    [Benchmark, BenchmarkCategory("BulkInsert")]
-    public async Task<long> PalORM_BulkInsert_10000()
-    {
-        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
-        var items = Enumerable.Range(0, 10000)
-            .Select(i => new BenchOrder { status = $"B{i}", total = i * 10m, created_at = 0 }).ToList();
-        return await db.BulkInsertAsync(items);
-    }
+    // 2026-09-23 精简：原 Dapper_MultiRowInsert_10000 与 PalORM_BulkInsert_10000 已删——
+    // 它们与 BulkBenchmarks 的 [Params] 矩阵在 10000 档完全重复（同操作、同 IterationSetup），
+    // 而 Params 矩阵是维度 2「耗时-行数曲线」的唯一曲线源（4 点 100/1K/10K/100K），保留它即可。
+    // 本类只保留 Params 矩阵没有的固定量项：BulkUpdate_1000 与 BulkDelete_500。
 
     [IterationSetup(Target = nameof(PalORM_BulkUpdate_1000))]
     public async Task BulkUpdateSetup() => await InsertFixedRowsAsync(1000);

@@ -193,7 +193,7 @@ internal static class IndexGenerator
     /// <para><b>为什么必须显式列出</b>：一次 <c>--dialects sqlite</c> 的跑测标签是非子集
     /// （不含 quick/filtered 等），项数看着也不少，读者会把它当成"三方言全矩阵"。
     /// 实测 PG/MySQL 不可达期间的批次正是这种形态。</para></summary>
-    private static string DialectScope(PerfResultEnvelope r)
+    internal static string DialectScope(PerfResultEnvelope r)
     {
         string[] dialects = [.. r.Items
             .Select(static i => i.Dialect)

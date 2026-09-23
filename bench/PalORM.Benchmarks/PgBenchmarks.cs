@@ -1,7 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
-using Dapper;
 using Npgsql;
 using PalORM;
 using PalORM.PostgreSql;
@@ -9,11 +8,16 @@ using PalORM.PostgreSql;
 namespace PalORM.Benchmarks;
 
 // ═══════════════════════════════════════════════════════════════
-// 远程 PostgreSQL 基准
+// 远程 PostgreSQL 基准——**只保留 PerfHub 无同名覆盖的项**
+//
+// 2026-09-23 精简：原 9 项里删去 8 项（ADO/Dapper/PalORM 的 QueryAll、GetByKey、Insert
+// 与 PalORM_BulkInsert_10000）。理由与 MySqlBenchmarks 同：跨方言覆盖已由 PerfHub 权威承担
+//（规范 §1.1），本类需要真库、不在任何自动路径、无报告引用其结果。
+// 保留 PalORM_BulkUpdateBatch_PG：它是 PG 单语句 UPDATE FROM VALUES 方言路径的**唯一**覆盖
+//（PerfHub 的 BulkUpdate 是逐条 UPDATE），PerfHub 无同名项。
+//
 // 连接串从环境变量读取，避免硬编码：
 //   PALORM_BENCH_PG="Host=...;Port=5432;Username=...;Password=...;Database=palorm_bench"
-// v5.0 基准体系重构：拆自原 Program.cs 的 PgBenchmarks，引用 BenchmarkConfig 辅助方法
-// v5.0 阶段 4.3b：新增 BulkUpdateBatch_PG（PG UPDATE FROM VALUES 方言验证）
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
@@ -38,9 +42,8 @@ public class PgBenchmarks : IAsyncDisposable
         await ResetAsync();
     }
 
-    // r19/ITM-688：每次迭代重置为 10K seed——此前 BulkInsert 在 warmup+iteration 持续
-    // 插入，表从 10K 膨胀到 ~110K，后期迭代负载失真；批量组为 PalORM 特性单臂
-    //（无同 SQL 的 ORM 对照），不产组内 Ratio（BENCHMARKS.md 已声明）。
+    // 每次迭代重置为 10K seed——BulkUpdateBatch 每轮把 1000 行改成 status='U'，
+    // 不重置则第二轮起更新的是已改过的行（口径不一致）。
     [IterationSetup]
     public async Task IterationSetup()
         => await ResetAsync();
@@ -61,85 +64,10 @@ public class PgBenchmarks : IAsyncDisposable
         if (_keeper is not null) await _keeper.DisposeAsync();
     }
 
-    // ─── 查询 ───
-    [Benchmark(Baseline = true), BenchmarkCategory("Query")]
-    public async Task<List<BenchOrder>> ADO_NET_QueryAll()
-    {
-        using var c = BenchmarkConfig.OpenPg(Cs);
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders";
-        using var r = await cmd.ExecuteReaderAsync();
-        var list = new List<BenchOrder>(BenchmarkConfig.SeedRows);
-        while (await r.ReadAsync())
-            list.Add(new BenchOrder { id = r.GetInt64(0), status = r.GetString(1), total = r.GetDecimal(2), created_at = r.GetInt64(3) });
-        return list;
-    }
-
-    [Benchmark, BenchmarkCategory("Query")]
-    public async Task<List<BenchOrder>> Dapper_QueryAll()
-    {
-        using var c = BenchmarkConfig.OpenPg(Cs);
-        return (await c.QueryAsync<BenchOrder>("SELECT id, status, total, created_at FROM bench_orders")).AsList();
-    }
-
-    [Benchmark, BenchmarkCategory("Query")]
-    public async Task<List<BenchOrder>> PalORM_QueryAll()
-    {
-        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(_options);
-        return await db.From<BenchOrder>().ToListAsync();
-    }
-
-    // ─── 主键查询 ───
-    [Benchmark(Baseline = true), BenchmarkCategory("GetByKey")]
-    public async Task<BenchOrder?> ADO_NET_GetByKey()
-    {
-        using var c = BenchmarkConfig.OpenPg(Cs);
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT id, status, total, created_at FROM bench_orders WHERE id = 5000";
-        using var r = await cmd.ExecuteReaderAsync();
-        return await r.ReadAsync() ? new BenchOrder { id = r.GetInt64(0), status = r.GetString(1), total = r.GetDecimal(2), created_at = r.GetInt64(3) } : null;
-    }
-
-    [Benchmark, BenchmarkCategory("GetByKey")]
-    public async Task<BenchOrder?> PalORM_GetByKey()
-    {
-        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(_options);
-        return await db.GetAsync<BenchOrder>(5000L);
-    }
-
-    // ─── 插入 ───
-    [Benchmark(Baseline = true), BenchmarkCategory("Insert")]
-    public async Task<long> ADO_NET_Insert()
-    {
-        using var c = BenchmarkConfig.OpenPg(Cs);
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = "INSERT INTO bench_orders (status, total, created_at) VALUES ('X', 1.0, 1) RETURNING id";
-        return (long)(await cmd.ExecuteScalarAsync())!;
-    }
-
-    [Benchmark, BenchmarkCategory("Insert")]
-    public async Task<long> PalORM_Insert()
-    {
-        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(_options);
-        var e = await db.InsertAsync(new BenchOrder { status = "X", total = 1m, created_at = 1 });
-        return e.id;
-    }
-
-    // ─── 批量插入（PG 走 Binary COPY）───
-    [Benchmark, BenchmarkCategory("BulkInsert")]
-    public async Task PalORM_BulkInsert_10000()
-    {
-        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(_options);
-        var batch = Enumerable.Range(0, 10000)
-            .Select(i => new BenchOrder { status = $"B{i}", total = i, created_at = i }).ToArray();
-        await db.BulkInsertAsync(batch, batchSize: 1000);
-    }
-
     // ─── 批量更新（v5.0 阶段 4.3b：PG UPDATE FROM VALUES 方言）───
     [Benchmark, BenchmarkCategory("BulkUpdateBatch")]
     public async Task PalORM_BulkUpdateBatch_PG()
     {
-        // v5.0 阶段 4.3b：PG UPDATE FROM VALUES 方言验证
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(_options);
         var entities = Enumerable.Range(1, 1000)
             .Select(i => new BenchOrder { id = i, status = "U", total = i, created_at = i }).ToList();

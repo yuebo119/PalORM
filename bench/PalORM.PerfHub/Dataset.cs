@@ -550,6 +550,17 @@ internal static class Fmt
         _ => $"{ns / 1_000_000_000:N2} s"
     };
 
+    /// <summary>进度用的时长形式（秒 / m分s秒 / h时m分），不带小数——进度条要的是量级不是精度。</summary>
+    public static string Duration(TimeSpan t)
+    {
+        if (t.TotalHours >= 1)
+        {
+            return $"{(int)t.TotalHours}h{t.Minutes}m";
+        }
+
+        return t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m{t.Seconds:D2}s" : $"{t.TotalSeconds:F0}s";
+    }
+
     /// <summary>比例格式化——入参是比例（0.983），输出百分比（+98.3%）。
     /// 负数自带符号，不再额外加正负号（避免出现 "+-1.0%"）。</summary>
     public static string Pct(double fraction)

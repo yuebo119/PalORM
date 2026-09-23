@@ -2,7 +2,7 @@
 
 > 定位：用 **Dapper 官方的数据集与测试方法学**，在 SQLite / MySQL / PostgreSQL 三方言上
 > 对照 **ADO.NET 手写（性能地板）/ Dapper / PalORM** 三方。
-> 与 [PerfHub](../perfhub/README.md) 的分工：PerfHub 测 22 项端到端能力矩阵（增删改查/批量/事务/并发），
+> 与 [PerfHub](../perfhub/README.md) 的分工：PerfHub 测 21 项端到端能力矩阵（增删改查/批量/事务/并发），
 > 本套件只测**官方那一个形状**（单行主键查询），但换来与官方数字可直接对照的资格。
 
 ## 1. 真源（官方仓库 `DapperLib/Dapper` → `benchmarks/Dapper.Tests.Performance/`）

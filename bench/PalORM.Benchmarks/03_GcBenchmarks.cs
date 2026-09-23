@@ -25,7 +25,7 @@ namespace PalORM.Benchmarks;
 [SuppressMessage("Security", "CA2100", Justification = "Seed data uses compile-time constants.")]
 public class GcBenchmarks : IAsyncDisposable
 {
-    [Params(1, 100, 1000, 10000)]
+    [Params(100, 10000)]
     public int RowCount { get; set; }
 
     private SqliteConnection? _keeper;

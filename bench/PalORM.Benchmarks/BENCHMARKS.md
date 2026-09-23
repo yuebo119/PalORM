@@ -234,21 +234,31 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
 
 ### 基准项目结构（v5.0 重构）
 
-1077 行单文件 → 13 个独立文件（按职责拆分）：
-- `01_CrudBenchmarks.cs`（23 方法）— Query/GetByKey/Insert/Update/Delete/Upsert 六组 ADO/Dapper/PalORM 对照（Query 组含 RepoDb；GetByKey 独立 category，与 Pg/MySql 全局统一）
-- `02_BulkBenchmarks.cs`（8 方法：BulkBenchmarksFixed 5 + BulkBenchmarks Params 矩阵 3）— BulkInsert/BulkUpdate/BulkDelete 固定量 + 参数矩阵 + BulkUpdateBatch 单臂
-- `03_GcBenchmarks.cs`（5 方法 × Params 4 行数）— GC 装箱专项（5 操作 × 4 行数）
+1077 行单文件 → 11 个独立文件（按职责拆分）。**共 61 个 [Benchmark] 方法**
+（2026-09-23 精简：原 85 项 → 61 项，逐项裁决与理由见 CHANGELOG「工具链·五」）：
+- `01_CrudBenchmarks.cs`（23 方法）— Query/GetByKey/Insert/Update/Delete/Upsert 六组 ADO/Dapper/PalORM 对照（Query 组含 RepoDb；GetByKey 独立 category，与 Pg/MySql 全局统一）。**其中 23 项是 CI 门禁集的一部分，不动**
+- `02_BulkBenchmarks.cs`（5 方法：BulkBenchmarksFixed 2 + BulkBenchmarks Params 矩阵 3）— BulkUpdate_1000 / BulkDelete_500 固定量 + Params 矩阵（100/1K/10K/100K 四点曲线）
+  - 原 Fixed 的 `Dapper_MultiRowInsert_10000` 与 `PalORM_BulkInsert_10000` 已删——与 Params 矩阵在 10000 档完全重复，而 Params 是维度 2「耗时-行数曲线」的唯一曲线源
+- `03_GcBenchmarks.cs`（5 方法 × `[Params(100, 10000)]`）— GC 装箱专项（5 操作 × 2 行数）
+  - Params 由 4 档（1/100/1000/10000）减到 2 档：1 与 100 两档对"装箱占总分配比"这个问题没有额外信息，减半省一半时间
 - `04_SqlBuildBenchmarks.cs`（3 方法）— SQL 构建零 I/O（纳秒级，高精度 5/10/15 + 4096 invocations）
   - **r18/T-P3-07（T10 已解决，2026-08-22）**：高精度重跑（5/10/15 + 4096）Error/Mean 全部
     ≤4.9%——StringBuilder 99.67ns ±4.9% / PalORM Simple 193.02ns ±4.4% / Complex 231.62ns ±2.6%，
     原 16.9% 超阈由旧配置 3/5/10 生成。BDN fork NU1100 同日修复（根 NuGet.Config 为 fork 的
-    源键 api.nuget.org 补通配映射）。
-- `06_FeatureBenchmarks.cs`（13 方法）— PalORM 独有特性 + v5.0 新特性
-- `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存对照（Dapper/PalORM，无 RepoDb）
-- `08_BinaryBenchmarks.cs`（6 方法）— 二进制列专项：原生 BLOB vs Base64 TEXT（含手工编解码全成本）× 256B/64KB
-- `PgBenchmarks.cs` / `MySqlBenchmarks.cs` — 方言基准（独立）
+    源键 api.nuget.org 补通配映射）。**该 job 档位不动**——它是为把 Error/Mean 压到 5% 以下而设
+- `06_FeatureBenchmarks.cs`（11 方法）— PalORM 独有特性 + v5.0 新特性
+  - 原 `PalORM_QueryAll_Small_10`（与 01 的 `PalORM_QueryAll` 同表同 API，只多 `Take(10)`）与
+    `PalORM_Concurrent_GetByKey_8x`（并发口径已由 PerfHub 与 `--workload` 覆盖，且 BDN 单线程套件
+    放并发项违反规范 §7）已删
+- `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存对照（Dapper/PalORM，无 RepoDb）。**属 CI 门禁集，不动**
+- `08_BinaryBenchmarks.cs`（6 方法）— 二进制列专项：原生 BLOB vs Base64 TEXT（含手工编解码全成本）× 256B/64KB。
+  形状 `BenchBinary`/`BenchBinaryText` 已登记进规范 §2 派生形状表（原为未登记的自定义形状）
+- `PgBenchmarks.cs`（1 方法）/ `MySqlBenchmarks.cs`（1 方法）— 方言基准，**只保留 PerfHub 无同名覆盖的项**：
+  各留 `PalORM_BulkUpdateBatch_PG`（`UPDATE FROM VALUES`）/ `PalORM_BulkUpdateBatch_MySql`（`CASE WHEN`）
+  - 原各 9 项里的 QueryAll/GetByKey/Insert/BulkInsert 已删——跨方言覆盖由 PerfHub 权威承担（规范 §1.1
+    「每个测量项必须有唯一权威夹具」），且这两类需要真库、不在任何自动路径、无报告引用其结果
 - `MySqlBulkColumnWidthBenchmarks.cs`（2 方法）— **2 列实体批量插入**（Dapper 基线 vs PalORM），
-  专为观测 `ParameterNameCache` 扩容（B1）的真库分配收益而建
+  专为观测 `ParameterNameCache` 扩容（B1）的真库分配收益而建。**保留**——五项价值核查命中"文档化能力"
 
 ### MySqlBulkColumnWidthBenchmarks：为什么单独一个类
 
@@ -480,8 +490,8 @@ dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*BulkBenchm
 # PG/MySQL 方言基准
 PALORM_BENCH_PG="..." dotnet run --project bench/PalORM.Benchmarks -c Release -- --filter '*PgBenchmarks*'
 
-# 手写装箱微基准（BDN fallback）
-dotnet run --project bench/PalORM.Benchmarks -c Release -- --boxing
+# 装箱专项已并入 BDN：03_GcBenchmarks（原 --boxing 手写微基准已于 2026-09-23 删除——
+# 它是 v5.0 阶段 3.4 的一次性决策量具，决策已落地）
 
 # JSON 报告（机读）
 dotnet run --project bench/PalORM.Benchmarks -c Release -- --exporters json
