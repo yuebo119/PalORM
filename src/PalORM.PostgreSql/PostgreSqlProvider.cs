@@ -23,12 +23,19 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// Enlist: true→false（跳过 TransactionScope 检查）。
     /// <see cref="SslNegotiation"/> 不在此默认追加——Direct 值要求同时 SslMode=Require+，
     /// 用户场景各异，应由用户按需显式设置。</para>
-    /// <para><b>判断策略说明</b>：用"属性当前值 == ADO.NET 默认值"作为"用户未显式设置"的判据。
-    /// 该判据在罕见场景（用户显式设置成默认值）下会把用户意图当作默认覆盖，但调优参数
-    /// 主动设成低性能默认值的实际场景极少，收益（透明调优）大于风险。
-    /// <b>布尔旋钮边界（审计 PROV-011）</b>：对 NoResetOnClose/Enlist 这类布尔参数，被覆盖的
-    /// 后果不是性能而是正确性（会话状态泄漏 ITM-652 / 环境事务脱离 ITM-643），上述
-    /// "收益大于风险"论证不适用于它们——需要这些语义的用户必须绕开本工厂自建连接。</para></summary>
+    /// <para><b>判断策略说明（PROV-001，2026-09-23 修订）</b>：判据 = 连接串未显式给出该键
+    /// （见 <see cref="HasExplicitKey"/>，按 <c>Keys</c> 集合判定）<b>且</b>属性当前值
+    /// 等于驱动默认值。前者管用户意图（显式设成默认值不再被静默改写），后者管驱动默认值漂移
+    /// （未来驱动改默认时仍能识别"未设置"）。键名经 Npgsql 10.0.3 探针实测——注意规范键是
+    /// "Maximum Pool Size" 而非 "Max Pool Size"，写错会静默失效。
+    /// <b>布尔旋钮边界（审计 PROV-011）</b>：NoResetOnClose/Enlist 这类布尔参数显式给出时
+    /// 不再被改写（此前"显式 true 与默认不可区分"会导致会话状态泄漏 ITM-652 与环境事务
+    /// 脱离 ITM-643）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "本方法是连接串调优旋钮的线性清单（池参数 + 预编译/缓冲/环境事务），"
+            + "复杂度来自旋钮数量而非嵌套；PROV-001 起每个旋钮多一个显式键判定条件。"
+            + "拆分会把 ITM-612 的'单点覆盖口径'打散到多处，反而增加漂移风险。")]
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -37,44 +44,61 @@ public sealed class PostgreSqlProvider : IDbProvider
         // 无条件覆盖，连接串内嵌 "Max Pool Size=500" 被静默改写为 DbOptions 默认值。
         // Npgsql 10 实测默认值：MaxPoolSize=100 / ConnectionIdleLifetime=300 / ConnectionLifetime=3600
         //（注意 Lifetime 默认非 0——曾按 0 写判据致 WithPool 值永不应用，实证修正）。
-        if (builder.MaxPoolSize == 100)
+        // PROV-001（2026-09-23）：判据补 ContainsKey（键集只含显式出现的键）——"值 == 驱动默认"
+        // 无法区分"用户没设"与"用户显式设成默认值"（后者会被静默改写，用户意图落空）。
+        // 两个条件同时保留：ContainsKey 管用户意图，值比对管驱动默认值漂移（未来驱动改默认时
+        // 仍能识别"未设置"）。键名经 Npgsql 10.0.3 探针实测（注意规范键是 "Maximum Pool Size"，
+        // 不是 "Max Pool Size"——写错会静默失效）。
+        if (!HasExplicitKey(builder, "Maximum Pool Size") && builder.MaxPoolSize == 100)
             builder.MaxPoolSize = options.MaxPoolSize;
         // C4（v5.7）：空闲保留下限——0 = 不覆盖（Npgsql 默认 0）。>0 时空闲修剪
         // （ConnectionIdleLifetime 到期）至少保留这么多条连接，避免稀疏流量清池后
         // 突发查询重建物理连接（远程建连实测 ~8.5 ms/条）。
-        if (options.MinPoolSize > 0 && builder.MinPoolSize == 0)
+        if (options.MinPoolSize > 0 && !HasExplicitKey(builder, "Minimum Pool Size") && builder.MinPoolSize == 0)
             builder.MinPoolSize = options.MinPoolSize;
         // v5.6：0 = 不覆盖（保留 Npgsql 默认 300 秒）——原默认 30 秒把驱动的空闲超时砍到 1/10，
         // 间隔超过 30 秒的首次查询须重建物理连接（跨网段实测多付 13.2 ms）。
-        if (options.PoolIdleTimeoutSeconds > 0 && builder.ConnectionIdleLifetime == 300)
+        if (options.PoolIdleTimeoutSeconds > 0 && !HasExplicitKey(builder, "Connection Idle Lifetime")
+            && builder.ConnectionIdleLifetime == 300)
+        {
             builder.ConnectionIdleLifetime = options.PoolIdleTimeoutSeconds;
-        if (builder.ConnectionLifetime == 3600)
+        }
+        if (!HasExplicitKey(builder, "Connection Lifetime") && builder.ConnectionLifetime == 3600)
             builder.ConnectionLifetime = checked(options.PoolLifetimeMinutes * 60);
 
-        // v5.0 阶段 3.1：仅当属性当前值等于 ADO.NET 默认值时覆盖为调优推荐值。
+        // v5.0 阶段 3.1：仅当属性当前值等于 ADO.NET 默认值（且连接串未显式给出该键）时覆盖为调优推荐值。
         // Npgsql 默认值（已通过 ConnectionStringBuilder 属性默认核实）：MaxAutoPrepare=0，
         // AutoPrepareMinUsages=5，NoResetOnClose=false，ReadBufferSize/WriteBufferSize=8192，Enlist=true。
-        if (builder.MaxAutoPrepare == 0)
+        if (!HasExplicitKey(builder, "Max Auto Prepare") && builder.MaxAutoPrepare == 0)
             builder.MaxAutoPrepare = 100;
-        if (builder.AutoPrepareMinUsages == 5)
+        if (!HasExplicitKey(builder, "Auto Prepare Min Usages") && builder.AutoPrepareMinUsages == 5)
             builder.AutoPrepareMinUsages = 2;
         // ITM-652(r4) 登记：NoResetOnClose=true 使归池连接跳过 DISCARD ALL——经 raw SQL
         // 的 SET/临时表/会话状态会泄漏给下一个池租客（吞吐收益的既定取舍）。需要会话
         // 状态隔离的场景请用独立连接（连接串 Max Pool Size=1）或显式 DISCARD。
-        if (!builder.NoResetOnClose)
+        if (!HasExplicitKey(builder, "No Reset On Close") && !builder.NoResetOnClose)
             builder.NoResetOnClose = true;
-        if (builder.ReadBufferSize == 8192)
+        if (!HasExplicitKey(builder, "Read Buffer Size") && builder.ReadBufferSize == 8192)
             builder.ReadBufferSize = 16384;
-        if (builder.WriteBufferSize == 8192)
+        if (!HasExplicitKey(builder, "Write Buffer Size") && builder.WriteBufferSize == 8192)
             builder.WriteBufferSize = 16384;
-        // ITM-643(r4) 登记：显式 Enlist=true 与默认 true 不可区分（同 ADR-G 的
+        // ITM-643(r4) 登记：显式 Enlist=true 与默认 true 此前不可区分（同 ADR-G 的
         // AllowLoadLocalInfile 形态）——依赖 TransactionScope 的用户被静默脱离环境事务。
-        // 缓解：环境事务场景请用 BeginTransaction 显式事务（PalORM 主路径）。
-        if (builder.Enlist)
+        // PROV-001（2026-09-23）：ContainsKey 现已可区分（键集只含显式出现的键），显式
+        // Enlist=true 不再被改写。缓解措施仍适用：环境事务场景请用 BeginTransaction 显式事务。
+        if (!HasExplicitKey(builder, "Enlist") && builder.Enlist)
             builder.Enlist = false;
 
         return new NpgsqlConnection(builder.ConnectionString);
     }
+
+    /// <summary>连接串是否显式给出某键（PROV-001，2026-09-23）。
+    /// <b>不能用</b> <c>NpgsqlConnectionStringBuilder.ContainsKey</c>——Npgsql 10.0.3 实测对
+    /// <b>未设置</b>的已知关键字同样返回 true（<c>Keys.Count</c> 只含显式键，但 ContainsKey
+    /// 认的是"已知关键字"），用它做判据会静默关闭全部调优。改用 <c>Keys</c> 集合
+    /// （只含显式出现的键）做大小写不敏感匹配。冷路径（每会话一次），LINQ 形式可接受。</summary>
+    private static bool HasExplicitKey(NpgsqlConnectionStringBuilder builder, string keyword)
+        => builder.Keys.Contains(keyword, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>双引号引用标识符(PG 标准),内部双引号以 "" 转义;引用后保留大小写敏感。</summary>
     public static string QuoteIdentifier(string identifier)

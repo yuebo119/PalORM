@@ -212,6 +212,30 @@ public sealed class ProviderTests
     }
 
     [Test]
+    public async Task ProviderConnectionFactories_HonorExplicitlySetDriverDefaults()
+    {
+        // PROV-001（2026-09-23）：判据从"值 == 驱动默认"改为"连接串未显式给出该键 且 值 == 驱动默认"——
+        // 显式设成默认值的用户意图必须保留（原实现会静默改写：调优/安全加固落空）。
+        // 注意 Npgsql 10.0.3 的 ContainsKey 对未设置键同样返回 true（探针实测），故判据用 Keys 集合。
+        // 断言用"不含被改写后的值"而非"含默认值"——驱动渲染连接串时会省略默认值键，正向断言会假失败。
+        var options = new DbOptions { ConnectionString = "x" }.WithPool(23, 17, 5);
+
+        await using var postgres = PalORM.PostgreSql.PostgreSqlProvider.CreateConnection(
+            "Host=localhost;Maximum Pool Size=100;Max Auto Prepare=0;Enlist=True", options);
+        string pg = postgres.ConnectionString;
+        await Assert.That(pg).DoesNotContain("Maximum Pool Size=23");   // 显式 100 不被 WithPool(23) 改写
+        await Assert.That(pg).DoesNotContain("Max Auto Prepare=100");   // 显式 0（关预编译）不被改写
+        await Assert.That(pg).DoesNotContain("Enlist=False");           // 显式 True 不被改写（环境事务场景）
+
+        await using var mysql = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Maximum Pool Size=100;Auto Enlist=True;Cancellation Timeout=2", options);
+        string my = mysql.ConnectionString;
+        await Assert.That(my).DoesNotContain("Maximum Pool Size=23");
+        await Assert.That(my).DoesNotContain("Auto Enlist=False");
+        await Assert.That(my).DoesNotContain("Cancellation Timeout=5");
+    }
+
+    [Test]
     public async Task MySqlConnectionFactory_AppliesConnectionTuning()
     {
         // 同上（MySQL 5 项）

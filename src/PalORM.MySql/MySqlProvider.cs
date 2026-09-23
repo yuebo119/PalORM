@@ -26,11 +26,16 @@ public sealed class MySqlProvider : IDbProvider
     /// ServerRedirectionMode: Disabled→Preferred（Azure MySQL 直连后端）。</para>
     /// <para><b>判断策略</b>：用"属性当前值 == ADO.NET 默认值"作为"用户未显式设置"的判据
     /// （同 PostgreSqlProvider，详见其注释）。
-    /// <b>布尔旋钮边界（审计 PROV-011 文档化）</b>：该判据对布尔参数意味着显式设置与
-    /// 未设置完全不可区分——AutoEnlist/ConnectionReset 的显式 true（环境事务/会话状态
-    /// 隔离需求，ITM-643）会被本调优静默改写为 false；AllowLoadLocalInfile 的显式 false
-    /// （安全加固）会被改写为 true（ADR-G 三层兜底裁决在案）。需要这些语义的用户必须
-    /// 绕开本工厂自建连接。</para></summary>
+    /// <b>布尔旋钮边界（审计 PROV-011，PROV-001 起已可区分）</b>：AutoEnlist/ConnectionReset 等
+    /// 布尔参数显式给出时不再被改写（此前显式 true 会被静默改为 false，导致环境事务脱离
+    /// ITM-643 / 会话状态隔离失效）。唯一例外是 <c>AllowLoadLocalInfile</c>：其改写属安全策略
+    /// （ADR-G 三层兜底裁决在案），ADR-G 的前提"builder 层无法区分未设置与显式 false"已被
+    /// 实测证伪，但改写与否需用户裁决后再动，当前维持现状。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "本方法是连接串调优旋钮的线性清单（池参数 + 预编译/缓冲/环境事务），"
+            + "复杂度来自旋钮数量而非嵌套；PROV-001 起每个旋钮多一个显式键判定条件。"
+            + "拆分会把 ITM-612 的'单点覆盖口径'打散到多处，反而增加漂移风险。")]
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -38,44 +43,65 @@ public sealed class MySqlProvider : IDbProvider
         // ITM-612：池参数遵循下方系列的"仅默认时覆盖"策略——原对象初始化器在连接串解析后
         // 无条件覆盖，连接串内嵌池参数被静默改写为 DbOptions 默认值。
         // MySqlConnector 默认：MaximumPoolSize=100 / ConnectionIdleTimeout=180 / ConnectionLifeTime=0。
-        if (builder.MaximumPoolSize == 100)
+        // PROV-001（2026-09-23）：判据补 ContainsKey（键集只含显式出现的键）——"值 == 驱动默认"
+        // 无法区分"用户没设"与"用户显式设成默认值"（后者会被静默改写，用户意图落空）。
+        // 两条件同时保留：ContainsKey 管用户意图，值比对管驱动默认值漂移。键名经 MySqlConnector
+        // 2.6.2 探针实测。
+        if (!HasExplicitKey(builder, "Maximum Pool Size") && builder.MaximumPoolSize == 100)
             builder.MaximumPoolSize = checked((uint)options.MaxPoolSize);
         // C4（v5.7）：空闲保留下限——0 = 不覆盖（MySqlConnector 默认 0）。>0 时
         // ConnectionIdleTimeout 到期修剪至少保留这么多条（官方 XML 文档语义），
         // 避免稀疏流量清池后突发查询重建物理连接。uint 池参数 checked 转换。
-        if (options.MinPoolSize > 0 && builder.MinimumPoolSize == 0)
+        if (options.MinPoolSize > 0 && !HasExplicitKey(builder, "Minimum Pool Size") && builder.MinimumPoolSize == 0)
             builder.MinimumPoolSize = checked((uint)options.MinPoolSize);
         // v5.6：0 = 不覆盖（保留 MySqlConnector 默认 180 秒）——理由同 PostgreSqlProvider。
-        if (options.PoolIdleTimeoutSeconds > 0 && builder.ConnectionIdleTimeout == 180)
+        if (options.PoolIdleTimeoutSeconds > 0 && !HasExplicitKey(builder, "Connection Idle Timeout")
+            && builder.ConnectionIdleTimeout == 180)
+        {
             builder.ConnectionIdleTimeout = checked((uint)options.PoolIdleTimeoutSeconds);
-        if (builder.ConnectionLifeTime == 0)
+        }
+        if (!HasExplicitKey(builder, "Connection Lifetime") && builder.ConnectionLifeTime == 0)
             builder.ConnectionLifeTime = checked((uint)(options.PoolLifetimeMinutes * 60));
 
-        // v5.0 阶段 3.2：仅当属性当前值等于 ADO.NET 默认值时覆盖为调优推荐值。
+        // v5.0 阶段 3.2：仅当属性当前值等于 ADO.NET 默认值（且连接串未显式给出该键）时覆盖为调优推荐值。
         // MySqlConnector 默认值：AutoEnlist=true，ConnectionReset=true，UseCompression=false，
         // CancellationTimeout=2，AllowLoadLocalInfile=false，ServerRedirectionMode=Disabled。
-        // ITM-643(r4) 登记：显式 AutoEnlist=true 与默认不可区分（同上）——环境事务静默脱离。
-        if (builder.AutoEnlist)
+        // ITM-643(r4)：显式 AutoEnlist=true 此前与默认不可区分（环境事务静默脱离）；
+        // PROV-001 起 ContainsKey 可区分，显式值不再被改写。
+        if (!HasExplicitKey(builder, "Auto Enlist") && builder.AutoEnlist)
             builder.AutoEnlist = false;
-        if (builder.ConnectionReset)
+        if (!HasExplicitKey(builder, "Connection Reset") && builder.ConnectionReset)
             builder.ConnectionReset = false;
         // ITM-730(r20) 订正：UseCompression 不在此赋值。本方法签名只接收 connectionString，
         // 无从区分"用户显式 true"与"部署环境注入"——原注释"显式固定防注入"无法实现（假承诺）。
         // 当前行为 = 不干预（用户设置优先），如需强制策略请在传入前构造连接串。
-        if (builder.CancellationTimeout == 2)
+        if (!HasExplicitKey(builder, "Cancellation Timeout") && builder.CancellationTimeout == 2)
             builder.CancellationTimeout = 5;
         // AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）。
         // ITM-612/EVAL-1：builder 层无法区分"未设置（驱动默认 false）"与"显式 false（安全加固，
         // 规避恶意服务端读取客户端文件的攻击面）"——显式 false 会被此覆盖。
         // ITM-666：ADR-G（2026-08-15）已裁决维持本现状——三层兜底（文档登记攻击面 /
         // 服务端 local_infile=OFF 即禁 BulkCopy / 不做启发式检测），revisit 条件见 ADR-G。
+        // PROV-001（2026-09-23）：ContainsKey 现已可区分两者（ADR-G 的前提"builder 层无法区分"
+        // 被实测证伪）——但改写与否是安全策略裁决，仍按 ADR-G 维持现状，待用户裁决后再动。
         if (!builder.AllowLoadLocalInfile)
             builder.AllowLoadLocalInfile = true;
-        if (builder.ServerRedirectionMode == MySqlServerRedirectionMode.Disabled)
+        if (!HasExplicitKey(builder, "Server Redirection Mode")
+            && builder.ServerRedirectionMode == MySqlServerRedirectionMode.Disabled)
+        {
             builder.ServerRedirectionMode = MySqlServerRedirectionMode.Preferred;
+        }
 
         return new MySqlConnection(builder.ConnectionString);
     }
+
+    /// <summary>连接串是否显式给出某键（PROV-001，2026-09-23）。
+    /// <b>不用</b> <c>ContainsKey</c>：MySqlConnector 2.6.2 的 ContainsKey 实测行为正确
+    /// （未设置返回 false），但 Npgsql 10.0.3 对未设置的已知关键字返回 true——两 Provider
+    /// 用同一判据（<c>Keys</c> 集合，只含显式出现的键）以避免"同一语义两种机制"的漂移。
+    /// 冷路径（每会话一次），LINQ 形式可接受。</summary>
+    private static bool HasExplicitKey(MySqlConnectionStringBuilder builder, string keyword)
+        => builder.Keys.Cast<string>().Contains(keyword, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>反引号引用标识符(MySQL 方言,非 SQL 标准双引号),内部反引号以 `` 转义。</summary>
     public static string QuoteIdentifier(string identifier)
