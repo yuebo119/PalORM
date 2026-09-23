@@ -7,7 +7,7 @@
 ## 快速开始
 
 ```bash
-# 全量（三方言 × 2000/20000 × 22 项 + 并发）
+# 全量（三方言 × 2000/20000 × 21 项 + 并发）
 dotnet run --project bench/PalORM.PerfHub -- run --concurrency --threads 1,4,8 --version HEAD
 
 # 只 SQLite 冒烟
@@ -37,7 +37,7 @@ dotnet run --project bench/PalORM.PerfHub -- report
 | 健康度 | 地板行散布中位数，阈值 0.35（本夹具自适应短跑实测 0.21/0.26/0.31） | `--quick` 批次在 label 里带 `quick` 标记，只作冒烟、不进基线 |
 | 结果登记 | 除自身 `results/history-*.json` 外，另写结果库信封 `bench/results/perfhub-*.json` | 统一登记处见 `bench/results/README.md`；跨夹具索引 `bash scripts/perf.sh index`（同一内容已含在 `perf.sh full` 的唯一报告里） |
 
-## 22 个测试项（v2 矩阵）
+## 21 个测试项（v2 矩阵；2026-09-23 精简删 TxTenInserts）
 
 | 组 | 测试项 | 行业最优实现（三臂契约摘要） |
 |---|---|---|
@@ -55,7 +55,9 @@ dotnet run --project bench/PalORM.PerfHub -- report
 | **Baseline** | `GenerateRows` | 不碰库，数据生成内存基线 |
 | **Concurrency** | `Concurrent_Mixed80_20` | 预热 1 s + 计时 2 s，池化连接每线程一条 |
 
-**规模**：22 × 3 库 × 2 档 × 3 臂 = 396 单操作项 + 并发 + 基线。
+**规模**：21 项 × 3 库 × 2 档 × 3 臂 —— 其中 8 项（Build×2 / InsertReturningId / IncludeJoin /
+TxSingleInsert / TxHundredInserts / TxRollback / TxBulkInsert）**只在最小档跑**（行数不进这些项的测量，
+两档是同一个测量的复制品），故每方言 13×2×3 + 8×1×3 = 102 个单操作项，加并发与基线。
 
 ## 测量口径（v2）
 

@@ -140,26 +140,12 @@ public class FeatureBenchmarks : IAsyncDisposable
         return count;
     }
 
-    // 并发查询（8 个并行 DataSession 各自 GetByKey——模拟多连接场景）
-    [Benchmark, BenchmarkCategory("Advanced")]
-    public async Task<int> PalORM_Concurrent_GetByKey_8x()
-    {
-        var tasks = Enumerable.Range(0, 8).Select(async _ =>
-        {
-            await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
-            return await db.GetAsync<BenchOrder>(5000) is not null ? 1 : 0;
-        });
-        var results = await Task.WhenAll(tasks);
-        return results.Sum();
-    }
-
-    // 小数据量冷启动（10 行——测量首次 JIT + 连接建立开销）
-    [Benchmark, BenchmarkCategory("Scale")]
-    public async Task<List<BenchOrder>> PalORM_QueryAll_Small_10()
-    {
-        await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
-        return await db.From<BenchOrder>().Take(10).ToListAsync();
-    }
+    // 2026-09-23 精简删去两项：
+    //  · PalORM_Concurrent_GetByKey_8x——并发口径已由 PerfHub 的 Concurrent_Mixed80_20 与
+    //    --workload（延迟分位数 / 并发扩展曲线）权威覆盖；且在 BDN 单线程套件里放并发项会让
+    //    计时受调度抖动支配（规范 §7 禁止并行套件里的墙钟断言）。
+    //  · PalORM_QueryAll_Small_10——与 01_CrudBenchmarks 的 PalORM_QueryAll 同表同 API，
+    //    只多一个 Take(10)；小结果集的问题由 KeysetPage / Count 覆盖。
 
     // ═══════ v5.0 阶段 5.2 / 5.4 新增：拦截器与会话设置开销 ═══════
 

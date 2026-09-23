@@ -78,7 +78,60 @@ internal static partial class ReportGenerator
         string directory = Path.GetDirectoryName(Path.GetFullPath(outputPath))!;
         Directory.CreateDirectory(directory);
         File.WriteAllText(outputPath, md.ToString());
+        PrintConsoleSummary(baseline, runs, passed, outputPath);
         return (passed, baseline.Benchmarks.Count);
+    }
+
+    /// <summary>控制台表格摘要——报告写文件之后把关键结果直接打到终端。
+    /// <para>为什么要有：报告是 markdown 文件，跑完得打开才知道结果；而"跑测时人在看终端"
+    /// 是常态。这里只放三张最小的表——各夹具最近一批、门禁判定、12 维覆盖，
+    /// 明细仍以报告文件为准。</para></summary>
+    private static void PrintConsoleSummary(
+        PerfBaseline baseline, List<PerfResultEnvelope> runs, int passed, string outputPath)
+    {
+        Console.WriteLine();
+        Console.WriteLine("╭─ 测试结果 " + new string('─', 62));
+        Console.WriteLine("│ 各夹具最近一批");
+        // 列宽按实际数据定：时间戳 25 显示列（"2026-09-23 18:27:11 +08:00"）、
+        // 方言范围最长 24（"MySQL+PostgreSQL+SQLite"），故各留 26。
+        Console.WriteLine("│ " + Pad("夹具", 12) + Pad("批次时间", 26) + Pad("方言范围", 26) + Pad("项数", 6)
+            + Pad("失败", 6) + "健康度");
+        foreach (IGrouping<string, PerfResultEnvelope> group in runs.GroupBy(static r => r.Harness))
+        {
+            List<PerfResultEnvelope> candidates =
+                [.. group.Where(static x => !PerfResultWriter.IsSubsetLabel(x.Label))];
+            if (candidates.Count == 0)
+            {
+                continue;
+            }
+
+            PerfResultEnvelope r = candidates[0];
+            int failures = r.Sections.Count(static s => s.Kind.Contains("failure", StringComparison.OrdinalIgnoreCase));
+            Console.WriteLine("│ " + Pad(r.Harness, 12) + Pad(r.Timestamp, 26) + Pad(IndexGenerator.DialectScope(r), 26)
+                + Pad(r.Items.Count.ToString(CultureInfo.InvariantCulture), 6)
+                + Pad(failures > 0 ? $"⚠{failures}" : "—", 6)
+                + (r.Regime.Health is "clean" ? "clean" : r.Regime.Health));
+        }
+
+        Console.WriteLine("│");
+        Console.WriteLine("│ 门禁");
+        string bdnLine = string.Create(CultureInfo.InvariantCulture,
+            $"│   微基准 BDN：{passed}/{baseline.Benchmarks.Count} 阈值内");
+        Console.WriteLine(bdnLine + (passed == baseline.Benchmarks.Count ? " ✓" : " ✗ 有回归"));
+        Console.WriteLine($"│   报告：{outputPath}");
+        Console.WriteLine("╰" + new string('─', 72));
+    }
+
+    /// <summary>按显示宽度左对齐填充——中文按 2 列算，否则表格会错位。</summary>
+    private static string Pad(string text, int width)
+    {
+        int shown = 0;
+        foreach (char ch in text)
+        {
+            shown += ch > 0x2E80 ? 2 : 1;
+        }
+
+        return text + new string(' ', Math.Max(1, width - shown));
     }
 
     /// <summary>可选输入路径——统一报告的数据来源。缺项即"该节未采集"，不是错误。</summary>

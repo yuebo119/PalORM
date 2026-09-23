@@ -2,6 +2,89 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·工具链·五] — 性能测试系统重构：项数 112→91、全量 42min→约 33min、进度与结果表格化
+
+> 变更范围：`bench/PalORM.PerfHub/`（Program / Dataset）+ `bench/PalORM.Benchmarks/`
+> （02 / 03 / 06 / MySql / Pg / Program，删 BoxingMicroBenchmark）+ `tools/PalORM.PerfGate/`
+> （ReportGenerator / IndexGenerator）+ `scripts/perf.sh` + 四份文档。
+
+### 先摆事实：时间不在"项数"上
+
+PerfHub 逐项耗时（SQLite，两档，三臂合计 189 秒）：
+
+| 项 | 耗时 | 占比 |
+|---|---:|---:|
+| TxBulkInsert | 35.0s | 19% |
+| BulkInsert | 34.9s | 18% |
+| UpsertBatch | 34.4s | 18% |
+| BulkDelete | 26.0s | 14% |
+| BulkUpdate | 20.6s | 11% |
+| **前 5 项** | **150.9s** | **80%** |
+| 其余 17 项 | 38.2s | 20% |
+
+**5 个批量项吃掉 80% 的时间**，所以"删小项"省不下时间——删掉一半的小项只省 10%，
+却砍掉点查/流式/键集分页/IN/计数/Join/自增回填/SQL 构建一整片覆盖。真正的杠杆是
+**档位**与**重复项**。
+
+### PerfHub（22 项 → 21 项，档位组合 44 → 30）
+
+- **删 `TxTenInserts`**：1/10/100 三点里的中间点；有 1 与 100 就能分离"事务固定开销"
+  与"每条约边际成本"，10 的信息量最小。
+- **8 项只在最小档跑**（`Build*` / `InsertReturningId` / `IncludeJoin` / `TxSingleInsert` /
+  `TxHundredInserts` / `TxRollback` / `TxBulkInsert`）：判据是**行数是否真的进入该项的测量**。
+  `Build*` 不碰库、签名里没有行数参数（`BuildComplexQuerySql(conn)`），两档是**同一个测量的
+  复制品**；`InsertReturningId` 用每次清空的独立自增表；`IncludeJoin` 固定 50 父×3 子；
+  `Tx*` 条数固定；`TxBulkInsert` 与 `BulkInsert` 近重复（地板臂的 BulkInsert 本身就自开事务
+  包整批），保留它是为覆盖"批量装载器在显式事务内"这条产品路径，属语义检查而非规模问题。
+  省下每方言 21 个重复测量（按实测只省 1.6% 时间，价值在项数与测量数）。
+
+### BDN（85 → 61 项 / 10 类）
+
+| 类 | 改动 | 理由 |
+|---|---|---|
+| `01_Crud`（23）/ `07_OrmComparison`（4） | **不动** | 唯一进 CI、唯一有录制基线、唯一能挡回归的 27 项 |
+| `02_Bulk`（7→5） | 删 `Dapper_MultiRowInsert_10000`、`PalORM_BulkInsert_10000` | 与 `[Params]` 矩阵在 10000 档完全重复；Params 是维度 2「耗时-行数曲线」的唯一曲线源 |
+| `03_Gc`（5×Params 4→2 档） | `[Params(1,100,1000,10000)]` → `(100,10000)` | 1 与 100 对"装箱占总分配比"没有额外信息，减半省一半时间 |
+| `04_SqlBuild`（3） | **不动** | Precision job（5/10/15+4096）是为把 Error/Mean 压到 5% 以下，改档会让该指标失真 |
+| `06_Feature`（13→11） | 删 `PalORM_QueryAll_Small_10`、`PalORM_Concurrent_GetByKey_8x` | 前者与 01 的 `PalORM_QueryAll` 同表同 API；后者并发口径已由 PerfHub 与 `--workload` 覆盖，且 BDN 单线程套件放并发项违反规范 §7 |
+| `08_Binary`（6） | **保留，形状登记进规范 §2** | 二进制列选型依据。原为未登记的自定义形状 `BenchBinary`（256B/64KB）——按规范补登记，而非改成 S4 尺寸（改形状会作废已文档化的实测数字） |
+| `MySql`（9→1）/ `Pg`（9→1） | 各留 `PalORM_BulkUpdateBatch_*` | 其余项的跨方言覆盖由 PerfHub 权威承担（规范 §1.1）；这两类需真库、不在自动路径、无报告引用其结果。保留的是 PerfHub 无同名项的方言专有路径（`CASE WHEN` / `UPDATE FROM VALUES`） |
+| `MySqlBulkColumnWidth`（2） | **不动** | 五项价值核查命中"文档化能力"（`BENCHMARKS.md` 有专章 + 2026-09-21 实测结论） |
+| `--boxing` + `BoxingMicroBenchmark.cs` | **删** | v5.0 阶段 3.4 的一次性决策量具（判据写在代码里），决策已落地；同一问题由 `03_Gc` 覆盖 |
+
+### DapperSuite（9 项 × 3 方言 → × 1 方言）
+
+只跑 SQLite。它的定位是"与 Dapper 官方数字可对照的外部锚点"，而官方数字本身是单机 SQLite 的
+——跑 PG/MySQL 得不到可对照的外部锚点，只是白花 2/3 时间。哨兵目的一个方言足够。
+（另注：9 项里只有 3 项能算出跨臂比值，其余 6 项是孤立数字——`SqlCommand` 是声明的 Baseline
+却没有任何臂与它对照。）
+
+### 进度与结果表格化
+
+- **PerfHub**：每项测量前打印 `[k/n] 已用 Xm Ys 余约 Zs`；启动时打印计划数与档位策略；
+  结束时**计划数与实际数对账**，不符即警告（进度条说谎比没有进度条更糟）。
+- **`perf.sh full`**：每步结束打印「本步耗时 + 累计」并刷新进度表；末尾汇总表给出各步耗时与占比。
+- **`PerfGate report`**：写文件之外，在终端打印「各夹具最近一批 + 门禁判定」表格。
+- 表格只让 ASCII 列参与宽度填充且不设表头——bash 在 C locale 下按**字节**计宽
+  （一个中文 3 字节、`✓` 也 3 字节），对含中文或 `✓` 的列做 `%-Ns` 填充必然错位（实测过）；
+  中文步骤名放最后不填充，状态用 ASCII 的 `OK`/`FAIL`，列自带"累计"字样故不需要表头。
+
+### 实测
+
+| 指标 | 改前 | 改后 |
+|---|---:|---:|
+| 项数（三套夹具合计） | 112 | **91** |
+| `perf.sh full` | 42m28s | **约 33min**（PerfHub −13%、DapperSuite −7min、其余不变） |
+| PerfHub 计划测量数 | 452 | 366（同覆盖，少 86 个重复测量） |
+| `perf.sh` 冒烟（PerfHub sqlite t2000 quick） | 82s（`--quick` 未生效） | **35s**（`--quick` 已生效） |
+
+### 未隔离与适用边界
+
+- PerfHub 的档位精简只影响"行数不进测量"的 8 项，其余 13 项两档不变，故**规模曲线覆盖不减**。
+- `08_BinaryBenchmarks` 的 256B 与 S4 的 32B/1KB 不同尺寸，跨夹具比较时须按派生形状看待
+  （已在规范 §2 登记）。
+- 删掉 24 个 BDN 项后，`run-benchmarks.sh` 的 `all` 目标耗时随之下降，但其**基线录制**用途不变。
+
 ## [未发布·工具链·四] — 修复 MySQL 方言整列失败：BulkDelete 播种超配 16.7 倍 + 默认超时
 
 > 变更范围：`bench/PalORM.PerfHub/Implementations.cs` + `Program.cs` +

@@ -51,6 +51,57 @@ step() {
     echo "═══════════════════════════════════════════"
 }
 
+# ── 实时进度与计时 ────────────────────────────────────────────────────────────
+# 全量流程动辄半小时以上，"跑完了没有、还要多久、时间花在哪一步"是操作时最需要的信息。
+# 每步跑完立即打印「本步耗时 + 累计」，末尾再汇总成表。
+TOTAL_T0=$SECONDS
+STEP_TOTAL=5
+STEP_IDX=0
+STEP_ROWS=()
+
+fmt_dur() {
+    local s="$1"
+    if [ "$s" -ge 3600 ]; then printf '%dh%dm' $((s / 3600)) $(((s % 3600) / 60))
+    elif [ "$s" -ge 60 ]; then printf '%dm%02ds' $((s / 60)) $((s % 60))
+    else printf '%ds' "$s"; fi
+}
+
+# 打印累计进度表——每步结束后调用，让"跑到哪了"随时可见。
+# 表格只有 ASCII 列参与宽度填充，且不设表头——两个原因：
+#  ① bash 在 C locale 下按**字节**计宽（一个中文 3 字节、✓ 也 3 字节），对含中文或 ✓ 的列
+#     做 %-Ns 填充必然错位（实测过）；
+#  ② 不设表头就不需要"表头也要对齐"这件事——列自带"本步/累计"字样，语义自解释。
+# 中文的步骤名放最后、不填充；状态用 ASCII 的 OK/FAIL。
+print_progress_table() {
+    local i
+    echo ""
+    echo "┌ 进度 ────────────────────────────────────────────────────────────────"
+    for ((i = 0; i < ${#STEP_ROWS[@]}; i++)); do
+        IFS='|' read -r name status secs cum <<< "${STEP_ROWS[$i]}"
+        printf '│ %-4s 本步 %-8s 累计 %-9s %s
+' "$status" "$(fmt_dur "$secs")" "$(fmt_dur "$cum")" "$name"
+    done
+    echo "└──────────────────────────────────────────────────────────────────────"
+}
+
+# 末尾汇总表——把五步的耗时与占比一次列全，方便回看"时间花在哪一步"。
+print_final_table() {
+    local total=$((SECONDS - TOTAL_T0)) i pct
+    echo ""
+    echo "╭─ 全量跑测汇总 $(date '+%Y-%m-%d %H:%M') ──────────────────────────────"
+    for ((i = 0; i < ${#STEP_ROWS[@]}; i++)); do
+        IFS='|' read -r name status secs cum <<< "${STEP_ROWS[$i]}"
+        pct="-"
+        [ "$total" -gt 0 ] && pct="$((secs * 100 / total))%"
+        printf '│ %-4s %-9s %-5s 累计 %-9s %s
+' "$status" "$(fmt_dur "$secs")" "$pct" "$(fmt_dur "$cum")" "$name"
+    done
+    echo "│"
+    printf '│ 总计 %s（OK=通过 FAIL=失败；报告：bench/reports/perf-report-<时间戳>.md）
+' "$(fmt_dur "$total")"
+    echo "╰──────────────────────────────────────────────────────────────────────"
+}
+
 gate() {
     step "[门禁 1/2] 微基准 BDN 基线"
     if [ -f "$BASELINE_BDN" ]; then
@@ -125,36 +176,48 @@ case "$cmd" in
         run_step() {
             local name="$1"
             shift
-            step "$name"
+            STEP_IDX=$((STEP_IDX + 1))
+            step "[$STEP_IDX/$STEP_TOTAL] $name"
+            local t0=$SECONDS status="OK"
             # 单步失败不中断全量：全量的价值是最大覆盖，每步的结果库登记与健康度会如实反映状态；
             # 失败汇总到末尾并以非零退出（不静默吞掉）。
-            if "$@"; then
-                echo "  ✓ $name"
-            else
-                echo "  ✗ $name（继续后续步骤）" >&2
+            if ! "$@"; then
+                status="FAIL"
                 STEP_FAILED+=("$name")
             fi
+            local secs=$((SECONDS - t0)) cum=$((SECONDS - TOTAL_T0))
+            STEP_ROWS+=("[$STEP_IDX/$STEP_TOTAL] $name|$status|$secs|$cum")
+            # 实时反馈：本步耗时与累计，不等流程结束就能判断"是不是卡住了"
+            echo ""
+            echo "  $status 本步 $(fmt_dur "$secs")，累计 $(fmt_dur "$cum")"
+            print_progress_table
         }
 
         # 步骤 1 跳过其内部报告：统一报告必须等三套夹具都写完结果库信封后再生成
         #（否则报告里的跨夹具节只含上一轮的批次——顺序错了就会得出"PerfHub 未采集"的假缺口）。
-        run_step "[1/5] 微基准全量 + 负载 + 内存 + 启动 + BDN 门禁" \
+        run_step "微基准全量 + 负载 + 内存 + 启动 + BDN 门禁" \
             env SKIP_REPORT=1 bash "$ROOT_DIR/scripts/run-full-perf.sh"
-        run_step "[2/5] PerfHub 三方言全量（含并发扩展档）" \
+        run_step "PerfHub 三方言全量（含并发扩展档）" \
             dotnet run --project "$ROOT_DIR/bench/PalORM.PerfHub" -c Release -- \
             run --dialects sqlite,mysql,pg --tiers 2000,20000 --concurrency --threads 1,4,8
-        run_step "[3/5] DapperSuite 三方言（官方形状锚点）" bash "$ROOT_DIR/scripts/dappersuite-run.sh"
-        run_step "[4/5] 门禁（BDN 基线 + 结果库基线）" gate
+        # DapperSuite 只跑 SQLite：它的定位是"与 Dapper 官方数字可对照的外部锚点"，
+        # 而官方数字是单机 SQLite 的——跑 PG/MySQL 得不到可对照的外部锚点，只是白花 2/3 时间
+        #（2026-09-23 精简）。哨兵目的（换驱动/换大版本时复测）一个方言足够。
+        run_step "DapperSuite SQLite（官方形状锚点）" \
+            bash "$ROOT_DIR/scripts/dappersuite-run.sh" sqlite
+        run_step "门禁（BDN 基线 + 结果库基线）" gate
         # [5/5] 唯一报告产物：BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览
-        run_step "[5/5] 统一报告" report
+        run_step "统一报告" report
 
         if [ ${#STEP_FAILED[@]} -gt 0 ]; then
             echo ""
             echo "全量跑测有失败步骤：${STEP_FAILED[*]}" >&2
+            print_final_table
             exit 1
         fi
         echo ""
-        echo "全量跑测完成：五步全通过。"
+        echo "全量跑测完成：五步全通过，总耗时 $(fmt_dur "$((SECONDS - TOTAL_T0))")。"
+        print_final_table
         ;;
     compare)
         # 交替 A/B 是跨版本对比的唯一可信方式（规范 §5），直接转发编排器

@@ -62,7 +62,9 @@ BenchmarkDotNet 0.15.8 与 .NET 11 preview SDK 不兼容（`GetRuntimeVersion no
 
 ```bash
 # 运行装箱基准
-dotnet run --project bench/PalORM.Benchmarks -c Release -- --boxing
+dotnet run --project bench/PalORM.Benchmarks -c Release -- --boxing   # 已于 2026-09-23 删除
+# 该量具是 v5.0 阶段 3.4 的一次性决策仪器（决策已落地：不做）；
+# 同一问题现由 03_GcBenchmarks 以 BDN 形式覆盖，命令见 bench/PalORM.Benchmarks/BENCHMARKS.md
 ```
 
 ## 原始设计方案（已被实测结果取代）
