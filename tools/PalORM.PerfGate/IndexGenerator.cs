@@ -116,7 +116,7 @@ internal static class IndexGenerator
     {
         md.AppendLine("## 各夹具最近一批（可引用）");
         md.AppendLine();
-        md.AppendLine("> 子集批次（label 带 `quick`/`filtered`/`workload`/`memory`/`stability`）不在此表，"
+        md.AppendLine("> 子集批次（label 带 `quick`/`filtered`/`gate-set`/`workload`/`memory`/`stability`）不在此表，"
             + "它们不是该夹具的完整矩阵；全部批次见下一节。");
         md.AppendLine("> 优先取**无失败登记**的最近一批：有方言级失败的批次矩阵不完整"
             + "（实测 PG/MySQL 不可达时批次只剩 1 项，标签却是非子集，会被当成可引用）；"
