@@ -25,7 +25,7 @@ public static class QueryBuilderExtensions
     public static async ValueTask<List<T>> ToListAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operationLease =
-            builder._operationState.Enter();
+            builder._operationState.EnterReadOnly();
         // 缓存命中返回列表副本——List 本身隔离，但元素是共享实体实例（浅拷贝，ITM-308）：
         // 调用方修改命中实体会污染缓存与其他调用方。契约声明见 WithCache 文档。
         // ADR-L：实际 key 经租户作用域前缀组装（跨租户命中结构性不可能）
@@ -52,7 +52,7 @@ public static class QueryBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(action);
         using SessionOperationState.SessionOperationLease operationLease =
-            builder._operationState.Enter();
+            builder._operationState.EnterReadOnly();
         return await ExecuteForEachAsync(builder, action, ct, operationLease.Owner).ConfigureAwait(false);
     }
 
@@ -188,9 +188,12 @@ public static class QueryBuilderExtensions
 
         // 单次尝试内核——每次重试重建连接租约/命令/读取器；缓存写入仅在成功尝试发生；
         // 拦截器 OnBefore/OnError 按尝试触发（失败的尝试确实发生了），OnAfter 仅成功尝试。
+        // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
+        DbConnection? lastReadConnection = null;
         async Task<List<T>> ExecuteCoreAsync(CancellationToken token)
         {
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
+            lastReadConnection = connection;
             await using DbCommand cmd = connection.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
@@ -219,9 +222,10 @@ public static class QueryBuilderExtensions
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =
-                builder._operationState.Enter(operationOwner);
+                builder._operationState.EnterReadOnly(operationOwner);
             // 操作门禁横跨全部重试尝试持有——一次用户操作仍是一次门禁占用，
-            // 与 SessionOperationState 的单活动操作契约一致。
+            // 与 SessionOperationState 的单活动操作契约一致。ARCH-001（2026-09-23）：
+            // 只读入口走 EnterReadOnly——并行读作用域内允许并发租约，作用域外行为逐位不变。
             List<T> list = resilient
                 ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
                 : await ExecuteCoreAsync(ct).ConfigureAwait(false);
@@ -246,6 +250,11 @@ public static class QueryBuilderExtensions
             PalORMMetrics.CompleteActivity(activity, outcome);
             if (builder._metrics && sw is not null)
                 PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
+            // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
+            // 记录的是最后一次尝试的连接——重试路径上中间尝试的连接由作用域退出时统一释放（有界：
+            // 每操作至多 MaxRetries+1 条），换取不改动内核主体缩进的低风险接线。
+            if (lastReadConnection is not null)
+                await builder.ReleaseReadConnectionAsync(lastReadConnection).ConfigureAwait(false);
         }
     }
 
@@ -346,7 +355,7 @@ public static class QueryBuilderExtensions
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue = default, bool descending = true, CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operationLease =
-            builder._operationState.Enter();
+            builder._operationState.EnterReadOnly();
         var paged = builder.CloneForExecution();
         paged._useReadRoute = false;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
@@ -460,7 +469,7 @@ public static class QueryBuilderExtensions
         DbCommand? command = null;
         GridReader? grid = null;
         SessionOperationState.SessionOperationLease operationLease =
-            builder._operationState.Enter();
+            builder._operationState.EnterReadOnly();
         bool operationTransferred = false;
         try
         {

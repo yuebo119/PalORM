@@ -52,7 +52,8 @@ public sealed partial class DataSession<TProvider>
                 _operationState, Volatile.Read(ref _resilience), _options.CommandTimeout,
                 _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
             tableName, columnNames, _readConnProvider,
-            _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator));
+            _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
+            _readConnReturner));
 
         // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）

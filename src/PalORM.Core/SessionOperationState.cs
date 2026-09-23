@@ -72,7 +72,9 @@ internal sealed class SessionOperationState
                 throw new InvalidOperationException(
                     "The active transaction belongs to another asynchronous flow.");
             }
-            if (_isActive)
+            // ARCH-001（2026-09-23）：并行读作用域内只读租约在飞时，独占操作（写/事务/Bulk）
+            // 同样被拒绝——"只读并行、写与事务串行"的非对称语义由本检查兜住。
+            if (_isActive || _activeReadLeases > 0)
             {
                 if (ownedOperation)
                 {
@@ -90,6 +92,70 @@ internal sealed class SessionOperationState
             _activeOperation = null;
             return new SessionOperationLease(
                 this, _activeOperationOwner);
+        }
+    }
+
+    /// <summary>并行只读租约上限（ARCH-001，2026-09-23）——作用域内允许的并发只读操作数。</summary>
+    internal const int MaxParallelReads = 8;
+
+    /// <summary>并行只读作用域深度与在飞只读租约计数（ARCH-001）。作用域外两者恒为 0，
+    /// 门禁行为与既有逐位一致。</summary>
+    private int _parallelReadScopes;
+    private int _activeReadLeases;
+
+    /// <summary>是否处于并行读作用域（供 DataSession 的读连接池判断）。</summary>
+    internal bool ParallelReadsEnabled
+    {
+        get { lock (_sync) return _parallelReadScopes > 0; }
+    }
+
+    /// <summary>进入并行读作用域（ARCH-001）——可嵌套，深度归零即恢复单活动门禁。</summary>
+    internal void EnterParallelReadScope()
+    {
+        lock (_sync) _parallelReadScopes++;
+    }
+
+    internal void ExitParallelReadScope()
+    {
+        lock (_sync)
+        {
+            if (_parallelReadScopes > 0) _parallelReadScopes--;
+        }
+    }
+
+    /// <summary>只读操作租约（ARCH-001）：并行读作用域内允许 N 个并发只读操作（各自持读连接）；
+    /// 作用域外与既有单活动操作门禁逐位一致（含 owner 重入）。
+    /// <para>写/事务/Bulk 不经此入口——它们走 <see cref="Enter"/>，在只读租约在飞时被拒绝
+    /// （见其 <c>_activeReadLeases</c> 检查），即"只读并行、写与事务串行"的非对称语义。</para></summary>
+    internal SessionOperationLease EnterReadOnly(object? owner = null)
+    {
+        lock (_sync)
+        {
+            if (_parallelReadScopes == 0)
+                return Enter(owner);
+            bool ownedOperation = owner is not null
+                && ReferenceEquals(owner, _activeOperationOwner);
+            ObjectDisposedException.ThrowIf(_state == 2 && !ownedOperation, this);
+            if (_isActive || _transactionOwner is not null)
+            {
+                throw new InvalidOperationException(
+                    "DataSession already has an active database operation.");
+            }
+            if (_activeReadLeases >= MaxParallelReads)
+            {
+                throw new InvalidOperationException(
+                    $"Parallel read lease limit ({MaxParallelReads}) reached for this DataSession.");
+            }
+            _activeReadLeases++;
+            return new SessionOperationLease(this, owner: null, readOnly: true);
+        }
+    }
+
+    private void ExitReadOnly()
+    {
+        lock (_sync)
+        {
+            if (_activeReadLeases > 0) _activeReadLeases--;
         }
     }
 
@@ -583,20 +649,31 @@ internal sealed class SessionOperationState
     {
         // v4.5：删除 _operation(TCS) 字段 -- TCS 延迟创建在 SessionOperationState 内管理
         private readonly SessionOperationState? _state;
+        /// <summary>ARCH-001：只读租约（并行读作用域内）——Dispose 走 ExitReadOnly 递减计数，
+        /// 不碰 _isActive（独占标志只由独占操作持有）。</summary>
+        private readonly bool _readOnly;
 
         internal SessionOperationLease(
             SessionOperationState state,
-            object owner)
+            object? owner,
+            bool readOnly = false)
         {
             _state = state;
             Owner = owner;
+            _readOnly = readOnly;
         }
 
         internal object? Owner { get; }
 
         public void Dispose()
         {
-            if (_state is not null && Owner is not null)
+            if (_state is null) return;
+            if (_readOnly)
+            {
+                _state.ExitReadOnly();
+                return;
+            }
+            if (Owner is not null)
             {
                 _state.Exit(Owner);
             }

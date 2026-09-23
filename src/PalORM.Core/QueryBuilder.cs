@@ -29,6 +29,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// 无参：会话丢弃自己缓存的那条读连接即可（读路由失败时若因活动事务回退主连接，
     /// 最多多一次读连接重建，无害）。未配置读路由时为 null。</summary>
     internal readonly Func<ValueTask>? _readConnInvalidator;
+    /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——执行路径在读操作完成后调用；
+    /// 会话侧仅在并行读作用域内对池内连接生效（其余为空操作）。</summary>
+    internal readonly Func<DbConnection, ValueTask>? _readConnReturner;
     internal readonly SqlDialect _dialect;
     /// <summary>r5-S2：会话隔离级别（WithIsolationLevel 透传，null=驱动默认）。</summary>
     internal readonly System.Data.IsolationLevel? _isolationLevel;
@@ -90,6 +93,7 @@ public struct QueryBuilder<T> where T : class, new()
         _conn = ctx.Connection;
         _readConnProvider = ctx.ReadConnProvider;
         _readConnInvalidator = ctx.ReadConnInvalidator;
+        _readConnReturner = ctx.ReadConnReturner;
         _queryCache = ctx.QueryCache ?? CacheStore.Default;
         _dialect = ctx.Services.Dialect;
         _isolationLevel = ctx.Services.IsolationLevel;
@@ -567,8 +571,10 @@ public struct QueryBuilder<T> where T : class, new()
     internal ValueTask<DbConnection> AcquireExecutionConnectionAsync(bool writeOperation,
         CancellationToken cancellationToken)
     {
+        // ARCH-001（2026-09-23）：并行读作用域内只读操作必须走独立连接（同一连接无法承载并发
+        // reader）——作用域本身就是"我要并行读"的声明，故不要求显式 ForRead()。
         if (GetActiveTransaction() is not null || writeOperation
-            || !_useReadRoute || _readConnProvider is null)
+            || (!_useReadRoute && !_operationState.ParallelReadsEnabled))
             return ValueTask.FromResult(_conn);
 
         return AcquireRoutedConnectionAsync(cancellationToken);
@@ -585,6 +591,11 @@ public struct QueryBuilder<T> where T : class, new()
     /// <c>State</c> 仍为 Open，不丢弃则后续查询复用同一条死连接。未配置读路由时零开销。</summary>
     internal ValueTask InvalidateReadConnectionAsync()
         => _readConnInvalidator is null ? default : _readConnInvalidator();
+
+    /// <summary>归还并行读连接（ARCH-001，2026-09-23）：读操作执行完成后调用，把作用域内池连接
+    /// 交回空闲栈（会话侧仅在并行读作用域内对池内连接生效，其余为空操作）。</summary>
+    internal ValueTask ReleaseReadConnectionAsync(DbConnection connection)
+        => _readConnReturner is null ? default : _readConnReturner(connection);
 
     internal DbTransaction? GetActiveTransaction()
     {
@@ -617,7 +628,7 @@ public struct QueryBuilder<T> where T : class, new()
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
                 _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
-            _readConnInvalidator))
+            _readConnInvalidator, _readConnReturner))
         {
             _selectColumns = _selectColumns,
             _take = _take,
@@ -1280,4 +1291,5 @@ internal readonly record struct QueryBuilderContext<T>(
     Func<CancellationToken, ValueTask<DbConnection>>? ReadConnProvider = null,
     IQueryCache? QueryCache = null,
     bool ValidateColumnOrder = false,
-    Func<ValueTask>? ReadConnInvalidator = null) where T : class, new();
+    Func<ValueTask>? ReadConnInvalidator = null,
+    Func<DbConnection, ValueTask>? ReadConnReturner = null) where T : class, new();

@@ -50,6 +50,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>读连接失效上报（READ-001，2026-09-23）——配置读路由时非 null，
     /// 由读路径在瞬时失败时调用（见 <see cref="InvalidateReadConnectionAsync"/>）。</summary>
     private readonly Func<ValueTask>? _readConnInvalidator;
+    /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——恒非 null（方法组一次性缓存）：
+    /// 并行读作用域在未配置读路由时也生效（连接回落主连接串），故不能按读路由配置条件挂接。</summary>
+    private readonly Func<DbConnection, ValueTask> _readConnReturner;
+    /// <summary>并行读作用域的连接池（ARCH-001）——作用域内创建的读连接（全部）与其中空闲可复用的。</summary>
+    private readonly List<DbConnection> _parallelReadConnections = [];
+    private readonly Stack<DbConnection> _idleParallelReadConnections = new();
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
     {
@@ -63,10 +69,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // ITM-624 同型面（修复侧纪律卡第三问实证）：读连接每次创建都读 _options 字段而非
         // 捕获构造期 options——WithTimeout/WithRetry 后读连接与主连接的池参数/超时口径一致。
         _readConnectionString = options.ResolveReadConnectionString();
-        _readConnProvider = _readConnectionString is not null ? AcquireReadConnectionAsync : null;
+        // ARCH-001（2026-09-23）：读连接提供者恒挂接——作用域内走池（未配置读连接串时回落主连接串），
+        // 作用域外未配置读路由时由 AcquireReadConnectionAsync 直接返回主连接（ForRead 既有语义）。
+        _readConnProvider = AcquireReadConnectionAsync;
         // READ-001（2026-09-23）：读连接失效上报——只在配置了读路由时挂接（方法组一次性缓存，
         // 不在 From<T>() 里新建委托）。见 InvalidateReadConnectionIfCurrentAsync。
         _readConnInvalidator = _readConnectionString is not null ? InvalidateReadConnectionAsync : null;
+        _readConnReturner = ReleaseReadConnectionAsync;
         // v5.0 阶段 5.2：读连接初始化器——无 ReadSessionSetupSql 时用 static 委托（零闭包分配），
         // 有时包装一层实例委托追加执行 ReadSessionSetupSql。
         _readConnInitializer = string.IsNullOrWhiteSpace(options.ReadSessionSetupSql)
@@ -226,6 +235,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 随新物理句柄一并补设（ITM-207 的初始化契约不因复用而豁免）。</para></summary>
     private async ValueTask<DbConnection> AcquireReadConnectionAsync(CancellationToken cancellationToken)
     {
+        // ARCH-001（2026-09-23）：并行读作用域内从作用域局部池取（用完归还）——同一条会话级
+        // 读连接无法承载并发 reader。
+        if (_operationState.ParallelReadsEnabled)
+            return await AcquireParallelReadConnectionAsync(cancellationToken).ConfigureAwait(false);
+        if (_readConnectionString is null)
+            return _conn;   // 未配置读路由：ForRead 语义 = 主连接（既有行为，不新建连接）
+
         DbConnection? existing = _readConnection;
         if (existing is not null)
         {
@@ -234,7 +250,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             await DisposeReadConnectionAsync().ConfigureAwait(false);
         }
 
-        DbConnection created = TProvider.CreateConnection(_readConnectionString!, _options);
+        DbConnection created = TProvider.CreateConnection(_readConnectionString, _options);
         try
         {
             // READ-003（2026-09-22）：与主连接 CreateAsync 同口径——连接建立与初始化共享连接
@@ -265,6 +281,24 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 释放结果忽略：连接已不可用，清理异常无诊断价值（与 AcquireReadConnectionAsync
         // 丢弃失效连接时同口径）。
         await DisposeReadConnectionAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>并行读作用域内的连接获取（ARCH-001）：空闲连接优先复用，否则新建——连接串取
+    /// 读连接串，未配置时回落主连接串（同一库上的并行只读）。连接建立与初始化受 ConnectionTimeout
+    /// 约束（与 READ-003 同口径）。</summary>
+    private async ValueTask<DbConnection> AcquireParallelReadConnectionAsync(CancellationToken cancellationToken)
+    {
+        if (_idleParallelReadConnections.Count > 0)
+            return _idleParallelReadConnections.Pop();
+        DbConnection created = TProvider.CreateConnection(
+            _readConnectionString ?? _options.ResolveConnectionString(), _options);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(_options.ConnectionTimeout);
+        await created.OpenAsync(cts.Token).ConfigureAwait(false);
+        if (_readConnInitializer is not null)
+            await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+        _parallelReadConnections.Add(created);
+        return created;
     }
 
     /// <summary>释放并清空会话持有的读连接，返回释放异常（无异常返回 null）。
@@ -651,6 +685,53 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     private DbTransaction? GetActiveTransaction()
         => _operationState.GetActiveTransaction();
+
+    /// <summary>并行读作用域（ARCH-001，2026-09-23）——作用域内只读操作允许并发（各自持一条独立
+    /// 连接，从作用域局部池取、用完归还）；写/事务/Bulk 仍走单活动门禁（遇在飞只读租约即拒绝），
+    /// 即"只读并行、写与事务串行"的非对称语义。
+    /// <para><b>连接来源</b>：配置了 <c>ReadConnectionString</c> 时用读连接串，否则回落到主连接串
+    /// （同一库上的并行只读）。池在作用域退出时统一释放，连接数上限 <c>MaxParallelReads</c>（8）。</para>
+    /// <para><b>用法</b>：<c>await using (session.ForParallelReads()) { await Task.WhenAll(a, b); }</c>。
+    /// 作用域内不要发起写操作（会被门禁拒绝）；作用域可嵌套，最外层退出才释放池。</para></summary>
+    public ParallelReadScope ForParallelReads()
+    {
+        _operationState.EnterParallelReadScope();
+        return new ParallelReadScope(this);
+    }
+
+    /// <summary>并行读作用域句柄——DisposeAsync 退出作用域并在最外层释放池内连接。</summary>
+    public sealed class ParallelReadScope(DataSession<TProvider> session) : IAsyncDisposable
+    {
+        /// <inheritdoc />
+        public async ValueTask DisposeAsync()
+            => await session.EndParallelReadsAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>退出并行读作用域（ARCH-001）——最外层退出时释放池内全部连接。</summary>
+    private async ValueTask EndParallelReadsAsync()
+    {
+        _operationState.ExitParallelReadScope();
+        if (_operationState.ParallelReadsEnabled) return;   // 仍有外层作用域：保留池
+        foreach (DbConnection connection in _parallelReadConnections)
+        {
+            // 清理路径：池内连接多为空闲句柄，释放失败无诊断价值（与既有失效连接丢弃同口径）
+            try { await connection.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception) { _ = exception; }
+        }
+        _parallelReadConnections.Clear();
+        _idleParallelReadConnections.Clear();
+    }
+
+    /// <summary>归还并行读连接（ARCH-001）——作用域内读操作完成后由执行路径调用。
+    /// 非池内连接为空操作（主连接与会话级读连接不归还，仍归会话持有）。</summary>
+    internal ValueTask ReleaseReadConnectionAsync(DbConnection connection)
+    {
+        if (!_operationState.ParallelReadsEnabled) return default;
+        if (!_parallelReadConnections.Contains(connection)) return default;
+        if (!_idleParallelReadConnections.Contains(connection))
+            _idleParallelReadConnections.Push(connection);
+        return default;
+    }
 
     /// <summary>按调用方要求选择连接创建命令（READ-002，2026-09-23）：<paramref name="readFromReplica"/>
     /// 为真、且无活动事务、且配置了读路由（<c>ReadConnectionString</c>）时走读连接，否则主连接。
