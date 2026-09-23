@@ -22,6 +22,15 @@
     <CompilerVisibleProperty Include="PalORMAutoTagging" />
   </ItemGroup>
 
+  <!-- GEN-008（2026-09-23）：方言选择性发射。
+       消费侧声明实际使用的方言（逗号分隔：postgresql,mysql,sqlite），未声明的方言不发射
+       CRUD SQL 载荷（实测注册文件里方言 SQL 字面量占 42.9%，单方言应用可去约 2/3）。
+       未声明（或全不识别）= 三方言全发射，与既有行为逐位一致。
+       运行时若取到未发射方言的 SQL，CommandSqlByDialect.Get 会响亮失败并提示本属性名。 -->
+  <ItemGroup>
+    <CompilerVisibleProperty Include="PalORMTargetDialects" />
+  </ItemGroup>
+
   <!-- 评审 2026-09-02：[SqlFile] 特性的 .sql 文件经 AdditionalFiles 进入源生成器增量管线——
        文件内容成为缓存键，仅编辑 .sql 也会触发重新生成（消除 ITM-585 陈旧缓存限制）。
        包消费侧零配置；不希望 .sql 进入编译器管线的项目可自行移除这些项。 -->

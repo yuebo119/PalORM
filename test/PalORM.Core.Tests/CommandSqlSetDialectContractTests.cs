@@ -54,4 +54,24 @@ internal sealed class CommandSqlSetDialectContractTests
         await Assert.That(sets.Sqlite.InsertReturning).IsEqualTo(sets.PostgreSql.InsertReturning);
         await Assert.That(sets.Sqlite.UpsertReturning).IsEqualTo(sets.PostgreSql.UpsertReturning);
     }
+
+    [Test]
+    public async Task Get_MissingDialect_ThrowsActionableError()
+    {
+        // GEN-008（2026-09-23）：未目标方言在生成期发射 default（全空 CommandSqlSet）——
+        // Get 必须响亮失败并指向 PalORMTargetDialects，而不是返回空 SQL（空 SQL 会在驱动侧
+        // 报"语法错误"，把配置问题伪装成 SQL 问题）。
+        var byDialect = new CommandSqlByDialect(
+            default,
+            new CommandSqlSet("", "UPDATE t SET x = @p0", "DELETE FROM t WHERE Id = @p0", "", "", "", ""),
+            default);
+
+        await Assert.That(byDialect.Get(SqlDialect.PostgreSql).Update).IsEqualTo("UPDATE t SET x = @p0");
+        Exception? thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        {
+            _ = byDialect.Get(SqlDialect.MySql);
+            return Task.CompletedTask;
+        });
+        await Assert.That(thrown!.Message).Contains("PalORMTargetDialects");
+    }
 }
