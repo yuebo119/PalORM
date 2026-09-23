@@ -1,7 +1,7 @@
 {
   "Schema": 1,
   "Date": "2026-09-23",
-  "Environment": "32 \u903B\u8F91\u6838 / .NET 11.0.0-rc.1.26425.128 / GC Workstation\uFF1B\u6761\u76EE\u9010\u952E\u5408\u5E76\u81EA\u975E\u5B50\u96C6\u6279\u6B21\uFF0C\u6700\u65B0\u8D21\u732E\u6279\u6B21 2026-09-23 19:45:38 \u002B08:00\uFF08\u5065\u5EB7\u5EA6 clean 13.0 %\uFF09",
+  "Environment": "32 逻辑核 / .NET 11.0.0-rc.1.26425.128 / GC Workstation；条目逐键合并自非子集批次，最新贡献批次 2026-09-23 19:45:38 +08:00（健康度 clean 13.0 %）",
   "Thresholds": {
     "RatioDelta": 0.3
   },
@@ -277,14 +277,6 @@
       "Tier": 20000,
       "Ratio": 1.002048678960915,
       "MeanUs": 153.58349999999996
-    },
-    {
-      "Harness": "perfhub",
-      "Name": "Count",
-      "Dialect": "SQLite",
-      "Tier": 20000,
-      "Ratio": 1.15184638109306,
-      "MeanUs": 11.697000000000031
     },
     {
       "Harness": "perfhub",
@@ -600,14 +592,6 @@
     },
     {
       "Harness": "perfhub",
-      "Name": "Count",
-      "Dialect": "MySQL",
-      "Tier": 20000,
-      "Ratio": 1.0574463194226937,
-      "MeanUs": 2727.8985000000002
-    },
-    {
-      "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "MySQL",
       "Tier": 20000,
@@ -917,14 +901,6 @@
       "Tier": 20000,
       "Ratio": 1.0244777347868779,
       "MeanUs": 1242.2105000000004
-    },
-    {
-      "Harness": "perfhub",
-      "Name": "Count",
-      "Dialect": "PostgreSQL",
-      "Tier": 20000,
-      "Ratio": 0.03467450589408244,
-      "MeanUs": 1005.0994999999996
     },
     {
       "Harness": "perfhub",

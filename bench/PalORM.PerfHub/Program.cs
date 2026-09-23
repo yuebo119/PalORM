@@ -678,31 +678,27 @@ internal static class Program
         or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert");
 
     /// <summary>该项是否在给定档位测量。
-    /// <para><see cref="SingleTierOnly"/> 的项只在最小档跑——它的理由**不是**"行数不进测量"，
-    /// 而是针对已实测证实的测量伪影的防御（见该属性注释）。</para></summary>
+    /// <para><see cref="SingleTierOnly"/> 的项只在最小档跑——理由不是"行数不进测量"，
+    /// 而是针对已实测证实的不可信测量（见该属性注释）。</para></summary>
     private static bool RunsAtTier(string operation, int rows)
         => rows <= _minTier || (RowCountSensitive(operation) && !SingleTierOnly(operation));
 
-    /// <summary>只在最小档跑的项——**第二组原因：非最小档存在已实测证实的伪影**。
-    /// <para><b>唯一成员：`Count`。</b>现象：PG 方言非最小档上，`SELECT COUNT(*)`
-    /// （PerfHub 里唯一做全表顺序扫描的项）在 ADO/Dapper 两臂上间歇性测出 28~91 ms，
-    /// 而 PalORM 臂恒定约 1 ms，同轮地板比值在 0.03 与 0.67 之间翻转 20 倍。</para>
-    /// <para><b>已查实的事实</b>（2026-09-23，探针 + 外部轮询）：三臂执行**同一条** SQL、
-    /// 共用**同一条**连接（`DataSession(conn)` 包装传入连接，PalORM 臂不另开连接）；
-    /// 表全程恒为 20000 行 / 1.30 MB，而一条**新连接**的 COUNT 在同期恒为 1.5 ms；
-    /// 中位数≈均值（比值 0.98~1.04），故不是取平均伪影；ADO 臂在两次完全相同的运行里
-    /// 分别测出 28.15 ms 与 1.65 ms——即伪影是间歇性的。</para>
-    /// <para><b>已排除的两个假设</b>：① 死元组堆积——探针实测"删 20 万行后 reset"的
-    /// COUNT 为 1.08 ms，与干净态 1.17 ms 无差别；轮询器也显示表物理大小恒为 1.30 MB；
-    /// ② autovacuum/catalog 清理——同理被同一组数据否掉。</para>
-    /// <para><b>结论</b>：机制未查明，但已定位到"共用连接的会话态"**——因为新连接同期正常。
-    /// 在查明前只做防御：`Count` 不跑非最小档（`COUNT` 在 2000 档的测量正常、比值 0.57）。
-    /// 这不是修复，是把不可信的测量移出基线；查明后应改为定向修复并恢复该档位。</para></summary>
+    /// <summary>只在最小档跑的项——**第二组原因：非最小档的测量不可信**。
+    /// <para><b>唯一成员：`Count`。</b>2026-09-23 的完整调查记录在 docs/性能基准规范.md §5，
+    /// 结论摘要：同一张表、同一条 SQL、同一个执行计划，ADR/Dapper/PalORM 三臂实测为
+    /// 2.07 / 98.61 / 0.96 ms（相差 100 倍），而外部轮询显示表状态与新连接查询均正常。
+    /// 已定位并修复一个真缺陷（统计陈旧导致计划器选 Parallel Seq Scan——`ANALYZE` 已解决，
+    /// ADO 臂从 28 ms 回到 1~2.4 ms），但**残余差异未查明**。</para>
+    /// <para><b>已排除</b>：死元组膨胀（探针实测带 20 万死元组的表 COUNT 只要 1.5 ms）、
+    /// 同步统计陈旧（ANALYZE 已修，但 Dapper 臂仍 88~99 ms）、会话态（新连接同期正常）、
+    /// 取平均伪影（中位数≈均值）。</para>
+    /// <para>在查明前只做防御：`Count` 不跑非最小档。2000 档三臂正常（908 / 943 / 550 µs）。
+    /// **这不是修复**，是把不可信的测量移出基线。</para></summary>
     private static bool SingleTierOnly(string operation) => operation == "Count";
 
-    /// <summary>本轮的测试项名——**必须与 <see cref="RunOneImplAsync"/> 里的 MeasAsync 调用一一对应**。
-    /// 它只用于算进度条的分母；结束时会把实际测量数与计划数对账，不一致就打警告
-    /// （进度条说谎比没有进度条更糟）。</summary>
+    /// <summary>本轮的测试项名——只用于算进度条的分母，**与各 MeasAsync 调用点一一对应**。
+    /// 结束时会把实际测量数与计划数对账，不一致就打警告（进度条说谎比没有进度条更糟）。
+    /// 新增或删除测试项时必须同步这里，否则分母失真。</summary>
     private static readonly string[] OperationNames =
     [
         "BuildGetByKeySql", "BuildComplexQuerySql",
