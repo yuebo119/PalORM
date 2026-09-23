@@ -1359,7 +1359,7 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         FormattableString sql = FormattableStringFactory.Create(
             "SELECT " + Dataset.SelectColumns(dialect) + " FROM " + Dataset.Table(dialect));
         await foreach (S1Row? row in Session<TProvider>(conn)
-            .QueryAsyncEnumerable<S1Row>(sql, ct).ConfigureAwait(false))
+            .QueryAsyncEnumerable<S1Row>(sql, ct: ct).ConfigureAwait(false))
         {
             await onRow(row).ConfigureAwait(false);
             n++;
