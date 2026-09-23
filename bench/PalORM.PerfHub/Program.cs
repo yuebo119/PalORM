@@ -694,18 +694,20 @@ internal static class Program
         "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback"
     ];
 
-    /// <summary>本轮计划的测量数——进度条的分母。跳过项与未启用的并发档不计入。</summary>
+    /// <summary>本轮计划的测量数——进度条的分母。跳过项与未启用的并发档不计入。
+    /// <para><b>数据生成基线只在最后加一次</b>：它的循环在方言循环**之外**（每档一条，
+    /// 与方言无关）。曾把它算进 per-dialect 再乘方言数，于是三方言时多算 4 条——
+    /// 该错误由 <see cref="RunAsync"/> 末尾的对账警告抓出（计划 366 / 实际 362）。</para></summary>
     private static int PlannedMeasurements(
         List<DialectInfo> dialects, List<int> tiers, bool concurrency, List<int> threadTiers)
     {
         int perDialect = tiers.Sum(rows => OperationNames.Count(op => RunsAtTier(op, rows)) * ImplCount);
-        perDialect += tiers.Count;   // 每档 1 条数据生成基线
         if (concurrency)
         {
             perDialect += tiers.Count * threadTiers.Count * ImplCount;
         }
 
-        return perDialect * dialects.Count;
+        return (perDialect * dialects.Count) + tiers.Count;
     }
 
     /// <summary>三臂（ADO.NET / Dapper / PalORM）。</summary>
