@@ -1,8 +1,11 @@
 # 结果库（bench/results/）
 
 > **唯一登记处**（`docs/性能基准规范.md` v2 §6）。三套夹具每次跑测各写一份
-> `<夹具>-<时间戳>.json` 并刷新 `latest-<夹具>.json`；跨夹具索引报告由
-> `dotnet run --project tools/PalORM.PerfGate -- index` 生成到 `bench/reports/perf-index.md`。
+> `<夹具>-<时间戳>.json` 并刷新 `latest-<夹具>.json`。
+> 跨夹具索引（口径登记 + 健康度 + 失败登记 + 关键项）由
+> `dotnet run --project tools/PalORM.PerfGate -- index` 生成到 `bench/reports/perf-index.md`，
+> 同时作为一节出现在唯一报告 `bench/reports/perf-report-<时间戳>.md` 里
+> （由 `bash scripts/perf.sh report` 生成，无需单独跑 index）。
 
 ## 为什么是"信封"而不是完整明细
 

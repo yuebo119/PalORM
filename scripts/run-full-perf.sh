@@ -42,6 +42,9 @@ if dotnet run --project "$ROOT_DIR/test/PalORM.SourceGen.Tests" -c Release --no-
   STARTUP="ok"
 fi
 echo "启动量具: $STARTUP"
+# 落盘供编排层（perf.sh report）在生成统一报告时取用——统一报告在全部夹具之后才生成，
+# 不能依赖本脚本的进程内变量
+printf '%s' "$STARTUP" > "$REPORT_DIR/last-startup-status.txt"
 
 step "[4/6] BDN 微基准（维度 1，与门禁同参 1/3/5，约 5 分钟）"
 # 先清结果目录——混入陈旧报告会让门禁读到截断/异构 JSON（实测先例）
@@ -59,11 +62,20 @@ dotnet run --project "$ROOT_DIR/$GATE" -c Release --no-build -- \
 GATE_EXIT=${PIPESTATUS[0]}
 
 step "[6/6] 生成 markdown 报告"
+# SKIP_REPORT=1：由编排层（perf.sh full）在**全部夹具跑完后**统一生成一份报告。
+# 本脚本单独跑时报告只能含 BDN 明细 + 当时已有的结果库批次（PerfHub/DapperSuite 尚未跑）。
+if [ "${SKIP_REPORT:-0}" = "1" ]; then
+  echo "已跳过（SKIP_REPORT=1，报告由编排层在全部夹具完成后统一生成）"
+else
 set +e
 dotnet run --project "$ROOT_DIR/$GATE" -c Release --no-build -- \
   report --results "$RESULTS_DIR" --baseline "$ROOT_DIR/bench/baselines/perf-baseline.json" \
-  --workload "$WORKLOAD_JSON" --memory "$MEMORY_JSON" --startup "$STARTUP" --out "$REPORT_MD"
+  --workload "$WORKLOAD_JSON" --memory "$MEMORY_JSON" --startup "$STARTUP" \
+  --envelopes "$ROOT_DIR/bench/results" \
+  --index-baseline "$ROOT_DIR/bench/baselines/perfhub-index-baseline.json" \
+  --out "$REPORT_MD"
 set -e
+fi
 
 if [ "${WITH_REMOTE:-0}" = "1" ] && [ -f "$ROOT_DIR/.env.test" ]; then
   echo "（WITH_REMOTE=1：远程批量档由 .ai/perf-probe/RemoteBulk.cs 承担，属 gitignored 本地探针，不在本脚本内复刻）"

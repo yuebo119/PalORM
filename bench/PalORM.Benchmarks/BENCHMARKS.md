@@ -1,7 +1,8 @@
 # PalORM 性能基准报告 v5.0.0
 
 > **本文件只保留方法论与里程碑结论**（规范 v2 §6 起）。逐次明细与最新数字以**结果库**为准：
-> `bench/results/`（三套夹具统一信封）+ 索引报告 `bench/reports/perf-index.md`。
+> `bench/results/`（三套夹具统一信封）+ 唯一报告 `bench/reports/perf-report-<时间戳>.md`
+> （含跨夹具索引一节；单跑 `bash scripts/perf.sh index` 生成 `bench/reports/perf-index.md`）。
 > 历史事实：2026-09-19 之后 PerfHub 与 DapperSuite 的数字从未登记进本文件，断档已由结果库接管。
 >
 > **最新全量对比报告**：`docs/性能测试报告-2026-09-19.md`（优化前后对比 · 规范 v1 首份完整报告）；

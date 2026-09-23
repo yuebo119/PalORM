@@ -114,6 +114,10 @@ internal sealed class PeakSampler : IDisposable
 /// <summary>测量引擎——统一口径的三类指标采集。</summary>
 internal static class Measure
 {
+    /// <summary>预热的时间预算（秒）——与规范 §4「负载测试每档 ≥1.5 s 预热不计数」同值。
+    /// 快操作在达到上限次数前就用满这个预算（行为与固定次数一致），慢操作在此收敛。</summary>
+    private const double WarmupBudgetSeconds = 1.5;
+
     /// <summary>测单操作：全路径时延（构建→执行→完成）+ 分配量 + 采样堆峰 + Gen0。
     /// <para><b>全路径口径</b>：被测 <paramref name="action"/> 内部必须包含 SQL 构建
     /// （From&lt;T&gt;()/Where/BuildSql）→ 执行 → 物化的完整链路；测量引擎不额外剥离任何段。</para>
@@ -132,9 +136,20 @@ internal static class Measure
             await prepare(conn).ConfigureAwait(false);
         }
 
-        for (int i = 0; i < Math.Max(3, maxIterations / 5); i++)
+        // 预热次数按**时间**收敛：上限仍是 maxIterations/5，但累计耗时达 WarmupBudgetSeconds
+        // 即停（至少 3 次）。固定次数对慢操作是无界成本——实测 20K 档 Dapper BulkInsert
+        // 单次 1.36 s，40 次预热 54 s，是计时段（4 s 预算 → 3 次 ≈ 4.1 s）的 13 倍；
+        // 而预热的目的（JIT、驱动缓冲、语句缓存）在前几次即达成，规范 §4 也只要求
+        // 「≥1.5 s 预热不计数」。
+        int warmupCap = Math.Max(3, maxIterations / 5);
+        var warmupSw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < warmupCap; i++)
         {
             await action(impl, conn, i).ConfigureAwait(false);
+            if (i >= 2 && warmupSw.Elapsed.TotalSeconds >= WarmupBudgetSeconds)
+            {
+                break;
+            }
         }
 
         // 预热已改变库状态（插入/删除），计时前再重置一次，保证每轮起点一致

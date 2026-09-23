@@ -71,7 +71,9 @@ internal static class Program
         Console.WriteLine("         [--scope <说明>] [--notes <说明>] [--exclude <基准全名> ...]");
         Console.WriteLine("  check  --results <BDN结果目录> --baseline <基线路径>");
         Console.WriteLine("  report --results <BDN结果目录> --baseline <基线路径> --workload <json> --memory <json> --out <md>");
-        Console.WriteLine("         （workload/memory/out 可选；缺省只含微基准节）");
+        Console.WriteLine("         [--startup ok] [--envelopes <结果库目录>] [--index-baseline <索引基线路径>]");
+        Console.WriteLine("         （workload/memory/out 可选；缺省只含微基准节。传 --envelopes 时同一份报告");
+        Console.WriteLine("           追加跨夹具批次登记/口径/健康度与关键项——一次跑测只产出一份报告）");
         Console.WriteLine("  index  --results <结果库目录> --out <md>");
         Console.WriteLine("         （扫三套夹具的信封 JSON，生成跨夹具索引报告；默认 bench/results → bench/reports/perf-index.md）");
         Console.WriteLine("  record-index --out <基线路径> [--results <结果库目录>]");
@@ -225,10 +227,13 @@ internal static class Program
         (int passed, int total) = ReportGenerator.Generate(
             line.Require("results"),
             baseline,
-            line.Optional("workload"),
-            line.Optional("memory"),
-            line.Require("out"),
-            line.Optional("startup"));
+            new ReportGenerator.ReportInputs(
+                line.Optional("workload"),
+                line.Optional("memory"),
+                line.Optional("startup"),
+                line.Optional("envelopes"),
+                line.Optional("index-baseline")),
+            line.Require("out"));
         Console.WriteLine($"报告已生成：{line.Require("out")}（门禁判定 {passed}/{total} 阈值内）");
         return passed == total ? 0 : 1;
     }
