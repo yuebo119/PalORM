@@ -446,7 +446,7 @@ internal static class Program
         // Update/BulkUpdate）的残留漂移另计，见各项处的注释与规范 §5 待办。
         long[] keys = Dataset.KeySet(rows);
         long[] whereInIds = BuildWhereInIds(rows);
-        int bulkDeleteIters = BulkDeleteSeedRounds();
+        int bulkDeleteIters = BulkDeleteRounds(rows);
 
         // ── Build：纯 SQL 构建开销，不执行、不碰库 ──
         await MeasAsync(info, impl, "BuildGetByKeySql", "Build", rows, conn, results, scale, null,
@@ -614,7 +614,7 @@ internal static class Program
             // 优化就只能靠猜。
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
-                MaxIterations(operation), ct, prepare, BudgetSeconds(operation), scale).ConfigureAwait(false);
+                MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale).ConfigureAwait(false);
             sw.Stop();
             results.Add(m);
             PrintRow([m], sw.Elapsed);
@@ -627,24 +627,35 @@ internal static class Program
         }
     }
 
-    /// <summary>BulkDelete 的播种轮数——**必须等于迭代上限**，不随 <c>--quick</c> 缩放。
-    /// <para><b>为什么严格相等</b>：每轮删除一段互不重叠的主键窗口
-    /// （轮 i 删 ((i-1)×rows, i×rows]），故计时轮 i 需要主键空间到 i×rows。探针占 i=0、
-    /// 计时轮取 i=1..iterations，iterations ≤ 上限 → 播种上限轮即恰好够。</para>
-    /// <para><b>为什么不能缩</b>：曾按 <c>scale</c>（--quick 的 0.3）缩放，而上限不缩，
-    /// 于是 quick 批次的尾部轮次删到不存在的键——空删最快，中位数不受影响，
-    /// 但分配量按「整轮总分配 ÷ 轮数」计算会被低估，而分配量正是门禁卡的确定性指标。</para>
-    /// <para><b>为什么上限压到 50</b>：播种行数 = 轮数 × rows，tier 20000 档是 50×20000 = 100 万行，
-    /// 每次测量重置两遍。实测（2026-09-23 逐项耗时归因）BulkDelete 在 tier 20000 占该档
-    /// 390s 中的 269.5s（69%），而 tier 20000 的计时轮数由 4s 预算决定
-    /// （clamp(4 ÷ 81ms, 3, 上限) = 49），**上限从 200 降到 50 不减少 tier 20000 的样本数**，
-    /// 只把播种从 400 万行降到 100 万行。tier 2000 的样本数由 200 降到 50——
-    /// 中位数仍由 50 个样本给出，StdErr/Mean 约 2.8%（阈值 5%）。</para></summary>
-    private static int BulkDeleteSeedRounds() => BulkDeleteMaxIterations;
+    /// <summary>BulkDelete 的播种轮数——**等于它的迭代上限**（两者必须严格相等，见
+    /// <see cref="BulkDeleteMaxRounds"/> 与 <see cref="BulkDeleteSeedRowBudget"/> 的注释）。
+    /// <para>每轮删除一段互不重叠的主键窗口（轮 i 删 ((i-1)×rows, i×rows]），故计时轮 i
+    /// 需要主键空间到 i×rows。探针占 i=0、计时轮取 i=1..iterations，iterations ≤ 上限
+    /// → 播种上限轮即恰好够。曾按 <c>--quick</c> 的 scale 缩放而上限不缩，尾部轮次会删到
+    /// 不存在的键（空删最快，中位数不受影响，但分配量按「整轮总分配 ÷ 轮数」算会被低估，
+    /// 而分配量正是门禁卡的确定性指标）。</para></summary>
+    private static int BulkDeleteRounds(int rows)
+        => Math.Clamp(BulkDeleteSeedRowBudget / rows, 3, BulkDeleteMaxRounds);
 
-    /// <summary>BulkDelete 的计时迭代上限——低于通用上限 200，因为它与播种行数成正比
-    /// （见 <see cref="BulkDeleteSeedRounds"/>）。</summary>
-    private const int BulkDeleteMaxIterations = 50;
+    /// <summary>BulkDelete 的迭代轮数上限（档位 2000 时的值）。</summary>
+    private const int BulkDeleteMaxRounds = 50;
+
+    /// <summary>BulkDelete 播种的总行数预算——**这条是修掉"超配 16.7 倍"的关键**。
+    /// <para><b>实测依据</b>（2026-09-23，`.ai/perf-probe/MySqlSeedDiag.cs`，远程 MySQL 8.4）：
+    /// 每轮删 20000 个键 = 20 条 DELETE（`BulkSql.BatchRows` = 1000）单轮 **2.02 s**
+    ///（每条语句 101 ms，远程 RTT 主导）→ 4 s 预算下只跑 **3 轮**，即实际只需要
+    /// 3 × 20000 = **6 万行**；而按上限 50 轮播种要 **100 万行——超配 16.7 倍**。
+    /// 播种是纯开销：100 万行的客户端插入 93.6 s + 快照拷贝 94.6 s，
+    /// 而每次测量重置两遍、三臂共 6 遍（`DELETE` 107.3 s + 重置 114.0 s），
+    /// 合计约 24 分钟只为一个测量项，且三条单命令都超过驱动默认 30 秒超时 → 方言失败。</para>
+    /// <para><b>为什么用行数预算而不是直接压上限</b>：上限同时决定档位 2000 的样本数
+    /// （那里每轮只删 2000 键、单轮 0.20 s，4 s 预算能跑 19 轮，压上限会白丢样本）。
+    /// 行数预算让档位 2000 保持 50 轮不变、档位 20000 降到 10 轮——
+    /// 而档位 20000 的轮数本来就由预算决定（3 轮），降上限不损失样本。</para>
+    /// <para><b>代价（已实测、需随基线重录）</b>：SQLite 档位 20000 的样本数由 49 降到 10
+    ///（其删除快，预算不再是瓶颈）。10 个样本对中位数仍够（BDN 默认 15 轮），
+    /// 分配量的复现性从 0.07% 量级降到约 0.3%，仍远优于规范的 1% 门槛。</para></summary>
+    private const int BulkDeleteSeedRowBudget = 200_000;
 
     /// <summary>测项的时间预算（秒）——阶段 3.1 的自适应迭代上限基准。
     /// 迭代数 = clamp(预算 ÷ 预热后单次耗时, 3, 上限)，单测量耗时结构性有界。
@@ -660,11 +671,12 @@ internal static class Program
     };
 
     /// <summary>迭代数上限——防止极快操作（Build 类亚微秒）在 1s 预算内跑出
-    /// 无意义的十万次迭代（计时循环自身的开销会污染测量）。</summary>
-    private static int MaxIterations(string operation) => operation switch
+    /// 无意义的十万次迭代（计时循环自身的开销会污染测量）。
+    /// <c>BulkDelete</c> 的上限随档位变化，因为它与播种行数成正比（见 <see cref="BulkDeleteRounds"/>）。</summary>
+    private static int MaxIterations(string operation, int rows) => operation switch
     {
         "BuildGetByKeySql" or "BuildComplexQuerySql" => 2_000,
-        "BulkDelete" => BulkDeleteMaxIterations,
+        "BulkDelete" => BulkDeleteRounds(rows),
         _ => 200
     };
 

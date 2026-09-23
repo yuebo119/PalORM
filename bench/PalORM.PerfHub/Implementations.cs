@@ -83,16 +83,16 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         if (SeedSnapshots.ContainsKey((conn, rows)))
         {
             // 快照重置：服务端两条 SQL 完成全表复原——客户端零往返逐行成本
-            await ExecAsync(conn, $"DELETE FROM {T}", ct).ConfigureAwait(false);
-            await ExecAsync(conn, $"INSERT INTO {T} SELECT * FROM {snapshot} WHERE {Q("Id")} <= {rows}",
+            await TruncateAsync(D, conn, ct).ConfigureAwait(false);
+            await ExecSetupAsync(conn, $"INSERT INTO {T} SELECT * FROM {snapshot} WHERE {Q("Id")} <= {rows}",
                 ct).ConfigureAwait(false);
             return;
         }
 
-        await ExecAsync(conn, Dataset.DropTableSql(D), ct).ConfigureAwait(false);
-        await ExecAsync(conn, Dataset.CreateTableSql(D), ct).ConfigureAwait(false);
-        await ExecAsync(conn, $"DROP TABLE IF EXISTS {snapshot}", ct).ConfigureAwait(false);
-        await ExecAsync(conn, "CREATE TABLE " + snapshot + " AS SELECT * FROM " + T + " WHERE 1=0",
+        await ExecSetupAsync(conn, Dataset.DropTableSql(D), ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, Dataset.CreateTableSql(D), ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, $"DROP TABLE IF EXISTS {snapshot}", ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, "CREATE TABLE " + snapshot + " AS SELECT * FROM " + T + " WHERE 1=0",
             ct).ConfigureAwait(false);
         const int batch = 500;
         for (int start = 0; start < rows; start += batch)
@@ -101,6 +101,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             var sb = new StringBuilder();
             sb.Append("INSERT INTO ").Append(T).Append(" (").Append(Cols).Append(") VALUES ");
             await using DbCommand cmd = conn.CreateCommand();
+            cmd.CommandTimeout = SetupCommandTimeoutSeconds;
             for (int r = start; r < end; r++)
             {
                 if (r > start)
@@ -134,7 +135,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
-        await ExecAsync(conn, $"INSERT INTO {snapshot} SELECT * FROM {T}", ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, $"INSERT INTO {snapshot} SELECT * FROM {T}", ct).ConfigureAwait(false);
         SeedSnapshots[(conn, rows)] = true;
     }
 
@@ -860,6 +861,36 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             default: break;
         }
         cmd.Parameters.Add(p);
+    }
+
+    /// <summary>播种/重置类语句的命令超时（秒）——**必须显式给**，否则用驱动默认 30 秒。
+    /// <para>实测（2026-09-23，远程 MySQL 8.4，逐段探针 `.ai/perf-probe/MySqlSeedDiag.cs`）：
+    /// 100 万行的 `INSERT INTO perf_s1_seed SELECT * FROM perf_s1` 单命令 94.6 s、
+    /// `DELETE FROM perf_s1` 107.3 s、快照重置 114.0 s——**三条都超过 30 秒默认值**，
+    /// MySqlConnector 中止 socket（SocketException 995）并把连接置为 Broken，
+    /// 整个 MySQL 方言就此失败。播种不是被测操作（不计入任何指标），
+    /// 不该因默认超时把方言打断；被测命令仍用驱动默认，保持"挂住就快速失败"。</para></summary>
+    internal const int SetupCommandTimeoutSeconds = 600;
+
+    /// <summary>播种类语句的执行——显式设 <see cref="SetupCommandTimeoutSeconds"/>。</summary>
+    internal static async Task ExecSetupAsync(DbConnection conn, string sql, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandTimeout = SetupCommandTimeoutSeconds;
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>清空表——MySQL 用 <c>TRUNCATE</c>：实测 <c>DELETE FROM perf_s1</c> 删 100 万行
+    /// 要 **107.3 s**（InnoDB 逐行删 + 每行 undo/redo 日志），而 TRUNCATE 是元数据操作、近瞬时。
+    /// PG/SQLite 保持 DELETE（本地/直连，删空表代价可忽略；SQLite 无 TRUNCATE 语句）。
+    /// <para>语义等价：两者都把表清空且保留表结构，而重置路径随后立即重新灌入确定内容。</para></summary>
+    internal static async Task TruncateAsync(Dialect dialect, DbConnection conn, CancellationToken ct)
+    {
+        string sql = dialect == Dialect.MySql
+            ? $"TRUNCATE TABLE {Dataset.Table(dialect)}"
+            : $"DELETE FROM {Dataset.Table(dialect)}";
+        await ExecSetupAsync(conn, sql, ct).ConfigureAwait(false);
     }
 
     internal static async Task ExecAsync(DbConnection conn, string sql, CancellationToken ct)
