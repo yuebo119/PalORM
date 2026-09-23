@@ -160,11 +160,15 @@ internal static class PerfResultWriter
     /// <item><c>gate-set</c>：`run-full-perf.sh` 的门禁同参集（11 个基准类里只跑
     /// Crud + OrmComparison 两个类）——它自身注释就写着"可复现的操作性子集"，
     /// 但它不带 filtered，曾被当成完整矩阵顶掉 latest</item>
+    /// <item><c>ab/&lt;轮&gt;/&lt;方言&gt;/&lt;档位&gt;</c>：交替 A/B 的单个块（一次只跑一个方言的一个档位）。
+    /// 它不带任何子集词，曾被当成完整矩阵——而 A/B 正是"块 = 方言 × 档位"的设计，
+    /// 单块必然残缺（实测 2026-09-23：不登记时 `record-index` 会挑中 ab 批次而非全量批次）</item>
     /// <item><c>workload</c>/<c>memory</c>/<c>stability</c>：微基准的三条旁路模式（各只覆盖一个维度）</item>
     /// </list></summary>
     public static bool IsSubsetLabel(string label)
         => label.Contains("quick", StringComparison.OrdinalIgnoreCase)
         || label.Contains("filtered", StringComparison.OrdinalIgnoreCase)
+        || label.StartsWith("ab/", StringComparison.OrdinalIgnoreCase)
         || label is "gate-set" or "workload" or "memory" or "stability";
 
     /// <summary>仓库根：向上找 PalORM.slnx。</summary>

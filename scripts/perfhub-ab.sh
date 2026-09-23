@@ -40,6 +40,17 @@ done
 IFS=',' read -ra DL <<< "$DIALECTS"
 IFS=',' read -ra TR <<< "$TIERS"
 
+# 已由本脚本解析的方言/档位选项**不再转发**给 PerfHub：run_one 用空格形式自己传
+# `--dialects "$d" --tiers "$t"`，而 PerfHub 只认空格形式——原样转发 `--dialects=pg`
+# 会让它以"未知选项"立刻退出（实测：按本脚本头注释的 `=` 形式调用会 11 秒就失败）。
+FORWARD_ARGS=()
+for arg in "${EXTRA_ARGS[@]:-}"; do
+  case "$arg" in
+    --dialects=*|--tiers=*) ;;
+    *) FORWARD_ARGS+=("$arg") ;;
+  esac
+done
+
 echo "[A/B] HEAD=$HEAD_DIR"
 echo "[A/B] 基线=$BASELINE_DIR（须已含 PerfHub + IVT + .env.test）"
 echo "[A/B] 轮数=$ROUNDS  方言=${DL[*]}  档位=${TR[*]}"
@@ -50,7 +61,7 @@ run_one() { # $1=项目目录 $2=version $3=round $4=dialect $5=tier
   echo "── $(date +%H:%M:%S) [$2] r$3 $4/$5 ──"
   (cd "$1" && dotnet run --project bench/PalORM.PerfHub -c Release -- \
     run --dialects "$4" --tiers "$5" --version "$2" \
-    --label "ab/$3/$4/$5" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
+    --label "ab/$3/$4/$5" ${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"} \
     > /dev/null) || { echo "[A/B] 失败: $2 r$3 $4/$5"; exit 1; }
 }
 

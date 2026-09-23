@@ -30,7 +30,10 @@ internal static class IndexGate
         {
             Schema = 1,
             Date = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            Environment = DescribeEnvironment(batches[0]),
+            // 标注必须指向**真正贡献了数据的批次**：条目是逐键从"非子集批次"里取最新值合并出来的
+            // （见 KeyItems 的过滤），而 batches[0] 是含子集批次在内的最新一批——实测
+            // 2026-09-23 用它标注时写的是 ab/1/pg/2000（被跳过、零贡献），指错了对象。
+            Environment = DescribeEnvironment(NewestContributing(batches)),
             Thresholds = new IndexThresholds { RatioDelta = DefaultRatioThreshold },
             Items = [.. current.Select(static entry => new IndexBaselineItem
             {
@@ -218,11 +221,22 @@ internal static class IndexGate
     }
 
     /// <summary>每个夹具取最近一批（含 quick 标记的批次由调用方过滤）。</summary>
-    /// <summary>环境一句话——写进基线的 environment 字段。</summary>
+    /// <summary>最新一个**为基线贡献条目的**批次——只有 PerfHub 的 PalORM 臂进基线
+    /// （见 <see cref="KeyItems"/>），故须同时限定 harness 与"非子集"。
+    /// 少限定 harness 会指向 DapperSuite 批次（实测：它比 PerfHub 批次晚 3 分钟），
+    /// 少限定子集会指向 ab 块（被跳过、零贡献）。都不满足时退回最新批。</summary>
+    private static PerfResultEnvelope NewestContributing(List<PerfResultEnvelope> batches)
+        => batches.FirstOrDefault(static r =>
+            r.Harness == "perfhub" && !PerfResultWriter.IsSubsetLabel(r.Label)) ?? batches[0];
+
+    /// <summary>环境一句话——写进基线的 environment 字段。
+    /// 条目是**逐键合并**自多个非子集批次的（见 <see cref="KeyItems"/>），故这里只说
+    /// "最新贡献批次"，不说"录制批次"——后者会让人以为整份基线来自单一批次。</summary>
     private static string DescribeEnvironment(PerfResultEnvelope run)
         => string.Create(CultureInfo.InvariantCulture,
             $"{run.Environment.Processor} / {run.Environment.Runtime} / GC {run.Environment.GcMode}；"
-            + $"录制批次 {run.Timestamp}（健康度 {run.Regime.Health} {run.Regime.HealthRatio:P1}）");
+            + $"条目逐键合并自非子集批次，最新贡献批次 {run.Timestamp}"
+            + $"（健康度 {run.Regime.Health} {run.Regime.HealthRatio:P1}）");
 
     /// <summary>结果库全部批次（按时间倒序）——门禁逐键取最新可得值，故需要全量而非只读 latest-*。
     /// 子集标记批次在 <see cref="KeyItems"/> 里被过滤掉。</summary>
