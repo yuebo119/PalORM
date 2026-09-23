@@ -302,8 +302,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                                 // P1：满批路径直传 pool——原实现经 rowCommand.Parameters 索引器
                                 // 取值，每行每列一次跨接口虚调用 + 一次硬转型（10 万行 × 10 列
                                 // = 100 万次），而 pool 与 Parameters 持有的是同一批对象。
-                                await WriteRowAsync(importer, rowCommand, pool, columnCount, commandCt)
-                                    .ConfigureAwait(false);
+                                WriteRow(importer, rowCommand, pool, columnCount, commandCt);
                                 total++;
                             }
                             await importer.CompleteAsync(commandCt).ConfigureAwait(false);
@@ -420,19 +419,26 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <summary>把单行参数写入 PG Binary importer——DBNull 转换为 null 让 importer 用列默认类型。
     /// <para>P1：<paramref name="pool"/> 非 null（满批复用路径）时直接索引取值，避开
     /// <see cref="DbParameterCollection"/> 索引器的跨接口虚调用与硬转型；池尚未建立
-    /// （首行）或旧版生成器回退路径下走 rowCommand.Parameters。</para></summary>
-    private static async ValueTask WriteRowAsync(
+    /// （首行）或旧版生成器回退路径下走 rowCommand.Parameters。</para>
+    /// <para><b>PROV-002（2026-09-23）</b>：行内改<b>同步</b> Write/StartRow——19 列 × 10 万行原先付
+    /// 190 万次 async 状态机（每次只做缓冲区写入，无真实异步 IO）；Npgsql 对 COPY 的建议同样是
+    /// CPU 密集段用同步 API（API 面已核对本机 npgsql/10.0.3 包 XML：<c>Write&lt;T&gt;(T, NpgsqlDbType)</c>
+    /// 与 <c>StartRow()</c> 存在）。取消检查移到行边界，粒度从"每列"变为"每行"。</para>
+    /// <para><b>验证缺口</b>：真库行为（写入正确性/NULL/类型推断/取消语义）需 ExternalDatabase
+    /// 环境（ExternalDatabaseBulkTests），本机 PG 不可达——本改动只经编译与 SQLite 套件回归。</para></summary>
+    private static void WriteRow(
         NpgsqlBinaryImporter importer, DbCommand rowCommand, DbParameter[]? pool,
         int columnCount, CancellationToken ct)
     {
-        await importer.StartRowAsync(ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        importer.StartRow();
         for (int parameterIndex = 0; parameterIndex < columnCount; parameterIndex++)
         {
             var parameter = (NpgsqlParameter)(pool is not null
                 ? pool[parameterIndex]
                 : rowCommand.Parameters[parameterIndex]);
             object? value = parameter.Value is DBNull ? null : parameter.Value;
-            await importer.WriteAsync(value, parameter.NpgsqlDbType, ct).ConfigureAwait(false);
+            importer.Write(value, parameter.NpgsqlDbType);
         }
     }
 
