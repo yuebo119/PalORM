@@ -118,9 +118,10 @@ internal static class IndexGenerator
         md.AppendLine();
         md.AppendLine("> 子集批次（label 带 `quick`/`filtered`/`gate-set`/`workload`/`memory`/`stability`）不在此表，"
             + "它们不是该夹具的完整矩阵；全部批次见下一节。");
-        md.AppendLine("> 优先取**无失败登记**的最近一批：有方言级失败的批次矩阵不完整"
-            + "（实测 PG/MySQL 不可达时批次只剩 1 项，标签却是非子集，会被当成可引用）；"
-            + "整组都带失败时回退取最近一批并在表中标 ⚠️。");
+        md.AppendLine("> 取**最近一批非子集批次**，完整性由行内两列披露：`方言范围`（缺哪几个方言）与"
+            + "`失败登记`（方言级/单项失败的条数）。不自动跳过带失败的批次——"
+            + "实测（2026-09-23 全量）386 项、只缺 MySQL 的批次会被\"优先选无失败批次\"的规则跳过，"
+            + "于是表里显示的是前一天 152 项的旧批次，把最新最全的数据藏了起来。");
         md.AppendLine();
         md.AppendLine("| 夹具 | 时间 | 提交 | 版本 | 标签 | 方言范围 | 连接配置口径 | 会话口径 | 健康度 | 项数 | 失败登记 | 明细 |");
         md.AppendLine("|---|---|---|---|---|---|---|---|---|---:|---:|---|");
@@ -151,19 +152,20 @@ internal static class IndexGenerator
         var rows = new List<(string Harness, string Timestamp, PerfResultSection Section)>();
         foreach (IGrouping<string, PerfResultEnvelope> group in runs.GroupBy(static r => r.Harness))
         {
-            // 覆盖"可引用批次及其之后"的全部非子集批次：可引用表可能跳过了带失败的新批次，
-            // 只报可引用批次会把"最近一次其实失败了"这个事实藏起来。
+            // 只报"可引用批次"（= 最近一批非子集批次）自己的失败——与上一张表同一批次，
+            // 两表对齐读者才不会误以为在说两个不同的批次。
             List<PerfResultEnvelope> candidates =
                 [.. group.Where(static x => !PerfResultWriter.IsSubsetLabel(x.Label))];
             if (candidates.Count == 0) continue;
-            int quotableIndex = candidates.IndexOf(SelectQuotable(candidates));
-            foreach (PerfResultEnvelope r in candidates.Take(quotableIndex + 1))
-            {
-                rows.AddRange(FailureSections(r).Select(s => (r.Harness, r.Timestamp, s)));
-            }
+            PerfResultEnvelope r = SelectQuotable(candidates);
+            rows.AddRange(FailureSections(r).Select(s => (r.Harness, r.Timestamp, s)));
         }
 
-        md.AppendLine("## 批次失败登记（可引用批次及其之后的非子集批次）");
+        md.AppendLine("## 批次失败登记（可引用批次）");
+        md.AppendLine();
+        md.AppendLine("> 反复出现的失败见下一节「全部批次」表的 `失败登记` 列——本节只展开最近一批；"
+            + "只留本节会把跨批次的规律藏起来（实测 MySQL `BulkDelete` 在 2026-09-22 与 09-23 的"
+            + "5 个批次里反复失败，单看某一批像是偶发）。");
         md.AppendLine();
         if (rows.Count == 0)
         {
@@ -175,7 +177,6 @@ internal static class IndexGenerator
         md.AppendLine("> **有登记的批次不得当作「该夹具已覆盖」**：方言级失败会让整列方言缺失，"
             + "单项失败会让某个 (实现 × 操作) 组合缺失。缺的项在报告里表现为行数变少，"
             + "不看本节就会把它读成「没测这项」而非「测失败了」。");
-        md.AppendLine("> 时间列即该失败所属批次——它可能晚于上一张表的可引用批次（那一批因不完整被跳过）。");
         md.AppendLine();
         md.AppendLine("| 夹具 | 时间 | 类型 | 方言 | 上下文 | 原因 |");
         md.AppendLine("|---|---|---|---|---|---|");
@@ -202,10 +203,14 @@ internal static class IndexGenerator
         return dialects.Length == 0 ? "—" : string.Join('+', dialects);
     }
 
-    /// <summary>从非子集批次中选"可引用"的那一批：优先无失败登记，整组都有失败时回退取最近一批。
-    /// <paramref name="candidates"/> 已按时间倒序，故 <c>[0]</c> 即最近。</summary>
+    /// <summary>从非子集批次中选"可引用"的那一批：**取最近一批**（<paramref name="candidates"/>
+    /// 已按时间倒序，故 <c>[0]</c> 即最近）。
+    /// <para>曾经的规则是"优先无失败登记"，理由是残缺矩阵不该被当成完整矩阵。实测证明该规则
+    /// 会反向伤人：2026-09-23 全量跑出 386 项、只缺 MySQL 的批次，被跳过而显示了前一天 152 项的
+    /// 旧批次——读者拿到的是更旧更少的数据。完整性改由两列披露（<see cref="DialectScope"/> +
+    /// 失败登记条数），不靠隐藏批次。</para></summary>
     private static PerfResultEnvelope SelectQuotable(List<PerfResultEnvelope> candidates)
-        => candidates.FirstOrDefault(static x => FailureSections(x).Count == 0) ?? candidates[0];
+        => candidates[0];
 
     private static List<PerfResultSection> FailureSections(PerfResultEnvelope r)
         => [.. r.Sections.Where(static s => s.Kind.Contains("failure", StringComparison.OrdinalIgnoreCase))];
@@ -220,14 +225,17 @@ internal static class IndexGenerator
     {
         md.AppendLine("## 全部批次（倒序）");
         md.AppendLine();
-        md.AppendLine("| 夹具 | 时间 | 提交 | 版本 | 标签 | 健康度 | 健康度依据(StdDev/Mean) | 项数 | 耗时 s |");
-        md.AppendLine("|---|---|---|---|---|---|---:|---:|---:|");
+        md.AppendLine("> `失败登记` 列让**跨批次反复出现的失败**可见（上一节只展开最近一批）。");
+        md.AppendLine();
+        md.AppendLine("| 夹具 | 时间 | 提交 | 版本 | 标签 | 健康度 | 健康度依据(StdDev/Mean) | 项数 | 失败登记 | 耗时 s |");
+        md.AppendLine("|---|---|---|---|---|---|---:|---:|---:|---:|");
         foreach (PerfResultEnvelope r in runs)
         {
+            int failures = FailureSections(r).Count;
             md.AppendLine(CultureInfo.InvariantCulture,
                 $"| {r.Harness} | {r.Timestamp} | `{r.Commit}` | {r.Version} | {r.Label} | {Health(r)} | "
                 + $"{(r.Regime.HealthRatio > 0 ? r.Regime.HealthRatio.ToString("P1", CultureInfo.InvariantCulture) : "未采")} | "
-                + $"{r.Items.Count} | {r.ElapsedSeconds:F1} |");
+                + $"{r.Items.Count} | {(failures > 0 ? $"⚠️ {failures}" : "—")} | {r.ElapsedSeconds:F1} |");
         }
 
         md.AppendLine();
