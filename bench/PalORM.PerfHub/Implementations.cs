@@ -86,6 +86,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             await TruncateAsync(D, conn, ct).ConfigureAwait(false);
             await ExecSetupAsync(conn, $"INSERT INTO {T} SELECT * FROM {snapshot} WHERE {Q("Id")} <= {rows}",
                 ct).ConfigureAwait(false);
+            await RefreshStatsAsync(conn, ct).ConfigureAwait(false);
             return;
         }
 
@@ -137,6 +138,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
 
         await ExecSetupAsync(conn, $"INSERT INTO {snapshot} SELECT * FROM {T}", ct).ConfigureAwait(false);
         SeedSnapshots[(conn, rows)] = true;
+        await RefreshStatsAsync(conn, ct).ConfigureAwait(false);
     }
 
     public async Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
@@ -505,6 +507,27 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         }
     }
 
+    /// <summary>刷新 PG 的计划器统计——**只对 PG 生效**。
+    /// <para><b>为什么必须有</b>：夹具会把行数改变一个数量级再改回来。实测（2026-09-23）：
+    /// BulkDelete 在 tier 20000 档把表播到 200,000 行，期间的 autovacuum/ANALYZE 把
+    /// reltuples 记成约 20 万；之后查询组 reset 回 20,000 行却**不刷新统计**，于是
+    /// <c>SELECT COUNT(*)</c> 拿到 7 倍高估的行数估计，计划器选 Parallel Seq Scan（2 workers），
+    /// Gather/worker 开销约 110 ms 峰值（实测 28.85 ms）压倒本应 1 ms 的串行扫描。
+    /// 同一张表、同一条 SQL、同一条连接，只补一次 ANALYZE 就回到 1.62 ms。</para>
+    /// <para><b>影响面不止 Count</b>：任何被计划器选成顺序扫描的项都会中招；此前的表征是
+    /// <c>Count/PostgreSQL/t20000</c> 的比值在批次间翻转 20 倍、且间歇性。</para>
+    /// <para><b>为什么只有 PG</b>：MySQL 的 InnoDB 持久统计由 innodb_stats_auto_recalc 自动维护
+    /// （实测 MySQL 同项比值稳定在 0.97~1.06），SQLite 无基于行数估计的并行扫描决策。
+    /// 这是**播种步骤**、不计入任何测量，因此不构成 §4.1 意义上的臂间口径差异。</para></summary>
+    private async Task RefreshStatsAsync(DbConnection conn, CancellationToken ct)
+    {
+        if (D != Dialect.PostgreSql)
+        {
+            return;
+        }
+
+        await ExecSetupAsync(conn, $"ANALYZE {T}", ct).ConfigureAwait(false);
+    }
     public async Task<long> BulkDeleteAsync(DbConnection conn, IReadOnlyList<object> keys, CancellationToken ct)
         => await BulkDeleteAsync(conn, keys, null, ct).ConfigureAwait(false);
 
