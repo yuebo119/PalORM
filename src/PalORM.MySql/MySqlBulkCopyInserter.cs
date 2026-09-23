@@ -17,6 +17,19 @@ namespace PalORM.MySql;
 /// BulkCopy 失败整批回滚。</para></summary>
 internal static class MySqlBulkCopyInserter
 {
+    /// <summary>列映射缓存（PROV-002，2026-09-23）：键 = (目标表, 列集)，值 = 不可变映射数组。
+    /// 键空间 = 实体 × 列集（有限，与 Provider 侧既有静态缓存同纪律）；映射对象跨批共享。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (string Table, string Columns), MySqlBulkCopyColumnMapping[]> ColumnMappingCache = new();
+
+    private static MySqlBulkCopyColumnMapping[] BuildColumnMappings(string[] columns)
+    {
+        var mappings = new MySqlBulkCopyColumnMapping[columns.Length];
+        for (int i = 0; i < columns.Length; i++)
+            mappings[i] = new MySqlBulkCopyColumnMapping(i, columns[i]);
+        return mappings;
+    }
+
     /// <summary>执行批量插入。</summary>
     public static async Task<long> ExecuteAsync<T>(
         MySqlConnection conn,
@@ -139,8 +152,16 @@ internal static class MySqlBulkCopyInserter
             // DestinationColumn 在非表达式形态下由驱动执行 QuoteIdentifier（反引号包裹 +
             // 内嵌反引号翻倍）；此处传入已引用名会导致双重引用（`` `order` `` 被当作字面量）。
             // 故裸名是正确契约，保留。
-            for (int i = 0; i < allColumns.Length; i++)
-                bulk.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, allColumns[i]));
+            // PROV-002（2026-09-23）：列映射只依赖 (目标表, 列集)——跨批恒定，缓存数组避免每批重建。
+            // MySqlBulkCopyColumnMapping 是不可变值对象（本机 mysqlconnector/2.6.2 包 XML：仅
+            // SourceOrdinal/DestinationColumn/Expression 只读属性 + 构造入参），跨 MySqlBulkCopy
+            // 实例共享安全。MySqlBulkCopy 对象本身仍每批新建——跨批复用需驱动侧确认，未纳入。
+            MySqlBulkCopyColumnMapping[] mappings = ColumnMappingCache.GetOrAdd(
+                (ctx.QuotedTable, string.Join('\u0001', allColumns)),
+                static (_, columns) => BuildColumnMappings(columns),
+                allColumns);
+            foreach (MySqlBulkCopyColumnMapping mapping in mappings)
+                bulk.ColumnMappings.Add(mapping);
             // v5.6：DataTable → EntityDataReader（每行 372/360 B → 57 B，−84%；时间 −11%）
             using var reader = new EntityDataReader(start, end, pool, bindRow, allColumns,
                 layout.PrimaryKeyPrefixLength);
