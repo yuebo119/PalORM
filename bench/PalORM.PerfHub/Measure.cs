@@ -123,20 +123,27 @@ internal static class Measure
     /// （From&lt;T&gt;()/Where/BuildSql）→ 执行 → 物化的完整链路；测量引擎不额外剥离任何段。</para>
     /// <para><b>prepare 语义</b>：在预热前与计时循环前各调用一次，用于把库重置到确定状态
     /// （写操作每轮要用不同主键，否则第二轮撞主键；删操作每轮要有行可删）。
-    /// prepare 不计入时延与分配。</para></summary>
+    /// prepare 不计入时延与分配。</para>
+    /// <para><b>scale</b>：计时与预热两条时间预算的共同缩放系数。全量跑为 1.0；
+    /// <c>--quick</c> 传 0.3，使 usage 声明的"迭代次数降到 30%"真正生效——
+    /// 该系数此前只流到 BulkDelete 的播种（并因上限不缩而把尾部轮次变成空删），
+    /// 迭代预算完全没缩，冒烟跑实际上没变快。</para></summary>
     public static async Task<Measurement> SingleAsync(
         DialectInfo dialect, IPerfImplementation impl, string operation, string group, int rows,
         Func<IPerfImplementation, DbConnection, int, Task> action,
         DbConnection conn, int maxIterations, CancellationToken ct,
-        Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5)
+        Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0)
     {
+        double warmupSeconds = WarmupBudgetSeconds * scale;
+        double timedSeconds = budgetSeconds * scale;
+
         // 预热（JIT + 驱动缓冲 + 缓存填充）——不计入样本
         if (prepare is not null)
         {
             await prepare(conn).ConfigureAwait(false);
         }
 
-        // 预热次数按**时间**收敛：上限仍是 maxIterations/5，但累计耗时达 WarmupBudgetSeconds
+        // 预热次数按**时间**收敛：上限仍是 maxIterations/5，但累计耗时达 warmupSeconds
         // 即停（至少 3 次）。固定次数对慢操作是无界成本——实测 20K 档 Dapper BulkInsert
         // 单次 1.36 s，40 次预热 54 s，是计时段（4 s 预算 → 3 次 ≈ 4.1 s）的 13 倍；
         // 而预热的目的（JIT、驱动缓冲、语句缓存）在前几次即达成，规范 §4 也只要求
@@ -146,7 +153,7 @@ internal static class Measure
         for (int i = 0; i < warmupCap; i++)
         {
             await action(impl, conn, i).ConfigureAwait(false);
-            if (i >= 2 && warmupSw.Elapsed.TotalSeconds >= WarmupBudgetSeconds)
+            if (i >= 2 && warmupSw.Elapsed.TotalSeconds >= warmupSeconds)
             {
                 break;
             }
@@ -166,7 +173,7 @@ internal static class Measure
         probe.Stop();
         double perOpSeconds = Math.Max(probe.Elapsed.TotalSeconds, 1e-7);
         int iterations = Math.Clamp(
-            (int)(budgetSeconds / perOpSeconds), 3, Math.Max(3, maxIterations));
+            (int)(timedSeconds / perOpSeconds), 3, Math.Max(3, maxIterations));
 
         var samples = new List<double>(iterations);
         int gen0Before = GC.CollectionCount(0);

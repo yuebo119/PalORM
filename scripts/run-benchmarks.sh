@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# PalORM 性能基准标准运行脚本
+# PalORM 微基准**完整矩阵**运行脚本
+#
+# 角色：第二个（也是最后一个）用户入口。与 perf.sh 的分工——
+#   perf.sh          → 门禁集（27 项，与 CI 同参）+ 三套夹具 + 唯一报告，日常与提交前用这个
+#   run-benchmarks.sh → 完整矩阵（11 个类里的其余 58 项）+ 基线录制，专项调查与换驱动时用
+# 其余 scripts/*.sh 是这两个入口调用的编排步骤，不单独作为用户入口。
+#
 # 用法：
 #   bash scripts/run-benchmarks.sh [sqlite|pg|mysql|all|scale|build|workload|speed]
 #   bash scripts/run-benchmarks.sh sqlite --save-baseline  # 保存基线 JSON
@@ -40,7 +46,7 @@ case "$TARGET" in
     echo ">>> 运行 SQLite 基准（CRUD + Bulk + Transaction + Advanced）..."
     dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
       --filter '*CrudBenchmarks*' '*BulkBenchmarksFixed*' '*BulkBenchmarks*' \
-               '*GcBenchmarks*' '*SqlBuildBenchmarks*' '*SqliteSpeedBenchmarks*' \
+               '*GcBenchmarks*' '*SqlBuildBenchmarks*' \
                '*FeatureBenchmarks*' '*OrmComparisonBenchmarks*' '*BinaryBenchmarks*' \
       --exporters json 2>&1 | tee /tmp/bench-sqlite-$(date +%Y%m%d-%H%M%S).log
     ;;
@@ -84,12 +90,17 @@ case "$TARGET" in
     dotnet run --project "$BENCH_DIR" -c Release --no-build --       --workload 2>&1 | tee /tmp/bench-workload-$(date +%Y%m%d-%H%M%S).log
     ;;
   speed)
-    echo ">>> 运行纯速度基准（无 MemoryDiagnoser 交叉验证）..."
-    dotnet run --project "$BENCH_DIR" -c Release --no-build -- \
-      --filter '*SqliteSpeedBenchmarks*' 2>&1 | tee /tmp/bench-speed-$(date +%Y%m%d-%H%M%S).log
+    # 原 05_SqliteSpeedBenchmarks 独立类已删（2026-09-23 审计）：它测的是 01_CrudBenchmarks
+    # 的真子集（同操作、同 SQL 文本、同 job），且因无 MemoryDiagnoser 被 ResultReader
+    # 结构性排除在门禁之外，数字从未被任何报告引用。其问句（MemoryDiagnoser 是否干扰 >5%）
+    # 用"临时摘掉 01 的属性跑同一过滤器"即可回答，不需要常驻一个类。
+    echo "纯速度交叉验证的做法（不再有专用类）："
+    echo "  1) 临时移除 bench/PalORM.Benchmarks/01_CrudBenchmarks.cs 的 [MemoryDiagnoser]"
+    echo "  2) bash scripts/run-benchmarks.sh sqlite"
+    echo "  3) 与此前带 diagnoser 的同项中位数对比；差 >5% 才说明 diagnoser 干扰了测量"
     ;;
   *)
-    echo "用法: bash scripts/run-benchmarks.sh [sqlite|pg|mysql|scale|build|speed|all]"
+    echo "用法: bash scripts/run-benchmarks.sh [sqlite|pg|mysql|scale|build|all|workload]"
     echo "  追加 --save-baseline 保存基线 JSON"
     echo "  追加 --compare <version> 与已有基线对比"
     exit 1

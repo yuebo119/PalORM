@@ -63,9 +63,10 @@ internal static class ResultReader
                     $"{file} 中的条目缺少 FullName/Statistics.Median: {benchmark.FullName ?? "(null)"}");
             }
 
-            // 无 [MemoryDiagnoser] 的类（如 SqliteSpeedBenchmarks）不产出分配数据。
-            // 这类条目跳过而非失败：覆盖度由"基线列了什么就必须出现什么"兜底——
-            // 基线里有的基准本轮缺失会被判 FAIL，不会静默缩水。
+            // 无 [MemoryDiagnoser] 的类不产出分配数据。这类条目跳过而非失败：覆盖度由
+            // "基线列了什么就必须出现什么"兜底——基线里有的基准本轮缺失会被判 FAIL，
+            // 不会静默缩水。（当前基准套件的类都带 diagnoser；此分支为"临时摘掉 diagnoser
+            // 做纯速度交叉验证"的场景保留。）
             if (benchmark.Memory?.BytesAllocatedPerOperation is not { } allocated) continue;
 
             benchmarks[benchmark.FullName] = new BenchmarkMeasurement(

@@ -66,9 +66,8 @@ jobs:
           # 完整矩阵请用 scripts/run-benchmarks.sh。
           #
           # 过滤器必须是实际类名。历史过滤器 '*SqliteBenchmarks*' 匹配不到任何类
-          # （最接近的是 SqliteSpeedBenchmarks，中间隔着 Speed），实测 BDN 跑 0 个基准
-          # 并以退出码 0 结束，后续回归检查恒拿不到当前值 → 长期以 warning 收尾，
-          # 门禁结构上不可能变红。
+          # （类名中间隔着 Speed 一类的词），实测 BDN 跑 0 个基准并以退出码 0 结束，
+          # 后续回归检查恒拿不到当前值 → 长期以 warning 收尾，门禁结构上不可能变红。
           dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- \
             --filter '*CrudBenchmarks*' '*OrmComparisonBenchmarks*' \
             --launchCount 1 --warmupCount 3 --iterationCount 5 \

@@ -16,7 +16,6 @@ internal static class BenchmarkConfig
 {
     // ── 连接串 ──
     public const string SqliteCs = "Data Source=bench;Mode=Memory;Cache=Shared";
-    public const string SpeedSqliteCs = "Data Source=bench_speed;Mode=Memory;Cache=Shared";
     public const string CacheSqliteCs = "Data Source=bench_cache;Mode=Memory;Cache=Shared";
     public const int SeedRows = 10000;
 
