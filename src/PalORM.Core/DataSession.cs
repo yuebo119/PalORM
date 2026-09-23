@@ -652,6 +652,23 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private DbTransaction? GetActiveTransaction()
         => _operationState.GetActiveTransaction();
 
+    /// <summary>按调用方要求选择连接创建命令（READ-002，2026-09-23）：<paramref name="readFromReplica"/>
+    /// 为真、且无活动事务、且配置了读路由（<c>ReadConnectionString</c>）时走读连接，否则主连接。
+    /// <para><b>为什么是 opt-in</b>：无条件把原始 SQL 家族路由到副本会给已配置读连接的用户做静默
+    /// 行为变更（读落到副本，read-after-write 语义改变）。默认 false = 与既有行为逐位一致。</para>
+    /// <para>命令超时与 <see cref="CreateCommand"/> 同源；读连接路径无事务可绑（有事务时回退主连接，
+    /// 与 <c>ForRead()</c> 的既有裁决一致）。仅对只读语句有意义——DML 走副本会写错库，
+    /// 由调用方负责（故 <c>ExecuteAsync</c> 不提供该开关）。</para></summary>
+    private async ValueTask<DbCommand> CreateReadOrPrimaryCommandAsync(bool readFromReplica, CancellationToken ct)
+    {
+        if (!readFromReplica || _readConnProvider is null || GetActiveTransaction() is not null)
+            return CreateCommand();
+        DbConnection connection = await _readConnProvider(ct).ConfigureAwait(false);
+        DbCommand command = connection.CreateCommand();
+        command.CommandTimeout = _options.CommandTimeoutSeconds;
+        return command;
+    }
+
     /// <summary>只读查询的弹性执行入口——WithRetry/WithCircuitBreaker 在内置管线的接入点
     /// （v5.4 行为变更，评审 P1-a：此前弹性配置对内置管线无效）。
     /// <para><b>接入条件</b>: 命令不带事务且策略非直通。事务内重试会以次生异常掩盖根因

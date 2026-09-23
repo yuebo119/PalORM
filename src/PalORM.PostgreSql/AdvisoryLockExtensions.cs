@@ -70,7 +70,7 @@ public static class AdvisoryLockExtensions
         ArgumentNullException.ThrowIfNull(session);
         EnsureInTransaction(session, nameof(TryAcquireXactLockAsync));
         // FormattableString 重载：key 参数化为 @p0，非字符串拼接（SQL 注入安全）
-        return await session.ScalarAsync<bool>($"SELECT pg_try_advisory_xact_lock({key})", ct).ConfigureAwait(false);
+        return await session.ScalarAsync<bool>($"SELECT pg_try_advisory_xact_lock({key})", ct: ct).ConfigureAwait(false);
     }
 
     /// <summary>尝试获取事务级咨询锁（非阻塞，双 int key 版本）。</summary>
@@ -83,7 +83,7 @@ public static class AdvisoryLockExtensions
         EnsureInTransaction(session, nameof(TryAcquireXactLockAsync));
         // FormattableString 重载：key1/key2 参数化为 @p0/@p1，非字符串拼接（SQL 注入安全）
         return await session.ScalarAsync<bool>(
-            $"SELECT pg_try_advisory_xact_lock({key1}, {key2})", ct).ConfigureAwait(false);
+            $"SELECT pg_try_advisory_xact_lock({key1}, {key2})", ct: ct).ConfigureAwait(false);
     }
 
     /// <summary>A1：事务前置校验。<c>pg_advisory_xact_lock</c> 是事务级锁，事务外调用会

@@ -131,13 +131,13 @@ public sealed partial class DataSession<TProvider>
     /// 用 <c>await foreach</c> 消费（自动释放）；手写 <c>GetAsyncEnumerator</c> 时必须 <c>await using</c>
     /// 或在 break/异常路径显式 DisposeAsync——否则租约永不归还，会话后续操作被门禁拒绝，
     /// 且 DataSession.DisposeAsync 会挂起至 DisposeWaitTimeout 后抛诊断异常。</para></summary>
-    public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
+    public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, bool readFromReplica = false, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
-        await using DbCommand cmd = CreateCommand();
+        await using DbCommand cmd = await CreateReadOrPrimaryCommandAsync(readFromReplica, ct).ConfigureAwait(false);
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
@@ -187,14 +187,14 @@ public sealed partial class DataSession<TProvider>
     /// SELECT 列序必须与实体列声明序一致；同类型列错位会静默交换数据。
     /// 避免 <c>SELECT *</c>（依赖物理表列序）——请显式 <c>SELECT col1, col2, ...</c> 按实体声明序列出，
     /// 或使用列序由编译期保证的 <c>From&lt;T&gt;()</c> 查询。见 ADR-A。</para></summary>
-    public async ValueTask<List<T>> QueryAsync<T>(FormattableString sql, CancellationToken ct = default)
+    public async ValueTask<List<T>> QueryAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
-        await using DbCommand cmd = CreateCommand();
+        await using DbCommand cmd = await CreateReadOrPrimaryCommandAsync(readFromReplica, ct).ConfigureAwait(false);
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
@@ -225,10 +225,10 @@ public sealed partial class DataSession<TProvider>
     /// <para>review R4：流式读取首行后立即释放 reader，不物化全表（大结果集场景省分配）。</para></summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Bugprone", "S1751",
         Justification = "「循环内 return」是有意为之的流式首行模式——取首行后立即跳出并释放 reader。")]
-    public async ValueTask<T> QueryFirstAsync<T>(FormattableString sql, CancellationToken ct = default)
+    public async ValueTask<T> QueryFirstAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
         where T : class, new()
     {
-        await foreach (T row in QueryAsyncEnumerable<T>(sql, ct).ConfigureAwait(false))
+        await foreach (T row in QueryAsyncEnumerable<T>(sql, readFromReplica, ct).ConfigureAwait(false))
             return row;
         throw new InvalidOperationException($"QueryFirstAsync: no rows for '{typeof(T).Name}'.");
     }
@@ -238,12 +238,12 @@ public sealed partial class DataSession<TProvider>
     /// 不再经 <see cref="QueryAsync{T}"/> 物化全表（大表上的隐式全读）。因流式提前终止，
     /// 多于 1 行时报告 "at least 2" 而非精确总数。</para>
     /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para></summary>
-    public async ValueTask<T> QuerySingleAsync<T>(FormattableString sql, CancellationToken ct = default)
+    public async ValueTask<T> QuerySingleAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
         where T : class, new()
     {
         int count = 0;
         T single = default!;
-        await foreach (T row in QueryAsyncEnumerable<T>(sql, ct).ConfigureAwait(false))
+        await foreach (T row in QueryAsyncEnumerable<T>(sql, readFromReplica, ct).ConfigureAwait(false))
         {
             count++;
             if (count > 1)
@@ -261,10 +261,10 @@ public sealed partial class DataSession<TProvider>
     /// <para><b>类型支持范围</b>（与 MaxAsync/MinAsync 一致）：<typeparamref name="T"/> 限 IConvertible 基元类型
     /// （数值/bool/string/DateTime）及其 Nullable；Guid/枚举/DateOnly 等非 IConvertible 目标在类型不完全匹配时
     /// 抛 InvalidCastException——此类值请以 string 取回后自行 Parse。</para></summary>
-    public async ValueTask<T?> ScalarAsync<T>(FormattableString sql, CancellationToken ct = default)
+    public async ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        await using DbCommand cmd = CreateCommand();
+        await using DbCommand cmd = await CreateReadOrPrimaryCommandAsync(readFromReplica, ct).ConfigureAwait(false);
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
