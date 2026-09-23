@@ -23,6 +23,10 @@
 PG/MySQL 连接超时时批次只剩 1 项、健康度仍报 clean，读者会读成「该夹具已覆盖」。
 实测 2026-09-22 的 26 个历史批次**没有一次跑完三方言全矩阵**（MySQL 恒停在 9 项）。
 
+**④ `gate-set` 是子集标签却未登记。** `run-full-perf.sh` 的门禁同参集只跑 11 个基准类里的
+Crud + OrmComparison 两个类，标签 `gate-set` 不含 `filtered`，故 `IsSubsetLabel` 判它非子集
+→ 这个残缺矩阵会顶掉 `latest-benchmarks.json` 并出现在「最近一批（可引用）」表里。
+
 ### 改动
 
 - `Measure.SingleAsync` 预热改为**按时间收敛**：至少 3 次，累计达 1.5 s 即停，上限仍是
@@ -34,6 +38,7 @@ PG/MySQL 连接超时时批次只剩 1 项、健康度仍报 clean，读者会�
   （口径登记 + 健康度 + **方言范围** + 失败登记）与关键项速览。
 - 12 维总览改为**按本轮实测批次推导**；新增「批次失败登记」节；「最近一批（可引用）」
   优先选无失败登记的批次并在表中标 ⚠️。
+- `PerfResultWriter.IsSubsetLabel` 补登记 `gate-set`（规范 §6 的子集清单同步补齐）。
 
 ### 实测（同机串行，SQLite 档，S2/S3 双向验证）
 

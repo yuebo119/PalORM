@@ -157,12 +157,15 @@ internal static class PerfResultWriter
     /// <list type="bullet">
     /// <item><c>quick</c>：PerfHub 冒烟（迭代降到 30%）</item>
     /// <item><c>filtered</c>：BDN/官方套件的过滤跑（只跑子集基准）</item>
+    /// <item><c>gate-set</c>：`run-full-perf.sh` 的门禁同参集（11 个基准类里只跑
+    /// Crud + OrmComparison 两个类）——它自身注释就写着"可复现的操作性子集"，
+    /// 但它不带 filtered，曾被当成完整矩阵顶掉 latest</item>
     /// <item><c>workload</c>/<c>memory</c>/<c>stability</c>：微基准的三条旁路模式（各只覆盖一个维度）</item>
     /// </list></summary>
     public static bool IsSubsetLabel(string label)
         => label.Contains("quick", StringComparison.OrdinalIgnoreCase)
         || label.Contains("filtered", StringComparison.OrdinalIgnoreCase)
-        || label is "workload" or "memory" or "stability";
+        || label is "gate-set" or "workload" or "memory" or "stability";
 
     /// <summary>仓库根：向上找 PalORM.slnx。</summary>
     public static string RepoRoot()
