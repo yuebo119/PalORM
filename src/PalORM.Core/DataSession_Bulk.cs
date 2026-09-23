@@ -710,23 +710,29 @@ public partial class DataSession<TProvider>
         // （池参数以批内连续下标命名，创建一次逐行只写 Value）。
         await using DbCommand scratch = CreateCommand();
 
+        // PERF-004（2026-09-23）：命令与参数池跨批复用——池按满批大小建一次（下标 0..N-1 逐批同义），
+        // 批间只写 Value；末批缩短时经 AttachParameters 收敛命令参数集合（池对象零新增分配）。
+        // SQL 按 rowCount 记忆化（满批文本逐批相同，原实现每批重建一次）。
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        int fullRowCount = Math.Min(batchSize, entities.Count);
+        var pool = new System.Data.Common.DbParameter[fullRowCount * columnCount];
+        for (int i = 0; i < pool.Length; i++)
+        {
+            System.Data.Common.DbParameter parameter = cmd.CreateParameter();
+            parameter.ParameterName = QueryBuilder<T>.GetParameterName(i);
+            pool[i] = parameter;
+        }
+
+        string? lastSql = null;
+        int lastRowCount = -1;
         long processed = 0;
         for (int start = 0; start < entities.Count; start += batchSize)
         {
             int end = Math.Min(start + batchSize, entities.Count);
             int rowCount = end - start;
-            await using DbCommand cmd = CreateCommand();
-            cmd.Transaction = transaction;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-
-            var pool = new System.Data.Common.DbParameter[rowCount * columnCount];
-            for (int i = 0; i < pool.Length; i++)
-            {
-                System.Data.Common.DbParameter parameter = cmd.CreateParameter();
-                parameter.ParameterName = QueryBuilder<T>.GetParameterName(i);
-                pool[i] = parameter;
-                _ = cmd.Parameters.Add(parameter);
-            }
+            AttachParameters(cmd, pool, rowCount * columnCount, pool.Length, tenantParams: 0);
 
             for (int row = start; row < end; row++)
             {
@@ -741,7 +747,12 @@ public partial class DataSession<TProvider>
                     pool[rowBase + c].Value = scratch.Parameters[c].Value;
             }
 
-            cmd.CommandText = BuildUpsertBatchSql(rowCount, columnCount, shape);
+            if (rowCount != lastRowCount)
+            {
+                lastSql = BuildUpsertBatchSql(rowCount, columnCount, shape);
+                lastRowCount = rowCount;
+            }
+            cmd.CommandText = lastSql;
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             processed += rowCount;
         }
