@@ -60,10 +60,21 @@ public sealed class PalORMGenerator : IIncrementalGenerator
             spc.AddSource(CreateStableHintName("Migration", model.EntityTypeName), MigrationEmitter.Generate(model));
         });
 
+        // ── 方言选择性发射（GEN-008，2026-09-23）──
+        // build_property.PalORMTargetDialects（逗号分隔：postgresql/mysql/sqlite）；缺省/空 = 三方言全发射。
+        // 经 CompilerVisibleProperty 传入（同 PalORMAutoTagging）。未目标方言不发射 SQL 载荷，
+        // 运行时取到即响亮失败（CommandSqlByDialect.Get 守卫）。
+        var dialectSelection = context.AnalyzerConfigOptionsProvider.Select(
+            static (provider, _) => DialectSelection.Parse(
+                provider.GlobalOptions.TryGetValue("build_property.PalORMTargetDialects", out string? v)
+                    ? v
+                    : null));
+
         // Registry: ModuleInitializer (Phase 1)
-        context.RegisterSourceOutput(tableModels.Collect(), static (spc, models) =>
+        context.RegisterSourceOutput(tableModels.Collect().Combine(dialectSelection), static (spc, input) =>
         {
-            spc.AddSource("PalORM_Registry.g.cs", RegistryEmitter.Generate(new EquatableArray<TableModel>(models)));
+            spc.AddSource("PalORM_Registry.g.cs",
+                RegistryEmitter.Generate(new EquatableArray<TableModel>(input.Left), input.Right));
         });
 
         // PALORM045 兜底（评审 2026-09-02）：transform 失败面显式呈现——正常构建下对应

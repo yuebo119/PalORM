@@ -31,7 +31,7 @@ internal static class RegistryEmitter
         Justification = "Registry 注册代码生成器：每个注册字典（RowFactories/TableNames/...）按顺序 "
             + "Append 到 StringBuilder。线性结构清晰，按字典拆分 Append* 方法会复制 15 次 foreach "
             + "样板，反而损害可读性。快照测试已覆盖字节级输出正确性。")]
-    internal static string Generate(EquatableArray<TableModel> models)
+    internal static string Generate(EquatableArray<TableModel> models, DialectSelection dialects)
     {
         TableModel[] all = models.AsSpan().ToArray();
         var sb = new StringBuilder();
@@ -63,7 +63,7 @@ internal static class RegistryEmitter
             sb.AppendLine($"    private static void AddChunk{index}(RegistryDraft draft)");
             sb.AppendLine("    {");
             foreach (var model in chunk)
-                AppendEntityPayload(sb, model);
+                AppendEntityPayload(sb, model, dialects);
             sb.AppendLine("    }");
             sb.AppendLine();
         }
@@ -102,15 +102,17 @@ internal static class RegistryEmitter
 
     /// <summary>单个实体的全部注册项——15 个字典各一行到数行，顺序与字典顺序一致。
     /// 分块方法只调用它多次，因此实体级新增载荷（如新的可选字典）只需改这一处。</summary>
-    private static void AppendEntityPayload(StringBuilder sb, TableModel m)
+    private static void AppendEntityPayload(StringBuilder sb, TableModel m, DialectSelection dialects)
     {
         sb.AppendLine($"        draft.RowFactories[typeof({m.EntityTypeName})] = RowFactory_{m.GeneratedTypeSuffix}.Read;");
         sb.AppendLine($"        draft.TableNames[typeof({m.EntityTypeName})] = {MigrationEmitter.ToCSharpLiteral(m.TableName)};");
 
         sb.AppendLine($"        draft.CommandSqlsByDialect[typeof({m.EntityTypeName})] = new global::PalORM.CommandSqlByDialect(");
-        AppendCommandSqlSet(sb, m, SqlGenerationDialect.Sqlite, indent: 12);
-        AppendCommandSqlSet(sb, m, SqlGenerationDialect.PostgreSql, indent: 12);
-        AppendCommandSqlSet(sb, m, SqlGenerationDialect.MySql, indent: 12, isLast: true);
+        // GEN-008（2026-09-23）：未目标方言发射 default（全空 CommandSqlSet）——运行时 Get 取到
+        // 即抛带方言名的响亮错误（提示加进 PalORMTargetDialects 并重编译），不会静默产出空 SQL。
+        AppendCommandSqlSetIfTargeted(sb, m, SqlGenerationDialect.Sqlite, dialects.Sqlite, indent: 12);
+        AppendCommandSqlSetIfTargeted(sb, m, SqlGenerationDialect.PostgreSql, dialects.PostgreSql, indent: 12);
+        AppendCommandSqlSetIfTargeted(sb, m, SqlGenerationDialect.MySql, dialects.MySql, indent: 12, isLast: true);
         sb.AppendLine("        );");
 
         sb.AppendLine($"        draft.BindInsert[typeof({m.EntityTypeName})] = (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off);");
@@ -285,6 +287,27 @@ internal static class RegistryEmitter
     /// <para>为什么置空而不是删除字段：删除是破坏性 API 变更（旧生成器产物与外部构造点编译失败）。
     /// 置空对既有消费者零破坏，代价是外部读者读到空串——由 <c>CommandSqlSet</c> 的字段文档
     /// 与实际发射面共同声明；后续主版本可连同其它破坏性项一并移除。</para></summary>
+    /// <summary>按方言选择性发射（GEN-008）：目标方言走完整 SQL 集，未目标方言发射 <c>default</c>
+    /// （全空）——体积收益来自"不发射未目标方言的 UPDATE/DELETE 与族内字段"，语义由运行时
+    /// <c>CommandSqlByDialect.Get</c> 的响亮守卫兜底。</summary>
+    private static void AppendCommandSqlSetIfTargeted(
+        StringBuilder builder,
+        TableModel model,
+        SqlGenerationDialect dialect,
+        bool targeted,
+        int indent,
+        bool isLast = false)
+    {
+        if (!targeted)
+        {
+            builder.Append(new string(' ', indent));
+            builder.Append(isLast ? "default" : "default,");
+            builder.AppendLine();
+            return;
+        }
+        AppendCommandSqlSet(builder, model, dialect, indent, isLast);
+    }
+
     private static void AppendCommandSqlSet(
         StringBuilder builder,
         TableModel model,

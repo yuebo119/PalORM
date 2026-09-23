@@ -36,15 +36,25 @@ public readonly record struct CommandSqlByDialect(
     CommandSqlSet PostgreSql,
     CommandSqlSet MySql)
 {
-    /// <summary>按 Provider 方言选择对应 SQL。</summary>
+    /// <summary>按 Provider 方言选择对应 SQL。
+    /// <para><b>GEN-008（2026-09-23）</b>：该方言未被 <c>PalORMTargetDialects</c> 声明时生成器发射
+    /// <c>default</c>（全空 CommandSqlSet，<see cref="CommandSqlSet.Update"/> 为 null）——此处响亮
+    /// 失败而非返回空 SQL（空 SQL 会在驱动侧报"语法错误"，把配置问题伪装成 SQL 问题）。</para></summary>
     public CommandSqlSet Get(SqlDialect dialect)
-        => dialect switch
+    {
+        CommandSqlSet set = dialect switch
         {
             SqlDialect.Sqlite => Sqlite,
             SqlDialect.PostgreSql => PostgreSql,
             SqlDialect.MySql => MySql,
             _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null)
         };
+        return set.Update is null
+            ? throw new InvalidOperationException(
+                $"Dialect '{dialect}' CRUD SQL was not generated for this assembly. Add it to the "
+                + "PalORMTargetDialects MSBuild property (postgresql,mysql,sqlite) and rebuild.")
+            : set;
+    }
 }
 
 /// <summary>编译期生成的三数据库方言建表 DDL。</summary>
