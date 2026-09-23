@@ -904,15 +904,21 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>清空表——MySQL 用 <c>TRUNCATE</c>：实测 <c>DELETE FROM perf_s1</c> 删 100 万行
-    /// 要 **107.3 s**（InnoDB 逐行删 + 每行 undo/redo 日志），而 TRUNCATE 是元数据操作、近瞬时。
-    /// PG/SQLite 保持 DELETE（本地/直连，删空表代价可忽略；SQLite 无 TRUNCATE 语句）。
-    /// <para>语义等价：两者都把表清空且保留表结构，而重置路径随后立即重新灌入确定内容。</para></summary>
+    /// <summary>清空表——MySQL/PG 用 <c>TRUNCATE</c>，SQLite 用 <c>DELETE</c>（无 TRUNCATE 语句）。
+    /// <para><b>MySQL 侧</b>：InnoDB 逐行删，实测删 100 万行要 107.3 s，TRUNCATE 是元数据操作、近瞬时。</para>
+    /// <para><b>PG 侧（影响更大）</b>：DELETE 只标记死元组、**不回收页面**，于是表的物理体积由
+    /// "历史上最大的那次播种"决定并跨臂单调膨胀。实测 2026-09-23：同一张 <c>perf_s1</c> 在三臂的
+    /// <c>pg_relation_size</c> 是 15 MB → 76 MB → 139 KB（末臂小只因 autovacuum 恰好截断了它）。
+    /// 而 <c>SELECT COUNT(*)</c> 的顺序扫描成本正比于页数，三臂因此差约 500 倍
+    /// （1841 / 9306 / 17 个 buffer）。改用 TRUNCATE 后每轮恒定 0.13 MB、COUNT 恒定 0.56~0.64 ms
+    /// （探针对照：DELETE 重置恒 7.00 MB / ~1.0 ms）。</para>
+    /// <para>语义等价：两者都清空且保留表结构，且重置路径随后立即重新灌入确定内容；这是**播种步骤**、
+    /// 不计入任何测量，不构成 §4.1 意义上的臂间口径差异。</para></summary>
     internal static async Task TruncateAsync(Dialect dialect, DbConnection conn, CancellationToken ct)
     {
-        string sql = dialect == Dialect.MySql
-            ? $"TRUNCATE TABLE {Dataset.Table(dialect)}"
-            : $"DELETE FROM {Dataset.Table(dialect)}";
+        string sql = dialect == Dialect.Sqlite
+            ? $"DELETE FROM {Dataset.Table(dialect)}"
+            : $"TRUNCATE TABLE {Dataset.Table(dialect)}";
         await ExecSetupAsync(conn, sql, ct).ConfigureAwait(false);
     }
 
