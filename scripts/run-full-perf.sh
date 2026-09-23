@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # PalORM 一键全量性能测评（依据 docs/性能基准规范.md）
+#
+# 角色：**微基准侧的编排步骤**，由统一入口 `bash scripts/perf.sh full` 的第 1 步调用
+#（该调用带 SKIP_REPORT=1，报告由编排层在三套夹具都写完结果库之后统一生成）。
+# 单独跑只在调试本脚本自身时用；用户入口是 perf.sh。
+#
 # 用法：
 #   bash scripts/run-full-perf.sh            # 本机全量（约 8-10 分钟）
 #   WITH_REMOTE=1 bash scripts/run-full-perf.sh   # 追加远程真库批量档（需 .env.test）

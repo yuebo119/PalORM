@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # PerfHub 交替 A/B 编排器（阶段 4.1）——跨版本对比的唯一可信执行方式。
 #
+# 角色：由统一入口 `bash scripts/perf.sh compare <基线worktree> <轮数>` 转发调用；
+# 也可以直接跑（两者等价，perf.sh compare 只是转发）。用户入口是 perf.sh。
+#
 # 用法:
 #   bash scripts/perfhub-ab.sh <基线worktree路径> <轮数> [选项...]
 #   例:  bash scripts/perfhub-ab.sh /c/v551 3 --dialects pg --tiers 2000

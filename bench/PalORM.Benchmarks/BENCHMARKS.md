@@ -53,8 +53,8 @@
   （`grep 'PalORM_QueryAll' | grep 'ms |'`），列宽/单位随 BDN 版本变化，一旦抓不到
   就落到 `::warning::` 分支放行——门禁结构上不可能变红。
 - **范围**：`CrudBenchmarks` + `OrmComparisonBenchmarks`（27 项，约 5 分钟）。
-  原过滤器 `*SqliteBenchmarks*` 匹配不到任何类名（最接近的是 `SqliteSpeedBenchmarks`，
-  中间隔着 `Speed`），实测 BDN 跑 0 个基准并以**退出码 0** 结束。
+  原过滤器 `*SqliteBenchmarks*` 匹配不到任何类名（中间隔着 `Speed` 一类的词），
+  实测 BDN 跑 0 个基准并以**退出码 0** 结束。
 - **阈值**（三个维度，档位写在基线文件里）：
   | 维度 | 阈值 | 为什么 |
   |---|---|---|
@@ -243,7 +243,6 @@ NuGet 0.15.8 在 .NET 11 preview SDK 下抛 `NotRecognized` 异常；fork 已支
     ≤4.9%——StringBuilder 99.67ns ±4.9% / PalORM Simple 193.02ns ±4.4% / Complex 231.62ns ±2.6%，
     原 16.9% 超阈由旧配置 3/5/10 生成。BDN fork NU1100 同日修复（根 NuGet.Config 为 fork 的
     源键 api.nuget.org 补通配映射）。
-- `05_SqliteSpeedBenchmarks.cs`（4 方法）— 纯速度交叉验证（无 MemoryDiagnoser）
 - `06_FeatureBenchmarks.cs`（13 方法）— PalORM 独有特性 + v5.0 新特性
 - `07_OrmComparisonBenchmarks.cs`（4 方法）— Dapper IL 缓存对照（Dapper/PalORM，无 RepoDb）
 - `08_BinaryBenchmarks.cs`（6 方法）— 二进制列专项：原生 BLOB vs Base64 TEXT（含手工编解码全成本）× 256B/64KB

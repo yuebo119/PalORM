@@ -2,6 +2,78 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·工具链·二] — 性能测试系统精简：逐项耗时归因、BulkDelete 播种、`--quick` 生效
+
+> 变更范围：`bench/PalORM.PerfHub/`（Program / Measure）+ `bench/PalORM.Benchmarks/`
+> （删 05_SqliteSpeedBenchmarks、BenchmarkConfig）+ `scripts/`（perf.sh / run-benchmarks.sh /
+> run-full-perf.sh / dappersuite-run.sh / perfhub-ab.sh）+ `docs/`（性能基准规范 / 测试体系路线图）。
+
+### 问题（逐项耗时归因实测，非推测）
+
+先给 PerfHub 的每项测量加上墙钟耗时输出（只进控制台，不进信封 schema），归因结果：
+
+| 位置 | 耗时 | 占该档 |
+|---|---:|---:|
+| tier 20000 档合计 | 390.1 s | — |
+| 其中 `BulkDelete`（三臂） | **269.5 s** | **69%** |
+
+`BulkDelete` 的播种行数 = 迭代上限 × 档位行数。上限 200 时 tier 20000 档要播 **400 万行**，
+且每次测量重置两遍——而该档的计时轮数由 4 s 预算决定（`clamp(4 ÷ 81ms, 3, 200)` = **49 轮**），
+**播种是实际消费的 4 倍**。这是纯开销，不计入任何指标。
+
+另两处缺陷：
+- **`--quick` 文档说了但没实现**：usage 写"迭代次数降到 30%"，但 `scale` 只流到
+  `BulkDeleteSeedRounds`，`MeasAsync` 里被 `_ = (rows, scale);` 丢弃——冒烟跑其实没变快。
+  而它缩放播种、却不缩上限，还让尾部轮次删到不存在的键（空删最快，中位数不受影响，
+  但分配量按"整轮总分配 ÷ 轮数"计算会被低估）。
+- **表状态漂移**：`BulkDelete` 播种过大 → 删完仍残留约 300 万行 → 其后的
+  `KeysetPage`/`WhereIn`/`Count` 在**机器速度决定的表规模**上测量（消费轮数由单次耗时决定）。
+  证据就在基线里：SQLite 档 `Count` t20000 记的是 **114 ms**，而 t2000 是 17 µs（6700 倍）。
+
+### 改动
+
+- 新增逐项墙钟耗时输出（`PrintRow` 带 elapsed，不进信封）。
+- `BulkDelete` 迭代上限 200 → **50**，播种随之一致（`BulkDeleteSeedRounds` 不再随 scale 缩放）。
+  该档计时轮数由预算决定（49 轮），**上限降低不减少样本数**，只把播种降到 1/4。
+- `--quick` 真正按 0.3 收缩计时与预热两条预算（`Measure.SingleAsync` 新增 `scale` 参数）。
+- `KeysetPage`/`WhereIn`/`Count` 显式带 `reset` prepare，保证"从表内恰好 rows 行开始"。
+- 删除 `05_SqliteSpeedBenchmarks.cs`（4 项）：它是 01 的真子集（同操作/同 SQL/同 job），
+  且因无 MemoryDiagnoser 被 `ResultReader` 结构性排除在门禁之外，数字从未被引用；
+  路线图 P2-C 据此关闭，复现方式留在 `run-benchmarks.sh speed` 的提示里。
+- 五个脚本标注角色：`perf.sh` 与 `run-benchmarks.sh` 是仅有的两个用户入口，
+  其余三个是被调用的编排步骤。
+
+### 实测（同机串行 SQLite 档，134 项不变）
+
+| 批次 | 耗时 | 说明 |
+|---|---:|---|
+| 改前（仅预热修复） | 444 s | — |
+| + BulkDelete 上限 50 | 270 s | `BulkDelete` 三臂 269.5 → 74.4 s |
+| + Query 组 reset（最终） | **250 s** | 修表状态漂移，另付 ~20 s 重置成本 |
+
+累计：**640 s → 250 s（−61%）**。归因验证其余项逐项未动
+（`BulkInsert` 5.9→6.0 s、`QueryAll` 1.7→1.7 s），单变量隔离成立。
+
+### 未隔离与适用边界
+
+- **`Update`/`BulkUpdate` 的 reset 尝试已回退**：加上后其后 ADO 臂的 `BulkInsert` 单次从
+  165 ms 跳到 1571 ms（9.5×，Dapper/PalORM 臂不变），机制未查明。按"不引入无法解释的行为"
+  撤掉，两项的残余漂移（`Update` +1%、`BulkUpdate` 约 25 倍表）登记在规范 §5 待办。
+- Query 组 reset 使 PalORM 臂其后 8 项分配量系统性下移 3~21%，**可复现**
+  （两个改后批次互差 0.1~1.0%），机制未查明。
+- **旧基线必须重录**：上述改动改变了 3 项自身与 PalORM 臂 8 项的数字，
+  且 `BulkDelete` 的样本数由 200 降到 50（tier 2000 档）。
+  `bench/baselines/perfhub-index-baseline.json` 与 `perf-baseline.json` 需按规范 §5
+  「基线重录」流程在新口径下重录后再卡阈值。
+- PG/MySQL 本次仍不可达，三方言矩阵的完整性未验证。
+- **索引基线失效（阻断项，已登记规范 §5）**：`perfhub-index-baseline.json` 的元数据自己写着
+  "录制批次 2026-09-22 20:43:04（健康度 **noisy 27.0%**）"——从一批被判 noisy 的数据录了门禁基线。
+  后果：该基线 7/102 项 PalORM 比值 < 0.6（`Update/SQLite/2000` = 0.220，即 PalORM 比手写 ADO
+  快 4.5 倍），隐含地板普遍比干净批次高 4~5 倍。2026-09-23 用干净批次打它 → 14/102 FAIL，
+  且每一条都是地板暴跌 44~79%、PalORM 自身只动 −0.5%~−45%，失败来自坏基线而非真回归。
+  **不重录部分基线**：`check-index` 的"缺项不判失败"是为方言缺席设计的，重录 SQLite-only
+  基线会让 PG/MySQL 静默失去检查。动作：PG/MySQL 可达后跑干净全量 → `record-index` → 人工过 diff。
+
 ## [未发布·工具链] — 性能测试系统审计：预热口径、唯一报告、时间预算
 
 > 变更范围：`bench/PalORM.PerfHub/Measure.cs`（预热收敛）+ `tools/PalORM.PerfGate/`

@@ -434,9 +434,19 @@ internal static class Program
             return impl.SetupAsync(c, rows, ct);
         }
 
+        // 不变量：**每个读 perf_s1 的测量都从「表内恰好 rows 行」开始**。
+        // 这条注释原本只写在上面那一行，但没有任何机制保证它——写类测量会改行数，
+        // 而其后的读类测量若不带 reset，就在**被上一个测量改过的表**上测：
+        // 实测（2026-09-23）BulkDelete 播种 4 倍于实际消费，删完仍残留约 300 万行，
+        // 于是其后的 KeysetPage/WhereIn/Count 在机器速度决定的表规模上测量
+        //（消费多少轮由 clamp(预算 ÷ 单次耗时) 决定，单次耗时是机器相关的）——
+        // Count 的分配量因此在两批之间从 232 KB/op 掉到 985 B/op（99.6%），
+        // 而 SQLite 档基线里记的 Count t20000 是 114 ms（t2000 是 17 µs，6700 倍）。
+        // 故 BulkDelete 之后的三项显式带 reset；它之前的项（GetByKey/QueryAll/StreamAll/
+        // Update/BulkUpdate）的残留漂移另计，见各项处的注释与规范 §5 待办。
         long[] keys = Dataset.KeySet(rows);
         long[] whereInIds = BuildWhereInIds(rows);
-        int bulkDeleteIters = BulkDeleteSeedRounds(scale);
+        int bulkDeleteIters = BulkDeleteSeedRounds();
 
         // ── Build：纯 SQL 构建开销，不执行、不碰库 ──
         await MeasAsync(info, impl, "BuildGetByKeySql", "Build", rows, conn, results, scale, null,
@@ -474,6 +484,10 @@ internal static class Program
             async (im, c, i) => await im.InsertAsync(c, Dataset.Seed(rows + i), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
+        // Update 不带 reset：前一项 Insert 每轮插 1 行，表涨到 rows + iterations（≤+200 行，
+        // 相对 20000 档是 +1%）。实测（2026-09-23）给它加 reset 后，**其后 ADO 臂的 BulkInsert
+        // 单次从 165ms 跳到 1571ms（9.5×，Dapper/PalORM 臂不变）**，机制未查明；
+        // 按"不引入无法解释的行为"原则撤掉，残留漂移（+1%）登记为已知限制。
         await MeasAsync(info, impl, "Update", "CRUD", rows, conn, results, scale, null,
             async (im, c, i) => _ = await im.UpdateAsync(c, Dataset.Seed(i * 7919 % rows), ct)
                 .ConfigureAwait(false), ct).ConfigureAwait(false);
@@ -483,6 +497,8 @@ internal static class Program
                 c, Dataset.SeedRows(rows, (long)rows * (i + 1)), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
+        // BulkUpdate 不带 reset（同上，与 Update 一并撤掉以保持两者口径一致）。
+        // 它因此跑在 BulkInsert 撑大的表上（rows × (1 + iterations)）——已知漂移，见规范 §5 待办。
         await MeasAsync(info, impl, "BulkUpdate", "CRUD", rows, conn, results, scale, null,
             async (im, c, i) => _ = await im.BulkUpdateAsync(c, Dataset.SeedRows(rows, 0), ct)
                 .ConfigureAwait(false), ct).ConfigureAwait(false);
@@ -505,16 +521,17 @@ internal static class Program
                 _ = await im.BulkDeleteAsync(c, batch, ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
-        // ── Query ──
-        await MeasAsync(info, impl, "KeysetPage", "Query", rows, conn, results, scale, null,
+        // ── Query ──（三项都带 reset：前一项 BulkDelete 会把 perf_s1 删到接近空表，
+        // 不带 reset 就在空表上测分页/IN/计数，而空的程度取决于 BulkDelete 消费了多少轮）
+        await MeasAsync(info, impl, "KeysetPage", "Query", rows, conn, results, scale, reset,
             async (im, c, i) => _ = await im.KeysetPageAsync(c, i % 20 * 100, 100, ct)
                 .ConfigureAwait(false), ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "WhereIn", "Query", rows, conn, results, scale, null,
+        await MeasAsync(info, impl, "WhereIn", "Query", rows, conn, results, scale, reset,
             async (im, c, i) => _ = await im.WhereInAsync(c, whereInIds, ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "Count", "Query", rows, conn, results, scale, null,
+        await MeasAsync(info, impl, "Count", "Query", rows, conn, results, scale, reset,
             async (im, c, i) => _ = await im.CountAsync(c, ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
@@ -592,10 +609,15 @@ internal static class Program
         _ = (rows, scale);
         try
         {
+            // 单测量墙钟耗时——只进控制台，不进结果信封（信封 schema 与门禁都读不到它）。
+            // 它回答"哪一项吃掉了跑测时间"，是调预算/砍项的唯一依据：只报指标不报耗时，
+            // 优化就只能靠猜。
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
-                MaxIterations(operation), ct, prepare, BudgetSeconds(operation)).ConfigureAwait(false);
+                MaxIterations(operation), ct, prepare, BudgetSeconds(operation), scale).ConfigureAwait(false);
+            sw.Stop();
             results.Add(m);
-            PrintRow([m]);
+            PrintRow([m], sw.Elapsed);
         }
         catch (Exception ex)
         {
@@ -605,13 +627,28 @@ internal static class Program
         }
     }
 
-    /// <summary>BulkDelete 播种规模的迭代上界——自适应迭代后实际轮数由预算决定，
-    /// 播种按最坏情况（上限轮数 × 每轮删除行数）准备主键空间。</summary>
-    private static int BulkDeleteSeedRounds(double scale)
-        => Math.Max(3, (int)Math.Ceiling(MaxIterations("BulkDelete") * scale));
+    /// <summary>BulkDelete 的播种轮数——**必须等于迭代上限**，不随 <c>--quick</c> 缩放。
+    /// <para><b>为什么严格相等</b>：每轮删除一段互不重叠的主键窗口
+    /// （轮 i 删 ((i-1)×rows, i×rows]），故计时轮 i 需要主键空间到 i×rows。探针占 i=0、
+    /// 计时轮取 i=1..iterations，iterations ≤ 上限 → 播种上限轮即恰好够。</para>
+    /// <para><b>为什么不能缩</b>：曾按 <c>scale</c>（--quick 的 0.3）缩放，而上限不缩，
+    /// 于是 quick 批次的尾部轮次删到不存在的键——空删最快，中位数不受影响，
+    /// 但分配量按「整轮总分配 ÷ 轮数」计算会被低估，而分配量正是门禁卡的确定性指标。</para>
+    /// <para><b>为什么上限压到 50</b>：播种行数 = 轮数 × rows，tier 20000 档是 50×20000 = 100 万行，
+    /// 每次测量重置两遍。实测（2026-09-23 逐项耗时归因）BulkDelete 在 tier 20000 占该档
+    /// 390s 中的 269.5s（69%），而 tier 20000 的计时轮数由 4s 预算决定
+    /// （clamp(4 ÷ 81ms, 3, 上限) = 49），**上限从 200 降到 50 不减少 tier 20000 的样本数**，
+    /// 只把播种从 400 万行降到 100 万行。tier 2000 的样本数由 200 降到 50——
+    /// 中位数仍由 50 个样本给出，StdErr/Mean 约 2.8%（阈值 5%）。</para></summary>
+    private static int BulkDeleteSeedRounds() => BulkDeleteMaxIterations;
+
+    /// <summary>BulkDelete 的计时迭代上限——低于通用上限 200，因为它与播种行数成正比
+    /// （见 <see cref="BulkDeleteSeedRounds"/>）。</summary>
+    private const int BulkDeleteMaxIterations = 50;
 
     /// <summary>测项的时间预算（秒）——阶段 3.1 的自适应迭代上限基准。
-    /// 迭代数 = clamp(预算 ÷ 预热后单次耗时, 3, 上限)，单测量耗时结构性有界。</summary>
+    /// 迭代数 = clamp(预算 ÷ 预热后单次耗时, 3, 上限)，单测量耗时结构性有界。
+    /// <c>--quick</c> 由调用方按 scale 收缩该预算（usage 声明的"迭代次数降到 30%"）。</summary>
     private static double BudgetSeconds(string operation) => operation switch
     {
         // 纯 CPU 构建——亚微秒级，1s 预算自然收敛到数千次迭代
@@ -627,6 +664,7 @@ internal static class Program
     private static int MaxIterations(string operation) => operation switch
     {
         "BuildGetByKeySql" or "BuildComplexQuerySql" => 2_000,
+        "BulkDelete" => BulkDeleteMaxIterations,
         _ => 200
     };
 
@@ -644,7 +682,9 @@ internal static class Program
         return ids;
     }
 
-    private static void PrintRow(Measurement[] rows)
+    /// <summary>打印一行测量结果。<paramref name="elapsed"/> 是本测量（预热 + 探针 + 计时）的墙钟耗时，
+    /// 用于归因"哪一项吃掉跑测时间"——它是调预算与砍项的依据，不参与任何判定。</summary>
+    private static void PrintRow(Measurement[] rows, TimeSpan elapsed = default)
     {
         foreach (Measurement m in rows)
         {
@@ -652,7 +692,9 @@ internal static class Program
             string line = "    " + m.Implementation.PadRight(9) + " " + m.Operation.PadRight(20)
                 + " " + Fmt.Time(m.MedianNs).PadLeft(12) + "  "
                 + Fmt.Bytes(m.AllocatedBytesPerOp).PadLeft(10) + "/op  堆峰 "
-                + Fmt.Bytes(m.PeakHeapBytes).PadLeft(10) + "  Gen0=" + m.Gen0Collections.ToString().PadLeft(3) + warn;
+                + Fmt.Bytes(m.PeakHeapBytes).PadLeft(10) + "  Gen0=" + m.Gen0Collections.ToString().PadLeft(3)
+                + (elapsed > TimeSpan.Zero ? "  " + elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) + "s" : "")
+                + warn;
             Console.WriteLine(line);
         }
     }

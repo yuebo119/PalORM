@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Dapper 官方基准套件（三臂移植版）逐方言跑测——一次串行跑完 SQLite / MySQL / PostgreSQL。
 #
+# 角色：**DapperSuite 侧的编排步骤**，由统一入口 `bash scripts/perf.sh full` 的第 3 步调用。
+# 单独跑用于调试本夹具，或换驱动版本时做官方形状哨兵复测；用户入口是 perf.sh。
+#
 # 用法:
 #   bash scripts/dappersuite-run.sh                    # 三库全跑
 #   bash scripts/dappersuite-run.sh sqlite             # 只跑一库
