@@ -89,7 +89,13 @@ fi
 echo ""
 echo "═══════════════════════════════════════════"
 echo " 全量测评完成"
-echo " 报告: $REPORT_MD"
+# 报告行只在真生成了报告时打印——SKIP_REPORT=1 时 $REPORT_MD 是预留路径，
+# 打印它会让人去找一个不存在的文件（实测：编排层跑完后横幅指向空文件）
+if [ "${SKIP_REPORT:-0}" = "1" ]; then
+  echo " 报告: 由编排层（perf.sh full 的第 5 步）在全部夹具完成后生成"
+else
+  echo " 报告: $REPORT_MD"
+fi
 echo " 日志: $LOG_DIR"
 echo " 门禁: $([ "$GATE_EXIT" = "0" ] && echo 通过 || echo "存在回归（见 gate.log）")"
 echo "═══════════════════════════════════════════"
