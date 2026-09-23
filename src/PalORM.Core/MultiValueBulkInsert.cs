@@ -116,64 +116,35 @@ public static class MultiValueBulkInsert
         return total;
     }
 
-    /// <summary>构建每行 (?,?,?,?,?) 占位符组——批内每行一组，逗号分隔。
-    /// v4.0 性能优化：改用 ValueStringBuilder + stackalloc 消除 LINQ + string.Join 分配。
-    /// 10000 行批量场景下，每批 BuildRowPlaceholders 省一次数组 + 多次字符串分配。</summary>
-    private static string[] BuildRowPlaceholders(int batchLength, int columnCount)
+    /// <summary>把完整 INSERT 语句（前缀 + VALUES 段）写入 <paramref name="sb"/>（PERF-004，2026-09-23）。
+    /// <para>原实现四层分配：<c>string[batchLength]</c> + 每行小串 + <c>string.Join</c> 大串 +
+    /// 插值再一份大串（20 列 1000 行瞬时约 830KB，其中约一半落 LOH）。单 VSB 顺序写后只产出一份
+    /// 最终字符串。占位符形态与旧实现逐字一致（行内 <c>(@p0, @p1)</c>、行间 <c>, </c>）。</para>
+    /// <para>占位符恒为 <c>@pN</c>（多值路径三方言共用，与 ParameterNameCache 的预建名对齐）；
+    /// 下标 5 位上限由入口守卫（ITM-668）。</para></summary>
+    private static void AppendInsertStatement(
+        ref ValueStringBuilder sb, string quotedTable, string quotedColumns,
+        int batchLength, int columnCount)
     {
-        var rowPlaceholders = new string[batchLength];
-        int singleRowMaxLen = columnCount * 10 + 4;
-        Span<char> buffer = singleRowMaxLen <= 512
-            ? stackalloc char[singleRowMaxLen]
-            : new char[singleRowMaxLen];
+        sb.Append("INSERT INTO ");
+        sb.Append(quotedTable);
+        sb.Append(" (");
+        sb.Append(quotedColumns);
+        sb.Append(") VALUES ");
         for (int row = 0; row < batchLength; row++)
         {
+            if (row > 0) sb.Append(", ");
+            sb.Append('(');
             int parameterOffset = row * columnCount;
-            int written = FormatRowPlaceholder(buffer, parameterOffset, columnCount);
-            rowPlaceholders[row] = new string(buffer[..written]);
-        }
-        return rowPlaceholders;
-    }
-
-    /// <summary>把单行占位符 "( @p0, @p1, ... )" 写入 buffer，返回写入字符数。</summary>
-    private static int FormatRowPlaceholder(Span<char> buffer, int parameterOffset, int columnCount)
-    {
-        int written = 0;
-        buffer[written++] = '(';
-        for (int column = 0; column < columnCount; column++)
-        {
-            if (column > 0)
+            for (int column = 0; column < columnCount; column++)
             {
-                buffer[written++] = ',';
-                buffer[written++] = ' ';
+                if (column > 0) sb.Append(", ");
+                sb.Append('@');
+                sb.Append('p');
+                sb.Append(parameterOffset + column);
             }
-            buffer[written++] = '@';
-            buffer[written++] = 'p';
-            written += WriteIndexDigits(buffer[written..], parameterOffset + column);
+            sb.Append(')');
         }
-        buffer[written++] = ')';
-        return written;
-    }
-
-    /// <summary>把非负整数写入 span（不含前导零），返回写入字符数。</summary>
-    private static int WriteIndexDigits(Span<char> buffer, int value)
-    {
-        if (value == 0)
-        {
-            buffer[0] = '0';
-            return 1;
-        }
-        Span<char> digits = stackalloc char[5];
-        int digitCount = 0;
-        while (value > 0)
-        {
-            digits[digitCount++] = (char)('0' + value % 10);
-            value /= 10;
-        }
-        // digits 是反向存的（个位在前），写入 buffer 时倒序还原
-        for (int i = 0; i < digitCount; i++)
-            buffer[i] = digits[digitCount - 1 - i];
-        return digitCount;
     }
 
     /// <summary>分批执行 INSERT——批大小受 effectiveBatchSize 与参数上限钳制。
@@ -184,7 +155,7 @@ public static class MultiValueBulkInsert
         "S107:MethodsShouldNotHaveTooManyParameters",
         Justification = "批量执行参数多但全是必要--连接/事务/命令/实体集合/binder/quoter/cancellationToken "
             + "都是 ADO.NET 批量骨架的必然组件，聚合成对象会引入跨方法状态传递。已抽出 ProbeBinderAsync "
-            + "+ BuildRowPlaceholders 减少方法主体复杂度。")]
+            + "+ AppendInsertStatement 减少方法主体复杂度。")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
         Justification = "v4.6 参数复用增加满批/末批分支，逻辑紧凑不宜拆分。")]
@@ -208,6 +179,9 @@ public static class MultiValueBulkInsert
             batchCmd.Transaction = tran;
             batchCmd.CommandTimeout = commandTimeoutSeconds;
 
+            // PERF-004：语句构建缓冲提到批循环外——stackalloc 在循环内会随迭代累积栈（CA2014），
+            // 提到循环外后每批在同一 span 上重建（VSB 起始于栈缓冲，超出才租池并在 Dispose 归还）。
+            Span<char> sqlBuffer = stackalloc char[512];
             for (int start = 0; start < entities.Count; start += effectiveBatchSize)
             {
                 int end = Math.Min(start + effectiveBatchSize, entities.Count);
@@ -217,10 +191,14 @@ public static class MultiValueBulkInsert
                 // CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）
                 if (batchLength != lastBatchLength)
                 {
-                    string[] rowPlaceholders = BuildRowPlaceholders(batchLength, columnCount);
-                    lastBatchSql =
-                        $"INSERT INTO {quotedTable} ({quotedColumns}) VALUES " +
-                        string.Join(", ", rowPlaceholders);
+                    var sqlBuilder = new ValueStringBuilder(sqlBuffer);
+                    try
+                    {
+                        AppendInsertStatement(
+                            ref sqlBuilder, quotedTable, quotedColumns, batchLength, columnCount);
+                        lastBatchSql = sqlBuilder.ToString();
+                    }
+                    finally { sqlBuilder.Dispose(); }
                     lastBatchLength = batchLength;
                 }
                 batchCmd.CommandText = lastBatchSql;
