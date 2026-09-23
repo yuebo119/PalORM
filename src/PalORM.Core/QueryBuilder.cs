@@ -24,6 +24,11 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>读路由连接提供者——v5.6 起由会话级复用：提供者首次建连并执行 Provider
     /// 初始化，之后返回同一连接（原为每次查询新建连接的工厂 + 初始化器两件套）。</summary>
     internal readonly Func<CancellationToken, ValueTask<DbConnection>>? _readConnProvider;
+    /// <summary>读连接失效上报（READ-001，2026-09-23）——读路由下命令因瞬时故障失败时通知会话丢弃
+    /// 缓存的读连接（静默掐断后 State 仍为 Open，不丢弃则后续查询复用死连接）。
+    /// 无参：会话丢弃自己缓存的那条读连接即可（读路由失败时若因活动事务回退主连接，
+    /// 最多多一次读连接重建，无害）。未配置读路由时为 null。</summary>
+    internal readonly Func<ValueTask>? _readConnInvalidator;
     internal readonly SqlDialect _dialect;
     /// <summary>r5-S2：会话隔离级别（WithIsolationLevel 透传，null=驱动默认）。</summary>
     internal readonly System.Data.IsolationLevel? _isolationLevel;
@@ -84,6 +89,7 @@ public struct QueryBuilder<T> where T : class, new()
         _validateColumnOrder = ctx.ValidateColumnOrder;
         _conn = ctx.Connection;
         _readConnProvider = ctx.ReadConnProvider;
+        _readConnInvalidator = ctx.ReadConnInvalidator;
         _queryCache = ctx.QueryCache ?? CacheStore.Default;
         _dialect = ctx.Services.Dialect;
         _isolationLevel = ctx.Services.IsolationLevel;
@@ -574,6 +580,12 @@ public struct QueryBuilder<T> where T : class, new()
     private async ValueTask<DbConnection> AcquireRoutedConnectionAsync(CancellationToken cancellationToken)
         => await _readConnProvider!(cancellationToken).ConfigureAwait(false);
 
+    /// <summary>上报读连接失效（READ-001，2026-09-23）：读路由下命令因<b>瞬时</b>故障失败时调用，
+    /// 让会话丢弃缓存的读连接——静默掐断（NAT 超时 / LB 空闲切断、无 FIN/RST）后
+    /// <c>State</c> 仍为 Open，不丢弃则后续查询复用同一条死连接。未配置读路由时零开销。</summary>
+    internal ValueTask InvalidateReadConnectionAsync()
+        => _readConnInvalidator is null ? default : _readConnInvalidator();
+
     internal DbTransaction? GetActiveTransaction()
     {
         // ITM-524: 用户经 WithTransaction 显式绑定的事务若已释放（Connection 置空），不得静默回退到
@@ -604,7 +616,8 @@ public struct QueryBuilder<T> where T : class, new()
             _conn,
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
                 _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
-            _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder))
+            _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
+            _readConnInvalidator))
         {
             _selectColumns = _selectColumns,
             _take = _take,
@@ -1266,4 +1279,5 @@ internal readonly record struct QueryBuilderContext<T>(
     IReadOnlyList<string> ColumnNames,
     Func<CancellationToken, ValueTask<DbConnection>>? ReadConnProvider = null,
     IQueryCache? QueryCache = null,
-    bool ValidateColumnOrder = false) where T : class, new();
+    bool ValidateColumnOrder = false,
+    Func<ValueTask>? ReadConnInvalidator = null) where T : class, new();

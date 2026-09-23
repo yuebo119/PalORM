@@ -192,6 +192,10 @@ public sealed class ResilienceExecutor
         return TimeSpan.FromMilliseconds(milliseconds * jitter);
     }
 
+    /// <summary>瞬时故障判定（READ-001，2026-09-23）：暴露 Provider 传入的瞬时判定——读路径在
+    /// 瞬时失败时据此丢弃缓存的读连接（确定性失败不该丢弃健康连接）。</summary>
+    internal bool IsTransient(Exception exception) => _isTransient(exception);
+
     /// <summary>ITM-506/658(r4)：仅瞬时故障与本类型包装的基础设施超时（ITM-667 起用
     /// Data 标记识别，不再按消息前缀）计入熔断——用户 operation 自抛的 TimeoutException
     /// 是应用域确定性信号，不熔断；唯一约束冲突/SQL 语法错误等确定性失败同理。</summary>
