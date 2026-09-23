@@ -677,24 +677,9 @@ internal static class Program
         "BuildGetByKeySql" or "BuildComplexQuerySql" or "InsertReturningId" or "IncludeJoin"
         or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert");
 
-    /// <summary>该项是否在给定档位测量。
-    /// <para><see cref="SingleTierOnly"/> 的项只在最小档跑——理由不是"行数不进测量"，
-    /// 而是针对已实测证实的不可信测量（见该属性注释）。</para></summary>
+    /// <summary>该项是否在给定档位测量。</summary>
     private static bool RunsAtTier(string operation, int rows)
-        => rows <= _minTier || (RowCountSensitive(operation) && !SingleTierOnly(operation));
-
-    /// <summary>只在最小档跑的项——**第二组原因：非最小档的测量不可信**。
-    /// <para><b>唯一成员：`Count`。</b>2026-09-23 的完整调查记录在 docs/性能基准规范.md §5，
-    /// 结论摘要：同一张表、同一条 SQL、同一个执行计划，ADR/Dapper/PalORM 三臂实测为
-    /// 2.07 / 98.61 / 0.96 ms（相差 100 倍），而外部轮询显示表状态与新连接查询均正常。
-    /// 已定位并修复一个真缺陷（统计陈旧导致计划器选 Parallel Seq Scan——`ANALYZE` 已解决，
-    /// ADO 臂从 28 ms 回到 1~2.4 ms），但**残余差异未查明**。</para>
-    /// <para><b>已排除</b>：死元组膨胀（探针实测带 20 万死元组的表 COUNT 只要 1.5 ms）、
-    /// 同步统计陈旧（ANALYZE 已修，但 Dapper 臂仍 88~99 ms）、会话态（新连接同期正常）、
-    /// 取平均伪影（中位数≈均值）。</para>
-    /// <para>在查明前只做防御：`Count` 不跑非最小档。2000 档三臂正常（908 / 943 / 550 µs）。
-    /// **这不是修复**，是把不可信的测量移出基线。</para></summary>
-    private static bool SingleTierOnly(string operation) => operation == "Count";
+        => rows <= _minTier || RowCountSensitive(operation);
 
     /// <summary>本轮的测试项名——只用于算进度条的分母，**与各 MeasAsync 调用点一一对应**。
     /// 结束时会把实际测量数与计划数对账，不一致就打警告（进度条说谎比没有进度条更糟）。
