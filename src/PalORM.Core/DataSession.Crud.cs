@@ -7,6 +7,18 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider>
     where TProvider : IDbProvider
 {
+    /// <summary>软删过滤条件文本（PERF-002，2026-09-23）——只由 Provider 的引用符决定，与实体类型无关；
+    /// 按封闭泛型类型静态缓存一次（每个 Provider 一份）。原先每次 <c>From&lt;T&gt;()</c> 付一次
+    /// QuoteIdentifier 扫描 + 插值。</summary>
+    private static readonly string SoftDeleteFilterCondition =
+        $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL";
+
+    /// <summary>租户过滤格式串（PERF-002，2026-09-23）——引用词前缀 + 单洞占位，同理由静态缓存；
+    /// 值仍经 <see cref="System.Runtime.CompilerServices.FormattableStringFactory"/> 传入
+    /// （参数化需要携带值，这是 API 形状固有成本）。</summary>
+    private static readonly string TenantFilterFormat =
+        $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}";
+
     /// <summary>创建查询构建器——每次调用创建新的 struct QueryBuilder（值类型）。
     /// <para><b>为什么是 struct</b>: 避免每次查询的堆分配。高 QPS 场景(10K+)每秒省 ~2MB 堆分配。</para>
     /// <para><b>为什么每次新建</b>: GORM #7437——条件残留在构建器实例上导致数据错误。全新构建器保证条件隔离。</para>
@@ -46,12 +58,12 @@ public sealed partial class DataSession<TProvider>
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）
         EntityFeatures features = GetEntityFeatures<T>();
         if (!_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)
-            builder.AddDefaultFilter($"{TProvider.QuoteIdentifier("deleted_at")} IS NULL");
+            builder.AddDefaultFilter(SoftDeleteFilterCondition);
         if (_tenantId is not null && !_ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
         {
             // 列名 quote 与软删过滤对齐（quote 后不含 {}，可安全进入复合格式串文本段）
             builder.AddDefaultFilter(System.Runtime.CompilerServices.FormattableStringFactory.Create(
-                $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}", _tenantId));
+                TenantFilterFormat, _tenantId));
         }
         // ADR-L：缓存租户作用域与过滤注入同点冻结——查询的租户可见性在此刻定型
         //（DefaultFilter 已上链），key 作用域同拍快照则二者永不漂移。租户过滤 → 每租户
