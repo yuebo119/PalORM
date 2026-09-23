@@ -23,14 +23,26 @@ internal static class FormattableSqlFormatter
     // 键不含参数值——编译期参数化保证值只进 @pN 占位，同形状 ⇒ 同 SQL 文本。
     // 容量以应用内"不同查询形状数"为界（有限且通常很小），与既有静态缓存同纪律；
     // 放在非泛型类避免按 T 分片（S2743）。
+    // CACHE-001（2026-09-23）：键空间 = Format × BaseIndex × ArgumentCount。Format 由调用点决定
+    // （有限），但 BaseIndex 是运行期参数偏移（QueryBuilder 按子句前累积参数数传入），动态集合大小
+    // 会让同一格式串产生不同键——因此"有限键集"只对单看 Format 成立，需要显式上限兜底。
+    private const int MaxEntries = 4096;
+
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
         (string Format, int BaseIndex, int ArgumentCount), string> ShapeCache = new();
 
     /// <summary>带形状缓存的格式化入口——QueryBuilder 热路径经此调用。</summary>
     internal static string FormatCached(string format, int baseIndex, int argumentCount)
-        => ShapeCache.GetOrAdd(
-            (format, baseIndex, argumentCount),
-            static key => Format(key.Format, key.BaseIndex, key.ArgumentCount));
+    {
+        (string Format, int BaseIndex, int ArgumentCount) key = (format, baseIndex, argumentCount);
+        // 命中路径零额外开销（与原先的 GetOrAdd 同为一次查表）
+        if (ShapeCache.TryGetValue(key, out string? cached)) return cached;
+        // 未命中才做容量治理：超限整体清空（自愈式重置）。格式化是纯函数，重建成本远低于
+        // "拒写导致缓存冻结在早期形状"的永久失效（与 SqlShapeCache 的拒写纪律不同，
+        // 那是因为形状缓存条目构建更贵且可观测计数被外部依赖）。
+        if (ShapeCache.Count >= MaxEntries) ShapeCache.Clear();
+        return ShapeCache.GetOrAdd(key, static k => Format(k.Format, k.BaseIndex, k.ArgumentCount));
+    }
 
     /// <summary>便捷重载——委托给纯字符串签名版本（保持既有调用点与契约测试不变）。</summary>
     internal static string Format(FormattableString sql, int baseIndex = 0)
