@@ -40,6 +40,10 @@ internal static class DataSessionCache
     /// <summary>per-(Type, Dialect) 缓存 DeleteAsync 物理路径的 sqls.Delete + 租户后缀（M1，v5.7）。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> DeleteWithTenantSqlCache = new();
 
+    /// <summary>per-(Type, Dialect) 缓存 COUNT 基础句（<c>SELECT COUNT(*) FROM "t"</c>）——PERF-002，
+    /// 2026-09-23：基底恒定、仅条件可变，原先每次 CountAsync 付一次 QuoteIdentifier + 插值。</summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> CountBaseSqlCache = new();
+
     /// <summary>per-(Type, Dialect, hasTenant) 缓存软删 UPDATE 全句（M1，v5.7）——原先
     /// DeleteAsync 软删路径每次调用 5 次 QuoteIdentifier + 全句插值重建。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool), string> SoftDeleteUpdateSqlCache = new();

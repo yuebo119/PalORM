@@ -14,7 +14,12 @@ public sealed partial class DataSession<TProvider>
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
         string defaultFilter = GetDefaultFilterCondition<T>();
-        string sql = $"SELECT COUNT(*) FROM {TProvider.QuoteIdentifier(tn)}";
+        // PERF-002（2026-09-23）：基底恒定（仅条件可变）——按 (Type, Dialect) 缓存，
+        // 原先每次 CountAsync 付一次 QuoteIdentifier + 插值。
+        string sql = DataSessionCache.CountBaseSqlCache.GetOrAdd(
+            (typeof(T), TProvider.Dialect),
+            static (_, tableName) => $"SELECT COUNT(*) FROM {TProvider.QuoteIdentifier(tableName)}",
+            tn);
         if (where is not null)
             // 用户条件必须整体括号包裹：含 OR 时 AND 优先级会使默认过滤对 OR 分支失效
             sql += " WHERE " + (defaultFilter.Length == 0 ? "" : defaultFilter + " AND ")
