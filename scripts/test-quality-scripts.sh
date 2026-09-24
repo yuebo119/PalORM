@@ -178,6 +178,19 @@ if [ "$setup_count" -ne "$global_json_count" ]; then
 fi
 printf 'PASS SDK 固定与 CI 一致性\n'
 
+printf '\n─── 脚本可移植性（无 PCRE grep 依赖）───\n'
+# B87：PCRE 专用语法（-oP 的 \K/lookahead）跨 grep 实现不兼容——Windows 侧 ugrep 实测挂死，
+# 且夹具/断言脚本是要在 CI（GNU）与本地（可能 ugrep）双侧跑的防线，必须两边都活。
+# 模式要求 -oP 后跟空白（真实调用形态）；豁免注释行（注释提及历史写法是合法的，
+# 可移植性问题只在"实际调用"——三重防自指：printf 说明文本、模式空格后缀、注释豁免）
+pcre_hits=$(grep -rn 'grep -oP[[:space:]]' scripts/ .github/workflows/ 2>/dev/null \
+    | grep -v -e ':[[:space:]]*#' || true)
+if [ -n "$pcre_hits" ]; then
+    printf 'FAIL 存在 grep -oP（PCRE 语法跨实现不兼容，换 POSIX grep+sed）:\n%s\n' "$pcre_hits"
+    exit 1
+fi
+printf 'PASS scripts/ 与 workflows/ 无 grep -oP（PCRE）依赖\n'
+
 if ! skip_ai; then
 printf '\n─── doc-consistency ───\n'
 if bash .ai/scripts/doc-consistency-check.sh > "$TMP/doc-pass.log"; then

@@ -89,7 +89,8 @@ jobs:
             - name: Verify version matches Directory.Build.props
               run: |
                   EXPECTED="${{ steps.ver.outputs.version }}"
-                  ACTUAL=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props | head -1)
+                  # POSIX sed（B87：仓内统一无 PCRE grep 依赖——\K/lookahead 跨 grep 实现不兼容）
+                  ACTUAL=$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' Directory.Build.props | head -1)
                   echo "Expected (tag/input): $EXPECTED"
                   echo "Actual (props):       $ACTUAL"
                   if [ "$EXPECTED" != "$ACTUAL" ]; then
