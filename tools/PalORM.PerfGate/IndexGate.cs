@@ -139,9 +139,10 @@ internal static class IndexGate
         var map = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
         foreach (PerfResultEnvelope run in batches)
         {
-            // 批内：同名键取最差（安全方向）
+            // 批内：同名键取最差（安全方向）。includeZeroRatio：比值 0 的键也要占位，
+            // 否则"最新批次已判定该项不可比"无法表达，旧批次会把它复活（见 KeyItems 文档）。
             var perBatch = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
-            foreach ((string harness, PerfResultItem item) in KeyItems([run]))
+            foreach ((string harness, PerfResultItem item) in KeyItems([run], includeZeroRatio: true))
             {
                 string key = Key(harness, item.Name, item.Dialect, item.Tier);
                 if (!perBatch.TryGetValue(key, out (string Harness, PerfResultItem Item) existing)
@@ -195,7 +196,15 @@ internal static class IndexGate
         }
     }
 
-    private static List<(string Harness, PerfResultItem Item)> KeyItems(List<PerfResultEnvelope> latest)
+    /// <summary>取进基线/速览的条目：PerfHub 的 PalORM 臂。
+    /// <para><b><paramref name="includeZeroRatio"/> 是防复活开关</b>：比值记为 0 的项
+    /// （PL-4 起 <c>Build*</c> 这类"地板不干活、对比不成立"的项就是 0）在
+    /// <see cref="LoadCurrentItems"/> 里也必须占位——否则最新批次"知道这个键不可比"这件事
+    /// 无法表达，旧批次里该项的高比值会把键复活，基线又被灌进一个已知无判别力的比值
+    /// （2026-09-24 实测：PL-4 之后录出的 152 项基线里仍有 12 个 Build 项）。</para>
+    /// <para>速览/哨兵这类只给人看的路径传 false——比值 0 的项没有可比信息，列出来是噪声。</para></summary>
+    private static List<(string Harness, PerfResultItem Item)> KeyItems(
+        List<PerfResultEnvelope> latest, bool includeZeroRatio = false)
     {
         var items = new List<(string, PerfResultItem)>();
         foreach (PerfResultEnvelope run in latest)
@@ -210,7 +219,8 @@ internal static class IndexGate
 
             foreach (PerfResultItem item in run.Items)
             {
-                if (item.Arm.Equals("PalORM", StringComparison.OrdinalIgnoreCase) && item.Ratio > 0)
+                if (item.Arm.Equals("PalORM", StringComparison.OrdinalIgnoreCase)
+                    && (includeZeroRatio || item.Ratio > 0))
                 {
                     items.Add((run.Harness, item));
                 }
