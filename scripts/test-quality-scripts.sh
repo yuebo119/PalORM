@@ -155,18 +155,23 @@ fi
 
 printf '\n─── SDK pin ───\n'
 # rollForward: latestMinor 语义——global.json 是下限锚点，实跑 SDK 允许同 band 更高版本
-pin_band=$(grep -oP '"version":\s*"\K[0-9]+\.[0-9]+\.[0-9]+' global.json)
-sdk_band=$(dotnet --version | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+')
+# 提取用 grep+sed POSIX 形式而非 grep -oP \K：PCRE \K 依赖 GNU/特定实现
+#（Windows 侧 ugrep 不支持会直接挂在 set -e——本机夹具实测；sed BRE 两边皆通）
+pin_band=$(grep '"version"' global.json | head -1 | sed 's/[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/')
+sdk_band=$(dotnet --version | sed 's/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/')
 if [ -z "$pin_band" ] || [ "$pin_band" != "$sdk_band" ]; then
     printf 'FAIL 当前 SDK band(%s) 与 global.json band(%s) 不一致\n' "$sdk_band" "$pin_band"
     exit 1
 fi
-if grep -q 'dotnet-version: "11.0.x"' .github/workflows/ci.yml; then
+# ci.yml 已收敛为调用 verify.yml 的 14 行空壳（job 全部在 verify.yml）——SDK 断言改查
+# verify.yml（真源）；grep -c 无匹配 exit 1 会沿 set -e 杀脚本（B38 同款坑），
+# || true 守卫保 stdout 的 "0" 计数交给下方数量对账。
+if grep -q 'dotnet-version: "11.0.x"' .github/workflows/verify.yml; then
     printf 'FAIL CI 仍使用浮动 .NET SDK\n'
     exit 1
 fi
-setup_count=$(grep -c 'uses: actions/setup-dotnet@v4' .github/workflows/ci.yml)
-global_json_count=$(grep -c 'global-json-file: global.json' .github/workflows/ci.yml)
+setup_count=$(grep -cE 'uses: actions/setup-dotnet' .github/workflows/verify.yml || true)
+global_json_count=$(grep -c 'global-json-file: global.json' .github/workflows/verify.yml || true)
 if [ "$setup_count" -ne "$global_json_count" ]; then
     printf 'FAIL CI setup-dotnet 未全部读取 global.json\n'
     exit 1
@@ -187,7 +192,9 @@ fi
 cp docs/架构设计.md "$TMP/pristine-arch.md"
 trap 'cp "$TMP/pristine-arch.md" docs/架构设计.md' EXIT
 # D10 实际校验的是 273 行附近的 "| **N 项 [Test] 声明**" 总声明（旧 Core.Tests N/N 表早已改版删除）
-current_total=$(grep -oP '\| \*\*\K[0-9]+(?= 项)' docs/架构设计.md | head -1 || true)
+# 同上：POSIX sed 取首个满足 "| **N 项" 的 N（等价原 grep -oP \K/lookahead + head -1；
+# sed -n 对每行尝试、p 全部命中、head -1 取首——跨行搜索语义，不依赖 PCRE）
+current_total=$(sed -n 's/.*| \*\*\([0-9][0-9]*\) 项.*/\1/p' docs/架构设计.md | head -1 || true)
 if [ -z "$current_total" ]; then
     printf 'FAIL 故障注入目标（总声明计数）缺失——文档格式再变更时同步本夹具\n'
     exit 1
