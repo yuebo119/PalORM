@@ -275,6 +275,24 @@ internal static class CommandFactoryEmitter
             || (c.IsPrimaryKey && c.IsAutoIncrement));
     }
 
+    /// <summary>「INSERT 不读返回」（PL-3）的静态判定——保守条件，全部满足才省 RETURNING/
+    /// LAST_INSERT_ID：
+    /// ① 恰一个主键且<b>非自增</b>——主键值由调用方给定，无需从 DB 回填；
+    /// ② 全部列 IsInsertable（无 IgnoreOnInsert/Computed/Timestamp/AutoIncrement——
+    ///   该类列的行值由 DB 决定，省读返回会让调用方实体与行值不一致）；
+    /// ③ 无转换器列、无 OwnedJson——值经 f→g 往返不保证恒等。
+    /// 全满足时插入值即行值，纯 INSERT 即完成语义（拆账 .ai/perf-probe/TxPathDiag.cs：
+    /// 读返回+物化段约占 InsertAsync 路径 3.1 µs/条）。任一不满足 → 保持既有读返回契约。</summary>
+    internal static bool SupportsInsertWithoutReturning(TableModel model)
+    {
+        var columns = model.Columns.AsSpan().ToArray();
+        ColumnModel[] primaryKeys = [.. columns.Where(static c => c.IsPrimaryKey)];
+        if (primaryKeys.Length != 1 || primaryKeys[0].IsAutoIncrement)
+            return false;
+        return columns.All(static c =>
+            c.IsInsertable && c.ConverterTypeName is null && !c.IsOwnedJson);
+    }
+
     // ── Upsert SQL 预构建（v4.1 性能优化：消除运行时 LINQ + string.Join 拼接）──
     // 运行时 UpsertWithReturningAsync / UpsertWithMySqlAsync 直接取 const，零分配。
 

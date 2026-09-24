@@ -9,9 +9,9 @@ namespace PalORM;
 /// SQL 载荷的 49%）——跨族字段本就不可达，故这不影响任何运行路径。</para>
 /// <para>读这两个族之外的字段请先确认方言：拿到 <c>""</c> 表示"该字段与本方言无关"，
 /// 而不是"SQL 生成失败"。<see cref="Update"/>/<see cref="Delete"/> 两族皆有值。</para></summary>
-/// <param name="Insert">INSERT 语句。<b>v5.6 起恒为 <c>""</c></b>：全方言无消费者（运行时一律走
-/// <see cref="InsertReturning"/> 或 <see cref="InsertWithLastInsertId"/>）。字段保留是为了不破坏
-/// 既有构造点；计划在下个主版本随其它破坏性项一并移除。</param>
+/// <param name="Insert">纯 INSERT 语句（无读返回）。PL-3 起由 <c>InsertNoReturning</c> 实体消费
+/// （显式主键 + 全列恒等，生成器静态判定）；其余实体运行时走
+/// <see cref="InsertReturning"/> 或 <see cref="InsertWithLastInsertId"/>。旧生成器模型程序集为 <c>""</c>。</param>
 /// <param name="Update">按主键 UPDATE 语句。两族皆有值。</param>
 /// <param name="Delete">按主键 DELETE 语句。两族皆有值。</param>
 /// <param name="InsertReturning">带主键回填的 INSERT 语句（RETURNING）。仅 PostgreSQL/SQLite 有值。</param>
