@@ -7,8 +7,9 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
 
-# 从 Directory.Build.props 动态读取版本号（与包版本同源，避免硬编码漂移）
-VERSION=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props | head -1)
+# 从 Directory.Build.props 动态读取版本号（与包版本同源，避免硬编码漂移）。
+# POSIX sed 提取（B87：仓内统一无 PCRE grep 依赖——lookahead/\K 跨 grep 实现不兼容）。
+VERSION=$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' Directory.Build.props | head -1)
 if [ -z "$VERSION" ]; then
     printf 'FAIL 无法从 Directory.Build.props 读取 Version\n' >&2
     exit 1
