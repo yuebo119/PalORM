@@ -2,6 +2,56 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮九] — 单行插入省读返回与批量 UPSERT 参数池直写（PL-3 / PL-3.2）
+
+> 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（InsertNoReturning 分派 + InsertPlainAsync）、
+> `src/PalORM.Core/CrudMetadata.cs`（CrudBindings 两字段）、`src/PalORM.Core/SqlSets.cs`（Insert 字段恢复发射）、
+> `src/PalORM.SourceGen/CommandFactoryEmitter.cs`（SupportsInsertWithoutReturning 判定 + BindUpsertValues 生成）、
+> `src/PalORM.SourceGen/RegistryEmitter.cs`（发射）、`src/PalORM.Core/DataSession_Bulk.cs`（BulkMerge 池直写）、
+> `test/PalORM.Core.Tests/InsertNoReturningTests.cs`（新增 6 例）＋ 快照基线刷新。
+
+### 为什么是这两项
+
+拆账（`.ai/perf-probe/TxPathDiag.cs`，本地探针）显示：`InsertAsync` 比同为命令复用路径的
+`UpdateAsync` 慢 3.1 µs/条，大头是 RETURNING 整行读+物化+回填——而显式主键（`AutoIncrement=false`）
+且全部列可插入的实体，插入值即行值，读回是纯浪费。`BulkMergeAsync` 的批 UPSERT 经 scratch 命令
+逐行 `BindUpsert` 建参数再值拷贝，每行白建 N 个 `DbParameter`（探针 c1 982 B/行 vs 地板 344 B/行）。
+
+### ✨ 新增
+
+- **PL-3 `InsertNoReturning`**：生成器保守判定（恰一个非自增主键 + 全部列 `IsInsertable` 且无
+  转换器/OwnedJson → 走纯 INSERT 不读返回；任一不满足保持读返回契约）
+  - 探针实测：w1 全路径 **5.79 → 2.72 µs/条（−53%）**，分配 1068 → 636 B/条
+  - PerfHub 实测（SQLite 同批前后对照）：`TxHundredInserts` P/ADO **2.76 → 1.30**、
+    `TxSingleInsert` **1.38 → 1.06**、`Insert` 20000 档 **1.28 → 0.98**
+  - 锁定测试：`InsertNoReturningTests` 6 例（判定值正反例 / 生成 SQL 形态 / 返回同一引用 /
+    事务回滚 / `[IgnoreOnInsert]` 判否回退读回 DB 真源）
+- **PL-3.2 `BindUpsertValues`**：与 `BindUpsert` 同谓词同列序的 Value 直写生成器，
+  `BatchUpsertAsync` 直写预建池；旧模型程序集回退 scratch 路径（`BindUpsertRowViaScratch`）
+  - 探针实测：BulkMerge **982 → 789 B/行（−20%）**
+  - PerfHub 实测：`UpsertBatch` 分配 P 相对 ADO **+32%/+41% → −4%/0%**
+
+### ✅ 验证
+
+- Core 415/415 · SourceGen 202/202 · Integration 205/205（2026-09-24 实跑）
+- 生成代码快照按 `PALORM_UPDATE_SNAPSHOTS` 流程刷新并逐行评审
+- `CommandSqlSet.Insert` 字段恢复发射（`Insert` 全方言无消费的旧断言已随语义更新）
+
+## [未发布·工具链·七] — PerfHub 臂 PG Binary COPY 批宽修正（比值 3.25 → 1.08）
+
+> 变更范围：`bench/PalORM.PerfHub/Implementations.cs`（`BulkBatchRows`：PG 传整段行数）、
+> `src/PalORM.PostgreSql/PostgreSqlProvider.cs`（`batchSize` 参数文档化）＋
+> `src/PalORM.Core/PalORM.Core.csproj`（InternalsVisibleTo 加 PerfProbe 拆账探针）。
+
+### 🐛 修复
+
+| 问题 | 影响 | 修复方式 |
+|---|---|---|
+| PerfHub PalORM 臂 PG `BulkInsert` 传 `batchSize=1000`（多值 VALUES 变量上限思维），对 Binary COPY（无参数上限）20000 行 = 20 次 `BeginBinaryImport/Complete` 协议往返 | A/A 四批读数稳定在 3.10–3.79×，档位指纹吻合（2000 档 2 次 vs 1 次 = 1.6×；20000 档 20 次 vs 1 次 = 3.3×），违反三臂契约"行业最优调用" | 臂对 PG 传 `rows.Count`（整段单批）；反向验证：单因子改动后 **3.25 → 1.08**（20000 档 111.5 → 40.9 ms，−63%），`TxBulkInsert` 1.53–1.71 → 0.94–1.06 |
+
+产品侧同步：`PostgreSqlProvider.BulkInsertAsync` 的 `batchSize` 文档注明 Binary COPY 无参数上限、
+远程库建议传整段行数——真实用户传 1000 同样付 20 次往返。
+
 ## [未发布·诊断] — PG/MySQL BulkUpdate 1.3-1.9× 差源定位：不在产品侧（PL-1.1）
 
 > 变更范围：`.ai/perf-probe/PgBatchUpdateDiag.cs`（本地探针，不入库）＋
