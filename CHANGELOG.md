@@ -2,6 +2,25 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·依赖] — 2026-09-24 依赖升级轮：TUnit 1.69.0 / Dapper 2.1.89 / Dapper.AOT 1.1.0
+
+> 变更范围：`Directory.Packages.props`（4 个 PackageVersion）。产品包（Core/SourceGen/三 Provider）
+> 依赖面零变化——包契约脚本 PASS，升级项全部是测试与基准侧依赖。
+
+| 包 | 旧 → 新 | 类型 | 影响面 |
+|---|---|---|---|
+| `TUnit` / `TUnit.Assertions` | 1.66.27 → **1.69.0** | minor | 三个测试套（升后实跑 **415 / 202 / 205** 全绿） |
+| `Dapper` | 2.1.79 → **2.1.89** | patch | Benchmarks / DapperSuite / PerfHub 三臂对照臂 |
+| `Dapper.AOT` | 1.0.52 → **1.1.0** | minor | Benchmarks / PerfHub |
+
+**口径注记**：Dapper 是三臂对照的外部锚点，版本变化会让 PerfHub/DapperSuite 的 Dapper 臂数字
+与历史批次漂移——下次全量跑测起 `P/Dapper` 列跨批不直接可比（批内三臂同批仍可比）。
+
+**验证**：`PalORM.ci.slnf` Release `-warnaserror` 构建 0 警告 0 错误 · 三测试套 415/202/205 ·
+bench 三项目 0 错误 · 包契约 PASS · `dotnet list package --outdated` 归零
+（Npgsql 10.0.3 / MySqlConnector 2.6.2 / Sqlite.Core rc.1 / CodeAnalysis 5.9.0 /
+SonarAnalyzer 10.34 / SourceLink 10.0.401 / RepoDb 1.16 等经查已为源内最新）。
+
 ## [未发布·性能轮九] — 单行插入省读返回与批量 UPSERT 参数池直写（PL-3 / PL-3.2）
 
 > 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（InsertNoReturning 分派 + InsertPlainAsync）、

@@ -34,8 +34,10 @@
 
   <!-- 测试 -->
   <ItemGroup>
-    <PackageVersion Include="TUnit" Version="1.66.27" />
-    <PackageVersion Include="TUnit.Assertions" Version="1.66.27" />
+    <!-- 2026-09-24 依赖升级轮：1.66.27→1.69.0（minor，测试框架）——升后三测试套
+         （Core 415 / SourceGen 202 / Integration 205）全量验证。 -->
+    <PackageVersion Include="TUnit" Version="1.69.0" />
+    <PackageVersion Include="TUnit.Assertions" Version="1.69.0" />
     <!-- v5.0 阶段 1.3：移除 Microsoft.NET.Test.Sdk——TUnit 1.x 走 MTP 模式，
          dotnet run 直接执行，不再需要 VSTest 桥接（dotnet test 入口）。 -->
   </ItemGroup>
@@ -45,8 +47,11 @@
     <!-- v5.0 阶段 3.4：BenchmarkDotNet 从 NuGet 0.15.8 改为本地 ProjectReference（fork 已支持 net11）。
          删除此处的 PackageVersion，避免 NuGet 把旧包带回来覆盖 ProjectReference。
          PalORM.Benchmarks.csproj 直接 ProjectReference 引用 bench/BenchmarkDotNet。 -->
-    <PackageVersion Include="Dapper" Version="2.1.79" />
-    <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
+    <!-- 2026-09-24 依赖升级轮：Dapper 2.1.79→2.1.89（patch）、Dapper.AOT 1.0.52→1.1.0（minor）。
+         口径注记：Dapper 是三臂对照的外部锚点——版本变化会让 PerfHub/DapperSuite 的 Dapper 臂数字
+         与历史批次漂移，下次全量跑测起 P/Dapper 列跨批不直接可比（批内三臂仍同批可比）。 -->
+    <PackageVersion Include="Dapper" Version="2.1.89" />
+    <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- 同类 micro-ORM 对照（Dapper 官方 benchmarks/ 同样多 ORM 对照）。
          RepoDb 主包 1.15.1 / Sqlite 1.15.0 是各自最新稳定版（RepoDb 发布节奏差异）。 -->
     <PackageVersion Include="RepoDb" Version="1.16.0" />
