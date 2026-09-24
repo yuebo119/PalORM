@@ -308,7 +308,75 @@ public sealed class SingleRowCommandReuseTests
         await Assert.That(other!.Qty).IsEqualTo(0);
     }
 
-    // ─── ⑧ 会话边界 ────────────────────────────
+    // ─── ⑧ 惰性晋升：单操作会话不得付出缓存代价 ────────────────────────────
+
+    [Test]
+    public async Task SingleOpSessions_NeverPromote_ValuesStillCorrect()
+    {
+        // 惰性晋升的动机场景：一条外部连接配多个一次性会话（会话接管连接所有权，
+        // 无法 DisposeAsync）。这种用法每次操作都应走"新建命令 + 随操作释放"——
+        // 若在这里缓存命令，每次操作都会泄漏一个未释放命令（实测并发混合负载慢 4.84×）。
+        // 本测试锁的是行为：连续多个单操作会话，值必须逐位正确。
+        string cs = PromoConnectionString();
+        await using DataSession<SqliteProvider> setup = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = cs });
+        await setup.ExecuteAsync(
+            $"CREATE TABLE srr_upd (id INTEGER PRIMARY KEY, name TEXT NOT NULL, qty INTEGER NOT NULL)");
+        await setup.BulkInsertAsync([new ReuseManual { Id = 1, Name = "s", Qty = 1 }]);
+
+        for (int i = 1; i <= 6; i++)
+        {
+            // 每个会话只做一次写——模拟"每操作一个抛弃式会话"
+            await using DataSession<SqliteProvider> oneShot = await DataSession<SqliteProvider>.CreateAsync(
+                new DbOptions { ConnectionString = cs });
+            int affected = await oneShot.UpdateAsync(
+                new ReuseManual { Id = 1, Name = "n" + i, Qty = i });
+            await Assert.That(affected).IsEqualTo(1);
+        }
+
+        ReuseManual? after = await setup.From<ReuseManual>().FirstOrDefaultAsync();
+        await Assert.That(after).IsNotNull();
+        await Assert.That(after!.Name).IsEqualTo("n6");
+        await Assert.That(after.Qty).IsEqualTo(6);
+    }
+
+    [Test]
+    public async Task PromotedSession_ReusesCommandAcrossManyOps()
+    {
+        // 晋升阈值是 3：前两次新建、第 3 次起复用。本测试用远超阈值的操作数
+        // 确认晋升后的命令可反复执行且值不错位（参数池与命令长期共用）。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync("srr_promo2");
+        await session.ExecuteAsync(
+            $"CREATE TABLE srr_upd (id INTEGER PRIMARY KEY, name TEXT NOT NULL, qty INTEGER NOT NULL)");
+        List<ReuseManual> rows = [];
+        for (int i = 1; i <= 25; i++) rows.Add(new ReuseManual { Id = i, Name = "s", Qty = i });
+        await session.BulkInsertAsync(rows);
+
+        for (int round = 1; round <= 8; round++)
+        {
+            foreach (ReuseManual row in rows)
+            {
+                row.Name = "r" + round;
+                row.Qty = row.Id + round;
+                int affected = await session.UpdateAsync(row);
+                await Assert.That(affected).IsEqualTo(1);
+            }
+        }
+
+        ReuseManual[] all = [.. (await session.From<ReuseManual>().OrderBy(x => x.Id).ToListAsync())
+            .OrderBy(static r => r.Id)];
+        for (int i = 0; i < 25; i++)
+        {
+            await Assert.That(all[i].Name).IsEqualTo("r8");
+            await Assert.That(all[i].Qty).IsEqualTo(i + 9);
+        }
+    }
+
+    /// <summary>独立命名共享缓存库的连接串——让多个"每操作一会话"连到同一个内存库。</summary>
+    private static string PromoConnectionString()
+        => $"Data Source=promo_{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
+
+    // ─── ⑨ 会话边界 ────────────────────────────
 
     [Test]
     public async Task SessionDisposed_ThenNewSession_WorksIndependently()
