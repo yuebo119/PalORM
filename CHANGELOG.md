@@ -45,12 +45,11 @@ PerfHub 的 `BuildGetByKeySql`/`BuildComplexQuerySql` 长期以 6.5~7.1× 挂在
 
 ## [未发布·性能轮八] — 单行 CRUD 命令与参数跨调用复用（PL-2）
 
-> 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（Insert/Update 复用路径 + 参数绑定职责上移）、
-> `src/PalORM.Core/DataSession.cs`（复用命令随会话释放）、
-> `test/PalORM.Core.Tests/SingleRowCommandReuseTests.cs`（新增 11 例回归）。
+> 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（Insert/Update 复用路径 + 惰性晋升）、
+> `src/PalORM.Core/DataSession.cs`（晋升命令随会话释放）、
+> `test/PalORM.Core.Tests/SingleRowCommandReuseTests.cs`（新增 13 例回归）。
 
 ### 为什么是这一项
-
 PerfHub 三臂全量对比里 PalORM 最大的两个落后项都在单行写路径：
 `TxHundredInserts` 4.40×、`TxRollback` 3.83×（往返数与地板持平，落后全在客户端每行固定开销）。
 同产品内部对照给出了归因：池化路径 `BulkUpdateAsync` **1.41 µs/行**，
@@ -58,45 +57,76 @@ PerfHub 三臂全量对比里 PalORM 最大的两个落后项都在单行写路�
 根因是 `InsertCoreAsync`/`UpdateCoreAsync` 每次调用 `CreateCommand()` 新建命令，
 `BindInsert`/`BindUpdate` 每列 `CreateParameter()` + `ParameterName` + `Add`。
 
+### 收益在哪一半：先测再改，两次改才改对
+
+三方交替 A/B（SQLite t2000）先把"收益来自命令还是参数"这个问题问清楚：
+
+| 方案 | TxHundredInserts | 分配 | 并发混合 t1 |
+|---|---|---|---|
+| 改前（每次新建命令+参数） | 969 µs | 254628 B | 8335 µs |
+| 只缓存参数、命令仍新建 | 960 µs（**无收益**） | 223055 B（只回收 12%） | — |
+| 命令 + 参数都缓存（无条件） | 549 µs | 154666 B（回收 39%） | **40380 µs（慢 4.84×）** |
+
+即**命令的新建与释放才是大头**，只池化参数几乎白做；但无条件缓存命令会引入一个真实的退化
+（见下）。终版取两者之长：**惰性晋升**。
+
 ### 改法
 
-会话上按 (实体类型, 操作) 缓存一个命令 + 从首行绑定摘出的参数池；后续调用只重设
-`Transaction`/`CommandTimeout`（`CreateCommand` 本就在做前者），参数只写 Value——
-用 v4.6 就已发射、批量路径一直在用的 `BindInsertValues`/`BindUpdateValues`（offset=0）。
-语句文本、超时与参数绑定的职责从 `InsertWithReturningAsync`/`InsertWithLastInsertIdAsync`
-上移到获取命令的 `TryAcquireInsertCommand`/`TryAcquireUpdateCommand`，子方法只负责执行与回填
+同一 (实体类型, 操作) **前 2 次**走原新建路径（命令随操作释放、不泄漏），**第 3 次**建池并晋升，
+之后复用命令 + 参数池只写 Value——用 v4.6 就已发射、批量路径一直在用的
+`BindInsertValues`/`BindUpdateValues`（offset=0）。语句文本、超时与参数绑定的职责从
+`InsertWithReturningAsync`/`InsertWithLastInsertIdAsync` 上移到
+`TryAcquireInsertCommand`/`TryAcquireUpdateCommand`，子方法只负责执行与回填
 （否则复用命令的参数集合会逐次增长——这一条由新增测试抓出来过）。
 
-三条边界：旧模型程序集未发射 `BindInsertValues`/`BindUpdateValues` 时回退原路径；
+**为什么必须惰性晋升**：缓存命令意味着"命令只随会话释放"，而 `DataSession` 构造时接管所接收
+连接的所有权——"一条外部连接配多个一次性会话"的用法（PerfHub 的每操作一会话正是如此）
+无法调用 `DisposeAsync`，那会把共享连接一起关掉。无条件缓存时该用法每次操作泄漏一个未释放的
+命令（原生语句句柄 + 终结器），实测并发混合负载慢 **4.84×**（40380 vs 8335 µs，三轮交替每臂 6 跑）。
+阈值 3 让"每操作一个抛弃式会话"永远不进缓存，而真正复用会话的用法从第 3 次起拿到全部收益。
+
+晋升生效由分配探针逐次证实（同一会话连续写，B/op）：
+
+| 路径 | 第 1-2 次 | 第 3 次（建池） | 第 4-8 次 |
+|---|---|---|---|
+| `InsertAsync` | 1464 | 1544 | **872**（−40%） |
+| `UpdateAsync` | 1752 | 1840 | **1104**（−37%） |
+
+三条边界：旧模型程序集未发射 `BindInsertValues`/`BindUpdateValues` 时恒走新建路径；
 `Update` 排除租户实体（租户参数每次调用新加 + `_tenantId` 可经 `WithTenant` 中途变更）；
-复用命令归会话所有，在 `DisposeCoreAsync` 里先于主连接关闭释放。
+晋升命令归会话所有，在 `DisposeCoreAsync` 里先于主连接关闭释放。
 
 ### A/B 结果（SQLite 2000 档，三轮交替配对）
 
 第一轮的**绝对耗时作废**：那一轮的地板臂自身慢了 2~5.4 倍（`TxHundredInserts` 地板
 215.8 → 1165.5 µs、`Count` 6.3 → 11.1 µs，后者是纯 SQLite 微操作、不碰被测产品代码）。
 改用**同轮交替配对**（B→A→B→A 三组，`label=ab/pl2-{a,b}/<轮>/sqlite/2000`）：
-同轮内取 PalORM ÷ 地板，分母与被测量同环境，能把漂移约掉。三轮里方向**无一例外**：
+同轮内取 PalORM ÷ 地板，分母与被测量同环境，能把漂移约掉。
 
-| 项 | A（改前）三轮 | B（改后）三轮 | 判定 |
+终版（惰性晋升）三轮交替的实测（中位）：
+
+| 项 | 改前 | 改后 | 判定 |
 |---|---|---|---|
-| `TxHundredInserts` P/F | 5.79 / 6.56 / 3.47 | 2.11 / 1.71 / 1.66 | 中位 5.79× → 1.71× |
-| `TxRollback` P/F | 10.84 / 4.34 / 3.37 | 1.14 / 1.53 / 1.65 | 中位 4.34× → 1.53× |
-| `TxHundredInserts` 分配 | 258319 / 257978 / 255742 B/op | 155643 / 159687 / 156294 B/op | −38.1~−39.7%，每轮复现 |
-| `TxRollback` 分配 | 1086809 / 1076241 / 1077357 B/op | 597694 / 597517 / 599987 B/op | −44.3~−45.0%，每轮复现 |
+| `TxHundredInserts` 耗时 | 969.3 µs | 573.5 µs | **−41%** |
+| `TxRollback` 耗时 | 1978.7 µs | 975.8 µs | **−51%** |
+| `TxHundredInserts` 分配 | 254620 B/op | 156681 B/op | **−38%** |
+| `TxRollback` 分配 | 1069618 B/op | 598716 B/op | **−44%** |
+| 并发混合 t1 | 8491.4 µs | 8174.9 µs | 0.96×（无退化） |
+| 并发混合 t4 / t8 | 34567 / 74725 µs | 35180 / 76908 µs | 1.02× / 1.03×（噪声内） |
+| `Insert` / `Update` / `TxSingleInsert` | 24.4 / 8.6 / 46.8 µs | 24.8 / 8.4 / 44.7 µs | 持平，不声称收益 |
 
-分配是 `GC.GetTotalAllocatedBytes` 精确计数，三轮逐位复现。`TxRollback` 改前 P/F 最高冲到
-10.84× 的机制也在这里：1.09 MB/op 的分配把 GC 停顿放大进了墙钟。
+分配是 `GC.GetTotalAllocatedBytes` 精确计数。**并发项是本条最关键的一行**：
+无条件缓存命令的版本在这里是 40380 µs（慢 4.84×），惰性晋升把它拉回 8175 µs——
+与改前的 8491 µs 同量级，t1 的 P/F 1.18× 甚至优于改前的 1.24×。
 
-**对照原定 [推断] 目标**：`TxRollback` ≤2.0× **达标**（1.53×）；
-`TxHundredInserts` ≤1.5× **未达标**（1.71×，差 0.21）。剩余差距是语义差——
-产品要 RETURNING 取自增 ID 并回填（`ExecuteScalar` + backfill + 会话租约 + 元数据查找），
-地板的 100 条插入是裸 `ExecuteNonQueryAsync`，不回 ID。
-`Insert`/`Update`/`TxSingleInsert`/`InsertReturningId` 三项在本环境无可分离信号
-（两臂都落在 1.2~2.9× 区间内互相重叠），**不声称收益**。
+**对照原定 [推断] 目标**（按 P/F）：`TxRollback` ≤2.0× **达标**（1.86×）；
+`TxHundredInserts` ≤1.5× **未达标**（2.60×）。P/F 依赖同轮地板的绝对耗时，
+而地板自身在本机的波动就有数倍，故判定以**绝对耗时与分配**为准（两者三轮一致、方向无例外）。
+剩余差距是语义差——产品要 RETURNING 取自增 ID 并回填（`ExecuteScalar` + backfill +
+会话租约 + 元数据查找），地板的 100 条插入是裸 `ExecuteNonQueryAsync`，不回 ID。
 
-读这批数字须知：`ab/pl2-a/*` 批次是用 `git checkout HEAD~1 --` 就地切出改前代码跑的，
-故信封里的 `Commit` 字段读到的仍是 B 提交号——区分两臂只能看 `label`。
+读这批数字须知：`ab/pl2-*` 批次是用 `git checkout <提交> -- <文件>` 就地切出另一臂代码跑的，
+故信封里的 `Commit` 字段读到的是当前 HEAD 提交号——区分两臂只能看 `label`。
 
 ## [未发布·工具链·五] — 性能测试系统重构：项数 112→91、全量 42min→约 33min、进度与结果表格化
 
