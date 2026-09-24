@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -510,6 +510,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         try
         {
+            // PL-2：晋升后的复用命令归会话所有，在主连接关闭前统一释放
+            // （DisposeAsync 已等待全部活动操作结束，此时无飞行查询持有这些命令）
+            await DisposeReusableCrudCommandsAsync().ConfigureAwait(false);
             if (_conn.State == ConnectionState.Open)
                 await _conn.CloseAsync().ConfigureAwait(false);
         }
@@ -536,6 +539,25 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
         // 后续异常挂 Data 不丢弃（与 GridReader 清理约定一致）；用 Data.Count 推导索引避免外部 ref 计数器
         primary.Data[$"PalORM.CleanupException{primary.Data.Count}"] = exception;
+    }
+
+    /// <summary>PL-2：释放晋升后的单行 CRUD 复用命令。首个异常直接抛出（由 DisposeCoreAsync 的连接
+    /// 清理 catch 记入主异常链），后续异常挂其 <see cref="Exception.Data"/> 不丢弃。</summary>
+    private async Task DisposeReusableCrudCommandsAsync()
+    {
+        Exception? primary = null;
+        if (_reusableInsert is { } insert)
+        {
+            try { await insert.Command.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
+        }
+        if (_reusableUpdate is { } update)
+        {
+            try { await update.Command.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
+        }
+        if (primary is not null)
+            ExceptionDispatchInfo.Capture(primary).Throw();
     }
 
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()
