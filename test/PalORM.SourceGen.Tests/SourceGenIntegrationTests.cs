@@ -319,11 +319,12 @@ internal sealed class SourceGenIntegrationTests
         var sqls = byDialect.Get(SqlDialect.Sqlite);
         // v5.6：INSERT 句子仍必须生成，但只出现在本方言族会读的字段里——
         // SQLite/PG 走 InsertReturning（RETURNING 回填主键），MySQL 走 InsertWithLastInsertId。
-        // 无消费者的 sqls.Insert 已停止发射（实测省下注册文件 19.6% 字符）。
+        // PL-3：sqls.Insert（纯 INSERT）由 InsertNoReturning 实体消费，恢复发射。
         await Assert.That(sqls.InsertReturning).Contains("INSERT INTO \"test_users\"");
         await Assert.That(sqls.InsertReturning).Contains("VALUES");
         await Assert.That(byDialect.MySql.InsertWithLastInsertId).Contains("INSERT INTO `test_users`"); // MySQL 反引号
-        await Assert.That(sqls.Insert).IsEmpty();
+        await Assert.That(sqls.Insert).Contains("INSERT INTO \"test_users\"");
+        await Assert.That(sqls.Insert.Contains("RETURNING", StringComparison.OrdinalIgnoreCase)).IsFalse();
         await Assert.That(sqls.Update).Contains("UPDATE \"test_users\"");
         await Assert.That(sqls.Delete).Contains("DELETE FROM \"test_users\"");
         // 新生成器片段不再携带 legacy 载荷

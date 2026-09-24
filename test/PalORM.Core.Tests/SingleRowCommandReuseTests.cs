@@ -213,29 +213,30 @@ public sealed class SingleRowCommandReuseTests
     [Test]
     public async Task FullRowReturning_RepeatedInsert_MaterializesEachTime()
     {
-        // [Key(AutoIncrement = false)] 使 SupportsKeyOnlyReturning 判否 → 走整行 RETURNING
-        // + RowFactory 物化路径（ExecuteReader）。这条路径的 reader 若未收尾会毒化下一次执行。
+        // [IgnoreOnInsert] 列（DB 默认值列）使 SupportsInsertWithoutReturning 与
+        // SupportsKeyOnlyReturning 双双判否 → 走整行 RETURNING + RowFactory 物化路径
+        // （ExecuteReader）。这条路径的 reader 若未收尾会毒化下一次执行。
+        //（PL-3 后纯可插入列的手工主键实体改走纯 INSERT——那条路径的回归面见
+        // InsertNoReturningTests；此处保的正是被它跳过的读返回路径。）
         await using DataSession<SqliteProvider> session = await CreateSessionAsync("srr_ret");
         await session.ExecuteAsync(
-            $"CREATE TABLE srr_ret (id INTEGER PRIMARY KEY, name TEXT NOT NULL, qty INTEGER NOT NULL, note TEXT)");
+            $"CREATE TABLE srr_ret (id INTEGER PRIMARY KEY, name TEXT NOT NULL, qty INTEGER NOT NULL, note TEXT DEFAULT 'db')");
 
         for (int i = 1; i <= 5; i++)
         {
-            ReuseFull inserted = await session.InsertAsync(
-                new ReuseFull { Id = i, Name = "n" + i, Qty = i, Note = i % 2 == 0 ? null : "note" + i });
-            // 整行 RETURNING 物化的是 DB 侧行，不是调用方实体
+            ReuseReturning inserted = await session.InsertAsync(
+                new ReuseReturning { Id = i, Name = "n" + i, Qty = i, Note = "note" + i });
+            // 整行 RETURNING 物化的是 DB 侧行——[IgnoreOnInsert] 列不进 INSERT，
+            // 读回 DB 真源值（DEFAULT 'db'），实体传入值被忽略
             await Assert.That(inserted.Id).IsEqualTo(i);
             await Assert.That(inserted.Name).IsEqualTo("n" + i);
             await Assert.That(inserted.Qty).IsEqualTo(i);
-            await Assert.That(inserted.Note).IsEqualTo(i % 2 == 0 ? null : "note" + i);
+            await Assert.That(inserted.Note).IsEqualTo("db");
         }
 
-        ReuseFull? third = await session.From<ReuseFull>().Where($"id = {(long)3}").FirstOrDefaultAsync();
+        ReuseReturning? third = await session.From<ReuseReturning>().Where($"id = {(long)3}").FirstOrDefaultAsync();
         await Assert.That(third).IsNotNull();
-        await Assert.That(third!.Note).IsEqualTo("note3");
-        ReuseFull? fourth = await session.From<ReuseFull>().Where($"id = {(long)4}").FirstOrDefaultAsync();
-        await Assert.That(fourth).IsNotNull();
-        await Assert.That(fourth!.Note).IsNull();
+        await Assert.That(third!.Note).IsEqualTo("db");
     }
 
     // ─── ⑥ 乐观锁 version 连续递增 ────────────────────────────
@@ -442,6 +443,17 @@ internal sealed partial class ReuseFull
     [Column("name")] public string Name { get; set; } = "";
     [Column("qty")] public long Qty { get; set; }
     [Column("note")] public string? Note { get; set; }
+}
+
+/// <summary>手工主键 + [IgnoreOnInsert] DB 默认值列——PL-3 判否实体，
+/// 走整行 RETURNING + 物化路径（回归面⑤的载体）。</summary>
+[Table("srr_ret")]
+internal sealed partial class ReuseReturning
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("qty")] public long Qty { get; set; }
+    [IgnoreOnInsert] [Column("note")] public string? Note { get; set; }
 }
 
 /// <summary>乐观锁实体——BindUpdateValues 比 setColumnCount+1 多一个 version 参数。</summary>

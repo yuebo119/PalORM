@@ -5,8 +5,8 @@ namespace PalORM.Core.Tests;
 /// <summary>方言族载荷契约（B2：只发射会被读到的 SQL）。
 /// <para>运行时按 <c>TProvider.SupportsReturningClause</c> 分发：PostgreSQL/SQLite 读
 /// <c>InsertReturning</c>/<c>UpsertReturning</c>，MySQL 读 <c>InsertWithLastInsertId</c>/<c>UpsertMySql</c>；
-/// <c>Insert</c> 全方言无消费者。生成器据此只发射本族载荷，另一族置空——
-/// 实测省下注册文件 27% 的字符（SQL 载荷的 49%）。</para>
+/// <c>Insert</c>（纯 INSERT）由 <c>InsertNoReturning</c> 实体三方言共用（PL-3）。
+/// 生成器据此只发射会被读的载荷，另一族置空——实测省下注册文件 27% 的字符（SQL 载荷的 49%）。</para>
 /// <para>本用例把"哪族该有值"钉成断言，使该优化不会退化成"某族 SQL 被误清空"：
 /// 清空正确字段与误清空必需字段，在只跑功能用例时都表现为"通过"（后者只在使用该方言时才炸），
 /// 逐字段断言才是可失败的仪器。</para></summary>
@@ -27,7 +27,7 @@ internal sealed class CommandSqlSetDialectContractTests
             await Assert.That(set.UpsertReturning).IsNotEmpty();
             await Assert.That(set.UpsertMySql).IsEmpty();
             await Assert.That(set.InsertWithLastInsertId).IsEmpty();
-            await Assert.That(set.Insert).IsEmpty(); // 全方言无消费者
+            await Assert.That(set.Insert).IsNotEmpty(); // PL-3：InsertNoReturning 实体消费
             _ = dialect;
         }
 
@@ -38,7 +38,7 @@ internal sealed class CommandSqlSetDialectContractTests
         await Assert.That(sets.MySql.InsertWithLastInsertId).IsNotEmpty();
         await Assert.That(sets.MySql.InsertReturning).IsEmpty();
         await Assert.That(sets.MySql.UpsertReturning).IsEmpty();
-        await Assert.That(sets.MySql.Insert).IsEmpty();
+        await Assert.That(sets.MySql.Insert).IsNotEmpty(); // PL-3：同上
     }
 
     [Test]
@@ -53,6 +53,7 @@ internal sealed class CommandSqlSetDialectContractTests
         await Assert.That(sets.Sqlite.Delete).IsEqualTo(sets.PostgreSql.Delete);
         await Assert.That(sets.Sqlite.InsertReturning).IsEqualTo(sets.PostgreSql.InsertReturning);
         await Assert.That(sets.Sqlite.UpsertReturning).IsEqualTo(sets.PostgreSql.UpsertReturning);
+        await Assert.That(sets.Sqlite.Insert).IsEqualTo(sets.PostgreSql.Insert);
     }
 
     [Test]

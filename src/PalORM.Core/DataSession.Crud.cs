@@ -86,6 +86,10 @@ public sealed partial class DataSession<TProvider>
     /// MySQL 无 RETURNING，仅回填自增 ID，其余属性保持传入值。需要 DB 计算列的最新值时请在插入后 GetAsync 重查。</para>
     /// <para><b>回填契约</b>: 三方言下传入实体的自增 ID 均被回填（可安全继续使用原引用）；
     /// 但 DB 默认值/[Computed] 列只存在于返回实例（PG/SQLite）——两者不是同一对象。</para>
+    /// <para><b>PL-3 无读返回形态</b>: 显式主键（AutoIncrement=false）且全部列可插入、
+    /// 无转换器/OwnedJson 的实体，插入值即行值——走纯 INSERT 不读返回（生成器静态判定
+    /// InsertNoReturning），返回传入实体本身（同一引用）；此形态下没有任何属性被 DB 改写，
+    /// 与读回恒等，仅省去读返回往返。</para>
     /// <para><b>租户契约</b>（ITM-599）：Insert/BulkInsert/BulkMerge 路径<b>不附加租户 WHERE</b>
     /// （写入路径不需要过滤——租户隔离在写入时由实体的 <c>tenant_id</c> 列值承载）。
     /// 调用方必须确保 [TenantAware] 实体的 <c>tenant_id</c> 属性已赋值——NOT NULL 列约束在
@@ -156,18 +160,16 @@ public sealed partial class DataSession<TProvider>
     /// （命令随操作释放，不泄漏）；第 <see cref="CommandReusePromotionThreshold"/> 次建池并晋升，
     /// 之后只走 <see cref="CrudMetadata.BindInsertValues"/> 写 Value（零 CreateParameter）。</para>
     /// <para>旧模型程序集未发射 BindInsertValues 时恒返回 null，调用方回退逐行新建命令。</para>
+    /// <para><paramref name="commandText"/> 由调用方按 PL-3/RETURNING 形态算好传入（单一真源，
+    /// 与新建路径同文本）；本方法只负责复用判定与绑定。</para>
     /// <para>返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放。</para></summary>
     private DbCommand? TryAcquireInsertCommand<T>(
-        CommandSqlSet sqls, CrudMetadata metadata, T entity, ref int servedOps)
+        string commandText, CrudMetadata metadata, T entity, ref int servedOps)
         where T : class, new()
     {
         if (metadata.BindInsertValues is not { } valuesBinder)
             return null;
 
-        // PG/SQLite 走 RETURNING、MySQL 走 LAST_INSERT_ID——两形态都是 (Type, Provider) 的编译期常量
-        string commandText = TProvider.SupportsReturningClause
-            ? sqls.InsertReturning
-            : sqls.InsertWithLastInsertId;
         if (_reusableInsert is { } reusable && reusable.EntityType == typeof(T))
         {
             DbCommand reused = reusable.Command;
@@ -269,27 +271,54 @@ public sealed partial class DataSession<TProvider>
 
         CommandSqlSet sqls = GetCommandSqls<T>(state);
 
-        // PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID——两形态都是 (Type, Provider) 的编译期常量
-        string commandText = TProvider.SupportsReturningClause
-            ? sqls.InsertReturning
-            : sqls.InsertWithLastInsertId;
+        // PL-3：InsertNoReturning 实体（显式主键 + 全列恒等，生成器静态判定）的插入值即行值，
+        // 纯 INSERT 即完成语义——省 RETURNING/LAST_INSERT_ID 的读返回与物化
+        //（拆账 .ai/perf-probe/TxPathDiag.cs：该段约占 InsertAsync 路径 3.1 µs/条）。
+        // 其余形态：PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID。
+        string commandText;
+        if (metadata.InsertNoReturning)
+            commandText = sqls.Insert;
+        else if (TProvider.SupportsReturningClause)
+            commandText = sqls.InsertReturning;
+        else
+            commandText = sqls.InsertWithLastInsertId;
 
         // PL-2：命令/参数复用路径。未晋升（前两次或旧模型程序集）时返回 null，
         // 走下方新建路径——命令随操作释放，不泄漏。
-        if (TryAcquireInsertCommand(sqls, metadata, entity, ref _insertWriteOps) is { } reused)
-        {
-            return TProvider.SupportsReturningClause
-                ? await InsertWithReturningAsync(state, reused, metadata, entity, ct).ConfigureAwait(false)
-                : await InsertWithLastInsertIdAsync(state, reused, entity, ct).ConfigureAwait(false);
-        }
+        if (TryAcquireInsertCommand(commandText, metadata, entity, ref _insertWriteOps) is { } reused)
+            return await FinishInsertAsync(state, reused, metadata, entity, ct).ConfigureAwait(false);
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         metadata.BindInsert(cmd, entity, 0);
+        return await FinishInsertAsync(state, cmd, metadata, entity, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>INSERT 执行形态分派的单一真源（PL-3）：InsertNoReturning → 纯执行；
+    /// RETURNING 方言 → 标量/整行读；MySQL → LAST_INSERT_ID 合并。复用与新建路径共用。</summary>
+    private async ValueTask<T> FinishInsertAsync<T>(
+        PalORM_Runtime.RuntimeRegistryState state,
+        DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
+        where T : class, new()
+    {
+        if (metadata.InsertNoReturning)
+            return await InsertPlainAsync<T>(cmd, entity, ct).ConfigureAwait(false);
         return TProvider.SupportsReturningClause
             ? await InsertWithReturningAsync(state, cmd, metadata, entity, ct).ConfigureAwait(false)
             : await InsertWithLastInsertIdAsync(state, cmd, entity, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>PL-3 无读返回路径——InsertNoReturning 实体专用（显式主键 + 全列恒等）。
+    /// 返回传入实体（同一引用，全部属性即行值，无回填）；影响行数不为 1 时明确失败。</summary>
+    private static async ValueTask<T> InsertPlainAsync<T>(DbCommand cmd, T entity, CancellationToken ct)
+        where T : class, new()
+    {
+        int affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        if (affected != 1)
+            throw new InvalidOperationException(
+                $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
+        return entity;
     }
 
     /// <summary>PG/SQLite 路径——INSERT ... RETURNING 单次往返物化完整行（含自增 ID）。

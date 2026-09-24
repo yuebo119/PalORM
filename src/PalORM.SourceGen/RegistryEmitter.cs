@@ -124,6 +124,8 @@ internal static class RegistryEmitter
         sb.AppendLine($"        draft.CrudMetadatas[typeof({m.EntityTypeName})] = new global::PalORM.CrudMetadata(");
         // v5.7：RETURNING 收窄判定（保守条件见 SupportsKeyOnlyReturning 文档）
         bool keyOnlyReturning = CommandFactoryEmitter.SupportsKeyOnlyReturning(m);
+        // PL-3：INSERT 不读返回判定（保守条件见 SupportsInsertWithoutReturning 文档）
+        bool insertNoReturning = CommandFactoryEmitter.SupportsInsertWithoutReturning(m);
         sb.AppendLine("                new global::PalORM.CrudBindings(");
         sb.AppendLine($"                    (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
         sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(parameters, ({m.EntityTypeName})obj, off),");
@@ -133,7 +135,8 @@ internal static class RegistryEmitter
         // v5.6：批量 UPDATE 参数池的取值绑定器（只写 Value，不建参数）。放在末位可选参数，
         // 与 BindInsertValues 同机制；消费点 ExecuteBatchUpdateAsync 在 null 时回退逐行 BindUpdate。
         sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateValues(parameters, ({m.EntityTypeName})obj, off),");
-        sb.AppendLine($"                    insertReturningKeyOnly: {(keyOnlyReturning ? "true" : "false")}),");
+        sb.AppendLine($"                    insertReturningKeyOnly: {(keyOnlyReturning ? "true" : "false")},");
+        sb.AppendLine($"                    insertNoReturning: {(insertNoReturning ? "true" : "false")}),");
         // ITM-640：单次物化 Columns（本块原 3 处 AsSpan().ToArray() 重复分配；另 3 处
         // 分属独立 per-model 循环无法共用——复检轮计数订正）
         var columns = m.Columns.AsSpan().ToArray();
@@ -279,11 +282,12 @@ internal static class RegistryEmitter
     /// <summary>按方言族只发射**会被读到**的 SQL 载荷，另一族的字段发空串。
     /// <para>依据（实测 + 消费者核实）：运行时按 <c>TProvider.SupportsReturningClause</c> 分发——
     /// PG/SQLite 读 <c>InsertReturning</c>/<c>UpsertReturning</c>，MySQL 读
-    /// <c>InsertWithLastInsertId</c>/<c>UpsertMySql</c>；<c>Insert</c> 全方言无消费者
-    /// （原两条命中是 <c>_interceptors.Insert</c> 与 <c>columns.Insert</c>，与 SQL 集无关）。</para>
-    /// <para>收益：快照实测死载荷占注册文件 <b>27%</b>（SQL 载荷的 49%，含 Insert 5.7% +
+    /// <c>InsertWithLastInsertId</c>/<c>UpsertMySql</c>；<c>Insert</c>（纯 INSERT）自 PL-3 起
+    /// 由 <c>InsertNoReturning</c> 实体三方言消费并恢复发射。</para>
+    /// <para>收益：快照实测死载荷占注册文件 <b>27%</b>（SQL 载荷的 49%，当时含 Insert 5.7% +
     /// 非 MySQL 族的 UpsertMySql/InsertWithLastInsertId + MySQL 族的两个 RETURNING 变体）。
-    /// 500 实体 × 30 列规模下约节省 1.6 MB 元数据字符串。</para>
+    /// 500 实体 × 30 列规模下约节省 1.6 MB 元数据字符串（Insert 恢复发射前的口径，
+    /// PL-3 后余下死载荷为跨族字段部分）。</para>
     /// <para>为什么置空而不是删除字段：删除是破坏性 API 变更（旧生成器产物与外部构造点编译失败）。
     /// 置空对既有消费者零破坏，代价是外部读者读到空串——由 <c>CommandSqlSet</c> 的字段文档
     /// 与实际发射面共同声明；后续主版本可连同其它破坏性项一并移除。</para></summary>
@@ -317,8 +321,10 @@ internal static class RegistryEmitter
     {
         string pad = new(' ', indent);
         bool mySqlFamily = dialect == SqlGenerationDialect.MySql;
-        // Insert：全方言无消费者（运行时一律走 InsertReturning / InsertWithLastInsertId）
-        string insert = string.Empty;
+        // Insert：纯 INSERT（PL-3）——InsertNoReturning 实体的运行时消费形态
+        // （显式主键 + 全列恒等，判定见 SupportsInsertWithoutReturning）；
+        // 其余实体运行时仍走 InsertReturning / InsertWithLastInsertId。
+        string insert = CommandFactoryEmitter.BuildInsertSql(model, dialect);
         string update = CommandFactoryEmitter.BuildUpdateSql(model, dialect);
         string delete = CommandFactoryEmitter.BuildDeleteSql(model, dialect);
         string returning = mySqlFamily ? string.Empty : CommandFactoryEmitter.BuildInsertReturningSql(model, dialect);
