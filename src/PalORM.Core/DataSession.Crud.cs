@@ -94,32 +94,39 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
         => InsertCoreAsync(entity, null, ct);
 
-    // ─── 单行 CRUD 命令与参数复用（PL-2，2026-09-24）────────────────────
+    // ─── 单行 CRUD 参数池复用（PL-2，2026-09-24）────────────────────
     //
-    // 动机：单行 Insert/Update 原先每次调用新建 DbCommand + 每列 CreateParameter。
+    // 动机：单行 Insert/Update 原先每次调用每列 CreateParameter + ParameterName + Add。
     // 实测同产品内部的池化路径 1.41 µs/行，单行 API 路径 9.9 µs/行（7 倍）；
     // 落后于手写地板的 TxHundredInserts 4.40× / TxRollback 3.83× 就在这一层。
     //
-    // 为什么能复用：同 (实体类型, 操作) 的语句逐位相同，变的只有参数值；会话写路径由
-    // SessionOperationState 单活动操作门禁串行化，不存在并发复用同一命令的情形。
+    // 为什么只缓存参数、不缓存命令：DataSession 构造时接管所接收连接的所有权，
+    // "一条外部连接配多个一次性会话"的用法（PerfHub 的每操作一会话正是如此）
+    // 无法调用 DisposeAsync——那会把共享连接一起关掉。缓存命令会让这种用法下
+    // 每次操作泄漏一个未释放的命令（内含原生语句句柄 + 终结器），
+    // 实测并发混合负载慢 4.84×（40380 vs 8335 µs，6 跑交替）。
+    // 参数对象没有原生句柄、随池复用；命令每次新建并随操作释放，两种用法都不泄漏。
     //
-    // 为什么参数池由首行按原绑定路径摘出：名/类型/精度与逐行 BindInsert/BindUpdate 逐位
-    // 一致，不为复用另写一套"参数长什么样"的规格（与 ExecuteBulkUpdatePooledAsync 的
-    // probe 取池同范式，且该路径早已用同一 SQL + BindUpdateValues(offset=0) 逐行执行）。
+    // 为什么能复用参数：同 (实体类型, 操作) 的参数名/序/类型逐位相同，变的只有值；
+    // 会话写路径由 SessionOperationState 单活动操作门禁串行化，不存在并发复用同一批参数。
+    //
+    // 为什么池由首行按原绑定路径摘出：名/类型/精度与逐行 BindInsert/BindUpdate 逐位
+    // 一致，不为复用另写一套"参数长什么样"的规格（与 ExecuteBulkUpdatePooledAsync
+    // 的 probe 取池同范式，且该路径早已用同一 SQL + BindUpdateValues(offset=0) 逐行执行）。
     //
     // 为什么 Update 排除租户实体：BindDefaultFilterParameters 每次调用新加一个租户参数，
     // 复用会让参数集合无界增长；且 _tenantId 可经 WithTenant 中途变更。租户实体走原路径。
 
-    /// <summary>会话级单行 INSERT 的命令/参数复用槽。</summary>
-    private ReusableCrudCommand? _reusableInsert;
+    /// <summary>会话级单行 INSERT 的参数池槽。</summary>
+    private ReusableParameterPool? _insertPool;
 
-    /// <summary>会话级单行 UPDATE 的命令/参数复用槽。</summary>
-    private ReusableCrudCommand? _reusableUpdate;
+    /// <summary>会话级单行 UPDATE 的参数池槽。</summary>
+    private ReusableParameterPool? _updatePool;
 
-    /// <summary>可复用写命令：命令本体 + 从首行绑定摘出的参数池（与命令参数集合持有同一批对象）。</summary>
-    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool);
+    /// <summary>可复用参数池：实体类型 + 参数对象（跨命令复用，只写 Value）。</summary>
+    private sealed record ReusableParameterPool(Type EntityType, DbParameter[] Pool);
 
-    /// <summary>从已按原路径绑定的命令摘出参数对象池。</summary>
+    /// <summary>从已按原路径绑定的命令摘出参数对象池——池与命令参数集合持有同一批对象。</summary>
     private static DbParameter[] SnapshotParameterPool(DbCommand cmd)
     {
         int count = cmd.Parameters.Count;
@@ -129,71 +136,38 @@ public sealed partial class DataSession<TProvider>
         return pool;
     }
 
-    /// <summary>取可复用的单行 INSERT 命令并把实体绑到参数池。
-    /// <para>首用按原 <see cref="CrudMetadata.BindInsert"/> 全量绑定建立池并写入槽位；
-    /// 之后只走 <see cref="CrudMetadata.BindInsertValues"/> 写 Value（零 CreateParameter）。</para>
-    /// <para>旧模型程序集未发射 BindInsertValues 时返回 null，调用方回退逐行新建命令。</para>
-    /// <para>返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放。</para></summary>
-    private DbCommand? TryAcquireInsertCommand<T>(
-        CommandSqlSet sqls, CrudMetadata metadata, T entity)
-        where T : class, new()
+    /// <summary>把参数池挂到命令上——集合已就绪则跳过（同长度即同形态）。</summary>
+    private static void AttachPool(DbCommand cmd, DbParameter[] pool)
     {
-        if (metadata.BindInsertValues is not { } valuesBinder)
-            return null;
-
-        // PG/SQLite 走 RETURNING、MySQL 走 LAST_INSERT_ID——两形态都是 (Type, Provider) 的编译期常量
-        string commandText = TProvider.SupportsReturningClause
-            ? sqls.InsertReturning
-            : sqls.InsertWithLastInsertId;
-        if (_reusableInsert is { } reusable && reusable.EntityType == typeof(T))
-        {
-            DbCommand reused = reusable.Command;
-            // 事务与超时可随 WithTransaction/WithTimeout 中途变更，每次调用重设
-            reused.Transaction = GetActiveTransaction();
-            reused.CommandTimeout = _options.CommandTimeoutSeconds;
-            if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
-                reused.CommandText = commandText;
-            valuesBinder(reusable.Pool, entity, 0);
-            return reused;
-        }
-
-        DbCommand cmd = CreateCommand();
-        cmd.CommandText = commandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindInsert(cmd, entity, 0);
-        _reusableInsert?.Command.Dispose();
-        _reusableInsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
-        return cmd;
+        if (cmd.Parameters.Count == pool.Length) return;
+        cmd.Parameters.Clear();
+        for (int i = 0; i < pool.Length; i++)
+            cmd.Parameters.Add(pool[i]);
     }
 
-    /// <summary>取可复用的单行 UPDATE 命令并把实体绑到参数池。
-    /// <para>租户实体返回 null（见本节注释：租户参数每调用新加 + _tenantId 可变）。</para>
-    /// <para>返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放。</para></summary>
-    private DbCommand? TryAcquireUpdateCommand<T>(
-        string updateSql, CrudMetadata metadata, T entity)
+    /// <summary>取可复用的单行 INSERT 参数池；无池（首次或旧模型程序集）时返回 null 走原绑定路径。</summary>
+    private DbParameter[]? AcquireInsertPool<T>(CrudMetadata metadata)
         where T : class, new()
     {
-        if (metadata.BindUpdateValues is not { } valuesBinder || HasTenantFilter<T>())
-            return null;
-
-        if (_reusableUpdate is { } reusable && reusable.EntityType == typeof(T))
-        {
-            DbCommand reused = reusable.Command;
-            reused.Transaction = GetActiveTransaction();
-            reused.CommandTimeout = _options.CommandTimeoutSeconds;
-            if (!string.Equals(reused.CommandText, updateSql, StringComparison.Ordinal))
-                reused.CommandText = updateSql;
-            valuesBinder(reusable.Pool, entity, 0);
-            return reused;
-        }
-
-        DbCommand cmd = CreateCommand();
-        cmd.CommandText = updateSql;
-        metadata.BindUpdate(cmd, entity);
-        _reusableUpdate?.Command.Dispose();
-        _reusableUpdate = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
-        return cmd;
+        if (metadata.BindInsertValues is null) return null;
+        return _insertPool is { } pool && pool.EntityType == typeof(T) ? pool.Pool : null;
     }
+
+    /// <summary>首次按原路径绑定后登记参数池（换实体类型时替换旧槽）。</summary>
+    private void RememberInsertPool<T>(DbCommand cmd) where T : class, new()
+        => _insertPool = new ReusableParameterPool(typeof(T), SnapshotParameterPool(cmd));
+
+    /// <summary>取可复用的单行 UPDATE 参数池；无池/租户实体/旧模型程序集时返回 null 走原绑定路径。</summary>
+    private DbParameter[]? AcquireUpdatePool<T>(CrudMetadata metadata)
+        where T : class, new()
+    {
+        if (metadata.BindUpdateValues is null || HasTenantFilter<T>()) return null;
+        return _updatePool is { } pool && pool.EntityType == typeof(T) ? pool.Pool : null;
+    }
+
+    /// <summary>首次按原路径绑定后登记参数池（换实体类型时替换旧槽）。</summary>
+    private void RememberUpdatePool<T>(DbCommand cmd) where T : class, new()
+        => _updatePool = new ReusableParameterPool(typeof(T), SnapshotParameterPool(cmd));
 
     /// <summary>单行 UPDATE 的结果校验与乐观锁 version 回填（复用与非复用路径共用，PL-2 抽出）。
     /// 语义与抽出前 UpdateCoreAsync 内联实现逐位一致。</summary>
@@ -238,20 +212,28 @@ public sealed partial class DataSession<TProvider>
 
         CommandSqlSet sqls = GetCommandSqls<T>(state);
 
-        // PL-2：会话级命令/参数复用路径（旧模型程序集无 BindInsertValues 时回退下方原路径）
-        if (TryAcquireInsertCommand(sqls, metadata, entity) is { } reused)
-        {
-            return TProvider.SupportsReturningClause
-                ? await InsertWithReturningAsync(state, reused, metadata, entity, ct).ConfigureAwait(false)
-                : await InsertWithLastInsertIdAsync(state, reused, entity, ct).ConfigureAwait(false);
-        }
-
-        await using DbCommand cmd = CreateCommand();
-        cmd.CommandText = TProvider.SupportsReturningClause
+        // PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID——两形态都是 (Type, Provider) 的编译期常量
+        string commandText = TProvider.SupportsReturningClause
             ? sqls.InsertReturning
             : sqls.InsertWithLastInsertId;
+
+        // PL-2：参数池复用路径。命令每次新建并随操作释放（见本节注释：不能缓存命令），
+        // 参数走已发射的 BindInsertValues 只写 Value，零 CreateParameter。
+        await using DbCommand cmd = CreateCommand();
+        cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindInsert(cmd, entity, 0);
+        if (AcquireInsertPool<T>(metadata) is { } insertPool)
+        {
+            AttachPool(cmd, insertPool);
+            metadata.BindInsertValues!(insertPool, entity, 0);
+        }
+        else
+        {
+            metadata.BindInsert(cmd, entity, 0);
+            if (metadata.BindInsertValues is not null)
+                RememberInsertPool<T>(cmd);
+        }
+
         return TProvider.SupportsReturningClause
             ? await InsertWithReturningAsync(state, cmd, metadata, entity, ct).ConfigureAwait(false)
             : await InsertWithLastInsertIdAsync(state, cmd, entity, ct).ConfigureAwait(false);
@@ -259,9 +241,9 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>PG/SQLite 路径——INSERT ... RETURNING 单次往返物化完整行（含自增 ID）。
     /// ITM-325：调用方持有的传入实体引用同步回填自增 ID（DB 计算列仍以返回实例为准）。
-    /// <para>PL-2：语句文本、超时与参数绑定已由 <see cref="TryAcquireInsertCommand"/> 完成
-    /// （复用路径在那里只写 Value）——本方法只负责执行与回填，不得再绑定参数，
-    /// 否则复用命令的参数集合会逐次增长。</para></summary>
+    /// <para>PL-2：语句文本、超时与参数绑定已由 <see cref="InsertCoreAsync"/> 完成
+    /// （参数池路径在那里只写 Value）——本方法只负责执行与回填，不得再绑定参数，
+    /// 否则参数池的参数集合会逐次增长。</para></summary>
     private async ValueTask<T> InsertWithReturningAsync<T>(
         PalORM_Runtime.RuntimeRegistryState state,
         DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
@@ -313,8 +295,8 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>MySQL 路径——INSERT + SELECT LAST_INSERT_ID() 合并为单次 ExecuteScalarAsync。
     /// 显式方言守卫：未来第三方 Provider 走到此处应明确失败，而非收到 LAST_INSERT_ID 专有 SQL。
-    /// <para>PL-2：语句文本、超时与参数绑定已由 <see cref="TryAcquireInsertCommand"/> 完成
-    /// （复用路径在那里只写 Value）——本方法只负责执行与回填。</para></summary>
+    /// <para>PL-2：语句文本、超时与参数绑定已由 <see cref="InsertCoreAsync"/> 完成
+    /// （参数池路径在那里只写 Value）——本方法只负责执行与回填。</para></summary>
     private static async ValueTask<T> InsertWithLastInsertIdAsync<T>(
         PalORM_Runtime.RuntimeRegistryState state,
         DbCommand cmd, T entity, CancellationToken ct)
@@ -386,18 +368,24 @@ public sealed partial class DataSession<TProvider>
             updateSql = GetTenantWrappedSql<T>(
                 DataSessionCache.UpdateWithTenantSqlCache, updateSql);
 
-        // PL-2：会话级命令/参数复用路径（旧模型程序集无 BindUpdateValues 或租户实体回退下方原路径）
-        if (TryAcquireUpdateCommand(updateSql, metadata, entity) is { } reusedUpdate)
-        {
-            int reusedRows = await ExecuteWriteRowsAsync(reusedUpdate, ct).ConfigureAwait(false);
-            return ApplyUpdateOutcome(metadata, entity, reusedRows, deferredVersionIncrements);
-        }
-
+        // PL-2：参数池复用路径。命令每次新建并随操作释放（见本节注释：不能缓存命令），
+        // 参数走已发射的 BindUpdateValues 只写 Value，零 CreateParameter。
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = updateSql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindUpdate(cmd, entity);
-        BindDefaultFilterParameters<T>(cmd);
+        if (AcquireUpdatePool<T>(metadata) is { } updatePool)
+        {
+            AttachPool(cmd, updatePool);
+            metadata.BindUpdateValues!(updatePool, entity, 0);
+        }
+        else
+        {
+            metadata.BindUpdate(cmd, entity);
+            BindDefaultFilterParameters<T>(cmd);
+            if (metadata.BindUpdateValues is not null && !HasTenantFilter<T>())
+                RememberUpdatePool<T>(cmd);
+        }
+
         // P2-1：直调重载——省掉 async lambda 的委托与 display class（实测约 208 B/行）
         int affectedRows = await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
         return ApplyUpdateOutcome(metadata, entity, affectedRows, deferredVersionIncrements);
