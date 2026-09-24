@@ -694,6 +694,18 @@ internal static class Program
         "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback"
     ];
 
+    /// <summary>PL-4：比值不计比的项。地板这两项直接返回插值字面量（见
+    /// <c>AdoNetImpl.BuildGetByKeySql</c>/<c>BuildComplexQuerySql</c>），不做任何 SQL 构造，
+    /// 拿它当分母量的是"生成一条 SQL 文本"本身——那是产品相对裸 ADO.NET 的价值而非税
+    /// （实测 PG 7.10×/6.59×、MySQL 7.10×/3.22×、SQLite 6.51×/3.66×，全部无判别力）。
+    /// 记 0 比值让它们不进索引基线、不进最差比值表、不被门禁卡；绝对值与分配仍照登，
+    /// Note 里注明原因。想真比这项就把地板也接到生成器上——那就测不到差异了。</summary>
+    private static readonly HashSet<string> NonComparableOperations =
+    [
+        "BuildGetByKeySql",
+        "BuildComplexQuerySql",
+    ];
+
     /// <summary>本轮计划的测量数——进度条的分母。跳过项与未启用的并发档不计入。
     /// <para><b>数据生成基线只在最后加一次</b>：它的循环在方言循环**之外**（每档一条，
     /// 与方言无关）。曾把它算进 per-dialect 再乘方言数，于是三方言时多算 4 条——
@@ -921,6 +933,10 @@ internal static class Program
         {
             Measurement? floor = results.Find(b => b.Implementation == "ADO_NET"
                 && b.Dialect == m.Dialect && b.Operation == m.Operation && b.Rows == m.Rows);
+            // PL-4：Build* 两项的比值记 0（"不计比"）——地板实现（Implementations.cs:588-593）
+            // 直接 return 插值字面量，不构造任何 SQL；拿它当分母量的是"生成一条 SQL 文本"
+            // 这件事本身，而那是产品相对裸 ADO.NET 的价值而不是税。绝对值与分配仍照登。
+            bool comparable = !NonComparableOperations.Contains(m.Operation);
             envelope.Items.Add(new PerfResultItem
             {
                 // 并发行的唯一标识必须含线程档：同一 (operation, 方言, 档位) 下有 1/4/8 三行，
@@ -933,10 +949,10 @@ internal static class Program
                 Tier = m.Rows,
                 MeanUs = m.MeanNs / 1000.0,
                 AllocBytes = (long)m.AllocatedBytesPerOp,
-                Ratio = floor is null || floor.MeanNs <= 0 ? 0 : m.MeanNs / floor.MeanNs,
                 RoundTripsPerOp = m.RoundTripsPerOp,
                 PreparedReuse = m.PreparedReuse,
-                Note = m.Group
+                Note = comparable ? m.Group : m.Group + "｜地板返回字面量，比值不计比（PL-4）",
+                Ratio = !comparable || floor is null || floor.MeanNs <= 0 ? 0 : m.MeanNs / floor.MeanNs,
             });
         }
 

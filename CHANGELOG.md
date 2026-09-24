@@ -2,6 +2,25 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·工具链·六] — `Build*` 比值不计比（PL-4）：地板不构造 SQL，对比无判别力
+
+> 变更范围：`bench/PalORM.PerfHub/Program.cs`（`NonComparableOperations` + 信封映射）
+> ＋ `docs/性能基准规范.md` §1.1。
+
+PerfHub 的 `BuildGetByKeySql`/`BuildComplexQuerySql` 长期以 6.5~7.1× 挂在落后项榜首，
+看着像产品在大面积落后。实际是地板这两项直接 `return` 插值字面量，不做任何 SQL 构造——
+拿它当分母量的是"生成一条 SQL 文本"这件事本身，而那正是产品相对裸 ADO.NET 的价值。
+三方言实测比值 PG 7.10×/6.59×、MySQL 7.10×/3.22×、SQLite 6.51×/3.66×，
+分配比还到 5.42×，全是同一个无判别力的机制。
+
+现在 `Program.NonComparableOperations` 把这两项的 `Ratio` 记 0 并在 `Note` 注明原因，
+绝对值与分配仍照登（构造 SQL 的真实成本仍然可见，只是不当地板分母）。
+记 0 即被 `PerfGate` 既有的 `Ratio > 0` 过滤排除出索引基线、关键项速览与最差比值表——
+不需要在各消费点各写一遍排除名单。报告里的落后项数从 7 降为 5。
+
+**没删项**：SQL 构建成本本身值得登记；删了就等于假装它不存在。
+想真比这项只有一条路——把地板也接到生成器上，而那会让差异归零，测不出东西。
+
 ## [未发布·性能轮八] — 单行 CRUD 命令与参数跨调用复用（PL-2）
 
 > 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（Insert/Update 复用路径 + 参数绑定职责上移）、
