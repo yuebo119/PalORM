@@ -45,7 +45,7 @@
 - **T17** [轴5] DataSession.Schema.cs:78-125 | MigrateAsync 无外层事务：表批成功后任一索引 DDL 失败留半成品 schema，靠幂等重跑收敛；MySQL DDL 自动提交无法包事务，PG/SQLite 本可包 | PG/SQLite 用事务包全程，MySQL 维持幂等收敛并文档声明 | [事实]无事务包裹 /[推断]
 - **T18** [轴5] DataSession.Transactions.cs:253-256、274-281 | RunInTransactionScopeAsync 复用外部事务（ownsTransaction=false）时 work 失败既不回滚也不标记，外部事务内部分失败对 Bulk 家族完全无痕 | 主异常 Data 追加"事务未回滚（复用外部事务）"提示 | [事实]分支
 - **T19** [轴5] DataSession_Bulk.cs:668-671 | 批内重复主键语义三方言不一致：MySQL last-wins、PG/SQLite 单语句内报错（注释登记为未定义边界） | 入口按 PK 检测重复显式失败或先去重，方言分歧收敛为单一行为 | [事实]
-- **T20** [轴5] DataSession_Bulk.cs:642-657 | v5.7 分区改变执行顺序：默认键行先全部逐条插入完才批量 upsert 非默认键行，输入交错顺序被重排，实体间外键依赖输入顺序时可能失败 | 文档化执行顺序契约或按输入顺序分组提交 | [事实]重排 /[推断]外键后果
+- **T20** [轴5] DataSession_Bulk.cs:642-657 | v5.6.0 分区改变执行顺序：默认键行先全部逐条插入完才批量 upsert 非默认键行，输入交错顺序被重排，实体间外键依赖输入顺序时可能失败 | 文档化执行顺序契约或按输入顺序分组提交 | [事实]重排 /[推断]外键后果
 - **T21** [轴5] PostgreSqlProvider.cs:73-74 + MySqlProvider.cs:58-61 | Enlist/AutoEnlist 强制 false 后依赖 TransactionScope 的调用方静默脱离环境事务（ITM-643），环境回滚不作用于已执行的 DB 工作且无错误信号 | 检测 TransactionScope.Current 非空时抛出或警告 | [事实]
 - **T22** [轴5] CommandFactoryEmitter.cs:356-360、404-406 | MySQL 发射单 CommandText 双语句 `...; SELECT LAST_INSERT_ID()`：autocommit 下 INSERT 提交先于取 ID，连接中断即"行已插入、ID 未取回"，重试造成重复插入；PG RETURNING 单语句无此窗口 | 文档标注原子性窗口，或自增键插入提示包显式事务 | [事实]emit 形态 /[推断]触发概率
 - **T23** [轴5] MySqlProvider.cs:298-311 | BulkCopy 路径失败的 catch 只记 primaryException 即重抛，无 PG 路径（PostgreSqlProvider.cs:339-341）的显式有界回滚，回滚完全依赖 finally 中事务 Dispose 的驱动隐式语义，无超时上界、无 RollbackTimeoutException 挂载 | 对齐 PG：catch 内显式有界回滚并挂主异常 Data | [事实]

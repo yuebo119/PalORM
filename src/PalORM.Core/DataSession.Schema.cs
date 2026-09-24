@@ -70,7 +70,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>从编译时生成的 DDL 执行迁移——零运行时反射。
     /// 建表后执行 [Index]/[Unique] 索引 DDL（ADR-B）；SQLite/PG 走 IF NOT EXISTS，
     /// MySQL 靠 IsDuplicateSchemaObject 识别重名索引实现幂等。
-    /// <para><b>L4（v5.7）两阶段</b>：先全集校验（表/索引方言 DDL 键齐全）再执行——
+    /// <para><b>L4（v5.6.0）两阶段</b>：先全集校验（表/索引方言 DDL 键齐全）再执行——
     /// 原实现边校验边执行，type B 缺键在 type A 的 DDL 已执行后才抛，留半成品 schema；
     /// 现在缺键时零副作用。建表 DDL 经 <see cref="CreateBatch"/> 单次往返
     /// （PG 真 DbBatch / MySQL 驱动侧批处理 / SQLite 顺序回退），N 表 N 次往返 → 1 次；

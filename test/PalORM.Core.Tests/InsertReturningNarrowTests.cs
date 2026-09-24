@@ -2,7 +2,7 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-/// <summary>INSERT RETURNING 收窄（v5.7）的行为契约。
+/// <summary>INSERT RETURNING 收窄（v5.6.0）的行为契约。
 /// <para>生成器静态判定「唯一自增主键之外全部列可直接插入且无转换器/OwnedJson/
 /// IgnoreOnInsert/Computed/Timestamp」时，SQL 收窄为 <c>RETURNING "Id"</c> 且
 /// Core 走标量路径——返回**调用方实体**（引用相等）+ 回填 ID。

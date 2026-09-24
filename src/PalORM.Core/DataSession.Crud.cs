@@ -331,7 +331,7 @@ public sealed partial class DataSession<TProvider>
         DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
         where T : class, new()
     {
-        // v5.7 收窄路径：RETURNING 只回主键（生成器保守判定，见 CrudBindings.InsertReturningKeyOnly）。
+        // v5.6.0 收窄路径：RETURNING 只回主键（生成器保守判定，见 CrudBindings.InsertReturningKeyOnly）。
         // 结果集与插入值恒等——整行物化等价于返回调用方实体 + 回填 ID；
         // 标量读取省去 reader 行缓冲与整行物化（宽表实体分配 −1 实体 −N 列读取）。
         if (metadata.InsertReturningKeyOnly)
@@ -488,7 +488,7 @@ public sealed partial class DataSession<TProvider>
         {
             await using DbCommand cmd = CreateCommand();
             // AND deleted_at IS NULL：与 BulkDeleteAsync 幂等语义对齐——重复删除不刷新时间戳且返回 0
-            // M1（v5.7）：全句 per-(Type, Dialect, hasTenant) 缓存（含租户两形态），见 GetSoftDeleteUpdateSql
+            // M1（v5.6.0）：全句 per-(Type, Dialect, hasTenant) 缓存（含租户两形态），见 GetSoftDeleteUpdateSql
             cmd.CommandText = GetSoftDeleteUpdateSql<T>(tn, HasTenantFilter<T>());
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
@@ -497,7 +497,7 @@ public sealed partial class DataSession<TProvider>
         }
 
         await using DbCommand delCmd = CreateCommand();
-        // M1（v5.7）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
+        // M1（v5.6.0）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
         delCmd.CommandText = HasTenantFilter<T>()
             ? GetTenantWrappedSql<T>(DataSessionCache.DeleteWithTenantSqlCache, sqls.Delete)
             : sqls.Delete;

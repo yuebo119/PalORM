@@ -68,7 +68,7 @@ public sealed record DbOptions
     /// 保留这么多条连接不关（依据：Npgsql/MySqlConnector 10.0/2.6 官方 XML 文档）。
     /// 配合空闲超时使用可消除「稀疏流量 + 空闲修剪清池 → 突发查询重建物理连接」的延迟尖峰
     /// （远程建连实测 ~8.5 ms/条）。启动即预热请用 DataSession.PreWarmAsync。
-    /// SQLite 无池不适用。C4（v5.7）。</summary>
+    /// SQLite 无池不适用。C4（v5.6.0）。</summary>
     public int MinPoolSize { get; init; } = 0;
 
     /// <summary>连接池空闲超时（秒）。

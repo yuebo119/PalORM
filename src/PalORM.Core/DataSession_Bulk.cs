@@ -53,7 +53,7 @@ public partial class DataSession<TProvider>
         string quotedTable = TProvider.QuoteIdentifier(tableName);
         string quotedPrimaryKey = TProvider.QuoteIdentifier(pkCol);
         // 租户过滤与单条 DeleteAsync 对齐（ITM-404）：跨租户主键命中 0 行
-        // M1（v5.7）：后缀 per-Dialect 缓存（语句随批次占位符变化，仅后缀可缓存）
+        // M1（v5.6.0）：后缀 per-Dialect 缓存（语句随批次占位符变化，仅后缀可缓存）
         string tenantFilter = HasTenantFilter<T>() ? GetTenantAppendFragment() : "";
         // L5：标识符与时间表达式集合一次算好——原实现每批重算
         // （QuoteIdentifier("deleted_at") × 2 + CurrentTimestampExpression 取值）
@@ -204,7 +204,7 @@ public partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
 
-        // v5.7 自动路由（L1）：满足全部条件时走单语句批量（远程 N 行 N 次 RTT → 1 次，
+        // v5.6.0 自动路由（L1）：满足全部条件时走单语句批量（远程 N 行 N 次 RTT → 1 次，
         // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / 软删 / 租户 / SQLite）。
         // 每个条件不自动路由的理由：
         //   乐观锁（IncrementVersion）→ 批量无法表达"每行 version 匹配"；
@@ -623,7 +623,7 @@ public partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' has no generated CRUD.");
         if (entities.Count == 0) return 0;
 
-        // v5.7 集合化：按键状态分区——默认键行走逐条 INSERT（保留 ID 回填契约，
+        // v5.6.0 集合化：按键状态分区——默认键行走逐条 INSERT（保留 ID 回填契约，
         // InsertCoreAsync 的物化/回填无法在多值形态下按行还原）；非默认键行
         // （bulk-merge 的主流场景：既有键的重复执行更新）改为**多行 UPSERT**，
         // 每批一条语句。原实现 N 行 = N 次往返（每行一次 SaveCoreAsync），

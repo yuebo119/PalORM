@@ -56,7 +56,7 @@ public sealed class DbOptionsTests
     [Test]
     public async Task WithPool_MinSize_ValidationAndPassthrough()
     {
-        // C4（v5.7）：minSize 默认 0 = 不覆盖驱动默认（与 idleTimeoutSeconds 的 0 语义同族）。
+        // C4（v5.6.0）：minSize 默认 0 = 不覆盖驱动默认（与 idleTimeoutSeconds 的 0 语义同族）。
         var options = new DbOptions { ConnectionString = "test" };
 
         // 缺省与显式 0 同义：0 合法（Validate 通过），字段可读

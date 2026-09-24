@@ -38,7 +38,7 @@ public sealed class PipelineParityContractTests
         await dbEach.From<ParityRow>().OrderBy(x => x.Id)
             .ForEachAsync(static (row, _) => ValueTask.CompletedTask);
         // 拦截器时序契约：两侧查询段都是 OnBefore → OnAfter(行数)，无第三种形态。
-        // R3（v5.7）：SeedAsync 的 ExecuteAsync(CREATE TABLE) 现在也过拦截器（覆盖面扩展），
+        // R3（v5.6.0）：SeedAsync 的 ExecuteAsync(CREATE TABLE) 现在也过拦截器（覆盖面扩展），
         // 序列头部多一对 OnBefore|OnAfter:0——两侧对称出现，奇偶性/时序契约不变
         await Assert.That(string.Join("|", seqList))
             .IsEqualTo("L:OnBefore|L:OnAfter:0|L:OnBefore|L:OnAfter:3");

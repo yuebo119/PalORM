@@ -50,7 +50,7 @@ public sealed class ArchitectureInvariantTests
         ["SeedAsync"] = "委托 BulkMergeAsync",
         // ITM-677：实体物化原始 SQL 流式入口——与 QueryAsync 同族，文档已声明过滤不适用
         ["QueryAsyncEnumerable"] = "原始 SQL 契约：用户 SQL 不可注入过滤（文档已声明，ITM-677）",
-        // C4（v5.7）：连接池预热——不触表（只建连/归还池，无 SQL 到任何实体表）
+        // C4（v5.6.0）：连接池预热——不触表（只建连/归还池，无 SQL 到任何实体表）
         ["PreWarmAsync"] = "连接池预热：仅建连 + Provider 初始化钩子，不触任何实体表",
     };
 

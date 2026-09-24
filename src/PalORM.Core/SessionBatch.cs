@@ -61,7 +61,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
         return this;
     }
 
-    /// <summary>追加一条无参数原语语句（L4，v5.7，internal）——DDL 等运行时字符串不能经
+    /// <summary>追加一条无参数原语语句（L4，v5.6.0，internal）——DDL 等运行时字符串不能经
     /// <see cref="Append"/>（<c>$"{ddl}"</c> 会把整句变成插值参数）。守卫与 Append 同口径。</summary>
     internal SessionBatch<TProvider> AppendRaw(string sql)
     {
@@ -80,7 +80,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
     public ValueTask<int> ExecuteNonQueryAsync(CancellationToken ct = default)
         => ExecuteNonQueryAsync(operationOwner: null, ct);
 
-    /// <summary>L4（v5.7）：携带外层操作 owner 的执行入口——持有操作租约的内部路径
+    /// <summary>L4（v5.6.0）：携带外层操作 owner 的执行入口——持有操作租约的内部路径
     /// （如 MigrateAsync）经 owner 重入，不再与外层租约冲突。</summary>
     internal async ValueTask<int> ExecuteNonQueryAsync(object? operationOwner, CancellationToken ct)
     {

@@ -311,7 +311,7 @@
 - 建议：Format 内维护 stackalloc bool 位集合检测重复下标，前移为库内 FormatException；单测：Create("{0}={0}", 1) 断言抛 FormatException。
 
 ### 已核查未发现（历史风险点专项核对）
-- WithTransaction commit 失败半提交状态：未发现缺陷。commitAttempted 标志区分提交失败与 action 失败；回滚裁决集中 TrySkipRollbackAfterCommitFailure，v5.8 已收窄为连接类失败一律回滚、服务端错误才跳过，判定保守偏向回滚。
+- WithTransaction commit 失败半提交状态：未发现缺陷。commitAttempted 标志区分提交失败与 action 失败；回滚裁决集中 TrySkipRollbackAfterCommitFailure，v5.6.0 已收窄为连接类失败一律回滚、服务端错误才跳过，判定保守偏向回滚。
 - 嵌套事务/savepoint：未发现。嵌套被 BeginTransactionCoreAsync 明确拒绝；savepoint 名经 ValidateSavepointName + QuoteIdentifier 双重防护；存活探测走 IsTransactionAlive 避开 ODE 陷阱。
 - 事务内命令取消后一致性：未发现。回滚路径用 CancellationToken.None + 新 CTS，调用方 ct 取消不中断回滚。唯一例外即 P0-32。
 - GridReader 未释放即提交：未发现。GridReader 登记为事务资源，commit 前统一释放；"先提交后读"被 _state != 0 拒绝。
@@ -368,7 +368,7 @@
 
 ### P2-52 整行 RETURNING 回填每次 Insert 一次 GetOrdinal 字符串查找
 - 位置：`src/PalORM.Core/DataSession.Crud.cs:141`
-- 问题：非 key-only 路径每 Insert 一次按列名哈希查找（约 20-50ns），pkColumn 是注册表常量，编译期可知。key-only 窄路径（v5.7）已走 ExecuteScalarAsync 不碰 reader。
+- 问题：非 key-only 路径每 Insert 一次按列名哈希查找（约 20-50ns），pkColumn 是注册表常量，编译期可知。key-only 窄路径（v5.6.0）已走 ExecuteScalarAsync 不碰 reader。
 - 依据：[事实]
 - 建议：生成器对主键非首列实体多发射 InsertReturningPkOrdinal（或 CrudMetadata 携带 PK 序号）。
 

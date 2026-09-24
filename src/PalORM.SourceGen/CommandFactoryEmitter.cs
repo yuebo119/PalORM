@@ -252,7 +252,7 @@ internal static class CommandFactoryEmitter
         if (dialect == SqlGenerationDialect.MySql)
             return string.Empty;
         string Quote(string value) => SqlGeneration.QuoteIdentifier(value, dialect);
-        // v5.7 收窄：满足 SupportsKeyOnlyReturning 时只回主键——整行物化等价于
+        // v5.6.0 收窄：满足 SupportsKeyOnlyReturning 时只回主键——整行物化等价于
         // 返回调用方实体+回填 ID（判定条件见该方法文档），省整行网络与物化。
         if (SupportsKeyOnlyReturning(model))
         {

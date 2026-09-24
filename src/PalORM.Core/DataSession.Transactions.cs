@@ -7,7 +7,7 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider>
     where TProvider : IDbProvider
 {
-    /// <summary>保存点名合法性校验（R4，v5.7）：空名/空白名/含 NUL 的名字经 QuoteIdentifier
+    /// <summary>保存点名合法性校验（R4，v5.6.0）：空名/空白名/含 NUL 的名字经 QuoteIdentifier
     /// 转义后跨方言行为发散（PG 接受空引用标识符、MySQL 拒绝；NUL 截断命令文本）——
     /// 库内统一提前拒绝，错误消息指向参数而非驱动语法报错。</summary>
     private static void ValidateSavepointName(string name)
@@ -25,7 +25,7 @@ public sealed partial class DataSession<TProvider>
         ValidateSavepointName(name);
         // ITM-637 同型面（复检发现）：已释放事务（Connection null）先于归属检查——
         // 原统一报"不属于主连接"误导排查方向（与 WithTransaction 同口径）。
-        // R4/T1（v5.7）：探测走 IsTransactionAlive——Npgsql 已释放事务取 Connection 抛
+        // R4/T1（v5.6.0）：探测走 IsTransactionAlive——Npgsql 已释放事务取 Connection 抛
         // ObjectDisposedException，会抢在本 ArgumentException 之前崩溃
         if (!SessionOperationState.IsTransactionAlive(tran))
             throw new ArgumentException(
@@ -50,7 +50,7 @@ public sealed partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(tran);
         ValidateSavepointName(name);
-        // ITM-637 同型面（复检发现，同 SavepointAsync）；R4/T1（v5.7）探测走
+        // ITM-637 同型面（复检发现，同 SavepointAsync）；R4/T1（v5.6.0）探测走
         // IsTransactionAlive，理由同 SavepointAsync 注释
         if (!SessionOperationState.IsTransactionAlive(tran))
             throw new ArgumentException(
@@ -130,7 +130,7 @@ public sealed partial class DataSession<TProvider>
         DbTransaction? previousTransaction = null;
         DbTransaction? transaction = null;
         Exception? primaryException = null;
-        // T1（v5.7）：置于 CommitAsync 紧前——异常到达 catch 且此标志为 true 即"提交已尝试
+        // T1（v5.6.0）：置于 CommitAsync 紧前——异常到达 catch 且此标志为 true 即"提交已尝试
         // 且失败"，与 action 失败可区分（提交成功不会进 catch）
         bool commitAttempted = false;
         try
@@ -160,7 +160,7 @@ public sealed partial class DataSession<TProvider>
                 _operationState.DiscardPostCommitActions();
                 await _operationState.DisposeTransactionResourcesAsync(exception)
                     .ConfigureAwait(false);
-                // T1（v5.7）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
+                // T1（v5.6.0）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
                 // 裁决依据与 SQLite 例外见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
                 if (!commitAttempted
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
@@ -331,7 +331,7 @@ public sealed partial class DataSession<TProvider>
                 null, operationOwner, ct).ConfigureAwait(false);
         bool ownsTransaction = previousTransaction is null;
         Exception? primaryException = null;
-        // T1（v5.7）：同 WithTransaction——提交尝试标志区分提交失败与 work 失败
+        // T1（v5.6.0）：同 WithTransaction——提交尝试标志区分提交失败与 work 失败
         bool commitAttempted = false;
         // TX-004（2026-09-23）：自开事务时持有提交权——生成 ID 等回填延迟到提交成功后回放。
         if (ownsTransaction)

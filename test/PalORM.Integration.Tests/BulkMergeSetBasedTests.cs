@@ -5,7 +5,7 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-/// <summary>BulkMergeAsync 集合化的行为验证——v5.7 起非默认键行由「N 行 N 次往返」
+/// <summary>BulkMergeAsync 集合化的行为验证——v5.6.0 起非默认键行由「N 行 N 次往返」
 /// 改为「多行 UPSERT 分批」。本用例锁定的语义契约：
 /// <para>① 既有键更新 + 新键插入（UPSERT 本义）；② 混合默认/非默认键分区
 /// （默认键走逐条 INSERT 并回填 ID）；③ 返回值 = 处理行数（不依赖 affectedRows）；

@@ -3,7 +3,7 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-/// <summary>R3（v5.7）行为防线——ExecuteAsync（原始 DDL/DML）的拦截器三段式接入：
+/// <summary>R3（v5.6.0）行为防线——ExecuteAsync（原始 DDL/DML）的拦截器三段式接入：
 /// OnBefore 收到完整 SQL 与绑定参数表、OnAfter 收到受影响行数、失败路径触发 OnError
 /// 且原始异常不被吞。此前该入口是拦截器覆盖面的文档化缺口（ITM-513/547），
 /// 接入后由本用例钉住，防回归回"静默绕过"。</summary>

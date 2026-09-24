@@ -368,7 +368,7 @@ internal sealed class SessionOperationState
         }
     }
 
-    /// <summary>事务存活性探测（R4/T1，v5.7）：Npgsql 的 Connection 取值在已释放事务上抛
+    /// <summary>事务存活性探测（R4/T1，v5.6.0）：Npgsql 的 Connection 取值在已释放事务上抛
     /// ObjectDisposedException（Microsoft.Data.Sqlite 返回 null 不抛）——所有
     /// 「Connection == null 即已终结」的判定统一走本方法，把已释放事务跨驱动一致地
     /// 视同 Connection=null，使各判定分支的设计语义（静默清理/响亮失败/还原空值）
@@ -541,7 +541,7 @@ internal sealed class SessionOperationState
                 _transactionOperationOwner is not null
                 && ReferenceEquals(
                     _transactionOperationOwner, _activeOperationOwner);
-            // R4/T1（v5.7）：已释放事务（IsTransactionAlive=false，含 Npgsql 取值抛 ODE 的
+            // R4/T1（v5.6.0）：已释放事务（IsTransactionAlive=false，含 Npgsql 取值抛 ODE 的
             // 形态）不触发"先完成事务"警告——会话释放不能因调用方先行释放事务而崩溃
             if (IsTransactionAlive(_transaction)
                 && _activeTransaction is null

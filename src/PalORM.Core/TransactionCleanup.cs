@@ -7,15 +7,15 @@ namespace PalORM;
 /// PG Provider 的同名助手是跨程序集刻意独立（Provider 不依赖 Core 内部），不合并。</summary>
 internal static class TransactionCleanup
 {
-    /// <summary>失败提交后跳过回滚时写主异常 Data 的键（T1，v5.7）。</summary>
+    /// <summary>失败提交后跳过回滚时写主异常 Data 的键（T1，v5.6.0）。</summary>
     internal const string RollbackSkippedDataKey = "PalORM.RollbackSkipped";
 
-    /// <summary>失败提交后的回滚裁决（T1，v5.7）。
+    /// <summary>失败提交后的回滚裁决（T1，v5.6.0）。
     /// <para><b>裁决依据</b>：PG/MySQL 的失败 COMMIT 在<b>服务端返回错误</b>时已由服务端
     /// 终止事务（PG 文档：COMMIT 出错即回滚；MySQL 错误处理同义）——后续 RollbackAsync
     /// 只会得到 "transaction already completed" 类驱动噪音并多一次徒劳往返。SQLite 相反：
     /// 失败的 COMMIT（如 SQLITE_BUSY）保留活动事务，必须回滚释放写锁。</para>
-    /// <para><b>v5.8 收窄（R1）</b>：原实现对 PG/MySQL 一律跳过回滚，只覆盖"服务端返回错误"。
+    /// <para><b>v5.6.0 收窄（R1）</b>：原实现对 PG/MySQL 一律跳过回滚，只覆盖"服务端返回错误"。
     /// 若 COMMIT 因<b>连接断开/取消/超时</b>失败，事务在服务端的最终状态未知，此时跳过回滚
     /// 会让服务端事务悬置到连接归还或回收，继续占用锁与 undo 日志。裁决条件从
     /// "方言非 SQLite" 收紧为 "方言非 SQLite 且失败看起来是服务端错误"——

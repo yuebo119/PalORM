@@ -49,7 +49,7 @@ public sealed class MySqlProvider : IDbProvider
         // 2.6.2 探针实测。
         if (!HasExplicitKey(builder, "Maximum Pool Size") && builder.MaximumPoolSize == 100)
             builder.MaximumPoolSize = checked((uint)options.MaxPoolSize);
-        // C4（v5.7）：空闲保留下限——0 = 不覆盖（MySqlConnector 默认 0）。>0 时
+        // C4（v5.6.0）：空闲保留下限——0 = 不覆盖（MySqlConnector 默认 0）。>0 时
         // ConnectionIdleTimeout 到期修剪至少保留这么多条（官方 XML 文档语义），
         // 避免稀疏流量清池后突发查询重建物理连接。uint 池参数 checked 转换。
         if (options.MinPoolSize > 0 && !HasExplicitKey(builder, "Minimum Pool Size") && builder.MinimumPoolSize == 0)

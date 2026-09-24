@@ -5,7 +5,7 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-/// <summary>保存点跨方言契约（R4，v5.7）——与 AdvancedFeatureTests 的 SQLite 基础用例互补：
+/// <summary>保存点跨方言契约（R4，v5.6.0）——与 AdvancedFeatureTests 的 SQLite 基础用例互补：
 /// PG/MySQL 真库锁定「QuoteIdentifier 转义在 SAVEPOINT/ROLLBACK TO 语法中有效」，
 /// 含各方言自己的引号字符（PG 双引号 / MySQL 反引号）内嵌于名字的往返；
 /// 并锁定非法名（空/空白/NUL）在库内统一拒绝、不触 SQL。</summary>
