@@ -19,7 +19,7 @@ public readonly struct CrudBindings
     public readonly Action<DbParameter[], object, int>? BindUpdateValues;
     /// <summary>行读取工厂委托（装箱为 object）。</summary>
     public readonly object RowFactory;
-    /// <summary>v5.7：INSERT ... RETURNING 只回主键（生成器静态判定：唯一自增主键之外
+    /// <summary>v5.6.0：INSERT ... RETURNING 只回主键（生成器静态判定：唯一自增主键之外
     /// 全部列可直接插入且无转换器/OwnedJson/IgnoreOnInsert/Computed/Timestamp——
     /// RETURNING 的整行与插入值恒等，物化等价于返回调用方实体+回填 ID）。
     /// 消费方（InsertCoreAsync）据此走标量读取路径；旧生成器缺省 false 走整行物化。</summary>
@@ -114,7 +114,7 @@ public readonly struct CrudMetadata
     public readonly Func<object, bool> HasDefaultKey;
     /// <summary>v4.3：源生成器保证 binder 参数数 == 列数，probe 只需验证一次。注册时设 true。</summary>
     public readonly bool InsertBinderValidated;
-    /// <summary>v5.7：INSERT ... RETURNING 只回主键（判定条件与消费路径见 CrudBindings.InsertReturningKeyOnly）。</summary>
+    /// <summary>v5.6.0：INSERT ... RETURNING 只回主键（判定条件与消费路径见 CrudBindings.InsertReturningKeyOnly）。</summary>
     public readonly bool InsertReturningKeyOnly;
     /// <summary>PL-3：INSERT 不读返回（判定条件与消费路径见 CrudBindings.InsertNoReturning）。</summary>
     public readonly bool InsertNoReturning;

@@ -3,7 +3,7 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-/// <summary>提交失败后的回滚裁决契约（T1，v5.7）：PG 的 DEFERRABLE INITIALLY DEFERRED
+/// <summary>提交失败后的回滚裁决契约（T1，v5.6.0）：PG 的 DEFERRABLE INITIALLY DEFERRED
 /// 唯一约束把冲突推迟到 COMMIT 时检查——这是唯一能<b>确定性</b>触发「CommitAsync 失败」
 /// 的手段。锁定三点：主异常是约束冲突本身（不被回滚噪音替换/掩盖）、Data 带
 /// PalORM.RollbackSkipped 标记（而非 RollbackException——跳过的回滚不是失败的回滚）、

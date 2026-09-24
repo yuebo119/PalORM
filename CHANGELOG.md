@@ -1115,7 +1115,7 @@ P0-2 原计划「MySQL Insert_1by1 4184 B/行池化」。分解实测后否决�
   既不建 CTS 也不包装超时，慢命令抛驱动自身异常，而非带 `PalORM.InfrastructureTimeout`
   标记的 `TimeoutException`（驱动的 `CommandTimeout` 仍然生效）。
 
-### 🔁 基线重录（v5.7.0）+ LOAD DATA 方差关闭
+### 🔁 基线重录（v5.6.0）+ LOAD DATA 方差关闭
 
 - **重录性能基线**（规范 §5 流程：影响基线的改动合入后重录守住新水位）：
   旧基线（5.6.0）已落后于往返优化轮后的水平——Insert 6,000→5,136 B（−14.4%）、

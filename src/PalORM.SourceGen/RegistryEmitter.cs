@@ -122,7 +122,7 @@ internal static class RegistryEmitter
         // CrudMetadata 用聚合 ctor（CrudBindings + CrudColumns）避免 9 参参数列表（S107）。
         // 评审 2026-09-02：用不含 legacy SQL 载荷的新 ctor——方言 SQL 走 CommandSqlsByDialect。
         sb.AppendLine($"        draft.CrudMetadatas[typeof({m.EntityTypeName})] = new global::PalORM.CrudMetadata(");
-        // v5.7：RETURNING 收窄判定（保守条件见 SupportsKeyOnlyReturning 文档）
+        // v5.6.0：RETURNING 收窄判定（保守条件见 SupportsKeyOnlyReturning 文档）
         bool keyOnlyReturning = CommandFactoryEmitter.SupportsKeyOnlyReturning(m);
         // PL-3：INSERT 不读返回判定（保守条件见 SupportsInsertWithoutReturning 文档）
         bool insertNoReturning = CommandFactoryEmitter.SupportsInsertWithoutReturning(m);

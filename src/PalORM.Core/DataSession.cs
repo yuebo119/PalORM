@@ -175,7 +175,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         throw new InvalidOperationException("Unreachable");
     }
 
-    /// <summary>预热连接池（C4，v5.7）：逐条打开 <paramref name="count"/> 条连接随即归还池，
+    /// <summary>预热连接池（C4，v5.6.0）：逐条打开 <paramref name="count"/> 条连接随即归还池，
     /// 使首批查询命中暖连接而非新建物理连接（远程建连实测 ~8.5 ms/条）。
     /// <para><b>与 <see cref="DbOptions.MinPoolSize"/> 的关系</b>：本方法是启动期一次性灌暖；
     /// MinPoolSize 是空闲修剪保留下限（稀疏流量下池不被清空）。两者配合才保持暖态——
@@ -624,7 +624,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
     }
 
-    // ─── 租户过滤 SQL 片段缓存（M1，v5.7）──────────────────────
+    // ─── 租户过滤 SQL 片段缓存（M1，v5.6.0）──────────────────────
     // GetDefaultFilterForms 覆盖 SELECT 家族的三形态；以下三个入口覆盖写路径的
     // 四处缓存外重建（UpdateCoreAsync 追加 / DeleteAsync 软删全句 / DeleteAsync
     // 物理追加 / BulkDeleteAsync 后缀）。命中走 TryGetValue（v5.6 口径，无闭包分配），

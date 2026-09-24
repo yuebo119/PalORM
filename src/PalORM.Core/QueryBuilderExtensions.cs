@@ -275,7 +275,7 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>触发所有拦截器的 OnBefore——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。
-    /// R3（v5.7）改 internal：DataSession.ExecuteAsync（原始 DDL/DML）接入同一三段式。</summary>
+    /// R3（v5.6.0）改 internal：DataSession.ExecuteAsync（原始 DDL/DML）接入同一三段式。</summary>
     internal static void NotifyInterceptorsOnBefore(
         List<IQueryInterceptor> interceptors, QueryContext context)
     {
@@ -285,7 +285,7 @@ public static class QueryBuilderExtensions
 
     /// <summary>触发所有拦截器的 OnAfter——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。
     /// Stopwatch 由调用方传入，仅当拦截器非空时才会读取 Elapsed（调用方需保证拦截器非空时 sw 也非 null）。
-    /// R3（v5.7）改 internal：DataSession.ExecuteAsync 接入。</summary>
+    /// R3（v5.6.0）改 internal：DataSession.ExecuteAsync 接入。</summary>
     internal static void NotifyInterceptorsOnAfter(
         List<IQueryInterceptor> interceptors, QueryContext context, Stopwatch? sw, int count)
     {
@@ -377,7 +377,7 @@ public static class QueryBuilderExtensions
                 : await paged._conn.BeginTransactionAsync(ct).ConfigureAwait(false));
         bool ownsTransaction = existingTransaction is null;
         Exception? primaryException = null;
-        // T1（v5.7）：同 WithTransaction——提交尝试标志区分提交失败与查询失败
+        // T1（v5.6.0）：同 WithTransaction——提交尝试标志区分提交失败与查询失败
         bool commitAttempted = false;
         // ITM-793(r21)：登记两步移入 try——PublishTransaction 可抛（ObjectDisposed，窄窗口），
         // 原位置抛出会让刚开启的自有事务无 rollback 无 dispose（连接持开事务）。finally 已按
@@ -412,7 +412,7 @@ public static class QueryBuilderExtensions
                 paged, ct, operationLease.Owner).ConfigureAwait(false);
             if (ownsTransaction)
             {
-                // T1（v5.7）：提交尝试标志——裁决依据见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
+                // T1（v5.6.0）：提交尝试标志——裁决依据见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
                     transaction, DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout), ct)

@@ -58,7 +58,7 @@ public sealed class SqlitePoolParameterTests
     [Test]
     public async Task PreWarmAsync_OnSqlite_IsNoOpAndValidatesArguments()
     {
-        // C4（v5.7）：SQLite 无连接池，无暖态可留——直接返回不报错（与上方池参数忽略契约同族）。
+        // C4（v5.6.0）：SQLite 无连接池，无暖态可留——直接返回不报错（与上方池参数忽略契约同族）。
         // 观察方式：memory: 库连不上也无所谓——方法在建连前就按方言返回，参数校验仍生效。
         var options = new DbOptions { ConnectionString = "Data Source=:memory:" };
         await DataSession<SqliteProvider>.PreWarmAsync(options, count: 3);

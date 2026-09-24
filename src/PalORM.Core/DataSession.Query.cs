@@ -276,7 +276,7 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>执行任意 DDL/DML。
     /// <para><b>ITM-700 警告</b>：原始 SQL 入口，默认过滤（[SoftDelete]/[TenantAware]）不适用（同 QueryAsync 契约）。</para>
-    /// <para><b>R3（v5.7）</b>：拦截器三段式接入（此前为覆盖面缺口）——OnBefore/OnAfter/OnError
+    /// <para><b>R3（v5.6.0）</b>：拦截器三段式接入（此前为覆盖面缺口）——OnBefore/OnAfter/OnError
     /// 与 ToListAsync 同语义；参数表仅在拦截器非空时物化，默认会话零开销。</para></summary>
     public async ValueTask<int> ExecuteAsync(FormattableString sql, CancellationToken ct = default)
     {
@@ -285,7 +285,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
-        // R3（v5.7）：拦截器非空才物化参数表与计时——与 SELECT 管线"空列表跳过"同口径
+        // R3（v5.6.0）：拦截器非空才物化参数表与计时——与 SELECT 管线"空列表跳过"同口径
         QueryContext context = default;
         System.Diagnostics.Stopwatch? stopwatch = null;
         if (_interceptors.Count > 0)

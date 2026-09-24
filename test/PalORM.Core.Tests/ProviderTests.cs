@@ -117,7 +117,7 @@ public sealed class ProviderTests
     [Test]
     public async Task ProviderConnectionFactories_ApplyMinPoolSizeOnlyWhenConfigured()
     {
-        // C4（v5.7）契约：MinPoolSize 默认 0 = 不覆盖驱动默认（键缺席即保留）；显式 >0 才透传。
+        // C4（v5.6.0）契约：MinPoolSize 默认 0 = 不覆盖驱动默认（键缺席即保留）；显式 >0 才透传。
         // 语义为空闲修剪保留下限（Npgsql ConnectionIdleLifetime / MySqlConnector
         // ConnectionIdleTimeout 到期时至少保留这么多条），非启动预热——启动预热是
         // DataSession.PreWarmAsync 的职责，与本参数正交。

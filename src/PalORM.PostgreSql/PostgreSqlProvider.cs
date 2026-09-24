@@ -51,7 +51,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         // 不是 "Max Pool Size"——写错会静默失效）。
         if (!HasExplicitKey(builder, "Maximum Pool Size") && builder.MaxPoolSize == 100)
             builder.MaxPoolSize = options.MaxPoolSize;
-        // C4（v5.7）：空闲保留下限——0 = 不覆盖（Npgsql 默认 0）。>0 时空闲修剪
+        // C4（v5.6.0）：空闲保留下限——0 = 不覆盖（Npgsql 默认 0）。>0 时空闲修剪
         // （ConnectionIdleLifetime 到期）至少保留这么多条连接，避免稀疏流量清池后
         // 突发查询重建物理连接（远程建连实测 ~8.5 ms/条）。
         if (options.MinPoolSize > 0 && !HasExplicitKey(builder, "Minimum Pool Size") && builder.MinPoolSize == 0)

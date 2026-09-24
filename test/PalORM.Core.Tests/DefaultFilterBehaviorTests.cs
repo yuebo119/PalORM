@@ -73,7 +73,7 @@ public sealed class DefaultFilterBehaviorTests
         await Assert.That(list[0].Name).IsEqualTo("keep-b");
     }
 
-    // M1（v5.7）：写路径租户过滤走缓存后的行为锁定——Update/软删 Delete/BulkDelete
+    // M1（v5.6.0）：写路径租户过滤走缓存后的行为锁定——Update/软删 Delete/BulkDelete
     // 三入口的租户隔离不因缓存引入而漂移；二次调用命中缓存路径，结果须与首调一致
     [Test]
     public async Task TenantWritePaths_IsolateAcrossTenants_AfterSqlCaching()
