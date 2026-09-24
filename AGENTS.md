@@ -96,9 +96,9 @@
    - 批量处理（BulkInsert/BulkUpdate/BulkDelete/UpsertBatch，两档）
    - 事务（仅最小档，TxTenInserts 已于 2026-09-23 精简删除）
    - 跨方言 PalORM/ADO 比值表（SQLite/PostgreSQL/MySQL 三列，2000/20000 两档）
-2. **列固定**：`操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | 分配 B（ADO/Dapper/PalORM）`
-3. **口径**：时延 = `MedianNs`（全路径中位数，µs）；分配 = `AllocatedBytesPerOp`（K=1024、M=1024²）；比值 = PalORM 中位数 ÷ ADO.NET 中位数；比值 ≥1.3 或 <0.7 加粗标注
-4. **口径注记必须附**：同批三臂 · per-operation 会话 · 三臂契约各自行业最优写法 · 连接配置三臂同口径 · 跨机绝对值不可比、同批比值可比
+2. **列固定**：`操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | 分配 B（ADO/Dapper/PalORM） | 分配相对 ADO（D/P）`
+3. **口径**：时延 = `MedianNs`（全路径中位数，µs）；分配 = `AllocatedBytesPerOp`（K 一位小数、≥100K 整数 K、M 一位小数，进制 1024）；P/ADO% = PalORM ÷ ADO − 1；分配相对 ADO% = 各臂分配 ÷ ADO 分配 − 1（Dapper 与 PalORM 都给）；百分比四舍五入整数，|p|<0.5% 记 0%；倍数 ≥1.3 或 ≤0.7 加粗标注
+4. **口径注记必须附**：同批三臂 · per-operation 会话 · 三臂契约各自行业最优写法 · 连接配置三臂同口径 · 跨机绝对值不可比、同批比值可比 · 百分比公式与加粗规则
 5. 只列用户点名的组；Query 组（WhereIn/Count/KeysetPage/WideQueryAll/IncludeJoin）与 Build 组默认不放，被点名才加
 
 ## 详见
