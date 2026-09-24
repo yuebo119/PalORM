@@ -20,6 +20,9 @@
     <!-- PerfHub 统一性能测试运行器：需复用调用方已打开的连接（避免建连口径不一致
          污染 ORM/地板比值，见 .ai/lessons.md B76），故需访问 internal ctor。 -->
     <InternalsVisibleTo Include="PalORM.PerfHub" />
+    <!-- 性能拆账探针（.ai/perf-probe，本地诊断工具不入库）：会话构造等内部形态的
+         分段测量需与 PerfHub 同口径（internal ctor 包装共享连接）。 -->
+    <InternalsVisibleTo Include="PerfProbe" />
   </ItemGroup>
   <!-- SourceLink：PrivateAssets=all 防止消费者拉到 -->
   <ItemGroup>
