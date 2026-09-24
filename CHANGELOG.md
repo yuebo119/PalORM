@@ -2,7 +2,47 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布·依赖] — 2026-09-24 依赖升级轮：TUnit 1.69.0 / Dapper 2.1.89 / Dapper.AOT 1.1.0
+## [5.6.0] — 性能大轮（性能轮一~九 · PL-1~4）+ 统一性能测试系统：写路径 −53%、UPSERT 分配 −28%、PG COPY 比值归位
+
+> 变更规模：v5.5.1 后 204 个提交 · 19 轮分节明细见下（各轮子节保留原标题内容）
+> 背景：五轴性能优化系列（延迟/内存/并发/可靠性/事务）落地产品侧，配套 PerfHub 统一性能
+> 测试系统（三方言 × 三臂 × 21 项 + 并发）、五段汇报标准与 PerfGate 基线门禁。
+> 工具链轮次只动 bench/docs/scripts，不进产品包。
+
+### 💔 破坏性变更
+
+- 无（SemVer Minor 判据：全系列向后兼容）。两处行为微变，值恒等、语义等价：
+  - **`InsertAsync` 不读返回形态（PL-3）**：显式主键且全部列可插入、无转换器/OwnedJson 的实体
+    走纯 INSERT，返回**传入实体同一引用**（原为物化新实例）；保守判定不满足任一条件即保持原读返回路径
+  - **`CommandSqlSet.Insert` 字段恢复发射（PL-3）**：由恒空串变为纯 INSERT SQL（外部读者
+    语义增强，旧生成器模型程序集仍为空串）
+
+### ✨ 产品性能亮点（实测数字，明细见各子节）
+
+- **PL-3 InsertNoReturning**：探针写路径单条 **5.79 → 2.72 µs（−53%）**；PerfHub 实测
+  `TxHundredInserts` P/ADO **2.76 → 1.30**、`TxSingleInsert` 1.38 → 1.06、`Insert` 20000 档 1.28 → 0.98
+- **PL-3.2 BindUpsertValues**：BulkMerge 分配 **982 → 789 B/行（−20%）**；`UpsertBatch` 分配
+  相对 ADO **+32%/+41% → −4%/0%**
+- **PL-2 命令/参数复用**：单行写路径池化（先测再改，惰性晋升防并发退化）
+- **性能轮二~七**：批量 INSERT 范式收敛、逐条 UPDATE 参数池化（−41~62%）、写路径直调重载
+  （−3.4~5.5%）、SQLite First/Single 族 LIMIT 内联、读路由会话级复用等（各子节含 A/B 数据）
+
+### 🛠 工具链（bench/docs，不入产品包）
+
+- PerfHub 统一性能测试系统（21 项 + 并发，项数精简 112→91、全量 42min→约 33min）、
+  五段汇报标准（看点/四组表/🚨读法/口径/尾注）、PerfGate 索引基线门禁（152 项）、
+  PL-1~4 诊断与夹具修正（PG COPY 批宽比值 3.25 → 1.08 等）、依赖升级轮
+  （TUnit 1.69.0 / Dapper 2.1.89 / Dapper.AOT 1.1.0，产品包依赖面零变化）
+
+### ✅ 验证（2026-09-24 实跑）
+
+- 构建 `PalORM.ci.slnf` Release `-warnaserror` **0 警告 0 错误**；测试 **Core 415 / SourceGen 202 /
+  Integration 205**；AOT 三 Provider publish + SQLite 运行 **PASSED**；包契约 PASS；五包 pack 与
+  nuspec 元数据全过；全量性能跑测五步完成，BDN 门禁 **27/27**
+
+### 分轮明细（19 轮，原标题保留）
+
+### [5.6.0 ·依赖] — 2026-09-24 依赖升级轮：TUnit 1.69.0 / Dapper 2.1.89 / Dapper.AOT 1.1.0
 
 > 变更范围：`Directory.Packages.props`（4 个 PackageVersion）。产品包（Core/SourceGen/三 Provider）
 > 依赖面零变化——包契约脚本 PASS，升级项全部是测试与基准侧依赖。
@@ -21,7 +61,7 @@ bench 三项目 0 错误 · 包契约 PASS · `dotnet list package --outdated` �
 （Npgsql 10.0.3 / MySqlConnector 2.6.2 / Sqlite.Core rc.1 / CodeAnalysis 5.9.0 /
 SonarAnalyzer 10.34 / SourceLink 10.0.401 / RepoDb 1.16 等经查已为源内最新）。
 
-## [未发布·性能轮九] — 单行插入省读返回与批量 UPSERT 参数池直写（PL-3 / PL-3.2）
+### [5.6.0 ·性能轮九] — 单行插入省读返回与批量 UPSERT 参数池直写（PL-3 / PL-3.2）
 
 > 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（InsertNoReturning 分派 + InsertPlainAsync）、
 > `src/PalORM.Core/CrudMetadata.cs`（CrudBindings 两字段）、`src/PalORM.Core/SqlSets.cs`（Insert 字段恢复发射）、
@@ -56,7 +96,7 @@ SonarAnalyzer 10.34 / SourceLink 10.0.401 / RepoDb 1.16 等经查已为源内最
 - 生成代码快照按 `PALORM_UPDATE_SNAPSHOTS` 流程刷新并逐行评审
 - `CommandSqlSet.Insert` 字段恢复发射（`Insert` 全方言无消费的旧断言已随语义更新）
 
-## [未发布·工具链·七] — PerfHub 臂 PG Binary COPY 批宽修正（比值 3.25 → 1.08）
+### [5.6.0 ·工具链·七] — PerfHub 臂 PG Binary COPY 批宽修正（比值 3.25 → 1.08）
 
 > 变更范围：`bench/PalORM.PerfHub/Implementations.cs`（`BulkBatchRows`：PG 传整段行数）、
 > `src/PalORM.PostgreSql/PostgreSqlProvider.cs`（`batchSize` 参数文档化）＋
@@ -71,7 +111,7 @@ SonarAnalyzer 10.34 / SourceLink 10.0.401 / RepoDb 1.16 等经查已为源内最
 产品侧同步：`PostgreSqlProvider.BulkInsertAsync` 的 `batchSize` 文档注明 Binary COPY 无参数上限、
 远程库建议传整段行数——真实用户传 1000 同样付 20 次往返。
 
-## [未发布·诊断] — PG/MySQL BulkUpdate 1.3-1.9× 差源定位：不在产品侧（PL-1.1）
+### [5.6.0 ·诊断] — PG/MySQL BulkUpdate 1.3-1.9× 差源定位：不在产品侧（PL-1.1）
 
 > 变更范围：`.ai/perf-probe/PgBatchUpdateDiag.cs`（本地探针，不入库）＋
 > `docs/性能基准规范.md` §6 结论登记。**未改任何产品代码。**
@@ -93,7 +133,7 @@ PerfHub 全量跑里 PG `BulkUpdate` 2000 档 1.81×、MySQL 20000 档 1.91×，
 **下一步最小实验**：对**同一提交**跑两轮看比值稳定性（`scripts/perfhub-ab.sh` 同参 A/A）——
 比值自身抖动若与 1.3-1.9× 同量级，这一项就该按噪声带处理，不必再追。
 
-## [未发布·工具链·六] — `Build*` 比值不计比（PL-4）：地板不构造 SQL，对比无判别力
+### [5.6.0 ·工具链·六] — `Build*` 比值不计比（PL-4）：地板不构造 SQL，对比无判别力
 
 > 变更范围：`bench/PalORM.PerfHub/Program.cs`（`NonComparableOperations` + 信封映射）
 > ＋ `docs/性能基准规范.md` §1.1。
@@ -112,7 +152,7 @@ PerfHub 的 `BuildGetByKeySql`/`BuildComplexQuerySql` 长期以 6.5~7.1× 挂在
 **没删项**：SQL 构建成本本身值得登记；删了就等于假装它不存在。
 想真比这项只有一条路——把地板也接到生成器上，而那会让差异归零，测不出东西。
 
-## [未发布·性能轮八] — 单行 CRUD 命令与参数跨调用复用（PL-2）
+### [5.6.0 ·性能轮八] — 单行 CRUD 命令与参数跨调用复用（PL-2）
 
 > 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（Insert/Update 复用路径 + 惰性晋升）、
 > `src/PalORM.Core/DataSession.cs`（晋升命令随会话释放）、
@@ -197,7 +237,7 @@ PerfHub 三臂全量对比里 PalORM 最大的两个落后项都在单行写路�
 读这批数字须知：`ab/pl2-*` 批次是用 `git checkout <提交> -- <文件>` 就地切出另一臂代码跑的，
 故信封里的 `Commit` 字段读到的是当前 HEAD 提交号——区分两臂只能看 `label`。
 
-## [未发布·工具链·五] — 性能测试系统重构：项数 112→91、全量 42min→约 33min、进度与结果表格化
+### [5.6.0 ·工具链·五] — 性能测试系统重构：项数 112→91、全量 42min→约 33min、进度与结果表格化
 
 > 变更范围：`bench/PalORM.PerfHub/`（Program / Dataset）+ `bench/PalORM.Benchmarks/`
 > （02 / 03 / 06 / MySql / Pg / Program，删 BoxingMicroBenchmark）+ `tools/PalORM.PerfGate/`
@@ -280,7 +320,7 @@ PerfHub 逐项耗时（SQLite，两档，三臂合计 189 秒）：
   （已在规范 §2 登记）。
 - 删掉 24 个 BDN 项后，`run-benchmarks.sh` 的 `all` 目标耗时随之下降，但其**基线录制**用途不变。
 
-## [未发布·工具链·四] — 修复 MySQL 方言整列失败：BulkDelete 播种超配 16.7 倍 + 默认超时
+### [5.6.0 ·工具链·四] — 修复 MySQL 方言整列失败：BulkDelete 播种超配 16.7 倍 + 默认超时
 
 > 变更范围：`bench/PalORM.PerfHub/Implementations.cs` + `Program.cs` +
 > `bench/perfhub/README.md` + `docs/性能基准规范.md`。
@@ -338,7 +378,7 @@ tier 2000 的播种是 10 万行、全部在 9 s 内，故那档能跑通。
   收益会小得多；行数预算按"最坏情况（慢库）"设定，对快库是保守取值。
 - MySQL 仍是三方言里最慢的（14.9 min 对 SQLite 约 4 min），瓶颈是 RTT 而非本修复能触及的部分。
 
-## [未发布·工具链·三] — 精简后首次完整跑测（41 分钟）与由此暴露的三处缺陷
+### [5.6.0 ·工具链·三] — 精简后首次完整跑测（41 分钟）与由此暴露的三处缺陷
 
 > 变更范围：`tools/PalORM.PerfGate/IndexGenerator.cs` + `scripts/run-full-perf.sh` +
 > `docs/性能基准规范.md`。
@@ -388,7 +428,7 @@ SQLite `GetByKey` +46.4% 等）。**不重录部分基线**：`check-index` 的"
   剩余修法（把播种改成服务端一条语句 / 单独放宽播种命令超时）未做。
 - PG/MySQL 本轮可达（网络恢复），但 MySQL 的 t20000 档仍未跑通。
 
-## [未发布·工具链·二] — 性能测试系统精简：逐项耗时归因、BulkDelete 播种、`--quick` 生效
+### [5.6.0 ·工具链·二] — 性能测试系统精简：逐项耗时归因、BulkDelete 播种、`--quick` 生效
 
 > 变更范围：`bench/PalORM.PerfHub/`（Program / Measure）+ `bench/PalORM.Benchmarks/`
 > （删 05_SqliteSpeedBenchmarks、BenchmarkConfig）+ `scripts/`（perf.sh / run-benchmarks.sh /
@@ -460,7 +500,7 @@ SQLite `GetByKey` +46.4% 等）。**不重录部分基线**：`check-index` 的"
   **不重录部分基线**：`check-index` 的"缺项不判失败"是为方言缺席设计的，重录 SQLite-only
   基线会让 PG/MySQL 静默失去检查。动作：PG/MySQL 可达后跑干净全量 → `record-index` → 人工过 diff。
 
-## [未发布·工具链] — 性能测试系统审计：预热口径、唯一报告、时间预算
+### [5.6.0 ·工具链] — 性能测试系统审计：预热口径、唯一报告、时间预算
 
 > 变更范围：`bench/PalORM.PerfHub/Measure.cs`（预热收敛）+ `tools/PalORM.PerfGate/`
 > （IndexGenerator / ReportGenerator / Program）+ `scripts/perf.sh` + `scripts/run-full-perf.sh` +
@@ -527,7 +567,7 @@ DapperSuite 三方言 ≈ 7 min、BDN 门禁集 + 负载 + 内存 ≈ 5 min。
   纪律：录基线前先跑一轮热身批次丢弃。
 - PG/MySQL 本次不可达（连接超时），三方言矩阵的完整性**未验证**；报告已能如实登记该缺口。
 
-## [未发布·性能轮七] — SQLite 单行查询 LIMIT 字面量内联（First/Single 族）
+### [5.6.0 ·性能轮七] — SQLite 单行查询 LIMIT 字面量内联（First/Single 族）
 
 > 变更范围：`src/PalORM.Core/QueryBuilder.cs`（BuildLimitClause / 形状键 / 新字段）+
 > `QueryBuilderExtensions.cs`（First/Single 族置标志）+ `SqlShapeCache.cs`（ShapeFields 加字面量维度）+
@@ -597,7 +637,7 @@ SQLite 为何对参数化 LIMIT 多收约 8 µs，机制未查明 [推断：参�
 页 I/O 把 8 µs 的 CPU 节省淹没了。DapperSuite 的 SQLite 档启用 WAL + 64MB 缓存 + mmap
 （三臂同一组 PRAGMA，见其 README 口径差 D10），属 CPU 主导，故能分辨。
 
-## [未发布·性能轮六] — MySQL QueryAll 归因修正 · SQLite 并发边界文档化
+### [5.6.0 ·性能轮六] — MySQL QueryAll 归因修正 · SQLite 并发边界文档化
 
 > 变更范围：docs/架构设计.md + README.md + CHANGELOG.md（纯文档，无代码改动）
 
@@ -636,7 +676,7 @@ SQLite 负扩展已用裸 ADO.NET 同负载对照证实（裸 ADO.NET 同样 −
 在 20% 写占比下的写串行化，不是 PalORM 引入的锁。文档明确选型建议：高并发写用 PG/MySQL，
 SQLite 适合读密集或低并发写的嵌入式场景。
 
-## [未发布·性能轮五] — 写路径直调重载（单条写 −3.4%~−5.5%）
+### [5.6.0 ·性能轮五] — 写路径直调重载（单条写 −3.4%~−5.5%）
 
 > 变更范围：src/PalORM.Core 三个文件 + 一个测试项目
 > 验证：`PalORM.ci.slnf --no-incremental` 0 警告 0 错误 · Core 360/360 ·
@@ -691,7 +731,7 @@ P0-2 原计划「MySQL Insert_1by1 4184 B/行池化」。分解实测后否决�
 幂等性（参数错位会立刻暴露），不再依赖全局计数。每行成本的量由 bench 的 Gc 基准与
 真库 A/B 覆盖，单测里重复断言全局分配既不可靠也无必要。
 
-## [未发布·性能轮四] — 逐条 UPDATE 参数池化（跨方言 −41%~−62%）
+### [5.6.0 ·性能轮四] — 逐条 UPDATE 参数池化（跨方言 −41%~−62%）
 
 > 变更范围：src/PalORM.Core 一个文件 + 一个测试项目（新增 8 个测试）
 > 验证：`PalORM.ci.slnf --no-incremental` 0 警告 0 错误 · Core 360/360 ·
@@ -764,7 +804,7 @@ P0-2 原计划「MySQL Insert_1by1 4184 B/行池化」。分解实测后否决�
 变异探针：把 `valuesBinder(pool, entities[i], 0)` 的偏移改为 1（模拟参数错位），
 8 个用例中 6 个失败——确认测试不是空转。
 
-## [未发布·性能轮三] — 事务前置校验 · 只读内核零 display class · 通知监听器保活
+### [5.6.0 ·性能轮三] — 事务前置校验 · 只读内核零 display class · 通知监听器保活
 
 > 变更范围：src/PalORM.Core 五个文件 + 三 Provider + 两个测试项目（新增 15 个测试）
 > 验证：`PalORM.ci.slnf --no-incremental` 0 警告 0 错误 · Core 352/352 · SourceGen 197/197 ·
@@ -860,7 +900,7 @@ P0-2 原计划「MySQL Insert_1by1 4184 B/行池化」。分解实测后否决�
   本次未做：它改变「回调在后台监听任务线程上执行」这一既有契约，需要先与调用方
   确认线程语义变更的影响面，不适合与上述改动混在一批。
 
-## [未发布·性能轮二] — 批量路径收敛 INSERT 范式 · 事务收口三分支裁决 · 熔断无锁快路径
+### [5.6.0 ·性能轮二] — 批量路径收敛 INSERT 范式 · 事务收口三分支裁决 · 熔断无锁快路径
 
 > 变更范围：src/PalORM.Core 六个文件 + 三 Provider + 两个测试项目（新增 39 个测试）
 > 验证：`PalORM.ci.slnf` 0 警告 0 错误 · Core 342/342 · SourceGen 197/197 ·
@@ -963,7 +1003,7 @@ P0-2 原计划「MySQL Insert_1by1 4184 B/行池化」。分解实测后否决�
 - 变异探针：把 `AttachParameters` 临时改为恒挂满批，`ShrunkBatch` 与 `WithTenant` 两个用例
   如期失败，确认新测试不是空转。
 
-## [未发布·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移 · 测试凭据自动加载
+### [5.6.0 ·性能轮] — 读路由会话级复用 · 查询构建分配减半 · SQL 零漂移 · 测试凭据自动加载
 
 > 变更范围：v5.5.1 后 8 个提交，src/PalORM.Core 七个文件 + src/PalORM.Sqlite +
 > src/PalORM.SourceGen + src/PalORM.Testing + 四个测试项目
@@ -1814,7 +1854,7 @@ EquatableArray 双向防御拷贝（ITM-737/783）；WithOutputParam 可空解�
   WhereJsonSqlGenerationTests（13，含方言守卫与归一拒绝）· ParenthesisScanAndTemplateCollisionTests（15）
 - 迁移：WhereJson DryRun 测试自 Integration 迁 Core.Tests（方言守卫使旧模式失效）
 
-## [未发布·r21 复检轮] — 回退上批过度修复 · 方言词法/诊断契约/文档三方一致
+### [5.6.0 ·r21 复检轮] — 回退上批过度修复 · 方言词法/诊断契约/文档三方一致
 
 > 本轮为 2026-09-10 r20 修复批（7 提交）的复检结果。独立分片评审发现并修复如下问题。
 

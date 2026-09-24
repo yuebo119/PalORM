@@ -6,7 +6,7 @@
 
 [![.NET](https://img.shields.io/badge/.NET-11.0.0--preview.6-512BD4)](https://dotnet.microsoft.com)
 [![AOT](https://img.shields.io/badge/Native%20AOT-✓%20全链路验证-512BD4)](#native-aot)
-[![Version](https://img.shields.io/badge/version-5.5.1-512BD4)](#)
+[![Version](https://img.shields.io/badge/version-5.6.0-512BD4)](#)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
 
 </div>
@@ -71,11 +71,11 @@
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="5.5.1" />
+<PackageReference Include="PalORM.PostgreSql" Version="5.6.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="5.5.1" />
+<PackageReference Include="PalORM.MySql" Version="5.6.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="5.5.1" />
+<PackageReference Include="PalORM.Sqlite" Version="5.6.0" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。
@@ -192,7 +192,7 @@ var env = DbOptions.FromEnvironment("PALORM_CONNECTION");
 > PostgreSQL 为 **+7.2×**、MySQL **+4.6×**。选型建议：高并发写场景用 PG/MySQL；
 > SQLite 适合读密集或低并发写的嵌入式场景。详见 `docs/架构设计.md` 的方言并发扩展性段。
 | `MinPoolSize` | `int` | 0 | 连接池空闲保留下限（v5.7 新增）。**0 = 不覆盖驱动默认**；正数透传（PG `MinPoolSize` / MySQL `MinimumPoolSize`），空闲超时修剪时池内至少保留这么多条连接——消除「稀疏流量 + 空闲修剪清池 → 突发查询重建物理连接」的延迟尖峰（远程建连实测 ~8.5 ms/条）。启动期一次性预热用 `DataSession.PreWarmAsync`，与本参数正交。**SQLite 忽略此项** | |
-| `PoolIdleTimeoutSeconds` | `int` | **0**（未发布→v5.6.0；**当前已发布版 5.5.1 为 30**） | 连接池空闲超时（秒）。**0 = 不覆盖驱动默认值**（Npgsql 300 秒 / MySqlConnector 180 秒，原样保留）；正数才覆盖。v5.6 起默认由 30 改为 0——被覆盖时的代价是间隔超过该值后的首个查询必须重建物理连接：实测跨网段 `SELECT 1` 池内 **0.300 ms** vs 新建连接 **13.523 ms**（多付 13.2 ms）。若你的部署受服务端 `max_connections` 挤压、希望更快释放空闲连接，显式设一个较小值即可 | |
+| `PoolIdleTimeoutSeconds` | `int` | **0**（v5.6.0 起；5.5.1 及更早为 30） | 连接池空闲超时（秒）。**0 = 不覆盖驱动默认值**（Npgsql 300 秒 / MySqlConnector 180 秒，原样保留）；正数才覆盖。v5.6 起默认由 30 改为 0——被覆盖时的代价是间隔超过该值后的首个查询必须重建物理连接：实测跨网段 `SELECT 1` 池内 **0.300 ms** vs 新建连接 **13.523 ms**（多付 13.2 ms）。若你的部署受服务端 `max_connections` 挤压、希望更快释放空闲连接，显式设一个较小值即可 | |
 | `PoolLifetimeMinutes` | `int` | 60 | 连接最大生命周期（分钟）。到期后强制重建，避免长期持有陈旧连接 | |
 | `PoolExplicitlyConfigured` | `bool` | false | `WithPool()` 设置后为 true。标记「池参数由调用方显式给出」 | |
 | `CircuitBreakerThreshold` | `int` | 5 | 断路器：连续失败次数阈值。0=禁用熔断 | |
