@@ -96,9 +96,9 @@
    - 批量处理（BulkInsert/BulkUpdate/BulkDelete/UpsertBatch，两档）
    - 事务（仅最小档，TxTenInserts 已于 2026-09-23 精简删除）
    - 跨方言 PalORM/ADO 比值表（SQLite/PostgreSQL/MySQL 三列，2000/20000 两档）
-2. **列固定**：`操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | 分配 B（ADO/Dapper/PalORM） | 分配相对 ADO（D/P）`
-3. **口径**：时延 = `MedianNs`（全路径中位数，µs）；分配 = `AllocatedBytesPerOp`（K 一位小数、≥100K 整数 K、M 一位小数，进制 1024）；P/ADO% = PalORM ÷ ADO − 1；分配相对 ADO% = 各臂分配 ÷ ADO 分配 − 1（Dapper 与 PalORM 都给）；百分比四舍五入整数，|p|<0.5% 记 0%；倍数 ≥1.3 或 ≤0.7 加粗标注
-4. **色标分档**（基准 = ADO.NET；性能方向：时间越短越好、内存占用越少越好——百分比 >0 即比 ADO 更慢/更费 = 劣，取暖色；<0 即更快/更省 = 优，取冷绿。时延 P/ADO% 与分配相对 ADO% 共用，各三级，+30% 对齐门禁 1.3× 线）：
+2. **列固定**：`操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | P/Dapper（倍数±%） | 分配（ADO/Dapper/PalORM） | 分配相对 ADO（D/P）`
+3. **口径**：时延 = `MedianNs`（全路径中位数），**单元格数值自带单位 µs**；分配 = `AllocatedBytesPerOp`，**单元格自带单位 KB/MB**（1024 进制，KB 一位小数、≥100 KB 取整、MB 一位小数）；P/ADO% = PalORM ÷ ADO − 1；P/Dapper% = PalORM ÷ Dapper − 1（仅时延列，基准 Dapper，方向同：正 = 比 Dapper 慢 = 劣）；分配相对 ADO% = 各臂分配 ÷ ADO 分配 − 1（Dapper 与 PalORM 都给）；百分比四舍五入整数，|p|<0.5% 记 0%；倍数 ≥1.3 或 ≤0.7 加粗（所有比值列）；跨方言表不设 P/Dapper 列
+4. **色标分档**（基准 = ADO.NET；性能方向：时间越短越好、内存占用越少越好——百分比 >0 即比基准更慢/更费 = 劣，取暖色；<0 即更快/更省 = 优，取冷绿。时延 P/ADO%、P/Dapper%（基准 Dapper）与分配相对 ADO% 共用，各三级，+30% 对齐门禁 1.3× 线）：
    - 🟢 强优 ≤ −30% · 🟩 中优 −29% ~ −10% · 🔹 微优 −9% ~ −1%
    - ⚪ 持平 0%（|p|<0.5% 四舍五入为 0）
    - 🔸 微劣 +1% ~ +9% · 🟧 中劣 +10% ~ +29% · 🟥 强劣 ≥ +30%
