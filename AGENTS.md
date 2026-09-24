@@ -87,6 +87,20 @@
 | 最终提交前 | `dotnet build --no-incremental` |
 | 技术债扫描 | `bash .ai/scripts/tech-debt-scan.sh`（本地工具） |
 
+## 性能测试结果输出规范（2026-09-24 用户指定 · 每次跑测汇报强制）
+
+性能跑测/对比结果一律以下列固定表格呈现，数据源为 `bench/perfhub/results/history-*.json` 明细（非报告转述）：
+
+1. **表格组**（按组分表，逐组呈现，缺组注明"本批未跑"）：
+   - CRUD 单行与读（两档）
+   - 批量处理（BulkInsert/BulkUpdate/BulkDelete/UpsertBatch，两档）
+   - 事务（仅最小档，TxTenInserts 已于 2026-09-23 精简删除）
+   - 跨方言 PalORM/ADO 比值表（SQLite/PostgreSQL/MySQL 三列，2000/20000 两档）
+2. **列固定**：`操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | 分配 B（ADO/Dapper/PalORM）`
+3. **口径**：时延 = `MedianNs`（全路径中位数，µs）；分配 = `AllocatedBytesPerOp`（K=1024、M=1024²）；比值 = PalORM 中位数 ÷ ADO.NET 中位数；比值 ≥1.3 或 <0.7 加粗标注
+4. **口径注记必须附**：同批三臂 · per-operation 会话 · 三臂契约各自行业最优写法 · 连接配置三臂同口径 · 跨机绝对值不可比、同批比值可比
+5. 只列用户点名的组；Query 组（WhereIn/Count/KeysetPage/WideQueryAll/IncludeJoin）与 Build 组默认不放，被点名才加
+
 ## 详见
 
 - **完整规范手册**：`.ai/lessons.md`
