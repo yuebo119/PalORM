@@ -56,6 +56,14 @@ internal static class CommandFactoryEmitter
         GenerateBindUpsertBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // PL-3.2：UPSERT 参数池路径——与 BindUpsert 同列序（IsUpsertable 声明序），
+        // 只写 Value 不建参数。消费点 BatchUpsertAsync（原 scratch 命令逐行建参数再值拷贝）。
+        sb.AppendLine($"    /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>");
+        sb.AppendLine($"    internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, {model.EntityTypeName} entity, int paramOffset)");
+        sb.AppendLine("    {");
+        GenerateBindValuesBody(model, sb, static column => column.IsUpsertable);
+        sb.AppendLine("    }");
+        sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定实体属性到 UPDATE 参数。</summary>");
         sb.AppendLine($"    internal static void BindUpdate(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity)");
         sb.AppendLine("    {");
@@ -405,11 +413,17 @@ internal static class CommandFactoryEmitter
 
     /// <summary>v4.6：仅设置预分配参数的 Value（无 CreateParameter/Add/ParameterName），用于跨批参数复用。</summary>
     private static void GenerateBindValuesBody(TableModel model, StringBuilder sb)
+        => GenerateBindValuesBody(model, sb, static column => column.IsInsertable);
+
+    /// <summary>共享 Value 直写循环——列序 = <paramref name="predicate"/> 过滤后的声明序，
+    /// 与同谓词的 GenerateBindBody（建参数版）逐列一致（PL-3.2：Upsert 版消费 IsUpsertable）。</summary>
+    private static void GenerateBindValuesBody(
+        TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate)
     {
         int pi = 0;
         foreach (var col in model.Columns.AsSpan())
         {
-            if (!col.IsInsertable) continue;
+            if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
             if (IsBinaryColumn(col))
                 sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");

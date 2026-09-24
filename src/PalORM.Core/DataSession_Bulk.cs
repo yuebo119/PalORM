@@ -670,6 +670,21 @@ public partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>旧模型程序集回退路径：scratch 命令逐行 BindUpsert → 值拷贝进池（PL-3.2 抽出）。</summary>
+    private static void BindUpsertRowViaScratch<T>(
+        DbCommand scratch, CrudMetadata metadata, T entity,
+        DbParameter[] pool, int rowBase, int columnCount) where T : class, new()
+    {
+        scratch.Parameters.Clear();
+        metadata.BindUpsert(scratch, entity);
+        if (scratch.Parameters.Count != columnCount)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' upsert binder produced {scratch.Parameters.Count} " +
+                $"parameters for {columnCount} upsert columns.");
+        for (int c = 0; c < columnCount; c++)
+            pool[rowBase + c].Value = scratch.Parameters[c].Value;
+    }
+
     /// <summary>多行 UPSERT 分批执行——PG/SQLite 走 ON CONFLICT (...) DO UPDATE SET c=excluded.c，
     /// MySQL 走 ON DUPLICATE KEY UPDATE c=VALUES(c)（与单行 upsert 的既有 SQL 形态一致）。
     /// <para><b>批次上限</b>：每语句参数总数钳制在 900（SQLite 默认变量上限 999 的安全余量；
@@ -706,9 +721,10 @@ public partial class DataSession<TProvider>
         UpsertSqlShape shape = BuildUpsertSqlShape(tableName, metadata, pkColumn);
 
         // 绑定策略：BindUpsert 每行从 @p0 起命名且 MySQL 参数集合在 Add 时校验重名——
-        // 不能直接往批命令里逐行 Append。改为 scratch 命令绑定 → 值拷贝进预建参数池
-        // （池参数以批内连续下标命名，创建一次逐行只写 Value）。
+        // 不能直接往批命令里逐行 Append。PL-3.2：生成器发射 BindUpsertValues 时直写参数池
+        // （零 CreateParameter）；旧模型程序集回退 scratch 命令绑定 → 值拷贝进预建参数池。
         await using DbCommand scratch = CreateCommand();
+        Action<DbParameter[], object, int>? upsertValuesBinder = metadata.BindUpsertValues;
 
         // PERF-004（2026-09-23）：命令与参数池跨批复用——池按满批大小建一次（下标 0..N-1 逐批同义），
         // 批间只写 Value；末批缩短时经 AttachParameters 收敛命令参数集合（池对象零新增分配）。
@@ -736,15 +752,13 @@ public partial class DataSession<TProvider>
 
             for (int row = start; row < end; row++)
             {
-                scratch.Parameters.Clear();
-                metadata.BindUpsert(scratch, entities[row]);
-                if (scratch.Parameters.Count != columnCount)
-                    throw new InvalidOperationException(
-                        $"Type '{typeof(T).Name}' upsert binder produced {scratch.Parameters.Count} " +
-                        $"parameters for {columnCount} upsert columns.");
                 int rowBase = (row - start) * columnCount;
-                for (int c = 0; c < columnCount; c++)
-                    pool[rowBase + c].Value = scratch.Parameters[c].Value;
+                if (upsertValuesBinder is not null)
+                {
+                    upsertValuesBinder(pool, entities[row], rowBase);
+                    continue;
+                }
+                BindUpsertRowViaScratch(scratch, metadata, entities[row], pool, rowBase, columnCount);
             }
 
             if (rowCount != lastRowCount)
