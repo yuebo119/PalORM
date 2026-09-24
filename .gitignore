@@ -104,3 +104,4 @@ kubeconfig
 *token*.txt
 *apikey*.txt
 bench/reports/
+cov-core.xml

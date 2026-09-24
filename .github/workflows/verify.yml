@@ -97,9 +97,13 @@ jobs:
               run: dotnet build PalORM.ci.slnf -c Release --no-incremental
 
             - name: Core tests (with coverage, M3-1)
+              # TUnit 1.69 起 --coverage-output 仅给文件名时落入 --results-directory
+              #（bin/.../TestResults/），断言步在 cwd 找不到——显式钉 results-directory
+              # 为 cwd，文件名保持 cov-core.xml 与断言步一致。
               run: >-
                   dotnet run --project test/PalORM.Core.Tests -c Release --no-build --
                   --coverage --coverage-output-format xml --coverage-output cov-core.xml
+                  --results-directory .
 
             - name: Assert Core test counts (M0-3)
               run: >-
