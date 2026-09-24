@@ -97,13 +97,15 @@ jobs:
               run: dotnet build PalORM.ci.slnf -c Release --no-incremental
 
             - name: Core tests (with coverage, M3-1)
-              # TUnit 1.69 起 --coverage-output 仅给文件名时落入 --results-directory
-              #（bin/.../TestResults/），断言步在 cwd 找不到——显式钉 results-directory
-              # 为 cwd，文件名保持 cov-core.xml 与断言步一致。
+              # TUnit 1.69 起 --coverage-output 仅给文件名（含 ./ 前缀）时归一化进
+              # --results-directory（默认 bin/.../TestResults/），断言步在 cwd 找不到；
+              # 且显式传 --results-directory . 会把 tunit-report.json 一起改道出 bin，
+              # 下一步 assert-test-counts 的 find bin 空参挂（run 36026357486 实测）。
+              # 修法：传绝对路径（非"文件名"即原样落盘）——coverage 落 cwd、报告留 bin，两侧各得其所。
               run: >-
                   dotnet run --project test/PalORM.Core.Tests -c Release --no-build --
-                  --coverage --coverage-output-format xml --coverage-output cov-core.xml
-                  --results-directory .
+                  --coverage --coverage-output-format xml
+                  --coverage-output "$(pwd)/cov-core.xml"
 
             - name: Assert Core test counts (M0-3)
               run: >-

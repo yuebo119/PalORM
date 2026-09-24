@@ -105,3 +105,4 @@ kubeconfig
 *apikey*.txt
 bench/reports/
 cov-core.xml
+*.tunit-report.json
