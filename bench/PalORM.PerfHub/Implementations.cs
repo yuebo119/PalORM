@@ -1342,6 +1342,13 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         where TProvider : IDbProvider, new()
         => new(conn, Opts(conn), [], null);
 
+    /// <summary>批量插入的批行数——PG Binary COPY 无参数上限，整段单批 = 单次协议往返，
+    /// 才是三臂契约的"行业最优调用"（此前固定 1000 是多值 VALUES 的变量上限思维：
+    /// 20000 行 = 20 次 BeginBinaryImport/Complete 往返，实测比值 3.3× 由此而来，
+    /// 2000 档 2 次 vs 1 次的 1.6× 与档位放大逐批吻合）；多值 VALUES 方言保持 1000。</summary>
+    private static int BulkBatchRows(SqlDialect dialect, int rowCount)
+        => dialect == SqlDialect.PostgreSql ? rowCount : 1000;
+
     private static DbOptions Opts(DbConnection conn)
         => new() { ConnectionString = conn.ConnectionString ?? "" };
 
@@ -1362,7 +1369,8 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         await AdoNetImpl.ExecAsync(conn, Dataset.DropTableSql(dialect), ct).ConfigureAwait(false);
         await AdoNetImpl.ExecAsync(conn, Dataset.CreateTableSql(dialect), ct).ConfigureAwait(false);
         List<S1Row> seed = Dataset.SeedRows(rows);
-        await Session<TProvider>(conn).BulkInsertAsync(seed, 1000, ct).ConfigureAwait(false);
+        await Session<TProvider>(conn)
+            .BulkInsertAsync(seed, BulkBatchRows(TProvider.Dialect, seed.Count), ct).ConfigureAwait(false);
     }
 
     public Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
@@ -1454,7 +1462,8 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     private static Task<long> BulkInsertCoreAsync<TProvider>(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
-        => Session<TProvider>(conn).BulkInsertAsync(rows, 1000, ct).AsTask();
+        => Session<TProvider>(conn)
+            .BulkInsertAsync(rows, BulkBatchRows(TProvider.Dialect, rows.Count), ct).AsTask();
 
     public Task<int> UpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
         => D switch
@@ -1739,7 +1748,8 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     {
         DataSession<TProvider> session = Session<TProvider>(conn);
         await session.WithTransaction(
-            async _ => await session.BulkInsertAsync(rows, 1000, ct).ConfigureAwait(false), ct: ct)
+            async _ => await session.BulkInsertAsync(
+                rows, BulkBatchRows(TProvider.Dialect, rows.Count), ct).ConfigureAwait(false), ct: ct)
             .ConfigureAwait(false);
     }
 

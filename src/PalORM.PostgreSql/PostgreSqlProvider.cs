@@ -176,6 +176,9 @@ public sealed class PostgreSqlProvider : IDbProvider
     }
 
     /// <summary>批量插入——按源生成 InsertColumns 与 BindInsert 执行 Npgsql Binary COPY。
+    /// <para><paramref name="batchSize"/> 即每次 COPY 会话的行数：Binary COPY 无参数上限，
+    /// 远程库建议传整段行数（单次协议往返）——小批（如多值 VALUES 思维的 1000）会让
+    /// 20000 行付出 20 次 BeginBinaryImport/Complete 往返（实测比值 3.3× 量级）。</para>
     /// <para>BeginBinaryImportAsync → StartRowAsync → WriteAsync(value, NpgsqlDbType) → CompleteAsync。</para>
     /// <para>列数与参数数在开始 COPY 前校验，无需运行时类型映射。</para>
     /// <para>命令、Importer、回滚或事务释放失败附加到主异常，不替换原始 COPY 失败。</para>
