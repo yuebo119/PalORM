@@ -2,6 +2,43 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·性能轮八] — 单行 CRUD 命令与参数跨调用复用（PL-2）
+
+> 变更范围：`src/PalORM.Core/DataSession.Crud.cs`（Insert/Update 复用路径 + 参数绑定职责上移）、
+> `src/PalORM.Core/DataSession.cs`（复用命令随会话释放）、
+> `test/PalORM.Core.Tests/SingleRowCommandReuseTests.cs`（新增 11 例回归）。
+
+### 为什么是这一项
+
+PerfHub 三臂全量对比里 PalORM 最大的两个落后项都在单行写路径：
+`TxHundredInserts` 4.40×、`TxRollback` 3.83×（往返数与地板持平，落后全在客户端每行固定开销）。
+同产品内部对照给出了归因：池化路径 `BulkUpdateAsync` **1.41 µs/行**，
+单行 API `UpdateAsync` **9.9 µs/行**——同一个 SQLite、同一张表，只因为"复用与否"差 7 倍。
+根因是 `InsertCoreAsync`/`UpdateCoreAsync` 每次调用 `CreateCommand()` 新建命令，
+`BindInsert`/`BindUpdate` 每列 `CreateParameter()` + `ParameterName` + `Add`。
+
+### 改法
+
+会话上按 (实体类型, 操作) 缓存一个命令 + 从首行绑定摘出的参数池；后续调用只重设
+`Transaction`/`CommandTimeout`（`CreateCommand` 本就在做前者），参数只写 Value——
+用 v4.6 就已发射、批量路径一直在用的 `BindInsertValues`/`BindUpdateValues`（offset=0）。
+语句文本、超时与参数绑定的职责从 `InsertWithReturningAsync`/`InsertWithLastInsertIdAsync`
+上移到获取命令的 `TryAcquireInsertCommand`/`TryAcquireUpdateCommand`，子方法只负责执行与回填
+（否则复用命令的参数集合会逐次增长——这一条由新增测试抓出来过）。
+
+三条边界：旧模型程序集未发射 `BindInsertValues`/`BindUpdateValues` 时回退原路径；
+`Update` 排除租户实体（租户参数每次调用新加 + `_tenantId` 可经 `WithTenant` 中途变更）；
+复用命令归会话所有，在 `DisposeCoreAsync` 里先于主连接关闭释放。
+
+### A/B 结果（SQLite 2000 档，同参）
+
+分配是确定性指标（`GC.GetTotalAllocatedBytes` 精确计数）：`TxHundredInserts`
+254567 → 155629 B/op（**−38.9%**），`TxRollback` 1069123 → 599246 B/op（**−43.9%**）。
+
+耗时信号被环境噪声掩盖：改动后那一轮的**地板臂自身也慢了 2~5.4 倍**
+（`TxHundredInserts` 地板 215.8 → 1165.5 µs、`Count` 6.3 → 11.1 µs），
+故该轮耗时读数作废，不能据此称"提速 X%"——按测量纪律重跑前只报告分配这一个维度。
+
 ## [未发布·工具链·五] — 性能测试系统重构：项数 112→91、全量 42min→约 33min、进度与结果表格化
 
 > 变更范围：`bench/PalORM.PerfHub/`（Program / Dataset）+ `bench/PalORM.Benchmarks/`
