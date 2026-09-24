@@ -375,44 +375,47 @@ Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物
 
 ## 性能基准报告
 
-> **测试环境**：AMD Ryzen 9 8945HX (32 logical) · Windows 10 22H2 · .NET 11.0.0-preview.6 · BenchmarkDotNet fork (net11) · SQLite 共享内存 10K 行 · PG 18.4 / MySQL 8.4.10 远程
+> **测试环境**：AMD Ryzen 9 8945HX (32 logical) · Windows 10 22H2 · .NET 11 RC1（SDK 11.0.100-rc.1.26425.128）· BenchmarkDotNet fork (net11) · SQLite 共享内存 10K 行 · PG 18.4 / MySQL 8.4.10 远程
+> **数据批次**：BDN 对照表 = 2026-09-24 全量跑测 gate-set（launch 1 / warmup 3 / iteration 5，均值）；批量表 = 同日 PerfHub 完整批（`history-20260924-231214.json`，中位数 + `AllocatedBytesPerOp` 精确计数）。BDN gate-set 未开 MemoryDiagnoser，单表分配列以 PerfHub 批次 JSON 为准。下方 GC 装箱 / PostgreSQL / MySQL / AOT 体积 / SQL 构建各表为对应专项测量的原始批次结果，未随本批重跑。
 
 ### SQLite CRUD（4 ORM 对照）
 
 #### 全表查询 10,000 行
 
-| 方法 | Mean | vs ADO.NET | Allocated |
-|:-----|-----:|:---------:|----------:|
-| **ADO.NET**（基线） | 4.59 ms | 1.00x | 1.30 MB |
-| Dapper | 4.59 ms | 1.01x | 1.32 MB |
-| **PalORM** | **5.52 ms** | **1.22x** | **1.48 MB** |
-| RepoDb | 4.31 ms | 0.95x | 1.09 MB |
+| 方法 | Mean | vs ADO.NET |
+|:-----|-----:|:---------:|
+| **ADO.NET**（基线） | 4.28 ms | 1.00x |
+| Dapper | 3.69 ms | 0.86x |
+| **PalORM** | **4.85 ms** | **1.13x** |
+| RepoDb | 3.53 ms | 0.82x |
 
 #### 单行插入
 
-| 方法 | Mean | Allocated |
-|:-----|-----:|----------:|
-| **ADO.NET** | 25.53 μs | 1.36 KB |
-| Dapper | 27.38 μs | 3.66 KB |
-| **PalORM** | **38.23 μs** | **5.66 KB** |
-| RepoDb | 27.85 μs | 3.66 KB |
+| 方法 | Mean | vs ADO.NET |
+|:-----|-----:|:---------:|
+| **ADO.NET** | 25.01 μs | 1.00x |
+| Dapper | 26.88 μs | 1.07x |
+| **PalORM** | **32.51 μs** | **1.30x** |
+| RepoDb | 27.12 μs | 1.08x |
 
 #### 主键查询
 
-| 方法 | Mean | Allocated |
-|:-----|-----:|----------:|
-| **ADO.NET** | 22.32 μs | 1.63 KB |
-| **PalORM** | **25.09 μs** | **4.66 KB** |
-| RepoDb | 22.39 μs | 5.35 KB |
+| 方法 | Mean | vs ADO.NET |
+|:-----|-----:|:---------:|
+| **ADO.NET** | 22.96 μs | 1.00x |
+| Dapper | 25.28 μs | 1.10x |
+| **PalORM** | **27.66 μs** | **1.20x** |
+| RepoDb | 27.43 μs | 1.19x |
 
-### 批量操作（10,000 行）
+### 批量操作（PerfHub · SQLite · 20,000 行 · 三臂对等口径）
 
 | 方法 | Mean | Allocated | vs Dapper |
 |:-----|-----:|----------:|:---------:|
-| Dapper 多值 INSERT | 22.99 ms | 12,658 KB | 1.0x |
-| **PalORM BulkInsert** | **48.58 ms** | **5,082 KB** | **分配仅 40%** |
+| ADO.NET 地板 | 160.4 ms | 14.9 MB | 0.15x |
+| Dapper 多值 INSERT | 1,105.4 ms | 79.5 MB | 1.0x |
+| **PalORM BulkInsert** | **161.0 ms** | **14.8 MB** | **0.15x（快 6.9×，分配 19%）** |
 
-> PalORM BulkInsert 耗时高于 Dapper（源生成 binder + SessionOperationState 门禁开销），但**内存分配仅 Dapper 的 40%**——GC 压力显著更低。
+> 三臂契约下 PalORM 与手写 ADO.NET 地板逐项持平（P/ADO 0.98–1.00），Dapper 多值 INSERT 在 20,000 行档因巨型 SQL 字符串构造慢 6.9×、分配 5.3×。跨批比值见 PerfHub 报告（`bench/perfhub/report.html`）。
 
 ### GC 装箱分析（v5.0 新增）
 
