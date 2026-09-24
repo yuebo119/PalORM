@@ -136,7 +136,8 @@ internal static class RegistryEmitter
         // 与 BindInsertValues 同机制；消费点 ExecuteBatchUpdateAsync 在 null 时回退逐行 BindUpdate。
         sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateValues(parameters, ({m.EntityTypeName})obj, off),");
         sb.AppendLine($"                    insertReturningKeyOnly: {(keyOnlyReturning ? "true" : "false")},");
-        sb.AppendLine($"                    insertNoReturning: {(insertNoReturning ? "true" : "false")}),");
+        sb.AppendLine($"                    insertNoReturning: {(insertNoReturning ? "true" : "false")},");
+        sb.AppendLine($"                    bindUpsertValues: (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsertValues(parameters, ({m.EntityTypeName})obj, off)),");
         // ITM-640：单次物化 Columns（本块原 3 处 AsSpan().ToArray() 重复分配；另 3 处
         // 分属独立 per-model 循环无法共用——复检轮计数订正）
         var columns = m.Columns.AsSpan().ToArray();

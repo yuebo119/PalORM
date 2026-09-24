@@ -29,12 +29,15 @@ public readonly struct CrudBindings
     /// 纯 INSERT 即完成语义）。消费方（InsertCoreAsync）走 ExecuteNonQuery 路径，
     /// 省 RETURNING/LAST_INSERT_ID 的读返回与物化；旧生成器缺省 false 走读返回路径。</summary>
     public readonly bool InsertNoReturning;
+    /// <summary>PL-3.2：仅设置预分配 UPSERT 参数 Value 的委托（批量 UPSERT 参数池路径，
+    /// 与 BindUpsert 同列序）。旧版生成器模型程序集为 null，消费方回退 scratch 逐行绑定。</summary>
+    public readonly Action<DbParameter[], object, int>? BindUpsertValues;
 
     /// <summary>构造 CRUD 委托聚合。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:Constructor should not have more than 7 parameters",
         Justification = "本聚合存在的目的就是把 CRUD 绑定打包为单参数（避免 CrudMetadata 的 20+ 参列表）；"
-            + "成员随版本演进只会增加，拆分聚合会把参数列表问题转移回消费方。末位两参均有默认值，"
+            + "成员随版本演进只会增加，拆分聚合会把参数列表问题转移回消费方。末位三参均有默认值，"
             + "位置参数调用点不受影响。")]
     public CrudBindings(
         Action<DbCommand, object, int> bindInsert,
@@ -44,11 +47,13 @@ public readonly struct CrudBindings
         object rowFactory,
         Action<DbParameter[], object, int>? bindUpdateValues = null,
         bool insertReturningKeyOnly = false,
-        bool insertNoReturning = false)
+        bool insertNoReturning = false,
+        Action<DbParameter[], object, int>? bindUpsertValues = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
         BindUpsert = bindUpsert;
+        BindUpsertValues = bindUpsertValues;
         BindUpdate = bindUpdate;
         RowFactory = rowFactory;
         BindUpdateValues = bindUpdateValues;
@@ -113,6 +118,9 @@ public readonly struct CrudMetadata
     public readonly bool InsertReturningKeyOnly;
     /// <summary>PL-3：INSERT 不读返回（判定条件与消费路径见 CrudBindings.InsertNoReturning）。</summary>
     public readonly bool InsertNoReturning;
+    /// <summary>PL-3.2：仅设置预分配 UPSERT 参数 Value 的委托（批量 UPSERT 参数池路径，
+    /// 与 BindUpsert 同列序）。旧版生成器模型程序集为 null，消费方回退 scratch 逐行绑定。</summary>
+    public readonly Action<DbParameter[], object, int>? BindUpsertValues;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
@@ -131,6 +139,7 @@ public readonly struct CrudMetadata
         BindInsert = bindings.BindInsert;
         BindInsertValues = bindings.BindInsertValues;
         BindUpsert = bindings.BindUpsert;
+        BindUpsertValues = bindings.BindUpsertValues;
         BindUpdate = bindings.BindUpdate;
         BindUpdateValues = bindings.BindUpdateValues;
         RowFactory = bindings.RowFactory;
@@ -169,7 +178,7 @@ public readonly struct CrudMetadata
     internal CrudMetadata Copy()
         => new(Sqls,
             new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues,
-                InsertReturningKeyOnly, InsertNoReturning),
+                InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }

@@ -28,6 +28,13 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
         { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.Value = (object)entity.Value; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>
+    internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, global::ReservedWordEntity entity, int paramOffset)
+    {
+        parameters[paramOffset + 0].Value = (object)entity.Id;
+        parameters[paramOffset + 1].Value = (object)entity.Value;
+    }
+
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
     internal static void BindUpdate(global::System.Data.Common.DbCommand cmd, global::ReservedWordEntity entity)
     {
