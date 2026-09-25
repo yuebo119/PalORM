@@ -6,8 +6,9 @@ namespace PalORM;
 /// <para><b>收益实测（PG 远程，事务内 10 条 INSERT，60 轮中位）</b>：逐条 4.56 ms →
 /// 批量 1.33 ms（**3.4×**，每语句消除 ~324µs RTT）。语句数越多、RTT 越大，收益越大。</para>
 /// <para><b>方言行为</b>：PostgreSQL 走 <c>DbBatch</c> 真单往返；MySQL 走 <c>DbBatch</c>
-/// （驱动侧批处理）；SQLite 无批量 API——<b>回退为顺序执行</b>（行为等价，无收益也无损失，
-/// 本地 RTT≈0）。回退对外不可见。</para>
+/// （驱动侧批处理）；SQLite 无批量 API——<b>全无参语句合并为单个多语句命令一次往返</b>
+/// （L38，2026-09-25；返回值经驱动 RecordsAffected 跨语句累计，契约保持），其余回退为
+/// 顺序执行且循环外复用单条命令（L37，消除每语句命令新建/释放）。回退对外不可见。</para>
 /// <para><b>语义契约</b>：① 只接受非查询语句（INSERT/UPDATE/DELETE）——批量内没有
 /// 每语句结果的可寻址位置，混入 SELECT 是调用方错误，执行期由驱动拒绝；
 /// ② 参数化与单条路径同纪律（<c>FormattableString</c> 编译期参数化，值只进 @pN）；
@@ -130,14 +131,62 @@ public sealed class SessionBatch<TProvider> : IDisposable
             }
         }
 
-        // 回退：逐条顺序执行（语句顺序 = 追加顺序，行为与分别 ExecuteAsync 等价）
+        // L38：全无参语句合并单次往返（仅 SQLite；不可合并返回 null 走顺序路径）
+        int? merged = await TryExecuteMergedParameterlessAsync(statements, connection, transaction, ct)
+            .ConfigureAwait(false);
+        if (merged is not null) return merged.Value;
+
+        // 回退：顺序执行 + 单命令复用（L37）
+        return await ExecuteSequentiallyAsync(statements, connection, transaction, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>L38（2026-09-25，极致优化）：SQLite 全无参语句合并为单个多语句命令一次往返。
+    /// SQLite 原生支持分号分隔多语句，驱动 prepare 循环逐条编译执行（含 CREATE TRIGGER 整体
+    /// 消费），<c>RecordsAffected</c> 跨语句累计（驱动源码 ExecuteNonQuery 语义核实）→ 返回
+    /// 契约保持，N 次往返压成 1 次。带参语句不合并（参数集合跨语句无归属）；混合形态与未知
+    /// 方言保持逐条路径（多语句支持面未验证）。不可合并返回 null。</summary>
+    private async ValueTask<int?> TryExecuteMergedParameterlessAsync(
+        List<(string Sql, IReadOnlyList<DbParameter> Parameters)> statements,
+        DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
+        if (TProvider.Dialect != SqlDialect.Sqlite || statements.Count <= 1)
+            return null;
+
+        foreach ((string _, IReadOnlyList<DbParameter> parameters) in statements)
+            if (parameters.Count != 0)
+                return null;
+
+        var mergedSql = new System.Text.StringBuilder();
+        for (int i = 0; i < statements.Count; i++)
+        {
+            if (i > 0) mergedSql.Append(";\n");
+            mergedSql.Append(statements[i].Sql);
+        }
+
+        await using DbCommand mergedCmd = connection.CreateCommand();
+        mergedCmd.Transaction = transaction;
+        mergedCmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
+        mergedCmd.CommandText = mergedSql.ToString();
+        return await mergedCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>回退：顺序执行（语句顺序 = 追加顺序，行为与分别 ExecuteAsync 等价）。
+    /// <para>L37（2026-09-25，极致优化）：循环外建一条命令复用——SQLite 本地 RTT≈0，命令
+    /// 新建/释放是回退路径的主要固定开销；驱动语句缓存按命令实例生效且 CommandText 同值
+    /// setter 短路（项15 探针实测），同文本语句免重编译。Clear + 克隆重加与逐条新建逐位等价。</para></summary>
+    private async ValueTask<int> ExecuteSequentiallyAsync(
+        List<(string Sql, IReadOnlyList<DbParameter> Parameters)> statements,
+        DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
         int total = 0;
+        await using DbCommand cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
         foreach ((string sql, IReadOnlyList<DbParameter> parameters) in statements)
         {
-            await using DbCommand cmd = connection.CreateCommand();
-            cmd.Transaction = transaction;
-            cmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
-            cmd.CommandText = sql;
+            if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
+                cmd.CommandText = sql;
+            cmd.Parameters.Clear();
             foreach (DbParameter parameter in parameters)
                 cmd.Parameters.Add(CloneParameter(parameter));
             total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);

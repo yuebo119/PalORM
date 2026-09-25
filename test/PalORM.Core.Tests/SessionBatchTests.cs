@@ -2,10 +2,11 @@ using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
-/// <summary>SessionBatch 的行为契约（B1）——SQLite 档（回退路径：无批量 API，顺序执行）。
+/// <summary>SessionBatch 的行为契约（B1）——SQLite 档（回退路径：无批量 API）。
 /// PG/MySQL 真 DbBatch 路径的契约在 PalORM.Integration.Tests.SessionBatchDialectTests。
 /// <para>钉住：① 语句真实生效；② 事务原子性（整批回滚）；③ 空批 no-op；
-/// ④ 空白语句 Append 期拒绝（ITM-745 同口径）。</para></summary>
+/// ④ 空白语句 Append 期拒绝（ITM-745 同口径）；⑤ 全无参语句合并单次多语句往返（L38，
+/// 2026-09-25）与带参/混合形态的逐条复用路径（L37）结果逐位等价。</para></summary>
 internal sealed class SessionBatchTests
 {
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
@@ -83,6 +84,66 @@ internal sealed class SessionBatchTests
             .Throws<ObjectDisposedException>();
         await Assert.That(() => batch.AppendRaw("CREATE TABLE batch_probe (id INTEGER)"))
             .Throws<ObjectDisposedException>();
+    }
+
+    [Test]
+    public async Task AppendRaw_AllParameterless_MergedExecution_SumsAffected()
+    {
+        // L38（2026-09-25）：全无参语句合并为单个多语句命令一次往返——效果与逐条等价：
+        // 全部生效、受影响行数跨语句累计（驱动 RecordsAffected 语义）。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+
+        using SessionBatch<SqliteProvider> batch = session.CreateBatch();
+        int affected = await batch
+            .AppendRaw("INSERT INTO batch_rows (id, v, tag) VALUES (1, 10, 'a')")
+            .AppendRaw("INSERT INTO batch_rows (id, v, tag) VALUES (2, 20, 'b')")
+            .AppendRaw("UPDATE batch_rows SET v = 11 WHERE id = 1")
+            .ExecuteNonQueryAsync();
+
+        await Assert.That(affected).IsEqualTo(3);
+        var rows = (await session.From<BatchRow>().ToListAsync()).OrderBy(static r => r.Id).ToList();
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(rows[0].V).IsEqualTo(11);
+        await Assert.That(rows[1].Tag).IsEqualTo("b");
+    }
+
+    [Test]
+    public async Task Mixed_ParameterizedAndRaw_ExecutesAllInOrder()
+    {
+        // L37/L38 混合形态：带参语句阻断合并 → 逐条复用路径，语句顺序 = 追加顺序。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+
+        using SessionBatch<SqliteProvider> batch = session.CreateBatch();
+        int affected = await batch
+            .AppendRaw("INSERT INTO batch_rows (id, v, tag) VALUES (1, 10, 'a')")
+            .Append($"INSERT INTO batch_rows (id, v, tag) VALUES ({2}, {20}, {"b"})")
+            .AppendRaw("UPDATE batch_rows SET v = 21 WHERE id = 2")
+            .ExecuteNonQueryAsync();
+
+        await Assert.That(affected).IsEqualTo(3);
+        var rows = (await session.From<BatchRow>().ToListAsync()).OrderBy(static r => r.Id).ToList();
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(rows[0].V).IsEqualTo(10);
+        await Assert.That(rows[1].V).IsEqualTo(21);
+    }
+
+    [Test]
+    public async Task MergedBatchInsideTransaction_RollsBackAllOnFailure()
+    {
+        // 合并路径与逐条路径同契约：事务内任一语句失败 → 整批回滚。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+
+        await Assert.That(async () => await session.WithTransaction(async ct =>
+        {
+            using SessionBatch<SqliteProvider> batch = session.CreateBatch();
+            await batch
+                .AppendRaw("INSERT INTO batch_rows (id, v, tag) VALUES (1, 1, 'ok')")
+                .AppendRaw("INSERT INTO nonexistent_table (x) VALUES (1)") // 第二条失败 → 整批回滚
+                .ExecuteNonQueryAsync(ct);
+            return true;
+        })).Throws<Exception>();
+
+        await Assert.That(await session.CountAsync<BatchRow>()).IsEqualTo(0);
     }
 }
 
