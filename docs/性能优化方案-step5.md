@@ -414,3 +414,35 @@
 所有性能项入库前按项目 PERF_MANAGED_DISCIPLINE 纪律执行：同会话交替配对 A/B（同配置自检报约 0 才信量具）→ 同负载复跑 ≥3 轮 → 分配与耗时双口径记录 → 优化后重录基线守住新水位。标 [推断] 的收益数字未实测，采纳前以实测为准；实测证伪的项从本文档划除并记录原因，不保留"理论收益"条目。
 
 事务可靠性项（P0-32、P1-33、P1-34、P2-37 至 P2-44）每项配回归测试，其中 P0-32 需覆盖 MySQL LOAD DATA 失败（网络中断与 COMMIT 超时两种注入）断言语义，P1-33 需补 PG 方言用例（SQLite 驱动测试覆盖不到该路径）。
+
+## 九、SQLite 极致优化批次执行记录（2026-09-25）
+
+> 触发：引擎探针（SQLite3MC 3.53.4 实跑）+ 驱动源码逐行 + 社区经验三方深挖后的 17 项清单。
+> 提交链：3551bd8（批次A/B/C）→ 批次D → 33c784d（批次E）→ ecc98d1（批次G）。测试基线：Core.Tests 421/421、SourceGen 202/202（快照更新 1 行，目检确认）、Integration SQLite 侧零失败（30 失败均为外部库连接超时的环境性失败）、SQLite AOT publish + 实跑通过。
+
+### 已落地
+
+| 项 | 内容 | 提交 |
+|----|------|------|
+| 1 | PRAGMA busy_timeout=5000（宽/窄分支共有）——并发 BUSY 引擎内等待，消上层 CTS+退避重试 | 3551bd8 |
+| 2 | PRAGMA journal_size_limit=67108864（文件库）——防 WAL 无界膨胀拖慢检查点 | 3551bd8 |
+| 4a | PRAGMA analysis_limit=400（宽/窄分支共有）——约束 optimize/ANALYZE 采样成本 | 3551bd8 |
+| 3 | 参数上限 999→32766（SqlLimits + SqliteProvider BulkContext）——探针实测引擎编译选项 MAX_VARIABLE_NUMBER=32766；多批测试用例行数同步提高保持跨批验证面 | 3551bd8 |
+| 8 | PL-2 惰性晋升扩展到 GetByKey——复用分支清参重绑走同一生成键绑定器（键类型转换语义逐位一致）；租户实体排除同 Update | 批次D |
+| 9 | SessionBatch 顺序回退单命令复用（L37）——循环外建一条，同文本语句经驱动语句缓存免重编译 | 33c784d |
+| 10 | SessionBatch 全无参语句合并单次多语句往返（L38）——驱动 RecordsAffected 跨语句累计（源码核实），返回契约保持；带参/混合/未知方言保持逐条 | 33c784d |
+| 13 | OwnedJson 读路径 GetFieldValue<byte[]> + Deserialize(ReadOnlySpan<byte>)（L45）——消每行 UTF-16 JSON string 分配与双重转码；TEXT 列字节语义探针实测 | ecc98d1 |
+| 5/6/7 | page_size / mmap_size / secure_delete 调优入口——经既有 SessionSetupSql 通道（Provider 初始化后执行可覆盖默认），XML doc 载明配方与安全取舍，不新增配置面 | 3551bd8 |
+
+### 探针证伪划除（不保留理论收益条目）
+
+- **L44 可空列单读（项12）**：`GetFieldValue<T?>` 读 NULL 抛 SqliteNullValueException（"The data is NULL at ordinal N"，探针实测 Microsoft.Data.Sqlite 11-rc）——IsDBNull 双读是驱动语义下的必需形态，不可单读。
+- **L35 批量 Prepare（项15）**：驱动 `SqliteCommand.CommandText` setter 同值短路（`if (value != _commandText)`，源码核实）+ 语句缓存按命令实例生效——同文本批次本就免重编译，显式 Prepare 无增益；文本变化批次（行数不同的尾批）重编译不可避免。
+- **命令复用写路径耗时收益**：探针实测同命令复用 vs 每次新建 1 万次 INSERT 仅差 0.5%（WAL 提交主导每操作成本）——复用的真实价值在分配/GC 与读路径（PL-2 原 A/B 的分配口径）。
+
+### 缓议登记（非静默跳过）
+
+- **P2-29 ToPageAsync 单往返（项14）**：SQLite 上 PerfHub KeysetPage P/ADO 已 1.03（平价），单往返无实测差距可收；改共享 SELECT 构建器为跨方言风险面。按本档"第四批观测优先"门槛，需专用 A/B 夹具实测后再裁。
+- **L33 PRAGMA 池复用跳过（项11）**：初始化 PRAGMA 已是单次往返批（v5.0 形态），探测读取本身即 1 次往返，成本 ≥ 收益，负优化；维持无条件批执行。
+- **大 BLOB 流式（项16）**：驱动 SqliteBlob/GetStream API 面已核实存在；暴露流式列读取是公共 API 语义变更，需 ADR + 三方言基准，归第三批设计评审。
+- **sqlite-vec 向量搜索（项17）**：v6.0 设计文档 Phase 3（P2），依赖 Phase 1 核心与 Phase 2 PG 前置；sqlite-vec 已发 0.1.9（2026-03，新增 DELETE 空间回收与 KNN 距离列约束分页），动工前须刷新设计文档的版本假设。
