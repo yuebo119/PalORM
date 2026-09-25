@@ -85,18 +85,29 @@ public sealed class SqliteProvider : IDbProvider
     /// 软删除 deleted_at 跨库混用时语义不同（ITM-326）。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
-    /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式 + v5.0 阶段 3.3 写入/读取 PRAGMA 调优。
+    /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式 + 写入/读取 PRAGMA 调优。
     /// 数据库文件被其他进程锁定时受调用方取消/超时约束。
-    /// <para><b>v5.0 阶段 3.3 PRAGMA 调优</b>（统一执行一次，单次往返）：
+    /// <para><b>PRAGMA 调优</b>（统一执行一次，单次往返）：
+    /// busy_timeout=5000（并发写下 BUSY 在引擎内等待至多 5s，替代上层重试的 CTS+退避循环；
+    /// 2026-09-25 引入）；
     /// synchronous=NORMAL（WAL 下安全，减少 fsync，写性能提升）；
     /// cache_size=-65536（64MB 页缓存，默认 2MB，读密集型提升）；
-    /// temp_store=MEMORY（临时表/索引走内存）；
-    /// wal_autocheckpoint=1000（WAL 自动检查点，默认即 1000，显式固定防部署漂移）。</para>
-    /// <para><b>v5.0 阶段 3.5 mmap_size 条件判断</b>：仅文件数据库追加 mmap_size=268435456（256MB
-    /// mmap I/O）。</para>
-    /// <para><b>v7.2.1 内存库分支收窄</b>：<c>:memory:</c> 库仅执行 foreign_keys 与 cache_size——
-    /// journal_mode=WAL / synchronous(fsync) / wal_autocheckpoint(检查点) / mmap_size 对无文件
-    /// I/O 的内存库均无语义（SQLite 静默返回不报错但徒增误导）；temp_store 本就以内存为目标。</para></summary>
+    /// temp_store=MEMORY（临时表/索引走内存；引擎编译选项 TEMP_STORE=2 已内置，此处显式
+    /// 固定防第三方引擎漂移）；
+    /// journal_size_limit=67108864（64MB 上限防 WAL 无界膨胀拖慢检查点；2026-09-25 引入）；
+    /// wal_autocheckpoint=1000（WAL 自动检查点，默认即 1000，显式固定防部署漂移）；
+    /// analysis_limit=400（约束后续 PRAGMA optimize/ANALYZE 的采样成本，官方推荐值）。</para>
+    /// <para><b>mmap_size=268435456</b>（256MB mmap I/O）仅文件数据库追加。</para>
+    /// <para><b>内存库分支收窄</b>：<c>:memory:</c> 库仅执行 foreign_keys / busy_timeout /
+    /// cache_size / analysis_limit——journal_mode=WAL / synchronous(fsync) / wal_autocheckpoint
+    /// (检查点) / journal_size_limit / mmap_size 对无文件 I/O 的内存库均无语义（SQLite 静默
+    /// 返回不报错但徒增误导）；temp_store 本就以内存为目标。</para>
+    /// <para><b>进阶调优入口</b>（建库参数/内存足迹/安全取舍，经既有
+    /// <see cref="DbOptions.SessionSetupSql"/> 通道，Provider 初始化后执行、可覆盖上述默认）：
+    /// <c>PRAGMA page_size=16384</c>（批量/大行负载，须在库首次创建前生效——对既有库为静默
+    /// no-op，改页大小需 VACUUM）；<c>PRAGMA mmap_size=1073741824</c>（读密集型提至 1GB）；
+    /// <c>PRAGMA secure_delete=OFF</c>（删除密集负载消除删页覆写写放大——引擎默认 ON，
+    /// 关闭属安全取舍：已删内容不再清零，加密库上意味着 forensic 残留，请按威胁模型评估）。</para></summary>
     public static async Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(connection);
@@ -130,11 +141,12 @@ public sealed class SqliteProvider : IDbProvider
         // 整体失败。只读库本就不写入，WAL/synchronous/checkpoint 类治理无语义；
         // foreign_keys 与 cache_size 是纯连接态设置，只读下安全。
         command.CommandText = isInMemory || isReadOnly
-            ? "PRAGMA foreign_keys = ON; PRAGMA cache_size=-65536"
-            : "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; "
+            ? "PRAGMA foreign_keys = ON; PRAGMA busy_timeout=5000; PRAGMA cache_size=-65536; PRAGMA analysis_limit=400"
+            : "PRAGMA foreign_keys = ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; "
               + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
               + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000; "
-              + "PRAGMA mmap_size=268435456";
+              + "PRAGMA journal_size_limit=67108864; "
+              + "PRAGMA mmap_size=268435456; PRAGMA analysis_limit=400";
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -166,7 +178,9 @@ public sealed class SqliteProvider : IDbProvider
     public static bool IsUniqueViolation(Exception exception)
         => exception is SqliteException { SqliteErrorCode: 19, SqliteExtendedErrorCode: 2067 or 1555 };
 
-    /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 999。</summary>
+    /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 32766
+    /// （引擎编译选项 <c>MAX_VARIABLE_NUMBER=32766</c>，2026-09-25 探针实测；999 旧值在同
+    /// 数据量下最多多 33 倍语句往返，见 <see cref="SqlLimits.MaxBindParametersFor"/>）。</summary>
     /// <para>r6-N2：隔离级别参数仅为接口形态同步（SQLite 事务隔离单一 Serializable，
     /// BeginTransactionAsync 忽略隔离参数差异；r9-S4：本调用点走 BulkContext 默认值（ReadCommitted），非透传——行为中性，措辞订正）。</para>
     public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
@@ -177,7 +191,7 @@ public sealed class SqliteProvider : IDbProvider
             conn, transaction, entities,
             new BulkContext(
                 batchSize,
-                MaxParametersPerStatement: 999,
+                MaxParametersPerStatement: 32766,
                 QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
             ct);
 }

@@ -266,6 +266,11 @@ public sealed class ProviderTests
             await Assert.That(await session.ScalarAsync<long>($"PRAGMA cache_size")).IsEqualTo(-65536);   // 64MB
             await Assert.That(await session.ScalarAsync<long>($"PRAGMA temp_store")).IsEqualTo(2);        // MEMORY
             await Assert.That(await session.ScalarAsync<long>($"PRAGMA wal_autocheckpoint")).IsEqualTo(1000);
+            // 2026-09-25 极致优化批次新增：busy_timeout（并发 BUSY 引擎内等待）、
+            // journal_size_limit（WAL 防 64MB 无界膨胀）、analysis_limit（optimize/ANALYZE 采样成本约束）
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA busy_timeout")).IsEqualTo(5000);
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA journal_size_limit")).IsEqualTo(67108864);
+            await Assert.That(await session.ScalarAsync<long>($"PRAGMA analysis_limit")).IsEqualTo(400);
         }
         finally
         {
@@ -284,13 +289,16 @@ public sealed class ProviderTests
     [Test]
     public async Task SqliteConnection_Pragmas_InMemoryBranch_StaysNarrow()
     {
-        // v7.2.1 收窄口径锁定：:memory: 库只跑 foreign_keys + cache_size，
+        // v7.2.1 收窄口径锁定：:memory: 库只跑 foreign_keys + busy_timeout + cache_size + analysis_limit，
         // journal_mode 保持默认 memory（非 WAL）——防"宽窄分支合一"漂移。
+        // （2026-09-25：busy_timeout/analysis_limit 属纯连接态设置，宽窄两分支共有。）
         await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = "Data Source=:memory:" });
         await Assert.That(await session.ScalarAsync<long>($"PRAGMA foreign_keys")).IsEqualTo(1);
         await Assert.That(await session.ScalarAsync<long>($"PRAGMA cache_size")).IsEqualTo(-65536);
         await Assert.That(await session.ScalarAsync<string>($"PRAGMA journal_mode")).IsEqualTo("memory");
+        await Assert.That(await session.ScalarAsync<long>($"PRAGMA busy_timeout")).IsEqualTo(5000);
+        await Assert.That(await session.ScalarAsync<long>($"PRAGMA analysis_limit")).IsEqualTo(400);
     }
 
     [Test]

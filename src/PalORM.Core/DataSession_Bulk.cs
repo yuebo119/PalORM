@@ -62,7 +62,8 @@ public partial class DataSession<TProvider>
             TProvider.CurrentTimestampExpression, tenantFilter);
         // BULK-001（2026-09-23）：本路径每批一次独立往返，批大小取"方言参数上限"与"单批行数上限"
         // 的较小者。原用 InClauseBatchSize（500，单语句内拼 IN 片段的约束）把 10 万键放大成 200 次往返；
-        // PG/MySQL 现为 5000（20 次），SQLite 受 999 参数上限约束（100 次）。
+        // 2026-09-25 SQLite 参数上限 999→32766（引擎探针实测 MAX_VARIABLE_NUMBER=32766）后
+        // 三方言均为 5000 行/批（20 次）。
         int batchSize = Math.Min(SqlLimits.MaxBindParametersFor(TProvider.Dialect), SqlLimits.MaxRowsPerBatch);
         // 满批占位符名在批大小不变时逐位相同——预建一次，末批另建
         string[] fullBatchPlaceholders = BuildPlaceholderNames(TProvider.GetParameterPlaceholder, batchSize);
@@ -627,7 +628,8 @@ public partial class DataSession<TProvider>
         // InsertCoreAsync 的物化/回填无法在多值形态下按行还原）；非默认键行
         // （bulk-merge 的主流场景：既有键的重复执行更新）改为**多行 UPSERT**，
         // 每批一条语句。原实现 N 行 = N 次往返（每行一次 SaveCoreAsync），
-        // 10K 行在远程库（RTT ~1ms）约 10s，集合化后约 12 条语句（900 参数/批上限）。
+        // 10K 行在远程库（RTT ~1ms）约 10s，集合化后 PG 约 12 条语句（65535 参数/批）、
+        // SQLite 约 7 条（32766 参数/批，20 列实体 1638 行/批）。
         // 单行语义保持：ON CONFLICT/ON DUPLICATE KEY 与 SaveCoreAsync 的单行
         // upsert 用同一谓词列集（UpsertColumns，含 PK）；[ConcurrencyCheck] 实体
         // 维持逐条路径——SaveCoreAsync 会以同消息拒绝（UPSERT 无法尊重乐观锁，ITM-503）。
@@ -687,8 +689,9 @@ public partial class DataSession<TProvider>
 
     /// <summary>多行 UPSERT 分批执行——PG/SQLite 走 ON CONFLICT (...) DO UPDATE SET c=excluded.c，
     /// MySQL 走 ON DUPLICATE KEY UPDATE c=VALUES(c)（与单行 upsert 的既有 SQL 形态一致）。
-    /// <para><b>批次上限</b>：每语句参数总数钳制在 900（SQLite 默认变量上限 999 的安全余量；
-    /// PG/MySQL 上限更高但不依赖方言探测——统一保守值，批数已足够少）。</para>
+    /// <para><b>批次上限</b>：每语句参数总数按方言取上限（SQLite 32766——引擎编译选项实测；
+    /// PG/MySQL 65535），再与"单批行数上限 × 列数"取较小者约束语句文本规模
+    /// （2026-09-25 前为硬编码 900，BULK-001 修正为方言感知）。</para>
     /// <para><b>批内重复主键的语义边界（如实登记）</b>：单行逐条形态下后行静默覆盖前行
     /// （last-wins）。集合化后 MySQL 保持 last-wins（ON DUPLICATE KEY 天然如此）；
     /// PG/SQLite 对同一语句内影响同一行会报错（PG: "cannot affect row a second time"）。
@@ -707,6 +710,7 @@ public partial class DataSession<TProvider>
         int columnCount = metadata.UpsertColumns.Count;
         // BULK-001（2026-09-23）：按方言取参数上限——原硬编码 900（SQLite 999 的余量）把 PG/MySQL
         // 的 65535 上限钳到 900：20 列实体 45 行/批、10K 行 223 次往返（同上限只需 4 批）。
+        // 2026-09-25 SQLite 侧 999→32766（引擎探针实测 MAX_VARIABLE_NUMBER=32766）。
         // 再叠加单批行数上限约束语句文本规模。
         int maxParametersPerStatement = Math.Min(
             SqlLimits.MaxBindParametersFor(TProvider.Dialect),
