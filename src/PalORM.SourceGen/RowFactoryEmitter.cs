@@ -132,8 +132,13 @@ internal static class RowFactoryEmitter
         }
 
         // 字符串 OwnedJson 是原始 JSON；对象 OwnedJson 仅走源生成 JsonTypeInfo<T>。
+        // L45（2026-09-25，极致优化）：GetFieldValue<byte[]> + Deserialize(ReadOnlySpan<byte>)
+        // 替代 GetString + string 重载——原形态每行先分配整段 UTF-16 JSON string，STJ 再从
+        // string 转码 UTF-8 缓冲解析（双重缓冲）；现形态直接从驱动取 UTF-8 字节解析（探针
+        // 实测 Microsoft.Data.Sqlite 对 TEXT 列 GetFieldValue<byte[]> 返回 UTF-8 字节，与
+        // 写路径 Serialize→TEXT 的存储逐位对应）。NULL 列两种形态都会抛（错误路径，语义不宽）。
         if (col.IsOwnedJson && col.ClrTypeName is not "string" and not "global::System.String")
-            return $"global::System.Text.Json.JsonSerializer.Deserialize(r.GetString({ordinal}), CommandFactory_{generatedTypeSuffix}.JsonTypeInfo_{col.PropertyName})!";
+            return $"global::System.Text.Json.JsonSerializer.Deserialize(new global::System.ReadOnlySpan<byte>(r.GetFieldValue<byte[]>({ordinal})), CommandFactory_{generatedTypeSuffix}.JsonTypeInfo_{col.PropertyName})!";
 
         return GetRawReadExpression(
             col.ProviderClrTypeName,
