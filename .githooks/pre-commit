@@ -9,4 +9,18 @@ bash "$(git rev-parse --show-toplevel)/scripts/secret-guard.sh" || exit 1
 echo "── pre-commit: stub-check ──"
 bash "$(git rev-parse --show-toplevel)/scripts/stub-check.sh" || exit 1
 
+# .ai 系统一致性（2026-09-25 起）：lessons/test 的"计数与标题声明"必须等于实测。
+# 这类漂移已发生过 3 次（lessons 标题停 v7.14、§II 声明 93/1-B86 实测 98、
+# test 补充节标题停 8~12 实到 19），人工核不住，故机械化到每次提交。
+# .ai/ 是 gitignored 本地工具，未克隆时无条件跳过（条件执行，不因缺文件报错）。
+# --fast 只跑纯文本检查：跳过 V14（跑 9 条防线脚本会与并发测量互斥）与
+# V17（变异探针会在 src/ 临时植入 .cs，与并发构建互斥）。
+AI_VERIFY="$(git rev-parse --show-toplevel)/.ai/scripts/verify-ai-system.sh"
+if [ -f "$AI_VERIFY" ]; then
+    echo "── pre-commit: .ai 系统一致性（--fast）──"
+    bash "$AI_VERIFY" --fast || exit 1
+else
+    echo "── pre-commit: .ai 系统一致性（跳过：无 .ai/）──"
+fi
+
 exit 0
