@@ -2,6 +2,26 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·工具链] — PerfHub `latest.json` 补两条守卫：子集批次与零真测量批次
+
+> 变更范围：`bench/PalORM.PerfHub/Program.cs`（写 latest 的判据）+ 还原被污染的指针 + 三份失败批次留档。
+
+规范 §6 写的是"带子集标记的批次不顶 `latest-<夹具>.json`"，但两侧实现只有一侧在执行：
+信封侧（`PerfResultWriter`）按 `IsSubsetLabel(label) && hasData` 判，原始侧（PerfHub 写
+`bench/perfhub/results/latest.json`）**只排 `quick`**——于是 `ab/…` 批次会把"当前数字"
+换成单方言单档的读数，与规范文字直接冲突（三方一致缺口）。
+
+第二个缺口是**零真测量**：2026-09-25 PG+MySQL 连接握手双双超时，一次跑只剩 `DataGen`
+两项却仍写了 `latest.json`——读到它的人以为"当前数字 = 0 项"。这正是 B86「空批次顶
+latest」当时**只修了信封侧**的那半个。
+
+现在两侧同一真源：`!IsSubsetLabel(label) && results.Exists(m => m.Implementation != "DataGen")`。
+不满足只打一行说明；历史文件照旧落盘（跑过什么包括失败都是事实，只是不该被读成当前状态）。
+
+**实测验收**：带子集 label 的失败重跑 `exit=1`、`latest.json` md5 前后一致、打印
+`跳过 latest（零真测量 label=…）`；被污染的指针已还原到最后一个可引用批次（362 项、
+2026-09-24 23:12:14），与 `bench/results/latest-perfhub.json` 一致。
+
 ## [5.6.0] — 性能大轮（性能轮一~九 · PL-1~4）+ 统一性能测试系统：写路径 −53%、UPSERT 分配 −28%、PG COPY 比值归位
 
 > 变更规模：v5.5.1 后 204 个提交 · 19 轮分节明细见下（各轮子节保留原标题内容）

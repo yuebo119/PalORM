@@ -874,10 +874,22 @@ internal static class Program
         string json = JsonSerializer.Serialize(run, PerfJsonContext.Default.PerfRun);
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         File.WriteAllText(Path.Combine(dir, $"history-{stamp}.json"), json);
-        // 冒烟批次不顶 latest：否则 HTML 报告的"当前数字"会变成 quick 值，而它不可引用
-        if (!label.Contains("quick", StringComparison.OrdinalIgnoreCase))
+        // latest 只指向"可引用的最近状态"（规范 §6 + B86）——判据与信封侧
+        // PerfResultWriter.IsSubsetLabel 同一真源。此处原先只排 quick，两个缺口都实测踩到：
+        //   ①子集批次（ab/、filtered、gate-set…）会把"当前数字"换成单方言单档的读数，
+        //     与规范 §6「带这些标记的批次不顶 latest」**文字冲突**（三方一致缺口）
+        //   ②零真测量批次（方言全失败）会顶上去——2026-09-25 实测 PG+MySQL 连接握手超时，
+        //     只剩 DataGen 两项却顶了 latest.json；B86 的"空批次顶 latest"当时只修了信封侧
+        // 历史文件照旧落盘：跑过什么、包括失败，都是事实，只是不该被读成"当前状态"。
+        bool hasRealMeasurement = results.Exists(static m => m.Implementation != "DataGen");
+        if (!PerfResultWriter.IsSubsetLabel(label) && hasRealMeasurement)
         {
             File.WriteAllText(Path.Combine(dir, "latest.json"), json);
+        }
+        else
+        {
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"[PerfHub] 跳过 latest（{(hasRealMeasurement ? $"子集 label={label}" : $"零真测量 label={label}")}）：保留上一个可引用批次"));
         }
 
         Console.WriteLine($"[PerfHub] 原始数据已写入 bench/perfhub/results/history-{stamp}.json");
