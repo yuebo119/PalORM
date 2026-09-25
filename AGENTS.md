@@ -17,7 +17,7 @@
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
 | **最高** | `.editorconfig` | SonarAnalyzer 39 条规则（P0+P1 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
-| **高** | `.ai/lessons.md` | 规范系统手册 v7.16（110 缺陷：A1-A7 + B1-B103 + XI 性能测量纪律 SOP，本地工具，不入仓库） |
+| **高** | `.ai/lessons.md` | 规范系统手册 v7.16（111 缺陷：A1-A7 + B1-B104 + XI 性能测量纪律 SOP，本地工具，不入仓库） |
 | **高** | `.ai/test/prompt.md` | 测试规范系统 v1.1（18 铁律 + 19 缺陷，本地工具，不入仓库） |
 | **高** | `docs/发布规范.md` | NuGet 发布流程 SOP（v5.0.0 实测，含 8 条实践教训） |
 | **中** | `docs/编码规范.md` §18 | SonarAnalyzer 守护层规则文档化 |
@@ -73,7 +73,7 @@
 - B28 特性推荐偏置缺陷（参照系偏置：用 EF Core 全功能面衡量 micro-ORM）— 「特性推荐四问」SOP：推荐前必过(1) ORM 职责吗？(2) AOT 可行吗？(3) 客户自己做更好吗？(4) 真必需吗？且必查 docs/adr/ 既有 ADR + .ai/lessons.md B 系列 + grep 目标 API 已存在性
 - B29 Interceptor 实施工程化缺陷（API 名称/位置推断错误）— PoC 驱动开发 SOP：实施前先写最小 PoC 验证关键 API 可用性（1 天止损），API 以编译错误信息为准不以记忆为准
 
-**PL 落地会话纪律（B92-B103，2026-09-25 实测，真源 `.ai/lessons.md` AJ 节）**：
+**PL 落地会话纪律（B92-B104，2026-09-25 实测，真源 `.ai/lessons.md` AJ 节）**：
 - B92 A/B 脚本运行期间禁止构建任何链接同一批源文件的项目——否则探针拿到另一臂的二进制（本会话据此误判"有退化"，多做一轮返工）
 - B93 提交前 grep 一个**唯一标识符**校验 HEAD 内容确实含本次声称的改动；`git status` 干净 ≠ 内容对（后台切文件的作业未结束时禁止提交）
 - B94 A/B 批次只靠 `label` 区分，**绝不信信封 `Commit` 字段**（就地 `git checkout <提交> -- <文件>` 切臂时 HEAD 不变）；label 必须带 `IsSubsetLabel` 认的前缀，否则单方言/单测项批次会顶掉 `latest-<夹具>.json`
@@ -85,6 +85,7 @@
 - B100 地板不是恒定标尺：三层判据稳定度**分配 > 绝对耗时 > 同轮比值 > 跨轮比值**；地板自身慢 2~5.4× 时该轮 P/F 全作废，判定改用绝对耗时与分配
 - B101 新增测试的 `CREATE TABLE` 表名从实体 `[Table]` 注解抄并跑前 grep 核对；`Cache=Shared` 内存库跨会话持一条 keeper 连接
 - B102 探针需要 internal 实现时**复刻而非加 `InternalsVisibleTo`**，但复刻必须**前置逐字节比对钉住**（校验失败即差源已定位）
+- B104 要看脚本退出码就**别把它管进 `tail`/`grep`**（`bash s.sh | tail` 恒返回 0，`set -e` 的失败被外层屏蔽）——实测 A/A 脚本第一轮就中止、harness 却报 "completed (exit code 0)"；兜底是**分析前先核对预期批次数与项数**（本例靠"说好 2 轮只出 1 轮、且仅 2 项 health=unknown"发现）。性能批次调用统一写 `bash s.sh > log 2>&1; echo exit=$?`
 
 **R0 审查前置三核实**（已提升到全局）：核实 summary / 核实 diff / 核实 API
 
