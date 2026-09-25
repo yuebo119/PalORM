@@ -107,10 +107,11 @@ public sealed partial class DataSession<TProvider>
     /// <summary>标量值到 CLR 类型的归一转换——解包可空泛型后统一走 Convert.ChangeType。
     /// ITM-533：InvariantCulture 避免线程区域性影响数值/日期解析。
     /// ITM-711：T 为可空值类型（如 int?）时直接转换会抛 InvalidCastException（已实测
-    /// Convert.ChangeType(5L, typeof(int?))）；须先取底层类型。ScalarAsync/MaxAsync/MinAsync 共用本助手。</summary>
+    /// Convert.ChangeType(5L, typeof(int?))）；须先取底层类型。ScalarAsync/MaxAsync/MinAsync 共用本助手。
+    /// 底层类型取用 .NET 11 新增的 Type.GetNullableUnderlyingType() 实例方法（与 Nullable.GetUnderlyingType 等价）。</summary>
     private static T ConvertScalar<T>(object value)
         => (T)Convert.ChangeType(
-            value, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T),
+            value, typeof(T).GetNullableUnderlyingType() ?? typeof(T),
             System.Globalization.CultureInfo.InvariantCulture);
 
     // 说明：保存点入口在 DataSession.Transactions.cs（SavepointAsync/RollbackToAsync）——

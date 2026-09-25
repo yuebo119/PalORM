@@ -65,9 +65,10 @@ public sealed class StoredProcBuilder
         DbParameter p = _paramFactory(name, DBNull.Value);
         p.Direction = ParameterDirection.Output;
         // 设置输出参数类型以帮助 ADO.NET provider 正确推断。
-        // ITM-787(r21)：Nullable.GetUnderlyingType 解包——GetOutputValue<T> 支持可空泛型，
+        // ITM-787(r21)：可空泛型解包（.NET 11 起用 Type.GetNullableUnderlyingType 实例方法）——
+        // GetOutputValue<T> 支持可空泛型，
         // 声明侧 typeof(T)== 链不识别 int?/long? 等会静默不设 DbType（两侧能力不对称）。
-        Type effectiveType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        Type effectiveType = typeof(T).GetNullableUnderlyingType() ?? typeof(T);
         if (effectiveType == typeof(int)) p.DbType = DbType.Int32;
         else if (effectiveType == typeof(long)) p.DbType = DbType.Int64;
         else if (effectiveType == typeof(string)) p.DbType = DbType.String;
@@ -97,7 +98,7 @@ public sealed class StoredProcBuilder
         // （如 int 输出参数回填 long/decimal），直接 (T?) 强转会抛 InvalidCastException。
         if (p.Value is null or DBNull) return default;
         if (p.Value is T t) return t;
-        Type target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        Type target = typeof(T).GetNullableUnderlyingType() ?? typeof(T);
         // ITM-729(r20)：Convert.ChangeType 不支持 Guid（string 回填 Guid 输出参数会抛
         // InvalidCastException）——显式补 Guid 分支，与"宽容拆箱"文档承诺一致。
         if (target == typeof(Guid))
