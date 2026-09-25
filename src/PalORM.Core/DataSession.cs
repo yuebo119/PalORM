@@ -541,8 +541,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         primary.Data[$"PalORM.CleanupException{primary.Data.Count}"] = exception;
     }
 
-    /// <summary>PL-2：释放晋升后的单行 CRUD 复用命令。首个异常直接抛出（由 DisposeCoreAsync 的连接
-    /// 清理 catch 记入主异常链），后续异常挂其 <see cref="Exception.Data"/> 不丢弃。</summary>
+    /// <summary>PL-2：释放晋升后的单行 CRUD 复用命令（写路径 + GetByKey 读路径，2026-09-25 扩展）。
+    /// 首个异常直接抛出（由 DisposeCoreAsync 的连接清理 catch 记入主异常链），后续异常挂其
+    /// <see cref="Exception.Data"/> 不丢弃。</summary>
     private async Task DisposeReusableCrudCommandsAsync()
     {
         Exception? primary = null;
@@ -554,6 +555,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         if (_reusableUpdate is { } update)
         {
             try { await update.Command.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
+        }
+        if (_reusableGetByKey is { } getByKey)
+        {
+            try { await getByKey.Command.DisposeAsync().ConfigureAwait(false); }
             catch (Exception exception) { RecordCleanupException(ref primary, exception); }
         }
         if (primary is not null)

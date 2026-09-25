@@ -127,6 +127,10 @@ public sealed partial class DataSession<TProvider>
     //
     // 为什么 Update 排除租户实体：BindDefaultFilterParameters 每次调用新加一个租户参数，
     // 复用会让参数集合无界增长；且 _tenantId 可经 WithTenant 中途变更。租户实体走原路径。
+    //
+    // PL-2 扩展（2026-09-25）：GetByKey 单行读走同一惰性晋升模式（TryAcquireGetByKeyCommand）。
+    // 读路径无 WAL 提交成本，命令新建/释放 + 驱动重编译在每操作里占比更高（GetAsync P/ADO
+    // 1.19、分配 +90%，2026-09-24 批）；租户实体与防御性参数数 ≠ 1 的形态走新建路径。
 
     /// <summary>同一 (实体类型, 操作) 第几次调用才开始缓存命令——低于此次数走新建路径。</summary>
     private const int CommandReusePromotionThreshold = 3;
@@ -137,10 +141,15 @@ public sealed partial class DataSession<TProvider>
     /// <summary>会话级单行 UPDATE 的命令/参数复用槽。</summary>
     private ReusableCrudCommand? _reusableUpdate;
 
-    /// <summary>INSERT / UPDATE 各自已服务过的同形态写操作数（惰性晋升的判据）。</summary>
+    /// <summary>会话级单行按主键读（GetAsync）的命令/参数复用槽（PL-2 扩展，2026-09-25）。</summary>
+    private ReusableCrudCommand? _reusableGetByKey;
+
+    /// <summary>INSERT / UPDATE / GetByKey 各自已服务过的同形态操作数（惰性晋升的判据）。</summary>
     private int _insertWriteOps;
 
     private int _updateWriteOps;
+
+    private int _getByKeyReadOps;
 
     /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。</summary>
     private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool);
@@ -225,6 +234,50 @@ public sealed partial class DataSession<TProvider>
         metadata.BindUpdate(cmd, entity);
         _reusableUpdate?.Command.Dispose();
         _reusableUpdate = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
+        return cmd;
+    }
+
+    /// <summary>取可复用的单行按主键读命令并重绑键参数（PL-2 扩展，2026-09-25）。
+    /// <para>晋升阈值与租户排除逻辑同 <see cref="TryAcquireInsertCommand"/>：租户实体排除
+    /// （<see cref="BindDefaultFilterParameters"/> 每次新增租户参数 + WithTenant 可中途变更）。
+    /// 复用分支清参后经 <see cref="BindGeneratedKeyParameter"/> 重绑——与新建路径同一绑定器、
+    /// 同一键类型转换语义（KeyConversionTests 契约），参数集合形态逐位一致。</para>
+    /// <para><paramref name="commandText"/> 与新建路径同源（GetGetByKeySql 缓存）；本方法只
+    /// 负责复用判定与键值绑定。返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放；
+    /// 读路径的 <see cref="DbDataReader"/> 由调用方 await using 释放——释放前不触碰本命令。</para></summary>
+    private DbCommand? TryAcquireGetByKeyCommand<T>(string commandText, object key)
+        where T : class, new()
+    {
+        if (HasTenantFilter<T>())
+            return null;
+
+        if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T))
+        {
+            DbCommand reused = reusable.Command;
+            // 事务与超时可随 WithTransaction/WithTimeout 中途变更，每次调用重设
+            reused.Transaction = GetActiveTransaction();
+            reused.CommandTimeout = _options.CommandTimeoutSeconds;
+            if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
+                reused.CommandText = commandText;
+            // 清参重绑而非裸设 Value——生成键绑定器含键类型转换（Guid→TEXT、装箱整数
+            // Convert.ToInt64 等，KeyConversionTests 契约），裸设会绕过转换改变绑定类型；
+            // 每次仅付 1 个 SqliteParameter 分配，仍远低于新建命令路径
+            reused.Parameters.Clear();
+            BindGeneratedKeyParameter<T>(reused, key);
+            return reused;
+        }
+
+        _getByKeyReadOps++;
+        if (_getByKeyReadOps < CommandReusePromotionThreshold)
+            return null;
+
+        DbCommand cmd = CreateCommand();
+        cmd.CommandText = commandText;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        BindGeneratedKeyParameter<T>(cmd, key);
+        BindDefaultFilterParameters<T>(cmd);
+        _reusableGetByKey?.Command.Dispose();
+        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
         return cmd;
     }
 
@@ -555,11 +608,24 @@ public sealed partial class DataSession<TProvider>
         // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）
         return await ExecuteReadPipelineAsync(async token =>
         {
-            await using DbCommand cmd = CreateCommand();
             string filter = GetDefaultFilterFragment<T>();
             // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
-            cmd.CommandText = GetGetByKeySql<T>(columnNames, tableName, filter,
+            string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
                 HasTenantFilter<T>(), _ignoreFilters);
+
+            // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
+            // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
+            // 按命令实例生效，换命令即重编译）。
+            DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key);
+            if (reused is not null)
+            {
+                await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
+                return await reusedReader.ReadAsync(token).ConfigureAwait(false)
+                    ? ((Func<DbDataReader, T>)factory)(reusedReader) : default;
+            }
+
+            await using DbCommand cmd = CreateCommand();
+            cmd.CommandText = commandText;
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
             BindDefaultFilterParameters<T>(cmd);
