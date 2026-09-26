@@ -38,13 +38,9 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
     /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, global::InheritedEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.Int64;
         parameters[paramOffset + 0].Value = (object)entity.Id;
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 1].Value = (object)entity.Name;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 2].Value = (object)entity.CreatedBy;
-        parameters[paramOffset + 3].DbType = global::System.Data.DbType.DateTimeOffset;
         parameters[paramOffset + 3].Value = (object)entity.CreatedAt;
     }
 
@@ -60,13 +56,9 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, global::InheritedEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 0].Value = (object)entity.Name;
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 1].Value = (object)entity.CreatedBy;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.DateTimeOffset;
         parameters[paramOffset + 2].Value = (object)entity.CreatedAt;
-        parameters[paramOffset + 3].DbType = global::System.Data.DbType.Int64;
         parameters[paramOffset + 3].Value = (object)entity.Id;
     }
 

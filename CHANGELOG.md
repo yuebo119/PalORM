@@ -2,15 +2,17 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] — PostgreSQL 极致化：参数占位零分配 + BulkDelete 参数转移 + 全标量显式 DbType（COPY null 列慢路径根因修复）
+## [未发布] — PostgreSQL 极致化：参数占位零分配 + BulkDelete 参数转移 + 全标量显式 DbType + COPY 类型缓存（含 null 列慢路径根因修复与 A/B 协议修正）
 
-> 变更范围：`PalORM.Core`（IDbProvider / DataSession_Bulk）+ `PalORM.SourceGen`（CommandFactoryEmitter）。执行账本与探针证据见 `docs/性能优化方案-step6-pg.md`。
+> 变更范围：`PalORM.Core`（IDbProvider / DataSession_Bulk）+ `PalORM.SourceGen`（CommandFactoryEmitter）+ `PalORM.PostgreSql`（PostgreSqlProvider）。执行账本与探针证据见 `docs/性能优化方案-step6-pg.md`。
 
 - **参数占位符零分配（S1）**：`GetParameterPlaceholder` 默认实现改走 `ParameterNameCache` 预建表，原插值形态在 BulkDelete 满批一次生成 5000 个新字符串；输出逐字节相同（`string.Concat("@p", i)`），三方言同受益。
 - **BulkDelete 参数转移（S2）**：中转参数按批内序号改名后转移进目标集合，不再每 key 重建参数对象（Clear/RemoveAt 不移交参数所有权，真库探针实证执行与复用均正确）；每 key 省 1 个 NpgsqlParameter + 1 次装箱 + Provider DbType switch。MySqlConnector Add 时重名校验的重名规避形态不变。
 - **全标量显式 DbType（S3）**：SourceGen binder（建参与池两条线）按 Provider CLR 类型 emit `DbType`，覆盖 18 组标量（原仅 byte[]→Binary）。修复真库探针实证的根因：`NpgsqlParameter.NpgsqlDbType` getter 对未显式设类型的参数每读一次重新推断（330ns/读），且 DBNull 值落 `Unknown`，PG COPY 每行每列一次读取使可空列走驱动慢路径（实测 null 列 261.5ms vs 显式形态 6.6ms，40~90×）；同时修 ITM-527（整列全 null 无值可推断）。未覆盖类型（char/TimeSpan/enum/对象型 OwnedJson）保持原推断路径。
+- **COPY 类型缓存与 emit 对称性（PG-4）**：`WriteRow` 每单元格读 `NpgsqlDbType` getter（31ns/读）改为每次 `BulkInsertAsync` 采样一次每列类型（类型是列属性非单元格属性）；显式 DbType 收敛到"有消费方或每操作一次"的路径——INSERT 池与单行 binder 保留（COPY 读取方 + ITM-527 + R5 推断确定性），Update/Upsert 池恢复 S3 前形态（每行每列重绑、无消费方、驱动从 Value 推断）。探针四：`DbType` setter 1.8ns/次、设 DbType 后 getter 31ns/读、`DBNull + DbType.Int32 → Integer` 真库执行验证通过。
+- **A/B 协议修正（顺序交替）**：首批固定顺序（每轮 base→opt）下 opt 固定占批内后段，远端共享库时段劣化全记到 opt 账上（未改代码的 Count/KeysetPage 假劣化 +27%/+23%、BulkUpdate 假劣化 +34%）；改奇数轮 base 先、偶数轮 opt 先后，BulkUpdate/Upsert 回平、BulkDelete 的"退化"反现真赢。同批 ADO 归一不能替代顺序交替（ADO 臂也在批内前段）。
 - **划除（实测证伪，留档不保留理论收益）**：显式 PrepareAsync（PG 远端库 RTT ~556µs 下 SELECT1 ratio 0.96 / JOIN 0.90，parse 收益被 RTT 淹没，自动预编译旋钮已覆盖）；GSS 协商关闭默认化（只削 149ms 长尾，属安全默认变更，改文档化配方）；synchronous_commit=off 批量路径（数据安全取舍须 opt-in，且夹具每批 1 COMMIT 收益上限小）。
-- **A/B 验证**（5 轮交替，base=0d15da5 独立 worktree，opt=本变更，PG 18.4 真库 20000 档）：分配（确定性口径）BulkInsert/TxBulkInsert 8.50→5.28MB（−38%）、BulkDelete 11.27→7.44MB（−34%），其余持平；时延 BulkInsert 中位 −15%（5 轮 4 负）。远端共享库会话级负载漂移致第 2 轮起时间读数失真（未改代码的读操作同步 +14~20% 为污染证据），未发现可归因于本次改动的退化；明细与污染分析见 `docs/性能优化方案-step6-pg.md` §五。
+- **A/B 验证**（顺序交替 4 轮，base=0d15da5 worktree，opt=本变更，PG 18.4 真库 20000 档）：分配（确定性口径）BulkInsert/TxBulkInsert 8.48→5.27MB（−38%）、BulkDelete 11.25→7.40MB（−34%）；时延 BulkInsert −13.8%（P/ADO 归一 −13.7%，4/4 轮一致）、TxBulkInsert −9.9%、BulkDelete −11.0%（4/4 轮一致）；BulkUpdate/UpsertBatch 持平（分配与 base 逐位相同）。StreamAll/QueryAll −27.8% 为只读路径观测、机制未归因，不计入收益；明细与协议分析见 `docs/性能优化方案-step6-pg.md` §五/§八。
 - **验证**：Core.Tests 421/421、SourceGen 202/202（快照基线已更新）、Integration 208/208（PG 真库在线）；三路深挖证据（Npgsql 10.0.3 反射盘查 68 连接串属性/importer 20 成员/驱动 API 全量 · PalORM PG 路径逐行热账 · 社区官方 2024-2026 经验 37 源抓取）与三轮真库探针见 `docs/性能优化方案-step6-pg.md`。
 
 ## [5.7.0] — SQLite 极致优化：PRAGMA 三补 + 读路径命令复用 + 批量回退合并 + OwnedJson Span 解析 + Migrate optimize（含参数上限 32766 实测证伪）
