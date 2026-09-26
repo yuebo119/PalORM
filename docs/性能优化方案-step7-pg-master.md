@@ -139,22 +139,22 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 - [ ] **Step 4: Core 421 + A/B 分配列**
 - [ ] **Step 5: Commit** `性能(Core)：Count/聚合组合 SQL 缓存（P1-2）`
 
-## T5【P1】读路径入口 display class 消除
-
-**背景：** A3/P1-4——只读入口每查询 async lambda + display class；写路径已由 `ExecuteWriteRowsAsync` 直调重载修复（208B/行，`DataSession.cs:789-798` 范式）。
+## T5【P1】读路径入口 display class ⛔ 已回滚（7332c6a）——累计 A/B 抓到真实回归
 
 **Files:**
-- Modify: `src/PalORM.Core/QueryBuilderExtensions.cs:193-230`（ExecuteCoreAsync 异步局部函数）
-- Test: `test/PalORM.Core.Tests/`（分配回归）
+- Revert: `src/PalORM.Core/QueryBuilderExtensions.cs`（`67e6d45` 的完整回滚；`QueryKernelState<T>`/`ExecuteQueryCoreAsync` 移除，执行路径回到 `955cc39` 形态）
 
-**Interfaces:**
-- Produces: 读管道复用与写路径同构的直调重载；拦截器/韧性路径保持行为
+- [x] **Step 1-3**：曾按计划实施（内核静态化 + 状态 struct，隔离单测默认配置 2662→2630 B/查询）
+- [x] **Step 4：累计 A/B 复测抓到回归**（2026-09-27 凌晨，见 §累计 A/B）：PerfHub 夹具上 GetByKey/IncludeJoin/QueryAll 分配 +3~10%、时间 +3~10%。
+- [x] **Step 5：对分定位**（T4→T5→T6 三提交各重建+诊断批）：T4 干净（+0.2%），T5 是唯一跳变点（+9.1%）。
+- [x] **Step 6：根因**：`AttemptAsync` 闭包捕获 `kernelState` **struct** → 编译器将其装箱（~112B）+ display class（~40B）+ 委托（56B）≈ 208B，高于它要消的旧 12 变量 display class（隔离端 SQLite/租户/ToList 形态测的是 −32B，真实夹具的 FirstOrDefault 路径却是 +690B——**同一改动两种形态 sign 相反**，隔离测试形状不能代表夹具形状）。
+- [x] **Step 7：回滚 + 记录**：真正零闭包需把执行器 50 行重试/熔断循环复制成 TState 原语（安全临界代码不复制）；该方向整体搁置，留档本 phenomenology。
 
-- [ ] **Step 1: 写失败测试**：`[Test] QueryAll_Allocation_Dropped()`——`From<T>().ToListAsync()` 分配不高于基线 −168B（CTS+timer 之外至少消 display class 56B）
-- [ ] **Step 2: 实现**：把 `ExecuteCoreAsync` 局部函数提为私有静态方法 + `QueryContext`  Struct 传递（对齐 `ExecuteWriteRowsAsync` 直调形态）
-- [ ] **Step 3: 保留韧性路径**：直调仅用于“无事务且 IsPassThrough”分支，其余不变（对照写路径条件）
-- [ ] **Step 4: Core 421 + SQLite/PG 集成冒烟**
-- [ ] **Step 5: Commit** `性能(Core)：读路径入口 display class 消除（P1-4，对齐写路径已修范式）`
+
+**T4 当日修正（累计 A/B 抓到 +4.7% Count 分配回归）**：原实现把
+`(filterOnlySql, wherePrefix)` 一次性三元求值——无 where 的 Count 每调用也付一次
+`baseSql + " WHERE ("` 拼接。改惰性（有 where 才求前缀；Empty 形态特判直出 baseSql，
+特判抽 `GetCountComposedSql` 静态助手）。修正后背靠背复测 Count 分配 +0.0%。
 
 ## T6【P1】BuildLimitClause / 租户 scope 分配收敛
 
@@ -304,3 +304,44 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 4. **Review Focus 对应**：PG 引号 → T4/T9 测试均带引号 SQL；缓存键 Dialect → T4 Step 3 聚合缓存键带 `SqlDialect` + 对抗测试；A/B 可信 → T1；nullable 行为 → T13 裁决门；快照漂移 → T12 Step 4 + Global Constraints。
 5. **编制期实地核实修正（2026-09-26）**：T3 原按 step5 文档写“FilterClause 每查询重建”，实地核实 `DataSession.cs:590-612`（S2743）已缓存三种拼接形态、`DataSession.Crud.cs:13-20`（PERF-002）已静态化格式串——P1-1 为过期项，T3 改写为实测收尾（Step 1 建分配基线，Step 3 设判定门槛）。**教训：step5 的 P 项状态列从未逐项维护，任务化前必须逐项读码核实。**
 6. **实施期二次修正（T1）**：T1 原计划“从零造顺序交替脚本”，实施时核实 `scripts/perfhub-ab.sh`（阶段 4.1）与报告 ⑤b（阶段 4.2）早已实现顺序交替、基线拷回、逐轮中位四档判定且含分配列——本会话 step6 早期的手跑批次是认知缺口（没用既有入口 + label 不合 `ab/轮/方言/档位` 契约）而非工具缺口，T1 降级为规范契约条款。**教训：动手造工具前先 `ls scripts/` + 读规范原文；AGENTS.md「代码库已有此能力？”是懒惰阶梯第一问。**
+
+## 累计 A/B 与回归发现（2026-09-27）
+
+**协议**：`scripts/perf.sh compare .ai/ab-final 3 --dialects=pg --tiers=20000`（既有编排器，
+轮内交替起跑 + 基线 JSON 拷回归约定量）。基线 = `955cc39`（step7 计划前 HEAD，含 S1~S3/PG-4），
+HEAD = 当前树（T4~T12）。
+
+**分析期两个方法论事故（均已修正，留档）**：
+1. **同 label 历史污染**：`bench/perfhub/results/` 里存在 2026-09-22/23 的同 label
+   （`ab/N/pg/2000`）历史批次，首次分析把它们混进中位数，得出"QueryAll 分配 −70%"的假结论。
+   修正：按 `Timestamp` 过滤本轮（B94 同族：label 空间随会话复用，判读必须带时间窗）。
+2. **参数形态**：`perfhub-ab.sh` 只解析 `--dialects=` 等号形式；空格形式被 PerfHub 自身的
+   `--dialects pg --tiers 2000` 覆盖，静默跑成三方言 2000 档（第一次最终跑白跑 20 分钟）。
+
+**回归发现与修复（累计 A/B 的核心价值——它抓到了隔离测试漏掉的两个回归）**：
+
+| 回归 | 发现口径 | 定位 | 修复 |
+|---|---|---|---|
+| T4 Count +4.7% 分配 | 累计 A/B（分配确定性）+ 背靠背复现 | 代码审查：饿汉三元 | wherePrefix 惰性化（`GetCountComposedSql`） |
+| T5 读路径 +3~10% 分配/时间 | 累计 A/B + T4/T5/T6 三提交对分（各重建+诊断批） | 闭包装箱 struct | 整体回滚 `7332c6a` |
+
+**修复后背靠背复测 + 最终 3 轮顺序交替 A/B（`ab/N/pg/20000`，2026-09-27）**：
+
+| 口径 | 结果 |
+|---|---|
+| 分配（确定性，21 项） | 全部 ±3.3% 内，多数 ±0.5%；GetByKey −3.3%、Insert −2.7% 为小幅负向（好方向），无一项正向超 1.1% |
+| 时延（3 轮中位） | BulkInsert +0.9% / TxBulkInsert −5.1% / BulkUpdate +4.1%（逐轮 +9/−2/+9 混合）/ BulkDelete +4.7%（逐轮 +17/+1/−2，逐轮中位 ≈+1%）/ UpsertBatch −1.8% / Insert −0.3% / GetByKey +1.5% / Count −0.7% / WhereIn −0.1% / KeysetPage −1.6% / IncludeJoin −4.3% / WideQueryAll −2.0% / TxHundredInserts −3.7% / TxRollback +0.2% |
+| 时延（一致负向） | QueryAll −5.1%（−7/−7/−29）、StreamAll −19.7%（−24/−2/−28）——分配持平的时间改善，机制未归因（step6 §五 同现象），不计入收益 |
+
+**判决**：批量路径与 base 持平（step7 未再动 COPY 路径，符合预期）；读路径分配零回归
+（T4 修正 + T5 回滚后）。step7 的两个分配收益项（Count where 形态 −635B、租户 From −33B）
+均无夹具覆盖（fixture 非租户、Count 无 where 组合），靠隔离单测取证——已在 T4/T6 节留档。
+
+**净变更结论（相对 955cc39）**：Count where 形态 −635B（T4 隔离实测，夹具无 where 组合覆盖）、
+租户 From −33B（T6，夹具不覆盖租户会话）、ODE 形态统一（T7 正确性）、缓存并发单实例化
+（T8 正确性）、@pN 保留命名空间（T9 正确性）、R47 契约测试（T10）、三配方文档（T11）。
+批量与时延在夹具口径下与 base 持平（±2% 内噪声带）；收益项集中在租户/where 组合——
+两者都无夹具覆盖，靠隔离单测取证。
+
+**教训（已落 cortex）**：隔离单测的分配读数**不能外推**到真实夹具形态（T5 的 SQLite/租户/ToList
+−1.2% vs PG/非租户/FirstOrDefault +9% sign 相反）；性能改动的最终判据是累计 A/B（顺序交替）。
