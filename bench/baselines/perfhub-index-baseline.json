@@ -1,7 +1,7 @@
 {
   "Schema": 1,
-  "Date": "2026-09-24",
-  "Environment": "32 \u903B\u8F91\u6838 / .NET 11.0.0-rc.1.26425.128 / GC Workstation\uFF1B\u6761\u76EE\u9010\u952E\u5408\u5E76\u81EA\u975E\u5B50\u96C6\u6279\u6B21\uFF0C\u6700\u65B0\u8D21\u732E\u6279\u6B21 2026-09-24 20:43:42 \u002B08:00\uFF08\u5065\u5EB7\u5EA6 clean 12.0 %\uFF09",
+  "Date": "2026-09-26",
+  "Environment": "32 \u903B\u8F91\u6838 / .NET 11.0.0-rc.1.26425.128 / GC Workstation\uFF1B\u6761\u76EE\u9010\u952E\u5408\u5E76\u81EA\u975E\u5B50\u96C6\u6279\u6B21\uFF0C\u6700\u65B0\u8D21\u732E\u6279\u6B21 2026-09-26 11:38:38 \u002B08:00\uFF08\u5065\u5EB7\u5EA6 clean 20.9 %\uFF09",
   "Thresholds": {
     "RatioDelta": 0.3
   },
@@ -12,7 +12,7 @@
       "Dialect": "SQLite",
       "Tier": 2000,
       "Ratio": 0,
-      "MeanUs": 1.8764000000000032
+      "MeanUs": 1.8934500000000019
     },
     {
       "Harness": "perfhub",
@@ -20,311 +20,311 @@
       "Dialect": "SQLite",
       "Tier": 2000,
       "Ratio": 0,
-      "MeanUs": 4.759400000000005
+      "MeanUs": 4.917100000000022
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9062709590878582,
-      "MeanUs": 10.809999999999969
+      "Ratio": 1.1270798047225266,
+      "MeanUs": 11.312500000000002
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.5976945566726631,
-      "MeanUs": 1113.4424999999992
+      "Ratio": 0.5757039906689992,
+      "MeanUs": 1105.6279999999995
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.6040744951340415,
-      "MeanUs": 1210.9525
+      "Ratio": 0.589931881573374,
+      "MeanUs": 1201.9749999999995
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.6697189880066524,
-      "MeanUs": 19.12549999999999
+      "Ratio": 0.6831049580770387,
+      "MeanUs": 19.26800000000001
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.6493045869365955,
-      "MeanUs": 8.146499999999996
+      "Ratio": 0.6483666578138619,
+      "MeanUs": 8.544499999999974
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9770208013185013,
-      "MeanUs": 16955.473500000004
+      "Ratio": 0.9768919087649351,
+      "MeanUs": 17517.634499999996
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9512254588622052,
-      "MeanUs": 2604.217500000001
+      "Ratio": 1.0517526397816177,
+      "MeanUs": 2857.2985
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9933383424417614,
-      "MeanUs": 7540.932000000001
+      "Ratio": 0.9708087213284384,
+      "MeanUs": 7242.999999999999
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0975543246697912,
-      "MeanUs": 64.39900000000002
+      "Ratio": 1.0937292820058029,
+      "MeanUs": 63.51450000000001
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0067558644656822,
-      "MeanUs": 144.84700000000007
+      "Ratio": 0.9664023041569918,
+      "MeanUs": 140.25300000000007
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.144923229321446,
-      "MeanUs": 5.779000000000006
+      "Ratio": 1.1205985915492944,
+      "MeanUs": 5.728500000000003
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9293785037015139,
-      "MeanUs": 16400.67553956835
+      "Ratio": 0.9867513088406529,
+      "MeanUs": 16934.28800000001
     },
     {
       "Harness": "perfhub",
       "Name": "InsertReturningId",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9330363293987967,
-      "MeanUs": 30.472499999999993
+      "Ratio": 1.0144898028436657,
+      "MeanUs": 29.896000000000008
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9635751355937047,
-      "MeanUs": 4469.4445
+      "Ratio": 0.9396145566319807,
+      "MeanUs": 4439.776499999999
     },
     {
       "Harness": "perfhub",
       "Name": "IncludeJoin",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.049676401122155,
-      "MeanUs": 141.99549999999996
+      "Ratio": 1.0455606991809183,
+      "MeanUs": 138.56450000000004
     },
     {
       "Harness": "perfhub",
       "Name": "TxSingleInsert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9930277148335372,
-      "MeanUs": 37.03049999999999
+      "Ratio": 1.0170311864311676,
+      "MeanUs": 36.24750000000002
     },
     {
       "Harness": "perfhub",
       "Name": "TxHundredInserts",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.2973402152991997,
-      "MeanUs": 277.3655
+      "Ratio": 1.263980306430838,
+      "MeanUs": 276.24100000000004
     },
     {
       "Harness": "perfhub",
       "Name": "TxBulkInsert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9782599547351551,
-      "MeanUs": 17074.492999999995
+      "Ratio": 1.0122491870264043,
+      "MeanUs": 17622.485999999997
     },
     {
       "Harness": "perfhub",
       "Name": "TxRollback",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.7692293794508158,
-      "MeanUs": 930.2900000000001
+      "Ratio": 1.8394436587416858,
+      "MeanUs": 962.4704999999998
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.192791312655073,
-      "MeanUs": 7941.662242689258
+      "Ratio": 1.202807509432815,
+      "MeanUs": 8162.690935259428
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 5.28583022570669,
-      "MeanUs": 35193.313263926815
+      "Ratio": 4.813373261582837,
+      "MeanUs": 32665.308440641184
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 9.996343355362999,
-      "MeanUs": 66556.13748018717
+      "Ratio": 11.103291360252353,
+      "MeanUs": 75350.98927060586
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.2059752566464896,
-      "MeanUs": 9.16300000000002
+      "Ratio": 1.1068278722037321,
+      "MeanUs": 9.475000000000026
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9343592432286112,
-      "MeanUs": 11218.172666666662
+      "Ratio": 0.952896054050735,
+      "MeanUs": 11273.703289473684
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0607632142807806,
-      "MeanUs": 10531.019580419583
+      "Ratio": 1.059658712010661,
+      "MeanUs": 10457.81805555555
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.8911944202266793,
-      "MeanUs": 37.96100000000001
+      "Ratio": 2.0460315457413274,
+      "MeanUs": 40.536999999999956
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.021624354077736,
-      "MeanUs": 9.094500000000016
+      "Ratio": 1.0472845176979169,
+      "MeanUs": 9.690000000000008
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.04613064059851,
-      "MeanUs": 168572.8260869565
+      "Ratio": 1.0008554026001484,
+      "MeanUs": 163384.60416666672
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0075574110399215,
-      "MeanUs": 29818.398648648657
+      "Ratio": 0.9883822997051659,
+      "MeanUs": 29973.076923076907
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9977057305894711,
-      "MeanUs": 69665.95
+      "Ratio": 1.002278245366085,
+      "MeanUs": 70292.7
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0713324360699865,
-      "MeanUs": 61.68999999999998
+      "Ratio": 1.0792566438099143,
+      "MeanUs": 63.27250000000002
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0100486188949738,
-      "MeanUs": 141.47650000000004
+      "Ratio": 1.0079051664133414,
+      "MeanUs": 141.9069999999999
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.078031601872022,
-      "MeanUs": 11.632500000000014
+      "Ratio": 1.0406049495875367,
+      "MeanUs": 11.353000000000007
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0062385340936735,
-      "MeanUs": 157389.10800000004
+      "Ratio": 0.9986255411367084,
+      "MeanUs": 158718.28000000003
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.1808127782692144,
-      "MeanUs": 52697.955555555556
+      "Ratio": 1.1746303633460558,
+      "MeanUs": 53560.44864864865
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.2101819878769533,
-      "MeanUs": 8054.033506507057
+      "Ratio": 1.1906824940213938,
+      "MeanUs": 8286.202860052676
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 4.893067158022002,
-      "MeanUs": 32564.463225431362
+      "Ratio": 4.844201987097661,
+      "MeanUs": 33711.79181831515
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 11.437130334375922,
-      "MeanUs": 76116.67654461722
+      "Ratio": 10.785542233817402,
+      "MeanUs": 75058.79304837658
     },
     {
       "Harness": "perfhub",
@@ -332,7 +332,7 @@
       "Dialect": "MySQL",
       "Tier": 2000,
       "Ratio": 0,
-      "MeanUs": 0.7861500000000207
+      "MeanUs": 0.9501000000000179
     },
     {
       "Harness": "perfhub",
@@ -340,311 +340,311 @@
       "Dialect": "MySQL",
       "Tier": 2000,
       "Ratio": 0,
-      "MeanUs": 2.7998499999999726
+      "MeanUs": 3.33889999999994
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0700030451706442,
-      "MeanUs": 581.5289999999999
+      "Ratio": 0.9023212903306085,
+      "MeanUs": 507.6039999999999
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0625995773953176,
-      "MeanUs": 21934.855882352935
+      "Ratio": 0.7611190632026188,
+      "MeanUs": 2351.3509999999997
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0558420359716714,
-      "MeanUs": 21804.319444444453
+      "Ratio": 1.0095867746086646,
+      "MeanUs": 2372.432
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0775493187184433,
-      "MeanUs": 2760.3360000000016
+      "Ratio": 1.0186280410996786,
+      "MeanUs": 1615.294
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9393434088308368,
-      "MeanUs": 546.7035000000001
+      "Ratio": 1.0555017985779753,
+      "MeanUs": 507.7750000000001
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.076605495102962,
-      "MeanUs": 130426.59285714282
+      "Ratio": 0.9992618536456099,
+      "MeanUs": 13949.424999999997
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.3099617943486614,
-      "MeanUs": 139330.1103448276
+      "Ratio": 1.7575139963656157,
+      "MeanUs": 59081.49855072465
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0138797158411066,
-      "MeanUs": 173414.82727272724
+      "Ratio": 0.9752539553761264,
+      "MeanUs": 9974.876000000002
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0821770862034552,
-      "MeanUs": 1710.4680000000008
+      "Ratio": 1.0597598348537667,
+      "MeanUs": 506.4375000000001
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.997143151998296,
-      "MeanUs": 1797.187000000001
+      "Ratio": 1.015152000032002,
+      "MeanUs": 507.5425
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.928388935917264,
-      "MeanUs": 1933.5250000000012
+      "Ratio": 0.9920626583468416,
+      "MeanUs": 920.7775000000001
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0159505824064043,
-      "MeanUs": 152063.1653846154
+      "Ratio": 1.0046644368213948,
+      "MeanUs": 10609.481999999993
     },
     {
       "Harness": "perfhub",
       "Name": "InsertReturningId",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0720822852307599,
-      "MeanUs": 2696.1389999999997
+      "Ratio": 1.0127025459039618,
+      "MeanUs": 1755.1719999999998
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0140775617052407,
-      "MeanUs": 29111.891549295768
+      "Ratio": 0.9104444459748651,
+      "MeanUs": 6543.880000000002
     },
     {
       "Harness": "perfhub",
       "Name": "IncludeJoin",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.6527348893446572,
-      "MeanUs": 26565.603703703695
+      "Ratio": 0.7773362210462517,
+      "MeanUs": 570.6775000000001
     },
     {
       "Harness": "perfhub",
       "Name": "TxSingleInsert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9701263639258072,
-      "MeanUs": 3459.8640000000005
+      "Ratio": 1.0182837398547393,
+      "MeanUs": 2434.86
     },
     {
       "Harness": "perfhub",
       "Name": "TxHundredInserts",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9884305828181319,
-      "MeanUs": 57916.81818181817
+      "Ratio": 1.0035251939829906,
+      "MeanUs": 57658.325000000004
     },
     {
       "Harness": "perfhub",
       "Name": "TxBulkInsert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9911177128596033,
-      "MeanUs": 127084.09310344832
+      "Ratio": 0.9740033141341132,
+      "MeanUs": 14828.919999999998
     },
     {
       "Harness": "perfhub",
       "Name": "TxRollback",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0034659154758707,
-      "MeanUs": 289892.8571428572
+      "Ratio": 0.9434625622042588,
+      "MeanUs": 269553.7875
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0955540707844502,
-      "MeanUs": 612265.3788107451
+      "Ratio": 1.0052553594682956,
+      "MeanUs": 536138.6230728338
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.9684767463905197,
-      "MeanUs": 1100110.1569965896
+      "Ratio": 1.010595177812436,
+      "MeanUs": 538986.5391048365
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.9617176003969077,
-      "MeanUs": 1096332.7157980436
+      "Ratio": 1.0369418034477556,
+      "MeanUs": 553038.136500156
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9366139977537941,
-      "MeanUs": 503.29000000000013
+      "Ratio": 1.0472279696214195,
+      "MeanUs": 518.5365
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.056184460251872,
-      "MeanUs": 212401.8333333333
+      "Ratio": 0.9991061827898013,
+      "MeanUs": 15116.936134453781
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9878273964289694,
-      "MeanUs": 207194.18571428573
+      "Ratio": 1.0061210313937292,
+      "MeanUs": 12490.731818181814
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.072431046340495,
-      "MeanUs": 2601.7515000000003
+      "Ratio": 1.0468107752883742,
+      "MeanUs": 1604.0695
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.0350377876248753,
-      "MeanUs": 542.9565000000001
+      "Ratio": 0.9489477678667447,
+      "MeanUs": 463.25399999999996
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.989812485290569,
-      "MeanUs": 1237033.0666666667
+      "Ratio": 0.9718011573054984,
+      "MeanUs": 109336.90322580644
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 2.017100864504653,
-      "MeanUs": 2198009.8000000003
+      "Ratio": 3.822205071624881,
+      "MeanUs": 1265852.4
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9179105634880611,
-      "MeanUs": 1720507.6333333335
+      "Ratio": 0.9397288003293388,
+      "MeanUs": 78205.49000000002
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.0752640665773663,
-      "MeanUs": 1794.9124999999997
+      "Ratio": 1.056900474960721,
+      "MeanUs": 468.1899999999998
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9719784175699806,
-      "MeanUs": 1841.4169999999992
+      "Ratio": 0.9507058240506652,
+      "MeanUs": 492.0725
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.1269583611288079,
-      "MeanUs": 2742.6780000000003
+      "Ratio": 1.1270406221345657,
+      "MeanUs": 1302.8814999999997
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.053389895300156,
-      "MeanUs": 1573913.0666666667
+      "Ratio": 1.1471792929974474,
+      "MeanUs": 99764.62051282049
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.090984820574759,
-      "MeanUs": 317353.48333333334
+      "Ratio": 0.8134697902012356,
+      "MeanUs": 51950.85000000001
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9832503560552375,
-      "MeanUs": 574615.3477893559
+      "Ratio": 1.1690672202230306,
+      "MeanUs": 577763.1278538813
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.6317132847714424,
-      "MeanUs": 953579.6156566878
+      "Ratio": 1.0824356665378663,
+      "MeanUs": 534949.065016303
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.8398465477855586,
-      "MeanUs": 1075213.5073475146
+      "Ratio": 1.0878512997919605,
+      "MeanUs": 537625.5177934135
     },
     {
       "Harness": "perfhub",
@@ -652,7 +652,7 @@
       "Dialect": "PostgreSQL",
       "Tier": 2000,
       "Ratio": 0,
-      "MeanUs": 0.7135500000000128
+      "MeanUs": 0.6926000000000062
     },
     {
       "Harness": "perfhub",
@@ -660,311 +660,311 @@
       "Dialect": "PostgreSQL",
       "Tier": 2000,
       "Ratio": 0,
-      "MeanUs": 2.502800000000001
+      "MeanUs": 2.3852500000000036
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9886965904683639,
-      "MeanUs": 643.6835000000002
+      "Ratio": 1.0854150375030378,
+      "MeanUs": 511.47850000000005
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.062636382080591,
-      "MeanUs": 5394.717999999999
+      "Ratio": 1.086909273525227,
+      "MeanUs": 3941.2264999999998
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9290010258974538,
-      "MeanUs": 5395.264500000003
+      "Ratio": 1.0226376906316017,
+      "MeanUs": 3784.9359999999992
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9941330900483913,
-      "MeanUs": 779.1194999999997
+      "Ratio": 1.0360438150688307,
+      "MeanUs": 545.9350000000002
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0029264682360326,
-      "MeanUs": 899.782
+      "Ratio": 1.059495223514455,
+      "MeanUs": 591.6910000000003
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0448927903541902,
-      "MeanUs": 7687.165499999999
+      "Ratio": 1.3025533635745212,
+      "MeanUs": 6232.542000000002
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.8131486369930234,
-      "MeanUs": 62193.50161290323
+      "Ratio": 2.5422426680698726,
+      "MeanUs": 41305.99787234042
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9515445793186637,
-      "MeanUs": 9870.173999999997
+      "Ratio": 1.0046799948869418,
+      "MeanUs": 4417.162
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.175452481694421,
-      "MeanUs": 817.5894999999999
+      "Ratio": 1.034308718096731,
+      "MeanUs": 548.2855
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0965616758307024,
-      "MeanUs": 1188.5155000000002
+      "Ratio": 1.1043762553199021,
+      "MeanUs": 624.0775000000004
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9047071928791373,
-      "MeanUs": 516.9419999999997
+      "Ratio": 0.9847985516073323,
+      "MeanUs": 531.1575
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0339998263549235,
-      "MeanUs": 198984.61052631578
+      "Ratio": 1.0186848418691323,
+      "MeanUs": 45623.20689655172
     },
     {
       "Harness": "perfhub",
       "Name": "InsertReturningId",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.2370377190431046,
-      "MeanUs": 886.7574999999994
+      "Ratio": 1.014236271251917,
+      "MeanUs": 514.5890000000002
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.8158273821209837,
-      "MeanUs": 8110.6699999999955
+      "Ratio": 1.0048192026991523,
+      "MeanUs": 5938.483999999995
     },
     {
       "Harness": "perfhub",
       "Name": "IncludeJoin",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9469008299490623,
-      "MeanUs": 1535.956
+      "Ratio": 1.1988402446300714,
+      "MeanUs": 803.7025
     },
     {
       "Harness": "perfhub",
       "Name": "TxSingleInsert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.969788606109479,
-      "MeanUs": 1558.5879999999995
+      "Ratio": 0.990971065024797,
+      "MeanUs": 1299.9934999999996
     },
     {
       "Harness": "perfhub",
       "Name": "TxHundredInserts",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0106055716790012,
-      "MeanUs": 59016.98484848483
+      "Ratio": 0.9921515349330895,
+      "MeanUs": 48210.434000000016
     },
     {
       "Harness": "perfhub",
       "Name": "TxBulkInsert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0852494395966499,
-      "MeanUs": 8283.111000000006
+      "Ratio": 1.1064004914557106,
+      "MeanUs": 6030.707500000003
     },
     {
       "Harness": "perfhub",
       "Name": "TxRollback",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0531786276370507,
-      "MeanUs": 294610.7428571429
+      "Ratio": 1.0541914279718838,
+      "MeanUs": 286283.2571428571
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0728763705203312,
-      "MeanUs": 700528.9355838764
+      "Ratio": 0.9913494692690971,
+      "MeanUs": 567024.9228178506
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.58539924889994,
-      "MeanUs": 1035178.0305951904
+      "Ratio": 1.070981759971749,
+      "MeanUs": 612572.4263866685
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 2.173325007173599,
-      "MeanUs": 1419061.036095669
+      "Ratio": 1.3351684795717433,
+      "MeanUs": 763680.0417477106
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0607540178039196,
-      "MeanUs": 591.6869999999998
+      "Ratio": 1.2842721308256686,
+      "MeanUs": 542.9010000000001
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.7928533548487592,
-      "MeanUs": 23611.83582089552
+      "Ratio": 0.7143041410152486,
+      "MeanUs": 17580.40113636363
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.066206855436986,
-      "MeanUs": 25830.53484848484
+      "Ratio": 0.7107757003832582,
+      "MeanUs": 17152.763636363645
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9843183900508348,
-      "MeanUs": 846.5650000000003
+      "Ratio": 0.9984778738883491,
+      "MeanUs": 541.8359999999996
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9714288480529788,
-      "MeanUs": 953.1824999999997
+      "Ratio": 1.0244773972327754,
+      "MeanUs": 599.6425000000003
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.2410027448756296,
-      "MeanUs": 44818.29911504425
+      "Ratio": 1.1127544933740887,
+      "MeanUs": 39312.340196078425
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9646520365488356,
-      "MeanUs": 369890.4888888889
+      "Ratio": 0.9593965234044745,
+      "MeanUs": 176521.27142857143
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.8894932431046815,
-      "MeanUs": 88918.45
+      "Ratio": 0.9622246210058453,
+      "MeanUs": 38749.18
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9376367891776867,
-      "MeanUs": 852.1140000000008
+      "Ratio": 1.1828589869083506,
+      "MeanUs": 606.6244999999998
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.935591446018565,
-      "MeanUs": 1283.3839999999998
+      "Ratio": 1.0651699186044465,
+      "MeanUs": 667.2725000000002
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0043513011293004,
-      "MeanUs": 995.8569999999997
+      "Ratio": 1.1100590682516005,
+      "MeanUs": 794.4664999999997
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0246868735822563,
-      "MeanUs": 1970256
+      "Ratio": 0.9618868733777519,
+      "MeanUs": 465018.12500000006
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.2299707173497885,
-      "MeanUs": 92685.69615384615
+      "Ratio": 0.9544048443178613,
+      "MeanUs": 58147.002857142856
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.7814091229028385,
-      "MeanUs": 693537.8663940006
+      "Ratio": 1.0098428582227748,
+      "MeanUs": 591755.0623730778
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.195982173157264,
-      "MeanUs": 1061491.221826809
+      "Ratio": 1.0571441422990548,
+      "MeanUs": 619473.0128254351
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.6097259525245184,
-      "MeanUs": 1428708.559794637
+      "Ratio": 1.303676350944449,
+      "MeanUs": 763937.7494089806
     },
     {
       "Harness": "perfhub",
