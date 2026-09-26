@@ -230,15 +230,27 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | `AllowLoadLocalInfile` | false → **true** | MySqlBulkCopy 前提 |
 | `ServerRedirectionMode` | Disabled → **Preferred** | Azure MySQL 直连 |
 
-**SQLite PRAGMA**（5 项）：
+**SQLite PRAGMA**（8 项，2026-09-26 极致优化批次新增 3 项）：
 
 | PRAGMA | 默认 → 调优值 | 收益 |
 |------|:---:|------|
+| `busy_timeout` | 0 → **5000ms** | 并发写 BUSY 在引擎内等待，替代上层 CTS+退避重试 |
 | `synchronous` | FULL → **NORMAL** | WAL 下安全，减少 fsync |
 | `cache_size` | 2MB → **64MB** | 读密集型提升 |
 | `temp_store` | DEFAULT → **MEMORY** | 临时表走内存 |
 | `wal_autocheckpoint` | 1000 → **1000** | 显式固定防漂移 |
+| `journal_size_limit` | -1 → **64MB** | 防 WAL 无界膨胀拖慢检查点 |
 | `mmap_size` | 0 → **256MB** | 文件库 I/O 加速（`:memory:` 跳过） |
+| `analysis_limit` | 1000 → **400** | 约束 optimize/ANALYZE 采样成本（MigrateAsync 后自动跑） |
+
+**SQLite 进阶配方**（经 `DbOptions.SessionSetupSql` 通道执行，可覆盖上述默认）：
+
+| 场景 | 配方 | 说明 |
+|------|------|------|
+| 批量/大行负载建库 | `PRAGMA page_size=16384` | 须在库首次创建前生效；既有库静默 no-op（改页大小需 VACUUM） |
+| 读密集 | `PRAGMA mmap_size=1073741824` | 提至 1GB（引擎 MAX_MMAP_SIZE 上限 2GB-64KB） |
+| 删除密集 | `PRAGMA secure_delete=OFF` | 消除删页覆写写放大——**安全取舍**：已删内容不再清零，加密库上意味着 forensic 残留 |
+| 本地弹性直通 | `DbOptions with { MaxRetries = 0 }` | 本地 BUSY 已由 `busy_timeout=5000` 吸收，弹性机构（2~29µs/op）在 RTT≈0 本地库是净开销；远程库维持默认 |
 
 ---
 

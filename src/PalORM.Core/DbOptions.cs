@@ -44,7 +44,13 @@ public sealed record DbOptions
 
     /// <summary>最大重试次数（默认 3 次）。
     /// <para><b>v5.4 作用域</b>: 连接建立与只读查询内置管线（From&lt;T&gt;() SELECT 家族/
-    /// GetAsync/GetAllAsync/聚合）。写入路径不自动重试（幂等性契约，见 DataSession.WithRetry）。</para></summary>
+    /// GetAsync/GetAllAsync/聚合）。写入路径不自动重试（幂等性契约，见 DataSession.WithRetry）。</para>
+    /// <para><b>SQLite 本地直通配方（2026-09-26 复测算账）</b>：本地 SQLite 的两类瞬时故障已有
+    /// 其他层兜底——并发写 BUSY 由引擎内 <c>PRAGMA busy_timeout=5000</c> 吸收（Provider 连接
+    /// 初始化默认设置），重试层到不了那一层；余下需要重试的只有连接握手/IO 级故障。弹性机构的
+    /// 每查询固定成本（CTS + 委托 + 执行器，探针 2~29µs/op）在 RTT≈0 的本地库上是净开销。
+    /// 本地部署建议显式直通：<c>new DbOptions { ConnectionString = cs } with { MaxRetries = 0 }</c>。
+    /// 远程库（PG/MySQL）维持默认——瞬时故障重试是网络库的真实需求。</para></summary>
     public int MaxRetries { get; init; } = 3;
 
     /// <summary>重试退避策略（默认 100ms→200ms→400ms，含 50%~100% 抖动）。</summary>
