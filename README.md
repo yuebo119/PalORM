@@ -252,6 +252,16 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | 删除密集 | `PRAGMA secure_delete=OFF` | 消除删页覆写写放大——**安全取舍**：已删内容不再清零，加密库上意味着 forensic 残留 |
 | 本地弹性直通 | `DbOptions with { MaxRetries = 0 }` | 本地 BUSY 已由 `busy_timeout=5000` 吸收，弹性机构（2~29µs/op）在 RTT≈0 本地库是净开销；远程库维持默认 |
 
+**PostgreSQL 进阶配方**（连接串层显式启用，均非默认——各有触发条件与取舍）：
+
+| 场景 | 配方 | 说明 |
+|------|------|------|
+| 本机/同容器 PG | `Host=/var/run/postgresql` | Unix domain socket 替代 TCP（Npgsql 官方性能文档：省 TCP 栈小提速）；`Host` 以斜杠或盘符开头即按 socket 目录解析 |
+| GSS 协商长尾削峰 | `GssEncryptionMode=Disable` | 探针实测（2026-09-26，Npgsql 10.0.3 × PG 18.4）：中位建连同为 6ms，长尾 149ms → ≤21ms；属安全策略变更，仅服务端不要求 GSS 加密时使用 |
+| 非关键表批量写 | 事务内首条 `SET LOCAL synchronous_commit TO off` | PG 官方 28.4：短事务吞吐的最大应用层杠杆；风险窗 ≤3×`wal_writer_delay` ≈600ms，崩溃丢最近提交（不损数据）——事件日志/缓存类可接受，账务类不可；须用户显式 opt-in，PalORM 不默认开启 |
+
+> `NoResetOnClose=true` 的会话状态泄漏取舍（raw SQL 的 SET/临时表跨池租客可见）见 ITM-652：需要隔离时用独立连接（连接串 `Max Pool Size=1`）或显式 `DISCARD`。
+
 ---
 
 ## 与主流 ORM 特性对比

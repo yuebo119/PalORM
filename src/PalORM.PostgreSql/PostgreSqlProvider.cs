@@ -5,6 +5,14 @@ using NpgsqlTypes;
 namespace PalORM.PostgreSql;
 
 /// <summary>PostgreSQL Provider —— Npgsql 适配 + JSONB/NOTIFY/Binary COPY。</summary>
+/// <para><b>调优配方（均非默认，须用户显式启用，README「PostgreSQL 进阶配方」表同款）</b>：
+/// ① 本机 PG 用 Unix domain socket（<c>Host=/var/run/postgresql</c>）；
+/// ② GSS 协商长尾削峰（<c>GssEncryptionMode=Disable</c>，探针实测长尾 149ms→≤21ms、中位不变，
+/// 属安全策略变更）；
+/// ③ 非关键表批量写在事务内首条 <c>SET LOCAL synchronous_commit TO off</c>（PG 官方 28.4，
+/// 风险窗 ≈600ms 崩溃丢提交，账务类不可）。
+/// <c>NoResetOnClose=true</c> 的会话状态泄漏取舍见 ITM-652（raw SQL 的 SET/临时表跨池租客
+/// 可见，需隔离时用独立连接或显式 <c>DISCARD</c>）。</para></summary>
 public sealed class PostgreSqlProvider : IDbProvider
 {
     /// <summary>Provider 名称:PostgreSql。</summary>
