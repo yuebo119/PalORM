@@ -4,7 +4,7 @@ using NpgsqlTypes;
 
 namespace PalORM.PostgreSql;
 
-/// <summary>PostgreSQL Provider —— Npgsql 适配 + JSONB/NOTIFY/Binary COPY。</summary>
+/// <summary>PostgreSQL Provider —— Npgsql 适配 + JSONB/NOTIFY/Binary COPY。
 /// <para><b>调优配方（均非默认，须用户显式启用，README「PostgreSQL 进阶配方」表同款）</b>：
 /// ① 本机 PG 用 Unix domain socket（<c>Host=/var/run/postgresql</c>）；
 /// ② GSS 协商长尾削峰（<c>GssEncryptionMode=Disable</c>，探针实测长尾 149ms→≤21ms、中位不变，
