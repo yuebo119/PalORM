@@ -54,20 +54,23 @@
 
 # 任务清单
 
-## T1【P0·仪器】A/B 顺序交替协议固化
+## T1【P0·仪器】A/B 顺序交替协议固化（编制后核实：协议已存在于工具链，缺口只在契约认知）
+
+**编制期修正**：本项目已有完整实现——`scripts/perfhub-ab.sh`（由 `scripts/perf.sh compare` 转发）
+按“轮内交替起跑顺序”执行（奇数轮 HEAD 先、偶数轮基线先）并把基线 JSON 拷回主仓，报告 ⑤b
+按 label `ab/轮/方言/档位` 配对、逐轮中位、四档判定，**且 A/B 表已含分配对比列**。
+step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约，⑤b 不聚合，只能手工算——
+这是认知缺口不是工具缺口。
 
 **Files:**
-- Create: `.ai/scripts/ab-alt.sh`（本地工具，gitignored）
-- Modify: `docs/性能基准规范.md`（新增“顺序交替”条款）
+- Modify: `docs/性能基准规范.md`（A/B 执行契约三条款：入口唯一 + label 契约 + ADO 归一不能替代交替 + 分配优先）
 
 **Interfaces:**
-- Produces: `bash .ai/scripts/ab-alt.sh <轮数> <标签前缀>`；内部按奇偶轮交换 base/opt 执行顺序，退出时打印两臂分配对照。
+- Produces: 规范条款；后续所有 A/B 批次走 `bash scripts/perf.sh compare <基线worktree> <轮数>`
 
-- [ ] **Step 1: 抄录已验证脚本为模板**（`.ai/scratch-pgprobe/ab-creverse.sh` 的奇偶轮逻辑，base=worktree、opt=主树、`--no-build`）
-- [ ] **Step 2: 脚本尾部追加分配对照输出**（从同批 JSON 提取 `AllocatedBytesPerOp` 中位数对比，漂移轮次标 `⚠污染`）
-- [ ] **Step 3: 文档条款**：`docs/性能基准规范.md` 增补——固定顺序批次不得作为回归判据；同批 ADO 归一仅作辅助
-- [ ] **Step 4: 自检**：用最近两批（固定顺序 vs 交替）跑一次脚本，确认能标出旧批次的污染轮
-- [ ] **Step 5: Commit** `工具链(PERF)：A/B 顺序交替协议固化——分配对照 + 污染轮标注`
+- [x] **Step 1: 核实既有工具链**（2026-09-26 实施时完成：`scripts/perfhub-ab.sh` 已含顺序交替 + 拷回 + label 契约；`Report.cs:596-597` ⑤b 段已含分配对比）
+- [x] **Step 2: 规范补三条契约**（入口唯一 / label 契约决定 ⑤b 配对 / 同批 ADO 归一不能替代顺序交替 + 分配优先判读）
+- [x] **Step 3: Commit** `文档(PERF)：A/B 执行契约——入口唯一 + label 契约 + ADO 归一不能替代交替`
 
 ## T2【P0·探针】PG 每操作一会话固定开销量级
 
@@ -286,3 +289,4 @@
 3. **类型/命名一致**：`GetDefaultFilterCondition`/`GetDefaultFilterWhereClause`（T4）与 `DataSession.Query.cs:618-624` 既有方法同名；`CountPrefixCache`/`CountFilterOnlyCache`（T4）为新名仅本任务使用；`ab-alt.sh`（T1）与 `.ai/scripts/` 既有脚本目录一致。
 4. **Review Focus 对应**：PG 引号 → T4/T9 测试均带引号 SQL；缓存键 Dialect → T4 Step 3 聚合缓存键带 `SqlDialect` + 对抗测试；A/B 可信 → T1；nullable 行为 → T13 裁决门；快照漂移 → T12 Step 4 + Global Constraints。
 5. **编制期实地核实修正（2026-09-26）**：T3 原按 step5 文档写“FilterClause 每查询重建”，实地核实 `DataSession.cs:590-612`（S2743）已缓存三种拼接形态、`DataSession.Crud.cs:13-20`（PERF-002）已静态化格式串——P1-1 为过期项，T3 改写为实测收尾（Step 1 建分配基线，Step 3 设判定门槛）。**教训：step5 的 P 项状态列从未逐项维护，任务化前必须逐项读码核实。**
+6. **实施期二次修正（T1）**：T1 原计划“从零造顺序交替脚本”，实施时核实 `scripts/perfhub-ab.sh`（阶段 4.1）与报告 ⑤b（阶段 4.2）早已实现顺序交替、基线拷回、逐轮中位四档判定且含分配列——本会话 step6 早期的手跑批次是认知缺口（没用既有入口 + label 不合 `ab/轮/方言/档位` 契约）而非工具缺口，T1 降级为规范契约条款。**教训：动手造工具前先 `ls scripts/` + 读规范原文；AGENTS.md「代码库已有此能力？”是懒惰阶梯第一问。**
