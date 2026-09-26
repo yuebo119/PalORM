@@ -611,10 +611,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return forms;
     }
 
-    /// <summary>默认过滤的裸条件（COUNT 等直接拼 WHERE 的调用点用）。</summary>
-    private string GetDefaultFilterCondition<T>() where T : class, new()
-        => GetDefaultFilterForms<T>().Condition;
-
     /// <summary>已有 WHERE 时的追加片段：" AND cond" 或空。</summary>
     private string GetDefaultFilterFragment<T>() where T : class, new()
         => GetDefaultFilterForms<T>().AndFragment;
