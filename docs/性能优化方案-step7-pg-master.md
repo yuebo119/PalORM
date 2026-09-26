@@ -284,6 +284,23 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 - [x] **Step 1: ADR**：G1 维持 / G2 SourceGen 方言感知化（推荐，但需先补 OwnedJson PerfHub 夹具）/ G3 PG-only 运行时旁路 / G4 驱动能力探测 四选项 + 收益成本分析
 - [ ] **Step 2: 若 ADR 通过再排实现**（G2 前置：OwnedJson 夹具子任务 + 三方言矩阵实测）
 
+## 追加证伪（2026-09-27 · 第 4 轮同款指令的增量回答）
+
+**plan_cache_mode=force_generic_plan 候选**：社区调研提到 PG 对 prepared 语句默认前 5 次走
+custom plan 再转 generic（sql-prepare），理论可省重复规划。实测证伪：
+① EXPLAIN 实测未 prepare 的 custom plan 规划耗时 26~126ms→µs 级（Count 26µs / GetByKey 29µs /
+IncludeJoin 126µs），看着占查询 8~15%；② 但 PalORM 臂稳态走 auto-prepare（MaxAutoPrepare=100、
+MinUsages=2）+ PG 自动转 generic，planning 在 generic 计划下近零——force_generic_plan 只省
+每语句每连接前 5 次的 custom 瞬态，对每形状数百次的夹具摊销 <1%；③ PerfHub 单批对照
+（`ab/genericplan` vs `ab/3/pg/20000`）读数 ±5% 混合（IncludeJoin/QueryAll/WideQueryAll 负向、
+WhereIn/KeysetPage 正向），与噪声带吻合；④ 风险实：倾斜分布列（如租户过滤）的 generic plan
+可能选错计划（PG 官方 19.7.2 明示）。结论：不列配方，登记证伪。
+
+**当前三臂站位**（口径：单批实现顺序恒为 ADO→Dapper→PalORM，末位结构性吃亏，单批
+P/D 与 P/ADO 有系统性正偏；引用 step6 §五 5 轮逐轮中位分析为准）：GetByKey 1.00~1.07、
+IncludeJoin 1.03~1.13、Count/WhereIn/KeysetPage ~1.0、QueryAll 0.70~0.81、StreamAll 0.38~0.55、
+批量 0.12~0.88（数值均为 P÷对比臂，<1 为优）。
+
 ## T15【缓议登记】触发条件表（不排期）
 
 | 项 | 触发条件（满足其一即重评） |
