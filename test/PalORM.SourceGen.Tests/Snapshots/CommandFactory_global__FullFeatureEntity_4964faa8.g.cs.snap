@@ -64,24 +64,15 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, global::FullFeatureEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.Int64;
         parameters[paramOffset + 0].Value = (object)entity.Id;
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 1].Value = (object)entity.Code;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 2].Value = (object)entity.Kind;
-        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 3].Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId);
         parameters[paramOffset + 4].Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
-        parameters[paramOffset + 5].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 5].Value = (object)entity.RawJson;
-        parameters[paramOffset + 6].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 6].Value = (object)entity.UniqueToken;
-        parameters[paramOffset + 7].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 7].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 8].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 8].Value = (object)entity.TenantId;
-        parameters[paramOffset + 9].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 9].Value = (object)entity.SensitiveValue;
     }
 
@@ -103,24 +94,15 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, global::FullFeatureEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 0].Value = (object)entity.Code;
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 1].Value = (object)entity.Kind;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 2].Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId);
         parameters[paramOffset + 3].Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
-        parameters[paramOffset + 4].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 4].Value = (object)entity.RawJson;
-        parameters[paramOffset + 5].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 5].Value = (object)entity.UniqueToken;
-        parameters[paramOffset + 6].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 6].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 7].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 7].Value = (object)entity.TenantId;
-        parameters[paramOffset + 8].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 8].Value = (object)entity.SensitiveValue;
-        parameters[paramOffset + 9].DbType = global::System.Data.DbType.Int64;
         parameters[paramOffset + 9].Value = (object)entity.Id;
     }
 

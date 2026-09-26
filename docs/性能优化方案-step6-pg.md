@@ -54,25 +54,23 @@ Npgsql **10.0.3**（Directory.Packages.props:16）。Provider 能力：Binary CO
 
 本轮只含 S1/S2/S3 三项。Update 池 binder 的计数器写法在改写过程中一度落入 `{pi}++`（增量在插值括号外）形态被 `--no-incremental` 构建抓住（CS1059），终态改回与提交版 `{pi++}` 逐位等价的 `{pi}` + 循环末自增；生成输出与改动前一致（快照比对仅余 DbType 新增行），非缺陷修复。
 
-## 五、A/B 结果（5 轮交替 · PG 真库 · PerfHub @ 20000 档 · 2026-09-26）
+## 五、A/B 结果（顺序交替 4 轮 · PG 真库 · PerfHub @ 20000 档 · 2026-09-26）
 
-方法：base 臂 = `0d15da5` 独立 git worktree（detach），opt 臂 = 主树 S1+S2+S3；`--no-build` 防构建竞态；每轮 base→opt 顺序执行；口径 = `MedianNs` 与 `AllocatedBytesPerOp`。**溯源说明**：opt 臂 5 轮 + 首轮单跑两批的结果 JSON 已随本提交入库（`bench/perfhub/results/history-20260926-173700..180228.json` 等 7 份）；base 臂 5 轮的同批 JSON 随 A/B worktree 清理一并删除（疏漏），其逐行测量留存于本地 gitignored 日志 `.ai/scratch-pgprobe/round{1..5}-base.log`，本表数字均从中汇总；复现只需按 §五方法重跑。
+**协议（复测轮，c1~c4）**：base 臂 = `0d15da5` 独立 git worktree（detach，`.ai/ab-base2`），opt 臂 = 主树 S1+S2+S3+PG-4；奇数轮 base→opt、偶数轮 opt→base（每臂各得 2 个批内前段 + 2 个后段槽位）；`--no-build`。口径 = `MedianNs` 与 `AllocatedBytesPerOp`。
 
-**判定按 B100 稳定度：分配 > 绝对耗时 > 同轮比值。**
+**这一协议修正是本轮的枢纽**：首批 5 轮用固定顺序（每轮 base→opt），opt 臂固定占批内后段，远端共享库的时段劣化全部记到 opt 账上——未改代码的 Count +27.5%、KeysetPage +22.8%、GetByKey +8.6% 同步"劣化"（分配零变化），BulkUpdate 假劣化 +34%。同批 ADO 臂归一不能替代顺序交替（ADO 臂也在批内前段，梯度照记）。顺序交替后对照组回到 +0.1~+5.8% 混合噪声，两个"劣化"项 BulkUpdate 回平（+1.4%）、原"退化"的 BulkDelete 反现真赢。
 
-| 操作 | base | opt | Δt | Δalloc | 判定 |
-|---|---|---|---|---|---|
-| BulkInsert | 39.13ms | 33.36ms | **−15%** | **−38%**（8.50→5.28MB，5 轮逐位一致） | ✅ 赢（5 轮 4 负，第 1 轮 −15%） |
-| TxBulkInsert | 44.42ms | 27.28ms | **−39%** | −38% | ✅ 赢 |
-| BulkDelete | 41.48ms | 45.29ms | +9%（污染） | **−34%**（11.27→7.44MB） | ✅ 分配赢；时间第 1 轮 −19% |
-| BulkUpdate | 178.09ms | 238.49ms | +34%（污染） | +2%（第 1 轮 +0%） | ⚪ 无归因退化 |
-| UpsertBatch | 473.31ms | 506.59ms | +7%（污染） | +0% | ⚪ 第 1 轮 +4.6% |
-| GetByKey / WhereIn / KeysetPage / Count | — | — | +14~20%（污染） | ~0 | 对照组：**代码未改，同样劣化** |
-| StreamAll / QueryAll / IncludeJoin | — | — | −3~−9% | 0 | 对照（读路径）反降 |
+| 操作 | base | opt | Δt | Δalloc | P/ADO 归一 | 逐轮一致性 |
+|---|---|---|---|---|---|---|
+| BulkInsert | — | — | **−13.8%** | **−37.9%**（8.48→5.27MB） | −13.7% | 4/4 负 |
+| TxBulkInsert | — | — | **−9.9%** | **−37.9%** | −12.3% | 4/4 负 |
+| BulkDelete | — | — | **−11.0%** | **−34.2%**（11.25→7.40MB） | −8.8% | 4/4 负 |
+| BulkUpdate | — | — | +2.8% | +0.1% | +1.4% | 混合（持平） |
+| UpsertBatch | — | — | +2.2% | +0.1% | +0.8% | 混合（持平） |
+| GetByKey / KeysetPage / Count / Insert / WhereIn | — | — | +0.1~+3.0% | ~0 | −2.1~+5.8% | 混合噪声 |
+| StreamAll / QueryAll | — | — | −27.8% | ~−1% | −40/−29% | 4/4、3/4 负（见下） |
 
-**污染证据链**（为什么正值读数不算退化）：① 四项未改动代码的只读操作（GetByKey/WhereIn/KeysetPage/Count）同步 +14~20% 且分配零变化——不可能由本次改动引起；② 劣化随时段梯度恶化（第 1 轮 opt 反而 −6~−12%，第 3 轮起 ~1ms 级）；③ base 臂自身也随时段膨胀（BulkInsert 39.1→44.3ms）。第 1 轮（全场最干净）口径：BulkInsert −15%、BulkDelete −19%、BulkUpdate −2.5%、Upsert +4.6%、读操作 −6~−12%。
-
-**结论**：S1/S2/S3 净效果 = 批量路径分配 −34~−38%（确定性）+ BulkInsert 时延 −15%（机制：消除 COPY 每单元格 `NpgsqlDbType.Unknown` 慢路径）。远端共享库的会话级负载漂移使时间读数第 2 轮起失真，**未发现可归因于本次改动的退化**；精确复测需本地容器 PG（B94/B100 留档）。
+**判读**：分配（确定性口径）BulkInsert/TxBulkInsert −38%、BulkDelete −34% 为硬赢；时延 BulkInsert/TxBulkInsert/BulkDelete 三赢且逐轮一致；BulkUpdate/UpsertBatch 持平（PG-4 见 §八）；StreamAll/QueryAll 的 −27.8% 为只读路径（代码未改）观测到的稳定负值，**机制未确立**（候选：更快更 lean 的 COPY 写入改变后续扫描的表物理状态/可见性映射），按 B97 纪律标"观测到、未归因"，不计入收益。绝对时间值跨协议不可比（服务端负载不同），只可比同协议内比值。
 
 ## 六、文档化配方（连接串层，不入代码）
 
@@ -89,6 +87,15 @@ GssEncryptionMode=Disable
 
 ## 七、遗留登记
 
-1. `NpgsqlParameter.NpgsqlDbType` 每读重推（330ns）——未设 DbType 的路径仍在付（SourceGen 未覆盖的 char/TimeSpan/enum/对象型 OwnedJson 列；`PostgreSqlProvider.CreateParameter` 的 16 组已知基元已显式设 DbType）。
+1. `NpgsqlParameter.NpgsqlDbType` 每读重推（探针四：设 DbType 后 31ns/读、未设 146~330ns/读）——未设 DbType 的路径仍在付（SourceGen 未覆盖的 char/TimeSpan/enum/对象型 OwnedJson 列；`PostgreSqlProvider.CreateParameter` 的 16 组已知基元已显式设 DbType）。
 2. PG 每操作一会话固定开销（探针口径 SQLite 侧 16~29µs/op）未在 PG 侧重测。
-3. 本地 PG 为远端共享库（192.168.200.120），跨批时间读数受时段负载影响，A/B 必须交替（B71）。
+3. 本地 PG 为远端共享库（192.168.200.120），本机无 Docker/WSL/本地 PG，时间读数必须按 §五顺序交替协议采集。
+4. StreamAll/QueryAll 的 −27.8% 观测未归因（§五）。
+
+## 八、探针四与 PG-4（2026-09-26 第二轮）
+
+**探针四事实**（`.ai/scratch-pgprobe/run4.log`）：`NpgsqlParameter.DbType` setter = **1.8ns/次**（推翻"每行赋值昂贵"假设）；设 DbType 后 `NpgsqlDbType` getter = 31ns/读（未设 146~330ns）；`DBNull + DbType.Int32 → Integer` 且真库 `SELECT @p1::int` 返回 DBNull 正确（ITM-527 修复真库双证）。
+
+**PG-4 两项**：
+1. **WriteRow 类型缓存**：每列 NpgsqlDbType 是列属性不是单元格值属性，原每单元格读 getter（31ns × 20000 行 × 13 列 ≈ 8ms）改为每次 `BulkInsertAsync` 采样一次（`SampleColumnTypes`，首行绑定后）。S3 的显式 DbType 保证首行全 DBNull 列也映射真实类型，采样对任何列组合成立。
+2. **emit 对称性规则**：显式 DbType 只保留在「有 `NpgsqlDbType` 消费方」或「每操作一次」的路径——INSERT 池（COPY WriteRow + ITM-527）、单行 binder（R5 推断确定性）；Update/Upsert 池（每行每列重绑、无消费方、执行期由驱动从 Value 推断）恢复 S3 前形态（仅 byte[]→Binary）。效果：BulkUpdate/Upsert 分配与 base 逐位相同（+0.1%），时延回到持平（+1.4%/+0.8%），首批协议下的 +34%/+17% 劣化读数消失。

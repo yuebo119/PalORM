@@ -58,11 +58,12 @@ internal static class CommandFactoryEmitter
         sb.AppendLine();
         // PL-3.2：UPSERT 参数池路径——与 BindUpsert 同列序（IsUpsertable 声明序），
         // 只写 Value 不建参数。消费点 BatchUpsertAsync（原 scratch 命令逐行建参数再值拷贝）。
-        sb.AppendLine($"    /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>");
-        sb.AppendLine($"    internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, {model.EntityTypeName} entity, int paramOffset)");
-        sb.AppendLine("    {");
-        GenerateBindValuesBody(model, sb, static column => column.IsUpsertable);
-        sb.AppendLine("    }");
+    sb.AppendLine($"    /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>");
+    sb.AppendLine($"    internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, {model.EntityTypeName} entity, int paramOffset)");
+    sb.AppendLine("    {");
+    // PG-4：UPSERT 池无 NpgsqlDbType 消费方，不带 DbType（见 GenerateBindValuesBody 注释）
+    GenerateBindValuesBody(model, sb, static column => column.IsUpsertable, emitDbType: false);
+    sb.AppendLine("    }");
         sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定实体属性到 UPDATE 参数。</summary>");
         sb.AppendLine($"    internal static void BindUpdate(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity)");
@@ -414,12 +415,16 @@ internal static class CommandFactoryEmitter
 
     /// <summary>v4.6：仅设置预分配参数的 Value（无 CreateParameter/Add/ParameterName），用于跨批参数复用。</summary>
     private static void GenerateBindValuesBody(TableModel model, StringBuilder sb)
-        => GenerateBindValuesBody(model, sb, static column => column.IsInsertable);
+        => GenerateBindValuesBody(model, sb, static column => column.IsInsertable, emitDbType: true);
 
     /// <summary>共享 Value 直写循环——列序 = <paramref name="predicate"/> 过滤后的声明序，
-    /// 与同谓词的 GenerateBindBody（建参数版）逐列一致（PL-3.2：Upsert 版消费 IsUpsertable）。</summary>
+    /// 与同谓词的 GenerateBindBody（建参数版）逐列一致（PL-3.2：Upsert 版消费 IsUpsertable）。
+    /// <para><b>emitDbType=false</b>（PG-4，2026-09-26）：UPSERT 池参数每行每列重绑，但没有任何
+    /// 消费方读 <c>NpgsqlDbType</c>（执行期由驱动从 Value 推断，与 S3 前行为一致）——每行赋值
+    /// 纯成本（探针：DbType+Value 组合 31ns vs Value 13ns）。只有 INSERT 池（PG Binary COPY 的
+    /// WriteRow 逐单元格读类型 + 需要 DBNull 列映射到真实类型修 ITM-527）保留显式 DbType。</para></summary>
     private static void GenerateBindValuesBody(
-        TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate)
+        TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate, bool emitDbType)
     {
         int pi = 0;
         foreach (var col in model.Columns.AsSpan())
@@ -427,7 +432,7 @@ internal static class CommandFactoryEmitter
             if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
             // PG-3：池参数（COPY/多值 INSERT 跨批复用）同样显式 DbType，先 DbType 后 Value
-            if (DbTypeFor(col.ProviderClrTypeName) is { } mapped)
+            if (emitDbType && DbTypeFor(col.ProviderClrTypeName) is { } mapped)
                 sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
@@ -473,7 +478,11 @@ internal static class CommandFactoryEmitter
 
     /// <summary>BindUpdateValues 的发射体——列序与 <see cref="GenerateBindUpdateBody"/> 由
     /// <see cref="GetUpdateColumnOrder"/> 单一真源保证一致（GEN-012：原"逐字一致"注释契约
-    /// 已被结构化收敛替代）。差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。</summary>
+    /// 已被结构化收敛替代）。差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。
+    /// <para><b>PG-4（2026-09-26）不带 DbType</b>：UPDATE 池参数每行每列重绑，但无任何消费方读
+    /// <c>NpgsqlDbType</c>（UPDATE..FROM(VALUES) 执行期由驱动从 Value 推断，与本方法 S3 前
+    /// 行为一致）——保留 byte[]→Binary（v5.3 PG BYTEA 确定性映射），其余标量不付每行赋值成本
+    /// （探针：DbType+Value 31ns vs Value 13ns）。</para></summary>
     private static void GenerateBindUpdateValuesBody(TableModel model, StringBuilder sb)
     {
         var (setCols, pkCols, cc) = GetUpdateColumnOrder(model);
@@ -482,9 +491,8 @@ internal static class CommandFactoryEmitter
         foreach (var col in setCols.Concat(pkCols))
         {
             string valueExpr = GetParameterValueExpression(col);
-            // PG-3：同 GenerateBindValuesBody——池参数显式 DbType，先 DbType 后 Value
-            if (DbTypeFor(col.ProviderClrTypeName) is { } mapped)
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
+            if (IsBinaryColumn(col))
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }

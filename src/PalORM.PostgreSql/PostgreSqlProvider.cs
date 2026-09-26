@@ -1,5 +1,6 @@
 using System.Data.Common;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace PalORM.PostgreSql;
 
@@ -258,8 +259,10 @@ public sealed class PostgreSqlProvider : IDbProvider
                 // 旧版生成器模型程序集 BindInsertValues 为 null 时回退逐行 binder。
                 Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
                 // 池的引用数组：参数对象仍留在 rowCommand.Parameters 内——
-                // WriteRowAsync 读 parameter.NpgsqlDbType，脱离集合会丢失类型推断。
+                // SampleColumnTypes 从集合读每列 NpgsqlDbType（PG-4），脱离集合会丢失类型来源。
                 DbParameter[]? pool = null;
+                // PG-4：每列 NpgsqlDbType 的调用级缓存（首行绑定后采样一次）
+                NpgsqlDbType[]? columnTypes = null;
                 for (int start = 0; start < entities.Count; start += batchSize)
                 {
                     int end = Math.Min(start + batchSize, entities.Count);
@@ -300,12 +303,14 @@ public sealed class PostgreSqlProvider : IDbProvider
                                         for (int column = 0; column < columnCount; column++)
                                             pool[column] = rowCommand.Parameters[column];
                                     }
+                                    // PG-4：类型按列采样一次（含 valuesBinder 为 null 的 legacy 回退路径）
+                                    columnTypes ??= SampleColumnTypes(rowCommand, columnCount);
                                 }
 
                                 // P1：满批路径直传 pool——原实现经 rowCommand.Parameters 索引器
                                 // 取值，每行每列一次跨接口虚调用 + 一次硬转型（10 万行 × 10 列
                                 // = 100 万次），而 pool 与 Parameters 持有的是同一批对象。
-                                WriteRow(importer, rowCommand, pool, columnCount, commandCt);
+                                WriteRow(importer, rowCommand, pool, columnTypes!, columnCount, commandCt);
                                 total++;
                             }
                             await importer.CompleteAsync(commandCt).ConfigureAwait(false);
@@ -427,11 +432,13 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 190 万次 async 状态机（每次只做缓冲区写入，无真实异步 IO）；Npgsql 对 COPY 的建议同样是
     /// CPU 密集段用同步 API（API 面已核对本机 npgsql/10.0.3 包 XML：<c>Write&lt;T&gt;(T, NpgsqlDbType)</c>
     /// 与 <c>StartRow()</c> 存在）。取消检查移到行边界，粒度从"每列"变为"每行"。</para>
-    /// <para><b>验证缺口</b>：真库行为（写入正确性/NULL/类型推断/取消语义）需 ExternalDatabase
-    /// 环境（ExternalDatabaseBulkTests），本机 PG 不可达——本改动只经编译与 SQLite 套件回归。</para></summary>
+    /// <para><b>PG-4（2026-09-26）</b>：每列 NpgsqlDbType 由 <paramref name="columnTypes"/>
+    /// 每次调用采样一次后传入——类型是列属性不是单元格值属性，原每单元格读
+    /// <c>NpgsqlParameter.NpgsqlDbType</c> getter（探针：设 DbType 后仍 31ns/次，20000 行 × 13 列
+    /// ≈ 8ms，占 COPY 路径剩余耗时约四分之一）。</para></summary>
     private static void WriteRow(
         NpgsqlBinaryImporter importer, DbCommand rowCommand, DbParameter[]? pool,
-        int columnCount, CancellationToken ct)
+        NpgsqlDbType[] columnTypes, int columnCount, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         importer.StartRow();
@@ -441,8 +448,20 @@ public sealed class PostgreSqlProvider : IDbProvider
                 ? pool[parameterIndex]
                 : rowCommand.Parameters[parameterIndex]);
             object? value = parameter.Value is DBNull ? null : parameter.Value;
-            importer.Write(value, parameter.NpgsqlDbType);
+            importer.Write(value, columnTypes[parameterIndex]);
         }
+    }
+
+    /// <summary>PG-4：每次 COPY 调用采样一次每列 NpgsqlDbType（见 <see cref="WriteRow"/>）。
+    /// <para>S3 的显式 DbType 保证首行全 DBNull 的可空列也返回映射类型而非 <c>Unknown</c>
+    /// （ITM-527 修复：探针实测 <c>DBNull + DbType.Int32 → Integer</c>，真库执行验证通过），
+    /// 因此首行采样对任何列组合都成立。</para></summary>
+    private static NpgsqlDbType[] SampleColumnTypes(DbCommand rowCommand, int columnCount)
+    {
+        var columnTypes = new NpgsqlDbType[columnCount];
+        for (int column = 0; column < columnCount; column++)
+            columnTypes[column] = ((NpgsqlParameter)rowCommand.Parameters[column]).NpgsqlDbType;
+        return columnTypes;
     }
 
     /// <summary>R2/T2：自管事务的 COMMIT 纳入 <paramref name="commandTimeoutSeconds"/> 超时窗口。
