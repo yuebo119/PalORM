@@ -519,8 +519,9 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> WithTransaction(DbTransaction tran)
     {
         ArgumentNullException.ThrowIfNull(tran);
-        // ITM-637：已释放事务的 Connection 为 null——原统一报"不属于主连接"误导排查方向
-        if (tran.Connection is null)
+        // ITM-637：已释放事务在 Npgsql 上读 Connection 抛 ODE（Microsoft.Data.Sqlite 返 null）——
+        // 统一走 SessionOperationState.IsTransactionAlive，两方言都给 ArgumentException
+        if (!SessionOperationState.IsTransactionAlive(tran))
             throw new ArgumentException(
                 "Cannot bind the transaction: it has been disposed (its Connection is null).", nameof(tran));
         if (!ReferenceEquals(tran.Connection, _conn))
@@ -599,9 +600,11 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal DbTransaction? GetActiveTransaction()
     {
-        // ITM-524: 用户经 WithTransaction 显式绑定的事务若已释放（Connection 置空），不得静默回退到
+        // ITM-524: 用户经 WithTransaction 显式绑定的事务若已释放，不得静默回退到
         // 会话事务或无事务执行——那会让本应在指定事务内的写操作脱离事务。显式失效应显式失败。
-        if (_transaction is not null && _transaction.Connection is null)
+        // P1-33/T7（2026-09-26）：Npgsql 已释放事务读 Connection 抛 ODE（SQLite 返 null），
+        // 同一走 IsTransactionAlive 使两方言都得 InvalidOperationException 而非裸 ODE。
+        if (_transaction is not null && !SessionOperationState.IsTransactionAlive(_transaction))
             throw new InvalidOperationException(
                 "The transaction bound via WithTransaction has been disposed (its Connection is null); " +
                 "the query would silently execute outside the intended transaction. Bind a live transaction.");
