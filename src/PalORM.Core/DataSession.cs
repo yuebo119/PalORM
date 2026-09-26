@@ -327,6 +327,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         _ignoreFilters = true;
+        _tenantScopeEntry = null;  // T6：作用域判别式含 _ignoreFilters，变更即失效单条目缓存
         return this;
     }
     internal bool _ignoreFilters;
@@ -387,7 +388,23 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // ITM-568: 门禁保护（同 AddInterceptor）——飞行查询期间切换租户是竞态
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         _tenantId = tenantId;
+        _tenantScopeEntry = null;  // T6：作用域判别式含 _tenantId，切换即失效单条目缓存
         return this;
+    }
+
+    /// <summary>T6：每会话租户过滤作用域的单条目缓存——命中同实体类型时零拼接
+    /// （消 <c>$"__t:{tenantId}"</c> 的 ~32 B/查询）。
+    /// <para><b>为什么是类不是值元组</b>：(Type, Scope) 两字段的写法在并行读下有撕裂读风险
+    /// （读到旧的 Type 配新的 Scope 即跨租户串数据）；单引用字段的赋值是原子的，
+    /// 条目不可变，撕裂不可能。</para>
+    /// <para><b>失效</b>：<see cref="IgnoreFilters"/> / <see cref="WithTenant"/> 显式清空——
+    /// 两者是判别式（_ignoreFilters / _tenantId）的唯一变更点，且都受操作门禁保护（ITM-568）。</para></summary>
+    private TenantScopeEntry? _tenantScopeEntry;
+
+    private sealed class TenantScopeEntry(Type type, string scope)
+    {
+        public Type Type { get; } = type;
+        public string Scope { get; } = scope;
     }
     internal object? _tenantId;
 
