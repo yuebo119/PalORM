@@ -220,12 +220,33 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         Action<DbCommand, object, int> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;
-        // v4.3：源生成器保证 binder 合法，probe 只需首次验证
+        // v5.3：源生成器保证 binder 合法，probe 只需首次验证。
+        // R50（2026-09-26）：首次并发经 Lazy<Task> 单实例化——原无锁双检让同 (Type, Dialect)
+        // 的并发首触各建一次探测命令（binder 绑定 + 参数数校验 + Dispose，无 I/O）。
+        // Lazy(ExecutionAndPublication) 对同键只跑一次，其余并发首触等同一个 Task。
+        // 失败即摘除缓存项：Lazy 缓存已完成的 Task（含故障），不摘除会把一次 binder 缺陷
+        // 固化为"该类型永不再验证/向后续调用者重放故障"。
         if (!metadata.InsertBinderValidated)
         {
-            await BulkOperationFramework.ProbeBinderAsync(
-                conn, binder, entities[0], columnCount, typeof(T).Name,
-                "PalORM.ProbeCommandCleanupException", ct).ConfigureAwait(false);
+            (Type, SqlDialect) probeKey = (typeof(T), Dialect);
+            Lazy<Task> probe = InsertProbeLazyCache.GetOrAdd(
+                probeKey,
+                static (_, state) => new Lazy<Task>(
+                    () => BulkOperationFramework.ProbeBinderAsync(
+                        state.Connection, state.Binder, state.First, state.ColumnCount, state.TypeName,
+                        "PalORM.ProbeCommandCleanupException", CancellationToken.None).AsTask(),
+                    System.Threading.LazyThreadSafetyMode.ExecutionAndPublication),
+                (Connection: (DbConnection)npgsqlConnection, Binder: binder, First: entities[0],
+                 ColumnCount: columnCount, TypeName: typeof(T).Name));
+            try
+            {
+                await probe.Value.ConfigureAwait(false);
+            }
+            catch
+            {
+                InsertProbeLazyCache.TryRemove(probeKey, out _);
+                throw;
+            }
         }
 
         // B3：引号后的表名与列清单只由 (Type, Dialect) 决定，是纯函数——原每次调用重算
@@ -386,17 +407,58 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 与 <c>DataSessionCache</c> 的有限键集豁免同口径（已登记 docs/静态缓存清单.md）。</para>
     /// <para><b>为什么不在 Core 的 DataSessionCache</b>：那个类是 internal，Provider 是独立程序集
     /// 访问不到；且本缓存的值含 PG 方言引用符，本就该留在 PG 程序集内。</para></summary>
+    /// <summary>R49（2026-09-26）：COPY 目标引用形态缓存。<b>存 Lazy 而非裸值</b>——实测本运行时
+    /// <c>ConcurrentDictionary.GetOrAdd</c> 的工厂对同键可被并发调用多次（只保证入库值唯一）：
+    /// 8 线程首触实测构建 8 次。Lazy(ExecutionAndPublication) 才真正单实例化；败者的 Lazy
+    /// 永不被 force（工厂不跑），胜者的 Lazy 被所有调用方共享。失败摘除见
+    /// <c>GetQuotedInsertTarget</c>（Lazy 缓存故障，不摘除会把一次构建失败固化为永久异常）。
+    /// 键空间 = 实体数 × 3，天然有限。</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (Type EntityType, SqlDialect Dialect), (string QuotedTable, string QuotedColumns)>
+        (Type EntityType, SqlDialect Dialect), Lazy<(string QuotedTable, string QuotedColumns)>>
         QuotedInsertTargetCache = new();
 
-    /// <summary>取（或构建并缓存）指定实体类型的 COPY 目标引用形态。</summary>
+    /// <summary>R50（2026-09-26）：INSERT binder 首次探测的每 (Type, Dialect) 单实例化
+    /// （机制与失败摘除语义见 <c>BulkInsertAsync</c> 内注释）。键空间同
+    /// <see cref="QuotedInsertTargetCache"/>（实体数 × 3，天然有限）。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect), Lazy<Task>> InsertProbeLazyCache = new();
+
+    /// <summary>R49 可观测面：COPY 目标引用形态的实际构建次数（缓存未命中且抢到桶锁时 +1）。
+    /// 仅测试读（Integration 并发夹具断言首次并发只构建一次）；生产路径每次 BulkInsertAsync
+    /// 一次 Interlocked 增量，缓存命中为零成本。非 const/readonly 是计数器语义（S2223 抑制：
+    /// 可变静态计数器是唯一能承载"构建次数"的形态，且仅 internal）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2223",
+        Justification = "构建次数计数器必须可变；仅 internal + 仅测试读，无生产可写面。")]
+    internal static int QuotedTargetBuildCount;
+
+    /// <summary>取（或构建并缓存）指定实体类型的 COPY 目标引用形态。
+    /// <para><b>R49（2026-09-26）</b>：TryGetValue→build→TryAdd 形态首次并发双构建（纯函数重算
+    /// 两遍）；GetOrAdd 工厂仍可被并发多次调用（实测构建 8 次）；收敛为<b>字典存 Lazy</b>——
+    /// Lazy(ExecutionAndPublication) 对同键只执行一次构建，其余首触等同一个 Value。
+    /// 失败即摘除：Lazy 会缓存已完成的 Task/值（含故障），不摘除会把一次构建失败固化。</para></summary>
     private static (string QuotedTable, string QuotedColumns) GetQuotedInsertTarget(Type entityType)
     {
-        (Type, SqlDialect) key = (entityType, Dialect);
-        if (QuotedInsertTargetCache.TryGetValue(key, out var cached))
-            return cached;
+        (Type EntityType, SqlDialect Dialect) key = (entityType, Dialect);
+        Lazy<(string QuotedTable, string QuotedColumns)> lazy = QuotedInsertTargetCache.GetOrAdd(
+            key,
+            static (k, _) => new Lazy<(string QuotedTable, string QuotedColumns)>(
+                () => BuildQuotedTarget(k.EntityType),
+                System.Threading.LazyThreadSafetyMode.ExecutionAndPublication),
+            (object?)null);
+        try
+        {
+            return lazy.Value;
+        }
+        catch
+        {
+            QuotedInsertTargetCache.TryRemove(key, out _);
+            throw;
+        }
+    }
 
+    /// <summary>构建 COPY 目标引用形态（引号表名 + 引号列清单）——R49 计数面同处递增。</summary>
+    private static (string QuotedTable, string QuotedColumns) BuildQuotedTarget(Type entityType)
+    {
         string tableName = PalORM_Runtime.TableNames.TryGetValue(entityType, out string? tn)
             ? tn
             : throw new InvalidOperationException(
@@ -404,12 +466,10 @@ public sealed class PostgreSqlProvider : IDbProvider
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(entityType, out CrudMetadata crud))
             throw new InvalidOperationException(
                 $"Type '{entityType.Name}' has no generated CRUD.");
-
-        var built = (
+        System.Threading.Interlocked.Increment(ref QuotedTargetBuildCount);
+        return (
             QuoteIdentifier(tableName),
             string.Join(", ", crud.InsertColumns.Select(QuoteIdentifier)));
-        QuotedInsertTargetCache.TryAdd(key, built);
-        return built;
     }
 
     /// <summary>创建单次 COPY 的超时令牌源——ITM-643：COPY 无 CommandTimeout 挂点，
