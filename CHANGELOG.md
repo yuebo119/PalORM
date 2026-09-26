@@ -7,6 +7,7 @@
 > 变更范围：`SqliteProvider` / `DataSession.Crud` / `SessionBatch` / `RowFactoryEmitter` + 测试与文档。执行账本与探针证据见 `docs/性能优化方案-step5.md` §九。
 
 - **PRAGMA 调优**：新增 `busy_timeout=5000`（并发 BUSY 引擎内等待，消上层 CTS+退避重试）、`journal_size_limit=67108864`（防 WAL 无界膨胀）、`analysis_limit=400`（约束 optimize/ANALYZE 采样成本）；初始化文本收敛为常量消每连接拼接分配；进阶调优（page_size/mmap_size/secure_delete）经既有 SessionSetupSql 通道，XML doc 载明配方。
+- **MigrateAsync SQLite 收尾 `PRAGMA optimize`**（增量深挖新增）：SQLite 官方对 schema 变更的建议；探针实测引擎编译选项无 STAT4，ANALYZE 基础统计是计划器唯一统计来源。
 - **GetByKey 命令复用（PL-2 扩展）**：单行读惰性晋升（阈值 3），复用分支清参重绑走同一生成键绑定器，键类型转换语义与新建路径逐位一致。
 - **SessionBatch SQLite 回退**：全无参语句合并单次多语句往返（`RecordsAffected` 跨语句累计，返回契约保持）；顺序路径循环外单命令复用，同文本语句经驱动语句缓存免重编译。
 - **OwnedJson 读路径 Span 化**：`GetFieldValue<byte[]>` + `Deserialize(ReadOnlySpan<byte>)` 替代 GetString 重载——消每行整段 UTF-16 JSON string 分配与双重转码。
