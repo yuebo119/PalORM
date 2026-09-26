@@ -255,22 +255,15 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 - [ ] **Step 2: XML doc**：`PostgreSqlProvider` 类头补配方指针
 - [ ] **Step 3: Commit** `文档(PG)：连接串调优三配方进 README + XML doc`
 
-## T12【P3】char 列物化 GetChars 化
-
-**背景：** C1/P1-45——char 列读路径每行一次完整 string 分配（`ReadChar` 走 `GetString(o)[0]`，`RowFactoryEmitter.cs:180`）。
+## T12【P3】char 列物化 GetChars ⛔ PoC 证伪结案（2026-09-26）
 
 **Files:**
-- Modify: `src/PalORM.SourceGen/RowFactoryEmitter.cs:180`、辅助方法 `:63-70`
-- Test: `test/PalORM.SourceGen.Tests/` 快照 + `test/PalORM.Integration.Tests/` 三方言 round trip
+- Modify: 无（维持 `ReadChar` 现状）
 
-**Interfaces:**
-- Produces: `stackalloc char[1]` + `GetChars` 形态；ITM-520（两驱动 GetChar 抛 NotSupported）的替代方案必须三方言矩阵实测
-
-- [ ] **Step 1: 写失败测试**：char 列读分配归零断言（Integration，AllTypesEntity 的 VChar 列）
-- [ ] **Step 2: 实现 emit**：`ReadChar` 辅助改 `reader.GetChars(ordinal, 0, buf, 0, 1)`
-- [ ] **Step 3: 三方言矩阵**：SQLite/MySQL/PG 真库 round trip（ITM-520 记录 MySQL 抛 NotSupportedException 的驱动面）
-- [ ] **Step 4: 快照更新 + 人工评审 diff**
-- [ ] **Step 5: Commit** `性能(SourceGen)：char 列 GetChars 零分配读（P1-45，三方言矩阵实测）`
+- [x] **Step 1: PoC**：探针九对 SQLite/PG 实测 `r.GetChars(0, 0, stackalloc char[1], 0, 1)`——编译器报错（CS1503）：`DbDataReader.GetChars(int, long, char[]?, int, int)` 的缓冲参数**只接受 `char[]`，无 Span 重载**（不同于读路径其他 API）。stackalloc 零分配形态不可行。
+- [x] **Step 2: 备选评估**：`ArrayPool<char>.Shared.Rent(1)` 每行 rent/return——收益是消 `GetString(o)[0]` 的每行 ~28B gen0 分配，开销是 rent+return（~40ns）+ 缓冲生命周期管理（RowFactory 的 `static readonly Func<DbDataReader,T>` 无 per-query 状态载体，只能每行 rent/return）。收益与开销相抵，且 char 列不是基准夹具覆盖的形态（PerfHub `Post` 无 char 列）。
+- [x] **Step 3: 结论**：维持 `GetString(o)[0]` + 空串守卫现状；ITM-520 记录的 GetChar NotSupported 背景不变。若未来 .NET 增 Span 版 GetChars 重估。
+- [x] **Step 4: Commit** `文档(PERF)：T12 PoC 证伪——GetChars 无 Span 重载，维持 GetString[0]`
 
 ## T13【裁决项】可空引用列读路径行为
 
