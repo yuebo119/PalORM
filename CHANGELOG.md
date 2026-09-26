@@ -10,10 +10,10 @@
 - **MigrateAsync SQLite 收尾 `PRAGMA optimize`**（增量深挖新增）：SQLite 官方对 schema 变更的建议；探针实测引擎编译选项无 STAT4，ANALYZE 基础统计是计划器唯一统计来源。
 - **GetByKey 命令复用（PL-2 扩展）**：单行读惰性晋升（阈值 3），复用分支清参重绑走同一生成键绑定器，键类型转换语义与新建路径逐位一致。
 - **SessionBatch SQLite 回退**：全无参语句合并单次多语句往返（`RecordsAffected` 跨语句累计，返回契约保持）；顺序路径循环外单命令复用，同文本语句经驱动语句缓存免重编译。
-- **OwnedJson 读路径 Span 化**：`GetFieldValue<byte[]>` + `Deserialize(ReadOnlySpan<byte>)` 替代 GetString 重载——消每行整段 UTF-16 JSON string 分配与双重转码。
-- **证伪划除**（实测，不保留理论收益）：**参数上限 999→32766**（2026-09-26 同轮 A/B：32766 臂批量劣化 BulkInsert 6.08× / UpsertBatch 15.80× / BulkDelete 1.84×，999 臂全部回 0.99~1.03×，ADO 臂逐位稳定——单语句参数绑定成本超线性，维持 999）；L44 可空列单读（驱动 `GetFieldValue<T?>` 读 NULL 抛异常，双读必需）；L35 批量 Prepare（驱动 CommandText 同值 setter 短路，语句缓存已生效）。
+- **OwnedJson 读路径维持 GetString**（Span 化已回滚）：`GetFieldValue<byte[]>` + Span 解析的 UTF-8 语义仅在 Microsoft.Data.Sqlite 成立（探针实测），MySqlConnector 对 TEXT 列该调用抛 `InvalidCastException`（发布 run 36223824623 的 MySQL Native AOT job 实证）；RowFactory 为方言无关生成物无法条件 emit，回滚通用形态并补 PG/MySQL OwnedJson round trip 测试钉死三方言行为。
+- **证伪划除**（实测，不保留理论收益）：**参数上限 999→32766**（2026-09-26 同轮 A/B：32766 臂批量劣化 BulkInsert 6.08× / UpsertBatch 15.80× / BulkDelete 1.84×，999 臂全部回 0.99~1.03×，ADO 臂逐位稳定——单语句参数绑定成本超线性，维持 999）；L44 可空列单读（驱动 `GetFieldValue<T?>` 读 NULL 抛异常，双读必需）；L35 批量 Prepare（驱动 CommandText 同值 setter 短路，语句缓存已生效）；L45 OwnedJson Span 化（MySqlConnector TEXT 列 `GetFieldValue<byte[]>` 抛 InvalidCastException，见上）。
 - **缓议**：P2-29 ToPageAsync 单往返（SQLite 上已平价无差距可收，跨方言 SELECT 形态风险，按观测优先门槛待专用夹具）；大 BLOB 流式与 sqlite-vec 归设计评审/多阶段路线。
-- **验证**：Core.Tests 421/421、SourceGen 202/202（快照更新 1 行目检确认）、Integration SQLite 侧零失败（30 失败均为外部库未启动的连接超时）、SQLite AOT publish + 实跑通过。
+- **验证**：Core.Tests 421/421、SourceGen 202/202、Integration 208/208（SQLite + PG + MySQL 外部库全在线）；三方言 AOT publish + 实跑通过（含 MySQL Native AOT 复现未发布缺陷后转绿）。
 
 ### 工具链 — PerfHub `latest.json` 补两条守卫：子集批次与零真测量批次
 

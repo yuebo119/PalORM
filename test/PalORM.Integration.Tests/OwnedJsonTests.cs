@@ -48,6 +48,49 @@ public sealed class OwnedJsonTests
         await Assert.That(found.Details.Count).IsEqualTo(7);
     }
 
+    // L45 回归（2026-09-26）：OwnedJson 读路径探针仅验 Microsoft.Data.Sqlite 就把 emit 改成
+    // GetFieldValue<byte[]>（Span 解析），MySqlConnector 对 TEXT 列该调用抛 InvalidCastException
+    // （CI MySQL Native AOT job 实证）。已回滚 emit 到 GetString；以下三项方言 round trip
+    // 钉死三方言 OwnedJson 读路径行为——本类故障再发生会在这里先炸（CI Integration service 覆盖）。
+
+    [Test]
+    public async Task OwnedJson_Object_MySql_RoundTrip()
+    {
+        await using var db = await TestDb.MySqlAsync();
+        await db.MigrateAsync();
+
+        var entity = await db.InsertAsync(new JsonTestEntity
+        {
+            Name = "mysql-object",
+            Data = "{}",
+            Details = new JsonDetails { Key = "mysql-value", Count = 7 }
+        });
+        var found = await db.GetAsync<JsonTestEntity>(entity.Id);
+
+        await Assert.That(found).IsNotNull();
+        await Assert.That(found!.Details.Key).IsEqualTo("mysql-value");
+        await Assert.That(found.Details.Count).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task OwnedJson_Object_PostgreSql_RoundTrip()
+    {
+        await using var db = await TestDb.PostgreSqlAsync();
+        await db.MigrateAsync();
+
+        var entity = await db.InsertAsync(new JsonTestEntity
+        {
+            Name = "pg-object",
+            Data = "{}",
+            Details = new JsonDetails { Key = "pg-value", Count = 9 }
+        });
+        var found = await db.GetAsync<JsonTestEntity>(entity.Id);
+
+        await Assert.That(found).IsNotNull();
+        await Assert.That(found!.Details.Key).IsEqualTo("pg-value");
+        await Assert.That(found.Details.Count).IsEqualTo(9);
+    }
+
     [Test]
     public async Task CTE_MultiCondition_Works()
     {
