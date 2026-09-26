@@ -459,3 +459,13 @@
 - 结论：差值的结构性来源 = 每操作一会话固定开销 × 本地低基数放大。后续候选（需 ADR 评估）：本地 SQLite 只读路径默认弹性直通（改 MaxRetries 默认值属契约语义变更，归第三批）。
 
 **② 强优三行（QueryAll/StreamAll/Update @2000）——同向稳定复现，读数可信**：0.60→0.50 / 0.58→0.66 / 0.64→0.56（QueryAll/Update 复测再降，StreamAll 回升但仍在强优区间），地板臂波动 <5%。前批 StreamAll 1.15×（PL-2 前）与本批 0.58/0.66 的反转，为 2026-09-25/26 批次读路径改动（GetByKey 复用/物化路径/PRAGMA）作用的真实信号而非量具漂移——量具同批三臂、A/A 复现性已双重确认。
+
+## 九-C、缓议四项处置决议（2026-09-26）
+
+**① P2-29 ToPageAsync 单往返——实测证伪，划除**：PG 三臂交替三轮（COUNT+page 两往返 / COUNT(*) OVER() 合并 / 仅页查询）：780~844ms vs **1084~1113ms** vs 504~524ms——合并形态比现行两往返**慢 40%（+1ms/页）**，窗口算子物化成本远超省下的本地 RTT，三轮方向无例外。收益假设（省一次往返）反向。本节后续不再单列 P2-29。
+
+**② 本地弹性直通——文档化落地（驳回代码方案）**：改 `DbOptions.MaxRetries` 全局默认 = 契约变更拖累 PG/MySQL；让 Core 感知方言 = 分层污染。两方案均驳回。落地为配方文档：`DbOptions.MaxRetries` XML doc + README SQLite 段双处载明 `with { MaxRetries = 0 }` 与依据（BUSY 已由 busy_timeout=5000 吸收、弹性机构 2~29µs/op 本地净开销）。
+
+**③ BLOB 流式——归档关闭（非死代码，需求未证）**：byte[] 读路径已是驱动 API 最优（`GetFieldValue<byte[]>` 直取零转码，OwnedJson 已 Span 解析）；"整段进内存"是实体属性语义而非实现缺陷。流式只能以新公共 API 存在，零场景佐证。归档：若出现真实大 blob 场景，以 ADR 重启（SqliteBlob 增量 API + SqliteDataReader.GetStream）。
+
+**④ sqlite-vec——分发 PoC 通过，Phase 3 前置条件明确**：PoC（/tmp 探针，Microsoft.Data.Sqlite.Core 11-rc + SQLite3MC 3.53.4 栈）：`LoadExtension("vec0.dll")` OK → `vec_version()` v0.1.9 → `CREATE VIRTUAL TABLE ... USING vec0(embedding float[4], name TEXT)` OK → 插入 → `WHERE embedding MATCH '[1,2,3,4]' ORDER BY distance` KNN 正确（0.0000 / 4.4721）。注意 vec0 的辅助影子表（vec_demo_data/chunks/rowids/aux 由模块自建）与 MigrateAsync 的 schema 校验（`PRAGMA table_info` 形态）是产品化的两处需方言分支点。Phase 3 开工前三问留档：(a) vec0.dll 多 RID 分发策略（授权 MIT/Apache-2.0 无阻碍，但需自托管资产或用户自备 + 6+ RID 尽调）；(b) LoadExtension 挂在 provider InitializeConnectionAsync（每物理连接一次，Deactivate 卸载语义已核实）；(c) AOT 矩阵冒烟（LoadExtension 无反射依赖，预期兼容，需实测）。
