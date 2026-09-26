@@ -102,7 +102,10 @@ public partial class DataSession<TProvider>
 
                     // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
                     // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
-                    // 经暂存命令中转取值，按批内序号重建参数。
+                    // PG-2（2026-09-26）：中转参数按批内序号**改名后转移**进目标集合，不再每 key
+                    // 重建一个参数对象——Clear/RemoveAt 不移交参数所有权（真库探针实测：改名
+                    // Add 到另一命令后执行与复用均正确），10 万键省 10 万个 NpgsqlParameter 与
+                    // 同等次数的装箱 + Provider DbType switch。
                     for (int index = 0; index < batchLen; index++)
                     {
                         scratch.Parameters.Clear();
@@ -111,8 +114,10 @@ public partial class DataSession<TProvider>
                             throw new InvalidOperationException(
                                 $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
 
-                        cmd.Parameters.Add(TProvider.CreateParameter(
-                            placeholders[index], scratch.Parameters[0].Value));
+                        var moved = scratch.Parameters[0];
+                        scratch.Parameters.Clear();
+                        moved.ParameterName = placeholders[index];
+                        cmd.Parameters.Add(moved);
                     }
                     BindDefaultFilterParameters<T>(cmd);
 

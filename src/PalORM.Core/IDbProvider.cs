@@ -39,8 +39,12 @@ public interface IDbProvider
     /// <summary>数据库当前时间表达式，用于软删除等服务端时间写入。</summary>
     static abstract string CurrentTimestampExpression { get; }
 
-    /// <summary>参数占位符生成（@p{N}）。统一格式，三 Provider 共享默认实现。</summary>
-    static virtual string GetParameterPlaceholder(int index) => $"@p{index}";
+    /// <summary>参数占位符生成（@p{N}）。统一格式，三 Provider 共享默认实现。
+    /// <para>PG-1（2026-09-26）：改走 <see cref="ParameterNameCache"/> 预建表——原插值形态在
+    /// BulkDelete 满批调用一次生成 5000 个新字符串（<c>new string[5000]</c> + 5000 次拼接）；
+    /// 缓存形态输出逐字节相同（<c>string.Concat("@p", index)</c>），索引取用零分配。</para></summary>
+    static virtual string GetParameterPlaceholder(int index)
+        => ParameterNameCache.GetName(index);
 
     /// <summary>创建 DbParameter。避免 QueryBuilder.Where() 中 CreateCommand() 资源泄漏。</summary>
     static abstract DbParameter CreateParameter(string name, object? value);

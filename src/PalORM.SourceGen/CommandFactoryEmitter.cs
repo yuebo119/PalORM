@@ -404,6 +404,7 @@ internal static class CommandFactoryEmitter
             if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
             // withOffset=true 时生成 $\"@p{paramOffset + N}\"（插值表达式），false 时生成 \"@pN\"（字面量）
+            // PG-3：DbTypeHint 与 Value 同行，先 DbType 后 Value（Npgsql 的 Value setter 不清除显式映射）
             string paramName = withOffset ? $"global::PalORM.ParameterNameCache.GetName(paramOffset + {pi})" : $"\"@p{pi}\"";
             sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = {paramName}; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
             pi++;
@@ -425,8 +426,9 @@ internal static class CommandFactoryEmitter
         {
             if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
-            if (IsBinaryColumn(col))
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
+            // PG-3：池参数（COPY/多值 INSERT 跨批复用）同样显式 DbType，先 DbType 后 Value
+            if (DbTypeFor(col.ProviderClrTypeName) is { } mapped)
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
@@ -480,9 +482,11 @@ internal static class CommandFactoryEmitter
         foreach (var col in setCols.Concat(pkCols))
         {
             string valueExpr = GetParameterValueExpression(col);
-            if (IsBinaryColumn(col))
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
-            sb.AppendLine($"        parameters[paramOffset + {pi++}].Value = {valueExpr};");
+            // PG-3：同 GenerateBindValuesBody——池参数显式 DbType，先 DbType 后 Value
+            if (DbTypeFor(col.ProviderClrTypeName) is { } mapped)
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
+            sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
+            pi++;
         }
         if (cc is not null)
         {
@@ -492,9 +496,44 @@ internal static class CommandFactoryEmitter
 
     /// <summary>byte[] provider 列的参数绑定显式化：DbType.Binary 在生成物中可见——
     /// PG COPY 经 NpgsqlParameter.DbType → NpgsqlDbType.Bytea（不再依赖驱动从 Value 的
-    /// 运行时推断），MySQL/SQLite 同步获得确定性二进制分派。</summary>
+    /// 运行时推断），MySQL/SQLite 同步获得确定性二进制分派。
+    /// <para><b>PG-3（2026-09-26）扩展到全部标量类型</b>：真库探针（Npgsql 10.0.3 × PG 18.4）
+    /// 实测 <c>NpgsqlParameter.NpgsqlDbType</c> getter 对未显式设类型的参数每读一次即重新
+    /// 推断（~330ns/次 vs 预置 5ns），且 DBNull 值落 <c>Unknown</c>——COPY 写入每行每列读
+    /// 一次该属性，可空列每行走驱动 Unknown 慢路径（实测 52µs/列，显式类型形态 6.6ms/5000 列），
+    /// 同时是 ITM-527（整列全 null 无值可推断）的根因。显式 DbType 后 getter 退化为 DbType
+    /// 映射的字段读，null 列与全 null 列均获得确定类型。未列出的类型（char/TimeSpan/enum/
+    /// 对象型 OwnedJson 等）保持原推断路径，行为不变。</para></summary>
     private static string DbTypeHint(ColumnModel col)
-        => IsBinaryColumn(col) ? "p.DbType = global::System.Data.DbType.Binary; " : "";
+    {
+        var hint = DbTypeFor(col.ProviderClrTypeName);
+        return hint is null ? "" : $"p.DbType = global::System.Data.DbType.{hint}; ";
+    }
+
+    /// <summary>Provider CLR 类型 → DbType 字面量（PG-3）。返回 null = 不显式设置，保持驱动推断。</summary>
+    private static string? DbTypeFor(string providerClrTypeName) => providerClrTypeName switch
+    {
+        "byte[]" or "global::System.Byte[]" => "Binary",
+        "bool" or "global::System.Boolean" => "Boolean",
+        "byte" or "global::System.Byte" => "Byte",
+        "sbyte" or "global::System.SByte" => "SByte",
+        "short" or "global::System.Int16" => "Int16",
+        "ushort" or "global::System.UInt16" => "UInt16",
+        "int" or "global::System.Int32" => "Int32",
+        "uint" or "global::System.UInt32" => "UInt32",
+        "long" or "global::System.Int64" => "Int64",
+        "ulong" or "global::System.UInt64" => "UInt64",
+        "float" or "global::System.Single" => "Single",
+        "double" or "global::System.Double" => "Double",
+        "decimal" or "global::System.Decimal" => "Decimal",
+        "string" or "global::System.String" => "String",
+        "global::System.Guid" => "Guid",
+        "global::System.DateTime" => "DateTime",
+        "global::System.DateTimeOffset" => "DateTimeOffset",
+        "global::System.DateOnly" => "Date",
+        "global::System.TimeOnly" => "Time",
+        _ => null,
+    };
 
     private static bool IsBinaryColumn(ColumnModel col)
         => col.ProviderClrTypeName is "byte[]" or "global::System.Byte[]";
