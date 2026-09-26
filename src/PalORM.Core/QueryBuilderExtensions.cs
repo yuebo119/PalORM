@@ -186,24 +186,36 @@ public static class QueryBuilderExtensions
         ResilienceExecutor resilience = builder._resilience;
         bool resilient = boundTransaction is null && !resilience.IsPassThrough;
 
-        // T5（2026-09-26）：单次尝试内核从 async 局部函数提取为静态方法 + 状态 struct——
-        // 直通分支零闭包零委托；韧性分支闭包从"12 个捕获变量"缩为"1 个 struct"。
-        // 依据：v5.6 注释实测该 display class ≈250 B + 委托转换 56 B，占只读查询固定开销
-        // （272 B 弹性常数）的大头；写入路径已有同范式直调重载（ExecuteWriteRowsAsync，208 B/行）。
-        // lastReadConnection 由内核经返回值回传（重试路径上中间尝试的连接丢失不再影响
-        // finally 归还语义——归还是"最后一次尝试"的既有契约）。
-        var kernelState = new QueryKernelState<T>(
-            builder, sql, parameters, context, interceptors, sw, boundTransaction);
-        DbConnection? lastReadConnection = null;
-
         // 单次尝试内核——每次重试重建连接租约/命令/读取器；缓存写入仅在成功尝试发生；
         // 拦截器 OnBefore/OnError 按尝试触发（失败的尝试确实发生了），OnAfter 仅成功尝试。
         // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
-        async Task<List<T>> AttemptAsync(CancellationToken token)
+        DbConnection? lastReadConnection = null;
+        async Task<List<T>> ExecuteCoreAsync(CancellationToken token)
         {
-            (List<T> list, DbConnection? connection) =
-                await ExecuteQueryCoreAsync(kernelState, token).ConfigureAwait(false);
+            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
             lastReadConnection = connection;
+            await using DbCommand cmd = connection.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+            cmd.Transaction = boundTransaction;
+            AddParameters(cmd, parameters);
+            // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
+            NotifyInterceptorsOnBefore(interceptors, context);
+            await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
+            // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
+            // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
+            // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源）。封顶后由均摊 O(1) 扩容兜底。
+            List<T> list = builder._take.HasValue
+                ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
+                : new List<T>(16);
+            while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
+            NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
+            // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
+            // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）
+            if (builder._cacheKey is not null)
+                builder._queryCache.Set(EffectiveCacheKey(builder), new List<T>(list), builder._cacheTtl);
             return list;
         }
 
@@ -215,8 +227,8 @@ public static class QueryBuilderExtensions
             // 与 SessionOperationState 的单活动操作契约一致。ARCH-001（2026-09-23）：
             // 只读入口走 EnterReadOnly——并行读作用域内允许并发租约，作用域外行为逐位不变。
             List<T> list = resilient
-                ? await resilience.ExecuteAsync(AttemptAsync, ct).ConfigureAwait(false)
-                : await AttemptAsync(ct).ConfigureAwait(false);
+                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
+                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
             outcome = "success";
             return list;
         }
@@ -244,51 +256,6 @@ public static class QueryBuilderExtensions
             if (lastReadConnection is not null)
                 await builder.ReleaseReadConnectionAsync(lastReadConnection).ConfigureAwait(false);
         }
-    }
-
-    /// <summary>T5：只读查询单次尝试内核的状态载体——替代 async 局部函数的 12 变量捕获。
-    /// 值类型按引用穿过 <see cref="ExecuteQueryCoreAsync{T}"/>，直通分支零分配。</summary>
-    private readonly record struct QueryKernelState<T>(
-        QueryBuilder<T> Builder,
-        string Sql,
-        IReadOnlyList<DbParameter> Parameters,
-        QueryContext Context,
-        List<IQueryInterceptor> Interceptors,
-        Stopwatch? Stopwatch,
-        DbTransaction? BoundTransaction) where T : class, new();
-
-    /// <summary>T5：只读查询单次尝试内核（静态化）——从 <see cref="ExecuteQueryAsync{T}"/> 的
-    /// async 局部函数提取。与提取前逐位同构：连接获取 → 命令装配 → 拦截器 OnBefore →
-    /// （可选）Prepare → reader 逐行物化 → 拦截器 OnAfter →（可选）缓存写入。
-    /// 连接经返回值回传供调用方 finally 归还（ARCH-001 语义：最后一次尝试的连接）。</summary>
-    private static async ValueTask<(List<T> List, DbConnection? Connection)> ExecuteQueryCoreAsync<T>(
-        QueryKernelState<T> state, CancellationToken token) where T : class, new()
-    {
-        QueryBuilder<T> builder = state.Builder;
-        DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
-        await using DbCommand cmd = connection.CreateCommand();
-        cmd.CommandText = state.Sql;
-        cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-        cmd.Transaction = state.BoundTransaction;
-        AddParameters(cmd, state.Parameters);
-        // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
-        NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
-        await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-        // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
-        // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
-        // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
-        // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源）。封顶后由均摊 O(1) 扩容兜底。
-        List<T> list = builder._take.HasValue
-            ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
-            : new List<T>(16);
-        while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
-        NotifyInterceptorsOnAfter(state.Interceptors, state.Context, state.Stopwatch, list.Count);
-        // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
-        // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）
-        if (builder._cacheKey is not null)
-            builder._queryCache.Set(EffectiveCacheKey(builder), new List<T>(list), builder._cacheTtl);
-        return (list, connection);
     }
 
     /// <summary>通知所有拦截器 OnError——单个拦截器抛出的异常被吞掉，
