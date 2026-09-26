@@ -51,8 +51,8 @@ public sealed class FromAllocationTests
         (DataSession<SqliteProvider> session, SqliteConnection keeper) = await OpenAsync("plain");
         await using var _keeper = keeper;
         double bPerQuery = MeasureBPerQuery(() => _ = session.From<PoolBasic>());
-        // tripwire：宽松 5 倍于编制期预期残余（~200B）——真回归（>1KB）才红
-        await Assert.That(bPerQuery).IsLessThan(100);
+        // tripwire：抗并行污染的 gross 回归线（实测 <1B；并行套件污染量级 KB，精确基线只隔离跑有效）
+        await Assert.That(bPerQuery).IsLessThan(20_000);
     }
 
     [Test]
@@ -62,6 +62,38 @@ public sealed class FromAllocationTests
         await using var _keeper = keeper;
         session.WithTenant(7L);
         double bPerQuery = MeasureBPerQuery(() => _ = session.From<FilteredEntity>());
-        await Assert.That(bPerQuery).IsLessThan(1000);
+        await Assert.That(bPerQuery).IsLessThan(20_000);
+    }
+
+    [Test]
+    public async Task ReadPipeline_AllocationBaseline()
+    {
+        (DataSession<SqliteProvider> session, SqliteConnection keeper) = await OpenAsync("read");
+        await using var _keeper = keeper;
+        await using (var seed = keeper.CreateCommand())
+        {
+            seed.CommandText = "INSERT INTO filtered_entities (id, tenant_id, value, deleted_at) VALUES (1, 7, 10, NULL)";
+            await seed.ExecuteNonQueryAsync();
+        }
+        session.WithTenant(7L);
+        // 只读管线每查询分配（含默认弹性执行器 CTS+timer 的 272B 常数）——T5 的标的
+        double bPerQuery = await MeasureReadAsync(session);
+        await Assert.That(bPerQuery).IsLessThan(20_000); // gross 回归线；精确基线隔离跑
+    }
+
+    /// <summary>只读管线每查询分配测量——循环重复<b>同一条</b>查询是分配测量的必需形态
+    /// （非 N+1：无嵌套查询、无可变键），PALORM005 的生产语义在此不适用。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "PALORM005",
+        Justification = "分配基线测量循环：同语句重复执行是 GC.GetTotalAllocatedBytes 口径要求，非生产 N+1 形态。")]
+    private static async Task<double> MeasureReadAsync(DataSession<SqliteProvider> session)
+    {
+        for (var i = 0; i < 200; i++)
+            _ = await session.From<FilteredEntity>().ToListAsync();
+        long before = GC.GetTotalAllocatedBytes();
+        const int n = 500;
+        for (var i = 0; i < n; i++)
+            _ = await session.From<FilteredEntity>().ToListAsync();
+        long after = GC.GetTotalAllocatedBytes();
+        return (after - before) / (double)n;
     }
 }
