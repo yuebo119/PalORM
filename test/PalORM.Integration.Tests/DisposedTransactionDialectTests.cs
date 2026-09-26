@@ -11,9 +11,10 @@ namespace PalORM.Integration.Tests;
 /// <c>GetActiveTransaction</c> 原先直接读 <c>.Connection</c>，PG 上用户拿到的是裸 ODE 而非
 /// 设计好的 ArgumentException / InvalidOperationException——同一错误代码在两方言给出两种形态，
 /// 排查方向被误导（ITM-637 注释已记录该发散，本组把它钉住）。</para>
-/// <para>PG 不可用时（无连接串）跳过——与其余 ExternalDatabase 组同口径。</para></summary>
+/// <para><b>为什么无建表</b>：两个用例的失败都发生在 SQL 执行<b>之前</b>（绑定期/执行管线
+/// 入口），不需要任何表。刻意不调 <c>MigrateAsync</c>——全实体建表会给 PG 系统目录加并发压，
+/// 触发 B63 记载的 pg_type/pg_class 23505 竞态连累同组夹具。</para></summary>
 [Property("Category", "ExternalDatabase")]
-[NotInParallel("ExtBulkTable")]
 public sealed class DisposedTransactionDialectTests
 {
     private static DbOptions PgOptions() => new()
@@ -25,8 +26,6 @@ public sealed class DisposedTransactionDialectTests
     public async Task WithTransaction_DisposedTran_ThrowsArgumentException_NotODE()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOptions());
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS disposed_tran_probe");
-        await db.MigrateAsync();
 
         var tran = (NpgsqlTransaction)await db.GetRawConnection().BeginTransactionAsync();
         await tran.DisposeAsync();
@@ -40,8 +39,6 @@ public sealed class DisposedTransactionDialectTests
     public async Task ExecutingWithLateDisposedTran_ThrowsInvalidOperation_NotODE()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOptions());
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS disposed_tran_probe");
-        await db.MigrateAsync();
 
         var tran = (NpgsqlTransaction)await db.GetRawConnection().BeginTransactionAsync();
         var query = db.From<MergeEntity>().WithTransaction(tran);

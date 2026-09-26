@@ -22,21 +22,23 @@ public sealed partial class DataSession<TProvider>
             tn);
         // T4/PG-5（2026-09-26）：组合句同缓存——键为 (Type, Dialect, 过滤形态)，
         // 过滤条件文本由该三元唯一决定（形态内含方言标识符与租户参数名），不新增判别面；
-        // Dialect 恒在键内（B59）。有 where 时调用方只拼 "whereSql + )"（1 次 concat）。
-        (string filterOnlySql, string wherePrefix) = filterForms == DefaultFilterForms.Empty
-            ? (baseSql, baseSql + " WHERE (")
-            : DataSessionCache.CountComposedSqlCache.GetOrAdd(
-                (typeof(T), TProvider.Dialect, filterForms),
-                static (key, b) =>
-                {
-                    string filter = key.Item3.Condition;
-                    return (b + " WHERE " + filter, b + " WHERE " + filter + " AND (");
-                },
-                baseSql);
-        // 用户条件必须整体括号包裹：含 OR 时 AND 优先级会使默认过滤对 OR 分支失效
-        string sql = where is not null
-            ? wherePrefix + FormatSqlWithParameters(where) + ")"
-            : filterOnlySql;
+        // Dialect 恒在键内（B59）。有 where 时只拼 "whereSql + )"（1 次 concat）。
+        // 修正（同日，PerfHub 夹具实测 +4.7% 分配回归）：wherePrefix 改**惰性**——
+        // 原三元在两个分支都饿汉求值，无 where 的 Count 每调用也付一次
+        // baseSql + " WHERE (" 拼接；Empty 形态的特判直出 baseSql（本就不需缓存）。
+        string sql;
+        if (where is null)
+        {
+            sql = filterForms == DefaultFilterForms.Empty
+                ? baseSql
+                : GetCountComposedSql(typeof(T), filterForms, baseSql).FilterOnlySql;
+        }
+        else
+        {
+            // 用户条件必须整体括号包裹：含 OR 时 AND 优先级会使默认过滤对 OR 分支失效
+            sql = GetCountComposedSql(typeof(T), filterForms, baseSql).WherePrefix
+                + FormatSqlWithParameters(where) + ")";
+        }
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = sql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -52,6 +54,22 @@ public sealed partial class DataSession<TProvider>
                 "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
         return scalar is long l ? l : Convert.ToInt64(scalar);
     }
+
+    /// <summary>T4：取（或建）Count 的组合句（filter-only 全句 + where 前缀片段）。
+    /// Empty 形态不入缓存（baseSql 即全句，无判别价值）；工厂对同键在桶锁内执行一次，
+    /// 败者的值被丢弃、不产生可见重复构建（缓存命中路径零分配）。</summary>
+    private static (string FilterOnlySql, string WherePrefix) GetCountComposedSql(
+        Type entityType, DefaultFilterForms filterForms, string baseSql)
+        => filterForms == DefaultFilterForms.Empty
+            ? (baseSql, baseSql + " WHERE (")
+            : DataSessionCache.CountComposedSqlCache.GetOrAdd(
+                (entityType, TProvider.Dialect, filterForms),
+                static (key, b) =>
+                {
+                    string filter = key.Item3.Condition;
+                    return (b + " WHERE " + filter, b + " WHERE " + filter + " AND (");
+                },
+                baseSql);
 
     /// <summary>聚合标量内核（Sum/Max/Min/Avg 共享，v5.4 精炼 L3）。
     /// ITM-613 门禁次序保持：先 EnterOperation 再拼 SQL——门禁外读过滤状态 + 门禁内
