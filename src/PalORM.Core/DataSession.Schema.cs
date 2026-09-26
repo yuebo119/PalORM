@@ -74,7 +74,10 @@ public sealed partial class DataSession<TProvider>
     /// 原实现边校验边执行，type B 缺键在 type A 的 DDL 已执行后才抛，留半成品 schema；
     /// 现在缺键时零副作用。建表 DDL 经 <see cref="CreateBatch"/> 单次往返
     /// （PG 真 DbBatch / MySQL 驱动侧批处理 / SQLite 顺序回退），N 表 N 次往返 → 1 次；
-    /// 索引 DDL 保持逐条——MySQL 1061 幂等跳过是逐条 catch 语义，批内单条失败无法定位跳过项。</para></summary>
+    /// 索引 DDL 保持逐条——MySQL 1061 幂等跳过是逐条 catch 语义，批内单条失败无法定位跳过项。</para>
+    /// <para><b>SQLite 收尾（2026-09-26）</b>：索引 DDL 后跑一次 <c>PRAGMA optimize</c>（SQLite
+    /// 官方对 schema 变更的建议；引擎无 STAT4，ANALYZE 基础统计对 keyset/大 IN 查询计划有
+    /// 直接影响，cost 由 analysis_limit=400 约束）。</para></summary>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
@@ -122,6 +125,20 @@ public sealed partial class DataSession<TProvider>
 
         foreach (IReadOnlyList<string> indexDdls in indexDdlGroups)
             await ApplyIndexDdlAsync(indexDdls, ct).ConfigureAwait(false);
+
+        // SQLite（2026-09-26）：schema 变更后跑一次 PRAGMA optimize——SQLite 官方文档明确建议
+        // "run PRAGMA optimize after a schema change, especially after one or more CREATE INDEX
+        // statements"。收益面：本引擎探针实测编译选项无 STAT4（sqlite_stat1 基础统计是计划器
+        // 的统计来源），新表/新索引后的 ANALYZE 采样直接影响 keyset 分页、大 IN 列表等
+        // PalORM 高频查询形态的执行计划选择。采样成本由连接初始化预设的 analysis_limit=400
+        // 约束（见 SqliteProvider.InitializeConnectionAsync）。方言静态判定（BATCH-002 同
+        // 范式）——PG/MySQL 无此语句。
+        if (TProvider.Dialect == SqlDialect.Sqlite)
+        {
+            await using DbCommand optimizeCmd = CreateCommand();
+            optimizeCmd.CommandText = "PRAGMA optimize;";
+            await optimizeCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>ITM-723：零超时配置（= ADO.NET 无限等待）下 DDL/探活的有限兜底上限。</summary>

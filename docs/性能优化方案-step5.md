@@ -427,6 +427,7 @@
 | 1 | PRAGMA busy_timeout=5000（宽/窄分支共有）——并发 BUSY 引擎内等待，消上层 CTS+退避重试 | 3551bd8 |
 | 2 | PRAGMA journal_size_limit=67108864（文件库）——防 WAL 无界膨胀拖慢检查点 | 3551bd8 |
 | 4a | PRAGMA analysis_limit=400（宽/窄分支共有）——约束 optimize/ANALYZE 采样成本 | 3551bd8 |
+| 4b | MigrateAsync 收尾跑一次 `PRAGMA optimize`（2026-09-26 增量深挖新增）——SQLite 官方对 schema 变更的建议，且引擎探针实测**编译选项无 STAT4**，ANALYZE 基础统计是计划器唯一统计来源，对 keyset/大 IN 查询计划有直接影响；memory 库空表场景不写 stat1 属 SQLite 语义，测试以"有数据+索引"形态锁定 | 增量批 |
 | 3 | ~~参数上限 999→32766~~ **实测证伪回滚**（2026-09-26 同轮 A/B：32766 臂 BulkInsert 6.08× / UpsertBatch 15.80× / BulkDelete 1.84×，999 臂全部回 0.99~1.03×，ADO 臂逐位稳定无环境漂移——单语句参数绑定成本随参数数超线性，"减往返"收益远不抵绑定开销；维持 999） | 3551bd8 + 证伪回滚 |
 | 8 | PL-2 惰性晋升扩展到 GetByKey——复用分支清参重绑走同一生成键绑定器（键类型转换语义逐位一致）；租户实体排除同 Update | 批次D |
 | 9 | SessionBatch 顺序回退单命令复用（L37）——循环外建一条，同文本语句经驱动语句缓存免重编译 | 33c784d |
