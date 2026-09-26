@@ -11,6 +11,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="PalORM.Core.Tests" />
+    <!-- T8/R49：Integration.Tests 的 PG 并发夹具读 QuotedTargetBuildCount（构建次数可观测面） -->
+    <InternalsVisibleTo Include="PalORM.Integration.Tests" />
   </ItemGroup>
 
   <ItemGroup>
