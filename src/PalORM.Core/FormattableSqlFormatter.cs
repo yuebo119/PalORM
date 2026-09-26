@@ -93,6 +93,17 @@ internal static class FormattableSqlFormatter
 
                 if (current != '{')
                 {
+                    // T9/P2-44（2026-09-26）：@pN 是 PalORM 参数保留命名空间（ParameterNameCache
+                    // 生成物）——格式串字面量里出现 @p<数字> 即抛。成因：手写字面量占位符的用户
+                    // 输入在 PG 上得驱动"there is no parameter $1"响亮失败，在 Microsoft.Data.Sqlite
+                    // 上却按未绑定 NULL 静默返回空集（实测复现）——同一错输入两方言两形态。
+                    if (current == '@' && index + 2 < format.Length
+                        && format[index + 1] == 'p' && char.IsAsciiDigit(format[index + 2]))
+                        throw new InvalidOperationException(
+                            $"Formattable SQL contains the literal text '@p…' at position {index}, " +
+                            "which collides with PalORM's reserved parameter naming (@p0..@pN). " +
+                            "Pass values through format items (e.g. {0}) instead of writing " +
+                            "placeholder text by hand.");
                     sb.Append(current);
                     continue;
                 }
