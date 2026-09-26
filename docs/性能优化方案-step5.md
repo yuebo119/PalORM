@@ -469,3 +469,11 @@
 **③ BLOB 流式——归档关闭（非死代码，需求未证）**：byte[] 读路径已是驱动 API 最优（`GetFieldValue<byte[]>` 直取零转码，OwnedJson 已 Span 解析）；"整段进内存"是实体属性语义而非实现缺陷。流式只能以新公共 API 存在，零场景佐证。归档：若出现真实大 blob 场景，以 ADR 重启（SqliteBlob 增量 API + SqliteDataReader.GetStream）。
 
 **④ sqlite-vec——分发 PoC 通过，Phase 3 前置条件明确**：PoC（/tmp 探针，Microsoft.Data.Sqlite.Core 11-rc + SQLite3MC 3.53.4 栈）：`LoadExtension("vec0.dll")` OK → `vec_version()` v0.1.9 → `CREATE VIRTUAL TABLE ... USING vec0(embedding float[4], name TEXT)` OK → 插入 → `WHERE embedding MATCH '[1,2,3,4]' ORDER BY distance` KNN 正确（0.0000 / 4.4721）。注意 vec0 的辅助影子表（vec_demo_data/chunks/rowids/aux 由模块自建）与 MigrateAsync 的 schema 校验（`PRAGMA table_info` 形态）是产品化的两处需方言分支点。Phase 3 开工前三问留档：(a) vec0.dll 多 RID 分发策略（授权 MIT/Apache-2.0 无阻碍，但需自托管资产或用户自备 + 6+ RID 尽调）；(b) LoadExtension 挂在 provider InitializeConnectionAsync（每物理连接一次，Deactivate 卸载语义已核实）；(c) AOT 矩阵冒烟（LoadExtension 无反射依赖，预期兼容，需实测）。
+
+## 九-D、发布拦截教训（2026-09-26，v5.7.0 首推 run 36223824623 两处失败）
+
+**① L45 OwnedJson Span 化——发布级证伪回滚**：emit 改为 `GetFieldValue<byte[]>` + `Deserialize(ReadOnlySpan<byte>)` 时，探针只验了 Microsoft.Data.Sqlite 的 TEXT→UTF-8 语义就统一了三方言 emit。MySqlConnector 对 TEXT 列 `GetFieldValue<byte[]>` 抛 `InvalidCastException`——CI 的 **MySQL Native AOT job** 在发布 gate 上抓住（本地 Integration 无 MySQL OwnedJson round trip 覆盖）。**教训制度化：驱动行为探针必须方言矩阵（P0 #4 的语境扩展）——"这个 API 在 SQLite 上返回 X" 不等于"在三方言上返回 X"；方言无关生成物（RowFactory）不可方言条件 emit，跨方言统一 emit 的读路径改动必须过 CI 三方言真库 + 三 AOT 矩阵才算验证。** 修复：emit 回滚 GetString（本地 MySQL AOT 产物复现实跑转绿），新增 Integration OwnedJson PG/MySQL round trip 测试钉死。
+
+**② 快照 ToolVersion 未随升版本同步**：918ceb9 升 5.7.0 改了 `GeneratedCodeMetadata.ToolVersion`（进生成代码头），但 SourceGen 快照镜像里钉的 ToolVersion 仍是 5.6.0 → CI SourceGen tests 红。release-version-scan 不覆盖快照文件（只扫 src/test/docs 版本引用）。**教训：升版本提交的机械扫描清单 +1 模式——快照文件中的 ToolVersion 字面量；本地先跑一次 `PALORM_UPDATE_SNAPSHOTS=1` 看 diff 是否只剩预期行。**
+
+**复盘面**：两处都在发布 gate 拦住而未入 NuGet（workflow step 顺序 gate 生效，NuGet 上 5.6.0 之后无新包）。本地跑测试 ≠ 三方言 AOT 矩阵验证——发布 SOP §4.1 应显式包含"三方言 OwnedJson round trip 已入测试"与"快照 ToolVersion 同步"两项，本次已补。

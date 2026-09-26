@@ -132,13 +132,14 @@ internal static class RowFactoryEmitter
         }
 
         // 字符串 OwnedJson 是原始 JSON；对象 OwnedJson 仅走源生成 JsonTypeInfo<T>。
-        // L45（2026-09-25，极致优化）：GetFieldValue<byte[]> + Deserialize(ReadOnlySpan<byte>)
-        // 替代 GetString + string 重载——原形态每行先分配整段 UTF-16 JSON string，STJ 再从
-        // string 转码 UTF-8 缓冲解析（双重缓冲）；现形态直接从驱动取 UTF-8 字节解析（探针
-        // 实测 Microsoft.Data.Sqlite 对 TEXT 列 GetFieldValue<byte[]> 返回 UTF-8 字节，与
-        // 写路径 Serialize→TEXT 的存储逐位对应）。NULL 列两种形态都会抛（错误路径，语义不宽）。
+        // L45（2026-09-25 Span 化）经 2026-09-26 发布验证**实测证伪回滚**：GetFieldValue<byte[]>
+        // 对 TEXT 列的 UTF-8 语义仅在 Microsoft.Data.Sqlite 成立（探针实测）；MySqlConnector 对
+        // TEXT 列 GetFieldValue<byte[]> 抛 InvalidCastException（CI MySQL Native AOT job 实证，
+        // 发布 run 36223824623）。RowFactory 是方言无关生成物（TableModel 无方言维度，
+        // 一套生成物服务三方言是根基架构），无法方言条件 emit；且收益面窄（OwnedJson 列读
+        // 分配的局部优化）远不抵一次 INT cast 故障的定位成本。维持 GetString 通用形态。
         if (col.IsOwnedJson && col.ClrTypeName is not "string" and not "global::System.String")
-            return $"global::System.Text.Json.JsonSerializer.Deserialize(new global::System.ReadOnlySpan<byte>(r.GetFieldValue<byte[]>({ordinal})), CommandFactory_{generatedTypeSuffix}.JsonTypeInfo_{col.PropertyName})!";
+            return $"global::System.Text.Json.JsonSerializer.Deserialize(r.GetString({ordinal}), CommandFactory_{generatedTypeSuffix}.JsonTypeInfo_{col.PropertyName})!";
 
         return GetRawReadExpression(
             col.ProviderClrTypeName,
