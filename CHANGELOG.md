@@ -2,9 +2,9 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] — PostgreSQL 极致化：参数占位零分配 + BulkDelete 参数转移 + 全标量显式 DbType + COPY 类型缓存（含 null 列慢路径根因修复与 A/B 协议修正）
+## [未发布] — PostgreSQL 极致化（S1~S3/PG-4 + step7 全量）：null 列慢路径根因修复 + 每查询开销收敛 + 并发单实例化 + ODE 形态统一
 
-> 变更范围：`PalORM.Core`（IDbProvider / DataSession_Bulk）+ `PalORM.SourceGen`（CommandFactoryEmitter）+ `PalORM.PostgreSql`（PostgreSqlProvider）。执行账本与探针证据见 `docs/性能优化方案-step6-pg.md`。
+> 变更范围：`PalORM.Core`（IDbProvider / DataSession_Bulk / DataSession.Query / QueryBuilderExtensions / QueryBuilder / DataSession / FormattableSqlFormatter）+ `PalORM.SourceGen`（CommandFactoryEmitter）+ `PalORM.PostgreSql`（PostgreSqlProvider）+ 测试与文档。执行账本：`docs/性能优化方案-step6-pg.md`（S1~S3/PG-4）+ `docs/性能优化方案-step7-pg-master.md`（T1~T15）。
 
 - **参数占位符零分配（S1）**：`GetParameterPlaceholder` 默认实现改走 `ParameterNameCache` 预建表，原插值形态在 BulkDelete 满批一次生成 5000 个新字符串；输出逐字节相同（`string.Concat("@p", i)`），三方言同受益。
 - **BulkDelete 参数转移（S2）**：中转参数按批内序号改名后转移进目标集合，不再每 key 重建参数对象（Clear/RemoveAt 不移交参数所有权，真库探针实证执行与复用均正确）；每 key 省 1 个 NpgsqlParameter + 1 次装箱 + Provider DbType switch。MySqlConnector Add 时重名校验的重名规避形态不变。
@@ -13,7 +13,18 @@
 - **A/B 协议修正（顺序交替）**：首批固定顺序（每轮 base→opt）下 opt 固定占批内后段，远端共享库时段劣化全记到 opt 账上（未改代码的 Count/KeysetPage 假劣化 +27%/+23%、BulkUpdate 假劣化 +34%）；改奇数轮 base 先、偶数轮 opt 先后，BulkUpdate/Upsert 回平、BulkDelete 的"退化"反现真赢。同批 ADO 归一不能替代顺序交替（ADO 臂也在批内前段）。
 - **划除（实测证伪，留档不保留理论收益）**：显式 PrepareAsync（PG 远端库 RTT ~556µs 下 SELECT1 ratio 0.96 / JOIN 0.90，parse 收益被 RTT 淹没，自动预编译旋钮已覆盖）；GSS 协商关闭默认化（只削 149ms 长尾，属安全默认变更，改文档化配方）；synchronous_commit=off 批量路径（数据安全取舍须 opt-in，且夹具每批 1 COMMIT 收益上限小）。
 - **A/B 验证**（顺序交替 4 轮，base=0d15da5 worktree，opt=本变更，PG 18.4 真库 20000 档）：分配（确定性口径）BulkInsert/TxBulkInsert 8.48→5.27MB（−38%）、BulkDelete 11.25→7.40MB（−34%）；时延 BulkInsert −13.8%（P/ADO 归一 −13.7%，4/4 轮一致）、TxBulkInsert −9.9%、BulkDelete −11.0%（4/4 轮一致）；BulkUpdate/UpsertBatch 持平（分配与 base 逐位相同）。StreamAll/QueryAll −27.8% 为只读路径观测、机制未归因，不计入收益；明细与协议分析见 `docs/性能优化方案-step6-pg.md` §五/§八。
-- **验证**：Core.Tests 421/421、SourceGen 202/202（快照基线已更新）、Integration 208/208（PG 真库在线）；三路深挖证据（Npgsql 10.0.3 反射盘查 68 连接串属性/importer 20 成员/驱动 API 全量 · PalORM PG 路径逐行热账 · 社区官方 2024-2026 经验 37 源抓取）与三轮真库探针见 `docs/性能优化方案-step6-pg.md`。
+- **step7 终极方案落地（2026-09-26 · `docs/性能优化方案-step7-pg-master.md`，15 任务 12 项实施/证伪）**：
+  - **T4 Count/聚合组合 SQL 缓存**：filter-only 全句与 where 前缀片段同缓存（键带 `DefaultFilterForms`——过滤形态即过滤条件全集，Dialect 恒在键内 B59），聚合族后缀同构。隔离实测 where 形态 4035→3399 B/查询（−15.7%）、filter-only −2.6%。
+  - **T5 读路径内核静态化 ⛔ 已回滚（7332c6a）**：曾实施并隔离实测 −1.2%，累计 A/B 抓到真实夹具回归（GetByKey/IncludeJoin 分配 +3~10%）——闭包捕获 `kernelState` struct 触发装箱（~112B）+ display class + 委托，总成本高于它要消的旧 display class；隔离端 SQLite/租户/ToList 形态与真实夹具 PG/非租户/FirstOrDefault 形态 **sign 相反**。对分（T4/T5/T6 各重建+诊断批）定位后整体回滚；教训：隔离分配的读数不能外推，最终判据是顺序交替累计 A/B。
+  - **T6 租户作用域单条目缓存**：分解实测（softOnly 57.1 / tenantOnly 277.8 / both 334.9 B），`From<T>` 每查询拼接改每会话惰性缓存（不可变条目类——单引用赋值原子，值元组有撕裂读即跨租户串数据风险），both 334.9→302.1 B；`IgnoreFilters`/`WithTenant` 显式失效。参数绑定 deferral（~200B）需改子句模型且 PerfHub 夹具不覆盖租户会话，登记后续 ADR。
+  - **T7 ODE 形态统一（P1-33）**：`WithTransaction`/`GetActiveTransaction` 直接读 `.Connection` 在 Npgsql 已释放事务上抛裸 `ObjectDisposedException`（SQLite 返 null）——统一走既有 `IsTransactionAlive` 探针，两方言都得设计语义异常；PG 真库红→绿测试钉住。锁成本量级推断 <0.5µs/查询，不动锁。
+  - **T8 缓存并发单实例化（R49/R50）**：**GetOrAdd 工厂实测仍可并发执行多次**（8 线程首触构建 8 次——测试红字记录，只保证入库值唯一）——收敛为字典存 `Lazy`（ExecutionAndPublication 真单实例）+ 失败摘除（Lazy 缓存故障，不摘除会把一次构建失败固化为永久异常）。R50 binder 首次探测同模式。
+  - **T10 R47 契约钉死**：显式设成驱动默认值的旋钮不被静默改写（PROV-001 的 `HasExplicitKey` 双条件），3 条回归测试。
+  - **T12 PoC 证伪**：`DbDataReader.GetChars` 缓冲参数只收 `char[]` 无 Span 重载，stackalloc 零分配形态不可行；ArrayPool rent/return 每行收益与开销相抵——维持 `GetString[0]`。
+  - **T13/T14 流程门**：可空引用列读行为三选项挂起等裁决；ADR-G（OwnedJson 方言条件 Span emit，G2 推荐但需先补 PerfHub 夹具）已产出，实现不动。
+  - **新增回归测试**：From/Count 分配基线（隔离口径 tripwire）、PG 已释放事务形态、PG 批缓存并发（构建次数=1）、连接串覆盖契约、@pN 保留命名空间（P2-44：字面量占位符在 PG 响亮失败/SQLite 静默返空集的方言发散被封堵）。
+- **验证（step6）**：Core.Tests 421/421、SourceGen 202/202（快照基线已更新）、Integration 208/208（PG 真库在线）；三路深挖证据（Npgsql 10.0.3 反射盘查 68 连接串属性/importer 20 成员/驱动 API 全量 · PalORM PG 路径逐行热账 · 社区官方 2024-2026 经验 37 源抓取）与三轮真库探针见 `docs/性能优化方案-step6-pg.md`。
+- **验证（step7）**：Core.Tests 426/426、SourceGen 202/202、Integration 211/211（PG 真库在线；新增 From/Count 分配基线、PG 已释放事务形态、PG 批缓存并发构建次数=1、连接串覆盖契约、@pN 保留命名空间等回归测试）。最终 3 轮顺序交替 A/B（base=955cc39 worktree，PG 20000 档）：21 项分配全部 ±3.3% 内（零回归），时延除 QueryAll/StreamAll/IncludeJoin 一致负向（未归因不计收益）外全在噪声带；批量路径与 base 持平符合预期（step7 未再动 COPY 路径）。累计 A/B 方法论事故两起留档（同 label 历史污染按时间戳过滤修正；perfhub-ab.sh 参数只认等号形式）。
 
 ## [5.7.0] — SQLite 极致优化：PRAGMA 三补 + 读路径命令复用 + 批量回退合并 + OwnedJson Span 解析 + Migrate optimize（含参数上限 32766 实测证伪）
 
