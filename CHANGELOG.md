@@ -2,7 +2,7 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] — SQLite 极致优化批次：PRAGMA 三补 + 读路径命令复用 + 批量回退合并 + OwnedJson Span 解析（含参数上限 32766 实测证伪）
+## [5.7.0] — SQLite 极致优化：PRAGMA 三补 + 读路径命令复用 + 批量回退合并 + OwnedJson Span 解析 + Migrate optimize（含参数上限 32766 实测证伪）
 
 > 变更范围：`SqliteProvider` / `DataSession.Crud` / `SessionBatch` / `RowFactoryEmitter` + 测试与文档。执行账本与探针证据见 `docs/性能优化方案-step5.md` §九。
 
@@ -15,7 +15,7 @@
 - **缓议**：P2-29 ToPageAsync 单往返（SQLite 上已平价无差距可收，跨方言 SELECT 形态风险，按观测优先门槛待专用夹具）；大 BLOB 流式与 sqlite-vec 归设计评审/多阶段路线。
 - **验证**：Core.Tests 421/421、SourceGen 202/202（快照更新 1 行目检确认）、Integration SQLite 侧零失败（30 失败均为外部库未启动的连接超时）、SQLite AOT publish + 实跑通过。
 
-## [未发布·工具链] — PerfHub `latest.json` 补两条守卫：子集批次与零真测量批次
+### 工具链 — PerfHub `latest.json` 补两条守卫：子集批次与零真测量批次
 
 > 变更范围：`bench/PalORM.PerfHub/Program.cs`（写 latest 的判据）+ 还原被污染的指针 + 三份失败批次留档。
 
