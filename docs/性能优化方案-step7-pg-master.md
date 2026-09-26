@@ -265,19 +265,24 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 - [x] **Step 3: 结论**：维持 `GetString(o)[0]` + 空串守卫现状；ITM-520 记录的 GetChar NotSupported 背景不变。若未来 .NET 增 Span 版 GetChars 重估。
 - [x] **Step 4: Commit** `文档(PERF)：T12 PoC 证伪——GetChars 无 Span 重载，维持 GetString[0]`
 
-## T13【裁决项】可空引用列读路径行为
+## T13【裁决项】可空引用列读路径行为 ⏸ 挂起等用户裁决（2026-09-26 已呈递）
 
-**背景：** C2/P1-46——DB NULL + 非可空注解属性 → 裸 `SqlNullValueException`。改为三态响亮失败属**行为变更**，需用户裁决。
+**Files:**
+- Modify: 无（未经确认不改行为——步骤 2 是硬门）
 
-- [ ] **Step 1: 呈现选项**：(a) 维持现状 + XML doc 警告；(b) 可空性未知时抛带列名的 PalORM 异常；(c) 读路径加 `IsDBNull` 守卫（每列每行一次 IsDBNull 成本）
-- [ ] **Step 2: 等裁决再排实现**（未经确认不动）
+- [x] **Step 1: 呈现选项**（已在对话中呈递，此处留档）：
+  - (a) 维持现状 + XML doc 警告：DB NULL 撞非可空注解属性时抛裸 `SqlNullValueException`（当前行为）
+  - (b) 可空性未知时抛带列名的 PalORM 异常：诊断性更好，仍是行为变更（异常类型变）
+  - (c) 读路径加 `IsDBNull` 守卫：每列每行一次 IsDBNull 探测成本，但可返回 null（需要属性可空）
+- [ ] **Step 2: 等裁决再排实现**——裁决记录到本行后开工
 
-## T14【ADR 项】OwnedJson 方言条件 Span emit
+## T14【ADR 项】OwnedJson 方言条件 Span emit ✅ ADR 已产（实现保持挂起）
 
-**背景：** C3——v5.7.0 三方言统一 emit 的 Span 化被 MySQL TEXT 列 `InvalidCastException` 证伪回滚（0d15da5）；PG 的 jsonb 理论可行，但 RowFactory 是方言无关生成物。
+**Files:**
+- Create: `docs/adr/ADR-G-ownedjson-方言条件span化.md`（2026-09-26）
 
-- [ ] **Step 1: 先写 ADR**（`docs/adr/`）：方言条件 emit 的 SourceGen 改造面 + PG-only 收益评估（无基准夹具覆盖 OwnedJson 列，收益不可测是主要障碍）
-- [ ] **Step 2: 若 ADR 通过再排实现**（含新增 OwnedJson 夹具进 PerfHub 的前置任务）
+- [x] **Step 1: ADR**：G1 维持 / G2 SourceGen 方言感知化（推荐，但需先补 OwnedJson PerfHub 夹具）/ G3 PG-only 运行时旁路 / G4 驱动能力探测 四选项 + 收益成本分析
+- [ ] **Step 2: 若 ADR 通过再排实现**（G2 前置：OwnedJson 夹具子任务 + 三方言矩阵实测）
 
 ## T15【缓议登记】触发条件表（不排期）
 
