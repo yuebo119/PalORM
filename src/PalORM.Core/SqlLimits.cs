@@ -17,13 +17,15 @@ public static class SqlLimits
     /// 不要复用本值——那是把单语句约束误用到多语句场景（BULK-001，2026-09-23）。</para></summary>
     public const int InClauseBatchSize = 500;
 
-    /// <summary>方言级绑定参数上限（BULK-001，2026-09-23）：SQLite 取引擎编译选项
-    /// <c>MAX_VARIABLE_NUMBER=32766</c>（3.32+ 默认值；PalORM 经 SQLite3MC.PCLRaw.bundle 固定
-    /// 引擎版本，2026-09-25 引擎探针实测确认该编译选项，故不再取 999 旧保守值——999 在同数据量下
-    /// 最多多出 33 倍语句往返）；PG/MySQL 取协议上限 <see cref="MaxBindParameters"/>。
+    /// <summary>方言级绑定参数上限（BULK-001，2026-09-23）：SQLite 取保守值 999——引擎编译
+    /// 选项 <c>MAX_VARIABLE_NUMBER=32766</c>（3.32+ 默认值，2026-09-25 引擎探针实测确认）
+    /// 虽支持大值，但 2026-09-26 PerfHub 同轮 A/B 实测证伪：32766 使 SQLite 批量路径劣化
+    /// BulkInsert 6.08×、UpsertBatch 15.80×、BulkDelete 1.84×（999 臂全部回 1.00~1.03×，
+    /// ADO 臂逐位稳定无环境漂移）——单语句参数绑定成本随参数数超线性，减少语句往返的收益
+    /// 远不抵绑定开销。PG/MySQL 取协议上限 <see cref="MaxBindParameters"/>。
     /// 批量路径按批切分必须用它——用全局上限会在 SQLite 上越界。</summary>
     public static int MaxBindParametersFor(SqlDialect dialect)
-        => dialect == SqlDialect.Sqlite ? 32766 : MaxBindParameters;
+        => dialect == SqlDialect.Sqlite ? 999 : MaxBindParameters;
 
     /// <summary>单批行数上限（BULK-001，2026-09-23）：参数上限只约束"参数个数"，不约束
     /// <b>语句文本规模</b>——CASE WHEN 形态的批量 UPDATE 文本按 O(行数×列数) 增长，

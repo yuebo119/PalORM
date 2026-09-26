@@ -10,9 +10,9 @@ namespace PalORM.Integration.Tests;
 /// <para>① 既有键更新 + 新键插入（UPSERT 本义）；② 混合默认/非默认键分区
 /// （默认键走逐条 INSERT 并回填 ID）；③ 返回值 = 处理行数（不依赖 affectedRows）；
 /// ④ 重复执行幂等（upsert）；⑤ [ConcurrencyCheck] 实体保持逐条路径的显式拒绝（ITM-503）。</para>
-/// <para>跨批路径的正确性由 BulkBatchLimitTests 以 11000 行 × 3 列显式覆盖
-/// （批大小 = 32766/3 = 10922 → 2 批；BULK-001 前的 900 参数/语句口径已随 2026-09-25
-/// 参数上限 32766 更新），本文件只锁定上述语义契约。</para></summary>
+/// <para>跨批路径的正确性由 BulkBatchLimitTests 覆盖（SQLite 批大小 = min(999, 5000)，
+/// 2500 键至少 3 批；32766 大值经 2026-09-26 A/B 实测证伪后维持 999 上限），
+/// 本文件只锁定上述语义契约。</para></summary>
 [NotInParallel("ExtBulkTable")]
 internal sealed class BulkMergeSetBasedTests
 {

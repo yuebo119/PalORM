@@ -8,8 +8,8 @@ namespace PalORM;
 /// (65535)，默认 batchSize=1000，2 列实体的 poolSize 即 2000，索引 1024..1999 全部落入
 /// <c>$"@p{index}"</c> 插值分支，每次 BulkInsertAsync 约 2*(poolSize-1024) 次字符串分配。
 /// 代价是常驻约 1.3 MB 的字符串表（65536 × (24B 对象头 + ~7 字符)），换来批量写入热路径
-/// 的参数名零分配。SQLite 上限 999→32766（2026-09-25，引擎编译选项实测）后最深参数名仍在
-/// 65536 表内不越界；PG 走 COPY 不建该池，扩容对 MySQL 与 SQLite 批量路径都有实际收益。</para></summary>
+/// 的参数名零分配。SQLite 上限 999 保守值不越界（32766 大值经 A/B 实测证伪为负优化，
+/// 见 SqlLimits.MaxBindParametersFor）；PG 走 COPY 不建该池，扩容对 MySQL 批量路径有实际收益。</para></summary>
 public static class ParameterNameCache
 {
     /// <summary>预建参数名的数量上界——与 <see cref="SqlLimits.MaxBindParameters"/> 对齐，

@@ -85,6 +85,19 @@ public sealed class SqliteProvider : IDbProvider
     /// 软删除 deleted_at 跨库混用时语义不同（ITM-326）。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
+    /// <summary>PRAGMA 初始化文本（窄分支：内存/只读库）——L32（2026-09-26）：文本恒定常量，
+    /// 消除每次连接初始化的运行时拼接分配（BDN 每操作一会话形态下每操作省数百字节）。</summary>
+    private const string PragmaNarrow =
+        "PRAGMA foreign_keys = ON; PRAGMA busy_timeout=5000; PRAGMA cache_size=-65536; PRAGMA analysis_limit=400";
+
+    /// <summary>PRAGMA 初始化文本（宽分支：文件读写库）。理由见 <see cref="PragmaNarrow"/>。</summary>
+    private const string PragmaFileDb =
+        "PRAGMA foreign_keys = ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; "
+        + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
+        + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000; "
+        + "PRAGMA journal_size_limit=67108864; "
+        + "PRAGMA mmap_size=268435456; PRAGMA analysis_limit=400";
+
     /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式 + 写入/读取 PRAGMA 调优。
     /// 数据库文件被其他进程锁定时受调用方取消/超时约束。
     /// <para><b>PRAGMA 调优</b>（统一执行一次，单次往返）：
@@ -140,13 +153,7 @@ public sealed class SqliteProvider : IDbProvider
         // 连接上抛 SqliteException Error 8（SQLite 真库探针实证），会使会话创建与读副本连接
         // 整体失败。只读库本就不写入，WAL/synchronous/checkpoint 类治理无语义；
         // foreign_keys 与 cache_size 是纯连接态设置，只读下安全。
-        command.CommandText = isInMemory || isReadOnly
-            ? "PRAGMA foreign_keys = ON; PRAGMA busy_timeout=5000; PRAGMA cache_size=-65536; PRAGMA analysis_limit=400"
-            : "PRAGMA foreign_keys = ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; "
-              + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
-              + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000; "
-              + "PRAGMA journal_size_limit=67108864; "
-              + "PRAGMA mmap_size=268435456; PRAGMA analysis_limit=400";
+        command.CommandText = isInMemory || isReadOnly ? PragmaNarrow : PragmaFileDb;
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -178,9 +185,9 @@ public sealed class SqliteProvider : IDbProvider
     public static bool IsUniqueViolation(Exception exception)
         => exception is SqliteException { SqliteErrorCode: 19, SqliteExtendedErrorCode: 2067 or 1555 };
 
-    /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 32766
-    /// （引擎编译选项 <c>MAX_VARIABLE_NUMBER=32766</c>，2026-09-25 探针实测；999 旧值在同
-    /// 数据量下最多多 33 倍语句往返，见 <see cref="SqlLimits.MaxBindParametersFor"/>）。</summary>
+    /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 999（保守值：
+    /// 引擎支持 32766 但 PerfHub 同轮 A/B 实测大批参数使批量劣化 6~16×，见
+    /// <see cref="SqlLimits.MaxBindParametersFor"/> 的证伪记录）。</summary>
     /// <para>r6-N2：隔离级别参数仅为接口形态同步（SQLite 事务隔离单一 Serializable，
     /// BeginTransactionAsync 忽略隔离参数差异；r9-S4：本调用点走 BulkContext 默认值（ReadCommitted），非透传——行为中性，措辞订正）。</para>
     public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
@@ -191,7 +198,7 @@ public sealed class SqliteProvider : IDbProvider
             conn, transaction, entities,
             new BulkContext(
                 batchSize,
-                MaxParametersPerStatement: 32766,
+                MaxParametersPerStatement: 999,
                 QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
             ct);
 }
