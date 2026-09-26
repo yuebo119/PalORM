@@ -13,19 +13,30 @@ public sealed partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
-        string defaultFilter = GetDefaultFilterCondition<T>();
+        DefaultFilterForms filterForms = GetDefaultFilterForms<T>();
         // PERF-002（2026-09-23）：基底恒定（仅条件可变）——按 (Type, Dialect) 缓存，
         // 原先每次 CountAsync 付一次 QuoteIdentifier + 插值。
-        string sql = DataSessionCache.CountBaseSqlCache.GetOrAdd(
+        string baseSql = DataSessionCache.CountBaseSqlCache.GetOrAdd(
             (typeof(T), TProvider.Dialect),
             static (_, tableName) => $"SELECT COUNT(*) FROM {TProvider.QuoteIdentifier(tableName)}",
             tn);
-        if (where is not null)
-            // 用户条件必须整体括号包裹：含 OR 时 AND 优先级会使默认过滤对 OR 分支失效
-            sql += " WHERE " + (defaultFilter.Length == 0 ? "" : defaultFilter + " AND ")
-                + "(" + FormatSqlWithParameters(where) + ")";
-        else if (defaultFilter.Length > 0)
-            sql += " WHERE " + defaultFilter;
+        // T4/PG-5（2026-09-26）：组合句同缓存——键为 (Type, Dialect, 过滤形态)，
+        // 过滤条件文本由该三元唯一决定（形态内含方言标识符与租户参数名），不新增判别面；
+        // Dialect 恒在键内（B59）。有 where 时调用方只拼 "whereSql + )"（1 次 concat）。
+        (string filterOnlySql, string wherePrefix) = filterForms == DefaultFilterForms.Empty
+            ? (baseSql, baseSql + " WHERE (")
+            : DataSessionCache.CountComposedSqlCache.GetOrAdd(
+                (typeof(T), TProvider.Dialect, filterForms),
+                static (key, b) =>
+                {
+                    string filter = key.Item3.Condition;
+                    return (b + " WHERE " + filter, b + " WHERE " + filter + " AND (");
+                },
+                baseSql);
+        // 用户条件必须整体括号包裹：含 OR 时 AND 优先级会使默认过滤对 OR 分支失效
+        string sql = where is not null
+            ? wherePrefix + FormatSqlWithParameters(where) + ")"
+            : filterOnlySql;
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = sql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -52,8 +63,19 @@ public sealed partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
             throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
+        // T4/PG-5 同构：") FROM {table}{whereClause}" 后缀按 (Type, Dialect, 过滤形态) 缓存——
+        // 只剩 "SELECT {fn}(" 前缀与表达式文本每次拼（1 次 concat，原全量插值 + QuoteIdentifier）。
+        string suffix = GetDefaultFilterForms<T>() == DefaultFilterForms.Empty
+            ? DataSessionCache.AggregateSuffixCache.GetOrAdd(
+                (typeof(T), TProvider.Dialect),
+                static (_, tableName) => $") FROM {TProvider.QuoteIdentifier(tableName)}",
+                tn)
+            : DataSessionCache.AggregateFilteredSuffixCache.GetOrAdd(
+                (typeof(T), TProvider.Dialect, GetDefaultFilterForms<T>()),
+                static (key, tableName) => $") FROM {TProvider.QuoteIdentifier(tableName)}{key.Item3.WhereClause}",
+                tn);
         return await ExecuteScalarAsync<T>(
-            $"SELECT {function}({FormatSqlWithParameters(expression)}) FROM {TProvider.QuoteIdentifier(tn)}{GetDefaultFilterWhereClause<T>()}",
+            $"SELECT {function}(" + FormatSqlWithParameters(expression) + suffix,
             expression, ct).ConfigureAwait(false);
     }
 

@@ -44,6 +44,25 @@ internal static class DataSessionCache
     /// 2026-09-23：基底恒定、仅条件可变，原先每次 CountAsync 付一次 QuoteIdentifier + 插值。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> CountBaseSqlCache = new();
 
+    /// <summary>PG-5/T4（2026-09-26）：per-(Type, Dialect, 默认过滤形态) 缓存 COUNT 的两种组合句——
+    /// <list type="bullet">
+    /// <item>键含 <see cref="DefaultFilterForms"/>：过滤条件文本由 (Type, Dialect) 唯一决定
+    /// （形态内已含方言标识符与租户参数名），形态即判别式，不引入新的键设计面；Dialect 恒在键内（B59）。</item>
+    /// <item>值 = (filter-only 全句, where 前缀片段)：前者服务无 where 的
+    /// <c>… WHERE filter</c>；后者服务有 where 的 <c>… WHERE filter AND (</c> 前缀，
+    /// 调用方只拼 <c>whereSql + ")"</c>（1 次 concat，原 3~4 次）。</item>
+    /// </list></summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect, DefaultFilterForms), (string FilterOnlySql, string WherePrefix)>
+        CountComposedSqlCache = new();
+
+    /// <summary>PG-5/T4（2026-09-26）：聚合标量（Sum/Max/Min/Avg）的 <c>") FROM {table}{whereClause}"</c>
+    /// 后缀缓存——两种键形态：无默认过滤 (Type, Dialect)；有过滤 (Type, Dialect, 过滤形态)。
+    /// 与 <see cref="CountComposedSqlCache"/> 同判别式设计（形态即过滤条件全集，Dialect 恒在键内）。</summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> AggregateSuffixCache = new();
+
+    /// <summary>聚合后缀缓存的有过滤形态——键含 <see cref="DefaultFilterForms"/>（同上判别式设计）。</summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect, DefaultFilterForms), string> AggregateFilteredSuffixCache = new();
+
     /// <summary>per-(Type, Dialect, hasTenant) 缓存软删 UPDATE 全句（M1，v5.6.0）——原先
     /// DeleteAsync 软删路径每次调用 5 次 QuoteIdentifier + 全句插值重建。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool), string> SoftDeleteUpdateSqlCache = new();
