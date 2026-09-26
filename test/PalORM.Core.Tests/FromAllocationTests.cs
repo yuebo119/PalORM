@@ -25,7 +25,9 @@ public sealed class FromAllocationTests
         await using (var init = keeper.CreateCommand())
         {
             init.CommandText = "CREATE TABLE pool_basic (id INTEGER PRIMARY KEY, qty INTEGER NOT NULL, label TEXT NOT NULL);" +
-                               "CREATE TABLE filtered_entities (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, value INTEGER NOT NULL, deleted_at TEXT);";
+                               "CREATE TABLE filtered_entities (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, value INTEGER NOT NULL, deleted_at TEXT);" +
+                               "CREATE TABLE softonly_entities (id INTEGER PRIMARY KEY, value INTEGER NOT NULL, deleted_at TEXT);" +
+                               "CREATE TABLE tenantonly_entities (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, value INTEGER NOT NULL);";
             await init.ExecuteNonQueryAsync();
         }
         var conn = new SqliteConnection(cs);
@@ -65,6 +67,26 @@ public sealed class FromAllocationTests
         await Assert.That(bPerQuery).IsLessThan(20_000);
     }
 
+    /// <summary>T6/T3 分解：租户 334.92B 的构成——软删单形态 / 租户单形态 / 双形态三读数相减。
+    /// 判定参数绑定 deferral 是否值得做（占大头的项才是标的）。</summary>
+    [Test]
+    public async Task FromT_Tenant_Decomposition()
+    {
+        (DataSession<SqliteProvider> session, SqliteConnection keeper) = await OpenAsync("decomp");
+        await using var _keeper = keeper;
+        session.WithTenant(7L);
+        double softOnly = MeasureBPerQuery(() => _ = session.From<SoftOnlyEntity>());
+        double tenantOnly = MeasureBPerQuery(() => _ = session.From<TenantOnlyEntity>());
+        double both = MeasureBPerQuery(() => _ = session.From<FilteredEntity>());
+        // T6 分解实测（2026-09-26 隔离口径）：softOnly=57.1 / tenantOnly=253.3 / both=302.1。
+        // 判定：租户路径的 ~200B 是 From<T> 期参数绑定（List+NpgsqlParameter+FormattableString），
+        // defer 到执行期需改子句模型（ADR-L 定型点在 From 期），收益仅惠及租户会话且 PerfHub 夹具
+        // 不覆盖——登记为后续 ADR 项，本轮只做 scope 缓存（−32.8B）。
+        await Assert.That(softOnly).IsLessThan(20_000);
+        await Assert.That(tenantOnly).IsLessThan(20_000);
+        await Assert.That(both).IsLessThan(20_000);
+    }
+
     [Test]
     public async Task ReadPipeline_AllocationBaseline()
     {
@@ -96,4 +118,22 @@ public sealed class FromAllocationTests
         long after = GC.GetTotalAllocatedBytes();
         return (after - before) / (double)n;
     }
+}
+
+[SoftDelete]
+[Table("softonly_entities")]
+internal sealed partial class SoftOnlyEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("value")] public long Value { get; set; }
+    [Column("deleted_at")] public string? DeletedAt { get; set; }
+}
+
+[TenantAware]
+[Table("tenantonly_entities")]
+internal sealed partial class TenantOnlyEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("tenant_id")] public long TenantId { get; set; }
+    [Column("value")] public long Value { get; set; }
 }

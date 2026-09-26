@@ -72,11 +72,25 @@ public sealed partial class DataSession<TProvider>
         // 独立命名空间（全量与过滤数据互不可见）；单租户（_tenantId null）→ key 原样。
         if (_tenantId is not null)
         {
+            // T6：租户过滤作用域走每会话单条目缓存（零拼接）；"__all__" 是 const 无需缓存。
+            // ADR-L 定型点不变——仍与过滤注入同点求值，缓存只消拼接不改变定型时点。
             builder._cacheTenantScope = !_ignoreFilters && (features & EntityFeatures.TenantAware) != 0
-                ? $"__t:{_tenantId}"
+                ? TenantScopeCached(typeof(T))
                 : "__all__";
         }
         return builder;
+    }
+
+    /// <summary>T6：取（或建）当前实体的租户过滤作用域——同类型命中缓存零分配。
+    /// <c>_tenantId</c> 非 null 由调用方（From&lt;T&gt; 的 if 门）保证。</summary>
+    private string TenantScopeCached(Type entityType)
+    {
+        TenantScopeEntry? entry = _tenantScopeEntry;
+        if (entry is not null && entry.Type == entityType)
+            return entry.Scope;
+        string scope = $"__t:{_tenantId}";
+        _tenantScopeEntry = new TenantScopeEntry(entityType, scope);
+        return scope;
     }
 
     // ─── CRUD ────────────────────────────────────────────
