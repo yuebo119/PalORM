@@ -15,6 +15,9 @@
 
 set -euo pipefail
 
+# NuGetAudit=false——理由与机制见 perf.sh 同名导出注释（BDN 图恢复需要，含被引用的 src 工程）。
+export NuGetAudit=false
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIALECTS="${1:-sqlite,mysql,pg}"
 shift || true

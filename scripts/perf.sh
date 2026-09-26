@@ -15,6 +15,13 @@
 
 set -euo pipefail
 
+# NuGetAudit=false（2026-09-26）：BDN 自动生成工程 restore 时拉取漏洞数据失败会被根级
+# TreatWarningsAsErrors 提升为 error（NU1900），整个 BDN 图（含被引用的 src 工程）被阻断。
+# 本机 NuGet 走 WinINET 系统代理拿不到 nuget.org 服务索引，env 变量在 Windows 上对 NuGet
+# 无效的问题用 MSBuild 属性通道解决：环境变量自动成为 MSBuild 属性、先于 SDK 默认值生效，
+# 且随 BDN 派生的 msbuild 子进程继承。仅审计静默，包解析不受影响（restore 实测通过）。
+export NuGetAudit=false
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GATE_PROJECT="$ROOT_DIR/tools/PalORM.PerfGate"
 BDN_RESULTS="$ROOT_DIR/BenchmarkDotNet.Artifacts/results"

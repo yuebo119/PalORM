@@ -427,7 +427,7 @@
 | 1 | PRAGMA busy_timeout=5000（宽/窄分支共有）——并发 BUSY 引擎内等待，消上层 CTS+退避重试 | 3551bd8 |
 | 2 | PRAGMA journal_size_limit=67108864（文件库）——防 WAL 无界膨胀拖慢检查点 | 3551bd8 |
 | 4a | PRAGMA analysis_limit=400（宽/窄分支共有）——约束 optimize/ANALYZE 采样成本 | 3551bd8 |
-| 3 | 参数上限 999→32766（SqlLimits + SqliteProvider BulkContext）——探针实测引擎编译选项 MAX_VARIABLE_NUMBER=32766；多批测试用例行数同步提高保持跨批验证面 | 3551bd8 |
+| 3 | ~~参数上限 999→32766~~ **实测证伪回滚**（2026-09-26 同轮 A/B：32766 臂 BulkInsert 6.08× / UpsertBatch 15.80× / BulkDelete 1.84×，999 臂全部回 0.99~1.03×，ADO 臂逐位稳定无环境漂移——单语句参数绑定成本随参数数超线性，"减往返"收益远不抵绑定开销；维持 999） | 3551bd8 + 证伪回滚 |
 | 8 | PL-2 惰性晋升扩展到 GetByKey——复用分支清参重绑走同一生成键绑定器（键类型转换语义逐位一致）；租户实体排除同 Update | 批次D |
 | 9 | SessionBatch 顺序回退单命令复用（L37）——循环外建一条，同文本语句经驱动语句缓存免重编译 | 33c784d |
 | 10 | SessionBatch 全无参语句合并单次多语句往返（L38）——驱动 RecordsAffected 跨语句累计（源码核实），返回契约保持；带参/混合/未知方言保持逐条 | 33c784d |

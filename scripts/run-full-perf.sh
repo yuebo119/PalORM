@@ -14,6 +14,10 @@
 
 set -euo pipefail
 
+# NuGetAudit=false——理由与机制见 perf.sh 同名导出注释（本脚本会被 perf.sh 调用，也可单独
+# 跑；BDN 派生的 msbuild 子进程继承此 env，src 工程被卷入 BDN 图恢复时同样需要）。
+export NuGetAudit=false
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_DIR="$ROOT_DIR/bench/PalORM.Benchmarks"
 GATE="tools/PalORM.PerfGate"
@@ -29,6 +33,9 @@ step() { echo ""; echo "══════════════════�
 step "[0/6] 构建（Release）"
 dotnet build "$BENCH_DIR/PalORM.Benchmarks.csproj" -c Release --nologo 2>&1 | tail -2
 dotnet build "$ROOT_DIR/$GATE/PalORM.PerfGate.csproj" -c Release --nologo 2>&1 | tail -2
+# 启动量具（[3/6]）以 --no-build 跑 SourceGen.Tests 的 Release 产物——不在此构建时，
+# 新机器/清理 bin 后该步恒 fail（exe 缺失，2026-09-26 基线重录实测）。
+dotnet build "$ROOT_DIR/test/PalORM.SourceGen.Tests/PalORM.SourceGen.Tests.csproj" -c Release --nologo 2>&1 | tail -2
 
 step "[1/6] 负载测试 第 1 轮（维度 3/4/11）"
 dotnet run --project "$BENCH_DIR" -c Release --no-build -- --workload 2>&1 | tee "$LOG_DIR/workload-run1.log" | grep -E "threads|种子"

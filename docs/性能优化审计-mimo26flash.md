@@ -90,9 +90,9 @@
 - **L30** [轴2] StoredProcBuilder.cs:94 | GetOutputValue 的 `_outputParams.Find(x => x.ParameterName == name)` 捕获 name 形成闭包+List 线性扫，执行后每读一次输出参数触发一次 | for 循环消闭包，输出参数字典化 | [事实]微
 - **L31** [轴2] BatchUpdateSqlBuilder.cs:143-178 | MySQL/SQLite CASE WHEN 形态 SQL 文本按 O(行数×列数) 平方级增长（每个 SET 列重复全部行 WHEN 分支），单语句可达 MB 级，解析与传输线性膨胀 | 分批阈值从纯行数改为按生成文本字节估算 | [事实]形态 /[推断]字节分批
 - **L32** [轴2] PostgreSqlProvider.cs:35-76、MySqlProvider.cs:37,77、SqliteProvider.cs:107-124 | 每次 CreateConnection/InitializeConnection 都 new XxxConnectionStringBuilder 解析全串并重建（每会话一次，高频短会话重复付） | 按（原串+调优参数）缓存调优后连接串 | [事实]
-- **L33** [轴2] SqliteProvider.cs:132-138 | 每个新连接无条件全量执行 PRAGMA 集，池复用物理句柄时每会话重复同一组幂等 PRAGMA（多一次多语句往返与解析） | 探测 PRAGMA 状态后跳过或增量执行 | [推断]
-- **L34** [轴2] SqliteProvider.cs:180 | 批量参数上限硬编码 999，现代 SQLite（3.32+）默认 32766，同数据量最多多约 33 倍语句往返 | 运行时 sqlite3_limit 探测或默认 32766 保留 999 回退 | [推断]
-- **L35** [轴2] MultiValueBulkInsert.cs:214-266 | 跨批复用 batchCmd 在 CommandText 稳定时从不调用 Prepare（全仓 src 无 DbCommand.Prepare 调用，grep 核实），MySQL 回退每批文本协议重解析、SQLite 每批重新 prepare | 首批后显式 Prepare，批间仅改参数 Value | [事实]
+- **L33** [轴2] SqliteProvider.cs:132-138 | 每个新连接无条件全量执行 PRAGMA 集，池复用物理句柄时每会话重复同一组幂等 PRAGMA（多一次多语句往返与解析） | 探测 PRAGMA 状态后跳过或增量执行 | [推断] **2026-09-26 决策不实施**：初始化已是单往返批，探测读取本身 1 次往返，成本≥收益（负优化），见 step5 §九
+- **L34** [轴2] SqliteProvider.cs:180 | 批量参数上限硬编码 999，现代 SQLite（3.32+）默认 32766，同数据量最多多约 33 倍语句往返 | ~~运行时 sqlite3_limit 探测或默认 32766 保留 999 回退~~ **[推断] 已实测证伪（2026-09-26）**：32766 臂批量劣化 6~16×（单语句绑定成本超线性），维持 999，见 step5 §九
+- **L35** [轴2] MultiValueBulkInsert.cs:214-266 | 跨批复用 batchCmd 在 CommandText 稳定时从不调用 Prepare（全仓 src 无 DbCommand.Prepare 调用，grep 核实），MySQL 回退每批文本协议重解析、SQLite 每批重新 prepare | ~~首批后显式 Prepare，批间仅改参数 Value~~ **[事实] 前提证伪（2026-09-26）**：驱动 CommandText 同值 setter 短路（`if (value != _commandText)` 源码核实），同文本批次本就免重编译，见 step5 §九
 - **L36** [轴2] DataSession_Bulk.cs:683-684 | BatchUpsert 硬编码 `maxParametersPerStatement = 900`（SQLite 999 余量），PG/MySQL 实际上限 65535：20 列实体 45 行/批，10K 行 223 次往返（PG 同上限只需 4 批） | 按方言分档钳制，复用 MultiValueBulkInsert 已有 MaxParametersPerStatement 机制 | [事实]
 - **L37** [轴2] SessionBatch.cs:119-126 | SQLite 回退路径每条语句 await using DbCommand 新建再销毁，本地 RTT≈0 时命令创建反成回退路径主要开销 | 循环外建一条命令复用（改 CommandText+清参数） | [事实]
 - **L38** [轴2] SessionBatch.cs:90-127 | SQLite 无批量 API 回退逐条，但 SQLite 支持单命令多语句（分号分隔）一次往返，当前未用 | 无参语句（AppendRaw）合并为单个多语句命令；带参保持逐条 | [事实]逐条 /[推断]合并
