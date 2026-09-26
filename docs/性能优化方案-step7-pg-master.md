@@ -101,22 +101,26 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 每操作自建连接的用法（形态 b）付 +23.9µs/op 会话税，登记给用户参考。
 按判定门槛（>10µs/op 才立 T2b 旋钮扫描缓存）：**T2b 不立**。
 
-## T3【P1】From&lt;T&gt; 每查询分配实测与收尾
+## T3【P1】From&lt;T&gt; 每查询分配实测与收尾 ✅ 已完成（2026-09-26，隔离单测口径）
 
-**背景（本总纲编制时实地核实，P1-1 已大部闭环）**：`DataSession.Crud.cs:13-20` 的软删/租户格式串已按封闭泛型静态缓存（PERF-002）；`GetDefaultFilterForms`（`DataSession.cs:590-612`，S2743）已按 `(Type,Dialect,hasSoftDelete,hasTenant)` 缓存三种拼接形态。剩余疑点只有租户会话的 `FormattableStringFactory.Create`（`DataSession.Crud.cs:66-67`，API 形状固有成本，P2-16 同族）与 `_cacheTenantScope` 拼接（`:75-77`，每 `From<T>()` 一次、会话内恒定）。本任务以实测结案，不预置结论。
+**背景（编制期实地核实，P1-1 已大部闭环）**：`DataSession.Crud.cs:13-20` 的软删/租户格式串已按封闭泛型静态缓存（PERF-002）；`GetDefaultFilterForms`（`DataSession.cs:590-612`，S2743）已按 `(Type,Dialect,hasSoftDelete,hasTenant)` 缓存三种拼接形态。剩余疑点只有租户会话的 `FormattableStringFactory.Create`（`:66-67`，API 形状固有成本，P2-16 同族）与 `_cacheTenantScope` 拼接（`:75-77`，每 `From<T>()` 一次、会话内恒定）。本任务以实测结案，不预置结论。
 
 **Files:**
-- Modify: `src/PalORM.Core/DataSession.Crud.cs:66-77`（仅当实测显示租户形态 >50B/查询时修 scope 拼接）
-- Test: `test/PalORM.Core.Tests/`
+- Create: `test/PalORM.Core.Tests/FromAllocationTests.cs`（隔离单测口径分配基线 + 宽松 tripwire）
+- Modify: `src/PalORM.Core/DataSession.Crud.cs:66-77`（租户形态超门槛，scope 拼接修复移 T6 Step 3）
 
-**Interfaces:**
-- Produces: 实测报告（非租户/租户两形态每查询分配 B 数）；修或不修的结论落入本文档 §结果
+- [x] **Step 1: 分配探针测试**（`--treenode-filter "/*/*/FromAllocationTests/*"` 单跑；全量套件禁配——TUnit 并行污染全局分配计数，同 BulkUpdatePoolingTests 既有结论）
+- [x] **Step 2: 实测记录**：见下
+- [x] **Step 3: 判定**：非租户 <1B/查询（零分配，不修）；租户 **334.92 B/查询**（两轮逐位稳定，超 80B 门槛）→ scope 拼接修复移 T6 Step 3；参数绑定 deferral 待 T6 分解后定
+- [x] **Step 4: tripwire 入库**（100B / 1000B，宽于实测）
+- [x] **Step 5: Commit** `测试(PERF)：From<T> 分配基线——非租户零分配 / 租户 334.92B`
 
-- [ ] **Step 1: 写分配探针测试**：`[Test] From_Allocation_Measured()`——非租户与租户两种会话，各 1000 次 `From<Posts>()`，`GC.GetAllocatedBytes` 差 ÷ 1000 得 B/次
-- [ ] **Step 2: 运行并记录两形态读数**（当前无基线，本步骤即建立基线）
-- [ ] **Step 3: 判定**：非租户 >30B 或租户 >80B → 修（scope 拼接改惰性字段，见 T6 Step 3）；否则登记结案
-- [ ] **Step 4: 若修**：补 `[Test] TenantScope_NotRebuilt()` 引用相等断言；若否：在文档记“实测 X B/查询，低于门槛，结案”
-- [ ] **Step 5: Core 421 + Commit** `性能(Core)：From<T> 每查询分配实测收尾（P1-1 残余）`
+**结果**：
+
+| 形态 | B/查询 | 判定 |
+|---|---|---|
+| 非租户 `From<PoolBasic>()` | **<1**（零分配） | 缓存全热后无堆分配，不修 |
+| 租户（软删+租户）`From<FilteredEntity>()` | **334.92** | 超门槛；构成待分解（候选：scope 拼接 ~32B / FormattableString 传值 ~140B / 过滤参数 `List+NpgsqlParameter` ~150B / 2×ClauseNode ~64B），T6 落地时同测分解
 
 ## T4【P1】Count 组合 SQL 缓存
 
