@@ -15,7 +15,7 @@ public static class PalORMMetrics
     /// <summary>ITM-773(r21)：instrumentation version 与包版本对齐（OTel 语义约定建议
     /// instrumentation_scope.version = 库版本）——此前硬编码 "1.0.0" 与 5.5.1 漂移，
     /// 观测端按版本过滤/关联失配。由 D11 同口径守护（生成物侧为 GeneratedCodeMetadata）。</summary>
-    internal const string InstrumentationVersion = "5.6.0";
+    internal const string InstrumentationVersion = "5.7.0";
 
     internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, InstrumentationVersion);
 
