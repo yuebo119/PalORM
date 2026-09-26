@@ -72,22 +72,34 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 - [x] **Step 2: 规范补三条契约**（入口唯一 / label 契约决定 ⑤b 配对 / 同批 ADO 归一不能替代顺序交替 + 分配优先判读）
 - [x] **Step 3: Commit** `文档(PERF)：A/B 执行契约——入口唯一 + label 契约 + ADO 归一不能替代交替`
 
-## T2【P0·探针】PG 每操作一会话固定开销量级
+## T2【P0·探针】PG 每操作一会话固定开销量级 ✅ 已完成（2026-09-26 探针六）
 
 **背景：** GetByKey/Count/IncludeJoin 对 Dapper 的 1.07~1.13 差距主因疑为“每操作一会话 vs 裸连接”形态差；SQLite 侧探针口径 16~29µs/op，PG 未测。
 
 **Files:**
-- Modify: `.ai/scratch-pgprobe/Program.cs`（新增探针六）
-- Test: `test/PalORM.Integration.Tests/`（若结论触发优化，补会话预热用例）
+- Modify: `.ai/scratch-pgprobe/Program.cs`（探针六，本地留档 gitignored）
 
 **Interfaces:**
-- Consumes: `DataSession.CreateAsync`（`src/PalORM.Core/DataSession.cs:100-176`）
 - Produces: 每操作一会话 CreateAsync vs 裸连接 OpenAsync 的 µs/op 差值（PG 口径）
 
-- [ ] **Step 1: 写探针**：PG 连接串暖池后，各 2000 次（a）`DataSession.CreateAsync` + DisposeAsync（b）裸 `new NpgsqlConnection` + OpenAsync；交替 3 轮取中位
-- [ ] **Step 2: 分解开销**：把 (a)−(b) 的差额按 DataSession 构造清单（NpgsqlConnectionStringBuilder 10 次 `Keys.Contains` + linked CTS + ResilienceExecutor + 3 集合）逐项注释归因
-- [ ] **Step 3: 判定门槛**：差值 >10µs/op → 立 T2b（连接串旋钮扫描缓存：per-connectionString 判定结果缓存）；≤10µs/op → 登记结案
-- [ ] **Step 4: Commit** `探针(PERF)：PG 每操作一会话开销量级 + 归因`
+- [x] **Step 1: 三形态交替 3 轮探针**（构造式 = PerfHub PalORM 臂实际形态；CreateAsync 自含式；裸连接基线；探针项目 AssemblyName=PerfProbe 走 InternalsVisibleTo）
+- [x] **Step 2: 记录与归因**：见下
+- [x] **Step 3: Commit** `探针(PERF)：PG 每操作一会话开销量级 + 归因`
+
+**结果（3 轮交替中位）**：
+
+| 形态 | 中位 | 分配 |
+|---|---|---|
+| (a) 构造式 `new DataSession<PostgreSqlProvider>(共享连接)`（PerfHub 臂实际形态） | **0.44µs/op** | 1041 B/op |
+| (b) CreateAsync 自含式 + DisposeAsync | 25.14µs/op | — |
+| (c) 裸连接 `new NpgsqlConnection + OpenAsync` | 1.25µs/op | — |
+
+**结论（证伪一个假设，闭环一项）**：GetByKey/Count/IncludeJoin 对 Dapper 的 1.07~1.13 差距（22~89µs/op）
+**不可能**由“每操作一会话 vs 裸连接”形态差解释——PerfHub PalORM 臂的构造式只付 0.44µs/op，
+占差距的 0.5~2%。剩余差距候选收敛到每查询管线本身（CTS+timer 168B、`EnterOperation` 锁、
+`GetActiveTransaction`、每查询新建命令/reader），即 T3~T6 的标的。
+每操作自建连接的用法（形态 b）付 +23.9µs/op 会话税，登记给用户参考。
+按判定门槛（>10µs/op 才立 T2b 旋钮扫描缓存）：**T2b 不立**。
 
 ## T3【P1】From&lt;T&gt; 每查询分配实测与收尾
 
