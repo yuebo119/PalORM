@@ -8,6 +8,10 @@ namespace PalORM.Integration.Tests;
 /// optimize 应产出 sqlite_stat1 统计行（空表场景 ANALYZE 无对象不写，属 SQLite 语义）。</para>
 /// <para>② PostgreSQL：同构平移 <c>ANALYZE</c>。实效断言：migrate 后 pg_statistic 系统目录
 /// 出现被迁移表的统计行——计划器统计已刷新（SQLite 优化平移 PG 的对应物）。</para></summary>
+/// <para>③ <b>B63 守卫（2026-09-27 复现）</b>：MigrateAsync 在 PG/MySQL 上是 registry 全量建表，
+/// 多用例并行执行会在系统目录撞 23505（pg_type_typname_nsp_index）——本地并行复现、CI 同因
+/// 失败卡过发布。本类挂 ExtBulkTable 组与其余 PG 建表用例串行。</para>
+[NotInParallel("ExtBulkTable")]
 public sealed class MigrateOptimizeTests
 {
     [Test]
