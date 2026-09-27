@@ -40,14 +40,40 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <b>布尔旋钮边界（审计 PROV-011）</b>：NoResetOnClose/Enlist 这类布尔参数显式给出时
     /// 不再被改写（此前"显式 true 与默认不可区分"会导致会话状态泄漏 ITM-652 与环境事务
     /// 脱离 ITM-643）。</para></summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
-        "S3776:CognitiveComplexity",
-        Justification = "本方法是连接串调优旋钮的线性清单（池参数 + 预编译/缓冲/环境事务），"
-            + "复杂度来自旋钮数量而非嵌套；PROV-001 起每个旋钮多一个显式键判定条件。"
-            + "拆分会把 ITM-612 的'单点覆盖口径'打散到多处，反而增加漂移风险。")]
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        // PG-6（2026-09-27）：改写结果按全部输入缓存——本方法的输入只有 (连接串, 4 个
+        // options 池参数字段)（旋钮清单只读 options.MaxPoolSize/MinPoolSize/
+        // PoolIdleTimeoutSeconds/PoolLifetimeMinutes，其余为常量）。实测（探针十二）
+        // 单次 CreateConnection 的固定成本 = 连接串解析 9.44µs + 10× Keys.Contains
+        // 旋钮扫描 2.46µs ≈ 12µs；每操作自建会话的用法（DataSession.CreateAsync per op，
+        // README 快速Start 形态）全额支付它——会话税 24µs 的近一半。缓存命中后
+        // CreateConnection 只剩字典查询 + new NpgsqlConnection（0.09µs）。
+        string rewritten = RewrittenConnectionStringCache.GetOrAdd(
+            (connectionString, options.MaxPoolSize, options.MinPoolSize,
+                options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
+            static (key, opts) => RewriteConnectionString(key.ConnectionString, opts),
+            options);
+        return new NpgsqlConnection(rewritten);
+    }
+
+    /// <summary>PG-6：改写结果的缓存——键 = 本方法全部输入（连接串 + 4 个 options 池参数字段）。
+    /// 键空间上限 = 连接串变体数 × 池参数组合数（应用内通常个位数），与
+    /// <see cref="QuotedInsertTargetCache"/> 同族的有限键集豁免。工厂失败（非法连接串）
+    /// 不缓存，异常照旧传播。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
+        RewrittenConnectionStringCache = new();
+
+    /// <summary>PG-6：连接串旋钮改写的实际逻辑（从 CreateConnection 原样抽出，逻辑零变更）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "PG-6：连接串调优旋钮改写（原 CreateConnection 主体原样抽出）——线性旋钮清单，（池参数 + 预编译/缓冲/环境事务），"
+            + "复杂度来自旋钮数量而非嵌套；PROV-001 起每个旋钮多一个显式键判定条件。"
+            + "拆分会把 ITM-612 的'单点覆盖口径'打散到多处，反而增加漂移风险。")]
+    private static string RewriteConnectionString(string connectionString, DbOptions options)
+    {
         var builder = new NpgsqlConnectionStringBuilder(connectionString);
         // ITM-612：池参数遵循下方系列的"仅默认时覆盖"策略——原对象初始化器在连接串解析后
         // 无条件覆盖，连接串内嵌 "Max Pool Size=500" 被静默改写为 DbOptions 默认值。
@@ -98,7 +124,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         if (!HasExplicitKey(builder, "Enlist") && builder.Enlist)
             builder.Enlist = false;
 
-        return new NpgsqlConnection(builder.ConnectionString);
+        return builder.ConnectionString;
     }
 
     /// <summary>连接串是否显式给出某键（PROV-001，2026-09-23）。

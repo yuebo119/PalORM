@@ -421,3 +421,30 @@ tenant_id/deleted_at 与产品默认过滤同款）+ 5 操作 × 三臂：
 
 剩余唯一基础设施债：本机无容器 PG（远端共享库），时延结论必须走顺序交替协议；
 单批比值因实现顺序（ADO→Dapper→PalORM）有结构性偏差，判读只认逐轮中位。
+
+## PG-6：CreateConnection 改写结果缓存（2026-09-27 追问"还有可以优化的吗"的产出）
+
+**动机**：追问下补测了此前列为"未测、预期 <2%"的连接串项。探针十二分解 CreateConnection
+固定成本：**连接串解析 9.44µs + 10× Keys.Contains 旋钮扫描 2.46µs ≈ 12µs/次**。PerfHub 夹具
+用共享连接（CreateConnection 只调一次），但 README 快速Start 的每操作 CreateAsync 用法全额
+支付它——T2 探针实测该形态会话税 25.1µs/op，其中近一半是这 12µs。
+
+**实施**：`PostgreSqlProvider.CreateConnection` 的输入只有（连接串, options.MaxPoolSize/
+MinPoolSize/PoolIdleTimeoutSeconds/PoolLifetimeMinutes 四个池参数字段——旋钮清单只读这四个），
+故改写结果按全部输入缓存（`RewrittenConnectionStringCache`，工厂失败不缓存）。逻辑零变更
+（原主体原样抽为 RewriteConnectionString）。
+
+**实测（探针十三，同形状对照探针十二/T2）**：CreateConnection **12µs → 0.53µs**；每操作
+CreateAsync+DisposeAsync **25.1µs → 2.67µs**。正确性由既有三态验证兜底：Core 430/430
+（含 ITM-546 字面量 @pN 透传）、SourceGen 202/202、Integration 214/214（PG 真库，含
+ConnectionStringOverrideTests 三条覆盖契约——显式默认值不被改写/未设旋钮仍应用调优值/
+显式非默认值赢 DbOptions，缓存键正确性即真库验证）。
+
+## T9 回归修复（2026-09-27 同日，诚实记录）
+
+PG-6 构建后的全量测试暴露：T9 的 @pN 保留命名空间守卫**破坏了既有契约 ITM-546**——SQL
+字符串字面量里的 @pN（`'a@p1.com'`、`'%@p2%'`）是用户数据必须原样透传，而守卫一律抛错。
+根因是首版守卫不做字面量状态跟踪。修复：单引号字符串字面量跟踪（含 `''` 转义），只拦
+引号外的裸 @pN。同时修正本人 T9 测试的错误断言（把"值经参数化"断言成"SQL 含字面值"）。
+**流程教训**：T9 提交时用 `tail -3` 看测试输出，失败行在 tail 窗口之外被漏看（B104 同款）——
+此后一律 grep `失败|成功:` 总结行。修复后 Core 430/430（此前 426 里实际藏着这 4 个失败）。
