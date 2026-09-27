@@ -101,6 +101,12 @@ public partial class User
 }
 ```
 
+> **可空约定**：引用类型属性标记为非可空（如 `string Email`）而库里是 NULL 时，读取抛
+> `SqlNullValueException`（响亮失败，不返回 null、不出静默错数据）——这是数据/模型不匹配的
+> 硬契约。可能存 NULL 的列请声明为可空（`string?`）。包一层带列名的异常与 IsDBNull 守卫
+> 两个替代方案已评估否决（前者是破坏面最大的异常类型变更、后者把失败推成下游空值扩散），
+> 留档于 `docs/性能优化方案-step7-pg-master.md` T13。
+
 ### 创建会话
 
 ```csharp

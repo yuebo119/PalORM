@@ -1,6 +1,6 @@
 # ADR-G：OwnedJson 读路径方言条件 Span 化
 
-> 状态：待用户决策（2026-09-26 提交）· 来源：step7 任务清单 T14 · 关联：发布回滚 0d15da5（run 36223824623）
+> 状态：**已决策：维持 G1（不做）**（2026-09-27）· 来源：step7 任务清单 T14 · 关联：发布回滚 0d15da5（run 36223824623）
 
 ## 背景
 
@@ -27,3 +27,22 @@ RowFactory 是**方言无关**生成物：emitter 拿不到（也不拿）实体
 
 1. 是否批准 G2 方向（SourceGen 方言感知化）？若批准，先立"OwnedJson PerfHub 夹具"子任务再动 emitter。
 2. 维持 G1 也是可接受决策：jsonb 读路径的 UTF-16 转码成本未被测量，可能本就低于直觉（Npgsql 的 GetString 内部也是 byte[]→string 单次转码）。
+
+## 决策（2026-09-27：维持 G1）
+
+**裁决依据来自 T16 新夹具族的实测**（`bench/PalORM.PerfHub` 的 `OwnedJsonQuery`/`TenantGetAll`
+两操作，PG 20000 档，三臂）：
+
+| 形态 | PalORM | 裸 ADO | Dapper |
+|---|---|---|---|
+| TenantGetAll（5000 行含 OwnedJson 反序列化，Span 化的目标形态） | **7.57ms / 1030KB**（时延与分配双优） | 9.86ms / 1035KB | 7.92ms / 1717KB |
+| OwnedJsonQuery（LIMIT 50，小结果集） | 0.46ms（+21% vs ADO） | **0.38ms** | 0.47ms |
+
+- Span 化要消除的“每行 UTF-16 string 分配 + 双重转码”只在**大结果集**显著——而那里 PalORM
+  已经时延分配双优，收益是“领先者再快一点”的上界。
+- 小结果集的 +21% 差距是 RTT 主导的固定开销，Span 化（物化侧优化）治不了。
+- G2 成本侧：SourceGen 方言感知化 = 生成器核心模型变更 + MySqlConnector TEXT 列
+  `InvalidCastException` 前科（0d15da5）需三方言矩阵重验。收益侧证据走弱后，投入产出不成立。
+
+**重评触发条件**（满足其一重开本 ADR）：① 出现“大 OwnedJson 结果集上 PalORM 时延或分配
+输给 Dapper/ADO”的夹具读数；② SourceGen 方言感知化因其他需求先行落地（成本已被摊销）。
