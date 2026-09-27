@@ -335,12 +335,17 @@ public partial class DataSession<TProvider>
             TProvider.CreateParameter);
         AttachParameters(cmd, pool, paramsPerRow, paramsPerRow, hasTenant ? 1 : 0);
 
-        // MySQL-8：MySQL dialect 走 DbBatch 打包——N 条 UPDATE 单次协议往返。
+        // MySQL-8/PG-7：MySQL/PG dialect 走 DbBatch 打包——N 条 UPDATE 单次协议往返。
         // 探针十六实测（真库 100 命令，同连接同事务）：100 命令 1 个 DbBatch = 14.70ms，
         // 逐条复用命令 = 52.18ms（3.55×）。走 ADO.NET 通用 DbBatch 抽象（.NET 7+
         // DbConnection.CreateBatch），Core 不依赖任何驱动类型；驱动不支持的方言
-        // （SQLite/PG）由 dialect 判据留在逐条路径（G31 方言感知）。
-        if (TProvider.Dialect == SqlDialect.MySql)
+        // 由 dialect 判据留在逐条路径（G31 方言感知）。
+        // PG-7（2026-09-27 移植）：探针二十八实测 PG 远程库同族对照 = **7.85×**
+        // （200 命令逐条 118.7ms vs DbBatch100/批 15.1ms）——PG 远程 RTT（~556µs）
+        // 高于本地 MySQL，打包省得更多。
+        // SQLite 不做：探针二十五实测进程内无 RTT，DbBatch vs 逐条 = 1.02~1.04×
+        // （省不下命令对象/状态机之外的任何成本），平移收益为噪声。
+        if (SupportsBatchedPooledUpdate)
         {
             return await ExecuteBulkUpdatePooledWithBatchAsync(
                 new PooledBatchUpdateInput<T>(
@@ -374,7 +379,13 @@ public partial class DataSession<TProvider>
         return (total, increments);
     }
 
-    /// <summary>MySQL-8：DbBatch 打包的池化逐条 UPDATE。
+    /// <summary>MySQL-8/PG-7 移植判据：仅 MySQL/PG dialect 走 DbBatch 批路径。
+    /// 抽成属性而非内联 `is X or Y`——内联 or 模式的分支会把宿主方法的认知复杂度
+    /// 推过 S3776 的 15 线；集中一处也便于后续方言加入时单点维护。</summary>
+    private static bool SupportsBatchedPooledUpdate
+        => TProvider.Dialect is SqlDialect.MySql or SqlDialect.PostgreSql;
+
+    /// <summary>MySQL-8/PG-7：DbBatch 打包的池化逐条 UPDATE（MySQL/PG dialect；SQLite 逐条——无 RTT 无收益）。
     /// <para><b>打包粒度</b>：<see cref="BatchedUpdateCommandsPerRound"/> 条命令一个 DbBatch
     /// （一次协议往返）。粒度取 100 的实测依据：探针十六 100 命令 = 14.70ms，且限制单批
     /// 报文在 max_allowed_packet 常见默认（每命令 UPDATE ≈ 1KB 量级 → 100KB/批）内。</para>
@@ -387,7 +398,7 @@ public partial class DataSession<TProvider>
     /// 加入待回放列表（ITM-556：中途冲突整批回滚，已"成功"行的内存状态与 DB 保持一致）。</para></summary>
     private const int BatchedUpdateCommandsPerRound = 100;
 
-    /// <summary>MySQL-8 批路径的上下文聚合（S107）——池化逐条 UPDATE 的全部输入。</summary>
+    /// <summary>MySQL-8/PG-7 批路径的上下文聚合（S107）——池化逐条 UPDATE 的全部输入。</summary>
     private readonly record struct PooledBatchUpdateInput<T>(
         IReadOnlyList<T> Entities,
         CrudMetadata Metadata,
