@@ -913,6 +913,11 @@ public partial class DataSession<TProvider>
     /// 变成明确失败。需要确定性 last-wins 时请先按主键去重再调用。</para>
     /// <para><b>返回值</b>：与原实现一致，返回处理的行数（不依赖驱动的 affectedRows——
     /// MySQL ON DUPLICATE KEY 的 affectedRows 对 insert/update 取值不同，不可比）。</para></summary>
+    /// <summary>MySQL-9：ODKU 单批行数上限——探针二十实测 1000 行/批比 5000 行快
+    /// 1.13~1.22× 且 SQL 文本 -82%；低于 ODKU 不再改善（500 行 204.5ms vs 1000 行 197.1ms，
+    /// 批数增加反超收益）。非 MySQL 方言不用此值（PG ON CONFLICT/SQLite 维持上限）。</summary>
+    private const int MySqlOdkuMaxRowsPerBatch = 1000;
+
     private async Task<long> BatchUpsertAsync<T>(
         DbTransaction transaction,
         List<T> entities,
@@ -926,9 +931,16 @@ public partial class DataSession<TProvider>
         // 的 65535 上限钳到 900：20 列实体 45 行/批、10K 行 223 次往返（同上限只需 4 批）。
         // SQLite 侧 32766 大值经 2026-09-26 同轮 A/B 实测证伪（批量劣化 6~16×），维持 999。
         // 再叠加单批行数上限约束语句文本规模。
+        // MySQL-9（2026-09-27）：MySQL ODKU 用 1000 行/批——探针二十实测（真库 20000 行，
+        // 多轮）：1000 行比 5000 行快 1.13~1.22×（ODKU 服务端近线性但批内唯一键探测与
+        // 大文本解析仍有成本），SQL 文本从 199KB 降到 36KB（-82%）。PG/SQLite 未实测，
+        // 维持原上限（S2 单变量纪律：方言分开调）。
+        int maxRowsPerBatch = TProvider.Dialect == SqlDialect.MySql
+            ? Math.Min(SqlLimits.MaxRowsPerBatch, MySqlOdkuMaxRowsPerBatch)
+            : SqlLimits.MaxRowsPerBatch;
         int maxParametersPerStatement = Math.Min(
             SqlLimits.MaxBindParametersFor(TProvider.Dialect),
-            SqlLimits.MaxRowsPerBatch * columnCount);
+            maxRowsPerBatch * columnCount);
         int batchSize = Math.Max(1, maxParametersPerStatement / columnCount);
 
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
