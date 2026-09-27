@@ -430,7 +430,7 @@ public static class QueryBuilderExtensions
             {
                 await TransactionCleanup.RollbackPreservingAsync(
                     transaction, exception,
-                    DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout))
+                    DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout), ct)
                     .ConfigureAwait(false);
             }
             throw;

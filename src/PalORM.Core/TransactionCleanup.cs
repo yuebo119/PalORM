@@ -75,24 +75,28 @@ internal static class TransactionCleanup
     /// Rollback 是<b>网络往返</b>，且发生在异常传播路径的 finally 里：网络黑洞下会把
     /// 一次快速失败拖成永久卡死。改为按 <paramref name="rollbackTimeoutSeconds"/> 设有界
     /// 取消；超时后把 TimeoutException 挂主异常 Data（与"清理异常不覆盖主异常"同模式）。
-    /// ≤0 表示调用方显式要求无限等待（与 CommandTimeout Zero 契约一致）。</para></summary>
+    /// ≤0 表示调用方显式要求无限等待（与 CommandTimeout Zero 契约一致）。</para>
+    /// <para><b>G25/2026-09-27 补 CancellationToken</b>：调用方取消与秒数超时为双重约束
+    /// （任一首发即中断），与 <see cref="CommitWithTimeoutAsync"/> 同族——回滚发生在异常
+    /// 传播路径，调用方已取消时继续等待回滚完成没有意义。默认参数保持既有调用点编译不变。</para></summary>
     internal static async ValueTask RollbackPreservingAsync(
         DbTransaction transaction, Exception primaryException,
-        int rollbackTimeoutSeconds = DefaultRollbackTimeoutSeconds)
+        int rollbackTimeoutSeconds = DefaultRollbackTimeoutSeconds,
+        CancellationToken ct = default)
     {
-        CancellationToken ct = CancellationToken.None;
         CancellationTokenSource? timeoutCts = null;
+        CancellationToken effectiveCt = ct;
         if (rollbackTimeoutSeconds > 0)
         {
-            timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
+            timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(rollbackTimeoutSeconds));
-            ct = timeoutCts.Token;
+            effectiveCt = timeoutCts.Token;
         }
         try
         {
-            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            await transaction.RollbackAsync(effectiveCt).ConfigureAwait(false);
         }
-        catch (OperationCanceledException timeoutException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException timeoutException) when (effectiveCt.IsCancellationRequested)
         {
             primaryException.Data["PalORM.RollbackTimeoutException"] = new TimeoutException(
                 $"Rollback timed out after {rollbackTimeoutSeconds}s; the server-side transaction may still be open.",

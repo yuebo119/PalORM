@@ -358,7 +358,7 @@ public sealed partial class DataSession<TProvider>
                         TProvider.Dialect, exception)))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
-                    transaction, exception, RollbackTimeoutSeconds).ConfigureAwait(false);
+                    transaction, exception, RollbackTimeoutSeconds, ct).ConfigureAwait(false);
             }
             throw;
         }
