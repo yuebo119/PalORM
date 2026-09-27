@@ -2,6 +2,26 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [6.0.0] — 未发布（实施中）
+
+> 破坏性变更窗口（SemVer major）。需求真源 `docs/v6.0-requirements.md` · 方案 `docs/v6.0-master-plan.md` · 任务 `docs/v6.0-tasks.md`（39 任务确定盘 + 向量 PoC 门控）。
+
+### 💔 破坏性变更（预定）
+
+- 删除 `IRowFactory<T>`（ADR-H，v5.2 起 PALORM900 预告已满一纪元）
+- 删除 `DataSession.DiffAsync<T>`（v4.0 起 PALORM901 预告）
+- 删除 `DbOptions.NamingConvention`（未预警破坏——设置后从未生效，删除该设置即可；详见 README 迁移指南）
+- 删除 `DbOptions.PoolExplicitlyConfigured`（零读方，公共面移除）
+
+### 计划项（实施中逐项填充）
+
+- **R1 DTO 投影物化（`[Projection]`）**：（待实施）
+- **R2 `[DefaultValue]` DDL 落地**：（待实施）
+- **R3 `[Column]` 类型细化**：（待实施）
+- **R4 跨方言唯一冲突异常**：（待实施）
+- **R5 `WithMetrics(name)` 转正**：（待实施）
+- **G 向量搜索**：（Phase 1 PoC 决策门待定：过 AOT 门 → 全量；证伪 → Raw 配方文档化）
+
 ## [5.9.0] — MySQL 极致化 + 跨方言移植：BulkUpdate 3.82×→0.30×、UpsertBatch 1.19×→1.05×、PG 乐观锁批量 7.85× — 2026-09-27
 
 > 数据源：探针二十五/二十六/二十七/二十八（真库 SQLite 内存库 / PG 远程库）。变更范围：`PalORM.Core`（DataSession_Bulk）+ 集成测试。盘账明细：`.ai/scratch-mysqlprobe/OPTIMIZATION-PLAN.md`（本地台账）。
