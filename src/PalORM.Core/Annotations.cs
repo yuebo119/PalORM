@@ -104,10 +104,16 @@ public sealed class IgnoreOnInsertAttribute : Attribute { }
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class RequiredAttribute : Attribute { }
 
-/// <summary>DB 端默认值表达式。
-/// <para><b>当前未实现</b>（ITM-580）: 表达式不参与 DDL 生成（MigrationEmitter 不读取本注解），
-/// 标注后 PALORM017 编译期告警。列默认值请直接写入 [SqlFile] 迁移脚本或建表后 ALTER。</para></summary>
-/// <param name="expression">SQL 默认值表达式（如 <c>CURRENT_TIMESTAMP</c>）。当前仅作元数据保留。</param>
+/// <summary>DB 端默认值表达式（v6.0 起参与 DDL 生成）。
+/// <para>表达式<b>原样进入三方言 DDL 的 DEFAULT 子句</b>（与 <see cref="ComputedAttribute"/> 同契约）——
+/// 不经引用转义、不做方言翻译；表达式内的函数/字面量须在目标数据库合法
+/// （跨方言部署时同一表达式可能仅部分方言有效，如字符串拼接 SQLite/PG 用 <c>||</c>、MySQL 用 <c>CONCAT</c>）。</para>
+/// <para><b>互斥</b>（PALORM047 编译期拦截）：不得与 <see cref="ComputedAttribute"/>
+/// （GENERATED 列禁 DEFAULT）、<see cref="TimestampAttribute"/>（内建 DEFAULT CURRENT_TIMESTAMP）、
+/// 自增 <see cref="KeyAttribute"/> 同属性。表达式含 NUL 或括号不平衡由 PALORM048 拦截。</para>
+/// <para><b>插入路径行为不变</b>：DDL-only——实体属性值照常写入，DEFAULT 仅对未显式插入该列的
+/// 场景（外部系统写表、Raw SQL 省略列）兜底。</para></summary>
+/// <param name="expression">SQL 默认值表达式（如 <c>CURRENT_TIMESTAMP</c>、<c>'pending'</c>）。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class DefaultValueAttribute(string expression) : Attribute
 {

@@ -16,7 +16,8 @@
 ### 计划项（实施中逐项填充）
 
 - **R1 DTO 投影物化（`[Projection]`）**：（待实施）
-- **R2 `[DefaultValue]` DDL 落地**：（待实施）
+- **R2 `[DefaultValue]` DDL 落地**：表达式原样直通三方言列定义的 `DEFAULT` 子句（`[Computed]` ITM-541 同契约——不经转义、不做方言翻译，跨方言合法性由调用方负责）；PALORM017 对 `[DefaultValue]` 停报（消一类"标注但静默无效"告警，ADR-B B1 分期债务清偿）；新增 **PALORM047**（与 `[Computed]`/`[Timestamp]`/自增 `[Key]` 互斥——`[Key(AutoIncrement = false)]` 与 Guid 主键不受限，应用侧默认值主键合法）与 **PALORM048**（表达式 NUL/括号不平衡，与 PALORM044 同型判定，单一真源 IsBalancedParentheses）。插入路径行为不变（DDL-only：实体属性值照写，DEFAULT 仅对未显式插入该列的场景兜底）。诊断总数 39→41（38 分析器 + 3 生成器）。
+- **测试**：`DefaultValueDdlTests` 9 例（017 停报 / 047 互斥三态 + 两合法形态 / 048 快检正负例）+ `MigrationDefaultTests` 4 例（SQLite 真库：DDL 含 DEFAULT、Raw 插入省略列读回默认值【锚点：撤 DEFAULT 追加即红】、实体路径属性值优先、幂等迁移）。验证：SourceGen 210/210（快照基线含 tier 列 `DEFAULT 'standard'` 已人工评审）、Core 433/433；PG/MySQL 真库验证由 CI 全量集成覆盖（DDL 文本形态已由三方言快照锁定）。
 - **R3 `[Column]` 类型细化**：（待实施）
 - **R4 跨方言唯一冲突异常**：（待实施）
 - **R5 `WithMetrics(name)` 转正**：（待实施）

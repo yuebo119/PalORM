@@ -501,8 +501,12 @@ public sealed class AnalyzerDiagnosticsTests
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
 
         int count = diagnostics.Count(d => d.Id == "PALORM017");
-        // [Column(Length=…)] + [DefaultValue] = 2 处独立告警（[Unique] 已由 ADR-B 落地停报）
-        await Assert.That(count).IsEqualTo(2);
+        // v6.0 R2 起 [DefaultValue] 参与列 DEFAULT 子句停报——仅剩 [Column(Length=…)] 1 处告警
+        //（[Unique] ADR-B 落地停报、[DefaultValue] R2 落地停报；Length/Precision 等 R3 落地后再停）
+        await Assert.That(count).IsEqualTo(1);
+        await Assert.That(diagnostics.Single(d => d.Id == "PALORM017")
+            .GetMessage(System.Globalization.CultureInfo.InvariantCulture))
+            .Contains("Length");
     }
 
     [Test]

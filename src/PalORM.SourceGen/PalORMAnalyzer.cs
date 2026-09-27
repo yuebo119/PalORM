@@ -237,6 +237,20 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM044", "[Computed] expression is invalid",
         "[Computed] expression on property '{0}' of type '{1}' contains a NUL character or has unbalanced parentheses; the entity would be silently skipped by source generation", "PalORM", DiagnosticSeverity.Error, true);
 
+    // PALORM047：[DefaultValue] 与 [Computed]/[Timestamp]/自增 [Key] 互斥（R2，v6.0）——三方言均
+    // 拒绝 GENERATED 列或自增列带 DEFAULT；[Timestamp] 已内建 DEFAULT CURRENT_TIMESTAMP，显式
+    // 表达式会生成双 DEFAULT 非法 DDL。生成器侧（TableModel.FromContext）防御性跳过，此处定位
+    // 报错（PALORM022 分工，与 PALORM042 同型）。
+    public static readonly DiagnosticDescriptor DefaultValueConflicts = new(
+        "PALORM047", "[DefaultValue] conflicts with [Computed]/[Timestamp]/auto-increment [Key]",
+        "[DefaultValue] property '{0}' on type '{1}' also has {2}; a column cannot combine an explicit DEFAULT with GENERATED ALWAYS AS, the built-in DEFAULT CURRENT_TIMESTAMP, or an auto-increment key", "PalORM", DiagnosticSeverity.Error, true);
+
+    // PALORM048：[DefaultValue] 表达式含 NUL 或括号不平衡（R2，v6.0）——判定与 TableModel
+    // 发射前快检共用 IsBalancedParentheses（单一真源），与 PALORM044 同型。
+    public static readonly DiagnosticDescriptor InvalidDefaultValueExpression = new(
+        "PALORM048", "[DefaultValue] expression is invalid",
+        "[DefaultValue] expression on property '{0}' of type '{1}' contains a NUL character or has unbalanced parentheses; the entity would be silently skipped by source generation", "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, MissingOwnedJsonContext,
@@ -250,7 +264,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          BulkUpdateBatchOnVersionedEntity, JoinReferencesUnregisteredEntity, SelectProjectionWithToList,
          KeyWithNonDefaultValue, ConcurrencyCheckWithIgnoreOnInsert, NullableContextDisabled,
          RequiredWithNullableAnnotation, TenantColumnNullable,
-         TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression];
+         TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression,
+         DefaultValueConflicts, InvalidDefaultValueExpression];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -868,6 +883,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             CheckTimestampType(ctx, type, member);                                // PALORM025
             CheckTimestampComputedConflict(ctx, type, member);                    // PALORM042（ITM-640 收口）
             CheckComputedExpressionValidity(ctx, type, member);                   // PALORM044（ITM-640 收口）
+            CheckDefaultValueConflicts(ctx, type, member);                        // PALORM047（R2，v6.0）
+            CheckDefaultValueExpressionValidity(ctx, type, member);               // PALORM048（R2，v6.0）
             CheckConverterOwnedJsonConflict(ctx, type, member);                   // PALORM027
             CheckKeyNonDefaultValue(ctx, type, member);                           // PALORM034
             CheckConcurrencyCheckWithIgnoreOnInsert(ctx, type, member);           // PALORM035
@@ -972,6 +989,56 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(InvalidComputedExpression,
+            member.Locations.FirstOrDefault() ?? type.Locations[0],
+            member.Name, type.Name));
+    }
+
+    /// <summary>PALORM047：[DefaultValue] 互斥三态（R2，v6.0）。自增键判定与 TableModel.FromContext
+    /// 的 isAutoIncrement 组合（[Key] + AutoIncrement 非 false + int/long）保持同口径——
+    /// [Key(AutoIncrement = false)] 与 Guid 主键允许 DEFAULT（应用侧默认值主键是合法用法）。
+    /// 生成器侧防御性跳过，此处定位报错（PALORM022 分工）。</summary>
+    private static void CheckDefaultValueConflicts(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        var defaultValueAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue"));
+        if (defaultValueAttr is null) return;
+
+        string? conflict =
+            member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Computed")) ? "[Computed]"
+            : member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp")) ? "[Timestamp]"
+            : IsAutoIncrementKey(member) ? "an auto-increment [Key]"
+            : null;
+        if (conflict is null) return;
+
+        ctx.ReportDiagnostic(Diagnostic.Create(DefaultValueConflicts,
+            member.Locations.FirstOrDefault() ?? type.Locations[0],
+            member.Name, type.Name, conflict));
+    }
+
+    /// <summary>PALORM047 辅助：自增主键判定（[Key] + AutoIncrement 非 false + int/long）。</summary>
+    private static bool IsAutoIncrementKey(IPropertySymbol member)
+    {
+        var keyAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+        if (keyAttr is null) return false;
+        if (keyAttr.NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is false)
+            return false;
+        return member.Type.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32;
+    }
+
+    /// <summary>PALORM048：[DefaultValue] 表达式含 NUL 或括号不平衡（R2，v6.0）——与 PALORM044 同型。</summary>
+    private static void CheckDefaultValueExpressionValidity(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        var defaultValueAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue"));
+        if (defaultValueAttr is null) return;
+        if (defaultValueAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
+        if (!expression.Contains('\0') && SourceGenerationValidation.IsBalancedParentheses(expression))
+            return;
+
+        ctx.ReportDiagnostic(Diagnostic.Create(InvalidDefaultValueExpression,
             member.Locations.FirstOrDefault() ?? type.Locations[0],
             member.Name, type.Name));
     }
@@ -1175,13 +1242,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM017：不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"。
-    /// ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；FK/DefaultValue/Column 架构参数仍告警。</summary>
+    /// ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；v6.0 R2 后 [DefaultValue] 参与列
+    /// DEFAULT 子句，停报。FK 约束与 [Column] 架构参数（Length/Precision/Scale/TypeName/StoreAs）仍告警。</summary>
     private static void CheckAnnotationNotApplied(
         SymbolAnalysisContext ctx, IPropertySymbol member, Location memberLocation)
     {
-        if (member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue")))  // ITM-512
-            ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[DefaultValue]", member.Name));
-
         var columnWithSchemaArgs = member.GetAttributes().FirstOrDefault(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Column")  // ITM-512
             && a.NamedArguments.Any(na => na.Key is "Length" or "Precision" or "Scale" or "TypeName" or "StoreAs"));

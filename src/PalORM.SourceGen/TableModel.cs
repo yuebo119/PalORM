@@ -115,6 +115,26 @@ internal sealed record TableModel(
                 && (computedExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
                 return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                     $"[Computed] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM044)");
+            // R2（v6.0）：[DefaultValue] 表达式——原样直通三方言 DDL 的 DEFAULT 子句（与 [Computed]
+            // ITM-541 同契约：不经转义、不做方言翻译，合法性由调用方负责）。NUL/未配对括号快检
+            // 与 [Computed]（ITM-584）同型：PALORM048 在编译期定位报错，此处防御性跳过。
+            string? defaultValueExpression = prop.GetAttributes()
+                .FirstOrDefault(static attribute =>
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, "DefaultValue"))?
+                .ConstructorArguments.FirstOrDefault().Value as string;
+            if (defaultValueExpression is not null
+                && (defaultValueExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(defaultValueExpression)))
+                return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                    $"[DefaultValue] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM048)");
+            // R2：[DefaultValue] 互斥三态（PALORM047 定位报错，此处防御性跳过）：
+            // ×[Computed]——GENERATED 列不得带 DEFAULT（与 ITM-626 Timestamp×Computed 同理）；
+            // ×[Timestamp]——该注解内建 DEFAULT CURRENT_TIMESTAMP，双 DEFAULT 生成非法 DDL；
+            // ×自增 [Key]——AUTO_INCREMENT / IDENTITY / AUTOINCREMENT 列禁 DEFAULT
+            //   （[Key(AutoIncrement = false)] 或 Guid 主键不受限，应用侧默认值主键是合法用法）。
+            if (defaultValueExpression is not null
+                && (computedExpression is not null || isTimestamp || isAutoIncrement))
+                return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                    $"[DefaultValue] on property '{prop.Name}' conflicts with [Computed]/[Timestamp]/auto-increment [Key] (PALORM047)");
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
                 SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
             bool isOwnedJson = ownedJsonAttr is not null;
@@ -176,7 +196,8 @@ internal sealed record TableModel(
                 // GEN-007（2026-09-23）：引用类型且 NRT 未启用（NullableAnnotation.None）——
                 // 可空性无从判断。注意与 NotAnnotated 区分：后者是"NRT 开启且显式声明非空"，
                 // 属契约而非缺陷，读路径保持直读（零额外 reader 访问）。
-                prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None));
+                prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
+                defaultValueExpression));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -298,7 +319,8 @@ internal sealed record ColumnModel(
     bool IgnoreOnInsert, bool IsConcurrencyToken, bool IsTimestamp, string? ComputedExpression,
     bool IsOwnedJson, string? OwnedJsonContextTypeName, string? ConverterTypeName,
     string? SensitiveMask = null,
-    bool IsNullabilityUnknown = false)
+    bool IsNullabilityUnknown = false,
+    string? DefaultValueExpression = null)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

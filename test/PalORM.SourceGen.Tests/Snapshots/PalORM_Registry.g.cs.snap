@@ -14,7 +14,7 @@ internal static class PalORM_RegistryInitializer
         Register(draft);
     }
 
-    /// <summary>注册 4 个实体（估算 IL ≈5940 B）——分块边界即单方法 IL 的上界。</summary>
+    /// <summary>注册 4 个实体（估算 IL ≈6000 B）——分块边界即单方法 IL 的上界。</summary>
     private static void AddChunk0(RegistryDraft draft)
     {
         draft.RowFactories[typeof(global::AllTypesEntity)] = RowFactory_global__AllTypesEntity_7f6c8145.Read;
@@ -106,29 +106,29 @@ internal static class PalORM_RegistryInitializer
         draft.TableNames[typeof(global::FullFeatureEntity)] = "full_feature";
         draft.CommandSqlsByDialect[typeof(global::FullFeatureEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
-                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-                "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7, \"sensitive_value\" = @p8 WHERE \"Id\" = @p9",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)",
+                "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"tier\" = @p6, \"deleted_at\" = @p7, \"tenant_id\" = @p8, \"sensitive_value\" = @p9 WHERE \"Id\" = @p10",
                 "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
-                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
-                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"tier\" = excluded.\"tier\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
                 "",
                 ""),
             new global::PalORM.CommandSqlSet(
-                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-                "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"deleted_at\" = @p6, \"tenant_id\" = @p7, \"sensitive_value\" = @p8 WHERE \"Id\" = @p9",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)",
+                "UPDATE \"full_feature\" SET \"code\" = @p0, \"kind\" = @p1, \"external_id\" = @p2, \"payload\" = @p3, \"raw_json\" = @p4, \"uniq_token\" = @p5, \"tier\" = @p6, \"deleted_at\" = @p7, \"tenant_id\" = @p8, \"sensitive_value\" = @p9 WHERE \"Id\" = @p10",
                 "DELETE FROM \"full_feature\" WHERE \"Id\" = @p0",
-                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
-                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
+                "INSERT INTO \"full_feature\" (\"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10) ON CONFLICT (\"Id\") DO UPDATE SET \"code\" = excluded.\"code\", \"kind\" = excluded.\"kind\", \"external_id\" = excluded.\"external_id\", \"payload\" = excluded.\"payload\", \"raw_json\" = excluded.\"raw_json\", \"uniq_token\" = excluded.\"uniq_token\", \"tier\" = excluded.\"tier\", \"deleted_at\" = excluded.\"deleted_at\", \"tenant_id\" = excluded.\"tenant_id\", \"sensitive_value\" = excluded.\"sensitive_value\" RETURNING \"Id\", \"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"row_updated_at\", \"total_display\", \"deleted_at\", \"tenant_id\", \"sensitive_value\"",
                 "",
                 ""),
             new global::PalORM.CommandSqlSet(
-                "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)",
-                "UPDATE `full_feature` SET `code` = @p0, `kind` = @p1, `external_id` = @p2, `payload` = @p3, `raw_json` = @p4, `uniq_token` = @p5, `deleted_at` = @p6, `tenant_id` = @p7, `sensitive_value` = @p8 WHERE `Id` = @p9",
+                "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `tier`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9)",
+                "UPDATE `full_feature` SET `code` = @p0, `kind` = @p1, `external_id` = @p2, `payload` = @p3, `raw_json` = @p4, `uniq_token` = @p5, `tier` = @p6, `deleted_at` = @p7, `tenant_id` = @p8, `sensitive_value` = @p9 WHERE `Id` = @p10",
                 "DELETE FROM `full_feature` WHERE `Id` = @p0",
                 "",
                 "",
-                "INSERT INTO `full_feature` (`Id`, `code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9) ON DUPLICATE KEY UPDATE `code` = VALUES(`code`), `kind` = VALUES(`kind`), `external_id` = VALUES(`external_id`), `payload` = VALUES(`payload`), `raw_json` = VALUES(`raw_json`), `uniq_token` = VALUES(`uniq_token`), `deleted_at` = VALUES(`deleted_at`), `tenant_id` = VALUES(`tenant_id`), `sensitive_value` = VALUES(`sensitive_value`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
-                "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8); SELECT LAST_INSERT_ID()")
+                "INSERT INTO `full_feature` (`Id`, `code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `tier`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10) ON DUPLICATE KEY UPDATE `code` = VALUES(`code`), `kind` = VALUES(`kind`), `external_id` = VALUES(`external_id`), `payload` = VALUES(`payload`), `raw_json` = VALUES(`raw_json`), `uniq_token` = VALUES(`uniq_token`), `tier` = VALUES(`tier`), `deleted_at` = VALUES(`deleted_at`), `tenant_id` = VALUES(`tenant_id`), `sensitive_value` = VALUES(`sensitive_value`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
+                "INSERT INTO `full_feature` (`code`, `kind`, `external_id`, `payload`, `raw_json`, `uniq_token`, `tier`, `deleted_at`, `tenant_id`, `sensitive_value`) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9); SELECT LAST_INSERT_ID()")
         );
         draft.BindInsert[typeof(global::FullFeatureEntity)] = (cmd, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindInsertToBatch(cmd, (global::FullFeatureEntity)obj, off);
         draft.BindUpdate[typeof(global::FullFeatureEntity)] = (cmd, obj) => CommandFactory_global__FullFeatureEntity_4964faa8.BindUpdate(cmd, (global::FullFeatureEntity)obj);
@@ -145,14 +145,14 @@ internal static class PalORM_RegistryInitializer
                     insertNoReturning: false,
                     bindUpsertValues: (parameters, obj, off) => CommandFactory_global__FullFeatureEntity_4964faa8.BindUpsertValues(parameters, (global::FullFeatureEntity)obj, off)),
                 new global::PalORM.CrudColumns(
-                    new[] { "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id", "sensitive_value" },
-                    new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id", "sensitive_value" },
-                    new[] { "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "deleted_at", "tenant_id", "sensitive_value" }),
+                    new[] { "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "tier", "deleted_at", "tenant_id", "sensitive_value" },
+                    new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "tier", "deleted_at", "tenant_id", "sensitive_value" },
+                    new[] { "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "tier", "deleted_at", "tenant_id", "sensitive_value" }),
                 null,
                 obj => CommandFactory_global__FullFeatureEntity_4964faa8.HasDefaultKey((global::FullFeatureEntity)obj));
         draft.EntityFeatures[typeof(global::FullFeatureEntity)] = global::PalORM.EntityFeatures.SoftDelete | global::PalORM.EntityFeatures.TenantAware;
         draft.PkColumns[typeof(global::FullFeatureEntity)] = "Id";
-        draft.ColumnNames[typeof(global::FullFeatureEntity)] = new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "row_updated_at", "total_display", "deleted_at", "tenant_id", "sensitive_value" };
+        draft.ColumnNames[typeof(global::FullFeatureEntity)] = new[] { "Id", "code", "kind", "external_id", "payload", "raw_json", "uniq_token", "tier", "row_updated_at", "total_display", "deleted_at", "tenant_id", "sensitive_value" };
         draft.PropertyToColumn[typeof(global::FullFeatureEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
         {
             ["Id"] = "Id",
@@ -162,6 +162,7 @@ internal static class PalORM_RegistryInitializer
             ["Payload"] = "payload",
             ["RawJson"] = "raw_json",
             ["UniqueToken"] = "uniq_token",
+            ["Tier"] = "tier",
             ["RowUpdatedAt"] = "row_updated_at",
             ["TotalDisplay"] = "total_display",
             ["DeletedAt"] = "deleted_at",
