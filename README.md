@@ -275,6 +275,8 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | 计划器统计刷新 | `ANALYZE TABLE 表名`（经 `ExecuteAsync`） | InnoDB 默认 `innodb_stats_auto_recalc=ON`（表行数变化 10% 自动重算），多数场景无需手工；MigrateAsync **不**自动跑（ANALYZE TABLE 在 InnoDB 上是显式运维操作而非迁移副作用）；大表 DDL 后想立刻刷新时手工执行 |
 | 批量写提交削峰 | `innodb_flush_log_at_trx_commit=2`（**服务端全局变量**，DBA 侧改） | 提交只写 OS 缓存不 fsync，写吞吐显著提升；崩溃丢最近约 1 秒提交——可接受场景与 `synchronous_commit=off` 同判据。PalORM 不提供客户端设置面（全局变量，会话级不可设） |
 | 锁等待 | 无需配置 | 引擎内等待由 `innodb_lock_wait_timeout`（MySQL 8 默认 50s）+ PalORM 弹性重试两层兜底（死锁 1213 / 锁超时 1205 判瞬时故障重试） |
+| 批量写报文上限 | 服务端 `max_allowed_packet` ≥ 16MB（云托管常见默认） | LOAD DATA 本地批量（MySqlBulkCopy）与大参数批（批量 UPDATE/INSERT 2000 行/批）单包可达数 MB；超限报 ER_NET_PACKET_TOO_LARGE 或静默断连。产品不检测该上限（连接级事实，探测成本高于收益）——报此错时先查服务端值 |
+| 批量 UPDATE 服务端版本 | MySQL ≥ 8.0.19 | `UPDATE JOIN (VALUES ROW(...))` 形态需 8.0.19+（table value constructor；真库实测 8.75×）；低版本自动回退 CASE WHEN（同结果不同形态，无需用户操作）。MariaDB 不适用该形态（无 VALUES 语句）——同样走回退 |
 
 ---
 
