@@ -23,17 +23,25 @@ public sealed class ColumnAttribute(string name) : Attribute
 {
     /// <summary>数据库列名。</summary>
     public string Name { get; } = name;
-    /// <summary>字符串列最大长度。<b>ITM-549：当前迁移 DDL 未实现</b>——设置会触发 PALORM017 告警，
-    /// string 列恒生成 TEXT/VARCHAR(255)。需定长时用原生 DDL 或等待实现。</summary>
-    public int? Length { get; init; }
-    /// <summary>数值列精度（总位数）。<b>ITM-549：当前未实现</b>（PALORM017 告警）——decimal 恒 DECIMAL(18,6)。</summary>
-    public int? Precision { get; init; }
-    /// <summary>数值列小数位数。<b>ITM-549：当前未实现</b>（PALORM017 告警），随 <see cref="Precision"/>。</summary>
-    public int? Scale { get; init; }
-    /// <summary>显式指定数据库列类型。<b>ITM-549：当前未实现</b>（PALORM017 告警），默认类型映射不被覆盖。</summary>
+    /// <summary>字符串列最大长度（v6.0 R3 起参与 DDL：string/char 列生成 <c>VARCHAR(n)</c>）。
+    /// <para><b>0 = 未设置</b>（sentinel——<c>int?</c> 不是合法的特性命名参数类型，CS0655，
+    /// v6.0 修正为 <c>int</c> 默认 0）。PG/MySQL 约束生效；SQLite 类型亲和性下长度为声明性
+    ///（写入 DDL 但引擎不截断）。MySQL 单行总宽上限 65535 字节——超大 n 建表时报运行期错误，
+    /// 需 <see cref="TypeName"/> 显式指定 TEXT 族。显式 Length 优先于 MySQL 索引/主键列的
+    /// VARCHAR(255) 约定。负值由 PALORM051 拦截。</para></summary>
+    public int Length { get; init; }
+    /// <summary>数值列精度（总位数，v6.0 R3 起参与 DDL）——decimal 列生成 <c>DECIMAL(p,s)</c>
+    ///（0 = 未设置，缺省精度 18；Scale 缺省 6，与历史默认 <c>DECIMAL(18,6)</c> 对齐）。负值由 PALORM051 拦截。</summary>
+    public int Precision { get; init; }
+    /// <summary>数值列小数位数（v6.0 R3 起参与 DDL），随 <see cref="Precision"/>；
+    /// 不得大于 Precision（PALORM051）。0 = 未设置。</summary>
+    public int Scale { get; init; }
+    /// <summary>显式指定数据库列类型（v6.0 R3 起参与 DDL）——<b>原样直通三方言 DDL</b>，最高优先
+    ///（覆盖默认映射与 Length/Precision）；类型须在目标数据库合法，跨方言部署注意同型异名
+    ///（如 MySQL 的 MEDIUMTEXT）。空白由 PALORM051 拦截。</summary>
     public string? TypeName { get; init; }
     /// <summary>列存储策略（枚举按整数/字符串存储）。<b>ITM-553：当前未实现</b>（PALORM017 告警）——
-    /// 枚举恒按默认映射存储（TEXT）。</summary>
+    /// 枚举恒按默认映射存储（TEXT）。涉及读写双路径（非仅 DDL），留待专门迭代。</summary>
     public StoreAs StoreAs { get; init; }
 }
 

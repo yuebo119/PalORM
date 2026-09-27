@@ -133,7 +133,7 @@ public static class QueryBuilderExtensions
             sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
             if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
+                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
         }
     }
 
@@ -249,7 +249,7 @@ public static class QueryBuilderExtensions
             sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
             if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
+                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
             // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
             // 记录的是最后一次尝试的连接——重试路径上中间尝试的连接由作用域退出时统一释放（有界：
             // 每操作至多 MaxRetries+1 条），换取不改动内核主体缩进的低风险接线。
@@ -584,7 +584,7 @@ public static class QueryBuilderExtensions
             sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
             if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed);
+                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
         }
     }
 

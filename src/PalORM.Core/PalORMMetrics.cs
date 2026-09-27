@@ -60,30 +60,36 @@ public static class PalORMMetrics
         activity.Dispose();
     }
 
-    internal static void Record(string operation, string provider, string outcome, TimeSpan duration)
+    internal static void Record(string operation, string provider, string outcome, TimeSpan duration,
+        string? metricName = null)
     {
-        RecordCount(operation, provider, outcome);
-        RecordDuration(operation, provider, outcome, duration);
+        RecordCount(operation, provider, outcome, metricName);
+        RecordDuration(operation, provider, outcome, duration, metricName);
     }
 
-    private static void RecordCount(string operation, string provider, string outcome)
+    private static void RecordCount(string operation, string provider, string outcome, string? metricName)
     {
-        TagList tags = CreateTags(operation, provider, outcome);
+        TagList tags = CreateTags(operation, provider, outcome, metricName);
         _queryCounter.Add(1, tags);
     }
 
-    private static void RecordDuration(string operation, string provider, string outcome, TimeSpan duration)
+    private static void RecordDuration(string operation, string provider, string outcome, TimeSpan duration,
+        string? metricName)
     {
-        TagList tags = CreateTags(operation, provider, outcome);
+        TagList tags = CreateTags(operation, provider, outcome, metricName);
         _queryDuration.Record(duration.TotalSeconds, tags);
     }
 
-    private static TagList CreateTags(string operation, string provider, string outcome)
+    /// <summary>metrics tag 构造。R5（v6.0）：metricName 非空时追加 <c>palorm.query.name</c>
+    /// 业务维度——null 不加（tag 集与历史行为逐位一致，时间序列基数不变）。</summary>
+    private static TagList CreateTags(string operation, string provider, string outcome, string? metricName)
     {
         TagList tags = default;
         tags.Add("db.system.name", provider);
         tags.Add("db.operation.name", operation);
         tags.Add("palorm.outcome", outcome);
+        if (metricName is not null)
+            tags.Add("palorm.query.name", metricName);
         return tags;
     }
 }
