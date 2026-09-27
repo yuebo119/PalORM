@@ -278,6 +278,9 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | 批量写报文上限 | 服务端 `max_allowed_packet` ≥ 16MB（云托管常见默认） | LOAD DATA 本地批量（MySqlBulkCopy）与大参数批（批量 UPDATE/INSERT 2000 行/批）单包可达数 MB；超限报 ER_NET_PACKET_TOO_LARGE 或静默断连。产品不检测该上限（连接级事实，探测成本高于收益）——报此错时先查服务端值 |
 | 批量写 LOAD DATA 开关 | `local_infile=ON`（**服务端 + 客户端双腿**） | `BulkInsertAsync` 优先走 LOAD DATA LOCAL INFILE（MySqlBulkCopy），服务端关闭时自动回退多值 INSERT（检测按连接缓存 60s）。双腿缺一即回退：服务端 `SET GLOBAL local_infile=ON`（需 SUPER，重启失效）+ 产品已自动给客户端连接串开 `AllowLoadLocalInfile=true`。本机实测（同网段库）LOAD DATA 比多值 INSERT 快 1.39×；远程库差距更大（官方基准 4~5× 量级） |
 | 批量 UPDATE 服务端版本 | MySQL ≥ 8.0.19 | `UPDATE JOIN (VALUES ROW(...))` 形态需 8.0.19+（table value constructor；真库实测 8.75×）；低版本自动回退 CASE WHEN（同结果不同形态，无需用户操作）。MariaDB 不适用该形态（无 VALUES 语句）——同样走回退 |
+| 事务内多行插入选型 | 优先 `BulkInsertAsync`，次选 `SessionBatch` | 同一事务内写 100 行：逐条 `InsertAsync` 45.7ms → **`BulkInsertAsync`(多值 INSERT) 5.4ms（8.44×）** → `SessionBatch`(DbBatch 单往返) 16.8ms（2.72×）——2026-09-27 真库实测。需要逐条回填自增 ID 或混合 INSERT/UPDATE 时才用 SessionBatch；仍逐条循环 = 每行付一次协议往返 |
+| 排序/连接内存缓冲 | `sort_buffer_size`/`join_buffer_size` ≥ 256KB（默认即此值） | 服务端 per-query 内存：`KeysetPage`/`IncludeJoin`/大 `ORDER BY` 走 filesort 或 BNL join 时受此限。本机库默认 256KB 对基准夹具够用；**远程大结果集 / 百万行级排序 join** 场景先 `EXPLAIN` 确认无 `Using filesort`/`Using join buffer` 再按需调（DBA 决策，会话级不可设） |
+| 隔离级别 RR→RC | `WithIsolationLevel(IsolationLevel.ReadCommitted)` 或连接串/服务端 RC | MySQL 引擎默认 REPEATABLE-READ（间隙锁）；热点行并发更新时间隙锁放大锁竞争（等待/超时 1205/死锁 1213）。显式事务已按调用方隔离级别透传（`BeginTransactionAsync(level)`）；只读/短事务路由可整体用 RC。取舍= MVCC 快照语义变化，属 DM 决策 |
 
 ---
 
