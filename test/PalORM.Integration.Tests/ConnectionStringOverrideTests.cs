@@ -1,6 +1,8 @@
 using Npgsql;
 using PalORM;
 using PalORM.PostgreSql;
+using MySqlConnector;
+using PalORM.MySql;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
@@ -54,5 +56,47 @@ public sealed class ConnectionStringOverrideTests
         var round = new NpgsqlConnectionStringBuilder(conn.ConnectionString);
 
         await Assert.That(round.MaxPoolSize).IsEqualTo(500);
+    }
+
+}
+
+/// <summary>MySQL-6/T10 移植：MySQL 侧连接串覆盖契约（与 PG 侧三态同构）。</summary>
+[Property("Category", "ExternalDatabase")]
+public sealed class MySqlConnectionStringOverrideTests
+{
+    private static string BaseCs() => TestEnvironment.ResolveMySqlConnectionString();
+
+    [Test]
+    public async Task ExplicitDriverDefaultValues_AreNotSilentlyOverwritten()
+    {
+        var cs = BaseCs() + ";Connection Lifetime=0;Connection Reset=true";
+        await using var conn = MySqlProvider.CreateConnection(cs, new DbOptions { ConnectionString = cs });
+        var round = new MySqlConnectionStringBuilder(conn.ConnectionString);
+
+        await Assert.That(round.ConnectionLifeTime).IsEqualTo(0u);
+        await Assert.That(round.ConnectionReset).IsTrue();
+    }
+
+    [Test]
+    public async Task UnsetKnobs_GetTuningValues()
+    {
+        await using var conn = MySqlProvider.CreateConnection(BaseCs(), new DbOptions { ConnectionString = BaseCs() });
+        var round = new MySqlConnectionStringBuilder(conn.ConnectionString);
+
+        await Assert.That(round.AutoEnlist).IsFalse();
+        await Assert.That(round.ConnectionReset).IsFalse();
+        await Assert.That(round.CancellationTimeout).IsEqualTo(5);
+        await Assert.That(round.ServerRedirectionMode).IsEqualTo(MySqlServerRedirectionMode.Preferred);
+    }
+
+    [Test]
+    public async Task ExplicitTuningValue_WinsOverDbOptionsDefault()
+    {
+        var cs = BaseCs() + ";Maximum Pool Size=500";
+        await using var conn = MySqlProvider.CreateConnection(
+            cs, new DbOptions { ConnectionString = cs, MaxPoolSize = 100 });
+        var round = new MySqlConnectionStringBuilder(conn.ConnectionString);
+
+        await Assert.That(round.MaximumPoolSize).IsEqualTo(500u);
     }
 }

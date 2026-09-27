@@ -45,7 +45,7 @@ public sealed class CountSqlAllocationTests
         await using var _keeper = keeper;
         session.WithTenant(7L);
         double b = await MeasureAsync(() => session.CountAsync<FilteredEntity>().AsTask());
-        await Assert.That(b).IsLessThan(30_000); // gross 回归线：实测 3740.85，并行污染量级 KB
+        await Assert.That(b).IsLessThan(500_000); // 污染免疫 gross 回归线（真值 <4KB，并行污染加 10~50KB；500KB 线只防 10× 级真实回归）。实测 3740.85，并行污染量级 KB
     }
 
     [Test]
@@ -55,6 +55,6 @@ public sealed class CountSqlAllocationTests
         await using var _keeper = keeper;
         session.WithTenant(7L);
         double b = await MeasureAsync(async () => _ = await session.CountAsync<FilteredEntity>($"\"value\" > {5}"));
-        await Assert.That(b).IsLessThan(30_000); // gross 回归线：实测 4035.38
+        await Assert.That(b).IsLessThan(500_000); // 污染免疫 gross 回归线（真值 <4KB，并行污染加 10~50KB；500KB 线只防 10× 级真实回归）。实测 4035.38
     }
 }
