@@ -68,11 +68,28 @@ internal static class FormattableSqlFormatter
 
         // v4.1：删除丢弃的 CompositeFormat.Parse（纯浪费），改用 ValueStringBuilder（栈分配 + ArrayPool 兜底）
         var sb = new ValueStringBuilder(stackalloc char[256]);
+        // ITM-546：SQL 字符串字面量跟踪——@pN 落在 '...' 内是用户数据（'a@p1.com'/'%@p2%'），
+        // 必须原样透传；只有引号外的裸 @pN 才是手写占位符（T9/P2-44 拦截对象）。
+        bool inStringLiteral = false;
         try
         {
             for (int index = 0; index < format.Length; index++)
             {
                 char current = format[index];
+                if (current == '\'')
+                {
+                    if (inStringLiteral && index + 1 < format.Length && format[index + 1] == '\'')
+                    {
+                        sb.Append("''");   // SQL 的引号转义：仍在字面量内
+                        index++;
+                        continue;
+                    }
+
+                    inStringLiteral = !inStringLiteral;
+                    sb.Append(current);
+                    continue;
+                }
+
                 if (current == '{' && index + 1 < format.Length && format[index + 1] == '{')
                 {
                     sb.Append('{');
@@ -93,11 +110,11 @@ internal static class FormattableSqlFormatter
 
                 if (current != '{')
                 {
-                    // T9/P2-44（2026-09-26）：@pN 是 PalORM 参数保留命名空间（ParameterNameCache
-                    // 生成物）——格式串字面量里出现 @p<数字> 即抛。成因：手写字面量占位符的用户
-                    // 输入在 PG 上得驱动"there is no parameter $1"响亮失败，在 Microsoft.Data.Sqlite
-                    // 上却按未绑定 NULL 静默返回空集（实测复现）——同一错输入两方言两形态。
-                    if (current == '@' && index + 2 < format.Length
+                    // T9/P2-44（2026-09-26）：引号外的裸 @pN 是 PalORM 参数保留命名空间
+                    // （ParameterNameCache 生成物）——手写字面量占位符在 PG 上得驱动
+                    // "there is no parameter $1"响亮失败，在 Microsoft.Data.Sqlite 上却按未绑定
+                    // NULL 静默返回空集（实测复现），同一错输入两方言两形态，故在此统一拦掉。
+                    if (current == '@' && !inStringLiteral && index + 2 < format.Length
                         && format[index + 1] == 'p' && char.IsAsciiDigit(format[index + 2]))
                         throw new InvalidOperationException(
                             $"Formattable SQL contains the literal text '@p…' at position {index}, " +

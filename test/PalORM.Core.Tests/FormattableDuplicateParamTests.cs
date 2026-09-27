@@ -55,10 +55,15 @@ public sealed class FormattableDuplicateParamTests
     {
         (DataSession<SqliteProvider> session, SqliteConnection keeper) = await OpenAsync();
         await using var _keeper = keeper;
-        string sql = session.From<Post>()
+        // 断言点：格式化不抛（'@people' 不是 @pN 占位符形态）+ 值经参数化（SQL 文本只有
+        // 占位符，值在参数里）——不是断言 SQL 含字面值
+        var dry = session.From<Post>()
             .Where(FormattableStringFactory.Create("\"text\" = {0}", "@people domain"))
-            .AsDryRun().Sql;
-        await Assert.That(sql).Contains("@people");
+            .AsDryRun();
+        await Assert.That(dry.Sql).Contains("@p0");
+        await Assert.That(dry.Sql).DoesNotContain("@people");
+        await Assert.That(dry.Parameters.Count).IsEqualTo(1);
+        await Assert.That(dry.Parameters[0].Value).IsEqualTo("@people domain");
     }
 
     private static async Task<(DataSession<SqliteProvider> Session, SqliteConnection Keeper)> OpenAsync()
