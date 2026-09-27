@@ -61,6 +61,15 @@ internal sealed partial class AotChildEntity
     [Column("weight")] public long Weight { get; set; }
 }
 
+// R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证载体（只读类型，无表无写命令；
+// 顶层声明——嵌套类型与实体同规被拒绝，PALORM045 兜底实测）
+[Projection]
+internal sealed class AotSummary
+{
+    public long Id { get; set; }
+    public string Value { get; set; } = "";
+}
+
 internal static class Program
 {
     internal static async Task Main()
@@ -115,6 +124,7 @@ internal static class Program
             AotEntity first = await db.GetAsync<AotEntity>(inserted.Id).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("GET failed");
             await VerifyBinaryColumnAsync(db, inserted, first).ConfigureAwait(false);
+            await VerifyProjectionAsync(db, inserted.Id).ConfigureAwait(false);
             AotEntity stale = await db.GetAsync<AotEntity>(inserted.Id).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Stale GET failed");
 
@@ -309,5 +319,17 @@ internal static class Program
         if (!fetched.Blob.AsSpan().SequenceEqual((ReadOnlySpan<byte>)[0x00, 0x01, 0xFF, 0x00])
             || fetched.Preview is not null)
             throw new InvalidOperationException("byte[] round trip failed");
+    }
+
+    /// <summary>R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证——只读类型经源生成注册，
+    /// QueryAsync 直接物化（ordinal 契约），不参与写命令与迁移 DDL。</summary>
+    private static async Task VerifyProjectionAsync(
+        DataSession<SqliteProvider> db, long id)
+    {
+        System.Collections.Generic.List<AotSummary> rows = await db.QueryAsync<AotSummary>(
+                $"SELECT \"Id\", \"value\" AS \"Value\" FROM aot_test WHERE \"Id\" = {id}")
+            .ConfigureAwait(false);
+        if (rows.Count != 1 || rows[0].Id != id || rows[0].Value != "AOT works!")
+            throw new InvalidOperationException("[Projection] materialization failed");
     }
 }

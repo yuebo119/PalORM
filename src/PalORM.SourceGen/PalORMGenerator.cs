@@ -87,6 +87,44 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 failure.EntityDisplayName ?? "<unknown>",
                 failure.FailureReason ?? "unknown reason")));
 
+        // ── R1（v6.0）：[Projection] 只读物化模型（DTO/投影）──
+        // 与实体管线同构：transform（ProjectionModel.FromContext）→ 逐模型 RowFactory →
+        // Collect 聚合独立注册片段（只填 RowFactories，见 ProjectionEmitter）。
+        // 投影不生成 CommandFactory/Migration、不进 TableNames（MigrateAsync 不建表）。
+        var projectionModels = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                "PalORM.ProjectionAttribute",
+                predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
+                transform: static (ctx, _) => ProjectionModel.FromContext(ctx))
+            .WithComparer(EqualityComparer<ProjectionModelResult>.Default);
+
+        context.RegisterSourceOutput(
+            projectionModels.Where(static r => r.Model is not null),
+            static (spc, result) => spc.AddSource(
+                CreateStableHintName("RowFactory", result.Model!.EntityTypeName),
+                ProjectionEmitter.GenerateRowFactory(result.Model)));
+
+        context.RegisterSourceOutput(
+            projectionModels.Collect(),
+            static (spc, results) =>
+            {
+                ProjectionModel[] models = results
+                    .Where(static r => r.Model is not null)
+                    .Select(static r => r.Model!)
+                    .ToArray();
+                if (models.Length == 0) return;  // 无投影：零生成物（不发射空注册文件）
+                spc.AddSource("PalORM_ProjectionRegistry.g.cs",
+                    ProjectionEmitter.GenerateRegistry(new EquatableArray<ProjectionModel>(models)));
+            });
+
+        // 投影失败面同款 PALORM045 兜底（形态校验/互斥跳过可检索）。
+        context.RegisterSourceOutput(
+            projectionModels.Where(static r => r.Model is null),
+            static (spc, failure) => spc.ReportDiagnostic(Diagnostic.Create(
+                EntitySkippedByGenerator, Location.None,
+                failure.EntityDisplayName ?? "<unknown>",
+                failure.FailureReason ?? "unknown reason")));
+
         // ── SqlFile: [SqlFile("path.sql")] 特性 → 编译时嵌入 SQL (Phase 4) ──
         // 评审 2026-09-02：两阶段管线——ExtractMethodModel（transform，零 IO、缓存键=语法+符号）
         // 与 Render（RegisterSourceOutput，路径校验 + AdditionalFiles 内容查找）。.sql 内容经

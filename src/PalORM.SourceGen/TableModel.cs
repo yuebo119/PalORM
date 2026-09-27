@@ -342,6 +342,94 @@ internal sealed record IndexModel(string Name, EquatableArray<string> Columns, b
 internal sealed record ForeignKeyModel(
     string PropertyName, string ReferencedTable, string ReferencedColumn, int OnDelete);
 
+/// <summary>R1（v6.0）：[Projection] 只读物化模型——无表、无写命令、无迁移 DDL。
+/// 与 TableModel 共享 ColumnModel 与 RowFactoryEmitter（物化契约同源，ADR-A ordinal 映射）。
+/// 属性仅消费 [Column]（列名，错误消息用）/ [Converter] / [NotMapped]，其余实体注解无效果。</summary>
+internal sealed record ProjectionModel(
+    string Namespace, string ClassName, string EntityTypeName, string GeneratedTypeSuffix,
+    EquatableArray<ColumnModel> Columns)
+{
+    public static ProjectionModelResult FromContext(GeneratorAttributeSyntaxContext ctx)
+    {
+        if (ctx.TargetSymbol is not INamedTypeSymbol typeSymbol)
+            return ProjectionModelResult.Skipped("<unknown>",
+                "the [Projection] target symbol is not a named type");
+        string displayName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        // 与实体同款形态校验（泛型/嵌套/抽象/静态/公共无参构造/属性 setter 走基类链），
+        // 但无 [Key] 要求——投影不参与 CRUD 主键语义。形态失败面由 PALORM045 兜底呈现
+        // （投影专属形态诊断留待真实需求，YAGNI）。
+        if (!SourceGenerationValidation.IsSupportedEntity(typeSymbol))
+            return ProjectionModelResult.Skipped(displayName,
+                "projection declaration is not supported (generic/nested/abstract/static type, "
+                + "missing public parameterless constructor, or non-writable properties)");
+        // PALORM049 定位报错（分析器），此处防御性跳过——双管线同类型会生成重复 hint 源文件。
+        if (typeSymbol.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))
+            return ProjectionModelResult.Skipped(displayName,
+                "type has both [Projection] and [Table] (PALORM049)");
+
+        List<ColumnModel> columns = [];
+        foreach (IPropertySymbol prop in SourceGenerationValidation.EnumerateMappedProperties(typeSymbol))
+        {
+            // PALORM050 定位报错（分析器），此处防御性跳过——OwnedJson 对象读路径引用实体
+            // CommandFactory 的 JsonTypeInfo，投影不生成 CommandFactory（生成物 CS0104）。
+            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson")))
+                return ProjectionModelResult.Skipped(displayName,
+                    $"property '{prop.Name}' has [OwnedJson] which is not supported on [Projection] types (PALORM050)");
+            if (!SourceGenerationValidation.HasValidValueMapping(prop))
+                return ProjectionModelResult.Skipped(displayName,
+                    $"property '{prop.Name}' has no valid value mapping");
+
+            var columnAttr = prop.GetAttributes().FirstOrDefault(a =>
+                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
+            string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
+                ?? prop.Name;
+
+            AttributeData? converterAttr = SourceGenerationValidation.GetConverterAttribute(prop);
+            INamedTypeSymbol? converterType = null;
+            ITypeSymbol providerType = SourceGenerationValidation.UnwrapNullable(prop.Type);
+            if (converterAttr is not null
+                && SourceGenerationValidation.TryGetConverterTypes(
+                    prop, converterAttr, out converterType, out ITypeSymbol? mappedProviderType)
+                && mappedProviderType is not null)
+            {
+                providerType = mappedProviderType;
+            }
+
+            columns.Add(new ColumnModel(
+                prop.Name, columnName,
+                prop.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                providerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                "TEXT", IsPrimaryKey: false, IsAutoIncrement: false,
+                IsNullable: prop.NullableAnnotation == NullableAnnotation.Annotated, IsRequired: false,
+                IgnoreOnInsert: false, IsConcurrencyToken: false, IsTimestamp: false,
+                ComputedExpression: null, IsOwnedJson: false, OwnedJsonContextTypeName: null,
+                ConverterTypeName: converterType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                SensitiveMask: null,
+                IsNullabilityUnknown: prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None));
+        }
+
+        if (columns.Count == 0)
+            return ProjectionModelResult.Skipped(displayName, "projection type has no mappable properties");
+
+        return ProjectionModelResult.Generated(new ProjectionModel(
+            typeSymbol.ContainingNamespace.ToDisplayString(),
+            typeSymbol.Name,
+            displayName,
+            PalORMGenerator.CreateGeneratedTypeSuffix(displayName),
+            new EquatableArray<ColumnModel>(columns.ToArray())));
+    }
+}
+
+/// <summary>投影模型提取结果——与 EntityModelResult 同分工（PALORM045 兜底覆盖失败面）。</summary>
+internal sealed record ProjectionModelResult(
+    ProjectionModel? Model, string? EntityDisplayName, string? FailureReason)
+{
+    public static ProjectionModelResult Generated(ProjectionModel model) => new(model, null, null);
+
+    public static ProjectionModelResult Skipped(string entityDisplayName, string failureReason)
+        => new(null, entityDisplayName, failureReason);
+}
+
 /// <summary>实体模型提取结果——<see cref="Model"/> 为 null 表示实体被生成器防御性跳过。
 /// <para><b>评审 2026-09-02（PALORM045）</b>：原 FromContext 失败面恒返 null、编译期零反馈，
 /// 兜底完全依赖可被 .editorconfig/ruleset 降级关闭的分析器诊断——分析器规则被抑制时实体
