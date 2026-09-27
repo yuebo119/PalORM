@@ -274,7 +274,11 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
   - (a) 维持现状 + XML doc 警告：DB NULL 撞非可空注解属性时抛裸 `SqlNullValueException`（当前行为）
   - (b) 可空性未知时抛带列名的 PalORM 异常：诊断性更好，仍是行为变更（异常类型变）
   - (c) 读路径加 `IsDBNull` 守卫：每列每行一次 IsDBNull 探测成本，但可返回 null（需要属性可空）
-- [ ] **Step 2: 等裁决再排实现**——裁决记录到本行后开工
+- [x] **Step 2: 已裁决（2026-09-27）：维持 (a)**。依据：失败本就响亮（SqlNullValueException），
+  收益仅是诊断信息；(b) 是破坏面最大的异常类型变更（用户 catch 驱动异常类型的代码失效），
+  且 SQLite 驱动异常消息本就不含列名，包装的信息增量有限；(c) 把失败推成下游空值扩散，
+  与项目“明确失败优于静默错误”哲学正相反。落地物 = README「可空约定」告警（用户面）
+  + GEN-007 生成器注释（既有，已记载同理由）。
 
 ## T14【ADR 项】OwnedJson 方言条件 Span emit ✅ ADR 已产（实现保持挂起）
 
@@ -282,7 +286,11 @@ step6 会话早期手跑批次（label `ab/pgcN-base/opt`）不符合该契约�
 - Create: `docs/adr/ADR-G-ownedjson-方言条件span化.md`（2026-09-26）
 
 - [x] **Step 1: ADR**：G1 维持 / G2 SourceGen 方言感知化（推荐，但需先补 OwnedJson PerfHub 夹具）/ G3 PG-only 运行时旁路 / G4 驱动能力探测 四选项 + 收益成本分析
-- [ ] **Step 2: 若 ADR 通过再排实现**（G2 前置：OwnedJson 夹具子任务 + 三方言矩阵实测）
+- [x] **Step 2: 已裁决（2026-09-27）：维持 G1，不做**。T16 夹具族给了决策证据：大结果集
+  （Span 化的目标形态）PalORM 已时延分配双优（TenantGetAll 7.57ms/1030KB vs Dapper
+  7.92ms/1717KB、ADO 9.86ms/1035KB）；小结果集差距（OwnedJsonQuery +21% vs ADO）是
+  RTT 主导的固定开销，Span 化治不了。G2 的 SourceGen 核心变更成本失去收益支撑。
+  ADR-G 已补决策与重评触发条件。
 
 ## 追加证伪（2026-09-27 · 第 4 轮同款指令的增量回答）
 
@@ -397,3 +405,19 @@ tenant_id/deleted_at 与产品默认过滤同款）+ 5 操作 × 三臂：
 2. `OwnedJsonQuery`：PalORM 0.46ms vs 裸 ADO 0.38ms（+21%，LIMIT 50 的 RTT 主导型查询）——
    ADR-G 的取证面：SourceGen RowFactory + OwnedJson 反序列化在微小结果集上不及手工 reader，
    ADR-G 决策时应把小结果集形态纳入考虑。
+
+## PG 线收官（2026-09-27）
+
+三轮盘查（Npgsql 10.0.3 驱动 API 全量反射 · 社区/官方 2024-2026 经验 37 源 · PalORM PG 路径
+逐行热账）+ 五轮真库探针 + 两轮累计顺序交替 A/B + T16 夹具族回验之后的终局站位：
+
+| 维度 | 状态 |
+|---|---|
+| 批量路径 | BulkInsert **0.12× Dapper**（分配 1/12）、TxBulkInsert 0.12×、BulkUpdate 0.72×、BulkDelete 0.84×、UpsertBatch 0.88×；SessionBatchInserts **11.6×**（DbBatch 单往返 vs Dapper 20 往返） |
+| 读路径 | GetByKey/Count/WhereIn/KeysetPage 与 Dapper 持平（5 轮逐轮中位 1.00~1.07 / 1.0 / 1.0 / 1.01）；QueryAll 0.70~0.81、StreamAll 0.38~0.55、IncludeJoin 1.03~1.13（噪声带） |
+| COPY 路径分配 | −34~−38%（S1/S2/S3/PG-4，确定性口径） |
+| 覆盖面 | 原四盲区（Count where 组合 / 租户会话 / OwnedJson / SessionBatch）已被 T16 夹具族覆盖 |
+| 已识别未处置性能点 | 无（其余项均为证伪留档、触发条件未到的缓议、或需用户裁决的门；两门已于 2026-09-27 按“维持”关闭） |
+
+剩余唯一基础设施债：本机无容器 PG（远端共享库），时延结论必须走顺序交替协议；
+单批比值因实现顺序（ADO→Dapper→PalORM）有结构性偏差，判读只认逐轮中位。

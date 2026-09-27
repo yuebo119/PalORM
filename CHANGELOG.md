@@ -24,6 +24,12 @@
   - **T13/T14 流程门**：可空引用列读行为三选项挂起等裁决；ADR-G（OwnedJson 方言条件 Span emit，G2 推荐但需先补 PerfHub 夹具）已产出，实现不动。
   - **新增回归测试**：From/Count 分配基线（隔离口径 tripwire）、PG 已释放事务形态、PG 批缓存并发（构建次数=1）、连接串覆盖契约、@pN 保留命名空间（P2-44：字面量占位符在 PG 响亮失败/SQLite 静默返空集的方言发散被封堵）。
 - **验证（step6）**：Core.Tests 421/421、SourceGen 202/202（快照基线已更新）、Integration 208/208（PG 真库在线）；三路深挖证据（Npgsql 10.0.3 反射盘查 68 连接串属性/importer 20 成员/驱动 API 全量 · PalORM PG 路径逐行热账 · 社区官方 2024-2026 经验 37 源抓取）与三轮真库探针见 `docs/性能优化方案-step6-pg.md`。
+- **覆盖面补齐与门裁决（T16/T17 + T13/ADR-G 收官，2026-09-27）**：
+  - **PerfHub 新增租户/OwnedJson/SessionBatch 夹具族**（`bench_tenant` 实体 = [TenantAware]+[SoftDelete]+[OwnedJson] 组合 + TenantCount/TenantCountWhere/TenantGetAll/OwnedJsonQuery/SessionBatchInserts 五操作 × 三臂），补齐原四盲区；SQLite 79/79 对账、PG 20000 档双冒烟。
+  - **T17 回验判决（诚实修正）**：3 轮顺序交替证明 T4/T6 的隔离读数（−635B/−33B）是形态放大上界，夹具口径净中性（−0.4%/+1.0%）——隔离分配读数第三次被证伪为最终判据（前两次：T5 回滚、T4 饿汉拼接）。
+  - **夹具族即时产出**：SessionBatchInserts PalORM 0.92ms vs Dapper 10.69ms（11.6×，首次量化）；OwnedJsonQuery 小结果集慢于裸 ADO 21%（RTT 主导）。
+  - **两门按“维持”裁决关闭**：T13 可空引用列读路径维持现状（README 补可空约定告警；包列名异常与 IsDBNull 守卫两案否决）；ADR-G OwnedJson 方言条件 Span 化维持不做（大结果集已双优、小结果集差距 Span 化治不了，重评触发条件已登记）。
+  - **PG 线收官**：三轮盘查 + 五轮探针 + 两轮累计 A/B + 夹具族回验后，已识别未处置性能点为零；批量 0.12× Dapper、SessionBatch 11.6×、读路径持平到 1.13× 内、COPY 分配 −34~−38%。
 - **验证（step7）**：Core.Tests 426/426、SourceGen 202/202、Integration 211/211（PG 真库在线；新增 From/Count 分配基线、PG 已释放事务形态、PG 批缓存并发构建次数=1、连接串覆盖契约、@pN 保留命名空间等回归测试）。最终 3 轮顺序交替 A/B（base=955cc39 worktree，PG 20000 档）：21 项分配全部 ±3.3% 内（零回归），时延除 QueryAll/StreamAll/IncludeJoin 一致负向（未归因不计收益）外全在噪声带；批量路径与 base 持平符合预期（step7 未再动 COPY 路径）。累计 A/B 方法论事故两起留档（同 label 历史污染按时间戳过滤修正；perfhub-ab.sh 参数只认等号形式）。
 
 ## [5.7.0] — SQLite 极致优化：PRAGMA 三补 + 读路径命令复用 + 批量回退合并 + OwnedJson Span 解析 + Migrate optimize（含参数上限 32766 实测证伪）
