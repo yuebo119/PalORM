@@ -2,6 +2,16 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·跨方言移植] — DbBatch 打包逐条 UPDATE 平移到 PG（远程库实测 7.85×）+ MySQL 产物移植盘账
+
+> 数据源：探针二十五/二十六/二十七/二十八（真库 SQLite 内存库 / PG 远程库）。变更范围：`PalORM.Core`（DataSession_Bulk）+ 集成测试。盘账明细：`.ai/scratch-mysqlprobe/OPTIMIZATION-PLAN.md`（本地台账）。
+
+- **PG-7：DbBatch 打包平移到 PG**：`ExecuteBulkUpdatePooledAsync`（乐观锁 `[ConcurrencyCheck]` 实体的逐条路径）原 MySQL-8 机制扩展到 PG dialect——100 命令一个 DbBatch 单次协议往返，乐观锁按批受影响总和判定（总和 < 批大小 = 冲突）。探针二十八（真库 PG，200 命令事务内）：逐条 118.7ms vs DbBatch 15.1ms（**7.85×**）；PG 远程 RTT（~556µs）高于本地 MySQL，比 MySQL 同族 3.55× 省得更多。判据抽为 `SupportsBatchedPooledUpdate` 属性（MySql/PostgreSql）。
+- **SQLite 不移植（证伪）**：探针二十五实测进程内无 RTT，DbBatch vs 逐条 = 1.02~1.04×，收益是噪声。
+- **MySQL-7 VALUES ROW → SQLite 证伪**：SQLite VALUES 行构造器不支持绑定参数（字面量内联版虽快 17.24×，但违反产品参数化纪律）；SELECT ? 派生表参数化变体慢 6.4× 且 compound SELECT 项数上限 500。PG 已有更优 UPDATE FROM VALUES，无需移植。
+- **MySQL-9 ODKU 批宽 → PG 证伪**：探针二十六（真库 PG ON CONFLICT 20000 行）：批宽 1000/2000/5000 差异 1.01~1.06×——PG 冲突检测机制与 MySQL dup read-modify 不同，对批宽不敏感。
+- **测试**：`PgBatchedUpdatePathTests`（新增，真库）3 例——250 行跨 3 批写值正确、批内 version 陈旧抛冲突且整批回滚、内存 version 仅成功回填。验证：Core 433/433、外库 45/45、0 警告。
+
 ## [未发布·MySQL 极致化] — 批量 UPDATE 换 UPDATE JOIN VALUES ROW（8.75×）+ 逐条 UPDATE 走 DbBatch 打包（3.55×）
 
 > 数据源：探针十五/十六/十七（`.ai/scratch-mysqlprobe/`，真库 MySQL 8.4.11，20000 行全曲线 + 产品路径实测）。变更范围：`PalORM.Core`（BatchUpdateSqlBuilder / DataSession_Bulk）+ 测试与 README。
