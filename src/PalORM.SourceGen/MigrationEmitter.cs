@@ -128,10 +128,15 @@ internal static class MigrationEmitter
         => column.ProviderClrTypeName is
             "global::System.DateTime" or "global::System.DateTimeOffset";
 
-    /// <summary>非 SQLite 方言（PG/MySQL）的 DEFAULT CURRENT_TIMESTAMP 子句。
-    /// MySQL 分秒精度列（dbType 以 "(6)" 结尾）要求 DEFAULT 表达式精度一致。</summary>
+    /// <summary>列 DEFAULT 子句——两个来源互斥（TableModel 生成期 PALORM046 拦截共存）：
+    /// <para><b>[DefaultValue] 表达式</b>（R2，v6.0）——原样直通三方言 DDL，不做方言翻译
+    /// （[Computed] ITM-541 同契约，跨方言合法性由调用方负责）；</para>
+    /// <para><b>[Timestamp] 时间戳列的 DEFAULT CURRENT_TIMESTAMP</b>（ITM-402/519）——
+    /// MySQL 分秒精度列（dbType 以 "(6)" 结尾）要求 DEFAULT 表达式精度一致。</para></summary>
     private static string GetDefaultClause(ColumnModel column, SqlGenerationDialect dialect, string dbType)
     {
+        if (column.DefaultValueExpression is not null)
+            return $" DEFAULT {column.DefaultValueExpression}";
         if (!column.IsTimestamp || !IsTemporalTimestampType(column))
             return "";
 

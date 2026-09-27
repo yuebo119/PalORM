@@ -19,9 +19,10 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 3); p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 4); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 5); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 6); p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 7); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 8); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 6); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Tier; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 7); p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 8); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 9); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
@@ -39,11 +40,13 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 5].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 5].Value = (object)entity.UniqueToken;
         parameters[paramOffset + 6].DbType = global::System.Data.DbType.String;
-        parameters[paramOffset + 6].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
+        parameters[paramOffset + 6].Value = (object)entity.Tier;
         parameters[paramOffset + 7].DbType = global::System.Data.DbType.String;
-        parameters[paramOffset + 7].Value = (object)entity.TenantId;
+        parameters[paramOffset + 7].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
         parameters[paramOffset + 8].DbType = global::System.Data.DbType.String;
-        parameters[paramOffset + 8].Value = (object)entity.SensitiveValue;
+        parameters[paramOffset + 8].Value = (object)entity.TenantId;
+        parameters[paramOffset + 9].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 9].Value = (object)entity.SensitiveValue;
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
@@ -56,9 +59,10 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p5"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p6"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Tier; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p10"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>
@@ -71,9 +75,10 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 4].Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
         parameters[paramOffset + 5].Value = (object)entity.RawJson;
         parameters[paramOffset + 6].Value = (object)entity.UniqueToken;
-        parameters[paramOffset + 7].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 8].Value = (object)entity.TenantId;
-        parameters[paramOffset + 9].Value = (object)entity.SensitiveValue;
+        parameters[paramOffset + 7].Value = (object)entity.Tier;
+        parameters[paramOffset + 8].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
+        parameters[paramOffset + 9].Value = (object)entity.TenantId;
+        parameters[paramOffset + 10].Value = (object)entity.SensitiveValue;
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
@@ -85,10 +90,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawJson; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p5"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.UniqueToken; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p6"; p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p6"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Tier; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p10"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
@@ -100,10 +106,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 3].Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
         parameters[paramOffset + 4].Value = (object)entity.RawJson;
         parameters[paramOffset + 5].Value = (object)entity.UniqueToken;
-        parameters[paramOffset + 6].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 7].Value = (object)entity.TenantId;
-        parameters[paramOffset + 8].Value = (object)entity.SensitiveValue;
-        parameters[paramOffset + 9].Value = (object)entity.Id;
+        parameters[paramOffset + 6].Value = (object)entity.Tier;
+        parameters[paramOffset + 7].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
+        parameters[paramOffset + 8].Value = (object)entity.TenantId;
+        parameters[paramOffset + 9].Value = (object)entity.SensitiveValue;
+        parameters[paramOffset + 10].Value = (object)entity.Id;
     }
 
     /// <summary>绑定主键到 DELETE 参数。</summary>

@@ -84,6 +84,9 @@ internal sealed class SnapshotTests
             [Column("uniq_token")]
             [Unique]
             public string UniqueToken { get; set; } = "";
+            [Column("tier")]
+            [DefaultValue("'standard'")]
+            public string Tier { get; set; } = "";
             [Column("row_updated_at")]
             [Timestamp]
             public System.DateTime RowUpdatedAt { get; set; }

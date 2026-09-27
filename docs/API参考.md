@@ -19,10 +19,12 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 39 条 PALORM 诊断（36 条分析器 + 3 条生成器：PALORM041/045/046）
+### 编译时验证 — 41 条 PALORM 诊断（38 条分析器 + 3 条生成器：PALORM041/045/046）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
 > v7.2 扩充（2026-08-26，ITM-640 收口）：PALORM042-044——生成器 throw/静默跳过的编译期定位面（分工同 022：分析器定位报错，生成器防御性跳过）。
+> v6.0 扩充（R2）：PALORM047/048——[DefaultValue] DDL 落地的编译期契约（互斥三态 + 表达式快检），
+> PALORM017 对 [DefaultValue] 停报（已参与 DDL）。
 > 评审批次（2026-09-02）：新增 PALORM045（生成器 transform 失败面兜底 Warning——分析器规则被
 > .editorconfig/ruleset 抑制时实体静默跳过的唯一编译期线索）；PALORM003 因带已知多程序集误报、
 > 默认严重度由 Error 复议为 Warning；PALORM041 category 归一为 "PalORM"；PALORM020 消息改为
@@ -67,6 +69,8 @@
 | **PALORM045** | **生成器兜底：实体被跳过且无对应分析器诊断时的编译期提示（分析器被抑制场景的最后线索）** | **P1** |
 | **PALORM041** | **[SqlTemplate] 同命名空间内模板名重复** | **P1** |
 | **PALORM046** | **[SqlTemplate] 声明形状非法或生成类名冲突（关键字名/带参/泛型/record 宿主/既有非 partial SqlTemplates）** | **P1** |
+| **PALORM047** | **[DefaultValue] 与 [Computed]/[Timestamp]/自增 [Key] 互斥（v6.0 R2；[Key(AutoIncrement=false)] 与 Guid 主键不受限）** | **P0** |
+| **PALORM048** | **[DefaultValue] 表达式 NUL 或括号不平衡（v6.0 R2，与 PALORM044 同型判定）** | **P1** |
 
 ### 基础注解 (22 个)
 
