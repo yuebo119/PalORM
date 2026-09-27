@@ -423,7 +423,7 @@ public sealed class PostgreSqlProvider : IDbProvider
             }
             primaryException = thrown;
             if (ownsTransaction)
-                await BulkOperationFramework.RollbackPreservingAsync(bulkTransaction, thrown, commandTimeoutSeconds)
+                await BulkOperationFramework.RollbackPreservingAsync(bulkTransaction, thrown, commandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
             throw thrown;
         }

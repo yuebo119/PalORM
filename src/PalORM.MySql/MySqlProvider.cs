@@ -360,7 +360,7 @@ public sealed class MySqlProvider : IDbProvider
             if (ownsTransaction)
             {
                 await BulkOperationFramework.RollbackPreservingAsync(
-                    mySqlTransaction, ex, commandTimeoutSeconds).ConfigureAwait(false);
+                    mySqlTransaction, ex, commandTimeoutSeconds, ct).ConfigureAwait(false);
             }
             throw;
         }

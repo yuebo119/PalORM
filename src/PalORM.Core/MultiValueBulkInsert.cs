@@ -103,7 +103,7 @@ public static class MultiValueBulkInsert
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(exception)))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
-                    tran, exception, commandTimeoutSeconds).ConfigureAwait(false);
+                    tran, exception, commandTimeoutSeconds, ct).ConfigureAwait(false);
             }
             throw;
         }

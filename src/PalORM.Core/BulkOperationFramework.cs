@@ -111,9 +111,12 @@ public static class BulkOperationFramework
     /// 回滚在诊断上也不可区分（PalORM.RollbackException / RollbackTimeoutException 永不出现）。</para>
     /// <para><b>语义</b>与 Core 侧完全一致：<paramref name="rollbackTimeoutSeconds"/> ≤ 0 表示无限等待
     /// （CommandTimeout Zero 契约同口径）；超时挂 PalORM.RollbackTimeoutException，回滚自身失败挂
-    /// PalORM.RollbackException，两者都附加到主异常 Data，不替换原始失败。</para></summary>
+    /// PalORM.RollbackException，两者都附加到主异常 Data，不替换原始失败。
+    /// <paramref name="ct"/> 为调用方取消（G25/2026-09-27 补，与 CommitWithTimeoutAsync 同族的
+    /// 双重约束：调用方取消或秒数超时任一首发即中断）。</para></summary>
     public static ValueTask RollbackPreservingAsync(
         DbTransaction transaction, Exception primaryException,
-        int rollbackTimeoutSeconds = TransactionCleanup.DefaultRollbackTimeoutSeconds)
-        => TransactionCleanup.RollbackPreservingAsync(transaction, primaryException, rollbackTimeoutSeconds);
+        int rollbackTimeoutSeconds = TransactionCleanup.DefaultRollbackTimeoutSeconds,
+        CancellationToken ct = default)
+        => TransactionCleanup.RollbackPreservingAsync(transaction, primaryException, rollbackTimeoutSeconds, ct);
 }
