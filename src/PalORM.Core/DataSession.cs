@@ -64,7 +64,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         _conn = conn;
         _options = options;
         _resilience = new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider));
-        _interceptors = interceptors.OrderBy(i => i.Priority).ToList();
+        // MySQL-9/P1（2026-09-27）：空拦截器列表跳过 OrderBy LINQ——大多数会话不配拦截器，
+        // 原实现对空集合也分配迭代器 + 委托 + 新 List（探针十八拆解：CreateAsync 每 op
+        // 2625B 里约 180B 属此）。空列表直接复用 CreateAsync 传入的私有副本
+        // （options.Interceptors?.ToList() 的产物，无外部引用，munate 安全）；
+        // 非空时保持防御性复制语义（OrderBy().ToList()）。
+        _interceptors = interceptors.Count == 0
+            ? interceptors
+            : interceptors.OrderBy(i => i.Priority).ToList();
         _logger = logger ?? NullLogger.Instance;
         // ITM-624 同型面（修复侧纪律卡第三问实证）：读连接每次创建都读 _options 字段而非
         // 捕获构造期 options——WithTimeout/WithRetry 后读连接与主连接的池参数/超时口径一致。

@@ -276,6 +276,7 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | 批量写提交削峰 | `innodb_flush_log_at_trx_commit=2`（**服务端全局变量**，DBA 侧改） | 提交只写 OS 缓存不 fsync，写吞吐显著提升；崩溃丢最近约 1 秒提交——可接受场景与 `synchronous_commit=off` 同判据。PalORM 不提供客户端设置面（全局变量，会话级不可设） |
 | 锁等待 | 无需配置 | 引擎内等待由 `innodb_lock_wait_timeout`（MySQL 8 默认 50s）+ PalORM 弹性重试两层兜底（死锁 1213 / 锁超时 1205 判瞬时故障重试） |
 | 批量写报文上限 | 服务端 `max_allowed_packet` ≥ 16MB（云托管常见默认） | LOAD DATA 本地批量（MySqlBulkCopy）与大参数批（批量 UPDATE/INSERT 2000 行/批）单包可达数 MB；超限报 ER_NET_PACKET_TOO_LARGE 或静默断连。产品不检测该上限（连接级事实，探测成本高于收益）——报此错时先查服务端值 |
+| 批量写 LOAD DATA 开关 | `local_infile=ON`（**服务端 + 客户端双腿**） | `BulkInsertAsync` 优先走 LOAD DATA LOCAL INFILE（MySqlBulkCopy），服务端关闭时自动回退多值 INSERT（检测按连接缓存 60s）。双腿缺一即回退：服务端 `SET GLOBAL local_infile=ON`（需 SUPER，重启失效）+ 产品已自动给客户端连接串开 `AllowLoadLocalInfile=true`。本机实测（同网段库）LOAD DATA 比多值 INSERT 快 1.39×；远程库差距更大（官方基准 4~5× 量级） |
 | 批量 UPDATE 服务端版本 | MySQL ≥ 8.0.19 | `UPDATE JOIN (VALUES ROW(...))` 形态需 8.0.19+（table value constructor；真库实测 8.75×）；低版本自动回退 CASE WHEN（同结果不同形态，无需用户操作）。MariaDB 不适用该形态（无 VALUES 语句）——同样走回退 |
 
 ---
