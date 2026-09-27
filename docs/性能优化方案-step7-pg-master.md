@@ -362,3 +362,38 @@ HEAD = 当前树（T4~T12）。
 
 **教训（已落 cortex）**：隔离单测的分配读数**不能外推**到真实夹具形态（T5 的 SQLite/租户/ToList
 −1.2% vs PG/非租户/FirstOrDefault +9% sign 相反）；性能改动的最终判据是累计 A/B（顺序交替）。
+
+## T16/T17 夹具族与回验（2026-09-27 下午 · 覆盖面补齐）
+
+**动机**：step7 的两个分配收益项（T4 Count where 组合、T6 租户 scope）此前只有隔离单测取证，
+夹具不覆盖（非租户会话、Count 无 where 组合）——按"无基准覆盖的优化无法证伪也无法验收"，
+先补夹具。
+
+**T16 夹具族**（`bench/PalORM.PerfHub/BenchTenantFixtures.cs` + Dataset/Implementations/Program）：
+新实体 `bench_tenant`（[TenantAware]+[SoftDelete]+[OwnedJson] 组合，契约列名
+tenant_id/deleted_at 与产品默认过滤同款）+ 5 操作 × 三臂：
+`TenantCount` / `TenantCountWhere`（阈值随档位）/ `TenantGetAll` / `OwnedJsonQuery`（LIMIT 50）
+/ `SessionBatchInserts`（20 条单行 INSERT 一个批操作）。播种走 SeedSnapshots 同款快照 reset
++ PG ANALYZE。SQLite 79/79 对账、PG 20000 档 exit=0 双冒烟通过。
+
+**T17 回验判决**（3 轮顺序交替，base=955cc39 即 T4/T6 之前 + 同一套夹具，PG 20000 档，
+分配 = 确定性口径）：
+
+| 操作 | Δa（HEAD vs base） | 判决 |
+|---|---|---|
+| TenantCountWhere | **−0.4%**（≈−28B） | T4 的 −635B 隔离读数**未在批内复现**——隔离测试的基线含饿汉拼接分支等高估项，真实收益 ≈0 |
+| TenantCount | +1.0% | T6 的 −33B 低于夹具分辨率（总 6.4KB 的 0.5%），符合预期 |
+| TenantGetAll | −0.2%（时延 −13.5%） | 分配持平；时延负向与 QueryAll −18.8% 同属未归因的环境性负向（上一轮 A/B 同现象） |
+| OwnedJsonQuery / SessionBatchInserts | +1.2% / +0.3% | 持平（src 未改其路径） |
+
+**结论（对 T4/T6 的诚实修正）**：两项改动在夹具口径下**净中性**（T4 保留：where 路径 concat
+次数确实少了、无回归；T6 保留：租户会话每查询 33B 属实但低于夹具分辨率）。隔离单测读数
+（−635B/−33B）是**形态放大的上界**，不是批内收益。教训并入 cortex：隔离分配读数只能当
+上界，最终判据是夹具口径的顺序交替 A/B——这与 T5 回滚是同一条纪律的第三次实证。
+
+**附带发现（夹具族的即时产出）**：
+1. `SessionBatchInserts`：PalORM 0.92ms vs Dapper 10.69ms（**11.6×**，DbBatch 单往返 vs
+   Dapper 无批 API 的 20 次往返）——产品批路径的优势首次被夹具量化，之前无任何基准覆盖。
+2. `OwnedJsonQuery`：PalORM 0.46ms vs 裸 ADO 0.38ms（+21%，LIMIT 50 的 RTT 主导型查询）——
+   ADR-G 的取证面：SourceGen RowFactory + OwnedJson 反序列化在微小结果集上不及手工 reader，
+   ADR-G 决策时应把小结果集形态纳入考虑。
