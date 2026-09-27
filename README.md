@@ -268,6 +268,14 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 
 > `NoResetOnClose=true` 的会话状态泄漏取舍（raw SQL 的 SET/临时表跨池租客可见）见 ITM-652：需要隔离时用独立连接（连接串 `Max Pool Size=1`）或显式 `DISCARD`。
 
+**MySQL 进阶配方**（均为服务端/DM 决策或显式操作，无自动默认）：
+
+| 场景 | 配方 | 说明 |
+|------|------|------|
+| 计划器统计刷新 | `ANALYZE TABLE 表名`（经 `ExecuteAsync`） | InnoDB 默认 `innodb_stats_auto_recalc=ON`（表行数变化 10% 自动重算），多数场景无需手工；MigrateAsync **不**自动跑（ANALYZE TABLE 在 InnoDB 上是显式运维操作而非迁移副作用）；大表 DDL 后想立刻刷新时手工执行 |
+| 批量写提交削峰 | `innodb_flush_log_at_trx_commit=2`（**服务端全局变量**，DBA 侧改） | 提交只写 OS 缓存不 fsync，写吞吐显著提升；崩溃丢最近约 1 秒提交——可接受场景与 `synchronous_commit=off` 同判据。PalORM 不提供客户端设置面（全局变量，会话级不可设） |
+| 锁等待 | 无需配置 | 引擎内等待由 `innodb_lock_wait_timeout`（MySQL 8 默认 50s）+ PalORM 弹性重试两层兜底（死锁 1213 / 锁超时 1205 判瞬时故障重试） |
+
 ---
 
 ## 与主流 ORM 特性对比
