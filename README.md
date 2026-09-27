@@ -150,7 +150,7 @@ await db.BulkInsertAsync(users);
 // 批量更新（逐条 + 乐观锁）
 await db.BulkUpdateAsync(users);
 
-// 批量更新（v5.0 单语句批量，PG: FROM VALUES / MySQL: CASE WHEN / SQLite: 自动回退逐条）
+// 批量更新（v5.0 单语句批量，PG: FROM VALUES / MySQL: UPDATE JOIN VALUES ROW（8.0.19+，低版本回退 CASE WHEN）/ SQLite: 自动回退逐条）
 await db.BulkUpdateBatchAsync(users);
 
 // 批量删除（IN 子句单语句）
@@ -289,7 +289,7 @@ PalORM v5.0 在 `CreateConnection` 时自动调优（仅当用户未显式设置
 | **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
 | **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
 | **三方言批量策略** | ✓ COPY / BulkCopy / 多值 | ❌ 无（手写多值 SQL） | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
-| **单语句多行 UPDATE** | ✓ FROM VALUES / CASE WHEN | ❌ | ❌ ExecuteUpdate 仅按 WHERE 单值 | ❌ |
+| **单语句多行 UPDATE** | ✓ FROM VALUES / UPDATE JOIN VALUES ROW（MySQL 8.0.19+）/ CASE WHEN | ❌ | ❌ ExecuteUpdate 仅按 WHERE 单值 | ❌ |
 | **乐观锁** | ✓ `[ConcurrencyCheck]` 自动 | ❌ 手写 | ✓ `RowVersion` 自动 | ❌ 手写 |
 | **软删除** | ✓ `[SoftDelete]` 自动过滤 | ❌ | ✓ 全局查询过滤器 | ❌ |
 | **多租户列隔离** | ✓ `[TenantAware]` 编译时 | ❌ | △ 需手动实现 | ❌ |

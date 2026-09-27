@@ -2,6 +2,15 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·MySQL 极致化] — 批量 UPDATE 换 UPDATE JOIN VALUES ROW（8.75×）+ 逐条 UPDATE 走 DbBatch 打包（3.55×）
+
+> 数据源：探针十五/十六/十七（`.ai/scratch-mysqlprobe/`，真库 MySQL 8.4.11，20000 行全曲线 + 产品路径实测）。变更范围：`PalORM.Core`（BatchUpdateSqlBuilder / DataSession_Bulk）+ 测试与 README。
+
+- **MySQL 批量 UPDATE 换形态（MySQL-7）**：`BulkUpdateAsync`/`BulkUpdateBatchAsync` 的 MySQL 单语句批量从 CASE WHEN 改为 `UPDATE t JOIN (VALUES ROW(...)) AS v ... ON t.pk = v.pk SET ...`（table value constructor，MySQL 8.0.19+）。根因：CASE WHEN 服务端求值 O(行数×CASE 分支数)，单批耗时随批宽超线性（真库实测 500 行/批 271.7ms → 5000 行/批 1373.9ms）；VALUES ROW 走等值 JOIN，20000 行 156.7ms（**8.75×**），SQL 文本 1/6.7。参数布局与 CASE WHEN 逐位一致（每行 [SET 列…, PK]），参数绑定零改动；批宽 2000 行（1000/2000 同值，2000 的 A/A drift 4.8% 更稳）。
+- **服务端版本探测 + 优雅降级**：连接级 + 60s TTL（`SELECT VERSION()`，与 local_infile 探测同模式），低于 8.0.19 不认识该语法的服务端自动回退 CASE WHEN；探测故障保守回退基线形态。语义差异（输入重复主键时 JOIN 一对多 affected rows 膨胀 vs CASE WHEN 末值覆盖）已在 `BatchUpdateSqlBuilder` 注释声明。
+- **MySQL 逐条 UPDATE 走 DbBatch 打包（MySQL-8）**：乐观锁（`[ConcurrencyCheck]`）实体不能走单语句批量（无法表达每行 version 匹配），`ExecuteBulkUpdatePooledAsync` 原先 N 行 = N 次往返。MySQL dialect 起改用 ADO.NET 通用 `DbBatch` 抽象（100 命令/批一次协议往返，真库实测 100 命令 14.70ms vs 逐条 52.18ms，**3.55×**）。乐观锁按批受影响行数总和判定（单行 UPDATE 每行恰 1 行：总和 < 批大小 = 冲突，> = WHERE 语义破坏），异常类型与逐条路径一致；ITM-556 延迟 version 回填同口径（仅批成功后登记）。
+- **测试**：`BatchUpdateSqlBuilderTests` 新增 4 例（VALUES ROW 占位符契约 / 租户过滤位置 / 非 MySQL 方言忽略形态参数）；`MySqlBatchedUpdatePathTests`（新增，真库）3 例——250 行跨 3 个批边界写值正确、批内 version 陈旧抛 `ConcurrencyConflictException` 且整批回滚、内存 version 仅成功回填。验证：Core 433/433、外库 42/42、全解决方案 0 警告（bench 子树既有 48 警告与本变更无关）。
+
 ## [未发布·移植] — MigrateAsync 计划器统计刷新平移 PG（ANALYZE）：SQLite 优化同构移植
 
 > 盘点与判定：`docs/性能优化方案-step5.md` §九-E。变更范围：`PalORM.Core`（DataSession.Schema）+ 测试与 README 配方。
