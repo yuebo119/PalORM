@@ -75,9 +75,10 @@ public sealed partial class DataSession<TProvider>
     /// 现在缺键时零副作用。建表 DDL 经 <see cref="CreateBatch"/> 单次往返
     /// （PG 真 DbBatch / MySQL 驱动侧批处理 / SQLite 顺序回退），N 表 N 次往返 → 1 次；
     /// 索引 DDL 保持逐条——MySQL 1061 幂等跳过是逐条 catch 语义，批内单条失败无法定位跳过项。</para>
-    /// <para><b>SQLite 收尾（2026-09-26）</b>：索引 DDL 后跑一次 <c>PRAGMA optimize</c>（SQLite
-    /// 官方对 schema 变更的建议；引擎无 STAT4，ANALYZE 基础统计对 keyset/大 IN 查询计划有
-    /// 直接影响，cost 由 analysis_limit=400 约束）。</para></summary>
+    /// <para><b>schema 变更后刷新计划器统计（2026-09-26）</b>：SQLite 跑 <c>PRAGMA optimize</c>、
+    /// PostgreSQL 跑 <c>ANALYZE</c>（同构对应物，见 <c>docs/性能优化方案-step5.md</c> §九-E）；
+    /// MySQL 不自动执行（InnoDB ANALYZE TABLE 是显式运维操作而非迁移副作用，经
+    /// <see cref="DbOptions.SessionSetupSql"/> 按需执行）。</para></summary>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
@@ -126,18 +127,26 @@ public sealed partial class DataSession<TProvider>
         foreach (IReadOnlyList<string> indexDdls in indexDdlGroups)
             await ApplyIndexDdlAsync(indexDdls, ct).ConfigureAwait(false);
 
-        // SQLite（2026-09-26）：schema 变更后跑一次 PRAGMA optimize——SQLite 官方文档明确建议
-        // "run PRAGMA optimize after a schema change, especially after one or more CREATE INDEX
-        // statements"。收益面：本引擎探针实测编译选项无 STAT4（sqlite_stat1 基础统计是计划器
-        // 的统计来源），新表/新索引后的 ANALYZE 采样直接影响 keyset 分页、大 IN 列表等
-        // PalORM 高频查询形态的执行计划选择。采样成本由连接初始化预设的 analysis_limit=400
-        // 约束（见 SqliteProvider.InitializeConnectionAsync）。方言静态判定（BATCH-002 同
-        // 范式）——PG/MySQL 无此语句。
-        if (TProvider.Dialect == SqlDialect.Sqlite)
+        // schema 变更后刷新计划器统计（各服务端/引擎的官方建议动作）：
+        //   SQLite（2026-09-26）：PRAGMA optimize——官方对 schema 变更的建议；本引擎无 STAT4，
+        //     sqlite_stat1 是计划器唯一统计来源，直接影响 keyset/大 IN 查询计划。采样成本由
+        //     连接初始化预设的 analysis_limit=400 约束。
+        //   PostgreSQL（2026-09-26 平移）：ANALYZE——同构对应物（见 step5 §九-E）。空库/空表
+        //     ANALYZE 近零成本（无采样页），建库首次迁移与后续幂等重迁都安全。
+        //   MySQL：不自动执行——InnoDB ANALYZE TABLE 触发持久化统计重采样，大表上是显式运维
+        //     操作而非迁移副作用；经 SessionSetupSql 按需手工执行（README 配方段载明）。
+        // 方言静态判定（BATCH-002 同范式）。
+        string? analyzeSql = TProvider.Dialect switch
         {
-            await using DbCommand optimizeCmd = CreateCommand();
-            optimizeCmd.CommandText = "PRAGMA optimize;";
-            await optimizeCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            SqlDialect.Sqlite => "PRAGMA optimize;",
+            SqlDialect.PostgreSql => "ANALYZE;",
+            _ => null,
+        };
+        if (analyzeSql is not null)
+        {
+            await using DbCommand analyzeCmd = CreateCommand();
+            analyzeCmd.CommandText = analyzeSql;
+            await analyzeCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
 

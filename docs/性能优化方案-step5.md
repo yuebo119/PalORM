@@ -477,3 +477,17 @@
 **② 快照 ToolVersion 未随升版本同步**：918ceb9 升 5.7.0 改了 `GeneratedCodeMetadata.ToolVersion`（进生成代码头），但 SourceGen 快照镜像里钉的 ToolVersion 仍是 5.6.0 → CI SourceGen tests 红。release-version-scan 不覆盖快照文件（只扫 src/test/docs 版本引用）。**教训：升版本提交的机械扫描清单 +1 模式——快照文件中的 ToolVersion 字面量；本地先跑一次 `PALORM_UPDATE_SNAPSHOTS=1` 看 diff 是否只剩预期行。**
 
 **复盘面**：两处都在发布 gate 拦住而未入 NuGet（workflow step 顺序 gate 生效，NuGet 上 5.6.0 之后无新包）。本地跑测试 ≠ 三方言 AOT 矩阵验证——发布 SOP §4.1 应显式包含"三方言 OwnedJson round trip 已入测试"与"快照 ToolVersion 同步"两项，本次已补。
+
+## 九-E、SQLite 优化向 PG/MySQL 的平移盘点（2026-09-26）
+
+盘点口径：逐项对照 SQLite 优化的**作用层**，而非表面形态。三段结论——
+
+**① 可直接平移（已落地）**：MigrateAsync 收尾的计划器统计刷新——SQLite `PRAGMA optimize` ↔ PG `ANALYZE` 同构（同为"schema 变更后刷计划器统计"的官方建议动作，收益面同为 keyset/大 IN 查询计划）。落地为方言 switch：SQLite `PRAGMA optimize;` / PG `ANALYZE;` / MySQL 不自动。MySQL 不自动的理由：InnoDB `ANALYZE TABLE` 触发持久化统计重采样，是显式运维操作而非迁移副作用（且默认 `innodb_stats_auto_recalc=ON` 已有 10% 变化自动重算兜底）——配方入 README MySQL 进阶段。
+
+**② 早已在三方言生效（无需移植）**：PL-2 命令/参数复用（Core 层方言无关，Insert/Update/GetByKey 全方言覆盖）；连接串自动调优（PG 6 项 / MySQL 5 项，v5.0 已落）。
+
+**③ 不可/不宜平移（判定记录）**：
+- busy_timeout → PG `lock_timeout` / MySQL `innodb_lock_wait_timeout`：对应物存在，但瞬时锁失败已有弹性重试器归置（PG 序列化 40001/死锁 40P01、MySQL 1213/1205 判瞬时重试），引擎等待层与重试层重复度高；
+- `synchronous=NORMAL` → PG `synchronous_commit=off` / MySQL `innodb_flush_log_at_trx_commit=2`：同构（削提交 fsync），但后者是**服务端全局/DM 级决策**（崩溃语义），只宜配方文档化（README 已载，PalORM 不默认）；
+- SQLite 回退路径专属项（SessionBatch 合并/单命令复用）：PG/MySQL 走真 DbBatch，单往返已天然满足，回退路径不存在；
+- SQLite 引擎内存项（cache_size/mmap/temp_store）：PG/MySQL 对应面（客户端 buffer / 池预热）已由 v5.0/v5.6 覆盖。

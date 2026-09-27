@@ -2,6 +2,15 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布·移植] — MigrateAsync 计划器统计刷新平移 PG（ANALYZE）：SQLite 优化同构移植
+
+> 盘点与判定：`docs/性能优化方案-step5.md` §九-E。变更范围：`PalORM.Core`（DataSession.Schema）+ 测试与 README 配方。
+
+- **MigrateAsync 收尾按方言刷新计划器统计**：SQLite `PRAGMA optimize` ↔ PostgreSQL `ANALYZE` 同构（schema 变更后刷计划器统计的官方建议动作，收益面同为 keyset 分页/大 IN 查询的计划选择）；MySQL 不自动执行（InnoDB ANALYZE TABLE 是显式运维操作且 `innodb_stats_auto_recalc=ON` 已有自动兜底），配方入 README。
+- **MySQL 进阶配方段**（README 新增）：`ANALYZE TABLE` 手工入口、`innodb_flush_log_at_trx_commit=2`（服务端全局变量，DM 决策，崩溃语义同 PG `synchronous_commit=off`）、锁等待两层兜底说明。
+- **测试**：`MigrateOptimizeTests` 扩 PG 断言（migrate 后 `pg_statistic` 出现统计行，S3 反向验证——撤 ANALYZE 分支即红）；Integration 218/218。
+- **不可/不宜移植项判定**：busy_timeout 对应物（lock_timeout 会话 SET）与弹性重试层重复度高；synchronous 对应物属 DM 决策只文档化；SQLite 回退路径专属项对 PG/MySQL 不成立——详见 §九-E ③。
+
 ## [未发布] — PostgreSQL 极致化（S1~S3/PG-4 + step7 全量）：null 列慢路径根因修复 + 每查询开销收敛 + 并发单实例化 + ODE 形态统一
 
 > 变更范围：`PalORM.Core`（IDbProvider / DataSession_Bulk / DataSession.Query / QueryBuilderExtensions / QueryBuilder / DataSession / FormattableSqlFormatter）+ `PalORM.SourceGen`（CommandFactoryEmitter）+ `PalORM.PostgreSql`（PostgreSqlProvider）+ 测试与文档。执行账本：`docs/性能优化方案-step6-pg.md`（S1~S3/PG-4）+ `docs/性能优化方案-step7-pg-master.md`（T1~T15）。
