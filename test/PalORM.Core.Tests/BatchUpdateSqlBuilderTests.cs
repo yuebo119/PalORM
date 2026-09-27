@@ -22,6 +22,55 @@ public sealed class BatchUpdateSqlBuilderTests
     }
 
     [Test]
+    public async Task BuildJoinValuesRow_PlaceholdersMatchRowMajorColumnOrder()
+    {
+        // MySQL-7：UPDATE JOIN table value constructor 形态（MySQL ≥ 8.0.19，探针十五 8.75×）
+        // 参数序与 CASE WHEN 逐位一致——每行 ROW(setCol0..setColN, pk)，调用方参数池布局零改动
+        string sql = BatchUpdateSqlBuilder.Build(
+            SqlDialect.MySql, "`t`", "`id`", ["`a`", "`b`"], rowCount: 2,
+            hasTenantFilter: false, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+
+        // 每行 ROW(@p0,@p1,@p2)：2 列 SET + pk 在行尾；ON 等价 JOIN + SET 派生列引用
+        await Assert.That(sql).Contains("JOIN (VALUES ROW(@p0,@p1,@p2), ROW(@p3,@p4,@p5)) AS v(c0, c1, pk)");
+        await Assert.That(sql).Contains("ON tgt.`id` = v.pk SET");
+        await Assert.That(sql).Contains("tgt.`a` = v.c0, tgt.`b` = v.c1");
+        // 无 CASE WHEN 残留（形态切换必须彻底，两种形态语义不能混）
+        await Assert.That(sql).DoesNotContain("CASE");
+    }
+
+    [Test]
+    public async Task BuildJoinValuesRow_TenantFilter_AppendsDialectQuotedPredicate()
+    {
+        // 租户过滤是 ON/SET 之后的 WHERE 谓词（AND），与 CASE WHEN 形态同位置
+        string sql = BatchUpdateSqlBuilder.Build(
+            SqlDialect.MySql, "`t`", "`id`", ["`a`"], rowCount: 1,
+            hasTenantFilter: true, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+
+        await Assert.That(sql).Contains(") AS v(c0, pk) ON tgt.`id` = v.pk SET tgt.`a` = v.c0 AND `tenant_id` = @__tenant0");
+    }
+
+    [Test]
+    public async Task Build_NonMySqlDialects_IgnoreJoinValuesRowForm()
+    {
+        // form 只在 MySQL 生效：PG 恒 FROM VALUES、SQLite 恒 CASE WHEN（调用方言既有路径）
+        string pg = BatchUpdateSqlBuilder.Build(
+            SqlDialect.PostgreSql, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: false, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+        string sqlite = BatchUpdateSqlBuilder.Build(
+            SqlDialect.Sqlite, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: false, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+
+        await Assert.That(pg).Contains("FROM (VALUES (@p0, @p1))");
+        await Assert.That(sqlite).Contains("= CASE \"id\" WHEN @p1 THEN @p0 END");
+        await Assert.That(pg).DoesNotContain("JOIN (VALUES ROW");
+        await Assert.That(sqlite).DoesNotContain("JOIN (VALUES ROW");
+    }
+
+    [Test]
     public async Task BuildPostgreSql_ValueRowsFollowRowMajorOrder()
     {
         string sql = BatchUpdateSqlBuilder.Build(

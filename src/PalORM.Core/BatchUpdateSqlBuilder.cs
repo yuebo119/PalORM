@@ -7,11 +7,29 @@ namespace PalORM;
 /// <para><c>UPDATE t AS tgt SET "a" = v.col0, "b" = v.col1 FROM (VALUES ...) AS v(col0, col1, col_pk) WHERE tgt."id" = v.col_pk</c></para>
 /// <para>MySQL/SQLite 方言（CASE WHEN，跨方言通用）：</para>
 /// <para><c>UPDATE t SET "a" = CASE "id" WHEN @pk0 THEN @v0a WHEN @pk1 THEN @v1a END WHERE "id" IN (@pk0, @pk1)</c></para>
+/// <para>MySQL ≥ 8.0.19 方言（UPDATE JOIN table value constructor，MySQL-7 实测 8.75×）：</para>
+/// <para><c>UPDATE t AS tgt JOIN (VALUES ROW(...), ROW(...)) AS v(c0, c1, pk) ON tgt."id" = v.pk SET tgt.c0 = v.c0</c></para>
 /// <para><b>参数顺序</b>（每行 setColumnCount+1 个，对应 BindUpdate 的输出顺序）：
-/// [setCol1, setCol2, ..., pk]。与 BindUpdate 参数序一致——SET 列先，PK 在末尾。</para>
-/// 不含租户参数（租户参数由调用方在 SQL 末尾追加）。</summary>
+/// [setCol1, setCol2, ..., pk]。与 BindUpdate 参数序一致——SET 列先，PK 在末尾。
+/// 不含租户参数（租户参数由调用方在 SQL 末尾追加）。</para>
+/// </summary>
 internal static class BatchUpdateSqlBuilder
 {
+    /// <summary>批量 UPDATE 形态——同方言下按服务端能力选择。
+    /// <para><b>MySQL-7（2026-09-27）</b>：CASE WHEN 的服务端求值是 O(行数×CASE 分支数)，
+    /// 单批耗时随批宽超线性（真库 20000 行实测：500 行/批 271.7ms → 5000 行/批 1373.9ms，
+    /// 探针十五）。UPDATE JOIN table value constructor（MySQL 8.0.19+）用等值 JOIN
+    /// 替代逐行 CASE 分支比较，同负载 156.7ms（8.75×），且 SQL 文本只有 CASE WHEN 的 1/6.7。
+    /// 低于 8.0.19 的服务端不认识该语法，由调用方版本探测后回退 <see cref="CaseWhen"/>。</para></summary>
+    internal enum BatchUpdateForm
+    {
+        /// <summary>CASE WHEN 形态——全方言兼容的基线（PG 走 FROM VALUES，不经过此枚举）。</summary>
+        CaseWhen,
+
+        /// <summary>UPDATE JOIN (VALUES ROW(...)) 形态——MySQL ≥ 8.0.19 专有。</summary>
+        JoinValuesRow,
+    }
+
     /// <summary>构造批量 UPDATE SQL。</summary>
     /// <param name="dialect">SQL 方言。</param>
     /// <param name="quotedTable">引号包裹的表名。</param>
@@ -20,11 +38,18 @@ internal static class BatchUpdateSqlBuilder
     /// <param name="rowCount">本批行数。</param>
     /// <param name="hasTenantFilter">是否追加租户过滤。</param>
     /// <param name="tenantParameterName">租户参数占位符（仅在 hasTenantFilter 时使用）。</param>
+    /// <param name="form">MySQL 方言的形态选择（非 MySQL 方言忽略，恒走方言既有形态）。</param>
     /// <exception cref="ArgumentException">SET 列集为空，或 hasTenantFilter 为 true 而租户参数名为空。</exception>
     /// <exception cref="ArgumentOutOfRangeException">rowCount 小于 1。</exception>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:MethodsShouldNotHaveTooManyParameters",
+        Justification = "MySQL-7：form 是方言内形态参数（MySQL ≥ 8.0.19 走 JoinValuesRow），"
+            + "与 dialect 二维描述同一条语句的构建；聚合为对象会把'构造参数'变成'构造输入对象'，"
+            + "而调用方（DataSession_Bulk）每次调用一个批，无跨批复用——YAGNI。")]
     public static string Build(
         SqlDialect dialect, string quotedTable, string quotedPk, string[] setColumns,
-        int rowCount, bool hasTenantFilter, string tenantParameterName)
+        int rowCount, bool hasTenantFilter, string tenantParameterName,
+        BatchUpdateForm form = BatchUpdateForm.CaseWhen)
     {
         ArgumentNullException.ThrowIfNull(setColumns);
         // R9：空 SET 集会生成 "UPDATE t AS tgt SET  FROM ..." / "UPDATE t SET  WHEN ..."，
@@ -48,6 +73,8 @@ internal static class BatchUpdateSqlBuilder
         {
             if (dialect == SqlDialect.PostgreSql)
                 BuildPostgreSql(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
+            else if (dialect == SqlDialect.MySql && form == BatchUpdateForm.JoinValuesRow)
+                BuildJoinValuesRow(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
             else
                 BuildCaseWhen(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow, setColCount);
 
@@ -175,6 +202,57 @@ internal static class BatchUpdateSqlBuilder
             AppendParameterName(ref sb, r * paramsPerRow + setColCount);  // pk 在每行末尾
         }
         sb.Append(')');
+    }
+
+    /// <summary>MySQL ≥ 8.0.19 形态：UPDATE JOIN table value constructor。
+    /// <para><c>UPDATE t AS tgt JOIN (VALUES ROW(@p0,@p1,@p2), ROW(@p3,@p4,@p5)) AS v(c0, c1, pk)
+    /// ON tgt.pk = v.pk SET tgt.c0 = v.c0, tgt.c1 = v.c1</c></para>
+    /// <para><b>与 CASE WHEN 的语义差异（输入重复主键时）</b>：CASE WHEN 对同一 pk 的多个
+    /// WHEN 分支按序求值取末值（行只更新一次）；JOIN 形态下重复 pk 的匹配是一对多，
+    /// 同一行按匹配次数更新（值相同则最终状态一致，但驱动 affected rows 计数膨胀）。
+    /// 上游契约（IReadOnlyList 按主键唯一）不变，此处仅注释说明差异。</para>
+    /// <para><b>参数序</b>：与 CASE WHEN 逐位一致——每行 ROW(setCol0..setColN, pk)，
+    /// 调用方参数池布局零改动。</para></summary>
+    private static void BuildJoinValuesRow(ref ValueStringBuilder sb, string quotedTable, string quotedPk,
+        string[] setColumns, int rowCount, int paramsPerRow)
+    {
+        int setColCount = setColumns.Length;
+        sb.Append("UPDATE ");
+        sb.Append(quotedTable);
+        sb.Append(" AS tgt JOIN (VALUES ");
+        for (int r = 0; r < rowCount; r++)
+        {
+            if (r > 0) sb.Append(", ROW(");
+            else sb.Append("ROW(");
+            int baseIdx = r * paramsPerRow;
+            for (int c = 0; c < setColCount; c++)
+            {
+                if (c > 0) sb.Append(',');
+                AppendParameterName(ref sb, baseIdx + c);
+            }
+            sb.Append(',');
+            AppendParameterName(ref sb, baseIdx + setColCount);  // pk（每行最后）
+            sb.Append(')');
+        }
+        // 派生表列名：c0..cN + pk（SET 子句引用名）
+        sb.Append(") AS v(c0");
+        for (int c = 1; c < setColCount; c++)
+        {
+            sb.Append(", c");
+            sb.Append(c);
+        }
+        sb.Append(", pk) ON tgt.");
+        sb.Append(quotedPk);
+        sb.Append(" = v.pk SET ");
+        for (int c = 0; c < setColCount; c++)
+        {
+            if (c > 0) sb.Append(", ");
+            sb.Append("tgt.");
+            // setColumns 已是引号包裹列名，直接拼接（与 PG 形态 v.colN 引用对称）
+            sb.Append(setColumns[c]);
+            sb.Append(" = v.c");
+            sb.Append(c);
+        }
     }
 
     /// <summary>为批量 UPDATE 的目标命令建立参数池：<c>@p0…@p{rowParamCount-1}</c> 按行递增

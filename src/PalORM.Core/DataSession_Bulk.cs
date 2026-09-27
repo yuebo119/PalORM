@@ -225,14 +225,16 @@ public partial class DataSession<TProvider>
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
             string tableName = state._tableNames[typeof(T)];
             BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, routeMetadata, tableName, entities[0]);
+            // MySQL-7：MySQL 按服务端版本选 UPDATE JOIN VALUES ROW 形态（8.75×）+ 对应批宽
+            BatchUpdateSqlBuilder.BatchUpdateForm form = await ResolveMySqlUpdateFormAsync(ct).ConfigureAwait(false);
             // BULK-001：方言参数上限 + 单批行数上限（文本规模）双约束
             int rowsPerBatch = Math.Min(
                 Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) / (ctx.SetColumnCount + 1)),
-                SqlLimits.MaxRowsPerBatch);
+                MaxRowsPerUpdateBatchFor(form));
             return await RunInTransactionScopeAsync(
                 operation.Owner,
                 async (tran, token) =>
-                    await ExecuteBulkUpdateBatchesAsync(entities, routeMetadata, ctx, tran, rowsPerBatch, token)
+                    await ExecuteBulkUpdateBatchesAsync(entities, routeMetadata, ctx, tran, rowsPerBatch, form, token)
                         .ConfigureAwait(false),
                 ct).ConfigureAwait(false);
         }
@@ -333,6 +335,19 @@ public partial class DataSession<TProvider>
             TProvider.CreateParameter);
         AttachParameters(cmd, pool, paramsPerRow, paramsPerRow, hasTenant ? 1 : 0);
 
+        // MySQL-8：MySQL dialect 走 DbBatch 打包——N 条 UPDATE 单次协议往返。
+        // 探针十六实测（真库 100 命令，同连接同事务）：100 命令 1 个 DbBatch = 14.70ms，
+        // 逐条复用命令 = 52.18ms（3.55×）。走 ADO.NET 通用 DbBatch 抽象（.NET 7+
+        // DbConnection.CreateBatch），Core 不依赖任何驱动类型；驱动不支持的方言
+        // （SQLite/PG）由 dialect 判据留在逐条路径（G31 方言感知）。
+        if (TProvider.Dialect == SqlDialect.MySql)
+        {
+            return await ExecuteBulkUpdatePooledWithBatchAsync(
+                new PooledBatchUpdateInput<T>(
+                    entities, metadata, valuesBinder, tran, updateSql, pool, paramsPerRow),
+                increments, ct).ConfigureAwait(false);
+        }
+
         long total = 0;
         for (int i = 0; i < entities.Count; i++)
         {
@@ -357,6 +372,118 @@ public partial class DataSession<TProvider>
             total += affectedRows;
         }
         return (total, increments);
+    }
+
+    /// <summary>MySQL-8：DbBatch 打包的池化逐条 UPDATE。
+    /// <para><b>打包粒度</b>：<see cref="BatchedUpdateCommandsPerRound"/> 条命令一个 DbBatch
+    /// （一次协议往返）。粒度取 100 的实测依据：探针十六 100 命令 = 14.70ms，且限制单批
+    /// 报文在 max_allowed_packet 常见默认（每命令 UPDATE ≈ 1KB 量级 → 100KB/批）内。</para>
+    /// <para><b>乐观锁批内判定</b>：DbBatch.ExecuteNonQueryAsync 返回批内受影响行数总和，
+    /// 不按命令拆分。单行 UPDATE（WHERE pk 唯一）每行恰 1 行，故：
+    /// 总和 == 批大小 → 全成功；总和 &lt; 批大小 → 存在 0 行匹配（乐观锁冲突）；
+    /// 总和 &gt; 批大小 → 存在多行匹配（WHERE 语义被破坏）。与逐条路径的抛异常类型一致
+    /// （异常消息本就不含行号，语义等价）。</para>
+    /// <para><b>延迟 version 回填</b>：与逐条路径同口径——仅批成功后把整批实体的 increment
+    /// 加入待回放列表（ITM-556：中途冲突整批回滚，已"成功"行的内存状态与 DB 保持一致）。</para></summary>
+    private const int BatchedUpdateCommandsPerRound = 100;
+
+    /// <summary>MySQL-8 批路径的上下文聚合（S107）——池化逐条 UPDATE 的全部输入。</summary>
+    private readonly record struct PooledBatchUpdateInput<T>(
+        IReadOnlyList<T> Entities,
+        CrudMetadata Metadata,
+        Action<DbParameter[], object, int> ValuesBinder,
+        DbTransaction Tran,
+        string UpdateSql,
+        DbParameter[] Pool,
+        int ParamsPerRow)
+        where T : class, new();
+
+    private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledWithBatchAsync<T>(
+        PooledBatchUpdateInput<T> input, List<Action> increments, CancellationToken ct)
+        where T : class, new()
+    {
+        long total = 0;
+        Action<object>? incrementVersion = input.Metadata.IncrementVersion;
+
+        for (int start = 0; start < input.Entities.Count; start += BatchedUpdateCommandsPerRound)
+        {
+            ct.ThrowIfCancellationRequested();
+            int end = Math.Min(start + BatchedUpdateCommandsPerRound, input.Entities.Count);
+            int batchLen = end - start;
+
+            // 每批新建 DbBatch（命令集合逐批填充）。参数对象逐命令新建——
+            // DbBatchCommand.Parameters 是每命令独立集合，无法跨命令共享池；
+            // 探针十六已验证"逐命令新建参数 + 单次往返"净收益仍 3.55×。
+            DbConnection batchConn = input.Tran.Connection ?? throw new InvalidOperationException(
+                "Batch UPDATE requires the transaction's connection.");
+            using DbBatch batch = batchConn.CreateBatch();
+            batch.Transaction = input.Tran;
+            // DbBatch.Timeout 是 int 秒（与 DbCommand.CommandTimeout 同口径）；
+            // ≤ 0 = 全库 Zero 无限等待契约。
+            batch.Timeout = _options.CommandTimeoutSeconds;
+
+            for (int i = start; i < end; i++)
+            {
+                var batchCommand = batch.CreateBatchCommand();
+                batchCommand.CommandText = input.UpdateSql;
+                BindIntoBatchCommand(batchCommand, input.Pool, input.ValuesBinder, input.Entities[i], input.ParamsPerRow);
+                batch.BatchCommands.Add(batchCommand);
+            }
+
+            int affectedRows = await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            total += affectedRows;
+
+            // 批总和判定 + 延迟回填登记（见方法 summary 与乐观锁语义说明）
+            if (incrementVersion is not null)
+            {
+                VerifyBatchConcurrencyRows<T>(affectedRows, batchLen, start / BatchedUpdateCommandsPerRound);
+            }
+            if (incrementVersion is not null)
+            {
+                for (int i = start; i < end; i++)
+                {
+                    T entity = input.Entities[i];
+                    increments.Add(() => incrementVersion(entity));
+                }
+            }
+        }
+        return (total, increments);
+    }
+
+    /// <summary>乐观锁批总和判定——单行 UPDATE（WHERE pk 唯一）每行恰 1 行：
+    /// 总和 &lt; 批大小 = 存在 0 行匹配（乐观锁冲突）；总和 &gt; 批大小 = 存在多行匹配
+    /// （WHERE 语义被破坏）。异常类型与逐条路径一致（消息本就不含具体行号）。</summary>
+    private static void VerifyBatchConcurrencyRows<T>(int affectedRows, int batchLen, int batchIndex)
+        where T : class, new()
+    {
+        if (affectedRows < batchLen)
+            throw new ConcurrencyConflictException(
+                $"Entity '{typeof(T).Name}' was modified by another transaction "
+                + $"(batch {batchIndex}: {affectedRows} of {batchLen} rows matched).");
+        if (affectedRows > batchLen)
+            throw new InvalidOperationException(
+                $"Concurrency update for '{typeof(T).Name}' affected {affectedRows} rows in a "
+                + $"{batchLen}-command batch.");
+    }
+
+    /// <summary>把池内一行参数值拷进 DbBatchCommand——valuesBinder 先把值写进池对象
+    /// （零 CreateParameter 的取值路径照旧），再逐列显式新建命令自己的参数并继承
+    /// ParameterName/DbType/Value（DbBatchCommand.Parameters 是每命令独立集合，
+    /// 池对象不能被多个命令集合共同持有——值会互相覆盖）。</summary>
+    private static void BindIntoBatchCommand<T>(
+        DbBatchCommand batchCommand, DbParameter[] pool,
+        Action<DbParameter[], object, int> valuesBinder, T entity, int paramsPerRow)
+    {
+        valuesBinder(pool, entity!, 0);
+        for (int c = 0; c < paramsPerRow; c++)
+        {
+            DbParameter target = batchCommand.CreateParameter();
+            DbParameter source = pool[c];
+            target.ParameterName = source.ParameterName;
+            target.DbType = source.DbType;
+            target.Value = source.Value;
+            batchCommand.Parameters.Add(target);
+        }
     }
 
     /// <summary>P0-1 的旧版模型程序集回退路径：无 <see cref="CrudMetadata.BindUpdateValues"/>
@@ -422,17 +549,19 @@ public partial class DataSession<TProvider>
         // ITM-640：SQLite 已在上方回退逐条路径，此处恒非 SQLite——原三元的 999 分支不可达。
         const int driverLimit = SqlLimits.MaxBindParameters;
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
+        // MySQL-7：MySQL 按服务端版本选 UPDATE JOIN VALUES ROW 形态（8.75×）+ 对应批宽
+        BatchUpdateSqlBuilder.BatchUpdateForm form = await ResolveMySqlUpdateFormAsync(ct).ConfigureAwait(false);
         // BULK-001（2026-09-23）：再取单批行数上限——本路径在 MySQL 走 CASE WHEN 形态，
         // 文本按 O(行数×列数) 增长，仅受参数上限约束会生成 MB 级单语句。
         int rowsPerBatch = Math.Min(
             Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1)),
-            SqlLimits.MaxRowsPerBatch);
+            MaxRowsPerUpdateBatchFor(form));
 
         // v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。
         return await RunInTransactionScopeAsync(
             operation.Owner,
             async (tran, token) =>
-                await ExecuteBulkUpdateBatchesAsync(entities, metadata, ctx, tran, rowsPerBatch, token)
+                await ExecuteBulkUpdateBatchesAsync(entities, metadata, ctx, tran, rowsPerBatch, form, token)
                     .ConfigureAwait(false),
             ct).ConfigureAwait(false);
     }
@@ -503,7 +632,8 @@ public partial class DataSession<TProvider>
     /// <c>BatchUpdateParameterContractTests</c> 锁定跨 Provider 契约。</para></summary>
     private async ValueTask<long> ExecuteBulkUpdateBatchesAsync<T>(
         IReadOnlyList<T> entities, CrudMetadata metadata, BatchUpdateContext ctx,
-        DbTransaction tran, int rowsPerBatch, CancellationToken ct)
+        DbTransaction tran, int rowsPerBatch,
+        BatchUpdateSqlBuilder.BatchUpdateForm form, CancellationToken ct)
         where T : class, new()
     {
         int setColumnCount = ctx.SetColumnCount;
@@ -538,7 +668,7 @@ public partial class DataSession<TProvider>
             {
                 lastBatchSql = BatchUpdateSqlBuilder.Build(
                     TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
-                    batchLen, ctx.HasTenantFilter, _tenantParameterName);
+                    batchLen, ctx.HasTenantFilter, _tenantParameterName, form);
                 lastBatchLength = batchLen;
                 AttachParameters(cmd, pool, rowParamCount, poolRowParamCount, tenantParams);
             }
@@ -561,6 +691,84 @@ public partial class DataSession<TProvider>
 
         return totalAffected;
     }
+
+    /// <summary>MySQL-7：批量 UPDATE 形态判定——MySQL 方言按服务端版本选
+    /// <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow"/>（UPDATE JOIN
+    /// table value constructor，MySQL 8.0.19+），否则 <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen"/>。
+    /// 非 MySQL 方言恒 CaseWhen（PG 走 FROM VALUES，SQLite 已在调用方回退逐条）。
+    /// <para><b>版本探测</b>：连接级 + 60s TTL（与 MySqlProvider 的 local_infile 探测同模式）。
+    /// 版本是连接级事实（同一连接指向的服务端版本不变），不是进程级可变状态。
+    /// 探测异常保守回退 CaseWhen（不把瞬时故障固化为新形态），TTL 让服务端升级在一分钟内生效。</para></summary>
+    private async ValueTask<BatchUpdateSqlBuilder.BatchUpdateForm> ResolveMySqlUpdateFormAsync(CancellationToken ct)
+    {
+        if (TProvider.Dialect != SqlDialect.MySql)
+            return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
+
+        if (MySqlUpdateFormCacheHolder.Cache.TryGetValue(_conn, out MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe? cached)
+            && Environment.TickCount64 < cached.ExpiresAtTicks)
+        {
+            return cached.Form;
+        }
+
+        try
+        {
+            await using DbCommand cmd = CreateCommand();
+            cmd.CommandTimeout = 3;  // SELECT VERSION() 是即时查询，3 秒足够
+            cmd.CommandText = "SELECT VERSION()";
+            object? scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            bool supportsValuesRow = scalar is string version && ParseMySqlVersion(version) >= MySQL_8_0_19;
+            BatchUpdateSqlBuilder.BatchUpdateForm form = supportsValuesRow
+                ? BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
+                : BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
+            MySqlUpdateFormCacheHolder.Cache.AddOrUpdate(_conn, new MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe(
+                form, Environment.TickCount64 + MySqlUpdateFormProbeTtlMilliseconds));
+            return form;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // 探测故障保守回退基线形态（与 local_infile 探测故障降级同族：能力探测不应
+            // 终止整批更新；故障不写缓存，下次重探）。取消原样上抛。
+            return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
+        }
+    }
+
+    /// <summary>MySQL 8.0.19 的比较键——UPDATE JOIN table value constructor 的最低版本。</summary>
+    private const long MySQL_8_0_19 = (8L << 40) | (0L << 24) | 19L;
+
+    private const int MySqlUpdateFormProbeTtlMilliseconds = 60_000;
+
+    /// <summary>解析 MySQL 版本串为可比较键：主版本×2^40 + 次版本×2^24 + 补丁。
+    /// 兼容 <c>8.4.11</c>、<c>8.0.36-0ubuntu0.22.04.1</c>、<c>5.7.44-log</c> 等形态
+    /// （补丁段取首个数字段，其后任意后缀忽略）。解析失败返回 0（调用方按不支持处理）。</summary>
+    private static long ParseMySqlVersion(string version)
+    {
+        // 取首个 "-"/" " 前的数字点分部分
+        int end = 0;
+        while (end < version.Length && (char.IsAsciiDigit(version[end]) || version[end] == '.'))
+            end++;
+        if (end == 0) return 0;
+        ReadOnlySpan<char> core = version.AsSpan(0, end);
+        Span<Range> ranges = stackalloc Range[3];
+        int parts = core.Split(ranges, '.');
+        if (parts == 0) return 0;
+        long major = parts > 0 && long.TryParse(core[ranges[0]], out long maj) ? maj : 0;
+        long minor = parts > 1 && long.TryParse(core[ranges[1]], out long min) ? min : 0;
+        long patch = parts > 2 && long.TryParse(core[ranges[2]], out long pat) ? pat : 0;
+        return (major << 40) | (minor << 24) | patch;
+    }
+
+    /// <summary>MySQL-7：按形态取单批行数上限。
+    /// <para><b>JoinValuesRow</b>：VALUES ROW 形态服务端是等值 JOIN（无逐行 CASE 分支比较），
+    /// 批宽不影响单批 CPU；但批宽越大 SQL 文本越长、参数绑定集合越大，且新连接首次
+    /// 解析成本仍随文本线性涨。探针十五实测 1000/2000 行同值，2000 A/A drift 4.8%
+    /// （1000 为 9.2%）——取 2000，兼顾往返数与量具稳定性。</para>
+    /// <para><b>CaseWhen</b>：沿用全局 MaxRowsPerBatch=5000（该形态服务端成本 = O(行数²)，
+    /// 本已是压到协议上限前的折中值；探针十五显示更小批宽更快，但 CASE WHEN 只在
+    /// &lt; 8.0.19 老服务端出现，改动会牵动 SQLite 同族共享上限，本轮不动）。</para></summary>
+    private static int MaxRowsPerUpdateBatchFor(BatchUpdateSqlBuilder.BatchUpdateForm form)
+        => form == BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
+            ? Math.Min(SqlLimits.MaxRowsPerBatch, 2000)
+            : SqlLimits.MaxRowsPerBatch;
 
     /// <summary>旧版生成器模型程序集的回退取值：probe 命令逐行 <c>BindUpdate</c> 建参数，
     /// 再把值写进池。语义与 <see cref="CrudMetadata.BindUpdateValues"/> 一致，参数创建量回到
@@ -845,6 +1053,26 @@ public partial class DataSession<TProvider>
         if (items.Any(entity => metadata.HasDefaultKey(entity)))
             throw new InvalidOperationException($"Seed entity '{typeof(T).Name}' requires a non-default stable primary key.");
         await BulkMergeAsync(items, ct).ConfigureAwait(false);
+    }
+}
+
+/// <summary>MySQL-7：批量 UPDATE 形态探测缓存（连接级，60s TTL）——命名空间级静态 holder
+/// 而非 DataSession&lt;TProvider&gt; 的静态字段，也与泛型类的嵌套静态类绝缘：缓存语义只依赖
+/// DbConnection 本身（版本是连接指向的服务端事实），泛型类里的静态字段会触发 S2743
+/// （不跨闭合类型共享）且让'只服务 MySQL'的状态对每个 Provider 闭合类型各存一份。
+/// 探测逻辑本体仍在 DataSession_Bulk（需要 CreateCommand 走会话口径）。</summary>
+internal static class MySqlUpdateFormCacheHolder
+{
+    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbConnection, MySqlUpdateFormProbe>
+        Cache = [];
+
+    /// <summary>探测结果缓存条目（连接级，60s TTL）——引用类型：ConditionalWeakTable 的
+    /// TValue 约束为 class（键才是弱引用，值随键一起回收）。</summary>
+    internal sealed class MySqlUpdateFormProbe(
+        BatchUpdateSqlBuilder.BatchUpdateForm form, long expiresAtTicks)
+    {
+        public BatchUpdateSqlBuilder.BatchUpdateForm Form { get; } = form;
+        public long ExpiresAtTicks { get; } = expiresAtTicks;
     }
 }
 
