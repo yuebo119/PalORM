@@ -20,6 +20,8 @@ namespace PalORM.PerfHub;
 ///   CRUD        9 项  点查/全查/流式/插入/更新/批量插入/批量更新/批量删除
 ///   Query       3 项  键集分页 / IN 查询 / 计数
 ///   Transaction 5 项  单条事务 / 10 条 / 100 条 / 批量 / 回滚
+///   Tenant      4 项  租户 COUNT（无 where / 带范围）/ 租户全表物化 / OwnedJson 读（LIMIT 50）
+///   SessionBatch 1 项 20 条 INSERT 一个批操作（三臂批形态对照）
 ///   Baseline    1 项  数据生成自身内存（与实现无关）
 ///   Concurrency 1 项  80/20 读写混合吞吐（--concurrency 时）
 ///
@@ -444,7 +446,7 @@ internal static class Program
         await childCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部 23 个单操作测量。
+    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部 26 个单操作测量。
     /// <para>顺序即状态依赖：Build/查询类先跑（要求表内恰好 <paramref name="rows"/> 行），
     /// 写类后跑（每轮用不同主键段，表会增长，但已不影响后续查询类——
     /// 下一个实现进场时 <c>SetupAsync</c> 会重建表）。</para></summary>
@@ -618,6 +620,57 @@ internal static class Program
                 c, Dataset.SeedRows(Math.Min(rows, 500), 0), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
+        // ── 租户会话 / OwnedJson / SessionBatch（覆盖面补齐批次）──
+        // 前三项与 OwnedJsonQuery 都带 reset：测量前表必须恰好 rows 行（10% 软删由种子
+        // 决定，租户过滤后可见行是 rows/5 量级）。等价断言照 IncludeJoin 模式——期望值
+        // 在此算一次，不进被测路径。
+        int expectedTenantVisible = Dataset.TenantVisibleCount(rows);
+        int expectedTenantValueVisible = Dataset.TenantVisibleValueCount(rows);
+        int expectedOwnedJson = Math.Min(50, expectedTenantVisible);
+
+        await MeasAsync(info, impl, "TenantCount", "Tenant", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                long n = await im.TenantCountAsync(c, ct).ConfigureAwait(false);
+                if (n != expectedTenantVisible)
+                    throw new InvalidOperationException(
+                        $"TenantCount 结果集不等价：{n}（期望 {expectedTenantVisible}）");
+            }, ct).ConfigureAwait(false);
+
+        await MeasAsync(info, impl, "TenantCountWhere", "Tenant", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                long n = await im.TenantCountWhereAsync(c, rows, ct).ConfigureAwait(false);
+                if (n != expectedTenantValueVisible)
+                    throw new InvalidOperationException(
+                        $"TenantCountWhere 结果集不等价：{n}（期望 {expectedTenantValueVisible}）");
+            }, ct).ConfigureAwait(false);
+
+        await MeasAsync(info, impl, "TenantGetAll", "Tenant", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                List<BenchTenantPost> list = await im.TenantGetAllAsync(c, ct).ConfigureAwait(false);
+                if (list.Count != expectedTenantVisible)
+                    throw new InvalidOperationException(
+                        $"TenantGetAll 结果集不等价：{list.Count} 行（期望 {expectedTenantVisible}）");
+            }, ct).ConfigureAwait(false);
+
+        await MeasAsync(info, impl, "OwnedJsonQuery", "Tenant", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                List<BenchTenantPost> list = await im.OwnedJsonQueryAsync(c, ct).ConfigureAwait(false);
+                if (list.Count != expectedOwnedJson)
+                    throw new InvalidOperationException(
+                        $"OwnedJsonQuery 结果集不等价：{list.Count} 行（期望 {expectedOwnedJson}）");
+            }, ct).ConfigureAwait(false);
+
+        // SessionBatchInserts 每轮插 20 行、主键段互不重叠（prepare 不在每轮前调，写操作
+        // 在计时循环内累积；种子主键是 1..rows，故段基址从 rows+1 起——warmup/探针的 i=0
+        // 与计时轮 i≥1 天然错开：探针前有 reset，计时首段不与探针段重叠）。
+        await MeasAsync(info, impl, "SessionBatchInserts", "SessionBatch", rows, conn, results, scale, reset,
+            async (im, c, i) => _ = await im.SessionBatchInsertsAsync(
+                c, rows + 1 + (i * Dataset.SessionBatchRows), ct).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。
@@ -675,7 +728,8 @@ internal static class Program
     /// 砍掉它们的第二档只省约 1.6% 时间，但省下 7 项 × 3 臂 = 每方言 21 个重复测量。</para></summary>
     private static bool RowCountSensitive(string operation) => operation is not (
         "BuildGetByKeySql" or "BuildComplexQuerySql" or "InsertReturningId" or "IncludeJoin"
-        or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert");
+        or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert"
+        or "OwnedJsonQuery" or "SessionBatchInserts");
 
     /// <summary>该项是否在给定档位测量。</summary>
     private static bool RunsAtTier(string operation, int rows)
@@ -691,7 +745,8 @@ internal static class Program
         "BulkInsert", "BulkUpdate", "BulkDelete",
         "KeysetPage", "WhereIn", "Count",
         "UpsertBatch", "InsertReturningId", "WideQueryAll", "IncludeJoin",
-        "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback"
+        "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback",
+        "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts"
     ];
 
     /// <summary>PL-4：比值不计比的项。地板这两项直接返回插值字面量（见
