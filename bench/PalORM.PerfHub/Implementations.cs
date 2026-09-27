@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Dapper;
 using PalORM.MySql;
 using PalORM.PostgreSql;
@@ -51,6 +52,22 @@ internal interface IPerfImplementation
     Task TxHundredInsertsAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct);
     Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct);
     Task TxRollbackAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct);
+
+    // ── 租户会话 / OwnedJson / SessionBatch（覆盖面补齐批次）──
+    /// <summary>租户会话 COUNT——[TenantAware] 实体在固定租户下的 COUNT。无显式 where：
+    /// 软删过滤由产品自动附加，ADO/Dapper 臂拼 SQL 显式带同款过滤（三臂同构）。</summary>
+    Task<long> TenantCountAsync(DbConnection conn, CancellationToken ct);
+    /// <summary>租户会话 COUNT + Value 范围条件——阈值随档位走（rows / 2）。</summary>
+    Task<long> TenantCountWhereAsync(DbConnection conn, int rows, CancellationToken ct);
+    /// <summary>租户会话全表物化——含 OwnedJson 列反序列化（产品臂走 SourceGen 反序列化，
+    /// 地板/Dapper 臂手工 STJ 反序列化）。</summary>
+    Task<List<BenchTenantPost>> TenantGetAllAsync(DbConnection conn, CancellationToken ct);
+    /// <summary>OwnedJson 列读路径——Take(50) 固定窗口（LIMIT 50 三方言同款）。</summary>
+    Task<List<BenchTenantPost>> OwnedJsonQueryAsync(DbConnection conn, CancellationToken ct);
+    /// <summary>SessionBatch 路径——20 条单行 INSERT 一个批操作。主键从 <paramref name="offset"/>
+    /// 起（Measure 的 prepare 只在预热前与计时前各调一次，写操作在计时循环内累积，
+    /// 故每轮必须用互不重叠的主键段）。</summary>
+    Task<int> SessionBatchInsertsAsync(DbConnection conn, int offset, CancellationToken ct);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,14 +88,69 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     private string Q(string c) => Dataset.Q(dialect.Dialect, c);
     private string Cols => Dataset.SelectColumns(dialect.Dialect);
     private Dialect D => dialect.Dialect;
+    private string TT => Dataset.TenantTable(dialect.Dialect);
 
     /// <summary>快照播种缓存——键 (连接, 行数)。同一组合的第二次起 prepare 走服务端
     /// DELETE + INSERT..SELECT 快照拷贝，替代客户端逐行重播（阶段 3.2）。</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<(DbConnection Conn, int Rows), bool>
         SeedSnapshots = [];
 
+    /// <summary>bench_tenant 快照播种缓存——键 (连接, 行数)，与 <see cref="SeedSnapshots"/>
+    /// 同模式。internal 且三臂共享：Dapper 臂的 SetupAsync 委托本臂，PalORM 臂读同一缓存
+    /// （同一连接同一档位的 tenant 数据只需就绪一次）。</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<(DbConnection Conn, int Rows), bool>
+        TenantSeedSnapshots = [];
+
+    /// <summary>bench_tenant 首次全量播种的公共 DDL 骨架：建主表 + 建空快照表。
+    /// 灌数由各臂按自己的路径完成，随后必须调用 <see cref="TenantSeedFinishAsync"/>。</summary>
+    internal static async Task TenantSeedBeginAsync(Dialect dialect, DbConnection conn, CancellationToken ct)
+    {
+        await ExecSetupAsync(conn, Dataset.TenantDropTableSql(dialect), ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, Dataset.TenantCreateTableSql(dialect), ct).ConfigureAwait(false);
+        string snapshot = Dataset.TenantSnapshotTable(dialect);
+        await ExecSetupAsync(conn, $"DROP TABLE IF EXISTS {snapshot}", ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, "CREATE TABLE " + snapshot + " AS SELECT * FROM "
+            + Dataset.TenantTable(dialect) + " WHERE 1=0", ct).ConfigureAwait(false);
+    }
+
+    /// <summary>灌数收尾：全表拷入快照表 + 标记缓存 + PG 统计刷新（COUNT 的顺序扫描成本
+    /// 正比于页数估计，机制见 <see cref="RefreshStatsAsync"/> 注释）。</summary>
+    internal static async Task TenantSeedFinishAsync(
+        Dialect dialect, DbConnection conn, int rows, CancellationToken ct)
+    {
+        await ExecSetupAsync(conn, $"INSERT INTO {Dataset.TenantSnapshotTable(dialect)} SELECT * FROM "
+            + Dataset.TenantTable(dialect), ct).ConfigureAwait(false);
+        TenantSeedSnapshots[(conn, rows)] = true;
+        if (dialect == Dialect.PostgreSql)
+        {
+            await ExecSetupAsync(conn, $"ANALYZE {Dataset.TenantTable(dialect)}", ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>缓存命中时的快照 reset——服务端两条 SQL 复原（truncate + 快照拷贝），
+    /// 与 perf_s1 的 reset 完全同构；PG 随后刷新统计。</summary>
+    internal static async Task TenantResetAsync(Dialect dialect, DbConnection conn, int rows, CancellationToken ct)
+    {
+        string table = Dataset.TenantTable(dialect);
+        string truncate = dialect == Dialect.Sqlite
+            ? $"DELETE FROM {table}"
+            : $"TRUNCATE TABLE {table}";
+        await ExecSetupAsync(conn, truncate, ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, $"INSERT INTO {table} SELECT * FROM "
+            + Dataset.TenantSnapshotTable(dialect) + $" WHERE {Dataset.Q(dialect, "Id")} <= {rows}",
+            ct).ConfigureAwait(false);
+        if (dialect == Dialect.PostgreSql)
+        {
+            await ExecSetupAsync(conn, $"ANALYZE {table}", ct).ConfigureAwait(false);
+        }
+    }
+
     public async Task SetupAsync(DbConnection conn, int rows, CancellationToken ct)
     {
+        // bench_tenant 播种（租户会话 / OwnedJson / SessionBatch 夹具）——快照重置模式与
+        // perf_s1 同构（两套缓存互不干扰，seed 表只服务 tenant 夹具）
+        await TenantSetupAsync(conn, rows, ct).ConfigureAwait(false);
+
         string snapshot = Q("perf_s1_seed");
         if (SeedSnapshots.ContainsKey((conn, rows)))
         {
@@ -646,6 +718,232 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    // ── 租户会话 / OwnedJson / SessionBatch ──
+
+    /// <summary>bench_tenant 播种——首次全量（多值 INSERT 分批 + 建快照表），后续走
+    /// 服务端快照 reset（与 perf_s1 的 SetupAsync 完全同构，只是列集换成 7 列）。</summary>
+    private async Task TenantSetupAsync(DbConnection conn, int rows, CancellationToken ct)
+    {
+        if (TenantSeedSnapshots.ContainsKey((conn, rows)))
+        {
+            await TenantResetAsync(D, conn, rows, ct).ConfigureAwait(false);
+            return;
+        }
+
+        await TenantSeedBeginAsync(D, conn, ct).ConfigureAwait(false);
+        const int batch = 100;   // 7 列——SQLite 999 参数上限内的保守批宽（播种非测量路径）
+        List<BenchTenantPost> seed = Dataset.TenantSeedRows(rows);
+        for (int start = 0; start < seed.Count; start += batch)
+        {
+            int end = Math.Min(start + batch, seed.Count);
+            var sb = new StringBuilder();
+            sb.Append("INSERT INTO ").Append(TT).Append(" (")
+                .Append(Dataset.TenantSelectColumns(D)).Append(") VALUES ");
+            await using DbCommand cmd = conn.CreateCommand();
+            cmd.CommandTimeout = SetupCommandTimeoutSeconds;
+            for (int r = start; r < end; r++)
+            {
+                if (r > start)
+                {
+                    sb.Append(", ");
+                }
+
+                sb.Append('(');
+                for (int c = 0; c < 7; c++)
+                {
+                    if (c > 0)
+                    {
+                        sb.Append(", ");
+                    }
+
+                    sb.Append(Dataset.P(((r - start) * 7) + c));
+                }
+                sb.Append(')');
+            }
+            cmd.CommandText = sb.ToString();
+            int p = 0;
+            for (int r = start; r < end; r++)
+            {
+                BenchTenantPost row = seed[r];
+                AddP(cmd, p++, row.Id);
+                AddP(cmd, p++, row.TenantId);
+                AddP(cmd, p++, row.Text);
+                AddP(cmd, p++, row.CreationDate);
+                AddP(cmd, p++, row.Value);
+                AddP(cmd, p++, row.DeletedAt);
+                AddP(cmd, p++, Dataset.TenantPayloadJson(row));
+            }
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        await TenantSeedFinishAsync(D, conn, rows, ct).ConfigureAwait(false);
+    }
+
+    public async Task<long> TenantCountAsync(DbConnection conn, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM {TT} {Dataset.WhereTenant(D)}";
+        AddNamedP(cmd, Dataset.TenantParameter, Dataset.TenantArmId);
+        object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public async Task<long> TenantCountWhereAsync(DbConnection conn, int rows, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM {TT} {Dataset.WhereTenantValue(D)}";
+        AddNamedP(cmd, Dataset.TenantParameter, Dataset.TenantArmId);
+        AddNamedP(cmd, Dataset.P(1), Dataset.TenantValueThreshold(rows));
+        object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public Task<List<BenchTenantPost>> TenantGetAllAsync(DbConnection conn, CancellationToken ct)
+        => TenantQueryAsync(conn, "", ct);
+
+    /// <summary>OwnedJson 读路径——Take(50) 固定窗口（LIMIT 50 三方言同款，与产品的
+    /// From&lt;T&gt;().Take(50) 生成的 SQL 同构）。</summary>
+    public Task<List<BenchTenantPost>> OwnedJsonQueryAsync(DbConnection conn, CancellationToken ct)
+        => TenantQueryAsync(conn, " LIMIT 50", ct);
+
+    /// <summary>租户会话读——产品臂在 WithTenant 下自动附加同款过滤（deleted_at IS NULL
+    /// AND tenant_id = @__tenant0），地板臂显式拼 <c>Dataset.WhereTenant</c> 同构 SQL；
+    /// limit 段由调用方给（空 = 全表）。Payload 列读 string 后经 BenchTenantJsonContext
+    /// 手工反序列化（STJ 源生成路径，与产品 OwnedJson emit 同形态）。</summary>
+    private async Task<List<BenchTenantPost>> TenantQueryAsync(
+        DbConnection conn, string limit, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {Dataset.TenantSelectColumns(D)} FROM {TT} {Dataset.WhereTenant(D)}{limit}";
+        AddNamedP(cmd, Dataset.TenantParameter, Dataset.TenantArmId);
+        await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<BenchTenantPost>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(MapTenant(r));
+        }
+
+        return list;
+    }
+
+    /// <summary>SessionBatch 路径——20 条单行 INSERT 一个 DbBatch（PG/MySQL 驱动的真
+    /// 单往返批）。主键从 <paramref name="offset"/> 起，避开既有行与各轮已插段
+    /// （Measure 的 prepare 不在每轮前调，写操作在计时循环内累积）。
+    /// <para>SQLite 分叉：Microsoft.Data.Sqlite 未覆写 CreateBatch（基类抛
+    /// NotSupportedException），回退为单命令复用逐条 ExecuteNonQuery——与产品 SessionBatch
+    /// 的回退路径（L37）同构。</para></summary>
+    public async Task<int> SessionBatchInsertsAsync(DbConnection conn, int offset, CancellationToken ct)
+    {
+        if (D == Dialect.Sqlite)
+        {
+            return await SessionBatchSequentialAsync(conn, offset, ct).ConfigureAwait(false);
+        }
+
+        await using DbBatch batch = conn.CreateBatch();
+        using DbCommand factory = conn.CreateCommand();
+        string sql = Dataset.TenantInsertSql(D);
+        for (int k = 0; k < Dataset.SessionBatchRows; k++)
+        {
+            BenchTenantPost row = Dataset.TenantSeed(offset + k);
+            DbBatchCommand command = batch.CreateBatchCommand();
+            command.CommandText = sql;
+            AddBatchP(factory, command, 0, row.Id);
+            AddBatchP(factory, command, 1, row.TenantId);
+            AddBatchP(factory, command, 2, row.Text);
+            AddBatchP(factory, command, 3, row.CreationDate);
+            AddBatchP(factory, command, 4, row.Value);
+            AddBatchP(factory, command, 5, row.DeletedAt);
+            AddBatchP(factory, command, 6, Dataset.TenantPayloadJson(row));
+            batch.BatchCommands.Add(command);
+        }
+
+        return await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>DbBatchCommand 的参数添加——DbBatchCommand 无 CreateParameter 面，
+    /// 参数对象从连接的普通命令工厂创建（驱动同型，可加入 batch.Parameters 集合）。</summary>
+    private static void AddBatchP(
+        DbCommand factory, DbBatchCommand command, int index, object? value)
+    {
+        DbParameter p = factory.CreateParameter();
+        p.ParameterName = Dataset.P(index);
+        p.Value = value ?? DBNull.Value;
+        command.Parameters.Add(p);
+    }
+
+    /// <summary>SQLite 的批路径回退——单命令跨行复用、每行只写参数 Value（与
+    /// <see cref="BulkUpdateRowByRowAsync"/> 同模式）。</summary>
+    private async Task<int> SessionBatchSequentialAsync(
+        DbConnection conn, int offset, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = Dataset.TenantInsertSql(D);
+        DbParameter[]? pool = null;
+        int total = 0;
+        for (int k = 0; k < Dataset.SessionBatchRows; k++)
+        {
+            BenchTenantPost row = Dataset.TenantSeed(offset + k);
+            if (pool is null)
+            {
+                AddP(cmd, 0, row.Id);
+                AddP(cmd, 1, row.TenantId);
+                AddP(cmd, 2, row.Text);
+                AddP(cmd, 3, row.CreationDate);
+                AddP(cmd, 4, row.Value);
+                AddP(cmd, 5, row.DeletedAt);
+                AddP(cmd, 6, Dataset.TenantPayloadJson(row));
+                pool = SnapshotParameters(cmd);
+            }
+            else
+            {
+                SetP(pool, 0, row.Id);
+                SetP(pool, 1, row.TenantId);
+                SetP(pool, 2, row.Text);
+                SetP(pool, 3, row.CreationDate);
+                SetP(pool, 4, row.Value);
+                SetP(pool, 5, row.DeletedAt);
+                SetP(pool, 6, Dataset.TenantPayloadJson(row));
+            }
+
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        return total;
+    }
+
+    /// <summary>bench_tenant 行物化——Payload 列按 OwnedJson 契约手工反序列化，
+    /// 走 BenchTenantJsonContext 的 STJ 源生成路径（与产品 SourceGen OwnedJson emit 的
+    /// 反序列化形态同源，零反射）。</summary>
+    internal static BenchTenantPost MapTenant(DbDataReader r) => new()
+    {
+        Id = r.GetInt32(0),
+        TenantId = r.GetInt64(1),
+        Text = r.IsDBNull(2) ? null : r.GetString(2),
+        CreationDate = r.GetDateTime(3),
+        Value = r.GetInt32(4),
+        DeletedAt = r.IsDBNull(5) ? null : r.GetString(5),
+        Payload = r.IsDBNull(6) ? null : JsonSerializer.Deserialize(
+            r.GetString(6), BenchTenantJsonContext.Default.BenchTenantPayloadInfo)
+    };
+
+    /// <summary>具名参数添加——租户过滤参数 <see cref="Dataset.TenantParameter"/> 是产品同款
+    /// 约定名（不是 <see cref="AddP"/> 的 @pN 序号名），DbType 显式化口径同 AddP。</summary>
+    private static void AddNamedP(DbCommand cmd, string name, object? value)
+    {
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = name;
+        p.Value = value ?? DBNull.Value;
+        switch (value)
+        {
+            case long: p.DbType = System.Data.DbType.Int64; break;
+            case int: p.DbType = System.Data.DbType.Int32; break;
+            case string: p.DbType = System.Data.DbType.String; break;
+            default: break;
+        }
+
+        cmd.Parameters.Add(p);
+    }
+
     // ── 阶段 2 新增 ──
 
     /// <summary>批量 UPSERT——共用 BulkSql.UpsertBatch（与产品 BuildUpsertSqlShape 同形态），
@@ -952,6 +1250,44 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         // SQLite 把 Guid 存 TEXT、MySQL CHAR(36) 返回 string——Dapper 默认不做 string→Guid
         // 转换，注册 TypeHandler 是 Dapper 用户在方言库上的标准做法（真实用法的一部分）
         SqlMapper.AddTypeHandler(new StringToGuidHandler());
+        // bench_tenant 的 int/DateTime 列同型：SQLite 的 INTEGER 读回 long、TEXT 时间列读回
+        // string（PG/MySQL 的对应类型原生是 int/DateTime），TypeHandler 的三方言双分支
+        // 统一两套 reader 形态——与 Guid handler 同范式
+        SqlMapper.AddTypeHandler(new Int32FromInt64Handler());
+        SqlMapper.AddTypeHandler(new StringToDateTimeHandler());
+    }
+
+    /// <summary>long → int 的 Dapper 类型处理器——覆盖 SQLite INTEGER（读回 long）与
+    /// PG/MySQL INTEGER/INT（原生 int）两种 reader 形态。</summary>
+    private sealed class Int32FromInt64Handler : SqlMapper.TypeHandler<int>
+    {
+        public override int Parse(object value)
+            => value switch
+            {
+                int i => i,
+                long l => (int)l,
+                _ => Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture),
+            };
+
+        public override void SetValue(System.Data.IDbDataParameter parameter, int value)
+            => parameter.Value = value;
+    }
+
+    /// <summary>string ↔ DateTime 的 Dapper 类型处理器——覆盖 SQLite TEXT 时间列与
+    /// PG TIMESTAMP/MySQL DATETIME 原生 DateTime 两种形态（固定格式，不用当前区域性）。</summary>
+    private sealed class StringToDateTimeHandler : SqlMapper.TypeHandler<DateTime>
+    {
+        public override DateTime Parse(object value)
+            => value switch
+            {
+                DateTime dt => dt,
+                string s => DateTime.Parse(s, System.Globalization.CultureInfo.InvariantCulture),
+                _ => Convert.ToDateTime(value, System.Globalization.CultureInfo.InvariantCulture),
+            };
+
+        public override void SetValue(System.Data.IDbDataParameter parameter, DateTime value)
+            => parameter.Value = value.ToString(
+                "O", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>string ↔ Guid 的 Dapper 类型处理器——覆盖 SQLite TEXT 与 MySQL CHAR(36)
@@ -973,8 +1309,9 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     private string T => Dataset.Table(dialect.Dialect);
     private string C(string c) => Dataset.Q(dialect.Dialect, c);
     private string Cols => Dataset.SelectColumns(dialect.Dialect);
+    private string TT => Dataset.TenantTable(dialect.Dialect);
 
-    // 灌数走 ADO.NET 臂的同一路径——保证三实现的库内容逐位相同
+    // 灌数走 ADO.NET 臂的同一路径（perf_s1 与 bench_tenant 都含）——保证三实现的库内容逐位相同
     public Task SetupAsync(DbConnection conn, int rows, CancellationToken ct)
         => new AdoNetImpl(dialect).SetupAsync(conn, rows, ct);
 
@@ -1164,6 +1501,102 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
 
     public async Task<long> CountAsync(DbConnection conn, CancellationToken ct)
         => await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {T}").ConfigureAwait(false);
+
+    // ── 租户会话 / OwnedJson / SessionBatch ──
+
+    /// <summary>bench_tenant 的 Dapper 投影 DTO——列名即属性名（含产品契约列的
+    /// tenant_id/deleted_at 形态，Dapper 按列名匹配）。Payload 是 string：Dapper 无 JSON
+    /// 列处理，反序列化在调用方（镜像产品 OwnedJson 的 STJ 源生成路径语义）。</summary>
+    [SuppressMessage("Performance", "CA1812",
+        Justification = "Dapper 经反射构造该 DTO（QueryAsync<BenchTenantDto> 的列映射载体），分析器静态不可见。")]
+    private sealed record BenchTenantDto(
+        int Id, long tenant_id, string? Text, DateTime CreationDate, int Value,
+        string? deleted_at, string? Payload);
+
+    /// <summary>租户过滤参数——@__tenant0（产品同款名）固定绑 <see cref="Dataset.TenantArmId"/>，
+    /// 可选追加 <see cref="Dataset.P"/> 序号名的阈值参数。</summary>
+    private static DynamicParameters TenantParameters(int? valueThreshold = null)
+    {
+        DynamicParameters dp = new();
+        dp.Add(Dataset.TenantParameter, Dataset.TenantArmId);
+        if (valueThreshold is { } threshold)
+        {
+            dp.Add(Dataset.P(1), threshold);
+        }
+
+        return dp;
+    }
+
+    public Task<long> TenantCountAsync(DbConnection conn, CancellationToken ct)
+        => conn.ExecuteScalarAsync<long>(
+            $"SELECT COUNT(*) FROM {TT} {Dataset.WhereTenant(dialect.Dialect)}",
+            TenantParameters());
+
+    public Task<long> TenantCountWhereAsync(DbConnection conn, int rows, CancellationToken ct)
+        => conn.ExecuteScalarAsync<long>(
+            $"SELECT COUNT(*) FROM {TT} {Dataset.WhereTenantValue(dialect.Dialect)}",
+            TenantParameters(Dataset.TenantValueThreshold(rows)));
+
+    public Task<List<BenchTenantPost>> TenantGetAllAsync(DbConnection conn, CancellationToken ct)
+        => TenantQueryAsync(conn, "");
+
+    /// <summary>OwnedJson 读路径——LIMIT 50 固定窗口（三方言同款，与地板臂同 SQL 形态）。</summary>
+    public Task<List<BenchTenantPost>> OwnedJsonQueryAsync(DbConnection conn, CancellationToken ct)
+        => TenantQueryAsync(conn, " LIMIT 50");
+
+    /// <summary>租户会话读——select 到 DTO（Payload 为 string），客户端再经
+    /// BenchTenantJsonContext 反序列化（STJ 源生成路径，与产品 OwnedJson emit 同形态；
+    /// Dapper 的扩展方法无 CancellationToken 面，ct 在本臂不可达，与既有查询方法同口径）。</summary>
+    private async Task<List<BenchTenantPost>> TenantQueryAsync(DbConnection conn, string limit)
+    {
+        IEnumerable<BenchTenantDto> rows = await conn.QueryAsync<BenchTenantDto>(
+            $"SELECT {Dataset.TenantSelectColumns(dialect.Dialect)} FROM {TT} "
+            + $"{Dataset.WhereTenant(dialect.Dialect)}{limit}",
+            TenantParameters()).ConfigureAwait(false);
+        var list = new List<BenchTenantPost>();
+        foreach (BenchTenantDto dto in rows)
+        {
+            list.Add(new BenchTenantPost
+            {
+                Id = dto.Id,
+                TenantId = dto.tenant_id,
+                Text = dto.Text,
+                CreationDate = dto.CreationDate,
+                Value = dto.Value,
+                DeletedAt = dto.deleted_at,
+                Payload = dto.Payload is null
+                    ? null
+                    : JsonSerializer.Deserialize(
+                        dto.Payload, BenchTenantJsonContext.Default.BenchTenantPayloadInfo)
+            });
+        }
+
+        return list;
+    }
+
+    /// <summary>SessionBatch 路径——Dapper 无批 API，20 次 ExecuteAsync 循环就是要考的
+    /// 形态差（产品/PG/MySQL 的 DbBatch 把 20 次往返压成 1 次，Dapper 用户只能逐条）。
+    /// 主键从 <paramref name="offset"/> 起避开既有行与各轮已插段。</summary>
+    public async Task<int> SessionBatchInsertsAsync(DbConnection conn, int offset, CancellationToken ct)
+    {
+        string sql = Dataset.TenantInsertSql(dialect.Dialect);
+        int total = 0;
+        for (int k = 0; k < Dataset.SessionBatchRows; k++)
+        {
+            BenchTenantPost row = Dataset.TenantSeed(offset + k);
+            DynamicParameters dp = new();
+            dp.Add(Dataset.P(0), row.Id);
+            dp.Add(Dataset.P(1), row.TenantId);
+            dp.Add(Dataset.P(2), row.Text);
+            dp.Add(Dataset.P(3), row.CreationDate);
+            dp.Add(Dataset.P(4), row.Value);
+            dp.Add(Dataset.P(5), row.DeletedAt);
+            dp.Add(Dataset.P(6), Dataset.TenantPayloadJson(row));
+            total += await conn.ExecuteAsync(sql, dp).ConfigureAwait(false);
+        }
+
+        return total;
+    }
 
     // ── 阶段 2 新增 ──
 
@@ -1371,6 +1804,23 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         List<S1Row> seed = Dataset.SeedRows(rows);
         await Session<TProvider>(conn)
             .BulkInsertAsync(seed, BulkBatchRows(TProvider.Dialect, seed.Count), ct).ConfigureAwait(false);
+
+        // bench_tenant：快照播种与 AdoNetImpl 同构（共享 TenantSeedSnapshots（连接, 行数）
+        // 缓存）。首次进场本臂自己用产品 BulkInsertAsync 灌数（本臂最擅长路径）；命中缓存
+        // 走服务端快照 reset——逐行重播全量是纯播种开销，不是被测路径。
+        if (AdoNetImpl.TenantSeedSnapshots.ContainsKey((conn, rows)))
+        {
+            await AdoNetImpl.TenantResetAsync(dialect, conn, rows, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            await AdoNetImpl.TenantSeedBeginAsync(dialect, conn, ct).ConfigureAwait(false);
+            List<BenchTenantPost> tenantSeed = Dataset.TenantSeedRows(rows);
+            await Session<TProvider>(conn)
+                .BulkInsertAsync(tenantSeed, BulkBatchRows(TProvider.Dialect, tenantSeed.Count), ct)
+                .ConfigureAwait(false);
+            await AdoNetImpl.TenantSeedFinishAsync(dialect, conn, rows, ct).ConfigureAwait(false);
+        }
     }
 
     public Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
@@ -1593,6 +2043,114 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     private static Task<long> CountCoreAsync<TProvider>(DbConnection conn, CancellationToken ct)
         where TProvider : IDbProvider, new()
         => Session<TProvider>(conn).CountAsync<S1Row>(ct: ct).AsTask();
+
+    // ── 租户会话 / OwnedJson / SessionBatch ──
+
+    public Task<long> TenantCountAsync(DbConnection conn, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => TenantCountCoreAsync<SqliteProvider>(conn, ct),
+            Dialect.MySql => TenantCountCoreAsync<MySqlProvider>(conn, ct),
+            Dialect.PostgreSql => TenantCountCoreAsync<PostgreSqlProvider>(conn, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    /// <summary>租户会话 COUNT——WithTenant 让产品自动附加"deleted_at IS NULL AND
+    /// tenant_id = @__tenant0"（与地板/Dapper 臂的同款 WHERE 段同源）。</summary>
+    private static Task<long> TenantCountCoreAsync<TProvider>(DbConnection conn, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).WithTenant(Dataset.TenantArmId)
+            .CountAsync<BenchTenantPost>(ct: ct).AsTask();
+
+    public Task<long> TenantCountWhereAsync(DbConnection conn, int rows, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => TenantCountWhereCoreAsync<SqliteProvider>(conn, rows, ct),
+            Dialect.MySql => TenantCountWhereCoreAsync<MySqlProvider>(conn, rows, ct),
+            Dialect.PostgreSql => TenantCountWhereCoreAsync<PostgreSqlProvider>(conn, rows, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static Task<long> TenantCountWhereCoreAsync<TProvider>(
+        DbConnection conn, int rows, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        // 列名必须走文本段（B78）：写成插值项会被参数化成字符串，PG 报 operator does not exist
+        FormattableString where = FormattableStringFactory.Create(
+            Dataset.Q(Dataset.Of(TProvider.Dialect), "Value") + " > {0}",
+            Dataset.TenantValueThreshold(rows));
+        return Session<TProvider>(conn).WithTenant(Dataset.TenantArmId)
+            .CountAsync<BenchTenantPost>(where, ct).AsTask();
+    }
+
+    public Task<List<BenchTenantPost>> TenantGetAllAsync(DbConnection conn, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => TenantGetAllCoreAsync<SqliteProvider>(conn, ct),
+            Dialect.MySql => TenantGetAllCoreAsync<MySqlProvider>(conn, ct),
+            Dialect.PostgreSql => TenantGetAllCoreAsync<PostgreSqlProvider>(conn, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static Task<List<BenchTenantPost>> TenantGetAllCoreAsync<TProvider>(
+        DbConnection conn, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).WithTenant(Dataset.TenantArmId)
+            .From<BenchTenantPost>().ToListAsync(ct).AsTask();
+
+    public Task<List<BenchTenantPost>> OwnedJsonQueryAsync(DbConnection conn, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => OwnedJsonQueryCoreAsync<SqliteProvider>(conn, ct),
+            Dialect.MySql => OwnedJsonQueryCoreAsync<MySqlProvider>(conn, ct),
+            Dialect.PostgreSql => OwnedJsonQueryCoreAsync<PostgreSqlProvider>(conn, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    /// <summary>OwnedJson 读路径——产品的 From&lt;T&gt;().Take(50)：租户 + 软删过滤自动附加，
+    /// Payload 列由 SourceGen 的 OwnedJson 反序列化路径回填（BenchTenantJsonContext）。</summary>
+    private static Task<List<BenchTenantPost>> OwnedJsonQueryCoreAsync<TProvider>(
+        DbConnection conn, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).WithTenant(Dataset.TenantArmId)
+            .From<BenchTenantPost>().Take(50).ToListAsync(ct).AsTask();
+
+    public Task<int> SessionBatchInsertsAsync(DbConnection conn, int offset, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => SessionBatchCoreAsync<SqliteProvider>(conn, offset, ct),
+            Dialect.MySql => SessionBatchCoreAsync<MySqlProvider>(conn, offset, ct),
+            Dialect.PostgreSql => SessionBatchCoreAsync<PostgreSqlProvider>(conn, offset, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    /// <summary>SessionBatch 路径——产品 CreateBatch + Append(FormattableString)：20 条单行
+    /// INSERT 一个批操作（PG/MySQL 走 DbBatch 真单往返，SQLite 由产品内部回退顺序执行）。
+    /// <para>INSERT 不加租户过滤（产品语义：Insert/Save 不过滤租户，实体自带 tenant_id
+    /// 列值）；Payload 列传 JSON 文本——Append 只做参数绑定，序列化是调用方责任，
+    /// 与产品的单行 Insert 路径同纪律。</para></summary>
+    private static async Task<int> SessionBatchCoreAsync<TProvider>(
+        DbConnection conn, int offset, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        Dialect dialect = Dataset.Of(TProvider.Dialect);
+        // 用 format-item 版而不是 TenantInsertSql 的字面 @pN 版——产品的 FormattableString
+        // 守卫拒绝字面占位符文本（"literal text '@p…' collides with PalORM's reserved
+        // parameter naming"）。列名走文本段（B78），值只进 format items。
+        string format = Dataset.TenantInsertRowFormat(dialect);
+        DataSession<TProvider> session = Session<TProvider>(conn);
+        using var batch = session.CreateBatch();
+        for (int k = 0; k < Dataset.SessionBatchRows; k++)
+        {
+            BenchTenantPost row = Dataset.TenantSeed(offset + k);
+            batch.Append(FormattableStringFactory.Create(
+                format,
+                row.Id, row.TenantId, row.Text, row.CreationDate, row.Value, row.DeletedAt,
+                Dataset.TenantPayloadJson(row)));
+        }
+
+        return await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
 
     // ── 事务场景：真实业务形态（开启事务 → N 条写 → 提交/回滚）──
     // ── 阶段 2 新增 ──

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using PalORM.Testing;
 
 namespace PalORM.PerfHub;
@@ -208,6 +209,165 @@ internal static class Dataset
 
         return FormattableStringFactory.Create(quoted + " IN (" + string.Join(", ", Enumerable.Range(0, ids.Length).Select(i => "{" + i + "}")) + ")", args);
     }
+
+    // ── 租户会话夹具（bench_tenant：[TenantAware] + [SoftDelete] + [OwnedJson] 组合路径）──
+
+    /// <summary>租户表列名——三方言 SELECT/WHERE 列表的唯一真源（CA1861：static readonly）。
+    /// <para>tenant_id / deleted_at 是产品默认过滤的硬编码契约列名（SourceGen
+    /// PALORM014/018/040 与 DataSession.GetDefaultFilterForms 逐字引用），不可更名。</para></summary>
+    private static readonly string[] TenantColumnNames =
+    [
+        "Id", "tenant_id", "Text", "CreationDate", "Value", "deleted_at", "Payload"
+    ];
+
+    /// <summary>SessionBatchInserts 的批语句数——固定 20 条单行 INSERT（形态差测量的固定面，
+    /// 不随行数档位放大）。</summary>
+    public const int SessionBatchRows = 20;
+
+    /// <summary>租户过滤参数名——与产品 DataSession._tenantParameterName 逐字一致。
+    /// 产品为 [TenantAware] 实体自动追加的过滤用这个名字，三臂 SQL 与产品生成 SQL
+    /// 同款才同构（产品注释：避开生成 SQL 的 @p{N} 命名空间）。</summary>
+    public const string TenantParameter = "@__tenant0";
+
+    /// <summary>租户会话测量的租户 ID——三臂固定租户 1（<see cref="TenantOfRow"/> 生成 1..4）。</summary>
+    public const long TenantArmId = 1L;
+
+    public static string TenantTable(Dialect dialect) => Q(dialect, "bench_tenant");
+
+    public static string TenantSnapshotTable(Dialect dialect) => Q(dialect, "bench_tenant_seed");
+
+    public static string TenantDropTableSql(Dialect dialect)
+        => $"DROP TABLE IF EXISTS {TenantTable(dialect)}";
+
+    /// <summary>7 列建表——列类型逐列照既有 CreateTableSql 的同名 CLR 类型方言映射
+    /// （DateTime → PG TIMESTAMP / MySQL DATETIME(6) / SQLite TEXT；string/Payload → TEXT；
+    /// int → INTEGER；TenantId(long) → PG BIGINT / MySQL BIGINT / SQLite INTEGER）。</summary>
+    public static string TenantCreateTableSql(Dialect dialect) => dialect switch
+    {
+        Dialect.Sqlite => "CREATE TABLE bench_tenant (\"Id\" INTEGER PRIMARY KEY, \"tenant_id\" INTEGER NOT NULL, \"Text\" TEXT, \"CreationDate\" TEXT NOT NULL, \"Value\" INTEGER NOT NULL, \"deleted_at\" TEXT, \"Payload\" TEXT)",
+        Dialect.MySql => "CREATE TABLE bench_tenant (`Id` INT PRIMARY KEY, `tenant_id` BIGINT NOT NULL, `Text` TEXT, `CreationDate` DATETIME(6) NOT NULL, `Value` INT NOT NULL, `deleted_at` TEXT, `Payload` TEXT)",
+        Dialect.PostgreSql => "CREATE TABLE bench_tenant (\"Id\" INTEGER PRIMARY KEY, \"tenant_id\" BIGINT NOT NULL, \"Text\" TEXT, \"CreationDate\" TIMESTAMP NOT NULL, \"Value\" INTEGER NOT NULL, \"deleted_at\" TEXT, \"Payload\" TEXT)",
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect))
+    };
+
+    public static string TenantSelectColumns(Dialect dialect)
+        => string.Join(", ", TenantColumnNames.Select(c => Q(dialect, c)));
+
+    /// <summary>租户过滤 WHERE 段——与产品 DataSession 为 [TenantAware]/[SoftDelete] 实体
+    /// 自动生成的默认过滤同款同序（"deleted_at IS NULL AND tenant_id = @__tenant0"）。
+    /// 参数名用 <see cref="TenantParameter"/>（产品同款约定，不是 PerfHub 的 @pN 序号名）。</summary>
+    public static string WhereTenant(Dialect dialect)
+        => "WHERE " + Q(dialect, "deleted_at") + " IS NULL AND "
+            + Q(dialect, "tenant_id") + " = " + TenantParameter;
+
+    /// <summary>租户过滤 WHERE 段（PalORM 侧方言枚举重载）。</summary>
+    public static string WhereTenant(SqlDialect dialect) => WhereTenant(Of(dialect));
+
+    /// <summary>租户过滤 + Value 范围条件——TenantCountWhere 的完整 WHERE 段。
+    /// 第二占位沿用 PerfHub 的 <see cref="P"/> 序号约定（@p1）。</summary>
+    public static string WhereTenantValue(Dialect dialect)
+        => WhereTenant(dialect) + " AND " + Q(dialect, "Value") + " > " + P(1);
+
+    /// <summary>租户过滤 + Value 范围条件（PalORM 侧方言枚举重载）。</summary>
+    public static string WhereTenantValue(SqlDialect dialect) => WhereTenantValue(Of(dialect));
+
+    /// <summary>租户过滤 + IN 条件——占位符照 WhereInIds 的序号约定（0..count-1）。</summary>
+    public static string WhereTenantIds(Dialect dialect, int count)
+        => WhereTenant(dialect) + " AND " + Q(dialect, "Id") + " IN ("
+            + string.Join(", ", Enumerable.Range(0, count).Select(P)) + ")";
+
+    /// <summary>租户过滤 + IN 条件（PalORM 侧方言枚举重载）。</summary>
+    public static string WhereTenantIds(SqlDialect dialect, int count)
+        => WhereTenantIds(Of(dialect), count);
+
+    /// <summary>单行 INSERT 语句——SessionBatchInserts 三臂共用 SQL 真源（杜绝两臂各拼
+    /// 各的漂移）。参数序 = <see cref="TenantSelectColumns"/> 列序；Payload 列传 JSON
+    /// 文本，三臂各自序列化后经参数绑定传入。</summary>
+    public static string TenantInsertSql(Dialect dialect)
+        => "INSERT INTO " + TenantTable(dialect) + " (" + TenantSelectColumns(dialect) + ") VALUES ("
+            + string.Join(", ", Enumerable.Range(0, TenantColumnNames.Length).Select(P)) + ")";
+
+    /// <summary>确定性租户——行号 i 映射到 4 个租户（(i % 4) + 1），三实现三方言完全相同。</summary>
+    public static long TenantOfRow(int i) => (i % 4) + 1;
+
+    /// <summary>TenantCountWhere 的 Value 阈值——档位行数的一半。</summary>
+    public static int TenantValueThreshold(int rows) => rows / 2;
+
+    /// <summary>确定性构造一行（i 从 0 起）——10% 软删（i % 10 == 0 记 deleted_at），
+    /// OwnedJson 载荷由行号派生（无 Random）。
+    /// <para>主键从 1 起（Id = i + 1），与 <see cref="Seed"/> / <see cref="KeySet"/> 同口径：
+    /// 快照 reset 的 <c>WHERE Id &lt;= rows</c> 恰好恢复 rows 行（0 起会让它多恢一行，
+    /// 与 perf_s1 的快照语义产生偏差）。</para></summary>
+    public static BenchTenantPost TenantSeed(int i) => new()
+    {
+        Id = i + 1,
+        TenantId = TenantOfRow(i),
+        Text = $"t{i}",
+        CreationDate = DateTime.UnixEpoch.AddMinutes(i),
+        Value = i,
+        DeletedAt = i % 10 == 0 ? "2020-01-01" : null,
+        Payload = new BenchTenantPayload { A = i, B = $"p{i}" }
+    };
+
+    public static List<BenchTenantPost> TenantSeedRows(int rows)
+    {
+        var list = new List<BenchTenantPost>(rows);
+        for (int i = 0; i < rows; i++)
+        {
+            list.Add(TenantSeed(i));
+        }
+
+        return list;
+    }
+
+    /// <summary>OwnedJson 列的存储形态——经 BenchTenantJsonContext 的 STJ 源生成路径
+    /// 序列化为 JSON 文本（与产品 SourceGen OwnedJson emit 的序列化形态同源，
+    /// 零反射形态；地板/Dapper 臂显式走同一 context）。</summary>
+    public static string? TenantPayloadJson(BenchTenantPost row)
+        => row.Payload is null ? null : JsonSerializer.Serialize(
+            row.Payload, BenchTenantJsonContext.Default.BenchTenantPayloadInfo);
+
+    /// <summary>租户 1 的可见行数——TenantCount / TenantGetAll 的期望值（等价断言用）。
+    /// 租户面 i % 4 == 0 扣软删面 i % 10 == 0（两者交集是 20 的倍数）。
+    /// <para>断言在 Program 侧的 MeasAsync 外各算一次，不进被测路径。</para></summary>
+    public static int TenantVisibleCount(int rows)
+    {
+        int total = 0;
+        for (int i = 0; i < rows; i++)
+        {
+            if (i % 4 == 0 && i % 10 != 0)
+            {
+                total++;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>租户 1 且 Value 大于阈值的可见行数——TenantCountWhere 的期望值（断言用）。</summary>
+    public static int TenantVisibleValueCount(int rows)
+    {
+        int threshold = TenantValueThreshold(rows);
+        int total = 0;
+        for (int i = 0; i < rows; i++)
+        {
+            if (i % 4 == 0 && i % 10 != 0 && i > threshold)
+            {
+                total++;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>单行 INSERT 的 FormattableString 格式版（{0}..{N-1} format items，产品
+    /// FormatFormattableSql 会把 format items 转成 @pN）——PalormImpl 的批路径专用。
+    /// <para>与 <see cref="TenantInsertSql"/> 的值列完全同源；后者是 ADO/Dapper 的
+    /// 字面占位符版（产品的 FormattableString 守卫拒绝字面 @pN 文本，故分两个形态）。</para></summary>
+    public static string TenantInsertRowFormat(Dialect dialect)
+        => "INSERT INTO " + TenantTable(dialect) + " (" + TenantSelectColumns(dialect) + ") VALUES ("
+            + string.Join(", ", Enumerable.Range(0, TenantColumnNames.Length).Select(i => "{" + i + "}"))
+            + ")";
 }
 
 // ═══════════════════════════════════════════════════════════════════════
