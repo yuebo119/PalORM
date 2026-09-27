@@ -17,7 +17,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 | 编译时诊断 | 20,000 行 BulkInsert | MySQL 单行操作 | SQLite Native AOT |
 |:---:|:---:|:---:|:---:|
-| **41 条** | **1.00× ADO.NET 地板** | **快 14~58%** | **exe 4.5 MB** |
+| **43 条** | **1.00× ADO.NET 地板** | **快 14~58%** | **exe 4.5 MB** |
 
 数据口径见[性能](#-性能)一节（2026-09-24 基准批次）。
 
@@ -41,7 +41,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ## ✨ 特性
 
-**编译时生成一切**。Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）。41 条编译时诊断（38 分析器 + 3 生成器）把缺 `[Key]`、租户列可空绕过隔离、乐观锁基线为 0 这类运行时崩溃或静默错数据提前到编译期。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门 `Raw()`（原样字面量片段，拒绝控制字符）与 `SessionSetupSql` 由调用方负责内容。
+**编译时生成一切**。Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）；`[Projection]` 标记的 DTO 同样获得源生成的 RowFactory——join/报表结果直接映射到非表类型（v6.0）。43 条编译时诊断（40 分析器 + 3 生成器）把缺 `[Key]`、租户列可空绕过隔离、乐观锁基线为 0 这类运行时崩溃或静默错数据提前到编译期。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门 `Raw()`（原样字面量片段，拒绝控制字符）与 `SessionSetupSql` 由调用方负责内容。
 
 **全链路 Native AOT**。.NET 生态唯一完整支持全链路 Native AOT 的 ORM：SQLite / PostgreSQL / MySQL 三方言发布验证全部通过（运行输出 `PalORM AOT verification PASSED`），无反射、无 IL Emit、无运行时代码生成。部署细节见 [docs/AOT部署指南.md](docs/AOT部署指南.md)。
 
@@ -511,7 +511,7 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 | 特性 | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
 | **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选（实验性拦截器） | ❌ 实验性，生产不推荐 | ❌ 反射 + IL Emit |
-| **编译时类型诊断** | ✓ 41 条（38 分析器 + 3 生成器） | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
+| **编译时类型诊断** | ✓ 43 条（40 分析器 + 3 生成器） | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
 | **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
 | **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
 | **三方言批量策略** | ✓ COPY / BulkCopy / 多值 | ❌ 手写多值 SQL | △ Provider 各异 | △ BulkInsert 仅 SQL Server |

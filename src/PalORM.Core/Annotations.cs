@@ -242,6 +242,22 @@ public sealed class DatabaseAttribute : Attribute
     public DatabaseAttribute(string name) => Name = name;
 }
 
+/// <summary>标记只读物化类型（DTO/投影，v6.0 R1）。
+/// <para>源生成器为其生成 RowFactory 并注册进物化注册表——<c>QueryAsync&lt;T&gt;</c> /
+/// <c>QueryFirstAsync</c> / <c>QuerySingleAsync</c> / <c>GridReader.Read</c> /
+/// <c>StoredProcBuilder.QueryAsync</c> 的结果映射直接可用（join/报表/聚合投影映射到非表类型）。
+/// 列映射按属性声明序（ordinal），契约同 ADR-A：SELECT 列序必须与属性声明序一致，
+/// 同类型列错位会静默交换数据。</para>
+/// <para><b>边界</b>：投影不生成写命令、不参与迁移 DDL（<c>MigrateAsync</c> 不会为它建表）、
+/// 不参与租户/软删过滤（无表）；<c>From&lt;T&gt;()</c> 链式不适用（无表可查）。属性仅消费
+/// <c>[Column]</c>（列名，仅用于错误消息）/ <c>[Converter]</c> / <c>[NotMapped]</c>，其余实体注解
+/// （[Key]/[Computed]/[Timestamp]/[DefaultValue] 等）无效果。</para>
+/// <para><b>互斥</b>（编译期拦截）：与 <see cref="TableAttribute"/> 同标报 PALORM049；
+/// 属性带 <see cref="OwnedJsonAttribute"/> 报 PALORM050（其读路径依赖实体 CommandFactory
+/// 的 JsonTypeInfo，投影不生成）。</para></summary>
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+public sealed class ProjectionAttribute : Attribute { }
+
 /// <summary>SQL 模板预编译标记。执行时在参数绑定后调用 DbCommand.PrepareAsync。</summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
 public sealed class SqlTemplateAttribute : Attribute

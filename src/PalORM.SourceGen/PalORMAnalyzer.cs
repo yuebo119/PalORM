@@ -245,11 +245,24 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM047", "[DefaultValue] conflicts with [Computed]/[Timestamp]/auto-increment [Key]",
         "[DefaultValue] property '{0}' on type '{1}' also has {2}; a column cannot combine an explicit DEFAULT with GENERATED ALWAYS AS, the built-in DEFAULT CURRENT_TIMESTAMP, or an auto-increment key", "PalORM", DiagnosticSeverity.Error, true);
 
-    // PALORM048：[DefaultValue] 表达式含 NUL 或括号不平衡（R2，v6.0）——判定与 TableModel
+    // PALORM047：[DefaultValue] 表达式含 NUL 或括号不平衡（R2，v6.0）——判定与 TableModel
     // 发射前快检共用 IsBalancedParentheses（单一真源），与 PALORM044 同型。
     public static readonly DiagnosticDescriptor InvalidDefaultValueExpression = new(
         "PALORM048", "[DefaultValue] expression is invalid",
         "[DefaultValue] expression on property '{0}' of type '{1}' contains a NUL character or has unbalanced parentheses; the entity would be silently skipped by source generation", "PalORM", DiagnosticSeverity.Error, true);
+
+    // PALORM049：[Projection] 与 [Table] 同标（R1，v6.0）——物化注册与实体注册语义冲突：
+    // 双管线对同类型生成同 hint 的 RowFactory 源文件（CS8782 重复）。生成器侧防御性跳过。
+    public static readonly DiagnosticDescriptor ProjectionTableConflict = new(
+        "PALORM049", "[Projection] conflicts with [Table]",
+        "Type '{0}' has both [Projection] and [Table]; a type cannot be both a mapped entity and a read-only projection", "PalORM", DiagnosticSeverity.Error, true);
+
+    // PALORM050：[Projection] 属性带 [OwnedJson]（R1，v6.0）——对象 OwnedJson 读路径引用实体
+    // CommandFactory 的 JsonTypeInfo，投影不生成 CommandFactory（生成物 CS0104）。
+    // 字符串属性接收原始 JSON 是投影侧替代形态。
+    public static readonly DiagnosticDescriptor ProjectionOwnedJsonUnsupported = new(
+        "PALORM050", "[OwnedJson] is not supported on [Projection] types",
+        "Property '{0}' on projection type '{1}' has [OwnedJson]; object OwnedJson materialization depends on the entity CommandFactory's JsonTypeInfo, which projections do not generate. Use a string property to receive the raw JSON instead.", "PalORM", DiagnosticSeverity.Error, true);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
@@ -265,7 +278,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          KeyWithNonDefaultValue, ConcurrencyCheckWithIgnoreOnInsert, NullableContextDisabled,
          RequiredWithNullableAnnotation, TenantColumnNullable,
          TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression,
-         DefaultValueConflicts, InvalidDefaultValueExpression];
+         DefaultValueConflicts, InvalidDefaultValueExpression,
+         ProjectionTableConflict, ProjectionOwnedJsonUnsupported];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -285,6 +299,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))  // ITM-512
                 return;
             AnalyzePrimaryKey(ctx, type);
+        }, SymbolKind.NamedType);
+
+        // R1（v6.0）：[Projection] 类型专属检查——PALORM049（×[Table] 互斥）与
+        // PALORM050（属性 [OwnedJson] 禁止）。与实体诊断分离注册（投影无 [Table]，
+        // 不进 AnalyzeEntityDiagnostics 的管线）。
+        context.RegisterSymbolAction(ctx =>
+        {
+            if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
+                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Projection")))
+                return;
+            CheckProjectionDiagnostics(ctx, type);
         }, SymbolKind.NamedType);
 
         // PALORM002 + PALORM003 + PALORM004: 表级验证
@@ -1041,6 +1066,28 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         ctx.ReportDiagnostic(Diagnostic.Create(InvalidDefaultValueExpression,
             member.Locations.FirstOrDefault() ?? type.Locations[0],
             member.Name, type.Name));
+    }
+
+    /// <summary>R1（v6.0）：[Projection] 类型专属检查——PALORM049（×[Table] 互斥）与
+    /// PALORM050（属性 [OwnedJson] 禁止）。生成器侧（ProjectionModel.FromContext）防御性跳过，
+    /// 此处定位报错（PALORM022 分工）。</summary>
+    private static void CheckProjectionDiagnostics(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type)
+    {
+        Location location = type.Locations.FirstOrDefault() ?? Location.None;
+        if (type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(ProjectionTableConflict,
+                location, type.Name));
+        }
+        foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
+        {
+            if (!property.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson")))
+                continue;
+            ctx.ReportDiagnostic(Diagnostic.Create(ProjectionOwnedJsonUnsupported,
+                property.Locations.FirstOrDefault() ?? location,
+                property.Name, type.Name));
+        }
     }
 
     /// <summary>PALORM043：进入 SQL 的标识符含控制字符或为空。

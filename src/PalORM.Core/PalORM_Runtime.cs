@@ -156,7 +156,15 @@ public static class PalORM_Runtime
         {
             RuntimeRegistryState current = Volatile.Read(ref _state);
             var entityTypes = fragment.TableNames.Keys.ToHashSet();
-            ValidateRequiredKeys(entityTypes, fragment.RowFactories.Keys, nameof(fragment.RowFactories));
+            // RowFactories 超集校验（v6.0 R1）：[Table] 实体必须全部有物化工厂（缺失=片段残缺，
+            // 运行期 QueryAsync 的 not registered 响亮兜底）；[Projection] 类型只进 RowFactories
+            // 不进 TableNames（物化注册与实体注册解耦——进 TableNames 会被 MigrateAsync 建表）。
+            // 原 SetEquals 校验会拒绝"携带投影键"的片段，与其余 required 字典的语义分化于此。
+            Type? missingFactory = entityTypes.FirstOrDefault(
+                type => !fragment.RowFactories.ContainsKey(type));
+            if (missingFactory is not null)
+                throw new InvalidOperationException(
+                    $"Registry fragment 'RowFactories' is missing entity type '{missingFactory.FullName}'.");
             // CommandSqls（legacy 兼容载荷）校验放宽为可选键集：旧片段携带、新片段为空集均为合法
             // （评审 2026-09-02 收敛——运行时不消费该载荷，仅要求不含未知实体键）。
             ValidateOptionalKeys(entityTypes, fragment.CommandSqls.Keys, nameof(fragment.CommandSqls));
