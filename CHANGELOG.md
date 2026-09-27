@@ -11,9 +11,9 @@
 - **测试**：`MigrateOptimizeTests` 扩 PG 断言（migrate 后 `pg_statistic` 出现统计行，S3 反向验证——撤 ANALYZE 分支即红）；Integration 218/218。
 - **不可/不宜移植项判定**：busy_timeout 对应物（lock_timeout 会话 SET）与弹性重试层重复度高；synchronous 对应物属 DM 决策只文档化；SQLite 回退路径专属项对 PG/MySQL 不成立——详见 §九-E ③。
 
-## [未发布] — PostgreSQL 极致化（S1~S3/PG-4 + step7 全量）：null 列慢路径根因修复 + 每查询开销收敛 + 并发单实例化 + ODE 形态统一
+## [5.8.0] — PostgreSQL 极致化 + 覆盖面补齐：null 列慢路径根因修复（分配 −34~−38%）+ MySQL 同构移植 + 租户/OwnedJson/SessionBatch 夹具族 — 2026-09-27
 
-> 变更范围：`PalORM.Core`（IDbProvider / DataSession_Bulk / DataSession.Query / QueryBuilderExtensions / QueryBuilder / DataSession / FormattableSqlFormatter）+ `PalORM.SourceGen`（CommandFactoryEmitter）+ `PalORM.PostgreSql`（PostgreSqlProvider）+ 测试与文档。执行账本：`docs/性能优化方案-step6-pg.md`（S1~S3/PG-4）+ `docs/性能优化方案-step7-pg-master.md`（T1~T15）。
+> 变更范围：`PalORM.Core`（IDbProvider / DataSession_Bulk / DataSession.Query / QueryBuilderExtensions / QueryBuilder / DataSession / FormattableSqlFormatter）+ `PalORM.SourceGen`（CommandFactoryEmitter）+ `PalORM.PostgreSql`（PostgreSqlProvider）+ `PalORM.MySql`（MySqlProvider）+ PerfHub 夹具 + 测试与文档。执行账本：`docs/性能优化方案-step6-pg.md`（S1~S3/PG-4）+ `docs/性能优化方案-step7-pg-master.md`（T1~T17）。
 
 - **参数占位符零分配（S1）**：`GetParameterPlaceholder` 默认实现改走 `ParameterNameCache` 预建表，原插值形态在 BulkDelete 满批一次生成 5000 个新字符串；输出逐字节相同（`string.Concat("@p", i)`），三方言同受益。
 - **BulkDelete 参数转移（S2）**：中转参数按批内序号改名后转移进目标集合，不再每 key 重建参数对象（Clear/RemoveAt 不移交参数所有权，真库探针实证执行与复用均正确）；每 key 省 1 个 NpgsqlParameter + 1 次装箱 + Provider DbType switch。MySqlConnector Add 时重名校验的重名规避形态不变。
