@@ -3,6 +3,9 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
+/// <para><b>B63 守卫（2026-09-27）</b>：PG/MySQL MigrateAsync 为 registry 全量建表，并行执行撞
+/// 系统目录 23505；本类挂 ExtBulkTable 组串行。</para>
+[NotInParallel("ExtBulkTable")]
 public sealed class OwnedJsonTests
 {
     [Test]
