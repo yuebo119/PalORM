@@ -172,6 +172,22 @@ internal static class MigrationEmitter
         if (column.IsAutoIncrement && dialect == SqlGenerationDialect.Sqlite)
             return "INTEGER";
 
+        // R3（v6.0）：显式架构参数细化——优先级 TypeName 直通 > decimal Precision/Scale >
+        // string/char Length > 默认映射。显式声明覆盖 MySQL 索引/主键列的 VARCHAR(255) 约定
+        //（用户意图优先）；无参数时走原链（与历史 DDL 逐位一致，零漂移）。
+        if (column.TypeName is not null)
+            return column.TypeName;
+        if ((column.Precision is not null || column.Scale is not null)
+            && column.ProviderClrTypeName is "decimal" or "global::System.Decimal")
+            return $"DECIMAL({column.Precision ?? 18},{column.Scale ?? 6})";
+        if (column.Length is int length
+            && column.ProviderClrTypeName is "string" or "global::System.String"
+                or "char" or "global::System.Char")
+        {
+            // PG/MySQL 约束生效；SQLite 类型亲和性下长度为声明性（写入 DDL 引擎不截断）
+            return $"VARCHAR({length})";
+        }
+
         string typeName = column.ProviderClrTypeName;
         return GetNumericDbType(typeName, dialect)
             ?? GetTemporalDbType(typeName, dialect)

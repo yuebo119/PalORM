@@ -78,6 +78,10 @@ public struct QueryBuilder<T> where T : class, new()
     internal bool _prepared;
     internal bool _tracing;
     internal bool _metrics;
+    /// <summary>R5（v6.0）：WithMetrics(name) 的业务名——透传为 metrics tag
+    /// <c>palorm.query.name</c>；null = 未设置（tag 集与历史行为逐位一致，时间序列基数不变）。
+    /// 低基数契约：name 应为静态业务名（如"订单查询"），禁止拼接动态值。</summary>
+    internal string? _metricsName;
     internal bool _splitQuery;
     internal bool _useReadRoute;
     internal DbTransaction? _transaction;
@@ -121,6 +125,7 @@ public struct QueryBuilder<T> where T : class, new()
         _prepared = false;
         _tracing = false;
         _metrics = false;
+        _metricsName = null;
         _splitQuery = false;
         _useReadRoute = false;
         _transaction = null;
@@ -538,13 +543,18 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
-    /// <summary>为查询执行启用 PalORM Meter。名称仅保留 API 兼容，不作为指标标签。</summary>
+    /// <summary>为查询执行启用 PalORM Meter，name 作为业务维度标签（v6.0 R5 转正）。
+    /// <para><b>低基数契约</b>：name 应为<b>静态业务名</b>（如 "订单查询"、"库存刷新"），
+    /// 禁止拼接动态值（Id/时间戳等）——高基数会在指标后端（Prometheus 等）裂出海量时间序列。</para>
+    /// <para>name 透传为 metrics tag <c>palorm.query.name</c>（Activity tracing 的 tag 集不变）；
+    /// 指标维度原有 operation/provider/outcome 三维保持。</para></summary>
     public QueryBuilder<T> WithMetrics(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (name.Contains("*/", StringComparison.Ordinal) || name.Contains('\0'))
             throw new ArgumentException("Metric name contains an invalid character.", nameof(name));
         _metrics = true;
+        _metricsName = name;
         return this;
     }
 
@@ -644,6 +654,7 @@ public struct QueryBuilder<T> where T : class, new()
             _prepared = _prepared,
             _tracing = _tracing,
             _metrics = _metrics,
+            _metricsName = _metricsName,
             _splitQuery = _splitQuery,
             _useReadRoute = _useReadRoute,
             _transaction = _transaction,

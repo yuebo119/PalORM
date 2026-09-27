@@ -501,12 +501,10 @@ public sealed class AnalyzerDiagnosticsTests
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
 
         int count = diagnostics.Count(d => d.Id == "PALORM017");
-        // v6.0 R2 起 [DefaultValue] 参与列 DEFAULT 子句停报——仅剩 [Column(Length=…)] 1 处告警
-        //（[Unique] ADR-B 落地停报、[DefaultValue] R2 落地停报；Length/Precision 等 R3 落地后再停）
-        await Assert.That(count).IsEqualTo(1);
-        await Assert.That(diagnostics.Single(d => d.Id == "PALORM017")
-            .GetMessage(System.Globalization.CultureInfo.InvariantCulture))
-            .Contains("Length");
+        // v6.0 R2 起 [DefaultValue] 参与列 DEFAULT 子句停报、R3 起 [Column(Length=…)] 参与类型
+        // 细化停报——StoreAs 是仅存告警面，本源无 StoreAs 则零告警
+        //（[Unique] ADR-B 停报、[DefaultValue] R2 停报、Length 等 R3 停报）
+        await Assert.That(count).IsEqualTo(0);
     }
 
     [Test]

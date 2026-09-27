@@ -19,7 +19,7 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 43 条 PALORM 诊断（40 条分析器 + 3 条生成器：PALORM041/045/046）
+### 编译时验证 — 44 条 PALORM 诊断（41 条分析器 + 3 条生成器：PALORM041/045/046）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
 > v7.2 扩充（2026-08-26，ITM-640 收口）：PALORM042-044——生成器 throw/静默跳过的编译期定位面（分工同 022：分析器定位报错，生成器防御性跳过）。
@@ -27,6 +27,8 @@
 > PALORM017 对 [DefaultValue] 停报（已参与 DDL）。
 > v6.0 扩充（R1）：PALORM049/050——[Projection] DTO 投影的编译期契约（×[Table] 互斥 +
 > [OwnedJson] 禁止）。
+> v6.0 扩充（R3）：PALORM051——[Column] 架构参数值域；PALORM017 对 Length/Precision/Scale/
+> TypeName 停报（已参与 DDL），仅 StoreAs 仍告警。
 > 评审批次（2026-09-02）：新增 PALORM045（生成器 transform 失败面兜底 Warning——分析器规则被
 > .editorconfig/ruleset 抑制时实体静默跳过的唯一编译期线索）；PALORM003 因带已知多程序集误报、
 > 默认严重度由 Error 复议为 Warning；PALORM041 category 归一为 "PalORM"；PALORM020 消息改为
@@ -75,6 +77,7 @@
 | **PALORM048** | **[DefaultValue] 表达式 NUL 或括号不平衡（v6.0 R2，与 PALORM044 同型判定）** | **P1** |
 | **PALORM049** | **[Projection] 与 [Table] 同标（v6.0 R1——物化注册与实体注册语义冲突）** | **P0** |
 | **PALORM050** | **[Projection] 属性带 [OwnedJson]（v6.0 R1——对象 OwnedJson 依赖实体 CommandFactory 的 JsonTypeInfo，投影不生成；字符串属性接收原始 JSON 是替代）** | **P0** |
+| **PALORM051** | **[Column] 架构参数值域（v6.0 R3——负 Length/Precision/Scale、Scale>Precision、空白 TypeName 拦截；0 视为未设置）** | **P0** |
 
 ### 基础注解 (23 个)
 

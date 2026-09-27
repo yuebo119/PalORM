@@ -63,6 +63,14 @@ internal sealed record TableModel(
                 SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? prop.Name;
+            // R3（v6.0）：[Column] 架构参数（Length/Precision/Scale/TypeName）——参与 DDL 类型细化
+            //（MigrationEmitter.GetDbType 拦截消费）；StoreAs 不解析（ITM-553 读写双路径，
+            // 留待专门迭代，PALORM017 继续告警）。
+            int? columnLength = GetNamedInt(columnAttr, "Length");
+            int? columnPrecision = GetNamedInt(columnAttr, "Precision");
+            int? columnScale = GetNamedInt(columnAttr, "Scale");
+            string? columnTypeName = columnAttr?.NamedArguments
+                .FirstOrDefault(static na => na.Key == "TypeName").Value.Value as string;
             // ITM-553 待实现：[Column(StoreAs=...)] 的枚举存储策略（AsInt32/AsInt64/AsString）在此未被读取，
             // enum 列恒走默认 TEXT 存储。用户已由 PALORM017（PalORMAnalyzer.cs AnnotationNotAppliedToDdl，
             // 谓词含 "StoreAs"）在编译期告警"标注但静默无效"，故无静默错误风险。完整接入需扩展类型映射
@@ -197,7 +205,8 @@ internal sealed record TableModel(
                 // 可空性无从判断。注意与 NotAnnotated 区分：后者是"NRT 开启且显式声明非空"，
                 // 属契约而非缺陷，读路径保持直读（零额外 reader 访问）。
                 prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
-                defaultValueExpression));
+                defaultValueExpression,
+                columnLength, columnPrecision, columnScale, columnTypeName));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -278,6 +287,12 @@ internal sealed record TableModel(
         return ordered;
     }
 
+    private static int? GetNamedInt(AttributeData? attribute, string name)
+        => attribute is null ? null
+            : attribute.NamedArguments.FirstOrDefault(na => na.Key == name).Value.Value is int v && v != 0
+                ? v
+                : null;
+
     private static string MapToDbType(ITypeSymbol type)
     {
         // byte[] 一维数组：legacy 单方言 DDL（SQLite 风格）映射 BLOB；方言重载走
@@ -320,7 +335,8 @@ internal sealed record ColumnModel(
     bool IsOwnedJson, string? OwnedJsonContextTypeName, string? ConverterTypeName,
     string? SensitiveMask = null,
     bool IsNullabilityUnknown = false,
-    string? DefaultValueExpression = null)
+    string? DefaultValueExpression = null,
+    int? Length = null, int? Precision = null, int? Scale = null, string? TypeName = null)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

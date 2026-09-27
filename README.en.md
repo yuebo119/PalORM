@@ -19,7 +19,7 @@ A Roslyn source generator produces SQL construction, parameter binding, object m
 
 | Compile-time diagnostics | 20,000-row BulkInsert | MySQL single-row ops | SQLite Native AOT |
 |:---:|:---:|:---:|:---:|
-| **43 rules** | **1.00× ADO.NET floor** | **14–58% faster** | **4.5 MB exe** |
+| **44 rules** | **1.00× ADO.NET floor** | **14–58% faster** | **4.5 MB exe** |
 
 See [Performance](#-performance) for measurement details (2026-09-24 benchmark batch).
 
@@ -42,7 +42,7 @@ See [Performance](#-performance) for measurement details (2026-09-24 benchmark b
 
 ## ✨ Features
 
-**Everything generated at compile time.** A Roslyn `IIncrementalGenerator` emits, for every `[Table]` entity, a RowFactory (materialization delegates), a CommandFactory (parameter binding), and Migration (DDL for all three dialects); DTOs marked `[Projection]` get a source-generated RowFactory too, so join/report results map straight onto non-table types (v6.0). 43 compile-time diagnostics (40 analyzers + 3 generator rules) move failures that would otherwise be runtime crashes or silently wrong data — a missing `[Key]`, a nullable tenant column bypassing isolation, an optimistic-lock baseline of 0 — to compile time. On the `FormattableString` path, values only ever become `@pN` placeholders (compile-time parameterization, injection-safe by default); explicit escape hatches are `Raw()` (verbatim literal fragments, control characters rejected) and `SessionSetupSql`, where the caller owns the content.
+**Everything generated at compile time.** A Roslyn `IIncrementalGenerator` emits, for every `[Table]` entity, a RowFactory (materialization delegates), a CommandFactory (parameter binding), and Migration (DDL for all three dialects); DTOs marked `[Projection]` get a source-generated RowFactory too, so join/report results map straight onto non-table types (v6.0). 44 compile-time diagnostics (41 analyzers + 3 generator rules) move failures that would otherwise be runtime crashes or silently wrong data — a missing `[Key]`, a nullable tenant column bypassing isolation, an optimistic-lock baseline of 0 — to compile time. On the `FormattableString` path, values only ever become `@pN` placeholders (compile-time parameterization, injection-safe by default); explicit escape hatches are `Raw()` (verbatim literal fragments, control characters rejected) and `SessionSetupSql`, where the caller owns the content.
 
 **Full-pipeline Native AOT.** The only ORM in the .NET ecosystem with full-pipeline Native AOT support: publish verification passes on all three dialects — SQLite / PostgreSQL / MySQL (output `PalORM AOT verification PASSED`) — with no reflection, no IL Emit, no runtime code generation. Deployment details: [AOT deployment guide](docs/AOT部署指南.md) (Chinese).
 
@@ -515,7 +515,7 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
 | **Full-pipeline Native AOT** | ✓ source-generated, verified | △ Dapper.Aot optional (experimental interceptors) | ❌ experimental, not production-ready | ❌ reflection + IL Emit |
-| **Compile-time type diagnostics** | ✓ 43 rules (40 analyzers + 3 generator) | ❌ fails at runtime | △ migration checks (design time) | ❌ fails at runtime |
+| **Compile-time type diagnostics** | ✓ 44 rules (41 analyzers + 3 generator) | ❌ fails at runtime | △ migration checks (design time) | ❌ fails at runtime |
 | **Compile-time SQL pre-building** | ✓ Roslyn source generation | ❌ runtime concatenation | △ precompiled queries (experimental) | ❌ runtime expression trees |
 | **Runtime reflection** | Zero | △ first-use reflection + IL Emit cache | △ expression-tree compilation | ❌ reflection + IL Emit |
 | **Per-dialect bulk strategies** | ✓ COPY / BulkCopy / multi-value | ❌ hand-written multi-value SQL | △ varies by provider | △ BulkInsert SQL Server only |

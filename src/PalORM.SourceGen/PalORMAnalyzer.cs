@@ -264,6 +264,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM050", "[OwnedJson] is not supported on [Projection] types",
         "Property '{0}' on projection type '{1}' has [OwnedJson]; object OwnedJson materialization depends on the entity CommandFactory's JsonTypeInfo, which projections do not generate. Use a string property to receive the raw JSON instead.", "PalORM", DiagnosticSeverity.Error, true);
 
+    // PALORM051：[Column] 架构参数值域（R3，v6.0）——负 Length/Precision、负 Scale、
+    // Scale>Precision、空白 TypeName 会生成非法 DDL（VARCHAR(-1)/DECIMAL(5,8)），
+    // 延迟到 MigrateAsync 才炸，此处编译期拦截。0 视为未设置不报。
+    public static readonly DiagnosticDescriptor InvalidColumnSchemaArgs = new(
+        "PALORM051", "[Column] schema arguments have invalid values",
+        "[Column] schema arguments on property '{0}' of type '{1}' are invalid: Length/Precision/Scale must be non-negative (0 = unset), Scale must not be greater than Precision, and TypeName must not be whitespace", "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, MissingOwnedJsonContext,
@@ -279,7 +286,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          RequiredWithNullableAnnotation, TenantColumnNullable,
          TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression,
          DefaultValueConflicts, InvalidDefaultValueExpression,
-         ProjectionTableConflict, ProjectionOwnedJsonUnsupported];
+         ProjectionTableConflict, ProjectionOwnedJsonUnsupported,
+         InvalidColumnSchemaArgs];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -910,6 +918,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             CheckComputedExpressionValidity(ctx, type, member);                   // PALORM044（ITM-640 收口）
             CheckDefaultValueConflicts(ctx, type, member);                        // PALORM047（R2，v6.0）
             CheckDefaultValueExpressionValidity(ctx, type, member);               // PALORM048（R2，v6.0）
+            CheckColumnSchemaArgValidity(ctx, type, member);                      // PALORM051（R3，v6.0）
             CheckConverterOwnedJsonConflict(ctx, type, member);                   // PALORM027
             CheckKeyNonDefaultValue(ctx, type, member);                           // PALORM034
             CheckConcurrencyCheckWithIgnoreOnInsert(ctx, type, member);           // PALORM035
@@ -1290,15 +1299,48 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     /// <summary>PALORM017：不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"。
     /// ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；v6.0 R2 后 [DefaultValue] 参与列
-    /// DEFAULT 子句，停报。FK 约束与 [Column] 架构参数（Length/Precision/Scale/TypeName/StoreAs）仍告警。</summary>
+    /// DEFAULT 子句，停报；v6.0 R3 后 [Column] 的 Length/Precision/Scale/TypeName 参与类型
+    /// 细化，停报。[Column(StoreAs=…)]（ITM-553 读写双路径）仍告警。</summary>
     private static void CheckAnnotationNotApplied(
         SymbolAnalysisContext ctx, IPropertySymbol member, Location memberLocation)
     {
-        var columnWithSchemaArgs = member.GetAttributes().FirstOrDefault(a =>
+        var columnWithStoreAs = member.GetAttributes().FirstOrDefault(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Column")  // ITM-512
-            && a.NamedArguments.Any(na => na.Key is "Length" or "Precision" or "Scale" or "TypeName" or "StoreAs"));
-        if (columnWithSchemaArgs is not null)
-            ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column] schema arguments (Length/Precision/Scale/TypeName/StoreAs)", member.Name));
+            && a.NamedArguments.Any(static na => na.Key == "StoreAs"));
+        if (columnWithStoreAs is not null)
+            ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column(StoreAs=…)]", member.Name));
+    }
+
+    /// <summary>PALORM051：[Column] 架构参数值域（R3，v6.0）——负 Length/Precision、负 Scale、
+    /// Scale>Precision、空白 TypeName 会生成非法 DDL，编译期拦截（0 视为未设置，不报）。
+    /// 提取用 is int 模式（int? 属性在 v6.0 前是 CS0655 不可达面，现为 int 默认 0）。</summary>
+    private static void CheckColumnSchemaArgValidity(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        var columnAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
+        if (columnAttr is null) return;
+
+        int? length = columnAttr.NamedArguments
+            .FirstOrDefault(static na => na.Key == "Length").Value.Value is int l && l != 0 ? l : null;
+        int? precision = columnAttr.NamedArguments
+            .FirstOrDefault(static na => na.Key == "Precision").Value.Value is int p && p != 0 ? p : null;
+        int? scale = columnAttr.NamedArguments
+            .FirstOrDefault(static na => na.Key == "Scale").Value.Value is int s && s != 0 ? s : null;
+        string? typeName = columnAttr.NamedArguments
+            .FirstOrDefault(static na => na.Key == "TypeName").Value.Value as string;
+
+        bool invalid =
+            (length is not null && length < 0)
+            || (precision is not null && precision < 0)
+            || (scale is not null && scale < 0)
+            || (scale is not null && precision is not null && scale > precision)
+            || (typeName is not null && string.IsNullOrWhiteSpace(typeName));
+        if (!invalid) return;
+
+        ctx.ReportDiagnostic(Diagnostic.Create(InvalidColumnSchemaArgs,
+            member.Locations.FirstOrDefault() ?? type.Locations[0],
+            member.Name, type.Name));
     }
 
     /// <summary>PALORM008/009/010：[OwnedJson] 必须是 string 属性（r11.5-D2 订正原 019 错标） + 有效的 JsonSerializerContext。
