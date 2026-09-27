@@ -448,3 +448,32 @@ PG-6 构建后的全量测试暴露：T9 的 @pN 保留命名空间守卫**破�
 引号外的裸 @pN。同时修正本人 T9 测试的错误断言（把"值经参数化"断言成"SQL 含字面值"）。
 **流程教训**：T9 提交时用 `tail -3` 看测试输出，失败行在 tail 窗口之外被漏看（B104 同款）——
 此后一律 grep `失败|成功:` 总结行。修复后 Core 430/430（此前 426 里实际藏着这 4 个失败）。
+
+## MySQL-6：PG-6 同构移植（2026-09-27）
+
+**移植审计总账**（回答"PG 的优化哪些可以平移到 MySQL/SQLite"）：
+
+| PG 优化 | MySQL | SQLite |
+|---|---|---|
+| S1/S2/S3/T4/T6/T7/T9 + SourceGen emit（Core 层） | ✅ 早已受益（改动本就在 Core，三方言共享） | ✅ 早已受益 |
+| PG-6 CreateConnection 改写缓存 | ✅ 本轮移植（探针十四/十五：7.5µs → 0.43µs） | ➖ 无适用面（探针十五：无旋钮改写，0.13µs，与裸 new 同量级） |
+| T10 连接串覆盖契约测试 | ✅ 本轮移植（MySqlConnectionStringOverrideTests 3 条） | ➖ 无旋钮可覆盖 |
+| R49/R50 Lazy 缓存 + 探测单实例化 | ➖ 无同款代码（PG COPY 路径专属） | ➖ 无同款代码 |
+| PG-4 WriteRow 类型缓存 | ➖ MySQL 走 LOAD DATA 另一路径 | ➖ 多值 INSERT 无此路径 |
+| 批量 UPDATE 更优 SQL 形态 | ➖ MySQL 最优已知形态即 CASE WHEN（Dapper 官方基准同款）；PG 的 UPDATE..FROM(VALUES) 依赖 PG 专属 VALUES 表构造器，MySQL 不支持 | ➖ SQLite 实测回退逐条（6.4×） |
+
+**MySQL-6 实施**：CreateConnection 与 PG 读取完全相同的 4 个 options 池参数字段，同构缓存
+（`RewrittenConnectionStringCache`）。探针十四实测 MySQL 侧成本：MySqlConnectionStringBuilder
+解析 4.00µs + 9× Keys LINQ 扫描 3.46µs ≈ 7.5µs/次；探针十五复测缓存命中后
+CreateConnection **0.43µs**、每操作 CreateAsync **3.55µs/op**。
+
+**测试**：Integration 217/217（PG + MySQL 双真库在线，含新增 MySQL 覆盖契约 3 条）。
+附带修正：MySqlConnector 的 CancellationTimeout 是 int（Npgsql 侧是 uint——断言字面量
+类型需按 Provider 分别给，TUnit IsEqualTo 不做隐式数值转换）。
+
+## 分配测试 tripwire 污染免疫（第 5 次复发后修正）
+
+FromAllocationTests/CountSqlAllocationTests 的全局分配 tripwire（20KB/30KB）在 TUnit 并行
+套件里偶发被同批用例顶穿（真值 <4KB，污染可加 10~50KB）。本轮按项目"测量类断言禁入并行
+套件精确断言"的既有纪律修正：tripwire 放到污染不可达的 500KB（只防 10× 级真实回归），
+精确基线继续只认隔离单跑（`--treenode-filter`）。修正后连续 6 次全量全绿。

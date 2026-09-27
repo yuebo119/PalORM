@@ -24,6 +24,8 @@
   - **T13/T14 流程门**：可空引用列读行为三选项挂起等裁决；ADR-G（OwnedJson 方言条件 Span emit，G2 推荐但需先补 PerfHub 夹具）已产出，实现不动。
   - **新增回归测试**：From/Count 分配基线（隔离口径 tripwire）、PG 已释放事务形态、PG 批缓存并发（构建次数=1）、连接串覆盖契约、@pN 保留命名空间（P2-44：字面量占位符在 PG 响亮失败/SQLite 静默返空集的方言发散被封堵）。
 - **验证（step6）**：Core.Tests 421/421、SourceGen 202/202（快照基线已更新）、Integration 208/208（PG 真库在线）；三路深挖证据（Npgsql 10.0.3 反射盘查 68 连接串属性/importer 20 成员/驱动 API 全量 · PalORM PG 路径逐行热账 · 社区官方 2024-2026 经验 37 源抓取）与三轮真库探针见 `docs/性能优化方案-step6-pg.md`。
+- **MySQL-6：PG-6 同构移植（2026-09-27）**：审计确认 Core 层项（S1/S2/S3/T4/T6/T7/T9）MySQL/SQLite 早已共享受益；CreateConnection 缓存同构移植到 MySQL（探针实测 7.5µs→0.43µs，每操作 CreateAsync 3.55µs）；SQLite 无适用面（无旋钮改写，0.13µs 与裸 new 同量级）。MySQL 覆盖契约测试 3 条同步移植；Integration 217/217（PG + MySQL 双真库）。批量 UPDATE 的 PG 专属 VALUES 形态 MySQL 无可移植项（CASE WHEN 即其最优已知形态）。
+- **分配测试 tripwire 污染免疫**（第 5 次复发修正）：全局分配断言在并行套件偶发被顶穿，tripwire 移至污染不可达的 500KB，精确基线只认隔离单跑。
 - **CreateConnection 改写结果缓存（PG-6，2026-09-27）**：探针十二实测 CreateConnection 固定成本 12µs（连接串解析 9.44 + 旋钮扫描 2.46），其中每操作自建会话形态（README 快速Start 用法）的会话税 25.1µs 近一半是它。改写结果按全部输入（连接串 + 4 个 options 池参数字段）缓存后：CreateConnection **12µs→0.53µs**、每操作 CreateAsync **25.1µs→2.67µs**。逻辑零变更，正确性由 Core 430/430 + Integration 214/214（含连接串覆盖契约三条）验证。
 - **T9 回归修复（同日）**：@pN 保留命名空间守卫首版未做字符串字面量跟踪，误拦了 ITM-546 契约的用户数据（`'a@p1.com'`）；修复为单引号字面量跟踪（含 `''` 转义）、只拦引号外裸 @pN。同步修正本人测试的错误断言（值走参数化却断言 SQL 含字面值）。
 - **覆盖面补齐与门裁决（T16/T17 + T13/ADR-G 收官，2026-09-27）**：

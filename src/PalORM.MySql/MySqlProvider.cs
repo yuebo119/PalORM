@@ -39,6 +39,35 @@ public sealed class MySqlProvider : IDbProvider
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        // MySQL-6（2026-09-27，PG-6 同构移植）：改写结果按全部输入缓存——本方法输入只有
+        // (连接串, 4 个 options 池参数字段)（旋钮清单只读 MaxPoolSize/MinPoolSize/
+        // PoolIdleTimeoutSeconds/PoolLifetimeMinutes，其余为常量/驱动默认比对）。探针十四实测
+        // 单次成本 = MySqlConnectionStringBuilder 解析 4.00µs + 9× Keys LINQ 扫描 3.46µs ≈ 7.5µs；
+        // PerfHub 夹具用共享连接不经过，但每操作自建会话用法（DataSession.CreateAsync per op）
+        // 全额支付。缓存命中后只剩字典查询 + new MySqlConnection（0.04µs）。逻辑零变更。
+        string rewritten = RewrittenConnectionStringCache.GetOrAdd(
+            (connectionString, options.MaxPoolSize, options.MinPoolSize,
+                options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
+            static (key, opts) => RewriteConnectionString(key.ConnectionString, opts),
+            options);
+        return new MySqlConnection(rewritten);
+    }
+
+    /// <summary>MySQL-6：改写结果缓存——键 = 本方法全部输入（连接串 + 4 个 options 池参数字段）。
+    /// 键空间上限 = 连接串变体数 × 池参数组合数（应用内通常个位数），与
+    /// PostgreSqlProvider 的同名缓存同族设计（跨程序集不可 cref）。工厂失败
+    /// （非法连接串）不缓存，异常照旧传播。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
+        RewrittenConnectionStringCache = new();
+
+    /// <summary>MySQL-6：连接串旋钮改写的实际逻辑（从 CreateConnection 原样抽出，逻辑零变更）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "MySQL-6：连接串调优旋钮改写（原 CreateConnection 主体原样抽出）——线性旋钮清单，"
+            + "复杂度来自旋钮数量而非嵌套；拆分会打散 ITM-612 的'单点覆盖口径'。")]
+    private static string RewriteConnectionString(string connectionString, DbOptions options)
+    {
         var builder = new MySqlConnectionStringBuilder(connectionString);
         // ITM-612：池参数遵循下方系列的"仅默认时覆盖"策略——原对象初始化器在连接串解析后
         // 无条件覆盖，连接串内嵌池参数被静默改写为 DbOptions 默认值。
@@ -92,7 +121,7 @@ public sealed class MySqlProvider : IDbProvider
             builder.ServerRedirectionMode = MySqlServerRedirectionMode.Preferred;
         }
 
-        return new MySqlConnection(builder.ConnectionString);
+        return builder.ConnectionString;
     }
 
     /// <summary>连接串是否显式给出某键（PROV-001，2026-09-23）。
