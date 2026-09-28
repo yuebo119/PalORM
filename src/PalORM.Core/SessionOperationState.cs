@@ -240,22 +240,30 @@ internal sealed class SessionOperationState
         }
     }
 
+    /// <summary>登记事务流结束时要释放的资源。
+    /// <para><b>ITM-829（r23 实修）</b>：无活动事务流时为 no-op <b>契约</b>（调用方资源自身
+    /// 管理生命周期，如无事务时的 GridReader）；但存在事务流而登记被拒的三种异常形态
+    /// （流属于他人/流已退出/流正在收口）原为静默不注册——调用方以为已纳管而资源永不
+    /// 被释放，现响亮失败。</para></summary>
     internal void RegisterTransactionResource(IAsyncDisposable resource)
     {
         lock (_sync)
         {
-            if (_transactionOwner is not null
-                && ReferenceEquals(
+            if (_transactionOwner is null)
+                return;   // 无事务流：契约性 no-op（见 doc）
+            if (!ReferenceEquals(
                     _transactionOwner, _currentTransactionOwner.Value))
             {
-                if (_transactionCompleting
-                    || _transactionResources is null)
-                {
-                    throw new InvalidOperationException(
-                        "The active transaction flow is completing.");
-                }
-                _transactionResources.Add(resource);
+                // ITM-829：流属于其他异步流——原静默跳过
+                throw new InvalidOperationException(
+                    "The active transaction belongs to another asynchronous flow.");
             }
+            if (_transactionCompleting || _transactionResources is null)
+            {
+                throw new InvalidOperationException(
+                    "The active transaction flow is completing.");
+            }
+            _transactionResources.Add(resource);
         }
     }
 
@@ -294,7 +302,7 @@ internal sealed class SessionOperationState
             catch (Exception exception)
             {
                 if (cleanupException is null) cleanupException = exception;
-                else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = exception;
+                else AttachCleanupException(cleanupException, exception);
             }
         }
         return cleanupException;
@@ -331,7 +339,7 @@ internal sealed class SessionOperationState
                 "always consume it with 'await foreach' or dispose the enumerator explicitly.",
                 timeoutException);
             if (cleanupException is null) cleanupException = hangException;
-            else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = hangException;
+            else AttachCleanupException(cleanupException, hangException);
         }
         return cleanupException;
     }
@@ -683,6 +691,17 @@ internal sealed class SessionOperationState
         // v4.5：不再写 _currentOperationOwner.Value = null（省 EC 拷贝）
         // _isActive = false 已足够让 IsCurrentOperationScope 返回 false
         tcs?.TrySetResult();
+    }
+
+    /// <summary>ITM-830（r23 实修）：清理异常挂 Data 的键名去重——原以 Data.Count 推导索引，
+    /// 主异常已带其它键（InfrastructureTimeout/RollbackSkipped 等）时两次清理异常可能算出同名键
+    /// 互相覆盖、静默丢一条诊断。空闲后缀探测保证每条清理异常独立可追溯。</summary>
+    private static void AttachCleanupException(Exception primary, Exception cleanup)
+    {
+        int suffix = 0;
+        while (primary.Data.Contains($"PalORM.CleanupException{suffix}"))
+            suffix++;
+        primary.Data[$"PalORM.CleanupException{suffix}"] = cleanup;
     }
 
     internal readonly struct SessionOperationLease : IAsyncDisposable, IDisposable

@@ -736,6 +736,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     /// <summary>创建批量执行器——把 N 条非查询语句压成一次往返（方言支持时，实测 PG 3.4×/10 语句）。
     /// 见 <see cref="SessionBatch{TProvider}"/> 的语义契约。</summary>
+    /// <summary>创建批执行器。ITM-836（r23 复核登记）：不取操作租约是<b>内部复用契约</b>——
+    /// MigrateAsync 的 ApplyTableDdlAsync 持租约调用本方法（Schema.cs），加租约会自撞
+    /// "already active"（r23 修复实测坐实后回滚）。公共调用方应在无飞行操作时调用
+    ///（会话常规使用形态天然满足）；构造期读取（CommandTimeout/事务）的门禁由调用方租约覆盖。</summary>
     public SessionBatch<TProvider> CreateBatch() => new(this);
 
     internal DbCommand CreateCommandForBatch() => CreateCommand();

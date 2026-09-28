@@ -141,6 +141,9 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfNegative(CommandTimeout.Ticks, nameof(CommandTimeout));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
+        // ITM-838（r23 实修）：上界补齐——env 覆盖入口可传入极大值，重试风暴的最坏墙钟
+        // = (MaxRetries+1)×CommandTimeout+Σ退避，上界使该乘积可推理（10 次 = 11×超时）。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxRetries, 10, nameof(MaxRetries));
         ArgumentOutOfRangeException.ThrowIfNegative(OverallDeadline.Ticks, nameof(OverallDeadline));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
         // C4：MinPoolSize 负数非法；大于 MaxPoolSize 是配置矛盾（透传后驱动行为未定义），提前报错
@@ -148,12 +151,16 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MinPoolSize, MaxPoolSize, nameof(MinPoolSize));
         // 0 = 不覆盖驱动默认值（合法值，见属性文档）；仅负数非法
         ArgumentOutOfRangeException.ThrowIfNegative(PoolIdleTimeoutSeconds, nameof(PoolIdleTimeoutSeconds));
+        // ITM-838：上界 24h——空闲回收超过一天等价于永不回收，误配置响亮失败优于静默泄漏。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(PoolIdleTimeoutSeconds, 86400, nameof(PoolIdleTimeoutSeconds));
         // r19/ITM-695：PG 侧 checked(分钟*60) 会在极大值抛 OverflowException（Npgsql 连接串
         // 的 ConnectionLifetime 为 int 秒）——Validate 统一兜底上限，三 Provider 行为一致。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
             PoolLifetimeMinutes, int.MaxValue / 60, nameof(PoolLifetimeMinutes));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PoolLifetimeMinutes, nameof(PoolLifetimeMinutes));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerThreshold, nameof(CircuitBreakerThreshold));
+        // ITM-838：上界 10000——阈值高于此的熔断器形同虚设，配置意图应为禁用（Threshold=0）。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(CircuitBreakerThreshold, 10000, nameof(CircuitBreakerThreshold));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerResetAfter.Ticks, nameof(CircuitBreakerResetAfter));
         // ITM-749(r21)：ConnectionTimeout 无上限——CreateAsync 用
         // CancellationTokenSource.CancelAfter(TimeSpan)，该 API 的 delay 上限是 uint.MaxValue-1

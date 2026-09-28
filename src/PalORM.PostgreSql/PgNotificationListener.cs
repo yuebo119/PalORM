@@ -401,11 +401,13 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         // B6：缓存调用列表快照——原实现每次通知都调 handlers.GetInvocationList()，
         // 每收到一条 NOTIFY 即一次 Delegate[] 分配（订阅者越多数组越大；10k 通知/秒
         // = 10k 数组/秒纯 GC 垃圾）。自定义 add/remove 在变更时换新数组（Interlocked
-        // 保证原子发布），分发路径直接 foreach 缓存数组：零分配且天然是安全快照。
+        // 保证原子发布——ITM-825 后为单条目 CAS，两值同拍一致），分发路径直接 foreach
+        // 缓存数组：零分配且天然是安全快照。
         // 注意：分发仍在泵任务线程上同步执行（既有契约）——订阅者慢会阻塞后续通知，
         // 那是 A3 的改造面，涉及回调线程语义变更，未在本次落地。
-        Delegate[]? handlers = Volatile.Read(ref _notificationHandlers);
-        if (handlers is null || handlers.Length == 0)
+        // ITM-825：分发读单条目（委托与快照原子一致）
+        Delegate[] handlers = [.. Volatile.Read(ref _notificationState)?.Snapshot ?? []];
+        if (handlers.Length == 0)
             return;
 
         var args = new PgNotificationEventArgs(channel, payload);
@@ -426,8 +428,18 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     /// Interlocked.CompareExchange 换新数组（交换失败重试），分发路径只读。
     /// 支撑字段 <c>_notification</c>（委托本体）与 <c>_notificationHandlers</c>（分发快照）
     /// 成对维护：访问器内只能操作字段，不能对事件自身 +=（会递归）。</summary>
-    private EventHandler<PgNotificationEventArgs>? _notification;
-    private Delegate[]? _notificationHandlers;
+    // ITM-825（r23 实修）：委托与快照合并为单一条目 CAS——原两字段（委托 CAS + 快照
+    // Volatile.Write）的发布非原子：CAS 成功与快照写之间被并发订阅插队时，快照被较旧
+    // 值覆盖（新订阅者收不到通知/已退订者仍被回调，直至下次订阅变更才自愈）。
+    private NotificationSubscriptionState? _notificationState;
+
+    /// <summary>订阅状态不可变条目——单字段 CAS 保证委托与快照原子发布。</summary>
+    private sealed class NotificationSubscriptionState(
+        EventHandler<PgNotificationEventArgs>? handler)
+    {
+        public EventHandler<PgNotificationEventArgs>? Handler { get; } = handler;
+        public Delegate[] Snapshot { get; } = [.. handler?.GetInvocationList() ?? []];
+    }
 
     /// <summary>收到 NOTIFY 时触发。回调在后台监听任务线程上执行——耗时处理请自行转移到其他线程。
     /// 单个订阅者抛出的异常被吞掉,不会阻断其他订阅者,也不会终止监听循环。
@@ -443,30 +455,22 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         {
             while (true)
             {
-                EventHandler<PgNotificationEventArgs>? current = Volatile.Read(ref _notification);
-                EventHandler<PgNotificationEventArgs>? updated = current + value;
-                Delegate[]? snapshot = updated?.GetInvocationList();
+                NotificationSubscriptionState? current = Volatile.Read(ref _notificationState);
+                var updated = new NotificationSubscriptionState(current?.Handler + value);
                 if (Interlocked.CompareExchange(
-                        ref _notification, updated, current) == current)
-                {
-                    Volatile.Write(ref _notificationHandlers, snapshot);
+                        ref _notificationState, updated, current) == current)
                     return;
-                }
             }
         }
         remove
         {
             while (true)
             {
-                EventHandler<PgNotificationEventArgs>? current = Volatile.Read(ref _notification);
-                EventHandler<PgNotificationEventArgs>? updated = current - value;
-                Delegate[]? snapshot = updated?.GetInvocationList();
+                NotificationSubscriptionState? current = Volatile.Read(ref _notificationState);
+                var updated = new NotificationSubscriptionState(current?.Handler - value);
                 if (Interlocked.CompareExchange(
-                        ref _notification, updated, current) == current)
-                {
-                    Volatile.Write(ref _notificationHandlers, snapshot);
+                        ref _notificationState, updated, current) == current)
                     return;
-                }
             }
         }
     }
