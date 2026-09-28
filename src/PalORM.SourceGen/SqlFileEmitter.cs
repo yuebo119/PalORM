@@ -42,7 +42,10 @@ internal static class SqlFileEmitter
         if (ctx.TargetSymbol is not IMethodSymbol method)
             return null;
 
-        if (method.ContainingType is { IsGenericType: true }
+        // ITM-844（r23 实修）：补 TypeKind 检查——partial record/struct 上的 [SqlFile]
+        // 此前会发射 partial class {TypeName} → CS0260/CS8640 类声明冲突，错误落在生成物
+        // 内难归因；跳过后由 PALORM010 家族的定位诊断兜底（与实体侧口径对齐）。
+        if (method.ContainingType is not { TypeKind: TypeKind.Class, IsGenericType: false }
             || method.ContainingType?.ContainingType is not null)
             return null;
 
