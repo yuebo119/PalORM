@@ -541,6 +541,18 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 - **EF Core 10**：LTS（[learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)）。`ExecuteUpdateAsync` 仅支持按 WHERE 单值更新，无法单 SQL 内对每行设置不同值；AOT 仍实验性（[issue #35945](https://github.com/dotnet/efcore/issues/35945)）。
 - **RepoDb**：BulkOperation 仅 SQL Server（[repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert)：*"It is only supporting the SQL Server RDBMS."*），其他方言走 packed statements。
 
+## 🔄 从 5.x 升级到 6.0
+
+四项破坏性变更（详见 [ADR-N](docs/adr/ADR-N-v6.0-破坏性变更汇总.md)）：
+
+| 删除/变更 | 迁移动作 |
+|-----------|---------|
+| `IRowFactory<T>` 接口 | 无——零实现零消费，若外部代码引用了它（不存在官方用法），删除引用即可 |
+| `DataSession.DiffAsync<T>()` | 换用 `ValidateSchemaAsync<T>()`，需要 `[DIFF]` 前缀时自行拼接 |
+| `DbOptions.NamingConvention`（含 `ApplyNaming`） | **删除该设置即可——行为从未生效过**（列名映射在编译期由 `[Table]`/`[Column]` 注解决定）；要改列名用 `[Column("...")]` |
+| `DbOptions.PoolExplicitlyConfigured` | 无——零读方内部标记；`WithPool`/`PALORM_MAX_POOL_SIZE` 行为不变 |
+| `[Column]` 的 `Length/Precision/Scale`：`int?` → `int`（0=未设置） | 无——`[Column(Length = 64)]` 语法在 5.x 从未可编译过（CS0655）；v6.0 起该语法首次真正可用并参与 DDL |
+
 ## 🧰 开发
 
 ### 环境要求
