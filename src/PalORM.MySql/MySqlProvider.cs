@@ -328,6 +328,9 @@ public sealed class MySqlProvider : IDbProvider
             ownsTransaction = true;
         }
         Exception? primaryException = null;
+        // ITM-870（r23）：提交尝试标志——服务端错误的 COMMIT 失败跳过回滚（与 PG COPY 路径
+        // 及 Core MultiValueBulkInsert 同语义，经 BulkOperationFramework 共享单一实现）
+        bool commitAttempted = false;
         try
         {
             long inserted = await MySqlBulkCopyInserter.ExecuteAsync(
@@ -348,8 +351,11 @@ public sealed class MySqlProvider : IDbProvider
             // 无界等待。超时包装为 TimeoutException 并打 InfrastructureTimeout 标记，
             // 与 PG 路径同口径；同时让 TransactionCleanup 判定"服务端状态未知"以尝试回滚。
             if (ownsTransaction)
+            {
+                commitAttempted = true;
                 await CommitWithTimeoutAsync(mySqlTransaction, commandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
+            }
             return inserted;
         }
         catch (Exception ex)
@@ -359,7 +365,11 @@ public sealed class MySqlProvider : IDbProvider
             // 与 PG 路径（PostgreSqlProvider 的 COPY catch）同口径：隐式回滚发生在异常传播路径上
             // 且无超时上界，网络黑洞下把一次快速失败拖成永久卡死；不发起回滚则服务端事务悬置到
             // 连接归还，继续持锁与 undo 日志。显式回滚让"回滚失败"与"未尝试回滚"在诊断上可区分。
-            if (ownsTransaction)
+            // ITM-870（r23）：服务端错误的 COMMIT 失败跳过回滚——服务端已终止事务，
+            // 回滚只会得到 "already completed" 噪音并多一次徒劳往返。
+            if (ownsTransaction
+                && (!commitAttempted
+                    || !BulkOperationFramework.TrySkipRollbackAfterCommitFailure(ex)))
             {
                 await BulkOperationFramework.RollbackPreservingAsync(
                     mySqlTransaction, ex, commandTimeoutSeconds, ct).ConfigureAwait(false);

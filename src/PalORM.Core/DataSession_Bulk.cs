@@ -1051,6 +1051,11 @@ public partial class DataSession<TProvider>
             throw new NotSupportedException(
                 $"Set-based upsert on '{tableName}' has no updatable columns " +
                 "(upsert columns minus primary key is empty); use BulkInsertAsync instead.");
+        // ITM-876（r23 裁决登记）：VALUES() 形态在 MySQL 8.0.20+ 处于弃用路线（推荐 row alias
+        // 新语法），但真库探针（OdkuDeprecationProbeTests，MySQL 8.4.11）实测**零弃用警告**且
+        // 行为正确——分派双形态（row alias 要求 8.0.19+）当前无收益信号，只引入 UpsertSqlShape
+        // 生成/快照/三序一致的双份维护面。维持单形态 + 哨兵测试：未来版本真报弃用错误时
+        // 探针自动转红，届时按 MySQL-7 ResolveMySqlUpdateFormAsync 先例（版本探测 + 每连接缓存）分派。
         string conflictClause = TProvider.Dialect == SqlDialect.MySql
             ? " ON DUPLICATE KEY UPDATE " + string.Join(", ",
                 updateColumns.Select(c => $"{quote(c)} = VALUES({quote(c)})"))

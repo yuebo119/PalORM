@@ -272,6 +272,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM051", "[Column] schema arguments have invalid values",
         "[Column] schema arguments on property '{0}' of type '{1}' are invalid: Length/Precision/Scale must be non-negative (0 = unset), Scale must not be greater than Precision, TypeName must not be whitespace, Length applies to string/char columns only, and Precision/Scale apply to decimal columns only", "PalORM", DiagnosticSeverity.Error, true);
 
+    // PALORM052：索引名长度上限（ITM-874，r23）——派生名 ux_{表}_{列} 与显式 [Index] 名
+    // 超过最严方言上限（PG NAMEDATALEN-1=63，MySQL 64）时迁移期报 1059/名称截断类错误
+    // （SQLite 无实际限制）。编译期 Warning 提示改用短表/列名或显式 [Index] 短名——
+    // 不做自动截断（截断有撞名风险，显式化由用户裁决）。
+    public static readonly DiagnosticDescriptor IndexNameTooLong = new(
+        "PALORM052", "Index name exceeds the identifier length limit",
+        "Index name '{0}' ({1} characters) on type '{2}' exceeds the strictest supported limit of {3} characters (PostgreSQL 63, MySQL 64) and CREATE INDEX fails at migration time on those dialects; use a shorter explicit [Index] name or shorter table/column names", "PalORM", DiagnosticSeverity.Warning, true);
+
+    /// <summary>索引名长度上限——最严方言口径（PG NAMEDATALEN-1）。ITM-874（r23）。</summary>
+    internal const int MaxIndexNameLength = 63;
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, MissingOwnedJsonContext,
@@ -288,7 +299,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression,
          DefaultValueConflicts, InvalidDefaultValueExpression,
          ProjectionTableConflict, ProjectionOwnedJsonUnsupported,
-         InvalidColumnSchemaArgs];
+         InvalidColumnSchemaArgs,
+         IndexNameTooLong];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -1498,6 +1510,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
             string derivedName = $"ux_{tableName}_{columnName}";
+            // ITM-874（r23）：派生名超长——编译期提示（不自动截断，防撞名）
+            if (derivedName.Length > MaxIndexNameLength)
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(IndexNameTooLong,
+                    member.Locations.FirstOrDefault() ?? type.Locations[0],
+                    derivedName, derivedName.Length, type.Name, MaxIndexNameLength));
+            }
             if (!seenNames.Add(derivedName))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration,
@@ -1527,6 +1546,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                     type.Name,
                     "no valid name; declare [Index(\"name\", \"col1\", ...)]"));
                 continue;
+            }
+
+            // ITM-874（r23）：显式名超长——与派生名同型面一次覆盖（E3/E4 教训）
+            if (indexName.Length > MaxIndexNameLength)
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(IndexNameTooLong, location,
+                    indexName, indexName.Length, type.Name, MaxIndexNameLength));
             }
 
             if (!TryGetIndexColumns(indexAttr, out string[] columns))
