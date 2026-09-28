@@ -150,7 +150,7 @@ public sealed class PostgreSqlProvider : IDbProvider
     }
 
     /// <summary>schema 与表名分别引用后以点连接;schema 为空时省略,落到 search_path 解析。
-    /// 覆盖接口默认实现以支持 PostgreSQL 的 schema 语义。</summary>
+    /// 实现 static abstract 成员（IDbProvider 不提供默认实现——CS8926，见接口注释）。ITM-871（r23）：订正 doc 残留（原写"覆盖接口默认实现"）。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)

@@ -59,8 +59,19 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
     public event EventHandler<PgNotificationErrorEventArgs>? OnError;
 
     /// <summary>可选兜底日志。未订阅 <see cref="OnError"/> 时，后台监听终止原因
-    /// 经此记录，避免监听器静默死亡后 NOTIFY 丢失无痕。</summary>
-    public Microsoft.Extensions.Logging.ILogger? Logger { get; set; }
+    /// 经此记录，避免监听器静默死亡后 NOTIFY 丢失无痕。
+    /// ITM-880（r23）：Volatile 发布——后台线程读、外部线程写，与同文件 <see cref="_lastError"/>
+    /// 的 ITM-761 论证同口径（自动属性无法表达屏障语义；读到旧值有 NullLogger 兜底，
+    /// 收紧为可见性确定性）。</summary>
+    public Microsoft.Extensions.Logging.ILogger? Logger
+    {
+        get => Volatile.Read(ref _logger);
+        set => Volatile.Write(ref _logger, value);
+    }
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("IDE", "IDE0032:Use auto property",
+        Justification = "Volatile 发布需要显式支撑字段——外部线程写、后台线程读，"
+            + "自动属性无法表达 Volatile.Read/Write 语义（ITM-761/880）。")]
+    private Microsoft.Extensions.Logging.ILogger? _logger;
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("IDE", "IDE0032:Use auto property",
         Justification = "Volatile 发布需要显式支撑字段——后台线程写、外部线程读，"

@@ -1581,7 +1581,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     // 注册的局部缓存（由 Roslyn 管理生命周期，符合 RS1008：不存储编译期符号到分析器字段）。
     private static HashSet<string> BuildAssemblyTableNames(IAssemblySymbol assembly)
     {
-        var names = new HashSet<string>();
+        // ITM-872（r23）：表名集合按 ITM-510"最严方言口径"用 OrdinalIgnoreCase——MySQL 表名
+        // 大小写不敏感（同文件 CheckColumnUniqueness/ValidateIndexDeclarations 同口径），
+        // Ordinal 集合会让 [Table("Users")] 被 [ForeignKey("users",…)] 引用时 PALORM003 误报。
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var module in assembly.Modules)
         {
             foreach (var type in GetAllTypes(module.GlobalNamespace))
