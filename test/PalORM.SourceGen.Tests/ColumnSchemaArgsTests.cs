@@ -105,7 +105,27 @@ public sealed class ColumnSchemaArgsTests
     }
 
     [Test]
-    public async Task PALORM017_StoreAs_StillReports()
+    public async Task PALORM051_LengthOnNonTextColumn_Reports()
+    {
+        // 适用面：Length 仅对 string/char 生效——byte[]/数值/时间列标注静默无效，051 一并拦截
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("data", Length = 512)]
+                public byte[] Data { get; set; } = [];
+                [Column("count", Precision = 10)]
+                public int Count { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Count(d => d.Id == "PALORM051")).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task PALORM051_StoreAs_StillReports()
     {
         // ITM-553：StoreAs 涉及读写双路径，未实现——PALORM017 继续告警
         const string source = """

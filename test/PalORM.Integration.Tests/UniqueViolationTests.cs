@@ -36,30 +36,29 @@ public sealed class UniqueViolationTests
     [Test]
     public async Task Pg_InsertAsync_DuplicateUniqueKey_ThrowsUnifiedException()
     {
-        // 外库持久残留清理（同 EDB 用例模式）——首跑后 SKU-1 留存，二次跑前置插入会撞行
+        // 残留数据清理用 DELETE 不用 DROP——外库共享库下 DROP 表会与并行用例的全表迁移交错
+        //（实测：DROP 后并行者的 ApplyIndexDdlAsync 给已删表建索引报 doesn't exist）
         await using var db = await TestDb.PostgreSqlAsync();
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS unique_probe");
         await db.MigrateAsync();
+        await db.ExecuteAsync($"DELETE FROM unique_probe");
         await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-1" });
 
         UniqueConstraintViolationException? thrown = await Assert.ThrowsAsync<UniqueConstraintViolationException>(
             async () => await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-1" }));
         await Assert.That(thrown!.InnerException).IsTypeOf<Npgsql.PostgresException>();
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS unique_probe");
     }
 
     [Test]
     public async Task MySql_InsertAsync_DuplicateUniqueKey_ThrowsUnifiedException()
     {
         await using var db = await TestDb.MySqlAsync();
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS unique_probe");
         await db.MigrateAsync();
+        await db.ExecuteAsync($"DELETE FROM unique_probe");
         await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-1" });
 
         UniqueConstraintViolationException? thrown = await Assert.ThrowsAsync<UniqueConstraintViolationException>(
             async () => await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-1" }));
         await Assert.That(thrown!.InnerException).IsTypeOf<MySqlConnector.MySqlException>();
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS unique_probe");
     }
 }
 
