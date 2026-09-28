@@ -318,10 +318,8 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | `MinPoolSize` | `int` | 0 | v5.6.0。0=不覆盖驱动默认；正数透传，空闲修剪后池内至少保留这么多暖连接，消除突发查询重建连接的延迟尖峰。SQLite 忽略 |
 | `PoolIdleTimeoutSeconds` | `int` | 0 | v5.6.0 起默认 0（更早为 30）。0=保留驱动默认（Npgsql 300s / MySqlConnector 180s）；正数才覆盖，代价是空闲超时后首个查询需重建物理连接（实测跨网段 `SELECT 1` 池内 0.3ms vs 新建 13.5ms） |
 | `PoolLifetimeMinutes` | `int` | 60 | 连接最大生命周期，到期强制重建 |
-| `PoolExplicitlyConfigured` | `bool` | false | `WithPool()` 设置后为 true（内部标记） |
 | `CircuitBreakerThreshold` | `int` | 5 | 连续失败次数阈值，0=禁用熔断 |
 | `CircuitBreakerResetAfter` | `TimeSpan` | 30s | 熔断后进入半开的等待时间 |
-| `NamingConvention` | `enum` | None | None / SnakeCase / LowerCase。仅影响自定义 SQL 标识符归一化 |
 | `Interceptors` | `IReadOnlyList<IQueryInterceptor>?` | null | 按 `Priority` 升序执行（`AuditInterceptor` 默认 200） |
 | `ValidateQueryColumnOrder` | `bool` | true | `QueryAsync` 首行列序与实体声明序比对，不匹配抛异常；用列别名/表达式列时需关闭 |
 | `QueryCache` | `IQueryCache?` | 1024 条 | 默认进程级共享；注入独立实例实现会话/租户级隔离（需线程安全） |

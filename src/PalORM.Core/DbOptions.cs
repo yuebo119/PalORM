@@ -89,13 +89,6 @@ public sealed record DbOptions
     /// <summary>连接最大生命周期（默认 60 分钟）。</summary>
     public int PoolLifetimeMinutes { get; init; } = 60;
 
-    /// <summary>池配置是否被显式设置（<see cref="WithPool"/>、<c>PALORM_MAX_POOL_SIZE</c> 置位）。
-    /// 标记「这三个池参数由调用方显式给出」，不与默认值比对以避免默认值漂移时误判（ITM-315）。
-    /// <para><b>v5.6 起无消费者</b>：SQLite Provider 曾据此抛 <c>NotSupportedException</c>，
-    /// 但那使「<see cref="Production"/> 预设 + SQLite」必然在构造期失败（Production 内部调用
-    /// WithPool），已改为忽略池参数。字段保留为对外可读的配置事实。</para></summary>
-    public bool PoolExplicitlyConfigured { get; init; }
-
     /// <summary>断路器：连续失败次数阈值（0 = 禁用）。</summary>
     public int CircuitBreakerThreshold { get; init; } = 5;
 
@@ -111,30 +104,6 @@ public sealed record DbOptions
     /// 独立连接串或保持会话级。</para>
     /// <para>RES-002（2026-09-23）。</para></summary>
     public CircuitBreakerScope CircuitBreakerScope { get; init; } = CircuitBreakerScope.Session;
-
-    /// <summary>命名策略（默认保持原样）。
-    /// <para><b>作用域限制（ITM-516）</b>：列名/表名映射在**编译期**由源生成器按 [Table]/[Column]
-    /// 注解确定，本运行时选项不参与该映射——设置本项不会改变已生成的列名。仅供调用方在
-    /// 自定义 SQL 中手动调用 <see cref="ApplyNaming"/> 归一标识符。要改列名请用 [Column("...")]。</para></summary>
-    public NamingConvention NamingConvention { get; init; } = NamingConvention.None;
-    /// <summary>应用命名策略（None=原样, SnakeCase=下划线, LowerCase=全小写）。</summary>
-    public string ApplyNaming(string name) => NamingConvention switch
-    {
-        NamingConvention.SnakeCase => ToSnakeCase(name),
-        NamingConvention.LowerCase => name.ToLowerInvariant(),
-        _ => name
-    };
-    private static string ToSnakeCase(string name)
-    {
-        var sb = new System.Text.StringBuilder();
-        for (int i = 0; i < name.Length; i++)
-        {
-            if (i > 0 && char.IsUpper(name[i]))
-                sb.Append('_');
-            sb.Append(char.ToLowerInvariant(name[i]));
-        }
-        return sb.ToString();
-    }
 
     /// <summary>查询拦截器列表。</summary>
     public IReadOnlyList<IQueryInterceptor>? Interceptors { get; init; }
@@ -209,8 +178,7 @@ public sealed record DbOptions
             MaxPoolSize = maxSize,
             MinPoolSize = minSize,
             PoolIdleTimeoutSeconds = idleTimeoutSeconds,
-            PoolLifetimeMinutes = lifetimeMinutes,
-            PoolExplicitlyConfigured = true
+            PoolLifetimeMinutes = lifetimeMinutes
         };
     }
 
@@ -285,7 +253,7 @@ public sealed record DbOptions
             options = options with { CircuitBreakerThreshold = cbThreshold };
 
         if (int.TryParse(Environment.GetEnvironmentVariable("PALORM_MAX_POOL_SIZE"), out int poolSize))
-            options = options with { MaxPoolSize = poolSize, PoolExplicitlyConfigured = true };
+            options = options with { MaxPoolSize = poolSize };
 
         // ITM-636：环境变量是用户输入面——组装完立即 Validate（非法值在此报，
         // 而非延迟到 CreateAsync）。预设方法为编译期字面量，正确性由代码审查保证。
@@ -325,8 +293,7 @@ public sealed record DbOptions
            $"ReadSessionSetupSql = {(ReadSessionSetupSql is null ? "null" : "***MASKED***")}, " +
            $"ConnectionTimeout = {ConnectionTimeout}, CommandTimeout = {CommandTimeout}, " +
            $"MaxRetries = {MaxRetries}, MaxPoolSize = {MaxPoolSize}, MinPoolSize = {MinPoolSize}, " +
-           $"CircuitBreakerThreshold = {CircuitBreakerThreshold}, " +
-           $"NamingConvention = {NamingConvention} }}";
+           $"CircuitBreakerThreshold = {CircuitBreakerThreshold} }}";
 }
 
 /// <summary>熔断器作用域（RES-002，2026-09-23）。</summary>
@@ -339,17 +306,4 @@ public enum CircuitBreakerScope
     /// <summary>按 (Provider, 连接串, 阈值, 冷却) 进程级共享。适用于短生命周期会话
     /// （每请求一个）——否则熔断器不会触发。</summary>
     Process
-}
-
-/// <summary>命名策略。</summary>
-public enum NamingConvention
-{
-    /// <summary>保持原样，不做转换。</summary>
-    None,
-
-    /// <summary>转为下划线命名（UserName → user_name）。</summary>
-    SnakeCase,
-
-    /// <summary>转为全小写（UserName → username）。</summary>
-    LowerCase
 }

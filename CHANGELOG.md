@@ -8,10 +8,8 @@
 
 ### 💔 破坏性变更（预定）
 
-- 删除 `IRowFactory<T>`（ADR-H，v5.2 起 PALORM900 预告已满一纪元）
-- 删除 `DataSession.DiffAsync<T>`（v4.0 起 PALORM901 预告）
-- 删除 `DbOptions.NamingConvention`（未预警破坏——设置后从未生效，删除该设置即可；详见 README 迁移指南）
-- 删除 `DbOptions.PoolExplicitlyConfigured`（零读方，公共面移除）
+- **已实施**：删除 `IRowFactory<T>`（ADR-H，PALORM900 预告满一纪元）、`DiffAsync<T>`（PALORM901 预告）、`DbOptions.NamingConvention`（未预警破坏——设置后从未生效，删除该设置即可；详见 README 迁移指南）、`DbOptions.PoolExplicitlyConfigured`（零读方，公共面移除）
+- **已实施**：`ColumnAttribute.Length/Precision/Scale` 从 `int?` 改为 `int`（0 = 未设置）——`int?` 不是合法的特性命名参数类型（CS0655），`[Column(Length = …)]` 语法此前从未可编译，读侧反射访问类型随本变更改
 
 ### 计划项（实施中逐项填充）
 

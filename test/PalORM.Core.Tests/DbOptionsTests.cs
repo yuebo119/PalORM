@@ -12,7 +12,6 @@ public sealed class DbOptionsTests
         await Assert.That(opts.MaxPoolSize).IsEqualTo(100);
         await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(5);
         await Assert.That(opts.CircuitBreakerResetAfter).IsEqualTo(TimeSpan.FromSeconds(30));
-        await Assert.That(opts.NamingConvention).IsEqualTo(NamingConvention.None);
     }
 
     [Test]

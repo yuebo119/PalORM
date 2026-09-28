@@ -48,15 +48,6 @@ public sealed class ProviderTests
     }
 
     [Test]
-    public async Task NamingConvention_SnakeCase_Works()
-    {
-        var opts = new DbOptions { ConnectionString = "x", NamingConvention = NamingConvention.SnakeCase };
-        await Assert.That(opts.ApplyNaming("OrderId")).IsEqualTo("order_id");
-        await Assert.That(opts.ApplyNaming("CreatedAt")).IsEqualTo("created_at");
-        await Assert.That(opts.ApplyNaming("Id")).IsEqualTo("id");
-    }
-
-    [Test]
     public async Task IValueConverter_Interface_Exists()
     {
         // 验证 IValueConverter<T,U> 接口已定义并可被实现
