@@ -125,9 +125,10 @@ public sealed class ColumnSchemaArgsTests
     }
 
     [Test]
-    public async Task PALORM051_StoreAs_StillReports()
+    public async Task StoreAs_OnEnum_NoPalorm017_Or_053()
     {
-        // ITM-553：StoreAs 涉及读写双路径，未实现——PALORM017 继续告警
+        // ITM-553（v6.1）：StoreAs 参与读写双路径——PALORM017 停报（旧断言"仍告警"随之作废，
+        // 基线提升理由=特性实施），枚举属性零诊断
         const string source = """
             using PalORM;
             public enum Kind { A, B }
@@ -140,6 +141,86 @@ public sealed class ColumnSchemaArgsTests
             }
             """;
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
-        await Assert.That(diagnostics.Any(d => d.Id == "PALORM017")).IsTrue();
+        await Assert.That(diagnostics.Any(static d => d.Id is "PALORM017" or "PALORM053")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM053_StoreAsOnNonEnum_Reports()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("name", StoreAs = StoreAs.AsString)]
+                public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM053")).IsTrue();
+        await Assert.That(diagnostics.Single(d => d.Id == "PALORM053").Severity)
+            .IsEqualTo(DiagnosticSeverity.Error);
+    }
+
+    [Test]
+    public async Task PALORM053_StoreAsWithConverter_Reports()
+    {
+        const string source = """
+            using PalORM;
+            public enum Kind { A, B }
+            public sealed class KindConverter : PalORM.IValueConverter<Kind, string>
+            {
+                public string ToProvider(Kind value) => value.ToString();
+                public Kind FromProvider(string value) => Kind.A;
+            }
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("kind", StoreAs = StoreAs.AsInt32)]
+                [Converter(typeof(KindConverter))]
+                public Kind Kind { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM053")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM053_AsInt32OnWideEnum_Reports()
+    {
+        // 底层 long 的枚举 + AsInt32 = 值截断 → Error
+        const string source = """
+            using PalORM;
+            public enum WideKind : long { A = 1, B = 1L << 40 }
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("kind", StoreAs = StoreAs.AsInt32)]
+                public WideKind Kind { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM053")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM053_AsInt64OnWideEnum_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            public enum WideKind : long { A = 1, B = 1L << 40 }
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("kind", StoreAs = StoreAs.AsInt64)]
+                public WideKind Kind { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(static d => d.Id is "PALORM053" or "PALORM016")).IsFalse();
     }
 }

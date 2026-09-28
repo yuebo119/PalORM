@@ -548,6 +548,26 @@ internal static class CommandFactoryEmitter
 
     private static string GetParameterValueExpression(ColumnModel col)
     {
+        // ITM-553（v6.1）：枚举列写路径——按存储策略转 provider 值（int/long 显式强转或
+        // 成员名字符串）。可空枚举（E?）先经 (E) 显式转换再转数值（空值已由外层守卫拦截）。
+        if (col.EnumStorage != EnumStorageKind.None)
+        {
+            string prop = $"entity.{col.EscapedPropertyName}";
+            string enumValue = col.EnumStorage switch
+            {
+                EnumStorageKind.AsInt32 => col.IsNullable
+                    ? $"(int)({col.EnumClrTypeName}){prop}" : $"(int){prop}",
+                EnumStorageKind.AsInt64 => col.IsNullable
+                    ? $"(long)({col.EnumClrTypeName}){prop}" : $"(long){prop}",
+                // Nullable<T>.ToString() 在引用程序集标注 string?（HasValue=false 返 ""）——
+                // (object) 强转下 CS8600；可空先显式转 E（null 已由外层守卫拦截）再 ToString。
+                _ => col.IsNullable
+                    ? $"(({col.EnumClrTypeName}){prop}).ToString()" : $"{prop}.ToString()",
+            };
+            return col.IsNullable
+                ? $"{prop} is null ? global::System.DBNull.Value : (object){enumValue}"
+                : $"(object){enumValue}";
+        }
         if (IsObjectOwnedJson(col))
             return col.IsNullable
                 ? $"entity.{col.EscapedPropertyName} is null ? global::System.DBNull.Value : (object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})"

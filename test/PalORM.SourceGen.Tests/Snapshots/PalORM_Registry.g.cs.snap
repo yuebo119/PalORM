@@ -14,7 +14,7 @@ internal static class PalORM_RegistryInitializer
         Register(draft);
     }
 
-    /// <summary>注册 4 个实体（估算 IL ≈6180 B）——分块边界即单方法 IL 的上界。</summary>
+    /// <summary>注册 5 个实体（估算 IL ≈7380 B）——分块边界即单方法 IL 的上界。</summary>
     private static void AddChunk0(RegistryDraft draft)
     {
         draft.RowFactories[typeof(global::AllTypesEntity)] = RowFactory_global__AllTypesEntity_7f6c8145.Read;
@@ -250,6 +250,75 @@ internal static class PalORM_RegistryInitializer
                 Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesSqlite,
                 Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesPostgreSql,
                 Migration_global__ReservedWordEntity_c143a9c9.CreateIndexesMySql);
+
+        draft.RowFactories[typeof(global::EnumStorageEntity)] = RowFactory_global__EnumStorageEntity_425d6d2b.Read;
+        draft.TableNames[typeof(global::EnumStorageEntity)] = "enum_storage";
+        draft.CommandSqlsByDialect[typeof(global::EnumStorageEntity)] = new global::PalORM.CommandSqlByDialect(
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"enum_storage\" (\"status\", \"level\", \"wide_flag\", \"fallback_status\") VALUES (@p0, @p1, @p2, @p3)",
+                "UPDATE \"enum_storage\" SET \"status\" = @p0, \"level\" = @p1, \"wide_flag\" = @p2, \"fallback_status\" = @p3 WHERE \"Id\" = @p4",
+                "DELETE FROM \"enum_storage\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"enum_storage\" (\"status\", \"level\", \"wide_flag\", \"fallback_status\") VALUES (@p0, @p1, @p2, @p3) RETURNING \"Id\"",
+                "INSERT INTO \"enum_storage\" (\"Id\", \"status\", \"level\", \"wide_flag\", \"fallback_status\") VALUES (@p0, @p1, @p2, @p3, @p4) ON CONFLICT (\"Id\") DO UPDATE SET \"status\" = excluded.\"status\", \"level\" = excluded.\"level\", \"wide_flag\" = excluded.\"wide_flag\", \"fallback_status\" = excluded.\"fallback_status\" RETURNING \"Id\", \"status\", \"level\", \"wide_flag\", \"fallback_status\"",
+                "",
+                ""),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"enum_storage\" (\"status\", \"level\", \"wide_flag\", \"fallback_status\") VALUES (@p0, @p1, @p2, @p3)",
+                "UPDATE \"enum_storage\" SET \"status\" = @p0, \"level\" = @p1, \"wide_flag\" = @p2, \"fallback_status\" = @p3 WHERE \"Id\" = @p4",
+                "DELETE FROM \"enum_storage\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"enum_storage\" (\"status\", \"level\", \"wide_flag\", \"fallback_status\") VALUES (@p0, @p1, @p2, @p3) RETURNING \"Id\"",
+                "INSERT INTO \"enum_storage\" (\"Id\", \"status\", \"level\", \"wide_flag\", \"fallback_status\") VALUES (@p0, @p1, @p2, @p3, @p4) ON CONFLICT (\"Id\") DO UPDATE SET \"status\" = excluded.\"status\", \"level\" = excluded.\"level\", \"wide_flag\" = excluded.\"wide_flag\", \"fallback_status\" = excluded.\"fallback_status\" RETURNING \"Id\", \"status\", \"level\", \"wide_flag\", \"fallback_status\"",
+                "",
+                ""),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO `enum_storage` (`status`, `level`, `wide_flag`, `fallback_status`) VALUES (@p0, @p1, @p2, @p3)",
+                "UPDATE `enum_storage` SET `status` = @p0, `level` = @p1, `wide_flag` = @p2, `fallback_status` = @p3 WHERE `Id` = @p4",
+                "DELETE FROM `enum_storage` WHERE `Id` = @p0",
+                "",
+                "",
+                "INSERT INTO `enum_storage` (`Id`, `status`, `level`, `wide_flag`, `fallback_status`) VALUES (@p0, @p1, @p2, @p3, @p4) ON DUPLICATE KEY UPDATE `status` = VALUES(`status`), `level` = VALUES(`level`), `wide_flag` = VALUES(`wide_flag`), `fallback_status` = VALUES(`fallback_status`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
+                "INSERT INTO `enum_storage` (`status`, `level`, `wide_flag`, `fallback_status`) VALUES (@p0, @p1, @p2, @p3); SELECT LAST_INSERT_ID()")
+        );
+        draft.BindInsert[typeof(global::EnumStorageEntity)] = (cmd, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindInsertToBatch(cmd, (global::EnumStorageEntity)obj, off);
+        draft.BindUpdate[typeof(global::EnumStorageEntity)] = (cmd, obj) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpdate(cmd, (global::EnumStorageEntity)obj);
+        draft.BindDelete[typeof(global::EnumStorageEntity)] = (cmd, key) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindDelete(cmd, key);
+        draft.CrudMetadatas[typeof(global::EnumStorageEntity)] = new global::PalORM.CrudMetadata(
+                new global::PalORM.CrudBindings(
+                    (cmd, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindInsertToBatch(cmd, (global::EnumStorageEntity)obj, off),
+                    (parameters, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindInsertValues(parameters, (global::EnumStorageEntity)obj, off),
+                    (cmd, obj) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpsert(cmd, (global::EnumStorageEntity)obj),
+                    (cmd, obj) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpdate(cmd, (global::EnumStorageEntity)obj),
+                    RowFactory_global__EnumStorageEntity_425d6d2b.Read,
+                    (parameters, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpdateValues(parameters, (global::EnumStorageEntity)obj, off),
+                    insertReturningKeyOnly: true,
+                    insertNoReturning: false,
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpsertValues(parameters, (global::EnumStorageEntity)obj, off)),
+                new global::PalORM.CrudColumns(
+                    new[] { "status", "level", "wide_flag", "fallback_status" },
+                    new[] { "Id", "status", "level", "wide_flag", "fallback_status" },
+                    new[] { "status", "level", "wide_flag", "fallback_status" }),
+                null,
+                obj => CommandFactory_global__EnumStorageEntity_425d6d2b.HasDefaultKey((global::EnumStorageEntity)obj));
+        draft.EntityFeatures[typeof(global::EnumStorageEntity)] = global::PalORM.EntityFeatures.None;
+        draft.PkColumns[typeof(global::EnumStorageEntity)] = "Id";
+        draft.ColumnNames[typeof(global::EnumStorageEntity)] = new[] { "Id", "status", "level", "wide_flag", "fallback_status" };
+        draft.PropertyToColumn[typeof(global::EnumStorageEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+        {
+            ["Id"] = "Id",
+            ["Status"] = "status",
+            ["Level"] = "level",
+            ["WideFlag"] = "wide_flag",
+            ["FallbackStatus"] = "fallback_status",
+        };
+        draft.CreateTableSqlByDialect[typeof(global::EnumStorageEntity)] = new global::PalORM.CreateTableSqlSet(
+                Migration_global__EnumStorageEntity_425d6d2b.CreateTableSqlite,
+                Migration_global__EnumStorageEntity_425d6d2b.CreateTablePostgreSql,
+                Migration_global__EnumStorageEntity_425d6d2b.CreateTableMySql);
+        draft.CreateIndexSqlByDialect[typeof(global::EnumStorageEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__EnumStorageEntity_425d6d2b.CreateIndexesSqlite,
+                Migration_global__EnumStorageEntity_425d6d2b.CreateIndexesPostgreSql,
+                Migration_global__EnumStorageEntity_425d6d2b.CreateIndexesMySql);
+        draft.SetIdDelegates[typeof(global::EnumStorageEntity)] = (entity, id) => CommandFactory_global__EnumStorageEntity_425d6d2b.SetId((global::EnumStorageEntity)entity, id);
 
         draft.RowFactories[typeof(global::InheritedEntity)] = RowFactory_global__InheritedEntity_3f5411cb.Read;
         draft.TableNames[typeof(global::InheritedEntity)] = "inherited";

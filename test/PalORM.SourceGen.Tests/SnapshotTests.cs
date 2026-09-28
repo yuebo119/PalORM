@@ -113,6 +113,20 @@ internal sealed class SnapshotTests
             [Column("select")] public string Value { get; set; } = "";
         }
 
+        // 实体 5：枚举存储三形态（ITM-553，v6.1）——缺省字符串 / AsInt32 / AsInt64 / 可空枚举
+        public enum SnapshotOrderStatus { Pending, Paid, Cancelled }
+        public enum SnapshotLevel { Free = 0, Pro = 1, Enterprise = 2 }
+        public enum SnapshotWideFlag : long { Off = 0, On = 1L << 33 }
+        [Table("enum_storage")]
+        public sealed partial class EnumStorageEntity
+        {
+            [Key] public long Id { get; set; }
+            [Column("status")] public SnapshotOrderStatus Status { get; set; }
+            [Column("level", StoreAs = StoreAs.AsInt32)] public SnapshotLevel Level { get; set; }
+            [Column("wide_flag", StoreAs = StoreAs.AsInt64)] public SnapshotWideFlag WideFlag { get; set; }
+            [Column("fallback_status", StoreAs = StoreAs.AsString)] public SnapshotOrderStatus? FallbackStatus { get; set; }
+        }
+
         // 实体 4：继承基类映射属性（ITM-502 防线——基类列不得静默丢失）
         public abstract class AuditBase
         {
