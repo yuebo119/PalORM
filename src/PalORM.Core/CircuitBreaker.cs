@@ -128,11 +128,22 @@ internal sealed class CircuitBreaker
         }
     }
 
-    /// <summary>记录最终失败——探针失败重开熔断；非探针失败从 Closed 态首次跨阈值时开启。</summary>
-    internal void RecordFinalFailure(bool isHalfOpenProbe, bool countsTowardCircuit)
+    /// <summary>记录最终失败——探针失败重开熔断；非探针失败从 Closed 态首次跨阈值时开启。
+    /// ITM-812（r23 实修）：补 generation 核对——与 RecordSuccess/ReleaseCancelledProbe
+    /// 对称（此前是三个终结记录口中唯一不带核对的，陈旧探针终态可改写新周期状态）。</summary>
+    internal void RecordFinalFailure(bool isHalfOpenProbe, bool countsTowardCircuit, long generation)
     {
         lock (_lock)
         {
+            if (generation != _generation)
+            {
+                // 陈旧探针：释放自己占用的槽位后不再触碰新周期状态（gen 已推进 = 闸已重开，
+                // 本探针属于上一周期）
+                if (isHalfOpenProbe)
+                    ReleaseProbeSlot();
+                return;
+            }
+
             if (isHalfOpenProbe)
                 ReleaseProbeSlot();
 
@@ -144,9 +155,14 @@ internal sealed class CircuitBreaker
                 // （熔断防瞬时故障风暴），显式复位为 Closed：状态诚实，瞬时故障再现时会重新计数开启。
                 if (isHalfOpenProbe)
                 {
+                    // ITM-812（r23 实修）：_isOpenFlag（volatile 镜像）与 _openMessage 同步复位——
+                    // 只写 _isOpen 不清镜像使 C1 无锁快路径永久失效 + OpenUntil 诊断值残留
+                    //（与 RecordSuccess 的复位逐位一致，Open 的"集中写两者"承诺兑现）。
                     _isOpen = false;
+                    _isOpenFlag = false;
                     _failureCount = 0;
                     _openUntil = default;
+                    _openMessage = null;
                 }
                 return;
             }
