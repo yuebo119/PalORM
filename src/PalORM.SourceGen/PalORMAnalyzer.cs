@@ -1424,7 +1424,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// F3 修复：移除 FK 的 PALORM017 无条件报告——[ForeignKey] 在 QueryBuilder.Include 中
     /// 实际有效（JOIN 语义），不构成"静默无效"。PALORM003（引用表存在）+ PALORM004（OnDelete
     /// 缺失）保留——这两条有实际校验价值。
-    /// ITM-612：Interlocked.CompareExchange 避免并发下 BuildAssemblyTableNames 被多线程重复调用。</summary>
+    /// ITM-612：Interlocked.CompareExchange 防重复<b>存储</b>（C# 实参在 CAS 前已求值，
+    /// EnableConcurrentExecution 下各 symbol action 仍各自完成全程序集扫描——ITM-842 订正
+    /// 原注释"避免重复调用"的失实表述；扫描幂等无正确性影响，仅并发下重复计算）。</summary>
     private static void CheckForeignKey(
         SymbolAnalysisContext ctx, IPropertySymbol member, INamedTypeSymbol type,
         Location memberLocation, ref HashSet<string>? assemblyTables)
