@@ -138,8 +138,12 @@ public sealed class BoundedQueryCache : IQueryCache
             {
                 _evictions.Add(1);  // 过期淘汰
             }
-            _cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry));
-            Interlocked.Decrement(ref _approximateCount);
+            // ITM-808（r22 登记，r23 实修）：Decrement 只在 TryRemove 成功时执行——并发双命中
+            // 同一条目时仅一个成功移除，无条件递减会让计数向下漂移且无自愈（唯一复位点是
+            // Clear），累积后 Set 对新键永久拒绝。与同文件 EvictExpired 的按实际移除数
+            // 递减对齐（原注释"漂移只偏保守"的方向判断也随本修复一并失效）。
+            if (_cache.TryRemove(new KeyValuePair<string, CacheEntry>(key, entry)))
+                Interlocked.Decrement(ref _approximateCount);
         }
         _requests.Add(1, MissTag);
         value = default;
@@ -151,8 +155,8 @@ public sealed class BoundedQueryCache : IQueryCache
     {
         // CACHE-001（2026-09-23）：容量判定改用 Interlocked 近似计数——原实现每次 Set 付一次
         // ConcurrentDictionary.Count（全分段锁扫描）加一次 ContainsKey，是写入路径上唯一的全局争用点。
-        // 计数在"新键成功入表"时自增、在任何移除路径上自减，语义为近似值：漂移方向只会偏保守
-        // （漏减 → 提前拒写），不会无界放行。
+        // 计数在"新键成功入表"时自增、在移除成功时自减（ITM-808：各移除点按 TryRemove 成功
+        // 与否递减），语义为近似值且无单向漂移累积。
         // 满员时只拒新键：既有键的更新必须放行（原语义——读路径依赖"后写者胜"，且
         // ContainsKey 是 O(1) 查表，比原实现每次付的 Count 全分段锁扫描便宜得多）。
         if (Volatile.Read(ref _approximateCount) >= _maxEntries && !_cache.ContainsKey(key))

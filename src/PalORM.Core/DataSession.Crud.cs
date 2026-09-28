@@ -55,42 +55,53 @@ public sealed partial class DataSession<TProvider>
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
             _readConnReturner));
 
+        // ITM-866（r23）：租户值与过滤开关单次快照贯穿——原实现三次读 live 字段
+        //（过滤值捕获 63 行 / 作用域求值 73 行 / TenantScopeCached 91 行），并发
+        // WithTenant 在读间穿插时过滤参数与缓存命名空间可能跨租户（QueryCache 开启时
+        // T1 的过滤结果缓存进 __t:T2 命名空间）。引用读原子，快照后过滤与作用域
+        // 由同一定型值构成，builder 局部永不漂移。
+        object? tenantId = _tenantId;
+        bool ignoreFilters = _ignoreFilters;
+
         // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）
         EntityFeatures features = GetEntityFeatures<T>();
-        if (!_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)
+        if (!ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)
             builder.AddDefaultFilter(SoftDeleteFilterCondition);
-        if (_tenantId is not null && !_ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
+        if (tenantId is not null && !ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
         {
             // 列名 quote 与软删过滤对齐（quote 后不含 {}，可安全进入复合格式串文本段）
             builder.AddDefaultFilter(System.Runtime.CompilerServices.FormattableStringFactory.Create(
-                TenantFilterFormat, _tenantId));
+                TenantFilterFormat, tenantId));
         }
         // ADR-L：缓存租户作用域与过滤注入同点冻结——查询的租户可见性在此刻定型
         //（DefaultFilter 已上链），key 作用域同拍快照则二者永不漂移。租户过滤 → 每租户
         // 命名空间；多租户会话的 IgnoreFilters / 非 TenantAware 实体（全量数据）→ __all__
         // 独立命名空间（全量与过滤数据互不可见）；单租户（_tenantId null）→ key 原样。
-        if (_tenantId is not null)
+        if (tenantId is not null)
         {
             // T6：租户过滤作用域走每会话单条目缓存（零拼接）；"__all__" 是 const 无需缓存。
             // ADR-L 定型点不变——仍与过滤注入同点求值，缓存只消拼接不改变定型时点。
-            builder._cacheTenantScope = !_ignoreFilters && (features & EntityFeatures.TenantAware) != 0
-                ? TenantScopeCached(typeof(T))
+            builder._cacheTenantScope = !ignoreFilters && (features & EntityFeatures.TenantAware) != 0
+                ? TenantScopeCached(typeof(T), tenantId)
                 : "__all__";
         }
         return builder;
     }
 
     /// <summary>T6：取（或建）当前实体的租户过滤作用域——同类型命中缓存零分配。
-    /// <c>_tenantId</c> 非 null 由调用方（From&lt;T&gt; 的 if 门）保证。</summary>
-    private string TenantScopeCached(Type entityType)
+    /// <paramref name="tenantId"/> 是 From&lt;T&gt; 的单次快照（ITM-866），与过滤参数同源。</summary>
+    private string TenantScopeCached(Type entityType, object tenantId)
     {
         TenantScopeEntry? entry = _tenantScopeEntry;
-        if (entry is not null && entry.Type == entityType)
+        // ITM-866：命中判定含 TenantId 值相等——并发 WithTenant 清缓存与本方法写回交错时
+        // 条目可能短暂 stale（Type 相同但租户已变），值校验避免 stale 命中。
+        if (entry is not null && entry.Type == entityType
+            && string.Equals(entry.TenantId, tenantId as string ?? tenantId.ToString(), StringComparison.Ordinal))
             return entry.Scope;
-        string scope = $"__t:{_tenantId}";
-        _tenantScopeEntry = new TenantScopeEntry(entityType, scope);
-        return scope;
+        var created = new TenantScopeEntry(entityType, tenantId.ToString()!);
+        _tenantScopeEntry = created;
+        return created.Scope;
     }
 
     // ─── CRUD ────────────────────────────────────────────
@@ -212,7 +223,17 @@ public sealed partial class DataSession<TProvider>
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindInsert(cmd, entity, 0);
+        try
+        {
+            metadata.BindInsert(cmd, entity, 0);
+        }
+        catch
+        {
+            // ITM-867（r23）：晋升路径绑定器抛异常时新建命令未注册为会话所有，
+            // 释放后再抛——原生句柄不靠终结器延迟回收。
+            cmd.Dispose();
+            throw;
+        }
         _reusableInsert?.Command.Dispose();
         _reusableInsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
         return cmd;
@@ -245,7 +266,16 @@ public sealed partial class DataSession<TProvider>
 
         DbCommand cmd = CreateCommand();
         cmd.CommandText = updateSql;
-        metadata.BindUpdate(cmd, entity);
+        try
+        {
+            metadata.BindUpdate(cmd, entity);
+        }
+        catch
+        {
+            // ITM-867（r23）：同 TryAcquireInsertCommand——绑定器抛异常时释放新建命令
+            cmd.Dispose();
+            throw;
+        }
         _reusableUpdate?.Command.Dispose();
         _reusableUpdate = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
         return cmd;
@@ -288,8 +318,18 @@ public sealed partial class DataSession<TProvider>
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindGeneratedKeyParameter<T>(cmd, key);
-        BindDefaultFilterParameters<T>(cmd);
+        try
+        {
+            BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters<T>(cmd);
+        }
+        catch
+        {
+            // ITM-867（r23）：同 TryAcquireInsertCommand——BindGeneratedKeyParameter 的
+            // Convert.ChangeType 可抛（ITM-743 登记形态），释放新建命令后再抛
+            cmd.Dispose();
+            throw;
+        }
         _reusableGetByKey?.Command.Dispose();
         _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
         return cmd;

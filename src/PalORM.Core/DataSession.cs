@@ -430,10 +430,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 两者是判别式（_ignoreFilters / _tenantId）的唯一变更点，且都受操作门禁保护（ITM-568）。</para></summary>
     private TenantScopeEntry? _tenantScopeEntry;
 
-    private sealed class TenantScopeEntry(Type type, string scope)
+    private sealed class TenantScopeEntry(Type type, string tenantId)
     {
         public Type Type { get; } = type;
-        public string Scope { get; } = scope;
+        /// <summary>ITM-866（r23）：判别式含租户值——并发 WithTenant 清缓存与 From&lt;T&gt;
+        /// 写回交错时条目可能短暂 stale（Type 相同但租户已变），按 TenantId 值相等判定
+        /// 避免 stale 命中（命中路径零拼接零分配的 T6 收益保留）。</summary>
+        public string TenantId { get; } = tenantId;
+        public string Scope { get; } = $"__t:{tenantId}";
     }
     internal object? _tenantId;
 

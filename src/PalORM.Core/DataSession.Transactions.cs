@@ -133,6 +133,11 @@ public sealed partial class DataSession<TProvider>
         // T1（v5.6.0）：置于 CommitAsync 紧前——异常到达 catch 且此标志为 true 即"提交已尝试
         // 且失败"，与 action 失败可区分（提交成功不会进 catch）
         bool commitAttempted = false;
+        // ITM-810①（r23）：提交成功标志——回放动作抛异常进 catch 时，回滚裁决对象是回放
+        // 异常而非提交异常（TrySkip 对非服务端错误返回 false → 必走回滚），对已提交事务
+        // 发起回滚只会得到 "transaction already completed" 噪音，且调用方误判执行失败
+        // （数据已提交）后上层重试即重复写。
+        bool commitSucceeded = false;
         try
         {
             owner = _operationState.EnterTransactionFlow();
@@ -151,6 +156,7 @@ public sealed partial class DataSession<TProvider>
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
                     transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                commitSucceeded = true;
                 ReplayPostCommitActions();
                 return result;
             }
@@ -161,10 +167,12 @@ public sealed partial class DataSession<TProvider>
                 await _operationState.DisposeTransactionResourcesAsync(exception)
                     .ConfigureAwait(false);
                 // T1（v5.6.0）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
-                // 裁决依据与 SQLite 例外见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
+                // 裁决依据与 SQLite 例外见 TransactionCleanup.TrySkipRollbackAfterCommitFailure；
+                // ITM-810①：commitSucceeded 后的异常只能来自回放，不触发回滚。
                 if (!commitAttempted
-                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
-                        TProvider.Dialect, exception))
+                    || (!commitSucceeded
+                        && !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                            TProvider.Dialect, exception)))
                 {
                     await RollbackTransactionPreservingAsync(transaction, exception)
                         .ConfigureAwait(false);
@@ -333,6 +341,8 @@ public sealed partial class DataSession<TProvider>
         Exception? primaryException = null;
         // T1（v5.6.0）：同 WithTransaction——提交尝试标志区分提交失败与 work 失败
         bool commitAttempted = false;
+        // ITM-810①（r23）：同 WithTransaction——回放异常不触发对已提交事务的回滚
+        bool commitSucceeded = false;
         // TX-004（2026-09-23）：自开事务时持有提交权——生成 ID 等回填延迟到提交成功后回放。
         if (ownsTransaction)
             _operationState.DefersPostCommitActions = true;
@@ -344,6 +354,7 @@ public sealed partial class DataSession<TProvider>
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
                     transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                commitSucceeded = true;
                 ReplayPostCommitActions();
             }
             return result;
@@ -354,8 +365,9 @@ public sealed partial class DataSession<TProvider>
             _operationState.DiscardPostCommitActions();
             if (ownsTransaction
                 && (!commitAttempted
-                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
-                        TProvider.Dialect, exception)))
+                    || (!commitSucceeded
+                        && !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                            TProvider.Dialect, exception))))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
                     transaction, exception, RollbackTimeoutSeconds, ct).ConfigureAwait(false);

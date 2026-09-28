@@ -341,17 +341,20 @@ public sealed partial class DataSession<TProvider>
         try
         {
             affected = await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
+            // ITM-865（r23）：OnAfter 移入 try——拦截器 OnAfter 抛异常时同样经 OnError 通知
+            // 后上抛（与 ExecuteNonQueryAsync/ExecuteQueryAsync 口径一致；原形态在 try 外
+            // 直接逃逸，调用方会误判"执行失败"而实际 DML 已成功）。
+            if (stopwatch is not null)
+            {
+                stopwatch.Stop();
+                QueryBuilderExtensions.NotifyInterceptorsOnAfter(_interceptors, context, stopwatch, affected);
+            }
         }
         catch (Exception exception)
         {
             if (stopwatch is not null)
                 QueryBuilderExtensions.NotifyInterceptorsOnError(_interceptors, context, exception);
             throw;
-        }
-        if (stopwatch is not null)
-        {
-            stopwatch.Stop();
-            QueryBuilderExtensions.NotifyInterceptorsOnAfter(_interceptors, context, stopwatch, affected);
         }
         return affected;
     }

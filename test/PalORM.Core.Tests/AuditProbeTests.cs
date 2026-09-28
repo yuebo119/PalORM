@@ -78,6 +78,31 @@ internal sealed class AuditProbeTests
         }
         await Assert.That(failures).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task Probe3_DbParameter_ReuseAcrossSequentialCommands_SucceedsOnSqlite()
+    {
+        // ITM-863（r23 探针）：重试路径把同一批 DbParameter 实例 Add 到新建命令——
+        // SQLite 臂验证驱动无归属拒绝（同一参数先后进两个命令、各自执行成功）。
+        // PG/MySQL 臂需真库注入探针（后续项），本测试不构成它们的无竞态证明。
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        using var first = connection.CreateCommand();
+        first.CommandText = "SELECT @p0";
+        var parameter = first.CreateParameter();
+        parameter.ParameterName = "@p0";
+        parameter.Value = 42L;
+        first.Parameters.Add(parameter);
+        _ = await first.ExecuteScalarAsync();
+        await first.DisposeAsync();
+
+        using var second = connection.CreateCommand();
+        second.CommandText = "SELECT @p0";
+        second.Parameters.Add(parameter);
+        object? result = await second.ExecuteScalarAsync();
+        await Assert.That(result).IsEqualTo(42L);
+    }
 }
 
 [Table("probe_rows")]
