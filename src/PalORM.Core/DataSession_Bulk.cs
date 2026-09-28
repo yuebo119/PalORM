@@ -229,7 +229,12 @@ public partial class DataSession<TProvider>
             && !HasTenantFilter<T>())
         {
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
-            string tableName = state._tableNames[typeof(T)];
+            // ITM-878（r23）：TryGetValue + 族内统一异常（裸索引器在部分注册的病态片段下
+            // 抛 KeyNotFoundException，与 "has no generated CRUD" 口径不一致）
+            if (!state._tableNames.TryGetValue(typeof(T), out string? batchTableName))
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' has no [Table] attribute.");
+            string tableName = batchTableName;
             BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, routeMetadata, tableName, entities[0]);
             // MySQL-7：MySQL 按服务端版本选 UPDATE JOIN VALUES ROW 形态（8.75×）+ 对应批宽
             BatchUpdateSqlBuilder.BatchUpdateForm form = await ResolveMySqlUpdateFormAsync(ct).ConfigureAwait(false);
@@ -966,7 +971,11 @@ public partial class DataSession<TProvider>
 
         // ITM-821（r23）：tableName/pkColumn 取外层传入快照（mergeState）——原二次读
         // CurrentState 与 metadata（旧快照）混用，违反本文件 R8 单快照纪律。
-        string tableName = state._tableNames[typeof(T)];
+        // ITM-878（r23）：TryGetValue + 族内统一异常（同 BulkUpdateAsync 路径口径）
+        if (!state._tableNames.TryGetValue(typeof(T), out string? upsertTableName))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no [Table] attribute.");
+        string tableName = upsertTableName;
         if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");

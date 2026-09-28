@@ -145,7 +145,7 @@ public sealed class MySqlProvider : IDbProvider
     }
 
     /// <summary>schema 与表名分别反引号引用后以点连接;MySQL 中 schema 即数据库名。
-    /// 覆盖接口默认实现以支持 MySQL 的 schema/database 语义。</summary>
+    /// 实现 static abstract 成员（IDbProvider 不提供默认实现——CS8926，见接口注释）。ITM-871（r23）：订正 doc 残留（原写"覆盖接口默认实现"）。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)

@@ -103,6 +103,44 @@ internal sealed class AuditProbeTests
         object? result = await second.ExecuteScalarAsync();
         await Assert.That(result).IsEqualTo(42L);
     }
+
+    [Test]
+    public async Task Probe4_SqliteConsecutiveStatementSeparators_AreAccepted()
+    {
+        // ITM-879（r23 真库探针）：SessionBatch 合并路径按 ";\n" 拼接无参语句——语句自身以
+        // 分号结尾时产生 ";;" 空语句段。验证 SQLite 驱动/引擎接受该形态且行数计数正确
+        // （否则合并路径对尾带分号的 DDL/DML 崩溃）。
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "CREATE TABLE probe_semi (Id INTEGER PRIMARY KEY);;\n"
+            + "INSERT INTO probe_semi (Id) VALUES (1);;\n"
+            + "INSERT INTO probe_semi (Id) VALUES (2);";
+        int affected = await command.ExecuteNonQueryAsync();
+        await Assert.That(affected).IsEqualTo(2);
+
+        using var countCommand = connection.CreateCommand();
+        countCommand.CommandText = "SELECT COUNT(*) FROM probe_semi";
+        object? count = await countCommand.ExecuteScalarAsync();
+        await Assert.That(count).IsEqualTo(2L);
+    }
+
+    [Test]
+    public async Task ParallelReadScope_FiveConcurrentToListAsync_AllSucceed()
+    {
+        // ITM-875（r23 锁定）：内层租约不双计——修复前 5 路并发 ToListAsync 双计 10 个
+        // 租约触发上限（MaxParallelReads=8 的有效并发被压到 4）；修复后 5 路各占 1 个
+        // 真租约全部成功。
+        await using DataSession<SqliteProvider> session = await CreateProbeSessionAsync();
+        await using (session.ForParallelReads())
+        {
+            List<ProbeRow>[] results = await Task.WhenAll(Enumerable.Range(0, 5)
+                .Select(_ => session.From<ProbeRow>().ToListAsync().AsTask()));
+            foreach (List<ProbeRow> rows in results)
+                await Assert.That(rows.Count).IsEqualTo(1);
+        }
+    }
 }
 
 [Table("probe_rows")]

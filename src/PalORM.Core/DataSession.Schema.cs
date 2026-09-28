@@ -18,7 +18,9 @@ public sealed partial class DataSession<TProvider>
     /// 跳过是幂等设计（ITM-528 裁决，不得改为抛异常），但默认会话无日志时静默无痕——
     /// 本属性是无副作用的事后可观测通道：迁移后检查非空即知有索引被跳过（可能存在
     /// 同名异构冲突，参见 MySqlProvider.IsDuplicateSchemaObject 文档）。每次 MigrateAsync 开头清空。</summary>
-    public IReadOnlyList<string> LastMigrationSkippedIndexes => _lastMigrationSkippedIndexes;
+    /// <summary>ITM-824（r23）：返回快照——直接暴露内部 List 可被强转改写，且迁移进行中
+    /// 并发枚举会撕裂（"集合已修改"）；快照化后调用方安全枚举，写侧单线契约不变。</summary>
+    public IReadOnlyList<string> LastMigrationSkippedIndexes => [.. _lastMigrationSkippedIndexes];
 
     private List<string> _lastMigrationSkippedIndexes = [];
 
