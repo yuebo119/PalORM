@@ -163,7 +163,13 @@ public sealed partial class DataSession<TProvider>
             catch (Exception exception)
             {
                 primaryException = exception;
-                _operationState.DiscardPostCommitActions();
+                // ITM-810③（r23 实修）：COMMIT 超时（带 InfrastructureTimeout 标记）时数据可能
+                // 已提交——按文档承诺重放回填而非丢弃（丢弃会让已插入行的内存 ID 缺失，上层
+                // 重试即重复插入）；其余失败形态维持丢弃（事务必回滚，回填必错）。
+                if (ShouldReplayPostCommitActions(commitAttempted, commitSucceeded, exception))
+                    ReplayPostCommitActions();
+                else
+                    _operationState.DiscardPostCommitActions();
                 await _operationState.DisposeTransactionResourcesAsync(exception)
                     .ConfigureAwait(false);
                 // T1（v5.6.0）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
@@ -219,6 +225,17 @@ public sealed partial class DataSession<TProvider>
                 action();
         }
     }
+
+    /// <summary>ITM-810③（r23 实修）：提交后动作的重放/丢弃裁决——COMMIT 超时（带
+    /// <c>PalORM.InfrastructureTimeout</c> 标记）时数据可能已提交，按文档承诺重放回填
+    ///（丢弃会让已插入行的内存 ID 缺失，上层重试即重复插入）；其余失败形态丢弃
+    ///（事务必回滚，回填必错）。两处事务收口（WithTransaction / RunInTransactionScopeAsync）共用。</summary>
+    private static bool ShouldReplayPostCommitActions(
+        bool commitAttempted, bool commitSucceeded, Exception exception)
+        => commitSucceeded
+            || (commitAttempted
+                && exception is TimeoutException timeout
+                && timeout.Data.Contains("PalORM.InfrastructureTimeout"));
 
     /// <summary>整事务重放（API-003，2026-09-23）：把 <paramref name="action"/> 包在自开事务里执行，
     /// 遇到可重放的失败（PG 序列化失败 40001 / 死锁 40P01、MySQL 1213·1205、SQLITE_BUSY·LOCKED）时
@@ -362,7 +379,16 @@ public sealed partial class DataSession<TProvider>
         catch (Exception exception)
         {
             primaryException = exception;
-            _operationState.DiscardPostCommitActions();
+            // ITM-810②（r23 实修）：复用外层事务（owns=false）的内层失败不清外层已登记的
+            // 回填——外层提交成功时应照常回放；丢弃会让外层的 ID/version 回填静默丢失。
+            // ITM-810③：自开事务的 COMMIT 超时按文档承诺重放（同 WithTransaction）。
+            if (ownsTransaction)
+            {
+                if (ShouldReplayPostCommitActions(commitAttempted, commitSucceeded, exception))
+                    ReplayPostCommitActions();
+                else
+                    _operationState.DiscardPostCommitActions();
+            }
             if (ownsTransaction
                 && (!commitAttempted
                     || (!commitSucceeded

@@ -30,8 +30,12 @@ public static class TestEnvironment
     /// 进程环境变量的通道。</summary>
     private const string _dotEnvKeyPrefix = "PALORM_";
 
-    /// <summary>0 = 未尝试，1 = 已尝试。只做一次，避免每次解析都走文件系统。</summary>
-    private static int _dotEnvAttempted;
+    /// <summary>ITM-819（r23 实修）：Lazy(PublicationOnly) 完成屏障——原 Interlocked.Exchange
+    /// 形态下并发第二调方在首调方写完环境变量前就返回并立即读取（读到未补入的缺失），
+    /// 并行测试首调时偶发 "Environment variable … is not set"（CI flaky）。Lazy 与下方
+    /// <c>_settings</c> 同文件同口径（并发首调去重、后来者阻塞等待完成、失败可重试）。</summary>
+    private static readonly Lazy<bool> _dotEnvLoaded = new(
+        LoadDotEnvCore, LazyThreadSafetyMode.PublicationOnly);
 
     // ITM-648：惰性加载 + 失败可重试——静态字段初始化抛异常会以 TypeInitializationException
     // 永久污染类型（文件后补也无法自愈）。Lazy(PublicationOnly) 不缓存异常：加载失败后
@@ -50,12 +54,14 @@ public static class TestEnvironment
     /// <para><b>凭据卫生</b>：只写环境变量，不回显键值，异常不携带文件内容（P0 红线）。</para>
     /// <para>只尝试一次（进程级），后续调用为一次原子读。</para></summary>
     public static void LoadDotEnvIfPresent()
+        => _ = _dotEnvLoaded.Value;
+
+    private static bool LoadDotEnvCore()
     {
-        if (Interlocked.Exchange(ref _dotEnvAttempted, 1) != 0) return;
         try
         {
             string? path = FindFileUpwards(_dotEnvFileName);
-            if (path is null) return;
+            if (path is null) return true;
             foreach ((string key, string value) in ParseDotEnv(File.ReadAllLines(path)))
             {
                 if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
@@ -65,6 +71,7 @@ public static class TestEnvironment
         catch (IOException) { /* 兜底路径：交给后续占位符解析给出显式报错 */ }
         catch (UnauthorizedAccessException) { /* 同上 */ }
         catch (ArgumentException) { /* 键/值含非法字符——同上，不覆盖既有报错 */ }
+        return true;
     }
 
     /// <summary>解析 PostgreSQL 连接串。
