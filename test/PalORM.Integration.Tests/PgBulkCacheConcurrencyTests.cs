@@ -26,9 +26,11 @@ public sealed class PgBulkCacheConcurrencyTests
         await using (var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOptions()))
         {
             // 专用实体手建表（列集合与实体的 InsertColumns 一致由 SourceGen 保证）。
-            // 先 DROP：早期失败运行可能留下小写列名的旧表（IF NOT EXISTS 会沿用旧定义）。
+            // 2026-09-28 修复：删去裸 DELETE FROM——它在 DROP IF EXISTS 之前，全新空库
+            //（CI 每次新容器）且本用例先于任何 MigrateAsync 执行时撞 42P01（既有顺序
+            // 依赖被 v6.0 新用例的调度变化暴露；本地绿因库有历史表）。DROP IF EXISTS
+            // + CREATE 已覆盖 DELETE 的全部意图（每次全新建表）。
             // 列名与生成物一致用引号形态（B78：PG 折叠未加引号的混合大小写）。
-            await db.ExecuteAsync($"DELETE FROM r49_probe");
             await db.ExecuteAsync($"DROP TABLE IF EXISTS r49_probe");
             await db.ExecuteAsync(
                 $"CREATE TABLE r49_probe (\"Id\" INTEGER PRIMARY KEY, \"label\" TEXT)");
