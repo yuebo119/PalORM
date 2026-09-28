@@ -120,11 +120,17 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         parameters[paramOffset + 12].Value = (object)entity.DateTimeOffsetValue;
         parameters[paramOffset + 13].Value = (object)entity.DateOnlyValue;
         parameters[paramOffset + 14].Value = (object)entity.TimeOnlyValue;
+        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 15].Value = (object)entity.BytesValue;
+        parameters[paramOffset + 16].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 16].Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt;
+        parameters[paramOffset + 17].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 17].Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString;
+        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Guid;
         parameters[paramOffset + 18].Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid;
+        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Time;
         parameters[paramOffset + 19].Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly;
+        parameters[paramOffset + 20].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 20].Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes;
     }
 
@@ -173,9 +179,13 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         parameters[paramOffset + 13].Value = (object)entity.TimeOnlyValue;
         parameters[paramOffset + 14].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 14].Value = (object)entity.BytesValue;
+        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 15].Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt;
+        parameters[paramOffset + 16].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 16].Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString;
+        parameters[paramOffset + 17].DbType = global::System.Data.DbType.Guid;
         parameters[paramOffset + 17].Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid;
+        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Time;
         parameters[paramOffset + 18].Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly;
         parameters[paramOffset + 19].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 19].Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes;
