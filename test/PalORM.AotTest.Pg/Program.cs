@@ -50,6 +50,14 @@ internal sealed class AotPgDetails
 [JsonSerializable(typeof(AotPgDetails), TypeInfoPropertyName = "AotPgDetailsInfo")]
 internal sealed partial class AotPgJsonContext : JsonSerializerContext;
 
+// R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证载体（顶层声明——嵌套类与实体同规被拒）
+[Projection]
+internal sealed class AotPgSummary
+{
+    public long Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
 internal static class Program
 {
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1303",
@@ -92,6 +100,9 @@ internal static class Program
                 ?? throw new InvalidOperationException("PostgreSQL GET failed");
             AotPgEntity stale = await db.GetAsync<AotPgEntity>(inserted.Id).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("PostgreSQL stale GET failed");
+
+            // R1（v6.0）：[Projection] DTO 物化（AOT 全链）
+            await VerifyProjectionAsync(db, inserted.Id).ConfigureAwait(false);
 
             first.Name = "AOT PG updated";
             if (await db.UpdateAsync(first).ConfigureAwait(false) != 1 || first.Version != 1)
@@ -193,5 +204,17 @@ internal static class Program
                 throw new InvalidOperationException("PostgreSQL pessimistic lock execution failed");
             return true;
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证——只读类型经源生成注册，
+    /// QueryAsync 直接物化（ordinal 契约），不参与写命令与迁移 DDL。</summary>
+    private static async Task VerifyProjectionAsync(
+        DataSession<PostgreSqlProvider> db, long id)
+    {
+        List<AotPgSummary> summaries = await db.QueryAsync<AotPgSummary>(
+                $"SELECT \"Id\", name AS \"Name\" FROM aot_pg_test WHERE \"Id\" = {id:N0}")
+            .ConfigureAwait(false);
+        if (summaries.Count != 1 || summaries[0].Id != id || summaries[0].Name != "AOT PG works!")
+            throw new InvalidOperationException("PostgreSQL [Projection] materialization failed");
     }
 }
