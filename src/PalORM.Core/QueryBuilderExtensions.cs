@@ -84,10 +84,13 @@ public static class QueryBuilderExtensions
         ResilienceExecutor resilience = builder._resilience;
         bool resilient = boundTransaction is null && !resilience.IsPassThrough;
 
+        // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
+        DbConnection? lastReadConnection = null;
         // 单次尝试内核——每行经回调消费，不物化列表；拦截器语义与 ToListAsync 一致
         async Task<long> ExecuteCoreAsync(CancellationToken token)
         {
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
+            lastReadConnection = connection;
             await using DbCommand cmd = connection.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
@@ -108,8 +111,12 @@ public static class QueryBuilderExtensions
 
         try
         {
+            // ITM-811（r22 登记，r23 实修）：内层租约与 ExecuteQueryAsync 同型走 EnterReadOnly
+            // ——作用域内复用外层读租约（SessionOperationState 的重入不双计语义），不再
+            // 以独占 Enter(null) 击穿（原形态使 ForParallelReads 作用域内 ForEachAsync
+            // 结构性必抛，AuditProbeTests.Probe1 锁定）。
             using SessionOperationState.SessionOperationLease operationStateLease =
-                builder._operationState.Enter(operationOwner);
+                builder._operationState.EnterReadOnly(operationOwner);
             long count = resilient
                 ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
                 : await ExecuteCoreAsync(ct).ConfigureAwait(false);
@@ -134,6 +141,11 @@ public static class QueryBuilderExtensions
             PalORMMetrics.CompleteActivity(activity, outcome);
             if (builder._metrics && sw is not null)
                 PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
+            // ITM-797①（r23）：与 ExecuteQueryAsync 同型——作用域内的池连接用完归还
+            // （作用域外归还器对主连接为空操作），否则作用域内每次 ForEachAsync 都
+            // 新建连接不复用。记录的是最后一次尝试的连接（重试中间尝试由作用域退出兜底）。
+            if (lastReadConnection is not null)
+                await builder.ReleaseReadConnectionAsync(lastReadConnection).ConfigureAwait(false);
         }
     }
 
