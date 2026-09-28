@@ -58,11 +58,11 @@ Requirements: .NET SDK `11.0.100-preview.6` or later (`global.json` pins `rollFo
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="5.9.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.0.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="5.9.0" />
+<PackageReference Include="PalORM.MySql" Version="6.0.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="5.9.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.0.0" />
 ```
 
 Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time source generator). After installing, verify with the minimal Quick Start example below: if you can create a session and complete one insert, the install works.

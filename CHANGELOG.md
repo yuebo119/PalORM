@@ -2,9 +2,10 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [6.0.0] — 未发布（实施中）
+## [6.0.0] — v6.0：`[Projection]` DTO 投影 + DDL 债务清偿（DefaultValue/Column 细化）+ 跨方言唯一冲突异常 + 破坏性窗口兑现 — 2026-09-28
 
-> 破坏性变更窗口（SemVer major）。需求真源 `docs/v6.0-requirements.md` · 方案 `docs/v6.0-master-plan.md` · 任务 `docs/v6.0-tasks.md`（39 任务确定盘 + 向量 PoC 门控）。
+> 需求真源 `docs/v6.0-requirements.md` · 方案 `docs/v6.0-master-plan.md` · 任务 `docs/v6.0-tasks.md`（确定盘 32/32 + 门控结论 + 发布三项）。
+> v5.x 终版为 5.9.0（不设 LTS 分支——零外部用户无维护承诺负担，如需可后续补）。诊断总数 39→44，注解 22→23。
 
 ### 💔 破坏性变更（预定）
 
