@@ -181,6 +181,17 @@ internal static class RowFactoryEmitter
             "System.TimeSpan" => $"r.GetFieldValue<global::System.TimeSpan>({ordinal})",
             "short" or "System.Int16" => $"r.GetInt16({ordinal})",
             "byte" or "System.Byte" => $"r.GetByte({ordinal})",
+            // ITM-814（r23 实修）：补齐窄整型无符号族与底层 long 的枚举——此前落
+            // (T)r.GetValue(i) 装箱拆箱路径：驱动把数值列装箱为 Int64/Int32 时拆箱必抛
+            // InvalidCastException（byte[] 之外的引用类型不走本 switch 的 provider 形态，
+            // 不受影响）。枚举底层 long（: long）同样必须显式 GetFieldValue。
+            "ushort" or "System.UInt16"
+                => $"global::System.Convert.ToUInt16(r.GetFieldValue<global::System.UInt64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+            "uint" or "System.UInt32"
+                => $"global::System.Convert.ToUInt32(r.GetFieldValue<global::System.UInt64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+            "sbyte" or "System.SByte"
+                => $"global::System.Convert.ToSByte(r.GetFieldValue<global::System.Int64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+            "ulong" or "System.UInt64" => $"r.GetFieldValue<global::System.UInt64>({ordinal})",
             // ITM-520：Microsoft.Data.Sqlite/Npgsql 的 GetChar 抛 NotSupportedException，
             // 经字符串读取；空串守卫走 ReadChar，抛带列名异常而非裸 IndexOutOfRange
             "char" or "System.Char" => $"ReadChar(r, {ordinal}, {SymbolDisplay.FormatLiteral(columnName, quote: true)})",

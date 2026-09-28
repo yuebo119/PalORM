@@ -41,9 +41,12 @@ public sealed class GridReader : IAsyncDisposable
     /// <summary>读取当前结果集。</summary>
     public async ValueTask<List<T>> ReadAsync<T>(CancellationToken ct = default) where T : class, new()
     {
-        EnterRead();
+        // ITM-813（r23 实修）：EnterRead 移入 try——_state!=0 时它抛 ObjectDisposedException，
+        // 原形态该路径不过 catch → _observation.Complete 永不执行 → 已 StartActivity 的
+        // Activity 不 Dispose、Activity.Current 不还原（后续无关操作挂错父级）。
         try
         {
+            EnterRead();
             if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
             // ITM-748：越界读取明确失败，避免调用方把"无更多结果集"当成"该集合为空"
