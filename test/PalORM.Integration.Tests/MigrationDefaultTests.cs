@@ -68,7 +68,9 @@ public partial class DefaultedOrder
 {
     [Key] public long Id { get; set; }
     [Column("amount")] public decimal Amount { get; set; }
-    [Column("status")]
+    // Length=64：MySQL 不允许 TEXT 列带 DEFAULT（真库实测 BLOB/TEXT/JSON 系拒绝字面量默认值）——
+    // VARCHAR(64) + DEFAULT 跨三方言合法，同时覆盖 R2×R3 组合形态
+    [Column("status", Length = 64)]
     [DefaultValue("'pending'")]
     public string Status { get; set; } = "";
 }

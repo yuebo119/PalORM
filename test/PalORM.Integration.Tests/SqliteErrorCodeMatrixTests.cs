@@ -20,9 +20,13 @@ public sealed class SqliteErrorCodeMatrixTests
             await db.InsertAsync(new UniqueMatrixEntity { Code = "A", RequiredValue = "y" });
             throw new InvalidOperationException("Expected unique violation");
         }
-        catch (SqliteException ex)
+        catch (UniqueConstraintViolationException ex)
         {
+            // v6.0 R4：InsertAsync 抛统一翻译异常——原生 SqliteException 在 Inner，
+            // 判定矩阵（扩展码 2067/1555）对两层异常都为 true（Provider 幂等）
+            await Assert.That(ex.InnerException).IsTypeOf<SqliteException>();
             await Assert.That(SqliteProvider.IsUniqueViolation(ex)).IsTrue();
+            await Assert.That(SqliteProvider.IsUniqueViolation(ex.InnerException!)).IsTrue();
         }
     }
 

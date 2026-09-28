@@ -166,9 +166,11 @@ public sealed class MySqlProvider : IDbProvider
     public static bool IsDuplicateSchemaObject(Exception exception)
         => exception is MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyName };
 
-    /// <summary>1062 Duplicate entry——唯一约束冲突。</summary>
+    /// <summary>1062 Duplicate entry——唯一约束冲突。
+    /// R4（v6.0）：对统一翻译异常幂等（UniqueConstraintViolationException 的 Inner 为 1062）。</summary>
     public static bool IsUniqueViolation(Exception exception)
-        => exception is MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyEntry };
+        => exception is UniqueConstraintViolationException
+            or MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyEntry };
 
     /// <summary>用 SHOW COLUMNS 查询列信息(表名/库名经反引号引用内联),列名位于结果集序号 0。</summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)

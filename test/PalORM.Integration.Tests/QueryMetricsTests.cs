@@ -35,8 +35,9 @@ public sealed class QueryMetricsTests
         await Assert.That(executions).IsEqualTo(1);
         await Assert.That(tags).Contains(new KeyValuePair<string, object?>("db.operation.name", "select"));
         await Assert.That(tags).Contains(new KeyValuePair<string, object?>("palorm.outcome", "success"));
-        await Assert.That(string.Join('|', tags.Select(tag => $"{tag.Key}={tag.Value}")))
-            .DoesNotContain("user-supplied-name");
+        // v6.0 R5 契约反转：WithMetrics(name) 的 name 透传为业务维度 tag palorm.query.name
+        //（ADR-M"若补 label 支持则保留"条款命中；低基数契约由 XML doc 载明——静态业务名）
+        await Assert.That(tags).Contains(new KeyValuePair<string, object?>("palorm.query.name", "user-supplied-name"));
     }
 
     [Test]
