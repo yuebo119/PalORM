@@ -133,6 +133,11 @@ public sealed partial class DataSession<TProvider>
         // T1（v5.6.0）：置于 CommitAsync 紧前——异常到达 catch 且此标志为 true 即"提交已尝试
         // 且失败"，与 action 失败可区分（提交成功不会进 catch）
         bool commitAttempted = false;
+        // ITM-810①（r23）：提交成功标志——回放动作抛异常进 catch 时，回滚裁决对象是回放
+        // 异常而非提交异常（TrySkip 对非服务端错误返回 false → 必走回滚），对已提交事务
+        // 发起回滚只会得到 "transaction already completed" 噪音，且调用方误判执行失败
+        // （数据已提交）后上层重试即重复写。
+        bool commitSucceeded = false;
         try
         {
             owner = _operationState.EnterTransactionFlow();
@@ -151,20 +156,29 @@ public sealed partial class DataSession<TProvider>
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
                     transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                commitSucceeded = true;
                 ReplayPostCommitActions();
                 return result;
             }
             catch (Exception exception)
             {
                 primaryException = exception;
-                _operationState.DiscardPostCommitActions();
+                // ITM-810③（r23 实修）：COMMIT 超时（带 InfrastructureTimeout 标记）时数据可能
+                // 已提交——按文档承诺重放回填而非丢弃（丢弃会让已插入行的内存 ID 缺失，上层
+                // 重试即重复插入）；其余失败形态维持丢弃（事务必回滚，回填必错）。
+                if (ShouldReplayPostCommitActions(commitAttempted, commitSucceeded, exception))
+                    ReplayPostCommitActions();
+                else
+                    _operationState.DiscardPostCommitActions();
                 await _operationState.DisposeTransactionResourcesAsync(exception)
                     .ConfigureAwait(false);
                 // T1（v5.6.0）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
-                // 裁决依据与 SQLite 例外见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
+                // 裁决依据与 SQLite 例外见 TransactionCleanup.TrySkipRollbackAfterCommitFailure；
+                // ITM-810①：commitSucceeded 后的异常只能来自回放，不触发回滚。
                 if (!commitAttempted
-                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
-                        TProvider.Dialect, exception))
+                    || (!commitSucceeded
+                        && !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                            TProvider.Dialect, exception)))
                 {
                     await RollbackTransactionPreservingAsync(transaction, exception)
                         .ConfigureAwait(false);
@@ -211,6 +225,17 @@ public sealed partial class DataSession<TProvider>
                 action();
         }
     }
+
+    /// <summary>ITM-810③（r23 实修）：提交后动作的重放/丢弃裁决——COMMIT 超时（带
+    /// <c>PalORM.InfrastructureTimeout</c> 标记）时数据可能已提交，按文档承诺重放回填
+    ///（丢弃会让已插入行的内存 ID 缺失，上层重试即重复插入）；其余失败形态丢弃
+    ///（事务必回滚，回填必错）。两处事务收口（WithTransaction / RunInTransactionScopeAsync）共用。</summary>
+    private static bool ShouldReplayPostCommitActions(
+        bool commitAttempted, bool commitSucceeded, Exception exception)
+        => commitSucceeded
+            || (commitAttempted
+                && exception is TimeoutException timeout
+                && timeout.Data.Contains("PalORM.InfrastructureTimeout"));
 
     /// <summary>整事务重放（API-003，2026-09-23）：把 <paramref name="action"/> 包在自开事务里执行，
     /// 遇到可重放的失败（PG 序列化失败 40001 / 死锁 40P01、MySQL 1213·1205、SQLITE_BUSY·LOCKED）时
@@ -333,6 +358,8 @@ public sealed partial class DataSession<TProvider>
         Exception? primaryException = null;
         // T1（v5.6.0）：同 WithTransaction——提交尝试标志区分提交失败与 work 失败
         bool commitAttempted = false;
+        // ITM-810①（r23）：同 WithTransaction——回放异常不触发对已提交事务的回滚
+        bool commitSucceeded = false;
         // TX-004（2026-09-23）：自开事务时持有提交权——生成 ID 等回填延迟到提交成功后回放。
         if (ownsTransaction)
             _operationState.DefersPostCommitActions = true;
@@ -344,6 +371,7 @@ public sealed partial class DataSession<TProvider>
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
                     transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                commitSucceeded = true;
                 ReplayPostCommitActions();
             }
             return result;
@@ -351,11 +379,21 @@ public sealed partial class DataSession<TProvider>
         catch (Exception exception)
         {
             primaryException = exception;
-            _operationState.DiscardPostCommitActions();
+            // ITM-810②（r23 实修）：复用外层事务（owns=false）的内层失败不清外层已登记的
+            // 回填——外层提交成功时应照常回放；丢弃会让外层的 ID/version 回填静默丢失。
+            // ITM-810③：自开事务的 COMMIT 超时按文档承诺重放（同 WithTransaction）。
+            if (ownsTransaction)
+            {
+                if (ShouldReplayPostCommitActions(commitAttempted, commitSucceeded, exception))
+                    ReplayPostCommitActions();
+                else
+                    _operationState.DiscardPostCommitActions();
+            }
             if (ownsTransaction
                 && (!commitAttempted
-                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
-                        TProvider.Dialect, exception)))
+                    || (!commitSucceeded
+                        && !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                            TProvider.Dialect, exception))))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
                     transaction, exception, RollbackTimeoutSeconds, ct).ConfigureAwait(false);

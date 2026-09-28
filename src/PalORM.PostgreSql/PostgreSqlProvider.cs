@@ -150,7 +150,7 @@ public sealed class PostgreSqlProvider : IDbProvider
     }
 
     /// <summary>schema 与表名分别引用后以点连接;schema 为空时省略,落到 search_path 解析。
-    /// 覆盖接口默认实现以支持 PostgreSQL 的 schema 语义。</summary>
+    /// 实现 static abstract 成员（IDbProvider 不提供默认实现——CS8926，见接口注释）。ITM-871（r23）：订正 doc 残留（原写"覆盖接口默认实现"）。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)
@@ -306,6 +306,10 @@ public sealed class PostgreSqlProvider : IDbProvider
             ?? await npgsqlConnection.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
         bool ownsTransaction = transaction is null;
         Exception? primaryException = null;
+        // ITM-870（r23）：提交尝试标志——COMMIT 已尝试且失败形态为服务端错误时跳过回滚
+        //（服务端已终止事务，回滚只会得到 "already completed" 噪音 + 一次徒劳往返），
+        // 与 Core MultiValueBulkInsert 的 TrySkip 裁决同语义（经 BulkOperationFramework 共享）。
+        bool commitAttempted = false;
         // ITM-760(r21)：超时判定线索提升到方法级——catch 原本拿不到循环内的 timeoutCts，
         // 只能用 "!ct.IsCancellationRequested && timeout>0" 近似，驱动自抛 OCE 会被误标
         // InfrastructureTimeout。现以方法级标志记录"本批超时 CTS 确已触发"。
@@ -396,6 +400,16 @@ public sealed class PostgreSqlProvider : IDbProvider
                                 "PalORM.ImporterCleanupException").ConfigureAwait(false);
                         }
                     }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested
+                        && timeoutCts.IsCancellationRequested)
+                    {
+                        // ITM-869（r23）：超时触发的状态补记——Cancel() 先置 token 状态再执行注册回调，
+                        // WriteRow 行边界的轮询检查可在回调执行前抛 OCE（timeoutFlag 仍 false），
+                        // 外层 wrapAsTimeout 判定随之失守（超时以裸 OCE 逃逸，熔断/超时分类 miss）。
+                        // 本 filter 在 timeoutCts.Dispose() 前执行，状态读取时序安全。
+                        timeoutFlag[0] = true;
+                        throw;
+                    }
                     finally
                     {
                         timeoutCts.Dispose();
@@ -414,8 +428,11 @@ public sealed class PostgreSqlProvider : IDbProvider
             }
 
             if (ownsTransaction)
+            {
+                commitAttempted = true;
                 await CommitWithTimeoutAsync(bulkTransaction, commandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
+            }
             return total;
         }
         catch (Exception exception)
@@ -437,9 +454,15 @@ public sealed class PostgreSqlProvider : IDbProvider
                 thrown = wrappedTimeout;
             }
             primaryException = thrown;
-            if (ownsTransaction)
+            // ITM-870（r23）：服务端错误的 COMMIT 失败跳过回滚（三 Provider 与 Core 共享同一份
+            // 语义——此前 PG COPY 路径无条件回滚，与同文件注释声称不符）
+            if (ownsTransaction
+                && (!commitAttempted
+                    || !BulkOperationFramework.TrySkipRollbackAfterCommitFailure(thrown)))
+            {
                 await BulkOperationFramework.RollbackPreservingAsync(bulkTransaction, thrown, commandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
+            }
             throw thrown;
         }
         finally

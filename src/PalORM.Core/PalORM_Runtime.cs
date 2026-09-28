@@ -258,7 +258,15 @@ public static class PalORM_Runtime
     {
         var merged = new Dictionary<Type, TValue>(current);
         foreach (var pair in fragment)
+        {
+            // ITM-864（r23）：重复键统一友好异常——裸 Add 抛不含类型名的 ArgumentException
+            // （跨片段重复注册 [Projection] 类型时 TableNames 查不到该重复，消息不可定位），
+            // 与实体重复检测的消息口径一致。锁内抛出、next 未发布，状态不变。
+            if (merged.ContainsKey(pair.Key))
+                throw new InvalidOperationException(
+                    $"Type '{pair.Key.FullName}' is already registered in PalORM runtime metadata.");
             merged.Add(pair.Key, pair.Value);
+        }
         return merged.ToFrozenDictionary();
     }
 

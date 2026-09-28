@@ -102,6 +102,13 @@ internal sealed class SessionOperationState
     /// 门禁行为与既有逐位一致。</summary>
     private int _parallelReadScopes;
     private int _activeReadLeases;
+    // ITM-863（r23）：Dispose 等待面纳入在飞读租约——计数归零时完成该 TCS（等待方为
+    // DisposeAsync；创建点见其锁内段）。ExitReadOnly 归零时 TrySetResult 并清引用。
+    private TaskCompletionSource? _readLeasesDrained;
+    // ITM-875（r23）：当前异步流是否已持读租约（深度恒 0/1——外层唯一计数，内层重入
+    // 不双计）。读 AsyncLocal 无 EC 拷贝；写只发生在租约取得/释放各一次（并行读路径
+    // 本身是 ms 级重负载操作，一次 ~300B EC 写入可接受）。
+    private readonly AsyncLocal<int> _readLeaseDepth = new();
 
     /// <summary>是否处于并行读作用域（供 DataSession 的读连接池判断）。</summary>
     internal bool ParallelReadsEnabled
@@ -133,9 +140,14 @@ internal sealed class SessionOperationState
         {
             if (_parallelReadScopes == 0)
                 return Enter(owner);
-            bool ownedOperation = owner is not null
-                && ReferenceEquals(owner, _activeOperationOwner);
-            ObjectDisposedException.ThrowIf(_state == 2 && !ownedOperation, this);
+            // ITM-875（r23）：内层执行核心（带 owner）在同一异步流已持读租约时不双计——
+            // 外层公共入口（无 owner）恒为真租约，租约上限检查对它保持有效。
+            // 同时使 ForEachAsync 作用域内的内层租约与 ToListAsync 族同型（ITM-811 配套）。
+            if (owner is not null && _readLeaseDepth.Value > 0)
+                return default;
+            // ITM-863（r23）：disposing 中不放行新读租约（对照 Enter 的 _state==1 分支）；
+            // 本流重入已在上方短路。
+            ObjectDisposedException.ThrowIf(_state != 0, this);
             if (_isActive || _transactionOwner is not null)
             {
                 throw new InvalidOperationException(
@@ -147,16 +159,23 @@ internal sealed class SessionOperationState
                     $"Parallel read lease limit ({MaxParallelReads}) reached for this DataSession.");
             }
             _activeReadLeases++;
+            _readLeaseDepth.Value = 1;
             return new SessionOperationLease(this, owner: null, readOnly: true);
         }
     }
 
     private void ExitReadOnly()
     {
+        TaskCompletionSource? drained;
         lock (_sync)
         {
+            _readLeaseDepth.Value = 0;
             if (_activeReadLeases > 0) _activeReadLeases--;
+            // ITM-863（r23）：归零时唤醒 Dispose 等待方（有等待者才创建过 TCS）
+            drained = _activeReadLeases == 0 ? _readLeasesDrained : null;
+            if (drained is not null) _readLeasesDrained = null;
         }
+        drained?.TrySetResult();
     }
 
     internal SessionOperationLease EnterTransactionOperation()
@@ -172,7 +191,7 @@ internal sealed class SessionOperationState
                 throw new InvalidOperationException(
                     "EnterTransactionOperation requires an active transaction flow owned by the current asynchronous flow.");
             }
-            if (_isActive)
+            if (_isActive || _activeReadLeases > 0)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation.");
@@ -193,6 +212,15 @@ internal sealed class SessionOperationState
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_state != 0, this);
+            // ITM-798（r22 登记，r23 实修）：事务流开启不得与在飞只读租约并存——
+            // "只读并行、写与事务串行"的非对称语义（Enter 的 ARCH-001 检查）同样约束
+            // 事务入口；否则同一会话读写重叠、读快照不一致。
+            if (_activeReadLeases > 0)
+            {
+                throw new InvalidOperationException(
+                    "DataSession has in-flight parallel read leases; " +
+                    "complete them before starting a transaction.");
+            }
             if (_transactionOwner is not null)
             {
                 throw new InvalidOperationException(
@@ -212,22 +240,30 @@ internal sealed class SessionOperationState
         }
     }
 
+    /// <summary>登记事务流结束时要释放的资源。
+    /// <para><b>ITM-829（r23 实修）</b>：无活动事务流时为 no-op <b>契约</b>（调用方资源自身
+    /// 管理生命周期，如无事务时的 GridReader）；但存在事务流而登记被拒的三种异常形态
+    /// （流属于他人/流已退出/流正在收口）原为静默不注册——调用方以为已纳管而资源永不
+    /// 被释放，现响亮失败。</para></summary>
     internal void RegisterTransactionResource(IAsyncDisposable resource)
     {
         lock (_sync)
         {
-            if (_transactionOwner is not null
-                && ReferenceEquals(
+            if (_transactionOwner is null)
+                return;   // 无事务流：契约性 no-op（见 doc）
+            if (!ReferenceEquals(
                     _transactionOwner, _currentTransactionOwner.Value))
             {
-                if (_transactionCompleting
-                    || _transactionResources is null)
-                {
-                    throw new InvalidOperationException(
-                        "The active transaction flow is completing.");
-                }
-                _transactionResources.Add(resource);
+                // ITM-829：流属于其他异步流——原静默跳过
+                throw new InvalidOperationException(
+                    "The active transaction belongs to another asynchronous flow.");
             }
+            if (_transactionCompleting || _transactionResources is null)
+            {
+                throw new InvalidOperationException(
+                    "The active transaction flow is completing.");
+            }
+            _transactionResources.Add(resource);
         }
     }
 
@@ -266,7 +302,7 @@ internal sealed class SessionOperationState
             catch (Exception exception)
             {
                 if (cleanupException is null) cleanupException = exception;
-                else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = exception;
+                else AttachCleanupException(cleanupException, exception);
             }
         }
         return cleanupException;
@@ -303,7 +339,7 @@ internal sealed class SessionOperationState
                 "always consume it with 'await foreach' or dispose the enumerator explicitly.",
                 timeoutException);
             if (cleanupException is null) cleanupException = hangException;
-            else cleanupException.Data[$"PalORM.CleanupException{cleanupException.Data.Count}"] = hangException;
+            else AttachCleanupException(cleanupException, hangException);
         }
         return cleanupException;
     }
@@ -461,8 +497,9 @@ internal sealed class SessionOperationState
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_state != 0, this);
-            // v4.5：_isActive 替代 _activeOperation is not null
-            if (_isActive || _activeTransaction is not null)
+            // v4.5：_isActive 替代 _activeOperationOwner is not null
+            // ITM-798（r23）：UseTransaction 同受在飞读租约门禁（与 Enter/事务流入口对称）
+            if (_isActive || _activeTransaction is not null || _activeReadLeases > 0)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation or transaction flow.");
@@ -558,21 +595,31 @@ internal sealed class SessionOperationState
                 _activeOperation = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
             }
+            // ITM-863（r23）：在飞读租约纳入等待面——归零时由 ExitReadOnly 完成。
+            // 不等待则 DisposeCoreAsync 清池会与飞行查询的连接使用竞态。
+            if (_activeReadLeases > 0 && _readLeasesDrained is null)
+            {
+                _readLeasesDrained = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
             activeOperation = _activeOperation?.Task ?? Task.CompletedTask;
             activeTransaction = _activeTransaction?.Task ?? Task.CompletedTask;
+            Task readLeases = _readLeasesDrained?.Task ?? Task.CompletedTask;
             completion = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _disposeTask = completion.Task;
+
+            _ = DisposeAndCompleteAsync(
+                activeOperation, activeTransaction, readLeases, disposeCore, completion);
         }
 
-        _ = DisposeAndCompleteAsync(
-            activeOperation, activeTransaction, disposeCore, completion);
         return new ValueTask(completion.Task);
     }
 
     private async Task DisposeAndCompleteAsync(
         Task activeOperation,
         Task activeTransaction,
+        Task readLeases,
         Func<Task> disposeCore,
         TaskCompletionSource completion)
     {
@@ -583,15 +630,16 @@ internal sealed class SessionOperationState
         Exception? primaryException = null;
         try
         {
-            await Task.WhenAll(activeOperation, activeTransaction)
+            await Task.WhenAll(activeOperation, activeTransaction, readLeases)
                 .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
         }
         catch (TimeoutException timeoutException)
         {
             primaryException = new InvalidOperationException(
                 $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
-                "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed; " +
-                "always consume it with 'await foreach' or dispose the enumerator explicitly.",
+                "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed, " +
+                "or an unfinished query inside a parallel-read scope; " +
+                "always consume enumerators with 'await foreach' and dispose scopes explicitly.",
                 timeoutException);
         }
 
@@ -643,6 +691,17 @@ internal sealed class SessionOperationState
         // v4.5：不再写 _currentOperationOwner.Value = null（省 EC 拷贝）
         // _isActive = false 已足够让 IsCurrentOperationScope 返回 false
         tcs?.TrySetResult();
+    }
+
+    /// <summary>ITM-830（r23 实修）：清理异常挂 Data 的键名去重——原以 Data.Count 推导索引，
+    /// 主异常已带其它键（InfrastructureTimeout/RollbackSkipped 等）时两次清理异常可能算出同名键
+    /// 互相覆盖、静默丢一条诊断。空闲后缀探测保证每条清理异常独立可追溯。</summary>
+    private static void AttachCleanupException(Exception primary, Exception cleanup)
+    {
+        int suffix = 0;
+        while (primary.Data.Contains($"PalORM.CleanupException{suffix}"))
+            suffix++;
+        primary.Data[$"PalORM.CleanupException{suffix}"] = cleanup;
     }
 
     internal readonly struct SessionOperationLease : IAsyncDisposable, IDisposable

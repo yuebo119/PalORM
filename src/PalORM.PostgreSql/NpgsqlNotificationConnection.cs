@@ -9,6 +9,9 @@ internal interface IPgNotificationConnection : IAsyncDisposable
 {
     event Action<string, string>? Notification;
     Task OpenAsync(CancellationToken cancellationToken);
+    /// <summary>ITM-843（r23 登记）：B7 重构后生产侧零调用（仅 <see cref="ListenAllAsync"/>）。
+    /// 保留为单通道便捷形态；若 6.x 周期仍无调用方，随破坏性窗口移除。</summary>
+    [System.Obsolete("Use ListenAllAsync (single round-trip for N channels); this member has no production callers since B7.")]
     Task ListenAsync(string quotedChannel, CancellationToken cancellationToken);
 
     /// <summary>B7：一次往返执行多条 LISTEN——N 个 channel 的启动/重连延迟从 N × RTT
@@ -74,6 +77,7 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
     /// <c>ExecuteNonQueryAsync</c>（各建一个 NpgsqlCommand），N 个 channel 的启动/重连
     /// 延迟 = N × RTT。PG 的 LISTEN 是工具语句，可在一条命令里用 <c>;</c> 拼接多条，
     /// N 个 RTT 压成 1 个（跨地域部署 RTT 50ms+ 时，8 channel 省 350ms）。</para></summary>
+    [System.Obsolete("Use ListenAllAsync; see interface declaration.")]
     public async Task ListenAsync(string quotedChannel, CancellationToken cancellationToken)
         => await ListenAllAsync([quotedChannel], cancellationToken).ConfigureAwait(false);
 

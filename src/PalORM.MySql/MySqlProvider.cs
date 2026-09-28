@@ -145,7 +145,7 @@ public sealed class MySqlProvider : IDbProvider
     }
 
     /// <summary>schema 与表名分别反引号引用后以点连接;MySQL 中 schema 即数据库名。
-    /// 覆盖接口默认实现以支持 MySQL 的 schema/database 语义。</summary>
+    /// 实现 static abstract 成员（IDbProvider 不提供默认实现——CS8926，见接口注释）。ITM-871（r23）：订正 doc 残留（原写"覆盖接口默认实现"）。</summary>
     public static string QuoteQualifiedIdentifier(string? schema, string identifier)
         => string.IsNullOrWhiteSpace(schema)
             ? QuoteIdentifier(identifier)
@@ -280,7 +280,13 @@ public sealed class MySqlProvider : IDbProvider
             cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
             using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                // ITM-822（r23 实修）：SHOW VARIABLES 恒返回一行，零行=服务端异常形态——
+                // 计数留痕（R14 降级可归因；受限账号每次 BulkInsert 恒付探测 RTT 且计数恒 0
+                // 的观测盲区），不写缓存（下次重探，不把异常形态固化为 OFF）。
+                BulkOperationFramework.RecordCapabilityProbeFailure();
                 return false;
+            }
             string value = reader.GetString(1);
             bool enabled = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
             LocalInfileCache.AddOrUpdate(conn, new LocalInfileProbe(
@@ -328,6 +334,9 @@ public sealed class MySqlProvider : IDbProvider
             ownsTransaction = true;
         }
         Exception? primaryException = null;
+        // ITM-870（r23）：提交尝试标志——服务端错误的 COMMIT 失败跳过回滚（与 PG COPY 路径
+        // 及 Core MultiValueBulkInsert 同语义，经 BulkOperationFramework 共享单一实现）
+        bool commitAttempted = false;
         try
         {
             long inserted = await MySqlBulkCopyInserter.ExecuteAsync(
@@ -348,8 +357,11 @@ public sealed class MySqlProvider : IDbProvider
             // 无界等待。超时包装为 TimeoutException 并打 InfrastructureTimeout 标记，
             // 与 PG 路径同口径；同时让 TransactionCleanup 判定"服务端状态未知"以尝试回滚。
             if (ownsTransaction)
+            {
+                commitAttempted = true;
                 await CommitWithTimeoutAsync(mySqlTransaction, commandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
+            }
             return inserted;
         }
         catch (Exception ex)
@@ -359,7 +371,11 @@ public sealed class MySqlProvider : IDbProvider
             // 与 PG 路径（PostgreSqlProvider 的 COPY catch）同口径：隐式回滚发生在异常传播路径上
             // 且无超时上界，网络黑洞下把一次快速失败拖成永久卡死；不发起回滚则服务端事务悬置到
             // 连接归还，继续持锁与 undo 日志。显式回滚让"回滚失败"与"未尝试回滚"在诊断上可区分。
-            if (ownsTransaction)
+            // ITM-870（r23）：服务端错误的 COMMIT 失败跳过回滚——服务端已终止事务，
+            // 回滚只会得到 "already completed" 噪音并多一次徒劳往返。
+            if (ownsTransaction
+                && (!commitAttempted
+                    || !BulkOperationFramework.TrySkipRollbackAfterCommitFailure(ex)))
             {
                 await BulkOperationFramework.RollbackPreservingAsync(
                     mySqlTransaction, ex, commandTimeoutSeconds, ct).ConfigureAwait(false);

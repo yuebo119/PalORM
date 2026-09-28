@@ -64,7 +64,13 @@ public partial class DataSession<TProvider>
         // 的较小者。原用 InClauseBatchSize（500，单语句内拼 IN 片段的约束）把 10 万键放大成 200 次往返；
         // PG/MySQL 为 5000（20 次），SQLite 受 999 参数上限约束（100 次；32766 大值经
         // 2026-09-26 同轮 A/B 实测证伪为负优化，见 SqlLimits.MaxBindParametersFor）。
-        int batchSize = Math.Min(SqlLimits.MaxBindParametersFor(TProvider.Dialect), SqlLimits.MaxRowsPerBatch);
+        // ITM-809（r22 登记，r23 实修）：批大小扣减租户过滤参数——每批 BindDefaultFilterParameters
+        // 追加 1 个租户参数，不扣则 SQLite+租户实体单语句 999+1=1000 越保守上限（同文件
+        // BulkUpdateBatchAsync 的 (driverLimit - tenantParams) 同口径）。
+        int tenantParamCount = HasTenantFilter<T>() ? 1 : 0;
+        int batchSize = Math.Min(
+            Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount),
+            SqlLimits.MaxRowsPerBatch);
         // 满批占位符名在批大小不变时逐位相同——预建一次，末批另建
         string[] fullBatchPlaceholders = BuildPlaceholderNames(TProvider.GetParameterPlaceholder, batchSize);
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
@@ -223,7 +229,12 @@ public partial class DataSession<TProvider>
             && !HasTenantFilter<T>())
         {
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
-            string tableName = state._tableNames[typeof(T)];
+            // ITM-878（r23）：TryGetValue + 族内统一异常（裸索引器在部分注册的病态片段下
+            // 抛 KeyNotFoundException，与 "has no generated CRUD" 口径不一致）
+            if (!state._tableNames.TryGetValue(typeof(T), out string? batchTableName))
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' has no [Table] attribute.");
+            string tableName = batchTableName;
             BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, routeMetadata, tableName, entities[0]);
             // MySQL-7：MySQL 按服务端版本选 UPDATE JOIN VALUES ROW 形态（8.75×）+ 对应批宽
             BatchUpdateSqlBuilder.BatchUpdateForm form = await ResolveMySqlUpdateFormAsync(ct).ConfigureAwait(false);
@@ -266,7 +277,7 @@ public partial class DataSession<TProvider>
             operationOwner,
             async (transaction, token) => metadata.BindUpdateValues is { } valuesBinder
                 ? await ExecuteBulkUpdatePooledAsync(
-                    entities, metadata, valuesBinder, transaction, token).ConfigureAwait(false)
+                    entities, metadata, valuesBinder, state, transaction, token).ConfigureAwait(false)
                 : await ExecuteBulkUpdateLegacyAsync(
                     entities, operationOwner, token).ConfigureAwait(false),
             ct).ConfigureAwait(false);
@@ -289,6 +300,7 @@ public partial class DataSession<TProvider>
     private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledAsync<T>(
         IReadOnlyList<T> entities, CrudMetadata metadata,
         Action<DbParameter[], object, int> valuesBinder,
+        PalORM_Runtime.RuntimeRegistryState state,
         DbTransaction tran, CancellationToken ct)
         where T : class, new()
     {
@@ -319,7 +331,9 @@ public partial class DataSession<TProvider>
         cmd.Transaction = tran;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         // 生成的 UPDATE 语句：复用 GetCommandSqls 的单一真源（含租户后缀的两形态由缓存提供）
-        string updateSql = GetCommandSqls<T>(PalORM_Runtime.CurrentState).Update;
+        // ITM-821（r23）：用外层传入快照——原二次读 CurrentState 违反 R8 单快照纪律
+        // （Register/热重载窗口内 SQL 与 metadata 可能跨版本混用，probe 哨兵只拦参数数量不拦列映射错位）
+        string updateSql = GetCommandSqls<T>(state).Update;
         if (updateSql.Length == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
@@ -890,7 +904,7 @@ public partial class DataSession<TProvider>
                 }
 
                 affected += await BatchUpsertAsync(
-                    transaction, upsertBatch, mergeMetadata, token).ConfigureAwait(false);
+                    transaction, upsertBatch, mergeMetadata, mergeState, token).ConfigureAwait(false);
                 return affected;
             },
             ct).ConfigureAwait(false);
@@ -933,6 +947,7 @@ public partial class DataSession<TProvider>
         DbTransaction transaction,
         List<T> entities,
         CrudMetadata metadata,
+        PalORM_Runtime.RuntimeRegistryState state,
         CancellationToken ct) where T : class, new()
     {
         if (entities.Count == 0) return 0;
@@ -954,8 +969,13 @@ public partial class DataSession<TProvider>
             maxRowsPerBatch * columnCount);
         int batchSize = Math.Max(1, maxParametersPerStatement / columnCount);
 
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        string tableName = state._tableNames[typeof(T)];
+        // ITM-821（r23）：tableName/pkColumn 取外层传入快照（mergeState）——原二次读
+        // CurrentState 与 metadata（旧快照）混用，违反本文件 R8 单快照纪律。
+        // ITM-878（r23）：TryGetValue + 族内统一异常（同 BulkUpdateAsync 路径口径）
+        if (!state._tableNames.TryGetValue(typeof(T), out string? upsertTableName))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no [Table] attribute.");
+        string tableName = upsertTableName;
         if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
@@ -1031,6 +1051,11 @@ public partial class DataSession<TProvider>
             throw new NotSupportedException(
                 $"Set-based upsert on '{tableName}' has no updatable columns " +
                 "(upsert columns minus primary key is empty); use BulkInsertAsync instead.");
+        // ITM-876（r23 裁决登记）：VALUES() 形态在 MySQL 8.0.20+ 处于弃用路线（推荐 row alias
+        // 新语法），但真库探针（OdkuDeprecationProbeTests，MySQL 8.4.11）实测**零弃用警告**且
+        // 行为正确——分派双形态（row alias 要求 8.0.19+）当前无收益信号，只引入 UpsertSqlShape
+        // 生成/快照/三序一致的双份维护面。维持单形态 + 哨兵测试：未来版本真报弃用错误时
+        // 探针自动转红，届时按 MySQL-7 ResolveMySqlUpdateFormAsync 先例（版本探测 + 每连接缓存）分派。
         string conflictClause = TProvider.Dialect == SqlDialect.MySql
             ? " ON DUPLICATE KEY UPDATE " + string.Join(", ",
                 updateColumns.Select(c => $"{quote(c)} = VALUES({quote(c)})"))

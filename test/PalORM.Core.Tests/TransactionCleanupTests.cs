@@ -160,10 +160,13 @@ public sealed class TransactionCleanupTests
     public async Task Commit_ZeroTimeout_IsUnboundedAndNotWrapped()
     {
         // Zero 契约：调用方显式要求无限等待时不设超时（与 CommandTimeout Zero 同口径）
+        // ITM-868（r23）：补强为行为断言——Commit 被真实调用（原"无异常即绿"无法区分
+        // "正常提交"与"被静默跳过"）
         await using var transaction = new SlowCommitTransaction(delaySeconds: 0);
 
         await TransactionCleanup.CommitWithTimeoutAsync(
             transaction, commandTimeoutSeconds: 0, CancellationToken.None);
+        await Assert.That(transaction.CommitCalls).IsEqualTo(1);
     }
 
     [Test]
@@ -260,15 +263,21 @@ internal sealed class FailingRollbackTransaction : DbTransaction
 internal sealed class SlowCommitTransaction(int delaySeconds) : DbTransaction
 {
     private readonly SlowRollbackConnection _connection = new();
+    /// <summary>ITM-868（r23）：Commit 调用计数——Zero 契约测试从"无异常即绿"补强为
+    /// 行为断言（Commit 确实被调用，而非被静默跳过）。</summary>
+    public int CommitCalls { get; private set; }
     public override IsolationLevel IsolationLevel => IsolationLevel.Unspecified;
     protected override DbConnection DbConnection => _connection;
 
     public override void Commit() { }
     public override void Rollback() { }
     public override Task CommitAsync(CancellationToken cancellationToken = default)
-        => delaySeconds <= 0
+    {
+        CommitCalls++;
+        return delaySeconds <= 0
             ? Task.CompletedTask
             : Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+    }
 
     protected override void Dispose(bool disposing)
     {

@@ -107,10 +107,16 @@ internal static class RowFactoryEmitter
         if (col.IsNullabilityUnknown)
         {
             string nonNullRead = GetNonNullReadExpression(col, ordinal, generatedTypeSuffix);
+            // ITM-831（r22 登记，r23 实修）：消息整段经 FormatLiteral 转义再进生成代码的
+            // 字符串字面量——与同文件 char 路径同口径。裸拼列名/属性名时，含 " 或 \ 的
+            // 标识符会让生成物报 CS1010/CS1009 语法错误（报错点落在生成物内难归因）。
+            string message = SymbolDisplay.FormatLiteral(
+                $"Column '{col.ColumnName}' (property '{col.PropertyName}') returned NULL, but the "
+                + "nullability of the property is unknown: enable nullable reference types on the entity "
+                + "and mark it nullable, or make the column NOT NULL.",
+                quote: true);
             return $"r.IsDBNull({ordinal}) ? throw new global::System.InvalidOperationException("
-                + $"\"Column '{col.ColumnName}' (property '{col.PropertyName}') returned NULL, but the "
-                + $"nullability of the property is unknown: enable nullable reference types on the entity "
-                + $"and mark it nullable, or make the column NOT NULL.\") : {nonNullRead}";
+                + $"{message}) : {nonNullRead}";
         }
 
         return GetNonNullReadExpression(col, ordinal, generatedTypeSuffix);
@@ -175,6 +181,17 @@ internal static class RowFactoryEmitter
             "System.TimeSpan" => $"r.GetFieldValue<global::System.TimeSpan>({ordinal})",
             "short" or "System.Int16" => $"r.GetInt16({ordinal})",
             "byte" or "System.Byte" => $"r.GetByte({ordinal})",
+            // ITM-814（r23 实修）：补齐窄整型无符号族与底层 long 的枚举——此前落
+            // (T)r.GetValue(i) 装箱拆箱路径：驱动把数值列装箱为 Int64/Int32 时拆箱必抛
+            // InvalidCastException（byte[] 之外的引用类型不走本 switch 的 provider 形态，
+            // 不受影响）。枚举底层 long（: long）同样必须显式 GetFieldValue。
+            "ushort" or "System.UInt16"
+                => $"global::System.Convert.ToUInt16(r.GetFieldValue<global::System.UInt64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+            "uint" or "System.UInt32"
+                => $"global::System.Convert.ToUInt32(r.GetFieldValue<global::System.UInt64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+            "sbyte" or "System.SByte"
+                => $"global::System.Convert.ToSByte(r.GetFieldValue<global::System.Int64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+            "ulong" or "System.UInt64" => $"r.GetFieldValue<global::System.UInt64>({ordinal})",
             // ITM-520：Microsoft.Data.Sqlite/Npgsql 的 GetChar 抛 NotSupportedException，
             // 经字符串读取；空串守卫走 ReadChar，抛带列名异常而非裸 IndexOutOfRange
             "char" or "System.Char" => $"ReadChar(r, {ordinal}, {SymbolDisplay.FormatLiteral(columnName, quote: true)})",

@@ -228,16 +228,21 @@ internal static class SourceGenerationValidation
             if (c == '\'')
             {
                 i++;
+                bool closed = false;
                 while (i < expression.Length)
                 {
                     if (expression[i] == '\\' && i + 1 < expression.Length) { i += 2; continue; }  // MySQL \'
                     if (expression[i] == '\'')
                     {
                         if (i + 1 < expression.Length && expression[i + 1] == '\'') { i += 2; continue; }
+                        closed = true;
                         break;
                     }
                     i++;
                 }
+                // ITM-817（r23 实修）：未闭合字符串 fail-closed——原形态吞到末尾使后续全部
+                // 括号不计，畸形表达式可能因恰好抵消被放行（PALORM044 漏拦，坏 DDL 晚失败在迁移期）。
+                if (!closed) return false;
                 continue;
             }
             // dollar-quoting（PG）：$$...$$ 或 $tag$...$tag$——内部括号全部跳过
@@ -247,16 +252,20 @@ internal static class SourceGenerationValidation
             {
                 char close = c == '[' ? ']' : c;
                 i++;
+                bool closed = false;
                 while (i < expression.Length)
                 {
                     if (expression[i] == close)
                     {
                         if (close != ']' && i + 1 < expression.Length && expression[i + 1] == close)
                         { i += 2; continue; }  // 双写引用符续写
+                        closed = true;
                         break;
                     }
                     i++;
                 }
+                // ITM-817：未闭合标识符 fail-closed（同单引号字符串）
+                if (!closed) return false;
                 continue;
             }
             // 行注释 -- 到行尾
@@ -269,9 +278,13 @@ internal static class SourceGenerationValidation
             if (c == '/' && i + 1 < expression.Length && expression[i + 1] == '*')
             {
                 i += 2;
+                bool closed = false;
                 while (i + 1 < expression.Length
                        && !(expression[i] == '*' && expression[i + 1] == '/')) i++;
-                i++;  // 跳过收尾 '*'（越界时循环自然结束）
+                if (i + 1 < expression.Length) { closed = true; }
+                i++;  // 跳过收尾 '*'（未闭合时越界自止）
+                // ITM-817：未闭合块注释 fail-closed（同字符串/标识符）
+                if (!closed) return false;
                 continue;
             }
             if (c == '(') depth++;

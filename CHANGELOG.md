@@ -2,6 +2,51 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [6.0.1] — v6.0 发布后质量清偿：并行读作用域并发集群（P0）+ 缓存/事务正确性修复 + PALORM052 — 2026-09-28
+
+> 来源：r23 全量评审（4 片并行地毯 72 文件 18916 行零跳读 + r22 账本双轮交叉印证）三阶段（分析→修复→清偿）。全量对账：r22+r23 共 100+ 项发现全部闭环（修复/探针证伪销案/登记并入专门迭代）。验证口径：Core 438/438 · SourceGen 223/223 · Integration 真库 244/244 · gate 33/33 · verify 19/19 · Release 全项目 0 警告 0 错误。
+
+### 🔴 并行读作用域（`ForParallelReads`）并发集群修复——v6.0.0 发布携带，升级强烈建议
+
+- **连接池无锁并发访问（ITM-796）**：作用域内并发读租约同时进入获取/归还路径时，无锁 `Stack`/`List` 操作可把同一空闲连接发放给两个 reader（同连接双开 DataReader）或丢失登记（连接不被追踪/归还）。池集合全部操作改持锁；50 轮 × 8 路并发压力测试入库为长期回归网。
+- **资源管理四处断链（ITM-797）**：① `ForEachAsync` 不归还池连接（作用域内每次调用新建不复用）；② 池连接 `OpenAsync` 失败泄漏物理句柄（与 `AcquireReadConnectionAsync` 的保护对齐）；③ `DisposeCoreAsync` 不清理并行读池（漏 Dispose 作用域句柄时靠终结器兜底）；④ 作用域句柄重复 Dispose 使外层池被提前整体释放（幂等化）。Dispose 等待面同步纳入读租约排空。
+- **事务入口漏读租约门禁（ITM-798）**：`WithTransaction`/`UseTransaction` 可与在飞只读租约并存，击穿"只读并行、写与事务串行"不变式（同一会话读写重叠/读快照不一致）——三事务入口补拒。
+- **`ForEachAsync` 作用域内结构性必抛（ITM-811）**：内层租约以独占形态进入并行读作用域，`await using (session.ForParallelReads())` 内首个 `ForEachAsync` 必抛 `InvalidOperationException`（官方 XML 示例 `Task.WhenAll` 形态即触发）。内层租约改 `EnterReadOnly` 同型（探针锁定测试反转验证）。
+- **有效并发恢复（ITM-875）**：内层租约重入不双计——`MaxParallelReads=8` 的实际并发数从修复前被压制的 4 恢复为 8（5 路并发锁定测试）。
+- **COPY 超时判定竞态窗口（ITM-869）**：超时 CTS 状态置位与回调执行之间，`WriteRow` 轮询抛出的 OCE 使超时以裸 OCE 逃逸（熔断/超时分类 miss）——批级 catch filter 读 token 状态补记（时序免疫）。
+
+### 🟠 缓存与并发正确性
+
+- **SQL 形状缓存跨实体串列（ITM-807①）**：同 `[Table]` 名两实体的零子句查询互相复用缓存条目，按 ordinal 物化**静默串列**——形状键增加实体类型维度。
+- **查询缓存计数漂移（ITM-808）**：并发双命中同一过期条目时计数重复递减且无自愈，累积后 `WithCache` 对新键永久拒绝——按 `TryRemove` 成功与否递减。
+- **熔断器双写不一致（ITM-812）**：半开探针确定性失败复位只写 `_isOpen` 不清 volatile 镜像（C1 无锁快路径永久失效）+ `RecordFinalFailure` 补 generation 核对（陈旧探针不再改写新周期状态）。
+- **订阅者快照发布非原子（ITM-825）**：`OnNotification` 委托与调用列表快照两字段 CAS 间被并发订阅插队时快照回退为较旧值（新订阅者收不到通知/已退订者仍被回调）——合并为单条目 CAS 原子发布。
+- **多租户缓存作用域交错（ITM-866）**：`From<T>()` 三次读 live 租户字段，并发 `WithTenant` 穿插时 T1 的过滤结果可缓存进 `__t:T2` 命名空间——单次快照贯穿 + 作用域缓存判别式含租户值。
+- **回滚超时/取消不可区分（ITM-862）**：`RollbackPreservingAsync` 把调用方取消也记成 "Rollback timed out"（诊断失真）——双 catch 区分，与 `CommitWithTimeoutAsync` 同型。
+
+### 🟠 事务语义
+
+- **回放异常错位回滚（ITM-810①）**：`WithTransaction` 提交成功后回放动作抛异常时，对**已提交**事务发起回滚（"already completed" 噪音 + 调用方误判失败重试即重复写）——`commitSucceeded` 标志裁决。
+- **COMMIT 超时丢回填（ITM-810③）**：提交超时（数据可能已提交）时延迟回填被整体丢弃（上层重试即重复插入）——按文档承诺重放；**内层事务失败清外层登记（ITM-810②）**——复用外部事务的内层失败不再清空外层的 ID/version 回填。
+- **提交失败回滚裁决对称化（ITM-870）**：PG COPY / MySQL BulkCopy 的服务端错误形态 COMMIT 失败此前无条件回滚（多付一次注定失败的往返 + Data 噪音）——引入与 Core `MultiValueBulkInsert` 同语义的跳过裁决（`BulkOperationFramework.TrySkipRollbackAfterCommitFailure` 单一实现点）。
+
+### 🟡 资源与错误诊断
+
+- 资源：CRUD 晋升路径绑定器抛异常时命令泄漏（ITM-867）、`SessionBatch.Timeout` 赋值移入 try（ITM-832）、清理异常 Data 键去重（ITM-830）、`GridReader.EnterRead` 移入 try（ITM-813，Activity 不再泄漏）、`LoadDotEnvIfPresent` 并发完成屏障（ITM-819）。
+- 错误诊断：`MemberResolver` 映射缺失响亮失败（ITM-815，原静默回退属性名生成引用不存在列的 SQL）、注册表重复键友好异常（ITM-864）、`CircuitBreakerRegistry.Key` 覆写 `ToString` 排除连接串明文（ITM-816）、`PALORM003` 表名集合大小写口径对齐 ITM-510（ITM-872，大小写不一致 FK 误报消除）。
+- 守卫：`WhereIn` 参数守卫改方言上限 + LIMIT 余量（ITM-827，SQLite 越界窗口与"恰满上限放行越界 LIMIT 参数"双封堵）、`BulkDelete` 批大小扣租户参数（ITM-809）、`DbOptions` 三条上界（ITM-838）、多值插入除零守卫（ITM-846）、`DbBatch` 索引名 fail-closed 词法（ITM-817）。
+
+### ✨ 新增
+
+- **PALORM052**（Warning）：索引名超过最严方言上限（PG 63 / MySQL 64）编译期提示——派生名 `ux_{表}_{列}` 与显式 `[Index]` 名同型面覆盖，不自动截断（防撞名）；三个锁定测试。诊断总数 44→45。
+- RowFactory 补 `ushort`/`uint`/`sbyte`/`ulong` 显式读分支（ITM-814，原装箱拆箱路径驱动返回 Int64 时抛 `InvalidCastException`）；`AutoTaggingEmitter` 补 `ForEachAsync`/`ToPageAsync`/`QueryMultipleAsync` 三个终态（ITM-818，源码定位注释覆盖补齐）+ `OriginalDefinition` 复核；Count/CountSplit/Update 参数路由数组补 `Raw` 位（ITM-873）。
+- `IPgNotificationConnection.ListenAsync` 标记 `[Obsolete]`（生产零调用，B7 后由 `ListenAllAsync` 承载）；`LastMigrationSkippedIndexes` 返回快照（ITM-824）；`PgNotificationListener.Logger` Volatile 发布（ITM-880）；`SqlFileEmitter` 补 TypeKind 检查（ITM-844）。
+
+### 🔧 内部与工具
+
+- 生成物工具版本与 OTel instrumentation 版本对齐包版本（ITM-861，v6.0 升版本漏改的 5.9.0 残留；D11 校验面扩至两常量）；架构文档测试计数同步；快照基线评审刷新（13 文件纯版本行）。
+- 探针证伪销案（三方言真库）：重试路径参数复用归属（ITM-852/863——Npgsql/MySqlConnector/Sqlite 均无归属拒绝，`DriverBehaviorProbeTests` 三臂入库）；MySQL ODKU `VALUES()` 弃用路线观测哨兵（8.4.11 零警告实证，分派不实施）；SQLite 合并语句双分号形态无害实证。
+
 ## [6.0.0] — v6.0：`[Projection]` DTO 投影 + DDL 债务清偿（DefaultValue/Column 细化）+ 跨方言唯一冲突异常 + 破坏性窗口兑现 — 2026-09-28
 
 > 需求真源 `docs/v6.0-requirements.md` · 方案 `docs/v6.0-master-plan.md` · 任务 `docs/v6.0-tasks.md`（确定盘 32/32 + 门控结论 + 发布三项）。
