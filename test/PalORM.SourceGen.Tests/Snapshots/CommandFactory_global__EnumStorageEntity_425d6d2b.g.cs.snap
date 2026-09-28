@@ -46,6 +46,7 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
         parameters[paramOffset + 1].Value = (object)entity.Status.ToString();
         parameters[paramOffset + 2].Value = (object)(int)entity.Level;
         parameters[paramOffset + 3].Value = (object)(long)entity.WideFlag;
+        parameters[paramOffset + 4].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 4].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString();
     }
 
@@ -65,6 +66,7 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
         parameters[paramOffset + 0].Value = (object)entity.Status.ToString();
         parameters[paramOffset + 1].Value = (object)(int)entity.Level;
         parameters[paramOffset + 2].Value = (object)(long)entity.WideFlag;
+        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString();
         parameters[paramOffset + 4].Value = (object)entity.Id;
     }
