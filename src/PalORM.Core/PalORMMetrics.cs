@@ -100,15 +100,18 @@ internal sealed class QueryObservation
     private readonly bool _metricsEnabled;
     private readonly string _operation;
     private readonly string _provider;
+    private readonly string? _metricName;
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
     private int _completed;
 
-    internal QueryObservation(bool tracingEnabled, bool metricsEnabled, string operation, string provider)
+    internal QueryObservation(bool tracingEnabled, bool metricsEnabled, string operation, string provider,
+        string? metricName = null)
     {
         _activity = tracingEnabled ? PalORMMetrics.StartActivity(operation, provider) : null;
         _metricsEnabled = metricsEnabled;
         _operation = operation;
         _provider = provider;
+        _metricName = metricName;
     }
 
     internal void Complete(string outcome)
@@ -119,6 +122,6 @@ internal sealed class QueryObservation
         _stopwatch.Stop();
         PalORMMetrics.CompleteActivity(_activity, outcome);
         if (_metricsEnabled)
-            PalORMMetrics.Record(_operation, _provider, outcome, _stopwatch.Elapsed);
+            PalORMMetrics.Record(_operation, _provider, outcome, _stopwatch.Elapsed, _metricName);
     }
 }

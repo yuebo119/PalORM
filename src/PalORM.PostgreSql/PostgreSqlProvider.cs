@@ -168,6 +168,18 @@ public sealed class PostgreSqlProvider : IDbProvider
         => exception is UniqueConstraintViolationException
             or PostgresException { SqlState: "23505" };
 
+    /// <summary>并发建表竞态的幂等信号（2026-09-28 实证）：CREATE TABLE IF NOT EXISTS 的
+    /// 存在性检查与 pg_type 随行复合类型插入非原子——多会话并发 MigrateAsync 建同名表时，
+    /// 后到者撞 <c>pg_type_typname_nsp_index</c>（23505）。该约束属系统表且仅在并发建表窗口
+    /// 可达，等价于"对方已建成同表"= IF NOT EXISTS 的期望结果（MySQL 1061 索引兜底同族）。
+    /// MigrateAsync 的建表批据此回退逐条执行。</summary>
+    public static bool IsDuplicateSchemaObject(Exception exception)
+        => exception is PostgresException
+        {
+            SqlState: "23505",
+            ConstraintName: "pg_type_typname_nsp_index"
+        };
+
     /// <summary>用 information_schema.columns 查询列名(参数化,schema 为空时回退 current_schema()),列名位于结果集序号 0。</summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
