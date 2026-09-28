@@ -181,9 +181,12 @@ public sealed class SqliteProvider : IDbProvider
 
     /// <summary>SQLITE_CONSTRAINT_UNIQUE (2067) / SQLITE_CONSTRAINT_PRIMARYKEY (1555)——
     /// 仅唯一/主键冲突。主码 19 涵盖 NOT NULL(1299)/FK(787) 等全部约束违规，
-    /// 按主码判定会把数据完整性错误误报为"记录已存在"（ITM-403）。</summary>
+    /// 按主码判定会把数据完整性错误误报为"记录已存在"（ITM-403）。
+    /// R4（v6.0）：对统一翻译异常幂等——InsertAsync 抛出的 UniqueConstraintViolationException
+    /// 再判定仍为 true（Inner 承载原生扩展码）。</summary>
     public static bool IsUniqueViolation(Exception exception)
-        => exception is SqliteException { SqliteErrorCode: 19, SqliteExtendedErrorCode: 2067 or 1555 };
+        => exception is UniqueConstraintViolationException
+            or SqliteException { SqliteErrorCode: 19, SqliteExtendedErrorCode: 2067 or 1555 };
 
     /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 999（保守值：
     /// 引擎支持 32766 但 PerfHub 同轮 A/B 实测大批参数使批量劣化 6~16×，见

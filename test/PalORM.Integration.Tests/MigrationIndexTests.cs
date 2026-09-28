@@ -38,8 +38,10 @@ public sealed class MigrationIndexTests
         await db.MigrateAsync();
         await db.InsertAsync(new IndexedProduct { Category = "a", Price = 1m, Sku = "SKU-1" });
 
-        await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(async () =>
+        // v6.0 R4：唯一冲突统一翻译为 UniqueConstraintViolationException（Inner 保真驱动原生异常）
+        UniqueConstraintViolationException? thrown = await Assert.ThrowsAsync<UniqueConstraintViolationException>(async () =>
             await db.InsertAsync(new IndexedProduct { Category = "b", Price = 2m, Sku = "SKU-1" }));
+        await Assert.That(thrown!.InnerException).IsTypeOf<Microsoft.Data.Sqlite.SqliteException>();
     }
 }
 

@@ -162,9 +162,11 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <summary>CURRENT_TIMESTAMP——注意 PG 返回会话时区时间(与 SQLite 的恒 UTC 语义不同,ITM-326)。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
-    /// <summary>SQLSTATE 23505 unique_violation——唯一约束冲突。</summary>
+    /// <summary>SQLSTATE 23505 unique_violation——唯一约束冲突。
+    /// R4（v6.0）：对统一翻译异常幂等（UniqueConstraintViolationException 的 Inner SqlState 为 23505）。</summary>
     public static bool IsUniqueViolation(Exception exception)
-        => exception is PostgresException { SqlState: "23505" };
+        => exception is UniqueConstraintViolationException
+            or PostgresException { SqlState: "23505" };
 
     /// <summary>用 information_schema.columns 查询列名(参数化,schema 为空时回退 current_schema()),列名位于结果集序号 0。</summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
