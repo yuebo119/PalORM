@@ -111,9 +111,11 @@ public sealed class SessionBatch<TProvider> : IDisposable
             // 实为误读——DbBatch.Timeout 自 .NET 8 起存在（8.0/9.0/10.0/11.0 参考程序集均有该属性），
             // 缺的是"设值"而非"API 面"：不设即按驱动默认（Npgsql 30s），会话 WithTimeout 在批路径静默失效。
             // 与回退路径同口径（含显式 Zero = 无限等待）。
-            batch.Timeout = _session.BatchCommandTimeoutSeconds;
             try
             {
+                // ITM-832（r23 实修）：Timeout 赋值移入 try——setter 抛异常（驱动验证拒绝）
+                // 时 DbBatch 原形态永不 Dispose；try/finally 保证批对象释放不受赋值影响。
+                batch.Timeout = _session.BatchCommandTimeoutSeconds;
                 // 慢 DDL 场景（大表 CREATE INDEX）不应走批——MigrateAsync 的索引 DDL 保持逐条。
                 foreach ((string sql, IReadOnlyList<DbParameter> parameters) in statements)
                 {

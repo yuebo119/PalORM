@@ -167,7 +167,7 @@ public sealed class ResilienceExecutor
         catch (Exception exception)
         {
             _circuitBreaker.RecordFinalFailure(
-                isHalfOpenProbe, CountsTowardCircuit(exception));
+                isHalfOpenProbe, CountsTowardCircuit(exception), generation);
             throw;
         }
     }

@@ -36,6 +36,11 @@ internal static class AutoTaggingEmitter
         new TerminalMethod("SingleAsync", "global::System.Threading.Tasks.ValueTask<T>"),
         new TerminalMethod("SingleOrDefaultAsync", "global::System.Threading.Tasks.ValueTask<T?>"),
         new TerminalMethod("ExecuteNonQueryAsync", "global::System.Threading.Tasks.ValueTask<int>"),
+        // ITM-818（r23 实修）：补齐三个漏登记的终态——此前这些调用点 SQL 无源码定位注释，
+        // 与自动加定位注释的承诺不一致（ForEachAsync/ToPageAsync/QueryMultipleAsync）。
+        new TerminalMethod("ForEachAsync", "global::System.Threading.Tasks.ValueTask<long>"),
+        new TerminalMethod("ToPageAsync", "global::System.Threading.Tasks.ValueTask<(global::System.Collections.Generic.List<T> Rows, long Total)>"),
+        new TerminalMethod("QueryMultipleAsync", "global::System.Threading.Tasks.ValueTask<PalORM.GridReader>"),
     }.ToImmutableArray();
 
     /// <summary>谓词：节点是 6 个终态方法之一的 InvocationExpression。</summary>
@@ -63,6 +68,16 @@ internal static class AutoTaggingEmitter
         if (op.TargetMethod.ContainingType is not { Name: "QueryBuilderExtensions" } containingType
             || containingType.ContainingNamespace?.ToDisplayString() != "PalORM")
             return null;
+        // ITM-818（r23 实修）：以符号的 OriginalDefinition 名复核终态身份——方法组/泛型构造
+        // 形态下语法层同名不保证是终态本体，误判会在生成物上挂 [InterceptsLocation] 失败
+        //（CS8849 类编译错误，报错点落在生成物内难归因）。
+        string symbolName = op.TargetMethod.OriginalDefinition.Name;
+        bool isKnownTerminal = false;
+        foreach (var terminal in s_terminals)
+        {
+            if (symbolName == terminal.Name) { isKnownTerminal = true; break; }
+        }
+        if (!isKnownTerminal) return null;
 
         // GetInterceptableLocation 扩展方法（CSharpExtensions 提供）
         InterceptableLocation? location = ctx.SemanticModel.GetInterceptableLocation(invocation, ct);

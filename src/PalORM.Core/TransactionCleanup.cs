@@ -96,6 +96,16 @@ internal static class TransactionCleanup
         {
             await transaction.RollbackAsync(effectiveCt).ConfigureAwait(false);
         }
+        catch (OperationCanceledException cancelledException) when (ct.IsCancellationRequested)
+        {
+            // ITM-862（r23）：调用方取消与秒数超时在 Data 痕迹上可区分——原实现把两种 OCE
+            // 都记成 "Rollback timed out"，取消首发时生成假超时记录（诊断失真）。
+            // 双 catch 形态与同文件 CommitWithTimeoutAsync 对齐（片 1/片 3 交叉印证）。
+            primaryException.Data["PalORM.RollbackCancelledException"] = new OperationCanceledException(
+                "Rollback was interrupted by the caller's cancellation token; " +
+                "the server-side transaction may still be open.",
+                cancelledException, ct);
+        }
         catch (OperationCanceledException timeoutException) when (effectiveCt.IsCancellationRequested)
         {
             primaryException.Data["PalORM.RollbackTimeoutException"] = new TimeoutException(

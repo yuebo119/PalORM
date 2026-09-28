@@ -61,6 +61,11 @@ public static class MultiValueBulkInsert
                 $"Type '{typeof(T).Name}' has {columnCount} insert columns, exceeding the " +
                 $"{maxParametersPerStatement}-parameter statement limit.");
 
+        // ITM-846（r23 实修）：columnCount 零守卫——EnsureInsertMetadata 在会话入口拒空列集，
+        // 此处是独立防御位（上方“超上限”守卫不拦 0）；清晰错误优于 DivideByZeroException。
+        if (columnCount == 0)
+            throw new NotSupportedException(
+                $"Type '{typeof(T).Name}' has no insertable columns; multi-value insert requires at least one.");
         int effectiveBatchSize = Math.Min(batchSize, maxParametersPerStatement / columnCount);
         string quotedTable = quoteIdentifier(tableName);
         string quotedColumns = string.Join(", ",

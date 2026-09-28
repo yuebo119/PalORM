@@ -257,14 +257,25 @@ public struct QueryBuilder<T> where T : class, new()
                 AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
             return this;
         }
-        // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超 65535（PG 协议 int16 上限，
-        // 最严方言）应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
+        // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超限
+        // 应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
         // ITM-562: 判定按"存量 + 增量"累计——两次 40k 的 WhereIn 各自增量合规但总量越界，
-        // 只查增量会静默通过、运行期 PG 协议层才报错。
-        if (_parameterCount + items.Count > SqlLimits.MaxBindParameters)
+        // 只查增量会静默通过、运行期协议层才报错。
+        // ITM-827（r23 实修本体）：LIMIT/OFFSET 参数由 BuildLimitClause 从 _parameterCount 起
+        // 编号但**不计入 _parameterCount**（只有 AddClause 计数）——守卫按"存量 + 增量 +
+        // LIMIT 余量"判定，_parameterCount 恰为上限时不再放行实际越界 1-2 参数的 SQL
+        //（正是 ITM-514/562 要"提前拒绝"的形态；字面量 LIMIT（First/Single 族）零余量）。
+        int dialectLimit = SqlLimits.MaxBindParametersFor(_dialect);
+        int limitReserve = 0;
+        if (LiteralTakeValue == 0)
+        {
+            if (_take.HasValue) limitReserve++;
+            if (_skip.HasValue) limitReserve++;
+        }
+        if (_parameterCount + items.Count + limitReserve > dialectLimit)
             throw new ArgumentException(
                 $"{callerName} received {items.Count} values on a builder holding {_parameterCount} parameters; " +
-                $"the total exceeds the {SqlLimits.MaxBindParameters} bind-parameter limit (PostgreSQL protocol max). " +
+                $"the total exceeds the {dialectLimit} bind-parameter limit for {_dialect.GetName()}. " +
                 "Use a temp table join or split the query into batches.", nameof(values));
 
         string operatorName = negated ? " NOT IN (" : " IN (";
@@ -807,7 +818,8 @@ public struct QueryBuilder<T> where T : class, new()
         // 方言参与键与哈希（理由见 ShapeFields 文档）。
         int literalTake = LiteralTakeValue;
         var shapeFields = new SqlShapeCache.ShapeFields(
-            _dialect, _splitQuery, _take.HasValue, _skip.HasValue, _tableName, _cteName, literalTake);
+            _dialect, _splitQuery, _take.HasValue, _skip.HasValue, _tableName, _cteName, literalTake,
+            typeof(T));   // ITM-807①：实体类型进键——SELECT 列清单的判别维度
         // 哈希由形状成分现算（单一真源，规范顺序：表名→子句→CTE→Split→Take形态→Skip形态→字面量take→方言）——
         // 克隆重建链、ToPageAsync/First 族字段直赋等任意构建路径自动一致（审计 A2 整改：
         // 原增量维护在克隆路径丢子句成分，同表分页查询全部挤进同一桶）。
@@ -816,7 +828,9 @@ public struct QueryBuilder<T> where T : class, new()
         // 不影响 SQL 文本，动态 OFFSET 分页的形状由此回归有限集；但 take-only/skip-only/
         // take+skip 产出不同文本形态，形态必须进键防互相复用条目。
         // 例外：字面量形状把值写进文本，故字面量值本身也必须进键（有界：仅 First/Single 族的 1/2）。
-        int shapeHash = System.HashCode.Combine(17, _tableName);
+        // ITM-807①：typeof(T) 进哈希——与 ShapeFields.EntityType 同源（零子句查询的
+        // SELECT 列清单判别；仅表名不够——同表名多实体是合法形态）
+        int shapeHash = System.HashCode.Combine(17, _tableName, typeof(T));
         foreach (QueryClause clause in MaterializeClauses())
             shapeHash = System.HashCode.Combine(shapeHash, clause.Sql);
         if (_cteName is not null) shapeHash = System.HashCode.Combine(shapeHash, _cteName);

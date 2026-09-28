@@ -93,7 +93,8 @@ public sealed class SqlShapeCacheGrowthTests
         _ = builder.ToSql();
 #pragma warning restore PALORM005
         QueryClause[] clauses = builder._materializedClauses!;
-        var fields = new SqlShapeCache.ShapeFields(SqlDialect.Sqlite, false, false, false, "shape_probe", null, 0);
+        var fields = new SqlShapeCache.ShapeFields(
+            SqlDialect.Sqlite, false, false, false, "shape_probe", null, 0, typeof(ShapeProbeEntity));
 
         SqlShapeCache.Add(4242, clauses, fields, "SELECT dup-probe");
         SqlShapeCache.Add(4242, clauses, fields, "SELECT dup-probe");

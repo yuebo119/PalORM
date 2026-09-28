@@ -35,8 +35,11 @@ report() { # <描述> <匹配输出>
 report "props/csproj 的 <Version> 属性" \
     "$(grep -rn "<Version>${OLD_RE}</Version>" --include='*.props' --include='*.csproj' --exclude-dir=obj --exclude-dir=bin . 2>/dev/null || true)"
 
-report "PackageReference Version= 属性" \
-    "$(grep -rn "Version=\"${OLD_RE}\"" --include='*.csproj' --exclude-dir=obj --exclude-dir=bin . 2>/dev/null || true)"
+# 2026-09-28（v6.0.1 发布实测）：PackageReference 残留扫描收窄到 PalORM.* 包——vendored
+# BDN 子树（bench/BenchmarkDotNet）的第三方依赖版本与 PalORM 版本号巧合（AsmResolver 6.0.0）
+# 构成发布阻断误报；自家版本残留的载体恒为 PalORM.* 前缀引用。
+report "PackageReference Version= 属性（PalORM.* 包）" \
+    "$(grep -rnE "Include=\"PalORM\.[A-Za-z]+\"[^>]*Version=\"${OLD_RE}\"" --include='*.csproj' --exclude-dir=obj --exclude-dir=bin . 2>/dev/null || true)"
 
 report "README badge version-" \
     "$(grep -n "version-${OLD_RE}" README.md 2>/dev/null || true)"

@@ -38,6 +38,9 @@ internal static class SqlShapeCache
     /// <para><b>TakeLiteral 是值</b>：First/Single 族的 SQLite 字面量形态把 take 写进 SQL 文本
     /// （<c>LIMIT 1</c>），值不同文本就不同，故必须进键。取值有界（该族的 take 恒为 1 或 2），
     /// 0 表示不是字面量形态。</para></summary>
+    // ITM-807①（r23 实修）：EntityType 参与键——SELECT 列清单由注册表的 (Type, Dialect)
+    // 唯一决定而不在子句序列内，缺此维度时同 [Table] 名两实体的零子句查询互相复用条目，
+    // 按 ordinal 物化静默串列（Type 引用相等即可判别；同表名多实体是合法形态）。
     internal readonly record struct ShapeFields(
         SqlDialect Dialect,
         bool SplitQuery,
@@ -45,7 +48,8 @@ internal static class SqlShapeCache
         bool HasSkip,
         string TableName,
         string? CteName,
-        int TakeLiteral);
+        int TakeLiteral,
+        System.Type EntityType);
 
     internal sealed record SqlShapeEntry(string[] SqlSequence, ShapeFields Fields, string FullSql);
 

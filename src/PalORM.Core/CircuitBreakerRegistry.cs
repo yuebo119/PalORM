@@ -27,5 +27,12 @@ internal static class CircuitBreakerRegistry
         Type Provider,
         string ConnectionString,
         int Threshold,
-        TimeSpan ResetAfter);
+        TimeSpan ResetAfter)
+    {
+        // ITM-816（r23 实修）：显式覆写排除连接串——编译器合成 ToString 输出全部字段，
+        // 连接串明文（含凭据）会进日志/异常消息/diagnostic dump，与类注释"不参与 ToString
+        // 输出"的承诺相反。相等语义不受影响（仍按全部字段）。
+        public override string ToString()
+            => $"{Provider.Name}, Threshold={Threshold}, ResetAfter={ResetAfter}";
+    }
 }

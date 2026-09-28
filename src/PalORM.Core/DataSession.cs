@@ -53,9 +53,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——恒非 null（方法组一次性缓存）：
     /// 并行读作用域在未配置读路由时也生效（连接回落主连接串），故不能按读路由配置条件挂接。</summary>
     private readonly Func<DbConnection, ValueTask> _readConnReturner;
-    /// <summary>并行读作用域的连接池（ARCH-001）——作用域内创建的读连接（全部）与其中空闲可复用的。</summary>
+    /// <summary>并行读作用域的连接池（ARCH-001）——作用域内创建的读连接（全部）与其中空闲可复用的。
+    /// ITM-796（r23）：并发读租约（最多 MaxParallelReads 路）可同时进入获取/归还路径，
+    /// 两个集合的全部操作（Pop/Add/Contains/Push/Clear）必须持 <see cref="_parallelReadPoolLock"/>。</summary>
     private readonly List<DbConnection> _parallelReadConnections = [];
     private readonly Stack<DbConnection> _idleParallelReadConnections = new();
+    private readonly Lock _parallelReadPoolLock = new();
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
     {
@@ -295,16 +298,35 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 约束（与 READ-003 同口径）。</summary>
     private async ValueTask<DbConnection> AcquireParallelReadConnectionAsync(CancellationToken cancellationToken)
     {
-        if (_idleParallelReadConnections.Count > 0)
-            return _idleParallelReadConnections.Pop();
+        // ITM-796（r23）：池集合操作持锁——并发读租约可同时进入本方法，无锁 Pop/Add
+        // 在竞态下可把同一空闲连接发放给两个 reader 或丢失登记（连接不被追踪/不归还）。
+        lock (_parallelReadPoolLock)
+        {
+            if (_idleParallelReadConnections.Count > 0)
+                return _idleParallelReadConnections.Pop();
+        }
         DbConnection created = TProvider.CreateConnection(
             _readConnectionString ?? _options.ResolveConnectionString(), _options);
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(_options.ConnectionTimeout);
-        await created.OpenAsync(cts.Token).ConfigureAwait(false);
-        if (_readConnInitializer is not null)
-            await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
-        _parallelReadConnections.Add(created);
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(_options.ConnectionTimeout);
+            await created.OpenAsync(cts.Token).ConfigureAwait(false);
+            if (_readConnInitializer is not null)
+                await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // ITM-797②（r23）：Open/初始化失败时释放新建连接（与 AcquireReadConnectionAsync
+            // 同口径——CreateAsync 泄漏教训族），此前裸抛泄漏物理句柄。
+            try { await created.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { exception.Data["PalORM.ConnectionCleanupException"] = cleanupException; }
+            throw;
+        }
+        lock (_parallelReadPoolLock)
+        {
+            _parallelReadConnections.Add(created);
+        }
         return created;
     }
 
@@ -408,10 +430,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 两者是判别式（_ignoreFilters / _tenantId）的唯一变更点，且都受操作门禁保护（ITM-568）。</para></summary>
     private TenantScopeEntry? _tenantScopeEntry;
 
-    private sealed class TenantScopeEntry(Type type, string scope)
+    private sealed class TenantScopeEntry(Type type, string tenantId)
     {
         public Type Type { get; } = type;
-        public string Scope { get; } = scope;
+        /// <summary>ITM-866（r23）：判别式含租户值——并发 WithTenant 清缓存与 From&lt;T&gt;
+        /// 写回交错时条目可能短暂 stale（Type 相同但租户已变），按 TenantId 值相等判定
+        /// 避免 stale 命中（命中路径零拼接零分配的 T6 收益保留）。</summary>
+        public string TenantId { get; } = tenantId;
+        public string Scope { get; } = $"__t:{tenantId}";
     }
     internal object? _tenantId;
 
@@ -549,6 +575,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 故不存在无飞行查询仍持有该连接的情形）。
         if (await DisposeReadConnectionAsync().ConfigureAwait(false) is { } readConnectionException)
             RecordCleanupException(ref cleanupException, readConnectionException);
+
+        // ITM-797③（r23）：并行读池兜底释放——用户漏 Dispose ParallelReadScope 时由会话
+        // 释放路径清池（DisposeAsync 等待面已含读租约排空，此时池内连接无飞行消费者）。
+        // 释放异常与池清理同口径（静默——空闲句柄无诊断价值）。
+        await DisposeParallelReadPoolAsync().ConfigureAwait(false);
 
         if (cleanupException is not null)
             ExceptionDispatchInfo.Capture(cleanupException).Throw();
@@ -705,6 +736,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     /// <summary>创建批量执行器——把 N 条非查询语句压成一次往返（方言支持时，实测 PG 3.4×/10 语句）。
     /// 见 <see cref="SessionBatch{TProvider}"/> 的语义契约。</summary>
+    /// <summary>创建批执行器。ITM-836（r23 复核登记）：不取操作租约是<b>内部复用契约</b>——
+    /// MigrateAsync 的 ApplyTableDdlAsync 持租约调用本方法（Schema.cs），加租约会自撞
+    /// "already active"（r23 修复实测坐实后回滚）。公共调用方应在无飞行操作时调用
+    ///（会话常规使用形态天然满足）；构造期读取（CommandTimeout/事务）的门禁由调用方租约覆盖。</summary>
     public SessionBatch<TProvider> CreateBatch() => new(this);
 
     internal DbCommand CreateCommandForBatch() => CreateCommand();
@@ -747,37 +782,63 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return new ParallelReadScope(this);
     }
 
-    /// <summary>并行读作用域句柄——DisposeAsync 退出作用域并在最外层释放池内连接。</summary>
+    /// <summary>并行读作用域句柄——DisposeAsync 退出作用域并在最外层释放池内连接。
+    /// ITM-797④（r23）：幂等——重复 Dispose 不再把外层作用域深度多扣一次
+    /// （原形态内层双 Dispose 使 _parallelReadScopes 提前归零、外层池被整体提前释放）。</summary>
     public sealed class ParallelReadScope(DataSession<TProvider> session) : IAsyncDisposable
     {
+        private bool _disposed;
+
         /// <inheritdoc />
         public async ValueTask DisposeAsync()
-            => await session.EndParallelReadsAsync().ConfigureAwait(false);
+        {
+            if (_disposed) return;
+            _disposed = true;
+            await session.EndParallelReadsAsync().ConfigureAwait(false);
+        }
     }
 
-    /// <summary>退出并行读作用域（ARCH-001）——最外层退出时释放池内全部连接。</summary>
+    /// <summary>退出并行读作用域（ARCH-001）——最外层退出时释放池内全部连接。
+    /// 已知边界：退出时在飞的读查询由其自身 finally 归还连接；作用域先于查询完成退出
+    /// 属调用方违约（正确用法是 Task.WhenAll 完成后再退作用域）。</summary>
     private async ValueTask EndParallelReadsAsync()
     {
         _operationState.ExitParallelReadScope();
         if (_operationState.ParallelReadsEnabled) return;   // 仍有外层作用域：保留池
-        foreach (DbConnection connection in _parallelReadConnections)
+        await DisposeParallelReadPoolAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>释放并行读池内全部连接（ITM-797③，r23）——最外层作用域退出与会话
+    /// Dispose 兜底共用。快照在锁内取得（ITM-796），释放 await 在锁外。</summary>
+    private async ValueTask DisposeParallelReadPoolAsync()
+    {
+        DbConnection[] connections;
+        lock (_parallelReadPoolLock)
+        {
+            connections = [.. _parallelReadConnections];
+            _parallelReadConnections.Clear();
+            _idleParallelReadConnections.Clear();
+        }
+        foreach (DbConnection connection in connections)
         {
             // 清理路径：池内连接多为空闲句柄，释放失败无诊断价值（与既有失效连接丢弃同口径）
             try { await connection.DisposeAsync().ConfigureAwait(false); }
             catch (Exception exception) { _ = exception; }
         }
-        _parallelReadConnections.Clear();
-        _idleParallelReadConnections.Clear();
     }
 
     /// <summary>归还并行读连接（ARCH-001）——作用域内读操作完成后由执行路径调用。
-    /// 非池内连接为空操作（主连接与会话级读连接不归还，仍归会话持有）。</summary>
+    /// 非池内连接为空操作（主连接与会话级读连接不归还，仍归会话持有）。
+    /// ITM-796（r23）：并发归还路径持锁。</summary>
     internal ValueTask ReleaseReadConnectionAsync(DbConnection connection)
     {
         if (!_operationState.ParallelReadsEnabled) return default;
-        if (!_parallelReadConnections.Contains(connection)) return default;
-        if (!_idleParallelReadConnections.Contains(connection))
-            _idleParallelReadConnections.Push(connection);
+        lock (_parallelReadPoolLock)
+        {
+            if (!_parallelReadConnections.Contains(connection)) return default;
+            if (!_idleParallelReadConnections.Contains(connection))
+                _idleParallelReadConnections.Push(connection);
+        }
         return default;
     }
 

@@ -272,6 +272,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM051", "[Column] schema arguments have invalid values",
         "[Column] schema arguments on property '{0}' of type '{1}' are invalid: Length/Precision/Scale must be non-negative (0 = unset), Scale must not be greater than Precision, TypeName must not be whitespace, Length applies to string/char columns only, and Precision/Scale apply to decimal columns only", "PalORM", DiagnosticSeverity.Error, true);
 
+    // PALORM052：索引名长度上限（ITM-874，r23）——派生名 ux_{表}_{列} 与显式 [Index] 名
+    // 超过最严方言上限（PG NAMEDATALEN-1=63，MySQL 64）时迁移期报 1059/名称截断类错误
+    // （SQLite 无实际限制）。编译期 Warning 提示改用短表/列名或显式 [Index] 短名——
+    // 不做自动截断（截断有撞名风险，显式化由用户裁决）。
+    public static readonly DiagnosticDescriptor IndexNameTooLong = new(
+        "PALORM052", "Index name exceeds the identifier length limit",
+        "Index name '{0}' ({1} characters) on type '{2}' exceeds the strictest supported limit of {3} characters (PostgreSQL 63, MySQL 64) and CREATE INDEX fails at migration time on those dialects; use a shorter explicit [Index] name or shorter table/column names", "PalORM", DiagnosticSeverity.Warning, true);
+
+    /// <summary>索引名长度上限——最严方言口径（PG NAMEDATALEN-1）。ITM-874（r23）。</summary>
+    internal const int MaxIndexNameLength = 63;
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, MissingOwnedJsonContext,
@@ -288,7 +299,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression,
          DefaultValueConflicts, InvalidDefaultValueExpression,
          ProjectionTableConflict, ProjectionOwnedJsonUnsupported,
-         InvalidColumnSchemaArgs];
+         InvalidColumnSchemaArgs,
+         IndexNameTooLong];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -1412,7 +1424,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// F3 修复：移除 FK 的 PALORM017 无条件报告——[ForeignKey] 在 QueryBuilder.Include 中
     /// 实际有效（JOIN 语义），不构成"静默无效"。PALORM003（引用表存在）+ PALORM004（OnDelete
     /// 缺失）保留——这两条有实际校验价值。
-    /// ITM-612：Interlocked.CompareExchange 避免并发下 BuildAssemblyTableNames 被多线程重复调用。</summary>
+    /// ITM-612：Interlocked.CompareExchange 防重复<b>存储</b>（C# 实参在 CAS 前已求值，
+    /// EnableConcurrentExecution 下各 symbol action 仍各自完成全程序集扫描——ITM-842 订正
+    /// 原注释"避免重复调用"的失实表述；扫描幂等无正确性影响，仅并发下重复计算）。</summary>
     private static void CheckForeignKey(
         SymbolAnalysisContext ctx, IPropertySymbol member, INamedTypeSymbol type,
         Location memberLocation, ref HashSet<string>? assemblyTables)
@@ -1498,6 +1512,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
             string derivedName = $"ux_{tableName}_{columnName}";
+            // ITM-874（r23）：派生名超长——编译期提示（不自动截断，防撞名）
+            if (derivedName.Length > MaxIndexNameLength)
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(IndexNameTooLong,
+                    member.Locations.FirstOrDefault() ?? type.Locations[0],
+                    derivedName, derivedName.Length, type.Name, MaxIndexNameLength));
+            }
             if (!seenNames.Add(derivedName))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(InvalidIndexDeclaration,
@@ -1527,6 +1548,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                     type.Name,
                     "no valid name; declare [Index(\"name\", \"col1\", ...)]"));
                 continue;
+            }
+
+            // ITM-874（r23）：显式名超长——与派生名同型面一次覆盖（E3/E4 教训）
+            if (indexName.Length > MaxIndexNameLength)
+            {
+                ctx.ReportDiagnostic(Diagnostic.Create(IndexNameTooLong, location,
+                    indexName, indexName.Length, type.Name, MaxIndexNameLength));
             }
 
             if (!TryGetIndexColumns(indexAttr, out string[] columns))
@@ -1581,7 +1609,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     // 注册的局部缓存（由 Roslyn 管理生命周期，符合 RS1008：不存储编译期符号到分析器字段）。
     private static HashSet<string> BuildAssemblyTableNames(IAssemblySymbol assembly)
     {
-        var names = new HashSet<string>();
+        // ITM-872（r23）：表名集合按 ITM-510"最严方言口径"用 OrdinalIgnoreCase——MySQL 表名
+        // 大小写不敏感（同文件 CheckColumnUniqueness/ValidateIndexDeclarations 同口径），
+        // Ordinal 集合会让 [Table("Users")] 被 [ForeignKey("users",…)] 引用时 PALORM003 误报。
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var module in assembly.Modules)
         {
             foreach (var type in GetAllTypes(module.GlobalNamespace))
