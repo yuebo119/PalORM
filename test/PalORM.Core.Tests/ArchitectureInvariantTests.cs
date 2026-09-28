@@ -97,7 +97,7 @@ public sealed class ArchitectureInvariantTests
             .Concat(
             [
                 // 非触表或非实体泛型入口（会话/事务/迁移/健康检查/生命周期）
-                "UpdateAsync", "ValidateSchemaAsync", "DiffAsync", "MigrateAsync",
+                "UpdateAsync", "ValidateSchemaAsync", "MigrateAsync",
                 "SavepointAsync", "RollbackToAsync", "ExecuteWithResilience",
                 "BeginTransactionAsync", "WithTransaction", "HealthCheckAsync",
                 // API-003（2026-09-23）：整事务重放——事务编排入口，不触表、不走过滤路由

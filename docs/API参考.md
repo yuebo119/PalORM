@@ -226,7 +226,6 @@
 | `LoggerFactory` | `ILoggerFactory?` |
 | `QueryCache` | `IQueryCache?`——未注入时各会话共享进程级 `BoundedQueryCache` 默认实例（容量 1024）。`BoundedQueryCache` 自 .NET 11 起暴露 OTel 指标（对齐 MemoryCache 标准口径）：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions`、`palorm.cache.entries`、`palorm.cache.estimated_size`，经 `PalORM` Meter 上游 OTLP 导出。 |
 | `ValidateQueryColumnOrder` | ADR-A 列序契约 |
-| `NamingConvention` | None / SnakeCase / LowerCase |
 
 ---
 

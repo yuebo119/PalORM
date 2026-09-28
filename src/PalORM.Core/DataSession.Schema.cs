@@ -57,14 +57,6 @@ public sealed partial class DataSession<TProvider>
         return issues;
     }
 
-    /// <summary>Schema 差异检测（CI 仅检查不执行）。
-    /// <para><b>v4.0 起标 Obsolete</b>——本质是 <see cref="ValidateSchemaAsync{T}"/> 的字符串前缀包装，
-    /// 增加了调用方心智负担却无新信息。直接用 <c>ValidateSchemaAsync&lt;T&gt;()</c> 然后按需加前缀。</para></summary>
-    [Obsolete("Use ValidateSchemaAsync<T>() and apply prefix manually if needed. This thin wrapper adds no information. Scheduled for removal in v6.0.",
-        DiagnosticId = "PALORM901")]
-    public async ValueTask<List<string>> DiffAsync<T>(CancellationToken ct = default) where T : class, new()
-        => (await ValidateSchemaAsync<T>(ct).ConfigureAwait(false)).Select(d => $"[DIFF] {d}").ToList();
-
     // ─── 迁移 ────────────────────────────────────────────
 
     /// <summary>从编译时生成的 DDL 执行迁移——零运行时反射。

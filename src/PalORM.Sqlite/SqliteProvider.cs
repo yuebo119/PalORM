@@ -44,7 +44,7 @@ public sealed class SqliteProvider : IDbProvider
         ArgumentNullException.ThrowIfNull(options);
         // v5.6：池参数在此被忽略，不再抛 NotSupportedException。
         //
-        // 原实现见 PoolExplicitlyConfigured 即抛——但该标记由 WithPool(...) 与
+        // 原实现见（v6.0 已删除的）PoolExplicitlyConfigured 标记即抛——但该标记由 WithPool(...) 与
         // PALORM_MAX_POOL_SIZE 环境变量设置，而 DbOptions.Production(...) 内部就调用 WithPool，
         // 于是「Production 预设 + SQLite」必然在构造期失败：走预设或走环境变量的 SQLite 部署
         // 全都装不起来。（ITM-315 把「与默认值比对」改成显式标记位是对的，误的是把

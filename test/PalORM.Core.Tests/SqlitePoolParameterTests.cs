@@ -14,10 +14,8 @@ public sealed class SqlitePoolParameterTests
     [Test]
     public async Task ProductionPreset_OnSqlite_CreatesSession()
     {
-        // Production 内部 WithPool(maxSize: 100) → PoolExplicitlyConfigured = true
+        // Production 内部 WithPool(maxSize: 100)（v6.0 起置位标记 PoolExplicitlyConfigured 已删除）
         DbOptions options = DbOptions.Production("Data Source=:memory:");
-
-        await Assert.That(options.PoolExplicitlyConfigured).IsTrue();
 
         await using var session = await DataSession<SqliteProvider>.CreateAsync(options);
         await Assert.That(session).IsNotNull();
