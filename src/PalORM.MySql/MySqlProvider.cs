@@ -280,7 +280,13 @@ public sealed class MySqlProvider : IDbProvider
             cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
             using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                // ITM-822（r23 实修）：SHOW VARIABLES 恒返回一行，零行=服务端异常形态——
+                // 计数留痕（R14 降级可归因；受限账号每次 BulkInsert 恒付探测 RTT 且计数恒 0
+                // 的观测盲区），不写缓存（下次重探，不把异常形态固化为 OFF）。
+                BulkOperationFramework.RecordCapabilityProbeFailure();
                 return false;
+            }
             string value = reader.GetString(1);
             bool enabled = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
             LocalInfileCache.AddOrUpdate(conn, new LocalInfileProbe(
