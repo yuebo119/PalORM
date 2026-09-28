@@ -257,14 +257,18 @@ public struct QueryBuilder<T> where T : class, new()
                 AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
             return this;
         }
-        // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超 65535（PG 协议 int16 上限，
-        // 最严方言）应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
+        // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超限
+        // 应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
         // ITM-562: 判定按"存量 + 增量"累计——两次 40k 的 WhereIn 各自增量合规但总量越界，
-        // 只查增量会静默通过、运行期 PG 协议层才报错。
-        if (_parameterCount + items.Count > SqlLimits.MaxBindParameters)
+        // 只查增量会静默通过、运行期协议层才报错。
+        // ITM-827（r23）：守卫改按方言上限——全局 65535 在 SQLite（999 保守上限）会放行
+        // 越界语句到运行期引擎层才报错（MaxBindParametersFor 文档契约："用全局上限会在
+        // SQLite 上越界"）；PG/MySQL 维持协议上限不变。
+        int dialectLimit = SqlLimits.MaxBindParametersFor(_dialect);
+        if (_parameterCount + items.Count > dialectLimit)
             throw new ArgumentException(
                 $"{callerName} received {items.Count} values on a builder holding {_parameterCount} parameters; " +
-                $"the total exceeds the {SqlLimits.MaxBindParameters} bind-parameter limit (PostgreSQL protocol max). " +
+                $"the total exceeds the {dialectLimit} bind-parameter limit for {_dialect.GetName()}. " +
                 "Use a temp table join or split the query into batches.", nameof(values));
 
         string operatorName = negated ? " NOT IN (" : " IN (";

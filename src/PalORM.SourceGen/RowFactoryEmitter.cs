@@ -107,10 +107,16 @@ internal static class RowFactoryEmitter
         if (col.IsNullabilityUnknown)
         {
             string nonNullRead = GetNonNullReadExpression(col, ordinal, generatedTypeSuffix);
+            // ITM-831（r22 登记，r23 实修）：消息整段经 FormatLiteral 转义再进生成代码的
+            // 字符串字面量——与同文件 char 路径同口径。裸拼列名/属性名时，含 " 或 \ 的
+            // 标识符会让生成物报 CS1010/CS1009 语法错误（报错点落在生成物内难归因）。
+            string message = SymbolDisplay.FormatLiteral(
+                $"Column '{col.ColumnName}' (property '{col.PropertyName}') returned NULL, but the "
+                + "nullability of the property is unknown: enable nullable reference types on the entity "
+                + "and mark it nullable, or make the column NOT NULL.",
+                quote: true);
             return $"r.IsDBNull({ordinal}) ? throw new global::System.InvalidOperationException("
-                + $"\"Column '{col.ColumnName}' (property '{col.PropertyName}') returned NULL, but the "
-                + $"nullability of the property is unknown: enable nullable reference types on the entity "
-                + $"and mark it nullable, or make the column NOT NULL.\") : {nonNullRead}";
+                + $"{message}) : {nonNullRead}";
         }
 
         return GetNonNullReadExpression(col, ordinal, generatedTypeSuffix);
