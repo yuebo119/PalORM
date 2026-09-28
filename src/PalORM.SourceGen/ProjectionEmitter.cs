@@ -37,7 +37,10 @@ internal static class ProjectionEmitter
         sb.AppendLine("        {");
         sb.AppendLine("            RowFactories = new global::System.Collections.Generic.Dictionary<global::System.Type, object>");
         sb.AppendLine("            {");
-        foreach (ProjectionModel model in models.AsSpan())
+        // EntityTypeName 排序——保证注册文件字节级确定（Collect 顺序在增量编译间可变，
+        // 未排序会导致生成文件抖动、增量缓存失效）
+        foreach (ProjectionModel model in models.AsSpan().ToArray()
+                     .OrderBy(static m => m.EntityTypeName, StringComparer.Ordinal))
             sb.AppendLine($"                [typeof({model.EntityTypeName})] = RowFactory_{model.GeneratedTypeSuffix}.Read,");
         sb.AppendLine("            },");
         // 空集用 FrozenDictionary.Empty（生成物消费端为 net11；比逐字典 new Dictionary 短且零分配）。

@@ -128,7 +128,7 @@ internal static class MigrationEmitter
         => column.ProviderClrTypeName is
             "global::System.DateTime" or "global::System.DateTimeOffset";
 
-    /// <summary>列 DEFAULT 子句——两个来源互斥（TableModel 生成期 PALORM046 拦截共存）：
+    /// <summary>列 DEFAULT 子句——两个来源互斥（TableModel 生成期 PALORM047 拦截共存）：
     /// <para><b>[DefaultValue] 表达式</b>（R2，v6.0）——原样直通三方言 DDL，不做方言翻译
     /// （[Computed] ITM-541 同契约，跨方言合法性由调用方负责）；</para>
     /// <para><b>[Timestamp] 时间戳列的 DEFAULT CURRENT_TIMESTAMP</b>（ITM-402/519）——

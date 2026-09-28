@@ -264,12 +264,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM050", "[OwnedJson] is not supported on [Projection] types",
         "Property '{0}' on projection type '{1}' has [OwnedJson]; object OwnedJson materialization depends on the entity CommandFactory's JsonTypeInfo, which projections do not generate. Use a string property to receive the raw JSON instead.", "PalORM", DiagnosticSeverity.Error, true);
 
-    // PALORM051：[Column] 架构参数值域（R3，v6.0）——负 Length/Precision、负 Scale、
-    // Scale>Precision、空白 TypeName 会生成非法 DDL（VARCHAR(-1)/DECIMAL(5,8)），
-    // 延迟到 MigrateAsync 才炸，此处编译期拦截。0 视为未设置不报。
+    // PALORM051：[Column] 架构参数值域与适用面（R3，v6.0）——负 Length/Precision、负 Scale、
+    // Scale>Precision、空白 TypeName 会生成非法 DDL，编译期拦截（0 视为未设置，不报）；
+    // Length 用于非 string/char 列、Precision/Scale 用于非 decimal 列时静默无效
+    //（PALORM017 家族要消灭的形态），一并拦截。
     public static readonly DiagnosticDescriptor InvalidColumnSchemaArgs = new(
         "PALORM051", "[Column] schema arguments have invalid values",
-        "[Column] schema arguments on property '{0}' of type '{1}' are invalid: Length/Precision/Scale must be non-negative (0 = unset), Scale must not be greater than Precision, and TypeName must not be whitespace", "PalORM", DiagnosticSeverity.Error, true);
+        "[Column] schema arguments on property '{0}' of type '{1}' are invalid: Length/Precision/Scale must be non-negative (0 = unset), Scale must not be greater than Precision, TypeName must not be whitespace, Length applies to string/char columns only, and Precision/Scale apply to decimal columns only", "PalORM", DiagnosticSeverity.Error, true);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
@@ -1335,7 +1336,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             || (precision is not null && precision < 0)
             || (scale is not null && scale < 0)
             || (scale is not null && precision is not null && scale > precision)
-            || (typeName is not null && string.IsNullOrWhiteSpace(typeName));
+            || (typeName is not null && string.IsNullOrWhiteSpace(typeName))
+            // 适用面：Length 仅 string/char（VARCHAR(n)），Precision/Scale 仅 decimal——
+            // 其他列类型标注静默无效（如 byte[] + Length），一并拦截
+            || (length is not null && member.Type.SpecialType
+                is not (SpecialType.System_String or SpecialType.System_Char))
+            || ((precision is not null || scale is not null) && member.Type.SpecialType
+                is not SpecialType.System_Decimal);
         if (!invalid) return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(InvalidColumnSchemaArgs,

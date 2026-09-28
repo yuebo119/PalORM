@@ -141,15 +141,6 @@ public sealed partial class DataSession<TProvider>
     private int ProbeCommandTimeoutSeconds
         => _options.CommandTimeoutSeconds == 0 ? DefaultProbeTimeoutSeconds : _options.CommandTimeoutSeconds;
 
-    /// <summary>逐条执行索引 DDL，重名对象按幂等跳过（ITM-203）。
-    /// <para><b>为什么跳过而非失败（ITM-528 既有裁决，r21 回退）</b>：MySQL 无
-    /// <c>CREATE INDEX IF NOT EXISTS</c>，1061（索引名已存在）就是幂等信号——重复迁移是
-    /// 正常运维场景（<c>ExternalDatabaseBulkTests</c> 有"二次迁移经 1061 兜底不抛"的既有断言）。
-    /// 但 1061 无法区分"同名同构"（真幂等）与"同名异构"（实为冲突），且运行时无安全判别手段
-    /// ——故 ITM-528 已裁决此处不改判定逻辑。</para>
-    /// <para><b>可观察性契约</b>：跳过以 Warning 记录，需配置 <c>DbOptions.LoggerFactory</c>
-    /// 才可见（默认会话是 NullLogger，IsEnabled 恒 false）。此处<b>不得</b>因日志不可见而改为
-    /// 抛异常——那会把正常幂等升级为硬失败（r20 曾如此修复并引入回归，r21 撤销）。</para></summary>
     /// <summary>建表 DDL 批执行（L4 单次往返）+ 并发建表竞态兜底。
     /// <para><b>竞态兜底（2026-09-28，PG 实证）</b>：CREATE TABLE IF NOT EXISTS 的存在性检查
     /// 与 pg_type 随行复合类型插入非原子——多会话并发 MigrateAsync 建同名表时，后到者撞
@@ -185,6 +176,15 @@ public sealed partial class DataSession<TProvider>
         }
     }
 
+    /// <summary>逐条执行索引 DDL，重名对象按幂等跳过（ITM-203）。
+    /// <para><b>为什么跳过而非失败（ITM-528 既有裁决，r21 回退）</b>：MySQL 无
+    /// <c>CREATE INDEX IF NOT EXISTS</c>，1061（索引名已存在）就是幂等信号——重复迁移是
+    /// 正常运维场景（<c>ExternalDatabaseBulkTests</c> 有"二次迁移经 1061 兜底不抛"的既有断言）。
+    /// 但 1061 无法区分"同名同构"（真幂等）与"同名异构"（实为冲突），且运行时无安全判别手段
+    /// ——故 ITM-528 已裁决此处不改判定逻辑。</para>
+    /// <para><b>可观察性契约</b>：跳过以 Warning 记录，需配置 <c>DbOptions.LoggerFactory</c>
+    /// 才可见（默认会话是 NullLogger，IsEnabled 恒 false）。此处<b>不得</b>因日志不可见而改为
+    /// 抛异常——那会把正常幂等升级为硬失败（r20 曾如此修复并引入回归，r21 撤销）。</para></summary>
     private async ValueTask ApplyIndexDdlAsync(
         IReadOnlyList<string> indexDdlStatements, CancellationToken ct)
     {
