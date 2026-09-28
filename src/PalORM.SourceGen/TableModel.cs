@@ -163,6 +163,19 @@ internal sealed record TableModel(
             // ITM-621：转换器解析失败（非法构造/基类链属性绕过 CanGenerateEntity 的校验循环）
             // 按原属性类型映射兜底——此前 bool 返回值被丢弃 + `!` 抑制，失败路径
             // providerType 为 null 在 ToDisplayString 处 NRE 崩掉生成器。
+            // ITM-553（v6.1）：枚举存储策略——无 converter 的枚举属性按 StoreAs（缺省=字符串）
+            // 覆写 provider 类型；非枚举/×[Converter] 形态由 PALORM053 定位报错，此处防御性
+            // 不覆写（保持原类型映射，Error 级诊断已阻断编译）。
+            string? enumClrTypeName = null;
+            string? enumParseSwitchBody = null;
+            EnumStorageKind enumStorage = EnumStorageKind.None;
+            if (converterType is null
+                && TryResolveEnumStorage(prop, columnAttr, ctx.SemanticModel.Compilation,
+                    out ITypeSymbol? enumProviderOverride, out enumClrTypeName,
+                    out enumStorage, out enumParseSwitchBody))
+            {
+                providerType = enumProviderOverride!;
+            }
 
             // ITM-626：[Timestamp]（DEFAULT CURRENT_TIMESTAMP）与 [Computed]（GENERATED ALWAYS AS）
             // 同标一属性会生成 "GENERATED ... STORED ... DEFAULT"——MySQL/PG 均拒绝（GENERATED 列
@@ -206,7 +219,8 @@ internal sealed record TableModel(
                 // 属契约而非缺陷，读路径保持直读（零额外 reader 访问）。
                 prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
                 defaultValueExpression,
-                columnLength, columnPrecision, columnScale, columnTypeName));
+                columnLength, columnPrecision, columnScale, columnTypeName,
+                enumStorage, enumClrTypeName, enumParseSwitchBody));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -287,6 +301,52 @@ internal sealed record TableModel(
         return ordered;
     }
 
+    /// <summary>ITM-553（v6.1）：解析枚举属性的存储策略——返回 provider 覆写类型
+    ///（string/int/long）、枚举全名与字符串形态的解析 switch 体。StoreAs 实参是编译期
+    /// 枚举常量（盒装 int）：Default(0)/AsInt32(1)/AsInt64(2)/AsString(3)，缺省与未知值
+    /// 均落字符串（与枚举不可用时期的 TEXT 映射形态一致，升级零迁移）。</summary>
+    internal static bool TryResolveEnumStorage(
+        IPropertySymbol prop, AttributeData? columnAttr, Compilation compilation,
+        out ITypeSymbol? providerOverride, out string? enumClrTypeName,
+        out EnumStorageKind storage, out string? parseSwitchBody)
+    {
+        providerOverride = null;
+        enumClrTypeName = null;
+        storage = EnumStorageKind.None;
+        parseSwitchBody = null;
+        ITypeSymbol unwrapped = SourceGenerationValidation.UnwrapNullable(prop.Type);
+        if (unwrapped.TypeKind != TypeKind.Enum)
+            return false;
+        storage = (columnAttr?.NamedArguments
+            .FirstOrDefault(static na => na.Key == "StoreAs").Value.Value as int?) switch
+        {
+            1 => EnumStorageKind.AsInt32,
+            2 => EnumStorageKind.AsInt64,
+            _ => EnumStorageKind.AsString,
+        };
+        providerOverride = compilation.GetSpecialType(storage switch
+        {
+            EnumStorageKind.AsInt32 => SpecialType.System_Int32,
+            EnumStorageKind.AsInt64 => SpecialType.System_Int64,
+            _ => SpecialType.System_String,
+        });
+        enumClrTypeName = unwrapped.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        if (storage == EnumStorageKind.AsString)
+        {
+            var arms = new System.Text.StringBuilder();
+            foreach (IFieldSymbol member in unwrapped.GetMembers().OfType<IFieldSymbol>())
+            {
+                // 合成字段 value__ 的 ConstantValue 为 null——据此过滤，只取具名成员
+                if (member.ConstantValue is null) continue;
+                arms.Append('"').Append(member.Name)
+                    .Append('"').Append(" => ").Append(enumClrTypeName)
+                    .Append('.').Append(member.Name).Append(", ");
+            }
+            parseSwitchBody = arms.ToString();
+        }
+        return true;
+    }
+
     private static int? GetNamedInt(AttributeData? attribute, string name)
         => attribute is null ? null
             : attribute.NamedArguments.FirstOrDefault(na => na.Key == name).Value.Value is int v && v != 0
@@ -327,6 +387,17 @@ internal sealed record TableModel(
     }
 }
 
+/// <summary>ITM-553（v6.1）：枚举列存储形态。None=非枚举列；AsString=成员名字符串
+///（缺省默认——DDL TEXT，与历史枚举不可用时期的映射形态一致）；AsInt32/AsInt64=底层整数
+///（DDL INTEGER/BIGINT）。[Column(StoreAs=…)] 显式选择，非枚举/×[Converter] 由 PALORM053 拦截。</summary>
+internal enum EnumStorageKind
+{
+    None,
+    AsString,
+    AsInt32,
+    AsInt64
+}
+
 internal sealed record ColumnModel(
     string PropertyName, string ColumnName, string ClrTypeName, string ProviderClrTypeName,
     string DbTypeName, bool IsPrimaryKey, bool IsAutoIncrement, bool IsNullable,
@@ -336,7 +407,12 @@ internal sealed record ColumnModel(
     string? SensitiveMask = null,
     bool IsNullabilityUnknown = false,
     string? DefaultValueExpression = null,
-    int? Length = null, int? Precision = null, int? Scale = null, string? TypeName = null)
+    int? Length = null, int? Precision = null, int? Scale = null, string? TypeName = null,
+    // ITM-553（v6.1）：枚举列的存储策略三件套——EnumClrTypeName 供两侧 Emitter 强转，
+    // ParseSwitchBody 是字符串形态的生成式 switch 解析体（AOT 零反射），仅 AsString 非空。
+    EnumStorageKind EnumStorage = EnumStorageKind.None,
+    string? EnumClrTypeName = null,
+    string? EnumParseSwitchBody = null)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;
@@ -411,6 +487,18 @@ internal sealed record ProjectionModel(
                 providerType = mappedProviderType;
             }
 
+            // ITM-553（v6.1）：投影同款枚举存储覆写（读路径共享 RowFactoryEmitter）。
+            string? projEnumClr = null;
+            string? projEnumParse = null;
+            EnumStorageKind projEnumStorage = EnumStorageKind.None;
+            if (converterType is null
+                && TableModel.TryResolveEnumStorage(prop, columnAttr, ctx.SemanticModel.Compilation,
+                    out ITypeSymbol? projOverride, out projEnumClr,
+                    out projEnumStorage, out projEnumParse))
+            {
+                providerType = projOverride!;
+            }
+
             columns.Add(new ColumnModel(
                 prop.Name, columnName,
                 prop.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
@@ -421,7 +509,8 @@ internal sealed record ProjectionModel(
                 ComputedExpression: null, IsOwnedJson: false, OwnedJsonContextTypeName: null,
                 ConverterTypeName: converterType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 SensitiveMask: null,
-                IsNullabilityUnknown: prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None));
+                IsNullabilityUnknown: prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
+                EnumStorage: projEnumStorage, EnumClrTypeName: projEnumClr, EnumParseSwitchBody: projEnumParse));
         }
 
         if (columns.Count == 0)

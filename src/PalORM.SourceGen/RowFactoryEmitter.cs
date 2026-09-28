@@ -69,6 +69,21 @@ internal static class RowFactoryEmitter
             sb.AppendLine("        return s[0];");
             sb.AppendLine("    }");
         }
+        // ITM-553（v6.1）：字符串存储枚举的解析辅助——生成式 switch（成员名→常量，
+        // AOT 零反射），未定义值抛带原始值的 InvalidOperationException（防静默默认值错数据）。
+        foreach (var col in model.Columns)
+        {
+            if (col.EnumStorage != EnumStorageKind.AsString || col.EnumParseSwitchBody is null) continue;
+            sb.AppendLine();
+            sb.AppendLine($"    private static {col.EnumClrTypeName} Parse_{col.PropertyName}(string value)");
+            sb.AppendLine("    {");
+            sb.AppendLine("        return value switch");
+            sb.AppendLine("        {");
+            sb.Append("            ").AppendLine(col.EnumParseSwitchBody);
+            sb.AppendLine("            _ => throw new global::System.InvalidOperationException(\"Value '\" + value + \"' does not match a defined member of " + col.EnumClrTypeName + ".\")");
+            sb.AppendLine("        };");
+            sb.AppendLine("    }");
+        }
         sb.AppendLine("}");
         return sb.ToString();
     }
@@ -135,6 +150,17 @@ internal static class RowFactoryEmitter
                 ordinal,
                 col.ColumnName);
             return $"_conv_{col.PropertyName}!.FromProvider({providerRead})";
+        }
+
+        // ITM-553（v6.1）：枚举列读路径——provider 类型已覆写（string/int/long），原始读取后
+        // 强转回枚举（int→E / long→E 显式合法）；字符串形态经生成式 switch 解析（AOT 零反射，
+        // 未定义成员响亮失败而非返回默认值）。枚举恒无 converter（×[Converter] 由 PALORM053 拦截）。
+        if (col.EnumStorage != EnumStorageKind.None)
+        {
+            string raw = GetRawReadExpression(col.ProviderClrTypeName, ordinal, col.ColumnName);
+            return col.EnumStorage == EnumStorageKind.AsString
+                ? $"Parse_{col.PropertyName}({raw})"
+                : $"({col.EnumClrTypeName}){raw}";
         }
 
         // 字符串 OwnedJson 是原始 JSON；对象 OwnedJson 仅走源生成 JsonTypeInfo<T>。

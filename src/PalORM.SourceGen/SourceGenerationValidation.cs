@@ -110,7 +110,15 @@ internal static class SourceGenerationValidation
             return converter is null;
 
         if (converter is null)
-            return IsSupportedProviderType(UnwrapNullable(property.Type));
+        {
+            ITypeSymbol unwrapped = UnwrapNullable(property.Type);
+            // ITM-553（v6.1）：枚举属性按 StoreAs 策略映射（缺省=字符串），provider 类型由
+            // TableModel 覆写为 string/int/long 后走既有读/写表达式——此处放行枚举本体。
+            // converter 的 provider 侧仍不接受枚举（读/写表达式的枚举强转只在无 converter
+            // 路径生成，见 RowFactoryEmitter/CommandFactoryEmitter 的 EnumStorage 分支）。
+            return unwrapped.TypeKind == TypeKind.Enum
+                || IsSupportedProviderType(unwrapped);
+        }
 
         return TryGetConverterTypes(
                 property,
