@@ -25,15 +25,13 @@ public sealed class PgBulkCacheConcurrencyTests
     {
         await using (var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOptions()))
         {
-            // 专用实体手建表（列集合与实体的 InsertColumns 一致由 SourceGen 保证）。
-            // 2026-09-28 修复：删去裸 DELETE FROM——它在 DROP IF EXISTS 之前，全新空库
-            //（CI 每次新容器）且本用例先于任何 MigrateAsync 执行时撞 42P01（既有顺序
-            // 依赖被 v6.0 新用例的调度变化暴露；本地绿因库有历史表）。DROP IF EXISTS
-            // + CREATE 已覆盖 DELETE 的全部意图（每次全新建表）。
-            // 列名与生成物一致用引号形态（B78：PG 折叠未加引号的混合大小写）。
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS r49_probe");
-            await db.ExecuteAsync(
-                $"CREATE TABLE r49_probe (\"Id\" INTEGER PRIMARY KEY, \"label\" TEXT)");
+            // 2026-09-28 二次修复：建表改走 MigrateAsync——此前手建表（裸 CREATE TABLE）
+            // 与并行用例的全表迁移建同名表（r49_probe 是注册实体）撞 pg_type 并发竞态
+            //（CI 实测 23505，同提交 dev 绿 main 红坐实概率性）。产品侧 ApplyTableDdlAsync
+            // 已带竞态兜底（回退逐条），复用该路径后本用例零裸 DDL。原注释"绕开 B63 竞态面"
+            // 的顾虑自产品兜底落地起消除。列名引号形态由 SourceGen 的方言 DDL 保证（B78）。
+            await db.MigrateAsync();
+            await db.ExecuteAsync($"DELETE FROM r49_probe");
         }
 
         int before = PostgreSqlProvider.QuotedTargetBuildCount;
