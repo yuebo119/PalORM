@@ -363,17 +363,26 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>INSERT 执行形态分派的单一真源（PL-3）：InsertNoReturning → 纯执行；
-    /// RETURNING 方言 → 标量/整行读；MySQL → LAST_INSERT_ID 合并。复用与新建路径共用。</summary>
+    /// RETURNING 方言 → 标量/整行读；MySQL → LAST_INSERT_ID 合并。复用与新建路径共用。
+    /// <para>R4（v6.0）：唯一冲突翻译挂靠点——异常过滤器形态（when 不吞栈），覆盖全部
+    /// 插入形态与 SaveAsync 的新增分支；Bulk 家族各有冲突消费语义，不在此包装。</para></summary>
     private async ValueTask<T> FinishInsertAsync<T>(
         PalORM_Runtime.RuntimeRegistryState state,
         DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
         where T : class, new()
     {
-        if (metadata.InsertNoReturning)
-            return await InsertPlainAsync<T>(cmd, entity, ct).ConfigureAwait(false);
-        return TProvider.SupportsReturningClause
-            ? await InsertWithReturningAsync(state, cmd, metadata, entity, ct).ConfigureAwait(false)
-            : await InsertWithLastInsertIdAsync(state, cmd, entity, ct).ConfigureAwait(false);
+        try
+        {
+            if (metadata.InsertNoReturning)
+                return await InsertPlainAsync<T>(cmd, entity, ct).ConfigureAwait(false);
+            return TProvider.SupportsReturningClause
+                ? await InsertWithReturningAsync(state, cmd, metadata, entity, ct).ConfigureAwait(false)
+                : await InsertWithLastInsertIdAsync(state, cmd, entity, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
+        {
+            throw new UniqueConstraintViolationException(ex);
+        }
     }
 
     /// <summary>PL-3 无读返回路径——InsertNoReturning 实体专用（显式主键 + 全列恒等）。
