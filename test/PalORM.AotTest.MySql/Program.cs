@@ -38,6 +38,14 @@ internal sealed class AotMySqlDetails
 [JsonSerializable(typeof(AotMySqlDetails), TypeInfoPropertyName = "AotMySqlDetailsInfo")]
 internal sealed partial class AotMySqlJsonContext : JsonSerializerContext;
 
+// R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证载体（顶层声明——嵌套类与实体同规被拒）
+[Projection]
+internal sealed class AotMySqlSummary
+{
+    public long Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
 // ITM-419：经 MigrateAsync（源生成 CreateTableSqlByDialect MySQL 产物）建表的实体——
 // 此前 MySQL 宿主全部手写 DDL，源生成 MySQL DDL 在 AOT 原生路径零真库验证（E1 残留敞口）
 [Table("aot_mysql_migrated")]
@@ -96,6 +104,9 @@ internal static class Program
                 ?? throw new InvalidOperationException("MySQL GET failed");
             AotMySqlEntity stale = await db.GetAsync<AotMySqlEntity>(inserted.Id).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("MySQL stale GET failed");
+
+            // R1（v6.0）：[Projection] DTO 物化（AOT 全链）
+            await VerifyProjectionAsync(db, inserted.Id).ConfigureAwait(false);
 
             first.Name = "AOT MySQL updated";
             if (await db.UpdateAsync(first).ConfigureAwait(false) != 1 || first.Version != 1)
@@ -211,5 +222,17 @@ internal static class Program
                 throw new InvalidOperationException("MySQL pessimistic lock execution failed");
             return true;
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证——只读类型经源生成注册，
+    /// QueryAsync 直接物化（ordinal 契约），不参与写命令与迁移 DDL。</summary>
+    private static async Task VerifyProjectionAsync(
+        DataSession<MySqlProvider> db, long id)
+    {
+        System.Collections.Generic.List<AotMySqlSummary> summaries = await db.QueryAsync<AotMySqlSummary>(
+                $"SELECT id AS \"Id\", name AS \"Name\" FROM aot_mysql_test WHERE id = {id:N0}")
+            .ConfigureAwait(false);
+        if (summaries.Count != 1 || summaries[0].Id != id || summaries[0].Name != "AOT MySQL works!")
+            throw new InvalidOperationException("MySQL [Projection] materialization failed");
     }
 }
