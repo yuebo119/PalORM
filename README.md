@@ -17,9 +17,9 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 | 编译时诊断 | 20,000 行 BulkInsert | MySQL 单行操作 | SQLite Native AOT |
 |:---:|:---:|:---:|:---:|
-| **44 条** | **1.00× ADO.NET 地板** | **快 14~58%** | **exe 4.5 MB** |
+| **45 条** | **1.00× ADO.NET 地板** | **快 10~14%** | **exe 4.5 MB** |
 
-数据口径见[性能](#-性能)一节（2026-09-24 基准批次）。
+数据口径见[性能](#-性能)一节（2026-09-29 基准批次）。
 
 ---
 
@@ -403,35 +403,35 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 
 ## 📊 性能
 
-> **测试环境**：AMD Ryzen 9 8945HX（32 逻辑核）· Windows 10 22H2 · .NET 11 RC1（SDK 11.0.100-rc.1）· BenchmarkDotNet fork（net11）· SQLite 共享内存 10K 行 · PG 18.4 / MySQL 8.4.10 远程。对照臂版本随 2026-09-24 依赖升级轮（Dapper 2.1.89）。
-> **数据批次**：SQLite CRUD 表 = 2026-09-24 BDN gate-set（launch 1 / warmup 3 / iteration 5，均值）；批量表 = 同日 PerfHub 完整批（`history-20260924-231214.json`，中位数 + 精确分配计数）；其余各表为对应专项测量的原始批次结果。完整方法论与复现命令见 [docs/性能基准规范.md](docs/性能基准规范.md) 与 `bench/perfhub/report.html`。
+> **测试环境**：AMD Ryzen 9 8945HX（32 逻辑核）· Windows 10 22H2 · .NET 11 RC1（SDK 11.0.100-rc.1）· BenchmarkDotNet fork（net11）· SQLite 共享内存 10K 行 · PG 18.4 / MySQL 8.4.11 远程。对照臂版本随 2026-09-24 依赖升级轮（Dapper 2.1.89）。
+> **数据批次**：SQLite CRUD 表与 SQL 构建表 = 2026-09-29 BDN 矩阵批（launch 1 / warmup 3 / iteration 5，均值）；其余各表 = 同日 `perf.sh full` 完整批（`history-20260929-003800.json`，中位数 + 精确分配计数）。共享 PG 服务器（空闲时段波动 ±30%）下只读比值跨批不可直接外推，绝对分配稳定。完整方法论与复现命令见 [docs/性能基准规范.md](docs/性能基准规范.md) 与 `bench/perfhub/report.html`。
 
 ### SQLite CRUD（4 ORM 对照）
 
 | 操作 | ADO.NET | Dapper | PalORM | RepoDb |
 |------|------:|------:|------:|------:|
-| 全表查询 10,000 行 | 4.28 ms | 3.69 ms | 4.85 ms（1.13x） | 3.53 ms |
-| 单行插入 | 25.01 μs | 26.88 μs | 32.51 μs（1.30x） | 27.12 μs |
-| 主键查询 | 22.96 μs | 25.28 μs | 27.66 μs（1.20x） | 27.43 μs |
+| 全表查询 10,000 行 | 4.25 ms | 3.89 ms | 4.78 ms（1.13x） | 3.66 ms |
+| 单行插入 | 27.0 μs | 26.6 μs | 33.4 μs（1.24x） | 27.0 μs |
+| 主键查询 | 23.7 μs | 24.8 μs | 29.3 μs（1.23x） | 26.6 μs |
 
 ### 批量操作（PerfHub · SQLite · 20,000 行 · 三臂对等口径）
 
 | 方法 | Mean | Allocated | vs Dapper |
 |:-----|-----:|----------:|:---------:|
-| ADO.NET 地板 | 160.4 ms | 14.9 MB | 0.15x |
-| Dapper 多值 INSERT | 1,105.4 ms | 79.5 MB | 1.0x |
-| **PalORM BulkInsert** | **161.0 ms** | **14.8 MB** | **0.15x（快 6.9×，分配 19%）** |
+| ADO.NET 地板 | 156.6 ms | 14.9 MB | 0.15x |
+| Dapper 多值 INSERT | 1,073.6 ms | 79.5 MB | 1.0x |
+| **PalORM BulkInsert** | **156.0 ms** | **14.8 MB** | **0.15x（快 6.9×，分配 19%）** |
 
-三臂契约下 PalORM 与手写 ADO.NET 地板逐项持平（P/ADO 0.98–1.00）；Dapper 多值 INSERT 在 20,000 行档因巨型 SQL 字符串构造慢 6.9×、分配 5.3×。
+三臂契约下 PalORM 与手写 ADO.NET 地板逐项持平（本批 P/ADO 0.99–1.02）；Dapper 多值 INSERT 在 20,000 行档因巨型 SQL 字符串构造慢 6.9×、分配 5.3×。
 
 ### GC 装箱分析
 
 | 操作（10K 行） | Mean | Allocated | bytes/row |
 |:-----|-----:|----------:|:---------:|
-| Insert（逐条） | 103.7 ms | 25,930 KB | 2,654 B |
-| **BulkInsert** | **62.3 ms** | **5,099 KB** | **522 B** |
-| BulkUpdate（逐条） | 28.8 ms | 17,973 KB | 1,839 B |
-| Query（对照组） | 0.089 ms | 5.41 KB | 0.55 B |
+| Insert（逐条） | 39.8 ms | 10,628 KB | 1,088 B |
+| **BulkInsert** | **69.6 ms** | **5,060 KB** | **518 B** |
+| BulkUpdate（逐条） | 11.5 ms | 7,899 KB | 809 B |
+| Query（对照组） | 5.4 ms | 1,586 KB | 162 B |
 
 PG COPY / MySQL BulkCopy 路径不走 `DbParameter.Value`，已无装箱。
 
@@ -439,38 +439,39 @@ PG COPY / MySQL BulkCopy 路径不走 `DbParameter.Value`，已无装箱。
 
 | 操作 | Mean | Allocated |
 |:-----|-----:|----------:|
-| QueryAll 10K | 15.04 ms | 1,140 KB |
-| BulkInsert 10K（COPY） | 43.06 ms | 9,797 KB |
-| **BulkUpdateBatch 1K（FROM VALUES）** | **4.85 ms** | 2,777 KB |
-| GetByKey | 501.9 μs | 13.64 KB |
+| QueryAll 20K | 23.8 ms | 2,620 KB |
+| BulkInsert 20K（COPY） | 26.5 ms | 5,391 KB |
+| GetByKey | 336.9 μs | 7 KB |
 
-### MySQL（远程 MySQL 8.4.10）
+### MySQL（远程 MySQL 8.4.11）
 
 | 操作 | Mean | vs ADO.NET | Allocated |
 |:-----|-----:|:---------:|----------:|
-| QueryAll 10K | 94.79 ms | 0.85x（快 15%） | 1,937 KB |
-| BulkInsert 10K | 49.41 ms | — | 4,741 KB |
-| **BulkUpdateBatch 1K** | **12.43 ms** | — | 2,405 KB |
-| **GetByKey** | **518.1 μs** | **0.42x（快 58%）** | 12.02 KB |
-| **Insert** | **1,597 μs** | **0.86x（快 14%）** | 12.45 KB |
+| QueryAll 20K | 11.2 ms | 0.86x（快 14%） | 4,161 KB |
+| BulkInsert 20K | 101.2 ms | — | 12,839 KB |
+| **BulkUpdate 20K（VALUES ROW）** | **95.7 ms** | **0.30x（快 3.3×）** | 14,044 KB |
+| GetByKey | 324.4 μs | 0.90x（快 10%） | 9 KB |
+| Insert | 1,516 μs | 1.04x | 10 KB |
 
-单行操作比原生 ADO.NET 快 14~58%：连接串调优（`AutoEnlist=false` / `ConnectionReset=false`）的收益在远程场景放大。表中 BulkUpdateBatch 为 CASE WHEN 形态批次数据；MySQL 形态自 v5.9.0 起改为 `UPDATE JOIN VALUES ROW`（20000 行实测 8.75× vs CASE WHEN）。
+MySQL 单行读快 10%、查询快 14%：连接串调优（`AutoEnlist=false` / `ConnectionReset=false`）的收益在远程场景放大；单行插入与 ADO 持平（1.04x）。批量 UPDATE 的 `UPDATE JOIN VALUES ROW` 形态（v5.9.0 起）对 20,000 行比 ADO 逐条 CASE WHEN 基线快 3.3×。
 
 ### SQL 构建（纳秒级）
 
 | 方法 | Mean | Allocated |
 |:-----|-----:|----------:|
-| StringBuilder（基线） | 61.07 ns | 1,496 B |
-| PalORM Simple | 129.01 ns | **544 B（−64%）** |
-| PalORM Complex | 161.01 ns | **696 B（−53%）** |
+| StringBuilder（基线） | 58.5 ns | 1,496 B |
+| PalORM Simple | 46.5 ns | **544 B** |
+| PalORM Complex | 97.4 ns | **696 B** |
 
-### 跨方言 BulkUpdateBatch（1K 行）
+### 跨方言 BulkUpdate（2,000 行 · 实际生成形态）
 
-| 方言 | SQL 策略 | Mean | 速度比 |
+| 方言 | SQL 策略 | Mean（PalORM） | vs ADO.NET |
 |------|---------|-----:|:------:|
-| SQLite | CASE WHEN → 回退逐条 | 28.3 ms | 1.0x |
-| **PostgreSQL** | **UPDATE FROM VALUES** | **4.85 ms** | **5.8x** |
-| MySQL | CASE WHEN（v5.9.0 起为 VALUES ROW） | 12.43 ms | 2.3x |
+| SQLite | 参数化逐条（≤999 节流） | 2.5 ms | 1.02x |
+| **MySQL** | **UPDATE JOIN VALUES ROW** | 10.7 ms | **0.33x（快 3×）** |
+| PostgreSQL | UPDATE FROM VALUES | 40.0 ms | 2.56x（方差敏感，见注） |
+
+> PG BulkUpdate 2,000 行档比值跨批波动大（服务器空闲度敏感：1.84~2.61），20,000 行档稳定持平 ADO（0.99x）；此形态为已登记的调优候选，不影响其它操作。
 
 ### Native AOT 发布体积
 
