@@ -434,8 +434,9 @@ internal static class CommandFactoryEmitter
             string valueExpr = GetParameterValueExpression(col);
             if (emitDbType && DbTypeFor(col.ProviderClrTypeName) is { } mapped)
                 sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
-            else if (!emitDbType && NeedsPoolDbTypeHint(col))
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{DbTypeFor(col.ProviderClrTypeName)};");
+            else if (!emitDbType && NeedsPoolDbTypeHint(col)
+                && DbTypeFor(col.ProviderClrTypeName) is { } poolMapped)
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{poolMapped};");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
