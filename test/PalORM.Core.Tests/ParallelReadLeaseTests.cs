@@ -56,6 +56,48 @@ internal sealed class ParallelReadLeaseTests
     }
 
     [Test]
+    public async Task TransactionFlowEntry_RejectedWhileReadLeaseInFlight()
+    {
+        // ITM-798（r23 实修锁定）："只读并行、写与事务串行"——事务流开启遇在飞读租约必须拒绝
+        var state = new SessionOperationState();
+        state.EnterParallelReadScope();
+        using SessionOperationState.SessionOperationLease lease = state.EnterReadOnly();
+
+        Exception? thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        {
+            _ = state.EnterTransactionFlow();
+            return Task.CompletedTask;
+        });
+        await Assert.That(thrown!.Message).Contains("in-flight parallel read leases");
+
+        // 租约释放后事务流恢复可用
+        await lease.DisposeAsync();
+        _ = state.EnterTransactionFlow();
+        state.ExitParallelReadScope();
+    }
+
+    [Test]
+    public async Task ParallelReadScope_Handle_DoubleDispose_IsIdempotent()
+    {
+        // ITM-797④（r23 实修锁定）：作用域句柄重复 Dispose 不多扣深度——原形态双 Dispose
+        // 使深度提前归零（外层池被整体提前释放）；幂等后再进作用域仍能正常查询。
+        await using DataSession<SqliteProvider> session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = $"Data Source=par_idem_{Guid.NewGuid():N};Mode=Memory;Cache=Shared" });
+        await session.ExecuteAsync($"CREATE TABLE parallel_rows (Id INTEGER PRIMARY KEY, v TEXT NOT NULL)");
+        await session.ExecuteAsync($"INSERT INTO parallel_rows (Id, v) VALUES (1, 'a')");
+
+        DataSession<SqliteProvider>.ParallelReadScope scope = session.ForParallelReads();
+        await scope.DisposeAsync();
+        await scope.DisposeAsync();   // 幂等：第二次为空操作
+
+        await using (session.ForParallelReads())
+        {
+            List<ParallelRow> rows = await session.From<ParallelRow>().ToListAsync();
+            await Assert.That(rows.Count).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task OutsideScope_ReadOnlyLeaseFallsBackToExclusiveSemantics()
     {
         // 无作用域时 EnterReadOnly 与既有单活动门禁逐位一致（第二次进入被拒绝）

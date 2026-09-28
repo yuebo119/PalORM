@@ -19,26 +19,21 @@ internal sealed class AuditProbeTests
     }
 
     [Test]
-    public async Task Probe1_ForParallelReads_Scope_InnerForEachAsync_ThrowsImmediately()
+    public async Task Probe1_ForParallelReads_Scope_InnerForEachAsync_Succeeds()
     {
+        // ITM-811 修复后的锁定形态（r23 反转）：作用域内 ForEachAsync 与 ToListAsync
+        // 同型成功（内层租约复用外层读租约不双计）。修复前该路径结构性必抛——
+        // 撤修复验红见 r23 报告（AuditProbeTests.Probe1 原断言必抛形态）。
         await using DataSession<SqliteProvider> session = await CreateProbeSessionAsync();
+        long seen = 0;
         await using (session.ForParallelReads())
         {
-            Exception? thrown = null;
-            try
-            {
-                _ = await session.From<ProbeRow>().ForEachAsync(static (_, _) => ValueTask.CompletedTask);
-            }
-            catch (Exception exception)
-            {
-                thrown = exception;
-            }
+            long count = await session.From<ProbeRow>()
+                .ForEachAsync((row, _) => { seen++; return ValueTask.CompletedTask; });
+            await Assert.That(count).IsEqualTo(1L);
+            await Assert.That(seen).IsEqualTo(1L);
 
-            // 坐实形态断言：作用域内 ForEachAsync 结构性必抛（外层只读租约 → 内层 Enter(null) 无重入放行）
-            await Assert.That(thrown).IsNotNull();
-            await Assert.That(thrown).IsTypeOf<InvalidOperationException>();
-
-            // 对照组：同作用域内 ToListAsync 正常（证明作用域本身健康，失败是 ForEachAsync 独有）
+            // 对照组：同作用域内 ToListAsync 正常
             List<ProbeRow> rows = await session.From<ProbeRow>().ToListAsync();
             await Assert.That(rows.Count).IsEqualTo(1);
         }
