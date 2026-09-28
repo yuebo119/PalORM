@@ -109,12 +109,7 @@ public sealed partial class DataSession<TProvider>
 
         // L4：建表 DDL 一次往返（owner 重入外层迁移租约）
         if (tableDdls.Count > 0)
-        {
-            using SessionBatch<TProvider> batch = CreateBatch();
-            foreach (string ddl in tableDdls)
-                _ = batch.AppendRaw(ddl);
-            _ = await batch.ExecuteNonQueryAsync(operation.Owner, ct).ConfigureAwait(false);
-        }
+            await ApplyTableDdlAsync(tableDdls, operation, ct).ConfigureAwait(false);
 
         foreach (IReadOnlyList<string> indexDdls in indexDdlGroups)
             await ApplyIndexDdlAsync(indexDdls, ct).ConfigureAwait(false);
@@ -155,6 +150,41 @@ public sealed partial class DataSession<TProvider>
     /// <para><b>可观察性契约</b>：跳过以 Warning 记录，需配置 <c>DbOptions.LoggerFactory</c>
     /// 才可见（默认会话是 NullLogger，IsEnabled 恒 false）。此处<b>不得</b>因日志不可见而改为
     /// 抛异常——那会把正常幂等升级为硬失败（r20 曾如此修复并引入回归，r21 撤销）。</para></summary>
+    /// <summary>建表 DDL 批执行（L4 单次往返）+ 并发建表竞态兜底。
+    /// <para><b>竞态兜底（2026-09-28，PG 实证）</b>：CREATE TABLE IF NOT EXISTS 的存在性检查
+    /// 与 pg_type 随行复合类型插入非原子——多会话并发 MigrateAsync 建同名表时，后到者撞
+    /// <c>pg_type_typname_nsp_index</c>（由 <see cref="IDbProvider.IsDuplicateSchemaObject"/> 识别），
+    /// 批内单条失败即整批报废。回退逐条执行：竞态过的表由 IF NOT EXISTS 自然跳过
+    ///（MySQL 1061 索引兜底同族；慢路径仅在竞态异常发生时进入，正常路径保持批单往返）。</para></summary>
+    private async ValueTask ApplyTableDdlAsync(
+        List<string> tableDdls, SessionOperationState.SessionOperationLease operation, CancellationToken ct)
+    {
+        using SessionBatch<TProvider> batch = CreateBatch();
+        foreach (string ddl in tableDdls)
+            _ = batch.AppendRaw(ddl);
+        try
+        {
+            _ = await batch.ExecuteNonQueryAsync(operation.Owner, ct).ConfigureAwait(false);
+        }
+        catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
+        {
+            foreach (string ddl in tableDdls)
+            {
+                await using DbCommand fallback = CreateCommand();
+                fallback.CommandText = ddl;
+                fallback.CommandTimeout = _options.CommandTimeoutSeconds;
+                try
+                {
+                    await fallback.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+                catch (DbException duplicate) when (TProvider.IsDuplicateSchemaObject(duplicate))
+                {
+                    // 已存在 = IF NOT EXISTS 的期望结果（并发对方已建成）
+                }
+            }
+        }
+    }
+
     private async ValueTask ApplyIndexDdlAsync(
         IReadOnlyList<string> indexDdlStatements, CancellationToken ct)
     {

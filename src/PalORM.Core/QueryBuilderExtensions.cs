@@ -507,10 +507,13 @@ public static class QueryBuilderExtensions
         }
     }
 
-    /// <summary>构建可观测性追踪点——仅当 tracing 或 metrics 任一启用时创建。</summary>
+    /// <summary>构建可观测性追踪点——仅当 tracing 或 metrics 任一启用时创建。
+    /// R5（v6.0）：WithMetrics(name) 的业务名贯通全部观测路径（含 ToPage/QueryMultiple/
+    /// ExecuteScalar 等经 QueryObservation 的路径——非仅三个直接 Record 调用点）。</summary>
     private static QueryObservation? StartObservation<T>(QueryBuilder<T> builder, string operation) where T : class, new()
         => builder._tracing || builder._metrics
-            ? new QueryObservation(builder._tracing, builder._metrics, operation, builder._dialect.GetName())
+            ? new QueryObservation(builder._tracing, builder._metrics, operation, builder._dialect.GetName(),
+                builder._metricsName)
             : null;
 
     /// <summary>查询失败时的资源清理——按"grid 已建/未建"两路径释放。
@@ -597,7 +600,7 @@ public static class QueryBuilderExtensions
     {
         string provider = builder._dialect.GetName();
         QueryObservation? observation = builder._tracing || builder._metrics
-            ? new QueryObservation(builder._tracing, builder._metrics, operation, provider)
+            ? new QueryObservation(builder._tracing, builder._metrics, operation, provider, builder._metricsName)
             : null;
         try
         {

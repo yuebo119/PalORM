@@ -8,6 +8,17 @@ namespace PalORM.Integration.Tests;
 [NotInParallel("PalORMMetrics")]
 public sealed class QueryMetricsTests
 {
+    /// <summary>meter tag 过滤辅助（并发免疫修复，2026-09-28）：MeterListener 是进程级广播，
+    /// 其他类的并行查询会 Record 进同一 instrument——精确计数/集合断言必须按本测试独有的
+    /// palorm.query.name（R5 tag）过滤，否则全量混跑下被串扰（实测 2→3）。</summary>
+    private static bool HasQueryName(ReadOnlySpan<KeyValuePair<string, object?>> tags, string name)
+    {
+        foreach (KeyValuePair<string, object?> tag in tags)
+            if (tag.Key == "palorm.query.name" && Equals(tag.Value, name))
+                return true;
+        return false;
+    }
+
     [Test]
     public async Task WithMetrics_EmitsLowCardinalityOutcomeTags()
     {
@@ -22,6 +33,7 @@ public sealed class QueryMetricsTests
         listener.SetMeasurementEventCallback<long>((instrument, measurement, measurementTags, _) =>
         {
             if (instrument.Name != "palorm.query.executions") return;
+            if (!HasQueryName(measurementTags, "user-supplied-name")) return;
             executions += measurement;
             foreach (KeyValuePair<string, object?> tag in measurementTags)
                 tags.Add(tag);
@@ -53,6 +65,7 @@ public sealed class QueryMetricsTests
         listener.SetMeasurementEventCallback<long>((instrument, _, measurementTags, _) =>
         {
             if (instrument.Name != "palorm.query.executions") return;
+            if (!HasQueryName(measurementTags, "page")) return;
             foreach (KeyValuePair<string, object?> tag in measurementTags)
             {
                 if (tag.Key == "db.operation.name" && tag.Value is string operation)
@@ -85,13 +98,9 @@ public sealed class QueryMetricsTests
         {
             if (instrument.Name != "palorm.query.executions") return;
             bool isSuccess = false;
-            bool isMultiple = false;
             foreach (KeyValuePair<string, object?> tag in measurementTags)
-            {
                 isSuccess |= tag.Key == "palorm.outcome" && Equals(tag.Value, "success");
-                isMultiple |= tag.Key == "db.operation.name" && Equals(tag.Value, "query_multiple");
-            }
-            if (isSuccess && isMultiple) successCount += measurement;
+            if (isSuccess && HasQueryName(measurementTags, "multiple")) successCount += measurement;
         });
         listener.Start();
         await using var db = await TestDb.SqliteAsync();
@@ -119,14 +128,12 @@ public sealed class QueryMetricsTests
         listener.SetMeasurementEventCallback<long>((instrument, _, measurementTags, _) =>
         {
             if (instrument.Name != "palorm.query.executions") return;
-            bool isMultiple = false;
             string? outcome = null;
             foreach (KeyValuePair<string, object?> tag in measurementTags)
             {
-                isMultiple |= tag.Key == "db.operation.name" && Equals(tag.Value, "query_multiple");
                 if (tag.Key == "palorm.outcome") outcome = tag.Value as string;
             }
-            if (isMultiple && outcome is not null) outcomes.Add(outcome);
+            if (outcome is not null && HasQueryName(measurementTags, "multiple-error")) outcomes.Add(outcome);
         });
         listener.Start();
         await using var db = await TestDb.SqliteAsync();
