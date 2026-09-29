@@ -2,7 +2,7 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] — v6.1：枚举支持（StoreAs 三形态）+ 参数池 DbType 贯通 + PALORM053 — 2026-09-29
+## [6.1.0] — v6.1：枚举支持（StoreAs 三形态）+ 参数池 DbType 贯通 + PALORM053 — 2026-09-29
 
 > 验证口径：Core 444/444 · SourceGen 227/227 · Integration 真库 244/244 · Release（ci.slnf -warnaserror）0 警告 0 错误 · gate 33/33 · verify 19/19 · doc 12/12。
 
