@@ -30,4 +30,4 @@
 
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
-| `test-package-contract.sh` | NuGet 包契约验证 | ✅ ci.yml aot |
+| `test-package-contract.cs` | NuGet 包契约验证（`dotnet run --file` 调用） | ✅ ci.yml aot |
