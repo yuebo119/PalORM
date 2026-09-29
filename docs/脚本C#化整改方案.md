@@ -215,12 +215,12 @@
 | 项 | 状态 |
 |----|------|
 | 方案 v3 定稿（探针实证 + 论证修订 + 最佳实践） | done |
-| Phase 0 基建与探针 | done（本轮提前完成，T0-1 至 T0-5） |
-| Phase 1 夹具先行 | pending |
-| Phase 2 提交防线四项 | pending |
-| Phase 3 发布链三项 | pending |
-| Phase 4 性能链 → PerfCli | pending（受裁决点 3 时序约束） |
-| Phase 5 夹具本体与 hook | pending |
-| Phase 6 政策固化 | pending |
+| Phase 0 基建与探针 | done（T0-1 至 T0-5） |
+| Phase 1 夹具先行 | done（并入逐脚本红先绿后节奏） |
+| Phase 2 提交防线四项 | done（91e1385 / ba01eac / 8d006b1 / 8e01486，含全历史硬闸） |
+| Phase 3 发布链三项 | done（ef0adf0 / 52ec490 / 2051fed，6.1.0 正向全绿） |
+| Phase 4 性能链 → PerfCli | done（fe8c6ca，gate/index/report 对拍 DIFF-CLEAN） |
+| Phase 5 夹具本体与 hook | done（9a01630，九段夹具全绿） |
+| Phase 6 政策固化 | done（编码规范 §19 + AGENTS 指针 + CHANGELOG 未发布段；语言门禁 V17 双向验证） |
 
-总进度约 10%（Phase 0 已实测完成并入库：scripts/Directory.Build.props + Directory.Build.targets；未动任何现有脚本；三个裁决点表态后从 T1-1 开工）。
+总进度 100%（17 项裁决全部落地：16 项迁 C#、1 项白名单保留；全仓非 C# 脚本文件归零、Node 依赖归零、ci.slnf 0 警告 0 错误含 PerfCli、九段夹具全绿）。遗留备案：run-mutation-tests.cs 的全量变异运行未实测（10-30 分钟成本，命令逐字对照，待下次变异轮兜底）；secret-guard 的 quotepath 非 ASCII 路径盲区两侧同构保留，修复属独立任务。

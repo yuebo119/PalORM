@@ -2,6 +2,15 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布]
+
+### 🧹 脚本 C# 化整改（2026-09-29，用户决策：脚本一律 C#，非 C# 白名单制须用户同意）
+
+- **全仓 15 个 `.sh` + 1 个 Node `.mjs` 迁移为 C#**：提交防线四项（secret-guard/stub-check/assert-test-counts/assert-coverage）与发布链三项（release-version-scan/pre-release-check/test-package-contract）迁为 file-based app（`dotnet run --file scripts/<名>.cs`）；性能链五件套（perf/perfhub-ab/run-full-perf/dappersuite-run/run-benchmarks）+ set-test-env 收敛为 `tools/PalORM.PerfCli` 项目（九子命令，入 ci.slnf 享 0 警告 0 错误门禁）；质量夹具本体迁为 `scripts/test-quality-scripts.cs`（九段，新增"脚本语言政策"机械门禁：白名单外新 `.sh/.mjs/.py` 即 FAIL，V17 双向验证）。`.githooks/pre-commit` 为唯一白名单保留项（git hook 机制要求）。
+- **行为对拍**：每个脚本迁移前新旧双跑逐字节比对——secret-guard 加全历史硬闸（719 提交 826 文件 range 双跑一致）；PerfCli gate/index/report 三子命令对拍抓出并修复两处语义漂移（set -e 终止语义、子进程输出直通）。
+- **脚本基建**：`scripts/` 配隔离构建配置（`Directory.Build.props` + `Directory.Build.targets`）——file-based app 默认继承仓库根严格配置会全量报错（CS1591/CA 系/S3903/NU1008 四类实证），隔离后保留严格编译、关分析器注入与 CPM；新增脚本语言规范入 `docs/编码规范.md` §19（白名单制 + 形态判据 + 编写约定）。
+- **CI/文档同步**：verify.yml 九处调用切换并补 secret-scan job 的 setup-dotnet；性能基准规范/测试规范/发布规范/编码规范/AGENTS/CONTRIBUTING/README 全部调用形态同步；删除 scripts/lib/（Node 依赖归零）。
+
 ## [6.1.0] — v6.1：枚举支持（StoreAs 三形态）+ 参数池 DbType 贯通 + PALORM053 — 2026-09-29
 
 > 验证口径：Core 444/444 · SourceGen 227/227 · Integration 真库 244/244 · Release（ci.slnf -warnaserror）0 警告 0 错误 · gate 33/33 · verify 19/19 · doc 12/12。
