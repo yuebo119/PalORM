@@ -286,7 +286,7 @@ jobs:
                   dotnet pack src/PalORM.Sqlite -c Release -o artifacts/packages
 
             - name: Validate package contracts
-              run: bash scripts/test-package-contract.sh
+              run: dotnet run --file scripts/test-package-contract.cs
 
             - name: Restore package consumer
               run: >-
