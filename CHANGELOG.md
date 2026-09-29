@@ -11,7 +11,7 @@
 - **脚本基建**：`scripts/` 配隔离构建配置（`Directory.Build.props` + `Directory.Build.targets`）——file-based app 默认继承仓库根严格配置会全量报错（CS1591/CA 系/S3903/NU1008 四类实证），隔离后保留严格编译、关分析器注入与 CPM；新增脚本语言规范入 `docs/编码规范.md` §19（白名单制 + 形态判据 + 编写约定）。
 - **CI/文档同步**：verify.yml 九处调用切换并补 secret-scan job 的 setup-dotnet；性能基准规范/测试规范/发布规范/编码规范/AGENTS/CONTRIBUTING/README 全部调用形态同步；删除 scripts/lib/（Node 依赖归零）。
 - **secret-guard 盲区修复（2026-09-30）**：git 默认 quotepath 把非 ASCII 路径转义为八进制形态，导致中文路径文件（docs/编码规范.md 族）的内容检查静默跳过、真阳性泄漏可绕过——修复为 Git 调用统一 `-c core.quotepath=false` + UTF-8 解码；连带白名单缺口泛化：`Password=<...>` 尖括号占位符整体豁免（盲区修复后全历史扫描暴露 docs/AOT部署指南.md 的 `<pwd>` 短形态命中，真实凭据不会包尖括号）。全历史 826 文件扫描复验 exit0，selftest 增三形态向量。
-- **变异测试管线现代化（2026-09-30）**：run-mutation-tests.cs 端到端实测暴露三处既有断点并修复——脚本局部函数编译错（IDE0062）；stryker-config.json 停留 stryker 4.x 形态（缺 `"stryker-config"` 根对象、threshold 三键已合并、log-level/timeout-ms 键已更名、相对路径基准失配），按 stryker 5.0.0 schema 重写并以 `test-runner: mtp` 启用 MTP runner（TUnit 唯一可用通道，预览特性）。当前终态：管线可跑通至变异生成（444 测试发现），但 stryker MTP 预览 runner 存在内部恢复缺陷（"Failed to restore the project to a buildable state"，coverage on/off 双态复现），全量变异得分被其阻断，待上游修复后复测。
+- **变异测试管线现代化（2026-09-30）**：run-mutation-tests.cs 端到端实测暴露三处既有断点并修复——脚本局部函数编译错（IDE0062）；stryker-config.json 停留 stryker 4.x 形态（缺 `"stryker-config"` 根对象、threshold 三键已合并、log-level/timeout-ms 键已更名、相对路径基准失配），按 stryker 5.0.0 schema 重写并以 `test-runner: mtp` 启用 MTP runner（TUnit 唯一可用通道，预览特性）。终态定性（三轮对照实验：ignore-mutations 排除、显式清单剔除、取反 glob 均证伪）：管线推进至变异生成（444 测试发现、Safe Mode 摘除编译错误变异正常），全量得分被 stryker 5.0.0 上游双重缺陷阻断——MTP 预览 runner 恢复器缺陷（issue #3799 同族，修复 PR #3817 已合未发版）+ 跨项目 mutate 过滤失效（Span 重度文件 MultiValueBulkInsert 无法排除）。待上游发版后复测；`src/` 经 git diff 双核对无残留变异污染。
 
 ## [6.1.0] — v6.1：枚举支持（StoreAs 三形态）+ 参数池 DbType 贯通 + PALORM053 — 2026-09-29
 
