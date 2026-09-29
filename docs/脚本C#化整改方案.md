@@ -223,4 +223,8 @@
 | Phase 5 夹具本体与 hook | done（9a01630，九段夹具全绿） |
 | Phase 6 政策固化 | done（编码规范 §19 + AGENTS 指针 + CHANGELOG 未发布段；语言门禁 V17 双向验证） |
 
-总进度 100%（17 项裁决全部落地：16 项迁 C#、1 项白名单保留；全仓非 C# 脚本文件归零、Node 依赖归零、ci.slnf 0 警告 0 错误含 PerfCli、九段夹具全绿）。遗留备案：run-mutation-tests.cs 的全量变异运行未实测（10-30 分钟成本，命令逐字对照，待下次变异轮兜底）；secret-guard 的 quotepath 非 ASCII 路径盲区两侧同构保留，修复属独立任务。
+总进度 100%（17 项裁决全部落地：16 项迁 C#、1 项白名单保留；全仓非 C# 脚本文件归零、Node 依赖归零、ci.slnf 0 警告 0 错误含 PerfCli、九段夹具全绿）。
+
+**终态备案（2026-09-30 实测收口）**：
+1. run-mutation-tests.cs 端到端实测完成，过程中修复三处既有断点（脚本 IDE0062、stryker-config.json 4.x 旧形态、相对路径基准），并启用 test-runner mtp（TUnit 唯一通道）。管线推进至变异生成（444 测试发现），全量得分被 stryker 5.0.0 上游双重缺陷阻断：MTP 预览 runner 恢复器缺陷（"Failed to restore the project to a buildable state"，[issue #3799](https://github.com/stryker-mutator/stryker-net/issues/3799) 同族，修复 PR #3817 已合但未发版）+ 跨项目 mutate 过滤失效（显式清单/取反 glob/ignore-mutations 三形态实验均无效）。待上游发版后周六 CI 自动复测，本地复验命令不变。
+2. secret-guard quotepath 盲区已修复（见提交 7796bb9），本方案的"两侧同构保留"条款随之撤销。

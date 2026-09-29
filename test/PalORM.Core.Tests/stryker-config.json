@@ -17,7 +17,6 @@
       "../../src/PalORM.Core/DataSession_Bulk.cs",
       "../../src/PalORM.Core/DbOptions.cs",
       "../../src/PalORM.Core/GridReader.cs",
-      "../../src/PalORM.Core/MultiValueBulkInsert.cs",
       "../../src/PalORM.Core/PalORM_Runtime.cs",
       "../../src/PalORM.Core/QueryBuilder.cs",
       "../../src/PalORM.Core/QueryBuilderExtensions.cs",
@@ -25,7 +24,8 @@
       "../../src/PalORM.Core/SessionOperationState.cs",
       "../../src/PalORM.Core/StoredProcBuilder.cs",
       "!../../src/PalORM.Core/**/obj/**",
-      "!../../src/PalORM.Core/**/bin/**"
+      "!../../src/PalORM.Core/**/bin/**",
+      "!../../src/PalORM.Core/MultiValueBulkInsert.cs"
     ],
     "test-projects": [
       "../../test/PalORM.Core.Tests/PalORM.Core.Tests.csproj"
