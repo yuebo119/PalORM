@@ -114,7 +114,7 @@ jobs:
                   "$(find test/PalORM.Core.Tests/bin -name '*.tunit-report.json' | head -1)"
 
             - name: Assert Core coverage floor (M3-1)
-              run: bash scripts/assert-coverage.sh PalORM.Core cov-core.xml core
+              run: dotnet run --file scripts/assert-coverage.cs -- PalORM.Core cov-core.xml core
 
             - name: Source generator tests
               run: dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build
