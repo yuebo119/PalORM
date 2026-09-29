@@ -9,7 +9,7 @@ internal static class GeneratedCodeMetadata
 {
     /// <summary>生成工具（本包）版本——须与 Directory.Build.props 的 Version 一致（D11 校验）。
     /// ITM-861（r23）：v6.0 升版本时漏改（5.9.0 残留一个 minor），已对齐。</summary>
-    internal const string ToolVersion = "6.0.1";
+    internal const string ToolVersion = "6.1.0";
 
     /// <summary>生成物头部的 GeneratedCode 特性行。五处 Emitter 共用此常量——版本只在上一行改一次。</summary>
     internal const string GeneratedCodeAttribute =
