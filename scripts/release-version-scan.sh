@@ -47,6 +47,26 @@ report "README badge version-" \
 report "src 双引号版本字面量（含 ToolVersion）" \
     "$(grep -rn "\"${OLD_RE}\"" --include='*.cs' --exclude-dir=obj --exclude-dir=bin src/ 2>/dev/null || true)"
 
+# 2026-09-29（v6.1.0 发布实测）：两道新判据，封堵 placeholder 残留这一发布失败形态——
+# 升版本批次的占位符交换若对某一行落空（留下 Version="6.0.0-placeholder"），旧号扫描
+# 抓不到它（含 placeholder 的字符串不匹配旧号），正向核对又只看 props 单点。CI 的
+# NuGet Consumer Restore 会因该版本不存在而失败（run 36510390810，坏包未推出但白烧
+# 一轮发布流）。
+#
+# 判据 A：消费者 csproj 的 PalORM.* 包引用必须精确等于新版本号——旧号残留与占位符
+#   字符串两种形态一网打尽（版本比较而非模式匹配，对任意占位写法免疫）。
+# 判据 B：全部 PalORM.* PackageReference 行中凡含 placeholder/TODO/FIXME 字样的行
+#   ——兜住"新版本号写好了但行内带占位标记"的中间态提交。
+CONSUMER_CSproj="test/PalORM.PackageConsumer.Aot/PalORM.PackageConsumer.Aot.csproj"
+if [ -n "$NEW" ] && [ -f "$CONSUMER_CSproj" ]; then
+    BAD_CONSUMER=$(grep -nE "Include=\"PalORM\.[A-Za-z]+\"[^>]*Version=\"" "$CONSUMER_CSproj" 2>/dev/null \
+        | grep -v "Version=\"${NEW_RE}\"" || true)
+    report "消费者 PackageReference 版本≠新版本 ${NEW}（判据 A）" "$BAD_CONSUMER"
+fi
+report "PalORM.* PackageReference 行含占位标记（判据 B）" \
+    "$(grep -rnE "Include=\"PalORM\.[A-Za-z]+\"[^>]*Version=\"" --include='*.csproj' --exclude-dir=obj --exclude-dir=bin . 2>/dev/null \
+        | grep -iE 'placeholder|todo|fixme' || true)"
+
 if [ -n "$NEW" ]; then
     if ! grep -q "<Version>${NEW_RE}</Version>" Directory.Build.props; then
         printf '::error::正向核对失败：Directory.Build.props 未落新版本 %s\n' "$NEW"
