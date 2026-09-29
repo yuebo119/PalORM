@@ -1,0 +1,34 @@
+<Project>
+  <!-- scripts/ 目录隔离配置（脚本 C# 化整改方案 D3，2026-09-29 双探针实证定稿）。
+       file-based app 会继承仓库根 Directory.Build.props（官方文档明示），探针实测
+       默认继承形态下 0 行配置也编译失败：CS1591（根开文档生成且 NoWarn 只豁免
+       .Tests/Benchmarks 条件组）、CA1050/CA1515/CA1707（AnalysisLevel latest-all
+       全规则集）、S3903（根 SonarAnalyzer 注入）、NU1008（根 CPM 禁显式版本）。
+
+       评估顺序陷阱（探针二实证）：根 props 的 Sonar ItemGroup 条件在 props 解析期
+       求值，本文件 Import 之后的属性覆写赶不上那次求值，S3903 照样注入——
+       所以 ManagePackageVersionsCentrally=false 必须放在 Import 之前。
+       Directory.Packages.props 的 CPM=true 在其后导入会翻转回来，但纯 BCL 脚本
+       零 PackageReference 不受影响；未来脚本确需 #:package 时在该文件加一行
+       #:property ManagePackageVersionsCentrally=false（虚拟项目体最后求值，必赢）。 -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- 以下均为构建期读取的属性，Import 后覆写即生效：
+         脚本非公共 API 面，不开文档生成（消 CS1591）、关 NET 分析器（消 CA 系）、
+         不做 AOT/裁剪分析（IsAotCompatible 继承自根，PublishAot=false 防官方
+         file-based app 默认 AOT publish 通道误触发）。
+         严格编译保留：TreatWarningsAsErrors/Nullable/LangVersion/IDE 风格全继承。
+         Sonar 注入已被上方解析期 CPM=false 跳过（S3903 实测消失）。 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+</Project>

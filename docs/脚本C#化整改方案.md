@@ -1,14 +1,14 @@
-# 脚本 C# 化整改方案（2026-09-29 定稿，v2 修订）
+# 脚本 C# 化整改方案（2026-09-29 定稿，v3 论证修订）
 
 > 用户决策一（2026-09-29）：当前项目尽量替换成 C#，以后做脚本能用 C#/.NET 就使用 C#，尽量避免引入其他语言；基于 .NET 10 起的 file-based app（`dotnet run app.cs`）脚本化。
 >
-> 用户决策二（2026-09-29 v2 修订）：非 C# 脚本若确有必要必须征得用户同意方可存在；C# 脚本做成 file-based app 还是传统项目，按真实场景逐个裁定，不一刀切。
+> 用户决策二（2026-09-29 v2）：非 C# 脚本若确有必要必须征得用户同意方可存在；C# 脚本做 file-based app 还是传统项目，按真实场景逐个裁定，不一刀切。
 >
-> 本文回答三件事：仓内还有哪些非 C# 脚本、每一个的形态与去向、按什么顺序与纪律迁移。方案本身不改任何脚本，开工前用户对第 8 节两个裁决点表态。
+> 用户决策三（2026-09-29 v3）：方案再次充分论证，给出最佳实践与最优方案。本轮以三个可执行探针把 v2 的推断项全部转为实测（第 2 节），逐决策点自我反驳（第 11 节），产出 4 项修订与 1 组最佳实践（第 8 节）。
 
-## 1. 事实基线（2026-09-29 盘点，全部来自 git ls-files 与逐文件核读）
+## 1. 事实基线（2026-09-29 盘点，git ls-files 与逐文件核读）
 
-**范围**：15 个 `.sh`（约 1740 行）+ 1 个 Node `.mjs` + 1 个 git hook 薄包装。仓内无 Python/Ruby/Perl。`tools/` 下 PerfGate 与 Scaffold 已是 C# 项目，且均已收入 PalORM.ci.slnf（享受 0 警告 0 错误严格门禁）。
+**范围**：15 个 `.sh`（约 1740 行）+ 1 个 Node `.mjs` + 1 个 git hook 薄包装。仓内无 Python/Ruby/Perl。`tools/` 下 PerfGate 与 Scaffold 已是 C# 项目，均收入 PalORM.ci.slnf（享受 0 警告 0 错误门禁）。
 
 | 脚本 | 行数 | 职责 | 现有调用方 |
 |------|------|------|-----------|
@@ -30,177 +30,197 @@
 | scripts/test-quality-scripts.sh | 239 | 质量脚本自身回归夹具 | verify.yml |
 | .githooks/pre-commit | 26 | pre-commit 薄包装，转发到 scripts/ | git config core.hooksPath |
 
-**引用半径**：CI 9 处调用（全部在 verify.yml）；docs 约 20 处（性能基准规范 18、发布规范 6、测试规范/编码规范/路线图零散）；AGENTS.md 4 处；CONTRIBUTING 1 处；CHANGELOG 为历史记录不改。全部为 bash 调用形态。
+**引用半径**：CI 9 处调用（全在 verify.yml）；docs 约 20 处；AGENTS.md 4 处；CONTRIBUTING 1 处；CHANGELOG 为历史记录不改。**外部工具依赖**：grep/sed 文本处理为主，Node 仅 parse-coverage.mjs 一处，无 jq/curl/psql/mysql CLI。CI 13 个 job 全 ubuntu-latest，除首个 secret-scan job 外均已装 setup-dotnet。**运行时**：global.json 钉 SDK 11.0.100-preview.6（本机实跑 rc.1），file-based app 需 10.0.100+，无需版本动作。
 
-**外部工具依赖实况**：grep/sed/head/tail 为主（C# 原生可替）；Node 仅 parse-coverage.mjs 一处；无 jq、无 curl、无 psql、无 mysql CLI（此前疑似 mysql 客户端调用实为方言名字符串，已逐条排除）。CI 13 个 job 全部 ubuntu-latest，除首个 secret-scan job 外均已装 setup-dotnet。
+## 2. 探针实测记录（v3 新增，2026-09-29 本机 SDK 11.0.100-rc.1，探针文件已删、隔离配置已入库）
 
-**运行时环境**：global.json 钉 SDK 11.0.100-preview.6（rollForward latestMinor），本机实跑 rc.1。file-based app 需 SDK 10.0.100+，本仓全部特性可用，无需任何版本动作。
+| # | 实验 | 结论 |
+|---|------|------|
+| P1 | 零配置脚本在仓内直跑 | 根 props 全量穿透 file-based app：CS1591（根开文档生成且 NoWarn 只豁免 .Tests/Benchmarks 条件组）+ CA1050/CA1515/CA1707（AnalysisLevel latest-all）+ S3903（根 SonarAnalyzer 注入）全部升格 error；冷跑 15.2 秒 |
+| P2 | 隔离配置生效后 | scripts/Directory.Build.props + Directory.Build.targets 双文件生效：0 警告 0 错误；冷跑 1.3 秒（关分析器带来约 10 倍提速）；热跑 0.14 秒 |
+| P3 | 退出码穿透 | 脚本 `return 42` → 进程 exit=42，干净传播 |
+| P4 | CPM 继承 | `#:package Dapper@2.1.89` 显式版本触发 NU1008（"使用中央包管理的项目必须在 PackageVersion 项上定义版本值"） |
+| P5 | CPM 逃生通道 | 脚本头部 `#:property ManagePackageVersionsCentrally=false`（虚拟项目体最后求值）必赢：NU1008 解除、包正常还原、exit=0 |
+| P6 | 评估顺序陷阱 | 根 props 的 Sonar 注入 ItemGroup 在 props 解析期求值；隔离 props 内 CPM=false 无论放 Import 前/后都未阻止注入（机制未完全定论，候选 .ai/lessons 登记）；targets 恒晚于全部 props，`PackageReference Remove` 是实证有效的确定性手段 |
+| P7 | BaseDirectory 陷阱 | `AppContext.BaseDirectory` 指向 `Temp\dotnet\runfile\<内容哈希>\bin\debug\`（构建缓存）而非脚本目录；CWD 保持调用方目录。仓库根定位必须从 CWD 向上找哨兵文件 |
 
-## 2. 技术定案（依据 learn.microsoft.com file-based-apps 官方文档逐条核实）
+## 3. 技术定案（官方文档逐条核实 + 探针实证）
 
 | 定案 | 内容 | 依据 |
 |------|------|------|
-| D1 调用约定 | 形态 A 统一 `dotnet run --file scripts/&lt;名&gt;.cs -- &lt;参数&gt;`；形态 B 统一 `dotnet run --project tools/&lt;项目&gt; -- &lt;子命令&gt;`，本地与 CI 同形 | 官方 CLI 节；CWD 有 csproj 时无 --file 会退化传参，--file 消除歧义 |
-| D2 不用 shebang | 不依赖 `#!/usr/bin/env dotnet` 直执行 | 仓内无 .gitattributes，Windows checkout 为 CRLF，shebang 文件在 Linux 直执行会破；`dotnet run` 调用形态对行尾免疫 |
-| D3 scripts/ 目录隔离 | 新增 scripts/Directory.Build.props，只作用于形态 A：Import 父级 props 后覆写 ManagePackageVersionsCentrally=false、PublishAot=false、GenerateDocumentationFile=false、IsAotCompatible=false、IsTrimmable=false | 官方 Folder layout 节明确推荐脚本目录配隔离 props；保持 net11.0/Nullable/TreatWarningsAsErrors/LangVersion 继承 |
-| D4 CPM 规避 | 隔离 props 关闭 CPM，形态 A 脚本自钉版本；形态 B 是正式项目，走根 CPM 正常通道 | 根 Directory.Packages.props 开启 CPM + 传递钉扎；NU1008 风险由 Phase 0 探针实证后定稿 |
-| D5 纯 BCL 为默认 | 全部迁移目标零第三方 NuGet 依赖（JSON 用 System.Text.Json，XML 用 System.Xml.Linq，zip 用 System.IO.Compression） | 懒惰阶梯：标准库优先；现有脚本能力全部 BCL 可覆盖 |
-| D6 构建缓存 | 形态 A 默认单文件形态（缓存开启）；禁用 glob 形态 `#:include`（官方明示 glob 会禁用缓存）；显式单文件 include 可用 | 官方 Build caching 节 |
-| D7 并发防争抢 | 同一脚本可能并发调用的场景（CI 矩阵、A/B 轮次），先 `dotnet build` 再 `--no-build` 启动 | 官方明示并发实例会争抢构建输出 |
-| D8 退出码契约 | 每个 .cs 保持与 .sh 相同的 exit 语义（0 过 / 非 0 分档失败）；编排类用 Process 传退出码，禁管道吞码形态（B104） | 全局 AGENTS 退出码族 + B104 实测教训 |
-| D9 JSON 序列化 | 形态 A 内需要 JSON 时用 STJ source-gen（JsonSerializerContext） | 官方明示 file-based app 默认 AOT publish；与本仓 AOT 文化同构 |
-| D10 输出契约不变 | stdout/stderr 文本格式、退出码、产物路径对调用方（CI 断言、SOP、PerfHub 结果库）逐字节兼容，迁移轮不做格式顺手改 | 外科手术原则；格式变更是独立任务，不夹带 |
-| D11 语言政策载体 | 非 C# 脚本白名单制：白名单唯一初始条目为 .githooks/pre-commit（git hook 机制要求可执行脚本入口，技术约束）；新增白名单条目必须在 docs/编码规范.md 登记理由并经用户明确同意；机械门禁见 T6-3 | 用户决策二；元规则"确定性 > 概率性"，门禁是承载物 |
+| D1 调用约定 | 形态 A `dotnet run --file scripts/&lt;名&gt;.cs -- &lt;参数&gt;`；形态 B `dotnet run --project tools/&lt;项目&gt; -- &lt;子命令&gt;`，本地与 CI 同形 | 官方 CLI 节；--file 消除 CWD 含 csproj 时的退化传参歧义 |
+| D2 不用 shebang | 不依赖 `#!/usr/bin/env dotnet` 直执行 | 仓内无 .gitattributes，Windows 检出 CRLF，shebang 直执行在 Linux 会破；dotnet run 形态对行尾免疫 |
+| D3 scripts/ 双文件隔离 | props（Import 前置 CPM=false + Import 后覆写 GenerateDocumentationFile/EnableNETAnalyzers/IsAotCompatible/IsTrimmable/PublishAot=false）+ targets（Remove SonarAnalyzer）；严格编译/Nullable/LangVersion/IDE 风格全继承保留 | P1/P2/P6 实测；两文件已入库即 Phase 0 T0-1 交付物 |
+| D4 CPM 与包 | 纯 BCL 零 `#:package` 为目标（16 项全部可达）；确需包时脚本头加 `#:property ManagePackageVersionsCentrally=false` 后自钉版本 | P4/P5 实测 |
+| D5 缓存与并发 | 默认单文件形态（缓存开）；禁 glob 形态 `#:include`（官方明示禁缓存）；并发调用先 build 再 --no-build；缓存位于用户 Temp，CI 每 job 冷态 | 官方 Build caching 节 + P2 |
+| D6 退出码契约 | 0 过 / 非 0 分档失败，逐脚本在夹具显式断言；编排用 Process 透传，禁管道吞码（B104） | P3 实测 + B104 |
+| D7 JSON | 脚本内 JSON 用 STJ source-gen（JsonSerializerContext） | 官方明示默认 AOT publish；与本仓 AOT 文化同构 |
+| D8 输出契约不变 | stdout/stderr 格式、退出码、产物路径对调用方逐字节兼容；迁移轮不顺手改格式 | 外科手术原则 |
+| D9 语言政策载体 | 非 C# 白名单制：唯一初始条目 .githooks/pre-commit（git hook 机制要求可执行脚本入口）；新增白名单必须在 docs/编码规范.md 登记理由并经用户同意；机械门禁 T6-3 | 用户决策二 |
+| D10 仓库根定位 | 禁用 AppContext.BaseDirectory（P7 实测指向缓存）；从 Environment.CurrentDirectory 向上探测哨兵（PalORM.slnx/global.json） | P7 实测 |
 
-## 3. 形态判定标准（用户决策二的落地判据）
+## 4. 形态判定标准（用户决策二落地）
 
-**形态 A：file-based app（scripts/*.cs）**，同时满足：
-1. 单一职责，单文件可容纳，无持续膨胀预期；
-2. 与仓内其他脚本无成体系共享基础设施（零共享，或至多一个显式 `#:include`）；
-3. 调用形态是一条命令跑完的脚本式使用，无人机接口演化需求；
-4. 行为验证走黑盒夹具（test-quality-scripts），不需要白盒单测；
-5. 不需要纳入 ci.slnf 严格编译图。
+**形态 A：file-based app（scripts/*.cs）**，同时满足：单一职责单文件可容纳、无成体系共享基础设施、一条命令跑完、黑盒夹具可验证、不进 ci.slnf。
+**形态 B：console 项目（tools/PalORM.*）**，任一命中：多入口共享成体系基础设施、活跃演化期且逻辑量超单文件舒适区、需进 ci.slnf 严格门禁、需被引用或白盒测试。
+**形态 C：保留 bash 薄壳**：仅限技术约束，属 D9 白名单。
 
-**形态 B：console 项目（tools/PalORM.*）**，任一命中：
-1. 多入口共享成体系的基础设施（路径常量、Process 包装、env loader、结果库契约）；
-2. 逻辑量超出单文件舒适区且处于活跃演化期；
-3. 需要纳入 ci.slnf 严格编译与门禁图（0 警告 0 错误 + SonarAnalyzer）；
-4. 需要被其他项目引用或白盒测试。
-
-**形态 C：保留 bash 薄壳**：仅限技术约束（git hook 必须是可执行脚本），属 D11 白名单条目，逻辑全部外移。
-
-## 4. 迁移裁决表（17 项逐一去向）
+## 5. 迁移裁决表（17 项）
 
 | # | 对象 | 形态 | 去向 | 场景判据 |
 |---|------|------|------|---------|
 | 1 | stub-check.sh | A | scripts/stub-check.cs | 36 行文本扫描，五判据全中 |
-| 2 | assert-test-counts.sh | A | scripts/assert-test-counts.cs | 单命令 JSON 断言，STJ 直覆盖 |
-| 3 | assert-coverage.sh + parse-coverage.mjs | A | scripts/assert-coverage.cs（合并） | XML 解析 + 地板断言一体，Node 依赖消除 |
-| 4 | secret-guard.sh | A | scripts/secret-guard.cs | 40 类 Regex 单命令；行为有 test-quality-scripts 自测夹具黑盒守卫；不与任何脚本共享基础设施 |
-| 5 | test-package-contract.sh | A | scripts/test-package-contract.cs | zip 读 nuspec + XML 断言单命令 |
-| 6 | release-version-scan.sh | A | scripts/release-version-scan.cs | 属性模式扫描 + git tag 推导单命令 |
-| 7 | pre-release-check.sh | A | scripts/pre-release-check.cs | pack/restore/断言编排，链式调用 #5 的 .cs 形态 |
-| 8 | perf.sh | B | tools/PalORM.PerfCli（子命令 smoke/full/compare/gate/report/index） | 六子命令与 perfhub-ab/run-full-perf/dappersuite/run-benchmarks 共享路径常量、env loader、Process 包装、结果库契约（判据 B1）；v5.8 起活跃演化（B2）；入 ci.slnf 得 0W0E 门禁（B3） |
-| 9 | perfhub-ab.sh | B | tools/PalORM.PerfCli（子命令 compare，内部步骤可独立触发） | 同上家族共享；worktree 切臂语义原样保留 |
-| 10 | run-full-perf.sh | B | tools/PalORM.PerfCli（子命令 full-perf） | 同上家族共享 |
-| 11 | dappersuite-run.sh | B | tools/PalORM.PerfCli（子命令 dappersuite） | 同上家族共享 |
-| 12 | run-benchmarks.sh | B | tools/PalORM.PerfCli（子命令 bench-matrix） | 同上家族共享 |
-| 13 | run-mutation-tests.sh | A | scripts/run-mutation-tests.cs | 独立 Stryker 触发，46 行，与性能家族无共享 |
-| 14 | set-test-env.sh | 淘汰 | env loader 并入 PerfCli 内部 | 仓内唯一 source 调用方 perf.sh 属 PerfCli；C# 进程无法向父 shell 导出变量，进程内读 .env.test 后传子进程已覆盖全部仓内场景（裁决点 1） |
-| 15 | test-quality-scripts.sh | A | scripts/test-quality-scripts.cs | 多夹具单命令测试编排；被测对象全部黑盒调用；排最后迁移 |
-| 16 | .githooks/pre-commit | C | 保留 26 行 bash 薄壳 | git hook 机制要求可执行脚本入口（技术约束）；内部转发改调形态 A/B 命令；D11 白名单唯一条目 |
-| 17 | CI verify.yml 9 处调用 | 改造 | 调用形按形态 A/B 切换；secret-scan job 补 setup-dotnet 步 | 该 job 是唯一无 dotnet 的调用方 |
+| 2 | assert-test-counts.sh | A | scripts/assert-test-counts.cs | 单命令 JSON 断言 |
+| 3 | assert-coverage.sh + parse-coverage.mjs | A | scripts/assert-coverage.cs（合并） | XML 解析一体，Node 依赖消除 |
+| 4 | secret-guard.sh | A | scripts/secret-guard.cs | 40 类 Regex 单命令；黑盒自测夹具守卫；迁移配全历史对拍（T2-4） |
+| 5 | test-package-contract.sh | A | scripts/test-package-contract.cs | zip 读 nuspec 单命令 |
+| 6 | release-version-scan.sh | A | scripts/release-version-scan.cs | 属性扫描 + git tag 推导 |
+| 7 | pre-release-check.sh | A | scripts/pre-release-check.cs | 编排 pack/restore，链式调用 #5 |
+| 8 | perf.sh | B | tools/PalORM.PerfCli（smoke/full/compare/gate/report/index） | 六子命令与 #9-12 共享成体系基础设施（判据 B1）、活跃演化（B2）、入 ci.slnf 得 0W0E 门禁（B3）。论证注记：CI 冷启动论据经反驳剔除（perf 家族 CI 零调用），结论由 B1-B3 独立支撑 |
+| 9 | perfhub-ab.sh | B | tools/PalORM.PerfCli（compare） | 同上家族共享 |
+| 10 | run-full-perf.sh | B | tools/PalORM.PerfCli（full-perf） | 同上家族共享 |
+| 11 | dappersuite-run.sh | B | tools/PalORM.PerfCli（dappersuite） | 同上家族共享 |
+| 12 | run-benchmarks.sh | B | tools/PalORM.PerfCli（bench-matrix） | 同上家族共享 |
+| 13 | run-mutation-tests.sh | A | scripts/run-mutation-tests.cs | 独立 Stryker 触发，无家族共享 |
+| 14 | set-test-env.sh | 淘汰 | env loader 并入 PerfCli | 仓内唯一 source 方 perf.sh 属 PerfCli；C# 进程无法向父 shell 导出变量（裁决点 1） |
+| 15 | test-quality-scripts.sh | A | scripts/test-quality-scripts.cs | 多夹具单命令编排，排最后迁移 |
+| 16 | .githooks/pre-commit | C | 保留 bash 薄壳 | git hook 机制要求（技术约束）；转发改形态 A 命令；D9 白名单唯一条目 |
+| 17 | CI verify.yml 9 处 | 改造 | 按形态切换；secret-scan job 补 setup-dotnet | 唯一无 dotnet 的调用方 |
 
-**范围外备案**：`.ai/scripts/`（tech-debt-scan.sh、verify-ai-system.sh 等本地工具，明确不入仓库）与用户级 hook（~/.zcode）不在本方案范围，如需同步迁移另立任务。此后任何新增脚本一律 C#（形态按第 3 节判据），非 C# 需求走 D11 白名单流程。
+**范围外备案**：`.ai/scripts/`（本地工具不入仓库）与用户级 hook 不在本方案范围。此后新增脚本一律 C#（形态按第 4 节判据），非 C# 走 D9 白名单流程。
 
-## 5. 迁移纪律（每个脚本通用，对应全局诊断三步骤）
+## 6. 迁移纪律
 
-1. **S1 基线快照**：迁移前记录该脚本现有行为证据（触发一次真实运行留输出，或引用 test-quality-scripts 既有夹具断言），作为对拍基准。
-2. **对拍验证**：新形态与旧 .sh 并存一轮，同一输入双跑，比对退出码与 stdout 关键行；夹具同时覆盖两形态后先绿再删旧 .sh。这是"修复前红"纪律在迁移场景的等价物。
-3. **单变量**：迁移轮不顺手改检测规则、阈值、输出格式（D10）。发现疑似 bug 单独开任务。
-4. **三方一致**：删除 .sh 的同一提交内，CI、docs、AGENTS、CONTRIBUTING、hook 转发全部切换；`grep -rn 'scripts/xxx\.sh'` 全仓归零（CHANGELOG 除外）。
-5. **锁定证据**：每项迁移的完成判据 = 成功夹具通过 + 故障夹具（坏输入 → 非零退出）通过；只过成功路径不算完成。
+1. **S1 基线快照**：迁移前留该脚本真实运行输出或夹具断言作对拍基准。
+2. **对拍验证**：新形态与旧 .sh 同输入双跑，比对退出码与 stdout 关键行；夹具双覆盖后先绿再删旧 .sh。
+3. **单变量**：迁移轮不改检测规则、阈值、输出格式（D8）；疑似 bug 单开任务。
+4. **三方一致**：删 .sh 的同一提交内 CI/docs/AGENTS/CONTRIBUTING/hook 全切换，grep 归零（CHANGELOG 除外）。
+5. **锁定证据**：完成判据 = 成功夹具过 + 故障夹具（坏输入 → 非零退出）过。
+6. **防线分级**：secret-guard 级（P0 载体）适用全历史对拍（见 T2-4）；普通脚本级适用单命令对拍。
 
-## 6. 分阶段任务清单
+## 7. 分阶段任务清单（估时合计约 9.5 个工作日，区间 7 至 12）
 
-估时为单侧工作量，含夹具扩展、CI 切换与文档同步。基准日期 2026-09-29。
+### Phase 0：基建与探针（已由本轮论证提前完成）
 
-### Phase 0：基建与探针（约 0.5 天）
-
-| 任务 | 内容 | 验收 |
+| 任务 | 状态 | 证据 |
 |------|------|------|
-| T0-1 | 建 scripts/Directory.Build.props（D3 清单，只管形态 A） | scripts 下任意 .cs 构建继承 net11.0/严格编译，且不触发 CPM/文档生成/AOT 分析器报错 |
-| T0-2 | 探针 A：CPM 冲突实证。临时 .cs 带 `#:package X@v` 构建一次，验证 NU1008 是否发生与关闭 CPM 的解除效果 | 探针结论回写 D4，删除临时文件 |
-| T0-3 | 探针 B：冷/热启动耗时。空脚本 `dotnet run --file` 首跑与缓存命中各测 3 次取中位；含 root .editorconfig + AnalysisLevel 干扰实测 | 数字回写第 7 节风险表；CI 预算据此复核 |
-| T0-4 | 探针 C：.editorconfig + EnforceCodeStyleInBuild 对 top-level 脚本的样式告警实测（CS1591/IDE 规则） | 隔离 props 终稿落盘，样例脚本 0 警告构建 |
-| T0-5 | 定稿调用约定文档片段（D1/D8），供 Phase 2 起 CI 与 docs 引用 | 片段进入 docs/编码规范.md 脚本节占位 |
+| T0-1 scripts/ 隔离双文件 | done | props + targets 已入库，P2 全绿 |
+| T0-2 CPM 探针 | done | P4 NU1008 实证 + P5 逃生通道实证 |
+| T0-3 冷/热启动探针 | done | 隔离后冷 1.3s、热 0.14s（P2） |
+| T0-4 样式告警探针 | done | P1 四类 error 实证，隔离后归零 |
+| T0-5 调用约定定稿 | done | D1/D6 即定稿文本 |
 
 ### Phase 1：夹具先行（约 0.5 天）
 
 | 任务 | 内容 | 验收 |
 |------|------|------|
-| T1-1 | test-quality-scripts.sh 增"目标形态"夹具骨架：为每个待迁对象预留形态 A 入口与形态 B 子命令的成功/故障夹具位（red 状态） | 夹具对未迁移目标报 skip 有明确标注，不误报 |
-| T1-2 | 夹具基础设施验证：故障输入触发非零退出的断言通道自身先被证明能失败（mutation probe：把一个夹具的预期值改错，确认夹具报红） | 验证记录留痕 |
+| T1-1 | test-quality-scripts.sh 增目标形态夹具骨架（形态 A 入口 + 形态 B 子命令的正反夹具位，red 状态） | skip 有明确标注不误报 |
+| T1-2 | 夹具通道 mutation probe：改错一个预期值证明夹具能红 | 记录留痕 |
 
-### Phase 2：提交防线四项（约 2 天，全部形态 A）
+### Phase 2：提交防线四项（约 2 天，形态 A）
 
-顺序：stub-check → assert-test-counts → assert-coverage（含吞并 parse-coverage.mjs）→ secret-guard（最复杂压轴）。
-
-| 任务 | 内容 | 验收 |
-|------|------|------|
-| T2-1 | stub-check.cs + 对拍 + 删 .sh | 夹具正反用例双绿；verify.yml 223 行调用切换 |
-| T2-2 | assert-test-counts.cs + 对拍 + 删 .sh | verify.yml 112/123/173 三处切换；三 job 各触发一次实跑 |
-| T2-3 | assert-coverage.cs（含 XML 解析，删 lib/parse-coverage.mjs） | Node 在仓内调用归零；verify.yml 116 行切换 |
-| T2-4 | secret-guard.cs + 对拍 + 删 .sh；secret-guard 自测夹具同步迁 | .githooks/pre-commit 转发更新；verify.yml 45/57 两处切换；secret-scan job 补 setup-dotnet；本机连续 3 次真实 commit 实测 hook 延迟在探针 B 数字 + 2s 内 |
-| T2-5 | Phase 2 收口：`grep -rn '\.sh' .github/ scripts/ .githooks/` 仅剩计划内项 | 0 意外残留 |
-
-### Phase 3：发布链三项（约 1.5 天，全部形态 A）
+顺序：stub-check → assert-test-counts → assert-coverage（吞 mjs）→ secret-guard 压轴。
 
 | 任务 | 内容 | 验收 |
 |------|------|------|
-| T3-1 | release-version-scan.cs + 对拍 + 删 .sh；用 v6.1.0 tag 重放一次 | 扫描结果与 .sh 版一致；docs/发布规范.md §1.3 同步 |
-| T3-2 | pre-release-check.cs + 对拍 + 删 .sh；正向（当前 6.1.0）全绿 | docs/发布规范.md §4.1 第 0 步命令同步；对 test-package-contract.cs 的链式调用打通 |
-| T3-3 | test-package-contract.cs + 对拍 + 删 .sh | verify.yml 283 行切换；CI 实跑绿 |
+| T2-1 | stub-check.cs + 对拍 + 删 .sh | 夹具双绿；verify.yml 223 行切换 |
+| T2-2 | assert-test-counts.cs + 对拍 + 删 .sh | verify.yml 112/123/173 切换并实跑 |
+| T2-3 | assert-coverage.cs（删 lib/parse-coverage.mjs） | Node 仓内调用归零；verify.yml 116 行切换 |
+| T2-4 | secret-guard.cs + 对拍 + 删 .sh | **全历史双跑对拍**：新旧两版对 git log 全量 range 各扫一遍，输出逐字节 diff 为空为过；verify.yml 45/57 切换 + secret-scan job 补 setup-dotnet；本机 3 次真实 commit 实测 hook 延迟 ≤ 热跑基线 0.14s × 2 + 2s |
+| T2-5 | 收口 grep：`.github/ scripts/ .githooks/` 仅剩计划内 | 0 意外残留 |
 
-### Phase 4：性能链 → PalORM.PerfCli 项目（约 3.5 天）
-
-| 任务 | 内容 | 验收 |
-|------|------|------|
-| T4-1 | 建 tools/PalORM.PerfCli console 项目：纯 BCL、入 PalORM.slnx tools 目录 + PalORM.ci.slnf，走根 props 严格编译 | ci.slnf 构建 0 警告 0 错误（新增一项目后的全量口径） |
-| T4-2 | 子命令 bench-matrix（对应 run-benchmarks.sh）+ 对拍 | BDN 矩阵触发与日志落盘路径一致 |
-| T4-3 | 子命令 full-perf（对应 run-full-perf.sh）+ 对拍 | perf full 第 1 步语义一致（SKIP_REPORT 通道不变） |
-| T4-4 | 子命令 dappersuite（对应 dappersuite-run.sh）+ 对拍 | 三方言串行行为一致 |
-| T4-5 | 子命令 compare（对应 perfhub-ab.sh）+ 对拍 | worktree 切臂 + label 契约不变；并发防护按 D7 |
-| T4-6 | 六子命令入口（对应 perf.sh：smoke/full/compare/gate/report/index）+ env loader 内置（吸收 set-test-env.sh）+ 对拍 | 六子命令逐一实跑冒烟；.env.test 缺失时 sqlite 档照跑、pg/mysql 档报缺凭证的原有语义不变 |
-| T4-7 | docs/性能基准规范.md 约 18 处、AGENTS.md 性能节、CONTRIBUTING set-test-env 段同步；删 perf.sh/perfhub-ab.sh/run-full-perf.sh/dappersuite-run.sh/run-benchmarks.sh/set-test-env.sh 六个 .sh | 性能链 .sh 引用 grep 归零（CHANGELOG 除外） |
-| T4-8 | run-mutation-tests.cs（形态 A）+ 对拍 + 删 .sh | Stryker 触发一致 |
-
-### Phase 5：夹具本体与 hook 收口（约 1 天）
+### Phase 3：发布链三项（约 1.5 天，形态 A）
 
 | 任务 | 内容 | 验收 |
 |------|------|------|
-| T5-1 | test-quality-scripts.cs（全部夹具随迁，含形态 B 子命令夹具）+ 对拍 + 删 .sh | verify.yml 243 行切换；CI 实跑绿；本机全量夹具绿 |
-| T5-2 | .githooks/pre-commit 终态：三段转发全为形态 A 命令 | 本机 commit 实测全链绿，延迟记录在案 |
+| T3-1 | release-version-scan.cs + 对拍（v6.1.0 tag 重放） | 结果一致；发布规范 §1.3 同步 |
+| T3-2 | pre-release-check.cs + 对拍（6.1.0 正向全绿） | 发布规范 §4.1 同步；链式调用 #5 打通 |
+| T3-3 | test-package-contract.cs + 对拍 | verify.yml 283 行切换实跑绿 |
 
-### Phase 6：政策固化与收尾（约 0.5 天）
+### Phase 4：性能链 → PalORM.PerfCli（约 3.5 天；受裁决点 3 时序约束）
 
 | 任务 | 内容 | 验收 |
 |------|------|------|
-| T6-1 | 全仓三方一致终扫：`git ls-files` 中非 C# 脚本仅剩 .githooks/pre-commit | 白名单计数 1，与 D11 一致 |
-| T6-2 | docs/编码规范.md 增脚本语言章节：D11 白名单政策 + 第 3 节形态判据 + D1/D3/D5/D8/D9 约定 + 形态 A 最小示例；AGENTS.md 同步一行政策指针 | 章节含最小可运行示例与判据表 |
-| T6-3 | 语言门禁：test-quality-scripts.cs 增"仓内出现新 .sh/.mjs/.py/.rb/.pl（白名单外）即 FAIL"扫描 | 植入一个假 .sh 验证 FAIL，删除后恢复绿（V17 式双向验证） |
-| T6-4 | CHANGELOG 未发布段登记本整改轮 | 条目含 17 项裁决摘要与白名单政策 |
+| T4-1 | 建 tools/PalORM.PerfCli：纯 BCL、入 slnx + ci.slnf、走根 props | ci.slnf 全量 0 警告 0 错误 |
+| T4-2 | 子命令 bench-matrix + 对拍 | BDN 矩阵触发与日志路径一致 |
+| T4-3 | 子命令 full-perf + 对拍 | SKIP_REPORT 语义不变 |
+| T4-4 | 子命令 dappersuite + 对拍 | 三方言串行一致 |
+| T4-5 | 子命令 compare + 对拍 | worktree 切臂 + label 契约不变；并发按 D5 |
+| T4-6 | 六子命令入口 + env loader 内置（吸收 set-test-env）+ 对拍 | 逐一冒烟；.env.test 缺失时 sqlite 照跑语义不变 |
+| T4-7 | docs/性能基准规范 约 18 处 + AGENTS.md + CONTRIBUTING 同步；删六个 .sh | 性能链 .sh 引用归零 |
+| T4-8 | run-mutation-tests.cs + 对拍 + 删 .sh | Stryker 触发一致 |
 
-**合计约 9.5 个工作日**（Phase 0 与 1 可合并半天内完成；Phase 2-4 之间无依赖可穿插）。
+### Phase 5：夹具本体与 hook（约 1 天）
 
-## 7. 风险与对策
+| 任务 | 内容 | 验收 |
+|------|------|------|
+| T5-1 | test-quality-scripts.cs（含形态 B 子命令夹具）+ 对拍 + 删 .sh | verify.yml 243 行切换实跑绿 |
+| T5-2 | .githooks/pre-commit 终态全为形态 A 调用 | 本机 commit 全链绿，延迟记录 |
+
+### Phase 6：政策固化（约 0.5 天）
+
+| 任务 | 内容 | 验收 |
+|------|------|------|
+| T6-1 | 全仓终扫：非 C# 脚本仅剩白名单 1 项 | 与 D9 一致 |
+| T6-2 | docs/编码规范.md 脚本章节（D9 政策 + 第 4 节判据 + 第 8 节最佳实践 + 形态 A 示例）；AGENTS.md 政策指针 | 含最小示例与判据表 |
+| T6-3 | 语言门禁：白名单外新 .sh/.mjs/.py 即 FAIL | 植入假文件双向验证 |
+| T6-4 | CHANGELOG 登记整改轮 | 含 17 项裁决摘要与白名单政策 |
+
+## 8. C# 脚本最佳实践（v3 新增，探针实证支撑）
+
+| # | 实践 | 依据 |
+|---|------|------|
+| B1 | 仓库根定位禁用 AppContext.BaseDirectory（指向 Temp 构建缓存）；从 CWD 向上探测 PalORM.slnx/global.json 哨兵；约定调用 CWD = 仓库根 | P7 实测 |
+| B2 | 退出码三档：0 过 / 1 失败 / 2 用法错；夹具逐档断言；禁管道转手 | P3 + B104 |
+| B3 | 结果走 stdout、诊断走 stderr；失败带一行上下文，禁静默 catch | D8 契约稳定前提 |
+| B4 | Process 编排：显式 WorkingDirectory、不开 shell、双流重定向、超时 + Kill、退出码透传；长跑子进程场景禁并发复用同一 file-based app | D5 + 官方并发警告 |
+| B5 | JSON 一律 STJ source-gen（JsonSerializerContext） | D7 |
+| B6 | 类型面收敛：top-level statements + internal 辅助类型，不声明 public 类型 | P1 四类 error 全由 public 类型触发 |
+| B7 | 脚本命名用连字符不用下划线（对齐既有 scripts 命名） | P1 中 CA1707 由程序集名（文件名）触发，虽分析器已关仍保持卫生 |
+| B8 | .env.test 读取禁回显值；缺文件按既有语义降级（sqlite 档照跑） | P0 #1 + perf.sh 既有行为 |
+| B9 | usage 文本走 stderr + exit 2；禁 Console.Readline 交互等待（脚本必须可无人值守） | CI 无人值守前提 |
+| B10 | 单文件单职责；确需共享代码先忍重复，两处以上再评估形态 B（本轮 PerfCli 即按此判据立项） | 三次必抽原则的脚本域适配 |
+
+## 9. 风险与对策（v3 更新）
 
 | 风险 | 等级 | 对策 |
 |------|------|------|
-| PerfCli 六合一重构面大于 1:1 换语言 | 中 | 子命令一一对应现入口（T4-2 至 T4-6 各自独立对拍）；内部步骤子命令保留独立触发能力；先移植步骤子命令、入口压轴 |
-| CI 冷启动增量：runner 每次冷构建脚本，形态 A 9 处调用预计各增 5 至 15 秒 | 中 | 探针 B 实测后回填；纯 BCL 无 restore，增量可控；不达标则 CI 侧预热后 `--no-build`；PerfCli 在 ci.slnf 内随既有构建图编译，无额外冷启动 |
-| 本机 pre-commit 延迟上升（secret-guard/stub-check 各一次 dotnet 启动） | 中 | 热缓存后单次约 0.3 至 0.5 秒；超预算则合并两脚本为单一入口一次启动 |
-| file-based app 继承根配置产生未预期告警（.editorconfig 样式、NU 系） | 中 | Phase 0 探针 C 在动工前暴露全部告警，隔离 props 一次定稿 |
-| 同脚本并发争抢构建输出 | 低 | D7 约定；现网仅 A/B 轮次与 CI 矩阵存在并发面，均可控 |
-| bash 独有语义翻译遗漏（pipefail、set -e 短路、B104 管道吞码） | 中 | 迁移纪律第 2 条对拍 + 第 5 条正反夹具；退出码契约逐脚本在夹具中显式断言 |
-| global.json SDK 预览版变动影响脚本构建缓存指纹 | 低 | 缓存键含 SDK 版本，行为是重建而非错构建；CI setup-dotnet 版本与 global.json 对齐已有既有约束 |
+| secret-guard 迁移静默语义漂移 | 高 | T2-4 全历史双跑对拍是硬闸，不得裁剪（第 11 节红队结论） |
+| PerfCli 六合一重构面大于 1:1 换语言 | 中 | 子命令一一对应现入口，先步骤后入口，逐命令独立对拍 |
+| CI 冷启动增量 | 低（v3 降级） | P2 实测隔离后冷跑 1.3s，CI 预估 3 至 8 秒每脚本首建；job 内并行稀释 |
+| pre-commit 延迟 | 低（v3 降级） | P2 热跑 0.14s，双脚本约 0.3s，对既有 7 秒链路无感 |
+| MSBuild 评估顺序类暗坑复发 | 中 | P6 已示范"探针先行 + targets 确定性手段"的处置范式；B 系列候选登记 |
+| bash 语义翻译遗漏（pipefail/set -e/B104） | 中 | 对拍 + 正反夹具 + 退出码逐档断言 |
+| SDK 预览版变动影响缓存指纹 | 低 | 缓存键含 SDK 版本，行为是重建而非错构建 |
 
-## 8. 待用户裁决的两个点
+## 10. 待用户裁决的三个点
 
-1. **set-test-env.sh 的残余价值**：推荐淘汰（仓内唯一 source 调用方 perf.sh 已由 PerfCli 内置 loader 覆盖）。若你仍要在交互 shell 里手工导出连接串跑 psql 等客户端工具，保留一个 10 行 bash shim 并列入 D11 白名单，其余照迁。
-2. **PerfCli 的子命令命名**：T4-2 至 T4-6 采用与现入口一一对应的语义名（bench-matrix/full-perf/dappersuite/compare + 六入口原名）。若你更在意文档改动最小，可把内部步骤子命令直接沿用旧名（bench/fullperf/dappersuite/ab），命名风格定稿后 docs 一次性切换。
+1. **set-test-env.sh 残余价值**：推荐淘汰。若仍需交互 shell 手工导出连接串，留 10 行 shim 入 D9 白名单。
+2. **PerfCli 子命令命名**：语义名（bench-matrix/full-perf/dappersuite/compare）或沿用旧名（bench/fullperf/dappersuite/ab，文档改动最小）。
+3. **Phase 4 与 v6.0 的时序**（v3 新增）：性能链是 v6.0 回归测量依赖的 harness，迁移中途换链会污染 A/B 可比性。推荐 Phase 0-3 与 5-6 先行（约 4 天，与 v6.0 无冲突），Phase 4 整体放在 v6.0 启动前或收尾后，不与 v6.0 穿插。
 
-## 9. 进度追踪
+## 11. 论证记录（辩证流程留痕）
+
+**自我反驳三点**：
+1. 反驳"不迁移更省"：bash 现状可用，迁移约 9.5 天纯投入。裁决：语言统一政策属用户主权且已两次确认，迁移换回的是单一技术栈 + ci.slnf 级 0W0E 覆盖（PerfCli）+ 语言门禁的确定性；同时承认 run-mutation-tests/release-version-scan 等低频稳定脚本收益最小，故排期靠后不阻塞。
+2. 反驳"PerfCli 是过度工程，1:1 file-based 足够"：反驳过程发现 v2 的 CI 冷启动论据不成立（perf 家族 CI 零调用），已剔除；结论改由共享基础设施、活跃演化、门禁三论据独立支撑，结论不变但论据更诚实。
+3. 反驳"探针已全绿可径直开工"：三个裁决点中两个影响调用形态与文档写法，开工后返工文档的成本高于先裁决；Phase 4 时序涉及 v6.0 主线资源分配，属用户主权，不可自主决定。
+
+**评分**：8.5/10。阻碍 9 至 10 的因素：三个裁决点未闭环（用户主权）；估时仍是区间估算无逐项校准；形态 B 子命令的夹具覆盖粒度未细化（T1-1 落地时补）。
+
+**红队一句**：本方案最大的残余风险不是迁不迁，而是 secret-guard 在迁移中出现静默语义漂移；T2-4 的全历史双跑对拍是唯一硬闸，任何压缩工期的情形下不得裁剪这一步。
+
+## 12. 进度追踪
 
 | 项 | 状态 |
 |----|------|
-| 方案定稿与任务清单（v2 含形态逐项裁定） | done（本文档） |
-| Phase 0 基建与探针 | pending |
+| 方案 v3 定稿（探针实证 + 论证修订 + 最佳实践） | done |
+| Phase 0 基建与探针 | done（本轮提前完成，T0-1 至 T0-5） |
 | Phase 1 夹具先行 | pending |
 | Phase 2 提交防线四项 | pending |
 | Phase 3 发布链三项 | pending |
-| Phase 4 性能链 → PerfCli | pending |
+| Phase 4 性能链 → PerfCli | pending（受裁决点 3 时序约束） |
 | Phase 5 夹具本体与 hook | pending |
 | Phase 6 政策固化 | pending |
 
-总进度 0%（方案 v2 已定稿，未动任何脚本；两个裁决点表态后从 T0-1 开工）。
+总进度约 10%（Phase 0 已实测完成并入库：scripts/Directory.Build.props + Directory.Build.targets；未动任何现有脚本；三个裁决点表态后从 T1-1 开工）。
