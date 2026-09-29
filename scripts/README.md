@@ -9,8 +9,8 @@
 
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
-| `secret-guard.sh` | 敏感信息拦截（40 类；默认 staged 模式，`--range BASE..HEAD` 供 CI 扫差异集） | ✅ pre-commit + ci.yml security |
-| `stub-check.sh` | Stub 方法门禁（检测 `throw new NotImplemented`） | ✅ pre-commit + ci.yml gate |
+| `secret-guard.cs` | 敏感信息拦截（40 类；默认 staged 模式，`--range BASE..HEAD` 供 CI 扫差异集；file-based app，`dotnet run --file` 调用） | ✅ pre-commit + ci.yml security |
+| `stub-check.cs` | Stub 方法门禁（检测 `=> this` 表达式体与 `NotImplementedException` 空壳） | ✅ pre-commit + ci.yml gate |
 | `test-quality-scripts.sh` | 脚本质量自检（CI 模式自动跳过 `.ai` 段，仍回归 stub/SDK/secret-guard 三段） | ✅ pre-commit + ci.yml gate |
 
 ## 性能基准
