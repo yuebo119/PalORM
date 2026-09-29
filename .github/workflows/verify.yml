@@ -220,7 +220,7 @@ jobs:
                   fi
 
             - name: Run stub gate
-              run: bash scripts/stub-check.sh
+              run: dotnet run --file scripts/stub-check.cs
 
             # 独立审计 M0-4：依赖 CVE 信号（此前完全空白——4 个运行时第三方包 +
             # Roslyn 的新 CVE 只能靠人工升级轮发现，GHSA-473q 类事件已实际发生过）。

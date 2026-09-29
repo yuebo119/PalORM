@@ -7,7 +7,7 @@ echo "── pre-commit: secret-guard ──"
 bash "$(git rev-parse --show-toplevel)/scripts/secret-guard.sh" || exit 1
 
 echo "── pre-commit: stub-check ──"
-bash "$(git rev-parse --show-toplevel)/scripts/stub-check.sh" || exit 1
+dotnet run --file "$(git rev-parse --show-toplevel)/scripts/stub-check.cs" || exit 1
 
 # .ai 系统一致性（2026-09-25 起）：lessons/test 的"计数与标题声明"必须等于实测。
 # 这类漂移已发生过 3 次（lessons 标题停 v7.14、§II 声明 93/1-B86 实测 98、
