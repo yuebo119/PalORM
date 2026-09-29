@@ -63,7 +63,7 @@ jobs:
           #   ② BulkBenchmarks(100K) / GcBenchmarks 的批量矩阵 / SqlBuildBenchmarks(4096
           #      次调用 × Precision job) 单类就超过本 job 的 40 分钟预算；
           #   ③ 门禁要的是"同一轮内 PalORM 相对 ADO.NET 是否退化"，横评比绝对耗时更有判别力。
-          # 完整矩阵请用 scripts/run-benchmarks.sh。
+          # 完整矩阵请用 dotnet run --project tools/PalORM.PerfCli -- bench-matrix。
           #
           # 过滤器必须是实际类名。历史过滤器 '*SqliteBenchmarks*' 匹配不到任何类
           # （类名中间隔着 Speed 一类的词），实测 BDN 跑 0 个基准并以退出码 0 结束，
@@ -89,7 +89,7 @@ jobs:
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Check Regression (vs baseline)
-        # 判定由 tools/PalORM.PerfGate 执行（C#，与 run-benchmarks.sh 共用同一实现）。
+        # 判定由 tools/PalORM.PerfGate 执行（C#，与 PerfCli bench-matrix 共用同一实现）。
         # 读 BDN 的 JSON（稳定契约），不读控制台表格。
         # 三个维度：分配字节数、分配比（同轮 PalORM/手写对照）、耗时比（同轮中位数之比）。
         # 不设绝对耗时阈值：实测同机两次运行的 ADO.NET 地板可漂 43%，绝对时间做门禁必然误报；

@@ -15,16 +15,18 @@
 
 ## 性能基准
 
-| 脚本 | 用途 | 耗时 |
+> 性能链统一入口已迁移为 `tools/PalORM.PerfCli`（脚本 C# 化整改方案 Phase 4）：
+> `dotnet run --project tools/PalORM.PerfCli -- <smoke|full|compare|gate|report|index|bench-matrix|full-perf|dappersuite>`。
+
+| 命令 | 用途 | 耗时 |
 |------|------|:---:|
-| `run-benchmarks.sh` | 基准运行器（sqlite/pg/mysql/scale/build/speed/all） | 5-30min |
-| `run-mutation-tests.sh` | 变异测试（Stryker.NET，验证测试有效性；CI 每周六自动跑 mutation-tests.yml，Core + SourceGen 双配置） | 10-30min/项目 |
+| `PerfCli bench-matrix` | 基准运行器（sqlite/pg/mysql/scale/build/speed/all） | 5-30min |
+| `scripts/run-mutation-tests.cs` | 变异测试（Stryker.NET，验证测试有效性；CI 每周六自动跑 mutation-tests.yml，Core + SourceGen 双配置；`dotnet run --file` 调用） | 10-30min/项目 |
 
 ## 测试环境
 
-| 脚本 | 用途 |
-|------|------|
-| `set-test-env.sh` | 从 `.env.test` 加载 PG/MySQL 连接串（`source` 方式调用）。**跑测试已不需要它**——`TestEnvironment` 会自动补入缺失的 `PALORM_*` 变量；本脚本保留给需要在当前 shell 里直接用连接串的场景 |
+> 原 `set-test-env.sh` 已淘汰：`.env.test` 的加载内置于 PerfCli 的 env loader
+> （进程内读取后由子进程继承，不回显值）；跑测试由 `TestEnvironment` 自动补变量。
 
 ## 包验证
 
