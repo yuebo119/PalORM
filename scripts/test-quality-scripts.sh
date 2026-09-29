@@ -52,8 +52,8 @@ printf '\n─── stub-check ───\n'
 mkdir -p "$TMP/clean" "$TMP/stub"
 printf 'internal sealed class Complete { int Value() { return 1; } }\n' > "$TMP/clean/Complete.cs"
 printf 'internal sealed class Stub { object Route() => this; }\n' > "$TMP/stub/Stub.cs"
-bash scripts/stub-check.sh "$TMP/clean" > "$TMP/stub-pass.log"
-if bash scripts/stub-check.sh "$TMP/stub" > "$TMP/stub-fail.log"; then
+dotnet run --file scripts/stub-check.cs "$TMP/clean" > "$TMP/stub-pass.log"
+if ! dotnet run --file scripts/stub-check.cs "$TMP/stub" > "$TMP/stub-fail.log"; then
     printf 'FAIL 空壳夹具未导致失败\n'
     exit 1
 fi
