@@ -125,6 +125,27 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
         {
             throw WrapConnectionException(exception);
         }
+        // ITM-840（v6.1）：空闲期连接被切断时，Npgsql 除 NpgsqlException 外还可能向上抛
+        // 未包装的 IOException / EndOfStreamException / ObjectDisposedException（形态随
+        // 断线阶段与驱动版本变化）。监听器的重连判定只认 PalORM.IsTransient 标记——裸异常
+        // 直达外层 catch 即"监听器永久终止不重连"，与 A2 断线重连意图相反。同标记包装，
+        // IO 族一律按 transient 处理（断线本就是瞬时故障的典型形态）。
+        catch (System.IO.IOException exception)
+        {
+            throw WrapTransientIoException(exception);
+        }
+        catch (ObjectDisposedException exception)
+        {
+            throw WrapTransientIoException(exception);
+        }
+    }
+
+    private static InvalidOperationException WrapTransientIoException(Exception exception)
+    {
+        var wrapped = new InvalidOperationException(
+            "PostgreSQL notification connection was severed by the peer or an intermediary.", exception);
+        wrapped.Data["PalORM.IsTransient"] = true;
+        return wrapped;
     }
 
     private static InvalidOperationException WrapConnectionException(NpgsqlException exception)

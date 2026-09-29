@@ -7,7 +7,7 @@
 
 ```
 1. git status——工作树清洁？
-2. dotnet build -c Debug——0 警告 0 错误？
+2. dotnet build PalORM.ci.slnf -c Debug——0 警告 0 错误？（口径=src+test；bench/BenchmarkDotNet vendored 子树有登记豁免，不在 ci.slnf）
 3. 技术债扫描——bash .ai/scripts/tech-debt-scan.sh（本地工具，不入仓库）
 4. .ai/lessons.md——已读最新版？（本地工具，不入仓库）
 ```
