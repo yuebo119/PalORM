@@ -23,4 +23,17 @@ else
     echo "── pre-commit: .ai 系统一致性（跳过：无 .ai/）──"
 fi
 
+# G1-G33 门禁（2026-09-30 起）：verify V14 只验"跑到完成标记"不判 FAIL 项——
+# G9 豁免清单漂移回归（secret-guard .sh→.cs 迁移漏同步）3 天无人发现，根因是
+# gate-check 在 CI 与 pre-commit 均无触发点。--allow-dirty：提交瞬间 staged 变更
+# 是预期状态，G33"跨任务切换前清洁"语义不适用本场景（脚本自带该参数）。
+# 约 10 秒（git grep 全仓只读扫描，无构建副作用）。
+GATE_CHECK="$(git rev-parse --show-toplevel)/.ai/scripts/gate-check.sh"
+if [ -f "$GATE_CHECK" ]; then
+    echo "── pre-commit: G1-G33 门禁（--allow-dirty）──"
+    bash "$GATE_CHECK" --allow-dirty || exit 1
+else
+    echo "── pre-commit: G1-G33 门禁（跳过：无 .ai/）──"
+fi
+
 exit 0
