@@ -84,6 +84,14 @@ static int RunSelfTest()
         Console.WriteLine("SELFTEST FAIL: uint64 LIMIT 常量行应被白名单过滤");
         selfFail = 1;
     }
+    // 期望被过滤：尖括号占位符三形态（<pwd> 短形态是 quotepath 盲区修复后暴露的缺口，B53 增补）
+    if (!Rules.WhitelistFilter.IsMatch("Host=<host>;Password=<pwd>;Database=<db>")
+        || !Rules.WhitelistFilter.IsMatch("Host=<host>;Password=<password>")
+        || !Rules.WhitelistFilter.IsMatch("Host=<host>;Password=<your-pwd-here>"))
+    {
+        Console.WriteLine("SELFTEST FAIL: 尖括号占位符连接串应被白名单过滤");
+        selfFail = 1;
+    }
     // 期望穿透白名单：真阳性连接串不得被白名单误滤（否则规则层永远看不到）
     if (Rules.WhitelistFilter.IsMatch("Host=prod.db;Port=5432;Password=realpass123"))
     {
@@ -241,11 +249,17 @@ static int RunMain(string[] args)
 
     static string Git(string arguments)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("git", arguments)
+        // core.quotepath=false：git 默认把非 ASCII 路径转义为八进制形态（"\346\226\207..."），
+        // 拿转义名去 git show / 读盘必然失败 → 内容检查静默跳过（盲区：中文路径文件从不被
+        // 内容扫描，真阳性泄漏可绕过——2026-09-30 scratch 仓复现实锤后修复）。
+        // StandardOutputEncoding=UTF8：本机 Console 编码 GBK 会把 git 输出的 UTF-8 中文路径解码成乱码。
+        var psi = new System.Diagnostics.ProcessStartInfo("git", $"-c core.quotepath=false {arguments}")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
         using var p = System.Diagnostics.Process.Start(psi)!;
         var stdout = p.StandardOutput.ReadToEnd();
@@ -272,8 +286,11 @@ internal static class Rules
     public static readonly Regex EnvExample = new(@"(^|/)\.env(\..+)?\.example$", RegexOptions.Compiled);
 
     // 白名单过滤层（B53：与 --selftest 过滤层向量共用；-viE 逐行剔除）
+    // Password=<...>：连接串模板的尖括号占位符整体豁免（<pwd>/<password>/<your-pwd> 同族；
+    // quotepath 盲区修复后 docs/AOT部署指南.md 的 <pwd> 形态首次进入扫描面暴露此缺口——
+    // 真实凭据不会包尖括号，泛化安全）
     public static readonly Regex WhitelistFilter = new(
-        @"Password=\*\*\*|Password=xxx|Password=<password>|Password=change-me|Password=\$\{|PALORM_.*_PASSWORD|pwd=\|connectionString|example|placeholder|sample|template|gate-check\.sh|secret-guard\.sh|安全红线|YOUR_.*_HERE|REPLACE_ME|INSERT_|TO_BE_|FIXME|TODO|18446744073709551615",
+        @"Password=\*\*\*|Password=<[^;>]+>|Password=xxx|Password=change-me|Password=\$\{|PALORM_.*_PASSWORD|pwd=\|connectionString|example|placeholder|sample|template|gate-check\.sh|secret-guard\.sh|安全红线|YOUR_.*_HERE|REPLACE_ME|INSERT_|TO_BE_|FIXME|TODO|18446744073709551615",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // 连接串含密码（规则 14，变量化共用）
