@@ -267,6 +267,22 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                         {
                             // 心跳到期：取消悬挂的 wait，避免下一轮对同一连接并发等待
                             await beat.CancelAsync().ConfigureAwait(false);
+                            // ITM-855（v6.1）：观测被取消的 waitTask——正常形态是 OCE（beat 取消）；
+                            // 若以非 OCE 失败（连接在取消竞态窗口内故障），不观测会成为
+                            // UnobservedTaskException 噪音。静默观测即可：探测分支随后判定连接死活。
+                            try
+                            {
+                                await waitTask.ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                // 预期形态：beat 取消传播
+                            }
+                            catch (Exception observeException) when (observeException is not OperationCanceledException)
+                            {
+                                // 非预期失败形态：观测吞掉（防 UnobservedTaskException 噪音），
+                                // 连接死活交由紧随的 ProbeConnectionAsync 判定
+                            }
                         }
 
                         // 探测连接是否仍活着（静默断线的唯一可靠信号）
