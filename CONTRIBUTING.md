@@ -44,7 +44,9 @@ cp .env.test.example .env.test
 > **优先级**：显式环境变量 > `.env.test` > 报错。已设置的环境变量恒不被文件覆盖，
 > 故 CI 注入 secret 的路径完全不读该文件。
 >
-> `source scripts/set-test-env.sh` 仍可用（例如想在 shell 里跑 `psql`），但已不是跑测试的必需步骤。
+> `.env.test` 的加载已内置于 `tools/PalORM.PerfCli`（性能链编排器自动读取，不回显值）；
+> 跑测试本身也不需要它——`TestEnvironment` 会自动补入缺失的 `PALORM_*` 变量。
+> 原 `source scripts/set-test-env.sh` 随脚本 C# 化淘汰（C# 进程无法向父 shell 导出变量）。
 
 ## 代码规范
 

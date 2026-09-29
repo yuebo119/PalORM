@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- 性能测评统一 CLI（自 scripts/perf.sh 家族五件套迁移，脚本 C# 化整改方案 Phase 4）。
+         与 PalORM.PerfGate 同例：CLI 输出无需本地化、Console 同步调用可接受（S6966/CA1849）；
+         bash 编排输出含中文与自定义框线，CA1303 豁免对齐既有 CLI 惯例。
+         CA2000：Console 输出流 StreamWriter 按设计存活整个进程，不释放即转交 Console 所有权；
+         S4036：git/dotnet 依赖 PATH 解析是编排器契约（各运行机一致）；
+         S6561：步骤耗时/进度表是运维显示精度（秒级），非基准测量；
+         CA2025：tee 日志 StreamWriter 跨异步任务使用后于 finally 同步释放（Task.WaitAll 后）；
+         CA2007：CLI 无同步上下文，ConfigureAwait 无意义；
+         S6444：编排器对 BDN 等长跑子进程按设计无限等待（测量时长本身就是分钟到小时级）。 -->
+    <NoWarn>$(NoWarn);CA1303;CA1849;S6966;IDE0028;IDE0061;CA1307;S1135;CA2000;S4036;S6561;CA2025;CA2007;S6444</NoWarn>
+  </PropertyGroup>
+
+</Project>
