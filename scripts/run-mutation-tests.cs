@@ -63,7 +63,7 @@ Console.WriteLine("   >80% = 高（绿）  60-80% = 中（黄）  <60% = 低（�
 Console.WriteLine("═══════════════════════════════════════════════════════════════");
 return 0;
 
-void PerfBanner()
+static void PerfBanner()
 {
     Console.WriteLine("═══════════════════════════════════════════════════════════════");
     Console.WriteLine(" PalORM 变异测试（Stryker.NET）");
