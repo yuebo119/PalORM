@@ -2,6 +2,30 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [6.1.0] — v6.1：枚举支持（StoreAs 三形态）+ 参数池 DbType 贯通 + PALORM053 — 2026-09-29
+
+> 验证口径：Core 444/444 · SourceGen 227/227 · Integration 真库 244/244 · Release（ci.slnf -warnaserror）0 警告 0 错误 · gate 33/33 · verify 19/19 · doc 12/12。
+
+### ✨ 新特性：枚举属性支持（ITM-553）
+
+- **`[Column(StoreAs = ...)]` 三形态**：枚举属性从 PALORM016 拒绝变为开箱支持。缺省（或 `AsString`）= 成员名字符串（DDL `TEXT`，与升级前映射形态一致，零迁移）；`AsInt32` = `INTEGER`；`AsInt64` = `BIGINT`。写侧 binder 三形态（单行/INSERT 池/UPSERT 池）生成枚举强转（`ToString()`/`(int)`/`(long)`，可空枚举先显式转 E 再转——`Nullable<T>.ToString()` 引用程序集标注 `string?`）；读侧数值强转 + 字符串走**生成式 switch 解析**（AOT 零反射，未定义成员抛带原始值的响亮异常）。投影路径（`[Projection]`）同款。
+- **新增 PALORM053**（Error）：StoreAs 适用面三态——非枚举属性 / 与 `[Converter]` 组合（converter 已独占 provider 映射）/ `AsInt32` 对底层宽于 int 的枚举（uint/long/ulong 值截断）。诊断总数 45→46。PALORM017 对 StoreAs 停报（参与读写双路径）。
+- **测试**：快照基线新增 EnumStorageEntity 三方言生成物（DDL 类型/强转形态/Parse helper 逐项评审）；SQLite 往返 5 测试——存储表示直证（status 列落 'Paid'）、可空双态、Int64 超 Int32 值不截断、更新 + BulkInsert 全形态、脏值响亮拒绝；PALORM053 四负向/正向测试。
+
+### 🔧 参数池 DbType 贯通（ITM-823/833）
+
+- 池路径（UPDATE 池 / UPSERT 池 binder）的 DbType 发射统一为 `NeedsPoolDbTypeHint` 判据（**可空列 + byte[] 列**）：非空标量保持驱动推断（PG-4 实测成本决策保留），DBNull 消息获得类型提示（Npgsql Unknown 慢路径与 ITM-527 家族对齐），byte[] Binary 确定性契约贯通全部路径（单行 BindUpdate 的 byte[]-only 分叉收敛）。INSERT 池维持恒发（COPY 消费方）。快照 diff = +14/−3 纯 DbType 行。
+- 修复期内自回归：values-body 分支漏 `DbTypeFor` 空值守卫——可空 OwnedJson 列（未映射类型）触发生成物空 identifier（CS1001），由 `ci.slnf -warnaserror` 全量构建抓到（三套测试实体未覆盖该组合形态），补守卫修复。
+
+### 🩹 通知监听健壮性（ITM-840/855）
+
+- `NpgsqlNotificationConnection.WaitAsync` 异常面扩展：空闲期断线的非 NpgsqlException 形态（`IOException`/`ObjectDisposedException`）按 transient 包装——监听器重连判定只认 `PalORM.IsTransient` 标记，裸异常直达外层即永久终止不重连（与 A2 断线重连意图相反）。锁定测试：Dispose 后 WaitAsync 获得标记（真实 ODE 形态）。
+- 心跳超时分支的 `waitTask` 弃置观测：取消后的等待以非 OCE 失败时不再成为 UnobservedTaskException 噪音（连接死活仍由探测分支判定）。
+
+### 📄 内部口径（.ai，ITM-803/847）
+
+- test-gate T 覆盖三方对齐（README/prompt 与实查输出：T4/T6/T8/T9/T11/T12 + T-DEF-1/4）；.ai/README 防线清单补仓库根 `scripts/` 条目；AGENTS 启动清单构建口径改为 ci.slnf（bench vendored 子树豁免）；"全阻断"表述订正（G10/G15/G16 为登记警告级）。
+
 ## [6.0.1] — v6.0 发布后质量清偿：并行读作用域并发集群（P0）+ 缓存/事务正确性修复 + PALORM052 — 2026-09-28
 
 > 来源：r23 全量评审（4 片并行地毯 72 文件 18916 行零跳读 + r22 账本双轮交叉印证）三阶段（分析→修复→清偿）。全量对账：r22+r23 共 100+ 项发现全部闭环（修复/探针证伪销案/登记并入专门迭代）。验证口径：Core 438/438 · SourceGen 223/223 · Integration 真库 244/244 · gate 33/33 · verify 19/19 · Release 全项目 0 警告 0 错误。

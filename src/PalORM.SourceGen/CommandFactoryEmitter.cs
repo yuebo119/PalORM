@@ -419,10 +419,11 @@ internal static class CommandFactoryEmitter
 
     /// <summary>共享 Value 直写循环——列序 = <paramref name="predicate"/> 过滤后的声明序，
     /// 与同谓词的 GenerateBindBody（建参数版）逐列一致（PL-3.2：Upsert 版消费 IsUpsertable）。
-    /// <para><b>emitDbType=false</b>（PG-4，2026-09-26）：UPSERT 池参数每行每列重绑，但没有任何
-    /// 消费方读 <c>NpgsqlDbType</c>（执行期由驱动从 Value 推断，与 S3 前行为一致）——每行赋值
-    /// 纯成本（探针：DbType+Value 组合 31ns vs Value 13ns）。只有 INSERT 池（PG Binary COPY 的
-    /// WriteRow 逐单元格读类型 + 需要 DBNull 列映射到真实类型修 ITM-527）保留显式 DbType。</para></summary>
+    /// <para><b>emitDbType 三态</b>（ITM-823，v6.1 收敛）：INSERT 池恒发（PG Binary COPY 逐单元格
+    /// 读类型 + ITM-527 DBNull 修复）；UPSERT 池按 <see cref="NeedsPoolDbTypeHint"/> 选择性发——
+    /// 非空标量列保持驱动推断（PG-4 实测每行赋值纯成本：31ns vs 13ns），可空列与 byte[] 列
+    /// 发提示（DBNull 落 Unknown 的驱动慢路径/类型歧义 + Binary 确定性契约，与单行 binder
+    /// 的分叉即 ITM-823 登记的"三处一致在本路径分叉"）。</para></summary>
     private static void GenerateBindValuesBody(
         TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate, bool emitDbType)
     {
@@ -431,13 +432,21 @@ internal static class CommandFactoryEmitter
         {
             if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
-            // PG-3：池参数（COPY/多值 INSERT 跨批复用）同样显式 DbType，先 DbType 后 Value
             if (emitDbType && DbTypeFor(col.ProviderClrTypeName) is { } mapped)
                 sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
+            else if (!emitDbType && NeedsPoolDbTypeHint(col)
+                && DbTypeFor(col.ProviderClrTypeName) is { } poolMapped)
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{poolMapped};");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
     }
+
+    /// <summary>ITM-823（v6.1）：选择性池提示的判据——可空列（DBNull 需要类型提示防 Unknown）
+    /// 或 byte[] 列（Binary 确定性契约，S3）。调用方已保证 DbTypeFor 非空（string/int/long/
+    /// byte[] 等映射内类型）。</summary>
+    private static bool NeedsPoolDbTypeHint(ColumnModel col)
+        => col.IsNullable || IsBinaryColumn(col);
 
     // v4.1：MySQL INSERT + SELECT LAST_INSERT_ID() 预构建，消除运行时 string 拼接
     internal static string BuildInsertWithLastInsertIdSql(
@@ -491,8 +500,10 @@ internal static class CommandFactoryEmitter
         foreach (var col in setCols.Concat(pkCols))
         {
             string valueExpr = GetParameterValueExpression(col);
-            if (IsBinaryColumn(col))
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.Binary;");
+            // ITM-823（v6.1）：byte[]-only 收敛为 NeedsPoolDbTypeHint（可空列同发——DBNull 落
+            // Unknown 的驱动慢路径与单行 BindUpdate 的分叉消除；非空标量保持 PG-4 推断决策）
+            if (NeedsPoolDbTypeHint(col) && DbTypeFor(col.ProviderClrTypeName) is { } updateMapped)
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{updateMapped};");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
@@ -548,6 +559,26 @@ internal static class CommandFactoryEmitter
 
     private static string GetParameterValueExpression(ColumnModel col)
     {
+        // ITM-553（v6.1）：枚举列写路径——按存储策略转 provider 值（int/long 显式强转或
+        // 成员名字符串）。可空枚举（E?）先经 (E) 显式转换再转数值（空值已由外层守卫拦截）。
+        if (col.EnumStorage != EnumStorageKind.None)
+        {
+            string prop = $"entity.{col.EscapedPropertyName}";
+            string enumValue = col.EnumStorage switch
+            {
+                EnumStorageKind.AsInt32 => col.IsNullable
+                    ? $"(int)({col.EnumClrTypeName}){prop}" : $"(int){prop}",
+                EnumStorageKind.AsInt64 => col.IsNullable
+                    ? $"(long)({col.EnumClrTypeName}){prop}" : $"(long){prop}",
+                // Nullable<T>.ToString() 在引用程序集标注 string?（HasValue=false 返 ""）——
+                // (object) 强转下 CS8600；可空先显式转 E（null 已由外层守卫拦截）再 ToString。
+                _ => col.IsNullable
+                    ? $"(({col.EnumClrTypeName}){prop}).ToString()" : $"{prop}.ToString()",
+            };
+            return col.IsNullable
+                ? $"{prop} is null ? global::System.DBNull.Value : (object){enumValue}"
+                : $"(object){enumValue}";
+        }
         if (IsObjectOwnedJson(col))
             return col.IsNullable
                 ? $"entity.{col.EscapedPropertyName} is null ? global::System.DBNull.Value : (object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})"

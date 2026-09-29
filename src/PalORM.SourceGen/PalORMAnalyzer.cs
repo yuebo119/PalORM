@@ -283,6 +283,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// <summary>索引名长度上限——最严方言口径（PG NAMEDATALEN-1）。ITM-874（r23）。</summary>
     internal const int MaxIndexNameLength = 63;
 
+    // PALORM053：[Column(StoreAs=…)] 适用面（ITM-553，v6.1）——StoreAs 参与读写双路径后，
+    // 误用形态须编译期定位：非枚举属性（无从映射）、×[Converter]（converter 已独占 provider
+    // 映射，双通道生成物语义未定义）、AsInt32 对底层宽于 int 的枚举（值截断写错数据）。
+    public static readonly DiagnosticDescriptor StoreAsMisuse = new(
+        "PALORM053", "[Column(StoreAs = ...)] is invalid on this property",
+        "[Column(StoreAs = ...)] on property '{0}' of type '{1}' is invalid: {2}", "PalORM", DiagnosticSeverity.Error, true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
         [MissingPrimaryKey, ColumnNameMismatch, UnknownTable, MissingForeignKey,
          NPlusOneDetected, MissingOwnedJsonContext,
@@ -300,7 +307,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          DefaultValueConflicts, InvalidDefaultValueExpression,
          ProjectionTableConflict, ProjectionOwnedJsonUnsupported,
          InvalidColumnSchemaArgs,
-         IndexNameTooLong];
+         IndexNameTooLong, StoreAsMisuse];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -930,6 +937,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             CheckTimestampComputedConflict(ctx, type, member);                    // PALORM042（ITM-640 收口）
             CheckComputedExpressionValidity(ctx, type, member);                   // PALORM044（ITM-640 收口）
             CheckDefaultValueConflicts(ctx, type, member);                        // PALORM047（R2，v6.0）
+            CheckStoreAsUsage(ctx, type, member);                        // PALORM053（v6.1，ITM-553）
             CheckDefaultValueExpressionValidity(ctx, type, member);               // PALORM048（R2，v6.0）
             CheckColumnSchemaArgValidity(ctx, type, member);                      // PALORM051（R3，v6.0）
             CheckConverterOwnedJsonConflict(ctx, type, member);                   // PALORM027
@@ -1310,18 +1318,53 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
     }
 
+    /// <summary>PALORM053（v6.1）：[Column(StoreAs=…)] 适用面三态——非枚举 / ×[Converter] /
+    /// AsInt32 对底层宽于 int 的枚举（uint/long/ulong，值截断即静默错数据）均 Error 定位报错。
+    /// 生成器侧（TableModel.TryResolveEnumStorage）对前两态防御性不覆写，与此处 Error 协同。</summary>
+    private static void CheckStoreAsUsage(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        AttributeData? columnAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
+        if (columnAttr is null
+            || !columnAttr.NamedArguments.Any(static na => na.Key == "StoreAs"))
+            return;
+        Location location = member.Locations.FirstOrDefault() ?? type.Locations[0];
+        ITypeSymbol unwrapped = SourceGenerationValidation.UnwrapNullable(member.Type);
+        if (unwrapped.TypeKind != TypeKind.Enum)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(StoreAsMisuse, location,
+                member.Name, member.Type.ToDisplayString(),
+                "it requires an enum property (it selects the integer/string mapping for enum members)"));
+            return;
+        }
+        if (SourceGenerationValidation.GetConverterAttribute(member) is not null)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(StoreAsMisuse, location,
+                member.Name, member.Type.ToDisplayString(),
+                "it cannot be combined with [Converter] because the converter already owns the provider mapping"));
+            return;
+        }
+        int storeAs = columnAttr.NamedArguments
+            .FirstOrDefault(static na => na.Key == "StoreAs").Value.Value as int? ?? 0;
+        if (storeAs == 1  // StoreAs.AsInt32
+            && unwrapped is INamedTypeSymbol { EnumUnderlyingType.SpecialType: SpecialType.System_UInt32
+                or SpecialType.System_Int64 or SpecialType.System_UInt64 })
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(StoreAsMisuse, location,
+                member.Name, member.Type.ToDisplayString(),
+                "AsInt32 would truncate values of an enum whose underlying type is wider than int; use AsInt64"));
+        }
+    }
+
     /// <summary>PALORM017：不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"。
     /// ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；v6.0 R2 后 [DefaultValue] 参与列
     /// DEFAULT 子句，停报；v6.0 R3 后 [Column] 的 Length/Precision/Scale/TypeName 参与类型
-    /// 细化，停报。[Column(StoreAs=…)]（ITM-553 读写双路径）仍告警。</summary>
+    /// 细化，停报；v6.1 起 [Column(StoreAs=…)] 参与读写双路径（ITM-553 枚举存储策略），
+    /// 停报——适用面违规由 PALORM053 定位报错。</summary>
     private static void CheckAnnotationNotApplied(
         SymbolAnalysisContext ctx, IPropertySymbol member, Location memberLocation)
     {
-        var columnWithStoreAs = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Column")  // ITM-512
-            && a.NamedArguments.Any(static na => na.Key == "StoreAs"));
-        if (columnWithStoreAs is not null)
-            ctx.ReportDiagnostic(Diagnostic.Create(AnnotationNotAppliedToDdl, memberLocation, "[Column(StoreAs=…)]", member.Name));
     }
 
     /// <summary>PALORM051：[Column] 架构参数值域（R3，v6.0）——负 Length/Precision、负 Scale、
