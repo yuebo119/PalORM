@@ -4,7 +4,7 @@
 set -uo pipefail
 
 echo "── pre-commit: secret-guard ──"
-bash "$(git rev-parse --show-toplevel)/scripts/secret-guard.sh" || exit 1
+dotnet run --file "$(git rev-parse --show-toplevel)/scripts/secret-guard.cs" || exit 1
 
 echo "── pre-commit: stub-check ──"
 dotnet run --file "$(git rev-parse --show-toplevel)/scripts/stub-check.cs" || exit 1

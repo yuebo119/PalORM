@@ -229,7 +229,7 @@ fi
 
 
 printf '─── secret-guard 自测（B41：误报/真阳性双向向量回归）───\n'
-if bash scripts/secret-guard.sh --selftest; then
+if dotnet run --file scripts/secret-guard.cs -- --selftest; then
     printf 'PASS secret-guard 自测\n'
 else
     printf 'FAIL secret-guard 自测未通过\n'
