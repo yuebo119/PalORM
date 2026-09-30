@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 665 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 887 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -83,7 +83,7 @@
 
 ### 基础注解 (23 个)
 
-`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]` `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Required]` `[DefaultValue]` `[Timestamp]` `[Computed]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[Schema]` `[Database]` `[SqlTemplate]` `[Projection]`（v6.0 R1：DTO 投影物化——`QueryAsync<T>`/`GridReader.Read<T>`/存储过程结果集直接映射到非表类型，ordinal 契约同 ADR-A；不生成写命令与迁移 DDL）
+`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]`（随 `CREATE TABLE` 内联生成三方言表级 FK 子句，`OnDelete` 显式必填、默认 NO ACTION；引用表/列名为字面 DDL 名，须与被引用实体实际映射列名逐字对齐——PG 引号标识符大小写敏感；SQLite 引擎强制需连接级 `PRAGMA foreign_keys=ON`，已建表不补齐属迁移幂等新建口径） `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Required]` `[DefaultValue]` `[Timestamp]` `[Computed]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[Schema]` `[Database]` `[SqlTemplate]` `[Projection]`（v6.0 R1：DTO 投影物化——`QueryAsync<T>`/`GridReader.Read<T>`/存储过程结果集直接映射到非表类型，ordinal 契约同 ADR-A；不生成写命令与迁移 DDL）
 
 ### 查询构建器 (struct QueryBuilder&lt;T&gt;)
 

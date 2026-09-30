@@ -28,7 +28,9 @@ internal static class MigrationEmitter
         sb.AppendLine($"    internal const string CreateTableMySql = {ToCSharpLiteral(mySql)};");
 
         // 索引 DDL（ADR-B）：三方言各一组，MigrateAsync 按 Provider 方言执行。
-        // FK 约束仍不生成（SQLite 需内联 CREATE TABLE，留待迁移系统整体设计）——由 PALORM017 告警。
+        // FK 约束自本版起随 CREATE TABLE 内联生成（ADR-B 补充实施，挂起解除）——三方言
+        // 表级 FOREIGN KEY 子句同构；已建表的增量补齐仍留迁移系统整体设计（与"已建表
+        // 不加列"同口径，MigrateAsync 是幂等新建哲学）。
         sb.AppendLine();
         AppendIndexArray(sb, model, "CreateIndexesSqlite", SqlGenerationDialect.Sqlite);
         AppendIndexArray(sb, model, "CreateIndexesPostgreSql", SqlGenerationDialect.PostgreSql);
@@ -101,8 +103,44 @@ internal static class MigrationEmitter
         }
 
         string tableName = SqlGeneration.QuoteIdentifier(model.TableName, dialect);
+        string foreignKeys = BuildForeignKeyClauses(model, dialect);
+        string fkSuffix = foreignKeys.Length == 0 ? "" : $",\n{foreignKeys}";
         return $"CREATE TABLE IF NOT EXISTS {tableName} (\n" +
-            $"{string.Join(",\n", columns)}\n)";
+            $"{string.Join(",\n", columns)}{fkSuffix}\n)";
+    }
+
+    /// <summary>表级 FOREIGN KEY 子句（ADR-B 补充实施）——三方言同构形态：
+    /// <c>FOREIGN KEY ("col") REFERENCES "reftable" ("refcol") ON DELETE &lt;action&gt;</c>。
+    /// <para>列名取该属性的 [Column] 映射名（ITM-512 家族同口径：错列引用在源头消除）；
+    /// 引用表/列名已经 PALORM043 控制字符扫描与 PALORM003 存在性校验。ON DELETE 默认
+    /// NO ACTION（G16：级联删除必须显式启用），CASCADE/SET NULL/RESTRICT 由用户显式
+    /// 声明（PALORM004 强制 OnDelete 必填）。SQLite 侧强制执行需连接级
+    /// <c>PRAGMA foreign_keys=ON</c>（引擎默认 OFF），由文档与测试载明。</para></summary>
+    private static string BuildForeignKeyClauses(TableModel model, SqlGenerationDialect dialect)
+    {
+        if (model.ForeignKeys.AsSpan().Length == 0) return "";
+        List<string> clauses = [];
+        foreach (ForeignKeyModel fk in model.ForeignKeys.AsSpan())
+        {
+            // 属性名 → [Column] 映射列名；匹配不到跳过该 FK（防御式，与 PALORM020
+            // 空列跳过同形态——正常解析流不可能命中，FK 本就从属性收集）
+            string? columnName = model.Columns.AsSpan().ToArray()
+                .FirstOrDefault(c => c.PropertyName == fk.PropertyName)?.ColumnName
+                ?? fk.PropertyName;
+            string onDelete = fk.OnDelete switch
+            {
+                (int)DeleteAction.NoAction => "NO ACTION",
+                (int)DeleteAction.Cascade => "CASCADE",
+                (int)DeleteAction.SetNull => "SET NULL",
+                (int)DeleteAction.Restrict => "RESTRICT",
+                _ => "NO ACTION",
+            };
+            clauses.Add(
+                $"    FOREIGN KEY ({SqlGeneration.QuoteIdentifier(columnName, dialect)}) " +
+                $"REFERENCES {SqlGeneration.QuoteIdentifier(fk.ReferencedTable, dialect)} " +
+                $"({SqlGeneration.QuoteIdentifier(fk.ReferencedColumn, dialect)}) ON DELETE {onDelete}");
+        }
+        return string.Join(",\n", clauses);
     }
 
     private static string GetPrimaryKeyClause(

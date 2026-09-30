@@ -4,6 +4,18 @@
 
 ## [未发布]
 
+### ✨ [ForeignKey] 迁移 DDL 落地（ADR-B 挂起解除）
+
+- **随 `CREATE TABLE` 内联三方言表级 FK 子句**：`FOREIGN KEY ("col") REFERENCES "reftable" ("refcol") ON DELETE <action>`——PG/MySQL 的 CREATE TABLE 原生支持表级 FK，SQLite 内联是其唯一形态，三方言同构零分叉。`OnDelete` 四形态映射（NO ACTION/CASCADE/SET NULL/RESTRICT），默认 NO ACTION（G16 级联显式启用语义）；PALORM004 已强制 OnDelete 必填，PALORM017 对 FK 此前已停报（JOIN 消费）。
+- **限制口径（文档明示）**：已建表不补齐 FK（与"已建表不加列"同限制，MigrateAsync 幂等新建哲学）；SQLite 引擎强制需连接级 `PRAGMA foreign_keys=ON`（引擎默认 OFF）；引用表/列名为字面 DDL 契约，须与被引用实体实际映射列名逐字对齐（PG 引号标识符大小写敏感——实测教训：引用列写 `"id"` 而实际列名 `"Id"` 时 PG 报 42703，Integration 全实体共享 Registry 使一处坏 FK 炸全部 MigrateAsync；引用列编译期对齐校验登记为诊断候选）。详见 `docs/adr/ADR-B` 实施记录二。
+- **测试**：快照基线 FkParentEntity/FkChildEntity 三方言形态（CASCADE/RESTRICT/SET NULL）+ Integration 5 用例（SQLite 孤儿拒绝/CASCADE 真传播/二次迁移幂等/PG/MySQL 真库强制），Core/SG/Integration = 444/227/249 全绿。
+
+### 🩹 质量系统修复轮（2026-09-30 · 提交 2fef3cc）
+
+- **verify-action-items.sh v2 重写**：v1 双向失配（对 r22 反引号格式账本把代码片段当标识符 git grep 出 76 误报且脚本为无触发点孤儿；对 r23 新格式账本提取 0 token 空扫假绿）——v2 收窄为可机械判真伪的路径核对（两层提取 + 中文分号联合列举拆分 + 五级路径解析链 + 历史改名豁免登记），r22/r23 双账本 0 缺失、幻觉路径负向探针如期 FAIL；并纳入 verify V14 自检（9→10 脚本）。
+- **assertion-strength 模式 2 helper 断言跟随**：`[Test]` 方法调用本文件内含断言的方法（含泛型+where 约束形态）即视为有断言——SavepointDialectTests 两个多轮误报归零；注入零断言探针仍被抓（检测能力未随误报修复丢失）。
+- **test-counts.json 地板注释刷新**：停旧 3 轮的"当前实测约 289/197/197"更新为实测口径并显式注明"地板≠当前值"；地板数值不动（防退化下限仍有效）。
+
 ### 🧹 脚本 C# 化整改（2026-09-29，用户决策：脚本一律 C#，非 C# 白名单制须用户同意）
 
 - **全仓 15 个 `.sh` + 1 个 Node `.mjs` 迁移为 C#**：提交防线四项（secret-guard/stub-check/assert-test-counts/assert-coverage）与发布链三项（release-version-scan/pre-release-check/test-package-contract）迁为 file-based app（`dotnet run --file scripts/<名>.cs`）；性能链五件套（perf/perfhub-ab/run-full-perf/dappersuite-run/run-benchmarks）+ set-test-env 收敛为 `tools/PalORM.PerfCli` 项目（九子命令，入 ci.slnf 享 0 警告 0 错误门禁）；质量夹具本体迁为 `scripts/test-quality-scripts.cs`（九段，新增"脚本语言政策"机械门禁：白名单外新 `.sh/.mjs/.py` 即 FAIL，V17 双向验证）。`.githooks/pre-commit` 为唯一白名单保留项（git hook 机制要求）。

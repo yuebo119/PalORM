@@ -14,7 +14,7 @@ internal static class PalORM_RegistryInitializer
         Register(draft);
     }
 
-    /// <summary>注册 5 个实体（估算 IL ≈7380 B）——分块边界即单方法 IL 的上界。</summary>
+    /// <summary>注册 7 个实体（估算 IL ≈9540 B）——分块边界即单方法 IL 的上界。</summary>
     private static void AddChunk0(RegistryDraft draft)
     {
         draft.RowFactories[typeof(global::AllTypesEntity)] = RowFactory_global__AllTypesEntity_7f6c8145.Read;
@@ -387,6 +387,140 @@ internal static class PalORM_RegistryInitializer
                 Migration_global__InheritedEntity_3f5411cb.CreateIndexesPostgreSql,
                 Migration_global__InheritedEntity_3f5411cb.CreateIndexesMySql);
         draft.SetIdDelegates[typeof(global::InheritedEntity)] = (entity, id) => CommandFactory_global__InheritedEntity_3f5411cb.SetId((global::InheritedEntity)entity, id);
+
+        draft.RowFactories[typeof(global::FkParentEntity)] = RowFactory_global__FkParentEntity_9c81ae12.Read;
+        draft.TableNames[typeof(global::FkParentEntity)] = "fk_parent";
+        draft.CommandSqlsByDialect[typeof(global::FkParentEntity)] = new global::PalORM.CommandSqlByDialect(
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"fk_parent\" (\"name\") VALUES (@p0)",
+                "UPDATE \"fk_parent\" SET \"name\" = @p0 WHERE \"Id\" = @p1",
+                "DELETE FROM \"fk_parent\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"fk_parent\" (\"name\") VALUES (@p0) RETURNING \"Id\"",
+                "INSERT INTO \"fk_parent\" (\"Id\", \"name\") VALUES (@p0, @p1) ON CONFLICT (\"Id\") DO UPDATE SET \"name\" = excluded.\"name\" RETURNING \"Id\", \"name\"",
+                "",
+                ""),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"fk_parent\" (\"name\") VALUES (@p0)",
+                "UPDATE \"fk_parent\" SET \"name\" = @p0 WHERE \"Id\" = @p1",
+                "DELETE FROM \"fk_parent\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"fk_parent\" (\"name\") VALUES (@p0) RETURNING \"Id\"",
+                "INSERT INTO \"fk_parent\" (\"Id\", \"name\") VALUES (@p0, @p1) ON CONFLICT (\"Id\") DO UPDATE SET \"name\" = excluded.\"name\" RETURNING \"Id\", \"name\"",
+                "",
+                ""),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO `fk_parent` (`name`) VALUES (@p0)",
+                "UPDATE `fk_parent` SET `name` = @p0 WHERE `Id` = @p1",
+                "DELETE FROM `fk_parent` WHERE `Id` = @p0",
+                "",
+                "",
+                "INSERT INTO `fk_parent` (`Id`, `name`) VALUES (@p0, @p1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
+                "INSERT INTO `fk_parent` (`name`) VALUES (@p0); SELECT LAST_INSERT_ID()")
+        );
+        draft.BindInsert[typeof(global::FkParentEntity)] = (cmd, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindInsertToBatch(cmd, (global::FkParentEntity)obj, off);
+        draft.BindUpdate[typeof(global::FkParentEntity)] = (cmd, obj) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpdate(cmd, (global::FkParentEntity)obj);
+        draft.BindDelete[typeof(global::FkParentEntity)] = (cmd, key) => CommandFactory_global__FkParentEntity_9c81ae12.BindDelete(cmd, key);
+        draft.CrudMetadatas[typeof(global::FkParentEntity)] = new global::PalORM.CrudMetadata(
+                new global::PalORM.CrudBindings(
+                    (cmd, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindInsertToBatch(cmd, (global::FkParentEntity)obj, off),
+                    (parameters, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindInsertValues(parameters, (global::FkParentEntity)obj, off),
+                    (cmd, obj) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpsert(cmd, (global::FkParentEntity)obj),
+                    (cmd, obj) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpdate(cmd, (global::FkParentEntity)obj),
+                    RowFactory_global__FkParentEntity_9c81ae12.Read,
+                    (parameters, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpdateValues(parameters, (global::FkParentEntity)obj, off),
+                    insertReturningKeyOnly: true,
+                    insertNoReturning: false,
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpsertValues(parameters, (global::FkParentEntity)obj, off)),
+                new global::PalORM.CrudColumns(
+                    new[] { "name" },
+                    new[] { "Id", "name" },
+                    new[] { "name" }),
+                null,
+                obj => CommandFactory_global__FkParentEntity_9c81ae12.HasDefaultKey((global::FkParentEntity)obj));
+        draft.EntityFeatures[typeof(global::FkParentEntity)] = global::PalORM.EntityFeatures.None;
+        draft.PkColumns[typeof(global::FkParentEntity)] = "Id";
+        draft.ColumnNames[typeof(global::FkParentEntity)] = new[] { "Id", "name" };
+        draft.PropertyToColumn[typeof(global::FkParentEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+        {
+            ["Id"] = "Id",
+            ["Name"] = "name",
+        };
+        draft.CreateTableSqlByDialect[typeof(global::FkParentEntity)] = new global::PalORM.CreateTableSqlSet(
+                Migration_global__FkParentEntity_9c81ae12.CreateTableSqlite,
+                Migration_global__FkParentEntity_9c81ae12.CreateTablePostgreSql,
+                Migration_global__FkParentEntity_9c81ae12.CreateTableMySql);
+        draft.CreateIndexSqlByDialect[typeof(global::FkParentEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__FkParentEntity_9c81ae12.CreateIndexesSqlite,
+                Migration_global__FkParentEntity_9c81ae12.CreateIndexesPostgreSql,
+                Migration_global__FkParentEntity_9c81ae12.CreateIndexesMySql);
+        draft.SetIdDelegates[typeof(global::FkParentEntity)] = (entity, id) => CommandFactory_global__FkParentEntity_9c81ae12.SetId((global::FkParentEntity)entity, id);
+
+        draft.RowFactories[typeof(global::FkChildEntity)] = RowFactory_global__FkChildEntity_9e8ce632.Read;
+        draft.TableNames[typeof(global::FkChildEntity)] = "fk_child";
+        draft.CommandSqlsByDialect[typeof(global::FkChildEntity)] = new global::PalORM.CommandSqlByDialect(
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"fk_child\" (\"parent_id\", \"restrict_ref\", \"setnull_ref\") VALUES (@p0, @p1, @p2)",
+                "UPDATE \"fk_child\" SET \"parent_id\" = @p0, \"restrict_ref\" = @p1, \"setnull_ref\" = @p2 WHERE \"Id\" = @p3",
+                "DELETE FROM \"fk_child\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"fk_child\" (\"parent_id\", \"restrict_ref\", \"setnull_ref\") VALUES (@p0, @p1, @p2) RETURNING \"Id\"",
+                "INSERT INTO \"fk_child\" (\"Id\", \"parent_id\", \"restrict_ref\", \"setnull_ref\") VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (\"Id\") DO UPDATE SET \"parent_id\" = excluded.\"parent_id\", \"restrict_ref\" = excluded.\"restrict_ref\", \"setnull_ref\" = excluded.\"setnull_ref\" RETURNING \"Id\", \"parent_id\", \"restrict_ref\", \"setnull_ref\"",
+                "",
+                ""),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO \"fk_child\" (\"parent_id\", \"restrict_ref\", \"setnull_ref\") VALUES (@p0, @p1, @p2)",
+                "UPDATE \"fk_child\" SET \"parent_id\" = @p0, \"restrict_ref\" = @p1, \"setnull_ref\" = @p2 WHERE \"Id\" = @p3",
+                "DELETE FROM \"fk_child\" WHERE \"Id\" = @p0",
+                "INSERT INTO \"fk_child\" (\"parent_id\", \"restrict_ref\", \"setnull_ref\") VALUES (@p0, @p1, @p2) RETURNING \"Id\"",
+                "INSERT INTO \"fk_child\" (\"Id\", \"parent_id\", \"restrict_ref\", \"setnull_ref\") VALUES (@p0, @p1, @p2, @p3) ON CONFLICT (\"Id\") DO UPDATE SET \"parent_id\" = excluded.\"parent_id\", \"restrict_ref\" = excluded.\"restrict_ref\", \"setnull_ref\" = excluded.\"setnull_ref\" RETURNING \"Id\", \"parent_id\", \"restrict_ref\", \"setnull_ref\"",
+                "",
+                ""),
+            new global::PalORM.CommandSqlSet(
+                "INSERT INTO `fk_child` (`parent_id`, `restrict_ref`, `setnull_ref`) VALUES (@p0, @p1, @p2)",
+                "UPDATE `fk_child` SET `parent_id` = @p0, `restrict_ref` = @p1, `setnull_ref` = @p2 WHERE `Id` = @p3",
+                "DELETE FROM `fk_child` WHERE `Id` = @p0",
+                "",
+                "",
+                "INSERT INTO `fk_child` (`Id`, `parent_id`, `restrict_ref`, `setnull_ref`) VALUES (@p0, @p1, @p2, @p3) ON DUPLICATE KEY UPDATE `parent_id` = VALUES(`parent_id`), `restrict_ref` = VALUES(`restrict_ref`), `setnull_ref` = VALUES(`setnull_ref`), `Id` = LAST_INSERT_ID(`Id`); SELECT LAST_INSERT_ID()",
+                "INSERT INTO `fk_child` (`parent_id`, `restrict_ref`, `setnull_ref`) VALUES (@p0, @p1, @p2); SELECT LAST_INSERT_ID()")
+        );
+        draft.BindInsert[typeof(global::FkChildEntity)] = (cmd, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindInsertToBatch(cmd, (global::FkChildEntity)obj, off);
+        draft.BindUpdate[typeof(global::FkChildEntity)] = (cmd, obj) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpdate(cmd, (global::FkChildEntity)obj);
+        draft.BindDelete[typeof(global::FkChildEntity)] = (cmd, key) => CommandFactory_global__FkChildEntity_9e8ce632.BindDelete(cmd, key);
+        draft.CrudMetadatas[typeof(global::FkChildEntity)] = new global::PalORM.CrudMetadata(
+                new global::PalORM.CrudBindings(
+                    (cmd, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindInsertToBatch(cmd, (global::FkChildEntity)obj, off),
+                    (parameters, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindInsertValues(parameters, (global::FkChildEntity)obj, off),
+                    (cmd, obj) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpsert(cmd, (global::FkChildEntity)obj),
+                    (cmd, obj) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpdate(cmd, (global::FkChildEntity)obj),
+                    RowFactory_global__FkChildEntity_9e8ce632.Read,
+                    (parameters, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpdateValues(parameters, (global::FkChildEntity)obj, off),
+                    insertReturningKeyOnly: true,
+                    insertNoReturning: false,
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpsertValues(parameters, (global::FkChildEntity)obj, off)),
+                new global::PalORM.CrudColumns(
+                    new[] { "parent_id", "restrict_ref", "setnull_ref" },
+                    new[] { "Id", "parent_id", "restrict_ref", "setnull_ref" },
+                    new[] { "parent_id", "restrict_ref", "setnull_ref" }),
+                null,
+                obj => CommandFactory_global__FkChildEntity_9e8ce632.HasDefaultKey((global::FkChildEntity)obj));
+        draft.EntityFeatures[typeof(global::FkChildEntity)] = global::PalORM.EntityFeatures.None;
+        draft.PkColumns[typeof(global::FkChildEntity)] = "Id";
+        draft.ColumnNames[typeof(global::FkChildEntity)] = new[] { "Id", "parent_id", "restrict_ref", "setnull_ref" };
+        draft.PropertyToColumn[typeof(global::FkChildEntity)] = new global::System.Collections.Generic.Dictionary<string, string>
+        {
+            ["Id"] = "Id",
+            ["ParentId"] = "parent_id",
+            ["RestrictRef"] = "restrict_ref",
+            ["SetNullRef"] = "setnull_ref",
+        };
+        draft.CreateTableSqlByDialect[typeof(global::FkChildEntity)] = new global::PalORM.CreateTableSqlSet(
+                Migration_global__FkChildEntity_9e8ce632.CreateTableSqlite,
+                Migration_global__FkChildEntity_9e8ce632.CreateTablePostgreSql,
+                Migration_global__FkChildEntity_9e8ce632.CreateTableMySql);
+        draft.CreateIndexSqlByDialect[typeof(global::FkChildEntity)] = new global::PalORM.CreateIndexSqlSet(
+                Migration_global__FkChildEntity_9e8ce632.CreateIndexesSqlite,
+                Migration_global__FkChildEntity_9e8ce632.CreateIndexesPostgreSql,
+                Migration_global__FkChildEntity_9e8ce632.CreateIndexesMySql);
+        draft.SetIdDelegates[typeof(global::FkChildEntity)] = (entity, id) => CommandFactory_global__FkChildEntity_9e8ce632.SetId((global::FkChildEntity)entity, id);
 
     }
 
