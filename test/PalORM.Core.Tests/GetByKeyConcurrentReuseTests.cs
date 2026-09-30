@@ -16,7 +16,11 @@ public sealed class GetByKeyConcurrentReuseTests
     {
         var session = await DataSession<SqliteProvider>.CreateAsync(new DbOptions
         {
-            ConnectionString = "Data Source=:memory:"
+            // 命名内存库 + Shared 缓存（对齐 ParallelReadLeaseTests 的工作形态）：
+            // 并行读池连接用同一连接串新建，裸 :memory: 每连接独立空库（读池连接会
+            // 报 no such table）；Mode=Memory 命名源下池连接与会话主连接同库。
+            // keeper 语义成立：会话释放先清并行池（ITM-797③）后关主连接。
+            ConnectionString = $"Data Source=gkcr_{Guid.NewGuid():N};Mode=Memory;Cache=Shared"
         }).ConfigureAwait(false);
         await session.ExecuteAsync(
             $"CREATE TABLE gkcr_items (Id INTEGER PRIMARY KEY, Name TEXT NOT NULL)").ConfigureAwait(false);
@@ -34,13 +38,11 @@ public sealed class GetByKeyConcurrentReuseTests
     // 时序竞争窗口（T24：时间窗竞态的测试必须在窗内真触发，竞争不可控的测试是假防线）。
 
     [Test]
-    public async Task ConcurrentGetByKey_InsideParallelReadScope_LoudlyRejected()
+    public async Task ConcurrentGetByKey_InsideParallelReadScope_NoCrossContamination()
     {
-        // step8-T3 实测链：作用域内并发 GetAsync 修 EnterReadOnly 放行后暴露双缺陷——
-        // ① 复用槽同命令并发（SQLite "Must add values" 参数串扰，已禁用复用槽）
-        // ② 直查族命令走主连接不走读池，并发挤同一物理连接（SqliteConnection.Close NRE）
-        // ②的根治 = 读连接池扩覆盖（专门迭代），当前以响亮失败拒绝并指引用户改用
-        // From<T>() 族（读池支撑）——响亮失败优于 NRE（项目哲学：静默兜底即假防线）
+        // step8 连接治理：作用域内 GetAsync 走读连接池（每尝试独立获取/归还，弹性重试
+        // 重新获取），8 路并发读各自命中预期行——复用槽仅服务作用域外主连接形态，
+        // 读池路径无共享命令对象，无串扰面
         await using var session = await CreateSeededAsync().ConfigureAwait(false);
 
         var failures = new System.Collections.Concurrent.ConcurrentBag<string>();
@@ -49,17 +51,16 @@ public sealed class GetByKeyConcurrentReuseTests
             var tasks = new List<Task>(8);
             for (int worker = 1; worker <= 8; worker++)
             {
+                long id = worker;
                 tasks.Add(Task.Run(async () =>
                 {
-                    try
+                    for (int round = 0; round < 25; round++)
                     {
-                        await session.GetAsync<GkcrItem>(1).ConfigureAwait(false);
-                        failures.Add("作用域内 GetAsync 未被拒绝（应响亮失败）");
-                    }
-                    catch (InvalidOperationException ex)
-                    {
-                        if (!ex.Message.Contains("ForParallelReads", StringComparison.Ordinal))
-                            failures.Add($"异常形态不符: {ex.Message}");
+                        GkcrItem? row = await session.GetAsync<GkcrItem>(id).ConfigureAwait(false);
+                        if (row is null)
+                            failures.Add($"scope id={id} round={round}: 未命中");
+                        else if (row.Id != id)
+                            failures.Add($"scope id={id} round={round}: 拿回 Id={row.Id}（串扰实锤）");
                     }
                 }));
             }
@@ -67,6 +68,26 @@ public sealed class GetByKeyConcurrentReuseTests
         }
 
         await Assert.That(failures.IsEmpty).IsTrue();
+    }
+
+    [Test]
+    public async Task SequentialGetByKey_AfterParallelScope_RestoresReuseAndCorrectness()
+    {
+        // 作用域退出后 GetAsync 回到主连接复用形态：结果正确且晋升槽继续服务
+        await using var session = await CreateSeededAsync().ConfigureAwait(false);
+
+        await using (session.ForParallelReads())
+        {
+            GkcrItem? inside = await session.GetAsync<GkcrItem>(1).ConfigureAwait(false);
+            await Assert.That(inside!.Id).IsEqualTo(1);
+        }
+
+        for (int round = 1; round <= 4; round++)
+        {
+            GkcrItem? row = await session.GetAsync<GkcrItem>(round).ConfigureAwait(false);
+            await Assert.That(row).IsNotNull();
+            await Assert.That(row!.Id).IsEqualTo(round);
+        }
     }
 }
 
