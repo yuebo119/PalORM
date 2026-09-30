@@ -2,6 +2,18 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布]
+
+### 🧹 脚本 C# 化整改（2026-09-29，用户决策：脚本一律 C#，非 C# 白名单制须用户同意）
+
+- **全仓 15 个 `.sh` + 1 个 Node `.mjs` 迁移为 C#**：提交防线四项（secret-guard/stub-check/assert-test-counts/assert-coverage）与发布链三项（release-version-scan/pre-release-check/test-package-contract）迁为 file-based app（`dotnet run --file scripts/<名>.cs`）；性能链五件套（perf/perfhub-ab/run-full-perf/dappersuite-run/run-benchmarks）+ set-test-env 收敛为 `tools/PalORM.PerfCli` 项目（九子命令，入 ci.slnf 享 0 警告 0 错误门禁）；质量夹具本体迁为 `scripts/test-quality-scripts.cs`（九段，新增"脚本语言政策"机械门禁：白名单外新 `.sh/.mjs/.py` 即 FAIL，V17 双向验证）。`.githooks/pre-commit` 为唯一白名单保留项（git hook 机制要求）。
+- **行为对拍**：每个脚本迁移前新旧双跑逐字节比对——secret-guard 加全历史硬闸（719 提交 826 文件 range 双跑一致）；PerfCli gate/index/report 三子命令对拍抓出并修复两处语义漂移（set -e 终止语义、子进程输出直通）。
+- **脚本基建**：`scripts/` 配隔离构建配置（`Directory.Build.props` + `Directory.Build.targets`）——file-based app 默认继承仓库根严格配置会全量报错（CS1591/CA 系/S3903/NU1008 四类实证），隔离后保留严格编译、关分析器注入与 CPM；新增脚本语言规范入 `docs/编码规范.md` §19（白名单制 + 形态判据 + 编写约定）。
+- **CI/文档同步**：verify.yml 九处调用切换并补 secret-scan job 的 setup-dotnet；性能基准规范/测试规范/发布规范/编码规范/AGENTS/CONTRIBUTING/README 全部调用形态同步；删除 scripts/lib/（Node 依赖归零）。
+- **secret-guard 盲区修复（2026-09-30）**：git 默认 quotepath 把非 ASCII 路径转义为八进制形态，导致中文路径文件（docs/编码规范.md 族）的内容检查静默跳过、真阳性泄漏可绕过——修复为 Git 调用统一 `-c core.quotepath=false` + UTF-8 解码；连带白名单缺口泛化：`Password=<...>` 尖括号占位符整体豁免（盲区修复后全历史扫描暴露 docs/AOT部署指南.md 的 `<pwd>` 短形态命中，真实凭据不会包尖括号）。全历史 826 文件扫描复验 exit0，selftest 增三形态向量。
+- **变异测试管线现代化（2026-09-30）**：run-mutation-tests.cs 端到端实测暴露三处既有断点并修复——脚本局部函数编译错（IDE0062）；stryker-config.json 停留 stryker 4.x 形态（缺 `"stryker-config"` 根对象、threshold 三键已合并、log-level/timeout-ms 键已更名、相对路径基准失配），按 stryker 5.0.0 schema 重写（Core 与 SourceGen 双配置）并以 `test-runner: mtp` 启用 MTP runner（TUnit 唯一可用通道，预览特性；降级 4.x 不可行——Microsoft.Testing.Platform 在 .NET 10+ SDK 已移除 VSTest 目标，实测报错确认）。**替代品与自写评估定案**：.NET 生态无 Stryker 成熟替代（Microsoft 官方文档仅收录 Stryker）；自写通用变异测试器 ≈ 数月工程且同样要趟插桩回滚深水区，上游修复 PR #3817 已合仅待发版，ROI 不成立。**退出码协议落地**（诚实信号：无信息不以绿呈现）：0=达标；1=得分低/失败（真红）；3=上游阻塞（恢复器缺陷，Core 形态：Span 重度文件触发回滚 bug）；4=变异面为空（SourceGen 形态：3782 变异全被跨项目 mutate 过滤缺陷滤掉，0 个被测）。CI 周六 job 对 3/4 记 notice 不判红（防已知阻塞周周红污染信号），上游发版后装最新工具自动恢复真实判定；`src/` 经 git diff 双核对无残留变异污染。
+- **质量系统全面运行修复（2026-09-30）**：14 项防线全量实测暴露三处漂移并修复。① G9 门禁假红 3 天——secret-guard `.sh→.cs` 迁移（8e01486）时 gate-check 豁免清单漏同步新文件名，5 处违规全为工具自检向量，豁免正则改 `secret-guard\.(sh|cs)` 双形态，修后 gate 33/33；② API参考.md 诊断口径停两轮（44/41 → 实测 46/43），补 PALORM052/053 表行 + 标题对齐；③ verify V12 从"≥30 宽门槛"升级为"实测 vs API参考声明双向精确对账"（负向注入验证：假声明 42≠43 如期 FAIL）；④ 根因收口——gate-check 此前在 CI 与 pre-commit 均无触发点（G9 回归 3 天无人发现的防线缺口），pre-commit 增第四段 `gate-check --allow-dirty`（约 10 秒，G33 清洁语义不适用提交瞬间），AGENTS/编码规范 STD-GATE-015/.ai README 四处描述同步四段。另：assertion-strength 报的 2 处"零断言"（SavepointDialectTests）经源码核实为检查器不跟共享 helper 的误报（helper 内有回滚行数=1 的行为断言），测试无缺陷不改。
+
 ## [6.1.0] — v6.1：枚举支持（StoreAs 三形态）+ 参数池 DbType 贯通 + PALORM053 — 2026-09-29
 
 > 验证口径：Core 444/444 · SourceGen 227/227 · Integration 真库 244/244 · Release（ci.slnf -warnaserror）0 警告 0 错误 · gate 33/33 · verify 19/19 · doc 12/12。

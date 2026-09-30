@@ -19,7 +19,7 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 44 条 PALORM 诊断（41 条分析器 + 3 条生成器：PALORM041/045/046）
+### 编译时验证 — 46 条 PALORM 诊断（43 条分析器 + 3 条生成器：PALORM041/045/046）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
 > v7.2 扩充（2026-08-26，ITM-640 收口）：PALORM042-044——生成器 throw/静默跳过的编译期定位面（分工同 022：分析器定位报错，生成器防御性跳过）。
@@ -78,6 +78,8 @@
 | **PALORM049** | **[Projection] 与 [Table] 同标（v6.0 R1——物化注册与实体注册语义冲突）** | **P0** |
 | **PALORM050** | **[Projection] 属性带 [OwnedJson]（v6.0 R1——对象 OwnedJson 依赖实体 CommandFactory 的 JsonTypeInfo，投影不生成；字符串属性接收原始 JSON 是替代）** | **P0** |
 | **PALORM051** | **[Column] 架构参数值域（v6.0 R3——负 Length/Precision/Scale、Scale>Precision、空白 TypeName 拦截；0 视为未设置）** | **P0** |
+| **PALORM052** | **索引名超最严方言上限（v6.0.1，ITM-874——PG 63 / MySQL 64，超限则迁移期 CREATE INDEX 失败；Warning 提示改短名，不自动截断防撞名）** | **P2** |
+| **PALORM053** | **[Column(StoreAs)] 适用面三态（v6.1，ITM-553——非枚举属性 / ×[Converter] 双通道 / AsInt32 对底层宽于 int 的枚举（uint/long/ulong 值截断即静默错数据）；Error）** | **P1** |
 
 ### 基础注解 (23 个)
 
