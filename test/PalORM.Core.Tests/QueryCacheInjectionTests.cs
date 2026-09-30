@@ -185,6 +185,66 @@ public sealed class QueryCacheInjectionTests
         await Assert.That(cache.SetKeys.Count).IsEqualTo(1);
     }
 
+    // ─── ADR-O C3：EvictQueryCache 写后显式失效 ─────────────────────
+
+    [Test]
+    public async Task EvictQueryCache_InjectedInstance_IsCleared()
+    {
+        var cache = new BoundedQueryCache();
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync(cache);
+        await session.InsertAsync(new QueryCacheEntity { Name = "A" });
+
+        await session.From<QueryCacheEntity>()
+            .WithCache("evict-injected", TimeSpan.FromMinutes(1)).ToListAsync();
+        await Assert.That(cache.TryGet("evict-injected", out List<QueryCacheEntity>? _)).IsTrue();
+
+        session.EvictQueryCache();
+
+        // 条目清空，下一次同键查询重新物化（写后读一致的行为前提）
+        await Assert.That(cache.TryGet("evict-injected", out List<QueryCacheEntity>? _)).IsFalse();
+        var reread = await session.From<QueryCacheEntity>()
+            .WithCache("evict-injected", TimeSpan.FromMinutes(1)).ToListAsync();
+        await Assert.That(reread.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EvictQueryCache_WriteRecipe_SecondQuerySeesNewRow()
+    {
+        // ADR-O recipe 端到端锁定：写后 Evict，同键再查读到新行（不 Evict 则 TTL 窗口内是旧行）
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await session.InsertAsync(new QueryCacheEntity { Name = "first" });
+
+        var firstRead = await session.From<QueryCacheEntity>()
+            .WithCache("evict-recipe", TimeSpan.FromMinutes(1)).ToListAsync();
+        await Assert.That(firstRead.Count).IsEqualTo(1);
+
+        await session.InsertAsync(new QueryCacheEntity { Name = "second" });
+        session.EvictQueryCache();
+
+        var secondRead = await session.From<QueryCacheEntity>()
+            .WithCache("evict-recipe", TimeSpan.FromMinutes(1)).ToListAsync();
+        await Assert.That(secondRead.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task EvictQueryCache_NoInjection_ClearsProcessDefault()
+    {
+        // 口径锁定：未注入 QueryCache 的会话，Evict 落在 CacheStore.Default（与
+        // QueryBuilder 构造的 ctx.QueryCache ?? CacheStore.Default 同源）。唯一 key 防
+        // 与其他测试的进程默认实例状态串扰（r19/T-P3-18 教训）
+        var key = $"evict-default-{Guid.NewGuid():N}";
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await session.InsertAsync(new QueryCacheEntity { Name = "A" });
+
+        await session.From<QueryCacheEntity>()
+            .WithCache(key, TimeSpan.FromMinutes(1)).ToListAsync();
+        await Assert.That(CacheStore.TryGet(key, out List<QueryCacheEntity>? _)).IsTrue();
+
+        session.EvictQueryCache();
+
+        await Assert.That(CacheStore.TryGet(key, out List<QueryCacheEntity>? _)).IsFalse();
+    }
+
     /// <summary>记录实际收到的 key（ADR-L 行为断言用——前缀是否编入、是否原样）。</summary>
     private sealed class RecordingCache : IQueryCache
     {

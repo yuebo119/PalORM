@@ -19,6 +19,7 @@ internal static class PalORM_RegistryInitializer
     {
         draft.RowFactories[typeof(global::AllTypesEntity)] = RowFactory_global__AllTypesEntity_7f6c8145.Read;
         draft.TableNames[typeof(global::AllTypesEntity)] = "all_types";
+        draft.TableMigrationOrder.Add(typeof(global::AllTypesEntity));
         draft.CommandSqlsByDialect[typeof(global::AllTypesEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
                 "INSERT INTO \"all_types\" (\"int_value\", \"short_value\", \"byte_value\", \"string_value\", \"char_value\", \"bool_value\", \"decimal_value\", \"double_value\", \"float_value\", \"datetime_value\", \"guid_value\", \"dto_value\", \"date_value\", \"time_value\", \"bytes_value\", \"nullable_int\", \"nullable_string\", \"nullable_guid\", \"nullable_time\", \"nullable_bytes\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)",
@@ -104,6 +105,7 @@ internal static class PalORM_RegistryInitializer
 
         draft.RowFactories[typeof(global::FullFeatureEntity)] = RowFactory_global__FullFeatureEntity_4964faa8.Read;
         draft.TableNames[typeof(global::FullFeatureEntity)] = "full_feature";
+        draft.TableMigrationOrder.Add(typeof(global::FullFeatureEntity));
         draft.CommandSqlsByDialect[typeof(global::FullFeatureEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
                 "INSERT INTO \"full_feature\" (\"code\", \"kind\", \"external_id\", \"payload\", \"raw_json\", \"uniq_token\", \"tier\", \"sku\", \"weight\", \"raw_kind\", \"deleted_at\", \"tenant_id\", \"sensitive_value\") VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12)",
@@ -188,6 +190,7 @@ internal static class PalORM_RegistryInitializer
 
         draft.RowFactories[typeof(global::ReservedWordEntity)] = RowFactory_global__ReservedWordEntity_c143a9c9.Read;
         draft.TableNames[typeof(global::ReservedWordEntity)] = "order";
+        draft.TableMigrationOrder.Add(typeof(global::ReservedWordEntity));
         draft.CommandSqlsByDialect[typeof(global::ReservedWordEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
                 "INSERT INTO \"order\" (\"Id\", \"select\") VALUES (@p0, @p1)",
@@ -253,6 +256,7 @@ internal static class PalORM_RegistryInitializer
 
         draft.RowFactories[typeof(global::EnumStorageEntity)] = RowFactory_global__EnumStorageEntity_425d6d2b.Read;
         draft.TableNames[typeof(global::EnumStorageEntity)] = "enum_storage";
+        draft.TableMigrationOrder.Add(typeof(global::EnumStorageEntity));
         draft.CommandSqlsByDialect[typeof(global::EnumStorageEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
                 "INSERT INTO \"enum_storage\" (\"status\", \"level\", \"wide_flag\", \"fallback_status\") VALUES (@p0, @p1, @p2, @p3)",
@@ -322,6 +326,7 @@ internal static class PalORM_RegistryInitializer
 
         draft.RowFactories[typeof(global::InheritedEntity)] = RowFactory_global__InheritedEntity_3f5411cb.Read;
         draft.TableNames[typeof(global::InheritedEntity)] = "inherited";
+        draft.TableMigrationOrder.Add(typeof(global::InheritedEntity));
         draft.CommandSqlsByDialect[typeof(global::InheritedEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
                 "INSERT INTO \"inherited\" (\"name\", \"created_by\", \"created_at\") VALUES (@p0, @p1, @p2)",
@@ -390,6 +395,7 @@ internal static class PalORM_RegistryInitializer
 
         draft.RowFactories[typeof(global::FkParentEntity)] = RowFactory_global__FkParentEntity_9c81ae12.Read;
         draft.TableNames[typeof(global::FkParentEntity)] = "fk_parent";
+        draft.TableMigrationOrder.Add(typeof(global::FkParentEntity));
         draft.CommandSqlsByDialect[typeof(global::FkParentEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
                 "INSERT INTO \"fk_parent\" (\"name\") VALUES (@p0)",
@@ -456,6 +462,7 @@ internal static class PalORM_RegistryInitializer
 
         draft.RowFactories[typeof(global::FkChildEntity)] = RowFactory_global__FkChildEntity_9e8ce632.Read;
         draft.TableNames[typeof(global::FkChildEntity)] = "fk_child";
+        draft.TableMigrationOrder.Add(typeof(global::FkChildEntity));
         draft.CommandSqlsByDialect[typeof(global::FkChildEntity)] = new global::PalORM.CommandSqlByDialect(
             new global::PalORM.CommandSqlSet(
                 "INSERT INTO \"fk_child\" (\"parent_id\", \"restrict_ref\", \"setnull_ref\") VALUES (@p0, @p1, @p2)",
@@ -543,6 +550,7 @@ internal static class PalORM_RegistryInitializer
             CreateIndexSqlByDialect = draft.CreateIndexSqlByDialect,
             SetIdDelegates = draft.SetIdDelegates,
             SensitiveColumnMasks = draft.SensitiveColumnMasks,
+            TableMigrationOrder = draft.TableMigrationOrder,
         });
     }
 
@@ -564,5 +572,6 @@ internal static class PalORM_RegistryInitializer
         internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateIndexSqlSet> CreateIndexSqlByDialect = new();
         internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<object, long>> SetIdDelegates = new();
         internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>> SensitiveColumnMasks = new();
+        internal readonly global::System.Collections.Generic.List<global::System.Type> TableMigrationOrder = new();
     }
 }

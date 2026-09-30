@@ -69,6 +69,13 @@ public sealed class RegistryFragment
     /// <c>QueryBuilder.Set</c> 查本表记录参数名→掩码）。可选键：无敏感列的片段可缺省。</summary>
     public IReadOnlyDictionary<Type, IReadOnlyDictionary<string, string>> SensitiveColumnMasks { get; init; }
         = FrozenDictionary<Type, IReadOnlyDictionary<string, string>>.Empty;
+
+    /// <summary>建表拓扑序（ADR-B 限制④）：实体类型数组，被 FK 引用的表排在引用表之前，
+    /// 保证空库首迁时前向 FK 引用可建（MigrateAsync 按此序排建表 DDL）。
+    /// <para>可选：旧版本生成器片段缺省——缺省实体由 MigrateAsync 按注册字典枚举序兜底。
+    /// 多片段合并按注册序拼接（每片段内部已生成期拓扑排序；跨程序集 FK 引用不在
+    /// PALORM003 的单程序集扫描面内，不构成拓扑约束）。</para></summary>
+    public IReadOnlyList<Type>? TableMigrationOrder { get; init; }
 }
 
 /// <summary>编译时注册表。各模型程序集的 ModuleInitializer 通过 <see cref="Register"/> 合并片段。</summary>
@@ -145,6 +152,11 @@ public static class PalORM_Runtime
     /// 供 QueryBuilder.Set 在创建参数时记录掩码，审计拦截器据 QueryContext 输出脱敏值。</summary>
     public static FrozenDictionary<Type, IReadOnlyDictionary<string, string>> SensitiveColumnMasks
         => Volatile.Read(ref _state)._sensitiveColumnMasks;
+
+    /// <summary>建表拓扑序（ADR-B 限制④）：被 FK 引用的表排前；旧片段缺省时为 null
+    /// （MigrateAsync 按注册字典枚举序兜底）。全实体或 null，无部分序列。</summary>
+    public static IReadOnlyList<Type>? TableMigrationOrder
+        => Volatile.Read(ref _state)._tableMigrationOrder;
 
     /// <summary>原子验证并合并一个模型程序集生成的实体元数据片段。</summary>
     /// <exception cref="InvalidOperationException">同一实体类型已由另一个片段注册。</exception>
@@ -245,11 +257,24 @@ public static class PalORM_Runtime
                 _setIdDelegates = Merge(current._setIdDelegates, fragment.SetIdDelegates),
                 _crudMetadatas = crudMetadatas.ToFrozenDictionary(),
                 _entityFeatures = Merge(current._entityFeatures, fragment.EntityFeatures),
-                _sensitiveColumnMasks = sensitiveMasks.ToFrozenDictionary()
+                _sensitiveColumnMasks = sensitiveMasks.ToFrozenDictionary(),
+                _tableMigrationOrder = MergeMigrationOrder(
+                    current._tableMigrationOrder, fragment.TableMigrationOrder)
             };
 
             Volatile.Write(ref _state, next);
         }
+    }
+
+    /// <summary>建表拓扑序合并：按片段注册序拼接（每片段内部已生成期拓扑排序）。
+    /// 任一片段携带即产生序列；全部缺省（旧生成器）保持 null。</summary>
+    private static Type[]? MergeMigrationOrder(Type[]? current, IReadOnlyList<Type>? fragment)
+    {
+        if (fragment is null) return current;
+        var merged = new List<Type>(current?.Length + fragment.Count ?? fragment.Count);
+        if (current is not null) merged.AddRange(current);
+        merged.AddRange(fragment);
+        return [.. merged];
     }
 
     private static FrozenDictionary<Type, TValue> Merge<TValue>(
@@ -312,5 +337,6 @@ public static class PalORM_Runtime
         internal FrozenDictionary<Type, EntityFeatures> _entityFeatures { get; init; } = FrozenDictionary<Type, EntityFeatures>.Empty;
         internal FrozenDictionary<Type, IReadOnlyDictionary<string, string>> _sensitiveColumnMasks { get; init; }
             = FrozenDictionary<Type, IReadOnlyDictionary<string, string>>.Empty;
+        internal Type[]? _tableMigrationOrder { get; init; }
     }
 }
