@@ -657,28 +657,49 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>按主键查询。</summary>
+    /// <remarks>step8 连接治理（2026-09-30）：并行读作用域内改走读连接池（原为响亮拒绝，
+    /// 修复链：Enter 门禁必抛 → EnterReadOnly 放行 → 复用槽串扰 + 主连接并发 NRE 双缺陷
+    /// 暴露 → 读池接入根治）。作用域内每次尝试从并行池取连接执行并归还（弹性重试时
+    /// 重新获取，失败连接不回池）；复用槽仅服务作用域外主连接形态。事务与作用域互斥
+    /// （ITM-798），故读池路径无事务绑定面。</remarks>
     public async ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        // step8-T3（2026-09-30）：GetAsync 直查族在并行读作用域内响亮拒绝——本族命令
-        // 走主连接（读连接池只覆盖 From<T>() 查询族），作用域内并发调用会在同一物理
-        // 连接上并发执行（实测 SqliteConnection.Close NRE + 复用槽参数串扰双形态）。
-        // 修复面 = 读连接池扩覆盖（GetAsync/QueryAsync 直查族接入 AcquireReadConnection）
-        // 属连接治理专门迭代；此前该组合表现为结构性必抛（Enter 门禁），ITM-811 同型
-        // 修复（本文件 EnterReadOnly）放行并发后缺口暴露——响亮失败优于 NRE。
-        if (_operationState.ParallelReadsEnabled)
-            throw new InvalidOperationException(
-                "GetAsync is not supported inside a ForParallelReads scope: the single-row " +
-                "direct path uses the primary connection and is not concurrency-safe. " +
-                "Use the From<T>() query family inside the scope (read-pool backed), or " +
-                "issue GetAsync outside the scope.");
         // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
             || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
             || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+
+        // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
+        // 主连接形态（复用槽有效）。
+        if (_operationState.ParallelReadsEnabled)
+        {
+            return await ExecuteReadPipelineAsync(async token =>
+            {
+                string filter = GetDefaultFilterFragment<T>();
+                string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
+                    HasTenantFilter<T>(), _ignoreFilters);
+                DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
+                try
+                {
+                    await using DbCommand cmd = connection.CreateCommand();
+                    cmd.CommandText = commandText;
+                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    BindGeneratedKeyParameter<T>(cmd, key);
+                    BindDefaultFilterParameters<T>(cmd);
+                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                    return await reader.ReadAsync(token).ConfigureAwait(false)
+                        ? ((Func<DbDataReader, T>)factory)(reader) : default;
+                }
+                finally
+                {
+                    await ReleaseReadConnectionAsync(connection).ConfigureAwait(false);
+                }
+            }, ct).ConfigureAwait(false);
+        }
 
         // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）
         return await ExecuteReadPipelineAsync(async token =>
@@ -691,13 +712,7 @@ public sealed partial class DataSession<TProvider>
             // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
             // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
             // 按命令实例生效，换命令即重编译）。
-            // step8-T3（2026-09-30）：并行读作用域内禁用复用槽——并发 GetAsync 命中同一
-            // 命令对象，DbCommand 非线程安全（实测串扰：SQLite 报 "Must add values for
-            // the following parameters"）。作用域内走新建路径：并发吞吐主导的形态下
-            // 命令新建占比可忽略，正确性优先。
-            DbCommand? reused = _operationState.ParallelReadsEnabled
-                ? null
-                : TryAcquireGetByKeyCommand<T>(commandText, key);
+            DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key);
             if (reused is not null)
             {
                 await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
