@@ -56,23 +56,13 @@ await db.ExecuteAsync(
     $"INSERT INTO \"docs\" (\"content\", \"embedding\") VALUES ({@content}, {@vec}::vector)");
 ```
 
-**向量文本的生成与早校验**（消灭"运行期才炸"的维度/格式错误）：
+**向量文本的生成与早校验**：已入库为 [`PalORM.PostgreSql.VectorText`](../src/PalORM.PostgreSql/VectorText.cs)
+（`Of(values, expectedDim)` 生成字面量并在维度不符时即抛；`TryParse(text, expectedDim, out values)`
+解析 `::text` 回读列）——单测见 Integration `VectorTextTests`。
 
 ```csharp
-internal static class VectorText
-{
-    public static string Of(ReadOnlySpan<float> values, int expectedDim)
-    {
-        if (values.Length != expectedDim)
-            throw new ArgumentException($"向量维度 {values.Length} ≠ 列定义 {expectedDim}");
-        var sb = new System.Text.StringBuilder(values.Length * 8).Append('[');
-        for (var i = 0; i < values.Length; i++)
-            sb.Append(values[i].ToString("R", System.Globalization.CultureInfo.InvariantCulture))
-              .Append(i < values.Length - 1 ? ',' : ']');
-        return sb.ToString();   // 形如 "[0.1,0.2,0.3]"，恒定 InvariantCulture 防区域小数点
-    }
-}
-// 用法：var vec = VectorText.Of(stackalloc float[] { 0.1f, 0.2f, 0.3f }, expectedDim: 3);
+string vec = VectorText.Of(stackalloc float[] { 0.1f, 0.2f, 0.3f }, expectedDim: 3);
+// → "[0.1,0.2,0.3]"，恒定 InvariantCulture 防区域小数点
 ```
 
 ## 四、检索：KNN Raw + [Projection] 物化 + 读侧永不裸读 vector 列
@@ -104,16 +94,25 @@ var hits = await db.QueryAsync<DocHit>(
 // SELECT "embedding"::text AS "Embedding" ... —— Npgsql 收到的是 text 列，确定性返回 string
 ```
 
-## 五、首用核对清单（未实证项逐条验证，全过才算配方成立）
+## 五、首用核对清单（自动化探针：`scripts/probe-pgvector.cs`）
 
-| # | 项 | 验证方式 | 依据状态 |
+在具备 pgvector 的库上一键验证六项（无扩展时门控 exit 2 输出指引，不静默跳过）：
+
+```bash
+PALORM_PG_CONNECTION="Host=...;..." dotnet run --file scripts/probe-pgvector.cs
+```
+
+| # | 项 | 探针覆盖 | 依据状态 |
 |---|----|---------|---------|
-| 1 | `ALTER ... ADD COLUMN IF NOT EXISTS ... vector(3)` 合法 | PG 15+ 语法，`\d docs` 看列型 | 文档形态，未实测 |
-| 2 | `@p0::vector` 参数化 cast（text 参数 + 显式 cast）写入成功 | 插一行 `SELECT embedding::text` 核值 | 铁证1 推出的必用形态，未实测 |
-| 3 | HNSW 索引建立 + 运算符类匹配走索引 | `EXPLAIN ANALYZE` 确认 Index Scan（错配是静默全表扫） | 强制步骤 |
-| 4 | `[Projection]` 物化 KNN 结果集（含 double 距离列） | 本配方查询原样跑 | R1 既有能力，低风险 |
-| 5 | 事务/COPY 等路径对 vector 列的兼容性 | 复用 Integration 夹具形态跑一轮 | 未测 |
-| 6 | PalORM 生成 SQL 与 Raw 补列共存（实体迁移幂等 + ADD COLUMN IF NOT EXISTS 幂等） | 连续两次会话启动 | 形态设计目标，未实测 |
+| 1 | `ALTER ... ADD COLUMN IF NOT EXISTS ... vector(3)` 合法 | ①+⑥ | 文档形态，探针待 pgvector 库 |
+| 2 | `@p0::vector` 参数化 cast 写入 | ② | 铁证 1 推出的必用形态，探针待 pgvector 库 |
+| 3 | HNSW 索引 + 运算符类匹配走索引 | ⑤（EXPLAIN 断言） | 强制步骤 |
+| 4 | KNN 查询端到端（标量列 + 距离） | ②④⑤ 组合 | 低风险 |
+| 5 | 裸 text 直写必败（铁证 1 反向直证） | ③（负向探针内建） | 文档铁证 |
+| 6 | DDL 幂等复跑 | ⑥ | 形态设计目标 |
+
+截至 2026-09-30：探针门控路径已在真库实测（连库成功、检出 pgvector 缺失、exit 2 指引，与门探针
+结论双向一致）；六项验证待具备 pgvector 的库执行。
 
 ## 六、两大铁证（本配方形态的推导依据，2026-09-30 官方文档查证）
 
