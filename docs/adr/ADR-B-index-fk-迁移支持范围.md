@@ -42,3 +42,13 @@
 - 注册链新增 `CreateIndexSqlSet` / `PalORM_Runtime.CreateIndexSqlByDialect`（可选键）；`MigrateAsync` 建表后按 Provider 方言执行索引 DDL。
 - PALORM017 对 `[Index]`/`[Unique]` 停报（已参与 DDL）；`[ForeignKey]`/`[DefaultValue]`/`[Column]` 架构参数继续告警。
 - 测试：生成端 2 用例（三方言 DDL 形状、无索引实体空数组且不入注册字典）+ SQLite 集成 3 用例（真实建索引、二次迁移幂等、唯一索引数据库强制生效）。
+
+## 实施记录二（2026-09-30 · FK 挂起解除，用户指令"未完成任务完整实现"）
+
+FK DDL 落地，方案对齐 `MigrateAsync` 既有的幂等新建哲学（`CREATE TABLE IF NOT EXISTS`）：
+
+- **生成**：`MigrationEmitter.BuildCreateTable` 追加表级 `FOREIGN KEY ("col") REFERENCES "reftable" ("refcol") ON DELETE <action>` 子句——三方言同构（PG/MySQL 的 CREATE TABLE 原生支持表级 FK，无需 ALTER；当初 B1 设想的"PG/MySQL 走 ALTER"只在增量补齐已建表时才需要，而增量变更本就属迁移系统整体设计范围）。
+- **OnDelete 映射**：NoAction/Cascade/SetNull/Restrict → NO ACTION/CASCADE/SET NULL/RESTRICT（默认 NO ACTION，G16 级联显式启用语义；PALORM004 已强制 OnDelete 必填）。
+- **列名解析**：FK 属性经 `[Column]` 映射名进 DDL（错列引用源头消除）；引用表/列已过 PALORM043 控制字符扫描与 PALORM003 存在性校验。
+- **限制口径（文档明示）**：① 已建表不补齐 FK（与"已建表不加列"同限制）；② SQLite 引擎强制需连接级 `PRAGMA foreign_keys=ON`（引擎默认 OFF，声明存在但不强制）；③ **引用表/列名是字面 DDL 契约**——实测教训：PG 引号标识符大小写敏感，引用列写 `"id"` 而被引用实体实际列名为 `"Id"` 时报 42703，且 Integration 全实体共享 Registry 使一处坏 FK 炸掉全部 `MigrateAsync`；引用列编译期对齐校验（PALORM003 扩展到列级）登记为诊断候选。
+- 测试：快照基线 `FkParentEntity`/`FkChildEntity` 三方言形态（含 CASCADE/RESTRICT/SET NULL 三形态）+ Integration 5 用例（SQLite PRAGMA 开启后孤儿拒绝、CASCADE 真传播、二次迁移幂等、PG/MySQL 真库强制）。
