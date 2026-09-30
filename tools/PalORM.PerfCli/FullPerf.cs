@@ -57,9 +57,12 @@ internal static class FullPerf
         }
         // PALORM_BENCH_LABEL：显式声明这是"门禁同参集"（可复现的操作性子集，与临时单基准跑区分开）
         Environment.SetEnvironmentVariable("PALORM_BENCH_LABEL", "gate-set");
-        _ = Perf.RunFiltered("dotnet",
+        // 2026-09-30 全面性能轮实测（修复）：BDN filter 不能带 bash 单引号——ProcessStartInfo
+        // 参数串不剥引号（bash 才剥），BDN 收到字面引号报 typo 且 filter 全空；退出码必须接住，
+        // 否则 BDN 失败被吞、推迟到门禁 FATAL"结果目录不存在"才暴露（B104 家族）。
+        int bdnExit = Perf.RunFiltered("dotnet",
             $"run --project \"{benchDir}\" -c Release --no-build -- " +
-            "--filter '*CrudBenchmarks*' '*OrmComparisonBenchmarks*' " +
+            "--filter *CrudBenchmarks* *OrmComparisonBenchmarks* " +
             "--launchCount 1 --warmupCount 3 --iterationCount 5 --exporters json",
             Path.Combine(logDir, "bdn.log"), "Global total");
 
@@ -96,6 +99,9 @@ internal static class FullPerf
         Perf.Out($" 日志: {logDir}");
         Perf.Out($" 门禁: {(gateExit == 0 ? "通过" : "存在回归（见 gate.log）")}");
         Perf.Out("═══════════════════════════════════════════");
+        // BDN 失败（含 filter 形态错）就地失败——负载/内存/启动是补充维度可容忍，
+        // BDN 是门禁数据源不可容忍（2026-09-30 修复：吞码缺陷）
+        if (bdnExit != 0) return bdnExit;
         return 0;
     }
 

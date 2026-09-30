@@ -657,16 +657,49 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>按主键查询。</summary>
+    /// <remarks>step8 连接治理（2026-09-30）：并行读作用域内改走读连接池（原为响亮拒绝，
+    /// 修复链：Enter 门禁必抛 → EnterReadOnly 放行 → 复用槽串扰 + 主连接并发 NRE 双缺陷
+    /// 暴露 → 读池接入根治）。作用域内每次尝试从并行池取连接执行并归还（弹性重试时
+    /// 重新获取，失败连接不回池）；复用槽仅服务作用域外主连接形态。事务与作用域互斥
+    /// （ITM-798），故读池路径无事务绑定面。</remarks>
     public async ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
             || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
             || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+
+        // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
+        // 主连接形态（复用槽有效）。
+        if (_operationState.ParallelReadsEnabled)
+        {
+            return await ExecuteReadPipelineAsync(async token =>
+            {
+                string filter = GetDefaultFilterFragment<T>();
+                string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
+                    HasTenantFilter<T>(), _ignoreFilters);
+                DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
+                try
+                {
+                    await using DbCommand cmd = connection.CreateCommand();
+                    cmd.CommandText = commandText;
+                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    BindGeneratedKeyParameter<T>(cmd, key);
+                    BindDefaultFilterParameters<T>(cmd);
+                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                    return await reader.ReadAsync(token).ConfigureAwait(false)
+                        ? ((Func<DbDataReader, T>)factory)(reader) : default;
+                }
+                finally
+                {
+                    await ReleaseReadConnectionAsync(connection).ConfigureAwait(false);
+                }
+            }, ct).ConfigureAwait(false);
+        }
 
         // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）
         return await ExecuteReadPipelineAsync(async token =>
@@ -703,7 +736,7 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask<List<T>> GetAllAsync<T>(CancellationToken ct = default)
         where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 GetAsync 和 From<T> 对齐。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
         if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
@@ -727,12 +760,38 @@ public sealed partial class DataSession<TProvider>
 
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
             // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容。
-            List<T> list = new(16);
+            List<T> list = new(GetMaterializedCapacity<T>());
             var tf = (Func<DbDataReader, T>)factory;
             while (await reader.ReadAsync(token).ConfigureAwait(false))
                 list.Add(tf(reader));
+            RecordMaterializedCount<T>(list.Count);
             return list;
         }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>物化容量启发（step8-T6/M3-2）：会话内记录 (实体类型 → 上次物化行数)，
+    /// 全表/宽查询的 List 初始容量取它——重复查询同表（分页轮询/报表形态）零扩容拷贝；
+    /// 首次查询无记录时 16（v4.0 优化 D 原值，行为兼容）。写路径不参与。
+    /// <para>并发：作用域内读并发（EnterReadOnly 放行后合法）下 ConcurrentDictionary 兜住
+    /// 同类型并发更新——值为"上次行数"近似量，竞争只影响容量精度不影响正确性。</para></summary>
+    private System.Collections.Concurrent.ConcurrentDictionary<Type, int>? _materializedCapacity;
+
+    private int GetMaterializedCapacity<T>() where T : class, new()
+        => _materializedCapacity is not null && _materializedCapacity.TryGetValue(typeof(T), out int cap)
+            ? cap
+            : 16;
+
+    private void RecordMaterializedCount<T>(int count) where T : class, new()
+    {
+        if (count <= 16)
+            return; // 小结果集：默认容量已覆盖，不值得一条记录
+        System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
+        if (dict is null)
+        {
+            System.Collections.Concurrent.ConcurrentDictionary<Type, int> created = new();
+            dict = Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
+        }
+        dict[typeof(T)] = count;
     }
 
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。</summary>
