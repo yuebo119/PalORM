@@ -10,7 +10,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>见 DataSession 主文档。</summary>
     public async ValueTask<long> CountAsync<T>(FormattableString? where = null, CancellationToken ct = default) where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
         DefaultFilterForms filterForms = GetDefaultFilterForms<T>();
@@ -78,7 +78,7 @@ public sealed partial class DataSession<TProvider>
         string function, FormattableString expression, CancellationToken ct)
         where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
             throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
         // T4/PG-5 同构：") FROM {table}{whereClause}" 后缀按 (Type, Dialect, 过滤形态) 缓存——
@@ -174,7 +174,7 @@ public sealed partial class DataSession<TProvider>
     /// 且 DataSession.DisposeAsync 会挂起至 DisposeWaitTimeout 后抛诊断异常。</para></summary>
     public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, bool readFromReplica = false, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
@@ -231,7 +231,7 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask<List<T>> QueryAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
         where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
@@ -304,7 +304,7 @@ public sealed partial class DataSession<TProvider>
     /// 抛 InvalidCastException——此类值请以 string 取回后自行 Parse。</para></summary>
     public async ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         await using DbCommand cmd = await CreateReadOrPrimaryCommandAsync(readFromReplica, ct).ConfigureAwait(false);
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
