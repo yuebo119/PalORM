@@ -109,7 +109,7 @@
 - [x] **T9 基线重录与三方一致收尾（CHANGELOG/lessons ✅；BDN 基线重录随下一全量批）**
   - 内容：T2-T5 全部落地后 perf-baseline.json + perfhub-index-baseline.json 重录；CHANGELOG 登记；lessons 沉淀（B 系列续编）；AGENTS/API参考 若有口径变化同步
   - 验收：门禁对新基线全绿；grep 旧口径零残留（准则 8）
-- [ ] **T10 AOT 全链路终验**
+- [x] **T10 AOT 全链路终验**
   - 内容：三方言 Native AOT publish（T3/T4 动了核心热路径，P0 #3 要求全链路重验）
   - 验收：三方言 publish 零警告 + 运行探针正常
 
@@ -179,5 +179,5 @@ T7/T8 随时可插（互不依赖）
 | T7 | 销案：批量族实测 0.97~1.03 地板带（F1），缓冲探针杠杆必 <10%，按总纲预设直接裁决免跑 | 本轮实测矩阵 |
 | T8 | ✅ README 补"内存与 GC 选型"节（流式引导/容量自适应/缓存取舍/Server GC 指南）+ IncludeJoin/GetAsync 作用域限制说明 | README |
 | T9 | CHANGELOG/lessons ✅；BDN 基线重录随下一全量批（本轮改动不触时延主路径：复用槽禁用仅作用域内、容量启发纯预分配） | CHANGELOG |
-| T10 | 待跑（三方言 AOT publish） | |
+| T10 | ✅ 三方言 AOT publish 全绿零警告（SQLite/PG/MySQL，GetAsync 读池接入后复验） | |
 | 新发现 | **连接治理专门迭代**（登记）：读连接池扩覆盖至直查族（GetAsync/QueryAsync 走 AcquireReadConnection）——本轮以响亮失败兜底；与 M1 并发边界设计（读路径按连接池化）合并立项 | T3 实测链 |
