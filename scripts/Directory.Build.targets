@@ -1,0 +1,12 @@
+<Project>
+  <!-- scripts/ 目录隔离 targets（配套 scripts/Directory.Build.props，2026-09-29 探针实证）。
+       根 props 的 SonarAnalyzer 注入是解析期 ItemGroup，其条件里 ManagePackageVersionsCentrally
+       的豁免对 props 内覆写的生效时机敏感（评估顺序陷阱）；targets 恒晚于全部 props 求值，
+       此处 Remove 是不依赖任何顺序的确定性手段。
+       未来脚本若确需 #:package，在该脚本头部加：
+         #:property ManagePackageVersionsCentrally=false
+       虚拟项目体最后求值必赢（探针二实证：NU1008 解除，包正常还原）。 -->
+  <ItemGroup>
+    <PackageReference Remove="SonarAnalyzer.CSharp" />
+  </ItemGroup>
+</Project>

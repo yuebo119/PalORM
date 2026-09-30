@@ -1,49 +1,54 @@
 {
   "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-net/master/src/Stryker.Core/Stryker.Core/schema/stryker-schema.json",
-  "solution": "../PalORM.slnx",
-  "project": "PalORM.Core.csproj",
-  "mutate": [
-    "src/PalORM.Core/Annotations.cs",
-    "src/PalORM.Core/BatchUpdateSqlBuilder.cs",
-    "src/PalORM.Core/BulkOperationFramework.cs",
-    "src/PalORM.Core/CacheStore.cs",
-    "src/PalORM.Core/CircuitBreaker.cs",
-    "src/PalORM.Core/DataSession.Crud.cs",
-    "src/PalORM.Core/DataSession.Query.cs",
-    "src/PalORM.Core/DataSession.Schema.cs",
-    "src/PalORM.Core/DataSession.Transactions.cs",
-    "src/PalORM.Core/DataSession.cs",
-    "src/PalORM.Core/DataSession_Bulk.cs",
-    "src/PalORM.Core/DbOptions.cs",
-    "src/PalORM.Core/GridReader.cs",
-    "src/PalORM.Core/MultiValueBulkInsert.cs",
-    "src/PalORM.Core/PalORM_Runtime.cs",
-    "src/PalORM.Core/QueryBuilder.cs",
-    "src/PalORM.Core/QueryBuilderExtensions.cs",
-    "src/PalORM.Core/Resilience.cs",
-    "src/PalORM.Core/SessionOperationState.cs",
-    "src/PalORM.Core/StoredProcBuilder.cs",
-    "!src/PalORM.Core/**/obj/**",
-    "!src/PalORM.Core/**/bin/**"
-  ],
-  "test-projects": [
-    "test/PalORM.Core.Tests/PalORM.Core.Tests.csproj"
-  ],
-  "threshold-high": 80,
-  "threshold-low": 60,
-  "threshold-break": 40,
-  "reporters": [
-    "html",
-    "progress",
-    "json"
-  ],
-  "log-level": "info",
-  "concurrency": 4,
-  "timeout-ms": 30000,
-  "additional-timeout-ms": 5000,
-  "ignore-methods": [
-    "ToString",
-    "GetHashCode",
-    "Equals"
-  ]
+  "stryker-config": {
+    "solution": "../../PalORM.slnx",
+    "project": "PalORM.Core.csproj",
+    "mutate": [
+      "../../src/PalORM.Core/Annotations.cs",
+      "../../src/PalORM.Core/BatchUpdateSqlBuilder.cs",
+      "../../src/PalORM.Core/BulkOperationFramework.cs",
+      "../../src/PalORM.Core/CacheStore.cs",
+      "../../src/PalORM.Core/CircuitBreaker.cs",
+      "../../src/PalORM.Core/DataSession.Crud.cs",
+      "../../src/PalORM.Core/DataSession.Query.cs",
+      "../../src/PalORM.Core/DataSession.Schema.cs",
+      "../../src/PalORM.Core/DataSession.Transactions.cs",
+      "../../src/PalORM.Core/DataSession.cs",
+      "../../src/PalORM.Core/DataSession_Bulk.cs",
+      "../../src/PalORM.Core/DbOptions.cs",
+      "../../src/PalORM.Core/GridReader.cs",
+      "../../src/PalORM.Core/PalORM_Runtime.cs",
+      "../../src/PalORM.Core/QueryBuilder.cs",
+      "../../src/PalORM.Core/QueryBuilderExtensions.cs",
+      "../../src/PalORM.Core/Resilience.cs",
+      "../../src/PalORM.Core/SessionOperationState.cs",
+      "../../src/PalORM.Core/StoredProcBuilder.cs",
+      "!../../src/PalORM.Core/**/obj/**",
+      "!../../src/PalORM.Core/**/bin/**",
+      "!../../src/PalORM.Core/MultiValueBulkInsert.cs"
+    ],
+    "test-projects": [
+      "../../test/PalORM.Core.Tests/PalORM.Core.Tests.csproj"
+    ],
+    "test-runner": "mtp",
+    "thresholds": {
+      "high": 80,
+      "low": 60,
+      "break": 40
+    },
+    "reporters": [
+      "html",
+      "progress",
+      "json"
+    ],
+    "verbosity": "info",
+    "coverage-analysis": "off",
+    "concurrency": 4,
+    "additional-timeout": 5000,
+    "ignore-methods": [
+      "ToString",
+      "GetHashCode",
+      "Equals"
+    ]
+  }
 }

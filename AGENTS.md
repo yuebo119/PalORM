@@ -20,7 +20,7 @@
 | **高** | `.ai/lessons.md` | 规范系统手册 v7.18（128 缺陷：A1-A7 + B1-B121 + XI 性能测量纪律 SOP，本地工具，不入仓库） |
 | **高** | `.ai/test/prompt.md` | 测试规范系统 v1.3（24 铁律 + 19 缺陷，本地工具，不入仓库） |
 | **高** | `docs/发布规范.md` | NuGet 发布流程 SOP（v5.0.0 实测，含 8 条实践教训） |
-| **中** | `docs/编码规范.md` §18 | SonarAnalyzer 守护层规则文档化 |
+| **中** | `docs/编码规范.md` §18-19 | SonarAnalyzer 守护层规则文档化 + 脚本语言规范（脚本一律 C#，白名单制与形态判据，2026-09-29 用户决策） |
 | **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 |
 
 ## 四系统（按需触发）
@@ -31,7 +31,7 @@
 | `/gate` | 门禁 | G1-G33 规范合规检查（编译前阻断） |
 | `/refine` | 精炼 | 24+3 项操作矩阵（更优实现） |
 | `/test` | 测试规范 | T1-T24 测试铁律 + 覆盖矩阵 + 基准配置规范 |
-| （自动） | pre-commit | 提交前三段：`secret-guard` → `stub-check` → `.ai/scripts/verify-ai-system.sh --fast`（19 项里的 17 项，约 7 秒；`.ai/` 不存在则跳过）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
+| （自动） | pre-commit | 提交前四段：`secret-guard` → `stub-check` → `.ai/scripts/verify-ai-system.sh --fast`（19 项里的 17 项）→ `.ai/scripts/gate-check.sh --allow-dirty`（G1-G33，约 10 秒；两段 `.ai/` 不存在则跳过，总预算约 17 秒）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
 
 ### 项目专属经验（v4.0 + v5.0 实测，编号与四系统脚本对齐）
 
@@ -104,7 +104,7 @@
 
 ## 性能测试结果输出规范（2026-09-24 用户指定 · 定稿 · 每次跑测汇报强制）
 
-性能跑测/对比结果一律以下列固定结构与表格呈现，数据源为 `bench/perfhub/results/history-*.json` 明细（非报告转述）。**触发场景**：任何性能测试后汇报——`perf.sh full`、PerfHub 批次、A/B 复测、单夹具运行。
+性能跑测/对比结果一律以下列固定结构与表格呈现，数据源为 `bench/perfhub/results/history-*.json` 明细（非报告转述）。**触发场景**：任何性能测试后汇报——`PerfCli full`、PerfHub 批次、A/B 复测、单夹具运行。
 
 **汇报结构固定五段**：
 1. **看点**：3-5 条量化结论（进地板带/转色项/改善项/新异常点），句式带数字
