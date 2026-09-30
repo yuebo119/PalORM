@@ -57,11 +57,11 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.1.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.2.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.1.0" />
+<PackageReference Include="PalORM.MySql" Version="6.2.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.1.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.2.0" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。
@@ -174,6 +174,14 @@ await using (db.ForParallelReads())
     await Task.WhenAll(db.From<User>().ToListAsync(), db.From<Order>().ToListAsync());
 }
 ```
+
+> **作用域内入口限制**：`From<T>()` 查询族走读连接池（并发安全）；`GetAsync` 单行直查族走主连接，作用域内调用会响亮拒绝（`InvalidOperationException` 带指引）——在作用域外使用，或改用 `From<T>().Where(...).FirstOrDefaultAsync()`。流式消费大结果集用 `QueryAsyncEnumerable<T>`（`await foreach`），避免全量物化的内存峰值；`Include` 只生成 JOIN 不装配导航，需按父分组时自行配对或直接流式处理。
+
+### 内存与 GC 选型
+
+- **结果集形态**：`ToListAsync` 全量物化（`List<T>` 初始容量按会话内上次行数自适应，重复查询同表零扩容拷贝）；行数不可控的大表用 `QueryAsyncEnumerable<T>` 流式（每行即时消费，峰值内存 O(1)）。
+- **查询缓存**：`WithCache` 的分配换时延取舍默认关（`DbOptions.QueryCache` 注入才启用）；TTL 最终一致，写后读一致用 `db.EvictQueryCache()` 显式收窄。
+- **GC 模式**：高吞吐服务端（多核 + 大堆）建议 `<ServerGarbageCollection>true</ServerGarbageCollection>`（Gen0 分配缓冲更大、GC 频率降）；容器配 `GarbageCollectionHeapHardLimit`（如 75c00000=2GB）防OOM；客户端/小内存场景保持 Workstation 默认。基准口径为 Workstation（`docs/性能基准规范.md` §4.1），Server GC 下分配数字不变、GC 频率与暂停分布不同。
 
 Keyset 游标分页（大偏移量场景比 OFFSET 稳定，返回行列表与总数）：
 

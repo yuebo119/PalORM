@@ -26,16 +26,18 @@ internal static class BenchMatrix
 
         var code = target switch
         {
+            // BDN filter 不带 bash 单引号——ProcessStartInfo 参数串不剥引号（2026-09-30 实测修复，
+            // 同 FullPerf BDN 修复）；RunSuite 的退出码链路完好，无需额外处理
             "sqlite" => RunSuite(benchDir,
-                "--filter '*CrudBenchmarks*' '*BulkBenchmarksFixed*' '*BulkBenchmarks*' " +
-                "'*GcBenchmarks*' '*SqlBuildBenchmarks*' " +
-                "'*FeatureBenchmarks*' '*OrmComparisonBenchmarks*' '*BinaryBenchmarks*' --exporters json",
+                "--filter *CrudBenchmarks* *BulkBenchmarksFixed* *BulkBenchmarks* " +
+                "*GcBenchmarks* *SqlBuildBenchmarks* " +
+                "*FeatureBenchmarks* *OrmComparisonBenchmarks* *BinaryBenchmarks* --exporters json",
                 "sqlite", ">>> 运行 SQLite 基准（CRUD + Bulk + Transaction + Advanced）..."),
-            "scale" => RunSuite(benchDir, "--filter '*BulkBenchmarks*'", "scale", ">>> 运行 BulkInsert 拐点扫描（100/1K/10K/100K）..."),
-            "build" => RunSuite(benchDir, "--filter '*SqlBuildBenchmarks*' --exporters json", "build", ">>> 运行 SQL 构建微基准（严格配置 5/10/15）..."),
-            "pg" => RunRemote(benchDir, "pg", "PALORM_BENCH_PG", "'*PgBenchmarks*'", "PostgreSQL"),
-            "mysql" => RunRemote(benchDir, "mysql", "PALORM_BENCH_MYSQL", "'*MySqlBenchmarks*'", "MySQL"),
-            "all" => RunSuite(benchDir, "--filter '*'", "all", ">>> 运行全部 SQLite + Scale + Build + Speed 基准（约 30 分钟）..."),
+            "scale" => RunSuite(benchDir, "--filter *BulkBenchmarks*", "scale", ">>> 运行 BulkInsert 拐点扫描（100/1K/10K/100K）..."),
+            "build" => RunSuite(benchDir, "--filter *SqlBuildBenchmarks* --exporters json", "build", ">>> 运行 SQL 构建微基准（严格配置 5/10/15）..."),
+            "pg" => RunRemote(benchDir, "pg", "PALORM_BENCH_PG", "*PgBenchmarks*", "PostgreSQL"),
+            "mysql" => RunRemote(benchDir, "mysql", "PALORM_BENCH_MYSQL", "*MySqlBenchmarks*", "MySQL"),
+            "all" => RunSuite(benchDir, "--filter *", "all", ">>> 运行全部 SQLite + Scale + Build + Speed 基准（约 30 分钟）..."),
             "workload" => RunSuite(benchDir, "--workload", "workload", ">>> 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md；SQLite 档）..."),
             "speed" => PrintSpeedGuidance(),
             _ => PrintUsage(),
