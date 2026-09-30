@@ -745,12 +745,38 @@ public sealed partial class DataSession<TProvider>
 
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
             // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容。
-            List<T> list = new(16);
+            List<T> list = new(GetMaterializedCapacity<T>());
             var tf = (Func<DbDataReader, T>)factory;
             while (await reader.ReadAsync(token).ConfigureAwait(false))
                 list.Add(tf(reader));
+            RecordMaterializedCount<T>(list.Count);
             return list;
         }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>物化容量启发（step8-T6/M3-2）：会话内记录 (实体类型 → 上次物化行数)，
+    /// 全表/宽查询的 List 初始容量取它——重复查询同表（分页轮询/报表形态）零扩容拷贝；
+    /// 首次查询无记录时 16（v4.0 优化 D 原值，行为兼容）。写路径不参与。
+    /// <para>并发：作用域内读并发（EnterReadOnly 放行后合法）下 ConcurrentDictionary 兜住
+    /// 同类型并发更新——值为"上次行数"近似量，竞争只影响容量精度不影响正确性。</para></summary>
+    private System.Collections.Concurrent.ConcurrentDictionary<Type, int>? _materializedCapacity;
+
+    private int GetMaterializedCapacity<T>() where T : class, new()
+        => _materializedCapacity is not null && _materializedCapacity.TryGetValue(typeof(T), out int cap)
+            ? cap
+            : 16;
+
+    private void RecordMaterializedCount<T>(int count) where T : class, new()
+    {
+        if (count <= 16)
+            return; // 小结果集：默认容量已覆盖，不值得一条记录
+        System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
+        if (dict is null)
+        {
+            System.Collections.Concurrent.ConcurrentDictionary<Type, int> created = new();
+            dict = Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
+        }
+        dict[typeof(T)] = count;
     }
 
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。</summary>
