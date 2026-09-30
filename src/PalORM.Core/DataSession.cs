@@ -734,6 +734,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         object? operationOwner = null)
         => _operationState.Enter(operationOwner);
 
+    /// <summary>只读操作租约入口（step8-T3）：作用域外与 <see cref="EnterOperation"/> 逐位一致
+    /// （EnterReadOnly 内部退化 Enter），并行读作用域内走只读并发租约（上限 MaxParallelReads）。
+    /// 纯读入口（GetAsync/GetAllAsync/CountAsync/QueryAsync/QueryAsyncEnumerable/ScalarAsync/
+    /// 聚合族）统一走本入口——ITM-811 同型面的收口（该轮只修了 QueryBuilderExtensions 族，
+    /// DataSession 直查族漏扫，并发 GetAsync 在作用域内必抛 "already active" 实测坐实）。</summary>
+    private SessionOperationState.SessionOperationLease EnterReadOnly()
+        => _operationState.EnterReadOnly();
+
     /// <summary>创建批量执行器——把 N 条非查询语句压成一次往返（方言支持时，实测 PG 3.4×/10 语句）。
     /// 见 <see cref="SessionBatch{TProvider}"/> 的语义契约。</summary>
     /// <summary>创建批执行器。ITM-836（r23 复核登记）：不取操作租约是<b>内部复用契约</b>——
