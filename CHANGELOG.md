@@ -2,7 +2,9 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布]
+## [6.2.0] — v6.2.0：[ForeignKey] DDL + 查询缓存显式失效 + 并发读租约收口 + 性能与内存优化轮 — 2026-09-30
+
+> 验证口径：Core 449 / SourceGen 227 / Integration 真库 255 全绿 · Release（ci.slnf -warnaserror）0 警告 0 错误 · gate 33/33 · verify 19/19（.ai 侧 17 项 --fast）/19 · doccons 12/12 · 三方言 AOT publish 零警告 · BDN 门禁 27/27 + 结果库 176/176。
 
 ### 🔧 step8 全面性能与内存优化轮（2026-09-30，总纲 `docs/性能优化方案-step8-全方言综合.md`）
 
