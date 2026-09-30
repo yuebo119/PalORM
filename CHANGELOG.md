@@ -4,6 +4,15 @@
 
 ## [未发布]
 
+### 🔧 step8 全面性能与内存优化轮（2026-09-30，总纲 `docs/性能优化方案-step8-全方言综合.md`）
+
+- **读租约同型面收口（ITM-811 家族）**：DataSession 直查族 7 个纯读入口（GetAsync/GetAllAsync/CountAsync/QueryAsync/QueryAsyncEnumerable/ScalarAsync/聚合内核）改 `EnterReadOnly`——作用域外行为逐位一致，`ForParallelReads` 作用域内放行只读并发租约（此前该族在作用域内结构性必抛，与 QueryBuilderExtensions 族不对称）。语义红线保持：写入口（ExecuteAsync/DeleteAsync/事务/DDL/Bulk）与配置修改器仍互斥门禁。
+- **GetByKey 复用槽并发防护**：并行读作用域内禁用单行读命令复用槽（并发命中同一 `DbCommand` 实测 SQLite 参数串扰；作用域内退回新建路径，正确性优先——命令新建在该形态下占比可忽略）。作用域外复用行为不变（PL-2 既有晋升阈值 3 与全部既有测试逐位保持）。
+- **GetAsync 作用域内响亮拒绝**：直查族命令走主连接（读连接池仅覆盖 `From<T>()` 族），作用域内并发挤同一物理连接实测 `SqliteConnection.Close` NRE——以带指引的 `InvalidOperationException` 替代（改用 `From<T>().Where(...).FirstOrDefaultAsync()`）；读池扩覆盖登记为连接治理专门迭代。
+- **物化容量自适应（M3-2）**：会话内记录 (实体类型 → 上次物化行数)，全表查询 `List<T>` 初始容量按它取值——重复查询同表（分页轮询/报表形态）零扩容拷贝；首查保持 16 兼容。并发安全（ConcurrentDictionary，容量精度竞争不影响正确性）。
+- **PerfHub 批量性能复核（T2 裁决）**：PG BulkUpdate 形状扫描探针（500~5000 宽五点 + 产品 vs 手写交替配对）实证产品 FROM VALUES 单形态已是最优（无形状交叉点，"双形状分流"裁撤）；夹具 1.31 定性为批宽参数（1000 vs 产品默认 5000，~7%）+ 会话管线固定成本 + 远程库时段漂移三因素叠加，非产品缺陷；批宽微调候选登记（收益 7% 低于环境噪声 10~25%，B100 判据作废）。探针结论与 B122（机制探针环境同构三关）入 lessons。
+- **验证**：Core 448 / SourceGen 227 / Integration 255 全绿 · build 0W0E · 新增并发正确性测试 2 用例（响亮拒绝形态 + 串扰归零）。
+
 ### ✨ 查询缓存显式失效 API + FK 建表拓扑序 + pgvector Raw 路线设施（2026-09-30 双方案实施轮）
 
 - **`DataSession.EvictQueryCache()`（ADR-O C3，C1 语义维持）**：写后显式失效本会话生效的查询缓存（`DbOptions.QueryCache` 注入优先、未注入时进程级默认，口径与查询路径同源）。TTL 最终一致定位不变，本方法是 opt-in 的失效窗口收窄，忘调 = 等价旧行为。详见 `docs/adr/ADR-O`（C2 进程级联动因分布式假一致性承诺永久降级）。

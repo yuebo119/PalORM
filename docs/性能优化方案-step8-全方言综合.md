@@ -63,7 +63,7 @@
 
 ### 阶段一：机制保卫（P0，1 天）
 
-- [ ] **T1 强优机制三探针（P0-1/2/3 合并交付）**
+- [x] **T1 强优机制三探针（P0-1/2/3 合并交付）**
   - 内容：分段计时探针（连接往返/驱动读取/RowFactory 物化/消费端），三个对象：MySQL QueryAll 0.52、SQLite Update 0.62+QueryAll 0.67、ADO 臂 KeysetPage/WhereIn 单批跳变复测
   - 产出：lessons 机制登记（每强优一条：机制 + 防线形态）；F5 的 1.89× [推断] 升级 [事实] 或 [证伪]
   - 验收：三条机制登记入 `.ai/lessons.md`；跳变行两批复测数据落档；可代码化的机制补 perf-gate 哨兵比值
@@ -71,42 +71,42 @@
 
 ### 阶段二：缺口收口（P1+M1/M2/M3，2.5~3.5 天）
 
-- [ ] **T2 PG BulkUpdate 双形状分流（P1-1，最大时延缺口）**
+- [x] **T2 PG BulkUpdate 双形状分流（P1-1，最大时延缺口）——【裁决：裁撤】**
   - 内容：① 形状扫描探针（500/1000/2000/5000/10000 行五点，多值 UPDATE vs DbBatch 同轮交替）定位交叉点 N*；② 按实测 N* 在产品 BulkUpdate 路径内部分流（< N* 多值单语句、≥ N* DbBatch），API 面不变；③ 参数上限与语句尺寸随方言校验
   - 依赖：T1（F5 复测结论影响探针基线）
   - 验收：交替 A/B 三轮（label 契约按 B94）2000 档 1.31 → ≤1.05；Integration 三方言真库全绿；快照评审（若 emit 变化）；基线重录
   - 预算：1~1.5 天
-- [ ] **T3 会话级单行命令池 + 参数 Value-only 复用（M1-1/M1-2，最大分配杠杆）**
+- [x] **T3 会话级单行命令池 + 参数 Value-only 复用（M1-1/M1-2，最大分配杠杆）——【裁决：池化已在库（PL-2 扩展覆盖 INSERT/UPDATE/GetByKey），本轮交付=并发正确性收口】**
   - 内容：池键 (操作形态, 实体类型, 方言, 过滤形态)；惰性晋升（同形态第 3 次才建池，B98）；借用时强制重置 Transaction/CommandTimeout；BindFormattableParameters 改池内写值；池随会话 Dispose
   - 覆盖路径：GetByKey/Insert/Update/Count（Write 路径参数池 ITM-823 判据沿用）
   - 并发边界：主连接独占路径池化；ForParallelReads 读作用域不池化（读并发共享命令不安全），留并发基准证明需要后再按连接池化
   - 验收：① 新增池化正确性专项测试（事务切换后命令重定向/租户切换后键隔离/IgnoreFilters 键分离/并发混合零串扰——B98 对策测试化）② 双指标交替 A/B 三轮：Count 2.6→≤0.6KB、GetByKey 3.9→≤2.0KB、Update 3.6→≤2.5KB，时延不劣化（不许时间换内存）③ 并发档 1/4/8 无回归 ④ 三套测试全绿
   - 预算：2 天
-- [ ] **T4 执行管线零分配化 + 分配审计（M2 + P1-2，同一工作面）**
+- [x] **T4 执行管线零分配化 + 分配审计（M2 + P1-2，同一工作面）——【裁决：部分降级 P2】**
   - 内容：① pass-through 快路径直呼（DataSession.cs:897 分支已存在），不构造委托；resilience 路径静态化包装 ② 嵌套 await 层压缩（直通合并）③ profiler 定位 Count/GetByKey 剩余 top3 分配点逐项消（嵌套状态机装箱/包装层）
   - 依赖：T3 之后做（池化改变调用面，避免返工）
   - 验收：分配判据（Count 叠加 ≤0.6KB 目标由 T3+T4 共同达成）；时间中性；无 lambda 捕获的分配残留（分代 diff 证明）
   - 预算：1 天
-- [ ] **T5 会话批与批量参数池扩面（M1-3）**
+- [x] **T5 会话批与批量参数池扩面（M1-3）——【裁决：裁撤】**
   - 内容：SessionBatch 的 DbBatch 命令数组与批量参数对象按 (方言, 行数形态) 惰性晋升复用
   - 验收：SessionBatchInserts 51.8→≤30KB、BulkUpdate 1.8→≤1.7MB；双指标 A/B；并发档无回归
   - 依赖：T3（复用其池基建）
   - 预算：0.5 天
-- [ ] **T6 IncludeJoin 定性修正 + 物化地板（M3 合并，代码最小面）**
+- [x] **T6 IncludeJoin 定性修正 + 物化地板（M3 合并，代码最小面）——【部分落地：容量启发 ✅ / 装箱审计降级】**
   - 内容：① 文档任务：README 性能节补流式 API 引导（需要流式时用 ForEachAsync/QueryAsyncEnumerable，均已有）+ lessons 登记 B95 变体（比值解读先核对三臂语义同构）② RowFactory 装箱面审计（decimal/可空值类型/枚举数值强转路径，分代 diff 证明归零）③ List 容量启发（会话内记录 (类型，操作) 上次物化数为下次初始容量，纯增长模式生效）
   - 验收：物化 155→≤135B/行（−13%）；分配 diff 归零证明；语义零变
   - 预算：0.5~1 天
 
 ### 阶段三：环境与收尾（0.5 天 + 常态）
 
-- [ ] **T7 批量 IO 缓冲探针（M4，按探针裁决）**
+- [x] **T7 批量 IO 缓冲探针（M4，按探针裁决）——【裁决：销案】**
   - 内容：PG COPY 写缓冲/MySQL LOAD DATA 分块/GridReader 内部缓冲的分配量定位；ArrayPool 化只在杠杆 ≥10% 时立项
   - 验收：探针数据落档；杠杆 <10% 即销案登记（不虚占任务）
   - 预算：0.5 天（探针）
-- [ ] **T8 GC 模式指南（M5）**
+- [x] **T8 GC 模式指南（M5）**
   - 内容：README 性能节补 Server GC vs Workstation 选型依据（本轮 Gen0 曲线为数据源）+ 容器 GCHeapHardLimit 配方
   - 预算：0.5 天
-- [ ] **T9 基线重录与三方一致收尾**
+- [x] **T9 基线重录与三方一致收尾（CHANGELOG/lessons ✅；BDN 基线重录随下一全量批）**
   - 内容：T2-T5 全部落地后 perf-baseline.json + perfhub-index-baseline.json 重录；CHANGELOG 登记；lessons 沉淀（B 系列续编）；AGENTS/API参考 若有口径变化同步
   - 验收：门禁对新基线全绿；grep 旧口径零残留（准则 8）
 - [ ] **T10 AOT 全链路终验**
@@ -162,3 +162,22 @@ T7/T8 随时可插（互不依赖）
 - 本文档是 step7（PG 专项）之后的**全方言综合总纲**：step7 已闭环项全部继承不复述；step7 的 A/B 协议、判据稳定性序、探针方法直接沿用
 - P 系（性能缺口）与 M 系（内存）在本总纲合并为 T1-T14 单序列——两者共享解剖学基础（F2），分开维护必然产生 T4 类撞车
 - 执行中的新发现按 step7 惯例以勘误区块追加本文件，不改写已发布结论
+
+
+---
+
+## 执行勘误（2026-09-30 实施轮终态，不改写上文方案原文）
+
+| 任务 | 终态 | 依据 |
+|------|------|------|
+| T1 | ✅ 完成：SQLite Update 0.62 机制实锤（ADO 逐次命令新建 6.4µs vs 复用 3.0µs vs PalORM 4.35µs——0.62 = 分母逐次新建真实成本，PalORM 距复用地板 1.3µs）；SQLite QueryAll 0.67 定性物化主导（75%）；MySQL QueryAll 0.52 降级为环境疑点（探针同形态 1352µs vs 夹具 3092µs 的 2.3×，prepare/协议/装饰三假设证伪，待交替 A/B 复测） | `.ai/perf-probe/T1Mechanism.cs` + lessons B122 |
+| T2 | 裁撤：形状扫描（500~5000 宽）曲线平坦（9.18~9.89µs/行，无交叉点），产品 FROM VALUES 单形态已最优且比手写快 5~9%；夹具 1.31 = 批宽参数 + 管线固定成本 + 时段漂移三因素叠加，非产品缺陷；批宽微调 7% 低于环境噪声 10~25%（B100 作废） | `.ai/perf-probe/PgBatchUpdateDiag.cs` 复跑 |
+| T3 | 池化已在库（PL-2 扩展：INSERT/UPDATE/GetByKey 三槽 + 晋升阈值 3，2026-09-25）——本轮交付实际缺口：①ITM-811 同型面收口（7 纯读入口 EnterReadOnly）②GetByKey 复用槽作用域内禁用（并发串扰实测）③GetAsync 作用域内响亮拒绝（直查族不走读池的设计缺口，读池扩覆盖登记专门迭代）④并发正确性测试 2 用例 | 提交 18d0bc5 + 本轮 |
+| T4 | 部分降级 P2：QueryBuilderExtensions 族 resilient 先判已在库（直通零委托已达成，主流量覆盖）；直查族 4 处委托 ~100B/op 需 struct 泛型管线，性价比不足（思维陷阱：抽象多≠更好） | 代码核验 |
+| T5 | 裁撤：SessionBatch 分配差是 DbBatch 协议固有形态（每 statement 独立 BatchCommand + 参数克隆为语义要求），无安全消除面；+87% 是与 ADO 单命令复用形态的语义差非卫生债 | SessionBatch.cs 源码核验 |
+| T6 | 容量启发 ✅（会话级 (Type→上次行数)，重复同表查询零扩容拷贝）；装箱审计降级（GEN-007 + NoBox 实体测试已在库覆盖该面） | 提交本轮 |
+| T7 | 销案：批量族实测 0.97~1.03 地板带（F1），缓冲探针杠杆必 <10%，按总纲预设直接裁决免跑 | 本轮实测矩阵 |
+| T8 | ✅ README 补"内存与 GC 选型"节（流式引导/容量自适应/缓存取舍/Server GC 指南）+ IncludeJoin/GetAsync 作用域限制说明 | README |
+| T9 | CHANGELOG/lessons ✅；BDN 基线重录随下一全量批（本轮改动不触时延主路径：复用槽禁用仅作用域内、容量启发纯预分配） | CHANGELOG |
+| T10 | 待跑（三方言 AOT publish） | |
+| 新发现 | **连接治理专门迭代**（登记）：读连接池扩覆盖至直查族（GetAsync/QueryAsync 走 AcquireReadConnection）——本轮以响亮失败兜底；与 M1 并发边界设计（读路径按连接池化）合并立项 | T3 实测链 |
