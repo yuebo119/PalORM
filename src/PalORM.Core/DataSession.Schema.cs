@@ -80,8 +80,7 @@ public sealed partial class DataSession<TProvider>
         // 评审 2026-09-02 第二批（ADR-J）：实体全集以 TableNames 为键源——legacy CreateTableSql
         // 已从生成物移除，方言 DDL（CreateTableSqlByDialect）是唯一执行真源。
         int entityCount = PalORM_Runtime.TableNames.Count;
-        var tableDdls = new List<string>(entityCount);
-        var indexDdlGroups = new List<IReadOnlyList<string>>(entityCount);
+        var tableEntries = new List<(Type Type, string Ddl, IReadOnlyList<string> IndexDdls)>(entityCount);
         foreach (var type in PalORM_Runtime.TableNames.Keys)
         {
             // ITM-569：拒绝回退 legacy 单方言 DDL（与 GetCommandSqls 对称）——旧生成器片段缺
@@ -105,8 +104,33 @@ public sealed partial class DataSession<TProvider>
                     $"Type '{type.Name}' has no dialect-specific generated index DDL. " +
                     "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
             }
-            tableDdls.Add(sqls.Get(TProvider.Dialect));
-            indexDdlGroups.Add(indexSqls.Get(TProvider.Dialect));
+            tableEntries.Add((type, sqls.Get(TProvider.Dialect), indexSqls.Get(TProvider.Dialect)));
+        }
+
+        // ADR-B 限制④：按生成期 FK 依赖拓扑序建表（被引用表先建，空库前向引用可建）。
+        // 旧片段无序时按注册字典枚举序兜底；order 未覆盖的实体（跨片段合并的旧片段）
+        // 排尾并保持原相对序（稳定排序）。
+        IReadOnlyList<Type>? migrationOrder = PalORM_Runtime.TableMigrationOrder;
+        Dictionary<Type, int>? orderIndex = migrationOrder is null
+            ? null
+            : migrationOrder.Select((type, index) => (type, index))
+                .ToDictionary(pair => pair.type, pair => pair.index);
+        if (orderIndex is not null)
+        {
+            tableEntries = tableEntries
+                .Select((entry, original) => (entry, original))
+                .OrderBy(pair => orderIndex.TryGetValue(pair.entry.Type, out int i) ? i : int.MaxValue)
+                .ThenBy(pair => pair.original)
+                .Select(pair => pair.entry)
+                .ToList();
+        }
+
+        var tableDdls = new List<string>(entityCount);
+        var indexDdlGroups = new List<IReadOnlyList<string>>(entityCount);
+        foreach (var (_, ddl, indexDdls) in tableEntries)
+        {
+            tableDdls.Add(ddl);
+            indexDdlGroups.Add(indexDdls);
         }
 
         // L4：建表 DDL 一次往返（owner 重入外层迁移租约）
@@ -142,6 +166,18 @@ public sealed partial class DataSession<TProvider>
     /// <summary>ITM-723：零超时配置（= ADO.NET 无限等待）下 DDL/探活的有限兜底上限。</summary>
     private int ProbeCommandTimeoutSeconds
         => _options.CommandTimeoutSeconds == 0 ? DefaultProbeTimeoutSeconds : _options.CommandTimeoutSeconds;
+
+    /// <summary>清空本会话生效的查询缓存（ADR-O C3：写后显式失效 API）。
+    /// <para>解析口径与查询路径同源（<see cref="DbOptions.QueryCache"/> 注入优先，未注入时为
+    /// 进程级默认实例 <see cref="CacheStore.Default"/>，对照 QueryBuilder 构造的
+    /// <c>ctx.QueryCache ?? CacheStore.Default</c>）。注意清的是"缓存实例"而非"本会话创建的
+    /// 条目"：注入实例被多会话共享时全部失效（语义即"该缓存整体已过期"）；默认实例影响全部
+    /// 未注入会话（与 <see cref="CacheStore.Clear"/> 同语义）。</para>
+    /// <para><b>ADR-O 定位</b>：TTL 最终一致（C1）语义不变，本方法是显式收窄失效窗口的
+    ///  opt-in——写后调用即写后读一致，忘调 = 等价旧行为，无更差。典型 recipe：
+    /// <c>await db.InsertAsync(e); db.EvictQueryCache();</c></para></summary>
+    public void EvictQueryCache()
+        => (_options.QueryCache ?? CacheStore.Default).Clear();
 
     /// <summary>建表 DDL 批执行（L4 单次往返）+ 并发建表竞态兜底。
     /// <para><b>竞态兜底（2026-09-28，PG 实证）</b>：CREATE TABLE IF NOT EXISTS 的存在性检查

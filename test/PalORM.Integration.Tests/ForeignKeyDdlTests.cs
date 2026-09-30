@@ -20,15 +20,15 @@ public sealed class ForeignKeyDdlTests
         await db.ExecuteAsync($"PRAGMA foreign_keys = ON");
         await db.MigrateAsync();
 
-        await db.InsertAsync(new FkItxParent { Name = "p1" });
+        await db.InsertAsync(new FkItx0Parent { Name = "p1" });
         // 合法引用成功
-        await db.InsertAsync(new FkItxChild { ParentId = 1 });
+        await db.InsertAsync(new FkItx1Child { ParentId = 1 });
         // 孤儿插入被引擎拒绝（SQLite 错误 787 FOREIGN KEY constraint failed，
         // 原生驱动异常冒出——InsertAsync 只翻译唯一冲突族）
         await Assert.That(async () =>
-            await db.InsertAsync(new FkItxChild { ParentId = 999 }))
+            await db.InsertAsync(new FkItx1Child { ParentId = 999 }))
             .Throws<Microsoft.Data.Sqlite.SqliteException>();
-        await Assert.That(await db.CountAsync<FkItxChild>()).IsEqualTo(1);
+        await Assert.That(await db.CountAsync<FkItx1Child>()).IsEqualTo(1);
     }
 
     [Test]
@@ -38,16 +38,16 @@ public sealed class ForeignKeyDdlTests
         await db.ExecuteAsync($"PRAGMA foreign_keys = ON");
         await db.MigrateAsync();
 
-        await db.InsertAsync(new FkItxParent { Name = "p1" });
-        await db.InsertAsync(new FkItxChild { ParentId = 1 });
-        await db.InsertAsync(new FkItxChild { ParentId = 1 });
-        await Assert.That(await db.CountAsync<FkItxChild>()).IsEqualTo(2);
+        await db.InsertAsync(new FkItx0Parent { Name = "p1" });
+        await db.InsertAsync(new FkItx1Child { ParentId = 1 });
+        await db.InsertAsync(new FkItx1Child { ParentId = 1 });
+        await Assert.That(await db.CountAsync<FkItx1Child>()).IsEqualTo(2);
 
         // OnDelete = Cascade 真传播：删 parent 行连带清 child。
         // DELETE 的列匹配用全表删（本测试仅一行）——插值洞会被参数化，
         // 把列名 {"Id"} 放洞里会变成 WHERE 'Id' = 1 恒假（静默删 0 行）
         await db.ExecuteAsync($"DELETE FROM fk_itx_parent");
-        await Assert.That(await db.CountAsync<FkItxChild>()).IsEqualTo(0);
+        await Assert.That(await db.CountAsync<FkItx1Child>()).IsEqualTo(0);
     }
 
     [Test]
@@ -61,7 +61,7 @@ public sealed class ForeignKeyDdlTests
 
         long fkCount = await db.ScalarAsync<long>(
             $"SELECT COUNT(*) FROM pragma_foreign_key_list('fk_itx_child')");
-        // FkItxChild 声明 1 个 FK（快照里的 FkChildEntity 是 3 个，别混）
+        // FkItx1Child 声明 1 个 FK（快照里的 FkChildEntity 是 3 个，别混）
         await Assert.That(fkCount).IsEqualTo(1);
     }
 
@@ -75,16 +75,18 @@ public sealed class ForeignKeyDdlTests
         {
             ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString()
         });
+        // 不做开头自清理：TUnit 并行下其他测试的 MigrateAsync 依赖 fk 表存在性，
+        // 开头 DROP 会与并行建表竞态（42P01）。空库起点自洽由字典序保证（FkItx0Parent 先建）
         try
         {
             await session.MigrateAsync();
-            await session.InsertAsync(new FkItxParent { Name = "p1" });
-            await session.InsertAsync(new FkItxChild { ParentId = 1 });
+            await session.InsertAsync(new FkItx0Parent { Name = "p1" });
+            await session.InsertAsync(new FkItx1Child { ParentId = 1 });
             // 孤儿插入被真库拒绝（PG 23503 foreign_key_violation）
             await Assert.That(async () =>
-                await session.InsertAsync(new FkItxChild { ParentId = 999 }))
+                await session.InsertAsync(new FkItx1Child { ParentId = 999 }))
                 .Throws<Npgsql.NpgsqlException>();
-            await Assert.That(await session.CountAsync<FkItxChild>()).IsEqualTo(1);
+            await Assert.That(await session.CountAsync<FkItx1Child>()).IsEqualTo(1);
         }
         finally
         {
@@ -101,16 +103,17 @@ public sealed class ForeignKeyDdlTests
         {
             ConnectionString = TestEnvironment.ResolveMySqlConnectionString()
         });
+        // 不做开头自清理：并行竞态同 PG 侧注释
         try
         {
             await session.MigrateAsync();
-            await session.InsertAsync(new FkItxParent { Name = "p1" });
-            await session.InsertAsync(new FkItxChild { ParentId = 1 });
+            await session.InsertAsync(new FkItx0Parent { Name = "p1" });
+            await session.InsertAsync(new FkItx1Child { ParentId = 1 });
             // 孤儿插入被真库拒绝（MySQL 1452 Cannot add or update a child row）
             await Assert.That(async () =>
-                await session.InsertAsync(new FkItxChild { ParentId = 999 }))
+                await session.InsertAsync(new FkItx1Child { ParentId = 999 }))
                 .Throws<MySqlConnector.MySqlException>();
-            await Assert.That(await session.CountAsync<FkItxChild>()).IsEqualTo(1);
+            await Assert.That(await session.CountAsync<FkItx1Child>()).IsEqualTo(1);
         }
         finally
         {
@@ -121,16 +124,18 @@ public sealed class ForeignKeyDdlTests
 }
 
 #region Test Entities
-// 表名前缀 fk_itx_ 避免与真库其他夹具冲突；引用表名经 PALORM003 存在性校验（同编译单元）
+// 表名前缀 fk_itx_ 避免与真库其他夹具冲突；引用表名经 PALORM003 存在性校验（同编译单元）。
+// Type 名数字后缀是刻意为之：MigrateAsync 按 Type 名字典序建表，被引用表（0Parent）必须
+// 先于引用表（1Child）建，空库上前向引用会报 errno 1824（ADR-B 实施记录二·限制③）
 [Table("fk_itx_parent")]
-public partial class FkItxParent
+public partial class FkItx0Parent
 {
     [Key] public long Id { get; set; }
     [Column("name")] public string Name { get; set; } = "";
 }
 
 [Table("fk_itx_child")]
-public partial class FkItxChild
+public partial class FkItx1Child
 {
     [Key] public long Id { get; set; }
     // 引用列 "Id" 必须与被引用实体的实际映射列名逐字对齐——PG 引号标识符大小写敏感，

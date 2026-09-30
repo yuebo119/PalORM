@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 887 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 896 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -200,6 +200,7 @@
 | `QueryAsyncEnumerable<T>(sql)` → `IAsyncEnumerable<T>` | 流式读取 |
 | `HealthCheckAsync()` → `HealthResult` | SELECT 1 探活 |
 | `GetRawConnection()` → `DbConnection` | 逃生舱 |
+| `EvictQueryCache()` | 清空本会话生效的查询缓存（ADR-O C3：写后显式失效，注入实例优先/默认进程级，口径同查询路径） |
 
 ### 横切注解
 

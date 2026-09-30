@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+### ✨ 查询缓存显式失效 API + FK 建表拓扑序 + pgvector Raw 路线设施（2026-09-30 双方案实施轮）
+
+- **`DataSession.EvictQueryCache()`（ADR-O C3，C1 语义维持）**：写后显式失效本会话生效的查询缓存（`DbOptions.QueryCache` 注入优先、未注入时进程级默认，口径与查询路径同源）。TTL 最终一致定位不变，本方法是 opt-in 的失效窗口收窄，忘调 = 等价旧行为。详见 `docs/adr/ADR-O`（C2 进程级联动因分布式假一致性承诺永久降级）。
+- **FK 建表拓扑序（ADR-B 限制④根治）**：实测坐实 MigrateAsync 按 FrozenDictionary 枚举序建表，空库上实体 A 的表 FK 引用实体 B 的表而 B 恰排后时报 1824。RegistryEmitter 生成期按 FK 依赖 Kahn 拓扑排序（无依赖实体保持原序，稳定排序使快照 diff 只反映真实依赖；FK 环按原序追加留给数据库端响亮失败）并发射 `TableMigrationOrder`，MigrateAsync 按序排建表 DDL；旧片段缺省时按枚举序兜底。快照已评审刷新。
+- **pgvector Raw 路线设施**（向量门结论 B 分支落地，配方 v2 全文本边界形态）：`PalORM.PostgreSql.VectorText`（pgvector 文本字面量生成/解析，维度错配前移到赋值行，InvariantCulture 防区域小数点）+ `scripts/probe-pgvector.cs` 探针（配方 §五六项核对清单自动化，pgvector 缺失时门控 exit 2 指引而非静默跳过；实测与门探针"服务器无 pgvector"结论双向一致）。形态依据见配方 §六双铁证（PG explicit-only cast + Npgsql EnableUnmappedTypes 与 AOT 不兼容）。
+
 ### ✨ [ForeignKey] 迁移 DDL 落地（ADR-B 挂起解除）
 
 - **随 `CREATE TABLE` 内联三方言表级 FK 子句**：`FOREIGN KEY ("col") REFERENCES "reftable" ("refcol") ON DELETE <action>`——PG/MySQL 的 CREATE TABLE 原生支持表级 FK，SQLite 内联是其唯一形态，三方言同构零分叉。`OnDelete` 四形态映射（NO ACTION/CASCADE/SET NULL/RESTRICT），默认 NO ACTION（G16 级联显式启用语义）；PALORM004 已强制 OnDelete 必填，PALORM017 对 FK 此前已停报（JOIN 消费）。
