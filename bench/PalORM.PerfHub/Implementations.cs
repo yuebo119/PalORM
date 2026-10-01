@@ -1022,22 +1022,26 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    /// <summary>宽表全表物化——19 列按序号取（按名取列是慢路径，S1 测不出的列数伸缩在此放大）。</summary>
+    /// <summary>宽表全表物化——19 列按序号取（按名取列是慢路径，S1 测不出的列数伸缩在此放大）。
+    /// <para>2026-10-02 对等化：物化进列表并持有到读完（原实现逐行映射后丢弃，PalORM 的 ToListAsync 与
+    /// Dapper 的缓冲查询都持有全部实体——2 万宽行约 10MB 存活集的 GC 成本只落在两臂上，宽表 2 万行
+    /// 1.14~1.21× 的差距由此而来，而非产品开销）。</para></summary>
     public async Task<int> WideQueryAllAsync(DbConnection conn, CancellationToken ct)
     {
         await using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = $"SELECT {Dataset.WideSelectColumns(D)} FROM {Dataset.WideTable(D)}";
         await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        int n = 0;
+        var list = new List<WideRow>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            _ = MapWide(r);
-            n++;
+            list.Add(MapWide(r));
         }
-        return n;
+        return list.Count;
     }
 
-    /// <summary>1:N 装配——JOIN 单查询 + 客户端按父去重分组（无行放大的手工天花板形态）。</summary>
+    /// <summary>1:N 装配——JOIN 单查询 + 客户端按父去重分组（无行放大的手工天花板形态）。
+    /// <para>2026-10-02 对等化：逐行物化父列实体进列表（与 PalORM Include 的产出同形：150 个 S1Row）；
+    /// 原实现每行只读 Id 与子表 Note 两列、不建实体，18~25KB 的分配差就是这部分。</para></summary>
     public async Task<(int Parents, int Children)> IncludeJoinAsync(
         DbConnection conn, int parentCount, CancellationToken ct)
     {
@@ -1047,20 +1051,23 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             + $"WHERE {T}.{Q("Id")} <= {Dataset.P(0)} ORDER BY {T}.{Q("Id")}";
         AddP(cmd, 0, (long)parentCount);
         await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        long lastParent = 0;
-        int parents = 0, children = 0;
+        var rows = new List<S1Row>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            long id = r.GetInt64(0);
-            if (id != lastParent)
+            rows.Add(Map(r));
+        }
+
+        long lastParent = 0;
+        int parents = 0;
+        foreach (S1Row row in rows)
+        {
+            if (row.Id != lastParent)
             {
                 parents++;
-                lastParent = id;
+                lastParent = row.Id;
             }
-            _ = r.GetString(6);
-            children++;
         }
-        return (parents, children);
+        return (parents, rows.Count);
     }
 
     /// <summary>宽表行物化——19 列全读（测量物化成本，不物化成实体会被优化掉）。</summary>
@@ -1127,17 +1134,30 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         await tran.CommitAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>事务内逐行整行 UPDATE 后显式回滚——测"撤销量"。2026-10-02 对等化：三臂同为整行
+    /// UPDATE（4 个 SET 列，与 PalORM UpdateAsync 的生成 SQL 同形）+ 显式 RollbackAsync；原实现
+    /// ADO/Dapper 只更新 Qty 一列、PalORM 抛异常触发回滚，1.95× 的差距混入了 SQL 形态与异常成本。
+    /// 天花板写法：单命令跨行复用，每行只写参数 Value。</summary>
     public async Task TxRollbackAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         await using DbCommand cmd = conn.CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandText = $"UPDATE {T} SET {Q("Qty")} = {Dataset.P(0)} WHERE {Q("Id")} = {Dataset.P(1)}";
+        cmd.CommandText = $"UPDATE {T} SET {Q("Name")} = {Dataset.P(0)}, {Q("Qty")} = {Dataset.P(1)}, "
+            + $"{Q("Price")} = {Dataset.P(2)}, {Q("Marker")} = {Dataset.P(3)} WHERE {Q("Id")} = {Dataset.P(4)}";
+        AddP(cmd, 0, default(string));
+        AddP(cmd, 1, 0);
+        AddP(cmd, 2, 0m);
+        AddP(cmd, 3, 0L);
+        AddP(cmd, 4, 0L);
+        DbParameter[] rowPool = SnapshotParameters(cmd);
         foreach (S1Row row in rows)
         {
-            cmd.Parameters.Clear();
-            AddP(cmd, 0, row.Qty + 1);
-            AddP(cmd, 1, row.Id);
+            SetP(rowPool, 0, row.Name);
+            SetP(rowPool, 1, row.Qty);
+            SetP(rowPool, 2, row.Price);
+            SetP(rowPool, 3, row.Marker);
+            SetP(rowPool, 4, row.Id);
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         await tran.RollbackAsync(ct).ConfigureAwait(false);
@@ -1728,13 +1748,15 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         await tran.CommitAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>事务内逐行整行 UPDATE 后显式回滚（2026-10-02 三臂对等化，见 ADO 臂注释）。</summary>
     public async Task TxRollbackAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         foreach (S1Row row in rows)
         {
             await conn.ExecuteAsync(
-                $"UPDATE {T} SET {C("Qty")}=@Qty WHERE {C("Id")}=@Id", row, tran).ConfigureAwait(false);
+                $"UPDATE {T} SET {C("Name")}=@Name, {C("Qty")}=@Qty, {C("Price")}=@Price, {C("Marker")}=@Marker WHERE {C("Id")}=@Id",
+                row, tran).ConfigureAwait(false);
         }
 
         await tran.RollbackAsync(ct).ConfigureAwait(false);
@@ -2345,26 +2367,20 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             _ => throw UnsupportedDialect(D)
         };
 
-    /// <summary>事务内更新 N 行后主动抛异常触发回滚——测的是"撤销量"而非"提交量"。</summary>
+    /// <summary>事务内逐行 UpdateAsync 后显式回滚——测的是"撤销量"而非"提交量"。
+    /// 2026-10-02 对等化：改用 BeginTransactionAsync（发布为会话活动事务，UpdateAsync 自动挂上）+
+    /// 显式 RollbackAsync，与 ADO/Dapper 的回滚触发方式一致；原实现靠抛异常让 WithTransaction 回滚，
+    /// 异常经多层 async 帧传播的成本只落在本臂。</summary>
     private static async Task TxRollbackCoreAsync<TProvider>(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
         DataSession<TProvider> session = Session<TProvider>(conn);
-        try
+        await using DbTransaction tran = await session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+        foreach (S1Row row in rows)
         {
-            await session.WithTransaction(async _ =>
-            {
-                foreach (S1Row row in rows)
-                {
-                    await session.UpdateAsync(row, ct).ConfigureAwait(false);
-                }
-                throw new InvalidOperationException("intentional rollback");
-            }, ct: ct).ConfigureAwait(false);
+            await session.UpdateAsync(row, ct).ConfigureAwait(false);
         }
-        catch (InvalidOperationException)
-        {
-            // 预期的回滚路径——WithTransaction 把 callback 异常转成 rollback 后重新抛出
-        }
+        await tran.RollbackAsync(ct).ConfigureAwait(false);
     }
 }

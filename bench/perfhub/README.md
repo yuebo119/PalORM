@@ -61,9 +61,9 @@ dotnet run --project bench/PalORM.PerfHub -- report
 | | `UpsertBatch` | PG/SQLite `ON CONFLICT excluded` · MySQL `ON DUPLICATE KEY VALUES(c)`；PalORM 走 `BulkMergeAsync` |
 | | `InsertReturningId` | 三臂各 1 RTT：PG/SQLite `RETURNING`；MySQL `INSERT;SELECT LAST_INSERT_ID()` 合并 |
 | **Query** | `KeysetPage` / `WhereIn` / `Count` | seek 分页（OFFSET 是反模式不测）；IN 显式占位符分批 |
-| | `WideQueryAll` | 19 列宽表全物化——物化器按列数伸缩（ADO/PalORM 按序号，Dapper 按列名） |
-| | `IncludeJoin` | 1:N 装配三策略对照（标注不同构）：ADO JOIN+手工 / Dapper multi-mapping / PalORM Include JOIN；带结果集等价断言 |
-| **Transaction** | `TxSingleInsert` / `TxTenInserts` / `TxHundredInserts` / `TxBulkInsert` / `TxRollback` | 命令复用重绑参数；批内走 loader/VALUES；回滚撤销量上限 500 |
+| | `WideQueryAll` | 19 列宽表全物化进列表并持有到读完——物化器按列数伸缩（ADO/PalORM 按序号，Dapper 按列名）；2026-10-02 起 ADO 臂与另两臂一样建列表（原逐行丢弃，存活集 GC 成本只落在两臂） |
+| | `IncludeJoin` | 1:N 装配三策略对照（标注不同构）：ADO JOIN+手工 / Dapper multi-mapping / PalORM Include JOIN；带结果集等价断言；2026-10-02 起 ADO 臂逐行物化父列实体（与 PalORM 产出同形，原只读两列不建实体） |
+| **Transaction** | `TxSingleInsert` / `TxTenInserts` / `TxHundredInserts` / `TxBulkInsert` / `TxRollback` | 命令复用重绑参数；批内走 loader/VALUES；回滚撤销量上限 500；`TxRollback` 2026-10-02 起三臂同为整行 UPDATE + 显式 RollbackAsync（原 ADO/Dapper 只更 1 列、PalORM 抛异常触发回滚） |
 | **Baseline** | `GenerateRows` | 不碰库，数据生成内存基线 |
 | **Concurrency** | `Concurrent_Mixed80_20` | 预热 1 s + 计时 2 s，池化连接每线程一条 |
 
