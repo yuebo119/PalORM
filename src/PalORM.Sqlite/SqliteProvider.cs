@@ -31,6 +31,7 @@ public sealed class SqliteProvider : IDbProvider
         SQLitePCL.Batteries_V2.Init();
         // C3：连接模式解析缓存在此初始化（不得用字段初始化器——见字段 doc 的形态约束）。
         ConnectionModeCache = new();
+        InitializedHandles = [];
     }
 
     /// <summary>Provider 名称:SQLite。</summary>
@@ -48,6 +49,21 @@ public sealed class SqliteProvider : IDbProvider
     private const int MaxConnectionModeCacheEntries = 64;
     private static System.Collections.Concurrent.ConcurrentDictionary<
         string, (bool IsInMemory, bool IsReadOnly)>? ConnectionModeCache;
+
+    /// <summary>已完整执行过初始化 PRAGMA 的原生句柄（键 = <see cref="SqliteConnection.Handle"/>）。
+    /// <para>Microsoft.Data.Sqlite 默认池化：连接归还后原生句柄留在池中，下次 Open 取回同一句柄，
+    /// 句柄上的连接级 PRAGMA 全部保留（探针实测五项设值经归还/复用读回不变）。整组 PRAGMA 每会话
+    /// 重跑是纯冗余——文件库 8.6µs / 3KB，占"每请求一会话"单键直查与手写 ADO 差距的八成以上。</para>
+    /// <para>弱键表：句柄被池释放后条目随 GC 消失；不池化（Pooling=False）时每次 Open 都是新句柄，
+    /// 自然每次完整初始化。形态约束同 <see cref="ConnectionModeCache"/>（ModuleInitializer 内赋值）。</para></summary>
+    private static ConditionalWeakTable<object, object>? InitializedHandles;
+
+    /// <summary>复用已初始化句柄时仍须每会话执行的 PRAGMA——外键约束是完整性约束而非调优项
+    /// （STD-CONC-008：每次连接开启），会话内被关掉也不得经池化句柄带入下一个会话。</summary>
+    private const string PragmaPerSession = "PRAGMA foreign_keys = ON";
+
+    /// <summary><see cref="InitializedHandles"/> 的值占位（只用键）。</summary>
+    private const string InitializedMarker = "initialized";
 
     /// <summary>SQL 方言标识:<see cref="SqlDialect.Sqlite"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.Sqlite;
@@ -135,10 +151,24 @@ public sealed class SqliteProvider : IDbProvider
     /// <c>PRAGMA page_size=16384</c>（批量/大行负载，须在库首次创建前生效——对既有库为静默
     /// no-op，改页大小需 VACUUM）；<c>PRAGMA mmap_size=1073741824</c>（读密集型提至 1GB）；
     /// <c>PRAGMA secure_delete=OFF</c>（删除密集负载消除删页覆写写放大——引擎默认 ON，
-    /// 关闭属安全取舍：已删内容不再清零，加密库上意味着 forensic 残留，请按威胁模型评估）。</para></summary>
+    /// 关闭属安全取舍：已删内容不再清零，加密库上意味着 forensic 残留，请按威胁模型评估）。</para>
+    /// <para><b>池化复用（2026-10-02）</b>：整组 PRAGMA 每个物理连接（池化原生句柄）只执行一次，
+    /// 复用已初始化句柄时只重设 <c>foreign_keys = ON</c>（文件库实测整组 8.6µs / 3KB，单条 1.0µs /
+    /// 520B）。会话内用原始 SQL 改过的调优 PRAGMA 会随句柄带入后续会话——需要每会话复位的设置请放进
+    /// <see cref="DbOptions.SessionSetupSql"/>：执行会话 SQL 前会话层先调用
+    /// <see cref="InvalidateConnectionInitialization"/>，该句柄下次被取用时重新完整初始化。</para></summary>
     public static async Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        object? handle = (connection as SqliteConnection)?.Handle;
+        if (handle is not null && InitializedHandles!.TryGetValue(handle, out _))
+        {
+            await using DbCommand perSession = connection.CreateCommand();
+            perSession.CommandText = PragmaPerSession;
+            await perSession.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
         // v5.0 阶段 3.5：检测 :memory: 数据库——文件 I/O 治理类 PRAGMA 仅对文件库有意义。
         // ITM-733(r20)：原用 ConnectionString.Contains(":memory:") 子串判定——DataSource 恰含该子串
         // 的真实文件库（Linux 合法文件名，如 /tmp/mem:memory:1.db）被误判为内存库，静默跳过
@@ -186,6 +216,17 @@ public sealed class SqliteProvider : IDbProvider
         // foreign_keys 与 cache_size 是纯连接态设置，只读下安全。
         command.CommandText = isInMemory || isReadOnly ? PragmaNarrow : PragmaFileDb;
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        // 只在整组成功后登记——中途失败的句柄下次仍走完整路径
+        if (handle is not null)
+            InitializedHandles!.AddOrUpdate(handle, InitializedMarker);
+    }
+
+    /// <summary>作废该连接原生句柄的"已完整初始化"登记——会话层在执行用户会话 SQL 之前调用
+    /// （会话 SQL 可改写连接级 PRAGMA）；该句柄下次被取用时重新执行整组 PRAGMA。</summary>
+    public static void InvalidateConnectionInitialization(DbConnection connection)
+    {
+        if ((connection as SqliteConnection)?.Handle is { } handle)
+            InitializedHandles!.Remove(handle);
     }
 
     /// <summary>用 PRAGMA table_info 查询列信息,列名位于结果集序号 1。

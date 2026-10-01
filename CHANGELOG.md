@@ -4,6 +4,10 @@
 
 ## [未发布]
 
+### ⚡ 提升空间实施轮（2026-10-02）
+
+- **SQLite 池化连接初始化去冗余**：Microsoft.Data.Sqlite 默认池化，连接归还后原生句柄留池、下次 Open 取回同一句柄，句柄上的连接级 PRAGMA 全部保留（探针实测）。原实现每次 `CreateAsync` 都重跑整组初始化 PRAGMA（文件库 10 条），现改为每个物理连接（句柄）只完整执行一次，复用已初始化句柄时只重设 `foreign_keys = ON`（完整性约束每会话保证，STD-CONC-008 不变）。新增 `IDbProvider.InvalidateConnectionInitialization`（static virtual，默认无操作）：会话层执行 `SessionSetupSql`/`ReadSessionSetupSql` 之前调用，SQLite 据此让该句柄下次被取用时重新完整初始化，会话定制不带入其他会话。**行为变化**：会话中途用原始 SQL 改过的调优 PRAGMA（cache_size 等）会随池化句柄带入后续会话；需每会话复位的设置请放进 `SessionSetupSql`。不池化（`Pooling=False`）与共享内存库（每次 Open 为新句柄）行为不变。实测（文件库 WAL，探针 `lifecycle` 5 轮交替）：`CreateAsync+DisposeAsync` 9.19µs/4688B → 1.80µs/2160B；每请求一会话的单键直查 `CreateAsync+GetAsync` 16.62µs/6408B → 7.69µs/3880B（对手写 ADO 2.84× → 1.37×）。新增 3 个锁定用例（复用保留调优项且重设外键 / 会话 SQL 作废登记 / 不池化每次完整初始化），三处变异各自转红已核实。
+
 ### 🩹 基准编排缺陷修复 + 形态复核全覆盖（2026-10-01，step13）
 
 - **修复：全量流程 dappersuite 步骤自 2026-09-29 起静默空跑**（B104 家族，与 FullPerf 的 BDN 步骤 2026-09-30 同类）：默认过滤串 `-f '*' --join` 的单引号在 `UseShellExecute=false` 的 ProcessStartInfo 下是字面量（无 shell 剥引号），BDN 收到带引号的过滤串匹配 0 个基准、打印清单后**退出码仍 0**，步骤假报 OK 且哨兵停在旧批。修复：过滤串去引号（`--filter * --join`）+ 失败守卫并入 `returned 0 benchmarks` 判据；同族引号缺陷一并清理（smoke 的两处 BDN filter）。

@@ -53,12 +53,23 @@ public interface IDbProvider
     static virtual bool IsTransient(Exception exception)
         => exception is DbException { IsTransient: true };
 
-    /// <summary>连接打开后的一次性初始化钩子（如 SQLite 的 PRAGMA 配置）。默认无操作。
+    /// <summary>连接打开后的初始化钩子（如 SQLite 的 PRAGMA 配置）。默认无操作。
     /// 主连接由 DataSession.CreateAsync 在连接打开后、会话可用前调用；
-    /// 读路由（ForRead）连接由 ConnectionLease.OpenOwnedAsync 在打开后调用——
-    /// 两类连接均经初始化，取消与超时保护对其生效。</summary>
+    /// 读路由连接与并行读作用域连接由会话在打开后调用——
+    /// 两类连接均经初始化，取消与超时保护对其生效。
+    /// <para><b>池化复用</b>：同一物理连接（驱动池化句柄）可被多个会话先后取用。Provider 可记住
+    /// "已完整初始化"的物理连接，复用时只重设必须每会话保证的项（SQLite：调优 PRAGMA 每物理连接
+    /// 一次，<c>foreign_keys</c> 每次重设）；作废时机见 <see cref="InvalidateConnectionInitialization"/>。</para></summary>
     static virtual Task InitializeConnectionAsync(DbConnection connection, CancellationToken ct)
         => Task.CompletedTask;
+
+    /// <summary>会话层即将在连接上执行用户会话 SQL（<see cref="DbOptions.SessionSetupSql"/> /
+    /// <see cref="DbOptions.ReadSessionSetupSql"/>）时调用：该物理连接的连接态随后可能被改写
+    /// （含部分执行后失败）。记住了"已完整初始化"判定的 Provider 应在此作废该判定，使该物理连接
+    /// 下次被取用时 <see cref="InitializeConnectionAsync"/> 走完整路径。默认无操作。</summary>
+    static virtual void InvalidateConnectionInitialization(DbConnection connection)
+    {
+    }
 
     /// <summary>判断异常是否为唯一约束冲突——调用方无需分别 catch 三驱动的专有异常
     /// （SqliteException 19 / MySqlException 1062 / PostgresException 23505，ITM-314）。默认 false。</summary>

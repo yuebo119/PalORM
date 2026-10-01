@@ -125,7 +125,11 @@ public sealed record DbOptions
     /// <para><b>作用域</b>：仅主连接（<see cref="DataSession{TProvider}.CreateAsync"/> 打开后）。
     /// 读副本连接请用 <see cref="ReadSessionSetupSql"/>。</para>
     /// <para><b>用户责任</b>：SQL 方言正确性由调用方保证。PalORM 不解析、不验证内容，
-    /// 原样提交给数据库执行。</para></summary>
+    /// 原样提交给数据库执行。</para>
+    /// <para><b>池化连接（2026-10-02）</b>：执行前会话层调用
+    /// <see cref="IDbProvider.InvalidateConnectionInitialization"/>——SQLite 据此让该物理连接下次被取用时
+    /// 重新执行整组初始化 PRAGMA，本会话的定制不会带入不设本项的会话。会话内改连接级设置且需每会话
+    /// 复位时应放在本项，而非会话中途的原始 SQL。</para></summary>
     public string? SessionSetupSql { get; init; }
 
     /// <summary>v5.0 阶段 5.2：读副本连接首次激活后执行的 SQL（一次性会话级配置）。
