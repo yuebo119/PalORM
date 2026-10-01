@@ -979,6 +979,12 @@ public partial class DataSession<TProvider>
     /// 批数增加反超收益）。非 MySQL 方言不用此值（PG ON CONFLICT/SQLite 维持上限）。</summary>
     private const int MySqlOdkuMaxRowsPerBatch = 1000;
 
+    /// <summary>PG ON CONFLICT 单批行数上限（2026-10-02）：时延对批宽不敏感，分配随批宽线性增长——
+    /// 参数池按"本调用最大批"建，5000 行批宽下 2000 行即 1 万个参数对象、2 万行 2.5 万个。
+    /// PerfHub UpsertBatch/PG 同批对照：产品（5000）对 ADO 地板（1000）时延 1.01×/1.02×、
+    /// 分配 4.31MB 对 2.79MB（2000 行）、19.77MB 对 12.41MB（2 万行）。</summary>
+    private const int PostgreSqlMaxRowsPerUpsertBatch = 1000;
+
     private async Task<long> BatchUpsertAsync<T>(
         DbTransaction transaction,
         List<T> entities,
@@ -995,11 +1001,14 @@ public partial class DataSession<TProvider>
         // 再叠加单批行数上限约束语句文本规模。
         // MySQL-9（2026-09-27）：MySQL ODKU 用 1000 行/批——探针二十实测（真库 20000 行，
         // 多轮）：1000 行比 5000 行快 1.13~1.22×（ODKU 服务端近线性但批内唯一键探测与
-        // 大文本解析仍有成本），SQL 文本从 199KB 降到 36KB（-82%）。PG/SQLite 未实测，
-        // 维持原上限（S2 单变量纪律：方言分开调）。
-        int maxRowsPerBatch = TProvider.Dialect == SqlDialect.MySql
-            ? Math.Min(SqlLimits.MaxRowsPerBatch, MySqlOdkuMaxRowsPerBatch)
-            : SqlLimits.MaxRowsPerBatch;
+        // 大文本解析仍有成本），SQL 文本从 199KB 降到 36KB（-82%）。SQLite 未实测，维持原上限。
+        // PG（2026-10-02）：1000 行/批，依据见 PostgreSqlMaxRowsPerUpsertBatch。
+        int maxRowsPerBatch = TProvider.Dialect switch
+        {
+            SqlDialect.MySql => Math.Min(SqlLimits.MaxRowsPerBatch, MySqlOdkuMaxRowsPerBatch),
+            SqlDialect.PostgreSql => Math.Min(SqlLimits.MaxRowsPerBatch, PostgreSqlMaxRowsPerUpsertBatch),
+            _ => SqlLimits.MaxRowsPerBatch,
+        };
         int maxParametersPerStatement = Math.Min(
             SqlLimits.MaxBindParametersFor(TProvider.Dialect),
             maxRowsPerBatch * columnCount);
