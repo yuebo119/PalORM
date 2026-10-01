@@ -28,13 +28,16 @@ public static class QueryBuilderExtensions
             builder._operationState.EnterReadOnly();
         // 缓存命中返回列表副本——List 本身隔离，但元素是共享实体实例（浅拷贝，ITM-308）：
         // 调用方修改命中实体会污染缓存与其他调用方。契约声明见 WithCache 文档。
-        // ADR-L：实际 key 经租户作用域前缀组装（跨租户命中结构性不可能）
-        if (builder._cacheKey is not null
-            && builder._queryCache.TryGet(EffectiveCacheKey(builder), out List<T>? cached) && cached is not null)
+        // ADR-L：实际 key 经租户作用域前缀组装（跨租户命中结构性不可能）。
+        // A8（2026-10-01 全 API 逐项轮）：key 单次组装贯穿 TryGet 与 Set——原实现未命中
+        // 路径（TryGet 一次 + Set 一次）在租户会话下每次查询拼两次前缀串。
+        string? effectiveCacheKey = builder._cacheKey is not null ? EffectiveCacheKey(builder) : null;
+        if (effectiveCacheKey is not null
+            && builder._queryCache.TryGet(effectiveCacheKey, out List<T>? cached) && cached is not null)
             return new List<T>(cached);
 
         return await ExecuteQueryAsync(
-            builder, ct, operationLease.Owner).ConfigureAwait(false);
+            builder, ct, operationLease.Owner, effectiveCacheKey).ConfigureAwait(false);
     }
 
     /// <summary>流式消费查询结果——每行经回调处理，<b>不物化列表</b>。
@@ -78,7 +81,8 @@ public static class QueryBuilderExtensions
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
-        Stopwatch? sw = needStopwatch ? Stopwatch.StartNew() : null;
+        // A7（2026-10-01 全 API 逐项轮）：时间戳替代 Stopwatch（每查询省 1 个 Stopwatch 分配）。
+        long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
         ResilienceExecutor resilience = builder._resilience;
@@ -105,7 +109,7 @@ public static class QueryBuilderExtensions
                 await action(builder._factory(reader), token).ConfigureAwait(false);
                 rowCount++;
             }
-            NotifyInterceptorsOnAfter(interceptors, context, sw, (int)rowCount);
+            NotifyInterceptorsOnAfter(interceptors, context, swStart, (int)rowCount);
             return rowCount;
         }
 
@@ -137,10 +141,9 @@ public static class QueryBuilderExtensions
         }
         finally
         {
-            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
             // ITM-797①（r23）：与 ExecuteQueryAsync 同型——作用域内的池连接用完归还
             // （作用域外归还器对主连接为空操作），否则作用域内每次 ForEachAsync 都
             // 新建连接不复用。记录的是最后一次尝试的连接（重试中间尝试由作用域退出兜底）。
@@ -156,7 +159,8 @@ public static class QueryBuilderExtensions
     private static async ValueTask<List<T>> ExecuteQueryAsync<T>(
         QueryBuilder<T> builder,
         CancellationToken ct,
-        object? operationOwner = null) where T : class, new()
+        object? operationOwner = null,
+        string? effectiveCacheKey = null) where T : class, new()
     {
         if (builder._selectColumns is not null)
             throw new NotSupportedException(
@@ -172,7 +176,8 @@ public static class QueryBuilderExtensions
         // 默认配置（无观测性 + 无拦截器）的热路径省一次 StartNew + Stop（~150ns）。
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
-        Stopwatch? sw = needStopwatch ? Stopwatch.StartNew() : null;
+        // A7（2026-10-01 全 API 逐项轮）：时间戳替代 Stopwatch（每查询省 1 个 Stopwatch 分配）。
+        long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         // v5.4 弹性接入（评审 P1-a）：WithRetry/WithCircuitBreaker 此前对内置管线无效。
         // 只读 SELECT 管线现经会话弹性策略执行。接入条件：
@@ -227,11 +232,15 @@ public static class QueryBuilderExtensions
                 ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
                 : new List<T>(16);
             while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
-            NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
+            NotifyInterceptorsOnAfter(interceptors, context, swStart, list.Count);
             // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
-            // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）
-            if (builder._cacheKey is not null)
-                builder._queryCache.Set(EffectiveCacheKey(builder), new List<T>(list), builder._cacheTtl);
+            // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）。
+            // A8（2026-10-01）：key 由 ToListAsync 单次组装传入（未命中路径避免 Set 侧
+            // 二次拼接）；其余调用点（First/Single 截断族与 ToPage 已清 _cacheKey）
+            // 经下方兜底保持原语义（非 null 时才拼）。
+            effectiveCacheKey ??= builder._cacheKey is not null ? EffectiveCacheKey(builder) : null;
+            if (effectiveCacheKey is not null)
+                builder._queryCache.Set(effectiveCacheKey, new List<T>(list), builder._cacheTtl);
             return list;
         }
 
@@ -262,10 +271,9 @@ public static class QueryBuilderExtensions
         }
         finally
         {
-            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
             // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
             // 记录的是最后一次尝试的连接——重试路径上中间尝试的连接由作用域退出时统一释放（有界：
             // 每操作至多 MaxRetries+1 条），换取不改动内核主体缩进的低风险接线。
@@ -300,14 +308,17 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>触发所有拦截器的 OnAfter——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。
-    /// Stopwatch 由调用方传入，仅当拦截器非空时才会读取 Elapsed（调用方需保证拦截器非空时 sw 也非 null）。
-    /// R3（v5.6.0）改 internal：DataSession.ExecuteAsync 接入。</summary>
+    /// 起始时间戳由调用方传入，仅当拦截器非空时才会经 GetElapsedTime 现算 Elapsed
+    /// （调用方需保证拦截器非空时 swStart 也非 null）。
+    /// R3（v5.6.0）改 internal：DataSession.ExecuteAsync（原始 DDL/DML）接入。
+    /// A7（2026-10-01 全 API 逐项轮）：参数由 <c>Stopwatch?</c> 改 <c>long?</c> 起始时间戳——
+    /// 消每查询的 Stopwatch 对象分配；Elapsed 语义（单调差值）逐位等价。</summary>
     internal static void NotifyInterceptorsOnAfter(
-        List<IQueryInterceptor> interceptors, QueryContext context, Stopwatch? sw, int count)
+        List<IQueryInterceptor> interceptors, QueryContext context, long? swStart, int count)
     {
         if (interceptors.Count == 0) return;
-        // 调用方契约：interceptors.Count > 0 时 sw 必非 null（needStopwatch = observed || interceptors.Count > 0）。
-        TimeSpan elapsed = sw!.Elapsed;
+        // 调用方契约：interceptors.Count > 0 时 swStart 必非 null（needStopwatch = observed || interceptors.Count > 0）。
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(swStart!.Value);
         foreach (IQueryInterceptor interceptor in interceptors)
             interceptor.OnAfter(context, elapsed, count);
     }
@@ -568,7 +579,8 @@ public static class QueryBuilderExtensions
         string sql = builder.BuildUpdateSql();
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         // v3.1：Stopwatch 延迟创建——与 ExecuteQueryAsync 同构（拦截器 OnAfter 需要 Elapsed）。
-        Stopwatch? sw = observed || interceptors.Count > 0 ? Stopwatch.StartNew() : null;
+        // A7（2026-10-01 全 API 逐项轮）：同改时间戳形态。
+        long? swStart = observed || interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
         IReadOnlyList<DbParameter> updateParameters = builder.GetUpdateParameters();
@@ -586,7 +598,7 @@ public static class QueryBuilderExtensions
             NotifyInterceptorsOnBefore(interceptors, context);
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            NotifyInterceptorsOnAfter(interceptors, context, sw, affectedRows);
+            NotifyInterceptorsOnAfter(interceptors, context, swStart, affectedRows);
             outcome = "success";
             return affectedRows;
         }
@@ -600,10 +612,9 @@ public static class QueryBuilderExtensions
         }
         finally
         {
-            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
         }
     }
 

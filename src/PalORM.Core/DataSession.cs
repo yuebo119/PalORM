@@ -905,8 +905,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             token => ExecuteRowsCoreAsync(command, token).AsTask(), ct);
     }
 
-    private static async ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
-        => await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    /// <summary>A2（2026-10-01 全 API 逐项轮）：`new ValueTask&lt;int&gt;(task)` 直包替代
+    /// async 方法——写路径直通分支（每操作必经）省一个异步状态机；ConfigureAwait
+    /// 由消费端覆盖（ValueTask 包装 Task 的 awaiter 即 Task 的 awaiter）。</summary>
+    private static ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
+        => new(command.ExecuteNonQueryAsync(ct));
 
 
     private async ValueTask<T> ExecuteReadPipelineAsync<T>(
@@ -918,9 +921,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return await executor.ExecuteAsync(attemptCore, ct).ConfigureAwait(false);
     }
 
-    /// <summary>将复合格式项映射为参数名，参数值保持原始对象。</summary>
+    /// <summary>将复合格式项映射为参数名，参数值保持原始对象。
+    /// <para>A1（2026-10-01 全 API 逐项轮）：改走形状缓存（baseIndex 恒 0）——与 QueryBuilder
+    /// 路径（<see cref="QueryBuilder{T}.FormatFormattableSql"/>）同源。格式化是
+    /// （Format 文本, baseIndex, 参数个数）的纯函数；直查的 Format 是编译期常量或工厂定串，
+    /// 值相等键可稳定命中——命中时复用同一 SQL 文本实例并省去复合格式扫描
+    /// （FormatCached 注释口径：约 -40B/次 + 省扫描）。校验（裸 @pN 拒绝等）在首次
+    /// 未命中构建时执行，纯函数性保证命中项已通过同一校验。</para></summary>
     private static string FormatSqlWithParameters(FormattableString sql)
-        => FormattableSqlFormatter.Format(sql);
+        => FormattableSqlFormatter.FormatCached(sql.Format, 0, sql.ArgumentCount);
 
     /// <summary>FormattableString → DbParameter 绑定。</summary>
     private static void BindFormattableParameters(DbCommand cmd, FormattableString sql)

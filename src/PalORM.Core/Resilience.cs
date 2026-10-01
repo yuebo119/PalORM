@@ -105,8 +105,21 @@ public sealed class ResilienceExecutor
                 CancellationTokenSource? timeout = null;
                 try
                 {
-                    timeout = CancellationTokenSource.CreateLinkedTokenSource(attemptScope);
-                    timeout.CancelAfter(_timeout);
+                    // A3（2026-10-01 全 API 逐项轮）：CTS 单构化——attemptScope 不可取消时
+                    // 用单构 CTS 替代 linked（省 registration 结构与两跳取消链）；无限超时
+                    // 且不可取消时完全不建 CTS（本就不存在超时事件）。下游 catch 判据均为
+                    // `timeout is not null`，null 形态下内部超时分支不可达，语义等价。
+                    if (_timeout == Timeout.InfiniteTimeSpan && !attemptScope.CanBeCanceled)
+                    {
+                        T resultNoTimeout = await operation(attemptScope).ConfigureAwait(false);
+                        _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
+                        return resultNoTimeout;
+                    }
+                    timeout = attemptScope.CanBeCanceled
+                        ? CancellationTokenSource.CreateLinkedTokenSource(attemptScope)
+                        : new CancellationTokenSource();
+                    if (_timeout != Timeout.InfiniteTimeSpan)
+                        timeout.CancelAfter(_timeout);
                     T result = await operation(timeout.Token).ConfigureAwait(false);
                     _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
                     return result;
@@ -214,10 +227,17 @@ public sealed class ResilienceExecutor
         Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // A3（2026-10-01 全 API 逐项轮）：与 ExecuteAsync 同款——ct 不可取消时单构 CTS；
+        // 无限超时且不可取消时完全不建 CTS（无超时事件可发生）。
+        if (_timeout == Timeout.InfiniteTimeSpan && !ct.CanBeCanceled)
+            return await operation(ct).ConfigureAwait(false);
+        CancellationTokenSource timeout = ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : new CancellationTokenSource();
         try
         {
-            timeout.CancelAfter(_timeout);
+            if (_timeout != Timeout.InfiniteTimeSpan)
+                timeout.CancelAfter(_timeout);
             return await operation(timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

@@ -108,9 +108,17 @@ internal sealed class CircuitBreaker
     /// （正常探针由数据库命令超时约束，远早于此完成）。</summary>
     private static readonly TimeSpan HalfOpenSlotStaleAfter = TimeSpan.FromMinutes(5);
 
-    /// <summary>记录成功——探针成功且 generation 匹配时关闭熔断。</summary>
+    /// <summary>记录成功——探针成功且 generation 匹配时关闭熔断。
+    /// <para><b>A4（2026-10-01 全 API 逐项轮）无状态快路径</b>：非探针、闸未开、失败计数为零时，
+    /// 锁内五个复位写（count/flag/openUntil/message）全部是"写回现值"，可直接返回——
+    /// 默认配置（阈值 5）下每次成功操作省一次无竞争 Monitor 与 5 次字段写。读序为
+    /// flag（volatile）后 count；Process 级共享执行器的并发交错最多让一次成功清零晚一拍
+    /// （失败计数短暂多留 1，属精度差异非正确性问题——下一成功操作读到非零即进锁清零）。</para></summary>
     internal void RecordSuccess(bool isHalfOpenProbe, long generation)
     {
+        if (!isHalfOpenProbe && !_isOpenFlag && Volatile.Read(ref _failureCount) == 0)
+            return;
+
         lock (_lock)
         {
             if (isHalfOpenProbe)
