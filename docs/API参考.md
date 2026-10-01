@@ -254,7 +254,8 @@
 | `SupportsReturningClause` | static abstract | PG/SQLite true / MySQL false |
 | `CurrentTimestampExpression` | static abstract | `CURRENT_TIMESTAMP` |
 | `IsTransient(exception)` | static virtual | 瞬时故障判定 |
-| `InitializeConnectionAsync(conn, ct)` | static virtual | SQLite PRAGMA FK+WAL |
+| `InitializeConnectionAsync(conn, ct)` | static virtual | SQLite PRAGMA FK+WAL（整组每物理连接一次，`foreign_keys` 每会话重设） |
+| `InvalidateConnectionInitialization(conn)` | static virtual | 会话 SQL 执行前作废物理连接的已初始化登记（默认无操作） |
 | `IsUniqueViolation(exception)` | static virtual | 唯一约束错误码 |
 | `IsDuplicateSchemaObject(exception)` | static virtual | 架构对象已存在 |
 | `BulkInsertAsync(...)` | static virtual | Provider 原生批量 |

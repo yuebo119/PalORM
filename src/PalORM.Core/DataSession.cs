@@ -100,6 +100,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             : async (conn, ct) =>
             {
                 await TProvider.InitializeConnectionAsync(conn, ct).ConfigureAwait(false);
+                // 同 CreateAsync 的 SessionSetupSql：先作废初始化登记再执行读会话 SQL
+                TProvider.InvalidateConnectionInitialization(conn);
                 await using DbCommand cmd = conn.CreateCommand();
                 // ITM-624：读 _options 字段而非捕获构造期 options——WithTimeout/WithRetry 经
                 // Volatile.Write 替换 _options 后，读连接初始化与主连接的超时口径保持一致。
@@ -142,6 +144,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 // 多条 SQL 用分号分隔，一次 ExecuteNonQueryAsync 执行（三方言均支持多语句）。
                 if (!string.IsNullOrWhiteSpace(options.SessionSetupSql))
                 {
+                    // 先作废再执行：会话 SQL 可改写连接态（含部分执行后失败），该物理连接
+                    // 下次被池化复用时须重新完整初始化，不得把本会话的定制带给下一个会话
+                    TProvider.InvalidateConnectionInitialization(connection);
                     await using DbCommand setupCmd = connection.CreateCommand();
                     setupCmd.CommandTimeout = options.CommandTimeoutSeconds;
                     setupCmd.CommandText = options.SessionSetupSql;
