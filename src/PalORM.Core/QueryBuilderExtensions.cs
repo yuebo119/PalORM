@@ -188,8 +188,12 @@ public static class QueryBuilderExtensions
         //      · 调用点把单次尝试内核转成委托 1 次 = 56 B（内核是捕获 builder 的 async 局部函数，
         //        目标实例每次不同，无法缓存委托）
         //      · 执行器机械（熔断进出 + 异步状态机 ≈48 B），量级最小且与重试/熔断语义耦合
-        //    后两项合计 104 B 是唯一可剥的部分，须把只读内核从 async 局部函数改成 struct 内核 +
-        //    泛型约束（顺带消掉两分支共有的 ~250 B display class）；实测耗时无变化，未做。
+        //    【step10 PoC 实测证伪（2026-10-01），裁决不做，勿重开】：struct 内核 + 泛型约束
+        //    （IResilienceKernel + 显式类型参数）方案全量实施后 BDN 实测 GetByKey 仅 -61B
+        //    （即 56B 委托一项；QueryAll -495B/1.5MB 噪声级），远低于 200B 放弃线——
+        //    原估算中"~250 B display class"是误读：该盒属外层 async 方法的状态机
+        //    （跨 await 持有管线局部变量），内核 struct 化不影响它；要消它须手写 awaiter
+        //    重构外层方法（T5 级深水区），104B 级收益不构成理由。耗时无变化（同前评估）。
         //    直通配置下三项都不发生，但同时也失去超时包装：慢命令抛驱动自身异常，
         //    不再是带 PalORM.InfrastructureTimeout 标记的 TimeoutException。
         // 写入路径（ExecuteNonQueryAsync/Bulk/StoredProc/原始 SQL 家族）维持直连：
