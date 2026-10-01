@@ -230,11 +230,13 @@ internal sealed class SessionOperationState
                         : "The active transaction belongs to another asynchronous flow.");
             }
 
-            _transactionOwner = new object();
+            // O4（2026-10-01）三处收口：① owner 复用 this（v4.6 操作租约同款先例，
+            // AsyncLocal 短路语义同源）；② 完成信号 TCS 惰性化——唯一等待方 DisposeAsync
+            // 在锁内按需创建（与 _activeOperation/_readLeasesDrained 同模式），正常路径
+            // 每事务省 1 个 TCS；③ 资源列表惰性化——无 RegisterTransactionResource 的
+            // 事务（绝大多数）不再付 List 分配，_transactionCompleting 单独承担收口标志。
+            _transactionOwner = this;
             _currentTransactionOwner.Value = _transactionOwner;
-            _activeTransaction = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            _transactionResources = [];
             _transactionCompleting = false;
             return _transactionOwner;
         }
@@ -258,12 +260,12 @@ internal sealed class SessionOperationState
                 throw new InvalidOperationException(
                     "The active transaction belongs to another asynchronous flow.");
             }
-            if (_transactionCompleting || _transactionResources is null)
+            if (_transactionCompleting)
             {
                 throw new InvalidOperationException(
                     "The active transaction flow is completing.");
             }
-            _transactionResources.Add(resource);
+            (_transactionResources ??= []).Add(resource);
         }
     }
 
@@ -499,7 +501,9 @@ internal sealed class SessionOperationState
             ObjectDisposedException.ThrowIf(_state != 0, this);
             // v4.5：_isActive 替代 _activeOperationOwner is not null
             // ITM-798（r23）：UseTransaction 同受在飞读租约门禁（与 Enter/事务流入口对称）
-            if (_isActive || _activeTransaction is not null || _activeReadLeases > 0)
+            // O4：WithTransaction 流活跃的真源是 _transactionOwner（TCS 已惰性化，
+            // 原 "_activeTransaction is not null" 代理判定在正常路径恒 false 会放进飞行事务）。
+            if (_isActive || _transactionOwner is not null || _activeReadLeases > 0)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation or transaction flow.");
@@ -579,9 +583,11 @@ internal sealed class SessionOperationState
                 && ReferenceEquals(
                     _transactionOperationOwner, _activeOperationOwner);
             // R4/T1（v5.6.0）：已释放事务（IsTransactionAlive=false，含 Npgsql 取值抛 ODE 的
-            // 形态）不触发"先完成事务"警告——会话释放不能因调用方先行释放事务而崩溃
+            // 形态）不触发"先完成事务"警告——会话释放不能因调用方先行释放事务而崩溃。
+            // O4：WithTransaction 流活跃的判定改用真源 _transactionOwner（TCS 惰性化后
+            // 原 _activeTransaction 代理在流开始后、首个等待者出现前为 null）。
             if (IsTransactionAlive(_transaction)
-                && _activeTransaction is null
+                && _transactionOwner is null
                 && !operationOwnsTransaction)
             {
                 throw new InvalidOperationException(
@@ -589,10 +595,17 @@ internal sealed class SessionOperationState
             }
 
             _state = 1;
-            // v4.5：TCS 延迟创建 -- 如果操作仍活动，创建 TCS 供等待
+            // v4.5：TCS 延迟创建 -- 如果操作仍活动，创建 TCS 并等待 Exit 唤醒
             if (_isActive && _activeOperation is null)
             {
                 _activeOperation = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            // O4：事务完成信号同款惰性创建——有在飞事务流（owner 非 null）且首个等待者
+            // 出现时才建，ExitTransactionFlow 完成并置 null。
+            if (_transactionOwner is not null && _activeTransaction is null)
+            {
+                _activeTransaction = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
             }
             // ITM-863（r23）：在飞读租约纳入等待面——归零时由 ExitReadOnly 完成。

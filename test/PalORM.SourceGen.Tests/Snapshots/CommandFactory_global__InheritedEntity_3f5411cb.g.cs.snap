@@ -26,6 +26,14 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
         parameters[paramOffset + 2].Value = (object)entity.CreatedAt;
     }
 
+    /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>
+    internal static void CopyWriteRow(global::PalORM.IBinaryRowSink sink, global::InheritedEntity entity)
+    {
+        sink.WriteString(0, entity.Name);
+        sink.WriteString(1, entity.CreatedBy);
+        sink.WriteDateTimeOffset(2, entity.CreatedAt);
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::InheritedEntity entity)
     {

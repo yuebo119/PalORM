@@ -230,7 +230,8 @@ internal static class PalORM_RegistryInitializer
                     (parameters, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindUpdateValues(parameters, (global::ReservedWordEntity)obj, off),
                     insertReturningKeyOnly: false,
                     insertNoReturning: true,
-                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindUpsertValues(parameters, (global::ReservedWordEntity)obj, off)),
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__ReservedWordEntity_c143a9c9.BindUpsertValues(parameters, (global::ReservedWordEntity)obj, off),
+                    copyWriteRow: (sink, obj) => CommandFactory_global__ReservedWordEntity_c143a9c9.CopyWriteRow(sink, (global::ReservedWordEntity)obj)),
                 new global::PalORM.CrudColumns(
                     new[] { "Id", "select" },
                     new[] { "Id", "select" },
@@ -296,7 +297,8 @@ internal static class PalORM_RegistryInitializer
                     (parameters, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpdateValues(parameters, (global::EnumStorageEntity)obj, off),
                     insertReturningKeyOnly: true,
                     insertNoReturning: false,
-                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpsertValues(parameters, (global::EnumStorageEntity)obj, off)),
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__EnumStorageEntity_425d6d2b.BindUpsertValues(parameters, (global::EnumStorageEntity)obj, off),
+                    copyWriteRow: (sink, obj) => CommandFactory_global__EnumStorageEntity_425d6d2b.CopyWriteRow(sink, (global::EnumStorageEntity)obj)),
                 new global::PalORM.CrudColumns(
                     new[] { "status", "level", "wide_flag", "fallback_status" },
                     new[] { "Id", "status", "level", "wide_flag", "fallback_status" },
@@ -366,7 +368,8 @@ internal static class PalORM_RegistryInitializer
                     (parameters, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindUpdateValues(parameters, (global::InheritedEntity)obj, off),
                     insertReturningKeyOnly: true,
                     insertNoReturning: false,
-                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindUpsertValues(parameters, (global::InheritedEntity)obj, off)),
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__InheritedEntity_3f5411cb.BindUpsertValues(parameters, (global::InheritedEntity)obj, off),
+                    copyWriteRow: (sink, obj) => CommandFactory_global__InheritedEntity_3f5411cb.CopyWriteRow(sink, (global::InheritedEntity)obj)),
                 new global::PalORM.CrudColumns(
                     new[] { "name", "created_by", "created_at" },
                     new[] { "Id", "name", "created_by", "created_at" },
@@ -435,7 +438,8 @@ internal static class PalORM_RegistryInitializer
                     (parameters, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpdateValues(parameters, (global::FkParentEntity)obj, off),
                     insertReturningKeyOnly: true,
                     insertNoReturning: false,
-                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpsertValues(parameters, (global::FkParentEntity)obj, off)),
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__FkParentEntity_9c81ae12.BindUpsertValues(parameters, (global::FkParentEntity)obj, off),
+                    copyWriteRow: (sink, obj) => CommandFactory_global__FkParentEntity_9c81ae12.CopyWriteRow(sink, (global::FkParentEntity)obj)),
                 new global::PalORM.CrudColumns(
                     new[] { "name" },
                     new[] { "Id", "name" },
@@ -502,7 +506,8 @@ internal static class PalORM_RegistryInitializer
                     (parameters, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpdateValues(parameters, (global::FkChildEntity)obj, off),
                     insertReturningKeyOnly: true,
                     insertNoReturning: false,
-                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpsertValues(parameters, (global::FkChildEntity)obj, off)),
+                    bindUpsertValues: (parameters, obj, off) => CommandFactory_global__FkChildEntity_9e8ce632.BindUpsertValues(parameters, (global::FkChildEntity)obj, off),
+                    copyWriteRow: (sink, obj) => CommandFactory_global__FkChildEntity_9e8ce632.CopyWriteRow(sink, (global::FkChildEntity)obj)),
                 new global::PalORM.CrudColumns(
                     new[] { "parent_id", "restrict_ref", "setnull_ref" },
                     new[] { "Id", "parent_id", "restrict_ref", "setnull_ref" },
