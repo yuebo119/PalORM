@@ -26,6 +26,14 @@ internal static class CommandFactory_global__FkChildEntity_9e8ce632
         parameters[paramOffset + 2].Value = entity.SetNullRef is null ? global::System.DBNull.Value : (object)entity.SetNullRef;
     }
 
+    /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>
+    internal static void CopyWriteRow(global::PalORM.IBinaryRowSink sink, global::FkChildEntity entity)
+    {
+        sink.WriteInt64(0, entity.ParentId);
+        sink.WriteInt64(1, entity.RestrictRef);
+        if (entity.SetNullRef is null) { sink.WriteNull(2); } else { sink.WriteInt64(2, entity.SetNullRef.Value); }
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::FkChildEntity entity)
     {

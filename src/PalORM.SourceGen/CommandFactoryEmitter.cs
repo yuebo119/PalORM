@@ -50,6 +50,18 @@ internal static class CommandFactoryEmitter
         GenerateBindValuesBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // O1（2026-10-01）：二进制 COPY 定型行写入器——全部可插入列的 provider 类型都在
+        // IBinaryRowSink 支持面内才发射（全有或全无）；含未支持类型的实体不发射，
+        // 消费方（PostgreSqlProvider.BulkInsertAsync）读到 null 回退参数池路径（零行为变化）。
+        if (SupportsCopyRowWrite(model))
+        {
+            sb.AppendLine("    /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>");
+            sb.AppendLine($"    internal static void CopyWriteRow(global::PalORM.IBinaryRowSink sink, {model.EntityTypeName} entity)");
+            sb.AppendLine("    {");
+            GenerateCopyWriteRowBody(model, sb);
+            sb.AppendLine("    }");
+            sb.AppendLine();
+        }
         sb.AppendLine($"    /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>");
         sb.AppendLine($"    internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity)");
         sb.AppendLine("    {");
@@ -595,4 +607,103 @@ internal static class CommandFactoryEmitter
     private static bool IsObjectOwnedJson(ColumnModel column)
         => column.IsOwnedJson
             && column.ClrTypeName is not "string" and not "global::System.String";
+
+    /// <summary>O1（2026-10-01）：COPY 定型写入的支持面判定——实体全部可插入列的
+    /// provider 类型都能映射到 <c>IBinaryRowSink</c> 的定型方法时为 true。
+    /// 支持面 = 12 个安全核心类型（long/int/short/decimal/double/float/bool/Guid/DateTime/
+    /// DateTimeOffset/string/byte[]）；枚举列按存储策略转换后的 provider 类型（int/long/string）
+    /// 判定，OwnedJson 列按序列化后的 string 判定。未列出的类型（byte/sbyte/ushort/uint/ulong/
+    /// DateOnly/TimeOnly 等）不入支持面——对应实体整体回退参数池路径，行为与 v6.2.0 一致。</summary>
+    internal static bool SupportsCopyRowWrite(TableModel model)
+    {
+        foreach (var col in model.Columns.AsSpan())
+        {
+            if (col.IsInsertable && SinkMethodFor(col) is null) return false;
+        }
+        return true;
+    }
+
+    /// <summary>O1：provider 类型 → IBinaryRowSink 定型方法名；不支持返回 null。
+    /// 类型真源与 <see cref="DbTypeFor"/> 同矩阵同形态（短名与全限定名双形态匹配，
+    /// 可空后缀 "?" 先剥离——值类型可空列走生成代码 null 守卫 + .Value）。</summary>
+    private static string? SinkMethodFor(ColumnModel col)
+    {
+        string t = col.ProviderClrTypeName;
+        if (t.EndsWith("?", StringComparison.Ordinal)) t = t.Substring(0, t.Length - 1);
+        return t switch
+        {
+            "long" or "global::System.Int64" => "WriteInt64",
+            "int" or "global::System.Int32" => "WriteInt32",
+            "short" or "global::System.Int16" => "WriteInt16",
+            "decimal" or "global::System.Decimal" => "WriteDecimal",
+            "double" or "global::System.Double" => "WriteDouble",
+            "float" or "global::System.Single" => "WriteSingle",
+            "bool" or "global::System.Boolean" => "WriteBoolean",
+            "global::System.Guid" => "WriteGuid",
+            "global::System.DateTime" => "WriteDateTime",
+            "global::System.DateTimeOffset" => "WriteDateTimeOffset",
+            "string" or "global::System.String" => "WriteString",
+            "byte[]" or "global::System.Byte[]" => "WriteBytes",
+            _ => null,
+        };
+    }
+
+    /// <summary>O1：普通值类型列（无转换器/枚举/OwnedJson 且 provider 类型非 string/byte[]）
+    /// 的可空属性表达式类型是 Nullable&lt;T&gt;，非空分支需 .Value 解包；
+    /// 枚举（转换表达式已解包）、转换器（输出即 provider 非空类型）、OwnedJson（序列化即
+    /// string）与引用类型列不走 .Value。</summary>
+    private static bool NeedsValueUnwrap(ColumnModel col)
+        => col.ConverterTypeName is null
+            && col.EnumStorage == EnumStorageKind.None
+            && !IsObjectOwnedJson(col)
+            && SinkMethodFor(col) is not ("WriteString" or "WriteBytes");
+
+    /// <summary>O1：COPY 行写入的表达式构造——与 <see cref="GetParameterValueExpression"/>
+    /// 同源（枚举/OwnedJson/Converter 三分支同一转换），仅去掉 (object) 装箱外壳与
+    /// DBNull 三元守卫（守卫由生成代码的 if/else 显式分流到 WriteNull）。</summary>
+    private static string GetSinkValueExpression(ColumnModel col)
+    {
+        if (col.EnumStorage != EnumStorageKind.None)
+        {
+            string prop = $"entity.{col.EscapedPropertyName}";
+            return col.EnumStorage switch
+            {
+                EnumStorageKind.AsInt32 => col.IsNullable
+                    ? $"(int)({col.EnumClrTypeName}){prop}" : $"(int){prop}",
+                EnumStorageKind.AsInt64 => col.IsNullable
+                    ? $"(long)({col.EnumClrTypeName}){prop}" : $"(long){prop}",
+                _ => col.IsNullable
+                    ? $"(({col.EnumClrTypeName}){prop}).ToString()" : $"{prop}.ToString()",
+            };
+        }
+        if (IsObjectOwnedJson(col))
+            return $"global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})";
+        return col.ConverterTypeName is null
+            ? $"entity.{col.EscapedPropertyName}"
+            : $"_conv_{col.PropertyName}.ToProvider(entity.{col.EscapedPropertyName})";
+    }
+
+    /// <summary>O1：CopyWriteRow 主体——列序 = IsInsertable 过滤后的声明序，与
+    /// GenerateBindValuesBody 同谓词（列序错位的后果是错误数据写入而非编译失败，
+    /// 与 GEN-012 同级契约，故消费同一谓词单一真源）。</summary>
+    private static void GenerateCopyWriteRowBody(TableModel model, StringBuilder sb)
+    {
+        int ordinal = 0;
+        foreach (var col in model.Columns.AsSpan())
+        {
+            if (!col.IsInsertable) continue;
+            string method = SinkMethodFor(col)!;
+            string expr = GetSinkValueExpression(col);
+            if (col.IsNullable)
+            {
+                string valueArg = NeedsValueUnwrap(col) ? $"{expr}.Value" : expr;
+                sb.AppendLine($"        if (entity.{col.EscapedPropertyName} is null) {{ sink.WriteNull({ordinal}); }} else {{ sink.{method}({ordinal}, {valueArg}); }}");
+            }
+            else
+            {
+                sb.AppendLine($"        sink.{method}({ordinal}, {expr});");
+            }
+            ordinal++;
+        }
+    }
 }

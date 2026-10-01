@@ -29,6 +29,15 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
         parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString();
     }
 
+    /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>
+    internal static void CopyWriteRow(global::PalORM.IBinaryRowSink sink, global::EnumStorageEntity entity)
+    {
+        sink.WriteString(0, entity.Status.ToString());
+        sink.WriteInt32(1, (int)entity.Level);
+        sink.WriteInt64(2, (long)entity.WideFlag);
+        if (entity.FallbackStatus is null) { sink.WriteNull(3); } else { sink.WriteString(3, ((global::SnapshotOrderStatus)entity.FallbackStatus).ToString()); }
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::EnumStorageEntity entity)
     {

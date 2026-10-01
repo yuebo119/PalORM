@@ -332,11 +332,30 @@ public sealed class PostgreSqlProvider : IDbProvider
                 // 零创建），与 MultiValueBulkInsert 的 v4.6 池同一机制，无需改生成器。
                 // 旧版生成器模型程序集 BindInsertValues 为 null 时回退逐行 binder。
                 Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
+                // O1（2026-10-01）：定型 COPY 行写入器——生成器仅在全部可插入列的 provider
+                // 类型可直写（IBinaryRowSink 支持面）时发射；null 回退参数池路径（零行为变化）。
+                // 行循环走定型直写后，每行不再付值类型装箱（S1Row 形态 104 B/行）。
+                Action<IBinaryRowSink, object>? copyWriter = metadata.CopyWriteRow;
                 // 池的引用数组：参数对象仍留在 rowCommand.Parameters 内——
                 // SampleColumnTypes 从集合读每列 NpgsqlDbType（PG-4），脱离集合会丢失类型来源。
                 DbParameter[]? pool = null;
                 // PG-4：每列 NpgsqlDbType 的调用级缓存（首行绑定后采样一次）
                 NpgsqlDbType[]? columnTypes = null;
+                // O1：copyWriter 路径把"首行建池 + 类型采样"提升到批循环外——类型真源仍是
+                // 参数 DbType 采样（PG-4 单一来源不变），行循环只走定型直写。
+                if (copyWriter is not null && valuesBinder is not null)
+                {
+                    rowCommand.Parameters.Clear();
+                    binder(rowCommand, entities[0], 0);
+                    if (rowCommand.Parameters.Count != columnCount)
+                        throw new InvalidOperationException(
+                            $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
+                            $"{rowCommand.Parameters.Count} parameters.");
+                    pool = new DbParameter[columnCount];
+                    for (int column = 0; column < columnCount; column++)
+                        pool[column] = rowCommand.Parameters[column];
+                    columnTypes = SampleColumnTypes(rowCommand, columnCount);
+                }
                 for (int start = 0; start < entities.Count; start += batchSize)
                 {
                     int end = Math.Min(start + batchSize, entities.Count);
@@ -355,8 +374,24 @@ public sealed class PostgreSqlProvider : IDbProvider
                         Exception? importerException = null;
                         try
                         {
+                            // O1：每 COPY 批一个定型行槽（importer + 采样类型数组）；仅
+                            // copyWriter 与采样结果同时就绪时启用。
+                            PgCopyRowSink? sink =
+                                copyWriter is not null && columnTypes is not null
+                                    ? new PgCopyRowSink(importer, columnTypes)
+                                    : null;
                             for (int index = start; index < end; index++)
                             {
+                                if (sink is not null)
+                                {
+                                    // 行边界取消检查 + StartRow 收进同步助手（与 WriteRow 同形，
+                                    // CA1849 只在异步上下文触发）；copyWriter 的非空性由 sink 的
+                                    // 创建条件保证（与 columnTypes! 同款流分析豁免）
+                                    StartCopyRow(importer, commandCt);
+                                    copyWriter!(sink, entities[index]);
+                                    total++;
+                                    continue;
+                                }
                                 if (valuesBinder is not null && pool is not null)
                                 {
                                     valuesBinder(pool, entities[index], 0);
@@ -594,6 +629,93 @@ public sealed class PostgreSqlProvider : IDbProvider
         for (int column = 0; column < columnCount; column++)
             columnTypes[column] = ((NpgsqlParameter)rowCommand.Parameters[column]).NpgsqlDbType;
         return columnTypes;
+    }
+
+    /// <summary>O1：定型直写路径的行起始——同步形态与 <see cref="WriteRow"/> 同形
+    /// （PROV-002：CPU 密集段用同步 API；CA1849 只在异步上下文触发），行边界取消检查
+    /// 保持 ITM-643/869 语义（每行一次轮询）。</summary>
+    private static void StartCopyRow(NpgsqlBinaryImporter importer, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        importer.StartRow();
+    }
+
+    /// <summary>O1（2026-10-01）：Binary COPY 定型行槽——把 <see cref="IBinaryRowSink"/> 的
+    /// 定型直调转接为 <see cref="NpgsqlBinaryImporter.Write{T}(T, NpgsqlDbType)"/> 泛型重载，
+    /// 值类型单元格不再经 DbParameter.Value 装箱中转（探针账目：S1Row 形态 104 B/行装箱，
+    /// 2000 行差额 208KB 与 PerfHub 实测 BulkInsert 分配差精确吻合）。
+    /// <para>线类型真源不变：构造时传入按列采样的 NpgsqlDbType 数组（PG-4 单一来源），
+    /// 每次写入下标取类型——与参数池路径读 NpgsqlParameter.NpgsqlDbType 同值同语义。</para></summary>
+    private sealed class PgCopyRowSink(NpgsqlBinaryImporter importer, NpgsqlDbType[] columnTypes) : IBinaryRowSink
+    {
+        private readonly NpgsqlBinaryImporter _importer = importer;
+        private readonly NpgsqlDbType[] _columnTypes = columnTypes;
+
+        /// <inheritdoc />
+        public void WriteNull(int ordinal)
+            => _importer.Write((object?)null, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteInt64(int ordinal, long value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteInt32(int ordinal, int value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteInt16(int ordinal, short value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteDecimal(int ordinal, decimal value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteDouble(int ordinal, double value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteSingle(int ordinal, float value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteBoolean(int ordinal, bool value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteGuid(int ordinal, Guid value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteDateTime(int ordinal, DateTime value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteDateTimeOffset(int ordinal, DateTimeOffset value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        public void WriteString(int ordinal, string? value)
+        {
+            if (value is null)
+            {
+                _importer.Write((object?)null, _columnTypes[ordinal]);
+                return;
+            }
+            _importer.Write(value, _columnTypes[ordinal]);
+        }
+
+        /// <inheritdoc />
+        public void WriteBytes(int ordinal, byte[]? value)
+        {
+            if (value is null)
+            {
+                _importer.Write((object?)null, _columnTypes[ordinal]);
+                return;
+            }
+            _importer.Write(value, _columnTypes[ordinal]);
+        }
     }
 
     /// <summary>R2/T2：自管事务的 COMMIT 纳入 <paramref name="commandTimeoutSeconds"/> 超时窗口。
