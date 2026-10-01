@@ -1,5 +1,5 @@
+using System.Buffers;
 using System.Globalization;
-using System.Text;
 
 namespace PalORM.PostgreSql;
 
@@ -26,18 +26,38 @@ public static class VectorText
             throw new ArgumentException(
                 $"向量维度 {values.Length} 与列声明 vector({expectedDim}) 不符。", nameof(values));
 
-        var sb = new StringBuilder(values.Length * 8).Append('[');
-        for (int i = 0; i < values.Length; i++)
+        // C12（2026-10-01 全 API 逐项轮）：消除每分量 ToString 中间串（1536 维原约 1538 个
+        // 分配）——ArrayPool 字符缓冲一次成型 + 精确长度 new string。float "R" 最长 15 字符
+        // （-1.2345678E-12 形态），按 16/分量预算（含逗号余量）。
+        char[] buffer = ArrayPool<char>.Shared.Rent(2 + (values.Length * 16));
+        try
         {
-            if (i > 0) sb.Append(',');
-            sb.Append(values[i].ToString("R", CultureInfo.InvariantCulture));
+            Span<char> span = buffer;
+            int pos = 0;
+            span[pos++] = '[';
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (i > 0) span[pos++] = ',';
+                if (!values[i].TryFormat(span[pos..], out int written, "R", CultureInfo.InvariantCulture))
+                    throw new InvalidOperationException(
+                        "float.TryFormat failed within the reserved span buffer (unreachable for float 'R').");
+                pos += written;
+            }
+            span[pos++] = ']';
+            return new string(buffer, 0, pos);
         }
-        return sb.Append(']').ToString();
+        finally
+        {
+            ArrayPool<char>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>解析 pgvector 文本字面量为 float 数组（<c>::text</c> 回读列的配套解析）。
     /// 非法格式（缺括号/非数值/空分量）返回 <c>false</c>，维度不匹配同理——由调用方决定
-    /// 抛错或降级。</summary>
+    /// 抛错或降级。
+    /// <para>C12（2026-10-01 全 API 逐项轮）：span 扫描替代 <c>Split(',')</c>——原实现
+    /// 1 个子串 + string[] + 每分量 1 个子串（1536 维约 1538 个字符串分配）；现除最终
+    /// float[] 外零分配。分段与空分量语义与 Split 版逐位一致（空段 TryParse 失败）。</para></summary>
     public static bool TryParse(string text, int expectedDim, out float[] values)
     {
         values = [];
@@ -45,16 +65,22 @@ public static class VectorText
         if (expectedDim <= 0 || text.Length < 2 || text[0] != '[' || text[^1] != ']')
             return false;
 
-        string[] parts = text[1..^1].Split(',');
-        if (parts.Length != expectedDim)
-            return false;
-
+        ReadOnlySpan<char> body = text.AsSpan(1, text.Length - 2);
         var result = new float[expectedDim];
-        for (int i = 0; i < parts.Length; i++)
+        int index = 0;
+        int segmentStart = 0;
+        for (int i = 0; i <= body.Length; i++)
         {
-            if (!float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out result[i]))
+            if (i < body.Length && body[i] != ',') continue;
+            if (index >= expectedDim)
                 return false;
+            if (!float.TryParse(body[segmentStart..i], NumberStyles.Float, CultureInfo.InvariantCulture, out result[index]))
+                return false;
+            index++;
+            segmentStart = i + 1;
         }
+        if (index != expectedDim)
+            return false;
         values = result;
         return true;
     }
