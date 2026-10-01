@@ -19,14 +19,19 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
     internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::EnumStorageEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 0].Value = (object)entity.Status.ToString();
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 1].Value = (object)(int)entity.Level;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.Int64;
         parameters[paramOffset + 2].Value = (object)(long)entity.WideFlag;
-        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString();
+    }
+
+    /// <summary>B21：建池后一次性写 INSERT 参数 DbType（配合 BindInsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitInsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 1].DbType = global::System.Data.DbType.Int32;
+        parameters[paramOffset + 2].DbType = global::System.Data.DbType.Int64;
+        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>

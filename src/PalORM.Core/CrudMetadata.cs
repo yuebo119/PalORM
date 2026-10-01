@@ -37,6 +37,11 @@ public readonly struct CrudBindings
     /// IBinaryRowSink 支持面内时由生成器发射；旧版生成器或含未支持类型时为 null，
     /// 消费方回退参数池路径（零行为变化）。</summary>
     public readonly Action<IBinaryRowSink, object>? CopyWriteRow;
+    /// <summary>B21（2026-10-01）：INSERT 池 DbType 一次性初始化委托（消费方 = MultiValueBulkInsert
+    /// 自建池路径，建池后调用一次）。新旧形态互斥：非 null 时 BindInsertValues 只写 Value
+    /// （DbType 已由本委托建立，池存续期内恒定）；null（旧生成器程序集）时 BindInsertValues
+    /// 保持"每行写 DbType+Value"的旧形态。</summary>
+    public readonly Action<DbParameter[], int>? InitInsertParameters;
 
     /// <summary>构造 CRUD 委托聚合。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -54,7 +59,8 @@ public readonly struct CrudBindings
         bool insertReturningKeyOnly = false,
         bool insertNoReturning = false,
         Action<DbParameter[], object, int>? bindUpsertValues = null,
-        Action<IBinaryRowSink, object>? copyWriteRow = null)
+        Action<IBinaryRowSink, object>? copyWriteRow = null,
+        Action<DbParameter[], int>? initInsertParameters = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -66,6 +72,7 @@ public readonly struct CrudBindings
         InsertReturningKeyOnly = insertReturningKeyOnly;
         InsertNoReturning = insertNoReturning;
         CopyWriteRow = copyWriteRow;
+        InitInsertParameters = initInsertParameters;
     }
 }
 
@@ -130,6 +137,8 @@ public readonly struct CrudMetadata
     public readonly Action<DbParameter[], object, int>? BindUpsertValues;
     /// <summary>O1（2026-10-01）：二进制 COPY 定型行写入委托（判定条件与消费路径见 CrudBindings.CopyWriteRow）。</summary>
     public readonly Action<IBinaryRowSink, object>? CopyWriteRow;
+    /// <summary>B21（2026-10-01）：INSERT 池 DbType 一次性初始化委托（判定条件与消费路径见 CrudBindings.InitInsertParameters）。</summary>
+    public readonly Action<DbParameter[], int>? InitInsertParameters;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
@@ -162,6 +171,7 @@ public readonly struct CrudMetadata
         InsertReturningKeyOnly = bindings.InsertReturningKeyOnly;
         InsertNoReturning = bindings.InsertNoReturning;
         CopyWriteRow = bindings.CopyWriteRow;
+        InitInsertParameters = bindings.InitInsertParameters;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
@@ -188,7 +198,7 @@ public readonly struct CrudMetadata
     internal CrudMetadata Copy()
         => new(Sqls,
             new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues,
-                InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow),
+                InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }

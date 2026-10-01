@@ -104,8 +104,8 @@ public static class MultiValueBulkInsert
             // v4.1：BindInsertToBatch 直接写入 batchCmd，不再需要 rowCommand scratch
             total = await ExecuteBatchesAsync(
                 conn, tran, entities, effectiveBatchSize, columnCount,
-                quotedTable, quotedColumns, binder, valuesBinder, commandTimeoutSeconds,
-                typeof(T).Name, ct).ConfigureAwait(false);
+                quotedTable, quotedColumns, binder, valuesBinder, metadata.InitInsertParameters,
+                commandTimeoutSeconds, typeof(T).Name, ct).ConfigureAwait(false);
             if (ownsTransaction)
             {
                 commitAttempted = true;
@@ -187,6 +187,7 @@ public static class MultiValueBulkInsert
         string quotedTable, string quotedColumns,
         Action<DbCommand, object, int> binder,
         Action<DbParameter[], object, int>? valuesBinder,
+        Action<DbParameter[], int>? initInsertParameters,
         int commandTimeoutSeconds, string typeName, CancellationToken ct) where T : class, new()
     {
         long total = 0;
@@ -244,6 +245,10 @@ public static class MultiValueBulkInsert
                             batchCmd.Parameters.Add(p);
                             paramPool[i] = p;
                         }
+                        // B21（2026-10-01 全 API 逐项轮）：池 DbType 一次性初始化——新生成器
+                        // 形态下 BindInsertValues 只写 Value（DbType 在此建立，池存续期内恒定）；
+                        // null（旧生成器程序集）时其 BindInsertValues 自写 DbType 的旧形态。
+                        initInsertParameters?.Invoke(paramPool, 0);
                     }
                     // B12（2026-10-01 全 API 逐项轮）：末批复用池前缀——集合裁剪到本批需要数
                     // （池前缀位序恒与 @pN 对齐，池容量 ≥ 本批需要数；ITM-785：短批恒为末次
