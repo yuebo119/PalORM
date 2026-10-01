@@ -1,4 +1,5 @@
-﻿using System.Data.Common;
+﻿using System.Data;
+using System.Data.Common;
 using Microsoft.Data.Sqlite;
 
 namespace PalORM.Core.Tests;
@@ -112,6 +113,39 @@ public sealed class BulkUpdateBatchReuseTests
 
         await Assert.That(cmd.Parameters.Count).IsEqualTo(RowParamCount);
         await Assert.That(cmd.Parameters[0]).IsSameReferenceAs(first);
+    }
+
+    [Test]
+    public async Task BindIntoBatchCommand_CopiesRowParamsPlusTenantSlot()
+    {
+        // B8 修复 + A′ 轮的 Core 契约锁定：DbBatch 每行命令必须持有池内全部参数
+        // （行参数 + 池尾租户槽）。原实现只拷 paramsPerRow 个，租户实体每行命令缺
+        // @__tenant0（PG 42703 / MySQL 未定义参数，真库 BulkUpdateTenantRoutingTests 暴露）；
+        // 本用例以方言夹具在 Core 层锁定同一契约（真库行为覆盖在 Integration，双位防护）。
+        const int ParamsPerRow = 3;
+        DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
+            ParamsPerRow, hasTenantFilter: true, "@__tenant0", 42L,
+            static (name, value) => new SqliteParameter(name, value));
+        // 模拟 valuesBinder 写入的行值（行参数前缀）
+        pool[0].Value = 7L;
+        pool[1].Value = "x";
+        pool[2].Value = 1L;
+
+        using var batchCommand = new FakeBatchCommand();
+        DataSession<BatchedDialectProvider>.BindIntoBatchCommand(
+            batchCommand, pool,
+            static (_, _, _) => { },   // 行值已就位，本用例只测拷贝面
+            new TbReuseEntity { Id = 1 });
+
+        await Assert.That(batchCommand.Parameters.Count).IsEqualTo(ParamsPerRow + 1);
+        for (int i = 0; i < ParamsPerRow; i++)
+        {
+            await Assert.That(batchCommand.Parameters[i].ParameterName)
+                .IsEqualTo(ParameterNameCache.GetName(i));
+            await Assert.That(batchCommand.Parameters[i].Value).IsEqualTo(pool[i].Value);
+        }
+        await Assert.That(batchCommand.Parameters[ParamsPerRow].ParameterName).IsEqualTo("@__tenant0");
+        await Assert.That(batchCommand.Parameters[ParamsPerRow].Value).IsEqualTo(42L);
     }
 
     // ─── 池构造契约（与 CreateParameterPool 同一实现） ────────────
@@ -323,4 +357,22 @@ internal sealed partial class TbReuseTenantEntity
 
     [Column("qty")]
     public long Qty { get; set; }
+}
+
+/// <summary>B8/A′ 轮：<see cref="DbBatchCommand"/> 的最小测试替身——参数集合复用
+/// <see cref="SqliteCommand"/> 的 <c>SqliteParameterCollection</c>（同一 DbParameterCollection
+/// 实现，免自建集合类）；仅承载参数拷贝契约的断言，不参与执行。
+/// <para>驱动侧无公开的 DbBatchCommand 构造路径（Microsoft.Data.Sqlite 不覆写 CreateBatch，
+/// 见 SessionBatch.TryCreateBatch 注释），故 Core 层契约只能以此替身锁定；
+/// PG/MySQL 真 DbBatch 的行为覆盖在 Integration 真库档（BulkUpdateTenantRoutingTests）。</para></summary>
+internal sealed class FakeBatchCommand : DbBatchCommand, IDisposable
+{
+    private readonly SqliteCommand _parameterHost = new();
+
+    public override string CommandText { get; set; } = "";
+    public override CommandType CommandType { get; set; } = CommandType.Text;
+    public override int RecordsAffected => 0;
+    protected override DbParameterCollection DbParameterCollection => _parameterHost.Parameters;
+    public override DbParameter CreateParameter() => new SqliteParameter();
+    public void Dispose() => _parameterHost.Dispose();
 }

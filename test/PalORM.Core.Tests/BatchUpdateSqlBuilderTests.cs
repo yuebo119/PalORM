@@ -78,6 +78,30 @@ public sealed class BatchUpdateSqlBuilderTests
     }
 
     [Test]
+    public async Task BuildJoinValuesRowForm_NonMySqlWithTenant_AppendsAndNeverSecondWhere()
+    {
+        // A′（2026-10-01 充分论证轮）回归格：form=JoinValuesRow 在非 MySQL 方言被忽略
+        // （实际形态为 FromValues/CaseWhen，均自带 WHERE），租户谓词必须按 AND 追加。
+        // B8 二修初版按 form 判落位（不含方言），此组合会生成双 WHERE——契约内输入
+        // （Build_NonMySqlDialects_IgnoreJoinValuesRowForm 锁定"忽略 form"语义），
+        // 当时因该测试只用 hasTenantFilter: false 而成为零覆盖格；A′ 起分派与追加共用
+        // usesJoinValuesRow 单一布尔，本用例锁定该格。
+        string pg = BatchUpdateSqlBuilder.Build(
+            SqlDialect.PostgreSql, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: true, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+        string sqlite = BatchUpdateSqlBuilder.Build(
+            SqlDialect.Sqlite, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: true, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+
+        await Assert.That(pg).Contains("AND \"tenant_id\" = @__tenant0");
+        await Assert.That(pg).DoesNotContain("WHERE tgt.\"tenant_id\"");   // 双 WHERE 即此处
+        await Assert.That(sqlite).Contains("AND \"tenant_id\" = @__tenant0");
+        await Assert.That(sqlite).DoesNotContain("WHERE tgt");             // SQLite 形态无 tgt 别名
+    }
+
+    [Test]
     public async Task BuildPostgreSql_ValueRowsFollowRowMajorOrder()
     {
         string sql = BatchUpdateSqlBuilder.Build(
