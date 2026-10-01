@@ -208,16 +208,22 @@ public partial class DataSession<TProvider>
         if (entities.Count == 0) return 0;
 
         // v5.6.0 自动路由（L1）：满足全部条件时走单语句批量（远程 N 行 N 次 RTT → 1 次，
-        // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / 软删 / 租户 / SQLite）。
+        // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / 软删 / SQLite）。
         // 每个条件不自动路由的理由：
         //   乐观锁（IncrementVersion）→ 批量无法表达"每行 version 匹配"；
-        //   软删/租户 → 逐条路径追加默认过滤，批量路径的过滤追加需另做（当前不支持）；
+        //   软删 → 软删实体的批量语义待厘清（当前保守排除；两路径都不附加 deleted_at 条件，
+        //          排除理由与租户不同源，改动需专测）；
         //   SQLite → CASE WHEN 在 SQLite 实测慢 6.4×（BulkUpdateBatchAsync 已有同判）。
+        // B8（2026-10-01 全 API 逐项轮）：放开租户过滤排除——两路径租户语义已对齐：
+        // 逐条池化路径（ExecuteBulkUpdatePooledAsync）与单语句内核（ExecuteBulkUpdateBatchesAsync）
+        // 都追加 UPDATE ... AND tenant_id = @__tenant0（池尾租户参数）；由真库用例
+        // BulkUpdateTenantRoutingTests（三方言：跨租户行零触碰）锁定，放开为纯性能改善
+        //（租户实体 N 次往返 → 1 次）。附带修复：逐条池化的 DbBatch 分支原先漏拷池尾租户
+        // 参数（PG 42703 / MySQL 未定义参数），本轮由该用例暴露并修复（BindIntoBatchCommand）。
         if (TProvider.Dialect != SqlDialect.Sqlite
             && entities.Count > 1
             && routeMetadata.IncrementVersion is null
-            && !IsSoftDeletable<T>()
-            && !HasTenantFilter<T>())
+            && !IsSoftDeletable<T>())
         {
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
             // ITM-878（r23）：TryGetValue + 族内统一异常（裸索引器在部分注册的病态片段下
@@ -442,7 +448,7 @@ public partial class DataSession<TProvider>
             {
                 var batchCommand = batch.CreateBatchCommand();
                 batchCommand.CommandText = input.UpdateSql;
-                BindIntoBatchCommand(batchCommand, input.Pool, input.ValuesBinder, input.Entities[i], input.ParamsPerRow);
+                BindIntoBatchCommand(batchCommand, input.Pool, input.ValuesBinder, input.Entities[i]);
                 batch.BatchCommands.Add(batchCommand);
             }
 
@@ -488,10 +494,17 @@ public partial class DataSession<TProvider>
     /// 池对象不能被多个命令集合共同持有——值会互相覆盖）。</summary>
     private static void BindIntoBatchCommand<T>(
         DbBatchCommand batchCommand, DbParameter[] pool,
-        Action<DbParameter[], object, int> valuesBinder, T entity, int paramsPerRow)
+        Action<DbParameter[], object, int> valuesBinder, T entity)
     {
         valuesBinder(pool, entity!, 0);
-        for (int c = 0; c < paramsPerRow; c++)
+        // B8 轮修复（2026-10-01）：拷贝范围 = 池全长（paramsPerRow + 租户槽）——
+        // 池布局为「行参数 × paramsPerRow, 租户参数?」（CreateParameterArray 尾部追加），
+        // 原实现只拷前 paramsPerRow 个，租户实体的 UPDATE 后缀引用 @__tenant0 而
+        // DbBatch 命令缺该参数：PG 42703 响亮失败、MySQL 拒绝未定义参数（两方言均经
+        // 真库 Integration BulkUpdateTenantRoutingTests 实测锁定）。非租户实体池长
+        // 恒等于 paramsPerRow，本修复对其为零变化。
+        int totalParams = pool.Length;
+        for (int c = 0; c < totalParams; c++)
         {
             DbParameter target = batchCommand.CreateParameter();
             DbParameter source = pool[c];
