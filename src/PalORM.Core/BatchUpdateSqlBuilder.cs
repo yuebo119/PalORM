@@ -68,12 +68,19 @@ internal static class BatchUpdateSqlBuilder
 
         int setColCount = setColumns.Length;
         int paramsPerRow = setColCount + 1;  // pk + set cols
+        // A′（2026-10-01 充分论证轮）：形态判定单一真源——分派与租户谓词落位共用同一布尔。
+        // 原两处条件不一致（分派用 `MySQL && form`，追加只用 `form`）：非 MySQL 方言忽略
+        // form（既定契约，见 Build_NonMySqlDialects_IgnoreJoinValuesRowForm），届时实际形态
+        // 有 WHERE 而追加按 form 误判为"无 WHERE 形态"，会生成双 WHERE（B8 修复引入的矩阵
+        // 回归，当前调用面不可达但属契约内输入；本布尔使二者结构性同源，任何一方扩展自动同步）。
+        bool usesJoinValuesRow =
+            dialect == SqlDialect.MySql && form == BatchUpdateForm.JoinValuesRow;
         var sb = new ValueStringBuilder(stackalloc char[512]);
         try
         {
             if (dialect == SqlDialect.PostgreSql)
                 BuildPostgreSql(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
-            else if (dialect == SqlDialect.MySql && form == BatchUpdateForm.JoinValuesRow)
+            else if (usesJoinValuesRow)
                 BuildJoinValuesRow(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
             else
                 BuildCaseWhen(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow, setColCount);
@@ -87,8 +94,9 @@ internal static class BatchUpdateSqlBuilder
                 // （连接条件在 ON，语句以 SET 结尾）——原盲追加 " AND ..." 会落进 SET 表达式
                 //（tgt.label = v.c1 AND tenant_id = @__tenant0），MySQL 对字符串列求布尔触发
                 // "Truncated incorrect DOUBLE value"（真库 Integration 实测，租户实体 + MySQL
-                // 8.0.19+ 路径此前后无覆盖）。正确落位：追加完整 WHERE 并以 tgt 限定列名。
-                if (form == BatchUpdateForm.JoinValuesRow)
+                // 8.0.19+ 路径此前后无覆盖）。A′：以 usesJoinValuesRow 为唯一判据落位——
+                // 该形态补完整 WHERE 并以 tgt 限定列名，其余形态（皆有 WHERE）追加 AND。
+                if (usesJoinValuesRow)
                 {
                     sb.Append(" WHERE tgt.");
                     sb.Append(q);

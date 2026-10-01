@@ -489,10 +489,15 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>把池内一行参数值拷进 DbBatchCommand——valuesBinder 先把值写进池对象
-    /// （零 CreateParameter 的取值路径照旧），再逐列显式新建命令自己的参数并继承
-    /// ParameterName/DbType/Value（DbBatchCommand.Parameters 是每命令独立集合，
-    /// 池对象不能被多个命令集合共同持有——值会互相覆盖）。</summary>
-    private static void BindIntoBatchCommand<T>(
+    /// （零 CreateParameter 的取值路径照旧），再把池内全部参数（行参数 + 池尾会话级槽）
+    /// 显式拷进命令自己的参数集合（DbBatchCommand.Parameters 是每命令独立集合，
+    /// 池对象不能被多个命令集合共同持有——值会互相覆盖）。
+    /// <para><b>internal for testing</b>：本方法是 DbBatch 路径的参数拷贝契约点
+    /// （拷贝范围 = 池全长，见 B8 修复注释）；PG/MySQL 真库端到端在
+    /// Integration.Tests 的 BulkUpdateTenantRoutingTests，本地 Core 单测
+    /// （BulkUpdateBatchReuseTests.BindIntoBatchCommand_CopiesRowParamsPlusTenantSlot）
+    /// 以方言夹具锁定同一契约（与 AttachParameters 的 internal 先例同口径）。</para></summary>
+    internal static void BindIntoBatchCommand<T>(
         DbBatchCommand batchCommand, DbParameter[] pool,
         Action<DbParameter[], object, int> valuesBinder, T entity)
     {
