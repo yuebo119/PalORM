@@ -44,6 +44,9 @@ public sealed partial class DataSession<TProvider>
 
         // v5.6：读连接提供者从实例字段取——会话级复用（含 ReadSessionSetupSql 与 Provider
         // 初始化钩子），且方法组不在此处新建闭包。
+        // A9：读查询命令复用槽——惰性创建（并行读作用域内并发 From<T>() 的竞态只会各建
+        // 一个空槽：引用写原子、败者被 GC；槽在该作用域内禁用晋升、永无命令可漏）。
+        _querySlot ??= new ReusableQuerySlot();
         var builder = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(
@@ -53,7 +56,7 @@ public sealed partial class DataSession<TProvider>
                 _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
             tableName, columnNames, _readConnProvider,
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
-            _readConnReturner));
+            _readConnReturner, _querySlot));
 
         // ITM-866（r23）：租户值与过滤开关单次快照贯穿——原实现三次读 live 字段
         //（过滤值捕获 63 行 / 作用域求值 73 行 / TenantScopeCached 91 行），并发

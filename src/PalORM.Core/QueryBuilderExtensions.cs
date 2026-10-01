@@ -215,33 +215,48 @@ public static class QueryBuilderExtensions
         {
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
             lastReadConnection = connection;
-            await using DbCommand cmd = connection.CreateCommand();
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            cmd.Transaction = boundTransaction;
-            AddParameters(cmd, parameters);
-            // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
-            NotifyInterceptorsOnBefore(interceptors, context);
-            await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
-            // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
-            // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
-            // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源）。封顶后由均摊 O(1) 扩容兜底。
-            List<T> list = builder._take.HasValue
-                ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
-                : new List<T>(16);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
-            NotifyInterceptorsOnAfter(interceptors, context, swStart, list.Count);
-            // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
-            // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）。
-            // A8（2026-10-01）：key 由 ToListAsync 单次组装传入（未命中路径避免 Set 侧
-            // 二次拼接）；其余调用点（First/Single 截断族与 ToPage 已清 _cacheKey）
-            // 经下方兜底保持原语义（非 null 时才拼）。
-            effectiveCacheKey ??= builder._cacheKey is not null ? EffectiveCacheKey(builder) : null;
-            if (effectiveCacheKey is not null)
-                builder._queryCache.Set(effectiveCacheKey, new List<T>(list), builder._cacheTtl);
-            return list;
+            // A9（2026-10-01 全 API 逐项轮）：读查询命令的惰性晋升复用——命中返回会话所有的
+            // 晋升命令（ownsCommand=false：执行后清参数集合归还，参数对象归当前 builder 的
+            // 子句、不 Dispose）；未晋升走新建 + 用后释放（现状形态）。守卫见
+            // QueryBuilder.TryAcquireReusableSelectCommand（连接一致/并行读禁用/晋升阈值 3）。
+            DbCommand? reusable = builder.TryAcquireReusableSelectCommand(connection, sql);
+            bool ownsCommand = reusable is null;
+            DbCommand cmd = reusable ?? connection.CreateCommand();
+            try
+            {
+                cmd.CommandText = sql;
+                cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+                cmd.Transaction = boundTransaction;
+                AddParameters(cmd, parameters);
+                // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
+                NotifyInterceptorsOnBefore(interceptors, context);
+                await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+                await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
+                // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
+                // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
+                // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源）。封顶后由均摊 O(1) 扩容兜底。
+                List<T> list = builder._take.HasValue
+                    ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
+                    : new List<T>(16);
+                while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
+                NotifyInterceptorsOnAfter(interceptors, context, swStart, list.Count);
+                // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
+                // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）。
+                // A8（2026-10-01）：key 由 ToListAsync 单次组装传入（未命中路径避免 Set 侧
+                // 二次拼接）；其余调用点（First/Single 截断族与 ToPage 已清 _cacheKey）
+                // 经下方兜底保持原语义（非 null 时才拼）。
+                effectiveCacheKey ??= builder._cacheKey is not null ? EffectiveCacheKey(builder) : null;
+                if (effectiveCacheKey is not null)
+                    builder._queryCache.Set(effectiveCacheKey, new List<T>(list), builder._cacheTtl);
+                return list;
+            }
+            finally
+            {
+                // A9：新建命令用后释放；复用命令清参数集合归还槽（参数对象归 builder，值由下次执行重写）
+                if (ownsCommand) await cmd.DisposeAsync().ConfigureAwait(false);
+                else cmd.Parameters.Clear();
+            }
         }
 
         try
