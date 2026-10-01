@@ -44,10 +44,10 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         if (where is not null) BindFormattableParameters(cmd, where);
         BindDefaultFilterParameters<T>(cmd);
-        // v5.4 弹性接入：COUNT 为无事务只读路径时经会话弹性策略
-        object? scalar = await ExecuteReadPipelineAsync(
-            async token => await cmd.ExecuteScalarAsync(token).ConfigureAwait(false), ct)
-            .ConfigureAwait(false);
+        // v5.4 弹性接入：COUNT 为无事务只读路径时经会话弹性策略。
+        // A2（2026-10-01 全 API 逐项轮）：直调重载消调用点 async lambda 的闭包与状态机
+        // （与 P2-1 ExecuteWriteRowsAsync 同型口径）。
+        object? scalar = await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
         // ITM-637 同型面：COUNT null 静默 0 掩蔽驱动异常——与 ToPageAsync 同口径显式报错
         if (scalar is null)
             throw new InvalidOperationException(
@@ -139,10 +139,29 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, original);
         BindDefaultFilterParameters<T>(cmd);
-        return await ExecuteReadPipelineAsync(
-            async token => await cmd.ExecuteScalarAsync(token).ConfigureAwait(false), ct)
-            .ConfigureAwait(false);
+        // A2（2026-10-01 全 API 逐项轮）：直调重载覆盖 Sum/Max/Min/Avg 四个聚合入口
+        // （CountAsync 同点改）。
+        return await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
     }
+
+    /// <summary>A2（2026-10-01 全 API 逐项轮）：只读标量直调重载——省调用点 async lambda
+    /// 的闭包与状态机（与 P2-1 <see cref="ExecuteWriteRowsAsync"/> 同型；该注释实测
+    /// 包装层约 208B/次）。语义与委托版逐位一致：直通（策略直通或事务内）直接执行并返回；
+    /// 非直通分支才包执行器（重试/熔断与超时包装要求，此时包装成本本就少见且必要）。
+    /// <para>Core 内核用 <c>new ValueTask&lt;T&gt;(task)</c> 直包而非 async 方法——连状态机
+    /// 一并省去；ConfigureAwait 由消费端 <c>await ... .ConfigureAwait(false)</c> 覆盖
+    /// （ValueTask 包装 Task 的 awaiter 即 Task 的 awaiter）。</para></summary>
+    private ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, CancellationToken ct)
+    {
+        ResilienceExecutor executor = Volatile.Read(ref _resilience);
+        if (executor.IsPassThrough || GetActiveTransaction() is not null)
+            return ExecuteScalarCoreAsync(command, ct);
+        return executor.ExecuteAsync(
+            token => ExecuteScalarCoreAsync(command, token).AsTask(), ct);
+    }
+
+    private static ValueTask<object?> ExecuteScalarCoreAsync(DbCommand command, CancellationToken ct)
+        => new(command.ExecuteScalarAsync(ct));
 
     /// <summary>标量值到 CLR 类型的归一转换——解包可空泛型后统一走 Convert.ChangeType。
     /// ITM-533：InvariantCulture 避免线程区域性影响数值/日期解析。
@@ -326,15 +345,16 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
-        // R3（v5.6.0）：拦截器非空才物化参数表与计时——与 SELECT 管线"空列表跳过"同口径
+        // R3（v5.6.0）：拦截器非空才物化参数表与计时——与 SELECT 管线"空列表跳过"同口径。
+        // A7（2026-10-01 全 API 逐项轮）：计时改起始时间戳（与 QueryBuilderExtensions 管线同型）。
         QueryContext context = default;
-        System.Diagnostics.Stopwatch? stopwatch = null;
+        long? swStart = null;
         if (_interceptors.Count > 0)
         {
             var parameters = new List<System.Data.Common.DbParameter>(cmd.Parameters.Count);
             foreach (System.Data.Common.DbParameter parameter in cmd.Parameters) parameters.Add(parameter);
             context = new QueryContext(cmd.CommandText, parameters);
-            stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            swStart = System.Diagnostics.Stopwatch.GetTimestamp();
             QueryBuilderExtensions.NotifyInterceptorsOnBefore(_interceptors, context);
         }
         int affected;
@@ -344,15 +364,14 @@ public sealed partial class DataSession<TProvider>
             // ITM-865（r23）：OnAfter 移入 try——拦截器 OnAfter 抛异常时同样经 OnError 通知
             // 后上抛（与 ExecuteNonQueryAsync/ExecuteQueryAsync 口径一致；原形态在 try 外
             // 直接逃逸，调用方会误判"执行失败"而实际 DML 已成功）。
-            if (stopwatch is not null)
+            if (swStart is not null)
             {
-                stopwatch.Stop();
-                QueryBuilderExtensions.NotifyInterceptorsOnAfter(_interceptors, context, stopwatch, affected);
+                QueryBuilderExtensions.NotifyInterceptorsOnAfter(_interceptors, context, swStart, affected);
             }
         }
         catch (Exception exception)
         {
-            if (stopwatch is not null)
+            if (swStart is not null)
                 QueryBuilderExtensions.NotifyInterceptorsOnError(_interceptors, context, exception);
             throw;
         }
