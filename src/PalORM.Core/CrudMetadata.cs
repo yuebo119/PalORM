@@ -30,8 +30,13 @@ public readonly struct CrudBindings
     /// 省 RETURNING/LAST_INSERT_ID 的读返回与物化；旧生成器缺省 false 走读返回路径。</summary>
     public readonly bool InsertNoReturning;
     /// <summary>PL-3.2：仅设置预分配 UPSERT 参数 Value 的委托（批量 UPSERT 参数池路径，
-    /// 与 BindUpsert 同列序）。旧版生成器模型程序集为 null，消费方回退 scratch 逐行绑定。</summary>
+    /// 与 BindUpsert 同列序）。旧版生成器缺省 false 走读返回路径。</summary>
     public readonly Action<DbParameter[], object, int>? BindUpsertValues;
+    /// <summary>O1（2026-10-01）：二进制 COPY 定型行写入委托（PG Binary COPY 路径，
+    /// 与 BindInsertValues 同列序同谓词）。仅当实体全部可插入列的 provider 类型都在
+    /// IBinaryRowSink 支持面内时由生成器发射；旧版生成器或含未支持类型时为 null，
+    /// 消费方回退参数池路径（零行为变化）。</summary>
+    public readonly Action<IBinaryRowSink, object>? CopyWriteRow;
 
     /// <summary>构造 CRUD 委托聚合。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -48,7 +53,8 @@ public readonly struct CrudBindings
         Action<DbParameter[], object, int>? bindUpdateValues = null,
         bool insertReturningKeyOnly = false,
         bool insertNoReturning = false,
-        Action<DbParameter[], object, int>? bindUpsertValues = null)
+        Action<DbParameter[], object, int>? bindUpsertValues = null,
+        Action<IBinaryRowSink, object>? copyWriteRow = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -59,6 +65,7 @@ public readonly struct CrudBindings
         BindUpdateValues = bindUpdateValues;
         InsertReturningKeyOnly = insertReturningKeyOnly;
         InsertNoReturning = insertNoReturning;
+        CopyWriteRow = copyWriteRow;
     }
 }
 
@@ -119,8 +126,10 @@ public readonly struct CrudMetadata
     /// <summary>PL-3：INSERT 不读返回（判定条件与消费路径见 CrudBindings.InsertNoReturning）。</summary>
     public readonly bool InsertNoReturning;
     /// <summary>PL-3.2：仅设置预分配 UPSERT 参数 Value 的委托（批量 UPSERT 参数池路径，
-    /// 与 BindUpsert 同列序）。旧版生成器模型程序集为 null，消费方回退 scratch 逐行绑定。</summary>
+    /// 与 BindUpsert 同列序）。旧版生成器缺省 false 走读返回路径。</summary>
     public readonly Action<DbParameter[], object, int>? BindUpsertValues;
+    /// <summary>O1（2026-10-01）：二进制 COPY 定型行写入委托（判定条件与消费路径见 CrudBindings.CopyWriteRow）。</summary>
+    public readonly Action<IBinaryRowSink, object>? CopyWriteRow;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
@@ -152,6 +161,7 @@ public readonly struct CrudMetadata
         InsertBinderValidated = insertBinderValidated;
         InsertReturningKeyOnly = bindings.InsertReturningKeyOnly;
         InsertNoReturning = bindings.InsertNoReturning;
+        CopyWriteRow = bindings.CopyWriteRow;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
@@ -178,7 +188,7 @@ public readonly struct CrudMetadata
     internal CrudMetadata Copy()
         => new(Sqls,
             new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues,
-                InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues),
+                InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }

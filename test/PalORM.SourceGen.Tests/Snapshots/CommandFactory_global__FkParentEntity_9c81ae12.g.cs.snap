@@ -20,6 +20,12 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
         parameters[paramOffset + 0].Value = (object)entity.Name;
     }
 
+    /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>
+    internal static void CopyWriteRow(global::PalORM.IBinaryRowSink sink, global::FkParentEntity entity)
+    {
+        sink.WriteString(0, entity.Name);
+    }
+
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::FkParentEntity entity)
     {
