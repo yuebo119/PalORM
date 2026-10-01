@@ -83,10 +83,25 @@ internal static class BatchUpdateSqlBuilder
                 // v5.0 修复 P2-2：按方言选择引号——MySQL 用反引号，PG/SQLite 用双引号。
                 // 之前硬编码双引号在 MySQL 默认 sql_mode 下会把 "tenant_id" 当字符串字面量。
                 char q = dialect == SqlDialect.MySql ? '`' : '"';
-                sb.Append(" AND ");
-                sb.Append(q);
-                sb.Append("tenant_id");
-                sb.Append(q);
+                // B8 二修（2026-10-01 全 API 逐项轮）：JoinValuesRow 形态<b>没有 WHERE 子句</b>
+                // （连接条件在 ON，语句以 SET 结尾）——原盲追加 " AND ..." 会落进 SET 表达式
+                //（tgt.label = v.c1 AND tenant_id = @__tenant0），MySQL 对字符串列求布尔触发
+                // "Truncated incorrect DOUBLE value"（真库 Integration 实测，租户实体 + MySQL
+                // 8.0.19+ 路径此前后无覆盖）。正确落位：追加完整 WHERE 并以 tgt 限定列名。
+                if (form == BatchUpdateForm.JoinValuesRow)
+                {
+                    sb.Append(" WHERE tgt.");
+                    sb.Append(q);
+                    sb.Append("tenant_id");
+                    sb.Append(q);
+                }
+                else
+                {
+                    sb.Append(" AND ");
+                    sb.Append(q);
+                    sb.Append("tenant_id");
+                    sb.Append(q);
+                }
                 sb.Append(" = ");
                 sb.Append(tenantParameterName);
             }
