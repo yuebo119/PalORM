@@ -260,20 +260,12 @@ public sealed partial class DataSession<TProvider>
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        // v4.1：对齐 GetAllAsync 的 capacity=16，避免 10K 行场景 14 次扩容
-        List<T> list = new(16);
-        var typedFactory = (Func<DbDataReader, T>)factory;
-        bool firstRow = true;
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
-        {
-            if (firstRow)
-            {
-                ValidateColumnOrder<T>(reader);
-                firstRow = false;
-            }
-            list.Add(typedFactory(reader));
-        }
-        return list;
+        // ADR-A 首行列序校验经 onFirstRow 保持"仅在有首行时执行一次"；关闭校验时传 null
+        //（Validate 关闭即空操作，省掉每次调用的委托判断）。static lambda 按泛型实例缓存，零分配。
+        return await ResultListReader.ReadAllAsync(
+            reader, (Func<DbDataReader, T>)factory, 16, ct,
+            _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
+            .ConfigureAwait(false);
     }
 
     /// <summary>ADR-A 首行列名校验：结果列名与实体声明序列名不匹配即抛异常，
