@@ -13,8 +13,12 @@ namespace PalORM.DapperSuite;
 /// 本身就是对照的一部分），基准返回 Task 由 BDN 原生支持。</para>
 /// <para>会话口径：公开工厂 <c>DataSession&lt;TProvider&gt;.CreateAsync</c> 在 Setup 建一次、
 /// 6500 次操作全程复用、CloseConnection 释放（README「创建会话」的最佳实践形态 + 口径差 D9）。
-/// 查询写法即 README 所示的 <c>db.From&lt;T&gt;().Where(...)</c> 链式形态，不做任何改写。</para>
-/// <para>列名进文本段的 Where 条件（B78）：列名拼进 FormattableString 文本段而非插值项。</para></summary>
+/// 查询写法遵循 README 推荐：<b>单键直查（本套件全部三臂的查询形状）用专用
+/// <c>GetAsync</c></b>；过滤类查询才用 <c>db.From&lt;T&gt;().Where(...)</c> 链式
+/// （step12 形态复核，2026-10-01——原 First 族链式在单键形状上多付查询构建器与列表物化，
+/// 同口径实测约 +880B/-25~30%，且产品 README 已明确单键首选 GetAsync）。</para>
+/// <para>列名进文本段的 Where 条件（B78）：链式形态的列名拼进 FormattableString 文本段
+/// 而非插值项。</para></summary>
 [Description("PalORM")]
 public class PalOrmBenchmarks : BenchmarkBase
 {
@@ -57,12 +61,9 @@ public class PalOrmBenchmarks : BenchmarkBase
         Step();
         return Dialect switch
         {
-            "sqlite" => await _sqlite
-                .From<Post>().Where(WhereId(i)).FirstOrDefaultAsync().ConfigureAwait(false),
-            "mysql" => await _mysql
-                .From<Post>().Where(WhereId(i)).FirstOrDefaultAsync().ConfigureAwait(false),
-            _ => await _pg
-                .From<Post>().Where(WhereId(i)).FirstOrDefaultAsync().ConfigureAwait(false)
+            "sqlite" => await _sqlite.GetAsync<Post>(i).ConfigureAwait(false),
+            "mysql" => await _mysql.GetAsync<Post>(i).ConfigureAwait(false),
+            _ => await _pg.GetAsync<Post>(i).ConfigureAwait(false)
         };
     }
 
@@ -86,15 +87,14 @@ public class PalOrmBenchmarks : BenchmarkBase
     public async Task<Post> QueryFirstAsync()
     {
         Step();
-        return Dialect switch
+        // GetAsync 无行返回 null；QueryFirst 语义为无行抛异常——补 null 检查保持同语义
+        Post? row = Dialect switch
         {
-            "sqlite" => await _sqlite
-                .From<Post>().Where(WhereId(i)).FirstAsync().ConfigureAwait(false),
-            "mysql" => await _mysql
-                .From<Post>().Where(WhereId(i)).FirstAsync().ConfigureAwait(false),
-            _ => await _pg
-                .From<Post>().Where(WhereId(i)).FirstAsync().ConfigureAwait(false)
+            "sqlite" => await _sqlite.GetAsync<Post>(i).ConfigureAwait(false),
+            "mysql" => await _mysql.GetAsync<Post>(i).ConfigureAwait(false),
+            _ => await _pg.GetAsync<Post>(i).ConfigureAwait(false)
         };
+        return row ?? throw new InvalidOperationException("Sequence contains no elements.");
     }
 
     /// <summary>Id = @p0 条件——列名走文本段（与 PerfHub Dataset.WhereId 同防 B78 坑）。</summary>

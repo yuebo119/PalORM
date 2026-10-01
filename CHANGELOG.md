@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+### 🩹 基准编排缺陷修复 + 形态复核全覆盖（2026-10-01，step13）
+
+- **修复：全量流程 dappersuite 步骤自 2026-09-29 起静默空跑**（B104 家族，与 FullPerf 的 BDN 步骤 2026-09-30 同类）：默认过滤串 `-f '*' --join` 的单引号在 `UseShellExecute=false` 的 ProcessStartInfo 下是字面量（无 shell 剥引号），BDN 收到带引号的过滤串匹配 0 个基准、打印清单后**退出码仍 0**，步骤假报 OK 且哨兵停在旧批。修复：过滤串去引号（`--filter * --join`）+ 失败守卫并入 `returned 0 benchmarks` 判据；同族引号缺陷一并清理（smoke 的两处 BDN filter）。
+- **形态复核全覆盖（接 step12）**：DapperSuite（官方形状锚点）两个单键直查臂改用专用 `GetAsync`（`FirstOrDefault<T>`/`QueryFirst<T>`，后者补 null 检查保持同语义）；Workload/Stability 两工装的键查同步切换。DapperSuite README 增 D11 口径差登记。BDN 对比基准经复核无需改（StableShape 双条件/VaryingShape 变长过滤，链式为语义必需；`PalORM_GetByKey` 已是 GetAsync）。
+- **实测（DapperSuite SQLite，官方 13 列形状、5000 轮转）**：`FirstOrDefault<T>` 10.24µs/2.91KB/对地板 2.20× → **4.98µs/1.38KB/1.07×**（时延 -51%、分配 -53%，紧贴手写 ADO 地板 7% 以内；Dapper 同项 9.15µs/3.07KB）。哨兵恢复真实更新（此前停在 09-29 旧批）。Workload 工装实测正常（threads=8 113,325 ops/s）。
+
 ### 📖 性能用法指南 + 基准契约形态复核（2026-10-01，step12）
 
 - **README 新增两处性能用法指南**：①单键直查首选 `GetAsync` 专用 API（同口径探针实测比链式 `From<T>().Where(Id==x).FirstOrDefaultAsync()` 省约 880 B/操作且快 25~30%）；②会话复用优先（同作用域复用一个会话，命令复用槽自动晋升；附 Microsoft.Data.Sqlite 官方源码事实：预备语句缓存按命令实例生效，换命令即重新 prepare 并额外分配 SQL 字节缓冲）。附产品侧既有最佳实践确认：PG 自动预备已默认开启（`MaxAutoPrepare=100`/`AutoPrepareMinUsages=2`）。

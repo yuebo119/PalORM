@@ -60,8 +60,10 @@ internal static class PerfEntry
     {
         var root = Perf.RepoRoot();
         Perf.Step("[1/4] 微基准冒烟（单点查询，BDN）");
+        // B104 同族（2026-10-01）：filter 不得带引号——ProcessStartInfo 无 shell，单引号是字面量，
+        // 带引号的过滤串匹配 0 基准后退出码仍 0（假绿）
         var code = Perf.Run("dotnet",
-            $"run --project \"{Path.Combine(root, "bench", "PalORM.Benchmarks")}\" -c Release -- --filter '*ADO_NET_GetByKey*'");
+            $"run --project \"{Path.Combine(root, "bench", "PalORM.Benchmarks")}\" -c Release -- --filter *ADO_NET_GetByKey*");
         if (code != 0)
         {
             return code;
@@ -77,8 +79,9 @@ internal static class PerfEntry
 
         Perf.Step("[3/4] DapperSuite 冒烟（SQLite 单行，官方形状）");
         Environment.SetEnvironmentVariable("DAPPER_SUITE_DIALECT", "sqlite");
+        // 同 [1/4]：filter 不带引号（B104 同族修复）
         code = Perf.Run("dotnet",
-            $"run --project \"{Path.Combine(root, "bench", "PalORM.DapperSuite")}\" -c Release -- --filter '*SqlCommand*' --join");
+            $"run --project \"{Path.Combine(root, "bench", "PalORM.DapperSuite")}\" -c Release -- --filter *SqlCommand* --join");
         if (code != 0)
         {
             return code;
