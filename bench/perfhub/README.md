@@ -31,7 +31,8 @@ dotnet run --project bench/PalORM.PerfHub -- report
 
 | 项 | 本夹具的值 | 为什么记在这 |
 |---|---|---|
-| 连接配置口径 | SQLite：三臂共用同一条连接，建连后统一执行 7 项 PRAGMA（WAL + 64MB cache + mmap 等，与产品 `SqliteProvider` 逐条一致）；PG/MySQL：驱动默认 | 只给 ORM 臂配会让比较变成"连接配置差异"：同一修复在 I/O 主导与 CPU 主导两种配置下分别是 0% 与 −30%（2026-09-22 实测） |
+| 连接配置口径 | SQLite：三臂共用同一条连接，建连后统一执行 7 项 PRAGMA（WAL + 64MB cache + mmap 等，与产品 `SqliteProvider` 逐条一致）；PG/MySQL：驱动默认（三臂均为裸驱动连接，`new NpgsqlConnection(cs)` 等） | 只给 ORM 臂配会让比较变成"连接配置差异"：同一修复在 I/O 主导与 CPU 主导两种配置下分别是 0% 与 −30%（2026-09-22 实测） |
+| 与生产 PalORM 连接的配置差（说明） | 产品 `PostgreSqlProvider` 对自建连接默认开启 Npgsql 自动预备（`MaxAutoPrepare=100` / `AutoPrepareMinUsages=2`，Npgsql 官方基准：重复同形状语句 306B/op vs 未预备 2.37KB/op）；基准三臂统一驱动默认故不含该项 | 基准测"驱动默认口径"下的三臂对等；生产链路的自动预备是 PalORM 的连接治理特性，不在本夹具对照面，避免把配置差计入"实现差"（2026-10-01 登记） |
 | 会话生命周期口径 | `per-operation`（每操作新建 `DataSession`，与 Dapper 无状态扩展方法对等） | 与 DapperSuite 的 `per-scope` 不同，故两套的分配量不可互比（规范 §4.1） |
 | 维度 8 计数 | 三臂共用 `CountingConnection` 装饰器，实测**往返次数/op** 与 **prepared 复用率** | 抓 N+1：实测 ADO 臂 `BulkUpdate` = 2000 次往返/op、`BulkInsert` = 11 次/op；基础 67 项中 60 项有值（其余 7 项是 `GenerateRows` 与 6 个纯构建项，本就没有往返），并发模式 3 项也已接计数（三臂 1.46–1.51 往返/op，80/20 混合） |
 | 健康度 | 地板行散布中位数，阈值 0.35（本夹具自适应短跑实测 0.21/0.26/0.31） | `--quick` 批次在 label 里带 `quick` 标记，只作冒烟、不进基线 |
@@ -43,6 +44,17 @@ dotnet run --project bench/PalORM.PerfHub -- report
 |---|---|---|
 | **Build** | `BuildGetByKeySql` / `BuildComplexQuerySql` | 纯 SQL 构建（ORM 构建税，**非同类对比**：ADO/Dapper 返回预写字面量） |
 | **CRUD** | `GetByKey` / `QueryAll` / `StreamAll` / `Insert` / `Update` | 显式列 + 参数化 + 键集 seek；流式不物化再枚举 |
+
+> **arm 形态复核（2026-10-01，step12）**：`GetByKey` 的 PalORM 臂由链式
+> `From<T>().Where(Id==x).FirstOrDefaultAsync()` 改为专用 `GetAsync` API——产品为单键直查
+> 专设该入口（SQL 常量缓存、单行直读、无 List 物化、无二次 ReadAsync 探测），属三臂契约
+> "各自行业最优写法"的应然形态。同口径探针（共享连接 + per-op 会话、3000 次摊销、3 轮）
+> 实测专用形态 **-880B/op（3640→2760，-24%）与 -25~30% 耗时**（探针：
+> `.ai/perf-probe/GetByKeyPathDiag.cs`，本机工具）。该复核逐臂做过：`Count`/`StreamAll`/
+> `InsertReturningId` 等臂已是专用 API 形态；`QueryAll`/`WideQueryAll` 保持链式
+> （固定开销占其总成本 <1%，换形态无实质收益）；`WhereIn`/`KeysetPage`/`IncludeJoin`
+> 的链式是过滤表达式的唯一自然形态。因该变更，GetByKey 组跨批数字在 2026-10-01 存在形态
+> 断点（基线随批重录吸收，比对此项需按批注日期分段）。
 | | `BulkInsert` | PG Binary COPY · MySQL MySqlBulkCopy（`local_infile=ON` 分流）· SQLite 多值 VALUES；Dapper 多值 VALUES |
 | | `BulkUpdate` | PG `UPDATE FROM VALUES` · MySQL `CASE WHEN` · SQLite 逐条裹单事务 |
 | | `BulkDelete` | `IN` 分批裹事务 |

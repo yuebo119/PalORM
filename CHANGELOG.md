@@ -4,6 +4,11 @@
 
 ## [未发布]
 
+### 📖 性能用法指南 + 基准契约形态复核（2026-10-01，step12）
+
+- **README 新增两处性能用法指南**：①单键直查首选 `GetAsync` 专用 API（同口径探针实测比链式 `From<T>().Where(Id==x).FirstOrDefaultAsync()` 省约 880 B/操作且快 25~30%）；②会话复用优先（同作用域复用一个会话，命令复用槽自动晋升；附 Microsoft.Data.Sqlite 官方源码事实：预备语句缓存按命令实例生效，换命令即重新 prepare 并额外分配 SQL 字节缓冲）。附产品侧既有最佳实践确认：PG 自动预备已默认开启（`MaxAutoPrepare=100`/`AutoPrepareMinUsages=2`）。
+- **基准夹具形态复核（三臂契约"行业最优写法"）**：PerfHub `GetByKey` 的 PalORM 臂由链式改为专用 `GetAsync`（-880B/-25~30%，探针 `.ai/perf-probe/GetByKeyPathDiag.cs` 三轮摊销）；逐臂复核完成——`Count`/`StreamAll`/`InsertReturningId` 已是专用形态，`QueryAll`/`WideQueryAll` 保持链式（固定开销占比 <1% 换形态无收益），过滤类项链式为唯一自然形态。夹具 README 登记形态断点说明与"基准 vs 生产连接配置差"说明（基准三臂驱动默认口径）。
+
 ### ⚡ step9 差距优化轮（2026-10-01，≥+10% 差距清单四族治理）
 
 - **PG Binary COPY 定型行写入器（O1）**：新增 Core `IBinaryRowSink`（12 安全核心类型定型直写 + WriteNull，方言中立，实体程序集零 Npgsql 感知）；生成器对全部可插入列 provider 类型可直写的实体发射 `CopyWriteRow`（列序与 BindInsertValues/InsertColumns 消费同一 IsInsertable 谓词单一真源）；`PgCopyRowSink` 转接 `NpgsqlBinaryImporter.Write<T>` 泛型直调——值类型单元格不再经 `DbParameter.Value` 装箱中转（S1Row 形态实测 104 B/行）。线类型真源不变（参数池采样 NpgsqlDbType，PG-4）；含未支持类型实体整体回退参数池路径零行为变化。实测 BulkInsert/PG/2000 分配 553.8→346.9KB（-37%），对 ADO 地板差距 +60%→+1.6% 归零；20000 档 5.3→3.3MB（-38%），TxBulkInsert 同步收益。快照 6 份刷新（5 实体获 CopyWriteRow：枚举三形态/可空守卫；AllTypes/FullFeature 异型列被门正确拒绝不发射）。
