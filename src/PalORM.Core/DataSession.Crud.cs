@@ -762,11 +762,9 @@ public sealed partial class DataSession<TProvider>
             BindDefaultFilterParameters<T>(cmd);
 
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容。
-            List<T> list = new(GetMaterializedCapacity<T>());
-            var tf = (Func<DbDataReader, T>)factory;
-            while (await reader.ReadAsync(token).ConfigureAwait(false))
-                list.Add(tf(reader));
+            // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
+            List<T> list = await ResultListReader.ReadAllAsync(
+                reader, (Func<DbDataReader, T>)factory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
             RecordMaterializedCount<T>(list.Count);
             return list;
         }, ct).ConfigureAwait(false);
