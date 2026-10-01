@@ -55,9 +55,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private readonly Func<DbConnection, ValueTask> _readConnReturner;
     /// <summary>并行读作用域的连接池（ARCH-001）——作用域内创建的读连接（全部）与其中空闲可复用的。
     /// ITM-796（r23）：并发读租约（最多 MaxParallelReads 路）可同时进入获取/归还路径，
-    /// 两个集合的全部操作（Pop/Add/Contains/Push/Clear）必须持 <see cref="_parallelReadPoolLock"/>。</summary>
-    private readonly List<DbConnection> _parallelReadConnections = [];
-    private readonly Stack<DbConnection> _idleParallelReadConnections = new();
+    /// 两个集合的全部操作（Pop/Add/Contains/Push/Clear）必须持 <see cref="_parallelReadPoolLock"/>。
+    /// O2（2026-10-01）：惰性初始化——per-operation 会话（每操作 new DataSession 且从不进入
+    /// 并行读作用域）不付两个容器与其背衬数组的分配，首次进入并行读获取/归还路径时才建；
+    /// 全部读写点持 <see cref="_parallelReadPoolLock"/>，null 判定与惰性赋值都在锁内，竞态安全。</summary>
+    private List<DbConnection>? _parallelReadConnections;
+    private Stack<DbConnection>? _idleParallelReadConnections;
     private readonly Lock _parallelReadPoolLock = new();
 
     internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
@@ -302,7 +305,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 在竞态下可把同一空闲连接发放给两个 reader 或丢失登记（连接不被追踪/不归还）。
         lock (_parallelReadPoolLock)
         {
-            if (_idleParallelReadConnections.Count > 0)
+            if (_idleParallelReadConnections is { Count: > 0 })
                 return _idleParallelReadConnections.Pop();
         }
         DbConnection created = TProvider.CreateConnection(
@@ -325,7 +328,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
         lock (_parallelReadPoolLock)
         {
-            _parallelReadConnections.Add(created);
+            (_parallelReadConnections ??= []).Add(created);
         }
         return created;
     }
@@ -823,9 +826,16 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         DbConnection[] connections;
         lock (_parallelReadPoolLock)
         {
+            // O2：池从未建立（本会话未进过并行读获取路径）即无可释放连接；
+            // 置 null 而非 Clear——惰性形态下下次进入作用域重建，语义与清空一致。
+            if (_parallelReadConnections is null)
+            {
+                _idleParallelReadConnections = null;
+                return;
+            }
             connections = [.. _parallelReadConnections];
-            _parallelReadConnections.Clear();
-            _idleParallelReadConnections.Clear();
+            _parallelReadConnections = null;
+            _idleParallelReadConnections = null;
         }
         foreach (DbConnection connection in connections)
         {
@@ -843,8 +853,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         if (!_operationState.ParallelReadsEnabled) return default;
         lock (_parallelReadPoolLock)
         {
-            if (!_parallelReadConnections.Contains(connection)) return default;
-            if (!_idleParallelReadConnections.Contains(connection))
+            // O2：池未建立（本会话未进过并行读获取路径）时连接必不属池——归还为空操作。
+            if (_parallelReadConnections is null || !_parallelReadConnections.Contains(connection)) return default;
+            if (!(_idleParallelReadConnections ??= []).Contains(connection))
                 _idleParallelReadConnections.Push(connection);
         }
         return default;
