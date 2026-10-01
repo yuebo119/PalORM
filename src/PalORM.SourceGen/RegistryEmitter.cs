@@ -202,6 +202,9 @@ internal static class RegistryEmitter
         bool keyOnlyReturning = CommandFactoryEmitter.SupportsKeyOnlyReturning(m);
         // PL-3：INSERT 不读返回判定（保守条件见 SupportsInsertWithoutReturning 文档）
         bool insertNoReturning = CommandFactoryEmitter.SupportsInsertWithoutReturning(m);
+        // O1（2026-10-01）：COPY 定型行写入委托——全列 provider 类型可直写才发射；
+        // 未支持形态不传参（默认 null），运行时回退参数池路径。
+        bool copyRowSupported = CommandFactoryEmitter.SupportsCopyRowWrite(m);
         sb.AppendLine("                new global::PalORM.CrudBindings(");
         sb.AppendLine($"                    (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
         sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(parameters, ({m.EntityTypeName})obj, off),");
@@ -213,7 +216,15 @@ internal static class RegistryEmitter
         sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateValues(parameters, ({m.EntityTypeName})obj, off),");
         sb.AppendLine($"                    insertReturningKeyOnly: {(keyOnlyReturning ? "true" : "false")},");
         sb.AppendLine($"                    insertNoReturning: {(insertNoReturning ? "true" : "false")},");
-        sb.AppendLine($"                    bindUpsertValues: (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsertValues(parameters, ({m.EntityTypeName})obj, off)),");
+        if (copyRowSupported)
+        {
+            sb.AppendLine($"                    bindUpsertValues: (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsertValues(parameters, ({m.EntityTypeName})obj, off),");
+            sb.AppendLine($"                    copyWriteRow: (sink, obj) => CommandFactory_{m.GeneratedTypeSuffix}.CopyWriteRow(sink, ({m.EntityTypeName})obj)),");
+        }
+        else
+        {
+            sb.AppendLine($"                    bindUpsertValues: (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsertValues(parameters, ({m.EntityTypeName})obj, off)),");
+        }
         // ITM-640：单次物化 Columns（本块原 3 处 AsSpan().ToArray() 重复分配；另 3 处
         // 分属独立 per-model 循环无法共用——复检轮计数订正）
         var columns = m.Columns.AsSpan().ToArray();
