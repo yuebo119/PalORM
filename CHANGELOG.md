@@ -2,6 +2,16 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布]
+
+### ⚡ step9 差距优化轮（2026-10-01，≥+10% 差距清单四族治理）
+
+- **PG Binary COPY 定型行写入器（O1）**：新增 Core `IBinaryRowSink`（12 安全核心类型定型直写 + WriteNull，方言中立，实体程序集零 Npgsql 感知）；生成器对全部可插入列 provider 类型可直写的实体发射 `CopyWriteRow`（列序与 BindInsertValues/InsertColumns 消费同一 IsInsertable 谓词单一真源）；`PgCopyRowSink` 转接 `NpgsqlBinaryImporter.Write<T>` 泛型直调——值类型单元格不再经 `DbParameter.Value` 装箱中转（S1Row 形态实测 104 B/行）。线类型真源不变（参数池采样 NpgsqlDbType，PG-4）；含未支持类型实体整体回退参数池路径零行为变化。实测 BulkInsert/PG/2000 分配 553.8→346.9KB（-37%），对 ADO 地板差距 +60%→+1.6% 归零；20000 档 5.3→3.3MB（-38%），TxBulkInsert 同步收益。快照 6 份刷新（5 实体获 CopyWriteRow：枚举三形态/可空守卫；AllTypes/FullFeature 异型列被门正确拒绝不发射）。
+- **并行读容器惰性初始化（O2）**：`_parallelReadConnections`/`_idleParallelReadConnections` 首次进入并行读获取/归还路径才创建（全部读写点持池锁，ITM-796 并发契约不变；Dispose 置 null 重建语义与原 Clear 一致）——per-operation 会话每操作省约 70B（实测 -2%~-3%，低于估算 150~300B：委托字段与方法组实为一次性缓存不可惰性化，如实登记）。
+- **事务骨架三处收口（O4）**：事务完成信号 TCS 与资源列表惰性化（唯一等待方 DisposeAsync 在锁内按需创建，v4.5 `_activeOperation` 既有先例同模式）、事务流 owner 复用 `this`（v4.6 操作租约同款）——每事务省 3 个对象；连带 UseTransaction 在飞守卫与 DisposeAsync 先完成事务警告换 `_transactionOwner` 真源判定（原 `_activeTransaction` 代理惰性化后失真，语义等价）。锁合并子项裁决不做（跨 I/O 锁序重构触碰 ITM-798/PublishTransaction 顺序契约）。
+- **裁决不做（登记防重开）**：Enter 快路径——AsyncLocal 写入值恒等于 `this`（会话内常量），运行时对等值写短路、无每操作 EC 拷贝（仓库自记 "-300B" 系已删除的 Exit null 写），快路径唯一收益是每异步流首次写，代价是 DisposeAsync 自作用域释放守卫静默失守；构建尾项（MaterializeClauses 数组随形状缓存复用/LIMIT 字面量常量化，合计约 100~200B）按 T5d 纪律放弃（<5% 且跨文件）。
+- **验证**：Core 449 / SourceGen 227 / Integration 真库 255 全绿（每项提交独立复跑）· ci.slnf 0W0E · 三方言 AOT publish 零警告 + 原生二进制运行 PASSED（O1 新发射面复验）· BDN 门禁 27/27 双跑 · 结果库 176 项比值门禁 0 FAIL · filtered 子集验证批（o1-copy-alloc / o2-lazy）入结果库；12:11 终验全量批 2 项门禁 FAIL 定性为远程服务器时段状态（MySQL t8 并发三臂同向 -20%）后基线滚动重录复跑 0 FAIL。
+
 ## [6.2.0] — v6.2.0：[ForeignKey] DDL + 查询缓存显式失效 + 并发读租约收口 + 性能与内存优化轮 — 2026-09-30
 
 > 验证口径：Core 449 / SourceGen 227 / Integration 真库 255 全绿 · Release（ci.slnf -warnaserror）0 警告 0 错误 · gate 33/33 · verify 19/19（.ai 侧 17 项 --fast）/19 · doccons 12/12 · 三方言 AOT publish 零警告 · BDN 门禁 27/27 + 结果库 176/176。
