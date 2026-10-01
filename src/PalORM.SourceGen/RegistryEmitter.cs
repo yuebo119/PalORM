@@ -219,11 +219,16 @@ internal static class RegistryEmitter
         if (copyRowSupported)
         {
             sb.AppendLine($"                    bindUpsertValues: (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsertValues(parameters, ({m.EntityTypeName})obj, off),");
+            // B21（2026-10-01 全 API 逐项轮）：INSERT 池 DbType 一次性初始化委托——消费方
+            // （MultiValueBulkInsert 自建池路径）建池后调用一次；旧生成器程序集为 null 时
+            // 消费方不调（其 BindInsertValues 自写 DbType 的旧形态）。
+            sb.AppendLine($"                    initInsertParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitInsertParameters(parameters, off),");
             sb.AppendLine($"                    copyWriteRow: (sink, obj) => CommandFactory_{m.GeneratedTypeSuffix}.CopyWriteRow(sink, ({m.EntityTypeName})obj)),");
         }
         else
         {
-            sb.AppendLine($"                    bindUpsertValues: (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsertValues(parameters, ({m.EntityTypeName})obj, off)),");
+            sb.AppendLine($"                    bindUpsertValues: (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsertValues(parameters, ({m.EntityTypeName})obj, off),");
+            sb.AppendLine($"                    initInsertParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitInsertParameters(parameters, off)),");
         }
         // ITM-640：单次物化 Columns（本块原 3 处 AsSpan().ToArray() 重复分配；另 3 处
         // 分属独立 per-model 循环无法共用——复检轮计数订正）
