@@ -347,18 +347,14 @@ public sealed class PostgreSqlProvider : IDbProvider
                 NpgsqlDbType[]? columnTypes = null;
                 // O1：copyWriter 路径把"首行建池 + 类型采样"提升到批循环外——类型真源仍是
                 // 参数 DbType 采样（PG-4 单一来源不变），行循环只走定型直写。
+                // B17（2026-10-01 全 API 逐项轮）：类型数组按实体类型缓存——O1 路径的
+                // "建池 + 采样"只为 NpgsqlDbType 真源服务（行循环走定型直写不读池）；
+                // 原实现每次 BulkInsert 调用都付 columnCount 个参数对象 + 装箱 + 采样读，
+                // 缓存命中后整段跳过。同一 Type 的列集在进程内恒定（Register 拒绝重复注册，
+                // 热重载不改变类型级元数据），校验降频与 B9（probe 结果缓存）同口径。
                 if (copyWriter is not null && valuesBinder is not null)
                 {
-                    rowCommand.Parameters.Clear();
-                    binder(rowCommand, entities[0], 0);
-                    if (rowCommand.Parameters.Count != columnCount)
-                        throw new InvalidOperationException(
-                            $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                            $"{rowCommand.Parameters.Count} parameters.");
-                    pool = new DbParameter[columnCount];
-                    for (int column = 0; column < columnCount; column++)
-                        pool[column] = rowCommand.Parameters[column];
-                    columnTypes = SampleColumnTypes(rowCommand, columnCount);
+                    columnTypes = GetOrBuildColumnTypes<T>(rowCommand, binder, entities[0], columnCount);
                 }
                 for (int start = 0; start < entities.Count; start += batchSize)
                 {
@@ -642,13 +638,42 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <summary>PG-4：每次 COPY 调用采样一次每列 NpgsqlDbType（见 <see cref="WriteRow"/>）。
     /// <para>S3 的显式 DbType 保证首行全 DBNull 的可空列也返回映射类型而非 <c>Unknown</c>
     /// （ITM-527 修复：探针实测 <c>DBNull + DbType.Int32 → Integer</c>，真库执行验证通过），
-    /// 因此首行采样对任何列组合都成立。</para></summary>
+    /// 因此首行采样对任何列组合都成立。</para>
+    /// <para>B17（2026-10-01）：本函数现仅作为 <see cref="GetOrBuildColumnTypes{T}"/> 的
+    /// 首次构建真源（缓存命中后不再执行）。</para></summary>
     private static NpgsqlDbType[] SampleColumnTypes(DbCommand rowCommand, int columnCount)
     {
         var columnTypes = new NpgsqlDbType[columnCount];
         for (int column = 0; column < columnCount; column++)
             columnTypes[column] = ((NpgsqlParameter)rowCommand.Parameters[column]).NpgsqlDbType;
         return columnTypes;
+    }
+
+    /// <summary>B17（2026-10-01 全 API 逐项轮）：COPY 列类型数组缓存——键 = 实体类型
+    /// （类型由生成器静态决定，同一进程内恒定；PG-4/S3 的"binder 显式 DbType → 采样"
+    /// 真源仅在首次构建时执行一次）。键空间 = 实体数，天然有限。并发首次构建可重复
+    /// （纯函数、同值），与 DataSessionCache 的 TryGetValue/TryAdd 纪律一致。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, NpgsqlDbType[]>
+        CopyColumnTypesCache = new();
+
+    /// <summary>B17：取（或首建）列类型数组——未命中时走原"清参 + binder + 参数数校验 +
+    /// 采样"路径（首行实体仅用于本次构建）。</summary>
+    private static NpgsqlDbType[] GetOrBuildColumnTypes<T>(
+        DbCommand rowCommand, Action<DbCommand, object, int> binder, T firstEntity, int columnCount)
+        where T : class
+    {
+        if (CopyColumnTypesCache.TryGetValue(typeof(T), out NpgsqlDbType[]? cached))
+            return cached;
+
+        rowCommand.Parameters.Clear();
+        binder(rowCommand, firstEntity, 0);
+        if (rowCommand.Parameters.Count != columnCount)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
+                $"{rowCommand.Parameters.Count} parameters.");
+        NpgsqlDbType[] built = SampleColumnTypes(rowCommand, columnCount);
+        CopyColumnTypesCache.TryAdd(typeof(T), built);
+        return built;
     }
 
     /// <summary>O1：定型直写路径的行起始——同步形态与 <see cref="WriteRow"/> 同形
