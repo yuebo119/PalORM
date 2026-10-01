@@ -1832,11 +1832,19 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             _ => throw UnsupportedDialect(D)
         };
 
+    /// <summary>单键直查——step12 形态复核（2026-10-01）改用产品专用 <c>GetAsync</c> API。
+    /// <para>原实现用 <c>From&lt;S1Row&gt;().Where(Id==x).FirstOrDefaultAsync()</c> 链式形态，
+    /// 与三臂契约"各自行业最优写法"不符：产品为单键直查专设 GetAsync（SQL 常量缓存、单行直读、
+    /// 无 List 物化、无二次 ReadAsync 探测）。同口径探针（.ai/perf-probe/GetByKeyPathDiag，
+    /// 共享连接 + per-op 会话、3000 次摊销、3 轮）实测专用形态 -880B/op（3640→2760，
+    /// -24%）且 -25~30% 耗时；链式多出的 880B 是 QueryBuilder 构建尾（FormattableString/
+    /// 子句链/参数 List/形状查询）与 List(1) 物化的合计。</para>
+    /// <para>该复核逐臂做过：Count/StreamAll/InsertReturningId 等已是专用 API 形态；
+    /// QueryAll/WideQueryAll 保持链式（固定开销占其总成本 &lt;1%，换形态无实质收益）；
+    /// WhereIn/KeysetPage/IncludeJoin 的链式是过滤表达式的唯一自然形态。</para></summary>
     private static Task<S1Row?> GetByKeyCoreAsync<TProvider>(DbConnection conn, long id, CancellationToken ct)
         where TProvider : IDbProvider, new()
-        => Session<TProvider>(conn).From<S1Row>()
-            .Where(Dataset.WhereId(TProvider.Dialect, id))
-            .FirstOrDefaultAsync(ct).AsTask();
+        => Session<TProvider>(conn).GetAsync<S1Row>(id, ct).AsTask();
 
     public Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
         => D switch
