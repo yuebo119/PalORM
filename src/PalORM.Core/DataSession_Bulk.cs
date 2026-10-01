@@ -810,11 +810,23 @@ public partial class DataSession<TProvider>
     /// （1000 为 9.2%）——取 2000，兼顾往返数与量具稳定性。</para>
     /// <para><b>CaseWhen</b>：沿用全局 MaxRowsPerBatch=5000（该形态服务端成本 = O(行数²)，
     /// 本已是压到协议上限前的折中值；探针十五显示更小批宽更快，但 CASE WHEN 只在
-    /// &lt; 8.0.19 老服务端出现，改动会牵动 SQLite 同族共享上限，本轮不动）。</para></summary>
+    /// &lt; 8.0.19 老服务端出现，改动会牵动 SQLite 同族共享上限，本轮不动）。</para>
+    /// <para><b>PostgreSQL（2026-10-02）</b>：UPDATE FROM VALUES 单批上限 1000 行。VALUES 行数相对表规模
+    /// 过大时规划器把连接翻成 Hash Join + 目标表全表顺扫：42 万行表上 2000 行单语句 45.65ms，
+    /// 拆成 1000×2 走 Nested Loop + 主键索引 18.63ms（2.45×；统计陈旧同形态 2.21×），
+    /// 即 PerfHub BulkUpdate/PG/2000 长期 2.65~2.83× 的根因（探针 pgplan）。1000 不是普适安全线
+    /// （翻转取决于批行数/表行数），是与地板形态同宽、在该场景实测保持索引计划的值。</para></summary>
     private static int MaxRowsPerUpdateBatchFor(BatchUpdateSqlBuilder.BatchUpdateForm form)
-        => form == BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
+    {
+        if (TProvider.Dialect == SqlDialect.PostgreSql)
+            return Math.Min(SqlLimits.MaxRowsPerBatch, PostgreSqlMaxRowsPerUpdateBatch);
+        return form == BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
             ? Math.Min(SqlLimits.MaxRowsPerBatch, 2000)
             : SqlLimits.MaxRowsPerBatch;
+    }
+
+    /// <summary>PG 批量 UPDATE FROM VALUES 的单批行数上限，依据见 <see cref="MaxRowsPerUpdateBatchFor"/>。</summary>
+    private const int PostgreSqlMaxRowsPerUpdateBatch = 1000;
 
     /// <summary>旧版生成器模型程序集的回退取值：probe 命令逐行 <c>BindUpdate</c> 建参数，
     /// 再把值写进池。语义与 <see cref="CrudMetadata.BindUpdateValues"/> 一致，参数创建量回到

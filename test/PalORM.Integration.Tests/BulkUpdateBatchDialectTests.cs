@@ -35,6 +35,56 @@ public sealed class BulkUpdateBatchDialectTests
     public async Task MySql_BulkUpdateBatch_WritesCorrectValuesPerRow()
         => await RunRoundTripAsync(await TestDb.MySqlAsync());
 
+    /// <summary>PG 单批上限 1000 行（2026-10-02，规避 VALUES 过宽时的 Hash Join 全表扫描翻转）后，
+    /// 2500 行拆成 1000/1000/500 三批：跨批边界与末批缩短（参数池收敛）路径成为常态，逐行断言最终值。
+    /// 自动路由的 BulkUpdateAsync 与显式 BulkUpdateBatchAsync 共用该批宽，两入口各验一次。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BulkUpdate_AcrossBatchBoundaries_WritesCorrectValues()
+    {
+        await using DataSession<PalORM.PostgreSql.PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_batch_upd");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_batch_upd (id INT PRIMARY KEY, qty INT NOT NULL, label VARCHAR(32) NOT NULL)");
+            const int rows = 2500;
+            // 服务端播种：BatchUpdEntity 的 long 主键按自增语义不进插入列，不能用 BulkInsert 灌显式 id
+            await db.ExecuteAsync(
+                $"INSERT INTO palorm_batch_upd (id, qty, label) SELECT g, 0, 'seed' || g FROM generate_series(1, 2500) AS g");
+            var seed = new List<BatchUpdEntity>(rows);
+            for (int i = 1; i <= rows; i++)
+                seed.Add(new BatchUpdEntity { Id = i, Qty = 0, Label = "seed" + i });
+
+            List<BatchUpdEntity> viaAutoRoute =
+                [.. seed.Select(e => new BatchUpdEntity { Id = e.Id, Qty = e.Id * 10, Label = "auto-" + e.Id })];
+            await Assert.That(await db.BulkUpdateAsync(viaAutoRoute)).IsEqualTo(rows);
+            await AssertAllRowsAsync(db, rows, id => id * 10, id => "auto-" + id);
+
+            List<BatchUpdEntity> viaExplicit =
+                [.. seed.Select(e => new BatchUpdEntity { Id = e.Id, Qty = e.Id * 7, Label = "batch-" + e.Id })];
+            await Assert.That(await db.BulkUpdateBatchAsync(viaExplicit)).IsEqualTo(rows);
+            await AssertAllRowsAsync(db, rows, id => id * 7, id => "batch-" + id);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_batch_upd");
+        }
+    }
+
+    private static async Task AssertAllRowsAsync<TProvider>(
+        DataSession<TProvider> db, int rows, Func<long, long> expectedQty, Func<long, string> expectedLabel)
+        where TProvider : IDbProvider
+    {
+        List<BatchUpdEntity> after = await db.From<BatchUpdEntity>().OrderBy(x => x.Id).ToListAsync();
+        await Assert.That(after.Count).IsEqualTo(rows);
+        foreach (BatchUpdEntity row in after)
+        {
+            await Assert.That(row.Qty).IsEqualTo(expectedQty(row.Id));
+            await Assert.That(row.Label).IsEqualTo(expectedLabel(row.Id));
+        }
+    }
+
     /// <summary>共享端到端：4 行 2 列批量更新后逐行逐列断言最终值（非仅行数）——
     /// 参数错位（第 i 行的值绑到第 j 行）即刻暴露为值断言失败。
     /// <para><b>根因终章（2026-09-20）</b>：此前的"42601 真缺陷"是<b>本测试自身的 DDL 缺陷</b>——
