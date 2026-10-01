@@ -300,7 +300,8 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         // B3：引号后的表名与列清单只由 (Type, Dialect) 决定，是纯函数——原每次调用重算
         // （方法组转委托 + LINQ 迭代器 + string.Join 中间数组 + 每列一次 QuoteIdentifier）。
-        (string quotedTable, string quotedColumns) = GetQuotedInsertTarget(typeof(T));
+        // B18（2026-10-01）：COPY 命令文本同缓存，每批不再插值。
+        (_, _, string copyCommand) = GetQuotedInsertTarget(typeof(T));
         long total = 0;
         DbTransaction bulkTransaction = transaction
             ?? await npgsqlConnection.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
@@ -360,16 +361,18 @@ public sealed class PostgreSqlProvider : IDbProvider
                 {
                     int end = Math.Min(start + batchSize, entities.Count);
                     // ITM-643：每次 COPY 一个独立超时窗口（对齐 ADO.NET 每命令超时语义，非整批累计）。
-                    CancellationTokenSource timeoutCts =
+                    // B19（2026-10-01）：timeoutCts 可为 null（无限等待 + 调用方不可取消）——
+                    // commandCt 回落 ct（不可取消 token 的 Register 为零开销空注册）。
+                    CancellationTokenSource? timeoutCts =
                         CreateCopyTimeoutTokenSource(commandTimeoutSeconds, ct);
                     try
                     {
-                        CancellationToken commandCt = timeoutCts.Token;
+                        CancellationToken commandCt = timeoutCts?.Token ?? ct;
                         // ITM-760：注册回调记录超时触发（回调先于 OCE 抛出点的传播）
                         using CancellationTokenRegistration reg = commandCt.Register(
                             static state => ((bool[])state!)[0] = true, timeoutFlag);
                         NpgsqlBinaryImporter importer = await npgsqlConnection.BeginBinaryImportAsync(
-                            $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)", commandCt)
+                            copyCommand, commandCt)
                             .ConfigureAwait(false);
                         Exception? importerException = null;
                         try
@@ -436,7 +439,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                         }
                     }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested
-                        && timeoutCts.IsCancellationRequested)
+                        && timeoutCts is not null && timeoutCts.IsCancellationRequested)
                     {
                         // ITM-869（r23）：超时触发的状态补记——Cancel() 先置 token 状态再执行注册回调，
                         // WriteRow 行边界的轮询检查可在回调执行前抛 OCE（timeoutFlag 仍 false），
@@ -447,7 +450,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                     }
                     finally
                     {
-                        timeoutCts.Dispose();
+                        timeoutCts?.Dispose();
                     }
                 }
             }
@@ -519,9 +522,12 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 8 线程首触实测构建 8 次。Lazy(ExecutionAndPublication) 才真正单实例化；败者的 Lazy
     /// 永不被 force（工厂不跑），胜者的 Lazy 被所有调用方共享。失败摘除见
     /// <c>GetQuotedInsertTarget</c>（Lazy 缓存故障，不摘除会把一次构建失败固化为永久异常）。
-    /// 键空间 = 实体数 × 3，天然有限。</summary>
+    /// 键空间 = 实体数 × 3，天然有限。
+    /// <para>B18（2026-10-01 全 API 逐项轮）：值扩为三元组含 COPY 命令文本——原实现每批
+    /// 1 个插值字符串（内容只由 Type 决定，恒定）。</para></summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (Type EntityType, SqlDialect Dialect), Lazy<(string QuotedTable, string QuotedColumns)>>
+        (Type EntityType, SqlDialect Dialect),
+        Lazy<(string QuotedTable, string QuotedColumns, string CopyCommand)>>
         QuotedInsertTargetCache = new();
 
     /// <summary>R50（2026-09-26）：INSERT binder 首次探测的每 (Type, Dialect) 单实例化
@@ -543,12 +549,12 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 两遍）；GetOrAdd 工厂仍可被并发多次调用（实测构建 8 次）；收敛为<b>字典存 Lazy</b>——
     /// Lazy(ExecutionAndPublication) 对同键只执行一次构建，其余首触等同一个 Value。
     /// 失败即摘除：Lazy 会缓存已完成的 Task/值（含故障），不摘除会把一次构建失败固化。</para></summary>
-    private static (string QuotedTable, string QuotedColumns) GetQuotedInsertTarget(Type entityType)
+    private static (string QuotedTable, string QuotedColumns, string CopyCommand) GetQuotedInsertTarget(Type entityType)
     {
         (Type EntityType, SqlDialect Dialect) key = (entityType, Dialect);
-        Lazy<(string QuotedTable, string QuotedColumns)> lazy = QuotedInsertTargetCache.GetOrAdd(
+        Lazy<(string QuotedTable, string QuotedColumns, string CopyCommand)> lazy = QuotedInsertTargetCache.GetOrAdd(
             key,
-            static (k, _) => new Lazy<(string QuotedTable, string QuotedColumns)>(
+            static (k, _) => new Lazy<(string QuotedTable, string QuotedColumns, string CopyCommand)>(
                 () => BuildQuotedTarget(k.EntityType),
                 System.Threading.LazyThreadSafetyMode.ExecutionAndPublication),
             (object?)null);
@@ -563,8 +569,9 @@ public sealed class PostgreSqlProvider : IDbProvider
         }
     }
 
-    /// <summary>构建 COPY 目标引用形态（引号表名 + 引号列清单）——R49 计数面同处递增。</summary>
-    private static (string QuotedTable, string QuotedColumns) BuildQuotedTarget(Type entityType)
+    /// <summary>构建 COPY 目标引用形态（引号表名 + 引号列清单 + COPY 命令文本）——R49 计数面
+    /// 同处递增。B18（2026-10-01）：COPY 文本一并构建缓存。</summary>
+    private static (string QuotedTable, string QuotedColumns, string CopyCommand) BuildQuotedTarget(Type entityType)
     {
         string tableName = PalORM_Runtime.TableNames.TryGetValue(entityType, out string? tn)
             ? tn
@@ -574,18 +581,28 @@ public sealed class PostgreSqlProvider : IDbProvider
             throw new InvalidOperationException(
                 $"Type '{entityType.Name}' has no generated CRUD.");
         System.Threading.Interlocked.Increment(ref QuotedTargetBuildCount);
+        string quotedTable = QuoteIdentifier(tableName);
+        string quotedColumns = string.Join(", ", crud.InsertColumns.Select(QuoteIdentifier));
         return (
-            QuoteIdentifier(tableName),
-            string.Join(", ", crud.InsertColumns.Select(QuoteIdentifier)));
+            quotedTable,
+            quotedColumns,
+            $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)");
     }
 
     /// <summary>创建单次 COPY 的超时令牌源——ITM-643：COPY 无 CommandTimeout 挂点，
     /// 联动 CTS + CancelAfter 履行"批量命令必须应用超时"契约；0 = 无限等待（不设取消），
-    /// 与 DbOptions.ToCommandTimeoutSeconds 的 Zero 透传语义一致。</summary>
-    private static CancellationTokenSource CreateCopyTimeoutTokenSource(
+    /// 与 DbOptions.ToCommandTimeoutSeconds 的 Zero 透传语义一致。
+    /// <para>B19（2026-10-01 全 API 逐项轮）：免构/单构——无限等待且不可取消时无超时事件
+    /// 可发生，返回 null（调用方直接用 ct；不可取消 token 的 Register 是零开销空注册）；
+    /// ct 不可取消时单构 CTS 替代 linked（省 registration 结构）。</para></summary>
+    private static CancellationTokenSource? CreateCopyTimeoutTokenSource(
         int commandTimeoutSeconds, CancellationToken ct)
     {
-        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (commandTimeoutSeconds <= 0 && !ct.CanBeCanceled)
+            return null;
+        var timeoutCts = ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : new CancellationTokenSource();
         if (commandTimeoutSeconds > 0)
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
         return timeoutCts;

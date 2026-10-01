@@ -52,6 +52,14 @@ internal static class MySqlBulkCopyInserter
         // B1/L4：列布局只由 ctx 决定，原实现每批重算一次 LINQ + 两个集合分配
         // （千批 = 千次无谓分配，且 Contains 是 O(pk×cols) 线性扫描）。此处算一次，逐批复用。
         ColumnLayout layout = ColumnLayout.Build(ctx);
+        // B16（2026-10-01 全 API 逐项轮）：列映射解析从"每批"提升到"每次调用"——
+        // 原实现每批 1 个 string.Join 键串 + GetOrAdd 查找（千批 = 千次键串 + 千次哈希）；
+        // 映射数组跨批/跨 MySqlBulkCopy 实例共享安全（不可变值对象，PROV-002）。
+        MySqlBulkCopyColumnMapping[] mappings = ColumnMappingCache.GetOrAdd(
+            (ctx.QuotedTable, string.Join('\u0001', layout.AllColumns)),
+            static (_, columns) => BuildColumnMappings(columns),
+            layout.AllColumns);
+        var batchLayout = new BatchLayout(layout, mappings);
         long totalInserted = 0;
         for (int start = 0; start < entities.Count; start += batchSize)
         {
@@ -59,7 +67,7 @@ internal static class MySqlBulkCopyInserter
             ct.ThrowIfCancellationRequested();
             int end = Math.Min(start + batchSize, entities.Count);
             totalInserted += await ExecuteBatchAsync(
-                conn, transaction, entities, new BatchRange(start, end), ctx, layout, ct)
+                conn, transaction, entities, new BatchRange(start, end), ctx, batchLayout, ct)
                 .ConfigureAwait(false);
         }
         return totalInserted;
@@ -67,6 +75,10 @@ internal static class MySqlBulkCopyInserter
 
     /// <summary>本批实体的起止区间（左闭右开）。</summary>
     private readonly record struct BatchRange(int Start, int End);
+
+    /// <summary>B16（2026-10-01）：批执行输入打包（列布局 + 列映射——映射由 ExecuteAsync
+    /// 解析后下传；打包避免 S107 且保持"每调用一次解析"语义）。</summary>
+    private readonly record struct BatchLayout(ColumnLayout Layout, MySqlBulkCopyColumnMapping[] Mappings);
 
     /// <summary>目标表列布局 + 参数池宽度——由 ctx 一次性推出，逐批复用（B1/L4）。
     /// <para>复检轮发现（预存缺陷）：非自增 PK（Guid/string 键）实体的 PK 已含于 InsertColumns
@@ -95,12 +107,14 @@ internal static class MySqlBulkCopyInserter
         IReadOnlyList<T> entities,
         BatchRange range,
         MySqlBulkCopyContext ctx,
-        ColumnLayout layout,
+        BatchLayout batchLayout,
         CancellationToken ct)
         where T : class
     {
         int start = range.Start;
         int end = range.End;
+        ColumnLayout layout = batchLayout.Layout;
+        MySqlBulkCopyColumnMapping[] mappings = batchLayout.Mappings;
         int columnCount = layout.ParameterCount;
         string[] allColumns = layout.AllColumns;
         // v5.6 参数复用：参数对象每批建一次、逐行只写 Value。原实现每行
@@ -152,14 +166,9 @@ internal static class MySqlBulkCopyInserter
             // DestinationColumn 在非表达式形态下由驱动执行 QuoteIdentifier（反引号包裹 +
             // 内嵌反引号翻倍）；此处传入已引用名会导致双重引用（`` `order` `` 被当作字面量）。
             // 故裸名是正确契约，保留。
-            // PROV-002（2026-09-23）：列映射只依赖 (目标表, 列集)——跨批恒定，缓存数组避免每批重建。
-            // MySqlBulkCopyColumnMapping 是不可变值对象（本机 mysqlconnector/2.6.2 包 XML：仅
-            // SourceOrdinal/DestinationColumn/Expression 只读属性 + 构造入参），跨 MySqlBulkCopy
-            // 实例共享安全。MySqlBulkCopy 对象本身仍每批新建——跨批复用需驱动侧确认，未纳入。
-            MySqlBulkCopyColumnMapping[] mappings = ColumnMappingCache.GetOrAdd(
-                (ctx.QuotedTable, string.Join('\u0001', allColumns)),
-                static (_, columns) => BuildColumnMappings(columns),
-                allColumns);
+            // B16（2026-10-01 全 API 逐项轮）：列映射解析提升到 ExecuteAsync（每调用一次）——
+            // 原实现每批 1 个 string.Join 键串 + GetOrAdd 查找；mappings 由调用方传入，
+            // PROV-002 的共享纪律不变（不可变值对象、跨 MySqlBulkCopy 实例共享安全）。
             foreach (MySqlBulkCopyColumnMapping mapping in mappings)
                 bulk.ColumnMappings.Add(mapping);
             // v5.6：DataTable → EntityDataReader（每行 372/360 B → 57 B，−84%；时间 −11%）

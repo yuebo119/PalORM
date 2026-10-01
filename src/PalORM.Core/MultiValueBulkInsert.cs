@@ -9,6 +9,13 @@ namespace PalORM;
 /// <para>命令、回滚或事务释放失败附加到主异常，不替换原始执行失败。</para></summary>
 public static class MultiValueBulkInsert
 {
+    /// <summary>B13（2026-10-01 全 API 逐项轮）：(实体类型, quotedTable) → 引用列清单串缓存——
+    /// 同类型同方言下值恒定（列集来自编译期注册表、引用符由 Provider 决定）。
+    /// quotedTable 作为方言代理键：不同引用符产出不同键；SQLite/PG 同为双引号时值也相同。
+    /// 键空间有限（实体类型 × 方言数）。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, string QuotedTable), string> QuotedColumnsCache = new();
+
     /// <summary>多值 INSERT 分批写入实体列表，返回受影响总行数。批次大小取
     /// <paramref name="ctx"/>.<see cref="BulkContext.BatchSize"/> 与参数上限
     /// <see cref="BulkContext.MaxParametersPerStatement"/>/列数的较小者；
@@ -68,8 +75,18 @@ public static class MultiValueBulkInsert
                 $"Type '{typeof(T).Name}' has no insertable columns; multi-value insert requires at least one.");
         int effectiveBatchSize = Math.Min(batchSize, maxParametersPerStatement / columnCount);
         string quotedTable = quoteIdentifier(tableName);
-        string quotedColumns = string.Join(", ",
-            metadata.InsertColumns.Select(quoteIdentifier));
+        // B13（2026-10-01 全 API 逐项轮）：列清单串按 (Type, quotedTable) 缓存——原实现每次
+        // 调用 1 次 LINQ Select 迭代器 + 委托 + string[N] + 结果串；键空间有限、值恒定。
+        string quotedColumns;
+        if (QuotedColumnsCache.TryGetValue((typeof(T), quotedTable), out string? cachedColumns))
+        {
+            quotedColumns = cachedColumns;
+        }
+        else
+        {
+            quotedColumns = string.Join(", ", metadata.InsertColumns.Select(quoteIdentifier));
+            QuotedColumnsCache.TryAdd((typeof(T), quotedTable), quotedColumns);
+        }
         long total = 0;
 
         // r7-S1：自开事务遵从会话隔离级别——原裸调致 MySQL local_infile=OFF 回退路径
@@ -191,7 +208,11 @@ public static class MultiValueBulkInsert
             {
                 int end = Math.Min(start + effectiveBatchSize, entities.Count);
                 int batchLength = end - start;
-                bool isFullBatch = batchLength == effectiveBatchSize && valuesBinder is not null;
+                // B12（2026-10-01 全 API 逐项轮）：池可用（已建）时所有批走池前缀路径——
+                // 末批不再 Clear 后逐行重建 R×cols 个参数；池未建时仅满批建池
+                // （首批即非满批的单批小数据保持老路径，避免小批白建满批规格池）。
+                bool poolUsable = valuesBinder is not null
+                    && (paramPool is not null || batchLength == effectiveBatchSize);
 
                 // CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）
                 if (batchLength != lastBatchLength)
@@ -208,12 +229,12 @@ public static class MultiValueBulkInsert
                 }
                 batchCmd.CommandText = lastBatchSql;
 
-                if (isFullBatch)
+                if (poolUsable)
                 {
                     // v4.6：满批参数复用路径
                     if (paramPool is null)
                     {
-                        // 首次：预分配 + Add 到 batchCmd
+                        // 首次满批：预分配 + Add 到 batchCmd
                         int poolSize = effectiveBatchSize * columnCount;
                         paramPool = new DbParameter[poolSize];
                         for (int i = 0; i < poolSize; i++)
@@ -224,15 +245,20 @@ public static class MultiValueBulkInsert
                             paramPool[i] = p;
                         }
                     }
-                    // ITM-785(r21)：删除原 `else if (!poolAdded)` 分支——循环按 start 单调递增，
-                    // 短批恒为末次迭代，"末批后回到满批"结构性不可达（覆盖分析确认从未命中）。
+                    // B12（2026-10-01 全 API 逐项轮）：末批复用池前缀——集合裁剪到本批需要数
+                    // （池前缀位序恒与 @pN 对齐，池容量 ≥ 本批需要数；ITM-785：短批恒为末次
+                    // 迭代，裁剪后不会再回满批）。原实现末批 Clear + 逐行 binder 重建 R×cols 个
+                    // 参数对象。满批间 needed == Count，循环零进入。
+                    int neededParameters = batchLength * columnCount;
+                    for (int i = batchCmd.Parameters.Count - 1; i >= neededParameters; i--)
+                        batchCmd.Parameters.RemoveAt(i);
                     // valuesBinder 只改 Value，不 Clear/Add
                     for (int row = 0; row < batchLength; row++)
                         valuesBinder!(paramPool, entities[start + row], row * columnCount);
                 }
                 else
                 {
-                    // 末批或无 valuesBinder：走老路径
+                    // 无 valuesBinder（旧模型程序集）或首批即非满批（单批小数据）：走老路径
                     batchCmd.Parameters.Clear();
                     for (int row = 0; row < batchLength; row++)
                     {
