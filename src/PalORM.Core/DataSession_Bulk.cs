@@ -71,8 +71,6 @@ public partial class DataSession<TProvider>
         int batchSize = Math.Min(
             Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount),
             SqlLimits.MaxRowsPerBatch);
-        // 满批占位符名在批大小不变时逐位相同——预建一次，末批另建
-        string[] fullBatchPlaceholders = BuildPlaceholderNames(TProvider.GetParameterPlaceholder, batchSize);
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
         // RunInTransactionScopeAsync 单点。
         return await RunInTransactionScopeAsync(
@@ -83,28 +81,24 @@ public partial class DataSession<TProvider>
                 // 仍执行 Restore+事务释放；await using 覆盖批间清理。
                 // R10：scratch 跨批次复用（对齐 MultiValueBulkInsert rowCommand 模式）。
                 await using DbCommand scratch = CreateCommand();
+                // B4（2026-10-01 全 API 逐项轮）：目标命令同样跨批复用——原实现每批
+                // CreateCommand + Dispose（SQLite 20K 键 21 个命令、PG/MySQL 5 个）；
+                // 批间 Clear 参数集合后重新转移，命令随作用域释放。
+                await using DbCommand cmd = CreateCommand();
+                cmd.Transaction = tran;
                 // 语句文本在批大小不变时逐位相同，末批不同——只在变化时重建
-                string? lastBatchSql = null;
                 int lastBatchLength = -1;
                 long total = 0;
                 for (int start = 0; start < keys.Count; start += batchSize)
                 {
                     int end = Math.Min(start + batchSize, keys.Count);
                     int batchLen = end - start;
-                    string[] placeholders = batchLen == batchSize
-                        ? fullBatchPlaceholders
-                        : BuildPlaceholderNames(TProvider.GetParameterPlaceholder, batchLen);
 
                     if (batchLen != lastBatchLength)
                     {
-                        lastBatchSql = BuildBulkDeleteSql(
-                            batchLen, placeholders, identifiers, isSoftDelete);
+                        cmd.CommandText = BuildBulkDeleteSql(batchLen, identifiers, isSoftDelete);
                         lastBatchLength = batchLen;
                     }
-
-                    await using DbCommand cmd = CreateCommand();
-                    cmd.Transaction = tran;
-                    cmd.CommandText = lastBatchSql!;
 
                     // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
                     // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
@@ -112,6 +106,10 @@ public partial class DataSession<TProvider>
                     // 重建一个参数对象——Clear/RemoveAt 不移交参数所有权（真库探针实测：改名
                     // Add 到另一命令后执行与复用均正确），10 万键省 10 万个 NpgsqlParameter 与
                     // 同等次数的装箱 + Provider DbType switch。
+                    // B5（2026-10-01）：占位符名从预建数组（string[batchSize]，5000 元素约 40KB）
+                    // 改为索引直取——GetParameterPlaceholder 默认实现即 ParameterNameCache
+                    // 索引取用（零分配），SQL 文本与参数名同源直取天然一致；三 Provider 均未覆写。
+                    cmd.Parameters.Clear();
                     for (int index = 0; index < batchLen; index++)
                     {
                         scratch.Parameters.Clear();
@@ -122,7 +120,7 @@ public partial class DataSession<TProvider>
 
                         var moved = scratch.Parameters[0];
                         scratch.Parameters.Clear();
-                        moved.ParameterName = placeholders[index];
+                        moved.ParameterName = TProvider.GetParameterPlaceholder(index);
                         cmd.Parameters.Add(moved);
                     }
                     BindDefaultFilterParameters<T>(cmd);
@@ -134,16 +132,6 @@ public partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
-    /// <summary>批内参数名（<see cref="IDbProvider.GetParameterPlaceholder"/> 形态，三方言一致）。
-    /// 驱动在 Add 时校验集合内重名，故名字必须真实存在而非仅占位。</summary>
-    private static string[] BuildPlaceholderNames(Func<int, string> placeholderFactory, int batchLen)
-    {
-        var placeholders = new string[batchLen];
-        for (int index = 0; index < batchLen; index++)
-            placeholders[index] = placeholderFactory(index);
-        return placeholders;
-    }
-
     /// <summary>删除语句的标识符与表达式集合——L5 提取到方法外，避免每批重算
     /// （QuoteIdentifier("deleted_at") × 2 + 时间表达式取值）。</summary>
     private readonly record struct DeleteIdentifiers(
@@ -151,9 +139,12 @@ public partial class DataSession<TProvider>
         string TimestampExpression, string TenantFilter);
 
     /// <summary>L5：单批删除/软删语句——单个 <see cref="ValueStringBuilder"/> 顺序写出，
-    /// 替代原「string[] + string.Join + 多重插值」的中间串。SQL 文本与旧实现逐字节一致。</summary>
+    /// 替代原「string[] + string.Join + 多重插值」的中间串。SQL 文本与旧实现逐字节一致。
+    /// <para>B5（2026-10-01 全 API 逐项轮）：占位符名改为索引直取
+    /// <see cref="IDbProvider.GetParameterPlaceholder"/>（默认实现 = ParameterNameCache 索引取用，
+    /// 零分配）——消去每调用 string[batchSize] 预建数组；参数改名循环同源直取，天然一致。</para></summary>
     private static string BuildBulkDeleteSql(
-        int batchLen, string[] placeholders, in DeleteIdentifiers identifiers, bool isSoftDelete)
+        int batchLen, in DeleteIdentifiers identifiers, bool isSoftDelete)
     {
         var sb = new ValueStringBuilder(stackalloc char[256]);
         try
@@ -179,7 +170,7 @@ public partial class DataSession<TProvider>
             for (int index = 0; index < batchLen; index++)
             {
                 if (index > 0) sb.Append(", ");
-                sb.Append(placeholders[index]);
+                sb.Append(TProvider.GetParameterPlaceholder(index));
             }
             sb.Append(')');
             if (isSoftDelete)
@@ -599,7 +590,11 @@ public partial class DataSession<TProvider>
 
     /// <summary>准备批量 UPDATE 上下文：SET 列集取自 CrudMetadata 真源、引号包裹、租户过滤。
     /// probe 命令验证 BindUpdate 参数序与元数据列集一致（ITM-642——原实现解析生成 SQL 文本
-    /// 反解列名，含逗号标识符被 Split(',') 错切、表名内含 " SET " 亦会误判）。</summary>
+    /// 反解列名，含逗号标识符被 Split(',') 错切、表名内含 " SET " 亦会误判）。
+    /// <para>B9（2026-10-01 全 API 逐项轮）：probe 结果按 (Type, Dialect) 经
+    /// <see cref="DataSessionCache.BatchUpdateContextCache"/> 缓存——生成器三处一致性是
+    /// 编译期事实（同一二进制内恒定），每进程每类型验证一次即可。租户位（会话态）不缓存，
+    /// 每次经 HasTenantFilter 现算。</para></summary>
     private BatchUpdateContext PrepareBatchUpdateContext<T>(
         PalORM_Runtime.RuntimeRegistryState state, CrudMetadata metadata,
         string tableName, T firstEntity)
@@ -611,35 +606,43 @@ public partial class DataSession<TProvider>
         if (setColumnCount <= 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
-        // probe 提取参数总数，作为生成器三处（SQL/Bind/元数据）漂移的运行时哨兵。
-        // ITM-792(r21) 订正：本方法为同步（BindUpdate 无 IO）——await using 不适用，
-        // 用 try/finally 显式 Dispose 保证异常路径释放（与 peer 的异步释放语义等价）。
-        DbCommand probe = CreateCommand();
-        try
+        if (!DataSessionCache.BatchUpdateContextCache.TryGetValue(
+                (typeof(T), TProvider.Dialect), out var cached))
         {
-            metadata.BindUpdate(probe, firstEntity);
-            int totalParams = probe.Parameters.Count;
-            if (totalParams != setColumnCount + 1)
-                throw new InvalidOperationException(
-                    $"Type '{typeof(T).Name}' BindUpdate produced {totalParams} parameters but metadata " +
-                    $"declares {setColumnCount} update columns (+1 primary key). Recompile the model assembly.");
-            string[] setColumns = metadata.UpdateColumns
-                .Select(TProvider.QuoteIdentifier).ToArray();
-            string quotedTable = TProvider.QuoteIdentifier(tableName);
-            // r19/ITM-684：缺 PkColumns 不再静默回退主键 "id"——错列更新比明确失败更危险。
-            // Register 的必填键校验使此分支经公共 API 不可达（防御纵深），但与 GetPkColumn/
-            // ITM-672 缺键拒绝族保持同口径：旧生成器/手工片段必须显式失败。
-            string quotedPk = state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
-                ? TProvider.QuoteIdentifier(pkCol)
-                : throw new InvalidOperationException(
-                    $"Type '{typeof(T).Name}' has no generated primary key metadata; " +
-                    "recompile the model assembly against the current PalORM source generator.");
-            return new BatchUpdateContext(setColumns, quotedTable, quotedPk, HasTenantFilter<T>());
+            // probe 提取参数总数，作为生成器三处（SQL/Bind/元数据）漂移的运行时哨兵
+            // （每进程每类型一次，见缓存 doc）。
+            // ITM-792(r21) 订正：本方法为同步（BindUpdate 无 IO）——await using 不适用，
+            // 用 try/finally 显式 Dispose 保证异常路径释放（与 peer 的异步释放语义等价）。
+            DbCommand probe = CreateCommand();
+            try
+            {
+                metadata.BindUpdate(probe, firstEntity);
+                int totalParams = probe.Parameters.Count;
+                if (totalParams != setColumnCount + 1)
+                    throw new InvalidOperationException(
+                        $"Type '{typeof(T).Name}' BindUpdate produced {totalParams} parameters but metadata " +
+                        $"declares {setColumnCount} update columns (+1 primary key). Recompile the model assembly.");
+                string[] setColumns = metadata.UpdateColumns
+                    .Select(TProvider.QuoteIdentifier).ToArray();
+                string quotedTable = TProvider.QuoteIdentifier(tableName);
+                // r19/ITM-684：缺 PkColumns 不再静默回退主键 "id"——错列更新比明确失败更危险。
+                // Register 的必填键校验使此分支经公共 API 不可达（防御纵深），但与 GetPkColumn/
+                // ITM-672 缺键拒绝族保持同口径：旧生成器/手工片段必须显式失败。
+                string quotedPk = state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
+                    ? TProvider.QuoteIdentifier(pkCol)
+                    : throw new InvalidOperationException(
+                        $"Type '{typeof(T).Name}' has no generated primary key metadata; " +
+                        "recompile the model assembly against the current PalORM source generator.");
+                cached = (setColumns, quotedTable, quotedPk);
+                DataSessionCache.BatchUpdateContextCache.TryAdd((typeof(T), TProvider.Dialect), cached);
+            }
+            finally
+            {
+                probe.Dispose();
+            }
         }
-        finally
-        {
-            probe.Dispose();
-        }
+        return new BatchUpdateContext(
+            cached.SetColumns, cached.QuotedTable, cached.QuotedPk, HasTenantFilter<T>());
     }
 
     /// <summary><b>M1/L2</b>：批量 UPDATE 的分批执行内核——拥有批次循环，命令、参数池与
@@ -889,7 +892,10 @@ public partial class DataSession<TProvider>
                     return affected;
                 }
 
-                List<T> upsertBatch = new(entities.Count);
+                // B6（2026-10-01 全 API 逐项轮）：惰性分配——全默认键（自增新实体，逐行
+                // SaveCoreAsync）场景不付 count 容量的引用数组（2 万行约 160KB）；
+                // BatchUpsertAsync 自带空列表短路（Count == 0 返回 0）。
+                List<T>? upsertBatch = null;
                 foreach (T entity in entities)
                 {
                     if (mergeMetadata.HasDefaultKey(entity))
@@ -899,12 +905,12 @@ public partial class DataSession<TProvider>
                     }
                     else
                     {
-                        upsertBatch.Add(entity);
+                        (upsertBatch ??= new List<T>(entities.Count)).Add(entity);
                     }
                 }
 
                 affected += await BatchUpsertAsync(
-                    transaction, upsertBatch, mergeMetadata, mergeState, token).ConfigureAwait(false);
+                    transaction, upsertBatch ?? [], mergeMetadata, mergeState, token).ConfigureAwait(false);
                 return affected;
             },
             ct).ConfigureAwait(false);
@@ -1093,13 +1099,21 @@ public partial class DataSession<TProvider>
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(entities);
-        var items = entities.ToList();
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        // B20（2026-10-01 全 API 逐项轮）：单遍收集 + 默认键校验——原 ToList（全量物化）
+        // + Any（第二遍枚举 + LINQ 委托）双遍开销；本形态一遍完成且零 LINQ。
+        // ICollection 可预知 Count 时按量预分配（与 ToList 的预分配行为对齐）。
+        List<T> items = entities is ICollection<T> sized ? new List<T>(sized.Count) : new();
+        foreach (T entity in entities)
+        {
+            if (metadata.HasDefaultKey(entity))
+                throw new InvalidOperationException(
+                    $"Seed entity '{typeof(T).Name}' requires a non-default stable primary key.");
+            items.Add(entity);
+        }
         // r12-B1（D3 残留族）：空短路后置——同 BulkInsertAsync 口径
         if (items.Count == 0) return;
-        if (items.Any(entity => metadata.HasDefaultKey(entity)))
-            throw new InvalidOperationException($"Seed entity '{typeof(T).Name}' requires a non-default stable primary key.");
         await BulkMergeAsync(items, ct).ConfigureAwait(false);
     }
 }
