@@ -200,26 +200,29 @@ public sealed class PostgreSqlProvider : IDbProvider
     public static DbParameter CreateParameter(string name, object? value)
     {
         var parameter = new NpgsqlParameter(name, value ?? DBNull.Value);
-        // 仅对已知基元显式映射——未知类型留给驱动推断（保持既有行为）
+        // 仅对已知基元显式映射——未知类型留给驱动推断（保持既有行为）。
+        // C1（2026-10-01 全 API 逐项轮）：case 频率重排——int/long/string/Guid 等高频类型前置
+        // （原顺序下 string 至多 13 次、Guid 17 次类型测试才命中）；各 case 为互斥的封闭类型
+        // 模式（无类型包含关系），重排纯语义等价。
         switch (value)
         {
+            case int: parameter.DbType = System.Data.DbType.Int32; break;
+            case long: parameter.DbType = System.Data.DbType.Int64; break;
+            case string: parameter.DbType = System.Data.DbType.String; break;
+            case Guid: parameter.DbType = System.Data.DbType.Guid; break;
             case bool: parameter.DbType = System.Data.DbType.Boolean; break;
+            case DateTime: parameter.DbType = System.Data.DbType.DateTime; break;
+            case decimal: parameter.DbType = System.Data.DbType.Decimal; break;
+            case double: parameter.DbType = System.Data.DbType.Double; break;
+            case short: parameter.DbType = System.Data.DbType.Int16; break;
             case byte: parameter.DbType = System.Data.DbType.Byte; break;
             case sbyte: parameter.DbType = System.Data.DbType.SByte; break;
-            case short: parameter.DbType = System.Data.DbType.Int16; break;
             case ushort: parameter.DbType = System.Data.DbType.UInt16; break;
-            case int: parameter.DbType = System.Data.DbType.Int32; break;
             case uint: parameter.DbType = System.Data.DbType.UInt32; break;
-            case long: parameter.DbType = System.Data.DbType.Int64; break;
             case ulong: parameter.DbType = System.Data.DbType.UInt64; break;
             case float: parameter.DbType = System.Data.DbType.Single; break;
-            case double: parameter.DbType = System.Data.DbType.Double; break;
-            case decimal: parameter.DbType = System.Data.DbType.Decimal; break;
-            case string: parameter.DbType = System.Data.DbType.String; break;
             case char: parameter.DbType = System.Data.DbType.String; break;
-            case DateTime: parameter.DbType = System.Data.DbType.DateTime; break;
             case DateTimeOffset: parameter.DbType = System.Data.DbType.DateTimeOffset; break;
-            case Guid: parameter.DbType = System.Data.DbType.Guid; break;
             default: break;  // 未知类型留给驱动推断（保持既有行为）
         }
         return parameter;

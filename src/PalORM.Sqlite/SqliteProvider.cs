@@ -29,10 +29,25 @@ public sealed class SqliteProvider : IDbProvider
         // 不含自动 bundle 探测，NativeAOT/裁剪下更不能依赖反射发现（ITM-317）。
         // Init 幂等，本方法由运行时保证恰好执行一次。
         SQLitePCL.Batteries_V2.Init();
+        // C3：连接模式解析缓存在此初始化（不得用字段初始化器——见字段 doc 的形态约束）。
+        ConnectionModeCache = new();
     }
 
     /// <summary>Provider 名称:SQLite。</summary>
     public static string Name => "SQLite";
+
+    /// <summary>C3（2026-10-01 全 API 逐项轮）：(连接串 → isInMemory/isReadOnly) 解析缓存——
+    /// 原实现每会话 Open 都付一次 SqliteConnectionStringBuilder 解析；解析是连接串的纯函数
+    /// （含解析失败 → 保守文件库的固定结果）。键 = 完整连接串；容量守卫防动态连接串无界增长
+    /// （超限不写，仅退化重建）。
+    /// <para><b>形态约束</b>：不得写成字段初始化器（<c>= new()</c>）——那会生成隐式静态构造器、
+    /// 使本类型丢失 beforefieldinit（C5 检查 SqliteProvider_IsBeforeFieldInit_NoExplicitStaticConstructor
+    /// 锁定），批量路径的方法组传递将每次白付类型初始化检查。故为可空字段，在
+    /// <see cref="InitializeSqliteNativeBundle"/>（ModuleInitializer）内一次性赋值——
+    /// 其"模块任何代码执行前恰好一次"的语义保证使用点就绪。</para></summary>
+    private const int MaxConnectionModeCacheEntries = 64;
+    private static System.Collections.Concurrent.ConcurrentDictionary<
+        string, (bool IsInMemory, bool IsReadOnly)>? ConnectionModeCache;
 
     /// <summary>SQL 方言标识:<see cref="SqlDialect.Sqlite"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.Sqlite;
@@ -128,23 +143,39 @@ public sealed class SqliteProvider : IDbProvider
         // ITM-733(r20)：原用 ConnectionString.Contains(":memory:") 子串判定——DataSource 恰含该子串
         // 的真实文件库（Linux 合法文件名，如 /tmp/mem:memory:1.db）被误判为内存库，静默跳过
         // WAL/synchronous/mmap 配置。改走 SqliteConnectionStringBuilder 结构化解析。
+        // C3（2026-10-01 全 API 逐项轮）：解析结果按连接串缓存——原实现每会话 Open 都付一次
+        // builder 解析（含内部键值解析分配）；解析是连接串的纯函数。容量守卫防动态连接串无界。
         bool isInMemory;
         bool isReadOnly;
-        try
+        string connectionString = connection.ConnectionString;
+        // ModuleInitializer 保证非 null（见字段 doc 的形态约束）。
+        System.Collections.Concurrent.ConcurrentDictionary<string, (bool IsInMemory, bool IsReadOnly)> modeCache =
+            ConnectionModeCache!;
+        if (modeCache.TryGetValue(connectionString, out (bool IsInMemory, bool IsReadOnly) cachedMode))
         {
-            var builder = new SqliteConnectionStringBuilder(connection.ConnectionString);
-            // Microsoft.Data.Sqlite 语义：Mode=Memory（含 ":memory:" 与命名共享内存库）
-            // 或省略 Data Source（临时内存库）均为内存库。
-            isInMemory = builder.Mode == SqliteOpenMode.Memory
-                || string.IsNullOrEmpty(builder.DataSource)
-                || string.Equals(builder.DataSource, ":memory:", StringComparison.Ordinal);
-            isReadOnly = builder.Mode == SqliteOpenMode.ReadOnly;
+            isInMemory = cachedMode.IsInMemory;
+            isReadOnly = cachedMode.IsReadOnly;
         }
-        catch (ArgumentException)
+        else
         {
-            // 非法连接串由后续命令执行报错；此处保守按文件库处理（不静默降级耐久性配置）
-            isInMemory = false;
-            isReadOnly = false;
+            try
+            {
+                var builder = new SqliteConnectionStringBuilder(connectionString);
+                // Microsoft.Data.Sqlite 语义：Mode=Memory（含 ":memory:" 与命名共享内存库）
+                // 或省略 Data Source（临时内存库）均为内存库。
+                isInMemory = builder.Mode == SqliteOpenMode.Memory
+                    || string.IsNullOrEmpty(builder.DataSource)
+                    || string.Equals(builder.DataSource, ":memory:", StringComparison.Ordinal);
+                isReadOnly = builder.Mode == SqliteOpenMode.ReadOnly;
+            }
+            catch (ArgumentException)
+            {
+                // 非法连接串由后续命令执行报错；此处保守按文件库处理（不静默降级耐久性配置）
+                isInMemory = false;
+                isReadOnly = false;
+            }
+            if (modeCache.Count < MaxConnectionModeCacheEntries)
+                modeCache.TryAdd(connectionString, (isInMemory, isReadOnly));
         }
 
         await using DbCommand command = connection.CreateCommand();
