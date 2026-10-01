@@ -7,6 +7,7 @@
 ### ⚡ 提升空间实施轮（2026-10-02）
 
 - **SQLite 池化连接初始化去冗余**：Microsoft.Data.Sqlite 默认池化，连接归还后原生句柄留池、下次 Open 取回同一句柄，句柄上的连接级 PRAGMA 全部保留（探针实测）。原实现每次 `CreateAsync` 都重跑整组初始化 PRAGMA（文件库 10 条），现改为每个物理连接（句柄）只完整执行一次，复用已初始化句柄时只重设 `foreign_keys = ON`（完整性约束每会话保证，STD-CONC-008 不变）。新增 `IDbProvider.InvalidateConnectionInitialization`（static virtual，默认无操作）：会话层执行 `SessionSetupSql`/`ReadSessionSetupSql` 之前调用，SQLite 据此让该句柄下次被取用时重新完整初始化，会话定制不带入其他会话。**行为变化**：会话中途用原始 SQL 改过的调优 PRAGMA（cache_size 等）会随池化句柄带入后续会话；需每会话复位的设置请放进 `SessionSetupSql`。不池化（`Pooling=False`）与共享内存库（每次 Open 为新句柄）行为不变。实测（文件库 WAL，探针 `lifecycle` 5 轮交替）：`CreateAsync+DisposeAsync` 9.19µs/4688B → 1.80µs/2160B；每请求一会话的单键直查 `CreateAsync+GetAsync` 16.62µs/6408B → 7.69µs/3880B（对手写 ADO 2.84× → 1.37×）。新增 3 个锁定用例（复用保留调优项且重设外键 / 会话 SQL 作废登记 / 不池化每次完整初始化），三处变异各自转红已核实。
+- **PG 批量 UPDATE 单批上限 1000 行**（`BulkUpdateAsync` 自动路由与 `BulkUpdateBatchAsync` 共用）：原批宽 `min(65535/(SET 列+1), 5000)`，S1 形状 2000 行一条 `UPDATE … FROM (VALUES …)` 发出。VALUES 行数相对表规模过大时规划器翻成 Hash Join + 目标表全表顺扫：探针 `pgplan` 在 42 万行表上，2000 行单语句 45.39ms，拆 1000×2 走 Nested Loop + 主键索引 19.50ms（统计陈旧同形态），即 PerfHub BulkUpdate/PG/2000 长期 2.65~2.83× 的根因（此前误判为服务器时段波动）。改后产品路径同场景 16.35ms（陈旧统计 15.27ms），约快 2.8×；2K 小表无翻转、持平。新增 PG 跨批边界真库用例（2500 行 = 1000/1000/500，自动路由与显式批量两入口逐行断言）。
 
 ### 🩹 基准编排缺陷修复 + 形态复核全覆盖（2026-10-01，step13）
 
