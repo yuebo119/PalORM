@@ -228,6 +228,88 @@ public sealed class PostgreSqlProvider : IDbProvider
         return parameter;
     }
 
+    /// <summary>由调用方给出的**显式元素类型**创建数组参数（UNNEST 阶段 B：批量 UPDATE/UPSERT 用）。
+    /// <para>与 <see cref="CreateArrayParameter"/> 的差异：后者从数组运行时类型推断元素类型
+    /// （阶段 A 的单键数组够用）；本形态下调用方已由生成物拿到列的元素类型
+    /// （<c>UpdateColumnArrayElementTypes</c>），直接给出，省一次推断且能覆盖
+    /// "元素类型为引用型但数组已建好"的形态。</para>
+    /// <para>元素类型为 <c>Nullable&lt;T&gt;</c> 时按 <c>T</c> 映射（PG 数组本身即承载 NULL）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S3265:Non-flags enums should not be used in bitwise operations",
+        Justification = "Npgsql 官方 XML 文档对 NpgsqlDbType.Array 明确要求按位或组合"
+            + "（\"This value must be combined with another value from NpgsqlDbType via a bit OR "
+            + "(e.g. NpgsqlDbType.Array | NpgsqlDbType.Integer)\"），枚举未标 [Flags] 是驱动侧的标注疏漏。")]
+    public static DbParameter? CreateTypedArrayParameter(string name, Array values, Type elementType)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        ArgumentNullException.ThrowIfNull(elementType);
+        Type underlying = Nullable.GetUnderlyingType(elementType) ?? elementType;
+        if (ArrayElementDbType(underlying) is not { } element)
+        {
+            return null;  // 不支持的 CLR 元素类型：调用方回退 VALUES 形态
+        }
+
+        return new NpgsqlParameter(name, values) { NpgsqlDbType = NpgsqlDbType.Array | element };
+    }
+
+    /// <summary>创建数组参数（2026-10-02，UNNEST 形态）——<c>NpgsqlDbType.Array | element</c>。
+    /// <para><b>元素类型由数组本身推断</b>（<paramref name="values"/> 的运行时元素类型）：
+    /// 生成物构造的是类型化数组（<c>long[]</c>/<c>string[]</c>/…），元素类型即参数类型，
+    /// 无需调用方另传 DbType——平行映射表会与生成物元素类型构成第二个真源（B120 同构温床）。</para>
+    /// <para><b>为什么必须显式类型</b>：数组参数的类型推断在空数组上无从进行（探针实测：
+    /// 不设类型时绑定失败）；显式 <c>Array | element</c> 让空数组与有值形态走同一条路径。
+    /// 注意此处用的是 C# 元素 <b>Type</b>（不是泛型 <c>NpgsqlParameter&lt;T&gt;</c>），
+    /// <c>values.GetType().GetElementType()</c> 对空数组同样返回元素类型——类型来自数组的
+    /// 编译期类型，不来自元素值，故空数组无歧义。</para>
+    /// <para><b>值形态</b>：接受 <see cref="Array"/>（含 <c>long[]</c>/<c>string[]</c> 等），
+    /// 驱动按元素类型逐项绑定。</para>
+    /// <para><b>null 语义</b>：不支持的 CLR 元素类型返回 null，调用方回退 IN 占位符形态
+    /// （不静默发一个类型未知的数组参数——那会以服务端推断错误的形式在远端失败，
+    /// 错误消息不指向真正的原因）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S3265:Non-flags enums should not be used in bitwise operations",
+        Justification = "Npgsql 官方 XML 文档对 NpgsqlDbType.Array 明确要求按位或组合"
+            + "（\"This value must be combined with another value from NpgsqlDbType via a bit OR "
+            + "(e.g. NpgsqlDbType.Array | NpgsqlDbType.Integer)\"），枚举未标 [Flags] 是驱动侧的标注疏漏。")]
+    public static DbParameter? CreateArrayParameter(string name, Array values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        Type elementType = values.GetType().GetElementType() ?? typeof(object);
+        if (ArrayElementDbType(elementType) is not { } element)
+        {
+            return null;  // 不支持的 CLR 元素类型：调用方回退 IN 占位符形态
+        }
+
+        var parameter = new NpgsqlParameter(name, values) { NpgsqlDbType = element };
+        parameter.NpgsqlDbType = NpgsqlDbType.Array | element;
+        return parameter;
+    }
+
+    /// <summary>数组元素 CLR 类型 → 驱动的元素 <see cref="NpgsqlDbType"/>。null = 不支持数组形态。
+    /// <para>映射面**刻意收窄到主键可能的类型**：主键列的 CLR 类型经
+    /// <c>SourceGenerationValidation.CanGenerateEntity</c> 已限为非可空值类型/string/Guid 等，
+    /// 故这里只需覆盖这些类型；未覆盖类型返回 null 走回退，不猜测。</para>
+    /// <para>可空元素类型（<c>long?</c>）经 <c>Nullable.GetUnderlyingType</c> 解包——
+    /// 数组元素是 <c>T?</c> 时运行时元素类型即 <c>Nullable&lt;T&gt;</c>。</para></summary>
+    private static NpgsqlDbType? ArrayElementDbType(Type elementType)
+    {
+        Type underlying = Nullable.GetUnderlyingType(elementType) ?? elementType;
+        if (underlying == typeof(int)) return NpgsqlDbType.Integer;
+        if (underlying == typeof(long)) return NpgsqlDbType.Bigint;
+        if (underlying == typeof(short)) return NpgsqlDbType.Smallint;
+        if (underlying == typeof(byte)) return NpgsqlDbType.Smallint;
+        if (underlying == typeof(string)) return NpgsqlDbType.Text;
+        if (underlying == typeof(Guid)) return NpgsqlDbType.Uuid;
+        if (underlying == typeof(bool)) return NpgsqlDbType.Boolean;
+        if (underlying == typeof(decimal)) return NpgsqlDbType.Numeric;
+        if (underlying == typeof(double)) return NpgsqlDbType.Double;
+        if (underlying == typeof(float)) return NpgsqlDbType.Real;
+        if (underlying == typeof(DateTime)) return NpgsqlDbType.Timestamp;
+        if (underlying == typeof(DateTimeOffset)) return NpgsqlDbType.TimestampTz;
+        if (underlying == typeof(DateOnly)) return NpgsqlDbType.Date;
+        if (underlying == typeof(TimeOnly)) return NpgsqlDbType.Time;
+        if (underlying == typeof(byte[])) return NpgsqlDbType.Bytea;
+        return null;
+    }
+
     /// <summary>批量插入——按源生成 InsertColumns 与 BindInsert 执行 Npgsql Binary COPY。
     /// <para><paramref name="batchSize"/> 即每次 COPY 会话的行数：Binary COPY 无参数上限，
     /// 远程库建议传整段行数（单次协议往返）——小批（如多值 VALUES 思维的 1000）会让

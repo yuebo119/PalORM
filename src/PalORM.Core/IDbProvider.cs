@@ -49,6 +49,26 @@ public interface IDbProvider
     /// <summary>创建 DbParameter。避免 QueryBuilder.Where() 中 CreateCommand() 资源泄漏。</summary>
     static abstract DbParameter CreateParameter(string name, object? value);
 
+    /// <summary>创建<b>数组</b>参数（2026-10-02，UNNEST 形态用）。
+    /// <para><b>元素类型由 <paramref name="values"/> 的运行时元素类型推断</b>——生成物构造的是
+    /// 类型化数组（<c>long[]</c>/<c>string[]</c>/…），数组元素类型即参数类型；调用方无需另传
+    /// DbType（平行映射会与生成物元素类型构成第二个真源，必然漂移）。调用方保证传类型化数组
+    /// 而非 <c>object[]</c>（<c>BuildDeleteKeyArray</c> 的返回即类型化数组）。</para>
+    /// <para><b>返回 null 表示该 Provider 或该元素类型不支持数组参数</b>（默认实现恒返回 null）：
+    /// 调用方据此回退到既有形态（IN 占位符列表）。MySQL/SQLite 无数组类型，未覆写本默认实现。</para>
+    /// <para><b>参数名带 @ 前缀</b>（与 <see cref="CreateParameter"/> 同约定）。</para></summary>
+    static virtual DbParameter? CreateArrayParameter(string name, Array values)
+        => null;
+
+    /// <summary>按<b>显式元素类型</b>创建数组参数（UNNEST 阶段 B：批量 UPDATE/UPSERT 的每列一数组）。
+    /// <para>与 <see cref="CreateArrayParameter"/> 的分工：后者从数组运行时类型推断（单键数组够用），
+    /// 本形态由调用方给出元素类型（生成物已静态确定，见 <c>UpdateColumnArrayElementTypes</c>），
+    /// 省一次推断且不依赖"数组元素类型一定可被运行时观察到"。</para>
+    /// <para>返回 null 表示该 Provider 或该元素类型不支持数组形态，调用方回退 VALUES 形态。
+    /// 默认实现恒返回 null（与 <see cref="CreateArrayParameter"/> 同族：非 PG 方言无数组类型）。</para></summary>
+    static virtual DbParameter? CreateTypedArrayParameter(string name, Array values, Type elementType)
+        => null;
+
     /// <summary>判断数据库异常是否属于可安全重试的瞬时故障。</summary>
     static virtual bool IsTransient(Exception exception)
         => exception is DbException { IsTransient: true };

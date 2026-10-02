@@ -163,6 +163,10 @@ internal static class Program
             if (migratedBack.Label != "migrated" || migratedBack.Amount != 12.5m)
                 throw new InvalidOperationException("PostgreSQL migrated-table round trip failed");
 
+            // UNNEST 阶段 B（2026-10-02）：批量 UPDATE / Merge 的数组形态在 NativeAOT 下的
+            // 原生实跑（生成物新增 AOT 面：泛型 new T[]、委托、类型表）。
+            await VerifyUnnestArrayFormsAsync(db).ConfigureAwait(false);
+
             await VerifyPessimisticLocksAsync(db).ConfigureAwait(false);
             }
             finally
@@ -175,6 +179,45 @@ internal static class Program
         }
 
         Console.WriteLine("PalORM AOT PG verification PASSED");
+    }
+
+    /// <summary>UNNEST 阶段 B（2026-10-02）：批量 UPDATE / Merge 的数组形态在 NativeAOT 下的
+    /// 原生实跑——生成物的逐列数组填充器/分配器是新增 AOT 面（泛型 <c>new T[]</c>、委托、
+    /// 类型表），必须原生二进制验证（P0 #3：编译通过不等于运行时安全）。
+    /// <para>用 AotPgMigratedEntity：无并发令牌、无软删（两者都会把 BulkUpdateAsync 路由到
+    /// 逐条路径，到不了数组形态）。</para></summary>
+    private static async Task VerifyUnnestArrayFormsAsync(DataSession<PostgreSqlProvider> db)
+    {
+        var rows = new List<AotPgMigratedEntity>();
+#pragma warning disable PALORM005 // 播种循环是有意逐行（本方法验证的是批量写路径，不是读取）
+        for (long i = 1; i <= 50; i++)
+            rows.Add(await db.InsertAsync(new AotPgMigratedEntity
+            {
+                Label = $"m{i}", Amount = i * 0.5m, CreatedAt = DateTimeOffset.UtcNow
+            }).ConfigureAwait(false));
+#pragma warning restore PALORM005
+
+        foreach (AotPgMigratedEntity row in rows)
+        {
+            row.Label = $"mu{row.Id}";
+            row.Amount = row.Id * 1.25m;
+        }
+        if (await db.BulkUpdateAsync(rows).ConfigureAwait(false) != rows.Count)
+            throw new InvalidOperationException("PostgreSQL bulk UPDATE (UNNEST array form) failed");
+        AotPgMigratedEntity updatedBack = await db
+            .GetAsync<AotPgMigratedEntity>(rows[0].Id).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("PostgreSQL bulk UPDATE GET failed");
+        if (updatedBack.Label != $"mu{rows[0].Id}" || updatedBack.Amount != rows[0].Id * 1.25m)
+            throw new InvalidOperationException("PostgreSQL bulk UPDATE (UNNEST array form) round trip failed");
+
+        foreach (AotPgMigratedEntity row in rows) row.Label = $"mm{row.Id}";
+        if (await db.BulkMergeAsync(rows).ConfigureAwait(false) != rows.Count)
+            throw new InvalidOperationException("PostgreSQL bulk MERGE (UNNEST array form) failed");
+        AotPgMigratedEntity mergedBack = await db
+            .GetAsync<AotPgMigratedEntity>(rows[1].Id).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("PostgreSQL bulk MERGE GET failed");
+        if (mergedBack.Label != $"mm{rows[1].Id}")
+            throw new InvalidOperationException("PostgreSQL bulk MERGE (UNNEST array form) round trip failed");
     }
 
     /// <summary>悲观锁子句的**原生执行**验证——SQLite 执行不了锁语句（ITM-639：只支持预览形态），

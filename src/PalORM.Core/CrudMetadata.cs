@@ -43,6 +43,48 @@ public readonly struct CrudBindings
     /// 保持"每行写 DbType+Value"的旧形态。</summary>
     public readonly Action<DbParameter[], int>? InitInsertParameters;
 
+    /// <summary>UNNEST-1（2026-10-02）：主键数组构造器——把键对象序列转成类型化数组
+    /// （<c>BuildDeleteKeyArray(keys, start, count)</c>），供 PG 的 <c>pk = ANY(@ids)</c> 形态使用。
+    /// <para>元素类型与元素值均由生成物静态确定（零反射，AOT 安全）；元素值与
+    /// <c>BindDelete</c> 同一归一化真源，两条路径绑定语义逐位一致。</para>
+    /// <para>返回 null 表示**该实体不支持数组形态**（复合主键——UNNEST 需行构造器数组，
+    /// 收益与复杂度不成比例）；旧版生成器程序集亦缺此委托。两种情况调用方均回退 IN 占位符形态。</para></summary>
+    public readonly Func<IReadOnlyList<object>, int, int, Array?>? BuildDeleteKeyArray;
+
+    /// <summary>UNNEST 阶段 B（2026-10-02）：逐列类型化数组填充器——把实体区间按 UPDATE 列序
+    /// （SET 列 → 主键 → 并发令牌）填入调用方预建的数组。
+    /// <para><c>FillUpdateColumnArrays(entities, start, count, arrays, arrayOffset)</c>：元素类型
+    /// 与元素值均与 <c>BindUpdateValues</c> 同一真源（共享 <c>GetParameterValueExpressionCore</c>
+    /// 与 <c>GetUpdateColumnOrder</c>），两条路径绑定语义逐位一致。</para>
+    /// <para>返回 null 表示旧版生成器程序集；调用方回退 VALUES 形态。</para></summary>
+    public readonly Action<IReadOnlyList<object>, int, int, Array[], int>? FillUpdateColumnArrays;
+
+    /// <summary>UNNEST 阶段 B：逐列数组的元素类型（与 <see cref="FillUpdateColumnArrays"/> 同序同长度）。
+    /// <para><b>为什么必须带可空标注</b>：数组元素类型决定能否承载 null——值类型必须建成
+    /// <c>T?[]</c>（探针实测 PG 正确写 SQL NULL），非可空列建成裸 <c>T[]</c>（可省一次 Nullable
+    /// 包装）。生成期已知，故直接发自真源而非运行时推断。</para>
+    /// <para>注册时做只读快照（与 ColumnNames 同纪律）：片段传入的是生成代码的静态数组裸引用。</para></summary>
+    public readonly IReadOnlyList<Type>? UpdateColumnArrayElementTypes;
+
+    /// <summary>UNNEST 阶段 B：逐列类型化数组分配器——<c>CreateUpdateColumnArrays(count)</c> 返回
+    /// 长度 <c>count</c> 的各列数组，<b>静态类型 <c>new T[count]</c> 分配</b>。
+    /// <para><b>为什么分配必须在生成物内</b>：Core 侧按 <c>Type</c> 建数组只能走
+    /// <c>Array.CreateInstance(Type, …)</c>，该方法带 <c>RequiresDynamicCode</c>（IL3050），
+    /// AOT 下不可用——生成物内写静态类型 <c>new T[count]</c> 才是 AOT 安全的（G4/G6 门禁）。</para></summary>
+    public readonly Func<int, Array[]>? CreateUpdateColumnArrays;
+
+    /// <summary>UNNEST 阶段 B：UPSERT 的逐列数组填充器——列序 = <c>IsUpsertable</c> 声明序
+    /// （与 <c>BindUpsertValues</c> / <c>UpsertColumns</c> 同源同序）。语义与
+    /// <see cref="FillUpdateColumnArrays"/> 同构，只是列集不同（UPSERT 含非更新列，不含并发令牌）。</summary>
+    public readonly Action<IReadOnlyList<object>, int, int, Array[], int>? FillUpsertColumnArrays;
+
+    /// <summary>UNNEST 阶段 B：UPSERT 逐列数组的元素类型（与 <see cref="FillUpsertColumnArrays"/>
+    /// 同序同长度；注册时做只读快照）。</summary>
+    public readonly IReadOnlyList<Type>? UpsertColumnArrayElementTypes;
+
+    /// <summary>UNNEST 阶段 B：UPSERT 逐列数组分配器（AOT 安全，同 <see cref="CreateUpdateColumnArrays"/>）。</summary>
+    public readonly Func<int, Array[]>? CreateUpsertColumnArrays;
+
     /// <summary>构造 CRUD 委托聚合。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:Constructor should not have more than 7 parameters",
@@ -60,7 +102,14 @@ public readonly struct CrudBindings
         bool insertNoReturning = false,
         Action<DbParameter[], object, int>? bindUpsertValues = null,
         Action<IBinaryRowSink, object>? copyWriteRow = null,
-        Action<DbParameter[], int>? initInsertParameters = null)
+        Action<DbParameter[], int>? initInsertParameters = null,
+        Func<IReadOnlyList<object>, int, int, Array?>? buildDeleteKeyArray = null,
+        Action<IReadOnlyList<object>, int, int, Array[], int>? fillUpdateColumnArrays = null,
+        IReadOnlyList<Type>? updateColumnArrayElementTypes = null,
+        Func<int, Array[]>? createUpdateColumnArrays = null,
+        Action<IReadOnlyList<object>, int, int, Array[], int>? fillUpsertColumnArrays = null,
+        IReadOnlyList<Type>? upsertColumnArrayElementTypes = null,
+        Func<int, Array[]>? createUpsertColumnArrays = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -73,6 +122,13 @@ public readonly struct CrudBindings
         InsertNoReturning = insertNoReturning;
         CopyWriteRow = copyWriteRow;
         InitInsertParameters = initInsertParameters;
+        BuildDeleteKeyArray = buildDeleteKeyArray;
+        FillUpdateColumnArrays = fillUpdateColumnArrays;
+        UpdateColumnArrayElementTypes = updateColumnArrayElementTypes;
+        CreateUpdateColumnArrays = createUpdateColumnArrays;
+        FillUpsertColumnArrays = fillUpsertColumnArrays;
+        UpsertColumnArrayElementTypes = upsertColumnArrayElementTypes;
+        CreateUpsertColumnArrays = createUpsertColumnArrays;
     }
 }
 
@@ -139,6 +195,20 @@ public readonly struct CrudMetadata
     public readonly Action<IBinaryRowSink, object>? CopyWriteRow;
     /// <summary>B21（2026-10-01）：INSERT 池 DbType 一次性初始化委托（判定条件与消费路径见 CrudBindings.InitInsertParameters）。</summary>
     public readonly Action<DbParameter[], int>? InitInsertParameters;
+    /// <summary>UNNEST-1（2026-10-02）：主键数组构造器（判定条件与消费路径见 CrudBindings.BuildDeleteKeyArray）。</summary>
+    public readonly Func<IReadOnlyList<object>, int, int, Array?>? BuildDeleteKeyArray;
+    /// <summary>UNNEST 阶段 B：逐列类型化数组填充器（判定条件与消费路径见 CrudBindings.FillUpdateColumnArrays）。</summary>
+    public readonly Action<IReadOnlyList<object>, int, int, Array[], int>? FillUpdateColumnArrays;
+    /// <summary>UNNEST 阶段 B：逐列数组元素类型（判定条件与消费路径见 CrudBindings.UpdateColumnArrayElementTypes）。</summary>
+    public readonly IReadOnlyList<Type>? UpdateColumnArrayElementTypes;
+    /// <summary>UNNEST 阶段 B：逐列类型化数组分配器（判定条件与消费路径见 CrudBindings.CreateUpdateColumnArrays）。</summary>
+    public readonly Func<int, Array[]>? CreateUpdateColumnArrays;
+    /// <summary>UNNEST 阶段 B：UPSERT 逐列数组填充器（判定条件与消费路径见 CrudBindings.FillUpsertColumnArrays）。</summary>
+    public readonly Action<IReadOnlyList<object>, int, int, Array[], int>? FillUpsertColumnArrays;
+    /// <summary>UNNEST 阶段 B：UPSERT 逐列数组元素类型（判定条件与消费路径见 CrudBindings.UpsertColumnArrayElementTypes）。</summary>
+    public readonly IReadOnlyList<Type>? UpsertColumnArrayElementTypes;
+    /// <summary>UNNEST 阶段 B：UPSERT 逐列数组分配器（判定条件与消费路径见 CrudBindings.CreateUpsertColumnArrays）。</summary>
+    public readonly Func<int, Array[]>? CreateUpsertColumnArrays;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
@@ -172,6 +242,18 @@ public readonly struct CrudMetadata
         InsertNoReturning = bindings.InsertNoReturning;
         CopyWriteRow = bindings.CopyWriteRow;
         InitInsertParameters = bindings.InitInsertParameters;
+        BuildDeleteKeyArray = bindings.BuildDeleteKeyArray;
+        FillUpdateColumnArrays = bindings.FillUpdateColumnArrays;
+        // 只读快照（与 CrudColumns / ColumnNames 同纪律）：片段传入的是生成代码的静态数组裸引用。
+        UpdateColumnArrayElementTypes = bindings.UpdateColumnArrayElementTypes is { } elementTypes
+            ? Array.AsReadOnly(elementTypes.ToArray())
+            : null;
+        CreateUpdateColumnArrays = bindings.CreateUpdateColumnArrays;
+        FillUpsertColumnArrays = bindings.FillUpsertColumnArrays;
+        UpsertColumnArrayElementTypes = bindings.UpsertColumnArrayElementTypes is { } upsertElementTypes
+            ? Array.AsReadOnly(upsertElementTypes.ToArray())
+            : null;
+        CreateUpsertColumnArrays = bindings.CreateUpsertColumnArrays;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
@@ -195,10 +277,16 @@ public readonly struct CrudMetadata
         Sqls = sqls;
     }
 
+    /// <summary>深拷贝——<b>新增字段必须同步本方法</b>：漏传在快照层不可见（拷贝后的实例字段为
+    /// default），会让优化静默失效或行为改变（PERF_MANAGED_DISCIPLINE 第九节的 Copy 路径检查单）。
+    /// </summary>
     internal CrudMetadata Copy()
         => new(Sqls,
             new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues,
-                InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters),
+                InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters,
+                BuildDeleteKeyArray, FillUpdateColumnArrays, UpdateColumnArrayElementTypes,
+                CreateUpdateColumnArrays, FillUpsertColumnArrays, UpsertColumnArrayElementTypes,
+                CreateUpsertColumnArrays),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }
