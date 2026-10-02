@@ -102,7 +102,11 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>数组形态的批量删除主体（UNNEST-1）——每批一句 <c>pk = ANY(@ids)</c>，
-    /// 语句文本跨批恒定（单参数名与批长度无关），故只建一次命令文本。</summary>
+    /// 语句文本跨批恒定（单参数名与批长度无关），故只建一次命令文本。
+    /// <para><b>R-UNNESTB 修正（2026-10-02）</b>：数组参数<b>建一次、批间只改 Value</b>。
+    /// 原实现每批 <c>Parameters.Clear()</c> + Add 新建的数组参数——命令跨批复用时，
+    /// PG 的 auto-prepare 会在 prepare 那一刻缓存当时的参数对象，后续 Clear+Add 的新对象
+    /// 不被读取，第 3 批起静默发送第 2 批的键数组（删错行且无异常）。探针见 CHANGELOG R-UNNESTB 段。</para></summary>
     private async Task<long> ExecuteArrayFormDeleteAsync<T>(
         DbTransaction? tran,
         Func<IReadOnlyList<object>, int, int, Array?> buildKeyArray,
@@ -116,14 +120,16 @@ public partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandText = BuildBulkDeleteArraySql(identifiers, isSoftDelete);
+        // 参数对象批间不变（只换 Value）——见方法级 R-UNNESTB 说明
+        DbParameter idsParameter = TProvider.CreateParameter(ArrayParameterName, DBNull.Value);
+        cmd.Parameters.Add(idsParameter);
+        BindDefaultFilterParameters<T>(cmd);
 
         long total = 0;
         for (int start = 0; start < keys.Count; start += batchSize)
         {
             int batchLen = Math.Min(batchSize, keys.Count - start);
-            cmd.Parameters.Clear();
-            cmd.Parameters.Add(BuildArrayParameter<T>(buildKeyArray, keys, start, batchLen));
-            BindDefaultFilterParameters<T>(cmd);
+            idsParameter.Value = BuildArrayParameter<T>(buildKeyArray, keys, start, batchLen).Value;
             total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         return total;
@@ -157,6 +163,7 @@ public partial class DataSession<TProvider>
         for (int start = 0; start < keys.Count; start += batchSize)
         {
             int batchLen = Math.Min(batchSize, keys.Count - start);
+            // PARAM-REUSE-OK[pool] 下方转移的是 scratch 参数池中的同一实例（改名后 Add），非新实例
             cmd.Parameters.Clear();
 
             if (batchLen != lastBatchLength)
@@ -241,6 +248,7 @@ public partial class DataSession<TProvider>
     {
         for (int index = 0; index < batchLen; index++)
         {
+            // PARAM-REUSE-OK[carrier] scratch 从不执行，仅承载键绑定器（ITM-676 中转参数）
             scratch.Parameters.Clear();
             bindKey(scratch, keys[start + index]);
             if (scratch.Parameters.Count != 1)
@@ -248,6 +256,7 @@ public partial class DataSession<TProvider>
                     $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
 
             var moved = scratch.Parameters[0];
+            // PARAM-REUSE-OK[carrier] 移出载体命令后改名转移进目标集合（同一实例，非新对象）
             scratch.Parameters.Clear();
             moved.ParameterName = TProvider.GetParameterPlaceholder(index);
             cmd.Parameters.Add(moved);
@@ -754,6 +763,18 @@ public partial class DataSession<TProvider>
 
         // 准备批量上下文：SET 列集、引号包裹标识符、租户过滤标记。
         BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, metadata, tableName, entities[0]);
+        // UNNEST 阶段 B（2026-10-02）：PG 数组形态——两个 UPDATE 入口共用同一能力检测与执行体
+        // （此前只有 BulkUpdateAsync 的自动路由走数组，本公开入口仍走 VALUES，形成
+        // 「同操作两形态」的不对称：B120 族）。乐观锁实体已在上方拒绝，列序与批量 UPDATE
+        // 的 SET 列 + 主键一致。
+        if (UseUnnestArraysForUpdate(metadata, out IReadOnlyList<Type>? arrayElementTypes))
+        {
+            return await RunInTransactionScopeAsync(
+                operation.Owner,
+                (tran, token) => ExecuteBulkUpdateArrayBatchesAsync(
+                    entities, metadata, ctx, tran, arrayElementTypes!, token),
+                ct).ConfigureAwait(false);
+        }
         // ITM-640：SQLite 已在上方回退逐条路径，此处恒非 SQLite——原三元的 999 分支不可达。
         const int driverLimit = SqlLimits.MaxBindParameters;
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
@@ -1105,6 +1126,7 @@ public partial class DataSession<TProvider>
         await using DbCommand probe = CreateCommand();
         for (int i = start; i < end; i++)
         {
+            // PARAM-REUSE-OK[carrier] probe 从不执行，只把逐行 BindUpdate 的值搬进池
             probe.Parameters.Clear();
             metadata.BindUpdate(probe, entities[i]);
             int baseIndex = (i - start) * paramsPerRow;
@@ -1123,6 +1145,7 @@ public partial class DataSession<TProvider>
     {
         int required = rowParamCount + tenantParams;
         if (cmd.Parameters.Count == required) return;
+        // PARAM-REUSE-OK[pool] 重挂的是参数池中的同一实例（非新对象），批间只改 Value
         cmd.Parameters.Clear();
         for (int i = 0; i < rowParamCount; i++)
             cmd.Parameters.Add(pool[i]);
@@ -1216,6 +1239,7 @@ public partial class DataSession<TProvider>
         DbCommand scratch, CrudMetadata metadata, T entity,
         DbParameter[] pool, int rowBase, int columnCount) where T : class, new()
     {
+        // PARAM-REUSE-OK[carrier] scratch 从不执行，只承载逐行 BindUpsert 的值产出
         scratch.Parameters.Clear();
         metadata.BindUpsert(scratch, entity);
         if (scratch.Parameters.Count != columnCount)

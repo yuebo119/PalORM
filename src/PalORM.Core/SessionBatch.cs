@@ -188,6 +188,8 @@ public sealed class SessionBatch<TProvider> : IDisposable
         {
             if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
                 cmd.CommandText = sql;
+            // PARAM-REUSE-OK[nodbbatch] 本方法仅在驱动无 DbBatch 时可达（探针实测 Npgsql/MySQL 均
+            // 支持 DbBatch → PG/MySQL 走真 DbBatch 路径）；SQLite 无 auto-prepare 行为，无此缺陷面
             cmd.Parameters.Clear();
             foreach (DbParameter parameter in parameters)
                 cmd.Parameters.Add(CloneParameter(parameter));

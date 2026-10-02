@@ -255,6 +255,7 @@ public static class MultiValueBulkInsert
                     // 迭代，裁剪后不会再回满批）。原实现末批 Clear + 逐行 binder 重建 R×cols 个
                     // 参数对象。满批间 needed == Count，循环零进入。
                     int neededParameters = batchLength * columnCount;
+                    // PARAM-REUSE-OK[pool] 裁剪只移除池尾实例，保留的前缀实例不变（valuesBinder 只改其 Value）
                     for (int i = batchCmd.Parameters.Count - 1; i >= neededParameters; i--)
                         batchCmd.Parameters.RemoveAt(i);
                     // valuesBinder 只改 Value，不 Clear/Add
@@ -264,6 +265,8 @@ public static class MultiValueBulkInsert
                 else
                 {
                     // 无 valuesBinder（旧模型程序集）或首批即非满批（单批小数据）：走老路径
+                    // PARAM-REUSE-OK[noautoprep] 该路径可达方言均无语句准备缓存：PG 走 Binary COPY、
+                    // MySQL 走 ODku/BulkCopy、SQLite 无 auto-prepare；新程序集仅单批时进入（无复用）
                     batchCmd.Parameters.Clear();
                     for (int row = 0; row < batchLength; row++)
                     {

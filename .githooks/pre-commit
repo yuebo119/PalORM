@@ -9,6 +9,12 @@ dotnet run --file "$(git rev-parse --show-toplevel)/scripts/secret-guard.cs" || 
 echo "── pre-commit: stub-check ──"
 dotnet run --file "$(git rev-parse --show-toplevel)/scripts/stub-check.cs" || exit 1
 
+# 参数集合复用纪律（R-UNNESTB，2026-10-02）：src/ 内每处 Parameters.Clear()/RemoveAt
+# 必须在邻近声明理由码——PG auto-prepare 下「复用命令 + 换参数实例」会静默发旧值，
+# 而 SQLite 套件对 PG 缺陷零判别力，只能机械化拦截。详见 docs/编码规范.md §20。
+echo "── pre-commit: 参数集合复用门禁 ──"
+dotnet run --file "$(git rev-parse --show-toplevel)/scripts/gate-param-collection-reuse.cs" || exit 1
+
 # .ai 系统一致性（2026-09-25 起）：lessons/test 的"计数与标题声明"必须等于实测。
 # 这类漂移已发生过 3 次（lessons 标题停 v7.14、§II 声明 93/1-B86 实测 98、
 # test 补充节标题停 8~12 实到 19），人工核不住，故机械化到每次提交。

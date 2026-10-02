@@ -210,6 +210,29 @@ internal sealed class BulkUpdateArrayFormTests
         AssertAllStatementsAreUnnestForm(expectedBatchCount: 1, expectedColumnCount: 2);
     }
 
+    /// <summary>公开的 <c>BulkUpdateBatchAsync</c> 入口也走数组形态——两个 UPDATE 入口对称
+    /// （B120 族纪律：同操作两形态是不对称缺陷的温床，形状断言各自锁死）。</summary>
+    [Test]
+    public async Task BulkUpdateBatchAsync_ArrayForm_UsesUnnestShape()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 5);
+        List<UnnestRow> rows = await session.From<UnnestRow>().OrderBy(r => r.Id).ToListAsync();
+        foreach (UnnestRow row in rows)
+        {
+            row.Name = $"b{row.Id}";
+            row.Qty = row.Id * 3;
+        }
+        Shapes.Clear();
+
+        long affected = await session.BulkUpdateBatchAsync(rows);
+
+        await Assert.That(affected).IsEqualTo(5);
+        List<UnnestRow> updated = await session.From<UnnestRow>().OrderBy(r => r.Id).ToListAsync();
+        await Assert.That(updated.All(r => r.Name == $"b{r.Id}" && r.Qty == r.Id * 3)).IsTrue();
+        AssertAllStatementsAreUnnestForm(expectedBatchCount: 1, expectedColumnCount: 3);
+    }
+
     /// <summary>回退路径锁定：Provider 未实现 <c>CreateTypedArrayParameter</c>（能力检测为假）
     /// 时行为必须与优化前一致（VALUES 形态）。缺这条测不出"能力检测写错"。</summary>
     [Test]

@@ -1,3 +1,4 @@
+using Npgsql;
 using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Testing;
@@ -271,8 +272,10 @@ public sealed class ExternalDatabaseBulkTests
     /// 被服务端接受，且多批（&gt; 5000 键）逐批正确。语句形状（<c>= ANY</c> + 单参数）由 Core 侧的
     /// <c>BulkDeleteArrayFormTests</c> 锁定——本用例的价值是"驱动与真实 PG 接受这个绑定"，
     /// 而批量路径不通知拦截器（实测记录 0 条），故形状断言不回在此重复。</para>
-    /// <para>5001 键的用意：批大小 = SqlLimits.MaxRowsPerBatch（5000），末批只剩 1 个元素，
-    /// 同时覆盖"count 取实际批长度而非批大小"的边界。</para></summary>
+    /// <para><b>15 001 键的用意（R-UNNESTB 修正后升档）</b>：批大小 = SqlLimits.MaxRowsPerBatch
+    /// （5000），故 15 001 = 5000 + 5000 + 5001 共<b>三批</b>。原 5 001 键只有两批，恰好逃过
+    /// 「第 3 批起发旧批参数」的缺陷面（auto-prepare 在第 2 批执行时 prepare，第 3 批才踩到）。
+    /// 三批是这条用例的判别力下限。</para></summary>
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task PG_BulkDelete_ArrayForm_MultiBatch_DeletesEveryKey()
@@ -283,7 +286,7 @@ public sealed class ExternalDatabaseBulkTests
             $"CREATE TABLE ext_array_delete (id BIGINT PRIMARY KEY, name TEXT NOT NULL)");
         try
         {
-            const int total = 5_001;
+            const int total = 15_001;
             var rows = new List<ExtArrayDeleteEntity>(total);
             for (long i = 1; i <= total; i++)
                 rows.Add(new ExtArrayDeleteEntity { Id = i, Name = $"n{i}" });
@@ -504,6 +507,108 @@ public sealed class ExternalDatabaseBulkTests
         }
     }
 #pragma warning restore PALORM005
+
+    /// <summary>R-UNNESTB 回归（守卫正侧）：同 DbType、不同 CLR 值类型（char 与 string 均映射
+    /// DbType.String）交替出现——A9 守卫判定形状一致后走就地写 Value，跨值类型必须仍跟随本次参数。
+    /// 这条锁的是「新规则」：就地写 Value 在值类型切换时不被驱动忽略（探针变体 B/D 的机制面）。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+#pragma warning disable PALORM005 // 同上：循环内同形变参查询是被测行为
+    public async Task PG_Where_SameDbType_DifferentClrType_AcrossPromotion_ReturnsMatchingRows()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_char_probe CASCADE");
+        await db.ExecuteAsync($"CREATE TABLE ext_char_probe (id BIGINT PRIMARY KEY, code TEXT NOT NULL)");
+        try
+        {
+            var rows = new List<ExtCharProbeEntity>();
+            for (long i = 1; i <= 4; i++)
+                rows.Add(new ExtCharProbeEntity { Id = i, Code = ((char)('a' + i - 1)).ToString() });
+            await db.BulkInsertAsync(rows, batchSize: rows.Count);
+
+            // 偶数轮传 char、奇数轮传 string：DbType 恒为 String，运行时类型交替
+            for (int round = 0; round < 12; round++)
+            {
+                long id = (round % rows.Count) + 1;
+                object probe = round % 2 == 0 ? ((char)('a' + id - 1)) : ((char)('a' + id - 1)).ToString();
+                List<ExtCharProbeEntity> found = await db.From<ExtCharProbeEntity>()
+                    .Where($"code = {probe}").ToListAsync();
+                await Assert.That(found).Count().IsEqualTo(1);
+                await Assert.That(found[0].Id).IsEqualTo(id);
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_char_probe CASCADE");
+        }
+    }
+
+    /// <summary>R-UNNESTB 回归（守卫反侧）：DbType 交替（int↔long 映射 Int32/Int64）时守卫判定
+    /// 形状漂移并回退新建命令——回退必须仍然正确（正确性优先，性能收益让位）。
+    /// 若将来有人放宽守卫为「只比参数个数」，这条会红。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+#pragma warning disable PALORM005 // 同上：循环内同形变参查询是被测行为
+    public async Task PG_Where_VaryingDbType_AcrossPromotion_FallsBackAndStaysCorrect()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_getbykey_reuse CASCADE");
+        await db.ExecuteAsync(
+            $"CREATE TABLE ext_getbykey_reuse (id BIGINT PRIMARY KEY, name TEXT NOT NULL)");
+        try
+        {
+            const int total = 6;
+            var rows = new List<ExtGetByKeyEntity>(total);
+            for (long i = 1; i <= total; i++)
+                rows.Add(new ExtGetByKeyEntity { Id = i, Name = $"n{i}" });
+            await db.BulkInsertAsync(rows, batchSize: total);
+
+            for (int round = 0; round < 12; round++)
+            {
+                long id = (round % total) + 1;
+                object probe = round % 2 == 0 ? (int)id : id;   // DbType 交替 Int32/Int64
+                List<ExtGetByKeyEntity> found = await db.From<ExtGetByKeyEntity>()
+                    .Where($"\"id\" = {probe}").ToListAsync();
+                await Assert.That(found).Count().IsEqualTo(1);
+                await Assert.That(found[0].Name).IsEqualTo($"n{id}");
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_getbykey_reuse CASCADE");
+        }
+    }
+#pragma warning restore PALORM005
+
+    /// <summary>UPSERT 批内重复主键的契约锁定：PG 对「同一语句影响同一行两次」明确报错
+    /// （<c>cannot affect row a second time</c>）——数组形态必须与集合化 VALUES 形态同语义，
+    /// 不能因为形态切换而静默变成 last-wins。
+    /// <para><b>方言事实（勿当普适）</b>：SQLite 同形态按行应用，重复主键走更新不报错；
+    /// MySQL ODKU 天然 last-wins。PG 此处的明确失败是既有集合化决策（见 BatchUpsertAsync
+    /// 方法级文档），本用例锁的是 PG 侧不被形态切换悄悄改掉。</para></summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BulkMerge_ArrayForm_DuplicateKeyInBatch_Throws()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_dup_key CASCADE");
+        await db.ExecuteAsync($"CREATE TABLE ext_dup_key (id BIGINT PRIMARY KEY, name TEXT NOT NULL)");
+        try
+        {
+            var entities = new List<ExtDupKeyEntity>
+            {
+                new() { Id = 1, Name = "first" },
+                new() { Id = 2, Name = "other" },
+                new() { Id = 1, Name = "duplicate-within-batch" },
+            };
+            await Assert.That(async () => await db.BulkMergeAsync(entities))
+                .Throws<PostgresException>();
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_dup_key CASCADE");
+        }
+    }
 }
 
 #region Test Entities
@@ -565,6 +670,22 @@ public partial class ExtArrayMergeEntity
 /// <summary>R-UNNESTB 回归：跨晋升阈值变键读取的载体实体。</summary>
 [Table("ext_getbykey_reuse")]
 public partial class ExtGetByKeyEntity
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("name")] [Required] public string Name { get; set; } = "";
+}
+
+/// <summary>R-UNNESTB 回归：同 DbType 变 CLR 值类型用例的载体（文本列比对 char/string 参数）。</summary>
+[Table("ext_char_probe")]
+public partial class ExtCharProbeEntity
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("code")] [Required] public string Code { get; set; } = "";
+}
+
+/// <summary>UPSERT 批内重复主键契约用例的载体。</summary>
+[Table("ext_dup_key")]
+public partial class ExtDupKeyEntity
 {
     [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
     [Column("name")] [Required] public string Name { get; set; } = "";

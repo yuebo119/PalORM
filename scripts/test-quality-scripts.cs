@@ -31,6 +31,7 @@ try
     }
 
     FixtureStubCheck(tmp);
+    FixtureParamCollectionReuseGate(tmp);
 
     if (!skipAi)
     {
@@ -129,6 +130,54 @@ void FixtureStubCheck(string tmpDir)
         return;
     }
     Console.WriteLine("PASS stub-check");
+}
+
+// ─── gate-param-collection-reuse（参数集合复用纪律门禁）───
+// 正反双路径：真实仓库当前全绿；去掉一处标记的故障夹具必须红（R-UNNESTB 的机械化拦截）
+void FixtureParamCollectionReuseGate(string tmpDir)
+{
+    Console.WriteLine("\n─── gate-param-collection-reuse ───");
+    // 正路径：真实仓库
+    _ = RunDotnetFileCapture("scripts/gate-param-collection-reuse.cs", repoRoot, out var okLog);
+    if (!okLog.Contains("PASS", StringComparison.Ordinal))
+    {
+        Bail("FAIL 参数集合复用门禁在真实仓库上未通过");
+        return;
+    }
+
+    // 反路径：故障夹具——复制 src/ 结构到 tmp，去掉一处标记后应报错并指位
+    // （门禁按工作目录定位仓库根，故须切 cwd；脚本路径用绝对路径）
+    var faultRoot = Path.Combine(tmpDir, "paramgate");
+    var faultSrc = Path.Combine(faultRoot, "src", "Fault");
+    Directory.CreateDirectory(faultSrc);
+    File.WriteAllText(Path.Combine(faultRoot, "Directory.Build.props"), "<Project />\n", new UTF8Encoding(false));
+    Directory.CreateDirectory(Path.Combine(faultSrc, "obj"));
+    File.WriteAllText(Path.Combine(faultSrc, "Good.cs"),
+        "class Good { void M(System.Data.Common.DbCommand c) { // PARAM-REUSE-OK[carrier] 载体命令\n c.Parameters.Clear(); } }\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(faultSrc, "Bad.cs"),
+        "class Bad { void M(System.Data.Common.DbCommand c) { c.Parameters.Clear(); } }\n",
+        new UTF8Encoding(false));
+
+    string gateScript = Path.Combine(repoRoot, "scripts", "gate-param-collection-reuse.cs");
+    var psi = new System.Diagnostics.ProcessStartInfo("dotnet", $"run --file \"{gateScript}\"")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        WorkingDirectory = faultRoot,
+    };
+    using var gateProc = System.Diagnostics.Process.Start(psi)!;
+    string badLog = gateProc.StandardOutput.ReadToEnd() + gateProc.StandardError.ReadToEnd();
+    gateProc.WaitForExit();
+    if (gateProc.ExitCode == 0
+        || !badLog.Contains("FAIL", StringComparison.Ordinal)
+        || !badLog.Contains("Bad.cs", StringComparison.Ordinal))
+    {
+        Bail("FAIL 未声明标记的调用点未被拦截");
+        return;
+    }
+    Console.WriteLine("PASS gate-param-collection-reuse");
 }
 
 // ─── review-snapshot（AI 段）───
