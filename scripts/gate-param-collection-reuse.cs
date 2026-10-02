@@ -93,11 +93,12 @@ if (violations.Count > 0)
     foreach (string item in violations) Console.Error.WriteLine($"  {item}");
     Console.Error.WriteLine();
     Console.Error.WriteLine("  理由码取值：");
-    Console.Error.WriteLine("    carrier   该命令从不执行，仅承载绑定器/参数转换（scratch、probe、keyProbe、列类型采样）");
-    Console.Error.WriteLine("    pool      转移参数池中的同一实例（非新实例），命令复用安全");
-    Console.Error.WriteLine("    fresh     该命令逐条新建/逐批新建，不跨执行复用");
-    Console.Error.WriteLine("    nodbbatch 仅在驱动无 DbBatch 时可达（当前方言：SQLite；SQLite 无 auto-prepare 行为）");
-    Console.Error.WriteLine("    legacy    仅旧版生成器模型程序集可达（新生成器恒发射值写入器）");
+    Console.Error.WriteLine("    carrier    该命令从不执行，仅承载绑定器/参数转换（scratch、probe、keyProbe、列类型采样）");
+    Console.Error.WriteLine("    pool       转移参数池中的同一实例（非新实例），命令复用安全");
+    Console.Error.WriteLine("    fresh      该命令逐条新建/逐批新建，不跨执行复用");
+    Console.Error.WriteLine("    nodbbatch  仅在驱动无 DbBatch 时可达（当前方言：SQLite；SQLite 无 auto-prepare 行为）");
+    Console.Error.WriteLine("    legacy     仅旧版生成器模型程序集可达（新生成器恒发射值写入器）");
+    Console.Error.WriteLine("    noautoprep 该调用点可达的方言均无语句准备缓存行为（SQLite/MySQL；PG 对应路径走 COPY 或 DbBatch，不可达）");
     Console.Error.WriteLine("  机制与实测见 CHANGELOG「R-UNNESTB」段与探针 mergearray（变体 A/B/C/D）。");
     return 1;
 }
