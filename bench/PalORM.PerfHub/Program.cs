@@ -280,6 +280,10 @@ internal static class Program
         // 三实现共用同一连接（B76：建连口径一致）
         IPerfImplementation[] impls = [new AdoNetImpl(info), new DapperImpl(info), new PalormImpl(info)];
 
+        // 批量项的确定性重置用中性播种（只播 perf_s1；三臂经同一路径得到同一张同规模的表）——
+        // 各臂自己的 SetupAsync 会把 bench_tenant 一并播到 rows×因子 行，且表布局随臂不同。
+        int maxTier = tiers.Max();
+
         foreach (int rows in tiers)
         {
             Console.WriteLine();
@@ -314,8 +318,11 @@ internal static class Program
                 }
             }
 
-            // 并发吞吐（三实现 × 线程档位）
-            if (concurrency)
+            // 并发吞吐（三实现 × 线程档位）——**只在最高档跑**：并发负载是点查混合
+            //（80/20 GetByKey + Insert），与表规模无关，实测两档吞吐差 MySQL/PG 全部在 ±5% 内、
+            // SQLite ±8~13%（夹具自身噪声带内），第二档属重复测量（省 1.47 分钟、27 个测量）。
+            // 线程档位、时长与分批语义均不变。
+            if (concurrency && rows == maxTier)
             {
                 Console.WriteLine();
                 Console.WriteLine("  并发吞吐（80/20 读写混合，3s）");
@@ -518,21 +525,29 @@ internal static class Program
             async (im, c, i) => _ = await im.UpdateAsync(c, Dataset.Seed(i * 7919 % rows), ct)
                 .ConfigureAwait(false), ct).ConfigureAwait(false);
 
+        // BulkUpdate 排在 BulkInsert 之前——两者都写 perf_s1，而 BulkInsert 每轮把表撑大 rows 行，
+        // 其迭代数又由时间预算自适应（逐臂不同）：BulkUpdate 紧随其后时，三臂就在规模不同的表上测
+        //（2026-10-03 实测 PG/20000 档起始表 324 万 / 34 万 / 330 万行），比值无可比性。
+        // 前置后它跑在 Update 留下的表上（rows + Insert 的 200 行，三臂的 Insert 迭代数都是 200），
+        // 行数与内容三臂一致。**不新增 reset**：规范 §5 已登记"给写项加 reset 的尝试回退过
+        //（其后 BulkInsert 9.5× 未解异常），机制查明前不得重加"，故本轮用排序消除漂移。
+        // 代价如实登记：数万行批更新进数十万行表的大表形态不再由本项覆盖（规范 §5）。
+        await MeasAsync(info, impl, "BulkUpdate", "CRUD", rows, conn, results, scale, null,
+            async (im, c, i) => _ = await im.BulkUpdateAsync(c, Dataset.SeedRows(rows, 0), ct)
+                .ConfigureAwait(false), ct).ConfigureAwait(false);
+
         await MeasAsync(info, impl, "BulkInsert", "CRUD", rows, conn, results, scale, reset,
             async (im, c, i) => _ = await im.BulkInsertAsync(
                 c, Dataset.SeedRows(rows, (long)rows * (i + 1)), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
-        // BulkUpdate 不带 reset（同上，与 Update 一并撤掉以保持两者口径一致）。
-        // 它因此跑在 BulkInsert 撑大的表上（rows × (1 + iterations)）——已知漂移，见规范 §5 待办。
-        await MeasAsync(info, impl, "BulkUpdate", "CRUD", rows, conn, results, scale, null,
-            async (im, c, i) => _ = await im.BulkUpdateAsync(c, Dataset.SeedRows(rows, 0), ct)
-                .ConfigureAwait(false), ct).ConfigureAwait(false);
-
-        // 批量删除：prepare 多种 rows×iterations 行，每轮删掉其中一段互不重叠的窗口
+        // 批量删除的播种改走中性路径（只播 perf_s1）：原实现经各臂 SetupAsync，会顺带把 bench_tenant
+        // 播到 rows×轮数 行（每方言首次约 10~20 万行含 JSON 载荷），且各臂的表布局不同。
+        // 这只改"怎么播"、行数与内容不变，也没有新增 reset。
+        var neutralSeeder = new AdoNetImpl(info);
         Task bulkDeleteReset(DbConnection c)
         {
-            return impl.SetupAsync(c, rows * bulkDeleteIters, ct);
+            return neutralSeeder.SetupPerfS1Async(c, rows * bulkDeleteIters, ct);
         }
 
         await MeasAsync(info, impl, "BulkDelete", "CRUD", rows, conn, results, scale, bulkDeleteReset,
@@ -725,11 +740,18 @@ internal static class Program
     /// 保留它是为覆盖"批量装载器在显式事务内"这条产品路径，属语义检查而非规模问题</item>
     /// </list>
     /// <para>2026-09-23 精简：这些项原本两档都跑，等于把同一个测量做两遍——按实测逐项耗时，
-    /// 砍掉它们的第二档只省约 1.6% 时间，但省下 7 项 × 3 臂 = 每方言 21 个重复测量。</para></summary>
+    /// 砍掉它们的第二档只省约 1.6% 时间，但省下 7 项 × 3 臂 = 每方言 21 个重复测量。</para>
+    /// <para><b>2026-10-03 再精简</b>（本轮全量批逐项两档对照）：单行与索引访问类的规模放大倍数
+    /// 仅 1.0~1.6×（GetByKey 1.6/1.0/1.0、Insert 1.2/0.9/1.0、Update 1.6/1.0/1.0、KeysetPage 1.1、
+    /// WhereIn 1.1，按 SQLite/MySQL/PG），第二档是重复测量，故把 Insert/Update/KeysetPage/WhereIn
+    /// 也移入本表（省第二档墙钟 0.51 分钟、45 个测量）。
+    /// <b>GetByKey 例外保留两档</b>：其 2000 档 P/ADO 稳定 0.73~0.79×、20000 档 1.04×，
+    /// 第二档正是暴露该异常的参照，查清前不撤（用户 2026-10-03 决定）。</para></summary>
     private static bool RowCountSensitive(string operation) => operation is not (
         "BuildGetByKeySql" or "BuildComplexQuerySql" or "InsertReturningId" or "IncludeJoin"
         or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert"
-        or "OwnedJsonQuery" or "SessionBatchInserts");
+        or "OwnedJsonQuery" or "SessionBatchInserts"
+        or "Insert" or "Update" or "KeysetPage" or "WhereIn");
 
     /// <summary>该项是否在给定档位测量。</summary>
     private static bool RunsAtTier(string operation, int rows)
@@ -771,7 +793,8 @@ internal static class Program
         int perDialect = tiers.Sum(rows => OperationNames.Count(op => RunsAtTier(op, rows)) * ImplCount);
         if (concurrency)
         {
-            perDialect += tiers.Count * threadTiers.Count * ImplCount;
+            // 并发只在最高档跑（见 RunDialectAsync 的门）——按 dialects 计一次，不乘 tiers.Count
+            perDialect += threadTiers.Count * ImplCount;
         }
 
         return (perDialect * dialects.Count) + tiers.Count;
