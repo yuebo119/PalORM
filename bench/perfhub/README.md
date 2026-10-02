@@ -7,7 +7,7 @@
 ## 快速开始
 
 ```bash
-# 全量（三方言 × 2000/20000 × 21 项 + 并发）
+# 全量（三方言 × 2000/20000 × 26 项，其中 14 项只在最小档；并发只在最高档）
 dotnet run --project bench/PalORM.PerfHub -- run --concurrency --threads 1,4,8 --version HEAD
 
 # 只 SQLite 冒烟
@@ -56,8 +56,8 @@ dotnet run --project bench/PalORM.PerfHub -- report
 > 的链式是过滤表达式的唯一自然形态。因该变更，GetByKey 组跨批数字在 2026-10-01 存在形态
 > 断点（基线随批重录吸收，比对此项需按批注日期分段）。
 | | `BulkInsert` | PG Binary COPY · MySQL MySqlBulkCopy（`local_infile=ON` 分流）· SQLite 多值 VALUES；Dapper 多值 VALUES |
-| | `BulkUpdate` | PG `UPDATE FROM VALUES` · MySQL `CASE WHEN` · SQLite 逐条裹单事务 |
-| | `BulkDelete` | `IN` 分批裹事务 |
+| | `BulkUpdate` | PG `UPDATE FROM VALUES`/UNNEST · MySQL `CASE WHEN` · SQLite 逐条裹单事务；**排在 `BulkInsert` 之前**——否则它跑在后者撑大的表上，而后者迭代数逐臂不同，三臂表规模实测差 10 倍（规范 §5） |
+| | `BulkDelete` | `IN`/数组分批裹事务；播种走中性路径（只播 `perf_s1`，不再顺带把 `bench_tenant` 播到 rows×轮数 行） |
 | | `UpsertBatch` | PG/SQLite `ON CONFLICT excluded` · MySQL `ON DUPLICATE KEY VALUES(c)`；PalORM 走 `BulkMergeAsync` |
 | | `InsertReturningId` | 三臂各 1 RTT：PG/SQLite `RETURNING`；MySQL `INSERT;SELECT LAST_INSERT_ID()` 合并 |
 | **Query** | `KeysetPage` / `WhereIn` / `Count` | seek 分页（OFFSET 是反模式不测）；IN 显式占位符分批 |
@@ -67,9 +67,12 @@ dotnet run --project bench/PalORM.PerfHub -- report
 | **Baseline** | `GenerateRows` | 不碰库，数据生成内存基线 |
 | **Concurrency** | `Concurrent_Mixed80_20` | 预热 1 s + 计时 2 s，池化连接每线程一条 |
 
-**规模**：21 项 × 3 库 × 2 档 × 3 臂 —— 其中 8 项（Build×2 / InsertReturningId / IncludeJoin /
-TxSingleInsert / TxHundredInserts / TxRollback / TxBulkInsert）**只在最小档跑**（行数不进这些项的测量，
-两档是同一个测量的复制品），故每方言 13×2×3 + 8×1×3 = 102 个单操作项，加并发与基线。
+**规模**：26 项 × 3 库 × 2 档 × 3 臂 —— 其中 14 项（Build×2 / InsertReturningId / IncludeJoin /
+TxSingleInsert / TxHundredInserts / TxRollback / TxBulkInsert / OwnedJsonQuery / SessionBatchInserts /
+Insert / Update / KeysetPage / WhereIn）**只在最小档跑**（行数不进这些项的测量，两档是同一个测量的
+复制品），故每方言 26×3 + 12×3 = 114 个单操作项；**并发只在最高档跑**（两档吞吐实测差在噪声带内，
+2026-10-03 起砍掉最小档的 9 项/方言）。加 2 项数据生成基线：全量 **371 项测量**（此前 434 项）。
+`GetByKey` 例外保留两档——其 2000 档 P/ADO 稳定 0.73~0.79× 而 20000 档 1.04×，第二档是暴露该异常的参照。
 
 ## 测量口径（v2）
 

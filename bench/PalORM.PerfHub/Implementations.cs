@@ -150,7 +150,20 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         // bench_tenant 播种（租户会话 / OwnedJson / SessionBatch 夹具）——快照重置模式与
         // perf_s1 同构（两套缓存互不干扰，seed 表只服务 tenant 夹具）
         await TenantSetupAsync(conn, rows, ct).ConfigureAwait(false);
+        await SetupPerfS1Async(conn, rows, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>只播 <c>perf_s1</c>（不碰 <c>bench_tenant</c>）——批量项的确定性重置专用。
+    /// <para><b>为什么需要</b>：BulkInsert 的迭代数由时间预算自适应且逐臂不同，而 BulkUpdate 紧随其后、
+    /// 原实现不带重置，于是三臂在规模不同的表上测（2026-10-03 实测 PG/20000 档起始表 324 万 / 34 万 /
+    /// 330 万行），跨臂比值无可比性；BulkDelete 原实现也走各臂 <see cref="SetupAsync"/>，顺带把
+    /// bench_tenant 播到 rows×轮数 行（每方言首次约 10~20 万行含 JSON 载荷）。两个批量项改用本方法后，
+    /// 三臂经同一中性路径得到同一张同规模的表，且不再牵动租户表。</para>
+    /// <para><b>快照表共用</b>：<c>perf_s1_seed</c> 只有一个，播新规模时会 DROP 重建；因
+    /// <c>Dataset.Seed(r)</c> 是 r 的纯函数，"更大规模快照 + <c>WHERE Id &lt;= rows</c>" 与小规模快照
+    /// 等价，故旧键的缓存命中仍然正确。</para></summary>
+    public async Task SetupPerfS1Async(DbConnection conn, int rows, CancellationToken ct)
+    {
         string snapshot = Q("perf_s1_seed");
         if (SeedSnapshots.ContainsKey((conn, rows)))
         {
