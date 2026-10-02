@@ -4,6 +4,97 @@
 
 ## [未发布]
 
+### 🐛 缺陷修复：PG auto-prepare × 命令复用槽 = 静默错数（R-UNNESTB，2026-10-02）
+
+- **现象**：同一会话内，同形状读查询跨晋升阈值（第 3 次起）后，变键 `GetAsync` 与变参
+  `From<T>().Where(...)` 返回**晋升那一次的旧行**——数据错但查询成功，无任何异常。
+  本轮 AOT 验证（阶段 B 的 BulkMerge round-trip 断言）偶然暴露。
+- **根因**：PG 连接串的 auto-prepare 调优（`MaxAutoPrepare=100;AutoPrepareMinUsages=2`，
+  v5.0 阶段 3.1 默认开启）× 复用槽的「`Parameters.Clear()` + Add **新**参数实例」模式。
+  探针（`mergearray`，裸 ADO 三变体）实测：同实例 Clear+重加 ✅、同实例就地写 Value ✅、
+  **每次新实例 Clear+重加 ❌（驱动沿用 prepare 时的绑定值）**。Npgsql 10.0.3。
+- **触发面**（修复前）：PL-2 GetByKey 复用槽（2026-09-25 引入）与 A9 From<T> 查询槽
+  （2026-10-01 引入）——两者都在复用分支重挂新参数实例。写路径（Insert/Update 槽）用
+  参数池就地写 Value，不受影响。**Core 套件抓不到**：SQLite 无 auto-prepare 行为，
+  集成套件此前的读用例没有"同会话同形状变值"的覆盖。
+- **修复**：两个读槽的参数集合持久持有、逐位置就地写 Value。GetByKey 的键类型换算
+  （ITM-587 契约）经**从不执行的探针命令**走同一生成绑定器（单源不变）；A9 槽对
+  DbType 形状变化保守回退新建命令（同型循环——晋升主要受益场景——不受影响）。
+- **回归锁定**：真库 `PG_GetAsync_VaryingKeys_AcrossPromotion_ReturnsMatchingRows` 与
+  `PG_Where_VaryingValues_AcrossPromotion_ReturnsMatchingRows`（12 次变值 > 阈值 3）。
+  S3 反向验证：还原旧复用分支 → 测试转红；恢复修复 → 全绿。
+- **教训**：连接串调优（驱动行为开关）× 命令复用（执行形态优化）的交互面没有真库
+  覆盖——性能特性必须在真实方言连接上验证正确性，"SQLite 全绿 + PG 编译通过"不构成
+  正确性证据。已登记 `.ai/lessons.md` B 系列候选。
+
+### ⚡ UNNEST 阶段 B：PG 批量 UPDATE / UPSERT 切数组形态（2026-10-02）
+
+- **`BulkUpdateAsync`（自动路由）在 PG 上走 `UPDATE … FROM UNNEST(@u0, @u1, …) AS v(col0, …, col_pk)`**：
+  每列一个数组参数（SET 列在前、主键末位，列序与 `BindUpdateValues` 共 `GetUpdateColumnOrder`
+  单一真源），语句内参数个数恒为列数、与批宽无关——绕开 VALUES 形态"行数相对表规模触发
+  Hash Join + 全表顺扫"的规划器翻转（阶段 A 前的探针 pgplan：2000 行 VALUES 45.65ms vs
+  UNNEST 11.53ms）。批宽 = MaxRowsPerBatch（数组形态不受语句参数个数约束）；批间复用满批
+  数组，末批用短数组（UNNEST 按数组实际长度展开）。
+- **`BulkMergeAsync`（集合化 UPSERT）在 PG 上走 `INSERT … SELECT * FROM UNNEST(…) ON CONFLICT …`**：
+  列序 = `IsUpsertable` 声明序（与 `BindUpsertValues` 同源）。批内重复主键语义与既有形态一致
+  （PG 对同语句影响同一行两次明确报错）；返回口径 = 处理行数，不变。
+- **源生成器新增逐列数组三件套**（UPDATE / UPSERT 各一套，共 6 个生成成员）：
+  `FillXxxColumnArrays`（区间逐列填充）、`XxxColumnArrayElementTypes`（元素类型表，可空值类型
+  列为 `T?`、OwnedJson/枚举按值形态取 provider 类型）、`CreateXxxColumnArrays`（`new T[count]`
+  静态类型分配）。**分配在生成物内做**：Core 侧 `Array.CreateInstance(Type, …)` 带
+  RequiresDynamicCode（IL3050），AOT 不可用。元素值取 `GetParameterValueExpressionCore` 的
+  裸值形态（参数池装箱/DBNull 收尾由此处独占）——转换器、枚举 StoreAs、OwnedJson 序列化
+  仍只有一份真源；可空值类型列经 `is { } v` 模式匹配解包（null 留数组默认值 = SQL NULL）。
+- **能力检测而非方言枚举**：生成物三件套非空 + Provider 对**全部列**元素类型的数组参数返回
+  非 null，才走数组形态；任一列不支持整体回退 VALUES 形态（不做混合半形态，B120 族纪律）。
+  新增 `IDbProvider.CreateTypedArrayParameter(name, values, elementType)`（static virtual，
+  默认 null），PG 实现按显式元素类型映射 `NpgsqlDbType.Array | element`。
+- **AOT 验证顺带修出 R-UNNESTB 缺陷**（见上节）——阶段 B 的 BulkMerge round-trip 断言是
+  第一个跨晋升阈值变键的真库读，偶然踩中这个比阶段 B 本身更严重的既有缺陷。
+- **测试**：`BulkUpdateArrayFormTests` 10 项（SQLite 夹具经 `json_each` 连接改写跑真实
+  UNNEST SQL，形状断言锁死 `FROM UNNEST(` + 参数个数 == 列数）；mutation probe 实测
+  强制回退 → 5/10 转红。真库 4 项（UPDATE 2000 行逐位校验含可空列混合 null、Merge 两分支、
+  加上 R-UNNESTB 的 2 项）。回归：Core 495/495（三连跑）、Integration 265/265、
+  AOT PG 原生二进制实跑 PASSED（0 警告）。
+- **未做**：读取侧 `WhereIn` 切 `= ANY`（未探针，维持立项时的"不做"决定）；MySQL/SQLite
+  不做（无数组类型，既定决策）。
+
+### ⚡ UNNEST 阶段 A：PG 批量删除切数组形态（2026-10-02）
+
+### ⚡ UNNEST 阶段 A：PG 批量删除切数组形态（2026-10-02）
+
+- **`BulkDeleteAsync` 在 PostgreSQL 上走 `pk = ANY(@ids)` 单参数数组形态**，取代每键一个
+  IN 占位符。收益（立项 PoC 实测，42 万行表 2000 行、事务内回滚）：DELETE 时延 **−52%**、
+  客户端分配 **−99%**（省 per-key 参数对象）。三方言里只有 PG 有数组类型，MySQL/SQLite
+  行为不变。
+- **判据是能力检测而非方言枚举**：Provider 的 `CreateArrayParameter` 返回非 null
+  （即"本 Provider 接受该元素类型的数组参数"）+ 生成物提供主键数组构造器，两条全真才走数组
+  形态。自定义 Provider 只要实现数组参数即自动获得该路径（对齐 O25 阈值改能力检测的教训）；
+  任一不满足回退 IN 形态（该形态对复合主键本就正确）。探测用**真实主键元素类型**的零长度
+  数组——用固定探测类型会把"不支持 long 数组"误判成"不支持数组形态"。
+- **新增 `IDbProvider.CreateArrayParameter(string, Array)`**（static virtual，默认返回 null
+  = 不支持）。元素类型由数组本身推断（`values.GetType().GetElementType()`），调用方不另传
+  `DbType`——平行映射表会与生成物元素类型构成第二个真源。PG 侧映射 `Array | element`，
+  `NpgsqlDbType.Array` 的按位或组合是驱动 XML 文档的明确要求。
+- **源生成器发射 `BuildDeleteKeyArray(keys, start, count)`**：元素类型与元素值均与 `BindDelete`
+  **同一真源**（共享 `BuildKeyCastExpression`，含 `Convert.ToInt64` 归一与转换器 `ToProvider`）。
+  两条路径的逐位一致性有专门断言（同一组 int/long 键分别过两条路径比对产出）——只改一处的
+  不对称缺陷（B120 族）会让数组形态静默改变绑定语义。复合主键返回 null（UNNEST 需行构造器
+  数组，收益与复杂度不成比例）。`CrudMetadata.Copy()` 同步带上该字段（漏传在快照层不可见，
+  会让优化静默失效）。
+- **Core 侧两条形态拆成独立方法**：数组形态每批一句恒定文本、单个参数；IN 形态保留原有的
+  "语句文本随批长度变化则重建 + 中转参数改名转移"。共用事务作用域会为数组形态白建一个用不到
+  的中转命令——正是本次优化要消的固定开销。
+- **测试**：`BulkDeleteArrayFormTests` 11 项（不触真库，SQLite 夹具经 `= ANY` → `json_each`
+  改写跑通真实 PG 语法）。**每个数组形态用例都断语句形状**（`= ANY(@ids)` + 整批单参数），
+  因为"删干净了"无法区分两条形态——mutation probe 实测：只在 1 处断形状时，禁用数组分支
+  10 个用例仅 1 个变红；补全后变红 7 个。另有反向断言（无数组能力的 Provider 必须落到
+  `IN (@p0, @p1, @p2)` 且参数个数为 3）。真库 `ExternalDatabaseBulkTests` 新增 2 项
+  （5001 键多批 + GUID 主键），AOT PG 原生二进制实跑 PASSED。回归：Core 485/485、
+  Integration 261/261。
+- **未做（阶段 B）**：`BulkUpdate` / `BulkMerge` 的数组形态（UPDATE `FROM UNNEST`、
+  UPSERT `SELECT UNNEST ON CONFLICT`）。立项方案预估 UPDATE −30% 时延、UPSERT 分配 −96%。
+
 ### 🔬 剩余三项清理：会话释放拆账 + 并发异常定性 + per-op 门禁（2026-10-02）
 
 - **会话释放路径拆账完成**（此前只有"约 370B"一个总数）：探针 `disposepath` 直测库侧

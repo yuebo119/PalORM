@@ -640,9 +640,13 @@ public struct QueryBuilder<T> where T : class, new()
 
     /// <summary>A9（2026-10-01 全 API 逐项轮）：读查询命令的惰性晋升复用（PL-2 泛化）——
     /// 同 SQL 文本（形状缓存命中即同文本）+ 同连接 + 非并行读作用域时返回晋升命令
-    ///（调用方负责清参重挂与"不 Dispose 归还"）；未晋升返回 null（调用方走新建路径）。
+    ///（调用方负责逐位置就地写参数值与"不 Dispose 归还"）；未晋升返回 null（调用方走新建路径）。
     /// 晋升时旧命令替换即释放（单操作门禁保证无飞行 reader）。收益上限探针：
-    /// KeyLookupCommandDiag（-504B/op、-2.57µs）。</summary>
+    /// KeyLookupCommandDiag（-504B/op、-2.57µs）。
+    /// <para>R-UNNESTB（2026-10-02）：命中分支不再 Clear 参数集合——PG 连接串的 auto-prepare
+    /// 调优（v5.0 阶段 3.1 默认开启）下，「Clear + Add 新参数实例」会让驱动沿用 prepare 时的
+    /// 绑定值（探针 mergearray 变体 C 实测；同实例就地写 Value 正常）。调用方经
+    /// <c>TryCopyParameterValues</c> 就地写值，形状漂移则保守回退新建命令。</para></summary>
     internal DbCommand? TryAcquireReusableSelectCommand(DbConnection connection, string sql)
     {
         var slot = _querySlot;
@@ -650,13 +654,12 @@ public struct QueryBuilder<T> where T : class, new()
         if (slot is null || _operationState.ParallelReadsEnabled)
             return null;
 
-        // 命中：同 SQL 文本 + 同连接 → 清参后交调用方重挂当前 builder 的参数对象
+        // 命中：同 SQL 文本 + 同连接 → 交调用方就地写参数值
         if (slot.Command is { } cmd
             && slot.Connection is { } cmdConn
             && ReferenceEquals(cmdConn, connection)
             && string.Equals(slot.Sql, sql, StringComparison.Ordinal))
         {
-            cmd.Parameters.Clear();
             return cmd;
         }
 

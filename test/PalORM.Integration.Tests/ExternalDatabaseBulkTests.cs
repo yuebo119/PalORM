@@ -265,6 +265,245 @@ public sealed class ExternalDatabaseBulkTests
             await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
         }
     }
+
+    /// <summary>UNNEST-1（2026-10-02）：数组形态（<c>pk = ANY(@ids)</c>）的真库验证。
+    /// <para>覆盖 hermetic 夹具无法证明的那一半：真实的 <c>NpgsqlDbType.Array | Bigint</c> 绑定
+    /// 被服务端接受，且多批（&gt; 5000 键）逐批正确。语句形状（<c>= ANY</c> + 单参数）由 Core 侧的
+    /// <c>BulkDeleteArrayFormTests</c> 锁定——本用例的价值是"驱动与真实 PG 接受这个绑定"，
+    /// 而批量路径不通知拦截器（实测记录 0 条），故形状断言不回在此重复。</para>
+    /// <para>5001 键的用意：批大小 = SqlLimits.MaxRowsPerBatch（5000），末批只剩 1 个元素，
+    /// 同时覆盖"count 取实际批长度而非批大小"的边界。</para></summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BulkDelete_ArrayForm_MultiBatch_DeletesEveryKey()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_delete CASCADE");
+        await db.ExecuteAsync(
+            $"CREATE TABLE ext_array_delete (id BIGINT PRIMARY KEY, name TEXT NOT NULL)");
+        try
+        {
+            const int total = 5_001;
+            var rows = new List<ExtArrayDeleteEntity>(total);
+            for (long i = 1; i <= total; i++)
+                rows.Add(new ExtArrayDeleteEntity { Id = i, Name = $"n{i}" });
+            // Binary COPY 无参数上限，整段一次写入
+            await db.BulkInsertAsync(rows, batchSize: total);
+
+            long deleted = await db.BulkDeleteAsync<ExtArrayDeleteEntity>(
+                [.. rows.Select(static r => (object)r.Id)]);
+
+            await Assert.That(deleted).IsEqualTo(total);
+            await Assert.That(await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM ext_array_delete")).IsEqualTo(0L);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_delete CASCADE");
+        }
+    }
+
+    /// <summary>数组形态的 Guid 主键（映射 <c>NpgsqlDbType.Array | Uuid</c>）——覆盖
+    /// <c>ArrayElementDbType</c> 的非整数分支（GUID/string 类主键在 <c>SqliteParameter</c>
+    /// 夹具上无法证伪类型映射错误）。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BulkDelete_ArrayForm_GuidPrimaryKey_DeletesEveryKey()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_delete_guid CASCADE");
+        await db.ExecuteAsync(
+            $"CREATE TABLE ext_array_delete_guid (id UUID PRIMARY KEY, name TEXT NOT NULL)");
+        try
+        {
+            var keep = Guid.NewGuid();
+            var remove = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+            var rows = new List<ExtArrayGuidEntity>
+            {
+                new() { Id = keep, Name = "keep" }
+            };
+            foreach (Guid id in remove) rows.Add(new ExtArrayGuidEntity { Id = id, Name = "drop" });
+            await db.BulkInsertAsync(rows);
+            await Assert.That(await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM ext_array_delete_guid")).IsEqualTo(4L);
+
+            // keep 留在表里：只删 remove 的三个，验证数组绑定不误伤相邻行
+            long deleted = await db.BulkDeleteAsync<ExtArrayGuidEntity>(
+                [.. remove.Select(static id => (object)id)]);
+
+            await Assert.That(deleted).IsEqualTo(3L);
+            await Assert.That(await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM ext_array_delete_guid WHERE id = {keep}")).IsEqualTo(1L);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_delete_guid CASCADE");
+        }
+    }
+
+    /// <summary>UNNEST 阶段 B（2026-10-02）：批量 UPDATE 数组形态的真库验证——
+    /// <c>UPDATE … FROM UNNEST(@u0,…)</c> 被 Npgsql 与真实 PG 接受，2000 行逐位正确
+    ///（含可空列混合 null）。语句形状由 Core 侧 BulkUpdateArrayFormTests 锁定
+    ///（批量路径不通知拦截器，真库侧无法采形）。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BulkUpdate_ArrayForm_UpdatesEveryRow()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_update CASCADE");
+        await db.ExecuteAsync(
+            $"CREATE TABLE ext_array_update (id BIGINT PRIMARY KEY, name TEXT NOT NULL, qty BIGINT NOT NULL, marker BIGINT NULL)");
+        try
+        {
+            const int total = 2_000;
+            var rows = new List<ExtArrayUpdateEntity>(total);
+            for (long i = 1; i <= total; i++)
+                rows.Add(new ExtArrayUpdateEntity
+                {
+                    Id = i, Name = $"n{i}", Qty = i, Marker = i % 3 == 0 ? null : i
+                });
+            await db.BulkInsertAsync(rows, batchSize: total);
+
+            foreach (ExtArrayUpdateEntity row in rows)
+            {
+                row.Name = $"u{row.Id}";
+                row.Qty = row.Id * 7;
+                row.Marker = row.Id % 4 == 0 ? null : row.Id * 11;
+            }
+            long affected = await db.BulkUpdateAsync(rows);
+
+            await Assert.That(affected).IsEqualTo(total);
+            await Assert.That(await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM ext_array_update")).IsEqualTo(total);
+            // 逐位校验：值列与可空列（混合 null）都按位置对应
+            await Assert.That(await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM ext_array_update WHERE \"name\" = 'u' || \"id\"::text AND \"qty\" = \"id\" * 7 AND ((\"marker\" IS NULL AND \"id\" % 4 = 0) OR (\"marker\" = \"id\" * 11 AND \"id\" % 4 <> 0))"
+            )).IsEqualTo(total);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_update CASCADE");
+        }
+    }
+
+    /// <summary>UNNEST 阶段 B：BulkMerge 数组形态的真库验证——<c>INSERT … SELECT * FROM
+    /// UNNEST(…) ON CONFLICT</c> 的插入与冲突更新两分支。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BulkMerge_ArrayForm_InsertThenConflictUpdate()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_merge CASCADE");
+        await db.ExecuteAsync(
+            $"CREATE TABLE ext_array_merge (id BIGINT PRIMARY KEY, name TEXT NOT NULL, qty BIGINT NOT NULL, marker BIGINT NULL)");
+        try
+        {
+            const int total = 2_000;
+            var rows = new List<ExtArrayMergeEntity>(total);
+            for (long i = 1; i <= total; i++)
+                rows.Add(new ExtArrayMergeEntity
+                {
+                    Id = i, Name = $"first{i}", Qty = i, Marker = i % 5 == 0 ? null : i
+                });
+            long inserted = await db.BulkMergeAsync(rows);
+
+            foreach (ExtArrayMergeEntity row in rows)
+            {
+                row.Name = $"second{row.Id}";
+                row.Qty = row.Id * 3;
+                row.Marker = row.Id % 2 == 0 ? null : row.Id * 9;
+            }
+            long updated = await db.BulkMergeAsync(rows);
+
+            await Assert.That(inserted).IsEqualTo(total);
+            await Assert.That(updated).IsEqualTo(total);
+            await Assert.That(await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM ext_array_merge")).IsEqualTo(total);
+            await Assert.That(await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM ext_array_merge WHERE \"name\" = 'second' || \"id\"::text AND \"qty\" = \"id\" * 3 AND ((\"marker\" IS NULL AND \"id\" % 2 = 0) OR (\"marker\" = \"id\" * 9 AND \"id\" % 2 <> 0))"
+            )).IsEqualTo(total);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_array_merge CASCADE");
+        }
+    }
+
+    /// <summary>R-UNNESTB 回归（2026-10-02）：跨晋升阈值的变键 <c>GetAsync</c>。
+    /// <para><b>缺陷史</b>：PG 连接串的 auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，
+    /// GetByKey 复用槽的「Clear 参数集合 + Add 新参数实例」让驱动沿用 prepare 时的绑定值——
+    /// 晋升后所有变键读取都返回晋升那一次的行（探针 mergearray 变体 C 实测；SQLite 无
+    /// auto-prepare，Core 套件抓不到）。修复 = 参数集合持久持有 + 就地写 Value（键换算经
+    /// 从不执行的探针命令走同一生成绑定器）。</para>
+    /// <para>12 次读取 &gt; 晋升阈值 3：覆盖新建路径（前 2 次）、晋升（第 3 次）、
+    /// 复用就地写（第 4 次起），且键值每次变化。</para></summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+#pragma warning disable PALORM005 // 循环内单行读正是被测行为（跨晋升阈值的变键复用）
+    public async Task PG_GetAsync_VaryingKeys_AcrossPromotion_ReturnsMatchingRows()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_getbykey_reuse CASCADE");
+        await db.ExecuteAsync(
+            $"CREATE TABLE ext_getbykey_reuse (id BIGINT PRIMARY KEY, name TEXT NOT NULL)");
+        try
+        {
+            const int total = 10;
+            var rows = new List<ExtGetByKeyEntity>(total);
+            for (long i = 1; i <= total; i++)
+                rows.Add(new ExtGetByKeyEntity { Id = i, Name = $"n{i}" });
+            await db.BulkInsertAsync(rows, batchSize: total);
+
+            for (int round = 0; round < 12; round++)
+            {
+                long id = (round % total) + 1;
+                ExtGetByKeyEntity? found = await db.GetAsync<ExtGetByKeyEntity>(id);
+                await Assert.That(found).IsNotNull();
+                await Assert.That(found!.Id).IsEqualTo(id);
+                await Assert.That(found.Name).IsEqualTo($"n{id}");
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_getbykey_reuse CASCADE");
+        }
+    }
+#pragma warning restore PALORM005
+
+    /// <summary>R-UNNESTB 回归：跨晋升阈值的变参 <c>Where</c> 查询（A9 From&lt;T&gt; 槽）——
+    /// 同一形状、不同值，晋升后每次结果必须跟随本次参数（同上缺陷面）。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+#pragma warning disable PALORM005 // 循环内同形查询正是被测行为（A9 槽跨晋升阈值的变参复用）
+    public async Task PG_Where_VaryingValues_AcrossPromotion_ReturnsMatchingRows()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_getbykey_reuse CASCADE");
+        await db.ExecuteAsync(
+            $"CREATE TABLE ext_getbykey_reuse (id BIGINT PRIMARY KEY, name TEXT NOT NULL)");
+        try
+        {
+            const int total = 10;
+            var rows = new List<ExtGetByKeyEntity>(total);
+            for (long i = 1; i <= total; i++)
+                rows.Add(new ExtGetByKeyEntity { Id = i, Name = $"n{i}" });
+            await db.BulkInsertAsync(rows, batchSize: total);
+
+            for (int round = 0; round < 12; round++)
+            {
+                long id = (round % total) + 1;
+                List<ExtGetByKeyEntity> found = await db.From<ExtGetByKeyEntity>()
+                    .Where($"\"id\" = {id}").ToListAsync();
+                await Assert.That(found).Count().IsEqualTo(1);
+                await Assert.That(found[0].Name).IsEqualTo($"n{id}");
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_getbykey_reuse CASCADE");
+        }
+    }
+#pragma warning restore PALORM005
 }
 
 #region Test Entities
@@ -285,5 +524,49 @@ public partial class ExtBulkEntity
 #pragma warning disable CA1819
     [Column("payload")] public byte[]? Payload { get; set; }
 #pragma warning restore CA1819
+}
+
+/// <summary>UNNEST-1 真库验证：长整型主键的数组形态（<c>NpgsqlDbType.Array | Bigint</c>）。</summary>
+[Table("ext_array_delete")]
+public partial class ExtArrayDeleteEntity
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("name")] [Required] public string Name { get; set; } = "";
+}
+
+/// <summary>UNNEST-1 真库验证：Guid 主键的数组形态（<c>NpgsqlDbType.Array | Uuid</c>）。</summary>
+[Table("ext_array_delete_guid")]
+public partial class ExtArrayGuidEntity
+{
+    [Key(AutoIncrement = false)] [Column("id")] public Guid Id { get; set; }
+    [Column("name")] [Required] public string Name { get; set; } = "";
+}
+
+/// <summary>UNNEST 阶段 B 真库验证：批量 UPDATE 数组形态（含可空列混合 null）。</summary>
+[Table("ext_array_update")]
+public partial class ExtArrayUpdateEntity
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("name")] [Required] public string Name { get; set; } = "";
+    [Column("qty")] public long Qty { get; set; }
+    [Column("marker")] public long? Marker { get; set; }
+}
+
+/// <summary>UNNEST 阶段 B 真库验证：BulkMerge 数组形态（同列布局、独立表）。</summary>
+[Table("ext_array_merge")]
+public partial class ExtArrayMergeEntity
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("name")] [Required] public string Name { get; set; } = "";
+    [Column("qty")] public long Qty { get; set; }
+    [Column("marker")] public long? Marker { get; set; }
+}
+
+/// <summary>R-UNNESTB 回归：跨晋升阈值变键读取的载体实体。</summary>
+[Table("ext_getbykey_reuse")]
+public partial class ExtGetByKeyEntity
+{
+    [Key(AutoIncrement = false)] [Column("id")] public long Id { get; set; }
+    [Column("name")] [Required] public string Name { get; set; } = "";
 }
 #endregion
