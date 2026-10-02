@@ -15,6 +15,14 @@ internal static class IndexGate
 {
     private const double DefaultRatioThreshold = 0.30;
 
+    /// <summary>非可比项判定：并发吞吐项（名带 <c>Concurrent_</c>）的比值不参与门禁。
+    /// <para>它的 Ratio 是**每操作延迟**，批内散布由线程调度与服务器时段支配——
+    /// 实测同批同组三臂一致性良好（MySQL/PG 三臂同为 ~1.7）而单点可跳到 9×
+    ///（MySQL/20000/t8/PalORM 中位 4.58s vs 同组 0.51s）。录进基线会制造反向地雷：
+    /// 上界被抬高后该项永不 FAIL，真实退化反而看不见。绝对值（中位/均值/分配）照常记录。</para></summary>
+    private static bool IsIncomparableOperation(string name)
+        => name.StartsWith("Concurrent_", StringComparison.Ordinal);
+
     internal static int Record(string resultsDir, string outputPath)
     {
         List<PerfResultEnvelope> batches = LoadBatches(resultsDir);
@@ -42,7 +50,12 @@ internal static class IndexGate
                 Dialect = entry.Value.Item.Dialect,
                 Tier = entry.Value.Item.Tier,
                 Ratio = entry.Value.Item.Ratio,
-                MeanUs = entry.Value.Item.MeanUs
+                MedianUs = entry.Value.Item.MedianUs,
+                MeanUs = entry.Value.Item.MeanUs,
+                Incomparable = IsIncomparableOperation(entry.Value.Item.Name),
+                Note = IsIncomparableOperation(entry.Value.Item.Name)
+                    ? "并发项：比值受线程调度与服务器时段支配，单点跳变可达 9×，不参与比值门禁（绝对值照登）"
+                    : ""
             })]
         };
 
@@ -80,9 +93,16 @@ internal static class IndexGate
         var current = LoadCurrentItems(batches);
 
         var failures = new List<string>();
-        int compared = 0, missing = 0;
+        int compared = 0, missing = 0, skipped = 0;
         foreach (IndexBaselineItem expected in baseline.Items)
         {
+            // 非可比项（并发族）跳过判定，也不计入缺项——它们的绝对值照常登在基线里供人看
+            if (expected.Incomparable)
+            {
+                skipped++;
+                continue;
+            }
+
             if (!current.TryGetValue(
                 Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier),
                 out (string Harness, PerfResultItem Item) found))
@@ -91,7 +111,8 @@ internal static class IndexGate
                 continue;
             }
 
-            (double Ratio, double MeanUs) actual = (found.Item.Ratio, found.Item.MeanUs);
+            (double Ratio, double MedianUs, double MeanUs) actual =
+                (found.Item.Ratio, found.Item.MedianUs, found.Item.MeanUs);
 
             compared++;
             double limit = expected.Ratio * (1 + baseline.Thresholds.RatioDelta);
@@ -104,7 +125,7 @@ internal static class IndexGate
         ReportSentinel(batches);
 
         Console.WriteLine($"[PerfGate] 结果库门禁: 比对 {compared} 项（基线 {baseline.Items.Count} 项，"
-            + $"缺项 {missing}），失败 {failures.Count}");
+            + $"缺项 {missing}，非可比跳过 {skipped}），失败 {failures.Count}");
         foreach (string failure in failures) Console.Error.WriteLine("  FAIL " + failure);
 
         // 缺项不判失败：基线里的项可能因本轮方言/档位未跑而缺席（例如只跑了 sqlite）。
@@ -163,20 +184,25 @@ internal static class IndexGate
         return map;
     }
 
-    /// <summary>失败描述必须自解释：两侧均值与隐含地板一起打印，否则无法分辨"本项退化"
-    /// 与"地板移动"（实测先例：StreamAll 三臂都变快，但地板快得更多，比值上升 0.48→0.64）。</summary>
+    /// <summary>失败描述必须自解释：两侧中位数与隐含地板一起打印，否则无法分辨"本项退化"
+    /// 与"地板移动"（实测先例：StreamAll 三臂都变快，但地板快得更多，比值上升 0.48→0.64）。
+    /// <para>比值基数是中位数（2026-10-02），故隐含地板按中位数反推；均值另附一行供判读
+    /// "是否只是计时离群"——两者大幅背离时（如 Insert/SQLite/2000 中位 17.1µs / 均值 45.6µs）
+    /// 该批次的该项本身不可信，应复测而不是归因产品。</para></summary>
     private static string DescribeFailure(
-        IndexBaselineItem expected, (double Ratio, double MeanUs) actual, double limit, double ratioDelta)
+        IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual,
+        double limit, double ratioDelta)
     {
-        double floorBase = expected.Ratio > 0 ? expected.MeanUs / expected.Ratio : 0;
-        double floorNow = actual.Ratio > 0 ? actual.MeanUs / actual.Ratio : 0;
-        double meanDelta = expected.MeanUs > 0 ? ((actual.MeanUs / expected.MeanUs) - 1) * 100 : 0;
+        double floorBase = expected.Ratio > 0 ? expected.MedianUs / expected.Ratio : 0;
+        double floorNow = actual.Ratio > 0 ? actual.MedianUs / actual.Ratio : 0;
+        double medianDelta = expected.MedianUs > 0 ? ((actual.MedianUs / expected.MedianUs) - 1) * 100 : 0;
         double floorDelta = floorBase > 0 ? ((floorNow / floorBase) - 1) * 100 : 0;
         return string.Create(CultureInfo.InvariantCulture,
             $"{expected.Harness}/{expected.Name}/{expected.Dialect}/{expected.Tier}: "
             + $"比值 {actual.Ratio:F2} 超过基线 {expected.Ratio:F2} × (1+{ratioDelta:P0}) = {limit:F2}"
-            + $"｜本项均值 {expected.MeanUs:F2} → {actual.MeanUs:F2} µs（{meanDelta:+0.0;-0.0}%）"
-            + $"｜隐含地板 {floorBase:F2} → {floorNow:F2} µs（{floorDelta:+0.0;-0.0}%）");
+            + $"｜本项中位 {expected.MedianUs:F2} → {actual.MedianUs:F2} µs（{medianDelta:+0.0;-0.0}%）"
+            + $"｜隐含地板 {floorBase:F2} → {floorNow:F2} µs（{floorDelta:+0.0;-0.0}%）"
+            + $"｜均值 {expected.MeanUs:F2} → {actual.MeanUs:F2} µs");
     }
 
     /// <summary>哨兵报告：DapperSuite 不卡阈值，但它的健康度与地板比值要打印出来供人工判读。</summary>
@@ -191,8 +217,13 @@ internal static class IndexGate
             + $"健康度 {sentinel.Regime.Health}:");
         foreach (PerfResultItem i in palorm.OrderBy(static i => i.Ratio))
         {
-            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"    {i.Name} 比值 {i.Ratio:F2}（{i.MeanUs:F2} µs）"));
+            // 中位为 0 说明该信封写于 2026-10-02 之前（MedianUs 字段尚不存在）——只报均值，
+            // 不显示 "中位 0.00"（那会被读成"极快"）。
+            Console.WriteLine(i.MedianUs > 0
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"    {i.Name} 比值 {i.Ratio:F2}（中位 {i.MedianUs:F2} µs / 均值 {i.MeanUs:F2} µs）")
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"    {i.Name} 比值 {i.Ratio:F2}（{i.MeanUs:F2} µs；均值口径，早于 2026-10-02）"));
         }
     }
 
@@ -306,8 +337,24 @@ internal sealed class IndexBaselineItem
     public int Tier { get; set; }
     public double Ratio { get; set; }
 
-    /// <summary>本项的绝对均值（µs）——失败时用来分辨"本项退化"与"地板移动"：
-    /// 比值上升可能只是分母（同批地板）变快，看均值才能判定方向。</summary>
+    /// <summary>非可比项（该批次的该项无判别力，门禁跳过判定）。
+    /// <para><b>为什么需要</b>：并发项（`Concurrent_Mixed80_20`）的比值是每操作延迟，
+    /// 其批内散布由线程调度与服务器时段支配，单点跳变可达 9×（实测 MySQL/20000/t8/PalORM
+    /// 4.58s vs 同组 0.51s）。把这种读数录进基线会制造**反向地雷**：上界被抬到
+    /// 15.5× 后，该项从此永不 FAIL，真实退化反而看不见。</para>
+    /// <para>与 PL-4 对 `Build*` 项"比值记 0"同族，区别是这里的绝对值（中位/均值/分配）
+    /// 照常记录，只是不参与比值判定——数据保留、判读交给人。</para></summary>
+    public bool Incomparable { get; set; }
+
+    /// <summary>非可比原因（写进基线，供人工复核时不必回查批次）。</summary>
+    public string Note { get; set; } = "";
+
+    /// <summary>本项的绝对中位耗时（µs）——<see cref="Ratio"/> 的基数，也是失败时分辨
+    /// "本项退化"与"地板移动"的依据：比值上升可能只是分母（同批地板）变快，看中位数才能判定方向。</summary>
+    public double MedianUs { get; set; }
+
+    /// <summary>本项的绝对均值（µs）——仅供判读"是否只是计时离群"，不参与比值。
+    /// 与中位数大幅背离说明该批次的该项不可信。</summary>
     public double MeanUs { get; set; }
 }
 

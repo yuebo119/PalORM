@@ -937,14 +937,22 @@ internal static class Program
         //     只剩 DataGen 两项却顶了 latest.json；B86 的"空批次顶 latest"当时只修了信封侧
         // 历史文件照旧落盘：跑过什么、包括失败，都是事实，只是不该被读成"当前状态"。
         bool hasRealMeasurement = results.Exists(static m => m.Implementation != "DataGen");
-        if (!PerfResultWriter.IsSubsetLabel(label) && hasRealMeasurement)
+        // 覆盖面回退（2026-10-02）：label 是"显式声明"，但同一族缺陷已三度复发（ab/ → gate-set →
+        // verify-），每次都是"跑了单方言却没声明成子集"。判定不能只信 label：**新批次的方言集
+        // 若是上一个可引用批次的真子集，说明覆盖面缩水，无论 label 写了什么都不得顶 latest**。
+        // 只挡真子集（更少的方言），同方言重跑不受影响；上一个 latest 不存在/不可解析时放行。
+        string? coverageReason = DetectCoverageRegression(dir, json);
+        if (!PerfResultWriter.IsSubsetLabel(label) && hasRealMeasurement && coverageReason is null)
         {
             File.WriteAllText(Path.Combine(dir, "latest.json"), json);
         }
         else
         {
+            string why = !hasRealMeasurement
+                ? $"零真测量 label={label}"
+                : coverageReason ?? $"子集 label={label}";
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"[PerfHub] 跳过 latest（{(hasRealMeasurement ? $"子集 label={label}" : $"零真测量 label={label}")}）：保留上一个可引用批次"));
+                $"[PerfHub] 跳过 latest（{why}）：保留上一个可引用批次"));
         }
 
         Console.WriteLine($"[PerfHub] 原始数据已写入 bench/perfhub/results/history-{stamp}.json");
@@ -952,6 +960,73 @@ internal static class Program
         // 结果库信封（规范 v2 §6）：跨夹具可查询的最小集 + 口径登记 + 健康度
         WriteEnvelope(results, label, version, elapsed,
             Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"), dialectFailures, itemFailures);
+    }
+
+    /// <summary>覆盖面回退检测：本批次的方言集是否为上一个可引用批次的**真子集**。
+    /// <para><b>为什么按方言判</b>：方言是最低成本、最不易误判的覆盖面维度——档位与项数会随
+    /// "行数不进测量的项只在 2000 档跑"等既有规则波动，方言集只由 <c>--dialects</c> 决定。
+    /// 一次 <c>--dialects sqlite</c> 的跑测必然丢掉 MySQL/PG 的读数，这正是要挡的形态
+    ///（2026-10-02 实测：434 项被 128 项顶掉，两方言整体消失且无提示）。</para>
+    /// <para><b>只挡真子集</b>：同方言重跑、方言超集（补跑）都放行；上一个 latest 不存在或
+    /// 不可解析（历史文件格式漂移、被删）时返回 null 放行——该守卫是增量护栏，
+    /// 不做"读不到就不许写"的失败关闭（那会让一次格式演进永久锁死 latest 更新）。</para>
+    /// <para>返回 null 表示放行，否则返回人类可读的拦截原因。</para></summary>
+    private static string? DetectCoverageRegression(string dir, string newJson)
+    {
+        string latestPath = Path.Combine(dir, "latest.json");
+        if (!File.Exists(latestPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            PerfRun? incoming = JsonSerializer.Deserialize(newJson, PerfJsonContext.Default.PerfRun);
+            PerfRun? previous = JsonSerializer.Deserialize(
+                File.ReadAllBytes(latestPath), PerfJsonContext.Default.PerfRun);
+            if (incoming is null || previous is null)
+            {
+                return null;
+            }
+
+            var prevDialects = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Measurement m in previous.Measurements)
+            {
+                if (m.Implementation != "DataGen")
+                {
+                    _ = prevDialects.Add(m.Dialect);
+                }
+            }
+
+            var newDialects = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Measurement m in incoming.Measurements)
+            {
+                if (m.Implementation != "DataGen")
+                {
+                    _ = newDialects.Add(m.Dialect);
+                }
+            }
+
+            if (prevDialects.Count == 0 || newDialects.Count == 0)
+            {
+                return null;
+            }
+
+            // 真子集判定：新方言集被旧集合完全覆盖且严格更少
+            if (newDialects.Count < prevDialects.Count && newDialects.IsSubsetOf(prevDialects))
+            {
+                return $"方言覆盖面缩水（本批 {string.Join('/', newDialects)} ⊂ 上一批 {string.Join('/', prevDialects)}）"
+                    + "，请给跑测加子集 label（如 --label verify-…）或补跑其余方言";
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // 读不到旧批次不是本次写入的错误——放行并说明，不阻塞 latest 更新
+            Console.WriteLine($"[PerfHub] 覆盖面回退检测跳过（上一个 latest 不可解析）：{ex.GetType().Name}");
+            return null;
+        }
     }
 
     /// <summary>把本批次映射成结果库信封。Ratio 以同方言同档位的 ADO_NET 行为地板现算
@@ -1014,12 +1089,16 @@ internal static class Program
                 Dialect = m.Dialect,
                 Arm = m.Implementation,
                 Tier = m.Rows,
+                MedianUs = m.MedianNs / 1000.0,
                 MeanUs = m.MeanNs / 1000.0,
                 AllocBytes = (long)m.AllocatedBytesPerOp,
                 RoundTripsPerOp = m.RoundTripsPerOp,
                 PreparedReuse = m.PreparedReuse,
                 Note = comparable ? m.Group : m.Group + "｜地板返回字面量，比值不计比（PL-4）",
-                Ratio = !comparable || floor is null || floor.MeanNs <= 0 ? 0 : m.MeanNs / floor.MeanNs,
+                // 基数用中位数（2026-10-02）：均值对计时离群值极敏感，且与报告侧口径不一致。
+                // 实测 Insert/SQLite/2000 的 ADO 臂中位 17.1µs / 均值 45.6µs ——用均值当分母
+                // 会把基线录成 0.46（中位口径 1.13），下一批必然假报 FAIL。详见 PerfResultItem 文档。
+                Ratio = !comparable || floor is null || floor.MedianNs <= 0 ? 0 : m.MedianNs / floor.MedianNs,
             });
         }
 
