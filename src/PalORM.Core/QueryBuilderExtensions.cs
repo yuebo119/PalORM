@@ -244,7 +244,12 @@ public static class QueryBuilderExtensions
             }
             try
             {
-                cmd.CommandText = sql;
+                // 复用路径的 CommandText 与槽内恒等（TryAcquireReusableSelectCommand 以 SQL 文本
+                // 文本为命中键），同值重设无益且会让驱动重置语句状态——同 GetByKey 复用分支的
+                // string.Equals 守卫口径。[推断] Npgsql 同值 setter 短路未实测，此处仅消除
+                // 不必要的重设；收益待测（探针可扩展 KeyLookupCommandDiag 对照）。
+                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
+                    cmd.CommandText = sql;
                 cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
                 cmd.Transaction = boundTransaction;
                 if (!parametersBound) AddParameters(cmd, parameters);

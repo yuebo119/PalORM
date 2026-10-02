@@ -11,21 +11,42 @@
   本轮 AOT 验证（阶段 B 的 BulkMerge round-trip 断言）偶然暴露。
 - **根因**：PG 连接串的 auto-prepare 调优（`MaxAutoPrepare=100;AutoPrepareMinUsages=2`，
   v5.0 阶段 3.1 默认开启）× 复用槽的「`Parameters.Clear()` + Add **新**参数实例」模式。
-  探针（`mergearray`，裸 ADO 三变体）实测：同实例 Clear+重加 ✅、同实例就地写 Value ✅、
-  **每次新实例 Clear+重加 ❌（驱动沿用 prepare 时的绑定值）**。Npgsql 10.0.3。
-- **触发面**（修复前）：PL-2 GetByKey 复用槽（2026-09-25 引入）与 A9 From<T> 查询槽
-  （2026-10-01 引入）——两者都在复用分支重挂新参数实例。写路径（Insert/Update 槽）用
-  参数池就地写 Value，不受影响。**Core 套件抓不到**：SQLite 无 auto-prepare 行为，
-  集成套件此前的读用例没有"同会话同形状变值"的覆盖。
+  探针（`mergearray`，裸 ADO 变体实验）实测，Npgsql 10.0.3。
 - **修复**：两个读槽的参数集合持久持有、逐位置就地写 Value。GetByKey 的键类型换算
   （ITM-587 契约）经**从不执行的探针命令**走同一生成绑定器（单源不变）；A9 槽对
   DbType 形状变化保守回退新建命令（同型循环——晋升主要受益场景——不受影响）。
 - **回归锁定**：真库 `PG_GetAsync_VaryingKeys_AcrossPromotion_ReturnsMatchingRows` 与
   `PG_Where_VaryingValues_AcrossPromotion_ReturnsMatchingRows`（12 次变值 > 阈值 3）。
-  S3 反向验证：还原旧复用分支 → 测试转红；恢复修复 → 全绿。
-- **教训**：连接串调优（驱动行为开关）× 命令复用（执行形态优化）的交互面没有真库
-  覆盖——性能特性必须在真实方言连接上验证正确性，"SQLite 全绿 + PG 编译通过"不构成
-  正确性证据。已登记 `.ai/lessons.md` B 系列候选。
+- **机制探针（变体 A/B/C/D，机制确证）**：auto-prepare 在 prepare 那一刻**缓存当时集合中的
+  参数对象**；变体 D 改旧实例的 Value 则结果跟随旧实例，改新实例不跟随。同实例 Clear+重加 ✅、
+  同实例就地写 Value ✅、每批新实例 ❌。
+- **触发面**（修复前）：PL-2 GetByKey 复用槽（2026-09-25 引入）与 A9 From<T> 查询槽
+  （2026-10-01 引入）——两者都在复用分支重挂新参数实例。写路径（Insert/Update 槽）用
+  参数池就地写 Value，不受影响。**Core 套件抓不到**：SQLite 无 auto-prepare 行为；
+  集成套件此前的读用例没有「同会话同形状变值」的覆盖，且 SessionBatch 的 PG 用例全在
+  `WithTransaction` 内（事务内 auto-prepare 不生效）。
+- **顺带修出第三处 + 一处自引入缺陷**（门禁化过程发现）：
+  ① 阶段 A 的**数组删除路径**每批 `Clear` + Add 新数组参数，15 001 键三批时第三批重发第二批的
+  键数组（删错行）。原 5 001 键用例**恰好逃过**（两批不触发，判别力下限是三批）——改为预建参数
+  + 批间只改 Value，用例升档 15 001 键，S3 反向验证转红/恢复绿。
+  ② `BulkUpdateBatchAsync`（独立公开入口）此前走 VALUES 形态，与 `BulkUpdateAsync` 自动路由
+  形成「同操作两形态」，本轮切为共用同一数组形态与执行体。
+- **纠正一处误判**：SessionBatch 回退路径（Clear + `CloneParameter`）曾被列为 P1 级
+  「PG 主路径」，探针实测 **Npgsql 支持 DbBatch**（`CreateBatch()` 返回可用对象）→ PG 走真
+  DbBatch，该回退在 PG 上不可达，仅 SQLite 可达且 SQLite 无 auto-prepare 行为，风险降至 P3，
+  只登记不改代码。
+- **纪律落成**：`docs/编码规范.md` §20（规则 + 机制表 + 判别力下限）+ 机械化门禁
+  `scripts/gate-param-collection-reuse.cs`（标记制：每处 `Parameters.Clear()`/`RemoveAt` 须在
+  邻近声明理由码 carrier/pool/fresh/nodbbatch/noautoprep/legacy，缺声明即 FAIL），接入
+  `.githooks/pre-commit` 与 `scripts/test-quality-scripts.cs` 正反双路径夹具（变异验证：抽掉一处
+  标记 → 门禁 exit 1 并精确指位）。
+- **新增回归**：A9 守卫两侧（`PG_Where_SameDbType_DifferentClrType_AcrossPromotion` 就地写跨值
+  类型、`PG_Where_VaryingDbType_AcrossPromotion_FallsBackAndStaysCorrect` 形状漂移回退仍正确）、
+  UPSERT 批内重复主键契约（`PG_BulkMerge_ArrayForm_DuplicateKeyInBatch_Throws`，PG 明确报错、
+  SQLite 与 MySQL 各自不同的既有方言事实已注明）、`BulkUpdateBatchAsync` 数组形态形状断言。
+- **教训**：连接串调优（驱动行为开关）× 命令复用（执行形态优化）的交互面没有真库覆盖——
+  性能特性必须在真实方言连接上验证正确性，「SQLite 全绿 + PG 编译通过」不构成正确性证据。
+  已登记 `.ai/lessons.md` B124。
 
 ### ⚡ UNNEST 阶段 B：PG 批量 UPDATE / UPSERT 切数组形态（2026-10-02）
 

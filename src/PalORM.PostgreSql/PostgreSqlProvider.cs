@@ -482,6 +482,8 @@ public sealed class PostgreSqlProvider : IDbProvider
                                 }
                                 else
                                 {
+                                    // PARAM-REUSE-OK[noautoprep] 该回退仅旧模型程序集（无 valuesBinder）
+                                    // 可达；PG 对应路径的语句为 Binary COPY/ODku，不经参数集合执行
                                     rowCommand.Parameters.Clear();
                                     binder(rowCommand, entities[index], 0);
                                     if (rowCommand.Parameters.Count != columnCount)
@@ -747,6 +749,7 @@ public sealed class PostgreSqlProvider : IDbProvider
         if (CopyColumnTypesCache.TryGetValue(typeof(T), out NpgsqlDbType[]? cached))
             return cached;
 
+        // PARAM-REUSE-OK[carrier] rowCommand 仅用于采样列类型，从不执行（类型按类型缓存）
         rowCommand.Parameters.Clear();
         binder(rowCommand, firstEntity, 0);
         if (rowCommand.Parameters.Count != columnCount)

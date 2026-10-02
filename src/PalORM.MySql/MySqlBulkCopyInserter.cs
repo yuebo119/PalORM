@@ -141,6 +141,8 @@ internal static class MySqlBulkCopyInserter
         // 这里只把新建出的参数对象引用抄进池，供读取器统一按 ordinal 取值。
         return index =>
         {
+            // PARAM-REUSE-OK[noautoprep] 该回退仅旧模型程序集（无 ValuesBinder）可达；MySQL
+            // 无 PostgreSQL 式语句准备缓存，参数对象每行重建无 stale 值面
             rowCommand.Parameters.Clear();
             ctx.Binder(rowCommand, entities[index], 0);
             for (int c = 0; c < columnCount; c++)

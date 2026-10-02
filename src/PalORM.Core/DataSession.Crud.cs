@@ -316,6 +316,7 @@ public sealed partial class DataSession<TProvider>
             // prepare 时的键，就地写同一实例的 Value 则正常——变体 A/B）。键值换算仍走
             // 同一生成绑定器（KeyConversionTests 契约的单源），但在从不执行的 keyProbe 上
             // 绑定，产出就地写入 Pool[0]（与命令参数集合持有同一参数实例）。
+            // PARAM-REUSE-OK[carrier] keyProbe 从不执行，只承载键绑定器的值转换产出
             keyProbe.Parameters.Clear();
             BindGeneratedKeyParameter<T>(keyProbe, key);
             pooledKey.Value = keyProbe.Parameters[0].Value;
