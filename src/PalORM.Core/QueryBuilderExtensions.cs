@@ -216,18 +216,38 @@ public static class QueryBuilderExtensions
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
             lastReadConnection = connection;
             // A9（2026-10-01 全 API 逐项轮）：读查询命令的惰性晋升复用——命中返回会话所有的
-            // 晋升命令（ownsCommand=false：执行后清参数集合归还，参数对象归当前 builder 的
-            // 子句、不 Dispose）；未晋升走新建 + 用后释放（现状形态）。守卫见
-            // QueryBuilder.TryAcquireReusableSelectCommand（连接一致/并行读禁用/晋升阈值 3）。
+            // 晋升命令（ownsCommand=false：参数集合持久持有，逐位置就地写 Value）；未晋升走
+            // 新建 + 用后释放（现状形态）。守卫见 QueryBuilder.TryAcquireReusableSelectCommand
+            // （连接一致/并行读禁用/晋升阈值 3）。
+            // R-UNNESTB（2026-10-02）：PG 连接串的 auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，
+            // 「Clear 集合 + Add 新参数实例」会让驱动沿用 prepare 时的绑定值（探针 mergearray
+            // 变体 C 实测）。故复用命令的参数集合持久持有，命中时逐位置就地写 Value； DbType
+            // 形状变化保守回退新建命令（正确性优先，同型循环——晋升的主要受益场景——不受影响）。
             DbCommand? reusable = builder.TryAcquireReusableSelectCommand(connection, sql);
-            bool ownsCommand = reusable is null;
-            DbCommand cmd = reusable ?? connection.CreateCommand();
+            bool ownsCommand;
+            bool parametersBound;
+            DbCommand cmd;
+            // 未晋升（新建）/ 形状漂移（保守回退新建）共用"新建命令"分支：
+            // 晋升后首次绑定（参数集合为空）也走 AddParameters，但不 owns——集合自此持久持有
+            if (reusable is null
+                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, parameters)))
+            {
+                cmd = connection.CreateCommand();
+                ownsCommand = true;
+                parametersBound = false;
+            }
+            else
+            {
+                cmd = reusable;
+                ownsCommand = false;
+                parametersBound = reusable.Parameters.Count > 0;
+            }
             try
             {
                 cmd.CommandText = sql;
                 cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
                 cmd.Transaction = boundTransaction;
-                AddParameters(cmd, parameters);
+                if (!parametersBound) AddParameters(cmd, parameters);
                 // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
                 NotifyInterceptorsOnBefore(interceptors, context);
                 await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
@@ -252,9 +272,8 @@ public static class QueryBuilderExtensions
             }
             finally
             {
-                // A9：新建命令用后释放；复用命令清参数集合归还槽（参数对象归 builder，值由下次执行重写）
+                // A9：新建命令用后释放；复用命令的参数集合持久持有（R-UNNESTB，见上），不清参
                 if (ownsCommand) await cmd.DisposeAsync().ConfigureAwait(false);
-                else cmd.Parameters.Clear();
             }
         }
 
@@ -672,5 +691,26 @@ public static class QueryBuilderExtensions
     {
         foreach (DbParameter parameter in parameters)
             command.Parameters.Add(parameter);
+    }
+
+    /// <summary>R-UNNESTB（2026-10-02）：复用命令的就地参数赋值——逐位置把本次查询的
+    /// Value 写进持久持有的参数实例（<b>不 Clear、不 Add 新实例</b>：PG 连接的 auto-prepare
+    /// 调优下「Clear + Add 新实例」会让驱动沿用 prepare 时的绑定值，探针 mergearray 实测）。
+    /// <para>形状守卫：个数不一致或任一位置的 DbType 与晋升时不同 → 返回 false，调用方回退
+    /// 新建命令。同型循环（同一查询形状、值不同——晋升的主要受益场景）恒走就地写。</para></summary>
+    private static bool TryCopyParameterValues(DbCommand command,
+        IReadOnlyList<DbParameter> parameters)
+    {
+        if (command.Parameters.Count != parameters.Count)
+            return false;
+        // 先全量校验形状再写值——半写状态对中断的复用尝试无害但不整洁
+        for (int i = 0; i < parameters.Count; i++)
+        {
+            if (command.Parameters[i].DbType != parameters[i].DbType)
+                return false;
+        }
+        for (int i = 0; i < parameters.Count; i++)
+            command.Parameters[i].Value = parameters[i].Value;
+        return true;
     }
 }

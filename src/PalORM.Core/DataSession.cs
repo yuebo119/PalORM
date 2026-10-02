@@ -672,7 +672,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
         if (_reusableGetByKey is { } getByKey)
         {
-            try { await getByKey.Command.DisposeAsync().ConfigureAwait(false); }
+            try
+            {
+                await getByKey.Command.DisposeAsync().ConfigureAwait(false);
+                if (getByKey.KeyProbe is { } keyProbe)
+                    await keyProbe.DisposeAsync().ConfigureAwait(false);
+            }
             catch (Exception exception) { RecordCleanupException(ref primary, exception); }
         }
         if (primary is not null)

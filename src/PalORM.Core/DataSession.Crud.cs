@@ -180,7 +180,10 @@ public sealed partial class DataSession<TProvider>
     private int _getByKeyReadOps;
 
     /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。</summary>
-    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool);
+    /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。
+    /// <para><see cref="KeyProbe"/> 仅 GetByKey 槽使用：从不执行的探针命令，承载键值转换绑定器
+    /// 的产出（见 <see cref="TryAcquireGetByKeyCommand"/> 复用分支的 auto-prepare 说明）。</para></summary>
+    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool, DbCommand? KeyProbe = null);
 
     /// <summary>从已按原路径绑定的命令摘出参数对象池。</summary>
     private static DbParameter[] SnapshotParameterPool(DbCommand cmd)
@@ -298,7 +301,8 @@ public sealed partial class DataSession<TProvider>
         if (HasTenantFilter<T>())
             return null;
 
-        if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T))
+        if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T)
+            && reusable.KeyProbe is { } keyProbe && reusable.Pool is [DbParameter pooledKey, ..])
         {
             DbCommand reused = reusable.Command;
             // 事务与超时可随 WithTransaction/WithTimeout 中途变更，每次调用重设
@@ -306,11 +310,15 @@ public sealed partial class DataSession<TProvider>
             reused.CommandTimeout = _options.CommandTimeoutSeconds;
             if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
                 reused.CommandText = commandText;
-            // 清参重绑而非裸设 Value——生成键绑定器含键类型转换（Guid→TEXT、装箱整数
-            // Convert.ToInt64 等，KeyConversionTests 契约），裸设会绕过转换改变绑定类型；
-            // 每次仅付 1 个 SqliteParameter 分配，仍远低于新建命令路径
-            reused.Parameters.Clear();
-            BindGeneratedKeyParameter<T>(reused, key);
+            // R-UNNESTB（2026-10-02）：**绝不触碰复用命令的参数集合**——PG 连接串的
+            // auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，「Clear 集合 + Add 新参数实例」
+            // 会让驱动沿用 prepare 时的绑定值（探针 mergearray 变体 C 实测：语句卡在
+            // prepare 时的键，就地写同一实例的 Value 则正常——变体 A/B）。键值换算仍走
+            // 同一生成绑定器（KeyConversionTests 契约的单源），但在从不执行的 keyProbe 上
+            // 绑定，产出就地写入 Pool[0]（与命令参数集合持有同一参数实例）。
+            keyProbe.Parameters.Clear();
+            BindGeneratedKeyParameter<T>(keyProbe, key);
+            pooledKey.Value = keyProbe.Parameters[0].Value;
             return reused;
         }
 
@@ -321,6 +329,7 @@ public sealed partial class DataSession<TProvider>
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        DbCommand keyProbeCommand = CreateCommand();
         try
         {
             BindGeneratedKeyParameter<T>(cmd, key);
@@ -331,10 +340,12 @@ public sealed partial class DataSession<TProvider>
             // ITM-867（r23）：同 TryAcquireInsertCommand——BindGeneratedKeyParameter 的
             // Convert.ChangeType 可抛（ITM-743 登记形态），释放新建命令后再抛
             cmd.Dispose();
+            keyProbeCommand.Dispose();
             throw;
         }
         _reusableGetByKey?.Command.Dispose();
-        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
+        _reusableGetByKey?.KeyProbe?.Dispose();
+        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), keyProbeCommand);
         return cmd;
     }
 
