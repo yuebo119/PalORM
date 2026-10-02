@@ -111,6 +111,62 @@ internal static class CommandFactoryEmitter
         GenerateBindDeleteBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // 2026-10-02（UNNEST 形态）：主键数组构造器——把键对象序列转成类型化数组，供 PG 的
+        // `pk = ANY(@ids)` 使用。数组**元素类型由生成物静态确定**（编译期已知，零反射/零 AOT 风险）；
+        // 元素值走 BuildKeyCastExpression 与 BindDelete 同一真源，两条路径产出逐位相同的 provider 值。
+        sb.AppendLine($"    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>");
+        sb.AppendLine($"    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)");
+        sb.AppendLine("    {");
+        GenerateBuildDeleteKeyArrayBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        // 2026-10-02（UNNEST 阶段 B）：逐列类型化数组填充器——UPDATE/UPSERT 的数组形态按**列**
+        // 建数组（UNNEST(@c0, @c1, …) 每个参数是一个列的全部值），与阶段 A 的"按行建键数组"不同。
+        // 元素类型与元素值均与 BindUpdateValues / BindUpsertValues 同源，见 GenerateFillUpdateColumnArraysBody。
+        sb.AppendLine($"    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>");
+        sb.AppendLine($"    internal static void FillUpdateColumnArrays(");
+        sb.AppendLine("        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,");
+        sb.AppendLine("        global::System.Array[] arrays, int arrayOffset)");
+        sb.AppendLine("    {");
+        GenerateFillUpdateColumnArraysBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        // 数组分配在生成物内做（new T[count] 静态类型），不由 Core 侧 Array.CreateInstance(Type, …)
+        // ——后者带 RequiresDynamicCode（IL3050），AOT 下不可用（G4/G6 门禁）。
+        sb.AppendLine($"    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>");
+        sb.AppendLine($"    internal static global::System.Array[] CreateUpdateColumnArrays(int count)");
+        sb.AppendLine("    {");
+        GenerateCreateColumnArraysBody(sb, UpdateArrayColumns(model));
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        // 2026-10-02（UNNEST 阶段 B）：UPSERT 的逐列数组——列序 = IsUpsertable 声明序
+        // （与 BindUpsertValues / UpsertColumns 同源同序），与 UPDATE 的列序不同故各发一套。
+        sb.AppendLine($"    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>");
+        sb.AppendLine($"    internal static void FillUpsertColumnArrays(");
+        sb.AppendLine("        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,");
+        sb.AppendLine("        global::System.Array[] arrays, int arrayOffset)");
+        sb.AppendLine("    {");
+        GenerateFillUpsertColumnArraysBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        sb.AppendLine($"    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>");
+        sb.AppendLine($"    internal static global::System.Type[] UpsertColumnArrayElementTypes()");
+        sb.AppendLine("    {");
+        GenerateUpsertColumnArrayElementTypesBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        sb.AppendLine($"    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>");
+        sb.AppendLine($"    internal static global::System.Array[] CreateUpsertColumnArrays(int count)");
+        sb.AppendLine("    {");
+        GenerateCreateColumnArraysBody(sb, UpsertArrayColumns(model));
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        sb.AppendLine($"    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>");
+        sb.AppendLine($"    internal static global::System.Type[] UpdateColumnArrayElementTypes()");
+        sb.AppendLine("    {");
+        GenerateUpdateColumnArrayElementTypesBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
         // SetId: 编译时安全设置自增主键（零反射，替代 MySQL LAST_INSERT_ID 后 Type.GetProperties()）
         sb.AppendLine($"    internal static void SetId({model.EntityTypeName} entity, long id)");
         sb.AppendLine("    {");
@@ -130,32 +186,181 @@ internal static class CommandFactoryEmitter
         return sb.ToString();
     }
 
+    /// <summary><c>FillUpdateColumnArrays</c> 与 <c>UpdateColumnArrayElementTypes</c> 的发射体——列序与
+    /// <c>BindUpdateValues</c> 共用 <see cref="GetUpdateColumnOrder"/> 单一真源（顺序错位的后果是
+    /// 错误数据写入而非编译失败，与 GEN-012 同族）。
+    /// <para><b>为什么元素类型静态确定而非运行时推断</b>：生成期已知每列 provider CLR 类型，
+    /// 直接 <c>new T[count]</c> 直写；运行时推断（<c>Array.CreateInstance</c> + <c>SetValue</c>）
+    /// 每个元素都装箱，探针实测 12 万元素规模下这是纯浪费（B 阶段探针 Q2）。</para>
+    /// <para><b>为什么不用 <c>DBNull</c></b>：类型化数组的元素不能是 <c>DBNull</c>（除 object[] 外
+    /// 会抛 InvalidCastException）；SQL NULL 由 <c>default</c>（值类型的 <c>T?</c> 之 null）
+    /// 或 <c>null</c>（引用类型）表达。可空值类型列声明为 <c>T?[]</c>，探针 Q4 实测 PG 正确写 NULL。</para>
+    /// <para><b>元素值</b>：与 <c>BindUpdateValues</c> 同一 <see cref="GetParameterValueExpression"/>，
+    /// 但取其"裸值"形态（不包 <c>(object)</c> / <c>DBNull</c>）——转换器、枚举 <c>StoreAs</c>、
+    /// OwnedJson 序列化的语义仍是一份真源。</para></summary>
+    private static void GenerateFillUpdateColumnArraysBody(TableModel model, StringBuilder sb)
+        => GenerateFillColumnArraysBody(model, sb, UpdateArrayColumns(model));
+
+    /// <summary>UPSERT 的逐列数组填充（列序 = IsUpsertable 声明序，与 <c>BindUpsertValues</c> 同源）。</summary>
+    private static void GenerateFillUpsertColumnArraysBody(TableModel model, StringBuilder sb)
+        => GenerateFillColumnArraysBody(model, sb, UpsertArrayColumns(model));
+
+    /// <summary>UPDATE 数组形态的列序（与 <c>BindUpdateValues</c> 共 <see cref="GetUpdateColumnOrder"/> 真源）。</summary>
+    private static ColumnModel[] UpdateArrayColumns(TableModel model)
+    {
+        var (setCols, pkCols, cc) = GetUpdateColumnOrder(model);
+        return [.. setCols, .. pkCols, .. cc is null ? [] : new[] { cc }];
+    }
+
+    /// <summary>UPSERT 数组形态的列序（与 <c>BindUpsertValues</c> 共 IsUpsertable 谓词真源）。</summary>
+    private static ColumnModel[] UpsertArrayColumns(TableModel model)
+        => [.. model.Columns.AsSpan().ToArray().Where(static column => column.IsUpsertable)];
+
+    /// <summary>逐列数组填充的共享发射体（UPDATE 与 UPSERT 同一实现，只有列序来源不同）。
+    /// <para><b>为什么元素类型静态确定而非运行时推断</b>：生成期已知每列 provider CLR 类型，
+    /// 直接 <c>new T[count]</c> 直写；运行时推断（<c>Array.CreateInstance</c> + <c>SetValue</c>）
+    /// 每个元素都装箱，探针实测 12 万元素规模下这是纯浪费（B 阶段探针 Q2）。</para>
+    /// <para><b>为什么不用 <c>DBNull</c></b>：类型化数组的元素不能是 <c>DBNull</c>（除 object[] 外
+    /// 会抛 InvalidCastException）；SQL NULL 由数组元素的 <c>default</c> 表达。可空值类型列声明为
+    /// <c>T?[]</c>，探针 Q4 实测 PG 正确写 NULL。</para></summary>
+    private static void GenerateFillColumnArraysBody(
+        TableModel model, StringBuilder sb, ColumnModel[] columns)
+    {
+        int index = 0;
+        foreach (var col in columns)
+        {
+            string elementType = ArrayElementTypeFor(col);
+            string property = $"(({model.EntityTypeName})entities[start + i]).{col.EscapedPropertyName}";
+            // 元素类型本身带 `[]`（byte[]列）时声明为 `byte[][]`（数组的数组）
+            sb.AppendLine($"        {{");
+            sb.AppendLine($"            {elementType}[] column{index} = ({elementType}[])arrays[arrayOffset + {index}];");
+            sb.AppendLine($"            for (int i = 0; i < count; i++)");
+            sb.AppendLine($"            {{");
+            if (NeedsNullGuard(col))
+            {
+                // 可空**值类型**（含可空枚举）：模式匹配让编译器知道 v 非 null。可空枚举的
+                // `(E)x` 转换在 x 为 null 时抛，且裸 `.Value` 访问触发 CS8629；null 走数组默认值
+                //（= SQL NULL）。
+                sb.AppendLine($"                if ({property} is {{ }} v{index})");
+                sb.AppendLine($"                {{");
+                sb.AppendLine($"                    column{index}[i] = {ArrayElementValueExpression(col, $"v{index}")};");
+                sb.AppendLine($"                }}");
+            }
+            else
+            {
+                // 引用类型元素（string/byte[]，含可空引用列）：null 直传即 SQL NULL。
+                // 编译器按可空性标注发 CS8601（属性声明可空、数组元素类型未标）——null 在此
+                // 是合法元素值，故抑制；不用 `is { }` 分支（引用类型的默认值本就是 null）。
+                string nullForgiving = col.IsNullable ? "!" : "";
+                sb.AppendLine($"                column{index}[i] = {ArrayElementValueExpression(col, property)}{nullForgiving};");
+            }
+            sb.AppendLine($"            }}");
+            sb.AppendLine($"        }}");
+            index++;
+        }
+    }
+
+    /// <summary>逐列元素类型数组（与 <see cref="GenerateFillColumnArraysBody"/> 同序同源）。</summary>
+    private static void GenerateUpdateColumnArrayElementTypesBody(TableModel model, StringBuilder sb)
+        => GenerateColumnArrayElementTypesBody(sb, UpdateArrayColumns(model));
+
+    /// <summary>UPSERT 的逐列元素类型数组。</summary>
+    private static void GenerateUpsertColumnArrayElementTypesBody(TableModel model, StringBuilder sb)
+        => GenerateColumnArrayElementTypesBody(sb, UpsertArrayColumns(model));
+
+    private static void GenerateColumnArrayElementTypesBody(StringBuilder sb, ColumnModel[] columns)
+    {
+        sb.AppendLine($"        return new global::System.Type[{columns.Length}]");
+        sb.AppendLine("        {");
+        foreach (var col in columns)
+            sb.AppendLine($"            typeof({ArrayElementTypeFor(col)}),");
+        sb.AppendLine("        };");
+    }
+
+    /// <summary><c>CreateUpdateColumnArrays</c> / <c>CreateUpsertColumnArrays</c> 的发射体：
+    /// <c>new T[count]</c> 静态类型分配（AOT 安全）。数组序与填充器逐位对应。</summary>
+    private static void GenerateCreateColumnArraysBody(StringBuilder sb, ColumnModel[] columns)
+    {
+        sb.AppendLine($"        return new global::System.Array[{columns.Length}]");
+        sb.AppendLine("        {");
+        foreach (var col in columns)
+        {
+            // 数组元素本身是数组（byte[]列）时必须写 `new byte[count][]`（交错）——
+            // `new byte[][count]` 会被解析成"逗号/右括号"错误（CS1586/CS0178）。
+            string elementType = ArrayElementTypeFor(col);
+            // 生成器目标 netstandard2.0：不用 range 语法（CS0518/CS0656 缺 System.Range/Index）
+            sb.AppendLine(elementType.EndsWith("[]", StringComparison.Ordinal)
+                ? $"            new {elementType.Substring(0, elementType.Length - 2)}[count][],"
+                : $"            new {elementType}[count],");
+        }
+        sb.AppendLine("        };");
+    }
+
+    /// <summary>列数组的元素类型：**按值的实际形态推导**，而非列声明的 CLR 类型。
+    /// <para>三处必须区分（探针与首轮构建各暴露一处）：</para>
+    /// <list type="bullet">
+    /// <item><b>转换器列</b>取 provider 类型（<c>ToProvider</c> 的产物）；</item>
+    /// <item><b>对象型 OwnedJson 列</b>取 <c>string</c>（值是 <c>JsonSerializer.Serialize</c>
+    /// 产出的 JSON 文本，不是实体类型——首轮误用实体类型直接 CS0029）；</item>
+    /// <item><b>枚举列</b>取存储形态的 provider 类型（AsInt32→int / AsInt64→long / 其他→string）。</item>
+    /// </list>
+    /// <para>可空值类型列用 <c>T?</c> 承载 SQL NULL；引用类型（string/byte[]）加不加 <c>?</c>
+    /// 同类型，统一不加——<c>typeof(T?)</c> 在引用类型上是编译错误（CS8639，首轮实测）。</para></summary>
+    private static string ArrayElementTypeFor(ColumnModel col)
+    {
+        string providerType = ArrayElementProviderTypeName(col);
+        if (!col.IsNullable || IsReferenceElementType(providerType)) return providerType;
+        return $"{providerType}?";
+    }
+
+    /// <summary>列数组元素的 provider 类型名（与 <see cref="ArrayElementValueExpression"/> 的产物同形）。</summary>
+    private static string ArrayElementProviderTypeName(ColumnModel col)
+    {
+        if (col.EnumStorage != EnumStorageKind.None)
+        {
+            return col.EnumStorage switch
+            {
+                EnumStorageKind.AsInt32 => "int",
+                EnumStorageKind.AsInt64 => "long",
+                _ => "string",
+            };
+        }
+        if (IsObjectOwnedJson(col)) return "string";
+        return NormalizeClrType(col.ConverterTypeName is null ? col.ClrTypeName : col.ProviderClrTypeName);
+    }
+
+    private static bool IsReferenceElementType(string typeName)
+        => typeName is "string" or "global::System.String" or "byte[]" or "global::System.Byte[]";
+
+    /// <summary>该列的可空是否需要"模式匹配解包"守卫——判据是<b>列的 CLR 类型</b>是否值类型，
+    /// 而不是 provider 元素类型。
+    /// <para>差异在可空枚举列（<c>OrderState? Fallback</c>，<c>StoreAs.AsString</c>）：元素类型是
+    /// 引用型 <c>string</c>，但属性是 <c>Nullable&lt;E&gt;</c>——直接 <c>(E)属性</c> 在 null 时抛，
+    /// 故必须走 <c>is { } v</c> 解包（首轮实测 CS8629）。</para></summary>
+    private static bool NeedsNullGuard(ColumnModel col)
+        => col.IsNullable && IsValueTypeColumn(col);
+
+    /// <summary>列属性的 CLR 类型是否为值类型（非 String/byte[] 即按值类型处理——
+    /// 与 <see cref="IsReferenceElementType"/> 同族判据，覆盖实体列的常见形态）。</summary>
+    private static bool IsValueTypeColumn(ColumnModel col)
+        => !IsReferenceElementType(NormalizeClrType(col.ClrTypeName));
+
+    /// <summary>列数组的**裸元素值**表达式（不装箱、不产 <c>DBNull</c>）。
+    /// <para>null 的落位由调用方决定（<see cref="GenerateFillUpdateColumnArraysBody"/> 对可空值类型列
+    /// 发 <c>is { } v</c> 模式匹配，null 时留数组默认值 = SQL NULL），故本助手只负责"有值"时的
+    /// provider 值表达式——null 判定不在表达式内，避免与调用方的分支重复。</para>
+    /// <para>转换器 / 枚举 StoreAs / OwnedJson 的表达式部分取自
+    /// <see cref="GetParameterValueExpressionCore"/>，语义只有一份真源。</para></summary>
+    private static string ArrayElementValueExpression(ColumnModel col, string valueExpr)
+        => GetParameterValueExpressionCore(col, valueExpr);
+
     private static void GenerateBindDeleteBody(TableModel model, StringBuilder sb)
     {
-        var pkCols = model.Columns.AsSpan().ToArray().Where(c => c.IsPrimaryKey).ToArray();
+        var pkCols = model.Columns.AsSpan().ToArray().Where(c => IsPrimaryKeyColumn(c)).ToArray();
         int pi = 0;
         foreach (var col in pkCols)
         {
-            // ITM-587/627：整数主键用 Convert.ToXxx(key) 而非直接 cast：
-            // 调用方可能传 int（如 BenchmarkDotNet 的 NextId()）、byte 等装箱为 object，
-            // 直接 (long)key 在 key 是 int 时抛 InvalidCastException。Convert 在装箱类型间
-            // 自动转换，代价仅几 ns。Converter 列同样归一化（627——先归一到 CLR 侧类型再交
-            // ToProvider）；非基元类型保持类型化 cast（默认 key 对 Converter 列不编译）。
-            string castExpr = NormalizeClrType(col.ClrTypeName) switch
-            {
-                "long" or "global::System.Int64" => "global::System.Convert.ToInt64(key)",
-                "int" or "global::System.Int32" => "global::System.Convert.ToInt32(key)",
-                "short" or "global::System.Int16" => "global::System.Convert.ToInt16(key)",
-                "byte" or "global::System.Byte" => "global::System.Convert.ToByte(key)",
-                // string/Guid 保持精确 cast——语义不同（不接受 int→string 隐式转换）
-                "string" or "global::System.String" => "((string)key)",
-                "global::System.Guid" => "((global::System.Guid)key)",
-                // ITM-743(r20)：decimal/DateTime 等 IConvertible 主键用 Convert.ChangeType 归一——
-                // 此前原样装箱（(object)key）与 int/long 的归一处理不对称，异型 key 靠驱动隐式转换。
-                // 同型装箱值 ChangeType 直返，行为不变。Converter 列保持原类型化 cast（先归一到 CLR 侧）。
-                _ when col.ConverterTypeName is not null => $"({col.ClrTypeName})key",
-                _ => $"global::System.Convert.ChangeType(key, typeof({col.ClrTypeName}), global::System.Globalization.CultureInfo.InvariantCulture)"
-            };
+            string castExpr = BuildKeyCastExpression(col, "key");
             string providerValueExpr = col.ConverterTypeName is null
                 ? castExpr
                 : $"_conv_{col.PropertyName}.ToProvider({castExpr})";
@@ -166,6 +371,74 @@ internal static class CommandFactoryEmitter
             pi++;
         }
     }
+
+    /// <summary>主键列判定——与 <c>GenerateHasDefaultKeyBody</c> / <c>GenerateSetIdBody</c> 同源，
+    /// 收敛为单一判据（原各方法各自 <c>Where(c =&gt; c.IsPrimaryKey)</c>）。</summary>
+    private static bool IsPrimaryKeyColumn(ColumnModel col) => col.IsPrimaryKey;
+
+    /// <summary><c>BuildDeleteKeyArray</c> 的发射体（UNNEST 形态，2026-10-02）。
+    /// <para><b>只支持单列主键</b>：复合主键在 UNNEST 形态下需要把每列各建一个数组并做元组比较
+    ///（<c>WHERE (a, b) = ANY(...)</c> 需行构造器数组），收益与复杂度不成比例——返回 null
+    /// 让调用方回退到 IN 占位符形态（该形态对复合主键本就正确）。</para>
+    /// <para><b>元素类型</b>：取 provider 侧 CLR 类型（Converter 列用其 provider 类型）。
+    /// 无 <c>T?[]</c> 分支：可空值类型主键与可空引用类型主键均被
+    /// <c>SourceGenerationValidation.CanGenerateEntity</c> 拒绝（ITM-560），生成物里
+    /// 该分支不可达——与单值 binder 的 <c>NullableSharp</c> 形态收敛为同一事实。</para>
+    /// <para><b>元素值</b>：与 <c>BindDelete</c> 同一 <see cref="BuildKeyCastExpression"/> 真源，
+    /// 故两条路径对同一 key 产出逐位相同的值（否则数组形态会静默改变绑定语义）。</para></summary>
+    private static void GenerateBuildDeleteKeyArrayBody(TableModel model, StringBuilder sb)
+    {
+        var pkCols = model.Columns.AsSpan().ToArray().Where(c => IsPrimaryKeyColumn(c)).ToArray();
+        if (pkCols.Length != 1)
+        {
+            // 复合主键或无主键：不支持数组形态，明确回退（不抛错——回退是正常路径）
+            sb.AppendLine("        return null;");
+            return;
+        }
+
+        var col = pkCols[0];
+        // 元素值表达式与 BindDelete 同一真源。此处要的是**元素级 provider 值**，
+        // 故取 cast 而非 BindDelete 的 (object) 装箱形态。
+        string castExpr = BuildKeyCastExpression(col, "keys[start + i]");
+        string elementType = NormalizeClrType(
+            col.ConverterTypeName is null ? col.ClrTypeName : col.ProviderClrTypeName);
+        string elementValue = col.ConverterTypeName is null
+            ? castExpr
+            : $"_conv_{col.PropertyName}.ToProvider({castExpr})";
+
+        sb.AppendLine($"        {elementType}[] values = new {elementType}[count];");
+        sb.AppendLine("        for (int i = 0; i < count; i++)");
+        sb.AppendLine("        {");
+        sb.AppendLine($"            values[i] = {elementValue};");
+        sb.AppendLine("        }");
+        sb.AppendLine("        return values;");
+    }
+
+    /// <summary>主键值归一化表达式（ITM-587/627/743）——<paramref name="keyExpr"/> 是待归一的值表达式。
+    /// <para><b>为什么抽成共享助手</b>：单值 binder（<see cref="GenerateBindDeleteBody"/>）与
+    /// 数组 binder（<see cref="GenerateBuildDeleteKeyArrayBody"/>）必须对同一个 key 产出<b>逐位相同</b>
+    /// 的 provider 值——两份拷贝会在下次转换器语义变更时只改一处（B120 同构不对称族）。
+    /// 此处是主键归一化的<b>唯一真源</b>。</para>
+    /// <para>整数主键用 <c>Convert.ToXxx</c> 而非直接 cast：调用方可能传 int（如 BDN 的 NextId()）、
+    /// byte 等装箱为 object，直接 <c>(long)key</c> 在 key 是 int 时抛 InvalidCastException。
+    /// int/byte 等装箱类型可经 Convert 自动转换，代价仅几 ns。Converter 列同样归一化
+    ///（627：先归一到 CLR 侧类型再交 ToProvider）；非基元类型保持类型化 cast。</para></summary>
+    private static string BuildKeyCastExpression(ColumnModel col, string keyExpr)
+        => NormalizeClrType(col.ClrTypeName) switch
+        {
+            "long" or "global::System.Int64" => $"global::System.Convert.ToInt64({keyExpr})",
+            "int" or "global::System.Int32" => $"global::System.Convert.ToInt32({keyExpr})",
+            "short" or "global::System.Int16" => $"global::System.Convert.ToInt16({keyExpr})",
+            "byte" or "global::System.Byte" => $"global::System.Convert.ToByte({keyExpr})",
+            // string/Guid 保持精确 cast——语义不同（不接受 int→string 隐式转换）
+            "string" or "global::System.String" => $"((string){keyExpr})",
+            "global::System.Guid" => $"((global::System.Guid){keyExpr})",
+            // ITM-743(r20)：decimal/DateTime 等 IConvertible 主键用 Convert.ChangeType 归一——
+            // 此前原样装箱（(object)key）与 int/long 的归一处理不对称，异型 key 靠驱动隐式转换。
+            // 同型装箱值 ChangeType 直返，行为不变。Converter 列保持原类型化 cast（先归一到 CLR 侧）。
+            _ when col.ConverterTypeName is not null => $"(({col.ClrTypeName}){keyExpr})",
+            _ => $"global::System.Convert.ChangeType({keyExpr}, typeof({col.ClrTypeName}), global::System.Globalization.CultureInfo.InvariantCulture)"
+        };
 
     private static void GenerateHasDefaultKeyBody(TableModel model, StringBuilder sb)
     {
@@ -600,38 +873,48 @@ internal static class CommandFactoryEmitter
         => col.ProviderClrTypeName is "byte[]" or "global::System.Byte[]";
 
     private static string GetParameterValueExpression(ColumnModel col)
+        => WrapAsParameterValue(col, GetParameterValueExpressionCore(col, $"entity.{col.EscapedPropertyName}"));
+
+    /// <summary>列 provider 值的**裸表达式内核**——不含 <c>(object)</c> 装箱与 <c>DBNull</c> 归一，
+    /// 这两个收尾由具体消费形态决定：参数池要装箱值（<c>DBNull</c> 表 NULL），类型化数组元素
+    /// 要裸值（<c>default</c> 表 NULL，见 <see cref="ArrayElementValueExpression"/>）。
+    /// <para><b>为什么抽成内核</b>：枚举 <c>StoreAs</c>、<c>[Converter]</c>、<c>OwnedJson</c> 序列化
+    /// 三套语义都在此，若数组路径另写一份，任何转换器变更都要改两处（B120 同构不对称族）。</para></summary>
+    private static string GetParameterValueExpressionCore(ColumnModel col, string entityExpr)
     {
         // ITM-553（v6.1）：枚举列写路径——按存储策略转 provider 值（int/long 显式强转或
         // 成员名字符串）。可空枚举（E?）先经 (E) 显式转换再转数值（空值已由外层守卫拦截）。
         if (col.EnumStorage != EnumStorageKind.None)
         {
-            string prop = $"entity.{col.EscapedPropertyName}";
-            string enumValue = col.EnumStorage switch
+            return col.EnumStorage switch
             {
                 EnumStorageKind.AsInt32 => col.IsNullable
-                    ? $"(int)({col.EnumClrTypeName}){prop}" : $"(int){prop}",
+                    ? $"(int)({col.EnumClrTypeName}){entityExpr}" : $"(int){entityExpr}",
                 EnumStorageKind.AsInt64 => col.IsNullable
-                    ? $"(long)({col.EnumClrTypeName}){prop}" : $"(long){prop}",
+                    ? $"(long)({col.EnumClrTypeName}){entityExpr}" : $"(long){entityExpr}",
                 // Nullable<T>.ToString() 在引用程序集标注 string?（HasValue=false 返 ""）——
-                // (object) 强转下 CS8600；可空先显式转 E（null 已由外层守卫拦截）再 ToString。
+                // (object) 强转下 CS8600；可空先显式转 E 再 ToString。
+                // 数组路径传入的是 `is { } v` 已解包的非空 E（转换退化为恒等），同一表达式两处可用。
                 _ => col.IsNullable
-                    ? $"(({col.EnumClrTypeName}){prop}).ToString()" : $"{prop}.ToString()",
+                    ? $"(({col.EnumClrTypeName}){entityExpr}).ToString()" : $"{entityExpr}.ToString()",
             };
-            return col.IsNullable
-                ? $"{prop} is null ? global::System.DBNull.Value : (object){enumValue}"
-                : $"(object){enumValue}";
         }
         if (IsObjectOwnedJson(col))
-            return col.IsNullable
-                ? $"entity.{col.EscapedPropertyName} is null ? global::System.DBNull.Value : (object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})"
-                : $"(object)global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})";
+            return $"global::System.Text.Json.JsonSerializer.Serialize({entityExpr}, JsonTypeInfo_{col.PropertyName})";
 
-        string valueExpression = col.ConverterTypeName is null
-            ? $"entity.{col.EscapedPropertyName}"
-            : $"_conv_{col.PropertyName}.ToProvider(entity.{col.EscapedPropertyName})";
+        return col.ConverterTypeName is null
+            ? entityExpr
+            : $"_conv_{col.PropertyName}.ToProvider({entityExpr})";
+    }
+
+    /// <summary>把裸值表达式包装为参数池可写的形态：非空列 <c>(object)值</c>，
+    /// 可空列 <c>is null ? DBNull.Value : (object)值</c>。</summary>
+    private static string WrapAsParameterValue(ColumnModel col, string coreExpression)
+    {
+        string property = $"entity.{col.EscapedPropertyName}";
         return col.IsNullable
-            ? $"entity.{col.EscapedPropertyName} is null ? global::System.DBNull.Value : (object){valueExpression}"
-            : $"(object){valueExpression}";
+            ? $"{property} is null ? global::System.DBNull.Value : (object){coreExpression}"
+            : $"(object){coreExpression}";
     }
 
     private static bool IsObjectOwnedJson(ColumnModel column)

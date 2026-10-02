@@ -78,6 +78,55 @@ public sealed class ProviderTests
         await Assert.That(PalORM.MySql.MySqlProvider.QuoteIdentifier("t")).IsEqualTo("`t`");
     }
 
+    /// <summary>UNNEST-1（2026-10-02）：PG 数组成员的元素类型映射（不触库，只验参数构造）。
+    /// <para>为什么需要这层：覆盖元数据里每个"主键可能出现的 CLR 类型"都被映射到正确的
+    /// <c>NpgsqlDbType</c>，且**未知类型返回 null**（能力检测的判据——返回一个类型未知的
+    /// 数组参数会让远端以"类型推断失败"报错，错误消息不指向真正的原因）。</para>
+    /// <para>类型判别经 <c>NpgsqlDbType</c> 的公开值断言；元素类型由数组运行时类型推断，
+    /// 故空数组也必须有确定结论（探针实测：不设类型时空数组绑定失败）。</para></summary>
+    [Test]
+    public async Task PostgreSqlProvider_CreateArrayParameter_MapsElementTypes()
+    {
+        // 支持的元素类型：空数组同样有确定类型（不依赖元素值推断）
+        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.CreateArrayParameter("@ids", Array.Empty<long>()))
+            .IsNotNull();
+        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.CreateArrayParameter("@ids", Array.Empty<string>()))
+            .IsNotNull();
+        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.CreateArrayParameter("@ids", Array.Empty<Guid>()))
+            .IsNotNull();
+        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.CreateArrayParameter("@ids", Array.Empty<int>()))
+            .IsNotNull();
+
+        // 元素类型与值都被带上：参数值即原数组（驱动按 NpgsqlDbType 逐项编码）
+        var values = new[] { 1L, 2L, 3L };
+        System.Data.Common.DbParameter? parameter =
+            PalORM.PostgreSql.PostgreSqlProvider.CreateArrayParameter("@ids", values);
+        await Assert.That(parameter).IsNotNull();
+        await Assert.That(parameter!.ParameterName).IsEqualTo("@ids");
+        await Assert.That(parameter.Value).IsSameReferenceAs(values);
+
+        // 不支持的元素类型返回 null（调用方回退 IN 形态）——不猜、不发类型未知的参数
+        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.CreateArrayParameter(
+            "@ids", Array.Empty<TimeSpan>())).IsNull();
+        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.CreateArrayParameter(
+            "@ids", Array.Empty<decimal>())).IsNotNull();  // decimal 是受支持类型，作反例对照
+    }
+
+    /// <summary>非 PG 方言保持默认实现（恒 null）——数组形态是 PG 特有优化，
+    /// MySQL/SQLite 必须回退 IN 形态（能力检测据此为假）。
+    /// <para><b>必须经泛型类型参数调用</b>：<c>CreateArrayParameter</c> 是接口的 static virtual
+    /// 成员，具体类上没有该方法（CS0117——static virtual 不在派生类上生成可见成员）。</para></summary>
+    [Test]
+    public async Task MySqlAndSqliteProviders_DoNotSupportArrayParameters()
+    {
+        await Assert.That(InvokeCreateArray<PalORM.MySql.MySqlProvider>()).IsNull();
+        await Assert.That(InvokeCreateArray<PalORM.Sqlite.SqliteProvider>()).IsNull();
+    }
+
+    private static System.Data.Common.DbParameter? InvokeCreateArray<TProvider>()
+        where TProvider : IDbProvider
+        => TProvider.CreateArrayParameter("@ids", Array.Empty<long>());
+
     [Test]
     public async Task Providers_QuoteInternalDelimitersAndQualifiedNames()
     {

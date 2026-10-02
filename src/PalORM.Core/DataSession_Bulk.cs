@@ -60,6 +60,14 @@ public partial class DataSession<TProvider>
         DeleteIdentifiers identifiers = new(
             quotedTable, quotedPrimaryKey, TProvider.QuoteIdentifier("deleted_at"),
             TProvider.CurrentTimestampExpression, tenantFilter);
+        int tenantParamCount = HasTenantFilter<T>() ? 1 : 0;
+
+        // UNNEST-1（2026-10-02）：PG 数组形态——`pk = ANY(@ids)` 一条语句取代 N 个 IN 占位符。
+        // 能力检测（生成物提供主键数组构造器 + Provider 接受该元素类型的数组参数）全真才走，
+        // 否则回退 IN 占位符形态（该形态对复合主键本就正确）。
+        // 收益（2026-10-02 探针实测）：DELETE 时延 −52%、客户端分配 −99%（省 per-key 参数对象）。
+        bool useArrayForm = IsArrayFormSupported<T>(out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray);
+
         // BULK-001（2026-09-23）：本路径每批一次独立往返，批大小取"方言参数上限"与"单批行数上限"
         // 的较小者。原用 InClauseBatchSize（500，单语句内拼 IN 片段的约束）把 10 万键放大成 200 次往返；
         // PG/MySQL 为 5000（20 次），SQLite 受 999 参数上限约束（100 次；32766 大值经
@@ -67,69 +75,225 @@ public partial class DataSession<TProvider>
         // ITM-809（r22 登记，r23 实修）：批大小扣减租户过滤参数——每批 BindDefaultFilterParameters
         // 追加 1 个租户参数，不扣则 SQLite+租户实体单语句 999+1=1000 越保守上限（同文件
         // BulkUpdateBatchAsync 的 (driverLimit - tenantParams) 同口径）。
-        int tenantParamCount = HasTenantFilter<T>() ? 1 : 0;
-        int batchSize = Math.Min(
-            Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount),
-            SqlLimits.MaxRowsPerBatch);
+        // UNNEST-1：数组形态不受"语句内参数个数"约束（整批一个参数），批大小只为限制单语句
+        // 触及的行数与事务持锁时长——沿用同一档位，行为面不变。
+        int batchSize = useArrayForm
+            ? SqlLimits.MaxRowsPerBatch
+            : Math.Min(
+                Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount),
+                SqlLimits.MaxRowsPerBatch);
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
-        // RunInTransactionScopeAsync 单点。
+        // RunInTransactionScopeAsync 单点。两条形态各自一个作用域——数组形态不需要
+        // 中转命令（scratch），共用作用域会为它白建一个命令（正是本次优化要消的固定开销）。
+        if (useArrayForm)
+        {
+            return await RunInTransactionScopeAsync(
+                operation.Owner,
+                (tran, token) => ExecuteArrayFormDeleteAsync<T>(
+                    tran, buildKeyArray!, keys, batchSize, identifiers, isSoftDelete, token),
+                ct).ConfigureAwait(false);
+        }
+
         return await RunInTransactionScopeAsync(
             operation.Owner,
-            async (tran, token) =>
-            {
-                // ITM-676 等价保持：scratch 在作用域内创建——创建失败时内核 finally
-                // 仍执行 Restore+事务释放；await using 覆盖批间清理。
-                // R10：scratch 跨批次复用（对齐 MultiValueBulkInsert rowCommand 模式）。
-                await using DbCommand scratch = CreateCommand();
-                // B4（2026-10-01 全 API 逐项轮）：目标命令同样跨批复用——原实现每批
-                // CreateCommand + Dispose（SQLite 20K 键 21 个命令、PG/MySQL 5 个）；
-                // 批间 Clear 参数集合后重新转移，命令随作用域释放。
-                await using DbCommand cmd = CreateCommand();
-                cmd.Transaction = tran;
-                // 语句文本在批大小不变时逐位相同，末批不同——只在变化时重建
-                int lastBatchLength = -1;
-                long total = 0;
-                for (int start = 0; start < keys.Count; start += batchSize)
-                {
-                    int end = Math.Min(start + batchSize, keys.Count);
-                    int batchLen = end - start;
-
-                    if (batchLen != lastBatchLength)
-                    {
-                        cmd.CommandText = BuildBulkDeleteSql(batchLen, identifiers, isSoftDelete);
-                        lastBatchLength = batchLen;
-                    }
-
-                    // binder 固定产出 @p0——不能直接绑到 cmd 再改名：MySqlConnector 在 Add 时
-                    // 即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。
-                    // PG-2（2026-09-26）：中转参数按批内序号**改名后转移**进目标集合，不再每 key
-                    // 重建一个参数对象——Clear/RemoveAt 不移交参数所有权（真库探针实测：改名
-                    // Add 到另一命令后执行与复用均正确），10 万键省 10 万个 NpgsqlParameter 与
-                    // 同等次数的装箱 + Provider DbType switch。
-                    // B5（2026-10-01）：占位符名从预建数组（string[batchSize]，5000 元素约 40KB）
-                    // 改为索引直取——GetParameterPlaceholder 默认实现即 ParameterNameCache
-                    // 索引取用（零分配），SQL 文本与参数名同源直取天然一致；三 Provider 均未覆写。
-                    cmd.Parameters.Clear();
-                    for (int index = 0; index < batchLen; index++)
-                    {
-                        scratch.Parameters.Clear();
-                        bindKey(scratch, keys[start + index]);
-                        if (scratch.Parameters.Count != 1)
-                            throw new InvalidOperationException(
-                                $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
-
-                        var moved = scratch.Parameters[0];
-                        scratch.Parameters.Clear();
-                        moved.ParameterName = TProvider.GetParameterPlaceholder(index);
-                        cmd.Parameters.Add(moved);
-                    }
-                    BindDefaultFilterParameters<T>(cmd);
-
-                    total += await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-                }
-                return total;
-            },
+            (tran, token) => ExecuteInFormDeleteAsync<T>(
+                tran, bindKey, keys, batchSize, identifiers, isSoftDelete, token),
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>数组形态的批量删除主体（UNNEST-1）——每批一句 <c>pk = ANY(@ids)</c>，
+    /// 语句文本跨批恒定（单参数名与批长度无关），故只建一次命令文本。</summary>
+    private async Task<long> ExecuteArrayFormDeleteAsync<T>(
+        DbTransaction? tran,
+        Func<IReadOnlyList<object>, int, int, Array?> buildKeyArray,
+        IReadOnlyList<object> keys,
+        int batchSize,
+        DeleteIdentifiers identifiers,
+        bool isSoftDelete,
+        CancellationToken ct)
+        where T : class, new()
+    {
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandText = BuildBulkDeleteArraySql(identifiers, isSoftDelete);
+
+        long total = 0;
+        for (int start = 0; start < keys.Count; start += batchSize)
+        {
+            int batchLen = Math.Min(batchSize, keys.Count - start);
+            cmd.Parameters.Clear();
+            cmd.Parameters.Add(BuildArrayParameter<T>(buildKeyArray, keys, start, batchLen));
+            BindDefaultFilterParameters<T>(cmd);
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        return total;
+    }
+
+    /// <summary>IN 占位符形态的批量删除主体（UNNEST-1 之前的既有路径）——语句文本随批长度变化，
+    /// 只在与上批不同时重建；末批通常更短，故 <paramref name="batchSize"/> 相同的中间批共用文本。</summary>
+    private async Task<long> ExecuteInFormDeleteAsync<T>(
+        DbTransaction? tran,
+        Action<DbCommand, object> bindKey,
+        IReadOnlyList<object> keys,
+        int batchSize,
+        DeleteIdentifiers identifiers,
+        bool isSoftDelete,
+        CancellationToken ct)
+        where T : class, new()
+    {
+        // ITM-676 等价保持：scratch 在作用域内创建——创建失败时内核 finally
+        // 仍执行 Restore+事务释放；await using 覆盖批间清理。
+        // R10：scratch 跨批次复用（对齐 MultiValueBulkInsert rowCommand 模式）。
+        await using DbCommand scratch = CreateCommand();
+        // B4（2026-10-01 全 API 逐项轮）：目标命令同样跨批复用——原实现每批
+        // CreateCommand + Dispose（SQLite 20K 键 21 个命令、PG/MySQL 5 个）；
+        // 批间 Clear 参数集合后重新转移，命令随作用域释放。
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+
+        // 语句文本在批大小不变时逐位相同，末批不同——只在变化时重建
+        int lastBatchLength = -1;
+        long total = 0;
+        for (int start = 0; start < keys.Count; start += batchSize)
+        {
+            int batchLen = Math.Min(batchSize, keys.Count - start);
+            cmd.Parameters.Clear();
+
+            if (batchLen != lastBatchLength)
+            {
+                cmd.CommandText = BuildBulkDeleteSql(batchLen, identifiers, isSoftDelete);
+                lastBatchLength = batchLen;
+            }
+            BindInFormParameters<T>(cmd, scratch, bindKey, keys, start, batchLen);
+            BindDefaultFilterParameters<T>(cmd);
+
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        return total;
+    }
+
+    /// <summary>数组形态的参数名——与 <see cref="IDbProvider.GetParameterPlaceholder"/> 的
+    /// <c>@pN</c> 命名空间不冲突；租户等默认过滤参数由 <see cref="BindDefaultFilterParameters{T}"/>
+    /// 按自身命名空间追加，同样不与本名冲突。</summary>
+    private const string ArrayParameterName = "@ids";
+
+    /// <summary><c>BulkDeleteAsync</c> 数组形态的能力检测（UNNEST-1，2026-10-02）。
+    /// <para>两条件全真才为 true：生成物提供主键数组构造器（非 null——复合主键与旧生成器为 null）、
+    /// Provider 支持数组参数（<see cref="IDbProvider.CreateArrayParameter"/> 对该主键的
+    /// <b>真实元素类型</b>返回非 null）。<b>能力检测而非方言枚举</b>：自定义 Provider 只要实现
+    /// 数组参数即自动获得该路径（对齐 O25 阈值改能力检测的教训）。</para>
+    /// <para><b>探测用真实元素类型</b>：以零长度数组试建参数——元素类型取自
+    /// <c>BuildDeleteKeyArray</c> 对空区间的产物（类型化数组），故 string 主键与 long 主键
+    /// 各自得到正确判定；用固定探测类型（如 <c>long[]</c>）会让"不支持 long 数组"误判为
+    /// "不支持数组形态"。探测产物即丢弃，代价一次堆分配 + 一次参数构造。</para></summary>
+    private static bool IsArrayFormSupported<T>(
+        out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray)
+        where T : class, new()
+    {
+        buildKeyArray = null;
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
+            return false;
+        Func<IReadOnlyList<object>, int, int, Array?>? builder = metadata.BuildDeleteKeyArray;
+        if (builder is null || builder([], 0, 0) is not { } probe)
+            return false;
+        buildKeyArray = builder;
+        return TProvider.CreateArrayParameter(ArrayParameterName, probe) is not null;
+    }
+
+    /// <summary>构造数组形态的数组参数——元素类型与值取自生成物（与 <c>BindDelete</c> 同一真源）。
+    /// <para>Provider 返回 null 属契约破坏：<see cref="IsArrayFormSupported{T}"/> 已用**同一元素类型**
+    /// 的零长度数组探测过，真实批次应得同一结论（不一致只可能来自 Provider 对空数组特殊处理）。
+    /// 明确抛错而非静默回退——静默回退会掩盖"探测与执行不一致"这一真实缺陷。</para></summary>
+    private static DbParameter BuildArrayParameter<T>(
+        Func<IReadOnlyList<object>, int, int, Array?> buildKeyArray,
+        IReadOnlyList<object> keys,
+        int start,
+        int count)
+        where T : class, new()
+    {
+        Array values = buildKeyArray(keys, start, count)
+            ?? throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' generated a null primary-key array.");
+        return TProvider.CreateArrayParameter(ArrayParameterName, values)
+            ?? throw new InvalidOperationException(
+                $"Provider '{TProvider.Name}' returned a null array parameter for element type "
+                + $"'{values.GetType().GetElementType()?.Name}'.");
+    }
+
+    /// <summary>IN 占位符形态的参数绑定（UNNEST-1 之前的既有路径，数组形态不适用时回退于此）。
+    /// <para>binder 固定产出 <c>@p0</c>——不能直接绑到 <paramref name="cmd"/> 再改名：
+    /// MySqlConnector 在 Add 时即拒绝集合内重名（SQLite 容忍瞬时重名掩盖了这点，真库 AOT 实测暴露）。</para>
+    /// <para>PG-2（2026-09-26）：中转参数按批内序号**改名后转移**进目标集合，不再每 key 重建一个
+    /// 参数对象——Clear/RemoveAt 不移交参数所有权（真库探针实测：改名 Add 到另一命令后执行与复用
+    /// 均正确），10 万键省 10 万个 NpgsqlParameter 与同等次数的装箱 + Provider DbType switch。</para>
+    /// <para>B5（2026-10-01）：占位符名从预建数组（<c>string[batchSize]</c>，5000 元素约 40KB）
+    /// 改为索引直取——<see cref="IDbProvider.GetParameterPlaceholder"/> 默认实现即
+    /// <see cref="ParameterNameCache"/> 索引取用（零分配），SQL 文本与参数名同源直取天然一致。</para></summary>
+    private static void BindInFormParameters<T>(
+        DbCommand cmd,
+        DbCommand scratch,
+        Action<DbCommand, object> bindKey,
+        IReadOnlyList<object> keys,
+        int start,
+        int batchLen)
+        where T : class, new()
+    {
+        for (int index = 0; index < batchLen; index++)
+        {
+            scratch.Parameters.Clear();
+            bindKey(scratch, keys[start + index]);
+            if (scratch.Parameters.Count != 1)
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
+
+            var moved = scratch.Parameters[0];
+            scratch.Parameters.Clear();
+            moved.ParameterName = TProvider.GetParameterPlaceholder(index);
+            cmd.Parameters.Add(moved);
+        }
+    }
+
+    /// <summary>数组形态的 DELETE / 软删 UPDATE 语句——`pk = ANY(@ids)`，单参数，文本跨批恒定。
+    /// <para>与 <see cref="BuildBulkDeleteSql"/> 是同一语句的两个形态：WHERE 语义（主键集合
+    /// ∩ 可选租户过滤 ∩ 软删的 deleted_at IS NULL）逐条等价，只有主键谓词的表达方式不同
+    /// （<c>= ANY(数组)</c> 取代 <c>IN (占位符列表)</c>）。</para></summary>
+    private static string BuildBulkDeleteArraySql(in DeleteIdentifiers identifiers, bool isSoftDelete)
+    {
+        var sb = new ValueStringBuilder(stackalloc char[256]);
+        try
+        {
+            if (isSoftDelete)
+            {
+                sb.Append("UPDATE ");
+                sb.Append(identifiers.QuotedTable);
+                sb.Append(" SET ");
+                sb.Append(identifiers.QuotedDeletedAt);
+                sb.Append(" = ");
+                sb.Append(identifiers.TimestampExpression);
+                sb.Append(" WHERE ");
+            }
+            else
+            {
+                sb.Append("DELETE FROM ");
+                sb.Append(identifiers.QuotedTable);
+                sb.Append(" WHERE ");
+            }
+            sb.Append(identifiers.QuotedPrimaryKey);
+            sb.Append(" = ANY(");
+            sb.Append(ArrayParameterName);
+            sb.Append(')');
+            if (isSoftDelete)
+            {
+                sb.Append(" AND ");
+                sb.Append(identifiers.QuotedDeletedAt);
+                sb.Append(" IS NULL");
+            }
+            sb.Append(identifiers.TenantFilter);
+            sb.TrimEnd();
+            return sb.ToString();
+        }
+        finally { sb.Dispose(); }
     }
 
     /// <summary>删除语句的标识符与表达式集合——L5 提取到方法外，避免每批重算
@@ -235,6 +399,16 @@ public partial class DataSession<TProvider>
             BatchUpdateContext ctx = PrepareBatchUpdateContext<T>(state, routeMetadata, tableName, entities[0]);
             // MySQL-7：MySQL 按服务端版本选 UPDATE JOIN VALUES ROW 形态（8.75×）+ 对应批宽
             BatchUpdateSqlBuilder.BatchUpdateForm form = await ResolveMySqlUpdateFormAsync(ct).ConfigureAwait(false);
+            // UNNEST 阶段 B（2026-10-02）：PG 的数组形态——每列一个数组参数，语句文本与批宽无关；
+            // 能力检测（生成物提供逐列填充器 + Provider 接受这些元素类型的数组）不全真时保持 VALUES 形态。
+            if (UseUnnestArraysForUpdate(routeMetadata, out IReadOnlyList<Type>? arrayElementTypes))
+            {
+                return await RunInTransactionScopeAsync(
+                    operation.Owner,
+                    (tran, token) => ExecuteBulkUpdateArrayBatchesAsync(
+                        entities, routeMetadata, ctx, tran, arrayElementTypes!, token),
+                    ct).ConfigureAwait(false);
+            }
             // BULK-001：方言参数上限 + 单批行数上限（文本规模）双约束
             int rowsPerBatch = Math.Min(
                 Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) / (ctx.SetColumnCount + 1)),
@@ -738,6 +912,97 @@ public partial class DataSession<TProvider>
         return totalAffected;
     }
 
+    /// <summary>UNNEST 阶段 B：批量 UPDATE 的数组形态能力检测。
+    /// <para>两条件全真：生成物提供逐列数组填充器/元素类型表/数组分配器（旧生成器为 null）、
+    /// Provider 接受<b>全部列的</b>元素类型的数组参数（<see cref="IDbProvider.CreateTypedArrayParameter"/>
+    /// 对每列非 null）。任一列不支持即整体回退 VALUES 形态——不做"部分列走数组、部分列逐个"的混合，
+    /// 那种半形态是不对称缺陷的温床（B120 族）。</para>
+    /// <para><b>能力检测而非方言枚举</b>：判据是 Provider 是否接受这些元素类型
+    /// （与阶段 A 的 BulkDelete 同纪律）。探测数组由生成物的分配器给出（AOT 安全，不用
+    /// <c>Array.CreateInstance(Type, …)</c>）。</para></summary>
+    private static bool UseUnnestArraysForUpdate(
+        CrudMetadata metadata, out IReadOnlyList<Type>? arrayElementTypes)
+    {
+        arrayElementTypes = null;
+        if (metadata.FillUpdateColumnArrays is null
+            || metadata.CreateUpdateColumnArrays is null
+            || metadata.UpdateColumnArrayElementTypes is not { Count: > 0 } elementTypes)
+        {
+            return false;
+        }
+        Array[] probes = metadata.CreateUpdateColumnArrays(1);
+        for (int c = 0; c < elementTypes.Count; c++)
+        {
+            if (TProvider.CreateTypedArrayParameter("@probe", probes[c], elementTypes[c]) is null)
+                return false;
+        }
+        arrayElementTypes = elementTypes;
+        return true;
+    }
+
+    /// <summary>UNNEST 阶段 B：数组形态的批量 UPDATE 主体——每批把实体区间按列填进数组，一列一个参数，
+    /// 语句文本跨批恒定（只依赖列数，与批宽无关）。
+    /// <para>列数组按批容量预建一次、批间复用（与既有参数池的跨批复用同纪律 M1/PERF-004）；
+    /// 末批缩短时用短数组——UNNEST 按传入数组的实际长度展开，长度必须精确等于本批行数。</para></summary>
+    private async Task<long> ExecuteBulkUpdateArrayBatchesAsync<T>(
+        IReadOnlyList<T> entities,
+        CrudMetadata metadata,
+        BatchUpdateContext ctx,
+        DbTransaction? tran,
+        IReadOnlyList<Type> arrayElementTypes,
+        CancellationToken ct)
+        where T : class, new()
+    {
+        Action<IReadOnlyList<object>, int, int, Array[], int> fillArrays = metadata.FillUpdateColumnArrays!;
+        Func<int, Array[]> createArrays = metadata.CreateUpdateColumnArrays!;
+        int columnCount = arrayElementTypes.Count;
+        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）——批大小只为限制单语句行数
+        // 与事务持锁时长，沿用 SqlLimits.MaxRowsPerBatch（与阶段 A 的 BulkDelete 同口径）。
+        int batchSize = SqlLimits.MaxRowsPerBatch;
+        int fullBatchLen = Math.Min(batchSize, entities.Count);
+
+        // 满批数组预建一次批间复用；末批不足满批时单独建一组短数组（UNNEST 按数组实际长度展开，
+        // 长度必须精确等于本批行数——复用长数组会把上一批的残留行一并更新）
+        int lastBatchLen = entities.Count % fullBatchLen;
+        Array[] fullArrays = createArrays(fullBatchLen);
+        Array[] shortArrays = lastBatchLen == 0 ? fullArrays : createArrays(lastBatchLen);
+
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandText = BatchUpdateSqlBuilder.Build(
+            TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
+            rowCount: 1, hasTenantFilter: ctx.HasTenantFilter,
+            tenantParameterName: _tenantParameterName,
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.UnnestArrays);
+
+        // 参数对象建一次（每列一个），批间只换 Value
+        var parameters = new DbParameter[columnCount];
+        for (int c = 0; c < columnCount; c++)
+        {
+            parameters[c] = TProvider.CreateParameter(
+                BatchUpdateSqlBuilder.UnnestColumnParameterName(c), DBNull.Value);
+            cmd.Parameters.Add(parameters[c]);
+        }
+        BindDefaultFilterParameters<T>(cmd);
+
+        long totalAffected = 0;
+        for (int start = 0; start < entities.Count; start += batchSize)
+        {
+            int batchLen = Math.Min(batchSize, entities.Count - start);
+            Array[] columns = batchLen == fullBatchLen ? fullArrays : shortArrays;
+            fillArrays(entities, start, batchLen, columns, 0);
+            for (int c = 0; c < columnCount; c++)
+            {
+                parameters[c].Value = TProvider.CreateTypedArrayParameter(
+                    BatchUpdateSqlBuilder.UnnestColumnParameterName(c),
+                    columns[c], arrayElementTypes[c])!.Value;
+            }
+            totalAffected += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        return totalAffected;
+    }
+
     /// <summary>MySQL-7：批量 UPDATE 形态判定——MySQL 方言按服务端版本选
     /// <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow"/>（UPDATE JOIN
     /// table value constructor，MySQL 8.0.19+），否则 <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen"/>。
@@ -1026,6 +1291,15 @@ public partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
         UpsertSqlShape shape = BuildUpsertSqlShape(tableName, metadata, pkColumn);
 
+        // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
+        // 能力检测与 UPDATE 路径同纪律（生成物三件套 + Provider 接受全部列的元素类型）。
+        // 批内重复主键语义与既有形态一致：PG 对同语句影响同一行两次明确报错（见方法级文档）。
+        if (UseUnnestArraysForUpsert(metadata, out IReadOnlyList<Type>? upsertElementTypes))
+        {
+            return await ExecuteUpsertArrayBatchesAsync(
+                entities, metadata, shape, upsertElementTypes!, transaction, ct).ConfigureAwait(false);
+        }
+
         // 绑定策略：BindUpsert 每行从 @p0 起命名且 MySQL 参数集合在 Add 时校验重名——
         // 不能直接往批命令里逐行 Append。PL-3.2：生成器发射 BindUpsertValues 时直写参数池
         // （零 CreateParameter）；旧模型程序集回退 scratch 命令绑定 → 值拷贝进预建参数池。
@@ -1081,6 +1355,96 @@ public partial class DataSession<TProvider>
 
     /// <summary>UPSERT 语句的可复用片段（方言分派一次，逐批复用）。</summary>
     private readonly record struct UpsertSqlShape(string QuotedTable, string QuotedColumns, string ConflictClause);
+
+    /// <summary>UNNEST 阶段 B：批量 UPSERT 的数组形态能力检测（与
+    /// <see cref="UseUnnestArraysForUpdate"/> 同纪律——生成物三件套非空 + Provider 接受
+    /// 全部列的元素类型；任一列不支持整体回退多值 VALUES 形态）。</summary>
+    private static bool UseUnnestArraysForUpsert(
+        CrudMetadata metadata, out IReadOnlyList<Type>? arrayElementTypes)
+    {
+        arrayElementTypes = null;
+        if (metadata.FillUpsertColumnArrays is null
+            || metadata.CreateUpsertColumnArrays is null
+            || metadata.UpsertColumnArrayElementTypes is not { Count: > 0 } elementTypes)
+        {
+            return false;
+        }
+        Array[] probes = metadata.CreateUpsertColumnArrays(1);
+        for (int c = 0; c < elementTypes.Count; c++)
+        {
+            if (TProvider.CreateTypedArrayParameter("@probe", probes[c], elementTypes[c]) is null)
+                return false;
+        }
+        arrayElementTypes = elementTypes;
+        return true;
+    }
+
+    /// <summary>UNNEST 阶段 B：数组形态的批量 UPSERT 主体——<c>INSERT … SELECT * FROM
+    /// UNNEST(@u0, @u1, …) ON CONFLICT …</c>。语句文本跨批恒定（参数个数 = 列数，与批宽无关），
+    /// 列数组按批容量预建复用（末批用短数组，理由同 <see cref="ExecuteBulkUpdateArrayBatchesAsync{T}"/>）。
+    /// <para><b>返回值口径与既有形态一致</b>：返回处理的行数（不依赖 affectedRows——
+    /// MySQL ODKU 的计数口径与 PG 不同，见 BatchUpsertAsync 文档）。</para></summary>
+    private async Task<long> ExecuteUpsertArrayBatchesAsync<T>(
+        List<T> entities,
+        CrudMetadata metadata,
+        UpsertSqlShape shape,
+        IReadOnlyList<Type> arrayElementTypes,
+        DbTransaction? transaction,
+        CancellationToken ct)
+        where T : class, new()
+    {
+        Action<IReadOnlyList<object>, int, int, Array[], int> fillArrays = metadata.FillUpsertColumnArrays!;
+        Func<int, Array[]> createArrays = metadata.CreateUpsertColumnArrays!;
+        int columnCount = arrayElementTypes.Count;
+        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。批宽取 MaxRowsPerBatch：
+        // 既有 PG upsert 的 1000 行上限理由是"参数池按最大批建、行×列个参数对象"——
+        // 数组形态的成本结构不同（每列一个数组，元素总量 = 行×列但无参数对象），不适用该约束。
+        int batchSize = SqlLimits.MaxRowsPerBatch;
+        int fullBatchLen = Math.Min(batchSize, entities.Count);
+
+        int lastBatchLen = entities.Count % fullBatchLen;
+        Array[] fullArrays = createArrays(fullBatchLen);
+        Array[] shortArrays = lastBatchLen == 0 ? fullArrays : createArrays(lastBatchLen);
+
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        var sql = new System.Text.StringBuilder(96 + shape.QuotedColumns.Length + shape.ConflictClause.Length);
+        sql.Append("INSERT INTO ").Append(shape.QuotedTable).Append(" (")
+            .Append(shape.QuotedColumns).Append(") SELECT * FROM UNNEST(");
+        for (int c = 0; c < columnCount; c++)
+        {
+            if (c > 0) sql.Append(", ");
+            sql.Append(BatchUpdateSqlBuilder.UnnestColumnParameterName(c));
+        }
+        sql.Append(')').Append(shape.ConflictClause);
+        cmd.CommandText = sql.ToString();
+
+        var parameters = new DbParameter[columnCount];
+        for (int c = 0; c < columnCount; c++)
+        {
+            parameters[c] = TProvider.CreateParameter(
+                BatchUpdateSqlBuilder.UnnestColumnParameterName(c), DBNull.Value);
+            cmd.Parameters.Add(parameters[c]);
+        }
+
+        long processed = 0;
+        for (int start = 0; start < entities.Count; start += batchSize)
+        {
+            int batchLen = Math.Min(batchSize, entities.Count - start);
+            Array[] columns = batchLen == fullBatchLen ? fullArrays : shortArrays;
+            fillArrays(entities, start, batchLen, columns, 0);
+            for (int c = 0; c < columnCount; c++)
+            {
+                parameters[c].Value = TProvider.CreateTypedArrayParameter(
+                    BatchUpdateSqlBuilder.UnnestColumnParameterName(c),
+                    columns[c], arrayElementTypes[c])!.Value;
+            }
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            processed += batchLen;
+        }
+        return processed;
+    }
 
     /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键
     /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身）；MySQL 用 VALUES(c) 形态
