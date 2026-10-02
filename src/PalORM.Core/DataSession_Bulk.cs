@@ -977,6 +977,20 @@ public partial class DataSession<TProvider>
         Action<IReadOnlyList<object>, int, int, Array[], int> fillArrays = metadata.FillUpdateColumnArrays!;
         Func<int, Array[]> createArrays = metadata.CreateUpdateColumnArrays!;
         int columnCount = arrayElementTypes.Count;
+        // 契约断言（2026-10-02）：生成物的数组列序 = SET 列 + 主键，与数组形态 SQL 的
+        // UNNEST(@u0…@u{SetColumnCount}) 参数个数逐位对应。不符即生成器与 Core 漂移——
+        // 明确抛错而非静默少绑（历史上并发令牌列曾被发射进数组，个数多 1，一旦前置条件
+        // 放宽就会以「参数未被使用」的驱动异常暴露，错误信息不指向根因）。
+        // 能力检测已排除该情形，此处是防未来漂移的哨兵（与 PrepareBatchUpdateContext 的
+        // probe 哨兵同范式）。
+        if (columnCount != ctx.SetColumnCount + 1)
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}': UNNEST array form expects {ctx.SetColumnCount + 1} column arrays "
+                + $"(SET columns + primary key) but the generated filler provides {columnCount}. "
+                + "The generator and batch UPDATE SQL disagree; recompile the model assembly "
+                + "(see CommandFactoryEmitter.UpdateArrayColumns).");
+        }
         // 数组形态不受"语句内参数个数"约束（整批每列一个参数）——批大小只为限制单语句行数
         // 与事务持锁时长，沿用 SqlLimits.MaxRowsPerBatch（与阶段 A 的 BulkDelete 同口径）。
         int batchSize = SqlLimits.MaxRowsPerBatch;

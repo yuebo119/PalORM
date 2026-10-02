@@ -205,11 +205,19 @@ internal static class CommandFactoryEmitter
     private static void GenerateFillUpsertColumnArraysBody(TableModel model, StringBuilder sb)
         => GenerateFillColumnArraysBody(model, sb, UpsertArrayColumns(model));
 
-    /// <summary>UPDATE 数组形态的列序（与 <c>BindUpdateValues</c> 共 <see cref="GetUpdateColumnOrder"/> 真源）。</summary>
+    /// <summary>UPDATE 数组形态的列序 = <b>SET 列 + 主键</b>（与数组形态 SQL 的参数列表同一契约：
+    /// <c>ctx.SetColumns</c> + 主键，共 SetColumnCount + 1 个）。
+    /// <para><b>为什么不含并发令牌列</b>：批量 UPDATE 无法表达「每行 version 匹配」，两条入口
+    /// （<c>BulkUpdateAsync</c> 自动路由与 <c>BulkUpdateBatchAsync</c>）都对带 <c>[ConcurrencyCheck]</c>
+    /// 的实体拒绝走批量，该列在数组形态下永不参与绑定；发射它会让数组个数多于 SQL 占位符个数
+    /// （一旦将来放宽前置条件即抛「参数未被使用」类异常，错误信息不指向根因）。
+    /// 将来若要支持并发感知的批量 UPDATE，须同时扩展 SQL（<c>WHERE pk = v.col_pk AND version = v.col_cc</c>），
+    /// 届时应连本方法、SQL 构造器与 Core 侧断言一并改。</para>
+    /// <para>Core 侧 <c>ExecuteBulkUpdateArrayBatchesAsync</c> 断言本契约（个数不符即抛可读错误）。</para></summary>
     private static ColumnModel[] UpdateArrayColumns(TableModel model)
     {
-        var (setCols, pkCols, cc) = GetUpdateColumnOrder(model);
-        return [.. setCols, .. pkCols, .. cc is null ? [] : new[] { cc }];
+        var (setCols, pkCols, _) = GetUpdateColumnOrder(model);
+        return [.. setCols, .. pkCols];
     }
 
     /// <summary>UPSERT 数组形态的列序（与 <c>BindUpsertValues</c> 共 IsUpsertable 谓词真源）。</summary>

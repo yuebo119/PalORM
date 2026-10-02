@@ -284,9 +284,16 @@ public sealed class PostgreSqlProvider : IDbProvider
     }
 
     /// <summary>数组元素 CLR 类型 → 驱动的元素 <see cref="NpgsqlDbType"/>。null = 不支持数组形态。
-    /// <para>映射面**刻意收窄到主键可能的类型**：主键列的 CLR 类型经
-    /// <c>SourceGenerationValidation.CanGenerateEntity</c> 已限为非可空值类型/string/Guid 等，
-    /// 故这里只需覆盖这些类型；未覆盖类型返回 null 走回退，不猜测。</para>
+    /// <para><b>映射面是封闭集合，且刻意收窄</b>（登记，2026-10-02）：恰好 13 类——int / long /
+    /// short / byte / string / Guid / bool / decimal / double / float / DateTime / DateTimeOffset /
+    /// DateOnly / TimeOnly / byte[]。**未列出的类型（含 <c>uint</c>/<c>ulong</c>/<c>sbyte</c>/
+    /// <c>ushort</c>/<c>char</c>/<c>TimeSpan</c>/枚举等）返回 null**，调用方据此整体回退
+    /// VALUES 形态（能力检测在 BEGIN 之前一次性判定全部列，任一列不支持即回退整条路径，
+    /// 不做「部分列走数组」的混合）。</para>
+    /// <para><b>回退是静默的</b>（无日志无计数器）——这是能力检测纪律的既定取舍：形态选择不改变
+    /// 语义，只是慢一些。含 <c>uint</c> 等列的实体因此拿不到数组形态收益，属已知边界；
+    /// 扩展本映射面须先实测该类型在 PG 端数组绑定的行为（探针 mergearray 的 Q1 形态可复用），
+    /// 不得凭 CLR 类型相似就顺手加。</para>
     /// <para>可空元素类型（<c>long?</c>）经 <c>Nullable.GetUnderlyingType</c> 解包——
     /// 数组元素是 <c>T?</c> 时运行时元素类型即 <c>Nullable&lt;T&gt;</c>。</para></summary>
     private static NpgsqlDbType? ArrayElementDbType(Type elementType)

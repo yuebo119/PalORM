@@ -233,6 +233,27 @@ internal sealed class BulkUpdateArrayFormTests
         AssertAllStatementsAreUnnestForm(expectedBatchCount: 1, expectedColumnCount: 3);
     }
 
+    /// <summary>生成器契约（含并发令牌实体也成立）：数组列数 == SET 列数 + 1（主键）。
+    /// <para><b>为什么这条必须独立存在</b>：带 <c>[ConcurrencyCheck]</c> 的实体走不到数组形态
+    /// （两条 UPDATE 入口都拒绝），所以执行路径测不到它的列数；而并发令牌列曾被发射进数组
+    /// （个数多 1），一旦前置条件放宽就会以驱动的「参数未被使用」异常暴露。这里直接读元数据
+    /// 断言契约，把漂移挡在编译后的第一次元数据加载上。</para></summary>
+    [Test]
+    public async Task UpdateArrayContract_ColumnCountMatchesSetColumnsPlusKey()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        foreach (Type entityType in new[] { typeof(UnnestRow), typeof(ConcurrencyRow) })
+        {
+            CrudMetadata metadata = state._crudMetadatas[entityType];
+            IReadOnlyList<Type> elementTypes = metadata.UpdateColumnArrayElementTypes
+                ?? throw new InvalidOperationException($"'{entityType.Name}' 缺数组元素类型表。");
+            await Assert.That(elementTypes.Count)
+                .IsEqualTo(metadata.UpdateColumns.Count + 1)
+                .Because($"{entityType.Name}：数组列序应为 SET 列（{metadata.UpdateColumns.Count}）+ 主键 1");
+        }
+    }
+
     /// <summary>回退路径锁定：Provider 未实现 <c>CreateTypedArrayParameter</c>（能力检测为假）
     /// 时行为必须与优化前一致（VALUES 形态）。缺这条测不出"能力检测写错"。</summary>
     [Test]
@@ -388,6 +409,23 @@ internal sealed partial class UnnestRow
 
     [Column("qty")]
     public long Qty { get; set; }
+}
+
+/// <summary>数组列数契约的对照实体：带并发令牌列（该实体走不到数组形态，但契约仍须成立——
+/// 并发列不得进入数组列序，见 CommandFactoryEmitter.UpdateArrayColumns 的说明）。</summary>
+[Table("unnest_concurrency_rows")]
+internal sealed partial class ConcurrencyRow
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("version")]
+    [ConcurrencyCheck]
+    public long Version { get; set; }
 }
 
 [Table("unnest_null_rows")]
