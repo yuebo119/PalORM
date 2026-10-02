@@ -264,15 +264,16 @@ internal static class IndexGenerator
             md.AppendLine(CultureInfo.InvariantCulture,
                 $"### {r.Harness}（{r.Timestamp} · `{r.Commit}` · 健康度 {Health(r)}）");
             md.AppendLine();
-            md.AppendLine("| 项 | 方言 | 档位 | 均值 µs | 比值(对地板) | 分配 B/op | 往返/op | prepared 复用 |");
-            md.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|");
+            // 中位 µs 是比值基数（2026-10-02），必须与比值同列呈现；均值保留供判读计时离群。
+            md.AppendLine("| 项 | 方言 | 档位 | 中位 µs | 均值 µs | 比值(对地板) | 分配 B/op | 往返/op | prepared 复用 |");
+            md.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|---:|");
             foreach (PerfResultItem i in palorm
                 .OrderBy(static i => i.Dialect, StringComparer.Ordinal)
                 .ThenBy(static i => i.Name, StringComparer.Ordinal)
                 .ThenBy(static i => i.Tier))
             {
                 md.AppendLine(CultureInfo.InvariantCulture,
-                    $"| {i.Name} | {i.Dialect} | {i.Tier} | {i.MeanUs:F2} | {i.Ratio:F2} | {i.AllocBytes} | "
+                    $"| {i.Name} | {i.Dialect} | {i.Tier} | {i.MedianUs:F2} | {i.MeanUs:F2} | {i.Ratio:F2} | {i.AllocBytes} | "
                     + $"{(i.RoundTripsPerOp > 0 ? i.RoundTripsPerOp.ToString("F2", CultureInfo.InvariantCulture) : "未测")} | "
                     + $"{(i.PreparedReuse > 0 ? i.PreparedReuse.ToString("P0", CultureInfo.InvariantCulture) : "未测")} |");
             }
