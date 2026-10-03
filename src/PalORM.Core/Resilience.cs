@@ -72,23 +72,7 @@ public sealed class ResilienceExecutor
     /// <summary>执行带重试和熔断的异步操作。
     /// <para><b>幂等性约束（ITM-310）</b>: 命令超时被判为可重试，而超时不代表服务器未执行——
     /// INSERT 可能已提交，重试会重复写入。仅将幂等操作（查询/带唯一键的 upsert/条件更新）
-    /// 交给本方法；非幂等写入请自行处理重试或依赖唯一约束去重。</para>
-    /// <para>step13（2026-10-03）：本重载转调状态化内部重载——<c>static</c> lambda 按
-    /// (TState, T) 实例化一次即被编译器缓存，不再为每操作构造闭包。
-    /// <b>形态变化</b>：本重载不再是 <c>async</c> 方法，故 <c>operation</c> 为 null 时
-    /// <see cref="ArgumentNullException"/> 同步抛出（原为捕获进返回的 Task）。经
-    /// <see cref="DataSession{TProvider}.ExecuteWithResilience{T}"/> 调用时该差异不可观测
-    /// （其自身为 async 方法，同步异常同样被捕获）。</para></summary>
-    public ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(operation);
-        return ExecuteAsync(operation, static (op, token) => op(token), ct);
-    }
-
-    /// <summary>step13（2026-10-03）：状态化重载——<paramref name="operation"/> 必须是
-    /// <c>static</c> lambda（无捕获），配合值类型 <typeparamref name="TState"/> 承载调用上下文，
-    /// 使每操作零委托、零 display class 分配。语义与委托版逐位一致（同一实现体）。
-    /// <para><b>internal</b>：仅服务 Core 内部热路径（读路径直调重载），不进公共 API 面。</para></summary>
+    /// 交给本方法；非幂等写入请自行处理重试或依赖唯一约束去重。</para></summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S2189:LoopStopIncrementerNotTested",
         Justification = "for(;;) 退出靠 return（成功路径）和 throw（取消/超时/重试耗尽）；"
@@ -101,8 +85,7 @@ public sealed class ResilienceExecutor
         Justification = "RES-003 起本方法有 6 条异常分支（调用方取消 / 总预算到期 / 超时重试 / "
             + "瞬时重试 / 超时耗尽包装 / 外层熔断记账），每条过滤条件都必须与异常形态严格对应；"
             + "拆分会把重试语义打散到多处、降低可审性（与同方法 S2189/S1994 同因）。")]
-    internal async ValueTask<T> ExecuteAsync<TState, T>(
-        TState state, Func<TState, CancellationToken, Task<T>> operation, CancellationToken ct = default)
+    public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
         var (isHalfOpenProbe, generation) = _circuitBreaker.Enter();
@@ -128,7 +111,7 @@ public sealed class ResilienceExecutor
                     // `timeout is not null`，null 形态下内部超时分支不可达，语义等价。
                     if (_timeout == Timeout.InfiniteTimeSpan && !attemptScope.CanBeCanceled)
                     {
-                        T resultNoTimeout = await operation(state, attemptScope).ConfigureAwait(false);
+                        T resultNoTimeout = await operation(attemptScope).ConfigureAwait(false);
                         _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
                         return resultNoTimeout;
                     }
@@ -137,7 +120,7 @@ public sealed class ResilienceExecutor
                         : new CancellationTokenSource();
                     if (_timeout != Timeout.InfiniteTimeSpan)
                         timeout.CancelAfter(_timeout);
-                    T result = await operation(state, timeout.Token).ConfigureAwait(false);
+                    T result = await operation(timeout.Token).ConfigureAwait(false);
                     _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
                     return result;
                 }

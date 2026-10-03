@@ -688,17 +688,63 @@ public sealed partial class DataSession<TProvider>
             || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
-        // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier。
-        // step13：过滤片段与 SQL 是纯函数（形状缓存命中），提到弹性重试之外单次求值，
-        // 不再随每次尝试重算。
-        string filter = GetDefaultFilterFragment<T>();
-        string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
-            HasTenantFilter<T>(), _ignoreFilters);
-
         // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
-        // 主连接形态（复用槽有效）。v5.4：无事务只读路径经会话弹性策略（重试/熔断）。
-        return await ExecuteGetByKeyReadAsync<T>(
-            commandText, key, factory, _operationState.ParallelReadsEnabled, ct).ConfigureAwait(false);
+        // 主连接形态（复用槽有效）。
+        if (_operationState.ParallelReadsEnabled)
+        {
+            return await ExecuteReadPipelineAsync(async token =>
+            {
+                string filter = GetDefaultFilterFragment<T>();
+                string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
+                    HasTenantFilter<T>(), _ignoreFilters);
+                DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
+                try
+                {
+                    await using DbCommand cmd = connection.CreateCommand();
+                    cmd.CommandText = commandText;
+                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    BindGeneratedKeyParameter<T>(cmd, key);
+                    BindDefaultFilterParameters<T>(cmd);
+                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                    return await reader.ReadAsync(token).ConfigureAwait(false)
+                        ? ((Func<DbDataReader, T>)factory)(reader) : default;
+                }
+                finally
+                {
+                    await ReleaseReadConnectionAsync(connection).ConfigureAwait(false);
+                }
+            }, ct).ConfigureAwait(false);
+        }
+
+        // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）
+        return await ExecuteReadPipelineAsync(async token =>
+        {
+            string filter = GetDefaultFilterFragment<T>();
+            // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
+            string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
+                HasTenantFilter<T>(), _ignoreFilters);
+
+            // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
+            // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
+            // 按命令实例生效，换命令即重编译）。
+            DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key);
+            if (reused is not null)
+            {
+                await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
+                return await reusedReader.ReadAsync(token).ConfigureAwait(false)
+                    ? ((Func<DbDataReader, T>)factory)(reusedReader) : default;
+            }
+
+            await using DbCommand cmd = CreateCommand();
+            cmd.CommandText = commandText;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters<T>(cmd);
+
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            return await reader.ReadAsync(token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)factory)(reader) : default;
+        }, ct).ConfigureAwait(false);
     }
 
     /// <summary>查询全表。</summary>
@@ -713,12 +759,27 @@ public sealed partial class DataSession<TProvider>
             || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
-        // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略。
-        // step13：过滤子句在入口点求值——架构不变式要求"实体表入口的方法体必须经过
-        // 默认过滤路由"（ArchitectureInvariantTests），入口点持有过滤决策、内核只负责执行。
-        string filterClause = GetDefaultFilterWhereClause<T>();
-        return await ExecuteGetAllReadAsync<T>(columnNames, tableName, filterClause, factory, ct)
-            .ConfigureAwait(false);
+        // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略
+        return await ExecuteReadPipelineAsync(async token =>
+        {
+            await using DbCommand cmd = CreateCommand();
+            // v4.1：缓存 selectColumns
+            string selectColumns = GetSelectColumns<T>(columnNames);
+            // S2077 报备（M1-5）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
+            // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
+#pragma warning disable S2077
+            cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
+#pragma warning restore S2077
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            BindDefaultFilterParameters<T>(cmd);
+
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
+            List<T> list = await ResultListReader.ReadAllAsync(
+                reader, (Func<DbDataReader, T>)factory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
+            RecordMaterializedCount<T>(list.Count);
+            return list;
+        }, ct).ConfigureAwait(false);
     }
 
     /// <summary>物化容量启发（step8-T6/M3-2）：会话内记录 (实体类型 → 上次物化行数)，
