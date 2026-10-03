@@ -474,7 +474,18 @@ internal static class Program
     {
         // 库重置为 rows 行——查询类操作要求表内恰好 rows 行
         await impl.SetupAsync(conn, rows, ct).ConfigureAwait(false);
+
+        // 中性播种 seeder（只播 perf_s1）：2026-10-03 起 perf_s1 族的重置统一走它——三臂经
+        // 同一路径得到同一张同规模的表（各臂自己的 SetupAsync 表布局不同，且会顺带把
+        // bench_tenant 播到 rows×轮数 行）；需要 bench_tenant 的项（租户族）走 fullReset。
+        var neutralSeeder = new AdoNetImpl(info);
         Task reset(DbConnection c)
+        {
+            return neutralSeeder.SetupPerfS1Async(c, rows, ct);
+        }
+
+        // 需要 bench_tenant 一并重置的项（租户/OwnedJson/SessionBatch 读它）走全量播种
+        Task fullReset(DbConnection c)
         {
             return impl.SetupAsync(c, rows, ct);
         }
@@ -552,10 +563,7 @@ internal static class Program
                 c, Dataset.SeedRows(rows, (long)rows * (i + 1)), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
-        // 批量删除的播种改走中性路径（只播 perf_s1）：原实现经各臂 SetupAsync，会顺带把 bench_tenant
-        // 播到 rows×轮数 行（每方言首次约 10~20 万行含 JSON 载荷），且各臂的表布局不同。
-        // 这只改"怎么播"、行数与内容不变，也没有新增 reset。
-        var neutralSeeder = new AdoNetImpl(info);
+        // 批量删除的播种走中性路径（2026-10-03 起 perf_s1 族统一，见 RunOneImplAsync 顶部 reset 注释）
         Task bulkDeleteReset(DbConnection c)
         {
             return neutralSeeder.SetupPerfS1Async(c, rows * bulkDeleteIters, ct);
@@ -654,7 +662,7 @@ internal static class Program
         int expectedTenantValueVisible = Dataset.TenantVisibleValueCount(rows);
         int expectedOwnedJson = Math.Min(50, expectedTenantVisible);
 
-        await MeasAsync(info, impl, "TenantCount", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "TenantCount", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 long n = await im.TenantCountAsync(c, ct).ConfigureAwait(false);
@@ -663,7 +671,7 @@ internal static class Program
                         $"TenantCount 结果集不等价：{n}（期望 {expectedTenantVisible}）");
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "TenantCountWhere", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "TenantCountWhere", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 long n = await im.TenantCountWhereAsync(c, rows, ct).ConfigureAwait(false);
@@ -672,7 +680,7 @@ internal static class Program
                         $"TenantCountWhere 结果集不等价：{n}（期望 {expectedTenantValueVisible}）");
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "TenantGetAll", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "TenantGetAll", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 List<BenchTenantPost> list = await im.TenantGetAllAsync(c, ct).ConfigureAwait(false);
@@ -681,7 +689,7 @@ internal static class Program
                         $"TenantGetAll 结果集不等价：{list.Count} 行（期望 {expectedTenantVisible}）");
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "OwnedJsonQuery", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "OwnedJsonQuery", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 List<BenchTenantPost> list = await im.OwnedJsonQueryAsync(c, ct).ConfigureAwait(false);
@@ -693,7 +701,7 @@ internal static class Program
         // SessionBatchInserts 每轮插 20 行、主键段互不重叠（prepare 不在每轮前调，写操作
         // 在计时循环内累积；种子主键是 1..rows，故段基址从 rows+1 起——warmup/探针的 i=0
         // 与计时轮 i≥1 天然错开：探针前有 reset，计时首段不与探针段重叠）。
-        await MeasAsync(info, impl, "SessionBatchInserts", "SessionBatch", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "SessionBatchInserts", "SessionBatch", rows, conn, results, scale, fullReset,
             async (im, c, i) => _ = await im.SessionBatchInsertsAsync(
                 c, rows + 1 + (i * Dataset.SessionBatchRows), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);

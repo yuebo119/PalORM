@@ -19,7 +19,7 @@ internal static class Program
         return cmd switch
         {
             "smoke" => PerfEntry.Smoke(),
-            "full" => PerfEntry.Full(),
+            "full" => PerfEntry.Full(rest),
             "compare" => PerfHubAb.Run(rest),
             "gate" => PerfEntry.Gate(),
             "report" => PerfEntry.Report(),
