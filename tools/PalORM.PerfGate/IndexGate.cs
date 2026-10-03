@@ -90,10 +90,18 @@ internal static class IndexGate
             return 1;
         }
 
-        var current = LoadCurrentItems(batches);
+        return JudgeBaseline(baseline, batches, LoadCurrentItems(batches));
+    }
 
+    /// <summary>逐键判定（Check 的主体）：比值超限且非分母漂移 → FAIL；分母漂移 → 告警；
+    /// 末尾对"全部缺项"单独判失败（只跑冒烟/过滤批次时的防呆）。</summary>
+    private static int JudgeBaseline(
+        IndexBaseline baseline, List<PerfResultEnvelope> batches,
+        Dictionary<string, (string Harness, PerfResultItem Item)> current)
+    {
         var failures = new List<string>();
-        int compared = 0, missing = 0, skipped = 0;
+        var driftWarnings = new List<string>();
+        int compared = 0, missing = 0, skipped = 0, floorDrift = 0;
         foreach (IndexBaselineItem expected in baseline.Items)
         {
             // 非可比项（并发族）跳过判定，也不计入缺项——它们的绝对值照常登在基线里供人看
@@ -116,17 +124,34 @@ internal static class IndexGate
 
             compared++;
             double limit = expected.Ratio * (1 + baseline.Thresholds.RatioDelta);
-            if (actual.Ratio > limit)
+            if (actual.Ratio <= limit)
             {
-                failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta));
+                continue;
             }
+
+            // 分母漂移判定（2026-10-03 把人工定性协议机械化）：比值超限、但被测臂自身中位移动
+            // ≤10% 且隐含地板变快 ≥20% 时，超限来自地板窗口而非产品（实测三例：中位 -3.7%/
+            // -2.9%/-9.0%，地板 -63.5%/-33.0%/-32.9%）——只告警不 FAIL；真实退化的中位移动会
+            // 远超 10%，仍走 FAIL。地板变慢方向只会压低比值，不会触发本门禁，故无须处理。
+            if (IsDenominatorDrift(expected, actual))
+            {
+                floorDrift++;
+                driftWarnings.Add(DriftText(expected, actual, limit));
+                continue;
+            }
+
+            failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta));
         }
 
         ReportSentinel(batches);
 
+        List<string> outliers = OutlierWarnings(batches);
+
         Console.WriteLine($"[PerfGate] 结果库门禁: 比对 {compared} 项（基线 {baseline.Items.Count} 项，"
-            + $"缺项 {missing}，非可比跳过 {skipped}），失败 {failures.Count}");
+            + $"缺项 {missing}，非可比跳过 {skipped}，分母漂移 {floorDrift}），失败 {failures.Count}");
         foreach (string failure in failures) Console.Error.WriteLine("  FAIL " + failure);
+        foreach (string drift in driftWarnings) Console.Error.WriteLine("  漂移 " + drift);
+        foreach (string outlier in outliers) Console.Error.WriteLine("  离群 " + outlier);
 
         // 缺项不判失败：基线里的项可能因本轮方言/档位未跑而缺席（例如只跑了 sqlite）。
         // 但"全部缺项"说明没有可引用的批次（只跑了冒烟/过滤批次，或跑错了夹具），按失败处理。
@@ -138,6 +163,110 @@ internal static class IndexGate
         }
 
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>被测臂中位与隐含地板的跨批移动幅度（与 <see cref="DescribeFailure"/> 同一算术，
+    /// 供分母漂移判定与失败描述共用）。</summary>
+    private static (double MedianDelta, double FloorDelta) Movement(
+        IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual)
+    {
+        double floorBase = expected.Ratio > 0 ? expected.MedianUs / expected.Ratio : 0;
+        double floorNow = actual.Ratio > 0 ? actual.MedianUs / actual.Ratio : 0;
+        double medianDelta = expected.MedianUs > 0 ? ((actual.MedianUs / expected.MedianUs) - 1) * 100 : 0;
+        double floorDelta = floorBase > 0 ? ((floorNow / floorBase) - 1) * 100 : 0;
+        return (medianDelta, floorDelta);
+    }
+
+    /// <summary>分母漂移判定：比值超限、但被测臂自身中位移动 ≤10% 且隐含地板变快 ≥20%。
+    /// 阈值出处与实测三例见 Check 内注释（2026-10-03）。</summary>
+    private static bool IsDenominatorDrift(
+        IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual)
+    {
+        (double medianDelta, double floorDelta) = Movement(expected, actual);
+        return floorDelta <= -20 && Math.Abs(medianDelta) <= 10;
+    }
+
+    /// <summary>分母漂移告警文本（自解释：两侧比值、被测臂移动、地板移动与处置建议）。</summary>
+    private static string DriftText(
+        IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual, double limit)
+    {
+        (double medianDelta, double floorDelta) = Movement(expected, actual);
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{expected.Name}/{expected.Dialect}/{expected.Tier}: 比值 {actual.Ratio:F2} 超基线 "
+            + $"{expected.Ratio:F2}（限 {limit:F2}），但被测臂中位仅 {medianDelta:+0.0;-0.0}%、"
+            + $"隐含地板 {floorDelta:+0.0;-0.0}%（地板变快推高比值）——判分母漂移，建议复测确认");
+    }
+
+    /// <summary>跨批离群告警（只告警、不参与判定与退出码）：最新非子集 perfhub 批次里，某
+    /// (操作,方言,档,臂) 键的中位对照其**此前至多 6 批**的中位偏离超 2× 时列出。
+    /// <para><b>为什么需要</b>：健康度只看 ADO 臂散布中位数、err 只测批内散布，对参考臂的
+    /// 系统性偏移都不敏感（实测：Dapper 臂 BulkDelete/SQLite/2000 120.77ms，历批 21~22ms，
+    /// 7.6×，两者都没抓到）。并发族排除（散布由调度支配，同 <see cref="IsIncomparableOperation"/>）。
+    /// 合法优化落地的当批也会触发（如 UNNEST 的 −46~−74%），语义即"复测后再归因"。</para></summary>
+    private static List<string> OutlierWarnings(List<PerfResultEnvelope> batchesDesc)
+    {
+        PerfResultEnvelope? newest = batchesDesc.FirstOrDefault(static b =>
+            b.Harness == "perfhub" && !PerfResultWriter.IsSubsetLabel(b.Label));
+        if (newest is null)
+        {
+            return [];
+        }
+
+        Dictionary<string, List<double>> history = MedianHistory(batchesDesc);
+        var warnings = new List<string>();
+        foreach (PerfResultItem item in newest.Items)
+        {
+            string? warning = OutlierText(item, history);
+            if (warning is not null)
+            {
+                warnings.Add(warning);
+            }
+        }
+
+        return warnings;
+    }
+
+    /// <summary>历史中位序列：键 = (操作,方言,档,臂)，值按时间升序（除最新批之外的非子集 perfhub 批次）。</summary>
+    private static Dictionary<string, List<double>> MedianHistory(List<PerfResultEnvelope> batchesDesc)
+    {
+        var history = new Dictionary<string, List<double>>(StringComparer.Ordinal);
+        foreach (PerfResultEnvelope run in batchesDesc.Skip(1))
+        {
+            if (run.Harness != "perfhub" || PerfResultWriter.IsSubsetLabel(run.Label)) continue;
+            foreach (PerfResultItem item in run.Items)
+            {
+                if (item.MedianUs <= 0) continue;
+                string key = item.Name + "|" + item.Dialect + "|" + item.Tier + "|" + item.Arm;
+                if (!history.TryGetValue(key, out List<double>? list))
+                {
+                    history[key] = list = [];
+                }
+
+                list.Add(item.MedianUs);
+            }
+        }
+
+        return history;
+    }
+
+    /// <summary>单键离群判定：最新中位对照此前至多 6 批的中位，偏离超过 2 倍（两个方向）生成告警文本。</summary>
+    private static string? OutlierText(PerfResultItem item, Dictionary<string, List<double>> history)
+    {
+        if (item.MedianUs <= 0 || IsIncomparableOperation(item.Name)) return null;
+        string key = item.Name + "|" + item.Dialect + "|" + item.Tier + "|" + item.Arm;
+        if (!history.TryGetValue(key, out List<double>? list) || list.Count == 0) return null;
+        List<double> recent = [.. list.TakeLast(6).OrderBy(static x => x)];
+        double reference = recent[recent.Count / 2];
+        if (reference <= 0) return null;
+        double factor = item.MedianUs / reference;
+        if (factor is > 2.0 or < 0.5)
+        {
+            return string.Create(CultureInfo.InvariantCulture,
+                $"{item.Name}/{item.Dialect}/{item.Tier} [{item.Arm}]: 中位 {item.MedianUs:F1} µs "
+                + $"vs 此前 {recent.Count} 批中位 {reference:F1} µs（{factor:F2}×）——疑似离群读数，复测后再归因");
+        }
+
+        return null;
     }
 
     /// <summary>当前比值表：**逐键取最新可得值**（批次按时间倒序，先到先得），同名键取最差比值。
@@ -193,10 +322,9 @@ internal static class IndexGate
         IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual,
         double limit, double ratioDelta)
     {
+        (double medianDelta, double floorDelta) = Movement(expected, actual);
         double floorBase = expected.Ratio > 0 ? expected.MedianUs / expected.Ratio : 0;
         double floorNow = actual.Ratio > 0 ? actual.MedianUs / actual.Ratio : 0;
-        double medianDelta = expected.MedianUs > 0 ? ((actual.MedianUs / expected.MedianUs) - 1) * 100 : 0;
-        double floorDelta = floorBase > 0 ? ((floorNow / floorBase) - 1) * 100 : 0;
         return string.Create(CultureInfo.InvariantCulture,
             $"{expected.Harness}/{expected.Name}/{expected.Dialect}/{expected.Tier}: "
             + $"比值 {actual.Ratio:F2} 超过基线 {expected.Ratio:F2} × (1+{ratioDelta:P0}) = {limit:F2}"
