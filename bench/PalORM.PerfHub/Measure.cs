@@ -134,15 +134,19 @@ internal static class Measure
     /// <para><b>scale</b>：计时与预热两条时间预算的共同缩放系数。全量跑为 1.0；
     /// <c>--quick</c> 传 0.3，使 usage 声明的"迭代次数降到 30%"真正生效——
     /// 该系数此前只流到 BulkDelete 的播种（并因上限不缩而把尾部轮次变成空删），
-    /// 迭代预算完全没缩，冒烟跑实际上没变快。</para></summary>
+    /// 迭代预算完全没缩，冒烟跑实际上没变快。</para>
+    /// <para><b>requireWarmupFloor</b>：是否要求 JIT 分层所需的预热时间下限（<see cref="MinWarmupSeconds"/>）。
+    /// 偏置只在方法首次执行时存在，故调用方只在每方言首档传 true；其余档传 false 走"次数上限"的轻预热。
+    /// 两档读数是否等价由交替 A/B 验证（2026-10-03）。</para></summary>
     public static async Task<Measurement> SingleAsync(
         DialectInfo dialect, IPerfImplementation impl, string operation, string group, int rows,
         Func<IPerfImplementation, DbConnection, int, Task> action,
         DbConnection conn, int maxIterations, CancellationToken ct,
-        Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0)
+        Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0,
+        bool requireWarmupFloor = true)
     {
         double warmupSeconds = WarmupBudgetSeconds * scale;
-        double minWarmupSeconds = MinWarmupSeconds * scale;
+        double minWarmupSeconds = requireWarmupFloor ? MinWarmupSeconds * scale : 0;
         double timedSeconds = budgetSeconds * scale;
 
         // 预热（JIT + 驱动缓冲 + 缓存填充）——不计入样本
