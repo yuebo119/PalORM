@@ -124,7 +124,13 @@ public sealed partial class DataSession<TProvider>
     /// DB 层兜底拒绝未赋值写入，但应用层应通过 WithTenant 设置会话上下文并在构造实体时填值。</para></summary>
     public ValueTask<T> InsertAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
-        => InsertCoreAsync(entity, null, ct);
+    {
+        // step16-P1：非 async 入口预热操作归属标记（调用方 EC 持久，体内 Enter 守卫命中免写）；
+        // 门禁见 PrewarmCurrentOperationOwner——仅本会话已完成过操作后预热，防 EC 链累积
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return InsertCoreAsync(entity, null, ct);
+    }
 
     // ─── 单行 CRUD 命令与参数复用（PL-2，2026-09-24）────────────────────
     //
@@ -567,7 +573,12 @@ public sealed partial class DataSession<TProvider>
     /// <para>单次查找: 使用 CrudMetadatas 聚合字典, 一次 TryGetValue 替代三次独立查找。</para></summary>
     public ValueTask<int> UpdateAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
-        => UpdateCoreAsync(entity, null, ct);
+    {
+        // step16-P1：同 InsertAsync——预热使事务内循环 UpdateAsync（TxRollback 形态）每行免 EC COW
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return UpdateCoreAsync(entity, null, ct);
+    }
 
     private async ValueTask<int> UpdateCoreAsync<T>(
         T entity,
@@ -821,7 +832,12 @@ public sealed partial class DataSession<TProvider>
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。</summary>
     public ValueTask<T> SaveAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
-        => SaveCoreAsync(entity, null, ct);
+    {
+        // step16-P1：同 InsertAsync——非 async 入口预热操作归属标记
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return SaveCoreAsync(entity, null, ct);
+    }
 
     private async ValueTask<T> SaveCoreAsync<T>(
         T entity,

@@ -86,7 +86,11 @@ internal sealed class SessionOperationState
 
             // v4.6：用 this 替代 new object() -- 常驻引用，第2次 AsyncLocal.Value=this 与旧值相等时 EC 短路不 COW
             _activeOperationOwner = this;
-            _currentOperationOwner.Value = _activeOperationOwner;
+            // step16-P1：同值守卫——公共入口预热后（调用方 EC 值持久流动进来）命中即免写；
+            // 未预热的路径（内部互调/旧入口）miss 时照写，语义不变（见 PrewarmCurrentOperationOwner）
+            if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
+                _currentOperationOwner.Value = _activeOperationOwner;
+            OwnerPrewarmed = true;
             _isActive = true;
             // v4.5：不创建 TCS -- 仅在 Dispose/WaitForActive 需要等待时才延迟创建
             _activeOperation = null;
@@ -199,13 +203,37 @@ internal sealed class SessionOperationState
 
             // v4.6：用 this 替代 new object() -- 常驻引用，第2次 AsyncLocal.Value=this 与旧值相等时 EC 短路不 COW
             _activeOperationOwner = this;
-            _currentOperationOwner.Value = _activeOperationOwner;
+            if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
+                _currentOperationOwner.Value = _activeOperationOwner;
+            OwnerPrewarmed = true;
             _isActive = true;
             _activeOperation = null;
             return new SessionOperationLease(
                 this, _activeOperationOwner);
         }
     }
+
+    /// <summary>step16-P1（2026-10-04）：在调用方异步流上预先登记操作归属标记。
+    /// <para><b>为什么需要预热</b>：async 方法体内写 AsyncLocal 的值不跨该调用持久——每次
+    /// async 方法（如 UpdateCoreAsync）内的 Enter 写都会 COW 一次新 ExecutionContext
+    /// （~72B/次：EC 48B + OneElementAsyncLocalValueMap 24B），即使带同值守卫（探针 ①e/①g
+    /// 实测 +72B/行）。写发生在<b>非 async 的公共入口</b>（调用方 EC）时值持久，且随 EC
+    /// 流动进 async 体的 Enter 守卫（①h 实测 0 增量）。</para>
+    /// <para><b>门禁（防 EC 链累积）</b>：调用方须先查 <see cref="OwnerPrewarmed"/>——每操作
+    /// 新会话形态（PerfHub 器材）若无条件预热，N 个会话各自的 AsyncLocal 实例会在同一
+    /// 调用方 EC 的不可变 map 链上累积，COW 成本随链长线性放大（探针 ③ 形态实测
+    /// 2459→10309 B/行）。仅"本会话已完成过至少一次操作"后预热，新会话首调永不预热，
+    /// 链上至多一个本会话节点。</para>
+    /// <para><b>语义零变化</b>：IsCurrentOperationScope 是 <c>_isActive &amp;&amp; owner匹配</c>
+    /// 的与逻辑——预热只影响槽值，操作未 Enter 时 _isActive=false 照样判 false；槽值与
+    /// Enter 会写的值恒同（this）；Exit 本就不清槽（v4.5）。无锁调用：AsyncLocal 写本身
+    /// 线程/流安全，且不读任何共享字段。</para></summary>
+    internal void PrewarmCurrentOperationOwner()
+        => _currentOperationOwner.Value = this;
+
+    /// <summary>step16-P1：本会话是否已完成过至少一次操作（Enter 走到写槽段即置位）。
+    /// 公共入口据此决定是否预热——见 <see cref="PrewarmCurrentOperationOwner"/> 的门禁说明。</summary>
+    internal bool OwnerPrewarmed;
 
     internal object EnterTransactionFlow()
     {
