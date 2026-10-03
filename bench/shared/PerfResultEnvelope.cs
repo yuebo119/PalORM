@@ -116,6 +116,13 @@ internal sealed class PerfResultItem
     /// <summary>维度 8：prepared 语句复用率 0-1（0 = 本夹具未测）。</summary>
     public double PreparedReuse { get; set; }
 
+    /// <summary>量具自检：Error/Mean（标准误比均值）——该臂读数自身的相对不确定度。
+    /// <para><b>判别力弱标注的判据</b>（2026-10-04）：同一键的三臂里最大 ErrorRatio &gt; 5% 时，
+    /// 该行的比值落在噪声带内，不足以支撑结论（阈值沿用 <c>Measure.cs</c> 的"&gt;5% 标黄"自检线）。
+    /// 比值 = 被测臂 / 地板，两侧噪声都会放大比值的不确定度，故取三臂最大值而非只看被测臂。</para>
+    /// <para>未采集该项的夹具（Benchmarks / DapperSuite）恒为 0，读侧须把 0 当"未测"而不是"无噪声"。</para></summary>
+    public double ErrorRatio { get; set; }
+
     public string Note { get; set; } = "";
 }
 

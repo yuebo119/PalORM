@@ -45,6 +45,9 @@ internal static class TableGen
         Table3(md, index, minTier);
         Table4(md, index, minTier);
         md.AppendLine();
+        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+            $"⚠ = 判别力弱：该行三臂里最大 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论（阈值同 Measure 的量具自检线）。仅 PerfHub 采集该指标。"));
+        md.AppendLine();
 
         if (string.IsNullOrEmpty(outPath))
         {
@@ -136,6 +139,9 @@ internal static class TableGen
         if (CrossRatio(ix, dialect, op, tier) is not { } ratio) return "—";
         string cell = $"{Emoji(ratio - 1)} {ratio.ToString("F2", CultureInfo.InvariantCulture)}×";
         double shown = Math.Round(ratio, 2);
+        cell += WeakMark(
+            Get(ix, dialect, op, tier, Floor), Get(ix, dialect, op, tier, "Dapper"),
+            Get(ix, dialect, op, tier, "PalORM"));
         return shown is >= 1.3 or <= 0.7 ? $"**{cell}**" : cell;
     }
 
@@ -162,7 +168,7 @@ internal static class TableGen
         PerfResultItem? pal = Get(ix, dialect, op, tier, "PalORM");
         if (ado is null || pal is null) return;
 
-        string pAdo = RatioCell(pal.MedianUs / ado.MedianUs);
+        string pAdo = RatioCell(pal.MedianUs / ado.MedianUs) + WeakMark(ado, dap, pal);
         string pDap = dap is null || dap.MedianUs <= 0 ? "—" : RatioCell(pal.MedianUs / dap.MedianUs);
         string alloc = $"{FmtBytes(ado.AllocBytes)}/{FmtBytes(dap?.AllocBytes ?? 0)}/{FmtBytes(pal.AllocBytes)}";
         string dDelta = DapDelta(dap, ado);
@@ -178,6 +184,25 @@ internal static class TableGen
         => ix.TryGetValue((d, o, t, a), out PerfResultItem? item) ? item : null;
 
     private static bool IsFlagged(double ratio) => ratio is >= 1.5 or <= 0.67;
+
+    /// <summary>判别力弱阈值——沿用 <c>Measure.cs</c> 的量具自检线（Error/Mean &gt; 5% 标黄）。</summary>
+    private const double NoiseLine = 0.05;
+
+    /// <summary>判别力弱标注（2026-10-04）：该键三臂里最大 ErrorRatio 超线时，比值落在噪声带内、
+    /// 不足以支撑结论。取三臂最大值而非只看被测臂——比值 = 被测臂 / 地板，两侧噪声都会放大
+    /// 比值的不确定度。任一侧缺 ErrorRatio（未采集）按 0 处理，不据此标注。</summary>
+    private static string WeakMark(params PerfResultItem?[] arms)
+    {
+        foreach (PerfResultItem? arm in arms)
+        {
+            if (arm is not null && arm.ErrorRatio > NoiseLine)
+            {
+                return " ⚠";
+            }
+        }
+
+        return "";
+    }
 
     private static string RatioCell(double ratio)
     {
