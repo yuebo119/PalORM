@@ -91,12 +91,20 @@ internal static class PerfEntry
         return Index();
     }
 
-    public static int Full()
+    /// <param name="options">--with-dappersuite：把 DapperSuite 哨兵并回本轮。默认**移出**（2026-10-03
+    /// 降频裁决：连续多轮 9 项零发现，信息增量低）：哨兵改按周或驱动/大版本变更时手动并回，
+    /// 统一报告的跨夹具登记会显示其最后批次时间，超期即可见。</param>
+    public static int Full(string[] options)
     {
+        bool withDapperSuite = options is not null && Array.IndexOf(options, "--with-dappersuite") >= 0;
         var root = Perf.RepoRoot();
         Perf.ClearSteps();
         Perf.StartClock();
-        const int stepTotal = 5;
+        // 离线前置：NuGet 审计需联网取漏洞数据，离线时 NU1900 会被 TreatWarningsAsErrors 升级为
+        // 错误并炸掉第 4 步门禁的构建（2026-10-03 实测：代理不可达时复现）。bench 工具的包版本
+        // 已钉死，审计信号交给有网环境；此变量只影响从本进程派生的构建。
+        Environment.SetEnvironmentVariable("NuGetAudit", "false");
+        int stepTotal = withDapperSuite ? 5 : 4;
         var stepIdx = 0;
         List<string> stepFailed = [];
 
@@ -136,7 +144,11 @@ internal static class PerfEntry
             "run --dialects sqlite,mysql,pg --tiers 2000,20000 --concurrency --threads 1,4,8"));
         // DapperSuite 只跑 SQLite：定位是"与 Dapper 官方数字可对照的外部锚点"，官方数字是
         // 单机 SQLite 的（2026-09-23 精简）。哨兵目的一个方言足够。
-        RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
+        // 2026-10-03 降频：移出默认全量（--with-dappersuite 并回），理由见方法 doc。
+        if (withDapperSuite)
+        {
+            RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
+        }
         RunStep("门禁（BDN 基线 + 结果库基线）", Gate);
         RunStep("统一报告", Report);
 
@@ -148,7 +160,7 @@ internal static class PerfEntry
             return 1;
         }
         Perf.Out("");
-        Perf.Out($"全量跑测完成：五步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
+        Perf.Out($"全量跑测完成：{(withDapperSuite ? "五" : "四")}步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
         Perf.PrintFinalTable();
         return 0;
     }
@@ -158,7 +170,8 @@ internal static class PerfEntry
         Perf.Out("""
             用法:
               PerfCli smoke                                    # 三套夹具最小档冒烟（SQLite，约 5 分钟）
-              PerfCli full                                     # 全量（三方言）+ 门禁 + 唯一报告
+              PerfCli full [--with-dappersuite]                # 全量（三方言）+ 门禁 + 唯一报告
+                                                               # DapperSuite 默认降频，--with-dappersuite 并回
               PerfCli compare <基线worktree> <轮数> [选项]      # 交替 A/B（转发 compare 编排器）
               PerfCli gate                                     # 只跑门禁（BDN 基线 + 结果库基线）
               PerfCli report                                   # 只重建统一报告（不重跑夹具）
