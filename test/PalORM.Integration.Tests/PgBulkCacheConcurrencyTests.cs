@@ -11,7 +11,10 @@ namespace PalORM.Integration.Tests;
 /// 首触各建一份（TryAdd 的败者也返回自己那份）。</para>
 /// <para><b>为什么用专用实体 + 手建表</b>：缓存键含 (Type, Dialect)，已注册实体可能被先前用例
 /// 预热过（计数器已 >0），读数失去判别力；专用实体保证本用例就是它的首次触发。手建表（不调
-/// MigrateAsync）同时绕开 B63 的系统目录并发竞态面。</para></summary>
+/// MigrateAsync）同时绕开 B63 的系统目录并发竞态面。</para>
+/// <para>2026-10-03：手建表同样与并行建表用例争系统目录（实测 42710 type already exists），
+/// 与 <c>ExtBulkTable</c> 组串行。</para></summary>
+[NotInParallel("ExtBulkTable")]
 [Property("Category", "ExternalDatabase")]
 public sealed class PgBulkCacheConcurrencyTests
 {

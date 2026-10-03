@@ -13,7 +13,10 @@ namespace PalORM.Integration.Tests;
 /// 排查方向被误导（ITM-637 注释已记录该发散，本组把它钉住）。</para>
 /// <para><b>为什么无建表</b>：两个用例的失败都发生在 SQL 执行<b>之前</b>（绑定期/执行管线
 /// 入口），不需要任何表。刻意不调 <c>MigrateAsync</c>——全实体建表会给 PG 系统目录加并发压，
-/// 触发 B63 记载的 pg_type/pg_class 23505 竞态连累同组夹具。</para></summary>
+/// 触发 B63 记载的 pg_type/pg_class 23505 竞态连累同组夹具。</para>
+/// <para>2026-10-03：本类虽不建表，仍属共享外部库资源组——与 <c>ExtBulkTable</c> 组串行，
+/// 避免与并行建表用例的目录竞态。</para></summary>
+[NotInParallel("ExtBulkTable")]
 [Property("Category", "ExternalDatabase")]
 public sealed class DisposedTransactionDialectTests
 {

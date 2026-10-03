@@ -13,7 +13,10 @@ namespace PalORM.Integration.Tests;
 /// PROV-001（2026-09-23）已修为 <c>HasExplicitKey</c>（Keys 集合只含显式出现的键）双条件
 /// （ContainsKey 管意图 + 值比对管驱动默认漂移）。本组把该契约钉死，防回归。</para>
 /// <para>可观测面：<c>CreateConnection</c> 返回的连接其 <c>ConnectionString</c> 保留显式设置的
-/// 键（探针八实测：显式设成默认值的键重建后仍在串中，未设置的键不出现）。</para></summary>
+/// 键（探针八实测：显式设成默认值的键重建后仍在串中，未设置的键不出现）。</para>
+/// <para>B63 同族（2026-10-03）：PG/MySQL 真库为共享库，建表 DDL 与其它外部库用例争同一
+/// 系统目录——必须与 <c>ExtBulkTable</c> 组串行，否则并发建表触发 42P07/42710。</para></summary>
+[NotInParallel("ExtBulkTable")]
 [Property("Category", "ExternalDatabase")]
 public sealed class ConnectionStringOverrideTests
 {
@@ -61,6 +64,7 @@ public sealed class ConnectionStringOverrideTests
 }
 
 /// <summary>MySQL-6/T10 移植：MySQL 侧连接串覆盖契约（与 PG 侧三态同构）。</summary>
+[NotInParallel("ExtBulkTable")]
 [Property("Category", "ExternalDatabase")]
 public sealed class MySqlConnectionStringOverrideTests
 {

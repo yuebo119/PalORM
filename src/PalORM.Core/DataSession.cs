@@ -953,9 +953,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 非直通分支才包 <see cref="ResilienceExecutor.ExecuteWithTimeoutAsync"/>——
     /// 此时仍需委托（超时包装要求），该形态本就少见（写入路径默认不重试，
     /// 只有显式配置了非零 CommandTimeout 才会走到）。</para>
-    /// <para>step13（2026-10-03）：曾试改状态化重载消除该委托，实测写路径分配
-    /// <b>+32 B/行</b>（1136→1168，WritePathDiag 确定性指标），收益为负已回滚；
-    /// 读路径同形态改动则是 −112 B（PerOpDecompDiag），两者形态差异见 step13 文档。</para>
     /// <para><b>为什么值得单独一个重载</b>：单条写路径（Update/Delete/ExecuteAsync）
     /// 每次调用都过这里，是每操作固定成本；208 B 在 MySQL Insert 的 4241 B/行上约 5%，
     /// 在 BulkInsert 的 1222 B/行上约 17%。</para></summary>
@@ -975,135 +972,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         => new(command.ExecuteNonQueryAsync(ct));
 
 
-    /// <summary>单行读的状态化调用上下文——值类型承载，配 <c>static</c> lambda 使
-    /// <see cref="ResilienceExecutor"/> 的每操作委托与 display class 分配归零。</summary>
-    private readonly record struct GetByKeyReadState(
-        DataSession<TProvider> Session,
-        string CommandText,
-        object Key,
-        object Factory,
-        bool ParallelRead);
-
-    /// <summary>step13：读路径直调重载（读路径唯一入口，对齐写路径 P2-1
-    /// <see cref="ExecuteWriteRowsAsync"/>）——调用方备齐命令文本/主键/工厂后经此入口。
-    /// 直通分支（策略直通或事务内）直接调 async 核心方法，无委托无状态机；非直通分支
-    /// 经 <see cref="ResilienceExecutor"/> 的状态化重载，传值类型状态 + <c>static</c> lambda，
-    /// 同样零闭包分配。
-    /// <para><b>语义与委托版逐位一致</b>：核心方法为 async，异常一律捕获进返回的 ValueTask，
-    /// 不会同步抛出。</para>
-    /// <para><paramref name="parallelRead"/> 为 true 时走并行读作用域形态（每次尝试独立获取/归还
-    /// 读连接，不参与 A9 命令复用槽）。</para></summary>
-    private ValueTask<T?> ExecuteGetByKeyReadAsync<T>(
-        string commandText, object key, object factory, bool parallelRead, CancellationToken ct)
-        where T : class, new()
+    private async ValueTask<T> ExecuteReadPipelineAsync<T>(
+        Func<CancellationToken, Task<T>> attemptCore, CancellationToken ct)
     {
         ResilienceExecutor executor = Volatile.Read(ref _resilience);
         if (executor.IsPassThrough || GetActiveTransaction() is not null)
-            return GetByKeyReadCoreAsync<T>(commandText, key, factory, parallelRead, ct);
-        return executor.ExecuteAsync(
-            new GetByKeyReadState(this, commandText, key, factory, parallelRead),
-            static (state, token) => state.Session.GetByKeyReadCoreAsync<T>(
-                state.CommandText, state.Key, state.Factory, state.ParallelRead, token).AsTask(),
-            ct);
-    }
-
-    /// <summary>单行读核心（GetAsync 两形态共用）——并行读作用域内从读池取连接执行并归还，
-    /// 作用域外走主连接（含 A9 惰性晋升复用槽）。</summary>
-    private async ValueTask<T?> GetByKeyReadCoreAsync<T>(
-        string commandText, object key, object factory, bool parallelRead, CancellationToken ct)
-        where T : class, new()
-    {
-        if (parallelRead)
-        {
-            DbConnection connection = await AcquireReadConnectionAsync(ct).ConfigureAwait(false);
-            try
-            {
-                await using DbCommand parallelCmd = connection.CreateCommand();
-                parallelCmd.CommandText = commandText;
-                parallelCmd.CommandTimeout = _options.CommandTimeoutSeconds;
-                BindGeneratedKeyParameter<T>(parallelCmd, key);
-                BindDefaultFilterParameters<T>(parallelCmd);
-                return await ReadSingleAsync<T>(parallelCmd, factory, ct).ConfigureAwait(false);
-            }
-            finally
-            {
-                await ReleaseReadConnectionAsync(connection).ConfigureAwait(false);
-            }
-        }
-
-        // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
-        // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
-        // 按命令实例生效，换命令即重编译）。
-        DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key);
-        if (reused is not null)
-            return await ReadSingleAsync<T>(reused, factory, ct).ConfigureAwait(false);
-
-        await using DbCommand cmd = CreateCommand();
-        cmd.CommandText = commandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindGeneratedKeyParameter<T>(cmd, key);
-        BindDefaultFilterParameters<T>(cmd);
-        return await ReadSingleAsync<T>(cmd, factory, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>执行 reader 并物化首行（无行返回 default）。</summary>
-    private static async ValueTask<T?> ReadSingleAsync<T>(
-        DbCommand command, object factory, CancellationToken ct)
-        where T : class, new()
-    {
-        await using DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        return await reader.ReadAsync(ct).ConfigureAwait(false)
-            ? ((Func<DbDataReader, T>)factory)(reader) : default;
-    }
-
-    /// <summary>全表读的状态化调用上下文（与 <see cref="GetByKeyReadState"/> 同型）。</summary>
-    private readonly record struct GetAllReadState(
-        DataSession<TProvider> Session,
-        IReadOnlyList<string> ColumnNames,
-        string TableName,
-        string FilterClause,
-        object Factory);
-
-    /// <summary>step13：全表读的直调重载（与 <see cref="ExecuteGetByKeyReadAsync{T}"/> 同型）。
-    /// <paramref name="filterClause"/> 由入口点求值后传入——过滤决策留在实体表入口，
-    /// 内核不隐式决定过滤（架构不变式）。</summary>
-    private ValueTask<List<T>> ExecuteGetAllReadAsync<T>(
-        IReadOnlyList<string> columnNames, string tableName, string filterClause, object factory,
-        CancellationToken ct)
-        where T : class, new()
-    {
-        ResilienceExecutor executor = Volatile.Read(ref _resilience);
-        if (executor.IsPassThrough || GetActiveTransaction() is not null)
-            return GetAllReadCoreAsync<T>(columnNames, tableName, filterClause, factory, ct);
-        return executor.ExecuteAsync(
-            new GetAllReadState(this, columnNames, tableName, filterClause, factory),
-            static (state, token) => state.Session.GetAllReadCoreAsync<T>(
-                state.ColumnNames, state.TableName, state.FilterClause, state.Factory, token).AsTask(),
-            ct);
-    }
-
-    private async ValueTask<List<T>> GetAllReadCoreAsync<T>(
-        IReadOnlyList<string> columnNames, string tableName, string filterClause, object factory,
-        CancellationToken ct)
-        where T : class, new()
-    {
-        await using DbCommand cmd = CreateCommand();
-        // v4.1：缓存 selectColumns
-        string selectColumns = GetSelectColumns<T>(columnNames);
-        // S2077 报备（M1-5）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
-        // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
-#pragma warning disable S2077
-        cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{filterClause}";
-#pragma warning restore S2077
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindDefaultFilterParameters<T>(cmd);
-
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
-        List<T> list = await ResultListReader.ReadAllAsync(
-            reader, (Func<DbDataReader, T>)factory, GetMaterializedCapacity<T>(), ct).ConfigureAwait(false);
-        RecordMaterializedCount<T>(list.Count);
-        return list;
+            return await attemptCore(ct).ConfigureAwait(false);
+        return await executor.ExecuteAsync(attemptCore, ct).ConfigureAwait(false);
     }
 
     /// <summary>将复合格式项映射为参数名，参数值保持原始对象。
