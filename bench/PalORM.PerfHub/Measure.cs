@@ -158,9 +158,12 @@ internal static class Measure
         // 预热按**时间**收敛：累计耗时达 warmupSeconds 即停（至少 3 次）。固定次数对慢操作是
         // 无界成本——实测 20K 档 Dapper BulkInsert 单次 1.36 s，40 次预热 54 s，是计时段
         // （4 s 预算 → 3 次 ≈ 4.1 s）的 13 倍。快操作在次数上限 maxIterations/5 处还远不够
-        // JIT 分层完成，故次数到顶后还须满 minWarmupSeconds（硬上限 maxIterations×100 防亚微秒项空转）。
+        // JIT 分层完成，故次数到顶后还须满 minWarmupSeconds。硬上限 200000 次
+        // （原 maxIterations×100 = 20000，对 1µs 操作 = 20ms，不足以触发 tier-0→tier-1
+        // 提升窗口 ~100ms——实测 QueryAll/SQLite/2000 地板跨批摆 2.7× 由此而来）。
+        // 200000 × 1µs = 200ms > 100ms 提升窗口，且仍 < 0.5s 预算不拖慢全量。
         int warmupCap = Math.Max(3, maxIterations / 5);
-        int warmupHardCap = Math.Max(warmupCap, maxIterations * 100);
+        int warmupHardCap = Math.Max(warmupCap, 200_000);
         var warmupSw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < warmupHardCap; i++)
         {
