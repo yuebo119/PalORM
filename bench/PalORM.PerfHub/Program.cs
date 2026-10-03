@@ -70,6 +70,7 @@ internal static class Program
               --concurrency                 启用并发吞吐测试
               --threads 1,4,8               并发线程档位（默认 1,4,8）
               --quick                       迭代次数降到 30%（冒烟用）
+              --warmup-floor all|first-tier 预热时间下限的作用范围（默认 first-tier；all 供交替 A/B 诊断）
               --version TEXT                被测版本标识（记入 JSON，用于版本对比）
               --label TEXT                  本次运行的标签（记入 JSON）
 
@@ -94,6 +95,7 @@ internal static class Program
         var dialects = new List<Dialect> { Dialect.Sqlite, Dialect.MySql, Dialect.PostgreSql };
         var tiers = new List<int>(Dataset.Tiers);
         bool concurrency = false;
+        bool warmupFloorAll = false;
         var threadTiers = new List<int> { 1, 4, 8 };
         double scale = 1.0;
         string label = "";
@@ -115,6 +117,10 @@ internal static class Program
                     break;
                 case "--concurrency":
                     concurrency = true;
+                    break;
+                case "--warmup-floor":
+                    // all = 全档都要求预热时间下限（旧行为，A/B 诊断用）；first-tier = 只在每方言首档（默认）
+                    warmupFloorAll = args[++i].Equals("all", StringComparison.OrdinalIgnoreCase);
                     break;
                 case "--quick":
                     scale = 0.3;
@@ -189,7 +195,7 @@ internal static class Program
             // 继续跑其余方言——失败进信封的 sections（kind=dialect-failure），退出码在末尾汇总。
             try
             {
-                await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, itemFailures, cts.Token)
+                await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, itemFailures, warmupFloorAll, cts.Token)
                     .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cts.IsCancellationRequested)
@@ -244,7 +250,7 @@ internal static class Program
     private static async Task RunDialectAsync(
         DialectInfo info, List<int> tiers, bool concurrency, List<int> threadTiers, double scale,
         List<Measurement> results, List<(string Dialect, int Rows, string Context, string Cause)> itemFailures,
-        CancellationToken ct)
+        bool warmupFloorAll, CancellationToken ct)
     {
         string cs = Connections.Resolve(info);
         await using DbConnection rawConn = info.OpenConnection(cs);
@@ -288,6 +294,11 @@ internal static class Program
         {
             Console.WriteLine();
             Console.WriteLine($"── 行数档位 {rows:N0} ──");
+
+            // 预热时间下限只在每方言的**首档**要求：JIT 分层的偏置只在方法首次执行时存在，
+            // 而每个方言的驱动代码在它的首档才首次编译。跨档重复预热（旧行为）是纯成本。
+            // 该结论经交替 A/B 验证（`--warmup-floor all` 与默认各两轮，比 20000 档读数）。
+            _requireWarmupFloor = warmupFloorAll || rows == tiers[0];
 
             // 阶段 2 新表：每 (方言 × 档位) 播一次，臂无关——测量只读或自清理
             await SetupV2TablesAsync(info, conn, rows, ct).ConfigureAwait(false);
@@ -708,7 +719,8 @@ internal static class Program
             // 优化就只能靠猜。
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
-                MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale).ConfigureAwait(false);
+                MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale,
+                _requireWarmupFloor).ConfigureAwait(false);
             sw.Stop();
             results.Add(m);
             PrintRow([m], sw.Elapsed);
@@ -723,6 +735,10 @@ internal static class Program
 
     /// <summary>本轮的最小档位——"行数不进测量"的项只在它上面跑一次（<see cref="RunAsync"/> 设置）。</summary>
     private static int _minTier = Dataset.Tiers[0];
+
+    /// <summary>本轮该档是否要求预热时间下限（JIT 分层偏置只在每方言首档存在，故默认只在那里要求；
+    /// <c>--warmup-floor all</c> 强制全档，供交替 A/B 诊断）。由 <see cref="RunDialectAsync"/> 在每档开跑前设置。</summary>
+    private static bool _requireWarmupFloor = true;
 
     /// <summary>进度条的分子/分母——实时标示"跑到哪了、用了多久"。</summary>
     private static int _done;
