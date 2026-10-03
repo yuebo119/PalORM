@@ -25,7 +25,14 @@ public sealed class SessionBatch<TProvider> : IDisposable
     where TProvider : IDbProvider
 {
     private readonly DataSession<TProvider> _session;
-    private readonly List<(string Sql, IReadOnlyList<DbParameter> Parameters)> _statements = [];
+    /// <summary>已追加语句（SQL 文本 + 实参载体）。<b>参数物化延后（step14，2026-10-03）</b>：
+    /// 原实现存 <c>DbParameter[]</c>——Append 每条语句建 N 个参数对象，执行时再 <c>CloneParameter</c>
+    /// 克隆一遍，同一批参数被分配两次。PerfHub 实测该形态每条语句比 ADO 臂多 1.2KB（SQLite）/
+    /// 1.68KB（PG），而延迟比值仅 1.02（纯分配问题）。改为直接持有调用方的
+    /// <see cref="FormattableString"/>（本就已分配，零额外开销），参数在执行期一次物化。
+    /// <para>值语义不变：FormattableString 是纯值载体（Append 后调用方无法改动其内容），
+    /// 重复执行每次重建参数，与"每执行克隆一份"逐位等价。</para></summary>
+    private readonly List<(string Sql, FormattableString? Values)> _statements = [];
     private readonly DbCommand _scratch;
     /// <summary>Append 与执行期快照的互斥门（OPS-002，2026-09-22）——门内只做 List 增删与拷贝，
     /// 不做 await（本仓库"lock 内无 await"纪律）。</summary>
@@ -50,15 +57,8 @@ public sealed class SessionBatch<TProvider> : IDisposable
             throw new ArgumentException(
                 "Batch statement must not be empty or whitespace; an empty statement produces invalid SQL.",
                 nameof(sql));
-        var parameters = new DbParameter[sql.ArgumentCount];
-        for (int i = 0; i < sql.ArgumentCount; i++)
-        {
-            DbParameter parameter = _scratch.CreateParameter();
-            parameter.ParameterName = QueryBuilder<object>.GetParameterName(i);
-            parameter.Value = sql.GetArgument(i) ?? DBNull.Value;
-            parameters[i] = parameter;
-        }
-        lock (_gate) _statements.Add((formatted, parameters));
+        // step14：只存 SQL 文本与实参载体，参数对象留到执行期物化（见 _statements 注释）
+        lock (_gate) _statements.Add((formatted, sql));
         return this;
     }
 
@@ -72,7 +72,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
             throw new ArgumentException(
                 "Batch statement must not be empty or whitespace; an empty statement produces invalid SQL.",
                 nameof(sql));
-        lock (_gate) _statements.Add((sql, Array.Empty<DbParameter>()));
+        lock (_gate) _statements.Add((sql, null));
         return this;
     }
 
@@ -91,7 +91,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
         // 此前直接迭代 _statements：与并发 Append 竞争会结构性损坏 List，或抛
         // "Collection was modified"——后者在批量执行中途让整批事务回滚。
         // 快照语义：执行期间新追加的语句由下一次 Execute 执行。
-        List<(string Sql, IReadOnlyList<DbParameter> Parameters)> statements;
+        List<(string Sql, FormattableString? Values)> statements;
         lock (_gate)
         {
             statements = [.. _statements];
@@ -117,12 +117,11 @@ public sealed class SessionBatch<TProvider> : IDisposable
                 // 时 DbBatch 原形态永不 Dispose；try/finally 保证批对象释放不受赋值影响。
                 batch.Timeout = _session.BatchCommandTimeoutSeconds;
                 // 慢 DDL 场景（大表 CREATE INDEX）不应走批——MigrateAsync 的索引 DDL 保持逐条。
-                foreach ((string sql, IReadOnlyList<DbParameter> parameters) in statements)
+                foreach ((string sql, FormattableString? values) in statements)
                 {
                     DbBatchCommand command = batch.CreateBatchCommand();
                     command.CommandText = sql;
-                    foreach (DbParameter parameter in parameters)
-                        command.Parameters.Add(CloneParameter(parameter));
+                    AddParameters(command.Parameters, values);
                     batch.BatchCommands.Add(command);
                 }
                 return await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -148,14 +147,14 @@ public sealed class SessionBatch<TProvider> : IDisposable
     /// 契约保持，N 次往返压成 1 次。带参语句不合并（参数集合跨语句无归属）；混合形态与未知
     /// 方言保持逐条路径（多语句支持面未验证）。不可合并返回 null。</summary>
     private async ValueTask<int?> TryExecuteMergedParameterlessAsync(
-        List<(string Sql, IReadOnlyList<DbParameter> Parameters)> statements,
+        List<(string Sql, FormattableString? Values)> statements,
         DbConnection connection, DbTransaction? transaction, CancellationToken ct)
     {
         if (TProvider.Dialect != SqlDialect.Sqlite || statements.Count <= 1)
             return null;
 
-        foreach ((string _, IReadOnlyList<DbParameter> parameters) in statements)
-            if (parameters.Count != 0)
+        foreach ((string _, FormattableString? values) in statements)
+            if (values is not null)
                 return null;
 
         var mergedSql = new System.Text.StringBuilder();
@@ -177,22 +176,21 @@ public sealed class SessionBatch<TProvider> : IDisposable
     /// 新建/释放是回退路径的主要固定开销；驱动语句缓存按命令实例生效且 CommandText 同值
     /// setter 短路（项15 探针实测），同文本语句免重编译。Clear + 克隆重加与逐条新建逐位等价。</para></summary>
     private async ValueTask<int> ExecuteSequentiallyAsync(
-        List<(string Sql, IReadOnlyList<DbParameter> Parameters)> statements,
+        List<(string Sql, FormattableString? Values)> statements,
         DbConnection connection, DbTransaction? transaction, CancellationToken ct)
     {
         int total = 0;
         await using DbCommand cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
-        foreach ((string sql, IReadOnlyList<DbParameter> parameters) in statements)
+        foreach ((string sql, FormattableString? values) in statements)
         {
             if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
                 cmd.CommandText = sql;
             // PARAM-REUSE-OK[nodbbatch] 本方法仅在驱动无 DbBatch 时可达（探针实测 Npgsql/MySQL 均
             // 支持 DbBatch → PG/MySQL 走真 DbBatch 路径）；SQLite 无 auto-prepare 行为，无此缺陷面
             cmd.Parameters.Clear();
-            foreach (DbParameter parameter in parameters)
-                cmd.Parameters.Add(CloneParameter(parameter));
+            AddParameters(cmd.Parameters, values);
             total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         return total;
@@ -218,14 +216,22 @@ public sealed class SessionBatch<TProvider> : IDisposable
         }
     }
 
-    /// <summary>克隆 scratch 参数（驱动同型：scratch 由会话连接创建，批量/回退命令同连接）。
-    /// 参数对象不可跨集合共享——Append 阶段是占位载体，每次执行克隆新实例，批量可重复执行。</summary>
-    private DbParameter CloneParameter(DbParameter source)
+    /// <summary>把一条语句的实参物化为参数并加入目标集合（step14，2026-10-03）。
+    /// <para>参数对象从 scratch 命令创建（驱动同型：scratch 由会话连接创建，批量/回退命令同连接）；
+    /// 参数对象不可跨集合共享，故每次执行都新建——这与原实现"Append 建一份 + 执行克隆一份"的
+    /// 值语义一致，但把两次分配压成一次。命名与单条路径同纪律（@p0 起、值只进 @pN）。</para>
+    /// <para><paramref name="values"/> 为 null 表示无参语句（<see cref="AppendRaw"/>）。</para></summary>
+    private void AddParameters(DbParameterCollection target, FormattableString? values)
     {
-        DbParameter copy = _scratch.CreateParameter();
-        copy.ParameterName = source.ParameterName;
-        copy.Value = source.Value;
-        return copy;
+        if (values is null)
+            return;
+        for (int i = 0; i < values.ArgumentCount; i++)
+        {
+            DbParameter parameter = _scratch.CreateParameter();
+            parameter.ParameterName = QueryBuilder<object>.GetParameterName(i);
+            parameter.Value = values.GetArgument(i) ?? DBNull.Value;
+            target.Add(parameter);
+        }
     }
 
     /// <summary>释放 scratch 命令。已追加语句随实例废弃；未执行的语句不会到达服务器。</summary>
