@@ -55,6 +55,10 @@ internal static class Program
                 "index" => Index(CommandLine.Parse(args[1..])),
                 "record-index" => RecordIndex(CommandLine.Parse(args[1..])),
                 "check-index" => CheckIndex(CommandLine.Parse(args[1..])),
+                "tables" => TableGen.Run(
+                    CommandLine.Parse(args[1..]).Optional("results")
+                        ?? Path.Combine(RepoRoot(), "bench", "results"),
+                    CommandLine.Parse(args[1..]).Optional("out")),
                 _ => Fail($"未知子命令: {args[0]}"),
             };
         }

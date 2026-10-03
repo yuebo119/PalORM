@@ -49,10 +49,27 @@ internal static class PerfEntry
     public static int Report()
     {
         var root = Perf.RepoRoot();
-        // 唯一报告产物（规范 §6）：BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览，一份文件。
-        Perf.Step("[报告] 统一报告（BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览）");
+        // 唯一报告产物（规范 §6）：BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览 + 四组表，一份文件。
+        Perf.Step("[报告] 统一报告（BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览 + 四组表）");
         var outPath = Path.Combine(root, "bench", "reports", $"perf-report-{Perf.Stamp()}.md");
         FullPerf.RunReport(root, Path.Combine(root, BdnResults), null, null, "", outPath);
+
+        // 四组表（性能输出规范的固定表格组）由门禁工具从最新非子集信封生成，追加进唯一报告——
+        // 该段曾是每次跑测汇报的最大人工步骤（.ai 本地脚本原型已验证），固化后人工只写归因。
+        string tablesPath = outPath + ".tables.md";
+        int code = Perf.Run("dotnet",
+            $"run --project \"{Path.Combine(root, GateProject)}\" -c Release --no-build -- tables "
+            + $"--results \"{Path.Combine(root, "bench", "results")}\" --out \"{tablesPath}\"");
+        if (code == 0 && File.Exists(tablesPath))
+        {
+            File.AppendAllText(outPath, File.ReadAllText(tablesPath));
+            File.Delete(tablesPath);
+        }
+        else
+        {
+            Perf.Err("四组表生成失败（不影响报告主体）");
+        }
+
         return 0;
     }
 
@@ -100,10 +117,6 @@ internal static class PerfEntry
         var root = Perf.RepoRoot();
         Perf.ClearSteps();
         Perf.StartClock();
-        // 离线前置：NuGet 审计需联网取漏洞数据，离线时 NU1900 会被 TreatWarningsAsErrors 升级为
-        // 错误并炸掉第 4 步门禁的构建（2026-10-03 实测：代理不可达时复现）。bench 工具的包版本
-        // 已钉死，审计信号交给有网环境；此变量只影响从本进程派生的构建。
-        Environment.SetEnvironmentVariable("NuGetAudit", "false");
         int stepTotal = withDapperSuite ? 5 : 4;
         var stepIdx = 0;
         List<string> stepFailed = [];
