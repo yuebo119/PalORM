@@ -371,9 +371,20 @@ public sealed partial class DataSession<TProvider>
         if (deferredVersionIncrements is null)
             metadata.IncrementVersion(entity);
         else
-            deferredVersionIncrements.Add(() => metadata.IncrementVersion(entity));
+            DeferVersionIncrement(metadata.IncrementVersion, entity, deferredVersionIncrements);
         return affectedRows;
     }
+
+    /// <summary>step16（2026-10-04）：乐观锁暂存闭包独立成方法。原 <c>() => metadata.IncrementVersion(entity)</c>
+    /// 内联在 <see cref="ApplyUpdateOutcome{T}"/> 时，Roslyn 对参数捕获 lambda 在方法入口
+    /// 无条件分配 display class——且 CrudMetadata 是 ~230B 的 struct，
+    /// 按值拷入闭包使每次 UpdateAsync 白付 ~250B（分配采样 248B/行实证，TxRollback SQLite
+    /// 356B/行差额的主项），<c>IncrementVersion is null</c> 的早退挡不住入口分配。
+    /// 拆出后：无并发令牌/单条路径零闭包；批量乐观锁路径的闭包只捕获委托引用 + entity
+    /// （~32B，降 87%）。</summary>
+    private static void DeferVersionIncrement<T>(
+        Action<object> increment, T entity, List<Action> deferred) where T : class, new()
+        => deferred.Add(() => increment(entity));
 
     private async ValueTask<T> InsertCoreAsync<T>(
         T entity,
