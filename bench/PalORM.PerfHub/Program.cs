@@ -1146,6 +1146,8 @@ internal static class Program
                 // 实测 Insert/SQLite/2000 的 ADO 臂中位 17.1µs / 均值 45.6µs ——用均值当分母
                 // 会把基线录成 0.46（中位口径 1.13），下一批必然假报 FAIL。详见 PerfResultItem 文档。
                 Ratio = !comparable || floor is null || floor.MedianNs <= 0 ? 0 : m.MedianNs / floor.MedianNs,
+                // 量具自检：判别力弱标注的判据（同键三臂最大值 > 5% 时该行比值不作结论）
+                ErrorRatio = m.ErrorRatio,
             });
         }
 

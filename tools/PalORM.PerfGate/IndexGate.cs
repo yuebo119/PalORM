@@ -15,6 +15,14 @@ internal static class IndexGate
 {
     private const double DefaultRatioThreshold = 0.30;
 
+    /// <summary>判别力弱阈值——沿用 <c>Measure.cs</c> 的量具自检线（Error/Mean &gt; 5% 标黄）。
+    /// 同键三臂里最大 ErrorRatio 超线时，该行比值落在噪声带内、不足以支撑结论。
+    /// 取三臂最大值而非只看被测臂：比值 = 被测臂 / 地板，两侧噪声都会放大比值的不确定度。</summary>
+    private const double NoiseLine = 0.05;
+
+    /// <summary>门禁输出里最多展开几条判别力弱项（总数照报，避免刷屏）。</summary>
+    private const int NoiseWarnPreview = 8;
+
     /// <summary>非可比项判定：并发吞吐项（名带 <c>Concurrent_</c>）的比值不参与门禁。
     /// <para>它的 Ratio 是**每操作延迟**，批内散布由线程调度与服务器时段支配——
     /// 实测同批同组三臂一致性良好（MySQL/PG 三臂同为 ~1.7）而单点可跳到 9×
@@ -94,13 +102,16 @@ internal static class IndexGate
     }
 
     /// <summary>逐键判定（Check 的主体）：比值超限且非分母漂移 → FAIL；分母漂移 → 告警；
-    /// 末尾对"全部缺项"单独判失败（只跑冒烟/过滤批次时的防呆）。</summary>
+    /// 末尾对"全部缺项"单独判失败（只跑冒烟/过滤批次时的防呆）。
+    /// <para>判别力弱标注（2026-10-04）：同键三臂最大 ErrorRatio &gt; 5% 的项在末尾汇总——
+    /// 只标注不判定，比值超限与否仍走原逻辑。</para></summary>
     private static int JudgeBaseline(
         IndexBaseline baseline, List<PerfResultEnvelope> batches,
         Dictionary<string, (string Harness, PerfResultItem Item)> current)
     {
         var failures = new List<string>();
         var driftWarnings = new List<string>();
+        List<string> weakWarnings = CollectWeakDiscrimination(baseline, LoadNoiseLevels(batches));
         int compared = 0, missing = 0, skipped = 0, floorDrift = 0;
         foreach (IndexBaselineItem expected in baseline.Items)
         {
@@ -147,11 +158,9 @@ internal static class IndexGate
 
         List<string> outliers = OutlierWarnings(batches);
 
-        Console.WriteLine($"[PerfGate] 结果库门禁: 比对 {compared} 项（基线 {baseline.Items.Count} 项，"
-            + $"缺项 {missing}，非可比跳过 {skipped}，分母漂移 {floorDrift}），失败 {failures.Count}");
-        foreach (string failure in failures) Console.Error.WriteLine("  FAIL " + failure);
-        foreach (string drift in driftWarnings) Console.Error.WriteLine("  漂移 " + drift);
-        foreach (string outlier in outliers) Console.Error.WriteLine("  离群 " + outlier);
+        PrintVerdict(
+            (compared, baseline.Items.Count, missing, skipped, floorDrift),
+            failures, driftWarnings, weakWarnings, outliers);
 
         // 缺项不判失败：基线里的项可能因本轮方言/档位未跑而缺席（例如只跑了 sqlite）。
         // 但"全部缺项"说明没有可引用的批次（只跑了冒烟/过滤批次，或跑错了夹具），按失败处理。
@@ -267,6 +276,93 @@ internal static class IndexGate
         }
 
         return null;
+    }
+
+    /// <summary>门禁输出：一行摘要 + 失败/漂移/判别力弱/离群四类明细。
+    /// <para>判别力弱（2026-10-04）只展开最差几条，总数在摘要里——本批实测 62 项超线，
+    /// 全展开会刷屏；它只标注不判定，比值超限与否仍走原逻辑。</para>
+    /// <para>第一个参数是计数五元组：比对 / 基线总数 / 缺项 / 非可比跳过 / 分母漂移。</para></summary>
+    private static void PrintVerdict(
+        (int Compared, int BaselineCount, int Missing, int Skipped, int FloorDrift) counts,
+        List<string> failures, List<string> driftWarnings, List<string> weakWarnings,
+        List<string> outliers)
+    {
+        Console.WriteLine($"[PerfGate] 结果库门禁: 比对 {counts.Compared} 项（基线 {counts.BaselineCount} 项，"
+            + $"缺项 {counts.Missing}，非可比跳过 {counts.Skipped}，分母漂移 {counts.FloorDrift}），"
+            + $"失败 {failures.Count}，判别力弱 {weakWarnings.Count} 项");
+        foreach (string failure in failures) Console.Error.WriteLine("  FAIL " + failure);
+        foreach (string drift in driftWarnings) Console.Error.WriteLine("  漂移 " + drift);
+        foreach (string weak in weakWarnings.Take(NoiseWarnPreview)) Console.Error.WriteLine("  弱 " + weak);
+        if (weakWarnings.Count > NoiseWarnPreview)
+        {
+            Console.Error.WriteLine(
+                $"  弱 …另有 {weakWarnings.Count - NoiseWarnPreview} 项（ErrorRatio > 5%，比值不作结论）");
+        }
+
+        foreach (string outlier in outliers) Console.Error.WriteLine("  离群 " + outlier);
+    }
+
+    /// <summary>判别力弱清单：基线里每个可比项的噪声水位超线则登记一条（只标注，不参与判定）。
+    /// 独立成一趟而非塞进判定循环——判定循环的认知复杂度已在上限附近，塞进去会触发 S3776。</summary>
+    private static List<string> CollectWeakDiscrimination(
+        IndexBaseline baseline, Dictionary<string, double> noise)
+    {
+        var weak = new List<string>();
+        foreach (IndexBaselineItem expected in baseline.Items)
+        {
+            if (expected.Incomparable)
+            {
+                continue;
+            }
+
+            NoteWeakDiscrimination(
+                Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier), noise, expected, weak);
+        }
+
+        return weak;
+    }
+
+    /// <summary>判别力弱标注：该键的噪声水位超线则登记一条（只标注，不参与判定）。</summary>
+    private static void NoteWeakDiscrimination(
+        string noiseKey, Dictionary<string, double> noise, IndexBaselineItem expected,
+        List<string> weakWarnings)
+    {
+        if (!noise.TryGetValue(noiseKey, out double errorRatio) || errorRatio <= NoiseLine)
+        {
+            return;
+        }
+
+        weakWarnings.Add(string.Create(CultureInfo.InvariantCulture,
+            $"{expected.Name}/{expected.Dialect}/{expected.Tier}: 最大 ErrorRatio {errorRatio * 100:0}%（>5%）——比值落在噪声带内，不作结论"));
+    }
+
+    /// <summary>逐键的噪声水位：同键三臂里最大的 <c>ErrorRatio</c>（标准误/均值）。
+    /// <para>与 <see cref="LoadCurrentItems"/> 不同，这里遍历**全部臂**——比值的噪声来自分子与
+    /// 分母两侧，只看被测臂会漏掉"地板很噪"的行（实测 SQLite/ADO_NET/Insert/2000 达 54.3%）。
+    /// 取各批次的最大值（噪声水位是上界性质，与"最新优先"的取值口径不同，故独立成表）。</para>
+    /// <para>子集批次跳过，与其它取数口径一致。未采集该指标的夹具（Benchmarks/DapperSuite）
+    /// 其 ErrorRatio 恒 0，不会触发标注。</para></summary>
+    private static Dictionary<string, double> LoadNoiseLevels(List<PerfResultEnvelope> batches)
+    {
+        var map = new Dictionary<string, double>(StringComparer.Ordinal);
+        foreach (PerfResultEnvelope run in batches)
+        {
+            if (PerfResultWriter.IsSubsetLabel(run.Label))
+            {
+                continue;
+            }
+
+            foreach (PerfResultItem item in run.Items)
+            {
+                string key = Key(run.Harness, item.Name, item.Dialect, item.Tier);
+                if (!map.TryGetValue(key, out double seen) || item.ErrorRatio > seen)
+                {
+                    map[key] = item.ErrorRatio;
+                }
+            }
+        }
+
+        return map;
     }
 
     /// <summary>当前比值表：**逐键取最新可得值**（批次按时间倒序，先到先得），同名键取最差比值。
