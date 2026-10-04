@@ -99,12 +99,30 @@ public sealed partial class DataSession<TProvider>
         TenantScopeEntry? entry = _tenantScopeEntry;
         // ITM-866：命中判定含 TenantId 值相等——并发 WithTenant 清缓存与本方法写回交错时
         // 条目可能短暂 stale（Type 相同但租户已变），值校验避免 stale 命中。
+        // N6（2026-10-04 step23 全量复读）：比较改经 TenantValueEquals（装箱原值的 Equals 值比较）
+        // ——原实现 `tenantId as string ?? tenantId.ToString()` 对非 string 租户每次调用
+        // 分配一个 ToString 串（T6 只消了 Scope 拼接，此路径是漏项）。
         if (entry is not null && entry.Type == entityType
-            && string.Equals(entry.TenantId, tenantId as string ?? tenantId.ToString(), StringComparison.Ordinal))
+            && TenantValueEquals(entry.TenantId, tenantId))
             return entry.Scope;
-        var created = new TenantScopeEntry(entityType, tenantId.ToString()!);
+        var created = new TenantScopeEntry(entityType, tenantId);
         _tenantScopeEntry = created;
         return created.Scope;
+    }
+
+    /// <summary>N6：租户值的命中比较——两侧均非 null（WithTenant 拒绝 null，From&lt;T&gt;
+    /// 在 tenantId 非 null 时才走到本路径）。
+    /// <para><b>语义与旧 ToString 形态的等价性</b>：string 走 Ordinal 值比较（逐位一致）；
+    /// int/long/Guid 等<b>装箱值类型</b>的 <c>Equals(object)</c> 是解箱值比较，与
+    /// ToString 形态比较同判定（这些类型的 ToString 对值单射）且零分配。自定义引用类型
+    /// 从"ToString 相等"变为虚 <c>Equals</c>（默认引用相等）——ITM-866 判别式的文档语义
+    /// 本就是"值相等"，新形态更贴合；租户键的既定用法（数值/Guid/string）不受影响。</para></summary>
+    private static bool TenantValueEquals(object cached, object current)
+    {
+        if (ReferenceEquals(cached, current)) return true;
+        return cached is string cachedString && current is string currentString
+            ? string.Equals(cachedString, currentString, StringComparison.Ordinal)
+            : cached.Equals(current);
     }
 
     // ─── CRUD ────────────────────────────────────────────
