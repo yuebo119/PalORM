@@ -72,6 +72,17 @@ internal interface IPerfImplementation
     /// 起（Measure 的 prepare 只在预热前与计时前各调一次，写操作在计时循环内累积，
     /// 故每轮必须用互不重叠的主键段）。</summary>
     Task<int> SessionBatchInsertsAsync(DbConnection conn, int offset, CancellationToken ct);
+
+    // ── 枚举列形态 + GetAllAsync 直查（2026-10-04 全量复读落地轮）──
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——事务内 N 次单行 INSERT 到 perf_enum，
+    /// 三臂同一语句形态（单行参数化 INSERT），唯一差异是绑定机械与枚举→字符串转换：
+    /// ADO 地板 = 单命令复用 + 逐行 Status.ToString()（行业常规写法）；
+    /// Dapper = 每行 ExecuteAsync + ToString()；PalORM = PL-2 复用命令 + EnumStr 生成式
+    /// switch（N2 零分配化的量化面）。</summary>
+    Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct);
+    /// <summary>全表直查（GetAllAsync 项）——PalORM 的 GetAllAsync 公共 API 路径（N5 组合句缓存）；
+    /// 地板与 QueryAll 同形（SELECT 全列 + 手工物化），Dapper 走 QueryAsync。</summary>
+    Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +158,15 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         {
             await ExecSetupAsync(conn, $"ANALYZE {table}", ct).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>枚举列形态表的重置（EnumInserts 项）——写专用表：DROP + CREATE 空表即可
+    /// （无读取项，无需播种；prepare 语义为预热前/计时前各一次，不进测量）。</summary>
+    internal static async Task SetupPerfEnumTableAsync(
+        Dialect dialect, DbConnection conn, CancellationToken ct)
+    {
+        await ExecSetupAsync(conn, Dataset.DropEnumTableSql(dialect), ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, Dataset.CreateEnumTableSql(dialect), ct).ConfigureAwait(false);
     }
 
     public async Task SetupAsync(DbConnection conn, int rows, CancellationToken ct)
@@ -1162,6 +1182,38 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     public Task TxHundredInsertsAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => TxTenInsertsAsync(conn, rows, ct);
 
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——地板写法：单命令跨行复用，每行只写
+    /// 参数 Value；Status 列是枚举→TEXT 的行业常规转换（逐行 ToString()，每行分配一个新串）。
+    /// 这正是 N2 前产品臂的形态，作为对照面保留。</summary>
+    public async Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+    {
+        string enumTable = Dataset.EnumTable(D);
+        await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandText = $"INSERT INTO {enumTable} ({Q("Id")}, {Q("Name")}, {Q("Status")}) "
+            + $"VALUES ({Dataset.P(0)}, {Dataset.P(1)}, {Dataset.P(2)})";
+        AddP(cmd, 0, 0L);
+        AddP(cmd, 1, "");
+        AddP(cmd, 2, "");
+        DbParameter pId = cmd.Parameters[0];
+        DbParameter pName = cmd.Parameters[1];
+        DbParameter pStatus = cmd.Parameters[2];
+        foreach (EnumRow row in rows)
+        {
+            pId.Value = row.Id;
+            pName.Value = row.Name;
+            pStatus.Value = row.Status.ToString();
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        await tran.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>全表直查（GetAllAsync 项）——地板与 QueryAll 同一写法（SELECT 全列 + 手工物化）：
+    /// 该臂的地板语义就是"全表 SELECT 物化"，API 形态差异只在 PalORM 侧（GetAllAsync vs 管线）。</summary>
+    public Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
+        => QueryAllAsync(conn, ct);
+
     public async Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -1771,6 +1823,26 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         ArgumentOutOfRangeException.ThrowIfLessThan(rows.Count, 11, nameof(rows));
         await TxInsertManyAsync(conn, rows, ct).ConfigureAwait(false);
     }
+
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——Dapper 的真实形态：每行一次
+    /// ExecuteAsync（无状态扩展，内部每次新命令）；TEXT 存储枚举的常规 Dapper 用法是
+    /// 匿名对象里显式 ToString() 转换（每行分配一个新串）。</summary>
+    public async Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+    {
+        string enumTable = Dataset.EnumTable(dialect.Dialect);
+        await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        foreach (EnumRow row in rows)
+        {
+            await conn.ExecuteAsync(
+                $"INSERT INTO {enumTable} ({C("Id")}, {C("Name")}, {C("Status")}) VALUES (@Id,@Name,@Status)",
+                new { row.Id, row.Name, Status = row.Status.ToString() }, tran).ConfigureAwait(false);
+        }
+        await tran.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>全表直查（GetAllAsync 项）——Dapper 的 QueryAsync 全表物化（与 QueryAll 同形）。</summary>
+    public Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
+        => QueryAllAsync(conn, ct);
 
     private async Task TxInsertManyAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
@@ -2394,6 +2466,49 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             Dialect.PostgreSql => TxInsertManyCoreAsync<PostgreSqlProvider>(conn, rows, ct),
             _ => throw UnsupportedDialect(D)
         };
+
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——N2 的量化面：单会话事务内逐行
+    /// InsertAsync（PL-2 命令/参数池第 3 次起复用，BindInsertValues 只写 Value），
+    /// 枚举列经 EnumStr 生成式 switch 返回驻留常量（零分配）；EnumRow 为显式主键 +
+    /// 全列可插入形态（InsertNoReturning），无读回往返。</summary>
+    public Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => EnumInsertsCoreAsync<SqliteProvider>(conn, rows, ct),
+            Dialect.MySql => EnumInsertsCoreAsync<MySqlProvider>(conn, rows, ct),
+            Dialect.PostgreSql => EnumInsertsCoreAsync<PostgreSqlProvider>(conn, rows, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static async Task EnumInsertsCoreAsync<TProvider>(
+        DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = Session<TProvider>(conn);
+        await session.WithTransaction(async _ =>
+        {
+            foreach (EnumRow row in rows)
+            {
+                await session.InsertAsync(row, ct).ConfigureAwait(false);
+            }
+        }, ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>全表直查（GetAllAsync 项）——产品的 GetAllAsync 公共 API（N5 组合句缓存
+    /// 的命中路径），与 QueryAll 臂（From&lt;T&gt;().ToListAsync() 管线）互为对照面。</summary>
+    public Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => GetAllCoreAsync<SqliteProvider>(conn, ct),
+            Dialect.MySql => GetAllCoreAsync<MySqlProvider>(conn, ct),
+            Dialect.PostgreSql => GetAllCoreAsync<PostgreSqlProvider>(conn, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static async Task<List<S1Row>> GetAllCoreAsync<TProvider>(
+        DbConnection conn, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => await Session<TProvider>(conn).GetAllAsync<S1Row>(ct).ConfigureAwait(false);
 
     public Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => D switch
