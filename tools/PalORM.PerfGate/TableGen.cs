@@ -12,9 +12,10 @@ namespace PalORM.PerfGate;
 /// 空格 + 色标紧贴百分比（无括号）；分配相对 ADO 用「P · D」记法；表四只列批量族 +
 /// GetAllAsync，列序 SQLite/PostgreSQL/MySQL，格值为裸比值。分配 1024 进制 KB/MB、
 /// 百分比取整（|p|&lt;0.5% 记 0%）、色标六档按显示值判定、倍数 ≥1.3 或 ≤0.7 加粗。</para>
-/// <para><b>行级标记 🔍（2026-10-04 用户裁决换标）</b>：比值 ≥1.50 或 ≤0.67 时操作名/格值
-/// 前置 🔍。语义 = 远离基准需人工判读（劣化 = 回归风险；优于地板 &gt;33% = 地板健全性待核），
-/// <b>不是警告</b>——远优方向同样标 🔍，故弃用 🚨（警示灯语义易误读为"出错"）。</para>
+/// <para><b>行级标记 📌（2026-10-05 用户定标，历经 🚨 → 🔍 → 📌 → 复核回 📌）</b>：比值
+/// ≥1.50 或 ≤0.67 时操作名/格值前置 📌。语义 = 标记待看：远离基准需人工判读（劣化 =
+/// 回归风险；优于地板 &gt;33% = 地板健全性待核），<b>不是警告</b>——远优方向同样标 📌；
+/// 弃用 🚨（警示灯语义易误读为"出错"）与 🔍（用户复判不够清晰）。</para>
 /// <para>为什么做成工具而非汇报时手工贴：四组表曾是每次跑测后最大的人工步骤（.ai 本地脚本原型），
 /// 固化后统一报告自动携带，人工只写"看点"与"行读法"的归因。</para></summary>
 internal static class TableGen
@@ -26,8 +27,8 @@ internal static class TableGen
     private static readonly string[] Dialects = ["SQLite", "MySQL", "PostgreSQL"];
     private static readonly string[] CrossOps = ["BulkInsert", "BulkUpdate", "BulkDelete", "UpsertBatch", "GetAllAsync"];
     private const string Floor = "ADO_NET";
-    /// <summary>行级 🔍：比值 ≥1.50 或 ≤0.67（远离基准需人工判读，非警告）。</summary>
-    private const string Flag = "🔍";
+    /// <summary>行级 📌：比值 ≥1.50 或 ≤0.67（标记待看：远离基准需人工判读，非警告）。</summary>
+    private const string Flag = "📌";
 
     public static int Run(string resultsDir, string? outPath)
     {
@@ -157,7 +158,7 @@ internal static class TableGen
         Dictionary<(string, string, int, string), PerfResultItem> ix, string dialect, string op, int tier)
     {
         if (CrossRatio(ix, dialect, op, tier) is not { } ratio) return "—";
-        // 裸比值（无 ×、无色标——三列全展开后逐格色标噪声大，越线格前缀 🔍 已足够指向需判读的格）
+        // 裸比值（无 ×、无色标——三列全展开后逐格色标噪声大，越线格前缀 📌 已足够指向需判读的格）
         string flag = IsFlagged(ratio) ? Flag : "";
         string cell = $"{flag}{ratio.ToString("F2", CultureInfo.InvariantCulture)}";
         double shown = Math.Round(ratio, 2);
