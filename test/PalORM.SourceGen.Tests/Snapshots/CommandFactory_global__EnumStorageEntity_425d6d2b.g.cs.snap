@@ -109,40 +109,21 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
     {
         {
             string[] column0 = (string[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = EnumStr_Status(((global::EnumStorageEntity)entities[start + i]).Status);
-            }
-        }
-        {
             int[] column1 = (int[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = (int)((global::EnumStorageEntity)entities[start + i]).Level;
-            }
-        }
-        {
             long[] column2 = (long[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = (long)((global::EnumStorageEntity)entities[start + i]).WideFlag;
-            }
-        }
-        {
             string[] column3 = (string[])arrays[arrayOffset + 3];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::EnumStorageEntity)entities[start + i]).FallbackStatus is { } v3)
-                {
-                    column3[i] = EnumStr_FallbackStatus((global::SnapshotOrderStatus)v3);
-                }
-            }
-        }
-        {
             long[] column4 = (long[])arrays[arrayOffset + 4];
             for (int i = 0; i < count; i++)
             {
-                column4[i] = ((global::EnumStorageEntity)entities[start + i]).Id;
+                var entity = (global::EnumStorageEntity)entities[start + i];
+                column0[i] = EnumStr_Status(entity.Status);
+                column1[i] = (int)entity.Level;
+                column2[i] = (long)entity.WideFlag;
+                if (entity.FallbackStatus is { } v3)
+                {
+                    column3[i] = EnumStr_FallbackStatus((global::SnapshotOrderStatus)v3);
+                }
+                column4[i] = entity.Id;
             }
         }
     }
@@ -167,37 +148,18 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
     {
         {
             long[] column0 = (long[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::EnumStorageEntity)entities[start + i]).Id;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = EnumStr_Status(((global::EnumStorageEntity)entities[start + i]).Status);
-            }
-        }
-        {
             int[] column2 = (int[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = (int)((global::EnumStorageEntity)entities[start + i]).Level;
-            }
-        }
-        {
             long[] column3 = (long[])arrays[arrayOffset + 3];
-            for (int i = 0; i < count; i++)
-            {
-                column3[i] = (long)((global::EnumStorageEntity)entities[start + i]).WideFlag;
-            }
-        }
-        {
             string[] column4 = (string[])arrays[arrayOffset + 4];
             for (int i = 0; i < count; i++)
             {
-                if (((global::EnumStorageEntity)entities[start + i]).FallbackStatus is { } v4)
+                var entity = (global::EnumStorageEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = EnumStr_Status(entity.Status);
+                column2[i] = (int)entity.Level;
+                column3[i] = (long)entity.WideFlag;
+                if (entity.FallbackStatus is { } v4)
                 {
                     column4[i] = EnumStr_FallbackStatus((global::SnapshotOrderStatus)v4);
                 }

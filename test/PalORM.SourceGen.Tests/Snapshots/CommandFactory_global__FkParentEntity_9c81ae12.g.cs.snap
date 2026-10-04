@@ -83,16 +83,12 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
     {
         {
             string[] column0 = (string[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::FkParentEntity)entities[start + i]).Name;
-            }
-        }
-        {
             long[] column1 = (long[])arrays[arrayOffset + 1];
             for (int i = 0; i < count; i++)
             {
-                column1[i] = ((global::FkParentEntity)entities[start + i]).Id;
+                var entity = (global::FkParentEntity)entities[start + i];
+                column0[i] = entity.Name;
+                column1[i] = entity.Id;
             }
         }
     }
@@ -114,16 +110,12 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
     {
         {
             long[] column0 = (long[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::FkParentEntity)entities[start + i]).Id;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
             for (int i = 0; i < count; i++)
             {
-                column1[i] = ((global::FkParentEntity)entities[start + i]).Name;
+                var entity = (global::FkParentEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.Name;
             }
         }
     }

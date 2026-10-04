@@ -101,33 +101,19 @@ internal static class CommandFactory_global__FkChildEntity_9e8ce632
     {
         {
             long[] column0 = (long[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::FkChildEntity)entities[start + i]).ParentId;
-            }
-        }
-        {
             long[] column1 = (long[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::FkChildEntity)entities[start + i]).RestrictRef;
-            }
-        }
-        {
             long?[] column2 = (long?[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::FkChildEntity)entities[start + i]).SetNullRef is { } v2)
-                {
-                    column2[i] = v2;
-                }
-            }
-        }
-        {
             long[] column3 = (long[])arrays[arrayOffset + 3];
             for (int i = 0; i < count; i++)
             {
-                column3[i] = ((global::FkChildEntity)entities[start + i]).Id;
+                var entity = (global::FkChildEntity)entities[start + i];
+                column0[i] = entity.ParentId;
+                column1[i] = entity.RestrictRef;
+                if (entity.SetNullRef is { } v2)
+                {
+                    column2[i] = v2;
+                }
+                column3[i] = entity.Id;
             }
         }
     }
@@ -151,30 +137,16 @@ internal static class CommandFactory_global__FkChildEntity_9e8ce632
     {
         {
             long[] column0 = (long[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::FkChildEntity)entities[start + i]).Id;
-            }
-        }
-        {
             long[] column1 = (long[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::FkChildEntity)entities[start + i]).ParentId;
-            }
-        }
-        {
             long[] column2 = (long[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = ((global::FkChildEntity)entities[start + i]).RestrictRef;
-            }
-        }
-        {
             long?[] column3 = (long?[])arrays[arrayOffset + 3];
             for (int i = 0; i < count; i++)
             {
-                if (((global::FkChildEntity)entities[start + i]).SetNullRef is { } v3)
+                var entity = (global::FkChildEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.ParentId;
+                column2[i] = entity.RestrictRef;
+                if (entity.SetNullRef is { } v3)
                 {
                     column3[i] = v3;
                 }

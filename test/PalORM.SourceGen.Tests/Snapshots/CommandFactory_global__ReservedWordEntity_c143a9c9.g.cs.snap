@@ -87,16 +87,12 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
     {
         {
             string[] column0 = (string[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::ReservedWordEntity)entities[start + i]).Value;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
             for (int i = 0; i < count; i++)
             {
-                column1[i] = ((global::ReservedWordEntity)entities[start + i]).Id;
+                var entity = (global::ReservedWordEntity)entities[start + i];
+                column0[i] = entity.Value;
+                column1[i] = entity.Id;
             }
         }
     }
@@ -118,16 +114,12 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
     {
         {
             string[] column0 = (string[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::ReservedWordEntity)entities[start + i]).Id;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
             for (int i = 0; i < count; i++)
             {
-                column1[i] = ((global::ReservedWordEntity)entities[start + i]).Value;
+                var entity = (global::ReservedWordEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.Value;
             }
         }
     }

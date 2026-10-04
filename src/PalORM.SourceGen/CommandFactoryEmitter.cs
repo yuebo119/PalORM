@@ -253,16 +253,27 @@ internal static class CommandFactoryEmitter
     private static void GenerateFillColumnArraysBody(
         TableModel model, StringBuilder sb, ColumnModel[] columns)
     {
+        // N3（2026-10-04 全量复读）：行主序形态——先逐列解引用数组（每列一次 cast，与原
+        // 形态相同的提升），行循环内先做一次 (T)entities[start+i] 强转存局部，再写全部列
+        // 数组。原列主序形态每列每行重复一次 IReadOnlyList<object> 接口调用 + 实体强转
+        //（C 列实体 = C×N 次，行主序降为 N 次），语义零变化：null 元素仍在首个列访问处
+        // NRE，可空守卫的 pattern 变量（v{index}）按列序命名保持唯一。
+        sb.AppendLine("        {");
         int index = 0;
         foreach (var col in columns)
         {
             string elementType = ArrayElementTypeFor(col);
-            string property = $"(({model.EntityTypeName})entities[start + i]).{col.EscapedPropertyName}";
             // 元素类型本身带 `[]`（byte[]列）时声明为 `byte[][]`（数组的数组）
-            sb.AppendLine($"        {{");
             sb.AppendLine($"            {elementType}[] column{index} = ({elementType}[])arrays[arrayOffset + {index}];");
-            sb.AppendLine($"            for (int i = 0; i < count; i++)");
-            sb.AppendLine($"            {{");
+            index++;
+        }
+        sb.AppendLine("            for (int i = 0; i < count; i++)");
+        sb.AppendLine("            {");
+        sb.AppendLine($"                var entity = ({model.EntityTypeName})entities[start + i];");
+        index = 0;
+        foreach (var col in columns)
+        {
+            string property = $"entity.{col.EscapedPropertyName}";
             if (NeedsNullGuard(col))
             {
                 // 可空**值类型**（含可空枚举）：模式匹配让编译器知道 v 非 null。可空枚举的
@@ -281,10 +292,10 @@ internal static class CommandFactoryEmitter
                 string nullForgiving = col.IsNullable ? "!" : "";
                 sb.AppendLine($"                column{index}[i] = {ArrayElementValueExpression(col, property)}{nullForgiving};");
             }
-            sb.AppendLine($"            }}");
-            sb.AppendLine($"        }}");
             index++;
         }
+        sb.AppendLine("            }");
+        sb.AppendLine("        }");
     }
 
     /// <summary>逐列元素类型数组（与 <see cref="GenerateFillColumnArraysBody"/> 同序同源）。</summary>

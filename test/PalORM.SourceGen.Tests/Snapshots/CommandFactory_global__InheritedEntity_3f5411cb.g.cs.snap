@@ -99,30 +99,16 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
     {
         {
             string[] column0 = (string[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::InheritedEntity)entities[start + i]).Name;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::InheritedEntity)entities[start + i]).CreatedBy;
-            }
-        }
-        {
             global::System.DateTimeOffset[] column2 = (global::System.DateTimeOffset[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = ((global::InheritedEntity)entities[start + i]).CreatedAt;
-            }
-        }
-        {
             long[] column3 = (long[])arrays[arrayOffset + 3];
             for (int i = 0; i < count; i++)
             {
-                column3[i] = ((global::InheritedEntity)entities[start + i]).Id;
+                var entity = (global::InheritedEntity)entities[start + i];
+                column0[i] = entity.Name;
+                column1[i] = entity.CreatedBy;
+                column2[i] = entity.CreatedAt;
+                column3[i] = entity.Id;
             }
         }
     }
@@ -146,30 +132,16 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
     {
         {
             long[] column0 = (long[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::InheritedEntity)entities[start + i]).Id;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::InheritedEntity)entities[start + i]).Name;
-            }
-        }
-        {
             string[] column2 = (string[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = ((global::InheritedEntity)entities[start + i]).CreatedBy;
-            }
-        }
-        {
             global::System.DateTimeOffset[] column3 = (global::System.DateTimeOffset[])arrays[arrayOffset + 3];
             for (int i = 0; i < count; i++)
             {
-                column3[i] = ((global::InheritedEntity)entities[start + i]).CreatedAt;
+                var entity = (global::InheritedEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.Name;
+                column2[i] = entity.CreatedBy;
+                column3[i] = entity.CreatedAt;
             }
         }
     }
