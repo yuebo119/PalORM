@@ -12,9 +12,10 @@ namespace PalORM.PerfGate;
 /// 空格 + 色标紧贴百分比（无括号）；分配相对 ADO 用「P · D」记法；表四只列批量族 +
 /// GetAllAsync，列序 SQLite/PostgreSQL/MySQL，格值为裸比值。分配 1024 进制 KB/MB、
 /// 百分比取整（|p|&lt;0.5% 记 0%）、色标六档按显示值判定、倍数 ≥1.3 或 ≤0.7 加粗。</para>
-/// <para><b>行级标记 🔍（2026-10-04 用户裁决换标）</b>：比值 ≥1.50 或 ≤0.67 时操作名/格值
-/// 前置 🔍。语义 = 远离基准需人工判读（劣化 = 回归风险；优于地板 &gt;33% = 地板健全性待核），
-/// <b>不是警告</b>——远优方向同样标 🔍，故弃用 🚨（警示灯语义易误读为"出错"）。</para>
+/// <para><b>行级标记 📌（2026-10-04 用户两轮裁决换标：🚨 → 🔍 → 📌）</b>：比值 ≥1.50 或
+/// ≤0.67 时操作名/格值前置 📌。语义 = 远离基准需人工判读（劣化 = 回归风险；优于地板 &gt;33% =
+/// 地板健全性待核），<b>不是警告</b>——远优方向同样标 📌，故弃用 🚨（警示灯语义易误读为"出错"）
+/// 与 🔍（用户复判仍不够清晰）；📌 = 标记待看，不预设方向。</para>
 /// <para>为什么做成工具而非汇报时手工贴：四组表曾是每次跑测后最大的人工步骤（.ai 本地脚本原型），
 /// 固化后统一报告自动携带，人工只写"看点"与"行读法"的归因。</para></summary>
 internal static class TableGen
@@ -26,8 +27,8 @@ internal static class TableGen
     private static readonly string[] Dialects = ["SQLite", "MySQL", "PostgreSQL"];
     private static readonly string[] CrossOps = ["BulkInsert", "BulkUpdate", "BulkDelete", "UpsertBatch", "GetAllAsync"];
     private const string Floor = "ADO_NET";
-    /// <summary>行级 🔍：比值 ≥1.50 或 ≤0.67（远离基准需人工判读，非警告）。</summary>
-    private const string Flag = "🔍";
+    /// <summary>行级 📌：比值 ≥1.50 或 ≤0.67（远离基准需人工判读，非警告，标记待看不预设方向）。</summary>
+    private const string Flag = "📌";
 
     public static int Run(string resultsDir, string? outPath)
     {
@@ -73,18 +74,52 @@ internal static class TableGen
         return 0;
     }
 
+    /// <summary>标签列的视觉合并状态（2026-10-04 用户裁决）：GFM 无 rowspan，重复的
+    /// 标签单元格（操作/方言/档）以留空表达合并——值变化才写。每张表独立重置。
+    /// 数据列不合并：逐行显式值避免"空 = 沿用上行"的误读。带行级 📌 的行强制写出
+    /// 操作名（否则标记随合并丢失，且标记本身就该把行身份顶到眼前）。</summary>
+    private sealed class LabelMerge
+    {
+        public string? Op;
+        public string? Dialect;
+        public int? Tier;
+
+        /// <summary>操作名单元格：与上行相同且本行无行级标记时留空。</summary>
+        public string OpCell(string op, bool flagged)
+        {
+            if (op == Op && !flagged) return "";
+            Op = op;
+            return flagged ? $"{Flag} {op}" : op;
+        }
+
+        public string DialectCell(string dialect)
+        {
+            if (dialect == Dialect) return "";
+            Dialect = dialect;
+            return dialect;
+        }
+
+        public string TierCell(int tier)
+        {
+            if (tier == Tier) return "";
+            Tier = tier;
+            return tier.ToString(CultureInfo.InvariantCulture);
+        }
+    }
+
     private static void Table1(StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier)
     {
         md.AppendLine("**一、CRUD 单行与读**");
         md.AppendLine();
         Header(md);
+        var merge = new LabelMerge();
         foreach (string op in CrudOps)
         {
             foreach (string dialect in Dialects)
             {
                 foreach (int tier in new[] { minTier, 20000 })
                 {
-                    Row(md, ix, dialect, op, tier, flaggable: true);
+                    Row(md, ix, merge, dialect, op, tier, flaggable: true);
                 }
             }
         }
@@ -96,13 +131,14 @@ internal static class TableGen
         md.AppendLine("**二、批量处理**");
         md.AppendLine();
         Header(md);
+        var merge = new LabelMerge();
         foreach (string op in BulkOps)
         {
             foreach (string dialect in Dialects)
             {
                 foreach (int tier in new[] { minTier, 20000 })
                 {
-                    Row(md, ix, dialect, op, tier, flaggable: true);
+                    Row(md, ix, merge, dialect, op, tier, flaggable: true);
                 }
             }
         }
@@ -114,11 +150,12 @@ internal static class TableGen
         md.AppendLine("**三、事务（仅最小档）**");
         md.AppendLine();
         Header(md);
+        var merge = new LabelMerge();
         foreach (string op in TxOps)
         {
             foreach (string dialect in Dialects)
             {
-                Row(md, ix, dialect, op, minTier, flaggable: true);
+                Row(md, ix, merge, dialect, op, minTier, flaggable: true);
             }
         }
     }
@@ -130,13 +167,20 @@ internal static class TableGen
         md.AppendLine();
         md.AppendLine("| 操作 | 档 | SQLite | PostgreSQL | MySQL |");
         md.AppendLine("|---|---|---|---|---|");
+        string? prevOp = null;
+        int? prevTier = null;
         foreach (string op in CrossOps)
         {
             foreach (int tier in new[] { minTier, 20000 })
             {
                 if (Get(ix, "SQLite", op, tier, "PalORM") is null && tier != minTier) continue;
+                bool flaggedRow = CrossFlag(ix, op, tier).Length > 0;
+                string opCell = op == prevOp && !flaggedRow ? "" : $"{CrossFlag(ix, op, tier)}{op}";
+                string tierCell = tier == prevTier ? "" : tier.ToString(CultureInfo.InvariantCulture);
+                prevOp = op;
+                prevTier = tier;
                 md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-                    $"| {CrossFlag(ix, op, tier)}{op} | {tier} | {CrossCell(ix, "SQLite", op, tier)} | "
+                    $"| {opCell} | {tierCell} | {CrossCell(ix, "SQLite", op, tier)} | "
                     + $"{CrossCell(ix, "PostgreSQL", op, tier)} | {CrossCell(ix, "MySQL", op, tier)} |"));
             }
         }
@@ -157,7 +201,7 @@ internal static class TableGen
         Dictionary<(string, string, int, string), PerfResultItem> ix, string dialect, string op, int tier)
     {
         if (CrossRatio(ix, dialect, op, tier) is not { } ratio) return "—";
-        // 裸比值（无 ×、无色标——三列全展开后逐格色标噪声大，越线格前缀 🔍 已足够指向需判读的格）
+        // 裸比值（无 ×、无色标——三列全展开后逐格色标噪声大，越线格前缀 📌 已足够指向需判读的格）
         string flag = IsFlagged(ratio) ? Flag : "";
         string cell = $"{flag}{ratio.ToString("F2", CultureInfo.InvariantCulture)}";
         double shown = Math.Round(ratio, 2);
@@ -180,7 +224,7 @@ internal static class TableGen
 
     private static void Row(
         StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix,
-        string dialect, string op, int tier, bool flaggable)
+        LabelMerge merge, string dialect, string op, int tier, bool flaggable)
     {
         PerfResultItem? ado = Get(ix, dialect, op, tier, Floor);
         PerfResultItem? dap = Get(ix, dialect, op, tier, "Dapper");
@@ -191,9 +235,9 @@ internal static class TableGen
         string pDap = dap is null || dap.MedianUs <= 0 ? "—" : RatioCell(pal.MedianUs / dap.MedianUs);
         string alloc = $"{FmtBytes(ado.AllocBytes)}/{FmtBytes(dap?.AllocBytes ?? 0)}/{FmtBytes(pal.AllocBytes)}";
         string allocDelta = AllocDeltaCell(pal, dap, ado);
-        string flag = flaggable && ado.MedianUs > 0 && IsFlagged(pal.MedianUs / ado.MedianUs) ? $"{Flag} " : "";
+        bool flagged = flaggable && ado.MedianUs > 0 && IsFlagged(pal.MedianUs / ado.MedianUs);
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"| {flag}{op} | {dialect} | {tier} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} "
+            $"| {merge.OpCell(op, flagged)} | {merge.DialectCell(dialect)} | {merge.TierCell(tier)} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} "
             + $"| {pAdo} | {pDap} | {alloc} | {allocDelta} |"));
     }
 
