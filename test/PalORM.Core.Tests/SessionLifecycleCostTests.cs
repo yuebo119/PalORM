@@ -22,8 +22,9 @@ namespace PalORM.Core.Tests;
 /// </list>
 /// <para><b>口径纪律</b>：并行测试套件<b>禁止一切墙钟断言</b>（B57/B74：同 run 比值实测漂 0.2~0.8、
 /// 并行污染加 10~50KB）。故本组只测两类确定性事实：① 命令复用与否的**结构后果**（抛弃式会话用完即弃）
-/// ② 分配量的 gross 级**上界**（真值数 KB，线设在 500KB，只挡 10× 级真实回归，
-/// 拒绝把微基准精度伪装成单测）。</para>
+/// ② 分配量的 gross 级**上界**（真值数 KB、gross 线 64KB——两条分配断言的污染对策不同：比值用例靠
+/// 双臂等量叠加免疫，gross 线用例靠 <c>[NotInParallel]</c> 串行免疫，见各用例注释），只挡 10× 级
+/// 真实回归，拒绝把微基准精度伪装成单测。</para>
 /// <para><b>与本文件相关的探针证据</b>：<c>.ai/perf-probe/PerOpAbDiag.cs</c>、
 /// <c>DisposePathDiag.cs</c>（本地工具，不入仓库）——后者实测会话释放库侧 424B/op
 /// （TCS + 异步状态机），不在热路径，判定不减。</para>
@@ -88,7 +89,16 @@ public sealed class SessionLifecycleCostTests
 
     /// <summary>长会话形态的绝对上界（宽松 gross 线）。它单独不可靠（并行污染），
     /// 但与上一条的**比值**断言互补：比值管"两形态没被拉平"，本条的宽松线管
-    /// "长会话形态自身没有数量级退化"（真值 1307 B/op，线设 64KB 只挡 gross 级）。</summary>
+    /// "长会话形态自身没有数量级退化"（真值 1307 B/op，线设 64KB 只挡 gross 级）。
+    /// <para><b>NotInParallel（2026-10-04 全量复读落地轮修复）</b>：<c>GC.GetTotalAllocatedBytes</c>
+    /// 是进程级计数，并行套件里其他用例的分配会被计入窗口——本会话实测 10 轮中 3 次偶发失败
+    /// （串行 <c>--maximum-parallel-tests 1</c> 全绿坐实归因），且重测试（宽表物化等）单次
+    /// 可分配 MB 级，抬高线到任何"污染包络"之上都只是降低频率而非消除（文档自述包络
+    /// 10~50KB 对 64KB 线余量本就过薄）。无参 <see cref="TUnit.Core.NotInParallelAttribute"/>
+    /// 使本用例与全部其他用例互斥（TUnit 官方语义：不指定约束键即与任何测试不并行），
+    /// 64KB 线由此获得注释原本声称的"污染免疫"。比值姊妹用例按设计双臂等量吃污染，
+    /// 保持并行不动。</para></summary>
+    [NotInParallel]
     [Test]
     public async Task LongLivedSession_GetAsync_StaysUnderGrossLine()
     {
@@ -103,9 +113,9 @@ public sealed class SessionLifecycleCostTests
             }
 
             double allocated = await MeasureAsync(() => session.GetAsync<LifecycleRow>(1L).AsTask());
-            // 真值 1307 B/op；64KB 是污染免疫的 gross 线（只挡 10× 级以上的真实回归）
+            // 真值 1307 B/op；串行后污染免疫的 gross 线（只挡 10× 级以上的真实回归）
             await Assert.That(allocated).IsLessThan(64_000)
-                .Because("长会话形态（命令已晋升）gross 上界：实测 1307 B/op");
+                .Because($"长会话形态（命令已晋升）gross 上界：本批实测 {allocated:F0} B/op（串行真值约 1307）");
         });
     }
 
