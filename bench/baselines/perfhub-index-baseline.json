@@ -1,7 +1,7 @@
 {
   "Schema": 1,
   "Date": "2026-10-04",
-  "Environment": "32 \u903B\u8F91\u6838 / .NET 11.0.0-rc.1.26425.128 / GC Workstation\uFF1B\u6761\u76EE\u9010\u952E\u5408\u5E76\u81EA\u975E\u5B50\u96C6\u6279\u6B21\uFF0C\u6700\u65B0\u8D21\u732E\u6279\u6B21 2026-10-04 14:13:45 \u002B08:00\uFF08\u5065\u5EB7\u5EA6 clean 14.3 %\uFF09",
+  "Environment": "32 \u903B\u8F91\u6838 / .NET 11.0.0-rc.1.26425.128 / GC Workstation\uFF1B\u6761\u76EE\u9010\u952E\u5408\u5E76\u81EA\u975E\u5B50\u96C6\u6279\u6B21\uFF0C\u6700\u65B0\u8D21\u732E\u6279\u6B21 2026-10-04 21:27:50 \u002B08:00\uFF08\u5065\u5EB7\u5EA6 clean 13.5 %\uFF09",
   "Thresholds": {
     "RatioDelta": 0.3
   },
@@ -15,7 +15,7 @@
       "Incomparable": false,
       "Note": "",
       "MedianUs": 0.4,
-      "MeanUs": 0.44215000000000326
+      "MeanUs": 0.4637000000000061
     },
     {
       "Harness": "perfhub",
@@ -25,52 +25,52 @@
       "Ratio": 0,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 3,
-      "MeanUs": 3.0833000000000124
+      "MedianUs": 2.9,
+      "MeanUs": 3.0228000000000455
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.6774193548387096,
+      "Ratio": 0.7191011235955056,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 6.3,
-      "MeanUs": 6.725499999999987
+      "MedianUs": 6.4,
+      "MeanUs": 6.808999999999978
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0289144572286144,
+      "Ratio": 0.9648744113029826,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1028.4,
-      "MeanUs": 1038.3719999999996
+      "MedianUs": 983.4,
+      "MeanUs": 992.6444999999997
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0854595757762067,
+      "Ratio": 1.0129140378548898,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1059.3,
-      "MeanUs": 1072.4194999999997
+      "MedianUs": 1027.5000000000002,
+      "MeanUs": 1034.1689999999999
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9829545454545454,
+      "Ratio": 0.9666666666666667,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 17.3,
-      "MeanUs": 18.01350000000001
+      "MedianUs": 17.4,
+      "MeanUs": 18.198000000000015
     },
     {
       "Harness": "perfhub",
@@ -81,392 +81,425 @@
       "Incomparable": false,
       "Note": "",
       "MedianUs": 7.2,
-      "MeanUs": 7.532500000000004
+      "MeanUs": 7.598500000000004
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9775419841238182,
+      "Ratio": 0.9853325706814839,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 2450.6,
-      "MeanUs": 2490.802999999999
+      "MedianUs": 2411.7,
+      "MeanUs": 2433.7119999999995
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9932403984242977,
+      "Ratio": 0.9762449349231966,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 17221.1,
-      "MeanUs": 17514.42200000001
+      "MedianUs": 16816.6,
+      "MeanUs": 17024.758500000007
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.7432969574329695,
+      "Ratio": 0.7533797980090707,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 5142.5,
-      "MeanUs": 5308.235999999999
+      "MedianUs": 5199.3,
+      "MeanUs": 5370.517999999999
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0928571428571427,
+      "Ratio": 1.0761061946902655,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 61.2,
-      "MeanUs": 61.66150000000002
+      "MedianUs": 60.8,
+      "MeanUs": 61.367499999999964
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1,
+      "Ratio": 0.992548435171386,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 135.6,
-      "MeanUs": 138.28950000000003
+      "MedianUs": 133.2,
+      "MeanUs": 134.1035
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.1162790697674418,
+      "Ratio": 1.1136363636363635,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 4.8,
-      "MeanUs": 5.097000000000004
+      "MedianUs": 4.9,
+      "MeanUs": 5.191
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9587791266257912,
+      "Ratio": 0.9907739837202143,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 16372.399999999998,
-      "MeanUs": 16553.1565
+      "MedianUs": 16419.8,
+      "MeanUs": 16548.896999999997
     },
     {
       "Harness": "perfhub",
       "Name": "InsertReturningId",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0218978102189782,
+      "Ratio": 1.003690036900369,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 28,
-      "MeanUs": 28.82099999999999
+      "MedianUs": 27.2,
+      "MeanUs": 28.325499999999966
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0146249410284636,
+      "Ratio": 0.9957884019067894,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 4516.4,
-      "MeanUs": 4571.550499999999
+      "MedianUs": 4303.2,
+      "MeanUs": 4341.882499999998
     },
     {
       "Harness": "perfhub",
       "Name": "IncludeJoin",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.8384710234278668,
+      "Ratio": 0.8278271918678526,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 136,
-      "MeanUs": 137.94599999999997
+      "MedianUs": 130.3,
+      "MeanUs": 133.39750000000004
     },
     {
       "Harness": "perfhub",
       "Name": "TxSingleInsert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0408163265306123,
+      "Ratio": 1.0360824742268042,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 20.4,
-      "MeanUs": 21.01400000000002
+      "MedianUs": 20.1,
+      "MeanUs": 20.700500000000023
     },
     {
       "Harness": "perfhub",
       "Name": "TxHundredInserts",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.2655771195097039,
+      "Ratio": 1.2473903966597077,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 247.8,
-      "MeanUs": 244.14900000000017
+      "MedianUs": 239,
+      "MeanUs": 238.15100000000007
     },
     {
       "Harness": "perfhub",
       "Name": "TxBulkInsert",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.9653370553222905,
+      "Ratio": 0.991937133008092,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 16737.4,
-      "MeanUs": 16986.750500000002
+      "MedianUs": 16977.5,
+      "MeanUs": 17190.805000000008
     },
     {
       "Harness": "perfhub",
       "Name": "TxRollback",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.447691314175008,
+      "Ratio": 1.366407366248611,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 896.7,
-      "MeanUs": 860.6654999999997
+      "MedianUs": 860.7,
+      "MeanUs": 849.5749999999999
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCount",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0811209439528024,
+      "Ratio": 1.0841949778434268,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 73.3,
-      "MeanUs": 73.74100000000001
+      "MedianUs": 73.4,
+      "MeanUs": 74.60949999999998
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCountWhere",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0985714285714285,
+      "Ratio": 1.1540697674418605,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 76.9,
-      "MeanUs": 77.61049999999996
+      "MedianUs": 79.4,
+      "MeanUs": 80.98749999999997
     },
     {
       "Harness": "perfhub",
       "Name": "TenantGetAll",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 0.7031878675332714,
+      "Ratio": 0.6975015812776724,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 454.4,
-      "MeanUs": 458.33499999999987
+      "MedianUs": 441.1,
+      "MeanUs": 445.9434999999999
     },
     {
       "Harness": "perfhub",
       "Name": "OwnedJsonQuery",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.1904761904761905,
+      "Ratio": 1.166394779771615,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 72.5,
-      "MeanUs": 72.936
+      "MedianUs": 71.5,
+      "MeanUs": 72.78349999999998
     },
     {
       "Harness": "perfhub",
       "Name": "SessionBatchInserts",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.0352828989192626,
+      "Ratio": 1.049222797927461,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 325.7,
-      "MeanUs": 380.0225
+      "MedianUs": 324,
+      "MeanUs": 375.7259999999999
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKeySession",
       "Dialect": "SQLite",
       "Tier": 2000,
-      "Ratio": 1.9907727797001153,
+      "Ratio": 2.0357142857142856,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 172.6,
-      "MeanUs": 172.7729999999998
+      "MedianUs": 176.7,
+      "MeanUs": 180.81999999999996
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "EnumInserts",
+      "Dialect": "SQLite",
+      "Tier": 2000,
+      "Ratio": 1.887762490948588,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 260.7,
+      "MeanUs": 249.90049999999994
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "GetAllAsync",
+      "Dialect": "SQLite",
+      "Tier": 2000,
+      "Ratio": 1.0148052464228936,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 1021.3000000000001,
+      "MeanUs": 1032.3325
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0387931034482758,
+      "Ratio": 1.010948905109489,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 24.1,
-      "MeanUs": 24.817000000000018
+      "MedianUs": 27.7,
+      "MeanUs": 28.523999999999976
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9937787996174542,
+      "Ratio": 1.0033978460437945,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 10287.3,
-      "MeanUs": 12423.048611111111
+      "MedianUs": 10099.4,
+      "MeanUs": 12414.579411764706
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0319068920470291,
+      "Ratio": 1.036738262234497,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 10426.8,
-      "MeanUs": 10450.409523809527
+      "MedianUs": 10435.6,
+      "MeanUs": 10481.9
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9982813623706873,
+      "Ratio": 1.0094948321203596,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 27067.9,
-      "MeanUs": 29212.276158940404
+      "MedianUs": 26410,
+      "MeanUs": 28474.82484076433
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9735485469827517,
+      "Ratio": 0.998701086012109,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 158707.3,
-      "MeanUs": 184406.82400000005
+      "MedianUs": 159772,
+      "MeanUs": 161248.216
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.5484040722684256,
+      "Ratio": 0.5744619752657357,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 38245.7,
-      "MeanUs": 49038.79
+      "MedianUs": 39009.3,
+      "MeanUs": 38973.58999999999
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.031496062992126,
+      "Ratio": 1.0234113712374582,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 26.2,
-      "MeanUs": 26.653500000000033
+      "MedianUs": 30.6,
+      "MeanUs": 31.701000000000008
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0067703127104646,
+      "Ratio": 1.0031932619032509,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 156213.2,
-      "MeanUs": 156068.60000000003
+      "MedianUs": 156482.8,
+      "MeanUs": 156349.504
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9972371831967042,
+      "Ratio": 1.0065582056896816,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 54972.6,
-      "MeanUs": 54904.67045454545
+      "MedianUs": 54562.4,
+      "MeanUs": 54164.18333333334
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCount",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.005656445370646,
+      "Ratio": 1.0010497900419917,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 675.6,
-      "MeanUs": 681.1734999999995
+      "MedianUs": 667.5,
+      "MeanUs": 672.8225000000002
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCountWhere",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.033643204957946,
+      "Ratio": 1.0382537596729449,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 700.5,
-      "MeanUs": 703.3215000000001
+      "MedianUs": 711.1,
+      "MeanUs": 713.0675000000001
     },
     {
       "Harness": "perfhub",
       "Name": "TenantGetAll",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0142192750172456,
+      "Ratio": 0.9884500661598152,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 4557.8,
-      "MeanUs": 4625.122999999998
+      "MedianUs": 4407.4,
+      "MeanUs": 4461.31
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "GetAllAsync",
+      "Dialect": "SQLite",
+      "Tier": 20000,
+      "Ratio": 0.9307084259899464,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 9961,
+      "MeanUs": 12217.482352941175
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0983606557377048,
+      "Ratio": 1.1166666666666667,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
       "MedianUs": 6700,
-      "MeanUs": 7116.636769532199
+      "MeanUs": 7104.568609518134
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.081967213114754,
+      "Ratio": 1.1,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
       "MedianUs": 6600,
-      "MeanUs": 28555.78411658992
+      "MeanUs": 30004.688146781955
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.081967213114754,
+      "Ratio": 1.1166666666666667,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
-      "MedianUs": 6600,
-      "MeanUs": 62978.14491710438
+      "MedianUs": 6700,
+      "MeanUs": 64405.656811989684
     },
     {
       "Harness": "perfhub",
@@ -477,7 +510,7 @@
       "Incomparable": false,
       "Note": "",
       "MedianUs": 0.6,
-      "MeanUs": 0.7217499999999976
+      "MeanUs": 0.7293500000000079
     },
     {
       "Harness": "perfhub",
@@ -488,447 +521,480 @@
       "Incomparable": false,
       "Note": "",
       "MedianUs": 2.2,
-      "MeanUs": 2.1515000000000333
+      "MeanUs": 2.143400000000028
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.8992872637124264,
+      "Ratio": 0.8600264725347453,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 290.2,
-      "MeanUs": 534.7079999999999
+      "MedianUs": 259.90000000000003,
+      "MeanUs": 500.8929999999999
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.037166537166537,
+      "Ratio": 1.0436424137710374,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1601.8,
-      "MeanUs": 2367.3850000000007
+      "MedianUs": 1630.9,
+      "MeanUs": 2379.4120000000003
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9846542697237769,
+      "Ratio": 1.0396456668525058,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1636.2,
-      "MeanUs": 2409.780999999999
+      "MedianUs": 1678.3,
+      "MeanUs": 2440.043
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9724043893253684,
+      "Ratio": 0.9661436291425223,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1497.6,
-      "MeanUs": 1521.2740000000006
+      "MedianUs": 1483.9,
+      "MeanUs": 1510.1879999999996
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0091556459816886,
+      "Ratio": 1.0055191445325975,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 297.6,
-      "MeanUs": 502.7895
+      "MedianUs": 291.5,
+      "MeanUs": 557.2
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.32537449880203334,
+      "Ratio": 0.3329633774505723,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 10606.2,
-      "MeanUs": 11313.0795
+      "MedianUs": 10800.1,
+      "MeanUs": 11488.035000000002
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9501032738627677,
+      "Ratio": 0.97917071748007,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 11683.8,
-      "MeanUs": 12814.21963190184
+      "MedianUs": 12086.1,
+      "MeanUs": 13215.508433734938
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9656160159993333,
+      "Ratio": 0.935327629468142,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 9270.3,
-      "MeanUs": 9363.476
+      "MedianUs": 9095.5,
+      "MeanUs": 9379.437999999998
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0200759631036354,
+      "Ratio": 1.0223178273729496,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 376,
-      "MeanUs": 469.0250000000002
+      "MedianUs": 380.2,
+      "MeanUs": 488.4059999999999
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0353089533417403,
+      "Ratio": 1.0303486870426173,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 492.6,
-      "MeanUs": 516.4795000000001
+      "MedianUs": 478.7,
+      "MeanUs": 491.1855
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0415557356175482,
+      "Ratio": 1.0184544405997693,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 899.8,
-      "MeanUs": 928.7795000000003
+      "MedianUs": 883,
+      "MeanUs": 890.5859999999999
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9793518964038409,
+      "Ratio": 0.9301401359735189,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 9362.8,
-      "MeanUs": 9825.645500000002
+      "MedianUs": 9385.3,
+      "MeanUs": 9857.217500000004
     },
     {
       "Harness": "perfhub",
       "Name": "InsertReturningId",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9483105137545534,
+      "Ratio": 0.9692355500310752,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1509.9,
-      "MeanUs": 1556.6130000000005
+      "MedianUs": 1559.5,
+      "MeanUs": 1607.228
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9488110747042491,
+      "Ratio": 0.9943543576868125,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 7210.3,
-      "MeanUs": 7194.670999999999
+      "MedianUs": 7168.4,
+      "MeanUs": 7158.735499999999
     },
     {
       "Harness": "perfhub",
       "Name": "IncludeJoin",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.7228555917480999,
+      "Ratio": 0.7645098583726743,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 532.6,
-      "MeanUs": 545.3935000000001
+      "MedianUs": 550.6,
+      "MeanUs": 570.4114999999999
     },
     {
       "Harness": "perfhub",
       "Name": "TxSingleInsert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9992223950233282,
+      "Ratio": 1.056512986694162,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 2056,
-      "MeanUs": 2151.8899999999994
+      "MedianUs": 2151.8,
+      "MeanUs": 2212.0340000000006
     },
     {
       "Harness": "perfhub",
       "Name": "TxHundredInserts",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0191799570399376,
+      "Ratio": 0.9829815635111988,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 53616,
-      "MeanUs": 57451.87674418605
+      "MedianUs": 54346.2,
+      "MeanUs": 57632.02558139535
     },
     {
       "Harness": "perfhub",
       "Name": "TxBulkInsert",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0091100096535275,
+      "Ratio": 1.035077123580505,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 12439.4,
-      "MeanUs": 13465.112000000001
+      "MedianUs": 13025.1,
+      "MeanUs": 13958.947500000004
     },
     {
       "Harness": "perfhub",
       "Name": "TxRollback",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0139798325353597,
+      "Ratio": 1.0348563545942384,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 286202.5,
-      "MeanUs": 283296.2428571429
+      "MedianUs": 276444.8,
+      "MeanUs": 276984.425
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCount",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9734617985125085,
+      "Ratio": 1.03743961352657,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 575.9,
-      "MeanUs": 577.1025000000003
+      "MedianUs": 601.3,
+      "MeanUs": 618.3735000000001
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCountWhere",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9738488689234719,
+      "Ratio": 1.0037910004944783,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 607,
-      "MeanUs": 617.0015000000001
+      "MedianUs": 609,
+      "MeanUs": 609.4335000000002
     },
     {
       "Harness": "perfhub",
       "Name": "TenantGetAll",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 0.9735323747595934,
+      "Ratio": 1.0190066857688636,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1063,
-      "MeanUs": 1078.9830000000006
+      "MedianUs": 1066.9,
+      "MeanUs": 1084.3445
     },
     {
       "Harness": "perfhub",
       "Name": "OwnedJsonQuery",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.1676234213547647,
+      "Ratio": 0.9625281039220585,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 406.8,
-      "MeanUs": 511.40049999999997
+      "MedianUs": 385.3,
+      "MeanUs": 476.44600000000014
     },
     {
       "Harness": "perfhub",
       "Name": "SessionBatchInserts",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.0259297583541298,
+      "Ratio": 0.9978064699532482,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 26968,
-      "MeanUs": 27436.38148148148
+      "MedianUs": 25974,
+      "MeanUs": 26371.966666666664
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKeySession",
       "Dialect": "MySQL",
       "Tier": 2000,
-      "Ratio": 1.1193121195004079,
+      "Ratio": 1.384888781187209,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 10700.4,
-      "MeanUs": 17426.22080536913
+      "MedianUs": 13715.8,
+      "MeanUs": 18180.85693430657
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "EnumInserts",
+      "Dialect": "MySQL",
+      "Tier": 2000,
+      "Ratio": 1.028883234714735,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 55520.7,
+      "MeanUs": 56705.63653846153
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "GetAllAsync",
+      "Dialect": "MySQL",
+      "Tier": 2000,
+      "Ratio": 1.1031205855913702,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 1718,
+      "MeanUs": 2357.3515000000007
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.0076590076590077,
+      "Ratio": 1.01693193362682,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 302.6,
-      "MeanUs": 501.7385
+      "MedianUs": 300.3,
+      "MeanUs": 494.7744999999999
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.8890836795101439,
+      "Ratio": 0.8233166661984888,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 13997.2,
-      "MeanUs": 17485.05138888889
+      "MedianUs": 11723.7,
+      "MeanUs": 15226.442028985506
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.8843587449386573,
+      "Ratio": 0.8850287139535958,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 11663.1,
-      "MeanUs": 12522.24454545454
+      "MedianUs": 11496.7,
+      "MeanUs": 11543.133076923077
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.3023255308648107,
+      "Ratio": 0.2994032022035611,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 97398.1,
-      "MeanUs": 97483.09411764707
+      "MedianUs": 97306.4,
+      "MeanUs": 98092.95853658537
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.1341491898867024,
+      "Ratio": 1.0279256797342762,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 108282.1,
-      "MeanUs": 108969.81081081081
+      "MedianUs": 100795,
+      "MeanUs": 101424.2825
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9788031795845488,
+      "Ratio": 0.9159067196665025,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 79595.1,
-      "MeanUs": 73475.69000000002
+      "MedianUs": 78480.2,
+      "MeanUs": 72555.29
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.0225988700564972,
+      "Ratio": 0.9693980085868275,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1086,
-      "MeanUs": 1122.4239999999995
+      "MedianUs": 1061.2,
+      "MeanUs": 1084.4944999999998
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.03198907061568,
+      "Ratio": 1.0385001012045698,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 88078.1,
-      "MeanUs": 88654.85681818183
+      "MedianUs": 88248,
+      "MeanUs": 88968.86444444444
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.0471542273614658,
+      "Ratio": 1.268237244039117,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 52994.8,
-      "MeanUs": 54117.17749999999
+      "MedianUs": 63663.1,
+      "MeanUs": 65652.5193548387
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCount",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9941842052226989,
+      "Ratio": 1.002492622410681,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 3453.1,
-      "MeanUs": 3459.218499999998
+      "MedianUs": 3499,
+      "MeanUs": 3517.8820000000014
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCountWhere",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9941757613695126,
+      "Ratio": 1.006278755074425,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 3652.9,
-      "MeanUs": 3673.9475000000025
+      "MedianUs": 3718.2,
+      "MeanUs": 3732.844500000001
     },
     {
       "Harness": "perfhub",
       "Name": "TenantGetAll",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.0983288552598287,
+      "Ratio": 1.0164927358297524,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 9115.8,
-      "MeanUs": 9068.818709677415
+      "MedianUs": 7451.4,
+      "MeanUs": 7923.6
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "GetAllAsync",
+      "Dialect": "MySQL",
+      "Tier": 20000,
+      "Ratio": 1.0359362334504187,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 11885.4,
+      "MeanUs": 17610.582692307697
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.0239002424662278,
+      "Ratio": 0.9856618872957651,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
       "MedianUs": 295599.99999999994,
-      "MeanUs": 552764.1791044783
+      "MeanUs": 548686.4069735764
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.974714236231382,
+      "Ratio": 1.94864954984995,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
-      "MedianUs": 570100,
-      "MeanUs": 501266.3712395456
+      "MedianUs": 584400,
+      "MeanUs": 515349.24324669485
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.73051610668514,
+      "Ratio": 1.6835611870623544,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
-      "MedianUs": 499599.99999999994,
-      "MeanUs": 531740.0311991752
+      "MedianUs": 504900.00000000006,
+      "MeanUs": 540627.3428331931
     },
     {
       "Harness": "perfhub",
@@ -939,7 +1005,7 @@
       "Incomparable": false,
       "Note": "",
       "MedianUs": 0.5,
-      "MeanUs": 0.5372500000000004
+      "MeanUs": 0.5603499999999935
     },
     {
       "Harness": "perfhub",
@@ -950,447 +1016,480 @@
       "Incomparable": false,
       "Note": "",
       "MedianUs": 1.8,
-      "MeanUs": 1.7633999999999792
+      "MeanUs": 1.6921999999999848
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9981285090455396,
+      "Ratio": 1.0084959093769665,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 320,
-      "MeanUs": 517.7065
+      "MedianUs": 320.5,
+      "MeanUs": 590.1375000000003
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9969669143222862,
+      "Ratio": 1.0006694747412759,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 3582.8,
-      "MeanUs": 3690.6579999999994
+      "MedianUs": 3587.3,
+      "MeanUs": 3709.6415000000015
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9045010178180996,
+      "Ratio": 1.0299407825557585,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 3599.1,
-      "MeanUs": 3706.5319999999997
+      "MedianUs": 3722,
+      "MeanUs": 3978.4405000000015
     },
     {
       "Harness": "perfhub",
       "Name": "Insert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9372037914691944,
+      "Ratio": 1.0130357495555995,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 474.6,
-      "MeanUs": 564.4980000000002
+      "MedianUs": 512.9,
+      "MeanUs": 533.8844999999998
     },
     {
       "Harness": "perfhub",
       "Name": "Update",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9504712622435779,
+      "Ratio": 0.939739114458938,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 514.3,
-      "MeanUs": 529.0660000000001
+      "MedianUs": 511.49999999999994,
+      "MeanUs": 533.474
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.4163255866109725,
+      "Ratio": 0.4138121624268883,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 5940.3,
-      "MeanUs": 6075.174999999999
+      "MedianUs": 5914.7,
+      "MeanUs": 6038.5495
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.1036962814517925,
+      "Ratio": 1.0835491943627344,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 4956.7,
-      "MeanUs": 5672.050500000003
+      "MedianUs": 4936,
+      "MeanUs": 5656.739499999999
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.5516600714216774,
+      "Ratio": 0.5166096839770837,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 2286.3,
-      "MeanUs": 2278.2719999999995
+      "MedianUs": 2236.3,
+      "MeanUs": 2240.0400000000004
     },
     {
       "Harness": "perfhub",
       "Name": "KeysetPage",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.2006516426825957,
+      "Ratio": 1.1623704491097528,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 442.2,
-      "MeanUs": 545.5665000000001
+      "MedianUs": 437.4,
+      "MeanUs": 538.7939999999998
     },
     {
       "Harness": "perfhub",
       "Name": "WhereIn",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.1243396226415094,
+      "Ratio": 1.0394239423942395,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 595.9,
-      "MeanUs": 612.73
+      "MedianUs": 577.4,
+      "MeanUs": 588.5754999999999
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.053738982087006,
+      "Ratio": 0.9749808526933877,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 370.6,
-      "MeanUs": 470.16750000000025
+      "MedianUs": 381.9,
+      "MeanUs": 485.41000000000014
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.8039910797039741,
+      "Ratio": 0.8290650051344409,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 34177.5,
-      "MeanUs": 34519.79150943398
+      "MedianUs": 34635.6,
+      "MeanUs": 34863.03027522935
     },
     {
       "Harness": "perfhub",
       "Name": "InsertReturningId",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0193728779708406,
+      "Ratio": 0.9963481436396835,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 510.3999999999999,
-      "MeanUs": 528.41
+      "MedianUs": 491.1,
+      "MeanUs": 580.0814999999999
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.7465522094005066,
+      "Ratio": 0.7310070950688639,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 5835.5,
-      "MeanUs": 6407.117499999999
+      "MedianUs": 5780,
+      "MeanUs": 5827.329000000002
     },
     {
       "Harness": "perfhub",
       "Name": "IncludeJoin",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.216611295681063,
+      "Ratio": 1.170727822901736,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 732.4,
-      "MeanUs": 742.6090000000002
+      "MedianUs": 735.1,
+      "MeanUs": 755.525
     },
     {
       "Harness": "perfhub",
       "Name": "TxSingleInsert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0089274795157148,
+      "Ratio": 1.039572192513369,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 825,
-      "MeanUs": 1325.1305
+      "MedianUs": 874.8,
+      "MeanUs": 1291.2035000000008
     },
     {
       "Harness": "perfhub",
       "Name": "TxHundredInserts",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0214497795639264,
+      "Ratio": 1.0068975766866795,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 51087.3,
-      "MeanUs": 56294.99032258065
+      "MedianUs": 49457.5,
+      "MeanUs": 53898.27307692307
     },
     {
       "Harness": "perfhub",
       "Name": "TxBulkInsert",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0006662763229623,
+      "Ratio": 1.0252455998647556,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 4956.2,
-      "MeanUs": 5623.896999999999
+      "MedianUs": 5458.1,
+      "MeanUs": 5491.065
     },
     {
       "Harness": "perfhub",
       "Name": "TxRollback",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0397650107930267,
+      "Ratio": 1.0234499984986527,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 294067.9,
-      "MeanUs": 293053.05000000005
+      "MedianUs": 293125.7,
+      "MeanUs": 294579
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCount",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9786503067484662,
+      "Ratio": 1.014709677419355,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 398.8,
-      "MeanUs": 531.1035000000002
+      "MedianUs": 393.2,
+      "MeanUs": 492.4744999999999
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCountWhere",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 0.9378677335843728,
+      "Ratio": 1.0541496598639455,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 398.5,
-      "MeanUs": 510.1825
+      "MedianUs": 387.4,
+      "MeanUs": 473.907
     },
     {
       "Harness": "perfhub",
       "Name": "TenantGetAll",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.043326626425218,
+      "Ratio": 1.7634534786253144,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 2333.4,
-      "MeanUs": 2066.0184999999988
+      "MedianUs": 2103.8,
+      "MeanUs": 2092.2044999999994
     },
     {
       "Harness": "perfhub",
       "Name": "OwnedJsonQuery",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.1719163968207242,
+      "Ratio": 1.0353029544316474,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 398.1,
-      "MeanUs": 491.91600000000045
+      "MedianUs": 413.5,
+      "MeanUs": 516.3175
     },
     {
       "Harness": "perfhub",
       "Name": "SessionBatchInserts",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0077922077922077,
+      "Ratio": 0.9652814870206174,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 931.2,
-      "MeanUs": 940.4659999999997
+      "MedianUs": 903.6,
+      "MeanUs": 917.1999999999997
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKeySession",
       "Dialect": "PostgreSQL",
       "Tier": 2000,
-      "Ratio": 1.0256480905634235,
+      "Ratio": 0.9496116107931316,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 13028.5,
-      "MeanUs": 18506.031851851843
+      "MedianUs": 13007.4,
+      "MeanUs": 18179.965384615378
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "EnumInserts",
+      "Dialect": "PostgreSQL",
+      "Tier": 2000,
+      "Ratio": 0.9814072038890114,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 49400.8,
+      "MeanUs": 54632.8588235294
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "GetAllAsync",
+      "Dialect": "PostgreSQL",
+      "Tier": 2000,
+      "Ratio": 0.9834776413853573,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 3589.3,
+      "MeanUs": 3702.496499999997
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9937166195413132,
+      "Ratio": 1.0404040404040404,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 316.3,
-      "MeanUs": 511.37200000000007
+      "MedianUs": 319.3,
+      "MeanUs": 501.89000000000004
     },
     {
       "Harness": "perfhub",
       "Name": "QueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.7297386260890579,
+      "Ratio": 1.0306297276192031,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 17513.8,
-      "MeanUs": 18227.808333333327
+      "MedianUs": 17685.4,
+      "MeanUs": 18196.404651162793
     },
     {
       "Harness": "perfhub",
       "Name": "StreamAll",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.7287800101271755,
+      "Ratio": 1.008533896426613,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 17415,
-      "MeanUs": 17461.475862068968
+      "MedianUs": 17289.7,
+      "MeanUs": 17394.82125
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.5966616281347786,
+      "Ratio": 0.5688829873726233,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 99591,
-      "MeanUs": 100747.53243243246
+      "MedianUs": 92711.6,
+      "MeanUs": 93734.1595238095
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.8244396034602514,
+      "Ratio": 1.000376854953143,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 26113.3,
-      "MeanUs": 29718.776470588236
+      "MedianUs": 26014.5,
+      "MeanUs": 27856.08389261746
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.39825658770295447,
+      "Ratio": 0.3930771440847064,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 14962.5,
-      "MeanUs": 14364.82
+      "MedianUs": 14912.6,
+      "MeanUs": 14371.32
     },
     {
       "Harness": "perfhub",
       "Name": "Count",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0182012847965738,
+      "Ratio": 1.050279769879423,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1331.4,
-      "MeanUs": 1349.5605000000005
+      "MedianUs": 1332.7,
+      "MeanUs": 1346.9135
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.7661111990611956,
+      "Ratio": 0.8305773597283055,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 365851.5,
-      "MeanUs": 363775.3909090909
+      "MedianUs": 372492.6,
+      "MeanUs": 372469.01999999996
     },
     {
       "Harness": "perfhub",
       "Name": "WideQueryAll",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0157809216445035,
+      "Ratio": 0.7350084153329257,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 58825.6,
-      "MeanUs": 61948.96060606062
+      "MedianUs": 58300.5,
+      "MeanUs": 58136.652941176464
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCount",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9913119026933102,
+      "Ratio": 1.0429482984293195,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1255.1,
-      "MeanUs": 1276.2315000000003
+      "MedianUs": 1274.9,
+      "MeanUs": 1290.5575000000006
     },
     {
       "Harness": "perfhub",
       "Name": "TenantCountWhere",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.005053966078465,
+      "Ratio": 1.0695798617266443,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 1173.3,
-      "MeanUs": 1205.4539999999997
+      "MedianUs": 1206.7,
+      "MeanUs": 1223.0405000000005
     },
     {
       "Harness": "perfhub",
       "Name": "TenantGetAll",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9996497961813776,
+      "Ratio": 1.0286643903404593,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 7136.2,
-      "MeanUs": 7320.478000000001
+      "MedianUs": 8314.9,
+      "MeanUs": 8213.738500000005
+    },
+    {
+      "Harness": "perfhub",
+      "Name": "GetAllAsync",
+      "Dialect": "PostgreSQL",
+      "Tier": 20000,
+      "Ratio": 1.015737981380091,
+      "Incomparable": false,
+      "Note": "",
+      "MedianUs": 17587.3,
+      "MeanUs": 18103.324324324327
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t1)",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0128126906650399,
+      "Ratio": 0.969553650605971,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
-      "MedianUs": 332000,
-      "MeanUs": 572493.9522998291
+      "MedianUs": 328000,
+      "MeanUs": 577586.2127659583
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t4)",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.7620500305064066,
+      "Ratio": 1.6769139816730716,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
-      "MedianUs": 577600,
-      "MeanUs": 577429.9741787416
+      "MedianUs": 567300.0000000001,
+      "MeanUs": 573607.0681931291
     },
     {
       "Harness": "perfhub",
       "Name": "Concurrent_Mixed80_20 (t8)",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.7461866992068338,
+      "Ratio": 1.6754360035471476,
       "Incomparable": true,
       "Note": "\u5E76\u53D1\u9879\uFF1A\u6BD4\u503C\u53D7\u7EBF\u7A0B\u8C03\u5EA6\u4E0E\u670D\u52A1\u5668\u65F6\u6BB5\u652F\u914D\uFF0C\u5355\u70B9\u8DF3\u53D8\u53EF\u8FBE 9\u00D7\uFF0C\u4E0D\u53C2\u4E0E\u6BD4\u503C\u95E8\u7981\uFF08\u7EDD\u5BF9\u503C\u7167\u767B\uFF09",
-      "MedianUs": 572400,
-      "MeanUs": 691309.9665494444
+      "MedianUs": 566800,
+      "MeanUs": 679072.8968001669
     },
     {
       "Harness": "perfhub",
