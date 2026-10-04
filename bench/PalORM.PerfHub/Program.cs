@@ -723,6 +723,34 @@ internal static class Program
                     throw new InvalidOperationException(
                         $"GetByKeySession 结果不等价：命中 {found}（期望 {SessionLoopCount}）");
             }, ct).ConfigureAwait(false);
+
+        // ── 枚举列形态 + GetAllAsync 直查（2026-10-04 全量复读落地轮：N2/N5 的量化臂）──
+        // 末位原则（同 GetByKeySession 的顺序效应登记）：排在既有 CRUD 序列之后，只影响
+        // 其后的并发段（并发用独立池化连接，不受共用连接态影响）。
+        // EnumInserts：事务内固定 100 行逐条插入（行数不进测量，只最小档），主键段按轮错开
+        //（prepare 在预热前/计时前各一次，探针 i=0 与计时轮 i≥1 的段互不重叠）。
+        Task enumReset(DbConnection c)
+        {
+            return AdoNetImpl.SetupPerfEnumTableAsync(info.Dialect, c, ct);
+        }
+
+        await MeasAsync(info, impl, "EnumInserts", "Transaction", rows, conn, results, scale, enumReset,
+            async (im, c, i) =>
+            {
+                await im.EnumInsertsAsync(
+                    c, Dataset.SeedEnumRows(100, (long)i * 100), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+
+        // GetAllAsync 直查（N5 组合句缓存）：与 QueryAll 臂互为对照（直查 API vs From<T>()
+        // 管线），地板同形（SELECT 全列物化）；reset 恢复 perf_s1 恰好 rows 行。
+        await MeasAsync(info, impl, "GetAllAsync", "CRUD", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                List<S1Row> list = await im.GetAllAsync(c, ct).ConfigureAwait(false);
+                if (list.Count != rows)
+                    throw new InvalidOperationException(
+                        $"GetAllAsync 结果不等价：{list.Count} 行（期望 {rows}）");
+            }, ct).ConfigureAwait(false);
     }
 
     /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。
@@ -793,7 +821,9 @@ internal static class Program
         "BuildGetByKeySql" or "BuildComplexQuerySql" or "InsertReturningId" or "IncludeJoin"
         or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert"
         or "OwnedJsonQuery" or "SessionBatchInserts"
-        or "Insert" or "Update" or "KeysetPage" or "WhereIn" or "GetByKeySession");
+        or "Insert" or "Update" or "KeysetPage" or "WhereIn" or "GetByKeySession"
+        // EnumInserts：事务内固定 100 行/轮（与 TxHundredInserts 同判据——行数不进测量）
+        or "EnumInserts");
 
     /// <summary>该项是否在给定档位测量。</summary>
     private static bool RunsAtTier(string operation, int rows)
@@ -810,7 +840,8 @@ internal static class Program
         "KeysetPage", "WhereIn", "Count",
         "UpsertBatch", "InsertReturningId", "WideQueryAll", "IncludeJoin",
         "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback",
-        "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts"
+        "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts",
+        "EnumInserts", "GetAllAsync"
     ];
 
     /// <summary>PL-4：比值不计比的项。地板这两项直接返回插值字面量（见
