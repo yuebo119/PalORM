@@ -733,10 +733,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private string GetDefaultFilterFragment<T>() where T : class, new()
         => GetDefaultFilterForms<T>().AndFragment;
 
-    /// <summary>独立 WHERE 子句：" WHERE cond" 或空。</summary>
-    private string GetDefaultFilterWhereClause<T>() where T : class, new()
-        => GetDefaultFilterForms<T>().WhereClause;
-
     /// <summary>为默认过滤条件绑定参数。任何拼接了 GetDefaultFilter* 结果的命令都必须调用。</summary>
     private void BindDefaultFilterParameters<T>(DbCommand cmd) where T : class, new()
     {

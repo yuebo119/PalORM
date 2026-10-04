@@ -693,6 +693,28 @@ public sealed partial class DataSession<TProvider>
         return built;
     }
 
+    /// <summary>取 GetAllAsync 的完整 SQL（含表名/过滤），走共享缓存（N5，2026-10-04 全量复读）。
+    /// 键 = (Type, Dialect, 过滤形态)——<see cref="DefaultFilterForms"/> 的值已编码
+    /// ignoreFilters/租户/软删的全部有效组合（Empty = 裸全表句），同值恒同 SQL；形态由
+    /// 调用方在实例侧求值传入（会话态）。
+    /// <b>v5.6 口径</b>：命中走 <c>TryGetValue</c>（无闭包分配），未命中才构建并 <c>TryAdd</c>。</summary>
+    private static string GetGetAllSql<T>(
+        DefaultFilterForms forms, IReadOnlyList<string> columnNames, string tableName)
+        where T : class, new()
+    {
+        (Type, SqlDialect, DefaultFilterForms) key = (typeof(T), TProvider.Dialect, forms);
+        if (DataSessionCache.GetAllSqlCache.TryGetValue(key, out string? cached))
+            return cached;
+        string selectColumns = GetSelectColumns<T>(columnNames);
+        // S2077 报备（M1-5，与原调用点同）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
+        // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
+#pragma warning disable S2077
+        string built = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{forms.WhereClause}";
+#pragma warning restore S2077
+        DataSessionCache.GetAllSqlCache.TryAdd(key, built);
+        return built;
+    }
+
     /// <summary>按主键查询。</summary>
     /// <remarks>step8 连接治理（2026-09-30）：并行读作用域内改走读连接池（原为响亮拒绝，
     /// 修复链：Enter 门禁必抛 → EnterReadOnly 放行 → 复用槽串扰 + 主连接并发 NRE 双缺陷
@@ -785,13 +807,10 @@ public sealed partial class DataSession<TProvider>
         return await ExecuteReadPipelineAsync(async token =>
         {
             await using DbCommand cmd = CreateCommand();
-            // v4.1：缓存 selectColumns
-            string selectColumns = GetSelectColumns<T>(columnNames);
-            // S2077 报备（M1-5）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
-            // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
-#pragma warning disable S2077
-            cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
-#pragma warning restore S2077
+            // N5（2026-10-04 全量复读）：完整 SQL 走 (Type, Dialect, 过滤形态) 缓存——
+            // 原每次调用 1 次 QuoteIdentifier + 全句插值；GetByKeySql/CountComposed 同款模式。
+            // 过滤形态在实例侧求值后传入（ignoreFilters/租户是会话态）。
+            cmd.CommandText = GetGetAllSql<T>(GetDefaultFilterForms<T>(), columnNames, tableName);
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindDefaultFilterParameters<T>(cmd);
 
