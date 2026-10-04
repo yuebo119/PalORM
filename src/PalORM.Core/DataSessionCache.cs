@@ -27,6 +27,12 @@ internal static class DataSessionCache
     /// （ITM-640：第四元实义为 !ignoreFilters——key 由 DataSession.Crud 传入，注释修正）。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> GetByKeySqlCache = new();
 
+    /// <summary>N5（2026-10-04 全量复读）：per-(Type, Dialect, 过滤形态) 缓存 GetAllAsync 完整 SQL——
+    /// GetByKeySql/CountBaseSql/聚合后缀此前都已有组合句缓存，GetAllAsync 每次调用仍付 1 次
+    /// QuoteIdentifier + 全句插值（约 150B）。键含 <see cref="DefaultFilterForms"/>：其值已编码
+    /// ignoreFilters/租户/软删的全部有效组合（Empty 对应裸全表句），同值恒同 SQL。</summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect, DefaultFilterForms), string> GetAllSqlCache = new();
+
     /// <summary>per-Dialect 缓存租户过滤追加片段（" AND {quote(tenant_id)} = @__tenant0"，
     /// M1，v5.6.0）——片段只含方言标识符与 const 参数名，方言内恒定；原先四处调用点每次
     /// 2 次 QuoteIdentifier + 插值。供 BulkDeleteAsync（语句随批次占位符变化，仅后缀可缓存）
