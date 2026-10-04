@@ -19,6 +19,10 @@ internal interface IPerfImplementation
 
     Task SetupAsync(DbConnection conn, int rows, CancellationToken ct);
     Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct);
+    /// <summary>长会话循环直查（GetByKeySession 项）——单会话内循环 N 次按键直查并返回命中数。
+    /// N 固定 32（覆盖 A9 晋升阈值 3 且摊销会话构造）；三臂契约：ADO 命令复用、Dapper 无状态
+    /// 循环、PalORM 单 DataSession（A9 复用槽生效）——"推荐用法"的对照面（step13 §6.2 挂账）。</summary>
+    Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct);
     Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct);
     Task<long> StreamAllAsync(DbConnection conn, Func<S1Row, ValueTask> onRow, CancellationToken ct);
     Task InsertAsync(DbConnection conn, S1Row row, CancellationToken ct);
@@ -233,6 +237,24 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         AddP(cmd, 0, id);
         await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await r.ReadAsync(ct).ConfigureAwait(false) ? Map(r) : null;
+    }
+
+    /// <summary>长会话最优形态：单命令跨查询复用，只改参数值（GetByKeySession 项）。</summary>
+    public async Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+    {
+        int found = 0;
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {Cols} FROM {T} WHERE {Q("Id")} = {Dataset.P(0)}";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = Dataset.P(0);
+        cmd.Parameters.Add(p);
+        foreach (long id in ids)
+        {
+            p.Value = id;
+            await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (await r.ReadAsync(ct).ConfigureAwait(false)) found++;
+        }
+        return found;
     }
 
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
@@ -1352,6 +1374,21 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         => await conn.QueryFirstOrDefaultAsync<S1Row>(
             $"SELECT {Cols} FROM {T} WHERE {C("Id")} = @id", new { id }).ConfigureAwait(false);
 
+    /// <summary>长会话形态（GetByKeySession 项）——Dapper 无状态扩展方法的最优循环：每查询
+    /// 一次调用，无命令复用概念（Dapper 内部每次新命令），这是它的真实形态而非让步。</summary>
+    public async Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+    {
+        int found = 0;
+        foreach (long id in ids)
+        {
+            if (await conn.QueryFirstOrDefaultAsync<S1Row>(
+                    $"SELECT {Cols} FROM {T} WHERE {C("Id")} = @id", new { id }).ConfigureAwait(false)
+                is not null)
+                found++;
+        }
+        return found;
+    }
+
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
     {
         IEnumerable<S1Row> rows = await conn.QueryAsync<S1Row>($"SELECT {Cols} FROM {T}").ConfigureAwait(false);
@@ -1880,6 +1917,33 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     private static Task<S1Row?> GetByKeyCoreAsync<TProvider>(DbConnection conn, long id, CancellationToken ct)
         where TProvider : IDbProvider, new()
         => Session<TProvider>(conn).GetAsync<S1Row>(id, ct).AsTask();
+
+    /// <summary>长会话推荐用法（GetByKeySession 项）——单 DataSession 循环 GetAsync：
+    /// A9 读查询命令复用槽在第 3 次同形态查询后晋升（ReusableQuerySlot.PromotionThreshold=3），
+    /// 会话构造 968B 被循环摊销。这是产品对"同会话重复查询"场景的推荐形态，
+    /// 与 GetByKey 项的"每操作一新会话"互为对照面（step13 §6.2 挂账清理）。</summary>
+    private static async Task<int> GetByKeySessionCoreAsync<TProvider>(
+        DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = Session<TProvider>(conn);
+        int found = 0;
+        foreach (long id in ids)
+        {
+            if (await session.GetAsync<S1Row>(id, ct).ConfigureAwait(false) is not null)
+                found++;
+        }
+        return found;
+    }
+
+    public Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => GetByKeySessionCoreAsync<SqliteProvider>(conn, ids, ct),
+            Dialect.MySql => GetByKeySessionCoreAsync<MySqlProvider>(conn, ids, ct),
+            Dialect.PostgreSql => GetByKeySessionCoreAsync<PostgreSqlProvider>(conn, ids, ct),
+            _ => throw UnsupportedDialect(D)
+        };
 
     public Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
         => D switch
