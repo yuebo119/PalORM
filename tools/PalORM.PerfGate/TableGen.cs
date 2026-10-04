@@ -8,7 +8,7 @@ namespace PalORM.PerfGate;
 /// <summary>四组表生成器（性能测试结果输出规范的固定表格组：CRUD 单行与读 / 批量 / 事务 /
 /// 跨方言比值）。数据源 = 最新非子集 perfhub 批次的信封（MedianUs/AllocBytes/Ratio 逐项）。
 /// <para>格式口径与规范一致（2026-10-04 step23 用户改版）：明细表（一/二/三）每行展开
-/// 「方言」列覆盖三方言；时延数值不带单位（µs 隐含，一位小数）；比值列 = 裸倍数两位小数 +
+/// 「方言」列覆盖三方言；时延数值自带单位（µs/ms，2026-10-05 用户定标）；比值列 = 裸倍数两位小数 +
 /// 空格 + 色标紧贴百分比（无括号）；分配相对 ADO 用「P · D」记法；表四只列批量族 +
 /// GetAllAsync，列序 SQLite/PostgreSQL/MySQL，格值为裸比值。分配 1024 进制 KB/MB、
 /// 百分比取整（|p|&lt;0.5% 记 0%）、色标六档按显示值判定、倍数 ≥1.3 或 ≤0.7 加粗。</para>
@@ -265,14 +265,17 @@ internal static class TableGen
         };
     }
 
-    /// <summary>时延裸数值（µs 隐含，不带单位）：≥1 一位小数，&lt;1 三位小数（当前夹具面最小中位 ~6µs，子 1µs 为防御）。</summary>
+    /// <summary>时延数值自带单位（2026-10-05 用户定标恢复带单位）：µs（≥1 一位小数，&lt;1 三位小数）
+    /// 或 ms（≥1000 换算两位小数）——与 AGENTS.md 口径"单元格数值自带单位"一致
+    /// （当前夹具面最小中位 ~6µs，子 1µs 为防御）。</summary>
     private static string FmtUs(double? medianUs)
     {
         if (medianUs is null or <= 0) return "—";
         double us = medianUs.Value;
+        if (us >= 1000) return (us / 1000).ToString("F2", CultureInfo.InvariantCulture) + " ms";
         return us < 1
-            ? us.ToString("F3", CultureInfo.InvariantCulture)
-            : us.ToString("F1", CultureInfo.InvariantCulture);
+            ? us.ToString("F3", CultureInfo.InvariantCulture) + " µs"
+            : us.ToString("F1", CultureInfo.InvariantCulture) + " µs";
     }
 
     private static string FmtBytes(double bytes)
