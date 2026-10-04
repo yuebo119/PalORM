@@ -175,7 +175,9 @@ internal static class TableGen
 
     private static void Header(StringBuilder md)
     {
-        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | P/Dapper（倍数±%） | 分配（A/D/P） | 分配相对 ADO（D/P） |");
+        // 列名顺序与单元格「P · D」记法一致（PalORM 无前缀在前、Dapper 带 D 前缀在后）——
+        // 原（D/P）是 fa1a401 改版时遗留的旧列名，与单元格顺序相反（2026-10-05 用户指正）。
+        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | P/Dapper（倍数±%） | 分配（A/D/P） | 分配相对 ADO（P · D） |");
         md.AppendLine("|---|---|---|---|---|---|---|---|---|---|");
     }
 
