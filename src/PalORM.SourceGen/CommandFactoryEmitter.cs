@@ -182,6 +182,25 @@ internal static class CommandFactoryEmitter
         sb.AppendLine("    {");
         GenerateHasDefaultKeyBody(model, sb);
         sb.AppendLine("    }");
+        // N2（2026-10-04 全量复读）：字符串存储枚举的写路径转换辅助——读侧 Parse_X 的
+        // 对称物。生成式 switch 返回驻留字符串常量（成员名），替代此前所有写形态
+        //（参数池/建参数/数组元素/COPY sink）逐行 entity.X.ToString() 的每枚举列每行
+        // 一次字符串分配。未定义数值与别名成员落 _ => ToString() 兜底（行为与旧形态一致；
+        // 全别名枚举的写臂为空，仅剩兜底臂——switch 仍合法且语义即旧形态）。
+        foreach (var col in model.Columns)
+        {
+            if (col.EnumStorage != EnumStorageKind.AsString) continue;
+            sb.AppendLine();
+            sb.AppendLine($"    private static string EnumStr_{col.PropertyName}({col.EnumClrTypeName} value)");
+            sb.AppendLine("    {");
+            sb.AppendLine("        return value switch");
+            sb.AppendLine("        {");
+            if (!string.IsNullOrEmpty(col.EnumWriteSwitchBody))
+                sb.Append("            ").AppendLine(col.EnumWriteSwitchBody);
+            sb.AppendLine("            _ => value.ToString()");
+            sb.AppendLine("        };");
+            sb.AppendLine("    }");
+        }
         sb.AppendLine("}");
         return sb.ToString();
     }
@@ -900,11 +919,13 @@ internal static class CommandFactoryEmitter
                     ? $"(int)({col.EnumClrTypeName}){entityExpr}" : $"(int){entityExpr}",
                 EnumStorageKind.AsInt64 => col.IsNullable
                     ? $"(long)({col.EnumClrTypeName}){entityExpr}" : $"(long){entityExpr}",
-                // Nullable<T>.ToString() 在引用程序集标注 string?（HasValue=false 返 ""）——
-                // (object) 强转下 CS8600；可空先显式转 E 再 ToString。
-                // 数组路径传入的是 `is { } v` 已解包的非空 E（转换退化为恒等），同一表达式两处可用。
+                // N2（2026-10-04）：字符串形态经 EnumStr_X 生成式 switch（驻留常量零分配），
+                // 替代逐行 ToString()。可空先显式转 E（空值已由外层守卫拦截， Nullable<T>
+                // 的 ToString 在空时返 "" 且 (object) 下 CS8600——旧行为是转换前必非空，
+                // 此处保持同一前提）。
                 _ => col.IsNullable
-                    ? $"(({col.EnumClrTypeName}){entityExpr}).ToString()" : $"{entityExpr}.ToString()",
+                    ? $"EnumStr_{col.PropertyName}(({col.EnumClrTypeName}){entityExpr})"
+                    : $"EnumStr_{col.PropertyName}({entityExpr})",
             };
         }
         if (IsObjectOwnedJson(col))
@@ -993,8 +1014,11 @@ internal static class CommandFactoryEmitter
                     ? $"(int)({col.EnumClrTypeName}){prop}" : $"(int){prop}",
                 EnumStorageKind.AsInt64 => col.IsNullable
                     ? $"(long)({col.EnumClrTypeName}){prop}" : $"(long){prop}",
+                // N2（2026-10-04）：同 GetParameterValueExpressionCore——EnumStr_X 零分配，
+                // 替代 COPY 行写入的逐列 ToString()。
                 _ => col.IsNullable
-                    ? $"(({col.EnumClrTypeName}){prop}).ToString()" : $"{prop}.ToString()",
+                    ? $"EnumStr_{col.PropertyName}(({col.EnumClrTypeName}){prop})"
+                    : $"EnumStr_{col.PropertyName}({prop})",
             };
         }
         if (IsObjectOwnedJson(col))
