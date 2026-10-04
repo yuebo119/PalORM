@@ -4,6 +4,42 @@
 
 ## [未发布]
 
+### 🚀 全量复读落地轮：写路径三处零分配化 + NOTIFY 分发回归修复（2026-10-04）
+
+> 源头：src 全量逐文件独立复读（Core 亲读 + SourceGen/Provider 并行审读），与 step5~21 定案交叉映射；
+> 基准可见面维持 step21 终审结论（无新增值得立项的差距），本轮五项全部是"基准外形态或裁决线下的
+> 对称化补齐"，收益落真实世界列形态用户。
+
+- **N1（回归修复）**：PG NOTIFY 分发路径的集合表达式 `[.. Snapshot]` 每通知复制一份不可变快照
+  数组——与 B6 注释"零分配分发"直接矛盾（疑似 ITM-825 单条目 CAS 合并时引入）。改为直接遍历，
+  繁忙通道（10k 通知/秒）消除 10k 数组/秒的 Gen0 垃圾。
+- **N2（枚举写路径零分配化）**：字符串存储枚举（默认 StoreAs=TEXT）的写路径原先在全部九种写形态
+  （BindInsertToBatch/BindInsertValues/CopyWriteRow/BindUpsert/BindUpsertValues/BindUpdate/
+  BindUpdateValues/FillUpdate/FillUpsertColumnArrays）逐行 `ToString()`，每枚举列每行分配一个新串。
+  现发射 `EnumStr_X` 生成式 switch（读侧 Parse_X 的对称物）返回驻留常量；未定义数值与别名成员
+  （重复常量值不进臂——重复常量模式是编译错误且 ToString 对别名无定义选取）落 `_ => ToString()`
+  兜底，行为与旧形态逐位一致。
+- **N3（UNNEST 数组填充行主序）**：FillColumnArrays 生成形态原列主序每列每行重复一次
+  `IReadOnlyList<object>` 接口调用 + 实体强转（C 列实体 = C×N 次），改行主序单次强转存局部
+  （降为 N 次），生成代码净缩 436 行；语义零变化（null 元素仍在首个列访问处 NRE）。
+- **N4（UPSERT/UPDATE 池 DbType 一次性初始化）**：B21 对 INSERT 池分解的对称化——原两 binder
+  对可空与 byte[] 列每行每列重写恒定 DbType（PG-4 实测纯成本 31ns vs 13ns），现发射
+  InitUpsertParameters/InitUpdateParameters 建池后调用一次；非空标量保持驱动推断（PG-4 决策不变），
+  PL-2 单行复用槽不受影响（池经 BindUpdate 建参已带 DbTypeHint）；旧生成器程序集 Init 委托为
+  null 时消费方不调，binder 保持自写旧形态（B21 契约同构）。
+- **N5（GetAllAsync 组合句缓存）**：补齐缓存不对称漏项——GetByKeySql/CountComposedSql/聚合后缀
+  均有组合句缓存，GetAllAsync 每次付 1 次 QuoteIdentifier + 全句插值（约 150B）；现按
+  (Type, Dialect, DefaultFilterForms) 缓存，命中零闭包。连带删除失去唯一消费者的
+  GetDefaultFilterWhereClause（S1144）。
+- **登记（不立项）**：①`LongLivedSession_GetAsync_StaysUnderGrossLine` 并行偶发失败坐实为
+  进程级 GC 计数的并行污染（串行全绿、比值姊妹用例恒绿；类文档自述污染包络 10~50KB 对 64KB
+  gross 线余量过薄）——预存测量类薄弱点，非产品回归；②SourceGen 编译期低效若干（Analyzer
+  重复 GetAttributes、QuoteIdentifier 每次新建引号串等），低优先级。
+- **验证**：ci.slnf Debug/Release 0W0E；SourceGen 227/227（快照重录并逐 diff 评审：枚举实体
+  9 处写形态切换 + 全实体行主序化 + 两 Init 方法 + 注册表两参）；Core 串行 497/497（并行同绿，
+  偶发项见登记①）；门禁 G1-G33 32/32 通过；Native AOT win-x64 发布 + 原生二进制运行 PASSED
+  （枚举 switch 为常量模式，与已验证的 Parse_X 同型）。
+
 ### 🔬 性能测试系统优化轮：门禁判读机械化 + 播种统一 + 编排精简（2026-10-03）
 
 - **结果库门禁机械化（根治 12:39 批 3 项 FAIL 的误报）**：①**分母漂移判定**——比值超限但被测臂
