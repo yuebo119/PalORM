@@ -503,6 +503,9 @@ internal static class Program
         long[] keys = Dataset.KeySet(rows);
         long[] whereInIds = BuildWhereInIds(rows);
         int bulkDeleteIters = BulkDeleteRounds(rows);
+        // GetByKeySession 的循环键集（32 个，步长 7919 打散同 GetByKey；N=32 > A9 晋升阈值 3）
+        const int SessionLoopCount = 32;
+        long[] sessionIds = [.. Enumerable.Range(0, SessionLoopCount).Select(i => keys[i * 7919 % keys.Length])];
         // ── Build：纯 SQL 构建开销，不执行、不碰库 ──
         await MeasAsync(info, impl, "BuildGetByKeySql", "Build", rows, conn, results, scale, null,
             (im, c, i) =>
@@ -525,6 +528,17 @@ internal static class Program
                 // 步长 7919（质数）打散访问位置，避免顺序扫描缓存放大点查优势
                 long id = keys[i * 7919 % keys.Length];
                 _ = await im.GetByKeyAsync(c, id, ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+
+        // 长会话推荐用法（step13 §6.2 挂账清理）：单会话内 32 次循环直查——A9 复用槽在
+        // 第 3 次晋升，会话构造被摊销；与 GetByKey（每操作一新会话）互为对照面
+        await MeasAsync(info, impl, "GetByKeySession", "CRUD", rows, conn, results, scale, null,
+            async (im, c, i) =>
+            {
+                int found = await im.GetByKeySessionAsync(c, sessionIds, ct).ConfigureAwait(false);
+                if (found != SessionLoopCount)
+                    throw new InvalidOperationException(
+                        $"GetByKeySession 结果不等价：命中 {found}（期望 {SessionLoopCount}）");
             }, ct).ConfigureAwait(false);
 
         await MeasAsync(info, impl, "QueryAll", "CRUD", rows, conn, results, scale, null,
@@ -775,7 +789,7 @@ internal static class Program
         "BuildGetByKeySql" or "BuildComplexQuerySql" or "InsertReturningId" or "IncludeJoin"
         or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert"
         or "OwnedJsonQuery" or "SessionBatchInserts"
-        or "Insert" or "Update" or "KeysetPage" or "WhereIn");
+        or "Insert" or "Update" or "KeysetPage" or "WhereIn" or "GetByKeySession");
 
     /// <summary>该项是否在给定档位测量。</summary>
     private static bool RunsAtTier(string operation, int rows)
@@ -787,7 +801,7 @@ internal static class Program
     private static readonly string[] OperationNames =
     [
         "BuildGetByKeySql", "BuildComplexQuerySql",
-        "GetByKey", "QueryAll", "StreamAll", "Insert", "Update",
+        "GetByKey", "GetByKeySession", "QueryAll", "StreamAll", "Insert", "Update",
         "BulkInsert", "BulkUpdate", "BulkDelete",
         "KeysetPage", "WhereIn", "Count",
         "UpsertBatch", "InsertReturningId", "WideQueryAll", "IncludeJoin",
