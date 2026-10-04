@@ -530,17 +530,6 @@ internal static class Program
                 _ = await im.GetByKeyAsync(c, id, ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
-        // 长会话推荐用法（step13 §6.2 挂账清理）：单会话内 32 次循环直查——A9 复用槽在
-        // 第 3 次晋升，会话构造被摊销；与 GetByKey（每操作一新会话）互为对照面
-        await MeasAsync(info, impl, "GetByKeySession", "CRUD", rows, conn, results, scale, null,
-            async (im, c, i) =>
-            {
-                int found = await im.GetByKeySessionAsync(c, sessionIds, ct).ConfigureAwait(false);
-                if (found != SessionLoopCount)
-                    throw new InvalidOperationException(
-                        $"GetByKeySession 结果不等价：命中 {found}（期望 {SessionLoopCount}）");
-            }, ct).ConfigureAwait(false);
-
         await MeasAsync(info, impl, "QueryAll", "CRUD", rows, conn, results, scale, null,
             async (im, c, i) => _ = await im.QueryAllAsync(c, ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
@@ -719,6 +708,21 @@ internal static class Program
             async (im, c, i) => _ = await im.SessionBatchInsertsAsync(
                 c, rows + 1 + (i * Dataset.SessionBatchRows), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
+
+        // 长会话推荐用法（step13 §6.2 挂账清理）：单会话内 32 次循环直查——A9 复用槽在
+        // 第 3 次晋升，会话构造被摊销；与 GetByKey（每操作一新会话）互为对照面。
+        // **排在 CRUD 序列之外（末位）**：插在 GetByKey 之后时，其后 PalORM 臂的 SQLite
+        // 短操作（Update/Count/TxSingleInsert）系统性慢 ~3×（13:54/13:57 两批坐实，ADO 臂
+        // 稳定）——与 2026-09-23 "Update 加 reset 后 BulkInsert 9.5×"同族的连接态顺序效应，
+        // 机制未查明；挪到末位使其只影响其后的并发段（并发用独立池化连接，不受共用连接态影响）。
+        await MeasAsync(info, impl, "GetByKeySession", "CRUD", rows, conn, results, scale, fullReset,
+            async (im, c, i) =>
+            {
+                int found = await im.GetByKeySessionAsync(c, sessionIds, ct).ConfigureAwait(false);
+                if (found != SessionLoopCount)
+                    throw new InvalidOperationException(
+                        $"GetByKeySession 结果不等价：命中 {found}（期望 {SessionLoopCount}）");
+            }, ct).ConfigureAwait(false);
     }
 
     /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。
