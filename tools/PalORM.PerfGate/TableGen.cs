@@ -9,7 +9,7 @@ namespace PalORM.PerfGate;
 /// 跨方言比值）。数据源 = 最新非子集 perfhub 批次的信封（MedianUs/AllocBytes/Ratio 逐项）。
 /// <para>格式口径与规范一致（2026-10-04 step23 用户改版）：明细表（一/二/三）每行展开
 /// 「方言」列覆盖三方言；时延数值自带单位（µs/ms，2026-10-05 用户定标）；比值列 = 裸倍数两位小数 +
-/// 空格 + 色标紧贴百分比（无括号）；分配相对 ADO 用「P 丨 D」记法；表四只列批量族 +
+/// 空格 + 色标紧贴百分比（无括号）；分配相对 ADO 拆 P/D 两列右对齐；表四只列批量族 +
 /// GetAllAsync，列序 SQLite/PostgreSQL/MySQL，格值为裸比值。分配 1024 进制 KB/MB、
 /// 百分比取整（|p|&lt;0.5% 记 0%）、色标六档按显示值判定、倍数 ≥1.3 或 ≤0.7 加粗。</para>
 /// <para><b>行级标记 📌（2026-10-05 用户定标，历经 🚨 → 🔍 → 📌 → 复核回 📌）</b>：比值
@@ -175,10 +175,10 @@ internal static class TableGen
 
     private static void Header(StringBuilder md)
     {
-        // 列名顺序与单元格「P 丨 D」记法一致（PalORM 在左、Dapper 在右，竖线分隔）——
-        // fa1a401 改版时列名曾遗留旧序（D/P），2026-10-05 用户先后指正列名与分隔符形态。
-        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | P/Dapper（倍数±%） | 分配（A/D/P） | 分配相对 ADO（P 丨 D） |");
-        md.AppendLine("|---|---|---|---|---|---|---|---|---|---|");
+        // 分配相对 ADO 拆 P/D 两列右对齐（2026-10-05 用户定标）：两列之间的边框即竖向中线，
+        // 由渲染器保证对齐——单格内以分隔符对齐在 GFM 下不可行（空格折叠 + 比例字体）。
+        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | P/Dapper（倍数±%） | 分配（A/D/P） | 分配相对 ADO（P） | 分配相对 ADO（D） |");
+        md.AppendLine("|---|---|---|---|---|---|---|---|---|---:|---:|");
     }
 
     private static void Row(
@@ -193,11 +193,10 @@ internal static class TableGen
         string pAdo = RatioCell(pal.MedianUs / ado.MedianUs) + WeakMark(ado, dap, pal);
         string pDap = dap is null || dap.MedianUs <= 0 ? "—" : RatioCell(pal.MedianUs / dap.MedianUs);
         string alloc = $"{FmtBytes(ado.AllocBytes)}/{FmtBytes(dap?.AllocBytes ?? 0)}/{FmtBytes(pal.AllocBytes)}";
-        string allocDelta = AllocDeltaCell(pal, dap, ado);
         string flag = flaggable && ado.MedianUs > 0 && IsFlagged(pal.MedianUs / ado.MedianUs) ? $"{Flag} " : "";
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"| {flag}{op} | {dialect} | {tier} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} "
-            + $"| {pAdo} | {pDap} | {alloc} | {allocDelta} |"));
+            + $"| {pAdo} | {pDap} | {alloc} | {PalDeltaCell(pal, ado)} | {DapDeltaCell(dap, ado)} |"));
     }
 
     private static PerfResultItem? Get(
@@ -232,17 +231,15 @@ internal static class TableGen
         return shown is >= 1.3 or <= 0.7 ? $"**{cell}**" : cell;
     }
 
-    /// <summary>分配相对 ADO 的「P 丨 D」记法（2026-10-05 用户定标）：PalORM 差值在左、Dapper
-    /// 差值在右，以竖线 丨 分隔，归属由列名（P 丨 D）声明——旧形态的 "D " 前缀随之取消，
-    /// 两值对称无前缀。</summary>
-    private static string AllocDeltaCell(PerfResultItem pal, PerfResultItem? dap, PerfResultItem ado)
-    {
-        string p = ado.AllocBytes > 0 ? Delta((pal.AllocBytes / (double)ado.AllocBytes) - 1) : "—";
-        string d = dap is null || ado.AllocBytes <= 0
-            ? "—"
-            : Delta((dap.AllocBytes / (double)ado.AllocBytes) - 1);
-        return $"{p} 丨 {d}";
-    }
+    /// <summary>分配相对 ADO 的 P 列（PalORM 对 ADO，右对齐）——拆两列形态（2026-10-05 用户定标）：
+    /// 列边框即竖向中线，渲染器保证对齐。单格内以分隔符对齐在 GFM 下不可行（空格折叠 +
+    /// 比例字体），故放弃单格 丨 形态。</summary>
+    private static string PalDeltaCell(PerfResultItem pal, PerfResultItem ado)
+        => ado.AllocBytes > 0 ? Delta((pal.AllocBytes / (double)ado.AllocBytes) - 1) : "—";
+
+    /// <summary>分配相对 ADO 的 D 列（Dapper 对 ADO，右对齐）；Dapper 缺失或 ADO 零分配为 —。</summary>
+    private static string DapDeltaCell(PerfResultItem? dap, PerfResultItem ado)
+        => dap is null || ado.AllocBytes <= 0 ? "—" : Delta((dap.AllocBytes / (double)ado.AllocBytes) - 1);
 
     private static string Delta(double p)
     {
