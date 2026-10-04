@@ -203,6 +203,459 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
     }
 
+    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
+    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
+    {
+        long[] values = new long[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = global::System.Convert.ToInt64(keys[start + i]);
+        }
+        return values;
+    }
+
+    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpdateColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            int[] column0 = (int[])arrays[arrayOffset + 0];
+            for (int i = 0; i < count; i++)
+            {
+                column0[i] = ((global::AllTypesEntity)entities[start + i]).IntValue;
+            }
+        }
+        {
+            short[] column1 = (short[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                column1[i] = ((global::AllTypesEntity)entities[start + i]).ShortValue;
+            }
+        }
+        {
+            byte[] column2 = (byte[])arrays[arrayOffset + 2];
+            for (int i = 0; i < count; i++)
+            {
+                column2[i] = ((global::AllTypesEntity)entities[start + i]).ByteValue;
+            }
+        }
+        {
+            string[] column3 = (string[])arrays[arrayOffset + 3];
+            for (int i = 0; i < count; i++)
+            {
+                column3[i] = ((global::AllTypesEntity)entities[start + i]).StringValue;
+            }
+        }
+        {
+            char[] column4 = (char[])arrays[arrayOffset + 4];
+            for (int i = 0; i < count; i++)
+            {
+                column4[i] = ((global::AllTypesEntity)entities[start + i]).CharValue;
+            }
+        }
+        {
+            bool[] column5 = (bool[])arrays[arrayOffset + 5];
+            for (int i = 0; i < count; i++)
+            {
+                column5[i] = ((global::AllTypesEntity)entities[start + i]).BoolValue;
+            }
+        }
+        {
+            decimal[] column6 = (decimal[])arrays[arrayOffset + 6];
+            for (int i = 0; i < count; i++)
+            {
+                column6[i] = ((global::AllTypesEntity)entities[start + i]).DecimalValue;
+            }
+        }
+        {
+            double[] column7 = (double[])arrays[arrayOffset + 7];
+            for (int i = 0; i < count; i++)
+            {
+                column7[i] = ((global::AllTypesEntity)entities[start + i]).DoubleValue;
+            }
+        }
+        {
+            float[] column8 = (float[])arrays[arrayOffset + 8];
+            for (int i = 0; i < count; i++)
+            {
+                column8[i] = ((global::AllTypesEntity)entities[start + i]).FloatValue;
+            }
+        }
+        {
+            global::System.DateTime[] column9 = (global::System.DateTime[])arrays[arrayOffset + 9];
+            for (int i = 0; i < count; i++)
+            {
+                column9[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeValue;
+            }
+        }
+        {
+            global::System.Guid[] column10 = (global::System.Guid[])arrays[arrayOffset + 10];
+            for (int i = 0; i < count; i++)
+            {
+                column10[i] = ((global::AllTypesEntity)entities[start + i]).GuidValue;
+            }
+        }
+        {
+            global::System.DateTimeOffset[] column11 = (global::System.DateTimeOffset[])arrays[arrayOffset + 11];
+            for (int i = 0; i < count; i++)
+            {
+                column11[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeOffsetValue;
+            }
+        }
+        {
+            global::System.DateOnly[] column12 = (global::System.DateOnly[])arrays[arrayOffset + 12];
+            for (int i = 0; i < count; i++)
+            {
+                column12[i] = ((global::AllTypesEntity)entities[start + i]).DateOnlyValue;
+            }
+        }
+        {
+            global::System.TimeOnly[] column13 = (global::System.TimeOnly[])arrays[arrayOffset + 13];
+            for (int i = 0; i < count; i++)
+            {
+                column13[i] = ((global::AllTypesEntity)entities[start + i]).TimeOnlyValue;
+            }
+        }
+        {
+            byte[][] column14 = (byte[][])arrays[arrayOffset + 14];
+            for (int i = 0; i < count; i++)
+            {
+                column14[i] = ((global::AllTypesEntity)entities[start + i]).BytesValue;
+            }
+        }
+        {
+            int?[] column15 = (int?[])arrays[arrayOffset + 15];
+            for (int i = 0; i < count; i++)
+            {
+                if (((global::AllTypesEntity)entities[start + i]).NullableInt is { } v15)
+                {
+                    column15[i] = v15;
+                }
+            }
+        }
+        {
+            string[] column16 = (string[])arrays[arrayOffset + 16];
+            for (int i = 0; i < count; i++)
+            {
+                column16[i] = ((global::AllTypesEntity)entities[start + i]).NullableString!;
+            }
+        }
+        {
+            global::System.Guid?[] column17 = (global::System.Guid?[])arrays[arrayOffset + 17];
+            for (int i = 0; i < count; i++)
+            {
+                if (((global::AllTypesEntity)entities[start + i]).NullableGuid is { } v17)
+                {
+                    column17[i] = v17;
+                }
+            }
+        }
+        {
+            global::System.TimeOnly?[] column18 = (global::System.TimeOnly?[])arrays[arrayOffset + 18];
+            for (int i = 0; i < count; i++)
+            {
+                if (((global::AllTypesEntity)entities[start + i]).NullableTimeOnly is { } v18)
+                {
+                    column18[i] = v18;
+                }
+            }
+        }
+        {
+            byte[][] column19 = (byte[][])arrays[arrayOffset + 19];
+            for (int i = 0; i < count; i++)
+            {
+                column19[i] = ((global::AllTypesEntity)entities[start + i]).NullableBytes!;
+            }
+        }
+        {
+            long[] column20 = (long[])arrays[arrayOffset + 20];
+            for (int i = 0; i < count; i++)
+            {
+                column20[i] = ((global::AllTypesEntity)entities[start + i]).Id;
+            }
+        }
+    }
+
+    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
+    internal static global::System.Array[] CreateUpdateColumnArrays(int count)
+    {
+        return new global::System.Array[21]
+        {
+            new int[count],
+            new short[count],
+            new byte[count],
+            new string[count],
+            new char[count],
+            new bool[count],
+            new decimal[count],
+            new double[count],
+            new float[count],
+            new global::System.DateTime[count],
+            new global::System.Guid[count],
+            new global::System.DateTimeOffset[count],
+            new global::System.DateOnly[count],
+            new global::System.TimeOnly[count],
+            new byte[count][],
+            new int?[count],
+            new string[count],
+            new global::System.Guid?[count],
+            new global::System.TimeOnly?[count],
+            new byte[count][],
+            new long[count],
+        };
+    }
+
+    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpsertColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            long[] column0 = (long[])arrays[arrayOffset + 0];
+            for (int i = 0; i < count; i++)
+            {
+                column0[i] = ((global::AllTypesEntity)entities[start + i]).Id;
+            }
+        }
+        {
+            int[] column1 = (int[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                column1[i] = ((global::AllTypesEntity)entities[start + i]).IntValue;
+            }
+        }
+        {
+            short[] column2 = (short[])arrays[arrayOffset + 2];
+            for (int i = 0; i < count; i++)
+            {
+                column2[i] = ((global::AllTypesEntity)entities[start + i]).ShortValue;
+            }
+        }
+        {
+            byte[] column3 = (byte[])arrays[arrayOffset + 3];
+            for (int i = 0; i < count; i++)
+            {
+                column3[i] = ((global::AllTypesEntity)entities[start + i]).ByteValue;
+            }
+        }
+        {
+            string[] column4 = (string[])arrays[arrayOffset + 4];
+            for (int i = 0; i < count; i++)
+            {
+                column4[i] = ((global::AllTypesEntity)entities[start + i]).StringValue;
+            }
+        }
+        {
+            char[] column5 = (char[])arrays[arrayOffset + 5];
+            for (int i = 0; i < count; i++)
+            {
+                column5[i] = ((global::AllTypesEntity)entities[start + i]).CharValue;
+            }
+        }
+        {
+            bool[] column6 = (bool[])arrays[arrayOffset + 6];
+            for (int i = 0; i < count; i++)
+            {
+                column6[i] = ((global::AllTypesEntity)entities[start + i]).BoolValue;
+            }
+        }
+        {
+            decimal[] column7 = (decimal[])arrays[arrayOffset + 7];
+            for (int i = 0; i < count; i++)
+            {
+                column7[i] = ((global::AllTypesEntity)entities[start + i]).DecimalValue;
+            }
+        }
+        {
+            double[] column8 = (double[])arrays[arrayOffset + 8];
+            for (int i = 0; i < count; i++)
+            {
+                column8[i] = ((global::AllTypesEntity)entities[start + i]).DoubleValue;
+            }
+        }
+        {
+            float[] column9 = (float[])arrays[arrayOffset + 9];
+            for (int i = 0; i < count; i++)
+            {
+                column9[i] = ((global::AllTypesEntity)entities[start + i]).FloatValue;
+            }
+        }
+        {
+            global::System.DateTime[] column10 = (global::System.DateTime[])arrays[arrayOffset + 10];
+            for (int i = 0; i < count; i++)
+            {
+                column10[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeValue;
+            }
+        }
+        {
+            global::System.Guid[] column11 = (global::System.Guid[])arrays[arrayOffset + 11];
+            for (int i = 0; i < count; i++)
+            {
+                column11[i] = ((global::AllTypesEntity)entities[start + i]).GuidValue;
+            }
+        }
+        {
+            global::System.DateTimeOffset[] column12 = (global::System.DateTimeOffset[])arrays[arrayOffset + 12];
+            for (int i = 0; i < count; i++)
+            {
+                column12[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeOffsetValue;
+            }
+        }
+        {
+            global::System.DateOnly[] column13 = (global::System.DateOnly[])arrays[arrayOffset + 13];
+            for (int i = 0; i < count; i++)
+            {
+                column13[i] = ((global::AllTypesEntity)entities[start + i]).DateOnlyValue;
+            }
+        }
+        {
+            global::System.TimeOnly[] column14 = (global::System.TimeOnly[])arrays[arrayOffset + 14];
+            for (int i = 0; i < count; i++)
+            {
+                column14[i] = ((global::AllTypesEntity)entities[start + i]).TimeOnlyValue;
+            }
+        }
+        {
+            byte[][] column15 = (byte[][])arrays[arrayOffset + 15];
+            for (int i = 0; i < count; i++)
+            {
+                column15[i] = ((global::AllTypesEntity)entities[start + i]).BytesValue;
+            }
+        }
+        {
+            int?[] column16 = (int?[])arrays[arrayOffset + 16];
+            for (int i = 0; i < count; i++)
+            {
+                if (((global::AllTypesEntity)entities[start + i]).NullableInt is { } v16)
+                {
+                    column16[i] = v16;
+                }
+            }
+        }
+        {
+            string[] column17 = (string[])arrays[arrayOffset + 17];
+            for (int i = 0; i < count; i++)
+            {
+                column17[i] = ((global::AllTypesEntity)entities[start + i]).NullableString!;
+            }
+        }
+        {
+            global::System.Guid?[] column18 = (global::System.Guid?[])arrays[arrayOffset + 18];
+            for (int i = 0; i < count; i++)
+            {
+                if (((global::AllTypesEntity)entities[start + i]).NullableGuid is { } v18)
+                {
+                    column18[i] = v18;
+                }
+            }
+        }
+        {
+            global::System.TimeOnly?[] column19 = (global::System.TimeOnly?[])arrays[arrayOffset + 19];
+            for (int i = 0; i < count; i++)
+            {
+                if (((global::AllTypesEntity)entities[start + i]).NullableTimeOnly is { } v19)
+                {
+                    column19[i] = v19;
+                }
+            }
+        }
+        {
+            byte[][] column20 = (byte[][])arrays[arrayOffset + 20];
+            for (int i = 0; i < count; i++)
+            {
+                column20[i] = ((global::AllTypesEntity)entities[start + i]).NullableBytes!;
+            }
+        }
+    }
+
+    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
+    internal static global::System.Type[] UpsertColumnArrayElementTypes()
+    {
+        return new global::System.Type[21]
+        {
+            typeof(long),
+            typeof(int),
+            typeof(short),
+            typeof(byte),
+            typeof(string),
+            typeof(char),
+            typeof(bool),
+            typeof(decimal),
+            typeof(double),
+            typeof(float),
+            typeof(global::System.DateTime),
+            typeof(global::System.Guid),
+            typeof(global::System.DateTimeOffset),
+            typeof(global::System.DateOnly),
+            typeof(global::System.TimeOnly),
+            typeof(byte[]),
+            typeof(int?),
+            typeof(string),
+            typeof(global::System.Guid?),
+            typeof(global::System.TimeOnly?),
+            typeof(byte[]),
+        };
+    }
+
+    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
+    internal static global::System.Array[] CreateUpsertColumnArrays(int count)
+    {
+        return new global::System.Array[21]
+        {
+            new long[count],
+            new int[count],
+            new short[count],
+            new byte[count],
+            new string[count],
+            new char[count],
+            new bool[count],
+            new decimal[count],
+            new double[count],
+            new float[count],
+            new global::System.DateTime[count],
+            new global::System.Guid[count],
+            new global::System.DateTimeOffset[count],
+            new global::System.DateOnly[count],
+            new global::System.TimeOnly[count],
+            new byte[count][],
+            new int?[count],
+            new string[count],
+            new global::System.Guid?[count],
+            new global::System.TimeOnly?[count],
+            new byte[count][],
+        };
+    }
+
+    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
+    internal static global::System.Type[] UpdateColumnArrayElementTypes()
+    {
+        return new global::System.Type[21]
+        {
+            typeof(int),
+            typeof(short),
+            typeof(byte),
+            typeof(string),
+            typeof(char),
+            typeof(bool),
+            typeof(decimal),
+            typeof(double),
+            typeof(float),
+            typeof(global::System.DateTime),
+            typeof(global::System.Guid),
+            typeof(global::System.DateTimeOffset),
+            typeof(global::System.DateOnly),
+            typeof(global::System.TimeOnly),
+            typeof(byte[]),
+            typeof(int?),
+            typeof(string),
+            typeof(global::System.Guid?),
+            typeof(global::System.TimeOnly?),
+            typeof(byte[]),
+            typeof(long),
+        };
+    }
+
     internal static void SetId(global::AllTypesEntity entity, long id)
     {
         entity.Id = id;

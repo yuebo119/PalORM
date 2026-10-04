@@ -69,6 +69,99 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.String; p.Value = (object)((string)key); cmd.Parameters.Add(p); }
     }
 
+    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
+    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
+    {
+        string[] values = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = ((string)keys[start + i]);
+        }
+        return values;
+    }
+
+    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpdateColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            string[] column0 = (string[])arrays[arrayOffset + 0];
+            for (int i = 0; i < count; i++)
+            {
+                column0[i] = ((global::ReservedWordEntity)entities[start + i]).Value;
+            }
+        }
+        {
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                column1[i] = ((global::ReservedWordEntity)entities[start + i]).Id;
+            }
+        }
+    }
+
+    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
+    internal static global::System.Array[] CreateUpdateColumnArrays(int count)
+    {
+        return new global::System.Array[2]
+        {
+            new string[count],
+            new string[count],
+        };
+    }
+
+    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpsertColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            string[] column0 = (string[])arrays[arrayOffset + 0];
+            for (int i = 0; i < count; i++)
+            {
+                column0[i] = ((global::ReservedWordEntity)entities[start + i]).Id;
+            }
+        }
+        {
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                column1[i] = ((global::ReservedWordEntity)entities[start + i]).Value;
+            }
+        }
+    }
+
+    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
+    internal static global::System.Type[] UpsertColumnArrayElementTypes()
+    {
+        return new global::System.Type[2]
+        {
+            typeof(string),
+            typeof(string),
+        };
+    }
+
+    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
+    internal static global::System.Array[] CreateUpsertColumnArrays(int count)
+    {
+        return new global::System.Array[2]
+        {
+            new string[count],
+            new string[count],
+        };
+    }
+
+    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
+    internal static global::System.Type[] UpdateColumnArrayElementTypes()
+    {
+        return new global::System.Type[2]
+        {
+            typeof(string),
+            typeof(string),
+        };
+    }
+
     internal static void SetId(global::ReservedWordEntity entity, long id)
     {
         // 仅自增 int/long 主键需要数据库 ID 回填

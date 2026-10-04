@@ -81,6 +81,135 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
     }
 
+    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
+    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
+    {
+        long[] values = new long[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = global::System.Convert.ToInt64(keys[start + i]);
+        }
+        return values;
+    }
+
+    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpdateColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            string[] column0 = (string[])arrays[arrayOffset + 0];
+            for (int i = 0; i < count; i++)
+            {
+                column0[i] = ((global::InheritedEntity)entities[start + i]).Name;
+            }
+        }
+        {
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                column1[i] = ((global::InheritedEntity)entities[start + i]).CreatedBy;
+            }
+        }
+        {
+            global::System.DateTimeOffset[] column2 = (global::System.DateTimeOffset[])arrays[arrayOffset + 2];
+            for (int i = 0; i < count; i++)
+            {
+                column2[i] = ((global::InheritedEntity)entities[start + i]).CreatedAt;
+            }
+        }
+        {
+            long[] column3 = (long[])arrays[arrayOffset + 3];
+            for (int i = 0; i < count; i++)
+            {
+                column3[i] = ((global::InheritedEntity)entities[start + i]).Id;
+            }
+        }
+    }
+
+    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
+    internal static global::System.Array[] CreateUpdateColumnArrays(int count)
+    {
+        return new global::System.Array[4]
+        {
+            new string[count],
+            new string[count],
+            new global::System.DateTimeOffset[count],
+            new long[count],
+        };
+    }
+
+    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpsertColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            long[] column0 = (long[])arrays[arrayOffset + 0];
+            for (int i = 0; i < count; i++)
+            {
+                column0[i] = ((global::InheritedEntity)entities[start + i]).Id;
+            }
+        }
+        {
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                column1[i] = ((global::InheritedEntity)entities[start + i]).Name;
+            }
+        }
+        {
+            string[] column2 = (string[])arrays[arrayOffset + 2];
+            for (int i = 0; i < count; i++)
+            {
+                column2[i] = ((global::InheritedEntity)entities[start + i]).CreatedBy;
+            }
+        }
+        {
+            global::System.DateTimeOffset[] column3 = (global::System.DateTimeOffset[])arrays[arrayOffset + 3];
+            for (int i = 0; i < count; i++)
+            {
+                column3[i] = ((global::InheritedEntity)entities[start + i]).CreatedAt;
+            }
+        }
+    }
+
+    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
+    internal static global::System.Type[] UpsertColumnArrayElementTypes()
+    {
+        return new global::System.Type[4]
+        {
+            typeof(long),
+            typeof(string),
+            typeof(string),
+            typeof(global::System.DateTimeOffset),
+        };
+    }
+
+    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
+    internal static global::System.Array[] CreateUpsertColumnArrays(int count)
+    {
+        return new global::System.Array[4]
+        {
+            new long[count],
+            new string[count],
+            new string[count],
+            new global::System.DateTimeOffset[count],
+        };
+    }
+
+    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
+    internal static global::System.Type[] UpdateColumnArrayElementTypes()
+    {
+        return new global::System.Type[4]
+        {
+            typeof(string),
+            typeof(string),
+            typeof(global::System.DateTimeOffset),
+            typeof(long),
+        };
+    }
+
     internal static void SetId(global::InheritedEntity entity, long id)
     {
         entity.Id = id;
