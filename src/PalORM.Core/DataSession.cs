@@ -442,13 +442,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 两者是判别式（_ignoreFilters / _tenantId）的唯一变更点，且都受操作门禁保护（ITM-568）。</para></summary>
     private TenantScopeEntry? _tenantScopeEntry;
 
-    private sealed class TenantScopeEntry(Type type, string tenantId)
+    private sealed class TenantScopeEntry(Type type, object tenantId)
     {
         public Type Type { get; } = type;
         /// <summary>ITM-866（r23）：判别式含租户值——并发 WithTenant 清缓存与 From&lt;T&gt;
         /// 写回交错时条目可能短暂 stale（Type 相同但租户已变），按 TenantId 值相等判定
-        /// 避免 stale 命中（命中路径零拼接零分配的 T6 收益保留）。</summary>
-        public string TenantId { get; } = tenantId;
+        /// 避免 stale 命中。
+        /// N6（2026-10-04 step23 全量复读）：存<b>装箱原值</b>而非 ToString 形态——T6 消掉了
+        /// Scope 拼接，但命中比较路径对非 string 租户（int/long/Guid 装箱值）仍每查询
+        /// <c>ToString()</c> 一次（~30B），T6"命中零拼接"的承诺此前只对 string 租户成立。
+        /// 装箱值类型的 <c>Equals(object)</c> 是解箱值比较，零分配；比较语义见
+        /// <see cref="DataSession{TProvider}.TenantValueEquals"/>。</summary>
+        public object TenantId { get; } = tenantId;
         public string Scope { get; } = $"__t:{tenantId}";
     }
     internal object? _tenantId;
