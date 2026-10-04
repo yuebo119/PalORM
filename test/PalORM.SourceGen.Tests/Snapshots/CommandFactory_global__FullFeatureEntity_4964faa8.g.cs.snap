@@ -165,100 +165,36 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     {
         {
             string[] column0 = (string[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::FullFeatureEntity)entities[start + i]).Code;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::FullFeatureEntity)entities[start + i]).Kind;
-            }
-        }
-        {
             string[] column2 = (string[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = _conv_ExternalId.ToProvider(((global::FullFeatureEntity)entities[start + i]).ExternalId);
-            }
-        }
-        {
             string[] column3 = (string[])arrays[arrayOffset + 3];
-            for (int i = 0; i < count; i++)
-            {
-                column3[i] = global::System.Text.Json.JsonSerializer.Serialize(((global::FullFeatureEntity)entities[start + i]).Payload, JsonTypeInfo_Payload);
-            }
-        }
-        {
             string[] column4 = (string[])arrays[arrayOffset + 4];
-            for (int i = 0; i < count; i++)
-            {
-                column4[i] = ((global::FullFeatureEntity)entities[start + i]).RawJson;
-            }
-        }
-        {
             string[] column5 = (string[])arrays[arrayOffset + 5];
-            for (int i = 0; i < count; i++)
-            {
-                column5[i] = ((global::FullFeatureEntity)entities[start + i]).UniqueToken;
-            }
-        }
-        {
             string[] column6 = (string[])arrays[arrayOffset + 6];
-            for (int i = 0; i < count; i++)
-            {
-                column6[i] = ((global::FullFeatureEntity)entities[start + i]).Tier;
-            }
-        }
-        {
             string[] column7 = (string[])arrays[arrayOffset + 7];
-            for (int i = 0; i < count; i++)
-            {
-                column7[i] = ((global::FullFeatureEntity)entities[start + i]).Sku;
-            }
-        }
-        {
             decimal[] column8 = (decimal[])arrays[arrayOffset + 8];
-            for (int i = 0; i < count; i++)
-            {
-                column8[i] = ((global::FullFeatureEntity)entities[start + i]).Weight;
-            }
-        }
-        {
             string[] column9 = (string[])arrays[arrayOffset + 9];
-            for (int i = 0; i < count; i++)
-            {
-                column9[i] = ((global::FullFeatureEntity)entities[start + i]).RawKind;
-            }
-        }
-        {
             string[] column10 = (string[])arrays[arrayOffset + 10];
-            for (int i = 0; i < count; i++)
-            {
-                column10[i] = ((global::FullFeatureEntity)entities[start + i]).DeletedAt!;
-            }
-        }
-        {
             string[] column11 = (string[])arrays[arrayOffset + 11];
-            for (int i = 0; i < count; i++)
-            {
-                column11[i] = ((global::FullFeatureEntity)entities[start + i]).TenantId;
-            }
-        }
-        {
             string[] column12 = (string[])arrays[arrayOffset + 12];
-            for (int i = 0; i < count; i++)
-            {
-                column12[i] = ((global::FullFeatureEntity)entities[start + i]).SensitiveValue;
-            }
-        }
-        {
             long[] column13 = (long[])arrays[arrayOffset + 13];
             for (int i = 0; i < count; i++)
             {
-                column13[i] = ((global::FullFeatureEntity)entities[start + i]).Id;
+                var entity = (global::FullFeatureEntity)entities[start + i];
+                column0[i] = entity.Code;
+                column1[i] = entity.Kind;
+                column2[i] = _conv_ExternalId.ToProvider(entity.ExternalId);
+                column3[i] = global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
+                column4[i] = entity.RawJson;
+                column5[i] = entity.UniqueToken;
+                column6[i] = entity.Tier;
+                column7[i] = entity.Sku;
+                column8[i] = entity.Weight;
+                column9[i] = entity.RawKind;
+                column10[i] = entity.DeletedAt!;
+                column11[i] = entity.TenantId;
+                column12[i] = entity.SensitiveValue;
+                column13[i] = entity.Id;
             }
         }
     }
@@ -292,100 +228,36 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     {
         {
             long[] column0 = (long[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::FullFeatureEntity)entities[start + i]).Id;
-            }
-        }
-        {
             string[] column1 = (string[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::FullFeatureEntity)entities[start + i]).Code;
-            }
-        }
-        {
             string[] column2 = (string[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = ((global::FullFeatureEntity)entities[start + i]).Kind;
-            }
-        }
-        {
             string[] column3 = (string[])arrays[arrayOffset + 3];
-            for (int i = 0; i < count; i++)
-            {
-                column3[i] = _conv_ExternalId.ToProvider(((global::FullFeatureEntity)entities[start + i]).ExternalId);
-            }
-        }
-        {
             string[] column4 = (string[])arrays[arrayOffset + 4];
-            for (int i = 0; i < count; i++)
-            {
-                column4[i] = global::System.Text.Json.JsonSerializer.Serialize(((global::FullFeatureEntity)entities[start + i]).Payload, JsonTypeInfo_Payload);
-            }
-        }
-        {
             string[] column5 = (string[])arrays[arrayOffset + 5];
-            for (int i = 0; i < count; i++)
-            {
-                column5[i] = ((global::FullFeatureEntity)entities[start + i]).RawJson;
-            }
-        }
-        {
             string[] column6 = (string[])arrays[arrayOffset + 6];
-            for (int i = 0; i < count; i++)
-            {
-                column6[i] = ((global::FullFeatureEntity)entities[start + i]).UniqueToken;
-            }
-        }
-        {
             string[] column7 = (string[])arrays[arrayOffset + 7];
-            for (int i = 0; i < count; i++)
-            {
-                column7[i] = ((global::FullFeatureEntity)entities[start + i]).Tier;
-            }
-        }
-        {
             string[] column8 = (string[])arrays[arrayOffset + 8];
-            for (int i = 0; i < count; i++)
-            {
-                column8[i] = ((global::FullFeatureEntity)entities[start + i]).Sku;
-            }
-        }
-        {
             decimal[] column9 = (decimal[])arrays[arrayOffset + 9];
-            for (int i = 0; i < count; i++)
-            {
-                column9[i] = ((global::FullFeatureEntity)entities[start + i]).Weight;
-            }
-        }
-        {
             string[] column10 = (string[])arrays[arrayOffset + 10];
-            for (int i = 0; i < count; i++)
-            {
-                column10[i] = ((global::FullFeatureEntity)entities[start + i]).RawKind;
-            }
-        }
-        {
             string[] column11 = (string[])arrays[arrayOffset + 11];
-            for (int i = 0; i < count; i++)
-            {
-                column11[i] = ((global::FullFeatureEntity)entities[start + i]).DeletedAt!;
-            }
-        }
-        {
             string[] column12 = (string[])arrays[arrayOffset + 12];
-            for (int i = 0; i < count; i++)
-            {
-                column12[i] = ((global::FullFeatureEntity)entities[start + i]).TenantId;
-            }
-        }
-        {
             string[] column13 = (string[])arrays[arrayOffset + 13];
             for (int i = 0; i < count; i++)
             {
-                column13[i] = ((global::FullFeatureEntity)entities[start + i]).SensitiveValue;
+                var entity = (global::FullFeatureEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.Code;
+                column2[i] = entity.Kind;
+                column3[i] = _conv_ExternalId.ToProvider(entity.ExternalId);
+                column4[i] = global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
+                column5[i] = entity.RawJson;
+                column6[i] = entity.UniqueToken;
+                column7[i] = entity.Tier;
+                column8[i] = entity.Sku;
+                column9[i] = entity.Weight;
+                column10[i] = entity.RawKind;
+                column11[i] = entity.DeletedAt!;
+                column12[i] = entity.TenantId;
+                column13[i] = entity.SensitiveValue;
             }
         }
     }

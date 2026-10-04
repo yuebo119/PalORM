@@ -221,158 +221,59 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
     {
         {
             int[] column0 = (int[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::AllTypesEntity)entities[start + i]).IntValue;
-            }
-        }
-        {
             short[] column1 = (short[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::AllTypesEntity)entities[start + i]).ShortValue;
-            }
-        }
-        {
             byte[] column2 = (byte[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = ((global::AllTypesEntity)entities[start + i]).ByteValue;
-            }
-        }
-        {
             string[] column3 = (string[])arrays[arrayOffset + 3];
-            for (int i = 0; i < count; i++)
-            {
-                column3[i] = ((global::AllTypesEntity)entities[start + i]).StringValue;
-            }
-        }
-        {
             char[] column4 = (char[])arrays[arrayOffset + 4];
-            for (int i = 0; i < count; i++)
-            {
-                column4[i] = ((global::AllTypesEntity)entities[start + i]).CharValue;
-            }
-        }
-        {
             bool[] column5 = (bool[])arrays[arrayOffset + 5];
-            for (int i = 0; i < count; i++)
-            {
-                column5[i] = ((global::AllTypesEntity)entities[start + i]).BoolValue;
-            }
-        }
-        {
             decimal[] column6 = (decimal[])arrays[arrayOffset + 6];
-            for (int i = 0; i < count; i++)
-            {
-                column6[i] = ((global::AllTypesEntity)entities[start + i]).DecimalValue;
-            }
-        }
-        {
             double[] column7 = (double[])arrays[arrayOffset + 7];
-            for (int i = 0; i < count; i++)
-            {
-                column7[i] = ((global::AllTypesEntity)entities[start + i]).DoubleValue;
-            }
-        }
-        {
             float[] column8 = (float[])arrays[arrayOffset + 8];
-            for (int i = 0; i < count; i++)
-            {
-                column8[i] = ((global::AllTypesEntity)entities[start + i]).FloatValue;
-            }
-        }
-        {
             global::System.DateTime[] column9 = (global::System.DateTime[])arrays[arrayOffset + 9];
-            for (int i = 0; i < count; i++)
-            {
-                column9[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeValue;
-            }
-        }
-        {
             global::System.Guid[] column10 = (global::System.Guid[])arrays[arrayOffset + 10];
-            for (int i = 0; i < count; i++)
-            {
-                column10[i] = ((global::AllTypesEntity)entities[start + i]).GuidValue;
-            }
-        }
-        {
             global::System.DateTimeOffset[] column11 = (global::System.DateTimeOffset[])arrays[arrayOffset + 11];
-            for (int i = 0; i < count; i++)
-            {
-                column11[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeOffsetValue;
-            }
-        }
-        {
             global::System.DateOnly[] column12 = (global::System.DateOnly[])arrays[arrayOffset + 12];
-            for (int i = 0; i < count; i++)
-            {
-                column12[i] = ((global::AllTypesEntity)entities[start + i]).DateOnlyValue;
-            }
-        }
-        {
             global::System.TimeOnly[] column13 = (global::System.TimeOnly[])arrays[arrayOffset + 13];
-            for (int i = 0; i < count; i++)
-            {
-                column13[i] = ((global::AllTypesEntity)entities[start + i]).TimeOnlyValue;
-            }
-        }
-        {
             byte[][] column14 = (byte[][])arrays[arrayOffset + 14];
-            for (int i = 0; i < count; i++)
-            {
-                column14[i] = ((global::AllTypesEntity)entities[start + i]).BytesValue;
-            }
-        }
-        {
             int?[] column15 = (int?[])arrays[arrayOffset + 15];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::AllTypesEntity)entities[start + i]).NullableInt is { } v15)
-                {
-                    column15[i] = v15;
-                }
-            }
-        }
-        {
             string[] column16 = (string[])arrays[arrayOffset + 16];
-            for (int i = 0; i < count; i++)
-            {
-                column16[i] = ((global::AllTypesEntity)entities[start + i]).NullableString!;
-            }
-        }
-        {
             global::System.Guid?[] column17 = (global::System.Guid?[])arrays[arrayOffset + 17];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::AllTypesEntity)entities[start + i]).NullableGuid is { } v17)
-                {
-                    column17[i] = v17;
-                }
-            }
-        }
-        {
             global::System.TimeOnly?[] column18 = (global::System.TimeOnly?[])arrays[arrayOffset + 18];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::AllTypesEntity)entities[start + i]).NullableTimeOnly is { } v18)
-                {
-                    column18[i] = v18;
-                }
-            }
-        }
-        {
             byte[][] column19 = (byte[][])arrays[arrayOffset + 19];
-            for (int i = 0; i < count; i++)
-            {
-                column19[i] = ((global::AllTypesEntity)entities[start + i]).NullableBytes!;
-            }
-        }
-        {
             long[] column20 = (long[])arrays[arrayOffset + 20];
             for (int i = 0; i < count; i++)
             {
-                column20[i] = ((global::AllTypesEntity)entities[start + i]).Id;
+                var entity = (global::AllTypesEntity)entities[start + i];
+                column0[i] = entity.IntValue;
+                column1[i] = entity.ShortValue;
+                column2[i] = entity.ByteValue;
+                column3[i] = entity.StringValue;
+                column4[i] = entity.CharValue;
+                column5[i] = entity.BoolValue;
+                column6[i] = entity.DecimalValue;
+                column7[i] = entity.DoubleValue;
+                column8[i] = entity.FloatValue;
+                column9[i] = entity.DateTimeValue;
+                column10[i] = entity.GuidValue;
+                column11[i] = entity.DateTimeOffsetValue;
+                column12[i] = entity.DateOnlyValue;
+                column13[i] = entity.TimeOnlyValue;
+                column14[i] = entity.BytesValue;
+                if (entity.NullableInt is { } v15)
+                {
+                    column15[i] = v15;
+                }
+                column16[i] = entity.NullableString!;
+                if (entity.NullableGuid is { } v17)
+                {
+                    column17[i] = v17;
+                }
+                if (entity.NullableTimeOnly is { } v18)
+                {
+                    column18[i] = v18;
+                }
+                column19[i] = entity.NullableBytes!;
+                column20[i] = entity.Id;
             }
         }
     }
@@ -413,158 +314,59 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
     {
         {
             long[] column0 = (long[])arrays[arrayOffset + 0];
-            for (int i = 0; i < count; i++)
-            {
-                column0[i] = ((global::AllTypesEntity)entities[start + i]).Id;
-            }
-        }
-        {
             int[] column1 = (int[])arrays[arrayOffset + 1];
-            for (int i = 0; i < count; i++)
-            {
-                column1[i] = ((global::AllTypesEntity)entities[start + i]).IntValue;
-            }
-        }
-        {
             short[] column2 = (short[])arrays[arrayOffset + 2];
-            for (int i = 0; i < count; i++)
-            {
-                column2[i] = ((global::AllTypesEntity)entities[start + i]).ShortValue;
-            }
-        }
-        {
             byte[] column3 = (byte[])arrays[arrayOffset + 3];
-            for (int i = 0; i < count; i++)
-            {
-                column3[i] = ((global::AllTypesEntity)entities[start + i]).ByteValue;
-            }
-        }
-        {
             string[] column4 = (string[])arrays[arrayOffset + 4];
-            for (int i = 0; i < count; i++)
-            {
-                column4[i] = ((global::AllTypesEntity)entities[start + i]).StringValue;
-            }
-        }
-        {
             char[] column5 = (char[])arrays[arrayOffset + 5];
-            for (int i = 0; i < count; i++)
-            {
-                column5[i] = ((global::AllTypesEntity)entities[start + i]).CharValue;
-            }
-        }
-        {
             bool[] column6 = (bool[])arrays[arrayOffset + 6];
-            for (int i = 0; i < count; i++)
-            {
-                column6[i] = ((global::AllTypesEntity)entities[start + i]).BoolValue;
-            }
-        }
-        {
             decimal[] column7 = (decimal[])arrays[arrayOffset + 7];
-            for (int i = 0; i < count; i++)
-            {
-                column7[i] = ((global::AllTypesEntity)entities[start + i]).DecimalValue;
-            }
-        }
-        {
             double[] column8 = (double[])arrays[arrayOffset + 8];
-            for (int i = 0; i < count; i++)
-            {
-                column8[i] = ((global::AllTypesEntity)entities[start + i]).DoubleValue;
-            }
-        }
-        {
             float[] column9 = (float[])arrays[arrayOffset + 9];
-            for (int i = 0; i < count; i++)
-            {
-                column9[i] = ((global::AllTypesEntity)entities[start + i]).FloatValue;
-            }
-        }
-        {
             global::System.DateTime[] column10 = (global::System.DateTime[])arrays[arrayOffset + 10];
-            for (int i = 0; i < count; i++)
-            {
-                column10[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeValue;
-            }
-        }
-        {
             global::System.Guid[] column11 = (global::System.Guid[])arrays[arrayOffset + 11];
-            for (int i = 0; i < count; i++)
-            {
-                column11[i] = ((global::AllTypesEntity)entities[start + i]).GuidValue;
-            }
-        }
-        {
             global::System.DateTimeOffset[] column12 = (global::System.DateTimeOffset[])arrays[arrayOffset + 12];
-            for (int i = 0; i < count; i++)
-            {
-                column12[i] = ((global::AllTypesEntity)entities[start + i]).DateTimeOffsetValue;
-            }
-        }
-        {
             global::System.DateOnly[] column13 = (global::System.DateOnly[])arrays[arrayOffset + 13];
-            for (int i = 0; i < count; i++)
-            {
-                column13[i] = ((global::AllTypesEntity)entities[start + i]).DateOnlyValue;
-            }
-        }
-        {
             global::System.TimeOnly[] column14 = (global::System.TimeOnly[])arrays[arrayOffset + 14];
-            for (int i = 0; i < count; i++)
-            {
-                column14[i] = ((global::AllTypesEntity)entities[start + i]).TimeOnlyValue;
-            }
-        }
-        {
             byte[][] column15 = (byte[][])arrays[arrayOffset + 15];
-            for (int i = 0; i < count; i++)
-            {
-                column15[i] = ((global::AllTypesEntity)entities[start + i]).BytesValue;
-            }
-        }
-        {
             int?[] column16 = (int?[])arrays[arrayOffset + 16];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::AllTypesEntity)entities[start + i]).NullableInt is { } v16)
-                {
-                    column16[i] = v16;
-                }
-            }
-        }
-        {
             string[] column17 = (string[])arrays[arrayOffset + 17];
-            for (int i = 0; i < count; i++)
-            {
-                column17[i] = ((global::AllTypesEntity)entities[start + i]).NullableString!;
-            }
-        }
-        {
             global::System.Guid?[] column18 = (global::System.Guid?[])arrays[arrayOffset + 18];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::AllTypesEntity)entities[start + i]).NullableGuid is { } v18)
-                {
-                    column18[i] = v18;
-                }
-            }
-        }
-        {
             global::System.TimeOnly?[] column19 = (global::System.TimeOnly?[])arrays[arrayOffset + 19];
-            for (int i = 0; i < count; i++)
-            {
-                if (((global::AllTypesEntity)entities[start + i]).NullableTimeOnly is { } v19)
-                {
-                    column19[i] = v19;
-                }
-            }
-        }
-        {
             byte[][] column20 = (byte[][])arrays[arrayOffset + 20];
             for (int i = 0; i < count; i++)
             {
-                column20[i] = ((global::AllTypesEntity)entities[start + i]).NullableBytes!;
+                var entity = (global::AllTypesEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.IntValue;
+                column2[i] = entity.ShortValue;
+                column3[i] = entity.ByteValue;
+                column4[i] = entity.StringValue;
+                column5[i] = entity.CharValue;
+                column6[i] = entity.BoolValue;
+                column7[i] = entity.DecimalValue;
+                column8[i] = entity.DoubleValue;
+                column9[i] = entity.FloatValue;
+                column10[i] = entity.DateTimeValue;
+                column11[i] = entity.GuidValue;
+                column12[i] = entity.DateTimeOffsetValue;
+                column13[i] = entity.DateOnlyValue;
+                column14[i] = entity.TimeOnlyValue;
+                column15[i] = entity.BytesValue;
+                if (entity.NullableInt is { } v16)
+                {
+                    column16[i] = v16;
+                }
+                column17[i] = entity.NullableString!;
+                if (entity.NullableGuid is { } v18)
+                {
+                    column18[i] = v18;
+                }
+                if (entity.NullableTimeOnly is { } v19)
+                {
+                    column19[i] = v19;
+                }
+                column20[i] = entity.NullableBytes!;
             }
         }
     }
