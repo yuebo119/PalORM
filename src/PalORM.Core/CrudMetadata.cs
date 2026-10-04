@@ -85,6 +85,19 @@ public readonly struct CrudBindings
     /// <summary>UNNEST 阶段 B：UPSERT 逐列数组分配器（AOT 安全，同 <see cref="CreateUpdateColumnArrays"/>）。</summary>
     public readonly Func<int, Array[]>? CreateUpsertColumnArrays;
 
+    /// <summary>N4（2026-10-04 全量复读）：UPSERT 池 DbType 一次性初始化委托（消费方 =
+    /// BatchUpsertAsync 自建池路径，建池后调用一次）。新旧形态互斥：非 null 时
+    /// <see cref="BindUpsertValues"/> 只写 Value（DbType 已由本委托建立，池存续期内恒定）；
+    /// null（旧生成器程序集）时 BindUpsertValues 保持"每行写 DbType+Value"的旧形态
+    ///（B21 对 INSERT 池的契约同构）。</summary>
+    public readonly Action<DbParameter[], int>? InitUpsertParameters;
+
+    /// <summary>N4（2026-10-04 全量复读）：UPDATE 池 DbType 一次性初始化委托（消费方 =
+    /// ExecuteBulkUpdatePooledAsync / ExecuteBulkUpdateBatchesAsync 的参数池，建池后调用一次；
+    /// PL-2 单行复用槽不经此——其池经 BindUpdate 建参时已带 DbTypeHint）。新旧形态互斥同
+    /// <see cref="InitUpsertParameters"/>。</summary>
+    public readonly Action<DbParameter[], int>? InitUpdateParameters;
+
     /// <summary>构造 CRUD 委托聚合。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:Constructor should not have more than 7 parameters",
@@ -109,7 +122,9 @@ public readonly struct CrudBindings
         Func<int, Array[]>? createUpdateColumnArrays = null,
         Action<IReadOnlyList<object>, int, int, Array[], int>? fillUpsertColumnArrays = null,
         IReadOnlyList<Type>? upsertColumnArrayElementTypes = null,
-        Func<int, Array[]>? createUpsertColumnArrays = null)
+        Func<int, Array[]>? createUpsertColumnArrays = null,
+        Action<DbParameter[], int>? initUpsertParameters = null,
+        Action<DbParameter[], int>? initUpdateParameters = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -129,6 +144,8 @@ public readonly struct CrudBindings
         FillUpsertColumnArrays = fillUpsertColumnArrays;
         UpsertColumnArrayElementTypes = upsertColumnArrayElementTypes;
         CreateUpsertColumnArrays = createUpsertColumnArrays;
+        InitUpsertParameters = initUpsertParameters;
+        InitUpdateParameters = initUpdateParameters;
     }
 }
 
@@ -209,6 +226,10 @@ public readonly struct CrudMetadata
     public readonly IReadOnlyList<Type>? UpsertColumnArrayElementTypes;
     /// <summary>UNNEST 阶段 B：UPSERT 逐列数组分配器（判定条件与消费路径见 CrudBindings.CreateUpsertColumnArrays）。</summary>
     public readonly Func<int, Array[]>? CreateUpsertColumnArrays;
+    /// <summary>N4（2026-10-04 全量复读）：UPSERT 池 DbType 一次性初始化委托（判定条件与消费路径见 CrudBindings.InitUpsertParameters）。</summary>
+    public readonly Action<DbParameter[], int>? InitUpsertParameters;
+    /// <summary>N4（2026-10-04 全量复读）：UPDATE 池 DbType 一次性初始化委托（判定条件与消费路径见 CrudBindings.InitUpdateParameters）。</summary>
+    public readonly Action<DbParameter[], int>? InitUpdateParameters;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
@@ -254,6 +275,8 @@ public readonly struct CrudMetadata
             ? Array.AsReadOnly(upsertElementTypes.ToArray())
             : null;
         CreateUpsertColumnArrays = bindings.CreateUpsertColumnArrays;
+        InitUpsertParameters = bindings.InitUpsertParameters;
+        InitUpdateParameters = bindings.InitUpdateParameters;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
@@ -286,7 +309,7 @@ public readonly struct CrudMetadata
                 InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters,
                 BuildDeleteKeyArray, FillUpdateColumnArrays, UpdateColumnArrayElementTypes,
                 CreateUpdateColumnArrays, FillUpsertColumnArrays, UpsertColumnArrayElementTypes,
-                CreateUpsertColumnArrays),
+                CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 }

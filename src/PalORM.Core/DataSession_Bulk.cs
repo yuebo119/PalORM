@@ -527,6 +527,10 @@ public partial class DataSession<TProvider>
         DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
             paramsPerRow, hasTenant, _tenantParameterName, _tenantId,
             TProvider.CreateParameter);
+        // N4（2026-10-04 全量复读）：可空/byte[] 列的 DbType 提示建池后一次性建立（原由
+        // BindUpdateValues 每行重写；租户槽在 CreateParameterArray 内经 CreateParameter 带值，
+        // 不在 Init 列序内）。旧生成器程序集 Init 委托为 null：不调，其 binder 保持旧形态。
+        metadata.InitUpdateParameters?.Invoke(pool, 0);
         AttachParameters(cmd, pool, paramsPerRow, paramsPerRow, hasTenant ? 1 : 0);
 
         // MySQL-8/PG-7：MySQL/PG dialect 走 DbBatch 打包——N 条 UPDATE 单次协议往返。
@@ -892,6 +896,9 @@ public partial class DataSession<TProvider>
         DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
             poolRowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
             TProvider.CreateParameter);
+        // N4（2026-10-04 全量复读）：同 ExecuteBulkUpdatePooledAsync——可空/byte[] 列的 DbType
+        // 提示一次性建立（原由 BindUpdateValues 每行每列重写恒定值）。
+        metadata.InitUpdateParameters?.Invoke(pool, 0);
         AttachParameters(cmd, pool, poolRowParamCount, poolRowParamCount, tenantParams);
 
         Action<DbParameter[], object, int>? valuesBinder = metadata.BindUpdateValues;
@@ -1358,6 +1365,10 @@ public partial class DataSession<TProvider>
             parameter.ParameterName = QueryBuilder<T>.GetParameterName(i);
             pool[i] = parameter;
         }
+        // N4（2026-10-04 全量复读）：可空/byte[] 列的 DbType 提示建池后一次性建立——原由
+        // BindUpsertValues 每行重写（池存续期内恒定，纯冗余）。旧生成器程序集 Init 委托为
+        // null：不调，其 BindUpsertValues 保持自写 DbType 的旧形态（B21 对 INSERT 池的同款契约）。
+        metadata.InitUpsertParameters?.Invoke(pool, 0);
 
         string? lastSql = null;
         int lastRowCount = -1;

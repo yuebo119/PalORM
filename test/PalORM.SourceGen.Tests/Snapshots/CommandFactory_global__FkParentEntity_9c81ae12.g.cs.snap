@@ -45,6 +45,11 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
         parameters[paramOffset + 1].Value = (object)entity.Name;
     }
 
+    /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+    }
+
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
     internal static void BindUpdate(global::System.Data.Common.DbCommand cmd, global::FkParentEntity entity)
     {
@@ -57,6 +62,11 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
     {
         parameters[paramOffset + 0].Value = (object)entity.Name;
         parameters[paramOffset + 1].Value = (object)entity.Id;
+    }
+
+    /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpdateParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
     }
 
     /// <summary>绑定主键到 DELETE 参数。</summary>

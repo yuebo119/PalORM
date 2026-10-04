@@ -250,7 +250,12 @@ internal static class RegistryEmitter
         // UNNEST 阶段 B：UPSERT 的逐列数组三件套（列序 = IsUpsertable，与 UPDATE 那套独立）。
         sb.AppendLine($"                    fillUpsertColumnArrays: (entities, start, count, arrays, arrayOffset) => CommandFactory_{m.GeneratedTypeSuffix}.FillUpsertColumnArrays(entities, start, count, arrays, arrayOffset),");
         sb.AppendLine($"                    upsertColumnArrayElementTypes: CommandFactory_{m.GeneratedTypeSuffix}.UpsertColumnArrayElementTypes(),");
-        sb.AppendLine($"                    createUpsertColumnArrays: CommandFactory_{m.GeneratedTypeSuffix}.CreateUpsertColumnArrays),");
+        sb.AppendLine($"                    createUpsertColumnArrays: CommandFactory_{m.GeneratedTypeSuffix}.CreateUpsertColumnArrays,");
+        // N4（2026-10-04 全量复读）：UPSERT/UPDATE 池 DbType 一次性初始化委托——B21 对两类
+        // 池的对称化；消费方（BatchUpsertAsync / ExecuteBulkUpdatePooled/Batches）建池后调用
+        // 一次。旧生成器程序集为 null 时消费方不调（其 BindUpsert/UpdateValues 自写 DbType）。
+        sb.AppendLine($"                    initUpsertParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitUpsertParameters(parameters, off),");
+        sb.AppendLine($"                    initUpdateParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitUpdateParameters(parameters, off)),");
         string insertColumns = BuildStringArrayLiteral(
             columns.Where(static column => column.IsInsertable)
                 .Select(static column => column.ColumnName));
