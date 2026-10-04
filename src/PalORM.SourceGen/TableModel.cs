@@ -168,11 +168,12 @@ internal sealed record TableModel(
             // 不覆写（保持原类型映射，Error 级诊断已阻断编译）。
             string? enumClrTypeName = null;
             string? enumParseSwitchBody = null;
+            string? enumWriteSwitchBody = null;
             EnumStorageKind enumStorage = EnumStorageKind.None;
             if (converterType is null
                 && TryResolveEnumStorage(prop, columnAttr, ctx.SemanticModel.Compilation,
                     out ITypeSymbol? enumProviderOverride, out enumClrTypeName,
-                    out enumStorage, out enumParseSwitchBody))
+                    out enumStorage, out enumParseSwitchBody, out enumWriteSwitchBody))
             {
                 providerType = enumProviderOverride!;
             }
@@ -220,7 +221,7 @@ internal sealed record TableModel(
                 prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
                 defaultValueExpression,
                 columnLength, columnPrecision, columnScale, columnTypeName,
-                enumStorage, enumClrTypeName, enumParseSwitchBody));
+                enumStorage, enumClrTypeName, enumParseSwitchBody, enumWriteSwitchBody));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -304,16 +305,24 @@ internal sealed record TableModel(
     /// <summary>ITM-553（v6.1）：解析枚举属性的存储策略——返回 provider 覆写类型
     ///（string/int/long）、枚举全名与字符串形态的解析 switch 体。StoreAs 实参是编译期
     /// 枚举常量（盒装 int）：Default(0)/AsInt32(1)/AsInt64(2)/AsString(3)，缺省与未知值
-    /// 均落字符串（与枚举不可用时期的 TEXT 映射形态一致，升级零迁移）。</summary>
+    /// 均落字符串（与枚举不可用时期的 TEXT 映射形态一致，升级零迁移）。
+    /// <para>N2（2026-10-04 全量复读）：新增写侧 switch 体（成员名常量 → 字符串字面量），
+    /// 供 CommandFactoryEmitter 发射 <c>EnumStr_X</c> 辅助——替代写路径逐行
+    /// <c>ToString()</c> 的每行字符串分配（读侧 Parse_X 的对称物）。别名成员（重复常量值）
+    /// 不进写侧臂：重复常量模式的 switch 臂是编译错误，且 <c>ToString()</c> 对别名值的
+    /// 选取本就无定义——唯一值成员走常量臂（零分配），别名与未定义值统一落
+    /// <c>_ => value.ToString()</c> 兜底，行为与旧形态一致。</para></summary>
     internal static bool TryResolveEnumStorage(
         IPropertySymbol prop, AttributeData? columnAttr, Compilation compilation,
         out ITypeSymbol? providerOverride, out string? enumClrTypeName,
-        out EnumStorageKind storage, out string? parseSwitchBody)
+        out EnumStorageKind storage, out string? parseSwitchBody,
+        out string? writeSwitchBody)
     {
         providerOverride = null;
         enumClrTypeName = null;
         storage = EnumStorageKind.None;
         parseSwitchBody = null;
+        writeSwitchBody = null;
         ITypeSymbol unwrapped = SourceGenerationValidation.UnwrapNullable(prop.Type);
         if (unwrapped.TypeKind != TypeKind.Enum)
             return false;
@@ -333,16 +342,30 @@ internal sealed record TableModel(
         enumClrTypeName = unwrapped.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         if (storage == EnumStorageKind.AsString)
         {
-            var arms = new System.Text.StringBuilder();
+            var parseArms = new System.Text.StringBuilder();
+            var writeArms = new System.Text.StringBuilder();
+            // N2：按常量值计数识别别名成员（同一枚举内底层类型一致，盒装值相等即同值）
+            var valueCounts = new System.Collections.Generic.Dictionary<object, int>();
+            var namedMembers = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, object>>();
             foreach (IFieldSymbol member in unwrapped.GetMembers().OfType<IFieldSymbol>())
             {
                 // 合成字段 value__ 的 ConstantValue 为 null——据此过滤，只取具名成员
                 if (member.ConstantValue is null) continue;
-                arms.Append('"').Append(member.Name)
-                    .Append('"').Append(" => ").Append(enumClrTypeName)
-                    .Append('.').Append(member.Name).Append(", ");
+                namedMembers.Add(new(member.Name, member.ConstantValue));
+                valueCounts[member.ConstantValue] = valueCounts.TryGetValue(member.ConstantValue, out int count)
+                    ? count + 1
+                    : 1;
             }
-            parseSwitchBody = arms.ToString();
+            foreach (System.Collections.Generic.KeyValuePair<string, object> named in namedMembers)
+            {
+                parseArms.Append('"').Append(named.Key).Append('"').Append(" => ").Append(enumClrTypeName)
+                    .Append('.').Append(named.Key).Append(", ");
+                if (valueCounts[named.Value] == 1)
+                    writeArms.Append(enumClrTypeName).Append('.').Append(named.Key)
+                        .Append(" => \"").Append(named.Key).Append("\", ");
+            }
+            parseSwitchBody = parseArms.ToString();
+            writeSwitchBody = writeArms.ToString();
         }
         return true;
     }
@@ -412,7 +435,8 @@ internal sealed record ColumnModel(
     // ParseSwitchBody 是字符串形态的生成式 switch 解析体（AOT 零反射），仅 AsString 非空。
     EnumStorageKind EnumStorage = EnumStorageKind.None,
     string? EnumClrTypeName = null,
-    string? EnumParseSwitchBody = null)
+    string? EnumParseSwitchBody = null,
+    string? EnumWriteSwitchBody = null)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;
@@ -490,11 +514,12 @@ internal sealed record ProjectionModel(
             // ITM-553（v6.1）：投影同款枚举存储覆写（读路径共享 RowFactoryEmitter）。
             string? projEnumClr = null;
             string? projEnumParse = null;
+            string? projEnumWrite = null;
             EnumStorageKind projEnumStorage = EnumStorageKind.None;
             if (converterType is null
                 && TableModel.TryResolveEnumStorage(prop, columnAttr, ctx.SemanticModel.Compilation,
                     out ITypeSymbol? projOverride, out projEnumClr,
-                    out projEnumStorage, out projEnumParse))
+                    out projEnumStorage, out projEnumParse, out projEnumWrite))
             {
                 providerType = projOverride!;
             }
@@ -510,7 +535,8 @@ internal sealed record ProjectionModel(
                 ConverterTypeName: converterType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 SensitiveMask: null,
                 IsNullabilityUnknown: prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
-                EnumStorage: projEnumStorage, EnumClrTypeName: projEnumClr, EnumParseSwitchBody: projEnumParse));
+                EnumStorage: projEnumStorage, EnumClrTypeName: projEnumClr, EnumParseSwitchBody: projEnumParse,
+                EnumWriteSwitchBody: projEnumWrite));
         }
 
         if (columns.Count == 0)
