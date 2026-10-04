@@ -58,7 +58,8 @@ internal static class Program
                 "tables" => TableGen.Run(
                     CommandLine.Parse(args[1..]).Optional("results")
                         ?? Path.Combine(RepoRoot(), "bench", "results"),
-                    CommandLine.Parse(args[1..]).Optional("out")),
+                    CommandLine.Parse(args[1..]).Optional("out"),
+                    CommandLine.Parse(args[1..]).Optional("html")),
                 _ => Fail($"未知子命令: {args[0]}"),
             };
         }

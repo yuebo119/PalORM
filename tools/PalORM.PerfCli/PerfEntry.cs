@@ -56,10 +56,14 @@ internal static class PerfEntry
 
         // 四组表（性能输出规范的固定表格组）由门禁工具从最新非子集信封生成，追加进唯一报告——
         // 该段曾是每次跑测汇报的最大人工步骤（.ai 本地脚本原型已验证），固化后人工只写归因。
+        // HTML 副本（真 rowspan 合并 + 完整边框，浏览器打开）保留在 reports 目录：GFM 管道表
+        // 无 rowspan、竖线是否绘制由渲染器决定，md 的留空合并是格式上限（2026-10-04 用户要求
+        // 竖向真合并与边框竖线）。
         string tablesPath = outPath + ".tables.md";
+        string tablesHtmlPath = outPath + ".tables.html";
         int code = Perf.Run("dotnet",
             $"run --project \"{Path.Combine(root, GateProject)}\" -c Release --no-build -- tables "
-            + $"--results \"{Path.Combine(root, "bench", "results")}\" --out \"{tablesPath}\"");
+            + $"--results \"{Path.Combine(root, "bench", "results")}\" --out \"{tablesPath}\" --html \"{tablesHtmlPath}\"");
         if (code == 0 && File.Exists(tablesPath))
         {
             File.AppendAllText(outPath, File.ReadAllText(tablesPath));
