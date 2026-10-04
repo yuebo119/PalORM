@@ -372,7 +372,8 @@ internal sealed class GeneratorPhase2Tests
 
         await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
         // v4.0 优化 A：BindDelete 也走单例字段 _conv_<prop>，不再每次 new Converter。
-        await Assert.That(bindDelete).Contains("_conv_Id.ToProvider((global::Ulid)key)");
+        // UNNEST 阶段 B：cast 加外层括号（((global::Ulid)key)）——与 BuildDeleteKeyArray 同源。
+        await Assert.That(bindDelete).Contains("_conv_Id.ToProvider(((global::Ulid)key))");
         await Assert.That(bindDelete).DoesNotContain("new global::UlidConverter()).ToProvider((global::Ulid)key)");
     }
 
