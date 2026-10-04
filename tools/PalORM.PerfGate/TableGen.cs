@@ -7,18 +7,27 @@ namespace PalORM.PerfGate;
 
 /// <summary>四组表生成器（性能测试结果输出规范的固定表格组：CRUD 单行与读 / 批量 / 事务 /
 /// 跨方言比值）。数据源 = 最新非子集 perfhub 批次的信封（MedianUs/AllocBytes/Ratio 逐项）。
-/// <para>格式口径与规范一致：中位 µs（自适应 ms）、分配 1024 进制 KB/MB、百分比取整
-/// （|p|&lt;0.5% 记 0%）、色标六档按显示值判定、倍数 ≥1.3 或 ≤0.7 加粗、🚨 = ≥1.50 或 ≤0.67。</para>
+/// <para>格式口径与规范一致（2026-10-04 step23 用户改版）：明细表（一/二/三）每行展开
+/// 「方言」列覆盖三方言；时延数值不带单位（µs 隐含，一位小数）；比值列 = 裸倍数两位小数 +
+/// 空格 + 色标紧贴百分比（无括号）；分配相对 ADO 用「P · D」记法；表四只列批量族 +
+/// GetAllAsync，列序 SQLite/PostgreSQL/MySQL，格值为裸比值。分配 1024 进制 KB/MB、
+/// 百分比取整（|p|&lt;0.5% 记 0%）、色标六档按显示值判定、倍数 ≥1.3 或 ≤0.7 加粗。</para>
+/// <para><b>行级标记 🔍（2026-10-04 用户裁决换标）</b>：比值 ≥1.50 或 ≤0.67 时操作名/格值
+/// 前置 🔍。语义 = 远离基准需人工判读（劣化 = 回归风险；优于地板 &gt;33% = 地板健全性待核），
+/// <b>不是警告</b>——远优方向同样标 🔍，故弃用 🚨（警示灯语义易误读为"出错"）。</para>
 /// <para>为什么做成工具而非汇报时手工贴：四组表曾是每次跑测后最大的人工步骤（.ai 本地脚本原型），
 /// 固化后统一报告自动携带，人工只写"看点"与"行读法"的归因。</para></summary>
 internal static class TableGen
 {
     private static readonly string[] CrudOps =
-        ["GetByKey", "QueryAll", "StreamAll", "Insert", "Update", "InsertReturningId"];
+        ["GetByKey", "GetAllAsync", "QueryAll", "Insert", "Update"];
     private static readonly string[] BulkOps = ["BulkInsert", "BulkUpdate", "BulkDelete", "UpsertBatch"];
-    private static readonly string[] TxOps = ["TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback"];
+    private static readonly string[] TxOps = ["TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback", "EnumInserts"];
     private static readonly string[] Dialects = ["SQLite", "MySQL", "PostgreSQL"];
+    private static readonly string[] CrossOps = ["BulkInsert", "BulkUpdate", "BulkDelete", "UpsertBatch", "GetAllAsync"];
     private const string Floor = "ADO_NET";
+    /// <summary>行级 🔍：比值 ≥1.50 或 ≤0.67（远离基准需人工判读，非警告）。</summary>
+    private const string Flag = "🔍";
 
     public static int Run(string resultsDir, string? outPath)
     {
@@ -47,6 +56,8 @@ internal static class TableGen
         md.AppendLine();
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"⚠ = 判别力弱：该行三臂里最大 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论（阈值同 Measure 的量具自检线）。仅 PerfHub 采集该指标。"));
+        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+            $"{Flag} = 远离基准需人工判读（P/ADO ≥1.50 或 ≤0.67）：劣化方向是回归风险，远优方向是地板健全性待核——两者都要过目，不等于告警。"));
         md.AppendLine();
 
         if (string.IsNullOrEmpty(outPath))
@@ -64,14 +75,17 @@ internal static class TableGen
 
     private static void Table1(StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier)
     {
-        md.AppendLine("**表 1 · CRUD 单行与读（SQLite）**");
+        md.AppendLine("**一、CRUD 单行与读**");
         md.AppendLine();
         Header(md);
         foreach (string op in CrudOps)
         {
-            foreach (int tier in new[] { minTier, 20000 })
+            foreach (string dialect in Dialects)
             {
-                Row(md, ix, "SQLite", op, tier, flaggable: true);
+                foreach (int tier in new[] { minTier, 20000 })
+                {
+                    Row(md, ix, dialect, op, tier, flaggable: true);
+                }
             }
         }
     }
@@ -79,14 +93,17 @@ internal static class TableGen
     private static void Table2(StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier)
     {
         md.AppendLine();
-        md.AppendLine("**表 2 · 批量处理（SQLite）**");
+        md.AppendLine("**二、批量处理**");
         md.AppendLine();
         Header(md);
         foreach (string op in BulkOps)
         {
-            foreach (int tier in new[] { minTier, 20000 })
+            foreach (string dialect in Dialects)
             {
-                Row(md, ix, "SQLite", op, tier, flaggable: true);
+                foreach (int tier in new[] { minTier, 20000 })
+                {
+                    Row(md, ix, dialect, op, tier, flaggable: true);
+                }
             }
         }
     }
@@ -94,30 +111,33 @@ internal static class TableGen
     private static void Table3(StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier)
     {
         md.AppendLine();
-        md.AppendLine("**表 3 · 事务（SQLite，仅最小档）**");
+        md.AppendLine("**三、事务（仅最小档）**");
         md.AppendLine();
         Header(md);
         foreach (string op in TxOps)
         {
-            Row(md, ix, "SQLite", op, minTier, flaggable: true);
+            foreach (string dialect in Dialects)
+            {
+                Row(md, ix, dialect, op, minTier, flaggable: true);
+            }
         }
     }
 
     private static void Table4(StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier)
     {
         md.AppendLine();
-        md.AppendLine("**表 4 · 跨方言 PalORM/ADO 比值**");
+        md.AppendLine("**四、跨方言 PalORM/ADO 比值（批量族 + GetAllAsync）**");
         md.AppendLine();
-        md.AppendLine("| 操作 | 档 | SQLite | MySQL | PostgreSQL |");
+        md.AppendLine("| 操作 | 档 | SQLite | PostgreSQL | MySQL |");
         md.AppendLine("|---|---|---|---|---|");
-        foreach (string op in CrudOps.Concat(BulkOps).Concat(TxOps))
+        foreach (string op in CrossOps)
         {
             foreach (int tier in new[] { minTier, 20000 })
             {
                 if (Get(ix, "SQLite", op, tier, "PalORM") is null && tier != minTier) continue;
                 md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-                    $"{CrossFlag(ix, op, tier)}{op} | {tier} | {CrossCell(ix, "SQLite", op, tier)} | "
-                    + $"{CrossCell(ix, "MySQL", op, tier)} | {CrossCell(ix, "PostgreSQL", op, tier)} |"));
+                    $"| {CrossFlag(ix, op, tier)}{op} | {tier} | {CrossCell(ix, "SQLite", op, tier)} | "
+                    + $"{CrossCell(ix, "PostgreSQL", op, tier)} | {CrossCell(ix, "MySQL", op, tier)} |"));
             }
         }
     }
@@ -127,7 +147,7 @@ internal static class TableGen
     {
         foreach (string dialect in Dialects)
         {
-            if (CrossRatio(ix, dialect, op, tier) is { } r && IsFlagged(r)) return "🚨 ";
+            if (CrossRatio(ix, dialect, op, tier) is { } r && IsFlagged(r)) return $"{Flag} ";
         }
 
         return "";
@@ -137,11 +157,10 @@ internal static class TableGen
         Dictionary<(string, string, int, string), PerfResultItem> ix, string dialect, string op, int tier)
     {
         if (CrossRatio(ix, dialect, op, tier) is not { } ratio) return "—";
-        string cell = $"{Emoji(ratio - 1)} {ratio.ToString("F2", CultureInfo.InvariantCulture)}×";
+        // 裸比值（无 ×、无色标——三列全展开后逐格色标噪声大，越线格前缀 🔍 已足够指向需判读的格）
+        string flag = IsFlagged(ratio) ? Flag : "";
+        string cell = $"{flag}{ratio.ToString("F2", CultureInfo.InvariantCulture)}";
         double shown = Math.Round(ratio, 2);
-        cell += WeakMark(
-            Get(ix, dialect, op, tier, Floor), Get(ix, dialect, op, tier, "Dapper"),
-            Get(ix, dialect, op, tier, "PalORM"));
         return shown is >= 1.3 or <= 0.7 ? $"**{cell}**" : cell;
     }
 
@@ -155,8 +174,8 @@ internal static class TableGen
 
     private static void Header(StringBuilder md)
     {
-        md.AppendLine("| 操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | 分配 ADO/Dapper/PalORM | 分配相对 ADO（D/P） |");
-        md.AppendLine("|---|---|---|---|---|---|---|---|---|");
+        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | P/ADO（倍数±%） | P/Dapper（倍数±%） | 分配（A/D/P） | 分配相对 ADO（D/P） |");
+        md.AppendLine("|---|---|---|---|---|---|---|---|---|---|");
     }
 
     private static void Row(
@@ -171,12 +190,11 @@ internal static class TableGen
         string pAdo = RatioCell(pal.MedianUs / ado.MedianUs) + WeakMark(ado, dap, pal);
         string pDap = dap is null || dap.MedianUs <= 0 ? "—" : RatioCell(pal.MedianUs / dap.MedianUs);
         string alloc = $"{FmtBytes(ado.AllocBytes)}/{FmtBytes(dap?.AllocBytes ?? 0)}/{FmtBytes(pal.AllocBytes)}";
-        string dDelta = DapDelta(dap, ado);
-        string pDelta = PalDelta(pal, ado);
-        string flag = flaggable && ado.MedianUs > 0 && IsFlagged(pal.MedianUs / ado.MedianUs) ? "🚨 " : "";
+        string allocDelta = AllocDeltaCell(pal, dap, ado);
+        string flag = flaggable && ado.MedianUs > 0 && IsFlagged(pal.MedianUs / ado.MedianUs) ? $"{Flag} " : "";
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"| {flag}{op} | {tier} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} "
-            + $"| {pAdo} | {pDap} | {alloc} | {dDelta} / {pDelta} |"));
+            $"| {flag}{op} | {dialect} | {tier} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} "
+            + $"| {pAdo} | {pDap} | {alloc} | {allocDelta} |"));
     }
 
     private static PerfResultItem? Get(
@@ -207,26 +225,28 @@ internal static class TableGen
     private static string RatioCell(double ratio)
     {
         double shown = Math.Round(ratio, 2);
-        string cell = $"{Emoji(ratio - 1)} {shown.ToString("F2", CultureInfo.InvariantCulture)}× ({Pct(ratio - 1)})";
+        string cell = $"{shown.ToString("F2", CultureInfo.InvariantCulture)} {Emoji(ratio - 1)}{Pct(ratio - 1)}";
         return shown is >= 1.3 or <= 0.7 ? $"**{cell}**" : cell;
     }
 
-    private static string PalDelta(PerfResultItem pal, PerfResultItem ado)
-        => ado.AllocBytes > 0 ? Delta((pal.AllocBytes / (double)ado.AllocBytes) - 1) : "—";
-
-    private static string DapDelta(PerfResultItem? dap, PerfResultItem ado)
-        => dap is null || ado.AllocBytes <= 0 ? "—" : Delta((dap.AllocBytes / (double)ado.AllocBytes) - 1);
+    /// <summary>分配相对 ADO 的「P · D」记法：PalORM 差值在前（无前缀），Dapper 差值带 D 前缀在后。</summary>
+    private static string AllocDeltaCell(PerfResultItem pal, PerfResultItem? dap, PerfResultItem ado)
+    {
+        string p = ado.AllocBytes > 0 ? Delta((pal.AllocBytes / (double)ado.AllocBytes) - 1) : "—";
+        if (dap is null || ado.AllocBytes <= 0) return $"{p} · D —";
+        return $"{p} · D {Delta((dap.AllocBytes / (double)ado.AllocBytes) - 1)}";
+    }
 
     private static string Delta(double p)
     {
         int q = Math.Abs(p * 100) < 0.5 ? 0 : (int)Math.Round(p * 100, MidpointRounding.AwayFromZero);
-        return $"{Emoji(p)} {q:+0;-0;0}%";
+        return $"{Emoji(p)}{q:+0;-0;+0}%";
     }
 
     private static string Pct(double p)
     {
         int q = Math.Abs(p * 100) < 0.5 ? 0 : (int)Math.Round(p * 100, MidpointRounding.AwayFromZero);
-        return $"{q:+0;-0;0}%";
+        return $"{q:+0;-0;+0}%";
     }
 
     private static string Emoji(double p)
@@ -244,24 +264,24 @@ internal static class TableGen
         };
     }
 
+    /// <summary>时延裸数值（µs 隐含，不带单位）：≥1 一位小数，&lt;1 三位小数（当前夹具面最小中位 ~6µs，子 1µs 为防御）。</summary>
     private static string FmtUs(double? medianUs)
     {
         if (medianUs is null or <= 0) return "—";
         double us = medianUs.Value;
-        if (us < 1) return us.ToString("F3", CultureInfo.InvariantCulture) + " µs";
-        if (us < 10) return us.ToString("F2", CultureInfo.InvariantCulture) + " µs";
-        if (us < 1000) return us.ToString("F1", CultureInfo.InvariantCulture) + " µs";
-        return (us / 1000).ToString("F2", CultureInfo.InvariantCulture) + " ms";
+        return us < 1
+            ? us.ToString("F3", CultureInfo.InvariantCulture)
+            : us.ToString("F1", CultureInfo.InvariantCulture);
     }
 
     private static string FmtBytes(double bytes)
     {
         if (bytes <= 0) return "—";
-        if (bytes < 1024) return Math.Round(bytes).ToString(CultureInfo.InvariantCulture) + " B";
+        if (bytes < 1024) return Math.Round(bytes).ToString(CultureInfo.InvariantCulture) + "B";
         double kb = bytes / 1024;
-        if (kb < 100) return kb.ToString("F1", CultureInfo.InvariantCulture) + " KB";
-        if (kb < 1024) return Math.Round(kb).ToString(CultureInfo.InvariantCulture) + " KB";
-        return (kb / 1024).ToString("F1", CultureInfo.InvariantCulture) + " MB";
+        if (kb < 100) return kb.ToString("F1", CultureInfo.InvariantCulture) + "KB";
+        if (kb < 1024) return Math.Round(kb).ToString(CultureInfo.InvariantCulture) + "KB";
+        return (kb / 1024).ToString("F1", CultureInfo.InvariantCulture) + "MB";
     }
 
     private static PerfResultEnvelope? NewestPerfHubBatch(string resultsDir)
