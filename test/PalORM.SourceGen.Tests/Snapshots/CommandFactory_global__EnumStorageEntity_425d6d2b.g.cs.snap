@@ -60,8 +60,13 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
         parameters[paramOffset + 1].Value = (object)EnumStr_Status(entity.Status);
         parameters[paramOffset + 2].Value = (object)(int)entity.Level;
         parameters[paramOffset + 3].Value = (object)(long)entity.WideFlag;
-        parameters[paramOffset + 4].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 4].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus);
+    }
+
+    /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 4].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
@@ -80,9 +85,14 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
         parameters[paramOffset + 0].Value = (object)EnumStr_Status(entity.Status);
         parameters[paramOffset + 1].Value = (object)(int)entity.Level;
         parameters[paramOffset + 2].Value = (object)(long)entity.WideFlag;
-        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus);
         parameters[paramOffset + 4].Value = (object)entity.Id;
+    }
+
+    /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpdateParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>绑定主键到 DELETE 参数。</summary>

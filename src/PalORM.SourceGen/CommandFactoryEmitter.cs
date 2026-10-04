@@ -84,9 +84,22 @@ internal static class CommandFactoryEmitter
     sb.AppendLine($"    /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>");
     sb.AppendLine($"    internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, {model.EntityTypeName} entity, int paramOffset)");
     sb.AppendLine("    {");
-    // PG-4：UPSERT 池无 NpgsqlDbType 消费方，非空标量列不带 DbType（见 GenerateBindValuesBody 注释）
-    GenerateBindValuesBody(model, sb, static column => column.IsUpsertable, emitSelectiveDbType: true);
+    // N4（2026-10-04 全量复读）：DbType 分解至 InitUpsertParameters 一次性建立（B21 对
+    // UPSERT 池的对称化）——原 emitSelectiveDbType:true 形态对可空/byte[] 列每行每列重写
+    // 恒定 DbType（PG-4 实测纯成本：31ns vs 13ns），池存续期内值不变，属纯冗余。
+    // 旧生成器程序集无 Init 委托时消费方按 null 判定不调，其 BindUpsertValues 保持
+    // 自写 DbType 的旧形态（两形态互斥且各自自洽，与 B21 的 INSERT 契约同构）。
+    GenerateBindValuesBody(model, sb, static column => column.IsUpsertable);
     sb.AppendLine("    }");
+        sb.AppendLine();
+        // N4（2026-10-04 全量复读）：UPSERT 池 DbType 一次性初始化——消费方（BatchUpsertAsync
+        // 自建池路径）建池后调用一次；只对 NeedsPoolDbTypeHint 列（可空/byte[]）写提示，
+        // 非空标量列保持驱动推断（PG-4 既定决策不变）。
+        sb.AppendLine($"    /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>");
+        sb.AppendLine($"    internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)");
+        sb.AppendLine("    {");
+        GenerateInitParametersBody(model, sb, static column => column.IsUpsertable, selective: true);
+        sb.AppendLine("    }");
         sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定实体属性到 UPDATE 参数。</summary>");
         sb.AppendLine($"    internal static void BindUpdate(global::System.Data.Common.DbCommand cmd, {model.EntityTypeName} entity)");
@@ -99,10 +112,22 @@ internal static class CommandFactoryEmitter
         // 其 probe 命令原先逐行 BindUpdate 建参数（40000 行 × 4 列 = 16 万次创建），
         // 而目标参数池本身没问题——真库实测该路径 2671 B/行（PG），远超 MySQL 多值 INSERT 的 359。
         // paramOffset 供扁平池的按行基址使用（池长 batchLen × paramsPerRow）。
+        // N4（2026-10-04 全量复读）：DbType 分解至 InitUpdateParameters 一次性建立——原形态对
+        // 可空/byte[] 列每行每列重写恒定 DbType（值恒定纯冗余）；PL-2 单行复用路径的池经
+        // BindUpdate 建参时已带 DbTypeHint，同样不受影响。旧生成器程序集无 Init 委托时其
+        // BindUpdateValues 保持自写 DbType 的旧形态（消费方按 null 判定分支）。
         sb.AppendLine($"    /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>");
         sb.AppendLine($"    internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, {model.EntityTypeName} entity, int paramOffset)");
         sb.AppendLine("    {");
         GenerateBindUpdateValuesBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        // N4（2026-10-04 全量复读）：UPDATE 池 DbType 一次性初始化——列序与 BindUpdateValues
+        // 共 GetUpdateColumnOrder 单一真源（SET → 主键；并发令牌恒末位且从不带 DbType）。
+        sb.AppendLine($"    /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>");
+        sb.AppendLine($"    internal static void InitUpdateParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)");
+        sb.AppendLine("    {");
+        GenerateInitUpdateParametersBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
         sb.AppendLine($"    /// <summary>绑定主键到 DELETE 参数。</summary>");
@@ -748,32 +773,28 @@ internal static class CommandFactoryEmitter
 
 
     /// <summary>v4.6：仅设置预分配参数的 Value（无 CreateParameter/Add/ParameterName），用于跨批参数复用。
-    /// <para><b>B21（2026-10-01 全 API 逐项轮）</b>：INSERT 池的 DbType 分解至
+    /// <para><b>B21（2026-10-01）</b>：INSERT 池的 DbType 分解至
     /// <see cref="GenerateInitInsertParametersBody"/> 一次性初始化（池跨批复用时逐行重写值是
     /// 纯冗余，值为恒定）；本方法对 INSERT 退化为只写 Value。旧生成器程序集无 Init 委托时
     /// 其 BindInsertValues 仍为"每行写 DbType+Value"的旧形态（消费方按
     /// CrudBindings.InitInsertParameters 非空判定分支）。</para>
-    /// <para><b>emitSelectiveDbType 两态</b>（ITM-823，v6.1 收敛基础上的 B21 收敛）：false =
-    /// 完全不写 DbType（INSERT 池——DbType 由 Init 一次性建立）；true = 按
-    /// <see cref="NeedsPoolDbTypeHint"/> 选择性写（UPSERT 池——非空标量列保持驱动推断，
-    /// PG-4 实测每行赋值纯成本：31ns vs 13ns；可空列与 byte[] 列发提示，DBNull 落 Unknown
-    /// 的驱动慢路径/类型歧义 + Binary 确定性契约）。</para></summary>
+    /// <para><b>N4（2026-10-04 全量复读）</b>：UPSERT 池同款分解至 InitUpsertParameters——
+    /// 原 emitSelectiveDbType:true 形态（ITM-823）对可空/byte[] 列每行重写恒定 DbType，
+    /// 选择性判据（<see cref="NeedsPoolDbTypeHint"/>）移入 Init 侧保持不变；非空标量列
+    /// 继续保持驱动推断（PG-4 既定决策）。旧生成器程序集的 BindUpsertValues 保持旧形态。</para></summary>
     private static void GenerateBindValuesBody(TableModel model, StringBuilder sb)
-        => GenerateBindValuesBody(model, sb, static column => column.IsInsertable, emitSelectiveDbType: false);
+        => GenerateBindValuesBody(model, sb, static column => column.IsInsertable);
 
     /// <summary>共享 Value 直写循环——列序 = <paramref name="predicate"/> 过滤后的声明序，
     /// 与同谓词的 GenerateBindBody（建参数版）逐列一致（PL-3.2：Upsert 版消费 IsUpsertable）。</summary>
     private static void GenerateBindValuesBody(
-        TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate, bool emitSelectiveDbType)
+        TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate)
     {
         int pi = 0;
         foreach (var col in model.Columns.AsSpan())
         {
             if (!predicate(col)) continue;
             string valueExpr = GetParameterValueExpression(col);
-            if (emitSelectiveDbType && NeedsPoolDbTypeHint(col)
-                && DbTypeFor(col.ProviderClrTypeName) is { } poolMapped)
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{poolMapped};");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
@@ -790,6 +811,24 @@ internal static class CommandFactoryEmitter
         {
             if (!col.IsInsertable) continue;
             if (DbTypeFor(col.ProviderClrTypeName) is { } mapped)
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
+            pi++;
+        }
+    }
+
+    /// <summary>N4（2026-10-04 全量复读）：UPSERT 池 DbType 的一次性初始化发射——列序 =
+    /// predicate 过滤后的声明序（与 BindUpsertValues 同谓词同序）。selective 判据保持
+    /// ITM-823 原形态：只对 <see cref="NeedsPoolDbTypeHint"/> 列（可空/byte[]）写提示，
+    /// 非空标量列保持驱动推断（PG-4 决策）。</summary>
+    private static void GenerateInitParametersBody(
+        TableModel model, StringBuilder sb, Func<ColumnModel, bool> predicate, bool selective)
+    {
+        int pi = 0;
+        foreach (var col in model.Columns.AsSpan())
+        {
+            if (!predicate(col)) continue;
+            if (DbTypeFor(col.ProviderClrTypeName) is { } mapped
+                && (!selective || NeedsPoolDbTypeHint(col)))
                 sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{mapped};");
             pi++;
         }
@@ -841,10 +880,10 @@ internal static class CommandFactoryEmitter
     /// <summary>BindUpdateValues 的发射体——列序与 <see cref="GenerateBindUpdateBody"/> 由
     /// <see cref="GetUpdateColumnOrder"/> 单一真源保证一致（GEN-012：原"逐字一致"注释契约
     /// 已被结构化收敛替代）。差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。
-    /// <para><b>PG-4（2026-09-26）不带 DbType</b>：UPDATE 池参数每行每列重绑，但无任何消费方读
-    /// <c>NpgsqlDbType</c>（UPDATE..FROM(VALUES) 执行期由驱动从 Value 推断，与本方法 S3 前
-    /// 行为一致）——保留 byte[]→Binary（v5.3 PG BYTEA 确定性映射），其余标量不付每行赋值成本
-    /// （探针：DbType+Value 31ns vs Value 13ns）。</para></summary>
+    /// <para><b>N4（2026-10-04 全量复读）</b>：不再逐行写 DbType——可空/byte[] 列的提示
+    /// 分解至 <see cref="GenerateInitUpdateParametersBody"/> 建池后一次性建立（B21 对 UPDATE
+    /// 池的对称化）。非空标量列保持 PG-4 驱动推断决策（探针：DbType+Value 31ns vs Value
+    /// 13ns）；byte[]→Binary 的确定性映射（v5.3 PG BYTEA）在 Init 侧保留。</para></summary>
     private static void GenerateBindUpdateValuesBody(TableModel model, StringBuilder sb)
     {
         var (setCols, pkCols, cc) = GetUpdateColumnOrder(model);
@@ -853,16 +892,29 @@ internal static class CommandFactoryEmitter
         foreach (var col in setCols.Concat(pkCols))
         {
             string valueExpr = GetParameterValueExpression(col);
-            // ITM-823（v6.1）：byte[]-only 收敛为 NeedsPoolDbTypeHint（可空列同发——DBNull 落
-            // Unknown 的驱动慢路径与单行 BindUpdate 的分叉消除；非空标量保持 PG-4 推断决策）
-            if (NeedsPoolDbTypeHint(col) && DbTypeFor(col.ProviderClrTypeName) is { } updateMapped)
-                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{updateMapped};");
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = {valueExpr};");
             pi++;
         }
         if (cc is not null)
         {
             sb.AppendLine($"        parameters[paramOffset + {pi}].Value = entity.{cc.EscapedPropertyName};");
+        }
+    }
+
+    /// <summary>N4：UPDATE 池 DbType 一次性初始化的发射体——列序与
+    /// <see cref="GenerateBindUpdateValuesBody"/> 共 <see cref="GetUpdateColumnOrder"/> 单一真源
+    ///（SET 列 → 主键；并发令牌恒末位且从不带 DbType）。只对 <see cref="NeedsPoolDbTypeHint"/>
+    /// 列（可空/byte[]）写提示，非空标量列保持驱动推断。</summary>
+    private static void GenerateInitUpdateParametersBody(TableModel model, StringBuilder sb)
+    {
+        var (setCols, pkCols, _) = GetUpdateColumnOrder(model);
+
+        int pi = 0;
+        foreach (var col in setCols.Concat(pkCols))
+        {
+            if (NeedsPoolDbTypeHint(col) && DbTypeFor(col.ProviderClrTypeName) is { } updateMapped)
+                sb.AppendLine($"        parameters[paramOffset + {pi}].DbType = global::System.Data.DbType.{updateMapped};");
+            pi++;
         }
     }
 
