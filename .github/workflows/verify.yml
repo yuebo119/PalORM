@@ -248,6 +248,12 @@ jobs:
               # 仍回归仓库内防线——stub-check / SDK 固定 / secret-guard / 语言门禁
               run: dotnet run --file scripts/test-quality-scripts.cs
 
+            - name: Param collection reuse gate (R-UNNESTB family)
+              # 2026-10-06 接线（系统评估 P2-5）：标记制门禁原先只挂 pre-commit 与
+              # quality-harness，本地之外（CI/克隆环境）无触发点——B160 触发链完整性。
+              # 该门禁扫描 src/ 全部参数集合变更调用点的理由码声明，缺声明即失败。
+              run: dotnet run --file scripts/gate-param-collection-reuse.cs
+
     aot-sqlite:
         name: SQLite Native AOT
         runs-on: ubuntu-latest

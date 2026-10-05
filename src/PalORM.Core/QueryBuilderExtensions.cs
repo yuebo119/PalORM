@@ -8,7 +8,7 @@ namespace PalORM;
 public static class QueryBuilderExtensions
 {
     /// <summary>结果列表的预分配容量上限（ITM-712）。Take/分页大小是查询结果上界而非预期行数，
-    /// 无上限的预分配可被单个超大值放大为进程级 OOM；封顶后超出部分依赖 List 均摊 O(1) 扩容。</summary>
+    /// 无上限的预分配可被单个超大值放大为进程级 OOM；超出部分由 <see cref="ResultListReader"/> 池化收集。</summary>
     private const int MaxPreallocatedCapacity = 4096;
 
     /// <summary>实际缓存 key 组装（ADR-L 结构性隔离）：租户作用域非空时前缀化——
@@ -28,13 +28,16 @@ public static class QueryBuilderExtensions
             builder._operationState.EnterReadOnly();
         // 缓存命中返回列表副本——List 本身隔离，但元素是共享实体实例（浅拷贝，ITM-308）：
         // 调用方修改命中实体会污染缓存与其他调用方。契约声明见 WithCache 文档。
-        // ADR-L：实际 key 经租户作用域前缀组装（跨租户命中结构性不可能）
-        if (builder._cacheKey is not null
-            && builder._queryCache.TryGet(EffectiveCacheKey(builder), out List<T>? cached) && cached is not null)
+        // ADR-L：实际 key 经租户作用域前缀组装（跨租户命中结构性不可能）。
+        // A8（2026-10-01 全 API 逐项轮）：key 单次组装贯穿 TryGet 与 Set——原实现未命中
+        // 路径（TryGet 一次 + Set 一次）在租户会话下每次查询拼两次前缀串。
+        string? effectiveCacheKey = builder._cacheKey is not null ? EffectiveCacheKey(builder) : null;
+        if (effectiveCacheKey is not null
+            && builder._queryCache.TryGet(effectiveCacheKey, out List<T>? cached) && cached is not null)
             return new List<T>(cached);
 
         return await ExecuteQueryAsync(
-            builder, ct, operationLease.Owner).ConfigureAwait(false);
+            builder, ct, operationLease.Owner, effectiveCacheKey).ConfigureAwait(false);
     }
 
     /// <summary>流式消费查询结果——每行经回调处理，<b>不物化列表</b>。
@@ -78,7 +81,8 @@ public static class QueryBuilderExtensions
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
-        Stopwatch? sw = needStopwatch ? Stopwatch.StartNew() : null;
+        // A7（2026-10-01 全 API 逐项轮）：时间戳替代 Stopwatch（每查询省 1 个 Stopwatch 分配）。
+        long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
         ResilienceExecutor resilience = builder._resilience;
@@ -105,7 +109,7 @@ public static class QueryBuilderExtensions
                 await action(builder._factory(reader), token).ConfigureAwait(false);
                 rowCount++;
             }
-            NotifyInterceptorsOnAfter(interceptors, context, sw, (int)rowCount);
+            NotifyInterceptorsOnAfter(interceptors, context, swStart, (int)rowCount);
             return rowCount;
         }
 
@@ -137,10 +141,9 @@ public static class QueryBuilderExtensions
         }
         finally
         {
-            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
             // ITM-797①（r23）：与 ExecuteQueryAsync 同型——作用域内的池连接用完归还
             // （作用域外归还器对主连接为空操作），否则作用域内每次 ForEachAsync 都
             // 新建连接不复用。记录的是最后一次尝试的连接（重试中间尝试由作用域退出兜底）。
@@ -156,7 +159,8 @@ public static class QueryBuilderExtensions
     private static async ValueTask<List<T>> ExecuteQueryAsync<T>(
         QueryBuilder<T> builder,
         CancellationToken ct,
-        object? operationOwner = null) where T : class, new()
+        object? operationOwner = null,
+        string? effectiveCacheKey = null) where T : class, new()
     {
         if (builder._selectColumns is not null)
             throw new NotSupportedException(
@@ -172,7 +176,8 @@ public static class QueryBuilderExtensions
         // 默认配置（无观测性 + 无拦截器）的热路径省一次 StartNew + Stop（~150ns）。
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
-        Stopwatch? sw = needStopwatch ? Stopwatch.StartNew() : null;
+        // A7（2026-10-01 全 API 逐项轮）：时间戳替代 Stopwatch（每查询省 1 个 Stopwatch 分配）。
+        long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         // v5.4 弹性接入（评审 P1-a）：WithRetry/WithCircuitBreaker 此前对内置管线无效。
         // 只读 SELECT 管线现经会话弹性策略执行。接入条件：
@@ -188,8 +193,12 @@ public static class QueryBuilderExtensions
         //      · 调用点把单次尝试内核转成委托 1 次 = 56 B（内核是捕获 builder 的 async 局部函数，
         //        目标实例每次不同，无法缓存委托）
         //      · 执行器机械（熔断进出 + 异步状态机 ≈48 B），量级最小且与重试/熔断语义耦合
-        //    后两项合计 104 B 是唯一可剥的部分，须把只读内核从 async 局部函数改成 struct 内核 +
-        //    泛型约束（顺带消掉两分支共有的 ~250 B display class）；实测耗时无变化，未做。
+        //    【step10 PoC 实测证伪（2026-10-01），裁决不做，勿重开】：struct 内核 + 泛型约束
+        //    （IResilienceKernel + 显式类型参数）方案全量实施后 BDN 实测 GetByKey 仅 -61B
+        //    （即 56B 委托一项；QueryAll -495B/1.5MB 噪声级），远低于 200B 放弃线——
+        //    原估算中"~250 B display class"是误读：该盒属外层 async 方法的状态机
+        //    （跨 await 持有管线局部变量），内核 struct 化不影响它；要消它须手写 awaiter
+        //    重构外层方法（T5 级深水区），104B 级收益不构成理由。耗时无变化（同前评估）。
         //    直通配置下三项都不发生，但同时也失去超时包装：慢命令抛驱动自身异常，
         //    不再是带 PalORM.InfrastructureTimeout 标记的 TimeoutException。
         // 写入路径（ExecuteNonQueryAsync/Bulk/StoredProc/原始 SQL 家族）维持直连：
@@ -206,29 +215,71 @@ public static class QueryBuilderExtensions
         {
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
             lastReadConnection = connection;
-            await using DbCommand cmd = connection.CreateCommand();
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            cmd.Transaction = boundTransaction;
-            AddParameters(cmd, parameters);
-            // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
-            NotifyInterceptorsOnBefore(interceptors, context);
-            await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容（每次 2x 复制数组）。
-            // 16 是经验值：小型查询（< 16 行）零扩容，大型查询（10K 行）扩容次数从 14 降至 10。
-            // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
-            // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源）。封顶后由均摊 O(1) 扩容兜底。
-            List<T> list = builder._take.HasValue
-                ? new List<T>(Math.Min(builder._take.Value, MaxPreallocatedCapacity))
-                : new List<T>(16);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) list.Add(builder._factory(reader));
-            NotifyInterceptorsOnAfter(interceptors, context, sw, list.Count);
-            // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
-            // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）
-            if (builder._cacheKey is not null)
-                builder._queryCache.Set(EffectiveCacheKey(builder), new List<T>(list), builder._cacheTtl);
-            return list;
+            // A9（2026-10-01 全 API 逐项轮）：读查询命令的惰性晋升复用——命中返回会话所有的
+            // 晋升命令（ownsCommand=false：参数集合持久持有，逐位置就地写 Value）；未晋升走
+            // 新建 + 用后释放（现状形态）。守卫见 QueryBuilder.TryAcquireReusableSelectCommand
+            // （连接一致/并行读禁用/晋升阈值 3）。
+            // R-UNNESTB（2026-10-02）：PG 连接串的 auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，
+            // 「Clear 集合 + Add 新参数实例」会让驱动沿用 prepare 时的绑定值（探针 mergearray
+            // 变体 C 实测）。故复用命令的参数集合持久持有，命中时逐位置就地写 Value； DbType
+            // 形状变化保守回退新建命令（正确性优先，同型循环——晋升的主要受益场景——不受影响）。
+            DbCommand? reusable = builder.TryAcquireReusableSelectCommand(connection, sql);
+            bool ownsCommand;
+            bool parametersBound;
+            DbCommand cmd;
+            // 未晋升（新建）/ 形状漂移（保守回退新建）共用"新建命令"分支：
+            // 晋升后首次绑定（参数集合为空）也走 AddParameters，但不 owns——集合自此持久持有
+            if (reusable is null
+                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, parameters)))
+            {
+                cmd = connection.CreateCommand();
+                ownsCommand = true;
+                parametersBound = false;
+            }
+            else
+            {
+                cmd = reusable;
+                ownsCommand = false;
+                parametersBound = reusable.Parameters.Count > 0;
+            }
+            try
+            {
+                // 复用路径的 CommandText 与槽内恒等（TryAcquireReusableSelectCommand 以 SQL 文本
+                // 文本为命中键），同值重设无益且会让驱动重置语句状态——同 GetByKey 复用分支的
+                // string.Equals 守卫口径。[推断] Npgsql 同值 setter 短路未实测，此处仅消除
+                // 不必要的重设；收益待测（探针可扩展 KeyLookupCommandDiag 对照）。
+                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
+                    cmd.CommandText = sql;
+                cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+                cmd.Transaction = boundTransaction;
+                if (!parametersBound) AddParameters(cmd, parameters);
+                // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
+                NotifyInterceptorsOnBefore(interceptors, context);
+                await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+                await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
+                // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源），故封顶。
+                // 无 Take 时 16 起步；超出初始容量的结果集由 ResultListReader 池化收集后一次精确分配。
+                List<T> list = await ResultListReader.ReadAllAsync(
+                    reader, builder._factory,
+                    builder._take.HasValue ? Math.Min(builder._take.Value, MaxPreallocatedCapacity) : 16,
+                    token).ConfigureAwait(false);
+                NotifyInterceptorsOnAfter(interceptors, context, swStart, list.Count);
+                // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
+                // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）。
+                // A8（2026-10-01）：key 由 ToListAsync 单次组装传入（未命中路径避免 Set 侧
+                // 二次拼接）；其余调用点（First/Single 截断族与 ToPage 已清 _cacheKey）
+                // 经下方兜底保持原语义（非 null 时才拼）。
+                effectiveCacheKey ??= builder._cacheKey is not null ? EffectiveCacheKey(builder) : null;
+                if (effectiveCacheKey is not null)
+                    builder._queryCache.Set(effectiveCacheKey, new List<T>(list), builder._cacheTtl);
+                return list;
+            }
+            finally
+            {
+                // A9：新建命令用后释放；复用命令的参数集合持久持有（R-UNNESTB，见上），不清参
+                if (ownsCommand) await cmd.DisposeAsync().ConfigureAwait(false);
+            }
         }
 
         try
@@ -258,10 +309,9 @@ public static class QueryBuilderExtensions
         }
         finally
         {
-            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
             // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
             // 记录的是最后一次尝试的连接——重试路径上中间尝试的连接由作用域退出时统一释放（有界：
             // 每操作至多 MaxRetries+1 条），换取不改动内核主体缩进的低风险接线。
@@ -296,14 +346,17 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>触发所有拦截器的 OnAfter——v3.1 抽出辅助，让 SELECT/UPDATE 管线共用并保留"空列表跳过"优化。
-    /// Stopwatch 由调用方传入，仅当拦截器非空时才会读取 Elapsed（调用方需保证拦截器非空时 sw 也非 null）。
-    /// R3（v5.6.0）改 internal：DataSession.ExecuteAsync 接入。</summary>
+    /// 起始时间戳由调用方传入，仅当拦截器非空时才会经 GetElapsedTime 现算 Elapsed
+    /// （调用方需保证拦截器非空时 swStart 也非 null）。
+    /// R3（v5.6.0）改 internal：DataSession.ExecuteAsync（原始 DDL/DML）接入。
+    /// A7（2026-10-01 全 API 逐项轮）：参数由 <c>Stopwatch?</c> 改 <c>long?</c> 起始时间戳——
+    /// 消每查询的 Stopwatch 对象分配；Elapsed 语义（单调差值）逐位等价。</summary>
     internal static void NotifyInterceptorsOnAfter(
-        List<IQueryInterceptor> interceptors, QueryContext context, Stopwatch? sw, int count)
+        List<IQueryInterceptor> interceptors, QueryContext context, long? swStart, int count)
     {
         if (interceptors.Count == 0) return;
-        // 调用方契约：interceptors.Count > 0 时 sw 必非 null（needStopwatch = observed || interceptors.Count > 0）。
-        TimeSpan elapsed = sw!.Elapsed;
+        // 调用方契约：interceptors.Count > 0 时 swStart 必非 null（needStopwatch = observed || interceptors.Count > 0）。
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(swStart!.Value);
         foreach (IQueryInterceptor interceptor in interceptors)
             interceptor.OnAfter(context, elapsed, count);
     }
@@ -564,7 +617,8 @@ public static class QueryBuilderExtensions
         string sql = builder.BuildUpdateSql();
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         // v3.1：Stopwatch 延迟创建——与 ExecuteQueryAsync 同构（拦截器 OnAfter 需要 Elapsed）。
-        Stopwatch? sw = observed || interceptors.Count > 0 ? Stopwatch.StartNew() : null;
+        // A7（2026-10-01 全 API 逐项轮）：同改时间戳形态。
+        long? swStart = observed || interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
         IReadOnlyList<DbParameter> updateParameters = builder.GetUpdateParameters();
@@ -582,7 +636,7 @@ public static class QueryBuilderExtensions
             NotifyInterceptorsOnBefore(interceptors, context);
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
             int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            NotifyInterceptorsOnAfter(interceptors, context, sw, affectedRows);
+            NotifyInterceptorsOnAfter(interceptors, context, swStart, affectedRows);
             outcome = "success";
             return affectedRows;
         }
@@ -596,10 +650,9 @@ public static class QueryBuilderExtensions
         }
         finally
         {
-            sw?.Stop();
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && sw is not null)
-                PalORMMetrics.Record(operation, provider, outcome, sw.Elapsed, builder._metricsName);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
         }
     }
 
@@ -643,5 +696,26 @@ public static class QueryBuilderExtensions
     {
         foreach (DbParameter parameter in parameters)
             command.Parameters.Add(parameter);
+    }
+
+    /// <summary>R-UNNESTB（2026-10-02）：复用命令的就地参数赋值——逐位置把本次查询的
+    /// Value 写进持久持有的参数实例（<b>不 Clear、不 Add 新实例</b>：PG 连接的 auto-prepare
+    /// 调优下「Clear + Add 新实例」会让驱动沿用 prepare 时的绑定值，探针 mergearray 实测）。
+    /// <para>形状守卫：个数不一致或任一位置的 DbType 与晋升时不同 → 返回 false，调用方回退
+    /// 新建命令。同型循环（同一查询形状、值不同——晋升的主要受益场景）恒走就地写。</para></summary>
+    private static bool TryCopyParameterValues(DbCommand command,
+        IReadOnlyList<DbParameter> parameters)
+    {
+        if (command.Parameters.Count != parameters.Count)
+            return false;
+        // 先全量校验形状再写值——半写状态对中断的复用尝试无害但不整洁
+        for (int i = 0; i < parameters.Count; i++)
+        {
+            if (command.Parameters[i].DbType != parameters[i].DbType)
+                return false;
+        }
+        for (int i = 0; i < parameters.Count; i++)
+            command.Parameters[i].Value = parameters[i].Value;
+        return true;
     }
 }

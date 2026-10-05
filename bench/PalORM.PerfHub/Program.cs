@@ -70,6 +70,7 @@ internal static class Program
               --concurrency                 启用并发吞吐测试
               --threads 1,4,8               并发线程档位（默认 1,4,8）
               --quick                       迭代次数降到 30%（冒烟用）
+              --warmup-floor all|first-tier 预热时间下限的作用范围（默认 first-tier；all 供交替 A/B 诊断）
               --version TEXT                被测版本标识（记入 JSON，用于版本对比）
               --label TEXT                  本次运行的标签（记入 JSON）
 
@@ -94,6 +95,7 @@ internal static class Program
         var dialects = new List<Dialect> { Dialect.Sqlite, Dialect.MySql, Dialect.PostgreSql };
         var tiers = new List<int>(Dataset.Tiers);
         bool concurrency = false;
+        bool warmupFloorAll = false;
         var threadTiers = new List<int> { 1, 4, 8 };
         double scale = 1.0;
         string label = "";
@@ -115,6 +117,10 @@ internal static class Program
                     break;
                 case "--concurrency":
                     concurrency = true;
+                    break;
+                case "--warmup-floor":
+                    // all = 全档都要求预热时间下限（旧行为，A/B 诊断用）；first-tier = 只在每方言首档（默认）
+                    warmupFloorAll = args[++i].Equals("all", StringComparison.OrdinalIgnoreCase);
                     break;
                 case "--quick":
                     scale = 0.3;
@@ -189,7 +195,7 @@ internal static class Program
             // 继续跑其余方言——失败进信封的 sections（kind=dialect-failure），退出码在末尾汇总。
             try
             {
-                await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, itemFailures, cts.Token)
+                await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, itemFailures, warmupFloorAll, cts.Token)
                     .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cts.IsCancellationRequested)
@@ -244,7 +250,7 @@ internal static class Program
     private static async Task RunDialectAsync(
         DialectInfo info, List<int> tiers, bool concurrency, List<int> threadTiers, double scale,
         List<Measurement> results, List<(string Dialect, int Rows, string Context, string Cause)> itemFailures,
-        CancellationToken ct)
+        bool warmupFloorAll, CancellationToken ct)
     {
         string cs = Connections.Resolve(info);
         await using DbConnection rawConn = info.OpenConnection(cs);
@@ -280,10 +286,19 @@ internal static class Program
         // 三实现共用同一连接（B76：建连口径一致）
         IPerfImplementation[] impls = [new AdoNetImpl(info), new DapperImpl(info), new PalormImpl(info)];
 
+        // 批量项的确定性重置用中性播种（只播 perf_s1；三臂经同一路径得到同一张同规模的表）——
+        // 各臂自己的 SetupAsync 会把 bench_tenant 一并播到 rows×因子 行，且表布局随臂不同。
+        int maxTier = tiers.Max();
+
         foreach (int rows in tiers)
         {
             Console.WriteLine();
             Console.WriteLine($"── 行数档位 {rows:N0} ──");
+
+            // 预热时间下限只在每方言的**首档**要求：JIT 分层的偏置只在方法首次执行时存在，
+            // 而每个方言的驱动代码在它的首档才首次编译。跨档重复预热（旧行为）是纯成本。
+            // 该结论经交替 A/B 验证（`--warmup-floor all` 与默认各两轮，比 20000 档读数）。
+            _requireWarmupFloor = warmupFloorAll || rows == tiers[0];
 
             // 阶段 2 新表：每 (方言 × 档位) 播一次，臂无关——测量只读或自清理
             await SetupV2TablesAsync(info, conn, rows, ct).ConfigureAwait(false);
@@ -314,8 +329,11 @@ internal static class Program
                 }
             }
 
-            // 并发吞吐（三实现 × 线程档位）
-            if (concurrency)
+            // 并发吞吐（三实现 × 线程档位）——**只在最高档跑**：并发负载是点查混合
+            //（80/20 GetByKey + Insert），与表规模无关，实测两档吞吐差 MySQL/PG 全部在 ±5% 内、
+            // SQLite ±8~13%（夹具自身噪声带内），第二档属重复测量（省 1.47 分钟、27 个测量）。
+            // 线程档位、时长与分批语义均不变。
+            if (concurrency && rows == maxTier)
             {
                 Console.WriteLine();
                 Console.WriteLine("  并发吞吐（80/20 读写混合，3s）");
@@ -456,7 +474,18 @@ internal static class Program
     {
         // 库重置为 rows 行——查询类操作要求表内恰好 rows 行
         await impl.SetupAsync(conn, rows, ct).ConfigureAwait(false);
+
+        // 中性播种 seeder（只播 perf_s1）：2026-10-03 起 perf_s1 族的重置统一走它——三臂经
+        // 同一路径得到同一张同规模的表（各臂自己的 SetupAsync 表布局不同，且会顺带把
+        // bench_tenant 播到 rows×轮数 行）；需要 bench_tenant 的项（租户族）走 fullReset。
+        var neutralSeeder = new AdoNetImpl(info);
         Task reset(DbConnection c)
+        {
+            return neutralSeeder.SetupPerfS1Async(c, rows, ct);
+        }
+
+        // 需要 bench_tenant 一并重置的项（租户/OwnedJson/SessionBatch 读它）走全量播种
+        Task fullReset(DbConnection c)
         {
             return impl.SetupAsync(c, rows, ct);
         }
@@ -474,6 +503,9 @@ internal static class Program
         long[] keys = Dataset.KeySet(rows);
         long[] whereInIds = BuildWhereInIds(rows);
         int bulkDeleteIters = BulkDeleteRounds(rows);
+        // GetByKeySession 的循环键集（32 个，步长 7919 打散同 GetByKey；N=32 > A9 晋升阈值 3）
+        const int SessionLoopCount = 32;
+        long[] sessionIds = [.. Enumerable.Range(0, SessionLoopCount).Select(i => keys[i * 7919 % keys.Length])];
         // ── Build：纯 SQL 构建开销，不执行、不碰库 ──
         await MeasAsync(info, impl, "BuildGetByKeySql", "Build", rows, conn, results, scale, null,
             (im, c, i) =>
@@ -518,21 +550,26 @@ internal static class Program
             async (im, c, i) => _ = await im.UpdateAsync(c, Dataset.Seed(i * 7919 % rows), ct)
                 .ConfigureAwait(false), ct).ConfigureAwait(false);
 
+        // BulkUpdate 排在 BulkInsert 之前——两者都写 perf_s1，而 BulkInsert 每轮把表撑大 rows 行，
+        // 其迭代数又由时间预算自适应（逐臂不同）：BulkUpdate 紧随其后时，三臂就在规模不同的表上测
+        //（2026-10-03 实测 PG/20000 档起始表 324 万 / 34 万 / 330 万行），比值无可比性。
+        // 前置后它跑在 Update 留下的表上（rows + Insert 的 200 行，三臂的 Insert 迭代数都是 200），
+        // 行数与内容三臂一致。**不新增 reset**：规范 §5 已登记"给写项加 reset 的尝试回退过
+        //（其后 BulkInsert 9.5× 未解异常），机制查明前不得重加"，故本轮用排序消除漂移。
+        // 代价如实登记：数万行批更新进数十万行表的大表形态不再由本项覆盖（规范 §5）。
+        await MeasAsync(info, impl, "BulkUpdate", "CRUD", rows, conn, results, scale, null,
+            async (im, c, i) => _ = await im.BulkUpdateAsync(c, Dataset.SeedRows(rows, 0), ct)
+                .ConfigureAwait(false), ct).ConfigureAwait(false);
+
         await MeasAsync(info, impl, "BulkInsert", "CRUD", rows, conn, results, scale, reset,
             async (im, c, i) => _ = await im.BulkInsertAsync(
                 c, Dataset.SeedRows(rows, (long)rows * (i + 1)), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
-        // BulkUpdate 不带 reset（同上，与 Update 一并撤掉以保持两者口径一致）。
-        // 它因此跑在 BulkInsert 撑大的表上（rows × (1 + iterations)）——已知漂移，见规范 §5 待办。
-        await MeasAsync(info, impl, "BulkUpdate", "CRUD", rows, conn, results, scale, null,
-            async (im, c, i) => _ = await im.BulkUpdateAsync(c, Dataset.SeedRows(rows, 0), ct)
-                .ConfigureAwait(false), ct).ConfigureAwait(false);
-
-        // 批量删除：prepare 多种 rows×iterations 行，每轮删掉其中一段互不重叠的窗口
+        // 批量删除的播种走中性路径（2026-10-03 起 perf_s1 族统一，见 RunOneImplAsync 顶部 reset 注释）
         Task bulkDeleteReset(DbConnection c)
         {
-            return impl.SetupAsync(c, rows * bulkDeleteIters, ct);
+            return neutralSeeder.SetupPerfS1Async(c, rows * bulkDeleteIters, ct);
         }
 
         await MeasAsync(info, impl, "BulkDelete", "CRUD", rows, conn, results, scale, bulkDeleteReset,
@@ -628,7 +665,7 @@ internal static class Program
         int expectedTenantValueVisible = Dataset.TenantVisibleValueCount(rows);
         int expectedOwnedJson = Math.Min(50, expectedTenantVisible);
 
-        await MeasAsync(info, impl, "TenantCount", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "TenantCount", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 long n = await im.TenantCountAsync(c, ct).ConfigureAwait(false);
@@ -637,7 +674,7 @@ internal static class Program
                         $"TenantCount 结果集不等价：{n}（期望 {expectedTenantVisible}）");
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "TenantCountWhere", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "TenantCountWhere", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 long n = await im.TenantCountWhereAsync(c, rows, ct).ConfigureAwait(false);
@@ -646,7 +683,7 @@ internal static class Program
                         $"TenantCountWhere 结果集不等价：{n}（期望 {expectedTenantValueVisible}）");
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "TenantGetAll", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "TenantGetAll", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 List<BenchTenantPost> list = await im.TenantGetAllAsync(c, ct).ConfigureAwait(false);
@@ -655,7 +692,7 @@ internal static class Program
                         $"TenantGetAll 结果集不等价：{list.Count} 行（期望 {expectedTenantVisible}）");
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "OwnedJsonQuery", "Tenant", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "OwnedJsonQuery", "Tenant", rows, conn, results, scale, fullReset,
             async (im, c, i) =>
             {
                 List<BenchTenantPost> list = await im.OwnedJsonQueryAsync(c, ct).ConfigureAwait(false);
@@ -667,10 +704,53 @@ internal static class Program
         // SessionBatchInserts 每轮插 20 行、主键段互不重叠（prepare 不在每轮前调，写操作
         // 在计时循环内累积；种子主键是 1..rows，故段基址从 rows+1 起——warmup/探针的 i=0
         // 与计时轮 i≥1 天然错开：探针前有 reset，计时首段不与探针段重叠）。
-        await MeasAsync(info, impl, "SessionBatchInserts", "SessionBatch", rows, conn, results, scale, reset,
+        await MeasAsync(info, impl, "SessionBatchInserts", "SessionBatch", rows, conn, results, scale, fullReset,
             async (im, c, i) => _ = await im.SessionBatchInsertsAsync(
                 c, rows + 1 + (i * Dataset.SessionBatchRows), ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
+
+        // 长会话推荐用法（step13 §6.2 挂账清理）：单会话内 32 次循环直查——A9 复用槽在
+        // 第 3 次晋升，会话构造被摊销；与 GetByKey（每操作一新会话）互为对照面。
+        // **排在 CRUD 序列之外（末位）**：插在 GetByKey 之后时，其后 PalORM 臂的 SQLite
+        // 短操作（Update/Count/TxSingleInsert）系统性慢 ~3×（13:54/13:57 两批坐实，ADO 臂
+        // 稳定）——与 2026-09-23 "Update 加 reset 后 BulkInsert 9.5×"同族的连接态顺序效应，
+        // 机制未查明；挪到末位使其只影响其后的并发段（并发用独立池化连接，不受共用连接态影响）。
+        await MeasAsync(info, impl, "GetByKeySession", "CRUD", rows, conn, results, scale, fullReset,
+            async (im, c, i) =>
+            {
+                int found = await im.GetByKeySessionAsync(c, sessionIds, ct).ConfigureAwait(false);
+                if (found != SessionLoopCount)
+                    throw new InvalidOperationException(
+                        $"GetByKeySession 结果不等价：命中 {found}（期望 {SessionLoopCount}）");
+            }, ct).ConfigureAwait(false);
+
+        // ── 枚举列形态 + GetAllAsync 直查（2026-10-04 全量复读落地轮：N2/N5 的量化臂）──
+        // 末位原则（同 GetByKeySession 的顺序效应登记）：排在既有 CRUD 序列之后，只影响
+        // 其后的并发段（并发用独立池化连接，不受共用连接态影响）。
+        // EnumInserts：事务内固定 100 行逐条插入（行数不进测量，只最小档），主键段按轮错开
+        //（prepare 在预热前/计时前各一次，探针 i=0 与计时轮 i≥1 的段互不重叠）。
+        Task enumReset(DbConnection c)
+        {
+            return AdoNetImpl.SetupPerfEnumTableAsync(info.Dialect, c, ct);
+        }
+
+        await MeasAsync(info, impl, "EnumInserts", "Transaction", rows, conn, results, scale, enumReset,
+            async (im, c, i) =>
+            {
+                await im.EnumInsertsAsync(
+                    c, Dataset.SeedEnumRows(100, (long)i * 100), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+
+        // GetAllAsync 直查（N5 组合句缓存）：与 QueryAll 臂互为对照（直查 API vs From<T>()
+        // 管线），地板同形（SELECT 全列物化）；reset 恢复 perf_s1 恰好 rows 行。
+        await MeasAsync(info, impl, "GetAllAsync", "CRUD", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                List<S1Row> list = await im.GetAllAsync(c, ct).ConfigureAwait(false);
+                if (list.Count != rows)
+                    throw new InvalidOperationException(
+                        $"GetAllAsync 结果不等价：{list.Count} 行（期望 {rows}）");
+            }, ct).ConfigureAwait(false);
     }
 
     /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。
@@ -693,7 +773,8 @@ internal static class Program
             // 优化就只能靠猜。
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
-                MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale).ConfigureAwait(false);
+                MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale,
+                _requireWarmupFloor).ConfigureAwait(false);
             sw.Stop();
             results.Add(m);
             PrintRow([m], sw.Elapsed);
@@ -708,6 +789,10 @@ internal static class Program
 
     /// <summary>本轮的最小档位——"行数不进测量"的项只在它上面跑一次（<see cref="RunAsync"/> 设置）。</summary>
     private static int _minTier = Dataset.Tiers[0];
+
+    /// <summary>本轮该档是否要求预热时间下限（JIT 分层偏置只在每方言首档存在，故默认只在那里要求；
+    /// <c>--warmup-floor all</c> 强制全档，供交替 A/B 诊断）。由 <see cref="RunDialectAsync"/> 在每档开跑前设置。</summary>
+    private static bool _requireWarmupFloor = true;
 
     /// <summary>进度条的分子/分母——实时标示"跑到哪了、用了多久"。</summary>
     private static int _done;
@@ -725,11 +810,20 @@ internal static class Program
     /// 保留它是为覆盖"批量装载器在显式事务内"这条产品路径，属语义检查而非规模问题</item>
     /// </list>
     /// <para>2026-09-23 精简：这些项原本两档都跑，等于把同一个测量做两遍——按实测逐项耗时，
-    /// 砍掉它们的第二档只省约 1.6% 时间，但省下 7 项 × 3 臂 = 每方言 21 个重复测量。</para></summary>
+    /// 砍掉它们的第二档只省约 1.6% 时间，但省下 7 项 × 3 臂 = 每方言 21 个重复测量。</para>
+    /// <para><b>2026-10-03 再精简</b>（本轮全量批逐项两档对照）：单行与索引访问类的规模放大倍数
+    /// 仅 1.0~1.6×（GetByKey 1.6/1.0/1.0、Insert 1.2/0.9/1.0、Update 1.6/1.0/1.0、KeysetPage 1.1、
+    /// WhereIn 1.1，按 SQLite/MySQL/PG），第二档是重复测量，故把 Insert/Update/KeysetPage/WhereIn
+    /// 也移入本表（省第二档墙钟 0.51 分钟、45 个测量）。
+    /// <b>GetByKey 例外保留两档</b>：其 2000 档 P/ADO 稳定 0.73~0.79×、20000 档 1.04×，
+    /// 第二档正是暴露该异常的参照，查清前不撤（用户 2026-10-03 决定）。</para></summary>
     private static bool RowCountSensitive(string operation) => operation is not (
         "BuildGetByKeySql" or "BuildComplexQuerySql" or "InsertReturningId" or "IncludeJoin"
         or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert"
-        or "OwnedJsonQuery" or "SessionBatchInserts");
+        or "OwnedJsonQuery" or "SessionBatchInserts"
+        or "Insert" or "Update" or "KeysetPage" or "WhereIn" or "GetByKeySession"
+        // EnumInserts：事务内固定 100 行/轮（与 TxHundredInserts 同判据——行数不进测量）
+        or "EnumInserts");
 
     /// <summary>该项是否在给定档位测量。</summary>
     private static bool RunsAtTier(string operation, int rows)
@@ -741,12 +835,13 @@ internal static class Program
     private static readonly string[] OperationNames =
     [
         "BuildGetByKeySql", "BuildComplexQuerySql",
-        "GetByKey", "QueryAll", "StreamAll", "Insert", "Update",
+        "GetByKey", "GetByKeySession", "QueryAll", "StreamAll", "Insert", "Update",
         "BulkInsert", "BulkUpdate", "BulkDelete",
         "KeysetPage", "WhereIn", "Count",
         "UpsertBatch", "InsertReturningId", "WideQueryAll", "IncludeJoin",
         "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback",
-        "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts"
+        "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts",
+        "EnumInserts", "GetAllAsync"
     ];
 
     /// <summary>PL-4：比值不计比的项。地板这两项直接返回插值字面量（见
@@ -771,7 +866,8 @@ internal static class Program
         int perDialect = tiers.Sum(rows => OperationNames.Count(op => RunsAtTier(op, rows)) * ImplCount);
         if (concurrency)
         {
-            perDialect += tiers.Count * threadTiers.Count * ImplCount;
+            // 并发只在最高档跑（见 RunDialectAsync 的门）——按 dialects 计一次，不乘 tiers.Count
+            perDialect += threadTiers.Count * ImplCount;
         }
 
         return (perDialect * dialects.Count) + tiers.Count;
@@ -937,14 +1033,22 @@ internal static class Program
         //     只剩 DataGen 两项却顶了 latest.json；B86 的"空批次顶 latest"当时只修了信封侧
         // 历史文件照旧落盘：跑过什么、包括失败，都是事实，只是不该被读成"当前状态"。
         bool hasRealMeasurement = results.Exists(static m => m.Implementation != "DataGen");
-        if (!PerfResultWriter.IsSubsetLabel(label) && hasRealMeasurement)
+        // 覆盖面回退（2026-10-02）：label 是"显式声明"，但同一族缺陷已三度复发（ab/ → gate-set →
+        // verify-），每次都是"跑了单方言却没声明成子集"。判定不能只信 label：**新批次的方言集
+        // 若是上一个可引用批次的真子集，说明覆盖面缩水，无论 label 写了什么都不得顶 latest**。
+        // 只挡真子集（更少的方言），同方言重跑不受影响；上一个 latest 不存在/不可解析时放行。
+        string? coverageReason = DetectCoverageRegression(dir, json);
+        if (!PerfResultWriter.IsSubsetLabel(label) && hasRealMeasurement && coverageReason is null)
         {
             File.WriteAllText(Path.Combine(dir, "latest.json"), json);
         }
         else
         {
+            string why = !hasRealMeasurement
+                ? $"零真测量 label={label}"
+                : coverageReason ?? $"子集 label={label}";
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"[PerfHub] 跳过 latest（{(hasRealMeasurement ? $"子集 label={label}" : $"零真测量 label={label}")}）：保留上一个可引用批次"));
+                $"[PerfHub] 跳过 latest（{why}）：保留上一个可引用批次"));
         }
 
         Console.WriteLine($"[PerfHub] 原始数据已写入 bench/perfhub/results/history-{stamp}.json");
@@ -952,6 +1056,73 @@ internal static class Program
         // 结果库信封（规范 v2 §6）：跨夹具可查询的最小集 + 口径登记 + 健康度
         WriteEnvelope(results, label, version, elapsed,
             Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"), dialectFailures, itemFailures);
+    }
+
+    /// <summary>覆盖面回退检测：本批次的方言集是否为上一个可引用批次的**真子集**。
+    /// <para><b>为什么按方言判</b>：方言是最低成本、最不易误判的覆盖面维度——档位与项数会随
+    /// "行数不进测量的项只在 2000 档跑"等既有规则波动，方言集只由 <c>--dialects</c> 决定。
+    /// 一次 <c>--dialects sqlite</c> 的跑测必然丢掉 MySQL/PG 的读数，这正是要挡的形态
+    ///（2026-10-02 实测：434 项被 128 项顶掉，两方言整体消失且无提示）。</para>
+    /// <para><b>只挡真子集</b>：同方言重跑、方言超集（补跑）都放行；上一个 latest 不存在或
+    /// 不可解析（历史文件格式漂移、被删）时返回 null 放行——该守卫是增量护栏，
+    /// 不做"读不到就不许写"的失败关闭（那会让一次格式演进永久锁死 latest 更新）。</para>
+    /// <para>返回 null 表示放行，否则返回人类可读的拦截原因。</para></summary>
+    private static string? DetectCoverageRegression(string dir, string newJson)
+    {
+        string latestPath = Path.Combine(dir, "latest.json");
+        if (!File.Exists(latestPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            PerfRun? incoming = JsonSerializer.Deserialize(newJson, PerfJsonContext.Default.PerfRun);
+            PerfRun? previous = JsonSerializer.Deserialize(
+                File.ReadAllBytes(latestPath), PerfJsonContext.Default.PerfRun);
+            if (incoming is null || previous is null)
+            {
+                return null;
+            }
+
+            var prevDialects = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Measurement m in previous.Measurements)
+            {
+                if (m.Implementation != "DataGen")
+                {
+                    _ = prevDialects.Add(m.Dialect);
+                }
+            }
+
+            var newDialects = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Measurement m in incoming.Measurements)
+            {
+                if (m.Implementation != "DataGen")
+                {
+                    _ = newDialects.Add(m.Dialect);
+                }
+            }
+
+            if (prevDialects.Count == 0 || newDialects.Count == 0)
+            {
+                return null;
+            }
+
+            // 真子集判定：新方言集被旧集合完全覆盖且严格更少
+            if (newDialects.Count < prevDialects.Count && newDialects.IsSubsetOf(prevDialects))
+            {
+                return $"方言覆盖面缩水（本批 {string.Join('/', newDialects)} ⊂ 上一批 {string.Join('/', prevDialects)}）"
+                    + "，请给跑测加子集 label（如 --label verify-…）或补跑其余方言";
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // 读不到旧批次不是本次写入的错误——放行并说明，不阻塞 latest 更新
+            Console.WriteLine($"[PerfHub] 覆盖面回退检测跳过（上一个 latest 不可解析）：{ex.GetType().Name}");
+            return null;
+        }
     }
 
     /// <summary>把本批次映射成结果库信封。Ratio 以同方言同档位的 ADO_NET 行为地板现算
@@ -1014,12 +1185,18 @@ internal static class Program
                 Dialect = m.Dialect,
                 Arm = m.Implementation,
                 Tier = m.Rows,
+                MedianUs = m.MedianNs / 1000.0,
                 MeanUs = m.MeanNs / 1000.0,
                 AllocBytes = (long)m.AllocatedBytesPerOp,
                 RoundTripsPerOp = m.RoundTripsPerOp,
                 PreparedReuse = m.PreparedReuse,
                 Note = comparable ? m.Group : m.Group + "｜地板返回字面量，比值不计比（PL-4）",
-                Ratio = !comparable || floor is null || floor.MeanNs <= 0 ? 0 : m.MeanNs / floor.MeanNs,
+                // 基数用中位数（2026-10-02）：均值对计时离群值极敏感，且与报告侧口径不一致。
+                // 实测 Insert/SQLite/2000 的 ADO 臂中位 17.1µs / 均值 45.6µs ——用均值当分母
+                // 会把基线录成 0.46（中位口径 1.13），下一批必然假报 FAIL。详见 PerfResultItem 文档。
+                Ratio = !comparable || floor is null || floor.MedianNs <= 0 ? 0 : m.MedianNs / floor.MedianNs,
+                // 量具自检：判别力弱标注的判据（同键三臂最大值 > 5% 时该行比值不作结论）
+                ErrorRatio = m.ErrorRatio,
             });
         }
 

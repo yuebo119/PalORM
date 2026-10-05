@@ -56,11 +56,8 @@ public sealed class GridReader : IAsyncDisposable
                     "sets than read. Check the number and order of ReadAsync calls against the SQL.");
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
-            // v4.4：对齐 ExecuteQueryAsync/QueryAsync 的 16 起步容量
-            List<T> list = new(16);
-            var typedFactory = (Func<DbDataReader, T>)factory;
-            while (await _reader.ReadAsync(ct).ConfigureAwait(false))
-                list.Add(typedFactory(_reader));
+            List<T> list = await ResultListReader.ReadAllAsync(
+                _reader, (Func<DbDataReader, T>)factory, 16, ct).ConfigureAwait(false);
 
             _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);
             return list;

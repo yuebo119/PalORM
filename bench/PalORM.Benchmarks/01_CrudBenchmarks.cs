@@ -176,9 +176,17 @@ public class CrudBenchmarks : IAsyncDisposable
     [Benchmark(Baseline = true), BenchmarkCategory("Update")]
     public async Task<int> ADO_NET_Update()
     {
+        // 参数化对齐另两臂（step13 §6.1 挂账清理）：原常量内联（SET status='U', total=999）
+        // 零参数，与 Dapper/PalORM 臂的 3 参数形态不可比，分配比 6.97× 是器材假信号
         using var c = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
         using var cmd = c.CreateCommand();
-        cmd.CommandText = "UPDATE bench_orders SET status = 'U', total = 999 WHERE id = 5000";
+        cmd.CommandText = "UPDATE bench_orders SET status = @status, total = @total WHERE id = @id";
+        System.Data.Common.DbParameter pStatus = cmd.CreateParameter();
+        pStatus.ParameterName = "@status"; pStatus.Value = "U"; cmd.Parameters.Add(pStatus);
+        System.Data.Common.DbParameter pTotal = cmd.CreateParameter();
+        pTotal.ParameterName = "@total"; pTotal.Value = 999m; cmd.Parameters.Add(pTotal);
+        System.Data.Common.DbParameter pId = cmd.CreateParameter();
+        pId.ParameterName = "@id"; pId.Value = 5000L; cmd.Parameters.Add(pId);
         return await cmd.ExecuteNonQueryAsync();
     }
 

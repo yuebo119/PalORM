@@ -22,18 +22,24 @@ internal static class DapperSuite
         {
             Perf.Out($"=== [{dialect}] 开始（{stamp}） ===");
             var log = Path.Combine(outDir, $"{dialect}-{stamp}.log");
+            // B104 同族修复（2026-10-01）：默认过滤串原为 "-f '*' --join"，单引号在
+            // UseShellExecute=false 的 ProcessStartInfo 下是字面量（无 shell 剥引号）——BDN 收到
+            // 带引号的过滤串匹配 0 个基准、打印清单后退出码仍 0，本步骤自 2026-09-29 起静默空跑
+            // （哨兵停在旧批）。filter 不得带引号（与 FullPerf 的 BDN 步骤 2026-09-30 同类修复对齐）。
             var runArgs = extraArgs.Length > 0
                 ? string.Join(' ', extraArgs.Select(a => a.Contains(' ') ? $"\"{a}\"" : a))
-                : "-f '*' --join";
+                : "--filter * --join";
             // 单方言失败不中断整批：一个库不可达（实测：托管库的虚拟机停机）不该让已跑方言的结果作废
             Environment.SetEnvironmentVariable("DAPPER_SUITE_DIALECT", dialect);
             var code = Perf.RunTee("dotnet",
                 $"run --project \"{Path.Combine(root, "bench", "PalORM.DapperSuite")}\" -c Release -- {runArgs}", log);
-            // BDN 在"全部基准 NA"（库不可达）时仍退 0 并打印 "Benchmarks with issues"——
-            // 只看退出码会把这种情况误报成成功，故追加日志检查
-            if (code == 0 && File.ReadAllText(log).Contains("Benchmarks with issues", StringComparison.Ordinal))
+            // BDN 在"全部基准 NA"（库不可达）时仍退 0 并打印 "Benchmarks with issues"；过滤串失配时
+            // 打印 "returned 0 benchmarks" 后也退 0——只看退出码都会误报成功，故两条日志判据并列。
+            string logText = File.ReadAllText(log);
+            if (code == 0 && (logText.Contains("Benchmarks with issues", StringComparison.Ordinal)
+                || logText.Contains("returned 0 benchmarks", StringComparison.Ordinal)))
             {
-                Perf.Err($"=== [{dialect}] 基准未产出有效结果（库不可达或设置错误，见 {log}）+ 继续下一方言 ===");
+                Perf.Err($"=== [{dialect}] 基准未产出有效结果（库不可达/过滤串失配/设置错误，见 {log}）+ 继续下一方言 ===");
                 failed.Add(dialect);
             }
             else if (code == 0)

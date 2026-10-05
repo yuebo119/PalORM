@@ -57,11 +57,11 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.2.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.2.1" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.2.0" />
+<PackageReference Include="PalORM.MySql" Version="6.2.1" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.2.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.2.1" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。
@@ -111,6 +111,8 @@ using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 await DataSession<PostgreSqlProvider>.PreWarmAsync(options, count: 10);
 ```
 
+**会话复用优先**：同一作用域（请求、批处理循环）内请复用一个 `db` 会话跑多次操作，而不是每操作新建。会话内同形状操作自动晋升命令复用槽（第 3 次起复用命令对象与参数槽），且避免每次重新 prepare——Microsoft.Data.Sqlite 的预备语句缓存按命令实例生效（官方源码确认：换命令即重新 `sqlite3_prepare_v2` 并额外分配一段 SQL 字节缓冲）。复用形态下每操作省下会话构造（约 960 B）与重复准备成本；单次即弃的写法（每操作 `CreateAsync`）适合低频调用，高频热路径建议复用。
+
 ### CRUD
 
 ```csharp
@@ -118,7 +120,7 @@ await DataSession<PostgreSqlProvider>.PreWarmAsync(options, count: 10);
 var user = await db.InsertAsync(new User { Email = "alice@example.com", CreatedAt = DateTime.UtcNow });
 
 // 查询
-var alice = await db.GetAsync<User>(user.Id);
+var alice = await db.GetAsync<User>(user.Id);   // 单键直查：首选专用 API
 var all = await db.From<User>().Where($"email LIKE {"%@example.com%"}").ToListAsync();
 
 // 更新
@@ -128,6 +130,8 @@ await db.UpdateAsync(alice);
 // 删除
 await db.DeleteAsync<User>(alice.Id);
 ```
+
+**单键直查用 `GetAsync`，不要用链式等价写法**：`GetAsync` 为单键设计（SQL 常量缓存、单行直读、不经查询构建器与列表物化），同口径实测比 `From<T>().Where(Id==x).FirstOrDefaultAsync()` 省约 880 B/操作且快 25~30%（2026-10-01 探针，3000 次摊销）。带过滤条件的查询才用 `From<T>()` 链式。
 
 ### 批量操作
 

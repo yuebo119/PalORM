@@ -38,16 +38,28 @@ public sealed class StoredProcBuilder
     }
 
     /// <summary>过程名白名单：字母/下划线开头，仅含字母数字、下划线和点分限定符。
-    /// 过程名直接进入 CommandText（CommandType.StoredProcedure），纵深防御拒绝特殊字符。</summary>
+    /// 过程名直接进入 CommandText（CommandType.StoredProcedure），纵深防御拒绝特殊字符。
+    /// <para>D4（2026-10-01 全 API 逐项轮）：span 扫描替代 <c>Split('.')</c> + LINQ Any——
+    /// 原实现每次 <c>StoredProc()</c> 构造 1 个分段数组 + 每段一个 LINQ 委托/迭代器。
+    /// 分段与首字符/余下字符判定语义与原实现逐位一致（首字符已由前判定保证合法，
+    /// 全段 Any 等价于索引 1 起扫描）。</para></summary>
     private static string ValidateProcedureName(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        foreach (string segment in name.Split('.'))
+        ReadOnlySpan<char> span = name.AsSpan();
+        int segmentStart = 0;
+        for (int i = 0; i <= span.Length; i++)
         {
+            if (i < span.Length && span[i] != '.') continue;
+            ReadOnlySpan<char> segment = span[segmentStart..i];
             if (segment.Length == 0 || (!char.IsLetter(segment[0]) && segment[0] != '_'))
                 throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
-            if (segment.Any(static c => !char.IsLetterOrDigit(c) && c != '_'))
-                throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
+            for (int c = 1; c < segment.Length; c++)
+            {
+                if (!char.IsLetterOrDigit(segment[c]) && segment[c] != '_')
+                    throw new ArgumentException($"Invalid stored procedure name '{name}'.", nameof(name));
+            }
+            segmentStart = i + 1;
         }
         return name;
     }
@@ -92,8 +104,19 @@ public sealed class StoredProcBuilder
             throw new InvalidOperationException(
                 $"Cannot read output parameter '{name}' before executing the stored procedure. " +
                 "Call QueryAsync<T>() or ExecuteAsync() first.");
-        var p = _outputParams.Find(x => x.ParameterName == name)
-            ?? throw new InvalidOperationException($"Output parameter '{name}' not found.");
+        // D4（2026-10-01 全 API 逐项轮）：手写循环替代 List.Find——原每次读取分配 1 个闭包
+        // （捕获 name 的显示类 + 委托）；输出参数数量级小、线性扫描等价。
+        DbParameter? p = null;
+        for (int i = 0; i < _outputParams.Count; i++)
+        {
+            if (_outputParams[i].ParameterName == name)
+            {
+                p = _outputParams[i];
+                break;
+            }
+        }
+        if (p is null)
+            throw new InvalidOperationException($"Output parameter '{name}' not found.");
         // ITM-540: 宽容拆箱，参照 ScalarAsync——provider 返回的装箱类型可能与 T 不完全一致
         // （如 int 输出参数回填 long/decimal），直接 (T?) 强转会抛 InvalidCastException。
         if (p.Value is null or DBNull) return default;
@@ -129,10 +152,8 @@ public sealed class StoredProcBuilder
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         ColumnOrderValidator.Validate<T>(reader, _validateColumnOrder);
-        List<T> list = new(16);
-        var tf = (Func<DbDataReader, T>)factory;
-        while (await reader.ReadAsync(ct).ConfigureAwait(false)) list.Add(tf(reader));
-        return list;
+        return await ResultListReader.ReadAllAsync(
+            reader, (Func<DbDataReader, T>)factory, 16, ct).ConfigureAwait(false);
     }
 
     /// <summary>执行不返回结果集。</summary>

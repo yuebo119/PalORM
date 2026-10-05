@@ -7,7 +7,7 @@
 ## 快速开始
 
 ```bash
-# 全量（三方言 × 2000/20000 × 21 项 + 并发）
+# 全量（三方言 × 2000/20000 × 26 项，其中 14 项只在最小档；并发只在最高档）
 dotnet run --project bench/PalORM.PerfHub -- run --concurrency --threads 1,4,8 --version HEAD
 
 # 只 SQLite 冒烟
@@ -31,7 +31,8 @@ dotnet run --project bench/PalORM.PerfHub -- report
 
 | 项 | 本夹具的值 | 为什么记在这 |
 |---|---|---|
-| 连接配置口径 | SQLite：三臂共用同一条连接，建连后统一执行 7 项 PRAGMA（WAL + 64MB cache + mmap 等，与产品 `SqliteProvider` 逐条一致）；PG/MySQL：驱动默认 | 只给 ORM 臂配会让比较变成"连接配置差异"：同一修复在 I/O 主导与 CPU 主导两种配置下分别是 0% 与 −30%（2026-09-22 实测） |
+| 连接配置口径 | SQLite：三臂共用同一条连接，建连后统一执行 7 项 PRAGMA（WAL + 64MB cache + mmap 等，与产品 `SqliteProvider` 逐条一致）；PG/MySQL：驱动默认（三臂均为裸驱动连接，`new NpgsqlConnection(cs)` 等） | 只给 ORM 臂配会让比较变成"连接配置差异"：同一修复在 I/O 主导与 CPU 主导两种配置下分别是 0% 与 −30%（2026-09-22 实测） |
+| 与生产 PalORM 连接的配置差（说明） | 产品 `PostgreSqlProvider` 对自建连接默认开启 Npgsql 自动预备（`MaxAutoPrepare=100` / `AutoPrepareMinUsages=2`，Npgsql 官方基准：重复同形状语句 306B/op vs 未预备 2.37KB/op）；基准三臂统一驱动默认故不含该项 | 基准测"驱动默认口径"下的三臂对等；生产链路的自动预备是 PalORM 的连接治理特性，不在本夹具对照面，避免把配置差计入"实现差"（2026-10-01 登记） |
 | 会话生命周期口径 | `per-operation`（每操作新建 `DataSession`，与 Dapper 无状态扩展方法对等） | 与 DapperSuite 的 `per-scope` 不同，故两套的分配量不可互比（规范 §4.1） |
 | 维度 8 计数 | 三臂共用 `CountingConnection` 装饰器，实测**往返次数/op** 与 **prepared 复用率** | 抓 N+1：实测 ADO 臂 `BulkUpdate` = 2000 次往返/op、`BulkInsert` = 11 次/op；基础 67 项中 60 项有值（其余 7 项是 `GenerateRows` 与 6 个纯构建项，本就没有往返），并发模式 3 项也已接计数（三臂 1.46–1.51 往返/op，80/20 混合） |
 | 健康度 | 地板行散布中位数，阈值 0.35（本夹具自适应短跑实测 0.21/0.26/0.31） | `--quick` 批次在 label 里带 `quick` 标记，只作冒烟、不进基线 |
@@ -43,21 +44,35 @@ dotnet run --project bench/PalORM.PerfHub -- report
 |---|---|---|
 | **Build** | `BuildGetByKeySql` / `BuildComplexQuerySql` | 纯 SQL 构建（ORM 构建税，**非同类对比**：ADO/Dapper 返回预写字面量） |
 | **CRUD** | `GetByKey` / `QueryAll` / `StreamAll` / `Insert` / `Update` | 显式列 + 参数化 + 键集 seek；流式不物化再枚举 |
+
+> **arm 形态复核（2026-10-01，step12）**：`GetByKey` 的 PalORM 臂由链式
+> `From<T>().Where(Id==x).FirstOrDefaultAsync()` 改为专用 `GetAsync` API——产品为单键直查
+> 专设该入口（SQL 常量缓存、单行直读、无 List 物化、无二次 ReadAsync 探测），属三臂契约
+> "各自行业最优写法"的应然形态。同口径探针（共享连接 + per-op 会话、3000 次摊销、3 轮）
+> 实测专用形态 **-880B/op（3640→2760，-24%）与 -25~30% 耗时**（探针：
+> `.ai/perf-probe/GetByKeyPathDiag.cs`，本机工具）。该复核逐臂做过：`Count`/`StreamAll`/
+> `InsertReturningId` 等臂已是专用 API 形态；`QueryAll`/`WideQueryAll` 保持链式
+> （固定开销占其总成本 <1%，换形态无实质收益）；`WhereIn`/`KeysetPage`/`IncludeJoin`
+> 的链式是过滤表达式的唯一自然形态。因该变更，GetByKey 组跨批数字在 2026-10-01 存在形态
+> 断点（基线随批重录吸收，比对此项需按批注日期分段）。
 | | `BulkInsert` | PG Binary COPY · MySQL MySqlBulkCopy（`local_infile=ON` 分流）· SQLite 多值 VALUES；Dapper 多值 VALUES |
-| | `BulkUpdate` | PG `UPDATE FROM VALUES` · MySQL `CASE WHEN` · SQLite 逐条裹单事务 |
-| | `BulkDelete` | `IN` 分批裹事务 |
+| | `BulkUpdate` | PG `UPDATE FROM VALUES`/UNNEST · MySQL `CASE WHEN` · SQLite 逐条裹单事务；**排在 `BulkInsert` 之前**——否则它跑在后者撑大的表上，而后者迭代数逐臂不同，三臂表规模实测差 10 倍（规范 §5） |
+| | `BulkDelete` | `IN`/数组分批裹事务；播种走中性路径（只播 `perf_s1`，不再顺带把 `bench_tenant` 播到 rows×轮数 行） |
 | | `UpsertBatch` | PG/SQLite `ON CONFLICT excluded` · MySQL `ON DUPLICATE KEY VALUES(c)`；PalORM 走 `BulkMergeAsync` |
 | | `InsertReturningId` | 三臂各 1 RTT：PG/SQLite `RETURNING`；MySQL `INSERT;SELECT LAST_INSERT_ID()` 合并 |
 | **Query** | `KeysetPage` / `WhereIn` / `Count` | seek 分页（OFFSET 是反模式不测）；IN 显式占位符分批 |
-| | `WideQueryAll` | 19 列宽表全物化——物化器按列数伸缩（ADO/PalORM 按序号，Dapper 按列名） |
-| | `IncludeJoin` | 1:N 装配三策略对照（标注不同构）：ADO JOIN+手工 / Dapper multi-mapping / PalORM Include JOIN；带结果集等价断言 |
-| **Transaction** | `TxSingleInsert` / `TxTenInserts` / `TxHundredInserts` / `TxBulkInsert` / `TxRollback` | 命令复用重绑参数；批内走 loader/VALUES；回滚撤销量上限 500 |
+| | `WideQueryAll` | 19 列宽表全物化进列表并持有到读完——物化器按列数伸缩（ADO/PalORM 按序号，Dapper 按列名）；2026-10-02 起 ADO 臂与另两臂一样建列表（原逐行丢弃，存活集 GC 成本只落在两臂） |
+| | `IncludeJoin` | 1:N 装配三策略对照（标注不同构）：ADO JOIN+手工 / Dapper multi-mapping / PalORM Include JOIN；带结果集等价断言；2026-10-02 起 ADO 臂逐行物化父列实体（与 PalORM 产出同形，原只读两列不建实体） |
+| **Transaction** | `TxSingleInsert` / `TxTenInserts` / `TxHundredInserts` / `TxBulkInsert` / `TxRollback` | 命令复用重绑参数；批内走 loader/VALUES；回滚撤销量上限 500；`TxRollback` 2026-10-02 起三臂同为整行 UPDATE + 显式 RollbackAsync（原 ADO/Dapper 只更 1 列、PalORM 抛异常触发回滚） |
 | **Baseline** | `GenerateRows` | 不碰库，数据生成内存基线 |
 | **Concurrency** | `Concurrent_Mixed80_20` | 预热 1 s + 计时 2 s，池化连接每线程一条 |
 
-**规模**：21 项 × 3 库 × 2 档 × 3 臂 —— 其中 8 项（Build×2 / InsertReturningId / IncludeJoin /
-TxSingleInsert / TxHundredInserts / TxRollback / TxBulkInsert）**只在最小档跑**（行数不进这些项的测量，
-两档是同一个测量的复制品），故每方言 13×2×3 + 8×1×3 = 102 个单操作项，加并发与基线。
+**规模**：26 项 × 3 库 × 2 档 × 3 臂 —— 其中 14 项（Build×2 / InsertReturningId / IncludeJoin /
+TxSingleInsert / TxHundredInserts / TxRollback / TxBulkInsert / OwnedJsonQuery / SessionBatchInserts /
+Insert / Update / KeysetPage / WhereIn）**只在最小档跑**（行数不进这些项的测量，两档是同一个测量的
+复制品），故每方言 26×3 + 12×3 = 114 个单操作项；**并发只在最高档跑**（两档吞吐实测差在噪声带内，
+2026-10-03 起砍掉最小档的 9 项/方言）。加 2 项数据生成基线：全量 **371 项测量**（此前 434 项）。
+`GetByKey` 例外保留两档——其 2000 档 P/ADO 稳定 0.73~0.79× 而 20000 档 1.04×，第二档是暴露该异常的参照。
 
 ## 测量口径（v2）
 

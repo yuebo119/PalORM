@@ -90,6 +90,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// （零分配；绝大多数实体无敏感列）。CloneForExecution 深拷贝（与子句参数同纪律）。</summary>
     internal Dictionary<string, string>? _sensitiveMasks;
     internal readonly IQueryCache _queryCache;
+    /// <summary>A9（2026-10-01）：读查询命令复用槽（会话所有，builder 仅持引用）——
+    /// 惰性晋升复用同 SQL 文本的命令，见 TryAcquireReusableSelectCommand。</summary>
+    internal readonly ReusableQuerySlot? _querySlot;
 
     internal QueryBuilder(QueryBuilderContext<T> ctx)
     {
@@ -130,6 +133,7 @@ public struct QueryBuilder<T> where T : class, new()
         _useReadRoute = false;
         _transaction = null;
         _sensitiveMasks = null;
+        _querySlot = ctx.QuerySlot;
     }
 
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
@@ -634,6 +638,45 @@ public struct QueryBuilder<T> where T : class, new()
             : _operationState.GetActiveTransaction();
     }
 
+    /// <summary>A9（2026-10-01 全 API 逐项轮）：读查询命令的惰性晋升复用（PL-2 泛化）——
+    /// 同 SQL 文本（形状缓存命中即同文本）+ 同连接 + 非并行读作用域时返回晋升命令
+    ///（调用方负责逐位置就地写参数值与"不 Dispose 归还"）；未晋升返回 null（调用方走新建路径）。
+    /// 晋升时旧命令替换即释放（单操作门禁保证无飞行 reader）。收益上限探针：
+    /// KeyLookupCommandDiag（-504B/op、-2.57µs）。
+    /// <para>R-UNNESTB（2026-10-02）：命中分支不再 Clear 参数集合——PG 连接串的 auto-prepare
+    /// 调优（v5.0 阶段 3.1 默认开启）下，「Clear + Add 新参数实例」会让驱动沿用 prepare 时的
+    /// 绑定值（探针 mergearray 变体 C 实测；同实例就地写 Value 正常）。调用方经
+    /// <c>TryCopyParameterValues</c> 就地写值，形状漂移则保守回退新建命令。</para></summary>
+    internal DbCommand? TryAcquireReusableSelectCommand(DbConnection connection, string sql)
+    {
+        var slot = _querySlot;
+        // 并行读作用域禁用：并发 reader 不能共用命令（各走新建 + 自持连接）
+        if (slot is null || _operationState.ParallelReadsEnabled)
+            return null;
+
+        // 命中：同 SQL 文本 + 同连接 → 交调用方就地写参数值
+        if (slot.Command is { } cmd
+            && slot.Connection is { } cmdConn
+            && ReferenceEquals(cmdConn, connection)
+            && string.Equals(slot.Sql, sql, StringComparison.Ordinal))
+        {
+            return cmd;
+        }
+
+        slot.ServedOps++;
+        if (slot.ServedOps < ReusableQuerySlot.PromotionThreshold)
+            return null;
+
+        // 晋升：替换旧命令即释放（单操作门禁保证无飞行 reader），新建并登记
+        slot.Command?.Dispose();
+        DbCommand promoted = connection.CreateCommand();
+        promoted.CommandText = sql;
+        slot.Sql = sql;
+        slot.Connection = connection;
+        slot.Command = promoted;
+        return promoted;
+    }
+
     internal void AddDefaultFilter(string condition)
         => AddClause(QueryClauseKind.DefaultFilter, condition);
 
@@ -652,7 +695,7 @@ public struct QueryBuilder<T> where T : class, new()
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
                 _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
-            _readConnInvalidator, _readConnReturner))
+            _readConnInvalidator, _readConnReturner, _querySlot))
         {
             _selectColumns = _selectColumns,
             _take = _take,
@@ -1320,4 +1363,5 @@ internal readonly record struct QueryBuilderContext<T>(
     IQueryCache? QueryCache = null,
     bool ValidateColumnOrder = false,
     Func<ValueTask>? ReadConnInvalidator = null,
-    Func<DbConnection, ValueTask>? ReadConnReturner = null) where T : class, new();
+    Func<DbConnection, ValueTask>? ReadConnReturner = null,
+    ReusableQuerySlot? QuerySlot = null) where T : class, new();

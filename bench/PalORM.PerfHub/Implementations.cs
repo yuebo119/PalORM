@@ -19,6 +19,10 @@ internal interface IPerfImplementation
 
     Task SetupAsync(DbConnection conn, int rows, CancellationToken ct);
     Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct);
+    /// <summary>长会话循环直查（GetByKeySession 项）——单会话内循环 N 次按键直查并返回命中数。
+    /// N 固定 32（覆盖 A9 晋升阈值 3 且摊销会话构造）；三臂契约：ADO 命令复用、Dapper 无状态
+    /// 循环、PalORM 单 DataSession（A9 复用槽生效）——"推荐用法"的对照面（step13 §6.2 挂账）。</summary>
+    Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct);
     Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct);
     Task<long> StreamAllAsync(DbConnection conn, Func<S1Row, ValueTask> onRow, CancellationToken ct);
     Task InsertAsync(DbConnection conn, S1Row row, CancellationToken ct);
@@ -68,6 +72,17 @@ internal interface IPerfImplementation
     /// 起（Measure 的 prepare 只在预热前与计时前各调一次，写操作在计时循环内累积，
     /// 故每轮必须用互不重叠的主键段）。</summary>
     Task<int> SessionBatchInsertsAsync(DbConnection conn, int offset, CancellationToken ct);
+
+    // ── 枚举列形态 + GetAllAsync 直查（2026-10-04 全量复读落地轮）──
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——事务内 N 次单行 INSERT 到 perf_enum，
+    /// 三臂同一语句形态（单行参数化 INSERT），唯一差异是绑定机械与枚举→字符串转换：
+    /// ADO 地板 = 单命令复用 + 逐行 Status.ToString()（行业常规写法）；
+    /// Dapper = 每行 ExecuteAsync + ToString()；PalORM = PL-2 复用命令 + EnumStr 生成式
+    /// switch（N2 零分配化的量化面）。</summary>
+    Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct);
+    /// <summary>全表直查（GetAllAsync 项）——PalORM 的 GetAllAsync 公共 API 路径（N5 组合句缓存）；
+    /// 地板与 QueryAll 同形（SELECT 全列 + 手工物化），Dapper 走 QueryAsync。</summary>
+    Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,12 +160,34 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         }
     }
 
+    /// <summary>枚举列形态表的重置（EnumInserts 项）——写专用表：DROP + CREATE 空表即可
+    /// （无读取项，无需播种；prepare 语义为预热前/计时前各一次，不进测量）。</summary>
+    internal static async Task SetupPerfEnumTableAsync(
+        Dialect dialect, DbConnection conn, CancellationToken ct)
+    {
+        await ExecSetupAsync(conn, Dataset.DropEnumTableSql(dialect), ct).ConfigureAwait(false);
+        await ExecSetupAsync(conn, Dataset.CreateEnumTableSql(dialect), ct).ConfigureAwait(false);
+    }
+
     public async Task SetupAsync(DbConnection conn, int rows, CancellationToken ct)
     {
         // bench_tenant 播种（租户会话 / OwnedJson / SessionBatch 夹具）——快照重置模式与
         // perf_s1 同构（两套缓存互不干扰，seed 表只服务 tenant 夹具）
         await TenantSetupAsync(conn, rows, ct).ConfigureAwait(false);
+        await SetupPerfS1Async(conn, rows, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>只播 <c>perf_s1</c>（不碰 <c>bench_tenant</c>）——批量项的确定性重置专用。
+    /// <para><b>为什么需要</b>：BulkInsert 的迭代数由时间预算自适应且逐臂不同，而 BulkUpdate 紧随其后、
+    /// 原实现不带重置，于是三臂在规模不同的表上测（2026-10-03 实测 PG/20000 档起始表 324 万 / 34 万 /
+    /// 330 万行），跨臂比值无可比性；BulkDelete 原实现也走各臂 <see cref="SetupAsync"/>，顺带把
+    /// bench_tenant 播到 rows×轮数 行（每方言首次约 10~20 万行含 JSON 载荷）。两个批量项改用本方法后，
+    /// 三臂经同一中性路径得到同一张同规模的表，且不再牵动租户表。</para>
+    /// <para><b>快照表共用</b>：<c>perf_s1_seed</c> 只有一个，播新规模时会 DROP 重建；因
+    /// <c>Dataset.Seed(r)</c> 是 r 的纯函数，"更大规模快照 + <c>WHERE Id &lt;= rows</c>" 与小规模快照
+    /// 等价，故旧键的缓存命中仍然正确。</para></summary>
+    public async Task SetupPerfS1Async(DbConnection conn, int rows, CancellationToken ct)
+    {
         string snapshot = Q("perf_s1_seed");
         if (SeedSnapshots.ContainsKey((conn, rows)))
         {
@@ -220,6 +257,24 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         AddP(cmd, 0, id);
         await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await r.ReadAsync(ct).ConfigureAwait(false) ? Map(r) : null;
+    }
+
+    /// <summary>长会话最优形态：单命令跨查询复用，只改参数值（GetByKeySession 项）。</summary>
+    public async Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+    {
+        int found = 0;
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {Cols} FROM {T} WHERE {Q("Id")} = {Dataset.P(0)}";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = Dataset.P(0);
+        cmd.Parameters.Add(p);
+        foreach (long id in ids)
+        {
+            p.Value = id;
+            await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (await r.ReadAsync(ct).ConfigureAwait(false)) found++;
+        }
+        return found;
     }
 
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
@@ -1022,22 +1077,26 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    /// <summary>宽表全表物化——19 列按序号取（按名取列是慢路径，S1 测不出的列数伸缩在此放大）。</summary>
+    /// <summary>宽表全表物化——19 列按序号取（按名取列是慢路径，S1 测不出的列数伸缩在此放大）。
+    /// <para>2026-10-02 对等化：物化进列表并持有到读完（原实现逐行映射后丢弃，PalORM 的 ToListAsync 与
+    /// Dapper 的缓冲查询都持有全部实体——2 万宽行约 10MB 存活集的 GC 成本只落在两臂上，宽表 2 万行
+    /// 1.14~1.21× 的差距由此而来，而非产品开销）。</para></summary>
     public async Task<int> WideQueryAllAsync(DbConnection conn, CancellationToken ct)
     {
         await using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = $"SELECT {Dataset.WideSelectColumns(D)} FROM {Dataset.WideTable(D)}";
         await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        int n = 0;
+        var list = new List<WideRow>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            _ = MapWide(r);
-            n++;
+            list.Add(MapWide(r));
         }
-        return n;
+        return list.Count;
     }
 
-    /// <summary>1:N 装配——JOIN 单查询 + 客户端按父去重分组（无行放大的手工天花板形态）。</summary>
+    /// <summary>1:N 装配——JOIN 单查询 + 客户端按父去重分组（无行放大的手工天花板形态）。
+    /// <para>2026-10-02 对等化：逐行物化父列实体进列表（与 PalORM Include 的产出同形：150 个 S1Row）；
+    /// 原实现每行只读 Id 与子表 Note 两列、不建实体，18~25KB 的分配差就是这部分。</para></summary>
     public async Task<(int Parents, int Children)> IncludeJoinAsync(
         DbConnection conn, int parentCount, CancellationToken ct)
     {
@@ -1047,20 +1106,23 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             + $"WHERE {T}.{Q("Id")} <= {Dataset.P(0)} ORDER BY {T}.{Q("Id")}";
         AddP(cmd, 0, (long)parentCount);
         await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        long lastParent = 0;
-        int parents = 0, children = 0;
+        var rows = new List<S1Row>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            long id = r.GetInt64(0);
-            if (id != lastParent)
+            rows.Add(Map(r));
+        }
+
+        long lastParent = 0;
+        int parents = 0;
+        foreach (S1Row row in rows)
+        {
+            if (row.Id != lastParent)
             {
                 parents++;
-                lastParent = id;
+                lastParent = row.Id;
             }
-            _ = r.GetString(6);
-            children++;
         }
-        return (parents, children);
+        return (parents, rows.Count);
     }
 
     /// <summary>宽表行物化——19 列全读（测量物化成本，不物化成实体会被优化掉）。</summary>
@@ -1120,6 +1182,38 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     public Task TxHundredInsertsAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => TxTenInsertsAsync(conn, rows, ct);
 
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——地板写法：单命令跨行复用，每行只写
+    /// 参数 Value；Status 列是枚举→TEXT 的行业常规转换（逐行 ToString()，每行分配一个新串）。
+    /// 这正是 N2 前产品臂的形态，作为对照面保留。</summary>
+    public async Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+    {
+        string enumTable = Dataset.EnumTable(D);
+        await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandText = $"INSERT INTO {enumTable} ({Q("Id")}, {Q("Name")}, {Q("Status")}) "
+            + $"VALUES ({Dataset.P(0)}, {Dataset.P(1)}, {Dataset.P(2)})";
+        AddP(cmd, 0, 0L);
+        AddP(cmd, 1, "");
+        AddP(cmd, 2, "");
+        DbParameter pId = cmd.Parameters[0];
+        DbParameter pName = cmd.Parameters[1];
+        DbParameter pStatus = cmd.Parameters[2];
+        foreach (EnumRow row in rows)
+        {
+            pId.Value = row.Id;
+            pName.Value = row.Name;
+            pStatus.Value = row.Status.ToString();
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        await tran.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>全表直查（GetAllAsync 项）——地板与 QueryAll 同一写法（SELECT 全列 + 手工物化）：
+    /// 该臂的地板语义就是"全表 SELECT 物化"，API 形态差异只在 PalORM 侧（GetAllAsync vs 管线）。</summary>
+    public Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
+        => QueryAllAsync(conn, ct);
+
     public async Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -1127,17 +1221,30 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         await tran.CommitAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>事务内逐行整行 UPDATE 后显式回滚——测"撤销量"。2026-10-02 对等化：三臂同为整行
+    /// UPDATE（4 个 SET 列，与 PalORM UpdateAsync 的生成 SQL 同形）+ 显式 RollbackAsync；原实现
+    /// ADO/Dapper 只更新 Qty 一列、PalORM 抛异常触发回滚，1.95× 的差距混入了 SQL 形态与异常成本。
+    /// 天花板写法：单命令跨行复用，每行只写参数 Value。</summary>
     public async Task TxRollbackAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         await using DbCommand cmd = conn.CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandText = $"UPDATE {T} SET {Q("Qty")} = {Dataset.P(0)} WHERE {Q("Id")} = {Dataset.P(1)}";
+        cmd.CommandText = $"UPDATE {T} SET {Q("Name")} = {Dataset.P(0)}, {Q("Qty")} = {Dataset.P(1)}, "
+            + $"{Q("Price")} = {Dataset.P(2)}, {Q("Marker")} = {Dataset.P(3)} WHERE {Q("Id")} = {Dataset.P(4)}";
+        AddP(cmd, 0, default(string));
+        AddP(cmd, 1, 0);
+        AddP(cmd, 2, 0m);
+        AddP(cmd, 3, 0L);
+        AddP(cmd, 4, 0L);
+        DbParameter[] rowPool = SnapshotParameters(cmd);
         foreach (S1Row row in rows)
         {
-            cmd.Parameters.Clear();
-            AddP(cmd, 0, row.Qty + 1);
-            AddP(cmd, 1, row.Id);
+            SetP(rowPool, 0, row.Name);
+            SetP(rowPool, 1, row.Qty);
+            SetP(rowPool, 2, row.Price);
+            SetP(rowPool, 3, row.Marker);
+            SetP(rowPool, 4, row.Id);
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         await tran.RollbackAsync(ct).ConfigureAwait(false);
@@ -1318,6 +1425,21 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     public async Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
         => await conn.QueryFirstOrDefaultAsync<S1Row>(
             $"SELECT {Cols} FROM {T} WHERE {C("Id")} = @id", new { id }).ConfigureAwait(false);
+
+    /// <summary>长会话形态（GetByKeySession 项）——Dapper 无状态扩展方法的最优循环：每查询
+    /// 一次调用，无命令复用概念（Dapper 内部每次新命令），这是它的真实形态而非让步。</summary>
+    public async Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+    {
+        int found = 0;
+        foreach (long id in ids)
+        {
+            if (await conn.QueryFirstOrDefaultAsync<S1Row>(
+                    $"SELECT {Cols} FROM {T} WHERE {C("Id")} = @id", new { id }).ConfigureAwait(false)
+                is not null)
+                found++;
+        }
+        return found;
+    }
 
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
     {
@@ -1702,6 +1824,26 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         await TxInsertManyAsync(conn, rows, ct).ConfigureAwait(false);
     }
 
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——Dapper 的真实形态：每行一次
+    /// ExecuteAsync（无状态扩展，内部每次新命令）；TEXT 存储枚举的常规 Dapper 用法是
+    /// 匿名对象里显式 ToString() 转换（每行分配一个新串）。</summary>
+    public async Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+    {
+        string enumTable = Dataset.EnumTable(dialect.Dialect);
+        await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        foreach (EnumRow row in rows)
+        {
+            await conn.ExecuteAsync(
+                $"INSERT INTO {enumTable} ({C("Id")}, {C("Name")}, {C("Status")}) VALUES (@Id,@Name,@Status)",
+                new { row.Id, row.Name, Status = row.Status.ToString() }, tran).ConfigureAwait(false);
+        }
+        await tran.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>全表直查（GetAllAsync 项）——Dapper 的 QueryAsync 全表物化（与 QueryAll 同形）。</summary>
+    public Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
+        => QueryAllAsync(conn, ct);
+
     private async Task TxInsertManyAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -1728,13 +1870,15 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         await tran.CommitAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>事务内逐行整行 UPDATE 后显式回滚（2026-10-02 三臂对等化，见 ADO 臂注释）。</summary>
     public async Task TxRollbackAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         foreach (S1Row row in rows)
         {
             await conn.ExecuteAsync(
-                $"UPDATE {T} SET {C("Qty")}=@Qty WHERE {C("Id")}=@Id", row, tran).ConfigureAwait(false);
+                $"UPDATE {T} SET {C("Name")}=@Name, {C("Qty")}=@Qty, {C("Price")}=@Price, {C("Marker")}=@Marker WHERE {C("Id")}=@Id",
+                row, tran).ConfigureAwait(false);
         }
 
         await tran.RollbackAsync(ct).ConfigureAwait(false);
@@ -1832,11 +1976,46 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             _ => throw UnsupportedDialect(D)
         };
 
+    /// <summary>单键直查——step12 形态复核（2026-10-01）改用产品专用 <c>GetAsync</c> API。
+    /// <para>原实现用 <c>From&lt;S1Row&gt;().Where(Id==x).FirstOrDefaultAsync()</c> 链式形态，
+    /// 与三臂契约"各自行业最优写法"不符：产品为单键直查专设 GetAsync（SQL 常量缓存、单行直读、
+    /// 无 List 物化、无二次 ReadAsync 探测）。同口径探针（.ai/perf-probe/GetByKeyPathDiag，
+    /// 共享连接 + per-op 会话、3000 次摊销、3 轮）实测专用形态 -880B/op（3640→2760，
+    /// -24%）且 -25~30% 耗时；链式多出的 880B 是 QueryBuilder 构建尾（FormattableString/
+    /// 子句链/参数 List/形状查询）与 List(1) 物化的合计。</para>
+    /// <para>该复核逐臂做过：Count/StreamAll/InsertReturningId 等已是专用 API 形态；
+    /// QueryAll/WideQueryAll 保持链式（固定开销占其总成本 &lt;1%，换形态无实质收益）；
+    /// WhereIn/KeysetPage/IncludeJoin 的链式是过滤表达式的唯一自然形态。</para></summary>
     private static Task<S1Row?> GetByKeyCoreAsync<TProvider>(DbConnection conn, long id, CancellationToken ct)
         where TProvider : IDbProvider, new()
-        => Session<TProvider>(conn).From<S1Row>()
-            .Where(Dataset.WhereId(TProvider.Dialect, id))
-            .FirstOrDefaultAsync(ct).AsTask();
+        => Session<TProvider>(conn).GetAsync<S1Row>(id, ct).AsTask();
+
+    /// <summary>长会话推荐用法（GetByKeySession 项）——单 DataSession 循环 GetAsync：
+    /// A9 读查询命令复用槽在第 3 次同形态查询后晋升（ReusableQuerySlot.PromotionThreshold=3），
+    /// 会话构造 968B 被循环摊销。这是产品对"同会话重复查询"场景的推荐形态，
+    /// 与 GetByKey 项的"每操作一新会话"互为对照面（step13 §6.2 挂账清理）。</summary>
+    private static async Task<int> GetByKeySessionCoreAsync<TProvider>(
+        DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = Session<TProvider>(conn);
+        int found = 0;
+        foreach (long id in ids)
+        {
+            if (await session.GetAsync<S1Row>(id, ct).ConfigureAwait(false) is not null)
+                found++;
+        }
+        return found;
+    }
+
+    public Task<int> GetByKeySessionAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => GetByKeySessionCoreAsync<SqliteProvider>(conn, ids, ct),
+            Dialect.MySql => GetByKeySessionCoreAsync<MySqlProvider>(conn, ids, ct),
+            Dialect.PostgreSql => GetByKeySessionCoreAsync<PostgreSqlProvider>(conn, ids, ct),
+            _ => throw UnsupportedDialect(D)
+        };
 
     public Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
         => D switch
@@ -2288,6 +2467,49 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             _ => throw UnsupportedDialect(D)
         };
 
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——N2 的量化面：单会话事务内逐行
+    /// InsertAsync（PL-2 命令/参数池第 3 次起复用，BindInsertValues 只写 Value），
+    /// 枚举列经 EnumStr 生成式 switch 返回驻留常量（零分配）；EnumRow 为显式主键 +
+    /// 全列可插入形态（InsertNoReturning），无读回往返。</summary>
+    public Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => EnumInsertsCoreAsync<SqliteProvider>(conn, rows, ct),
+            Dialect.MySql => EnumInsertsCoreAsync<MySqlProvider>(conn, rows, ct),
+            Dialect.PostgreSql => EnumInsertsCoreAsync<PostgreSqlProvider>(conn, rows, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static async Task EnumInsertsCoreAsync<TProvider>(
+        DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = Session<TProvider>(conn);
+        await session.WithTransaction(async _ =>
+        {
+            foreach (EnumRow row in rows)
+            {
+                await session.InsertAsync(row, ct).ConfigureAwait(false);
+            }
+        }, ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>全表直查（GetAllAsync 项）——产品的 GetAllAsync 公共 API（N5 组合句缓存
+    /// 的命中路径），与 QueryAll 臂（From&lt;T&gt;().ToListAsync() 管线）互为对照面。</summary>
+    public Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => GetAllCoreAsync<SqliteProvider>(conn, ct),
+            Dialect.MySql => GetAllCoreAsync<MySqlProvider>(conn, ct),
+            Dialect.PostgreSql => GetAllCoreAsync<PostgreSqlProvider>(conn, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static async Task<List<S1Row>> GetAllCoreAsync<TProvider>(
+        DbConnection conn, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => await Session<TProvider>(conn).GetAllAsync<S1Row>(ct).ConfigureAwait(false);
+
     public Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => D switch
         {
@@ -2337,26 +2559,20 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             _ => throw UnsupportedDialect(D)
         };
 
-    /// <summary>事务内更新 N 行后主动抛异常触发回滚——测的是"撤销量"而非"提交量"。</summary>
+    /// <summary>事务内逐行 UpdateAsync 后显式回滚——测的是"撤销量"而非"提交量"。
+    /// 2026-10-02 对等化：改用 BeginTransactionAsync（发布为会话活动事务，UpdateAsync 自动挂上）+
+    /// 显式 RollbackAsync，与 ADO/Dapper 的回滚触发方式一致；原实现靠抛异常让 WithTransaction 回滚，
+    /// 异常经多层 async 帧传播的成本只落在本臂。</summary>
     private static async Task TxRollbackCoreAsync<TProvider>(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
         DataSession<TProvider> session = Session<TProvider>(conn);
-        try
+        await using DbTransaction tran = await session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+        foreach (S1Row row in rows)
         {
-            await session.WithTransaction(async _ =>
-            {
-                foreach (S1Row row in rows)
-                {
-                    await session.UpdateAsync(row, ct).ConfigureAwait(false);
-                }
-                throw new InvalidOperationException("intentional rollback");
-            }, ct: ct).ConfigureAwait(false);
+            await session.UpdateAsync(row, ct).ConfigureAwait(false);
         }
-        catch (InvalidOperationException)
-        {
-            // 预期的回滚路径——WithTransaction 把 callback 异常转成 rollback 后重新抛出
-        }
+        await tran.RollbackAsync(ct).ConfigureAwait(false);
     }
 }

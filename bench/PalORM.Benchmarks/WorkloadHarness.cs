@@ -228,7 +228,8 @@ internal static class WorkloadHarness
             }
             else
             {
-                _ = await session.From<BenchNarrow>().Where($"\"Id\" = {id}").FirstOrDefaultAsync()
+                // step12 形态复核：单键直查改用专用 GetAsync（同 StabilityHarness）
+                _ = await session.GetAsync<BenchNarrow>(id)
                     .ConfigureAwait(false);
             }
             stopwatch.Stop();

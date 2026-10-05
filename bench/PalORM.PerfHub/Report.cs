@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using PalORM.Bench.Shared;
 
 namespace PalORM.PerfHub;
 
@@ -73,9 +74,35 @@ internal static class Report
         return 0;
     }
 
+    /// <summary>批次的方言覆盖面（排除 DataGen 的 "—" 占位）——报告选批的"不得回退"判据。</summary>
+    private static int DialectCount(PerfRun run)
+        => run.Measurements
+            .Select(static m => m.Dialect)
+            .Where(static d => d != "—")
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+
     private static string Render(List<PerfRun> runs)
     {
-        PerfRun latest = runs[^1];
+        // 报告主体取「最近的可引用批次」——原用 runs[^1]（文件名排序的最后一个），两个缺口
+        // 都实测踩到（2026-10-03）：
+        //   ①子集标签批（filtered/quick/ab/verify-/gate-set）会顶掉它，整份报告缩水成单方言；
+        //   ②**无标签**的子集批（只跑 --dialects sqlite 而不传 --label）标签守卫拦不住
+        //     ——实测 20:02/20:04 两批就是 79 项 SQLite 单方言、label 为空。
+        // 判据与 latest.json 的守卫对齐：跳过子集标签，且方言覆盖面不得回退（真子集不采纳）。
+        PerfRun? latest = null;
+        foreach (PerfRun run in runs)
+        {
+            if (PerfResultWriter.IsSubsetLabel(run.Label))
+            {
+                continue;
+            }
+            if (latest is null || DialectCount(run) >= DialectCount(latest))
+            {
+                latest = run;
+            }
+        }
+        latest ??= runs[^1];
         var sb = new StringBuilder();
         sb.Append(Header(latest, runs.Count));
         sb.Append(Overview(latest));

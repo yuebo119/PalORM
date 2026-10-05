@@ -94,6 +94,43 @@ internal static class Dataset
 
     public static string Table(Dialect dialect) => Q(dialect, "perf_s1");
 
+    // ── 枚举列形态（2026-10-04 全量复读落地轮：N2 枚举写路径零分配化的量化臂）──
+
+    /// <summary>枚举列形态表（perf_enum）——Status 列为枚举按默认字符串存储（TEXT），
+    /// 是 EnumStr 生成式 switch 的测量载体。写专用：无读取项，reset 只需建空表。</summary>
+    public static string EnumTable(Dialect dialect) => Q(dialect, "perf_enum");
+
+    public static string DropEnumTableSql(Dialect dialect)
+        => $"DROP TABLE IF EXISTS {Q(dialect, "perf_enum")}";
+
+    public static string CreateEnumTableSql(Dialect dialect) => dialect switch
+    {
+        Dialect.Sqlite => "CREATE TABLE perf_enum (\"Id\" INTEGER PRIMARY KEY, \"Name\" TEXT NOT NULL, \"Status\" TEXT NOT NULL)",
+        Dialect.MySql => "CREATE TABLE perf_enum (`Id` BIGINT PRIMARY KEY, `Name` TEXT NOT NULL, `Status` TEXT NOT NULL)",
+        Dialect.PostgreSql => "CREATE TABLE perf_enum (\"Id\" BIGINT PRIMARY KEY, \"Name\" TEXT NOT NULL, \"Status\" TEXT NOT NULL)",
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect))
+    };
+
+    /// <summary>确定性构造一枚举行（i 从 0 起）——Status 在 6 个成员间循环，
+    /// 覆盖 EnumStr switch 的常量臂（全部命中，无兜底臂）。</summary>
+    public static EnumRow SeedEnum(long i) => new()
+    {
+        Id = i + 1,
+        Name = $"row-{i}",
+        Status = (OrderStatus)(i % 6)
+    };
+
+    public static List<EnumRow> SeedEnumRows(int count, long idOffset)
+    {
+        var list = new List<EnumRow>(count);
+        for (long i = 0; i < count; i++)
+        {
+            list.Add(SeedEnum(idOffset + i));
+        }
+
+        return list;
+    }
+
     /// <summary>PalORM 的 <see cref="SqlDialect"/> 映射到 PerfHub 内部 <see cref="Dialect"/>。
     /// <para>泛型核心方法拿得到的是 <c>TProvider.Dialect</c>（PalORM 侧枚举），
     /// 而 Dataset 的 SQL 模板按 PerfHub 侧枚举分叉——这一层是两套枚举的唯一转换点。</para></summary>
@@ -482,6 +519,36 @@ internal sealed partial class S1Row
     /// <summary>顺序标记列——ORDER BY / 键集分页的排序列，值等于行号。</summary>
     [Column("Marker")]
     public long Marker { get; set; }
+}
+
+/// <summary>枚举列形态的列值枚举——6 个成员，字符串（TEXT）存储（默认 StoreAs）。
+/// 测量的是写路径的枚举→字符串转换：PalORM 走 EnumStr 生成式 switch（驻留常量零分配），
+/// ADO/Dapper 地板走行业常规的逐行 ToString()。</summary>
+internal enum OrderStatus
+{
+    Pending,
+    Processing,
+    Paid,
+    Shipped,
+    Delivered,
+    Cancelled
+}
+
+/// <summary>枚举列形态实体（perf_enum）——N2 量化臂的载体。显式主键（AutoIncrement=false，
+/// 与 S1Row 同形态），三列中 Status 为枚举列。</summary>
+[Table("perf_enum")]
+internal sealed partial class EnumRow
+{
+    [Key(AutoIncrement = false)]
+    [Column("Id")]
+    public long Id { get; set; }
+
+    [Column("Name")]
+    public string Name { get; set; } = "";
+
+    /// <summary>枚举列（默认字符串存储/TEXT）——本臂的测量对象：写路径逐行的枚举转换成本。</summary>
+    [Column("Status")]
+    public OrderStatus Status { get; set; }
 }
 
 /// <summary>方言标识——PerfHub 内部使用，避免直接依赖 Provider 静态类型分派。</summary>

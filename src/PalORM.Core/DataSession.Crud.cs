@@ -44,6 +44,9 @@ public sealed partial class DataSession<TProvider>
 
         // v5.6：读连接提供者从实例字段取——会话级复用（含 ReadSessionSetupSql 与 Provider
         // 初始化钩子），且方法组不在此处新建闭包。
+        // A9：读查询命令复用槽——惰性创建（并行读作用域内并发 From<T>() 的竞态只会各建
+        // 一个空槽：引用写原子、败者被 GC；槽在该作用域内禁用晋升、永无命令可漏）。
+        _querySlot ??= new ReusableQuerySlot();
         var builder = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(
@@ -53,7 +56,7 @@ public sealed partial class DataSession<TProvider>
                 _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
             tableName, columnNames, _readConnProvider,
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
-            _readConnReturner));
+            _readConnReturner, _querySlot));
 
         // ITM-866（r23）：租户值与过滤开关单次快照贯穿——原实现三次读 live 字段
         //（过滤值捕获 63 行 / 作用域求值 73 行 / TenantScopeCached 91 行），并发
@@ -96,12 +99,30 @@ public sealed partial class DataSession<TProvider>
         TenantScopeEntry? entry = _tenantScopeEntry;
         // ITM-866：命中判定含 TenantId 值相等——并发 WithTenant 清缓存与本方法写回交错时
         // 条目可能短暂 stale（Type 相同但租户已变），值校验避免 stale 命中。
+        // N6（2026-10-04 step23 全量复读）：比较改经 TenantValueEquals（装箱原值的 Equals 值比较）
+        // ——原实现 `tenantId as string ?? tenantId.ToString()` 对非 string 租户每次调用
+        // 分配一个 ToString 串（T6 只消了 Scope 拼接，此路径是漏项）。
         if (entry is not null && entry.Type == entityType
-            && string.Equals(entry.TenantId, tenantId as string ?? tenantId.ToString(), StringComparison.Ordinal))
+            && TenantValueEquals(entry.TenantId, tenantId))
             return entry.Scope;
-        var created = new TenantScopeEntry(entityType, tenantId.ToString()!);
+        var created = new TenantScopeEntry(entityType, tenantId);
         _tenantScopeEntry = created;
         return created.Scope;
+    }
+
+    /// <summary>N6：租户值的命中比较——两侧均非 null（WithTenant 拒绝 null，From&lt;T&gt;
+    /// 在 tenantId 非 null 时才走到本路径）。
+    /// <para><b>语义与旧 ToString 形态的等价性</b>：string 走 Ordinal 值比较（逐位一致）；
+    /// int/long/Guid 等<b>装箱值类型</b>的 <c>Equals(object)</c> 是解箱值比较，与
+    /// ToString 形态比较同判定（这些类型的 ToString 对值单射）且零分配。自定义引用类型
+    /// 从"ToString 相等"变为虚 <c>Equals</c>（默认引用相等）——ITM-866 判别式的文档语义
+    /// 本就是"值相等"，新形态更贴合；租户键的既定用法（数值/Guid/string）不受影响。</para></summary>
+    private static bool TenantValueEquals(object cached, object current)
+    {
+        if (ReferenceEquals(cached, current)) return true;
+        return cached is string cachedString && current is string currentString
+            ? string.Equals(cachedString, currentString, StringComparison.Ordinal)
+            : cached.Equals(current);
     }
 
     // ─── CRUD ────────────────────────────────────────────
@@ -121,7 +142,13 @@ public sealed partial class DataSession<TProvider>
     /// DB 层兜底拒绝未赋值写入，但应用层应通过 WithTenant 设置会话上下文并在构造实体时填值。</para></summary>
     public ValueTask<T> InsertAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
-        => InsertCoreAsync(entity, null, ct);
+    {
+        // step16-P1：非 async 入口预热操作归属标记（调用方 EC 持久，体内 Enter 守卫命中免写）；
+        // 门禁见 PrewarmCurrentOperationOwner——仅本会话已完成过操作后预热，防 EC 链累积
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return InsertCoreAsync(entity, null, ct);
+    }
 
     // ─── 单行 CRUD 命令与参数复用（PL-2，2026-09-24）────────────────────
     //
@@ -177,7 +204,10 @@ public sealed partial class DataSession<TProvider>
     private int _getByKeyReadOps;
 
     /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。</summary>
-    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool);
+    /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。
+    /// <para><see cref="KeyProbe"/> 仅 GetByKey 槽使用：从不执行的探针命令，承载键值转换绑定器
+    /// 的产出（见 <see cref="TryAcquireGetByKeyCommand"/> 复用分支的 auto-prepare 说明）。</para></summary>
+    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool, DbCommand? KeyProbe = null);
 
     /// <summary>从已按原路径绑定的命令摘出参数对象池。</summary>
     private static DbParameter[] SnapshotParameterPool(DbCommand cmd)
@@ -295,7 +325,8 @@ public sealed partial class DataSession<TProvider>
         if (HasTenantFilter<T>())
             return null;
 
-        if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T))
+        if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T)
+            && reusable.KeyProbe is { } keyProbe && reusable.Pool is [DbParameter pooledKey, ..])
         {
             DbCommand reused = reusable.Command;
             // 事务与超时可随 WithTransaction/WithTimeout 中途变更，每次调用重设
@@ -303,11 +334,16 @@ public sealed partial class DataSession<TProvider>
             reused.CommandTimeout = _options.CommandTimeoutSeconds;
             if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
                 reused.CommandText = commandText;
-            // 清参重绑而非裸设 Value——生成键绑定器含键类型转换（Guid→TEXT、装箱整数
-            // Convert.ToInt64 等，KeyConversionTests 契约），裸设会绕过转换改变绑定类型；
-            // 每次仅付 1 个 SqliteParameter 分配，仍远低于新建命令路径
-            reused.Parameters.Clear();
-            BindGeneratedKeyParameter<T>(reused, key);
+            // R-UNNESTB（2026-10-02）：**绝不触碰复用命令的参数集合**——PG 连接串的
+            // auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，「Clear 集合 + Add 新参数实例」
+            // 会让驱动沿用 prepare 时的绑定值（探针 mergearray 变体 C 实测：语句卡在
+            // prepare 时的键，就地写同一实例的 Value 则正常——变体 A/B）。键值换算仍走
+            // 同一生成绑定器（KeyConversionTests 契约的单源），但在从不执行的 keyProbe 上
+            // 绑定，产出就地写入 Pool[0]（与命令参数集合持有同一参数实例）。
+            // PARAM-REUSE-OK[carrier] keyProbe 从不执行，只承载键绑定器的值转换产出
+            keyProbe.Parameters.Clear();
+            BindGeneratedKeyParameter<T>(keyProbe, key);
+            pooledKey.Value = keyProbe.Parameters[0].Value;
             return reused;
         }
 
@@ -318,6 +354,7 @@ public sealed partial class DataSession<TProvider>
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        DbCommand keyProbeCommand = CreateCommand();
         try
         {
             BindGeneratedKeyParameter<T>(cmd, key);
@@ -328,10 +365,12 @@ public sealed partial class DataSession<TProvider>
             // ITM-867（r23）：同 TryAcquireInsertCommand——BindGeneratedKeyParameter 的
             // Convert.ChangeType 可抛（ITM-743 登记形态），释放新建命令后再抛
             cmd.Dispose();
+            keyProbeCommand.Dispose();
             throw;
         }
         _reusableGetByKey?.Command.Dispose();
-        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
+        _reusableGetByKey?.KeyProbe?.Dispose();
+        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), keyProbeCommand);
         return cmd;
     }
 
@@ -356,9 +395,20 @@ public sealed partial class DataSession<TProvider>
         if (deferredVersionIncrements is null)
             metadata.IncrementVersion(entity);
         else
-            deferredVersionIncrements.Add(() => metadata.IncrementVersion(entity));
+            DeferVersionIncrement(metadata.IncrementVersion, entity, deferredVersionIncrements);
         return affectedRows;
     }
+
+    /// <summary>step16（2026-10-04）：乐观锁暂存闭包独立成方法。原 <c>() => metadata.IncrementVersion(entity)</c>
+    /// 内联在 <see cref="ApplyUpdateOutcome{T}"/> 时，Roslyn 对参数捕获 lambda 在方法入口
+    /// 无条件分配 display class——且 CrudMetadata 是 ~230B 的 struct，
+    /// 按值拷入闭包使每次 UpdateAsync 白付 ~250B（分配采样 248B/行实证，TxRollback SQLite
+    /// 356B/行差额的主项），<c>IncrementVersion is null</c> 的早退挡不住入口分配。
+    /// 拆出后：无并发令牌/单条路径零闭包；批量乐观锁路径的闭包只捕获委托引用 + entity
+    /// （~32B，降 87%）。</summary>
+    private static void DeferVersionIncrement<T>(
+        Action<object> increment, T entity, List<Action> deferred) where T : class, new()
+        => deferred.Add(() => increment(entity));
 
     private async ValueTask<T> InsertCoreAsync<T>(
         T entity,
@@ -541,7 +591,12 @@ public sealed partial class DataSession<TProvider>
     /// <para>单次查找: 使用 CrudMetadatas 聚合字典, 一次 TryGetValue 替代三次独立查找。</para></summary>
     public ValueTask<int> UpdateAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
-        => UpdateCoreAsync(entity, null, ct);
+    {
+        // step16-P1：同 InsertAsync——预热使事务内循环 UpdateAsync（TxRollback 形态）每行免 EC COW
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return UpdateCoreAsync(entity, null, ct);
+    }
 
     private async ValueTask<int> UpdateCoreAsync<T>(
         T entity,
@@ -656,6 +711,28 @@ public sealed partial class DataSession<TProvider>
         return built;
     }
 
+    /// <summary>取 GetAllAsync 的完整 SQL（含表名/过滤），走共享缓存（N5，2026-10-04 全量复读）。
+    /// 键 = (Type, Dialect, 过滤形态)——<see cref="DefaultFilterForms"/> 的值已编码
+    /// ignoreFilters/租户/软删的全部有效组合（Empty = 裸全表句），同值恒同 SQL；形态由
+    /// 调用方在实例侧求值传入（会话态）。
+    /// <b>v5.6 口径</b>：命中走 <c>TryGetValue</c>（无闭包分配），未命中才构建并 <c>TryAdd</c>。</summary>
+    private static string GetGetAllSql<T>(
+        DefaultFilterForms forms, IReadOnlyList<string> columnNames, string tableName)
+        where T : class, new()
+    {
+        (Type, SqlDialect, DefaultFilterForms) key = (typeof(T), TProvider.Dialect, forms);
+        if (DataSessionCache.GetAllSqlCache.TryGetValue(key, out string? cached))
+            return cached;
+        string selectColumns = GetSelectColumns<T>(columnNames);
+        // S2077 报备（M1-5，与原调用点同）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
+        // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
+#pragma warning disable S2077
+        string built = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{forms.WhereClause}";
+#pragma warning restore S2077
+        DataSessionCache.GetAllSqlCache.TryAdd(key, built);
+        return built;
+    }
+
     /// <summary>按主键查询。</summary>
     /// <remarks>step8 连接治理（2026-09-30）：并行读作用域内改走读连接池（原为响亮拒绝，
     /// 修复链：Enter 门禁必抛 → EnterReadOnly 放行 → 复用槽串扰 + 主连接并发 NRE 双缺陷
@@ -748,22 +825,17 @@ public sealed partial class DataSession<TProvider>
         return await ExecuteReadPipelineAsync(async token =>
         {
             await using DbCommand cmd = CreateCommand();
-            // v4.1：缓存 selectColumns
-            string selectColumns = GetSelectColumns<T>(columnNames);
-            // S2077 报备（M1-5）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
-            // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
-#pragma warning disable S2077
-            cmd.CommandText = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{GetDefaultFilterWhereClause<T>()}";
-#pragma warning restore S2077
+            // N5（2026-10-04 全量复读）：完整 SQL 走 (Type, Dialect, 过滤形态) 缓存——
+            // 原每次调用 1 次 QuoteIdentifier + 全句插值；GetByKeySql/CountComposed 同款模式。
+            // 过滤形态在实例侧求值后传入（ignoreFilters/租户是会话态）。
+            cmd.CommandText = GetGetAllSql<T>(GetDefaultFilterForms<T>(), columnNames, tableName);
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindDefaultFilterParameters<T>(cmd);
 
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            // v4.0 优化 D：默认 Capacity 16 起步——避免 []（=0）在 10K 行场景的 14 次扩容。
-            List<T> list = new(GetMaterializedCapacity<T>());
-            var tf = (Func<DbDataReader, T>)factory;
-            while (await reader.ReadAsync(token).ConfigureAwait(false))
-                list.Add(tf(reader));
+            // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
+            List<T> list = await ResultListReader.ReadAllAsync(
+                reader, (Func<DbDataReader, T>)factory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
             RecordMaterializedCount<T>(list.Count);
             return list;
         }, ct).ConfigureAwait(false);
@@ -797,7 +869,12 @@ public sealed partial class DataSession<TProvider>
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。</summary>
     public ValueTask<T> SaveAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
-        => SaveCoreAsync(entity, null, ct);
+    {
+        // step16-P1：同 InsertAsync——非 async 入口预热操作归属标记
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return SaveCoreAsync(entity, null, ct);
+    }
 
     private async ValueTask<T> SaveCoreAsync<T>(
         T entity,

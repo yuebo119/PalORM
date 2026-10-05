@@ -66,8 +66,11 @@ public sealed class ForeignKeyDdlTests
     }
 
     // ─── PG / MySQL（真库，FK 默认强制） ───
+    // 2026-10-03：MigrateAsync 对共享库建表，与并行外部库用例争系统目录
+    //（实测 42P07 relation already exists）——与 ExtBulkTable 组串行。
 
     [Test]
+    [NotInParallel("ExtBulkTable")]
     [Property("Category", "ExternalDatabase")]
     public async Task Pg_FkDdl_EnforcedByDatabase()
     {
@@ -96,6 +99,7 @@ public sealed class ForeignKeyDdlTests
     }
 
     [Test]
+    [NotInParallel("ExtBulkTable")]
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_FkDdl_EnforcedByDatabase()
     {

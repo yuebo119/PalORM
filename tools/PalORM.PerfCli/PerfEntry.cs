@@ -49,10 +49,27 @@ internal static class PerfEntry
     public static int Report()
     {
         var root = Perf.RepoRoot();
-        // 唯一报告产物（规范 §6）：BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览，一份文件。
-        Perf.Step("[报告] 统一报告（BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览）");
+        // 唯一报告产物（规范 §6）：BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览 + 四组表，一份文件。
+        Perf.Step("[报告] 统一报告（BDN 门禁明细 + 负载/内存 + 跨夹具批次登记 + 维度总览 + 四组表）");
         var outPath = Path.Combine(root, "bench", "reports", $"perf-report-{Perf.Stamp()}.md");
         FullPerf.RunReport(root, Path.Combine(root, BdnResults), null, null, "", outPath);
+
+        // 四组表（性能输出规范的固定表格组）由门禁工具从最新非子集信封生成，追加进唯一报告——
+        // 该段曾是每次跑测汇报的最大人工步骤（.ai 本地脚本原型已验证），固化后人工只写归因。
+        string tablesPath = outPath + ".tables.md";
+        int code = Perf.Run("dotnet",
+            $"run --project \"{Path.Combine(root, GateProject)}\" -c Release --no-build -- tables "
+            + $"--results \"{Path.Combine(root, "bench", "results")}\" --out \"{tablesPath}\"");
+        if (code == 0 && File.Exists(tablesPath))
+        {
+            File.AppendAllText(outPath, File.ReadAllText(tablesPath));
+            File.Delete(tablesPath);
+        }
+        else
+        {
+            Perf.Err("四组表生成失败（不影响报告主体）");
+        }
+
         return 0;
     }
 
@@ -60,8 +77,10 @@ internal static class PerfEntry
     {
         var root = Perf.RepoRoot();
         Perf.Step("[1/4] 微基准冒烟（单点查询，BDN）");
+        // B104 同族（2026-10-01）：filter 不得带引号——ProcessStartInfo 无 shell，单引号是字面量，
+        // 带引号的过滤串匹配 0 基准后退出码仍 0（假绿）
         var code = Perf.Run("dotnet",
-            $"run --project \"{Path.Combine(root, "bench", "PalORM.Benchmarks")}\" -c Release -- --filter '*ADO_NET_GetByKey*'");
+            $"run --project \"{Path.Combine(root, "bench", "PalORM.Benchmarks")}\" -c Release -- --filter *ADO_NET_GetByKey*");
         if (code != 0)
         {
             return code;
@@ -77,8 +96,9 @@ internal static class PerfEntry
 
         Perf.Step("[3/4] DapperSuite 冒烟（SQLite 单行，官方形状）");
         Environment.SetEnvironmentVariable("DAPPER_SUITE_DIALECT", "sqlite");
+        // 同 [1/4]：filter 不带引号（B104 同族修复）
         code = Perf.Run("dotnet",
-            $"run --project \"{Path.Combine(root, "bench", "PalORM.DapperSuite")}\" -c Release -- --filter '*SqlCommand*' --join");
+            $"run --project \"{Path.Combine(root, "bench", "PalORM.DapperSuite")}\" -c Release -- --filter *SqlCommand* --join");
         if (code != 0)
         {
             return code;
@@ -88,12 +108,31 @@ internal static class PerfEntry
         return Index();
     }
 
-    public static int Full()
+    /// <param name="options">--with-dappersuite：把 DapperSuite 哨兵并回本轮。默认**移出**（2026-10-03
+    /// 降频裁决：连续多轮 9 项零发现，信息增量低）：哨兵改按周或驱动/大版本变更时手动并回，
+    /// 统一报告的跨夹具登记会显示其最后批次时间，超期即可见。</param>
+    public static int Full(string[] options)
     {
+        // B135（2026-10-04 实录）：full 是 20 分钟级的昂贵动作，曾把 `full --help` 的 --help
+        // 当未知参数静默忽略直接开跑全量。未知参数一律响亮拒绝（含 -h/--help 输出用法），
+        // 防拼错参数名（如 --with-dappersuit）被静默降级成默认全量。
+        string[] known = ["--with-dappersuite", "-h", "--help"];
+        string[] unknown = options is null
+            ? []
+            : [.. options.Where(o => !known.Contains(o, StringComparer.Ordinal))];
+        if (unknown.Length > 0)
+        {
+            Perf.Out("full：未知参数 " + string.Join(' ', unknown));
+            return Usage();
+        }
+        if (options is not null && (Array.IndexOf(options, "-h") >= 0 || Array.IndexOf(options, "--help") >= 0))
+            return Usage();
+
+        bool withDapperSuite = options is not null && Array.IndexOf(options, "--with-dappersuite") >= 0;
         var root = Perf.RepoRoot();
         Perf.ClearSteps();
         Perf.StartClock();
-        const int stepTotal = 5;
+        int stepTotal = withDapperSuite ? 5 : 4;
         var stepIdx = 0;
         List<string> stepFailed = [];
 
@@ -133,7 +172,11 @@ internal static class PerfEntry
             "run --dialects sqlite,mysql,pg --tiers 2000,20000 --concurrency --threads 1,4,8"));
         // DapperSuite 只跑 SQLite：定位是"与 Dapper 官方数字可对照的外部锚点"，官方数字是
         // 单机 SQLite 的（2026-09-23 精简）。哨兵目的一个方言足够。
-        RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
+        // 2026-10-03 降频：移出默认全量（--with-dappersuite 并回），理由见方法 doc。
+        if (withDapperSuite)
+        {
+            RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
+        }
         RunStep("门禁（BDN 基线 + 结果库基线）", Gate);
         RunStep("统一报告", Report);
 
@@ -145,7 +188,7 @@ internal static class PerfEntry
             return 1;
         }
         Perf.Out("");
-        Perf.Out($"全量跑测完成：五步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
+        Perf.Out($"全量跑测完成：{(withDapperSuite ? "五" : "四")}步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
         Perf.PrintFinalTable();
         return 0;
     }
@@ -155,7 +198,8 @@ internal static class PerfEntry
         Perf.Out("""
             用法:
               PerfCli smoke                                    # 三套夹具最小档冒烟（SQLite，约 5 分钟）
-              PerfCli full                                     # 全量（三方言）+ 门禁 + 唯一报告
+              PerfCli full [--with-dappersuite]                # 全量（三方言）+ 门禁 + 唯一报告
+                                                               # DapperSuite 默认降频，--with-dappersuite 并回
               PerfCli compare <基线worktree> <轮数> [选项]      # 交替 A/B（转发 compare 编排器）
               PerfCli gate                                     # 只跑门禁（BDN 基线 + 结果库基线）
               PerfCli report                                   # 只重建统一报告（不重跑夹具）

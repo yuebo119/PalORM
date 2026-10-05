@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.1")]
 internal static class CommandFactory_global__FullFeatureEntity_4964faa8
 {
     private static readonly global::PalORM.IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter();
@@ -31,31 +31,36 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
     internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::FullFeatureEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 0].Value = (object)entity.Code;
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 1].Value = (object)entity.Kind;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 2].Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId);
         parameters[paramOffset + 3].Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
-        parameters[paramOffset + 4].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 4].Value = (object)entity.RawJson;
-        parameters[paramOffset + 5].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 5].Value = (object)entity.UniqueToken;
-        parameters[paramOffset + 6].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 6].Value = (object)entity.Tier;
-        parameters[paramOffset + 7].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 7].Value = (object)entity.Sku;
-        parameters[paramOffset + 8].DbType = global::System.Data.DbType.Decimal;
         parameters[paramOffset + 8].Value = (object)entity.Weight;
-        parameters[paramOffset + 9].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 9].Value = (object)entity.RawKind;
-        parameters[paramOffset + 10].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 10].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 11].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 11].Value = (object)entity.TenantId;
-        parameters[paramOffset + 12].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 12].Value = (object)entity.SensitiveValue;
+    }
+
+    /// <summary>B21：建池后一次性写 INSERT 参数 DbType（配合 BindInsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitInsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 1].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 2].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 4].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 5].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 6].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 7].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 8].DbType = global::System.Data.DbType.Decimal;
+        parameters[paramOffset + 9].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 10].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 11].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 12].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
@@ -91,10 +96,15 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 8].Value = (object)entity.Sku;
         parameters[paramOffset + 9].Value = (object)entity.Weight;
         parameters[paramOffset + 10].Value = (object)entity.RawKind;
-        parameters[paramOffset + 11].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 11].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
         parameters[paramOffset + 12].Value = (object)entity.TenantId;
         parameters[paramOffset + 13].Value = (object)entity.SensitiveValue;
+    }
+
+    /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 11].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
@@ -129,17 +139,203 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 7].Value = (object)entity.Sku;
         parameters[paramOffset + 8].Value = (object)entity.Weight;
         parameters[paramOffset + 9].Value = (object)entity.RawKind;
-        parameters[paramOffset + 10].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 10].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
         parameters[paramOffset + 11].Value = (object)entity.TenantId;
         parameters[paramOffset + 12].Value = (object)entity.SensitiveValue;
         parameters[paramOffset + 13].Value = (object)entity.Id;
     }
 
+    /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpdateParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 10].DbType = global::System.Data.DbType.String;
+    }
+
     /// <summary>绑定主键到 DELETE 参数。</summary>
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
+    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
+    {
+        long[] values = new long[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = global::System.Convert.ToInt64(keys[start + i]);
+        }
+        return values;
+    }
+
+    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpdateColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            string[] column0 = (string[])arrays[arrayOffset + 0];
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            string[] column2 = (string[])arrays[arrayOffset + 2];
+            string[] column3 = (string[])arrays[arrayOffset + 3];
+            string[] column4 = (string[])arrays[arrayOffset + 4];
+            string[] column5 = (string[])arrays[arrayOffset + 5];
+            string[] column6 = (string[])arrays[arrayOffset + 6];
+            string[] column7 = (string[])arrays[arrayOffset + 7];
+            decimal[] column8 = (decimal[])arrays[arrayOffset + 8];
+            string[] column9 = (string[])arrays[arrayOffset + 9];
+            string[] column10 = (string[])arrays[arrayOffset + 10];
+            string[] column11 = (string[])arrays[arrayOffset + 11];
+            string[] column12 = (string[])arrays[arrayOffset + 12];
+            long[] column13 = (long[])arrays[arrayOffset + 13];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::FullFeatureEntity)entities[start + i];
+                column0[i] = entity.Code;
+                column1[i] = entity.Kind;
+                column2[i] = _conv_ExternalId.ToProvider(entity.ExternalId);
+                column3[i] = global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
+                column4[i] = entity.RawJson;
+                column5[i] = entity.UniqueToken;
+                column6[i] = entity.Tier;
+                column7[i] = entity.Sku;
+                column8[i] = entity.Weight;
+                column9[i] = entity.RawKind;
+                column10[i] = entity.DeletedAt!;
+                column11[i] = entity.TenantId;
+                column12[i] = entity.SensitiveValue;
+                column13[i] = entity.Id;
+            }
+        }
+    }
+
+    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
+    internal static global::System.Array[] CreateUpdateColumnArrays(int count)
+    {
+        return new global::System.Array[14]
+        {
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new decimal[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new long[count],
+        };
+    }
+
+    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpsertColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            long[] column0 = (long[])arrays[arrayOffset + 0];
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            string[] column2 = (string[])arrays[arrayOffset + 2];
+            string[] column3 = (string[])arrays[arrayOffset + 3];
+            string[] column4 = (string[])arrays[arrayOffset + 4];
+            string[] column5 = (string[])arrays[arrayOffset + 5];
+            string[] column6 = (string[])arrays[arrayOffset + 6];
+            string[] column7 = (string[])arrays[arrayOffset + 7];
+            string[] column8 = (string[])arrays[arrayOffset + 8];
+            decimal[] column9 = (decimal[])arrays[arrayOffset + 9];
+            string[] column10 = (string[])arrays[arrayOffset + 10];
+            string[] column11 = (string[])arrays[arrayOffset + 11];
+            string[] column12 = (string[])arrays[arrayOffset + 12];
+            string[] column13 = (string[])arrays[arrayOffset + 13];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::FullFeatureEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.Code;
+                column2[i] = entity.Kind;
+                column3[i] = _conv_ExternalId.ToProvider(entity.ExternalId);
+                column4[i] = global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload);
+                column5[i] = entity.RawJson;
+                column6[i] = entity.UniqueToken;
+                column7[i] = entity.Tier;
+                column8[i] = entity.Sku;
+                column9[i] = entity.Weight;
+                column10[i] = entity.RawKind;
+                column11[i] = entity.DeletedAt!;
+                column12[i] = entity.TenantId;
+                column13[i] = entity.SensitiveValue;
+            }
+        }
+    }
+
+    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
+    internal static global::System.Type[] UpsertColumnArrayElementTypes()
+    {
+        return new global::System.Type[14]
+        {
+            typeof(long),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(decimal),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+        };
+    }
+
+    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
+    internal static global::System.Array[] CreateUpsertColumnArrays(int count)
+    {
+        return new global::System.Array[14]
+        {
+            new long[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new decimal[count],
+            new string[count],
+            new string[count],
+            new string[count],
+            new string[count],
+        };
+    }
+
+    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
+    internal static global::System.Type[] UpdateColumnArrayElementTypes()
+    {
+        return new global::System.Type[14]
+        {
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(decimal),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(long),
+        };
     }
 
     internal static void SetId(global::FullFeatureEntity entity, long id)

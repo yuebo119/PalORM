@@ -88,7 +88,10 @@ internal static class TransactionCleanup
         CancellationToken effectiveCt = ct;
         if (rollbackTimeoutSeconds > 0)
         {
-            timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            // D6（2026-10-01 全 API 逐项轮）：ct 不可取消时单构 CTS（与 CommitWithTimeoutAsync 同款）。
+            timeoutCts = ct.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : new CancellationTokenSource();
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(rollbackTimeoutSeconds));
             effectiveCt = timeoutCts.Token;
         }
@@ -141,7 +144,9 @@ internal static class TransactionCleanup
             return;
         }
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timeoutCts = ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : new CancellationTokenSource();  // D6（2026-10-01 全 API 逐项轮）：ct 不可取消时单构，省 linked registration
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
         try
         {

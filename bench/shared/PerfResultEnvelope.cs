@@ -89,13 +89,23 @@ internal sealed class PerfResultRegime
     public double HealthThreshold { get; set; } = 0.10;
 }
 
-/// <summary>一行测量。Ratio 为同方言同批次内相对地板的比值，无地板时留 0。</summary>
+/// <summary>一行测量。Ratio 为同方言同批次内相对地板的比值，无地板时留 0。
+/// <para><b>Ratio 的基数（2026-10-02 定案）</b>：中位数，不是均值。均值对计时离群值极其敏感——
+/// 实测终验批 Insert/SQLite/2000 的 ADO 臂中位数 17.1µs、均值 45.6µs（errRatio 0.58），
+/// 用它当分母会让该档基线比值录成 0.46（中位口径 1.13），下一个不离群的批次必然假报 FAIL。
+/// 报告侧（PerfHub Report.cs）本来就用 MedianNs，此处改中位数后两处口径才一致。
+/// <see cref="MeanUs"/> 保留：门禁失败描述要用它分辨"本项退化"与"地板移动"。</para></summary>
 internal sealed class PerfResultItem
 {
     public string Name { get; set; } = "";
     public string Dialect { get; set; } = "";
     public string Arm { get; set; } = "";
     public int Tier { get; set; }
+
+    /// <summary>中位耗时（µs）——Ratio 的基数，也是门禁比值的分子/分母来源。</summary>
+    public double MedianUs { get; set; }
+
+    /// <summary>平均耗时（µs）——仅供门禁失败描述做方向判读，不参与比值。</summary>
     public double MeanUs { get; set; }
     public long AllocBytes { get; set; }
     public double Ratio { get; set; }
@@ -105,6 +115,13 @@ internal sealed class PerfResultItem
 
     /// <summary>维度 8：prepared 语句复用率 0-1（0 = 本夹具未测）。</summary>
     public double PreparedReuse { get; set; }
+
+    /// <summary>量具自检：Error/Mean（标准误比均值）——该臂读数自身的相对不确定度。
+    /// <para><b>判别力弱标注的判据</b>（2026-10-04）：同一键的三臂里最大 ErrorRatio &gt; 5% 时，
+    /// 该行的比值落在噪声带内，不足以支撑结论（阈值沿用 <c>Measure.cs</c> 的"&gt;5% 标黄"自检线）。
+    /// 比值 = 被测臂 / 地板，两侧噪声都会放大比值的不确定度，故取三臂最大值而非只看被测臂。</para>
+    /// <para>未采集该项的夹具（Benchmarks / DapperSuite）恒为 0，读侧须把 0 当"未测"而不是"无噪声"。</para></summary>
+    public double ErrorRatio { get; set; }
 
     public string Note { get; set; } = "";
 }
@@ -139,9 +156,18 @@ internal static class PerfResultWriter
             // 与**空批次**（无 items 且无 sections，例如库不可达导致全部 NA 的方言跑）都不顶它。
             // 空批次本身仍然落盘——"这次什么都没测到"是事实，只是不该被当成当前状态。
             bool hasData = envelope.Items.Count > 0 || envelope.Sections.Count > 0;
-            if (!IsSubsetLabel(envelope.Label) && hasData)
+            string latestTarget = Path.Combine(dir, "latest-" + envelope.Harness + ".json");
+            // 覆盖面回退（2026-10-02）：label 是"显式声明"，但同族缺陷已三度复发
+            //（ab/ → gate-set → verify-），每次都是"跑了单方言却没声明成子集"。信封侧与
+            // PerfHub 原始侧是**两个写入点**——B86 那次只修一侧的教训，必须两侧同真源。
+            string? coverageReason = hasData ? DetectCoverageRegression(latestTarget, envelope) : null;
+            if (!IsSubsetLabel(envelope.Label) && hasData && coverageReason is null)
             {
-                File.WriteAllText(Path.Combine(dir, "latest-" + envelope.Harness + ".json"), json);
+                File.WriteAllText(latestTarget, json);
+            }
+            else if (coverageReason is not null)
+            {
+                Console.WriteLine($"[PerfResult] 跳过 latest-{envelope.Harness}（{coverageReason}）");
             }
 
             return path;
@@ -165,11 +191,88 @@ internal static class PerfResultWriter
     /// 单块必然残缺（实测 2026-09-23：不登记时 `record-index` 会挑中 ab 批次而非全量批次）</item>
     /// <item><c>workload</c>/<c>memory</c>/<c>stability</c>：微基准的三条旁路模式（各只覆盖一个维度）</item>
     /// </list></summary>
+    /// <summary>子集标记判据：带这些标记的批次是**单方言/单档/单臂**的定向跑测，只写批次文件，
+    /// 不顶 <c>latest-*</c>（否则"当前状态"会变成只测到一个方言的读数）。
+    /// <para><b>为什么 <c>verify-</c> 也在内（2026-10-02 实测）</b>：加它之前，SQLite 单方言验证批
+    /// 因 label 不含任何既有标记而顶掉了 <c>latest-*</c>（434 项 → 128 项，MySQL/PG 整体消失却无提示）。
+    /// 与"空批次顶 latest"是同族缺陷：判定只看 label，不看**覆盖面是否缩水**。</para></summary>
     public static bool IsSubsetLabel(string label)
         => label.Contains("quick", StringComparison.OrdinalIgnoreCase)
         || label.Contains("filtered", StringComparison.OrdinalIgnoreCase)
         || label.StartsWith("ab/", StringComparison.OrdinalIgnoreCase)
+        || label.StartsWith("verify-", StringComparison.OrdinalIgnoreCase)
         || label is "gate-set" or "workload" or "memory" or "stability";
+
+    /// <summary>覆盖面回退检测（信封侧）：本批次的方言集是否为上一个可引用信封的**真子集**。
+    /// <para>与 PerfHub 原始侧的 <c>DetectCoverageRegression</c> 同一判据、同一动机——
+    /// 两个写入点必须都拦住，只修一侧等于没修（B86 的教训）。</para>
+    /// <para>返回 null 表示放行，否则返回人类可读的拦截原因。读不到旧信封时放行。</para></summary>
+    private static string? DetectCoverageRegression(string latestTarget, PerfResultEnvelope envelope)
+    {
+        if (!File.Exists(latestTarget))
+        {
+            return null;
+        }
+
+        try
+        {
+            PerfResultEnvelope? previous = JsonSerializer.Deserialize(
+                File.ReadAllText(latestTarget), PerfResultJsonContext.Default.PerfResultEnvelope);
+            if (previous is null)
+            {
+                return null;
+            }
+
+            HashSet<string> prevDialects = DialectsOf(previous);
+            HashSet<string> newDialects = DialectsOf(envelope);
+            if (prevDialects.Count == 0 || newDialects.Count == 0)
+            {
+                return null;
+            }
+
+            if (newDialects.Count < prevDialects.Count && newDialects.IsSubsetOf(prevDialects))
+            {
+                return $"方言覆盖面缩水（本批 {string.Join('/', newDialects)} ⊂ 上一批 {string.Join('/', prevDialects)}）"
+                    + "，请给跑测加子集 label 或补跑其余方言";
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // 读不到旧信封不是本次写入的错误——放行，不阻塞 latest 更新
+            return null;
+        }
+    }
+
+    /// <summary>信封里出现过的方言集（sections 与 items 合并；无 items 的方言节也算覆盖）。</summary>
+    private static HashSet<string> DialectsOf(PerfResultEnvelope envelope)
+    {
+        // 显式 StringComparer.Ordinal：方言名来自封闭枚举，不需要文化敏感比较。
+        // IDE0028 建议的集合表达式无法携带比较器，此处保留显式构造（抑制该建议）。
+        // S3267 的 Where 写法在此会引入两轮中间枚举，且本方法只在写 latest 时调用一次
+        //（非热路径）——显式循环更直白，抑制该建议。
+#pragma warning disable IDE0028, S3267
+        HashSet<string> dialects = new(StringComparer.Ordinal);
+        foreach (PerfResultItem item in envelope.Items)
+        {
+            if (!string.IsNullOrEmpty(item.Dialect))
+            {
+                _ = dialects.Add(item.Dialect);
+            }
+        }
+
+        foreach (PerfResultSection section in envelope.Sections)
+        {
+            if (!string.IsNullOrEmpty(section.Dialect))
+            {
+                _ = dialects.Add(section.Dialect);
+            }
+        }
+#pragma warning restore IDE0028, S3267
+
+        return dialects;
+    }
 
     /// <summary>仓库根：向上找 PalORM.slnx。</summary>
     public static string RepoRoot()
