@@ -61,6 +61,15 @@ internal static class TableGen
             $"{Flag} = 远离基准需人工判读（P/ADO ≥1.50 或 ≤0.67）：劣化方向是回归风险，远优方向是地板健全性待核——两者都要过目，不等于告警。"));
         md.AppendLine();
 
+        // 输出结构自检（2026-10-05 质量系统优化轮，B126 配套）：以分隔行锁定每表列数，
+        // 其后所有表格行必须同列数——机械化拦截"行首漏管道符/列漂移"类缺陷
+        // （本会话表四曾漏行首 | 生成断裂表，靠人工重生成核对才发现）。
+        foreach (string warning in StructuralWarnings(md.ToString()))
+        {
+            md.AppendLine(warning);
+            Console.Error.WriteLine(warning);
+        }
+
         if (string.IsNullOrEmpty(outPath))
         {
             Console.WriteLine(md.ToString());
@@ -73,6 +82,74 @@ internal static class TableGen
 
         return 0;
     }
+
+    /// <summary>表格结构自检，两条判据（2026-10-05 质量系统优化轮，变异探针三轮定稿）：
+    /// ① 列数不变量：分隔行（|---|…）确定该表列数，其后表格行必须同列数，表头（下一行是
+    /// 分隔行）重置期望列数（表间列数不同不误报）；② 行首缺管道符：非表格行但含 ≥2 个
+    /// 管道符 = 数据行断裂形态（标题/图例/空行管道数为 0，天然免疫）。
+    /// 告警非致命——追加到输出尾部 + stderr（报告管线对四组表有容错，结构告警必须留在
+    /// 产物里可见，与 B123"零匹配假绿"同族：坏输出要能自己喊出来）。</summary>
+    private static List<string> StructuralWarnings(string md)
+    {
+        var warnings = new List<string>();
+        string[] lines = md.Split('\n');
+        var state = new TableScanState();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i].TrimEnd('\r');
+            if (line.StartsWith('|', StringComparison.Ordinal))
+            {
+                OnTableLine(warnings, lines, i, line, state);
+            }
+            else if (state.Expected > 0 && line.Count('|') >= 2)
+            {
+                // 判据②：非表格行但含 ≥2 个管道符 = 数据行断裂形态（标题/图例/空行管道数为 0）
+                warnings.Add($"[TableGen] 结构告警：第 {i + 1} 行疑似行首缺管道符：{Truncate(line)}");
+            }
+        }
+
+        return warnings;
+    }
+
+    /// <summary>判据①（表格行）：分隔行设定该表期望列数；新表头（下一行是分隔行）重置期望
+    /// （表间列数不同是合法形态）；其余表格行列数必须等于期望；分隔行额外核对表头列数。</summary>
+    private sealed class TableScanState
+    {
+        public int Expected;
+        public int LastColumns;
+    }
+
+    private static void OnTableLine(List<string> warnings, string[] lines, int i, string line, TableScanState state)
+    {
+        int columns = line.Count('|') - 1;
+        bool isSeparator = line.StartsWith("|---", StringComparison.Ordinal);
+        if (isSeparator)
+        {
+            if (state.LastColumns > 0 && state.LastColumns != columns)
+            {
+                warnings.Add($"[TableGen] 结构告警：第 {i} 行表头列数 {state.LastColumns} ≠ 分隔行 {columns}");
+            }
+
+            state.Expected = columns;
+        }
+        else if (FollowedBySeparator(lines, i))
+        {
+            state.Expected = 0;
+        }
+        else if (state.Expected > 0 && columns != state.Expected)
+        {
+            warnings.Add($"[TableGen] 结构告警：第 {i + 1} 行列数 {columns} ≠ 表头 {state.Expected}：{Truncate(line)}");
+        }
+
+        state.LastColumns = columns;
+    }
+
+    /// <summary>本行是否是"新表的表头"（下一行为分隔行）。</summary>
+    private static bool FollowedBySeparator(string[] lines, int i)
+        => i + 1 < lines.Length && lines[i + 1].TrimEnd('\r').StartsWith("|---", StringComparison.Ordinal);
+
+    private static string Truncate(string line)
+        => line.Length <= 60 ? line : line[..60];
 
     private static void Table1(StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier)
     {
