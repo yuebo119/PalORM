@@ -65,6 +65,17 @@ internal static class FullPerf
             "--filter *CrudBenchmarks* *OrmComparisonBenchmarks* " +
             "--launchCount 1 --warmupCount 3 --iterationCount 5 --exporters json",
             Path.Combine(logDir, "bdn.log"), "Global total");
+        // B131（2026-10-04 实测）：BDN filter 失配（含 glob 展开形态）时进交互/打印清单后仍退 0——
+        // RunFiltered 第四参是控制台过滤正则不是失败判据，只看退出码会把零执行报成 OK。
+        // "Global total time" 只在真跑了基准的收尾输出；缺失即判失败（与 DapperSuite 的
+        // "returned 0 benchmarks" 判据同族对称，d855b65）。
+        if (bdnExit == 0
+            && !File.ReadAllText(Path.Combine(logDir, "bdn.log"))
+                .Contains("Global total", StringComparison.Ordinal))
+        {
+            Perf.Err($"=== BDN 零执行（filter 失配/交互模式退出，见 {Path.Combine(logDir, "bdn.log")}）===");
+            bdnExit = 1;
+        }
 
         Perf.Step("[5/6] 门禁判定");
         var gateLog = Path.Combine(logDir, "gate.log");
