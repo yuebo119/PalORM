@@ -52,6 +52,24 @@ internal static class MySqlBulkCopyInserter
         // B1/L4：列布局只由 ctx 决定，原实现每批重算一次 LINQ + 两个集合分配
         // （千批 = 千次无谓分配，且 Contains 是 O(pk×cols) 线性扫描）。此处算一次，逐批复用。
         ColumnLayout layout = ColumnLayout.Build(ctx);
+        // B16（2026-10-01 全 API 逐项轮）：列映射解析从"每批"提升到"每次调用"——
+        // 原实现每批 1 个 string.Join 键串 + GetOrAdd 查找（千批 = 千次键串 + 千次哈希）；
+        // 映射数组跨批/跨 MySqlBulkCopy 实例共享安全（不可变值对象，PROV-002）。
+        MySqlBulkCopyColumnMapping[] mappings = ColumnMappingCache.GetOrAdd(
+            (ctx.QuotedTable, string.Join('\u0001', layout.AllColumns)),
+            static (_, columns) => BuildColumnMappings(columns),
+            layout.AllColumns);
+        // B15（2026-10-01 全 API 逐项轮）：参数池/行命令/probe 从"每批"提升到"每次调用"——
+        // 原实现每批 new DbParameter[columnCount] + CreateCommand + 首行 probe binder
+        // （千批 = 千次池数组 + 千个命令对象 + 每批 columnCount 个参数新建与装箱）。
+        // 池与 bindRow 跨批复用（ValuesBinder 只写 Value；fallback 每行 Clear 重绑，
+        // 与 MultiValueBulkInsert 的跨批复用范式对齐）；命令随本方法释放（await using）。
+        if (entities.Count == 0) return 0;   // probe 需要首行实体；空输入短路（入口已判，防御在此）
+        await using DbCommand rowCommand = conn.CreateCommand();
+        DbParameter[] pool = new DbParameter[layout.ParameterCount];
+        Action<int> bindRow = PrepareRowBinder(
+            rowCommand, pool, entities, ctx, layout.ParameterCount, entities[0]);
+        var batchLayout = new BatchLayout(layout, mappings, pool, bindRow);
         long totalInserted = 0;
         for (int start = 0; start < entities.Count; start += batchSize)
         {
@@ -59,7 +77,7 @@ internal static class MySqlBulkCopyInserter
             ct.ThrowIfCancellationRequested();
             int end = Math.Min(start + batchSize, entities.Count);
             totalInserted += await ExecuteBatchAsync(
-                conn, transaction, entities, new BatchRange(start, end), ctx, layout, ct)
+                conn, transaction, new BatchRange(start, end), ctx, batchLayout, ct)
                 .ConfigureAwait(false);
         }
         return totalInserted;
@@ -67,6 +85,13 @@ internal static class MySqlBulkCopyInserter
 
     /// <summary>本批实体的起止区间（左闭右开）。</summary>
     private readonly record struct BatchRange(int Start, int End);
+
+    /// <summary>B16/B15（2026-10-01 全 API 逐项轮）：批执行输入打包（列布局 + 列映射 +
+    /// 参数池 + 行绑定器）——全部由 ExecuteAsync 每次调用解析/构建一次后下传、逐批复用；
+    /// 打包同时避免 ExecuteBatchAsync 的 S107 参数列表。</summary>
+    private readonly record struct BatchLayout(
+        ColumnLayout Layout, MySqlBulkCopyColumnMapping[] Mappings,
+        DbParameter[] Pool, Action<int> BindRow);
 
     /// <summary>目标表列布局 + 参数池宽度——由 ctx 一次性推出，逐批复用（B1/L4）。
     /// <para>复检轮发现（预存缺陷）：非自增 PK（Guid/string 键）实体的 PK 已含于 InsertColumns
@@ -89,106 +114,95 @@ internal static class MySqlBulkCopyInserter
         }
     }
 
-    private static async Task<long> ExecuteBatchAsync<T>(
+    /// <summary>B15（2026-10-01）：行绑定器与参数池的一次性准备（每调用一次，跨批复用其实例）——
+    /// probe 验证 binder 输出参数数与列数一致（与 MultiValueBulkInsert 对齐）；ValuesBinder
+    /// 存在时以 probe 建出的参数对象为池（零 CreateParameter 取值，v5.6 机制），否则回退
+    /// 逐行 Binder（旧模型程序集；每行重建参数对象，本方法只负责把引用抄进池）。</summary>
+    private static Action<int> PrepareRowBinder<T>(
+        DbCommand rowCommand, DbParameter[] pool, IReadOnlyList<T> entities,
+        MySqlBulkCopyContext ctx, int columnCount, T firstEntity)
+        where T : class
+    {
+        ctx.Binder(rowCommand, firstEntity, 0);
+        if (rowCommand.Parameters.Count != columnCount)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
+                $"{rowCommand.Parameters.Count} parameters.");
+
+        if (ctx.ValuesBinder is { } valuesBinder)
+        {
+            // probe 已把首行绑到 rowCommand——直接取其参数对象作池（不再新建）
+            for (int c = 0; c < columnCount; c++)
+                pool[c] = rowCommand.Parameters[c];
+            return index => valuesBinder(pool, entities[index], 0);
+        }
+
+        // 回退路径：Binder 每行重建参数对象（旧模型程序集无从零分配取值），
+        // 这里只把新建出的参数对象引用抄进池，供读取器统一按 ordinal 取值。
+        return index =>
+        {
+            // PARAM-REUSE-OK[noautoprep] 该回退仅旧模型程序集（无 ValuesBinder）可达；MySQL
+            // 无 PostgreSQL 式语句准备缓存，参数对象每行重建无 stale 值面
+            rowCommand.Parameters.Clear();
+            ctx.Binder(rowCommand, entities[index], 0);
+            for (int c = 0; c < columnCount; c++)
+                pool[c] = rowCommand.Parameters[c];
+        };
+    }
+
+    private static async Task<long> ExecuteBatchAsync(
         MySqlConnection conn,
         MySqlTransaction? transaction,
-        IReadOnlyList<T> entities,
         BatchRange range,
         MySqlBulkCopyContext ctx,
-        ColumnLayout layout,
+        BatchLayout batchLayout,
         CancellationToken ct)
-        where T : class
     {
         int start = range.Start;
         int end = range.End;
-        int columnCount = layout.ParameterCount;
+        ColumnLayout layout = batchLayout.Layout;
         string[] allColumns = layout.AllColumns;
-        // v5.6 参数复用：参数对象每批建一次、逐行只写 Value。原实现每行
-        // Parameters.Clear() + Binder 重建 columnCount 个 MySqlParameter——
-        // 真库实测 BulkCopy 路径 671.7 B/行（同一实体走多值 INSERT 只要 359.1），
-        // 每行参数创建是主项。取值走生成器已产出的 BindInsertValues（零
-        // CreateParameter），与 MultiValueBulkInsert 的 v4.6 池同一机制。
-        // 旧版生成器模型程序集该绑定器为 null 时回退逐行 Binder。
-        DbParameter[] pool = new DbParameter[columnCount];
-        Action<int> bindRow;
-        DbCommand rowCommand = conn.CreateCommand();
-        try
-        {
-            // probe：首次验证 binder 输出参数数与列数一致（与 MultiValueBulkInsert 对齐）。
-            ctx.Binder(rowCommand, entities[start], 0);
-            if (rowCommand.Parameters.Count != columnCount)
-                throw new InvalidOperationException(
-                    $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                    $"{rowCommand.Parameters.Count} parameters.");
 
-            if (ctx.ValuesBinder is not null)
-            {
-                // probe 已把首行绑到 rowCommand——直接取其参数对象作池（不再新建）
-                for (int c = 0; c < columnCount; c++)
-                    pool[c] = rowCommand.Parameters[c];
-                bindRow = index => ctx.ValuesBinder(pool, entities[index], 0);
-            }
-            else
-            {
-                // 回退路径：Binder 每行重建参数对象（旧模型程序集无从零分配取值），
-                // 这里只把新建出的参数对象引用抄进池，供读取器统一按 ordinal 取值。
-                bindRow = index =>
-                {
-                    rowCommand.Parameters.Clear();
-                    ctx.Binder(rowCommand, entities[index], 0);
-                    for (int c = 0; c < columnCount; c++)
-                        pool[c] = rowCommand.Parameters[c];
-                };
-            }
-
-            var bulk = new MySqlBulkCopy(conn, transaction)
-            {
-                DestinationTableName = ctx.QuotedTable,
-                // ITM-655(r4)：0=无限（全库契约，非 30 秒）；正数透传
-                BulkCopyTimeout = ctx.CommandTimeoutSeconds,
-            };
-            // ITM-721(r20) 反证结案：曾疑"裸列名与仓库其余路径 QuoteIdentifier 不对称"。
-            // 核对驱动源码（MySqlConnector MySqlBulkCopy.cs）：ColumnMappings 的
-            // DestinationColumn 在非表达式形态下由驱动执行 QuoteIdentifier（反引号包裹 +
-            // 内嵌反引号翻倍）；此处传入已引用名会导致双重引用（`` `order` `` 被当作字面量）。
-            // 故裸名是正确契约，保留。
-            // PROV-002（2026-09-23）：列映射只依赖 (目标表, 列集)——跨批恒定，缓存数组避免每批重建。
-            // MySqlBulkCopyColumnMapping 是不可变值对象（本机 mysqlconnector/2.6.2 包 XML：仅
-            // SourceOrdinal/DestinationColumn/Expression 只读属性 + 构造入参），跨 MySqlBulkCopy
-            // 实例共享安全。MySqlBulkCopy 对象本身仍每批新建——跨批复用需驱动侧确认，未纳入。
-            MySqlBulkCopyColumnMapping[] mappings = ColumnMappingCache.GetOrAdd(
-                (ctx.QuotedTable, string.Join('\u0001', allColumns)),
-                static (_, columns) => BuildColumnMappings(columns),
-                allColumns);
-            foreach (MySqlBulkCopyColumnMapping mapping in mappings)
-                bulk.ColumnMappings.Add(mapping);
-            // v5.6：DataTable → EntityDataReader（每行 372/360 B → 57 B，−84%；时间 −11%）
-            using var reader = new EntityDataReader(start, end, pool, bindRow, allColumns,
-                layout.PrimaryKeyPrefixLength);
-            MySqlBulkCopyResult result = await bulk.WriteToServerAsync(reader, ct).ConfigureAwait(false);
-            // ITM-709(r20)：驱动文档明示"MySqlBulkCopy 用户应检查 Warnings 为非空，
-            // 否则可能因数据类型转换失败静默丢数据"。当前只取行数会把"截断/转换失败"
-            // 报成成功——非空即显式失败，避免静默数据损坏。
-            if (result.Warnings.Count > 0)
-            {
-                // ITM-777(r21)：不回显 Warnings[0].Message 原文——MySQL 1366 等告警内嵌
-                // 被拒原始值（"Incorrect integer value: '<value>'"），若该列是 [SensitiveData]，
-                // 真实值会随异常消息进日志（掩码只作用于参数面，不覆盖此路径）。
-                // 只报数量/错误码/Level，内容留给调用方按需自查。
-                var first = result.Warnings[0];
-                throw new InvalidOperationException(
-                    $"MySqlBulkCopy reported {result.Warnings.Count} warning(s); data may have been " +
-                    $"truncated or converted incorrectly. First warning: ErrorCode={first.ErrorCode}, Level={first.Level} " +
-                    "(message content redacted to avoid echoing rejected values).");
-            }
-            // ITM-656(r4)：MySqlConnector 服务端不报行数时返 -1——规范化为本批实体数
-            long inserted = result.RowsInserted;
-            return inserted >= 0 ? inserted : end - start;
-        }
-        finally
+        var bulk = new MySqlBulkCopy(conn, transaction)
         {
-            await rowCommand.DisposeAsync().ConfigureAwait(false);
+            DestinationTableName = ctx.QuotedTable,
+            // ITM-655(r4)：0=无限（全库契约，非 30 秒）；正数透传
+            BulkCopyTimeout = ctx.CommandTimeoutSeconds,
+        };
+        // ITM-721(r20) 反证结案：曾疑"裸列名与仓库其余路径 QuoteIdentifier 不对称"。
+        // 核对驱动源码（MySqlConnector MySqlBulkCopy.cs）：ColumnMappings 的
+        // DestinationColumn 在非表达式形态下由驱动执行 QuoteIdentifier（反引号包裹 +
+        // 内嵌反引号翻倍）；此处传入已引用名会导致双重引用（`` `order` `` 被当作字面量）。
+        // 故裸名是正确契约，保留。
+        // B16（2026-10-01 全 API 逐项轮）：列映射解析提升到 ExecuteAsync（每调用一次）——
+        // 原实现每批 1 个 string.Join 键串 + GetOrAdd 查找；mappings 由调用方传入，
+        // PROV-002 的共享纪律不变（不可变值对象、跨 MySqlBulkCopy 实例共享安全）。
+        foreach (MySqlBulkCopyColumnMapping mapping in batchLayout.Mappings)
+            bulk.ColumnMappings.Add(mapping);
+        // v5.6：DataTable → EntityDataReader（每行 372/360 B → 57 B，−84%；时间 −11%）
+        // B15：池与 bindRow 由 ExecuteAsync 每次调用建一次、跨批复用（reader 仅在
+        // WriteToServerAsync 期间读池，批间无残留引用）。
+        using var reader = new EntityDataReader(start, end, batchLayout.Pool, batchLayout.BindRow,
+            allColumns, layout.PrimaryKeyPrefixLength);
+        MySqlBulkCopyResult result = await bulk.WriteToServerAsync(reader, ct).ConfigureAwait(false);
+        // ITM-709(r20)：驱动文档明示"MySqlBulkCopy 用户应检查 Warnings 为非空，
+        // 否则可能因数据类型转换失败静默丢数据"。当前只取行数会把"截断/转换失败"
+        // 报成成功——非空即显式失败，避免静默数据损坏。
+        if (result.Warnings.Count > 0)
+        {
+            // ITM-777(r21)：不回显 Warnings[0].Message 原文——MySQL 1366 等告警内嵌
+            // 被拒原始值（"Incorrect integer value: '<value>'"），若该列是 [SensitiveData]，
+            // 真实值会随异常消息进日志（掩码只作用于参数面，不覆盖此路径）。
+            // 只报数量/错误码/Level，内容留给调用方按需自查。
+            var first = result.Warnings[0];
+            throw new InvalidOperationException(
+                $"MySqlBulkCopy reported {result.Warnings.Count} warning(s); data may have been " +
+                $"truncated or converted incorrectly. First warning: ErrorCode={first.ErrorCode}, Level={first.Level} " +
+                "(message content redacted to avoid echoing rejected values).");
         }
+        // ITM-656(r4)：MySqlConnector 服务端不报行数时返 -1——规范化为本批实体数
+        long inserted = result.RowsInserted;
+        return inserted >= 0 ? inserted : end - start;
     }
 
 }

@@ -3,87 +3,217 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.1")]
 internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
 {
 
     /// <summary>绑定实体属性到 INSERT 参数（支持批量 offset 偏移）。</summary>
     internal static void BindInsertToBatch(global::System.Data.Common.DbCommand cmd, global::EnumStorageEntity entity, int paramOffset)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 0); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Status.ToString(); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 0); p.DbType = global::System.Data.DbType.String; p.Value = (object)EnumStr_Status(entity.Status); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 1); p.DbType = global::System.Data.DbType.Int32; p.Value = (object)(int)entity.Level; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 2); p.DbType = global::System.Data.DbType.Int64; p.Value = (object)(long)entity.WideFlag; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 3); p.DbType = global::System.Data.DbType.String; p.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString(); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 3); p.DbType = global::System.Data.DbType.String; p.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus); cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
     internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::EnumStorageEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
-        parameters[paramOffset + 0].Value = (object)entity.Status.ToString();
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.Int32;
+        parameters[paramOffset + 0].Value = (object)EnumStr_Status(entity.Status);
         parameters[paramOffset + 1].Value = (object)(int)entity.Level;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.Int64;
         parameters[paramOffset + 2].Value = (object)(long)entity.WideFlag;
+        parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus);
+    }
+
+    /// <summary>B21：建池后一次性写 INSERT 参数 DbType（配合 BindInsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitInsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 1].DbType = global::System.Data.DbType.Int32;
+        parameters[paramOffset + 2].DbType = global::System.Data.DbType.Int64;
         parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
-        parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString();
     }
 
     /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>
     internal static void CopyWriteRow(global::PalORM.IBinaryRowSink sink, global::EnumStorageEntity entity)
     {
-        sink.WriteString(0, entity.Status.ToString());
+        sink.WriteString(0, EnumStr_Status(entity.Status));
         sink.WriteInt32(1, (int)entity.Level);
         sink.WriteInt64(2, (long)entity.WideFlag);
-        if (entity.FallbackStatus is null) { sink.WriteNull(3); } else { sink.WriteString(3, ((global::SnapshotOrderStatus)entity.FallbackStatus).ToString()); }
+        if (entity.FallbackStatus is null) { sink.WriteNull(3); } else { sink.WriteString(3, EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus)); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
     internal static void BindUpsert(global::System.Data.Common.DbCommand cmd, global::EnumStorageEntity entity)
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Status.ToString(); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.DbType = global::System.Data.DbType.String; p.Value = (object)EnumStr_Status(entity.Status); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.DbType = global::System.Data.DbType.Int32; p.Value = (object)(int)entity.Level; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)(long)entity.WideFlag; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.DbType = global::System.Data.DbType.String; p.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString(); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.DbType = global::System.Data.DbType.String; p.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus); cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpsertValues(global::System.Data.Common.DbParameter[] parameters, global::EnumStorageEntity entity, int paramOffset)
     {
         parameters[paramOffset + 0].Value = (object)entity.Id;
-        parameters[paramOffset + 1].Value = (object)entity.Status.ToString();
+        parameters[paramOffset + 1].Value = (object)EnumStr_Status(entity.Status);
         parameters[paramOffset + 2].Value = (object)(int)entity.Level;
         parameters[paramOffset + 3].Value = (object)(long)entity.WideFlag;
+        parameters[paramOffset + 4].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus);
+    }
+
+    /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
         parameters[paramOffset + 4].DbType = global::System.Data.DbType.String;
-        parameters[paramOffset + 4].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString();
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
     internal static void BindUpdate(global::System.Data.Common.DbCommand cmd, global::EnumStorageEntity entity)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Status.ToString(); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.String; p.Value = (object)EnumStr_Status(entity.Status); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.DbType = global::System.Data.DbType.Int32; p.Value = (object)(int)entity.Level; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)(long)entity.WideFlag; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.DbType = global::System.Data.DbType.String; p.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString(); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.DbType = global::System.Data.DbType.String; p.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, global::EnumStorageEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].Value = (object)entity.Status.ToString();
+        parameters[paramOffset + 0].Value = (object)EnumStr_Status(entity.Status);
         parameters[paramOffset + 1].Value = (object)(int)entity.Level;
         parameters[paramOffset + 2].Value = (object)(long)entity.WideFlag;
-        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
-        parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)((global::SnapshotOrderStatus)entity.FallbackStatus).ToString();
+        parameters[paramOffset + 3].Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus);
         parameters[paramOffset + 4].Value = (object)entity.Id;
+    }
+
+    /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpdateParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>绑定主键到 DELETE 参数。</summary>
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
+    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
+    {
+        long[] values = new long[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = global::System.Convert.ToInt64(keys[start + i]);
+        }
+        return values;
+    }
+
+    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpdateColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            string[] column0 = (string[])arrays[arrayOffset + 0];
+            int[] column1 = (int[])arrays[arrayOffset + 1];
+            long[] column2 = (long[])arrays[arrayOffset + 2];
+            string[] column3 = (string[])arrays[arrayOffset + 3];
+            long[] column4 = (long[])arrays[arrayOffset + 4];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::EnumStorageEntity)entities[start + i];
+                column0[i] = EnumStr_Status(entity.Status);
+                column1[i] = (int)entity.Level;
+                column2[i] = (long)entity.WideFlag;
+                if (entity.FallbackStatus is { } v3)
+                {
+                    column3[i] = EnumStr_FallbackStatus((global::SnapshotOrderStatus)v3);
+                }
+                column4[i] = entity.Id;
+            }
+        }
+    }
+
+    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
+    internal static global::System.Array[] CreateUpdateColumnArrays(int count)
+    {
+        return new global::System.Array[5]
+        {
+            new string[count],
+            new int[count],
+            new long[count],
+            new string[count],
+            new long[count],
+        };
+    }
+
+    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpsertColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            long[] column0 = (long[])arrays[arrayOffset + 0];
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            int[] column2 = (int[])arrays[arrayOffset + 2];
+            long[] column3 = (long[])arrays[arrayOffset + 3];
+            string[] column4 = (string[])arrays[arrayOffset + 4];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::EnumStorageEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = EnumStr_Status(entity.Status);
+                column2[i] = (int)entity.Level;
+                column3[i] = (long)entity.WideFlag;
+                if (entity.FallbackStatus is { } v4)
+                {
+                    column4[i] = EnumStr_FallbackStatus((global::SnapshotOrderStatus)v4);
+                }
+            }
+        }
+    }
+
+    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
+    internal static global::System.Type[] UpsertColumnArrayElementTypes()
+    {
+        return new global::System.Type[5]
+        {
+            typeof(long),
+            typeof(string),
+            typeof(int),
+            typeof(long),
+            typeof(string),
+        };
+    }
+
+    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
+    internal static global::System.Array[] CreateUpsertColumnArrays(int count)
+    {
+        return new global::System.Array[5]
+        {
+            new long[count],
+            new string[count],
+            new int[count],
+            new long[count],
+            new string[count],
+        };
+    }
+
+    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
+    internal static global::System.Type[] UpdateColumnArrayElementTypes()
+    {
+        return new global::System.Type[5]
+        {
+            typeof(string),
+            typeof(int),
+            typeof(long),
+            typeof(string),
+            typeof(long),
+        };
     }
 
     internal static void SetId(global::EnumStorageEntity entity, long id)
@@ -98,5 +228,23 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
     internal static bool HasDefaultKey(global::EnumStorageEntity entity)
     {
         return global::System.Collections.Generic.EqualityComparer<long>.Default.Equals(entity.Id, default);
+    }
+
+    private static string EnumStr_Status(global::SnapshotOrderStatus value)
+    {
+        return value switch
+        {
+            global::SnapshotOrderStatus.Pending => "Pending", global::SnapshotOrderStatus.Paid => "Paid", global::SnapshotOrderStatus.Cancelled => "Cancelled", 
+            _ => value.ToString()
+        };
+    }
+
+    private static string EnumStr_FallbackStatus(global::SnapshotOrderStatus value)
+    {
+        return value switch
+        {
+            global::SnapshotOrderStatus.Pending => "Pending", global::SnapshotOrderStatus.Paid => "Paid", global::SnapshotOrderStatus.Cancelled => "Cancelled", 
+            _ => value.ToString()
+        };
     }
 }

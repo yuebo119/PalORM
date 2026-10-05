@@ -115,8 +115,15 @@ internal sealed class PeakSampler : IDisposable
 internal static class Measure
 {
     /// <summary>预热的时间预算（秒）——与规范 §4「负载测试每档 ≥1.5 s 预热不计数」同值。
-    /// 快操作在达到上限次数前就用满这个预算（行为与固定次数一致），慢操作在此收敛。</summary>
+    /// 慢操作在此收敛；快操作由 <see cref="MinWarmupSeconds"/> 兜底。</summary>
     private const double WarmupBudgetSeconds = 1.5;
+
+    /// <summary>预热次数达 maxIterations/5 后仍须满足的最短预热时长（秒，2026-10-02）。
+    /// 原规则只有次数上限：微秒级操作 40 次预热不足 1 ms，JIT 分层（tier0 → 带插桩 tier0 → tier1，
+    /// 每级有约 100 ms 静默延迟）在计时段里才完成——三批数据里 SQLite 首个进场的 ADO 臂单行操作
+    /// 在 2000 档比自身 20000 档慢 21~42%，PalORM 臂（第三个进场）0.87~0.98，首档地板被预热
+    /// 不足抬高，比值读成"PalORM 快 21~35%"。按时间兜底后各臂各项都在 tier1 代码上计时。</summary>
+    private const double MinWarmupSeconds = 0.5;
 
     /// <summary>测单操作：全路径时延（构建→执行→完成）+ 分配量 + 采样堆峰 + Gen0。
     /// <para><b>全路径口径</b>：被测 <paramref name="action"/> 内部必须包含 SQL 构建
@@ -127,14 +134,19 @@ internal static class Measure
     /// <para><b>scale</b>：计时与预热两条时间预算的共同缩放系数。全量跑为 1.0；
     /// <c>--quick</c> 传 0.3，使 usage 声明的"迭代次数降到 30%"真正生效——
     /// 该系数此前只流到 BulkDelete 的播种（并因上限不缩而把尾部轮次变成空删），
-    /// 迭代预算完全没缩，冒烟跑实际上没变快。</para></summary>
+    /// 迭代预算完全没缩，冒烟跑实际上没变快。</para>
+    /// <para><b>requireWarmupFloor</b>：是否要求 JIT 分层所需的预热时间下限（<see cref="MinWarmupSeconds"/>）。
+    /// 偏置只在方法首次执行时存在，故调用方只在每方言首档传 true；其余档传 false 走"次数上限"的轻预热。
+    /// 两档读数是否等价由交替 A/B 验证（2026-10-03）。</para></summary>
     public static async Task<Measurement> SingleAsync(
         DialectInfo dialect, IPerfImplementation impl, string operation, string group, int rows,
         Func<IPerfImplementation, DbConnection, int, Task> action,
         DbConnection conn, int maxIterations, CancellationToken ct,
-        Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0)
+        Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0,
+        bool requireWarmupFloor = true)
     {
         double warmupSeconds = WarmupBudgetSeconds * scale;
+        double minWarmupSeconds = requireWarmupFloor ? MinWarmupSeconds * scale : 0;
         double timedSeconds = budgetSeconds * scale;
 
         // 预热（JIT + 驱动缓冲 + 缓存填充）——不计入样本
@@ -143,17 +155,26 @@ internal static class Measure
             await prepare(conn).ConfigureAwait(false);
         }
 
-        // 预热次数按**时间**收敛：上限仍是 maxIterations/5，但累计耗时达 warmupSeconds
-        // 即停（至少 3 次）。固定次数对慢操作是无界成本——实测 20K 档 Dapper BulkInsert
-        // 单次 1.36 s，40 次预热 54 s，是计时段（4 s 预算 → 3 次 ≈ 4.1 s）的 13 倍；
-        // 而预热的目的（JIT、驱动缓冲、语句缓存）在前几次即达成，规范 §4 也只要求
-        // 「≥1.5 s 预热不计数」。
+        // 预热按**时间**收敛：累计耗时达 warmupSeconds 即停（至少 3 次）。固定次数对慢操作是
+        // 无界成本——实测 20K 档 Dapper BulkInsert 单次 1.36 s，40 次预热 54 s，是计时段
+        // （4 s 预算 → 3 次 ≈ 4.1 s）的 13 倍。快操作在次数上限 maxIterations/5 处还远不够
+        // JIT 分层完成，故次数到顶后还须满 minWarmupSeconds。硬上限 200000 次
+        // （原 maxIterations×100 = 20000，对 1µs 操作 = 20ms，不足以触发 tier-0→tier-1
+        // 提升窗口 ~100ms——实测 QueryAll/SQLite/2000 地板跨批摆 2.7× 由此而来）。
+        // 200000 × 1µs = 200ms > 100ms 提升窗口，且仍 < 0.5s 预算不拖慢全量。
         int warmupCap = Math.Max(3, maxIterations / 5);
+        int warmupHardCap = Math.Max(warmupCap, 200_000);
         var warmupSw = System.Diagnostics.Stopwatch.StartNew();
-        for (int i = 0; i < warmupCap; i++)
+        for (int i = 0; i < warmupHardCap; i++)
         {
             await action(impl, conn, i).ConfigureAwait(false);
-            if (i >= 2 && warmupSw.Elapsed.TotalSeconds >= warmupSeconds)
+            double warmedSeconds = warmupSw.Elapsed.TotalSeconds;
+            if (i >= 2 && warmedSeconds >= warmupSeconds)
+            {
+                break;
+            }
+
+            if (i + 1 >= warmupCap && warmedSeconds >= minWarmupSeconds)
             {
                 break;
             }

@@ -42,13 +42,20 @@ public sealed class BatchUpdateSqlBuilderTests
     [Test]
     public async Task BuildJoinValuesRow_TenantFilter_AppendsDialectQuotedPredicate()
     {
-        // 租户过滤是 ON/SET 之后的 WHERE 谓词（AND），与 CASE WHEN 形态同位置
+        // B8 修正（2026-10-01 全 API 逐项轮）：JoinValuesRow 形态无 WHERE 子句（连接条件在 ON、
+        // 语句以 SET 结尾），租户谓词必须自带完整 WHERE 并以 tgt 限定——原断言期望的
+        // "SET tgt.`a` = v.c0 AND `tenant_id` = ..." 是错误形态：AND 落入 SET 表达式右端，
+        // MySQL 对字符串列求布尔报 "Truncated incorrect DOUBLE value"
+        // （真库 Integration BulkUpdateTenantRoutingTests 实测暴露；本断言此前只做字符串匹配、
+        // 无真库执行，把语法错误形态固化成了期望值——测试造假教训的又一实例）。
         string sql = BatchUpdateSqlBuilder.Build(
             SqlDialect.MySql, "`t`", "`id`", ["`a`"], rowCount: 1,
             hasTenantFilter: true, tenantParameterName: "@__tenant0",
             form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
 
-        await Assert.That(sql).Contains(") AS v(c0, pk) ON tgt.`id` = v.pk SET tgt.`a` = v.c0 AND `tenant_id` = @__tenant0");
+        await Assert.That(sql).Contains(") AS v(c0, pk) ON tgt.`id` = v.pk SET tgt.`a` = v.c0 WHERE tgt.`tenant_id` = @__tenant0");
+        // 负向防回退：SET 表达式内不得出现租户 AND 追加
+        await Assert.That(sql).DoesNotContain("c0 AND `tenant_id`");
     }
 
     [Test]
@@ -68,6 +75,30 @@ public sealed class BatchUpdateSqlBuilderTests
         await Assert.That(sqlite).Contains("= CASE \"id\" WHEN @p1 THEN @p0 END");
         await Assert.That(pg).DoesNotContain("JOIN (VALUES ROW");
         await Assert.That(sqlite).DoesNotContain("JOIN (VALUES ROW");
+    }
+
+    [Test]
+    public async Task BuildJoinValuesRowForm_NonMySqlWithTenant_AppendsAndNeverSecondWhere()
+    {
+        // A′（2026-10-01 充分论证轮）回归格：form=JoinValuesRow 在非 MySQL 方言被忽略
+        // （实际形态为 FromValues/CaseWhen，均自带 WHERE），租户谓词必须按 AND 追加。
+        // B8 二修初版按 form 判落位（不含方言），此组合会生成双 WHERE——契约内输入
+        // （Build_NonMySqlDialects_IgnoreJoinValuesRowForm 锁定"忽略 form"语义），
+        // 当时因该测试只用 hasTenantFilter: false 而成为零覆盖格；A′ 起分派与追加共用
+        // usesJoinValuesRow 单一布尔，本用例锁定该格。
+        string pg = BatchUpdateSqlBuilder.Build(
+            SqlDialect.PostgreSql, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: true, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+        string sqlite = BatchUpdateSqlBuilder.Build(
+            SqlDialect.Sqlite, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: true, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow);
+
+        await Assert.That(pg).Contains("AND \"tenant_id\" = @__tenant0");
+        await Assert.That(pg).DoesNotContain("WHERE tgt.\"tenant_id\"");   // 双 WHERE 即此处
+        await Assert.That(sqlite).Contains("AND \"tenant_id\" = @__tenant0");
+        await Assert.That(sqlite).DoesNotContain("WHERE tgt");             // SQLite 形态无 tgt 别名
     }
 
     [Test]

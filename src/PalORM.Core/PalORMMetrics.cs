@@ -16,7 +16,7 @@ public static class PalORMMetrics
     /// instrumentation_scope.version = 库版本）——此前硬编码 "1.0.0" 与 5.5.1 漂移，
     /// 观测端按版本过滤/关联失配。由 D11 同口径守护（生成物侧为 GeneratedCodeMetadata）。
     /// ITM-861（r23）：v6.0 漏改残留已对齐；D11 校验面同步扩至本常量。</summary>
-    internal const string InstrumentationVersion = "6.2.0";
+    internal const string InstrumentationVersion = "6.2.1";
 
     internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, InstrumentationVersion);
 
@@ -102,7 +102,10 @@ internal sealed class QueryObservation
     private readonly string _operation;
     private readonly string _provider;
     private readonly string? _metricName;
-    private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+    // A7（2026-10-01 全 API 逐项轮）：时间戳替代 Stopwatch 对象——每观测对象省 1 个
+    // Stopwatch 堆分配；Elapsed 在 Complete 处经 GetElapsedTime 现算（与 Stop 后读
+    // Elapsed 等价的单调差值，.NET 7+ API）。
+    private readonly long _startTimestamp = Stopwatch.GetTimestamp();
     private int _completed;
 
     internal QueryObservation(bool tracingEnabled, bool metricsEnabled, string operation, string provider,
@@ -120,9 +123,8 @@ internal sealed class QueryObservation
         if (Interlocked.Exchange(ref _completed, 1) != 0)
             return;
 
-        _stopwatch.Stop();
         PalORMMetrics.CompleteActivity(_activity, outcome);
         if (_metricsEnabled)
-            PalORMMetrics.Record(_operation, _provider, outcome, _stopwatch.Elapsed, _metricName);
+            PalORMMetrics.Record(_operation, _provider, outcome, Stopwatch.GetElapsedTime(_startTimestamp), _metricName);
     }
 }

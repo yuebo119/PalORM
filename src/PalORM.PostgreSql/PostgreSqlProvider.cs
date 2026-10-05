@@ -200,29 +200,121 @@ public sealed class PostgreSqlProvider : IDbProvider
     public static DbParameter CreateParameter(string name, object? value)
     {
         var parameter = new NpgsqlParameter(name, value ?? DBNull.Value);
-        // 仅对已知基元显式映射——未知类型留给驱动推断（保持既有行为）
+        // 仅对已知基元显式映射——未知类型留给驱动推断（保持既有行为）。
+        // C1（2026-10-01 全 API 逐项轮）：case 频率重排——int/long/string/Guid 等高频类型前置
+        // （原顺序下 string 至多 13 次、Guid 17 次类型测试才命中）；各 case 为互斥的封闭类型
+        // 模式（无类型包含关系），重排纯语义等价。
         switch (value)
         {
+            case int: parameter.DbType = System.Data.DbType.Int32; break;
+            case long: parameter.DbType = System.Data.DbType.Int64; break;
+            case string: parameter.DbType = System.Data.DbType.String; break;
+            case Guid: parameter.DbType = System.Data.DbType.Guid; break;
             case bool: parameter.DbType = System.Data.DbType.Boolean; break;
+            case DateTime: parameter.DbType = System.Data.DbType.DateTime; break;
+            case decimal: parameter.DbType = System.Data.DbType.Decimal; break;
+            case double: parameter.DbType = System.Data.DbType.Double; break;
+            case short: parameter.DbType = System.Data.DbType.Int16; break;
             case byte: parameter.DbType = System.Data.DbType.Byte; break;
             case sbyte: parameter.DbType = System.Data.DbType.SByte; break;
-            case short: parameter.DbType = System.Data.DbType.Int16; break;
             case ushort: parameter.DbType = System.Data.DbType.UInt16; break;
-            case int: parameter.DbType = System.Data.DbType.Int32; break;
             case uint: parameter.DbType = System.Data.DbType.UInt32; break;
-            case long: parameter.DbType = System.Data.DbType.Int64; break;
             case ulong: parameter.DbType = System.Data.DbType.UInt64; break;
             case float: parameter.DbType = System.Data.DbType.Single; break;
-            case double: parameter.DbType = System.Data.DbType.Double; break;
-            case decimal: parameter.DbType = System.Data.DbType.Decimal; break;
-            case string: parameter.DbType = System.Data.DbType.String; break;
             case char: parameter.DbType = System.Data.DbType.String; break;
-            case DateTime: parameter.DbType = System.Data.DbType.DateTime; break;
             case DateTimeOffset: parameter.DbType = System.Data.DbType.DateTimeOffset; break;
-            case Guid: parameter.DbType = System.Data.DbType.Guid; break;
             default: break;  // 未知类型留给驱动推断（保持既有行为）
         }
         return parameter;
+    }
+
+    /// <summary>由调用方给出的**显式元素类型**创建数组参数（UNNEST 阶段 B：批量 UPDATE/UPSERT 用）。
+    /// <para>与 <see cref="CreateArrayParameter"/> 的差异：后者从数组运行时类型推断元素类型
+    /// （阶段 A 的单键数组够用）；本形态下调用方已由生成物拿到列的元素类型
+    /// （<c>UpdateColumnArrayElementTypes</c>），直接给出，省一次推断且能覆盖
+    /// "元素类型为引用型但数组已建好"的形态。</para>
+    /// <para>元素类型为 <c>Nullable&lt;T&gt;</c> 时按 <c>T</c> 映射（PG 数组本身即承载 NULL）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S3265:Non-flags enums should not be used in bitwise operations",
+        Justification = "Npgsql 官方 XML 文档对 NpgsqlDbType.Array 明确要求按位或组合"
+            + "（\"This value must be combined with another value from NpgsqlDbType via a bit OR "
+            + "(e.g. NpgsqlDbType.Array | NpgsqlDbType.Integer)\"），枚举未标 [Flags] 是驱动侧的标注疏漏。")]
+    public static DbParameter? CreateTypedArrayParameter(string name, Array values, Type elementType)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        ArgumentNullException.ThrowIfNull(elementType);
+        Type underlying = Nullable.GetUnderlyingType(elementType) ?? elementType;
+        if (ArrayElementDbType(underlying) is not { } element)
+        {
+            return null;  // 不支持的 CLR 元素类型：调用方回退 VALUES 形态
+        }
+
+        return new NpgsqlParameter(name, values) { NpgsqlDbType = NpgsqlDbType.Array | element };
+    }
+
+    /// <summary>创建数组参数（2026-10-02，UNNEST 形态）——<c>NpgsqlDbType.Array | element</c>。
+    /// <para><b>元素类型由数组本身推断</b>（<paramref name="values"/> 的运行时元素类型）：
+    /// 生成物构造的是类型化数组（<c>long[]</c>/<c>string[]</c>/…），元素类型即参数类型，
+    /// 无需调用方另传 DbType——平行映射表会与生成物元素类型构成第二个真源（B120 同构温床）。</para>
+    /// <para><b>为什么必须显式类型</b>：数组参数的类型推断在空数组上无从进行（探针实测：
+    /// 不设类型时绑定失败）；显式 <c>Array | element</c> 让空数组与有值形态走同一条路径。
+    /// 注意此处用的是 C# 元素 <b>Type</b>（不是泛型 <c>NpgsqlParameter&lt;T&gt;</c>），
+    /// <c>values.GetType().GetElementType()</c> 对空数组同样返回元素类型——类型来自数组的
+    /// 编译期类型，不来自元素值，故空数组无歧义。</para>
+    /// <para><b>值形态</b>：接受 <see cref="Array"/>（含 <c>long[]</c>/<c>string[]</c> 等），
+    /// 驱动按元素类型逐项绑定。</para>
+    /// <para><b>null 语义</b>：不支持的 CLR 元素类型返回 null，调用方回退 IN 占位符形态
+    /// （不静默发一个类型未知的数组参数——那会以服务端推断错误的形式在远端失败，
+    /// 错误消息不指向真正的原因）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S3265:Non-flags enums should not be used in bitwise operations",
+        Justification = "Npgsql 官方 XML 文档对 NpgsqlDbType.Array 明确要求按位或组合"
+            + "（\"This value must be combined with another value from NpgsqlDbType via a bit OR "
+            + "(e.g. NpgsqlDbType.Array | NpgsqlDbType.Integer)\"），枚举未标 [Flags] 是驱动侧的标注疏漏。")]
+    public static DbParameter? CreateArrayParameter(string name, Array values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        Type elementType = values.GetType().GetElementType() ?? typeof(object);
+        if (ArrayElementDbType(elementType) is not { } element)
+        {
+            return null;  // 不支持的 CLR 元素类型：调用方回退 IN 占位符形态
+        }
+
+        var parameter = new NpgsqlParameter(name, values) { NpgsqlDbType = element };
+        parameter.NpgsqlDbType = NpgsqlDbType.Array | element;
+        return parameter;
+    }
+
+    /// <summary>数组元素 CLR 类型 → 驱动的元素 <see cref="NpgsqlDbType"/>。null = 不支持数组形态。
+    /// <para><b>映射面是封闭集合，且刻意收窄</b>（登记，2026-10-02）：恰好 13 类——int / long /
+    /// short / byte / string / Guid / bool / decimal / double / float / DateTime / DateTimeOffset /
+    /// DateOnly / TimeOnly / byte[]。**未列出的类型（含 <c>uint</c>/<c>ulong</c>/<c>sbyte</c>/
+    /// <c>ushort</c>/<c>char</c>/<c>TimeSpan</c>/枚举等）返回 null**，调用方据此整体回退
+    /// VALUES 形态（能力检测在 BEGIN 之前一次性判定全部列，任一列不支持即回退整条路径，
+    /// 不做「部分列走数组」的混合）。</para>
+    /// <para><b>回退是静默的</b>（无日志无计数器）——这是能力检测纪律的既定取舍：形态选择不改变
+    /// 语义，只是慢一些。含 <c>uint</c> 等列的实体因此拿不到数组形态收益，属已知边界；
+    /// 扩展本映射面须先实测该类型在 PG 端数组绑定的行为（探针 mergearray 的 Q1 形态可复用），
+    /// 不得凭 CLR 类型相似就顺手加。</para>
+    /// <para>可空元素类型（<c>long?</c>）经 <c>Nullable.GetUnderlyingType</c> 解包——
+    /// 数组元素是 <c>T?</c> 时运行时元素类型即 <c>Nullable&lt;T&gt;</c>。</para></summary>
+    private static NpgsqlDbType? ArrayElementDbType(Type elementType)
+    {
+        Type underlying = Nullable.GetUnderlyingType(elementType) ?? elementType;
+        if (underlying == typeof(int)) return NpgsqlDbType.Integer;
+        if (underlying == typeof(long)) return NpgsqlDbType.Bigint;
+        if (underlying == typeof(short)) return NpgsqlDbType.Smallint;
+        if (underlying == typeof(byte)) return NpgsqlDbType.Smallint;
+        if (underlying == typeof(string)) return NpgsqlDbType.Text;
+        if (underlying == typeof(Guid)) return NpgsqlDbType.Uuid;
+        if (underlying == typeof(bool)) return NpgsqlDbType.Boolean;
+        if (underlying == typeof(decimal)) return NpgsqlDbType.Numeric;
+        if (underlying == typeof(double)) return NpgsqlDbType.Double;
+        if (underlying == typeof(float)) return NpgsqlDbType.Real;
+        if (underlying == typeof(DateTime)) return NpgsqlDbType.Timestamp;
+        if (underlying == typeof(DateTimeOffset)) return NpgsqlDbType.TimestampTz;
+        if (underlying == typeof(DateOnly)) return NpgsqlDbType.Date;
+        if (underlying == typeof(TimeOnly)) return NpgsqlDbType.Time;
+        if (underlying == typeof(byte[])) return NpgsqlDbType.Bytea;
+        return null;
     }
 
     /// <summary>批量插入——按源生成 InsertColumns 与 BindInsert 执行 Npgsql Binary COPY。
@@ -300,7 +392,8 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         // B3：引号后的表名与列清单只由 (Type, Dialect) 决定，是纯函数——原每次调用重算
         // （方法组转委托 + LINQ 迭代器 + string.Join 中间数组 + 每列一次 QuoteIdentifier）。
-        (string quotedTable, string quotedColumns) = GetQuotedInsertTarget(typeof(T));
+        // B18（2026-10-01）：COPY 命令文本同缓存，每批不再插值。
+        (_, _, string copyCommand) = GetQuotedInsertTarget(typeof(T));
         long total = 0;
         DbTransaction bulkTransaction = transaction
             ?? await npgsqlConnection.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
@@ -343,33 +436,31 @@ public sealed class PostgreSqlProvider : IDbProvider
                 NpgsqlDbType[]? columnTypes = null;
                 // O1：copyWriter 路径把"首行建池 + 类型采样"提升到批循环外——类型真源仍是
                 // 参数 DbType 采样（PG-4 单一来源不变），行循环只走定型直写。
+                // B17（2026-10-01 全 API 逐项轮）：类型数组按实体类型缓存——O1 路径的
+                // "建池 + 采样"只为 NpgsqlDbType 真源服务（行循环走定型直写不读池）；
+                // 原实现每次 BulkInsert 调用都付 columnCount 个参数对象 + 装箱 + 采样读，
+                // 缓存命中后整段跳过。同一 Type 的列集在进程内恒定（Register 拒绝重复注册，
+                // 热重载不改变类型级元数据），校验降频与 B9（probe 结果缓存）同口径。
                 if (copyWriter is not null && valuesBinder is not null)
                 {
-                    rowCommand.Parameters.Clear();
-                    binder(rowCommand, entities[0], 0);
-                    if (rowCommand.Parameters.Count != columnCount)
-                        throw new InvalidOperationException(
-                            $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
-                            $"{rowCommand.Parameters.Count} parameters.");
-                    pool = new DbParameter[columnCount];
-                    for (int column = 0; column < columnCount; column++)
-                        pool[column] = rowCommand.Parameters[column];
-                    columnTypes = SampleColumnTypes(rowCommand, columnCount);
+                    columnTypes = GetOrBuildColumnTypes<T>(rowCommand, binder, entities[0], columnCount);
                 }
                 for (int start = 0; start < entities.Count; start += batchSize)
                 {
                     int end = Math.Min(start + batchSize, entities.Count);
                     // ITM-643：每次 COPY 一个独立超时窗口（对齐 ADO.NET 每命令超时语义，非整批累计）。
-                    CancellationTokenSource timeoutCts =
+                    // B19（2026-10-01）：timeoutCts 可为 null（无限等待 + 调用方不可取消）——
+                    // commandCt 回落 ct（不可取消 token 的 Register 为零开销空注册）。
+                    CancellationTokenSource? timeoutCts =
                         CreateCopyTimeoutTokenSource(commandTimeoutSeconds, ct);
                     try
                     {
-                        CancellationToken commandCt = timeoutCts.Token;
+                        CancellationToken commandCt = timeoutCts?.Token ?? ct;
                         // ITM-760：注册回调记录超时触发（回调先于 OCE 抛出点的传播）
                         using CancellationTokenRegistration reg = commandCt.Register(
                             static state => ((bool[])state!)[0] = true, timeoutFlag);
                         NpgsqlBinaryImporter importer = await npgsqlConnection.BeginBinaryImportAsync(
-                            $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)", commandCt)
+                            copyCommand, commandCt)
                             .ConfigureAwait(false);
                         Exception? importerException = null;
                         try
@@ -398,6 +489,8 @@ public sealed class PostgreSqlProvider : IDbProvider
                                 }
                                 else
                                 {
+                                    // PARAM-REUSE-OK[noautoprep] 该回退仅旧模型程序集（无 valuesBinder）
+                                    // 可达；PG 对应路径的语句为 Binary COPY/ODku，不经参数集合执行
                                     rowCommand.Parameters.Clear();
                                     binder(rowCommand, entities[index], 0);
                                     if (rowCommand.Parameters.Count != columnCount)
@@ -436,7 +529,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                         }
                     }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested
-                        && timeoutCts.IsCancellationRequested)
+                        && timeoutCts is not null && timeoutCts.IsCancellationRequested)
                     {
                         // ITM-869（r23）：超时触发的状态补记——Cancel() 先置 token 状态再执行注册回调，
                         // WriteRow 行边界的轮询检查可在回调执行前抛 OCE（timeoutFlag 仍 false），
@@ -447,7 +540,7 @@ public sealed class PostgreSqlProvider : IDbProvider
                     }
                     finally
                     {
-                        timeoutCts.Dispose();
+                        timeoutCts?.Dispose();
                     }
                 }
             }
@@ -519,9 +612,12 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 8 线程首触实测构建 8 次。Lazy(ExecutionAndPublication) 才真正单实例化；败者的 Lazy
     /// 永不被 force（工厂不跑），胜者的 Lazy 被所有调用方共享。失败摘除见
     /// <c>GetQuotedInsertTarget</c>（Lazy 缓存故障，不摘除会把一次构建失败固化为永久异常）。
-    /// 键空间 = 实体数 × 3，天然有限。</summary>
+    /// 键空间 = 实体数 × 3，天然有限。
+    /// <para>B18（2026-10-01 全 API 逐项轮）：值扩为三元组含 COPY 命令文本——原实现每批
+    /// 1 个插值字符串（内容只由 Type 决定，恒定）。</para></summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (Type EntityType, SqlDialect Dialect), Lazy<(string QuotedTable, string QuotedColumns)>>
+        (Type EntityType, SqlDialect Dialect),
+        Lazy<(string QuotedTable, string QuotedColumns, string CopyCommand)>>
         QuotedInsertTargetCache = new();
 
     /// <summary>R50（2026-09-26）：INSERT binder 首次探测的每 (Type, Dialect) 单实例化
@@ -543,12 +639,12 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 两遍）；GetOrAdd 工厂仍可被并发多次调用（实测构建 8 次）；收敛为<b>字典存 Lazy</b>——
     /// Lazy(ExecutionAndPublication) 对同键只执行一次构建，其余首触等同一个 Value。
     /// 失败即摘除：Lazy 会缓存已完成的 Task/值（含故障），不摘除会把一次构建失败固化。</para></summary>
-    private static (string QuotedTable, string QuotedColumns) GetQuotedInsertTarget(Type entityType)
+    private static (string QuotedTable, string QuotedColumns, string CopyCommand) GetQuotedInsertTarget(Type entityType)
     {
         (Type EntityType, SqlDialect Dialect) key = (entityType, Dialect);
-        Lazy<(string QuotedTable, string QuotedColumns)> lazy = QuotedInsertTargetCache.GetOrAdd(
+        Lazy<(string QuotedTable, string QuotedColumns, string CopyCommand)> lazy = QuotedInsertTargetCache.GetOrAdd(
             key,
-            static (k, _) => new Lazy<(string QuotedTable, string QuotedColumns)>(
+            static (k, _) => new Lazy<(string QuotedTable, string QuotedColumns, string CopyCommand)>(
                 () => BuildQuotedTarget(k.EntityType),
                 System.Threading.LazyThreadSafetyMode.ExecutionAndPublication),
             (object?)null);
@@ -563,8 +659,9 @@ public sealed class PostgreSqlProvider : IDbProvider
         }
     }
 
-    /// <summary>构建 COPY 目标引用形态（引号表名 + 引号列清单）——R49 计数面同处递增。</summary>
-    private static (string QuotedTable, string QuotedColumns) BuildQuotedTarget(Type entityType)
+    /// <summary>构建 COPY 目标引用形态（引号表名 + 引号列清单 + COPY 命令文本）——R49 计数面
+    /// 同处递增。B18（2026-10-01）：COPY 文本一并构建缓存。</summary>
+    private static (string QuotedTable, string QuotedColumns, string CopyCommand) BuildQuotedTarget(Type entityType)
     {
         string tableName = PalORM_Runtime.TableNames.TryGetValue(entityType, out string? tn)
             ? tn
@@ -574,18 +671,28 @@ public sealed class PostgreSqlProvider : IDbProvider
             throw new InvalidOperationException(
                 $"Type '{entityType.Name}' has no generated CRUD.");
         System.Threading.Interlocked.Increment(ref QuotedTargetBuildCount);
+        string quotedTable = QuoteIdentifier(tableName);
+        string quotedColumns = string.Join(", ", crud.InsertColumns.Select(QuoteIdentifier));
         return (
-            QuoteIdentifier(tableName),
-            string.Join(", ", crud.InsertColumns.Select(QuoteIdentifier)));
+            quotedTable,
+            quotedColumns,
+            $"COPY {quotedTable} ({quotedColumns}) FROM STDIN (FORMAT BINARY)");
     }
 
     /// <summary>创建单次 COPY 的超时令牌源——ITM-643：COPY 无 CommandTimeout 挂点，
     /// 联动 CTS + CancelAfter 履行"批量命令必须应用超时"契约；0 = 无限等待（不设取消），
-    /// 与 DbOptions.ToCommandTimeoutSeconds 的 Zero 透传语义一致。</summary>
-    private static CancellationTokenSource CreateCopyTimeoutTokenSource(
+    /// 与 DbOptions.ToCommandTimeoutSeconds 的 Zero 透传语义一致。
+    /// <para>B19（2026-10-01 全 API 逐项轮）：免构/单构——无限等待且不可取消时无超时事件
+    /// 可发生，返回 null（调用方直接用 ct；不可取消 token 的 Register 是零开销空注册）；
+    /// ct 不可取消时单构 CTS 替代 linked（省 registration 结构）。</para></summary>
+    private static CancellationTokenSource? CreateCopyTimeoutTokenSource(
         int commandTimeoutSeconds, CancellationToken ct)
     {
-        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (commandTimeoutSeconds <= 0 && !ct.CanBeCanceled)
+            return null;
+        var timeoutCts = ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : new CancellationTokenSource();
         if (commandTimeoutSeconds > 0)
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
         return timeoutCts;
@@ -622,13 +729,43 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <summary>PG-4：每次 COPY 调用采样一次每列 NpgsqlDbType（见 <see cref="WriteRow"/>）。
     /// <para>S3 的显式 DbType 保证首行全 DBNull 的可空列也返回映射类型而非 <c>Unknown</c>
     /// （ITM-527 修复：探针实测 <c>DBNull + DbType.Int32 → Integer</c>，真库执行验证通过），
-    /// 因此首行采样对任何列组合都成立。</para></summary>
+    /// 因此首行采样对任何列组合都成立。</para>
+    /// <para>B17（2026-10-01）：本函数现仅作为 <see cref="GetOrBuildColumnTypes{T}"/> 的
+    /// 首次构建真源（缓存命中后不再执行）。</para></summary>
     private static NpgsqlDbType[] SampleColumnTypes(DbCommand rowCommand, int columnCount)
     {
         var columnTypes = new NpgsqlDbType[columnCount];
         for (int column = 0; column < columnCount; column++)
             columnTypes[column] = ((NpgsqlParameter)rowCommand.Parameters[column]).NpgsqlDbType;
         return columnTypes;
+    }
+
+    /// <summary>B17（2026-10-01 全 API 逐项轮）：COPY 列类型数组缓存——键 = 实体类型
+    /// （类型由生成器静态决定，同一进程内恒定；PG-4/S3 的"binder 显式 DbType → 采样"
+    /// 真源仅在首次构建时执行一次）。键空间 = 实体数，天然有限。并发首次构建可重复
+    /// （纯函数、同值），与 DataSessionCache 的 TryGetValue/TryAdd 纪律一致。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, NpgsqlDbType[]>
+        CopyColumnTypesCache = new();
+
+    /// <summary>B17：取（或首建）列类型数组——未命中时走原"清参 + binder + 参数数校验 +
+    /// 采样"路径（首行实体仅用于本次构建）。</summary>
+    private static NpgsqlDbType[] GetOrBuildColumnTypes<T>(
+        DbCommand rowCommand, Action<DbCommand, object, int> binder, T firstEntity, int columnCount)
+        where T : class
+    {
+        if (CopyColumnTypesCache.TryGetValue(typeof(T), out NpgsqlDbType[]? cached))
+            return cached;
+
+        // PARAM-REUSE-OK[carrier] rowCommand 仅用于采样列类型，从不执行（类型按类型缓存）
+        rowCommand.Parameters.Clear();
+        binder(rowCommand, firstEntity, 0);
+        if (rowCommand.Parameters.Count != columnCount)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' generated {columnCount} insert columns but " +
+                $"{rowCommand.Parameters.Count} parameters.");
+        NpgsqlDbType[] built = SampleColumnTypes(rowCommand, columnCount);
+        CopyColumnTypesCache.TryAdd(typeof(T), built);
+        return built;
     }
 
     /// <summary>O1：定型直写路径的行起始——同步形态与 <see cref="WriteRow"/> 同形

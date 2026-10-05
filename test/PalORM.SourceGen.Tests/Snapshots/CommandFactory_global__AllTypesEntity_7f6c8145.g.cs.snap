@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.1")]
 internal static class CommandFactory_global__AllTypesEntity_7f6c8145
 {
 
@@ -35,45 +35,50 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
     internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::AllTypesEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 0].Value = (object)entity.IntValue;
-        parameters[paramOffset + 1].DbType = global::System.Data.DbType.Int16;
         parameters[paramOffset + 1].Value = (object)entity.ShortValue;
-        parameters[paramOffset + 2].DbType = global::System.Data.DbType.Byte;
         parameters[paramOffset + 2].Value = (object)entity.ByteValue;
-        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 3].Value = (object)entity.StringValue;
         parameters[paramOffset + 4].Value = (object)entity.CharValue;
-        parameters[paramOffset + 5].DbType = global::System.Data.DbType.Boolean;
         parameters[paramOffset + 5].Value = (object)entity.BoolValue;
-        parameters[paramOffset + 6].DbType = global::System.Data.DbType.Decimal;
         parameters[paramOffset + 6].Value = (object)entity.DecimalValue;
-        parameters[paramOffset + 7].DbType = global::System.Data.DbType.Double;
         parameters[paramOffset + 7].Value = (object)entity.DoubleValue;
-        parameters[paramOffset + 8].DbType = global::System.Data.DbType.Single;
         parameters[paramOffset + 8].Value = (object)entity.FloatValue;
-        parameters[paramOffset + 9].DbType = global::System.Data.DbType.DateTime;
         parameters[paramOffset + 9].Value = (object)entity.DateTimeValue;
-        parameters[paramOffset + 10].DbType = global::System.Data.DbType.Guid;
         parameters[paramOffset + 10].Value = (object)entity.GuidValue;
-        parameters[paramOffset + 11].DbType = global::System.Data.DbType.DateTimeOffset;
         parameters[paramOffset + 11].Value = (object)entity.DateTimeOffsetValue;
-        parameters[paramOffset + 12].DbType = global::System.Data.DbType.Date;
         parameters[paramOffset + 12].Value = (object)entity.DateOnlyValue;
-        parameters[paramOffset + 13].DbType = global::System.Data.DbType.Time;
         parameters[paramOffset + 13].Value = (object)entity.TimeOnlyValue;
-        parameters[paramOffset + 14].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 14].Value = (object)entity.BytesValue;
-        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 15].Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt;
-        parameters[paramOffset + 16].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 16].Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString;
-        parameters[paramOffset + 17].DbType = global::System.Data.DbType.Guid;
         parameters[paramOffset + 17].Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid;
-        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Time;
         parameters[paramOffset + 18].Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly;
-        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 19].Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes;
+    }
+
+    /// <summary>B21：建池后一次性写 INSERT 参数 DbType（配合 BindInsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitInsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 0].DbType = global::System.Data.DbType.Int32;
+        parameters[paramOffset + 1].DbType = global::System.Data.DbType.Int16;
+        parameters[paramOffset + 2].DbType = global::System.Data.DbType.Byte;
+        parameters[paramOffset + 3].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 5].DbType = global::System.Data.DbType.Boolean;
+        parameters[paramOffset + 6].DbType = global::System.Data.DbType.Decimal;
+        parameters[paramOffset + 7].DbType = global::System.Data.DbType.Double;
+        parameters[paramOffset + 8].DbType = global::System.Data.DbType.Single;
+        parameters[paramOffset + 9].DbType = global::System.Data.DbType.DateTime;
+        parameters[paramOffset + 10].DbType = global::System.Data.DbType.Guid;
+        parameters[paramOffset + 11].DbType = global::System.Data.DbType.DateTimeOffset;
+        parameters[paramOffset + 12].DbType = global::System.Data.DbType.Date;
+        parameters[paramOffset + 13].DbType = global::System.Data.DbType.Time;
+        parameters[paramOffset + 14].DbType = global::System.Data.DbType.Binary;
+        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Int32;
+        parameters[paramOffset + 16].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 17].DbType = global::System.Data.DbType.Guid;
+        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Time;
+        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Binary;
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
@@ -120,18 +125,23 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         parameters[paramOffset + 12].Value = (object)entity.DateTimeOffsetValue;
         parameters[paramOffset + 13].Value = (object)entity.DateOnlyValue;
         parameters[paramOffset + 14].Value = (object)entity.TimeOnlyValue;
-        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 15].Value = (object)entity.BytesValue;
-        parameters[paramOffset + 16].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 16].Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt;
-        parameters[paramOffset + 17].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 17].Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString;
-        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Guid;
         parameters[paramOffset + 18].Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid;
-        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Time;
         parameters[paramOffset + 19].Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly;
-        parameters[paramOffset + 20].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 20].Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes;
+    }
+
+    /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Binary;
+        parameters[paramOffset + 16].DbType = global::System.Data.DbType.Int32;
+        parameters[paramOffset + 17].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Guid;
+        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Time;
+        parameters[paramOffset + 20].DbType = global::System.Data.DbType.Binary;
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
@@ -177,25 +187,285 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         parameters[paramOffset + 11].Value = (object)entity.DateTimeOffsetValue;
         parameters[paramOffset + 12].Value = (object)entity.DateOnlyValue;
         parameters[paramOffset + 13].Value = (object)entity.TimeOnlyValue;
-        parameters[paramOffset + 14].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 14].Value = (object)entity.BytesValue;
-        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 15].Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt;
-        parameters[paramOffset + 16].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 16].Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString;
-        parameters[paramOffset + 17].DbType = global::System.Data.DbType.Guid;
         parameters[paramOffset + 17].Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid;
-        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Time;
         parameters[paramOffset + 18].Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly;
-        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Binary;
         parameters[paramOffset + 19].Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes;
         parameters[paramOffset + 20].Value = (object)entity.Id;
+    }
+
+    /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpdateParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 14].DbType = global::System.Data.DbType.Binary;
+        parameters[paramOffset + 15].DbType = global::System.Data.DbType.Int32;
+        parameters[paramOffset + 16].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 17].DbType = global::System.Data.DbType.Guid;
+        parameters[paramOffset + 18].DbType = global::System.Data.DbType.Time;
+        parameters[paramOffset + 19].DbType = global::System.Data.DbType.Binary;
     }
 
     /// <summary>绑定主键到 DELETE 参数。</summary>
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
+    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
+    {
+        long[] values = new long[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = global::System.Convert.ToInt64(keys[start + i]);
+        }
+        return values;
+    }
+
+    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpdateColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            int[] column0 = (int[])arrays[arrayOffset + 0];
+            short[] column1 = (short[])arrays[arrayOffset + 1];
+            byte[] column2 = (byte[])arrays[arrayOffset + 2];
+            string[] column3 = (string[])arrays[arrayOffset + 3];
+            char[] column4 = (char[])arrays[arrayOffset + 4];
+            bool[] column5 = (bool[])arrays[arrayOffset + 5];
+            decimal[] column6 = (decimal[])arrays[arrayOffset + 6];
+            double[] column7 = (double[])arrays[arrayOffset + 7];
+            float[] column8 = (float[])arrays[arrayOffset + 8];
+            global::System.DateTime[] column9 = (global::System.DateTime[])arrays[arrayOffset + 9];
+            global::System.Guid[] column10 = (global::System.Guid[])arrays[arrayOffset + 10];
+            global::System.DateTimeOffset[] column11 = (global::System.DateTimeOffset[])arrays[arrayOffset + 11];
+            global::System.DateOnly[] column12 = (global::System.DateOnly[])arrays[arrayOffset + 12];
+            global::System.TimeOnly[] column13 = (global::System.TimeOnly[])arrays[arrayOffset + 13];
+            byte[][] column14 = (byte[][])arrays[arrayOffset + 14];
+            int?[] column15 = (int?[])arrays[arrayOffset + 15];
+            string[] column16 = (string[])arrays[arrayOffset + 16];
+            global::System.Guid?[] column17 = (global::System.Guid?[])arrays[arrayOffset + 17];
+            global::System.TimeOnly?[] column18 = (global::System.TimeOnly?[])arrays[arrayOffset + 18];
+            byte[][] column19 = (byte[][])arrays[arrayOffset + 19];
+            long[] column20 = (long[])arrays[arrayOffset + 20];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::AllTypesEntity)entities[start + i];
+                column0[i] = entity.IntValue;
+                column1[i] = entity.ShortValue;
+                column2[i] = entity.ByteValue;
+                column3[i] = entity.StringValue;
+                column4[i] = entity.CharValue;
+                column5[i] = entity.BoolValue;
+                column6[i] = entity.DecimalValue;
+                column7[i] = entity.DoubleValue;
+                column8[i] = entity.FloatValue;
+                column9[i] = entity.DateTimeValue;
+                column10[i] = entity.GuidValue;
+                column11[i] = entity.DateTimeOffsetValue;
+                column12[i] = entity.DateOnlyValue;
+                column13[i] = entity.TimeOnlyValue;
+                column14[i] = entity.BytesValue;
+                if (entity.NullableInt is { } v15)
+                {
+                    column15[i] = v15;
+                }
+                column16[i] = entity.NullableString!;
+                if (entity.NullableGuid is { } v17)
+                {
+                    column17[i] = v17;
+                }
+                if (entity.NullableTimeOnly is { } v18)
+                {
+                    column18[i] = v18;
+                }
+                column19[i] = entity.NullableBytes!;
+                column20[i] = entity.Id;
+            }
+        }
+    }
+
+    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
+    internal static global::System.Array[] CreateUpdateColumnArrays(int count)
+    {
+        return new global::System.Array[21]
+        {
+            new int[count],
+            new short[count],
+            new byte[count],
+            new string[count],
+            new char[count],
+            new bool[count],
+            new decimal[count],
+            new double[count],
+            new float[count],
+            new global::System.DateTime[count],
+            new global::System.Guid[count],
+            new global::System.DateTimeOffset[count],
+            new global::System.DateOnly[count],
+            new global::System.TimeOnly[count],
+            new byte[count][],
+            new int?[count],
+            new string[count],
+            new global::System.Guid?[count],
+            new global::System.TimeOnly?[count],
+            new byte[count][],
+            new long[count],
+        };
+    }
+
+    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpsertColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            long[] column0 = (long[])arrays[arrayOffset + 0];
+            int[] column1 = (int[])arrays[arrayOffset + 1];
+            short[] column2 = (short[])arrays[arrayOffset + 2];
+            byte[] column3 = (byte[])arrays[arrayOffset + 3];
+            string[] column4 = (string[])arrays[arrayOffset + 4];
+            char[] column5 = (char[])arrays[arrayOffset + 5];
+            bool[] column6 = (bool[])arrays[arrayOffset + 6];
+            decimal[] column7 = (decimal[])arrays[arrayOffset + 7];
+            double[] column8 = (double[])arrays[arrayOffset + 8];
+            float[] column9 = (float[])arrays[arrayOffset + 9];
+            global::System.DateTime[] column10 = (global::System.DateTime[])arrays[arrayOffset + 10];
+            global::System.Guid[] column11 = (global::System.Guid[])arrays[arrayOffset + 11];
+            global::System.DateTimeOffset[] column12 = (global::System.DateTimeOffset[])arrays[arrayOffset + 12];
+            global::System.DateOnly[] column13 = (global::System.DateOnly[])arrays[arrayOffset + 13];
+            global::System.TimeOnly[] column14 = (global::System.TimeOnly[])arrays[arrayOffset + 14];
+            byte[][] column15 = (byte[][])arrays[arrayOffset + 15];
+            int?[] column16 = (int?[])arrays[arrayOffset + 16];
+            string[] column17 = (string[])arrays[arrayOffset + 17];
+            global::System.Guid?[] column18 = (global::System.Guid?[])arrays[arrayOffset + 18];
+            global::System.TimeOnly?[] column19 = (global::System.TimeOnly?[])arrays[arrayOffset + 19];
+            byte[][] column20 = (byte[][])arrays[arrayOffset + 20];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::AllTypesEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.IntValue;
+                column2[i] = entity.ShortValue;
+                column3[i] = entity.ByteValue;
+                column4[i] = entity.StringValue;
+                column5[i] = entity.CharValue;
+                column6[i] = entity.BoolValue;
+                column7[i] = entity.DecimalValue;
+                column8[i] = entity.DoubleValue;
+                column9[i] = entity.FloatValue;
+                column10[i] = entity.DateTimeValue;
+                column11[i] = entity.GuidValue;
+                column12[i] = entity.DateTimeOffsetValue;
+                column13[i] = entity.DateOnlyValue;
+                column14[i] = entity.TimeOnlyValue;
+                column15[i] = entity.BytesValue;
+                if (entity.NullableInt is { } v16)
+                {
+                    column16[i] = v16;
+                }
+                column17[i] = entity.NullableString!;
+                if (entity.NullableGuid is { } v18)
+                {
+                    column18[i] = v18;
+                }
+                if (entity.NullableTimeOnly is { } v19)
+                {
+                    column19[i] = v19;
+                }
+                column20[i] = entity.NullableBytes!;
+            }
+        }
+    }
+
+    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
+    internal static global::System.Type[] UpsertColumnArrayElementTypes()
+    {
+        return new global::System.Type[21]
+        {
+            typeof(long),
+            typeof(int),
+            typeof(short),
+            typeof(byte),
+            typeof(string),
+            typeof(char),
+            typeof(bool),
+            typeof(decimal),
+            typeof(double),
+            typeof(float),
+            typeof(global::System.DateTime),
+            typeof(global::System.Guid),
+            typeof(global::System.DateTimeOffset),
+            typeof(global::System.DateOnly),
+            typeof(global::System.TimeOnly),
+            typeof(byte[]),
+            typeof(int?),
+            typeof(string),
+            typeof(global::System.Guid?),
+            typeof(global::System.TimeOnly?),
+            typeof(byte[]),
+        };
+    }
+
+    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
+    internal static global::System.Array[] CreateUpsertColumnArrays(int count)
+    {
+        return new global::System.Array[21]
+        {
+            new long[count],
+            new int[count],
+            new short[count],
+            new byte[count],
+            new string[count],
+            new char[count],
+            new bool[count],
+            new decimal[count],
+            new double[count],
+            new float[count],
+            new global::System.DateTime[count],
+            new global::System.Guid[count],
+            new global::System.DateTimeOffset[count],
+            new global::System.DateOnly[count],
+            new global::System.TimeOnly[count],
+            new byte[count][],
+            new int?[count],
+            new string[count],
+            new global::System.Guid?[count],
+            new global::System.TimeOnly?[count],
+            new byte[count][],
+        };
+    }
+
+    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
+    internal static global::System.Type[] UpdateColumnArrayElementTypes()
+    {
+        return new global::System.Type[21]
+        {
+            typeof(int),
+            typeof(short),
+            typeof(byte),
+            typeof(string),
+            typeof(char),
+            typeof(bool),
+            typeof(decimal),
+            typeof(double),
+            typeof(float),
+            typeof(global::System.DateTime),
+            typeof(global::System.Guid),
+            typeof(global::System.DateTimeOffset),
+            typeof(global::System.DateOnly),
+            typeof(global::System.TimeOnly),
+            typeof(byte[]),
+            typeof(int?),
+            typeof(string),
+            typeof(global::System.Guid?),
+            typeof(global::System.TimeOnly?),
+            typeof(byte[]),
+            typeof(long),
+        };
     }
 
     internal static void SetId(global::AllTypesEntity entity, long id)

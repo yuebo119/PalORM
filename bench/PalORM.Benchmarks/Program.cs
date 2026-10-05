@@ -115,19 +115,23 @@ public static class Program
         // NA 行（无连接/被跳过/失败）不该进结果库：0 均值会被读成"极快"
         foreach (BenchmarkReport r in reports.Where(static r => r.ResultStatistics is { Mean: > 0 }))
         {
-            double mean = r.ResultStatistics!.Mean;
+            var stats = r.ResultStatistics!;
+            double mean = stats.Mean;
+            double median = stats.Median;
             string operation = OperationOf(r);
             BenchmarkReport? floor = reports.Find(b => ArmOf(b) == "ADO_NET" && OperationOf(b) == operation);
-            double floorMean = floor?.ResultStatistics?.Mean ?? 0;
+            double floorMedian = floor?.ResultStatistics?.Median ?? 0;
             envelope.Items.Add(new PerfResultItem
             {
                 Name = operation,
                 Dialect = "sqlite",
                 Arm = ArmOf(r),
                 Tier = TierOf(r),
+                // 比值基数用中位数（2026-10-02，与 PerfHub 同口径）：BDN 的 Median 即其主统计量。
+                MedianUs = median / 1000.0,
                 MeanUs = mean / 1000.0,
                 AllocBytes = r.GcStats.GetBytesAllocatedPerOperation(r.BenchmarkCase) ?? 0,
-                Ratio = floorMean > 0 ? mean / floorMean : 0,
+                Ratio = floorMedian > 0 ? median / floorMedian : 0,
                 Note = r.BenchmarkCase.Descriptor.Type.Name
             });
         }

@@ -16,10 +16,12 @@ internal static class Program
 
         var cmd = args.Length > 0 ? args[0] : "";
         var rest = args.Skip(1).ToArray();
+        if (cmd is "-h" or "--help" or "help")
+            return PerfEntry.Usage();
         return cmd switch
         {
             "smoke" => PerfEntry.Smoke(),
-            "full" => PerfEntry.Full(),
+            "full" => PerfEntry.Full(rest),
             "compare" => PerfHubAb.Run(rest),
             "gate" => PerfEntry.Gate(),
             "report" => PerfEntry.Report(),

@@ -2,7 +2,305 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布]
+## [6.2.1] - 2026-10-06
+
+### 🚀 全量复读落地轮：写路径三处零分配化 + NOTIFY 分发回归修复（2026-10-04）
+
+> 源头：src 全量逐文件独立复读（Core 亲读 + SourceGen/Provider 并行审读），与 step5~21 定案交叉映射；
+> 基准可见面维持 step21 终审结论（无新增值得立项的差距），本轮五项全部是"基准外形态或裁决线下的
+> 对称化补齐"，收益落真实世界列形态用户。
+
+- **N1（回归修复）**：PG NOTIFY 分发路径的集合表达式 `[.. Snapshot]` 每通知复制一份不可变快照
+  数组——与 B6 注释"零分配分发"直接矛盾（疑似 ITM-825 单条目 CAS 合并时引入）。改为直接遍历，
+  繁忙通道（10k 通知/秒）消除 10k 数组/秒的 Gen0 垃圾。
+- **N2（枚举写路径零分配化）**：字符串存储枚举（默认 StoreAs=TEXT）的写路径原先在全部九种写形态
+  （BindInsertToBatch/BindInsertValues/CopyWriteRow/BindUpsert/BindUpsertValues/BindUpdate/
+  BindUpdateValues/FillUpdate/FillUpsertColumnArrays）逐行 `ToString()`，每枚举列每行分配一个新串。
+  现发射 `EnumStr_X` 生成式 switch（读侧 Parse_X 的对称物）返回驻留常量；未定义数值与别名成员
+  （重复常量值不进臂——重复常量模式是编译错误且 ToString 对别名无定义选取）落 `_ => ToString()`
+  兜底，行为与旧形态逐位一致。
+- **N3（UNNEST 数组填充行主序）**：FillColumnArrays 生成形态原列主序每列每行重复一次
+  `IReadOnlyList<object>` 接口调用 + 实体强转（C 列实体 = C×N 次），改行主序单次强转存局部
+  （降为 N 次），生成代码净缩 436 行；语义零变化（null 元素仍在首个列访问处 NRE）。
+- **N4（UPSERT/UPDATE 池 DbType 一次性初始化）**：B21 对 INSERT 池分解的对称化——原两 binder
+  对可空与 byte[] 列每行每列重写恒定 DbType（PG-4 实测纯成本 31ns vs 13ns），现发射
+  InitUpsertParameters/InitUpdateParameters 建池后调用一次；非空标量保持驱动推断（PG-4 决策不变），
+  PL-2 单行复用槽不受影响（池经 BindUpdate 建参已带 DbTypeHint）；旧生成器程序集 Init 委托为
+  null 时消费方不调，binder 保持自写旧形态（B21 契约同构）。
+- **N5（GetAllAsync 组合句缓存）**：补齐缓存不对称漏项——GetByKeySql/CountComposedSql/聚合后缀
+  均有组合句缓存，GetAllAsync 每次付 1 次 QuoteIdentifier + 全句插值（约 150B）；现按
+  (Type, Dialect, DefaultFilterForms) 缓存，命中零闭包。连带删除失去唯一消费者的
+  GetDefaultFilterWhereClause（S1144）。
+- **登记（不立项）**：①`LongLivedSession_GetAsync_StaysUnderGrossLine` 并行偶发失败坐实为
+  进程级 GC 计数的并行污染（串行全绿、比值姊妹用例恒绿；类文档自述污染包络 10~50KB 对 64KB
+  gross 线余量过薄）——预存测量类薄弱点，非产品回归；②SourceGen 编译期低效若干（Analyzer
+  重复 GetAttributes、QuoteIdentifier 每次新建引号串等），低优先级。
+- **验证**：ci.slnf Debug/Release 0W0E；SourceGen 227/227（快照重录并逐 diff 评审：枚举实体
+  9 处写形态切换 + 全实体行主序化 + 两 Init 方法 + 注册表两参）；Core 串行 497/497（并行同绿，
+  偶发项见登记①）；门禁 G1-G33 32/32 通过；Native AOT win-x64 发布 + 原生二进制运行 PASSED
+  （枚举 switch 为常量模式，与已验证的 Parse_X 同型）。
+
+### 🔬 性能测试系统优化轮：门禁判读机械化 + 播种统一 + 编排精简（2026-10-03）
+
+- **结果库门禁机械化（根治 12:39 批 3 项 FAIL 的误报）**：①**分母漂移判定**——比值超限但被测臂
+  自身中位移动 ≤10%、隐含地板变快 ≥20% 时判"分母漂移"只告警不 FAIL（把当轮人工定性协议固化成
+  规则；真实退化的中位移动远超 10% 仍走 FAIL）；②**跨批离群告警**——最新批各 (操作,方言,档,臂)
+  中位对照此前 ≤6 批中位 >2× 即告警（两方向），首跑即抓到 Dapper BulkDelete/SQLite/2000 5.38×
+  与 WhereIn/SQLite/2000 Dapper 3.08× 两处参考臂异常（健康度与 err 告警线此前都没抓到）。
+  逐项定性依据与"不豁免、不重录基线"的裁决登记于规范 §5（三个键的比值在无代码变更批次间摆动
+  40~170%，±30% 带无判别力，重录等于固化另一窗口）。
+- **PerfHub 播种统一**：perf_s1 族重置（Insert/BulkInsert/KeysetPage/WhereIn/Count/UpsertBatch/
+  Tx×4/BulkDelete）统一走中性播种 `SetupPerfS1Async`（三臂同一路径、同一表布局），需要
+  `bench_tenant` 的租户族保留全量播种（`fullReset`）。
+- **PerfCli 编排**：`full` 默认移出 DapperSuite 哨兵（连续多轮 9 项零发现，降频为按周或驱动/大版本
+  变更时 `--with-dappersuite` 并回，跨夹具登记显示其最后批次时间）；入口设置 `NuGetAudit=false`
+  （离线时 NU1900 会被 TreatWarningsAsErrors 升级为错误炸掉门禁构建，实测代理不可达复现；
+  只影响本进程派生的构建，审计信号交给有网环境）。
+- **v3 并入**：写族顺序（BulkUpdate 前置消除跨臂表规模混淆）、撤 4 项第二档、并发单档、
+  `GetByKey`/`Build×2` 按裁决保留（cherry-pick 226e0f5+6fc27c8）。全量测量数 434 → 371（−15%）；
+  DapperSuite 移出后每轮再省 2.1 分钟，预计全量 23.1 → 约 18 分钟（−22%）。
+- **验证**：ci.slnf 0W0E；结果库门禁对 12:39 批复验 = 比对 156 项、分母漂移 3、失败 0、离群 2；
+  SQLite 冒烟 79/79 无失败（中性/全量两条播种路径都覆盖）。
+
+### 🔬 夹具 v3 续：预热下限收窄到首档（含 A/B 证据）+ 测量量具开销量化（2026-10-03）
+
+- **预热时间下限只在每方言首档要求**（新增 `--warmup-floor all|first-tier`，默认 first-tier）：JIT 分层
+  偏置只在方法首次执行时存在，而每个方言的驱动代码在它的首档才首次编译，跨档重复预热是纯成本。
+  **交替 A/B 四轮**（`filtered/ab-floor-{all,first}-{1,2}`，SQLite+PG 两档，各 230 项）：20000 档
+  72 个键中 70 个的配置间漂移不超过各自重复散布，仅 GetByKey/SQLite/PalORM 6.0% 与 Count/PG/PalORM
+  6.5% 略超，且无首臂偏置特征、无方向一致性 → 判定等价。**省时实测约 10 秒/2 方言**（此前"1.1 分钟"
+  的估算偏高约 4 倍，原因是下限成本集中在首档的快操作上，而非全档所有项）。
+- **测量量具开销量化（负结果，防止重开）**：新探针 `.ai/instr-probe`（独立小工程，与 PerfHub 同
+  Workstation GC 模式；`.ai/perf-probe` 是 ServerGC，会把 gen2 成本低估数倍）实测：每次测量的阻塞
+  三重 GC 仅 **0.1~5.6 ms**（存活集 1~60 MB；待回收垃圾 64 MB 上界 5.6 ms），371 次合计 **≤2 秒**，
+  **不是可省的杠杆**（此前"1.5~7 分钟"的估算偏高约两个数量级）。峰值堆采样线程（100µs、SpinWait
+  轮询）的干扰在噪声带内（−0.5%~+3.1%，方向不一致）。**且不得为省时去掉预 GC**：去掉后计时段中位
+  8.6 → 36.1 µs、极差 38 → 2012 µs（GC 与终结器落进计时窗）。规范 §4 已登记两行（下限作用范围、
+  量具自身开销）。
+
+### 🔬 性能测试夹具 v3：缩短时长 + 消除跨臂表规模混淆（2026-10-03）
+
+- **写族顺序**：`BulkUpdate` 排到 `BulkInsert` **之前**。前者原先紧随后者，而后者的迭代数由时间预算
+  自适应、逐臂不同，导致三臂在规模差 10 倍的表上测（实测 PG/20000 档起始表 324 万 / 34 万 / 330 万行，
+  Dapper 在小 10 倍的表上跑），跨臂比值无从解释。修后它跑在 `rows + 200` 行（三臂 `Insert` 迭代数都是
+  200）的表上。**未新增 reset**——规范 §5"给写项加 reset 的尝试已回退（9.5× 未解异常），机制查明前
+  不得重加"的约束仍然有效。代价如实登记：数万行批更新进数十万行表的大表形态不再由本项覆盖，
+  该形态改由 `BulkUpdateArrayFormTests` 与 UNNEST 文档 L5 的批宽探针覆盖。
+- **撤第二档 4 项**：`Insert`/`Update`/`KeysetPage`/`WhereIn`（逐项两档对照的规模放大仅 1.0~1.6×）。
+  `GetByKey` 例外保留两档：其 2000 档 P/ADO 稳定 0.73~0.79× 而 20000 档 1.04×，第二档是暴露该异常的参照。
+  `Build×2` 按决定保留（跨方言 SQL 构建税的唯一来源，BDN 只覆盖 SQLite）。
+- **并发只在最高档**：两档吞吐实测差 MySQL/PG 在 ±5% 内、SQLite ±8~13%（夹具噪声带内），
+  最小档的 9 项/方言属重复测量，撤掉。
+- **`BulkDelete` 播种改中性路径**：只播 `perf_s1`，不再顺带把 `bench_tenant` 播到 rows×轮数 行
+  （每方言首次约 10~20 万行含 JSON 载荷）；行数与内容不变，也不属"新增 reset"。
+- **实测**（子批 `filtered/verify-fixture-v3b`，SQLite+PG 两档含并发）：248/248 无失败、进度对账相符、
+  耗时 7m51s（旧夹具同覆盖面约 9.7 分钟）。全量测量数 434 → **371**（−15%），PerfHub 段约 15.1 → 12.5 分钟。
+- **并入时必须重录基线**：两项有数值面变化（`BulkUpdate` 的表规模、`BulkDelete` 的播种路径），
+  需一轮干净全量批后 `PerfCli gate` 复验；`GetByKey/PostgreSQL/2000` 的旧基线地板离群问题见上一节。
+
+### 📊 结果库基线重录 + UNNEST 收益入库（2026-10-03）
+
+- **全量批 `history-20261003-013103`（434 项，三方言两档 + 并发扩展档，23m25s）**：五步中
+  四步通过，门禁步 FAIL 四项（PG），逐项定性后**无产品退化**，已按复测证据登记：
+  - `TenantGetAll/PostgreSQL/20000`（9.51ms 对基线 7.04ms）：**瞬时**。PG/20000 子批三批
+    A/A 复测（`filtered/recheck-tenantgetall-1..3`）PalORM 7.02/7.28/7.32ms，与基线同档，
+    分配三批一致（998KB 对全量批 1003KB）→ 环境抖动，不归因产品。
+  - `GetByKey/PostgreSQL/2000`（比值 1.02 对基线 0.06）：**基线地板离群**。旧基线隐含地板
+    4932.9µs（ADO 读单行 4.9ms 不合理），本批地板回落 321.5µs（−93.5%）；PG/2000 复测
+    三批 P/ADO 0.86/0.71/0.76，稳定优于地板。
+  - `QueryAll/PostgreSQL/2000`（1.52 对 0.34）与 `WideQueryAll/PostgreSQL/2000`（1.42 对 1.00）：
+    基线地板离群（−69.4%）叠加本批该臂偏慢；复测三批 P/ADO 分别 0.99/0.96/0.99 与
+    0.99/0.98/1.26（第三批绝对值跳变，属已知高散布项）→ 无系统退化。
+  - 更强反证：A/B 同批背靠背对照（`ab/*`，改动前后各一臂）中，本轮改动**未触碰的读项**
+    GetByKey Δ −3.0%/−6.0%、QueryAll Δ −10.0%/−3.5%、Count Δ −16.5%/+2.8%、BulkInsert
+    Δ −6.1%/−2.1%，全部在噪声内且方向偏好 → 排除 A9 槽与数组形态改动的读路径外溢。
+- **基线重录（`perfhub-index-baseline.json`，176 项，阈值比值 +30%）**：按**全量批**口径重录
+  （与被测批次同环境形态；B122 环境同构纪律——子批复测值不得用于覆盖全量批口径的基线）。
+  重录后门禁复验：比对 156 项、缺项 0、非可比跳过 20、**失败 0**。
+- **UNNEST 收益进基线**（PG 批量三项 P/ADO，旧 → 新）：`BulkUpdate/2000` 0.987 → **0.447**、
+  `BulkDelete/2000` 0.976 → **0.566**、`UpsertBatch/2000` 0.953 → **0.829**；
+  2 万档 1.050 → **0.554**、0.882 → **0.385**、0.992 → **0.803**。与 A/B 验收的逐轮配对
+  改善（−46%~−74%）方向一致，此前基线挂旧值的上界虚高问题消除。
+- **登记（供后续批次判读）**：PG 读路径的批次间散布（同形态子批内 ±10% 以内，全量批与子批
+  之间可达 20~50%）属已知族；四项新基线值取自本批，样本为单批，后续批次若在其上界附近
+  波动应先行复测再归因（B110）。
+
+### 🐛 缺陷修复：PG auto-prepare × 命令复用槽 = 静默错数（R-UNNESTB，2026-10-02）
+
+> **⚠️ 影响范围（2026-10-03 排查）**：该缺陷**已随发布版本分发**——受影响版本为 **5.7.0、5.8.0、
+> 5.9.0、6.0.0、6.0.1、6.1.0、6.2.0**（`5.6.0` 不含复用槽故不受影响；修复 `e49ab75` 晚于
+> `v6.2.0`，本版起修复）。触发条件（五条全真）：PostgreSQL + 连接串未显式设 `MaxAutoPrepare`
+> + 同一会话内对同一实体类型第 4 次及以后的 `GetAsync` 且键值不同 + 非租户感知实体 + 非并行读
+> 作用域。表现为该会话后续变键读取静默返回第 3 次那一行的数据。
+> **止血**：连接串加 `MaxAutoPrepare=0` 立即消除（代价是失去该调优的查询延迟收益）；
+> 或把循环内 `GetAsync` 改写为一次 `WhereIn`。不受影响：`GetAllAsync`/`From<T>()`（查询槽
+> 未发布）、全部批量写路径、`SessionBatch`、SQLite/MySQL、无参查询。详见
+> `docs/性能优化方案-UNNEST数组形态-2026-10-02.md` 第九节 L9。
+
+- **现象**：同一会话内，同形状读查询跨晋升阈值（第 3 次起）后，变键 `GetAsync` 与变参
+  `From<T>().Where(...)` 返回**晋升那一次的旧行**——数据错但查询成功，无任何异常。
+  本轮 AOT 验证（阶段 B 的 BulkMerge round-trip 断言）偶然暴露。
+- **根因**：PG 连接串的 auto-prepare 调优（`MaxAutoPrepare=100;AutoPrepareMinUsages=2`，
+  v5.0 阶段 3.1 默认开启）× 复用槽的「`Parameters.Clear()` + Add **新**参数实例」模式。
+  探针（`mergearray`，裸 ADO 变体实验）实测，Npgsql 10.0.3。
+- **修复**：两个读槽的参数集合持久持有、逐位置就地写 Value。GetByKey 的键类型换算
+  （ITM-587 契约）经**从不执行的探针命令**走同一生成绑定器（单源不变）；A9 槽对
+  DbType 形状变化保守回退新建命令（同型循环——晋升主要受益场景——不受影响）。
+- **回归锁定**：真库 `PG_GetAsync_VaryingKeys_AcrossPromotion_ReturnsMatchingRows` 与
+  `PG_Where_VaryingValues_AcrossPromotion_ReturnsMatchingRows`（12 次变值 > 阈值 3）。
+- **机制探针（变体 A/B/C/D，机制确证）**：auto-prepare 在 prepare 那一刻**缓存当时集合中的
+  参数对象**；变体 D 改旧实例的 Value 则结果跟随旧实例，改新实例不跟随。同实例 Clear+重加 ✅、
+  同实例就地写 Value ✅、每批新实例 ❌。
+- **触发面**（修复前）：PL-2 GetByKey 复用槽（2026-09-25 引入）与 A9 From<T> 查询槽
+  （2026-10-01 引入）——两者都在复用分支重挂新参数实例。写路径（Insert/Update 槽）用
+  参数池就地写 Value，不受影响。**Core 套件抓不到**：SQLite 无 auto-prepare 行为；
+  集成套件此前的读用例没有「同会话同形状变值」的覆盖，且 SessionBatch 的 PG 用例全在
+  `WithTransaction` 内（事务内 auto-prepare 不生效）。
+- **顺带修出第三处 + 一处自引入缺陷**（门禁化过程发现）：
+  ① 阶段 A 的**数组删除路径**每批 `Clear` + Add 新数组参数，15 001 键三批时第三批重发第二批的
+  键数组（删错行）。原 5 001 键用例**恰好逃过**（两批不触发，判别力下限是三批）——改为预建参数
+  + 批间只改 Value，用例升档 15 001 键，S3 反向验证转红/恢复绿。
+  ② `BulkUpdateBatchAsync`（独立公开入口）此前走 VALUES 形态，与 `BulkUpdateAsync` 自动路由
+  形成「同操作两形态」，本轮切为共用同一数组形态与执行体。
+- **纠正一处误判**：SessionBatch 回退路径（Clear + `CloneParameter`）曾被列为 P1 级
+  「PG 主路径」，探针实测 **Npgsql 支持 DbBatch**（`CreateBatch()` 返回可用对象）→ PG 走真
+  DbBatch，该回退在 PG 上不可达，仅 SQLite 可达且 SQLite 无 auto-prepare 行为，风险降至 P3，
+  只登记不改代码。
+- **纪律落成**：`docs/编码规范.md` §20（规则 + 机制表 + 判别力下限）+ 机械化门禁
+  `scripts/gate-param-collection-reuse.cs`（标记制：每处 `Parameters.Clear()`/`RemoveAt` 须在
+  邻近声明理由码 carrier/pool/fresh/nodbbatch/noautoprep/legacy，缺声明即 FAIL），接入
+  `.githooks/pre-commit` 与 `scripts/test-quality-scripts.cs` 正反双路径夹具（变异验证：抽掉一处
+  标记 → 门禁 exit 1 并精确指位）。
+- **新增回归**：A9 守卫两侧（`PG_Where_SameDbType_DifferentClrType_AcrossPromotion` 就地写跨值
+  类型、`PG_Where_VaryingDbType_AcrossPromotion_FallsBackAndStaysCorrect` 形状漂移回退仍正确）、
+  UPSERT 批内重复主键契约（`PG_BulkMerge_ArrayForm_DuplicateKeyInBatch_Throws`，PG 明确报错、
+  SQLite 与 MySQL 各自不同的既有方言事实已注明）、`BulkUpdateBatchAsync` 数组形态形状断言。
+- **教训**：连接串调优（驱动行为开关）× 命令复用（执行形态优化）的交互面没有真库覆盖——
+  性能特性必须在真实方言连接上验证正确性，「SQLite 全绿 + PG 编译通过」不构成正确性证据。
+  已登记 `.ai/lessons.md` B124。
+
+### ⚡ UNNEST 阶段 B：PG 批量 UPDATE / UPSERT 切数组形态（2026-10-02）
+
+- **`BulkUpdateAsync`（自动路由）在 PG 上走 `UPDATE … FROM UNNEST(@u0, @u1, …) AS v(col0, …, col_pk)`**：
+  每列一个数组参数（SET 列在前、主键末位，列序与 `BindUpdateValues` 共 `GetUpdateColumnOrder`
+  单一真源），语句内参数个数恒为列数、与批宽无关——绕开 VALUES 形态"行数相对表规模触发
+  Hash Join + 全表顺扫"的规划器翻转（阶段 A 前的探针 pgplan：2000 行 VALUES 45.65ms vs
+  UNNEST 11.53ms）。批宽 = MaxRowsPerBatch（数组形态不受语句参数个数约束）；批间复用满批
+  数组，末批用短数组（UNNEST 按数组实际长度展开）。
+- **`BulkMergeAsync`（集合化 UPSERT）在 PG 上走 `INSERT … SELECT * FROM UNNEST(…) ON CONFLICT …`**：
+  列序 = `IsUpsertable` 声明序（与 `BindUpsertValues` 同源）。批内重复主键语义与既有形态一致
+  （PG 对同语句影响同一行两次明确报错）；返回口径 = 处理行数，不变。
+- **源生成器新增逐列数组三件套**（UPDATE / UPSERT 各一套，共 6 个生成成员）：
+  `FillXxxColumnArrays`（区间逐列填充）、`XxxColumnArrayElementTypes`（元素类型表，可空值类型
+  列为 `T?`、OwnedJson/枚举按值形态取 provider 类型）、`CreateXxxColumnArrays`（`new T[count]`
+  静态类型分配）。**分配在生成物内做**：Core 侧 `Array.CreateInstance(Type, …)` 带
+  RequiresDynamicCode（IL3050），AOT 不可用。元素值取 `GetParameterValueExpressionCore` 的
+  裸值形态（参数池装箱/DBNull 收尾由此处独占）——转换器、枚举 StoreAs、OwnedJson 序列化
+  仍只有一份真源；可空值类型列经 `is { } v` 模式匹配解包（null 留数组默认值 = SQL NULL）。
+- **能力检测而非方言枚举**：生成物三件套非空 + Provider 对**全部列**元素类型的数组参数返回
+  非 null，才走数组形态；任一列不支持整体回退 VALUES 形态（不做混合半形态，B120 族纪律）。
+  新增 `IDbProvider.CreateTypedArrayParameter(name, values, elementType)`（static virtual，
+  默认 null），PG 实现按显式元素类型映射 `NpgsqlDbType.Array | element`。
+- **AOT 验证顺带修出 R-UNNESTB 缺陷**（见上节）——阶段 B 的 BulkMerge round-trip 断言是
+  第一个跨晋升阈值变键的真库读，偶然踩中这个比阶段 B 本身更严重的既有缺陷。
+- **测试**：`BulkUpdateArrayFormTests` 10 项（SQLite 夹具经 `json_each` 连接改写跑真实
+  UNNEST SQL，形状断言锁死 `FROM UNNEST(` + 参数个数 == 列数）；mutation probe 实测
+  强制回退 → 5/10 转红。真库 4 项（UPDATE 2000 行逐位校验含可空列混合 null、Merge 两分支、
+  加上 R-UNNESTB 的 2 项）。回归：Core 495/495（三连跑）、Integration 265/265、
+  AOT PG 原生二进制实跑 PASSED（0 警告）。
+- **未做**：读取侧 `WhereIn` 切 `= ANY`（未探针，维持立项时的"不做"决定）；MySQL/SQLite
+  不做（无数组类型，既定决策）。
+
+### ⚡ UNNEST 阶段 A：PG 批量删除切数组形态（2026-10-02）
+
+### ⚡ UNNEST 阶段 A：PG 批量删除切数组形态（2026-10-02）
+
+- **`BulkDeleteAsync` 在 PostgreSQL 上走 `pk = ANY(@ids)` 单参数数组形态**，取代每键一个
+  IN 占位符。收益（立项 PoC 实测，42 万行表 2000 行、事务内回滚）：DELETE 时延 **−52%**、
+  客户端分配 **−99%**（省 per-key 参数对象）。三方言里只有 PG 有数组类型，MySQL/SQLite
+  行为不变。
+- **判据是能力检测而非方言枚举**：Provider 的 `CreateArrayParameter` 返回非 null
+  （即"本 Provider 接受该元素类型的数组参数"）+ 生成物提供主键数组构造器，两条全真才走数组
+  形态。自定义 Provider 只要实现数组参数即自动获得该路径（对齐 O25 阈值改能力检测的教训）；
+  任一不满足回退 IN 形态（该形态对复合主键本就正确）。探测用**真实主键元素类型**的零长度
+  数组——用固定探测类型会把"不支持 long 数组"误判成"不支持数组形态"。
+- **新增 `IDbProvider.CreateArrayParameter(string, Array)`**（static virtual，默认返回 null
+  = 不支持）。元素类型由数组本身推断（`values.GetType().GetElementType()`），调用方不另传
+  `DbType`——平行映射表会与生成物元素类型构成第二个真源。PG 侧映射 `Array | element`，
+  `NpgsqlDbType.Array` 的按位或组合是驱动 XML 文档的明确要求。
+- **源生成器发射 `BuildDeleteKeyArray(keys, start, count)`**：元素类型与元素值均与 `BindDelete`
+  **同一真源**（共享 `BuildKeyCastExpression`，含 `Convert.ToInt64` 归一与转换器 `ToProvider`）。
+  两条路径的逐位一致性有专门断言（同一组 int/long 键分别过两条路径比对产出）——只改一处的
+  不对称缺陷（B120 族）会让数组形态静默改变绑定语义。复合主键返回 null（UNNEST 需行构造器
+  数组，收益与复杂度不成比例）。`CrudMetadata.Copy()` 同步带上该字段（漏传在快照层不可见，
+  会让优化静默失效）。
+- **Core 侧两条形态拆成独立方法**：数组形态每批一句恒定文本、单个参数；IN 形态保留原有的
+  "语句文本随批长度变化则重建 + 中转参数改名转移"。共用事务作用域会为数组形态白建一个用不到
+  的中转命令——正是本次优化要消的固定开销。
+- **测试**：`BulkDeleteArrayFormTests` 11 项（不触真库，SQLite 夹具经 `= ANY` → `json_each`
+  改写跑通真实 PG 语法）。**每个数组形态用例都断语句形状**（`= ANY(@ids)` + 整批单参数），
+  因为"删干净了"无法区分两条形态——mutation probe 实测：只在 1 处断形状时，禁用数组分支
+  10 个用例仅 1 个变红；补全后变红 7 个。另有反向断言（无数组能力的 Provider 必须落到
+  `IN (@p0, @p1, @p2)` 且参数个数为 3）。真库 `ExternalDatabaseBulkTests` 新增 2 项
+  （5001 键多批 + GUID 主键），AOT PG 原生二进制实跑 PASSED。回归：Core 485/485、
+  Integration 261/261。
+- **未做（阶段 B）**：`BulkUpdate` / `BulkMerge` 的数组形态（UPDATE `FROM UNNEST`、
+  UPSERT `SELECT UNNEST ON CONFLICT`）。立项方案预估 UPDATE −30% 时延、UPSERT 分配 −96%。
+
+### 🔬 剩余三项清理：会话释放拆账 + 并发异常定性 + per-op 门禁（2026-10-02）
+
+- **会话释放路径拆账完成**（此前只有"约 370B"一个总数）：探针 `disposepath` 直测库侧
+  `SessionOperationState.DisposeAsync` = **424 B/op**，构成是异步状态机 + 无条件创建的
+  `TaskCompletionSource`（88B）+ 等待面组合。**判定不减**：TCS 是 Dispose 等待在飞操作的唯一机制
+  （ITM-863/797），且释放路径不在任何热路径上（每会话一次），改动只会在正确性上冒险。
+  会话完整生命周期（构造 968B + 命令 1448B + 释放侧库逻辑 424B）与 `peropab` 基线互洽。
+- **`MySQL/20000/t8` 并发单点复测定性**：4.58s（vs 同组 0.51s）为**一次性瞬时异常**。复测批
+  `history-20261002-131243` 中 PalORM 中位 684.5ms、ADO 591.7ms、Dapper 682.4ms 三臂同档；
+  且 PalORM 在两处方言均为**更优或持平**（PG 841.5ms 对 ADO 1176.6ms；MySQL 684.5ms 对 591.7ms）。
+  该批健康 clean 0.155、零失败登记。结论：不构成产品问题，并发项已在基线侧登记为 `Incomparable`
+  防止此类单点抬升门禁上界。
+- **新增 per-op 会话形态门禁** `SessionLifecycleCostTests`：锁定两条此前无覆盖的成本事实——
+  ①「池化文件库 + 每请求 `CreateAsync`」形态（commit 47b6aa9 的收益，PerfHub 与 BDN 都不经过）
+  ②「per-op 会话拿不到命令复用」的取舍（阈值 3 防泄漏，B98）。**口径**：并行套件禁绝对上界断言
+  （B57/B74），故主断言用**同用例内两形态背靠背测量的比值**（实测 per-op 3202 B/op 对长会话
+  1307 B/op，比值 2.45，线设 1.8）：污染对两臂等量，比值免疫；另设 64KB gross 线兜数量级退化。
+  变异探针已验证可转红（比值线下调 → 用例红）。Core 472/472 全绿。
+- **UNNEST 数组形态立项方案** `docs/性能优化方案-UNNEST数组形态-2026-10-02.md`：实施范围（源生成器
+  类型化数组绑定 + PG Provider 数组参数 + Core 四入口分支）、失败判据与回退条件、风险清单
+  （峰值堆、参数上限、空数组推断、快照漂移）、五步实施顺序。**明确不做 MySQL/SQLite**（无数组
+  类型）与读取侧 `WhereIn`（未测）。收益如实标注：UPDATE −30% / DELETE −52% 是时延收益，
+  UPSERT 是分配收益（时延仅 −8%）。
+
+### 🎯 测量层修复：门禁比值改中位数 + 覆盖面回退守卫（2026-10-02）
+
+- **结果库门禁比值基数由均值改中位数**（`PerfResultItem.Ratio` 取自 `MedianNs`）：均值对计时离群值极其敏感，终验批 `Insert/SQLite/2000` 的 ADO 臂中位 17.1µs、均值 45.6µs（errRatio 0.58），用均值当分母把该项基线录成 **0.459**，下一个不离群的批次必然假报 FAIL（上一轮已登记为已知地雷）。改后同项基线 **1.011**。HTML 报告侧（`PerfHub/Report.cs`）本来就用中位数，改后两处口径一致。三套夹具信封统一新增 `medianUs` 字段（PerfHub/BDN/DapperSuite 各自同源），`meanUs` 保留供判读"是否只是计时离群"。**旧批次（2026-10-02 前）的 `ratio` 是均值口径，跨该日期对比比值需按批注日期分段。**
+- **门禁失败描述同时打印中位与均值**：比值基数既是中位，隐含地板就须按中位反推；均值另附一行，两者大幅背离时该批该项不可信，应复测而非归因产品。
+- **修复 `verify-*` 未登记为子集标记**（同族第三次复发：`ab/` → `gate-set` → `verify-`）：SQLite 单方言验证批因 label 不含任何既有标记而顶掉 `latest-*`，434 项变 128 项、MySQL/PG 整体消失且**无任何提示**。已登记进 `PerfResultWriter.IsSubsetLabel`。
+- **新增覆盖面回退守卫（机械化，两侧同真源）**：判定不再只信 label——新批次的方言集若是上一个可引用批次的**真子集**，无论 label 写了什么都不得顶 `latest`。同一守卫在 **PerfHub 原始侧**与**结果库信封侧**各一份（B86 教训：只修一侧等于没修）。已用单方言批次实测拦截（两侧各打印拦截原因），同方言重跑与补跑不受影响。
+- **并发项登记为非可比（`Incomparable` + `Note`）**：`Concurrent_Mixed80_20` 的 `Ratio` 是**每操作延迟**（`MedianNs = Pct(all, 0.50)`，微秒采样），批内散布由线程调度与服务器时段支配——实测 `MySQL/20000/t8/PalORM` 中位 4.58s vs 同组其余 ~0.51s（跳变 9×），而上一批同项为 1.00。把这种读数录进基线会制造**反向地雷**：上界被抬到 15.5× 后该项从此永不 FAIL，真实退化反而看不见。处置与 PL-4 对 `Build*` 项"比值记 0"同族——**绝对值（中位/均值/分配）照常记录在基线里**，只是不参与比值判定（20 项跳过，门禁比对 156 项）。同批中位口径下 SQLite 三臂差异 +6~20%、MySQL/PG 三臂同为 ~1.7（相对同批 ADO 地板），说明该档比值主要反映**服务器时段**而非实现差异，单点异常待复测定性，不作结论。
+- **全量批 `history-20261002-122826`（434 项，健康 clean，零失败登记）**：三方言两档 + 并发扩展档；基线随中位数口径重录（176 项），门禁 0 FAIL。比值变动 >15% 的 23 项已逐项核对。
+
+### ⚡ 提升空间实施轮（2026-10-02）
+
+- **SQLite 池化连接初始化去冗余**：Microsoft.Data.Sqlite 默认池化，连接归还后原生句柄留池、下次 Open 取回同一句柄，句柄上的连接级 PRAGMA 全部保留（探针实测）。原实现每次 `CreateAsync` 都重跑整组初始化 PRAGMA（文件库 10 条），现改为每个物理连接（句柄）只完整执行一次，复用已初始化句柄时只重设 `foreign_keys = ON`（完整性约束每会话保证，STD-CONC-008 不变）。新增 `IDbProvider.InvalidateConnectionInitialization`（static virtual，默认无操作）：会话层执行 `SessionSetupSql`/`ReadSessionSetupSql` 之前调用，SQLite 据此让该句柄下次被取用时重新完整初始化，会话定制不带入其他会话。**行为变化**：会话中途用原始 SQL 改过的调优 PRAGMA（cache_size 等）会随池化句柄带入后续会话；需每会话复位的设置请放进 `SessionSetupSql`。不池化（`Pooling=False`）与共享内存库（每次 Open 为新句柄）行为不变。实测（文件库 WAL，探针 `lifecycle` 5 轮交替）：`CreateAsync+DisposeAsync` 9.19µs/4688B → 1.80µs/2160B；每请求一会话的单键直查 `CreateAsync+GetAsync` 16.62µs/6408B → 7.69µs/3880B（对手写 ADO 2.84× → 1.37×）。新增 3 个锁定用例（复用保留调优项且重设外键 / 会话 SQL 作废登记 / 不池化每次完整初始化），三处变异各自转红已核实。
+- **PG 批量 UPDATE 单批上限 1000 行**（`BulkUpdateAsync` 自动路由与 `BulkUpdateBatchAsync` 共用）：原批宽 `min(65535/(SET 列+1), 5000)`，S1 形状 2000 行一条 `UPDATE … FROM (VALUES …)` 发出。VALUES 行数相对表规模过大时规划器翻成 Hash Join + 目标表全表顺扫：探针 `pgplan` 在 42 万行表上，2000 行单语句 45.39ms，拆 1000×2 走 Nested Loop + 主键索引 19.50ms（统计陈旧同形态），即 PerfHub BulkUpdate/PG/2000 长期 2.65~2.83× 的根因（此前误判为服务器时段波动）。改后产品路径同场景 16.35ms（陈旧统计 15.27ms），约快 2.8×；2K 小表无翻转、持平。新增 PG 跨批边界真库用例（2500 行 = 1000/1000/500，自动路由与显式批量两入口逐行断言）。
+- **PG 批量 UPSERT（BulkMerge）单批上限 1000 行**：时延对批宽不敏感，分配随批宽线性增长（参数池按本调用最大批建）。PerfHub PG 子集批（`filtered/verify-pg-batchwidth`）对前三批：UpsertBatch/PG 分配 4.31MB → 2.72MB（2000 行，对 ADO 1.54× → 0.97×）、19.77MB → 12.54MB（2 万行，1.59× → 1.01×），时延持平；同批 BulkUpdate/PG/2000 时延 41.55ms → 15.21ms（2.65× → 1.01×）、分配 3.44MB → 2.18MB，BulkUpdate/PG/20000 分配 16.60MB → 11.13MB。
+- **结果列表池化收集 + 精确分配（`ResultListReader`）**：`ToListAsync`/`GetAllAsync`/`QueryAsync`/`GridReader.ReadAsync`/存储过程查询五处物化循环统一走新内核——前 `initialCapacity` 行直写 List（小结果集与原形态逐位相同、不碰池），超出后转入 `ArrayPool` 缓冲倍增，读完按实际行数一次精确分配（1 万行最终数组 80KB，低于 LOH 阈值）。探针 `listbuild`（同一 SQLite 读取器，5 轮交替）：分配 -1.0KB（100 行）/ -16.7KB（2000 行）/ -364KB（2 万行，-12%）/ -1.30MB（10 万行）；**时延持平（±3%，噪声带内）**——分析轮"宽表 2 万行慢 18% 主要来自 LOH 触发 GC"的推断被本探针证伪，该项差距归因改为器材不对等（ADO 臂逐行丢弃、不持有 2 万个实体），收益如实登记为分配面。新增 10 个用例（空/恰满/首次溢出/多次扩容/首行回调计数/溢出路径异常上抛），两处变异转红已核实。
+- **修复自引入回归（7b1ea39）**：初始化登记只对池化文件库生效。首版对每个新原生句柄都写弱表，而共享内存库与 `Pooling=False` 每次 Open 都是新句柄（探针实测不复用），BDN 共享内存库 CRUD 臂因此 +25~33B/会话；修复后回到改前（GetByKey 4888B / Insert 4856B / Update 6520B），池化文件库收益保持（`CreateAsync+GetAsync` 8.08µs/3880B，对手写 ADO 1.44×）。
+- **基准测量层修正**：PerfHub 单操作预热加 0.5s 时间下限（原只有次数上限，微秒级操作预热不足 1ms，SQLite 首个进场的 ADO 臂 2000 档被 JIT 分层抬高 21~42%，首档读成"PalORM 快 21~35%"）；三项器材对等化（WideQueryAll 的 ADO 臂建列表持有、IncludeJoin 的 ADO 臂物化实体、TxRollback 三臂同为整行 UPDATE + 显式回滚）。终验批：SQLite 2000 档 QueryAll/StreamAll/Insert/Update 的 P/ADO 由 0.50~0.79 回到 1.01~1.13，WideQueryAll/SQLite/20000 1.18× → 1.00×，TxRollback/SQLite 1.95× → 1.51×（余量为 UpdateAsync 每次调用的真实固定开销）。副作用登记：SQLite 20000 档单行绝对值三臂同步上移 30~50%（比值不受影响，待查）。
+- **PG UNNEST 数组形态 PoC（结论 GO，单独立项）**：NativeAOT 发布 0 警告、原生运行通过（七种数组类型，UPDATE/UPSERT 插入与更新分支/DELETE = ANY）；42 万行表 2000 行：UPDATE -30%、UPSERT -8% 时延 / -96% 客户端分配、DELETE -52% / -99%。
+- **终验与基线**：全量批 `history-20261002-040429`（434 项，健康 clean）；结果库基线随本轮重录（176 项，比值变动 ≥15% 的 26 项按 M1/M2/产品/远程状态四类评审，Insert/SQLite/2000 基线 0.46 系 ADO 臂均值离群、MySQL 20000 档两臂互换噪声 ±20%，均登记为已知地雷）；重录后 BDN 27/27、结果库 176 项 0 FAIL。三方言 AOT 发布 0 警告、原生运行 PASSED。完整记录见 `docs/性能优化方案-提升空间实施-2026-10-02.md`。
+
+### 🩹 基准编排缺陷修复 + 形态复核全覆盖（2026-10-01，step13）
+
+- **修复：全量流程 dappersuite 步骤自 2026-09-29 起静默空跑**（B104 家族，与 FullPerf 的 BDN 步骤 2026-09-30 同类）：默认过滤串 `-f '*' --join` 的单引号在 `UseShellExecute=false` 的 ProcessStartInfo 下是字面量（无 shell 剥引号），BDN 收到带引号的过滤串匹配 0 个基准、打印清单后**退出码仍 0**，步骤假报 OK 且哨兵停在旧批。修复：过滤串去引号（`--filter * --join`）+ 失败守卫并入 `returned 0 benchmarks` 判据；同族引号缺陷一并清理（smoke 的两处 BDN filter）。
+- **形态复核全覆盖（接 step12）**：DapperSuite（官方形状锚点）两个单键直查臂改用专用 `GetAsync`（`FirstOrDefault<T>`/`QueryFirst<T>`，后者补 null 检查保持同语义）；Workload/Stability 两工装的键查同步切换。DapperSuite README 增 D11 口径差登记。BDN 对比基准经复核无需改（StableShape 双条件/VaryingShape 变长过滤，链式为语义必需；`PalORM_GetByKey` 已是 GetAsync）。
+- **实测（DapperSuite SQLite，官方 13 列形状、5000 轮转）**：`FirstOrDefault<T>` 10.24µs/2.91KB/对地板 2.20× → **4.98µs/1.38KB/1.07×**（时延 -51%、分配 -53%，紧贴手写 ADO 地板 7% 以内；Dapper 同项 9.15µs/3.07KB）。哨兵恢复真实更新（此前停在 09-29 旧批）。Workload 工装实测正常（threads=8 113,325 ops/s）。
+
+### 📖 性能用法指南 + 基准契约形态复核（2026-10-01，step12）
+
+- **README 新增两处性能用法指南**：①单键直查首选 `GetAsync` 专用 API（同口径探针实测比链式 `From<T>().Where(Id==x).FirstOrDefaultAsync()` 省约 880 B/操作且快 25~30%）；②会话复用优先（同作用域复用一个会话，命令复用槽自动晋升；附 Microsoft.Data.Sqlite 官方源码事实：预备语句缓存按命令实例生效，换命令即重新 prepare 并额外分配 SQL 字节缓冲）。附产品侧既有最佳实践确认：PG 自动预备已默认开启（`MaxAutoPrepare=100`/`AutoPrepareMinUsages=2`）。
+- **基准夹具形态复核（三臂契约"行业最优写法"）**：PerfHub `GetByKey` 的 PalORM 臂由链式改为专用 `GetAsync`（-880B/-25~30%，探针 `.ai/perf-probe/GetByKeyPathDiag.cs` 三轮摊销）；逐臂复核完成——`Count`/`StreamAll`/`InsertReturningId` 已是专用形态，`QueryAll`/`WideQueryAll` 保持链式（固定开销占比 <1% 换形态无收益），过滤类项链式为唯一自然形态。夹具 README 登记形态断点说明与"基准 vs 生产连接配置差"说明（基准三臂驱动默认口径）。
 
 ### ⚡ step9 差距优化轮（2026-10-01，≥+10% 差距清单四族治理）
 

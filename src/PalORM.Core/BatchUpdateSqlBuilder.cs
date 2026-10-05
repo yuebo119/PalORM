@@ -20,7 +20,11 @@ internal static class BatchUpdateSqlBuilder
     /// 单批耗时随批宽超线性（真库 20000 行实测：500 行/批 271.7ms → 5000 行/批 1373.9ms，
     /// 探针十五）。UPDATE JOIN table value constructor（MySQL 8.0.19+）用等值 JOIN
     /// 替代逐行 CASE 分支比较，同负载 156.7ms（8.75×），且 SQL 文本只有 CASE WHEN 的 1/6.7。
-    /// 低于 8.0.19 的服务端不认识该语法，由调用方版本探测后回退 <see cref="CaseWhen"/>。</para></summary>
+    /// 低于 8.0.19 的服务端不认识该语法，由调用方版本探测后回退 <see cref="CaseWhen"/>。</para>
+    /// <para><b>UnnestArrays（UNNEST 阶段 B，2026-10-02）</b>：PG 专有。每个参数承载**一整列**的值
+    /// （<c>FROM UNNEST(@c0, @c1, …, @pk) AS v(c0, …, col_pk)</c>），语句内参数个数恒为列数，
+    /// 与批宽无关——绕开了 VALUES 形态"VALUES 行数相对表规模触发 Hash Join + 全表顺扫"
+    /// 的规划器翻转（探针 pgplan：42 万行表 2000 行 VALUES 45.65ms vs 1000×2 18.63ms）。</para></summary>
     internal enum BatchUpdateForm
     {
         /// <summary>CASE WHEN 形态——全方言兼容的基线（PG 走 FROM VALUES，不经过此枚举）。</summary>
@@ -28,6 +32,9 @@ internal static class BatchUpdateSqlBuilder
 
         /// <summary>UPDATE JOIN (VALUES ROW(...)) 形态——MySQL ≥ 8.0.19 专有。</summary>
         JoinValuesRow,
+
+        /// <summary>UPDATE … FROM UNNEST(数组参数) 形态——PG 专有（UNNEST 阶段 B）。</summary>
+        UnnestArrays,
     }
 
     /// <summary>构造批量 UPDATE SQL。</summary>
@@ -68,12 +75,24 @@ internal static class BatchUpdateSqlBuilder
 
         int setColCount = setColumns.Length;
         int paramsPerRow = setColCount + 1;  // pk + set cols
+        // A′（2026-10-01 充分论证轮）：形态判定单一真源——分派与租户谓词落位共用同一布尔。
+        // 原两处条件不一致（分派用 `MySQL && form`，追加只用 `form`）：非 MySQL 方言忽略
+        // form（既定契约，见 Build_NonMySqlDialects_IgnoreJoinValuesRowForm），届时实际形态
+        // 有 WHERE 而追加按 form 误判为"无 WHERE 形态"，会生成双 WHERE（B8 修复引入的矩阵
+        // 回归，当前调用面不可达但属契约内输入；本布尔使二者结构性同源，任何一方扩展自动同步）。
+        bool usesJoinValuesRow =
+            dialect == SqlDialect.MySql && form == BatchUpdateForm.JoinValuesRow;
+        // UNNEST 阶段 B：PG 的数组形态（UNNEST 是 PG 专有语法，其余方言忽略 form）。
+        bool usesUnnestArrays =
+            dialect == SqlDialect.PostgreSql && form == BatchUpdateForm.UnnestArrays;
         var sb = new ValueStringBuilder(stackalloc char[512]);
         try
         {
-            if (dialect == SqlDialect.PostgreSql)
+            if (usesUnnestArrays)
+                BuildPostgreSqlUnnest(ref sb, quotedTable, quotedPk, setColumns, setColCount);
+            else if (dialect == SqlDialect.PostgreSql)
                 BuildPostgreSql(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
-            else if (dialect == SqlDialect.MySql && form == BatchUpdateForm.JoinValuesRow)
+            else if (usesJoinValuesRow)
                 BuildJoinValuesRow(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
             else
                 BuildCaseWhen(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow, setColCount);
@@ -83,10 +102,26 @@ internal static class BatchUpdateSqlBuilder
                 // v5.0 修复 P2-2：按方言选择引号——MySQL 用反引号，PG/SQLite 用双引号。
                 // 之前硬编码双引号在 MySQL 默认 sql_mode 下会把 "tenant_id" 当字符串字面量。
                 char q = dialect == SqlDialect.MySql ? '`' : '"';
-                sb.Append(" AND ");
-                sb.Append(q);
-                sb.Append("tenant_id");
-                sb.Append(q);
+                // B8 二修（2026-10-01 全 API 逐项轮）：JoinValuesRow 形态<b>没有 WHERE 子句</b>
+                // （连接条件在 ON，语句以 SET 结尾）——原盲追加 " AND ..." 会落进 SET 表达式
+                //（tgt.label = v.c1 AND tenant_id = @__tenant0），MySQL 对字符串列求布尔触发
+                // "Truncated incorrect DOUBLE value"（真库 Integration 实测，租户实体 + MySQL
+                // 8.0.19+ 路径此前后无覆盖）。A′：以 usesJoinValuesRow 为唯一判据落位——
+                // 该形态补完整 WHERE 并以 tgt 限定列名，其余形态（皆有 WHERE）追加 AND。
+                if (usesJoinValuesRow)
+                {
+                    sb.Append(" WHERE tgt.");
+                    sb.Append(q);
+                    sb.Append("tenant_id");
+                    sb.Append(q);
+                }
+                else
+                {
+                    sb.Append(" AND ");
+                    sb.Append(q);
+                    sb.Append("tenant_id");
+                    sb.Append(q);
+                }
                 sb.Append(" = ");
                 sb.Append(tenantParameterName);
             }
@@ -95,6 +130,46 @@ internal static class BatchUpdateSqlBuilder
         }
         finally { sb.Dispose(); }
     }
+
+    /// <summary>PG 的数组形态（UNNEST 阶段 B）：<c>UPDATE t AS tgt SET c = v.colN … FROM
+    /// UNNEST(@c0, @c1, …, @pk) AS v(col0, …, col_pk) WHERE tgt.pk = v.col_pk</c>。
+    /// <para>参数个数恒为列数（每列一个数组参数），与批宽无关——故 <c>rowCount</c> 不参与文本，
+    /// 语句文本在整个批循环中恒定（调用方只需建一次）。参数名按列序：SET 列在前、主键末位，
+    /// 与 <c>FillUpdateColumnArrays</c> 的填充序同源（<c>GetUpdateColumnOrder</c>）。</para></summary>
+    private static void BuildPostgreSqlUnnest(ref ValueStringBuilder sb, string quotedTable,
+        string quotedPk, string[] setColumns, int setColCount)
+    {
+        sb.Append("UPDATE ");
+        sb.Append(quotedTable);
+        sb.Append(" AS tgt SET ");
+        for (int c = 0; c < setColCount; c++)
+        {
+            if (c > 0) sb.Append(", ");
+            sb.Append(setColumns[c]);
+            sb.Append(" = v.col");
+            sb.Append(c);
+        }
+        sb.Append(" FROM UNNEST(");
+        for (int c = 0; c <= setColCount; c++)
+        {
+            if (c > 0) sb.Append(", ");
+            sb.Append(UnnestColumnParameterName(c));
+        }
+        sb.Append(") AS v(col0");
+        for (int c = 1; c < setColCount; c++)
+        {
+            sb.Append(", col");
+            sb.Append(c);
+        }
+        sb.Append(", col_pk) WHERE tgt.");
+        sb.Append(quotedPk);
+        sb.Append(" = v.col_pk");
+    }
+
+    /// <summary>UNNEST 形态的列参数名：<c>@u0…@u{列数}</c>。与 <c>@pN</c> 命名空间分离，
+    /// 避免与租户参数或既有占位符撞名。</summary>
+    internal static string UnnestColumnParameterName(int columnIndex)
+        => $"@u{columnIndex}";
 
     /// <summary>参数名合法性——必须以 @ 或 : 开头，其余仅含字母数字下划线（与三方言参数命名一致）。</summary>
     private static bool IsSafeParameterName(string? name)

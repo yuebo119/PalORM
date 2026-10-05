@@ -199,11 +199,13 @@ public sealed class BoundedQueryCache : IQueryCache
     private sealed class CacheEntry(object value, TimeSpan ttl)
     {
         public object Value { get; } = value;
-        // ITM-586：与 Resilience（ITM-538）同款已知取舍——UtcNow 墙钟受 NTP 回拨影响，
-        // 回拨仅延长条目存活（正确性中性：缓存多活≠错误数据，写路径会覆盖）。
-        // 换 Environment.TickCount64 需处理 49.7 天回绕，不值得为缓存 TTL 引入。
-        private DateTime ExpiresAt { get; } = DateTime.UtcNow.Add(ttl);
-        public bool IsExpired() => DateTime.UtcNow > ExpiresAt;
+        // A5（2026-10-01 全 API 逐项轮）：TTL 改单调时钟 Environment.TickCount64——原注释
+        // "需处理 49.7 天回绕"只对 int TickCount 成立；TickCount64 为 64 位毫秒、不回绕，
+        // 且消除 NTP 回拨下条目超期存活（墙钟回退时旧实现 IsExpired 读到更小 Now）。
+        // 命中路径同时省一次墙钟读取。ttl 为负时到期时刻落在过去、立即过期——与
+        // UtcNow.Add(负) 旧行为一致；TimeSpan.MaxValue 量级（约 9.2e14 ms）不溢出 long。
+        private long ExpiresAtTicks { get; } = Environment.TickCount64 + (long)ttl.TotalMilliseconds;
+        public bool IsExpired() => Environment.TickCount64 > ExpiresAtTicks;
     }
 }
 

@@ -49,7 +49,7 @@ internal static class Program
         // 地板行：手写臂的单行 SqlCommand（官方基准的 Baseline=true 项）
         BenchmarkReport? floor = reports.Find(static r =>
             ArmOf(r) == "HandCoded" && NameOf(r).Contains("SqlCommand", StringComparison.Ordinal));
-        double floorMean = floor?.ResultStatistics?.Mean ?? 0;
+        double floorMedian = floor?.ResultStatistics?.Median ?? 0;
         double healthRatio = floor?.ResultStatistics is { Mean: > 0 } st ? st.StandardDeviation / st.Mean : 0;
 
         var envelope = new PerfResultEnvelope
@@ -74,15 +74,18 @@ internal static class Program
             // NA 行（无连接/被跳过/失败）不该进结果库：0 均值会被读成"极快"
             if (r.ResultStatistics is not { Mean: > 0 } stats) continue;
             double mean = stats.Mean;
+            double median = stats.Median;
             envelope.Items.Add(new PerfResultItem
             {
                 Name = NameOf(r),
                 Dialect = Database.Dialect,
                 Arm = ArmOf(r),
                 Tier = Database.RowCount,
+                // 比值基数用中位数（2026-10-02，与 PerfHub 同口径）。
+                MedianUs = median / 1000.0,
                 MeanUs = mean / 1000.0,
                 AllocBytes = r.GcStats.GetBytesAllocatedPerOperation(r.BenchmarkCase) ?? 0,
-                Ratio = floorMean > 0 ? mean / floorMean : 0,
+                Ratio = floorMedian > 0 ? median / floorMedian : 0,
                 Note = "Dapper 官方套件移植"
             });
         }

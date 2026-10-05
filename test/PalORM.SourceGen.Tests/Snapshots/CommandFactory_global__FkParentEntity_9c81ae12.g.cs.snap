@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.2.1")]
 internal static class CommandFactory_global__FkParentEntity_9c81ae12
 {
 
@@ -16,8 +16,13 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
     internal static void BindInsertValues(global::System.Data.Common.DbParameter[] parameters, global::FkParentEntity entity, int paramOffset)
     {
-        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 0].Value = (object)entity.Name;
+    }
+
+    /// <summary>B21：建池后一次性写 INSERT 参数 DbType（配合 BindInsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitInsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+        parameters[paramOffset + 0].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>
@@ -40,6 +45,11 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
         parameters[paramOffset + 1].Value = (object)entity.Name;
     }
 
+    /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+    }
+
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
     internal static void BindUpdate(global::System.Data.Common.DbCommand cmd, global::FkParentEntity entity)
     {
@@ -54,10 +64,100 @@ internal static class CommandFactory_global__FkParentEntity_9c81ae12
         parameters[paramOffset + 1].Value = (object)entity.Id;
     }
 
+    /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
+    internal static void InitUpdateParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
+    {
+    }
+
     /// <summary>绑定主键到 DELETE 参数。</summary>
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
+    internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
+    {
+        long[] values = new long[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = global::System.Convert.ToInt64(keys[start + i]);
+        }
+        return values;
+    }
+
+    /// <summary>把实体区间逐列填入调用方预建的类型化数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpdateColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            string[] column0 = (string[])arrays[arrayOffset + 0];
+            long[] column1 = (long[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::FkParentEntity)entities[start + i];
+                column0[i] = entity.Name;
+                column1[i] = entity.Id;
+            }
+        }
+    }
+
+    /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
+    internal static global::System.Array[] CreateUpdateColumnArrays(int count)
+    {
+        return new global::System.Array[2]
+        {
+            new string[count],
+            new long[count],
+        };
+    }
+
+    /// <summary>把实体区间逐列填入 UPSERT 的预建数组（UNNEST 阶段 B 用）。</summary>
+    internal static void FillUpsertColumnArrays(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array[] arrays, int arrayOffset)
+    {
+        {
+            long[] column0 = (long[])arrays[arrayOffset + 0];
+            string[] column1 = (string[])arrays[arrayOffset + 1];
+            for (int i = 0; i < count; i++)
+            {
+                var entity = (global::FkParentEntity)entities[start + i];
+                column0[i] = entity.Id;
+                column1[i] = entity.Name;
+            }
+        }
+    }
+
+    /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
+    internal static global::System.Type[] UpsertColumnArrayElementTypes()
+    {
+        return new global::System.Type[2]
+        {
+            typeof(long),
+            typeof(string),
+        };
+    }
+
+    /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
+    internal static global::System.Array[] CreateUpsertColumnArrays(int count)
+    {
+        return new global::System.Array[2]
+        {
+            new long[count],
+            new string[count],
+        };
+    }
+
+    /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
+    internal static global::System.Type[] UpdateColumnArrayElementTypes()
+    {
+        return new global::System.Type[2]
+        {
+            typeof(string),
+            typeof(long),
+        };
     }
 
     internal static void SetId(global::FkParentEntity entity, long id)

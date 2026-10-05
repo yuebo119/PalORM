@@ -421,9 +421,12 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
         // 缓存数组：零分配且天然是安全快照。
         // 注意：分发仍在泵任务线程上同步执行（既有契约）——订阅者慢会阻塞后续通知，
         // 那是 A3 的改造面，涉及回调线程语义变更，未在本次落地。
-        // ITM-825：分发读单条目（委托与快照原子一致）
-        Delegate[] handlers = [.. Volatile.Read(ref _notificationState)?.Snapshot ?? []];
-        if (handlers.Length == 0)
+        // ITM-825：分发读单条目（委托与快照原子一致）。快照在 add/remove 的 CAS 发布后
+        // 不可变且从不原地修改，foreach 消费不需要所有权——直接遍历，零分配
+        // （B6 承诺的形态；此前此处的集合表达式 spread 会每通知复制一份新数组，
+        // 与注释矛盾，2026-10-04 全量复读发现后修正）。
+        Delegate[]? handlers = Volatile.Read(ref _notificationState)?.Snapshot;
+        if (handlers is not { Length: > 0 })
             return;
 
         var args = new PgNotificationEventArgs(channel, payload);

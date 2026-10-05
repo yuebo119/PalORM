@@ -53,6 +53,7 @@ bash scripts/dappersuite-run.sh pg
 | D8 | 官方 `Post` 无 ORM 标注（Dapper 靠约定映射） | `Post` 加 PalORM 标注（`[Table]`/`[Key]`/`[Column]`） | PalORM 是源生成器 ORM，需要编译期实体元数据；列形状与官方逐位一致 |
 | D9 | 官方基类在 `Setup` 打开一条连接、全过程复用 | PalORM 臂用公开工厂 `DataSession<TProvider>.CreateAsync` 在**范围入口建一次**、范围内服务全部操作、`CloseConnection` 释放 | README「创建会话」的最佳实践形态，也是编码规范 STD-ARCH-003（using-scoped 无状态、用完即弃）。"范围"就是一个基准类的 Setup→Cleanup，与官方的单连接复用同口径——若改成每操作新建，建连/建会话成本会混进 Ratio（`.ai/lessons.md` B76 记录的正是这一形态） |
 | D10 | —（官方只有 SQL Server，无此问题） | SQLite 的 `foreign_keys`/`journal_mode=WAL`/`synchronous`/`cache_size`/`mmap_size` **三臂同一组 PRAGMA** | PalORM 的 `SqliteProvider` 初始化会自动配这一组；只给 ORM 臂配、不给另两臂配，比较就从"ORM 层差异"变成"连接配置差异"。PRAGMA 清单与产品 `SqliteProvider.InitializeConnectionAsync` 逐条一致 |
+| D11 | —（官方只有 Dapper 臂，无此问题） | PalORM 臂的单键直查（本套件全部查询形状）用专用 `GetAsync`，非 `From<T>().Where(Id==x).First()` 链式 | step12 形态复核（2026-10-01）：产品 README 明确单键首选 `GetAsync`（SQL 常量缓存、单行直读、无构建器与列表物化），同口径探针实测链式多付约 +880B/-25~30% 耗时；对齐"各臂用自身最佳形态"的对照原则。`Query<T> (buffered)` 臂保持链式（过滤类提单行，链式是产品对应形态；`QueryFirst` 臂以 GetAsync + 空行抛异常保持同语义）。因该变更，PalORM 臂跨批数字在 2026-10-01 存在形态断点 |
 
 ## 4. 结果（2026-09-22，单机 AMD Ryzen 9 8945HX / .NET 11.0.0-rc.1 / BDN 0.16.0-develop）
 
