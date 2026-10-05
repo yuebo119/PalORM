@@ -57,11 +57,11 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.2.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.2.1" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.2.0" />
+<PackageReference Include="PalORM.MySql" Version="6.2.1" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.2.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.2.1" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。
