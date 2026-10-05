@@ -70,6 +70,15 @@ internal static class TableGen
             Console.Error.WriteLine(warning);
         }
 
+        // 数值哨兵（B148 配套，2026-10-03 教训：long/long 整数除法截断让分配百分比列全 0%，
+        // 三道防线全漏）：批量族各行对 ADO 分配差恒 0 时报错——ADO/PalORM 分配逐位相同的
+        // 概率可忽略，全 0 只可能是算式坏了（截断/漏算/取错字段）。
+        foreach (string warning in NumericSentinelWarnings(md.ToString()))
+        {
+            md.AppendLine(warning);
+            Console.Error.WriteLine(warning);
+        }
+
         if (string.IsNullOrEmpty(outPath))
         {
             Console.WriteLine(md.ToString());
@@ -117,6 +126,37 @@ internal static class TableGen
     {
         public int Expected;
         public int LastColumns;
+    }
+
+    /// <summary>数值哨兵（B148 配套）：表 2（批量处理）里"分配相对 ADO"末列全为 0% 即报错。
+    /// 该列由 long/long 相除得比值——若忘 `(double)` 转型，截断让商恒 0/1、delta 恒 0%，
+    /// 全列 `⚪ 0%`（实测：ADO 2.1KB/PalORM 3.0KB 明明差 +42% 却显示 0%）。ADO 与 PalORM
+    /// 的分配逐位相同的概率可忽略，全 0 只可能是算式坏（截断/漏算/取错字段），不是数据态。</summary>
+    private static List<string> NumericSentinelWarnings(string md)
+    {
+        var warnings = new List<string>();
+        bool inTable2 = false;
+        int zeroRows = 0, totalRows = 0;
+        foreach (string raw in md.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (line.StartsWith("**表 2", StringComparison.Ordinal)) inTable2 = true;
+            else if (line.StartsWith("**表 3", StringComparison.Ordinal)) break;
+            else if (inTable2 && line.StartsWith('|', StringComparison.Ordinal) && !line.StartsWith("|---", StringComparison.Ordinal)
+                && !line.StartsWith("| 操作", StringComparison.Ordinal))
+            {
+                totalRows++;
+                if (line.Contains("⚪ 0%", StringComparison.Ordinal)) zeroRows++;
+            }
+        }
+
+        if (totalRows >= 4 && zeroRows == totalRows)
+        {
+            warnings.Add($"[TableGen] 数值哨兵：表 2 的 {totalRows} 行分配相对 ADO 全为 0%——"
+                + "ADO/PalORM 分配逐位相同的概率可忽略，疑似比值算式坏了（B148：long/long 整数除法截断）");
+        }
+
+        return warnings;
     }
 
     private static void OnTableLine(List<string> warnings, string[] lines, int i, string line, TableScanState state)
