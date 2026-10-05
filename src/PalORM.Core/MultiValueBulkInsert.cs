@@ -255,7 +255,7 @@ public static class MultiValueBulkInsert
                     // 迭代，裁剪后不会再回满批）。原实现末批 Clear + 逐行 binder 重建 R×cols 个
                     // 参数对象。满批间 needed == Count，循环零进入。
                     int neededParameters = batchLength * columnCount;
-                    // PARAM-REUSE-OK[pool] 裁剪只移除池尾实例，保留的前缀实例不变（valuesBinder 只改其 Value）
+                    // PARAM-REUSE-OK[pool:paramPool] 裁剪只移除池尾实例，保留的前缀实例不变（valuesBinder 只改其 Value）
                     for (int i = batchCmd.Parameters.Count - 1; i >= neededParameters; i--)
                         batchCmd.Parameters.RemoveAt(i);
                     // valuesBinder 只改 Value，不 Clear/Add

@@ -55,12 +55,17 @@ foreach (string file in Directory
         // 向上回看 20 行找标记（标记写在调用点或所在分支的注释里）
         int windowStart = Math.Max(0, i - 20);
         string? marker = null;
+        string markerCode = "";
+        string markerIdent = "";
         for (int k = i; k >= windowStart; k--)
         {
-            var m = Regex.Match(lines[k], @"PARAM-REUSE-OK\[(?<code>[a-z-]+)\]\s*(?<why>.+)$");
+            var m = Regex.Match(lines[k],
+                @"PARAM-REUSE-OK\[(?<code>[a-z-]+)(?::(?<ident>[A-Za-z_][A-Za-z0-9_]*))?\]\s*(?<why>.+)$");
             if (m.Success)
             {
-                marker = $"{m.Groups["code"].Value}: {m.Groups["why"].Value.Trim()}";
+                markerCode = m.Groups["code"].Value;
+                markerIdent = m.Groups["ident"].Value;
+                marker = $"{markerCode}{(markerIdent.Length > 0 ? ":" + markerIdent : "")}: {m.Groups["why"].Value.Trim()}";
                 break;
             }
         }
@@ -68,6 +73,63 @@ foreach (string file in Directory
         if (marker is null)
         {
             violations.Add(callSite);
+            continue;
+        }
+
+        // 反向启发式（2026-10-05 审计）：标记制只能保证"已声明"，不能保证"声明为真"——
+        // 我自己的假 pool 标记就是这么骗过门禁的（局部事实"scratch→cmd 同一实例"为真，
+        // 整体结论"跨批复用安全"为假，掩盖了 PG 上第 3 批重发上一批键的静默错删）。
+        // 故把"安全性断言"改成**可证伪**的形式：
+        //   pool:<ident> —— 必须点名池标识符；门禁核该标识符在文件中确有参数数组来源
+        //                    （`DbParameter[] <ident>` 形参/字段，或 `<ident> = new DbParameter[`
+        //                    / `CreateParameterArray(...)` / `CreateParameterPool(...)` 赋值）。
+        //                    写不出合法 ident 就说明参数其实是新对象，断言不成立。
+        //   carrier      —— 断言"该命令从不执行"；门禁核同文件对该命令变量无任何 Execute 调用。
+        string? forged = null;
+        if (markerCode == "pool")
+        {
+            if (markerIdent.Length == 0)
+            {
+                forged = "pool 断言必须点名池标识符（PARAM-REUSE-OK[pool:<池变量名>]），"
+                    + "否则无法核验参数确实来自预建池";
+            }
+            else
+            {
+                var poolSource = new Regex(
+                    $@"DbParameter\[\]\??\s+{Regex.Escape(markerIdent)}\b"
+                    + $@"|{Regex.Escape(markerIdent)}\s*=\s*(new\s+DbParameter\["
+                    + @"|[\w.]*CreateParameterArray\(|[\w.]*CreateParameterPool\()");
+                int sourceLine = Array.FindIndex(lines, poolSource.IsMatch);
+                if (sourceLine < 0)
+                {
+                    forged = $"pool:{markerIdent} 断言参数来自预建池，但全文件未找到 "
+                        + $"'{markerIdent}' 的参数数组来源（DbParameter[] 形参/字段或 "
+                        + "new DbParameter[] / CreateParameterArray / CreateParameterPool 赋值）";
+                }
+            }
+        }
+        else if (markerCode == "carrier")
+        {
+            System.Text.RegularExpressions.Match nameMatch = Regex.Match(line, @"(?<cmd>[A-Za-z_][A-Za-z0-9_]*)\.Parameters\.");
+            if (nameMatch.Success)
+            {
+                string cmdName = nameMatch.Groups["cmd"].Value;
+                var execute = new Regex($@"\b{Regex.Escape(cmdName)}\.Execute[A-Za-z]*\(");
+                for (int k = 0; k < lines.Length; k++)
+                {
+                    if (execute.IsMatch(lines[k]))
+                    {
+                        forged = $"carrier 断言「该命令从不执行」，但第 {k + 1} 行有执行调用："
+                            + $"{lines[k].Trim()}";
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (forged is not null)
+        {
+            violations.Add($"{callSite}\n      ★断言与事实矛盾：{forged}\n      声明: {marker}");
         }
         else
         {
