@@ -113,6 +113,21 @@ internal static class PerfEntry
     /// 统一报告的跨夹具登记会显示其最后批次时间，超期即可见。</param>
     public static int Full(string[] options)
     {
+        // B135（2026-10-04 实录）：full 是 20 分钟级的昂贵动作，曾把 `full --help` 的 --help
+        // 当未知参数静默忽略直接开跑全量。未知参数一律响亮拒绝（含 -h/--help 输出用法），
+        // 防拼错参数名（如 --with-dappersuit）被静默降级成默认全量。
+        string[] known = ["--with-dappersuite", "-h", "--help"];
+        string[] unknown = options is null
+            ? []
+            : [.. options.Where(o => !known.Contains(o, StringComparer.Ordinal))];
+        if (unknown.Length > 0)
+        {
+            Perf.Out("full：未知参数 " + string.Join(' ', unknown));
+            return Usage();
+        }
+        if (options is not null && (Array.IndexOf(options, "-h") >= 0 || Array.IndexOf(options, "--help") >= 0))
+            return Usage();
+
         bool withDapperSuite = options is not null && Array.IndexOf(options, "--with-dappersuite") >= 0;
         var root = Perf.RepoRoot();
         Perf.ClearSteps();
