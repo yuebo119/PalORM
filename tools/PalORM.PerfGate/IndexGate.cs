@@ -434,6 +434,21 @@ internal static class IndexGate
     {
         PerfResultEnvelope? sentinel = latest.Find(static r => r.Harness == "dappersuite");
         if (sentinel is null) return;
+        // B123-③ 机械化（2026-10-05）：哨兵新鲜度巡检——dappersuite 哨兵批早于本结果库最新
+        // PerfHub 批（本次扫描已有更新结果而哨兵没跟上）即提示登记步骤可能静默空跑。
+        // d855b65 修引号过滤缺陷时，唯一旁证就是哨兵停在 09-29 旧批；人工核对时间戳不可靠，
+        // 在门禁输出面机械化为每次必打印的告警（时间戳为 "yyyy-MM-dd HH:mm:ss zzz" 定长格式，
+        // 序数比较即时间序）。触发路径验证：历史状态回放（哨兵 09-29 vs 批 10-01 时必触发）。
+        PerfResultEnvelope? newestPerfHub = latest
+            .Where(static r => r.Harness.Equals("perfhub", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(static r => r.Timestamp, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (newestPerfHub is not null
+            && string.CompareOrdinal(sentinel.Timestamp, newestPerfHub.Timestamp) < 0)
+        {
+            Console.WriteLine($"[PerfGate] ⚠ 哨兵批次陈旧：DapperSuite {sentinel.Timestamp} 早于本库最新 "
+                + $"PerfHub 批（{newestPerfHub.Timestamp}）——登记步骤可能静默空跑（B123-③），核对该步骤信封更新时间");
+        }
         List<PerfResultItem> palorm = [.. sentinel.Items.Where(static i =>
             i.Arm.Equals("PalORM", StringComparison.OrdinalIgnoreCase) && i.Ratio > 0)];
         if (palorm.Count == 0) return;
