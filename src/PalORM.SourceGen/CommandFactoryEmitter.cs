@@ -462,7 +462,10 @@ internal static class CommandFactoryEmitter
         var col = pkCols[0];
         // 元素值表达式与 BindDelete 同一真源。此处要的是**元素级 provider 值**，
         // 故取 cast 而非 BindDelete 的 (object) 装箱形态。
-        string castExpr = BuildKeyCastExpression(col, "keys[start + i]");
+        // P1（2026-10-05 审计复现）：默认分支的 Convert.ChangeType 静态返回 object——数组元素
+        // 赋值 `values[i] = <object>` 对 decimal/DateTime/enum 等主键是 CS0266（构建中断，
+        // 单值 binder 因包了 (object) 不受影响）。故数组路径显式要求目标类型定型。
+        string castExpr = BuildKeyCastExpression(col, "keys[start + i]", requireElementType: true);
         string elementType = NormalizeClrType(
             col.ConverterTypeName is null ? col.ClrTypeName : col.ProviderClrTypeName);
         string elementValue = col.ConverterTypeName is null
@@ -486,7 +489,7 @@ internal static class CommandFactoryEmitter
     /// byte 等装箱为 object，直接 <c>(long)key</c> 在 key 是 int 时抛 InvalidCastException。
     /// int/byte 等装箱类型可经 Convert 自动转换，代价仅几 ns。Converter 列同样归一化
     ///（627：先归一到 CLR 侧类型再交 ToProvider）；非基元类型保持类型化 cast。</para></summary>
-    private static string BuildKeyCastExpression(ColumnModel col, string keyExpr)
+    private static string BuildKeyCastExpression(ColumnModel col, string keyExpr, bool requireElementType = false)
         => NormalizeClrType(col.ClrTypeName) switch
         {
             "long" or "global::System.Int64" => $"global::System.Convert.ToInt64({keyExpr})",
@@ -500,7 +503,12 @@ internal static class CommandFactoryEmitter
             // 此前原样装箱（(object)key）与 int/long 的归一处理不对称，异型 key 靠驱动隐式转换。
             // 同型装箱值 ChangeType 直返，行为不变。Converter 列保持原类型化 cast（先归一到 CLR 侧）。
             _ when col.ConverterTypeName is not null => $"(({col.ClrTypeName}){keyExpr})",
-            _ => $"global::System.Convert.ChangeType({keyExpr}, typeof({col.ClrTypeName}), global::System.Globalization.CultureInfo.InvariantCulture)"
+            // requireElementType：数组路径（元素赋值给 T[]）必须定型——ChangeType 静态返回 object，
+            // 不加转换就是 CS0266（decimal/DateTime/enum 等主键整实体构建中断，2026-10-05 审计复现）。
+            // 单值路径（写入参数 Value）由调用方包 (object)，故默认 false 保持原形态。
+            _ => requireElementType
+                ? $"(({NormalizeClrType(col.ClrTypeName)})global::System.Convert.ChangeType({keyExpr}, typeof({col.ClrTypeName}), global::System.Globalization.CultureInfo.InvariantCulture))"
+                : $"global::System.Convert.ChangeType({keyExpr}, typeof({col.ClrTypeName}), global::System.Globalization.CultureInfo.InvariantCulture)"
         };
 
     private static void GenerateHasDefaultKeyBody(TableModel model, StringBuilder sb)

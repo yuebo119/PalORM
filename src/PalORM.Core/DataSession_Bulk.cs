@@ -136,7 +136,13 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>IN 占位符形态的批量删除主体（UNNEST-1 之前的既有路径）——语句文本随批长度变化，
-    /// 只在与上批不同时重建；末批通常更短，故 <paramref name="batchSize"/> 相同的中间批共用文本。</summary>
+    /// 只在与上批不同时重建；末批通常更短，故批大小相同的中间批共用同一份语句文本。
+    /// <para><b>目标命令每批新建</b>（2026-10-05 审计修正）：B4（2026-10-01）曾把命令改为跨批复用 +
+    /// 每批 <c>Parameters.Clear()</c> 后重加——但重加的是生成绑定器 per-key 新建的参数实例，
+    /// 正是 R-UNNESTB 变体 C 的形态：PG auto-prepare 下第 3 个等长批会重发第 2 批的键（静默少删）。
+    /// 该形态无法用"预建池 + 只改 Value"消除（生成器只发射 <c>BindDelete(cmd, key)</c>，
+    /// 没有键值写入器），故回到每批新建命令的形态：代价是每批一次命令创建，
+    /// 换来与 v6.2.0 一致的、可证明正确的执行形态。语句文本仍跨批记忆化。</para></summary>
     private async Task<long> ExecuteInFormDeleteAsync<T>(
         DbTransaction? tran,
         Action<DbCommand, object> bindKey,
@@ -151,26 +157,24 @@ public partial class DataSession<TProvider>
         // 仍执行 Restore+事务释放；await using 覆盖批间清理。
         // R10：scratch 跨批次复用（对齐 MultiValueBulkInsert rowCommand 模式）。
         await using DbCommand scratch = CreateCommand();
-        // B4（2026-10-01 全 API 逐项轮）：目标命令同样跨批复用——原实现每批
-        // CreateCommand + Dispose（SQLite 20K 键 21 个命令、PG/MySQL 5 个）；
-        // 批间 Clear 参数集合后重新转移，命令随作用域释放。
-        await using DbCommand cmd = CreateCommand();
-        cmd.Transaction = tran;
 
         // 语句文本在批大小不变时逐位相同，末批不同——只在变化时重建
         int lastBatchLength = -1;
+        string? lastBatchSql = null;
         long total = 0;
         for (int start = 0; start < keys.Count; start += batchSize)
         {
             int batchLen = Math.Min(batchSize, keys.Count - start);
-            // PARAM-REUSE-OK[pool] 下方转移的是 scratch 参数池中的同一实例（改名后 Add），非新实例
-            cmd.Parameters.Clear();
-
             if (batchLen != lastBatchLength)
             {
-                cmd.CommandText = BuildBulkDeleteSql(batchLen, identifiers, isSoftDelete);
+                lastBatchSql = BuildBulkDeleteSql(batchLen, identifiers, isSoftDelete);
                 lastBatchLength = batchLen;
             }
+
+            // PARAM-REUSE-OK[fresh] 命令每批新建（不跨执行复用）——见方法级 2026-10-05 审计说明
+            await using DbCommand cmd = CreateCommand();
+            cmd.Transaction = tran;
+            cmd.CommandText = lastBatchSql!;
             BindInFormParameters<T>(cmd, scratch, bindKey, keys, start, batchLen);
             BindDefaultFilterParameters<T>(cmd);
 
@@ -1166,7 +1170,7 @@ public partial class DataSession<TProvider>
     {
         int required = rowParamCount + tenantParams;
         if (cmd.Parameters.Count == required) return;
-        // PARAM-REUSE-OK[pool] 重挂的是参数池中的同一实例（非新对象），批间只改 Value
+        // PARAM-REUSE-OK[pool:pool] 重挂的是参数池中的同一实例（非新对象），批间只改 Value
         cmd.Parameters.Clear();
         for (int i = 0; i < rowParamCount; i++)
             cmd.Parameters.Add(pool[i]);
