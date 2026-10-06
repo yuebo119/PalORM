@@ -921,19 +921,28 @@ public sealed partial class DataSession<TProvider>
         // v4.1 性能优化：Upsert SQL 预构建为编译期 const，消除运行时 LINQ + string.Join 拼接
         // r19/ITM-703：state 快照贯穿（Insert/Update/Delete 同口径）
         CommandSqlSet sqls = GetCommandSqls<T>(state);
+        // 租户护栏（2026-10-06）：带租户会话的冲突更新只改本租户行——守卫 SQL 与 @__tenant0
+        // 绑定在此收口（UpdateCoreAsync 租户包装的对称面，10-05 审计 P2）
+        bool tenantGuarded = HasTenantFilter<T>();
+        if (tenantGuarded)
+            BindDefaultFilterParameters<T>(cmd);
 
         return TProvider.SupportsReturningClause
-            ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, ct).ConfigureAwait(false)
-            : await UpsertWithMySqlAsync(cmd, sqls, state, entity, ct).ConfigureAwait(false);
+            ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, tenantGuarded, ct).ConfigureAwait(false)
+            : await UpsertWithMySqlAsync(cmd, sqls, state, entity, tenantGuarded, ct).ConfigureAwait(false);
     }
 
     /// <summary>PG/SQLite UPSERT--ON CONFLICT ... DO UPDATE/NOTHING + RETURNING 物化完整行。
-    /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertReturning），消除运行时拼接。</summary>
+    /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertReturning），消除运行时拼接。
+    /// 租户护栏（2026-10-06）：tenantGuarded 时经 <see cref="DataSession{TProvider}.UpsertTenantGuardedSql"/>
+    /// 在 RETURNING 前插 WHERE 租户条件（冲突不命中=0 行=静默跳过，返回实体回显）。</summary>
     private static async ValueTask<T> UpsertWithReturningAsync<T>(
-        DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, CancellationToken ct)
+        DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, bool tenantGuarded, CancellationToken ct)
         where T : class, new()
     {
-        cmd.CommandText = sqls.UpsertReturning;
+        cmd.CommandText = tenantGuarded
+            ? UpsertTenantGuardedSql<T>(sqls.UpsertReturning)
+            : sqls.UpsertReturning;
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
             return ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
@@ -942,12 +951,13 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>MySQL UPSERT--ON DUPLICATE KEY UPDATE，自增键用 LAST_INSERT_ID(expr) 回填。
     /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertMySql）。
+    /// 租户护栏（2026-10-06）：tenantGuarded 时逐赋值项包 IF(tenant_id = @p, …)（ODKU 无 WHERE）。
     /// ITM-725(r20)：<paramref name="state"/> 是调用方捕获的注册表快照（SaveCoreAsync:360），
     /// 本方法此前直读 live <c>PalORM_Runtime.CurrentState</c>——Register/热重载窗口内会出现
     /// "SQL 元数据来自快照 N、自增回填委托来自版本 N+1"的混用，破坏同文件自称的"单快照贯穿"纪律。</summary>
     private static async ValueTask<T> UpsertWithMySqlAsync<T>(
         DbCommand cmd, CommandSqlSet sqls, PalORM_Runtime.RuntimeRegistryState state,
-        T entity, CancellationToken ct)
+        T entity, bool tenantGuarded, CancellationToken ct)
         where T : class, new()
     {
         if (TProvider.Dialect != SqlDialect.MySql)
@@ -955,7 +965,9 @@ public sealed partial class DataSession<TProvider>
                 $"Provider '{TProvider.Name}' does not support RETURNING and has no upsert strategy; " +
                 "only the MySQL dialect fallback (ON DUPLICATE KEY UPDATE) is implemented.");
 
-        cmd.CommandText = sqls.UpsertMySql;
+        cmd.CommandText = tenantGuarded
+            ? UpsertTenantGuardedSql<T>(sqls.UpsertMySql)
+            : sqls.UpsertMySql;
 
         if (!state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? setId))
         {
