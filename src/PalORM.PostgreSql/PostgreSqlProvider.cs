@@ -278,8 +278,7 @@ public sealed class PostgreSqlProvider : IDbProvider
             return null;  // 不支持的 CLR 元素类型：调用方回退 IN 占位符形态
         }
 
-        var parameter = new NpgsqlParameter(name, values) { NpgsqlDbType = element };
-        parameter.NpgsqlDbType = NpgsqlDbType.Array | element;
+        var parameter = new NpgsqlParameter(name, values) { NpgsqlDbType = NpgsqlDbType.Array | element };
         return parameter;
     }
 
@@ -353,11 +352,13 @@ public sealed class PostgreSqlProvider : IDbProvider
         //（PROV-010：守卫收敛至 BulkOperationFramework.EnsureInsertMetadata 单一实现点）
         // tableName 弃元：B3 起 COPY 目标的引用形态由 GetQuotedInsertTarget 缓存提供
         (CrudMetadata metadata, _) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
-        if (entities.Count == 0) return 0;
-
+        // 连接类型守卫同口径（2026-10-06，10-05 审计 P3）：契约校验先于空列表短路——
+        // 原顺序下空列表 + 非 Npgsql 连接静默返 0、非空则抛，同参数形态结果不对称
+        //（ITM-740 MySQL 包装事务守卫的同构修复）
         if (conn is not NpgsqlConnection npgsqlConnection)
             throw new ArgumentException(
                 "PostgreSqlProvider.BulkInsertAsync requires an NpgsqlConnection.", nameof(conn));
+        if (entities.Count == 0) return 0;
 
         Action<DbCommand, object, int> binder = metadata.BindInsert;
         int columnCount = metadata.InsertColumns.Count;

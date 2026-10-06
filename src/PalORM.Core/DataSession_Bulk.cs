@@ -956,6 +956,11 @@ public partial class DataSession<TProvider>
         CrudMetadata metadata, out IReadOnlyList<Type>? arrayElementTypes)
     {
         arrayElementTypes = null;
+        // 方言前置（2026-10-06，10-05 审计 P3）：UNNEST 是 PG 专有语法（BatchUpdateSqlBuilder
+        // 的 usesUnnestArrays 同判定），能力检测与 SQL 构造必须结构同源——否则非 PG 方言的
+        // 第三方 Provider 实现数组能力时会绑 @u* 数组参数却得到 VALUES 形态 SQL（参数错位）
+        if (TProvider.Dialect != SqlDialect.PostgreSql)
+            return false;
         if (metadata.FillUpdateColumnArrays is null
             || metadata.CreateUpdateColumnArrays is null
             || metadata.UpdateColumnArrayElementTypes is not { Count: > 0 } elementTypes)
@@ -1451,6 +1456,9 @@ public partial class DataSession<TProvider>
         CrudMetadata metadata, out IReadOnlyList<Type>? arrayElementTypes)
     {
         arrayElementTypes = null;
+        // 方言前置（同 UseUnnestArraysForUpdate：UNNEST 语法 PG 专有，能力检测与 SQL 构造同源）
+        if (TProvider.Dialect != SqlDialect.PostgreSql)
+            return false;
         if (metadata.FillUpsertColumnArrays is null
             || metadata.CreateUpsertColumnArrays is null
             || metadata.UpsertColumnArrayElementTypes is not { Count: > 0 } elementTypes)

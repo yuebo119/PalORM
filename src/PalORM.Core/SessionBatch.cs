@@ -179,21 +179,35 @@ public sealed class SessionBatch<TProvider> : IDisposable
         List<(string Sql, FormattableString? Values)> statements,
         DbConnection connection, DbTransaction? transaction, CancellationToken ct)
     {
-        int total = 0;
-        await using DbCommand cmd = connection.CreateCommand();
-        cmd.Transaction = transaction;
-        cmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
-        foreach ((string sql, FormattableString? values) in statements)
+        // 命令复用仅限 SQLite（L37 优化的适用面）：本回退路径对已知方言只有 SQLite 可达；
+        // 未知方言（第三方 Provider + 无 DbBatch）的驱动可能有语句缓存（auto-prepare 族），
+        // 复用命令 + Clear 换新参数实例是 R-UNNESTB 静默错值形态——逐条新建命令免疫。
+        // （2026-10-06，10-05 审计 P3 边界收口）
+        bool reuseSafe = TProvider.Dialect == SqlDialect.Sqlite;
+        DbCommand? shared = reuseSafe ? connection.CreateCommand() : null;
+        try
         {
-            if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
-                cmd.CommandText = sql;
-            // PARAM-REUSE-OK[nodbbatch] 本方法仅在驱动无 DbBatch 时可达（探针实测 Npgsql/MySQL 均
-            // 支持 DbBatch → PG/MySQL 走真 DbBatch 路径）；SQLite 无 auto-prepare 行为，无此缺陷面
-            cmd.Parameters.Clear();
-            AddParameters(cmd.Parameters, values);
-            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            int total = 0;
+            foreach ((string sql, FormattableString? values) in statements)
+            {
+                await using DbCommand cmd = shared ?? connection.CreateCommand();
+                cmd.Transaction = transaction;
+                cmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
+                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
+                    cmd.CommandText = sql;
+                // PARAM-REUSE-OK[nodbbatch] shared 仅 SQLite 方言可达（无 auto-prepare 行为）；
+                // 非 SQLite 走逐条新建命令（cmd 每条新实例，无复用面）
+                cmd.Parameters.Clear();
+                AddParameters(cmd.Parameters, values);
+                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            return total;
         }
-        return total;
+        finally
+        {
+            if (shared is not null)
+                await shared.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private static DbBatch? TryCreateBatch(DbConnection connection, DbTransaction? transaction)
