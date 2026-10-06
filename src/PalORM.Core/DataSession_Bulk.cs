@@ -1485,6 +1485,16 @@ public partial class DataSession<TProvider>
         Action<IReadOnlyList<object>, int, int, Array[], int> fillArrays = metadata.FillUpsertColumnArrays!;
         Func<int, Array[]> createArrays = metadata.CreateUpsertColumnArrays!;
         int columnCount = arrayElementTypes.Count;
+        // 契约断言（2026-10-06，镜像 UPDATE 侧哨兵/ExecuteBulkUpdateArrayBatchesAsync）：生成物的
+        // 数组列序 = UpsertColumns 全集，与数组形态 SQL 的 UNNEST(@u0…) 参数个数及 INSERT 列清单
+        // 逐位对应。不符即生成器与 Core 漂移——明确抛错而非静默错绑（哨兵范式同 UPDATE 侧）。
+        if (columnCount != metadata.UpsertColumns.Count)
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}': UNNEST array form expects {metadata.UpsertColumns.Count} column arrays "
+                + $"(upsert columns) but the generated filler provides {columnCount}. "
+                + "The generator and batch upsert SQL disagree; recompile the model assembly.");
+        }
         // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。批宽取 MaxRowsPerBatch：
         // 既有 PG upsert 的 1000 行上限理由是"参数池按最大批建、行×列个参数对象"——
         // 数组形态的成本结构不同（每列一个数组，元素总量 = 行×列但无参数对象），不适用该约束。
