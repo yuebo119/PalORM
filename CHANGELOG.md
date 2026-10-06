@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+### 🐛 缺陷修复：PG 并发迁移竞态穿透（2026-10-06）
+
+- `IsDuplicateSchemaObject` 补 **42P07**（duplicate_table/duplicate_object）盲区：并发 `MigrateAsync` 时 CREATE TABLE IF NOT EXISTS 的存在性检查与目录插入非原子，竞态败者此前只接得住 23505（pg_type/pg_class 目录索引），PG 17 上主形态 42P07 直接穿透逐条幂等兜底（CI 空库 + 跨类并行确定性复现）。修复后建表批兜底与索引幂等跳过两面同时识别三形态（23505×2 + 42P07）。
+- 回归装置 MigrationRaceHarnessTests（自包含）：CREATE DATABASE 造空库 → 6 路并发迁移 → 断言零异常；修复前 5/5 复现、修复后 5/5 绿。
+- 诊断链：V601 探针双假设实验排除"22001→池残留"归因（H-A 50 轮零复现），42P07 竞态实验证实（H-B）；会话级 advisory lock 方案三 failure mode 后回退废弃（GET_LOCK 装箱匹配/锁饥饿/未解释 42P01），最小匹配面修复取代。
+
 ### 🐛 缺陷修复：并行读作用域全读家族接入读路由（2026-10-06，10-05 审计 P1 收口）
 
 - `ForParallelReads()` 作用域内 GetAllAsync/CountAsync/聚合（Sum/Max/Min/Avg）/ScalarAsync/原始 SQL 默认路径此前仍用主连接建命令——并发读在主连接开第二个 reader，PG 上 Npgsql 抛 "already open DataReader"。现统一走 `CreateReadRoutedCommandAsync`：作用域内从作用域池取独立连接（租约释放归还），事务活动期走主连接（事务归属不变），作用域外行为逐位一致（无 replica opt-in 仍走主连接）。
