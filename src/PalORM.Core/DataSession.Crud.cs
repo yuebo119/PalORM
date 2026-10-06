@@ -824,7 +824,8 @@ public sealed partial class DataSession<TProvider>
         // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略
         return await ExecuteReadPipelineAsync(async token =>
         {
-            await using DbCommand cmd = CreateCommand();
+            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, token).ConfigureAwait(false);
+            DbCommand cmd = lease.Command;
             // N5（2026-10-04 全量复读）：完整 SQL 走 (Type, Dialect, 过滤形态) 缓存——
             // 原每次调用 1 次 QuoteIdentifier + 全句插值；GetByKeySql/CountComposed 同款模式。
             // 过滤形态在实例侧求值后传入（ignoreFilters/租户是会话态）。
