@@ -36,9 +36,11 @@ public static class IdentifierSafety
             // 驱动 C 层解析行为同样不稳。当前调用点全编译期常量，威胁面接近 0，防御性扩展。
             if (IsControlChar(ch))
             {
-                // r19/R-P3-03：M5 string.Format → 插值（string.Create 保持文化安全，S6618）
+                // r19/R-P3-03：M5 string.format → 插值（string.Create 保持文化安全，S6618）。
+                // ITM-901（r24）：消息改英文对齐全库异常口径（原中文消息是全库唯一，
+                // 影响英文关键词检索与日志聚合一致性）。
                 string message = string.Create(CultureInfo.InvariantCulture,
-                    $"标识符包含控制字符 U+{(int)ch:X4}——驱动/服务端 C 层解析行为不稳（NUL 截断 / 换行穿透引号定界等）。拒绝以保安全。");
+                    $"Identifier contains control character U+{(int)ch:X4} — driver/server C-layer parsing is unstable around control characters (NUL truncation, newline escaping quote delimiters, etc.). Rejected for safety.");
                 throw new ArgumentException(message, nameof(identifier));
             }
         }

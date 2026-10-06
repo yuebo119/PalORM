@@ -344,7 +344,11 @@ public sealed partial class DataSession<TProvider>
     /// 提交后的收尾动作（如 ITM-556 的 version 批量回填）应在内核返回后执行——仅成功路径可达。</para>
     /// <para><see cref="QueryBuilderExtensions.ToPageAsync"/> 有意不走本内核：其自开事务需
     /// honoring 会话隔离级别并经 PublishTransaction 登记（r9-S2/ITM-649），机制不同，
-    /// 强行统一需策略参数化反而劣化可读性。</para></summary>
+    /// 强行统一需策略参数化反而劣化可读性。</para>
+    /// <para><b>ITM-905 登记（r24）</b>：本内核成功与异常路径均不调 DisposeTransactionResourcesAsync
+    /// （WithTransaction 双路径都调）——当前 RegisterTransactionResource 全仓零调用方，
+    /// 无触发路径；未来接入调用方时必须同步本内核的两路径释放，否则资源泄漏只等
+    /// ExitTransactionFlow 置 null 丢弃或会话 Dispose 兜底。</para></summary>
     private async ValueTask<T> RunInTransactionScopeAsync<T>(
         object? operationOwner,
         Func<DbTransaction, CancellationToken, Task<T>> work,

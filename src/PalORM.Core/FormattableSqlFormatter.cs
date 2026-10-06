@@ -71,6 +71,10 @@ internal static class FormattableSqlFormatter
         // ITM-546：SQL 字符串字面量跟踪——@pN 落在 '...' 内是用户数据（'a@p1.com'/'%@p2%'），
         // 必须原样透传；只有引号外的裸 @pN 才是手写占位符（T9/P2-44 拦截对象）。
         bool inStringLiteral = false;
+        // ITM-902（r24）：PG 双引号引用标识符跟踪——"@p1col" 是合法列名，其中 @pN 文本
+        // 不是手写占位符。MySQL 默认 sql_mode 下 "..." 虽是字符串字面量，但字面量内容同属
+        // 用户数据——两种方言语义下拦截决策一致（双引号内不拦）。
+        bool inQuotedIdentifier = false;
         try
         {
             for (int index = 0; index < format.Length; index++)
@@ -86,6 +90,21 @@ internal static class FormattableSqlFormatter
                     }
 
                     inStringLiteral = !inStringLiteral;
+                    sb.Append(current);
+                    continue;
+                }
+
+                // ITM-902：双引号状态跟踪（"" 续写同单引号逻辑）
+                if (current == '"')
+                {
+                    if (inQuotedIdentifier && index + 1 < format.Length && format[index + 1] == '"')
+                    {
+                        sb.Append("\"\"");
+                        index++;
+                        continue;
+                    }
+
+                    inQuotedIdentifier = !inQuotedIdentifier;
                     sb.Append(current);
                     continue;
                 }
@@ -114,7 +133,7 @@ internal static class FormattableSqlFormatter
                     // （ParameterNameCache 生成物）——手写字面量占位符在 PG 上得驱动
                     // "there is no parameter $1"响亮失败，在 Microsoft.Data.Sqlite 上却按未绑定
                     // NULL 静默返回空集（实测复现），同一错输入两方言两形态，故在此统一拦掉。
-                    if (current == '@' && !inStringLiteral && index + 2 < format.Length
+                    if (current == '@' && !inStringLiteral && !inQuotedIdentifier && index + 2 < format.Length
                         && format[index + 1] == 'p' && char.IsAsciiDigit(format[index + 2]))
                         throw new InvalidOperationException(
                             $"Formattable SQL contains the literal text '@p…' at position {index}, " +
