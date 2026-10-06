@@ -46,6 +46,11 @@ internal static class DataSessionCache
     /// <summary>per-(Type, Dialect) 缓存 DeleteAsync 物理路径的 sqls.Delete + 租户后缀（M1，v5.6.0）。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> DeleteWithTenantSqlCache = new();
 
+    /// <summary>租户护栏（2026-10-06）：per-(Type, Dialect) 缓存 UPSERT 冲突子句 + 租户守卫——
+    /// PG/SQLite 在 RETURNING 前插 WHERE，MySQL 逐赋值项包 IF。供 UpsertWithReturningAsync/
+    /// UpsertWithMySqlAsync 消费（SaveCoreAsync 单行 upsert 面）。</summary>
+    internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> UpsertTenantGuardedSqlCache = new();
+
     /// <summary>per-(Type, Dialect) 缓存 COUNT 基础句（<c>SELECT COUNT(*) FROM "t"</c>）——PERF-002，
     /// 2026-09-23：基底恒定、仅条件可变，原先每次 CountAsync 付一次 QuoteIdentifier + 插值。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> CountBaseSqlCache = new();

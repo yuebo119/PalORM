@@ -762,6 +762,61 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return fragment;
     }
 
+    /// <summary>租户护栏 WHERE 片段：" WHERE {限定租户列} = @__tenant0"——供批量 UPSERT 的
+    /// 冲突子句后追加（调用方传表名限定引用，PG 下裸列名对 excluded 关系歧义）。</summary>
+    private static string GetUpsertTenantWhereFragment(string qualifiedTenantColumn, string tenantParameterName)
+        => $" WHERE {qualifiedTenantColumn} = {tenantParameterName}";
+
+    /// <summary>UPSERT 冲突更新的租户护栏（2026-10-06，10-05 审计 P2 收口）：带租户会话的
+    /// SaveAsync/BulkMerge 冲突更新只允许改写本租户的行，与 UpdateAsync 的租户条件对称。
+    /// 路由：PG/SQLite 在 RETURNING 子句前插 WHERE（冲突不命中=0 行受影响，静默跳过）；
+    /// MySQL ODKU 无 WHERE，把每个赋值项包 IF(...)（IF 短路求值，租户不符时
+    /// VALUES(col)/LAST_INSERT_ID(col) 分支不求值，行为=静默跳过）。per-(Type, Dialect) 缓存。
+    /// <para><b>表名限定</b>：INSERT 列清单含 tenant_id，PG 的 DO UPDATE 中裸列名对目标表与
+    /// excluded 关系歧义（42702 实测）——守卫条件必须以表名限定（42702 修复实测）。</para></summary>
+    private static string UpsertTenantGuardedSql<T>(string baseSql) where T : class, new()
+    {
+        (Type, SqlDialect) key = (typeof(T), TProvider.Dialect);
+        if (DataSessionCache.UpsertTenantGuardedSqlCache.TryGetValue(key, out string? cached))
+            return cached;
+        string sql = TProvider.Dialect == SqlDialect.MySql
+            ? WrapMySqlUpsertAssignmentsWithTenantGuard(baseSql, TenantColumnRef<T>(), _tenantParameterName)
+            : InsertTenantGuardBeforeReturning(baseSql, TenantColumnRef<T>(), _tenantParameterName);
+        DataSessionCache.UpsertTenantGuardedSqlCache.TryAdd(key, sql);
+        return sql;
+    }
+
+    /// <summary>租户列的表名限定引用（"{quote(table)}.{quote(tenant_id)}"）。</summary>
+    private static string TenantColumnRef<T>() where T : class, new()
+    {
+        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tableName) || tableName is null)
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no [Table] attribute.");
+        return $"{TProvider.QuoteIdentifier(tableName)}.{TProvider.QuoteIdentifier("tenant_id")}";
+    }
+
+    /// <summary>MySQL ODKU 赋值项守卫：`col` = VALUES(`col`) / `pk` = LAST_INSERT_ID(`pk`)
+    /// 逐项包 IF(tenant_id = @p, 原表达式, col)。已知局限：列名内含 " RETURNING " 形态的
+    /// 病态标识符不在本手术假设内（与 UpdateWithTenant 的 WHERE 结尾假设同量级）。</summary>
+    private static string WrapMySqlUpsertAssignmentsWithTenantGuard(
+        string sql, string qualifiedTenantColumn, string tenantParameterName)
+        => System.Text.RegularExpressions.Regex.Replace(
+            sql,
+            @"((?:`[^`]+`|\w+)) = (VALUES|LAST_INSERT_ID)\(\1\)",
+            "$1 = IF(" + qualifiedTenantColumn + " = " + tenantParameterName + ", $2($1), $1)",
+            System.Text.RegularExpressions.RegexOptions.None,
+            TimeSpan.FromSeconds(2));
+
+    private static string InsertTenantGuardBeforeReturning(
+        string sql, string qualifiedTenantColumn, string tenantParameterName)
+    {
+        // 手术锚点：生成器形态 "… DO UPDATE SET … RETURNING …"（BuildUpsertReturningSql），
+        // RETURNING 关键字恰一次；列名经引号包裹，裸 RETURNING 只能是子句关键字。
+        int returningIndex = sql.LastIndexOf(" RETURNING", StringComparison.Ordinal);
+        return returningIndex < 0
+            ? sql
+            : sql[..returningIndex] + " WHERE " + qualifiedTenantColumn + " = " + tenantParameterName + sql[returningIndex..];
+    }
+
     /// <summary>带租户过滤的 Update/Delete 语句（per-(Type, Dialect) 缓存）——
     /// baseSql 为已缓存的生成语句，与租户后缀的拼接结果原先每次调用重建。</summary>
     private static string GetTenantWrappedSql<T>(
