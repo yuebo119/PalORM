@@ -1,3 +1,4 @@
+using PalORM.PostgreSql;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
@@ -10,6 +11,9 @@ namespace PalORM.Integration.Tests;
 /// 之后，同进程 Npgsql 池的下一个会话 ExecuteScalar 偶发 "Received unexpected backend message
 /// DataRow"（Bind 阶段协议错误后的连接归池状态残留）。对调用例声明序（ThrowsAsync 用例置尾）
 /// 规避——现象留待专门诊断（触发面：同池跨会话 + 紧跟 ExecuteScalar 的收窄插入路径）。</para>
+/// <para><b>P1-V6-01 缓解升级（2026-10-06）</b>：声明序缓解在 CI（PG17 + 跨类并行；同组
+/// NotInParallel 只保证互斥不保证顺序）被击穿两次（release.yml 发布门禁实测拦截）——
+/// ThrowsAsync 用例改池隔离（Pooling=false），异常连接随会话关闭不回流，与顺序解耦。</para>
 /// </summary>
 [NotInParallel("ExtBulkTable")]
 public sealed class ColumnSchemaDialectTests
@@ -30,9 +34,15 @@ public sealed class ColumnSchemaDialectTests
     public async Task Pg_VarcharLength_EnforcedByDatabase()
     {
         // 锚点：撤掉 GetDbType 的 Length 拦截 → 列回 TEXT → 插入 65 字符成功（红）
-        //（声明序在 Decimal 之后：22001 异常后的池连接存在跨会话协议状态残留——
-        //  见本文件尾部登记 P1-V6-01；尾位放置避免污染同库后续用例）
-        await using var db = await TestDb.PostgreSqlAsync();
+        // 池隔离（P1-V6-01，见类注释）：22001 异常后的连接归池存在跨会话协议状态残留。
+        // 原缓解靠"声明序置尾"，但同组 NotInParallel 只保证互斥不保证执行顺序，CI
+        // （PG17 + 跨类并行）两次被击穿（release.yml 发布门禁）。Pooling=false 让异常
+        // 连接随会话关闭、不回流任何池，缓解与执行顺序解耦。
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(
+            new DbOptions
+            {
+                ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString() + ";Pooling=false"
+            });
         await db.MigrateAsync();
 
         await db.InsertAsync(new ColProbeEntity { Name = new string('a', 64), Amount = 1.23m });
