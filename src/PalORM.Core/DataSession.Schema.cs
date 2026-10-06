@@ -121,7 +121,9 @@ public sealed partial class DataSession<TProvider>
                     for (int attempt = 0; attempt < 60 && !acquiredMySql; attempt++)
                     {
                         cmd.CommandText = "SELECT GET_LOCK('palorm_migrate', 5)";
-                        acquiredMySql = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) is 1;
+                        // Convert 而非 is 装箱模式（CI 实测：驱动返回装箱 long，`is 1` 只匹配
+                        // int——恒判"未获取"，实持锁假失败；Convert 跨 long/int/string 形态）
+                        acquiredMySql = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false)) == 1;
                     }
 
                     if (!acquiredMySql)
