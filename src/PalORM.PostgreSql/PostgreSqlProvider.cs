@@ -168,18 +168,22 @@ public sealed class PostgreSqlProvider : IDbProvider
         => exception is UniqueConstraintViolationException
             or PostgresException { SqlState: "23505" };
 
-    /// <summary>并发建表竞态的幂等信号（2026-09-28 实证）：CREATE TABLE IF NOT EXISTS 的
-    /// 存在性检查与系统表插入非原子——多会话并发 MigrateAsync 建同名表时，后到者撞
-    /// <c>pg_type_typname_nsp_index</c>（随行复合类型）或 <c>pg_class_relname_nsp_index</c>
-    ///（关系行）两个系统表唯一索引之一（23505，两形态均实测）。两者仅在并发建表窗口可达，
-    /// 等价于"对方已建成同表"= IF NOT EXISTS 的期望结果（MySQL 1061 索引兜底同族）。
-    /// MigrateAsync 的建表批据此回退逐条执行。</summary>
+    /// <summary>并发建表竞态的幂等信号（2026-09-28 实证；2026-10-06 补 42P07）：CREATE TABLE
+    /// IF NOT EXISTS 的存在性检查与系统表插入非原子——多会话并发 MigrateAsync 建同名表时，
+    /// 后到者撞 <c>pg_type_typname_nsp_index</c>（随行复合类型）或 <c>pg_class_relname_nsp_index</c>
+    ///（关系行）两个系统表唯一索引之一（23505，两形态均实测），或直接收 <c>42P07</c>
+    ///（duplicate_table/duplicate_object——PG 17 实测主形态，原匹配器盲区致穿透：
+    /// CI 与本地空库 6 路并发装置 5/5 复现）。三形态仅在并发建表窗口可达，
+    /// 等价于"对方已建成同对象"= IF NOT EXISTS 的期望结果（MySQL 1061 索引兜底同族）。
+    /// MigrateAsync 的建表批据此回退逐条执行，索引 DDL 据此幂等跳过。</summary>
     public static bool IsDuplicateSchemaObject(Exception exception)
-        => exception is PostgresException
+        => exception is PostgresException pg
+        && (pg.SqlState switch
         {
-            SqlState: "23505",
-            ConstraintName: "pg_type_typname_nsp_index" or "pg_class_relname_nsp_index"
-        };
+            "23505" => pg.ConstraintName is "pg_type_typname_nsp_index" or "pg_class_relname_nsp_index",
+            "42P07" => true,
+            _ => false,
+        });
 
     /// <summary>用 information_schema.columns 查询列名(参数化,schema 为空时回退 current_schema()),列名位于结果集序号 0。</summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
