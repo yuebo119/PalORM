@@ -1338,7 +1338,8 @@ public partial class DataSession<TProvider>
         if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
-        UpsertSqlShape shape = BuildUpsertSqlShape(tableName, metadata, pkColumn);
+        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(tableName, metadata, pkColumn));
+        bool tenantGuarded = HasTenantFilter<T>();
 
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
         // 能力检测与 UPDATE 路径同纪律（生成物三件套 + Provider 接受全部列的元素类型）。
@@ -1346,7 +1347,7 @@ public partial class DataSession<TProvider>
         if (UseUnnestArraysForUpsert(metadata, out IReadOnlyList<Type>? upsertElementTypes))
         {
             return await ExecuteUpsertArrayBatchesAsync(
-                entities, metadata, shape, upsertElementTypes!, transaction, ct).ConfigureAwait(false);
+                entities, metadata, shape, upsertElementTypes!, transaction, tenantGuarded, ct).ConfigureAwait(false);
         }
 
         // 绑定策略：BindUpsert 每行从 @p0 起命名且 MySQL 参数集合在 Add 时校验重名——
@@ -1358,17 +1359,14 @@ public partial class DataSession<TProvider>
         // PERF-004（2026-09-23）：命令与参数池跨批复用——池按满批大小建一次（下标 0..N-1 逐批同义），
         // 批间只写 Value；末批缩短时经 AttachParameters 收敛命令参数集合（池对象零新增分配）。
         // SQL 按 rowCount 记忆化（满批文本逐批相同，原实现每批重建一次）。
+        // 租户护栏（2026-10-06）：池布局 = [行参数…][租户参数]，与 BulkUpdate 的
+        // AttachParameters 契约同构；守卫 SQL 已在 shape 层施加。
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         int fullRowCount = Math.Min(batchSize, entities.Count);
-        var pool = new System.Data.Common.DbParameter[fullRowCount * columnCount];
-        for (int i = 0; i < pool.Length; i++)
-        {
-            System.Data.Common.DbParameter parameter = cmd.CreateParameter();
-            parameter.ParameterName = QueryBuilder<T>.GetParameterName(i);
-            pool[i] = parameter;
-        }
+        int tenantParams = CountTenantParams(tenantGuarded);
+        var pool = CreateUpsertParameterPool<T>(cmd, fullRowCount, columnCount, tenantGuarded);
         // N4（2026-10-04 全量复读）：可空/byte[] 列的 DbType 提示建池后一次性建立——原由
         // BindUpsertValues 每行重写（池存续期内恒定，纯冗余）。旧生成器程序集 Init 委托为
         // null：不调，其 BindUpsertValues 保持自写 DbType 的旧形态（B21 对 INSERT 池的同款契约）。
@@ -1381,7 +1379,7 @@ public partial class DataSession<TProvider>
         {
             int end = Math.Min(start + batchSize, entities.Count);
             int rowCount = end - start;
-            AttachParameters(cmd, pool, rowCount * columnCount, pool.Length, tenantParams: 0);
+            AttachParameters(cmd, pool, rowCount * columnCount, poolRowParamCount: fullRowCount * columnCount, tenantParams);
 
             for (int row = start; row < end; row++)
             {
@@ -1408,6 +1406,43 @@ public partial class DataSession<TProvider>
 
     /// <summary>UPSERT 语句的可复用片段（方言分派一次，逐批复用）。</summary>
     private readonly record struct UpsertSqlShape(string QuotedTable, string QuotedColumns, string ConflictClause);
+
+    /// <summary>租户护栏形态（2026-10-06）：带租户会话时冲突子句带守卫——PG/SQLite 冲突子句后
+    /// 追加 WHERE 表名限定的租户条件，MySQL 逐赋值项包 IF(tenant_id = @p, …)（ODKU 无 WHERE）。
+    /// values 与 UNNEST 两路共用同一 shape。</summary>
+    private UpsertSqlShape ApplyTenantGuardToShape<T>(UpsertSqlShape shape) where T : class, new()
+    {
+        if (!HasTenantFilter<T>())
+            return shape;
+        string qualifiedTenantColumn = $"{shape.QuotedTable}.{TProvider.QuoteIdentifier("tenant_id")}";
+        return new UpsertSqlShape(
+            shape.QuotedTable, shape.QuotedColumns,
+            TProvider.Dialect == SqlDialect.MySql
+                ? WrapMySqlUpsertAssignmentsWithTenantGuard(shape.ConflictClause, qualifiedTenantColumn, _tenantParameterName)
+                : shape.ConflictClause + GetUpsertTenantWhereFragment(qualifiedTenantColumn, _tenantParameterName));
+    }
+
+    /// <summary>租户护栏参数槽数量（守卫开启时池尾 1 个 @__tenant0 槽）。</summary>
+    private static int CountTenantParams(bool tenantGuarded) => tenantGuarded ? 1 : 0;
+
+    /// <summary>批量 UPSERT 参数池：[行参数 fullRowCount×columnCount][租户参数?]——
+    /// 池尾租户参数槽与 BulkUpdate 的 AttachParameters 契约同构。</summary>
+    private System.Data.Common.DbParameter[] CreateUpsertParameterPool<T>(
+        DbCommand cmd, int fullRowCount, int columnCount, bool tenantGuarded)
+        where T : class, new()
+    {
+        int rowParamCount = fullRowCount * columnCount;
+        var pool = new System.Data.Common.DbParameter[rowParamCount + (tenantGuarded ? 1 : 0)];
+        for (int i = 0; i < rowParamCount; i++)
+        {
+            System.Data.Common.DbParameter parameter = cmd.CreateParameter();
+            parameter.ParameterName = QueryBuilder<T>.GetParameterName(i);
+            pool[i] = parameter;
+        }
+        if (tenantGuarded)
+            pool[rowParamCount] = TProvider.CreateParameter(_tenantParameterName, _tenantId!);
+        return pool;
+    }
 
     /// <summary>UNNEST 阶段 B：批量 UPSERT 的数组形态能力检测（与
     /// <see cref="UseUnnestArraysForUpdate"/> 同纪律——生成物三件套非空 + Provider 接受
@@ -1443,6 +1478,7 @@ public partial class DataSession<TProvider>
         UpsertSqlShape shape,
         IReadOnlyList<Type> arrayElementTypes,
         DbTransaction? transaction,
+        bool tenantGuarded,
         CancellationToken ct)
         where T : class, new()
     {
@@ -1480,6 +1516,9 @@ public partial class DataSession<TProvider>
                 BatchUpdateSqlBuilder.UnnestColumnParameterName(c), DBNull.Value);
             cmd.Parameters.Add(parameters[c]);
         }
+        // 租户护栏：守卫 SQL 已在 shape 层施加，此处只补 @__tenant0 绑定
+        if (tenantGuarded)
+            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId!));
 
         long processed = 0;
         for (int start = 0; start < entities.Count; start += batchSize)
