@@ -14,7 +14,10 @@ public sealed class UpsertTenantGuardDialectTests
     public async Task Pg_SaveAsync_CrossTenantSameKey_DoesNotOverwriteForeignRow()
     {
         await using var sessionA = await TestDb.PostgreSqlAsync();
-        await sessionA.MigrateAsync();
+        // B171 探针自建自清：不用 MigrateAsync（它迁移全部已注册实体，CI 并发下与其他
+        // 用例的迁移撞建表竞态 42P07 实测）——本探针只需自己的表
+        await sessionA.ExecuteAsync(
+            $"CREATE TABLE IF NOT EXISTS tenant_upsert_dialect_probe (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, value BIGINT NOT NULL)");
         await sessionA.ExecuteAsync($"DELETE FROM tenant_upsert_dialect_probe");
 
         sessionA.WithTenant(1);
@@ -35,7 +38,9 @@ public sealed class UpsertTenantGuardDialectTests
     public async Task MySql_SaveAsync_CrossTenantSameKey_DoesNotOverwriteForeignRow()
     {
         await using var sessionA = await TestDb.MySqlAsync();
-        await sessionA.MigrateAsync();
+        // B171 探针自建自清：不用 MigrateAsync（CI 并发迁移竞态，见 PG 侧同注释）
+        await sessionA.ExecuteAsync(
+            $"CREATE TABLE IF NOT EXISTS tenant_upsert_dialect_probe (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, value BIGINT NOT NULL)");
         await sessionA.ExecuteAsync($"DELETE FROM tenant_upsert_dialect_probe");
 
         sessionA.WithTenant(1);
