@@ -1024,9 +1024,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         public async ValueTask DisposeAsync()
         {
-            await Command.DisposeAsync().ConfigureAwait(false);
-            if (pooledConnection is not null)
-                await session.ReleaseReadConnectionAsync(pooledConnection).ConfigureAwait(false);
+            // ITM-891：Command 释放抛出时连接仍须归还——try/finally 保证
+            //（原形态连接留在池登记表外，同作用域内不再入 idle 栈，直到作用域退出兜底）。
+            try
+            {
+                await Command.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                if (pooledConnection is not null)
+                    await session.ReleaseReadConnectionAsync(pooledConnection).ConfigureAwait(false);
+            }
         }
     }
 

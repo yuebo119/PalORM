@@ -88,7 +88,7 @@ public sealed class ResilienceExecutor
     public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        var (isHalfOpenProbe, generation) = _circuitBreaker.Enter();
+        var (isHalfOpenProbe, generation, probeToken) = _circuitBreaker.Enter();
 
         // RES-003（2026-09-23）：总预算（Zero = 不设）——比单次尝试超时更强的上界，到期即停重试。
         // 默认不设时本块零开销（overall 为 null，attemptScope 就是调用方 ct）。
@@ -112,7 +112,7 @@ public sealed class ResilienceExecutor
                     if (_timeout == Timeout.InfiniteTimeSpan && !attemptScope.CanBeCanceled)
                     {
                         T resultNoTimeout = await operation(attemptScope).ConfigureAwait(false);
-                        _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
+                        _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation, probeToken);
                         return resultNoTimeout;
                     }
                     timeout = attemptScope.CanBeCanceled
@@ -121,7 +121,7 @@ public sealed class ResilienceExecutor
                     if (_timeout != Timeout.InfiniteTimeSpan)
                         timeout.CancelAfter(_timeout);
                     T result = await operation(timeout.Token).ConfigureAwait(false);
-                    _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation);
+                    _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation, probeToken);
                     return result;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -174,13 +174,13 @@ public sealed class ResilienceExecutor
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _circuitBreaker.ReleaseCancelledProbe(isHalfOpenProbe, generation);
+            _circuitBreaker.ReleaseCancelledProbe(isHalfOpenProbe, generation, probeToken);
             throw;
         }
         catch (Exception exception)
         {
             _circuitBreaker.RecordFinalFailure(
-                isHalfOpenProbe, CountsTowardCircuit(exception), generation);
+                isHalfOpenProbe, CountsTowardCircuit(exception), generation, probeToken);
             throw;
         }
     }

@@ -254,7 +254,14 @@ internal static class SourceGenerationValidation
                 continue;
             }
             // dollar-quoting（PG）：$$...$$ 或 $tag$...$tag$——内部括号全部跳过
-            if (c == '$' && TrySkipDollarQuoted(expression, ref i)) continue;
+            if (c == '$' && TrySkipDollarQuoted(expression, ref i, out bool dollarUnterminated))
+            {
+                // ITM-888（r24，ITM-817 补全）：未闭合 dollar-quote fail-closed——原实现吞到
+                // 末尾仍返回 true，畸形 $tag$(1+1 因后续括号抵消过平衡检查，坏 DDL 晚失败在
+                // 迁移期（正是 ITM-817 要消灭的形态；与单引号/注释/标识符的未闭合处理对齐）。
+                if (dollarUnterminated) return false;
+                continue;
+            }
             // 双引号标识符（PG/SQLite，"" 续写）、反引号标识符（MySQL，`` 续写）、方括号（SQLite/T-SQL）
             if (c is '"' or '`' or '[')
             {
@@ -302,9 +309,12 @@ internal static class SourceGenerationValidation
     }
 
     /// <summary>ITM-753：PG dollar-quoting 跳过。命中时把 <paramref name="i"/> 推进到闭合 tag 末尾，
-    /// 返回 true；非 dollar-quote 起始则返回 false（i 不变）。</summary>
-    private static bool TrySkipDollarQuoted(string expression, ref int i)
+    /// 返回 true；非 dollar-quote 起始则返回 false（i 不变）。
+    /// <paramref name="unterminated"/> 为 true 表示识别为 dollar-quote 但找不到闭合 tag
+    /// （ITM-888：调用方据此 fail-closed——返回值 true/false 无法与"非 dollar-quote 起始"区分）。</summary>
+    private static bool TrySkipDollarQuoted(string expression, ref int i, out bool unterminated)
     {
+        unterminated = false;
         int open = i + 1;
         // tag 由字母/数字/下划线组成（可空 → $$）
         while (open < expression.Length
@@ -313,7 +323,13 @@ internal static class SourceGenerationValidation
         // netstandard2.0 无 Range/Index——用 Substring
         string tag = expression.Substring(i, open + 1 - i);  // 含首尾 $，如 "$$" 或 "$tag$"
         int close = expression.IndexOf(tag, open + 1, StringComparison.Ordinal);
-        if (close < 0) { i = expression.Length; return true; }  // 未闭合：吞到末尾（fail-closed 于上层）
+        if (close < 0)
+        {
+            // 未闭合：i 吞到末尾（调用方随即 return false，i 值不再被消费）
+            i = expression.Length;
+            unterminated = true;
+            return true;
+        }
         i = close + tag.Length - 1;
         return true;
     }

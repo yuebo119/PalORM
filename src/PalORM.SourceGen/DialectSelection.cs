@@ -6,6 +6,9 @@ namespace PalORM.SourceGen;
 /// 运行时取到即响亮失败（提示把该方言加进属性并重编译），不会静默产出空 SQL。</para>
 /// <para><b>收益（实测）</b>：注册文件里方言 SQL 字面量占 42.9%（16,405 / 38,209 字节，4 实体语料），
 /// 单方言应用可去掉其中约 2/3（≈2.7KB/实体）。</para>
+/// <para><b>裁剪范围（ITM-896 收窄声明，r24）</b>：仅 <c>CommandSqlSet</c>（CRUD SQL）；
+/// CreateTableSqlSet/CreateIndexSqlSet（DDL 载荷）恒全发射三方言——若未来接线 DDL 裁剪，
+/// 须同步补 SqlSets DDL Get 的 GEN-008 式 null 防御（ITM-907 登记项）。</para>
 /// <para>缺省 / 空 / 全不识别 = 三方言全发射（与既有行为逐位一致）。</para></summary>
 internal readonly record struct DialectSelection(bool Sqlite, bool PostgreSql, bool MySql)
 {
@@ -30,11 +33,7 @@ internal readonly record struct DialectSelection(bool Sqlite, bool PostgreSql, b
         return sqlite || postgreSql || mySql ? new DialectSelection(sqlite, postgreSql, mySql) : All;
     }
 
-    internal bool Includes(SqlGenerationDialect dialect)
-        => dialect switch
-        {
-            SqlGenerationDialect.Sqlite => Sqlite,
-            SqlGenerationDialect.PostgreSql => PostgreSql,
-            _ => MySql
-        };
+    // ITM-896（r24）：删除 Includes(SqlGenerationDialect)——GEN-008 接线时只接了
+    // CommandSqlSet（RegistryEmitter 内联三元），本方法自引入起全仓零调用（死方法）。
+    // DDL 裁剪若立项，届时按需重建（连同 SqlSets 的 null 防御，见类级注释）。
 }

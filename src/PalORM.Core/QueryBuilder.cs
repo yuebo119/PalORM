@@ -269,12 +269,15 @@ public struct QueryBuilder<T> where T : class, new()
         // 编号但**不计入 _parameterCount**（只有 AddClause 计数）——守卫按"存量 + 增量 +
         // LIMIT 余量"判定，_parameterCount 恰为上限时不再放行实际越界 1-2 参数的 SQL
         //（正是 ITM-514/562 要"提前拒绝"的形态；字面量 LIMIT（First/Single 族）零余量）。
+        // ITM-885（r24 补全余量）：按 BuildLimitClause 实际建参形态核算——take±skip 非字面量
+        // 时 MySQL/default 均建 2 个参数（take + skip??0 参数化的 0），只 reserve 1 会在
+        // "参数和恰为上限"时放行越界 1 个的 SQL；skip-only 单参数（MySQL 上限哨兵是字面量）。
         int dialectLimit = SqlLimits.MaxBindParametersFor(_dialect);
         int limitReserve = 0;
         if (LiteralTakeValue == 0)
         {
-            if (_take.HasValue) limitReserve++;
-            if (_skip.HasValue) limitReserve++;
+            if (_take.HasValue) limitReserve = 2;
+            else if (_skip.HasValue) limitReserve = 1;
         }
         if (_parameterCount + items.Count + limitReserve > dialectLimit)
             throw new ArgumentException(
@@ -405,13 +408,33 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
-    /// <summary>追加调用方负责安全性的窗口 SQL 片段。不得传入不可信内容。</summary>
+    /// <summary>追加调用方负责安全性的窗口 SQL 片段。不得传入不可信内容。
+    /// <para><b>ITM-886</b>：与 <see cref="Raw(string)"/> 同款控制字符防线（ITM-584 NUL 截断
+    /// 向量）——"调用方负责"约定下仍拒绝驱动/服务端 C 层可截断/重定界的字符，三入口防线一致。</para></summary>
     public QueryBuilder<T> UnsafeWindowOver(string func, string over)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(func);
         ArgumentException.ThrowIfNullOrWhiteSpace(over);
+        ThrowIfContainsControlChar(func, nameof(func));
+        ThrowIfContainsControlChar(over, nameof(over));
         AddClause(QueryClauseKind.Window, $"{func} OVER ({over})");
         return this;
+    }
+
+    /// <summary>ITM-886：SQL 片段入参的控制字符防线（与 Raw 同消息形态，手写循环零分配）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3267:LoopsShouldBeSimplifiedWithLinq",
+        Justification = "构建器热路径上的防线：LINQ Where+Any 分配委托+迭代器。手写循环零分配（同 Raw/SqlShapeCache.FindMatch 口径）。")]
+    private static void ThrowIfContainsControlChar(string value, string paramName)
+    {
+        foreach (char ch in value)
+        {
+            if (IdentifierSafety.IsControlChar(ch))
+                throw new ArgumentException(
+                    $"SQL fragment contains control character U+{(int)ch:X4} — control characters "
+                    + "can truncate or re-delimit the statement at the driver/server C layer (NUL truncation proven, ITM-584). "
+                    + "Remove control characters from the fragment.", paramName);
+        }
     }
 
     /// <summary>定义 CTE（WITH cteName AS (subquery)），子查询参数化绑定；后续主查询 FROM 该 CTE 而非实体表。
