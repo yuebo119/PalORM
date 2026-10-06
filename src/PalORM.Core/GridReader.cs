@@ -41,12 +41,18 @@ public sealed class GridReader : IAsyncDisposable
     /// <summary>读取当前结果集。</summary>
     public async ValueTask<List<T>> ReadAsync<T>(CancellationToken ct = default) where T : class, new()
     {
-        // ITM-813（r23 实修）：EnterRead 移入 try——_state!=0 时它抛 ObjectDisposedException，
-        // 原形态该路径不过 catch → _observation.Complete 永不执行 → 已 StartActivity 的
-        // Activity 不 Dispose、Activity.Current 不还原（后续无关操作挂错父级）。
+        // ITM-813（r23 实修）+ ITM-882（r24 补全）：EnterRead 移入 try——_state!=0 时它抛
+        // ObjectDisposedException，原形态该路径不过 catch → _observation.Complete 永不执行 →
+        // 已 StartActivity 的 Activity 不 Dispose、Activity.Current 不还原（后续无关操作挂错父级）。
+        // ITM-882 第二面：EnterRead 被拒（并发读/已释放）时本次未登记 _activeRead，
+        // finally 的 ExitRead 若无条件执行会误清他人的活动读标记并提前 TrySetResult——
+        // 打开"第三个调用趁窗口并发进 _reader"的数据竞争。entered 标记保证只在
+        // 成功登记后配对退出（两个读取入口同款形态）。
+        bool entered = false;
         try
         {
             EnterRead();
+            entered = true;
             if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
             // ITM-748：越界读取明确失败，避免调用方把"无更多结果集"当成"该集合为空"
@@ -71,16 +77,20 @@ public sealed class GridReader : IAsyncDisposable
         }
         finally
         {
-            ExitRead();
+            if (entered) ExitRead();
         }
     }
 
     /// <summary>读取当前结果集第一行（不物化全量）。</summary>
     public async ValueTask<T?> ReadFirstAsync<T>(CancellationToken ct = default) where T : class, new()
     {
-        EnterRead();
+        // ITM-882（r24）：ITM-813 在 ReadAsync 修掉的形态在此原样残留——EnterRead 在 try 外，
+        // 被拒路径绕过 catch（观测不 Complete）。与 ReadAsync 同款 entered 两面形态。
+        bool entered = false;
         try
         {
+            EnterRead();
+            entered = true;
             if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
                 throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
             // ITM-748：越界读取明确失败（同 ReadAsync）
@@ -109,7 +119,7 @@ public sealed class GridReader : IAsyncDisposable
         }
         finally
         {
-            ExitRead();
+            if (entered) ExitRead();
         }
     }
 
