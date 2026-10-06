@@ -143,6 +143,7 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<T> InsertAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
     {
+        ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：非 async 入口预热操作归属标记（调用方 EC 持久，体内 Enter 守卫命中免写）；
         // 门禁见 PrewarmCurrentOperationOwner——仅本会话已完成过操作后预热，防 EC 链累积
         if (_operationState.OwnerPrewarmed)
@@ -592,6 +593,7 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<int> UpdateAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
     {
+        ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：同 InsertAsync——预热使事务内循环 UpdateAsync（TxRollback 形态）每行免 EC COW
         if (_operationState.OwnerPrewarmed)
             _operationState.PrewarmCurrentOperationOwner();
@@ -644,6 +646,7 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask<int> DeleteAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
     {
+        ArgumentNullException.ThrowIfNull(key);
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         // r19/ITM-703：单快照贯穿（Delete 侧同口径）；存在性检查与 Insert/Update/Save 对齐走
         // CrudMetadatas——legacy 无方言 CommandSqls 已从生成物移除，不再作存在性代理。
@@ -742,6 +745,7 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
     {
+        ArgumentNullException.ThrowIfNull(key);
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
@@ -871,6 +875,7 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<T> SaveAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
     {
+        ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：同 InsertAsync——非 async 入口预热操作归属标记
         if (_operationState.OwnerPrewarmed)
             _operationState.PrewarmCurrentOperationOwner();
@@ -927,9 +932,19 @@ public sealed partial class DataSession<TProvider>
         if (tenantGuarded)
             BindDefaultFilterParameters<T>(cmd);
 
-        return TProvider.SupportsReturningClause
-            ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, tenantGuarded, ct).ConfigureAwait(false)
-            : await UpsertWithMySqlAsync(cmd, sqls, state, entity, tenantGuarded, ct).ConfigureAwait(false);
+        // 异常契约对称（2026-10-06，10-05 审计 P2）：InsertAsync 把唯一约束冲突包装为
+        // UniqueConstraintViolationException——UPSERT 分支的 INSERT 段仍可能撞**二级唯一索引**
+        //（冲突目标主键被 ON CONFLICT 吸收，二级索引不吸收），同一公开方法两分支异常类型必须一致。
+        try
+        {
+            return TProvider.SupportsReturningClause
+                ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, tenantGuarded, ct).ConfigureAwait(false)
+                : await UpsertWithMySqlAsync(cmd, sqls, state, entity, tenantGuarded, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
+        {
+            throw new UniqueConstraintViolationException(ex);
+        }
     }
 
     /// <summary>PG/SQLite UPSERT--ON CONFLICT ... DO UPDATE/NOTHING + RETURNING 物化完整行。

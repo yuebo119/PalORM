@@ -40,11 +40,42 @@ foreach (string file in Directory
     }
 
     string[] lines = File.ReadAllLines(file);
+    // 成员作用域的"执行后 Add"检测（2026-10-06 审计补面）：命令变量在本成员内先 Execute 后
+    // .Parameters.Add(.WithValue) = 复用命令上换入新参数对象——auto-prepare 缓存旧参数对象、
+    // 换入的新对象不被读取的静默错值形态（R-UNNESTB 机制），且无 Clear/RemoveAt 时旧扫描面
+    // 不可见。粗粒度成员边界：修饰符开头的行为界，执行史随之清零（跨成员误报由标记制兜底）。
+    var firstExecuteLine = new Dictionary<string, int>();
     for (int i = 0; i < lines.Length; i++)
     {
         string line = lines[i];
-        if (!line.Contains(".Parameters.Clear()", StringComparison.Ordinal)
-            && !line.Contains(".Parameters.RemoveAt(", StringComparison.Ordinal))
+        string trimmed = line.TrimStart();
+        if (trimmed.StartsWith("public ", StringComparison.Ordinal)
+            || trimmed.StartsWith("private ", StringComparison.Ordinal)
+            || trimmed.StartsWith("internal ", StringComparison.Ordinal)
+            || trimmed.StartsWith("protected ", StringComparison.Ordinal))
+        {
+            firstExecuteLine.Clear();
+        }
+
+        System.Text.RegularExpressions.Match executeMatch = Regex.Match(
+            line, @"(?<cmd>[A-Za-z_][A-Za-z0-9_]*)\.Execute[A-Za-z]*\(");
+        if (executeMatch.Success && !firstExecuteLine.ContainsKey(executeMatch.Groups["cmd"].Value))
+        {
+            firstExecuteLine[executeMatch.Groups["cmd"].Value] = i;
+        }
+
+        bool isCollectionMutation =
+            line.Contains(".Parameters.Clear()", StringComparison.Ordinal)
+            || line.Contains(".Parameters.RemoveAt(", StringComparison.Ordinal);
+        bool isAddAfterExecute = false;
+        System.Text.RegularExpressions.Match addMatch = Regex.Match(
+            line, @"(?<cmd>[A-Za-z_][A-Za-z0-9_]*)\.Parameters\.Add(Value)?\(");
+        if (addMatch.Success)
+        {
+            string addCmd = addMatch.Groups["cmd"].Value;
+            isAddAfterExecute = firstExecuteLine.TryGetValue(addCmd, out int execLine) && execLine < i;
+        }
+        if (!isCollectionMutation && !isAddAfterExecute)
         {
             continue;
         }
