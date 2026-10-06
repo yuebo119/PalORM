@@ -167,6 +167,10 @@ internal sealed class BulkUpdateArrayFormTests
         List<UnnestNullRow> rows = await session.From<UnnestNullRow>().OrderBy(r => r.Id).ToListAsync();
         foreach (UnnestNullRow row in rows) row.Marker = null;
         Shapes.Clear();
+        // inline 建会话不经工厂，须自注册采集钩子（静态 recorder last-write-wins，见文件头）——
+        // 否则钩子可能仍指向 Delete 侧 Shapes（同组串行不保证执行顺序，CI 实证两次）
+        ArrayAnySqliteCommand.SetStatementRecorder((sql, parameterCount)
+            => Shapes.Add((sql, parameterCount)));
 
         long affected = await session.BulkUpdateAsync(rows);
 
@@ -196,6 +200,9 @@ internal sealed class BulkUpdateArrayFormTests
         foreach (UnnestNullRow row in rows)
             row.Marker = row.Id % 2 == 0 ? null : row.Id * 11;
         Shapes.Clear();
+        // 同 AllNull 用例：inline 建会话须自注册采集钩子（见文件头 last-write-wins）
+        ArrayAnySqliteCommand.SetStatementRecorder((sql, parameterCount)
+            => Shapes.Add((sql, parameterCount)));
 
         long affected = await session.BulkUpdateAsync(rows);
 
