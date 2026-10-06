@@ -677,13 +677,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
         if (_reusableGetByKey is { } getByKey)
         {
-            try
-            {
-                await getByKey.Command.DisposeAsync().ConfigureAwait(false);
-                if (getByKey.KeyProbe is { } keyProbe)
-                    await keyProbe.DisposeAsync().ConfigureAwait(false);
-            }
+            // Command 与 KeyProbe 分 try（2026-10-06，10-05 审计 P3）：捆同一 try 时
+            // Command.Dispose 抛出会跳过 KeyProbe 释放（泄漏）；两者独立清理、异常都入链
+            try { await getByKey.Command.DisposeAsync().ConfigureAwait(false); }
             catch (Exception exception) { RecordCleanupException(ref primary, exception); }
+            if (getByKey.KeyProbe is { } keyProbe)
+            {
+                try { await keyProbe.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception exception) { RecordCleanupException(ref primary, exception); }
+            }
         }
         if (primary is not null)
             ExceptionDispatchInfo.Capture(primary).Throw();
