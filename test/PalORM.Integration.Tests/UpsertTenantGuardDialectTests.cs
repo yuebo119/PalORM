@@ -15,9 +15,10 @@ public sealed class UpsertTenantGuardDialectTests
     {
         await using var sessionA = await TestDb.PostgreSqlAsync();
         // B171 探针自建自清：不用 MigrateAsync（它迁移全部已注册实体，CI 并发下与其他
-        // 用例的迁移撞建表竞态 42P07 实测）——本探针只需自己的表
+        // 用例的迁移撞建表竞态 42P07 实测）——本探针只需自己的表。列名对齐生成器命名：
+        // 主键无 [Column] 按属性名发射带引号 "Id"（小写 id 在 PG 大小写敏感下 42703 实测）
         await sessionA.ExecuteAsync(
-            $"CREATE TABLE IF NOT EXISTS tenant_upsert_dialect_probe (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, value BIGINT NOT NULL)");
+            $"CREATE TABLE IF NOT EXISTS tenant_upsert_dialect_probe (\"Id\" BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, value BIGINT NOT NULL)");
         await sessionA.ExecuteAsync($"DELETE FROM tenant_upsert_dialect_probe");
 
         sessionA.WithTenant(1);
@@ -38,9 +39,11 @@ public sealed class UpsertTenantGuardDialectTests
     public async Task MySql_SaveAsync_CrossTenantSameKey_DoesNotOverwriteForeignRow()
     {
         await using var sessionA = await TestDb.MySqlAsync();
-        // B171 探针自建自清：不用 MigrateAsync（CI 并发迁移竞态，见 PG 侧同注释）
+        // B171 探针自建自清 + 生成器命名对齐（同 PG 侧注释；MySQL 引号形态经反引号但
+        // ExecuteAsync 的 FormattableString 直接透传，双引号在 MySQL 默认模式下非标识符引用——
+        // 故 MySQL 侧 DDL 用反引号形态）
         await sessionA.ExecuteAsync(
-            $"CREATE TABLE IF NOT EXISTS tenant_upsert_dialect_probe (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, value BIGINT NOT NULL)");
+            $"CREATE TABLE IF NOT EXISTS tenant_upsert_dialect_probe (`Id` BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, value BIGINT NOT NULL)");
         await sessionA.ExecuteAsync($"DELETE FROM tenant_upsert_dialect_probe");
 
         sessionA.WithTenant(1);
