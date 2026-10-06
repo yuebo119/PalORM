@@ -922,21 +922,55 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return default;
     }
 
-    /// <summary>按调用方要求选择连接创建命令（READ-002，2026-09-23）：<paramref name="readFromReplica"/>
-    /// 为真、且无活动事务、且配置了读路由（<c>ReadConnectionString</c>）时走读连接，否则主连接。
-    /// <para><b>为什么是 opt-in</b>：无条件把原始 SQL 家族路由到副本会给已配置读连接的用户做静默
-    /// 行为变更（读落到副本，read-after-write 语义改变）。默认 false = 与既有行为逐位一致。</para>
-    /// <para>命令超时与 <see cref="CreateCommand"/> 同源；读连接路径无事务可绑（有事务时回退主连接，
-    /// 与 <c>ForRead()</c> 的既有裁决一致）。仅对只读语句有意义——DML 走副本会写错库，
-    /// 由调用方负责（故 <c>ExecuteAsync</c> 不提供该开关）。</para></summary>
-    private async ValueTask<DbCommand> CreateReadOrPrimaryCommandAsync(bool readFromReplica, CancellationToken ct)
+    /// <summary>读路径统一命令创建（ARCH-001 收口，2026-10-06）：路由判据按序——
+    /// ① 事务活动期走主连接（读未提交数据 + 事务归属；与 QueryBuilder 活动事务守卫同语义）；
+    /// ② 并行读作用域内走作用域池（特性语义：作用域内每个只读操作持独立连接；事务与作用域
+    ///    互斥 ITM-798，池路径无事务绑定面），租约释放时经 <see cref="ReleaseReadConnectionAsync"/>
+    ///    归还池；
+    /// ③ 其余走既有形态：replica opt-in 走会话级读连接（READ-002 opt-in 教义，不回归），
+    ///    否则主连接。
+    /// <para><b>收口背景</b>：GetAsync（并行分支）与 QueryBuilder 管线此前已接线，
+    /// GetAllAsync/CountAsync/聚合内核/原始 SQL 家族漏接——作用域内未接线家族在主连接开
+    /// 并发 reader（10-05 审计 P1"接线一半"，PG 上 Npgsql "already open DataReader" 实测）。
+    /// 本助手取代 CreateReadOrPrimaryCommandAsync（其副本路由语义并入 ③，池归还语义新增）。</para></summary>
+    private async ValueTask<ReadCommandLease> CreateReadRoutedCommandAsync(bool readFromReplica, CancellationToken ct)
     {
-        if (!readFromReplica || _readConnProvider is null || GetActiveTransaction() is not null)
-            return CreateCommand();
-        DbConnection connection = await _readConnProvider(ct).ConfigureAwait(false);
-        DbCommand command = connection.CreateCommand();
-        command.CommandTimeout = _options.CommandTimeoutSeconds;
-        return command;
+        if (GetActiveTransaction() is not null)
+            return new ReadCommandLease(this, CreateCommand(), null);
+
+        if (_operationState.ParallelReadsEnabled)
+        {
+            DbConnection connection = await AcquireReadConnectionAsync(ct).ConfigureAwait(false);
+            DbCommand command = connection.CreateCommand();
+            command.CommandTimeout = _options.CommandTimeoutSeconds;
+            return new ReadCommandLease(this, command, connection);
+        }
+
+        if (readFromReplica && _readConnProvider is not null)
+        {
+            DbConnection connection = await _readConnProvider(ct).ConfigureAwait(false);
+            DbCommand command = connection.CreateCommand();
+            command.CommandTimeout = _options.CommandTimeoutSeconds;
+            return new ReadCommandLease(this, command, null);   // 会话级读连接：不归还（归会话持有）
+        }
+
+        return new ReadCommandLease(this, CreateCommand(), null);
+    }
+
+    /// <summary>读命令租约：命令随租约释放；并行读作用域内租到的池连接在释放时归还
+    /// （<see cref="ReleaseReadConnectionAsync"/> 对非池连接空操作）。会话级连接
+    /// （主连接/ForRead 读连接）不归还，仍归会话持有。</summary>
+    private sealed class ReadCommandLease(DataSession<TProvider> session, DbCommand command, DbConnection? pooledConnection)
+        : IAsyncDisposable
+    {
+        public DbCommand Command { get; } = command;
+
+        public async ValueTask DisposeAsync()
+        {
+            await Command.DisposeAsync().ConfigureAwait(false);
+            if (pooledConnection is not null)
+                await session.ReleaseReadConnectionAsync(pooledConnection).ConfigureAwait(false);
+        }
     }
 
     /// <summary>只读查询的弹性执行入口——WithRetry/WithCircuitBreaker 在内置管线的接入点

@@ -39,7 +39,8 @@ public sealed partial class DataSession<TProvider>
             sql = GetCountComposedSql(typeof(T), filterForms, baseSql).WherePrefix
                 + FormatSqlWithParameters(where) + ")";
         }
-        await using DbCommand cmd = CreateCommand();
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         if (where is not null) BindFormattableParameters(cmd, where);
@@ -134,7 +135,8 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<object?> ExecuteScalarAsync<T>(string sql, FormattableString original, CancellationToken ct)
         where T : class, new()
     {
-        await using DbCommand cmd = CreateCommand();
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, original);
@@ -197,7 +199,8 @@ public sealed partial class DataSession<TProvider>
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
 
-        await using DbCommand cmd = await CreateReadOrPrimaryCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
@@ -254,7 +257,8 @@ public sealed partial class DataSession<TProvider>
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
-        await using DbCommand cmd = await CreateReadOrPrimaryCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
@@ -316,7 +320,8 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        await using DbCommand cmd = await CreateReadOrPrimaryCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
         cmd.CommandText = FormatSqlWithParameters(sql);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);

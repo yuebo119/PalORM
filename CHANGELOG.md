@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+### 🐛 缺陷修复：并行读作用域全读家族接入读路由（2026-10-06，10-05 审计 P1 收口）
+
+- `ForParallelReads()` 作用域内 GetAllAsync/CountAsync/聚合（Sum/Max/Min/Avg）/ScalarAsync/原始 SQL 默认路径此前仍用主连接建命令——并发读在主连接开第二个 reader，PG 上 Npgsql 抛 "already open DataReader"。现统一走 `CreateReadRoutedCommandAsync`：作用域内从作用域池取独立连接（租约释放归还），事务活动期走主连接（事务归属不变），作用域外行为逐位一致（无 replica opt-in 仍走主连接）。
+- 顺带修复：作用域内 `readFromReplica=true` 的池连接借出不归还（池增长到作用域退出才整体释放）。
+- 锁定测试 ParallelReadScopeTests（PG 真库）：修复前红（并发 reader 冲突实测复现）/修复后绿。
+- 边界：GetByKey（PL-2 复用槽绑定主连接）不参与作用域并行（既有形态不变）；SQLite `:memory:` 作用域用法需 `Cache=Shared`（与 GetAsync 既有形态一致）。
+
 ### 🛡️ 质量系统：CI 发布拦截教训机械化（2026-10-06）
 
 - **测试基建不变式守卫**（TestInfraInvariantTests）：静态语句采集钩子（last-write-wins）的每个捕获窗口必须自注册或调用注册型方法，并设反向登记守卫防新文件漏登（B74 家族防线，B179）；守卫先剥注释（B13）并经删除式变异探针验证（删注册 → 红点名方法 → 恢复绿）。
