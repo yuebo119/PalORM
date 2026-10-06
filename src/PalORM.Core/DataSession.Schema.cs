@@ -115,11 +115,19 @@ public sealed partial class DataSession<TProvider>
                     await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
                     break;
                 case SqlDialect.MySql:
-                    cmd.CommandText = "SELECT GET_LOCK('palorm_migrate', 60)";
-                    object? acquired = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
-                    if (acquired is not 1)
+                    // 分片重试而非单次长等（CI 实证：多作业共享一库时连续循环持锁会把
+                    // 单次 GET_LOCK(60) 饿死——5s×60 次≈5 分钟上限，GET_LOCK FIFO 下必然轮到）
+                    bool acquiredMySql = false;
+                    for (int attempt = 0; attempt < 60 && !acquiredMySql; attempt++)
+                    {
+                        cmd.CommandText = "SELECT GET_LOCK('palorm_migrate', 5)";
+                        acquiredMySql = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) is 1;
+                    }
+
+                    if (!acquiredMySql)
                         throw new InvalidOperationException(
-                            "MigrateAsync: GET_LOCK timed out (60s) — another migration is holding the lock.");
+                            "MigrateAsync: GET_LOCK not acquired within ~5 minutes (60×5s) — concurrent migration storm did not drain.");
+
                     break;
             }
         }
