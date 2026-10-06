@@ -221,8 +221,33 @@ public sealed class MySqlProvider : IDbProvider
         if (conn is MySqlConnection mySqlConnection
             && await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
         {
-            return await ExecuteBulkCopyAsync(
-                mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
+            try
+            {
+                return await ExecuteBulkCopyAsync(
+                    mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // ITM-892（r24，真库实证）：探测缓存 60s TTL 内服务端可被关闭——BulkCopy 抛
+                // "Loading local data is disabled"（协议握手阶段拒绝，零行写入）整批硬失败。
+                // 失败后强制失效缓存并重探测：仍 ON → 原样重抛（真故障，如数据/约束问题——
+                // 其失败可能发生在部分写入后，重试整批会重复，必须透传）；OFF → 回退多值
+                // 重试整批（OFF 的失败形态必然是握手拒绝，无部分写入，回退安全；自开事务
+                // 场景失败批已回滚）。重探测的额外 SHOW VARIABLES 往返只发生在失败路径。
+                LocalInfileCache.Remove(mySqlConnection);
+                if (!await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
+                {
+                    return await MultiValueBulkInsert.ExecuteAsync(
+                        conn, transaction, entities,
+                        new BulkContext(
+                            batchSize,
+                            MaxParametersPerStatement: SqlLimits.MaxBindParameters,
+                            QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
+                            IsolationLevel: isolationLevel),
+                        ct).ConfigureAwait(false);
+                }
+                throw;
+            }
         }
 
         // 回退路径：local_infile=OFF 或非 MySqlConnection，走多值 INSERT。

@@ -125,6 +125,30 @@ public sealed class WhereJsonSqlGenerationTests
             .Throws<NotSupportedException>();
 
     [Test]
+    public async Task DoubleValue_ThrowsExplicitly()
+        // ITM-890（真库实证）：E 记法/去尾零与 jsonb numeric 展开定点形恒不相等——静默空结果
+        => await Assert.That(() => PgBuilder<WjProduct>()
+            .WhereJson("payload", "k", 1e21))
+            .Throws<NotSupportedException>();
+
+    [Test]
+    public async Task FloatValue_ThrowsExplicitly()
+        => await Assert.That(() => PgBuilder<WjProduct>()
+            .WhereJson("payload", "k", 1.10f))
+            .Throws<NotSupportedException>();
+
+    [Test]
+    public async Task DecimalValue_StillAllowed_ScaleFormMatchesJsonb()
+        // ITM-890 边界：decimal 的 ToString 保留 scale 尾零，与 jsonb numeric 形态一致
+        //（PG 18.6 实测 1.10m == '1.10'）——不拒绝，DryRun 正常产出
+    {
+        DryRunResult preview = PgBuilder<WjProduct>()
+            .WhereJson("payload", "k", 1.10m)
+            .AsDryRun();
+        await Assert.That(preview.Sql.Contains("->>", StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
     public async Task DateOnlyValue_ThrowsExplicitly()
         // r19/ITM-683：DateOnly invariant 输出与 ISO text 恒不相等
         => await Assert.That(() => PgBuilder<WjProduct>()
