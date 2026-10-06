@@ -81,13 +81,21 @@ public sealed class StoredProcBuilder
         // GetOutputValue<T> 支持可空泛型，
         // 声明侧 typeof(T)== 链不识别 int?/long? 等会静默不设 DbType（两侧能力不对称）。
         Type effectiveType = typeof(T).GetNullableUnderlyingType() ?? typeof(T);
+        // ITM-893（r24）：补全数值/时间偏移/二进制六类型——原链静默不设 DbType，部分驱动
+        //（如 MySQL Connector）对 Output 参数需要显式类型才能正确回填。
         if (effectiveType == typeof(int)) p.DbType = DbType.Int32;
         else if (effectiveType == typeof(long)) p.DbType = DbType.Int64;
+        else if (effectiveType == typeof(short)) p.DbType = DbType.Int16;
+        else if (effectiveType == typeof(byte)) p.DbType = DbType.Byte;
         else if (effectiveType == typeof(string)) p.DbType = DbType.String;
         else if (effectiveType == typeof(decimal)) p.DbType = DbType.Decimal;
+        else if (effectiveType == typeof(double)) p.DbType = DbType.Double;
+        else if (effectiveType == typeof(float)) p.DbType = DbType.Single;
         else if (effectiveType == typeof(bool)) p.DbType = DbType.Boolean;
         else if (effectiveType == typeof(DateTime)) p.DbType = DbType.DateTime;
+        else if (effectiveType == typeof(DateTimeOffset)) p.DbType = DbType.DateTimeOffset;
         else if (effectiveType == typeof(Guid)) p.DbType = DbType.Guid;
+        else if (effectiveType == typeof(byte[])) p.DbType = DbType.Binary;
         _outputParams.Add(p);
         _parameters.Add(p);
         return this;

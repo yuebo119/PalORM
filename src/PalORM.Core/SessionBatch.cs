@@ -190,16 +190,28 @@ public sealed class SessionBatch<TProvider> : IDisposable
             int total = 0;
             foreach ((string sql, FormattableString? values) in statements)
             {
-                await using DbCommand cmd = shared ?? connection.CreateCommand();
-                cmd.Transaction = transaction;
-                cmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
-                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
-                    cmd.CommandText = sql;
-                // PARAM-REUSE-OK[nodbbatch] shared 仅 SQLite 方言可达（无 auto-prepare 行为）；
-                // 非 SQLite 走逐条新建命令（cmd 每条新实例，无复用面）
-                cmd.Parameters.Clear();
-                AddParameters(cmd.Parameters, values);
-                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                // ITM-887（r24）：循环内不再 await using——SQLite 复用路径（shared 非 null）下
+                // 每迭代末的 Dispose 会释放 shared（次迭代起用已释放命令，违反 DbCommand 契约且
+                // 清空驱动语句缓存使 L37 复用收益每迭代归零，finally 还构成二次 Dispose）。
+                // 复用路径的所有权归方法级 finally；逐条新建路径（shared null）保持每迭代释放。
+                DbCommand cmd = shared ?? connection.CreateCommand();
+                try
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
+                    if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
+                        cmd.CommandText = sql;
+                    // PARAM-REUSE-OK[nodbbatch] shared 仅 SQLite 方言可达（无 auto-prepare 行为）；
+                    // 非 SQLite 走逐条新建命令（cmd 每条新实例，无复用面）
+                    cmd.Parameters.Clear();
+                    AddParameters(cmd.Parameters, values);
+                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (shared is null)
+                        await cmd.DisposeAsync().ConfigureAwait(false);
+                }
             }
             return total;
         }

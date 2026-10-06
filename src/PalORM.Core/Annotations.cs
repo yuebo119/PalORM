@@ -40,8 +40,9 @@ public sealed class ColumnAttribute(string name) : Attribute
     ///（覆盖默认映射与 Length/Precision）；类型须在目标数据库合法，跨方言部署注意同型异名
     ///（如 MySQL 的 MEDIUMTEXT）。空白由 PALORM051 拦截。</summary>
     public string? TypeName { get; init; }
-    /// <summary>列存储策略（枚举按整数/字符串存储）。<b>ITM-553：当前未实现</b>（PALORM017 告警）——
-    /// 枚举恒按默认映射存储（TEXT）。涉及读写双路径（非仅 DDL），留待专门迭代。</summary>
+    /// <summary>列存储策略（枚举按整数/字符串存储）。v6.1 起读写双路径已实现（写侧参数与
+    /// 读侧物化均按 <see cref="StoreAs"/> 映射，PALORM017 停报；涉及面见 CommandFactoryEmitter
+    /// 的枚举双路径）。原「ITM-553 未实现」表述已于 r24 更正（ITM-889：文档落后两个 minor）。</summary>
     public StoreAs StoreAs { get; init; }
 }
 

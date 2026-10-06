@@ -24,6 +24,11 @@ internal sealed class CircuitBreaker
     /// <see cref="Enter"/> 回收槽位，防止"调用方忘了调 ReleaseCancelledProbe → 熔断器永久 Open"。
     /// 0 = 无占用探针。</summary>
     private long _halfOpenProbeAcquiredAt;
+    /// <summary>ITM-895（r24）：槽位归属 token——每次授予探针时 +1。stale 回收把槽位转给新探针时
+    /// generation 不推进（回收不开闸），旧探针苏醒后仅凭 generation 无法区分"槽位还是自己的"与
+    /// "槽位已被回收给新探针"——token 不匹配即旧探针，其任何终结记录（成功/失败/取消）都
+    /// 不得释放槽位或触碰窗口（否则半开单探针不变式破坏、熔断保护弱化一拍）。</summary>
+    private long _halfOpenProbeToken;
     private readonly Lock _lock = new();
     /// <summary>R5：探针重试前的消息缓存——开闸时生成一次，避免每次拒绝都格式化（M6）。</summary>
     private string? _openMessage;
@@ -47,7 +52,8 @@ internal sealed class CircuitBreaker
     }
 
     /// <summary>尝试进入电路——Open 态非探针请求抛 CircuitBreakerOpenException。
-    /// 返回 (isHalfOpenProbe, generation) 记录，供后续 RecordSuccess/RecordFailure 判定。
+    /// 返回 (isHalfOpenProbe, generation, probeToken) 记录，供后续 RecordSuccess/
+    /// RecordFailure/ReleaseCancelledProbe 判定（token 为槽位归属标识，ITM-895）。
     /// <para><b>C1 无锁快路径</b>：Closed 态（绝大多数时间）只读 volatile 镜像 + generation，
     /// 不进入锁。会话级单活动操作契约下同一执行器极少被并发使用，收益是省掉锁本身的开销
     /// （每次 DB 操作两次）。</para>
@@ -57,16 +63,16 @@ internal sealed class CircuitBreaker
     /// 返回，操作成功后 RecordSuccess 会关闭刚开闸的熔断器，resetAfter 冷却静默失效。
     /// 先读 generation 则保证：只要后读的 flag 仍是 false，先读的 generation 必然早于本次
     /// Open 的自增（自增发生在 flag 写之后），陈旧记录会被 RecordSuccess 的 generation 核对拦下。</para></summary>
-    internal (bool IsHalfOpenProbe, long Generation) Enter()
+    internal (bool IsHalfOpenProbe, long Generation, long ProbeToken) Enter()
     {
         long generation = Volatile.Read(ref _generation);
         if (!IsEnabled || !_isOpenFlag)
-            return (false, generation);
+            return (false, generation, 0);
 
         lock (_lock)
         {
             if (!IsEnabled || !_isOpen)
-                return (false, _generation);
+                return (false, _generation, 0);
 
             // R5：回收超时未终结的探针占用槽位——调用方在两次记录之间崩溃/取消且未调
             // ReleaseCancelledProbe 时，槽位会永久泄漏使熔断器永远 Open
@@ -77,7 +83,8 @@ internal sealed class CircuitBreaker
 
             if (_halfOpenProbeActive)
             {
-                // 槽位超时：回收后本次请求立即成为新探针
+                // 槽位超时：回收后本次请求立即成为新探针（token 推进使旧探针的终结记录失效，
+                // ITM-895——generation 不动，回收不开闸）
                 _halfOpenProbeActive = false;
             }
             else if (DateTime.UtcNow < _openUntil)
@@ -87,7 +94,8 @@ internal sealed class CircuitBreaker
 
             _halfOpenProbeActive = true;
             _halfOpenProbeAcquiredAt = DateTime.UtcNow.Ticks;
-            return (true, _generation);
+            _halfOpenProbeToken += 1;
+            return (true, _generation, _halfOpenProbeToken);
         }
     }
 
@@ -114,7 +122,7 @@ internal sealed class CircuitBreaker
     /// 默认配置（阈值 5）下每次成功操作省一次无竞争 Monitor 与 5 次字段写。读序为
     /// flag（volatile）后 count；Process 级共享执行器的并发交错最多让一次成功清零晚一拍
     /// （失败计数短暂多留 1，属精度差异非正确性问题——下一成功操作读到非零即进锁清零）。</para></summary>
-    internal void RecordSuccess(bool isHalfOpenProbe, long generation)
+    internal void RecordSuccess(bool isHalfOpenProbe, long generation, long probeToken)
     {
         if (!isHalfOpenProbe && !_isOpenFlag && Volatile.Read(ref _failureCount) == 0)
             return;
@@ -122,7 +130,12 @@ internal sealed class CircuitBreaker
         lock (_lock)
         {
             if (isHalfOpenProbe)
+            {
+                // ITM-895：token 不匹配 = 槽位已被 stale 回收给新探针——旧探针的成功
+                // 不得释放新探针的槽位，也不得关闭新探针正在验证的闸
+                if (probeToken != _halfOpenProbeToken) return;
                 ReleaseProbeSlot();
+            }
 
             // generation 防陈旧：gen N 的探针成功不得关闭 gen N+1 的熔断。
             if (generation != _generation)
@@ -138,22 +151,28 @@ internal sealed class CircuitBreaker
 
     /// <summary>记录最终失败——探针失败重开熔断；非探针失败从 Closed 态首次跨阈值时开启。
     /// ITM-812（r23 实修）：补 generation 核对——与 RecordSuccess/ReleaseCancelledProbe
-    /// 对称（此前是三个终结记录口中唯一不带核对的，陈旧探针终态可改写新周期状态）。</summary>
-    internal void RecordFinalFailure(bool isHalfOpenProbe, bool countsTowardCircuit, long generation)
+    /// 对称（此前是三个终结记录口中唯一不带核对的，陈旧探针终态可改写新周期状态）。
+    /// ITM-895（r24）：补 token 核对——gen 陈旧分支里旧探针的 ReleaseProbeSlot 释放的
+    /// 是新探针的槽位（gen 推进 = Open 重开 = 新探针已在位），同族不变式破坏。</summary>
+    internal void RecordFinalFailure(bool isHalfOpenProbe, bool countsTowardCircuit, long generation, long probeToken)
     {
         lock (_lock)
         {
             if (generation != _generation)
             {
                 // 陈旧探针：释放自己占用的槽位后不再触碰新周期状态（gen 已推进 = 闸已重开，
-                // 本探针属于上一周期）
-                if (isHalfOpenProbe)
+                // 本探针属于上一周期）。ITM-895：token 校验——gen 推进时槽位属新探针，
+                // 旧探针无权释放
+                if (isHalfOpenProbe && probeToken == _halfOpenProbeToken)
                     ReleaseProbeSlot();
                 return;
             }
 
             if (isHalfOpenProbe)
+            {
+                if (probeToken != _halfOpenProbeToken) return;  // ITM-895：槽位已易主（stale 回收）
                 ReleaseProbeSlot();
+            }
 
             if (!countsTowardCircuit)
             {
@@ -196,14 +215,17 @@ internal sealed class CircuitBreaker
     /// <summary>调用方取消（非数据库失败）——释放探针占用，让熔断窗口立即到期进入半开态。
     /// <para><b>C2：带 generation</b>——原实现不带 generation，序列「探针 P 进入(gen N) →
     /// 探针失败重开(gen N+1，新 _openUntil) → P 的调用方取消并调本方法」会把 _openUntil
-    /// 改写为"现在"，新窗口瞬间到期，实际冷却期被旧探针的取消单方面抹掉。</para></summary>
-    internal void ReleaseCancelledProbe(bool isHalfOpenProbe, long generation)
+    /// 改写为"现在"，新窗口瞬间到期，实际冷却期被旧探针的取消单方面抹掉。</para>
+    /// <para><b>ITM-895：带 probeToken</b>——stale 回收后 gen 未推进，旧探针的取消同样
+    /// 不得释放新探针的槽位或改写其窗口。</para></summary>
+    internal void ReleaseCancelledProbe(bool isHalfOpenProbe, long generation, long probeToken)
     {
         if (!isHalfOpenProbe) return;
 
         lock (_lock)
         {
             if (generation != _generation) return;
+            if (probeToken != _halfOpenProbeToken) return;  // ITM-895：槽位已易主（stale 回收）
             ReleaseProbeSlot();
             _openUntil = DateTime.UtcNow;
         }

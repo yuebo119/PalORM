@@ -1051,9 +1051,15 @@ public partial class DataSession<TProvider>
             fillArrays(entities, start, batchLen, columns, 0);
             for (int c = 0; c < columnCount; c++)
             {
-                parameters[c].Value = TProvider.CreateTypedArrayParameter(
+                // ITM-894：能力检测与执行不一致（探测非 null 而满批 null）时给显式诊断，
+                // 对齐 BulkDelete BuildArrayParameter 的消息形态（原 null 断言直接 NRE 无信息）
+                parameters[c].Value = (TProvider.CreateTypedArrayParameter(
                     BatchUpdateSqlBuilder.UnnestColumnParameterName(c),
-                    columns[c], arrayElementTypes[c])!.Value;
+                    columns[c], arrayElementTypes[c])
+                    ?? throw new InvalidOperationException(
+                        $"Provider '{TProvider.Name}' returned a null typed array parameter for "
+                        + $"element type '{arrayElementTypes[c].Name}' (batch length {batchLen}); "
+                        + "the capability probe and the execution path disagree.")).Value;
             }
             totalAffected += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -1558,9 +1564,14 @@ public partial class DataSession<TProvider>
             fillArrays(entities, start, batchLen, columns, 0);
             for (int c = 0; c < columnCount; c++)
             {
-                parameters[c].Value = TProvider.CreateTypedArrayParameter(
+                // ITM-894：同 Update 执行体——null 时显式诊断（对齐 BuildArrayParameter）
+                parameters[c].Value = (TProvider.CreateTypedArrayParameter(
                     BatchUpdateSqlBuilder.UnnestColumnParameterName(c),
-                    columns[c], arrayElementTypes[c])!.Value;
+                    columns[c], arrayElementTypes[c])
+                    ?? throw new InvalidOperationException(
+                        $"Provider '{TProvider.Name}' returned a null typed array parameter for "
+                        + $"element type '{arrayElementTypes[c].Name}' (batch length {batchLen}); "
+                        + "the capability probe and the execution path disagree.")).Value;
             }
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             processed += batchLen;

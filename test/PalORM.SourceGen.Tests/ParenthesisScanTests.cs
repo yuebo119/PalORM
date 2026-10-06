@@ -19,6 +19,11 @@ public sealed class ParenthesisScanTests
     [Arguments("[we(ird] + 1", true)]
     [Arguments("$$a(b$$ + 1", true)]
     [Arguments("$tag$a(b$tag$ + 1", true)]
+    // ITM-888（r24）：未闭合 dollar-quote fail-closed——原实现吞到末尾仍返回 true，
+    // 畸形 $tag$(1+1 因后续括号自抵消（或无更多括号）过平衡检查，坏 DDL 晚失败在迁移期。
+    // 撤修复（恢复"吞到末尾 return true"）此两行变红。
+    [Arguments("$tag$(1+1", false)]
+    [Arguments("$$foo(", false)]
     public async Task IsBalancedParentheses_HandlesDialectLexemes(string expression, bool expected)
     {
         await Assert.That(
