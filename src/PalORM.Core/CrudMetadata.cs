@@ -160,13 +160,22 @@ public readonly struct CrudColumns
     /// BulkUpdateBatchAsync 直接消费本真源，不再解析生成 SQL 文本）。</summary>
     public readonly IReadOnlyList<string> Update;
 
-    /// <summary>构造列名聚合。三个列表做只读快照，调用方可安全复用生成代码的静态数组。</summary>
+    /// <summary>构造列名聚合。三个列表做只读快照，调用方可安全复用生成代码的静态数组。
+    /// 快照幂等（2026-10-06，10-05 审计 P3）：已是 ReadOnlyCollection 的输入直接复用——
+    /// CrudMetadata.Copy() 经本 ctor 重建时不再对注册期已快照的列表二次拷贝。</summary>
     public CrudColumns(IReadOnlyList<string> insert, IReadOnlyList<string> upsert, IReadOnlyList<string> update)
     {
-        Insert = Array.AsReadOnly(insert.ToArray());
-        Upsert = Array.AsReadOnly(upsert.ToArray());
-        Update = Array.AsReadOnly(update.ToArray());
+        Insert = Snapshot(insert);
+        Upsert = Snapshot(upsert);
+        Update = Snapshot(update);
     }
+
+    /// <summary>只读快照幂等化：裸数组/可变列表包装为 ReadOnlyCollection；已是只读快照
+    /// （注册期产物，Copy 路径的输入恒为此形态）直接复用原引用。</summary>
+    private static System.Collections.ObjectModel.ReadOnlyCollection<string> Snapshot(IReadOnlyList<string> source)
+        => source is System.Collections.ObjectModel.ReadOnlyCollection<string> snapshot
+            ? snapshot
+            : Array.AsReadOnly(source.ToArray());
 }
 
 /// <summary>CRUD 元数据聚合——单次字典查找替代四次独立查找。</summary>
@@ -266,14 +275,11 @@ public readonly struct CrudMetadata
         BuildDeleteKeyArray = bindings.BuildDeleteKeyArray;
         FillUpdateColumnArrays = bindings.FillUpdateColumnArrays;
         // 只读快照（与 CrudColumns / ColumnNames 同纪律）：片段传入的是生成代码的静态数组裸引用。
-        UpdateColumnArrayElementTypes = bindings.UpdateColumnArrayElementTypes is { } elementTypes
-            ? Array.AsReadOnly(elementTypes.ToArray())
-            : null;
+        // 快照幂等（2026-10-06）：Copy() 路径的输入已是注册期 ReadOnlyCollection，直接复用不二次拷贝。
+        UpdateColumnArrayElementTypes = SnapshotElementTypes(bindings.UpdateColumnArrayElementTypes);
         CreateUpdateColumnArrays = bindings.CreateUpdateColumnArrays;
         FillUpsertColumnArrays = bindings.FillUpsertColumnArrays;
-        UpsertColumnArrayElementTypes = bindings.UpsertColumnArrayElementTypes is { } upsertElementTypes
-            ? Array.AsReadOnly(upsertElementTypes.ToArray())
-            : null;
+        UpsertColumnArrayElementTypes = SnapshotElementTypes(bindings.UpsertColumnArrayElementTypes);
         CreateUpsertColumnArrays = bindings.CreateUpsertColumnArrays;
         InitUpsertParameters = bindings.InitUpsertParameters;
         InitUpdateParameters = bindings.InitUpdateParameters;
@@ -312,4 +318,15 @@ public readonly struct CrudMetadata
                 CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
+
+    /// <summary>元素类型表只读快照幂等化（同 CrudColumns.Snapshot——注册期已快照的输入
+    /// 在 Copy() 路径直接复用，不二次拷贝；2026-10-06，10-05 审计 P3）。</summary>
+    private static System.Collections.ObjectModel.ReadOnlyCollection<Type>? SnapshotElementTypes(IReadOnlyList<Type>? source)
+    {
+        if (source is null)
+            return null;
+        if (source is System.Collections.ObjectModel.ReadOnlyCollection<Type> snapshot)
+            return snapshot;
+        return Array.AsReadOnly(source.ToArray());
+    }
 }

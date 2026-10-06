@@ -265,7 +265,16 @@ public sealed partial class DataSession<TProvider>
             cmd.Dispose();
             throw;
         }
-        _reusableInsert?.Command.Dispose();
+        try
+        {
+            _reusableInsert?.Command.Dispose();
+        }
+        catch
+        {
+            // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面收口）——ITM-867 同哲学
+            cmd.Dispose();
+            throw;
+        }
         _reusableInsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
         return cmd;
     }
@@ -307,7 +316,16 @@ public sealed partial class DataSession<TProvider>
             cmd.Dispose();
             throw;
         }
-        _reusableUpdate?.Command.Dispose();
+        try
+        {
+            _reusableUpdate?.Command.Dispose();
+        }
+        catch
+        {
+            // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面收口）——ITM-867 同哲学
+            cmd.Dispose();
+            throw;
+        }
         _reusableUpdate = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
         return cmd;
     }
@@ -355,7 +373,17 @@ public sealed partial class DataSession<TProvider>
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        DbCommand keyProbeCommand = CreateCommand();
+        DbCommand keyProbeCommand;
+        try
+        {
+            // 第二次 CreateCommand 也可能抛（连接状态劣化）——首个命令此时未注册，须释放
+            keyProbeCommand = CreateCommand();
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
         try
         {
             BindGeneratedKeyParameter<T>(cmd, key);
@@ -369,8 +397,19 @@ public sealed partial class DataSession<TProvider>
             keyProbeCommand.Dispose();
             throw;
         }
-        _reusableGetByKey?.Command.Dispose();
-        _reusableGetByKey?.KeyProbe?.Dispose();
+        try
+        {
+            _reusableGetByKey?.Command.Dispose();
+            _reusableGetByKey?.KeyProbe?.Dispose();
+        }
+        catch
+        {
+            // 旧槽释放抛出时新命令未注册（10-05 审计 P3：原顺序 Dispose 抛会跳过
+            // KeyProbe 且泄漏新命令）——与 ITM-867 同哲学：释放新建资源后再抛
+            cmd.Dispose();
+            keyProbeCommand.Dispose();
+            throw;
+        }
         _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), keyProbeCommand);
         return cmd;
     }
