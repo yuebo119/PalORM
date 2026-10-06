@@ -50,41 +50,54 @@ public static class PostgreSqlExtensions
             if (JsonFormatCache.Count < MaxJsonFormatCacheEntries)
                 JsonFormatCache.TryAdd(column, format);
         }
-        // ->> 结果恒为 text：非字符串 value 归一为不变文化字符串，绑定参数类型对齐。
-        // ITM-610：bool 必须特判小写——Convert.ToString(bool) 产 "True"（首字母大写），
-        // jsonb 提取 text 恒为 "true"，text 相等比较大小写敏感 → 恒不匹配静默空结果。
-        // ITM-641(r4)：DateTime/DateTimeOffset 显式拒绝——Convert.ToString 产区域格式
-        // （06/15/2026 ...），jsonb ->> 提取 ISO text 恒不相等（同型静默空结果）。格式
-        // 对齐需 PG 真库实证提取形态——实现前响亮拒绝优于静默错；调用方请先 ToString
-        // 为与存储一致的 ISO 形态再传 string。
-        object? normalized = value switch
-        {
-            null or string => value,
-            bool b => b ? "true" : "false",
-            DateTime or DateTimeOffset => throw new NotSupportedException(
-                "WhereJson does not accept DateTime/DateTimeOffset values: the culture-formatted text "
-                + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first."),
-            // r19/ITM-683：DateOnly/TimeOnly 与 DateTime 同族——Convert.ToString 的 invariant
-            // 输出（MM/dd/yyyy / H:mm）与 jsonb ->> 提取的 ISO text（yyyy-MM-dd / HH:mm:ss）
-            // 恒不相等 → 静默空结果。显式拒绝，调用方请 ToString("yyyy-MM-dd")/("HH:mm:ss")。
-            DateOnly or TimeOnly => throw new NotSupportedException(
-                "WhereJson does not accept DateOnly/TimeOnly values: the invariant-formatted text "
-                + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first "
-                + "(e.g. value.ToString(\"yyyy-MM-dd\") or value.ToString(\"HH:mm:ss\"))."),
-            // ITM-771(r21)：enum/char/TimeSpan/byte[] 与 DateOnly 同族——Convert.ToString 的
-            // 输出与 jsonb ->> 提取 text 恒不相等（enum 产符号名而 jsonb 存数字/字符串、
-            // byte[] 产类型名）→ 静默空结果（ITM-610/683 根因类）。显式拒绝。
-            Enum or char or TimeSpan => throw new NotSupportedException(
-                "WhereJson does not accept enum/char/TimeSpan values: the invariant-formatted text "
-                + "never matches the jsonb text extracted by '->>'. Serialize to the stored string form first."),
-            byte[] => throw new NotSupportedException(
-                "WhereJson does not accept byte[] values; serialize to the stored string form first."),
-            _ => Convert.ToString(value, CultureInfo.InvariantCulture),
-        };
         // ITM-701：value 与 column/path 同口径 NUL 显式拒绝——绑定参数虽已隔离注入面，
         // 但 Npgsql 线协议对 NUL 的错误形态不可控，库内统一明确失败（ITM-644 族）。
+        object? normalized = NormalizeJsonValue(value);
         if (normalized is string normalizedString && normalizedString.Contains('\0', StringComparison.Ordinal))
             throw new ArgumentException("JSONB comparison value must not contain NUL characters.", nameof(value));
         return builder.Where(FormattableStringFactory.Create(format, path, normalized));
     }
+
+    /// <summary>value → text 比较值归一。<c>->></c> 结果恒为 text：非字符串 value 归一为
+    /// 不变文化字符串，绑定参数类型对齐。格式恒不相等族（bool/DateTime/DateOnly/enum/char/
+    /// TimeSpan/byte[]/double/float）显式拒绝——详见各分支 ITM 注释。</summary>
+    private static object? NormalizeJsonValue(object? value) => value switch
+    {
+        null or string => value,
+        bool b => b ? "true" : "false",
+        // ITM-610：bool 特判小写——Convert.ToString(bool) 产 "True"，jsonb 恒 "true"，大小写敏感恒不匹配。
+        // ITM-641(r4)：DateTime/DateTimeOffset 显式拒绝——Convert.ToString 产区域格式，jsonb ->>
+        // 提取 ISO text 恒不相等。格式对齐需 PG 真库实证提取形态——实现前响亮拒绝优于静默错；
+        // 调用方请先 ToString 为与存储一致的 ISO 形态再传 string。
+        DateTime or DateTimeOffset => throw new NotSupportedException(
+            "WhereJson does not accept DateTime/DateTimeOffset values: the culture-formatted text "
+            + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first."),
+        // r19/ITM-683：DateOnly/TimeOnly 与 DateTime 同族——Convert.ToString 的 invariant
+        // 输出（MM/dd/yyyy / H:mm）与 jsonb ->> 提取的 ISO text（yyyy-MM-dd / HH:mm:ss）
+        // 恒不相等 → 静默空结果。显式拒绝，调用方请 ToString("yyyy-MM-dd")/("HH:mm:ss")。
+        DateOnly or TimeOnly => throw new NotSupportedException(
+            "WhereJson does not accept DateOnly/TimeOnly values: the invariant-formatted text "
+            + "never matches the jsonb ISO text extracted by '->>'. Serialize to the stored ISO string form first "
+            + "(e.g. value.ToString(\"yyyy-MM-dd\") or value.ToString(\"HH:mm:ss\"))."),
+        // ITM-771(r21)：enum/char/TimeSpan/byte[] 与 DateOnly 同族——Convert.ToString 的
+        // 输出与 jsonb ->> 提取 text 恒不相等（enum 产符号名而 jsonb 存数字/字符串、
+        // byte[] 产类型名）→ 静默空结果（ITM-610/683 根因类）。显式拒绝。
+        Enum or char or TimeSpan => throw new NotSupportedException(
+            "WhereJson does not accept enum/char/TimeSpan values: the invariant-formatted text "
+            + "never matches the jsonb text extracted by '->>'. Serialize to the stored string form first."),
+        byte[] => throw new NotSupportedException(
+            "WhereJson does not accept byte[] values; serialize to the stored string form first."),
+        // ITM-890（r24，PG 18.6 真库实证）：double/float 与上族同型——InvariantCulture 输出
+        // 大值走 E 记法（1e21 → "1E+21"）且去尾零（1.10 → "1.1"），而 jsonb ->> 的 numeric
+        // 文本恒为展开定点形（"1000000000000000000000"）且保留输入 scale 尾零（"1.10"）→
+        // 大值/尾零形态恒不相等 → 静默空结果（实测 1e21/1.10 均 False、0.1 简形相等）。
+        // decimal 不拒绝：其 ToString 保留 scale 尾零，与 jsonb numeric 的 scale 形态一致
+        //（实测 1.10m == '1.10' 相等）。
+        double or float => throw new NotSupportedException(
+            "WhereJson does not accept double/float values: the invariant text (E-notation for "
+            + "large values, trailing zeros stripped) never matches the jsonb numeric text extracted "
+            + "by '->>' (always expanded decimal with input scale preserved). "
+            + "Serialize to the stored string form first."),
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture),
+    };
 }
