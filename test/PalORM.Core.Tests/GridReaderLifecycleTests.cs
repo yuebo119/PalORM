@@ -1,12 +1,15 @@
 using System.Collections;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalORM.Core.Tests;
 
 public sealed class GridReaderLifecycleTests
 {
+    // 类级串行：ITM-882 测试挂进程级 ActivityListener 并捕获引用，与其他测试的
+    // PalORM activity 并行会覆盖捕获（B74：无参形态按 TUnit 官方语义与任何测试互斥）。
     [Test]
     public async Task ConcurrentRead_FailsFast_AndFirstReadCompletes()
     {
@@ -51,7 +54,7 @@ public sealed class GridReaderLifecycleTests
     {
         var resources = new GridFailureResources(failReaderDispose: true);
         GridReader grid = await resources.CreateGridReaderAsync();
-#pragma warning disable S5034 // ValueTask 经 .AsTask() 显式转 Task 后多次 await Task 是合法的
+#pragma warning disable S5034 // ValueTask 经 .AsTask() 显式转 Task 后多次 await Task 是合法的，非双消费
 
         Task first = grid.DisposeAsync().AsTask();
         Task second = grid.DisposeAsync().AsTask();
@@ -67,6 +70,83 @@ public sealed class GridReaderLifecycleTests
         await Assert.That(resources.Reader.DisposeCount).IsEqualTo(1);
         await Assert.That(resources.Command.DisposeCount).IsEqualTo(1);
         await Assert.That(resources.Connection.DisposeCount).IsEqualTo(0);
+    }
+
+    // ITM-882 第一面：被拒读取必须经 catch 完成观测——修复前 ReadFirstAsync 的 EnterRead
+    // 在 try 外，"already has an active read" 的 InvalidOperationException 不经 catch →
+    // 观测悬挂（Activity 不 Dispose、Duration 恒 Zero）。
+    // 选并发拒绝而非 Dispose 后调用：DisposeAsync 自身会 Complete("success")，那条路径上
+    // 修复前后观测终态相同（都被 Dispose 收口），只有"观测未完成时被拒"才暴露差异。
+    // 断言面捕获 activity 引用看 Duration 与 outcome tag（类级 NotInParallel 消除并行污染）；
+    // finally 放行 AllowRead：断言失败传播时 await using 的 DisposeAsync 必须能等到
+    // 阻塞中的读完成，否则 5 分钟 DisposeWaitTimeout 超时会掩盖真正的断言失败。
+    [Test]
+    public async Task ReadFirstAsync_RejectedWhileActive_CompletesObservationAsError()
+    {
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = source => source.Name == PalORMMetrics.ActivitySourceName,
+            Sample = static (ref _) => ActivitySamplingResult.AllData,
+        };
+        ActivitySource.AddActivityListener(listener);
+        Activity? captured = null;
+        listener.ActivityStarted = activity => captured = activity;
+
+        var resources = new GridFailureResources();
+        var observation = new QueryObservation(tracingEnabled: true, metricsEnabled: false,
+            operation: "QueryMultiple", provider: "SQLite");
+        await using var grid = new GridReader(resources.Reader, resources.Command, observation);
+
+        Task<List<GridLifecycleEntity>> first = grid.ReadAsync<GridLifecycleEntity>().AsTask();
+        await resources.Reader.ReadStarted.Task;
+
+        try
+        {
+            await Assert.That(async () => await grid.ReadFirstAsync<GridLifecycleEntity>())
+                .Throws<InvalidOperationException>();
+            // Complete("error") → SetStatus + Dispose（隐式 Stop，Duration 固化为正值）；
+            // 修复前 Complete 未执行，Duration 恒 Zero
+            await Assert.That(captured).IsNotNull();
+            await Assert.That(captured!.Duration).IsGreaterThan(TimeSpan.Zero);
+            string? outcome = captured.Tags.FirstOrDefault(t => t.Key == "palorm.outcome").Value;
+            await Assert.That(outcome).IsEqualTo("error");
+        }
+        finally
+        {
+            resources.Reader.AllowRead.TrySetResult();
+        }
+        await Assert.That((await first).Count).IsEqualTo(0);
+    }
+
+    // ITM-882 第二面（entered 标记）：被拒调用不得误清活动读标记。修复前 ReadAsync 的
+    // 无条件 finally ExitRead（ITM-813 引入）在被拒时清掉在飞读的 _activeRead 并 TrySetResult——
+    // 下一个调用趁窗口穿过 EnterRead 与第一个读并发进 _reader。被拒方必须用 ReadAsync
+    // （修复前它才携带误清行为；ReadFirstAsync 在 try 外抛、无 finally，不误清）。
+    // 锁定的行为：被拒后再来的调用仍被 EnterRead 以"already has an active read"拒绝，
+    // 而不是进到 reader 层（fake reader 的 "concurrent reader access" 消息）。
+    [Test]
+    public async Task ReadRejected_DoesNotReleaseActiveReadMarker_ForSubsequentCalls()
+    {
+        var resources = new GridFailureResources();
+        await using var grid = await resources.CreateGridReaderAsync();
+        Task<List<GridLifecycleEntity>> first = grid.ReadAsync<GridLifecycleEntity>().AsTask();
+        await resources.Reader.ReadStarted.Task;
+
+        try
+        {
+            await Assert.That(async () => await grid.ReadAsync<GridLifecycleEntity>())
+                .Throws<InvalidOperationException>();
+
+            // 修复前：上一次被拒的 finally 已清标记，本次会穿过 EnterRead 进入 fake reader
+            Exception? second = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => grid.ReadAsync<GridLifecycleEntity>().AsTask());
+            await Assert.That(second!.Message).Contains("already has an active read");
+        }
+        finally
+        {
+            resources.Reader.AllowRead.TrySetResult();
+        }
+        await Assert.That((await first).Count).IsEqualTo(0);
     }
 }
 

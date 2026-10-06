@@ -423,8 +423,14 @@ public partial class DataSession<TProvider>
                     ct).ConfigureAwait(false);
             }
             // BULK-001：方言参数上限 + 单批行数上限（文本规模）双约束
+            // ITM-883（r24，ITM-809 族第 3 处）：分子扣租户参数——单语句批量内核每语句在池尾
+            // 追加 1 个 @__tenant0（上方 B8 注释证两路径租户语义对齐），不扣则租户实体在
+            // 参数恰好满批时越界 1 个，退回运行期协议层报错。与 BulkUpdateBatchAsync 的
+            // (driverLimit - tenantParams) 同口径（族内四处现已全扣）。
+            int singleStatementTenantParams = ctx.HasTenantFilter ? 1 : 0;
             int rowsPerBatch = Math.Min(
-                Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) / (ctx.SetColumnCount + 1)),
+                Math.Max(1, (SqlLimits.MaxBindParametersFor(TProvider.Dialect) - singleStatementTenantParams)
+                    / (ctx.SetColumnCount + 1)),
                 MaxRowsPerUpdateBatchFor(form));
             return await RunInTransactionScopeAsync(
                 operation.Owner,
@@ -1328,8 +1334,14 @@ public partial class DataSession<TProvider>
             SqlDialect.PostgreSql => Math.Min(SqlLimits.MaxRowsPerBatch, PostgreSqlMaxRowsPerUpsertBatch),
             _ => SqlLimits.MaxRowsPerBatch,
         };
+        // ITM-884（r24，ITM-809 族第 4 处）：参数上限扣租户参数——租户守卫（ApplyTenantGuardToShape）
+        // 每语句追加 1 个租户参数（PG/SQLite 冲突子句 WHERE 后；MySQL 各赋值项引用同名 @p，
+        // 参数集合内仍只占 1 个对象）。行数上限分支（maxRowsPerBatch * columnCount）不含租户参数，
+        // 不扣——两分支语义各自正确，Math.Min 取较小者。此处 tenantGuarded（1347 行）尚未声明，
+        // HasTenantFilter 现算无缓存（同 818 行注释口径），两处调用等值。
+        int upsertTenantParams = HasTenantFilter<T>() ? 1 : 0;
         int maxParametersPerStatement = Math.Min(
-            SqlLimits.MaxBindParametersFor(TProvider.Dialect),
+            SqlLimits.MaxBindParametersFor(TProvider.Dialect) - upsertTenantParams,
             maxRowsPerBatch * columnCount);
         int batchSize = Math.Max(1, maxParametersPerStatement / columnCount);
 
