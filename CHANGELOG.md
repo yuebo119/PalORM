@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+### 🐛 缺陷修复：r24 里程碑评审修复轮——P1×3 + P2×12 + P3×14（2026-10-06，ITM-882~912/914）
+
+r24 全量评审（4 片并行地毯 75 文件 22486 行零跳读）产出的行动项完整实施，四批提交（cbb3523 / 10c0870 / 9abe423 / 本批）。全部修复带撤修复验红锁定测试（绿↔红↔绿三向）。
+
+**P1（数据完整性/观测闭环）**
+- `GridReader.ReadFirstAsync` 被拒读取的观测闭环（ITM-882，ITM-813 同型漏修）：EnterRead 移入 try + entered 标记两面修复——被拒调用的 finally 不再误清在飞读的活动标记（误清后第三调用可穿透并发进 reader）。
+- 批容量算式租户扣减（ITM-883/884，ITM-809 族第 3/4 处）：BulkUpdate 单语句分支与 BatchUpsertAsync 的参数上限分子扣 tenantParams，租户实体"恰好满批"不再越界 1 参数（SQLite 27 列实测 1000>999 撤修复红）。
+- WhereJson 拒绝 double/float（ITM-890，PG 18.6 真库实证）：jsonb `->>` 的 numeric 文本恒为展开定点形且保留 scale 尾零，与 InvariantCulture 输出（E 记法/去尾零）大值尾零形态恒不相等 → 静默空结果；decimal 实测形态一致保留放行。
+
+**P2（守卫/防线/资源）**
+- WhereIn 守卫 LIMIT 余量按实际建参形态核算（ITM-885，ITM-827 族：take±skip=2/skip-only=1）；UnsafeWindowOver 补控制字符防线（ITM-886，三入口一致）；SessionBatch 复用命令不在迭代内 Dispose（ITM-887，L37 语句缓存收益恢复）；dollar-quote 未闭合 fail-closed（ITM-888，ITM-817 补全）；StoreAs 文档更正"v6.1 已实现"（ITM-889）；ReadCommandLease 释放 try/finally（ITM-891）；WithOutputParam DbType 补 6 类型（ITM-893）；UNNEST null 断言显式异常（ITM-894）；CircuitBreaker 探针槽位 token 归属（ITM-895，连带修 RecordFinalFailure 陈旧分支释放新探针槽位的同族缺陷）；local_infile TTL 失效回退（ITM-892，MySQL 真库实证：失败后重探测，OFF 回退多值/真故障透传）；DialectSelection.Includes 死方法删除 + GEN-008 裁剪范围收窄声明（ITM-896）。
+- AutoTagging 拦截签名模板化（ITM-914，哨兵测试揭穿 ITM-818 修复不完整）：s_terminals 增类型参数/参数列表/转发实参三要素——旧硬编码 `<T>` 两参模板对多参终态（ForEachAsync/QueryMultipleAsync 转发参数不全）与双泛型终态（ToPageAsync 拦截缺失）生成不可编译/漏拦截的产物。
+
+**P3（一致性/清理/登记）**
+- ParallelReadScope.DisposeAsync 原子幂等（ITM-897）；`is 0` 窄整型假阳修正（ITM-898）；IdentifierSafety 消息英文化（ITM-901）；@pN 拦截双引号标识符豁免（ITM-902）；GetByKey 复用精确单元素 pattern（ITM-904）；RunInTransactionScopeAsync 资源释放登记（ITM-905）；WithTimeout Zero 口径登记（ITM-908）；AutoTagging 终态计数三处同步 + 九终态哨兵（ITM-909）；PG/MySQL COMMIT 超时包装双复制体收敛到 BulkOperationFramework（ITM-910，消息文本统一为 Core 版）；SeedAsync 单快照 + 取消响应（ITM-911）；ValueStringBuilder.Append 负数守卫（ITM-912）。
+
+**登记待办**：ITM-883 MySQL 真库满批用例（16 SET 列×3855 行）/ ITM-892 端到端用例（SET GLOBAL 全局状态扰动 CI 共享库）/ ITM-895 并发单测（stale 常量不可注入）/ ITM-914 生成物签名正确性锁（GeneratorTestHost 未开 InterceptorsNamespaces）/ ITM-899 PALORM017 死代码三残留（涉及 V12 对账链）/ ITM-900 SqlTemplate 诊断 Location（DX 增强）/ ITM-906 GetSink 收敛（分叉当前零漂移）。
+
 ### 🐛 缺陷修复：PG 并发迁移竞态穿透（2026-10-06）
 
 - `IsDuplicateSchemaObject` 补 **42P07**（duplicate_table/duplicate_object）盲区：并发 `MigrateAsync` 时 CREATE TABLE IF NOT EXISTS 的存在性检查与目录插入非原子，竞态败者此前只接得住 23505（pg_type/pg_class 目录索引），PG 17 上主形态 42P07 直接穿透逐条幂等兜底（CI 空库 + 跨类并行确定性复现）。修复后建表批兜底与索引幂等跳过两面同时识别三形态（23505×2 + 42P07）。

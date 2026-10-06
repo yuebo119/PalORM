@@ -345,8 +345,12 @@ public sealed partial class DataSession<TProvider>
             return null;
 
         if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T)
-            && reusable.KeyProbe is { } keyProbe && reusable.Pool is [DbParameter pooledKey, ..])
+            && reusable.KeyProbe is { } keyProbe && reusable.Pool is [var pooledKey])
         {
+            // ITM-904（r24）：精确单元素 pattern——原 [DbParameter pooledKey, ..] 宽匹配在
+            // Pool.Length>1 时命中且只重绑 [0]，其余参数保持上一轮旧值。当前 BindDefaultFilterParameters
+            // 非租户时 no-op 使 Pool 恒为 1（无现实触发路径）；未来出现带参默认过滤形态时，
+            // 精确 pattern 使复用安全失效（走新建路径）而非静默用旧参数值执行（ITM-867 族防线缺口）。
             DbCommand reused = reusable.Command;
             // 事务与超时可随 WithTransaction/WithTimeout 中途变更，每次调用重设
             reused.Transaction = GetActiveTransaction();

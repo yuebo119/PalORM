@@ -472,7 +472,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>设置会话默认命令超时，并以**合并后的当前配置**重建弹性执行器。
     /// <para>"重建"意味着：此前经 <see cref="WithRetry"/>/<see cref="WithCircuitBreaker"/>
     /// 做过的会话级配置**保留**（三者都落到同一份 <c>_options</c>，叠加而非互相清空）；
-    /// 已通过 <c>From&lt;T&gt;()</c> 创建的 builder 因快照语义不受影响（继续用旧执行器）。</para></summary>
+    /// 已通过 <c>From&lt;T&gt;()</c> 创建的 builder 因快照语义不受影响（继续用旧执行器）。</para>
+    /// <para><b>ITM-908 口径不对称登记</b>：本入口拒绝 Zero/负值，而
+    /// <see cref="DbOptions.CommandTimeout"/> 的 Zero 语义是"无限等待"（ITM-619）——
+    /// 会话级无法把已设的超时**恢复**为无限等待（只能重建会话）。差异源于公共 API 的
+    /// 参数校验口径（ThrowIfLessThanOrEqual），Zero 透传属行为变更，未采纳。</para></summary>
     public DataSession<TProvider> WithTimeout(TimeSpan timeout)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout.Ticks, 0, nameof(timeout));
@@ -913,16 +917,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     /// <summary>并行读作用域句柄——DisposeAsync 退出作用域并在最外层释放池内连接。
     /// ITM-797④（r23）：幂等——重复 Dispose 不再把外层作用域深度多扣一次
-    /// （原形态内层双 Dispose 使 _parallelReadScopes 提前归零、外层池被整体提前释放）。</summary>
+    /// （原形态内层双 Dispose 使 _parallelReadScopes 提前归零、外层池被整体提前释放）。
+    /// ITM-897（r24）：幂等守卫改原子交换——bool 先查后写的窗口在并发双 Dispose 下双扣
+    /// （await using 正常路径不触发，仅并发手写 Dispose 暴露）。</summary>
     public sealed class ParallelReadScope(DataSession<TProvider> session) : IAsyncDisposable
     {
-        private bool _disposed;
+        private int _disposeState;
 
         /// <inheritdoc />
         public async ValueTask DisposeAsync()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (Interlocked.Exchange(ref _disposeState, 1) != 0) return;
             await session.EndParallelReadsAsync().ConfigureAwait(false);
         }
     }

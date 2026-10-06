@@ -50,9 +50,12 @@ internal ref struct ValueStringBuilder
         _pos += s.Length;
     }
 
-    /// <summary>追加非负整数的十进制数字——@p{N} 占位符等热路径免去 int→string 的中间分配。</summary>
+    /// <summary>追加非负整数的十进制数字——@p{N} 占位符等热路径免去 int→string 的中间分配。
+    /// <para>ITM-912（r24）：负数经 (uint) 转换变补码巨数产出错误数字串——当前全仓调用点
+    /// 均为非负（占位符编号），防御性显式拒绝优于静默错值。</para></summary>
     public void Append(int value)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(value);
         if ((uint)value < 10)
         {
             Append((char)('0' + value));

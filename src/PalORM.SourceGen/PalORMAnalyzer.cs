@@ -1269,7 +1269,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         {
             null => true,
             string text => text.Length == 0,
-            0 => true,              // int/short/byte/sbyte 等装箱 0
+            // ITM-898（r24）：C# 常量模式按类型精确匹配——装箱 short/byte/sbyte/ushort 的 0
+            // 不命中 `0`（int 型模式）。原注释「int/short/byte/sbyte 等装箱 0」是错误认知，
+            // 短整型键 = 0 会叠加 PALORM034 假阳 Warning。窄整型显式列全。
+            0 => true,
+            short and 0 or byte and 0 or sbyte and 0 or ushort and 0 => true,
             0L => true,
             0u => true,
             0UL => true,

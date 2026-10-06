@@ -108,4 +108,66 @@ public class AutoTaggingTests
         await Assert.That(generated).Contains("this global::PalORM.QueryBuilder<T> builder");
         await Assert.That(generated).Contains("global::System.Threading.CancellationToken ct = default");
     }
+
+    /// <summary>测试源码：含全部 9 个终态方法调用（ITM-909 哨兵——s_terminals 是 Core
+    /// QueryBuilderExtensions 签名的第二真源，本测试锁覆盖面；Core 新增终态时扩本清单）。
+    /// 调用形态按各终态真实签名（ForEachAsync 需 Func&lt;T,ct,ValueTask&gt;、ToPageAsync 需
+    /// orderBy 表达式、QueryMultipleAsync 需 FormattableString）。</summary>
+    private const string _sourceWithAllNineTerminals = """
+        using PalORM;
+        using System.Linq.Expressions;
+
+        [Table("users")]
+        public class User
+        {
+            [Key] public long Id { get; set; }
+            public string Name { get; set; } = "";
+        }
+
+        public static class Consumer
+        {
+            public static async Task Probe(PalORM.QueryBuilder<User> b)
+            {
+                _ = await b.ToListAsync();
+                _ = await b.FirstAsync();
+                _ = await b.FirstOrDefaultAsync();
+                _ = await b.SingleAsync();
+                _ = await b.SingleOrDefaultAsync();
+                _ = await b.ExecuteNonQueryAsync();
+                _ = await b.ForEachAsync(static (u, ct) => System.Threading.Tasks.ValueTask.CompletedTask);
+                _ = await b.ToPageAsync(10, static u => u.Id);
+                _ = await b.QueryMultipleAsync($"SELECT 1");
+            }
+        }
+    """;
+
+    [Test]
+    public async Task AutoTagging_AllNineTerminals_Intercepted()
+    {
+        // ITM-909：九终态全覆盖哨兵——9 个调用点各生成一个拦截方法。
+        // Emitter 漏登某个终态（s_terminals 与 Core 漂移）时该测试红。
+        var options = new Dictionary<string, string>
+        {
+            ["build_property.PalORMAutoTagging"] = "true"
+        };
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            _sourceWithAllNineTerminals, "AutoTaggingNine", options);
+
+        string generated = result.GeneratedSources["PalORM_AutoTagging.g.cs"];
+        // 已知限制：GeneratorTestHost 未启用 InterceptorsNamespaces（CS9137），OutputCompilation
+        // 零错断言不可用——生成物可编译性由真实消费工程（AotTest.* 开 PalORMAutoTagging +
+        // InterceptorsNamespaces）验证；本测试锁拦截覆盖面与签名文本。
+        int interceptCount = System.Text.RegularExpressions.Regex.Count(
+            generated, @"\[global::System\.Runtime\.CompilerServices\.InterceptsLocationAttribute\(");
+        string missing = string.Join(",", s_allNineTerminalNames
+            .Where(t => !generated.Contains($"{t}_AutoTag_", StringComparison.Ordinal)));
+        await Assert.That($"count={interceptCount} missing=[{missing}]").IsEqualTo("count=9 missing=[]");
+    }
+
+    private static readonly string[] s_allNineTerminalNames =
+    [
+        "ToListAsync", "FirstAsync", "FirstOrDefaultAsync", "SingleAsync",
+        "SingleOrDefaultAsync", "ExecuteNonQueryAsync", "ForEachAsync",
+        "ToPageAsync", "QueryMultipleAsync",
+    ];
 }

@@ -1630,12 +1630,17 @@ public partial class DataSession<TProvider>
         return sql.ToString();
     }
 
-    /// <summary>种子数据。要求每个实体具有非默认稳定主键，重复执行按主键更新。</summary>
+    /// <summary>种子数据。要求每个实体具有非默认稳定主键，重复执行按主键更新。
+    /// <para><b>ITM-911（r24）</b>：校验/收集段改读注册表单快照（R8 纪律，与 bulk 家族对齐，
+    /// 原 <c>PalORM_Runtime.CrudMetadatas</c> 直读绕过快照）+ 收集循环响应取消。
+    /// 外层 EnterOperation 租约登记不做：收集段不触碰会话可变状态（连接/门禁/过滤），
+    /// 实际 DB 操作在内层 BulkMergeAsync 自带租约。</para></summary>
     public async ValueTask SeedAsync<T>(IEnumerable<T> entities, CancellationToken ct = default)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(entities);
-        if (!PalORM_Runtime.CrudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
+        // ITM-911：单快照（R8）——路由判定与后续取值同一版本
+        if (!PalORM_Runtime.CurrentState._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
         // B20（2026-10-01 全 API 逐项轮）：单遍收集 + 默认键校验——原 ToList（全量物化）
         // + Any（第二遍枚举 + LINQ 委托）双遍开销；本形态一遍完成且零 LINQ。
@@ -1643,6 +1648,7 @@ public partial class DataSession<TProvider>
         List<T> items = entities is ICollection<T> sized ? new List<T>(sized.Count) : new();
         foreach (T entity in entities)
         {
+            ct.ThrowIfCancellationRequested();  // ITM-911：大集合取消响应
             if (metadata.HasDefaultKey(entity))
                 throw new InvalidOperationException(
                     $"Seed entity '{typeof(T).Name}' requires a non-default stable primary key.");

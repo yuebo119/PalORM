@@ -384,7 +384,8 @@ public sealed class MySqlProvider : IDbProvider
             if (ownsTransaction)
             {
                 commitAttempted = true;
-                await CommitWithTimeoutAsync(mySqlTransaction, commandTimeoutSeconds, ct)
+                // ITM-910（r24）：收敛到 BulkOperationFramework 委派 Core 的单一实现
+                await BulkOperationFramework.CommitWithTimeoutAsync(mySqlTransaction, commandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
             }
             return inserted;
@@ -418,35 +419,6 @@ public sealed class MySqlProvider : IDbProvider
         }
     }
 
-    /// <summary>COMMIT 的超时包装——与 PG 路径（<c>PostgreSqlProvider.CommitWithTimeoutAsync</c>）
-    /// 同口径：仅超时触发时包装为带 <c>PalORM.InfrastructureTimeout</c> 标记的
-    /// <see cref="TimeoutException"/>，调用方取消原样上抛；commandTimeoutSeconds ≤ 0
-    /// （全库 Zero = 无限等待契约）时不设超时。</summary>
-    private static async ValueTask CommitWithTimeoutAsync(
-        MySqlTransaction transaction, int commandTimeoutSeconds, CancellationToken ct)
-    {
-        if (commandTimeoutSeconds <= 0)
-        {
-            await transaction.CommitAsync(ct).ConfigureAwait(false);
-            return;
-        }
-
-        using var timeoutCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(System.TimeSpan.FromSeconds(commandTimeoutSeconds));
-        try
-        {
-            await transaction.CommitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (System.OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (System.OperationCanceledException timeoutException) when (timeoutCts.IsCancellationRequested)
-        {
-            var wrappedTimeout = new System.TimeoutException(
-                $"Bulk insert commit timed out after {commandTimeoutSeconds}s.", timeoutException);
-            wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
-            throw wrappedTimeout;
-        }
-    }
+    // ITM-910（r24）：原私有 CommitWithTimeoutAsync 复制体（与 PG 同构）已删，
+    // 调用点走 BulkOperationFramework.CommitWithTimeoutAsync（Core 单一实现）。
 }

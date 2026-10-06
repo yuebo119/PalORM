@@ -563,7 +563,8 @@ public sealed class PostgreSqlProvider : IDbProvider
             if (ownsTransaction)
             {
                 commitAttempted = true;
-                await CommitWithTimeoutAsync(bulkTransaction, commandTimeoutSeconds, ct)
+                // ITM-910（r24）：收敛到 BulkOperationFramework 委派 Core 的单一实现
+                await BulkOperationFramework.CommitWithTimeoutAsync(bulkTransaction, commandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
             }
             return total;
@@ -860,40 +861,9 @@ public sealed class PostgreSqlProvider : IDbProvider
         }
     }
 
-    /// <summary>R2/T2：自管事务的 COMMIT 纳入 <paramref name="commandTimeoutSeconds"/> 超时窗口。
-    /// COPY/LOAD DATA 每批已有 per-batch 超时（ITM-643），但整批收尾的 COMMIT 此前只受
-    /// 调用方 ct 约束——<c>ct == default</c> 时网络黑洞可让提交永久挂起。超时包装为
-    /// <see cref="TimeoutException"/> 并打 <c>PalORM.InfrastructureTimeout</c> 标记（与
-    /// COPY 路径的 wrapAsTimeout 同口径），调用方据此判定"服务端状态未知"并尝试回滚。</summary>
-    private static async ValueTask CommitWithTimeoutAsync(
-        DbTransaction transaction, int commandTimeoutSeconds, CancellationToken ct)
-    {
-        if (commandTimeoutSeconds <= 0)
-        {
-            await transaction.CommitAsync(ct).ConfigureAwait(false);
-            return;
-        }
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
-        try
-        {
-            await transaction.CommitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (OperationCanceledException timeoutException) when (timeoutCts.IsCancellationRequested)
-        {
-            var wrappedTimeout = new TimeoutException(
-                $"Bulk insert commit timed out after {commandTimeoutSeconds}s.", timeoutException);
-            wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
-            throw wrappedTimeout;
-        }
-    }
-
     // ITM-412 防漂移锚点（r22 收敛）：有界回滚与 DisposePreservingAsync 同族，已抽到
     // BulkOperationFramework 单一实现（跨程序集 public 入口，委派 Core 的 TransactionCleanup），
     // 三 Provider 与 Core 共享同一份语义——不再存在需要两侧同步核对的复制体。
+    // ITM-910（r24）：COMMIT 超时包装同款收敛（本文件原私有 CommitWithTimeoutAsync 复制体
+    // 已删，调用点走 BulkOperationFramework.CommitWithTimeoutAsync）——尾注与实现一致。
 }

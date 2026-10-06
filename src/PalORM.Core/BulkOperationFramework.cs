@@ -104,6 +104,18 @@ public static class BulkOperationFramework
         }
     }
 
+    /// <summary>提交超时包装的跨程序集入口（ITM-910 收敛，r24）——Provider 批量路径
+    /// （PG COPY / MySQL LOAD DATA）自管事务的 COMMIT 复用 Core 的单一实现
+    /// （<see cref="TransactionCleanup.CommitWithTimeoutAsync"/>）。此前 PG/MySQL 各持一份
+    /// 近乎逐字同构的私有复制体（仅消息文案差异），尾注声称"已抽到单一实现不再存在复制体"
+    /// 与实现漂移——本入口兑现该声明。
+    /// <para><b>消息文本变化</b>：原复制体的 "Bulk insert commit timed out after {n}s."
+    /// 收敛为 Core 版 "Commit timed out after {n}s; the server-side transaction state is unknown."
+    /// （无测试断言旧文案；InfrastructureTimeout 标记与调用方判定语义不变）。</para></summary>
+    public static ValueTask CommitWithTimeoutAsync(
+        DbTransaction transaction, int commandTimeoutSeconds, CancellationToken ct = default)
+        => TransactionCleanup.CommitWithTimeoutAsync(transaction, commandTimeoutSeconds, ct);
+
     /// <summary>有界回滚的跨程序集入口——Provider 批量路径（PG COPY / MySQL LOAD DATA）复用 Core 的
     /// 单一实现（<see cref="TransactionCleanup.RollbackPreservingAsync"/>），不各自复制。
     /// <para><b>为什么需要它</b>：MySQL 批量失败路径此前只依赖驱动 Dispose 的隐式回滚，而隐式回滚
