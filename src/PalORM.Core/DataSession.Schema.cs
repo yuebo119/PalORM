@@ -77,6 +77,79 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         _lastMigrationSkippedIndexes = [];  // ITM-765：每次迁移重置跳过清单
+        await AcquireMigrationLockAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await MigrateCoreAsync(operation, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await ReleaseMigrationLockAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>迁移互斥锁键（PG 会话级 advisory lock 的任意固定 int64——无语义，只求
+    /// 跨进程/跨实例恒定；2026-10-06 V601 诊断轮设立，CI 实验证实 4 路并发 MigrateAsync
+    /// 在 PG 17 上稳定复现 42P07/pg_type 目录级竞态，现有 IsDuplicateSchemaObject 兜底
+    /// 接不住目录错误）。</summary>
+    private const long MigrationAdvisoryLockKey = 721894423635590;
+
+    /// <summary>迁移互斥（会话级锁，连接关闭自动释放=崩溃安全）：多实例/多会话并发迁移
+    /// 时 CREATE TABLE IF NOT EXISTS 仍存在目录级竞态（PG pg_type duplicate 23505 +
+    /// 42P07 越过 IsDuplicateSchemaObject 兜底）。PG 走 advisory lock；MySQL 走
+    /// GET_LOCK（60s 超时）；SQLite 无并发目录（库级写锁串行 + IF NOT EXISTS 原子），跳过。
+    /// 调用方必须已持操作租约（本方法直用 _conn，不再入门禁）。</summary>
+    private async ValueTask AcquireMigrationLockAsync(CancellationToken ct)
+    {
+        DbCommand cmd = CreateCommand();
+        await using (cmd.ConfigureAwait(false))
+        {
+            switch (TProvider.Dialect)
+            {
+                case SqlDialect.PostgreSql:
+                    // S2077 报备（与 GetSoftDeleteUpdateSql 同口径）：插值成分=const long 键，
+                    // 非用户输入，注入面不存在
+#pragma warning disable S2077
+                    cmd.CommandText = $"SELECT pg_advisory_lock({MigrationAdvisoryLockKey})";
+#pragma warning restore S2077
+                    await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+                    break;
+                case SqlDialect.MySql:
+                    cmd.CommandText = "SELECT GET_LOCK('palorm_migrate', 60)";
+                    object? acquired = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+                    if (acquired is not 1)
+                        throw new InvalidOperationException(
+                            "MigrateAsync: GET_LOCK timed out (60s) — another migration is holding the lock.");
+                    break;
+            }
+        }
+    }
+
+    private async ValueTask ReleaseMigrationLockAsync(CancellationToken ct)
+    {
+        DbCommand cmd = CreateCommand();
+        await using (cmd.ConfigureAwait(false))
+        {
+            switch (TProvider.Dialect)
+            {
+                case SqlDialect.PostgreSql:
+#pragma warning disable S2077
+                    cmd.CommandText = $"SELECT pg_advisory_unlock({MigrationAdvisoryLockKey})";
+#pragma warning restore S2077
+                    await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+                    break;
+                case SqlDialect.MySql:
+                    cmd.CommandText = "SELECT RELEASE_LOCK('palorm_migrate')";
+                    await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>迁移执行体（互斥锁内）——原 MigrateAsync 主体。</summary>
+    private async ValueTask MigrateCoreAsync(
+        SessionOperationState.SessionOperationLease operation, CancellationToken ct)
+    {
         // 评审 2026-09-02 第二批（ADR-J）：实体全集以 TableNames 为键源——legacy CreateTableSql
         // 已从生成物移除，方言 DDL（CreateTableSqlByDialect）是唯一执行真源。
         int entityCount = PalORM_Runtime.TableNames.Count;
