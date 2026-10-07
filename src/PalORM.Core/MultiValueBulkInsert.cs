@@ -138,6 +138,25 @@ public static class MultiValueBulkInsert
         return total;
     }
 
+    /// <summary>单批 INSERT 语句的同步构建入口（2026-10-07 修复拆出）——stackalloc 缓冲
+    /// 生命周期收到本方法调用帧内。<see cref="ExecuteBatchesAsync{T}"/> 是 async 方法，
+    /// span 不能跨 await 存活（多批场景第二批构建发生在首批 await 后，状态机恢复后栈缓冲
+    /// 失效，Release 下 Memmove NRE）；本方法同步执行完毕即产出字符串，缓冲不外泄。
+    /// <para>PERF-004 语义不变：VSB 起始于 512 字符栈缓冲，超出由 ArrayPool 兜底，
+    /// 单 VSB 顺序写后只产出一份最终字符串。</para></summary>
+    private static string BuildBatchSql(
+        string quotedTable, string quotedColumns, int batchLength, int columnCount)
+    {
+        Span<char> sqlBuffer = stackalloc char[512];
+        var sb = new ValueStringBuilder(sqlBuffer);
+        try
+        {
+            AppendInsertStatement(ref sb, quotedTable, quotedColumns, batchLength, columnCount);
+            return sb.ToString();
+        }
+        finally { sb.Dispose(); }
+    }
+
     /// <summary>把完整 INSERT 语句（前缀 + VALUES 段）写入 <paramref name="sb"/>（PERF-004，2026-09-23）。
     /// <para>原实现四层分配：<c>string[batchLength]</c> + 每行小串 + <c>string.Join</c> 大串 +
     /// 插值再一份大串（20 列 1000 行瞬时约 830KB，其中约一半落 LOH）。单 VSB 顺序写后只产出一份
@@ -202,9 +221,6 @@ public static class MultiValueBulkInsert
             batchCmd.Transaction = tran;
             batchCmd.CommandTimeout = commandTimeoutSeconds;
 
-            // PERF-004：语句构建缓冲提到批循环外——stackalloc 在循环内会随迭代累积栈（CA2014），
-            // 提到循环外后每批在同一 span 上重建（VSB 起始于栈缓冲，超出才租池并在 Dispose 归还）。
-            Span<char> sqlBuffer = stackalloc char[512];
             for (int start = 0; start < entities.Count; start += effectiveBatchSize)
             {
                 int end = Math.Min(start + effectiveBatchSize, entities.Count);
@@ -215,17 +231,15 @@ public static class MultiValueBulkInsert
                 bool poolUsable = valuesBinder is not null
                     && (paramPool is not null || batchLength == effectiveBatchSize);
 
-                // CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）
+                // CommandText 仅在批大小变化时重建（首批 + 末尾不满批时）。
+                // 2026-10-07 修复：构建缓冲的 stackalloc 原声明在 async 方法体内（PERF-004
+                // 提到批循环外），多批场景下第二批的构建发生在首批 await 之后——状态机恢复后
+                // 栈缓冲已失效，Release 下 Memmove NRE（ITM-883 满批用例在 CI 实锤；Debug
+                // 不炸纯属栈布局运气，单批场景构建全在首个 await 前故一直潜伏）。修复＝构建
+                // 收进同步静态方法，缓冲生命周期收到单次调用帧，天然不跨 await。
                 if (batchLength != lastBatchLength)
                 {
-                    var sqlBuilder = new ValueStringBuilder(sqlBuffer);
-                    try
-                    {
-                        AppendInsertStatement(
-                            ref sqlBuilder, quotedTable, quotedColumns, batchLength, columnCount);
-                        lastBatchSql = sqlBuilder.ToString();
-                    }
-                    finally { sqlBuilder.Dispose(); }
+                    lastBatchSql = BuildBatchSql(quotedTable, quotedColumns, batchLength, columnCount);
                     lastBatchLength = batchLength;
                 }
                 batchCmd.CommandText = lastBatchSql;

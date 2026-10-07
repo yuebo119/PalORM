@@ -4,6 +4,20 @@
 
 ## [6.3.1] - 2026-10-07
 
+### 🐛 缺陷修复：多值 INSERT 多批构建的栈缓冲跨 await（Release 下 NRE）
+
+`MultiValueBulkInsert.ExecuteBatchesAsync` 的语句构建缓冲 `stackalloc char[512]` 原声明在
+async 方法体内（PERF-004 提到批循环外），多批场景下第二批的构建发生在首批 await 之后——
+状态机恢复后栈缓冲已失效，Release 下 `Append(string)` 的 `Memmove` 抛 NullReferenceException
+（ITM-883 满批用例在 CI 实锤；Debug 不炸纯属栈布局运气，单批场景构建全在首个 await 前故长期
+潜伏，同构复现程序双向验证）。修复＝构建拆进同步静态方法 `BuildBatchSql`，缓冲生命周期收到
+单次调用帧内，天然不跨 await；PERF-004 语义不变（VSB 栈起步 + ArrayPool 兜底）。
+
+- 触发面：MySQL/SQLite 多值 INSERT 分 ≥2 批且批大小变化（含末批）的组合；PG Binary COPY
+  与 MySQL LOAD DATA 路径不经过此代码
+- 验证：Integration Release 276/276（修复前 275/276 失败于 ITM-883 用例）· Core 523/523 ·
+  SourceGen 231/231 · Release 严格构建 0 警告 0 错误 · 同构最小复现程序修复前 REPRO/修复后 OK
+
 ### ⚡ 性能优化：BulkDelete IN 形态池化——恢复 R-UNNESTB 正确性修复的性能代价（2026-10-07）
 
 - **IN 占位符形态的批量删除**（SQLite/MySQL 及复合主键回退路径）：满批命令与参数实例跨批复用，
