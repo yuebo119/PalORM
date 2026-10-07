@@ -1073,31 +1073,12 @@ internal static class CommandFactoryEmitter
 
     /// <summary>O1：COPY 行写入的表达式构造——与 <see cref="GetParameterValueExpression"/>
     /// 同源（枚举/OwnedJson/Converter 三分支同一转换），仅去掉 (object) 装箱外壳与
-    /// DBNull 三元守卫（守卫由生成代码的 if/else 显式分流到 WriteNull）。</summary>
+    /// DBNull 三元守卫（守卫由生成代码的 if/else 显式分流到 WriteNull）。
+    /// ITM-906（r24 待办收口）：原为 GetParameterValueExpressionCore 的手写拷贝（r24 片 4
+    /// 实证当前两处逐位一致），转换器/枚举存储语义变更需双处同步（B120 单一真源原则的
+    /// 分叉隐患）——收敛为带 entity 表达式参数的委派，生成物逐字节不变（快照零 diff 验证）。</summary>
     private static string GetSinkValueExpression(ColumnModel col)
-    {
-        if (col.EnumStorage != EnumStorageKind.None)
-        {
-            string prop = $"entity.{col.EscapedPropertyName}";
-            return col.EnumStorage switch
-            {
-                EnumStorageKind.AsInt32 => col.IsNullable
-                    ? $"(int)({col.EnumClrTypeName}){prop}" : $"(int){prop}",
-                EnumStorageKind.AsInt64 => col.IsNullable
-                    ? $"(long)({col.EnumClrTypeName}){prop}" : $"(long){prop}",
-                // N2（2026-10-04）：同 GetParameterValueExpressionCore——EnumStr_X 零分配，
-                // 替代 COPY 行写入的逐列 ToString()。
-                _ => col.IsNullable
-                    ? $"EnumStr_{col.PropertyName}(({col.EnumClrTypeName}){prop})"
-                    : $"EnumStr_{col.PropertyName}({prop})",
-            };
-        }
-        if (IsObjectOwnedJson(col))
-            return $"global::System.Text.Json.JsonSerializer.Serialize(entity.{col.EscapedPropertyName}, JsonTypeInfo_{col.PropertyName})";
-        return col.ConverterTypeName is null
-            ? $"entity.{col.EscapedPropertyName}"
-            : $"_conv_{col.PropertyName}.ToProvider(entity.{col.EscapedPropertyName})";
-    }
+        => GetParameterValueExpressionCore(col, $"entity.{col.EscapedPropertyName}");
 
     /// <summary>O1：CopyWriteRow 主体——列序 = IsInsertable 过滤后的声明序，与
     /// GenerateBindValuesBody 同谓词（列序错位的后果是错误数据写入而非编译失败，

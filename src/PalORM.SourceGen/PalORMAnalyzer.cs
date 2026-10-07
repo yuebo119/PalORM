@@ -95,11 +95,6 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "Property '{0}' has unsupported type '{1}'. Supported provider types are long, int, short, byte, string, char, bool, decimal, double, float, DateTime, Guid, DateTimeOffset, DateOnly, TimeOnly, and byte[] (single-dimensional arrays). TimeSpan and other arrays must convert via an accessible parameterless [Converter] to a supported provider type. byte[] entity properties may trigger analyzer CA1819, which is a false positive for ORM columns and should be suppressed locally.",
         "PalORM", DiagnosticSeverity.Error, true);
 
-    public static readonly DiagnosticDescriptor AnnotationNotAppliedToDdl = new(
-        "PALORM017", "Annotation does not participate in DDL generation",
-        "{0} on '{1}' does not participate in migration DDL generation in the current version; MigrateAsync will not create the corresponding schema object",
-        "PalORM", DiagnosticSeverity.Warning, true);
-
     public static readonly DiagnosticDescriptor MissingTenantColumn = new(
         "PALORM018", "Tenant-aware entity requires a tenant_id column",
         "Type '{0}' uses [TenantAware] but does not map a property to column 'tenant_id'; WithTenant filtering would reference a non-existent column",
@@ -295,7 +290,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          NPlusOneDetected, MissingOwnedJsonContext,
          InvalidOwnedJsonContext, UnsupportedOwnedJsonDeclaration, UnsupportedQualifiedTable,
          InvalidConcurrencyTokenType, MultipleConcurrencyTokens, MissingSoftDeleteColumn,
-         UnsupportedEntityDeclaration, InvalidValueMapping, AnnotationNotAppliedToDdl,
+         UnsupportedEntityDeclaration, InvalidValueMapping,
          MissingTenantColumn, CompositePrimaryKey, InvalidIndexDeclaration, DuplicateColumnName,
          InvalidKeyDeclaration,
          NoInsertableColumns, NoUpdatableColumns, UnsupportedTimestampType, NotMappedConflict,
@@ -928,7 +923,6 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         {
             var memberLocation = member.Locations.FirstOrDefault() ?? type.Locations[0];
 
-            CheckAnnotationNotApplied(ctx, member, memberLocation);              // PALORM017
             CheckOwnedJson(ctx, type, member);                                    // PALORM008/009/010（r11.5-D2 订正：019 是复合主键）
             CheckValueMapping(ctx, member);                                       // 值映射
             CheckColumnNameMismatch(ctx, member, type);                           // PALORM002
@@ -1359,16 +1353,6 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 member.Name, member.Type.ToDisplayString(),
                 "AsInt32 would truncate values of an enum whose underlying type is wider than int; use AsInt64"));
         }
-    }
-
-    /// <summary>PALORM017：不参与迁移 DDL 的属性级注解——消除"标注了但静默无效"。
-    /// ADR-B 后 [Index]/[Unique] 已参与索引 DDL，停报；v6.0 R2 后 [DefaultValue] 参与列
-    /// DEFAULT 子句，停报；v6.0 R3 后 [Column] 的 Length/Precision/Scale/TypeName 参与类型
-    /// 细化，停报；v6.1 起 [Column(StoreAs=…)] 参与读写双路径（ITM-553 枚举存储策略），
-    /// 停报——适用面违规由 PALORM053 定位报错。</summary>
-    private static void CheckAnnotationNotApplied(
-        SymbolAnalysisContext ctx, IPropertySymbol member, Location memberLocation)
-    {
     }
 
     /// <summary>PALORM051：[Column] 架构参数值域（R3，v6.0）——负 Length/Precision、负 Scale、

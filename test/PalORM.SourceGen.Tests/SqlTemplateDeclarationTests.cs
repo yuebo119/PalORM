@@ -1,3 +1,5 @@
+using Microsoft.CodeAnalysis;
+
 namespace PalORM.SourceGen.Tests;
 
 /// <summary>ITM-719/720(r20)：[SqlTemplate] 声明形状与插值串 trivia 锁定。
@@ -24,6 +26,12 @@ public sealed class SqlTemplateDeclarationTests
         // 不生成字段（否则生成物 `FormattableString class = ...` 编译错误落 .g.cs）
         await Assert.That(result.GeneratedSources.Any(pair =>
             pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))).IsFalse();
+        // ITM-900（r24 待办收口）：诊断携带声明位置（IDE 可跳转；原 Location.None 无红点
+        // 位置）——撤本修复此断言变红
+        Diagnostic? diagnostic = result.Diagnostics.FirstOrDefault(d => d.Id == "PALORM046");
+        await Assert.That(diagnostic).IsNotNull();
+        await Assert.That(diagnostic!.Location != Location.None
+            && diagnostic.Location.SourceTree is not null).IsTrue();
     }
 
     [Test]

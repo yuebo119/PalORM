@@ -188,10 +188,13 @@ public sealed class PalORMGenerator : IIncrementalGenerator
             {
                 // ITM-719(r20)：声明不受支持（关键字名/宿主形状/带参泛型）——报 PALORM046
                 // 且不生成字段（生成物会不可编译，错误指向 .g.cs）。
+                // ITM-900（r24 待办收口）：携带声明位置——Location.None 上报时 IDE 错误列表
+                // 不可跳转（与 PALORM001-053 的带锚点口径对齐）
                 if (model.InvalidReason is not null)
                 {
                     spc.ReportDiagnostic(Diagnostic.Create(
-                        SqlTemplateEmitter.InvalidSqlTemplateDeclaration, Location.None,
+                        SqlTemplateEmitter.InvalidSqlTemplateDeclaration,
+                        model.DeclarationLocation ?? Location.None,
                         model.MethodIdentity, model.InvalidReason));
                     continue;
                 }
@@ -200,7 +203,8 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                     // ITM-662：重名必须显式报错——静默 continue 让第二个模板的 SQL
                     // 永远不可用且用户不知情（拿错 SQL 族）。
                     spc.ReportDiagnostic(Diagnostic.Create(
-                        SqlTemplateEmitter.DuplicateSqlTemplateName, Location.None,
+                        SqlTemplateEmitter.DuplicateSqlTemplateName,
+                        model.DeclarationLocation ?? Location.None,
                         model.TemplateName, model.Namespace));
                     continue;
                 }
