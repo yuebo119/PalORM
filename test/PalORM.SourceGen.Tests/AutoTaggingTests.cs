@@ -162,6 +162,21 @@ public class AutoTaggingTests
         string missing = string.Join(",", s_allNineTerminalNames
             .Where(t => !generated.Contains($"{t}_AutoTag_", StringComparison.Ordinal)));
         await Assert.That($"count={interceptCount} missing=[{missing}]").IsEqualTo("count=9 missing=[]");
+
+        // ITM-914 签名正确性锁（文本级）：三个多参/双泛型终态的拦截签名必须逐字含类型参数与
+        // 全部参数。旧硬编码 <T> 两参模板（撤模板化）下生成的是错误签名——计数断言无判别力
+        // （attribute 文本同在），此三断言是模板化修复的咬合面。
+        await Assert.That(generated.Contains(
+            "ForEachAsync_AutoTag_", StringComparison.Ordinal)
+            && generated.Contains("global::System.Func<T, global::System.Threading.CancellationToken, global::System.Threading.Tasks.ValueTask> action", StringComparison.Ordinal)
+            && generated.Contains(".ForEachAsync(action, ct)", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generated.Contains(
+            "<T, TKey>(this global::PalORM.QueryBuilder<T> builder, int pageSize, global::System.Linq.Expressions.Expression<global::System.Func<T, TKey>> orderBy", StringComparison.Ordinal)
+            && generated.Contains(".ToPageAsync(pageSize, orderBy, lastValue, descending, ct)", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(generated.Contains(
+            "QueryMultipleAsync_AutoTag_", StringComparison.Ordinal)
+            && generated.Contains("global::System.FormattableString sql", StringComparison.Ordinal)
+            && generated.Contains(".QueryMultipleAsync(sql, ct)", StringComparison.Ordinal)).IsTrue();
     }
 
     private static readonly string[] s_allNineTerminalNames =

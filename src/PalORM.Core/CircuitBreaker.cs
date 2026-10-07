@@ -33,11 +33,18 @@ internal sealed class CircuitBreaker
     /// <summary>R5：探针重试前的消息缓存——开闸时生成一次，避免每次拒绝都格式化（M6）。</summary>
     private string? _openMessage;
 
-    internal CircuitBreaker(int threshold, TimeSpan resetAfter)
+    /// <summary>半开探针占用的可回收下限默认 5 分钟（构造参数 halfOpenSlotStaleAfter
+    /// 为 null 时采用）。ITM-895（r24 待办收口）：改为构造可注入——并发单测需要亚毫秒窗口
+    /// 模拟"探针卡死后槽位被 stale 回收"的时序，硬编码 5 分钟使该场景不可测。</summary>
+    private static readonly TimeSpan DefaultHalfOpenSlotStaleAfter = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan _halfOpenSlotStaleAfter;
+
+    internal CircuitBreaker(int threshold, TimeSpan resetAfter, TimeSpan? halfOpenSlotStaleAfter = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(threshold);
         _threshold = threshold;
         _resetAfter = resetAfter;
+        _halfOpenSlotStaleAfter = halfOpenSlotStaleAfter ?? DefaultHalfOpenSlotStaleAfter;
     }
 
     internal bool IsEnabled => _threshold > 0;
@@ -109,12 +116,11 @@ internal sealed class CircuitBreaker
         long acquiredAt = _halfOpenProbeAcquiredAt;
         if (acquiredAt == 0) return true;
         TimeSpan held = DateTime.UtcNow - new DateTime(acquiredAt, DateTimeKind.Utc);
-        return held > HalfOpenSlotStaleAfter;
+        return held > _halfOpenSlotStaleAfter;
     }
 
     /// <summary>半开探针占用的可回收下限——触发即说明探针的终结路径没被调用
-    /// （正常探针由数据库命令超时约束，远早于此完成）。</summary>
-    private static readonly TimeSpan HalfOpenSlotStaleAfter = TimeSpan.FromMinutes(5);
+    /// （正常探针由数据库命令超时约束，远早于此完成）。默认值见构造器。</summary>
 
     /// <summary>记录成功——探针成功且 generation 匹配时关闭熔断。
     /// <para><b>A4（2026-10-01 全 API 逐项轮）无状态快路径</b>：非探针、闸未开、失败计数为零时，
