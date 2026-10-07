@@ -29,9 +29,11 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 - [安装](#-安装)
 - [快速开始](#-快速开始)
 - [使用](#-使用)
+- [最佳实践速查](#-最佳实践速查)
 - [配置](#-配置)
 - [性能](#-性能)
 - [与主流 ORM 对比](#-与主流-orm-对比)
+- [升级指南](#-升级指南)
 - [开发](#-开发)
 - [贡献](#-贡献)
 - [社区](#-社区)
@@ -41,7 +43,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ## ✨ 特性
 
-**编译时生成一切**。Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）；`[Projection]` 标记的 DTO 同样获得源生成的 RowFactory——join/报表结果直接映射到非表类型（v6.0）。46 条编译时诊断（43 分析器 + 3 生成器）把缺 `[Key]`、租户列可空绕过隔离、乐观锁基线为 0 这类运行时崩溃或静默错数据提前到编译期。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门 `Raw()`（原样字面量片段，拒绝控制字符）与 `SessionSetupSql` 由调用方负责内容。
+**编译时生成一切**。Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）；`[Projection]` 标记的 DTO 同样获得源生成的 RowFactory——join/报表结果直接映射到非表类型（v6.0）。45 条编译时诊断（42 分析器 + 3 生成器）把缺 `[Key]`、租户列可空绕过隔离、乐观锁基线为 0 这类运行时崩溃或静默错数据提前到编译期，错误列表可跳转到声明位置（PALORM041/045/046 带锚点）。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门 `Raw()`（原样字面量片段，拒绝控制字符）与 `SessionSetupSql` 由调用方负责内容。
 
 **全链路 Native AOT**。.NET 生态唯一完整支持全链路 Native AOT 的 ORM：SQLite / PostgreSQL / MySQL 三方言发布验证全部通过（运行输出 `PalORM AOT verification PASSED`），无反射、无 IL Emit、无运行时代码生成。部署细节见 [docs/AOT部署指南.md](docs/AOT部署指南.md)。
 
@@ -145,7 +147,7 @@ await db.BulkUpdateAsync(users);
 // 批量更新（v5.0 单语句批量）
 await db.BulkUpdateBatchAsync(users);
 
-// 批量删除（IN 子句单语句）
+// 批量删除（PG: = ANY(数组) 单语句 / MySQL、SQLite: IN 分批单语句，满批命令与参数池化复用）
 await db.BulkDeleteAsync<User>(keyList);
 
 // 批量 UPSERT（多行 UPSERT 单语句；默认键新行走逐条 INSERT 回填自增 ID）
@@ -159,7 +161,7 @@ await db.BulkMergeAsync(users);
 | `BulkInsertAsync` | Binary COPY | BulkCopy（local_infile）或多值 INSERT | 多值 INSERT |
 | `BulkUpdateAsync` | 逐条 + 乐观锁（DbBatch 打包） | 逐条 + 乐观锁（DbBatch 打包） | 逐条 + 乐观锁 |
 | `BulkUpdateBatchAsync` | `FROM VALUES` | `UPDATE JOIN VALUES ROW`（8.0.19+，低版本回退 CASE WHEN） | 自动回退逐条 |
-| `BulkDeleteAsync` | `IN` 单语句 | `IN` 单语句 | `IN` 单语句 |
+| `BulkDeleteAsync` | `= ANY(数组)` 单语句 | `IN` 分批单语句 | `IN` 分批单语句 |
 | `BulkMergeAsync` | 多行 UPSERT（`ON CONFLICT DO UPDATE`） | 多行 UPSERT（`ON DUPLICATE KEY UPDATE`） | 多行 UPSERT（`ON CONFLICT DO UPDATE`） |
 
 `BulkMergeAsync`（v5.6.0 集合化）按键状态分区：默认键（新行）走逐条 INSERT 保留 ID 回填契约，非默认键行按方言参数上限分批走多行 UPSERT（SQLite 999 / PG 与 MySQL 65535 参数上限，MySQL ODKU 单批 1000 行）；`[ConcurrencyCheck]` 实体维持逐条（UPSERT 无法尊重乐观锁）。
@@ -221,13 +223,15 @@ await db.WithTransaction(async ct =>
 弹性策略（`WithRetry` 指数退避 + `WithCircuitBreaker` 熔断）自 v5.4 起自动覆盖只读查询管线：
 
 ```csharp
-// 配置一次，只读查询自动获得重试 + 熔断；SELECT 瞬时故障（死锁/超时/连接闪断）自动重试
+// Production 预设已含弹性（MaxRetries=5 / 熔断阈值 10 / 半开 60s）
 await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(
-    DbOptions.Production(connectionString)
-        .WithRetry(maxRetries: 3)
-        .WithCircuitBreaker(failureThreshold: 5, resetAfter: TimeSpan.FromSeconds(30)));
+    DbOptions.Production(connectionString));
 
-// 非幂等写入不自动重试，显式声明弹性意图
+// 需要自定义阈值时在会话上链式覆盖（方法在 DataSession 上，返回同一会话）
+db.WithRetry(maxRetries: 3)
+  .WithCircuitBreaker(failureThreshold: 5, resetAfter: TimeSpan.FromSeconds(30));
+
+// SELECT 瞬时故障（死锁/超时/连接闪断）自动重试；非幂等写入不自动重试，显式声明弹性意图：
 long affected = await db.ExecuteWithResilience(
     token => db.From<Order>()
         .Set(o => o.Status, OrderStatus.Paid)
@@ -269,7 +273,7 @@ var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 
 ⚠️ `AuditInterceptor` 覆盖面：实体 SELECT 管线、QueryBuilder UPDATE 与 `ExecuteAsync`（v5.6.0 接入）；`InsertAsync`/`DeleteAsync`/`SaveAsync`/Bulk 家族/存储过程/迁移不产生审计记录，完整写入审计请用数据库层审计或 OpenTelemetry。
 
-其余横切能力：`[SoftDelete]` 自动 WHERE 过滤、`[TenantAware]` + `WithTenant(id)` 单库列隔离（缓存 key 自动加 `__t:{tenantId}:` 前缀，`IgnoreFilters()` 走独立 `__all__:` 命名空间）、`[ConcurrencyCheck]` 乐观锁、`ForRead` 读写分离。全部注解（22 个）与执行方法明细见 [docs/API参考.md](docs/API参考.md)。
+其余横切能力：`[SoftDelete]` 自动 WHERE 过滤、`[TenantAware]` + `WithTenant(id)` 单库列隔离（缓存 key 自动加 `__t:{tenantId}:` 前缀，`IgnoreFilters()` 走独立 `__all__:` 命名空间）、`[ConcurrencyCheck]` 乐观锁、`ForRead` 读写分离。全部注解（23 个）与执行方法明细见 [docs/API参考.md](docs/API参考.md)。
 
 ### 原生 SQL 与 SQL 文件
 
@@ -304,6 +308,49 @@ dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqli
 ```
 
 三 Provider schema → C# 实体，40+ 类型映射（`uuid` → `Guid`、`jsonb` → `string`、`bytea` → `byte[]`、`date` → `DateOnly`、`time` → `TimeOnly`）。
+
+### 批量 API 选型速查
+
+| 场景 | 用 | 不用 | 理由 |
+|------|-----|------|------|
+| 批量插入，不需要 ID 回填 | `BulkInsertAsync` | 逐条 / `SessionBatch` | 方言最快路径（COPY / LOAD DATA / 多值），实测事务内 100 行比逐条快 8.4× |
+| 批量插入且需逐行回填自增 ID | `BulkMergeAsync`（默认键走逐条回填）或 `SessionBatch` | `BulkInsertAsync` | COPY / LOAD DATA 不回填 ID |
+| 混合语句或需逐条语义控制 | `SessionBatch`（DbBatch 打包） | 逐条往返 | 单往返打包多语句，SQLite 20 条/批 |
+| 按非主键列批量更新（每行不同值） | `BulkUpdateBatchAsync` | 逐条 | 单语句多行 SET（PG `FROM VALUES` / MySQL `JOIN VALUES ROW`） |
+| 乐观锁实体批量更新 | `BulkUpdateAsync` | `BulkUpdateBatchAsync` | UPSERT/单语句形态无法逐行校验版本；DbBatch 打包保语义 |
+| 插入或更新（键存在则更新） | `BulkMergeAsync` | 手写 ON CONFLICT | 租户实体自动限定本租户（跨租户命中 0 行） |
+| 大键集删除（万级以上） | `BulkDeleteAsync` | 逐条 Delete | 自动按方言参数上限分批（SQLite 999 / MySQL·PG 数千），整批单事务，满批命令与参数池化复用 |
+
+## ✅ 最佳实践速查
+
+按使用频率收拢，详细依据见各链接位置：
+
+**会话与连接**
+- 同一作用域复用一个 `DataSession`，不要每操作 `CreateAsync`（会话内同形状操作第 3 次起自动复用命令与参数槽）
+- 高频单键查询用 `GetAsync`（比链式等价写法快 25~30%、省 880 B）；带过滤条件才用 `From<T>()`
+- 只读副本配置 `ReadConnectionString` 后，报表/列表查询显式 `.ForRead()`，主从延迟敏感的强读留在主库
+- 并发查询先声明 `await using (db.ForParallelReads())`；作用域内不要调 `GetAsync`（入口限制会响亮拒绝）
+
+**查询与结果集**
+- 行数不可控的大表用 `QueryAsyncEnumerable<T>` 流式消费（峰值内存 O(1)），不要 `ToListAsync` 全量物化
+- 深翻页用 `ToPageAsync` 游标（Keyset），不要大 OFFSET（扫描量随偏移线性增长）
+- 热路径的 `OrderBy`/`Select` 表达式提到静态字段（每棵树 512 B + 0.5~1.6 µs 的调用点成本可消除）
+- `WithCache` 默认关；启用后写后读一致用 `db.EvictQueryCache()` 显式收窄
+
+**写入与批量**
+- 批量 API 按上方选型速查表选择；不要在循环里逐条 `InsertAsync`（连接往返是数量级差异）
+- 可能存 NULL 的列声明可空属性（`string?`），非可空遇 NULL 会响亮抛 `SqlNullValueException`（不出静默 null）
+- 非幂等写不要指望自动重试（写入路径直连语义）；确需弹性用 `ExecuteWithResilience` 包裹并自行评估重复执行风险
+- 事务内批量优先 `BulkInsertAsync` 而非 `SessionBatch`（同事务 100 行 5.4ms vs 16.8ms）
+
+**多租户与横切**
+- `[TenantAware]` 实体会话创建后立即 `WithTenant(id)`，不要延后到首个查询（缓存 key 前缀随租户切换失效）
+- 需要跨租户管理查询时用 `IgnoreFilters()` 短路，查询结束立即回到租户上下文
+
+**运维与排查**
+- 生产用 `DbOptions.Production`（已含弹性/连接池预设），只覆盖确需自定义的项
+- 超时异常带 `PalORM.InfrastructureTimeout` 标记的属基础设施侧（网络/服务器），先查环境再查代码
+- MySQL 批量写报 `ER_NET_PACKET_TOO_LARGE` 先查服务端 `max_allowed_packet`；LOAD DATA 回退多值 INSERT 是 `local_infile` 关闭时的预期行为（非错误）
 
 ## 🔧 配置
 
@@ -572,7 +619,19 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 - **RepoDb**：BulkOperation 仅 SQL Server（[repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert)：*"It is only supporting the SQL Server RDBMS."*），其他方言走 packed statements；`Merge` 同属 BulkOperation 族，同受此限。
 - **PalORM**：诊断计数 45 = 42 分析器 + 3 生成器（`docs/API参考.md`）；批量 UPSERT 租户护栏 = `BulkMergeAsync` 冲突更新限定本租户（2026-10 审计 P2 收口）；读副本路由 = 查询族 `readFromReplica` 参数 + `ParallelReadScope` 并行读作用域。
 
-## 🔄 从 5.x 升级到 6.0
+## 🔄 升级指南
+
+### 从 6.2.x 及更早升级到 6.3.0（数据正确性修复，强烈建议）
+
+6.3.0 修复了 **R-UNNESTB：PG auto-prepare × 命令复用槽交互下的批量操作静默错数**（影响 5.7.0 ~ 6.2.0 共 7 个版本）。触发条件：连接串启用 `MaxAutoPrepare`（PalORM 默认调优会设为 100，见[连接串自动调优](#-连接串自动调优)）且同一会话执行第 3 个及后续等长批量批次；后果是第 3 批起静默重发第 2 批的参数（批量删除少删行、批量 UPSERT 写错键），无异常无告警。
+
+- **升级到 6.3.0** 即彻底修复（参数对象从建立到释放全程稳定，auto-prepare 缓存引用不再错配）
+- **暂不能升级的止血**：连接串显式加 `MaxAutoPrepare=0`（代价是失去自动预编译的查询延迟收益，Npgsql 默认即 0）
+- 风险面自查：若历史负载满足触发条件，建议对受影响表的批量操作结果做一次对账（行数/键集合核对）
+
+6.3.0 同时包含 PG 三条批量写走数组形态（`UPDATE FROM VALUES(...)` 的 UNNEST 化与 `DELETE ... = ANY(数组)`，批量族时延 −40~74%），行为面无破坏。
+
+### 从 5.x 升级到 6.0
 
 四项破坏性变更（详见 [ADR-N](docs/adr/ADR-N-v6.0-破坏性变更汇总.md)）：
 
@@ -583,6 +642,8 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 | `DbOptions.NamingConvention`（含 `ApplyNaming`） | **删除该设置即可——行为从未生效过**（列名映射在编译期由 `[Table]`/`[Column]` 注解决定）；要改列名用 `[Column("...")]` |
 | `DbOptions.PoolExplicitlyConfigured` | 无——零读方内部标记；`WithPool`/`PALORM_MAX_POOL_SIZE` 行为不变 |
 | `[Column]` 的 `Length/Precision/Scale`：`int?` → `int`（0=未设置） | 无——`[Column(Length = 64)]` 语法在 5.x 从未可编译过（CS0655）；v6.0 起该语法首次真正可用并参与 DDL |
+
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 🧰 开发
 
