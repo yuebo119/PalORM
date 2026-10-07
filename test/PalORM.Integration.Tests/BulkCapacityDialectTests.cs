@@ -32,11 +32,13 @@ public sealed class BulkCapacityDialectTests
         await session.ExecuteAsync($"SET GLOBAL local_infile=OFF");
         try
         {
-            // 探针自建自清（B171 惯例）：DDL 硬编码（表名/列名进插值会成为绑定参数）
+            // 探针自建自清（B171 惯例）：DDL 硬编码（表名/列名进插值会成为绑定参数）；
+            // IF NOT EXISTS 双保险——前轮异常退出残留表时前置 DROP 失效可自愈
 #pragma warning disable S2077, CA2100
             await session.ExecuteAsync($"DROP TABLE IF EXISTS itm883_batch_capacity_probe");
             await session.ExecuteAsync(
-                $"CREATE TABLE itm883_batch_capacity_probe (`Id` BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, f01 BIGINT NOT NULL, f02 BIGINT NOT NULL, f03 BIGINT NOT NULL, f04 BIGINT NOT NULL, f05 BIGINT NOT NULL, f06 BIGINT NOT NULL, f07 BIGINT NOT NULL, f08 BIGINT NOT NULL, f09 BIGINT NOT NULL, f10 BIGINT NOT NULL, f11 BIGINT NOT NULL, f12 BIGINT NOT NULL, f13 BIGINT NOT NULL, f14 BIGINT NOT NULL, f15 BIGINT NOT NULL)");
+                $"CREATE TABLE IF NOT EXISTS itm883_batch_capacity_probe (`Id` BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, f01 BIGINT NOT NULL, f02 BIGINT NOT NULL, f03 BIGINT NOT NULL, f04 BIGINT NOT NULL, f05 BIGINT NOT NULL, f06 BIGINT NOT NULL, f07 BIGINT NOT NULL, f08 BIGINT NOT NULL, f09 BIGINT NOT NULL, f10 BIGINT NOT NULL, f11 BIGINT NOT NULL, f12 BIGINT NOT NULL, f13 BIGINT NOT NULL, f14 BIGINT NOT NULL, f15 BIGINT NOT NULL)");
+            await session.ExecuteAsync($"DELETE FROM itm883_batch_capacity_probe");
 #pragma warning restore S2077, CA2100
             session.WithTenant(7);
 
