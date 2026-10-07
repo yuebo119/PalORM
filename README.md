@@ -530,25 +530,29 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 
 ## 🆚 与主流 ORM 对比
 
-> 版本基准：PalORM 5.9.0 / Dapper 2.1.89 / EF Core 10.0.10 / RepoDb 1.16.0（仓库基准套件所用版本）。单元格依据见下方注释。
+> 版本基准：PalORM 6.3.0 / Dapper 2.1.89 / EF Core 10.0.10 / RepoDb 1.16.0（仓库基准套件所用版本）。单元格依据见下方注释。
 
 | 特性 | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
 | **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选（实验性拦截器） | ❌ 实验性，生产不推荐 | ❌ 反射 + IL Emit |
-| **编译时类型诊断** | ✓ 46 条（43 分析器 + 3 生成器） | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
+| **编译时类型诊断** | ✓ 45 条（42 分析器 + 3 生成器），错误可跳转声明位置 | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
 | **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
 | **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
-| **三方言批量策略** | ✓ COPY / BulkCopy / 多值 | ❌ 手写多值 SQL | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
+| **三方言批量策略** | ✓ COPY / BulkCopy / 多值 / `= ANY` 数组 | ❌ 手写多值 SQL | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
 | **单语句多行 UPDATE** | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN | ❌ | ❌ ExecuteUpdate 仅按 WHERE 单值 | ❌ |
-| **乐观锁** | ✓ `[ConcurrencyCheck]` 自动 | ❌ 手写 | ✓ `RowVersion` 自动 | ❌ 手写 |
-| **软删除** | ✓ `[SoftDelete]` 自动过滤 | ❌ | ✓ 全局查询过滤器 | ❌ |
-| **多租户列隔离** | ✓ `[TenantAware]` 编译时 | ❌ | △ 需手动实现 | ❌ |
+| **批量 UPSERT** | ✓ `BulkMergeAsync`（ON CONFLICT / ON DUPLICATE KEY，冲突更新限定本租户） | ❌ 手写 | ❌ 需 raw SQL | △ Merge 仅 SQL Server |
+| **乐观锁** | ✓ `[ConcurrencyCheck]` 自动；批量走 DbBatch 打包 | ❌ 手写 | ✓ `RowVersion` 自动 | ❌ 手写 |
+| **软删除** | ✓ `[SoftDelete]` 自动过滤（含批量删转 UPDATE） | ❌ | ✓ 全局查询过滤器 | ❌ |
+| **多租户列隔离** | ✓ `[TenantAware]` 编译时；批量写跨租户护栏 | ❌ | △ 需手动实现 | ❌ |
+| **值转换 + 枚举存储** | ✓ `[Converter]` / 枚举三策略（int32/int64/文本）编译时发射 | △ TypeHandler 手写 | ✓ ValueConverter / HasConversion（运行时） | △ TypeHandler |
+| **读副本路由** | ✓ `ParallelReadScope` + 查询族 `readFromReplica` | ❌ | △ 需手动配置多上下文 | ❌ |
+| **Schema 自动迁移** | ✓ `MigrateAsync` + 并发竞态容错（重复对象即跳过） | ❌ | ✓ Migrations（最全面） | △ |
 | **OwnedJson 编译时安全** | ✓ `[OwnedJson]` + 源生成 | ❌ 手写 STJ | △ Owned Types（运行时） | ❌ |
 | **审计拦截器** | ✓ | ❌ | ✓ Interceptors | ❌ |
 | **咨询锁** | ✓ `pg_advisory_xact_lock` | ❌ | ❌ | ❌ |
 | **会话级 SET** | ✓ `SessionSetupSql` | ❌ | ❌ | ❌ |
 | **SQL 文件嵌入** | ✓ `[SqlFile]` 编译时校验 | ❌ | ❌ | ❌ |
-| **断路器 + 重试** | ✓ 内置 | ❌ 需 Polly | △ 执行策略 | ❌ |
+| **断路器 + 重试** | ✓ 内置（HalfOpen 探针槽位并发安全） | ❌ 需 Polly | △ 执行策略 | ❌ |
 | **CTE / 窗口函数** | ✓ 链式 API | △ 原生 SQL 字符串 | △ LINQ 翻译（部分） | △ 原生 SQL |
 | **多结果集** | ✓ `GridReader` | ✓ `QueryMultiple` | ❌ | ✓ `ExecuteQueryMultiple` |
 | **Keyset 分页** | ✓ `ToPageAsync` | ❌ | ❌ | ❌ |
@@ -559,13 +563,14 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 | **目标框架** | net11.0（单目标） | 多目标（netstandard2.0+） | 多目标（net8+） | 多目标（netstandard2.0+） |
 | **许可证** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
 
-核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，且批量仅 SQL Server。
+核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略（COPY / BulkCopy / 多值 / 数组）。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，且批量仅 SQL Server。
 
 对比依据：
 
-- **Dapper**：`Dapper.AOT`（独立包，[aot.dapperlib.dev](https://aot.dapperlib.dev)）通过 Roslyn interceptors 生成 AOT 拦截器，interceptors 是 C# 实验性特性，非默认启用。
-- **EF Core 10**：LTS（[learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)）。`ExecuteUpdateAsync` 仅支持按 WHERE 单值更新，无法单 SQL 内对每行设置不同值；AOT 仍实验性（[issue #35945](https://github.com/dotnet/efcore/issues/35945)）。
-- **RepoDb**：BulkOperation 仅 SQL Server（[repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert)：*"It is only supporting the SQL Server RDBMS."*），其他方言走 packed statements。
+- **Dapper**：`Dapper.Aot`（独立包，[aot.dapperlib.dev](https://aot.dapperlib.dev)）通过 Roslyn interceptors 生成 AOT 拦截器，interceptors 是 C# 实验性特性，非默认启用。
+- **EF Core 10**：LTS（[learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)）。`ExecuteUpdateAsync` 仅支持按 WHERE 单值更新，无法单 SQL 内对每行设置不同值；AOT 仍实验性（[issue #35945](https://github.com/dotnet/efcore/issues/35945)）；无内置 UPSERT API，`MERGE` 语义需 raw SQL。
+- **RepoDb**：BulkOperation 仅 SQL Server（[repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert)：*"It is only supporting the SQL Server RDBMS."*），其他方言走 packed statements；`Merge` 同属 BulkOperation 族，同受此限。
+- **PalORM**：诊断计数 45 = 42 分析器 + 3 生成器（`docs/API参考.md`）；批量 UPSERT 租户护栏 = `BulkMergeAsync` 冲突更新限定本租户（2026-10 审计 P2 收口）；读副本路由 = 查询族 `readFromReplica` 参数 + `ParallelReadScope` 并行读作用域。
 
 ## 🔄 从 5.x 升级到 6.0
 
