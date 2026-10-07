@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 982 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 986 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -19,8 +19,10 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 46 条 PALORM 诊断（43 条分析器 + 3 条生成器：PALORM041/045/046）
+### 编译时验证 — 45 条 PALORM 诊断（42 条分析器 + 3 条生成器：PALORM041/045/046）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
+> PALORM017 已删除（r24，ITM-899）：v6.1 起 StoreAs 参与读写双路径后停报，描述符与
+> 空方法为死残留——ID 永不复用（诊断编号历史保留记录）。
 > v5.0 扩充（2026-07-26）：PALORM023-027（实体级硬规则）+ PALORM031-033（调用级 API 误用）+ PALORM034-037/040（防静默错误）。
 > v7.2 扩充（2026-08-26，ITM-640 收口）：PALORM042-044——生成器 throw/静默跳过的编译期定位面（分工同 022：分析器定位报错，生成器防御性跳过）。
 > v6.0 扩充（R2）：PALORM047/048——[DefaultValue] DDL 落地的编译期契约（互斥三态 + 表达式快检），

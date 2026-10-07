@@ -40,7 +40,8 @@ internal static class SqlTemplateEmitter
     /// 宿主非 partial class/方法带参或泛型）——生成器据此报 PALORM046 且不生成该字段。</para></summary>
     internal sealed record SqlTemplateModel(
         string Namespace, string TemplateName, string Literal, string MethodIdentity,
-        string? InvalidReason = null);
+        string? InvalidReason = null,
+        Location? DeclarationLocation = null);
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -62,33 +63,34 @@ internal static class SqlTemplateEmitter
         string ns = method.ContainingNamespace?.IsGlobalNamespace == true
             ? "PalORM.Generated"
             : method.ContainingNamespace?.ToDisplayString() ?? "PalORM.Generated";
+        // ITM-900（r24 待办收口）：携带声明位置——PALORM046/041 以 Location.None 上报时
+        // IDE 错误列表不可跳转（与 PalORMAnalyzer 内 PALORM001-053 的带锚点口径不一致）。
+        Location declarationLocation = method.Locations.FirstOrDefault() ?? Location.None;
 
         // ITM-719(r20)：IsValidIdentifier 对 C# 关键字返回 true（探针实测 "class"=true）——
         // 关键字名会生成 `FormattableString class = ...`，错误落在 .g.cs。显式报诊断。
+        // ITM-900：InvalidReason 分支统一入口——携带声明位置（诊断可跳转）
+        SqlTemplateModel Invalid(string reason) => new(ns, templateName, "", methodIdentity, reason, declarationLocation);
+
         if (string.IsNullOrEmpty(templateName)
             || !SyntaxFacts.IsValidIdentifier(templateName))
             return null;  // 未填有效名——保持原"不生成"语义（非用户误以为合法的形态）
         if (SyntaxFacts.GetKeywordKind(templateName) != SyntaxKind.None)
-            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
-                $"'{templateName}' is a C# keyword and cannot be used as a generated field name");
+            return Invalid($"'{templateName}' is a C# keyword and cannot be used as a generated field name");
 
         // ITM-719(r20)：宿主形状——Render 硬编码 `public static partial class SqlTemplates`，
         // 方法须为无参非泛型且宿主支持 partial class（record/struct 宿主会 CS0261/CS0111，
         // 错误落在 .g.cs）。此处显式报诊断并拒绝生成。
         if (method.Parameters.Length != 0)
-            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
-                "the method must have no parameters (the generated field is a static readonly const)");
+            return Invalid("the method must have no parameters (the generated field is a static readonly const)");
         if (method.IsGenericMethod)
-            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
-                "the method must not be generic (the generated field is a static readonly const)");
+            return Invalid("the method must not be generic (the generated field is a static readonly const)");
         // ITM-755(r21)：原条件 `{ TypeKind: not TypeKind.Class } host && host.TypeKind != TypeKind.Class`
         // 的第二合取恒为真（模式已保证），属冗余；简化为单模式匹配。
         if (method.ContainingType is { TypeKind: not TypeKind.Class } host)
-            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
-                $"the containing type '{host.Name}' must be a class (the generated partial declaration is a class)");
+            return Invalid($"the containing type '{host.Name}' must be a class (the generated partial declaration is a class)");
         if (method.ContainingType is { IsRecord: true })
-            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
-                "the containing type must be a plain class, not a record (the generated partial declaration is a class)");
+            return Invalid("the containing type must be a plain class, not a record (the generated partial declaration is a class)");
         // ITM-754(r21)：生成类名硬编码为 SqlTemplates（Render）。同命名空间若已存在**非 partial**
         // 的同名类型，生成的 partial 声明会报 CS0260（错误仍落在 .g.cs，正是 ITM-573 家族要消灭的形态）。
         // 探针实证：`public class SqlTemplates {}` + 任意 [SqlTemplate] → CS0260 且无 PALORM046。
@@ -97,9 +99,8 @@ internal static class SqlTemplateEmitter
                 .Select(static r => r.GetSyntax())
                 .OfType<TypeDeclarationSyntax>()
                 .Any(static t => !t.Modifiers.Any(SyntaxKind.PartialKeyword)))
-            return new SqlTemplateModel(ns, templateName, "", methodIdentity,
-                $"the namespace '{ns}' already declares a non-partial type named 'SqlTemplates', " +
-                "which conflicts with the generated partial declaration (rename it or make it partial)");
+            return Invalid($"the namespace '{ns}' already declares a non-partial type named 'SqlTemplates', "
+                + "which conflicts with the generated partial declaration (rename it or make it partial)");
 
         var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
         if (syntaxRef?.GetSyntax(ct) is not MethodDeclarationSyntax methodSyntax)
@@ -154,7 +155,8 @@ internal static class SqlTemplateEmitter
         // 会把行注释一并带进初始值，生成的 `= $"..." // c;` 使分号被注释掉（语法错误落 .g.cs）。
         // 用 `ToString()` 只取插值串本体（不含外层 trivia），并在无 trivia 后 Trim。
         string literal = interpolated.ToString().Trim();
-        return new SqlTemplateModel(ns, templateName, literal, methodIdentity);
+        return new SqlTemplateModel(ns, templateName, literal, methodIdentity,
+            DeclarationLocation: declarationLocation);
     }
 
     /// <summary>渲染单个模板文件（去重后由生成器逐个调用）。</summary>
