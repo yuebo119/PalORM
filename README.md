@@ -59,11 +59,11 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.3.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.3.1" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.3.0" />
+<PackageReference Include="PalORM.MySql" Version="6.3.1" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.3.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.3.1" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。
@@ -577,7 +577,7 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 
 ## 🆚 与主流 ORM 对比
 
-> 版本基准：PalORM 6.3.0 / Dapper 2.1.89 / EF Core 10.0.10 / RepoDb 1.16.0（仓库基准套件所用版本）。单元格依据见下方注释。
+> 版本基准：PalORM 6.3.1 / Dapper 2.1.89 / EF Core 10.0.10 / RepoDb 1.16.0（仓库基准套件所用版本）。单元格依据见下方注释。
 
 | 特性 | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -621,11 +621,11 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 
 ## 🔄 升级指南
 
-### 从 6.2.x 及更早升级到 6.3.0（数据正确性修复，强烈建议）
+### 从 6.2.x 及更早升级到 6.3.x（数据正确性修复，强烈建议）
 
-6.3.0 修复了 **R-UNNESTB：PG auto-prepare × 命令复用槽交互下的批量操作静默错数**（影响 5.7.0 ~ 6.2.0 共 7 个版本）。触发条件：连接串启用 `MaxAutoPrepare`（PalORM 默认调优会设为 100，见[连接串自动调优](#-连接串自动调优)）且同一会话执行第 3 个及后续等长批量批次；后果是第 3 批起静默重发第 2 批的参数（批量删除少删行、批量 UPSERT 写错键），无异常无告警。
+6.3.0 修复了 **R-UNNESTB：PG auto-prepare × 命令复用槽交互下的批量操作静默错数**（影响 5.7.0 ~ 6.2.0 共 7 个版本）；6.3.1 在此之上恢复了 BulkDelete IN 形态的池化性能（20K 键 39→38ms 快态带，见[性能](#-性能)）。R-UNNESTB 触发条件：连接串启用 `MaxAutoPrepare`（PalORM 默认调优会设为 100，见[连接串自动调优](#-连接串自动调优)）且同一会话执行第 3 个及后续等长批量批次；后果是第 3 批起静默重发第 2 批的参数（批量删除少删行、批量 UPSERT 写错键），无异常无告警。
 
-- **升级到 6.3.0** 即彻底修复（参数对象从建立到释放全程稳定，auto-prepare 缓存引用不再错配）
+- **升级到 6.3.1** 即彻底修复（参数对象从建立到释放全程稳定，auto-prepare 缓存引用不再错配）
 - **暂不能升级的止血**：连接串显式加 `MaxAutoPrepare=0`（代价是失去自动预编译的查询延迟收益，Npgsql 默认即 0）
 - 风险面自查：若历史负载满足触发条件，建议对受影响表的批量操作结果做一次对账（行数/键集合核对）
 

@@ -60,11 +60,11 @@ Requirements: .NET SDK `11.0.100-preview.6` or later (`global.json` pins `rollFo
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.3.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.3.1" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.3.0" />
+<PackageReference Include="PalORM.MySql" Version="6.3.1" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.3.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.3.1" />
 ```
 
 Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time source generator). After installing, verify with the minimal Quick Start example below: if you can create a session and complete one insert, the install works.
@@ -571,7 +571,7 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 
 ## 🆚 Comparison with mainstream ORMs
 
-> Version baseline: PalORM 6.3.0 / Dapper 2.1.89 / EF Core 10.0.10 / RepoDb 1.16.0 (versions used by this repo's benchmark suite). Cell evidence in the notes below.
+> Version baseline: PalORM 6.3.1 / Dapper 2.1.89 / EF Core 10.0.10 / RepoDb 1.16.0 (versions used by this repo's benchmark suite). Cell evidence in the notes below.
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -615,11 +615,11 @@ Comparison evidence:
 
 ## 🔄 Upgrade guide
 
-### Upgrading from 6.2.x and earlier to 6.3.0 (data-correctness fix — strongly recommended)
+### Upgrading from 6.2.x and earlier to 6.3.x (data-correctness fix — strongly recommended)
 
-6.3.0 fixes **R-UNNESTB: silently wrong row counts from the PG auto-prepare × command-reuse-slot interaction** (affects 5.7.0 ~ 6.2.0, seven versions). Trigger: `MaxAutoPrepare` enabled in the connection string (PalORM's default tuning sets it to 100) plus a third and subsequent equal-length bulk batch in the same session; the consequence is that from the third batch on, the second batch's parameters are silently re-sent (bulk deletes miss rows, bulk UPSERTs write wrong keys) with no exception and no warning.
+6.3.0 fixes **R-UNNESTB: silently wrong row counts from the PG auto-prepare × command-reuse-slot interaction** (affects 5.7.0 ~ 6.2.0, seven versions); 6.3.1 additionally restores the pooled BulkDelete IN-form performance on top (20K keys back to the 38ms fast band, see [Performance](#-performance)). R-UNNESTB trigger: `MaxAutoPrepare` enabled in the connection string (PalORM's default tuning sets it to 100) plus a third and subsequent equal-length bulk batch in the same session; the consequence is that from the third batch on, the second batch's parameters are silently re-sent (bulk deletes miss rows, bulk UPSERTs write wrong keys) with no exception and no warning.
 
-- **Upgrading to 6.3.0** fixes it completely (parameter objects stay stable from creation to release, so the auto-prepare cache never holds a stale reference)
+- **Upgrading to 6.3.1** fixes it completely (parameter objects stay stable from creation to release, so the auto-prepare cache never holds a stale reference)
 - **Hotfix if you cannot upgrade yet**: add `MaxAutoPrepare=0` to the connection string (costs the auto-prepare latency win; 0 is the Npgsql default)
 - Exposure check: if historical workloads matched the trigger conditions, reconcile the affected tables' bulk-operation results (row counts / key sets)
 
