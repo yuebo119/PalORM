@@ -135,14 +135,16 @@ public partial class DataSession<TProvider>
         return total;
     }
 
-    /// <summary>IN 占位符形态的批量删除主体（UNNEST-1 之前的既有路径）——语句文本随批长度变化，
-    /// 只在与上批不同时重建；末批通常更短，故批大小相同的中间批共用同一份语句文本。
-    /// <para><b>目标命令每批新建</b>（2026-10-05 审计修正）：B4（2026-10-01）曾把命令改为跨批复用 +
-    /// 每批 <c>Parameters.Clear()</c> 后重加——但重加的是生成绑定器 per-key 新建的参数实例，
-    /// 正是 R-UNNESTB 变体 C 的形态：PG auto-prepare 下第 3 个等长批会重发第 2 批的键（静默少删）。
-    /// 该形态无法用"预建池 + 只改 Value"消除（生成器只发射 <c>BindDelete(cmd, key)</c>，
-    /// 没有键值写入器），故回到每批新建命令的形态：代价是每批一次命令创建，
-    /// 换来与 v6.2.0 一致的、可证明正确的执行形态。语句文本仍跨批记忆化。</para></summary>
+    /// <summary>IN 占位符形态的批量删除主体（UNNEST-1 之前的既有路径）——满批语句文本恒定，
+    /// 末批（更短）单独一条短语句。
+    /// <para><b>满批命令与参数实例跨批复用，批间只写 Value</b>（2026-10-07 池化恢复）：2026-10-05 审计
+    /// 曾因 R-UNNESTB 变体 C 退到"每批新建命令"（B4 的 Clear 后重加 per-key 新建参数实例，在
+    /// PG auto-prepare 下第 3 个等长批重发第 2 批的键、静默少删），代价 +71%（20K 键 39→66ms）。
+    /// 本形态消除复发窗口的方式不是恢复 B4，而是对齐数组形态（<see cref="ExecuteArrayFormDeleteAsync{T}"/>）
+    /// 的纪律：满批参数对象从首批转移进集合后从不替换、不 Clear，后续满批经 scratch 载体读出
+    /// provider 值只写 <c>Value</c>（与 <see cref="BindRowValuesViaProbeAsync{T}"/> 同一模式）——
+    /// auto-prepare 缓存的参数引用始终有效，Clear/Add 错配窗口在源头不存在。末批语句文本不同，
+    /// 单独新命令 + 全新参数集合（一次性成本，批数占比 1/N），不复用满批集合故无裁剪争议。</para></summary>
     private async Task<long> ExecuteInFormDeleteAsync<T>(
         DbTransaction? tran,
         Action<DbCommand, object> bindKey,
@@ -157,28 +159,42 @@ public partial class DataSession<TProvider>
         // 仍执行 Restore+事务释放；await using 覆盖批间清理。
         // R10：scratch 跨批次复用（对齐 MultiValueBulkInsert rowCommand 模式）。
         await using DbCommand scratch = CreateCommand();
-
-        // 语句文本在批大小不变时逐位相同，末批不同——只在变化时重建
-        int lastBatchLength = -1;
-        string? lastBatchSql = null;
         long total = 0;
-        for (int start = 0; start < keys.Count; start += batchSize)
-        {
-            int batchLen = Math.Min(batchSize, keys.Count - start);
-            if (batchLen != lastBatchLength)
-            {
-                lastBatchSql = BuildBulkDeleteSql(batchLen, identifiers, isSoftDelete);
-                lastBatchLength = batchLen;
-            }
+        int start = 0;
 
-            // PARAM-REUSE-OK[fresh] 命令每批新建（不跨执行复用）——见方法级 2026-10-05 审计说明
+        int fullBatchCount = keys.Count / batchSize;
+        if (fullBatchCount > 0)
+        {
             await using DbCommand cmd = CreateCommand();
             cmd.Transaction = tran;
-            cmd.CommandText = lastBatchSql!;
-            BindInFormParameters<T>(cmd, scratch, bindKey, keys, start, batchLen);
-            BindDefaultFilterParameters<T>(cmd);
+            cmd.CommandText = BuildBulkDeleteSql(batchSize, identifiers, isSoftDelete);
+            for (int batch = 0; batch < fullBatchCount; batch++, start += batchSize)
+            {
+                if (batch == 0)
+                {
+                    // 首个满批：转移形态建池（scratch 改名转移，参数实例从此稳定）
+                    BindInFormParameters<T>(cmd, scratch, bindKey, keys, start, batchSize);
+                    BindDefaultFilterParameters<T>(cmd);
+                }
+                else
+                {
+                    // 后续满批：参数实例不变，只写 Value（见方法级 R-UNNESTB 说明）
+                    WriteInFormValues<T>(scratch, bindKey, cmd, keys, start, batchSize);
+                }
+                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+        }
 
-            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        int tailLen = keys.Count % batchSize;
+        if (tailLen > 0)
+        {
+            // 末批：短语句 + 新命令（fresh 形态，非跨批复用）
+            await using DbCommand tail = CreateCommand();
+            tail.Transaction = tran;
+            tail.CommandText = BuildBulkDeleteSql(tailLen, identifiers, isSoftDelete);
+            BindInFormParameters<T>(tail, scratch, bindKey, keys, start, tailLen);
+            BindDefaultFilterParameters<T>(tail);
+            total += await tail.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         return total;
     }
@@ -264,6 +280,31 @@ public partial class DataSession<TProvider>
             scratch.Parameters.Clear();
             moved.ParameterName = TProvider.GetParameterPlaceholder(index);
             cmd.Parameters.Add(moved);
+        }
+    }
+
+    /// <summary>等长批与末批前缀的键值写入——scratch 载体承载键绑定器的转换产出（与
+    /// <see cref="BindRowValuesViaProbeAsync{T}"/> 同一模式），只把 <c>Value</c> 写进目标集合的
+    /// 既有参数实例：不创建、不替换、不 Clear 目标集合（R-UNNESTB 变体 C 的 Clear+重加窗口
+    /// 在本形态下不存在；scratch 里的短命参数从不执行、从不进目标命令，与 auto-prepare 无关）。</summary>
+    private static void WriteInFormValues<T>(
+        DbCommand scratch,
+        Action<DbCommand, object> bindKey,
+        DbCommand cmd,
+        IReadOnlyList<object> keys,
+        int start,
+        int batchLen)
+        where T : class, new()
+    {
+        for (int index = 0; index < batchLen; index++)
+        {
+            // PARAM-REUSE-OK[carrier] scratch 从不执行，仅承载键绑定器读出 provider 值（ITM-676 中转参数）
+            scratch.Parameters.Clear();
+            bindKey(scratch, keys[start + index]);
+            if (scratch.Parameters.Count != 1)
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
+            cmd.Parameters[index].Value = scratch.Parameters[0].Value;
         }
     }
 
