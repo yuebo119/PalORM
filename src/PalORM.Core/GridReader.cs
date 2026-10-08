@@ -194,7 +194,7 @@ public sealed class GridReader : IAsyncDisposable
         Exception? hangException;
         try
         {
-            hangException = await WaitForActiveReadAsync(activeRead);
+            hangException = await WaitForActiveReadAsync(activeRead).ConfigureAwait(false);
         }
         catch (Exception waitFailure)
         {
