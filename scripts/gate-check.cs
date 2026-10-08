@@ -60,7 +60,7 @@ foreach (var (path, pattern) in new[]
 CheckZero("G13", "Provider 不跨引用", g13);
 
 CheckZero("G14", "SourceGen 不引用运行时 Provider", CountMatches("""using\s+PalORM\.(Sqlite|PostgreSql|MySql|Testing)""", "src/PalORM.SourceGen"));
-CheckZero("G15", "实体禁用裸 DateTime（用 DateTimeOffset）", CountMatches("""public\s+DateTime[?\s]""", "src/**/*.cs"));
+CheckZero("G15", "实体禁用裸 DateTime（用 DateTimeOffset）", CountMatches("""public\s+DateTime[?[:space:]]""", "src/**/*.cs"));
 CheckZero("G16", "级联删除必须显式启用（默认 NO ACTION）", CountMatches("""OnDelete.*Cascade|Cascade.*Delete""", "src/**/*.cs"));
 CheckZero("G17", "禁止 async void", CountMatches("""async\s+void""", "src/**/*.cs"));
 // v7.2.1 词边界匹配（B13 同族教训）：命中行须不含 /// 与 //（与 .sh 管道 grep -v 等价）
@@ -190,13 +190,13 @@ foreach (var dir in new[] { "src/PalORM.Core", "src/PalORM.Sqlite", "src/PalORM.
     foreach (var f in Directory.EnumerateFiles(dir, "*.cs").OrderBy(f => f, StringComparer.Ordinal))
     {
         var lines = File.ReadAllLines(f);
-        int ln = 0; var found = false; var cnt = 0;
+        var ln = -1; var found = false; var cnt = 0;
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
             if (line.Contains("conn.CreateCommand()") || line.Contains("Connection.CreateCommand()")) { ln = i; found = false; }
-            if (ln > 0 && i <= ln + 20 && line.Contains("CommandTimeout")) { found = true; ln = 0; }
-            if (ln > 0 && i <= ln + 20 && Regex.IsMatch(line, @"Execute(Reader|Scalar|NonQuery)Async") && !found) { cnt++; ln = 0; }
+            if (ln >= 0 && i <= ln + 20 && line.Contains("CommandTimeout")) { found = true; ln = -1; }
+            if (ln >= 0 && i <= ln + 20 && Regex.IsMatch(line, @"Execute(Reader|Scalar|NonQuery)Async") && !found) { cnt++; ln = -1; }
         }
         g29 += cnt;
     }

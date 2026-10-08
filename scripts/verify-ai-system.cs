@@ -271,7 +271,7 @@ else Fail(19, ".ai 文本带 UTF-8 BOM（B84 的脚本回写副作用）", strin
 if (File.Exists("bench/PalORM.PerfHub/Program.cs") && File.Exists("bench/baselines/perfhub-index-baseline.json"))
 {
     var opsSrc = Regex.Match(File.ReadAllText("bench/PalORM.PerfHub/Program.cs"),
-        @"private static readonly string\[\] OperationNames(.*?);\];", RegexOptions.Singleline).Value;
+        @"private static readonly string\[\] OperationNames.*?\];", RegexOptions.Singleline).Value;
     var ops = Regex.Matches(opsSrc, @"""([A-Za-z]+)""").Select(m => m.Groups[1].Value).ToList();
     var baseline = File.ReadAllText("bench/baselines/perfhub-index-baseline.json");
     var ungated = ops.Where(op => !baseline.Contains($"\"Name\": \"{op}\"")).ToList();
@@ -426,7 +426,8 @@ void V17Batteries()
         Git("checkout -- src/PalORM.Core/QueryBuilder.cs");
 
         mutFiles.Add("Directory.Build.props");
-        MutateFile("Directory.Build.props", t => Regex.Replace(t, @"^  <PropertyGroup>$", "  <PropertyGroup>\n    <NoWarn>CS1591</NoWarn>", RegexOptions.Multiline));
+        // CRLF 行尾容忍（\r?）：文件实测为 CRLF，无 \r? 的 $ 锚永不匹配（bash sed 版同坑的存量假绿）
+        MutateFile("Directory.Build.props", t => Regex.Replace(t, @"^  <PropertyGroup>\r?$", "  <PropertyGroup>\n    <NoWarn>CS1591</NoWarn>", RegexOptions.Multiline));
         if (!Regex.IsMatch(RunGate(), @"FAIL G27[^0-9]")) missing.Add("G27");
         Git("checkout -- Directory.Build.props");
 
@@ -472,7 +473,17 @@ void V17cBattery()
 {
     // V/D 面电池：变异真源 → 跑 --fast 自身（进程递归）→ 断言对应检查 FAIL → 还原
     var v17cFail = new List<string>();
-    string RunFastVerify() { return RunCapture("dotnet", "run --file scripts/verify-ai-system.cs -- --fast"); }
+    string RunFastVerify()
+    {
+        // --no-build：递归自身时 MSBuild 复制 apphost 会撞父进程 exe 锁（MSB3026 重试 8 次后
+        // 构建失败、子输出全为警告 = 断言全沉默的根因）；父进程刚构建的缓存即当前版本，直接二次启动安全
+        var output = RunCapture("dotnet", "run --no-build --file scripts/verify-ai-system.cs -- --fast");
+        if (Environment.GetEnvironmentVariable("V17C_DEBUG") == "1")
+        {
+            Console.WriteLine($"[v17c-debug] 子进程输出前 8 行：{string.Join(" ⏎ ", output.Split('\n').Take(8))}");
+        }
+        return output;
+    }
     string RunDc() { return RunCapture("dotnet", "run --file scripts/doc-consistency-check.cs"); }
     var touched = new List<string>();
     try
@@ -502,8 +513,8 @@ void V17cBattery()
         if (!RunFastVerify().Contains("FAIL V18")) v17cFail.Add("V18");
         Git("checkout -- AGENTS.md");
 
-        // V19：植入 BOM
-        File.WriteAllText(".ai/zzv17c_bom.md", "\xEF\xBB\xBFzz\n", new UTF8Encoding(false));
+        // V19：植入 BOM（按字节写——C# 字符串 "\xEF.." 是拉丁字符非 BOM 字节）
+        File.WriteAllBytes(".ai/zzv17c_bom.md", [0xEF, 0xBB, 0xBF, (byte)'z', (byte)'z', (byte)'\n']);
         if (!RunFastVerify().Contains("FAIL V19")) v17cFail.Add("V19");
         File.Delete(".ai/zzv17c_bom.md");
 
@@ -522,8 +533,9 @@ void V17cBattery()
         if (!RunDc().Contains("FAIL D10")) v17cFail.Add("D10");
         File.Delete("test/PalORM.Core.Tests/ZZV17cD10Probe.cs");
 
-        // D11：生成物工具版本漂移
-        MutateFile("src/PalORM.SourceGen/GeneratedCodeMetadata.cs", t => t.Replace("\"6.3.0\"", "\"9.9.9\""), touch: touched);
+        // D11：生成物工具版本漂移（动态取包版本——原 .sh 硬编码 6.3.0，升版即失效的存量假绿）
+        var pkgVer = Regex.Match(File.ReadAllText("Directory.Build.props"), @"<Version>([^<]+)").Groups[1].Value.Trim();
+        MutateFile("src/PalORM.SourceGen/GeneratedCodeMetadata.cs", t => t.Replace($"\"{pkgVer}\"", "\"9.9.9\""), touch: touched);
         if (!RunDc().Contains("FAIL D11")) v17cFail.Add("D11");
         Git("checkout -- src/PalORM.SourceGen/GeneratedCodeMetadata.cs");
 
