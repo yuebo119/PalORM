@@ -2,6 +2,24 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布]（目标 6.4.0）
+
+### ⚠️ 行为变更：`DbOptions.Production` 预设熔断作用域 Session → Process（RES-002 收口）
+
+`Production` 预设显式设置 `CircuitBreakerScope = Process`：熔断失败计数按
+(Provider, 连接串, 阈值, 冷却) 跨会话累计，一请求一会话的短会话形态下熔断从"形同虚设"
+变为真实生效（数据库持续故障时快速失败，而非每个请求各自重试 5 次打满 30s 超时）。
+
+- **影响面**：仅显式使用 `DbOptions.Production(...)` 的调用方。升级后同一连接串上的会话
+  共享熔断器开闸状态；多租户共用一个连接串时为租户间共享粒度。
+- **不变**：裸 `new DbOptions { ... }` 默认仍为 `Session`（向后兼容）；长生命周期会话、
+  测试场景零变化。
+- **逃生门**：需要租户级隔离的部署用独立连接串，或
+  `DbOptions.Production(...) with { CircuitBreakerScope = CircuitBreakerScope.Session }` 显式回退。
+- **动机**：预设的 XML 契约自述"稳定性优先……快速熔断保护下游"，Session 作用域下该承诺
+  在推荐用法（短会话）中不可兑现（源码注释 RES-002 自述"阈值形同虚设"）；2026-10-08
+  README 审计确认配置表此前未暴露该开关，读者无从自救。
+
 ## [6.3.1] - 2026-10-07
 
 ### 🐛 缺陷修复：多值 INSERT 多批构建的栈缓冲跨 await（Release 下 NRE）
