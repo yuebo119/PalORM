@@ -26,13 +26,13 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 ## 目录
 
 - [特性](#-特性)
+- [与主流 ORM 对比](#-与主流-orm-对比)
+- [性能](#-性能)
 - [安装](#-安装)
 - [快速开始](#-快速开始)
 - [使用](#-使用)
 - [最佳实践速查](#-最佳实践速查)
 - [配置](#-配置)
-- [性能](#-性能)
-- [与主流 ORM 对比](#-与主流-orm-对比)
 - [升级指南](#-升级指南)
 - [开发](#-开发)
 - [贡献](#-贡献)
@@ -52,6 +52,161 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 **企业级特性开箱即用**。多租户列隔离（查询缓存 key 自动加租户前缀，跨租户命中不可能）、乐观锁、软删除、审计拦截器、读写分离（`ForRead`）、咨询锁、弹性重试 + 熔断（v5.4 起自动覆盖只读查询管线），无需样板代码。
 
 **零依赖核心**。PalORM.Core 不引用任何第三方 NuGet 包（仅 BCL + ADO.NET 抽象）。SQLite 经 SQLite3MC 驱动支持 AES-256 静态加密（连接字符串 `Password=` 启用，驱动层能力）。
+
+## 🆚 与主流 ORM 对比
+
+> 版本基准：PalORM 6.3.1 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
+
+| 特性 | **PalORM** | Dapper | EF Core | RepoDb |
+|------|:---:|:---:|:---:|:---:|
+| **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选（实验性拦截器） | ❌ 实验性，生产不推荐 | ❌ 反射 + IL Emit |
+| **编译时类型诊断** | ✓ 45 条（42 分析器 + 3 生成器），错误可跳转声明位置 | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
+| **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
+| **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
+| **三方言批量策略** | ✓ COPY / BulkCopy / 多值 / `= ANY` 数组 | ❌ 手写多值 SQL | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
+| **单语句多行 UPDATE** | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN | ❌ | ❌ ExecuteUpdate 仅按 WHERE 单值 | ❌ |
+| **批量 UPSERT** | ✓ `BulkMergeAsync`（ON CONFLICT / ON DUPLICATE KEY，冲突更新限定本租户） | ❌ 手写 | ❌ 需 raw SQL | △ Merge 仅 SQL Server |
+| **乐观锁** | ✓ `[ConcurrencyCheck]` 自动；批量走 DbBatch 打包 | ❌ 手写 | ✓ `RowVersion` 自动 | ❌ 手写 |
+| **软删除** | ✓ `[SoftDelete]` 自动过滤（含批量删转 UPDATE） | ❌ | ✓ 全局查询过滤器 | ❌ |
+| **多租户列隔离** | ✓ `[TenantAware]` 编译时；批量写跨租户护栏 | ❌ | △ 需手动实现 | ❌ |
+| **值转换 + 枚举存储** | ✓ `[Converter]` / 枚举三策略（int32/int64/文本）编译时发射 | △ TypeHandler 手写 | ✓ ValueConverter / HasConversion（运行时） | △ TypeHandler |
+| **读副本路由** | ✓ `ParallelReadScope` + 查询族 `readFromReplica` | ❌ | △ 需手动配置多上下文 | ❌ |
+| **Schema 自动迁移** | ✓ `MigrateAsync` + 并发竞态容错（重复对象即跳过） | ❌ | ✓ Migrations（最全面） | △ |
+| **OwnedJson 编译时安全** | ✓ `[OwnedJson]` + 源生成 | ❌ 手写 STJ | △ Owned Types（运行时） | ❌ |
+| **审计拦截器** | ✓ | ❌ | ✓ Interceptors | ❌ |
+| **咨询锁** | ✓ `pg_advisory_xact_lock` | ❌ | ❌ | ❌ |
+| **会话级 SET** | ✓ `SessionSetupSql` | ❌ | ❌ | ❌ |
+| **SQL 文件嵌入** | ✓ `[SqlFile]` 编译时校验 | ❌ | ❌ | ❌ |
+| **断路器 + 重试** | ✓ 内置（HalfOpen 探针槽位并发安全） | ❌ 需 Polly | △ 执行策略 | ❌ |
+| **查询缓存** | ✓ `WithCache` 有界缓存 + TTL + `EvictQueryCache` 收窄 | ❌ | ❌ 需第三方拦截器 | ✓ 原生 `cacheKey` 参数 |
+| **流式消费** | ✓ `QueryAsyncEnumerable` / `ForEachAsync` | △ 手写 CommandBehavior | ✓ `AsAsyncEnumerable` 原生 | ❌ |
+| **可观测性（OTel）** | ✓ `WithMetrics` / `WithTracing` 内置 | ❌ | △ 第三方 instrumentation 包 | ❌ |
+| **SQL 预览** | ✓ `AsDryRun`（SQL + 参数） | ❌ | ✓ `ToQueryString` | △ 构建器层 `GetString` |
+| **悲观锁** | ✓ `ForUpdate` / `ForShare` 链式 | ❌ 手写 SQL | △ 本体无内置（PG provider 扩展） | ❌ |
+| **导航装配（对象图）** | △ `Include` 生成 JOIN 不装配（micro-ORM 取舍，按父分组自行配对） | △ multi-mapping 手写 | ✓ `Include` 完整装配 + 变更追踪 | ❌ |
+| **JSON 列查询** | △ `WhereJson` JSONB 路径查询（PG 专有）；映射见上方 `[OwnedJson]` | △ 手写 SQL | ✓ EF7+ JSON 列映射 + 路径查询（EF10 增强） | △ PropertyHandler 映射，无路径查询 |
+| **CTE / 窗口函数** | ✓ 链式 API | △ 原生 SQL 字符串 | △ LINQ 翻译（部分） | △ 原生 SQL |
+| **多结果集** | ✓ `GridReader` | ✓ `QueryMultiple` | ❌ | ✓ `ExecuteQueryMultiple` |
+| **Keyset 分页** | ✓ `ToPageAsync` | ❌ | ❌ | ❌ |
+| **Scaffold 工具** | ✓ 三 Provider | ❌ | ✓ `dotnet ef dbContext scaffold` | ❌ |
+| **连接串自动调优** | ✓ PG 6 / MySQL 5 / SQLite 8 项 | ❌ | ❌ | ❌ |
+| **BulkInsert 内存** | ≈ Dapper 的 19% | 基线 | 最高（ChangeTracker） | 中等 |
+| **核心包 NuGet 依赖** | 零 | 零 | 高（多包拆分） | 中等 |
+| **目标框架** | net11.0（单目标） | 多目标（netstandard2.0+） | 多目标（net8+） | 多目标（netstandard2.0+） |
+| **许可证** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
+
+核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略（COPY / BulkCopy / 多值 / 数组）。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，且批量仅 SQL Server。
+
+对比依据：
+
+- **Dapper**：`Dapper.Aot`（独立包，[aot.dapperlib.dev](https://aot.dapperlib.dev)）通过 Roslyn interceptors 生成 AOT 拦截器，interceptors 是 C# 实验性特性，非默认启用。
+- **EF Core 10**：LTS（[learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)）。`ExecuteUpdateAsync` 仅支持按 WHERE 单值更新，无法单 SQL 内对每行设置不同值；AOT 仍实验性（[issue #35945](https://github.com/dotnet/efcore/issues/35945)）；无内置 UPSERT API，`MERGE` 语义需 raw SQL。查询缓存需第三方拦截器（[EFCoreSecondLevelCacheInterceptor](https://github.com/VahidN/EFCoreSecondLevelCacheInterceptor)）；OTel 可观测性官方无一等内置指标，经 [OpenTelemetry.Instrumentation.EntityFrameworkCore](https://www.nuget.org/packages/OpenTelemetry.Instrumentation.EntityFrameworkCore)（第三方，Experimental）接入；悲观锁本体无内置（[多源证实](https://milanjovanovic.tech/blog/a-clever-way-to-implement-pessimistic-locking-in-ef-core)），PG 场景靠 Npgsql provider 的 `ForUpdate` 扩展且跨方言不一致；`ToQueryString` 自 EF Core 5+。
+- **RepoDb**：BulkOperation 仅 SQL Server（[repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert)：*"It is only supporting the SQL Server RDBMS."*），其他方言走 packed statements；`Merge` 同属 BulkOperation 族，同受此限。查询缓存为操作级 `cacheKey` + 共享 `ICache` 实例（[官方博客](https://blogs.repodb.net/posts/2026/09/caching-in-repodb)）；SQL 预览仅有构建器层 `QueryBuilder.GetString()`（面向 `IStatementBuilder` 实现者），操作级无一等预览 API。无导航装配：[官方 README](https://github.com/mikependon/repodb) 对比表把 "Rich object graphs" 定位归于 EF，自身主张 "EF-like productivity without losing SQL control"。JSON 能力为 PropertyHandler 系列映射（`JsonToEntity/JsonDocument` 等，[core release notes](https://repodb.net/release/core)），无路径查询构建。
+- **PalORM**：诊断计数 45 = 42 分析器 + 3 生成器（`docs/API参考.md`）；批量 UPSERT 租户护栏 = `BulkMergeAsync` 冲突更新限定本租户（2026-10 审计 P2 收口）；读副本路由 = 查询族 `readFromReplica` 参数 + `ParallelReadScope` 并行读作用域。
+
+## 📊 性能
+
+> **测试环境**：AMD Ryzen 9 8945HX（32 逻辑核）· Windows 10 22H2 · .NET 11 RC1 · SQLite 共享内存 · PG 18.6 / MySQL 8.4.11 本机容器 · Dapper 2.1.89。三臂（ADO.NET / Dapper / PalORM）同进程同轮采集、同连接口径，各臂使用其生态惯用的最优写法（ADO.NET 为手写性能地板）。
+>
+> **数据批次**：2026-10-08 `PerfCli full` 完整批（`history-20261008-115807.json`，中位数 + 精确分配计数）。时延 = 全路径中位数；分配 = 精确计数（1024 进制）。共享 PG/MySQL 服务器空闲度存在 ±30% 批间波动，跨批只读比值不可直接外推；分配为确定性指标，跨批稳定。完整方法论与复现命令见 [docs/性能基准规范.md](docs/性能基准规范.md) 与 `bench/perfhub/report.html`（同批 BDN 门禁矩阵数字亦在该报告）。
+
+**图例**（时延与分配共用，基准 = 手写 ADO.NET 地板；正 % = 比基准慢/费）：
+🟢 强优 ≤−30% · 🟩 中优 −29%~−10% · 🔹 微优 −9%~−1% · 🔸 微劣 +1%~+9% · 🟧 中劣 +10%~+29% · 🟥 强劣 ≥+30% · **加粗** = 超出 1.3×/0.7× 显著带。
+
+### 总表 · 跨方言 PalORM / ADO.NET 时延比（ADO 中位数 → PalORM 中位数，单位 μs）
+
+| 操作 | 档 | SQLite | PostgreSQL | MySQL |
+|------|---:|:---:|:---:|:---:|
+| GetByKey | 2K | 9.9→6.3 **0.64** | 210→206 0.98 | 204→233 1.14 |
+| GetByKey | 20K | 26.9→27.5 1.02 | 205→208 1.01 | 179→220 1.23 |
+| QueryAll | 2K | 963→984 1.02 | 664→663 1.00 | 1,090→1,340 1.23 |
+| QueryAll | 20K | 9,720→9,890 1.02 | 5,060→5,210 1.03 | 8,030→8,200 1.02 |
+| StreamAll | 2K | 967→1,036 1.07 | 657→665 1.01 | 1,071→1,408 **1.31** |
+| StreamAll | 20K | 9,474→10,146 1.07 | 5,071→5,191 1.02 | 7,667→8,461 1.10 |
+| Insert | 2K | 17.9→17.7 0.99 | 559→565 1.01 | 1,530→1,550 1.01 |
+| Update | 2K | 7.2→7.4 1.03 | 601→581 0.97 | 200→233 1.16 |
+| BulkInsert | 2K | 17,250→16,780 0.97 | 3,360→3,550 1.06 | 11,390→10,780 0.95 |
+| BulkInsert | 20K | 156,280→157,390 1.01 | 17,960→19,070 1.06 | 84,190→88,480 1.05 |
+| BulkUpdate | 2K | 2,380→2,350 0.99 | 10,610→4,340 **0.41** | 28,760→9,290 **0.32** |
+| BulkUpdate | 20K | 25,940→26,010 1.00 | 108,680→69,810 **0.64** | 288,480→85,060 **0.29** |
+| BulkDelete | 2K | 6,780→5,060 0.75 | 2,670→1,580 **0.59** | 9,590→8,450 0.88 |
+| BulkDelete | 20K | 66,550→36,790 **0.55** | 23,720→10,000 **0.42** | 68,420→66,400 0.97 |
+| UpsertBatch | 2K | 16,640→16,250 0.98 | 11,470→5,790 **0.50** | 8,080→7,920 0.98 |
+| UpsertBatch | 20K | 155,130→154,270 0.99 | 124,980→75,030 **0.60** | 73,880→77,870 1.05 |
+
+**读法**：批量写路径与 ADO 地板全方言持平或更优（0.88~1.06），其中三条方言专属快路径显著快于手写地板：MySQL 批量 UPDATE 凭 `UPDATE JOIN VALUES ROW` 快 3~3.4×，PG 批量族凭数组参数（`= ANY`）与 Binary COPY 快 1.6~2.4×，SQLite BulkDelete 池化复用命令与参数后快 1.8×；单行读 SQLite/PG 与地板持平（0.64~1.02）、MySQL 为 1.14~1.23。MySQL 2K 档 QueryAll 1.23 / StreamAll 1.31 为两批复现的持续差距（ADO 地板稳定、非批内跳变，未归因，待专项复测）；10-07 批登记的 MySQL 20K 大结果集慢态（曾 +51~62%）本批已回常态带（1.02~1.10）。
+
+### SQLite 细表 · 时延与分配（三臂对照）
+
+**CRUD 单行与读**
+
+| 操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | 分配 A/D/P | 分配 ΔADO（D/P） |
+|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
+| GetByKey | 2K | 9.9 | 7.0 | 6.3 | **0.64🟢** | 0.90🟩 | 2.1/2.8/3.0 KB | +30% / +40% |
+| GetByKey | 20K | 26.9 | 18.3 | 27.5 | 1.02🔸 | **1.50🟥** | 2.1/2.8/3.0 KB | +31% / +42% |
+| QueryAll | 2K | 963 | 1,350 | 984 | 1.02🔸 | 0.73🟩 | 308/513/293 KB | +66% / −5% |
+| QueryAll | 20K | 9,720 | 13,980 | 9,890 | 1.02🔸 | 0.71🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
+| StreamAll | 2K | 967 | 1,403 | 1,036 | 1.07🔸 | 0.74🟩 | 276/481/278 KB | +74% / +1% |
+| StreamAll | 20K | 9,474 | 14,143 | 10,146 | 1.07🔸 | 0.72🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
+| Insert | 2K | 17.9 | 18.6 | 17.7 | 0.99🔹 | 0.95🔹 | 2.8/3.6/3.1 KB | +28% / +10% |
+| Update | 2K | 7.2 | 8.2 | 7.4 | 1.03🔸 | 0.90🟩 | 2.6/3.3/3.4 KB | +30% / +32% |
+| InsertReturningId | 2K | 27 | 28 | 28 | 1.02🔸 | 0.99⚪ | 1.9/2.3/2.7 KB | +24% / +43% |
+
+**批量处理**
+
+| 操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | 分配 A/D/P | 分配 ΔADO（D/P） |
+|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
+| BulkInsert | 2K | 17,250 | 106,930 | 16,780 | 0.97🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
+| BulkInsert | 20K | 156,280 | 1,068,140 | 157,390 | 1.01🔸 | **0.15🟢** | 14.9/79.5/14.7 MB | +432% / −1% |
+| BulkUpdate | 2K | 2,380 | 8,840 | 2,350 | 0.99🔹 | **0.27🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
+| BulkUpdate | 20K | 25,940 | 311,960 | 26,010 | 1.00⚪ | **0.08🟢** | 17.0/65.1/17.6 MB | +283% / +4% |
+| BulkDelete | 2K | 6,780 | 22,030 | 5,060 | 0.75🟩 | **0.23🟢** | 629 KB/1.6 MB/478 KB | +155% / −24% |
+| BulkDelete | 20K | 66,550 | 223,280 | 36,790 | **0.55🟢** | **0.16🟢** | 6.1/15.6/4.3 MB | +155% / −30% |
+| UpsertBatch | 2K | 16,640 | 103,820 | 16,250 | 0.98🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +378% / −4% |
+| UpsertBatch | 20K | 155,130 | 1,067,210 | 154,270 | 0.99🔹 | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / +0% |
+
+批量四形态与 ADO 地板逐位持平（P/ADO 0.75~1.01），BulkDelete 凭命令与参数池化复用快于地板（满批只写 Value，20K 档 0.55）；Dapper 多值 INSERT 在 20K 档因巨型 SQL 字符串构造慢 6.8×、分配 5.3×。
+
+**事务**
+
+| 操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | 分配 A/D/P | 分配 ΔADO（D/P） |
+|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
+| TxSingleInsert | 2K | 19.4 | 20.5 | 20.3 | 1.05🔸 | 0.99🔹 | 4.1/4.8/4.8 KB | +17% / +17% |
+| TxHundredInserts | 2K | 191 | 264 | 246 | 1.29🟧 | 0.93🔹 | 137/220/93 KB | +61% / −32% |
+| TxBulkInsert | 2K | 16,960 | 104,340 | 16,750 | 0.99🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
+| TxRollback | 2K | 594 | 2,127 | 878 | **1.48🟥** | **0.41🟢** | 435 KB/1.6 MB/450 KB | +279% / +3% |
+
+### 专项测量
+
+**Native AOT 发布体积**
+
+| 方言 | exe 大小 | 发布目录 |
+|------|:---:|:---:|
+| SQLite | 4.5 MB | 26 MB |
+| PostgreSQL | 11.6 MB | 61 MB |
+| MySQL | 9.5 MB | 47 MB |
+
+### 查询构建的性能提示：表达式树提到静态字段
+
+`OrderBy` / `Select` / `GroupBy` / `WhereIn` / `Set` / `Include` 等接收 `Expression<Func<T, ...>>`。C# 在调用点构造表达式树，库拿到时成本已付，无法在库内缓存；实测每棵树 512 字节加 0.5~1.6 µs。把 lambda 提到静态字段即可消除：
+
+```csharp
+// 每次调用都重建表达式树
+await db.From<Order>().OrderBy(o => o.CreatedAt).ToListAsync();
+
+// 表达式树只构造一次，之后复用
+private static readonly Expression<Func<Order, DateTime>> ByCreatedAt = o => o.CreatedAt;
+await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
+```
+
+| 场景 | 分配降幅 | 时间降幅 |
+|------|:---:|:---:|
+| `UPDATE` + `Set(...)` | −18.0% | −18.3% |
+| 单行查询 + `OrderBy(...)` | −12.4% | −7.2% |
+| `WhereIn(500)` | −0.72% | −1.7% |
+| 10K 行查询 | 被结果集摊薄到可忽略 | 同 |
+
+查询次数多、单次行数少且热路径用到构建器方法时值得改；批量与报表型负载不必。`Where` / `OrWhere` / `Having` 接收 `FormattableString`，不构造表达式树，无需处理。
 
 ## 📦 安装
 
@@ -224,7 +379,7 @@ await db.WithTransaction(async ct =>
 弹性策略（`WithRetry` 指数退避 + `WithCircuitBreaker` 熔断）自 v5.4 起自动覆盖只读查询管线：
 
 ```csharp
-// Production 预设已含弹性（MaxRetries=5 / 熔断阈值 10 / 半开 60s）
+// Production 预设已含弹性（MaxRetries=5 / 熔断阈值 10 / 半开 60s / 作用域 Process）
 await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(
     DbOptions.Production(connectionString));
 
@@ -350,6 +505,7 @@ dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqli
 
 **运维与排查**
 - 生产用 `DbOptions.Production`（已含弹性/连接池预设），只覆盖确需自定义的项
+- 一请求一个 `DataSession` 的短会话部署：`Production` 预设已默认 `CircuitBreakerScope.Process`（熔断跨会话累计，数据库持续故障时快速失败）；自建 `DbOptions` 的等价部署请显式设 `CircuitBreakerScope.Process`，Session 级计数随会话销毁、短会话下阈值几乎不可能达到
 - 超时异常带 `PalORM.InfrastructureTimeout` 标记的属基础设施侧（网络/服务器），先查环境再查代码
 - MySQL 批量写报 `ER_NET_PACKET_TOO_LARGE` 先查服务端 `max_allowed_packet`；LOAD DATA 回退多值 INSERT 是 `local_infile` 关闭时的预期行为（非错误）
 
@@ -364,6 +520,8 @@ var test = DbOptions.Testing(connectionString);               // 测试（零重
 var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（Docker/K8s 友好）
 ```
 
+`FromEnvironment` 支持的环境变量：`PALORM_CONNECTION`（必需）、`PALORM_READ_CONNECTION`、`PALORM_COMMAND_TIMEOUT`、`PALORM_CONNECTION_TIMEOUT`、`PALORM_MAX_RETRIES`、`PALORM_CIRCUIT_BREAKER_THRESHOLD`、`PALORM_MAX_POOL_SIZE`；组装后自动 `Validate()`，非法值在启动期报错。
+
 ### 配置项
 
 | 属性 | 类型 | 默认值 | 说明 |
@@ -372,14 +530,16 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | `ReadConnectionString` | `string?` | null | 只读副本连接串。配置后 `ForRead()` 自动路由 |
 | `ConnectionTimeout` | `TimeSpan` | 15s | 连接建立超时（含重试），超时抛 `TimeoutException` |
 | `CommandTimeout` | `TimeSpan` | 30s | 命令执行超时；亚秒值向上取整为 1 秒 |
-| `MaxRetries` | `int` | 3 | 瞬时故障最大重试次数，0=禁用。覆盖只读查询管线；写入不自动重试 |
-| `RetryBackoff` | `Func<int, TimeSpan>?` | 指数退避 | 自定义重试间隔（参数=重试次数），负值抛异常 |
+| `MaxRetries` | `int` | 3 | 瞬时故障最大重试次数，0=禁用，上限 10（超出 `Validate()` 抛错）。覆盖只读查询管线；写入不自动重试 |
+| `RetryBackoff` | `Func<int, TimeSpan>?` | 100→200→400ms | 默认退避含 50~100% 抖动；自定义重试间隔（参数=重试次数），负值抛异常 |
+| `OverallDeadline` | `TimeSpan` | Zero（不设） | 整次操作总预算：到期停止重试并抛带 `PalORM.InfrastructureTimeout` 标记的 `TimeoutException`。不设时最坏墙钟 ≈ (MaxRetries+1)×CommandTimeout+Σ退避（默认配置约 120 秒）；取值应大于单次 `CommandTimeout` |
 | `MaxPoolSize` | `int` | 100 | 连接池上限。SQLite 忽略（嵌入式库无服务端池） |
 | `MinPoolSize` | `int` | 0 | v5.6.0。0=不覆盖驱动默认；正数透传，空闲修剪后池内至少保留这么多暖连接，消除突发查询重建连接的延迟尖峰。SQLite 忽略 |
 | `PoolIdleTimeoutSeconds` | `int` | 0 | v5.6.0 起默认 0（更早为 30）。0=保留驱动默认（Npgsql 300s / MySqlConnector 180s）；正数才覆盖，代价是空闲超时后首个查询需重建物理连接（实测跨网段 `SELECT 1` 池内 0.3ms vs 新建 13.5ms） |
 | `PoolLifetimeMinutes` | `int` | 60 | 连接最大生命周期，到期强制重建 |
 | `CircuitBreakerThreshold` | `int` | 5 | 连续失败次数阈值，0=禁用熔断 |
 | `CircuitBreakerResetAfter` | `TimeSpan` | 30s | 熔断后进入半开的等待时间 |
+| `CircuitBreakerScope` | `CircuitBreakerScope` | Session | 熔断作用域：Session 的失败计数随会话销毁（长会话可用）；Process 按 (Provider, 连接串, 阈值, 冷却) 跨会话累计，一请求一会话的短会话部署必选，否则熔断形同虚设。`Production` 预设已默认 `Process` |
 | `Interceptors` | `IReadOnlyList<IQueryInterceptor>?` | null | 按 `Priority` 升序执行（`AuditInterceptor` 默认 200） |
 | `ValidateQueryColumnOrder` | `bool` | true | `QueryAsync` 首行列序与实体声明序比对，不匹配抛异常；用列别名/表达式列时需关闭 |
 | `QueryCache` | `IQueryCache?` | 1024 条 | 默认进程级共享；注入独立实例实现会话/租户级隔离（需线程安全） |
@@ -461,166 +621,15 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | 排序/连接内存缓冲 | `sort_buffer_size` / `join_buffer_size` ≥ 256KB（默认即此值） | 远程大结果集 / 百万行级排序 join 先 `EXPLAIN` 确认无 `Using filesort` 再按需调（DBA 决策） |
 | 隔离级别 RR→RC | `WithIsolationLevel(IsolationLevel.ReadCommitted)` | 引擎默认 RR（间隙锁）放大热点行锁竞争；取舍为 MVCC 快照语义变化，属业务决策 |
 
-## 📊 性能
-
-> **测试环境**：AMD Ryzen 9 8945HX（32 逻辑核）· Windows 10 22H2 · .NET 11 RC1 · BenchmarkDotNet fork（net11）· SQLite 共享内存 · PG 18.6 / MySQL 8.4.11 本机容器 · Dapper 2.1.89。三臂（ADO.NET / Dapper / PalORM）同进程同轮采集、同连接口径，各臂使用其生态惯用的最优写法（ADO.NET 为手写性能地板）。
->
-> **数据批次**：2026-10-08 `PerfCli full` 完整批（`history-20261008-115807.json`，中位数 + 精确分配计数）与同日 BDN 三臂矩阵批。时延 = 全路径中位数；分配 = 精确计数（1024 进制）。共享 PG/MySQL 服务器空闲度存在 ±30% 批间波动，跨批只读比值不可直接外推；分配为确定性指标，跨批稳定。完整方法论与复现命令见 [docs/性能基准规范.md](docs/性能基准规范.md) 与 `bench/perfhub/report.html`。
-
-**图例**（时延与分配共用，基准 = 手写 ADO.NET 地板；正 % = 比基准慢/费）：
-🟢 强优 ≤−30% · 🟩 中优 −29%~−10% · 🔹 微优 −9%~−1% · 🔸 微劣 +1%~+9% · 🟧 中劣 +10%~+29% · 🟥 强劣 ≥+30% · **加粗** = 超出 1.3×/0.7× 显著带。
-
-### 总表 · 跨方言 PalORM / ADO.NET 时延比（ADO 中位数 → PalORM 中位数，单位 μs）
-
-| 操作 | 档 | SQLite | PostgreSQL | MySQL |
-|------|---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.9→6.3 **0.64** | 210→206 0.98 | 204→233 1.14 |
-| GetByKey | 20K | 26.9→27.5 1.02 | 205→208 1.01 | 179→220 1.23 |
-| QueryAll | 2K | 963→984 1.02 | 664→663 1.00 | 1,090→1,340 1.23 |
-| QueryAll | 20K | 9,720→9,890 1.02 | 5,060→5,210 1.03 | 8,030→8,200 1.02 |
-| StreamAll | 2K | 967→1,036 1.07 | 657→665 1.01 | 1,071→1,408 **1.31** |
-| StreamAll | 20K | 9,474→10,146 1.07 | 5,071→5,191 1.02 | 7,667→8,461 1.10 |
-| Insert | 2K | 17.9→17.7 0.99 | 559→565 1.01 | 1,530→1,550 1.01 |
-| Update | 2K | 7.2→7.4 1.03 | 601→581 0.97 | 200→233 1.16 |
-| BulkInsert | 2K | 17,250→16,780 0.97 | 3,360→3,550 1.06 | 11,390→10,780 0.95 |
-| BulkInsert | 20K | 156,280→157,390 1.01 | 17,960→19,070 1.06 | 84,190→88,480 1.05 |
-| BulkUpdate | 2K | 2,380→2,350 0.99 | 10,610→4,340 **0.41** | 28,760→9,290 **0.32** |
-| BulkUpdate | 20K | 25,940→26,010 1.00 | 108,680→69,810 **0.64** | 288,480→85,060 **0.29** |
-| BulkDelete | 2K | 6,780→5,060 0.75 | 2,670→1,580 **0.59** | 9,590→8,450 0.88 |
-| BulkDelete | 20K | 66,550→36,790 **0.55** | 23,720→10,000 **0.42** | 68,420→66,400 0.97 |
-| UpsertBatch | 2K | 16,640→16,250 0.98 | 11,470→5,790 **0.50** | 8,080→7,920 0.98 |
-| UpsertBatch | 20K | 155,130→154,270 0.99 | 124,980→75,030 **0.60** | 73,880→77,870 1.05 |
-
-**读法**：批量写路径与 ADO 地板全方言持平或更优（0.88~1.06），其中三条方言专属快路径显著快于手写地板：MySQL 批量 UPDATE 凭 `UPDATE JOIN VALUES ROW` 快 3~3.4×，PG 批量族凭数组参数（`= ANY`）与 Binary COPY 快 1.6~2.4×，SQLite BulkDelete 池化复用命令与参数后快 1.8×；单行读 SQLite/PG 与地板持平（0.64~1.02）、MySQL 为 1.14~1.23。MySQL 2K 档 QueryAll 1.23 / StreamAll 1.31 为两批复现的持续差距（ADO 地板稳定、非批内跳变，未归因，待专项复测）；10-07 批登记的 MySQL 20K 大结果集慢态（曾 +51~62%）本批已回常态带（1.02~1.10）。
-
-### SQLite 细表 · 时延与分配（三臂对照）
-
-**CRUD 单行与读**
-
-| 操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | 分配 A/D/P | 分配 ΔADO（D/P） |
-|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.9 | 7.0 | 6.3 | **0.64🟢** | 0.90🟩 | 2.1/2.8/3.0 KB | +30% / +40% |
-| GetByKey | 20K | 26.9 | 18.3 | 27.5 | 1.02🔸 | **1.50🟥** | 2.1/2.8/3.0 KB | +31% / +42% |
-| QueryAll | 2K | 963 | 1,350 | 984 | 1.02🔸 | 0.73🟩 | 308/513/293 KB | +66% / −5% |
-| QueryAll | 20K | 9,720 | 13,980 | 9,890 | 1.02🔸 | 0.71🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
-| StreamAll | 2K | 967 | 1,403 | 1,036 | 1.07🔸 | 0.74🟩 | 276/481/278 KB | +74% / +1% |
-| StreamAll | 20K | 9,474 | 14,143 | 10,146 | 1.07🔸 | 0.72🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
-| Insert | 2K | 17.9 | 18.6 | 17.7 | 0.99🔹 | 0.95🔹 | 2.8/3.6/3.1 KB | +28% / +10% |
-| Update | 2K | 7.2 | 8.2 | 7.4 | 1.03🔸 | 0.90🟩 | 2.6/3.3/3.4 KB | +30% / +32% |
-| InsertReturningId | 2K | 27 | 28 | 28 | 1.02🔸 | 0.99⚪ | 1.9/2.3/2.7 KB | +24% / +43% |
-
-**批量处理**
-
-| 操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | 分配 A/D/P | 分配 ΔADO（D/P） |
-|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| BulkInsert | 2K | 17,250 | 106,930 | 16,780 | 0.97🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| BulkInsert | 20K | 156,280 | 1,068,140 | 157,390 | 1.01🔸 | **0.15🟢** | 14.9/79.5/14.7 MB | +432% / −1% |
-| BulkUpdate | 2K | 2,380 | 8,840 | 2,350 | 0.99🔹 | **0.27🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
-| BulkUpdate | 20K | 25,940 | 311,960 | 26,010 | 1.00⚪ | **0.08🟢** | 17.0/65.1/17.6 MB | +283% / +4% |
-| BulkDelete | 2K | 6,780 | 22,030 | 5,060 | 0.75🟩 | **0.23🟢** | 629 KB/1.6 MB/478 KB | +155% / −24% |
-| BulkDelete | 20K | 66,550 | 223,280 | 36,790 | **0.55🟢** | **0.16🟢** | 6.1/15.6/4.3 MB | +155% / −30% |
-| UpsertBatch | 2K | 16,640 | 103,820 | 16,250 | 0.98🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +378% / −4% |
-| UpsertBatch | 20K | 155,130 | 1,067,210 | 154,270 | 0.99🔹 | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / +0% |
-
-批量四形态与 ADO 地板逐位持平（P/ADO 0.75~1.01），BulkDelete 凭命令与参数池化复用快于地板（满批只写 Value，20K 档 0.55）；Dapper 多值 INSERT 在 20K 档因巨型 SQL 字符串构造慢 6.8×、分配 5.3×。
-
-**事务**
-
-| 操作 | 档 | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | 分配 A/D/P | 分配 ΔADO（D/P） |
-|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| TxSingleInsert | 2K | 19.4 | 20.5 | 20.3 | 1.05🔸 | 0.99🔹 | 4.1/4.8/4.8 KB | +17% / +17% |
-| TxHundredInserts | 2K | 191 | 264 | 246 | 1.29🟧 | 0.93🔹 | 137/220/93 KB | +61% / −32% |
-| TxBulkInsert | 2K | 16,960 | 104,340 | 16,750 | 0.99🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| TxRollback | 2K | 594 | 2,127 | 878 | **1.48🟥** | **0.41🟢** | 435 KB/1.6 MB/450 KB | +279% / +3% |
-
-### 专项测量
-
-**SQLite CRUD · 三臂对照**（BDN，10K 行种子）
-
-| 操作 | ADO.NET | Dapper | PalORM |
-|------|------:|------:|------:|
-| 全表查询 10,000 行 | 4.25 ms | 3.85 ms | 4.38 ms（1.03x） |
-| 单行插入 | 24.6 µs | 26.3 µs | 33.1 µs（1.35x） |
-| 主键查询 | 23.9 µs | 23.8 µs | 28.1 µs（1.18x） |
-| 单行更新 | 22.8 µs | 22.3 µs | 28.2 µs（1.24x） |
-
-单行写 P/ADO 1.24~1.35 的构成为 SourceGen 生成物化器 + 会话门禁与租户路由的固定开销（每行约 5~9 µs）；读路径与地板持平。PG COPY / MySQL BulkCopy 路径不走 `DbParameter.Value`，无装箱。
-
-**Native AOT 发布体积**
-
-| 方言 | exe 大小 | 发布目录 |
-|------|:---:|:---:|
-| SQLite | 4.5 MB | 26 MB |
-| PostgreSQL | 11.6 MB | 61 MB |
-| MySQL | 9.5 MB | 47 MB |
-
-### 查询构建的性能提示：表达式树提到静态字段
-
-`OrderBy` / `Select` / `GroupBy` / `WhereIn` / `Set` / `Include` 等接收 `Expression<Func<T, ...>>`。C# 在调用点构造表达式树，库拿到时成本已付，无法在库内缓存；实测每棵树 512 字节加 0.5~1.6 µs。把 lambda 提到静态字段即可消除：
-
-```csharp
-// 每次调用都重建表达式树
-await db.From<Order>().OrderBy(o => o.CreatedAt).ToListAsync();
-
-// 表达式树只构造一次，之后复用
-private static readonly Expression<Func<Order, DateTime>> ByCreatedAt = o => o.CreatedAt;
-await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
-```
-
-| 场景 | 分配降幅 | 时间降幅 |
-|------|:---:|:---:|
-| `UPDATE` + `Set(...)` | −18.0% | −18.3% |
-| 单行查询 + `OrderBy(...)` | −12.4% | −7.2% |
-| `WhereIn(500)` | −0.72% | −1.7% |
-| 10K 行查询 | 被结果集摊薄到可忽略 | 同 |
-
-查询次数多、单次行数少且热路径用到构建器方法时值得改；批量与报表型负载不必。`Where` / `OrWhere` / `Having` 接收 `FormattableString`，不构造表达式树，无需处理。
-
-## 🆚 与主流 ORM 对比
-
-> 版本基准：PalORM 6.3.1 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
-
-| 特性 | **PalORM** | Dapper | EF Core | RepoDb |
-|------|:---:|:---:|:---:|:---:|
-| **Native AOT 全链路** | ✓ 源生成验证 | △ Dapper.Aot 可选（实验性拦截器） | ❌ 实验性，生产不推荐 | ❌ 反射 + IL Emit |
-| **编译时类型诊断** | ✓ 45 条（42 分析器 + 3 生成器），错误可跳转声明位置 | ❌ 运行时失败 | △ 迁移检查（设计时） | ❌ 运行时失败 |
-| **编译时 SQL 预构建** | ✓ Roslyn 源生成 | ❌ 运行时拼接 | △ 预编译查询（实验性） | ❌ 运行时表达式树 |
-| **运行时反射** | 零 | △ 首次反射 + IL Emit 缓存 | △ 表达式树编译 | ❌ 反射 + IL Emit |
-| **三方言批量策略** | ✓ COPY / BulkCopy / 多值 / `= ANY` 数组 | ❌ 手写多值 SQL | △ Provider 各异 | △ BulkInsert 仅 SQL Server |
-| **单语句多行 UPDATE** | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN | ❌ | ❌ ExecuteUpdate 仅按 WHERE 单值 | ❌ |
-| **批量 UPSERT** | ✓ `BulkMergeAsync`（ON CONFLICT / ON DUPLICATE KEY，冲突更新限定本租户） | ❌ 手写 | ❌ 需 raw SQL | △ Merge 仅 SQL Server |
-| **乐观锁** | ✓ `[ConcurrencyCheck]` 自动；批量走 DbBatch 打包 | ❌ 手写 | ✓ `RowVersion` 自动 | ❌ 手写 |
-| **软删除** | ✓ `[SoftDelete]` 自动过滤（含批量删转 UPDATE） | ❌ | ✓ 全局查询过滤器 | ❌ |
-| **多租户列隔离** | ✓ `[TenantAware]` 编译时；批量写跨租户护栏 | ❌ | △ 需手动实现 | ❌ |
-| **值转换 + 枚举存储** | ✓ `[Converter]` / 枚举三策略（int32/int64/文本）编译时发射 | △ TypeHandler 手写 | ✓ ValueConverter / HasConversion（运行时） | △ TypeHandler |
-| **读副本路由** | ✓ `ParallelReadScope` + 查询族 `readFromReplica` | ❌ | △ 需手动配置多上下文 | ❌ |
-| **Schema 自动迁移** | ✓ `MigrateAsync` + 并发竞态容错（重复对象即跳过） | ❌ | ✓ Migrations（最全面） | △ |
-| **OwnedJson 编译时安全** | ✓ `[OwnedJson]` + 源生成 | ❌ 手写 STJ | △ Owned Types（运行时） | ❌ |
-| **审计拦截器** | ✓ | ❌ | ✓ Interceptors | ❌ |
-| **咨询锁** | ✓ `pg_advisory_xact_lock` | ❌ | ❌ | ❌ |
-| **会话级 SET** | ✓ `SessionSetupSql` | ❌ | ❌ | ❌ |
-| **SQL 文件嵌入** | ✓ `[SqlFile]` 编译时校验 | ❌ | ❌ | ❌ |
-| **断路器 + 重试** | ✓ 内置（HalfOpen 探针槽位并发安全） | ❌ 需 Polly | △ 执行策略 | ❌ |
-| **CTE / 窗口函数** | ✓ 链式 API | △ 原生 SQL 字符串 | △ LINQ 翻译（部分） | △ 原生 SQL |
-| **多结果集** | ✓ `GridReader` | ✓ `QueryMultiple` | ❌ | ✓ `ExecuteQueryMultiple` |
-| **Keyset 分页** | ✓ `ToPageAsync` | ❌ | ❌ | ❌ |
-| **Scaffold 工具** | ✓ 三 Provider | ❌ | ✓ `dotnet ef dbContext scaffold` | ❌ |
-| **连接串自动调优** | ✓ PG 6 / MySQL 5 / SQLite 8 项 | ❌ | ❌ | ❌ |
-| **BulkInsert 内存** | ≈ Dapper 的 19% | 基线 | 最高（ChangeTracker） | 中等 |
-| **核心包 NuGet 依赖** | 零 | 零 | 高（多包拆分） | 中等 |
-| **目标框架** | net11.0（单目标） | 多目标（netstandard2.0+） | 多目标（net8+） | 多目标（netstandard2.0+） |
-| **许可证** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
-
-核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略（COPY / BulkCopy / 多值 / 数组）。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，且批量仅 SQL Server。
-
-对比依据：
-
-- **Dapper**：`Dapper.Aot`（独立包，[aot.dapperlib.dev](https://aot.dapperlib.dev)）通过 Roslyn interceptors 生成 AOT 拦截器，interceptors 是 C# 实验性特性，非默认启用。
-- **EF Core 10**：LTS（[learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)）。`ExecuteUpdateAsync` 仅支持按 WHERE 单值更新，无法单 SQL 内对每行设置不同值；AOT 仍实验性（[issue #35945](https://github.com/dotnet/efcore/issues/35945)）；无内置 UPSERT API，`MERGE` 语义需 raw SQL。
-- **RepoDb**：BulkOperation 仅 SQL Server（[repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert)：*"It is only supporting the SQL Server RDBMS."*），其他方言走 packed statements；`Merge` 同属 BulkOperation 族，同受此限。
-- **PalORM**：诊断计数 45 = 42 分析器 + 3 生成器（`docs/API参考.md`）；批量 UPSERT 租户护栏 = `BulkMergeAsync` 冲突更新限定本租户（2026-10 审计 P2 收口）；读副本路由 = 查询族 `readFromReplica` 参数 + `ParallelReadScope` 并行读作用域。
-
 ## 🔄 升级指南
+
+### 从 6.3.x 升级到 6.4.0（未发布）：Production 预设熔断作用域变更
+
+`DbOptions.Production` 预设自 6.4.0 起显式设 `CircuitBreakerScope = Process`（此前为 Session）。影响与动因：
+
+- **变化**：使用 `Production` 预设时，熔断失败计数按 (Provider, 连接串, 阈值, 冷却) 跨会话累计。一请求一会话的部署下，数据库持续故障时请求快速失败（熔断开闸），而非此前每个请求各自重试 5 次再失败、熔断从不触发的虚设形态。
+- **不变**：裸 `new DbOptions { ... }` 默认仍为 `Session`；长生命周期会话与测试场景零变化。
+- **多租户注意**：多租户共用一个连接串时熔断器为租户间共享粒度，需要租户级隔离的部署用独立连接串，或 `with { CircuitBreakerScope = CircuitBreakerScope.Session }` 显式回退。
 
 ### 从 6.2.x 及更早升级到 6.3.x（数据正确性修复，强烈建议）
 
