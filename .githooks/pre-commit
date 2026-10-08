@@ -15,16 +15,16 @@ dotnet run --file "$(git rev-parse --show-toplevel)/scripts/stub-check.cs" || ex
 echo "── pre-commit: 参数集合复用门禁 ──"
 dotnet run --file "$(git rev-parse --show-toplevel)/scripts/gate-param-collection-reuse.cs" || exit 1
 
-# .ai 系统一致性（2026-09-25 起）：lessons/test 的"计数与标题声明"必须等于实测。
-# 这类漂移已发生过 3 次（lessons 标题停 v7.14、§II 声明 93/1-B86 实测 98、
-# test 补充节标题停 8~12 实到 19），人工核不住，故机械化到每次提交。
+# .ai 系统一致性（2026-09-25 起；2026-10-08 判定层 C# 化迁主仓 scripts/）：lessons/test 的
+# "计数与标题声明"必须等于实测。这类漂移已发生过 3 次（lessons 标题停 v7.14、§II 声明
+# 93/1-B86 实测 98、test 补充节标题停 8~12 实到 19），人工核不住，故机械化到每次提交。
 # .ai/ 是 gitignored 本地工具，未克隆时无条件跳过（条件执行，不因缺文件报错）。
-# --fast 只跑纯文本检查：跳过 V14（跑 9 条防线脚本会与并发测量互斥）与
+# --fast 只跑纯文本检查：跳过 V14（跑 10 条防线脚本会与并发测量互斥）与
 # V17（变异探针会在 src/ 临时植入 .cs，与并发构建互斥）。
-AI_VERIFY="$(git rev-parse --show-toplevel)/.ai/scripts/verify-ai-system.sh"
-if [ -f "$AI_VERIFY" ]; then
+ROOT="$(git rev-parse --show-toplevel)"
+if [ -d "$ROOT/.ai" ] && [ -f "$ROOT/scripts/verify-ai-system.cs" ]; then
     echo "── pre-commit: .ai 系统一致性（--fast）──"
-    bash "$AI_VERIFY" --fast || exit 1
+    dotnet run --file "$ROOT/scripts/verify-ai-system.cs" -- --fast || exit 1
 else
     echo "── pre-commit: .ai 系统一致性（跳过：无 .ai/）──"
 fi
@@ -33,11 +33,10 @@ fi
 # G9 豁免清单漂移回归（secret-guard .sh→.cs 迁移漏同步）3 天无人发现，根因是
 # gate-check 在 CI 与 pre-commit 均无触发点。--allow-dirty：提交瞬间 staged 变更
 # 是预期状态，G33"跨任务切换前清洁"语义不适用本场景（脚本自带该参数）。
-# 约 10 秒（git grep 全仓只读扫描，无构建副作用）。
-GATE_CHECK="$(git rev-parse --show-toplevel)/.ai/scripts/gate-check.sh"
-if [ -f "$GATE_CHECK" ]; then
+# C# 化后约 1-4 秒（bash 版 ~11 秒；git grep 全仓只读扫描，无构建副作用）。
+if [ -d "$ROOT/.ai" ] && [ -f "$ROOT/scripts/gate-check.cs" ]; then
     echo "── pre-commit: G1-G33 门禁（--allow-dirty）──"
-    bash "$GATE_CHECK" --allow-dirty || exit 1
+    dotnet run --file "$ROOT/scripts/gate-check.cs" -- --allow-dirty || exit 1
 else
     echo "── pre-commit: G1-G33 门禁（跳过：无 .ai/）──"
 fi
