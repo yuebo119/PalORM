@@ -17,7 +17,7 @@
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
 | **最高** | `.editorconfig` | SonarAnalyzer 39 条规则（P0+P1 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
-| **高** | `.ai/lessons.md` | 规范系统手册 v7.33（188 缺陷：A1-A7 + B1-B181 + XI 性能测量纪律 SOP，本地工具，独立嵌套 git 仓库） |
+| **高** | `.ai/lessons.md` | 规范系统手册 v7.34（188 缺陷：A1-A7 + B1-B181 + XI 性能测量纪律 SOP，本地工具，独立嵌套 git 仓库） |
 | **高** | `.ai/test/prompt.md` | 测试规范系统 v1.3（24 铁律 + 19 缺陷，本地工具，不入仓库） |
 | **高** | `docs/发布规范.md` | NuGet 发布流程 SOP（v5.0.0 实测，含 8 条实践教训） |
 | **中** | `docs/编码规范.md` §18-19 | SonarAnalyzer 守护层规则文档化 + 脚本语言规范（脚本一律 C#，白名单制与形态判据，2026-09-29 用户决策） |
@@ -31,7 +31,7 @@
 | `/gate` | 门禁 | G1-G33 规范合规检查（编译前阻断） |
 | `/refine` | 精炼 | 24+3 项操作矩阵（更优实现） |
 | `/test` | 测试规范 | T1-T24 测试铁律 + 覆盖矩阵 + 基准配置规范 |
-| （自动） | pre-commit | 提交前四段：`secret-guard` → `stub-check` → `.ai/scripts/verify-ai-system.sh --fast`（22 项里的 20 项）→ `.ai/scripts/gate-check.sh --allow-dirty`（G1-G33，约 10 秒；两段 `.ai/` 不存在则跳过，总预算约 17 秒）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
+| （自动） | pre-commit | 提交前四段：`secret-guard` → `stub-check` → `.ai/scripts/verify-ai-system.sh --fast`（23 项里的 21 项）→ `.ai/scripts/gate-check.sh --allow-dirty`（G1-G33，约 10 秒；两段 `.ai/` 不存在则跳过，总预算约 17 秒）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
 
 ### 项目专属经验（v4.0 + v5.0 实测，编号与四系统脚本对齐）
 
