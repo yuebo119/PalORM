@@ -8,7 +8,7 @@
 ```
 1. git status——工作树清洁？
 2. dotnet build PalORM.ci.slnf -c Debug——0 警告 0 错误？（口径=src+test；bench/BenchmarkDotNet vendored 子树有登记豁免，不在 ci.slnf）
-3. 技术债扫描——bash .ai/scripts/tech-debt-scan.sh（本地工具，不入仓库）
+3. 技术债扫描——dotnet run --file scripts/tech-debt-scan.cs（判定层已 C# 化迁主仓；.ai 知识层仍为本地工具）
 4. .ai/lessons.md——已读最新版？（本地工具，不入仓库）
 ```
 
@@ -31,7 +31,7 @@
 | `/gate` | 门禁 | G1-G33 规范合规检查（编译前阻断） |
 | `/refine` | 精炼 | 24+3 项操作矩阵（更优实现） |
 | `/test` | 测试规范 | T1-T24 测试铁律 + 覆盖矩阵 + 基准配置规范 |
-| （自动） | pre-commit | 提交前四段：`secret-guard` → `stub-check` → `.ai/scripts/verify-ai-system.sh --fast`（23 项里的 21 项）→ `.ai/scripts/gate-check.sh --allow-dirty`（G1-G33，约 10 秒；两段 `.ai/` 不存在则跳过，总预算约 17 秒）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
+| （自动） | pre-commit | 提交前四段：`secret-guard` → `stub-check` → `dotnet run --file scripts/verify-ai-system.cs -- --fast`（23 项里的 21 项）→ `dotnet run --file scripts/gate-check.cs -- --allow-dirty`（G1-G33；C# 化后约 1-4 秒/段；`.ai/` 不存在则后两段跳过）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
 
 ### 项目专属经验（v4.0 + v5.0 实测，编号与四系统脚本对齐）
 
@@ -100,7 +100,7 @@
 | 跨类别切换 | `dotnet build` |
 | 快照类改动 | 先 `PALORM_UPDATE_SNAPSHOTS=1 dotnet run` 确认基线 |
 | 最终提交前 | `dotnet build --no-incremental` |
-| 技术债扫描 | `bash .ai/scripts/tech-debt-scan.sh`（本地工具） |
+| 技术债扫描 | `dotnet run --file scripts/tech-debt-scan.cs`（判定层 C# 化迁主仓） |
 
 ## 性能测试结果输出规范（2026-09-24 用户指定 · 2026-10-04 step23 改版 · 每次跑测汇报强制）
 

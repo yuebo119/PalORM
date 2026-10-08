@@ -37,7 +37,7 @@ CheckZero("G8", "零 string.Format 拼接 SQL", CountMatches("""string\.Format.*
 var g9 = GitGrepLines("""(Password|Pwd)=[^;$"'\s]+|connectionString\s*=\s*"(Server|Host)=""", ignoreCase: true, ":!docs/**", ":!**/bin/**", ":!**/obj/**")
     .Where(l => !Regex.IsMatch(l, @"example|sample|placeholder|<password>|\$\{[^}]+\}|\.\.\.|change-me|USER.*PASS|palorm_bench", RegexOptions.IgnoreCase))
     .Where(l => !l.Contains("Password=`"))
-    .Where(l => !Regex.IsMatch(l, @"^(\.ai/|scripts/gate-check\.(sh|cs)|scripts/secret-guard\.(sh|cs)|\.github/PULL_REQUEST_TEMPLATE\.md|CONTRIBUTING\.md)"))
+    .Where(l => !Regex.IsMatch(l, @"^(\.ai/|scripts/gate-check\.(sh|cs)|scripts/secret-guard\.(sh|cs)|scripts/verify-ai-system\.(sh|cs)|\.github/PULL_REQUEST_TEMPLATE\.md|CONTRIBUTING\.md)"))
     .Where(l => !Regex.IsMatch(l, @"localhost.*Database=test", RegexOptions.IgnoreCase))
     .Where(l => !Regex.IsMatch(l, @"Host=(primary|replica)", RegexOptions.IgnoreCase))
     .Count(l => !(l.Contains("localhost", StringComparison.OrdinalIgnoreCase) && !Regex.IsMatch(l, @"(Password|Pwd)=[^;""\s]")));

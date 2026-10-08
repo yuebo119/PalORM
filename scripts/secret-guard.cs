@@ -182,8 +182,10 @@ static int RunMain(string[] args)
         }
 
         // 自豁免：门禁脚本与其回归夹具按设计包含检测向量（真阳性样本），不适用内容检查
+        // verify-ai-system.cs 2026-10-08 登记：V17b 变异电池的 G9 探针串含假密码向量（与 selftest 向量同形态）
         if (file is "scripts/secret-guard.cs" or "scripts/secret-guard.sh"
             or "scripts/test-quality-scripts.cs" or "scripts/test-quality-scripts.sh"
+            or "scripts/verify-ai-system.cs"
             or ".git/hooks/pre-commit")
         {
             continue;
