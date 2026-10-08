@@ -12,6 +12,19 @@ public sealed class DbOptionsTests
         await Assert.That(opts.MaxPoolSize).IsEqualTo(100);
         await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(5);
         await Assert.That(opts.CircuitBreakerResetAfter).IsEqualTo(TimeSpan.FromSeconds(30));
+        // 裸默认保持 Session（6.4.0 行为变更只动 Production 预设；CHANGELOG [未发布]）
+        await Assert.That(opts.CircuitBreakerScope).IsEqualTo(CircuitBreakerScope.Session);
+    }
+
+    [Test]
+    public async Task Production_Preset_Scope_IsProcess()
+    {
+        // 锁定 6.4.0 行为变更（RES-002 收口）：短会话形态下 Session 级熔断形同虚设，
+        // 预设必须跨会话累计；漂回 Session 时此测试红（升级指南与 CHANGELOG 同源）
+        var opts = DbOptions.Production("Host=db");
+        await Assert.That(opts.CircuitBreakerScope).IsEqualTo(CircuitBreakerScope.Process);
+        await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(10);
+        await Assert.That(opts.CircuitBreakerResetAfter).IsEqualTo(TimeSpan.FromSeconds(60));
     }
 
     [Test]

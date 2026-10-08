@@ -207,7 +207,12 @@ public sealed record DbOptions
     };
 
     /// <summary>生产环境预设：严格超时 + 高重试 + 激进熔断。
-    /// <para>稳定性优先，瞬时故障自动重试，连续失败快速熔断保护下游。</para></summary>
+    /// <para>稳定性优先，瞬时故障自动重试，连续失败快速熔断保护下游。
+    /// <b>熔断作用域为 Process</b>（行为变更自 6.4.0）：一请求一会话的短会话形态下 Session 级
+    /// 计数随会话销毁、阈值形同虚设（RES-002），故预设按 (Provider, 连接串, 阈值, 冷却) 跨会话
+    /// 累计失败。多租户共用一个连接串时熔断器为租户间共享粒度——基础设施故障（连接失败/超时）
+    /// 全租户同受保护也同受开闸影响；需要租户级隔离的部署用独立连接串，或
+    /// <c>with { CircuitBreakerScope = CircuitBreakerScope.Session }</c> 显式回退。</para></summary>
     public static DbOptions Production(string connectionString, string? readConnectionString = null) => new DbOptions
     {
         ConnectionString = connectionString,
@@ -216,7 +221,8 @@ public sealed record DbOptions
         ConnectionTimeout = TimeSpan.FromSeconds(15),
         MaxRetries = 5,
         CircuitBreakerThreshold = 10,
-        CircuitBreakerResetAfter = TimeSpan.FromSeconds(60)
+        CircuitBreakerResetAfter = TimeSpan.FromSeconds(60),
+        CircuitBreakerScope = CircuitBreakerScope.Process
     }.WithPool(maxSize: 100);
 
     /// <summary>测试环境预设：短超时 + 零重试 + 禁用熔断。
