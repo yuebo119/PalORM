@@ -28,13 +28,13 @@ See [Performance](#-performance) for measurement details (2026-10-08 benchmark b
 ## Table of Contents
 
 - [Features](#-features)
+- [Comparison with mainstream ORMs](#-comparison-with-mainstream-orms)
+- [Performance](#-performance)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
 - [Usage](#-usage)
 - [Best-practice cheat sheet](#-best-practice-cheat-sheet)
 - [Configuration](#-configuration)
-- [Performance](#-performance)
-- [Comparison with mainstream ORMs](#-comparison-with-mainstream-orms)
 - [Upgrade guide](#-upgrade-guide)
 - [Development](#-development)
 - [Contributing](#-contributing)
@@ -53,6 +53,161 @@ See [Performance](#-performance) for measurement details (2026-10-08 benchmark b
 **Enterprise features out of the box.** Multi-tenant column isolation (query cache keys automatically get a tenant prefix — cross-tenant hits are impossible), optimistic locking, soft delete, audit interceptors, read/write splitting (`ForRead`), advisory locks, resilient retry + circuit breaker (covering the read-only query pipeline automatically since v5.4). No boilerplate required.
 
 **Zero-dependency core.** PalORM.Core references no third-party NuGet packages (BCL + ADO.NET abstractions only). SQLite supports at-rest AES-256 encryption via the SQLite3MC driver (enable with `Password=` in the connection string; a driver-level capability).
+
+## 🆚 Comparison with mainstream ORMs
+
+> Version baseline: PalORM 6.3.1 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
+
+| Feature | **PalORM** | Dapper | EF Core | RepoDb |
+|------|:---:|:---:|:---:|:---:|
+| **Full-pipeline Native AOT** | ✓ source-generated, verified | △ Dapper.Aot optional (experimental interceptors) | ❌ experimental, not production-ready | ❌ reflection + IL Emit |
+| **Compile-time type diagnostics** | ✓ 45 rules (42 analyzers + 3 generators), errors jump to declaration sites | ❌ fails at runtime | △ migration checks (design time) | ❌ fails at runtime |
+| **Compile-time SQL pre-building** | ✓ Roslyn source generation | ❌ runtime concatenation | △ precompiled queries (experimental) | ❌ runtime expression trees |
+| **Runtime reflection** | Zero | △ first-use reflection + IL Emit cache | △ expression-tree compilation | ❌ reflection + IL Emit |
+| **Per-dialect bulk strategies** | ✓ COPY / BulkCopy / multi-value / `= ANY` arrays | ❌ hand-written multi-value SQL | △ varies by provider | △ BulkInsert SQL Server only |
+| **Single-statement multi-row UPDATE** | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN | ❌ | ❌ ExecuteUpdate is single-value per WHERE only | ❌ |
+| **Bulk UPSERT** | ✓ `BulkMergeAsync` (ON CONFLICT / ON DUPLICATE KEY, conflict updates tenant-scoped) | ❌ hand-written | ❌ raw SQL required | △ Merge SQL Server only |
+| **Optimistic locking** | ✓ `[ConcurrencyCheck]` automatic; bulk updates via packed DbBatch | ❌ hand-written | ✓ `RowVersion` automatic | ❌ hand-written |
+| **Soft delete** | ✓ `[SoftDelete]` automatic filtering (bulk delete becomes UPDATE) | ❌ | ✓ global query filters | ❌ |
+| **Multi-tenant column isolation** | ✓ `[TenantAware]` compile time; cross-tenant guards on bulk writes | ❌ | △ manual implementation | ❌ |
+| **Value conversion + enum storage** | ✓ `[Converter]` / three enum strategies (int32/int64/text) emitted at compile time | △ hand-written TypeHandler | ✓ ValueConverter / HasConversion (runtime) | △ TypeHandler |
+| **Read-replica routing** | ✓ `ParallelReadScope` + `readFromReplica` on the query family | ❌ | △ manual multi-context setup | ❌ |
+| **Automatic schema migration** | ✓ `MigrateAsync` + concurrent-race tolerance (duplicate objects skipped) | ❌ | ✓ Migrations (most complete) | △ |
+| **OwnedJson compile-time safety** | ✓ `[OwnedJson]` + source generation | ❌ hand-written STJ | △ Owned Types (runtime) | ❌ |
+| **Audit interceptor** | ✓ | ❌ | ✓ Interceptors | ❌ |
+| **Advisory locks** | ✓ `pg_advisory_xact_lock` | ❌ | ❌ | ❌ |
+| **Session-level SET** | ✓ `SessionSetupSql` | ❌ | ❌ | ❌ |
+| **SQL file embedding** | ✓ `[SqlFile]` compile-time validation | ❌ | ❌ | ❌ |
+| **Circuit breaker + retry** | ✓ built in (concurrency-safe HalfOpen probe slots) | ❌ needs Polly | △ execution strategies | ❌ |
+| **Query cache** | ✓ `WithCache` bounded cache + TTL + `EvictQueryCache` narrowing | ❌ | ❌ third-party interceptor | ✓ native `cacheKey` argument |
+| **Streaming consumption** | ✓ `QueryAsyncEnumerable` / `ForEachAsync` | △ hand-written CommandBehavior | ✓ native `AsAsyncEnumerable` | ❌ |
+| **Observability (OTel)** | ✓ built-in `WithMetrics` / `WithTracing` | ❌ | △ third-party instrumentation package | ❌ |
+| **SQL preview** | ✓ `AsDryRun` (SQL + parameters) | ❌ | ✓ `ToQueryString` | △ builder-level `GetString` |
+| **Pessimistic locking** | ✓ chained `ForUpdate` / `ForShare` | ❌ hand-written SQL | △ not in the core (PG provider extension) | ❌ |
+| **Navigation object graphs** | △ `Include` generates JOINs without assembly (micro-ORM trade-off; group by parent yourself) | △ hand-written multi-mapping | ✓ full `Include` assembly + change tracking | ❌ |
+| **JSON column queries** | △ `WhereJson` JSONB path queries (PG only); mapping see `[OwnedJson]` above | △ hand-written SQL | ✓ EF7+ JSON column mapping + path queries (enhanced in EF10) | △ PropertyHandler mapping, no path queries |
+| **CTE / window functions** | ✓ chained API | △ raw SQL strings | △ LINQ translation (partial) | △ raw SQL |
+| **Multiple result sets** | ✓ `GridReader` | ✓ `QueryMultiple` | ❌ | ✓ `ExecuteQueryMultiple` |
+| **Keyset paging** | ✓ `ToPageAsync` | ❌ | ❌ | ❌ |
+| **Scaffold tool** | ✓ all three providers | ❌ | ✓ `dotnet ef dbContext scaffold` | ❌ |
+| **Connection-string auto-tuning** | ✓ PG 6 / MySQL 5 / SQLite 8 settings | ❌ | ❌ | ❌ |
+| **BulkInsert memory** | ≈ 19% of Dapper | baseline | highest (ChangeTracker) | medium |
+| **Core NuGet dependencies** | zero | zero | high (multi-package) | medium |
+| **Target frameworks** | net11.0 (single target) | multi-target (netstandard2.0+) | multi-target (net8+) | multi-target (netstandard2.0+) |
+| **License** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
+
+Core differentiators: compile-time generation + full-pipeline AOT compatibility + per-dialect bulk strategies (COPY / BulkCopy / multi-value / arrays). Dapper is fast but reflects at runtime; EF Core is feature-complete but heavy at runtime with AOT still experimental; RepoDb is also a micro-ORM but has no source generation, and its bulk support is SQL Server only.
+
+Comparison evidence:
+
+- **Dapper**: `Dapper.Aot` (separate package, [aot.dapperlib.dev](https://aot.dapperlib.dev)) generates AOT interceptors via Roslyn interceptors — an experimental C# feature, not enabled by default.
+- **EF Core 10**: LTS ([learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)). `ExecuteUpdateAsync` only supports a single value per WHERE clause and cannot set different values per row in one SQL statement; AOT is still experimental ([issue #35945](https://github.com/dotnet/efcore/issues/35945)); no built-in UPSERT API — `MERGE` semantics require raw SQL. Query cache requires a third-party interceptor ([EFCoreSecondLevelCacheInterceptor](https://github.com/VahidN/EFCoreSecondLevelCacheInterceptor)); OTel observability has no first-class built-in metrics, wired via [OpenTelemetry.Instrumentation.EntityFrameworkCore](https://www.nuget.org/packages/OpenTelemetry.Instrumentation.EntityFrameworkCore) (third-party, Experimental); pessimistic locking is not built into the core ([multiple sources](https://milanjovanovic.tech/blog/a-clever-way-to-implement-pessimistic-locking-in-ef-core)), PG scenarios rely on the Npgsql provider's `ForUpdate` extension with cross-dialect inconsistency; `ToQueryString` since EF Core 5+.
+- **RepoDb**: BulkOperation is SQL Server only ([repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert): *"It is only supporting the SQL Server RDBMS."*); other dialects use packed statements; `Merge` belongs to the same BulkOperation family and is subject to the same limit. Query cache is operation-level `cacheKey` + a shared `ICache` instance ([official blog](https://blogs.repodb.net/posts/2026/09/caching-in-repodb)); SQL preview only exists at the builder level via `QueryBuilder.GetString()` (aimed at `IStatementBuilder` implementers), with no first-class operation-level preview API. No navigation assembly: the [official README](https://github.com/mikependon/repodb) comparison table positions "Rich object graphs" as EF's territory while claiming "EF-like productivity without losing SQL control". JSON support is PropertyHandler-based mapping (`JsonToEntity/JsonDocument` etc., [core release notes](https://repodb.net/release/core)), with no path-query building.
+- **PalORM**: diagnostic count 45 = 42 analyzers + 3 generators (`docs/API参考.md`, Chinese); bulk-UPSERT tenant guard = `BulkMergeAsync` conflict updates scoped to the current tenant (2026-10 audit closure); read-replica routing = `readFromReplica` parameter on the query family + `ParallelReadScope`.
+
+## 📊 Performance
+
+> **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC1 · SQLite shared memory · PG 18.6 / MySQL 8.4.11 local containers · Dapper 2.1.89. Three arms (ADO.NET / Dapper / PalORM) collected in the same process and same round with identical connection settings; each arm uses its ecosystem's idiomatic best-practice code (ADO.NET is the hand-written performance floor).
+>
+> **Data batches**: 2026-10-08 `PerfCli full` batch (`history-20261008-115807.json`, medians + exact allocation counts). Latency = full-path median; allocation = exact counts (1024-based). Shared PG/MySQL servers swing ±30% between batches — cross-batch absolute values are not comparable; allocation is deterministic and stable across batches. Full methodology and reproduction commands: [benchmark methodology](docs/性能基准规范.md) (Chinese) and `bench/perfhub/report.html` (the same-day BDN gate matrix numbers are also in that report).
+
+**Legend** (shared by latency and allocation, baseline = hand-written ADO.NET floor; positive % = slower/more than baseline):
+🟢 strong win ≤−30% · 🟩 mid win −29%~−10% · 🔹 slight win −9%~−1% · 🔸 slight loss +1%~+9% · 🟧 mid loss +10%~+29% · 🟥 strong loss ≥+30% · **bold** = outside the 1.3×/0.7× significant band.
+
+### Master table · Cross-dialect PalORM / ADO.NET latency ratio (ADO median → PalORM median, μs)
+
+| Operation | Tier | SQLite | PostgreSQL | MySQL |
+|------|---:|:---:|:---:|:---:|
+| GetByKey | 2K | 9.9→6.3 **0.64** | 210→206 0.98 | 204→233 1.14 |
+| GetByKey | 20K | 26.9→27.5 1.02 | 205→208 1.01 | 179→220 1.23 |
+| QueryAll | 2K | 963→984 1.02 | 664→663 1.00 | 1,090→1,340 1.23 |
+| QueryAll | 20K | 9,720→9,890 1.02 | 5,060→5,210 1.03 | 8,030→8,200 1.02 |
+| StreamAll | 2K | 967→1,036 1.07 | 657→665 1.01 | 1,071→1,408 **1.31** |
+| StreamAll | 20K | 9,474→10,146 1.07 | 5,071→5,191 1.02 | 7,667→8,461 1.10 |
+| Insert | 2K | 17.9→17.7 0.99 | 559→565 1.01 | 1,530→1,550 1.01 |
+| Update | 2K | 7.2→7.4 1.03 | 601→581 0.97 | 200→233 1.16 |
+| BulkInsert | 2K | 17,250→16,780 0.97 | 3,360→3,550 1.06 | 11,390→10,780 0.95 |
+| BulkInsert | 20K | 156,280→157,390 1.01 | 17,960→19,070 1.06 | 84,190→88,480 1.05 |
+| BulkUpdate | 2K | 2,380→2,350 0.99 | 10,610→4,340 **0.41** | 28,760→9,290 **0.32** |
+| BulkUpdate | 20K | 25,940→26,010 1.00 | 108,680→69,810 **0.64** | 288,480→85,060 **0.29** |
+| BulkDelete | 2K | 6,780→5,060 0.75 | 2,670→1,580 **0.59** | 9,590→8,450 0.88 |
+| BulkDelete | 20K | 66,550→36,790 **0.55** | 23,720→10,000 **0.42** | 68,420→66,400 0.97 |
+| UpsertBatch | 2K | 16,640→16,250 0.98 | 11,470→5,790 **0.50** | 8,080→7,920 0.98 |
+| UpsertBatch | 20K | 155,130→154,270 0.99 | 124,980→75,030 **0.60** | 73,880→77,870 1.05 |
+
+**How to read**: bulk write paths are on par with or better than the ADO.NET floor across all dialects (0.88~1.06), with three dialect-specific fast paths clearly ahead of the hand-written floor — MySQL bulk UPDATE via `UPDATE JOIN VALUES ROW` at 3~3.4×, the PG bulk family via array parameters (`= ANY`) and Binary COPY at 1.6~2.4×, and SQLite BulkDelete at 1.8× thanks to pooled command/parameter reuse; single-row reads sit at 0.64~1.02 of the floor on SQLite/PG and 1.14~1.23 on MySQL. The MySQL 2K-tier QueryAll 1.23 / StreamAll 1.31 gap has reproduced across two batches (stable ADO floor — a persistent gap, not batch noise, not yet attributed; awaiting a dedicated re-run). The MySQL 20K large-result-set slow state registered on 10-07 (once +51~62%) has returned to the normal band this batch (1.02~1.10).
+
+### SQLite detail · Latency and allocation (three arms)
+
+**CRUD single-row and reads**
+
+| Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
+|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
+| GetByKey | 2K | 9.9 | 7.0 | 6.3 | **0.64🟢** | 0.90🟩 | 2.1/2.8/3.0 KB | +30% / +40% |
+| GetByKey | 20K | 26.9 | 18.3 | 27.5 | 1.02🔸 | **1.50🟥** | 2.1/2.8/3.0 KB | +31% / +42% |
+| QueryAll | 2K | 963 | 1,350 | 984 | 1.02🔸 | 0.73🟩 | 308/513/293 KB | +66% / −5% |
+| QueryAll | 20K | 9,720 | 13,980 | 9,890 | 1.02🔸 | 0.71🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
+| StreamAll | 2K | 967 | 1,403 | 1,036 | 1.07🔸 | 0.74🟩 | 276/481/278 KB | +74% / +1% |
+| StreamAll | 20K | 9,474 | 14,143 | 10,146 | 1.07🔸 | 0.72🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
+| Insert | 2K | 17.9 | 18.6 | 17.7 | 0.99🔹 | 0.95🔹 | 2.8/3.6/3.1 KB | +28% / +10% |
+| Update | 2K | 7.2 | 8.2 | 7.4 | 1.03🔸 | 0.90🟩 | 2.6/3.3/3.4 KB | +30% / +32% |
+| InsertReturningId | 2K | 27 | 28 | 28 | 1.02🔸 | 0.99⚪ | 1.9/2.3/2.7 KB | +24% / +43% |
+
+**Bulk operations**
+
+| Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
+|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
+| BulkInsert | 2K | 17,250 | 106,930 | 16,780 | 0.97🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
+| BulkInsert | 20K | 156,280 | 1,068,140 | 157,390 | 1.01🔸 | **0.15🟢** | 14.9/79.5/14.7 MB | +432% / −1% |
+| BulkUpdate | 2K | 2,380 | 8,840 | 2,350 | 0.99🔹 | **0.27🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
+| BulkUpdate | 20K | 25,940 | 311,960 | 26,010 | 1.00⚪ | **0.08🟢** | 17.0/65.1/17.6 MB | +283% / +4% |
+| BulkDelete | 2K | 6,780 | 22,030 | 5,060 | 0.75🟩 | **0.23🟢** | 629 KB/1.6 MB/478 KB | +155% / −24% |
+| BulkDelete | 20K | 66,550 | 223,280 | 36,790 | **0.55🟢** | **0.16🟢** | 6.1/15.6/4.3 MB | +155% / −30% |
+| UpsertBatch | 2K | 16,640 | 103,820 | 16,250 | 0.98🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +378% / −4% |
+| UpsertBatch | 20K | 155,130 | 1,067,210 | 154,270 | 0.99🔹 | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / +0% |
+
+The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.75~1.01); BulkDelete beats the floor via pooled command and parameter reuse (full batches only write `Value`; 0.55 at the 20K tier); Dapper's multi-value INSERT at the 20K tier is 6.8× slower with 5.3× allocations due to giant SQL string construction.
+
+**Transactions**
+
+| Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
+|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
+| TxSingleInsert | 2K | 19.4 | 20.5 | 20.3 | 1.05🔸 | 0.99🔹 | 4.1/4.8/4.8 KB | +17% / +17% |
+| TxHundredInserts | 2K | 191 | 264 | 246 | 1.29🟧 | 0.93🔹 | 137/220/93 KB | +61% / −32% |
+| TxBulkInsert | 2K | 16,960 | 104,340 | 16,750 | 0.99🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
+| TxRollback | 2K | 594 | 2,127 | 878 | **1.48🟥** | **0.41🟢** | 435 KB/1.6 MB/450 KB | +279% / +3% |
+
+### Specialized measurements
+
+**Native AOT publish size**
+
+| Dialect | exe size | Publish directory |
+|------|:---:|:---:|
+| SQLite | 4.5 MB | 26 MB |
+| PostgreSQL | 11.6 MB | 61 MB |
+| MySQL | 9.5 MB | 47 MB |
+
+### Performance tip for query building: hoist expression trees to static fields
+
+`OrderBy` / `Select` / `GroupBy` / `WhereIn` / `Set` / `Include` and friends accept `Expression<Func<T, ...>>`. C# constructs the expression tree at the call site — the cost is already paid by the time the library sees it and cannot be cached in-library; measured at 512 bytes plus 0.5–1.6 µs per tree. Hoisting the lambda to a static field eliminates it:
+
+```csharp
+// The expression tree is rebuilt on every call
+await db.From<Order>().OrderBy(o => o.CreatedAt).ToListAsync();
+
+// The expression tree is constructed once, then reused
+private static readonly Expression<Func<Order, DateTime>> ByCreatedAt = o => o.CreatedAt;
+await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
+```
+
+| Scenario | Allocation reduction | Time reduction |
+|------|:---:|:---:|
+| `UPDATE` + `Set(...)` | −18.0% | −18.3% |
+| Single-row query + `OrderBy(...)` | −12.4% | −7.2% |
+| `WhereIn(500)` | −0.72% | −1.7% |
+| 10K-row query | Amortized to negligible by the result set | Same |
+
+Worth doing when queries are frequent, rows per query are few, and builder methods are on hot paths; unnecessary for bulk and reporting workloads. `Where` / `OrWhere` / `Having` take `FormattableString` and construct no expression trees — nothing to do there.
 
 ## 📦 Installation
 
@@ -214,7 +369,7 @@ await db.WithTransaction(async ct =>
 Resilience policies (`WithRetry` exponential backoff + `WithCircuitBreaker`) have covered the read-only query pipeline automatically since v5.4:
 
 ```csharp
-// The Production preset already includes resilience (MaxRetries=5 / breaker threshold 10 / 60s half-open)
+// The Production preset already includes resilience (MaxRetries=5 / breaker threshold 10 / 60s half-open / Process scope)
 await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(
     DbOptions.Production(connectionString));
 
@@ -342,6 +497,7 @@ Grouped by frequency; detailed rationale at each linked section:
 
 **Operations and troubleshooting**
 - Use `DbOptions.Production` in production (resilience and pooling presets included); override only what you actually need
+- For short-lived per-request sessions: the `Production` preset already defaults to `CircuitBreakerScope.Process` (failures accumulate across sessions, so a persistently failing database trips the breaker and requests fail fast); when building `DbOptions` by hand, set `CircuitBreakerScope.Process` explicitly — Session-scope counts die with the session, so with per-request sessions the threshold is practically unreachable
 - Timeout exceptions tagged `PalORM.InfrastructureTimeout` are infrastructure-side (network/server) — check the environment before the code
 - On MySQL, check server-side `max_allowed_packet` first when bulk writes report `ER_NET_PACKET_TOO_LARGE`; LOAD DATA falling back to multi-value INSERT when `local_infile` is off is expected behavior (not an error)
 
@@ -356,6 +512,8 @@ var test = DbOptions.Testing(connectionString);               // testing (zero r
 var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // environment variables (Docker/K8s friendly)
 ```
 
+Environment variables supported by `FromEnvironment`: `PALORM_CONNECTION` (required), `PALORM_READ_CONNECTION`, `PALORM_COMMAND_TIMEOUT`, `PALORM_CONNECTION_TIMEOUT`, `PALORM_MAX_RETRIES`, `PALORM_CIRCUIT_BREAKER_THRESHOLD`, `PALORM_MAX_POOL_SIZE`; the result is `Validate()`d automatically so invalid values fail at startup.
+
 ### Options
 
 | Property | Type | Default | Notes |
@@ -364,8 +522,9 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // environment var
 | `ReadConnectionString` | `string?` | null | Read replica connection string. When set, `ForRead()` routes automatically |
 | `ConnectionTimeout` | `TimeSpan` | 15s | Connection establishment timeout (including retries); throws `TimeoutException` on expiry |
 | `CommandTimeout` | `TimeSpan` | 30s | Command execution timeout; sub-second values round up to 1 second |
-| `MaxRetries` | `int` | 3 | Max retries for transient failures, 0=disabled. Covers the read-only query pipeline; writes are not auto-retried |
-| `RetryBackoff` | `Func<int, TimeSpan>?` | Exponential backoff | Custom retry intervals (parameter = retry count); negative values throw |
+| `MaxRetries` | `int` | 3 | Max retries for transient failures, 0=disabled, capped at 10 (`Validate()` throws beyond it). Covers the read-only query pipeline; writes are not auto-retried |
+| `RetryBackoff` | `Func<int, TimeSpan>?` | 100→200→400ms | Default backoff includes 50~100% jitter; custom retry intervals (parameter = retry count), negative values throw |
+| `OverallDeadline` | `TimeSpan` | Zero (off) | Total budget per operation: on expiry, retries stop and a `TimeoutException` tagged `PalORM.InfrastructureTimeout` is thrown. Unset, worst-case wall clock ≈ (MaxRetries+1)×CommandTimeout+Σbackoff (about 120 s with defaults); should exceed a single `CommandTimeout` |
 | `MaxPoolSize` | `int` | 100 | Pool upper bound. Ignored for SQLite (embedded database, no server-side pool) |
 | `MinPoolSize` | `int` | 0 | v5.6.0. 0=keep driver default; positive values pass through — after idle trimming the pool keeps at least this many warm connections, eliminating latency spikes from rebuilding connections on bursts. Ignored for SQLite |
 | `PoolIdleTimeoutSeconds` | `int` | 0 | Default 0 since v5.6.0 (30 earlier). 0=keep driver default (Npgsql 300s / MySqlConnector 180s); only positive values override, at the cost that the first query after an idle expiry rebuilds a physical connection (measured cross-subnet `SELECT 1`: 0.3 ms pooled vs 13.5 ms fresh) |
@@ -373,6 +532,7 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // environment var
 | `PoolExplicitlyConfigured` | `bool` | false | true once `WithPool()` is set (internal marker) |
 | `CircuitBreakerThreshold` | `int` | 5 | Consecutive-failure threshold, 0=disable the breaker |
 | `CircuitBreakerResetAfter` | `TimeSpan` | 30s | Wait before the breaker moves to half-open |
+| `CircuitBreakerScope` | `CircuitBreakerScope` | Session | Breaker scope: Session counts failures per session (fine for long-lived sessions); Process accumulates across sessions keyed by (Provider, connection string, threshold, cooldown) and is mandatory for short-lived per-request sessions, otherwise the breaker can never trip. The `Production` preset already defaults to `Process` |
 | `NamingConvention` | `enum` | None | None / SnakeCase / LowerCase. Only affects identifier normalization for custom SQL |
 | `Interceptors` | `IReadOnlyList<IQueryInterceptor>?` | null | Executed in ascending `Priority` order (`AuditInterceptor` defaults to 200) |
 | `ValidateQueryColumnOrder` | `bool` | true | Compares the first result row's column order against entity declaration order on `QueryAsync`; throws on mismatch — disable when using column aliases/expression columns |
@@ -455,166 +615,15 @@ The session-state leakage trade-off of `NoResetOnClose=true` (raw-SQL SET/temp t
 | Sort/join memory buffers | `sort_buffer_size` / `join_buffer_size` ≥ 256KB (the default) | For remote large result sets / million-row sorted joins, first confirm no `Using filesort` via `EXPLAIN`, then adjust as needed (DBA decision) |
 | Isolation level RR→RC | `WithIsolationLevel(IsolationLevel.ReadCommitted)` | The engine default RR (gap locks) amplifies hot-row lock contention; the trade-off is a change in MVCC snapshot semantics — a business decision |
 
-## 📊 Performance
-
-> **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC1 · BenchmarkDotNet fork (net11) · SQLite shared memory · PG 18.6 / MySQL 8.4.11 local containers · Dapper 2.1.89. Three arms (ADO.NET / Dapper / PalORM) collected in the same process and same round with identical connection settings; each arm uses its ecosystem's idiomatic best-practice code (ADO.NET is the hand-written performance floor).
->
-> **Data batches**: 2026-10-08 `PerfCli full` batch (`history-20261008-115807.json`, medians + exact allocation counts) plus the same-day BDN three-arm matrix. Latency = full-path median; allocation = exact counts (1024-based). Shared PG/MySQL servers swing ±30% between batches — cross-batch absolute values are not comparable; allocation is deterministic and stable across batches. Full methodology and reproduction commands: [benchmark methodology](docs/性能基准规范.md) (Chinese) and `bench/perfhub/report.html`.
-
-**Legend** (shared by latency and allocation, baseline = hand-written ADO.NET floor; positive % = slower/more than baseline):
-🟢 strong win ≤−30% · 🟩 mid win −29%~−10% · 🔹 slight win −9%~−1% · 🔸 slight loss +1%~+9% · 🟧 mid loss +10%~+29% · 🟥 strong loss ≥+30% · **bold** = outside the 1.3×/0.7× significant band.
-
-### Master table · Cross-dialect PalORM / ADO.NET latency ratio (ADO median → PalORM median, μs)
-
-| Operation | Tier | SQLite | PostgreSQL | MySQL |
-|------|---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.9→6.3 **0.64** | 210→206 0.98 | 204→233 1.14 |
-| GetByKey | 20K | 26.9→27.5 1.02 | 205→208 1.01 | 179→220 1.23 |
-| QueryAll | 2K | 963→984 1.02 | 664→663 1.00 | 1,090→1,340 1.23 |
-| QueryAll | 20K | 9,720→9,890 1.02 | 5,060→5,210 1.03 | 8,030→8,200 1.02 |
-| StreamAll | 2K | 967→1,036 1.07 | 657→665 1.01 | 1,071→1,408 **1.31** |
-| StreamAll | 20K | 9,474→10,146 1.07 | 5,071→5,191 1.02 | 7,667→8,461 1.10 |
-| Insert | 2K | 17.9→17.7 0.99 | 559→565 1.01 | 1,530→1,550 1.01 |
-| Update | 2K | 7.2→7.4 1.03 | 601→581 0.97 | 200→233 1.16 |
-| BulkInsert | 2K | 17,250→16,780 0.97 | 3,360→3,550 1.06 | 11,390→10,780 0.95 |
-| BulkInsert | 20K | 156,280→157,390 1.01 | 17,960→19,070 1.06 | 84,190→88,480 1.05 |
-| BulkUpdate | 2K | 2,380→2,350 0.99 | 10,610→4,340 **0.41** | 28,760→9,290 **0.32** |
-| BulkUpdate | 20K | 25,940→26,010 1.00 | 108,680→69,810 **0.64** | 288,480→85,060 **0.29** |
-| BulkDelete | 2K | 6,780→5,060 0.75 | 2,670→1,580 **0.59** | 9,590→8,450 0.88 |
-| BulkDelete | 20K | 66,550→36,790 **0.55** | 23,720→10,000 **0.42** | 68,420→66,400 0.97 |
-| UpsertBatch | 2K | 16,640→16,250 0.98 | 11,470→5,790 **0.50** | 8,080→7,920 0.98 |
-| UpsertBatch | 20K | 155,130→154,270 0.99 | 124,980→75,030 **0.60** | 73,880→77,870 1.05 |
-
-**How to read**: bulk write paths are on par with or better than the ADO.NET floor across all dialects (0.88~1.06), with three dialect-specific fast paths clearly ahead of the hand-written floor — MySQL bulk UPDATE via `UPDATE JOIN VALUES ROW` at 3~3.4×, the PG bulk family via array parameters (`= ANY`) and Binary COPY at 1.6~2.4×, and SQLite BulkDelete at 1.8× thanks to pooled command/parameter reuse; single-row reads sit at 0.64~1.02 of the floor on SQLite/PG and 1.14~1.23 on MySQL. The MySQL 2K-tier QueryAll 1.23 / StreamAll 1.31 gap has reproduced across two batches (stable ADO floor — a persistent gap, not batch noise, not yet attributed; awaiting a dedicated re-run). The MySQL 20K large-result-set slow state registered on 10-07 (once +51~62%) has returned to the normal band this batch (1.02~1.10).
-
-### SQLite detail · Latency and allocation (three arms)
-
-**CRUD single-row and reads**
-
-| Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
-|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.9 | 7.0 | 6.3 | **0.64🟢** | 0.90🟩 | 2.1/2.8/3.0 KB | +30% / +40% |
-| GetByKey | 20K | 26.9 | 18.3 | 27.5 | 1.02🔸 | **1.50🟥** | 2.1/2.8/3.0 KB | +31% / +42% |
-| QueryAll | 2K | 963 | 1,350 | 984 | 1.02🔸 | 0.73🟩 | 308/513/293 KB | +66% / −5% |
-| QueryAll | 20K | 9,720 | 13,980 | 9,890 | 1.02🔸 | 0.71🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
-| StreamAll | 2K | 967 | 1,403 | 1,036 | 1.07🔸 | 0.74🟩 | 276/481/278 KB | +74% / +1% |
-| StreamAll | 20K | 9,474 | 14,143 | 10,146 | 1.07🔸 | 0.72🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
-| Insert | 2K | 17.9 | 18.6 | 17.7 | 0.99🔹 | 0.95🔹 | 2.8/3.6/3.1 KB | +28% / +10% |
-| Update | 2K | 7.2 | 8.2 | 7.4 | 1.03🔸 | 0.90🟩 | 2.6/3.3/3.4 KB | +30% / +32% |
-| InsertReturningId | 2K | 27 | 28 | 28 | 1.02🔸 | 0.99⚪ | 1.9/2.3/2.7 KB | +24% / +43% |
-
-**Bulk operations**
-
-| Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
-|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| BulkInsert | 2K | 17,250 | 106,930 | 16,780 | 0.97🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| BulkInsert | 20K | 156,280 | 1,068,140 | 157,390 | 1.01🔸 | **0.15🟢** | 14.9/79.5/14.7 MB | +432% / −1% |
-| BulkUpdate | 2K | 2,380 | 8,840 | 2,350 | 0.99🔹 | **0.27🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
-| BulkUpdate | 20K | 25,940 | 311,960 | 26,010 | 1.00⚪ | **0.08🟢** | 17.0/65.1/17.6 MB | +283% / +4% |
-| BulkDelete | 2K | 6,780 | 22,030 | 5,060 | 0.75🟩 | **0.23🟢** | 629 KB/1.6 MB/478 KB | +155% / −24% |
-| BulkDelete | 20K | 66,550 | 223,280 | 36,790 | **0.55🟢** | **0.16🟢** | 6.1/15.6/4.3 MB | +155% / −30% |
-| UpsertBatch | 2K | 16,640 | 103,820 | 16,250 | 0.98🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +378% / −4% |
-| UpsertBatch | 20K | 155,130 | 1,067,210 | 154,270 | 0.99🔹 | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / +0% |
-
-The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.75~1.01); BulkDelete beats the floor via pooled command and parameter reuse (full batches only write `Value`; 0.55 at the 20K tier); Dapper's multi-value INSERT at the 20K tier is 6.8× slower with 5.3× allocations due to giant SQL string construction.
-
-**Transactions**
-
-| Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
-|------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| TxSingleInsert | 2K | 19.4 | 20.5 | 20.3 | 1.05🔸 | 0.99🔹 | 4.1/4.8/4.8 KB | +17% / +17% |
-| TxHundredInserts | 2K | 191 | 264 | 246 | 1.29🟧 | 0.93🔹 | 137/220/93 KB | +61% / −32% |
-| TxBulkInsert | 2K | 16,960 | 104,340 | 16,750 | 0.99🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| TxRollback | 2K | 594 | 2,127 | 878 | **1.48🟥** | **0.41🟢** | 435 KB/1.6 MB/450 KB | +279% / +3% |
-
-### Specialized measurements
-
-**SQLite CRUD · three-arm matrix** (BDN, 10K-row seed)
-
-| Operation | ADO.NET | Dapper | PalORM |
-|------|------:|------:|------:|
-| Full-table query, 10,000 rows | 4.25 ms | 3.85 ms | 4.38 ms (1.03x) |
-| Single-row insert | 24.6 µs | 26.3 µs | 33.1 µs (1.35x) |
-| Primary-key lookup | 23.9 µs | 23.8 µs | 28.1 µs (1.18x) |
-| Single-row update | 22.8 µs | 22.3 µs | 28.2 µs (1.24x) |
-
-The single-row write overhead (P/ADO 1.24~1.35) is the source-generated materializer plus the session gate and tenant routing (about 5~9 µs per row); the read path is on par with the floor. The PG COPY / MySQL BulkCopy paths bypass `DbParameter.Value` entirely — no boxing remains.
-
-**Native AOT publish size**
-
-| Dialect | exe size | Publish directory |
-|------|:---:|:---:|
-| SQLite | 4.5 MB | 26 MB |
-| PostgreSQL | 11.6 MB | 61 MB |
-| MySQL | 9.5 MB | 47 MB |
-
-### Performance tip for query building: hoist expression trees to static fields
-
-`OrderBy` / `Select` / `GroupBy` / `WhereIn` / `Set` / `Include` and friends accept `Expression<Func<T, ...>>`. C# constructs the expression tree at the call site — the cost is already paid by the time the library sees it and cannot be cached in-library; measured at 512 bytes plus 0.5–1.6 µs per tree. Hoisting the lambda to a static field eliminates it:
-
-```csharp
-// The expression tree is rebuilt on every call
-await db.From<Order>().OrderBy(o => o.CreatedAt).ToListAsync();
-
-// The expression tree is constructed once, then reused
-private static readonly Expression<Func<Order, DateTime>> ByCreatedAt = o => o.CreatedAt;
-await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
-```
-
-| Scenario | Allocation reduction | Time reduction |
-|------|:---:|:---:|
-| `UPDATE` + `Set(...)` | −18.0% | −18.3% |
-| Single-row query + `OrderBy(...)` | −12.4% | −7.2% |
-| `WhereIn(500)` | −0.72% | −1.7% |
-| 10K-row query | Amortized to negligible by the result set | Same |
-
-Worth doing when queries are frequent, rows per query are few, and builder methods are on hot paths; unnecessary for bulk and reporting workloads. `Where` / `OrWhere` / `Having` take `FormattableString` and construct no expression trees — nothing to do there.
-
-## 🆚 Comparison with mainstream ORMs
-
-> Version baseline: PalORM 6.3.1 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
-
-| Feature | **PalORM** | Dapper | EF Core | RepoDb |
-|------|:---:|:---:|:---:|:---:|
-| **Full-pipeline Native AOT** | ✓ source-generated, verified | △ Dapper.Aot optional (experimental interceptors) | ❌ experimental, not production-ready | ❌ reflection + IL Emit |
-| **Compile-time type diagnostics** | ✓ 45 rules (42 analyzers + 3 generators), errors jump to declaration sites | ❌ fails at runtime | △ migration checks (design time) | ❌ fails at runtime |
-| **Compile-time SQL pre-building** | ✓ Roslyn source generation | ❌ runtime concatenation | △ precompiled queries (experimental) | ❌ runtime expression trees |
-| **Runtime reflection** | Zero | △ first-use reflection + IL Emit cache | △ expression-tree compilation | ❌ reflection + IL Emit |
-| **Per-dialect bulk strategies** | ✓ COPY / BulkCopy / multi-value / `= ANY` arrays | ❌ hand-written multi-value SQL | △ varies by provider | △ BulkInsert SQL Server only |
-| **Single-statement multi-row UPDATE** | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN | ❌ | ❌ ExecuteUpdate is single-value per WHERE only | ❌ |
-| **Bulk UPSERT** | ✓ `BulkMergeAsync` (ON CONFLICT / ON DUPLICATE KEY, conflict updates tenant-scoped) | ❌ hand-written | ❌ raw SQL required | △ Merge SQL Server only |
-| **Optimistic locking** | ✓ `[ConcurrencyCheck]` automatic; bulk updates via packed DbBatch | ❌ hand-written | ✓ `RowVersion` automatic | ❌ hand-written |
-| **Soft delete** | ✓ `[SoftDelete]` automatic filtering (bulk delete becomes UPDATE) | ❌ | ✓ global query filters | ❌ |
-| **Multi-tenant column isolation** | ✓ `[TenantAware]` compile time; cross-tenant guards on bulk writes | ❌ | △ manual implementation | ❌ |
-| **Value conversion + enum storage** | ✓ `[Converter]` / three enum strategies (int32/int64/text) emitted at compile time | △ hand-written TypeHandler | ✓ ValueConverter / HasConversion (runtime) | △ TypeHandler |
-| **Read-replica routing** | ✓ `ParallelReadScope` + `readFromReplica` on the query family | ❌ | △ manual multi-context setup | ❌ |
-| **Automatic schema migration** | ✓ `MigrateAsync` + concurrent-race tolerance (duplicate objects skipped) | ❌ | ✓ Migrations (most complete) | △ |
-| **OwnedJson compile-time safety** | ✓ `[OwnedJson]` + source generation | ❌ hand-written STJ | △ Owned Types (runtime) | ❌ |
-| **Audit interceptor** | ✓ | ❌ | ✓ Interceptors | ❌ |
-| **Advisory locks** | ✓ `pg_advisory_xact_lock` | ❌ | ❌ | ❌ |
-| **Session-level SET** | ✓ `SessionSetupSql` | ❌ | ❌ | ❌ |
-| **SQL file embedding** | ✓ `[SqlFile]` compile-time validation | ❌ | ❌ | ❌ |
-| **Circuit breaker + retry** | ✓ built in (concurrency-safe HalfOpen probe slots) | ❌ needs Polly | △ execution strategies | ❌ |
-| **CTE / window functions** | ✓ chained API | △ raw SQL strings | △ LINQ translation (partial) | △ raw SQL |
-| **Multiple result sets** | ✓ `GridReader` | ✓ `QueryMultiple` | ❌ | ✓ `ExecuteQueryMultiple` |
-| **Keyset paging** | ✓ `ToPageAsync` | ❌ | ❌ | ❌ |
-| **Scaffold tool** | ✓ all three providers | ❌ | ✓ `dotnet ef dbContext scaffold` | ❌ |
-| **Connection-string auto-tuning** | ✓ PG 6 / MySQL 5 / SQLite 8 settings | ❌ | ❌ | ❌ |
-| **BulkInsert memory** | ≈ 19% of Dapper | baseline | highest (ChangeTracker) | medium |
-| **Core NuGet dependencies** | zero | zero | high (multi-package) | medium |
-| **Target frameworks** | net11.0 (single target) | multi-target (netstandard2.0+) | multi-target (net8+) | multi-target (netstandard2.0+) |
-| **License** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
-
-Core differentiators: compile-time generation + full-pipeline AOT compatibility + per-dialect bulk strategies (COPY / BulkCopy / multi-value / arrays). Dapper is fast but reflects at runtime; EF Core is feature-complete but heavy at runtime with AOT still experimental; RepoDb is also a micro-ORM but has no source generation, and its bulk support is SQL Server only.
-
-Comparison evidence:
-
-- **Dapper**: `Dapper.Aot` (separate package, [aot.dapperlib.dev](https://aot.dapperlib.dev)) generates AOT interceptors via Roslyn interceptors — an experimental C# feature, not enabled by default.
-- **EF Core 10**: LTS ([learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)). `ExecuteUpdateAsync` only supports a single value per WHERE clause and cannot set different values per row in one SQL statement; AOT is still experimental ([issue #35945](https://github.com/dotnet/efcore/issues/35945)); no built-in UPSERT API — `MERGE` semantics require raw SQL.
-- **RepoDb**: BulkOperation is SQL Server only ([repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert): *"It is only supporting the SQL Server RDBMS."*); other dialects use packed statements; `Merge` belongs to the same BulkOperation family and is subject to the same limit.
-- **PalORM**: diagnostic count 45 = 42 analyzers + 3 generators (`docs/API参考.md`, Chinese); bulk-UPSERT tenant guard = `BulkMergeAsync` conflict updates scoped to the current tenant (2026-10 audit closure); read-replica routing = `readFromReplica` parameter on the query family + `ParallelReadScope`.
-
 ## 🔄 Upgrade guide
+
+### Upgrading from 6.3.x to 6.4.0 (unreleased): Production preset breaker scope change
+
+Starting with 6.4.0, the `DbOptions.Production` preset explicitly sets `CircuitBreakerScope = Process` (previously Session):
+
+- **What changes**: with the `Production` preset, breaker failure counts accumulate across sessions keyed by (Provider, connection string, threshold, cooldown). Under per-request sessions, a persistently failing database now trips the breaker and requests fail fast, instead of the previous shape where every request retried 5 times and failed on its own while the breaker never tripped.
+- **Unchanged**: bare `new DbOptions { ... }` still defaults to `Session`; long-lived sessions and test scenarios see no change.
+- **Multi-tenant note**: tenants sharing one connection string share the breaker; deployments needing tenant-level isolation should use separate connection strings, or fall back explicitly with `with { CircuitBreakerScope = CircuitBreakerScope.Session }`.
 
 ### Upgrading from 6.2.x and earlier to 6.3.x (data-correctness fix — strongly recommended)
 
