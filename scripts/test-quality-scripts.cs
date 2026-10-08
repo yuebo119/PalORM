@@ -18,11 +18,12 @@ var fail = 0;
 
 try
 {
-    var aiScripts = Path.Combine(repoRoot, ".ai", "scripts");
-    var skipAi = !Directory.Exists(aiScripts);
+    // 2026-10-08 迁移后形态：AI 段被测对象已从 .ai/scripts/*.sh 迁为 scripts/*.cs（dotnet run）
+    var aiScripts = Path.Combine(repoRoot, "scripts");
+    var skipAi = !File.Exists(Path.Combine(aiScripts, "verify-action-items.cs"));
     if (skipAi)
     {
-        Console.WriteLine("SKIP: .ai/scripts/ not found — AI 段跳过，仅回归仓库内防线");
+        Console.WriteLine("SKIP: scripts/verify-action-items.cs not found — AI 段跳过，仅回归仓库内防线");
     }
 
     if (!skipAi)
@@ -69,38 +70,40 @@ void Bail(string reason)
     fail = 1;
 }
 
-// ─── verify-action-items（AI 段）───
+// ─── verify-action-items（AI 段，2026-10-08 C# 形态重写 + v2 语义对齐）───
+// 夹具语义修正：原 v1 夹具断言"缺失标识符→FAIL"与 v2 收窄原则相反（v2 只核对文件路径，
+// 标识符一律跳过——PalOrmDefinitelyMissingSymbol 类无扩展名无斜杠属跳过形态）；
+// "缺失：1"（v1 文案）改对 v2 实际输出"缺失 1"。此两处漂移自 v2 重写日起未被发现（CI 盲区）。
 void FixtureVerifyActionItems(string aiScripts, string tmpDir)
 {
     Console.WriteLine("─── verify-action-items ───");
+    var script = "scripts/verify-action-items.cs";
     File.WriteAllText(Path.Combine(tmpDir, "action-pass.md"), "# fixture\n`README.md`\n", new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(tmpDir, "action-fail-file.md"), "# fixture\n`missing-file.yml`\n", new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(tmpDir, "action-fail-symbol.md"), "# fixture\n`PalOrmDefinitelyMissingSymbol`\n", new UTF8Encoding(false));
 
-    _ = RunBashCapture(Path.Combine(aiScripts, "verify-action-items.sh"),
-        [$"{Path.Combine(tmpDir, "action-pass.md")}"], out _);
-    var failFileOk = RunBashCapture(Path.Combine(aiScripts, "verify-action-items.sh"),
-        [$"{Path.Combine(tmpDir, "action-fail-file.md")}"], out var failFileLog);
+    var passOk = RunDotnetFileCapture(script, [$"\"{Path.Combine(tmpDir, "action-pass.md")}\""], out var passLog);
+    if (!passOk)
+    {
+        Bail($"FAIL 干净账本夹具未通过（{string.Join(' ', passLog.Split('\n').TakeLast(2))}）");
+        return;
+    }
+    var failFileOk = RunDotnetFileCapture(script, [$"\"{Path.Combine(tmpDir, "action-fail-file.md")}\""], out var failFileLog);
     if (failFileOk)
     {
         Bail("FAIL 缺失文件未导致失败");
         return;
     }
-    if (!failFileLog.Contains("缺失：1", StringComparison.Ordinal))
+    if (!failFileLog.Contains("缺失 1", StringComparison.Ordinal))
     {
         Bail("FAIL 缺失文件计数错误");
         return;
     }
-    var failSymbolOk = RunBashCapture(Path.Combine(aiScripts, "verify-action-items.sh"),
-        [$"{Path.Combine(tmpDir, "action-fail-symbol.md")}"], out var failSymbolLog);
-    if (failSymbolOk)
+    // v2 语义：标识符不是核对对象（多是"待创建"对象）——期望跳过而非失败
+    var symbolOk = RunDotnetFileCapture(script, [$"\"{Path.Combine(tmpDir, "action-fail-symbol.md")}\""], out var symbolLog);
+    if (!symbolOk || !symbolLog.Contains("跳过", StringComparison.Ordinal))
     {
-        Bail("FAIL 缺失标识符未导致失败");
-        return;
-    }
-    if (!failSymbolLog.Contains("缺失：1", StringComparison.Ordinal))
-    {
-        Bail("FAIL 缺失标识符计数错误");
+        Bail("FAIL 标识符夹具应被 v2 跳过（收窄原则：只核对文件路径）");
         return;
     }
     Console.WriteLine("PASS verify-action-items");
@@ -117,8 +120,8 @@ void FixtureStubCheck(string tmpDir)
     File.WriteAllText(Path.Combine(cleanDir, "Complete.cs"), "internal sealed class Complete { int Value() { return 1; } }\n", new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(stubDir, "Stub.cs"), "internal sealed class Stub { object Route() => this; }\n", new UTF8Encoding(false));
 
-    _ = RunDotnetFileCapture("scripts/stub-check.cs", cleanDir, out _);
-    var stubOk = RunDotnetFileCapture("scripts/stub-check.cs", stubDir, out var stubLog);
+    _ = RunDotnetFileCapture("scripts/stub-check.cs", [cleanDir], out _);
+    var stubOk = RunDotnetFileCapture("scripts/stub-check.cs", [stubDir], out var stubLog);
     if (stubOk)
     {
         Bail("FAIL 空壳夹具未导致失败");
@@ -138,7 +141,7 @@ void FixtureParamCollectionReuseGate(string tmpDir)
 {
     Console.WriteLine("\n─── gate-param-collection-reuse ───");
     // 正路径：真实仓库
-    _ = RunDotnetFileCapture("scripts/gate-param-collection-reuse.cs", repoRoot, out var okLog);
+    _ = RunDotnetFileCapture("scripts/gate-param-collection-reuse.cs", [repoRoot], out var okLog);
     if (!okLog.Contains("PASS", StringComparison.Ordinal))
     {
         Bail("FAIL 参数集合复用门禁在真实仓库上未通过");
@@ -209,11 +212,11 @@ bool RunGateExpectFailure(string gateScript, string faultRoot, string expectSubs
     return true;
 }
 
-// ─── review-snapshot（AI 段）───
+// ─── review-snapshot（AI 段，2026-10-08 C# 形态重写）───
 void FixtureReviewSnapshot(string aiScripts, string tmpDir)
 {
     Console.WriteLine("\n─── review-snapshot ───");
-    _ = RunBashCapture(Path.Combine(aiScripts, "review-snapshot.sh"), ["--no-build"], out var log);
+    _ = RunDotnetFileCapture("scripts/review-snapshot.cs", ["--no-build"], out var log);
     if (!log.Contains("构建状态", StringComparison.Ordinal) || !log.Contains("已跳过（--no-build）", StringComparison.Ordinal))
     {
         Bail("FAIL 快照无构建模式输出不完整");
@@ -227,12 +230,19 @@ void FixtureReviewSnapshot(string aiScripts, string tmpDir)
     Console.WriteLine("PASS review-snapshot");
 }
 
-// ─── gate-check G12 故障与恢复（AI 段）───
+// ─── gate-check G12 故障与恢复（AI 段，2026-10-08 C# 形态重写）───
+// 三处形态修正：①gate-check.cs 以 PalORM.slnx 为仓库根哨兵——夹具根须放置空哨兵文件，
+// 否则 FindRepoRoot 向上穿透到真实仓库根（语义污染）；②被测脚本用绝对路径（workingDir
+// 已切夹具仓库）；③恢复段补 commit——原夹具 add -A 后 staged deletion 使 G33 必然 FAIL，
+// 与"恢复后须通过"的断言矛盾（存量断裂根因之一，G33 加入后该段从未真绿）。
 void FixtureGateCheckG12(string aiScripts, string tmpDir)
 {
     Console.WriteLine("\n─── gate-check G12 ───");
-    var gateDir = Path.Combine(tmpDir, "gate", "src", "Fixture");
+    var gateScript = Path.Combine(repoRoot, "scripts", "gate-check.cs").Replace('\\', '/');
+    var gateRoot = Path.Combine(tmpDir, "gate");
+    var gateDir = Path.Combine(gateRoot, "src", "Fixture");
     Directory.CreateDirectory(gateDir);
+    File.WriteAllText(Path.Combine(gateRoot, "PalORM.slnx"), "", new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(gateDir, "Fixture.csproj"),
         "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net11.0</TargetFramework><IsAotCompatible>true</IsAotCompatible></PropertyGroup></Project>\n",
         new UTF8Encoding(false));
@@ -241,22 +251,20 @@ void FixtureGateCheckG12(string aiScripts, string tmpDir)
         new UTF8Encoding(false));
     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "init -q")
     {
-        WorkingDirectory = Path.Combine(tmpDir, "gate"),
+        WorkingDirectory = gateRoot,
         UseShellExecute = false,
     })!.WaitForExit();
-    GitIn(Path.Combine(tmpDir, "gate"), "add .");
+    GitIn(gateRoot, "add .");
     // G33 工作树脏检查：临时仓库必须 commit 干净，否则 gate-check 的 G33 必然 FAIL（预存断裂根因）。
-    // 预检比 gate-check 的报错更早给出根因（commit 输出 + porcelain 清单）。
-    var commitOut = GitIn(Path.Combine(tmpDir, "gate"), "-c user.name=fixture -c user.email=fixture@test.local commit -qm \"fixture init\"");
-    var status = GitIn(Path.Combine(tmpDir, "gate"), "status --porcelain");
+    var commitOut = GitIn(gateRoot, "-c user.name=fixture -c user.email=fixture@test.local commit -qm \"fixture init\"");
+    var status = GitIn(gateRoot, "status --porcelain");
     if (status.Length > 0)
     {
         Bail($"FAIL G12 夹具仓库未清空（commit 输出=[{commitOut}] status=[{status}]）");
         return;
     }
 
-    var gatePass = RunBashCapture(Path.Combine(aiScripts, "gate-check.sh"), [], out var gatePassLog,
-        workingDir: Path.Combine(tmpDir, "gate"));
+    var gatePass = RunDotnetFileCapture(gateScript, [], out var gatePassLog, workingDir: gateRoot);
     if (!gatePass || !gatePassLog.Contains("PASS G12: 禁止公开 static 可写状态", StringComparison.Ordinal))
     {
         var head = string.Join(" | ", gatePassLog.Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(3));
@@ -266,9 +274,8 @@ void FixtureGateCheckG12(string aiScripts, string tmpDir)
     File.WriteAllText(Path.Combine(gateDir, "Broken.cs"),
         "public static class Broken { public static int Value\n{\n    get;\n    set;\n} }\n",
         new UTF8Encoding(false));
-    GitIn(Path.Combine(tmpDir, "gate"), "add .");
-    var brokenOk = RunBashCapture(Path.Combine(aiScripts, "gate-check.sh"), [], out var gateFailLog,
-        workingDir: Path.Combine(tmpDir, "gate"));
+    GitIn(gateRoot, "add .");
+    var brokenOk = RunDotnetFileCapture(gateScript, [], out var gateFailLog, workingDir: gateRoot);
     if (brokenOk || !gateFailLog.Contains("FAIL G12: 禁止公开 static 可写状态（违规数：1）", StringComparison.Ordinal))
     {
         Bail("FAIL G12 多行可写属性未导致失败或计数错误");
@@ -277,18 +284,17 @@ void FixtureGateCheckG12(string aiScripts, string tmpDir)
     File.WriteAllText(Path.Combine(gateDir, "Broken.cs"),
         "using System.Collections.Generic; public static class Broken { public static List<int> Items { get; } = []; }\n",
         new UTF8Encoding(false));
-    GitIn(Path.Combine(tmpDir, "gate"), "add .");
-    var collectionOk = RunBashCapture(Path.Combine(aiScripts, "gate-check.sh"), [], out var gateCollectionLog,
-        workingDir: Path.Combine(tmpDir, "gate"));
+    GitIn(gateRoot, "add .");
+    var collectionOk = RunDotnetFileCapture(gateScript, [], out var gateCollectionLog, workingDir: gateRoot);
     if (collectionOk || !gateCollectionLog.Contains("FAIL G12: 禁止公开 static 可写状态（违规数：1）", StringComparison.Ordinal))
     {
         Bail("FAIL G12 可变集合属性未导致失败或计数错误");
         return;
     }
     File.Delete(Path.Combine(gateDir, "Broken.cs"));
-    GitIn(Path.Combine(tmpDir, "gate"), "add -A");
-    var recoveredOk = RunBashCapture(Path.Combine(aiScripts, "gate-check.sh"), [], out var gateRecoveredLog,
-        workingDir: Path.Combine(tmpDir, "gate"));
+    GitIn(gateRoot, "add -A");
+    GitIn(gateRoot, "-c user.name=fixture -c user.email=fixture@test.local commit -qm \"remove broken\"");
+    var recoveredOk = RunDotnetFileCapture(gateScript, [], out var gateRecoveredLog, workingDir: gateRoot);
     if (!recoveredOk || !gateRecoveredLog.Contains("PASS G12: 禁止公开 static 可写状态", StringComparison.Ordinal))
     {
         Bail("FAIL G12 移除违规后未恢复");
@@ -297,11 +303,11 @@ void FixtureGateCheckG12(string aiScripts, string tmpDir)
     Console.WriteLine("PASS gate-check G12 故障与恢复");
 }
 
-// ─── verify-phase 参数失败传播（AI 段）───
+// ─── verify-phase 参数失败传播（AI 段，2026-10-08 C# 形态重写）───
 void FixtureVerifyPhase(string aiScripts, string tmpDir)
 {
     Console.WriteLine("\n─── verify-phase ───");
-    var ok = RunBashCapture(Path.Combine(aiScripts, "verify-phase.sh"), ["invalid"], out var log);
+    var ok = RunDotnetFileCapture("scripts/verify-phase.cs", ["invalid"], out var log);
     if (ok || !log.Contains("用法", StringComparison.Ordinal) || !log.Contains("phase-number", StringComparison.Ordinal))
     {
         Bail("FAIL 非法阶段参数失败传播或输出不完整");
@@ -378,7 +384,7 @@ void FixtureNoPcreGrep(string root)
 void FixtureSecretGuardSelfTest()
 {
     Console.WriteLine("─── secret-guard 自测（B41：误报/真阳性双向向量回归）───");
-    var ok = RunDotnetFileCapture("scripts/secret-guard.cs", "--selftest", out var log);
+    var ok = RunDotnetFileCapture("scripts/secret-guard.cs", ["--selftest"], out var log);
     if (!ok || !log.Contains("SELFTEST PASS", StringComparison.Ordinal))
     {
         Bail("FAIL secret-guard 自测未通过");
@@ -438,36 +444,20 @@ static string[] SafeReadLines(string file)
     }
 }
 
-bool RunBashCapture(string scriptPath, string[] args, out string output, string? workingDir = null)
+bool RunDotnetFileCapture(string scriptFile, string[] args, out string output, string? workingDir = null)
 {
-    // 路径正斜杠化：bash 对反斜杠路径的引用形态跨实现不稳（对拍经验）
-    var posixPath = scriptPath.Replace('\\', '/');
-    var psi = new System.Diagnostics.ProcessStartInfo("bash", $"\"{posixPath}\" " + string.Join(' ', args))
+    var psi = new System.Diagnostics.ProcessStartInfo("dotnet", $"run --file {scriptFile} {(args.Length > 0 ? "-- " + string.Join(' ', args) : "")}")
     {
         RedirectStandardOutput = true,
         RedirectStandardError = true,
         UseShellExecute = false,
+        StandardOutputEncoding = System.Text.Encoding.UTF8,
+        StandardErrorEncoding = System.Text.Encoding.UTF8,
     };
     if (workingDir is not null)
     {
         psi.WorkingDirectory = workingDir;
     }
-    using var p = System.Diagnostics.Process.Start(psi)!;
-    var outTask = p.StandardOutput.ReadToEndAsync();
-    var errTask = p.StandardError.ReadToEndAsync();
-    p.WaitForExit();
-    output = outTask.Result + errTask.Result;
-    return p.ExitCode == 0;
-}
-
-bool RunDotnetFileCapture(string scriptFile, string arg, out string output)
-{
-    var psi = new System.Diagnostics.ProcessStartInfo("dotnet", $"run --file {scriptFile} -- {arg}")
-    {
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-    };
     using var p = System.Diagnostics.Process.Start(psi)!;
     var outTask = p.StandardOutput.ReadToEndAsync();
     var errTask = p.StandardError.ReadToEndAsync();
