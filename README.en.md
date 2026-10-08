@@ -19,9 +19,9 @@ A Roslyn source generator produces SQL construction, parameter binding, object m
 
 | Compile-time diagnostics | 20,000-row BulkInsert | MySQL bulk UPDATE | SQLite Native AOT |
 |:---:|:---:|:---:|:---:|
-| **45 rules** | **SQLite/PG on par with the ADO.NET floor** | **0.31× floor (3× faster)** | **4.5 MB exe** |
+| **45 rules** | **SQLite 1.01× / PG 1.06× floor** | **0.29× floor (3.4× faster)** | **4.5 MB exe** |
 
-See [Performance](#-performance) for measurement details (2026-10-07 benchmark batch).
+See [Performance](#-performance) for measurement details (2026-10-08 benchmark batch).
 
 ---
 
@@ -192,7 +192,8 @@ var next = await db.From<Order>().ToPageAsync(20, o => o.CreatedAt, lastValue: r
 Multiple result sets (`GridReader`):
 
 ```csharp
-using var grid = await db.QueryMultipleAsync($"SELECT * FROM users WHERE id = {userId}; SELECT * FROM orders WHERE user_id = {userId}");
+await using var grid = await db.From<User>()
+    .QueryMultipleAsync($"SELECT * FROM users WHERE id = {userId}; SELECT * FROM orders WHERE user_id = {userId}");
 var user = await grid.ReadFirstAsync<User>();
 var orders = await grid.ReadAsync<Order>().ToListAsync();
 ```
@@ -458,7 +459,7 @@ The session-state leakage trade-off of `NoResetOnClose=true` (raw-SQL SET/temp t
 
 > **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC1 · BenchmarkDotNet fork (net11) · SQLite shared memory · PG 18.6 / MySQL 8.4.11 local containers · Dapper 2.1.89. Three arms (ADO.NET / Dapper / PalORM) collected in the same process and same round with identical connection settings; each arm uses its ecosystem's idiomatic best-practice code (ADO.NET is the hand-written performance floor).
 >
-> **Data batches**: 2026-10-07 `PerfCli full` batch (`history-20261007-120312.json`, medians + exact allocation counts) plus the same-day BDN three-arm matrix. Latency = full-path median; allocation = exact counts (1024-based). Shared PG/MySQL servers swing ±30% between batches — cross-batch absolute values are not comparable; allocation is deterministic and stable across batches. Full methodology and reproduction commands: [benchmark methodology](docs/性能基准规范.md) (Chinese) and `bench/perfhub/report.html`.
+> **Data batches**: 2026-10-08 `PerfCli full` batch (`history-20261008-115807.json`, medians + exact allocation counts) plus the same-day BDN three-arm matrix. Latency = full-path median; allocation = exact counts (1024-based). Shared PG/MySQL servers swing ±30% between batches — cross-batch absolute values are not comparable; allocation is deterministic and stable across batches. Full methodology and reproduction commands: [benchmark methodology](docs/性能基准规范.md) (Chinese) and `bench/perfhub/report.html`.
 
 **Legend** (shared by latency and allocation, baseline = hand-written ADO.NET floor; positive % = slower/more than baseline):
 🟢 strong win ≤−30% · 🟩 mid win −29%~−10% · 🔹 slight win −9%~−1% · 🔸 slight loss +1%~+9% · 🟧 mid loss +10%~+29% · 🟥 strong loss ≥+30% · **bold** = outside the 1.3×/0.7× significant band.
@@ -467,24 +468,24 @@ The session-state leakage trade-off of `NoResetOnClose=true` (raw-SQL SET/temp t
 
 | Operation | Tier | SQLite | PostgreSQL | MySQL |
 |------|---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.3→6.5 **0.70** | 192→211 1.10 | 218→237 1.09 |
-| GetByKey | 20K | 27.0→26.9 1.00 | 222→220 0.99 | 184→224 1.22 |
-| QueryAll | 2K | 1,005→1,001 1.00 | 745→673 0.90 | 1,071→1,352 1.26 |
-| QueryAll | 20K | 10,152→10,305 1.02 | 5,504→5,321 0.97 | 7,863→11,902 **1.51*** |
-| StreamAll | 2K | 984→1,012 1.03 | 709→669 0.94 | 1,081→1,427 1.32* |
-| StreamAll | 20K | 10,010→10,320 1.03 | 5,575→5,914 1.06 | 7,740→12,553 **1.62*** |
-| Insert | 2K | 18.2→17.4 0.96 | 573→603 1.05 | 1,539→1,597 1.04 |
-| Update | 2K | 7.2→7.5 1.04 | 604→606 1.00 | 203→238 1.17 |
-| BulkInsert | 2K | 16,651→16,845 1.01 | 3,498→3,563 1.02 | 7,172→8,108 1.13 |
-| BulkInsert | 20K | 158,580→159,009 1.00 | 18,506→18,220 0.98 | 49,686→63,447 1.28 |
-| BulkUpdate | 2K | 2,389→2,417 1.01 | 10,496→4,588 **0.44** | 29,127→9,708 **0.33** |
-| BulkUpdate | 20K | 26,061→26,508 1.02 | 108,560→70,320 **0.65** | 286,702→88,100 **0.31** |
-| BulkDelete | 2K | 6,645→5,149 0.77 | 2,744→1,620 **0.59** | 8,461→8,778 1.04 |
-| BulkDelete | 20K | 68,871→37,713 **0.55** | 24,051→11,133 **0.46** | 69,725→65,887 0.94 |
-| UpsertBatch | 2K | 16,591→16,522 1.00 | 11,449→6,108 **0.53** | 8,158→8,128 1.00 |
-| UpsertBatch | 20K | 154,503→155,128 1.00 | 126,368→74,621 **0.59** | 75,110→79,241 1.06 |
+| GetByKey | 2K | 9.9→6.3 **0.64** | 210→206 0.98 | 204→233 1.14 |
+| GetByKey | 20K | 26.9→27.5 1.02 | 205→208 1.01 | 179→220 1.23 |
+| QueryAll | 2K | 963→984 1.02 | 664→663 1.00 | 1,090→1,340 1.23 |
+| QueryAll | 20K | 9,720→9,890 1.02 | 5,060→5,210 1.03 | 8,030→8,200 1.02 |
+| StreamAll | 2K | 967→1,036 1.07 | 657→665 1.01 | 1,071→1,408 **1.31** |
+| StreamAll | 20K | 9,474→10,146 1.07 | 5,071→5,191 1.02 | 7,667→8,461 1.10 |
+| Insert | 2K | 17.9→17.7 0.99 | 559→565 1.01 | 1,530→1,550 1.01 |
+| Update | 2K | 7.2→7.4 1.03 | 601→581 0.97 | 200→233 1.16 |
+| BulkInsert | 2K | 17,250→16,780 0.97 | 3,360→3,550 1.06 | 11,390→10,780 0.95 |
+| BulkInsert | 20K | 156,280→157,390 1.01 | 17,960→19,070 1.06 | 84,190→88,480 1.05 |
+| BulkUpdate | 2K | 2,380→2,350 0.99 | 10,610→4,340 **0.41** | 28,760→9,290 **0.32** |
+| BulkUpdate | 20K | 25,940→26,010 1.00 | 108,680→69,810 **0.64** | 288,480→85,060 **0.29** |
+| BulkDelete | 2K | 6,780→5,060 0.75 | 2,670→1,580 **0.59** | 9,590→8,450 0.88 |
+| BulkDelete | 20K | 66,550→36,790 **0.55** | 23,720→10,000 **0.42** | 68,420→66,400 0.97 |
+| UpsertBatch | 2K | 16,640→16,250 0.98 | 11,470→5,790 **0.50** | 8,080→7,920 0.98 |
+| UpsertBatch | 20K | 155,130→154,270 0.99 | 124,980→75,030 **0.60** | 73,880→77,870 1.05 |
 
-**How to read**: bulk write paths are on par with or better than the ADO.NET floor across all dialects (0.94~1.28), with three dialect-specific fast paths clearly ahead of the hand-written floor — MySQL bulk UPDATE via `UPDATE JOIN VALUES ROW` at 3×, the PG bulk family via array parameters (`= ANY`) and Binary COPY at 1.5~2.2×, and SQLite BulkDelete at 1.8× thanks to pooled command/parameter reuse across full batches. The three starred MySQL large-result-set reads (QueryAll/StreamAll 20K and StreamAll 2K) are server-side slow-state readings from this batch (the Dapper arm is equally slow at +35~43%, the ADO floor is stable, and an old-code control batch is equally slow — attributed to the environment, unrelated to code), not product behavior.
+**How to read**: bulk write paths are on par with or better than the ADO.NET floor across all dialects (0.88~1.06), with three dialect-specific fast paths clearly ahead of the hand-written floor — MySQL bulk UPDATE via `UPDATE JOIN VALUES ROW` at 3~3.4×, the PG bulk family via array parameters (`= ANY`) and Binary COPY at 1.6~2.4×, and SQLite BulkDelete at 1.8× thanks to pooled command/parameter reuse; single-row reads sit at 0.64~1.02 of the floor on SQLite/PG and 1.14~1.23 on MySQL. The MySQL 2K-tier QueryAll 1.23 / StreamAll 1.31 gap has reproduced across two batches (stable ADO floor — a persistent gap, not batch noise, not yet attributed; awaiting a dedicated re-run). The MySQL 20K large-result-set slow state registered on 10-07 (once +51~62%) has returned to the normal band this batch (1.02~1.10).
 
 ### SQLite detail · Latency and allocation (three arms)
 
@@ -492,39 +493,39 @@ The session-state leakage trade-off of `NoResetOnClose=true` (raw-SQL SET/temp t
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.3 | 7.0 | 6.5 | **0.70🟢** | 0.93🔹 | 2.1/2.8/3.0 KB | +30% / +40% |
-| GetByKey | 20K | 27.0 | 18.0 | 26.9 | 1.00⚪ | **1.49🟥** | 2.1/2.8/3.0 KB | +31% / +42% |
-| QueryAll | 2K | 1,005 | 1,379 | 1,001 | 1.00⚪ | 0.73🟩 | 308/513/293 KB | +66% / −5% |
-| QueryAll | 20K | 10,152 | 14,209 | 10,305 | 1.02🔸 | 0.73🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
-| StreamAll | 2K | 984 | 1,406 | 1,012 | 1.03🔸 | 0.72🟩 | 276/481/278 KB | +74% / +1% |
-| StreamAll | 20K | 10,010 | 14,435 | 10,320 | 1.03🔸 | 0.71🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
-| Insert | 2K | 18.2 | 17.8 | 17.4 | 0.96🔹 | 0.98🔹 | 2.8/3.6/3.0 KB | +27% / +7% |
-| Update | 2K | 7.2 | 7.7 | 7.5 | 1.04🔸 | 0.97🔹 | 2.6/3.3/3.4 KB | +30% / +32% |
-| InsertReturningId | 2K | 27.7 | 27.2 | 28.0 | 1.01🔸 | 1.03🔸 | 1.9/2.3/2.7 KB | +23% / +43% |
+| GetByKey | 2K | 9.9 | 7.0 | 6.3 | **0.64🟢** | 0.90🟩 | 2.1/2.8/3.0 KB | +30% / +40% |
+| GetByKey | 20K | 26.9 | 18.3 | 27.5 | 1.02🔸 | **1.50🟥** | 2.1/2.8/3.0 KB | +31% / +42% |
+| QueryAll | 2K | 963 | 1,350 | 984 | 1.02🔸 | 0.73🟩 | 308/513/293 KB | +66% / −5% |
+| QueryAll | 20K | 9,720 | 13,980 | 9,890 | 1.02🔸 | 0.71🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
+| StreamAll | 2K | 967 | 1,403 | 1,036 | 1.07🔸 | 0.74🟩 | 276/481/278 KB | +74% / +1% |
+| StreamAll | 20K | 9,474 | 14,143 | 10,146 | 1.07🔸 | 0.72🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
+| Insert | 2K | 17.9 | 18.6 | 17.7 | 0.99🔹 | 0.95🔹 | 2.8/3.6/3.1 KB | +28% / +10% |
+| Update | 2K | 7.2 | 8.2 | 7.4 | 1.03🔸 | 0.90🟩 | 2.6/3.3/3.4 KB | +30% / +32% |
+| InsertReturningId | 2K | 27 | 28 | 28 | 1.02🔸 | 0.99⚪ | 1.9/2.3/2.7 KB | +24% / +43% |
 
 **Bulk operations**
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| BulkInsert | 2K | 16,651 | 106,831 | 16,845 | 1.01🔸 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| BulkInsert | 20K | 158,580 | 1,077,868 | 159,009 | 1.00⚪ | **0.15🟢** | 14.9/79.5/14.7 MB | +432% / −1% |
-| BulkUpdate | 2K | 2,389 | 8,714 | 2,417 | 1.01🔸 | **0.28🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
-| BulkUpdate | 20K | 26,061 | 301,711 | 26,508 | 1.02🔸 | **0.09🟢** | 17.0/65.0/17.6 MB | +283% / +4% |
-| BulkDelete | 2K | 6,645 | 22,106 | 5,149 | 0.77🟩 | **0.23🟢** | 629 KB/1.6 MB/478 KB | +155% / −24% |
-| BulkDelete | 20K | 68,871 | 223,546 | 37,713 | **0.55🟢** | **0.17🟢** | 6.1/15.6/4.3 MB | +155% / −30% |
-| UpsertBatch | 2K | 16,591 | 106,120 | 16,522 | 1.00⚪ | **0.16🟢** | 1.7/8.0/1.6 MB | +379% / −4% |
-| UpsertBatch | 20K | 154,503 | 1,075,618 | 155,128 | 1.00⚪ | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / +0% |
+| BulkInsert | 2K | 17,250 | 106,930 | 16,780 | 0.97🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
+| BulkInsert | 20K | 156,280 | 1,068,140 | 157,390 | 1.01🔸 | **0.15🟢** | 14.9/79.5/14.7 MB | +432% / −1% |
+| BulkUpdate | 2K | 2,380 | 8,840 | 2,350 | 0.99🔹 | **0.27🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
+| BulkUpdate | 20K | 25,940 | 311,960 | 26,010 | 1.00⚪ | **0.08🟢** | 17.0/65.1/17.6 MB | +283% / +4% |
+| BulkDelete | 2K | 6,780 | 22,030 | 5,060 | 0.75🟩 | **0.23🟢** | 629 KB/1.6 MB/478 KB | +155% / −24% |
+| BulkDelete | 20K | 66,550 | 223,280 | 36,790 | **0.55🟢** | **0.16🟢** | 6.1/15.6/4.3 MB | +155% / −30% |
+| UpsertBatch | 2K | 16,640 | 103,820 | 16,250 | 0.98🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +378% / −4% |
+| UpsertBatch | 20K | 155,130 | 1,067,210 | 154,270 | 0.99🔹 | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / +0% |
 
-The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.77~1.02); BulkDelete beats the floor via pooled command and parameter reuse (full batches only write `Value`; 0.55 at the 20K tier); Dapper's multi-value INSERT at the 20K tier is 6.9× slower with 5.3× allocations due to giant SQL string construction.
+The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.75~1.01); BulkDelete beats the floor via pooled command and parameter reuse (full batches only write `Value`; 0.55 at the 20K tier); Dapper's multi-value INSERT at the 20K tier is 6.8× slower with 5.3× allocations due to giant SQL string construction.
 
 **Transactions**
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| TxSingleInsert | 2K | 19.9 | 19.9 | 20.4 | 1.03🔸 | 1.03🔸 | 4.0/4.8/4.8 KB | +19% / +20% |
-| TxHundredInserts | 2K | 189 | 243 | 246 | 1.30🟧 | 1.01🔸 | 137/220/93 KB | +61% / −32% |
-| TxBulkInsert | 2K | 16,764 | 107,029 | 16,739 | 1.00⚪ | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| TxRollback | 2K | 597 | 2,177 | 886 | **1.49🟥** | **0.41🟢** | 435 KB/1.6 MB/450 KB | +279% / +3% |
+| TxSingleInsert | 2K | 19.4 | 20.5 | 20.3 | 1.05🔸 | 0.99🔹 | 4.1/4.8/4.8 KB | +17% / +17% |
+| TxHundredInserts | 2K | 191 | 264 | 246 | 1.29🟧 | 0.93🔹 | 137/220/93 KB | +61% / −32% |
+| TxBulkInsert | 2K | 16,960 | 104,340 | 16,750 | 0.99🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
+| TxRollback | 2K | 594 | 2,127 | 878 | **1.48🟥** | **0.41🟢** | 435 KB/1.6 MB/450 KB | +279% / +3% |
 
 ### Specialized measurements
 
@@ -532,12 +533,12 @@ The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.77~1.02); Bul
 
 | Operation | ADO.NET | Dapper | PalORM |
 |------|------:|------:|------:|
-| Full-table query, 10,000 rows | 4.26 ms | 3.72 ms | 4.25 ms (1.00x) |
-| Single-row insert | 25.0 µs | 26.0 µs | 32.7 µs (1.31x) |
-| Primary-key lookup | 23.3 µs | 23.2 µs | 28.7 µs (1.23x) |
-| Single-row update | 22.7 µs | 23.1 µs | 29.1 µs (1.28x) |
+| Full-table query, 10,000 rows | 4.25 ms | 3.85 ms | 4.38 ms (1.03x) |
+| Single-row insert | 24.6 µs | 26.3 µs | 33.1 µs (1.35x) |
+| Primary-key lookup | 23.9 µs | 23.8 µs | 28.1 µs (1.18x) |
+| Single-row update | 22.8 µs | 22.3 µs | 28.2 µs (1.24x) |
 
-The single-row write overhead (P/ADO 1.23~1.31) is the source-generated materializer plus the session gate and tenant routing (about 5~7 µs per row); the read path is on par with the floor. The PG COPY / MySQL BulkCopy paths bypass `DbParameter.Value` entirely — no boxing remains.
+The single-row write overhead (P/ADO 1.24~1.35) is the source-generated materializer plus the session gate and tenant routing (about 5~9 µs per row); the read path is on par with the floor. The PG COPY / MySQL BulkCopy paths bypass `DbParameter.Value` entirely — no boxing remains.
 
 **Native AOT publish size**
 
@@ -571,7 +572,7 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 
 ## 🆚 Comparison with mainstream ORMs
 
-> Version baseline: PalORM 6.3.1 / Dapper 2.1.89 / EF Core 10.0.10 / RepoDb 1.16.0 (versions used by this repo's benchmark suite). Cell evidence in the notes below.
+> Version baseline: PalORM 6.3.1 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -617,7 +618,7 @@ Comparison evidence:
 
 ### Upgrading from 6.2.x and earlier to 6.3.x (data-correctness fix — strongly recommended)
 
-6.3.0 fixes **R-UNNESTB: silently wrong row counts from the PG auto-prepare × command-reuse-slot interaction** (affects 5.7.0 ~ 6.2.0, seven versions); 6.3.1 additionally restores the pooled BulkDelete IN-form performance on top (20K keys back to the 38ms fast band, see [Performance](#-performance)). R-UNNESTB trigger: `MaxAutoPrepare` enabled in the connection string (PalORM's default tuning sets it to 100) plus a third and subsequent equal-length bulk batch in the same session; the consequence is that from the third batch on, the second batch's parameters are silently re-sent (bulk deletes miss rows, bulk UPSERTs write wrong keys) with no exception and no warning.
+6.3.0 fixes **R-UNNESTB: silently wrong row counts from the PG auto-prepare × command-reuse-slot interaction** (affects 5.7.0 ~ 6.2.0, seven versions); 6.3.1 additionally restores the pooled BulkDelete IN-form performance on top (20K keys at the 37 ms fast band, 0.55× the floor, see [Performance](#-performance)). R-UNNESTB trigger: `MaxAutoPrepare` enabled in the connection string (PalORM's default tuning sets it to 100) plus a third and subsequent equal-length bulk batch in the same session; the consequence is that from the third batch on, the second batch's parameters are silently re-sent (bulk deletes miss rows, bulk UPSERTs write wrong keys) with no exception and no warning.
 
 - **Upgrading to 6.3.1** fixes it completely (parameter objects stay stable from creation to release, so the auto-prepare cache never holds a stale reference)
 - **Hotfix if you cannot upgrade yet**: add `MaxAutoPrepare=0` to the connection string (costs the auto-prepare latency win; 0 is the Npgsql default)
