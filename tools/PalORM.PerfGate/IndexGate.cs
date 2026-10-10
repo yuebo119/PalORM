@@ -112,6 +112,8 @@ internal static class IndexGate
         var failures = new List<string>();
         var driftWarnings = new List<string>();
         List<string> weakWarnings = CollectWeakDiscrimination(baseline, LoadNoiseLevels(batches));
+        // 锚定诊断在判定循环前算好：失败描述要附锚定比值（B175 判读法，见 CrossAnchorDiagnostics）
+        Dictionary<string, AnchorLine> anchorNotes = CrossAnchorDiagnostics(batches);
         int compared = 0, missing = 0, skipped = 0, floorDrift = 0;
         foreach (IndexBaselineItem expected in baseline.Items)
         {
@@ -151,7 +153,9 @@ internal static class IndexGate
                 continue;
             }
 
-            failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta));
+            failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta)
+                + AnchorSuffix(Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier),
+                    anchorNotes));
         }
 
         ReportSentinel(batches);
@@ -160,7 +164,8 @@ internal static class IndexGate
 
         PrintVerdict(
             (compared, baseline.Items.Count, missing, skipped, floorDrift),
-            failures, driftWarnings, weakWarnings, outliers);
+            failures, driftWarnings, weakWarnings, outliers,
+            [.. anchorNotes.Values.Select(static line => line.Text)]);
 
         // 缺项不判失败：基线里的项可能因本轮方言/档位未跑而缺席（例如只跑了 sqlite）。
         // 但"全部缺项"说明没有可引用的批次（只跑了冒烟/过滤批次，或跑错了夹具），按失败处理。
@@ -278,18 +283,179 @@ internal static class IndexGate
         return null;
     }
 
-    /// <summary>门禁输出：一行摘要 + 失败/漂移/判别力弱/离群四类明细。
+    /// <summary>同形态锚定对（B175）：ADO 臂跑**同一段代码**的操作族——夹具
+    /// <c>Implementations.cs</c> 里 ADO 臂的 GetAllAsync 直接委托 QueryAllAsync
+    /// （"地板与 QueryAll 同一写法"），两键的 ADO 地板读数理应一致；分叉即其中一侧
+    /// 落入摆动窗口（实测 ADO 地板在 MySQL 单操作可摆 ±20%~2.9×，B175）。</summary>
+    private static readonly (string A, string B)[] AnchorPairs = [("QueryAll", "GetAllAsync")];
+
+    /// <summary>锚定事实：按伙伴侧地板重算的比值与两地板的分叉幅度（失败描述引用）。</summary>
+    private readonly record struct AnchorFacts(double AnchoredRatio, double FloorDivergence);
+
+    /// <summary>锚定告警行：事实 + 自解释文本（打印侧只管输出）。</summary>
+    private sealed record AnchorLine(AnchorFacts Facts, string Text);
+
+    /// <summary>同形态地板分叉的触发线（校准 2026-10-10：仓库 6 个全量批 × 3 方言 × 2 档共 38 观测，
+    /// 安静带上界 12.4%（SQLite ≤6.3% / PG ≤12.4% / MySQL 多数 ≤5%），触发带下界 17.8%
+    /// （6 例 MySQL + 1 例 PG——后者即 B170 的服务器空闲方差家族），15% 落在两带间隙中点）。</summary>
+    private const double AnchorDivergenceLine = 0.15;
+
+    /// <summary>失败描述里追加锚定比值（键有锚定条目时；无锚定返回空串）。</summary>
+    private static string AnchorSuffix(
+        string key, Dictionary<string, AnchorLine> anchorNotes)
+        => anchorNotes.TryGetValue(key, out AnchorLine? line)
+            ? string.Create(CultureInfo.InvariantCulture,
+                $"｜锚定比值 {line.Facts.AnchoredRatio:F2}（同形态地板分叉 {line.Facts.FloorDivergence:P0}，判读以锚定值为准）")
+            : "";
+
+    /// <summary>批内交叉锚定诊断（B175 判读法机械化，2026-10-10）：最新非子集 PerfHub 批次里，
+    /// 同形态对的两条 ADO 地板分叉 ≥<see cref="AnchorDivergenceLine"/> 时，两侧各生成一条
+    /// "表观 vs 锚定"告警——该状态下表观比值无判别力，判读应以"地板贴近自身跨批中位"的一侧
+    /// 为锚（B175：分子稳 + 分母暴摆 = 表观比值失真，借同形态稳定臂抢救分子真值；
+    /// 实测 QueryAll/MySQL/2000 表观 1.25、锚定 1.05）。
+    /// <para><b>只告警不判定</b>：与 IsDenominatorDrift 的跨批分母漂移互补——那边管"本批 vs 基线"
+    /// 的地板移动，这边管"同批内两条同代码地板互相分叉"。判定放松需要跨批稳定性裁决，
+    /// 本诊断不改变退出码（与离群/弱同纪律）。</para></summary>
+    private static Dictionary<string, AnchorLine> CrossAnchorDiagnostics(
+        List<PerfResultEnvelope> batchesDesc)
+    {
+        var notes = new Dictionary<string, AnchorLine>(StringComparer.Ordinal);
+        PerfResultEnvelope? newest = batchesDesc.FirstOrDefault(static b =>
+            b.Harness == "perfhub" && !PerfResultWriter.IsSubsetLabel(b.Label));
+        if (newest is null)
+        {
+            return notes;
+        }
+
+        var adoFloors = new Dictionary<(string Name, string Dialect, int Tier), double>();
+        foreach (PerfResultItem item in newest.Items)
+        {
+            if (item.Arm == "ADO_NET" && item.MedianUs > 0)
+            {
+                adoFloors[(item.Name, item.Dialect, item.Tier)] = item.MedianUs;
+            }
+        }
+
+        foreach ((string a, string b) in AnchorPairs)
+        {
+            foreach (KeyValuePair<(string Name, string Dialect, int Tier), double> entry in adoFloors)
+            {
+                if (entry.Key.Name != a
+                    || !adoFloors.TryGetValue((b, entry.Key.Dialect, entry.Key.Tier), out double floorB))
+                {
+                    continue;
+                }
+
+                double divergence = (Math.Max(entry.Value, floorB) / Math.Min(entry.Value, floorB)) - 1;
+                if (divergence < AnchorDivergenceLine)
+                {
+                    continue;
+                }
+
+                AddAnchorLine(new AnchorContext(newest, batchesDesc, a, b,
+                    entry.Key.Dialect, entry.Key.Tier, entry.Value, floorB, divergence), notes);
+                AddAnchorLine(new AnchorContext(newest, batchesDesc, b, a,
+                    entry.Key.Dialect, entry.Key.Tier, floorB, entry.Value, divergence), notes);
+            }
+        }
+
+        return notes;
+    }
+
+    /// <summary>锚定行的求值输入（避免参数列表超 S107 上限）。</summary>
+    private sealed record AnchorContext(
+        PerfResultEnvelope Newest, List<PerfResultEnvelope> BatchesDesc,
+        string Name, string Partner, string Dialect, int Tier,
+        double OwnFloor, double PartnerFloor, double Divergence);
+
+    /// <summary>单键锚定行：PalORM 臂存在且可读时写一条（键重复时后者覆盖——
+    /// 每对每 (方言,档) 至多触发一次，实际不会重复）。</summary>
+    private static void AddAnchorLine(AnchorContext context, Dictionary<string, AnchorLine> notes)
+    {
+        PerfResultItem? palorm = context.Newest.Items.FirstOrDefault(i =>
+            i.Name == context.Name && i.Dialect == context.Dialect && i.Tier == context.Tier
+            && i.Arm == "PalORM" && i.MedianUs > 0);
+        if (palorm is null)
+        {
+            return;
+        }
+
+        double anchoredRatio = palorm.MedianUs / context.PartnerFloor;
+        double ownHistory = FloorHistoryMedian(
+            context.BatchesDesc, context.Newest, context.Name, context.Dialect, context.Tier);
+        double partnerHistory = FloorHistoryMedian(
+            context.BatchesDesc, context.Newest, context.Partner, context.Dialect, context.Tier);
+        string historyHint = ownHistory > 0 && partnerHistory > 0
+            ? $"；本项地板近批中位 {ownHistory:F0}µs、伙伴 {partnerHistory:F0}µs——贴近自身中位的一侧可信"
+            : "";
+        string text = string.Create(CultureInfo.InvariantCulture,
+            $"{context.Name}/{context.Dialect}/{context.Tier}: 表观 P/ADO {palorm.Ratio:F2}，但同形态地板分叉 {context.Divergence:P0}"
+            + $"（本项 ADO 地板 {context.OwnFloor:F0}µs vs {context.Partner} {context.PartnerFloor:F0}µs）——锚定比值 {anchoredRatio:F2}"
+            + $"（以伙伴地板重算，B175 判读法{historyHint}）");
+        notes[Key("perfhub", context.Name, context.Dialect, context.Tier)] =
+            new AnchorLine(new AnchorFacts(anchoredRatio, context.Divergence), text);
+    }
+
+    /// <summary>某键 ADO 地板的跨批中位（µs）：锚定批本身**按引用排除**（不能按位置 Skip(1)——
+    /// 最新落盘批次常是子集批，锚定批并不是序列首位，Skip(1) 会把锚定批自己算进历史，
+    /// "稳定侧"提示退化为自指），向前取至多 6 个非子集 PerfHub 批次的 ADO_NET 行中位数
+    ///（子集批不占名额）。无历史返回 0（告警文本省略历史提示）。</summary>
+    private static double FloorHistoryMedian(
+        List<PerfResultEnvelope> batchesDesc, PerfResultEnvelope anchorBatch,
+        string name, string dialect, int tier)
+    {
+        var values = new List<double>();
+        foreach (PerfResultEnvelope run in batchesDesc)
+        {
+            // 锚定批自己不计入历史（按引用跳过，其余更老的批次继续扫——序列是时间倒序，
+            // "更老"在锚定批之后，不能用 break 截断）
+            if (ReferenceEquals(run, anchorBatch))
+            {
+                continue;
+            }
+
+            if (run.Harness != "perfhub" || PerfResultWriter.IsSubsetLabel(run.Label))
+            {
+                continue;
+            }
+
+            foreach (PerfResultItem item in run.Items)
+            {
+                if (item.Name == name && item.Dialect == dialect && item.Tier == tier
+                    && item.Arm == "ADO_NET" && item.MedianUs > 0)
+                {
+                    values.Add(item.MedianUs);
+                    break;
+                }
+            }
+
+            if (values.Count >= 6)
+            {
+                break;
+            }
+        }
+
+        if (values.Count == 0)
+        {
+            return 0;
+        }
+
+        values.Sort();
+        return values[values.Count / 2];
+    }
+
+    /// <summary>门禁输出：一行摘要 + 失败/漂移/判别力弱/离群/锚定五类明细。
     /// <para>判别力弱（2026-10-04）只展开最差几条，总数在摘要里——本批实测 62 项超线，
     /// 全展开会刷屏；它只标注不判定，比值超限与否仍走原逻辑。</para>
     /// <para>第一个参数是计数五元组：比对 / 基线总数 / 缺项 / 非可比跳过 / 分母漂移。</para></summary>
     private static void PrintVerdict(
         (int Compared, int BaselineCount, int Missing, int Skipped, int FloorDrift) counts,
         List<string> failures, List<string> driftWarnings, List<string> weakWarnings,
-        List<string> outliers)
+        List<string> outliers, List<string> anchorLines)
     {
         Console.WriteLine($"[PerfGate] 结果库门禁: 比对 {counts.Compared} 项（基线 {counts.BaselineCount} 项，"
             + $"缺项 {counts.Missing}，非可比跳过 {counts.Skipped}，分母漂移 {counts.FloorDrift}），"
-            + $"失败 {failures.Count}，判别力弱 {weakWarnings.Count} 项");
+            + $"失败 {failures.Count}，判别力弱 {weakWarnings.Count} 项，锚定 {anchorLines.Count} 项");
         foreach (string failure in failures) Console.Error.WriteLine("  FAIL " + failure);
         foreach (string drift in driftWarnings) Console.Error.WriteLine("  漂移 " + drift);
         foreach (string weak in weakWarnings.Take(NoiseWarnPreview)) Console.Error.WriteLine("  弱 " + weak);
@@ -300,6 +466,7 @@ internal static class IndexGate
         }
 
         foreach (string outlier in outliers) Console.Error.WriteLine("  离群 " + outlier);
+        foreach (string anchor in anchorLines) Console.Error.WriteLine("  锚定 " + anchor);
     }
 
     /// <summary>判别力弱清单：基线里每个可比项的噪声水位超线则登记一条（只标注，不参与判定）。
