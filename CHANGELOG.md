@@ -2,7 +2,7 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布]（目标 6.4.0）
+## [6.4.0] - 2026-10-11
 
 ### ⚠️ 行为变更：`DbOptions.Production` 预设熔断作用域 Session → Process（RES-002 收口）
 
@@ -19,6 +19,20 @@
 - **动机**：预设的 XML 契约自述"稳定性优先……快速熔断保护下游"，Session 作用域下该承诺
   在推荐用法（短会话）中不可兑现（源码注释 RES-002 自述"阈值形同虚设"）；2026-10-08
   README 审计确认配置表此前未暴露该开关，读者无从自救。
+
+### 🐛 缺陷修复：GridReader.DisposeCoreAsync 挂起等待漏 ConfigureAwait(false)
+
+`GridReader` 的释放路径在 `Task.WaitAsync` 形态的挂起等待后缺 `ConfigureAwait(false)`，
+带同步上下文的宿主（桌面 UI 线程、部分测试宿主）里续体被回投 UI 线程，最坏可死锁。
+该缺陷自文件诞生即在，长期未被防线发现的原因：gate-check 的 G24 注释剥离检查曾以
+bash perl 实现，`gms` 修饰符让 `.` 跨行，`GridReader.cs` 11789 字节被剥至 89 字节
+（首个 `///` 到文件尾全吞噬），该文件的 G24 检查自诞生即失明；迁移期 C# 版
+Multiline 逐行剥离首跑即抓到。修复＝补 `ConfigureAwait(false)`。
+
+- 触发面：仅在带 `SynchronizationContext` 的宿主调用 `QueryMultipleAsync` 并触发
+  挂起等待（等待在飞读取器排空）时可现；ASP.NET Core 无同步上下文，不受影响
+- 验证：S3 反向验证（移除即被 C# 版 G24 抓红、加回全绿）· gate-check C# 版 32/32 ·
+  ci.slnf 0 警告 0 错误
 
 ## [6.3.1] - 2026-10-07
 
