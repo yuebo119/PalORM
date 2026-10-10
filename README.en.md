@@ -56,7 +56,7 @@ See [Performance](#-performance) for measurement details (2026-10-08 benchmark b
 
 ## 🆚 Comparison with mainstream ORMs
 
-> Version baseline: PalORM 6.3.1 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
+> Version baseline: PalORM 6.4.0 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -215,11 +215,11 @@ Requirements: .NET SDK `11.0.100-preview.6` or later (`global.json` pins `rollFo
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.3.1" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.4.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.3.1" />
+<PackageReference Include="PalORM.MySql" Version="6.4.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.3.1" />
+<PackageReference Include="PalORM.Sqlite" Version="6.4.0" />
 ```
 
 Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time source generator). After installing, verify with the minimal Quick Start example below: if you can create a session and complete one insert, the install works.
@@ -617,7 +617,7 @@ The session-state leakage trade-off of `NoResetOnClose=true` (raw-SQL SET/temp t
 
 ## 🔄 Upgrade guide
 
-### Upgrading from 6.3.x to 6.4.0 (unreleased): Production preset breaker scope change
+### Upgrading from 6.3.x to 6.4.0: Production preset breaker scope change
 
 Starting with 6.4.0, the `DbOptions.Production` preset explicitly sets `CircuitBreakerScope = Process` (previously Session):
 
