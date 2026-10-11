@@ -98,6 +98,15 @@ public readonly struct CrudBindings
     /// <see cref="InitUpsertParameters"/>。</summary>
     public readonly Action<DbParameter[], int>? InitUpdateParameters;
 
+    /// <summary>C3（2026-10-11 执行流程复核）：单键标量转换委托 <c>ConvertDeleteKey(key)</c>——
+    /// 主键值归一化产出，与 <c>BindDelete</c> 的 @p0 参数值同一生成真源（两条路径逐位一致，
+    /// 契约由 KeyConversionTests 锁定）。消费方 = GetByKey 复用槽（TryAcquireGetByKeyCommand）：
+    /// 命中时经它就地写键参数 Value，替代原 keyProbe 探针命令的 Clear+重绑形态（每调用省一次
+    /// CreateParameter，探针命令整体退役）。
+    /// <para>复合主键或旧版生成器程序集为 null——复用槽据此不晋升，走每调用新建命令路径
+    /// （与 <see cref="BindUpdateValues"/> 的旧程序集回退判定同模式）。</para></summary>
+    public readonly Func<object, object?>? ConvertDeleteKey;
+
     /// <summary>构造 CRUD 委托聚合。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:Constructor should not have more than 7 parameters",
@@ -124,7 +133,8 @@ public readonly struct CrudBindings
         IReadOnlyList<Type>? upsertColumnArrayElementTypes = null,
         Func<int, Array[]>? createUpsertColumnArrays = null,
         Action<DbParameter[], int>? initUpsertParameters = null,
-        Action<DbParameter[], int>? initUpdateParameters = null)
+        Action<DbParameter[], int>? initUpdateParameters = null,
+        Func<object, object?>? convertDeleteKey = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -146,6 +156,7 @@ public readonly struct CrudBindings
         CreateUpsertColumnArrays = createUpsertColumnArrays;
         InitUpsertParameters = initUpsertParameters;
         InitUpdateParameters = initUpdateParameters;
+        ConvertDeleteKey = convertDeleteKey;
     }
 }
 
@@ -239,6 +250,8 @@ public readonly struct CrudMetadata
     public readonly Action<DbParameter[], int>? InitUpsertParameters;
     /// <summary>N4（2026-10-04 全量复读）：UPDATE 池 DbType 一次性初始化委托（判定条件与消费路径见 CrudBindings.InitUpdateParameters）。</summary>
     public readonly Action<DbParameter[], int>? InitUpdateParameters;
+    /// <summary>C3（2026-10-11）：单键标量转换委托（判定条件与消费路径见 CrudBindings.ConvertDeleteKey）。</summary>
+    public readonly Func<object, object?>? ConvertDeleteKey;
 
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
@@ -283,6 +296,7 @@ public readonly struct CrudMetadata
         CreateUpsertColumnArrays = bindings.CreateUpsertColumnArrays;
         InitUpsertParameters = bindings.InitUpsertParameters;
         InitUpdateParameters = bindings.InitUpdateParameters;
+        ConvertDeleteKey = bindings.ConvertDeleteKey;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
@@ -315,7 +329,7 @@ public readonly struct CrudMetadata
                 InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters,
                 BuildDeleteKeyArray, FillUpdateColumnArrays, UpdateColumnArrayElementTypes,
                 CreateUpdateColumnArrays, FillUpsertColumnArrays, UpsertColumnArrayElementTypes,
-                CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters),
+                CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters, ConvertDeleteKey),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 

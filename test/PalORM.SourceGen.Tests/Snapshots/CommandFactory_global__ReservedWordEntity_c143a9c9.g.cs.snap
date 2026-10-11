@@ -79,6 +79,12 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.String; p.Value = (object)((string)key); cmd.Parameters.Add(p); }
     }
 
+    /// <summary>主键值归一化（GetByKey 命令复用路径）——与 BindDelete 的 @p0 值同一真源。</summary>
+    internal static object? ConvertDeleteKey(object key)
+    {
+        return (object)((string)key);
+    }
+
     /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
     internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
     {

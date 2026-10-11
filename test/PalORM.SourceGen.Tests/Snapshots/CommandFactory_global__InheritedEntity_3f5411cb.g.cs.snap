@@ -91,6 +91,12 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
     }
 
+    /// <summary>主键值归一化（GetByKey 命令复用路径）——与 BindDelete 的 @p0 值同一真源。</summary>
+    internal static object? ConvertDeleteKey(object key)
+    {
+        return (object)global::System.Convert.ToInt64(key);
+    }
+
     /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
     internal static global::System.Array? BuildDeleteKeyArray(global::System.Collections.Generic.IReadOnlyList<object> keys, int start, int count)
     {
