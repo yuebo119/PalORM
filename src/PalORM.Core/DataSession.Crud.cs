@@ -204,11 +204,11 @@ public sealed partial class DataSession<TProvider>
 
     private int _getByKeyReadOps;
 
-    /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。</summary>
     /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。
-    /// <para><see cref="KeyProbe"/> 仅 GetByKey 槽使用：从不执行的探针命令，承载键值转换绑定器
-    /// 的产出（见 <see cref="TryAcquireGetByKeyCommand"/> 复用分支的 auto-prepare 说明）。</para></summary>
-    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool, DbCommand? KeyProbe = null);
+    /// <para><see cref="KeyConverter"/> 仅 GetByKey 槽使用：生成器发射的单键转换委托
+    /// （<c>ConvertDeleteKey</c>，与 BindDelete 的 @p0 值同一真源），命中时经它就地写键参数
+    /// Value（C3，2026-10-11——原 keyProbe 探针命令形态退役，每调用省一次 CreateParameter）。</para></summary>
+    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool, Func<object, object?>? KeyConverter = null);
 
     /// <summary>从已按原路径绑定的命令摘出参数对象池。</summary>
     private static DbParameter[] SnapshotParameterPool(DbCommand cmd)
@@ -333,19 +333,25 @@ public sealed partial class DataSession<TProvider>
     /// <summary>取可复用的单行按主键读命令并重绑键参数（PL-2 扩展，2026-09-25）。
     /// <para>晋升阈值与租户排除逻辑同 <see cref="TryAcquireInsertCommand"/>：租户实体排除
     /// （<see cref="BindDefaultFilterParameters"/> 每次新增租户参数 + WithTenant 可中途变更）。
-    /// 复用分支清参后经 <see cref="BindGeneratedKeyParameter"/> 重绑——与新建路径同一绑定器、
-    /// 同一键类型转换语义（KeyConversionTests 契约），参数集合形态逐位一致。</para>
+    /// 复用分支经槽内持有的单键转换委托（<c>ConvertDeleteKey</c>，生成器与 BindDelete 的 @p0
+    /// 同一真源发射）就地写键参数 Value——与新建路径同一键类型转换语义（KeyConversionTests
+    /// 契约），参数集合结构零触碰。</para>
+    /// <para>C3（2026-10-11）：原 keyProbe 探针命令形态退役——晋升门禁要求
+    /// <see cref="CrudMetadata.ConvertDeleteKey"/> 非空（复合主键 / 旧生成器程序集不晋升，
+    /// 与 <see cref="CrudMetadata.BindUpdateValues"/> 的旧程序集回退判定同模式），委托在晋升时
+    /// 存入槽内、命中分支零注册表查找。</para>
     /// <para><paramref name="commandText"/> 与新建路径同源（GetGetByKeySql 缓存）；本方法只
     /// 负责复用判定与键值绑定。返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放；
     /// 读路径的 <see cref="DbDataReader"/> 由调用方 await using 释放——释放前不触碰本命令。</para></summary>
-    private DbCommand? TryAcquireGetByKeyCommand<T>(string commandText, object key)
+    private DbCommand? TryAcquireGetByKeyCommand<T>(
+        string commandText, object key, PalORM_Runtime.RuntimeRegistryState state)
         where T : class, new()
     {
         if (HasTenantFilter<T>())
             return null;
 
         if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T)
-            && reusable.KeyProbe is { } keyProbe && reusable.Pool is [var pooledKey])
+            && reusable.KeyConverter is { } convertKey && reusable.Pool is [var pooledKey])
         {
             // ITM-904（r24）：精确单元素 pattern——原 [DbParameter pooledKey, ..] 宽匹配在
             // Pool.Length>1 时命中且只重绑 [0]，其余参数保持上一轮旧值。当前 BindDefaultFilterParameters
@@ -360,13 +366,11 @@ public sealed partial class DataSession<TProvider>
             // R-UNNESTB（2026-10-02）：**绝不触碰复用命令的参数集合**——PG 连接串的
             // auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，「Clear 集合 + Add 新参数实例」
             // 会让驱动沿用 prepare 时的绑定值（探针 mergearray 变体 C 实测：语句卡在
-            // prepare 时的键，就地写同一实例的 Value 则正常——变体 A/B）。键值换算仍走
-            // 同一生成绑定器（KeyConversionTests 契约的单源），但在从不执行的 keyProbe 上
-            // 绑定，产出就地写入 Pool[0]（与命令参数集合持有同一参数实例）。
-            // PARAM-REUSE-OK[carrier] keyProbe 从不执行，只承载键绑定器的值转换产出
-            keyProbe.Parameters.Clear();
-            BindGeneratedKeyParameter<T>(keyProbe, key);
-            pooledKey.Value = keyProbe.Parameters[0].Value;
+            // prepare 时的键，就地写同一实例的 Value 则正常——变体 A/B）。
+            // C3（2026-10-11）：键值换算不再经从不执行的探针命令中转——生成器发射的
+            // ConvertDeleteKey 与 BindDelete 的 @p0 值同一真源（DeleteKeyValueExpression），
+            // 就地写入 Pool[0]（与命令参数集合持有同一参数实例）。
+            pooledKey.Value = convertKey(key);
             return reused;
         }
 
@@ -374,20 +378,15 @@ public sealed partial class DataSession<TProvider>
         if (_getByKeyReadOps < CommandReusePromotionThreshold)
             return null;
 
+        // 晋升门禁：单键转换委托缺失（复合主键 / 旧生成器程序集）永不晋升——每次调用走
+        // 下方外的新建路径。读调用方传入的注册表快照（ITM-703 单快照纪律）。
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata promoteMetadata)
+            || promoteMetadata.ConvertDeleteKey is not { } promotedConverter)
+            return null;
+
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        DbCommand keyProbeCommand;
-        try
-        {
-            // 第二次 CreateCommand 也可能抛（连接状态劣化）——首个命令此时未注册，须释放
-            keyProbeCommand = CreateCommand();
-        }
-        catch
-        {
-            cmd.Dispose();
-            throw;
-        }
         try
         {
             BindGeneratedKeyParameter<T>(cmd, key);
@@ -395,26 +394,23 @@ public sealed partial class DataSession<TProvider>
         }
         catch
         {
-            // ITM-867（r23）：同 TryAcquireInsertCommand——BindGeneratedKeyParameter 的
-            // Convert.ChangeType 可抛（ITM-743 登记形态），释放新建命令后再抛
+            // ITM-867（r23）：BindGeneratedKeyParameter 的 Convert.ChangeType 可抛
+            //（ITM-743 登记形态），释放新建命令后再抛
             cmd.Dispose();
-            keyProbeCommand.Dispose();
             throw;
         }
         try
         {
             _reusableGetByKey?.Command.Dispose();
-            _reusableGetByKey?.KeyProbe?.Dispose();
         }
         catch
         {
-            // 旧槽释放抛出时新命令未注册（10-05 审计 P3：原顺序 Dispose 抛会跳过
-            // KeyProbe 且泄漏新命令）——与 ITM-867 同哲学：释放新建资源后再抛
+            // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面）——与 ITM-867 同哲学：
+            // 释放新建资源后再抛
             cmd.Dispose();
-            keyProbeCommand.Dispose();
             throw;
         }
-        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), keyProbeCommand);
+        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
         return cmd;
     }
 
@@ -836,7 +832,7 @@ public sealed partial class DataSession<TProvider>
             // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
             // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
             // 按命令实例生效，换命令即重编译）。
-            DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key);
+            DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, state);
             if (reused is not null)
             {
                 await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);

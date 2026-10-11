@@ -255,7 +255,14 @@ internal static class RegistryEmitter
         // 池的对称化；消费方（BatchUpsertAsync / ExecuteBulkUpdatePooled/Batches）建池后调用
         // 一次。旧生成器程序集为 null 时消费方不调（其 BindUpsert/UpdateValues 自写 DbType）。
         sb.AppendLine($"                    initUpsertParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitUpsertParameters(parameters, off),");
-        sb.AppendLine($"                    initUpdateParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitUpdateParameters(parameters, off)),");
+        // C3（2026-10-11 执行流程复核）：单键标量转换委托——消费方 = GetByKey 复用槽
+        // （TryAcquireGetByKeyCommand）：命中时经它就地写键参数 Value（原 keyProbe 探针
+        // 命令形态退役）。复合主键传 null，运行时复用槽不晋升（走每调用新建命令路径）。
+        string convertKeyArg = hasSingleColumnPrimaryKey
+            ? $"key => CommandFactory_{m.GeneratedTypeSuffix}.ConvertDeleteKey(key)"
+            : "null";
+        sb.AppendLine($"                    initUpdateParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitUpdateParameters(parameters, off),");
+        sb.AppendLine($"                    convertDeleteKey: {convertKeyArg}),");
         string insertColumns = BuildStringArrayLiteral(
             columns.Where(static column => column.IsInsertable)
                 .Select(static column => column.ColumnName));

@@ -234,7 +234,7 @@ public sealed class MySqlProvider : IDbProvider
                 // 其失败可能发生在部分写入后，重试整批会重复，必须透传）；OFF → 回退多值
                 // 重试整批（OFF 的失败形态必然是握手拒绝，无部分写入，回退安全；自开事务
                 // 场景失败批已回滚）。重探测的额外 SHOW VARIABLES 往返只发生在失败路径。
-                LocalInfileCache.Remove(mySqlConnection);
+                CapabilityProbeCache<LocalInfileProbe>.Invalidate(mySqlConnection.ConnectionString);
                 if (!await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
                 {
                     return await MultiValueBulkInsert.ExecuteAsync(
@@ -262,61 +262,56 @@ public sealed class MySqlProvider : IDbProvider
     }
 
     /// <summary>检测服务端 local_infile 是否开启。
-    /// <para><b>L1：按连接缓存探测结果</b>——原实现每次 BulkInsertAsync 都付一次
-    /// <c>SHOW VARIABLES</c> RTT。注释以"&lt;1ms，批量场景占比可忽略"论证，但每请求只插
-    /// 5 行的短事务场景下这一次 RTT 与业务写入同量级（跨网段 0.3~2ms，可占总延迟三成以上）。
-    /// 探测结果是连接级事实（同一连接的 <c>local_infile</c> 由连接串与账号决定），
-    /// 不是进程级可变状态，缓存不违反零全局状态原则。</para>
-    /// <para><b>TTL 与失效</b>：默认 60 秒——服务端变量可运行时变更，短 TTL 让托管环境
-    /// 的配置刷新在一分钟内生效；探测异常不写入缓存（下次重探，不把瞬时故障固化为 OFF）。</para>
+    /// <para><b>L1：按连接串缓存探测结果</b>（EPSL 2026-10-11 审计 B 批 #2 修订）——原实现每次
+    /// BulkInsertAsync 都付一次 <c>SHOW VARIABLES</c> RTT；L1 首修按连接包装实例键控，但每操作
+    /// 自建会话形态（DataSession.CreateAsync per op）每次都是新包装实例，缓存永不命中，per-op
+    /// 场景照付全款 RTT（跨网段 0.3~2ms，短事务场景可占总延迟三成以上）。探测结果是
+    /// 「同一连接串所指服务端 + 账号」的事实，故键取改写后连接串（CapabilityProbeCache 底座，
+    /// RewrittenConnectionStringCache 同族键控），会话间共享、60s TTL 内零探测往返。</para>
+    /// <para><b>TTL 与失效</b>：60 秒——服务端变量可运行时变更，短 TTL 让托管环境的配置刷新
+    /// 在一分钟内生效；探测异常不写入缓存（下次重探，不把瞬时故障固化为 OFF）；BulkCopy 失败
+    /// 后经 <see cref="CapabilityProbeCache{T}.Invalidate"/> 强制失效重探（ITM-892）。</para>
     /// <para><b>R14：降级可观测</b>——探测故障 vs 能力关闭都会走多值路径（慢约 4.84×），
     /// 原实现静默无痕。故障经 <see cref="BulkOperationFramework.RecordCapabilityProbeFailure"/>
     /// 计数，运行期"突然变慢"有归因线索。</para>
-    /// <para>ITM-633：检测命令挂接外部事务（连接 pending 事务下未挂接命令 MySqlConnector
+    /// <para><b>ITM-633：检测命令挂接外部事务</b>（连接 pending 事务下未挂接命令 MySqlConnector
     /// 会抛 InvalidOperationException）；检测自身故障（网络抖动/超时）降级为 OFF 走多值
     /// INSERT——能力探测不应终止整批插入。</para></summary>
-    private static readonly ConditionalWeakTable<MySqlConnection, LocalInfileProbe> LocalInfileCache = [];
-
-    /// <summary>探测结果缓存条目——<see cref="ExpiresAtTicks"/> 用 <see cref="Environment.TickCount64"/>
-    /// 单调钟，不受系统时间回拨影响。必须是引用类型：ConditionalWeakTable 的 TValue 约束为
-    /// class（键才是弱引用，值随键一起回收）。</summary>
-    private sealed class LocalInfileProbe(bool enabled, long expiresAtTicks)
-    {
-        public bool Enabled { get; } = enabled;
-        public long ExpiresAtTicks { get; } = expiresAtTicks;
-    }
+    private sealed record LocalInfileProbe(bool Enabled);
 
     private const int LocalInfileProbeTtlMilliseconds = 60_000;
 
+    /// <summary>检测服务端 local_infile 是否开启——键 = <see cref="MySqlConnection.ConnectionString"/>
+    /// （改写后串），命中未过期直接返回；未命中执行 SHOW VARIABLES 并写缓存。探测故障
+    /// （异常 / ITM-822 零行形态）经异常路径上抛，由本方法捕获后计数降级（不写缓存）。</summary>
     private static async ValueTask<bool> IsLocalInfileEnabledAsync(
         MySqlConnection conn, MySqlTransaction? transaction, CancellationToken ct)
     {
-        if (LocalInfileCache.TryGetValue(conn, out LocalInfileProbe? cached)
-            && Environment.TickCount64 < cached.ExpiresAtTicks)
-        {
-            return cached.Enabled;
-        }
-
         try
         {
-            using DbCommand cmd = conn.CreateCommand();
-            cmd.Transaction = transaction;
-            cmd.CommandTimeout = 3;  // SHOW VARIABLES 是即时查询，3 秒足够
-            cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
-            using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
-            {
-                // ITM-822（r23 实修）：SHOW VARIABLES 恒返回一行，零行=服务端异常形态——
-                // 计数留痕（R14 降级可归因；受限账号每次 BulkInsert 恒付探测 RTT 且计数恒 0
-                // 的观测盲区），不写缓存（下次重探，不把异常形态固化为 OFF）。
-                BulkOperationFramework.RecordCapabilityProbeFailure();
-                return false;
-            }
-            string value = reader.GetString(1);
-            bool enabled = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
-            LocalInfileCache.AddOrUpdate(conn, new LocalInfileProbe(
-                enabled, Environment.TickCount64 + LocalInfileProbeTtlMilliseconds));
-            return enabled;
+            return (await CapabilityProbeCache<LocalInfileProbe>.GetOrProbeAsync(
+                conn.ConnectionString,
+                LocalInfileProbeTtlMilliseconds,
+                async token =>
+                {
+                    using DbCommand cmd = conn.CreateCommand();
+                    cmd.Transaction = transaction;
+                    cmd.CommandTimeout = 3;  // SHOW VARIABLES 是即时查询，3 秒足够
+                    cmd.CommandText = "SHOW VARIABLES LIKE 'local_infile'";
+                    using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                    if (!await reader.ReadAsync(token).ConfigureAwait(false))
+                    {
+                        // ITM-822（r23 实修）：SHOW VARIABLES 恒返回一行，零行=服务端异常形态——
+                        // 以异常走失败路径（计数留痕、不写缓存；受限账号每次 BulkInsert 恒付探测
+                        // RTT 且计数恒 0 的观测盲区与原形态一致）
+                        throw new InvalidOperationException(
+                            "SHOW VARIABLES returned no row for 'local_infile'.");
+                    }
+                    string value = reader.GetString(1);
+                    bool enabled = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
+                    return new LocalInfileProbe(enabled);
+                },
+                ct).ConfigureAwait(false)).Enabled;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

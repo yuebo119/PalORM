@@ -94,10 +94,21 @@ public partial class DataSession<TProvider>
                 ct).ConfigureAwait(false);
         }
 
+        // C3 延伸（EPSL 2026-10-11 审计 A 批）：IN 形态后续满批的键值换算改经 ConvertDeleteKey
+        // 直写参数 Value——7caa357 否决"生成器写入器方案"的成本前提（需动 SourceGen+注册链+
+        // 快照+旧模型回退）已被 C3 的委托基建整体沉没，此处零生成器改动消费既有委托，消除
+        // 每键一次 scratch 参数创建 + 两次集合操作（20K 键约省 1.9 万个短命参数对象）。
+        // 复合主键 / 旧生成器程序集为 null——保留 scratch 载体回退，行为不变。
+        InFormKeyBinding keyBinding = new(
+            bindKey,
+            state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata bulkMetadata)
+                ? bulkMetadata.ConvertDeleteKey
+                : null);
+
         return await RunInTransactionScopeAsync(
             operation.Owner,
             (tran, token) => ExecuteInFormDeleteAsync<T>(
-                tran, bindKey, keys, batchSize, identifiers, isSoftDelete, token),
+                tran, keyBinding, keys, batchSize, identifiers, isSoftDelete, token),
             ct).ConfigureAwait(false);
     }
 
@@ -141,13 +152,15 @@ public partial class DataSession<TProvider>
     /// 曾因 R-UNNESTB 变体 C 退到"每批新建命令"（B4 的 Clear 后重加 per-key 新建参数实例，在
     /// PG auto-prepare 下第 3 个等长批重发第 2 批的键、静默少删），代价 +71%（20K 键 39→66ms）。
     /// 本形态消除复发窗口的方式不是恢复 B4，而是对齐数组形态（<see cref="ExecuteArrayFormDeleteAsync{T}"/>）
-    /// 的纪律：满批参数对象从首批转移进集合后从不替换、不 Clear，后续满批经 scratch 载体读出
-    /// provider 值只写 <c>Value</c>（与 <see cref="BindRowValuesViaProbeAsync{T}"/> 同一模式）——
+    /// 的纪律：满批参数对象从首批转移进集合后从不替换、不 Clear，后续满批优先经
+    /// <see cref="CrudMetadata.ConvertDeleteKey"/> 直写 <c>Value</c>（C3 延伸，2026-10-11：单键
+    /// 委托非空时零 scratch 参数创建，与 GetByKey 复用槽同一委托），复合主键/旧生成器回退
+    /// scratch 载体读出 provider 值（与 <see cref="BindRowValuesViaProbeAsync{T}"/> 同一模式）——
     /// auto-prepare 缓存的参数引用始终有效，Clear/Add 错配窗口在源头不存在。末批语句文本不同，
     /// 单独新命令 + 全新参数集合（一次性成本，批数占比 1/N），不复用满批集合故无裁剪争议。</para></summary>
     private async Task<long> ExecuteInFormDeleteAsync<T>(
         DbTransaction? tran,
-        Action<DbCommand, object> bindKey,
+        InFormKeyBinding keyBinding,
         IReadOnlyList<object> keys,
         int batchSize,
         DeleteIdentifiers identifiers,
@@ -173,13 +186,13 @@ public partial class DataSession<TProvider>
                 if (batch == 0)
                 {
                     // 首个满批：转移形态建池（scratch 改名转移，参数实例从此稳定）
-                    BindInFormParameters<T>(cmd, scratch, bindKey, keys, start, batchSize);
+                    BindInFormParameters<T>(cmd, scratch, keyBinding.Build, keys, start, batchSize);
                     BindDefaultFilterParameters<T>(cmd);
                 }
                 else
                 {
                     // 后续满批：参数实例不变，只写 Value（见方法级 R-UNNESTB 说明）
-                    WriteInFormValues<T>(scratch, bindKey, cmd, keys, start, batchSize);
+                    WriteInFormValues<T>(scratch, keyBinding, cmd, keys, start, batchSize);
                 }
                 total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
@@ -192,7 +205,7 @@ public partial class DataSession<TProvider>
             await using DbCommand tail = CreateCommand();
             tail.Transaction = tran;
             tail.CommandText = BuildBulkDeleteSql(tailLen, identifiers, isSoftDelete);
-            BindInFormParameters<T>(tail, scratch, bindKey, keys, start, tailLen);
+            BindInFormParameters<T>(tail, scratch, keyBinding.Build, keys, start, tailLen);
             BindDefaultFilterParameters<T>(tail);
             total += await tail.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -283,24 +296,35 @@ public partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>等长批与末批前缀的键值写入——scratch 载体承载键绑定器的转换产出（与
+    /// <summary>等长批与末批前缀的键值写入——单键转换委托（<see cref="CrudMetadata.ConvertDeleteKey"/>，
+    /// C3 延伸 2026-10-11）非空时直写 <c>Value</c>：每键零参数创建、零集合操作；null（复合主键 /
+    /// 旧生成器程序集）回退 scratch 载体承载键绑定器的转换产出（与
     /// <see cref="BindRowValuesViaProbeAsync{T}"/> 同一模式），只把 <c>Value</c> 写进目标集合的
-    /// 既有参数实例：不创建、不替换、不 Clear 目标集合（R-UNNESTB 变体 C 的 Clear+重加窗口
-    /// 在本形态下不存在；scratch 里的短命参数从不执行、从不进目标命令，与 auto-prepare 无关）。</summary>
+    /// 既有参数实例。两条路径不创建、不替换、不 Clear 目标集合（R-UNNESTB 变体 C 的 Clear+重加
+    /// 窗口在本形态下不存在；scratch 里的短命参数从不执行、从不进目标命令，与 auto-prepare 无关）；
+    /// 键转换语义逐位一致（同一 DeleteKeyValueExpression 真源，KeyConversionTests 契约）。</summary>
     private static void WriteInFormValues<T>(
         DbCommand scratch,
-        Action<DbCommand, object> bindKey,
+        InFormKeyBinding keyBinding,
         DbCommand cmd,
         IReadOnlyList<object> keys,
         int start,
         int batchLen)
         where T : class, new()
     {
+        if (keyBinding.Convert is { } convertKey)
+        {
+            // 与 GetByKey 复用槽（TryAcquireGetByKeyCommand）同一委托、同一就地写形态
+            for (int index = 0; index < batchLen; index++)
+                cmd.Parameters[index].Value = convertKey(keys[start + index]);
+            return;
+        }
+
         for (int index = 0; index < batchLen; index++)
         {
             // PARAM-REUSE-OK[carrier] scratch 从不执行，仅承载键绑定器读出 provider 值（ITM-676 中转参数）
             scratch.Parameters.Clear();
-            bindKey(scratch, keys[start + index]);
+            keyBinding.Build(scratch, keys[start + index]);
             if (scratch.Parameters.Count != 1)
                 throw new InvalidOperationException(
                     $"Type '{typeof(T).Name}' generated an invalid primary-key binder.");
@@ -355,6 +379,13 @@ public partial class DataSession<TProvider>
     private readonly record struct DeleteIdentifiers(
         string QuotedTable, string QuotedPrimaryKey, string QuotedDeletedAt,
         string TimestampExpression, string TenantFilter);
+
+    /// <summary>IN 形态批量删除的键绑定器对（C3 延伸 2026-10-11）——<see cref="Build"/> 经 scratch
+    /// 载体建池（首批转移 / 末批短语句）；<see cref="Convert"/> 非空时后续满批直写参数 Value
+    /// （零 scratch 参数创建，见 <see cref="WriteInFormValues{T}"/>），null（复合主键 / 旧生成器
+    /// 程序集）回退 scratch 读出形态。</summary>
+    private readonly record struct InFormKeyBinding(
+        Action<DbCommand, object> Build, Func<object, object?>? Convert);
 
     /// <summary>L5：单批删除/软删语句——单个 <see cref="ValueStringBuilder"/> 顺序写出，
     /// 替代原「string[] + string.Join + 多重插值」的中间串。SQL 文本与旧实现逐字节一致。
@@ -1111,33 +1142,34 @@ public partial class DataSession<TProvider>
     /// <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow"/>（UPDATE JOIN
     /// table value constructor，MySQL 8.0.19+），否则 <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen"/>。
     /// 非 MySQL 方言恒 CaseWhen（PG 走 FROM VALUES，SQLite 已在调用方回退逐条）。
-    /// <para><b>版本探测</b>：连接级 + 60s TTL（与 MySqlProvider 的 local_infile 探测同模式）。
-    /// 版本是连接级事实（同一连接指向的服务端版本不变），不是进程级可变状态。
+    /// <para><b>版本探测</b>：连接串键控 + 60s TTL（EPSL 2026-10-11 审计 B 批 #2：原按连接
+    /// 实例键控，per-op 会话形态每会话新包装永不命中，每次 BulkUpdate 重付 SELECT VERSION()
+    /// 往返；与 local_infile 探测同轮迁 <see cref="CapabilityProbeCache{T}"/>——版本是
+    /// 「同一连接串所指服务端」的事实，不是进程级可变状态）。
     /// 探测异常保守回退 CaseWhen（不把瞬时故障固化为新形态），TTL 让服务端升级在一分钟内生效。</para></summary>
     private async ValueTask<BatchUpdateSqlBuilder.BatchUpdateForm> ResolveMySqlUpdateFormAsync(CancellationToken ct)
     {
         if (TProvider.Dialect != SqlDialect.MySql)
             return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
 
-        if (MySqlUpdateFormCacheHolder.Cache.TryGetValue(_conn, out MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe? cached)
-            && Environment.TickCount64 < cached.ExpiresAtTicks)
-        {
-            return cached.Form;
-        }
-
         try
         {
-            await using DbCommand cmd = CreateCommand();
-            cmd.CommandTimeout = 3;  // SELECT VERSION() 是即时查询，3 秒足够
-            cmd.CommandText = "SELECT VERSION()";
-            object? scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
-            bool supportsValuesRow = scalar is string version && ParseMySqlVersion(version) >= MySQL_8_0_19;
-            BatchUpdateSqlBuilder.BatchUpdateForm form = supportsValuesRow
-                ? BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
-                : BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
-            MySqlUpdateFormCacheHolder.Cache.AddOrUpdate(_conn, new MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe(
-                form, Environment.TickCount64 + MySqlUpdateFormProbeTtlMilliseconds));
-            return form;
+            return (await CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.GetOrProbeAsync(
+                _conn.ConnectionString,
+                MySqlUpdateFormProbeTtlMilliseconds,
+                async token =>
+                {
+                    await using DbCommand cmd = CreateCommand();
+                    cmd.CommandTimeout = 3;  // SELECT VERSION() 是即时查询，3 秒足够
+                    cmd.CommandText = "SELECT VERSION()";
+                    object? scalar = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
+                    bool supportsValuesRow = scalar is string version && ParseMySqlVersion(version) >= MySQL_8_0_19;
+                    return new MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe(
+                        supportsValuesRow
+                            ? BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
+                            : BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen);
+                },
+                ct).ConfigureAwait(false)).Form;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -1701,23 +1733,14 @@ public partial class DataSession<TProvider>
     }
 }
 
-/// <summary>MySQL-7：批量 UPDATE 形态探测缓存（连接级，60s TTL）——命名空间级静态 holder
-/// 而非 DataSession&lt;TProvider&gt; 的静态字段，也与泛型类的嵌套静态类绝缘：缓存语义只依赖
-/// DbConnection 本身（版本是连接指向的服务端事实），泛型类里的静态字段会触发 S2743
-/// （不跨闭合类型共享）且让'只服务 MySQL'的状态对每个 Provider 闭合类型各存一份。
-/// 探测逻辑本体仍在 DataSession_Bulk（需要 CreateCommand 走会话口径）。</summary>
+/// <summary>MySQL-7：批量 UPDATE 形态探测的缓存值类型——探测缓存本体已迁
+/// <see cref="CapabilityProbeCache{T}"/>（连接串键控 + 60s TTL，EPSL 2026-10-11 审计 B 批 #2），
+/// 本类型只承载探测产出（形态枚举）。命名空间级静态 holder 而非 DataSession&lt;TProvider&gt;
+/// 的嵌套类型，与泛型类的闭合类型绝缘（S2743 同因）。探测逻辑本体仍在 DataSession_Bulk
+/// （需要 CreateCommand 走会话口径）。</summary>
 internal static class MySqlUpdateFormCacheHolder
 {
-    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbConnection, MySqlUpdateFormProbe>
-        Cache = [];
-
-    /// <summary>探测结果缓存条目（连接级，60s TTL）——引用类型：ConditionalWeakTable 的
-    /// TValue 约束为 class（键才是弱引用，值随键一起回收）。</summary>
-    internal sealed class MySqlUpdateFormProbe(
-        BatchUpdateSqlBuilder.BatchUpdateForm form, long expiresAtTicks)
-    {
-        public BatchUpdateSqlBuilder.BatchUpdateForm Form { get; } = form;
-        public long ExpiresAtTicks { get; } = expiresAtTicks;
-    }
+    /// <summary>探测结果值（形态枚举；TTL 由缓存底座管理）。</summary>
+    internal sealed record MySqlUpdateFormProbe(BatchUpdateSqlBuilder.BatchUpdateForm Form);
 }
 

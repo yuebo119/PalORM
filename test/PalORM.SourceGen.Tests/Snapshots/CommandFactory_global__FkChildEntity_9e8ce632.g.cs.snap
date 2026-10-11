@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.4.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.4.1")]
 internal static class CommandFactory_global__FkChildEntity_9e8ce632
 {
 
@@ -91,6 +91,12 @@ internal static class CommandFactory_global__FkChildEntity_9e8ce632
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
         { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>主键值归一化（GetByKey 命令复用路径）——与 BindDelete 的 @p0 值同一真源。</summary>
+    internal static object? ConvertDeleteKey(object key)
+    {
+        return (object)global::System.Convert.ToInt64(key);
     }
 
     /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>

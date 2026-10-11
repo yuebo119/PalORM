@@ -226,22 +226,25 @@ public sealed class PalORMGenerator : IIncrementalGenerator
                 provider.GlobalOptions.TryGetValue("build_property.PalORMAutoTagging", out string? v)
                 && string.Equals(v, "true", System.StringComparison.OrdinalIgnoreCase));
 
-        // 检测 6 个终态方法调用点；InterceptionTarget 的 Location 成员是引用相等（见其
-        // 注释，GEN-014 修正）——缓存命中退化为准引用级，候选一变即重渲染（过度失效方向安全）。
+        // 检测 9 个终态方法调用点；transform 只回传语法节点（零语义工作）——语义提取
+        // （GetOperation/GetInterceptableLocation）在输出段经 CompilationProvider 门控，
+        // 开关关闭（默认态）对所有消费者零语义成本（EPSL 2026-10-11 审计 B 批 #3；transform
+        // 拿不到 options 无法自行短路，取舍见 AutoTaggingEmitter.ExtractTargets 注释）。
+        // 节点级缓存 = 引用相等（SyntaxNode 不覆写 Equals；GEN-014 的过度失效安全方向
+        // 保持——节点一变即重收集）。
         var terminalCalls = context.SyntaxProvider.CreateSyntaxProvider(
             predicate: static (node, _) => AutoTaggingEmitter.IsTerminalCall(node),
-            transform: static (ctx, ct) => AutoTaggingEmitter.ExtractTarget(ctx, ct))
-            .Where(static t => t is not null)
-            .WithComparer(EqualityComparer<AutoTaggingEmitter.InterceptionTarget?>.Default)
+            transform: static (ctx, _) => (InvocationExpressionSyntax)ctx.Node)
             .Collect();
 
         context.RegisterSourceOutput(
-            autoTaggingEnabled.Combine(terminalCalls),
+            autoTaggingEnabled.Combine(terminalCalls).Combine(context.CompilationProvider),
             static (spc, tuple) =>
             {
-                if (!tuple.Left) return;  // 开关关闭：零生成物
+                if (!tuple.Left.Left) return;  // 开关关闭：零生成物、零语义查询
                 spc.AddSource("PalORM_AutoTagging.g.cs",
-                    AutoTaggingEmitter.Generate(tuple.Right));
+                    AutoTaggingEmitter.Generate(AutoTaggingEmitter.ExtractTargets(
+                        tuple.Left.Right, tuple.Right, spc.CancellationToken)));
             });
     }
 
