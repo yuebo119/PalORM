@@ -2,7 +2,13 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布]
+## [6.4.1] - 2026-10-11
+
+### ⚡ 性能：EPSL 2026-10-11 审计 A/B 批（4 项落地，全部向后兼容，无 API 与默认行为变更）
+
+> 变更规模：5 个提交（50478d9..7d65b16）· 源生成器发射物变更（升级后重编译受益）
+> 验证：ci.slnf Release 0 警告 0 错误 · Core 532/532 · SourceGen 231/231 ·
+> Integration 真库 277/277 · gate 32/32 · verify-ai fast 21/21 · tech-debt 14/14
 
 ### 性能：GetByKey 命令复用槽退役 keyProbe 探针命令（C3）
 
@@ -17,6 +23,37 @@ Value——原"从不执行的 keyProbe 探针命令 Clear + 重绑"形态整体
   null），复用槽不晋升、走每调用新建命令路径，行为不变。
 - **快照**：22 份生成物基线中 8 份重录（7 CommandFactory + 1 Registry，逐行人工核对，
   仅新增方法与装配行）。
+
+### 性能：IN 形态批量删除后续满批退役 scratch 每键参数（C3 延伸）
+
+`WriteInFormValues` 经 `CrudMetadata.ConvertDeleteKey`（与 C3 同一
+`DeleteKeyValueExpression` 真源）直写参数 Value——20K 键约 1.9 万个短命参数对象的
+每键 `CreateParameter` + 两次集合操作全部消除；复合主键 / 旧版生成器程序集回退
+scratch 载体形态不变（参数集合结构零触碰）。
+
+- **锁定测试**：`BulkDeleteInFormPoolingTests.SubsequentFullBatches_CreateZeroKeyParameters`
+  （包装命令参数创建计数批间差 = 0；修复前同断言实得 999，红绿双向验证）。
+
+### 性能：local_infile 与 MySQL 版本探测缓存改连接串键控
+
+原两处探测缓存按连接包装实例键控，而 per-op 会话形态每次批量操作都新建包装实例，
+缓存永不命中：每次 MySQL BulkInsert 付一次 `SHOW VARIABLES` RTT、每次 BulkUpdate 付
+一次 `SELECT VERSION()` RTT。改连接串键控（Core 侧 `CapabilityProbeCache<T>` 共享
+底座，调用方 TTL + 失败不缓存 + 失效通道）后跨会话命中。
+
+- **实测**：per-op 会话 ×40 探测增量 40/轮 → 0；wall 稳态 ≈ 每会话省 0.5-0.65ms。
+- **兼容**：`local_infile` 失效回退语义不变（ITM-892 集成用例随新缓存同过）。
+
+### 性能：AutoTagging 管线语义工作门控化（实验性 opt-in 特性）
+
+AutoTagging（CS9137，默认关闭）的原管线在 transform 段对每个同名调用命中跑语义
+`GetOperation`，开关判定却在输出段——默认关闭态每次编译的语义工作整体白付。改造后
+transform 只回传语法节点（零语义），语义提取经输出段 `CompilationProvider` 门控，
+关闭态提前返回。
+
+- **实测**：300 个非 PalORM 同名调用、开关关、整跑中位 11.5ms → 1.9ms（−83%）。
+- **已知取舍**：开启态每次编译变化重提取全部候选（原实现按节点缓存）——实验特性
+  opt-in 场景下默认关闭态全量消费者的零成本优先。
 
 ## [6.4.0] - 2026-10-11
 
