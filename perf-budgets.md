@@ -40,6 +40,7 @@ PalORM 的"热路径" = 物化器（QueryAll/StreamAll 按序号取列）与 SQL
 | MySQL Insert_1by1 池化 | B77（分解数据在案：可省仅约 5%） |
 | 每请求复用 DataSession 的默认化 | 报告口径声明项（复用可快 35~40%，属调用方决策） |
 | N6 以下量级逐项立项 | step23 收敛结论（低于批间摆动带，机制可证 + 行为测试锁定即可） |
+| MySQL BulkCopy 值载体 object[] 化（弃参数池中转） | EPSL 2026-10-11 审计 B 批 #4 否决：库内 PG-4 探针实测未定类型参数 Value setter 13ns/格（DbType+Value 31ns 对照），20K 行 × 5 列 ≈ 1.5ms ≈ 操作的 1.7%——低于 5% 不做线与 ±8pp 批间摆动带，基准不可见；而改动面 = SourceGen 新 binder + 注册链 + 快照重录 + 旧模型回退（7caa357 同形否决过的成本面） |
 
 ## 6. 门禁接线表
 
