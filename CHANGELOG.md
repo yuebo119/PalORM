@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [6.4.1] - 2026-10-11
+
 ### 📦 依赖升级：TUnit 1.73.5 → 1.73.19（测试框架，patch 流）
 
 `dotnet list package --outdated` 全解决方案扫描（2026-10-11）：唯一过时项，src 五包生产依赖、
@@ -12,8 +14,6 @@ NuGet 最新稳定版。中央包管理两行升级，零 API 适配。
 
 - **验证**：ci.slnf Release --no-incremental -warnaserror 0W0E · 三测试套计数零漂移
   （Core 532/532 · SourceGen 231/231 · Integration 真库 277/277）。
-
-## [6.4.1] - 2026-10-11
 
 ### ⚡ 性能：EPSL 2026-10-11 审计 A/B 批（4 项落地，全部向后兼容，无 API 与默认行为变更）
 
