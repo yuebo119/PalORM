@@ -1142,33 +1142,34 @@ public partial class DataSession<TProvider>
     /// <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow"/>（UPDATE JOIN
     /// table value constructor，MySQL 8.0.19+），否则 <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen"/>。
     /// 非 MySQL 方言恒 CaseWhen（PG 走 FROM VALUES，SQLite 已在调用方回退逐条）。
-    /// <para><b>版本探测</b>：连接级 + 60s TTL（与 MySqlProvider 的 local_infile 探测同模式）。
-    /// 版本是连接级事实（同一连接指向的服务端版本不变），不是进程级可变状态。
+    /// <para><b>版本探测</b>：连接串键控 + 60s TTL（EPSL 2026-10-11 审计 B 批 #2：原按连接
+    /// 实例键控，per-op 会话形态每会话新包装永不命中，每次 BulkUpdate 重付 SELECT VERSION()
+    /// 往返；与 local_infile 探测同轮迁 <see cref="CapabilityProbeCache{T}"/>——版本是
+    /// 「同一连接串所指服务端」的事实，不是进程级可变状态）。
     /// 探测异常保守回退 CaseWhen（不把瞬时故障固化为新形态），TTL 让服务端升级在一分钟内生效。</para></summary>
     private async ValueTask<BatchUpdateSqlBuilder.BatchUpdateForm> ResolveMySqlUpdateFormAsync(CancellationToken ct)
     {
         if (TProvider.Dialect != SqlDialect.MySql)
             return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
 
-        if (MySqlUpdateFormCacheHolder.Cache.TryGetValue(_conn, out MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe? cached)
-            && Environment.TickCount64 < cached.ExpiresAtTicks)
-        {
-            return cached.Form;
-        }
-
         try
         {
-            await using DbCommand cmd = CreateCommand();
-            cmd.CommandTimeout = 3;  // SELECT VERSION() 是即时查询，3 秒足够
-            cmd.CommandText = "SELECT VERSION()";
-            object? scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
-            bool supportsValuesRow = scalar is string version && ParseMySqlVersion(version) >= MySQL_8_0_19;
-            BatchUpdateSqlBuilder.BatchUpdateForm form = supportsValuesRow
-                ? BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
-                : BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
-            MySqlUpdateFormCacheHolder.Cache.AddOrUpdate(_conn, new MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe(
-                form, Environment.TickCount64 + MySqlUpdateFormProbeTtlMilliseconds));
-            return form;
+            return (await CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.GetOrProbeAsync(
+                _conn.ConnectionString,
+                MySqlUpdateFormProbeTtlMilliseconds,
+                async token =>
+                {
+                    await using DbCommand cmd = CreateCommand();
+                    cmd.CommandTimeout = 3;  // SELECT VERSION() 是即时查询，3 秒足够
+                    cmd.CommandText = "SELECT VERSION()";
+                    object? scalar = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
+                    bool supportsValuesRow = scalar is string version && ParseMySqlVersion(version) >= MySQL_8_0_19;
+                    return new MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe(
+                        supportsValuesRow
+                            ? BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
+                            : BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen);
+                },
+                ct).ConfigureAwait(false)).Form;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -1732,23 +1733,14 @@ public partial class DataSession<TProvider>
     }
 }
 
-/// <summary>MySQL-7：批量 UPDATE 形态探测缓存（连接级，60s TTL）——命名空间级静态 holder
-/// 而非 DataSession&lt;TProvider&gt; 的静态字段，也与泛型类的嵌套静态类绝缘：缓存语义只依赖
-/// DbConnection 本身（版本是连接指向的服务端事实），泛型类里的静态字段会触发 S2743
-/// （不跨闭合类型共享）且让'只服务 MySQL'的状态对每个 Provider 闭合类型各存一份。
-/// 探测逻辑本体仍在 DataSession_Bulk（需要 CreateCommand 走会话口径）。</summary>
+/// <summary>MySQL-7：批量 UPDATE 形态探测的缓存值类型——探测缓存本体已迁
+/// <see cref="CapabilityProbeCache{T}"/>（连接串键控 + 60s TTL，EPSL 2026-10-11 审计 B 批 #2），
+/// 本类型只承载探测产出（形态枚举）。命名空间级静态 holder 而非 DataSession&lt;TProvider&gt;
+/// 的嵌套类型，与泛型类的闭合类型绝缘（S2743 同因）。探测逻辑本体仍在 DataSession_Bulk
+/// （需要 CreateCommand 走会话口径）。</summary>
 internal static class MySqlUpdateFormCacheHolder
 {
-    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbConnection, MySqlUpdateFormProbe>
-        Cache = [];
-
-    /// <summary>探测结果缓存条目（连接级，60s TTL）——引用类型：ConditionalWeakTable 的
-    /// TValue 约束为 class（键才是弱引用，值随键一起回收）。</summary>
-    internal sealed class MySqlUpdateFormProbe(
-        BatchUpdateSqlBuilder.BatchUpdateForm form, long expiresAtTicks)
-    {
-        public BatchUpdateSqlBuilder.BatchUpdateForm Form { get; } = form;
-        public long ExpiresAtTicks { get; } = expiresAtTicks;
-    }
+    /// <summary>探测结果值（形态枚举；TTL 由缓存底座管理）。</summary>
+    internal sealed record MySqlUpdateFormProbe(BatchUpdateSqlBuilder.BatchUpdateForm Form);
 }
 
