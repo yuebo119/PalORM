@@ -22,6 +22,7 @@ internal sealed class BulkDeleteInFormPoolingTests
     private static async Task<DataSession<InFormSqliteProvider>> CreateSessionAsync()
     {
         Statements.Clear();
+        InFormRecordingCommand.ResetCreateCounts();
         InFormRecordingCommand.SetRecorder((sql, parameters) => Statements.Add((sql, parameters)));
         DataSession<InFormSqliteProvider> session =
             await DataSession<InFormSqliteProvider>.CreateAsync(
@@ -76,6 +77,33 @@ internal sealed class BulkDeleteInFormPoolingTests
             await Assert.That(ReferenceEquals(p1[i], p2[i])).IsTrue();
             await Assert.That(p2[i].Value).IsEqualTo((long)(1000 + i));
         }
+    }
+
+    /// <summary>后续满批零参数创建锁定（C3 延伸，2026-10-11 EPSL 审计 A 批）：
+    /// ConvertDeleteKey 非空（单键 + 新生成器）时，第 2 个等长批起键值经委托直写参数
+    /// <c>Value</c>，不再经 scratch 载体每键新建参数。判据 = 批 1 与批 2 执行点之间
+    /// 包装命令的 <c>CreateDbParameter</c> 计数差为 0（旧 scratch 形态该差 = 批容量 999，
+    /// 本用例在旧代码上必红）；批 1 建池计数 ≥ 批容量作计数通道有效性见证（通道断链时
+    /// 本用例同样先红，防 B95 家族"数字对但没测到目标"）。
+    /// <para>键转换行为等价由用例 1 的 Value 断言锁定（同一单键实体在修复后走快速路径，
+    /// 值断言不变绿则修复破坏语义）。</para></summary>
+    [Test]
+    public async Task BulkDelete_InForm_SubsequentFullBatches_CreateZeroKeyParameters()
+    {
+        await using DataSession<InFormSqliteProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 1998); // 999 + 999，无末批
+        Statements.Clear(); // 播种语句不参与形态断言
+        InFormRecordingCommand.ResetCreateCounts();
+
+        long deleted = await session.BulkDeleteAsync<InFormPoolRow>(Keys(1, 1998));
+
+        await Assert.That(deleted).IsEqualTo(1998);
+        await Assert.That((await session.GetAllAsync<InFormPoolRow>()).Count).IsEqualTo(0);
+        await Assert.That(Statements.Count).IsEqualTo(2);
+        List<int> counts = [.. InFormRecordingCommand.CreateCountsAtExecution];
+        await Assert.That(counts.Count).IsEqualTo(2);
+        await Assert.That(counts[0] >= 999).IsTrue(); // 建池本身经计数通道（999 键参数）
+        await Assert.That(counts[1] - counts[0]).IsEqualTo(0); // 旧 scratch 形态此处为 999
     }
 
     /// <summary>末批（更短）断言：单独短语句（占位符收敛到末批长度）+ 新参数集合承载末批键值；
@@ -267,6 +295,28 @@ internal sealed class InFormRecordingCommand(SqliteCommand inner) : DbCommand
     /// <summary>注册采集钩子（测试串行使用，见类级 <c>NotInParallel</c>）。</summary>
     internal static void SetRecorder(Action<string, DbParameter[]> recorder) => _onStatement = recorder;
 
+    /// <summary>经本命令创建通道的参数创建计数——生成器键绑定器的 <c>cmd.CreateParameter()</c>
+    /// 落在被包装命令上，可观测 scratch 载体的每键分配（静态量，组内串行使用；
+    /// 读写均经静态门卫方法，S2223/S2696 形态与 <c>_onStatement</c> 一致）。</summary>
+    private static int _parameterCreateCount;
+
+    private static readonly List<int> _createCountsAtExecution = [];
+
+    /// <summary>每次执行时的参数创建计数快照（与 <c>Statements</c> 同点采集，
+    /// 下标一一对应；测试须同轮 Clear 两个列表保持对齐）。</summary>
+    internal static IReadOnlyList<int> CreateCountsAtExecution => _createCountsAtExecution;
+
+    /// <summary>清零计数并清空执行点快照（与 <c>Statements.Clear()</c> 成对调用）。</summary>
+    internal static void ResetCreateCounts()
+    {
+        _parameterCreateCount = 0;
+        _createCountsAtExecution.Clear();
+    }
+
+    private static void RecordParameterCreate() => _parameterCreateCount++;
+
+    private static void RecordExecution() => _createCountsAtExecution.Add(_parameterCreateCount);
+
     [System.Diagnostics.CodeAnalysis.AllowNull]
     public override string CommandText
     {
@@ -326,12 +376,14 @@ internal sealed class InFormRecordingCommand(SqliteCommand inner) : DbCommand
     public override int ExecuteNonQuery()
     {
         _onStatement?.Invoke(inner.CommandText, SnapshotParameters());
+        RecordExecution();
         return inner.ExecuteNonQuery();
     }
 
     public override Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
     {
         _onStatement?.Invoke(inner.CommandText, SnapshotParameters());
+        RecordExecution();
         return inner.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -339,7 +391,11 @@ internal sealed class InFormRecordingCommand(SqliteCommand inner) : DbCommand
 
     public override void Prepare() => inner.Prepare();
 
-    protected override DbParameter CreateDbParameter() => inner.CreateParameter();
+    protected override DbParameter CreateDbParameter()
+    {
+        RecordParameterCreate();
+        return inner.CreateParameter();
+    }
 
     protected override DbDataReader ExecuteDbDataReader(System.Data.CommandBehavior behavior)
         => inner.ExecuteReader(behavior);
