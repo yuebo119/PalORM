@@ -100,9 +100,10 @@ public readonly struct CrudBindings
 
     /// <summary>C3（2026-10-11 执行流程复核）：单键标量转换委托 <c>ConvertDeleteKey(key)</c>——
     /// 主键值归一化产出，与 <c>BindDelete</c> 的 @p0 参数值同一生成真源（两条路径逐位一致，
-    /// 契约由 KeyConversionTests 锁定）。消费方 = GetByKey 复用槽（TryAcquireGetByKeyCommand）：
-    /// 命中时经它就地写键参数 Value，替代原 keyProbe 探针命令的 Clear+重绑形态（每调用省一次
-    /// CreateParameter，探针命令整体退役）。
+    /// 契约由 KeyConversionTests 锁定）。消费方：GetByKey 复用槽（TryAcquireGetByKeyCommand）
+    /// ——命中时经它就地写键参数 Value，替代原 keyProbe 探针命令的 Clear+重绑形态（每调用省
+    /// 一次 CreateParameter，探针命令整体退役）；IN 形态批量删除的后续满批（WriteInFormValues，
+    /// C3 延伸 2026-10-11）——每键直写 Value，消除 scratch 载体的每键参数创建。
     /// <para>复合主键或旧版生成器程序集为 null——复用槽据此不晋升，走每调用新建命令路径
     /// （与 <see cref="BindUpdateValues"/> 的旧程序集回退判定同模式）。</para></summary>
     public readonly Func<object, object?>? ConvertDeleteKey;
