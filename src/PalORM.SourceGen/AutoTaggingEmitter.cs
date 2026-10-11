@@ -73,11 +73,35 @@ internal static class AutoTaggingEmitter
         return false;
     }
 
-    /// <summary>转换：提取调用点的 InterceptableLocation + 路径/行号/方法名。</summary>
-    public static InterceptionTarget? ExtractTarget(GeneratorSyntaxContext ctx, CancellationToken ct)
+    /// <summary>输出段批量提取（EPSL 2026-10-11 审计 B 批 #3）：语义工作（GetOperation /
+    /// GetInterceptableLocation）从管线 transform 挪到本入口，仅当开关为 true 时被调用——
+    /// transform 只回传语法节点（谓词命中即触发且拿不到 options，默认关闭态若在 transform
+    /// 做语义查询，则所有消费者（含 EF Core 等混合栈的高频同名调用）每次编译/编辑遍历白付。
+    /// 经 <paramref name="compilation"/> 取各节点所在树的 SemanticModel，与原
+    /// GeneratorSyntaxContext.SemanticModel 同源等价。代价：开启态下每次编译变化重提取全部
+    /// 候选（原 transform 按节点缓存）——AutoTagging 属实验性 opt-in（CS9137），默认关闭的
+    /// 全量消费者零语义成本优先于 opt-in 用户的重提取（候选数 = 终态调用点数，通常个位到
+    /// 两位数）。</summary>
+    public static ImmutableArray<InterceptionTarget?> ExtractTargets(
+        ImmutableArray<InvocationExpressionSyntax> nodes, Compilation compilation, CancellationToken ct)
     {
-        var invocation = (InvocationExpressionSyntax)ctx.Node;
-        if (ctx.SemanticModel.GetOperation(invocation, ct) is not IInvocationOperation op)
+        if (nodes.IsEmpty)
+            return ImmutableArray<InterceptionTarget?>.Empty;
+
+        var results = ImmutableArray.CreateBuilder<InterceptionTarget?>(nodes.Length);
+        foreach (InvocationExpressionSyntax invocation in nodes)
+        {
+            SemanticModel model = compilation.GetSemanticModel(invocation.SyntaxTree);
+            results.Add(ExtractTarget(invocation, model, ct));
+        }
+        return results.ToImmutable();
+    }
+
+    /// <summary>提取单个调用点的 InterceptableLocation + 路径/行号/方法名。</summary>
+    private static InterceptionTarget? ExtractTarget(
+        InvocationExpressionSyntax invocation, SemanticModel model, CancellationToken ct)
+    {
+        if (model.GetOperation(invocation, ct) is not IInvocationOperation op)
             return null;
         // 过滤：必须是 PalORM.QueryBuilderExtensions 的方法（排除其他同名方法）。
         // ITM-631：裸类名比对可被用户自定义同名静态类穿透——命名空间全限定精确匹配。
@@ -96,7 +120,7 @@ internal static class AutoTaggingEmitter
         if (!isKnownTerminal) return null;
 
         // GetInterceptableLocation 扩展方法（CSharpExtensions 提供）
-        InterceptableLocation? location = ctx.SemanticModel.GetInterceptableLocation(invocation, ct);
+        InterceptableLocation? location = model.GetInterceptableLocation(invocation, ct);
         if (location is null) return null;
 
         // 提取调用点位置信息（用于 Tag 注释）
