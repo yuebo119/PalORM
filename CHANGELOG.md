@@ -2,6 +2,22 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布]
+
+### 性能：GetByKey 命令复用槽退役 keyProbe 探针命令（C3）
+
+源生成器新增 `ConvertDeleteKey` 单键标量转换委托（与 `BindDelete` 的 @p0 参数值同一
+`DeleteKeyValueExpression` 真源发射，逐位一致），GetByKey 复用槽命中时经它就地写键参数
+Value——原"从不执行的 keyProbe 探针命令 Clear + 重绑"形态整体退役：每次 GetByKey 省
+一次 CreateParameter 分配与两次参数集合操作，槽内不再持有第二个命令对象。
+
+- **影响面**：仅会话内第 3 次起的同形态 `GetAsync`（晋升阈值后）；键类型转换语义不变
+  （KeyConversionTests 新增跨晋升阈值异型键用例锁定两路径等价）。
+- **兼容**：旧版生成器编译的模型程序集无此委托（`CrudMetadata.ConvertDeleteKey` 为
+  null），复用槽不晋升、走每调用新建命令路径，行为不变。
+- **快照**：22 份生成物基线中 8 份重录（7 CommandFactory + 1 Registry，逐行人工核对，
+  仅新增方法与装配行）。
+
 ## [6.4.0] - 2026-10-11
 
 ### ⚠️ 行为变更：`DbOptions.Production` 预设熔断作用域 Session → Process（RES-002 收口）

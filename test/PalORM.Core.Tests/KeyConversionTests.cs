@@ -83,6 +83,48 @@ public sealed class KeyConversionTests
         await Assert.That(found).IsNull();
     }
 
+    [Test]
+    public async Task GetAsync_AcrossPromotionThreshold_ConvertedKeyFormsStillWork()
+    {
+        // C3（2026-10-11）：复用路径键值换算改经生成器 ConvertDeleteKey（与 BindDelete 的
+        // @p0 同一真源 DeleteKeyValueExpression）——跨晋升阈值（第 3 次起）后异型键
+        // （int/short/byte → long PK）必须与新建路径同判定。本用例锁定两条路径的等价性，
+        // 是上面四条新建路径用例在复用分支的延伸。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await CreateTableAsync(session);
+        long idA = (await session.InsertAsync(new KeyConversionEntity { Name = "reuse-a" })).Id;
+        long idB = (await session.InsertAsync(new KeyConversionEntity { Name = "reuse-b" })).Id;
+
+        // 前两次走新建路径（BindGeneratedKeyParameter 绑定），第 3 次起晋升为复用路径
+        //（ConvertDeleteKey 就地写 Value）
+        _ = await session.GetAsync<KeyConversionEntity>(idA);
+        _ = await session.GetAsync<KeyConversionEntity>(idB);
+
+        KeyConversionEntity? byInt = await session.GetAsync<KeyConversionEntity>((int)idA);
+        await Assert.That(byInt).IsNotNull();
+        await Assert.That(byInt!.Name).IsEqualTo("reuse-a");
+
+        KeyConversionEntity? byShort = await session.GetAsync<KeyConversionEntity>((short)idA);
+        await Assert.That(byShort).IsNotNull();
+        await Assert.That(byShort!.Id).IsEqualTo(idA);
+
+        KeyConversionEntity? byByte = await session.GetAsync<KeyConversionEntity>(checked((byte)idB));
+        await Assert.That(byByte).IsNotNull();
+        await Assert.That(byByte!.Name).IsEqualTo("reuse-b");
+
+        // 原生 long 键在复用路径同样保持
+        KeyConversionEntity? byLong = await session.GetAsync<KeyConversionEntity>(idB);
+        await Assert.That(byLong!.Id).IsEqualTo(idB);
+    }
+
+    [Test]
+    public async Task ConvertDeleteKey_IsWiredInRegistry_ForSingleColumnPrimaryKey()
+    {
+        // C3：注册表层契约——单列主键实体的聚合元数据必须携带转换委托（晋升门禁消费）。
+        // 复合主键/旧生成器程序集为 null 属设计回退，此处只锁真源形态不被未来发射变更静默丢弃。
+        await Assert.That(PalORM_Runtime.CrudMetadatas[typeof(KeyConversionEntity)].ConvertDeleteKey).IsNotNull();
+    }
+
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
         => await DataSession<SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = "Data Source=:memory:" });

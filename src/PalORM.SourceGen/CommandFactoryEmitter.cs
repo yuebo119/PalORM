@@ -136,6 +136,15 @@ internal static class CommandFactoryEmitter
         GenerateBindDeleteBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // C3（2026-10-11 执行流程复核）：单键标量转换器——GetByKey 复用槽命中时经它就地写
+        // 键参数 Value，替代原 keyProbe 探针命令的 Clear+重绑形态（Core 侧探针整体退役）。
+        // 值与 BindDelete 的 @p0 经 DeleteKeyValueExpression 同一真源，逐位一致。
+        sb.AppendLine($"    /// <summary>主键值归一化（GetByKey 命令复用路径）——与 BindDelete 的 @p0 值同一真源。</summary>");
+        sb.AppendLine($"    internal static object? ConvertDeleteKey(object key)");
+        sb.AppendLine("    {");
+        GenerateConvertDeleteKeyBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
         // 2026-10-02（UNNEST 形态）：主键数组构造器——把键对象序列转成类型化数组，供 PG 的
         // `pk = ANY(@ids)` 使用。数组**元素类型由生成物静态确定**（编译期已知，零反射/零 AOT 风险）；
         // 元素值走 BuildKeyCastExpression 与 BindDelete 同一真源，两条路径产出逐位相同的 provider 值。
@@ -423,16 +432,44 @@ internal static class CommandFactoryEmitter
         int pi = 0;
         foreach (var col in pkCols)
         {
-            string castExpr = BuildKeyCastExpression(col, "key");
-            string providerValueExpr = col.ConverterTypeName is null
-                ? castExpr
-                : $"_conv_{col.PropertyName}.ToProvider({castExpr})";
-            string valueExpr = col.IsNullable
-                ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
-                : $"(object){providerValueExpr}";
-            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = \"@p{pi}\"; {DbTypeHint(col)}p.Value = {DeleteKeyValueExpression(col)}; cmd.Parameters.Add(p); }}");
             pi++;
         }
+    }
+
+    /// <summary>DELETE 键参数的 Value 表达式——<see cref="GenerateBindDeleteBody"/>（单值 binder 的
+    /// @p0）与 <see cref="GenerateConvertDeleteKeyBody"/>（GetByKey 复用槽的标量转换器）的
+    /// <b>单一真源</b>：两份拷贝会在键归一化语义变更时只改一处（B120 同构不对称族）。
+    /// <para>表达式形态与抽出的原实现逐字一致：<see cref="BuildKeyCastExpression"/> 归一 →
+    /// Converter 列过 ToProvider → 可空列包 DBNull 三元（PK 不可空由 CanGenerateEntity 保证，
+    /// 该分支为防御形态）。</para></summary>
+    private static string DeleteKeyValueExpression(ColumnModel col)
+    {
+        string castExpr = BuildKeyCastExpression(col, "key");
+        string providerValueExpr = col.ConverterTypeName is null
+            ? castExpr
+            : $"_conv_{col.PropertyName}.ToProvider({castExpr})";
+        return col.IsNullable
+            ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
+            : $"(object){providerValueExpr}";
+    }
+
+    /// <summary><c>ConvertDeleteKey</c> 的发射体（C3，2026-10-11 执行流程复核）——GetByKey
+    /// 命令复用槽的键值就地写入委托。
+    /// <para><b>值语义</b>：与 <c>BindDelete</c> 的 @p0 参数值经 <see cref="DeleteKeyValueExpression"/>
+    /// 同一真源，两条路径对同一 key 产出逐位相同的值（KeyConversionTests 契约）。</para>
+    /// <para><b>复合主键/无主键</b>：发 <c>return null</c> 占位（与 BuildDeleteKeyArray 同形态）；
+    /// 注册侧同判据不装配委托（CrudBindings.ConvertDeleteKey = null），运行时复用槽不晋升。</para></summary>
+    private static void GenerateConvertDeleteKeyBody(TableModel model, StringBuilder sb)
+    {
+        var pkCols = model.Columns.AsSpan().ToArray().Where(c => IsPrimaryKeyColumn(c)).ToArray();
+        if (pkCols.Length != 1)
+        {
+            // 复合主键或无主键：注册侧不装配本委托，本占位不被调用（快照稳定性保留方法形态）
+            sb.AppendLine("        return null;");
+            return;
+        }
+        sb.AppendLine($"        return {DeleteKeyValueExpression(pkCols[0])};");
     }
 
     /// <summary>主键列判定——与 <c>GenerateHasDefaultKeyBody</c> / <c>GenerateSetIdBody</c> 同源，
