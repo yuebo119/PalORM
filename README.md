@@ -55,7 +55,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ## 🆚 与主流 ORM 对比
 
-> 版本基准：PalORM 6.4.0 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
+> 版本基准：PalORM 6.4.1 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
 
 | 特性 | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -214,11 +214,11 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.4.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.4.1" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.4.0" />
+<PackageReference Include="PalORM.MySql" Version="6.4.1" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.4.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.4.1" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。
