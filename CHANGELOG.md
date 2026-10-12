@@ -4,6 +4,40 @@
 
 ## [未发布]
 
+### ⚡ 性能：P0-2 WhereIn/WhereNotIn 的 PG 数组形态（= ANY / != ALL 单参数）
+
+- **数组形态查询路径补项**：UNNEST/ANY 族已在批量写路径全面数组化，查询路径的
+  WhereIn/WhereNotIn 是漏网项——原实现对每个值建一个参数对象（500 值一批拼占位符）。
+  PG 方言下改发射 `col = ANY(@pN)`（NOT IN 用 `col != ALL(@pN)`），整个列表一个类型化
+  数组参数（`IDbProvider.CreateArrayParameter` 既有能力面，元素类型由 TValue 编译期
+  类型决定，AOT 安全）。
+- **收益面**：500 值省 499 个参数对象与约 3KB SQL 文本；更关键的是 SQL 文本与值数量
+  解耦后，形状缓存对 WhereIn 从几乎无效（占位符文本长度随值数变化，每个数量都是新
+  形状）变为恒命中；超过占位符单批 500 上限的大列表单参数整列表执行（不再分批片
+  OR 组合，也不再受 65535 参数上限拒绝）。
+- **NULL 语义逐位等价**（真库 PG 实测锁定）：数组 NULL 元素在 `= ANY` 下永不匹配
+  （同 IN）；`!= ALL` 含 NULL 元素时全行过滤（同 NOT IN 的经典语义——数组形态不得
+  "顺手修好"它，静默改变语义比 gotcha 更危险）。
+- **回退面**：元素类型不在 Provider 支持面（char/uint 等，`CreateArrayParameter` 返回
+  null）或非 PG 方言时，整体回退既有占位符形态（逐位不变）。数组值构建期防御性拷贝
+  （调用方后续变更输入集合不影响已构建子句，与占位符形态的构建期快照对齐）。
+
+### ⚡ 性能：P1 批次（直查族命令复用槽推广 + 实体元数据三查合一 + 复用槽二次装箱消除）
+
+- **P1-1 直查族命令复用槽**：A9 惰性晋升从 From&lt;T&gt;() 管线扩展到
+  QueryAsync/QueryFirstAsync（经 QueryAsyncEnumerable 流式）/ScalarAsync/CountAsync/
+  聚合族/ExecuteAsync 六入口——同 SQL 文本第 3 次起复用会话级命令，就地写参数值
+  （不 Clear 不 Add，R-UNNESTB 纪律）；类型守卫拒绝同位异类型形态（PG DbType 陈旧
+  错绑防线）；与 From&lt;T&gt; 共用单槽（C15 按形状计数，交替形态互不淘汰）。
+- **P1-2 实体元数据三查合一**：新增 `EntityRuntimeInfo` 合并视图（工厂/表名/列名/
+  能力标志/CRUD 元数据一次取全），From&lt;T&gt;/GetByKeyEntry/GetAllEntry 原先各 3 次
+  FrozenDictionary 查找收敛为 1 次（约 -30~60ns/op，零分配变化）。
+- **P1-4 复用槽二次装箱消除**：GetByKey/Delete 槽命中分支 long 键走 identity 快路径
+  （复用调用方装箱实例，-24B/op；非 long 键照走 ConvertDeleteKey 委托）。
+
+- **验证**：ci.slnf 0W0E · Core 576/576（+9 直查复用行为锁定）· Integration 真库
+  285/285（+4 WhereIn 数组形态：行集等价三形态/大列表超批上限/NULL 语义两分支）。
+
 ### ⚡ 性能：剩余三项收口（读路径 Enter 预热 + copyWriter 类型面扩至 byte/char + D23 关账）
 
 - **读路径 Enter 预热（R4）**：读入口的 Enter 写 AsyncLocal 落在 async 体内不回流调用方，

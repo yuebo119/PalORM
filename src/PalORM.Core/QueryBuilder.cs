@@ -94,6 +94,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>A9（2026-10-01）：读查询命令复用槽（会话所有，builder 仅持引用）——
     /// 惰性晋升复用同 SQL 文本的命令，见 TryAcquireReusableSelectCommand。</summary>
     internal readonly ReusableQuerySlot? _querySlot;
+    /// <summary>P0-2（2026-10-12 全量重读）：数组参数委托（UNNEST 族同源的 Provider 能力面）
+    /// ——WhereIn/WhereNotIn 的 PG 数组形态用；null（MySQL/SQLite 接口默认）时回退占位符。</summary>
+    internal readonly Func<string, Array, DbParameter?>? _createArrayParameter;
 
     internal QueryBuilder(QueryBuilderContext<T> ctx)
     {
@@ -135,6 +138,7 @@ public struct QueryBuilder<T> where T : class, new()
         _transaction = null;
         _sensitiveMasks = null;
         _querySlot = ctx.QuerySlot;
+        _createArrayParameter = ctx.Services.CreateArrayParameter;
     }
 
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
@@ -262,6 +266,15 @@ public struct QueryBuilder<T> where T : class, new()
                 AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
             return this;
         }
+        // P0-2（2026-10-12 全量重读）：PG 数组形态——`col = ANY(@pN)` / `col != ALL(@pN)`，
+        // 整个列表一个类型化数组参数（UNNEST 族在批量写路径的同构推广，查询路径的漏项）。
+        // 收益不止参数对象（500 值省 499 个参数对象与 ~3KB SQL 文本）：SQL 文本与值数量解耦后
+        // 形状缓存对 WhereIn 从几乎无效（占位符文本长度随值数变化，每个数量都是新形状）变为
+        // 恒命中。元素类型不在 Provider 支持面（char/uint 等）或 Provider 无数组能力时回退
+        // 下方占位符形态。NULL 语义逐位等价：数组 NULL 元素在 = ANY 下永不匹配（同 IN）；
+        // != ALL 含 NULL 元素时全部行被过滤（同 NOT IN 的经典语义）。
+        if (TryAddArrayInClause(column, items, negated))
+            return this;
         // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超限
         // 应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
         // ITM-562: 判定按"存量 + 增量"累计——两次 40k 的 WhereIn 各自增量合规但总量越界，
@@ -301,6 +314,42 @@ public struct QueryBuilder<T> where T : class, new()
         }
         finally { sb.Dispose(); }
         return this;
+    }
+
+    /// <summary>P0-2：WhereIn/WhereNotIn 的 PG 数组形态子句——成功即已 AddClause 并返回 true。
+    /// <para>守卫链：Provider 数组能力委托非空、方言为 PG（ANY/ALL 是 PG 专有语法，能力检测
+    /// 与 SQL 构造同源——UseUnnestArraysForUpdate 同纪律）、Provider 接受该元素类型
+    ///（<see cref="IDbProvider.CreateArrayParameter"/> 对元素类型返回 null = 不支持，char/uint
+    /// 等在映射面外）。数组元素类型由 TValue 编译期类型决定（Nullable&lt;T&gt; 由 Provider 解包
+    /// 映射），泛型数组 new 是 AOT 安全形态。</para>
+    /// <para><b>防御性拷贝</b>：值在构建期快照进新数组——调用方随后变更输入集合不得影响已构建
+    /// 子句（占位符形态同样在构建期快照进参数，两路径语义对齐）。</para></summary>
+    private bool TryAddArrayInClause<TValue>(string column, IReadOnlyList<TValue> items, bool negated)
+    {
+        Func<string, Array, DbParameter?>? createArray = _createArrayParameter;
+        if (createArray is null || _dialect != SqlDialect.PostgreSql)
+            return false;
+
+        var values = new TValue[items.Count];
+        for (int i = 0; i < items.Count; i++)
+            values[i] = items[i];
+        DbParameter? parameter = createArray(GetParameterName(_parameterCount), values);
+        if (parameter is null)
+            return false;   // Provider 不接受该元素类型：调用方回退占位符形态
+
+        var sb = new ValueStringBuilder(stackalloc char[128]);
+        try
+        {
+            if (HasClause(QueryClauseKind.Where)) sb.Append("AND ");
+            sb.Append('(');
+            sb.Append(column);
+            sb.Append(negated ? " != ALL(" : " = ANY(");
+            sb.Append(parameter.ParameterName);
+            sb.Append("))");
+            AddClause(QueryClauseKind.Where, sb.ToString(), [parameter]);
+            return true;
+        }
+        finally { sb.Dispose(); }
     }
 
     /// <summary>把 items 按 500 一批写成 <c>col IN (@p…)</c> 片段，批间以 <paramref name="batchSeparator"/>
@@ -699,7 +748,8 @@ public struct QueryBuilder<T> where T : class, new()
         var clone = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
-                _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
+                _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel,
+                _createArrayParameter),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
             _readConnInvalidator, _readConnReturner, _querySlot))
         {
@@ -1426,7 +1476,8 @@ internal readonly record struct QueryBuilderServices<T>(
     SessionOperationState OperationState,
     ResilienceExecutor Resilience,
     TimeSpan CommandTimeout,
-    System.Data.IsolationLevel? IsolationLevel = null)  // r5-S2：会话隔离级别透传（ToPageAsync 自开事务 honoring WithIsolationLevel）
+    System.Data.IsolationLevel? IsolationLevel = null,  // r5-S2：会话隔离级别透传（ToPageAsync 自开事务 honoring WithIsolationLevel）
+    Func<string, Array, DbParameter?>? CreateArrayParameter = null)  // P0-2：数组参数委托（Provider 无数组能力时为接口默认 null，WhereIn 回退占位符形态）
     where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。
