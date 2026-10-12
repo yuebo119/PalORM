@@ -669,19 +669,24 @@ internal sealed class SessionOperationState
         // ITM-581：读一次入局部（评审 2026-09-02 起为防御习惯——实例值在首个操作前固定）
         TimeSpan disposeWaitTimeout = DisposeWaitTimeout;
         Exception? primaryException = null;
-        try
+        // R3（2026-10-12）：三个等待信号全部已完成（无飞行操作/事务/读租约，每操作一会话的
+        // 常态）时短路——免 WhenAll 的参数数组与 promise 分配及 WaitAsync 包装
+        if (!activeOperation.IsCompleted || !activeTransaction.IsCompleted || !readLeases.IsCompleted)
         {
-            await Task.WhenAll(activeOperation, activeTransaction, readLeases)
-                .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
-        }
-        catch (TimeoutException timeoutException)
-        {
-            primaryException = new InvalidOperationException(
-                $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
-                "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed, " +
-                "or an unfinished query inside a parallel-read scope; " +
-                "always consume enumerators with 'await foreach' and dispose scopes explicitly.",
-                timeoutException);
+            try
+            {
+                await Task.WhenAll(activeOperation, activeTransaction, readLeases)
+                    .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException timeoutException)
+            {
+                primaryException = new InvalidOperationException(
+                    $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
+                    "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed, " +
+                    "or an unfinished query inside a parallel-read scope; " +
+                    "always consume enumerators with 'await foreach' and dispose scopes explicitly.",
+                    timeoutException);
+            }
         }
 
         // ITM-665: 超时路径也必须执行 disposeCore（关闭/释放主连接）——此前 throw 先于

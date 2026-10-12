@@ -64,20 +64,10 @@ public static class PalORMMetrics
     internal static void Record(string operation, string provider, string outcome, TimeSpan duration,
         string? metricName = null)
     {
-        RecordCount(operation, provider, outcome, metricName);
-        RecordDuration(operation, provider, outcome, duration, metricName);
-    }
-
-    private static void RecordCount(string operation, string provider, string outcome, string? metricName)
-    {
+        // R3（2026-10-12）：TagList 构造一次贯穿两计数器——原 RecordCount/RecordDuration
+        // 各自 CreateTags，metrics 开启路径的字符串 Add 与结构体拷贝双份。
         TagList tags = CreateTags(operation, provider, outcome, metricName);
         _queryCounter.Add(1, tags);
-    }
-
-    private static void RecordDuration(string operation, string provider, string outcome, TimeSpan duration,
-        string? metricName)
-    {
-        TagList tags = CreateTags(operation, provider, outcome, metricName);
         _queryDuration.Record(duration.TotalSeconds, tags);
     }
 

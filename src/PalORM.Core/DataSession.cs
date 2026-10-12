@@ -157,7 +157,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                     await setupCmd.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
                 }
 
-                var interceptors = options.Interceptors?.ToList() ?? [];
+                var interceptors = options.Interceptors?.ToList() ?? DataSessionCache.EmptyInterceptors;
                 ILogger? logger = options.LoggerFactory?.CreateLogger(LogCategory);
                 var session = new DataSession<TProvider>(connection, options, interceptors, logger);
                 connection = null;
@@ -689,6 +689,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             try { await getByKey.Command.DisposeAsync().ConfigureAwait(false); }
             catch (Exception exception) { RecordCleanupException(ref primary, exception); }
         }
+        if (_reusableDelete is { } delete)
+        {
+            // R3（2026-10-12）：Delete 槽同口径释放
+            try { await delete.Command.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
+        }
         if (primary is not null)
             ExceptionDispatchInfo.Capture(primary).Throw();
     }
@@ -1100,16 +1106,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 由消费端覆盖（ValueTask 包装 Task 的 awaiter 即 Task 的 awaiter）。</summary>
     private static ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
         => new(command.ExecuteNonQueryAsync(ct));
-
-
-    private async ValueTask<T> ExecuteReadPipelineAsync<T>(
-        Func<CancellationToken, Task<T>> attemptCore, CancellationToken ct)
-    {
-        ResilienceExecutor executor = Volatile.Read(ref _resilience);
-        if (executor.IsPassThrough || GetActiveTransaction() is not null)
-            return await attemptCore(ct).ConfigureAwait(false);
-        return await executor.ExecuteAsync(attemptCore, ct).ConfigureAwait(false);
-    }
 
     /// <summary>将复合格式项映射为参数名，参数值保持原始对象。
     /// <para>A1（2026-10-01 全 API 逐项轮）：改走形状缓存（baseIndex 恒 0）——与 QueryBuilder

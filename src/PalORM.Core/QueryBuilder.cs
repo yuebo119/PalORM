@@ -806,10 +806,14 @@ public struct QueryBuilder<T> where T : class, new()
         List<DbParameter> parameters = GetParametersForKinds(
             _splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
         if (!_take.HasValue && !_skip.HasValue) return parameters;
-        // SHAPE-010 根解：LIMIT/OFFSET 值参数化后必须随查询绑定。占位符名从 _parameterCount
-        // 推导，与 BuildSql 内 BuildLimitClause 同源恒一致；每次现建（builder 可变，缓存参数
-        // 对象会在 Take/Skip 改值后失真），0-2 个对象的成本已在方案评审接受。
-        parameters.AddRange(BuildLimitClause().Parameters);
+        // SHAPE-010 根解：LIMIT/OFFSET 值参数化后必须随查询绑定。R3（2026-10-12）：
+        // 走 CreateLimitParameters 单一真源——免建即弃的 LIMIT 文本（原每次一个 ~60B 串）；
+        // 每次现建（builder 可变，缓存参数对象会在 Take/Skip 改值后失真）。
+        DbParameter[] limitParameters = CreateLimitParameters();
+        if (limitParameters.Length == 0) return parameters;
+        // 零子句参数 + LIMIT：数组直返——GetParametersForKinds 的共享空表不得被 AddRange
+        if (parameters.Count == 0) return limitParameters;
+        parameters.AddRange(limitParameters);
         return parameters;
     }
 
@@ -1156,9 +1160,10 @@ public struct QueryBuilder<T> where T : class, new()
     // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
     private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
-        // PERF-005（2026-09-23）：零参数查询直接返回空表——原先仍分配 List（约 32B/查询），
-        // 而 _parameterCount == 0 时任何类别过滤的结果必然为空。
-        if (_parameterCount == 0) return [];
+        // PERF-005 + R3（2026-10-12）：零参数查询返回共享空表（原 `[]` 每次新建 List ~32B）。
+        // 不可变约定：返回共享空表的调用方不得向其 Add——GetQueryParameters 的 LIMIT 追加
+        // 已在 Count==0 时改走数组直返，新增调用方须遵守同约定。
+        if (_parameterCount == 0) return QueryBuilderShared.EmptyParameters;
         // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
         var parameters = new List<DbParameter>(_parameterCount);
         foreach (QueryClause clause in MaterializeClauses())
@@ -1313,50 +1318,41 @@ public struct QueryBuilder<T> where T : class, new()
     private (string Text, DbParameter[] Parameters) BuildLimitClause()
     {
         if (!_take.HasValue && !_skip.HasValue) return ("", System.Array.Empty<DbParameter>());
-        int literalTake = LiteralTakeValue;
-        if (literalTake != 0)
+        DbParameter[] parameters = CreateLimitParameters();
+        if (LiteralTakeValue != 0)
         {
             var literal = new ValueStringBuilder(stackalloc char[24]);
             try
             {
                 literal.Append("LIMIT ");
-                literal.Append(literalTake.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                literal.Append(LiteralTakeValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 return (literal.ToString(), System.Array.Empty<DbParameter>());
             }
             finally { literal.Dispose(); }
         }
-        // PERF-005（2026-09-23）：2 元素数组直填替代 List + [.. parameters] 二次拷贝——
-        // 每页查询省一个 List（对象 + 内部数组）与一次数组拷贝。
-        var parameters = new DbParameter[2];
-        int parameterIndex = 0;
         var sb = new ValueStringBuilder(stackalloc char[64]);
         try
         {
-            // 局部函数不可用（struct 内不能捕获 this，闭包又产生热路径分配）——
-            // 参数创建+占位符回写按分支内联（编号 = _parameterCount + 已建数）
+            // R3（2026-10-12）：参数创建收敛到 CreateLimitParameters 单一真源（编号从
+            // _parameterCount 起，SHAPE-010 契约：BuildSql 文本与 GetQueryParameters 绑定恒一致），
+            // 文本只消费已建参数的 ParameterName——原两路径各自创建，漂移即错位绑定。
             if (!_take.HasValue)
             {
                 switch (_dialect)
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        DbParameter skipParam = CreateParameter(_skip!.Value, parameterIndex);
-                        parameters[parameterIndex++] = skipParam;
-                        sb.Append(skipParam.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         sb.Append(", ");
                         sb.Append(SqlLimits.MySqlOffsetOnlyLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         break;
                     case SqlDialect.Sqlite:
                         sb.Append("LIMIT -1 OFFSET ");
-                        DbParameter sqliteSkip = CreateParameter(_skip!.Value, parameterIndex);
-                        parameters[parameterIndex++] = sqliteSkip;
-                        sb.Append(sqliteSkip.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         break;
                     default:
                         sb.Append("OFFSET ");
-                        DbParameter pgSkip = CreateParameter(_skip!.Value, parameterIndex);
-                        parameters[parameterIndex++] = pgSkip;
-                        sb.Append(pgSkip.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         break;
                 }
             }
@@ -1366,35 +1362,46 @@ public struct QueryBuilder<T> where T : class, new()
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        DbParameter mysqlSkip = CreateParameter(_skip ?? 0, parameterIndex);
-                        parameters[parameterIndex++] = mysqlSkip;
-                        sb.Append(mysqlSkip.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         sb.Append(", ");
-                        DbParameter mysqlTake = CreateParameter(_take.Value, parameterIndex);
-                        parameters[parameterIndex++] = mysqlTake;
-                        sb.Append(mysqlTake.ParameterName);
+                        sb.Append(parameters[1].ParameterName);
                         break;
                     default:
                         sb.Append("LIMIT ");
-                        DbParameter takeParam = CreateParameter(_take.Value, parameterIndex);
-                        parameters[parameterIndex++] = takeParam;
-                        sb.Append(takeParam.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         sb.Append(" OFFSET ");
-                        DbParameter skipParam2 = CreateParameter(_skip ?? 0, parameterIndex);
-                        parameters[parameterIndex++] = skipParam2;
-                        sb.Append(skipParam2.ParameterName);
+                        sb.Append(parameters[1].ParameterName);
                         break;
                 }
             }
-            DbParameter[] result = parameterIndex switch
-            {
-                0 => System.Array.Empty<DbParameter>(),
-                1 => [parameters[0]],
-                _ => parameters,
-            };
-            return (sb.ToString(), result);
+            return (sb.ToString(), parameters);
         }
         finally { sb.Dispose(); }
+    }
+
+    /// <summary>R3（2026-10-12）：LIMIT 参数创建单一真源——BuildLimitClause（文本+参数）与
+    /// GetQueryParameters（仅参数，免建即弃文本）共用。编号从 _parameterCount 起；形态：
+    /// skip-only 单参数；take 在场恒两参数（skip 缺省 0 占位，MySQL 序为 [skip, take]，
+    /// 其余 [take, skip]，与原 BuildLimitClause 内联创建逐位一致）。</summary>
+    private DbParameter[] CreateLimitParameters()
+    {
+        if (!_take.HasValue && !_skip.HasValue) return System.Array.Empty<DbParameter>();
+        if (LiteralTakeValue != 0) return System.Array.Empty<DbParameter>();
+        if (!_take.HasValue)
+        {
+            DbParameter skipOnly = CreateParameter(_skip!.Value, 0);
+            return [skipOnly];
+        }
+        if (_dialect == SqlDialect.MySql)
+        {
+            // MySQL 裸 OFFSET 无 LIMIT 需补位哨兵：LIMIT skip, max（skip 在前）
+            DbParameter mysqlSkip = CreateParameter(_skip ?? 0, 0);
+            DbParameter mysqlTake = CreateParameter(_take.Value, 1);
+            return [mysqlSkip, mysqlTake];
+        }
+        DbParameter take = CreateParameter(_take.Value, 0);
+        DbParameter skip = CreateParameter(_skip ?? 0, 1);
+        return [take, skip];
     }
 
     private static string GetRegisteredTableName(Type entityType)
@@ -1422,6 +1429,14 @@ public struct QueryBuilder<T> where T : class, new()
 
     private static string GetColumnName<TEntity, TKey>(Expression<Func<TEntity, TKey>> member)
         => MemberResolver.GetColumnName(member);
+}
+
+/// <summary>QueryBuilder 的非泛型共享常量载体（S2743：泛型类静态字段不跨 T 共享）。</summary>
+internal static class QueryBuilderShared
+{
+    /// <summary>零参数查询的共享空表（R3，2026-10-12）——只读共享；
+    /// 不可变约定见 QueryBuilder&lt;T&gt;.GetParametersForKinds。</summary>
+    internal static readonly List<DbParameter> EmptyParameters = [];
 }
 
 /// <summary>Provider 能力聚合——把 dialect/factory/interceptors/paramFactory/quoteIdentifier/

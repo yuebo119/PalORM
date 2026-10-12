@@ -699,8 +699,10 @@ public static class QueryBuilderExtensions
     private static void AddParameters(DbCommand command,
         IReadOnlyList<DbParameter> parameters)
     {
-        foreach (DbParameter parameter in parameters)
-            command.Parameters.Add(parameter);
+        // R3（2026-10-12）：for + 索引替代 foreach——经 IReadOnlyList 接口枚举 List 会
+        // 装箱枚举器（每查询约 32B）；数组/自建 List 的索引访问零分配且同为 O(1)。
+        for (int i = 0; i < parameters.Count; i++)
+            command.Parameters.Add(parameters[i]);
     }
 
     /// <summary>R-UNNESTB（2026-10-02）：复用命令的就地参数赋值——逐位置把本次查询的

@@ -24,7 +24,11 @@ internal static class SqlShapeCache
     /// 同时通过上限检查），偏差量为并发 Add 数，无害。</summary>
     internal const int MaxEntries = 1024;
 
-    private static readonly ConcurrentDictionary<int, ConcurrentQueue<SqlShapeEntry>> Buckets = new();
+    /// <summary>桶改不可变数组快照（R3 三轮审读，2026-10-12）：原 ConcurrentQueue 的
+    /// <c>foreach</c> 经接口分配枚举器（每查询命中路径 32-48B，是命中路径唯一结构性分配）。
+    /// 数组快照的 foreach 走 span 枚举零分配；Add 稀疏（每形状一次），整体换新可接受，
+    /// 经 <see cref="ConcurrentDictionary{TKey,TValue}.TryUpdate"/> 原子替换（CAS 失败重读重试）。</summary>
+    private static readonly ConcurrentDictionary<int, SqlShapeEntry[]> Buckets = new();
 
     private static int _totalEntries;
 
@@ -54,11 +58,12 @@ internal static class SqlShapeCache
     internal sealed record SqlShapeEntry(string[] SqlSequence, ShapeFields Fields, string FullSql);
 
     public static IEnumerable<SqlShapeEntry> GetBucket(int shapeHash)
-        => Buckets.TryGetValue(shapeHash, out ConcurrentQueue<SqlShapeEntry>? bucket)
+        => Buckets.TryGetValue(shapeHash, out SqlShapeEntry[]? bucket)
             ? bucket
             : System.Array.Empty<SqlShapeEntry>();
 
-    /// <summary>查找与当前形状匹配的 SQL 文本——命中返回缓存的 string 实例（调用方直接复用）。</summary>
+    /// <summary>查找与当前形状匹配的 SQL 文本——命中返回缓存的 string 实例（调用方直接复用）。
+    /// R3：数组 foreach 走 span 枚举零分配（原 ConcurrentQueue 经接口每次分配枚举器）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3267:LoopsShouldBeSimplifiedWithLinq",
         Justification = "查找本身在查询热路径上：LINQ 形式每次分配委托+迭代器，抵消缓存收益。手写循环零分配。")]
@@ -67,7 +72,7 @@ internal static class SqlShapeCache
         IReadOnlyList<QueryClause> clauses,
         ShapeFields fields)
     {
-        if (!Buckets.TryGetValue(shapeHash, out ConcurrentQueue<SqlShapeEntry>? bucket))
+        if (!Buckets.TryGetValue(shapeHash, out SqlShapeEntry[]? bucket))
             return null;
         foreach (SqlShapeEntry entry in bucket)
         {
@@ -91,25 +96,33 @@ internal static class SqlShapeCache
         // A5：先判容量再建桶——满员后不得为被拒的新形状留下空桶（桶表本身无上限）。
         if (Volatile.Read(ref _totalEntries) >= MaxEntries) return;
 
-        ConcurrentQueue<SqlShapeEntry> bucket =
-            Buckets.GetOrAdd(shapeHash, static _ => new ConcurrentQueue<SqlShapeEntry>());
-        // CACHE-001（2026-09-23）：入队前查重——并发同形状双写会留下全等重复条目，侵蚀 1024 名额
-        // （计数先行且到顶后新形状永远拒写，等于缓存冻结）。桶内条目极少（通常 1-2 条），
-        // 手写循环零分配（与 FindMatch 同口径，不用 LINQ）。
-        foreach (SqlShapeEntry existing in bucket)
-        {
-            if (existing.Matches(clauses, fields)) return;
-        }
-
-        Interlocked.Increment(ref _totalEntries);
-
         var sequence = new string[clauses.Count];
         for (int i = 0; i < clauses.Count; i++)
         {
             sequence[i] = clauses[i].Sql;
         }
+        var entry = new SqlShapeEntry(sequence, fields, fullSql);
 
-        bucket.Enqueue(new SqlShapeEntry(sequence, fields, fullSql));
+        // R3（2026-10-12）：不可变数组快照 + CAS 换新——败者（并发同桶写入）重读快照重试，
+        // 查重吸收并发等价条目（CACHE-001 语义保持：计数只在换新成功后递增）。
+        while (true)
+        {
+            SqlShapeEntry[] current =
+                Buckets.GetOrAdd(shapeHash, static _ => System.Array.Empty<SqlShapeEntry>());
+            foreach (SqlShapeEntry existing in current)
+            {
+                if (existing.Matches(clauses, fields)) return;
+            }
+
+            var replaced = new SqlShapeEntry[current.Length + 1];
+            System.Array.Copy(current, replaced, current.Length);
+            replaced[current.Length] = entry;
+            if (Buckets.TryUpdate(shapeHash, replaced, current))
+            {
+                Interlocked.Increment(ref _totalEntries);
+                return;
+            }
+        }
     }
 
     /// <summary>全缓存条目总数——诊断与测试观测点（O(1) 读计数器）。
@@ -125,7 +138,7 @@ internal static class SqlShapeCache
     {
         get
         {
-            foreach (ConcurrentQueue<SqlShapeEntry> bucket in Buckets.Values)
+            foreach (SqlShapeEntry[] bucket in Buckets.Values)
                 foreach (SqlShapeEntry entry in bucket)
                     yield return entry;
         }

@@ -197,12 +197,18 @@ public sealed partial class DataSession<TProvider>
     /// <summary>会话级单行按主键读（GetAsync）的命令/参数复用槽（PL-2 扩展，2026-09-25）。</summary>
     private ReusableCrudCommand? _reusableGetByKey;
 
-    /// <summary>INSERT / UPDATE / GetByKey 各自已服务过的同形态操作数（惰性晋升的判据）。</summary>
+    /// <summary>会话级单行物理删除（DeleteAsync）的命令/参数复用槽（R3，2026-10-12）——
+    /// GetByKey 同型第四槽：删除密集负载的每操作命令/参数创建退役。</summary>
+    private ReusableCrudCommand? _reusableDelete;
+
+    /// <summary>INSERT / UPDATE / GetByKey / Delete 各自已服务过的同形态操作数（惰性晋升的判据）。</summary>
     private int _insertWriteOps;
 
     private int _updateWriteOps;
 
     private int _getByKeyReadOps;
+
+    private int _deleteWriteOps;
 
     /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。
     /// <para><see cref="KeyConverter"/> 仅 GetByKey 槽使用：生成器发射的单键转换委托
@@ -411,6 +417,64 @@ public sealed partial class DataSession<TProvider>
             throw;
         }
         _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
+        return cmd;
+    }
+
+    /// <summary>取可复用的单行物理 DELETE 命令（R3，2026-10-12）——GetByKey 槽的同型第四槽：
+    /// 键值经 <see cref="CrudMetadata.ConvertDeleteKey"/> 就地写池参数（与 BindDelete 的 @p0
+    /// 同一真源）。租户实体/复合主键/旧生成器程序集不晋升（与 GetByKey 槽同门禁）；
+    /// 返回的命令归会话所有，调用方不得释放。</summary>
+    private DbCommand? TryAcquireDeleteCommand<T>(
+        string commandText, object key, PalORM_Runtime.RuntimeRegistryState state)
+        where T : class, new()
+    {
+        if (HasTenantFilter<T>())
+            return null;
+
+        if (_reusableDelete is { } reusable && reusable.EntityType == typeof(T)
+            && reusable.KeyConverter is { } convertKey && reusable.Pool is [var pooledKey])
+        {
+            DbCommand reused = reusable.Command;
+            reused.Transaction = GetActiveTransaction();
+            reused.CommandTimeout = _options.CommandTimeoutSeconds;
+            if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
+                reused.CommandText = commandText;
+            // R-UNNESTB：不触碰参数集合，就地写同一实例的 Value
+            pooledKey.Value = convertKey(key);
+            return reused;
+        }
+
+        _deleteWriteOps++;
+        if (_deleteWriteOps < CommandReusePromotionThreshold)
+            return null;
+
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata promoteMetadata)
+            || promoteMetadata.ConvertDeleteKey is not { } promotedConverter)
+            return null;
+
+        DbCommand cmd = CreateCommand();
+        cmd.CommandText = commandText;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        try
+        {
+            BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters<T>(cmd);
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        try
+        {
+            _reusableDelete?.Command.Dispose();
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        _reusableDelete = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
         return cmd;
     }
 
@@ -709,11 +773,18 @@ public sealed partial class DataSession<TProvider>
             return await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
         }
 
-        await using DbCommand delCmd = CreateCommand();
-        // M1（v5.6.0）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
-        delCmd.CommandText = HasTenantFilter<T>()
+        // R3（2026-10-12）：物理删除接 PL-2 复用槽（GetByKey 同型）——软删/租户形态不进槽。
+        bool deleteHasTenant = HasTenantFilter<T>();
+        string deleteCommandText = deleteHasTenant
             ? GetTenantWrappedSql<T>(DataSessionCache.DeleteWithTenantSqlCache, sqls.Delete)
             : sqls.Delete;
+        if (!deleteHasTenant
+            && TryAcquireDeleteCommand<T>(deleteCommandText, key, state) is { } reusedDelete)
+            return await ExecuteWriteRowsAsync(reusedDelete, ct).ConfigureAwait(false);
+
+        await using DbCommand delCmd = CreateCommand();
+        // M1（v5.6.0）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
+        delCmd.CommandText = deleteCommandText;
         delCmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(delCmd, key);
         BindDefaultFilterParameters<T>(delCmd);
@@ -797,31 +868,14 @@ public sealed partial class DataSession<TProvider>
         // 主连接形态（复用槽有效）。
         if (_operationState.ParallelReadsEnabled)
         {
-            return await ExecuteReadPipelineAsync(async token =>
-            {
-                string filter = GetDefaultFilterFragment<T>();
-                string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
-                    HasTenantFilter<T>(), _ignoreFilters);
-                DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
-                bool healthy = false;
-                try
-                {
-                    await using DbCommand cmd = connection.CreateCommand();
-                    cmd.CommandText = commandText;
-                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-                    BindGeneratedKeyParameter<T>(cmd, key);
-                    BindDefaultFilterParameters<T>(cmd);
-                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-                    T? row = await reader.ReadAsync(token).ConfigureAwait(false)
-                        ? ((Func<DbDataReader, T>)factory)(reader) : default;
-                    healthy = true;
-                    return row;
-                }
-                finally
-                {
-                    await ReleaseOrDiscardReadConnectionAsync(connection, healthy).ConfigureAwait(false);
-                }
-            }, ct).ConfigureAwait(false);
+            // R3（2026-10-12）：直通分支免闭包直调（主分支 C10 同型；作用域与事务互斥
+            // ITM-798，无需事务判定）。原闭包捕获 6 变量 + this，直通时约 250-300B/op 纯浪费。
+            ResilienceExecutor parallelExecutor = Volatile.Read(ref _resilience);
+            if (parallelExecutor.IsPassThrough)
+                return await ParallelGetByKeyCoreAsync<T>(factory, columnNames, tableName, key, ct).ConfigureAwait(false);
+            return await parallelExecutor.ExecuteAsync(
+                token => ParallelGetByKeyCoreAsync<T>(factory, columnNames, tableName, key, token).AsTask(),
+                ct).ConfigureAwait(false);
         }
 
         // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）。
@@ -834,6 +888,36 @@ public sealed partial class DataSession<TProvider>
         return await getByKeyExecutor.ExecuteAsync(
             token => GetByKeyCoreAsync<T>(state, factory, columnNames, tableName, key, token).AsTask(),
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>GetAsync 并行读作用域分支的执行核心（R3 抽出）：参数直传不捕获，
+    /// 直通直调与弹性重试共用。失败时池连接丢弃（A1 语义），成功归还。</summary>
+    private async ValueTask<T?> ParallelGetByKeyCoreAsync<T>(
+        object factory, IReadOnlyList<string> columnNames, string tableName, object key, CancellationToken token)
+        where T : class, new()
+    {
+        string filter = GetDefaultFilterFragment<T>();
+        string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
+            HasTenantFilter<T>(), _ignoreFilters);
+        DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
+        bool healthy = false;
+        try
+        {
+            await using DbCommand cmd = connection.CreateCommand();
+            cmd.CommandText = commandText;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters<T>(cmd);
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            T? row = await reader.ReadAsync(token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)factory)(reader) : default;
+            healthy = true;
+            return row;
+        }
+        finally
+        {
+            await ReleaseOrDiscardReadConnectionAsync(connection, healthy).ConfigureAwait(false);
+        }
     }
 
     /// <summary>GetAsync 主连接分支的执行核心（C10 抽出）：参数直传不捕获，供直通直调与
