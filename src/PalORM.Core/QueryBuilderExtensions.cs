@@ -432,6 +432,12 @@ public static class QueryBuilderExtensions
     /// 需要强一致快照请 <see cref="DataSession{TProvider}.WithIsolationLevel"/>(Snapshot/Serializable)
     /// 或外部事务（两者都走经典事务路径）。MySQL（RR 快照有真实一致性）与 SQLite 保持
     /// 经典事务路径。</para></summary>
+    /// <para><b>各方言经典路径的快照语义</b>（决策 MySQL 不入批路径的依据，2026-10-12 复核）：
+    /// MySQL InnoDB 默认 REPEATABLE READ 下，事务内 COUNT 与页查询<b>共享同一快照</b>
+    ///（快照在事务首次读取时建立）——Total 与页行保证一致；SQLite 延迟读事务下两语句
+    /// 看到同一一致性读视图；PG 默认 READ COMMITTED 下两语句各取快照（Total 与页行可能
+    /// 不一致，需强一致用 Snapshot/Serializable 隔离）。批路径（仅 PG 默认形态）以
+    /// "两快照"为契约，与 PG 经典路径逐位等价。</para>
     /// <para>lastValue 为上一页末行的 orderBy 键值：非默认值时生成 <c>orderBy &lt; lastValue</c>（降序）
     /// 或 <c>&gt;</c>（升序）续页条件；首页传 default。键值为 default 的行无法作为续页锚点。</para>
     /// <para>ITM-582: ① COUNT 查询走 Tracing/Metrics 但<b>不经过</b> IQueryInterceptor（页查询经过）——
