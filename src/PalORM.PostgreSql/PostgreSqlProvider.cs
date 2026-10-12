@@ -849,6 +849,17 @@ public sealed class PostgreSqlProvider : IDbProvider
             => _importer.Write(value, _columnTypes[ordinal]);
 
         /// <inheritdoc />
+        /// <para>P2-2（2026-10-12 扩面）：Npgsql 6+ 的 PG date 映射即 DateOnly——
+        /// <c>Write&lt;DateOnly&gt;(value, NpgsqlDbType.Date)</c> 定型直写，真库往返实证。</para>
+        public void WriteDateOnly(int ordinal, DateOnly value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        /// <para>P2-2：同 <see cref="WriteDateOnly"/>——PG time 映射即 TimeOnly。</para>
+        public void WriteTimeOnly(int ordinal, TimeOnly value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
         public void WriteString(int ordinal, string? value)
         {
             if (value is null)

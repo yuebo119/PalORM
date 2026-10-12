@@ -1072,10 +1072,12 @@ internal static class CommandFactoryEmitter
 
     /// <summary>O1（2026-10-01）：COPY 定型写入的支持面判定——实体全部可插入列的
     /// provider 类型都能映射到 <c>IBinaryRowSink</c> 的定型方法时为 true。
-    /// 支持面 = 12 个安全核心类型（long/int/short/decimal/double/float/bool/Guid/DateTime/
-    /// DateTimeOffset/string/byte[]）；枚举列按存储策略转换后的 provider 类型（int/long/string）
-    /// 判定，OwnedJson 列按序列化后的 string 判定。未列出的类型（byte/sbyte/ushort/uint/ulong/
-    /// DateOnly/TimeOnly 等）不入支持面——对应实体整体回退参数池路径，行为与 v6.2.0 一致。</summary>
+    /// 支持面 = long/int/short/decimal/double/float/bool/Guid/DateTime/DateTimeOffset/
+    /// string/byte[]/byte/char + DateOnly/TimeOnly（P2-2 扩面）；枚举列按存储策略转换后的
+    /// provider 类型（int/long/string）判定，OwnedJson 列按序列化后的 string 判定。
+    /// 未列出的类型（sbyte/ushort/uint/ulong/TimeSpan 等）不入支持面——对应实体整体回退
+    /// 参数池路径（TimeSpan 本身已在 PALORM016 分析器层拒绝，Converter 列按转换后的
+    /// provider 类型判定）。</summary>
     internal static bool SupportsCopyRowWrite(TableModel model)
     {
         foreach (var col in model.Columns.AsSpan())
@@ -1109,9 +1111,14 @@ internal static class CommandFactoryEmitter
             // R4（2026-10-12 扩面）：byte → WriteInt16（PG 无 tinyint，byte 列 DDL 即 SMALLINT，
             // short 直写语义精确；byte→short 隐式 widening 零转换发射）；char → WriteString
             //（char 列 DDL 为文本形态；值表达式在 GenerateCopyWriteRowBody 包 .ToString()）。
-            // DateOnly/TimeOnly/TimeSpan 维持不支持（无对应定型方法，实体回退参数池——边界登记）。
+            // P2-2（2026-10-12 全量重读扩面）：DateOnly/TimeOnly → 定型直写（Npgsql 6+ 的
+            // PG date/time 即 DateOnly/TimeOnly，真库往返探针实证——PgCopyDateOnlyTimeOnlyTests）。
+            // TimeSpan 不在 PALORM016 支持面（分析器层拒绝，须经 Converter 转成受支持
+            // provider 类型——Converter 列按转换后的 provider 类型走本判定，无需单列）。
             "byte" or "global::System.Byte" => "WriteInt16",
             "char" or "global::System.Char" => "WriteString",
+            "global::System.DateOnly" => "WriteDateOnly",
+            "global::System.TimeOnly" => "WriteTimeOnly",
             _ => null,
         };
     }

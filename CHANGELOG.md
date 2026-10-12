@@ -4,6 +4,19 @@
 
 ## [未发布]
 
+### ⚡ 性能：P2-2 copyWriter 扩面至 DateOnly/TimeOnly（定型 COPY 写入覆盖面扩大）
+
+- **扩面**：IBinaryRowSink 增 `WriteDateOnly`/`WriteTimeOnly` 定型方法，生成器谓词放开
+  两类型映射——Npgsql 6+ 的 PG `date`/`time` 即 DateOnly/TimeOnly，
+  `Write<DateOnly>(value, NpgsqlDbType.Date)` 定型直写真库往返实证（含 nullable 的
+  null→WriteNull 分支与边界值 0001-01-01/9999-12-31/23:59:59.999）。含 DateOnly/TimeOnly
+  且无其他不支持列的实体（如 AllTypesEntity）从整体回退参数池改为定型 COPY 写入
+  （值类型格装箱归零）。
+- **边界勘误**：TimeSpan 原以为需单列边界，实际在 PALORM016 分析器层即被拒绝
+  （须经 Converter 转成受支持 provider 类型——Converter 列按转换后类型判定，天然覆盖），
+  sink 层无需单列。快照变化：AllTypesEntity 的 CommandFactory 增 CopyWriteRow 方法、
+  Registry 的 copyWriteRow 从 null 变为委托（其余实体零变化）。
+
 ### ⚡ 性能：P0-1 ToPageAsync 的 PG 单往返默认路径（COUNT + 页 SELECT 一个 DbBatch）
 
 - **四次往返压成一次**：PG 默认形态（READ COMMITTED + 无外部事务 + 无拦截器/观测性 +
