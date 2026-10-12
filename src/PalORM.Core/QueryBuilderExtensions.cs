@@ -148,7 +148,7 @@ public static class QueryBuilderExtensions
             // （作用域外归还器对主连接为空操作），否则作用域内每次 ForEachAsync 都
             // 新建连接不复用。记录的是最后一次尝试的连接（重试中间尝试由作用域退出兜底）。
             if (lastReadConnection is not null)
-                await builder.ReleaseReadConnectionAsync(lastReadConnection).ConfigureAwait(false);
+                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
         }
     }
 
@@ -316,7 +316,7 @@ public static class QueryBuilderExtensions
             // 记录的是最后一次尝试的连接——重试路径上中间尝试的连接由作用域退出时统一释放（有界：
             // 每操作至多 MaxRetries+1 条），换取不改动内核主体缩进的低风险接线。
             if (lastReadConnection is not null)
-                await builder.ReleaseReadConnectionAsync(lastReadConnection).ConfigureAwait(false);
+                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
         }
     }
 

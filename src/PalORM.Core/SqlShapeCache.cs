@@ -86,6 +86,11 @@ internal static class SqlShapeCache
         IReadOnlyList<QueryClause> clauses,
         ShapeFields fields, string fullSql)
     {
+        // 容量纪律（审计 A1）：满则拒写。被拒的形状此后逐次重建——行为等同于缓存不存在，
+        // 正确性不受影响；动态 Tag/Raw 值等残余无界源由此兜底。
+        // A5：先判容量再建桶——满员后不得为被拒的新形状留下空桶（桶表本身无上限）。
+        if (Volatile.Read(ref _totalEntries) >= MaxEntries) return;
+
         ConcurrentQueue<SqlShapeEntry> bucket =
             Buckets.GetOrAdd(shapeHash, static _ => new ConcurrentQueue<SqlShapeEntry>());
         // CACHE-001（2026-09-23）：入队前查重——并发同形状双写会留下全等重复条目，侵蚀 1024 名额
@@ -96,9 +101,6 @@ internal static class SqlShapeCache
             if (existing.Matches(clauses, fields)) return;
         }
 
-        // 容量纪律（审计 A1）：满则拒写。被拒的形状此后逐次重建——行为等同于缓存不存在，
-        // 正确性不受影响；动态 Tag/Raw 值等残余无界源由此兜底。
-        if (Volatile.Read(ref _totalEntries) >= MaxEntries) return;
         Interlocked.Increment(ref _totalEntries);
 
         var sequence = new string[clauses.Count];
@@ -113,6 +115,9 @@ internal static class SqlShapeCache
     /// <summary>全缓存条目总数——诊断与测试观测点（O(1) 读计数器）。
     /// 审计 2026-09-19 A1 防线：进程级缓存必须有界，本计数让上界可断言。</summary>
     internal static int TotalEntryCount => Volatile.Read(ref _totalEntries);
+
+    /// <summary>桶数——测试观测点（A5）：容量满后的拒写路径不得为新形状新建桶。</summary>
+    internal static int BucketCount => Buckets.Count;
 
     /// <summary>枚举全部条目——测试/诊断观测（分配枚举，不进热路径）。
     /// 行为断言用（如"同 SQL 文本仅一条目""无 OFFSET 形状入缓存"），对并行测试噪声免疫。</summary>

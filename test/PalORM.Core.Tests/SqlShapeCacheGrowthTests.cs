@@ -104,6 +104,31 @@ public sealed class SqlShapeCacheGrowthTests
     }
 
     [Test]
+    public async Task FullCache_RejectedAdd_DoesNotCreateBucket()
+    {
+        // A5（2026-10-12 审读修复）：容量满后被拒写的新形状不得新建桶——桶表本身无上限，
+        // 原实现先 GetOrAdd 建桶再判容量，满员后每个新形状都会在桶表留下一个空队列。
+        try
+        {
+            SqlShapeCache.Clear();
+            var fields = new SqlShapeCache.ShapeFields(
+                SqlDialect.Sqlite, false, false, false, "shape_probe", null, 0, typeof(ShapeProbeEntity));
+            for (int i = 0; i < SqlShapeCache.MaxEntries; i++)
+                SqlShapeCache.Add(100_000 + i, [], fields, $"SELECT fill-{i}");
+
+            await Assert.That(SqlShapeCache.TotalEntryCount).IsEqualTo(SqlShapeCache.MaxEntries);
+            int bucketsBefore = SqlShapeCache.BucketCount;
+
+            for (int i = 0; i < 100; i++)
+                SqlShapeCache.Add(900_000 + i, [], fields, $"SELECT rejected-{i}");
+
+            await Assert.That(SqlShapeCache.TotalEntryCount).IsEqualTo(SqlShapeCache.MaxEntries);
+            await Assert.That(SqlShapeCache.BucketCount).IsEqualTo(bucketsBefore);
+        }
+        finally { SqlShapeCache.Clear(); }
+    }
+
+    [Test]
     public async Task DynamicTagValues_NewShapeRejectedWhenCacheFull()
     {
         // A1 的残余无界源（OFFSET 排除之外）：Tag 的业务标识是裸文本子句，动态值

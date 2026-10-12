@@ -133,24 +133,19 @@ public sealed class ResilienceExecutor
                 {
                     // RES-003：总预算到期不再重试——最坏墙钟由 (MaxRetries+1)×CommandTimeout+Σ退避
                     // 收敛为 OverallDeadline。与单次命令超时同口径包装（Data 标记可识别）。
-                    var wrappedOverall = new TimeoutException(
-                        $"Operation exceeded the overall deadline of {_overallDeadline} "
-                        + $"(attempt {attempt + 1} of {_maxRetries + 1}).",
-                        overallException);
-                    wrappedOverall.Data["PalORM.InfrastructureTimeout"] = true;
-                    throw wrappedOverall;
+                    throw WrapOverallDeadline(attempt, overallException);
                 }
                 catch (OperationCanceledException) when (timeout is not null
                     && timeout.IsCancellationRequested && attempt < _maxRetries)
                 {
                     // ITM-630：仅超时 token 触发的 OCE 可重试——operation 内部自取消
                     // （非调用方 ct、非超时）原样上抛：重试会放大已取消操作的副作用。
-                    await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
+                    await DelayBeforeRetryAsync(attempt, overall, attemptScope).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException
                     && attempt < _maxRetries && _isTransient(exception))
                 {
-                    await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
+                    await DelayBeforeRetryAsync(attempt, overall, attemptScope).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException timeoutException) when (timeout is not null
                     && timeout.IsCancellationRequested)
@@ -191,6 +186,33 @@ public sealed class ResilienceExecutor
     {
         ArgumentNullException.ThrowIfNull(operation);
         await ExecuteAsync(async c => { await operation(c).ConfigureAwait(false); return true; }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>重试退避等待（A3）：等待与尝试范围共用 <paramref name="attemptScope"/>——总预算到期即中断等待，
+    /// 包装为超时抛出；不再睡满退避后用已取消的 token 多发起一次操作（RES-003 的到期即停契约）。</summary>
+    private async Task DelayBeforeRetryAsync(
+        int attempt, CancellationTokenSource? overall, CancellationToken attemptScope)
+    {
+        try
+        {
+            await Task.Delay(_backoff(attempt), attemptScope).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException delayException) when (overall is not null
+            && overall.IsCancellationRequested)
+        {
+            throw WrapOverallDeadline(attempt, delayException);
+        }
+    }
+
+    /// <summary>总预算到期的超时包装（RES-003）：与单次命令超时同口径，Data 标记供基础设施超时识别。</summary>
+    private TimeoutException WrapOverallDeadline(int attempt, OperationCanceledException inner)
+    {
+        var wrapped = new TimeoutException(
+            $"Operation exceeded the overall deadline of {_overallDeadline} "
+            + $"(attempt {attempt + 1} of {_maxRetries + 1}).",
+            inner);
+        wrapped.Data["PalORM.InfrastructureTimeout"] = true;
+        return wrapped;
     }
 
     internal static TimeSpan GetDefaultBackoff(int attempt)

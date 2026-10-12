@@ -1472,6 +1472,64 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    public async Task SqlFile_GeneratedDoc_UsesRelativePath_NotAbsolute()
+    {
+        // E24（2026-10-12 确定性修复）：来源标注用特性声明的相对路径——绝对路径含开发机
+        // 盘符/目录，同一源码在不同机器产出不同 .g.cs，破坏可复现构建与增量缓存。
+        const string source = """
+            using PalORM;
+            public static partial class Queries
+            {
+                [SqlFile("Queries/get.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-tests");
+        string fullPath = Path.Combine(projectDir, "Queries", "get.sql");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+        var texts = new AdditionalText[] { new TestAdditionalText(fullPath, "SELECT 1;") };
+
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "SqlFileConsumer", options, texts);
+        string generated = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("SqlFile", StringComparison.Ordinal))];
+
+        await Assert.That(generated).Contains("Queries/get.sql");
+        await Assert.That(generated).DoesNotContain(projectDir);
+    }
+
+    [Test]
+    public async Task SqlFile_ProviderSectionReassembly_UsesLfNewlines()
+    {
+        // E25（2026-10-12 确定性修复）：段重组显式 '\n'——AppendLine 的换行符随宿主 OS 变化
+        //（Windows \r\n / Linux \n），同一 .sql 在不同 OS 产出不同的嵌入常量字节。
+        const string source = """
+            using PalORM;
+            public static partial class Queries
+            {
+                [SqlFile("Queries/sections.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-tests");
+        string fullPath = Path.Combine(projectDir, "Queries", "sections.sql");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+        var texts = new AdditionalText[]
+        {
+            new TestAdditionalText(fullPath, "-- @all\nSELECT 1;\nSELECT 2;\n-- @pg\nSELECT pg;")
+        };
+
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "SqlFileConsumer", options, texts);
+        string generated = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("SqlFile", StringComparison.Ordinal))];
+
+        // 选中段（@all）逐行重组成嵌入内容：行间必须是 \n（旧实现在 Windows 上是 \r\n）
+        await Assert.That(generated).Contains("SELECT 1;\nSELECT 2;");
+        await Assert.That(generated).DoesNotContain("SELECT 1;\r\nSELECT 2;");
+    }
+
+    [Test]
     public async Task SqlFile_MissingAdditionalFile_EmitsObsoleteErrorPlaceholder()
     {
         // .sql 不在 AdditionalFiles（未注入或文件不存在）→ Obsolete(error) 占位可检索

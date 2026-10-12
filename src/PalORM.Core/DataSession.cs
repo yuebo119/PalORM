@@ -52,7 +52,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private readonly Func<ValueTask>? _readConnInvalidator;
     /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——恒非 null（方法组一次性缓存）：
     /// 并行读作用域在未配置读路由时也生效（连接回落主连接串），故不能按读路由配置条件挂接。</summary>
-    private readonly Func<DbConnection, ValueTask> _readConnReturner;
+    private readonly Func<DbConnection, bool, ValueTask> _readConnReturner;
     /// <summary>A9（2026-10-01）：读查询命令复用槽（PL-2 惰性晋升的泛化）——惰性创建：
     /// 并行读作用域内并发 From&lt;T&gt;() 的竞态只会各建一个空槽（引用写原子、败者被 GC、
     /// 槽在禁用晋升下永无命令可漏）。</summary>
@@ -92,7 +92,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // READ-001（2026-09-23）：读连接失效上报——只在配置了读路由时挂接（方法组一次性缓存，
         // 不在 From<T>() 里新建委托）。见 InvalidateReadConnectionIfCurrentAsync。
         _readConnInvalidator = _readConnectionString is not null ? InvalidateReadConnectionAsync : null;
-        _readConnReturner = ReleaseReadConnectionAsync;
+        _readConnReturner = ReleaseOrDiscardReadConnectionAsync;
         // v5.0 阶段 5.2：读连接初始化器——无 ReadSessionSetupSql 时用 static 委托（零闭包分配），
         // 有时包装一层实例委托追加执行 ReadSessionSetupSql。
         _readConnInitializer = string.IsNullOrWhiteSpace(options.ReadSessionSetupSql)
@@ -628,11 +628,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 返回读连接释放异常（无异常返回 null；池清理异常静默，与既有口径一致）。</summary>
     private async ValueTask<Exception?> DisposeReadSideAssetsAsync()
     {
-        if (await DisposeReadConnectionAsync().ConfigureAwait(false) is { } readConnectionException)
-            return readConnectionException;
-
+        // A2：读连接释放失败不得跳过并行池清理——池内物理连接须在会话释放时无条件释放
+        Exception? readConnectionException = await DisposeReadConnectionAsync().ConfigureAwait(false);
         await DisposeParallelReadPoolAsync().ConfigureAwait(false);
-        return null;
+        return readConnectionException;
     }
 
     /// <summary>A9：释放晋升的读查询命令（会话所有）——返回清理异常（无异常返回 null），
@@ -979,6 +978,23 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return default;
     }
 
+    /// <summary>读完成后的池连接处置（A1）：成功归还空闲栈，失败丢弃。失败路径的连接状态不可信
+    /// （静默断开时 <c>State</c> 仍为 Open），归还即让同作用域后续读复用死连接。</summary>
+    internal ValueTask ReleaseOrDiscardReadConnectionAsync(DbConnection connection, bool healthy)
+        => healthy ? ReleaseReadConnectionAsync(connection) : DiscardReadConnectionAsync(connection);
+
+    /// <summary>丢弃并行读池内的连接（A1）：从池登记中移除并释放，不回空闲栈。非池连接（主连接、
+    /// 会话级读连接）不在池登记内，为空操作——它们的失效由 <see cref="InvalidateReadConnectionAsync"/> 处理。</summary>
+    internal async ValueTask DiscardReadConnectionAsync(DbConnection connection)
+    {
+        lock (_parallelReadPoolLock)
+        {
+            if (_parallelReadConnections is null || !_parallelReadConnections.Remove(connection)) return;
+        }
+        try { await connection.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception exception) { _ = exception; }
+    }
+
     /// <summary>读路径统一命令创建（ARCH-001 收口，2026-10-06）：路由判据按序——
     /// ① 事务活动期走主连接（读未提交数据 + 事务归属；与 QueryBuilder 活动事务守卫同语义）；
     /// ② 并行读作用域内走作用域池（特性语义：作用域内每个只读操作持独立连接；事务与作用域
@@ -1020,7 +1036,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private sealed class ReadCommandLease(DataSession<TProvider> session, DbCommand command, DbConnection? pooledConnection)
         : IAsyncDisposable
     {
+        private bool _healthy;
+
         public DbCommand Command { get; } = command;
+
+        /// <summary>读操作成功完成（结果已完整消费）后调用（A1）。未调用即视为失败路径：
+        /// 池连接在释放时被丢弃而非归还，避免失败后的连接状态被后续读复用。</summary>
+        public void MarkHealthy() => _healthy = true;
+
+        /// <summary>撤销健康标记（A1）：流式枚举在 reader 成功打开后先标记健康（早终止消费
+        /// 属正常路径），读取阶段抛出时撤销——此后连接状态不可信，释放时丢弃。</summary>
+        public void MarkFailed() => _healthy = false;
 
         public async ValueTask DisposeAsync()
         {
@@ -1033,7 +1059,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             finally
             {
                 if (pooledConnection is not null)
-                    await session.ReleaseReadConnectionAsync(pooledConnection).ConfigureAwait(false);
+                    await session.ReleaseOrDiscardReadConnectionAsync(pooledConnection, _healthy).ConfigureAwait(false);
             }
         }
     }
