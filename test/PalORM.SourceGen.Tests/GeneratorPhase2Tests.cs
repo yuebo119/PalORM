@@ -1549,6 +1549,41 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    public async Task CopyRowWrite_DateOnlyTimeOnlyColumns_EmittedWithTypedWrites()
+    {
+        // P2-2（2026-10-12 全量重读扩面）：DateOnly → WriteDateOnly、TimeOnly → WriteTimeOnly
+        //（Npgsql 6+ 的 PG date/time 即 DateOnly/TimeOnly）；含 DateOnly/TimeOnly 但无其他
+        // 不支持列（TimeSpan 等）的实体不再整体回退参数池。nullable 分支 null→WriteNull、
+        // 非 null 侧 .Value 解包（NeedsValueUnwrap 对非 string/bytes 定型方法自动适用）。
+        const string source = """
+            using System;
+            using PalORM;
+            [Table("copy_dot_probe")]
+            public sealed partial class CopyDotEntity
+            {
+                [Key] public long Id { get; set; }
+                [Column("d")] public DateOnly D { get; set; }
+                [Column("t")] public TimeOnly T { get; set; }
+                [Column("nd")] public DateOnly? Nd { get; set; }
+                [Column("nt")] public TimeOnly? Nt { get; set; }
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string commandFactory = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("CommandFactory", StringComparison.Ordinal))];
+
+        await Assert.That(commandFactory).Contains("CopyWriteRow");
+        // 自增键不参与 INSERT：D/T/Nd/Nt 的 COPY 序号为 0/1/2/3
+        await Assert.That(commandFactory).Contains("sink.WriteDateOnly(0, entity.D)");
+        await Assert.That(commandFactory).Contains("sink.WriteTimeOnly(1, entity.T)");
+        await Assert.That(commandFactory).Contains("sink.WriteDateOnly(2, entity.Nd.Value)");
+        await Assert.That(commandFactory).Contains("sink.WriteNull(2)");
+        await Assert.That(commandFactory).Contains("sink.WriteTimeOnly(3, entity.Nt.Value)");
+        await Assert.That(commandFactory).Contains("sink.WriteNull(3)");
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
     public async Task SqlFile_GeneratedDoc_UsesRelativePath_NotAbsolute()
     {
         // E24（2026-10-12 确定性修复）：来源标注用特性声明的相对路径——绝对路径含开发机

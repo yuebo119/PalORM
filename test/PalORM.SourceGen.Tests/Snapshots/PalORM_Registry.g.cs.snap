@@ -64,7 +64,7 @@ internal static class PalORM_RegistryInitializer
                     insertNoReturning: false,
                     bindUpsertValues: (parameters, obj, off) => CommandFactory_global__AllTypesEntity_7f6c8145.BindUpsertValues(parameters, (global::AllTypesEntity)obj, off),
                     initInsertParameters: (parameters, off) => CommandFactory_global__AllTypesEntity_7f6c8145.InitInsertParameters(parameters, off),
-                    copyWriteRow: null,
+                    copyWriteRow: (sink, obj) => CommandFactory_global__AllTypesEntity_7f6c8145.CopyWriteRow(sink, (global::AllTypesEntity)obj),
                     buildDeleteKeyArray: (keys, start, count) => CommandFactory_global__AllTypesEntity_7f6c8145.BuildDeleteKeyArray(keys, start, count),
                     fillUpdateColumnArrays: (entities, start, count, arrays, arrayOffset) => CommandFactory_global__AllTypesEntity_7f6c8145.FillUpdateColumnArrays(entities, start, count, arrays, arrayOffset),
                     updateColumnArrayElementTypes: CommandFactory_global__AllTypesEntity_7f6c8145.UpdateColumnArrayElementTypes(),
