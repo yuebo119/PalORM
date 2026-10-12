@@ -1145,6 +1145,9 @@ internal sealed class ReusableQuerySlot
     public DbConnection? Connection;
     /// <summary>晋升判据：同 SQL 第 <see cref="PromotionThreshold"/> 次晋升（对齐 PL-2）。</summary>
     public int ServedOps;
+    /// <summary>最近一次被计数的 SQL 文本——形状切换时清零 ServedOps 的判据（C15，2026-10-12）：
+    /// 计数按形状后，交替形状永不晋升（原计数全体未命中使交替形态反复 Dispose+重建晋升命令）。</summary>
+    public string? LastCountedSql;
 
     /// <summary>同一 (实体类型, 操作) 的晋升阈值——低于此次数走新建路径（对齐 PL-2，
     /// 防"每操作一会话"的抛弃式用法泄漏命令）。</summary>

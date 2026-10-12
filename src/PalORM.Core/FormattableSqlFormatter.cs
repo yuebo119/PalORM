@@ -68,54 +68,28 @@ internal static class FormattableSqlFormatter
 
         // v4.1：删除丢弃的 CompositeFormat.Parse（纯浪费），改用 ValueStringBuilder（栈分配 + ArrayPool 兜底）
         var sb = new ValueStringBuilder(stackalloc char[256]);
-        // ITM-546：SQL 字符串字面量跟踪——@pN 落在 '...' 内是用户数据（'a@p1.com'/'%@p2%'），
-        // 必须原样透传；只有引号外的裸 @pN 才是手写占位符（T9/P2-44 拦截对象）。
-        bool inStringLiteral = false;
-        // ITM-902（r24）：PG 双引号引用标识符跟踪——"@p1col" 是合法列名，其中 @pN 文本
-        // 不是手写占位符。MySQL 默认 sql_mode 下 "..." 虽是字符串字面量，但字面量内容同属
-        // 用户数据——两种方言语义下拦截决策一致（双引号内不拦）。
-        bool inQuotedIdentifier = false;
+        // SQL 引号状态机（ITM-546/902 的统一化，C17 2026-10-12 全量审读重构）：
+        // 同一时刻至多一种引号活跃（'…' 字面量 / "…" 引用标识符），活跃引号内的另一种
+        // 引号是普通数据。原双布尔独立跟踪：'{"a":1}' 里的 " 会打开标识符态且永不关闭，
+        // 扫描状态卡死——其后裸 @pN 拦截与占位符替换对剩余文本全部失真。
+        // 引号内：''/"" 成对续写，其余字符（含 {N}/}/@pN）一律原样透传——引号内的花括号
+        // 是字面量数据（'{0}'、JSON 文本），此前被替换为 '@p0' 文本或误抛 FormatException。
+        // 引号外：{N}→@pN 替换、裸 @pN 拦截、孤立 } 拒绝。{{ }} 转义全局生效
+        //（与旧实现一致——引号内需要单个花括号仍用 '{{'/'}}' 转义）。
+        char activeQuote = '\0';
         try
         {
             for (int index = 0; index < format.Length; index++)
             {
                 char current = format[index];
-                if (current == '\'')
-                {
-                    if (inStringLiteral && index + 1 < format.Length && format[index + 1] == '\'')
-                    {
-                        sb.Append("''");   // SQL 的引号转义：仍在字面量内
-                        index++;
-                        continue;
-                    }
 
-                    inStringLiteral = !inStringLiteral;
-                    sb.Append(current);
-                    continue;
-                }
-
-                // ITM-902：双引号状态跟踪（"" 续写同单引号逻辑）
-                if (current == '"')
-                {
-                    if (inQuotedIdentifier && index + 1 < format.Length && format[index + 1] == '"')
-                    {
-                        sb.Append("\"\"");
-                        index++;
-                        continue;
-                    }
-
-                    inQuotedIdentifier = !inQuotedIdentifier;
-                    sb.Append(current);
-                    continue;
-                }
-
+                // {{ }} 转义全局生效（先于引号状态机——旧行为保持）
                 if (current == '{' && index + 1 < format.Length && format[index + 1] == '{')
                 {
                     sb.Append('{');
                     index++;
                     continue;
                 }
-
                 if (current == '}' && index + 1 < format.Length && format[index + 1] == '}')
                 {
                     sb.Append('}');
@@ -123,7 +97,36 @@ internal static class FormattableSqlFormatter
                     continue;
                 }
 
-                // v4.1：单独的 } 不是合法的转义（}} 才是）--替代被删除的 CompositeFormat.Parse 校验
+                if (current == '\'' || current == '"')
+                {
+                    if (activeQuote == '\0')
+                    {
+                        activeQuote = current;
+                    }
+                    else if (current == activeQuote)
+                    {
+                        if (index + 1 < format.Length && format[index + 1] == activeQuote)
+                        {
+                            sb.Append(current);   // 引号内成对续写（''/""）
+                            sb.Append(current);
+                            index++;
+                            continue;
+                        }
+                        activeQuote = '\0';       // 引号闭合
+                    }
+                    // 活跃引号内的另一种引号是数据，原样落盘
+                    sb.Append(current);
+                    continue;
+                }
+
+                // 引号内其余字符原样透传（含 @pN 与花括号——T9 拦截与占位符替换都不适用）
+                if (activeQuote != '\0')
+                {
+                    sb.Append(current);
+                    continue;
+                }
+
+                // v4.1：引号外单独的 } 不是合法的转义（}} 才是）
                 if (current == '}')
                     throw new FormatException("Formattable SQL has an unescaped '}' that is not part of a '}}' escape.");
 
@@ -133,7 +136,7 @@ internal static class FormattableSqlFormatter
                     // （ParameterNameCache 生成物）——手写字面量占位符在 PG 上得驱动
                     // "there is no parameter $1"响亮失败，在 Microsoft.Data.Sqlite 上却按未绑定
                     // NULL 静默返回空集（实测复现），同一错输入两方言两形态，故在此统一拦掉。
-                    if (current == '@' && !inStringLiteral && !inQuotedIdentifier && index + 2 < format.Length
+                    if (current == '@' && index + 2 < format.Length
                         && format[index + 1] == 'p' && char.IsAsciiDigit(format[index + 2]))
                         throw new InvalidOperationException(
                             $"Formattable SQL contains the literal text '@p…' at position {index}, " +
