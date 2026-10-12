@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 🔬 调研：P2-1 方言定型行工厂与 P1-3 形状哈希增量化（分析关账，不做）
+
+- **P2-1（方言定型行工厂，按阅读 DBDataReader 虚分发的每列每行成本核算后关闭）**：
+  DbDataReader 的列 getter 调用是<b>单态虚调用</b>（运行时恒为同一驱动的 sealed 重写），
+  分支预测近乎全额命中 + 现代 JIT 的守卫去虚化可将其还原为直接调用并内联；现实的
+  每列增量约 0~3ns，20 列宽行约 0~60ns/行。对照 QueryAll/SQLite 的行成本（µs 量级）
+  占比 1~3%，低于 5% 不做线；远程 PG 上更被网络与解析淹没。DateTimeOffset/TimeSpan/
+  byte[]/TimeOnly 的泛型 GetFieldValue&lt;T&gt; 与 EF Core Npgsql 物化器同形态（其直读
+  驱动具体型获的正是同一虚分发消除，收益同一量级），无独立改进空间。重启触发条件：
+  PerfHub QueryAll/WideQueryAll 剖面显示物化为首要热点（P0/P1/P2-2 落地后重录基线时复核）。
+- **P1-3（cons list 节点携带累积形状哈希，实施前核算撤销）**：方案阶段预估"省去
+  BuildSql 每查询的子句串全量哈希"，实施前核算发现总哈希量不变——节点哈希在
+  AddClause 时计算 vs BuildSql 时计算都是每子句一次 string.GetHashCode（.NET 字符串
+  不缓存哈希），单次执行的查询两形态总工作量逐位相同；唯一受益形态是同一 builder
+  多次 BuildSql（DryRun+执行，罕见）。复杂度净增、收益趋零，撤销不做。
+
 ### ⚡ 性能：P2-2 copyWriter 扩面至 DateOnly/TimeOnly（定型 COPY 写入覆盖面扩大）
 
 - **扩面**：IBinaryRowSink 增 `WriteDateOnly`/`WriteTimeOnly` 定型方法，生成器谓词放开
