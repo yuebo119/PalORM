@@ -1517,6 +1517,38 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    public async Task CopyRowWrite_ByteAndCharColumns_EmittedWithWidenedMapping()
+    {
+        // R4（2026-10-12 扩面）：byte → WriteInt16（PG SMALLINT 直写）、char → WriteString
+        //（值表达式包 .ToString()）；含 byte/char 但无其他不支持列的实体不再整体回退参数池。
+        const string source = """
+            using PalORM;
+            [Table("copy_widen_probe")]
+            public sealed partial class CopyWidenEntity
+            {
+                [Key] public long Id { get; set; }
+                [Column("b")] public byte B { get; set; }
+                [Column("c")] public char C { get; set; }
+                [Column("n")] public char? N { get; set; }
+                [Column("s")] public string S { get; set; } = "";
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string commandFactory = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("CommandFactory", StringComparison.Ordinal))];
+
+        await Assert.That(commandFactory).Contains("CopyWriteRow");
+        // 自增键不参与 INSERT：B/C/N/S 的 COPY 序号为 0/1/2/3
+        await Assert.That(commandFactory).Contains("sink.WriteInt16(0, entity.B)");
+        await Assert.That(commandFactory).Contains("sink.WriteString(1, entity.C.ToString())");
+        // nullable char：null 分流 WriteNull，非 null 侧 ToString（char?.ToString() 在非空
+        // 分支等价 char.ToString()）
+        await Assert.That(commandFactory).Contains("sink.WriteString(2, entity.N.ToString())");
+        await Assert.That(commandFactory).Contains("sink.WriteNull(2)");
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
     public async Task SqlFile_GeneratedDoc_UsesRelativePath_NotAbsolute()
     {
         // E24（2026-10-12 确定性修复）：来源标注用特性声明的相对路径——绝对路径含开发机

@@ -7,8 +7,15 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider>
     where TProvider : IDbProvider
 {
-    /// <summary>见 DataSession 主文档。</summary>
-    public async ValueTask<long> CountAsync<T>(FormattableString? where = null, CancellationToken ct = default) where T : class, new()
+    /// <summary>见 DataSession 主文档。（R4 预热包装同 GetAsync。）</summary>
+    public ValueTask<long> CountAsync<T>(FormattableString? where = null, CancellationToken ct = default) where T : class, new()
+    {
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return CountEntryAsync<T>(where, ct);
+    }
+
+    private async ValueTask<long> CountEntryAsync<T>(FormattableString? where, CancellationToken ct) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
@@ -103,7 +110,13 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>SUM 聚合。空表/全过滤时 SUM 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
-    public async ValueTask<decimal> SumAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    public ValueTask<decimal> SumAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    {
+        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        return SumEntryAsync<T>(expression, ct);
+    }
+
+    private async ValueTask<decimal> SumEntryAsync<T>(FormattableString expression, CancellationToken ct) where T : class, new()
     {
         object? r = await ExecuteAggregateScalarAsync<T>("SUM", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? 0m : Convert.ToDecimal(r, System.Globalization.CultureInfo.InvariantCulture);
@@ -112,21 +125,39 @@ public sealed partial class DataSession<TProvider>
     /// <summary>MAX 聚合。TValue 限 IConvertible 基元类型（数值/字符串/DateTime）；
     /// Guid/DateOnly/枚举等经 Convert.ChangeType 会抛 InvalidCastException。
     /// TValue 可为可空值类型（如 int?）——底层类型解包见 <see cref="ConvertScalar{T}"/>（ITM-711）。</summary>
-    public async ValueTask<TValue?> MaxAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    public ValueTask<TValue?> MaxAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    {
+        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        return MaxEntryAsync<T, TValue>(expression, ct);
+    }
+
+    private async ValueTask<TValue?> MaxEntryAsync<T, TValue>(FormattableString expression, CancellationToken ct) where T : class, new()
     {
         object? r = await ExecuteAggregateScalarAsync<T>("MAX", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? default : ConvertScalar<TValue>(r);
     }
 
     /// <summary>MIN 聚合。TValue 限制同 MaxAsync。</summary>
-    public async ValueTask<TValue?> MinAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    public ValueTask<TValue?> MinAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    {
+        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        return MinEntryAsync<T, TValue>(expression, ct);
+    }
+
+    private async ValueTask<TValue?> MinEntryAsync<T, TValue>(FormattableString expression, CancellationToken ct) where T : class, new()
     {
         object? r = await ExecuteAggregateScalarAsync<T>("MIN", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? default : ConvertScalar<TValue>(r);
     }
 
     /// <summary>AVG 聚合。空表/全过滤时 AVG 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
-    public async ValueTask<double> AvgAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    public ValueTask<double> AvgAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
+    {
+        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        return AvgEntryAsync<T>(expression, ct);
+    }
+
+    private async ValueTask<double> AvgEntryAsync<T>(FormattableString expression, CancellationToken ct) where T : class, new()
     {
         object? r = await ExecuteAggregateScalarAsync<T>("AVG", expression, ct).ConfigureAwait(false);
         return r is null or DBNull ? 0d : Convert.ToDouble(r, System.Globalization.CultureInfo.InvariantCulture);
@@ -271,7 +302,14 @@ public sealed partial class DataSession<TProvider>
     /// SELECT 列序必须与实体列声明序一致；同类型列错位会静默交换数据。
     /// 避免 <c>SELECT *</c>（依赖物理表列序）——请显式 <c>SELECT col1, col2, ...</c> 按实体声明序列出，
     /// 或使用列序由编译期保证的 <c>From&lt;T&gt;()</c> 查询。见 ADR-A。</para></summary>
-    public async ValueTask<List<T>> QueryAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
+    public ValueTask<List<T>> QueryAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
+        where T : class, new()
+    {
+        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        return QueryEntryAsync<T>(sql, readFromReplica, ct);
+    }
+
+    private async ValueTask<List<T>> QueryEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
@@ -340,7 +378,13 @@ public sealed partial class DataSession<TProvider>
     /// <para><b>类型支持范围</b>（与 MaxAsync/MinAsync 一致）：<typeparamref name="T"/> 限 IConvertible 基元类型
     /// （数值/bool/string/DateTime）及其 Nullable；Guid/枚举/DateOnly 等非 IConvertible 目标在类型不完全匹配时
     /// 抛 InvalidCastException——此类值请以 string 取回后自行 Parse。</para></summary>
-    public async ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
+    public ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
+    {
+        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        return ScalarEntryAsync<T>(sql, readFromReplica, ct);
+    }
+
+    private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);

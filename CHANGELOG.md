@@ -4,6 +4,29 @@
 
 ## [未发布]
 
+### ⚡ 性能：剩余三项收口（读路径 Enter 预热 + copyWriter 类型面扩至 byte/char + D23 关账）
+
+- **读路径 Enter 预热（R4）**：读入口的 Enter 写 AsyncLocal 落在 async 体内不回流调用方，
+  稳态每读重付一次 ExecutionContext 拷贝。探针 readprewarm A/B 实锤（SQLite 长会话
+  GetByKey：872 → 800 B/op，精确 -72B/op）。按写路径 step16-P1 同型（非 async 薄入口 +
+  `*EntryAsync` 内核）推广到 GetAsync/GetAllAsync/CountAsync/Sum/Max/Min/Avg/Query/
+  Scalar 与 From&lt;T&gt;() 管线的 ToListAsync/FirstOrDefaultAsync/ToPageAsync 共 13 个读入口。
+- **copyWriter 类型面扩至 byte/char（R4）**：byte → WriteInt16（PG 无 tinyint，byte 列 DDL
+  即 SMALLINT，short 直写语义精确，隐式 widening 零转换发射）；char → WriteString（值
+  表达式包 ToString()，含 nullable char 的 null→WriteNull 分流）。含 byte/char 且无其他
+  不支持列的实体从整体回退参数池改为定型 COPY 写入（值类型格装箱归零）。边界登记：
+  DateOnly/TimeOnly/TimeSpan 维持不支持（无对应定型方法，实体回退参数池）。真库 PG
+  COPY 往返测试锁定（含中文 char 与 null 分支）。
+- **D23 通知循环关账（文档化登记）**：每等待周期一份 linked CTS + WaitAsync 定时器是
+  NOTIF-001 正确性修复的有意代价（前形态复用单 CTS 重臂——CTS 一经取消不可复用，
+  空闲通道静默死亡；与 DbBatch 探针实锤的驱动绑定清理同族）。周期按通知到达或心跳
+  间隔计费，无高频 LISTEN 负载证据，EPSL 触发条件不满足，不做（注释落锚）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 557/557 · SourceGen 235/235
+  （+1 CopyWriteRow 扩面锁定测试；既有快照零变化——AllTypesEntity 含 DateOnly/TimeOnly
+  列仍在回退面内，扩面由新生成器测试覆盖）· Integration 真库 281/281（+1 PG COPY
+  byte/char 往返）· gate 32/32 · verify-ai fast 21/21 · tech-debt 14/14。
+
 ### ⚡ 性能：S4 生成器包（方言门控发射 + 绑定委托去重）+ DbBatch 复用门禁关账
 
 - **PG 专属方法族按 PalORMTargetDialects 门控发射**：COPY 定型行写入器、删除键数组

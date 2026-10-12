@@ -22,7 +22,16 @@ public static class QueryBuilderExtensions
     /// <summary>执行查询并返回全部实体列表。
     /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
     /// 未命中则执行查询并将副本写入缓存。</para></summary>
-    public static async ValueTask<List<T>> ToListAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    public static ValueTask<List<T>> ToListAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    {
+        // R4（2026-10-12）：读预热（写路径 step16-P1 同型）——Enter 的 AsyncLocal 写落在
+        // 调用方持久 EC，体内守卫命中免写（每读省一次 EC 拷贝，探针 readprewarm A/B -72B/op）
+        if (builder._operationState.OwnerPrewarmed)
+            builder._operationState.PrewarmCurrentOperationOwner();
+        return ToListEntryAsync(builder, ct);
+    }
+
+    private static async ValueTask<List<T>> ToListEntryAsync<T>(QueryBuilder<T> builder, CancellationToken ct) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operationLease =
             builder._operationState.EnterReadOnly();
@@ -371,7 +380,14 @@ public static class QueryBuilderExtensions
 
     /// <summary>返回第一行实体，无结果返回 null。
     /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para></summary>
-    public static async ValueTask<T?> FirstOrDefaultAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    public static ValueTask<T?> FirstOrDefaultAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    {
+        if (builder._operationState.OwnerPrewarmed)
+            builder._operationState.PrewarmCurrentOperationOwner();
+        return FirstOrDefaultEntryAsync(builder, ct);
+    }
+
+    private static async ValueTask<T?> FirstOrDefaultEntryAsync<T>(QueryBuilder<T> builder, CancellationToken ct) where T : class, new()
     {
         var limited = builder;
         limited._take = 1;
@@ -416,8 +432,16 @@ public static class QueryBuilderExtensions
     /// 审计型拦截器不会看到 COUNT SQL；② builder 上已设的 <c>Skip()</c> 被忽略（键集分页以
     /// lastValue 锚点续页，OFFSET 语义不适用）；③ 用户先行的 <c>Take()</c> 同被
     /// pageSize 覆写（r9-S-B/r10-N2 补交付——双覆写契约显式化）。</para>
-    public static async ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
+    public static ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue = default, bool descending = true, CancellationToken ct = default) where T : class, new()
+    {
+        if (builder._operationState.OwnerPrewarmed)
+            builder._operationState.PrewarmCurrentOperationOwner();
+        return ToPageEntryAsync(builder, pageSize, orderBy, lastValue, descending, ct);
+    }
+
+    private static async ValueTask<(List<T> Rows, long Total)> ToPageEntryAsync<T, TKey>(QueryBuilder<T> builder,
+        int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue, bool descending, CancellationToken ct) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operationLease =
             builder._operationState.EnterReadOnly();
