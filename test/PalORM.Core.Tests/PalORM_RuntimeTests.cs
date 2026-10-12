@@ -7,6 +7,9 @@ public sealed class PalORM_RuntimeTests
     private sealed class DuplicateFragmentEntity;
     private sealed class InconsistentFragmentEntity;
     private sealed class MutableFragmentEntity;
+    private sealed class MergedViewEntity;
+
+    private static readonly string[] MergedViewExpectedColumns = ["merged_col"];
 
     [Test]
     public async Task Register_MergesMultipleFragmentsIntoFrozenSnapshots()
@@ -93,6 +96,33 @@ public sealed class PalORM_RuntimeTests
         CrudMetadata metadata = PalORM_Runtime.CrudMetadatas[typeof(MutableFragmentEntity)];
         await Assert.That(metadata.InsertColumns[0]).IsEqualTo("original");
         await Assert.That(metadata.UpsertColumns[0]).IsEqualTo("original");
+    }
+
+    [Test]
+    public async Task Register_BuildsMergedEntityInfoView_ConsistentWithSourceDictionaries()
+    {
+        // P1-2（2026-10-12 全量重读）：合并视图 _entityInfo 的完整性与一致性锁定——
+        // From<T>/GetAsync/GetAllAsync 的热路径单查由此视图供数，键集缺失或字段错位
+        // 会让三入口的行为在热路径与冷路径（旧三查）之间分叉。
+        _ = new MergedViewEntity();
+        PalORM_Runtime.Register(CreateFragment<MergedViewEntity>("merged_view_t", "merged_col"));
+
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        await Assert.That(state._entityInfo.ContainsKey(typeof(MergedViewEntity))).IsTrue();
+
+        EntityRuntimeInfo info = state._entityInfo[typeof(MergedViewEntity)];
+        // 与源字典逐位一致：工厂/表名/列名同源，CRUD 元数据与能力标志随视图携带
+        await Assert.That(info.TableName).IsEqualTo("merged_view_t");
+        await Assert.That(info.ColumnNames).IsEquivalentTo(MergedViewExpectedColumns);
+        await Assert.That(ReferenceEquals(info.RowFactory, PalORM_Runtime.RowFactories[typeof(MergedViewEntity)])).IsTrue();
+        await Assert.That(ReferenceEquals(info.TableName, PalORM_Runtime.TableNames[typeof(MergedViewEntity)])).IsTrue();
+        CrudMetadata sourceCrud = PalORM_Runtime.CrudMetadatas[typeof(MergedViewEntity)];
+        await Assert.That(info.Crud.BindInsert).IsEqualTo(sourceCrud.BindInsert);
+        await Assert.That(info.Crud.InsertColumns).IsEquivalentTo(sourceCrud.InsertColumns);
+        await Assert.That(info.Features).IsEqualTo(PalORM_Runtime.EntityFeatures[typeof(MergedViewEntity)]);
+
+        // 模块初始化器注册的全部实体都在合并视图内（键集 = TableNames 全集）
+        await Assert.That(state._entityInfo.Count).IsEqualTo(state._tableNames.Count);
     }
 
     private static RegistryFragment CreateFragment<TEntity>(

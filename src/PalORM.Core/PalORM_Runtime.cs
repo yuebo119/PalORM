@@ -78,6 +78,29 @@ public sealed class RegistryFragment
     public IReadOnlyList<Type>? TableMigrationOrder { get; init; }
 }
 
+/// <summary>P1-2（2026-10-12 全量重读）：实体热路径元数据的合并视图——把
+/// <c>From&lt;T&gt;</c>/GetAsync/GetAllAsync 原先的三次独立字典查找
+///（RowFactories/TableNames/ColumnNames）收敛为一次；CRUD 元数据与能力标志一并携带，
+/// 供 GetByKey 晋升判定与过滤判定免二次查找。Register 时由既有字典构建（键集 = TableNames，
+/// 三个源字典经 Register 的键集校验对实体类型恒同时存在），读取零额外开销。</summary>
+public sealed class EntityRuntimeInfo
+{
+    /// <summary>行读取工厂委托（装箱为 object，调用方按实体类型还原泛型）。</summary>
+    public required object RowFactory { get; init; }
+
+    /// <summary>数据库表名。</summary>
+    public required string TableName { get; init; }
+
+    /// <summary>列名只读快照。</summary>
+    public required IReadOnlyList<string> ColumnNames { get; init; }
+
+    /// <summary>编译期能力标志（软删/租户）。</summary>
+    public required EntityFeatures Features { get; init; }
+
+    /// <summary>聚合 CRUD 元数据（值拷贝，注册期一次）。</summary>
+    public required CrudMetadata Crud { get; init; }
+}
+
 /// <summary>编译时注册表。各模型程序集的 ModuleInitializer 通过 <see cref="Register"/> 合并片段。</summary>
 /// <remarks>
 /// 注册在锁内构造完整不可变状态，并通过一次引用交换发布；外部调用方只能读取快照。
@@ -262,6 +285,22 @@ public static class PalORM_Runtime
                     current._tableMigrationOrder, fragment.TableMigrationOrder)
             };
 
+            // P1-2：合并视图在全部源字典定型后从 next 构建（键集 = TableNames；三个源字典经
+            // 上方键集校验对实体类型恒同时有值，GetValueOrDefault 的缺省值仅是防御形态）。
+            var entityInfo = new Dictionary<Type, EntityRuntimeInfo>(next._tableNames.Count);
+            foreach (KeyValuePair<Type, string> pair in next._tableNames)
+            {
+                entityInfo[pair.Key] = new EntityRuntimeInfo
+                {
+                    RowFactory = next._rowFactories[pair.Key],
+                    TableName = pair.Value,
+                    ColumnNames = next._columnNames[pair.Key],
+                    Features = next._entityFeatures.GetValueOrDefault(pair.Key),
+                    Crud = next._crudMetadatas.GetValueOrDefault(pair.Key),
+                };
+            }
+            next._entityInfo = entityInfo.ToFrozenDictionary();
+
             Volatile.Write(ref _state, next);
         }
     }
@@ -337,6 +376,10 @@ public static class PalORM_Runtime
         internal FrozenDictionary<Type, EntityFeatures> _entityFeatures { get; init; } = FrozenDictionary<Type, EntityFeatures>.Empty;
         internal FrozenDictionary<Type, IReadOnlyDictionary<string, string>> _sensitiveColumnMasks { get; init; }
             = FrozenDictionary<Type, IReadOnlyDictionary<string, string>>.Empty;
+        // P1-2：合并视图由 Register 在源字典定型后填充——init-only 属性无法支持
+        // "构建自同批合并结果"的两步形态（private set 对外围类不可见），故用 internal 字段。
+        internal FrozenDictionary<Type, EntityRuntimeInfo> _entityInfo
+            = FrozenDictionary<Type, EntityRuntimeInfo>.Empty;
         internal Type[]? _tableMigrationOrder { get; init; }
     }
 }

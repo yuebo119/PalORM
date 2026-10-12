@@ -31,16 +31,15 @@ public sealed partial class DataSession<TProvider>
 
         // v3.1：单次 Volatile.Read 复用——替代三次独立属性访问（每个属性各自触发 fence）。
         // 单查询固定开销下降 ~2 次内存屏障（与 state 快照合并方案一致）。
+        // P1-2（2026-10-12 全量重读）：三查合一——合并视图 EntityInfo 一次取回工厂/表名/列名
+        //（原 RowFactories/TableNames/ColumnNames 三次独立查找）；未命中回退旧三查形态产出
+        // 原有精确错误消息（[Projection] 类型等冷路径，消息兼容由 ThrowFromNotRegistered 承担）。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._rowFactories.TryGetValue(typeof(T), out var factory))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' is not registered. Add [Table] attribute.");
-        if (!state._tableNames.TryGetValue(typeof(T), out var tableName))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no [Table] attribute.");
-        if (!state._columnNames.TryGetValue(typeof(T), out var columnNames))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated column metadata.");
+        if (!state._entityInfo.TryGetValue(typeof(T), out EntityRuntimeInfo? info))
+            ThrowFromNotRegistered<T>(state);
+        object factory = info.RowFactory;
+        string tableName = info.TableName;
+        IReadOnlyList<string> columnNames = info.ColumnNames;
 
         // v5.6：读连接提供者从实例字段取——会话级复用（含 ReadSessionSetupSql 与 Provider
         // 初始化钩子），且方法组不在此处新建闭包。
@@ -68,7 +67,8 @@ public sealed partial class DataSession<TProvider>
 
         // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）
-        EntityFeatures features = GetEntityFeatures<T>();
+        // P1-2：能力标志取合并视图（与上方元数据同一 state 快照，单快照纪律不破坏）
+        EntityFeatures features = info.Features;
         if (!ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)
             builder.AddDefaultFilter(SoftDeleteFilterCondition);
         if (tenantId is not null && !ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
@@ -90,6 +90,23 @@ public sealed partial class DataSession<TProvider>
                 : "__all__";
         }
         return builder;
+    }
+
+    /// <summary>P1-2：合并视图未命中时的冷路径——按旧三查次序复现原有精确错误消息
+    ///（未注册类型报 "is not registered"、[Projection] 类型报 "has no [Table]"）。
+    /// 热路径不经过本方法；消息兼容层，防既有调用方依赖异常文本。</summary>
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private static void ThrowFromNotRegistered<T>(PalORM_Runtime.RuntimeRegistryState state)
+        where T : class, new()
+    {
+        if (!state._rowFactories.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' is not registered. Add [Table] attribute.");
+        if (!state._tableNames.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no [Table] attribute.");
+        throw new InvalidOperationException(
+            $"Type '{typeof(T).Name}' has no generated column metadata.");
     }
 
     /// <summary>T6：取（或建）当前实体的租户过滤作用域——同类型命中缓存零分配。
@@ -350,7 +367,7 @@ public sealed partial class DataSession<TProvider>
     /// 负责复用判定与键值绑定。返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放；
     /// 读路径的 <see cref="DbDataReader"/> 由调用方 await using 释放——释放前不触碰本命令。</para></summary>
     private DbCommand? TryAcquireGetByKeyCommand<T>(
-        string commandText, object key, PalORM_Runtime.RuntimeRegistryState state)
+        string commandText, object key, CrudMetadata metadata)
         where T : class, new()
     {
         if (HasTenantFilter<T>())
@@ -376,7 +393,10 @@ public sealed partial class DataSession<TProvider>
             // C3（2026-10-11）：键值换算不再经从不执行的探针命令中转——生成器发射的
             // ConvertDeleteKey 与 BindDelete 的 @p0 值同一真源（DeleteKeyValueExpression），
             // 就地写入 Pool[0]（与命令参数集合持有同一参数实例）。
-            pooledKey.Value = convertKey(key);
+            // P1-4（2026-10-12 全量重读）：long 键走 identity 快路径——long 主键的
+            // ConvertDeleteKey 恒为 Convert.ToInt64（恒等映射），复用调用方已装箱的实例
+            // 省去换算产出的第二个 24B 装箱；非 long 键照走委托（语义同一真源不变）。
+            pooledKey.Value = key is long ? key : convertKey(key);
             return reused;
         }
 
@@ -385,9 +405,8 @@ public sealed partial class DataSession<TProvider>
             return null;
 
         // 晋升门禁：单键转换委托缺失（复合主键 / 旧生成器程序集）永不晋升——每次调用走
-        // 下方外的新建路径。读调用方传入的注册表快照（ITM-703 单快照纪律）。
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata promoteMetadata)
-            || promoteMetadata.ConvertDeleteKey is not { } promotedConverter)
+        // 下方外的新建路径。P1-2：元数据经合并视图由调用方传入（同一 state 快照，ITM-703 单快照纪律）。
+        if (metadata.ConvertDeleteKey is not { } promotedConverter)
             return null;
 
         DbCommand cmd = CreateCommand();
@@ -425,7 +444,7 @@ public sealed partial class DataSession<TProvider>
     /// 同一真源）。租户实体/复合主键/旧生成器程序集不晋升（与 GetByKey 槽同门禁）；
     /// 返回的命令归会话所有，调用方不得释放。</summary>
     private DbCommand? TryAcquireDeleteCommand<T>(
-        string commandText, object key, PalORM_Runtime.RuntimeRegistryState state)
+        string commandText, object key, CrudMetadata metadata)
         where T : class, new()
     {
         if (HasTenantFilter<T>())
@@ -440,7 +459,8 @@ public sealed partial class DataSession<TProvider>
             if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
                 reused.CommandText = commandText;
             // R-UNNESTB：不触碰参数集合，就地写同一实例的 Value
-            pooledKey.Value = convertKey(key);
+            // P1-4：long 键 identity 快路径（同 GetByKey 槽——省换算的第二个装箱）
+            pooledKey.Value = key is long ? key : convertKey(key);
             return reused;
         }
 
@@ -448,8 +468,8 @@ public sealed partial class DataSession<TProvider>
         if (_deleteWriteOps < CommandReusePromotionThreshold)
             return null;
 
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata promoteMetadata)
-            || promoteMetadata.ConvertDeleteKey is not { } promotedConverter)
+        // P1-2：元数据经调用方传入（合并视图，同一 state 快照）
+        if (metadata.ConvertDeleteKey is not { } promotedConverter)
             return null;
 
         DbCommand cmd = CreateCommand();
@@ -754,7 +774,7 @@ public sealed partial class DataSession<TProvider>
         // r19/ITM-703：单快照贯穿（Delete 侧同口径）；存在性检查与 Insert/Update/Save 对齐走
         // CrudMetadatas——legacy 无方言 CommandSqls 已从生成物移除，不再作存在性代理。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.ContainsKey(typeof(T)))
+        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata deleteMetadata))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
         CommandSqlSet sqls = GetCommandSqls<T>(state);
 
@@ -779,7 +799,7 @@ public sealed partial class DataSession<TProvider>
             ? GetTenantWrappedSql<T>(DataSessionCache.DeleteWithTenantSqlCache, sqls.Delete)
             : sqls.Delete;
         if (!deleteHasTenant
-            && TryAcquireDeleteCommand<T>(deleteCommandText, key, state) is { } reusedDelete)
+            && TryAcquireDeleteCommand<T>(deleteCommandText, key, deleteMetadata) is { } reusedDelete)
             return await ExecuteWriteRowsAsync(reusedDelete, ct).ConfigureAwait(false);
 
         await using DbCommand delCmd = CreateCommand();
@@ -869,10 +889,9 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
+        // P1-2：三查合一（From<T> 同型）——单查取回工厂/表名/列名，Crud 随合并视图携带（晋升判定免二次查找）。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
-            || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
-            || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
+        if (!state._entityInfo.TryGetValue(typeof(T), out EntityRuntimeInfo? info))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
         // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
@@ -883,9 +902,9 @@ public sealed partial class DataSession<TProvider>
             // ITM-798，无需事务判定）。原闭包捕获 6 变量 + this，直通时约 250-300B/op 纯浪费。
             ResilienceExecutor parallelExecutor = Volatile.Read(ref _resilience);
             if (parallelExecutor.IsPassThrough)
-                return await ParallelGetByKeyCoreAsync<T>(factory, columnNames, tableName, key, ct).ConfigureAwait(false);
+                return await ParallelGetByKeyCoreAsync<T>(info.RowFactory, info.ColumnNames, info.TableName, key, ct).ConfigureAwait(false);
             return await parallelExecutor.ExecuteAsync(
-                token => ParallelGetByKeyCoreAsync<T>(factory, columnNames, tableName, key, token).AsTask(),
+                token => ParallelGetByKeyCoreAsync<T>(info.RowFactory, info.ColumnNames, info.TableName, key, token).AsTask(),
                 ct).ConfigureAwait(false);
         }
 
@@ -895,9 +914,9 @@ public sealed partial class DataSession<TProvider>
         // 浪费；非直通分支才构造捕获委托（重试需要）。
         ResilienceExecutor getByKeyExecutor = Volatile.Read(ref _resilience);
         if (getByKeyExecutor.IsPassThrough || GetActiveTransaction() is not null)
-            return await GetByKeyCoreAsync<T>(state, factory, columnNames, tableName, key, ct).ConfigureAwait(false);
+            return await GetByKeyCoreAsync<T>(info.Crud, info.RowFactory, info.ColumnNames, info.TableName, key, ct).ConfigureAwait(false);
         return await getByKeyExecutor.ExecuteAsync(
-            token => GetByKeyCoreAsync<T>(state, factory, columnNames, tableName, key, token).AsTask(),
+            token => GetByKeyCoreAsync<T>(info.Crud, info.RowFactory, info.ColumnNames, info.TableName, key, token).AsTask(),
             ct).ConfigureAwait(false);
     }
 
@@ -932,9 +951,10 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>GetAsync 主连接分支的执行核心（C10 抽出）：参数直传不捕获，供直通直调与
-    /// 弹性重试共用——语义与原内联闭包逐位一致（复用槽晋升/新建命令/单行物化）。</summary>
+    /// 弹性重试共用——语义与原内联闭包逐位一致（复用槽晋升/新建命令/单行物化）。
+    /// P1-2：首参由注册表快照改为 CRUD 元数据（合并视图携带，晋升判定免二次查找）。</summary>
     private async ValueTask<T?> GetByKeyCoreAsync<T>(
-        PalORM_Runtime.RuntimeRegistryState state, object factory,
+        CrudMetadata metadata, object factory,
         IReadOnlyList<string> columnNames, string tableName, object key, CancellationToken token)
         where T : class, new()
     {
@@ -946,7 +966,7 @@ public sealed partial class DataSession<TProvider>
         // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
         // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
         // 按命令实例生效，换命令即重编译）。
-        DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, state);
+        DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, metadata);
         if (reused is not null)
         {
             await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -979,18 +999,16 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 GetAsync 和 From<T> 对齐。
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
-            || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
-            || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
+        // P1-2：三查合一（From<T>/GetByKey 同型，合并视图一次取全）。
+        if (!PalORM_Runtime.CurrentState._entityInfo.TryGetValue(typeof(T), out EntityRuntimeInfo? info))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
         // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略（C10 直通直调，同 GetAsync）。
         ResilienceExecutor getAllExecutor = Volatile.Read(ref _resilience);
         if (getAllExecutor.IsPassThrough || GetActiveTransaction() is not null)
-            return await GetAllCoreAsync<T>(factory, columnNames, tableName, ct).ConfigureAwait(false);
+            return await GetAllCoreAsync<T>(info.RowFactory, info.ColumnNames, info.TableName, ct).ConfigureAwait(false);
         return await getAllExecutor.ExecuteAsync(
-            token => GetAllCoreAsync<T>(factory, columnNames, tableName, token).AsTask(),
+            token => GetAllCoreAsync<T>(info.RowFactory, info.ColumnNames, info.TableName, token).AsTask(),
             ct).ConfigureAwait(false);
     }
 
