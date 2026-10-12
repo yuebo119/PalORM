@@ -4,6 +4,32 @@
 
 ## [未发布]
 
+### ⚡ 性能：S4 生成器包（方言门控发射 + 绑定委托去重）+ DbBatch 复用门禁关账
+
+- **PG 专属方法族按 PalORMTargetDialects 门控发射**：COPY 定型行写入器、删除键数组
+  构造器、UNNEST 逐列数组三件套 ×2 在未目标 PostgreSQL 的构建中不再发射（生成物
+  体积与启动委托数双降），注册侧同轮置 null——运行时回退路径既有（UNNEST 缺席回落
+  VALUES 形态、数组删除回落 IN 占位符、COPY 缺席回落参数池）。缺省（未声明属性）
+  恒全发射，CommandFactory 生成物与既有逐位一致（快照零变化）。三方言共有的
+  `ConvertDeleteKey`（GetByKey/Delete 复用槽）不门控。生成器测试锁定 mysql-only
+  目标下的裁剪形态与编译零错。
+- **绑定委托单份发射**：`draft.BindInsert/BindUpdate` 与 `CrudBindings` 此前各写一份
+  等价 lambda（每实体 2 个冗余委托实例 + 双份 IL），改为分块方法内显式类型局部变量
+  建一次两处引用（变量名带实体后缀防 CS0128）。
+- **DbBatch 跨轮复用门禁关账（探针实证 FAIL，勿重开）**：版本化实体 BulkUpdate 的
+  PG 逐条 DbBatch 路径候选优化（100 组命令/参数跨轮复用就地写值）经真库探针证伪：
+  同一 NpgsqlBatch 第二次 ExecuteNonQueryAsync 即被驱动响亮拒绝（"Missing type info
+  or binding info"，执行后驱动清空参数绑定信息）——R-UNNESTB 族风险以响亮失败形态
+  实锤，候选优化关闭。产品路径（A 臂）五轮 1000 行全对，基线 30.7µs/1892B 每行在案。
+- **证伪撤销**：DbType 策略"三面收敛"——读码证实映射（DbTypeFor）与谓词
+  （NeedsPoolDbTypeHint）本就是单一真源，三处调用点的差异是 B21/N4 文档化的有意
+  策略面（单行/INSERT 池全写、UPDATE/UPSERT 池按 PG-4 选择性写），收敛属化妆性重构。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 557/557 · SourceGen 234/234
+  （+1 方言门控测试；快照仅 Registry 一件预期变化，CommandFactory/RowFactory/
+  Migration 逐位零变化）· Integration 真库 280/280 · gate 32/32 · verify-ai fast
+  21/21 · tech-debt 14/14 · dev 推送后 CI 绿（run 38248754265）。
+
 ### ⚡ 性能：第三轮全量审读（R3）S1-S3 三包落地 + 一项自引入回归修复
 
 第三轮七代理并行深读（异步状态机/分配清单/生成物运行时形态/驱动交互/横切清点五个新切入角）的产出：

@@ -1472,6 +1472,51 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    public async Task DialectGating_NonPgTarget_OmitsPgFamily_AndRegistryPassesNull()
+    {
+        // R3-S4（2026-10-12）：PalORMTargetDialects=mysql 时——CommandFactory 不发射 PG 专属
+        // 方法族（COPY 写入器 / 删除键数组 / UNNEST 逐列数组三件套 ×2），注册侧对应参数为
+        // null（运行时回退路径既有）；三方言共有的 ConvertDeleteKey 不门控。缺省全发射由
+        // 快照基线锁定（本套件快照未设该属性，逐位包含全家族）。
+        const string source = """
+            using PalORM;
+            [Table("gate_probe")]
+            public sealed partial class GateProbeEntity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("qty")] public int Qty { get; set; }
+            }
+            """;
+        var options = new Dictionary<string, string>
+        {
+            ["build_property.PalORMTargetDialects"] = "mysql",
+        };
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "DialectGateConsumer", options, []);
+
+        string commandFactory = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("CommandFactory", StringComparison.Ordinal))];
+        await Assert.That(commandFactory).DoesNotContain("CopyWriteRow");
+        await Assert.That(commandFactory).DoesNotContain("BuildDeleteKeyArray");
+        await Assert.That(commandFactory).DoesNotContain("FillUpdateColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("FillUpsertColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("CreateUpdateColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("CreateUpsertColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("ColumnArrayElementTypes");
+        await Assert.That(commandFactory).Contains("ConvertDeleteKey");
+
+        string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
+        await Assert.That(registry).Contains("copyWriteRow: null");
+        await Assert.That(registry).Contains("buildDeleteKeyArray: null");
+        await Assert.That(registry).Contains("fillUpdateColumnArrays: null");
+        await Assert.That(registry).Contains("fillUpsertColumnArrays: null");
+
+        // 编译零错误：门控后生成物不得有悬空方法引用（CS0103 等）
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
     public async Task SqlFile_GeneratedDoc_UsesRelativePath_NotAbsolute()
     {
         // E24（2026-10-12 确定性修复）：来源标注用特性声明的相对路径——绝对路径含开发机

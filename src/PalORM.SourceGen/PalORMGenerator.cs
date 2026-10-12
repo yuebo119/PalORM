@@ -51,24 +51,26 @@ public sealed class PalORMGenerator : IIncrementalGenerator
             // WithComparer 让管道用值相等判断，提高增量缓存命中率（大项目构建时间进一步降低）。
             .WithComparer(EqualityComparer<TableModel>.Default);
 
-        // v5.0 优化：合并 3 次独立 RegisterSourceOutput 为 1 次（减少增量管道回调 3→1）。
-        // RowFactory / CommandFactory / Migration 互不依赖，可在一个回调内生成全部源文件。
-        context.RegisterSourceOutput(tableModels, static (spc, model) =>
-        {
-            spc.AddSource(CreateStableHintName("RowFactory", model.EntityTypeName), RowFactoryEmitter.Generate(model));
-            spc.AddSource(CreateStableHintName("CommandFactory", model.EntityTypeName), CommandFactoryEmitter.Generate(model));
-            spc.AddSource(CreateStableHintName("Migration", model.EntityTypeName), MigrationEmitter.Generate(model));
-        });
-
         // ── 方言选择性发射（GEN-008，2026-09-23）──
         // build_property.PalORMTargetDialects（逗号分隔：postgresql/mysql/sqlite）；缺省/空 = 三方言全发射。
         // 经 CompilerVisibleProperty 传入（同 PalORMAutoTagging）。未目标方言不发射 SQL 载荷，
         // 运行时取到即响亮失败（CommandSqlByDialect.Get 守卫）。
+        // R3-S4（2026-10-12）：定义前移——CommandFactory 的逐模型发射也需要方言（PG 专属
+        // 方法族门控），与 Registry 共用同一 provider。
         var dialectSelection = context.AnalyzerConfigOptionsProvider.Select(
             static (provider, _) => DialectSelection.Parse(
                 provider.GlobalOptions.TryGetValue("build_property.PalORMTargetDialects", out string? v)
                     ? v
                     : null));
+
+        // v5.0 优化：合并 3 次独立 RegisterSourceOutput 为 1 次（减少增量管道回调 3→1）。
+        // RowFactory / CommandFactory / Migration 互不依赖，可在一个回调内生成全部源文件。
+        context.RegisterSourceOutput(tableModels.Combine(dialectSelection), static (spc, pair) =>
+        {
+            spc.AddSource(CreateStableHintName("RowFactory", pair.Left.EntityTypeName), RowFactoryEmitter.Generate(pair.Left));
+            spc.AddSource(CreateStableHintName("CommandFactory", pair.Left.EntityTypeName), CommandFactoryEmitter.Generate(pair.Left, pair.Right));
+            spc.AddSource(CreateStableHintName("Migration", pair.Left.EntityTypeName), MigrationEmitter.Generate(pair.Left));
+        });
 
         // Registry: ModuleInitializer (Phase 1)
         context.RegisterSourceOutput(tableModels.Collect().Combine(dialectSelection), static (spc, input) =>
