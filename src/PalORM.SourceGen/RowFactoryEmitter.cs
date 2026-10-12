@@ -6,7 +6,9 @@ namespace PalORM.SourceGen;
 /// <summary>RowFactory 代码生成器——为每个 [Table] 类生成静态 Func&lt;DbDataReader, T&gt; Read 委托。
 /// <para><b>v3.1 性能优化 1</b>: emit 从 <c>sealed class : IRowFactory&lt;T&gt;</c> 迁移到
 /// <c>static class + static readonly Func&lt;DbDataReader, T&gt; Read</c>，调用方直接委托 invoke，
-/// 消除接口虚分发（JIT 无法跨接口边界内联）。.NET 8+ JIT 对 static delegate invoke 有更好内联支持。</para></summary>
+/// 消除接口虚分发（JIT 无法跨接口边界内联）。委托 invoke 本身仍是间接调用：
+/// 目标为 static 方法时现代 JIT <b>可能</b>经受保护的去虚化内联，但这不是保证——
+/// 收益的确定部分是去掉接口分发层，不是内联本身。</para></summary>
 internal static class RowFactoryEmitter
 {
     internal static string Generate(TableModel model)
@@ -36,8 +38,8 @@ internal static class RowFactoryEmitter
         if (converterCount > 0)
             sb.AppendLine();
 
-        // v3.1 性能优化 1：Read 委托——static readonly，由 JIT 特化为直接调用（消除接口虚分发）。
-        // static lambda 保证无闭包捕获，JIT 生成代码与直接方法调用等价。
+        // v3.1 性能优化 1：Read 委托——static readonly，消除接口虚分发（委托调用目标固定，
+        // 现代 JIT 可能经去虚化内联，但不应作为性能假设依赖）。static lambda 保证无闭包捕获。
         sb.AppendLine($"    internal static readonly global::System.Func<global::System.Data.Common.DbDataReader, {model.EntityTypeName}> Read");
         sb.AppendLine($"        = static (global::System.Data.Common.DbDataReader r) =>");
         sb.AppendLine("    {");

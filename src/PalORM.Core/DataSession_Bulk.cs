@@ -1302,8 +1302,11 @@ public partial class DataSession<TProvider>
         // InsertCoreAsync 的物化/回填无法在多值形态下按行还原）；非默认键行
         // （bulk-merge 的主流场景：既有键的重复执行更新）改为**多行 UPSERT**，
         // 每批一条语句。原实现 N 行 = N 次往返（每行一次 SaveCoreAsync），
-        // 10K 行在远程库（RTT ~1ms）约 10s，集合化后 PG 约 12 条语句（65535 参数/批）、
-        // SQLite 约 31 条（999 参数/批，20 列实体 49 行/批；大值经 A/B 证伪见 SqlLimits）。
+        // 10K 行在远程库（RTT ~1ms）约 10s。集合化后的批宽（BatchUpsertAsync 的
+        // maxRowsPerBatch）：PG 1000 行/批（PostgreSqlMaxRowsPerUpsertBatch，分配纪律）、
+        // MySQL 1000 行/批（MySqlOdkuMaxRowsPerBatch，探针二十）、SQLite 受 999 参数
+        // 上限按列数分批（SqlLimits.MaxBindParametersFor）——10K 行 PG/MySQL 约 10 条语句，
+        // SQLite 语句数 = ⌈列数×10K ÷ 999⌉ 量级（大值经 A/B 证伪见 SqlLimits）。
         // 单行语义保持：ON CONFLICT/ON DUPLICATE KEY 与 SaveCoreAsync 的单行
         // upsert 用同一谓词列集（UpsertColumns，含 PK）；[ConcurrencyCheck] 实体
         // 维持逐条路径——SaveCoreAsync 会以同消息拒绝（UPSERT 无法尊重乐观锁，ITM-503）。

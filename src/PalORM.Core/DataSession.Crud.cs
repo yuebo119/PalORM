@@ -803,6 +803,7 @@ public sealed partial class DataSession<TProvider>
                 string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
                     HasTenantFilter<T>(), _ignoreFilters);
                 DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
+                bool healthy = false;
                 try
                 {
                     await using DbCommand cmd = connection.CreateCommand();
@@ -811,12 +812,14 @@ public sealed partial class DataSession<TProvider>
                     BindGeneratedKeyParameter<T>(cmd, key);
                     BindDefaultFilterParameters<T>(cmd);
                     await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-                    return await reader.ReadAsync(token).ConfigureAwait(false)
+                    T? row = await reader.ReadAsync(token).ConfigureAwait(false)
                         ? ((Func<DbDataReader, T>)factory)(reader) : default;
+                    healthy = true;
+                    return row;
                 }
                 finally
                 {
-                    await ReleaseReadConnectionAsync(connection).ConfigureAwait(false);
+                    await ReleaseOrDiscardReadConnectionAsync(connection, healthy).ConfigureAwait(false);
                 }
             }, ct).ConfigureAwait(false);
         }
@@ -881,6 +884,7 @@ public sealed partial class DataSession<TProvider>
             List<T> list = await ResultListReader.ReadAllAsync(
                 reader, (Func<DbDataReader, T>)factory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
             RecordMaterializedCount<T>(list.Count);
+            lease.MarkHealthy();
             return list;
         }, ct).ConfigureAwait(false);
     }

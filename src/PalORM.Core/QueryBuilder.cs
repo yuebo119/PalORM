@@ -30,8 +30,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// 最多多一次读连接重建，无害）。未配置读路由时为 null。</summary>
     internal readonly Func<ValueTask>? _readConnInvalidator;
     /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——执行路径在读操作完成后调用；
-    /// 会话侧仅在并行读作用域内对池内连接生效（其余为空操作）。</summary>
-    internal readonly Func<DbConnection, ValueTask>? _readConnReturner;
+    /// 会话侧仅在并行读作用域内对池内连接生效（其余为空操作）。第二参数为读是否成功完成（A1）：
+    /// 失败则丢弃池连接而非归还。</summary>
+    internal readonly Func<DbConnection, bool, ValueTask>? _readConnReturner;
     internal readonly SqlDialect _dialect;
     /// <summary>r5-S2：会话隔离级别（WithIsolationLevel 透传，null=驱动默认）。</summary>
     internal readonly System.Data.IsolationLevel? _isolationLevel;
@@ -642,9 +643,10 @@ public struct QueryBuilder<T> where T : class, new()
         => _readConnInvalidator is null ? default : _readConnInvalidator();
 
     /// <summary>归还并行读连接（ARCH-001，2026-09-23）：读操作执行完成后调用，把作用域内池连接
-    /// 交回空闲栈（会话侧仅在并行读作用域内对池内连接生效，其余为空操作）。</summary>
-    internal ValueTask ReleaseReadConnectionAsync(DbConnection connection)
-        => _readConnReturner is null ? default : _readConnReturner(connection);
+    /// 交回空闲栈；读失败（<paramref name="healthy"/> 为 false）则丢弃（A1）。
+    /// 会话侧仅在并行读作用域内对池内连接生效，其余为空操作。</summary>
+    internal ValueTask ReleaseReadConnectionAsync(DbConnection connection, bool healthy)
+        => _readConnReturner is null ? default : _readConnReturner(connection, healthy);
 
     internal DbTransaction? GetActiveTransaction()
     {
@@ -1386,5 +1388,5 @@ internal readonly record struct QueryBuilderContext<T>(
     IQueryCache? QueryCache = null,
     bool ValidateColumnOrder = false,
     Func<ValueTask>? ReadConnInvalidator = null,
-    Func<DbConnection, ValueTask>? ReadConnReturner = null,
+    Func<DbConnection, bool, ValueTask>? ReadConnReturner = null,
     ReusableQuerySlot? QuerySlot = null) where T : class, new();

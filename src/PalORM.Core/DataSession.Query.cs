@@ -49,6 +49,7 @@ public sealed partial class DataSession<TProvider>
         // A2（2026-10-01 全 API 逐项轮）：直调重载消调用点 async lambda 的闭包与状态机
         // （与 P2-1 ExecuteWriteRowsAsync 同型口径）。
         object? scalar = await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
+        lease.MarkHealthy();
         // ITM-637 同型面：COUNT null 静默 0 掩蔽驱动异常——与 ToPageAsync 同口径显式报错
         if (scalar is null)
             throw new InvalidOperationException(
@@ -143,7 +144,9 @@ public sealed partial class DataSession<TProvider>
         BindDefaultFilterParameters<T>(cmd);
         // A2（2026-10-01 全 API 逐项轮）：直调重载覆盖 Sum/Max/Min/Avg 四个聚合入口
         // （CountAsync 同点改）。
-        return await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
+        object? result = await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
+        lease.MarkHealthy();
+        return result;
     }
 
     /// <summary>A2（2026-10-01 全 API 逐项轮）：只读标量直调重载——省调用点 async lambda
@@ -206,10 +209,25 @@ public sealed partial class DataSession<TProvider>
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        // A1：reader 成功打开即证明连接本轮可用——先标记健康（早终止消费如 First/Single 族
+        // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
+        // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
+        lease.MarkHealthy();
         var tf = (Func<DbDataReader, T>)factory;
         bool firstRow = true;
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        while (true)
         {
+            bool hasRow;
+            try
+            {
+                hasRow = await reader.ReadAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                lease.MarkFailed();
+                throw;
+            }
+            if (!hasRow) break;
             if (firstRow)
             {
                 ValidateColumnOrder<T>(reader);
@@ -266,10 +284,12 @@ public sealed partial class DataSession<TProvider>
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         // ADR-A 首行列序校验经 onFirstRow 保持"仅在有首行时执行一次"；关闭校验时传 null
         //（Validate 关闭即空操作，省掉每次调用的委托判断）。static lambda 按泛型实例缓存，零分配。
-        return await ResultListReader.ReadAllAsync(
+        List<T> list = await ResultListReader.ReadAllAsync(
             reader, (Func<DbDataReader, T>)factory, 16, ct,
             _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
             .ConfigureAwait(false);
+        lease.MarkHealthy();
+        return list;
     }
 
     /// <summary>ADR-A 首行列名校验：结果列名与实体声明序列名不匹配即抛异常，
@@ -326,6 +346,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
         object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        lease.MarkHealthy();
         if (result is null or DBNull) return default;
         if (result is T t) return t;
         return ConvertScalar<T>(result);
