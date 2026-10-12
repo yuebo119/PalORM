@@ -52,7 +52,8 @@ public sealed partial class DataSession<TProvider>
                 TProvider.Dialect, (Func<DbDataReader, T>)factory, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
                 _operationState, Volatile.Read(ref _resilience), _options.CommandTimeout,
-                _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
+                _isolationLevel,  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
+                TProvider.CreateArrayParameter),  // P0-2：WhereIn 的数组形态（Provider 无数组能力时接口默认 null → 占位符回退）
             tableName, columnNames, _readConnProvider,
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
             _readConnReturner, _querySlot));

@@ -605,6 +605,11 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
 
     private static string RewriteAny(string sql)
     {
+        // P0-2（WhereIn 数组形态）：!= ALL(@p) → NOT IN (SELECT value FROM json_each(@p))
+        // ——与 = ANY 的改写同构（NOT IN 的 NULL 语义与 != ALL 逐位等价，见 TryAddArrayInClause 注释）。
+        if (sql.Contains("!= ALL(", StringComparison.Ordinal))
+            sql = RewriteAll(sql);
+
         const string marker = "= ANY(";
         int at = sql.IndexOf(marker, StringComparison.Ordinal);
         if (at < 0) return sql;
@@ -622,6 +627,29 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
         return string.Concat(
             sql[..at],
             "IN (SELECT value FROM json_each(", parameterName, "))",
+            sql[(nameEnd + 1)..]);
+    }
+
+    /// <summary>P0-2：<c>!= ALL(@p)</c> → <c>NOT IN (SELECT value FROM json_each(@p))</c>。
+    /// NOT IN 子查询含 NULL 行时全行过滤——与 != ALL 的 NULL 元素语义逐位等价（SQLite 可跑）。</summary>
+    private static string RewriteAll(string sql)
+    {
+        const string marker = "!= ALL(";
+        int at = sql.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0) return sql;
+
+        int nameStart = at + marker.Length;
+        int nameEnd = nameStart;
+        while (nameEnd < sql.Length
+            && (char.IsLetterOrDigit(sql[nameEnd]) || sql[nameEnd] is '@' or '$' or '_'))
+        {
+            nameEnd++;
+        }
+        if (nameEnd >= sql.Length || sql[nameEnd] != ')') return sql;
+
+        return string.Concat(
+            sql[..at],
+            "NOT IN (SELECT value FROM json_each(", sql[nameStart..nameEnd], "))",
             sql[(nameEnd + 1)..]);
     }
 
