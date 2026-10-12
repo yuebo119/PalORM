@@ -688,6 +688,15 @@ public struct QueryBuilder<T> where T : class, new()
             return cmd;
         }
 
+        // C15（2026-10-12）：计数按形状——被计数 SQL 与上一被计数 SQL 不同时清零。原实现
+        // 计数全体未命中：交替形状（A/B/A/B…）在总第 3 次操作后每次未命中都晋升，晋升命令
+        // 随形状交替反复 Dispose+重建（比不晋升更差）。按形状计数后交替形态永不晋升，保持
+        // 每操作新建命令；单形状连续查询的晋升时点不变。
+        if (!string.Equals(slot.LastCountedSql, sql, StringComparison.Ordinal))
+        {
+            slot.ServedOps = 0;
+            slot.LastCountedSql = sql;
+        }
         slot.ServedOps++;
         if (slot.ServedOps < ReusableQuerySlot.PromotionThreshold)
             return null;
@@ -1186,12 +1195,58 @@ public struct QueryBuilder<T> where T : class, new()
         if (hasUser)
         {
             if (hasDefault) builder.Append("AND (");
-            AppendClauseKind(ref builder, QueryClauseKind.Where, separator: null);
+            AppendUserWhereClauses(ref builder);
             if (hasDefault)
             {
                 builder.TrimEnd();
                 builder.Append(") ");
             }
+        }
+    }
+
+    /// <summary>组装用户 WHERE 子句组（C16 优先级修复，2026-10-12 全量审读）。
+    /// 子句逐个带 "AND "/"OR " 前缀直接拼接时，<c>Where(A).OrWhere(B).Where(C)</c> 产出
+    /// <c>(A) OR (B) AND (C)</c>——SQL 求值为 <c>A OR (B AND C)</c>，与链式调用直觉
+    /// <c>((A) OR (B)) AND (C)</c> 不符（本方法文档承诺的用户组形态同样未实现）。
+    /// 修复：AND 前缀子句出现在顶屋 OR 之后时，为已累积组补开括号、在该 AND 前补闭括号；
+    /// 纯 AND 链、纯 OR 链与 OR 收尾链的 SQL 文本逐字不变（既有基线零扰动）。
+    /// 本方法只在形状缓存未命中的组装路径执行，两遍扫描与中间集合不进命中热路径。</summary>
+    private void AppendUserWhereClauses(ref ValueStringBuilder builder)
+    {
+        List<QueryClause> userClauses = [];
+        foreach (QueryClause clause in MaterializeClauses())
+        {
+            if (clause.Kind == QueryClauseKind.Where)
+                userClauses.Add(clause);
+        }
+        if (userClauses.Count == 0) return;
+
+        // 第一遍：标记需要补的括号。openAtStart 只在首位开一次——后续再遇 AND-after-OR
+        // 时闭括号推进即可（外层括号已覆盖更早的段），避免逐层嵌套膨胀。
+        bool topHasOr = false;
+        bool openAtStart = false;
+        bool[] closeAfter = new bool[userClauses.Count];
+        for (int i = 0; i < userClauses.Count; i++)
+        {
+            string sql = userClauses[i].Sql;
+            if (sql.StartsWith("OR ", StringComparison.Ordinal))
+            {
+                topHasOr = true;
+            }
+            else if (topHasOr && sql.StartsWith("AND ", StringComparison.Ordinal))
+            {
+                openAtStart = true;
+                closeAfter[i - 1] = true;
+                topHasOr = false;
+            }
+        }
+
+        if (openAtStart) builder.Append('(');
+        for (int i = 0; i < userClauses.Count; i++)
+        {
+            builder.Append(userClauses[i].Sql);
+            if (closeAfter[i]) builder.Append(") ");
+            else builder.Append(' ');
         }
     }
 

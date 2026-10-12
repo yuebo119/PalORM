@@ -1286,6 +1286,10 @@ public partial class DataSession<TProvider>
     /// 调用方的对账逻辑会静默错；② PG/SQLite 的 ON CONFLICT 每行计 1、恰等于实体数，
     /// 处理实体数是唯一跨方言可预测口径；③ 混合路径（默认键逐条 INSERT + 批量 UPSERT）
     /// 下两种驱动口径不可加总。BulkMergeSetBasedTests 已锁定本口径。</returns>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "分区循环含三条路径（默认键集合化/默认键逐行回退/既有键缓冲）+ rowByRow 旁支，"
+            + "均为路由判定不可再拆（拆出需传递 operation lease 与事务上下文，跨方法状态面更大）。")]
     public async ValueTask<long> BulkMergeAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {
@@ -1328,16 +1332,29 @@ public partial class DataSession<TProvider>
                     return affected;
                 }
 
-                // B6（2026-10-01 全 API 逐项轮）：惰性分配——全默认键（自增新实体，逐行
-                // SaveCoreAsync）场景不付 count 容量的引用数组（2 万行约 160KB）；
-                // BatchUpsertAsync 自带空列表短路（Count == 0 返回 0）。
+                // B6（2026-10-01 全 API 逐项轮）：惰性分配——全默认键（自增新实体）场景不付
+                // count 容量的引用数组（2 万行约 160KB）；两个批次方法自带空列表短路。
+                // B6 落地（2026-10-12）：默认键行集合化——RETURNING 方言（PG/SQLite）改走
+                // 多行 INSERT..RETURNING 按行序回填（BatchInsertReturningAsync），N 次往返收敛为
+                // N/批；MySQL 保持逐行（LAST_INSERT_ID 多行回填需"批内自增值连续"假设，
+                // auto_increment_increment/触发器/混合分配都会破坏，MySQL 文档只保证首值）。
+                bool batchDefaultKeyInserts = TProvider.SupportsReturningClause
+                    && mergeMetadata.InsertColumns.Count > 0;
                 List<T>? upsertBatch = null;
+                List<T>? insertBatch = null;
                 foreach (T entity in entities)
                 {
                     if (mergeMetadata.HasDefaultKey(entity))
                     {
-                        await SaveCoreAsync(entity, operation.Owner, token).ConfigureAwait(false);
-                        affected++;
+                        if (batchDefaultKeyInserts)
+                        {
+                            (insertBatch ??= new List<T>(entities.Count)).Add(entity);
+                        }
+                        else
+                        {
+                            await SaveCoreAsync(entity, operation.Owner, token).ConfigureAwait(false);
+                            affected++;
+                        }
                     }
                     else
                     {
@@ -1345,11 +1362,102 @@ public partial class DataSession<TProvider>
                     }
                 }
 
+                if (insertBatch is not null)
+                    affected += await BatchInsertReturningAsync(
+                        transaction, insertBatch, mergeMetadata, mergeState, token).ConfigureAwait(false);
                 affected += await BatchUpsertAsync(
                     transaction, upsertBatch ?? [], mergeMetadata, mergeState, token).ConfigureAwait(false);
                 return affected;
             },
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>B6 落地（2026-10-12）：BulkMerge 默认键行的集合化插入——RETURNING 方言
+    /// （PG/SQLite）多行 INSERT ... RETURNING 主键，按行序回填实体，N 次往返收敛为 N/批。
+    /// <para><b>行序映射</b>：RETURNING 行序按 VALUES 顺序（EF Core Npgsql 多行
+    /// INSERT..RETURNING 的同构形态）；返回行数与批行数不符时明确失败，不静默错位回填。</para>
+    /// <para><b>回填时点</b>：经 <see cref="BackfillGeneratedId"/>——自开事务延迟到提交后回放，
+    /// 与单行 SaveCoreAsync 路径同语义（TX-004）。</para>
+    /// <para><b>已知边界</b>：本路径每次批间重建参数（BindInsert 直绑）——相对原 N 次往返已是
+    /// 数量级收敛；参数池化留待 PerfHub 门禁显示需要时再做（&lt;5% 不做线）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "批循环（分批/绑行）+ RETURNING 读循环（行数核对、ID 回填双守卫）各为"
+            + "不可拆的顺序语义；拆分需在方法间传递回填对位状态，正确性风险大于可读性收益。")]
+    private async Task<long> BatchInsertReturningAsync<T>(
+        DbTransaction transaction,
+        List<T> entities,
+        CrudMetadata metadata,
+        PalORM_Runtime.RuntimeRegistryState state,
+        CancellationToken ct) where T : class, new()
+    {
+        if (!state._tableNames.TryGetValue(typeof(T), out string? insertTableName))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no [Table] attribute.");
+        if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no primary key column; set-based insert requires one.");
+        state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill);
+
+        int columnCount = metadata.InsertColumns.Count;
+        int batchSize = Math.Max(1, Math.Min(
+            SqlLimits.MaxRowsPerBatch,
+            SqlLimits.MaxBindParametersFor(TProvider.Dialect) / columnCount));
+        string quotedTable = TProvider.QuoteIdentifier(insertTableName);
+        string quotedPk = TProvider.QuoteIdentifier(pkColumn);
+        string quotedColumns = string.Join(", ",
+            metadata.InsertColumns.Select(c => TProvider.QuoteIdentifier(c)));
+
+        long processed = 0;
+        for (int start = 0; start < entities.Count; start += batchSize)
+        {
+            int end = Math.Min(start + batchSize, entities.Count);
+            int rowCount = end - start;
+            // R-UNNESTB 纪律：命令逐批新建（fresh）而非跨批复用 + Parameters.Clear——PG
+            // auto-prepare 下「Clear + Add 新参数实例」会让驱动沿用 prepare 时的绑定值
+            //（mergearray 变体 C 实测）；批数 = N/批 上限 5000 行/批，新建成本可忽略。
+            await using DbCommand cmd = CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = BuildInsertReturningBatchSql(
+                quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
+            for (int row = start; row < end; row++)
+                metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
+
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            int returned = 0;
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                long? id = NormalizeGeneratedId(
+                    await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
+                if (id is { } generatedId && backfill is not null)
+                    BackfillGeneratedId(backfill, entities[start + returned], generatedId);
+                returned++;
+            }
+            if (returned != rowCount)
+                throw new InvalidOperationException(
+                    $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
+                    $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
+            processed += rowCount;
+        }
+        return processed;
+    }
+
+    /// <summary>多行 INSERT..RETURNING 语句构建（同步方法收栈缓冲生命周期，与
+    /// <see cref="MultiValueBulkInsert"/> 的 BuildBatchSql 同纪律——span 不跨 await）。</summary>
+    private static string BuildInsertReturningBatchSql(
+        string quotedTable, string quotedColumns, string quotedPk, int rowCount, int columnCount)
+    {
+        Span<char> sqlBuffer = stackalloc char[512];
+        var sb = new ValueStringBuilder(sqlBuffer);
+        try
+        {
+            MultiValueBulkInsert.AppendInsertStatement(
+                ref sb, quotedTable, quotedColumns, rowCount, columnCount);
+            sb.Append(" RETURNING ");
+            sb.Append(quotedPk);
+            return sb.ToString();
+        }
+        finally { sb.Dispose(); }
     }
 
     /// <summary>旧模型程序集回退路径：scratch 命令逐行 BindUpsert → 值拷贝进池（PL-3.2 抽出）。</summary>

@@ -435,7 +435,10 @@ public static class QueryBuilderExtensions
         // 与事务门禁可见该事务（此前直接 BeginTransactionAsync 自包含但登记缺席；若 Dispose/
         // 门禁依赖登记状态则为盲区）。外部事务已由其创建方登记，此处不重复发布。
         // r5-S2：自开事务 honoring 会话 WithIsolationLevel——原裸调 BeginTransactionAsync
-        // 恒驱动默认，Serializable/Snapshot 会话的分页一致性快照被静默降级
+        // 恒驱动默认，Serializable/Snapshot 会话的分页一致性快照被静默降级。
+        // 隔离实口径（2026-10-12 注明）：事务使 COUNT 与页查询在 MySQL RR / SQLite 延迟读
+        // 下看到同一快照；PG 默认 READ COMMITTED 下两条语句各取快照，Total 与页行可能
+        // 不一致——需要强一致请 WithIsolationLevel(Snapshot/Serializable)。
         DbTransaction transaction = existingTransaction
             ?? (paged._isolationLevel is { } iso
                 ? await paged._conn.BeginTransactionAsync(iso, ct).ConfigureAwait(false)
