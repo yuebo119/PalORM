@@ -46,6 +46,14 @@ public sealed partial class DataSession<TProvider>
             sql = GetCountComposedSql(typeof(T), filterForms, baseSql).WherePrefix
                 + FormatSqlWithParameters(where) + ")";
         }
+        // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接 + 非并行读形态）——
+        // 满批 COUNT 的 SQL 文本经组合句缓存恒稳定，晋升后每次调用省命令创建/释放与参数
+        // 集合重建。租户槽值随 WithTenant 刷新；就地写失败（形状/类型漂移）回退下方新建路径。
+        (bool countHandled, long reusedCountValue) = await TryCountViaReusableCommandAsync<T>(sql, where, ct)
+            .ConfigureAwait(false);
+        if (countHandled)
+            return reusedCountValue;
+
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
@@ -62,6 +70,29 @@ public sealed partial class DataSession<TProvider>
             throw new InvalidOperationException(
                 "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
         return scalar is long l ? l : Convert.ToInt64(scalar);
+    }
+
+    /// <summary>P1-1：CountAsync 的复用分支（从 CountEntryAsync 抽出，降 S3776）——
+    /// 槽命中且就地绑定成功时执行并返回 (true, 计数)；未命中/绑定失败返回 default，
+    /// 调用方回退新建命令路径。租户槽（@__tenant0）随命令持久存在，值每次就地刷新。</summary>
+    private async ValueTask<(bool Handled, long Count)> TryCountViaReusableCommandAsync<T>(
+        string sql, FormattableString? where, CancellationToken ct)
+        where T : class, new()
+    {
+        int tenantSlots = HasTenantFilter<T>() ? 1 : 0;
+        DbCommand? reused = TryAcquireReusableDirectCommand(sql);
+        if (reused is null || !TryBindFormattableValuesInPlace(reused, where, tenantSlots))
+            return default;
+        reused.Transaction = GetActiveTransaction();
+        reused.CommandTimeout = _options.CommandTimeoutSeconds;
+        if (tenantSlots > 0)
+            reused.Parameters[^1].Value = _tenantId;
+        object? scalar = await ExecuteReadScalarAsync(reused, ct).ConfigureAwait(false);
+        // ITM-637 同型面：COUNT null 静默 0 掩蔽驱动异常——与新建路径同口径显式报错
+        if (scalar is null)
+            throw new InvalidOperationException(
+                "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
+        return (true, scalar is long l ? l : Convert.ToInt64(scalar));
     }
 
     /// <summary>T4：取（或建）Count 的组合句（filter-only 全句 + where 前缀片段）。
@@ -170,6 +201,20 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<object?> ExecuteScalarAsync<T>(string sql, FormattableString original, CancellationToken ct)
         where T : class, new()
     {
+        // P1-1：直查族命令复用（A9 同型）——聚合全句由缓存片段拼接恒稳定（值相等）；
+        // 租户槽随命令持久，值就地刷新。就地写失败回退下方新建路径。
+        int aggregateTenantSlots = HasTenantFilter<T>() ? 1 : 0;
+        DbCommand? reusedAggregate = TryAcquireReusableDirectCommand(sql);
+        if (reusedAggregate is not null
+            && TryBindFormattableValuesInPlace(reusedAggregate, original, aggregateTenantSlots))
+        {
+            reusedAggregate.Transaction = GetActiveTransaction();
+            reusedAggregate.CommandTimeout = _options.CommandTimeoutSeconds;
+            if (aggregateTenantSlots > 0)
+                reusedAggregate.Parameters[^1].Value = _tenantId;
+            return await ExecuteReadScalarAsync(reusedAggregate, ct).ConfigureAwait(false);
+        }
+
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
@@ -234,40 +279,65 @@ public sealed partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
-        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
-        DbCommand cmd = lease.Command;
-        cmd.CommandText = FormatSqlWithParameters(sql);
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindFormattableParameters(cmd, sql);
-
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        // A1：reader 成功打开即证明连接本轮可用——先标记健康（早终止消费如 First/Single 族
-        // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
-        // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
-        lease.MarkHealthy();
-        var tf = (Func<DbDataReader, T>)factory;
-        bool firstRow = true;
-        while (true)
+        // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接 + 非读路由形态）。
+        // 流式枚举下 reader 在枚举期间持有，命令归槽所有不释放；单活动操作门禁保证槽命令
+        // 不被并发使用。就地写失败回退下方新建路径。
+        string streamCommandText = FormatSqlWithParameters(sql);
+        DbCommand? reusedStream = readFromReplica ? null : TryAcquireReusableDirectCommand(streamCommandText);
+        bool streamInPlace = reusedStream is not null && TryBindFormattableValuesInPlace(reusedStream, sql);
+        ReadCommandLease? lease = null;
+        try
         {
-            bool hasRow;
-            try
+            DbCommand cmd;
+            if (streamInPlace)
             {
-                hasRow = await reader.ReadAsync(ct).ConfigureAwait(false);
+                cmd = reusedStream!;
+                cmd.Transaction = GetActiveTransaction();
+                cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             }
-            catch (Exception)
+            else
             {
-                lease.MarkFailed();
-                throw;
+                lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+                cmd = lease.Command;
+                cmd.CommandText = streamCommandText;
+                cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                BindFormattableParameters(cmd, sql);
             }
-            if (!hasRow) break;
-            if (firstRow)
+
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            // A1：reader 成功打开即证明连接本轮可用——先标记健康（早终止消费如 First/Single 族
+            // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
+            // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
+            lease?.MarkHealthy();
+            var tf = (Func<DbDataReader, T>)factory;
+            bool firstRow = true;
+            while (true)
             {
-                ValidateColumnOrder<T>(reader);
-                firstRow = false;
+                bool hasRow;
+                try
+                {
+                    hasRow = await reader.ReadAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    lease?.MarkFailed();
+                    throw;
+                }
+                if (!hasRow) break;
+                if (firstRow)
+                {
+                    ValidateColumnOrder<T>(reader);
+                    firstRow = false;
+                }
+                yield return tf(reader);
             }
-            yield return tf(reader);
+        }
+        finally
+        {
+            if (lease is not null)
+                await lease.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -316,9 +386,25 @@ public sealed partial class DataSession<TProvider>
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
 
+        // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——reader 由 using 释放，
+        // 命令归槽所有不释放（下一次同形状查询的就地写值前提）；就地写失败回退下方新建路径。
+        string queryCommandText = FormatSqlWithParameters(sql);
+        DbCommand? reusedQuery = readFromReplica ? null : TryAcquireReusableDirectCommand(queryCommandText);
+        if (reusedQuery is not null && TryBindFormattableValuesInPlace(reusedQuery, sql))
+        {
+            reusedQuery.Transaction = GetActiveTransaction();
+            reusedQuery.CommandTimeout = _options.CommandTimeoutSeconds;
+            await using DbDataReader reusedReader = await reusedQuery.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            List<T> reusedList = await ResultListReader.ReadAllAsync(
+                reusedReader, (Func<DbDataReader, T>)factory, 16, ct,
+                _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
+                .ConfigureAwait(false);
+            return reusedList;
+        }
+
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
-        cmd.CommandText = FormatSqlWithParameters(sql);
+        cmd.CommandText = queryCommandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
 
@@ -387,15 +473,32 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——就地写失败回退下方新建路径
+        string scalarCommandText = FormatSqlWithParameters(sql);
+        DbCommand? reusedScalar = readFromReplica ? null : TryAcquireReusableDirectCommand(scalarCommandText);
+        if (reusedScalar is not null && TryBindFormattableValuesInPlace(reusedScalar, sql))
+        {
+            reusedScalar.Transaction = GetActiveTransaction();
+            reusedScalar.CommandTimeout = _options.CommandTimeoutSeconds;
+            object? reusedResult = await reusedScalar.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            return NormalizeScalarResult<T>(reusedResult);
+        }
+
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
-        cmd.CommandText = FormatSqlWithParameters(sql);
+        cmd.CommandText = scalarCommandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
         object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         lease.MarkHealthy();
+        return NormalizeScalarResult<T>(result);
+    }
+
+    /// <summary>P1-1：ScalarEntryAsync 两分支共用的结果归一（原内联尾段逐位提取）。</summary>
+    private static T? NormalizeScalarResult<T>(object? result)
+    {
         if (result is null or DBNull) return default;
-        if (result is T t) return t;
+        if (result is T typed) return typed;
         return ConvertScalar<T>(result);
     }
 
@@ -406,40 +509,66 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask<int> ExecuteAsync(FormattableString sql, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        await using DbCommand cmd = CreateCommand();
-        cmd.CommandText = FormatSqlWithParameters(sql);
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindFormattableParameters(cmd, sql);
-        // R3（v5.6.0）：拦截器非空才物化参数表与计时——与 SELECT 管线"空列表跳过"同口径。
-        // A7（2026-10-01 全 API 逐项轮）：计时改起始时间戳（与 QueryBuilderExtensions 管线同型）。
-        QueryContext context = default;
-        long? swStart = null;
-        if (_interceptors.Count > 0)
+        // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接形态）——重复执行的
+        // DDL/DML（建表迁移循环、分批 DELETE 等同文本形态）省命令创建/释放；就地写失败回退
+        // 新建路径。复用命令归槽所有（ownsCommand=false，不得释放），事务/超时每次重设。
+        string executeCommandText = FormatSqlWithParameters(sql);
+        DbCommand? reusedExecute = TryAcquireReusableDirectCommand(executeCommandText);
+        DbCommand cmd;
+        bool ownsCommand;
+        if (reusedExecute is not null && TryBindFormattableValuesInPlace(reusedExecute, sql))
         {
-            var parameters = new List<System.Data.Common.DbParameter>(cmd.Parameters.Count);
-            foreach (System.Data.Common.DbParameter parameter in cmd.Parameters) parameters.Add(parameter);
-            context = new QueryContext(cmd.CommandText, parameters);
-            swStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            QueryBuilderExtensions.NotifyInterceptorsOnBefore(_interceptors, context);
+            reusedExecute.Transaction = GetActiveTransaction();
+            reusedExecute.CommandTimeout = _options.CommandTimeoutSeconds;
+            cmd = reusedExecute;
+            ownsCommand = false;
         }
-        int affected;
+        else
+        {
+            cmd = CreateCommand();
+            cmd.CommandText = executeCommandText;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            BindFormattableParameters(cmd, sql);
+            ownsCommand = true;
+        }
         try
         {
-            affected = await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
-            // ITM-865（r23）：OnAfter 移入 try——拦截器 OnAfter 抛异常时同样经 OnError 通知
-            // 后上抛（与 ExecuteNonQueryAsync/ExecuteQueryAsync 口径一致；原形态在 try 外
-            // 直接逃逸，调用方会误判"执行失败"而实际 DML 已成功）。
-            if (swStart is not null)
+            // R3（v5.6.0）：拦截器非空才物化参数表与计时——与 SELECT 管线"空列表跳过"同口径。
+            // A7（2026-10-01 全 API 逐项轮）：计时改起始时间戳（与 QueryBuilderExtensions 管线同型）。
+            QueryContext context = default;
+            long? swStart = null;
+            if (_interceptors.Count > 0)
             {
-                QueryBuilderExtensions.NotifyInterceptorsOnAfter(_interceptors, context, swStart, affected);
+                var parameters = new List<System.Data.Common.DbParameter>(cmd.Parameters.Count);
+                foreach (System.Data.Common.DbParameter parameter in cmd.Parameters) parameters.Add(parameter);
+                context = new QueryContext(cmd.CommandText, parameters);
+                swStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                QueryBuilderExtensions.NotifyInterceptorsOnBefore(_interceptors, context);
             }
+            int affected;
+            try
+            {
+                affected = await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
+                // ITM-865（r23）：OnAfter 移入 try——拦截器 OnAfter 抛异常时同样经 OnError 通知
+                // 后上抛（与 ExecuteNonQueryAsync/ExecuteQueryAsync 口径一致；原形态在 try 外
+                // 直接逃逸，调用方会误判"执行失败"而实际 DML 已成功）。
+                if (swStart is not null)
+                {
+                    QueryBuilderExtensions.NotifyInterceptorsOnAfter(_interceptors, context, swStart, affected);
+                }
+            }
+            catch (Exception exception)
+            {
+                if (swStart is not null)
+                    QueryBuilderExtensions.NotifyInterceptorsOnError(_interceptors, context, exception);
+                throw;
+            }
+            return affected;
         }
-        catch (Exception exception)
+        finally
         {
-            if (swStart is not null)
-                QueryBuilderExtensions.NotifyInterceptorsOnError(_interceptors, context, exception);
-            throw;
+            if (ownsCommand)
+                await cmd.DisposeAsync().ConfigureAwait(false);
         }
-        return affected;
     }
 }

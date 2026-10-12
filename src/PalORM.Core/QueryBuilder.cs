@@ -670,45 +670,17 @@ public struct QueryBuilder<T> where T : class, new()
     /// KeyLookupCommandDiag（-504B/op、-2.57µs）。
     /// <para>R-UNNESTB（2026-10-02）：命中分支不再 Clear 参数集合——PG 连接串的 auto-prepare
     /// 调优（v5.0 阶段 3.1 默认开启）下，「Clear + Add 新参数实例」会让驱动沿用 prepare 时的
-    /// 绑定值（探针 mergearray 变体 C 实测；同实例就地写 Value 正常）。调用方经
-    /// <c>TryCopyParameterValues</c> 就地写值，形状漂移则保守回退新建命令。</para></summary>
+    /// 绑定值（探针 mergearray 变体 C 实测）。故复用命令的参数集合持久持有，命中时逐位置就地
+    /// 写 Value；形状漂移则保守回退新建命令。
+    /// P1-1（2026-10-12）：命中/计数/晋升逻辑收敛至 ReusableQuerySlot.TryAcquire 单一真源
+    ///（直查族命令复用共用同一段判据），本方法只保留 From&lt;T&gt; 管线的并行读守卫。</para></summary>
     internal DbCommand? TryAcquireReusableSelectCommand(DbConnection connection, string sql)
     {
         var slot = _querySlot;
         // 并行读作用域禁用：并发 reader 不能共用命令（各走新建 + 自持连接）
         if (slot is null || _operationState.ParallelReadsEnabled)
             return null;
-
-        // 命中：同 SQL 文本 + 同连接 → 交调用方就地写参数值
-        if (slot.Command is { } cmd
-            && slot.Connection is { } cmdConn
-            && ReferenceEquals(cmdConn, connection)
-            && string.Equals(slot.Sql, sql, StringComparison.Ordinal))
-        {
-            return cmd;
-        }
-
-        // C15（2026-10-12）：计数按形状——被计数 SQL 与上一被计数 SQL 不同时清零。原实现
-        // 计数全体未命中：交替形状（A/B/A/B…）在总第 3 次操作后每次未命中都晋升，晋升命令
-        // 随形状交替反复 Dispose+重建（比不晋升更差）。按形状计数后交替形态永不晋升，保持
-        // 每操作新建命令；单形状连续查询的晋升时点不变。
-        if (!string.Equals(slot.LastCountedSql, sql, StringComparison.Ordinal))
-        {
-            slot.ServedOps = 0;
-            slot.LastCountedSql = sql;
-        }
-        slot.ServedOps++;
-        if (slot.ServedOps < ReusableQuerySlot.PromotionThreshold)
-            return null;
-
-        // 晋升：替换旧命令即释放（单操作门禁保证无飞行 reader），新建并登记
-        slot.Command?.Dispose();
-        DbCommand promoted = connection.CreateCommand();
-        promoted.CommandText = sql;
-        slot.Sql = sql;
-        slot.Connection = connection;
-        slot.Command = promoted;
-        return promoted;
+        return slot.TryAcquire(connection, sql);
     }
 
     internal void AddDefaultFilter(string condition)
