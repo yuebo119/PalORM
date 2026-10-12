@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### ⚡ 性能：P0-1 ToPageAsync 的 PG 单往返默认路径（COUNT + 页 SELECT 一个 DbBatch）
+
+- **四次往返压成一次**：PG 默认形态（READ COMMITTED + 无外部事务 + 无拦截器/观测性 +
+  非 AsPrepared）下，键集分页的 COUNT 与页 SELECT 打进一个 `DbBatch` 单次协议往返——
+  原路径 BEGIN+COUNT+SELECT+COMMIT 四次往返中 BEGIN/COMMIT 两次在 RC 隔离下买不到任何
+  快照一致性（事务内两条语句各取快照，Total 与页行本就可能不一致），纯属开销；批内
+  两条语句的快照语义与原形态逐位一致。远程 PG（RTT 0.3~1ms）分页时延预期 −50~70%。
+- **门禁与回退**：强隔离（WithIsolationLevel(Snapshot/Serializable)）、外部事务、
+  拦截器/Tracing/Metrics（三段式与 QueryObservation 编排留在经典路径）、AsPrepared、
+  非 PG 方言（MySQL RR 快照有真实一致性价值、SQLite 本地事务便宜）全部走既有经典
+  事务路径；第三方 PG 方言连接的 DbBatch 能力按连接类型探测缓存（探测失败永久回退）。
+- **参数归属**：COUNT 与页查询的参数列表可能引用同一批子句参数对象，同一
+  DbParameter 实例不挂进两个 DbBatchCommand——COUNT 侧拷贝（典型 0~2 个），页侧独占。
+- **弹性**：批执行整体经会话弹性策略包裹（幂等读重试重建批与读取器；经典路径的页
+  查询同受覆盖，COUNT 原直连——两条语句同享覆盖是收窄而非放松）。
+
 ### ⚡ 性能：P0-2 WhereIn/WhereNotIn 的 PG 数组形态（= ANY / != ALL 单参数）
 
 - **数组形态查询路径补项**：UNNEST/ANY 族已在批量写路径全面数组化，查询路径的
@@ -36,7 +52,9 @@
   （复用调用方装箱实例，-24B/op；非 long 键照走 ConvertDeleteKey 委托）。
 
 - **验证**：ci.slnf 0W0E · Core 576/576（+9 直查复用行为锁定）· Integration 真库
-  285/285（+4 WhereIn 数组形态：行集等价三形态/大列表超批上限/NULL 语义两分支）。
+  290/290（+4 WhereIn 数组形态：行集等价三形态/大列表超批上限/NULL 语义两分支；
+  +5 P0-1 分页批路径：键集翻页逐位对齐经典路径/空表/软删过滤双语句/拦截器回退/MySQL
+  经典路径基线）。
 
 ### ⚡ 性能：剩余三项收口（读路径 Enter 预热 + copyWriter 类型面扩至 byte/char + D23 关账）
 
