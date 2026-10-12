@@ -555,6 +555,33 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>停止后台操作，释放连接。幂等。</summary>
+    /// <summary>所属连接池（非池化会话为 null）——DisposeAsync 在池化形态下走归还路径
+    ///（驻留 + 瞬态复位 + 入队），不关闭连接、不释放复用槽（PL-2/A9/P1-1 槽跨租用存活
+    /// 是池化的核心收益）。由 <see cref="DataSessionPool{TProvider}"/> 在创建后立即注入。</summary>
+    internal DataSessionPool<TProvider>? _pool;
+    internal DbOptions? _poolBaseOptions;
+    internal ResilienceExecutor? _poolBaseResilience;
+
+    /// <summary>池标记注入（池创建会话后、首次租出前调用）——记录基准 options/resilience
+    /// 供归还时复位（With* 链在租用期内的覆写不带入下一租期）。</summary>
+    internal void MarkPooled(DataSessionPool<TProvider> pool)
+    {
+        _pool = pool;
+        _poolBaseOptions = _options;
+        _poolBaseResilience = _resilience;
+    }
+
+    /// <summary>租出准备：连接健康校验（非 Open 由池侧丢弃重建）+ 驻留态复位。</summary>
+    internal bool IsConnectionHealthyForRent
+        => _conn.State == System.Data.ConnectionState.Open;
+
+    internal void PrepareForRent() => _operationState.Unpark();
+
+    /// <summary>停止后台操作，释放连接。幂等。
+    /// <para><b>池化会话</b>（经 <see cref="DataSessionPool{TProvider}.RentAsync"/> 租出）：
+    /// DisposeAsync 是<b>归还</b>而非释放——瞬态状态（WithTenant/IgnoreFilters/With* 覆写、
+    /// AddInterceptor 加项）复位，会话与复用槽留在池中待下一租期。有事务、在飞操作或并行读
+    /// 作用域未收口时抛出（先提交/消费完再归还）。</para></summary>
     public ValueTask DisposeAsync()
     {
         if (_operationState.IsCurrentOperationScope
@@ -563,7 +590,47 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             throw new InvalidOperationException(
                 "DataSession cannot be disposed from its active operation or transaction scope.");
         }
+        // 池化形态：归还路径（驻留门禁失败时抛出——事务/在飞操作/并行作用域未收口是
+        // 调用方契约违反；池满或池已释放则降级真实释放）
+        if (_pool is not null)
+            return ReturnToPoolAsync();
         return _operationState.DisposeAsync(DisposeCoreAsync);
+    }
+
+    /// <summary>池化归还：Park 门禁 → 瞬态复位 → 入队；未被接收（池满/池释放）则 Unpark
+    /// 后走真实释放。复用槽、读连接、物化容量启发<b>不复位</b>（跨租用存活即收益）。</summary>
+    private async ValueTask ReturnToPoolAsync()
+    {
+        _operationState.Park();
+        // 瞬态复位（已 Park，无并发进入）：过滤/租户/隔离级别/弹性覆写/拦截器加项全部
+        // 回到池的基准形态——上一租期 的 WithTenant/IgnoreFilters/WithTimeout/AddInterceptor
+        // 不得串味到下一租期（R3 共享拦截器表教训的池化同款防线）。
+        _ignoreFilters = false;
+        _tenantId = null;
+        _tenantScopeEntry = null;
+        _isolationLevel = System.Data.IsolationLevel.ReadCommitted;
+        Volatile.Write(ref _options, _poolBaseOptions!);
+        Volatile.Write(ref _resilience, _poolBaseResilience!);
+        _operationState.DiscardPostCommitActions();
+        _operationState.DefersPostCommitActions = false;
+        ResetInterceptorsToPoolBase();
+        if (_pool!.TryReturn(this))
+            return;
+        // 池满/池已释放：Unpark 后走真实释放（连接关闭、槽释放——语义与非池化一致）
+        _operationState.Unpark();
+        await _operationState.DisposeAsync(DisposeCoreAsync).ConfigureAwait(false);
+    }
+
+    /// <summary>拦截器表复位为池基准清单（内容级：清空后按 Priority 重排回填；表实例保留
+    /// ——列表本身是会话私有的，无共享可变表风险，R3 教训不适用）。</summary>
+    private void ResetInterceptorsToPoolBase()
+    {
+        _interceptors.Clear();
+        if (_poolBaseOptions!.Interceptors is { Count: > 0 } baseInterceptors)
+        {
+            foreach (IQueryInterceptor interceptor in baseInterceptors.OrderBy(static i => i.Priority))
+                _interceptors.Add(interceptor);
+        }
     }
 
     private async Task DisposeCoreAsync()
@@ -723,6 +790,20 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
         EntityInfoCache.Store<T>(info);
         return info;
+    }
+
+    /// <summary>刀1：行工厂的每类型静态缓存——直查族（QueryAsync/QueryAsyncEnumerable/
+    /// QueryFirst/QuerySingle）专用。T 允许是 [Projection] 类型（只进 RowFactories 不进
+    /// TableNames），故不走 EntityRuntimeInfo 视图而走 RowFactories 注册表。</summary>
+    private static Func<DbDataReader, T> GetRowFactory<T>() where T : class, new()
+    {
+        object? cached = EntityInfoCache.FactoryPer<T>.Factory;
+        if (cached is not null)
+            return (Func<DbDataReader, T>)cached;
+        if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+        EntityInfoCache.StoreFactory<T>(factory);
+        return (Func<DbDataReader, T>)factory;
     }
 
     // ─── 默认过滤（软删除 + 租户）────────────────────────

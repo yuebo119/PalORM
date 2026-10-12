@@ -31,4 +31,25 @@ internal static class EntityInfoCache
     /// 每类型至多生效一次（竞态下后写覆盖，值同源等价，无害）。</summary>
     internal static void Store<T>(EntityRuntimeInfo info) where T : class, new()
         => Per<T>.Info = info;
+
+    /// <summary>每类型行工厂缓存槽（直查族专用）。与 <see cref="Per{T}"/> 分离：直查族
+    ///（QueryAsync/QueryAsyncEnumerable/QueryFirst/QuerySingle）的 T 允许是 [Projection]
+    /// 类型——只进 RowFactories 不进 TableNames（实体集），不能走 EntityRuntimeInfo 视图
+    ///（投影无表名/CRUD，视图键集不含它们）。同样满足单调不可变前提（RowFactories 注册后
+    /// 条目恒定）。抑制理由同 <see cref="Per{T}"/>。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S2326",
+        Justification = "T 不出现在字段类型中是刻意的：分片键是 T 的闭合类型本身。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+        Justification = "静态字段按 T 分片正是本缓存的目的，非跨泛型实例共享事故。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2223",
+        Justification = "可变静态字段是惰性缓存的语义本体；写入只在注册表查找成功后发生一次。")]
+    internal static class FactoryPer<T> where T : class, new()
+    {
+        /// <summary>缓存槽：null = 未查过（下次走 RowFactories 并回填）。</summary>
+        public static object? Factory;
+    }
+
+    /// <summary>行工厂缓存写入（同 <see cref="Store{T}"/> 口径）。</summary>
+    internal static void StoreFactory<T>(object factory) where T : class, new()
+        => FactoryPer<T>.Factory = factory;
 }

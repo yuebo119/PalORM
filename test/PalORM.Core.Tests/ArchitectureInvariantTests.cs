@@ -113,6 +113,9 @@ public sealed class ArchitectureInvariantTests
                 "WithTransactionRetry",
                 "ForRead", "DisposeAsync", "QueryMultipleAsync",
                 "CreateAsync",
+                // 池化（2026-10-13 二轮方案）：DataSessionPool.RentAsync 是会话生命周期入口
+                //（租出不触表，过滤路由由租期内的具体查询入口承担）
+                "RentAsync",
             ])
             .ToHashSet(StringComparer.Ordinal);
 
