@@ -50,6 +50,13 @@ public sealed class PostgreSqlProvider : IDbProvider
         // 旋钮扫描 2.46µs ≈ 12µs；每操作自建会话的用法（DataSession.CreateAsync per op，
         // README 快速Start 形态）全额支付它——会话税 24µs 的近一半。缓存命中后
         // CreateConnection 只剩字典查询 + new NpgsqlConnection（0.09µs）。
+        // PG-6：改写结果的缓存——键 = 本方法全部输入（连接串 + 4 个 options 池参数字段）。
+        // D21（2026-10-12 审读修复）：键空间"应用内通常个位数"的假设在多租户逐租户连接串
+        // 形态下不成立（每租户一条连接串 = 无界增长，且值含凭据副本）——上限封顶 + 满清
+        // 自愈（FormattableSqlFormatter 同纪律：改写是纯函数，重建成本远低于冻结）。
+        // 工厂失败（非法连接串）不缓存，异常照旧传播。
+        if (RewrittenConnectionStringCache.Count >= RewrittenCacheCapacity)
+            RewrittenConnectionStringCache.Clear();
         string rewritten = RewrittenConnectionStringCache.GetOrAdd(
             (connectionString, options.MaxPoolSize, options.MinPoolSize,
                 options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
@@ -65,6 +72,9 @@ public sealed class PostgreSqlProvider : IDbProvider
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
         (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
         RewrittenConnectionStringCache = new();
+
+    /// <summary>PG-6/D21：改写缓存容量上限——多租户连接串变体数封顶（含凭据副本的常驻量随之封顶）。</summary>
+    private const int RewrittenCacheCapacity = 256;
 
     /// <summary>PG-6：连接串旋钮改写的实际逻辑（从 CreateConnection 原样抽出，逻辑零变更）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",

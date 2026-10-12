@@ -45,6 +45,10 @@ public sealed class MySqlProvider : IDbProvider
         // 单次成本 = MySqlConnectionStringBuilder 解析 4.00µs + 9× Keys LINQ 扫描 3.46µs ≈ 7.5µs；
         // PerfHub 夹具用共享连接不经过，但每操作自建会话用法（DataSession.CreateAsync per op）
         // 全额支付。缓存命中后只剩字典查询 + new MySqlConnection（0.04µs）。逻辑零变更。
+        // MySQL-6/D21（2026-10-12 审读修复）：多租户逐租户连接串使键空间不再"个位数"——
+        // 上限封顶 + 满清自愈（PG-6 同构，值含凭据副本常驻量随之封顶）。工厂失败不缓存。
+        if (RewrittenConnectionStringCache.Count >= RewrittenCacheCapacity)
+            RewrittenConnectionStringCache.Clear();
         string rewritten = RewrittenConnectionStringCache.GetOrAdd(
             (connectionString, options.MaxPoolSize, options.MinPoolSize,
                 options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
@@ -60,6 +64,9 @@ public sealed class MySqlProvider : IDbProvider
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
         (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
         RewrittenConnectionStringCache = new();
+
+    /// <summary>MySQL-6/D21：改写缓存容量上限（与 PostgreSqlProvider 同构纪律）。</summary>
+    private const int RewrittenCacheCapacity = 256;
 
     /// <summary>MySQL-6：连接串旋钮改写的实际逻辑（从 CreateConnection 原样抽出，逻辑零变更）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",

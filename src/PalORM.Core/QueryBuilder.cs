@@ -774,6 +774,11 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal void AddWhereComparison<TKey>(Expression<Func<T, TKey>> member,
         string operation, TKey value)
+        => AddWhereComparison(ResolveColumn(member), operation, value);
+
+    /// <summary>C16（2026-10-12 审读收敛）：预解析列名形态——ToPageAsync 对同一 orderBy
+    /// 先后调 AddWhereComparison 与 AddOrderBy，原各自做一次成员解析；调用方解析一次复用。</summary>
+    internal void AddWhereComparison<TKey>(string qualifiedColumn, string operation, TKey value)
     {
         // ITM-555：键集续页条件走 DefaultFilter 类别而非 Where——AppendWhereSection 对
         // DefaultFilter 恒以 AND 拼在用户子句组括号之外（WHERE keyset AND ((A) OR (B))）。
@@ -781,13 +786,20 @@ public struct QueryBuilder<T> where T : class, new()
         // 页间重复、分页不推进（ITM-401 括组根因的新入口，真库探针实测）。
         DbParameter parameter = CreateParameter(value);
         AddClause(QueryClauseKind.DefaultFilter,
-            $"{GetQualifiedColumnName(member)} {operation} {parameter.ParameterName}", [parameter]);
+            $"{qualifiedColumn} {operation} {parameter.ParameterName}", [parameter]);
     }
 
+    /// <summary>成员表达式 → 限定列名（C16：暴露给 ToPageAsync 单次解析复用）。</summary>
+    internal string ResolveColumn<TKey>(Expression<Func<T, TKey>> member)
+        => GetQualifiedColumnName(member);
+
     internal void AddOrderBy<TKey>(Expression<Func<T, TKey>> member, bool descending)
+        => AddOrderBy(ResolveColumn(member), descending);
+
+    internal void AddOrderBy(string qualifiedColumn, bool descending)
         => AddClause(QueryClauseKind.OrderBy,
             $"{(HasClause(QueryClauseKind.OrderBy) ? ", " : "ORDER BY ")}" +
-            $"{GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
+            $"{qualifiedColumn}{(descending ? " DESC" : "")}");
 
     internal IReadOnlyList<DbParameter> GetQueryParameters()
     {

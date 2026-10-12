@@ -41,16 +41,25 @@ public sealed class ResilienceExecutor
         // ResilienceExecutor.ExecuteAsync 命令重试）——此前 ITM-603 只在 CreateAsync 调用点
         // 加守卫，命令路径 Task.Delay(_backoff(attempt)) 抛 AOORE("delay") 不指向 RetryBackoff 配置。
         // 包装到构造函数后，所有走 ResilienceExecutor 的路径共享同一校验逻辑。
-        Func<int, TimeSpan> sourceBackoff = options.RetryBackoff ?? GetDefaultBackoff;
-        _backoff = attempt =>
+        // C11（2026-10-12 审读重开·安全子集）：默认退避恒非负（GetDefaultBackoff 数学上
+        // ≥50ms），守卫只对自定义委托必要——默认路径跳过包装委托，省每会话一个闭包；
+        // 自定义路径保持原守卫（ITM-603/605 双路径校验语义不变）。
+        if (options.RetryBackoff is { } customBackoff)
         {
-            TimeSpan delay = sourceBackoff(attempt);
-            if (delay < TimeSpan.Zero)
-                throw new InvalidOperationException(
-                    $"DbOptions.RetryBackoff(attempt={attempt}) returned a negative TimeSpan ({delay}). "
-                    + "The delegate must return a non-negative delay.");
-            return delay;
-        };
+            _backoff = attempt =>
+            {
+                TimeSpan delay = customBackoff(attempt);
+                if (delay < TimeSpan.Zero)
+                    throw new InvalidOperationException(
+                        $"DbOptions.RetryBackoff(attempt={attempt}) returned a negative TimeSpan ({delay}). "
+                        + "The delegate must return a non-negative delay.");
+                return delay;
+            };
+        }
+        else
+        {
+            _backoff = GetDefaultBackoff;
+        }
         // ITM-619：DbOptions 契约 TimeSpan.Zero = 无限等待（Validate 允许 Zero），但
         // CancelAfter(Zero) 是立即取消——归一为 InfiniteTimeSpan 保持契约语义。
         // r19/ITM-696：直接构造未 Validate 的 options 时负值会在执行期 CancelAfter(负)

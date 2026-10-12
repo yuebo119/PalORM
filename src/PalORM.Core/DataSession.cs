@@ -57,6 +57,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 并行读作用域内并发 From&lt;T&gt;() 的竞态只会各建一个空槽（引用写原子、败者被 GC、
     /// 槽在禁用晋升下永无命令可漏）。</summary>
     internal ReusableQuerySlot? _querySlot;
+
+    /// <summary>C11（2026-10-12 审读重开·安全子集）：日志类别串每闭合泛型实例缓存一次
+    ///（原每会话创建时插值分配一个新串，仅 LoggerFactory 配置时发生）。</summary>
+    private static readonly string LogCategory = $"PalORM.{TProvider.Name}";
     /// <summary>并行读作用域的连接池（ARCH-001）——作用域内创建的读连接（全部）与其中空闲可复用的。
     /// ITM-796（r23）：并发读租约（最多 MaxParallelReads 路）可同时进入获取/归还路径，
     /// 两个集合的全部操作（Pop/Add/Contains/Push/Clear）必须持 <see cref="_parallelReadPoolLock"/>。
@@ -154,7 +158,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                 }
 
                 var interceptors = options.Interceptors?.ToList() ?? [];
-                ILogger? logger = options.LoggerFactory?.CreateLogger($"PalORM.{TProvider.Name}");
+                ILogger? logger = options.LoggerFactory?.CreateLogger(LogCategory);
                 var session = new DataSession<TProvider>(connection, options, interceptors, logger);
                 connection = null;
                 return session;

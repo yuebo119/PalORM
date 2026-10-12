@@ -315,11 +315,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         context.EnableConcurrentExecution();
 
         // PALORM001: Missing primary key
+        // E26（2026-10-12 审读重排）：[Table] 判定前置——IsSupportedEntity 做全量属性枚举
+        //（每属性 GetAttributes），全项目每个 class 都要付；[Table] 命名检查远廉，先筛掉
+        // 非实体（类型的绝大多数）。两条件为合取，交换不影响行为。
         context.RegisterSymbolAction(ctx =>
         {
             if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
-                || !SourceGenerationValidation.IsSupportedEntity(type)
-                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))  // ITM-512
+                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"))  // ITM-512
+                || !SourceGenerationValidation.IsSupportedEntity(type))
                 return;
             AnalyzePrimaryKey(ctx, type);
         }, SymbolKind.NamedType);
@@ -458,6 +461,65 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // Select 调用（含 LINQ Select）都白付一次语义解析。
         if (ma.Expression is not IdentifierNameSyntax varRef) return;
 
+        // E26（2026-10-12 审读重排）：纯语法终端扫描先行——绝大多数 Select 调用（LINQ）的
+        // 5 语句窗口内不存在同标识符的 ToListAsync/FirstAsync/SingleAsync 终端，此前每个
+        // Select 都先付 GetSymbolInfo(invocation) + 接收者符号解析。窗口内无文本级终端候选
+        // 即返回（语义查询全程不发生）；命中候选后才做语义确认，诊断行为与原实现一致。
+
+        // 向后扫描：同一语句块内后续是否存在同标识符的终端调用（文本级候选）
+        SyntaxNode? parent = invocation.Parent;
+        while (parent is not null and not BlockSyntax and not StatementSyntax)
+            parent = parent.Parent;
+        if (parent is not ExpressionStatementSyntax currentStmt) return;
+
+        string receiverName = varRef.Identifier.Text;
+        SyntaxNode? sibling = currentStmt;
+        int scanned = 0;
+        ExpressionStatementSyntax? terminalStmt = null;
+        bool reassignmentCandidate = false;
+        while (sibling is not null && scanned < 5)
+        {
+            scanned++;
+            sibling = sibling.Parent?.ChildNodes()
+                .FirstOrDefault(n => n.SpanStart > sibling.SpanStart);
+            if (sibling is not ExpressionStatementSyntax exprStmt) break;
+
+            if (!reassignmentCandidate)
+            {
+                foreach (AssignmentExpressionSyntax assignment in exprStmt.DescendantNodes()
+                             .OfType<AssignmentExpressionSyntax>())
+                {
+                    if (assignment.Left is IdentifierNameSyntax assigned
+                        && assigned.Identifier.Text == receiverName)
+                    {
+                        reassignmentCandidate = true;
+                        break;
+                    }
+                }
+            }
+
+            if (terminalStmt is null)
+            {
+                foreach (MemberAccessExpressionSyntax member in exprStmt.DescendantNodes()
+                             .OfType<MemberAccessExpressionSyntax>())
+                {
+                    if (member.Expression is IdentifierNameSyntax id
+                        && id.Identifier.Text == receiverName
+                        && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync")
+                    {
+                        terminalStmt = exprStmt;
+                        break;
+                    }
+                }
+            }
+
+            if (terminalStmt is not null) break;
+        }
+
+        // 窗口内无终端候选：与原实现同样不报告，但零语义查询（E26 的收益主体）
+        if (terminalStmt is null) return;
+
+        // ── 语义确认（仅候选存在时）──
         // Select 必须属于 PalORM——从 QueryBuilder<T> 类型
         if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
             is not IMethodSymbol methodSymbol
@@ -471,37 +533,37 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         ISymbol? selectReceiver = ctx.SemanticModel.GetSymbolInfo(varRef, ctx.CancellationToken).Symbol;
         if (selectReceiver is null) return;
 
-        // 向后扫描：同一语句块内后续是否存在同符号的 ToListAsync/FirstAsync/SingleAsync 调用
-        SyntaxNode? parent = invocation.Parent;
-        while (parent is not null and not BlockSyntax and not StatementSyntax)
-            parent = parent.Parent;
-        if (parent is not ExpressionStatementSyntax currentStmt) return;
-
-        // ITM-634：向后扫描加上限——原无距离上限，中间隔任意多语句仍误报
-        SyntaxNode? sibling = currentStmt;
-        int scanned = 0;
-        while (sibling is not null && scanned < 5)
+        // 重赋值确认：文本级候选（终端语句及之前）经符号级核实——同文本不同符号（遮蔽的
+        // 同名局部变量）不构成放弃条件，与原实现的符号级判定一致。
+        if (reassignmentCandidate)
         {
-            scanned++;
-            sibling = sibling.Parent?.ChildNodes()
-                .FirstOrDefault(n => n.SpanStart > sibling.SpanStart);
-            if (sibling is not ExpressionStatementSyntax exprStmt) break;
+            for (SyntaxNode? node = currentStmt; node is not null;)
+            {
+                if (node is ExpressionStatementSyntax stmt)
+                {
+                    foreach (AssignmentExpressionSyntax assignment in stmt.DescendantNodes()
+                                 .OfType<AssignmentExpressionSyntax>())
+                    {
+                        if (assignment.Left is IdentifierNameSyntax assigned
+                            && SymbolEqualityComparer.Default.Equals(
+                                ctx.SemanticModel.GetSymbolInfo(assigned, ctx.CancellationToken).Symbol,
+                                selectReceiver))
+                            return;
+                    }
+                }
+                if (ReferenceEquals(node, terminalStmt)) break;
+                node = node.Parent?.ChildNodes().FirstOrDefault(n => n.SpanStart > node.SpanStart);
+            }
+        }
 
-            // ITM-717：区间内对同一符号重赋值 → 终端调用可能属于新 builder，放弃报告，
-            // 避免误报（重赋值形态见 summary）。
-            bool reassigned = exprStmt.DescendantNodes()
-                .OfType<AssignmentExpressionSyntax>()
-                .Any(a => SymbolEqualityComparer.Default.Equals(
-                    ctx.SemanticModel.GetSymbolInfo(a.Left, ctx.CancellationToken).Symbol, selectReceiver));
-            if (reassigned) return;
-
-            bool terminal = exprStmt.DescendantNodes()
-                .OfType<MemberAccessExpressionSyntax>()
-                .Any(m => m.Expression is IdentifierNameSyntax id
-                          && m.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync"
-                          && SymbolEqualityComparer.Default.Equals(
-                              ctx.SemanticModel.GetSymbolInfo(id, ctx.CancellationToken).Symbol, selectReceiver));
-            if (terminal)
+        // 终端确认：候选语句内的终端调用标识符符号与接收者一致
+        foreach (MemberAccessExpressionSyntax member in terminalStmt.DescendantNodes()
+                     .OfType<MemberAccessExpressionSyntax>())
+        {
+            if (member.Expression is IdentifierNameSyntax id
+                && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync"
+                && SymbolEqualityComparer.Default.Equals(
+                    ctx.SemanticModel.GetSymbolInfo(id, ctx.CancellationToken).Symbol, selectReceiver))
             {
                 ctx.ReportDiagnostic(Diagnostic.Create(SelectProjectionWithToList, invocation.GetLocation()));
                 return;
