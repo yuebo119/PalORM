@@ -457,11 +457,9 @@ public partial class DataSession<TProvider>
         if (entities.Count == 0) return 0;
 
         // v5.6.0 自动路由（L1）：满足全部条件时走单语句批量（远程 N 行 N 次 RTT → 1 次，
-        // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / 软删 / SQLite）。
+        // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / SQLite）。
         // 每个条件不自动路由的理由：
         //   乐观锁（IncrementVersion）→ 批量无法表达"每行 version 匹配"；
-        //   软删 → 软删实体的批量语义待厘清（当前保守排除；两路径都不附加 deleted_at 条件，
-        //          排除理由与租户不同源，改动需专测）；
         //   SQLite → CASE WHEN 在 SQLite 实测慢 6.4×（BulkUpdateBatchAsync 已有同判）。
         // B8（2026-10-01 全 API 逐项轮）：放开租户过滤排除——两路径租户语义已对齐：
         // 逐条池化路径（ExecuteBulkUpdatePooledAsync）与单语句内核（ExecuteBulkUpdateBatchesAsync）
@@ -469,10 +467,14 @@ public partial class DataSession<TProvider>
         // BulkUpdateTenantRoutingTests（三方言：跨租户行零触碰）锁定，放开为纯性能改善
         //（租户实体 N 次往返 → 1 次）。附带修复：逐条池化的 DbBatch 分支原先漏拷池尾租户
         // 参数（PG 42703 / MySQL 未定义参数），本轮由该用例暴露并修复（BindIntoBatchCommand）。
+        // B7（2026-10-12 审读重开落地）：放开软删排除——原"语义待厘清"已厘清：逐条与单语句
+        // 批量的 SET 列集同源（生成器 UpdateColumns，含 deleted_at，两路径都从实体绑定该列），
+        // 对软删实体行为逐位等价（BulkUpdateSoftDeleteRoutingTests 三方言实测一致，含恒逐条的
+        // SQLite 基线）；排除纯属性能损失。调用方契约：实体须携带自身 deleted_at（置 null
+        // 即复活该行，两路径同语义）。
         if (TProvider.Dialect != SqlDialect.Sqlite
             && entities.Count > 1
-            && routeMetadata.IncrementVersion is null
-            && !IsSoftDeletable<T>())
+            && routeMetadata.IncrementVersion is null)
         {
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
             // ITM-878（r23）：TryGetValue + 族内统一异常（裸索引器在部分注册的病态片段下
@@ -880,12 +882,6 @@ public partial class DataSession<TProvider>
                     .ConfigureAwait(false),
             ct).ConfigureAwait(false);
     }
-
-    /// <summary>实体是否标注 [SoftDelete] 且未被 IgnoreFilters——按注册表 EntityFeatures
-    /// 判定（与 BulkDeleteAsync 的软删分派同源）。</summary>
-    private bool IsSoftDeletable<T>() where T : class, new()
-        => !_ignoreFilters
-            && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
 
     /// <summary>准备批量 UPDATE 上下文：SET 列集取自 CrudMetadata 真源、引号包裹、租户过滤。
     /// probe 命令验证 BindUpdate 参数序与元数据列集一致（ITM-642——原实现解析生成 SQL 文本

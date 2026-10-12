@@ -146,8 +146,9 @@ public sealed class BulkUpdatePoolingTests
         await session.ExecuteAsync(
             $"INSERT INTO pool_soft (id, name, deleted_at) VALUES ({(long)1}, {"a"}, {null})");
 
-        // [SoftDelete] 实体走 BulkUpdateAsync 的逐条回退（自动路由排除软删）——
-        // 池化路径必须同样只改 name，不动 deleted_at
+        // [SoftDelete] 实体在 SQLite 走 BulkUpdateAsync 的逐条路径（方言排除；
+        // PG/MySQL 已放开软删排除进单语句批量，B7 2026-10-12，语义等价依据见
+        // BulkUpdateSoftDeleteRoutingTests）——池化路径必须同样只改 name，不动 deleted_at
         long affected = await session.BulkUpdateAsync([new PoolSoft { Id = 1, Name = "b" }]);
 
         await Assert.That(affected).IsEqualTo(1L);

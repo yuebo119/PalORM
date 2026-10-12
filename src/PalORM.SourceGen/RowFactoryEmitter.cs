@@ -213,12 +213,18 @@ internal static class RowFactoryEmitter
             // (T)r.GetValue(i) 装箱拆箱路径：驱动把数值列装箱为 Int64/Int32 时拆箱必抛
             // InvalidCastException（byte[] 之外的引用类型不走本 switch 的 provider 形态，
             // 不受影响）。枚举底层 long（: long）同样必须显式 GetFieldValue。
+            // D19（2026-10-12 审读修复）：窄化改 checked cast——原 Convert.ToUInt16(ulong, IFP)
+            // 在 BCL 无 (ulong, IFormatProvider) 重载，绑定到 (object, IFormatProvider)，每行
+            // 装箱 24B。Convert 数值窄化本就是 checked 语义，checked cast 逐位等价（超范围同抛
+            // OverflowException），IFP 对数值转换无作用。可达性登记：PALORM016 与生成器侧
+            // IsSupportedProviderType 双白名单当前均不含无符号窄整型（枚举路径会被覆写为
+            // string/int/long），本分支属白名单扩展时的前置卫生（扩展后即无装箱形态）。
             "ushort" or "System.UInt16"
-                => $"global::System.Convert.ToUInt16(r.GetFieldValue<global::System.UInt64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+                => $"checked((global::System.UInt16)r.GetFieldValue<global::System.UInt64>({ordinal}))",
             "uint" or "System.UInt32"
-                => $"global::System.Convert.ToUInt32(r.GetFieldValue<global::System.UInt64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+                => $"checked((global::System.UInt32)r.GetFieldValue<global::System.UInt64>({ordinal}))",
             "sbyte" or "System.SByte"
-                => $"global::System.Convert.ToSByte(r.GetFieldValue<global::System.Int64>({ordinal}), global::System.Globalization.CultureInfo.InvariantCulture)",
+                => $"checked((global::System.SByte)r.GetFieldValue<global::System.Int64>({ordinal}))",
             "ulong" or "System.UInt64" => $"r.GetFieldValue<global::System.UInt64>({ordinal})",
             // ITM-520：Microsoft.Data.Sqlite/Npgsql 的 GetChar 抛 NotSupportedException，
             // 经字符串读取；空串守卫走 ReadChar，抛带列名异常而非裸 IndexOutOfRange

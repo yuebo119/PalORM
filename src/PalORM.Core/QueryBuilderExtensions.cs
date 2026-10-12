@@ -471,11 +471,13 @@ public static class QueryBuilderExtensions
             long total = countResult is long count ? count : Convert.ToInt64(countResult);
 
             string operation = descending ? "<" : ">";
+            // C16：orderBy 列解析一次复用（原 AddWhereComparison + AddOrderBy 各解析一次）
+            string orderByColumn = paged.ResolveColumn(orderBy);
             if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
-                paged.AddWhereComparison(orderBy, operation, lastValue);
+                paged.AddWhereComparison(orderByColumn, operation, lastValue);
             // review R3：如果 builder 已有 OrderBy，AddOrderBy 追加为次级排序键。
             // keyset 续页条件始终锚定 orderBy 参数列——用户预设排序不影响续页正确性。
-            paged.AddOrderBy(orderBy, descending);
+            paged.AddOrderBy(orderByColumn, descending);
             List<T> rows = await ExecuteQueryAsync(
                 paged, ct, operationLease.Owner).ConfigureAwait(false);
             if (ownsTransaction)
