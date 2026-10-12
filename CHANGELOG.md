@@ -4,6 +4,37 @@
 
 ## [未发布]
 
+### ⚡ 性能：第三轮全量审读（R3）S1-S3 三包落地 + 一项自引入回归修复
+
+第三轮七代理并行深读（异步状态机/分配清单/生成物运行时形态/驱动交互/横切清点五个新切入角）的产出：
+
+- **查询命中路径零分配（S1）**：SQL 形状缓存桶改不可变数组快照（命中路径的枚举器装箱归零，
+  CAS 换新败者重试，容量纪律保持）；参数装配 for 索引化；LIMIT 参数创建收敛
+  `CreateLimitParameters` 单一真源（参数装配不再构建即弃文本，编号契约由单源保证）；
+  零参数查询共享空表；聚合过滤形态单次求值；metrics TagList 单次构造贯穿双计数器。
+- **CRUD 对称（S2）**：`DeleteAsync` 接入 PL-2 第四命令复用槽（GetByKey 同型，
+  键值经 `ConvertDeleteKey` 就地写，软删/租户形态不进槽）；`GetAsync` 并行读分支直通
+  直调（原闭包 6 捕获约 250-300B/op）；GridReader 读活动 TCS 惰性化；会话 Dispose
+  无飞行信号短路（免 WhenAll+WaitAsync 包装）。
+- **批量与 Provider（S3）**：BulkMerge 默认键 RETURNING 批量路径参数池化（R-UNNESTB
+  安全形态：池参数就地写值、末批只裁池尾；PG 20000 行从约 20 万参数对象降为满批池一次
+  建立）；Upsert 形状字符串与逐条 UPDATE 每行参数数 per-(Type, Dialect) 缓存；
+  local_infile 探测负结果 10s TTL（持续故障形态下原每次 BulkInsert 重付探测往返加 3 秒
+  超时，窗口内直接降级）。
+- **回归修复（自引入，S2 项撤销）**：CreateAsync 的共享空拦截器表造成跨会话全局污染
+  （`AddInterceptor` 就地变异共享列表；全量套件随机失败最高 10 处，经二分定位与栈分析
+  确认后撤销该项优化，回退后连续三轮全量稳定）。
+- **证伪撤销（代理建议不成立）**：三 Provider BulkContext 委托缓存（静态方法组转换
+  C# 11+ 已由编译器缓存）；QueryContext 条件构造（record struct 零分配）；CTS TryReset
+  复用（既有 step10 PoC 实测裁决：超时 CTS 为语义本体覆盖建连与读取全程，非冗余）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 557/557（Debug 连续三轮稳定
+  + Release）· SourceGen 233/233（快照零变化）· Integration 真库 280/280 · gate 32/32 ·
+  verify-ai fast 21/21 · tech-debt 14/14。
+- **顺延（Not-Tested）**：S3 门禁项（DbBatch 逐条路径跨轮复用探针、copyWriter 类型面
+  扩展）与 S4 生成器包（UNNEST/COPY 按 PalORMTargetDialects 门控发射、Bind lambda
+  双份去重）本轮未做，理由与数据见提交 5620521 trailers。
+
 ### ⚡ 性能：审读重开 A 层七项 + 弹性瘦身子集 + 两项测量关账
 
 固定每操作成本口径（绝对 µs/B × 调用频次）重开后落地的一批：
