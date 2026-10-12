@@ -85,13 +85,16 @@ public sealed partial class DataSession<TProvider>
             throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
         // T4/PG-5 同构：") FROM {table}{whereClause}" 后缀按 (Type, Dialect, 过滤形态) 缓存——
         // 只剩 "SELECT {fn}(" 前缀与表达式文本每次拼（1 次 concat，原全量插值 + QuoteIdentifier）。
-        string suffix = GetDefaultFilterForms<T>() == DefaultFilterForms.Empty
+        // R3（2026-10-12）：过滤形态单次求值——原条件与键构造各调一次（租户/软删态窗口内
+        // 理论可变，双读属错配面），局部变量贯穿两分支。
+        DefaultFilterForms aggregateForms = GetDefaultFilterForms<T>();
+        string suffix = aggregateForms == DefaultFilterForms.Empty
             ? DataSessionCache.AggregateSuffixCache.GetOrAdd(
                 (typeof(T), TProvider.Dialect),
                 static (_, tableName) => $") FROM {TProvider.QuoteIdentifier(tableName)}",
                 tn)
             : DataSessionCache.AggregateFilteredSuffixCache.GetOrAdd(
-                (typeof(T), TProvider.Dialect, GetDefaultFilterForms<T>()),
+                (typeof(T), TProvider.Dialect, aggregateForms),
                 static (key, tableName) => $") FROM {TProvider.QuoteIdentifier(tableName)}{key.Item3.WhereClause}",
                 tn);
         return await ExecuteScalarAsync<T>(

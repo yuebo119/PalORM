@@ -6,6 +6,10 @@ namespace PalORM;
 /// 不跨 TProvider 共享（Sonar S2743）。v4.1 极致降内存优化。</summary>
 internal static class DataSessionCache
 {
+    /// <summary>R3（2026-10-12）：无拦截器会话的共享空表（非泛型载体，S2743）——
+    /// CreateAsync 原每次 `?? []` 新建 List；构造器对空表直接复用引用（只读）。</summary>
+    internal static readonly List<IQueryInterceptor> EmptyInterceptors = [];
+
     /// <summary>per-(Type, Dialect) 缓存 selectColumns 字符串，消除每次 QuoteIdentifier + string.Join。
     /// <para><b>注意形态</b>：本缓存存的是<b>不带表名限定</b>的裸列清单（<c>"id", "status"</c>），
     /// 供 GetAllAsync/GetAsync 的 FROM 单表查询使用。需要表名限定的调用点（QueryBuilder 的
