@@ -1130,6 +1130,51 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             cmd.Parameters.Add(param);
         }
     }
+
+    /// <summary>P1-1（2026-10-12 全量重读）：直查族（QueryAsync/Scalar/Count/聚合/
+    /// QueryAsyncEnumerable/ExecuteAsync）的命令复用入口——From&lt;T&gt; 查询管线（A9）同槽
+    /// 共用（C15 按形状计数使交替 SQL 形态永不互相淘汰）。守卫：非并行读作用域 + 主连接形态
+    ///（读路由/并行池连接不参与——连接引用一致性是复用前提）。命中返回槽内命令（归会话所有，
+    /// 调用方不得 Dispose，负责重设 Transaction/超时并经
+    /// <see cref="TryBindFormattableValuesInPlace"/> 就地写参数值）。</summary>
+    private DbCommand? TryAcquireReusableDirectCommand(string sql)
+    {
+        ReusableQuerySlot? slot = _querySlot;
+        if (slot is null || _operationState.ParallelReadsEnabled)
+            return null;
+        return slot.TryAcquire(_conn, sql);
+    }
+
+    /// <summary>P1-1：把 FormattableString 参数值就地写进复用命令的既有参数集合
+    ///（<b>不 Clear、不 Add 新实例</b>——R-UNNESTB：PG auto-prepare 下 Clear+Add 会让驱动
+    /// 沿用 prepare 时的绑定值）。同 SQL 文本恒同参数个数（FormatCached 的输出文本唯一决定
+    /// 占位符集）；<paramref name="extraSlots"/> 是随命令持久存在的附加参数槽数
+    ///（如租户过滤 @__tenant0，值由调用方就地刷新）。非空值的运行时类型与前值不一致时返回
+    /// false（PG 的 DbType 在池存续期恒定，同位异类型会让驱动按陈旧类型错绑——调用方回退
+    /// 新建命令，槽保留其命令）。</summary>
+    private static bool TryBindFormattableValuesInPlace(
+        DbCommand cmd, FormattableString? sql, int extraSlots = 0)
+    {
+        if (sql is null)
+            return cmd.Parameters.Count == extraSlots;
+        int argumentCount = sql.ArgumentCount;
+        if (cmd.Parameters.Count != argumentCount + extraSlots)
+            return false;
+        // 先全量校验形态再写值（半写状态无害但不整洁；A9 TryCopyParameterValues 同口径）
+        for (int i = 0; i < argumentCount; i++)
+        {
+            object? value = sql.GetArgument(i);
+            object? existing = cmd.Parameters[i].Value;
+            // null/DBNull 任一侧不参与类型校验：DBNull 期间 DbType 恒定不失（PG-4 单一来源）
+            if (value is null or DBNull || existing is null or DBNull)
+                continue;
+            if (value.GetType() != existing.GetType())
+                return false;
+        }
+        for (int i = 0; i < argumentCount; i++)
+            cmd.Parameters[i].Value = sql.GetArgument(i) ?? DBNull.Value;
+        return true;
+    }
 }
 
 /// <summary>A9（2026-10-01 全 API 逐项轮）：读查询命令复用槽（PL-2 惰性晋升的泛化）——
@@ -1155,4 +1200,41 @@ internal sealed class ReusableQuerySlot
     /// <summary>同一 (实体类型, 操作) 的晋升阈值——低于此次数走新建路径（对齐 PL-2，
     /// 防"每操作一会话"的抛弃式用法泄漏命令）。</summary>
     internal const int PromotionThreshold = 3;
+
+    /// <summary>P1-1（2026-10-12 全量重读）：取（或晋升）本槽服务当前 SQL 文本的命令——
+    /// From&lt;T&gt; 查询管线（A9）与直查族（QueryAsync/Scalar/Count/聚合/ExecuteAsync）共用的
+    /// 单一真源。命中：同 SQL 文本 + 同连接 → 返回槽内命令（调用方负责重设 Transaction/超时、
+    /// <b>就地写参数值</b>且不得 Dispose）。未命中：按形状计数（C15），达到阈值在给定连接上
+    /// 晋升新命令（旧命令替换即释放——单操作门禁保证无飞行 reader）。
+    /// <para>并行读作用域由调用方判定后不进入本方法（并发 reader 不能共用命令）。</para></summary>
+    internal DbCommand? TryAcquire(DbConnection connection, string sql)
+    {
+        if (Command is { } cmd
+            && Connection is { } cmdConn
+            && ReferenceEquals(cmdConn, connection)
+            && string.Equals(Sql, sql, StringComparison.Ordinal))
+        {
+            return cmd;
+        }
+
+        // C15（2026-10-12）：计数按形状——被计数 SQL 与上一被计数 SQL 不同时清零。交替形状
+        // （A/B/A/B…）永不晋升，保持每操作新建命令；单形状连续查询的晋升时点不变。
+        // 两族共用本槽时同理：已晋升 A 后交替出现的 B 形态永不晋升也不淘汰 A。
+        if (!string.Equals(LastCountedSql, sql, StringComparison.Ordinal))
+        {
+            ServedOps = 0;
+            LastCountedSql = sql;
+        }
+        ServedOps++;
+        if (ServedOps < PromotionThreshold)
+            return null;
+
+        Command?.Dispose();
+        DbCommand promoted = connection.CreateCommand();
+        promoted.CommandText = sql;
+        Sql = sql;
+        Connection = connection;
+        Command = promoted;
+        return promoted;
+    }
 }
