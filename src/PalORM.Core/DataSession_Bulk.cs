@@ -561,6 +561,10 @@ public partial class DataSession<TProvider>
     /// <para><b>与 <see cref="ExecuteBulkUpdateBatchesAsync{T}"/> 的关系</b>：后者是「一条 SQL 更新 N 行」，
     /// 本方法是「N 条 SQL 各更新 1 行」——参数布局相同（每行 paramsPerRow 个），故直接复用
     /// <see cref="BatchUpdateSqlBuilder.CreateParameterArray"/> 的命名契约。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "池化逐条 UPDATE 的分支构成：每行参数缓存命中/建池、版本实体 deferred 回填、"
+            + "DbBatch/单命令两驱动形态——拆分需在方法间传参数池与回填列表，状态面更大。")]
     private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledAsync<T>(
         IReadOnlyList<T> entities, CrudMetadata metadata,
         Action<DbParameter[], object, int> valuesBinder,
@@ -576,20 +580,26 @@ public partial class DataSession<TProvider>
         // 带 [ConcurrencyCheck] 的实体比 setColumnCount+1 多一个。硬算会让乐观锁实体
         // 的 version 参数拿不到值，静默写错数据。probe 同时是生成器三处
         // （SQL/Bind/元数据）漂移的运行时哨兵（与 PrepareBatchUpdateContext 同范式）。
-        DbCommand probe = CreateCommand();
-        int paramsPerRow;
-        try
+        // R3（2026-10-12）：paramsPerRow per-(Type, Dialect) 缓存——probe 哨兵语义随 B9 先例
+        //（PrepareBatchUpdateContext）转为每进程一次；生成器三处漂移仍由首进程 probe 拦截。
+        (Type, SqlDialect) rowParamsKey = (typeof(T), TProvider.Dialect);
+        if (!DataSessionCache.UpdateRowParamsCache.TryGetValue(rowParamsKey, out int paramsPerRow))
         {
-            metadata.BindUpdate(probe, entities[0]);
-            paramsPerRow = probe.Parameters.Count;
+            DbCommand probe = CreateCommand();
+            try
+            {
+                metadata.BindUpdate(probe, entities[0]);
+                paramsPerRow = probe.Parameters.Count;
+            }
+            finally
+            {
+                await probe.DisposeAsync().ConfigureAwait(false);
+            }
+            if (paramsPerRow <= 0)
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' BindUpdate produced {paramsPerRow} parameters; recompile the model assembly.");
+            DataSessionCache.UpdateRowParamsCache.TryAdd(rowParamsKey, paramsPerRow);
         }
-        finally
-        {
-            await probe.DisposeAsync().ConfigureAwait(false);
-        }
-        if (paramsPerRow <= 0)
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' BindUpdate produced {paramsPerRow} parameters; recompile the model assembly.");
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
@@ -1404,36 +1414,98 @@ public partial class DataSession<TProvider>
         string quotedColumns = string.Join(", ",
             metadata.InsertColumns.Select(c => TProvider.QuoteIdentifier(c)));
 
+        // R3（2026-10-12）：参数池化——原每批 fresh 命令 + 每行 BindInsert 建参（PG 默认键
+        // merge 20000 行约 20 万参数对象）。镜像 MultiValueBulkInsert 的 R-UNNESTB 安全池形态：
+        // 命令跨批复用 + 池参数就地写 Value（不 Clear 不 Add 新实例）；末批 RemoveAt 只裁池尾
+        //（ITM-785：短批恒为末次，裁后不回满批）。旧生成器程序集（无 BindInsertValues）与
+        // 首批即非满批的单批小数据保持 fresh 路径（与 MultiValueBulkInsert 的池纪律同款）。
         long processed = 0;
-        for (int start = 0; start < entities.Count; start += batchSize)
+        Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
+        int fullBatchRows = Math.Min(batchSize, entities.Count);
+        DbCommand? pooledCmd = null;
+        DbParameter[]? pool = null;
+        string? lastSql = null;
+        int lastRowCount = -1;
+        try
         {
-            int end = Math.Min(start + batchSize, entities.Count);
-            int rowCount = end - start;
-            // R-UNNESTB 纪律：命令逐批新建（fresh）而非跨批复用 + Parameters.Clear——PG
-            // auto-prepare 下「Clear + Add 新参数实例」会让驱动沿用 prepare 时的绑定值
-            //（mergearray 变体 C 实测）；批数 = N/批 上限 5000 行/批，新建成本可忽略。
-            await using DbCommand cmd = CreateCommand();
-            cmd.Transaction = transaction;
-            cmd.CommandText = BuildInsertReturningBatchSql(
-                quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
-            for (int row = start; row < end; row++)
-                metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
-
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            int returned = 0;
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            for (int start = 0; start < entities.Count; start += batchSize)
             {
-                long? id = NormalizeGeneratedId(
-                    await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
-                if (id is { } generatedId && backfill is not null)
-                    BackfillGeneratedId(backfill, entities[start + returned], generatedId);
-                returned++;
+                int end = Math.Min(start + batchSize, entities.Count);
+                int rowCount = end - start;
+                DbCommand cmd;
+                bool ownsCmd;
+                if (valuesBinder is not null && (pool is not null || rowCount == batchSize))
+                {
+                    if (pooledCmd is null)
+                    {
+                        pooledCmd = CreateCommand();
+                        pooledCmd.Transaction = transaction;
+                        pooledCmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    }
+                    cmd = pooledCmd;
+                    ownsCmd = false;
+                    if (pool is null)
+                    {
+                        pool = new DbParameter[fullBatchRows * columnCount];
+                        for (int i = 0; i < pool.Length; i++)
+                        {
+                            DbParameter pooled = pooledCmd.CreateParameter();
+                            pooled.ParameterName = ParameterNameCache.GetName(i);
+                            pooledCmd.Parameters.Add(pooled);
+                            pool[i] = pooled;
+                        }
+                        // B21 同款：池 DbType 一次性建立（BindInsertValues 池存续期内只写 Value）
+                        metadata.InitInsertParameters?.Invoke(pool, 0);
+                    }
+                    int neededParameters = rowCount * columnCount;
+                    // PARAM-REUSE-OK[pool:pool] 末批裁剪只移除池尾实例，保留前缀实例不变（valuesBinder 只改其 Value）
+                    for (int i = pooledCmd.Parameters.Count - 1; i >= neededParameters; i--)
+                        pooledCmd.Parameters.RemoveAt(i);
+                    for (int row = start; row < end; row++)
+                        valuesBinder(pool, entities[row], (row - start) * columnCount);
+                    if (rowCount != lastRowCount)
+                    {
+                        lastSql = BuildInsertReturningBatchSql(
+                            quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
+                        lastRowCount = rowCount;
+                    }
+                    pooledCmd.CommandText = lastSql;
+                }
+                else
+                {
+                    cmd = CreateCommand();
+                    cmd.Transaction = transaction;
+                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    cmd.CommandText = BuildInsertReturningBatchSql(
+                        quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
+                    for (int row = start; row < end; row++)
+                        metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
+                    ownsCmd = true;
+                }
+
+                await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                int returned = 0;
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                {
+                    long? id = NormalizeGeneratedId(
+                        await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
+                    if (id is { } generatedId && backfill is not null)
+                        BackfillGeneratedId(backfill, entities[start + returned], generatedId);
+                    returned++;
+                }
+                if (returned != rowCount)
+                    throw new InvalidOperationException(
+                        $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
+                        $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
+                processed += rowCount;
+                if (ownsCmd)
+                    await cmd.DisposeAsync().ConfigureAwait(false);
             }
-            if (returned != rowCount)
-                throw new InvalidOperationException(
-                    $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
-                    $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
-            processed += rowCount;
+        }
+        finally
+        {
+            if (pooledCmd is not null)
+                await pooledCmd.DisposeAsync().ConfigureAwait(false);
         }
         return processed;
     }
@@ -1541,7 +1613,7 @@ public partial class DataSession<TProvider>
         if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
-        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(tableName, metadata, pkColumn));
+        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn));
         bool tenantGuarded = HasTenantFilter<T>();
 
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
@@ -1762,8 +1834,15 @@ public partial class DataSession<TProvider>
     /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键
     /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身）；MySQL 用 VALUES(c) 形态
     /// （与单行 upsert 的既有生成 SQL 一致）。</summary>
-    private UpsertSqlShape BuildUpsertSqlShape(string tableName, CrudMetadata metadata, string pkColumn)
+    private UpsertSqlShape BuildUpsertSqlShape(Type entityType, string tableName, CrudMetadata metadata, string pkColumn)
     {
+        // R3（2026-10-12）：形状字符串 per-(Type, Dialect) 缓存——原每次调用 1 LINQ 迭代器 +
+        // 2 string.Join + 冲突子句插值（与 QuotedColumnsCache 同纪律；值由编译期元数据唯一决定，
+        // UpsertColumns/pkColumn 同源于注册表）。record struct 包装零分配，缓存存字符串组件即可。
+        (Type, SqlDialect) shapeKey = (entityType, TProvider.Dialect);
+        if (DataSessionCache.UpsertShapeCache.TryGetValue(shapeKey, out (string QuotedColumns, string ConflictClause) cached))
+            return new UpsertSqlShape(TProvider.QuoteIdentifier(tableName), cached.QuotedColumns, cached.ConflictClause);
+
         string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
         List<string> updateColumns =
         [
@@ -1783,10 +1862,9 @@ public partial class DataSession<TProvider>
                 updateColumns.Select(c => $"{quote(c)} = VALUES({quote(c)})"))
             : $" ON CONFLICT ({quote(pkColumn)}) DO UPDATE SET " + string.Join(", ",
                 updateColumns.Select(c => $"{quote(c)} = excluded.{quote(c)}"));
-        return new UpsertSqlShape(
-            quote(tableName),
-            string.Join(", ", metadata.UpsertColumns.Select(quote)),
-            conflictClause);
+        string quotedColumns = string.Join(", ", metadata.UpsertColumns.Select(quote));
+        DataSessionCache.UpsertShapeCache.TryAdd(shapeKey, (quotedColumns, conflictClause));
+        return new UpsertSqlShape(quote(tableName), quotedColumns, conflictClause);
     }
 
     /// <summary>构建单批的多值 UPSERT SQL——参数已由调用方按批内连续下标预建绑定，

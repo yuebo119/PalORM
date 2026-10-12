@@ -45,9 +45,26 @@ internal static class CapabilityProbeCache<T>
 
         T value = await probe(ct).ConfigureAwait(false);
         Cache[key] = new ProbeEntry(value, Environment.TickCount64 + ttlMilliseconds);
+        NegativeUntil.TryRemove(key, out _);   // R3：探测成功清除负结果标记
         return value;
     }
 
     /// <summary>强制失效单键（ITM-892 族：TTL 窗口内服务端状态变化，失败后重探测）。</summary>
     public static void Invalidate(string key) => Cache.TryRemove(key, out _);
+
+    /// <summary>R3（2026-10-12）：负结果短 TTL 标记表——探测持续失败形态（受限账号/网络分区）
+    /// 下，原每次调用重付探测往返 + 超时（local_infile 探测 CommandTimeout=3s 是最坏延迟洞）。
+    /// 窗口内调用方经 <see cref="IsNegativeFresh"/> 直接走降级路径；探测成功时由
+    /// <see cref="GetOrProbeAsync"/> 自动清除标记。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S2743:StaticFieldInGenericType",
+        Justification = "与 Cache 字段同因：按 T 分表是设计语义（类文档第三段）。")]
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> NegativeUntil = new();
+
+    /// <summary>标记探测失败（负结果窗口开始）。</summary>
+    public static void MarkNegative(string key, int negativeTtlMilliseconds)
+        => NegativeUntil[key] = Environment.TickCount64 + negativeTtlMilliseconds;
+
+    /// <summary>负结果窗口是否仍在生效（窗口内调用方应跳过探测直接降级）。</summary>
+    public static bool IsNegativeFresh(string key)
+        => NegativeUntil.TryGetValue(key, out long until) && Environment.TickCount64 < until;
 }

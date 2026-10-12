@@ -157,7 +157,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                     await setupCmd.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
                 }
 
-                var interceptors = options.Interceptors?.ToList() ?? DataSessionCache.EmptyInterceptors;
+                // R3 回退登记（2026-10-12）：曾改共享空表省 ~32B/会话——构造器对空表"直接复用传入
+                // 引用"的前提是列表私有（AddInterceptor 会就地变异 _interceptors），共享表会被
+                // 任意会话的 AddInterceptor 全局污染（跨会话串味 + 枚举竞态，全量套件实测抓红）。
+                var interceptors = options.Interceptors?.ToList() ?? [];
                 ILogger? logger = options.LoggerFactory?.CreateLogger(LogCategory);
                 var session = new DataSession<TProvider>(connection, options, interceptors, logger);
                 connection = null;

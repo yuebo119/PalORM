@@ -6,9 +6,17 @@ namespace PalORM;
 /// 不跨 TProvider 共享（Sonar S2743）。v4.1 极致降内存优化。</summary>
 internal static class DataSessionCache
 {
-    /// <summary>R3（2026-10-12）：无拦截器会话的共享空表（非泛型载体，S2743）——
-    /// CreateAsync 原每次 `?? []` 新建 List；构造器对空表直接复用引用（只读）。</summary>
-    internal static readonly List<IQueryInterceptor> EmptyInterceptors = [];
+    /// <summary>R3（2026-10-12）：per-(Type, Dialect) 缓存 Upsert 列清单与冲突子句——
+    /// BuildUpsertSqlShape 原每次调用 1 LINQ 迭代器 + 2 string.Join + 插值（与
+    /// QuotedColumnsCache 同纪律；值由编译期注册表元数据唯一决定）。空 updateColumns 的
+    /// 不支持形态不缓存（异常逐次抛出，语义不变）。</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect), (string QuotedColumns, string ConflictClause)> UpsertShapeCache = new();
+
+    /// <summary>R3（2026-10-12）：per-(Type, Dialect) 缓存逐条 UPDATE 池化路径的每行参数数
+    ///（原每次调用建 probe 命令数参；哨兵语义随 B9 先例转为每进程一次）。</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect), int> UpdateRowParamsCache = new();
 
     /// <summary>per-(Type, Dialect) 缓存 selectColumns 字符串，消除每次 QuoteIdentifier + string.Join。
     /// <para><b>注意形态</b>：本缓存存的是<b>不带表名限定</b>的裸列清单（<c>"id", "status"</c>），
