@@ -851,11 +851,22 @@ public sealed partial class DataSession<TProvider>
     /// 修复链：Enter 门禁必抛 → EnterReadOnly 放行 → 复用槽串扰 + 主连接并发 NRE 双缺陷
     /// 暴露 → 读池接入根治）。作用域内每次尝试从并行池取连接执行并归还（弹性重试时
     /// 重新获取，失败连接不回池）；复用槽仅服务作用域外主连接形态。事务与作用域互斥
-    /// （ITM-798），故读池路径无事务绑定面。</remarks>
-    public async ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
+    /// （ITM-798），故读池路径无事务绑定面。
+    /// R4（2026-10-12）：非 async 入口预热操作归属标记（写路径 step16-P1 同型）——读路径的
+    /// Enter 写 AsyncLocal 落在 async 体内不回流调用方，稳态每读重付一次 EC 拷贝（探针
+    /// readprewarm A/B 裁决）。</remarks>
+    public ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(key);
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return GetByKeyEntryAsync<T>(key, ct);
+    }
+
+    private async ValueTask<T?> GetByKeyEntryAsync<T>(object key, CancellationToken ct)
+        where T : class, new()
+    {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
@@ -954,8 +965,16 @@ public sealed partial class DataSession<TProvider>
             ? ((Func<DbDataReader, T>)factory)(reader) : default;
     }
 
-    /// <summary>查询全表。</summary>
-    public async ValueTask<List<T>> GetAllAsync<T>(CancellationToken ct = default)
+    /// <summary>查询全表。（R4 预热包装同 <see cref="GetAsync{T}"/>。）</summary>
+    public ValueTask<List<T>> GetAllAsync<T>(CancellationToken ct = default)
+        where T : class, new()
+    {
+        if (_operationState.OwnerPrewarmed)
+            _operationState.PrewarmCurrentOperationOwner();
+        return GetAllEntryAsync<T>(ct);
+    }
+
+    private async ValueTask<List<T>> GetAllEntryAsync<T>(CancellationToken ct)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();

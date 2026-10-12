@@ -1106,6 +1106,12 @@ internal static class CommandFactoryEmitter
             "global::System.DateTimeOffset" => "WriteDateTimeOffset",
             "string" or "global::System.String" => "WriteString",
             "byte[]" or "global::System.Byte[]" => "WriteBytes",
+            // R4（2026-10-12 扩面）：byte → WriteInt16（PG 无 tinyint，byte 列 DDL 即 SMALLINT，
+            // short 直写语义精确；byte→short 隐式 widening 零转换发射）；char → WriteString
+            //（char 列 DDL 为文本形态；值表达式在 GenerateCopyWriteRowBody 包 .ToString()）。
+            // DateOnly/TimeOnly/TimeSpan 维持不支持（无对应定型方法，实体回退参数池——边界登记）。
+            "byte" or "global::System.Byte" => "WriteInt16",
+            "char" or "global::System.Char" => "WriteString",
             _ => null,
         };
     }
@@ -1140,6 +1146,13 @@ internal static class CommandFactoryEmitter
             if (!col.IsInsertable) continue;
             string method = SinkMethodFor(col)!;
             string expr = GetSinkValueExpression(col);
+            // R4（2026-10-12）：char 经 WriteString 写入——sink 无 char 重载，值表达式包
+            // ToString()（nullable char? 的 ToString() 产出 ""，但 null 分支已被 IsNullable
+            // 外层 if 分流到 WriteNull，此处只在非 null 侧取值）
+            string rawType = col.ProviderClrTypeName;
+            if (rawType.EndsWith("?", StringComparison.Ordinal)) rawType = rawType.Substring(0, rawType.Length - 1);
+            bool isCharColumn = rawType is "char" or "global::System.Char";
+            if (isCharColumn) expr = $"{expr}.ToString()";
             if (col.IsNullable)
             {
                 string valueArg = NeedsValueUnwrap(col) ? $"{expr}.Value" : expr;

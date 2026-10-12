@@ -84,7 +84,11 @@ public sealed class ArchitectureInvariantTests
             //（GetDefaultFilter*/BindDefaultFilterParameters）移入 GetByKeyCoreAsync/
             // GetAllCoreAsync 内核，薄包装体以内核调用名为路由凭证（L3 同款先例）
             || body.Contains("GetByKeyCoreAsync", StringComparison.Ordinal)
-            || body.Contains("GetAllCoreAsync", StringComparison.Ordinal);
+            || body.Contains("GetAllCoreAsync", StringComparison.Ordinal)
+            // R4（2026-10-12 读预热包装）：GetAsync/GetAllAsync/Count/聚合/Query/Scalar 改
+            // 非 async 薄入口（预热 + 委托 *EntryAsync 内核），过滤路由在内核体内——
+            // 委托调用名为路由凭证（与 C10/L3 同款口径）
+            || body.Contains("EntryAsync", StringComparison.Ordinal);
             if (!routed)
                 violations.Add($"{method}: 方法体未经过默认过滤路由（GetDefaultFilter*/HasTenantFilter+BindDefaultFilterParameters）");
         }
