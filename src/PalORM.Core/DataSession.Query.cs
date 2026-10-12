@@ -285,8 +285,8 @@ public sealed partial class DataSession<TProvider>
     public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, bool readFromReplica = false, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        // 刀1：工厂走合并视图缓存；刀2：事务单次取用。
-        EntityRuntimeInfo streamInfo = GetEntityInfo<T>();
+        // 刀1：工厂走每类型静态缓存（[Projection] 兼容——同 QueryEntryAsync）；刀2：事务单次取用。
+        Func<DbDataReader, T> streamRowFactory = GetRowFactory<T>();
         DbTransaction? streamTransaction = GetActiveTransaction();
 
         // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接 + 非读路由形态）。
@@ -318,7 +318,7 @@ public sealed partial class DataSession<TProvider>
             // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
             // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
             lease?.MarkHealthy();
-            var tf = (Func<DbDataReader, T>)streamInfo.RowFactory;
+            var tf = streamRowFactory;
             bool firstRow = true;
             while (true)
             {
@@ -390,8 +390,9 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        // 刀1：工厂走合并视图缓存；刀2：事务单次取用。
-        EntityRuntimeInfo info = GetEntityInfo<T>();
+        // 刀1：工厂走每类型静态缓存（直查族允许 [Projection] 类型——走 RowFactories 视图，
+        // 不走 EntityRuntimeInfo 实体视图）；刀2：事务单次取用。
+        Func<DbDataReader, T> rowFactory = GetRowFactory<T>();
         DbTransaction? activeTransaction = GetActiveTransaction();
 
         // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——reader 由 using 释放，
@@ -403,7 +404,7 @@ public sealed partial class DataSession<TProvider>
             ApplyReusableCommandState(reusedQuery, activeTransaction, queryCommandText);
             await using DbDataReader reusedReader = await reusedQuery.ExecuteReaderAsync(ct).ConfigureAwait(false);
             List<T> reusedList = await ResultListReader.ReadAllAsync(
-                reusedReader, (Func<DbDataReader, T>)info.RowFactory, 16, ct,
+                reusedReader, rowFactory, 16, ct,
                 _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
                 .ConfigureAwait(false);
             return reusedList;
@@ -419,7 +420,7 @@ public sealed partial class DataSession<TProvider>
         // ADR-A 首行列序校验经 onFirstRow 保持"仅在有首行时执行一次"；关闭校验时传 null
         //（Validate 关闭即空操作，省掉每次调用的委托判断）。static lambda 按泛型实例缓存，零分配。
         List<T> list = await ResultListReader.ReadAllAsync(
-            reader, (Func<DbDataReader, T>)info.RowFactory, 16, ct,
+            reader, rowFactory, 16, ct,
             _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
             .ConfigureAwait(false);
         lease.MarkHealthy();

@@ -47,6 +47,54 @@ internal sealed class SessionOperationState
     private bool _transactionCompleting;
     private int _state;
 
+    // ─── 池化驻留（2026-10-13 二轮方案）：_state 第 4 态 ──
+    // 0=活动 1=释放中 2=已释放 3=已驻留(归还池中,租出经 Unpark 复位回 0)。
+    // Park 在锁内校验"无在飞操作/读租约/事务流/并行作用域"后置位——与 Enter 的互斥
+    // 由同一把 _sync 保证(驻留后 Enter 拒绝,租出前无人可进入)。
+
+    /// <summary>驻留（归还连接池前的门禁收口）——已驻留/释放中/已释放抛 <see cref="InvalidOperationException"/>；
+    /// 存在在飞操作、只读租约、事务流、并行读作用域或存活事务时抛
+    /// <see cref="InvalidOperationException"/>（调用方契约违反：池化会话必须在无飞行工作时归还）。
+    /// 死残留事务（外部已释放）静默清空（与 GetActiveTransaction 的静默清理同口径）。</summary>
+    internal void Park()
+    {
+        lock (_sync)
+        {
+            if (_state != 0)
+                throw new InvalidOperationException(
+                    $"Cannot return this DataSession to its pool while its operation state is {_state}.");
+            if (_isActive || _activeReadLeases > 0)
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool while an operation is still in flight; " +
+                    "always consume enumerators with 'await foreach' and complete operations before disposing.");
+            if (_parallelReadScopes > 0)
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool while a parallel-read scope is active; " +
+                    "dispose the scope first.");
+            if (_transactionOwner is not null)
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool while a transaction flow is active.");
+            if (IsTransactionAlive(_transaction))
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool with an active transaction; " +
+                    "commit or roll it back first.");
+            _transaction = null;
+            _transactionOperationOwner = null;
+            _externalTransaction = false;
+            _state = 3;
+        }
+    }
+
+    /// <summary>租出（从池中取出时复位驻留态）。</summary>
+    internal void Unpark()
+    {
+        lock (_sync)
+        {
+            if (_state == 3)
+                _state = 0;
+        }
+    }
+
     internal SessionOperationLease Enter(object? owner = null)
     {
         lock (_sync)
@@ -57,7 +105,7 @@ internal sealed class SessionOperationState
                 && ReferenceEquals(
                     _transactionOwner, _currentTransactionOwner.Value);
             ObjectDisposedException.ThrowIf(
-                _state == 2
+                _state is 2 or 3
                 || (_state == 1 && !ownedOperation && !currentTransaction),
                 this);
             if (_transactionCompleting && currentTransaction && !ownedOperation)
@@ -430,7 +478,7 @@ internal sealed class SessionOperationState
                 && ReferenceEquals(
                     _transactionOwner, _currentTransactionOwner.Value);
             ObjectDisposedException.ThrowIf(
-                _state == 2 || (_state == 1 && !currentTransaction), this);
+                _state is 2 or 3 || (_state == 1 && !currentTransaction), this);
         }
     }
 
@@ -564,7 +612,7 @@ internal sealed class SessionOperationState
                 && ReferenceEquals(
                     _transactionOwner, _currentTransactionOwner.Value);
             ObjectDisposedException.ThrowIf(
-                _state == 2
+                _state is 2 or 3
                 || (_state == 1 && !ownedOperation && !currentTransaction),
                 this);
             // ITM-640：内部发布的事务失效走静默清理（正常生命周期）；
