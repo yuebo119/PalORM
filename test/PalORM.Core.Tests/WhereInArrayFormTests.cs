@@ -9,7 +9,11 @@ namespace PalORM.Core.Tests;
 /// <para>形状断言经 DryRun/ToSql（不触库）；行为断言经 PG 方言夹具
 ///（<see cref="PgWhereInArrayProvider"/>，SQLite 底 + ANY/ALL → json_each 改写，与
 /// ArrayFormDialectProvider 同构）。NULL 语义锁定：数组 NULL 元素在 = ANY 下永不匹配、
-/// != ALL 含 NULL 时全行过滤（与占位符 IN/NOT IN 逐位等价）。</para></summary>
+/// != ALL 含 NULL 时全行过滤（与占位符 IN/NOT IN 逐位等价）。</para>
+/// <para><b>串行槽</b>：连接层复用 ArrayAnySqliteConnection——其语句采集钩子是静态的，
+/// 须与 BulkDelete/BulkUpdate 数组形态族同挂 "ArrayFormFixtures" 组防串台（2026-10-13
+/// 实锤：SoftDelete 批删断言偶发收到 5 条语句，含本类并发执行泄漏的 4 条）。</para></summary>
+[NotInParallel("ArrayFormFixtures")]
 public sealed class WhereInArrayFormTests
 {
     [Test]

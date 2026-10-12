@@ -4,6 +4,42 @@
 
 ## [未发布]
 
+### ⚡ 性能：二轮方案主项——会话池化 DataSessionPool（per-op 会话税归零 + 复用槽跨租期激活）
+
+- **新增 `DataSessionPool<TProvider>`**（Create/RentAsync/DisposeAsync）：空闲复用（连接
+  不健康的闲置项租出时丢弃重建）、无空闲新建、空闲上限默认 16（满员归还真实释放，不放大
+  物理连接占用）。租出即 `await using`，DisposeAsync 即归还。
+- **归还即复位**：瞬态状态（WithTenant/IgnoreFilters/WithIsolationLevel/With* 弹性覆写、
+  AddInterceptor 加项）全部复位回池基准；复用槽（PL-2 CRUD 槽/A9 查询槽/P1-1 直查槽）、
+  读连接、物化容量启发保留——复用槽在"一请求一会话"形态下此前结构性永不生效（晋升阈值 3
+  永达不到），池化使其跨租期激活，这是本项的核心收益。
+- **归还门禁**：活动事务、未消费的流式枚举器、并行读作用域未收口时响亮失败（SessionOperationState
+  新增 Park/Unpark 第 4 状态，与 Enter 的互斥由同一把锁保证）；死残留事务静默清空。
+- **三形态探针实证**（SQLite 本地，直通弹性，三臂交错）：GetByKey per-op 会话 45.5µs →
+  池化 3.3µs（**13.8×**）、Count 44.2µs → 4.2µs（**10.5×**）；池化与长会话（2.5/3.6µs）
+  只差约 1µs 租还成本——F1 家族（会话税，Count/SQLite 分配 2.56×ADO 的主项）被整体消除。
+
+### ⚡ 性能：二轮方案刀 1-3——长会话热路径族瘦身
+
+- **刀 1（每类型元数据静态缓存）**：EntityInfoCache 把 From/GetByKey/GetAll/Count/聚合/
+  Query 七入口的 FrozenDictionary 查找收敛为零（稳态）；Count/聚合/GetByKey 的
+  GetEntityFeatures/FilterForms/TableNames 直读并入合并视图（features 参数重载贯穿）。
+  直查族（Query/QueryAsyncEnumerable）走 FactoryPer 行工厂缓存——[Projection] 类型只进
+  RowFactories 不进实体视图（误进实体视图导致投影直查抛 not registered，集成测试抓红后修正）。
+- **刀 2（事务单次取用）**：Insert/Update/Delete/GetByKey/GetAll/Count/聚合/Query/Scalar/
+  Execute/QueryAsyncEnumerable 各入口取一次事务贯穿槽路径与执行（原每操作 2~3 次锁往返）。
+- **刀 3（守卫式重设）**：复用命令的 Transaction/CommandTimeout 同值不重设
+  （SqliteCommand.Transaction setter 含连接归属验证），CRUD 四槽与直查复用分支统一走
+  ApplyReusableCommandState 单点。
+- **测试串行组修复**：WhereInArrayFormTests 补挂 "ArrayFormFixtures" NotInParallel 组——
+  连接层语句采集钩子是静态的，P0-2 起该类与 BulkDelete 数组形态族并发泄漏语句
+  （SoftDelete 批删断言偶发 5 条 vs 期望 1，6 轮复现 2 次实锤），修复后 8/8 稳定。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 585/585（+9 池化行为契约：
+  同实例复用/瞬态复位/槽跨租期存活/归还门禁×2/空闲上限/池释放幂等/并发租出互异/死亡连接
+  丢弃）× Release 8 连跑稳定 · SourceGen 236/236（快照零变化）· Integration 真库 292/292
+  （+1 PG 三租期 CRUD 往返）· RentAsync 经架构不变式登记 · API 参考文档化。
+
 ### 🔬 调研：P2-1 方言定型行工厂与 P1-3 形状哈希增量化（分析关账，不做）
 
 - **P2-1（方言定型行工厂，按阅读 DBDataReader 虚分发的每列每行成本核算后关闭）**：
