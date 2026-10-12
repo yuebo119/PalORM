@@ -1238,7 +1238,7 @@ public partial class DataSession<TProvider>
     /// <summary>旧版生成器模型程序集的回退取值：probe 命令逐行 <c>BindUpdate</c> 建参数，
     /// 再把值写进池。语义与 <see cref="CrudMetadata.BindUpdateValues"/> 一致，参数创建量回到
     /// 改前水平（这是旧程序集的既有成本，不是本路径的回归）。
-    /// probe 命令由会话连接创建（<see cref="CreateCommand"/> 带事务/超时口径）。</summary>
+    /// probe 命令由会话连接创建（<see cref="CreateCommand(DbTransaction?)"/> 带事务/超时口径）。</summary>
     private async ValueTask BindRowValuesViaProbeAsync<T>(
         CrudMetadata metadata, DbParameter[] pool,
         IReadOnlyList<T> entities, int start, int end, int paramsPerRow)

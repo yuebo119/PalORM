@@ -18,18 +18,20 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<long> CountEntryAsync<T>(FormattableString? where, CancellationToken ct) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
-        DefaultFilterForms filterForms = GetDefaultFilterForms<T>();
+        // 刀1（2026-10-13 二轮）：表名/features 走合并视图静态缓存（原 TableNames + EntityFeatures
+        // + FilterForms 三次查找）；刀2：事务单次取用贯穿复用分支与 lease 路径。
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
+        DefaultFilterForms filterForms = GetDefaultFilterForms<T>(info.Features);
         // PERF-002（2026-09-23）：基底恒定（仅条件可变）——按 (Type, Dialect) 缓存，
         // 原先每次 CountAsync 付一次 QuoteIdentifier + 插值。
         string baseSql = DataSessionCache.CountBaseSqlCache.GetOrAdd(
             (typeof(T), TProvider.Dialect),
             static (_, tableName) => $"SELECT COUNT(*) FROM {TProvider.QuoteIdentifier(tableName)}",
-            tn);
+            info.TableName);
         // T4/PG-5（2026-09-26）：组合句同缓存——键为 (Type, Dialect, 过滤形态)，
         // 过滤条件文本由该三元唯一决定（形态内含方言标识符与租户参数名），不新增判别面；
-        // Dialect 恒在键内（B59）。有 where 时只拼 "whereSql + )"（1 次 concat）。
+        // Dialect 恒在键内（B59）。有 where 时只拼 "whereSql + ")"（1 次 concat）。
         // 修正（同日，PerfHub 夹具实测 +4.7% 分配回归）：wherePrefix 改**惰性**——
         // 原三元在两个分支都饿汉求值，无 where 的 Count 每调用也付一次
         // baseSql + " WHERE (" 拼接；Empty 形态的特判直出 baseSql（本就不需缓存）。
@@ -49,17 +51,17 @@ public sealed partial class DataSession<TProvider>
         // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接 + 非并行读形态）——
         // 满批 COUNT 的 SQL 文本经组合句缓存恒稳定，晋升后每次调用省命令创建/释放与参数
         // 集合重建。租户槽值随 WithTenant 刷新；就地写失败（形状/类型漂移）回退下方新建路径。
-        (bool countHandled, long reusedCountValue) = await TryCountViaReusableCommandAsync<T>(sql, where, ct)
+        (bool countHandled, long reusedCountValue) = await TryCountViaReusableCommandAsync(sql, where, info, activeTransaction, ct)
             .ConfigureAwait(false);
         if (countHandled)
             return reusedCountValue;
 
-        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, ct).ConfigureAwait(false);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         if (where is not null) BindFormattableParameters(cmd, where);
-        BindDefaultFilterParameters<T>(cmd);
+        BindDefaultFilterParameters(cmd, info.Features);
         // v5.4 弹性接入：COUNT 为无事务只读路径时经会话弹性策略。
         // A2（2026-10-01 全 API 逐项轮）：直调重载消调用点 async lambda 的闭包与状态机
         // （与 P2-1 ExecuteWriteRowsAsync 同型口径）。
@@ -74,20 +76,20 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>P1-1：CountAsync 的复用分支（从 CountEntryAsync 抽出，降 S3776）——
     /// 槽命中且就地绑定成功时执行并返回 (true, 计数)；未命中/绑定失败返回 default，
-    /// 调用方回退新建命令路径。租户槽（@__tenant0）随命令持久存在，值每次就地刷新。</summary>
-    private async ValueTask<(bool Handled, long Count)> TryCountViaReusableCommandAsync<T>(
-        string sql, FormattableString? where, CancellationToken ct)
-        where T : class, new()
+    /// 调用方回退新建命令路径。租户槽（@__tenant0）随命令持久存在，值每次就地刷新。
+    /// 刀1：features 经合并视图传入；刀2：事务传入（守卫式重设）。</summary>
+    private async ValueTask<(bool Handled, long Count)> TryCountViaReusableCommandAsync(
+        string sql, FormattableString? where, EntityRuntimeInfo info,
+        DbTransaction? activeTransaction, CancellationToken ct)
     {
-        int tenantSlots = HasTenantFilter<T>() ? 1 : 0;
+        int tenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
         DbCommand? reused = TryAcquireReusableDirectCommand(sql);
         if (reused is null || !TryBindFormattableValuesInPlace(reused, where, tenantSlots))
             return default;
-        reused.Transaction = GetActiveTransaction();
-        reused.CommandTimeout = _options.CommandTimeoutSeconds;
+        ApplyReusableCommandState(reused, activeTransaction, sql);
         if (tenantSlots > 0)
             reused.Parameters[^1].Value = _tenantId;
-        object? scalar = await ExecuteReadScalarAsync(reused, ct).ConfigureAwait(false);
+        object? scalar = await ExecuteReadScalarAsync(reused, activeTransaction, ct).ConfigureAwait(false);
         // ITM-637 同型面：COUNT null 静默 0 掩蔽驱动异常——与新建路径同口径显式报错
         if (scalar is null)
             throw new InvalidOperationException(
@@ -119,25 +121,26 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        if (!PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
-            throw new InvalidOperationException($"'{typeof(T).Name}' not registered.");
+        // 刀1：表名/features 走合并视图；刀2：事务单次取用。
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
         // T4/PG-5 同构：") FROM {table}{whereClause}" 后缀按 (Type, Dialect, 过滤形态) 缓存——
         // 只剩 "SELECT {fn}(" 前缀与表达式文本每次拼（1 次 concat，原全量插值 + QuoteIdentifier）。
         // R3（2026-10-12）：过滤形态单次求值——原条件与键构造各调一次（租户/软删态窗口内
         // 理论可变，双读属错配面），局部变量贯穿两分支。
-        DefaultFilterForms aggregateForms = GetDefaultFilterForms<T>();
+        DefaultFilterForms aggregateForms = GetDefaultFilterForms<T>(info.Features);
         string suffix = aggregateForms == DefaultFilterForms.Empty
             ? DataSessionCache.AggregateSuffixCache.GetOrAdd(
                 (typeof(T), TProvider.Dialect),
                 static (_, tableName) => $") FROM {TProvider.QuoteIdentifier(tableName)}",
-                tn)
+                info.TableName)
             : DataSessionCache.AggregateFilteredSuffixCache.GetOrAdd(
                 (typeof(T), TProvider.Dialect, aggregateForms),
                 static (key, tableName) => $") FROM {TProvider.QuoteIdentifier(tableName)}{key.Item3.WhereClause}",
-                tn);
-        return await ExecuteScalarAsync<T>(
+                info.TableName);
+        return await ExecuteScalarAsync(
             $"SELECT {function}(" + FormatSqlWithParameters(expression) + suffix,
-            expression, ct).ConfigureAwait(false);
+            expression, info, activeTransaction, ct).ConfigureAwait(false);
     }
 
     /// <summary>SUM 聚合。空表/全过滤时 SUM 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
@@ -197,30 +200,30 @@ public sealed partial class DataSession<TProvider>
     /// <summary>聚合执行内核（不带操作门禁）——门禁由四个聚合入口持有（ITM-613：
     /// 先入门禁再拼 SQL）。Enter 不可重入，此处再 Enter 会抛
     /// "already has an active database operation"（SoftDelete 聚合测试实证）。
-    /// v5.4 弹性接入：无事务只读标量经会话弹性策略（重试/熔断）。</summary>
-    private async ValueTask<object?> ExecuteScalarAsync<T>(string sql, FormattableString original, CancellationToken ct)
-        where T : class, new()
+    /// v5.4 弹性接入：无事务只读标量经会话弹性策略（重试/熔断）。
+    /// 刀1：features 经合并视图；刀2：事务传入。</summary>
+    private async ValueTask<object?> ExecuteScalarAsync(string sql, FormattableString original,
+        EntityRuntimeInfo info, DbTransaction? activeTransaction, CancellationToken ct)
     {
         // P1-1：直查族命令复用（A9 同型）——聚合全句由缓存片段拼接恒稳定（值相等）；
         // 租户槽随命令持久，值就地刷新。就地写失败回退下方新建路径。
-        int aggregateTenantSlots = HasTenantFilter<T>() ? 1 : 0;
+        int aggregateTenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
         DbCommand? reusedAggregate = TryAcquireReusableDirectCommand(sql);
         if (reusedAggregate is not null
             && TryBindFormattableValuesInPlace(reusedAggregate, original, aggregateTenantSlots))
         {
-            reusedAggregate.Transaction = GetActiveTransaction();
-            reusedAggregate.CommandTimeout = _options.CommandTimeoutSeconds;
+            ApplyReusableCommandState(reusedAggregate, activeTransaction, sql);
             if (aggregateTenantSlots > 0)
                 reusedAggregate.Parameters[^1].Value = _tenantId;
-            return await ExecuteReadScalarAsync(reusedAggregate, ct).ConfigureAwait(false);
+            return await ExecuteReadScalarAsync(reusedAggregate, activeTransaction, ct).ConfigureAwait(false);
         }
 
-        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, ct).ConfigureAwait(false);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindFormattableParameters(cmd, original);
-        BindDefaultFilterParameters<T>(cmd);
+        BindDefaultFilterParameters(cmd, info.Features);
         // A2（2026-10-01 全 API 逐项轮）：直调重载覆盖 Sum/Max/Min/Avg 四个聚合入口
         // （CountAsync 同点改）。
         object? result = await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
@@ -236,9 +239,13 @@ public sealed partial class DataSession<TProvider>
     /// 一并省去；ConfigureAwait 由消费端 <c>await ... .ConfigureAwait(false)</c> 覆盖
     /// （ValueTask 包装 Task 的 awaiter 即 Task 的 awaiter）。</para></summary>
     private ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, CancellationToken ct)
+        => ExecuteReadScalarAsync(command, GetActiveTransaction(), ct);
+
+    /// <summary>刀2：事务由调用方单次取用后传入的重载。</summary>
+    private ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
         ResilienceExecutor executor = Volatile.Read(ref _resilience);
-        if (executor.IsPassThrough || GetActiveTransaction() is not null)
+        if (executor.IsPassThrough || activeTransaction is not null)
             return ExecuteScalarCoreAsync(command, ct);
         return executor.ExecuteAsync(
             token => ExecuteScalarCoreAsync(command, token).AsTask(), ct);
@@ -278,8 +285,9 @@ public sealed partial class DataSession<TProvider>
     public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, bool readFromReplica = false, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+        // 刀1：工厂走合并视图缓存；刀2：事务单次取用。
+        EntityRuntimeInfo streamInfo = GetEntityInfo<T>();
+        DbTransaction? streamTransaction = GetActiveTransaction();
 
         // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接 + 非读路由形态）。
         // 流式枚举下 reader 在枚举期间持有，命令归槽所有不释放；单活动操作门禁保证槽命令
@@ -294,12 +302,11 @@ public sealed partial class DataSession<TProvider>
             if (streamInPlace)
             {
                 cmd = reusedStream!;
-                cmd.Transaction = GetActiveTransaction();
-                cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                ApplyReusableCommandState(cmd, streamTransaction, streamCommandText);
             }
             else
             {
-                lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+                lease = await CreateReadRoutedCommandAsync(readFromReplica, streamTransaction, ct).ConfigureAwait(false);
                 cmd = lease.Command;
                 cmd.CommandText = streamCommandText;
                 cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -311,7 +318,7 @@ public sealed partial class DataSession<TProvider>
             // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
             // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
             lease?.MarkHealthy();
-            var tf = (Func<DbDataReader, T>)factory;
+            var tf = (Func<DbDataReader, T>)streamInfo.RowFactory;
             bool firstRow = true;
             while (true)
             {
@@ -383,26 +390,26 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+        // 刀1：工厂走合并视图缓存；刀2：事务单次取用。
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
 
         // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——reader 由 using 释放，
-        // 命令归槽所有不释放（下一次同形状查询的就地写值前提）；就地写失败回退下方新建路径。
+        // 命令归槽所有不释放（下一次同形状查询的就地写值前提）；就地写失败回退新建路径。
         string queryCommandText = FormatSqlWithParameters(sql);
         DbCommand? reusedQuery = readFromReplica ? null : TryAcquireReusableDirectCommand(queryCommandText);
         if (reusedQuery is not null && TryBindFormattableValuesInPlace(reusedQuery, sql))
         {
-            reusedQuery.Transaction = GetActiveTransaction();
-            reusedQuery.CommandTimeout = _options.CommandTimeoutSeconds;
+            ApplyReusableCommandState(reusedQuery, activeTransaction, queryCommandText);
             await using DbDataReader reusedReader = await reusedQuery.ExecuteReaderAsync(ct).ConfigureAwait(false);
             List<T> reusedList = await ResultListReader.ReadAllAsync(
-                reusedReader, (Func<DbDataReader, T>)factory, 16, ct,
+                reusedReader, (Func<DbDataReader, T>)info.RowFactory, 16, ct,
                 _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
                 .ConfigureAwait(false);
             return reusedList;
         }
 
-        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, activeTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = queryCommandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -412,7 +419,7 @@ public sealed partial class DataSession<TProvider>
         // ADR-A 首行列序校验经 onFirstRow 保持"仅在有首行时执行一次"；关闭校验时传 null
         //（Validate 关闭即空操作，省掉每次调用的委托判断）。static lambda 按泛型实例缓存，零分配。
         List<T> list = await ResultListReader.ReadAllAsync(
-            reader, (Func<DbDataReader, T>)factory, 16, ct,
+            reader, (Func<DbDataReader, T>)info.RowFactory, 16, ct,
             _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
             .ConfigureAwait(false);
         lease.MarkHealthy();
@@ -473,18 +480,19 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        // 刀2：事务单次取用（刀1 不适用：Scalar 的 T 是标量类型而非实体，无注册表查找）。
+        DbTransaction? scalarTransaction = GetActiveTransaction();
         // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——就地写失败回退下方新建路径
         string scalarCommandText = FormatSqlWithParameters(sql);
         DbCommand? reusedScalar = readFromReplica ? null : TryAcquireReusableDirectCommand(scalarCommandText);
         if (reusedScalar is not null && TryBindFormattableValuesInPlace(reusedScalar, sql))
         {
-            reusedScalar.Transaction = GetActiveTransaction();
-            reusedScalar.CommandTimeout = _options.CommandTimeoutSeconds;
+            ApplyReusableCommandState(reusedScalar, scalarTransaction, scalarCommandText);
             object? reusedResult = await reusedScalar.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return NormalizeScalarResult<T>(reusedResult);
         }
 
-        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, ct).ConfigureAwait(false);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, scalarTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = scalarCommandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
@@ -512,20 +520,21 @@ public sealed partial class DataSession<TProvider>
         // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接形态）——重复执行的
         // DDL/DML（建表迁移循环、分批 DELETE 等同文本形态）省命令创建/释放；就地写失败回退
         // 新建路径。复用命令归槽所有（ownsCommand=false，不得释放），事务/超时每次重设。
+        // 刀2：事务单次取用。
+        DbTransaction? executeTransaction = GetActiveTransaction();
         string executeCommandText = FormatSqlWithParameters(sql);
         DbCommand? reusedExecute = TryAcquireReusableDirectCommand(executeCommandText);
         DbCommand cmd;
         bool ownsCommand;
         if (reusedExecute is not null && TryBindFormattableValuesInPlace(reusedExecute, sql))
         {
-            reusedExecute.Transaction = GetActiveTransaction();
-            reusedExecute.CommandTimeout = _options.CommandTimeoutSeconds;
+            ApplyReusableCommandState(reusedExecute, executeTransaction, executeCommandText);
             cmd = reusedExecute;
             ownsCommand = false;
         }
         else
         {
-            cmd = CreateCommand();
+            cmd = CreateCommand(executeTransaction);
             cmd.CommandText = executeCommandText;
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindFormattableParameters(cmd, sql);
@@ -548,7 +557,7 @@ public sealed partial class DataSession<TProvider>
             int affected;
             try
             {
-                affected = await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
+                affected = await ExecuteWriteRowsAsync(cmd, executeTransaction, ct).ConfigureAwait(false);
                 // ITM-865（r23）：OnAfter 移入 try——拦截器 OnAfter 抛异常时同样经 OnError 通知
                 // 后上抛（与 ExecuteNonQueryAsync/ExecuteQueryAsync 口径一致；原形态在 try 外
                 // 直接逃逸，调用方会误判"执行失败"而实际 DML 已成功）。

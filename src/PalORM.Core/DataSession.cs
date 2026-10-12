@@ -705,14 +705,39 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()
         => PalORM_Runtime.EntityFeatures.GetValueOrDefault(typeof(T), EntityFeatures.None);
 
+    // ─── 刀1（2026-10-13 二轮全量重读）：每实体类型 T 的合并元数据单例缓存 ──
+    //
+    // 动机：P1-2 的合并视图把 From<T>/GetByKey/GetAll 从 3 次 FrozenDictionary 查找收敛为
+    // 1 次，但稳态热路径（长会话读循环）每次操作仍付 1~5 次查找（EntityInfo + EntityFeatures
+    // + FilterForms + 语句缓存）。类型级注册表条目单调不可变（Register 拒绝重复注册，
+    // ITM-758 的 live 读安全性论证同源），且缓存只在查找成功后写入——未注册类型的首次
+    // 失败不缓存，注册后首查入缓，此后零查找（约 -20ns/次）。
+    // 载体在非泛型宿主类 EntityInfoCache 内（S2743：静态缓存按 T 分片是本缓存的目的而非
+    // 事故——见该类抑制理由）；写入经静态 Store 方法（S2696）。
+    private static EntityRuntimeInfo GetEntityInfo<T>() where T : class, new()
+    {
+        EntityRuntimeInfo? cached = EntityInfoCache.Per<T>.Info;
+        if (cached is not null)
+            return cached;
+        if (!PalORM_Runtime.CurrentState._entityInfo.TryGetValue(typeof(T), out EntityRuntimeInfo? info))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+        EntityInfoCache.Store<T>(info);
+        return info;
+    }
+
     // ─── 默认过滤（软删除 + 租户）────────────────────────
     // 三个 Get* 形态 + Bind 必须共用同一判定谓词：条件里引用了 @__tenant0 而 Bind 未绑（或反之）
     // 都会直接产生运行时错误。租户过滤覆盖所有直连读写入口（ITM-302）；
     // Insert/Save 不做租户过滤——实体自带 tenant_id 列值，由调用方负责。
+    // 刀1：热路径调用方已持有 EntityRuntimeInfo.Features 的，经 features 参数重载省一次
+    // EntityFeatures 字典查找；无参重载留给批量族等冷调用方（语义同源）。
 
     private bool HasTenantFilter<T>() where T : class, new()
+        => HasTenantFilter(GetEntityFeatures<T>());
+
+    private bool HasTenantFilter(EntityFeatures features)
         => _tenantId is not null && !_ignoreFilters
-            && (GetEntityFeatures<T>() & EntityFeatures.TenantAware) != 0;
+            && (features & EntityFeatures.TenantAware) != 0;
 
     /// <summary>默认过滤条件的参数名——避开生成 SQL 的 @p{N} 命名空间。</summary>
     private const string _tenantParameterName = "@__tenant0";
@@ -722,11 +747,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>取默认过滤的三种拼接形态（缓存）。<b>v5.6</b>：命中路径走 <c>TryGetValue</c>——
     /// 原实现用 <c>GetOrAdd(key, 捕获 lambda)</c>，factory 捕获 <c>_tenantParameterName</c> 所在
     /// 实例语境，每次调用都分配一个显示类与委托（实测 96B/次），即使缓存命中。未命中才构建并
-    /// <c>TryAdd</c>；并发下同键可能被构建多次，但同输入恒同输出，正确性无影响。</summary>
-    private DefaultFilterForms GetDefaultFilterForms<T>() where T : class, new()
+    /// <c>TryAdd</c>；并发下同键可能被构建多次，但同输入恒同输出，正确性无影响。
+    /// 刀1：热路径调用方经 features 参数省一次 EntityFeatures 查找。</summary>
+    private DefaultFilterForms GetDefaultFilterForms<T>(EntityFeatures features) where T : class, new()
     {
-        bool hasSoftDelete = !_ignoreFilters && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
-        bool hasTenant = HasTenantFilter<T>();
+        bool hasSoftDelete = !_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0;
+        bool hasTenant = HasTenantFilter(features);
         if (!hasSoftDelete && !hasTenant) return DefaultFilterForms.Empty;
         (Type, SqlDialect, bool, bool) key = (typeof(T), TProvider.Dialect, hasSoftDelete, hasTenant);
         if (DataSessionCache.FilterFormsCache.TryGetValue(key, out DefaultFilterForms cached))
@@ -747,14 +773,22 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return forms;
     }
 
-    /// <summary>已有 WHERE 时的追加片段：" AND cond" 或空。</summary>
-    private string GetDefaultFilterFragment<T>() where T : class, new()
-        => GetDefaultFilterForms<T>().AndFragment;
+    /// <summary>刀1：features 参数重载（调用方持有合并视图的 Features 时省一次字典查找；
+    /// T 保留——透传给 GetDefaultFilterForms 的 (Type, Dialect) 缓存键）。</summary>
+    private string GetDefaultFilterFragment<T>(EntityFeatures features) where T : class, new()
+        => GetDefaultFilterForms<T>(features).AndFragment;
 
     /// <summary>为默认过滤条件绑定参数。任何拼接了 GetDefaultFilter* 结果的命令都必须调用。</summary>
     private void BindDefaultFilterParameters<T>(DbCommand cmd) where T : class, new()
     {
         if (HasTenantFilter<T>())
+            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
+    }
+
+    /// <summary>刀1：features 参数重载（同 <see cref="BindDefaultFilterParameters{T}"/>）。</summary>
+    private void BindDefaultFilterParameters(DbCommand cmd, EntityFeatures features)
+    {
+        if (HasTenantFilter(features))
             cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));
     }
 
@@ -895,15 +929,33 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     internal int BatchCommandTimeoutSeconds => _options.CommandTimeoutSeconds;
 
     private DbCommand CreateCommand()
+        => CreateCommand(GetActiveTransaction());
+
+    /// <summary>刀2：事务由调用方单次取用后传入（每操作省一次 GetActiveTransaction 的锁往返）。</summary>
+    private DbCommand CreateCommand(DbTransaction? transaction)
     {
         DbCommand command = _conn.CreateCommand();
-        command.Transaction = GetActiveTransaction();
+        command.Transaction = transaction;
         // ITM-557 根治：超时在工厂集中设置——新调用点在结构上不可能漏（ValidateSchemaAsync 即漏网实例）。
         // ITM-597: 部分路径（HealthCheck/Scalar/Execute/Migrate/Bulk 等）显式重复赋同值——
         // 这是<b>防御冗余</b>而非死代码：万一未来 CreateCommand 被重构不再设超时，这些路径仍自洽。
         // 删除冗余会削弱回归防御；保留并在此声明 CreateCommand 是<b>权威源</b>。
         command.CommandTimeout = _options.CommandTimeoutSeconds;
         return command;
+    }
+
+    /// <summary>刀3（2026-10-13 二轮）：复用命令的状态守卫式重设——Transaction/CommandTimeout
+    /// 同值不重设（SqliteCommand.Transaction setter 含连接归属验证，长会话循环里同值重设是
+    /// 纯开销）；CommandText 保持既有同值守卫（驱动同值 setter 短路未证实，显式跳过）。</summary>
+    private void ApplyReusableCommandState(DbCommand command, DbTransaction? transaction, string commandText)
+    {
+        if (!ReferenceEquals(command.Transaction, transaction))
+            command.Transaction = transaction;
+        int timeoutSeconds = _options.CommandTimeoutSeconds;
+        if (command.CommandTimeout != timeoutSeconds)
+            command.CommandTimeout = timeoutSeconds;
+        if (!string.Equals(command.CommandText, commandText, StringComparison.Ordinal))
+            command.CommandText = commandText;
     }
 
     private DbTransaction? GetActiveTransaction()
@@ -1019,10 +1071,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// GetAllAsync/CountAsync/聚合内核/原始 SQL 家族漏接——作用域内未接线家族在主连接开
     /// 并发 reader（10-05 审计 P1"接线一半"，PG 上 Npgsql "already open DataReader" 实测）。
     /// 本助手取代 CreateReadOrPrimaryCommandAsync（其副本路由语义并入 ③，池归还语义新增）。</para></summary>
-    private async ValueTask<ReadCommandLease> CreateReadRoutedCommandAsync(bool readFromReplica, CancellationToken ct)
+    /// <summary>刀2：事务由调用方单次取用后传入（每读省一次 GetActiveTransaction 锁往返）。</summary>
+    private async ValueTask<ReadCommandLease> CreateReadRoutedCommandAsync(bool readFromReplica, DbTransaction? activeTransaction, CancellationToken ct)
     {
-        if (GetActiveTransaction() is not null)
-            return new ReadCommandLease(this, CreateCommand(), null);
+        if (activeTransaction is not null)
+            return new ReadCommandLease(this, CreateCommand(activeTransaction), null);
 
         if (_operationState.ParallelReadsEnabled)
         {
@@ -1040,7 +1093,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             return new ReadCommandLease(this, command, null);   // 会话级读连接：不归还（归会话持有）
         }
 
-        return new ReadCommandLease(this, CreateCommand(), null);
+        return new ReadCommandLease(this, CreateCommand(activeTransaction), null);
     }
 
     /// <summary>读命令租约：命令随租约释放；并行读作用域内租到的池连接在释放时归还
@@ -1095,10 +1148,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <para><b>为什么值得单独一个重载</b>：单条写路径（Update/Delete/ExecuteAsync）
     /// 每次调用都过这里，是每操作固定成本；208 B 在 MySQL Insert 的 4241 B/行上约 5%，
     /// 在 BulkInsert 的 1222 B/行上约 17%。</para></summary>
-    private ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, CancellationToken ct)
+    private ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
         ResilienceExecutor executor = Volatile.Read(ref _resilience);
-        if (executor.IsPassThrough || GetActiveTransaction() is not null)
+        if (executor.IsPassThrough || activeTransaction is not null)
             return ExecuteRowsCoreAsync(command, ct);
         return executor.ExecuteWithTimeoutAsync(
             token => ExecuteRowsCoreAsync(command, token).AsTask(), ct);
