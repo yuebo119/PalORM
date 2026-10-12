@@ -8,7 +8,10 @@ namespace PalORM.Integration.Tests;
 /// 全命中边界）；② 超过占位符单批 500 上限的大列表在数组形态下整列表单参数正确执行
 ///（原路径需要 2 个 IN 批片 OR 组合）；③ NULL 语义：数组 NULL 元素在 = ANY 下永不匹配、
 /// NOT IN 含 NULL 时全行过滤（经典语义，数组形态不得改变）。SQLite 走占位符回退路径
-/// 作行为对照基线。</para></summary>
+/// 作行为对照基线。</para>
+/// <para><b>串行槽</b>：ExternalDatabase 用例统一挂 ExtBulkTable 守卫键
+///（B63 家族——ExternalDbIsolationInvariantTests 门禁锁定）。</para></summary>
+[NotInParallel("ExtBulkTable")]
 public sealed class WhereInArrayFormIntegrationTests
 {
     [Test]

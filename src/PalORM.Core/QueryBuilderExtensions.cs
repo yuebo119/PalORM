@@ -424,8 +424,14 @@ public static class QueryBuilderExtensions
         return results.Count <= 1 ? results.FirstOrDefault() : throw new InvalidOperationException("More than one.");
     }
 
-    /// <summary>键集（keyset）分页：返回一页数据与总行数。</summary>
-    /// <para>COUNT 与页查询在同一事务内执行保证一致性快照——无外部事务时自动开启并提交/回滚。</para>
+    /// <summary>键集（keyset）分页：返回一页数据与总行数。
+    /// <para><b>P0-1（2026-10-12）PG 单往返默认路径</b>：PG 方言 + 默认 READ COMMITTED +
+    /// 无外部事务 + 无拦截器/观测性时，COUNT 与页查询打包为一个 <c>DbBatch</c> 单次协议往返
+    ///（原形态 BEGIN+COUNT+SELECT+COMMIT 四次往返）。该形态下快照语义与原先逐位一致——
+    /// READ COMMITTED 的事务内两条语句本就<b>各取快照</b>（Total 与页行可能不一致），
+    /// 需要强一致快照请 <see cref="DataSession{TProvider}.WithIsolationLevel"/>(Snapshot/Serializable)
+    /// 或外部事务（两者都走经典事务路径）。MySQL（RR 快照有真实一致性）与 SQLite 保持
+    /// 经典事务路径。</para></summary>
     /// <para>lastValue 为上一页末行的 orderBy 键值：非默认值时生成 <c>orderBy &lt; lastValue</c>（降序）
     /// 或 <c>&gt;</c>（升序）续页条件；首页传 default。键值为 default 的行无法作为续页锚点。</para>
     /// <para>ITM-582: ① COUNT 查询走 Tracing/Metrics 但<b>不经过</b> IQueryInterceptor（页查询经过）——
@@ -455,6 +461,17 @@ public static class QueryBuilderExtensions
         // （ITM-406 同型面唯一漏口，First/Single/SingleOrDefault 三入口均已清）
         paged._cacheKey = null;
         DbTransaction? existingTransaction = paged.GetActiveTransaction();
+        // P0-1（2026-10-12 全量重读）：PG 默认形态的单往返分页——COUNT 与页 SELECT 打进一个
+        // DbBatch 单次协议往返。PG 默认 READ COMMITTED 下事务内两条语句<b>各取快照</b>
+        //（ToPageAsync 注释既有登记：Total 与页行可能不一致），原路径 BEGIN+COUNT+SELECT+COMMIT
+        // 四次往返中 BEGIN/COMMIT 两次买不到任何一致性，纯属开销；批内两条语句的快照语义
+        // 与原形态逐位一致。其余形态（强隔离/外部事务/SQLite/MySQL——RR 快照有真实一致性
+        // 价值）走下方经典事务路径；门禁细则见 CanUseBatchedPage。
+        if (CanUseBatchedPage(paged, existingTransaction))
+        {
+            return await ExecuteBatchedPageAsync(paged, pageSize, orderBy, lastValue, descending, ct)
+                .ConfigureAwait(false);
+        }
         // ITM-649：自有事务经 PublishTransaction 登记进 SessionOperationState——会话 Dispose
         // 与事务门禁可见该事务（此前直接 BeginTransactionAsync 自包含但登记缺席；若 Dispose/
         // 门禁依赖登记状态则为盲区）。外部事务已由其创建方登记，此处不重复发布。
@@ -537,6 +554,136 @@ public static class QueryBuilderExtensions
                 paged._operationState.RestoreTransaction(transaction, existingTransaction);
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>P0-1：PG 单往返分页的门禁判定（从 ToPageEntryAsync 抽出，降 S3776）——
+    /// 无外部事务、PG 方言、默认隔离（RC）、无拦截器/观测性（三段式编排留在经典路径）、
+    /// 非 AsPrepared、连接具备 DbBatch 能力（第三方 PG 方言 Provider 探测失败回退）。</summary>
+    private static bool CanUseBatchedPage<T>(QueryBuilder<T> paged, DbTransaction? existingTransaction)
+        where T : class, new()
+        => existingTransaction is null
+            && paged._dialect == SqlDialect.PostgreSql
+            && paged._isolationLevel is null or System.Data.IsolationLevel.ReadCommitted
+            && paged._interceptors.Count == 0
+            && !paged._tracing && !paged._metrics && !paged._prepared
+            && BatchedPageConnectionCapable(paged._conn);
+
+    /// <summary>P0-1：连接类型 → DbBatch 能力缓存（第三方 PG 方言 Provider 的连接未覆写
+    /// CreateBatch 时基类抛 NotSupportedException——探测一次按类型记忆，稳态一次字典查询）。
+    /// 与 SessionBatch.TryCreateBatch 的方言静态判定 + try/catch 兜底同纪律；本处分页路径
+    /// 按 PG 方言门控后仍需面对自定义连接，探测结果缓存避免每页一次异常抛出成本。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> BatchedPageCapability = new();
+
+    private static bool BatchedPageConnectionCapable(DbConnection connection)
+    {
+        Type connectionType = connection.GetType();
+        if (BatchedPageCapability.TryGetValue(connectionType, out bool capable))
+            return capable;
+        try
+        {
+            using DbBatch probe = connection.CreateBatch();
+            capable = true;
+        }
+        catch (NotSupportedException)
+        {
+            capable = false;
+        }
+        BatchedPageCapability.TryAdd(connectionType, capable);
+        return capable;
+    }
+
+    /// <summary>P0-1：PG 单往返分页——COUNT 与页查询的语句/参数在批执行内核外构建一次，
+    /// 重试经会话弹性策略包裹（幂等读，每次尝试重建批与读取器；经典路径的页查询同受
+    /// 弹性覆盖，COUNT 原直连——批形态两条语句同享覆盖是收窄而非放松）。</summary>
+    private static async ValueTask<(List<T> Rows, long Total)> ExecuteBatchedPageAsync<T, TKey>(
+        QueryBuilder<T> paged, int pageSize, Expression<Func<T, TKey>> orderBy,
+        TKey? lastValue, bool descending, CancellationToken ct)
+        where T : class, new()
+    {
+        // COUNT 先行构建（键集续页条件尚未注入——与经典路径的构建次序逐位一致，
+        // COUNT 不含续页条件是 keyset 语义本体）
+        string countSql = paged.BuildCountSql();
+        IReadOnlyList<DbParameter> countParameters = paged.GetCountParameters();
+        string operation = descending ? "<" : ">";
+        // C16：orderBy 列解析一次复用
+        string orderByColumn = paged.ResolveColumn(orderBy);
+        if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
+            paged.AddWhereComparison(orderByColumn, operation, lastValue);
+        paged.AddOrderBy(orderByColumn, descending);
+        string pageSql = paged.BuildSql();
+        IReadOnlyList<DbParameter> pageParameters = paged.GetQueryParameters();
+
+        ResilienceExecutor resilience = paged._resilience;
+        if (resilience.IsPassThrough)
+            return await ExecuteBatchedPageCoreAsync<T>(
+                paged, pageSize, countSql, countParameters, pageSql, pageParameters, ct).ConfigureAwait(false);
+        return await resilience.ExecuteAsync(
+            token => ExecuteBatchedPageCoreAsync<T>(
+                paged, pageSize, countSql, countParameters, pageSql, pageParameters, token),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>P0-1：批执行内核——COUNT 结果集 + 页结果集经一个 DbDataReader 顺序消费。
+    /// <para><b>参数归属</b>：COUNT 与页查询的参数列表可能引用同一批子句参数对象
+    ///（Where/DefaultFilter 的参数同时进两个语句），同一 DbParameter 实例不得挂进两个
+    /// DbBatchCommand——COUNT 侧经 <see cref="AddBatchParameterCopies"/> 拷贝（参数数 ≤ 过滤
+    /// 参数量，典型 0~2 个），页侧独占原始对象。</para></summary>
+    private static async Task<(List<T> Rows, long Total)> ExecuteBatchedPageCoreAsync<T>(
+        QueryBuilder<T> paged, int pageSize,
+        string countSql, IReadOnlyList<DbParameter> countParameters,
+        string pageSql, IReadOnlyList<DbParameter> pageParameters,
+        CancellationToken ct)
+        where T : class, new()
+    {
+        await using DbBatch batch = paged._conn.CreateBatch();
+        // DbBatch.Timeout 是 int 秒（SessionBatch 的 BATCH-001 口径；不设则驱动默认 30s，
+        // 会话 WithTimeout 在此静默失效）
+        batch.Timeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
+
+        DbBatchCommand countCommand = batch.CreateBatchCommand();
+        countCommand.CommandText = countSql;
+        AddBatchParameterCopies(countCommand, countParameters);
+        batch.BatchCommands.Add(countCommand);
+
+        DbBatchCommand pageCommand = batch.CreateBatchCommand();
+        pageCommand.CommandText = pageSql;
+        for (int i = 0; i < pageParameters.Count; i++)
+            pageCommand.Parameters.Add(pageParameters[i]);
+        batch.BatchCommands.Add(pageCommand);
+
+        await using DbDataReader reader = await batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        // 第一结果集：COUNT 标量（ITM-637 同型面：null/零行显式报错不静默 0）
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                "COUNT query returned no row — the ADO.NET driver behaved unexpectedly.");
+        object? countResult = reader.GetValue(0);
+        if (countResult is null)
+            throw new InvalidOperationException(
+                "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
+        long total = countResult is long count ? count : Convert.ToInt64(countResult);
+
+        // 第二结果集：页行（ITM-712 容量封顶与经典路径同口径）
+        if (!await reader.NextResultAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                "Paged query result set is missing from the batch response.");
+        List<T> rows = await ResultListReader.ReadAllAsync(
+            reader, paged._factory, Math.Min(pageSize, MaxPreallocatedCapacity), ct).ConfigureAwait(false);
+        return (rows, total);
+    }
+
+    /// <summary>P0-1：把参数拷贝进 COUNT 批命令（名称/类型/值三件套；源对象归页命令或子句所有，
+    /// 不得共享实例——DbBatchCommand.Parameters 是每命令独立集合）。</summary>
+    private static void AddBatchParameterCopies(DbBatchCommand command, IReadOnlyList<DbParameter> source)
+    {
+        for (int i = 0; i < source.Count; i++)
+        {
+            DbParameter original = source[i];
+            DbParameter copy = command.CreateParameter();
+            copy.ParameterName = original.ParameterName;
+            copy.DbType = original.DbType;
+            copy.Value = original.Value;
+            command.Parameters.Add(copy);
         }
     }
 
