@@ -290,10 +290,16 @@ public sealed class MySqlProvider : IDbProvider
 
     /// <summary>检测服务端 local_infile 是否开启——键 = <see cref="MySqlConnection.ConnectionString"/>
     /// （改写后串），命中未过期直接返回；未命中执行 SHOW VARIABLES 并写缓存。探测故障
-    /// （异常 / ITM-822 零行形态）经异常路径上抛，由本方法捕获后计数降级（不写缓存）。</summary>
+    /// （异常 / ITM-822 零行形态）经异常路径上抛，由本方法捕获后计数降级（不写缓存）。
+    /// R3（2026-10-12）：失败时打负结果标记（10s 窗口）——持续故障形态下原每次 BulkInsert
+    /// 重付探测往返 + 3s 超时封顶（最坏延迟洞），窗口内直接降级多值路径不再探测。</summary>
+    private const int LocalInfileNegativeTtlMilliseconds = 10_000;
+
     private static async ValueTask<bool> IsLocalInfileEnabledAsync(
         MySqlConnection conn, MySqlTransaction? transaction, CancellationToken ct)
     {
+        if (CapabilityProbeCache<LocalInfileProbe>.IsNegativeFresh(conn.ConnectionString))
+            return false;   // 负结果窗口：直接降级，不重付探测往返/超时
         try
         {
             return (await CapabilityProbeCache<LocalInfileProbe>.GetOrProbeAsync(
@@ -324,6 +330,8 @@ public sealed class MySqlProvider : IDbProvider
         {
             // R14：探测故障与能力关闭在多值路径上行为一致，但归因完全不同——计数留痕
             BulkOperationFramework.RecordCapabilityProbeFailure();
+            CapabilityProbeCache<LocalInfileProbe>.MarkNegative(
+                conn.ConnectionString, LocalInfileNegativeTtlMilliseconds);
             return false;  // 探测故障降级多值路径（见 summary）；取消原样上抛
         }
     }
