@@ -35,10 +35,6 @@ internal static class DataSessionCache
     /// 追加片段、独立 WHERE 子句）原本各自再做一次插值，现在一次查找同时拿到三种形态。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), DefaultFilterForms> FilterFormsCache = new();
 
-    /// <summary>per-(Type, Dialect, hasTenant, !ignoreFilters) 缓存 GetAsync 完整 SQL，消除每次插值 + QuoteIdentifier。
-    /// （ITM-640：第四元实义为 !ignoreFilters——key 由 DataSession.Crud 传入，注释修正）。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> GetByKeySqlCache = new();
-
     /// <summary>N5（2026-10-04 全量复读）：per-(Type, Dialect, 过滤形态) 缓存 GetAllAsync 完整 SQL——
     /// GetByKeySql/CountBaseSql/聚合后缀此前都已有组合句缓存，GetAllAsync 每次调用仍付 1 次
     /// QuoteIdentifier + 全句插值（约 150B）。键含 <see cref="DefaultFilterForms"/>：其值已编码

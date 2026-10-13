@@ -624,9 +624,15 @@ public static class QueryBuilderExtensions
         if (resilience.IsPassThrough)
             return await ExecuteBatchedPageCoreAsync<T>(
                 paged, pageSize, countSql, countParameters, pageSql, pageParameters, ct).ConfigureAwait(false);
+        // F3（2026-10-13 全量重读微项包）：R4-λ 清扫的漏网点——原形态捕获 6 个局部变量的闭包
+        // 在非直通（默认）配置下每分页查询分配一个 display class。static lambda 按调用点缓存，
+        // 值元组状态按值传递，语义逐位一致。
         return await resilience.ExecuteAsync(
-            token => ExecuteBatchedPageCoreAsync<T>(
-                paged, pageSize, countSql, countParameters, pageSql, pageParameters, token),
+            static (state, token) => ExecuteBatchedPageCoreAsync<T>(
+                state.Paged, state.PageSize, state.CountSql, state.CountParameters,
+                state.PageSql, state.PageParameters, token),
+            (Paged: paged, PageSize: pageSize, CountSql: countSql, CountParameters: countParameters,
+             PageSql: pageSql, PageParameters: pageParameters),
             ct).ConfigureAwait(false);
     }
 
