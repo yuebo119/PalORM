@@ -743,6 +743,18 @@ public struct QueryBuilder<T> where T : class, new()
         AddClause(QueryClauseKind.DefaultFilter, sql, parameters);
     }
 
+    /// <summary>G3（2026-10-13 五轮全量重读微项包）：采用共享的无参默认过滤链头节点——
+    /// From&lt;T&gt;() 对 SoftDelete 实体注入的默认过滤子句零参数、全部成分只由 TProvider 决定，
+    /// 预建节点跨 builder 复用（链不可变，并发共享安全）。位掩码与参数计数同步维护，
+    /// 语义与 <c>AddClause(DefaultFilter, condition)</c> 逐位一致；共享节点参数恒为空数组，
+    /// _parameterCount 增量为 0。</summary>
+    internal void AdoptSharedDefaultFilterNode(ClauseNode node)
+    {
+        _clauseChain = node;
+        _materializedClauses = null;
+        _clauseBitmask |= 1 << (int)QueryClauseKind.DefaultFilter;
+    }
+
     internal QueryBuilder<T> CloneForExecution()
     {
         var clone = new QueryBuilder<T>(new QueryBuilderContext<T>(

@@ -1005,36 +1005,38 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             : sql[..returningIndex] + " WHERE " + qualifiedTenantColumn + " = " + tenantParameterName + sql[returningIndex..];
     }
 
-    /// <summary>带租户过滤的 Update/Delete 语句（per-(Type, Dialect) 缓存）——
-    /// baseSql 为已缓存的生成语句，与租户后缀的拼接结果原先每次调用重建。</summary>
-    private static string GetTenantWrappedSql<T>(
-        System.Collections.Concurrent.ConcurrentDictionary<(Type, SqlDialect), string> cache,
-        string baseSql)
-        where T : class, new()
-    {
-        (Type, SqlDialect) key = (typeof(T), TProvider.Dialect);
-        if (cache.TryGetValue(key, out string? cached))
-            return cached;
-        string sql = baseSql + GetTenantAppendFragment();
-        cache.TryAdd(key, sql);
-        return sql;
-    }
+    /// <summary>G4（2026-10-13 五轮微项包）：带租户后缀的 UPDATE/DELETE 全句单值静态槽——
+    /// 值 = 生成语句 + 租户追加片段，由 (T, 方言) 唯一决定（非租户形态不走本槽）。
+    /// 替代 GetTenantWrappedSql 的 per-(Type, Dialect) 元组键字典查找。</summary>
+    private static string GetUpdateWithTenantSqlFast<T>(string baseSql) where T : class, new()
+        => SqlSlots<T>.UpdateWithTenant ??= baseSql + GetTenantAppendFragment();
 
-    /// <summary>软删 UPDATE 全句（per-(Type, Dialect, hasTenant) 缓存）——原先 DeleteAsync
-    /// 软删路径每次调用 5 次 QuoteIdentifier + 全句插值。</summary>
+    /// <summary>G4：带租户后缀的 DELETE 全句单值静态槽（同 <see cref="GetUpdateWithTenantSqlFast{T}"/>）。</summary>
+    private static string GetDeleteWithTenantSqlFast<T>(string baseSql) where T : class, new()
+        => SqlSlots<T>.DeleteWithTenant ??= baseSql + GetTenantAppendFragment();
+
+    /// <summary>软删 UPDATE 全句——G4（五轮微项包）起为纯构建器，仅在 2 槽静态缓存未命中时调用
+    ///（M1 原注释：原先 DeleteAsync 软删路径每次调用 5 次 QuoteIdentifier + 全句插值）。</summary>
     private static string GetSoftDeleteUpdateSql<T>(string tableName, bool hasTenant) where T : class, new()
     {
-        (Type, SqlDialect, bool) key = (typeof(T), TProvider.Dialect, hasTenant);
-        if (DataSessionCache.SoftDeleteUpdateSqlCache.TryGetValue(key, out string? cached))
-            return cached;
         string tenantFilter = hasTenant ? GetTenantAppendFragment() : "";
         // S2077 报备（M1-5，与原调用点同）：插值成分全为 QuoteIdentifier 标识符、
         // CurrentTimestampExpression 与 const 参数名——用户值经 @p0 绑定
 #pragma warning disable S2077
-        string sql = $"UPDATE {TProvider.QuoteIdentifier(tableName)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
+        return $"UPDATE {TProvider.QuoteIdentifier(tableName)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
 #pragma warning restore S2077
-        DataSessionCache.SoftDeleteUpdateSqlCache.TryAdd(key, sql);
-        return sql;
+    }
+
+    /// <summary>G4：软删 UPDATE 全句的 2 槽静态缓存取用（F6b 同型）——bit0=hasTenant，
+    /// 命中路径零字典查找（原 per-(Type, Dialect, bool) 元组键）。</summary>
+    private string GetSoftDeleteUpdateSqlFast<T>(EntityRuntimeInfo info) where T : class, new()
+    {
+        int slot = HasTenantFilter(info.Features) ? 1 : 0;
+        if (SqlSlots<T>.SoftDeleteUpdate[slot] is { } cached)
+            return cached;
+        string built = GetSoftDeleteUpdateSql<T>(info.TableName, slot == 1);
+        SqlSlots<T>.SoftDeleteUpdate[slot] = built;
+        return built;
     }
 
     private SessionOperationState.SessionOperationLease EnterOperation(
@@ -1324,6 +1326,29 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 由消费端覆盖（ValueTask 包装 Task 的 awaiter 即 Task 的 awaiter）。</summary>
     private static ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
         => new(command.ExecuteNonQueryAsync(ct));
+
+    /// <summary>G2（2026-10-13 五轮全量重读微项包）：只读路径弹性分支的共享异步壳——
+    /// 非 async 入口分派器无法用 using 跨任务持有租约，由本壳在全部重试尝试完成后统一释放
+    ///（"操作门禁横跨全部重试尝试持有"的既有契约逐位保持；重试内核经 default 租约空操作）。
+    /// 每调用一个状态机盒，与非 async 化前的入口帧等量（直通分支才是净省——省掉入口帧）。</summary>
+    private static async ValueTask<TResult> ExecuteReadOnlyRetryAsync<TState, TResult>(
+        SessionOperationState.SessionOperationLease lease,
+        ResilienceExecutor executor,
+        Func<TState, CancellationToken, Task<TResult>> operation,
+        TState state,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await executor.ExecuteAsync(operation, state, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            // DisposeAsync 即同步 Dispose 的 ValueTask.CompletedTask 包装（lease 契约），
+            // 经 await 形态满足 CA1849/S6966 且零额外开销
+            await lease.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     /// <summary>将复合格式项映射为参数名，参数值保持原始对象。
     /// <para>A1（2026-10-01 全 API 逐项轮）：改走形状缓存（baseIndex 恒 0）——与 QueryBuilder
