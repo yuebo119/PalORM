@@ -598,12 +598,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     }
 
     /// <summary>池化归还：Park 门禁 → 瞬态复位 → 入队；未被接收（池满/池释放）则 Unpark
-    /// 后走真实释放。复用槽、读连接、物化容量启发<b>不复位</b>（跨租用存活即收益）。</summary>
+    /// 后走真实释放。复用槽、读连接、物化容量启发<b>不复位</b>（跨租用存活即收益）。
+    /// 幂等（加固 2026-10-13）：重复 Dispose 命中 AlreadyParked/TornDown 直接返回——
+    /// 与非池化 DisposeAsync 的幂等语义对齐；并发双归还由 Park 的锁内状态判定互斥
+    /// （先驻留者独占归还路径，后到者拿到 AlreadyParked 返回；会话在入队前不可能被
+    /// 租出，不存在"复位与新租期并发"窗口）。</summary>
     private async ValueTask ReturnToPoolAsync()
     {
-        _operationState.Park();
+        SessionOperationState.ParkResult parkResult = _operationState.Park();
+        if (parkResult != SessionOperationState.ParkResult.Parked)
+            return;   // AlreadyParked（重复 Dispose）/ TornDown（池丢弃后的残留 Dispose）
         // 瞬态复位（已 Park，无并发进入）：过滤/租户/隔离级别/弹性覆写/拦截器加项全部
-        // 回到池的基准形态——上一租期 的 WithTenant/IgnoreFilters/WithTimeout/AddInterceptor
+        // 回到池的基准形态——上一租期的 WithTenant/IgnoreFilters/WithTimeout/AddInterceptor
         // 不得串味到下一租期（R3 共享拦截器表教训的池化同款防线）。
         _ignoreFilters = false;
         _tenantId = null;

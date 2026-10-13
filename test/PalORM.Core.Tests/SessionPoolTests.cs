@@ -39,6 +39,49 @@ public sealed class SessionPoolTests
     }
 
     [Test]
+    public async Task RepeatedDispose_IsIdempotent()
+    {
+        // 加固（2026-10-13）：重复 Dispose 不抛（AlreadyParked 幂等路径）——与非池化
+        // DisposeAsync 的幂等语义对齐；并发双归还由 Park 锁内状态判定互斥
+        await using DataSessionPool<SqliteProvider> pool = await CreatePoolAsync("spt_idem");
+        DataSession<SqliteProvider> session = await pool.RentAsync();
+        await session.DisposeAsync();
+        await session.DisposeAsync();   // 顺序重复
+        await session.DisposeAsync();   // 再重复
+        await Assert.That(pool.IdleCount).IsEqualTo(1);   // 恰好入池一次
+
+        // 并发双归还:两个线程同时 Dispose 已租出的同一会话——先驻留者归还,后到者幂等返回
+        DataSession<SqliteProvider> concurrent = await pool.RentAsync();
+        await Assert.That(pool.IdleCount).IsEqualTo(0);
+        Task firstDispose = Task.Run(async () => await concurrent.DisposeAsync());
+        Task secondDispose = Task.Run(async () => await concurrent.DisposeAsync());
+        await Task.WhenAll(firstDispose, secondDispose);   // 任一抛出即测试失败
+        await Assert.That(pool.IdleCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DisposeAfterPoolDiscard_IsIdempotent()
+    {
+        // 池满被丢弃(TornDown 路径)后的残留 Dispose 不抛
+        DataSessionPool<SqliteProvider> pool = DataSessionPool<SqliteProvider>.Create(
+            new DbOptions { ConnectionString = $"Data Source=spt_torn_{Guid.NewGuid():N};Mode=Memory;Cache=Shared" },
+            maxIdleSize: 1);
+        try
+        {
+            DataSession<SqliteProvider> a = await pool.RentAsync();
+            DataSession<SqliteProvider> b = await pool.RentAsync();
+            await a.DisposeAsync();
+            await b.DisposeAsync();   // 满员 → 真实释放(TornDown)
+            await b.DisposeAsync();   // 释放后的残留 Dispose:TornDown 幂等路径
+            await Assert.That(pool.IdleCount).IsEqualTo(1);
+        }
+        finally
+        {
+            await pool.DisposeAsync();
+        }
+    }
+
+    [Test]
     public async Task TransientOverrides_ResetBetweenRentals()
     {
         CountingInterceptor counter = new();
