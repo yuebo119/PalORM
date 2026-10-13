@@ -154,13 +154,13 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>绑定主键到 DELETE 参数。</summary>
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = key is long ? key : (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
     }
 
     /// <summary>主键值归一化（GetByKey 命令复用路径）——与 BindDelete 的 @p0 值同一真源。</summary>
     internal static object? ConvertDeleteKey(object key)
     {
-        return (object)global::System.Convert.ToInt64(key);
+        return key is long ? key : (object)global::System.Convert.ToInt64(key);
     }
 
     /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>
