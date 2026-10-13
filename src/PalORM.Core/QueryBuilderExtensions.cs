@@ -371,7 +371,10 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>返回第一行实体；无结果抛 <see cref="InvalidOperationException"/>。
-    /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para></summary>
+    /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para>
+    /// <para>G1（2026-10-13 五轮全量重读微项包）：截断族改走 <see cref="ExecuteQueryRowsAsync{T}"/>
+    /// 单行物化内核——不再为最多 2 行的结果建 List（约 −56B/次），管线语义（拦截器时序/
+    /// 观测性/弹性覆盖/A9 复用槽/截断防护）与 ToListAsync 逐位一致。</para></summary>
     public static async ValueTask<T> FirstAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         T? result = await FirstOrDefaultAsync(builder, ct).ConfigureAwait(false);
@@ -395,8 +398,8 @@ public static class QueryBuilderExtensions
         // First/Single 族的 _take 截断列表不得写入用户缓存键——后续同键 ToListAsync
         // 会命中截断数据静默丢行（ITM-406）
         limited._cacheKey = null;
-        List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
-        return results.Count == 0 ? default : results[0];
+        (T? row, _) = await ExecuteQueryRowsAsync(limited, maxRows: 1, ct).ConfigureAwait(false);
+        return row;
     }
 
     /// <summary>返回恰好一行实体；无结果或多于一行均抛 <see cref="InvalidOperationException"/>。
@@ -407,9 +410,9 @@ public static class QueryBuilderExtensions
         limited._take = 2;
         limited._takeLiteral = true;   // SQLite 上内联成 LIMIT 2（同 FirstOrDefaultAsync）
         limited._cacheKey = null;
-        List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
-        if (results.Count == 1) return results[0];
-        throw new InvalidOperationException(results.Count == 0 ? "Empty." : "More than one.");
+        (T? row, int count) = await ExecuteQueryRowsAsync(limited, maxRows: 2, ct).ConfigureAwait(false);
+        if (count == 1) return row!;
+        throw new InvalidOperationException(count == 0 ? "Empty." : "More than one.");
     }
 
     /// <summary>返回至多一行实体：无结果返回 null，多于一行抛 <see cref="InvalidOperationException"/>。
@@ -420,8 +423,127 @@ public static class QueryBuilderExtensions
         limited._take = 2;
         limited._takeLiteral = true;   // SQLite 上内联成 LIMIT 2（同 FirstOrDefaultAsync）
         limited._cacheKey = null;
-        List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
-        return results.Count <= 1 ? results.FirstOrDefault() : throw new InvalidOperationException("More than one.");
+        (T? row, int count) = await ExecuteQueryRowsAsync(limited, maxRows: 2, ct).ConfigureAwait(false);
+        return count <= 1 ? row : throw new InvalidOperationException("More than one.");
+    }
+
+    /// <summary>G1（2026-10-13 五轮全量重读微项包）：First/Single 截断族的单行物化执行内核——
+    /// 与 <see cref="ExecuteQueryAsync{T}"/>（ToList 管线）<b>语义逐位一致</b>（拦截器
+    /// OnBefore → OnAfter(实际行数) → OnError、观测性、弹性覆盖、A9 复用槽、A1 并行池归还、
+    /// READ-001 读连接失效），差异仅在物化：最多 maxRows 行直读进返回元组，不建 List
+    ///（截断族原先为 1~2 行结果付 List + 元素数组约 56B，且 OnAfter 行数口径不变）。
+    /// <para><b>缓存写入结构性跳过</b>：三个调用方入口在进入前清空 _cacheKey（ITM-406 截断防护），
+    /// 本内核无缓存写入面。maxRows 恒等于已设的 Take 值（1 或 2）——SQL 的 LIMIT 已在服务端
+    /// 截断，循环上限是双保险而非额外扫描。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "与 ExecuteQueryAsync/ExecuteForEachAsync 同构的管线形态（执行/拦截器/观测性三段式）——"
+            + "单行变体必须保持同一语义结构，抽公共化会为各处引入一层间接（PipelineParityContractTests 的既有取舍）。")]
+    private static async ValueTask<(T? Row, int Rows)> ExecuteQueryRowsAsync<T>(
+        QueryBuilder<T> builder, int maxRows, CancellationToken ct, object? operationOwner = null)
+        where T : class, new()
+    {
+        if (builder._selectColumns is not null)
+            throw new NotSupportedException(
+                "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
+        string sql = builder.BuildSql();
+        IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
+        var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
+        const string operation = "select";
+        string provider = builder._dialect.GetName();
+        bool observed = builder._tracing || builder._metrics;
+        Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        bool needStopwatch = observed || interceptors.Count > 0;
+        long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
+        string outcome = "error";
+        DbTransaction? boundTransaction = builder.GetActiveTransaction();
+        ResilienceExecutor resilience = builder._resilience;
+        bool resilient = boundTransaction is null && !resilience.IsPassThrough;
+
+        // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
+        DbConnection? lastReadConnection = null;
+        // 单次尝试内核——最多读 maxRows 行直进元组；A9 复用槽与新建命令的分支形态与
+        // ExecuteQueryAsync 逐位同源（R-UNNESTB：复用命令参数集合持久持有，就地写 Value）。
+        async Task<(T? Row, int Rows)> ExecuteCoreAsync(CancellationToken token)
+        {
+            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
+            lastReadConnection = connection;
+            DbCommand? reusable = builder.TryAcquireReusableSelectCommand(connection, sql);
+            bool ownsCommand;
+            bool parametersBound;
+            DbCommand cmd;
+            if (reusable is null
+                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, parameters)))
+            {
+                cmd = connection.CreateCommand();
+                ownsCommand = true;
+                parametersBound = false;
+            }
+            else
+            {
+                cmd = reusable;
+                ownsCommand = false;
+                parametersBound = reusable.Parameters.Count > 0;
+            }
+            try
+            {
+                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
+                    cmd.CommandText = sql;
+                cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+                cmd.Transaction = boundTransaction;
+                if (!parametersBound) AddParameters(cmd, parameters);
+                NotifyInterceptorsOnBefore(interceptors, context);
+                await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+                await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                T? first = null;
+                int rows = 0;
+                while (rows < maxRows && await reader.ReadAsync(token).ConfigureAwait(false))
+                {
+                    if (rows == 0)
+                        first = builder._factory(reader);
+                    rows++;
+                }
+                NotifyInterceptorsOnAfter(interceptors, context, swStart, rows);
+                return (first, rows);
+            }
+            finally
+            {
+                if (ownsCommand) await cmd.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        try
+        {
+            using SessionOperationState.SessionOperationLease operationLease =
+                builder._operationState.EnterReadOnly(operationOwner);
+            (T? row, int rows) result = resilient
+                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
+                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
+            outcome = "success";
+            return result;
+        }
+        catch (Exception exception)
+        {
+            if (exception is OperationCanceledException && ct.IsCancellationRequested)
+                outcome = "cancelled";
+            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
+            //（NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
+            // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
+            if (builder._resilience.IsTransient(exception))
+                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
+            NotifyInterceptorsOnError(builder._interceptors, context, exception);
+            throw;
+        }
+        finally
+        {
+            PalORMMetrics.CompleteActivity(activity, outcome);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
+            // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
+            if (lastReadConnection is not null)
+                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
+        }
     }
 
     /// <summary>键集（keyset）分页：返回一页数据与总行数。

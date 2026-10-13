@@ -174,7 +174,12 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>F2：批循环内核——命令/数组参数建一次批间只换 Value（R-UNNESTB 纪律同
-    /// <see cref="ExecuteArrayFormDeleteAsync{T}"/>）。</summary>
+    /// <see cref="ExecuteArrayFormDeleteAsync{T}"/>）。
+    /// G6 证伪登记（2026-10-13 五轮微项包实施轮）：<c>CreateArrayParameter</c> 的返回值允许
+    /// Provider 变换（非 PG 方言需把数组编码为可绑定形态，测试夹具 ArrayFormDialectProvider
+    /// 实锤——SQLite 形态把数组编码为 JSON 文本），"临时参数仅当值通道、Value 即原数组"
+    /// 只是 Npgsql 的实现细节不是接口契约；批间直赋原数组的优化不成立，维持每批经
+    /// Provider 构造（值变换是契约的一部分）。</summary>
     private async Task<long> ExecuteTypedArrayDeleteCoreAsync<T, TKey>(
         DbTransaction? tran,
         IReadOnlyList<TKey> keys,
@@ -256,7 +261,7 @@ public partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandText = BuildBulkDeleteArraySql(identifiers, isSoftDelete);
-        // 参数对象批间不变（只换 Value）——见方法级 R-UNNESTB 说明
+        // 参数对象批间不变（只换 Value）——见方法级 R-UNNESTB 说明。
         DbParameter idsParameter = TProvider.CreateParameter(ArrayParameterName, DBNull.Value);
         cmd.Parameters.Add(idsParameter);
         BindDefaultFilterParameters<T>(cmd);
@@ -737,8 +742,7 @@ public partial class DataSession<TProvider>
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
         if (HasTenantFilter<T>())
-            updateSql = GetTenantWrappedSql<T>(
-                DataSessionCache.UpdateWithTenantSqlCache, updateSql);
+            updateSql = GetUpdateWithTenantSqlFast<T>(updateSql);
         cmd.CommandText = updateSql;
 
         // 参数池：一行 paramsPerRow 个 + 可选租户参数（固定名追加末尾）
