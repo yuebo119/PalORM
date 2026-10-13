@@ -124,9 +124,13 @@ public sealed class ResilienceExecutor
                         _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation, probeToken);
                         return resultNoTimeout;
                     }
+                    // R3-CTS（2026-10-13 用户点名轮）：非链接形态经进程级租借池复用——
+                    // step10 证伪的是"移除 CTS 依赖驱动超时"(丢语义)；池化保持超时语义
+                    // 逐位不变只消分配(TryReset 官方热路径复用模式,见 PooledCts 文档)。
+                    // 链接形态(源 token 注册不可跨次复用)恒新建+Dispose。
                     timeout = attemptScope.CanBeCanceled
                         ? CancellationTokenSource.CreateLinkedTokenSource(attemptScope)
-                        : new CancellationTokenSource();
+                        : PooledCts.Rent();
                     if (_timeout != Timeout.InfiniteTimeSpan)
                         timeout.CancelAfter(_timeout);
                     T result = await operation(timeout.Token).ConfigureAwait(false);
@@ -172,7 +176,15 @@ public sealed class ResilienceExecutor
                 }
                 finally
                 {
-                    timeout?.Dispose();
+                    // R3-CTS:非链接形态归还池(TryReset 失败即已取消 → 池内 Dispose),
+                    // 链接形态照旧 Dispose(源 token 注册不可复用)。
+                    if (timeout is not null)
+                    {
+                        if (attemptScope.CanBeCanceled)
+                            timeout.Dispose();
+                        else
+                            PooledCts.Return(timeout);
+                    }
                 }
             }
         }
@@ -262,9 +274,11 @@ public sealed class ResilienceExecutor
         // 无限超时且不可取消时完全不建 CTS（无超时事件可发生）。
         if (_timeout == Timeout.InfiniteTimeSpan && !ct.CanBeCanceled)
             return await operation(ct).ConfigureAwait(false);
-        CancellationTokenSource timeout = ct.CanBeCanceled
+        // R3-CTS:同 ExecuteAsync——非链接形态走租借池,链接形态新建。
+        bool linked = ct.CanBeCanceled;
+        CancellationTokenSource timeout = linked
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-            : new CancellationTokenSource();
+            : PooledCts.Rent();
         try
         {
             if (_timeout != Timeout.InfiniteTimeSpan)
@@ -285,7 +299,11 @@ public sealed class ResilienceExecutor
         }
         finally
         {
-            timeout.Dispose();
+            // R3-CTS:同 ExecuteAsync 的归还分流。
+            if (linked)
+                timeout.Dispose();
+            else
+                PooledCts.Return(timeout);
         }
     }
 
