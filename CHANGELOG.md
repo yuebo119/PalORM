@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 📦 依赖升级：SQLite3MC.PCLRaw.bundle 2.4.0 → 2.6.1（SQLite 引擎 3.54.0）；TUnit 1.73.19 → 1.74.0
+
+- **SQLite3MC.PCLRaw.bundle 2.4.0 → 2.6.1**：上游 SQLite3 Multiple Ciphers 升至 SQLite
+  3.54.0，新增 chacha20/poly1305 硬件加速、临时文件加密与 `encrypt_temp_db`/`mc_cpu_info`/
+  `mc_aes_info`/`mc_chacha20_hwaccel` pragma；无初始化 API 变更，与本仓使用面
+  （`SQLitePCL.Batteries_V2.Init()` + 标准 SQL，无加密连接形态）零交集。README 驱动表
+  同步（3.47+ → 3.54+）。
+- **TUnit / TUnit.Assertions 1.73.19 → 1.74.0**（minor，测试框架）。
+- **盘点口径**：`dotnet list package --outdated` 全项目扫描，其余引用（Npgsql 10.0.3 /
+  MySqlConnector 2.6.2 / Microsoft.Data.Sqlite.Core 11.0.0-rc.1 / Roslyn 5.9.0 / Dapper
+  2.1.89 / Dapper.AOT 1.1.0 / RepoDb 1.16.0 / SonarAnalyzer 10.35.0.4138 / SourceLink
+  10.0.401）均已最新；Sqlite.Core 经 NuGet 平面索引核实 rc.1 为最新发布版（无更新
+  rc/stable）。
+- **验证**：ci.slnf Debug --no-incremental 0W0E · Core 605/605 · SourceGen 236/236 ·
+  Integration 真库 292/292（SQLite 3.54.0 原生引擎下）· gate 32/32 · tech-debt 14/14。
+
 ### ⚡ 性能：R4-λ 弹性调用闭包归零（结构体状态重载，默认配置读路径再 −104B/键）
 
 - **结构体状态重载**：ResilienceExecutor 新增 `ExecuteAsync<TState,TResult>` /

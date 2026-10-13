@@ -9,7 +9,10 @@
     <!-- ITM-依赖升级(2026-09-10)：preview.7 → rc.1（与 SDK 11.0.100-rc.1 同轨对齐；.NET 11 GA 后切 stable）
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-preview.7.26381.103" /> -->
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.4.0" />
+    <!-- 2026-10-14 依赖升级轮：SQLite3MC 2.4.0→2.6.1（引擎升 SQLite 3.54.0；chacha20/poly1305
+         硬件加速、临时文件加密与新 pragma，与本仓使用面（Batteries_V2.Init + 标准 SQL）零交集，
+         无初始化 API 变更）。Sqlite.Core 侧经 NuGet 平面索引核实 rc.1 已是最新发布版，维持。 -->
+    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.6.1" />
     <!-- v5.0 阶段 2.2：Npgsql 9.0.3→10.0.3。破坏性变更（date/time 默认映射 DateOnly/TimeOnly）
          仅影响 GetValue/ExecuteScalar 路径；RowFactoryEmitter 全部用 GetDateTime/GetFieldValue<T>，
          经源码核实 v10 仍返回 DateTime/TimeSpan，零代码改动。 -->
@@ -36,9 +39,10 @@
   <ItemGroup>
     <!-- 2026-09-29 依赖升级轮：1.69.0→1.71.0（minor，测试框架）——升后三测试套全量验证。
          2026-10-08 依赖升级轮：1.71.0→1.73.5（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。
-         2026-10-11 依赖升级轮：1.73.5→1.73.19（patch 流，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。 -->
-    <PackageVersion Include="TUnit" Version="1.73.19" />
-    <PackageVersion Include="TUnit.Assertions" Version="1.73.19" />
+         2026-10-11 依赖升级轮：1.73.5→1.73.19（patch 流，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。
+         2026-10-14 依赖升级轮：1.73.19→1.74.0（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。 -->
+    <PackageVersion Include="TUnit" Version="1.74.0" />
+    <PackageVersion Include="TUnit.Assertions" Version="1.74.0" />
     <!-- v5.0 阶段 1.3：移除 Microsoft.NET.Test.Sdk——TUnit 1.x 走 MTP 模式，
          dotnet run 直接执行，不再需要 VSTest 桥接（dotnet test 入口）。 -->
   </ItemGroup>
