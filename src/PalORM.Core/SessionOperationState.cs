@@ -197,10 +197,17 @@ internal sealed class SessionOperationState
     // 本身是 ms 级重负载操作，一次 ~300B EC 写入可接受）。
     private readonly AsyncLocal<int> _readLeaseDepth = new();
 
-    /// <summary>是否处于并行读作用域（供 DataSession 的读连接池判断）。</summary>
+    /// <summary>是否处于并行读作用域（供 DataSession 的读连接池判断）。
+    /// F6（2026-10-13 全量重读微项包）：读侧降级 Volatile.Read——计数只在锁内增减
+    /// （<see cref="EnterParallelReadScope"/>/<see cref="ExitParallelReadScope"/>），读为 int 原子且
+    /// 漏读两方向都安全（假阴性=下一查询再读到；假阳性所需的"读 true 后作用域已退"窗口内，
+    /// 池连接的释放由作用域退出方负责，读方最多多走一次池查询）。原 getter 持锁在每条查询的
+    /// 执行路径上被读 1~2 次（AcquireExecutionConnectionAsync/CreateReadRoutedCommandAsync/
+    /// TryAcquireReusable*），是纯无竞争锁开销；镜像纪律同 <see cref="CircuitBreaker"/> 的
+    /// _isOpenFlag（C1 先例）。写点仍在锁内，与全部状态变迁的锁纪律不冲突。</summary>
     internal bool ParallelReadsEnabled
     {
-        get { lock (_sync) return _parallelReadScopes > 0; }
+        get => Volatile.Read(ref _parallelReadScopes) > 0;
     }
 
     /// <summary>进入并行读作用域（ARCH-001）——可嵌套，深度归零即恢复单活动门禁。</summary>

@@ -829,22 +829,50 @@ public sealed partial class DataSession<TProvider>
         return built;
     }
 
-    /// <summary>取 GetAsync 的完整 SQL（含表名/PK/过滤），走共享缓存。
-    /// key 含 hasTenant + ignoreFilters：两者影响 filter 后缀。
-    /// <b>v5.6</b>：命中走 <c>TryGetValue</c>（原 <c>GetOrAdd</c> 的 factory 捕获
-    /// columnNames/tableName/filter 三个方法局部，每次调用分配显示类与委托）。</summary>
+    /// <summary>取 GetAsync 的完整 SQL（含表名/PK/过滤）。
+    /// F6b（2026-10-13 全量重读微项包）：命中路径改走 <see cref="GetGetByKeySqlFast{T}"/> 的
+    /// 4 槽静态缓存（零字典查找）；本方法退化为纯构建器，仅槽未命中时调用。</summary>
     private static string GetGetByKeySql<T>(IReadOnlyList<string> columnNames, string tableName,
-        string filter, bool hasTenant, bool ignoreFilters)
+        string filter)
         where T : class, new()
     {
-        (Type, SqlDialect, bool, bool) key = (typeof(T), TProvider.Dialect, hasTenant, !ignoreFilters);
-        if (DataSessionCache.GetByKeySqlCache.TryGetValue(key, out string? cached))
-            return cached;
         string selectColumns = GetSelectColumns<T>(columnNames);
         string pkColumn = GetPkColumn<T>();
-        string built = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
-        DataSessionCache.GetByKeySqlCache.TryAdd(key, built);
+        return $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
+    }
+
+    /// <summary>F6b：GetByKey 完整 SQL 的 4 槽静态缓存取用。SQL 值由
+    /// (T, TProvider.Dialect, hasTenant, ignoreFilters) 唯一决定——软删/租户特性是 T 的
+    /// 编译期属性（ITM-758 单调不可变论证同源），方言由闭式泛型 TProvider 钉死，故每
+    /// (TProvider, T) 恰 4 个可能值，按两 bit 索引。原先每读两次 ConcurrentDictionary
+    /// 元组键查找（FilterForms + GetByKeySql），现命中路径零查找。
+    /// <para><b>并发</b>：写入竞态良性（同输入恒同输出、引用写原子）；调用点都在操作租约内
+    /// （WithTenant/IgnoreFilters 受 ITM-568 门禁保护，租约期间判别位恒定）。</para></summary>
+    private string GetGetByKeySqlFast<T>(EntityRuntimeInfo info) where T : class, new()
+    {
+        bool hasTenant = HasTenantFilter(info.Features);
+        int slot = (hasTenant ? 2 : 0) | (_ignoreFilters ? 1 : 0);
+        string? cached = GetByKeySqlSlot<T>.Slots[slot];
+        if (cached is not null)
+            return cached;
+        string built = GetGetByKeySql<T>(info.ColumnNames, info.TableName,
+            GetDefaultFilterFragment<T>(info.Features));
+        GetByKeySqlSlot<T>.Slots[slot] = built;
         return built;
+    }
+
+    /// <summary>F6b：4 槽载体。嵌在 DataSession&lt;TProvider&gt; 内按 (TProvider, T) 分片——
+    /// SQL 含方言引用符，PG/SQLite 双引号与 MySQL 反引号产出不同文本，必须分片（这正是
+    /// 缓存目的而非 S2743 的事故场景）；T 仅作分片键不出现在字段类型（S2326 同
+    /// EntityInfoCache.Per&lt;T&gt; 的既定抑制理由）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S2326",
+        Justification = "T 不出现在字段类型是刻意的：分片键是 (TProvider, T) 的闭合类型本身，字段值是该分片的 4 个可能 SQL 之一。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+        Justification = "静态数组按 (TProvider, T) 分片正是本缓存的目的（每闭合类型一份），非跨泛型实例共享事故。")]
+    private static class GetByKeySqlSlot<T> where T : class, new()
+    {
+        /// <summary>4 个槽：bit1=hasTenant，bit0=ignoreFilters。null = 未构建。</summary>
+        public static readonly string?[] Slots = new string?[4];
     }
 
     /// <summary>取 GetAllAsync 的完整 SQL（含表名/过滤），走共享缓存（N5，2026-10-04 全量复读）。
@@ -934,9 +962,7 @@ public sealed partial class DataSession<TProvider>
         EntityRuntimeInfo info, object key, CancellationToken token)
         where T : class, new()
     {
-        string filter = GetDefaultFilterFragment<T>(info.Features);
-        string commandText = GetGetByKeySql<T>(info.ColumnNames, info.TableName, filter,
-            HasTenantFilter(info.Features), _ignoreFilters);
+        string commandText = GetGetByKeySqlFast<T>(info);
         DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
         bool healthy = false;
         try
@@ -967,10 +993,9 @@ public sealed partial class DataSession<TProvider>
         EntityRuntimeInfo info, DbTransaction? activeTransaction, object key, CancellationToken token)
         where T : class, new()
     {
-        string filter = GetDefaultFilterFragment<T>(info.Features);
         // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
-        string commandText = GetGetByKeySql<T>(info.ColumnNames, info.TableName, filter,
-            HasTenantFilter(info.Features), _ignoreFilters);
+        // F6b：4 槽静态缓存零字典查找（原 FilterForms + GetByKeySql 两次元组键哈希/读）
+        string commandText = GetGetByKeySqlFast<T>(info);
 
         // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
         // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存

@@ -298,7 +298,10 @@ public sealed partial class DataSession<TProvider>
         string streamCommandText = FormatSqlWithParameters(sql);
         DbCommand? reusedStream = readFromReplica ? null : TryAcquireReusableDirectCommand(streamCommandText);
         bool streamInPlace = reusedStream is not null && TryBindFormattableValuesInPlace(reusedStream, sql);
-        ReadCommandLease? lease = null;
+        // F7：租约改 struct——default 形态（复用命令分支）的 MarkHealthy/MarkFailed/DisposeAsync
+        // 均为空安全空操作，调用点保持无分支形态（Nullable<T>.Value 是只读属性，经它调用
+        // 变异方法会作用在临时拷贝上，故不用 Nullable 形态）。
+        ReadCommandLease lease = default;
         try
         {
             DbCommand cmd;
@@ -320,7 +323,7 @@ public sealed partial class DataSession<TProvider>
             // A1：reader 成功打开即证明连接本轮可用——先标记健康（早终止消费如 First/Single 族
             // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
             // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
-            lease?.MarkHealthy();
+            lease.MarkHealthy();
             var tf = streamRowFactory;
             bool firstRow = true;
             while (true)
@@ -332,7 +335,7 @@ public sealed partial class DataSession<TProvider>
                 }
                 catch (Exception)
                 {
-                    lease?.MarkFailed();
+                    lease.MarkFailed();
                     throw;
                 }
                 if (!hasRow) break;
@@ -346,8 +349,7 @@ public sealed partial class DataSession<TProvider>
         }
         finally
         {
-            if (lease is not null)
-                await lease.DisposeAsync().ConfigureAwait(false);
+            await lease.DisposeAsync().ConfigureAwait(false);
         }
     }
 

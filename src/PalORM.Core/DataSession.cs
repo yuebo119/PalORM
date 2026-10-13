@@ -141,16 +141,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         for (int attempt = 0; attempt <= maxRetries; attempt++)
         {
             DbConnection? connection = null;
+            // F5：非可取消 ct 走租借池（A3 补扫）——归还收在外层 finally（成功 return 与全部
+            // 失败路径共用，不引入嵌套 try）
+            CancellationTokenSource? openScope = null;
             try
             {
                 connection = TProvider.CreateConnection(cs, options);
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(options.ConnectionTimeout);
-                await connection.OpenAsync(cts.Token).ConfigureAwait(false);
+                openScope = RentOpenScopeCts(ct);
+                openScope.CancelAfter(options.ConnectionTimeout);
+                await connection.OpenAsync(openScope.Token).ConfigureAwait(false);
 
                 // Provider 初始化钩子（SQLite: PRAGMA foreign_keys/WAL）。
                 // 与 OpenAsync 共享连接超时和调用方取消——初始化被锁阻塞时不再无限等待。
-                await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
+                await TProvider.InitializeConnectionAsync(connection, openScope.Token).ConfigureAwait(false);
 
                 // v5.0 阶段 5.2：用户会话级 SQL（SET TIME ZONE / search_path / statement_timeout 等）。
                 // 在 Provider 钩子后执行——Provider 钩子可能设置影响后续 SET 的状态（如 SQLite PRAGMA）。
@@ -163,7 +166,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
                     await using DbCommand setupCmd = connection.CreateCommand();
                     setupCmd.CommandTimeout = options.CommandTimeoutSeconds;
                     setupCmd.CommandText = options.SessionSetupSql;
-                    await setupCmd.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
+                    await setupCmd.ExecuteNonQueryAsync(openScope.Token).ConfigureAwait(false);
                 }
 
                 // R3 回退登记（2026-10-12）：曾改共享空表省 ~32B/会话——构造器对空表"直接复用传入
@@ -206,6 +209,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             }
             finally
             {
+                if (openScope is not null)
+                    ReturnOpenScopeCts(openScope, ct);
                 await DisposeConnectionSafelyAsync(connection).ConfigureAwait(false);
             }
         }
@@ -236,12 +241,20 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             try
             {
                 connection = TProvider.CreateConnection(cs, options);
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(options.ConnectionTimeout);
-                await connection.OpenAsync(cts.Token).ConfigureAwait(false);
-                // 与 CreateAsync 同口径：预热连接也过 Provider 初始化钩子（SQLite 无此路径，
-                // PG/MySQL 钩子为方言初始化），归还池后的首用行为与正常连接一致。
-                await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
+                // F5：同 CreateAsync——非可取消 ct 走租借池
+                CancellationTokenSource cts = RentOpenScopeCts(ct);
+                try
+                {
+                    cts.CancelAfter(options.ConnectionTimeout);
+                    await connection.OpenAsync(cts.Token).ConfigureAwait(false);
+                    // 与 CreateAsync 同口径：预热连接也过 Provider 初始化钩子（SQLite 无此路径，
+                    // PG/MySQL 钩子为方言初始化），归还池后的首用行为与正常连接一致。
+                    await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ReturnOpenScopeCts(cts, ct);
+                }
             }
             finally
             {
@@ -258,6 +271,22 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         if (connection is null) return;
         try { await connection.DisposeAsync().ConfigureAwait(false); }
         catch { /* 清理失败不能覆盖连接或初始化异常。 */ }
+    }
+
+    // F5（2026-10-13 全量重读微项包）：连接打开范围的 CTS——A3 纪律补扫（ResilienceExecutor
+    // 早已落地的同型分支，建连四处此前漏扫）：ct 可取消走链接形态（源 token 注册不可跨次复用，
+    // 用后 Dispose），否则走 <see cref="PooledCts"/> 租借（未取消时 TryReset 复用，约省一次
+    // CTS+CancelAfter 定时器的每建连分配）。归还纪律与 ResilienceExecutor 相同：token 只在
+    // 单次打开/初始化的 await 生命周期内传递，驱动在执行完成前注销自己的取消注册。
+    private static CancellationTokenSource RentOpenScopeCts(CancellationToken ct)
+        => ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : PooledCts.Rent();
+
+    private static void ReturnOpenScopeCts(CancellationTokenSource cts, CancellationToken ct)
+    {
+        if (ct.CanBeCanceled) cts.Dispose();
+        else PooledCts.Return(cts);
     }
 
     private static bool IsRetryable(Exception exception, CancellationToken callerToken)
@@ -293,11 +322,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         {
             // READ-003（2026-09-22）：与主连接 CreateAsync 同口径——连接建立与初始化共享连接
             // 超时和调用方取消。此前只吃调用方 ct，ct == default 时读连接建立可无界挂起。
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(_options.ConnectionTimeout);
-            await created.OpenAsync(cts.Token).ConfigureAwait(false);
-            if (_readConnInitializer is not null)
-                await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+            // F5：非可取消 ct 走租借池（同 CreateAsync 的 A3 补扫）。
+            CancellationTokenSource cts = RentOpenScopeCts(cancellationToken);
+            try
+            {
+                cts.CancelAfter(_options.ConnectionTimeout);
+                await created.OpenAsync(cts.Token).ConfigureAwait(false);
+                if (_readConnInitializer is not null)
+                    await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                ReturnOpenScopeCts(cts, cancellationToken);
+            }
         }
         catch (Exception exception)
         {
@@ -337,11 +374,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             _readConnectionString ?? _options.ResolveConnectionString(), _options);
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(_options.ConnectionTimeout);
-            await created.OpenAsync(cts.Token).ConfigureAwait(false);
-            if (_readConnInitializer is not null)
-                await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+            // F5：非可取消 ct 走租借池（READ-003 口径不变）
+            CancellationTokenSource cts = RentOpenScopeCts(cancellationToken);
+            try
+            {
+                cts.CancelAfter(_options.ConnectionTimeout);
+                await created.OpenAsync(cts.Token).ConfigureAwait(false);
+                if (_readConnInitializer is not null)
+                    await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                ReturnOpenScopeCts(cts, cancellationToken);
+            }
         }
         catch (Exception exception)
         {
@@ -1194,13 +1239,28 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     /// <summary>读命令租约：命令随租约释放；并行读作用域内租到的池连接在释放时归还
     /// （<see cref="ReleaseReadConnectionAsync"/> 对非池连接空操作）。会话级连接
-    /// （主连接/ForRead 读连接）不归还，仍归会话持有。</summary>
-    private sealed class ReadCommandLease(DataSession<TProvider> session, DbCommand command, DbConnection? pooledConnection)
-        : IAsyncDisposable
+    /// （主连接/ForRead 读连接）不归还，仍归会话持有。
+    /// F7（2026-10-13 全量重读微项包）：class → struct——直查族（GetAll/Count/聚合/Query/
+    /// QueryAsyncEnumerable）每次读原先为租约本身付一个堆对象（约 48B），而主连接 + 非并行读
+    /// 形态下它只包一层命令引用。struct 经 await using 的<b>模式化</b> DisposeAsync 释放
+    /// （不实现 IAsyncDisposable 接口——接口形态对 struct 按接口调用会装箱，模式化直调不装箱）；
+    /// MarkHealthy/MarkFailed 只在局部变量上调用（值语义，变异作用于调用方持有的实例）。</summary>
+    private struct ReadCommandLease
     {
+        private readonly DataSession<TProvider> _session;
+        private readonly DbCommand _command;
+        private readonly DbConnection? _pooledConnection;
         private bool _healthy;
 
-        public DbCommand Command { get; } = command;
+        public ReadCommandLease(DataSession<TProvider> session, DbCommand command, DbConnection? pooledConnection)
+        {
+            _session = session;
+            _command = command;
+            _pooledConnection = pooledConnection;
+            _healthy = false;
+        }
+
+        public DbCommand Command => _command;
 
         /// <summary>读操作成功完成（结果已完整消费）后调用（A1）。未调用即视为失败路径：
         /// 池连接在释放时被丢弃而非归还，避免失败后的连接状态被后续读复用。</summary>
@@ -1212,16 +1272,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
         public async ValueTask DisposeAsync()
         {
+            // default 租约（QueryAsyncEnumerable 的复用命令分支从未赋值）：无资源可释放。
+            // 空安全形态让调用点无需 hasLease 分支（S3776：流式枚举器的分支预算紧）。
+            if (_command is null) return;
             // ITM-891：Command 释放抛出时连接仍须归还——try/finally 保证
             //（原形态连接留在池登记表外，同作用域内不再入 idle 栈，直到作用域退出兜底）。
             try
             {
-                await Command.DisposeAsync().ConfigureAwait(false);
+                await _command.DisposeAsync().ConfigureAwait(false);
             }
             finally
             {
-                if (pooledConnection is not null)
-                    await session.ReleaseOrDiscardReadConnectionAsync(pooledConnection, _healthy).ConfigureAwait(false);
+                if (_pooledConnection is not null)
+                    await _session.ReleaseOrDiscardReadConnectionAsync(_pooledConnection, _healthy).ConfigureAwait(false);
             }
         }
     }
