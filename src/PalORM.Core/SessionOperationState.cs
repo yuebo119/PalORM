@@ -109,29 +109,16 @@ internal sealed class SessionOperationState
 
     internal SessionOperationLease Enter(object? owner = null)
     {
+        // R2-#9（2026-10-13 微项，原 A3 安全子集）：owner 重入快路径——事务/编排循环内
+        // 每行一次的 Enter 免锁。判定抽 CanFastReenterOwner（降 S3776），只读不改状态。
+        if (owner is not null && CanFastReenterOwner(owner))
+            return default;
+
         lock (_sync)
         {
             bool ownedOperation = owner is not null
                 && ReferenceEquals(owner, _activeOperationOwner);
-            bool currentTransaction = _transactionOwner is not null
-                && ReferenceEquals(
-                    _transactionOwner, _currentTransactionOwner.Value);
-            ObjectDisposedException.ThrowIf(
-                _state is 2 or 3
-                || (_state == 1 && !ownedOperation && !currentTransaction),
-                this);
-            if (_transactionCompleting && currentTransaction && !ownedOperation)
-            {
-                throw new InvalidOperationException(
-                    "The active transaction flow is completing.");
-            }
-            if (_transactionOwner is not null
-                && !ReferenceEquals(
-                    _transactionOwner, _currentTransactionOwner.Value))
-            {
-                throw new InvalidOperationException(
-                    "The active transaction belongs to another asynchronous flow.");
-            }
+            ThrowIfEnterBlocked(ownedOperation);
             // ARCH-001（2026-09-23）：并行读作用域内只读租约在飞时，独占操作（写/事务/Bulk）
             // 同样被拒绝——"只读并行、写与事务串行"的非对称语义由本检查兜住。
             if (_isActive || _activeReadLeases > 0)
@@ -158,6 +145,42 @@ internal sealed class SessionOperationState
                 this, _activeOperationOwner);
         }
     }
+
+    /// <summary>Enter 的前两段守卫（R2-#9 从 Enter 抽出，降 S3776）：终态/释放中拒绝与
+    /// 事务流归属校验。锁内调用；ownedOperation 由调用方按 owner 判定后传入。</summary>
+    private void ThrowIfEnterBlocked(bool ownedOperation)
+    {
+        bool currentTransaction = _transactionOwner is not null
+            && ReferenceEquals(
+                _transactionOwner, _currentTransactionOwner.Value);
+        ObjectDisposedException.ThrowIf(
+            _state is 2 or 3
+            || (_state == 1 && !ownedOperation && !currentTransaction),
+            this);
+        if (_transactionCompleting && currentTransaction && !ownedOperation)
+        {
+            throw new InvalidOperationException(
+                "The active transaction flow is completing.");
+        }
+        if (_transactionOwner is not null
+            && !ReferenceEquals(
+                _transactionOwner, _currentTransactionOwner.Value))
+        {
+            throw new InvalidOperationException(
+                "The active transaction belongs to another asynchronous flow.");
+        }
+    }
+
+    /// <summary>R2-#9：owner 重入快路径的只读判定。漏读两方向均安全：假阴性（volatile
+    /// 读到旧值）落入锁路径走完整判定；假阳性所需的条件组合在锁路径逐条对照同样放行——
+    /// state==2 蕴含 !_isActive（Dispose 排空后才置终态）读不到；_transactionCompleting
+    /// 守卫只对 !ownedOperation 抛（owner 非 null 恒过）；异流事务由第三条件显式挡下
+    /// （不匹配即落锁路径，由锁路径抛 "belongs to another asynchronous flow"）。</summary>
+    private bool CanFastReenterOwner(object owner)
+        => Volatile.Read(ref _isActive)
+            && ReferenceEquals(Volatile.Read(ref _activeOperationOwner), owner)
+            && (Volatile.Read(ref _transactionOwner) is null
+                || ReferenceEquals(Volatile.Read(ref _transactionOwner), _currentTransactionOwner.Value));
 
     /// <summary>并行只读租约上限（ARCH-001，2026-09-23）——作用域内允许的并发只读操作数。</summary>
     internal const int MaxParallelReads = 8;

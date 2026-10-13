@@ -61,6 +61,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>C11（2026-10-12 审读重开·安全子集）：日志类别串每闭合泛型实例缓存一次
     ///（原每会话创建时插值分配一个新串，仅 LoggerFactory 配置时发生）。</summary>
     private static readonly string LogCategory = $"PalORM.{TProvider.Name}";
+
+    /// <summary>R2-#3（2026-10-13 微项）：Provider 静态方法组的每封闭泛型缓存——
+    /// TProvider.IsTransient 是 static 成员，方法组转委托在每会话构造时分配一个新委托
+    ///（~56B，实例无关）；嵌套静态类按 (TProvider) 闭合类型缓存一份，第二个会话起零分配。
+    /// 实例方法组（_readConnProvider 等）绑定 this 不可缓存，维持每会话分配。</summary>
+    private static class ProviderDelegates
+    {
+        public static readonly Func<Exception, bool> IsTransient = TProvider.IsTransient;
+    }
     /// <summary>并行读作用域的连接池（ARCH-001）——作用域内创建的读连接（全部）与其中空闲可复用的。
     /// ITM-796（r23）：并发读租约（最多 MaxParallelReads 路）可同时进入获取/归还路径，
     /// 两个集合的全部操作（Pop/Add/Contains/Push/Clear）必须持 <see cref="_parallelReadPoolLock"/>。
@@ -77,7 +86,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         _conn = conn;
         _options = options;
-        _resilience = new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider));
+        _resilience = new ResilienceExecutor(options, ProviderDelegates.IsTransient, typeof(TProvider));
         // MySQL-9/P1（2026-09-27）：空拦截器列表跳过 OrderBy LINQ——大多数会话不配拦截器，
         // 原实现对空集合也分配迭代器 + 委托 + 新 List（探针十八拆解：CreateAsync 每 op
         // 2625B 里约 180B 属此）。空列表直接复用 CreateAsync 传入的私有副本
