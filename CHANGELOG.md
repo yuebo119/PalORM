@@ -4,6 +4,30 @@
 
 ## [未发布]
 
+### ⚡ 性能：R3-CTS 弹性尝试 CTS 进程级租借池（默认配置每读 −144B/键，−13.8%）；Exit 免锁设计阶段证伪（owner 覆写竞态）
+
+- **社区方案落地**：.NET 6+ `CancellationTokenSource.TryReset` 的官方设计动机正是热路径
+  每操作 CTS 分配消除（dotnet/runtime #48492，ASP.NET Core 场景）。ResilienceExecutor 的
+  ExecuteAsync/ExecuteWithTimeoutAsync 非链接形态 CTS（attemptScope 不可取消——默认
+  ct=default 的常态）改经进程级租借池复用：Rent 复用/TryReset 失败（已取消）即丢弃、
+  链接形态（源 token 注册不可跨次复用）恒新建。**与 step10 PoC 的区别**：step10 证伪的
+  是"移除 CTS 依赖驱动超时"（丢失语义）；池化保持超时语义与 InfrastructureTimeout 标记
+  逐位不变，只消除分配与构造。
+- **双检硬化**：TryReset 与迟发 CancelAfter 回调的文档化竞态，Return 内 TryReset 后二次
+  IsCancellationRequested 复核封堵（此时定时器已解除，复核后无新取消来源）。
+- **实测（GetByKeySession 同构探针，长会话 32 键 × 2000 循环 = 64000 键，SQLite 本地，
+  默认弹性配置）**：每键分配 1040 → **896B（−13.8%，三轮逐位一致）**、Gen0 4→3（−25%）；
+  时延在批间摆动带内（median 3.1~3.7µs 前后重叠，不主张）。
+- **Exit 免锁（设计阶段证伪，勿重开）**：动手设计时挖出具体竞态——快路径清
+  _activeOperationOwner 与并发新 Enter 交错会覆写新 owner，后续 Exit 失配致 _isActive
+  永真、门禁永久卡死；安全化需将 {flag, owner} 打包原子化并触及全部访问点（Enter/
+  EnterReadOnly/IsCurrentOperationScope/DisposeAsync…），收益仅 ~20-40ns/键，风险收益
+  比不成立，维持不做。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 594/594（含弹性/熔断/超时全族）·
+  SourceGen 236/236 · Integration 真库 292/292 · gate 32/32 · tech-debt 14/14 · 探针
+  tmp/probe-gate-ab 可复跑。
+
 ### ⚡ 性能：R2 微项（用户点名）——单贡献者参数表直返 + IsTransient 委托缓存 + owner 重入免锁快路径
 
 - **#2 GetParametersForKinds 单贡献者快路径**：恰有一个子句贡献参数时直返该子句的参数表
