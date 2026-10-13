@@ -1254,16 +1254,19 @@ internal static class Program
     private const double HealthThreshold = 0.35;
 
     /// <summary>SQLite 连接治理（规范 §4.1 的连接配置口径）——与产品
-    /// <c>SqliteProvider.InitializeConnectionAsync</c> 逐条一致，也与 DapperSuite 同值。</summary>
+    /// <c>SqliteProvider.InitializeConnectionAsync</c> 的调优面同族（2026-10-14 SQLite 3.54 适配轮
+    /// 同步追加了产品的 analysis_limit + optimize=0x10002 统计对；busy_timeout / journal_size_limit
+    /// 为历史口径维持不进 bench——三臂共享连接的测量面不受影响），也与 DapperSuite 同值。</summary>
     private const string SqliteGovernancePragma =
         "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; PRAGMA synchronous = NORMAL; "
         + "PRAGMA cache_size = -65536; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 1000; "
-        + "PRAGMA mmap_size = 268435456";
+        + "PRAGMA mmap_size = 268435456; PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002";
 
     /// <summary>连接配置口径（规范 §4.1）——三臂同值，改这里必须同步报告与文档。</summary>
     internal const string RegimeDescription =
         "sqlite: 三臂同一组 PRAGMA（foreign_keys=ON / journal_mode=WAL / synchronous=NORMAL / "
-        + "cache_size=-65536 / temp_store=MEMORY / wal_autocheckpoint=1000 / mmap_size=268435456）；"
+        + "cache_size=-65536 / temp_store=MEMORY / wal_autocheckpoint=1000 / mmap_size=268435456 / "
+        + "analysis_limit=400 / optimize=0x10002）；"
         + "pg/mysql: 驱动默认 + MySQL 追加 AllowLoadLocalInfile=true（三臂同值）";
 
     private static string FindRepoRoot()

@@ -4,6 +4,27 @@
 
 ## [未发布]
 
+### ⚡ 性能：SQLite 3.54 全面适配——optimize=0x10002 进宽分支 PRAGMA 组 + 引擎升级收益实测
+
+- **optimize=0x10002**（SQLite 3.54 适配轮）：官方对长生命周期连接的 first-open 推荐形态
+  （pragma.html：0x02 分析可能受益的表 + 0x10000 检查全部表尺寸；0x10 位默认施加临时
+  analysis_limit）。M.D.S 池化原生句柄即长生命周期物理连接，整组 PRAGMA 每句柄只执行一次的
+  池化去重恰好等价于 first-open——同批单次往返零额外往返。收益：查询计划统计（sqlite_stat1）
+  随句柄首开建立，数据演化的长跑应用不再依赖应用侧手动 ANALYZE。窄分支（内存/只读库）不落：
+  内存库无持久统计面；只读连接上 ANALYZE 写 sqlite_stat1 抛 SQLITE_READONLY。
+- **引擎升级收益实测**（SQLite3MC 2.4.0→2.6.1，SQLite 3.47→3.54；A/B 批 20261014-071447 vs
+  20261013-235904，同机，SQLite 方言三臂）：全家族中位 −2~−7%（Bulk 族 −1.3~−4.5%、
+  Query/Stream/Wide 族 −3~−7%、TenantCount 族 −7~−12%、TxRollback −2~−8%、并发
+  Mixed80_20 −1.7~−3.3%），**三臂同带**（ADO 地板同步受益）＝引擎级收益非单臂代码；
+  GetByKey 点查持平（±3% 内）；分配持平（±0.1%，Tenant 族 −3~5%）。3.51+ 读事务提交优化、
+  3.53+ join 计划改进、3.54 Windows SRW 锁替换 CriticalSection 为主要机制面。
+- **守卫与口径**：新增 SqliteProvider_BundledEngineVersion_Floor（引擎 ≥ 3.54 地板，bundle 漂移
+  响亮失败）与 SqliteProvider_OptimizePragma_BuildsQueryPlannerStats（带数据句柄首开真实建立
+  sqlite_stat1 的行为锁定——只断不抛无法区分掩码写错被引擎静默按默认跑）；PerfHub
+  SqliteGovernancePragma 同步追加 analysis_limit+optimize=0x10002（三臂共享连接口径）。
+- **验证**：ci.slnf Debug --no-incremental 0W0E · Core 607/607（+2）· SourceGen 236/236 ·
+  Integration 真库 292/292 · gate 32/32。
+
 ### 📦 依赖升级：SQLite3MC.PCLRaw.bundle 2.4.0 → 2.6.1（SQLite 引擎 3.54.0）；TUnit 1.73.19 → 1.74.0
 
 - **SQLite3MC.PCLRaw.bundle 2.4.0 → 2.6.1**：上游 SQLite3 Multiple Ciphers 升至 SQLite
