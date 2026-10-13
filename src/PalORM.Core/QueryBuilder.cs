@@ -825,18 +825,22 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal IReadOnlyList<DbParameter> GetQueryParameters()
     {
-        List<DbParameter> parameters = GetParametersForKinds(
+        IReadOnlyList<DbParameter> parameters = GetParametersForKinds(
             _splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
         if (!_take.HasValue && !_skip.HasValue) return parameters;
         // SHAPE-010 根解：LIMIT/OFFSET 值参数化后必须随查询绑定。R3（2026-10-12）：
         // 走 CreateLimitParameters 单一真源——免建即弃的 LIMIT 文本（原每次一个 ~60B 串）；
         // 每次现建（builder 可变，缓存参数对象会在 Take/Skip 改值后失真）。
+        // R2-#2（2026-10-13）：parameters 可能是子句参数表的直引用（单贡献者快路径，
+        // 不得就地变异）——LIMIT 追加改组合拷贝。
         DbParameter[] limitParameters = CreateLimitParameters();
         if (limitParameters.Length == 0) return parameters;
-        // 零子句参数 + LIMIT：数组直返——GetParametersForKinds 的共享空表不得被 AddRange
         if (parameters.Count == 0) return limitParameters;
-        parameters.AddRange(limitParameters);
-        return parameters;
+        var combined = new List<DbParameter>(parameters.Count + limitParameters.Length);
+        for (int i = 0; i < parameters.Count; i++)
+            combined.Add(parameters[i]);
+        combined.AddRange(limitParameters);
+        return combined;
     }
 
     internal IReadOnlyList<DbParameter> GetCountParameters()
@@ -1180,12 +1184,30 @@ public struct QueryBuilder<T> where T : class, new()
         || _selectColumns is not null || _splitQuery || _cacheKey is not null;
 
     // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
-    private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
+    private IReadOnlyList<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
         // PERF-005 + R3（2026-10-12）：零参数查询返回共享空表（原 `[]` 每次新建 List ~32B）。
         // 不可变约定：返回共享空表的调用方不得向其 Add——GetQueryParameters 的 LIMIT 追加
         // 已在 Count==0 时改走数组直返，新增调用方须遵守同约定。
+        // R2-#2（2026-10-13）：单贡献者快路径——恰有一个子句贡献参数时直返该子句的参数表
+        //（Where($"…") 单条件是绝对主流形态，省外层 List + 扩容数组 ~64B/查询）。
+        // 返回的子句表被调用方只读消费（AddParameters/TryCopyParameterValues/QueryContext
+        // 均不变异）；LIMIT 组合路径在 GetQueryParameters 里拷贝，不触碰本表。
         if (_parameterCount == 0) return QueryBuilderShared.EmptyParameters;
+        IReadOnlyList<DbParameter>? single = null;
+        foreach (QueryClause clause in MaterializeClauses())
+        {
+            if (Array.IndexOf(kinds, clause.Kind) < 0) continue;
+            if (clause.Parameters.Count == 0) continue;
+            if (single is not null)
+            {
+                single = null;   // 第二个贡献者：退出扫描走聚合
+                break;
+            }
+            single = clause.Parameters;
+        }
+        if (single is not null)
+            return single;   // 单贡献者：直引用，零分配
         // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
         var parameters = new List<DbParameter>(_parameterCount);
         foreach (QueryClause clause in MaterializeClauses())

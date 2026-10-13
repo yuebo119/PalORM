@@ -4,7 +4,32 @@
 
 ## [未发布]
 
-### ⚡ 性能/🔬证伪：微项包 R1 收档——A2 键装箱 identity 快路径落地（−24B/非槽绑定），A1 定型行工厂 PoC 证伪，A3 不实施
+### ⚡ 性能：R2 微项（用户点名）——单贡献者参数表直返 + IsTransient 委托缓存 + owner 重入免锁快路径
+
+- **#2 GetParametersForKinds 单贡献者快路径**：恰有一个子句贡献参数时直返该子句的参数表
+  （`Where($"…")` 单条件是绝对主流形态），省外层 List + 扩容数组 ~64B/查询；多贡献者/
+  零贡献者保持原聚合形态（共享空表契约不变）；LIMIT 组合路径改拷贝组装（直引用表不
+  就地变异）。GetCountParameters/GetUpdateParameters 同享。
+- **#3 IsTransient 委托每封闭泛型缓存**：TProvider.IsTransient 是 static 方法组，原每
+  会话构造分配一个新委托（~56B，实例无关）；嵌套静态类按 (TProvider) 闭合类型缓存
+  一份，第二个会话起零分配。实例方法组（读路由委托）绑定 this 不可缓存，维持现状
+  （200B 头条里其余成分结构性锁定：空拦截器表 = R3 教训，executor = 弹性架构）。
+- **#9 owner 重入免锁快路径（原 A3 安全子集）**：Enter(owner) 命中重入（_isActive +
+  owner 匹配 + 事务流不冲突三条件 volatile 只读判定）时免锁返回 default 租约——事务/
+  编排循环（RunInTransactionScopeAsync 族/ToPageAsync count+page/SaveCore 链）内每
+  行一次的 Enter 锁往返归零。安全性：只读判定漏读两方向均安全（假阴性落锁路径走完整
+  判定；假阳性的条件组合在锁路径逐条对照同样放行——state==2 蕴含 !_isActive 读不到、
+  _transactionCompleting 守卫只对 !ownedOperation 抛、异流事务由第三条件显式挡下）。
+  **诚实边界**：三个 PerfHub 写循环臂（EnumInserts/TxRollback/TxHundred）的调用形态
+  是 owner=null 的顺序循环（公共 API 不流 owner），快路径对其不触发——写循环臂的每行
+  剩余锁成本属锁外写路径（Exit 免锁需 DisposeAsync TCS 双检协议，实施核算判定风险
+  不成比例，不做）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 594/594（+3 快路径守卫锁定：
+  异流事务下重入仍拒/同流重入 default 租约+门禁保持/非 owner 仍拒）· SourceGen 236/236 ·
+  Integration 真库 292/292 · gate 32/32 · tech-debt 14/14。
+
+### 🔬 R1 收档 + 🔒 池化加固条目见下（2026-10-13 当日早批）
 
 - **A2（落地，分配侧精确可证即做）**：生成器 DeleteKeyValueExpression 对数值主键发射
   identity 快路径 `key is long ? key : (object)Convert.ToInt64(key)`——同型装箱键复用
