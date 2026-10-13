@@ -232,7 +232,7 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 |--------|------|------|:---:|
 | PostgreSQL | 14+（推荐 18） | Npgsql 10.0.3 | SSL/TLS |
 | MySQL | 8.0+（推荐 8.4 LTS） | MySqlConnector 2.6.2 | SSL/TLS |
-| SQLite | 3.47+（via SQLite3MC 2.4.0） | Microsoft.Data.Sqlite.Core 11.0.0-rc.1 | AES-256（驱动层，`Password=`） |
+| SQLite | 3.54+（via SQLite3MC 2.6.1） | Microsoft.Data.Sqlite.Core 11.0.0-rc.1 | AES-256（驱动层，`Password=`） |
 
 ## 🚀 快速开始
 
