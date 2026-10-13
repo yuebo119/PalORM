@@ -480,6 +480,27 @@ dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqli
 | 插入或更新（键存在则更新） | `BulkMergeAsync` | 手写 ON CONFLICT | 租户实体自动限定本租户（跨租户命中 0 行） |
 | 大键集删除（万级以上） | `BulkDeleteAsync` | 逐条 Delete | 自动按方言参数上限分批（SQLite 999 / MySQL·PG 数千），整批单事务，满批命令与参数池化复用 |
 
+### 按形态选 API：会话池与批量路径
+
+同一 API 在不同使用形态下的表观开销构成不同，按形态选对入口的收益大于任何库内微优化。
+
+**一请求一会话（Web/API 服务）用会话池**（v7.0 `DataSessionPool`，API 细节见[API 参考 · 会话池](docs/API参考.md)）：
+
+```csharp
+// 启动时创建一次（maxIdleSize 按峰值并发调整）
+var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
+
+// 每请求：租出即用，DisposeAsync 即归还
+await using var db = await pool.RentAsync();
+var user = await db.GetAsync<User>(id);
+```
+
+归还时瞬态状态（租户/超时/重试等 `With*` 覆写、拦截器加项）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在"一请求一会话"形态下不经池化永不激活（同形状第 3 次操作才晋升）。32 并发压测实测：P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B；池化形态单键直查 P/ADO 比值 MySQL 0.99 / PG 0.87（台账批），租还自身约 1 µs。
+
+**高吞吐逐行写换批量 API，不要在逐条循环里找损耗**。逐条 `UpdateAsync` 每行各付一次会话门禁与命令往返；合成单语句多行（`BulkUpdateBatchAsync`）或走批量路径（见上方速查表）后，这部分成本摊薄到 1/N。逐条循环里的每行开销是形态决定的，不是可挤的库内水分。
+
+**长会话顺序循环的对比数字要读连接态**。基准中"每操作新建会话"与"长会话复用"的表观差距主要来自连接/命令冷态与驱动侧成本：库侧单键执行成本已与 ADO 地板重合（见[性能](#-性能)），评估自身业务收益时以同形态对照为准。
+
 ## ✅ 最佳实践速查
 
 按使用频率收拢，详细依据见各链接位置：
