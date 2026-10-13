@@ -19,6 +19,11 @@ internal interface IPerfImplementation
 
     Task SetupAsync(DbConnection conn, int rows, CancellationToken ct);
     Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct);
+
+    /// <summary>池化租借形态的逐键查询（2026-10-13 二轮方案臂）：每键一次完整租期
+    ///（租出 → GetByKey → 归还）——"一请求一会话"的真实请求形状。PalORM 臂走
+    /// DataSessionPool；ADO/Dapper 无会话税，天然形态即地板（实现与 GetByKeySession 同）。</summary>
+    Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct);
     /// <summary>长会话循环直查（GetByKeySession 项）——单会话内循环 N 次按键直查并返回命中数。
     /// N 固定 32（覆盖 A9 晋升阈值 3 且摊销会话构造）；三臂契约：ADO 命令复用、Dapper 无状态
     /// 循环、PalORM 单 DataSession（A9 复用槽生效）——"推荐用法"的对照面（step13 §6.2 挂账）。</summary>
@@ -276,6 +281,10 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         }
         return found;
     }
+
+    /// <summary>池化臂的地板：ADO 无会话税，天然形态即行业最优（与 GetByKeySession 同体）。</summary>
+    public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+        => GetByKeySessionAsync(conn, ids, ct);
 
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
     {
@@ -1441,6 +1450,10 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         return found;
     }
 
+    /// <summary>池化臂的 Dapper 侧：无会话税，天然形态即行业最优（与 GetByKeySession 同体）。</summary>
+    public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+        => GetByKeySessionAsync(conn, ids, ct);
+
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
     {
         IEnumerable<S1Row> rows = await conn.QueryAsync<S1Row>($"SELECT {Cols} FROM {T}").ConfigureAwait(false);
@@ -1918,6 +1931,69 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     private static DataSession<TProvider> Session<TProvider>(DbConnection conn)
         where TProvider : IDbProvider, new()
         => new(conn, Opts(conn), [], null);
+
+    // ── 池化租借臂（2026-10-13 二轮方案）：每方言一个进程级池 ──
+    // 连接串来源：Connections.Resolve（环境变量/.env.test，含真实凭据）——已打开连接的
+    // ConnectionString getter 被驱动脱敏（MySqlConnector/Npgsql 隐藏密码），池新建连接
+    // 会因无凭据被拒（SQLite 无凭据幸免，MySQL/PG 实测 Access denied/No password）。
+    // MySQL 同夹具连接口径追加 WithLocalInfile（三臂同等生效的既定变换）。
+    // PalORM 臂语义：每键一个完整租期（租出 → GetByKey → 归还）——"一请求一会话"的
+    // 真实请求形状；池空闲在 MeasAsync 预热段稳定，测量段全部命中复用租借。
+    private DataSessionPool<PalORM.Sqlite.SqliteProvider>? _sqlitePool;
+    private DataSessionPool<PalORM.MySql.MySqlProvider>? _mySqlPool;
+    private DataSessionPool<PalORM.PostgreSql.PostgreSqlProvider>? _pgPool;
+
+    /// <summary>池基准连接串（凭据完整形态，与夹具连接同源同变换）。</summary>
+    private DbOptions PoolOptions()
+    {
+        string cs = Connections.Resolve(dialect);
+        return new DbOptions
+        {
+            ConnectionString = D == Dialect.MySql
+                ? MySqlConnString.WithLocalInfile(cs)
+                : cs,
+        };
+    }
+
+    public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
+    {
+        // 池按方言惰性建一次（实例字段；async 方法不能带 ref 形参，池解析留在同步分派层）
+        switch (D)
+        {
+            case Dialect.Sqlite:
+                _sqlitePool ??= DataSessionPool<PalORM.Sqlite.SqliteProvider>.Create(PoolOptions());
+                return PooledLoopAsync(_sqlitePool, ids, ct);
+            case Dialect.MySql:
+                _mySqlPool ??= DataSessionPool<PalORM.MySql.MySqlProvider>.Create(PoolOptions());
+                return PooledLoopAsync(_mySqlPool, ids, ct);
+            case Dialect.PostgreSql:
+                _pgPool ??= DataSessionPool<PalORM.PostgreSql.PostgreSqlProvider>.Create(PoolOptions());
+                return PooledLoopAsync(_pgPool, ids, ct);
+            default:
+                throw UnsupportedDialect(D);
+        }
+    }
+
+    private static async Task<int> PooledLoopAsync<TProvider>(
+        DataSessionPool<TProvider> pool, IReadOnlyList<long> ids, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        int found = 0;
+        foreach (long id in ids)
+        {
+            DataSession<TProvider> session = await pool.RentAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (await session.GetAsync<S1Row>(id, ct).ConfigureAwait(false) is not null)
+                    found++;
+            }
+            finally
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        return found;
+    }
 
     /// <summary>批量插入的批行数——PG Binary COPY 无参数上限，整段单批 = 单次协议往返，
     /// 才是三臂契约的"行业最优调用"（此前固定 1000 是多值 VALUES 的变量上限思维：
