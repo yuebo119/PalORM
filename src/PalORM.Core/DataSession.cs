@@ -1238,7 +1238,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <c>async token => (long)await cmd.ExecuteNonQueryAsync(token)</c> 的委托与
     /// display class（实测约 208 B/行，含两层包装）。
     /// <para><b>语义与委托版逐位一致</b>：直通分支（策略直通或事务内）直接执行并返回；
-    /// 非直通分支才包 <see cref="ResilienceExecutor.ExecuteWithTimeoutAsync"/>——
+    /// 非直通分支才包 <see cref="ResilienceExecutor.ExecuteWithTimeoutAsync{T}(Func{CancellationToken,Task{T}},CancellationToken)"/>——
     /// 此时仍需委托（超时包装要求），该形态本就少见（写入路径默认不重试，
     /// 只有显式配置了非零 CommandTimeout 才会走到）。</para>
     /// <para><b>为什么值得单独一个重载</b>：单条写路径（Update/Delete/ExecuteAsync）
@@ -1249,8 +1249,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         ResilienceExecutor executor = Volatile.Read(ref _resilience);
         if (executor.IsPassThrough || activeTransaction is not null)
             return ExecuteRowsCoreAsync(command, ct);
+        // R4-λ:static lambda + 命令状态,闭包归零(写路径每行的 display class 分配)
         return executor.ExecuteWithTimeoutAsync(
-            token => ExecuteRowsCoreAsync(command, token).AsTask(), ct);
+            static (cmd, token) => ExecuteRowsCoreAsync(cmd, token).AsTask(),
+            command,
+            ct);
     }
 
     /// <summary>A2（2026-10-01 全 API 逐项轮）：`new ValueTask&lt;int&gt;(task)` 直包替代

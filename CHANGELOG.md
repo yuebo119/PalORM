@@ -4,6 +4,25 @@
 
 ## [未发布]
 
+### ⚡ 性能：R4-λ 弹性调用闭包归零（结构体状态重载，默认配置读路径再 −104B/键）
+
+- **结构体状态重载**：ResilienceExecutor 新增 `ExecuteAsync<TState,TResult>` /
+  `ExecuteWithTimeoutAsync<TState,TResult>`（operation 收 (state, token) 两参），经典单参
+  形态桥接复用同一内核（重试/超时/熔断语义逐位不变）。热调用点改造为 static lambda +
+  值元组状态：GetByKey 两分支、GetAll、ExecuteReadScalarAsync、ExecuteWriteRowsAsync——
+  **每操作闭包（display class）分配归零**（GetByKey ~88B、标量/写路径 ~56B）。
+  static lambda 不捕获由编译器按调用点缓存；TState 是值类型按值传递。
+  **与 step10 的关系**：step10 证伪的是手写 struct 内核接口形态（架构级改造判 -61B
+  低于当时 200B 线）；本形态是同一收益的零架构代价版本（一个重载 + 调用点改写）。
+- **实测（GetByKeySession 同构探针）**：每键分配 896 → **792B（−11.6%，两轮逐位一致）**；
+  与 R3-CTS 合计本两轮 1040 → 792B（**−23.8%**）；median 3.1~3.7 → 2.9~3.0µs（带边缘，
+  谨慎正向）。
+- **探针诊断注记**：Integration 首跑 206/292 为 DB 容器停机（Exited 255，wslc 重启后
+  292/292 全绿），非代码回归。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 594/594 · SourceGen 236/236 ·
+  Integration 真库 292/292（容器恢复后）· gate 32/32 · tech-debt 14/14。
+
 ### ⚡ 性能：R3-CTS 弹性尝试 CTS 进程级租借池（默认配置每读 −144B/键，−13.8%）；Exit 免锁设计阶段证伪（owner 覆写竞态）
 
 - **社区方案落地**：.NET 6+ `CancellationTokenSource.TryReset` 的官方设计动机正是热路径
