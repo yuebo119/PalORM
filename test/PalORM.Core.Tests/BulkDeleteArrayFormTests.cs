@@ -311,6 +311,96 @@ internal sealed class BulkDeleteArrayFormTests
             ?? throw new InvalidOperationException("数组构造器返回 null（区间调用）。");
         await Assert.That((long[])offset).IsEquivalentTo([expected[1], expected[2]]);
     }
+
+    // ─── F2（2026-10-13 全量重读）：类型化键重载 BulkDeleteAsync<T, TKey> ───────────
+
+    /// <summary>类型化重载的数组形态锁定：long[] 直入（零装箱路径），语句形状必须是
+    /// <c>= ANY(@ids)</c> 单参数。白盒断言 <c>TypedKeyIdentityCache</c> 命中 true——
+    /// 没有这条，"门控判据写错而静默装箱回退"不会有任何红（行为面等价，B95 家族：
+    /// 数字对但没测到目标）。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_UsesZeroBoxingArrayForm()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 10);
+        Shapes.Clear();
+        DataSessionCache.TypedKeyIdentityCache.TryRemove((typeof(ArrayFormRow), typeof(long)), out _);
+
+        long[] keys = [1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L];
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, long>(keys);
+
+        await Assert.That(deleted).IsEqualTo(10);
+        await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
+        await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 1);
+        // 门控确已通过（探针把 (ArrayFormRow, long) 判为等同并缓存）——静默回退时此键为 false/缺失
+        await Assert.That(DataSessionCache.TypedKeyIdentityCache[(typeof(ArrayFormRow), typeof(long))])
+            .IsTrue();
+    }
+
+    /// <summary>键类型不匹配（long 主键传 int 键）时探针否决直拷，装箱回退既有对象路径——
+    /// 删除语义与形状（经生成物构造器逐键 Convert 归一后仍是数组形态）都必须正确。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_MismatchedKeyType_FallsBackWithCorrectSemantics()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 3);
+        Shapes.Clear();
+        DataSessionCache.TypedKeyIdentityCache.TryRemove((typeof(ArrayFormRow), typeof(int)), out _);
+
+        int[] keys = [1, 2, 3];
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, int>(keys);
+
+        await Assert.That(deleted).IsEqualTo(3);
+        await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
+        // 回退经对象路径：数组形态仍成立（生成物构造器做 int→long 归一），单参数 ANY
+        await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 1);
+        await Assert.That(DataSessionCache.TypedKeyIdentityCache[(typeof(ArrayFormRow), typeof(int))])
+            .IsFalse();
+    }
+
+    /// <summary>单键/空列表的回退守卫次序与对象路径逐位一致：空列表 + 未注册类型仍先报
+    /// "no generated CRUD"（r12-B1 空短路后置口径经装箱回退继承）。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_EmptyList_PreservesGuardOrdering()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 2);
+        Shapes.Clear();
+
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, long>([]);
+        await Assert.That(deleted).IsEqualTo(0);
+        await Assert.That(Shapes).IsEmpty();
+
+        // 未注册类型 + 空列表：守卫先于空短路（与对象重载同口径）
+        await Assert.ThrowsAsync<InvalidOperationException>(async ()
+            => await session.BulkDeleteAsync<TypedGuardUnregisteredRow, long>([]));
+    }
+
+    /// <summary>多批边界：键数跨 <see cref="SqlLimits.MaxRowsPerBatch"/> 时类型化路径的批循环
+    /// 正确切批（批边界算错会留残行）。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_MultiBatch_BoundariesCorrect()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        int count = SqlLimits.MaxRowsPerBatch + 17;
+        await SeedAsync(session, count);
+        Shapes.Clear();
+
+        var keys = new long[count];
+        for (int i = 0; i < count; i++) keys[i] = i + 1;
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, long>(keys);
+
+        await Assert.That(deleted).IsEqualTo(count);
+        await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
+        await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 2);
+    }
+
+    /// <summary>未注册哨兵——无 [Table] 注解，源生成器不注册（专供守卫次序断言的
+    /// "空列表 + 未注册类型仍先报错"路径）。</summary>
+    internal sealed class TypedGuardUnregisteredRow
+    {
+        public long Id { get; set; }
+    }
 }
 
 /// <summary>数组形态夹具：报 PG 方言、底层 SQLite，并实现

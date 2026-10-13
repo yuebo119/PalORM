@@ -112,6 +112,131 @@ public partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>F2（2026-10-13 全量重读）：批量删除的<b>类型化键重载</b>——数组形态可用且键类型
+    /// 与生成物数组元素类型等同时，键从调用方到数组参数<b>全程零装箱</b>（对象重载的
+    /// <c>IReadOnlyList&lt;object&gt;</c> 迫使调用方对每个值类型键装箱，20K 个 long 键约 480KB
+    /// 短命垃圾，随后 <c>BuildDeleteKeyArray</c> 再逐个解箱）。
+    /// <para><b>等同性门控</b>：直接拷贝与生成物构造器的逐位等价由
+    /// <see cref="CanUseTypedKeyArrayCopy{T,TKey}"/> 的双值探针钉住（以生成物自身为真源，
+    /// 探测两个真实键值经构造器往返后类型为 <c>TKey[]</c> 且值相等）；探针结果按
+    /// (实体类型, 键类型) 每进程缓存一次。转换器主键（<c>ToProvider</c> 有真实转换语义）
+    /// 或类型不匹配（如 long 主键传 int 键）时探针不通过，装箱回退既有对象路径——语义与
+    /// 守卫（元数据检查先于空列表短路等口径）完整继承。</para>
+    /// <para><b>为什么落在数组形态</b>：IN 占位符形态的每键参数本就以 object 存储（装箱发生在
+    /// 参数写入侧，与调用方装箱等量），类型化无净收益；数组形态的元素是类型化数组的槽位，
+    /// 装箱可整体消除。</para>
+    /// <para>其余语义（软删/租户过滤/事务包装/批大小/返回口径）与
+    /// <see cref="BulkDeleteAsync{T}"/> 逐位一致。</para></summary>
+    public ValueTask<long> BulkDeleteAsync<T, TKey>(IReadOnlyList<TKey> keys, CancellationToken ct = default)
+        where T : class, new()
+        where TKey : notnull
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (keys.Count >= 2
+            && CanUseTypedKeyArrayCopy<T, TKey>(keys))
+        {
+            return BulkDeleteTypedArrayAsync<T, TKey>(keys, ct);
+        }
+        // 回退：装箱后委托既有对象路径（单键/空列表/类型不匹配/数组形态不可用——
+        // 单键装箱只 1 次，探针成本反高于收益；空列表保持对象路径的守卫次序语义）
+        object[] boxed = new object[keys.Count];
+        for (int i = 0; i < boxed.Length; i++)
+            boxed[i] = keys[i];
+        return BulkDeleteAsync<T>(boxed, ct);
+    }
+
+    /// <summary>F2：类型化数组删除主体——与 <see cref="ExecuteArrayFormDeleteAsync{T}"/> 同构，
+    /// 差异仅在批数组构造：直接类型化拷贝（等同性已由探针钉住）替代生成物构造器的逐键装箱转换。</summary>
+    private async ValueTask<long> BulkDeleteTypedArrayAsync<T, TKey>(
+        IReadOnlyList<TKey> keys, CancellationToken ct)
+        where T : class, new()
+        where TKey : notnull
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._tableNames.TryGetValue(typeof(T), out string? typedTableName)
+            || !state._pkColumns.TryGetValue(typeof(T), out string? typedPkCol)
+            || !state._bindDelete.TryGetValue(typeof(T), out Action<DbCommand, object>? _))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        // 调用方已保证 keys.Count >= 2（门控条件），无空列表路径
+
+        bool isSoftDelete = (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
+        DeleteIdentifiers identifiers = new(
+            TProvider.QuoteIdentifier(typedTableName), TProvider.QuoteIdentifier(typedPkCol),
+            TProvider.QuoteIdentifier("deleted_at"), TProvider.CurrentTimestampExpression,
+            HasTenantFilter<T>() ? GetTenantAppendFragment() : "");
+        int batchSize = SqlLimits.MaxRowsPerBatch;
+        return await RunInTransactionScopeAsync(
+            operation.Owner,
+            (tran, token) => ExecuteTypedArrayDeleteCoreAsync<T, TKey>(
+                tran, keys, batchSize, identifiers, isSoftDelete, token),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>F2：批循环内核——命令/数组参数建一次批间只换 Value（R-UNNESTB 纪律同
+    /// <see cref="ExecuteArrayFormDeleteAsync{T}"/>）。</summary>
+    private async Task<long> ExecuteTypedArrayDeleteCoreAsync<T, TKey>(
+        DbTransaction? tran,
+        IReadOnlyList<TKey> keys,
+        int batchSize,
+        DeleteIdentifiers identifiers,
+        bool isSoftDelete,
+        CancellationToken ct)
+        where T : class, new()
+        where TKey : notnull
+    {
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandText = BuildBulkDeleteArraySql(identifiers, isSoftDelete);
+        DbParameter idsParameter = TProvider.CreateParameter(ArrayParameterName, DBNull.Value);
+        cmd.Parameters.Add(idsParameter);
+        BindDefaultFilterParameters<T>(cmd);
+
+        long total = 0;
+        for (int start = 0; start < keys.Count; start += batchSize)
+        {
+            int batchLen = Math.Min(batchSize, keys.Count - start);
+            TKey[] values = new TKey[batchLen];
+            for (int i = 0; i < batchLen; i++)
+                values[i] = keys[start + i];
+            idsParameter.Value = (TProvider.CreateArrayParameter(ArrayParameterName, values)
+                ?? throw new InvalidOperationException(
+                    $"Provider '{TProvider.Name}' returned a null array parameter for element type "
+                    + $"'{typeof(TKey).Name}' (batch length {batchLen}); the capability probe and the "
+                    + "execution path disagree.")).Value;
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        return total;
+    }
+
+    /// <summary>F2：类型化直拷的等同性门控（含每 (T, TKey) 一次的双值探针缓存）。
+    /// <para><b>为什么以生成物为真源做运行时探针</b>：直接拷贝的等价条件是"生成物
+    /// BuildDeleteKeyArray 对 TKey 输入的产出恒为 identity"——数值/Guid/string 主键无转换器时
+    /// 恒成立；转换器主键的 <c>ToProvider</c> 有真实转换语义时被探针否决。静态信号（"主键无
+    /// 转换器"）需要 SourceGen 新增真源并改注册链/快照面；运行时探针以既有生成物自身度量，
+    /// 双值（两个不同键值）往返比对后缓存，漏检需要 ToProvider 恰好对两个真实探测值恒等而
+    /// 对其余值不恒等——属对抗性形态，与 R2-A2 的 identity 快路径同一风险量级。</para></summary>
+    private static bool CanUseTypedKeyArrayCopy<T, TKey>(IReadOnlyList<TKey> keys)
+        where T : class, new()
+        where TKey : notnull
+    {
+        if (!IsArrayFormSupported<T>(out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray)
+            || buildKeyArray is null)
+            return false;
+        (Type, Type) cacheKey = (typeof(T), typeof(TKey));
+        if (DataSessionCache.TypedKeyIdentityCache.TryGetValue(cacheKey, out bool cached))
+            return cached;
+        // 双值探针：装箱 2 次 + 2 个短数组，每 (T, TKey) 每进程至多一次
+        Array probe = buildKeyArray([keys[0], keys[1]], 0, 2)
+            ?? throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' generated a null primary-key array during the typed-key probe.");
+        bool identity = probe is TKey[] typed
+            && EqualityComparer<TKey>.Default.Equals(typed[0], keys[0])
+            && EqualityComparer<TKey>.Default.Equals(typed[1], keys[1]);
+        DataSessionCache.TypedKeyIdentityCache.TryAdd(cacheKey, identity);
+        return identity;
+    }
+
     /// <summary>数组形态的批量删除主体（UNNEST-1）——每批一句 <c>pk = ANY(@ids)</c>，
     /// 语句文本跨批恒定（单参数名与批长度无关），故只建一次命令文本。
     /// <para><b>R-UNNESTB 修正（2026-10-02）</b>：数组参数<b>建一次、批间只改 Value</b>。

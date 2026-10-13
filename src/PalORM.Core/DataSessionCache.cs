@@ -94,6 +94,12 @@ internal static class DataSessionCache
     internal static readonly ConcurrentDictionary<
         (Type EntityType, SqlDialect Dialect),
         (string[] SetColumns, string QuotedTable, string QuotedPk)> BatchUpdateContextCache = new();
+
+    /// <summary>F2（2026-10-13 全量重读）：BulkDeleteAsync 类型化重载的等同性探针结果缓存——
+    /// 键 = (实体类型, 键 CLR 类型)，值 = "生成物 BuildDeleteKeyArray 对该键类型的产出与
+    /// 类型化直拷逐位等价"（双值探针，以生成物自身为真源）。键空间有限（实体 × 键类型组合），
+    /// 每组合每进程探测一次后定态。</summary>
+    internal static readonly ConcurrentDictionary<(Type EntityType, Type KeyType), bool> TypedKeyIdentityCache = new();
 }
 
 /// <summary>默认过滤（软删/租户）的三种拼接形态。空过滤时为 <see cref="Empty"/>（三项全空串），
