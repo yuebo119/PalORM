@@ -906,8 +906,10 @@ public sealed partial class DataSession<TProvider>
             ResilienceExecutor parallelExecutor = Volatile.Read(ref _resilience);
             if (parallelExecutor.IsPassThrough)
                 return await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false);
+            // R4-λ:static lambda + 值元组状态,闭包归零(static 委托按调用点缓存)
             return await parallelExecutor.ExecuteAsync(
-                token => ParallelGetByKeyCoreAsync<T>(info, key, token).AsTask(),
+                static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(state.Info, state.Key, token).AsTask(),
+                (Session: this, Info: info, Key: key),
                 ct).ConfigureAwait(false);
         }
 
@@ -918,8 +920,10 @@ public sealed partial class DataSession<TProvider>
         ResilienceExecutor getByKeyExecutor = Volatile.Read(ref _resilience);
         if (getByKeyExecutor.IsPassThrough || activeTransaction is not null)
             return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
+        // R4-λ:static lambda + 值元组状态,闭包归零
         return await getByKeyExecutor.ExecuteAsync(
-            token => GetByKeyCoreAsync<T>(info, activeTransaction, key, token).AsTask(),
+            static (state, token) => state.Session.GetByKeyCoreAsync<T>(state.Info, state.Tx, state.Key, token).AsTask(),
+            (Session: this, Info: info, Tx: activeTransaction, Key: key),
             ct).ConfigureAwait(false);
     }
 
@@ -1013,8 +1017,10 @@ public sealed partial class DataSession<TProvider>
         ResilienceExecutor getAllExecutor = Volatile.Read(ref _resilience);
         if (getAllExecutor.IsPassThrough || activeTransaction is not null)
             return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
+        // R4-λ:static lambda + 值元组状态,闭包归零
         return await getAllExecutor.ExecuteAsync(
-            token => GetAllCoreAsync<T>(info, activeTransaction, token).AsTask(),
+            static (state, token) => state.Session.GetAllCoreAsync<T>(state.Info, state.Tx, token).AsTask(),
+            (Session: this, Info: info, Tx: activeTransaction),
             ct).ConfigureAwait(false);
     }
 

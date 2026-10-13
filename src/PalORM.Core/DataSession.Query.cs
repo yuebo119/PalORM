@@ -247,8 +247,11 @@ public sealed partial class DataSession<TProvider>
         ResilienceExecutor executor = Volatile.Read(ref _resilience);
         if (executor.IsPassThrough || activeTransaction is not null)
             return ExecuteScalarCoreAsync(command, ct);
+        // R4-λ:static lambda + 命令状态,闭包归零(原捕获 command 的 display class ~56B/读)
         return executor.ExecuteAsync(
-            token => ExecuteScalarCoreAsync(command, token).AsTask(), ct);
+            static (cmd, token) => ExecuteScalarCoreAsync(cmd, token).AsTask(),
+            command,
+            ct);
     }
 
     private static ValueTask<object?> ExecuteScalarCoreAsync(DbCommand command, CancellationToken ct)

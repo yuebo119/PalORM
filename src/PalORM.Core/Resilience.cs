@@ -82,6 +82,29 @@ public sealed class ResilienceExecutor
     /// <para><b>幂等性约束（ITM-310）</b>: 命令超时被判为可重试，而超时不代表服务器未执行——
     /// INSERT 可能已提交，重试会重复写入。仅将幂等操作（查询/带唯一键的 upsert/条件更新）
     /// 交给本方法；非幂等写入请自行处理重试或依赖唯一约束去重。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S4136",
+        Justification = "结构体状态重载与 void 重载分置内核两侧(编排取舍,语义分组优先)。")]
+    public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return await ExecuteAsyncCore<Func<CancellationToken, Task<T>>, T>(
+            static (op, token) => op(token), operation, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>R4-λ(2026-10-13 用户点名"继续"轮):结构体状态重载——operation 收
+    /// (state, token) 两参,调用方经 static lambda + 值元组传参,热路径闭包分配归零
+    /// (static lambda 不捕获,每个调用点一份由编译器缓存;TState 是值类型按值传递)。
+    /// step10 证伪的是手写 struct 内核接口形态(收益 -61B 判"低于当时 200B 线");
+    /// 本形态是同一收益的零架构代价版本:重试/超时/熔断语义逐位复用既有内核。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S4136",
+        Justification = "结构体状态重载紧邻经典重载与内核放置(与 void 重载隔开是编排取舍,语义分组优先)。")]
+    public async ValueTask<TResult> ExecuteAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return await ExecuteAsyncCore(operation, state, ct).ConfigureAwait(false);
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S2189:LoopStopIncrementerNotTested",
         Justification = "for(;;) 退出靠 return（成功路径）和 throw（取消/超时/重试耗尽）；"
@@ -94,9 +117,9 @@ public sealed class ResilienceExecutor
         Justification = "RES-003 起本方法有 6 条异常分支（调用方取消 / 总预算到期 / 超时重试 / "
             + "瞬时重试 / 超时耗尽包装 / 外层熔断记账），每条过滤条件都必须与异常形态严格对应；"
             + "拆分会把重试语义打散到多处、降低可审性（与同方法 S2189/S1994 同因）。")]
-    public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
+    private async ValueTask<TResult> ExecuteAsyncCore<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(operation);
         var (isHalfOpenProbe, generation, probeToken) = _circuitBreaker.Enter();
 
         // RES-003（2026-09-23）：总预算（Zero = 不设）——比单次尝试超时更强的上界，到期即停重试。
@@ -120,7 +143,7 @@ public sealed class ResilienceExecutor
                     // `timeout is not null`，null 形态下内部超时分支不可达，语义等价。
                     if (_timeout == Timeout.InfiniteTimeSpan && !attemptScope.CanBeCanceled)
                     {
-                        T resultNoTimeout = await operation(attemptScope).ConfigureAwait(false);
+                        TResult resultNoTimeout = await operation(state, attemptScope).ConfigureAwait(false);
                         _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation, probeToken);
                         return resultNoTimeout;
                     }
@@ -133,7 +156,7 @@ public sealed class ResilienceExecutor
                         : PooledCts.Rent();
                     if (_timeout != Timeout.InfiniteTimeSpan)
                         timeout.CancelAfter(_timeout);
-                    T result = await operation(timeout.Token).ConfigureAwait(false);
+                    TResult result = await operation(state, timeout.Token).ConfigureAwait(false);
                     _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation, probeToken);
                     return result;
                 }
@@ -270,10 +293,22 @@ public sealed class ResilienceExecutor
         Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
+        return await ExecuteWithTimeoutAsync<Func<CancellationToken, Task<T>>, T>(
+            static (op, token) => op(token), operation, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>R4-λ:结构体状态重载(与 ExecuteAsync 的同型重载对称)——写路径
+    /// ExecuteWriteRowsAsync 消闭包用;语义与单参版逐位一致。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S4136",
+        Justification = "与 ExecuteAsync 族同因:编排取舍,语义分组优先。")]
+    public async ValueTask<TResult> ExecuteWithTimeoutAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
         // A3（2026-10-01 全 API 逐项轮）：与 ExecuteAsync 同款——ct 不可取消时单构 CTS；
         // 无限超时且不可取消时完全不建 CTS（无超时事件可发生）。
         if (_timeout == Timeout.InfiniteTimeSpan && !ct.CanBeCanceled)
-            return await operation(ct).ConfigureAwait(false);
+            return await operation(state, ct).ConfigureAwait(false);
         // R3-CTS:同 ExecuteAsync——非链接形态走租借池,链接形态新建。
         bool linked = ct.CanBeCanceled;
         CancellationTokenSource timeout = linked
@@ -283,7 +318,7 @@ public sealed class ResilienceExecutor
         {
             if (_timeout != Timeout.InfiniteTimeSpan)
                 timeout.CancelAfter(_timeout);
-            return await operation(timeout.Token).ConfigureAwait(false);
+            return await operation(state, timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
