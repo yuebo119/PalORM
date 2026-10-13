@@ -4,6 +4,27 @@
 
 ## [未发布]
 
+### ⚡ 性能/🔬证伪：微项包 R1 收档——A2 键装箱 identity 快路径落地（−24B/非槽绑定），A1 定型行工厂 PoC 证伪，A3 不实施
+
+- **A2（落地，分配侧精确可证即做）**：生成器 DeleteKeyValueExpression 对数值主键发射
+  identity 快路径 `key is long ? key : (object)Convert.ToInt64(key)`——同型装箱键复用
+  调用方装箱实例，免去 Convert 解箱+重箱。**非槽路径**（per-op 会话/租户实体/晋升前
+  2 次）每 GetByKey/Delete 绑定 −24B；槽路径 P1-4 已在 Core 侧同型优化（两路径语义
+  同源）。快照变化仅数值主键实体的 BindDelete/ConvertDeleteKey 两行（AllTypes 等数个
+  实体）。装箱复用由 ReferenceEquals 锁定测试直锁（同型同箱 / 异型新箱两分支）。
+  **原设计证伪登记**：泛型键 API 重载被实施前核算否决——装箱只从调用点移进库内净零，
+  且 long 重载对 int 主键实体产生 Int64 参数错配面。
+- **A1（PoC 证伪出包）**：手写 NpgsqlDataReader 定型工厂 vs DbDataReader 泛型工厂，
+  5000 行 × 12 列三臂交错真库 PG：typed/generic = **−0.4%**（分配逐位相同）——低于
+  PoC 门禁 1%，定型行工厂生成器全量不做（此前分析关账 1~3% 为乐观上界，实测确认
+  单态虚分发 + JIT 去虚化吃掉绝大部分）。
+- **A3（不实施）**：包散伙后单独 2~4% 低于 5% 时延线，且需动 SessionOperationState
+  核心并发原语，纪律上不做。包判定门禁（至少两臂 ≥5%）无法达成，**包 R1 收档**。
+
+- **验证**：ci.slnf 0W0E · Core 591/591（+1 装箱复用锁定）· SourceGen 236/236
+  （快照按预期变化：数值主键实体 BindDelete/ConvertDeleteKey 两行）· Integration 真库
+  292/292。PoC 探针：tmp/probe-typedfactory（可复跑）。
+
 ### 🔒 加固：会话池化全面审计与四项缺陷修复（2026-10-13）
 
 - **审计发现并修复四处缺陷**：①重复 Dispose 抛异常——Park 改三态返回

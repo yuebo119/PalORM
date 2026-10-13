@@ -454,13 +454,32 @@ internal static class CommandFactoryEmitter
     /// <b>单一真源</b>：两份拷贝会在键归一化语义变更时只改一处（B120 同构不对称族）。
     /// <para>表达式形态与抽出的原实现逐字一致：<see cref="BuildKeyCastExpression"/> 归一 →
     /// Converter 列过 ToProvider → 可空列包 DBNull 三元（PK 不可空由 CanGenerateEntity 保证，
-    /// 该分支为防御形态）。</para></summary>
+    /// 该分支为防御形态）。</para>
+    /// <para>R2-A2（2026-10-13 微项包）：数值主键发射 <b>identity 快路径</b>
+    /// <c>key is long ? key : (object)Convert.ToInt64(key)</c>——同型装箱键复用调用方装箱实例，
+    /// 免去 Convert 解箱 + 重箱（每非槽路径绑定 −24B；槽路径 P1-4 已在 Core 侧同型优化，两路径
+    /// 语义同源）。真分支返回的 <c>key</c> 是原始 object 引用（同一箱），零新分配；异型键照走
+    /// Convert 归一（既有语义逐位保持）。string/Guid 的精确 cast 本就零转换，不需要快路径。</para></summary>
     private static string DeleteKeyValueExpression(ColumnModel col)
     {
         string castExpr = BuildKeyCastExpression(col, "key");
         string providerValueExpr = col.ConverterTypeName is null
             ? castExpr
             : $"_conv_{col.PropertyName}.ToProvider({castExpr})";
+        // R2-A2：数值主键（Converter 为 null 时 castExpr 恒为 Convert.ToXxx(key) 归一）的
+        // identity 前置——同型装箱直接复用。Converter 列的 ToProvider 有真实转换语义，不加。
+        if (col.ConverterTypeName is null
+            && NormalizeClrType(col.ClrTypeName) is "long" or "global::System.Int64"
+                or "int" or "global::System.Int32"
+                or "short" or "global::System.Int16"
+                or "byte" or "global::System.Byte")
+        {
+            string clrType = NormalizeClrType(col.ClrTypeName);
+            string identityExpr = $"key is {clrType} ? key : (object){castExpr}";
+            return col.IsNullable
+                ? $"{castExpr} is null ? global::System.DBNull.Value : {identityExpr}"
+                : identityExpr;
+        }
         return col.IsNullable
             ? $"{castExpr} is null ? global::System.DBNull.Value : (object){providerValueExpr}"
             : $"(object){providerValueExpr}";
