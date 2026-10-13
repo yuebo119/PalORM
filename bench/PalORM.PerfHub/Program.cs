@@ -751,6 +751,19 @@ internal static class Program
                     throw new InvalidOperationException(
                         $"GetAllAsync 结果不等价：{list.Count} 行（期望 {rows}）");
             }, ct).ConfigureAwait(false);
+
+        // 池化租借臂（2026-10-13 二轮方案）：PalORM 每键一完整租期（租出→GetByKey→归还，
+        // 一请求一会话的真实形状,池在预热段稳定后测量段全命中复用）;ADO/Dapper 无会话税,
+        // 天然形态即地板。**末位原则**(同 GetByKeySession/EnumInserts 的顺序效应登记):
+        // 排在整个测量序列最后,只影响其后的并发段(并发用独立连接,不受影响)。
+        await MeasAsync(info, impl, "PooledGetByKey", "CRUD", rows, conn, results, scale, reset,
+            async (im, c, i) =>
+            {
+                int found = await im.PooledGetByKeyAsync(c, sessionIds, ct).ConfigureAwait(false);
+                if (found != SessionLoopCount)
+                    throw new InvalidOperationException(
+                        $"PooledGetByKey 结果不等价：命中 {found}（期望 {SessionLoopCount}）");
+            }, ct).ConfigureAwait(false);
     }
 
     /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。
@@ -822,6 +835,8 @@ internal static class Program
         or "TxSingleInsert" or "TxHundredInserts" or "TxRollback" or "TxBulkInsert"
         or "OwnedJsonQuery" or "SessionBatchInserts"
         or "Insert" or "Update" or "KeysetPage" or "WhereIn" or "GetByKeySession"
+        // PooledGetByKey：固定 32 键循环（同 GetByKeySession 判据——行数不进测量）
+        or "PooledGetByKey"
         // EnumInserts：事务内固定 100 行/轮（与 TxHundredInserts 同判据——行数不进测量）
         or "EnumInserts");
 
@@ -841,7 +856,7 @@ internal static class Program
         "UpsertBatch", "InsertReturningId", "WideQueryAll", "IncludeJoin",
         "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback",
         "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts",
-        "EnumInserts", "GetAllAsync"
+        "EnumInserts", "GetAllAsync", "PooledGetByKey"
     ];
 
     /// <summary>PL-4：比值不计比的项。地板这两项直接返回插值字面量（见
