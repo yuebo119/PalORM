@@ -52,17 +52,28 @@ internal sealed class SessionOperationState
     // Park 在锁内校验"无在飞操作/读租约/事务流/并行作用域"后置位——与 Enter 的互斥
     // 由同一把 _sync 保证(驻留后 Enter 拒绝,租出前无人可进入)。
 
-    /// <summary>驻留（归还连接池前的门禁收口）——已驻留/释放中/已释放抛 <see cref="InvalidOperationException"/>；
+    /// <summary>驻留（归还连接池前的门禁收口）的返回态。
+    /// <see cref="Parked"/> = 本次成功驻留（调用方继续瞬态复位与入队）；
+    /// <see cref="AlreadyParked"/> = 已驻留（重复 Dispose 的幂等路径，调用方直接返回）；
+    /// <see cref="TornDown"/> = 已释放/释放中（池丢弃后又被 Dispose，调用方直接返回）。
     /// 存在在飞操作、只读租约、事务流、并行读作用域或存活事务时抛
     /// <see cref="InvalidOperationException"/>（调用方契约违反：池化会话必须在无飞行工作时归还）。
     /// 死残留事务（外部已释放）静默清空（与 GetActiveTransaction 的静默清理同口径）。</summary>
-    internal void Park()
+    internal enum ParkResult
+    {
+        Parked,
+        AlreadyParked,
+        TornDown,
+    }
+
+    internal ParkResult Park()
     {
         lock (_sync)
         {
-            if (_state != 0)
-                throw new InvalidOperationException(
-                    $"Cannot return this DataSession to its pool while its operation state is {_state}.");
+            if (_state == 3)
+                return ParkResult.AlreadyParked;
+            if (_state is 1 or 2)
+                return ParkResult.TornDown;
             if (_isActive || _activeReadLeases > 0)
                 throw new InvalidOperationException(
                     "Cannot return this DataSession to its pool while an operation is still in flight; " +
@@ -82,6 +93,7 @@ internal sealed class SessionOperationState
             _transactionOperationOwner = null;
             _externalTransaction = false;
             _state = 3;
+            return ParkResult.Parked;
         }
     }
 

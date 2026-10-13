@@ -68,11 +68,16 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
                     (discarded ??= []).Add(candidate);
             }
         }
-        // 锁外释放被丢弃的闲置会话（健康校验失败的连接走真实释放，异常不吞）
+        // 锁外释放被丢弃的闲置会话（健康校验失败的连接走真实释放）。加固（2026-10-13）：
+        // 清理失败不得打穿租出方——连接已判死，其释放异常无诊断价值（DiscardReadConnectionAsync
+        // 同口径静默），租出方不该为一个死资源的清理买单。
         if (discarded is not null)
         {
             foreach (DataSession<TProvider> dead in discarded)
-                await dead.TearDownFromPoolAsync().ConfigureAwait(false);
+            {
+                try { await dead.TearDownFromPoolAsync().ConfigureAwait(false); }
+                catch (Exception cleanupException) { _ = cleanupException; }
+            }
         }
         if (rented is null)
         {
@@ -97,7 +102,8 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
     }
 
     /// <summary>释放池：清空并真实释放全部空闲会话；已租出的会话在归还时发现池已释放，
-    /// 自行真实释放（不悬空）。幂等。</summary>
+    /// 自行真实释放（不悬空）。幂等。加固（2026-10-13）：逐会话尽力清理——单个会话释放
+    /// 失败（主异常保留抛出）不中断其余会话的释放，否则一个死资源的清理失败会泄漏整池连接。</summary>
     public async ValueTask DisposeAsync()
     {
         List<DataSession<TProvider>> drain;
@@ -108,8 +114,23 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
             drain = [.. _idle];
             _idle.Clear();
         }
+        Exception? primaryException = null;
+        int cleanupIndex = 0;
         foreach (DataSession<TProvider> session in drain)
-            await session.TearDownFromPoolAsync().ConfigureAwait(false);
+        {
+            try { await session.TearDownFromPoolAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException)
+            {
+                // 首个清理异常为 primaries（抛出），后续挂其 Data 不丢弃（仓库清理约定）
+                if (primaryException is null)
+                    primaryException = cleanupException;
+                else
+                    primaryException.Data[$"PalORM.PoolDisposeCleanupException{cleanupIndex}"] = cleanupException;
+                cleanupIndex++;
+            }
+        }
+        if (primaryException is not null)
+            throw primaryException;
     }
 }
 

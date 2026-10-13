@@ -4,6 +4,26 @@
 
 ## [未发布]
 
+### 🔒 加固：会话池化全面审计与四项缺陷修复（2026-10-13）
+
+- **审计发现并修复四处缺陷**：①重复 Dispose 抛异常——Park 改三态返回
+  （Parked/AlreadyParked/TornDown），重复/并发双归还幂等（先驻留者独占归还路径，
+  后到者直接返回；与非池化 DisposeAsync 幂等语义对齐）；②租出时死亡连接的清理失败
+  打穿租出方——改为静默（连接已判死，清理异常无诊断价值，DiscardReadConnectionAsync
+  同口径）；③池释放时单个会话清理失败中断其余清理（一个死资源泄漏整池连接）——改
+  逐会话尽力（首异常保留抛出，后续挂 Data）；④首次异常错误地把自身挂进自身 Data。
+- **复位完整性机械化守卫（PoolResetCompletenessTests）**：反射枚举
+  DataSession/SessionOperationState 全部可变实例字段对账两表（归还复位/跨租期保留
+  白名单，含保留理由），新字段忘登记即测试失败；第三条对账 ResetOnReturn 表与
+  ReturnToPoolAsync 实现的文本一致性（防"表里登记、实现忘写"假绿）。首跑即抓到
+  `_lastMigrationSkippedIndexes` 真实遗漏（DDL 幂等跳过缓存，登记保留），守卫价值
+  自证。SessionOperationState 全部 18 个可变字段按复位机制显式归类
+  （Park 收口/退出路径归零/归还复位/终态/保留）。
+- **并发/残留 Dispose 测试**：顺序重复 ×2、并发双 Dispose（Task.WhenAll 不抛且恰入池
+  一次）、池丢弃后残留 Dispose（TornDown 幂等路径）。
+
+- **验证**：ci.slnf 0W0E · Core 590/590（+5：守卫×3 + 幂等×2）· Integration 真库 292/292。
+
 ### ⚡ 性能：二轮方案主项——会话池化 DataSessionPool（per-op 会话税归零 + 复用槽跨租期激活）
 
 - **新增 `DataSessionPool<TProvider>`**（Create/RentAsync/DisposeAsync）：空闲复用（连接
