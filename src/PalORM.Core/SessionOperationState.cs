@@ -593,23 +593,27 @@ internal sealed class SessionOperationState
     /// 复用外部事务的内层路径（owns=false）不读写本标记，不会清掉外层的设置。</summary>
     internal bool DefersPostCommitActions { get; set; }
 
-    private List<Action>? _postCommitActions;
+    /// <summary>W2（深挖轮 2026-10-14）：延迟回填的存储从 List&lt;Action&gt; 改为类型化元组列表——
+    /// 原唯一登记面 BackfillGeneratedId 每次登记一个捕获 (backfill, entity, id) 三字段的闭包
+    ///（display class + Action 委托约 80B）；元组经值内联进 List 背衬数组，逐条零堆分配。
+    /// 语义逐位不变：回滚整体丢弃、成功提交后回放（TX-004）。</summary>
+    private List<(Action<object, long> Backfill, object Entity, long Id)>? _postCommitBackfills;
 
-    /// <summary>登记"提交成功后回放"的动作（TX-004）——事务回滚时整体丢弃。
+    /// <summary>登记"提交成功后回放"的生成 ID 回填（TX-004）——事务回滚时整体丢弃。
     /// 事务流内单线执行（单活动操作契约），无需加锁。</summary>
-    internal void AddPostCommitAction(Action action)
-        => (_postCommitActions ??= []).Add(action);
+    internal void AddPostCommitBackfill(Action<object, long> backfill, object entity, long id)
+        => (_postCommitBackfills ??= []).Add((backfill, entity, id));
 
-    /// <summary>取走并清空待回放动作（成功提交后调用）。</summary>
-    internal List<Action>? TakePostCommitActions()
+    /// <summary>取走并清空待回放回填（成功提交后调用）。</summary>
+    internal List<(Action<object, long> Backfill, object Entity, long Id)>? TakePostCommitBackfills()
     {
-        List<Action>? actions = _postCommitActions;
-        _postCommitActions = null;
-        return actions;
+        List<(Action<object, long> Backfill, object Entity, long Id)>? backfills = _postCommitBackfills;
+        _postCommitBackfills = null;
+        return backfills;
     }
 
-    /// <summary>丢弃待回放动作（回滚路径调用）——未提交的写入不得体现在内存实体上。</summary>
-    internal void DiscardPostCommitActions() => _postCommitActions = null;
+    /// <summary>丢弃待回放回填（回滚路径调用）——未提交的写入不得体现在内存实体上。</summary>
+    internal void DiscardPostCommitBackfills() => _postCommitBackfills = null;
 
     /// <summary>是否存在可用事务——不抛异常的查询形式（API-002，2026-09-22）。
     /// <see cref="GetActiveTransaction"/> 在"外部设入的事务被外部释放"时响亮抛异常（ITM-640/767），

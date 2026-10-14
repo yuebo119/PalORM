@@ -28,6 +28,8 @@ public sealed class PoolResetCompletenessTests
     /// _parallelReadConnections/_idleParallelReadConnections（并行池，作用域退出即空，
     /// Park 门禁保证归还时无作用域）；_materializedCapacity（容量启发，租期无关近似）；
     /// _readConnection（会话级读连接，AcquireReadConnectionAsync 自带死连接重建）；
+    /// _readConnProvider/_readConnReturner（W1 惰性读路由委托：绑定 this 的方法组，
+    /// 幂等无状态，保留使第二租期起 From&lt;T&gt; 免重建）；
     /// _lastMigrationSkippedIndexes（DDL 幂等跳过缓存：类型级事实，与租期无关——守卫测试
     /// 首跑即抓到该遗漏，登记实证）；_pool/_poolBaseOptions/_poolBaseResilience（池标记与
     /// 复位基准，永不复位）。</summary>
@@ -38,6 +40,7 @@ public sealed class PoolResetCompletenessTests
         "_insertWriteOps", "_updateWriteOps", "_getByKeyReadOps", "_deleteWriteOps",
         "_parallelReadConnections", "_idleParallelReadConnections",
         "_materializedCapacity", "_readConnection",
+        "_readConnProvider", "_readConnReturner",
         "_lastMigrationSkippedIndexes",
         "_pool", "_poolBaseOptions", "_poolBaseResilience",
     ];
@@ -47,7 +50,7 @@ public sealed class PoolResetCompletenessTests
     /// Exit/事务流退出路径归零（Park 前置校验保证这些能量在驻留时点恒为零——非零即抛，不可能带残留进池）：
     /// _isActive/_activeOperation/_activeOperationOwner/_activeTransaction/_transactionOwner/
     /// _transactionResources/_transactionCompleting/_parallelReadScopes/_activeReadLeases/_readLeasesDrained；
-    /// 归还复位（DataSession.ReturnToPoolAsync）：DefersPostCommitActions/_postCommitActions（Discard）；
+    /// 归还复位（DataSession.ReturnToPoolAsync）：DefersPostCommitActions/_postCommitBackfills（Discard）；
     /// 生命周期终态：_disposeTask（仅真实释放路径产生，驻留会话恒 null）；
     /// 跨租期保留：CompletedOps（原 OwnerPrewarmed，深挖轮改计数——AsyncLocal 槽值随异步流
     /// 不跨租期，保留计数使第二租期起免 EC 拷贝且立即达预热门槛）、
@@ -61,7 +64,7 @@ public sealed class PoolResetCompletenessTests
         "_transactionOwner", "_transactionResources", "_transactionCompleting",
         "_parallelReadScopes", "_activeReadLeases", "_readLeasesDrained",
         // 归还复位（ReturnToPoolAsync）
-        "DefersPostCommitActions", "_postCommitActions",
+        "DefersPostCommitActions", "_postCommitBackfills",
         // 生命周期终态
         "_disposeTask",
         // 跨租期保留
