@@ -125,6 +125,28 @@ public sealed class KeyConversionTests
         await Assert.That(PalORM_Runtime.CrudMetadatas[typeof(KeyConversionEntity)].ConvertDeleteKey).IsNotNull();
     }
 
+    [Test]
+    public async Task ConvertDeleteKey_SameTypeBoxedKey_ReusesCallerBox()
+    {
+        // R2-A2（2026-10-13 微项包）：生成器 identity 快路径——同型装箱键（long 主键实体收
+        // long 键）复用调用方装箱实例（ReferenceEquals），异型键照走 Convert 归一（新箱）。
+        // 锁定的是"非槽路径 −24B/绑定"的机制本体：Convert.ToInt64(object) 必解箱重箱，
+        // identity 分支返回原始引用零新分配。
+        Func<object, object?>? convert = PalORM_Runtime.CrudMetadatas[typeof(KeyConversionEntity)].ConvertDeleteKey;
+        await Assert.That(convert).IsNotNull();
+
+        long keyValue = 42L;
+        object boxedKey = keyValue;   // 调用点装箱（唯一一箱）
+        object? converted = convert!(boxedKey);
+        await Assert.That(converted).IsEqualTo(42L);
+        await Assert.That(ReferenceEquals(converted, boxedKey)).IsTrue();   // 同一箱复用
+
+        // 异型键（int → long 主键）照走 Convert 归一：值正确、产新实例
+        object? crossType = convert!(42);
+        await Assert.That(crossType).IsEqualTo(42L);
+        await Assert.That(ReferenceEquals(crossType, boxedKey)).IsFalse();
+    }
+
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
         => await DataSession<SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = "Data Source=:memory:" });

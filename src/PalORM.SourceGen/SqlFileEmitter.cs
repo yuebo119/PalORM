@@ -140,7 +140,10 @@ internal static class SqlFileEmitter
                 "普通注释请勿以 '-- @' 开头。嵌入整份原文会在运行期执行异方言 SQL，已拒绝");
         sqlContent = resolution.Resolved;
 
-        return GenerateMethod(model, sqlContent, fullPath);
+        // E24（2026-10-12 确定性修复）：来源标注用特性里声明的相对路径，不用解析后的绝对
+        // 路径——绝对路径含开发机盘符/目录，同一源码在不同机器产出不同 .g.cs，破坏可复现
+        // 构建与增量缓存（与 AutoTaggingEmitter ITM-697 只留文件名的政策同向）。
+        return GenerateMethod(model, sqlContent, model.RelativePath);
     }
 
     /// <summary>在 AdditionalFiles 内容快照中按解析后的绝对路径查找 .sql 内容。
@@ -267,7 +270,9 @@ internal static class SqlFileEmitter
             }
 
             if (inSection && (result.Length > 0 || !string.IsNullOrWhiteSpace(line)))
-                result.AppendLine(line);
+                // E25（2026-10-12 确定性修复）：显式 '\n' 重组，不用 AppendLine——后者随宿主
+                // OS 变化（Windows \r\n / Linux \n），同一 .sql 在不同 OS 产出不同的嵌入常量字节。
+                result.Append(line).Append('\n');
         }
 
         string resolved = result.ToString().TrimEnd('\r', '\n');

@@ -162,8 +162,10 @@ public static class MultiValueBulkInsert
     /// 插值再一份大串（20 列 1000 行瞬时约 830KB，其中约一半落 LOH）。单 VSB 顺序写后只产出一份
     /// 最终字符串。占位符形态与旧实现逐字一致（行内 <c>(@p0, @p1)</c>、行间 <c>, </c>）。</para>
     /// <para>占位符恒为 <c>@pN</c>（多值路径三方言共用，与 ParameterNameCache 的预建名对齐）；
-    /// 下标 5 位上限由入口守卫（ITM-668）。</para></summary>
-    private static void AppendInsertStatement(
+    /// 下标 5 位上限由入口守卫（ITM-668）。</para>
+    /// <para>B6 落地（2026-10-12）：internal 化——BulkMerge 默认键批量化复用同一 VALUES
+    /// 构造器（追加 RETURNING 后缀），避免第三份逐字拷贝。</para></summary>
+    internal static void AppendInsertStatement(
         ref ValueStringBuilder sb, string quotedTable, string quotedColumns,
         int batchLength, int columnCount)
     {

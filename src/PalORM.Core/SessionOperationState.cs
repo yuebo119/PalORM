@@ -47,31 +47,78 @@ internal sealed class SessionOperationState
     private bool _transactionCompleting;
     private int _state;
 
+    // ─── 池化驻留（2026-10-13 二轮方案）：_state 第 4 态 ──
+    // 0=活动 1=释放中 2=已释放 3=已驻留(归还池中,租出经 Unpark 复位回 0)。
+    // Park 在锁内校验"无在飞操作/读租约/事务流/并行作用域"后置位——与 Enter 的互斥
+    // 由同一把 _sync 保证(驻留后 Enter 拒绝,租出前无人可进入)。
+
+    /// <summary>驻留（归还连接池前的门禁收口）的返回态。
+    /// <see cref="Parked"/> = 本次成功驻留（调用方继续瞬态复位与入队）；
+    /// <see cref="AlreadyParked"/> = 已驻留（重复 Dispose 的幂等路径，调用方直接返回）；
+    /// <see cref="TornDown"/> = 已释放/释放中（池丢弃后又被 Dispose，调用方直接返回）。
+    /// 存在在飞操作、只读租约、事务流、并行读作用域或存活事务时抛
+    /// <see cref="InvalidOperationException"/>（调用方契约违反：池化会话必须在无飞行工作时归还）。
+    /// 死残留事务（外部已释放）静默清空（与 GetActiveTransaction 的静默清理同口径）。</summary>
+    internal enum ParkResult
+    {
+        Parked,
+        AlreadyParked,
+        TornDown,
+    }
+
+    internal ParkResult Park()
+    {
+        lock (_sync)
+        {
+            if (_state == 3)
+                return ParkResult.AlreadyParked;
+            if (_state is 1 or 2)
+                return ParkResult.TornDown;
+            if (_isActive || _activeReadLeases > 0)
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool while an operation is still in flight; " +
+                    "always consume enumerators with 'await foreach' and complete operations before disposing.");
+            if (_parallelReadScopes > 0)
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool while a parallel-read scope is active; " +
+                    "dispose the scope first.");
+            if (_transactionOwner is not null)
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool while a transaction flow is active.");
+            if (IsTransactionAlive(_transaction))
+                throw new InvalidOperationException(
+                    "Cannot return this DataSession to its pool with an active transaction; " +
+                    "commit or roll it back first.");
+            _transaction = null;
+            _transactionOperationOwner = null;
+            _externalTransaction = false;
+            _state = 3;
+            return ParkResult.Parked;
+        }
+    }
+
+    /// <summary>租出（从池中取出时复位驻留态）。</summary>
+    internal void Unpark()
+    {
+        lock (_sync)
+        {
+            if (_state == 3)
+                _state = 0;
+        }
+    }
+
     internal SessionOperationLease Enter(object? owner = null)
     {
+        // R2-#9（2026-10-13 微项，原 A3 安全子集）：owner 重入快路径——事务/编排循环内
+        // 每行一次的 Enter 免锁。判定抽 CanFastReenterOwner（降 S3776），只读不改状态。
+        if (owner is not null && CanFastReenterOwner(owner))
+            return default;
+
         lock (_sync)
         {
             bool ownedOperation = owner is not null
                 && ReferenceEquals(owner, _activeOperationOwner);
-            bool currentTransaction = _transactionOwner is not null
-                && ReferenceEquals(
-                    _transactionOwner, _currentTransactionOwner.Value);
-            ObjectDisposedException.ThrowIf(
-                _state == 2
-                || (_state == 1 && !ownedOperation && !currentTransaction),
-                this);
-            if (_transactionCompleting && currentTransaction && !ownedOperation)
-            {
-                throw new InvalidOperationException(
-                    "The active transaction flow is completing.");
-            }
-            if (_transactionOwner is not null
-                && !ReferenceEquals(
-                    _transactionOwner, _currentTransactionOwner.Value))
-            {
-                throw new InvalidOperationException(
-                    "The active transaction belongs to another asynchronous flow.");
-            }
+            ThrowIfEnterBlocked(ownedOperation);
             // ARCH-001（2026-09-23）：并行读作用域内只读租约在飞时，独占操作（写/事务/Bulk）
             // 同样被拒绝——"只读并行、写与事务串行"的非对称语义由本检查兜住。
             if (_isActive || _activeReadLeases > 0)
@@ -88,9 +135,16 @@ internal sealed class SessionOperationState
             _activeOperationOwner = this;
             // step16-P1：同值守卫——公共入口预热后（调用方 EC 值持久流动进来）命中即免写；
             // 未预热的路径（内部互调/旧入口）miss 时照写，语义不变（见 PrewarmCurrentOperationOwner）
+            //
+            // ⚠ EC 包含绊线（2026-10-14 G2 证伪轮）：本 AsyncLocal 写只允许发生在 async 方法
+            // 体内（builder 同步完成路径会还原 EC）——非 async 调用使写逃逸调用方活 EC，
+            // per-op 会话 = 新 AsyncLocal 实例键 → EC map 无界增长 → O(N²)（SQLite 并发 20×
+            // 塌方实测）。同步上下文需要门禁时用 <see cref="EnterConfigGate"/>（无 AsyncLocal 写）；
+            // ArchitectureInvariantTests.EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment
+            // 机械守卫本纪律。
             if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
                 _currentOperationOwner.Value = _activeOperationOwner;
-            OwnerPrewarmed = true;
+            CompletedOps++;
             _isActive = true;
             // v4.5：不创建 TCS -- 仅在 Dispose/WaitForActive 需要等待时才延迟创建
             _activeOperation = null;
@@ -98,6 +152,65 @@ internal sealed class SessionOperationState
                 this, _activeOperationOwner);
         }
     }
+
+    /// <summary>配置门（EC 包含绊线轮，2026-10-14）：同步配置方法（IgnoreFilters/WithTenant/
+    /// AddInterceptor/WithIsolationLevel/UpdateResilience）的互斥门禁——守卫与 <see cref="Enter"/>
+    /// 逐位一致，<b>但不做 AsyncLocal owner 写</b>：这些方法是同步签名（链式 API），写会逃逸
+    /// 调用方活 ExecutionContext（G2 根因的静态面：per-op 会话 + WithTenant 的长循环同样累积
+    /// EC map）。owner 仍置 <c>_activeOperationOwner=this</c> 使 <c>Exit(owner)</c> 配对。
+    /// 安全性来源：租约释放在同步方法 using 内即取即还，无需跨 await 追踪 owner。</summary>
+    internal SessionOperationLease EnterConfigGate()
+    {
+        lock (_sync)
+        {
+            ThrowIfEnterBlocked(false);
+            if (_isActive || _activeReadLeases > 0)
+            {
+                throw new InvalidOperationException(
+                    "DataSession already has an active database operation.");
+            }
+            _activeOperationOwner = this;
+            _isActive = true;
+            _activeOperation = null;
+            return new SessionOperationLease(this, _activeOperationOwner);
+        }
+    }
+
+    /// <summary>Enter 的前两段守卫（R2-#9 从 Enter 抽出，降 S3776）：终态/释放中拒绝与
+    /// 事务流归属校验。锁内调用；ownedOperation 由调用方按 owner 判定后传入。</summary>
+    private void ThrowIfEnterBlocked(bool ownedOperation)
+    {
+        bool currentTransaction = _transactionOwner is not null
+            && ReferenceEquals(
+                _transactionOwner, _currentTransactionOwner.Value);
+        ObjectDisposedException.ThrowIf(
+            _state is 2 or 3
+            || (_state == 1 && !ownedOperation && !currentTransaction),
+            this);
+        if (_transactionCompleting && currentTransaction && !ownedOperation)
+        {
+            throw new InvalidOperationException(
+                "The active transaction flow is completing.");
+        }
+        if (_transactionOwner is not null
+            && !ReferenceEquals(
+                _transactionOwner, _currentTransactionOwner.Value))
+        {
+            throw new InvalidOperationException(
+                "The active transaction belongs to another asynchronous flow.");
+        }
+    }
+
+    /// <summary>R2-#9：owner 重入快路径的只读判定。漏读两方向均安全：假阴性（volatile
+    /// 读到旧值）落入锁路径走完整判定；假阳性所需的条件组合在锁路径逐条对照同样放行——
+    /// state==2 蕴含 !_isActive（Dispose 排空后才置终态）读不到；_transactionCompleting
+    /// 守卫只对 !ownedOperation 抛（owner 非 null 恒过）；异流事务由第三条件显式挡下
+    /// （不匹配即落锁路径，由锁路径抛 "belongs to another asynchronous flow"）。</summary>
+    private bool CanFastReenterOwner(object owner)
+        => Volatile.Read(ref _isActive)
+            && ReferenceEquals(Volatile.Read(ref _activeOperationOwner), owner)
+            && (Volatile.Read(ref _transactionOwner) is null
+                || ReferenceEquals(Volatile.Read(ref _transactionOwner), _currentTransactionOwner.Value));
 
     /// <summary>并行只读租约上限（ARCH-001，2026-09-23）——作用域内允许的并发只读操作数。</summary>
     internal const int MaxParallelReads = 8;
@@ -114,10 +227,17 @@ internal sealed class SessionOperationState
     // 本身是 ms 级重负载操作，一次 ~300B EC 写入可接受）。
     private readonly AsyncLocal<int> _readLeaseDepth = new();
 
-    /// <summary>是否处于并行读作用域（供 DataSession 的读连接池判断）。</summary>
+    /// <summary>是否处于并行读作用域（供 DataSession 的读连接池判断）。
+    /// F6（2026-10-13 全量重读微项包）：读侧降级 Volatile.Read——计数只在锁内增减
+    /// （<see cref="EnterParallelReadScope"/>/<see cref="ExitParallelReadScope"/>），读为 int 原子且
+    /// 漏读两方向都安全（假阴性=下一查询再读到；假阳性所需的"读 true 后作用域已退"窗口内，
+    /// 池连接的释放由作用域退出方负责，读方最多多走一次池查询）。原 getter 持锁在每条查询的
+    /// 执行路径上被读 1~2 次（AcquireExecutionConnectionAsync/CreateReadRoutedCommandAsync/
+    /// TryAcquireReusable*），是纯无竞争锁开销；镜像纪律同 <see cref="CircuitBreaker"/> 的
+    /// _isOpenFlag（C1 先例）。写点仍在锁内，与全部状态变迁的锁纪律不冲突。</summary>
     internal bool ParallelReadsEnabled
     {
-        get { lock (_sync) return _parallelReadScopes > 0; }
+        get => Volatile.Read(ref _parallelReadScopes) > 0;
     }
 
     /// <summary>进入并行读作用域（ARCH-001）——可嵌套，深度归零即恢复单活动门禁。</summary>
@@ -205,7 +325,7 @@ internal sealed class SessionOperationState
             _activeOperationOwner = this;
             if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
                 _currentOperationOwner.Value = _activeOperationOwner;
-            OwnerPrewarmed = true;
+            CompletedOps++;
             _isActive = true;
             _activeOperation = null;
             return new SessionOperationLease(
@@ -219,11 +339,19 @@ internal sealed class SessionOperationState
     /// （~72B/次：EC 48B + OneElementAsyncLocalValueMap 24B），即使带同值守卫（探针 ①e/①g
     /// 实测 +72B/行）。写发生在<b>非 async 的公共入口</b>（调用方 EC）时值持久，且随 EC
     /// 流动进 async 体的 Enter 守卫（①h 实测 0 增量）。</para>
-    /// <para><b>门禁（防 EC 链累积）</b>：调用方须先查 <see cref="OwnerPrewarmed"/>——每操作
+    /// <para><b>门禁（防 EC 链累积）</b>：调用方须先查 <see cref="CompletedOps"/> ≥2——每操作
     /// 新会话形态（PerfHub 器材）若无条件预热，N 个会话各自的 AsyncLocal 实例会在同一
     /// 调用方 EC 的不可变 map 链上累积，COW 成本随链长线性放大（探针 ③ 形态实测
-    /// 2459→10309 B/行）。仅"本会话已完成过至少一次操作"后预热，新会话首调永不预热，
+    /// 2459→10309 B/行）。仅"本会话已完成过多次操作"后预热，新会话首调永不预热，
     /// 链上至多一个本会话节点。</para>
+    /// <para><b>门槛 1→2（深挖轮 2026-10-14）</b>：原 ≥1 门禁有一个旁路——会话首操作是
+    /// <c>BeginTransactionAsync</c>（或 Savepoint 族）这类<b>生命周期操作</b>时，其 Enter 在
+    /// async 体内被包含地置位标志，而随后的标准操作（InsertAsync 等）的非 async 包装壳看到
+    /// 标志即预热，把<b>新会话的新 AsyncLocal 键</b>写进调用方长活 EC——per-op 会话 +
+    /// 事务形态每事务净增一个键，长循环 O(N²)（探针 Bisect：A 空事务/C 复用会话/D 纯插入
+    /// 全平 1.4~3.7KB，B 完整形态 96924 B/op ≈ N×32B 精确二次型签名）。门槛提高到 ≥2：
+    /// per-op 形态（含事务共 ≤2 个操作）结构上永不预热；长会话仅第 1~2 个操作各付一次
+    /// 72B 的包含式 Enter 写，第 3 个操作起照常预热（同键值替换，O(1)）。</para>
     /// <para><b>语义零变化</b>：IsCurrentOperationScope 是 <c>_isActive &amp;&amp; owner匹配</c>
     /// 的与逻辑——预热只影响槽值，操作未 Enter 时 _isActive=false 照样判 false；槽值与
     /// Enter 会写的值恒同（this）；Exit 本就不清槽（v4.5）。无锁调用：AsyncLocal 写本身
@@ -231,9 +359,16 @@ internal sealed class SessionOperationState
     internal void PrewarmCurrentOperationOwner()
         => _currentOperationOwner.Value = this;
 
-    /// <summary>step16-P1：本会话是否已完成过至少一次操作（Enter 走到写槽段即置位）。
-    /// 公共入口据此决定是否预热——见 <see cref="PrewarmCurrentOperationOwner"/> 的门禁说明。</summary>
-    internal bool OwnerPrewarmed;
+    /// <summary>step16-P1（门槛 2 版，深挖轮 2026-10-14）：本会话已完成的操作数（Enter/
+    /// EnterTransactionOperation 走到写槽段即递增，锁内）。公共入口据此决定是否预热
+    /// （≥<see cref="PrewarmThreshold"/> 才预热）——见 <see cref="PrewarmCurrentOperationOwner"/> 的门禁说明。</summary>
+    internal int CompletedOps;
+
+    /// <summary>预热门槛（深挖轮 2026-10-14 由 1 提高到 2）：会话完成操作数达到此值后，
+    /// 公共入口的非 async 包装壳才做持久预热写。per-op 会话形态（含"Begin+单操作+Commit"
+    /// 的事务形态，共 2 个操作）结构上永不达标；长会话第 3 个操作起进入预热稳态。
+    /// 依据与二次型签名见 <see cref="PrewarmCurrentOperationOwner"/> 的门槛 1→2 段。</summary>
+    internal const int PrewarmThreshold = 2;
 
     internal object EnterTransactionFlow()
     {
@@ -430,7 +565,7 @@ internal sealed class SessionOperationState
                 && ReferenceEquals(
                     _transactionOwner, _currentTransactionOwner.Value);
             ObjectDisposedException.ThrowIf(
-                _state == 2 || (_state == 1 && !currentTransaction), this);
+                _state is 2 or 3 || (_state == 1 && !currentTransaction), this);
         }
     }
 
@@ -458,23 +593,27 @@ internal sealed class SessionOperationState
     /// 复用外部事务的内层路径（owns=false）不读写本标记，不会清掉外层的设置。</summary>
     internal bool DefersPostCommitActions { get; set; }
 
-    private List<Action>? _postCommitActions;
+    /// <summary>W2（深挖轮 2026-10-14）：延迟回填的存储从 List&lt;Action&gt; 改为类型化元组列表——
+    /// 原唯一登记面 BackfillGeneratedId 每次登记一个捕获 (backfill, entity, id) 三字段的闭包
+    ///（display class + Action 委托约 80B）；元组经值内联进 List 背衬数组，逐条零堆分配。
+    /// 语义逐位不变：回滚整体丢弃、成功提交后回放（TX-004）。</summary>
+    private List<(Action<object, long> Backfill, object Entity, long Id)>? _postCommitBackfills;
 
-    /// <summary>登记"提交成功后回放"的动作（TX-004）——事务回滚时整体丢弃。
+    /// <summary>登记"提交成功后回放"的生成 ID 回填（TX-004）——事务回滚时整体丢弃。
     /// 事务流内单线执行（单活动操作契约），无需加锁。</summary>
-    internal void AddPostCommitAction(Action action)
-        => (_postCommitActions ??= []).Add(action);
+    internal void AddPostCommitBackfill(Action<object, long> backfill, object entity, long id)
+        => (_postCommitBackfills ??= []).Add((backfill, entity, id));
 
-    /// <summary>取走并清空待回放动作（成功提交后调用）。</summary>
-    internal List<Action>? TakePostCommitActions()
+    /// <summary>取走并清空待回放回填（成功提交后调用）。</summary>
+    internal List<(Action<object, long> Backfill, object Entity, long Id)>? TakePostCommitBackfills()
     {
-        List<Action>? actions = _postCommitActions;
-        _postCommitActions = null;
-        return actions;
+        List<(Action<object, long> Backfill, object Entity, long Id)>? backfills = _postCommitBackfills;
+        _postCommitBackfills = null;
+        return backfills;
     }
 
-    /// <summary>丢弃待回放动作（回滚路径调用）——未提交的写入不得体现在内存实体上。</summary>
-    internal void DiscardPostCommitActions() => _postCommitActions = null;
+    /// <summary>丢弃待回放回填（回滚路径调用）——未提交的写入不得体现在内存实体上。</summary>
+    internal void DiscardPostCommitBackfills() => _postCommitBackfills = null;
 
     /// <summary>是否存在可用事务——不抛异常的查询形式（API-002，2026-09-22）。
     /// <see cref="GetActiveTransaction"/> 在"外部设入的事务被外部释放"时响亮抛异常（ITM-640/767），
@@ -564,7 +703,7 @@ internal sealed class SessionOperationState
                 && ReferenceEquals(
                     _transactionOwner, _currentTransactionOwner.Value);
             ObjectDisposedException.ThrowIf(
-                _state == 2
+                _state is 2 or 3
                 || (_state == 1 && !ownedOperation && !currentTransaction),
                 this);
             // ITM-640：内部发布的事务失效走静默清理（正常生命周期）；
@@ -669,19 +808,24 @@ internal sealed class SessionOperationState
         // ITM-581：读一次入局部（评审 2026-09-02 起为防御习惯——实例值在首个操作前固定）
         TimeSpan disposeWaitTimeout = DisposeWaitTimeout;
         Exception? primaryException = null;
-        try
+        // R3（2026-10-12）：三个等待信号全部已完成（无飞行操作/事务/读租约，每操作一会话的
+        // 常态）时短路——免 WhenAll 的参数数组与 promise 分配及 WaitAsync 包装
+        if (!activeOperation.IsCompleted || !activeTransaction.IsCompleted || !readLeases.IsCompleted)
         {
-            await Task.WhenAll(activeOperation, activeTransaction, readLeases)
-                .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
-        }
-        catch (TimeoutException timeoutException)
-        {
-            primaryException = new InvalidOperationException(
-                $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
-                "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed, " +
-                "or an unfinished query inside a parallel-read scope; " +
-                "always consume enumerators with 'await foreach' and dispose scopes explicitly.",
-                timeoutException);
+            try
+            {
+                await Task.WhenAll(activeOperation, activeTransaction, readLeases)
+                    .WaitAsync(disposeWaitTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException timeoutException)
+            {
+                primaryException = new InvalidOperationException(
+                    $"DataSession dispose timed out after {disposeWaitTimeout} waiting for an active operation. " +
+                    "A likely cause is an abandoned QueryAsyncEnumerable enumerator that was never disposed, " +
+                    "or an unfinished query inside a parallel-read scope; " +
+                    "always consume enumerators with 'await foreach' and dispose scopes explicitly.",
+                    timeoutException);
+            }
         }
 
         // ITM-665: 超时路径也必须执行 disposeCore（关闭/释放主连接）——此前 throw 先于

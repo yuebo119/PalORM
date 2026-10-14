@@ -332,6 +332,8 @@ public sealed class ProviderTests
         // v7.2.1 收窄口径锁定：:memory: 库只跑 foreign_keys + busy_timeout + cache_size + analysis_limit，
         // journal_mode 保持默认 memory（非 WAL）——防"宽窄分支合一"漂移。
         // （2026-09-25：busy_timeout/analysis_limit 属纯连接态设置，宽窄两分支共有。）
+        // 2026-10-14 SQLite 3.54 适配轮：optimize 只落宽分支（内存库无持久统计面），本测试同时
+        // 守住窄分支不出现 optimize 的口径。
         await using var session = await PalORM.DataSession<PalORM.Sqlite.SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = "Data Source=:memory:" });
         await Assert.That(await session.ScalarAsync<long>($"PRAGMA foreign_keys")).IsEqualTo(1);
@@ -339,6 +341,81 @@ public sealed class ProviderTests
         await Assert.That(await session.ScalarAsync<string>($"PRAGMA journal_mode")).IsEqualTo("memory");
         await Assert.That(await session.ScalarAsync<long>($"PRAGMA busy_timeout")).IsEqualTo(5000);
         await Assert.That(await session.ScalarAsync<long>($"PRAGMA analysis_limit")).IsEqualTo(400);
+    }
+
+    [Test]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100",
+        Justification = "测试种子与探查 SQL 均为固定字面量（循环变量为受控整数），非用户输入。")]
+    public async Task SqliteProvider_OptimizePragma_BuildsQueryPlannerStats()
+    {
+        // 2026-10-14 SQLite 3.54 适配轮的锁定测试：宽分支整组 PRAGMA 尾部的 optimize=0x10002
+        // （官方对长生命周期连接的 first-open 推荐形态，M.D.S 池化句柄即长生命周期物理连接）
+        // 必须真实建立查询计划统计（sqlite_stat1）——只断"不抛"无法区分掩码写错被引擎静默
+        // 接受（PRAGMA 对非法掩码静默按默认跑）与真正生效。直测 Provider API：先建表播种，
+        // 再跑 InitializeConnectionAsync（时序上等于"带数据的池化句柄首开"）。
+        string dbPath = Path.Combine(Path.GetTempPath(), $"palorm-optimize-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using var connection = PalORM.Sqlite.SqliteProvider.CreateConnection(
+                $"Data Source={dbPath}", new DbOptions { ConnectionString = $"Data Source={dbPath}" });
+            await connection.OpenAsync();
+            await using System.Data.Common.DbCommand setup = connection.CreateCommand();
+            setup.CommandText = "CREATE TABLE opt_probe (id INTEGER PRIMARY KEY, v TEXT NOT NULL)";
+            await setup.ExecuteNonQueryAsync();
+            // PALORM005/S2077 豁免：种子固定 50 行（ANALYZE 采样面，analysis_limit=400 下全量
+            // 覆盖）；插值成分仅为受控循环整数与常量标识符，非用户输入
+#pragma warning disable PALORM005, S2077
+            for (int i = 1; i <= 50; i++)
+            {
+                await using System.Data.Common.DbCommand insert = connection.CreateCommand();
+                insert.CommandText = $"INSERT INTO opt_probe (id, v) VALUES ({i}, 'v{i}')";
+                await insert.ExecuteNonQueryAsync();
+            }
+#pragma warning restore PALORM005, S2077
+            long statBefore = await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'");
+            await Assert.That(statBefore).IsEqualTo(0);
+
+            await PalORM.Sqlite.SqliteProvider.InitializeConnectionAsync(connection, default);
+
+            long statAfter = await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM sqlite_stat1");
+            await Assert.That(statAfter).IsGreaterThanOrEqualTo(1);
+        }
+        finally
+        {
+            foreach (string path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm", dbPath + "-journal" })
+            {
+                try { File.Delete(path); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    _ = exception;
+                }
+            }
+        }
+    }
+
+    [Test]
+    public async Task SqliteProvider_BundledEngineVersion_Floor()
+    {
+        // 2026-10-14 适配轮守卫：SQLite3MC 2.6.1 携带的引擎必须 ≥ 3.54.0——本仓的性能/语义
+        // 适配（optimize=0x10002 的掩码语义、3.51+ 的读事务提交优化、3.53+ 的 join 计划改进）
+        // 以引擎版本为前提；bundle 回退或漂移在此响亮失败而不是静默降级。后续升级 bundle 时
+        // 同步抬高地板。
+        await using var connection = PalORM.Sqlite.SqliteProvider.CreateConnection(
+            "Data Source=:memory:", new DbOptions { ConnectionString = "Data Source=:memory:" });
+        await connection.OpenAsync();
+        string version = await ScalarAsync<string>(connection, "SELECT sqlite_version()");
+        string[] parts = version.Split('.');
+        await Assert.That(int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture)).IsGreaterThanOrEqualTo(3);
+        await Assert.That(int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)).IsGreaterThanOrEqualTo(54);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100",
+        Justification = "本测试类内的固定字面量探查 SQL（PRAGMA/sqlite_master/sqlite_version），非用户输入。")]
+    private static async Task<T> ScalarAsync<T>(System.Data.Common.DbConnection connection, string sql)
+    {
+        await using System.Data.Common.DbCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        return (T)(await command.ExecuteScalarAsync())!;
     }
 
     [Test]

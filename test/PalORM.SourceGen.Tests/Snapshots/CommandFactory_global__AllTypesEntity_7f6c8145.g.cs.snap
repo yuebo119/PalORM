@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.4.1")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.5.0")]
 internal static class CommandFactory_global__AllTypesEntity_7f6c8145
 {
 
@@ -79,6 +79,31 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         parameters[paramOffset + 17].DbType = global::System.Data.DbType.Guid;
         parameters[paramOffset + 18].DbType = global::System.Data.DbType.Time;
         parameters[paramOffset + 19].DbType = global::System.Data.DbType.Binary;
+    }
+
+    /// <summary>O1：COPY 定型行写入——列序 = IsInsertable 声明序（与 BindInsertValues/InsertColumns 同源同序）。</summary>
+    internal static void CopyWriteRow(global::PalORM.IBinaryRowSink sink, global::AllTypesEntity entity)
+    {
+        sink.WriteInt32(0, entity.IntValue);
+        sink.WriteInt16(1, entity.ShortValue);
+        sink.WriteInt16(2, entity.ByteValue);
+        sink.WriteString(3, entity.StringValue);
+        sink.WriteString(4, entity.CharValue.ToString());
+        sink.WriteBoolean(5, entity.BoolValue);
+        sink.WriteDecimal(6, entity.DecimalValue);
+        sink.WriteDouble(7, entity.DoubleValue);
+        sink.WriteSingle(8, entity.FloatValue);
+        sink.WriteDateTime(9, entity.DateTimeValue);
+        sink.WriteGuid(10, entity.GuidValue);
+        sink.WriteDateTimeOffset(11, entity.DateTimeOffsetValue);
+        sink.WriteDateOnly(12, entity.DateOnlyValue);
+        sink.WriteTimeOnly(13, entity.TimeOnlyValue);
+        sink.WriteBytes(14, entity.BytesValue);
+        if (entity.NullableInt is null) { sink.WriteNull(15); } else { sink.WriteInt32(15, entity.NullableInt.Value); }
+        if (entity.NullableString is null) { sink.WriteNull(16); } else { sink.WriteString(16, entity.NullableString); }
+        if (entity.NullableGuid is null) { sink.WriteNull(17); } else { sink.WriteGuid(17, entity.NullableGuid.Value); }
+        if (entity.NullableTimeOnly is null) { sink.WriteNull(18); } else { sink.WriteTimeOnly(18, entity.NullableTimeOnly.Value); }
+        if (entity.NullableBytes is null) { sink.WriteNull(19); } else { sink.WriteBytes(19, entity.NullableBytes); }
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
@@ -210,13 +235,13 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
     /// <summary>绑定主键到 DELETE 参数。</summary>
     internal static void BindDelete(global::System.Data.Common.DbCommand cmd, object key)
     {
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p0"; p.DbType = global::System.Data.DbType.Int64; p.Value = key is long ? key : (object)global::System.Convert.ToInt64(key); cmd.Parameters.Add(p); }
     }
 
     /// <summary>主键值归一化（GetByKey 命令复用路径）——与 BindDelete 的 @p0 值同一真源。</summary>
     internal static object? ConvertDeleteKey(object key)
     {
-        return (object)global::System.Convert.ToInt64(key);
+        return key is long ? key : (object)global::System.Convert.ToInt64(key);
     }
 
     /// <summary>构造主键数组（UNNEST 形态用）——元素类型与元素值均与 BindDelete 同源。</summary>

@@ -21,6 +21,9 @@
          CapabilityProbeCache<T> 底座（EPSL 2026-10-11 审计 B 批 #2 两处同轮收敛，防 B120
          不对称族分叉），探测语义需同源。 -->
     <InternalsVisibleTo Include="PalORM.MySql" />
+    <!-- PG Provider 的 COPY 批超时 CTS 走 PooledCts 租借池（G7，2026-10-13 五轮微项包：
+         F5 的 A3 纪律在 Provider 侧的补全），与 MySQL 同属一体发布的方言 Provider。 -->
+    <InternalsVisibleTo Include="PalORM.PostgreSql" />
     <!-- PerfHub 统一性能测试运行器：需复用调用方已打开的连接（避免建连口径不一致
          污染 ORM/地板比值，见 .ai/lessons.md B76），故需访问 internal ctor。 -->
     <InternalsVisibleTo Include="PalORM.PerfHub" />

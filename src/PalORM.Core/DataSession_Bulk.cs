@@ -112,6 +112,137 @@ public partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>F2（2026-10-13 全量重读）：批量删除的<b>类型化键重载</b>——数组形态可用且键类型
+    /// 与生成物数组元素类型等同时，键从调用方到数组参数<b>全程零装箱</b>（对象重载的
+    /// <c>IReadOnlyList&lt;object&gt;</c> 迫使调用方对每个值类型键装箱，20K 个 long 键约 480KB
+    /// 短命垃圾，随后 <c>BuildDeleteKeyArray</c> 再逐个解箱）。
+    /// <para><b>等同性门控</b>：直接拷贝与生成物构造器的逐位等价由
+    /// <see cref="CanUseTypedKeyArrayCopy{T,TKey}"/> 的双值探针钉住（以生成物自身为真源，
+    /// 探测两个真实键值经构造器往返后类型为 <c>TKey[]</c> 且值相等）；探针结果按
+    /// (实体类型, 键类型) 每进程缓存一次。转换器主键（<c>ToProvider</c> 有真实转换语义）
+    /// 或类型不匹配（如 long 主键传 int 键）时探针不通过，装箱回退既有对象路径——语义与
+    /// 守卫（元数据检查先于空列表短路等口径）完整继承。</para>
+    /// <para><b>为什么落在数组形态</b>：IN 占位符形态的每键参数本就以 object 存储（装箱发生在
+    /// 参数写入侧，与调用方装箱等量），类型化无净收益；数组形态的元素是类型化数组的槽位，
+    /// 装箱可整体消除。</para>
+    /// <para>其余语义（软删/租户过滤/事务包装/批大小/返回口径）与
+    /// <see cref="BulkDeleteAsync{T}"/> 逐位一致。</para></summary>
+    public ValueTask<long> BulkDeleteAsync<T, TKey>(IReadOnlyList<TKey> keys, CancellationToken ct = default)
+        where T : class, new()
+        where TKey : notnull
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (keys.Count >= 2
+            && CanUseTypedKeyArrayCopy<T, TKey>(keys))
+        {
+            return BulkDeleteTypedArrayAsync<T, TKey>(keys, ct);
+        }
+        // 回退：装箱后委托既有对象路径（单键/空列表/类型不匹配/数组形态不可用——
+        // 单键装箱只 1 次，探针成本反高于收益；空列表保持对象路径的守卫次序语义）
+        object[] boxed = new object[keys.Count];
+        for (int i = 0; i < boxed.Length; i++)
+            boxed[i] = keys[i];
+        return BulkDeleteAsync<T>(boxed, ct);
+    }
+
+    /// <summary>F2：类型化数组删除主体——与 <see cref="ExecuteArrayFormDeleteAsync{T}"/> 同构，
+    /// 差异仅在批数组构造：直接类型化拷贝（等同性已由探针钉住）替代生成物构造器的逐键装箱转换。</summary>
+    private async ValueTask<long> BulkDeleteTypedArrayAsync<T, TKey>(
+        IReadOnlyList<TKey> keys, CancellationToken ct)
+        where T : class, new()
+        where TKey : notnull
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+        if (!state._tableNames.TryGetValue(typeof(T), out string? typedTableName)
+            || !state._pkColumns.TryGetValue(typeof(T), out string? typedPkCol)
+            || !state._bindDelete.TryGetValue(typeof(T), out Action<DbCommand, object>? _))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        // 调用方已保证 keys.Count >= 2（门控条件），无空列表路径
+
+        bool isSoftDelete = (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
+        DeleteIdentifiers identifiers = new(
+            TProvider.QuoteIdentifier(typedTableName), TProvider.QuoteIdentifier(typedPkCol),
+            TProvider.QuoteIdentifier("deleted_at"), TProvider.CurrentTimestampExpression,
+            HasTenantFilter<T>() ? GetTenantAppendFragment() : "");
+        // 深挖轮：数组形态批宽提升（见 UnnestArraysMaxRowsPerBatch 注释）
+        int batchSize = UnnestArraysMaxRowsPerBatch;
+        return await RunInTransactionScopeAsync(
+            operation.Owner,
+            (tran, token) => ExecuteTypedArrayDeleteCoreAsync<T, TKey>(
+                tran, keys, batchSize, identifiers, isSoftDelete, token),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>F2：批循环内核——命令/数组参数建一次批间只换 Value（R-UNNESTB 纪律同
+    /// <see cref="ExecuteArrayFormDeleteAsync{T}"/>）。
+    /// G6 证伪登记（2026-10-13 五轮微项包实施轮）：<c>CreateArrayParameter</c> 的返回值允许
+    /// Provider 变换（非 PG 方言需把数组编码为可绑定形态，测试夹具 ArrayFormDialectProvider
+    /// 实锤——SQLite 形态把数组编码为 JSON 文本），"临时参数仅当值通道、Value 即原数组"
+    /// 只是 Npgsql 的实现细节不是接口契约；批间直赋原数组的优化不成立，维持每批经
+    /// Provider 构造（值变换是契约的一部分）。</summary>
+    private async Task<long> ExecuteTypedArrayDeleteCoreAsync<T, TKey>(
+        DbTransaction? tran,
+        IReadOnlyList<TKey> keys,
+        int batchSize,
+        DeleteIdentifiers identifiers,
+        bool isSoftDelete,
+        CancellationToken ct)
+        where T : class, new()
+        where TKey : notnull
+    {
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandText = BuildBulkDeleteArraySql(identifiers, isSoftDelete);
+        DbParameter idsParameter = TProvider.CreateParameter(ArrayParameterName, DBNull.Value);
+        cmd.Parameters.Add(idsParameter);
+        BindDefaultFilterParameters<T>(cmd);
+
+        long total = 0;
+        for (int start = 0; start < keys.Count; start += batchSize)
+        {
+            int batchLen = Math.Min(batchSize, keys.Count - start);
+            TKey[] values = new TKey[batchLen];
+            for (int i = 0; i < batchLen; i++)
+                values[i] = keys[start + i];
+            idsParameter.Value = (TProvider.CreateArrayParameter(ArrayParameterName, values)
+                ?? throw new InvalidOperationException(
+                    $"Provider '{TProvider.Name}' returned a null array parameter for element type "
+                    + $"'{typeof(TKey).Name}' (batch length {batchLen}); the capability probe and the "
+                    + "execution path disagree.")).Value;
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        return total;
+    }
+
+    /// <summary>F2：类型化直拷的等同性门控（含每 (T, TKey) 一次的双值探针缓存）。
+    /// <para><b>为什么以生成物为真源做运行时探针</b>：直接拷贝的等价条件是"生成物
+    /// BuildDeleteKeyArray 对 TKey 输入的产出恒为 identity"——数值/Guid/string 主键无转换器时
+    /// 恒成立；转换器主键的 <c>ToProvider</c> 有真实转换语义时被探针否决。静态信号（"主键无
+    /// 转换器"）需要 SourceGen 新增真源并改注册链/快照面；运行时探针以既有生成物自身度量，
+    /// 双值（两个不同键值）往返比对后缓存，漏检需要 ToProvider 恰好对两个真实探测值恒等而
+    /// 对其余值不恒等——属对抗性形态，与 R2-A2 的 identity 快路径同一风险量级。</para></summary>
+    private static bool CanUseTypedKeyArrayCopy<T, TKey>(IReadOnlyList<TKey> keys)
+        where T : class, new()
+        where TKey : notnull
+    {
+        if (!IsArrayFormSupported<T>(out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray)
+            || buildKeyArray is null)
+            return false;
+        (Type, Type) cacheKey = (typeof(T), typeof(TKey));
+        if (DataSessionCache.TypedKeyIdentityCache.TryGetValue(cacheKey, out bool cached))
+            return cached;
+        // 双值探针：装箱 2 次 + 2 个短数组，每 (T, TKey) 每进程至多一次
+        Array probe = buildKeyArray([keys[0], keys[1]], 0, 2)
+            ?? throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' generated a null primary-key array during the typed-key probe.");
+        bool identity = probe is TKey[] typed
+            && EqualityComparer<TKey>.Default.Equals(typed[0], keys[0])
+            && EqualityComparer<TKey>.Default.Equals(typed[1], keys[1]);
+        DataSessionCache.TypedKeyIdentityCache.TryAdd(cacheKey, identity);
+        return identity;
+    }
+
     /// <summary>数组形态的批量删除主体（UNNEST-1）——每批一句 <c>pk = ANY(@ids)</c>，
     /// 语句文本跨批恒定（单参数名与批长度无关），故只建一次命令文本。
     /// <para><b>R-UNNESTB 修正（2026-10-02）</b>：数组参数<b>建一次、批间只改 Value</b>。
@@ -131,7 +262,7 @@ public partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandText = BuildBulkDeleteArraySql(identifiers, isSoftDelete);
-        // 参数对象批间不变（只换 Value）——见方法级 R-UNNESTB 说明
+        // 参数对象批间不变（只换 Value）——见方法级 R-UNNESTB 说明。
         DbParameter idsParameter = TProvider.CreateParameter(ArrayParameterName, DBNull.Value);
         cmd.Parameters.Add(idsParameter);
         BindDefaultFilterParameters<T>(cmd);
@@ -457,11 +588,9 @@ public partial class DataSession<TProvider>
         if (entities.Count == 0) return 0;
 
         // v5.6.0 自动路由（L1）：满足全部条件时走单语句批量（远程 N 行 N 次 RTT → 1 次，
-        // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / 软删 / SQLite）。
+        // 与 BulkMerge 集合化同构收益）。条件不满足时保持逐条（乐观锁语义 / SQLite）。
         // 每个条件不自动路由的理由：
         //   乐观锁（IncrementVersion）→ 批量无法表达"每行 version 匹配"；
-        //   软删 → 软删实体的批量语义待厘清（当前保守排除；两路径都不附加 deleted_at 条件，
-        //          排除理由与租户不同源，改动需专测）；
         //   SQLite → CASE WHEN 在 SQLite 实测慢 6.4×（BulkUpdateBatchAsync 已有同判）。
         // B8（2026-10-01 全 API 逐项轮）：放开租户过滤排除——两路径租户语义已对齐：
         // 逐条池化路径（ExecuteBulkUpdatePooledAsync）与单语句内核（ExecuteBulkUpdateBatchesAsync）
@@ -469,10 +598,14 @@ public partial class DataSession<TProvider>
         // BulkUpdateTenantRoutingTests（三方言：跨租户行零触碰）锁定，放开为纯性能改善
         //（租户实体 N 次往返 → 1 次）。附带修复：逐条池化的 DbBatch 分支原先漏拷池尾租户
         // 参数（PG 42703 / MySQL 未定义参数），本轮由该用例暴露并修复（BindIntoBatchCommand）。
+        // B7（2026-10-12 审读重开落地）：放开软删排除——原"语义待厘清"已厘清：逐条与单语句
+        // 批量的 SET 列集同源（生成器 UpdateColumns，含 deleted_at，两路径都从实体绑定该列），
+        // 对软删实体行为逐位等价（BulkUpdateSoftDeleteRoutingTests 三方言实测一致，含恒逐条的
+        // SQLite 基线）；排除纯属性能损失。调用方契约：实体须携带自身 deleted_at（置 null
+        // 即复活该行，两路径同语义）。
         if (TProvider.Dialect != SqlDialect.Sqlite
             && entities.Count > 1
-            && routeMetadata.IncrementVersion is null
-            && !IsSoftDeletable<T>())
+            && routeMetadata.IncrementVersion is null)
         {
             // 直接复用 BulkUpdateBatchAsync 的核心逻辑（此处条件已排除其拒绝项）
             // ITM-878（r23）：TryGetValue + 族内统一异常（裸索引器在部分注册的病态片段下
@@ -559,6 +692,10 @@ public partial class DataSession<TProvider>
     /// <para><b>与 <see cref="ExecuteBulkUpdateBatchesAsync{T}"/> 的关系</b>：后者是「一条 SQL 更新 N 行」，
     /// 本方法是「N 条 SQL 各更新 1 行」——参数布局相同（每行 paramsPerRow 个），故直接复用
     /// <see cref="BatchUpdateSqlBuilder.CreateParameterArray"/> 的命名契约。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "池化逐条 UPDATE 的分支构成：每行参数缓存命中/建池、版本实体 deferred 回填、"
+            + "DbBatch/单命令两驱动形态——拆分需在方法间传参数池与回填列表，状态面更大。")]
     private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledAsync<T>(
         IReadOnlyList<T> entities, CrudMetadata metadata,
         Action<DbParameter[], object, int> valuesBinder,
@@ -574,20 +711,26 @@ public partial class DataSession<TProvider>
         // 带 [ConcurrencyCheck] 的实体比 setColumnCount+1 多一个。硬算会让乐观锁实体
         // 的 version 参数拿不到值，静默写错数据。probe 同时是生成器三处
         // （SQL/Bind/元数据）漂移的运行时哨兵（与 PrepareBatchUpdateContext 同范式）。
-        DbCommand probe = CreateCommand();
-        int paramsPerRow;
-        try
+        // R3（2026-10-12）：paramsPerRow per-(Type, Dialect) 缓存——probe 哨兵语义随 B9 先例
+        //（PrepareBatchUpdateContext）转为每进程一次；生成器三处漂移仍由首进程 probe 拦截。
+        (Type, SqlDialect) rowParamsKey = (typeof(T), TProvider.Dialect);
+        if (!DataSessionCache.UpdateRowParamsCache.TryGetValue(rowParamsKey, out int paramsPerRow))
         {
-            metadata.BindUpdate(probe, entities[0]);
-            paramsPerRow = probe.Parameters.Count;
+            DbCommand probe = CreateCommand();
+            try
+            {
+                metadata.BindUpdate(probe, entities[0]);
+                paramsPerRow = probe.Parameters.Count;
+            }
+            finally
+            {
+                await probe.DisposeAsync().ConfigureAwait(false);
+            }
+            if (paramsPerRow <= 0)
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' BindUpdate produced {paramsPerRow} parameters; recompile the model assembly.");
+            DataSessionCache.UpdateRowParamsCache.TryAdd(rowParamsKey, paramsPerRow);
         }
-        finally
-        {
-            await probe.DisposeAsync().ConfigureAwait(false);
-        }
-        if (paramsPerRow <= 0)
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' BindUpdate produced {paramsPerRow} parameters; recompile the model assembly.");
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
@@ -600,8 +743,7 @@ public partial class DataSession<TProvider>
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
         if (HasTenantFilter<T>())
-            updateSql = GetTenantWrappedSql<T>(
-                DataSessionCache.UpdateWithTenantSqlCache, updateSql);
+            updateSql = GetUpdateWithTenantSqlFast<T>(updateSql);
         cmd.CommandText = updateSql;
 
         // 参数池：一行 paramsPerRow 个 + 可选租户参数（固定名追加末尾）
@@ -881,12 +1023,6 @@ public partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
-    /// <summary>实体是否标注 [SoftDelete] 且未被 IgnoreFilters——按注册表 EntityFeatures
-    /// 判定（与 BulkDeleteAsync 的软删分派同源）。</summary>
-    private bool IsSoftDeletable<T>() where T : class, new()
-        => !_ignoreFilters
-            && (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
-
     /// <summary>准备批量 UPDATE 上下文：SET 列集取自 CrudMetadata 真源、引号包裹、租户过滤。
     /// probe 命令验证 BindUpdate 参数序与元数据列集一致（ITM-642——原实现解析生成 SQL 文本
     /// 反解列名，含逗号标识符被 Split(',') 错切、表名内含 " SET " 亦会误判）。
@@ -1085,9 +1221,9 @@ public partial class DataSession<TProvider>
                 + "The generator and batch UPDATE SQL disagree; recompile the model assembly "
                 + "(see CommandFactoryEmitter.UpdateArrayColumns).");
         }
-        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）——批大小只为限制单语句行数
-        // 与事务持锁时长，沿用 SqlLimits.MaxRowsPerBatch（与阶段 A 的 BulkDelete 同口径）。
-        int batchSize = SqlLimits.MaxRowsPerBatch;
+        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。深挖轮批宽提升——
+        // 5000→20000 实测 -36%（探针 B，见 UnnestArraysMaxRowsPerBatch）。
+        int batchSize = UnnestArraysMaxRowsPerBatch;
         int fullBatchLen = Math.Min(batchSize, entities.Count);
 
         // 满批数组预建一次批间复用；末批不足满批时单独建一组短数组（UNNEST 按数组实际长度展开，
@@ -1229,10 +1365,21 @@ public partial class DataSession<TProvider>
     /// <summary>PG 批量 UPDATE FROM VALUES 的单批行数上限，依据见 <see cref="MaxRowsPerUpdateBatchFor"/>。</summary>
     private const int PostgreSqlMaxRowsPerUpdateBatch = 1000;
 
+    /// <summary>深挖轮（2026-10-14，探针 B）：UNNEST 数组形态的单批行数上限——语句文本与批宽
+    /// 无关（每列一个数组参数），批宽只受服务端计划形态与往返摊销约束。探针（20000 行表、
+    /// UNNEST UPDATE、9 轮取中位）：批 5000（4 语句）= 104.9ms / 10000（2 语句）= 73.6ms /
+    /// 20000（单语句）= 67.6ms——<b>4×5000 比单语句慢 55%</b>，机制是批/表行数比 25% 时规划器
+    /// 已把数组连接翻成 Hash Join + 全表顺扫（每语句一次全表扫描，4 语句 = 4 次扫描）；批宽
+    /// 提到与表同量级后只扫一次。大表（比值小）方向：Nested Loop + 主键索引计划不变，批宽
+    /// 提升只减语句数与往返，两头都不劣。20000 是探针实证上界（更大宽度未测，锁时长按需
+    /// 再评）。适用于三个数组形态执行体（UPDATE/UPSERT/DELETE——DELETE 的 <c>= ANY(@ids)</c>
+    /// 无连接翻转面，收益为纯往返摊销）。</summary>
+    private const int UnnestArraysMaxRowsPerBatch = 20000;
+
     /// <summary>旧版生成器模型程序集的回退取值：probe 命令逐行 <c>BindUpdate</c> 建参数，
     /// 再把值写进池。语义与 <see cref="CrudMetadata.BindUpdateValues"/> 一致，参数创建量回到
     /// 改前水平（这是旧程序集的既有成本，不是本路径的回归）。
-    /// probe 命令由会话连接创建（<see cref="CreateCommand"/> 带事务/超时口径）。</summary>
+    /// probe 命令由会话连接创建（<see cref="CreateCommand(DbTransaction?)"/> 带事务/超时口径）。</summary>
     private async ValueTask BindRowValuesViaProbeAsync<T>(
         CrudMetadata metadata, DbParameter[] pool,
         IReadOnlyList<T> entities, int start, int end, int paramsPerRow)
@@ -1286,6 +1433,10 @@ public partial class DataSession<TProvider>
     /// 调用方的对账逻辑会静默错；② PG/SQLite 的 ON CONFLICT 每行计 1、恰等于实体数，
     /// 处理实体数是唯一跨方言可预测口径；③ 混合路径（默认键逐条 INSERT + 批量 UPSERT）
     /// 下两种驱动口径不可加总。BulkMergeSetBasedTests 已锁定本口径。</returns>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "分区循环含三条路径（默认键集合化/默认键逐行回退/既有键缓冲）+ rowByRow 旁支，"
+            + "均为路由判定不可再拆（拆出需传递 operation lease 与事务上下文，跨方法状态面更大）。")]
     public async ValueTask<long> BulkMergeAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {
@@ -1302,8 +1453,11 @@ public partial class DataSession<TProvider>
         // InsertCoreAsync 的物化/回填无法在多值形态下按行还原）；非默认键行
         // （bulk-merge 的主流场景：既有键的重复执行更新）改为**多行 UPSERT**，
         // 每批一条语句。原实现 N 行 = N 次往返（每行一次 SaveCoreAsync），
-        // 10K 行在远程库（RTT ~1ms）约 10s，集合化后 PG 约 12 条语句（65535 参数/批）、
-        // SQLite 约 31 条（999 参数/批，20 列实体 49 行/批；大值经 A/B 证伪见 SqlLimits）。
+        // 10K 行在远程库（RTT ~1ms）约 10s。集合化后的批宽（BatchUpsertAsync 的
+        // maxRowsPerBatch）：PG 1000 行/批（PostgreSqlMaxRowsPerUpsertBatch，分配纪律）、
+        // MySQL 1000 行/批（MySqlOdkuMaxRowsPerBatch，探针二十）、SQLite 受 999 参数
+        // 上限按列数分批（SqlLimits.MaxBindParametersFor）——10K 行 PG/MySQL 约 10 条语句，
+        // SQLite 语句数 = ⌈列数×10K ÷ 999⌉ 量级（大值经 A/B 证伪见 SqlLimits）。
         // 单行语义保持：ON CONFLICT/ON DUPLICATE KEY 与 SaveCoreAsync 的单行
         // upsert 用同一谓词列集（UpsertColumns，含 PK）；[ConcurrencyCheck] 实体
         // 维持逐条路径——SaveCoreAsync 会以同消息拒绝（UPSERT 无法尊重乐观锁，ITM-503）。
@@ -1325,16 +1479,29 @@ public partial class DataSession<TProvider>
                     return affected;
                 }
 
-                // B6（2026-10-01 全 API 逐项轮）：惰性分配——全默认键（自增新实体，逐行
-                // SaveCoreAsync）场景不付 count 容量的引用数组（2 万行约 160KB）；
-                // BatchUpsertAsync 自带空列表短路（Count == 0 返回 0）。
+                // B6（2026-10-01 全 API 逐项轮）：惰性分配——全默认键（自增新实体）场景不付
+                // count 容量的引用数组（2 万行约 160KB）；两个批次方法自带空列表短路。
+                // B6 落地（2026-10-12）：默认键行集合化——RETURNING 方言（PG/SQLite）改走
+                // 多行 INSERT..RETURNING 按行序回填（BatchInsertReturningAsync），N 次往返收敛为
+                // N/批；MySQL 保持逐行（LAST_INSERT_ID 多行回填需"批内自增值连续"假设，
+                // auto_increment_increment/触发器/混合分配都会破坏，MySQL 文档只保证首值）。
+                bool batchDefaultKeyInserts = TProvider.SupportsReturningClause
+                    && mergeMetadata.InsertColumns.Count > 0;
                 List<T>? upsertBatch = null;
+                List<T>? insertBatch = null;
                 foreach (T entity in entities)
                 {
                     if (mergeMetadata.HasDefaultKey(entity))
                     {
-                        await SaveCoreAsync(entity, operation.Owner, token).ConfigureAwait(false);
-                        affected++;
+                        if (batchDefaultKeyInserts)
+                        {
+                            (insertBatch ??= new List<T>(entities.Count)).Add(entity);
+                        }
+                        else
+                        {
+                            await SaveCoreAsync(entity, operation.Owner, token).ConfigureAwait(false);
+                            affected++;
+                        }
                     }
                     else
                     {
@@ -1342,11 +1509,164 @@ public partial class DataSession<TProvider>
                     }
                 }
 
+                if (insertBatch is not null)
+                    affected += await BatchInsertReturningAsync(
+                        transaction, insertBatch, mergeMetadata, mergeState, token).ConfigureAwait(false);
                 affected += await BatchUpsertAsync(
                     transaction, upsertBatch ?? [], mergeMetadata, mergeState, token).ConfigureAwait(false);
                 return affected;
             },
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>B6 落地（2026-10-12）：BulkMerge 默认键行的集合化插入——RETURNING 方言
+    /// （PG/SQLite）多行 INSERT ... RETURNING 主键，按行序回填实体，N 次往返收敛为 N/批。
+    /// <para><b>行序映射</b>：RETURNING 行序按 VALUES 顺序（EF Core Npgsql 多行
+    /// INSERT..RETURNING 的同构形态）；返回行数与批行数不符时明确失败，不静默错位回填。</para>
+    /// <para><b>回填时点</b>：经 <see cref="BackfillGeneratedId"/>——自开事务延迟到提交后回放，
+    /// 与单行 SaveCoreAsync 路径同语义（TX-004）。</para>
+    /// <para><b>已知边界</b>：本路径每次批间重建参数（BindInsert 直绑）——相对原 N 次往返已是
+    /// 数量级收敛；参数池化留待 PerfHub 门禁显示需要时再做（&lt;5% 不做线）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "批循环（分批/绑行）+ RETURNING 读循环（行数核对、ID 回填双守卫）各为"
+            + "不可拆的顺序语义；拆分需在方法间传递回填对位状态，正确性风险大于可读性收益。")]
+    private async Task<long> BatchInsertReturningAsync<T>(
+        DbTransaction transaction,
+        List<T> entities,
+        CrudMetadata metadata,
+        PalORM_Runtime.RuntimeRegistryState state,
+        CancellationToken ct) where T : class, new()
+    {
+        if (!state._tableNames.TryGetValue(typeof(T), out string? insertTableName))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no [Table] attribute.");
+        if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no primary key column; set-based insert requires one.");
+        state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill);
+
+        int columnCount = metadata.InsertColumns.Count;
+        int batchSize = Math.Max(1, Math.Min(
+            SqlLimits.MaxRowsPerBatch,
+            SqlLimits.MaxBindParametersFor(TProvider.Dialect) / columnCount));
+        string quotedTable = TProvider.QuoteIdentifier(insertTableName);
+        string quotedPk = TProvider.QuoteIdentifier(pkColumn);
+        string quotedColumns = string.Join(", ",
+            metadata.InsertColumns.Select(c => TProvider.QuoteIdentifier(c)));
+
+        // R3（2026-10-12）：参数池化——原每批 fresh 命令 + 每行 BindInsert 建参（PG 默认键
+        // merge 20000 行约 20 万参数对象）。镜像 MultiValueBulkInsert 的 R-UNNESTB 安全池形态：
+        // 命令跨批复用 + 池参数就地写 Value（不 Clear 不 Add 新实例）；末批 RemoveAt 只裁池尾
+        //（ITM-785：短批恒为末次，裁后不回满批）。旧生成器程序集（无 BindInsertValues）与
+        // 首批即非满批的单批小数据保持 fresh 路径（与 MultiValueBulkInsert 的池纪律同款）。
+        long processed = 0;
+        Action<DbParameter[], object, int>? valuesBinder = metadata.BindInsertValues;
+        int fullBatchRows = Math.Min(batchSize, entities.Count);
+        DbCommand? pooledCmd = null;
+        DbParameter[]? pool = null;
+        string? lastSql = null;
+        int lastRowCount = -1;
+        try
+        {
+            for (int start = 0; start < entities.Count; start += batchSize)
+            {
+                int end = Math.Min(start + batchSize, entities.Count);
+                int rowCount = end - start;
+                DbCommand cmd;
+                bool ownsCmd;
+                if (valuesBinder is not null && (pool is not null || rowCount == batchSize))
+                {
+                    if (pooledCmd is null)
+                    {
+                        pooledCmd = CreateCommand();
+                        pooledCmd.Transaction = transaction;
+                        pooledCmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    }
+                    cmd = pooledCmd;
+                    ownsCmd = false;
+                    if (pool is null)
+                    {
+                        pool = new DbParameter[fullBatchRows * columnCount];
+                        for (int i = 0; i < pool.Length; i++)
+                        {
+                            DbParameter pooled = pooledCmd.CreateParameter();
+                            pooled.ParameterName = ParameterNameCache.GetName(i);
+                            pooledCmd.Parameters.Add(pooled);
+                            pool[i] = pooled;
+                        }
+                        // B21 同款：池 DbType 一次性建立（BindInsertValues 池存续期内只写 Value）
+                        metadata.InitInsertParameters?.Invoke(pool, 0);
+                    }
+                    int neededParameters = rowCount * columnCount;
+                    // PARAM-REUSE-OK[pool:pool] 末批裁剪只移除池尾实例，保留前缀实例不变（valuesBinder 只改其 Value）
+                    for (int i = pooledCmd.Parameters.Count - 1; i >= neededParameters; i--)
+                        pooledCmd.Parameters.RemoveAt(i);
+                    for (int row = start; row < end; row++)
+                        valuesBinder(pool, entities[row], (row - start) * columnCount);
+                    if (rowCount != lastRowCount)
+                    {
+                        lastSql = BuildInsertReturningBatchSql(
+                            quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
+                        lastRowCount = rowCount;
+                    }
+                    pooledCmd.CommandText = lastSql;
+                }
+                else
+                {
+                    cmd = CreateCommand();
+                    cmd.Transaction = transaction;
+                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    cmd.CommandText = BuildInsertReturningBatchSql(
+                        quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
+                    for (int row = start; row < end; row++)
+                        metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
+                    ownsCmd = true;
+                }
+
+                await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                int returned = 0;
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                {
+                    long? id = NormalizeGeneratedId(
+                        await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
+                    if (id is { } generatedId && backfill is not null)
+                        BackfillGeneratedId(backfill, entities[start + returned], generatedId);
+                    returned++;
+                }
+                if (returned != rowCount)
+                    throw new InvalidOperationException(
+                        $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
+                        $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
+                processed += rowCount;
+                if (ownsCmd)
+                    await cmd.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            if (pooledCmd is not null)
+                await pooledCmd.DisposeAsync().ConfigureAwait(false);
+        }
+        return processed;
+    }
+
+    /// <summary>多行 INSERT..RETURNING 语句构建（同步方法收栈缓冲生命周期，与
+    /// <see cref="MultiValueBulkInsert"/> 的 BuildBatchSql 同纪律——span 不跨 await）。</summary>
+    private static string BuildInsertReturningBatchSql(
+        string quotedTable, string quotedColumns, string quotedPk, int rowCount, int columnCount)
+    {
+        Span<char> sqlBuffer = stackalloc char[512];
+        var sb = new ValueStringBuilder(sqlBuffer);
+        try
+        {
+            MultiValueBulkInsert.AppendInsertStatement(
+                ref sb, quotedTable, quotedColumns, rowCount, columnCount);
+            sb.Append(" RETURNING ");
+            sb.Append(quotedPk);
+            return sb.ToString();
+        }
+        finally { sb.Dispose(); }
     }
 
     /// <summary>旧模型程序集回退路径：scratch 命令逐行 BindUpsert → 值拷贝进池（PL-3.2 抽出）。</summary>
@@ -1434,7 +1754,7 @@ public partial class DataSession<TProvider>
         if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
-        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(tableName, metadata, pkColumn));
+        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn));
         bool tenantGuarded = HasTenantFilter<T>();
 
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
@@ -1594,10 +1914,11 @@ public partial class DataSession<TProvider>
                 + $"(upsert columns) but the generated filler provides {columnCount}. "
                 + "The generator and batch upsert SQL disagree; recompile the model assembly.");
         }
-        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。批宽取 MaxRowsPerBatch：
-        // 既有 PG upsert 的 1000 行上限理由是"参数池按最大批建、行×列个参数对象"——
-        // 数组形态的成本结构不同（每列一个数组，元素总量 = 行×列但无参数对象），不适用该约束。
-        int batchSize = SqlLimits.MaxRowsPerBatch;
+        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。批宽：既有 PG upsert 的
+        // 1000 行上限理由是"参数池按最大批建、行×列个参数对象"——数组形态的成本结构不同
+        //（每列一个数组，元素总量 = 行×列但无参数对象），不适用该约束。深挖轮批宽提升
+        //（探针 B 同机制，见 UnnestArraysMaxRowsPerBatch）。
+        int batchSize = UnnestArraysMaxRowsPerBatch;
         int fullBatchLen = Math.Min(batchSize, entities.Count);
 
         int lastBatchLen = entities.Count % fullBatchLen;
@@ -1655,8 +1976,15 @@ public partial class DataSession<TProvider>
     /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键
     /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身）；MySQL 用 VALUES(c) 形态
     /// （与单行 upsert 的既有生成 SQL 一致）。</summary>
-    private UpsertSqlShape BuildUpsertSqlShape(string tableName, CrudMetadata metadata, string pkColumn)
+    private UpsertSqlShape BuildUpsertSqlShape(Type entityType, string tableName, CrudMetadata metadata, string pkColumn)
     {
+        // R3（2026-10-12）：形状字符串 per-(Type, Dialect) 缓存——原每次调用 1 LINQ 迭代器 +
+        // 2 string.Join + 冲突子句插值（与 QuotedColumnsCache 同纪律；值由编译期元数据唯一决定，
+        // UpsertColumns/pkColumn 同源于注册表）。record struct 包装零分配，缓存存字符串组件即可。
+        (Type, SqlDialect) shapeKey = (entityType, TProvider.Dialect);
+        if (DataSessionCache.UpsertShapeCache.TryGetValue(shapeKey, out (string QuotedColumns, string ConflictClause) cached))
+            return new UpsertSqlShape(TProvider.QuoteIdentifier(tableName), cached.QuotedColumns, cached.ConflictClause);
+
         string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
         List<string> updateColumns =
         [
@@ -1676,10 +2004,9 @@ public partial class DataSession<TProvider>
                 updateColumns.Select(c => $"{quote(c)} = VALUES({quote(c)})"))
             : $" ON CONFLICT ({quote(pkColumn)}) DO UPDATE SET " + string.Join(", ",
                 updateColumns.Select(c => $"{quote(c)} = excluded.{quote(c)}"));
-        return new UpsertSqlShape(
-            quote(tableName),
-            string.Join(", ", metadata.UpsertColumns.Select(quote)),
-            conflictClause);
+        string quotedColumns = string.Join(", ", metadata.UpsertColumns.Select(quote));
+        DataSessionCache.UpsertShapeCache.TryAdd(shapeKey, (quotedColumns, conflictClause));
+        return new UpsertSqlShape(quote(tableName), quotedColumns, conflictClause);
     }
 
     /// <summary>构建单批的多值 UPSERT SQL——参数已由调用方按批内连续下标预建绑定，

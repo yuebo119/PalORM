@@ -97,6 +97,26 @@ public sealed class ReusableQuerySlotTests
     }
 
     [Test]
+    public async Task AlternatingShapes_PerShapeCounting_NeverPromotes()
+    {
+        // C15（2026-10-12 全量审读修复）：晋升计数按形状——交替形态（A/B/A/B…）永不晋升，
+        // 保持每操作新建命令。原实现计数全体未命中：交替形态总第 3 次操作后每次未命中都
+        // Dispose+重建晋升命令（比不晋升更差），本断言在旧实现上为红（Command 非空）。
+        await using var conn = await NewConnWithRowsAsync();
+        await using var session = NewSession(conn);
+
+        for (int round = 0; round < 6; round++)
+        {
+#pragma warning disable PALORM005
+            _ = await session.From<RqsProbeRow>().Where($"qty > {20}").ToListAsync();
+            _ = await session.From<RqsProbeRow>().Where($"name = {"b"}").ToListAsync();
+#pragma warning restore PALORM005
+        }
+
+        await Assert.That(session._querySlot!.Command).IsNull();
+    }
+
+    [Test]
     public async Task ParallelReadScope_DisablesPromotion()
     {
         await using var conn = await NewConnWithRowsAsync();

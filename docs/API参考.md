@@ -179,6 +179,16 @@
 | `SavepointAsync(tran, name)` / `RollbackToAsync(tran, name)` | 保存点 |
 | `WithIsolationLevel(level)` | 隔离级别 |
 
+### 会话池（DataSessionPool，v6.5）
+
+| API | 说明 |
+|------|------|
+| `DataSessionPool<TProvider>.Create(options, maxIdleSize = 16)` | 创建会话池。`options` 为池基准配置（租期内的 With* 覆写在归还时复位回此形态；拦截器清单为池级共享） |
+| `RentAsync()` | 租出会话——空闲复用（连接不健康的闲置项丢弃重建），无空闲新建。`await using` 消费，`DisposeAsync` 即归还 |
+| `IdleCount` | 空闲会话数（诊断观测） |
+
+归还语义：瞬态状态（`WithTenant`/`IgnoreFilters`/`WithIsolationLevel`/`WithTimeout`/`WithRetry`/`WithCircuitBreaker` 覆写、`AddInterceptor` 加项）全部复位；**复用槽（命令/参数池）、读连接、物化容量启发保留**——跨租期存活是池化的核心收益（单行 CRUD/查询命令复用槽在"一请求一会话"形态下不经池化永不激活）。归还门禁：活动事务、未消费的流式枚举器、并行读作用域未收口时 `DisposeAsync` 抛出。空闲上限：满员归还的会话真实释放（不放大物理连接占用）。SQLite 本地实测（探针）：GetByKey per-op 会话 45.5µs → 池化 3.3µs（13.8×），与长会话（2.5µs）只差约 1µs 租还成本。
+
 ### 弹性配置
 
 | API | 说明 |

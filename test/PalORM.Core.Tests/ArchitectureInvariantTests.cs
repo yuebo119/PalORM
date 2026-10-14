@@ -77,9 +77,18 @@ public sealed class ArchitectureInvariantTests
                     && body.Contains("BindDefaultFilterParameters", StringComparison.Ordinal))
                 // 聚合家族经 ExecuteScalarAsync 集中绑定，方法体只需出现过滤子句构造
                 || body.Contains("GetDefaultFilterWhereClause", StringComparison.Ordinal)
-                // v5.4 精炼 L3：聚合家族（Sum/Max/Min/Avg）改经 ExecuteAggregateScalarAsync
-                // 集中路由——过滤子句构造移入该内核，薄包装体以内核调用名为路由凭证
-                || body.Contains("ExecuteAggregateScalarAsync", StringComparison.Ordinal);
+            // v5.4 精炼 L3：聚合家族（Sum/Max/Min/Avg）改经 ExecuteAggregateScalarAsync
+            // 集中路由——过滤子句构造移入该内核，薄包装体以内核调用名为路由凭证
+            || body.Contains("ExecuteAggregateScalarAsync", StringComparison.Ordinal)
+            // C10（2026-10-12 审读重开）：GetAsync/GetAllAsync 直通直调改造——过滤路由
+            //（GetDefaultFilter*/BindDefaultFilterParameters）移入 GetByKeyCoreAsync/
+            // GetAllCoreAsync 内核，薄包装体以内核调用名为路由凭证（L3 同款先例）
+            || body.Contains("GetByKeyCoreAsync", StringComparison.Ordinal)
+            || body.Contains("GetAllCoreAsync", StringComparison.Ordinal)
+            // R4（2026-10-12 读预热包装）：GetAsync/GetAllAsync/Count/聚合/Query/Scalar 改
+            // 非 async 薄入口（预热 + 委托 *EntryAsync 内核），过滤路由在内核体内——
+            // 委托调用名为路由凭证（与 C10/L3 同款口径）
+            || body.Contains("EntryAsync", StringComparison.Ordinal);
             if (!routed)
                 violations.Add($"{method}: 方法体未经过默认过滤路由（GetDefaultFilter*/HasTenantFilter+BindDefaultFilterParameters）");
         }
@@ -104,6 +113,9 @@ public sealed class ArchitectureInvariantTests
                 "WithTransactionRetry",
                 "ForRead", "DisposeAsync", "QueryMultipleAsync",
                 "CreateAsync",
+                // 池化（2026-10-13 二轮方案）：DataSessionPool.RentAsync 是会话生命周期入口
+                //（租出不触表，过滤路由由租期内的具体查询入口承担）
+                "RentAsync",
             ])
             .ToHashSet(StringComparer.Ordinal);
 
@@ -120,6 +132,103 @@ public sealed class ArchitectureInvariantTests
             .IsEmpty()
             .Because("DataSession 新增公共入口必须在 ArchitectureInvariantTests 登记：" +
                 "触表入口进 _filteredEntryPoints（接过滤路由），豁免进 _exemptEntryPoints（给依据）");
+    }
+
+    /// <summary>EC 包含绊线（2026-10-14 G2 证伪轮的机械防线）：Enter 族调用必须处于
+    /// async 方法体内。非 async 方法调用 Enter 时，Enter 内的 AsyncLocal 写直接落在调用方
+    /// 活 ExecutionContext 上（async 方法体内的写会被 async method builder 在同步完成路径
+    /// 还原）；每操作新会话 = 新 AsyncLocal 实例键 → EC map 无界增长 → O(N²)——SQLite 并发
+    /// 饱和循环实测 20× 塌方。同步完成方言（SQLite）是真挂起方言的盲区（真挂起在续体恢复时
+    /// 重置 EC，天然防火墙），故缺陷只在 SQLite 并发臂显形。
+    /// <para><b>豁免面</b>：SessionOperationState 自身（Enter 的定义处）；DataSession 的
+    /// EnterOperation/EnterReadOnly/EnterBatchOperation 三个<b>同步转发包装</b>（安全性由
+    /// 本测试的递归面承担：这些包装的全部调用点也必须 async）。</para></summary>
+    [Test]
+    public async Task EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment()
+    {
+        // 自检（验证验证者）：合成负样本必须被抓、正样本必须放行（行首 4 空格对齐真实源码的方法级缩进）
+        string probeBad = string.Join("\n",
+            "    private ValueTask<T?> BadEntryAsync<T>() where T : class",
+            "    {",
+            "        using var operation = EnterReadOnly();",
+            "        return SomethingCoreAsync<T>();",
+            "    }");
+        string probeGood = string.Join("\n",
+            "    private async ValueTask<T?> GoodEntryAsync<T>() where T : class",
+            "    {",
+            "        using var operation = EnterReadOnly();",
+            "        return await SomethingCoreAsync<T>().ConfigureAwait(false);",
+            "    }");
+        await Assert.That(string.Join(";", DetectNonAsyncEnterCalls(probeBad, "probe.cs")))
+            .Contains("BadEntryAsync");
+        await Assert.That(string.Join(";", DetectNonAsyncEnterCalls(probeGood, "probe.cs")))
+            .IsEmpty();
+
+        // 实源扫描：src/PalORM.Core 全部 .cs（SessionOperationState 除外）
+        var violations = new List<string>();
+        foreach (string file in Directory.GetFiles(FindCoreDir(), "*.cs"))
+        {
+            if (Path.GetFileName(file) == "SessionOperationState.cs")
+                continue;
+#pragma warning disable CA1849, S6966
+            violations.AddRange(DetectNonAsyncEnterCalls(File.ReadAllText(file), Path.GetFileName(file)));
+#pragma warning restore CA1849, S6966
+        }
+        await Assert.That(string.Join("\n", violations))
+            .IsEmpty()
+            .Because("Enter 族（EnterOperation/EnterReadOnly/EnterBatchOperation/_operationState.Enter*/" +
+                "EnterTransactionFlow/EnterTransactionOperation）的调用点必须在 async 方法体内：" +
+                "非 async 调用使 Enter 的 AsyncLocal 写逃逸调用方 EC（G2 缺陷根因，SQLite 并发 20× 塌方）。" +
+                "同步转发包装（DataSession 的三个私有包装）的调用点同样必须 async——安全性递归由本测试承担。");
+    }
+
+    /// <summary>定位 src/PalORM.Core（[CallerFilePath] 与既有 ReadAllDataSessionSources 同源手法）。</summary>
+    private static string FindCoreDir([CallerFilePath] string testPath = "")
+        => Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(testPath)!, "..", "..", "src", "PalORM.Core"));
+
+    /// <summary>检测非 async 方法体内的 Enter 族调用：对每个调用点向上找最近的方法签名行，
+    /// 签名不含 async 即违规。转发包装（表达式体单行转发）自身豁免，但其调用点由同一规则覆盖。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S3776",
+        Justification = "源码扫描绊线的分支构成（调用点遍历/签名回溯/豁免判定）是文本分析的必然形态。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S3267",
+        Justification = "签名回溯需要早退循环（首个在调用点之后的签名即停），Select 形态不可表达。")]
+    private static List<string> DetectNonAsyncEnterCalls(string source, string fileName)
+    {
+        var violations = new List<string>();
+        // Enter 族调用模式（调用点，非定义处）
+        var callPattern = new Regex(
+            @"(EnterOperation\(|EnterReadOnly\(|EnterBatchOperation\(|_operationState\.Enter\(|_operationState\.EnterTransactionFlow\(|_operationState\.EnterTransactionOperation\()");
+        // 方法签名（4 空格缩进，含修饰符与返回类型；lambda/局部函数不匹配——调用点在语句层）
+        var signaturePattern = new Regex(
+            @"^[ \t]{4}(?:public|private|internal|protected)[^\n=;]*?\s(\w+)(?:<[^>(]+>)?\s*\(",
+            RegexOptions.Multiline);
+
+        foreach (Match call in callPattern.Matches(source))
+        {
+            // 向上找最近的方法签名
+            Match? enclosing = null;
+            foreach (Match signature in signaturePattern.Matches(source))
+            {
+                if (signature.Index >= call.Index)
+                    break;
+                enclosing = signature;
+            }
+            if (enclosing is null)
+                continue;   // 顶层/字段初始化等非方法上下文（如 lambda 字段）——本绊线不覆盖
+            string signatureLine = enclosing.Value;
+            // 同步转发包装豁免：签名后 200 字符内直接 => 转发 _operationState.XXX——安全性递归到调用点
+            string rest = source[enclosing.Index..Math.Min(source.Length, enclosing.Index + 200)];
+            if (rest.Contains("=> _operationState.", StringComparison.Ordinal)
+                || rest.Contains("=> EnterOperation(", StringComparison.Ordinal))
+                continue;
+            if (!signatureLine.Contains("async", StringComparison.Ordinal))
+            {
+                int line = 1 + source[..call.Index].Count(static ch => ch == '\n');
+                violations.Add($"{fileName}:{line} {enclosing.Groups[1].Value}: Enter 族调用处于非 async 方法（EC 逃逸风险，G2 根因）");
+            }
+        }
+        return violations;
     }
 
     /// <summary>提取方法体：从签名行起花括号配对到闭合（ITM-413——文本定界会吞并

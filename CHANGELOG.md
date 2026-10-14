@@ -4,6 +4,588 @@
 
 ## [未发布]
 
+## [6.5.0] - 2026-10-14
+
+### 🎉 主线：会话池 `DataSessionPool` + 全性能战役（W1~W3 / R1~R4 / P0~P2 / S4）+ 两项并发缺陷修复
+
+### ⚡ 性能（W3 两轴清单轮）：弹性执行器惰性化——Insert/事务/批量族 per-op 会话每 op −224B
+### （四组表两轴全清单 ≥+1% 共 54 项逐项代码审计，结论见提交记录）
+
+- **清单口径**（用户指令两轴）：分配相对 ADO（P）≥ +1% 共 24 项、P/ADO ≥ +1% 共 30 项（去重
+  54 项；数据源 history-20261014-163705 全量批 416 项）。逐项分解用探针 5（每行/每 op 边际
+  分配，三方言真库）、探针 6（MySQL 读/写单项时延分解：弹性/直通/裸驱动复刻对照）。
+- **W3 弹性执行器惰性化**（本轮唯一落地项）：构造器原无条件 new ResilienceExecutor（含熔断器
+  与 Lock，探针实测 228B/个），而 **Insert 家族（InsertCore→FinishInsert 直执）、纯事务会话、
+  批量族从不读弹性**——per-op 会话形态每 op 白付。改可空字段 + CAS 惰性取用器（_querySlot
+  先例）；ExecuteWriteRowsAsync 事务短路前置（事务内写入恒直连，判定语义逐位不变）使
+  **事务内逐行 Update/Insert 也不再触发物化**；池化会话在 MarkPooled 强制物化（基准实例
+  跨租期存活语义逐位保留）。实测（探针 5，三方言）：会话构造 856→632B（−224 逐位一致）；
+  SQLite tx+S1 插入 5669→5445B（−224）；`_resilience` 全部读点收敛至惰性取用器。
+- **审计结论逐族**（详见提交信息）：可落地项已全部落地；其余各族处置——
+  ①GetByKey/Update 独立读改写臂必触碰弹性（非直通模式 IsPassThrough 判定），无惰性空间；
+  ②远端方言每行写 ~410-440B 为 UpdateCoreAsync 单一异步状态机盒（复制实验：单层薄帧
+  +171~192B/行已达最小；真直通 vs 默认差 ~0 证明弹性链不担责），网络 I/O 必需、Step17
+  写路径先例；③BulkUpdate/SQLite 逐条池化路径与 BulkInsert/MySQL EntityDataReader 经读码
+  确认已是设计最优（命令+参数池、逐行只写 Value、零 CreateParameter）；④EnumStr 枚举写
+  零分配经生成物逐行核实（switch 返驻留常量），Batch 内 EnumInserts 的 ΔP 来自 ADO 臂循环
+  形态更瘦，非我方空间；⑤MySQL 读族时延（GetByKey +20%）：probe6 证实往返数 1.00 一致、
+  构造墙钟 0.08µs、AsyncLocal 新键写 0.2µs 均排除，残留 ~30µs 因顺序测量暖机混淆未闭合，
+  登记待交错 A/B 探针。
+- **验证**：探针分配三方言复测如上；Core 612/612 · SourceGen 236/236 · Integration 真库
+  292/292 · gate 32/32；focused 三方言批 verify-W3-lazyres 见批内记录。
+
+### ⚡ 性能（W1+W2 分配削减包）：四组表全部 >+10% 分配项逐项代码检查——读路由委托惰性化
+### （每会话 −113B，per-op 会话形态全体项受益）+ 延迟回填去闭包化
+
+- **背景与清单**：最新四组表（2026-10-14 11:44 全量基线批）中分配相对 ADO（P）>+10% 的项共 48 项
+  （明细表内 15 项：GetByKey×6 / Insert·PG / Update×3 / TxSingleInsert×3 / TxRollback·MySQL·PG /
+  EnumInserts·PG），全部为 per-op 会话形态。探针 4 分解定位公共主因：会话构造税 972B/个
+  （ResilienceExecutor 228B + 读路由两委托 ~128B + 会话/操作状态/AsyncLocal 键对象）；
+  同构对照长会话 Update 898B，低于 ADO 地板 1019B——命令复用本体已在地板之下，超出部分全是每 op
+  重建会话的固定税。
+- **W1 读路由委托惰性化**（−113B/会话，四组表 15 项全体 + 48 项全体受益）：原构造器无条件挂接
+  _readConnProvider/_readConnReturner 两个方法组委托，而主连接操作（GetByKey/Insert/Update/
+  事务族）从不走读路由——per-op 形态每 op 白付。改惰性：字段转可空非 readonly，首个 From&lt;T&gt;()/
+  复制读命令时 ??= 初始化（并发竞态良性，同 _querySlot 先例：引用写原子、败者被 GC）。
+  池化归还在 KeptAcrossRentals 登记（幂等无状态方法组，第二租期起免重建）。语义等价性：原构造器
+  恒挂接使 CreateReadRoutedCommandAsync 的 is-not-null 判定恒真，??= 兜底后逐位不变。
+- **W2 延迟回填去闭包化**（每条自开事务内自增插入 −80B，真实世界面）：TX-004 延迟回填的唯一登记面
+  BackfillGeneratedId 原以 List&lt;Action&gt; + 闭包捕获 (backfill, entity, id) 三字段（display class +
+  委托 ~80B/条）；改类型化元组列表（值内联进背衬数组，逐条零堆分配），登记/回放/丢弃语义逐位不变。
+  四组表臂不受益（夹具实体显式主键，无回填）——收益面是真实世界自开事务内自增插入循环。
+- **为什么不动 ResilienceExecutor 228B**：熔断器是 sealed class + 进程级注册表共享形态，内联进
+  执行器属架构级改造（~12 字段 + Lock 迁移），收益 48~64B 低于改造风险线（step10 手写 struct 内核
+  证伪的同族结论）；会话对象/操作状态/AsyncLocal 键是 EC 包含性防御的结构成本（G2/tx-open 两起
+  实锤事故的防线本体），不动。
+- **验证**：分配探针复测（SQLite 内存库，4000 op）：纯会话构造 972→859B（−113），GetByKey per-op
+  2425→2314（−111），Update per-op 2841→2729（−112），长会话/地板逐位不变；Core 612/612 ·
+  SourceGen 236/236 · Integration 真库 292/292 · gate 32/32；池化字段分类守卫同步登记（W1 两字段
+  转 KeptAcrossRentals，W2 字段改名 _postCommitBackfills）；focused SQLite/2000 时延验证批见批内
+  记录。W1/W2 只删分配不加工作（??= 单次空判在 From&lt;T&gt; 路径），时延影响在噪声地板之下。
+
+### 🐛 缺陷修复：tx-open 形态 EC 泄漏（预热门槛旁路）——per-op 会话 + BeginTransaction 长循环 O(N²)，
+### TxSingleInsert 族每事务泄漏量 96924→4157 B/op（-96%，三臂探针双方言对证）
+
+- **根因**（深挖轮 Bisect 探针四变体二分 + SQLite/PG 双方言三臂对证）：step16-P1 预热门槛（≥1）有一个
+  旁路——会话首操作是 <c>BeginTransactionAsync</c> 时，其 Enter 在 async 体内被包含地置位标志，随后的
+  <c>InsertAsync</c> 等的非 async 包装壳看到标志即预热，把<b>新会话的新 AsyncLocal 键</b>写进调用方长活
+  EC。per-op 会话 + 事务形态每事务净增一个键，EC map 无界线性增长，长循环 O(N²)。
+- **探针证据**（四变体：A 空事务 1377 / B 完整 96924 / C 复用会话 2385 / D 纯插入 3676 B/op）：A/C/D 全平
+  锁定触发链为 Begin 置标志 → 操作包装壳预热写新键；96924 ≈ N×32B 为 EC map 增长的精确二次型签名；
+  SQLite 同构 Bisect（96887）与 PG（96924）逐位同量＝方言无关。PerfHub 夹具迭代数低（数百）未显形，
+  长跑后台循环（数万事务）才是暴露面。
+- **修复**：预热门槛 1→2（<c>CompletedOps</c> 计数替代 <c>OwnerPrewarmed</c> 布尔，Enter/EnterTransactionOperation
+  锁内递增，公共包装壳 ≥<c>PrewarmThreshold</c>=2 才预热）。per-op 形态（含事务共 ≤2 个操作）结构上永不
+  预热；长会话第 3 个操作起照常预热稳态（跨租期保留，池化复位分类同步登记）；修复后 B=4157 B/op（平）。
+- **检测器**：TxOpen 四分位 EC 检测器（含诚实边界标注：TUnit 宿主稀释累积，主绊线为既有分配地板测试——
+  旧门槛下实测红 + Bisect 外部探针可复跑）。四分位设计的数学依据：纯二次型前/后半比渐近 3.0× 永不过
+  阈值（首版漏检实锤），首/末四分位渐近 7×。
+- **验证**：Core 612/612（+1）· SourceGen 236/236 · Integration 真库 292/292 · gate 32/32 · 突变探针
+  （旧门槛源码：分配地板测试红 + MutableFields 分类红；修复后 612 全绿）。
+
+### ⚡ 性能：四项深挖——UNNEST 批宽 5000→20000（BulkUpdate/PG/20000 批内 −58%、消除规划器
+翻转方差）+ SQLite 事务循环插入微项
+
+- **UNNEST 数组形态批宽提升**（探针 B，20000 行表 9 轮中位）：批 5000（4 语句）= 104.9ms /
+  10000 = 73.6ms / 20000（单语句）= 67.6ms——4×5000 慢 55%，机制是批/表行数比 25% 时规划器
+  把数组连接翻成 Hash Join + 全表顺扫（每语句一次全表扫描）；大表方向（比值小）Nested Loop
+  计划不变、批宽提升只减语句数与往返，两头不劣。三个数组形态执行体（UPDATE/UPSERT/DELETE）
+  统一改用 UnnestArraysMaxRowsPerBatch=20000（探针实证上界，更大宽度未测）。PerfHub 验证：
+  BulkUpdate/PG/20000 批内 171.3→71.7ms（比值 1.62→0.66，批内 −58%）；该族此前的批间慢窗
+  （基线批 171ms vs 复测 66.7ms）正是翻转方差——单语句形态从机制上消除。UpsertBatch（ON CONFLICT
+  逐入行计划，无连接翻转面）与 2000 档（本就单语句）如预期持平。
+- **SQLite 事务循环插入微项**（探针 A：INSERT 差距 +1561→+535ns/op、enum +588→+286）：
+  InsertCoreAsync 元数据改经 GetEntityInfo&lt;T&gt; 静态缓存（原每插入一次 FrozenDictionary 查找，
+  UpdateCoreAsync 既定先例的对齐）+ InsertNoReturning 分支内联 InsertPlainAsync 体（省一个
+  async 状态机帧/行，方法退役）。归因：async 链+锁仅 ~210ns，剩余为会话机器面（探针登记）。
+- **测试适配**：三个多批边界测试（Update/Merge/Delete 数组形态）跨新边界 20000，播种改多值
+  INSERT 零参工厂形态（FormattableStringFactory.Create——插值孔一律参数化是 ExecuteAsync 契约）。
+- **验证**：Core 611/611 · SourceGen 236/236 · Integration 真库 292/292 · gate 32/32 ·
+  focused 批（sqlite+pg，history-20261014-135449）。
+
+### 🛡️ 防线：EC 包含结构性绊线 + 配置门 AsyncLocal 写消除（G2 教训的机械化收口）
+
+- **ArchitectureInvariantTests.EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment**：
+  扫描 src/PalORM.Core 全部 Enter 族调用点（EnterOperation/EnterReadOnly/EnterBatchOperation/
+  _operationState.Enter*/EnterTransactionFlow/EnterTransactionOperation），签名不含 async 即失败——
+  非 async 调用使 Enter 的 AsyncLocal 写逃逸调用方 EC（G2 根因），今后在设计期即被拦。同步转发包装
+  （DataSession 三个私有包装）豁免，安全性递归由其调用点规则承担；内置正负双样本自检（验证验证者）。
+  突变验证：对 4fef5ea（G 形态）源码精确报出 GetByKeyEntryAsync:1017（当年缺陷位）。
+- **绊线首跑战果：抓到 5 个存量同型面**——IgnoreFilters/AddInterceptor/WithTenant/WithIsolationLevel/
+  UpdateResilience 五个同步配置方法经 EnterOperation 同样写逃逸（长循环 per-op 会话 + WithTenant 形态
+  同样累积 EC map，PerfHub 并发臂不覆盖该路径故未显形）。新增 SessionOperationState.EnterConfigGate：
+  守卫与 Enter 逐位一致但**不做 AsyncLocal owner 写**（同步方法 using 内即取即还，无需跨 await 追踪
+  owner），五处调用点切换。
+- **验证**：ci.slnf Debug 0W0E · Core 611/611（绊线 +1）· SourceGen 236/236 · Integration 真库
+  292/292 · gate 32/32。
+
+### 🐛 缺陷修复：G2 入口扁平化引入 SQLite 并发饱和循环 20× 塌方（AsyncLocal 写逃逸调用方 ExecutionContext）
+
+- **根因**（2026-10-14 并发塌方定位轮，单因探针 + 文件级二分钉死）：G2 把 GetByKey/GetAll/聚合
+  入口改为非 async 直包分派器后，EnterReadOnly 内的 `_currentOperationOwner.Value = this`
+  （AsyncLocal 写）直接落在调用方活 ExecutionContext 上——async 方法体内的写会被 async method
+  builder 在同步完成路径还原（step16-P1 既有知识），非 async 入口没有这层包含。每操作新会话 =
+  每次写入一个<b>全新的 AsyncLocal 实例键</b>（SessionOperationState 每会话独立 AsyncLocal 字段），
+  调用方 EC map 随操作数无界线性增长，AsyncLocal.Value setter 的 O(N) map 拷贝使长循环总成本
+  O(N²)。
+- **暴露面与发现路径**：PerfHub 并发臂（2s 饱和循环 ~万级 op）P50 6.6→133.7µs（20×）、
+  ops/s 139k→6.7k；短迭代批项（几十 op）完全不可见——G 包当日全量验证 Core 605 全绿未拦住。
+  单因探针（tmp/conc-probe）+ 三级二分（G 包范围 → GetByKey 三方法 → using 块/入口形态/EC 机制）
+  定位；同二进制内自对照（微计时 16µs vs 饱和循环 163µs）与线程线性扩展签名共同钉死机制。
+- **修复**：三个入口回退 async 形态（Enter 的 AsyncLocal 写回落 async 体内被包含），ExecuteReadOnlyRetryAsync
+  共享壳随之退役；G1/G3/G4/G5/G7 保留（无 Enter 调用面，不含此风险）。**勿重开非 async 租约入口**
+  （除非运行时改变 EC 包含语义）——G2 的状态机盒收益（~72-96B，[推断] 级）不构成理由。
+- **验证**：探针读 464k ops/s（修复前 32k）；回归批 Concurrent_Mixed80_20/SQLite PalORM **144k ops/s、
+  P50 6.5µs**（G 形态 6.7k/133.7µs，前 G 健康臂 139k/6.6µs）——完全恢复。突变探针：G 形态 6 红
+ （含既有 PerOperationVsLongLived 分配地板测试，主绊线）/修复 610 全绿。新增分配基 EC 包含检测器 ×3
+  （含诚实边界标注：框架上下文累积弱于裸 worker，主绊线为既有分配地板测试）。全套：
+  ci.slnf --no-incremental 0W0E · Core 610/610 · SourceGen 236/236 · Integration 292/292。
+
+### ⚡ 性能：SQLite 3.54 全面适配——optimize=0x10002 进宽分支 PRAGMA 组 + 引擎升级收益实测
+
+- **optimize=0x10002**（SQLite 3.54 适配轮）：官方对长生命周期连接的 first-open 推荐形态
+  （pragma.html：0x02 分析可能受益的表 + 0x10000 检查全部表尺寸；0x10 位默认施加临时
+  analysis_limit）。M.D.S 池化原生句柄即长生命周期物理连接，整组 PRAGMA 每句柄只执行一次的
+  池化去重恰好等价于 first-open——同批单次往返零额外往返。收益：查询计划统计（sqlite_stat1）
+  随句柄首开建立，数据演化的长跑应用不再依赖应用侧手动 ANALYZE。窄分支（内存/只读库）不落：
+  内存库无持久统计面；只读连接上 ANALYZE 写 sqlite_stat1 抛 SQLITE_READONLY。
+- **引擎升级收益实测**（SQLite3MC 2.4.0→2.6.1，SQLite 3.47→3.54；A/B 批 20261014-071447 vs
+  20261013-235904，同机，SQLite 方言三臂）：全家族中位 −2~−7%（Bulk 族 −1.3~−4.5%、
+  Query/Stream/Wide 族 −3~−7%、TenantCount 族 −7~−12%、TxRollback −2~−8%、并发
+  Mixed80_20 −1.7~−3.3%），**三臂同带**（ADO 地板同步受益）＝引擎级收益非单臂代码；
+  GetByKey 点查持平（±3% 内）；分配持平（±0.1%，Tenant 族 −3~5%）。3.51+ 读事务提交优化、
+  3.53+ join 计划改进、3.54 Windows SRW 锁替换 CriticalSection 为主要机制面。
+- **守卫与口径**：新增 SqliteProvider_BundledEngineVersion_Floor（引擎 ≥ 3.54 地板，bundle 漂移
+  响亮失败）与 SqliteProvider_OptimizePragma_BuildsQueryPlannerStats（带数据句柄首开真实建立
+  sqlite_stat1 的行为锁定——只断不抛无法区分掩码写错被引擎静默按默认跑）；PerfHub
+  SqliteGovernancePragma 同步追加 analysis_limit+optimize=0x10002（三臂共享连接口径）。
+- **验证**：ci.slnf Debug --no-incremental 0W0E · Core 607/607（+2）· SourceGen 236/236 ·
+  Integration 真库 292/292 · gate 32/32。
+
+### 📦 依赖升级：SQLite3MC.PCLRaw.bundle 2.4.0 → 2.6.1（SQLite 引擎 3.54.0）；TUnit 1.73.19 → 1.74.0
+
+- **SQLite3MC.PCLRaw.bundle 2.4.0 → 2.6.1**：上游 SQLite3 Multiple Ciphers 升至 SQLite
+  3.54.0，新增 chacha20/poly1305 硬件加速、临时文件加密与 `encrypt_temp_db`/`mc_cpu_info`/
+  `mc_aes_info`/`mc_chacha20_hwaccel` pragma；无初始化 API 变更，与本仓使用面
+  （`SQLitePCL.Batteries_V2.Init()` + 标准 SQL，无加密连接形态）零交集。README 驱动表
+  同步（3.47+ → 3.54+）。
+- **TUnit / TUnit.Assertions 1.73.19 → 1.74.0**（minor，测试框架）。
+- **盘点口径**：`dotnet list package --outdated` 全项目扫描，其余引用（Npgsql 10.0.3 /
+  MySqlConnector 2.6.2 / Microsoft.Data.Sqlite.Core 11.0.0-rc.1 / Roslyn 5.9.0 / Dapper
+  2.1.89 / Dapper.AOT 1.1.0 / RepoDb 1.16.0 / SonarAnalyzer 10.35.0.4138 / SourceLink
+  10.0.401）均已最新；Sqlite.Core 经 NuGet 平面索引核实 rc.1 为最新发布版（无更新
+  rc/stable）。
+- **验证**：ci.slnf Debug --no-incremental 0W0E · Core 605/605 · SourceGen 236/236 ·
+  Integration 真库 292/292（SQLite 3.54.0 原生引擎下）· gate 32/32 · tech-debt 14/14。
+
+### ⚡ 性能：R4-λ 弹性调用闭包归零（结构体状态重载，默认配置读路径再 −104B/键）
+
+- **结构体状态重载**：ResilienceExecutor 新增 `ExecuteAsync<TState,TResult>` /
+  `ExecuteWithTimeoutAsync<TState,TResult>`（operation 收 (state, token) 两参），经典单参
+  形态桥接复用同一内核（重试/超时/熔断语义逐位不变）。热调用点改造为 static lambda +
+  值元组状态：GetByKey 两分支、GetAll、ExecuteReadScalarAsync、ExecuteWriteRowsAsync——
+  **每操作闭包（display class）分配归零**（GetByKey ~88B、标量/写路径 ~56B）。
+  static lambda 不捕获由编译器按调用点缓存；TState 是值类型按值传递。
+  **与 step10 的关系**：step10 证伪的是手写 struct 内核接口形态（架构级改造判 -61B
+  低于当时 200B 线）；本形态是同一收益的零架构代价版本（一个重载 + 调用点改写）。
+- **实测（GetByKeySession 同构探针）**：每键分配 896 → **792B（−11.6%，两轮逐位一致）**；
+  与 R3-CTS 合计本两轮 1040 → 792B（**−23.8%**）；median 3.1~3.7 → 2.9~3.0µs（带边缘，
+  谨慎正向）。
+- **探针诊断注记**：Integration 首跑 206/292 为 DB 容器停机（Exited 255，wslc 重启后
+  292/292 全绿），非代码回归。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 594/594 · SourceGen 236/236 ·
+  Integration 真库 292/292（容器恢复后）· gate 32/32 · tech-debt 14/14。
+
+### ⚡ 性能：R3-CTS 弹性尝试 CTS 进程级租借池（默认配置每读 −144B/键，−13.8%）；Exit 免锁设计阶段证伪（owner 覆写竞态）
+
+- **社区方案落地**：.NET 6+ `CancellationTokenSource.TryReset` 的官方设计动机正是热路径
+  每操作 CTS 分配消除（dotnet/runtime #48492，ASP.NET Core 场景）。ResilienceExecutor 的
+  ExecuteAsync/ExecuteWithTimeoutAsync 非链接形态 CTS（attemptScope 不可取消——默认
+  ct=default 的常态）改经进程级租借池复用：Rent 复用/TryReset 失败（已取消）即丢弃、
+  链接形态（源 token 注册不可跨次复用）恒新建。**与 step10 PoC 的区别**：step10 证伪的
+  是"移除 CTS 依赖驱动超时"（丢失语义）；池化保持超时语义与 InfrastructureTimeout 标记
+  逐位不变，只消除分配与构造。
+- **双检硬化**：TryReset 与迟发 CancelAfter 回调的文档化竞态，Return 内 TryReset 后二次
+  IsCancellationRequested 复核封堵（此时定时器已解除，复核后无新取消来源）。
+- **实测（GetByKeySession 同构探针，长会话 32 键 × 2000 循环 = 64000 键，SQLite 本地，
+  默认弹性配置）**：每键分配 1040 → **896B（−13.8%，三轮逐位一致）**、Gen0 4→3（−25%）；
+  时延在批间摆动带内（median 3.1~3.7µs 前后重叠，不主张）。
+- **Exit 免锁（设计阶段证伪，勿重开）**：动手设计时挖出具体竞态——快路径清
+  _activeOperationOwner 与并发新 Enter 交错会覆写新 owner，后续 Exit 失配致 _isActive
+  永真、门禁永久卡死；安全化需将 {flag, owner} 打包原子化并触及全部访问点（Enter/
+  EnterReadOnly/IsCurrentOperationScope/DisposeAsync…），收益仅 ~20-40ns/键，风险收益
+  比不成立，维持不做。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 594/594（含弹性/熔断/超时全族）·
+  SourceGen 236/236 · Integration 真库 292/292 · gate 32/32 · tech-debt 14/14 · 探针
+  tmp/probe-gate-ab 可复跑。
+
+### ⚡ 性能：R2 微项（用户点名）——单贡献者参数表直返 + IsTransient 委托缓存 + owner 重入免锁快路径
+
+- **#2 GetParametersForKinds 单贡献者快路径**：恰有一个子句贡献参数时直返该子句的参数表
+  （`Where($"…")` 单条件是绝对主流形态），省外层 List + 扩容数组 ~64B/查询；多贡献者/
+  零贡献者保持原聚合形态（共享空表契约不变）；LIMIT 组合路径改拷贝组装（直引用表不
+  就地变异）。GetCountParameters/GetUpdateParameters 同享。
+- **#3 IsTransient 委托每封闭泛型缓存**：TProvider.IsTransient 是 static 方法组，原每
+  会话构造分配一个新委托（~56B，实例无关）；嵌套静态类按 (TProvider) 闭合类型缓存
+  一份，第二个会话起零分配。实例方法组（读路由委托）绑定 this 不可缓存，维持现状
+  （200B 头条里其余成分结构性锁定：空拦截器表 = R3 教训，executor = 弹性架构）。
+- **#9 owner 重入免锁快路径（原 A3 安全子集）**：Enter(owner) 命中重入（_isActive +
+  owner 匹配 + 事务流不冲突三条件 volatile 只读判定）时免锁返回 default 租约——事务/
+  编排循环（RunInTransactionScopeAsync 族/ToPageAsync count+page/SaveCore 链）内每
+  行一次的 Enter 锁往返归零。安全性：只读判定漏读两方向均安全（假阴性落锁路径走完整
+  判定；假阳性的条件组合在锁路径逐条对照同样放行——state==2 蕴含 !_isActive 读不到、
+  _transactionCompleting 守卫只对 !ownedOperation 抛、异流事务由第三条件显式挡下）。
+  **诚实边界**：三个 PerfHub 写循环臂（EnumInserts/TxRollback/TxHundred）的调用形态
+  是 owner=null 的顺序循环（公共 API 不流 owner），快路径对其不触发——写循环臂的每行
+  剩余锁成本属锁外写路径（Exit 免锁需 DisposeAsync TCS 双检协议，实施核算判定风险
+  不成比例，不做）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 594/594（+3 快路径守卫锁定：
+  异流事务下重入仍拒/同流重入 default 租约+门禁保持/非 owner 仍拒）· SourceGen 236/236 ·
+  Integration 真库 292/292 · gate 32/32 · tech-debt 14/14。
+
+### 🔬 R1 收档 + 🔒 池化加固条目见下（2026-10-13 当日早批）
+
+- **A2（落地，分配侧精确可证即做）**：生成器 DeleteKeyValueExpression 对数值主键发射
+  identity 快路径 `key is long ? key : (object)Convert.ToInt64(key)`——同型装箱键复用
+  调用方装箱实例，免去 Convert 解箱+重箱。**非槽路径**（per-op 会话/租户实体/晋升前
+  2 次）每 GetByKey/Delete 绑定 −24B；槽路径 P1-4 已在 Core 侧同型优化（两路径语义
+  同源）。快照变化仅数值主键实体的 BindDelete/ConvertDeleteKey 两行（AllTypes 等数个
+  实体）。装箱复用由 ReferenceEquals 锁定测试直锁（同型同箱 / 异型新箱两分支）。
+  **原设计证伪登记**：泛型键 API 重载被实施前核算否决——装箱只从调用点移进库内净零，
+  且 long 重载对 int 主键实体产生 Int64 参数错配面。
+- **A1（PoC 证伪出包）**：手写 NpgsqlDataReader 定型工厂 vs DbDataReader 泛型工厂，
+  5000 行 × 12 列三臂交错真库 PG：typed/generic = **−0.4%**（分配逐位相同）——低于
+  PoC 门禁 1%，定型行工厂生成器全量不做（此前分析关账 1~3% 为乐观上界，实测确认
+  单态虚分发 + JIT 去虚化吃掉绝大部分）。
+- **A3（不实施）**：包散伙后单独 2~4% 低于 5% 时延线，且需动 SessionOperationState
+  核心并发原语，纪律上不做。包判定门禁（至少两臂 ≥5%）无法达成，**包 R1 收档**。
+
+- **验证**：ci.slnf 0W0E · Core 591/591（+1 装箱复用锁定）· SourceGen 236/236
+  （快照按预期变化：数值主键实体 BindDelete/ConvertDeleteKey 两行）· Integration 真库
+  292/292。PoC 探针：tmp/probe-typedfactory（可复跑）。
+
+### 🔒 加固：会话池化全面审计与四项缺陷修复（2026-10-13）
+
+- **审计发现并修复四处缺陷**：①重复 Dispose 抛异常——Park 改三态返回
+  （Parked/AlreadyParked/TornDown），重复/并发双归还幂等（先驻留者独占归还路径，
+  后到者直接返回；与非池化 DisposeAsync 幂等语义对齐）；②租出时死亡连接的清理失败
+  打穿租出方——改为静默（连接已判死，清理异常无诊断价值，DiscardReadConnectionAsync
+  同口径）；③池释放时单个会话清理失败中断其余清理（一个死资源泄漏整池连接）——改
+  逐会话尽力（首异常保留抛出，后续挂 Data）；④首次异常错误地把自身挂进自身 Data。
+- **复位完整性机械化守卫（PoolResetCompletenessTests）**：反射枚举
+  DataSession/SessionOperationState 全部可变实例字段对账两表（归还复位/跨租期保留
+  白名单，含保留理由），新字段忘登记即测试失败；第三条对账 ResetOnReturn 表与
+  ReturnToPoolAsync 实现的文本一致性（防"表里登记、实现忘写"假绿）。首跑即抓到
+  `_lastMigrationSkippedIndexes` 真实遗漏（DDL 幂等跳过缓存，登记保留），守卫价值
+  自证。SessionOperationState 全部 18 个可变字段按复位机制显式归类
+  （Park 收口/退出路径归零/归还复位/终态/保留）。
+- **并发/残留 Dispose 测试**：顺序重复 ×2、并发双 Dispose（Task.WhenAll 不抛且恰入池
+  一次）、池丢弃后残留 Dispose（TornDown 幂等路径）。
+
+- **验证**：ci.slnf 0W0E · Core 590/590（+5：守卫×3 + 幂等×2）· Integration 真库 292/292。
+
+### ⚡ 性能：二轮方案主项——会话池化 DataSessionPool（per-op 会话税归零 + 复用槽跨租期激活）
+
+- **新增 `DataSessionPool<TProvider>`**（Create/RentAsync/DisposeAsync）：空闲复用（连接
+  不健康的闲置项租出时丢弃重建）、无空闲新建、空闲上限默认 16（满员归还真实释放，不放大
+  物理连接占用）。租出即 `await using`，DisposeAsync 即归还。
+- **归还即复位**：瞬态状态（WithTenant/IgnoreFilters/WithIsolationLevel/With* 弹性覆写、
+  AddInterceptor 加项）全部复位回池基准；复用槽（PL-2 CRUD 槽/A9 查询槽/P1-1 直查槽）、
+  读连接、物化容量启发保留——复用槽在"一请求一会话"形态下此前结构性永不生效（晋升阈值 3
+  永达不到），池化使其跨租期激活，这是本项的核心收益。
+- **归还门禁**：活动事务、未消费的流式枚举器、并行读作用域未收口时响亮失败（SessionOperationState
+  新增 Park/Unpark 第 4 状态，与 Enter 的互斥由同一把锁保证）；死残留事务静默清空。
+- **三形态探针实证**（SQLite 本地，直通弹性，三臂交错）：GetByKey per-op 会话 45.5µs →
+  池化 3.3µs（**13.8×**）、Count 44.2µs → 4.2µs（**10.5×**）；池化与长会话（2.5/3.6µs）
+  只差约 1µs 租还成本——F1 家族（会话税，Count/SQLite 分配 2.56×ADO 的主项）被整体消除。
+
+### ⚡ 性能：二轮方案刀 1-3——长会话热路径族瘦身
+
+- **刀 1（每类型元数据静态缓存）**：EntityInfoCache 把 From/GetByKey/GetAll/Count/聚合/
+  Query 七入口的 FrozenDictionary 查找收敛为零（稳态）；Count/聚合/GetByKey 的
+  GetEntityFeatures/FilterForms/TableNames 直读并入合并视图（features 参数重载贯穿）。
+  直查族（Query/QueryAsyncEnumerable）走 FactoryPer 行工厂缓存——[Projection] 类型只进
+  RowFactories 不进实体视图（误进实体视图导致投影直查抛 not registered，集成测试抓红后修正）。
+- **刀 2（事务单次取用）**：Insert/Update/Delete/GetByKey/GetAll/Count/聚合/Query/Scalar/
+  Execute/QueryAsyncEnumerable 各入口取一次事务贯穿槽路径与执行（原每操作 2~3 次锁往返）。
+- **刀 3（守卫式重设）**：复用命令的 Transaction/CommandTimeout 同值不重设
+  （SqliteCommand.Transaction setter 含连接归属验证），CRUD 四槽与直查复用分支统一走
+  ApplyReusableCommandState 单点。
+- **测试串行组修复**：WhereInArrayFormTests 补挂 "ArrayFormFixtures" NotInParallel 组——
+  连接层语句采集钩子是静态的，P0-2 起该类与 BulkDelete 数组形态族并发泄漏语句
+  （SoftDelete 批删断言偶发 5 条 vs 期望 1，6 轮复现 2 次实锤），修复后 8/8 稳定。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 585/585（+9 池化行为契约：
+  同实例复用/瞬态复位/槽跨租期存活/归还门禁×2/空闲上限/池释放幂等/并发租出互异/死亡连接
+  丢弃）× Release 8 连跑稳定 · SourceGen 236/236（快照零变化）· Integration 真库 292/292
+  （+1 PG 三租期 CRUD 往返）· RentAsync 经架构不变式登记 · API 参考文档化。
+
+### 🔬 调研：P2-1 方言定型行工厂与 P1-3 形状哈希增量化（分析关账，不做）
+
+- **P2-1（方言定型行工厂，按阅读 DBDataReader 虚分发的每列每行成本核算后关闭）**：
+  DbDataReader 的列 getter 调用是<b>单态虚调用</b>（运行时恒为同一驱动的 sealed 重写），
+  分支预测近乎全额命中 + 现代 JIT 的守卫去虚化可将其还原为直接调用并内联；现实的
+  每列增量约 0~3ns，20 列宽行约 0~60ns/行。对照 QueryAll/SQLite 的行成本（µs 量级）
+  占比 1~3%，低于 5% 不做线；远程 PG 上更被网络与解析淹没。DateTimeOffset/TimeSpan/
+  byte[]/TimeOnly 的泛型 GetFieldValue&lt;T&gt; 与 EF Core Npgsql 物化器同形态（其直读
+  驱动具体型获的正是同一虚分发消除，收益同一量级），无独立改进空间。重启触发条件：
+  PerfHub QueryAll/WideQueryAll 剖面显示物化为首要热点（P0/P1/P2-2 落地后重录基线时复核）。
+- **P1-3（cons list 节点携带累积形状哈希，实施前核算撤销）**：方案阶段预估"省去
+  BuildSql 每查询的子句串全量哈希"，实施前核算发现总哈希量不变——节点哈希在
+  AddClause 时计算 vs BuildSql 时计算都是每子句一次 string.GetHashCode（.NET 字符串
+  不缓存哈希），单次执行的查询两形态总工作量逐位相同；唯一受益形态是同一 builder
+  多次 BuildSql（DryRun+执行，罕见）。复杂度净增、收益趋零，撤销不做。
+
+### ⚡ 性能：P2-2 copyWriter 扩面至 DateOnly/TimeOnly（定型 COPY 写入覆盖面扩大）
+
+- **扩面**：IBinaryRowSink 增 `WriteDateOnly`/`WriteTimeOnly` 定型方法，生成器谓词放开
+  两类型映射——Npgsql 6+ 的 PG `date`/`time` 即 DateOnly/TimeOnly，
+  `Write<DateOnly>(value, NpgsqlDbType.Date)` 定型直写真库往返实证（含 nullable 的
+  null→WriteNull 分支与边界值 0001-01-01/9999-12-31/23:59:59.999）。含 DateOnly/TimeOnly
+  且无其他不支持列的实体（如 AllTypesEntity）从整体回退参数池改为定型 COPY 写入
+  （值类型格装箱归零）。
+- **边界勘误**：TimeSpan 原以为需单列边界，实际在 PALORM016 分析器层即被拒绝
+  （须经 Converter 转成受支持 provider 类型——Converter 列按转换后类型判定，天然覆盖），
+  sink 层无需单列。快照变化：AllTypesEntity 的 CommandFactory 增 CopyWriteRow 方法、
+  Registry 的 copyWriteRow 从 null 变为委托（其余实体零变化）。
+
+### ⚡ 性能：P0-1 ToPageAsync 的 PG 单往返默认路径（COUNT + 页 SELECT 一个 DbBatch）
+
+- **四次往返压成一次**：PG 默认形态（READ COMMITTED + 无外部事务 + 无拦截器/观测性 +
+  非 AsPrepared）下，键集分页的 COUNT 与页 SELECT 打进一个 `DbBatch` 单次协议往返——
+  原路径 BEGIN+COUNT+SELECT+COMMIT 四次往返中 BEGIN/COMMIT 两次在 RC 隔离下买不到任何
+  快照一致性（事务内两条语句各取快照，Total 与页行本就可能不一致），纯属开销；批内
+  两条语句的快照语义与原形态逐位一致。远程 PG（RTT 0.3~1ms）分页时延预期 −50~70%。
+- **门禁与回退**：强隔离（WithIsolationLevel(Snapshot/Serializable)）、外部事务、
+  拦截器/Tracing/Metrics（三段式与 QueryObservation 编排留在经典路径）、AsPrepared、
+  非 PG 方言（MySQL RR 快照有真实一致性价值、SQLite 本地事务便宜）全部走既有经典
+  事务路径；第三方 PG 方言连接的 DbBatch 能力按连接类型探测缓存（探测失败永久回退）。
+- **参数归属**：COUNT 与页查询的参数列表可能引用同一批子句参数对象，同一
+  DbParameter 实例不挂进两个 DbBatchCommand——COUNT 侧拷贝（典型 0~2 个），页侧独占。
+- **弹性**：批执行整体经会话弹性策略包裹（幂等读重试重建批与读取器；经典路径的页
+  查询同受覆盖，COUNT 原直连——两条语句同享覆盖是收窄而非放松）。
+
+### ⚡ 性能：P0-2 WhereIn/WhereNotIn 的 PG 数组形态（= ANY / != ALL 单参数）
+
+- **数组形态查询路径补项**：UNNEST/ANY 族已在批量写路径全面数组化，查询路径的
+  WhereIn/WhereNotIn 是漏网项——原实现对每个值建一个参数对象（500 值一批拼占位符）。
+  PG 方言下改发射 `col = ANY(@pN)`（NOT IN 用 `col != ALL(@pN)`），整个列表一个类型化
+  数组参数（`IDbProvider.CreateArrayParameter` 既有能力面，元素类型由 TValue 编译期
+  类型决定，AOT 安全）。
+- **收益面**：500 值省 499 个参数对象与约 3KB SQL 文本；更关键的是 SQL 文本与值数量
+  解耦后，形状缓存对 WhereIn 从几乎无效（占位符文本长度随值数变化，每个数量都是新
+  形状）变为恒命中；超过占位符单批 500 上限的大列表单参数整列表执行（不再分批片
+  OR 组合，也不再受 65535 参数上限拒绝）。
+- **NULL 语义逐位等价**（真库 PG 实测锁定）：数组 NULL 元素在 `= ANY` 下永不匹配
+  （同 IN）；`!= ALL` 含 NULL 元素时全行过滤（同 NOT IN 的经典语义——数组形态不得
+  "顺手修好"它，静默改变语义比 gotcha 更危险）。
+- **回退面**：元素类型不在 Provider 支持面（char/uint 等，`CreateArrayParameter` 返回
+  null）或非 PG 方言时，整体回退既有占位符形态（逐位不变）。数组值构建期防御性拷贝
+  （调用方后续变更输入集合不影响已构建子句，与占位符形态的构建期快照对齐）。
+
+### ⚡ 性能：P1 批次（直查族命令复用槽推广 + 实体元数据三查合一 + 复用槽二次装箱消除）
+
+- **P1-1 直查族命令复用槽**：A9 惰性晋升从 From&lt;T&gt;() 管线扩展到
+  QueryAsync/QueryFirstAsync（经 QueryAsyncEnumerable 流式）/ScalarAsync/CountAsync/
+  聚合族/ExecuteAsync 六入口——同 SQL 文本第 3 次起复用会话级命令，就地写参数值
+  （不 Clear 不 Add，R-UNNESTB 纪律）；类型守卫拒绝同位异类型形态（PG DbType 陈旧
+  错绑防线）；与 From&lt;T&gt; 共用单槽（C15 按形状计数，交替形态互不淘汰）。
+- **P1-2 实体元数据三查合一**：新增 `EntityRuntimeInfo` 合并视图（工厂/表名/列名/
+  能力标志/CRUD 元数据一次取全），From&lt;T&gt;/GetByKeyEntry/GetAllEntry 原先各 3 次
+  FrozenDictionary 查找收敛为 1 次（约 -30~60ns/op，零分配变化）。
+- **P1-4 复用槽二次装箱消除**：GetByKey/Delete 槽命中分支 long 键走 identity 快路径
+  （复用调用方装箱实例，-24B/op；非 long 键照走 ConvertDeleteKey 委托）。
+
+- **验证**：ci.slnf 0W0E · Core 576/576（+9 直查复用行为锁定）· Integration 真库
+  290/290（+4 WhereIn 数组形态：行集等价三形态/大列表超批上限/NULL 语义两分支；
+  +5 P0-1 分页批路径：键集翻页逐位对齐经典路径/空表/软删过滤双语句/拦截器回退/MySQL
+  经典路径基线）。
+
+### ⚡ 性能：剩余三项收口（读路径 Enter 预热 + copyWriter 类型面扩至 byte/char + D23 关账）
+
+- **读路径 Enter 预热（R4）**：读入口的 Enter 写 AsyncLocal 落在 async 体内不回流调用方，
+  稳态每读重付一次 ExecutionContext 拷贝。探针 readprewarm A/B 实锤（SQLite 长会话
+  GetByKey：872 → 800 B/op，精确 -72B/op）。按写路径 step16-P1 同型（非 async 薄入口 +
+  `*EntryAsync` 内核）推广到 GetAsync/GetAllAsync/CountAsync/Sum/Max/Min/Avg/Query/
+  Scalar 与 From&lt;T&gt;() 管线的 ToListAsync/FirstOrDefaultAsync/ToPageAsync 共 13 个读入口。
+- **copyWriter 类型面扩至 byte/char（R4）**：byte → WriteInt16（PG 无 tinyint，byte 列 DDL
+  即 SMALLINT，short 直写语义精确，隐式 widening 零转换发射）；char → WriteString（值
+  表达式包 ToString()，含 nullable char 的 null→WriteNull 分流）。含 byte/char 且无其他
+  不支持列的实体从整体回退参数池改为定型 COPY 写入（值类型格装箱归零）。边界登记：
+  DateOnly/TimeOnly/TimeSpan 维持不支持（无对应定型方法，实体回退参数池）。真库 PG
+  COPY 往返测试锁定（含中文 char 与 null 分支）。
+- **D23 通知循环关账（文档化登记）**：每等待周期一份 linked CTS + WaitAsync 定时器是
+  NOTIF-001 正确性修复的有意代价（前形态复用单 CTS 重臂——CTS 一经取消不可复用，
+  空闲通道静默死亡；与 DbBatch 探针实锤的驱动绑定清理同族）。周期按通知到达或心跳
+  间隔计费，无高频 LISTEN 负载证据，EPSL 触发条件不满足，不做（注释落锚）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 557/557 · SourceGen 235/235
+  （+1 CopyWriteRow 扩面锁定测试；既有快照零变化——AllTypesEntity 含 DateOnly/TimeOnly
+  列仍在回退面内，扩面由新生成器测试覆盖）· Integration 真库 281/281（+1 PG COPY
+  byte/char 往返）· gate 32/32 · verify-ai fast 21/21 · tech-debt 14/14。
+
+### ⚡ 性能：S4 生成器包（方言门控发射 + 绑定委托去重）+ DbBatch 复用门禁关账
+
+- **PG 专属方法族按 PalORMTargetDialects 门控发射**：COPY 定型行写入器、删除键数组
+  构造器、UNNEST 逐列数组三件套 ×2 在未目标 PostgreSQL 的构建中不再发射（生成物
+  体积与启动委托数双降），注册侧同轮置 null——运行时回退路径既有（UNNEST 缺席回落
+  VALUES 形态、数组删除回落 IN 占位符、COPY 缺席回落参数池）。缺省（未声明属性）
+  恒全发射，CommandFactory 生成物与既有逐位一致（快照零变化）。三方言共有的
+  `ConvertDeleteKey`（GetByKey/Delete 复用槽）不门控。生成器测试锁定 mysql-only
+  目标下的裁剪形态与编译零错。
+- **绑定委托单份发射**：`draft.BindInsert/BindUpdate` 与 `CrudBindings` 此前各写一份
+  等价 lambda（每实体 2 个冗余委托实例 + 双份 IL），改为分块方法内显式类型局部变量
+  建一次两处引用（变量名带实体后缀防 CS0128）。
+- **DbBatch 跨轮复用门禁关账（探针实证 FAIL，勿重开）**：版本化实体 BulkUpdate 的
+  PG 逐条 DbBatch 路径候选优化（100 组命令/参数跨轮复用就地写值）经真库探针证伪：
+  同一 NpgsqlBatch 第二次 ExecuteNonQueryAsync 即被驱动响亮拒绝（"Missing type info
+  or binding info"，执行后驱动清空参数绑定信息）——R-UNNESTB 族风险以响亮失败形态
+  实锤，候选优化关闭。产品路径（A 臂）五轮 1000 行全对，基线 30.7µs/1892B 每行在案。
+- **证伪撤销**：DbType 策略"三面收敛"——读码证实映射（DbTypeFor）与谓词
+  （NeedsPoolDbTypeHint）本就是单一真源，三处调用点的差异是 B21/N4 文档化的有意
+  策略面（单行/INSERT 池全写、UPDATE/UPSERT 池按 PG-4 选择性写），收敛属化妆性重构。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 557/557 · SourceGen 234/234
+  （+1 方言门控测试；快照仅 Registry 一件预期变化，CommandFactory/RowFactory/
+  Migration 逐位零变化）· Integration 真库 280/280 · gate 32/32 · verify-ai fast
+  21/21 · tech-debt 14/14 · dev 推送后 CI 绿（run 38248754265）。
+
+### ⚡ 性能：第三轮全量审读（R3）S1-S3 三包落地 + 一项自引入回归修复
+
+第三轮七代理并行深读（异步状态机/分配清单/生成物运行时形态/驱动交互/横切清点五个新切入角）的产出：
+
+- **查询命中路径零分配（S1）**：SQL 形状缓存桶改不可变数组快照（命中路径的枚举器装箱归零，
+  CAS 换新败者重试，容量纪律保持）；参数装配 for 索引化；LIMIT 参数创建收敛
+  `CreateLimitParameters` 单一真源（参数装配不再构建即弃文本，编号契约由单源保证）；
+  零参数查询共享空表；聚合过滤形态单次求值；metrics TagList 单次构造贯穿双计数器。
+- **CRUD 对称（S2）**：`DeleteAsync` 接入 PL-2 第四命令复用槽（GetByKey 同型，
+  键值经 `ConvertDeleteKey` 就地写，软删/租户形态不进槽）；`GetAsync` 并行读分支直通
+  直调（原闭包 6 捕获约 250-300B/op）；GridReader 读活动 TCS 惰性化；会话 Dispose
+  无飞行信号短路（免 WhenAll+WaitAsync 包装）。
+- **批量与 Provider（S3）**：BulkMerge 默认键 RETURNING 批量路径参数池化（R-UNNESTB
+  安全形态：池参数就地写值、末批只裁池尾；PG 20000 行从约 20 万参数对象降为满批池一次
+  建立）；Upsert 形状字符串与逐条 UPDATE 每行参数数 per-(Type, Dialect) 缓存；
+  local_infile 探测负结果 10s TTL（持续故障形态下原每次 BulkInsert 重付探测往返加 3 秒
+  超时，窗口内直接降级）。
+- **回归修复（自引入，S2 项撤销）**：CreateAsync 的共享空拦截器表造成跨会话全局污染
+  （`AddInterceptor` 就地变异共享列表；全量套件随机失败最高 10 处，经二分定位与栈分析
+  确认后撤销该项优化，回退后连续三轮全量稳定）。
+- **证伪撤销（代理建议不成立）**：三 Provider BulkContext 委托缓存（静态方法组转换
+  C# 11+ 已由编译器缓存）；QueryContext 条件构造（record struct 零分配）；CTS TryReset
+  复用（既有 step10 PoC 实测裁决：超时 CTS 为语义本体覆盖建连与读取全程，非冗余）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 557/557（Debug 连续三轮稳定
+  + Release）· SourceGen 233/233（快照零变化）· Integration 真库 280/280 · gate 32/32 ·
+  verify-ai fast 21/21 · tech-debt 14/14。
+- **顺延（Not-Tested）**：S3 门禁项（DbBatch 逐条路径跨轮复用探针、copyWriter 类型面
+  扩展）与 S4 生成器包（UNNEST/COPY 按 PalORMTargetDialects 门控发射、Bind lambda
+  双份去重）本轮未做，理由与数据见提交 5620521 trailers。
+
+### ⚡ 性能：审读重开 A 层七项 + 弹性瘦身子集 + 两项测量关账
+
+固定每操作成本口径（绝对 µs/B × 调用频次）重开后落地的一批：
+
+- **读路径直通直调（C10/C12）**：`GetAsync`/`GetAllAsync` 直通分支免闭包直调执行核心
+  （复刻 A2/ExecuteReadScalarAsync 模式），非直通分支才构造捕获委托。复测（探针
+  readoverhead）：PG 回环直通读与裸 ADO 持平（217 vs 221µs，原差 8µs）；闭包与
+  异步状态机不再构造。`CountAsync` 复查确认已是无闭包形态，不在改动面。
+- **BulkUpdate 软删实体放开批量路由（B7）**：逐条与单语句批量的 SET 列集同源
+  （含 deleted_at，均从实体绑定），行为逐位等价（三方言真库实测一致，含恒逐条的
+  SQLite 基线）。软删实体从 N 次往返收敛为 1 次。**契约文档化**：调用方须在实体上
+  携带自身 deleted_at（置 null 即复活该行，两路径同语义）——
+  `BulkUpdateSoftDeleteRoutingTests` 三方言锁定。
+- **连接串改写缓存上限（D21）**：PG/MySQL 两处改写缓存加 256 上限 + 满清自愈
+  （多租户逐租户连接串形态下无界增长且值含凭据副本，现常驻量封顶）。
+- **参数名表分块惰性（F30）**：65536 个预建字符串（常驻约 2.9MB，原注释 1.3MB 口径
+  失实）改为 1024 一块按需构建——典型负载常驻降至几十 KB，批量满批路径保持零分配。
+- **ToPage 列单次解析（C16）**：orderBy 成员此前解析两次（续页条件 + 排序），收敛为一次。
+- **弹性构造瘦身（C11 子集）**：默认退避路径不再包装守卫闭包（每会话省一个）；
+  日志类别串每 Provider 缓存一次。
+- **窄整型无符号读取改 checked cast（D19，卫生修复）**：`Convert.ToUInt16(ulong, IFP)`
+  绑定到 (object, IFP) 每行装箱 24B，改 checked cast 语义逐位等价。可达性登记：PALORM016
+  与生成器侧双白名单当前均拒绝无符号窄整型，本分支属白名单扩展时的前置卫生。
+- **分析器判定顺序（E26，编译期）**：PALORM001 的 [Table] 判定前置（原全量属性枚举
+  先行，全项目每个 class 都付）；Select 投影检查改纯语法终端扫描先行（无终端候选时
+  零语义查询）。
+- **测量关账**：B8 版本化 BulkUpdate 实测增量 0.23µs/193B 每行（SQLite 本地 11%，
+  远程在 600µs 往返下不可见；未出现审计声称的 O(N×P) 参数重建主导形态），重构涉
+  版本回填时序语义，数据在案暂缓；D23 通知循环维持开放（低优先，无高频 LISTEN
+  负载触发条件）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 555/555（+3 分块惰性）·
+  SourceGen 233/233（快照零变化）· Integration 真库 280/280（+3 软删路由三方言）·
+  gate 32/32 · verify-ai fast 21/21 · tech-debt 14/14。
+
+### 🔧 修复：查询语义两处（WHERE/OR 链式优先级、引号内花括号）+ 性能两项（BulkMerge 默认键批量化、晋升计数按形状）
+
+全量审读第二批复用项。**两项为用户可见行为修复**，升级注意：
+
+- **WHERE/OR 链式优先级（C16）**：`Where(A).OrWhere(B).Where(C)` 此前生成
+  `(A) OR (B) AND (C)`（SQL 求值 `A OR (B AND C)`，与方法文档承诺的链式形态不符），
+  修复为 `((A) OR (B)) AND (C)`。**混合 Where/OrWhere 链的查询结果可能变化**——
+  旧行为依赖 SQL 运算符优先级的链在此前并不返回链式直觉的行集；纯 AND 链、纯 OR 链
+  与 OR 收尾链的 SQL 文本逐字不变。WhereIn/WhereNotIn 同受此修复覆盖。
+- **FormattableString 引号内花括号（C17）**：引号内 `{N}`/`}` 此前被替换或误抛
+  FormatException（JSON 文本 `'{"a":1}'` 无法书写；`'{0}'` 被改写为字面 `'@p0'`），
+  修复后引号内一律原样透传；另修引号状态机：`'{"a":1}'` 内的 `"` 此前使标识符态
+  卡死，其后的占位符替换与裸 @pN 拦截全部失真。`{{ }}` 转义语义全局不变。
+
+性能：
+
+- **BulkMerge 默认键行集合化（B6 落地）**：RETURNING 方言（PG/SQLite）的自增新实体
+  改走多行 `INSERT … RETURNING` 按行序回填，N 次往返收敛为 N/批；MySQL 保持逐行
+  （LAST_INSERT_ID 多行回填需自增值连续假设，不安全）。行序映射与 EF Core Npgsql
+  同构，返回行数与批行数不符时明确失败。
+- **读查询晋升计数按形状（C15）**：交替形状（A/B/A/B…）不再反复 Dispose+重建晋升命令
+  （原计数全体未命中使交替形态每次未命中都晋升），永不晋升保持每操作新建命令；
+  单形状连续查询的晋升时点不变。
+- **测量关账（EPSL 纪律，勿重开）**：Npgsql 参数未显式 DbType 的执行期类型推断罚金
+  不可测（池形态 2001.7 vs 2014.9 µs/op，0.7% 噪声内；新参形态显式类型反慢 20%），
+  PG-4 决策证实；读路径框架开销（3.7%）、弹性包裹（0.8%）、会话构造（4.5%）在 PG
+  回环均低于 5% 做线——C10/C11/C12/C13 与键二次装箱（24B/点查）登记不做。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 552/552（+13：BulkMerge 批量 2 ·
+  WHERE/OR 3 · 引号花括号 7 · 晋升计数 1）· SourceGen 233/233 · Integration 真库 277/277
+  （PG 批量 RETURNING 路径经真库全绿）· gate 32/32 · verify-ai fast 21/21 · tech-debt 14/14。
+
+### 🔧 修复：热路径审读五项（并行读连接治理 / 弹性总预算 / 熔断锁 / 形状缓存桶泄漏 / 生成物确定性）
+
+全量源码重读（七模块并行审读）产出的正确性与确定性修复，正常路径行为不变：
+
+- **并行读失败连接不回池**：作用域内读操作失败（绑定/SQL/读取异常）时池连接丢弃而非归还
+  空闲栈——失败后的连接状态不可信（静默断开后 `State` 仍为 Open），归还会让同作用域后续
+  读复用死连接。流式枚举（`QueryAsyncEnumerable`）以 reader 成功打开即标记健康，早终止消费
+  （First/Single 族）照常归还，读取异常撤销标记。
+- **会话释放失败路径仍清理并行读池**：读连接释放抛异常时不再短路跳过池清理（原实现池内
+  物理连接泄漏到进程级）。
+- **总预算约束退避等待**：`ResilienceExecutor` 重试退避改与尝试范围共用取消令牌——总预算
+  到期即中断等待并包装为 `TimeoutException`（带 `PalORM.InfrastructureTimeout` 标记），不再
+  睡满退避后用已取消的令牌多发起一次操作（RES-003 到期即停契约补全）。
+- **熔断器锁外抛异常**：`CircuitBreaker.Enter` 锁内只做状态判定并快照拒绝数据，异常构造与
+  抛出移到锁外——熔断打开期间被拒请求不再因异常分发在锁内串行化（进程级共享时尤甚）。
+- **形状缓存先判容量再建桶**：`SqlShapeCache.Add` 满员拒写发生在建桶之前——原实现每个被拒
+  新形状仍向桶表插入空队列，桶表无界增长。
+- **生成物确定性**：[SqlFile] 来源标注改用声明的相对路径（原嵌入开发机绝对路径，同一源码
+  不同机器产出不同 .g.cs）；provider 段重组显式 `\n`（原 `AppendLine` 随宿主 OS 变化）。
+- **文档失实修正**：本地直通配方补 `CircuitBreakerThreshold = 0`（原配方不触发直通）；列序
+  校验"零额外开销"改为 O(列数) 实口径；RowFactory 的 JIT 内联表述去断言化；BulkMerge 批宽
+  注释对齐现行常量（PG/MySQL 1000 行/批）。
+
+- **验证**：ci.slnf Release --no-incremental 0W0E · Core 539/539（+7：并行读失败丢弃 4 ·
+  释放清理 1 · 总预算退避 1 · 桶泄漏 1）· SourceGen 233/233（+2：相对路径 · LF 重组）·
+  Integration 真库 277/277 · gate 32/32 · verify-ai fast 21/21 · tech-debt 14/14。
+  红绿纪律：A1/A2/A3/A5 修复前红、修复后绿（A5 另做反向验证：临时还原旧实现确认测试抓红）。
+
+### 📄 文档：新增功能特性全景（docs/功能特性.md）
+
+全量源码分析产出的特性清单：23 个映射注解、DataSession API 面、查询构建器子句、
+批量操作方言路由、事务与 Schema 能力、源生成器 6 条管线与 45 条编译期诊断、
+横切能力（租户/软删/弹性/缓存/可观测）、三方言专属能力、配置系统与能力边界。
+每项落锚到文件与符号名（不写行号，防漂移）。README 目录区与特性节已加链接。
+
 ## [6.4.1] - 2026-10-11
 
 ### 📦 依赖升级：TUnit 1.73.5 → 1.73.19（测试框架，patch 流）

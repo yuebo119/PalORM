@@ -50,6 +50,13 @@ public sealed class PostgreSqlProvider : IDbProvider
         // 旋钮扫描 2.46µs ≈ 12µs；每操作自建会话的用法（DataSession.CreateAsync per op，
         // README 快速Start 形态）全额支付它——会话税 24µs 的近一半。缓存命中后
         // CreateConnection 只剩字典查询 + new NpgsqlConnection（0.09µs）。
+        // PG-6：改写结果的缓存——键 = 本方法全部输入（连接串 + 4 个 options 池参数字段）。
+        // D21（2026-10-12 审读修复）：键空间"应用内通常个位数"的假设在多租户逐租户连接串
+        // 形态下不成立（每租户一条连接串 = 无界增长，且值含凭据副本）——上限封顶 + 满清
+        // 自愈（FormattableSqlFormatter 同纪律：改写是纯函数，重建成本远低于冻结）。
+        // 工厂失败（非法连接串）不缓存，异常照旧传播。
+        if (RewrittenConnectionStringCache.Count >= RewrittenCacheCapacity)
+            RewrittenConnectionStringCache.Clear();
         string rewritten = RewrittenConnectionStringCache.GetOrAdd(
             (connectionString, options.MaxPoolSize, options.MinPoolSize,
                 options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
@@ -65,6 +72,9 @@ public sealed class PostgreSqlProvider : IDbProvider
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
         (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
         RewrittenConnectionStringCache = new();
+
+    /// <summary>PG-6/D21：改写缓存容量上限——多租户连接串变体数封顶（含凭据副本的常驻量随之封顶）。</summary>
+    private const int RewrittenCacheCapacity = 256;
 
     /// <summary>PG-6：连接串旋钮改写的实际逻辑（从 CreateConnection 原样抽出，逻辑零变更）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -335,6 +345,10 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// timestamptz 列写入行为依赖服务器时区，建议实体侧统一用 DateTimeKind.Utc。</para></summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1062", Justification = "conn 在外层已有验证")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100", Justification = "表名/列名来自源生成器")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+        Justification = "G7（2026-10-13 五轮微项包）：每批超时 CTS 的非链接形态经 PooledCts.Return 释放"
+            + "（未取消 TryReset 入池复用；已取消/池满路径内含 Dispose），链接形态 finally 内显式 Dispose——"
+            + "CA2000 的流分析不识别 Return 为释放形态，实际全路径有界。")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
         Justification = "PG Binary COPY 批量写入的 4 层 try/catch/finally 是异步 IO 资源管理的必然形态。"
@@ -545,7 +559,18 @@ public sealed class PostgreSqlProvider : IDbProvider
                     }
                     finally
                     {
-                        timeoutCts?.Dispose();
+                        // G7（2026-10-13 五轮全量重读微项包）：非链接形态经进程级租借池复用
+                        //（F5/PooledCts 同纪律——token 生命周期不超出本批的 await 面，
+                        // 驱动在执行完成前注销自己的取消注册；超时已触发的实例由 Return 内
+                        // TryReset 失败路径 Dispose，语义零变化）；链接形态（源 token 注册
+                        // 不可跨次复用）恒 Dispose。
+                        if (timeoutCts is not null)
+                        {
+                            if (ct.CanBeCanceled)
+                                timeoutCts.Dispose();
+                            else
+                                PooledCts.Return(timeoutCts);
+                        }
                     }
                 }
             }
@@ -696,9 +721,12 @@ public sealed class PostgreSqlProvider : IDbProvider
     {
         if (commandTimeoutSeconds <= 0 && !ct.CanBeCanceled)
             return null;
+        // G7（五轮微项包）：非链接形态经 PooledCts 租借（每 COPY 批省 CTS + CancelAfter
+        // 定时器分配，约 168B/批——F5 在建连四处落地的同型分支，此处是 Provider 侧补全）；
+        // 归还分流见调用方 finally（链接 Dispose / 非链接 Return）。
         var timeoutCts = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-            : new CancellationTokenSource();
+            : PooledCts.Rent();
         if (commandTimeoutSeconds > 0)
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
         return timeoutCts;
@@ -836,6 +864,17 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         /// <inheritdoc />
         public void WriteDateTimeOffset(int ordinal, DateTimeOffset value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        /// <para>P2-2（2026-10-12 扩面）：Npgsql 6+ 的 PG date 映射即 DateOnly——
+        /// <c>Write&lt;DateOnly&gt;(value, NpgsqlDbType.Date)</c> 定型直写，真库往返实证。</para>
+        public void WriteDateOnly(int ordinal, DateOnly value)
+            => _importer.Write(value, _columnTypes[ordinal]);
+
+        /// <inheritdoc />
+        /// <para>P2-2：同 <see cref="WriteDateOnly"/>——PG time 映射即 TimeOnly。</para>
+        public void WriteTimeOnly(int ordinal, TimeOnly value)
             => _importer.Write(value, _columnTypes[ordinal]);
 
         /// <inheritdoc />

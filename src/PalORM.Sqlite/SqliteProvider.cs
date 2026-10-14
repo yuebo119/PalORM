@@ -117,7 +117,9 @@ public sealed class SqliteProvider : IDbProvider
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 
     /// <summary>PRAGMA 初始化文本（窄分支：内存/只读库）——L32（2026-09-26）：文本恒定常量，
-    /// 消除每次连接初始化的运行时拼接分配（BDN 每操作一会话形态下每操作省数百字节）。</summary>
+    /// 消除每次连接初始化的运行时拼接分配（BDN 每操作一会话形态下每操作省数百字节）。
+    /// 不含 optimize：内存库无持久统计面；只读连接上 ANALYZE 写 sqlite_stat1 会抛
+    /// SQLITE_READONLY（引擎语义），故只落在 <see cref="PragmaFileDb"/>。</summary>
     private const string PragmaNarrow =
         "PRAGMA foreign_keys = ON; PRAGMA busy_timeout=5000; PRAGMA cache_size=-65536; PRAGMA analysis_limit=400";
 
@@ -127,7 +129,8 @@ public sealed class SqliteProvider : IDbProvider
         + "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-65536; "
         + "PRAGMA temp_store=MEMORY; PRAGMA wal_autocheckpoint=1000; "
         + "PRAGMA journal_size_limit=67108864; "
-        + "PRAGMA mmap_size=268435456; PRAGMA analysis_limit=400";
+        + "PRAGMA mmap_size=268435456; PRAGMA analysis_limit=400; "
+        + "PRAGMA optimize=0x10002";
 
     /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式 + 写入/读取 PRAGMA 调优。
     /// 数据库文件被其他进程锁定时受调用方取消/超时约束。
@@ -140,18 +143,30 @@ public sealed class SqliteProvider : IDbProvider
     /// 固定防第三方引擎漂移）；
     /// journal_size_limit=67108864（64MB 上限防 WAL 无界膨胀拖慢检查点；2026-09-25 引入）；
     /// wal_autocheckpoint=1000（WAL 自动检查点，默认即 1000，显式固定防部署漂移）；
-    /// analysis_limit=400（约束后续 PRAGMA optimize/ANALYZE 的采样成本，官方推荐值）。</para>
+    /// analysis_limit=400（约束后续 PRAGMA optimize/ANALYZE 的采样成本，官方推荐值）；
+    /// <b>optimize=0x10002</b>（2026-10-14 SQLite 3.54 适配轮）：官方对<b>长生命周期连接</b>的
+    /// 推荐形态——"when first opened, run PRAGMA optimize=0x10002"。M.D.S 池化的原生句柄正是
+    /// 长生命周期物理连接，整组 PRAGMA 每句柄只执行一次的池化去重恰好等价于"first opened"。
+    /// 掩码语义（官方 pragma.html）：0x02 分析可能受益的表 + 0x10000 检查<b>全部</b>表尺寸
+    /// （默认掩码只看近期用过的表）；0x10 位默认开启（ANALYZE 期间施加临时 analysis_limit），
+    /// 加上前置的 analysis_limit=400，成本有界。收益：查询计划统计（sqlite_stat1）随首开建立，
+    /// 数据演化的长跑应用不再依赖应用侧手动 ANALYZE。</para>
     /// <para><b>mmap_size=268435456</b>（256MB mmap I/O）仅文件数据库追加。</para>
     /// <para><b>内存库分支收窄</b>：<c>:memory:</c> 库仅执行 foreign_keys / busy_timeout /
     /// cache_size / analysis_limit——journal_mode=WAL / synchronous(fsync) / wal_autocheckpoint
     /// (检查点) / journal_size_limit / mmap_size 对无文件 I/O 的内存库均无语义（SQLite 静默
-    /// 返回不报错但徒增误导）；temp_store 本就以内存为目标。</para>
+    /// 返回不报错但徒增误导）；temp_store 本就以内存为目标；optimize 同样不落（内存库无
+    /// 持久统计面）。</para>
     /// <para><b>进阶调优入口</b>（建库参数/内存足迹/安全取舍，经既有
     /// <see cref="DbOptions.SessionSetupSql"/> 通道，Provider 初始化后执行、可覆盖上述默认）：
     /// <c>PRAGMA page_size=16384</c>（批量/大行负载，须在库首次创建前生效——对既有库为静默
     /// no-op，改页大小需 VACUUM）；<c>PRAGMA mmap_size=1073741824</c>（读密集型提至 1GB）；
     /// <c>PRAGMA secure_delete=OFF</c>（删除密集负载消除删页覆写写放大——引擎默认 ON，
-    /// 关闭属安全取舍：已删内容不再清零，加密库上意味着 forensic 残留，请按威胁模型评估）。</para>
+    /// 关闭属安全取舍：已删内容不再清零，加密库上意味着 forensic 残留，请按威胁模型评估）；
+    /// 定期 <c>PRAGMA optimize</c>（官方对长跑应用的建议节奏为小时/天级——首开已由本
+    /// Provider 的 0x10002 形态覆盖，数据快速演化的应用可经应用侧定时器补跑；<c>Pooling=False</c>
+    /// 的短生命周期真实关闭形态，官方建议在关闭前执行一次 <c>PRAGMA optimize</c>，可放入
+    /// 会话末尾的 SessionSetupSql 或应用侧关闭序列）。</para>
     /// <para><b>池化复用（2026-10-02）</b>：整组 PRAGMA 每个物理连接（池化原生句柄）只执行一次，
     /// 复用已初始化句柄时只重设 <c>foreign_keys = ON</c>（文件库实测整组 8.6µs / 3KB，单条 1.0µs /
     /// 520B）。会话内用原始 SQL 改过的调优 PRAGMA 会随句柄带入后续会话——需要每会话复位的设置请放进

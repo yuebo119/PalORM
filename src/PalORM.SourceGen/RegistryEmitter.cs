@@ -191,9 +191,15 @@ internal static class RegistryEmitter
         AppendCommandSqlSetIfTargeted(sb, m, SqlGenerationDialect.MySql, dialects.MySql, indent: 12, isLast: true);
         sb.AppendLine("        );");
 
-        sb.AppendLine($"        draft.BindInsert[typeof({m.EntityTypeName})] = (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off);");
-        sb.AppendLine($"        draft.BindUpdate[typeof({m.EntityTypeName})] = (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj);");
-        sb.AppendLine($"        draft.BindDelete[typeof({m.EntityTypeName})] = (cmd, key) => CommandFactory_{m.GeneratedTypeSuffix}.BindDelete(cmd, key);");
+        // R3-S4-2（2026-10-12）：绑定委托单份发射——原 draft.BindXxx 与 CrudBindings 各写一份
+        // 等价 lambda（每实体 2 个冗余委托实例 + 双份 IL），显式类型局部变量建一次两处引用。
+        // 变量名带实体后缀：同一分块方法内多实体共存，裸名会 CS0128。
+        sb.AppendLine($"        global::System.Action<global::System.Data.Common.DbCommand, object, int> __bindInsert_{m.GeneratedTypeSuffix} = (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off);");
+        sb.AppendLine($"        global::System.Action<global::System.Data.Common.DbCommand, object> __bindUpdate_{m.GeneratedTypeSuffix} = (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj);");
+        sb.AppendLine($"        global::System.Action<global::System.Data.Common.DbCommand, object> __bindDelete_{m.GeneratedTypeSuffix} = (cmd, key) => CommandFactory_{m.GeneratedTypeSuffix}.BindDelete(cmd, key);");
+        sb.AppendLine($"        draft.BindInsert[typeof({m.EntityTypeName})] = __bindInsert_{m.GeneratedTypeSuffix};");
+        sb.AppendLine($"        draft.BindUpdate[typeof({m.EntityTypeName})] = __bindUpdate_{m.GeneratedTypeSuffix};");
+        sb.AppendLine($"        draft.BindDelete[typeof({m.EntityTypeName})] = __bindDelete_{m.GeneratedTypeSuffix};");
 
         // CrudMetadata 用聚合 ctor（CrudBindings + CrudColumns）避免 9 参参数列表（S107）。
         // 评审 2026-09-02：用不含 legacy SQL 载荷的新 ctor——方言 SQL 走 CommandSqlsByDialect。
@@ -213,10 +219,10 @@ internal static class RegistryEmitter
         // 保留判定与 CommandFactory 的 BuildDeleteKeyArray 同源，便于该契约若放松时两处同步失守。
         bool hasSingleColumnPrimaryKey = columns.Count(static column => column.IsPrimaryKey) == 1;
         sb.AppendLine("                new global::PalORM.CrudBindings(");
-        sb.AppendLine($"                    (cmd, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertToBatch(cmd, ({m.EntityTypeName})obj, off),");
+        sb.AppendLine($"                    __bindInsert_{m.GeneratedTypeSuffix},");
         sb.AppendLine($"                    (parameters, obj, off) => CommandFactory_{m.GeneratedTypeSuffix}.BindInsertValues(parameters, ({m.EntityTypeName})obj, off),");
         sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpsert(cmd, ({m.EntityTypeName})obj),");
-        sb.AppendLine($"                    (cmd, obj) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdate(cmd, ({m.EntityTypeName})obj),");
+        sb.AppendLine($"                    __bindUpdate_{m.GeneratedTypeSuffix},");
         sb.AppendLine($"                    RowFactory_{m.GeneratedTypeSuffix}.Read,");
         // v5.6：批量 UPDATE 参数池的取值绑定器（只写 Value，不建参数）。放在末位可选参数，
         // 与 BindInsertValues 同机制；消费点 ExecuteBatchUpdateAsync 在 null 时回退逐行 BindUpdate。
@@ -230,27 +236,45 @@ internal static class RegistryEmitter
         sb.AppendLine($"                    initInsertParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitInsertParameters(parameters, off),");
         // O1（2026-10-01）：COPY 定型行写入委托——全列 provider 类型可直写才发射；
         // 未支持形态传 null，运行时回退参数池路径（零行为变化）。
-        string copyRowArg = copyRowSupported
+        // R3-S4（2026-10-12）：PG 专属族叠加方言门控——未目标 PG 一律传 null
+        //（CommandFactory 同轮不发射对应方法，引用不存在的方法会编译错，两端必须同步）。
+        string copyRowArg = copyRowSupported && dialects.PostgreSql
             ? $"(sink, obj) => CommandFactory_{m.GeneratedTypeSuffix}.CopyWriteRow(sink, ({m.EntityTypeName})obj)"
             : "null";
         // UNNEST-1（2026-10-02）：主键数组构造器——消费方 = BulkDeleteAsync 的 PG 数组形态。
         // 复合主键传 null，运行时回退 IN 占位符形态。
-        string keyArrayArg = hasSingleColumnPrimaryKey
+        string keyArrayArg = hasSingleColumnPrimaryKey && dialects.PostgreSql
             ? $"(keys, start, count) => CommandFactory_{m.GeneratedTypeSuffix}.BuildDeleteKeyArray(keys, start, count)"
             : "null";
         // UNNEST 阶段 B（2026-10-02）：逐列数组填充器——消费方 = PG 的批量 UPDATE/UPSERT 数组形态。
-        string fillArraysArg =
-            $"(entities, start, count, arrays, arrayOffset) => CommandFactory_{m.GeneratedTypeSuffix}"
-            + $".FillUpdateColumnArrays(entities, start, count, arrays, arrayOffset)";
+        string fillArraysArg = dialects.PostgreSql
+            ? $"(entities, start, count, arrays, arrayOffset) => CommandFactory_{m.GeneratedTypeSuffix}"
+              + $".FillUpdateColumnArrays(entities, start, count, arrays, arrayOffset)"
+            : "null";
+        string updateElementTypesArg = dialects.PostgreSql
+            ? $"CommandFactory_{m.GeneratedTypeSuffix}.UpdateColumnArrayElementTypes()"
+            : "null";
+        string createUpdateArraysArg = dialects.PostgreSql
+            ? $"CommandFactory_{m.GeneratedTypeSuffix}.CreateUpdateColumnArrays"
+            : "null";
+        string fillUpsertArraysArg = dialects.PostgreSql
+            ? $"(entities, start, count, arrays, arrayOffset) => CommandFactory_{m.GeneratedTypeSuffix}.FillUpsertColumnArrays(entities, start, count, arrays, arrayOffset)"
+            : "null";
+        string upsertElementTypesArg = dialects.PostgreSql
+            ? $"CommandFactory_{m.GeneratedTypeSuffix}.UpsertColumnArrayElementTypes()"
+            : "null";
+        string createUpsertArraysArg = dialects.PostgreSql
+            ? $"CommandFactory_{m.GeneratedTypeSuffix}.CreateUpsertColumnArrays"
+            : "null";
         sb.AppendLine($"                    copyWriteRow: {copyRowArg},");
         sb.AppendLine($"                    buildDeleteKeyArray: {keyArrayArg},");
         sb.AppendLine($"                    fillUpdateColumnArrays: {fillArraysArg},");
-        sb.AppendLine($"                    updateColumnArrayElementTypes: CommandFactory_{m.GeneratedTypeSuffix}.UpdateColumnArrayElementTypes(),");
-        sb.AppendLine($"                    createUpdateColumnArrays: CommandFactory_{m.GeneratedTypeSuffix}.CreateUpdateColumnArrays,");
+        sb.AppendLine($"                    updateColumnArrayElementTypes: {updateElementTypesArg},");
+        sb.AppendLine($"                    createUpdateColumnArrays: {createUpdateArraysArg},");
         // UNNEST 阶段 B：UPSERT 的逐列数组三件套（列序 = IsUpsertable，与 UPDATE 那套独立）。
-        sb.AppendLine($"                    fillUpsertColumnArrays: (entities, start, count, arrays, arrayOffset) => CommandFactory_{m.GeneratedTypeSuffix}.FillUpsertColumnArrays(entities, start, count, arrays, arrayOffset),");
-        sb.AppendLine($"                    upsertColumnArrayElementTypes: CommandFactory_{m.GeneratedTypeSuffix}.UpsertColumnArrayElementTypes(),");
-        sb.AppendLine($"                    createUpsertColumnArrays: CommandFactory_{m.GeneratedTypeSuffix}.CreateUpsertColumnArrays,");
+        sb.AppendLine($"                    fillUpsertColumnArrays: {fillUpsertArraysArg},");
+        sb.AppendLine($"                    upsertColumnArrayElementTypes: {upsertElementTypesArg},");
+        sb.AppendLine($"                    createUpsertColumnArrays: {createUpsertArraysArg},");
         // N4（2026-10-04 全量复读）：UPSERT/UPDATE 池 DbType 一次性初始化委托——B21 对两类
         // 池的对称化；消费方（BatchUpsertAsync / ExecuteBulkUpdatePooled/Batches）建池后调用
         // 一次。旧生成器程序集为 null 时消费方不调（其 BindUpsert/UpdateValues 自写 DbType）。

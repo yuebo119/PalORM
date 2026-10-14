@@ -41,16 +41,25 @@ public sealed class ResilienceExecutor
         // ResilienceExecutor.ExecuteAsync 命令重试）——此前 ITM-603 只在 CreateAsync 调用点
         // 加守卫，命令路径 Task.Delay(_backoff(attempt)) 抛 AOORE("delay") 不指向 RetryBackoff 配置。
         // 包装到构造函数后，所有走 ResilienceExecutor 的路径共享同一校验逻辑。
-        Func<int, TimeSpan> sourceBackoff = options.RetryBackoff ?? GetDefaultBackoff;
-        _backoff = attempt =>
+        // C11（2026-10-12 审读重开·安全子集）：默认退避恒非负（GetDefaultBackoff 数学上
+        // ≥50ms），守卫只对自定义委托必要——默认路径跳过包装委托，省每会话一个闭包；
+        // 自定义路径保持原守卫（ITM-603/605 双路径校验语义不变）。
+        if (options.RetryBackoff is { } customBackoff)
         {
-            TimeSpan delay = sourceBackoff(attempt);
-            if (delay < TimeSpan.Zero)
-                throw new InvalidOperationException(
-                    $"DbOptions.RetryBackoff(attempt={attempt}) returned a negative TimeSpan ({delay}). "
-                    + "The delegate must return a non-negative delay.");
-            return delay;
-        };
+            _backoff = attempt =>
+            {
+                TimeSpan delay = customBackoff(attempt);
+                if (delay < TimeSpan.Zero)
+                    throw new InvalidOperationException(
+                        $"DbOptions.RetryBackoff(attempt={attempt}) returned a negative TimeSpan ({delay}). "
+                        + "The delegate must return a non-negative delay.");
+                return delay;
+            };
+        }
+        else
+        {
+            _backoff = GetDefaultBackoff;
+        }
         // ITM-619：DbOptions 契约 TimeSpan.Zero = 无限等待（Validate 允许 Zero），但
         // CancelAfter(Zero) 是立即取消——归一为 InfiniteTimeSpan 保持契约语义。
         // r19/ITM-696：直接构造未 Validate 的 options 时负值会在执行期 CancelAfter(负)
@@ -73,6 +82,29 @@ public sealed class ResilienceExecutor
     /// <para><b>幂等性约束（ITM-310）</b>: 命令超时被判为可重试，而超时不代表服务器未执行——
     /// INSERT 可能已提交，重试会重复写入。仅将幂等操作（查询/带唯一键的 upsert/条件更新）
     /// 交给本方法；非幂等写入请自行处理重试或依赖唯一约束去重。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S4136",
+        Justification = "结构体状态重载与 void 重载分置内核两侧(编排取舍,语义分组优先)。")]
+    public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return await ExecuteAsyncCore<Func<CancellationToken, Task<T>>, T>(
+            static (op, token) => op(token), operation, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>R4-λ(2026-10-13 用户点名"继续"轮):结构体状态重载——operation 收
+    /// (state, token) 两参,调用方经 static lambda + 值元组传参,热路径闭包分配归零
+    /// (static lambda 不捕获,每个调用点一份由编译器缓存;TState 是值类型按值传递)。
+    /// step10 证伪的是手写 struct 内核接口形态(收益 -61B 判"低于当时 200B 线");
+    /// 本形态是同一收益的零架构代价版本:重试/超时/熔断语义逐位复用既有内核。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S4136",
+        Justification = "结构体状态重载紧邻经典重载与内核放置(与 void 重载隔开是编排取舍,语义分组优先)。")]
+    public async ValueTask<TResult> ExecuteAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return await ExecuteAsyncCore(operation, state, ct).ConfigureAwait(false);
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S2189:LoopStopIncrementerNotTested",
         Justification = "for(;;) 退出靠 return（成功路径）和 throw（取消/超时/重试耗尽）；"
@@ -85,9 +117,9 @@ public sealed class ResilienceExecutor
         Justification = "RES-003 起本方法有 6 条异常分支（调用方取消 / 总预算到期 / 超时重试 / "
             + "瞬时重试 / 超时耗尽包装 / 外层熔断记账），每条过滤条件都必须与异常形态严格对应；"
             + "拆分会把重试语义打散到多处、降低可审性（与同方法 S2189/S1994 同因）。")]
-    public async ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
+    private async ValueTask<TResult> ExecuteAsyncCore<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(operation);
         var (isHalfOpenProbe, generation, probeToken) = _circuitBreaker.Enter();
 
         // RES-003（2026-09-23）：总预算（Zero = 不设）——比单次尝试超时更强的上界，到期即停重试。
@@ -111,16 +143,20 @@ public sealed class ResilienceExecutor
                     // `timeout is not null`，null 形态下内部超时分支不可达，语义等价。
                     if (_timeout == Timeout.InfiniteTimeSpan && !attemptScope.CanBeCanceled)
                     {
-                        T resultNoTimeout = await operation(attemptScope).ConfigureAwait(false);
+                        TResult resultNoTimeout = await operation(state, attemptScope).ConfigureAwait(false);
                         _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation, probeToken);
                         return resultNoTimeout;
                     }
+                    // R3-CTS（2026-10-13 用户点名轮）：非链接形态经进程级租借池复用——
+                    // step10 证伪的是"移除 CTS 依赖驱动超时"(丢语义)；池化保持超时语义
+                    // 逐位不变只消分配(TryReset 官方热路径复用模式,见 PooledCts 文档)。
+                    // 链接形态(源 token 注册不可跨次复用)恒新建+Dispose。
                     timeout = attemptScope.CanBeCanceled
                         ? CancellationTokenSource.CreateLinkedTokenSource(attemptScope)
-                        : new CancellationTokenSource();
+                        : PooledCts.Rent();
                     if (_timeout != Timeout.InfiniteTimeSpan)
                         timeout.CancelAfter(_timeout);
-                    T result = await operation(timeout.Token).ConfigureAwait(false);
+                    TResult result = await operation(state, timeout.Token).ConfigureAwait(false);
                     _circuitBreaker.RecordSuccess(isHalfOpenProbe, generation, probeToken);
                     return result;
                 }
@@ -133,24 +169,19 @@ public sealed class ResilienceExecutor
                 {
                     // RES-003：总预算到期不再重试——最坏墙钟由 (MaxRetries+1)×CommandTimeout+Σ退避
                     // 收敛为 OverallDeadline。与单次命令超时同口径包装（Data 标记可识别）。
-                    var wrappedOverall = new TimeoutException(
-                        $"Operation exceeded the overall deadline of {_overallDeadline} "
-                        + $"(attempt {attempt + 1} of {_maxRetries + 1}).",
-                        overallException);
-                    wrappedOverall.Data["PalORM.InfrastructureTimeout"] = true;
-                    throw wrappedOverall;
+                    throw WrapOverallDeadline(attempt, overallException);
                 }
                 catch (OperationCanceledException) when (timeout is not null
                     && timeout.IsCancellationRequested && attempt < _maxRetries)
                 {
                     // ITM-630：仅超时 token 触发的 OCE 可重试——operation 内部自取消
                     // （非调用方 ct、非超时）原样上抛：重试会放大已取消操作的副作用。
-                    await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
+                    await DelayBeforeRetryAsync(attempt, overall, attemptScope).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException
                     && attempt < _maxRetries && _isTransient(exception))
                 {
-                    await Task.Delay(_backoff(attempt), ct).ConfigureAwait(false);
+                    await DelayBeforeRetryAsync(attempt, overall, attemptScope).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException timeoutException) when (timeout is not null
                     && timeout.IsCancellationRequested)
@@ -168,7 +199,15 @@ public sealed class ResilienceExecutor
                 }
                 finally
                 {
-                    timeout?.Dispose();
+                    // R3-CTS:非链接形态归还池(TryReset 失败即已取消 → 池内 Dispose),
+                    // 链接形态照旧 Dispose(源 token 注册不可复用)。
+                    if (timeout is not null)
+                    {
+                        if (attemptScope.CanBeCanceled)
+                            timeout.Dispose();
+                        else
+                            PooledCts.Return(timeout);
+                    }
                 }
             }
         }
@@ -191,6 +230,33 @@ public sealed class ResilienceExecutor
     {
         ArgumentNullException.ThrowIfNull(operation);
         await ExecuteAsync(async c => { await operation(c).ConfigureAwait(false); return true; }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>重试退避等待（A3）：等待与尝试范围共用 <paramref name="attemptScope"/>——总预算到期即中断等待，
+    /// 包装为超时抛出；不再睡满退避后用已取消的 token 多发起一次操作（RES-003 的到期即停契约）。</summary>
+    private async Task DelayBeforeRetryAsync(
+        int attempt, CancellationTokenSource? overall, CancellationToken attemptScope)
+    {
+        try
+        {
+            await Task.Delay(_backoff(attempt), attemptScope).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException delayException) when (overall is not null
+            && overall.IsCancellationRequested)
+        {
+            throw WrapOverallDeadline(attempt, delayException);
+        }
+    }
+
+    /// <summary>总预算到期的超时包装（RES-003）：与单次命令超时同口径，Data 标记供基础设施超时识别。</summary>
+    private TimeoutException WrapOverallDeadline(int attempt, OperationCanceledException inner)
+    {
+        var wrapped = new TimeoutException(
+            $"Operation exceeded the overall deadline of {_overallDeadline} "
+            + $"(attempt {attempt + 1} of {_maxRetries + 1}).",
+            inner);
+        wrapped.Data["PalORM.InfrastructureTimeout"] = true;
+        return wrapped;
     }
 
     internal static TimeSpan GetDefaultBackoff(int attempt)
@@ -227,18 +293,32 @@ public sealed class ResilienceExecutor
         Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
+        return await ExecuteWithTimeoutAsync<Func<CancellationToken, Task<T>>, T>(
+            static (op, token) => op(token), operation, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>R4-λ:结构体状态重载(与 ExecuteAsync 的同型重载对称)——写路径
+    /// ExecuteWriteRowsAsync 消闭包用;语义与单参版逐位一致。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S4136",
+        Justification = "与 ExecuteAsync 族同因:编排取舍,语义分组优先。")]
+    public async ValueTask<TResult> ExecuteWithTimeoutAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
         // A3（2026-10-01 全 API 逐项轮）：与 ExecuteAsync 同款——ct 不可取消时单构 CTS；
         // 无限超时且不可取消时完全不建 CTS（无超时事件可发生）。
         if (_timeout == Timeout.InfiniteTimeSpan && !ct.CanBeCanceled)
-            return await operation(ct).ConfigureAwait(false);
-        CancellationTokenSource timeout = ct.CanBeCanceled
+            return await operation(state, ct).ConfigureAwait(false);
+        // R3-CTS:同 ExecuteAsync——非链接形态走租借池,链接形态新建。
+        bool linked = ct.CanBeCanceled;
+        CancellationTokenSource timeout = linked
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-            : new CancellationTokenSource();
+            : PooledCts.Rent();
         try
         {
             if (_timeout != Timeout.InfiniteTimeSpan)
                 timeout.CancelAfter(_timeout);
-            return await operation(timeout.Token).ConfigureAwait(false);
+            return await operation(state, timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -254,7 +334,11 @@ public sealed class ResilienceExecutor
         }
         finally
         {
-            timeout.Dispose();
+            // R3-CTS:同 ExecuteAsync 的归还分流。
+            if (linked)
+                timeout.Dispose();
+            else
+                PooledCts.Return(timeout);
         }
     }
 

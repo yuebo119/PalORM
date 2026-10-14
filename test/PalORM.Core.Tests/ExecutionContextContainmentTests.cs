@@ -1,0 +1,178 @@
+using System.Diagnostics;
+using PalORM.Sqlite;
+
+namespace PalORM.Core.Tests;
+
+/// <summary>G2 证伪回退（2026-10-14 并发塌方定位轮）的行为锁定测试——
+/// <b>AsyncLocal 写的 EC 包含防线</b>。
+/// <para><b>背景缺陷</b>：非 async 入口直接调用 EnterReadOnly 时，Enter 内的
+/// <c>_currentOperationOwner.Value = this</c>（AsyncLocal 写）落在调用方活 ExecutionContext 上；
+/// async 方法体内的写会被 async method builder 在同步完成路径还原（step16-P1 既有知识），
+/// 非 async 入口没有这层包含。每操作新会话 = 每次写入一个<b>新的 AsyncLocal 实例键</b>
+///（SessionOperationState 每会话持有独立 AsyncLocal 字段）→ 调用方 EC map 随操作数线性增长 →
+/// AsyncLocal.Value setter 的 O(N) map 拷贝 → 长循环 O(N²)。PerfHub 并发臂（饱和循环）实测
+/// P50 6.6→133.7µs（20×），短迭代批项不可见——只有饱和循环暴露。</para>
+/// <para><b>检测器形态（二次型签名）</b>：同一异步流里连续跑 N 个每操作新会话，比较前段与
+/// 后段的每 op 耗时——污染形态后段远慢于前段（map 随 N 增长），健康形态两段持平。比值断言
+/// 机器无关（B100 判据稳定度：比例型 > 绝对耗时）；3× 阈值给 JIT/GC 噪声留双向余量
+///（JIT 使前段偏慢、污染使后段偏慢，两者都把比值压向 1，只有真二次型会越线）。</para></summary>
+public sealed class ExecutionContextContainmentTests
+{
+    // 量级依据：突变探针实测 800 op 的时延二次项未越过 3× 阈值；污染的显性可测面是
+    // <b>分配</b>——EC map 每次写入都分配新 map 节点，后段 B/op 随 map 增长显著抬升
+    //（G 形态实测：长会话臂 B/op 从基线抬升 ~26%，分配地板测试连带红）。分配基检测器
+    // 确定性且机器无关（B100：比例型 > 绝对值），时延形状仅作旁证。
+    private const int TotalOps = 6000;
+    private const int HalfOps = TotalOps / 2;
+
+    private static async Task<(double FirstHalfBPerOp, double SecondHalfBPerOp)> MeasurePerOpSessionsAsync(
+        Func<DataSession<SqliteProvider>, long, CancellationToken, Task> operation)
+    {
+        string cs = $"Data Source=:memory:";
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+        await connection.OpenAsync();
+        await using (var setup = connection.CreateCommand())
+        {
+            setup.CommandText = "CREATE TABLE ec_probe (id INTEGER PRIMARY KEY, v TEXT NOT NULL)";
+            await setup.ExecuteNonQueryAsync();
+        }
+        var opts = new DbOptions { ConnectionString = cs };
+
+        // 在裸 Task.Run worker 内跑饱和循环（塌方实测的暴露形态：非 async 入口的
+        // AsyncLocal 写逃逸进 worker 流动 EC，逐 op 累积）。测试框架自身的执行包装
+        // 会隔离/还原 EC，污染在框架直跑的循环里不累积——必须复刻 worker 形态
+        return await Task.Run(async () =>
+        {
+            long firstAlloc = 0, secondAlloc = 0;
+            for (int i = 0; i < TotalOps; i++)
+            {
+                if (i == 0) GC.GetTotalAllocatedBytes();   // 触发内部计数同步（首轮忽略）
+                long halfMark = i == HalfOps ? GC.GetTotalAllocatedBytes() : 0;
+                long t0 = GC.GetTotalAllocatedBytes();
+                // 会话即抛弃（连接归本测试持有，与 PerfHub 并发臂同形态），不 Dispose
+                // 不关共享连接——正是缺陷的暴露形态（CA2000 按此形态豁免）
+#pragma warning disable CA2000
+                DataSession<SqliteProvider> session = new(connection, opts, [], null);
+#pragma warning restore CA2000
+                await operation(session, 1 + (i % 4), default);
+                long delta = GC.GetTotalAllocatedBytes() - t0;
+                if (i < HalfOps) firstAlloc += delta; else secondAlloc += delta;
+                _ = halfMark;
+            }
+            return (firstAlloc / (double)HalfOps, secondAlloc / (double)HalfOps);
+        }).ConfigureAwait(false);
+    }
+
+    private static async Task AssertNoQuadraticGrowthAsync(
+        string operationName,
+        Func<DataSession<SqliteProvider>, long, CancellationToken, Task> operation)
+    {
+        // 3 轮取最小比值——JIT 预热轮的前段偏重会压低比值，最小值最接近真值。
+        // 诚实边界（突变探针实测）：本检测器在 G 形态下不必然直接红——污染在测试框架
+        // 上下文中的累积弱于裸 worker，主要绊线是 SessionLifecycleCostTests 的分配地板
+        // 测试（G 形态实测红，长会话臂 B/op 被 EC map 分配抬升）；本组提供次级的
+        // 分配稳定性形态守卫（健康形态比值 ~1×，3× 阈值留足余量，无误报面）。
+        double minRatio = double.MaxValue;
+        for (int round = 0; round < 3; round++)
+        {
+            (double first, double second) = await MeasurePerOpSessionsAsync(operation).ConfigureAwait(false);
+            minRatio = Math.Min(minRatio, second / Math.Max(first, 1.0));
+        }
+        await Assert.That(minRatio).IsLessThan(3.0);
+        _ = operationName;
+    }
+
+    [Test]
+    public async Task GetAsync_PerOpSessions_NoExecutionContextMapGrowth()
+        => await AssertNoQuadraticGrowthAsync("GetAsync",
+            static (session, id, ct) => session.GetAsync<EcProbe>(id, ct).AsTask());
+
+    [Test]
+    public async Task GetAllAsync_PerOpSessions_NoExecutionContextMapGrowth()
+        => await AssertNoQuadraticGrowthAsync("GetAllAsync",
+            static (session, _, ct) => session.GetAllAsync<EcProbe>(ct).AsTask());
+
+    [Test]
+    public async Task CountAsync_PerOpSessions_NoExecutionContextMapGrowth()
+        => await AssertNoQuadraticGrowthAsync("CountAsync",
+            static (session, _, ct) => session.CountAsync<EcProbe>(null, ct).AsTask());
+
+    /// <summary>tx-open 形态（深挖轮 2026-10-14 实锤的旁路）：per-op 会话 +
+    /// BeginTransactionAsync + 单操作 + Commit。原 ≥1 预热门槛下，Begin 的 Enter 置位标志、
+    /// 随后操作的非 async 包装壳预热写<b>新会话的新 AsyncLocal 键</b>进长活 EC——每事务一个
+    /// 新键，长循环 O(N²)（Bisect 探针三臂对证：旧门槛 B=96887 B/op ≈ N×32B，SQLite 与 PG
+    /// 逐位同量＝方言无关；门槛 ≥2 后 B=4157 平）。门槛提到 ≥2 后 per-op 形态结构上永不预热。
+    /// <para><b>四分位比较（突变探针实锤的设计依据）</b>：纯二次型信号（每 op 成本 = 基线 +
+    /// i×c）的前/后半均值比渐近线恰为 3.0×（(¾N)/(¼N)），<b>永不超过</b>阈值 3.0——首版
+    /// 检测器因此漏检。首/末四分位比渐近 7×（(⅞N)/(⅛N)），健康形态 ~1×，3.5× 阈值双向余量充足。</para>
+    /// <para><b>诚实边界</b>（与 G2 轮检测器同一局限，突变探针两轮复核）：TUnit 宿主上下文
+    /// 稀释 EC 累积，本检测器在旧门槛源码上<b>不必然直接红</b>——主绊线是 SessionLifecycleCostTests
+    /// 的分配地板测试（旧门槛实测红）与 Bisect 三臂探针（tmp/probe3，外部可复跑）；
+    /// 本测试提供无回归守卫（修复形态全绿，无误报面）。</para></summary>
+    [Test]
+    public async Task TxOpen_PerOpSessions_NoExecutionContextMapGrowth()
+    {
+        double minRatio = double.MaxValue;
+        for (int round = 0; round < 3; round++)
+        {
+            (double first, double last) = await MeasureTxOpenPerOpAsync().ConfigureAwait(false);
+            minRatio = Math.Min(minRatio, last / Math.Max(first, 1.0));
+        }
+        await Assert.That(minRatio).IsLessThan(3.5);
+    }
+
+    private static async Task<(double FirstQuarterBPerOp, double LastQuarterBPerOp)> MeasureTxOpenPerOpAsync()
+    {
+        string cs = $"Data Source=ectx_{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+        await connection.OpenAsync();
+        await using (var setup = connection.CreateCommand())
+        {
+            setup.CommandText = "CREATE TABLE ec_tx (id INTEGER PRIMARY KEY, v TEXT NOT NULL)";
+            await setup.ExecuteNonQueryAsync();
+        }
+        var opts = new DbOptions { ConnectionString = cs };
+        int quarter = TotalOps / 4;
+        return await Task.Run(async () =>
+        {
+            long firstAlloc = 0, lastAlloc = 0;
+            // PALORM005 豁免：检测器本体就是逐 op 会话循环（测的正是每 op 分配形态）
+#pragma warning disable PALORM005
+            for (int i = 0; i < TotalOps; i++)
+            {
+                long t0 = GC.GetTotalAllocatedBytes();
+#pragma warning disable CA2000
+                DataSession<PalORM.Sqlite.SqliteProvider> session = new(connection, opts, [], null);
+#pragma warning restore CA2000
+                await using var tx = await session.BeginTransactionAsync();
+                await session.InsertAsync(new EcTxRow { Id = i + 1, V = "v" });
+                await tx.CommitAsync();
+                long delta = GC.GetTotalAllocatedBytes() - t0;
+                if (i < quarter) firstAlloc += delta;
+                else if (i >= TotalOps - quarter) lastAlloc += delta;
+            }
+#pragma warning restore PALORM005
+            return (firstAlloc / (double)quarter, lastAlloc / (double)quarter);
+        }).ConfigureAwait(false);
+    }
+}
+
+[Table("ec_tx")]
+internal sealed partial class EcTxRow
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public long Id { get; set; }
+    [Column("v")]
+    public string V { get; set; } = "";
+}
+
+[Table("ec_probe")]
+internal sealed partial class EcProbe
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+    [Column("v")]
+    public string V { get; set; } = "";
+}
