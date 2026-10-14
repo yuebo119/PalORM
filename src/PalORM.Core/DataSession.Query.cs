@@ -10,7 +10,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>见 DataSession 主文档。（R4 预热包装同 GetAsync。）</summary>
     public ValueTask<long> CountAsync<T>(FormattableString? where = null, CancellationToken ct = default) where T : class, new()
     {
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return CountEntryAsync<T>(where, ct);
     }
@@ -133,7 +133,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>SUM 聚合。空表/全过滤时 SUM 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
     public ValueTask<decimal> SumAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
         return SumEntryAsync<T>(expression, ct);
     }
 
@@ -148,7 +148,7 @@ public sealed partial class DataSession<TProvider>
     /// TValue 可为可空值类型（如 int?）——底层类型解包见 <see cref="ConvertScalar{T}"/>（ITM-711）。</summary>
     public ValueTask<TValue?> MaxAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
         return MaxEntryAsync<T, TValue>(expression, ct);
     }
 
@@ -161,7 +161,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>MIN 聚合。TValue 限制同 MaxAsync。</summary>
     public ValueTask<TValue?> MinAsync<T, TValue>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
         return MinEntryAsync<T, TValue>(expression, ct);
     }
 
@@ -174,7 +174,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>AVG 聚合。空表/全过滤时 AVG 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
     public ValueTask<double> AvgAsync<T>(FormattableString expression, CancellationToken ct = default) where T : class, new()
     {
-        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
         return AvgEntryAsync<T>(expression, ct);
     }
 
@@ -374,7 +374,7 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<List<T>> QueryAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
         where T : class, new()
     {
-        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
         return QueryEntryAsync<T>(sql, readFromReplica, ct);
     }
 
@@ -466,7 +466,7 @@ public sealed partial class DataSession<TProvider>
     /// 抛 InvalidCastException——此类值请以 string 取回后自行 Parse。</para></summary>
     public ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
-        if (_operationState.OwnerPrewarmed) _operationState.PrewarmCurrentOperationOwner();
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
         return ScalarEntryAsync<T>(sql, readFromReplica, ct);
     }
 

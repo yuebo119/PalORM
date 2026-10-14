@@ -26,7 +26,7 @@ public static class QueryBuilderExtensions
     {
         // R4（2026-10-12）：读预热（写路径 step16-P1 同型）——Enter 的 AsyncLocal 写落在
         // 调用方持久 EC，体内守卫命中免写（每读省一次 EC 拷贝，探针 readprewarm A/B -72B/op）
-        if (builder._operationState.OwnerPrewarmed)
+        if (builder._operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             builder._operationState.PrewarmCurrentOperationOwner();
         return ToListEntryAsync(builder, ct);
     }
@@ -385,7 +385,7 @@ public static class QueryBuilderExtensions
     /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para></summary>
     public static ValueTask<T?> FirstOrDefaultAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
-        if (builder._operationState.OwnerPrewarmed)
+        if (builder._operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             builder._operationState.PrewarmCurrentOperationOwner();
         return FirstOrDefaultEntryAsync(builder, ct);
     }
@@ -569,7 +569,7 @@ public static class QueryBuilderExtensions
     public static ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue = default, bool descending = true, CancellationToken ct = default) where T : class, new()
     {
-        if (builder._operationState.OwnerPrewarmed)
+        if (builder._operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             builder._operationState.PrewarmCurrentOperationOwner();
         return ToPageEntryAsync(builder, pageSize, orderBy, lastValue, descending, ct);
     }

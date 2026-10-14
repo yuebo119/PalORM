@@ -4,6 +4,26 @@
 
 ## [未发布]
 
+### 🐛 缺陷修复：tx-open 形态 EC 泄漏（预热门槛旁路）——per-op 会话 + BeginTransaction 长循环 O(N²)，
+### TxSingleInsert 族每事务泄漏量 96924→4157 B/op（-96%，三臂探针双方言对证）
+
+- **根因**（深挖轮 Bisect 探针四变体二分 + SQLite/PG 双方言三臂对证）：step16-P1 预热门槛（≥1）有一个
+  旁路——会话首操作是 <c>BeginTransactionAsync</c> 时，其 Enter 在 async 体内被包含地置位标志，随后的
+  <c>InsertAsync</c> 等的非 async 包装壳看到标志即预热，把<b>新会话的新 AsyncLocal 键</b>写进调用方长活
+  EC。per-op 会话 + 事务形态每事务净增一个键，EC map 无界线性增长，长循环 O(N²)。
+- **探针证据**（四变体：A 空事务 1377 / B 完整 96924 / C 复用会话 2385 / D 纯插入 3676 B/op）：A/C/D 全平
+  锁定触发链为 Begin 置标志 → 操作包装壳预热写新键；96924 ≈ N×32B 为 EC map 增长的精确二次型签名；
+  SQLite 同构 Bisect（96887）与 PG（96924）逐位同量＝方言无关。PerfHub 夹具迭代数低（数百）未显形，
+  长跑后台循环（数万事务）才是暴露面。
+- **修复**：预热门槛 1→2（<c>CompletedOps</c> 计数替代 <c>OwnerPrewarmed</c> 布尔，Enter/EnterTransactionOperation
+  锁内递增，公共包装壳 ≥<c>PrewarmThreshold</c>=2 才预热）。per-op 形态（含事务共 ≤2 个操作）结构上永不
+  预热；长会话第 3 个操作起照常预热稳态（跨租期保留，池化复位分类同步登记）；修复后 B=4157 B/op（平）。
+- **检测器**：TxOpen 四分位 EC 检测器（含诚实边界标注：TUnit 宿主稀释累积，主绊线为既有分配地板测试——
+  旧门槛下实测红 + Bisect 外部探针可复跑）。四分位设计的数学依据：纯二次型前/后半比渐近 3.0× 永不过
+  阈值（首版漏检实锤），首/末四分位渐近 7×。
+- **验证**：Core 612/612（+1）· SourceGen 236/236 · Integration 真库 292/292 · gate 32/32 · 突变探针
+  （旧门槛源码：分配地板测试红 + MutableFields 分类红；修复后 612 全绿）。
+
 ### ⚡ 性能：四项深挖——UNNEST 批宽 5000→20000（BulkUpdate/PG/20000 批内 −58%、消除规划器
 翻转方差）+ SQLite 事务循环插入微项
 
