@@ -107,6 +107,8 @@ kubeconfig
 *token*.txt
 *apikey*.txt
 bench/reports/
+# 跑测会话日志（PerfCli full/smoke 自动落盘，保留最近 20 份；结果真源在 bench/results 与 history JSON，日志仅供回看）
+bench/logs/
 cov-core.xml
 *.tunit-report.json
 # 手工分析用一次性曲线视图（数据真源 bench/perfhub/results/history-*.json 已入库，视图可再生）
