@@ -1327,29 +1327,6 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private static ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
         => new(command.ExecuteNonQueryAsync(ct));
 
-    /// <summary>G2（2026-10-13 五轮全量重读微项包）：只读路径弹性分支的共享异步壳——
-    /// 非 async 入口分派器无法用 using 跨任务持有租约，由本壳在全部重试尝试完成后统一释放
-    ///（"操作门禁横跨全部重试尝试持有"的既有契约逐位保持；重试内核经 default 租约空操作）。
-    /// 每调用一个状态机盒，与非 async 化前的入口帧等量（直通分支才是净省——省掉入口帧）。</summary>
-    private static async ValueTask<TResult> ExecuteReadOnlyRetryAsync<TState, TResult>(
-        SessionOperationState.SessionOperationLease lease,
-        ResilienceExecutor executor,
-        Func<TState, CancellationToken, Task<TResult>> operation,
-        TState state,
-        CancellationToken ct)
-    {
-        try
-        {
-            return await executor.ExecuteAsync(operation, state, ct).ConfigureAwait(false);
-        }
-        finally
-        {
-            // DisposeAsync 即同步 Dispose 的 ValueTask.CompletedTask 包装（lease 契约），
-            // 经 await 形态满足 CA1849/S6966 且零额外开销
-            await lease.DisposeAsync().ConfigureAwait(false);
-        }
-    }
-
     /// <summary>将复合格式项映射为参数名，参数值保持原始对象。
     /// <para>A1（2026-10-01 全 API 逐项轮）：改走形状缓存（baseIndex 恒 0）——与 QueryBuilder
     /// 路径（<see cref="QueryBuilder{T}.FormatFormattableSql"/>）同源。格式化是

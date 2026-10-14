@@ -1000,30 +1000,24 @@ public sealed partial class DataSession<TProvider>
         return GetByKeyEntryAsync<T>(key, ct);
     }
 
-    private ValueTask<T?> GetByKeyEntryAsync<T>(object key, CancellationToken ct)
+    // ── G2 证伪回退（2026-10-14 并发塌方定位轮，勿重开此形态）──
+    // 非 async 入口调用 EnterReadOnly 时，Enter 内的 AsyncLocal 写（_currentOperationOwner.Value = this）
+    // 直接落在调用方活 ExecutionContext 上——async 方法体内的写会被 async method builder 在
+    // 同步完成路径上还原（step16-P1 既有知识，"async 方法体内写 AsyncLocal 的值不跨该调用持久"），
+    // 非 async 入口没有这层包含。每操作新会话 = 每次写入一个<b>全新的 AsyncLocal 实例键</b>
+    //（SessionOperationState 每会话两个 AsyncLocal 字段），调用方 EC map 随操作数无界线性增长，
+    // AsyncLocal.Value setter 的 O(N) map 拷贝使长循环总成本 O(N²)——PerfHub 并发臂（饱和循环）
+    // 实测 20× 塌方（P50 6.6→133.7µs，8.65×于地板），短迭代批项不可见。入口回到 async 形态
+    //（写落在 async 体内被包含），G2 的状态机盒收益（~72-96B，[推断]级）不构成重开理由。
+    private async ValueTask<T?> GetByKeyEntryAsync<T>(object key, CancellationToken ct)
         where T : class, new()
     {
-        // G2（2026-10-13 五轮微项包）：入口退化为非 async 直包分派器——租约随参下沉
-        // 执行内核（using 持有），直通分支省一个 async 状态机盒（A2 直包先例同型）；
-        // 弹性分支经 ExecuteReadOnlyRetryAsync 共享壳持租约跨全部重试（契约逐位保持）。
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
         // P1-2：三查合一（From<T> 同型）。刀1：静态缓存命中零查找；刀2：事务单次取用贯穿
         //（原 Entry 弹性检查与槽路径重设各取一次，各省一次 lock）。
-        SessionOperationState.SessionOperationLease operation;
-        EntityRuntimeInfo info;
-        DbTransaction? activeTransaction;
-        try
-        {
-            operation = EnterReadOnly();
-            info = GetEntityInfo<T>();
-            activeTransaction = GetActiveTransaction();
-        }
-        catch (Exception exception)
-        {
-            // async 方法体的同步段异常落在返回的 ValueTask 里（既有契约）——非 async 入口
-            // 以 FromException 保持逐位一致。
-            return ValueTask.FromException<T?>(exception);
-        }
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
 
         // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
         // 主连接形态（复用槽有效）。
@@ -1033,15 +1027,12 @@ public sealed partial class DataSession<TProvider>
             // ITM-798，无需事务判定）。原闭包捕获 6 变量 + this，直通时约 250-300B/op 纯浪费。
             ResilienceExecutor parallelExecutor = Volatile.Read(ref _resilience);
             if (parallelExecutor.IsPassThrough)
-                return ParallelGetByKeyCoreAsync<T>(operation, info, key, ct);
-            // R4-λ：static lambda + 值元组状态，闭包归零（static 委托按调用点缓存）
-            // 租约由共享壳持有，重试内核经 default 租约空操作
-            return ExecuteReadOnlyRetryAsync(
-                operation, parallelExecutor,
-                static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(
-                    default, state.Info, state.Key, token).AsTask(),
+                return await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false);
+            // R4-λ:static lambda + 值元组状态,闭包归零(static 委托按调用点缓存)
+            return await parallelExecutor.ExecuteAsync(
+                static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(state.Info, state.Key, token).AsTask(),
                 (Session: this, Info: info, Key: key),
-                ct);
+                ct).ConfigureAwait(false);
         }
 
         // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）。
@@ -1050,48 +1041,40 @@ public sealed partial class DataSession<TProvider>
         // 浪费；非直通分支才构造捕获委托（重试需要）。
         ResilienceExecutor getByKeyExecutor = Volatile.Read(ref _resilience);
         if (getByKeyExecutor.IsPassThrough || activeTransaction is not null)
-            return GetByKeyCoreAsync<T>(operation, info, activeTransaction, key, ct);
+            return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
         // R4-λ:static lambda + 值元组状态,闭包归零
-        return ExecuteReadOnlyRetryAsync(
-            operation, getByKeyExecutor,
-            static (state, token) => state.Session.GetByKeyCoreAsync<T>(
-                default, state.Info, state.Tx, state.Key, token).AsTask(),
+        return await getByKeyExecutor.ExecuteAsync(
+            static (state, token) => state.Session.GetByKeyCoreAsync<T>(state.Info, state.Tx, state.Key, token).AsTask(),
             (Session: this, Info: info, Tx: activeTransaction, Key: key),
-            ct);
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>GetAsync 并行读作用域分支的执行核心（R3 抽出）：参数直传不捕获，
     /// 直通直调与弹性重试共用。失败时池连接丢弃（A1 语义），成功归还。
-    /// 刀1：签名改携 EntityRuntimeInfo（features/工厂/列名/表名一次取全）。
-    /// G2（五轮微项包）：租约随参下沉（using 持有）——直通分支由非 async 入口直包，
-    /// 弹性分支经 default 租约空操作（真租约在共享壳）。</summary>
+    /// 刀1：签名改携 EntityRuntimeInfo（features/工厂/列名/表名一次取全）。</summary>
     private async ValueTask<T?> ParallelGetByKeyCoreAsync<T>(
-        SessionOperationState.SessionOperationLease operation,
         EntityRuntimeInfo info, object key, CancellationToken token)
         where T : class, new()
     {
-        using (operation)
+        string commandText = GetGetByKeySqlFast<T>(info);
+        DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
+        bool healthy = false;
+        try
         {
-            string commandText = GetGetByKeySqlFast<T>(info);
-            DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
-            bool healthy = false;
-            try
-            {
-                await using DbCommand cmd = connection.CreateCommand();
-                cmd.CommandText = commandText;
-                cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-                BindGeneratedKeyParameter<T>(cmd, key);
-                BindDefaultFilterParameters(cmd, info.Features);
-                await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-                T? row = await reader.ReadAsync(token).ConfigureAwait(false)
-                    ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
-                healthy = true;
-                return row;
-            }
-            finally
-            {
-                await ReleaseOrDiscardReadConnectionAsync(connection, healthy).ConfigureAwait(false);
-            }
+            await using DbCommand cmd = connection.CreateCommand();
+            cmd.CommandText = commandText;
+            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters(cmd, info.Features);
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            T? row = await reader.ReadAsync(token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
+            healthy = true;
+            return row;
+        }
+        finally
+        {
+            await ReleaseOrDiscardReadConnectionAsync(connection, healthy).ConfigureAwait(false);
         }
     }
 
@@ -1099,40 +1082,35 @@ public sealed partial class DataSession<TProvider>
     /// 弹性重试共用——语义与原内联闭包逐位一致（复用槽晋升/新建命令/单行物化）。
     /// P1-2：首参由注册表快照改为 CRUD 元数据（合并视图携带，晋升判定免二次查找）。
     /// 刀1：改携完整 EntityRuntimeInfo；刀2：事务由调用方单次取用传入；刀3：槽命中路径
-    /// 守卫式重设（Transaction/CommandTimeout 同值不重设，省 SqliteCommand setter 重验证）。
-    /// G2（五轮微项包）：租约随参下沉（using 持有；弹性重试路径传 default 空操作）。</summary>
+    /// 守卫式重设（Transaction/CommandTimeout 同值不重设，省 SqliteCommand setter 重验证）。</summary>
     private async ValueTask<T?> GetByKeyCoreAsync<T>(
-        SessionOperationState.SessionOperationLease operation,
         EntityRuntimeInfo info, DbTransaction? activeTransaction, object key, CancellationToken token)
         where T : class, new()
     {
-        using (operation)
+        // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
+        // F6b：4 槽静态缓存零字典查找（原 FilterForms + GetByKeySql 两次元组键哈希/读）
+        string commandText = GetGetByKeySqlFast<T>(info);
+
+        // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
+        // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
+        // 按命令实例生效，换命令即重编译）。
+        DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, info.Crud, activeTransaction);
+        if (reused is not null)
         {
-            // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
-            // F6b：4 槽静态缓存零字典查找（原 FilterForms + GetByKeySql 两次元组键哈希/读）
-            string commandText = GetGetByKeySqlFast<T>(info);
-
-            // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
-            // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
-            // 按命令实例生效，换命令即重编译）。
-            DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, info.Crud, activeTransaction);
-            if (reused is not null)
-            {
-                await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
-                return await reusedReader.ReadAsync(token).ConfigureAwait(false)
-                    ? ((Func<DbDataReader, T>)info.RowFactory)(reusedReader) : default;
-            }
-
-            await using DbCommand cmd = CreateCommand(activeTransaction);
-            cmd.CommandText = commandText;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            BindGeneratedKeyParameter<T>(cmd, key);
-            BindDefaultFilterParameters(cmd, info.Features);
-
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            return await reader.ReadAsync(token).ConfigureAwait(false)
-                ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
+            await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
+            return await reusedReader.ReadAsync(token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)info.RowFactory)(reusedReader) : default;
         }
+
+        await using DbCommand cmd = CreateCommand(activeTransaction);
+        cmd.CommandText = commandText;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        BindGeneratedKeyParameter<T>(cmd, key);
+        BindDefaultFilterParameters(cmd, info.Features);
+
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+        return await reader.ReadAsync(token).ConfigureAwait(false)
+            ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
     }
 
     /// <summary>查询全表。（R4 预热包装同 <see cref="GetAsync{T}"/>。）</summary>
@@ -1144,67 +1122,48 @@ public sealed partial class DataSession<TProvider>
         return GetAllEntryAsync<T>(ct);
     }
 
-    private ValueTask<List<T>> GetAllEntryAsync<T>(CancellationToken ct)
+    // G2 证伪回退（2026-10-14，勿重开非 async 租约入口）：理由见 GetByKeyEntryAsync 上方登记
+    private async ValueTask<List<T>> GetAllEntryAsync<T>(CancellationToken ct)
         where T : class, new()
     {
-        // G2（五轮微项包）：非 async 直包分派器（GetByKeyEntryAsync 同型）——租约随参下沉
-        // GetAllCoreAsync（using 持有），直通分支省一个 async 状态机盒；弹性分支经共享壳
-        // 持租约跨全部重试。
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 GetAsync 和 From<T> 对齐。
         // P1-2：三查合一（From<T>/GetByKey 同型，合并视图一次取全）。刀1：静态缓存零查找；
         // 刀2：事务单次取用（原弹性检查与 lease 内 CreateCommand 各取一次）。
-        SessionOperationState.SessionOperationLease operation;
-        EntityRuntimeInfo info;
-        DbTransaction? activeTransaction;
-        try
-        {
-            operation = EnterReadOnly();
-            info = GetEntityInfo<T>();
-            activeTransaction = GetActiveTransaction();
-        }
-        catch (Exception exception)
-        {
-            return ValueTask.FromException<List<T>>(exception);
-        }
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
 
         // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略（C10 直通直调，同 GetAsync）。
         ResilienceExecutor getAllExecutor = Volatile.Read(ref _resilience);
         if (getAllExecutor.IsPassThrough || activeTransaction is not null)
-            return GetAllCoreAsync<T>(operation, info, activeTransaction, ct);
-        // R4-λ:static lambda + 值元组状态,闭包归零;租约由共享壳持有
-        return ExecuteReadOnlyRetryAsync(
-            operation, getAllExecutor,
-            static (state, token) => state.Session.GetAllCoreAsync<T>(
-                default, state.Info, state.Tx, token).AsTask(),
+            return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
+        // R4-λ:static lambda + 值元组状态,闭包归零
+        return await getAllExecutor.ExecuteAsync(
+            static (state, token) => state.Session.GetAllCoreAsync<T>(state.Info, state.Tx, token).AsTask(),
             (Session: this, Info: info, Tx: activeTransaction),
-            ct);
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>GetAllAsync 的执行核心（C10 抽出）：参数直传不捕获，直通直调与弹性重试共用。
-    /// 刀1：改携 EntityRuntimeInfo（forms/绑定经 features 省查找）；刀2：事务传入。
-    /// G2（五轮微项包）：租约随参下沉（using 持有；弹性重试路径传 default 空操作）。</summary>
+    /// 刀1：改携 EntityRuntimeInfo（forms/绑定经 features 省查找）；刀2：事务传入。</summary>
     private async ValueTask<List<T>> GetAllCoreAsync<T>(
-        SessionOperationState.SessionOperationLease operation,
         EntityRuntimeInfo info, DbTransaction? activeTransaction, CancellationToken token)
         where T : class, new()
     {
-        using (operation)
-        {
-            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
-            DbCommand cmd = lease.Command;
-            // G4（五轮微项包）：完整 SQL 走 4 槽静态缓存（F6b 同型，原 per-(Type,Dialect,forms) 字典）。
-            cmd.CommandText = GetGetAllSqlFast<T>(info);
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            BindDefaultFilterParameters(cmd, info.Features);
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
+        // G4（五轮微项包）：完整 SQL 走 4 槽静态缓存（F6b 同型，原 per-(Type,Dialect,forms) 字典）。
+        cmd.CommandText = GetGetAllSqlFast<T>(info);
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        BindDefaultFilterParameters(cmd, info.Features);
 
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
-            List<T> list = await ResultListReader.ReadAllAsync(
-                reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
-            RecordMaterializedCount<T>(list.Count);
-            lease.MarkHealthy();
-            return list;
-        }
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+        // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
+        List<T> list = await ResultListReader.ReadAllAsync(
+            reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
+        RecordMaterializedCount<T>(list.Count);
+        lease.MarkHealthy();
+        return list;
     }
 
     /// <summary>物化容量启发（step8-T6/M3-2）：会话内记录 (实体类型 → 上次物化行数)，

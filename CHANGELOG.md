@@ -4,6 +4,28 @@
 
 ## [未发布]
 
+### 🐛 缺陷修复：G2 入口扁平化引入 SQLite 并发饱和循环 20× 塌方（AsyncLocal 写逃逸调用方 ExecutionContext）
+
+- **根因**（2026-10-14 并发塌方定位轮，单因探针 + 文件级二分钉死）：G2 把 GetByKey/GetAll/聚合
+  入口改为非 async 直包分派器后，EnterReadOnly 内的 `_currentOperationOwner.Value = this`
+  （AsyncLocal 写）直接落在调用方活 ExecutionContext 上——async 方法体内的写会被 async method
+  builder 在同步完成路径还原（step16-P1 既有知识），非 async 入口没有这层包含。每操作新会话 =
+  每次写入一个<b>全新的 AsyncLocal 实例键</b>（SessionOperationState 每会话独立 AsyncLocal 字段），
+  调用方 EC map 随操作数无界线性增长，AsyncLocal.Value setter 的 O(N) map 拷贝使长循环总成本
+  O(N²)。
+- **暴露面与发现路径**：PerfHub 并发臂（2s 饱和循环 ~万级 op）P50 6.6→133.7µs（20×）、
+  ops/s 139k→6.7k；短迭代批项（几十 op）完全不可见——G 包当日全量验证 Core 605 全绿未拦住。
+  单因探针（tmp/conc-probe）+ 三级二分（G 包范围 → GetByKey 三方法 → using 块/入口形态/EC 机制）
+  定位；同二进制内自对照（微计时 16µs vs 饱和循环 163µs）与线程线性扩展签名共同钉死机制。
+- **修复**：三个入口回退 async 形态（Enter 的 AsyncLocal 写回落 async 体内被包含），ExecuteReadOnlyRetryAsync
+  共享壳随之退役；G1/G3/G4/G5/G7 保留（无 Enter 调用面，不含此风险）。**勿重开非 async 租约入口**
+  （除非运行时改变 EC 包含语义）——G2 的状态机盒收益（~72-96B，[推断] 级）不构成理由。
+- **验证**：探针读 464k ops/s（修复前 32k）；回归批 Concurrent_Mixed80_20/SQLite PalORM **144k ops/s、
+  P50 6.5µs**（G 形态 6.7k/133.7µs，前 G 健康臂 139k/6.6µs）——完全恢复。突变探针：G 形态 6 红
+ （含既有 PerOperationVsLongLived 分配地板测试，主绊线）/修复 610 全绿。新增分配基 EC 包含检测器 ×3
+  （含诚实边界标注：框架上下文累积弱于裸 worker，主绊线为既有分配地板测试）。全套：
+  ci.slnf --no-incremental 0W0E · Core 610/610 · SourceGen 236/236 · Integration 292/292。
+
 ### ⚡ 性能：SQLite 3.54 全面适配——optimize=0x10002 进宽分支 PRAGMA 组 + 引擎升级收益实测
 
 - **optimize=0x10002**（SQLite 3.54 适配轮）：官方对长生命周期连接的 first-open 推荐形态
