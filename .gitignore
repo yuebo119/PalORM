@@ -109,3 +109,5 @@ kubeconfig
 bench/reports/
 cov-core.xml
 *.tunit-report.json
+# 手工分析用一次性曲线视图（数据真源 bench/perfhub/results/history-*.json 已入库，视图可再生）
+perf-curve.html
