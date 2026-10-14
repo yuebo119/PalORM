@@ -135,6 +135,13 @@ internal sealed class SessionOperationState
             _activeOperationOwner = this;
             // step16-P1：同值守卫——公共入口预热后（调用方 EC 值持久流动进来）命中即免写；
             // 未预热的路径（内部互调/旧入口）miss 时照写，语义不变（见 PrewarmCurrentOperationOwner）
+            //
+            // ⚠ EC 包含绊线（2026-10-14 G2 证伪轮）：本 AsyncLocal 写只允许发生在 async 方法
+            // 体内（builder 同步完成路径会还原 EC）——非 async 调用使写逃逸调用方活 EC，
+            // per-op 会话 = 新 AsyncLocal 实例键 → EC map 无界增长 → O(N²)（SQLite 并发 20×
+            // 塌方实测）。同步上下文需要门禁时用 <see cref="EnterConfigGate"/>（无 AsyncLocal 写）；
+            // ArchitectureInvariantTests.EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment
+            // 机械守卫本纪律。
             if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
                 _currentOperationOwner.Value = _activeOperationOwner;
             OwnerPrewarmed = true;
@@ -143,6 +150,29 @@ internal sealed class SessionOperationState
             _activeOperation = null;
             return new SessionOperationLease(
                 this, _activeOperationOwner);
+        }
+    }
+
+    /// <summary>配置门（EC 包含绊线轮，2026-10-14）：同步配置方法（IgnoreFilters/WithTenant/
+    /// AddInterceptor/WithIsolationLevel/UpdateResilience）的互斥门禁——守卫与 <see cref="Enter"/>
+    /// 逐位一致，<b>但不做 AsyncLocal owner 写</b>：这些方法是同步签名（链式 API），写会逃逸
+    /// 调用方活 ExecutionContext（G2 根因的静态面：per-op 会话 + WithTenant 的长循环同样累积
+    /// EC map）。owner 仍置 <c>_activeOperationOwner=this</c> 使 <c>Exit(owner)</c> 配对。
+    /// 安全性来源：租约释放在同步方法 using 内即取即还，无需跨 await 追踪 owner。</summary>
+    internal SessionOperationLease EnterConfigGate()
+    {
+        lock (_sync)
+        {
+            ThrowIfEnterBlocked(false);
+            if (_isActive || _activeReadLeases > 0)
+            {
+                throw new InvalidOperationException(
+                    "DataSession already has an active database operation.");
+            }
+            _activeOperationOwner = this;
+            _isActive = true;
+            _activeOperation = null;
+            return new SessionOperationLease(this, _activeOperationOwner);
         }
     }
 
