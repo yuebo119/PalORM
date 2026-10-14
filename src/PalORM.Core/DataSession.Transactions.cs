@@ -169,7 +169,7 @@ public sealed partial class DataSession<TProvider>
                 if (ShouldReplayPostCommitActions(commitAttempted, commitSucceeded, exception))
                     ReplayPostCommitActions();
                 else
-                    _operationState.DiscardPostCommitActions();
+                    _operationState.DiscardPostCommitBackfills();
                 await _operationState.DisposeTransactionResourcesAsync(exception)
                     .ConfigureAwait(false);
                 // T1（v5.6.0）：提交失败且非 SQLite（服务端已终结事务）时跳过回滚——
@@ -216,13 +216,14 @@ public sealed partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>提交成功后回放延迟的提交后动作（TX-004）——空清单零开销。</summary>
+    /// <summary>提交成功后回放延迟的提交后回填（TX-004）——空清单零开销。
+    /// W2：回填以类型化元组存储，回放即逐条调 backfill(entity, id)（无闭包解包）。</summary>
     private void ReplayPostCommitActions()
     {
-        if (_operationState.TakePostCommitActions() is { } actions)
+        if (_operationState.TakePostCommitBackfills() is { } backfills)
         {
-            foreach (Action action in actions)
-                action();
+            foreach ((Action<object, long> backfill, object entity, long id) in backfills)
+                backfill(entity, id);
         }
     }
 
@@ -391,7 +392,7 @@ public sealed partial class DataSession<TProvider>
                 if (ShouldReplayPostCommitActions(commitAttempted, commitSucceeded, exception))
                     ReplayPostCommitActions();
                 else
-                    _operationState.DiscardPostCommitActions();
+                    _operationState.DiscardPostCommitBackfills();
             }
             if (ownsTransaction
                 && (!commitAttempted

@@ -1472,6 +1472,176 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    public async Task DialectGating_NonPgTarget_OmitsPgFamily_AndRegistryPassesNull()
+    {
+        // R3-S4（2026-10-12）：PalORMTargetDialects=mysql 时——CommandFactory 不发射 PG 专属
+        // 方法族（COPY 写入器 / 删除键数组 / UNNEST 逐列数组三件套 ×2），注册侧对应参数为
+        // null（运行时回退路径既有）；三方言共有的 ConvertDeleteKey 不门控。缺省全发射由
+        // 快照基线锁定（本套件快照未设该属性，逐位包含全家族）。
+        const string source = """
+            using PalORM;
+            [Table("gate_probe")]
+            public sealed partial class GateProbeEntity
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+                [Column("qty")] public int Qty { get; set; }
+            }
+            """;
+        var options = new Dictionary<string, string>
+        {
+            ["build_property.PalORMTargetDialects"] = "mysql",
+        };
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "DialectGateConsumer", options, []);
+
+        string commandFactory = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("CommandFactory", StringComparison.Ordinal))];
+        await Assert.That(commandFactory).DoesNotContain("CopyWriteRow");
+        await Assert.That(commandFactory).DoesNotContain("BuildDeleteKeyArray");
+        await Assert.That(commandFactory).DoesNotContain("FillUpdateColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("FillUpsertColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("CreateUpdateColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("CreateUpsertColumnArrays");
+        await Assert.That(commandFactory).DoesNotContain("ColumnArrayElementTypes");
+        await Assert.That(commandFactory).Contains("ConvertDeleteKey");
+
+        string registry = result.GeneratedSources["PalORM_Registry.g.cs"];
+        await Assert.That(registry).Contains("copyWriteRow: null");
+        await Assert.That(registry).Contains("buildDeleteKeyArray: null");
+        await Assert.That(registry).Contains("fillUpdateColumnArrays: null");
+        await Assert.That(registry).Contains("fillUpsertColumnArrays: null");
+
+        // 编译零错误：门控后生成物不得有悬空方法引用（CS0103 等）
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
+    public async Task CopyRowWrite_ByteAndCharColumns_EmittedWithWidenedMapping()
+    {
+        // R4（2026-10-12 扩面）：byte → WriteInt16（PG SMALLINT 直写）、char → WriteString
+        //（值表达式包 .ToString()）；含 byte/char 但无其他不支持列的实体不再整体回退参数池。
+        const string source = """
+            using PalORM;
+            [Table("copy_widen_probe")]
+            public sealed partial class CopyWidenEntity
+            {
+                [Key] public long Id { get; set; }
+                [Column("b")] public byte B { get; set; }
+                [Column("c")] public char C { get; set; }
+                [Column("n")] public char? N { get; set; }
+                [Column("s")] public string S { get; set; } = "";
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string commandFactory = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("CommandFactory", StringComparison.Ordinal))];
+
+        await Assert.That(commandFactory).Contains("CopyWriteRow");
+        // 自增键不参与 INSERT：B/C/N/S 的 COPY 序号为 0/1/2/3
+        await Assert.That(commandFactory).Contains("sink.WriteInt16(0, entity.B)");
+        await Assert.That(commandFactory).Contains("sink.WriteString(1, entity.C.ToString())");
+        // nullable char：null 分流 WriteNull，非 null 侧 ToString（char?.ToString() 在非空
+        // 分支等价 char.ToString()）
+        await Assert.That(commandFactory).Contains("sink.WriteString(2, entity.N.ToString())");
+        await Assert.That(commandFactory).Contains("sink.WriteNull(2)");
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
+    public async Task CopyRowWrite_DateOnlyTimeOnlyColumns_EmittedWithTypedWrites()
+    {
+        // P2-2（2026-10-12 全量重读扩面）：DateOnly → WriteDateOnly、TimeOnly → WriteTimeOnly
+        //（Npgsql 6+ 的 PG date/time 即 DateOnly/TimeOnly）；含 DateOnly/TimeOnly 但无其他
+        // 不支持列（TimeSpan 等）的实体不再整体回退参数池。nullable 分支 null→WriteNull、
+        // 非 null 侧 .Value 解包（NeedsValueUnwrap 对非 string/bytes 定型方法自动适用）。
+        const string source = """
+            using System;
+            using PalORM;
+            [Table("copy_dot_probe")]
+            public sealed partial class CopyDotEntity
+            {
+                [Key] public long Id { get; set; }
+                [Column("d")] public DateOnly D { get; set; }
+                [Column("t")] public TimeOnly T { get; set; }
+                [Column("nd")] public DateOnly? Nd { get; set; }
+                [Column("nt")] public TimeOnly? Nt { get; set; }
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string commandFactory = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("CommandFactory", StringComparison.Ordinal))];
+
+        await Assert.That(commandFactory).Contains("CopyWriteRow");
+        // 自增键不参与 INSERT：D/T/Nd/Nt 的 COPY 序号为 0/1/2/3
+        await Assert.That(commandFactory).Contains("sink.WriteDateOnly(0, entity.D)");
+        await Assert.That(commandFactory).Contains("sink.WriteTimeOnly(1, entity.T)");
+        await Assert.That(commandFactory).Contains("sink.WriteDateOnly(2, entity.Nd.Value)");
+        await Assert.That(commandFactory).Contains("sink.WriteNull(2)");
+        await Assert.That(commandFactory).Contains("sink.WriteTimeOnly(3, entity.Nt.Value)");
+        await Assert.That(commandFactory).Contains("sink.WriteNull(3)");
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
+    public async Task SqlFile_GeneratedDoc_UsesRelativePath_NotAbsolute()
+    {
+        // E24（2026-10-12 确定性修复）：来源标注用特性声明的相对路径——绝对路径含开发机
+        // 盘符/目录，同一源码在不同机器产出不同 .g.cs，破坏可复现构建与增量缓存。
+        const string source = """
+            using PalORM;
+            public static partial class Queries
+            {
+                [SqlFile("Queries/get.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-tests");
+        string fullPath = Path.Combine(projectDir, "Queries", "get.sql");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+        var texts = new AdditionalText[] { new TestAdditionalText(fullPath, "SELECT 1;") };
+
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "SqlFileConsumer", options, texts);
+        string generated = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("SqlFile", StringComparison.Ordinal))];
+
+        await Assert.That(generated).Contains("Queries/get.sql");
+        await Assert.That(generated).DoesNotContain(projectDir);
+    }
+
+    [Test]
+    public async Task SqlFile_ProviderSectionReassembly_UsesLfNewlines()
+    {
+        // E25（2026-10-12 确定性修复）：段重组显式 '\n'——AppendLine 的换行符随宿主 OS 变化
+        //（Windows \r\n / Linux \n），同一 .sql 在不同 OS 产出不同的嵌入常量字节。
+        const string source = """
+            using PalORM;
+            public static partial class Queries
+            {
+                [SqlFile("Queries/sections.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-tests");
+        string fullPath = Path.Combine(projectDir, "Queries", "sections.sql");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+        var texts = new AdditionalText[]
+        {
+            new TestAdditionalText(fullPath, "-- @all\nSELECT 1;\nSELECT 2;\n-- @pg\nSELECT pg;")
+        };
+
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "SqlFileConsumer", options, texts);
+        string generated = result.GeneratedSources[
+            result.GeneratedSources.Keys.Single(k => k.StartsWith("SqlFile", StringComparison.Ordinal))];
+
+        // 选中段（@all）逐行重组成嵌入内容：行间必须是 \n（旧实现在 Windows 上是 \r\n）
+        await Assert.That(generated).Contains("SELECT 1;\nSELECT 2;");
+        await Assert.That(generated).DoesNotContain("SELECT 1;\r\nSELECT 2;");
+    }
+
+    [Test]
     public async Task SqlFile_MissingAdditionalFile_EmitsObsoleteErrorPlaceholder()
     {
         // .sql 不在 AdditionalFiles（未注入或文件不存在）→ Obsolete(error) 占位可检索

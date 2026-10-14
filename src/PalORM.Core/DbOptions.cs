@@ -49,8 +49,9 @@ public sealed record DbOptions
     /// 其他层兜底——并发写 BUSY 由引擎内 <c>PRAGMA busy_timeout=5000</c> 吸收（Provider 连接
     /// 初始化默认设置），重试层到不了那一层；余下需要重试的只有连接握手/IO 级故障。弹性机构的
     /// 每查询固定成本（CTS + 委托 + 执行器，探针 2~29µs/op）在 RTT≈0 的本地库上是净开销。
-    /// 本地部署建议显式直通：<c>new DbOptions { ConnectionString = cs } with { MaxRetries = 0 }</c>。
-    /// 远程库（PG/MySQL）维持默认——瞬时故障重试是网络库的真实需求。</para></summary>
+    /// 本地部署建议显式直通：<c>new DbOptions { ConnectionString = cs } with { MaxRetries = 0, CircuitBreakerThreshold = 0 }</c>
+    /// ——两项都必须置零（直通判定 = 零重试<b>且</b>熔断禁用，只置 MaxRetries 时默认阈值 5 的
+    /// 熔断器仍使弹性管线生效）。远程库（PG/MySQL）维持默认——瞬时故障重试是网络库的真实需求。</para></summary>
     public int MaxRetries { get; init; } = 3;
 
     /// <summary>重试退避策略（默认 100ms→200ms→400ms，含 50%~100% 抖动）。</summary>
@@ -110,7 +111,8 @@ public sealed record DbOptions
 
     /// <summary>原生 SQL 查询（QueryAsync 家族）首行列名校验（默认开启，ADR-A）。
     /// 结果集按 ordinal 映射实体，列序错位会静默交换同型列数据；开启后首行比对
-    /// 结果列名与实体声明序列名，不匹配抛异常。仅校验首行，热路径零额外开销。
+    /// 结果列名与实体声明序列名，不匹配抛异常。仅校验首行——每查询一次、O(映射列数) 的
+    /// GetName 比较（亚微秒级，远低于一次数据库往返），不是严格零开销。
     /// 使用列别名/表达式列的查询需关闭此项并自行保证列序。</summary>
     public bool ValidateQueryColumnOrder { get; init; } = true;
 

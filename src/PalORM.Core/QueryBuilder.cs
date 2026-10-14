@@ -30,8 +30,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// 最多多一次读连接重建，无害）。未配置读路由时为 null。</summary>
     internal readonly Func<ValueTask>? _readConnInvalidator;
     /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——执行路径在读操作完成后调用；
-    /// 会话侧仅在并行读作用域内对池内连接生效（其余为空操作）。</summary>
-    internal readonly Func<DbConnection, ValueTask>? _readConnReturner;
+    /// 会话侧仅在并行读作用域内对池内连接生效（其余为空操作）。第二参数为读是否成功完成（A1）：
+    /// 失败则丢弃池连接而非归还。</summary>
+    internal readonly Func<DbConnection, bool, ValueTask>? _readConnReturner;
     internal readonly SqlDialect _dialect;
     /// <summary>r5-S2：会话隔离级别（WithIsolationLevel 透传，null=驱动默认）。</summary>
     internal readonly System.Data.IsolationLevel? _isolationLevel;
@@ -93,6 +94,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>A9（2026-10-01）：读查询命令复用槽（会话所有，builder 仅持引用）——
     /// 惰性晋升复用同 SQL 文本的命令，见 TryAcquireReusableSelectCommand。</summary>
     internal readonly ReusableQuerySlot? _querySlot;
+    /// <summary>P0-2（2026-10-12 全量重读）：数组参数委托（UNNEST 族同源的 Provider 能力面）
+    /// ——WhereIn/WhereNotIn 的 PG 数组形态用；null（MySQL/SQLite 接口默认）时回退占位符。</summary>
+    internal readonly Func<string, Array, DbParameter?>? _createArrayParameter;
 
     internal QueryBuilder(QueryBuilderContext<T> ctx)
     {
@@ -134,6 +138,7 @@ public struct QueryBuilder<T> where T : class, new()
         _transaction = null;
         _sensitiveMasks = null;
         _querySlot = ctx.QuerySlot;
+        _createArrayParameter = ctx.Services.CreateArrayParameter;
     }
 
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
@@ -261,6 +266,15 @@ public struct QueryBuilder<T> where T : class, new()
                 AddClause(QueryClauseKind.Where, HasClause(QueryClauseKind.Where) ? "AND 1=0" : "1=0");
             return this;
         }
+        // P0-2（2026-10-12 全量重读）：PG 数组形态——`col = ANY(@pN)` / `col != ALL(@pN)`，
+        // 整个列表一个类型化数组参数（UNNEST 族在批量写路径的同构推广，查询路径的漏项）。
+        // 收益不止参数对象（500 值省 499 个参数对象与 ~3KB SQL 文本）：SQL 文本与值数量解耦后
+        // 形状缓存对 WhereIn 从几乎无效（占位符文本长度随值数变化，每个数量都是新形状）变为
+        // 恒命中。元素类型不在 Provider 支持面（char/uint 等）或 Provider 无数组能力时回退
+        // 下方占位符形态。NULL 语义逐位等价：数组 NULL 元素在 = ANY 下永不匹配（同 IN）；
+        // != ALL 含 NULL 元素时全部行被过滤（同 NOT IN 的经典语义）。
+        if (TryAddArrayInClause(column, items, negated))
+            return this;
         // ITM-514: 分批规避单条 IN 的参数上限，但参数总量仍受协议约束——超限
         // 应改用临时表 JOIN 或分批查询，而非静默生成越界 SQL。
         // ITM-562: 判定按"存量 + 增量"累计——两次 40k 的 WhereIn 各自增量合规但总量越界，
@@ -300,6 +314,42 @@ public struct QueryBuilder<T> where T : class, new()
         }
         finally { sb.Dispose(); }
         return this;
+    }
+
+    /// <summary>P0-2：WhereIn/WhereNotIn 的 PG 数组形态子句——成功即已 AddClause 并返回 true。
+    /// <para>守卫链：Provider 数组能力委托非空、方言为 PG（ANY/ALL 是 PG 专有语法，能力检测
+    /// 与 SQL 构造同源——UseUnnestArraysForUpdate 同纪律）、Provider 接受该元素类型
+    ///（<see cref="IDbProvider.CreateArrayParameter"/> 对元素类型返回 null = 不支持，char/uint
+    /// 等在映射面外）。数组元素类型由 TValue 编译期类型决定（Nullable&lt;T&gt; 由 Provider 解包
+    /// 映射），泛型数组 new 是 AOT 安全形态。</para>
+    /// <para><b>防御性拷贝</b>：值在构建期快照进新数组——调用方随后变更输入集合不得影响已构建
+    /// 子句（占位符形态同样在构建期快照进参数，两路径语义对齐）。</para></summary>
+    private bool TryAddArrayInClause<TValue>(string column, IReadOnlyList<TValue> items, bool negated)
+    {
+        Func<string, Array, DbParameter?>? createArray = _createArrayParameter;
+        if (createArray is null || _dialect != SqlDialect.PostgreSql)
+            return false;
+
+        var values = new TValue[items.Count];
+        for (int i = 0; i < items.Count; i++)
+            values[i] = items[i];
+        DbParameter? parameter = createArray(GetParameterName(_parameterCount), values);
+        if (parameter is null)
+            return false;   // Provider 不接受该元素类型：调用方回退占位符形态
+
+        var sb = new ValueStringBuilder(stackalloc char[128]);
+        try
+        {
+            if (HasClause(QueryClauseKind.Where)) sb.Append("AND ");
+            sb.Append('(');
+            sb.Append(column);
+            sb.Append(negated ? " != ALL(" : " = ANY(");
+            sb.Append(parameter.ParameterName);
+            sb.Append("))");
+            AddClause(QueryClauseKind.Where, sb.ToString(), [parameter]);
+            return true;
+        }
+        finally { sb.Dispose(); }
     }
 
     /// <summary>把 items 按 500 一批写成 <c>col IN (@p…)</c> 片段，批间以 <paramref name="batchSeparator"/>
@@ -642,9 +692,10 @@ public struct QueryBuilder<T> where T : class, new()
         => _readConnInvalidator is null ? default : _readConnInvalidator();
 
     /// <summary>归还并行读连接（ARCH-001，2026-09-23）：读操作执行完成后调用，把作用域内池连接
-    /// 交回空闲栈（会话侧仅在并行读作用域内对池内连接生效，其余为空操作）。</summary>
-    internal ValueTask ReleaseReadConnectionAsync(DbConnection connection)
-        => _readConnReturner is null ? default : _readConnReturner(connection);
+    /// 交回空闲栈；读失败（<paramref name="healthy"/> 为 false）则丢弃（A1）。
+    /// 会话侧仅在并行读作用域内对池内连接生效，其余为空操作。</summary>
+    internal ValueTask ReleaseReadConnectionAsync(DbConnection connection, bool healthy)
+        => _readConnReturner is null ? default : _readConnReturner(connection, healthy);
 
     internal DbTransaction? GetActiveTransaction()
     {
@@ -668,36 +719,17 @@ public struct QueryBuilder<T> where T : class, new()
     /// KeyLookupCommandDiag（-504B/op、-2.57µs）。
     /// <para>R-UNNESTB（2026-10-02）：命中分支不再 Clear 参数集合——PG 连接串的 auto-prepare
     /// 调优（v5.0 阶段 3.1 默认开启）下，「Clear + Add 新参数实例」会让驱动沿用 prepare 时的
-    /// 绑定值（探针 mergearray 变体 C 实测；同实例就地写 Value 正常）。调用方经
-    /// <c>TryCopyParameterValues</c> 就地写值，形状漂移则保守回退新建命令。</para></summary>
+    /// 绑定值（探针 mergearray 变体 C 实测）。故复用命令的参数集合持久持有，命中时逐位置就地
+    /// 写 Value；形状漂移则保守回退新建命令。
+    /// P1-1（2026-10-12）：命中/计数/晋升逻辑收敛至 ReusableQuerySlot.TryAcquire 单一真源
+    ///（直查族命令复用共用同一段判据），本方法只保留 From&lt;T&gt; 管线的并行读守卫。</para></summary>
     internal DbCommand? TryAcquireReusableSelectCommand(DbConnection connection, string sql)
     {
         var slot = _querySlot;
         // 并行读作用域禁用：并发 reader 不能共用命令（各走新建 + 自持连接）
         if (slot is null || _operationState.ParallelReadsEnabled)
             return null;
-
-        // 命中：同 SQL 文本 + 同连接 → 交调用方就地写参数值
-        if (slot.Command is { } cmd
-            && slot.Connection is { } cmdConn
-            && ReferenceEquals(cmdConn, connection)
-            && string.Equals(slot.Sql, sql, StringComparison.Ordinal))
-        {
-            return cmd;
-        }
-
-        slot.ServedOps++;
-        if (slot.ServedOps < ReusableQuerySlot.PromotionThreshold)
-            return null;
-
-        // 晋升：替换旧命令即释放（单操作门禁保证无飞行 reader），新建并登记
-        slot.Command?.Dispose();
-        DbCommand promoted = connection.CreateCommand();
-        promoted.CommandText = sql;
-        slot.Sql = sql;
-        slot.Connection = connection;
-        slot.Command = promoted;
-        return promoted;
+        return slot.TryAcquire(connection, sql);
     }
 
     internal void AddDefaultFilter(string condition)
@@ -711,12 +743,25 @@ public struct QueryBuilder<T> where T : class, new()
         AddClause(QueryClauseKind.DefaultFilter, sql, parameters);
     }
 
+    /// <summary>G3（2026-10-13 五轮全量重读微项包）：采用共享的无参默认过滤链头节点——
+    /// From&lt;T&gt;() 对 SoftDelete 实体注入的默认过滤子句零参数、全部成分只由 TProvider 决定，
+    /// 预建节点跨 builder 复用（链不可变，并发共享安全）。位掩码与参数计数同步维护，
+    /// 语义与 <c>AddClause(DefaultFilter, condition)</c> 逐位一致；共享节点参数恒为空数组，
+    /// _parameterCount 增量为 0。</summary>
+    internal void AdoptSharedDefaultFilterNode(ClauseNode node)
+    {
+        _clauseChain = node;
+        _materializedClauses = null;
+        _clauseBitmask |= 1 << (int)QueryClauseKind.DefaultFilter;
+    }
+
     internal QueryBuilder<T> CloneForExecution()
     {
         var clone = new QueryBuilder<T>(new QueryBuilderContext<T>(
             _conn,
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
-                _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
+                _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel,
+                _createArrayParameter),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
             _readConnInvalidator, _readConnReturner, _querySlot))
         {
@@ -763,6 +808,11 @@ public struct QueryBuilder<T> where T : class, new()
 
     internal void AddWhereComparison<TKey>(Expression<Func<T, TKey>> member,
         string operation, TKey value)
+        => AddWhereComparison(ResolveColumn(member), operation, value);
+
+    /// <summary>C16（2026-10-12 审读收敛）：预解析列名形态——ToPageAsync 对同一 orderBy
+    /// 先后调 AddWhereComparison 与 AddOrderBy，原各自做一次成员解析；调用方解析一次复用。</summary>
+    internal void AddWhereComparison<TKey>(string qualifiedColumn, string operation, TKey value)
     {
         // ITM-555：键集续页条件走 DefaultFilter 类别而非 Where——AppendWhereSection 对
         // DefaultFilter 恒以 AND 拼在用户子句组括号之外（WHERE keyset AND ((A) OR (B))）。
@@ -770,24 +820,39 @@ public struct QueryBuilder<T> where T : class, new()
         // 页间重复、分页不推进（ITM-401 括组根因的新入口，真库探针实测）。
         DbParameter parameter = CreateParameter(value);
         AddClause(QueryClauseKind.DefaultFilter,
-            $"{GetQualifiedColumnName(member)} {operation} {parameter.ParameterName}", [parameter]);
+            $"{qualifiedColumn} {operation} {parameter.ParameterName}", [parameter]);
     }
 
+    /// <summary>成员表达式 → 限定列名（C16：暴露给 ToPageAsync 单次解析复用）。</summary>
+    internal string ResolveColumn<TKey>(Expression<Func<T, TKey>> member)
+        => GetQualifiedColumnName(member);
+
     internal void AddOrderBy<TKey>(Expression<Func<T, TKey>> member, bool descending)
+        => AddOrderBy(ResolveColumn(member), descending);
+
+    internal void AddOrderBy(string qualifiedColumn, bool descending)
         => AddClause(QueryClauseKind.OrderBy,
             $"{(HasClause(QueryClauseKind.OrderBy) ? ", " : "ORDER BY ")}" +
-            $"{GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
+            $"{qualifiedColumn}{(descending ? " DESC" : "")}");
 
     internal IReadOnlyList<DbParameter> GetQueryParameters()
     {
-        List<DbParameter> parameters = GetParametersForKinds(
+        IReadOnlyList<DbParameter> parameters = GetParametersForKinds(
             _splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
         if (!_take.HasValue && !_skip.HasValue) return parameters;
-        // SHAPE-010 根解：LIMIT/OFFSET 值参数化后必须随查询绑定。占位符名从 _parameterCount
-        // 推导，与 BuildSql 内 BuildLimitClause 同源恒一致；每次现建（builder 可变，缓存参数
-        // 对象会在 Take/Skip 改值后失真），0-2 个对象的成本已在方案评审接受。
-        parameters.AddRange(BuildLimitClause().Parameters);
-        return parameters;
+        // SHAPE-010 根解：LIMIT/OFFSET 值参数化后必须随查询绑定。R3（2026-10-12）：
+        // 走 CreateLimitParameters 单一真源——免建即弃的 LIMIT 文本（原每次一个 ~60B 串）；
+        // 每次现建（builder 可变，缓存参数对象会在 Take/Skip 改值后失真）。
+        // R2-#2（2026-10-13）：parameters 可能是子句参数表的直引用（单贡献者快路径，
+        // 不得就地变异）——LIMIT 追加改组合拷贝。
+        DbParameter[] limitParameters = CreateLimitParameters();
+        if (limitParameters.Length == 0) return parameters;
+        if (parameters.Count == 0) return limitParameters;
+        var combined = new List<DbParameter>(parameters.Count + limitParameters.Length);
+        for (int i = 0; i < parameters.Count; i++)
+            combined.Add(parameters[i]);
+        combined.AddRange(limitParameters);
+        return combined;
     }
 
     internal IReadOnlyList<DbParameter> GetCountParameters()
@@ -1131,11 +1196,30 @@ public struct QueryBuilder<T> where T : class, new()
         || _selectColumns is not null || _splitQuery || _cacheKey is not null;
 
     // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
-    private List<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
+    private IReadOnlyList<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
     {
-        // PERF-005（2026-09-23）：零参数查询直接返回空表——原先仍分配 List（约 32B/查询），
-        // 而 _parameterCount == 0 时任何类别过滤的结果必然为空。
-        if (_parameterCount == 0) return [];
+        // PERF-005 + R3（2026-10-12）：零参数查询返回共享空表（原 `[]` 每次新建 List ~32B）。
+        // 不可变约定：返回共享空表的调用方不得向其 Add——GetQueryParameters 的 LIMIT 追加
+        // 已在 Count==0 时改走数组直返，新增调用方须遵守同约定。
+        // R2-#2（2026-10-13）：单贡献者快路径——恰有一个子句贡献参数时直返该子句的参数表
+        //（Where($"…") 单条件是绝对主流形态，省外层 List + 扩容数组 ~64B/查询）。
+        // 返回的子句表被调用方只读消费（AddParameters/TryCopyParameterValues/QueryContext
+        // 均不变异）；LIMIT 组合路径在 GetQueryParameters 里拷贝，不触碰本表。
+        if (_parameterCount == 0) return QueryBuilderShared.EmptyParameters;
+        IReadOnlyList<DbParameter>? single = null;
+        foreach (QueryClause clause in MaterializeClauses())
+        {
+            if (Array.IndexOf(kinds, clause.Kind) < 0) continue;
+            if (clause.Parameters.Count == 0) continue;
+            if (single is not null)
+            {
+                single = null;   // 第二个贡献者：退出扫描走聚合
+                break;
+            }
+            single = clause.Parameters;
+        }
+        if (single is not null)
+            return single;   // 单贡献者：直引用，零分配
         // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
         var parameters = new List<DbParameter>(_parameterCount);
         foreach (QueryClause clause in MaterializeClauses())
@@ -1184,12 +1268,58 @@ public struct QueryBuilder<T> where T : class, new()
         if (hasUser)
         {
             if (hasDefault) builder.Append("AND (");
-            AppendClauseKind(ref builder, QueryClauseKind.Where, separator: null);
+            AppendUserWhereClauses(ref builder);
             if (hasDefault)
             {
                 builder.TrimEnd();
                 builder.Append(") ");
             }
+        }
+    }
+
+    /// <summary>组装用户 WHERE 子句组（C16 优先级修复，2026-10-12 全量审读）。
+    /// 子句逐个带 "AND "/"OR " 前缀直接拼接时，<c>Where(A).OrWhere(B).Where(C)</c> 产出
+    /// <c>(A) OR (B) AND (C)</c>——SQL 求值为 <c>A OR (B AND C)</c>，与链式调用直觉
+    /// <c>((A) OR (B)) AND (C)</c> 不符（本方法文档承诺的用户组形态同样未实现）。
+    /// 修复：AND 前缀子句出现在顶屋 OR 之后时，为已累积组补开括号、在该 AND 前补闭括号；
+    /// 纯 AND 链、纯 OR 链与 OR 收尾链的 SQL 文本逐字不变（既有基线零扰动）。
+    /// 本方法只在形状缓存未命中的组装路径执行，两遍扫描与中间集合不进命中热路径。</summary>
+    private void AppendUserWhereClauses(ref ValueStringBuilder builder)
+    {
+        List<QueryClause> userClauses = [];
+        foreach (QueryClause clause in MaterializeClauses())
+        {
+            if (clause.Kind == QueryClauseKind.Where)
+                userClauses.Add(clause);
+        }
+        if (userClauses.Count == 0) return;
+
+        // 第一遍：标记需要补的括号。openAtStart 只在首位开一次——后续再遇 AND-after-OR
+        // 时闭括号推进即可（外层括号已覆盖更早的段），避免逐层嵌套膨胀。
+        bool topHasOr = false;
+        bool openAtStart = false;
+        bool[] closeAfter = new bool[userClauses.Count];
+        for (int i = 0; i < userClauses.Count; i++)
+        {
+            string sql = userClauses[i].Sql;
+            if (sql.StartsWith("OR ", StringComparison.Ordinal))
+            {
+                topHasOr = true;
+            }
+            else if (topHasOr && sql.StartsWith("AND ", StringComparison.Ordinal))
+            {
+                openAtStart = true;
+                closeAfter[i - 1] = true;
+                topHasOr = false;
+            }
+        }
+
+        if (openAtStart) builder.Append('(');
+        for (int i = 0; i < userClauses.Count; i++)
+        {
+            builder.Append(userClauses[i].Sql);
+            if (closeAfter[i]) builder.Append(") ");
+            else builder.Append(' ');
         }
     }
 
@@ -1244,50 +1374,41 @@ public struct QueryBuilder<T> where T : class, new()
     private (string Text, DbParameter[] Parameters) BuildLimitClause()
     {
         if (!_take.HasValue && !_skip.HasValue) return ("", System.Array.Empty<DbParameter>());
-        int literalTake = LiteralTakeValue;
-        if (literalTake != 0)
+        DbParameter[] parameters = CreateLimitParameters();
+        if (LiteralTakeValue != 0)
         {
             var literal = new ValueStringBuilder(stackalloc char[24]);
             try
             {
                 literal.Append("LIMIT ");
-                literal.Append(literalTake.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                literal.Append(LiteralTakeValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 return (literal.ToString(), System.Array.Empty<DbParameter>());
             }
             finally { literal.Dispose(); }
         }
-        // PERF-005（2026-09-23）：2 元素数组直填替代 List + [.. parameters] 二次拷贝——
-        // 每页查询省一个 List（对象 + 内部数组）与一次数组拷贝。
-        var parameters = new DbParameter[2];
-        int parameterIndex = 0;
         var sb = new ValueStringBuilder(stackalloc char[64]);
         try
         {
-            // 局部函数不可用（struct 内不能捕获 this，闭包又产生热路径分配）——
-            // 参数创建+占位符回写按分支内联（编号 = _parameterCount + 已建数）
+            // R3（2026-10-12）：参数创建收敛到 CreateLimitParameters 单一真源（编号从
+            // _parameterCount 起，SHAPE-010 契约：BuildSql 文本与 GetQueryParameters 绑定恒一致），
+            // 文本只消费已建参数的 ParameterName——原两路径各自创建，漂移即错位绑定。
             if (!_take.HasValue)
             {
                 switch (_dialect)
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        DbParameter skipParam = CreateParameter(_skip!.Value, parameterIndex);
-                        parameters[parameterIndex++] = skipParam;
-                        sb.Append(skipParam.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         sb.Append(", ");
                         sb.Append(SqlLimits.MySqlOffsetOnlyLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         break;
                     case SqlDialect.Sqlite:
                         sb.Append("LIMIT -1 OFFSET ");
-                        DbParameter sqliteSkip = CreateParameter(_skip!.Value, parameterIndex);
-                        parameters[parameterIndex++] = sqliteSkip;
-                        sb.Append(sqliteSkip.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         break;
                     default:
                         sb.Append("OFFSET ");
-                        DbParameter pgSkip = CreateParameter(_skip!.Value, parameterIndex);
-                        parameters[parameterIndex++] = pgSkip;
-                        sb.Append(pgSkip.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         break;
                 }
             }
@@ -1297,35 +1418,46 @@ public struct QueryBuilder<T> where T : class, new()
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        DbParameter mysqlSkip = CreateParameter(_skip ?? 0, parameterIndex);
-                        parameters[parameterIndex++] = mysqlSkip;
-                        sb.Append(mysqlSkip.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         sb.Append(", ");
-                        DbParameter mysqlTake = CreateParameter(_take.Value, parameterIndex);
-                        parameters[parameterIndex++] = mysqlTake;
-                        sb.Append(mysqlTake.ParameterName);
+                        sb.Append(parameters[1].ParameterName);
                         break;
                     default:
                         sb.Append("LIMIT ");
-                        DbParameter takeParam = CreateParameter(_take.Value, parameterIndex);
-                        parameters[parameterIndex++] = takeParam;
-                        sb.Append(takeParam.ParameterName);
+                        sb.Append(parameters[0].ParameterName);
                         sb.Append(" OFFSET ");
-                        DbParameter skipParam2 = CreateParameter(_skip ?? 0, parameterIndex);
-                        parameters[parameterIndex++] = skipParam2;
-                        sb.Append(skipParam2.ParameterName);
+                        sb.Append(parameters[1].ParameterName);
                         break;
                 }
             }
-            DbParameter[] result = parameterIndex switch
-            {
-                0 => System.Array.Empty<DbParameter>(),
-                1 => [parameters[0]],
-                _ => parameters,
-            };
-            return (sb.ToString(), result);
+            return (sb.ToString(), parameters);
         }
         finally { sb.Dispose(); }
+    }
+
+    /// <summary>R3（2026-10-12）：LIMIT 参数创建单一真源——BuildLimitClause（文本+参数）与
+    /// GetQueryParameters（仅参数，免建即弃文本）共用。编号从 _parameterCount 起；形态：
+    /// skip-only 单参数；take 在场恒两参数（skip 缺省 0 占位，MySQL 序为 [skip, take]，
+    /// 其余 [take, skip]，与原 BuildLimitClause 内联创建逐位一致）。</summary>
+    private DbParameter[] CreateLimitParameters()
+    {
+        if (!_take.HasValue && !_skip.HasValue) return System.Array.Empty<DbParameter>();
+        if (LiteralTakeValue != 0) return System.Array.Empty<DbParameter>();
+        if (!_take.HasValue)
+        {
+            DbParameter skipOnly = CreateParameter(_skip!.Value, 0);
+            return [skipOnly];
+        }
+        if (_dialect == SqlDialect.MySql)
+        {
+            // MySQL 裸 OFFSET 无 LIMIT 需补位哨兵：LIMIT skip, max（skip 在前）
+            DbParameter mysqlSkip = CreateParameter(_skip ?? 0, 0);
+            DbParameter mysqlTake = CreateParameter(_take.Value, 1);
+            return [mysqlSkip, mysqlTake];
+        }
+        DbParameter take = CreateParameter(_take.Value, 0);
+        DbParameter skip = CreateParameter(_skip ?? 0, 1);
+        return [take, skip];
     }
 
     private static string GetRegisteredTableName(Type entityType)
@@ -1355,6 +1487,14 @@ public struct QueryBuilder<T> where T : class, new()
         => MemberResolver.GetColumnName(member);
 }
 
+/// <summary>QueryBuilder 的非泛型共享常量载体（S2743：泛型类静态字段不跨 T 共享）。</summary>
+internal static class QueryBuilderShared
+{
+    /// <summary>零参数查询的共享空表（R3，2026-10-12）——只读共享；
+    /// 不可变约定见 QueryBuilder&lt;T&gt;.GetParametersForKinds。</summary>
+    internal static readonly List<DbParameter> EmptyParameters = [];
+}
+
 /// <summary>Provider 能力聚合——把 dialect/factory/interceptors/paramFactory/quoteIdentifier/
 /// operationState/resilience/commandTimeout 八项打包为单参数，消除 QueryBuilder 14 参 ctor 的 S107 警告。
 /// 一次构造，多个 QueryBuilder 实例共享。
@@ -1370,7 +1510,8 @@ internal readonly record struct QueryBuilderServices<T>(
     SessionOperationState OperationState,
     ResilienceExecutor Resilience,
     TimeSpan CommandTimeout,
-    System.Data.IsolationLevel? IsolationLevel = null)  // r5-S2：会话隔离级别透传（ToPageAsync 自开事务 honoring WithIsolationLevel）
+    System.Data.IsolationLevel? IsolationLevel = null,  // r5-S2：会话隔离级别透传（ToPageAsync 自开事务 honoring WithIsolationLevel）
+    Func<string, Array, DbParameter?>? CreateArrayParameter = null)  // P0-2：数组参数委托（Provider 无数组能力时为接口默认 null，WhereIn 回退占位符形态）
     where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。
@@ -1386,5 +1527,5 @@ internal readonly record struct QueryBuilderContext<T>(
     IQueryCache? QueryCache = null,
     bool ValidateColumnOrder = false,
     Func<ValueTask>? ReadConnInvalidator = null,
-    Func<DbConnection, ValueTask>? ReadConnReturner = null,
+    Func<DbConnection, bool, ValueTask>? ReadConnReturner = null,
     ReusableQuerySlot? QuerySlot = null) where T : class, new();

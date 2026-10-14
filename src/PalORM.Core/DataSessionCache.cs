@@ -6,6 +6,18 @@ namespace PalORM;
 /// 不跨 TProvider 共享（Sonar S2743）。v4.1 极致降内存优化。</summary>
 internal static class DataSessionCache
 {
+    /// <summary>R3（2026-10-12）：per-(Type, Dialect) 缓存 Upsert 列清单与冲突子句——
+    /// BuildUpsertSqlShape 原每次调用 1 LINQ 迭代器 + 2 string.Join + 插值（与
+    /// QuotedColumnsCache 同纪律；值由编译期注册表元数据唯一决定）。空 updateColumns 的
+    /// 不支持形态不缓存（异常逐次抛出，语义不变）。</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect), (string QuotedColumns, string ConflictClause)> UpsertShapeCache = new();
+
+    /// <summary>R3（2026-10-12）：per-(Type, Dialect) 缓存逐条 UPDATE 池化路径的每行参数数
+    ///（原每次调用建 probe 命令数参；哨兵语义随 B9 先例转为每进程一次）。</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect), int> UpdateRowParamsCache = new();
+
     /// <summary>per-(Type, Dialect) 缓存 selectColumns 字符串，消除每次 QuoteIdentifier + string.Join。
     /// <para><b>注意形态</b>：本缓存存的是<b>不带表名限定</b>的裸列清单（<c>"id", "status"</c>），
     /// 供 GetAllAsync/GetAsync 的 FROM 单表查询使用。需要表名限定的调用点（QueryBuilder 的
@@ -20,63 +32,22 @@ internal static class DataSessionCache
     /// <summary>per-(Type, Dialect, softDelete, tenant) 缓存默认过滤的三种拼接形态，消除每次
     /// QuoteIdentifier + 插值。<b>v5.6</b>：值由「条件文本」升级为
     /// <see cref="DefaultFilterForms"/>——三个调用点（COUNT 的裸条件、拼在既有 WHERE 之后的
-    /// 追加片段、独立 WHERE 子句）原本各自再做一次插值，现在一次查找同时拿到三种形态。</summary>
+    /// 追加片段、独立 WHERE 子句）原本各自再做一次插值，现在一次查找同时拿到三种形态。
+    ///（G4，2026-10-13 五轮微项包：GetAll/Count 组合句/聚合后缀的<b>语句级</b>缓存已迁
+    /// DataSession&lt;TProvider&gt;.SqlSlots&lt;T&gt; 闭式泛型静态槽，本字典仍服务过滤形态的
+    /// 构建期真源。）</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), DefaultFilterForms> FilterFormsCache = new();
-
-    /// <summary>per-(Type, Dialect, hasTenant, !ignoreFilters) 缓存 GetAsync 完整 SQL，消除每次插值 + QuoteIdentifier。
-    /// （ITM-640：第四元实义为 !ignoreFilters——key 由 DataSession.Crud 传入，注释修正）。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool, bool), string> GetByKeySqlCache = new();
-
-    /// <summary>N5（2026-10-04 全量复读）：per-(Type, Dialect, 过滤形态) 缓存 GetAllAsync 完整 SQL——
-    /// GetByKeySql/CountBaseSql/聚合后缀此前都已有组合句缓存，GetAllAsync 每次调用仍付 1 次
-    /// QuoteIdentifier + 全句插值（约 150B）。键含 <see cref="DefaultFilterForms"/>：其值已编码
-    /// ignoreFilters/租户/软删的全部有效组合（Empty 对应裸全表句），同值恒同 SQL。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect, DefaultFilterForms), string> GetAllSqlCache = new();
 
     /// <summary>per-Dialect 缓存租户过滤追加片段（" AND {quote(tenant_id)} = @__tenant0"，
     /// M1，v5.6.0）——片段只含方言标识符与 const 参数名，方言内恒定；原先四处调用点每次
     /// 2 次 QuoteIdentifier + 插值。供 BulkDeleteAsync（语句随批次占位符变化，仅后缀可缓存）
-    /// 及下方三个语句级缓存的构建期复用。</summary>
+    /// 及 SqlSlots 的 UPDATE/DELETE 租户全句构建期复用。</summary>
     internal static readonly ConcurrentDictionary<SqlDialect, string> TenantAppendFragmentCache = new();
-
-    /// <summary>per-(Type, Dialect) 缓存 UpdateCoreAsync 的 sqls.Update + 租户后缀（M1，v5.6.0）——
-    /// 原先租户会话每次更新都重新拼接。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> UpdateWithTenantSqlCache = new();
-
-    /// <summary>per-(Type, Dialect) 缓存 DeleteAsync 物理路径的 sqls.Delete + 租户后缀（M1，v5.6.0）。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> DeleteWithTenantSqlCache = new();
 
     /// <summary>租户护栏（2026-10-06）：per-(Type, Dialect) 缓存 UPSERT 冲突子句 + 租户守卫——
     /// PG/SQLite 在 RETURNING 前插 WHERE，MySQL 逐赋值项包 IF。供 UpsertWithReturningAsync/
     /// UpsertWithMySqlAsync 消费（SaveCoreAsync 单行 upsert 面）。</summary>
     internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> UpsertTenantGuardedSqlCache = new();
-
-    /// <summary>per-(Type, Dialect) 缓存 COUNT 基础句（<c>SELECT COUNT(*) FROM "t"</c>）——PERF-002，
-    /// 2026-09-23：基底恒定、仅条件可变，原先每次 CountAsync 付一次 QuoteIdentifier + 插值。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> CountBaseSqlCache = new();
-
-    /// <summary>PG-5/T4（2026-09-26）：per-(Type, Dialect, 默认过滤形态) 缓存 COUNT 的两种组合句——
-    /// <list type="bullet">
-    /// <item>键含 <see cref="DefaultFilterForms"/>：过滤条件文本由 (Type, Dialect) 唯一决定
-    /// （形态内已含方言标识符与租户参数名），形态即判别式，不引入新的键设计面；Dialect 恒在键内（B59）。</item>
-    /// <item>值 = (filter-only 全句, where 前缀片段)：前者服务无 where 的
-    /// <c>… WHERE filter</c>；后者服务有 where 的 <c>… WHERE filter AND (</c> 前缀，
-    /// 调用方只拼 <c>whereSql + ")"</c>（1 次 concat，原 3~4 次）。</item>
-    /// </list></summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect, DefaultFilterForms), (string FilterOnlySql, string WherePrefix)>
-        CountComposedSqlCache = new();
-
-    /// <summary>PG-5/T4（2026-09-26）：聚合标量（Sum/Max/Min/Avg）的 <c>") FROM {table}{whereClause}"</c>
-    /// 后缀缓存——两种键形态：无默认过滤 (Type, Dialect)；有过滤 (Type, Dialect, 过滤形态)。
-    /// 与 <see cref="CountComposedSqlCache"/> 同判别式设计（形态即过滤条件全集，Dialect 恒在键内）。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect), string> AggregateSuffixCache = new();
-
-    /// <summary>聚合后缀缓存的有过滤形态——键含 <see cref="DefaultFilterForms"/>（同上判别式设计）。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect, DefaultFilterForms), string> AggregateFilteredSuffixCache = new();
-
-    /// <summary>per-(Type, Dialect, hasTenant) 缓存软删 UPDATE 全句（M1，v5.6.0）——原先
-    /// DeleteAsync 软删路径每次调用 5 次 QuoteIdentifier + 全句插值重建。</summary>
-    internal static readonly ConcurrentDictionary<(Type, SqlDialect, bool), string> SoftDeleteUpdateSqlCache = new();
 
     /// <summary>B9（2026-10-01 全 API 逐项轮）：批量 UPDATE 上下文（SET 列集 + 引用表名/主键）
     /// 按 (Type, Dialect) 缓存——生成器三处（SQL/Bind/元数据）一致性是编译期事实，probe 验证
@@ -86,6 +57,12 @@ internal static class DataSessionCache
     internal static readonly ConcurrentDictionary<
         (Type EntityType, SqlDialect Dialect),
         (string[] SetColumns, string QuotedTable, string QuotedPk)> BatchUpdateContextCache = new();
+
+    /// <summary>F2（2026-10-13 全量重读）：BulkDeleteAsync 类型化重载的等同性探针结果缓存——
+    /// 键 = (实体类型, 键 CLR 类型)，值 = "生成物 BuildDeleteKeyArray 对该键类型的产出与
+    /// 类型化直拷逐位等价"（双值探针，以生成物自身为真源）。键空间有限（实体 × 键类型组合），
+    /// 每组合每进程探测一次后定态。</summary>
+    internal static readonly ConcurrentDictionary<(Type EntityType, Type KeyType), bool> TypedKeyIdentityCache = new();
 }
 
 /// <summary>默认过滤（软删/租户）的三种拼接形态。空过滤时为 <see cref="Empty"/>（三项全空串），

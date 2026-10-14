@@ -76,6 +76,11 @@ internal sealed class CircuitBreaker
         if (!IsEnabled || !_isOpenFlag)
             return (false, generation, 0);
 
+        // A4：锁内只做状态判定并快照拒绝所需的数据；异常的构造与抛出在锁外完成，
+        // 熔断打开期间被拒请求不再因异常分发而串行化（进程级共享时尤甚）。
+        bool rejected;
+        string? openMessage;
+        DateTime openUntil;
         lock (_lock)
         {
             if (!IsEnabled || !_isOpen)
@@ -83,27 +88,33 @@ internal sealed class CircuitBreaker
 
             // R5：回收超时未终结的探针占用槽位——调用方在两次记录之间崩溃/取消且未调
             // ReleaseCancelledProbe 时，槽位会永久泄漏使熔断器永远 Open
-            if (_halfOpenProbeActive && !IsHalfOpenSlotStale())
+            rejected = _halfOpenProbeActive && !IsHalfOpenSlotStale();
+            if (!rejected)
             {
-                throw new CircuitBreakerOpenException(_openMessage ?? FormatOpenMessage(_openUntil));
+                if (_halfOpenProbeActive)
+                {
+                    // 槽位超时：回收后本次请求立即成为新探针（token 推进使旧探针的终结记录失效，
+                    // ITM-895——generation 不动，回收不开闸）
+                    _halfOpenProbeActive = false;
+                }
+                else
+                {
+                    rejected = DateTime.UtcNow < _openUntil;
+                }
             }
 
-            if (_halfOpenProbeActive)
+            if (!rejected)
             {
-                // 槽位超时：回收后本次请求立即成为新探针（token 推进使旧探针的终结记录失效，
-                // ITM-895——generation 不动，回收不开闸）
-                _halfOpenProbeActive = false;
-            }
-            else if (DateTime.UtcNow < _openUntil)
-            {
-                throw new CircuitBreakerOpenException(_openMessage ?? FormatOpenMessage(_openUntil));
+                _halfOpenProbeActive = true;
+                _halfOpenProbeAcquiredAt = DateTime.UtcNow.Ticks;
+                _halfOpenProbeToken += 1;
+                return (true, _generation, _halfOpenProbeToken);
             }
 
-            _halfOpenProbeActive = true;
-            _halfOpenProbeAcquiredAt = DateTime.UtcNow.Ticks;
-            _halfOpenProbeToken += 1;
-            return (true, _generation, _halfOpenProbeToken);
+            openMessage = _openMessage;
+            openUntil = _openUntil;
         }
+        throw new CircuitBreakerOpenException(openMessage ?? FormatOpenMessage(openUntil));
     }
 
     /// <summary>探针占用是否已超时可回收——R5 的槽位回收判据。

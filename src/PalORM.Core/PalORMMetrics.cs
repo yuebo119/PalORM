@@ -16,7 +16,7 @@ public static class PalORMMetrics
     /// instrumentation_scope.version = 库版本）——此前硬编码 "1.0.0" 与 5.5.1 漂移，
     /// 观测端按版本过滤/关联失配。由 D11 同口径守护（生成物侧为 GeneratedCodeMetadata）。
     /// ITM-861（r23）：v6.0 漏改残留已对齐；D11 校验面同步扩至本常量。</summary>
-    internal const string InstrumentationVersion = "6.4.1";
+    internal const string InstrumentationVersion = "6.5.0";
 
     internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, InstrumentationVersion);
 
@@ -64,20 +64,10 @@ public static class PalORMMetrics
     internal static void Record(string operation, string provider, string outcome, TimeSpan duration,
         string? metricName = null)
     {
-        RecordCount(operation, provider, outcome, metricName);
-        RecordDuration(operation, provider, outcome, duration, metricName);
-    }
-
-    private static void RecordCount(string operation, string provider, string outcome, string? metricName)
-    {
+        // R3（2026-10-12）：TagList 构造一次贯穿两计数器——原 RecordCount/RecordDuration
+        // 各自 CreateTags，metrics 开启路径的字符串 Add 与结构体拷贝双份。
         TagList tags = CreateTags(operation, provider, outcome, metricName);
         _queryCounter.Add(1, tags);
-    }
-
-    private static void RecordDuration(string operation, string provider, string outcome, TimeSpan duration,
-        string? metricName)
-    {
-        TagList tags = CreateTags(operation, provider, outcome, metricName);
         _queryDuration.Record(duration.TotalSeconds, tags);
     }
 

@@ -19,6 +19,18 @@ public sealed partial class DataSession<TProvider>
     private static readonly string TenantFilterFormat =
         $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}";
 
+    /// <summary>G3（2026-10-13 五轮全量重读微项包）：无参默认过滤子句的共享链头节点——
+    /// SoftDelete 过滤的 QueryClause/ClauseNode 原先每次 From&lt;T&gt;() 分配一份，而其全部成分
+    /// （类别/条件串/空参数表）只由 TProvider 决定（SoftDeleteFilterCondition 静态串）。链节点
+    /// 不可变（T5b cons list），跨 builder/跨会话共享天然安全：后续 AddClause 只是在其外包新节点，
+    /// 不触碰既有节点；租户子句携带值，不走共享（每次照建）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+        Justification = "按 TProvider 闭合类型分片是刻意的：软删过滤条件含方言引用符（PG/SQLite 双引号与 MySQL 反引号产出不同文本），每个 Provider 一份正是共享的前提（GetByKeySqlSlot 同型抑制先例）。")]
+    private static readonly ClauseNode SoftDeleteFilterNode = new(
+        null,
+        new QueryClause(QueryClauseKind.DefaultFilter, SoftDeleteFilterCondition,
+            System.Array.Empty<System.Data.Common.DbParameter>()));
+
     /// <summary>创建查询构建器——每次调用创建新的 struct QueryBuilder（值类型）。
     /// <para><b>为什么是 struct</b>: 避免每次查询的堆分配。高 QPS 场景(10K+)每秒省 ~2MB 堆分配。</para>
     /// <para><b>为什么每次新建</b>: GORM #7437——条件残留在构建器实例上导致数据错误。全新构建器保证条件隔离。</para>
@@ -31,19 +43,32 @@ public sealed partial class DataSession<TProvider>
 
         // v3.1：单次 Volatile.Read 复用——替代三次独立属性访问（每个属性各自触发 fence）。
         // 单查询固定开销下降 ~2 次内存屏障（与 state 快照合并方案一致）。
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._rowFactories.TryGetValue(typeof(T), out var factory))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' is not registered. Add [Table] attribute.");
-        if (!state._tableNames.TryGetValue(typeof(T), out var tableName))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no [Table] attribute.");
-        if (!state._columnNames.TryGetValue(typeof(T), out var columnNames))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated column metadata.");
+        // P1-2（2026-10-12 全量重读）：三查合一——合并视图 EntityInfo 一次取回工厂/表名/列名。
+        // 刀1（2026-10-13）：命中每类型静态缓存后零字典查找（未注册首查不缓存，
+        // 精确错误消息仍走 ThrowFromNotRegistered 兼容层）。
+        EntityRuntimeInfo info;
+        if (EntityInfoCache.Per<T>.Info is not { } cachedInfo)
+        {
+            PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
+            if (!state._entityInfo.TryGetValue(typeof(T), out EntityRuntimeInfo? loaded))
+                ThrowFromNotRegistered<T>(state);
+            info = loaded;
+            EntityInfoCache.Store<T>(loaded);
+        }
+        else
+        {
+            info = cachedInfo;
+        }
+        object factory = info.RowFactory;
+        string tableName = info.TableName;
+        IReadOnlyList<string> columnNames = info.ColumnNames;
 
         // v5.6：读连接提供者从实例字段取——会话级复用（含 ReadSessionSetupSql 与 Provider
         // 初始化钩子），且方法组不在此处新建闭包。
+        // W1（深挖轮 2026-10-14）：惰性 ??=——主连接写操作（Insert/Update/Delete/事务族）
+        // 不经 From<T>()，读路由委托不构造；首个 From<T>() 时初始化，此后每会话恰一份。
+        _readConnProvider ??= AcquireReadConnectionAsync;
+        _readConnReturner ??= ReleaseOrDiscardReadConnectionAsync;
         // A9：读查询命令复用槽——惰性创建（并行读作用域内并发 From<T>() 的竞态只会各建
         // 一个空槽：引用写原子、败者被 GC；槽在该作用域内禁用晋升、永无命令可漏）。
         _querySlot ??= new ReusableQuerySlot();
@@ -52,8 +77,9 @@ public sealed partial class DataSession<TProvider>
             new QueryBuilderServices<T>(
                 TProvider.Dialect, (Func<DbDataReader, T>)factory, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
-                _operationState, Volatile.Read(ref _resilience), _options.CommandTimeout,
-                _isolationLevel),  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
+                _operationState, Resilience, _options.CommandTimeout,
+                _isolationLevel,  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
+                TProvider.CreateArrayParameter),  // P0-2：WhereIn 的数组形态（Provider 无数组能力时接口默认 null → 占位符回退）
             tableName, columnNames, _readConnProvider,
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
             _readConnReturner, _querySlot));
@@ -68,9 +94,10 @@ public sealed partial class DataSession<TProvider>
 
         // 自动附加默认过滤（软删/租户）——统一走 DefaultFilter 子句类别，
         // 与用户 WHERE 组恒 AND 组合，OrWhere 无法绕过（ITM-401）
-        EntityFeatures features = GetEntityFeatures<T>();
+        // P1-2：能力标志取合并视图（与上方元数据同一 state 快照，单快照纪律不破坏）
+        EntityFeatures features = info.Features;
         if (!ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)
-            builder.AddDefaultFilter(SoftDeleteFilterCondition);
+            builder.AdoptSharedDefaultFilterNode(SoftDeleteFilterNode);
         if (tenantId is not null && !ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
         {
             // 列名 quote 与软删过滤对齐（quote 后不含 {}，可安全进入复合格式串文本段）
@@ -90,6 +117,23 @@ public sealed partial class DataSession<TProvider>
                 : "__all__";
         }
         return builder;
+    }
+
+    /// <summary>P1-2：合并视图未命中时的冷路径——按旧三查次序复现原有精确错误消息
+    ///（未注册类型报 "is not registered"、[Projection] 类型报 "has no [Table]"）。
+    /// 热路径不经过本方法；消息兼容层，防既有调用方依赖异常文本。</summary>
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private static void ThrowFromNotRegistered<T>(PalORM_Runtime.RuntimeRegistryState state)
+        where T : class, new()
+    {
+        if (!state._rowFactories.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' is not registered. Add [Table] attribute.");
+        if (!state._tableNames.TryGetValue(typeof(T), out _))
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no [Table] attribute.");
+        throw new InvalidOperationException(
+            $"Type '{typeof(T).Name}' has no generated column metadata.");
     }
 
     /// <summary>T6：取（或建）当前实体的租户过滤作用域——同类型命中缓存零分配。
@@ -146,7 +190,7 @@ public sealed partial class DataSession<TProvider>
         ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：非 async 入口预热操作归属标记（调用方 EC 持久，体内 Enter 守卫命中免写）；
         // 门禁见 PrewarmCurrentOperationOwner——仅本会话已完成过操作后预热，防 EC 链累积
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return InsertCoreAsync(entity, null, ct);
     }
@@ -197,12 +241,18 @@ public sealed partial class DataSession<TProvider>
     /// <summary>会话级单行按主键读（GetAsync）的命令/参数复用槽（PL-2 扩展，2026-09-25）。</summary>
     private ReusableCrudCommand? _reusableGetByKey;
 
-    /// <summary>INSERT / UPDATE / GetByKey 各自已服务过的同形态操作数（惰性晋升的判据）。</summary>
+    /// <summary>会话级单行物理删除（DeleteAsync）的命令/参数复用槽（R3，2026-10-12）——
+    /// GetByKey 同型第四槽：删除密集负载的每操作命令/参数创建退役。</summary>
+    private ReusableCrudCommand? _reusableDelete;
+
+    /// <summary>INSERT / UPDATE / GetByKey / Delete 各自已服务过的同形态操作数（惰性晋升的判据）。</summary>
     private int _insertWriteOps;
 
     private int _updateWriteOps;
 
     private int _getByKeyReadOps;
+
+    private int _deleteWriteOps;
 
     /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。
     /// <para><see cref="KeyConverter"/> 仅 GetByKey 槽使用：生成器发射的单键转换委托
@@ -229,7 +279,7 @@ public sealed partial class DataSession<TProvider>
     /// 与新建路径同文本）；本方法只负责复用判定与绑定。</para>
     /// <para>返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放。</para></summary>
     private DbCommand? TryAcquireInsertCommand<T>(
-        string commandText, CrudMetadata metadata, T entity, ref int servedOps)
+        string commandText, CrudMetadata metadata, T entity, ref int servedOps, DbTransaction? activeTransaction)
         where T : class, new()
     {
         if (metadata.BindInsertValues is not { } valuesBinder)
@@ -238,11 +288,8 @@ public sealed partial class DataSession<TProvider>
         if (_reusableInsert is { } reusable && reusable.EntityType == typeof(T))
         {
             DbCommand reused = reusable.Command;
-            // 事务与超时可随 WithTransaction/WithTimeout 中途变更，每次调用重设
-            reused.Transaction = GetActiveTransaction();
-            reused.CommandTimeout = _options.CommandTimeoutSeconds;
-            if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
-                reused.CommandText = commandText;
+            // 事务与超时可随 WithTransaction/WithTimeout 中途变更，守卫式重设（刀3）
+            ApplyReusableCommandState(reused, activeTransaction, commandText);
             valuesBinder(reusable.Pool, entity, 0);
             return reused;
         }
@@ -283,19 +330,17 @@ public sealed partial class DataSession<TProvider>
     /// <para>晋升阈值与租户/旧模型程序集的排除见 <see cref="TryAcquireInsertCommand"/> 与本节注释。</para>
     /// <para>返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放。</para></summary>
     private DbCommand? TryAcquireUpdateCommand<T>(
-        string updateSql, CrudMetadata metadata, T entity, ref int servedOps)
+        string updateSql, CrudMetadata metadata, T entity, ref int servedOps,
+        DbTransaction? activeTransaction, EntityFeatures features)
         where T : class, new()
     {
-        if (metadata.BindUpdateValues is not { } valuesBinder || HasTenantFilter<T>())
+        if (metadata.BindUpdateValues is not { } valuesBinder || HasTenantFilter(features))
             return null;
 
         if (_reusableUpdate is { } reusable && reusable.EntityType == typeof(T))
         {
             DbCommand reused = reusable.Command;
-            reused.Transaction = GetActiveTransaction();
-            reused.CommandTimeout = _options.CommandTimeoutSeconds;
-            if (!string.Equals(reused.CommandText, updateSql, StringComparison.Ordinal))
-                reused.CommandText = updateSql;
+            ApplyReusableCommandState(reused, activeTransaction, updateSql);
             valuesBinder(reusable.Pool, entity, 0);
             return reused;
         }
@@ -344,7 +389,7 @@ public sealed partial class DataSession<TProvider>
     /// 负责复用判定与键值绑定。返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放；
     /// 读路径的 <see cref="DbDataReader"/> 由调用方 await using 释放——释放前不触碰本命令。</para></summary>
     private DbCommand? TryAcquireGetByKeyCommand<T>(
-        string commandText, object key, PalORM_Runtime.RuntimeRegistryState state)
+        string commandText, object key, CrudMetadata metadata, DbTransaction? activeTransaction)
         where T : class, new()
     {
         if (HasTenantFilter<T>())
@@ -358,11 +403,8 @@ public sealed partial class DataSession<TProvider>
             // 非租户时 no-op 使 Pool 恒为 1（无现实触发路径）；未来出现带参默认过滤形态时，
             // 精确 pattern 使复用安全失效（走新建路径）而非静默用旧参数值执行（ITM-867 族防线缺口）。
             DbCommand reused = reusable.Command;
-            // 事务与超时可随 WithTransaction/WithTimeout 中途变更，每次调用重设
-            reused.Transaction = GetActiveTransaction();
-            reused.CommandTimeout = _options.CommandTimeoutSeconds;
-            if (!string.Equals(reused.CommandText, commandText, StringComparison.Ordinal))
-                reused.CommandText = commandText;
+            // 事务与超时可随 WithTransaction/WithTimeout 中途变更，守卫式重设（刀3）
+            ApplyReusableCommandState(reused, activeTransaction, commandText);
             // R-UNNESTB（2026-10-02）：**绝不触碰复用命令的参数集合**——PG 连接串的
             // auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，「Clear 集合 + Add 新参数实例」
             // 会让驱动沿用 prepare 时的绑定值（探针 mergearray 变体 C 实测：语句卡在
@@ -370,7 +412,10 @@ public sealed partial class DataSession<TProvider>
             // C3（2026-10-11）：键值换算不再经从不执行的探针命令中转——生成器发射的
             // ConvertDeleteKey 与 BindDelete 的 @p0 值同一真源（DeleteKeyValueExpression），
             // 就地写入 Pool[0]（与命令参数集合持有同一参数实例）。
-            pooledKey.Value = convertKey(key);
+            // P1-4（2026-10-12 全量重读）：long 键走 identity 快路径——long 主键的
+            // ConvertDeleteKey 恒为 Convert.ToInt64（恒等映射），复用调用方已装箱的实例
+            // 省去换算产出的第二个 24B 装箱；非 long 键照走委托（语义同一真源不变）。
+            pooledKey.Value = key is long ? key : convertKey(key);
             return reused;
         }
 
@@ -379,9 +424,8 @@ public sealed partial class DataSession<TProvider>
             return null;
 
         // 晋升门禁：单键转换委托缺失（复合主键 / 旧生成器程序集）永不晋升——每次调用走
-        // 下方外的新建路径。读调用方传入的注册表快照（ITM-703 单快照纪律）。
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata promoteMetadata)
-            || promoteMetadata.ConvertDeleteKey is not { } promotedConverter)
+        // 下方外的新建路径。P1-2：元数据经合并视图由调用方传入（同一 state 快照，ITM-703 单快照纪律）。
+        if (metadata.ConvertDeleteKey is not { } promotedConverter)
             return null;
 
         DbCommand cmd = CreateCommand();
@@ -411,6 +455,62 @@ public sealed partial class DataSession<TProvider>
             throw;
         }
         _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
+        return cmd;
+    }
+
+    /// <summary>取可复用的单行物理 DELETE 命令（R3，2026-10-12）——GetByKey 槽的同型第四槽：
+    /// 键值经 <see cref="CrudMetadata.ConvertDeleteKey"/> 就地写池参数（与 BindDelete 的 @p0
+    /// 同一真源）。租户实体/复合主键/旧生成器程序集不晋升（与 GetByKey 槽同门禁）；
+    /// 返回的命令归会话所有，调用方不得释放。</summary>
+    private DbCommand? TryAcquireDeleteCommand<T>(
+        string commandText, object key, CrudMetadata metadata, DbTransaction? activeTransaction)
+        where T : class, new()
+    {
+        if (HasTenantFilter<T>())
+            return null;
+
+        if (_reusableDelete is { } reusable && reusable.EntityType == typeof(T)
+            && reusable.KeyConverter is { } convertKey && reusable.Pool is [var pooledKey])
+        {
+            DbCommand reused = reusable.Command;
+            ApplyReusableCommandState(reused, activeTransaction, commandText);
+            // R-UNNESTB：不触碰参数集合，就地写同一实例的 Value
+            // P1-4：long 键 identity 快路径（同 GetByKey 槽——省换算的第二个装箱）
+            pooledKey.Value = key is long ? key : convertKey(key);
+            return reused;
+        }
+
+        _deleteWriteOps++;
+        if (_deleteWriteOps < CommandReusePromotionThreshold)
+            return null;
+
+        // P1-2：元数据经调用方传入（合并视图，同一 state 快照）
+        if (metadata.ConvertDeleteKey is not { } promotedConverter)
+            return null;
+
+        DbCommand cmd = CreateCommand();
+        cmd.CommandText = commandText;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        try
+        {
+            BindGeneratedKeyParameter<T>(cmd, key);
+            BindDefaultFilterParameters<T>(cmd);
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        try
+        {
+            _reusableDelete?.Command.Dispose();
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        _reusableDelete = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
         return cmd;
     }
 
@@ -459,12 +559,17 @@ public sealed partial class DataSession<TProvider>
             EnterOperation(operationOwner);
         // ITM-675：单次快照贯穿全路径——元数据与回填委托/列名必须来自同一注册表版本，
         // 不得在 RETURNING 读后重读 CurrentState（热重载窗口会跨版本混用）。
+        // 刀1 扩面（2026-10-14 深挖轮）：元数据改经 GetEntityInfo<T> 静态缓存（注册表条目
+        // 单调不可变，ITM-758 同源论证；UpdateCoreAsync 的既定先例）——原每次插入一次
+        // FrozenDictionary 查找，事务内逐条插入循环（TxHundred/EnumInserts）每行白付。
+        // state 快照保留：GetCommandSqls 未命中路径与 setId 委托仍从同一 CurrentState 取用。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        CrudMetadata metadata = GetEntityInfo<T>().Crud;
         if (metadata.InsertColumns.Count == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
+        // 刀2：事务单次取用贯穿槽路径与执行（原槽内每次重取，长事务写循环每行多一次锁）
+        DbTransaction? activeTransaction = GetActiveTransaction();
 
         CommandSqlSet sqls = GetCommandSqls<T>(state);
 
@@ -482,7 +587,7 @@ public sealed partial class DataSession<TProvider>
 
         // PL-2：命令/参数复用路径。未晋升（前两次或旧模型程序集）时返回 null，
         // 走下方新建路径——命令随操作释放，不泄漏。
-        if (TryAcquireInsertCommand(commandText, metadata, entity, ref _insertWriteOps) is { } reused)
+        if (TryAcquireInsertCommand(commandText, metadata, entity, ref _insertWriteOps, activeTransaction) is { } reused)
             return await FinishInsertAsync(state, reused, metadata, entity, ct).ConfigureAwait(false);
 
         await using DbCommand cmd = CreateCommand();
@@ -495,7 +600,9 @@ public sealed partial class DataSession<TProvider>
     /// <summary>INSERT 执行形态分派的单一真源（PL-3）：InsertNoReturning → 纯执行；
     /// RETURNING 方言 → 标量/整行读；MySQL → LAST_INSERT_ID 合并。复用与新建路径共用。
     /// <para>R4（v6.0）：唯一冲突翻译挂靠点——异常过滤器形态（when 不吞栈），覆盖全部
-    /// 插入形态与 SaveAsync 的新增分支；Bulk 家族各有冲突消费语义，不在此包装。</para></summary>
+    /// 插入形态与 SaveAsync 的新增分支；Bulk 家族各有冲突消费语义，不在此包装。</para>
+    /// 深挖轮（2026-10-14）：InsertNoReturning 分支内联原 InsertPlainAsync 体——事务内
+    /// 逐条插入循环省一个 async 状态机帧/行（探针 A：三层 async 链 144ns，本项约 1/3）。</summary>
     private async ValueTask<T> FinishInsertAsync<T>(
         PalORM_Runtime.RuntimeRegistryState state,
         DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
@@ -504,7 +611,13 @@ public sealed partial class DataSession<TProvider>
         try
         {
             if (metadata.InsertNoReturning)
-                return await InsertPlainAsync<T>(cmd, entity, ct).ConfigureAwait(false);
+            {
+                int affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                if (affected != 1)
+                    throw new InvalidOperationException(
+                        $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
+                return entity;
+            }
             return TProvider.SupportsReturningClause
                 ? await InsertWithReturningAsync(state, cmd, metadata, entity, ct).ConfigureAwait(false)
                 : await InsertWithLastInsertIdAsync(state, cmd, entity, ct).ConfigureAwait(false);
@@ -513,18 +626,6 @@ public sealed partial class DataSession<TProvider>
         {
             throw new UniqueConstraintViolationException(ex);
         }
-    }
-
-    /// <summary>PL-3 无读返回路径——InsertNoReturning 实体专用（显式主键 + 全列恒等）。
-    /// 返回传入实体（同一引用，全部属性即行值，无回填）；影响行数不为 1 时明确失败。</summary>
-    private static async ValueTask<T> InsertPlainAsync<T>(DbCommand cmd, T entity, CancellationToken ct)
-        where T : class, new()
-    {
-        int affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        if (affected != 1)
-            throw new InvalidOperationException(
-                $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
-        return entity;
     }
 
     /// <summary>PG/SQLite 路径——INSERT ... RETURNING 单次往返物化完整行（含自增 ID）。
@@ -576,7 +677,7 @@ public sealed partial class DataSession<TProvider>
         where TEntity : class
     {
         if (_operationState.DefersPostCommitActions)
-            _operationState.AddPostCommitAction(() => backfill(entity, id));
+            _operationState.AddPostCommitBackfill(backfill, entity, id);
         else
             backfill(entity, id);
     }
@@ -634,7 +735,7 @@ public sealed partial class DataSession<TProvider>
     {
         ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：同 InsertAsync——预热使事务内循环 UpdateAsync（TxRollback 形态）每行免 EC COW
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return UpdateCoreAsync(entity, null, ct);
     }
@@ -648,36 +749,36 @@ public sealed partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation =
             EnterOperation(operationOwner);
         // r19/ITM-703：单快照贯穿（与 InsertCoreAsync 同口径）
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        // 刀1：元数据/features 走合并视图静态缓存（省 2 次字典查找）；刀2：事务单次取用。
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        CrudMetadata metadata = info.Crud;
+        DbTransaction? activeTransaction = GetActiveTransaction();
 
-        string updateSql = GetCommandSqls<T>(state).Update;
+        string updateSql = GetCommandSqls<T>(PalORM_Runtime.CurrentState).Update;
         if (updateSql.Length == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
         // 生成的 UPDATE 以 "WHERE pk = @pN [AND version = @pM]" 结尾，可安全追加租户过滤；
         // 跨租户主键的更新命中 0 行（并发实体表现为 ConcurrencyConflictException，失败关闭）
-        if (HasTenantFilter<T>())
-            updateSql = GetTenantWrappedSql<T>(
-                DataSessionCache.UpdateWithTenantSqlCache, updateSql);
+        if (HasTenantFilter(info.Features))
+            updateSql = GetUpdateWithTenantSqlFast<T>(updateSql);
 
         // PL-2：命令/参数复用路径。未晋升（前两次、租户实体或旧模型程序集）时返回 null，
         // 走下方新建路径——命令随操作释放，不泄漏。
-        if (TryAcquireUpdateCommand(updateSql, metadata, entity, ref _updateWriteOps) is { } reusedUpdate)
+        if (TryAcquireUpdateCommand(updateSql, metadata, entity, ref _updateWriteOps, activeTransaction, info.Features) is { } reusedUpdate)
         {
-            int reusedRows = await ExecuteWriteRowsAsync(reusedUpdate, ct).ConfigureAwait(false);
+            int reusedRows = await ExecuteWriteRowsAsync(reusedUpdate, activeTransaction, ct).ConfigureAwait(false);
             return ApplyUpdateOutcome(metadata, entity, reusedRows, deferredVersionIncrements);
         }
 
-        await using DbCommand cmd = CreateCommand();
+        await using DbCommand cmd = CreateCommand(activeTransaction);
         cmd.CommandText = updateSql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         metadata.BindUpdate(cmd, entity);
-        BindDefaultFilterParameters<T>(cmd);
+        BindDefaultFilterParameters(cmd, info.Features);
 
         // P2-1：直调重载——省掉 async lambda 的委托与 display class（实测约 208 B/行）
-        int affectedRows = await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
+        int affectedRows = await ExecuteWriteRowsAsync(cmd, activeTransaction, ct).ConfigureAwait(false);
         return ApplyUpdateOutcome(metadata, entity, affectedRows, deferredVersionIncrements);
     }
 
@@ -689,35 +790,42 @@ public sealed partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         // r19/ITM-703：单快照贯穿（Delete 侧同口径）；存在性检查与 Insert/Update/Save 对齐走
         // CrudMetadatas——legacy 无方言 CommandSqls 已从生成物移除，不再作存在性代理。
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.ContainsKey(typeof(T)))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
-        CommandSqlSet sqls = GetCommandSqls<T>(state);
+        // 刀1：features/表名走合并视图；刀2：事务单次取用贯穿软删/槽/执行三路径。
+        EntityRuntimeInfo deleteInfo = GetEntityInfo<T>();
+        CrudMetadata deleteMetadata = deleteInfo.Crud;
+        DbTransaction? deleteTransaction = GetActiveTransaction();
+        CommandSqlSet sqls = GetCommandSqls<T>(PalORM_Runtime.CurrentState);
 
         // [SoftDelete]: 物理删除改为软删除 (UPDATE deleted_at)
-        bool isSoftDelete = PalORM_Runtime.EntityFeatures.TryGetValue(typeof(T), out EntityFeatures features)
-            && (features & EntityFeatures.SoftDelete) != 0;
-        if (isSoftDelete && PalORM_Runtime.TableNames.TryGetValue(typeof(T), out string? tn))
+        bool isSoftDelete = (deleteInfo.Features & EntityFeatures.SoftDelete) != 0;
+        if (isSoftDelete)
         {
-            await using DbCommand cmd = CreateCommand();
+            await using DbCommand cmd = CreateCommand(deleteTransaction);
             // AND deleted_at IS NULL：与 BulkDeleteAsync 幂等语义对齐——重复删除不刷新时间戳且返回 0
-            // M1（v5.6.0）：全句 per-(Type, Dialect, hasTenant) 缓存（含租户两形态），见 GetSoftDeleteUpdateSql
-            cmd.CommandText = GetSoftDeleteUpdateSql<T>(tn, HasTenantFilter<T>());
+            // G4（五轮微项包）：全句走 2 槽静态缓存（含租户两形态），见 GetSoftDeleteUpdateSqlFast
+            cmd.CommandText = GetSoftDeleteUpdateSqlFast<T>(deleteInfo);
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
-            BindDefaultFilterParameters<T>(cmd);
-            return await ExecuteWriteRowsAsync(cmd, ct).ConfigureAwait(false);
+            BindDefaultFilterParameters(cmd, deleteInfo.Features);
+            return await ExecuteWriteRowsAsync(cmd, deleteTransaction, ct).ConfigureAwait(false);
         }
 
-        await using DbCommand delCmd = CreateCommand();
-        // M1（v5.6.0）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
-        delCmd.CommandText = HasTenantFilter<T>()
-            ? GetTenantWrappedSql<T>(DataSessionCache.DeleteWithTenantSqlCache, sqls.Delete)
+        // R3（2026-10-12）：物理删除接 PL-2 复用槽（GetByKey 同型）——软删/租户形态不进槽。
+        bool deleteHasTenant = HasTenantFilter(deleteInfo.Features);
+        string deleteCommandText = deleteHasTenant
+            ? GetDeleteWithTenantSqlFast<T>(sqls.Delete)
             : sqls.Delete;
+        if (!deleteHasTenant
+            && TryAcquireDeleteCommand<T>(deleteCommandText, key, deleteMetadata, deleteTransaction) is { } reusedDelete)
+            return await ExecuteWriteRowsAsync(reusedDelete, deleteTransaction, ct).ConfigureAwait(false);
+
+        await using DbCommand delCmd = CreateCommand(deleteTransaction);
+        // M1（v5.6.0）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
+        delCmd.CommandText = deleteCommandText;
         delCmd.CommandTimeout = _options.CommandTimeoutSeconds;
         BindGeneratedKeyParameter<T>(delCmd, key);
-        BindDefaultFilterParameters<T>(delCmd);
-        return await ExecuteWriteRowsAsync(delCmd, ct).ConfigureAwait(false);
+        BindDefaultFilterParameters(delCmd, deleteInfo.Features);
+        return await ExecuteWriteRowsAsync(delCmd, deleteTransaction, ct).ConfigureAwait(false);
     }
 
     // v4.1 极致降内存：per-(Type, Dialect) 缓存 selectColumns，消除每次 Get/GetAll 的 N 次 QuoteIdentifier + string.Join
@@ -735,43 +843,145 @@ public sealed partial class DataSession<TProvider>
         return built;
     }
 
-    /// <summary>取 GetAsync 的完整 SQL（含表名/PK/过滤），走共享缓存。
-    /// key 含 hasTenant + ignoreFilters：两者影响 filter 后缀。
-    /// <b>v5.6</b>：命中走 <c>TryGetValue</c>（原 <c>GetOrAdd</c> 的 factory 捕获
-    /// columnNames/tableName/filter 三个方法局部，每次调用分配显示类与委托）。</summary>
+    /// <summary>取 GetAsync 的完整 SQL（含表名/PK/过滤）。
+    /// F6b（2026-10-13 全量重读微项包）：命中路径改走 <see cref="GetGetByKeySqlFast{T}"/> 的
+    /// 4 槽静态缓存（零字典查找）；本方法退化为纯构建器，仅槽未命中时调用。</summary>
     private static string GetGetByKeySql<T>(IReadOnlyList<string> columnNames, string tableName,
-        string filter, bool hasTenant, bool ignoreFilters)
+        string filter)
         where T : class, new()
     {
-        (Type, SqlDialect, bool, bool) key = (typeof(T), TProvider.Dialect, hasTenant, !ignoreFilters);
-        if (DataSessionCache.GetByKeySqlCache.TryGetValue(key, out string? cached))
-            return cached;
         string selectColumns = GetSelectColumns<T>(columnNames);
         string pkColumn = GetPkColumn<T>();
-        string built = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
-        DataSessionCache.GetByKeySqlCache.TryAdd(key, built);
+        return $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)} WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}";
+    }
+
+    /// <summary>F6b：GetByKey 完整 SQL 的 4 槽静态缓存取用。SQL 值由
+    /// (T, TProvider.Dialect, hasTenant, ignoreFilters) 唯一决定——软删/租户特性是 T 的
+    /// 编译期属性（ITM-758 单调不可变论证同源），方言由闭式泛型 TProvider 钉死，故每
+    /// (TProvider, T) 恰 4 个可能值，按两 bit 索引。原先每读两次 ConcurrentDictionary
+    /// 元组键查找（FilterForms + GetByKeySql），现命中路径零查找。
+    /// <para><b>并发</b>：写入竞态良性（同输入恒同输出、引用写原子）；调用点都在操作租约内
+    /// （WithTenant/IgnoreFilters 受 ITM-568 门禁保护，租约期间判别位恒定）。</para></summary>
+    private string GetGetByKeySqlFast<T>(EntityRuntimeInfo info) where T : class, new()
+    {
+        bool hasTenant = HasTenantFilter(info.Features);
+        int slot = (hasTenant ? 2 : 0) | (_ignoreFilters ? 1 : 0);
+        string? cached = GetByKeySqlSlot<T>.Slots[slot];
+        if (cached is not null)
+            return cached;
+        string built = GetGetByKeySql<T>(info.ColumnNames, info.TableName,
+            GetDefaultFilterFragment<T>(info.Features));
+        GetByKeySqlSlot<T>.Slots[slot] = built;
         return built;
     }
 
-    /// <summary>取 GetAllAsync 的完整 SQL（含表名/过滤），走共享缓存（N5，2026-10-04 全量复读）。
-    /// 键 = (Type, Dialect, 过滤形态)——<see cref="DefaultFilterForms"/> 的值已编码
-    /// ignoreFilters/租户/软删的全部有效组合（Empty = 裸全表句），同值恒同 SQL；形态由
-    /// 调用方在实例侧求值传入（会话态）。
-    /// <b>v5.6 口径</b>：命中走 <c>TryGetValue</c>（无闭包分配），未命中才构建并 <c>TryAdd</c>。</summary>
+    /// <summary>F6b：4 槽载体。嵌在 DataSession&lt;TProvider&gt; 内按 (TProvider, T) 分片——
+    /// SQL 含方言引用符，PG/SQLite 双引号与 MySQL 反引号产出不同文本，必须分片（这正是
+    /// 缓存目的而非 S2743 的事故场景）；T 仅作分片键不出现在字段类型（S2326 同
+    /// EntityInfoCache.Per&lt;T&gt; 的既定抑制理由）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S2326",
+        Justification = "T 不出现在字段类型是刻意的：分片键是 (TProvider, T) 的闭合类型本身，字段值是该分片的 4 个可能 SQL 之一。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+        Justification = "静态数组按 (TProvider, T) 分片正是本缓存的目的（每闭合类型一份），非跨泛型实例共享事故。")]
+    private static class GetByKeySqlSlot<T> where T : class, new()
+    {
+        /// <summary>4 个槽：bit1=hasTenant，bit0=ignoreFilters。null = 未构建。</summary>
+        public static readonly string?[] Slots = new string?[4];
+    }
+
+    /// <summary>G4/G5（2026-10-13 五轮全量重读微项包）：读写路径语句缓存的闭式泛型静态槽载体——
+    /// F6b（GetByKeySqlSlot）与刀1（EntityInfoCache.Per&lt;T&gt;）的扩面集合，替代原先的
+    /// (Type, Dialect[, 过滤形态]) 元组键 ConcurrentDictionary 查找（每次调用 1~2 次哈希读）。
+    /// 嵌在 DataSession&lt;TProvider&gt; 内按 (TProvider, T) 分片：SQL 值由 (T, 方言, 过滤位)
+    /// 唯一决定（方言被闭式 TProvider 钉死），分片即缓存目的（S2326/S2743 抑制理由同 GetByKeySqlSlot）。
+    /// 写入竞态良性（同输入恒同输出、引用写原子）；调用点都在操作租约内
+    /// （WithTenant/IgnoreFilters 受 ITM-568 门禁保护，租约期间判别位恒定）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S2326",
+        Justification = "T 不出现在字段类型是刻意的：分片键是 (TProvider, T) 的闭合类型本身，各字段是该分片的可能 SQL 之一。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+        Justification = "静态槽按 (TProvider, T) 分片正是本缓存的目的（每闭合类型一份），非跨泛型实例共享事故。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2223",
+        Justification = "缓存槽字段必须可变（null → 构建值的单次写入；PostgreSqlProvider.QuotedTargetBuildCount 的计数器/槽位同型抑制先例）。仅缓存基础设施读写，无生产可写面。")]
+    private static class SqlSlots<T> where T : class, new()
+    {
+        /// <summary>GetAllAsync 完整 SQL：bit1=hasSoftDelete，bit0=hasTenant（0 = 裸全表句）。</summary>
+        public static readonly string?[] GetAll = new string?[4];
+
+        /// <summary>软删 UPDATE 全句：bit0=hasTenant。</summary>
+        public static readonly string?[] SoftDeleteUpdate = new string?[2];
+
+        /// <summary>带租户后缀的 UPDATE 全句（单值——非租户形态不走本槽）。</summary>
+        public static string? UpdateWithTenant;
+
+        /// <summary>带租户后缀的 DELETE 全句（单值）。</summary>
+        public static string? DeleteWithTenant;
+
+        /// <summary>CountAsync 基底句（SELECT COUNT(*) FROM …；无过滤形态）。</summary>
+        public static string? CountBase;
+
+        /// <summary>Count 组合句：bit1=hasSoftDelete，bit0=hasTenant（slot 0 = Empty 不缓存——
+        /// 基底即 filter-only 全句，where 前缀是每次现拼的变长成分）。</summary>
+        public static readonly (string FilterOnlySql, string WherePrefix)?[] CountComposed =
+            new (string, string)?[4];
+
+        /// <summary>聚合后缀（无过滤形态）。</summary>
+        public static string? AggregateSuffix;
+
+        /// <summary>聚合后缀（有过滤形态）：bit1=hasSoftDelete，bit0=hasTenant。</summary>
+        public static readonly string?[] AggregateFilteredSuffix = new string?[4];
+
+        /// <summary>G5：方言 CRUD SQL 集的每 (TProvider, T) 静态缓存（刀1 同型——注册表条目
+        /// 单调不可变，Register 拒绝重复注册，缓存后跨热重载版本恒同值）。</summary>
+        public static CommandSqlSet? CommandSqls;
+
+        /// <summary>S2696 归位：静态槽的写入收敛到本类的静态取用器（构建入参由调用方传入，
+        /// 命中路径零额外分配）——CountAsync 基底句。</summary>
+        public static string CountBaseOrBuilt(string quotedTableName)
+            => CountBase ??= $"SELECT COUNT(*) FROM {quotedTableName}";
+
+        /// <summary>S2696 归位：聚合后缀（无过滤形态）。</summary>
+        public static string AggregateSuffixOrBuilt(string quotedTableName)
+            => AggregateSuffix ??= $") FROM {quotedTableName}";
+
+        /// <summary>S2696 归位：聚合后缀（有过滤形态，按判别位入槽）。</summary>
+        public static string AggregateFilteredSuffixOrBuilt(int slot, string quotedTableName, string whereClause)
+            => AggregateFilteredSuffix[slot] ??= $") FROM {quotedTableName}{whereClause}";
+    }
+
+    /// <summary>G4：默认过滤判别位——与 <see cref="GetDefaultFilterForms{T}"/> 的
+    /// hasSoftDelete/hasTenant 计算逐位同源（值决定槽位；0 = Empty 形态）。</summary>
+    private int FilterSlotBits(EntityFeatures features)
+    {
+        bool hasSoftDelete = !_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0;
+        bool hasTenant = HasTenantFilter(features);
+        return (hasSoftDelete ? 2 : 0) | (hasTenant ? 1 : 0);
+    }
+
+    /// <summary>取 GetAllAsync 的完整 SQL（含表名/过滤）——G4（五轮微项包）起为纯构建器，
+    /// 仅在 4 槽静态缓存未命中时调用（N5 原注释：过滤形态已编码 ignoreFilters/租户/软删的
+    /// 全部有效组合，同值恒同 SQL）。</summary>
     private static string GetGetAllSql<T>(
         DefaultFilterForms forms, IReadOnlyList<string> columnNames, string tableName)
         where T : class, new()
     {
-        (Type, SqlDialect, DefaultFilterForms) key = (typeof(T), TProvider.Dialect, forms);
-        if (DataSessionCache.GetAllSqlCache.TryGetValue(key, out string? cached))
-            return cached;
         string selectColumns = GetSelectColumns<T>(columnNames);
         // S2077 报备（M1-5，与原调用点同）：selectColumns 为 (Type,Dialect) 缓存的引用列清单、
         // 过滤子句为内部生成模板——租户值经 BindDefaultFilterParameters 参数绑定
 #pragma warning disable S2077
-        string built = $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{forms.WhereClause}";
+        return $"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{forms.WhereClause}";
 #pragma warning restore S2077
-        DataSessionCache.GetAllSqlCache.TryAdd(key, built);
+    }
+
+    /// <summary>G4：GetAllAsync 完整 SQL 的 4 槽静态缓存取用（F6b 同型）——bit1=hasSoftDelete、
+    /// bit0=hasTenant，命中路径零字典查找（原 per-(Type, Dialect, 过滤形态) 元组键）。</summary>
+    private string GetGetAllSqlFast<T>(EntityRuntimeInfo info) where T : class, new()
+    {
+        int slot = FilterSlotBits(info.Features);
+        if (SqlSlots<T>.GetAll[slot] is { } cached)
+            return cached;
+        string built = GetGetAllSql<T>(
+            GetDefaultFilterForms<T>(info.Features), info.ColumnNames, info.TableName);
+        SqlSlots<T>.GetAll[slot] = built;
         return built;
     }
 
@@ -780,109 +990,183 @@ public sealed partial class DataSession<TProvider>
     /// 修复链：Enter 门禁必抛 → EnterReadOnly 放行 → 复用槽串扰 + 主连接并发 NRE 双缺陷
     /// 暴露 → 读池接入根治）。作用域内每次尝试从并行池取连接执行并归还（弹性重试时
     /// 重新获取，失败连接不回池）；复用槽仅服务作用域外主连接形态。事务与作用域互斥
-    /// （ITM-798），故读池路径无事务绑定面。</remarks>
-    public async ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
+    /// （ITM-798），故读池路径无事务绑定面。
+    /// R4（2026-10-12）：非 async 入口预热操作归属标记（写路径 step16-P1 同型）——读路径的
+    /// Enter 写 AsyncLocal 落在 async 体内不回流调用方，稳态每读重付一次 EC 拷贝（探针
+    /// readprewarm A/B 裁决）。</remarks>
+    public ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(key);
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            _operationState.PrewarmCurrentOperationOwner();
+        return GetByKeyEntryAsync<T>(key, ct);
+    }
+
+    // ── G2 证伪回退（2026-10-14 并发塌方定位轮，勿重开此形态）──
+    // 非 async 入口调用 EnterReadOnly 时，Enter 内的 AsyncLocal 写（_currentOperationOwner.Value = this）
+    // 直接落在调用方活 ExecutionContext 上——async 方法体内的写会被 async method builder 在
+    // 同步完成路径上还原（step16-P1 既有知识，"async 方法体内写 AsyncLocal 的值不跨该调用持久"），
+    // 非 async 入口没有这层包含。每操作新会话 = 每次写入一个<b>全新的 AsyncLocal 实例键</b>
+    //（SessionOperationState 每会话两个 AsyncLocal 字段），调用方 EC map 随操作数无界线性增长，
+    // AsyncLocal.Value setter 的 O(N) map 拷贝使长循环总成本 O(N²)——PerfHub 并发臂（饱和循环）
+    // 实测 20× 塌方（P50 6.6→133.7µs，8.65×于地板），短迭代批项不可见。入口回到 async 形态
+    //（写落在 async 体内被包含），G2 的状态机盒收益（~72-96B，[推断]级）不构成重开理由。
+    private async ValueTask<T?> GetByKeyEntryAsync<T>(object key, CancellationToken ct)
+        where T : class, new()
+    {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
-            || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
-            || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+        // P1-2：三查合一（From<T> 同型）。刀1：静态缓存命中零查找；刀2：事务单次取用贯穿
+        //（原 Entry 弹性检查与槽路径重设各取一次，各省一次 lock）。
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
 
         // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
         // 主连接形态（复用槽有效）。
         if (_operationState.ParallelReadsEnabled)
         {
-            return await ExecuteReadPipelineAsync(async token =>
-            {
-                string filter = GetDefaultFilterFragment<T>();
-                string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
-                    HasTenantFilter<T>(), _ignoreFilters);
-                DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
-                try
-                {
-                    await using DbCommand cmd = connection.CreateCommand();
-                    cmd.CommandText = commandText;
-                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-                    BindGeneratedKeyParameter<T>(cmd, key);
-                    BindDefaultFilterParameters<T>(cmd);
-                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-                    return await reader.ReadAsync(token).ConfigureAwait(false)
-                        ? ((Func<DbDataReader, T>)factory)(reader) : default;
-                }
-                finally
-                {
-                    await ReleaseReadConnectionAsync(connection).ConfigureAwait(false);
-                }
-            }, ct).ConfigureAwait(false);
+            // R3（2026-10-12）：直通分支免闭包直调（主分支 C10 同型；作用域与事务互斥
+            // ITM-798，无需事务判定）。原闭包捕获 6 变量 + this，直通时约 250-300B/op 纯浪费。
+            ResilienceExecutor parallelExecutor = Resilience;
+            if (parallelExecutor.IsPassThrough)
+                return await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false);
+            // R4-λ:static lambda + 值元组状态,闭包归零(static 委托按调用点缓存)
+            return await parallelExecutor.ExecuteAsync(
+                static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(state.Info, state.Key, token).AsTask(),
+                (Session: this, Info: info, Key: key),
+                ct).ConfigureAwait(false);
         }
 
-        // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）
-        return await ExecuteReadPipelineAsync(async token =>
+        // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）。
+        // C10/C12（2026-10-12 审读重开落地）：直通分支免闭包直调（A2/ExecuteReadScalarAsync
+        // 同型）——闭包捕获 + 异步状态机是每读固定成本，直通时弹性语义本就不参与，包装纯属
+        // 浪费；非直通分支才构造捕获委托（重试需要）。
+        ResilienceExecutor getByKeyExecutor = Resilience;
+        if (getByKeyExecutor.IsPassThrough || activeTransaction is not null)
+            return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
+        // R4-λ:static lambda + 值元组状态,闭包归零
+        return await getByKeyExecutor.ExecuteAsync(
+            static (state, token) => state.Session.GetByKeyCoreAsync<T>(state.Info, state.Tx, state.Key, token).AsTask(),
+            (Session: this, Info: info, Tx: activeTransaction, Key: key),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>GetAsync 并行读作用域分支的执行核心（R3 抽出）：参数直传不捕获，
+    /// 直通直调与弹性重试共用。失败时池连接丢弃（A1 语义），成功归还。
+    /// 刀1：签名改携 EntityRuntimeInfo（features/工厂/列名/表名一次取全）。</summary>
+    private async ValueTask<T?> ParallelGetByKeyCoreAsync<T>(
+        EntityRuntimeInfo info, object key, CancellationToken token)
+        where T : class, new()
+    {
+        string commandText = GetGetByKeySqlFast<T>(info);
+        DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
+        bool healthy = false;
+        try
         {
-            string filter = GetDefaultFilterFragment<T>();
-            // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
-            string commandText = GetGetByKeySql<T>(columnNames, tableName, filter,
-                HasTenantFilter<T>(), _ignoreFilters);
-
-            // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
-            // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
-            // 按命令实例生效，换命令即重编译）。
-            DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, state);
-            if (reused is not null)
-            {
-                await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
-                return await reusedReader.ReadAsync(token).ConfigureAwait(false)
-                    ? ((Func<DbDataReader, T>)factory)(reusedReader) : default;
-            }
-
-            await using DbCommand cmd = CreateCommand();
+            await using DbCommand cmd = connection.CreateCommand();
             cmd.CommandText = commandText;
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
-            BindDefaultFilterParameters<T>(cmd);
-
+            BindDefaultFilterParameters(cmd, info.Features);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            return await reader.ReadAsync(token).ConfigureAwait(false)
-                ? ((Func<DbDataReader, T>)factory)(reader) : default;
-        }, ct).ConfigureAwait(false);
+            T? row = await reader.ReadAsync(token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
+            healthy = true;
+            return row;
+        }
+        finally
+        {
+            await ReleaseOrDiscardReadConnectionAsync(connection, healthy).ConfigureAwait(false);
+        }
     }
 
-    /// <summary>查询全表。</summary>
-    public async ValueTask<List<T>> GetAllAsync<T>(CancellationToken ct = default)
+    /// <summary>GetAsync 主连接分支的执行核心（C10 抽出）：参数直传不捕获，供直通直调与
+    /// 弹性重试共用——语义与原内联闭包逐位一致（复用槽晋升/新建命令/单行物化）。
+    /// P1-2：首参由注册表快照改为 CRUD 元数据（合并视图携带，晋升判定免二次查找）。
+    /// 刀1：改携完整 EntityRuntimeInfo；刀2：事务由调用方单次取用传入；刀3：槽命中路径
+    /// 守卫式重设（Transaction/CommandTimeout 同值不重设，省 SqliteCommand setter 重验证）。</summary>
+    private async ValueTask<T?> GetByKeyCoreAsync<T>(
+        EntityRuntimeInfo info, DbTransaction? activeTransaction, object key, CancellationToken token)
+        where T : class, new()
+    {
+        // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
+        // F6b：4 槽静态缓存零字典查找（原 FilterForms + GetByKeySql 两次元组键哈希/读）
+        string commandText = GetGetByKeySqlFast<T>(info);
+
+        // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
+        // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
+        // 按命令实例生效，换命令即重编译）。
+        DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, info.Crud, activeTransaction);
+        if (reused is not null)
+        {
+            await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
+            return await reusedReader.ReadAsync(token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)info.RowFactory)(reusedReader) : default;
+        }
+
+        await using DbCommand cmd = CreateCommand(activeTransaction);
+        cmd.CommandText = commandText;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        BindGeneratedKeyParameter<T>(cmd, key);
+        BindDefaultFilterParameters(cmd, info.Features);
+
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+        return await reader.ReadAsync(token).ConfigureAwait(false)
+            ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
+    }
+
+    /// <summary>查询全表。（R4 预热包装同 <see cref="GetAsync{T}"/>。）</summary>
+    public ValueTask<List<T>> GetAllAsync<T>(CancellationToken ct = default)
+        where T : class, new()
+    {
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            _operationState.PrewarmCurrentOperationOwner();
+        return GetAllEntryAsync<T>(ct);
+    }
+
+    // G2 证伪回退（2026-10-14，勿重开非 async 租约入口）：理由见 GetByKeyEntryAsync 上方登记
+    private async ValueTask<List<T>> GetAllEntryAsync<T>(CancellationToken ct)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // v4.0 优化 B：CurrentState 单次快照--与 GetAsync 和 From<T> 对齐。
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._rowFactories.TryGetValue(typeof(T), out object? factory)
-            || !state._tableNames.TryGetValue(typeof(T), out string? tableName)
-            || !state._columnNames.TryGetValue(typeof(T), out var columnNames))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' is not registered.");
+        // P1-2：三查合一（From<T>/GetByKey 同型，合并视图一次取全）。刀1：静态缓存零查找；
+        // 刀2：事务单次取用（原弹性检查与 lease 内 CreateCommand 各取一次）。
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
 
-        // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略
-        return await ExecuteReadPipelineAsync(async token =>
-        {
-            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, token).ConfigureAwait(false);
-            DbCommand cmd = lease.Command;
-            // N5（2026-10-04 全量复读）：完整 SQL 走 (Type, Dialect, 过滤形态) 缓存——
-            // 原每次调用 1 次 QuoteIdentifier + 全句插值；GetByKeySql/CountComposed 同款模式。
-            // 过滤形态在实例侧求值后传入（ignoreFilters/租户是会话态）。
-            cmd.CommandText = GetGetAllSql<T>(GetDefaultFilterForms<T>(), columnNames, tableName);
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            BindDefaultFilterParameters<T>(cmd);
+        // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略（C10 直通直调，同 GetAsync）。
+        ResilienceExecutor getAllExecutor = Resilience;
+        if (getAllExecutor.IsPassThrough || activeTransaction is not null)
+            return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
+        // R4-λ:static lambda + 值元组状态,闭包归零
+        return await getAllExecutor.ExecuteAsync(
+            static (state, token) => state.Session.GetAllCoreAsync<T>(state.Info, state.Tx, token).AsTask(),
+            (Session: this, Info: info, Tx: activeTransaction),
+            ct).ConfigureAwait(false);
+    }
 
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
-            List<T> list = await ResultListReader.ReadAllAsync(
-                reader, (Func<DbDataReader, T>)factory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
-            RecordMaterializedCount<T>(list.Count);
-            return list;
-        }, ct).ConfigureAwait(false);
+    /// <summary>GetAllAsync 的执行核心（C10 抽出）：参数直传不捕获，直通直调与弹性重试共用。
+    /// 刀1：改携 EntityRuntimeInfo（forms/绑定经 features 省查找）；刀2：事务传入。</summary>
+    private async ValueTask<List<T>> GetAllCoreAsync<T>(
+        EntityRuntimeInfo info, DbTransaction? activeTransaction, CancellationToken token)
+        where T : class, new()
+    {
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
+        // G4（五轮微项包）：完整 SQL 走 4 槽静态缓存（F6b 同型，原 per-(Type,Dialect,forms) 字典）。
+        cmd.CommandText = GetGetAllSqlFast<T>(info);
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        BindDefaultFilterParameters(cmd, info.Features);
+
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+        // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
+        List<T> list = await ResultListReader.ReadAllAsync(
+            reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
+        RecordMaterializedCount<T>(list.Count);
+        lease.MarkHealthy();
+        return list;
     }
 
     /// <summary>物化容量启发（step8-T6/M3-2）：会话内记录 (实体类型 → 上次物化行数)，
@@ -916,7 +1200,7 @@ public sealed partial class DataSession<TProvider>
     {
         ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：同 InsertAsync——非 async 入口预热操作归属标记
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return SaveCoreAsync(entity, null, ct);
     }
@@ -1040,19 +1324,27 @@ public sealed partial class DataSession<TProvider>
         PalORM_Runtime.RuntimeRegistryState state)
         where T : class, new()
     {
+        // G5（2026-10-13 五轮微项包）：刀1 同型静态缓存——Register 拒绝对已注册类型重复注册，
+        // 类型级注册表条目单调不可变（ITM-758 live 读安全性论证同源），首次成功查找后按
+        // (TProvider, T) 钉死，后续每操作零字典查找。未命中走既有快照路径（异常消息逐位保留），
+        // 旧生成器程序集缺方言键的抛出发生在缓存写入之前，失败不缓存。
+        if (SqlSlots<T>.CommandSqls is { } cached)
+            return cached;
         // r19/ITM-703：读调用方传入的同一注册表快照——不再直读 live 注册表
         // （热重载/Register 窗口内避免同一操作跨版本混用元数据）。
         // 评审 2026-09-02 收敛：legacy 无方言 SQL 已从生成物移除（运行时此前即拒绝消费，
         // 见 ITM-684），方言 SQL 是唯一真源。旧生成器模型程序集缺方言键时明确拒绝——
         // 其 legacy 标识符未经引用转义，回退即错误语句。
-        if (state._commandSqlsByDialect.TryGetValue(
+        if (!state._commandSqlsByDialect.TryGetValue(
                 typeof(T), out CommandSqlByDialect sqls))
         {
-            return sqls.Get(TProvider.Dialect);
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no dialect-specific generated SQL. " +
+                "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
         }
-        throw new InvalidOperationException(
-            $"Type '{typeof(T).Name}' has no dialect-specific generated SQL. " +
-            "The model assembly was compiled with an older PalORM source generator; recompile it against the current version.");
+        CommandSqlSet set = sqls.Get(TProvider.Dialect);
+        SqlSlots<T>.CommandSqls = set;
+        return set;
     }
 
     // v5.4 精炼：BuildMySqlUpsertSql 运行时死代码已删（原注释自认"运行时不再调用"，

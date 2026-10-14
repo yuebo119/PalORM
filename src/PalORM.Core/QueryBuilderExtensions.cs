@@ -22,7 +22,16 @@ public static class QueryBuilderExtensions
     /// <summary>执行查询并返回全部实体列表。
     /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
     /// 未命中则执行查询并将副本写入缓存。</para></summary>
-    public static async ValueTask<List<T>> ToListAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    public static ValueTask<List<T>> ToListAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    {
+        // R4（2026-10-12）：读预热（写路径 step16-P1 同型）——Enter 的 AsyncLocal 写落在
+        // 调用方持久 EC，体内守卫命中免写（每读省一次 EC 拷贝，探针 readprewarm A/B -72B/op）
+        if (builder._operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            builder._operationState.PrewarmCurrentOperationOwner();
+        return ToListEntryAsync(builder, ct);
+    }
+
+    private static async ValueTask<List<T>> ToListEntryAsync<T>(QueryBuilder<T> builder, CancellationToken ct) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operationLease =
             builder._operationState.EnterReadOnly();
@@ -148,7 +157,7 @@ public static class QueryBuilderExtensions
             // （作用域外归还器对主连接为空操作），否则作用域内每次 ForEachAsync 都
             // 新建连接不复用。记录的是最后一次尝试的连接（重试中间尝试由作用域退出兜底）。
             if (lastReadConnection is not null)
-                await builder.ReleaseReadConnectionAsync(lastReadConnection).ConfigureAwait(false);
+                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
         }
     }
 
@@ -316,7 +325,7 @@ public static class QueryBuilderExtensions
             // 记录的是最后一次尝试的连接——重试路径上中间尝试的连接由作用域退出时统一释放（有界：
             // 每操作至多 MaxRetries+1 条），换取不改动内核主体缩进的低风险接线。
             if (lastReadConnection is not null)
-                await builder.ReleaseReadConnectionAsync(lastReadConnection).ConfigureAwait(false);
+                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
         }
     }
 
@@ -362,7 +371,10 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>返回第一行实体；无结果抛 <see cref="InvalidOperationException"/>。
-    /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para></summary>
+    /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para>
+    /// <para>G1（2026-10-13 五轮全量重读微项包）：截断族改走 <see cref="ExecuteQueryRowsAsync{T}"/>
+    /// 单行物化内核——不再为最多 2 行的结果建 List（约 −56B/次），管线语义（拦截器时序/
+    /// 观测性/弹性覆盖/A9 复用槽/截断防护）与 ToListAsync 逐位一致。</para></summary>
     public static async ValueTask<T> FirstAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         T? result = await FirstOrDefaultAsync(builder, ct).ConfigureAwait(false);
@@ -371,7 +383,14 @@ public static class QueryBuilderExtensions
 
     /// <summary>返回第一行实体，无结果返回 null。
     /// <para>内部限制 Take(1) 并跳过缓存写入——截断结果写入用户缓存键会导致同键 ToListAsync 静默丢行。</para></summary>
-    public static async ValueTask<T?> FirstOrDefaultAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    public static ValueTask<T?> FirstOrDefaultAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+    {
+        if (builder._operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            builder._operationState.PrewarmCurrentOperationOwner();
+        return FirstOrDefaultEntryAsync(builder, ct);
+    }
+
+    private static async ValueTask<T?> FirstOrDefaultEntryAsync<T>(QueryBuilder<T> builder, CancellationToken ct) where T : class, new()
     {
         var limited = builder;
         limited._take = 1;
@@ -379,8 +398,8 @@ public static class QueryBuilderExtensions
         // First/Single 族的 _take 截断列表不得写入用户缓存键——后续同键 ToListAsync
         // 会命中截断数据静默丢行（ITM-406）
         limited._cacheKey = null;
-        List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
-        return results.Count == 0 ? default : results[0];
+        (T? row, _) = await ExecuteQueryRowsAsync(limited, maxRows: 1, ct).ConfigureAwait(false);
+        return row;
     }
 
     /// <summary>返回恰好一行实体；无结果或多于一行均抛 <see cref="InvalidOperationException"/>。
@@ -391,9 +410,9 @@ public static class QueryBuilderExtensions
         limited._take = 2;
         limited._takeLiteral = true;   // SQLite 上内联成 LIMIT 2（同 FirstOrDefaultAsync）
         limited._cacheKey = null;
-        List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
-        if (results.Count == 1) return results[0];
-        throw new InvalidOperationException(results.Count == 0 ? "Empty." : "More than one.");
+        (T? row, int count) = await ExecuteQueryRowsAsync(limited, maxRows: 2, ct).ConfigureAwait(false);
+        if (count == 1) return row!;
+        throw new InvalidOperationException(count == 0 ? "Empty." : "More than one.");
     }
 
     /// <summary>返回至多一行实体：无结果返回 null，多于一行抛 <see cref="InvalidOperationException"/>。
@@ -404,20 +423,159 @@ public static class QueryBuilderExtensions
         limited._take = 2;
         limited._takeLiteral = true;   // SQLite 上内联成 LIMIT 2（同 FirstOrDefaultAsync）
         limited._cacheKey = null;
-        List<T> results = await ExecuteQueryAsync(limited, ct).ConfigureAwait(false);
-        return results.Count <= 1 ? results.FirstOrDefault() : throw new InvalidOperationException("More than one.");
+        (T? row, int count) = await ExecuteQueryRowsAsync(limited, maxRows: 2, ct).ConfigureAwait(false);
+        return count <= 1 ? row : throw new InvalidOperationException("More than one.");
     }
 
-    /// <summary>键集（keyset）分页：返回一页数据与总行数。</summary>
-    /// <para>COUNT 与页查询在同一事务内执行保证一致性快照——无外部事务时自动开启并提交/回滚。</para>
+    /// <summary>G1（2026-10-13 五轮全量重读微项包）：First/Single 截断族的单行物化执行内核——
+    /// 与 <see cref="ExecuteQueryAsync{T}"/>（ToList 管线）<b>语义逐位一致</b>（拦截器
+    /// OnBefore → OnAfter(实际行数) → OnError、观测性、弹性覆盖、A9 复用槽、A1 并行池归还、
+    /// READ-001 读连接失效），差异仅在物化：最多 maxRows 行直读进返回元组，不建 List
+    ///（截断族原先为 1~2 行结果付 List + 元素数组约 56B，且 OnAfter 行数口径不变）。
+    /// <para><b>缓存写入结构性跳过</b>：三个调用方入口在进入前清空 _cacheKey（ITM-406 截断防护），
+    /// 本内核无缓存写入面。maxRows 恒等于已设的 Take 值（1 或 2）——SQL 的 LIMIT 已在服务端
+    /// 截断，循环上限是双保险而非额外扫描。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "与 ExecuteQueryAsync/ExecuteForEachAsync 同构的管线形态（执行/拦截器/观测性三段式）——"
+            + "单行变体必须保持同一语义结构，抽公共化会为各处引入一层间接（PipelineParityContractTests 的既有取舍）。")]
+    private static async ValueTask<(T? Row, int Rows)> ExecuteQueryRowsAsync<T>(
+        QueryBuilder<T> builder, int maxRows, CancellationToken ct, object? operationOwner = null)
+        where T : class, new()
+    {
+        if (builder._selectColumns is not null)
+            throw new NotSupportedException(
+                "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
+        string sql = builder.BuildSql();
+        IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
+        var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
+        const string operation = "select";
+        string provider = builder._dialect.GetName();
+        bool observed = builder._tracing || builder._metrics;
+        Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        bool needStopwatch = observed || interceptors.Count > 0;
+        long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
+        string outcome = "error";
+        DbTransaction? boundTransaction = builder.GetActiveTransaction();
+        ResilienceExecutor resilience = builder._resilience;
+        bool resilient = boundTransaction is null && !resilience.IsPassThrough;
+
+        // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
+        DbConnection? lastReadConnection = null;
+        // 单次尝试内核——最多读 maxRows 行直进元组；A9 复用槽与新建命令的分支形态与
+        // ExecuteQueryAsync 逐位同源（R-UNNESTB：复用命令参数集合持久持有，就地写 Value）。
+        async Task<(T? Row, int Rows)> ExecuteCoreAsync(CancellationToken token)
+        {
+            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
+            lastReadConnection = connection;
+            DbCommand? reusable = builder.TryAcquireReusableSelectCommand(connection, sql);
+            bool ownsCommand;
+            bool parametersBound;
+            DbCommand cmd;
+            if (reusable is null
+                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, parameters)))
+            {
+                cmd = connection.CreateCommand();
+                ownsCommand = true;
+                parametersBound = false;
+            }
+            else
+            {
+                cmd = reusable;
+                ownsCommand = false;
+                parametersBound = reusable.Parameters.Count > 0;
+            }
+            try
+            {
+                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
+                    cmd.CommandText = sql;
+                cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
+                cmd.Transaction = boundTransaction;
+                if (!parametersBound) AddParameters(cmd, parameters);
+                NotifyInterceptorsOnBefore(interceptors, context);
+                await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
+                await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+                T? first = null;
+                int rows = 0;
+                while (rows < maxRows && await reader.ReadAsync(token).ConfigureAwait(false))
+                {
+                    if (rows == 0)
+                        first = builder._factory(reader);
+                    rows++;
+                }
+                NotifyInterceptorsOnAfter(interceptors, context, swStart, rows);
+                return (first, rows);
+            }
+            finally
+            {
+                if (ownsCommand) await cmd.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        try
+        {
+            using SessionOperationState.SessionOperationLease operationLease =
+                builder._operationState.EnterReadOnly(operationOwner);
+            (T? row, int rows) result = resilient
+                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
+                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
+            outcome = "success";
+            return result;
+        }
+        catch (Exception exception)
+        {
+            if (exception is OperationCanceledException && ct.IsCancellationRequested)
+                outcome = "cancelled";
+            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
+            //（NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
+            // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
+            if (builder._resilience.IsTransient(exception))
+                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
+            NotifyInterceptorsOnError(builder._interceptors, context, exception);
+            throw;
+        }
+        finally
+        {
+            PalORMMetrics.CompleteActivity(activity, outcome);
+            if (builder._metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
+            // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
+            if (lastReadConnection is not null)
+                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>键集（keyset）分页：返回一页数据与总行数。
+    /// <para><b>P0-1（2026-10-12）PG 单往返默认路径</b>：PG 方言 + 默认 READ COMMITTED +
+    /// 无外部事务 + 无拦截器/观测性时，COUNT 与页查询打包为一个 <c>DbBatch</c> 单次协议往返
+    ///（原形态 BEGIN+COUNT+SELECT+COMMIT 四次往返）。该形态下快照语义与原先逐位一致——
+    /// READ COMMITTED 的事务内两条语句本就<b>各取快照</b>（Total 与页行可能不一致），
+    /// 需要强一致快照请 <see cref="DataSession{TProvider}.WithIsolationLevel"/>(Snapshot/Serializable)
+    /// 或外部事务（两者都走经典事务路径）。MySQL（RR 快照有真实一致性）与 SQLite 保持
+    /// 经典事务路径。</para></summary>
+    /// <para><b>各方言经典路径的快照语义</b>（决策 MySQL 不入批路径的依据，2026-10-12 复核）：
+    /// MySQL InnoDB 默认 REPEATABLE READ 下，事务内 COUNT 与页查询<b>共享同一快照</b>
+    ///（快照在事务首次读取时建立）——Total 与页行保证一致；SQLite 延迟读事务下两语句
+    /// 看到同一一致性读视图；PG 默认 READ COMMITTED 下两语句各取快照（Total 与页行可能
+    /// 不一致，需强一致用 Snapshot/Serializable 隔离）。批路径（仅 PG 默认形态）以
+    /// "两快照"为契约，与 PG 经典路径逐位等价。</para>
     /// <para>lastValue 为上一页末行的 orderBy 键值：非默认值时生成 <c>orderBy &lt; lastValue</c>（降序）
     /// 或 <c>&gt;</c>（升序）续页条件；首页传 default。键值为 default 的行无法作为续页锚点。</para>
     /// <para>ITM-582: ① COUNT 查询走 Tracing/Metrics 但<b>不经过</b> IQueryInterceptor（页查询经过）——
     /// 审计型拦截器不会看到 COUNT SQL；② builder 上已设的 <c>Skip()</c> 被忽略（键集分页以
     /// lastValue 锚点续页，OFFSET 语义不适用）；③ 用户先行的 <c>Take()</c> 同被
     /// pageSize 覆写（r9-S-B/r10-N2 补交付——双覆写契约显式化）。</para>
-    public static async ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
+    public static ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue = default, bool descending = true, CancellationToken ct = default) where T : class, new()
+    {
+        if (builder._operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            builder._operationState.PrewarmCurrentOperationOwner();
+        return ToPageEntryAsync(builder, pageSize, orderBy, lastValue, descending, ct);
+    }
+
+    private static async ValueTask<(List<T> Rows, long Total)> ToPageEntryAsync<T, TKey>(QueryBuilder<T> builder,
+        int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue, bool descending, CancellationToken ct) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operationLease =
             builder._operationState.EnterReadOnly();
@@ -431,11 +589,25 @@ public static class QueryBuilderExtensions
         // （ITM-406 同型面唯一漏口，First/Single/SingleOrDefault 三入口均已清）
         paged._cacheKey = null;
         DbTransaction? existingTransaction = paged.GetActiveTransaction();
+        // P0-1（2026-10-12 全量重读）：PG 默认形态的单往返分页——COUNT 与页 SELECT 打进一个
+        // DbBatch 单次协议往返。PG 默认 READ COMMITTED 下事务内两条语句<b>各取快照</b>
+        //（ToPageAsync 注释既有登记：Total 与页行可能不一致），原路径 BEGIN+COUNT+SELECT+COMMIT
+        // 四次往返中 BEGIN/COMMIT 两次买不到任何一致性，纯属开销；批内两条语句的快照语义
+        // 与原形态逐位一致。其余形态（强隔离/外部事务/SQLite/MySQL——RR 快照有真实一致性
+        // 价值）走下方经典事务路径；门禁细则见 CanUseBatchedPage。
+        if (CanUseBatchedPage(paged, existingTransaction))
+        {
+            return await ExecuteBatchedPageAsync(paged, pageSize, orderBy, lastValue, descending, ct)
+                .ConfigureAwait(false);
+        }
         // ITM-649：自有事务经 PublishTransaction 登记进 SessionOperationState——会话 Dispose
         // 与事务门禁可见该事务（此前直接 BeginTransactionAsync 自包含但登记缺席；若 Dispose/
         // 门禁依赖登记状态则为盲区）。外部事务已由其创建方登记，此处不重复发布。
         // r5-S2：自开事务 honoring 会话 WithIsolationLevel——原裸调 BeginTransactionAsync
-        // 恒驱动默认，Serializable/Snapshot 会话的分页一致性快照被静默降级
+        // 恒驱动默认，Serializable/Snapshot 会话的分页一致性快照被静默降级。
+        // 隔离实口径（2026-10-12 注明）：事务使 COUNT 与页查询在 MySQL RR / SQLite 延迟读
+        // 下看到同一快照；PG 默认 READ COMMITTED 下两条语句各取快照，Total 与页行可能
+        // 不一致——需要强一致请 WithIsolationLevel(Snapshot/Serializable)。
         DbTransaction transaction = existingTransaction
             ?? (paged._isolationLevel is { } iso
                 ? await paged._conn.BeginTransactionAsync(iso, ct).ConfigureAwait(false)
@@ -468,11 +640,13 @@ public static class QueryBuilderExtensions
             long total = countResult is long count ? count : Convert.ToInt64(countResult);
 
             string operation = descending ? "<" : ">";
+            // C16：orderBy 列解析一次复用（原 AddWhereComparison + AddOrderBy 各解析一次）
+            string orderByColumn = paged.ResolveColumn(orderBy);
             if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
-                paged.AddWhereComparison(orderBy, operation, lastValue);
+                paged.AddWhereComparison(orderByColumn, operation, lastValue);
             // review R3：如果 builder 已有 OrderBy，AddOrderBy 追加为次级排序键。
             // keyset 续页条件始终锚定 orderBy 参数列——用户预设排序不影响续页正确性。
-            paged.AddOrderBy(orderBy, descending);
+            paged.AddOrderBy(orderByColumn, descending);
             List<T> rows = await ExecuteQueryAsync(
                 paged, ct, operationLease.Owner).ConfigureAwait(false);
             if (ownsTransaction)
@@ -508,6 +682,142 @@ public static class QueryBuilderExtensions
                 paged._operationState.RestoreTransaction(transaction, existingTransaction);
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>P0-1：PG 单往返分页的门禁判定（从 ToPageEntryAsync 抽出，降 S3776）——
+    /// 无外部事务、PG 方言、默认隔离（RC）、无拦截器/观测性（三段式编排留在经典路径）、
+    /// 非 AsPrepared、连接具备 DbBatch 能力（第三方 PG 方言 Provider 探测失败回退）。</summary>
+    private static bool CanUseBatchedPage<T>(QueryBuilder<T> paged, DbTransaction? existingTransaction)
+        where T : class, new()
+        => existingTransaction is null
+            && paged._dialect == SqlDialect.PostgreSql
+            && paged._isolationLevel is null or System.Data.IsolationLevel.ReadCommitted
+            && paged._interceptors.Count == 0
+            && !paged._tracing && !paged._metrics && !paged._prepared
+            && BatchedPageConnectionCapable(paged._conn);
+
+    /// <summary>P0-1：连接类型 → DbBatch 能力缓存（第三方 PG 方言 Provider 的连接未覆写
+    /// CreateBatch 时基类抛 NotSupportedException——探测一次按类型记忆，稳态一次字典查询）。
+    /// 与 SessionBatch.TryCreateBatch 的方言静态判定 + try/catch 兜底同纪律；本处分页路径
+    /// 按 PG 方言门控后仍需面对自定义连接，探测结果缓存避免每页一次异常抛出成本。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> BatchedPageCapability = new();
+
+    private static bool BatchedPageConnectionCapable(DbConnection connection)
+    {
+        Type connectionType = connection.GetType();
+        if (BatchedPageCapability.TryGetValue(connectionType, out bool capable))
+            return capable;
+        try
+        {
+            using DbBatch probe = connection.CreateBatch();
+            capable = true;
+        }
+        catch (NotSupportedException)
+        {
+            capable = false;
+        }
+        BatchedPageCapability.TryAdd(connectionType, capable);
+        return capable;
+    }
+
+    /// <summary>P0-1：PG 单往返分页——COUNT 与页查询的语句/参数在批执行内核外构建一次，
+    /// 重试经会话弹性策略包裹（幂等读，每次尝试重建批与读取器；经典路径的页查询同受
+    /// 弹性覆盖，COUNT 原直连——批形态两条语句同享覆盖是收窄而非放松）。</summary>
+    private static async ValueTask<(List<T> Rows, long Total)> ExecuteBatchedPageAsync<T, TKey>(
+        QueryBuilder<T> paged, int pageSize, Expression<Func<T, TKey>> orderBy,
+        TKey? lastValue, bool descending, CancellationToken ct)
+        where T : class, new()
+    {
+        // COUNT 先行构建（键集续页条件尚未注入——与经典路径的构建次序逐位一致，
+        // COUNT 不含续页条件是 keyset 语义本体）
+        string countSql = paged.BuildCountSql();
+        IReadOnlyList<DbParameter> countParameters = paged.GetCountParameters();
+        string operation = descending ? "<" : ">";
+        // C16：orderBy 列解析一次复用
+        string orderByColumn = paged.ResolveColumn(orderBy);
+        if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
+            paged.AddWhereComparison(orderByColumn, operation, lastValue);
+        paged.AddOrderBy(orderByColumn, descending);
+        string pageSql = paged.BuildSql();
+        IReadOnlyList<DbParameter> pageParameters = paged.GetQueryParameters();
+
+        ResilienceExecutor resilience = paged._resilience;
+        if (resilience.IsPassThrough)
+            return await ExecuteBatchedPageCoreAsync<T>(
+                paged, pageSize, countSql, countParameters, pageSql, pageParameters, ct).ConfigureAwait(false);
+        // F3（2026-10-13 全量重读微项包）：R4-λ 清扫的漏网点——原形态捕获 6 个局部变量的闭包
+        // 在非直通（默认）配置下每分页查询分配一个 display class。static lambda 按调用点缓存，
+        // 值元组状态按值传递，语义逐位一致。
+        return await resilience.ExecuteAsync(
+            static (state, token) => ExecuteBatchedPageCoreAsync<T>(
+                state.Paged, state.PageSize, state.CountSql, state.CountParameters,
+                state.PageSql, state.PageParameters, token),
+            (Paged: paged, PageSize: pageSize, CountSql: countSql, CountParameters: countParameters,
+             PageSql: pageSql, PageParameters: pageParameters),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>P0-1：批执行内核——COUNT 结果集 + 页结果集经一个 DbDataReader 顺序消费。
+    /// <para><b>参数归属</b>：COUNT 与页查询的参数列表可能引用同一批子句参数对象
+    ///（Where/DefaultFilter 的参数同时进两个语句），同一 DbParameter 实例不得挂进两个
+    /// DbBatchCommand——COUNT 侧经 <see cref="AddBatchParameterCopies"/> 拷贝（参数数 ≤ 过滤
+    /// 参数量，典型 0~2 个），页侧独占原始对象。</para></summary>
+    private static async Task<(List<T> Rows, long Total)> ExecuteBatchedPageCoreAsync<T>(
+        QueryBuilder<T> paged, int pageSize,
+        string countSql, IReadOnlyList<DbParameter> countParameters,
+        string pageSql, IReadOnlyList<DbParameter> pageParameters,
+        CancellationToken ct)
+        where T : class, new()
+    {
+        await using DbBatch batch = paged._conn.CreateBatch();
+        // DbBatch.Timeout 是 int 秒（SessionBatch 的 BATCH-001 口径；不设则驱动默认 30s，
+        // 会话 WithTimeout 在此静默失效）
+        batch.Timeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
+
+        DbBatchCommand countCommand = batch.CreateBatchCommand();
+        countCommand.CommandText = countSql;
+        AddBatchParameterCopies(countCommand, countParameters);
+        batch.BatchCommands.Add(countCommand);
+
+        DbBatchCommand pageCommand = batch.CreateBatchCommand();
+        pageCommand.CommandText = pageSql;
+        for (int i = 0; i < pageParameters.Count; i++)
+            pageCommand.Parameters.Add(pageParameters[i]);
+        batch.BatchCommands.Add(pageCommand);
+
+        await using DbDataReader reader = await batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        // 第一结果集：COUNT 标量（ITM-637 同型面：null/零行显式报错不静默 0）
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                "COUNT query returned no row — the ADO.NET driver behaved unexpectedly.");
+        object? countResult = reader.GetValue(0);
+        if (countResult is null)
+            throw new InvalidOperationException(
+                "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
+        long total = countResult is long count ? count : Convert.ToInt64(countResult);
+
+        // 第二结果集：页行（ITM-712 容量封顶与经典路径同口径）
+        if (!await reader.NextResultAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                "Paged query result set is missing from the batch response.");
+        List<T> rows = await ResultListReader.ReadAllAsync(
+            reader, paged._factory, Math.Min(pageSize, MaxPreallocatedCapacity), ct).ConfigureAwait(false);
+        return (rows, total);
+    }
+
+    /// <summary>P0-1：把参数拷贝进 COUNT 批命令（名称/类型/值三件套；源对象归页命令或子句所有，
+    /// 不得共享实例——DbBatchCommand.Parameters 是每命令独立集合）。</summary>
+    private static void AddBatchParameterCopies(DbBatchCommand command, IReadOnlyList<DbParameter> source)
+    {
+        for (int i = 0; i < source.Count; i++)
+        {
+            DbParameter original = source[i];
+            DbParameter copy = command.CreateParameter();
+            copy.ParameterName = original.ParameterName;
+            copy.DbType = original.DbType;
+            copy.Value = original.Value;
+            command.Parameters.Add(copy);
         }
     }
 
@@ -694,8 +1004,10 @@ public static class QueryBuilderExtensions
     private static void AddParameters(DbCommand command,
         IReadOnlyList<DbParameter> parameters)
     {
-        foreach (DbParameter parameter in parameters)
-            command.Parameters.Add(parameter);
+        // R3（2026-10-12）：for + 索引替代 foreach——经 IReadOnlyList 接口枚举 List 会
+        // 装箱枚举器（每查询约 32B）；数组/自建 List 的索引访问零分配且同为 O(1)。
+        for (int i = 0; i < parameters.Count; i++)
+            command.Parameters.Add(parameters[i]);
     }
 
     /// <summary>R-UNNESTB（2026-10-02）：复用命令的就地参数赋值——逐位置把本次查询的

@@ -45,6 +45,10 @@ public sealed class MySqlProvider : IDbProvider
         // 单次成本 = MySqlConnectionStringBuilder 解析 4.00µs + 9× Keys LINQ 扫描 3.46µs ≈ 7.5µs；
         // PerfHub 夹具用共享连接不经过，但每操作自建会话用法（DataSession.CreateAsync per op）
         // 全额支付。缓存命中后只剩字典查询 + new MySqlConnection（0.04µs）。逻辑零变更。
+        // MySQL-6/D21（2026-10-12 审读修复）：多租户逐租户连接串使键空间不再"个位数"——
+        // 上限封顶 + 满清自愈（PG-6 同构，值含凭据副本常驻量随之封顶）。工厂失败不缓存。
+        if (RewrittenConnectionStringCache.Count >= RewrittenCacheCapacity)
+            RewrittenConnectionStringCache.Clear();
         string rewritten = RewrittenConnectionStringCache.GetOrAdd(
             (connectionString, options.MaxPoolSize, options.MinPoolSize,
                 options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
@@ -60,6 +64,9 @@ public sealed class MySqlProvider : IDbProvider
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
         (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
         RewrittenConnectionStringCache = new();
+
+    /// <summary>MySQL-6/D21：改写缓存容量上限（与 PostgreSqlProvider 同构纪律）。</summary>
+    private const int RewrittenCacheCapacity = 256;
 
     /// <summary>MySQL-6：连接串旋钮改写的实际逻辑（从 CreateConnection 原样抽出，逻辑零变更）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -283,10 +290,16 @@ public sealed class MySqlProvider : IDbProvider
 
     /// <summary>检测服务端 local_infile 是否开启——键 = <see cref="MySqlConnection.ConnectionString"/>
     /// （改写后串），命中未过期直接返回；未命中执行 SHOW VARIABLES 并写缓存。探测故障
-    /// （异常 / ITM-822 零行形态）经异常路径上抛，由本方法捕获后计数降级（不写缓存）。</summary>
+    /// （异常 / ITM-822 零行形态）经异常路径上抛，由本方法捕获后计数降级（不写缓存）。
+    /// R3（2026-10-12）：失败时打负结果标记（10s 窗口）——持续故障形态下原每次 BulkInsert
+    /// 重付探测往返 + 3s 超时封顶（最坏延迟洞），窗口内直接降级多值路径不再探测。</summary>
+    private const int LocalInfileNegativeTtlMilliseconds = 10_000;
+
     private static async ValueTask<bool> IsLocalInfileEnabledAsync(
         MySqlConnection conn, MySqlTransaction? transaction, CancellationToken ct)
     {
+        if (CapabilityProbeCache<LocalInfileProbe>.IsNegativeFresh(conn.ConnectionString))
+            return false;   // 负结果窗口：直接降级，不重付探测往返/超时
         try
         {
             return (await CapabilityProbeCache<LocalInfileProbe>.GetOrProbeAsync(
@@ -317,6 +330,8 @@ public sealed class MySqlProvider : IDbProvider
         {
             // R14：探测故障与能力关闭在多值路径上行为一致，但归因完全不同——计数留痕
             BulkOperationFramework.RecordCapabilityProbeFailure();
+            CapabilityProbeCache<LocalInfileProbe>.MarkNegative(
+                conn.ConnectionString, LocalInfileNegativeTtlMilliseconds);
             return false;  // 探测故障降级多值路径（见 summary）；取消原样上抛
         }
     }

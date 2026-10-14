@@ -251,6 +251,11 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
                     //   ① 无 delayTask，超时不再依赖第二个定时器，也不存在取消语义复用；
                     //   ② 超时分支先 Cancel 取消悬挂的 wait——不留同一连接上的并发等待；
                     //   ③ 通知到达走原路径，连接故障仍按 transient 走既有重连。
+                    // D23 关账登记（R3 三轮审读，2026-10-12）：本循环每等待周期一份 linked CTS +
+                    // WaitAsync(TimeSpan) 定时器——这是 NOTIF-001 正确性修复的**有意代价**（前形态
+                    // 复用单 CTS + CancelAfter 重臂，CTS 一经取消不可复用，空闲通道静默死亡——
+                    // 与 DbBatch 探针实锤的驱动绑定清理同族）。周期 = 通知到达或心跳间隔（默认
+                    // 30s），按事件率计费；无高频 LISTEN 负载证据，EPSL 触发条件不满足，不做。
                     while (!owner.IsCancellationRequested)
                     {
                         using var beat = CancellationTokenSource.CreateLinkedTokenSource(owner.Token);

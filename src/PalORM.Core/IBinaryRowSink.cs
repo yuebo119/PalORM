@@ -45,6 +45,14 @@ public interface IBinaryRowSink
     /// <summary>写 <see cref="DateTimeOffset"/> 列（对应 DbType.DateTimeOffset 形态）。</summary>
     void WriteDateTimeOffset(int ordinal, DateTimeOffset value);
 
+    /// <summary>写 <see cref="DateOnly"/> 列（对应 DbType.Date 形态）。
+    /// P2-2（2026-10-12 扩面）：Npgsql 6+ 的 PG date 映射即 DateOnly，二进制 COPY 定型直写。</summary>
+    void WriteDateOnly(int ordinal, DateOnly value);
+
+    /// <summary>写 <see cref="TimeOnly"/> 列（对应 DbType.Time 形态）。
+    /// P2-2（2026-10-12 扩面）：Npgsql 6+ 的 PG time 映射即 TimeOnly，二进制 COPY 定型直写。</summary>
+    void WriteTimeOnly(int ordinal, TimeOnly value);
+
     /// <summary>写字符串列（对应 DbType.String 形态）；运行时 null 值按 NULL 写入。</summary>
     void WriteString(int ordinal, string? value);
 

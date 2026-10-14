@@ -46,9 +46,22 @@ internal sealed class BulkDeleteArrayFormTests
     private static async Task SeedAsync(
         DataSession<ArrayFormDialectProvider> session, int count)
     {
-        for (int i = 1; i <= count; i++)
+        // 深挖轮（2026-10-14）：批宽提升到 20000 后边界测试需 >20000 行——改多值 INSERT
+        //（500 行/语句）；经 FormattableStringFactory.Create 零参形态传裸 SQL（插值孔一律
+        // 参数化是 ExecuteAsync 契约，常量字面值拼好的整句走零参工厂即无参数）；不经
+        // BulkInsertAsync（保持"不为播种动被测路径"的夹具隔离既定取舍）。
+        for (int start = 1; start <= count; start += 500)
+        {
+            int end = Math.Min(start + 499, count);
+            var sb = new System.Text.StringBuilder("INSERT INTO array_form_rows (id, name) VALUES ");
+            for (int i = start; i <= end; i++)
+            {
+                if (i > start) sb.Append(',');
+                sb.Append('(').Append(i).Append(", 'row").Append(i).Append("')");
+            }
             await session.ExecuteAsync(
-                $"INSERT INTO array_form_rows (id, name) VALUES ({i}, {"row" + i})");
+                System.Runtime.CompilerServices.FormattableStringFactory.Create(sb.ToString()));
+        }
     }
 
     /// <summary>数组形态断言：每次执行的语句都必须是 <c>= ANY(@ids)</c> 且整批只有一个参数
@@ -310,6 +323,96 @@ internal sealed class BulkDeleteArrayFormTests
         Array offset = builder(keys, 1, 2)
             ?? throw new InvalidOperationException("数组构造器返回 null（区间调用）。");
         await Assert.That((long[])offset).IsEquivalentTo([expected[1], expected[2]]);
+    }
+
+    // ─── F2（2026-10-13 全量重读）：类型化键重载 BulkDeleteAsync<T, TKey> ───────────
+
+    /// <summary>类型化重载的数组形态锁定：long[] 直入（零装箱路径），语句形状必须是
+    /// <c>= ANY(@ids)</c> 单参数。白盒断言 <c>TypedKeyIdentityCache</c> 命中 true——
+    /// 没有这条，"门控判据写错而静默装箱回退"不会有任何红（行为面等价，B95 家族：
+    /// 数字对但没测到目标）。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_UsesZeroBoxingArrayForm()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 10);
+        Shapes.Clear();
+        DataSessionCache.TypedKeyIdentityCache.TryRemove((typeof(ArrayFormRow), typeof(long)), out _);
+
+        long[] keys = [1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L];
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, long>(keys);
+
+        await Assert.That(deleted).IsEqualTo(10);
+        await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
+        await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 1);
+        // 门控确已通过（探针把 (ArrayFormRow, long) 判为等同并缓存）——静默回退时此键为 false/缺失
+        await Assert.That(DataSessionCache.TypedKeyIdentityCache[(typeof(ArrayFormRow), typeof(long))])
+            .IsTrue();
+    }
+
+    /// <summary>键类型不匹配（long 主键传 int 键）时探针否决直拷，装箱回退既有对象路径——
+    /// 删除语义与形状（经生成物构造器逐键 Convert 归一后仍是数组形态）都必须正确。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_MismatchedKeyType_FallsBackWithCorrectSemantics()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 3);
+        Shapes.Clear();
+        DataSessionCache.TypedKeyIdentityCache.TryRemove((typeof(ArrayFormRow), typeof(int)), out _);
+
+        int[] keys = [1, 2, 3];
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, int>(keys);
+
+        await Assert.That(deleted).IsEqualTo(3);
+        await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
+        // 回退经对象路径：数组形态仍成立（生成物构造器做 int→long 归一），单参数 ANY
+        await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 1);
+        await Assert.That(DataSessionCache.TypedKeyIdentityCache[(typeof(ArrayFormRow), typeof(int))])
+            .IsFalse();
+    }
+
+    /// <summary>单键/空列表的回退守卫次序与对象路径逐位一致：空列表 + 未注册类型仍先报
+    /// "no generated CRUD"（r12-B1 空短路后置口径经装箱回退继承）。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_EmptyList_PreservesGuardOrdering()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await SeedAsync(session, 2);
+        Shapes.Clear();
+
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, long>([]);
+        await Assert.That(deleted).IsEqualTo(0);
+        await Assert.That(Shapes).IsEmpty();
+
+        // 未注册类型 + 空列表：守卫先于空短路（与对象重载同口径）
+        await Assert.ThrowsAsync<InvalidOperationException>(async ()
+            => await session.BulkDeleteAsync<TypedGuardUnregisteredRow, long>([]));
+    }
+
+    /// <summary>多批边界：键数跨 <c>UnnestArraysMaxRowsPerBatch</c>（20000，深挖轮）时类型化
+    /// 路径的批循环正确切批（批边界算错会留残行）。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_MultiBatch_BoundariesCorrect()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        const int count = 20_017;
+        await SeedAsync(session, count);
+        Shapes.Clear();
+
+        var keys = new long[count];
+        for (int i = 0; i < count; i++) keys[i] = i + 1;
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow, long>(keys);
+
+        await Assert.That(deleted).IsEqualTo(count);
+        await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
+        await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 2);
+    }
+
+    /// <summary>未注册哨兵——无 [Table] 注解，源生成器不注册（专供守卫次序断言的
+    /// "空列表 + 未注册类型仍先报错"路径）。</summary>
+    internal sealed class TypedGuardUnregisteredRow
+    {
+        public long Id { get; set; }
     }
 }
 
@@ -605,6 +708,11 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
 
     private static string RewriteAny(string sql)
     {
+        // P0-2（WhereIn 数组形态）：!= ALL(@p) → NOT IN (SELECT value FROM json_each(@p))
+        // ——与 = ANY 的改写同构（NOT IN 的 NULL 语义与 != ALL 逐位等价，见 TryAddArrayInClause 注释）。
+        if (sql.Contains("!= ALL(", StringComparison.Ordinal))
+            sql = RewriteAll(sql);
+
         const string marker = "= ANY(";
         int at = sql.IndexOf(marker, StringComparison.Ordinal);
         if (at < 0) return sql;
@@ -622,6 +730,29 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
         return string.Concat(
             sql[..at],
             "IN (SELECT value FROM json_each(", parameterName, "))",
+            sql[(nameEnd + 1)..]);
+    }
+
+    /// <summary>P0-2：<c>!= ALL(@p)</c> → <c>NOT IN (SELECT value FROM json_each(@p))</c>。
+    /// NOT IN 子查询含 NULL 行时全行过滤——与 != ALL 的 NULL 元素语义逐位等价（SQLite 可跑）。</summary>
+    private static string RewriteAll(string sql)
+    {
+        const string marker = "!= ALL(";
+        int at = sql.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0) return sql;
+
+        int nameStart = at + marker.Length;
+        int nameEnd = nameStart;
+        while (nameEnd < sql.Length
+            && (char.IsLetterOrDigit(sql[nameEnd]) || sql[nameEnd] is '@' or '$' or '_'))
+        {
+            nameEnd++;
+        }
+        if (nameEnd >= sql.Length || sql[nameEnd] != ')') return sql;
+
+        return string.Concat(
+            sql[..at],
+            "NOT IN (SELECT value FROM json_each(", sql[nameStart..nameEnd], "))",
             sql[(nameEnd + 1)..]);
     }
 

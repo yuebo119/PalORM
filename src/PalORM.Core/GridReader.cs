@@ -15,7 +15,10 @@ public sealed class GridReader : IAsyncDisposable
     private readonly SessionOperationState? _operationState;
     private readonly QueryObservation? _observation;
     private readonly Lock _sync = new();
-    private TaskCompletionSource? _activeRead;
+    // R3（2026-10-12）：读活动布尔 + 惰性等待 TCS（仅 Dispose 需要等待时创建）——
+    // 原 _activeRead 每结果集 new 一个 TCS，顺序消费无人等待纯属白付。
+    private bool _readActive;
+    private TaskCompletionSource? _readDrained;
     private Task? _disposeTask;
     private int _state;
     private readonly bool _validateColumnOrder;
@@ -129,13 +132,17 @@ public sealed class GridReader : IAsyncDisposable
     /// <para>等待活动读取时不传递取消：活动 ReadAsync 因网络阻塞时以其自身 ct 为准（文档化设计取舍）。</para></summary>
     public ValueTask DisposeAsync()
     {
-        TaskCompletionSource completion;
         Task activeRead;
+        TaskCompletionSource completion;
         lock (_sync)
         {
             if (_disposeTask is not null) return new ValueTask(_disposeTask);
             _state = 1;
-            activeRead = _activeRead?.Task ?? Task.CompletedTask;
+            // R3（2026-10-12）：等待 TCS 惰性创建（SessionOperationState v4.5 同型）——原每次
+            // EnterRead 都 new 一个 TCS，顺序消费（无人等待）纯属白付（约 80B/结果集）。
+            activeRead = _readActive
+                ? (_readDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task
+                : Task.CompletedTask;
             completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _disposeTask = completion.Task;
         }
@@ -149,21 +156,22 @@ public sealed class GridReader : IAsyncDisposable
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_state != 0, this);
-            if (_activeRead is not null)
+            if (_readActive)
                 throw new InvalidOperationException("GridReader already has an active read operation.");
-            _activeRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _readActive = true;
         }
     }
 
     private void ExitRead()
     {
-        TaskCompletionSource? completion;
+        TaskCompletionSource? drained;
         lock (_sync)
         {
-            completion = _activeRead;
-            _activeRead = null;
+            _readActive = false;
+            drained = _readDrained;
+            if (drained is not null) _readDrained = null;
         }
-        completion?.TrySetResult();
+        drained?.TrySetResult();
     }
 
     private async Task DisposeAndCompleteAsync(
