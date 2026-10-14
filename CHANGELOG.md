@@ -4,6 +4,35 @@
 
 ## [未发布]
 
+### ⚡ 性能（W1+W2 分配削减包）：四组表全部 >+10% 分配项逐项代码检查——读路由委托惰性化
+### （每会话 −113B，per-op 会话形态全体项受益）+ 延迟回填去闭包化
+
+- **背景与清单**：最新四组表（2026-10-14 11:44 全量基线批）中分配相对 ADO（P）>+10% 的项共 48 项
+  （明细表内 15 项：GetByKey×6 / Insert·PG / Update×3 / TxSingleInsert×3 / TxRollback·MySQL·PG /
+  EnumInserts·PG），全部为 per-op 会话形态。探针 4 分解定位公共主因：会话构造税 972B/个
+  （ResilienceExecutor 228B + 读路由两委托 ~128B + 会话/操作状态/AsyncLocal 键对象）；
+  同构对照长会话 Update 898B，低于 ADO 地板 1019B——命令复用本体已在地板之下，超出部分全是每 op
+  重建会话的固定税。
+- **W1 读路由委托惰性化**（−113B/会话，四组表 15 项全体 + 48 项全体受益）：原构造器无条件挂接
+  _readConnProvider/_readConnReturner 两个方法组委托，而主连接操作（GetByKey/Insert/Update/
+  事务族）从不走读路由——per-op 形态每 op 白付。改惰性：字段转可空非 readonly，首个 From&lt;T&gt;()/
+  复制读命令时 ??= 初始化（并发竞态良性，同 _querySlot 先例：引用写原子、败者被 GC）。
+  池化归还在 KeptAcrossRentals 登记（幂等无状态方法组，第二租期起免重建）。语义等价性：原构造器
+  恒挂接使 CreateReadRoutedCommandAsync 的 is-not-null 判定恒真，??= 兜底后逐位不变。
+- **W2 延迟回填去闭包化**（每条自开事务内自增插入 −80B，真实世界面）：TX-004 延迟回填的唯一登记面
+  BackfillGeneratedId 原以 List&lt;Action&gt; + 闭包捕获 (backfill, entity, id) 三字段（display class +
+  委托 ~80B/条）；改类型化元组列表（值内联进背衬数组，逐条零堆分配），登记/回放/丢弃语义逐位不变。
+  四组表臂不受益（夹具实体显式主键，无回填）——收益面是真实世界自开事务内自增插入循环。
+- **为什么不动 ResilienceExecutor 228B**：熔断器是 sealed class + 进程级注册表共享形态，内联进
+  执行器属架构级改造（~12 字段 + Lock 迁移），收益 48~64B 低于改造风险线（step10 手写 struct 内核
+  证伪的同族结论）；会话对象/操作状态/AsyncLocal 键是 EC 包含性防御的结构成本（G2/tx-open 两起
+  实锤事故的防线本体），不动。
+- **验证**：分配探针复测（SQLite 内存库，4000 op）：纯会话构造 972→859B（−113），GetByKey per-op
+  2425→2314（−111），Update per-op 2841→2729（−112），长会话/地板逐位不变；Core 612/612 ·
+  SourceGen 236/236 · Integration 真库 292/292 · gate 32/32；池化字段分类守卫同步登记（W1 两字段
+  转 KeptAcrossRentals，W2 字段改名 _postCommitBackfills）；focused SQLite/2000 时延验证批见批内
+  记录。W1/W2 只删分配不加工作（??= 单次空判在 From&lt;T&gt; 路径），时延影响在噪声地板之下。
+
 ### 🐛 缺陷修复：tx-open 形态 EC 泄漏（预热门槛旁路）——per-op 会话 + BeginTransaction 长循环 O(N²)，
 ### TxSingleInsert 族每事务泄漏量 96924→4157 B/op（-96%，三臂探针双方言对证）
 

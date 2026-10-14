@@ -44,15 +44,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     // v5.0 阶段 5.2：读连接初始化器——包装 Provider 钩子 + ReadSessionSetupSql。
     // 仅当 ReadSessionSetupSql 非空时才捕获实例委托；否则用 static 委托（无闭包分配）。
     private readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
-    /// <summary>读连接提供者——会话级复用，无读连接串时为 null（读路由退化为主连接）。
-    /// 缓存为实例字段：方法组直接传给 QueryBuilderContext 会在每次 From&lt;T&gt;() 分配闭包。</summary>
-    private readonly Func<CancellationToken, ValueTask<DbConnection>>? _readConnProvider;
+    /// <summary>读连接提供者——W1（深挖轮 2026-10-14）起<b>惰性创建</b>：原构造器无条件
+    /// 挂接方法组委托（~64B/个），而 GetByKey/Update/Insert 等主连接操作从不走读路由——
+    /// per-op 会话形态每 op 白付两个委托。首个 From&lt;T&gt;()/读路由命令创建时 <c>??=</c> 初始化，
+    /// 并发竞态良性（同 _querySlot 先例：引用写原子、败者被 GC）。
+    /// 缓存为实例字段的原因不变：方法组直接传给 QueryBuilderContext 会每次 From&lt;T&gt;() 分配。</summary>
+    private Func<CancellationToken, ValueTask<DbConnection>>? _readConnProvider;
     /// <summary>读连接失效上报（READ-001，2026-09-23）——配置读路由时非 null，
     /// 由读路径在瞬时失败时调用（见 <see cref="InvalidateReadConnectionAsync"/>）。</summary>
     private readonly Func<ValueTask>? _readConnInvalidator;
-    /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——恒非 null（方法组一次性缓存）：
-    /// 并行读作用域在未配置读路由时也生效（连接回落主连接串），故不能按读路由配置条件挂接。</summary>
-    private readonly Func<DbConnection, bool, ValueTask> _readConnReturner;
+    /// <summary>并行读连接归还回调（ARCH-001，2026-09-23）——W1 起惰性创建（首个
+    /// From&lt;T&gt;() 时初始化，QueryBuilder 上下文恒拿到非 null）：并行读作用域在未配置读路由时
+    /// 也生效（连接回落主连接串），From&lt;T&gt;() 管线是它的唯一消费面。</summary>
+    private Func<DbConnection, bool, ValueTask>? _readConnReturner;
     /// <summary>A9（2026-10-01）：读查询命令复用槽（PL-2 惰性晋升的泛化）——惰性创建：
     /// 并行读作用域内并发 From&lt;T&gt;() 的竞态只会各建一个空槽（引用写原子、败者被 GC、
     /// 槽在禁用晋升下永无命令可漏）。</summary>
@@ -99,13 +103,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // ITM-624 同型面（修复侧纪律卡第三问实证）：读连接每次创建都读 _options 字段而非
         // 捕获构造期 options——WithTimeout/WithRetry 后读连接与主连接的池参数/超时口径一致。
         _readConnectionString = options.ResolveReadConnectionString();
-        // ARCH-001（2026-09-23）：读连接提供者恒挂接——作用域内走池（未配置读连接串时回落主连接串），
-        // 作用域外未配置读路由时由 AcquireReadConnectionAsync 直接返回主连接（ForRead 既有语义）。
-        _readConnProvider = AcquireReadConnectionAsync;
+        // W1（深挖轮 2026-10-14）：_readConnProvider/_readConnReturner 改惰性——原构造器
+        // 无条件挂接两个方法组委托，而主连接操作（GetByKey/Insert/Update/事务族）从不走
+        // 读路由，per-op 会话形态每 op 白付 ~128B。首个 From<T>()/读路由命令时 ??= 初始化。
+        // ARCH-001 语义不变：作用域内走池（未配置读连接串时回落主连接串），作用域外
+        // 未配置读路由时 AcquireReadConnectionAsync 直接返回主连接（ForRead 既有语义）。
         // READ-001（2026-09-23）：读连接失效上报——只在配置了读路由时挂接（方法组一次性缓存，
         // 不在 From<T>() 里新建委托）。见 InvalidateReadConnectionIfCurrentAsync。
         _readConnInvalidator = _readConnectionString is not null ? InvalidateReadConnectionAsync : null;
-        _readConnReturner = ReleaseOrDiscardReadConnectionAsync;
         // v5.0 阶段 5.2：读连接初始化器——无 ReadSessionSetupSql 时用 static 委托（零闭包分配），
         // 有时包装一层实例委托追加执行 ReadSessionSetupSql。
         _readConnInitializer = string.IsNullOrWhiteSpace(options.ReadSessionSetupSql)
@@ -671,7 +676,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         _isolationLevel = System.Data.IsolationLevel.ReadCommitted;
         Volatile.Write(ref _options, _poolBaseOptions!);
         Volatile.Write(ref _resilience, _poolBaseResilience!);
-        _operationState.DiscardPostCommitActions();
+        _operationState.DiscardPostCommitBackfills();
         _operationState.DefersPostCommitActions = false;
         ResetInterceptorsToPoolBase();
         if (_pool!.TryReturn(this))
@@ -1228,9 +1233,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             return new ReadCommandLease(this, command, connection);
         }
 
-        if (readFromReplica && _readConnProvider is not null)
+        if (readFromReplica)
         {
-            DbConnection connection = await _readConnProvider(ct).ConfigureAwait(false);
+            // W1：惰性挂接——readFromReplica 形态此前必然已初始化（From<T> 或上一条复制读），
+            // ??= 兜底首次直达；原构造器恒挂接使 is-not-null 判定恒真，此处语义等价。
+            DbConnection connection = await (_readConnProvider ??= AcquireReadConnectionAsync)(ct).ConfigureAwait(false);
             DbCommand command = connection.CreateCommand();
             command.CommandTimeout = _options.CommandTimeoutSeconds;
             return new ReadCommandLease(this, command, null);   // 会话级读连接：不归还（归会话持有）

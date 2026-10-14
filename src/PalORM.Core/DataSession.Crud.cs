@@ -65,6 +65,10 @@ public sealed partial class DataSession<TProvider>
 
         // v5.6：读连接提供者从实例字段取——会话级复用（含 ReadSessionSetupSql 与 Provider
         // 初始化钩子），且方法组不在此处新建闭包。
+        // W1（深挖轮 2026-10-14）：惰性 ??=——主连接写操作（Insert/Update/Delete/事务族）
+        // 不经 From<T>()，读路由委托不构造；首个 From<T>() 时初始化，此后每会话恰一份。
+        _readConnProvider ??= AcquireReadConnectionAsync;
+        _readConnReturner ??= ReleaseOrDiscardReadConnectionAsync;
         // A9：读查询命令复用槽——惰性创建（并行读作用域内并发 From<T>() 的竞态只会各建
         // 一个空槽：引用写原子、败者被 GC；槽在该作用域内禁用晋升、永无命令可漏）。
         _querySlot ??= new ReusableQuerySlot();
@@ -673,7 +677,7 @@ public sealed partial class DataSession<TProvider>
         where TEntity : class
     {
         if (_operationState.DefersPostCommitActions)
-            _operationState.AddPostCommitAction(() => backfill(entity, id));
+            _operationState.AddPostCommitBackfill(backfill, entity, id);
         else
             backfill(entity, id);
     }
