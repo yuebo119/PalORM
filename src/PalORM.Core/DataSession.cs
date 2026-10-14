@@ -427,7 +427,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 防止飞行查询与过滤状态变更竞态产生跨租户/含软删数据。</para></summary>
     public DataSession<TProvider> IgnoreFilters()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = _operationState.EnterConfigGate();
         _ignoreFilters = true;
         _tenantScopeEntry = null;  // T6：作用域判别式含 _ignoreFilters，变更即失效单条目缓存
         return this;
@@ -439,7 +439,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     public DataSession<TProvider> AddInterceptor(IQueryInterceptor interceptor)
     {
         ArgumentNullException.ThrowIfNull(interceptor);
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = _operationState.EnterConfigGate();
         int index = _interceptors.FindIndex(existing => existing.Priority > interceptor.Priority);
         if (index < 0)
             _interceptors.Add(interceptor);
@@ -488,7 +488,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // 上游 tenantId 缺失时全部查询跨租户返回——失败开放。宁可明确失败。
         ArgumentNullException.ThrowIfNull(tenantId);
         // ITM-568: 门禁保护（同 AddInterceptor）——飞行查询期间切换租户是竞态
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = _operationState.EnterConfigGate();
         _tenantId = tenantId;
         _tenantScopeEntry = null;  // T6：作用域判别式含 _tenantId，切换即失效单条目缓存
         return this;
@@ -524,7 +524,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>设置事务隔离级别。</summary>
     public DataSession<TProvider> WithIsolationLevel(IsolationLevel level)
     {
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = _operationState.EnterConfigGate();
         _isolationLevel = level;
         return this;
     }
@@ -594,7 +594,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         // ITM-568: 配置发布与飞行查询互斥（门禁），消除"读到新旧混合配置"窗口；
         // ITM-577: 注释同步——一致性由门禁保证（单活动操作），不再依赖 Volatile.Read 配对协议。
-        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        using SessionOperationState.SessionOperationLease operation = _operationState.EnterConfigGate();
         UpdateResilienceCore(options);
     }
 

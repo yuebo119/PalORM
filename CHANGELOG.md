@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 🛡️ 防线：EC 包含结构性绊线 + 配置门 AsyncLocal 写消除（G2 教训的机械化收口）
+
+- **ArchitectureInvariantTests.EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment**：
+  扫描 src/PalORM.Core 全部 Enter 族调用点（EnterOperation/EnterReadOnly/EnterBatchOperation/
+  _operationState.Enter*/EnterTransactionFlow/EnterTransactionOperation），签名不含 async 即失败——
+  非 async 调用使 Enter 的 AsyncLocal 写逃逸调用方 EC（G2 根因），今后在设计期即被拦。同步转发包装
+  （DataSession 三个私有包装）豁免，安全性递归由其调用点规则承担；内置正负双样本自检（验证验证者）。
+  突变验证：对 4fef5ea（G 形态）源码精确报出 GetByKeyEntryAsync:1017（当年缺陷位）。
+- **绊线首跑战果：抓到 5 个存量同型面**——IgnoreFilters/AddInterceptor/WithTenant/WithIsolationLevel/
+  UpdateResilience 五个同步配置方法经 EnterOperation 同样写逃逸（长循环 per-op 会话 + WithTenant 形态
+  同样累积 EC map，PerfHub 并发臂不覆盖该路径故未显形）。新增 SessionOperationState.EnterConfigGate：
+  守卫与 Enter 逐位一致但**不做 AsyncLocal owner 写**（同步方法 using 内即取即还，无需跨 await 追踪
+  owner），五处调用点切换。
+- **验证**：ci.slnf Debug 0W0E · Core 611/611（绊线 +1）· SourceGen 236/236 · Integration 真库
+  292/292 · gate 32/32。
+
 ### 🐛 缺陷修复：G2 入口扁平化引入 SQLite 并发饱和循环 20× 塌方（AsyncLocal 写逃逸调用方 ExecutionContext）
 
 - **根因**（2026-10-14 并发塌方定位轮，单因探针 + 文件级二分钉死）：G2 把 GetByKey/GetAll/聚合
