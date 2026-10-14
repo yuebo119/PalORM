@@ -105,40 +105,29 @@ public sealed partial class DataSession<TProvider>
     /// <summary>聚合标量内核（Sum/Max/Min/Avg 共享，v5.4 精炼 L3）。
     /// ITM-613 门禁次序保持：先 EnterOperation 再拼 SQL——门禁外读过滤状态 + 门禁内
     /// 二次求值的窗口内，并发 IgnoreFilters()/WithTenant() 可致 SQL 片段与参数集错配。</summary>
-    private ValueTask<object?> ExecuteAggregateScalarAsync<T>(
+    // G2 证伪回退（2026-10-14，勿重开非 async 租约入口）：理由见 DataSession.Crud 的
+    // GetByKeyEntryAsync 上方登记——非 async 入口的 Enter AsyncLocal 写逃逸调用方 EC，
+    // 每操作新会话 = 新 AsyncLocal 实例键 → EC map 无界增长 → O(N²)。
+    private async ValueTask<object?> ExecuteAggregateScalarAsync<T>(
         string function, FormattableString expression, CancellationToken ct)
         where T : class, new()
     {
-        // G2（2026-10-13 五轮微项包）：入口退化为非 async 直包分派器——租约随参下沉
-        // <see cref="ExecuteScalarAsync"/> 内核（using 持有），本帧不再多付一个 async
-        // 状态机盒（A2 直包先例同型）。次序保持 ITM-613：先入门禁再拼 SQL。
-        SessionOperationState.SessionOperationLease operation;
-        string sql;
-        EntityRuntimeInfo info;
-        DbTransaction? activeTransaction;
-        try
-        {
-            operation = EnterReadOnly();
-            info = GetEntityInfo<T>();
-            activeTransaction = GetActiveTransaction();
-            // G4（五轮微项包）：") FROM {table}{whereClause}" 后缀走闭式泛型静态槽（F6b 同型，原
-            // AggregateSuffixCache/AggregateFilteredSuffixCache 元组键字典）——只剩 "SELECT {fn}("
-            // 前缀与表达式文本每次拼（1 次 concat）。R3（2026-10-12）原纪律保持：过滤判别单次求值。
-            int aggregateSlot = FilterSlotBits(info.Features);
-            string suffix = aggregateSlot == 0
-                ? SqlSlots<T>.AggregateSuffixOrBuilt(TProvider.QuoteIdentifier(info.TableName))
-                : SqlSlots<T>.AggregateFilteredSuffixOrBuilt(
-                    aggregateSlot, TProvider.QuoteIdentifier(info.TableName),
-                    GetDefaultFilterForms<T>(info.Features).WhereClause);
-            sql = $"SELECT {function}(" + FormatSqlWithParameters(expression) + suffix;
-        }
-        catch (Exception exception)
-        {
-            // async 方法体的同步段异常落在返回的 ValueTask 里（既有契约）——非 async 入口
-            // 以 FromException 保持逐位一致。
-            return ValueTask.FromException<object?>(exception);
-        }
-        return ExecuteScalarAsync(operation, sql, expression, info, activeTransaction, ct);
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        // 刀1：表名/features 走合并视图；刀2：事务单次取用。
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
+        // G4（五轮微项包）：") FROM {table}{whereClause}" 后缀走闭式泛型静态槽（F6b 同型，原
+        // AggregateSuffixCache/AggregateFilteredSuffixCache 元组键字典）——只剩 "SELECT {fn}("
+        // 前缀与表达式文本每次拼（1 次 concat）。R3（2026-10-12）原纪律保持：过滤判别单次求值。
+        int aggregateSlot = FilterSlotBits(info.Features);
+        string suffix = aggregateSlot == 0
+            ? SqlSlots<T>.AggregateSuffixOrBuilt(TProvider.QuoteIdentifier(info.TableName))
+            : SqlSlots<T>.AggregateFilteredSuffixOrBuilt(
+                aggregateSlot, TProvider.QuoteIdentifier(info.TableName),
+                GetDefaultFilterForms<T>(info.Features).WhereClause);
+        return await ExecuteScalarAsync(
+            $"SELECT {function}(" + FormatSqlWithParameters(expression) + suffix,
+            expression, info, activeTransaction, ct).ConfigureAwait(false);
     }
 
     /// <summary>SUM 聚合。空表/全过滤时 SUM 返回 NULL——与 Max/Min 一致返回 0（ITM-408）。</summary>
@@ -199,41 +188,34 @@ public sealed partial class DataSession<TProvider>
     /// 先入门禁再拼 SQL）。Enter 不可重入，此处再 Enter 会抛
     /// "already has an active database operation"（SoftDelete 聚合测试实证）。
     /// v5.4 弹性接入：无事务只读标量经会话弹性策略（重试/熔断）。
-    /// 刀1：features 经合并视图；刀2：事务传入。
-    /// G2（五轮微项包）：租约随参下沉本内核（using 持有）——非 async 入口直包分派，
-    /// 网络路径省一个 async 状态机盒。</summary>
-    private async ValueTask<object?> ExecuteScalarAsync(
-        SessionOperationState.SessionOperationLease operation,
-        string sql, FormattableString original,
+    /// 刀1：features 经合并视图；刀2：事务传入。</summary>
+    private async ValueTask<object?> ExecuteScalarAsync(string sql, FormattableString original,
         EntityRuntimeInfo info, DbTransaction? activeTransaction, CancellationToken ct)
     {
-        using (operation)
+        // P1-1：直查族命令复用（A9 同型）——聚合全句由缓存片段拼接恒稳定（值相等）；
+        // 租户槽随命令持久，值就地刷新。就地写失败回退下方新建路径。
+        int aggregateTenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
+        DbCommand? reusedAggregate = TryAcquireReusableDirectCommand(sql);
+        if (reusedAggregate is not null
+            && TryBindFormattableValuesInPlace(reusedAggregate, original, aggregateTenantSlots))
         {
-            // P1-1：直查族命令复用（A9 同型）——聚合全句由缓存片段拼接恒稳定（值相等）；
-            // 租户槽随命令持久，值就地刷新。就地写失败回退下方新建路径。
-            int aggregateTenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
-            DbCommand? reusedAggregate = TryAcquireReusableDirectCommand(sql);
-            if (reusedAggregate is not null
-                && TryBindFormattableValuesInPlace(reusedAggregate, original, aggregateTenantSlots))
-            {
-                ApplyReusableCommandState(reusedAggregate, activeTransaction, sql);
-                if (aggregateTenantSlots > 0)
-                    reusedAggregate.Parameters[^1].Value = _tenantId;
-                return await ExecuteReadScalarAsync(reusedAggregate, activeTransaction, ct).ConfigureAwait(false);
-            }
-
-            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, ct).ConfigureAwait(false);
-            DbCommand cmd = lease.Command;
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            BindFormattableParameters(cmd, original);
-            BindDefaultFilterParameters(cmd, info.Features);
-            // A2（2026-10-01 全 API 逐项轮）：直调重载覆盖 Sum/Max/Min/Avg 四个聚合入口
-            // （CountAsync 同点改）。
-            object? result = await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
-            lease.MarkHealthy();
-            return result;
+            ApplyReusableCommandState(reusedAggregate, activeTransaction, sql);
+            if (aggregateTenantSlots > 0)
+                reusedAggregate.Parameters[^1].Value = _tenantId;
+            return await ExecuteReadScalarAsync(reusedAggregate, activeTransaction, ct).ConfigureAwait(false);
         }
+
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
+        cmd.CommandText = sql;
+        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        BindFormattableParameters(cmd, original);
+        BindDefaultFilterParameters(cmd, info.Features);
+        // A2（2026-10-01 全 API 逐项轮）：直调重载覆盖 Sum/Max/Min/Avg 四个聚合入口
+        // （CountAsync 同点改）。
+        object? result = await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
+        lease.MarkHealthy();
+        return result;
     }
 
     /// <summary>A2（2026-10-01 全 API 逐项轮）：只读标量直调重载——省调用点 async lambda
