@@ -52,7 +52,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 **企业级横切开箱即用**。多租户列隔离（查询缓存 key 自动加租户前缀，跨租户命中不可能）、乐观锁、软删除、审计拦截器、读写分离（`ForRead`）、咨询锁、弹性重试 + 熔断（v5.4 起自动覆盖只读查询管线），无需样板代码。
 
-**会话池化**（v7.0 `DataSessionPool`）。Web 服务"一请求一会话"形态的固定成本消除器：租出的会话归还后瞬态状态（租户/超时/重试覆写）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在同会话第 3 次同形状操作才晋升，不池化则每请求形态下结构性永不激活。32 并发压测实测 P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B，租还自身约 1 µs。
+**会话池化**（v6.5 `DataSessionPool`）。Web 服务"一请求一会话"形态的固定成本消除器：租出的会话归还后瞬态状态（租户/超时/重试覆写）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在同会话第 3 次同形状操作才晋升，不池化则每请求形态下结构性永不激活。32 并发压测实测 P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B，租还自身约 1 µs。
 
 **SQL 资产编译期管理**。`[SqlFile]` 把外部 .sql 文件嵌入为常量（支持 `-- @pg/@mysql/@sqlite/@all` 方言条件段，改 SQL 免 Rebuild，文件缺失编译期报错）；`[SqlTemplate]` 把方法体插值串提升为模板常量，配合 `.AsPrepared()` 走 `DbCommand.PrepareAsync` 预编译；AutoTagging（opt-in 编译开关）经 C# `[InterceptsLocation]` 拦截 9 个查询终态方法，SQL 自动注入「文件:行号 成员名」定位注释，排查零成本。
 
@@ -68,7 +68,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ## 🆚 与主流 ORM 对比
 
-> 版本基准：PalORM 7.0.0 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
+> 版本基准：PalORM 6.5.0 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
 
 | 特性                  | **PalORM**                                                   | Dapper                  | EF Core                               | RepoDb                     |
 | ------------------- |:------------------------------------------------------------:|:-----------------------:|:-------------------------------------:|:--------------------------:|
@@ -239,11 +239,11 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="7.0.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.5.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="7.0.0" />
+<PackageReference Include="PalORM.MySql" Version="6.5.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="7.0.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.5.0" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。
@@ -618,7 +618,7 @@ dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqli
 
 同一 API 在不同使用形态下的表观开销构成不同，按形态选对入口的收益大于任何库内微优化。
 
-**一请求一会话（Web/API 服务）用会话池**（v7.0 `DataSessionPool`，API 细节见[API 参考 · 会话池](docs/API参考.md)）：
+**一请求一会话（Web/API 服务）用会话池**（v6.5 `DataSessionPool`，API 细节见[API 参考 · 会话池](docs/API参考.md)）：
 
 ```csharp
 // 启动时创建一次（maxIdleSize 按峰值并发调整）
@@ -815,6 +815,15 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 ## 🔄 升级指南
 
 > 按版本倒序排列；数据正确性修复优先阅读对应小节。
+
+### 从 6.4.x 升级到 6.5.0：查询语义两处修复（结果可能变化）
+
+两项**用户可见行为修复**，升级前请核对（详见 [CHANGELOG](CHANGELOG.md)）：
+
+- **WHERE/OR 链式优先级（C16）**：`Where(A).OrWhere(B).Where(C)` 此前生成 `(A) OR (B) AND (C)`（SQL 求值为 `A OR (B AND C)`，与方法文档承诺的链式形态不符），本版修复为 `((A) OR (B)) AND (C)`。**混合 Where/OrWhere 链的查询结果可能变化**：纯 AND 链、纯 OR 链与 OR 收尾链的 SQL 文本逐字不变，无需动作。`WhereIn`/`WhereNotIn` 同受此修复覆盖。**升级动作**：检索代码中混合 `Where`/`OrWhere` 链，确认查询结果符合链式直觉预期。
+- **FormattableString 引号内花括号（C17）**：引号内 `{N}`/`}` 此前被替换或误抛 `FormatException`（JSON 文本 `'{"a":1}'` 无法书写），修复后引号内一律原样透传。此前为绕过该缺陷手写拆串的代码可还原为直书 JSON 字面量。
+
+其余为纯新增（会话池 `DataSessionPool`）与内部性能/修复，无迁移动作。
 
 ### 从 6.3.x 升级到 6.4.0：Production 预设熔断作用域变更
 

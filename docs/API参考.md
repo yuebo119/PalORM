@@ -179,7 +179,7 @@
 | `SavepointAsync(tran, name)` / `RollbackToAsync(tran, name)` | 保存点 |
 | `WithIsolationLevel(level)` | 隔离级别 |
 
-### 会话池（DataSessionPool，v7.0）
+### 会话池（DataSessionPool，v6.5）
 
 | API | 说明 |
 |------|------|
