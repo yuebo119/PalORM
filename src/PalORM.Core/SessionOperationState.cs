@@ -144,7 +144,7 @@ internal sealed class SessionOperationState
             // 机械守卫本纪律。
             if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
                 _currentOperationOwner.Value = _activeOperationOwner;
-            OwnerPrewarmed = true;
+            CompletedOps++;
             _isActive = true;
             // v4.5：不创建 TCS -- 仅在 Dispose/WaitForActive 需要等待时才延迟创建
             _activeOperation = null;
@@ -325,7 +325,7 @@ internal sealed class SessionOperationState
             _activeOperationOwner = this;
             if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
                 _currentOperationOwner.Value = _activeOperationOwner;
-            OwnerPrewarmed = true;
+            CompletedOps++;
             _isActive = true;
             _activeOperation = null;
             return new SessionOperationLease(
@@ -339,11 +339,19 @@ internal sealed class SessionOperationState
     /// （~72B/次：EC 48B + OneElementAsyncLocalValueMap 24B），即使带同值守卫（探针 ①e/①g
     /// 实测 +72B/行）。写发生在<b>非 async 的公共入口</b>（调用方 EC）时值持久，且随 EC
     /// 流动进 async 体的 Enter 守卫（①h 实测 0 增量）。</para>
-    /// <para><b>门禁（防 EC 链累积）</b>：调用方须先查 <see cref="OwnerPrewarmed"/>——每操作
+    /// <para><b>门禁（防 EC 链累积）</b>：调用方须先查 <see cref="CompletedOps"/> ≥2——每操作
     /// 新会话形态（PerfHub 器材）若无条件预热，N 个会话各自的 AsyncLocal 实例会在同一
     /// 调用方 EC 的不可变 map 链上累积，COW 成本随链长线性放大（探针 ③ 形态实测
-    /// 2459→10309 B/行）。仅"本会话已完成过至少一次操作"后预热，新会话首调永不预热，
+    /// 2459→10309 B/行）。仅"本会话已完成过多次操作"后预热，新会话首调永不预热，
     /// 链上至多一个本会话节点。</para>
+    /// <para><b>门槛 1→2（深挖轮 2026-10-14）</b>：原 ≥1 门禁有一个旁路——会话首操作是
+    /// <c>BeginTransactionAsync</c>（或 Savepoint 族）这类<b>生命周期操作</b>时，其 Enter 在
+    /// async 体内被包含地置位标志，而随后的标准操作（InsertAsync 等）的非 async 包装壳看到
+    /// 标志即预热，把<b>新会话的新 AsyncLocal 键</b>写进调用方长活 EC——per-op 会话 +
+    /// 事务形态每事务净增一个键，长循环 O(N²)（探针 Bisect：A 空事务/C 复用会话/D 纯插入
+    /// 全平 1.4~3.7KB，B 完整形态 96924 B/op ≈ N×32B 精确二次型签名）。门槛提高到 ≥2：
+    /// per-op 形态（含事务共 ≤2 个操作）结构上永不预热；长会话仅第 1~2 个操作各付一次
+    /// 72B 的包含式 Enter 写，第 3 个操作起照常预热（同键值替换，O(1)）。</para>
     /// <para><b>语义零变化</b>：IsCurrentOperationScope 是 <c>_isActive &amp;&amp; owner匹配</c>
     /// 的与逻辑——预热只影响槽值，操作未 Enter 时 _isActive=false 照样判 false；槽值与
     /// Enter 会写的值恒同（this）；Exit 本就不清槽（v4.5）。无锁调用：AsyncLocal 写本身
@@ -351,9 +359,16 @@ internal sealed class SessionOperationState
     internal void PrewarmCurrentOperationOwner()
         => _currentOperationOwner.Value = this;
 
-    /// <summary>step16-P1：本会话是否已完成过至少一次操作（Enter 走到写槽段即置位）。
-    /// 公共入口据此决定是否预热——见 <see cref="PrewarmCurrentOperationOwner"/> 的门禁说明。</summary>
-    internal bool OwnerPrewarmed;
+    /// <summary>step16-P1（门槛 2 版，深挖轮 2026-10-14）：本会话已完成的操作数（Enter/
+    /// EnterTransactionOperation 走到写槽段即递增，锁内）。公共入口据此决定是否预热
+    /// （≥<see cref="PrewarmThreshold"/> 才预热）——见 <see cref="PrewarmCurrentOperationOwner"/> 的门禁说明。</summary>
+    internal int CompletedOps;
+
+    /// <summary>预热门槛（深挖轮 2026-10-14 由 1 提高到 2）：会话完成操作数达到此值后，
+    /// 公共入口的非 async 包装壳才做持久预热写。per-op 会话形态（含"Begin+单操作+Commit"
+    /// 的事务形态，共 2 个操作）结构上永不达标；长会话第 3 个操作起进入预热稳态。
+    /// 依据与二次型签名见 <see cref="PrewarmCurrentOperationOwner"/> 的门槛 1→2 段。</summary>
+    internal const int PrewarmThreshold = 2;
 
     internal object EnterTransactionFlow()
     {

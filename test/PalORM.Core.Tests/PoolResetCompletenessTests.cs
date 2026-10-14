@@ -49,7 +49,8 @@ public sealed class PoolResetCompletenessTests
     /// _transactionResources/_transactionCompleting/_parallelReadScopes/_activeReadLeases/_readLeasesDrained；
     /// 归还复位（DataSession.ReturnToPoolAsync）：DefersPostCommitActions/_postCommitActions（Discard）；
     /// 生命周期终态：_disposeTask（仅真实释放路径产生，驻留会话恒 null）；
-    /// 跨租期保留：OwnerPrewarmed（AsyncLocal 槽值随异步流不跨租期，保留标志使第二租期起免 EC 拷贝）、
+    /// 跨租期保留：CompletedOps（原 OwnerPrewarmed，深挖轮改计数——AsyncLocal 槽值随异步流
+    /// 不跨租期，保留计数使第二租期起免 EC 拷贝且立即达预热门槛）、
     /// DisposeWaitTimeout（测试注入的实例配置，与租期无关）。</summary>
     private static readonly HashSet<string> OperationStateClassified =
     [
@@ -64,7 +65,7 @@ public sealed class PoolResetCompletenessTests
         // 生命周期终态
         "_disposeTask",
         // 跨租期保留
-        "OwnerPrewarmed", "DisposeWaitTimeout",
+        "CompletedOps", "DisposeWaitTimeout",
     ];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "S3011",

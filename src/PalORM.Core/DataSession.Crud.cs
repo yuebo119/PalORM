@@ -186,7 +186,7 @@ public sealed partial class DataSession<TProvider>
         ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：非 async 入口预热操作归属标记（调用方 EC 持久，体内 Enter 守卫命中免写）；
         // 门禁见 PrewarmCurrentOperationOwner——仅本会话已完成过操作后预热，防 EC 链累积
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return InsertCoreAsync(entity, null, ct);
     }
@@ -731,7 +731,7 @@ public sealed partial class DataSession<TProvider>
     {
         ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：同 InsertAsync——预热使事务内循环 UpdateAsync（TxRollback 形态）每行免 EC COW
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return UpdateCoreAsync(entity, null, ct);
     }
@@ -994,7 +994,7 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(key);
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return GetByKeyEntryAsync<T>(key, ct);
     }
@@ -1116,7 +1116,7 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<List<T>> GetAllAsync<T>(CancellationToken ct = default)
         where T : class, new()
     {
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return GetAllEntryAsync<T>(ct);
     }
@@ -1196,7 +1196,7 @@ public sealed partial class DataSession<TProvider>
     {
         ArgumentNullException.ThrowIfNull(entity);
         // step16-P1：同 InsertAsync——非 async 入口预热操作归属标记
-        if (_operationState.OwnerPrewarmed)
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
         return SaveCoreAsync(entity, null, ct);
     }
