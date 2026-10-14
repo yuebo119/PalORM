@@ -54,7 +54,7 @@ See [Performance](#-performance) for measurement details (2026-10-14 benchmark b
 
 **Enterprise features out of the box.** Multi-tenant column isolation (query cache keys automatically get a tenant prefix — cross-tenant hits are impossible), optimistic locking, soft delete, audit interceptors, read/write splitting (`ForRead`), advisory locks, resilient retry + circuit breaker (covering the read-only query pipeline automatically since v5.4). No boilerplate required.
 
-**Session pooling** (v7.0 `DataSessionPool`). A fixed-cost eliminator for the request-per-session shape of Web services: when a rented session is returned, all transient state (tenant/timeout/retry overrides) resets, while command reuse slots, the read connection, and materialization capacity survive across rentals — reuse slots only promote on the 3rd same-shape operation within one session, so without pooling they never activate in a per-request lifetime. Measured at 32 concurrent: P99 −18%, Gen0 collections −58%, −2,576 B allocated per operation, with rent/return itself around 1 µs.
+**Session pooling** (v6.5 `DataSessionPool`). A fixed-cost eliminator for the request-per-session shape of Web services: when a rented session is returned, all transient state (tenant/timeout/retry overrides) resets, while command reuse slots, the read connection, and materialization capacity survive across rentals — reuse slots only promote on the 3rd same-shape operation within one session, so without pooling they never activate in a per-request lifetime. Measured at 32 concurrent: P99 −18%, Gen0 collections −58%, −2,576 B allocated per operation, with rent/return itself around 1 µs.
 
 **SQL assets managed at compile time.** `[SqlFile]` embeds external .sql files as constants (supports `-- @pg/@mysql/@sqlite/@all` dialect sections; editing SQL needs no rebuild; a missing file fails the build); `[SqlTemplate]` promotes an interpolated string into a template constant, paired with `.AsPrepared()` for `DbCommand.PrepareAsync` pre-compilation; AutoTagging (opt-in build switch) uses C# `[InterceptsLocation]` to intercept 9 query terminal methods, automatically injecting a "file:line member" locating comment into the SQL — zero-cost troubleshooting.
 
@@ -68,7 +68,7 @@ See [Performance](#-performance) for measurement details (2026-10-14 benchmark b
 
 ## 🆚 Comparison with mainstream ORMs
 
-> Version baseline: PalORM 7.0.0 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
+> Version baseline: PalORM 6.5.0 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -239,11 +239,11 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="7.0.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.5.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="7.0.0" />
+<PackageReference Include="PalORM.MySql" Version="6.5.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="7.0.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.5.0" />
 ```
 
 Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time source generator). After installing, verify with the minimal Quick Start example below: if you can create a session and complete one insert, the install works.
