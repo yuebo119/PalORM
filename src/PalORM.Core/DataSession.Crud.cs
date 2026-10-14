@@ -77,7 +77,7 @@ public sealed partial class DataSession<TProvider>
             new QueryBuilderServices<T>(
                 TProvider.Dialect, (Func<DbDataReader, T>)factory, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
-                _operationState, Volatile.Read(ref _resilience), _options.CommandTimeout,
+                _operationState, Resilience, _options.CommandTimeout,
                 _isolationLevel,  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
                 TProvider.CreateArrayParameter),  // P0-2：WhereIn 的数组形态（Provider 无数组能力时接口默认 null → 占位符回退）
             tableName, columnNames, _readConnProvider,
@@ -1028,7 +1028,7 @@ public sealed partial class DataSession<TProvider>
         {
             // R3（2026-10-12）：直通分支免闭包直调（主分支 C10 同型；作用域与事务互斥
             // ITM-798，无需事务判定）。原闭包捕获 6 变量 + this，直通时约 250-300B/op 纯浪费。
-            ResilienceExecutor parallelExecutor = Volatile.Read(ref _resilience);
+            ResilienceExecutor parallelExecutor = Resilience;
             if (parallelExecutor.IsPassThrough)
                 return await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false);
             // R4-λ:static lambda + 值元组状态,闭包归零(static 委托按调用点缓存)
@@ -1042,7 +1042,7 @@ public sealed partial class DataSession<TProvider>
         // C10/C12（2026-10-12 审读重开落地）：直通分支免闭包直调（A2/ExecuteReadScalarAsync
         // 同型）——闭包捕获 + 异步状态机是每读固定成本，直通时弹性语义本就不参与，包装纯属
         // 浪费；非直通分支才构造捕获委托（重试需要）。
-        ResilienceExecutor getByKeyExecutor = Volatile.Read(ref _resilience);
+        ResilienceExecutor getByKeyExecutor = Resilience;
         if (getByKeyExecutor.IsPassThrough || activeTransaction is not null)
             return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
         // R4-λ:static lambda + 值元组状态,闭包归零
@@ -1137,7 +1137,7 @@ public sealed partial class DataSession<TProvider>
         DbTransaction? activeTransaction = GetActiveTransaction();
 
         // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略（C10 直通直调，同 GetAsync）。
-        ResilienceExecutor getAllExecutor = Volatile.Read(ref _resilience);
+        ResilienceExecutor getAllExecutor = Resilience;
         if (getAllExecutor.IsPassThrough || activeTransaction is not null)
             return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
         // R4-λ:static lambda + 值元组状态,闭包归零

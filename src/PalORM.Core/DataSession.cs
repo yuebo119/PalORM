@@ -23,7 +23,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 {
     private readonly DbConnection _conn;
     private DbOptions _options;
-    private ResilienceExecutor _resilience;
+    /// <summary>W3（两轴清单轮 2026-10-14）：弹性执行器<b>惰性创建</b>——原构造器无条件
+    /// new ResilienceExecutor（含熔断器与 Lock 共 ~228B/个，探针实测），而 Insert 家族
+    /// （InsertCore/FinishInsert 直执）、纯事务会话与批量族从不读弹性（写入路径直连契约，
+    /// 事务族经 ExecuteWriteRowsAsync 的事务短路也绕开）——per-op 会话形态每 op 白付。
+    /// 首个读/写弹性触点（<see cref="Resilience"/> getter）时 CAS 挂接；
+    /// 池化会话在 <see cref="MarkPooled"/> 强制物化，池语义（基准实例跨租期存活）逐位不变。</summary>
+    private ResilienceExecutor? _resilience;
     private readonly List<IQueryInterceptor> _interceptors;
     private readonly ILogger _logger;
     private readonly SessionOperationState _operationState = new();
@@ -90,7 +96,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         _conn = conn;
         _options = options;
-        _resilience = new ResilienceExecutor(options, ProviderDelegates.IsTransient, typeof(TProvider));
+        // W3（两轴清单轮 2026-10-14）：弹性执行器改惰性（见 _resilience 字段 doc）——
+        // 原此处无条件 new ResilienceExecutor（228B/个）；首个弹性触点或 MarkPooled 时建。
         // MySQL-9/P1（2026-09-27）：空拦截器列表跳过 OrderBy LINQ——大多数会话不配拦截器，
         // 原实现对空集合也分配迭代器 + 委托 + 新 List（探针十八拆解：CreateAsync 每 op
         // 2625B 里约 180B 属此）。空列表直接复用 CreateAsync 传入的私有副本
@@ -579,6 +586,21 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return this;
     }
 
+    /// <summary>W3：弹性执行器的惰性取用器——首个触点创建（CAS 良性竞态：并发首触只多建
+    /// 一个实例，败者被 GC；单活动操作契约下实际不触发，同 _querySlot/_readConnProvider 先例）。
+    /// 全部弹性读点经此取器，插入/批量/事务短路路径不再触发创建。</summary>
+    private ResilienceExecutor Resilience
+    {
+        get
+        {
+            ResilienceExecutor? executor = Volatile.Read(ref _resilience);
+            if (executor is not null)
+                return executor;
+            var created = new ResilienceExecutor(_options, ProviderDelegates.IsTransient, typeof(TProvider));
+            return Interlocked.CompareExchange(ref _resilience, created, null) ?? created;
+        }
+    }
+
     /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。
     /// <para><b>并发契约（OPS-001，2026-09-23）</b>：本入口<b>不占操作门禁</b>——它是给调用方
     /// 自带编排（并行扇出、自定义批处理）的逃生门，可被多线程并发调用，因此：(1) 不要与会话的
@@ -589,11 +611,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 失败计数共享同一实例，若需跨会话共享请设 <see cref="DbOptions.CircuitBreakerScope"/> 为
     /// <see cref="CircuitBreakerScope.Process"/>。</para></summary>
     public async ValueTask<T> ExecuteWithResilience<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct = default)
-        => await Volatile.Read(ref _resilience).ExecuteAsync(operation, ct).ConfigureAwait(false);
+        => await Resilience.ExecuteAsync(operation, ct).ConfigureAwait(false);
 
     /// <summary>使用会话级弹性策略执行操作（无返回值）。</summary>
     public async ValueTask ExecuteWithResilience(Func<CancellationToken, Task> operation, CancellationToken ct = default)
-        => await Volatile.Read(ref _resilience).ExecuteAsync(operation, ct).ConfigureAwait(false);
+        => await Resilience.ExecuteAsync(operation, ct).ConfigureAwait(false);
 
     private void UpdateResilience(DbOptions options)
     {
@@ -627,7 +649,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     {
         _pool = pool;
         _poolBaseOptions = _options;
-        _poolBaseResilience = _resilience;
+        // W3：强制物化基准执行器——池语义要求基准实例跨租期存活（租用期 WithResilience
+        // 覆写经 ReturnToPoolAsync 复位回本实例，熔断状态不因归还重置）；池创建一次的成本。
+        _poolBaseResilience = Resilience;
     }
 
     /// <summary>租出准备：连接健康校验（非 Open 由池侧丢弃重建）+ 驻留态复位。</summary>
@@ -1318,8 +1342,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 在 BulkInsert 的 1222 B/行上约 17%。</para></summary>
     private ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
-        ResilienceExecutor executor = Volatile.Read(ref _resilience);
-        if (executor.IsPassThrough || activeTransaction is not null)
+        // W3（两轴清单轮 2026-10-14）：事务短路前置——原实现先读弹性再判事务，纯事务会话
+        // （TxRollback 族逐行 Update）每行都先触发惰性执行器物化；事务内写入恒直连
+        //（重试语义与事务互斥，见方法 doc），前置判定后事务路径零弹性接触，
+        // per-op 事务会话整会话不再建执行器（−228B/op）。判定语义逐位不变：
+        // 原式 (IsPassThrough || tx is not null) 在 tx 非空时恒真 → ExecuteRowsCoreAsync。
+        if (activeTransaction is not null)
+            return ExecuteRowsCoreAsync(command, ct);
+        ResilienceExecutor executor = Resilience;
+        if (executor.IsPassThrough)
             return ExecuteRowsCoreAsync(command, ct);
         // R4-λ:static lambda + 命令状态,闭包归零(写路径每行的 display class 分配)
         return executor.ExecuteWithTimeoutAsync(
