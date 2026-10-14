@@ -165,7 +165,8 @@ public partial class DataSession<TProvider>
             TProvider.QuoteIdentifier(typedTableName), TProvider.QuoteIdentifier(typedPkCol),
             TProvider.QuoteIdentifier("deleted_at"), TProvider.CurrentTimestampExpression,
             HasTenantFilter<T>() ? GetTenantAppendFragment() : "");
-        int batchSize = SqlLimits.MaxRowsPerBatch;
+        // 深挖轮：数组形态批宽提升（见 UnnestArraysMaxRowsPerBatch 注释）
+        int batchSize = UnnestArraysMaxRowsPerBatch;
         return await RunInTransactionScopeAsync(
             operation.Owner,
             (tran, token) => ExecuteTypedArrayDeleteCoreAsync<T, TKey>(
@@ -1220,9 +1221,9 @@ public partial class DataSession<TProvider>
                 + "The generator and batch UPDATE SQL disagree; recompile the model assembly "
                 + "(see CommandFactoryEmitter.UpdateArrayColumns).");
         }
-        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）——批大小只为限制单语句行数
-        // 与事务持锁时长，沿用 SqlLimits.MaxRowsPerBatch（与阶段 A 的 BulkDelete 同口径）。
-        int batchSize = SqlLimits.MaxRowsPerBatch;
+        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。深挖轮批宽提升——
+        // 5000→20000 实测 -36%（探针 B，见 UnnestArraysMaxRowsPerBatch）。
+        int batchSize = UnnestArraysMaxRowsPerBatch;
         int fullBatchLen = Math.Min(batchSize, entities.Count);
 
         // 满批数组预建一次批间复用；末批不足满批时单独建一组短数组（UNNEST 按数组实际长度展开，
@@ -1363,6 +1364,17 @@ public partial class DataSession<TProvider>
 
     /// <summary>PG 批量 UPDATE FROM VALUES 的单批行数上限，依据见 <see cref="MaxRowsPerUpdateBatchFor"/>。</summary>
     private const int PostgreSqlMaxRowsPerUpdateBatch = 1000;
+
+    /// <summary>深挖轮（2026-10-14，探针 B）：UNNEST 数组形态的单批行数上限——语句文本与批宽
+    /// 无关（每列一个数组参数），批宽只受服务端计划形态与往返摊销约束。探针（20000 行表、
+    /// UNNEST UPDATE、9 轮取中位）：批 5000（4 语句）= 104.9ms / 10000（2 语句）= 73.6ms /
+    /// 20000（单语句）= 67.6ms——<b>4×5000 比单语句慢 55%</b>，机制是批/表行数比 25% 时规划器
+    /// 已把数组连接翻成 Hash Join + 全表顺扫（每语句一次全表扫描，4 语句 = 4 次扫描）；批宽
+    /// 提到与表同量级后只扫一次。大表（比值小）方向：Nested Loop + 主键索引计划不变，批宽
+    /// 提升只减语句数与往返，两头都不劣。20000 是探针实证上界（更大宽度未测，锁时长按需
+    /// 再评）。适用于三个数组形态执行体（UPDATE/UPSERT/DELETE——DELETE 的 <c>= ANY(@ids)</c>
+    /// 无连接翻转面，收益为纯往返摊销）。</summary>
+    private const int UnnestArraysMaxRowsPerBatch = 20000;
 
     /// <summary>旧版生成器模型程序集的回退取值：probe 命令逐行 <c>BindUpdate</c> 建参数，
     /// 再把值写进池。语义与 <see cref="CrudMetadata.BindUpdateValues"/> 一致，参数创建量回到
@@ -1902,10 +1914,11 @@ public partial class DataSession<TProvider>
                 + $"(upsert columns) but the generated filler provides {columnCount}. "
                 + "The generator and batch upsert SQL disagree; recompile the model assembly.");
         }
-        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。批宽取 MaxRowsPerBatch：
-        // 既有 PG upsert 的 1000 行上限理由是"参数池按最大批建、行×列个参数对象"——
-        // 数组形态的成本结构不同（每列一个数组，元素总量 = 行×列但无参数对象），不适用该约束。
-        int batchSize = SqlLimits.MaxRowsPerBatch;
+        // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。批宽：既有 PG upsert 的
+        // 1000 行上限理由是"参数池按最大批建、行×列个参数对象"——数组形态的成本结构不同
+        //（每列一个数组，元素总量 = 行×列但无参数对象），不适用该约束。深挖轮批宽提升
+        //（探针 B 同机制，见 UnnestArraysMaxRowsPerBatch）。
+        int batchSize = UnnestArraysMaxRowsPerBatch;
         int fullBatchLen = Math.Min(batchSize, entities.Count);
 
         int lastBatchLen = entities.Count % fullBatchLen;

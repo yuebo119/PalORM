@@ -46,9 +46,22 @@ internal sealed class BulkDeleteArrayFormTests
     private static async Task SeedAsync(
         DataSession<ArrayFormDialectProvider> session, int count)
     {
-        for (int i = 1; i <= count; i++)
+        // 深挖轮（2026-10-14）：批宽提升到 20000 后边界测试需 >20000 行——改多值 INSERT
+        //（500 行/语句）；经 FormattableStringFactory.Create 零参形态传裸 SQL（插值孔一律
+        // 参数化是 ExecuteAsync 契约，常量字面值拼好的整句走零参工厂即无参数）；不经
+        // BulkInsertAsync（保持"不为播种动被测路径"的夹具隔离既定取舍）。
+        for (int start = 1; start <= count; start += 500)
+        {
+            int end = Math.Min(start + 499, count);
+            var sb = new System.Text.StringBuilder("INSERT INTO array_form_rows (id, name) VALUES ");
+            for (int i = start; i <= end; i++)
+            {
+                if (i > start) sb.Append(',');
+                sb.Append('(').Append(i).Append(", 'row").Append(i).Append("')");
+            }
             await session.ExecuteAsync(
-                $"INSERT INTO array_form_rows (id, name) VALUES ({i}, {"row" + i})");
+                System.Runtime.CompilerServices.FormattableStringFactory.Create(sb.ToString()));
+        }
     }
 
     /// <summary>数组形态断言：每次执行的语句都必须是 <c>= ANY(@ids)</c> 且整批只有一个参数
@@ -376,13 +389,13 @@ internal sealed class BulkDeleteArrayFormTests
             => await session.BulkDeleteAsync<TypedGuardUnregisteredRow, long>([]));
     }
 
-    /// <summary>多批边界：键数跨 <see cref="SqlLimits.MaxRowsPerBatch"/> 时类型化路径的批循环
-    /// 正确切批（批边界算错会留残行）。</summary>
+    /// <summary>多批边界：键数跨 <c>UnnestArraysMaxRowsPerBatch</c>（20000，深挖轮）时类型化
+    /// 路径的批循环正确切批（批边界算错会留残行）。</summary>
     [Test]
     public async Task BulkDelete_TypedKeys_MultiBatch_BoundariesCorrect()
     {
         await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
-        int count = SqlLimits.MaxRowsPerBatch + 17;
+        const int count = 20_017;
         await SeedAsync(session, count);
         Shapes.Clear();
 
