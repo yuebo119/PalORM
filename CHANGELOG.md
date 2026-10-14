@@ -4,6 +4,32 @@
 
 ## [未发布]
 
+### ⚡ 性能（W3 两轴清单轮）：弹性执行器惰性化——Insert/事务/批量族 per-op 会话每 op −224B
+### （四组表两轴全清单 ≥+1% 共 54 项逐项代码审计，结论见提交记录）
+
+- **清单口径**（用户指令两轴）：分配相对 ADO（P）≥ +1% 共 24 项、P/ADO ≥ +1% 共 30 项（去重
+  54 项；数据源 history-20261014-163705 全量批 416 项）。逐项分解用探针 5（每行/每 op 边际
+  分配，三方言真库）、探针 6（MySQL 读/写单项时延分解：弹性/直通/裸驱动复刻对照）。
+- **W3 弹性执行器惰性化**（本轮唯一落地项）：构造器原无条件 new ResilienceExecutor（含熔断器
+  与 Lock，探针实测 228B/个），而 **Insert 家族（InsertCore→FinishInsert 直执）、纯事务会话、
+  批量族从不读弹性**——per-op 会话形态每 op 白付。改可空字段 + CAS 惰性取用器（_querySlot
+  先例）；ExecuteWriteRowsAsync 事务短路前置（事务内写入恒直连，判定语义逐位不变）使
+  **事务内逐行 Update/Insert 也不再触发物化**；池化会话在 MarkPooled 强制物化（基准实例
+  跨租期存活语义逐位保留）。实测（探针 5，三方言）：会话构造 856→632B（−224 逐位一致）；
+  SQLite tx+S1 插入 5669→5445B（−224）；`_resilience` 全部读点收敛至惰性取用器。
+- **审计结论逐族**（详见提交信息）：可落地项已全部落地；其余各族处置——
+  ①GetByKey/Update 独立读改写臂必触碰弹性（非直通模式 IsPassThrough 判定），无惰性空间；
+  ②远端方言每行写 ~410-440B 为 UpdateCoreAsync 单一异步状态机盒（复制实验：单层薄帧
+  +171~192B/行已达最小；真直通 vs 默认差 ~0 证明弹性链不担责），网络 I/O 必需、Step17
+  写路径先例；③BulkUpdate/SQLite 逐条池化路径与 BulkInsert/MySQL EntityDataReader 经读码
+  确认已是设计最优（命令+参数池、逐行只写 Value、零 CreateParameter）；④EnumStr 枚举写
+  零分配经生成物逐行核实（switch 返驻留常量），Batch 内 EnumInserts 的 ΔP 来自 ADO 臂循环
+  形态更瘦，非我方空间；⑤MySQL 读族时延（GetByKey +20%）：probe6 证实往返数 1.00 一致、
+  构造墙钟 0.08µs、AsyncLocal 新键写 0.2µs 均排除，残留 ~30µs 因顺序测量暖机混淆未闭合，
+  登记待交错 A/B 探针。
+- **验证**：探针分配三方言复测如上；Core 612/612 · SourceGen 236/236 · Integration 真库
+  292/292 · gate 32/32；focused 三方言批 verify-W3-lazyres 见批内记录。
+
 ### ⚡ 性能（W1+W2 分配削减包）：四组表全部 >+10% 分配项逐项代码检查——读路由委托惰性化
 ### （每会话 −113B，per-op 会话形态全体项受益）+ 延迟回填去闭包化
 

@@ -231,7 +231,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>刀2：事务由调用方单次取用后传入的重载。</summary>
     private ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
-        ResilienceExecutor executor = Volatile.Read(ref _resilience);
+        ResilienceExecutor executor = Resilience;
         if (executor.IsPassThrough || activeTransaction is not null)
             return ExecuteScalarCoreAsync(command, ct);
         // R4-λ:static lambda + 命令状态,闭包归零(原捕获 command 的 display class ~56B/读)
