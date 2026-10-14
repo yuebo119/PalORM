@@ -4,6 +4,26 @@
 
 ## [未发布]
 
+### ⚡ 性能：四项深挖——UNNEST 批宽 5000→20000（BulkUpdate/PG/20000 批内 −58%、消除规划器
+翻转方差）+ SQLite 事务循环插入微项
+
+- **UNNEST 数组形态批宽提升**（探针 B，20000 行表 9 轮中位）：批 5000（4 语句）= 104.9ms /
+  10000 = 73.6ms / 20000（单语句）= 67.6ms——4×5000 慢 55%，机制是批/表行数比 25% 时规划器
+  把数组连接翻成 Hash Join + 全表顺扫（每语句一次全表扫描）；大表方向（比值小）Nested Loop
+  计划不变、批宽提升只减语句数与往返，两头不劣。三个数组形态执行体（UPDATE/UPSERT/DELETE）
+  统一改用 UnnestArraysMaxRowsPerBatch=20000（探针实证上界，更大宽度未测）。PerfHub 验证：
+  BulkUpdate/PG/20000 批内 171.3→71.7ms（比值 1.62→0.66，批内 −58%）；该族此前的批间慢窗
+  （基线批 171ms vs 复测 66.7ms）正是翻转方差——单语句形态从机制上消除。UpsertBatch（ON CONFLICT
+  逐入行计划，无连接翻转面）与 2000 档（本就单语句）如预期持平。
+- **SQLite 事务循环插入微项**（探针 A：INSERT 差距 +1561→+535ns/op、enum +588→+286）：
+  InsertCoreAsync 元数据改经 GetEntityInfo&lt;T&gt; 静态缓存（原每插入一次 FrozenDictionary 查找，
+  UpdateCoreAsync 既定先例的对齐）+ InsertNoReturning 分支内联 InsertPlainAsync 体（省一个
+  async 状态机帧/行，方法退役）。归因：async 链+锁仅 ~210ns，剩余为会话机器面（探针登记）。
+- **测试适配**：三个多批边界测试（Update/Merge/Delete 数组形态）跨新边界 20000，播种改多值
+  INSERT 零参工厂形态（FormattableStringFactory.Create——插值孔一律参数化是 ExecuteAsync 契约）。
+- **验证**：Core 611/611 · SourceGen 236/236 · Integration 真库 292/292 · gate 32/32 ·
+  focused 批（sqlite+pg，history-20261014-135449）。
+
 ### 🛡️ 防线：EC 包含结构性绊线 + 配置门 AsyncLocal 写消除（G2 教训的机械化收口）
 
 - **ArchitectureInvariantTests.EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment**：

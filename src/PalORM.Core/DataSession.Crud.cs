@@ -555,9 +555,12 @@ public sealed partial class DataSession<TProvider>
             EnterOperation(operationOwner);
         // ITM-675：单次快照贯穿全路径——元数据与回填委托/列名必须来自同一注册表版本，
         // 不得在 RETURNING 读后重读 CurrentState（热重载窗口会跨版本混用）。
+        // 刀1 扩面（2026-10-14 深挖轮）：元数据改经 GetEntityInfo<T> 静态缓存（注册表条目
+        // 单调不可变，ITM-758 同源论证；UpdateCoreAsync 的既定先例）——原每次插入一次
+        // FrozenDictionary 查找，事务内逐条插入循环（TxHundred/EnumInserts）每行白付。
+        // state 快照保留：GetCommandSqls 未命中路径与 setId 委托仍从同一 CurrentState 取用。
         PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
-            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        CrudMetadata metadata = GetEntityInfo<T>().Crud;
         if (metadata.InsertColumns.Count == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
@@ -593,7 +596,9 @@ public sealed partial class DataSession<TProvider>
     /// <summary>INSERT 执行形态分派的单一真源（PL-3）：InsertNoReturning → 纯执行；
     /// RETURNING 方言 → 标量/整行读；MySQL → LAST_INSERT_ID 合并。复用与新建路径共用。
     /// <para>R4（v6.0）：唯一冲突翻译挂靠点——异常过滤器形态（when 不吞栈），覆盖全部
-    /// 插入形态与 SaveAsync 的新增分支；Bulk 家族各有冲突消费语义，不在此包装。</para></summary>
+    /// 插入形态与 SaveAsync 的新增分支；Bulk 家族各有冲突消费语义，不在此包装。</para>
+    /// 深挖轮（2026-10-14）：InsertNoReturning 分支内联原 InsertPlainAsync 体——事务内
+    /// 逐条插入循环省一个 async 状态机帧/行（探针 A：三层 async 链 144ns，本项约 1/3）。</summary>
     private async ValueTask<T> FinishInsertAsync<T>(
         PalORM_Runtime.RuntimeRegistryState state,
         DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
@@ -602,7 +607,13 @@ public sealed partial class DataSession<TProvider>
         try
         {
             if (metadata.InsertNoReturning)
-                return await InsertPlainAsync<T>(cmd, entity, ct).ConfigureAwait(false);
+            {
+                int affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                if (affected != 1)
+                    throw new InvalidOperationException(
+                        $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
+                return entity;
+            }
             return TProvider.SupportsReturningClause
                 ? await InsertWithReturningAsync(state, cmd, metadata, entity, ct).ConfigureAwait(false)
                 : await InsertWithLastInsertIdAsync(state, cmd, entity, ct).ConfigureAwait(false);
@@ -611,18 +622,6 @@ public sealed partial class DataSession<TProvider>
         {
             throw new UniqueConstraintViolationException(ex);
         }
-    }
-
-    /// <summary>PL-3 无读返回路径——InsertNoReturning 实体专用（显式主键 + 全列恒等）。
-    /// 返回传入实体（同一引用，全部属性即行值，无回填）；影响行数不为 1 时明确失败。</summary>
-    private static async ValueTask<T> InsertPlainAsync<T>(DbCommand cmd, T entity, CancellationToken ct)
-        where T : class, new()
-    {
-        int affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        if (affected != 1)
-            throw new InvalidOperationException(
-                $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
-        return entity;
     }
 
     /// <summary>PG/SQLite 路径——INSERT ... RETURNING 单次往返物化完整行（含自增 ID）。

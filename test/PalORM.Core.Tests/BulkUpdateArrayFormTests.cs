@@ -39,9 +39,23 @@ internal sealed class BulkUpdateArrayFormTests
     private static async Task SeedAsync(
         DataSession<ArrayFormDialectProvider> session, int count)
     {
-        for (int i = 1; i <= count; i++)
+        // 深挖轮（2026-10-14）：批宽提升到 20000 后，多批边界测试需 >20000 行——逐行
+        // 插入在 2 万行级不可接受（~7s/测试）。改多值 INSERT（333 行/语句）分块播种；
+        // 经 FormattableStringFactory.Create 零参形态传裸 SQL（插值孔一律参数化是
+        // ExecuteAsync 契约，常量字面值拼好的整句走零参工厂即无参数）；不经
+        // BulkInsertAsync（保持"不为播种动被测路径"的夹具隔离既定取舍）。
+        for (int start = 1; start <= count; start += 333)
+        {
+            int end = Math.Min(start + 332, count);
+            var sb = new System.Text.StringBuilder("INSERT INTO unnest_rows (id, name, qty) VALUES ");
+            for (int i = start; i <= end; i++)
+            {
+                if (i > start) sb.Append(',');
+                sb.Append('(').Append(i).Append(", 'n").Append(i).Append("', ").Append(i).Append(')');
+            }
             await session.ExecuteAsync(
-                $"INSERT INTO unnest_rows (id, name, qty) VALUES ({i}, {"n" + i}, {i})");
+                System.Runtime.CompilerServices.FormattableStringFactory.Create(sb.ToString()));
+        }
     }
 
     /// <summary>形状断言：每条语句都是 UNNEST 形态且参数个数 == 列数（每列一个数组参数，与批宽无关）。</summary>
@@ -84,12 +98,13 @@ internal sealed class BulkUpdateArrayFormTests
         AssertAllStatementsAreUnnestForm(expectedBatchCount: 1, expectedColumnCount: 3);
     }
 
-    /// <summary>多批与末批：5001 行 → 批大小 5000，两批（5000 + 1）。末批数组长度必须精确等于
-    /// 实际行数——UNNEST 按数组长度展开，复用满批长数组会把上一批的残留值一起写回。</summary>
+    /// <summary>多批与末批：20001 行 → 批大小 20000（UnnestArraysMaxRowsPerBatch），两批
+    ///（20000 + 1）。末批数组长度必须精确等于实际行数——UNNEST 按数组长度展开，复用满批
+    /// 长数组会把上一批的残留值一起写回。</summary>
     [Test]
     public async Task BulkUpdate_ArrayForm_MultiBatchWithShortLastBatch_UpdatesEveryRow()
     {
-        const int total = 5_001;
+        const int total = 20_001;
         await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
         await SeedAsync(session, total);
         List<UnnestRow> rows = await session.From<UnnestRow>().OrderBy(r => r.Id).ToListAsync();
@@ -352,11 +367,11 @@ internal sealed class BulkUpdateArrayFormTests
         await Assert.That(rows.All(r => r.Name == $"upd{r.Id}" && r.Qty == r.Id * 100)).IsTrue();
     }
 
-    /// <summary>多批与末批：5001 行 → 5000 + 1 两批，末批数组长度精确。</summary>
+    /// <summary>多批与末批：20001 行 → 20000 + 1 两批（UnnestArraysMaxRowsPerBatch），末批数组长度精确。</summary>
     [Test]
     public async Task BulkMerge_ArrayForm_MultiBatchWithShortLastBatch()
     {
-        const int total = 5_001;
+        const int total = 20_001;
         await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
         var entities = new List<UnnestRow>(total);
         for (long i = 1; i <= total; i++)
