@@ -12,6 +12,8 @@ internal static class PerfEntry
     public static int Gate()
     {
         var root = Perf.RepoRoot();
+        Perf.StartClock();
+        Perf.BeginSessionLog(root, "gate");
         Perf.Step("[门禁 1/2] 微基准 BDN 基线");
         if (File.Exists(Path.Combine(root, BaselineBdn)))
         {
@@ -21,6 +23,7 @@ internal static class PerfEntry
                 $"check --results \"{Path.Combine(root, BdnResults)}\" --baseline \"{Path.Combine(root, BaselineBdn)}\"");
             if (code != 0)
             {
+                Perf.EndSessionLog(code);
                 return code;
             }
         }
@@ -32,10 +35,13 @@ internal static class PerfEntry
         Perf.Step("[门禁 2/2] 结果库基线（PerfHub 能力矩阵 + DapperSuite 哨兵）");
         if (File.Exists(Path.Combine(root, BaselineIndex)))
         {
-            return Perf.Run("dotnet",
+            var finalCode = Perf.Run("dotnet",
                 $"run --project \"{Path.Combine(root, GateProject)}\" -c Release -- check-index --baseline \"{Path.Combine(root, BaselineIndex)}\"");
+            Perf.EndSessionLog(finalCode);
+            return finalCode;
         }
         Perf.Out($"跳过：缺 {BaselineIndex}（先跑 record-index 录制）");
+        Perf.EndSessionLog(0);
         return 0;
     }
 
@@ -76,6 +82,8 @@ internal static class PerfEntry
     public static int Smoke()
     {
         var root = Perf.RepoRoot();
+        Perf.StartClock();
+        Perf.BeginSessionLog(root, "smoke");
         Perf.Step("[1/4] 微基准冒烟（单点查询，BDN）");
         // B104 同族（2026-10-01）：filter 不得带引号——ProcessStartInfo 无 shell，单引号是字面量，
         // 带引号的过滤串匹配 0 基准后退出码仍 0（假绿）
@@ -83,6 +91,7 @@ internal static class PerfEntry
             $"run --project \"{Path.Combine(root, "bench", "PalORM.Benchmarks")}\" -c Release -- --filter *ADO_NET_GetByKey*");
         if (code != 0)
         {
+            Perf.EndSessionLog(code);
             return code;
         }
 
@@ -91,6 +100,7 @@ internal static class PerfEntry
             $"run --project \"{Path.Combine(root, "bench", "PalORM.PerfHub")}\" -c Release -- run --dialects sqlite --tiers 2000 --quick");
         if (code != 0)
         {
+            Perf.EndSessionLog(code);
             return code;
         }
 
@@ -101,11 +111,14 @@ internal static class PerfEntry
             $"run --project \"{Path.Combine(root, "bench", "PalORM.DapperSuite")}\" -c Release -- --filter *SqlCommand* --join");
         if (code != 0)
         {
+            Perf.EndSessionLog(code);
             return code;
         }
 
         Perf.Step("[4/4] 索引报告");
-        return Index();
+        var finalCode = Index();
+        Perf.EndSessionLog(finalCode);
+        return finalCode;
     }
 
     /// <param name="options">--with-dappersuite：把 DapperSuite 哨兵并回本轮。默认**移出**（2026-10-03
@@ -132,6 +145,7 @@ internal static class PerfEntry
         var root = Perf.RepoRoot();
         Perf.ClearSteps();
         Perf.StartClock();
+        Perf.BeginSessionLog(root, "full");
         int stepTotal = withDapperSuite ? 5 : 4;
         var stepIdx = 0;
         List<string> stepFailed = [];
@@ -185,12 +199,16 @@ internal static class PerfEntry
             Perf.Out("");
             Perf.Err($"全量跑测有失败步骤：{string.Join(' ', stepFailed)}");
             Perf.PrintFinalTable();
-            return 1;
+            var failCode = 1;
+            Perf.EndSessionLog(failCode);
+            return failCode;
         }
         Perf.Out("");
         Perf.Out($"全量跑测完成：{(withDapperSuite ? "五" : "四")}步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
         Perf.PrintFinalTable();
-        return 0;
+        var okCode = 0;
+        Perf.EndSessionLog(okCode);
+        return okCode;
     }
 
     public static int Usage()

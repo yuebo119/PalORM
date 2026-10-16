@@ -14,11 +14,19 @@ internal static class Perf
     public const string Red = "\x1b[0;31m";
     public const string Nc = "\x1b[0m";
 
-    /// <summary>UI 行输出（显式 LF，对齐 bash echo 的字节形态；与子进程直通行相区分）。</summary>
-    public static void Out(string text) => Console.Out.Write(text + "\n");
+    /// <summary>UI 行输出（显式 LF，对齐 bash echo 的字节形态；与子进程直通行相区分）。会话日志开启时双写。</summary>
+    public static void Out(string text)
+    {
+        Console.Out.Write(text + "\n");
+        SessionLog?.WriteLine(text);
+    }
 
-    /// <summary>UI 行错误输出（显式 LF）。</summary>
-    public static void Err(string text) => Console.Error.Write(text + "\n");
+    /// <summary>UI 行错误输出（显式 LF）。会话日志开启时双写。</summary>
+    public static void Err(string text)
+    {
+        Console.Error.Write(text + "\n");
+        SessionLog?.WriteLine("[stderr] " + text);
+    }
 
     /// <summary>从 CWD 向上找仓库根（PalORM.slnx 哨兵；禁用 AppContext.BaseDirectory——file-based app 指向缓存，项目形态指向 bin，均非仓库根）。</summary>
     public static string RepoRoot()
@@ -160,6 +168,7 @@ internal static class Perf
         while (await reader.ReadLineAsync() is { } line)
         {
             log?.WriteLine(line);
+            SessionLog?.WriteLine(line);
             if (!silentStdout)
             {
                 // 默认控制台直通（对齐 bash 的 `| tee` 形态：子进程输出可见）；onLine 供过滤形态覆写
@@ -234,6 +243,50 @@ internal static class Perf
     // ── 计时与进度表（perf.sh 的实时进度/末尾汇总机制）──
     private static readonly List<string[]> StepRows = [];
     public static DateTime TotalStart { get; private set; }
+
+    /// <summary>
+    /// 会话级全量日志（bench/logs/perfcli-&lt;时间戳&gt;.log）：Out/Err 与子进程行双写。
+    /// 动机（2026-10-14 用户指令"全量测试结果报告归类统一保存"）：此前跑测日志靠调用方手动
+    /// `&gt; tmp/xxx.log` 重定向，散落在临时目录且已随 tmp 清理丢失。归档目录固定为
+    /// bench/logs/（.gitignore 覆盖，不入库），每次 full/smoke 运行自动落一份，带退出码尾行。
+    /// </summary>
+    private static StreamWriter? SessionLog;
+    public static string? SessionLogPath { get; private set; }
+
+    public static void BeginSessionLog(string root, string kind)
+    {
+        var dir = Path.Combine(root, "bench", "logs");
+        Directory.CreateDirectory(dir);
+        SessionLogPath = Path.Combine(dir, $"perfcli-{kind}-{Stamp()}.log");
+        SessionLog = new StreamWriter(SessionLogPath, append: false, new UTF8Encoding(false));
+        SessionLog.WriteLine($"# PerfCli {kind} @ {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+    }
+
+    public static void EndSessionLog(int exitCode)
+    {
+        if (SessionLog is null)
+        {
+            return;
+        }
+        SessionLog.WriteLine($"# exit={exitCode} total={FmtDur(ElapsedSince(TotalStart))}");
+        SessionLog.Dispose();
+        SessionLog = null;
+        if (SessionLogPath is not null)
+        {
+            Perf.Out($"│ 本轮日志：{SessionLogPath}");
+            PruneLogs(Path.GetDirectoryName(SessionLogPath)!, "perfcli-*.log", keep: 20);
+        }
+    }
+
+    /// <summary>日志保留最近 keep 份（全量批约 2~4 MB/份，防目录无限膨胀）。</summary>
+    private static void PruneLogs(string dir, string pattern, int keep)
+    {
+        var logs = Directory.GetFiles(dir, pattern).OrderByDescending(f => f, StringComparer.Ordinal).ToList();
+        for (var i = keep; i < logs.Count; i++)
+        {
+            File.Delete(logs[i]);
+        }
+    }
 
     public static void StartClock() => TotalStart = DateTime.Now;
 
