@@ -1,5 +1,5 @@
 // verify-ai-system.cs（自 .ai/scripts/verify-ai-system.sh 迁移，脚本全面 C# 化轮）
-// .ai 系统机械校验 V1-V23：提示词引用可解析、口径数字与事实一致、配套脚本存在、防线能失败。
+// .ai 系统机械校验 V1-V25：提示词引用可解析、口径数字与事实一致、配套脚本存在、防线能失败、引用锚真实在案。
 // 迁移形态重登记（与引用面切换同批生效）：①判定/工具脚本真源=主仓 scripts/*.cs，V2/V5/V14
 // 判据按新路径；②V15 原 bash 卫生（B30/B31）随判定层 .sh 退役，重登记为 .ai/scripts 白名单
 // 哨兵（允许 bash 的仅 install-ai-system.sh 引导件；额外 .sh/.mjs/.py 即 FAIL）；③V17c V16
@@ -358,6 +358,73 @@ if (File.Exists(ledgerPath))
 }
 else Fail(23, "传感器台账缺失", ".ai/gate/sensor-ledger.md");
 
+// V24 提交锚验存（lessons/CHANGELOG/perf-ledger 引用的短哈希须在主仓或 .ai 仓真实存在）
+// 出处：2026-10-14 独立复核轮抓到 ledger 凭记忆写假哈希（82d8d01 不存在，实为 50478d9）——
+// "锚点验存"此前靠人工 git log 逐个对账，本轮机械化（B93 核真家族的延伸面）。
+// 口径：7-12 位十六进制候选且含 a-f 字母（纯数字候选=日期/批号，排除）；双仓 cat-file 验存；
+// 只验存在性不验语义（存在但引错提交属人工面）；2026-07-17 仓库重建前的锚对象不在本地库，
+// 走 .ai/gate/anchor-baseline.md 基线豁免（共同理由+清理触发见该文件；另含表 2 文献性引用与
+// 表 3 姊妹仓引用——假锚反例/变异探针形态/跨仓（Pal.DDD）提交等本地双仓验存范围外的故意非锚，
+// V24 不辨语义故一并登记）。
+var v24Baseline = new HashSet<string>();
+if (File.Exists(".ai/gate/anchor-baseline.md"))
+{
+    foreach (var bl in File.ReadAllText(".ai/gate/anchor-baseline.md").Split('\n'))
+        if (bl.TrimStart().StartsWith('|'))
+        {
+            var bm = Regex.Match(bl, @"\b[0-9a-f]{7,12}\b");
+            if (bm.Success) v24Baseline.Add(bm.Value);
+        }
+}
+var v24Missing = new List<string>();
+var v24Checked = 0; var v24Exempt = 0;
+foreach (var f in new[] { ".ai/lessons.md", ".ai/CHANGELOG-lessons.md", ".ai/perf-ledger.md" })
+{
+    if (!File.Exists(f)) { v24Missing.Add($"{f}(文件缺失)"); continue; }
+    var seen = new HashSet<string>();
+    foreach (Match m in Regex.Matches(File.ReadAllText(f), @"\b[0-9a-f]{7,12}\b"))
+    {
+        var h = m.Value;
+        if (!h.Any(c => c is >= 'a' and <= 'f')) continue;
+        if (!seen.Add(h)) continue;
+        if (v24Baseline.Contains(h)) { v24Exempt++; continue; }
+        v24Checked++;
+        if (RunCapture("git", $"cat-file -t {h}").Trim() == "commit") continue;
+        if (RunCapture("git", $"-C .ai cat-file -t {h}").Trim() == "commit") continue;
+        v24Missing.Add($"{h}({Path.GetFileName(f)})");
+    }
+}
+if (v24Missing.Count == 0)
+    Pass(24, $"提交锚验存通过（{v24Checked} 个哈希在主仓/.ai 均在案，基线豁免 {v24Exempt} 个见 anchor-baseline.md 三表）");
+else
+    Fail(24, "知识文件引用本地不存在的提交锚（凭记忆写哈希族——订正哈希或登记基线理由）", string.Join(' ', v24Missing));
+
+// V25 verify 计数声明三方对齐（B103 族：README 头段/README 防线表行/主仓 AGENTS.md 多写入点）
+// 2026-10-16 实例：v7.36 配套机械化只改 README 头段（23→24/fast 21→22），防线清单表行
+// （仍 23 项/V1–V23/fast 21/V17c 10 探针）与主仓 AGENTS.md（仍"23 项里的 21 项"）两处漏改，
+// --fast 全绿照过——V16/V18 只覆盖 lessons/test 两个声明面，README 与 AGENTS 的计数无人核。
+// 判据全部从本脚本源码推导（实现最大值/fast 跳过数/V17c 探针数），新增检查项零硬编码维护。
+var v25Src = File.ReadAllText("scripts/verify-ai-system.cs");
+var v25Impl = MaxNum(Regex.Matches(v25Src, @"(?:Pass|Fail|Warn)\(([0-9]+)"));
+var v25Skip = Regex.Matches(v25Src, @"if \(!FAST\)").Count;
+var v25Readme = File.ReadAllText(".ai/README.md");
+var v25Header = Regex.Match(v25Readme, @"([0-9]+) 项（V1–V([0-9]+)）");
+var v25Table = Regex.Match(v25Readme, @"\*\*([0-9]+) 项\*\*：V1–V");
+var v25Fast = Regex.Matches(v25Readme, @"--fast`?\s*[跑出] ([0-9]+) 项").Select(m => m.Groups[1].Value).Distinct().ToList();
+var v25Ag = Regex.Match(File.ReadAllText("AGENTS.md"), @"([0-9]+) 项里的 ([0-9]+) 项");
+var v25ProbeClaim = Regex.Match(v25Readme, @"V/D 面 (\d+) 探针");
+var v25ProbeActual = Regex.Matches(v25Src, @"v17cFail\.Add\(").Count;
+var v25ExpectFast = v25Impl.Length > 0 ? (int.Parse(v25Impl) - v25Skip).ToString() : "";
+if (v25Impl.Length > 0 && v25Header.Success && v25Header.Groups[1].Value == v25Impl && v25Header.Groups[2].Value == v25Impl
+    && v25Table.Success && v25Table.Groups[1].Value == v25Impl
+    && v25Fast.Count == 1 && v25Fast[0] == v25ExpectFast
+    && v25Ag.Success && v25Ag.Groups[1].Value == v25Impl && v25Ag.Groups[2].Value == v25ExpectFast
+    && v25ProbeClaim.Success && v25ProbeClaim.Groups[1].Value == v25ProbeActual.ToString())
+    Pass(25, $"verify 计数声明三方对齐（{v25Impl} 项全量 / fast {v25ExpectFast} 项 / V17c 探针 {v25ProbeActual} 个）");
+else
+    Fail(25, "verify 计数声明漂移（README 头段/表行/AGENTS.md 与脚本实现不一致——B103 族）",
+        $"实现 V1-V{(v25Impl.Length > 0 ? v25Impl : "?")}（fast 跳过 {v25Skip} → {v25ExpectFast}，V17c 探针 {v25ProbeActual} 个）；README 头段 {(v25Header.Success ? v25Header.Value : "未匹配")}，表行 {(v25Table.Success ? v25Table.Groups[1].Value + " 项" : "未匹配")}，fast {string.Join("/", v25Fast)}，探针声称 {(v25ProbeClaim.Success ? v25ProbeClaim.Groups[1].Value : "无")}，AGENTS.md {(v25Ag.Success ? v25Ag.Value : "未匹配")}");
+
 Console.WriteLine();
 Console.WriteLine($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
 Console.WriteLine("═══════ 校验完成 ═══════");
@@ -367,6 +434,22 @@ return failed > 0 ? 1 : 0;
 
 void V17Batteries()
 {
+    // 脏树守卫（2026-10-16，lessons B190）：探针还原全部走 git checkout（"回到 HEAD"而非
+    // "回到电池前状态"）——带着目标文件未提交改动跑全量 verify 会被静默打回 HEAD，且 git status
+    // 显示干净（与 HEAD 一致）使损害对 git 隐身（实测：一轮全量把未提交的 lessons/README/
+    // AGENTS 三文件改动打没，主流程 V16 在电池前已跑过还显示 PASS）。full verify 前双仓
+    // tracked 改动必须为零；未跟踪文件（?? 行）不被 checkout 还原，放行。
+    var v17Dirty = new List<string>();
+    foreach (var line in RunCapture("git", "status --porcelain").Split('\n'))
+        if (line.Trim().Length > 0 && !line.TrimStart().StartsWith("??")) v17Dirty.Add(line.Trim());
+    foreach (var line in RunCapture("git", "-C .ai status --porcelain").Split('\n'))
+        if (line.Trim().Length > 0 && !line.TrimStart().StartsWith("??")) v17Dirty.Add(".ai: " + line.Trim());
+    if (v17Dirty.Count > 0)
+    {
+        Fail(17, "全量 verify 前双仓存在未提交改动——变异探针将以 git checkout 还原目标文件，先提交或 stash 再跑（B190）", string.Join(' ', v17Dirty));
+        return;
+    }
+
     var probes = new List<string>();
     var mutFiles = new List<string>();
     try
@@ -528,6 +611,19 @@ void V17cBattery()
         if (!RunFastVerify().Contains("FAIL V22")) v17cFail.Add("V22");
         File.Delete(".ai/scripts/zzv17c_noshell.sh");
 
+        // V24：植入未登记假提交锚（8 位十六进制含 a-f 字母，过纯数字排除、不在任一仓、不在基线）。
+        // 值只存在于本源码、不进知识文件——v7.36 旧值与基线表 2 登记互斥（探针描述逐字进
+        // CHANGELOG → 植入值被基线豁免 → 探针退化为无声 no-op），full verify 在基线登记后
+        // 从未重跑故横跨两个会话无人发现，v7.37 全量跑当场抓出（lessons B189）。
+        MutateFile(".ai/perf-ledger.md", t => t + "\n\nzzv24probe: deadbeef\n");
+        if (!RunFastVerify().Contains("FAIL V24")) v17cFail.Add("V24");
+        GitInAi("checkout -- perf-ledger.md");
+
+        // V25：README verify 计数写入点漂移（头段 25→24，模拟"只改一处"复发——B103 族 2026-10-16 实例形态）
+        MutateFile(".ai/README.md", t => ReplaceFirst(t, @"([0-9]+) 项（V1–V", "24 项（V1–V"));
+        if (!RunFastVerify().Contains("FAIL V25")) v17cFail.Add("V25");
+        GitInAi("checkout -- README.md");
+
         // D10：植入 [Test] 临时文件 → 实测计数漂移
         File.WriteAllText("test/PalORM.Core.Tests/ZZV17cD10Probe.cs", "[Test]\n", new UTF8Encoding(false));
         if (!RunDc().Contains("FAIL D10")) v17cFail.Add("D10");
@@ -539,7 +635,8 @@ void V17cBattery()
         if (!RunDc().Contains("FAIL D11")) v17cFail.Add("D11");
         Git("checkout -- src/PalORM.SourceGen/GeneratedCodeMetadata.cs");
 
-        if (v17cFail.Count == 0) Pass(17, "V/D 面防线变异探针 10/10 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22 + D10/D11；T 面定性=提示词规则非机械防线）");
+        var vdcTotal = Regex.Matches(File.ReadAllText("scripts/verify-ai-system.cs"), @"v17cFail\.Add\(").Count;
+        if (v17cFail.Count == 0) Pass(17, $"V/D 面防线变异探针 {vdcTotal}/{vdcTotal} 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22/V24/V25 + D10/D11；T 面定性=提示词规则非机械防线）");
         else Fail(17, "V/D 面探针有沉默项（变异真源后检查仍 PASS = 无声 no-op）", "未报 FAIL: " + string.Join(' ', v17cFail));
     }
     finally
