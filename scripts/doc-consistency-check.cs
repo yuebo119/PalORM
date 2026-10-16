@@ -96,11 +96,17 @@ else Fail($"D9 分项计数不一致（core={coreN} sg={sgN} int={intN} total={t
 if (Regex.IsMatch(stdText, @"G12.*禁止公开 static.*✅", RegexOptions.Singleline)) Pass("D8 G12 标注为通过");
 else Fail("D8 G12 状态不符合预期（应包含 ✅）");
 
-// ── D10: 架构总声明 = 实测 [Test] 标记数（含 --fix 自动同步）──
+// ── D10: [Test] 计数声明（三文件全部写入点）= 实测标记数（含 --fix 自动同步）──
+// 写入点台账（2026-10-16 v7.37 轮补全）：docs/架构设计.md ×2（首行总验证 + 状态表行）、
+// docs/API参考.md ×1（首行测试口径）、docs/测试体系规范.md ×1（§验证指针行）。原校验只查
+// 架构设计.md 的加粗行一处：API参考.md 的声明曾被 V12 探针 git checkout 连带打回（lessons
+// B190）、测试体系规范.md 的声明是 533 化石值（少实测 566），两个写入点均无校验面（B103 族）。
+var d10Docs = new[] { "docs/架构设计.md", "docs/API参考.md", "docs/测试体系规范.md" };
 if (args.Length > 0 && args[0] == "--fix")
 {
     var fixCount = CountTestMarkers();
-    foreach (var doc in new[] { "docs/架构设计.md", "docs/API参考.md" })
+    var fixPlaces = 0;
+    foreach (var doc in d10Docs)
     {
         if (!File.Exists(doc)) continue;
         var lines = File.ReadAllLines(doc);
@@ -109,18 +115,24 @@ if (args.Length > 0 && args[0] == "--fix")
             if (lines[i].Contains("[Test]") && lines[i].Contains("声明") && Regex.IsMatch(lines[i], @"[0-9]+ 项"))
             {
                 lines[i] = Regex.Replace(lines[i], @"[0-9]+ 项", $"{fixCount} 项");
+                fixPlaces++;
             }
         }
         File.WriteAllLines(doc, lines, new UTF8Encoding(false));
     }
-    Console.WriteLine($"D10 --fix: 三处计数已同步为 {fixCount}");
+    Console.WriteLine($"D10 --fix: {fixPlaces} 处计数已同步为 {fixCount}");
     return 0;
 }
-var declTotal = FirstMatch(archText, @"\*\*(\d+) 项 `\[Test\]` 声明\*\*")?.Group1 ?? "";
 var markTotal = CountTestMarkers().ToString();
-if (declTotal.Length == 0) Fail("D10 架构设计.md 未找到 '**N 项 `[Test]` 声明**' 总声明（格式变更？）");
-else if (declTotal == markTotal) Pass($"D10 架构总声明 = 实测标记数（{declTotal}）");
-else Fail($"D10 架构声明 {declTotal} ≠ 实测标记数 {markTotal}（同步 docs/架构设计.md 273 行附近的总声明）");
+var d10Bad = new List<string>();
+foreach (var doc in d10Docs)
+{
+    if (!File.Exists(doc)) { d10Bad.Add($"{doc} 缺失"); continue; }
+    foreach (Match m in Regex.Matches(File.ReadAllText(doc), @"(\d+) 项 `\[Test\]` 声明"))
+        if (m.Groups[1].Value != markTotal) d10Bad.Add($"{doc} 声明 {m.Groups[1].Value}≠实测 {markTotal}");
+}
+if (d10Bad.Count == 0) Pass($"D10 [Test] 计数声明一致（三文件全部写入点 = 实测 {markTotal}）");
+else Fail($"D10 [Test] 计数声明漂移（{string.Join("；", d10Bad)}）——用 --fix 同步");
 
 // ── D11: 生成物工具版本 = 包版本真源（含 OTel InstrumentationVersion）───
 var propsText = File.Exists("Directory.Build.props") ? File.ReadAllText("Directory.Build.props") : "";
