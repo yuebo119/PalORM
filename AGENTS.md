@@ -32,7 +32,7 @@
 | `/gate` | 门禁 | G1-G33 规范合规检查（编译前阻断） |
 | `/refine` | 精炼 | 24+3 项操作矩阵（更优实现） |
 | `/test` | 测试规范 | T1-T24 测试铁律 + 覆盖矩阵 + 基准配置规范 |
-| （自动） | pre-commit | 提交前六段：`secret-guard` → `stub-check` → 参数集合复用门禁（R-UNNESTB）→ `dotnet run --file scripts/verify-ai-system.cs -- --fast`（25 项里的 23 项）→ `dotnet run --file scripts/gate-check.cs -- --allow-dirty`（G1-G33）→ `dotnet run --file scripts/doc-consistency-check.cs`（D1-D12 文档口径，2026-10-16 补；`.ai/` 不存在则 verify/gate 两段跳过）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
+| （自动） | pre-commit | 提交前七段：`secret-guard` → `stub-check` → 受影响项目构建（`precommit-build-check.cs`，按暂存文件映射 csproj，Debug 增量；根级基础设施文件走 ci.slnf 全量，docs/scripts/vendored 子树跳过，2026-10-17 补）→ 参数集合复用门禁（R-UNNESTB）→ `dotnet run --file scripts/verify-ai-system.cs -- --fast`（25 项里的 23 项）→ `dotnet run --file scripts/gate-check.cs -- --allow-dirty`（G1-G33）→ `dotnet run --file scripts/doc-consistency-check.cs`（D1-D12 文档口径，2026-10-16 补；`.ai/` 不存在则 verify/gate 两段跳过）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
 
 ### 项目专属经验（v4.0 + v5.0 实测，编号与四系统脚本对齐）
 
