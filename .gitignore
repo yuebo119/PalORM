@@ -113,3 +113,5 @@ cov-core.xml
 *.tunit-report.json
 # 手工分析用一次性曲线视图（数据真源 bench/perfhub/results/history-*.json 已入库，视图可再生）
 perf-curve.html
+# 迭代级采样诊断落盘（PALORM_PERFHUB_SAMPLE_DUMP=1 才生成；诊断证据按需 -f 显式提交）
+bench/perfhub/results/samples-*.jsonl

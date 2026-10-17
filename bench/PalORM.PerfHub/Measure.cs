@@ -239,12 +239,14 @@ internal static class Measure
             preparedReuse = execs == 0 ? 0 : (cc1.Prepares - prepareBefore) / (double)execs;
         }
 
+        // 诊断落盘（PALORM_PERFHUB_SAMPLE_DUMP=1）：排序前保留原始序号，供离群迭代形态分析
+        double[]? rawSamples = SampleDump.Enabled ? [.. samples] : null;
         samples.Sort();
         double median = samples[samples.Count / 2];
         double mean = samples.Average();
         double stdErr = samples.Count > 1 ? StdDev(samples) / Math.Sqrt(samples.Count) : 0;
 
-        return new Measurement
+        var measurement = new Measurement
         {
             Dialect = dialect.DisplayName,
             Implementation = impl.Name,
@@ -262,6 +264,11 @@ internal static class Measure
             RoundTripsPerOp = roundTrips,
             PreparedReuse = preparedReuse
         };
+        if (rawSamples is not null)
+        {
+            SampleDump.Emit(dialect.DisplayName, impl.Name, operation, rows, iterations, median, mean, rawSamples);
+        }
+        return measurement;
     }
 
     /// <summary>测量「数据生成」本身的成本——不涉及数据库，纯粹是构造 N 个实体对象。

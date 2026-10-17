@@ -1,6 +1,7 @@
 // full-perf 子命令（自 run-full-perf.sh 迁移，T4-3）：微基准侧编排步骤。
 // 由 full 入口第 1 步以 SKIP_REPORT=1 调用；单独跑只在调试时用，报告只能含 BDN 明细。
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace PalORM.PerfCli;
 
@@ -67,13 +68,18 @@ internal static class FullPerf
             Path.Combine(logDir, "bdn.log"), "Global total");
         // B131（2026-10-04 实测）：BDN filter 失配（含 glob 展开形态）时进交互/打印清单后仍退 0——
         // RunFiltered 第四参是控制台过滤正则不是失败判据，只看退出码会把零执行报成 OK。
-        // "Global total time" 只在真跑了基准的收尾输出；缺失即判失败（与 DapperSuite 的
+        // B191（2026-10-17 实测）：存在性判据仍被零执行打穿——BDN job exe 构建失败（NU1101，
+        // vendored Weaver 冷缓存）时同样打印 "Global total time: .. executed benchmarks: 0"
+        // 且退 0；判据升级为解析 executed benchmarks 计数，缺失或为 0 即失败（与 DapperSuite 的
         // "returned 0 benchmarks" 判据同族对称，d855b65）。
+        var bdnLog = File.ReadAllText(Path.Combine(logDir, "bdn.log"));
+        var executedMatch = Regex.Match(bdnLog, @"executed benchmarks:\s*(\d+)");
         if (bdnExit == 0
-            && !File.ReadAllText(Path.Combine(logDir, "bdn.log"))
-                .Contains("Global total", StringComparison.Ordinal))
+            && (!bdnLog.Contains("Global total", StringComparison.Ordinal)
+                || !executedMatch.Success
+                || executedMatch.Groups[1].Value == "0"))
         {
-            Perf.Err($"=== BDN 零执行（filter 失配/交互模式退出，见 {Path.Combine(logDir, "bdn.log")}）===");
+            Perf.Err($"=== BDN 零执行（filter 失配/交互模式退出/job 构建失败，见 {Path.Combine(logDir, "bdn.log")}）===");
             bdnExit = 1;
         }
 
@@ -111,9 +117,12 @@ internal static class FullPerf
         Perf.Out($" 门禁: {(gateExit == 0 ? "通过" : "存在回归（见 gate.log）")}");
         Perf.Out("═══════════════════════════════════════════");
         // BDN 失败（含 filter 形态错）就地失败——负载/内存/启动是补充维度可容忍，
-        // BDN 是门禁数据源不可容忍（2026-09-30 修复：吞码缺陷）
+        // BDN 是门禁数据源不可容忍（2026-09-30 修复：吞码缺陷）。
+        // B192（2026-10-17 实测）：gateExit 曾被吞——门禁 FATAL（BDN 报告 JSON 缺字段）时本步
+        // 仍返回 0，编排层标 OK 继续跑 15 分钟 PerfHub 才在总门禁暴露；gate 非零（回归/FATAL
+        // 同返 1）即就地失败，与 bdnExit 同族传播，不再让坏数据流到下一步。
         if (bdnExit != 0) return bdnExit;
-        return 0;
+        return gateExit;
     }
 
     /// <summary>统一报告生成（report 入口与 full-perf 第 6 步共用；失败不抛出——报告的价值恰在如实呈现回归）。</summary>
