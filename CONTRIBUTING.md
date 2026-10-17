@@ -2,7 +2,7 @@
 
 ## 开发环境
 
-- .NET 11 SDK (Preview)
+- .NET 11 SDK（预览版）——版本由 `global.json` 精确钉住（当前 `11.0.100-rc.2.26504.105`，`rollForward: disable`）；本机 SDK 版本不符时构建直接失败，需用官方 `dotnet-install` 脚本安装同一版本。钉版的目的是让本地与 CI 的代码分析规则集完全一致（曾因 SDK 小版本差异出现"本地过、CI 红"）
 - Git
 - 本地 SQLite（内置，无需安装）
 - 可选：本地 PostgreSQL 17 / MySQL 8.4（集成测试需要）
