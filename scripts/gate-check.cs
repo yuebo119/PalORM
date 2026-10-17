@@ -263,7 +263,13 @@ if (args.Length > 0 && args[0] == "--allow-dirty")
 }
 else
 {
-    var dirty = RunCapture("git", "status --short").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    // B194（2026-10-17 实测）：未跟踪项（?? 行）不计入脏判定——与 V17Batteries 脏树守卫
+    // （B190）的"排除未跟踪"语义对齐。tmp/ 跑测日志（B104 惯例每轮 perf full 建）等合法
+    //  scratch 曾把 G33 打成假阳性（1 个未提交改动），而 pre-commit 走 --allow-dirty 从不经此路径。
+    var dirty = RunCapture("git", "status --short")
+        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(l => !l.StartsWith("??", StringComparison.Ordinal))
+        .ToArray();
     if (dirty.Length > 0)
     {
         Console.WriteLine($"{RED}FAIL{NC}  G33  工作树有 {dirty.Length} 个未提交改动——跨任务切换前必须 clean 或 stash");
