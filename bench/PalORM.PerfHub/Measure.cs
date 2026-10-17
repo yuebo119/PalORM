@@ -240,7 +240,7 @@ internal static class Measure
         }
 
         // 诊断落盘（PALORM_PERFHUB_SAMPLE_DUMP=1）：排序前保留原始序号，供离群迭代形态分析
-        double[]? rawSamples = SampleDump.Enabled ? samples.ToArray() : null;
+        double[]? rawSamples = SampleDump.Enabled ? [.. samples] : null;
         samples.Sort();
         double median = samples[samples.Count / 2];
         double mean = samples.Average();
