@@ -9,6 +9,10 @@
     <IsTrimmable>true</IsTrimmable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- 测试可执行程序无需 XML 文档；且 rc.2 SDK 的发布目标会把 DocFileItem 从 RID 输出目录
+         复制，而 AOT 流程的构建产物落在非 RID 目录 → MSB3030（2026-10-17 CI 实证，四个 AOT
+         job 全挂）。关闭生成即无 DocFileItem，绕开该路径；src/ 的文档强制不受影响。 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
