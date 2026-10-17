@@ -25,11 +25,14 @@ if (root.Length == 0)
     return 2;
 }
 
-// 暂存文件清单（兼容无 HEAD 的初始提交：退到空树比对）
-var staged = RunCapture("git", "diff --cached --name-only");
+// 暂存文件清单（兼容无 HEAD 的初始提交：退到空树比对）。
+// core.quotepath=false + UTF8 解码：git 默认把非 ASCII 路径 C-quote 成八进制形态
+// （"docs\346\226\207..."），拿转义名拼路径必炸 IOException——secret-guard.cs 同型修复
+// （2026-09-30 中文路径盲区实锤），本段复用该模式，勿退回去裸调 git。
+var staged = RunCapture("git", "-c core.quotepath=false diff --cached --name-only");
 if (staged.Code != 0)
 {
-    staged = RunCapture("git", "diff --cached --name-only 4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+    staged = RunCapture("git", "-c core.quotepath=false diff --cached --name-only 4b825dc642cb6eb9a060e54bf8d69288fbee4904");
 }
 var files = staged.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 if (files.Length == 0)
@@ -165,7 +168,10 @@ static (int Code, string Output) RunCapture(string command, string arguments)
     {
         RedirectStandardOutput = true,
         RedirectStandardError = true,
-        UseShellExecute = false
+        UseShellExecute = false,
+        // UTF8 显式解码：本机 Console 为 GBK，不指定会把 git/dotnet 的 UTF-8 输出解成乱码
+        StandardOutputEncoding = Encoding.UTF8,
+        StandardErrorEncoding = Encoding.UTF8,
     };
     var stdout = new StringWriter();
     var stderr = new StringWriter();
