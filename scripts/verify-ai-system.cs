@@ -425,6 +425,32 @@ else
     Fail(25, "verify 计数声明漂移（README 头段/表行/AGENTS.md 与脚本实现不一致——B103 族）",
         $"实现 V1-V{(v25Impl.Length > 0 ? v25Impl : "?")}（fast 跳过 {v25Skip} → {v25ExpectFast}，V17c 探针 {v25ProbeActual} 个）；README 头段 {(v25Header.Success ? v25Header.Value : "未匹配")}，表行 {(v25Table.Success ? v25Table.Groups[1].Value + " 项" : "未匹配")}，fast {string.Join("/", v25Fast)}，探针声称 {(v25ProbeClaim.Success ? v25ProbeClaim.Groups[1].Value : "无")}，AGENTS.md {(v25Ag.Success ? v25Ag.Value : "未匹配")}");
 
+// V26 pre-commit 段数声明三方对齐（B103 族：主仓 AGENTS.md / .ai/README 头注 / .ai/README 表行）
+// 2026-10-17 实例：用户裁定增设第七段（受影响项目构建）后全仓 grep 段数声明，发现三处，
+// 其中 .ai/README 传感器表「提交前四段」自参数集合复用段加入起已漂移约 14 天无人发现——
+// V25 只对齐 verify 项数，钩子段数是另一个"文档里写着数字但无机器校验"的场合（族实例 3）。
+// 判据源码推导：实际段数 = 钩子中段头 echo 行数（每段恰好一条；条件段的"跳过"变体 echo
+// 不计入——.ai 缺失时 verify/gate 两段仍计为定义内段，声明文本另注条件语义）。
+var v26Hook = File.ReadAllText(".githooks/pre-commit");
+var v26Actual = Regex.Matches(v26Hook, @"echo ""── pre-commit:(?![^\n]*跳过)").Count;
+var v26Cn = new Dictionary<string, int>(StringComparer.Ordinal)
+{
+    ["一"] = 1, ["二"] = 2, ["三"] = 3, ["四"] = 4, ["五"] = 5,
+    ["六"] = 6, ["七"] = 7, ["八"] = 8, ["九"] = 9, ["十"] = 10
+};
+int CnNum(string s) => v26Cn.TryGetValue(s, out var n) ? n : -1;
+var v26Agents = Regex.Match(File.ReadAllText("AGENTS.md"), @"提交前([一二三四五六七八九十]+)段");
+var v26Head = Regex.Match(v25Readme, @"pre-commit 共([一二三四五六七八九十]+)段");
+var v26Table = Regex.Match(v25Readme, @"提交前([一二三四五六七八九十]+)段");
+if (v26Agents.Success && v26Head.Success && v26Table.Success
+    && CnNum(v26Agents.Groups[1].Value) == v26Actual
+    && CnNum(v26Head.Groups[1].Value) == v26Actual
+    && CnNum(v26Table.Groups[1].Value) == v26Actual)
+    Pass(26, $"pre-commit 段数声明三方对齐（钩子实际 {v26Actual} 段 = AGENTS.md / README 头注 / README 表行）");
+else
+    Fail(26, "pre-commit 段数声明漂移（钩子实际段数与 AGENTS.md/.ai/README 声明不一致——B103 族）",
+        $"钩子实际 {v26Actual} 段；AGENTS.md {(v26Agents.Success ? v26Agents.Groups[1].Value : "未匹配")} 段，README 头注 {(v26Head.Success ? v26Head.Groups[1].Value : "未匹配")} 段，README 表行 {(v26Table.Success ? v26Table.Groups[1].Value : "未匹配")} 段");
+
 Console.WriteLine();
 Console.WriteLine($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
 Console.WriteLine("═══════ 校验完成 ═══════");
@@ -624,6 +650,11 @@ void V17cBattery()
         if (!RunFastVerify().Contains("FAIL V25")) v17cFail.Add("V25");
         GitInAi("checkout -- README.md");
 
+        // V26：钩子段数漂移（追加一条假段头，模拟"加了段忘改声明"——B103 族 2026-10-17 实例形态）
+        MutateFile(".githooks/pre-commit", t => t + "\necho \"── pre-commit: zzprobe ──\"\n", touch: touched);
+        if (!RunFastVerify().Contains("FAIL V26")) v17cFail.Add("V26");
+        Git("checkout -- .githooks/pre-commit");
+
         // D10：植入 [Test] 临时文件 → 实测计数漂移
         File.WriteAllText("test/PalORM.Core.Tests/ZZV17cD10Probe.cs", "[Test]\n", new UTF8Encoding(false));
         if (!RunDc().Contains("FAIL D10")) v17cFail.Add("D10");
@@ -636,7 +667,7 @@ void V17cBattery()
         Git("checkout -- src/PalORM.SourceGen/GeneratedCodeMetadata.cs");
 
         var vdcTotal = Regex.Matches(File.ReadAllText("scripts/verify-ai-system.cs"), @"v17cFail\.Add\(").Count;
-        if (v17cFail.Count == 0) Pass(17, $"V/D 面防线变异探针 {vdcTotal}/{vdcTotal} 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22/V24/V25 + D10/D11；T 面定性=提示词规则非机械防线）");
+        if (v17cFail.Count == 0) Pass(17, $"V/D 面防线变异探针 {vdcTotal}/{vdcTotal} 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22/V24/V25/V26 + D10/D11；T 面定性=提示词规则非机械防线）");
         else Fail(17, "V/D 面探针有沉默项（变异真源后检查仍 PASS = 无声 no-op）", "未报 FAIL: " + string.Join(' ', v17cFail));
     }
     finally
