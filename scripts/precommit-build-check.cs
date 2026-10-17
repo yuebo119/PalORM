@@ -79,7 +79,7 @@ foreach (var file in files)
 
 if (projects.Count == 0)
 {
-    Console.WriteLine($"PASS 暂存 {files.Length} 个文件均不涉及编译（文档 {skippedDocs}，vendored 豁免 {skippedVendored}），跳过构建。");
+    Console.WriteLine($"PASS 暂存 {files.Length} 个文件均不涉及编译（非编译文件 {skippedDocs}，vendored 豁免 {skippedVendored}），跳过构建。");
     return 0;
 }
 
