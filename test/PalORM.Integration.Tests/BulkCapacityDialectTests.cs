@@ -13,7 +13,13 @@ namespace PalORM.Integration.Tests;
 /// 整批抛异常；修复后失败触发重探测，OFF 则回退多值重试整批成功（MySQL 8.4 真库实证：
 /// OFF 失败形态为协议握手拒绝零行写入，回退无重复风险）。
 /// 两测试同编组（SET GLOBAL 是实例级状态，CI 共享库下防窗口互扰；finally 恢复 ON）。
+/// B63 族实例（2026-10-17）：本类还须挂 ExtBulkTable 槽——两测试的 DROP+CREATE 是 check-then-act
+/// 形态，而 PG/MySQL 的 MigrateAsync 会建 registry 全量注册表集（含 itm883/itm892 探针表，
+/// CREATE IF NOT EXISTS）。独立槽名让本类与 ExtBulkTable 组并行时，前置 DROP 落表后被并发的
+/// MigrateAsync 重建，随后的 CREATE 报 1050 表已存在（全量套件偶发，单跑不现；PG 同机制为
+/// 42P07/23505，见 B63 守卫族）。故与 OwnedJsonTests 等真库迁移测试共槽串行。
 /// </summary>
+[NotInParallel("ExtBulkTable")]
 public sealed class BulkCapacityDialectTests
 {
     private static Itm883Row MakeRow(long id, long v) => new()
