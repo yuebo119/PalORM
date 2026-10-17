@@ -34,14 +34,23 @@ internal static class SampleDump
               .Append(",\"median_ms\":").Append(Math.Round(medianMs, 4))
               .Append(",\"mean_ms\":").Append(Math.Round(meanMs, 4))
               .Append(",\"outliers\":[");
+            // 离群候选收集后按耗时降序取前 10（显式循环，避免元组推断命中的跨 SDK 风格差异）。
+            // 判据：>3× 中位且 ≥1ms 绝对地板——专抓停顿级事件；亚毫秒抖动是快操作的正常噪声，
+            // 全收会稀释信号。整轮水平漂移（所有迭代一起慢）不进 outliers，由 median/mean 承载。
+            var candidates = new List<(int Idx, double Ms)>(rawMs.Length);
+            for (int i = 0; i < rawMs.Length; i++)
+            {
+                if (rawMs[i] >= 1.0 && rawMs[i] > medianMs * 3)
+                {
+                    candidates.Add((i + 1, rawMs[i]));
+                }
+            }
+            candidates.Sort(static (a, b) => b.Ms.CompareTo(a.Ms));
             bool first = true;
             int written = 0;
-            // 降序扫描：>3× 中位且 ≥1ms 绝对地板（停顿级事件；亚毫秒抖动是快操作的正常噪声，
-            // 全淹没会稀释信号）。整轮水平漂移（所有迭代一起慢）不进 outliers，由 median/mean 承载。
-            // 首次不满足后续都更小，可断
-            foreach (var (ms, idx) in rawMs.Select((ms, i) => (ms, i + 1)).OrderByDescending(t => t.Item1))
+            foreach (var (idx, ms) in candidates)
             {
-                if (written >= 10 || ms < 1.0 || ms <= medianMs * 3) break;
+                if (written >= 10) break;
                 if (!first) sb.Append(',');
                 sb.Append("{\"i\":").Append(idx)
                   .Append(",\"ms\":").Append(Math.Round(ms, 3))
