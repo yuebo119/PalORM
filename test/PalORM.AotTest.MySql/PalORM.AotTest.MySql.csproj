@@ -14,6 +14,8 @@
     <!-- 让源生成器输出可见——便于 PoC 调试 -->
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+    <!-- 同 PalORM.AotTest：测试程序无 XML 文档需求，且绕开 rc.2 发布 DocFileItem 的 MSB3030。 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <!--
