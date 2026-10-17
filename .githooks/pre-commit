@@ -9,6 +9,16 @@ dotnet run --file "$(git rev-parse --show-toplevel)/scripts/secret-guard.cs" || 
 echo "── pre-commit: stub-check ──"
 dotnet run --file "$(git rev-parse --show-toplevel)/scripts/stub-check.cs" || exit 1
 
+# 受影响项目构建（2026-10-17，用户裁定增设）：按暂存文件映射最近 *.csproj 并构建
+# （Debug 增量，单次调用多项目）。填补的触发链缺口：既有六段全是文本/只读扫描，
+# 编译断裂只能等 CI 5 分钟反馈（B160 触发链补面同族）。根级基础设施文件
+# （Directory.Build.props/.editorconfig/global.json/NuGet.Config/*.slnf）→ 全量
+# ci.slnf；docs/.md/vendored BenchmarkDotNet 子树（ci.slnf 登记豁免）→ 跳过；
+# 无法映射的文件 → 保守全量。已知边界：本地 SDK 与 CI 的 analyzer 激活集有版本
+# 漂移（2026-10-17 IDE0033/IDE0305 实例），该类风格回归本段捕不到、由 CI 兜底。
+echo "── pre-commit: 受影响项目构建 ──"
+dotnet run --file "$(git rev-parse --show-toplevel)/scripts/precommit-build-check.cs" || exit 1
+
 # 参数集合复用纪律（R-UNNESTB，2026-10-02）：src/ 内每处 Parameters.Clear()/RemoveAt
 # 必须在邻近声明理由码——PG auto-prepare 下「复用命令 + 换参数实例」会静默发旧值，
 # 而 SQLite 套件对 PG 缺陷零判别力，只能机械化拦截。详见 docs/编码规范.md §20。
