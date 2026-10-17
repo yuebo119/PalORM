@@ -88,7 +88,8 @@ if (conservative)
     Console.WriteLine("注意：存在无法映射到项目的暂存文件，按保守策略构建全量 ci.slnf。");
 }
 
-// ─── 构建（单次调用多项目，Debug 增量） ───
+// ─── 构建（逐项目循环：dotnet build 只接受单个项目参数，多项目传参第二个会被 MSBuild
+// 当成开关——2026-10-17 实证。节点默认复用，后续每次构建仍快） ───
 Console.WriteLine($"构建 {projects.Count} 个受影响项目（Debug 增量）：");
 foreach (var p in projects)
 {
@@ -100,15 +101,22 @@ if (skippedVendored > 0)
 }
 
 var sw = Stopwatch.StartNew();
-var build = RunCapture("dotnet", $"build {string.Join(' ', projects.Select(p => $"\"{p}\""))} -c Debug -v q --nologo");
+var failures = new List<string>();
+foreach (var p in projects)
+{
+    var one = RunCapture("dotnet", $"build \"{p}\" -c Debug -v q --nologo");
+    if (one.Code != 0)
+    {
+        failures.Add(p);
+        Console.WriteLine(one.Output.Trim());
+    }
+}
 sw.Stop();
 
-if (build.Code != 0)
+if (failures.Count > 0)
 {
     Console.WriteLine();
-    Console.WriteLine(build.Output.Trim());
-    Console.WriteLine();
-    Console.WriteLine($"FAIL 受影响项目构建失败（{sw.Elapsed.TotalSeconds:F1}s）。请先修复再提交；");
+    Console.WriteLine($"FAIL 受影响项目构建失败（{string.Join(' ', failures)}，{sw.Elapsed.TotalSeconds:F1}s）。请先修复再提交；");
     Console.WriteLine("     若失败与暂存内容无关（既有断裂），先修复或改用 git stash 后重试。");
     return 1;
 }
