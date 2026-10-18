@@ -20,26 +20,33 @@ public sealed class PgBatchedUpdatePathTests
     public async Task PG_BatchedPooledUpdate_CrossesBatchBoundaries_WritesCorrectValues()
     {
         await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched");
-        await db.ExecuteAsync(
-            $"CREATE TABLE palorm_pg_batched (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
-
-        const int rows = 250;
-        var seed = new List<PgBatchedRow>(rows);
-        for (int i = 1; i <= rows; i++)
-            seed.Add(new PgBatchedRow { Id = i, Name = "s" + i });
-        await db.BulkInsertAsync(seed);
-
-        List<PgBatchedRow> updated = [.. seed.Select(e => new PgBatchedRow { Id = e.Id, Name = "u" + e.Id })];
-        long affected = await db.BulkUpdateAsync(updated);
-
-        await Assert.That(affected).IsEqualTo(rows);
-        List<PgBatchedRow> after = await db.From<PgBatchedRow>().ToListAsync();
-        await Assert.That(after.Count).IsEqualTo(rows);
-        foreach (PgBatchedRow row in after)
+        try
         {
-            await Assert.That(row.Name).IsEqualTo("u" + row.Id);
-            await Assert.That(row.Version).IsEqualTo(1);
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_pg_batched (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+
+            const int rows = 250;
+            var seed = new List<PgBatchedRow>(rows);
+            for (int i = 1; i <= rows; i++)
+                seed.Add(new PgBatchedRow { Id = i, Name = "s" + i });
+            await db.BulkInsertAsync(seed);
+
+            List<PgBatchedRow> updated = [.. seed.Select(e => new PgBatchedRow { Id = e.Id, Name = "u" + e.Id })];
+            long affected = await db.BulkUpdateAsync(updated);
+
+            await Assert.That(affected).IsEqualTo(rows);
+            List<PgBatchedRow> after = await db.From<PgBatchedRow>().ToListAsync();
+            await Assert.That(after.Count).IsEqualTo(rows);
+            foreach (PgBatchedRow row in after)
+            {
+                await Assert.That(row.Name).IsEqualTo("u" + row.Id);
+                await Assert.That(row.Version).IsEqualTo(1);
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched");
         }
     }
 
@@ -48,30 +55,37 @@ public sealed class PgBatchedUpdatePathTests
     public async Task PG_BatchedPooledUpdate_StaleVersionInsideBatch_ThrowsConcurrencyConflict()
     {
         await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_c");
-        await db.ExecuteAsync(
-            $"CREATE TABLE palorm_pg_batched_c (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
-
-        const int rows = 150;
-        var seed = new List<PgBatchedRowC>(rows);
-        for (int i = 1; i <= rows; i++)
-            seed.Add(new PgBatchedRowC { Id = i, Name = "s" + i });
-        await db.BulkInsertAsync(seed);
-
-        List<PgBatchedRowC> updated = [.. seed.Select(e => new PgBatchedRowC { Id = e.Id, Name = "u" + e.Id })];
-
-        // 第 150 行（第二/末批内）version 陈旧——批总和 < 批大小必须抛冲突
-        updated[^1].Version = 99;
-        await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
-            await db.BulkUpdateAsync(updated));
-
-        // 整批回滚：DB 内应全部保持种子原状
-        List<PgBatchedRowC> after = await db.From<PgBatchedRowC>().ToListAsync();
-        await Assert.That(after.Count).IsEqualTo(rows);
-        foreach (PgBatchedRowC row in after)
+        try
         {
-            await Assert.That(row.Name).IsEqualTo("s" + row.Id);
-            await Assert.That(row.Version).IsEqualTo(0);
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_c");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_pg_batched_c (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+
+            const int rows = 150;
+            var seed = new List<PgBatchedRowC>(rows);
+            for (int i = 1; i <= rows; i++)
+                seed.Add(new PgBatchedRowC { Id = i, Name = "s" + i });
+            await db.BulkInsertAsync(seed);
+
+            List<PgBatchedRowC> updated = [.. seed.Select(e => new PgBatchedRowC { Id = e.Id, Name = "u" + e.Id })];
+
+            // 第 150 行（第二/末批内）version 陈旧——批总和 < 批大小必须抛冲突
+            updated[^1].Version = 99;
+            await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
+                await db.BulkUpdateAsync(updated));
+
+            // 整批回滚：DB 内应全部保持种子原状
+            List<PgBatchedRowC> after = await db.From<PgBatchedRowC>().ToListAsync();
+            await Assert.That(after.Count).IsEqualTo(rows);
+            foreach (PgBatchedRowC row in after)
+            {
+                await Assert.That(row.Name).IsEqualTo("s" + row.Id);
+                await Assert.That(row.Version).IsEqualTo(0);
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_c");
         }
     }
 
@@ -80,17 +94,24 @@ public sealed class PgBatchedUpdatePathTests
     public async Task PG_BatchedPooledUpdate_InMemoryVersionIncrementOnlyOnSuccess()
     {
         await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_v");
-        await db.ExecuteAsync(
-            $"CREATE TABLE palorm_pg_batched_v (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_v");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_pg_batched_v (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
 
-        var entity = new PgBatchedRowV { Id = 1, Name = "a" };
-        await db.BulkInsertAsync([entity]);
+            var entity = new PgBatchedRowV { Id = 1, Name = "a" };
+            await db.BulkInsertAsync([entity]);
 
-        entity.Name = "b";
-        long affected = await db.BulkUpdateAsync([entity]);
-        await Assert.That(affected).IsEqualTo(1L);
-        await Assert.That(entity.Version).IsEqualTo(1);
+            entity.Name = "b";
+            long affected = await db.BulkUpdateAsync([entity]);
+            await Assert.That(affected).IsEqualTo(1L);
+            await Assert.That(entity.Version).IsEqualTo(1);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_v");
+        }
     }
 }
 

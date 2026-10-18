@@ -42,7 +42,7 @@ public sealed class WhereInArrayFormTests
     }
 
     [Test]
-    public async Task ArrayParameterNumberingContinuesAfterWhereParameters()
+    public async Task ArrayParameter_NumberingContinues_AfterWhereParameters()
     {
         await using var session = await CreateSessionAsync();
         DryRunResult dry = session.From<WinArrayEntity>()

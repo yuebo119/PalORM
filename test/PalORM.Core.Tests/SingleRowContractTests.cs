@@ -68,7 +68,10 @@ internal sealed class SingleRowContractTests
 
         UniqueConstraintViolationException? wrapped = await Assert.ThrowsAsync<UniqueConstraintViolationException>(
             async () => await session.SaveAsync(new UniqueGuardRow { Id = 3, Code = "X1", Value = 3 }));
-        await Assert.That(wrapped).IsNotNull();
+        // 2026-10-18 审计：IsNotNull 升级为包装语义断言（T14）——异常类型对但 inner 丢失
+        // 同样是缺陷（调用方按 provider 错误码分流时拿不到原始异常）。
+        await Assert.That(wrapped!.InnerException).IsNotNull();
+        await Assert.That(wrapped.InnerException!.Message).Contains("UNIQUE");
     }
 
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()

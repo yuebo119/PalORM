@@ -21,31 +21,36 @@ internal sealed class SessionBatchDialectTests
         await session.ExecuteAsync($"DROP TABLE IF EXISTS batch_dialect_rows");
         await session.ExecuteAsync(
             $"CREATE TABLE batch_dialect_rows (id BIGINT PRIMARY KEY, v INTEGER NOT NULL, tag TEXT NOT NULL)");
-
-        // 事务内 10 条一次往返（真 DbBatch）——受影响行数与值都要对
-        await session.WithTransaction(async ct =>
+        try
         {
-            using SessionBatch<PostgreSqlProvider> batch = session.CreateBatch();
-            for (int i = 1; i <= 10; i++)
-                _ = batch.Append($"INSERT INTO batch_dialect_rows (id, v, tag) VALUES ({(long)i}, {i * 10}, {"t"})");
-            int affected = await batch.ExecuteNonQueryAsync(ct);
-            await Assert.That(affected).IsEqualTo(10);
-            return true;
-        });
-        await Assert.That(await session.CountAsync<BatchDialectRow>()).IsEqualTo(10);
+            // 事务内 10 条一次往返（真 DbBatch）——受影响行数与值都要对
+            await session.WithTransaction(async ct =>
+            {
+                using SessionBatch<PostgreSqlProvider> batch = session.CreateBatch();
+                for (int i = 1; i <= 10; i++)
+                    _ = batch.Append($"INSERT INTO batch_dialect_rows (id, v, tag) VALUES ({(long)i}, {i * 10}, {"t"})");
+                int affected = await batch.ExecuteNonQueryAsync(ct);
+                await Assert.That(affected).IsEqualTo(10);
+                return true;
+            });
+            await Assert.That(await session.CountAsync<BatchDialectRow>()).IsEqualTo(10);
 
-        // 失败整批回滚（事务原子性）
-        await Assert.That(async () => await session.WithTransaction(async ct =>
+            // 失败整批回滚（事务原子性）
+            await Assert.That(async () => await session.WithTransaction(async ct =>
+            {
+                using SessionBatch<PostgreSqlProvider> batch = session.CreateBatch();
+                await batch
+                    .Append($"DELETE FROM batch_dialect_rows")
+                    .Append($"INSERT INTO nonexistent_pg_table (x) VALUES ({1})")
+                    .ExecuteNonQueryAsync(ct);
+                return true;
+            })).Throws<Exception>();
+            await Assert.That(await session.CountAsync<BatchDialectRow>()).IsEqualTo(10); // DELETE 被回滚
+        }
+        finally
         {
-            using SessionBatch<PostgreSqlProvider> batch = session.CreateBatch();
-            await batch
-                .Append($"DELETE FROM batch_dialect_rows")
-                .Append($"INSERT INTO nonexistent_pg_table (x) VALUES ({1})")
-                .ExecuteNonQueryAsync(ct);
-            return true;
-        })).Throws<Exception>();
-        await Assert.That(await session.CountAsync<BatchDialectRow>()).IsEqualTo(10); // DELETE 被回滚
-        await session.ExecuteAsync($"DROP TABLE IF EXISTS batch_dialect_rows");
+            await session.ExecuteAsync($"DROP TABLE IF EXISTS batch_dialect_rows");
+        }
     }
 
     [Test]
@@ -60,19 +65,24 @@ internal sealed class SessionBatchDialectTests
         await session.ExecuteAsync($"DROP TABLE IF EXISTS batch_dialect_rows");
         await session.ExecuteAsync(
             $"CREATE TABLE batch_dialect_rows (id BIGINT PRIMARY KEY, v INTEGER NOT NULL, tag TEXT NOT NULL)");
+        try
+        {
+            using SessionBatch<MySqlProvider> batch = session.CreateBatch();
+            int affected = await batch
+                .Append($"INSERT INTO batch_dialect_rows (id, v, tag) VALUES ({1L}, {10}, {"a"})")
+                .Append($"INSERT INTO batch_dialect_rows (id, v, tag) VALUES ({2L}, {20}, {"b"})")
+                .Append($"UPDATE batch_dialect_rows SET v = {11} WHERE id = {1L}")
+                .ExecuteNonQueryAsync();
 
-        using SessionBatch<MySqlProvider> batch = session.CreateBatch();
-        int affected = await batch
-            .Append($"INSERT INTO batch_dialect_rows (id, v, tag) VALUES ({1L}, {10}, {"a"})")
-            .Append($"INSERT INTO batch_dialect_rows (id, v, tag) VALUES ({2L}, {20}, {"b"})")
-            .Append($"UPDATE batch_dialect_rows SET v = {11} WHERE id = {1L}")
-            .ExecuteNonQueryAsync();
-
-        await Assert.That(affected).IsEqualTo(3);
-        await Assert.That(await session.CountAsync<BatchDialectRow>()).IsEqualTo(2);
-        var first = await session.GetAsync<BatchDialectRow>(1L);
-        await Assert.That(first!.V).IsEqualTo(11);
-        await session.ExecuteAsync($"DROP TABLE IF EXISTS batch_dialect_rows");
+            await Assert.That(affected).IsEqualTo(3);
+            await Assert.That(await session.CountAsync<BatchDialectRow>()).IsEqualTo(2);
+            var first = await session.GetAsync<BatchDialectRow>(1L);
+            await Assert.That(first!.V).IsEqualTo(11);
+        }
+        finally
+        {
+            await session.ExecuteAsync($"DROP TABLE IF EXISTS batch_dialect_rows");
+        }
     }
 }
 

@@ -122,7 +122,10 @@ public sealed class KeyConversionTests
     {
         // C3：注册表层契约——单列主键实体的聚合元数据必须携带转换委托（晋升门禁消费）。
         // 复合主键/旧生成器程序集为 null 属设计回退，此处只锁真源形态不被未来发射变更静默丢弃。
-        await Assert.That(PalORM_Runtime.CrudMetadatas[typeof(KeyConversionEntity)].ConvertDeleteKey).IsNotNull();
+        // 2026-10-18 审计：空值断言升级为可调用性断言（T14）——委托存在但不可调用同为断链。
+        Func<object, object?>? convert = PalORM_Runtime.CrudMetadatas[typeof(KeyConversionEntity)].ConvertDeleteKey;
+        object? converted = convert?.Invoke(7L);
+        await Assert.That(converted).IsEqualTo(7L);
     }
 
     [Test]

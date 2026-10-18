@@ -13,7 +13,8 @@ Console.OutputEncoding = new UTF8Encoding(false);
 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" });
 
 Environment.CurrentDirectory = FindRepoRoot();
-var passCount = 0; var failCount = 0;
+var CI = args.Length > 0 && args[0] == "--ci";
+var passCount = 0; var failCount = 0; var skipCount = 0;
 
 Console.WriteLine("═══════════════════════════════════════════");
 Console.WriteLine($" PalORM 技术债扫描 ({DateTime.Now:yyyy-MM-dd HH:mm})");
@@ -82,11 +83,16 @@ if (baseVer.Length == 0) mismatch += " 版本真源缺失";
 foreach (var v in DistinctVersions("src/*/*.csproj", @"<Version>([^<]+)")) if (v != baseVer) mismatch += $" csproj={v}";
 foreach (var v in DistinctVersions("README.md", """Include="PalORM\.[A-Za-z]+" Version="([0-9.]+)""")) if (v != baseVer) mismatch += $" README-安装={v}";
 foreach (var v in DistinctVersions("test/PalORM.PackageConsumer.Aot/*.csproj", """Include="PalORM\.[A-Za-z]+" Version="([0-9.]+)""")) if (v != baseVer) mismatch += $" 消费者={v}";
-var tagVer = RunCapture("git", "tag --sort=-v:refname").Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.TrimStart('v') ?? "";
-if (tagVer.Length > 0 && tagVer != baseVer) mismatch += $" tag=v{tagVer}";
+// tag 对账（2026-10-18 --ci 语义）：CI 的浅克隆/PR 合并提交上 tag 列表不含被验证提交的
+// 版本标签，恒报漂移——该维度只在本地（开发者有完整 tag 集）有意义。
+if (!CI)
+{
+    var tagVer = RunCapture("git", "tag --sort=-v:refname").Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.TrimStart('v') ?? "";
+    if (tagVer.Length > 0 && tagVer != baseVer) mismatch += $" tag=v{tagVer}";
+}
 if (mismatch.Length == 0)
 {
-    Console.WriteLine($"PASS  10. 版本三方一致 ({baseVer} + README + 消费者 + tag)");
+    Console.WriteLine($"PASS  10. 版本三方一致 ({baseVer} + README + 消费者{(CI ? "；tag 对账本地专属，CI 跳过" : " + tag")})");
     passCount++;
 }
 else
@@ -160,7 +166,13 @@ else
 // ─── 14. CI 盲区：本地分支领先远端（B181）───
 var hasOrigin = RunCapture("git", "rev-parse --verify -q origin/dev").Trim().Length > 0
              && RunCapture("git", "rev-parse --verify -q origin/main").Trim().Length > 0;
-if (!hasOrigin)
+if (CI)
+{
+    // 该维度衡量的是"本地开发是否长期脱离 CI 反馈"——CI 环境本身即反馈回路，无意义。
+    Console.WriteLine("SKIP  14. CI 盲区检查（--ci：本地专属维度）");
+    skipCount++;
+}
+else if (!hasOrigin)
 {
     Console.WriteLine("PASS  14. CI 盲区检查跳过（远端引用不可用：网络或首次克隆）");
     passCount++;
@@ -183,7 +195,7 @@ else
 
 Console.WriteLine();
 Console.WriteLine("═══════════════════════════════════════════");
-Console.WriteLine($" 结果: {passCount} 通过 / {failCount} 失败");
+Console.WriteLine($" 结果: {passCount} 通过 / {failCount} 失败{(skipCount > 0 ? $" / {skipCount} 跳过" : "")}");
 Console.WriteLine("═══════════════════════════════════════════");
 return failCount > 0 ? 1 : 0;
 

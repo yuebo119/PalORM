@@ -7,8 +7,7 @@
 //   2. bench/BenchmarkDotNet/**（vendored 子树，ci.slnf 登记豁免）→ 跳过。
 //   3. docs//.github//.githooks//.ai/ 与 .md/.txt/.html/.yml/.ps1/.cmd 等非编译产物 → 跳过。
 //   4. 其余文件 → 向上找最近含 *.csproj 的目录；找不到 → 保守全量（ci.slnf）并提示。
-// 构建口径：Debug 增量（最快反馈；analyzer 严重级不随配置变化）。
-// 已知边界（登记不掩饰）：本地 SDK 与 CI 的 analyzer 激活集存在版本漂移（2026-10-17
+// 构建口径：Debug 增量（最快反馈；analyzer 严重级不随配置变化）。// 已知边界（登记不掩饰）：本地 SDK 与 CI 的 analyzer 激活集存在版本漂移（2026-10-17
 // IDE0033/IDE0305 实例：本地 rc.2 为 suggestion、CI 侧 SDK 为 warning），该类风格回归
 // 本段捕不到，仍由 CI 兜底；本段负责编译断裂与本地可见的一切诊断。
 using System.Diagnostics;
@@ -41,11 +40,17 @@ if (files.Length == 0)
     return 0;
 }
 
-// ─── 映射 ───
+// ─── 映射（2026-10-18 质量审计修正） ───
+// 原实现「向上找最近 csproj，只构建该项目」有系统性漏检：改 Core 的公共 API 只构建 Core，
+// 引用它的三 Provider / Testing / SourceGen / 全部测试项目一个都不编译，破坏照样漏到 CI。
+// 反向依赖需要解析 ProjectReference 闭包，而实测整份 ci.slnf 增量构建仅约 9 秒——启发式
+// 映射省下的两三秒不值得换取漏检风险。新规则：
+//   src/** · test/** · tools/**（全部在 ci.slnf 内）→ 直接全量 ci.slnf 增量构建；
+//   bench/** 非 vendored → 映射到该 bench 项目（Benchmarks 依赖本地 BDN fork，不在 ci.slnf）；
+//   根级基础设施 → ci.slnf；docs/.md 等非编译文件 → 跳过；无法判定 → 保守 ci.slnf。
 var projects = new SortedSet<string>(StringComparer.Ordinal);
 var skippedDocs = 0;
 var skippedVendored = 0;
-var conservative = false;
 
 foreach (var file in files)
 {
@@ -66,11 +71,18 @@ foreach (var file in files)
         skippedDocs++;
         continue;
     }
+    if (rel.StartsWith("src/", StringComparison.Ordinal)
+        || rel.StartsWith("test/", StringComparison.Ordinal)
+        || rel.StartsWith("tools/", StringComparison.Ordinal))
+    {
+        // 编译面变更：整解依赖闭包构建一次（增量，实测 ~9s）——不再做单项目映射
+        projects.Add(SlnPath());
+        continue;
+    }
 
     var proj = FindProject(Path.Combine(root, rel));
     if (proj is null)
     {
-        conservative = true;
         projects.Add(SlnPath());
         continue;
     }
@@ -83,9 +95,9 @@ if (projects.Count == 0)
     return 0;
 }
 
-if (conservative)
+if (skippedDocs > 0 || skippedVendored > 0)
 {
-    Console.WriteLine("注意：存在无法映射到项目的暂存文件，按保守策略构建全量 ci.slnf。");
+    Console.WriteLine($"  （跳过非编译文件 {skippedDocs} 个、vendored BenchmarkDotNet {skippedVendored} 个）");
 }
 
 // ─── 构建（逐项目循环：dotnet build 只接受单个项目参数，多项目传参第二个会被 MSBuild

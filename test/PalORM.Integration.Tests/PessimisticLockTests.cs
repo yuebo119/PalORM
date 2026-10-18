@@ -25,38 +25,45 @@ internal sealed class PessimisticLockTests
     public async Task PostgreSql_LockClauses_ExecuteInsideTransaction()
     {
         await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS lock_probe");
-        await db.MigrateAsync();
-        await db.InsertAsync(new LockProbe { Label = "locked", Weight = 1 });
-
-        await db.WithTransaction(async ct =>
+        try
         {
-            var forUpdate = db.From<LockProbe>().Where($"weight = {1L}").ForUpdate();
-            var rows = await forUpdate.ToListAsync(ct);
-            await Assert.That(rows.Count).IsEqualTo(1);
-            await Assert.That(rows[0].Label).IsEqualTo("locked");
-            return true;
-        });
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS lock_probe");
+            await db.MigrateAsync();
+            await db.InsertAsync(new LockProbe { Label = "locked", Weight = 1 });
 
-        await db.WithTransaction(async ct =>
+            await db.WithTransaction(async ct =>
+            {
+                var forUpdate = db.From<LockProbe>().Where($"weight = {1L}").ForUpdate();
+                var rows = await forUpdate.ToListAsync(ct);
+                await Assert.That(rows.Count).IsEqualTo(1);
+                await Assert.That(rows[0].Label).IsEqualTo("locked");
+                return true;
+            });
+
+            await db.WithTransaction(async ct =>
+            {
+                var forShare = db.From<LockProbe>().Where($"weight = {1L}").ForShare();
+                var rows = await forShare.ToListAsync(ct);
+                await Assert.That(rows.Count).IsEqualTo(1);
+                return true;
+            });
+
+            await db.WithTransaction(async ct =>
+            {
+                var skipLocked = db.From<LockProbe>().Where($"weight = {1L}").ForUpdate(skipLocked: true);
+                await Assert.That((await skipLocked.ToListAsync(ct)).Count).IsEqualTo(1);
+                return true;
+            });
+
+            // 位置契约：锁子句必须在 WHERE 之后（子句拼接顺序回归会让语句非法，但 DryRun 断言看不到）
+            string sql = db.From<LockProbe>().Where($"weight = {1L}").ForUpdate().AsDryRun().Sql;
+            await Assert.That(sql.IndexOf("WHERE", StringComparison.Ordinal))
+                .IsLessThan(sql.IndexOf("FOR UPDATE", StringComparison.Ordinal));
+        }
+        finally
         {
-            var forShare = db.From<LockProbe>().Where($"weight = {1L}").ForShare();
-            var rows = await forShare.ToListAsync(ct);
-            await Assert.That(rows.Count).IsEqualTo(1);
-            return true;
-        });
-
-        await db.WithTransaction(async ct =>
-        {
-            var skipLocked = db.From<LockProbe>().Where($"weight = {1L}").ForUpdate(skipLocked: true);
-            await Assert.That((await skipLocked.ToListAsync(ct)).Count).IsEqualTo(1);
-            return true;
-        });
-
-        // 位置契约：锁子句必须在 WHERE 之后（子句拼接顺序回归会让语句非法，但 DryRun 断言看不到）
-        string sql = db.From<LockProbe>().Where($"weight = {1L}").ForUpdate().AsDryRun().Sql;
-        await Assert.That(sql.IndexOf("WHERE", StringComparison.Ordinal))
-            .IsLessThan(sql.IndexOf("FOR UPDATE", StringComparison.Ordinal));
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS lock_probe");
+        }
     }
 
     [Test]
@@ -65,32 +72,39 @@ internal sealed class PessimisticLockTests
     public async Task MySql_LockClauses_ExecuteInsideTransaction()
     {
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
-        await db.ExecuteAsync($"DROP TABLE IF EXISTS lock_probe");
-        await db.MigrateAsync();
-        await db.InsertAsync(new LockProbe { Label = "locked", Weight = 1 });
-
-        await db.WithTransaction(async ct =>
+        try
         {
-            var rows = await db.From<LockProbe>().Where($"weight = {1L}").ForUpdate().ToListAsync(ct);
-            await Assert.That(rows.Count).IsEqualTo(1);
-            return true;
-        });
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS lock_probe");
+            await db.MigrateAsync();
+            await db.InsertAsync(new LockProbe { Label = "locked", Weight = 1 });
 
-        await db.WithTransaction(async ct =>
-        {
-            // FOR SHARE 需 MySQL 8.0+（目标 8.4）
-            var rows = await db.From<LockProbe>().Where($"weight = {1L}").ForShare().ToListAsync(ct);
-            await Assert.That(rows.Count).IsEqualTo(1);
-            return true;
-        });
+            await db.WithTransaction(async ct =>
+            {
+                var rows = await db.From<LockProbe>().Where($"weight = {1L}").ForUpdate().ToListAsync(ct);
+                await Assert.That(rows.Count).IsEqualTo(1);
+                return true;
+            });
 
-        await db.WithTransaction(async ct =>
+            await db.WithTransaction(async ct =>
+            {
+                // FOR SHARE 需 MySQL 8.0+（目标 8.4）
+                var rows = await db.From<LockProbe>().Where($"weight = {1L}").ForShare().ToListAsync(ct);
+                await Assert.That(rows.Count).IsEqualTo(1);
+                return true;
+            });
+
+            await db.WithTransaction(async ct =>
+            {
+                var rows = await db.From<LockProbe>().Where($"weight = {1L}")
+                    .ForUpdate(skipLocked: true).ToListAsync(ct);
+                await Assert.That(rows.Count).IsEqualTo(1);
+                return true;
+            });
+        }
+        finally
         {
-            var rows = await db.From<LockProbe>().Where($"weight = {1L}")
-                .ForUpdate(skipLocked: true).ToListAsync(ct);
-            await Assert.That(rows.Count).IsEqualTo(1);
-            return true;
-        });
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS lock_probe");
+        }
     }
 }
 

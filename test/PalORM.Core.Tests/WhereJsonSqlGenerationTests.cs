@@ -47,7 +47,7 @@ public sealed class WhereJsonSqlGenerationTests
 
 
     [Test]
-    public async Task GeneratesQuotedColumnWithBoundPathAndValue()
+    public async Task WhereJson_GeneratesQuotedColumn_WithBoundPathAndValue()
     {
         var dry = PgBuilder<WjProduct>()
             .WhereJson("payload", "name", "Alice")

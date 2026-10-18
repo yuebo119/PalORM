@@ -3,7 +3,11 @@
 // 背景：Stryker.NET 不支持 TUnit 的 MTP（stryker-net#3094）；本脚本覆盖其最高价值子集。
 // 迁移修正：原 Python 解释器依赖（python3 缺失假绿/死亡事故根源）随 C# 化退役。
 // 契约：0=通过；1=弱断言超基线；用法 `-- --max-weak N` 可临时调阈值（基线只许下调）。
+// 2026-10-18 审计修复：基线原为硬编码 17 而实测仅 3——13 个弱断言余量等于棘轮空转（新增
+// 13 处弱断言照样全绿）。基线外置到 bench/baselines/assertion-baseline.json 并有"陈旧度"
+// 检查：实测低于基线 30% 以上时报告 STALE 提示收紧（防"只降不增"规则被遗忘成永久余量）。
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 Console.OutputEncoding = new UTF8Encoding(false);
@@ -11,8 +15,16 @@ Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(f
 
 Environment.CurrentDirectory = FindRepoRoot();
 
-var maxWeak = 17; // 基线上限（2026-08-15 按真实现状重定；只许下调）
+var baselineFile = "bench/baselines/assertion-baseline.json";
+var maxWeak = 17; // 兜底值：基线文件缺失时仍按 17 执行（fail-safe，不放行）
+if (File.Exists(baselineFile))
+{
+    var node = JsonNode.Parse(File.ReadAllText(baselineFile));
+    maxWeak = node?["maxWeak"]?.GetValue<int>() ?? maxWeak;
+}
 if (args.Length == 2 && args[0] == "--max-weak") maxWeak = int.Parse(args[1]);
+// --ci：CI 环境语义（与本地一致——棘轮不因环境放宽；参数位保留供未来显式化）
+_ = args.Length > 0 && args[0] == "--ci";
 
 Console.WriteLine("═══════ 断言强度扫描 ═══════");
 
@@ -88,6 +100,10 @@ if (zeroAssert.Count > 0)
 var total = weakNotnull.Count + zeroAssert.Count;
 Console.WriteLine();
 Console.WriteLine($"弱断言合计：{total}（基线上限 {maxWeak}）");
+if (maxWeak > 0 && total <= maxWeak * 0.7)
+{
+    Console.WriteLine($"STALE 实测 {total} 远低于基线 {maxWeak}（余量 >30%）——棘轮有空转风险，请下调 {baselineFile} 的 maxWeak（只许下调）");
+}
 Console.WriteLine("═══════ 扫描完成 ═══════");
 
 if (total > maxWeak)
@@ -104,11 +120,68 @@ static int CountNewlines(string text, int upto)
 
 static int BlockEnd(string text, int openBrace)
 {
+    // 字符串/字符字面量与注释感知的括号匹配（2026-10-18 审计修复）：原实现裸数括号，
+    // 测试体内 `'a}b'`、`"{"` 之类字面量会让 depth 提前归零——整块被截断后 Assert 不在
+    // 视野内，产生"零断言"假阳性（FormattableLiteralBraceTests 实测）。
     var depth = 0;
     for (var i = openBrace; i < text.Length; i++)
     {
-        if (text[i] == '{') depth++;
-        else if (text[i] == '}')
+        var c = text[i];
+        if (c == '/' && i + 1 < text.Length)
+        {
+            if (text[i + 1] == '/')
+            {
+                var nl = text.IndexOf('\n', i);
+                if (nl < 0) return depth == 0 ? i : text.Length - 1;
+                i = nl;
+                continue;
+            }
+            if (text[i + 1] == '*')
+            {
+                var close = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                if (close < 0) return text.Length - 1;
+                i = close + 1;
+                continue;
+            }
+        }
+        if (c == '"')
+        {
+            // C# 原始字符串字面量 """..."""（含 $$""" 插值变体）：整段跳过——其中花括号是
+            // 文本而非代码块（GeneratorPhase2Tests 的内联源码常量实测）。
+            var quoteCount = 0;
+            while (i + quoteCount < text.Length && text[i + quoteCount] == '"') quoteCount++;
+            if (quoteCount >= 3)
+            {
+                var closing = new string('"', quoteCount);
+                var close = text.IndexOf(closing, i + quoteCount, StringComparison.Ordinal);
+                if (close < 0) return text.Length - 1;
+                i = close + quoteCount - 1;
+                continue;
+            }
+            // 逐字字符串 @"..." 的双引号以 "" 转义；普通字符串以 \" 转义
+            var verbatim = i > 0 && text[i - 1] == '@';
+            for (i++; i < text.Length; i++)
+            {
+                if (!verbatim && text[i] == '\\') { i++; continue; }
+                if (text[i] == '"')
+                {
+                    if (verbatim && i + 1 < text.Length && text[i + 1] == '"') { i++; continue; }
+                    break;
+                }
+            }
+            continue;
+        }
+        if (c == '\'')
+        {
+            for (i++; i < text.Length; i++)
+            {
+                if (text[i] == '\\') { i++; continue; }
+                if (text[i] == '\'') break;
+            }
+            continue;
+        }
+        if (c == '{') depth++;
+        else if (c == '}')
         {
             depth--;
             if (depth == 0) return i;
