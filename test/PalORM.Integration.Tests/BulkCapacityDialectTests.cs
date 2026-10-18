@@ -1,3 +1,4 @@
+using PalORM.MySql;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
@@ -19,6 +20,10 @@ namespace PalORM.Integration.Tests;
 /// MigrateAsync 重建，随后的 CREATE 报 1050 表已存在（全量套件偶发，单跑不现；PG 同机制为
 /// 42P07/23505，见 B63 守卫族）。故与 OwnedJsonTests 等真库迁移测试共槽串行。
 /// </summary>
+// LocalInfileGlobal 的实例级互斥改由 LocalInfileTestGate 信号量承担（2026-10-18 审计）：
+// TUnit 的 [NotInParallel] 类级只允许一个键、方法级会覆盖类级，而本类同时需要迁移竞态组
+// （ExtBulkTable，B63 守卫要求）与 local_infile 全局状态互斥。信号量在方法体最外层获取，
+// 与依赖 BulkCopy 的用例（MySqlIntegrationTests）共享同一把锁。
 [NotInParallel("ExtBulkTable")]
 public sealed class BulkCapacityDialectTests
 {
@@ -30,14 +35,16 @@ public sealed class BulkCapacityDialectTests
     };
 
     [Test]
-    [NotInParallel("LocalInfileGlobal")]
     public async Task MySql_BulkUpdate_TenantEntity_FullBatch_StaysWithinPlaceholderLimit()
     {
-        await using var session = await TestDb.MySqlAsync();
-        // 数据准备强制多值插入（见类注释）；finally 恢复实例默认
-        await session.ExecuteAsync($"SET GLOBAL local_infile=OFF");
+        await LocalInfileTestGate.Gate.WaitAsync();
         try
         {
+            await using var session = await TestDb.MySqlAsync();
+            // 数据准备强制多值插入（见类注释）；finally 恢复实例默认
+            await session.ExecuteAsync($"SET GLOBAL local_infile=OFF");
+            try
+            {
             // 探针自建自清（B171 惯例）：DDL 硬编码（表名/列名进插值会成为绑定参数）；
             // IF NOT EXISTS 双保险——前轮异常退出残留表时前置 DROP 失效可自愈
 #pragma warning disable S2077, CA2100
@@ -73,52 +80,68 @@ public sealed class BulkCapacityDialectTests
             await Assert.That(tail).IsNotNull();
             await Assert.That(tail!.F15).IsEqualTo(rowCount);
         }
+            finally
+            {
+                await session.ExecuteAsync($"SET GLOBAL local_infile=ON");
+                await session.ExecuteAsync($"DROP TABLE IF EXISTS itm883_batch_capacity_probe");
+                // 恢复全局值后清探测缓存（否则 OFF 结论残留至 TTL 到期，BulkCopy 用例静默降级）
+                MySqlProvider.ResetLocalInfileProbeCache();
+            }
+        }
         finally
         {
-            await session.ExecuteAsync($"SET GLOBAL local_infile=ON");
-            await session.ExecuteAsync($"DROP TABLE IF EXISTS itm883_batch_capacity_probe");
+            LocalInfileTestGate.Gate.Release();
         }
     }
 
     [Test]
-    [NotInParallel("LocalInfileGlobal")]
     public async Task MySql_BulkInsert_ServerDisablesLocalInfile_FallsBackToMultiValue()
     {
-        await using var session = await TestDb.MySqlAsync();
-#pragma warning disable S2077, CA2100
-        await session.ExecuteAsync($"DROP TABLE IF EXISTS itm892_fallback_probe");
-        await session.ExecuteAsync(
-            $"CREATE TABLE itm892_fallback_probe (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL)");
-#pragma warning restore S2077, CA2100
+        await LocalInfileTestGate.Gate.WaitAsync();
         try
         {
-            await session.ExecuteAsync($"SET GLOBAL local_infile=ON");
+            await using var session = await TestDb.MySqlAsync();
+#pragma warning disable S2077, CA2100
+            await session.ExecuteAsync($"DROP TABLE IF EXISTS itm892_fallback_probe");
+            await session.ExecuteAsync(
+                $"CREATE TABLE itm892_fallback_probe (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL)");
+#pragma warning restore S2077, CA2100
+            try
+            {
+                await session.ExecuteAsync($"SET GLOBAL local_infile=ON");
 
-            // 第一次插入：探测 ON → BulkCopy 路径成功（auto id + string/int 为已验证组合，
-            // 对齐 MySql_BulkInsert_LocalInfileOn 的实体形态），探测结果进入 60s TTL 连接级缓存
-            await session.BulkInsertAsync([
-                new Itm892Row { Name = "first", Value = 10 },
-            ]);
+                // 第一次插入：探测 ON → BulkCopy 路径成功（auto id + string/int 为已验证组合，
+                // 对齐 MySql_BulkInsert_LocalInfileOn 的实体形态），探测结果进入 60s TTL 连接级缓存
+                await session.BulkInsertAsync([
+                    new Itm892Row { Name = "first", Value = 10 },
+                ]);
 
-            // TTL 窗口内服务端关闭（模拟 DBA/托管环境配置变更）
-            await session.ExecuteAsync($"SET GLOBAL local_infile=OFF");
+                // TTL 窗口内服务端关闭（模拟 DBA/托管环境配置变更）
+                await session.ExecuteAsync($"SET GLOBAL local_infile=OFF");
 
-            // 修复前：缓存仍 ON → MySqlBulkCopy 触碰已关闭的服务端能力，整批抛
-            // MySqlException("Loading local data is disabled...")；
-            // 修复后：失败失效缓存并重探测 → OFF → 回退多值重试整批成功（撤修复此调用变红）
-            await session.BulkInsertAsync([
-                new Itm892Row { Name = "second", Value = 20 },
-            ]);
+                // 修复前：缓存仍 ON → MySqlBulkCopy 触碰已关闭的服务端能力，整批抛
+                // MySqlException("Loading local data is disabled...")；
+                // 修复后：失败失效缓存并重探测 → OFF → 回退多值重试整批成功（撤修复此调用变红）
+                await session.BulkInsertAsync([
+                    new Itm892Row { Name = "second", Value = 20 },
+                ]);
 
-            long count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM itm892_fallback_probe");
-            await Assert.That(count).IsEqualTo(2);
-            long total = await session.ScalarAsync<long>($"SELECT COALESCE(SUM(value), 0) FROM itm892_fallback_probe");
-            await Assert.That(total).IsEqualTo(30);
+                long count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM itm892_fallback_probe");
+                await Assert.That(count).IsEqualTo(2);
+                long total = await session.ScalarAsync<long>($"SELECT COALESCE(SUM(value), 0) FROM itm892_fallback_probe");
+                await Assert.That(total).IsEqualTo(30);
+            }
+            finally
+            {
+                await session.ExecuteAsync($"SET GLOBAL local_infile=ON");  // 恢复实例级默认（CI 共享库）
+                await session.ExecuteAsync($"DROP TABLE IF EXISTS itm892_fallback_probe");
+                // 恢复全局值后清探测缓存（否则 OFF 结论残留至 TTL 到期，BulkCopy 用例静默降级）
+                MySqlProvider.ResetLocalInfileProbeCache();
+            }
         }
         finally
         {
-            await session.ExecuteAsync($"SET GLOBAL local_infile=ON");  // 恢复实例级默认（CI 共享库）
-            await session.ExecuteAsync($"DROP TABLE IF EXISTS itm892_fallback_probe");
+            LocalInfileTestGate.Gate.Release();
         }
     }
 }

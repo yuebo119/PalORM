@@ -14,6 +14,10 @@
          只靠真库集成用例时，服务端 local_infile=OFF 会让 provider 静默回退多值 INSERT，
          该用例就不再经过读取器——测试通过但什么都没验证。 -->
     <InternalsVisibleTo Include="PalORM.Core.Tests" />
+    <!-- 2026-10-18 审计：真库用例需要 ResetLocalInfileProbeCache() 清理探测缓存——
+         SET GLOBAL local_infile 恢复后缓存仍持旧值至 TTL 到期，BulkCopy 路径集成覆盖率
+         长期为 0%（用例通过但未验证目标路径）。 -->
+    <InternalsVisibleTo Include="PalORM.Integration.Tests" />
   </ItemGroup>
 
   <ItemGroup>

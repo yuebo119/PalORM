@@ -13,8 +13,8 @@
   },
   "coverage": {
     "core": 74.0,
-    "mysql": 24.0,
+    "mysql": 67.0,
     "postgresql": 46.0,
-    "_comment": "覆盖率地板=防退化非达标。core 由 Core 测试收集（2026-10-18 实测 76.07%，地板 74）；mysql/postgresql 由 Integration 测试收集（同日实测 MySql 26.0% / PostgreSql 48.9%，地板各减 2pp）。Core 覆盖率测不到 Provider 代码，两套地板互不替代。调整规则：覆盖率提升后按同口径收紧；有意降低须在提交说明理由。"
+    "_comment": "覆盖率地板=防退化非达标。core 由 Core 测试收集（2026-10-18 实测 76.07%，地板 74）；mysql/postgresql 由 Integration 测试收集。2026-10-18 审计修正：MySql 实测由 26.0% 升至 69.4%——原 26% 是假读数（SET GLOBAL local_infile=OFF 用例把能力探测缓存污染成 False 达 60s TTL，全量跑所有批量写静默走多值回退，BulkCopy 路径从未被执行）；补 ResetLocalInfileProbeCache 测试钩子后 BulkCopy 真跑，地板按新实测 -2pp 定 67。PostgreSql 48.8%，地板 46 维持。Core 覆盖率测不到 Provider 代码，两套地板互不替代。"
   }
 }
