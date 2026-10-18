@@ -523,6 +523,9 @@ else
 
 Console.WriteLine();
 Console.WriteLine($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
+// 编号数与通过数不等是设计使然：V17 在非 fast 模式下分两段执行（gate 探针组 + V/D 面探针组），
+// 各记一次通过——编号最大值为 27，全量通过数为 28。V25 按编号最大值对账，此处显式说明防误读。
+Console.WriteLine("（注：V17 全量模式分两次记录——gate 探针组与 V/D 面探针组，故总数比最大编号多 1）");
 Console.WriteLine("═══════ 校验完成 ═══════");
 return failed > 0 ? 1 : 0;
 
