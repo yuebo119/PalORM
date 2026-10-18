@@ -51,13 +51,14 @@ else
     echo "── pre-commit: G1-G33 门禁（跳过：无 .ai/）──"
 fi
 
-# 文档口径（2026-10-16 起；2026-10-18 重构为 D4/D10-D13）：D10 架构 [Test] 总声明对账在
+# 文档口径（2026-10-16 起；2026-10-18 重构为 D4/D10-D14）：D10 架构 [Test] 总声明对账在
 # pre-commit 与 CI 均无触发点，6.4.1 后池化轮持续加测试致声明停 999 而实测 1099，漂移两天
 # 无人发现——B160 触发链补面同型（gate-check 当年即因无触发点漏 G9 豁免回归 3 天）。
 # 2026-10-18 审计删除六项长期"跳过并 PASS"的死检查（D1/D2/D5/D6/D7/D9）与两项字样检查
-# （D3/D8），新增 D13 门禁级别三方对账（文档表级别 ⊗ gate-check 实际判定方式）。
+# （D3/D8），新增 D13 门禁级别三方对账（文档表级别 ⊗ gate-check 实际判定方式）与 D14 T 级
+# 严重度对账（test/prompt.md T 表 ⊗ test-gate 实际 FAIL/WARN）。
 # 纯文本扫描无构建副作用，约 1-2 秒；D10 有 --fix 同步模式（只替换含 [Test]+声明+计数的行）。
-echo "── pre-commit: D4/D10-D13 文档口径 ──"
+echo "── pre-commit: D4/D10-D14 文档口径 ──"
 dotnet run --file "$(git rev-parse --show-toplevel)/scripts/doc-consistency-check.cs" || exit 1
 
 exit 0

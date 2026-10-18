@@ -10,8 +10,8 @@
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
 | `gate-check.cs` | G1-G33 规范门禁（G10/G15/G16 为警告级） | ✅ pre-commit + verify.yml gate |
-| `doc-consistency-check.cs` | D4/D10-D13 文档口径（`--fix` 同步 [Test] 计数） | ✅ pre-commit + verify.yml gate |
-| `tech-debt-scan.cs` | 技术债 14 类（`--ci` 跳过领先远端与 tag 对账） | ✅ verify.yml gate |
+| `doc-consistency-check.cs` | D4/D10-D14 文档口径（`--fix` 同步 [Test] 计数；D13 G 级对账 / D14 T 级严重度对账） | ✅ pre-commit + verify.yml gate |
+| `tech-debt-scan.cs` | 技术债 15 类（`--ci` 跳过领先远端与 tag 对账；#15 脚本索引完整性） | ✅ verify.yml gate |
 | `test-gate.cs` | 测试规范 T4/T6/T8/T9/T11/T12 + T-DEF-1/4（`--ci` 语义保留） | ✅ verify.yml gate |
 | `assertion-strength-check.cs` | 弱断言棘轮（基线见 `bench/baselines/assertion-baseline.json`，当前 0） | ✅ verify.yml gate |
 | `gate-param-collection-reuse.cs` | R-UNNESTB 参数集合复用理由码门禁 | ✅ pre-commit + verify.yml gate |
@@ -35,6 +35,28 @@
 | 脚本 | 用途 | 调用时机 |
 |------|------|:---:|
 | `backup-ai-system.cs` | `.ai` 知识层异地备份（69 个知识文件约 1 MB，排除约 600 MB 可再生实验产物；写 MANIFEST + SHA256 回读校验；`--verify` 只校验） | 手工 / 阶段收尾 |
+| `verify-ai-system.cs` | `.ai` 系统一致性校验 V1-V27（提示词引用可解析、口径数字对账、防线能失败、提交锚验存、活文档完整性）；`--fast` 跳过副作用项，`--public` 仅跑主仓可见子集 | pre-commit + 手工全量 |
+
+## 四系统工具（按需调用，非门禁）
+
+| 脚本 | 用途 | 触发 |
+|------|------|:---:|
+| `refine-scan.cs` | 精炼扫描：27 项操作矩阵的机械命中数（可 grep 的 17 项出量级，7 项需 Roslyn 标 [人工]） | `/refine` 阶段 0 |
+| `review-scope.cs` | review 范围清单与覆盖度账本（分片 + 逐文件勾销） | `/review` 执行门禁 |
+| `review-snapshot.cs` | 仓库基线快照（可整段贴进评审报告；`--no-build` 跳过构建） | `/review` 执行门禁 |
+| `sibling-map.cs` | 三方言姊妹族枚举：轴 A 机械生成同名方法族，轴 B 语义种子表真源在 `.ai/review/sibling-map.md` | 修复 brief 前评估联动面 |
+| `swing-analysis.cs` | 全键比值摆动分布（选择门禁「宽散布」阈值时重跑） | 门禁阈值调参 |
+| `probe-template.cs` | 探针骨架生成器（约 30 秒出最小工程，review probe-first 基建） | P0/P1 定级前的探针实证 |
+| `verify-action-items.cs` | 行动项账本中「文件路径引用」的真实性校验（只核可机械判真的路径，标识符跳过） | `/review` 事后验证回路 |
+| `verify-phase.cs` | 阶段完成验证（S1 构建 / S2 空壳 / S3 测试 / S4 阶段特定） | 阶段收尾 |
+| `probe-pgvector.cs` | pgvector 向量门核对清单（在有扩展的 PG 库上验证 Raw 配方六项形态；无扩展时退出 2） | 向量场景变更 |
+
+## 发布
+
+| 脚本 | 用途 | 调用时机 |
+|------|------|:---:|
+| `pre-release-check.cs` | 发布前预检：模拟 CI 消费者路径（v6.1.0 发布事故后固化） | 打 tag 前 |
+| `release-version-scan.cs` | 升版本时旧版本号字面量残留扫描（版本字面量多处同步的机械兜底） | 升版本提交前 |
 
 ## 性能基准
 

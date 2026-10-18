@@ -1,5 +1,5 @@
 // tech-debt-scan.cs（自 .ai/scripts/tech-debt-scan.sh 迁移，脚本全面 C# 化轮）
-// PalORM 技术债扫描——14 类检查，每项零残留即通过。
+// PalORM 技术债扫描——15 类检查，每项零残留即通过（第 15 类为 2026-10-18 新增的脚本索引完整性）。
 // 迁移修正（按现形态重登记，DDD F-07 同款）：检查 8 的 Python 依赖消除（原 python3 缺失
 // 假绿事故的根源直接不存在了，B 族防线失明根因退役）；检查 3 原 bash 引号 bug（'|| true'
 // 被包进 grep -v 模式）按意图修正；检查 13 原对照 scripts/secret-guard.sh 已 C# 化且
@@ -43,8 +43,11 @@ Check("2. TODO/HACK/FIXME 注释", GrepLines(Rx(@"// TODO|// HACK|// FIXME|// XX
 Check("3. Console.WriteLine 在 src/", GrepLines(Rx(@"Console\."), null, "src"), strict: true);
 Check("4. 空 catch 无注释", GrepLines(Rx(@"catch.*\{\}"), null, "src", "test"), strict: true);
 Check("5. tab 字符（应为 space）", TabFiles(), strict: true);
-Check("6. src/ 超长行 > 180（SourceGen 允许）", LongLines("src", excludeSourceGen: true, excludeAotTest: false, max: 20), strict: false);
-Check("7. test/ 超长行 > 180（AotTest 允许）", LongLines("test", excludeSourceGen: false, excludeAotTest: true, max: 20), strict: false);
+// 6/7 长行（2026-10-18 第二轮审计转 strict）：此前 strict:false，命中 20 处也只报 PASS
+// 并计入通过数，属「检查永不失败」的软门禁。两处已于同日清零（src 0 处 / test 0 处），
+// 此刻转 strict 才能锁住成果；再出现长行即 FAIL。
+Check("6. src/ 超长行 > 180（SourceGen 允许）", LongLines("src", excludeSourceGen: true, excludeAotTest: false, max: 20), strict: true);
+Check("7. test/ 超长行 > 180（AotTest 允许）", LongLines("test", excludeSourceGen: false, excludeAotTest: true, max: 20), strict: true);
 
 // ─── 8. SuppressMessage 无 Justification（原 Python DOTALL 多行扫描 → C# Regex）───
 var noJust = new List<string>();
@@ -207,6 +210,38 @@ else
     else
     {
         Console.WriteLine($"FAIL  14. CI 盲区：dev 领先 {aheadDev} / main 领先 {aheadMain}（阈值 10）——尽快 push 恢复 CI 反馈回路，防发布门禁沦为首次 CI 接触");
+        failCount++;
+    }
+}
+
+// ─── 15. 脚本索引完整性（T-DEF-7 的机械载体，2026-10-18 第二轮审计新增）───
+// 规则原文（test/prompt.md T-DEF-7）：「测试脚本无索引，18 个脚本对新人可发现性差，
+// 必须有 scripts/README.md 分类索引」。规则存在但此前无任何检查读索引，实测 28 个脚本
+// 只登记 15 个。本项逐文件核对，缺登记即 FAIL；新增脚本必须同步索引。
+var scriptDir = "scripts";
+var readmePath = Path.Combine(scriptDir, "README.md");
+var unindexed = new List<string>();
+if (!File.Exists(readmePath))
+{
+    Console.WriteLine($"FAIL  15. scripts/README.md 缺失（T-DEF-7 要求脚本索引）");
+    failCount++;
+}
+else
+{
+    var readme = File.ReadAllText(readmePath);
+    foreach (var f in Directory.GetFiles(scriptDir, "*.cs").OrderBy(f => f, StringComparer.Ordinal))
+    {
+        var name = Path.GetFileName(f);
+        if (!readme.Contains(name, StringComparison.Ordinal)) unindexed.Add(name);
+    }
+    if (unindexed.Count == 0)
+    {
+        Console.WriteLine($"PASS  15. 脚本索引完整（{Directory.GetFiles(scriptDir, "*.cs").Length} 个脚本全部登记于 scripts/README.md）");
+        passCount++;
+    }
+    else
+    {
+        Console.WriteLine($"FAIL  15. 脚本未登记于 scripts/README.md（{unindexed.Count} 个）: {string.Join(' ', unindexed.Take(10))}");
         failCount++;
     }
 }
