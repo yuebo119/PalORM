@@ -171,7 +171,15 @@ if (!FAST)
         if (name == "verify-action-items" && latestLedger is null) { continue; } // 无账本跳过（与 .sh 版一致）
         var (code, output) = RunCaptureWithCode("dotnet", arguments);
         // V14 语义（2026-10-18 审计修复）：只判"跑到完成标记"会把"检查红着但活着"算通过，
-        // 与 E5「防线无触发点」同型——完成标记与退出码必须同时满足；任一脚本红即 verify 红。
+        // 与 E5「防线无触发点」同型——完成标记与退出码必须同时满足。
+        // 退出码契约按各脚本自述区分（probe-template 等辅助件缺参返回 2=用法错，属正常行为，
+        // 其自证方式是"打印用法说明"而非完成标记）：0=健康；2=用法错（该项以用法标记替代
+        // 完成标记判定）；1=检查失败，一律计入失败。
+        if (code == 2 && name == "probe-template")
+        {
+            if (!output.Contains("用法", StringComparison.Ordinal)) deadScripts.Add("probe-template(exit=2 且无用法说明)");
+            continue;
+        }
         if (code != 0) deadScripts.Add($"{name}(exit={code})");
         else if (!Regex.IsMatch(output, mark)) deadScripts.Add($"{name}(无完成标记)");
     }
