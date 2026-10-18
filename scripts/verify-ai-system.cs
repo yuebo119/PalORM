@@ -834,14 +834,59 @@ void V17dPublicBattery()
         if (!RunTg().Contains("WARN  T9")) silent.Add("T9");
         File.Delete(t9);
 
-        // T11：声明口径地板被抬到不可能通过的数值
+        // T11 + tech-debt #9：声明口径地板被抬到不可能通过的数值（两处检查同读该字段，
+        // 一次变异断言两条，省一次 tech-debt 全仓扫描）
         MutateFile("bench/baselines/test-counts.json",
             t => Regex.Replace(t, @"""sourceMarkers"": \d+", "\"sourceMarkers\": 99999"), touch: touched);
         if (!RunTg().Contains("FAIL  T11")) silent.Add("T11");
+        if (!RunTd().Contains("FAIL  9.")) silent.Add("tech-debt#9");
         Git("checkout -- bench/baselines/test-counts.json");
 
-        if (silent.Count == 0) Pass(17, "public 面变异探针 7/7 如期报红（D12/D13/tech-debt#15/T4/T6/T9/T11；CI 每周 --public --probes 执行）");
-        else Fail(17, "public 面探针有沉默项（变异主仓真源后检查仍不报红 = 无声 no-op）", string.Join(' ', silent));
+        // D4：文档出现已过期的当前计数陈述（硬编码旧值黑名单命中）
+        MutateFile("docs/测试体系规范.md",
+            t => t + "\n当前 Core 71/71 通过（ZZV17d 探针行）\n", touch: touched);
+        if (!RunDc().Contains("FAIL D4")) silent.Add("D4");
+        Git("checkout -- docs/测试体系规范.md");
+
+        // T8 + T-DEF-1 + T-DEF-4 合并变异：一次 test-gate 运行断言三条
+        //   T8：SimpleJob 缺配置理由注释（bench 临时文件，前 3 行无注释）
+        //   T-DEF-1：scripts/ 出现 .sh 残留（语言政策）
+        //   T-DEF-4：某个 CI job 缺 timeout-minutes（工作流临时删一行）
+        var t8 = "bench/PalORM.Benchmarks/ZZV17dT8Probe.cs";
+        File.WriteAllText(t8,
+            "using BenchmarkDotNet.Attributes;\n\npublic sealed class ZZV17dT8Probe\n{\n    [SimpleJob]\n    public void M() { }\n}\n",
+            new UTF8Encoding(false));
+        var tdef1 = "scripts/zzv17d_residue.sh";
+        File.WriteAllText(tdef1, "#!/bin/sh\n", new UTF8Encoding(false));
+        MutateFile(".github/workflows/verify.yml",
+            t => new Regex(@"\n\s+timeout-minutes: \d+\n").Replace(t, "\n", 1), touch: touched);
+        var tg = RunTg();
+        if (!tg.Contains("WARN  T8")) silent.Add("T8");
+        if (!tg.Contains("FAIL  T-DEF-1")) silent.Add("T-DEF-1");
+        if (!tg.Contains("WARN  T-DEF-4")) silent.Add("T-DEF-4");
+        Git("checkout -- .github/workflows/verify.yml");
+        File.Delete(t8);
+        File.Delete(tdef1);
+
+        // tech-debt #6 + #7：src/ 与 test/ 各注入一行超长（>180）注释，一次扫描断言两条
+        MutateFile("src/PalORM.Core/Annotations.cs",
+            t => t + "\n// " + new string('z', 200) + "\n", touch: touched);
+        MutateFile("test/PalORM.Core.Tests/KeyConversionTests.cs",
+            t => t + "\n// " + new string('y', 200) + "\n", touch: touched);
+        var tdLong = RunTd();
+        if (!tdLong.Contains("FAIL  6.")) silent.Add("tech-debt#6");
+        if (!tdLong.Contains("FAIL  7.")) silent.Add("tech-debt#7");
+        Git("checkout -- src/PalORM.Core/Annotations.cs");
+        Git("checkout -- test/PalORM.Core.Tests/KeyConversionTests.cs");
+
+        if (silent.Count == 0)
+        {
+            Pass(17, "public 面变异探针 14/14 如期报红（D4/D12/D13/tech-debt#6/#7/#9/#15/T4/T6/T8/T9/T11/T-DEF-1/T-DEF-4；CI 每周 --public --probes 执行）");
+        }
+        else
+        {
+            Fail(17, "public 面探针有沉默项（变异主仓真源后检查仍不报红 = 无声 no-op）", string.Join(' ', silent));
+        }
     }
     finally
     {
@@ -851,6 +896,8 @@ void V17dPublicBattery()
             "test/PalORM.Core.Tests/ZZV17dT4Probe.cs",
             "test/PalORM.Integration.Tests/ZZV17dT6Probe.cs",
             "bench/PalORM.Benchmarks/ZZV17dT9Probe.cs",
+            "bench/PalORM.Benchmarks/ZZV17dT8Probe.cs",
+            "scripts/zzv17d_residue.sh",
         })
         {
             if (File.Exists(f)) File.Delete(f);
