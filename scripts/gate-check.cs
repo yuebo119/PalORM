@@ -43,7 +43,10 @@ var g9 = GitGrepLines("""(Password|Pwd)=[^;$"'\s]+|connectionString\s*=\s*"(Serv
     .Count(l => !(l.Contains("localhost", StringComparison.OrdinalIgnoreCase) && !Regex.IsMatch(l, @"(Password|Pwd)=[^;""\s]")));
 CheckZero("G9", "受跟踪文件零硬编码连接凭据", g9);
 
-CheckZero("G10", "DataSession 不得长期持有（字段/属性缓存会话）", CountMatches("""DataSession.*(_db|field|property)""", "src/**/*.cs"));
+// G10/G15/G16：文档登记为警告级（.ai/gate/prompt.md 与 docs/编码规范.md 的「级别」列），
+// 2026-10-18 审计修正——此前脚本用 CheckZero 按阻断执行，与两处文档声明冲突（V27 的对账
+// 判据会把这类"文档说警告、代码真阻断"抓出来）。WARN 级违规不阻断提交但计入警告数。
+CheckWarn("G10", "DataSession 不得长期持有（字段/属性缓存会话）", CountMatches("""DataSession.*(_db|field|property)""", "src/**/*.cs"));
 CheckZero("G11", "零 virtual 导航属性", CountMatches("""public.*virtual|virtual.*public""", "src/**/*.cs"));
 CheckZero("G12", "禁止公开 static 可写状态", CountPublicStaticState());
 
@@ -60,8 +63,8 @@ foreach (var (path, pattern) in new[]
 CheckZero("G13", "Provider 不跨引用", g13);
 
 CheckZero("G14", "SourceGen 不引用运行时 Provider", CountMatches("""using\s+PalORM\.(Sqlite|PostgreSql|MySql|Testing)""", "src/PalORM.SourceGen"));
-CheckZero("G15", "实体禁用裸 DateTime（用 DateTimeOffset）", CountMatches("""public\s+DateTime[?[:space:]]""", "src/**/*.cs"));
-CheckZero("G16", "级联删除必须显式启用（默认 NO ACTION）", CountMatches("""OnDelete.*Cascade|Cascade.*Delete""", "src/**/*.cs"));
+CheckWarn("G15", "实体禁用裸 DateTime（用 DateTimeOffset）", CountMatches("""public\s+DateTime[?[:space:]]""", "src/**/*.cs"));
+CheckWarn("G16", "级联删除必须显式启用（默认 NO ACTION）", CountMatches("""OnDelete.*Cascade|Cascade.*Delete""", "src/**/*.cs"));
 CheckZero("G17", "禁止 async void", CountMatches("""async\s+void""", "src/**/*.cs"));
 // v7.2.1 词边界匹配（B13 同族教训）：命中行须不含 /// 与 //（与 .sh 管道 grep -v 等价）
 var g18 = 0;
@@ -293,6 +296,12 @@ void CheckZero(string id, string title, int violations)
 {
     if (violations == 0) { Console.WriteLine($"{GREEN}PASS {id}: {title}{NC}"); passed++; }
     else { Console.WriteLine($"{RED}FAIL {id}: {title}（违规数：{violations}）{NC}"); failed++; }
+}
+
+void CheckWarn(string id, string title, int violations)
+{
+    if (violations == 0) { Console.WriteLine($"{GREEN}PASS {id}: {title}{NC}"); passed++; }
+    else { Console.WriteLine($"{YELLOW}WARN {id}: {title}（违规数：{violations}——文档登记为警告级，不阻断）{NC}"); warned++; }
 }
 
 // ── git grep 语义（B178 目录形态 pathspec + B13 注释剥离）──

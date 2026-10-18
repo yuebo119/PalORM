@@ -15,26 +15,10 @@ const string RED = "\x1b[0;31m", GREEN = "\x1b[0;32m", NC = "\x1b[0m";
 void Fail(string msg) { Console.WriteLine($"{RED}FAIL {msg}{NC}"); failed++; }
 void Pass(string msg) { Console.WriteLine($"{GREEN}PASS {msg}{NC}"); passed++; }
 
-// ── D1: README tests badge（若存在）与架构总计一致 ──
-var readmeBadge = FirstMatch(File.Exists("README.md") ? File.ReadAllText("README.md") : "", @"tests-(\d+)%2F(\d+)") is { } b1 ? $"{b1.Group1}/{b1.Group2}" : "";
-var archText = File.Exists("docs/架构设计.md") ? File.ReadAllText("docs/架构设计.md") : "";
-var archTotal = (LastMatch(archText, @"\*\*(\d+/\d+)\*\*")?.Group1 ?? "").Replace("*", "");
-if (readmeBadge.Length == 0) Pass("D1 README 无 tests badge（v5.0 精简）——无对照需求");
-else if (readmeBadge == archTotal) Pass($"D1 README badge({readmeBadge}) = 架构总计({archTotal})");
-else Fail($"D1 README badge({readmeBadge}) ≠ 架构总计({archTotal})");
-
-// ── D2: 架构表格 Core 计数 = API参考中 Core 计数 ──
-var coreArch = FirstMatch(archText, @"Core\.Tests\s*\|\s*(\d+/\d+)")?.Group1 ?? "";
-var apiText = File.Exists("docs/API参考.md") ? File.ReadAllText("docs/API参考.md") : "";
-var coreApi = FirstMatch(apiText, @"Core (\d+/\d+)")?.Group1 ?? "";
-if (coreArch.Length == 0 && coreApi.Length == 0) Pass("D2 架构/API 参考均无分项 X/X 计数（v5.x 文档重构后口径）——跳过");
-else if (coreArch.Length > 0 && coreApi.Length > 0 && coreArch == coreApi) Pass($"D2 Core 计数一致: {coreArch}");
-else Fail($"D2 Core 计数: 架构={coreArch}, API={coreApi}（单侧缺失或值漂移）");
-
-// ── D3: G9 文档状态与整改事实一致 ──
-var stdText = File.Exists("docs/编码规范.md") ? File.ReadAllText("docs/编码规范.md") : "";
-if (Regex.IsMatch(stdText, @"G9.*仓库侧已整改.*AUD-001", RegexOptions.Singleline)) Pass("D3 G9 标注为仓库侧已整改/AUD-001 在案");
-else Fail("D3 G9 状态不符合预期（应标注仓库侧已整改并引用 AUD-001）");
+// ── D 组重构（2026-10-18 质量审计）──
+// 原 D1/D2/D5/D6/D7/D9 六项在 v5.x 文档重构后已无对照对象：每次运行都走"跳过并 PASS"分支，
+// 却计入通过数——六项死检查长期冒充有效防线。原 D3/D8 只检查文档里有指定字样（"已整改"/
+// "✅"），与代码真实行为无关联，由 D13 的机器对账取代。有效编号现为 D4/D10/D11/D12/D13。
 
 // ── D4: 所有文档不含已过期的当前计数陈述 ──
 var staleRegex = new Regex(@"Core (71/71|89/89|92/92|94/94|96/96|104/104)|tests-(241|258|259|262|264|266|274|276)%2F|(241|258|259|262|264|266|274|276)/", RegexOptions.Compiled);
@@ -61,40 +45,6 @@ foreach (var (doc, di) in new[] { ("docs", 0), ("README.md", 1) })
 }
 if (!staleFound) Pass("D4 无过期当前计数陈述");
 else Fail("D4 存在过期当前计数（见上）");
-
-// ── D5: 架构设计 Core 页眉 = 表格 ──
-var coreHeader = FirstMatch(archText, @"Core (\d+/\d+)")?.Group1 ?? "";
-if (coreHeader.Length == 0 && coreArch.Length == 0) Pass("D5 架构页无 Core X/X 计数（v5.x 文档重构后口径）——跳过");
-else if (coreHeader == coreArch) Pass($"D5 架构页眉({coreHeader}) = 表格({coreArch})");
-else Fail($"D5 架构页眉({coreHeader}) ≠ 表格({coreArch})");
-
-// ── D6: SourceGen 计数一致 ──
-var sgHeader = FirstMatch(archText, @"SourceGen (\d+/\d+)")?.Group1 ?? "";
-var sgTable = FirstMatch(archText, @"SourceGen\.Tests\s*\|\s*(\d+/\d+)")?.Group1 ?? "";
-if (sgHeader.Length == 0 && sgTable.Length == 0) Pass("D6 架构页无 SourceGen X/X 计数（v5.x 文档重构后口径）——跳过");
-else if (sgHeader == sgTable && sgHeader.Length > 0) Pass($"D6 SourceGen 计数一致: {sgHeader}");
-else Fail($"D6 SourceGen: 页眉={sgHeader}, 表格={sgTable}");
-
-// ── D7: Integration 本地通过数一致 ──
-var intHeader = FirstMatch(archText, @"集成 (\d+)/\d+")?.Group1 ?? "";
-var intTable = FirstMatch(archText, @"Integration\.Tests\s*\|\s*(\d+)/\d+")?.Group1 ?? "";
-if (intHeader.Length == 0 && intTable.Length == 0) Pass("D7 架构页无集成 X/X 计数（v5.x 文档重构后口径）——跳过");
-else if (intHeader == intTable && intHeader.Length > 0) Pass($"D7 Integration 本地通过数一致: {intHeader}");
-else Fail($"D7 Integration: 表头={intHeader}, 表格={intTable}");
-
-// ── D9: 分项加和 = 总计 ──
-var coreN = FirstMatch(archText, @"Core\.Tests\s*\|\s*(\d+)")?.Group1;
-var sgN = FirstMatch(archText, @"SourceGen\.Tests\s*\|\s*(\d+)")?.Group1;
-var intN = FirstMatch(archText, @"Integration\.Tests\s*\|\s*(\d+)")?.Group1;
-var totalN = FirstMatch(archText, @"\*\*总计\*\*\s*\|\s*\*\*(\d+)")?.Group1;
-if (string.Concat(coreN, sgN, intN, totalN).Length == 0) Pass("D9 分项/总计行不存在（v5.x 文档重构后口径）——跳过");
-else if (coreN is { Length: > 0 } c && sgN is { Length: > 0 } s && intN is { Length: > 0 } it && totalN is { Length: > 0 } tt && int.Parse(c) + int.Parse(s) + int.Parse(it) == int.Parse(tt))
-    Pass($"D9 分项加和 = 总计: {c}+{s}+{it}={tt}");
-else Fail($"D9 分项计数不一致（core={coreN} sg={sgN} int={intN} total={totalN}）");
-
-// ── D8: 编码规范 G12 标记为通过 ──
-if (Regex.IsMatch(stdText, @"G12.*禁止公开 static.*✅", RegexOptions.Singleline)) Pass("D8 G12 标注为通过");
-else Fail("D8 G12 状态不符合预期（应包含 ✅）");
 
 // ── D10: [Test] 计数声明（三文件全部写入点）= 实测标记数（含 --fix 自动同步）──
 // 写入点台账（2026-10-16 v7.37 轮补全）：docs/架构设计.md ×2（首行总验证 + 状态表行）、
@@ -172,6 +122,44 @@ foreach (var name in declaredApis)
 if (apiMissing.Count == 0) Pass($"D12 文档表格声明的 {declaredApis.Count} 个调用式 API 均在源码中存在");
 else Fail($"D12 文档声明但源码不存在: {string.Join(' ', apiMissing)}（补实现或从 docs/API参考.md 删除该行）");
 
+// ── D13: 门禁级别三方对账（文档表 ⊗ 脚本实际判定方式）──
+// 2026-10-18 审计新增。实例：G10/G15/G16 在 .ai/gate/prompt.md 与 docs/编码规范.md 都标
+// 「警告级」，gate-check.cs 却用 CheckZero 按阻断执行——文档说警告、代码真拦截，两边都没人核。
+// 判据来源：gate-check.cs 的调用方式（CheckZero=阻断 / CheckWarn=警告），与两处文档表的级别列
+// 逐项对账；文档或代码任一侧改动而未同步另一侧即 FAIL。
+var gateSrc = File.Exists("scripts/gate-check.cs") ? File.ReadAllText("scripts/gate-check.cs") : "";
+var scriptLevels = new Dictionary<string, string>(StringComparer.Ordinal);
+foreach (Match m in Regex.Matches(gateSrc, @"Check(Zero|Warn)\(""G(\d+)"""))
+{
+    scriptLevels[$"G{m.Groups[2].Value}"] = m.Groups[1].Value == "Zero" ? "阻断" : "警告";
+}
+var docLevelBad = new List<string>();
+var docLevelChecked = 0;
+foreach (var doc in new[] { ".ai/gate/prompt.md", "docs/编码规范.md" })
+{
+    if (!File.Exists(doc)) continue;
+    foreach (var line in File.ReadLines(doc))
+    {
+        if (!line.StartsWith('|')) continue;
+        var m = Regex.Match(line, @"^\|\s*(G\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|");
+        if (!m.Success) continue;
+        var id = m.Groups[1].Value;
+        if (!scriptLevels.TryGetValue(id, out var actual)) continue;
+        var cell = m.Groups[4].Value;
+        // 文档侧级别表达：编码规范用 ✅ / ⚠️ 警告级；gate 提示词用 阻断 / 警告
+        var declared = cell.Contains("警告", StringComparison.Ordinal) ? "警告"
+            : cell.Contains("阻断", StringComparison.Ordinal) ? "阻断"
+            : cell.Contains('✅') ? "阻断" : "";
+        if (declared.Length == 0) continue;
+        docLevelChecked++;
+        if (declared != actual) docLevelBad.Add($"{doc} {id} 文档={declared} 脚本={actual}");
+    }
+}
+if (docLevelBad.Count == 0)
+    Pass($"D13 门禁级别三方对账一致（{docLevelChecked} 处 G 项声明与 gate-check 判定方式对齐）");
+else
+    Fail($"D13 门禁级别文档与脚本不一致（{string.Join("；", docLevelBad)}）——改文档级别或改脚本 CheckZero/CheckWarn");
+
 Console.WriteLine();
 Console.WriteLine($"通过: {passed}  失败: {failed}");
 return failed > 0 ? 1 : 0;
@@ -182,12 +170,6 @@ static (string Group1, string Group2)? FirstMatch(string content, string pattern
 {
     var m = Regex.Match(content, pattern);
     return m.Success ? (m.Groups[1].Value, m.Groups.Count > 2 ? m.Groups[2].Value : "") : null;
-}
-
-static (string Group1, string Group2)? LastMatch(string content, string pattern)
-{
-    var matches = Regex.Matches(content, pattern);
-    return matches.Count > 0 ? (matches[^1].Groups[1].Value, "") : null;
 }
 
 static int CountTestMarkers()

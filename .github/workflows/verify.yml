@@ -228,6 +228,27 @@ jobs:
             - name: Run stub gate
               run: dotnet run --file scripts/stub-check.cs
 
+            # 2026-10-18 质量审计补接：以下五个门禁此前只在 pre-commit 或人工手动跑，
+            # CI 完全无触发点——本地不装 hook（fresh clone / 外部贡献者 / Core.autocrlf
+            # 差异环境）时，向 Core 加 Activator.CreateInstance、async void、.Result、
+            # Provider 跨引用，或删测试跌破地板，都能一路绿灯合入。E5（G9 假红 3 天）
+            # 的教训是「门禁无触发点」，当年只补了 pre-commit 没补 CI。
+            # --ci 语义（各脚本内置）：跳过本地专属项（G33 脏树/领先远端/tag 对账）。
+            - name: Storefront gates (G1-G33)
+              run: dotnet run --file scripts/gate-check.cs -- --allow-dirty
+
+            - name: Doc consistency (D4/D10-D13)
+              run: dotnet run --file scripts/doc-consistency-check.cs
+
+            - name: Tech debt scan (14 checks)
+              run: dotnet run --file scripts/tech-debt-scan.cs -- --ci
+
+            - name: Test spec gate (T4/T6/T8/T9/T12/T-DEF-4)
+              run: dotnet run --file scripts/test-gate.cs -- --ci
+
+            - name: Assertion strength ratchet
+              run: dotnet run --file scripts/assertion-strength-check.cs -- --ci
+
             # 独立审计 M0-4：依赖 CVE 信号（此前完全空白——4 个运行时第三方包 +
             # Roslyn 的新 CVE 只能靠人工升级轮发现，GHSA-473q 类事件已实际发生过）。
             # NuGetAudit 在还原期报 NU1903/NU1904，但中央包管理 + 显式钉版本下

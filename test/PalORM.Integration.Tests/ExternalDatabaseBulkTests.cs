@@ -136,52 +136,58 @@ public sealed class ExternalDatabaseBulkTests
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
         await db.ExecuteAsync($"DROP TABLE IF EXISTS all_types_entities");
         await db.MigrateAsync();
-
-        var sample = new AllTypesEntity
+        try
         {
-            VInt = 42,
-            VShort = 7,
-            VByte = 255,
-            VString = "端到端",
-            VChar = 'Z',
-            VBool = true,
-            VDecimal = 12.34m,
-            VDouble = 3.14159,
-            VFloat = 2.5f,
-            VDateTime = new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc),
-            VGuid = Guid.Parse("11111111-2222-3333-4444-555555555555"),
-            VDto = new DateTimeOffset(2026, 7, 18, 10, 30, 0, TimeSpan.FromHours(8)),
-            VDateOnly = new DateOnly(2026, 7, 18),
-            VTimeOnly = new TimeOnly(10, 30, 45),
-            VBytes = [0x00, 0x01, 0xFF, 0x00, 0x41],
-            VNullableInt = null,
-            VNullableTimeOnly = new TimeOnly(23, 59, 59),
-            VNullableBytes = [9, 8, 7],
-        };
+            var sample = new AllTypesEntity
+            {
+                VInt = 42,
+                VShort = 7,
+                VByte = 255,
+                VString = "端到端",
+                VChar = 'Z',
+                VBool = true,
+                VDecimal = 12.34m,
+                VDouble = 3.14159,
+                VFloat = 2.5f,
+                VDateTime = new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc),
+                VGuid = Guid.Parse("11111111-2222-3333-4444-555555555555"),
+                VDto = new DateTimeOffset(2026, 7, 18, 10, 30, 0, TimeSpan.FromHours(8)),
+                VDateOnly = new DateOnly(2026, 7, 18),
+                VTimeOnly = new TimeOnly(10, 30, 45),
+                VBytes = [0x00, 0x01, 0xFF, 0x00, 0x41],
+                VNullableInt = null,
+                VNullableTimeOnly = new TimeOnly(23, 59, 59),
+                VNullableBytes = [9, 8, 7],
+            };
 
-        long inserted = await db.BulkInsertAsync([sample]);
+            long inserted = await db.BulkInsertAsync([sample]);
 
-        await Assert.That(inserted).IsEqualTo(1);
-        var read = (await db.GetAllAsync<AllTypesEntity>()).Single();
-        await Assert.That(read.Id).IsGreaterThan(0); // 自增主键由 MySQL 生成（读取器返回 DBNull）
-        await Assert.That(read.VInt).IsEqualTo(sample.VInt);
-        await Assert.That(read.VShort).IsEqualTo(sample.VShort);
-        await Assert.That(read.VByte).IsEqualTo(sample.VByte);
-        await Assert.That(read.VString).IsEqualTo(sample.VString);
-        await Assert.That(read.VChar).IsEqualTo(sample.VChar);
-        await Assert.That(read.VBool).IsEqualTo(sample.VBool);
-        await Assert.That(read.VDecimal).IsEqualTo(sample.VDecimal);
-        await Assert.That(read.VDouble).IsEqualTo(sample.VDouble);
-        await Assert.That(read.VFloat).IsEqualTo(sample.VFloat);
-        await Assert.That(read.VDateTime).IsEqualTo(sample.VDateTime);
-        await Assert.That(read.VGuid).IsEqualTo(sample.VGuid);
-        await Assert.That(read.VDto.UtcDateTime).IsEqualTo(sample.VDto.UtcDateTime);
-        await Assert.That(read.VDateOnly).IsEqualTo(sample.VDateOnly);
-        await Assert.That(read.VTimeOnly).IsEqualTo(sample.VTimeOnly);
-        await Assert.That(read.VBytes.SequenceEqual(sample.VBytes)).IsTrue();
-        await Assert.That(read.VNullableInt).IsNull();
-        await Assert.That(read.VNullableTimeOnly).IsEqualTo(sample.VNullableTimeOnly);
-        await Assert.That(read.VNullableBytes.SequenceEqual(sample.VNullableBytes)).IsTrue();
+            await Assert.That(inserted).IsEqualTo(1);
+            var read = (await db.GetAllAsync<AllTypesEntity>()).Single();
+            await Assert.That(read.Id).IsGreaterThan(0); // 自增主键由 MySQL 生成（读取器返回 DBNull）
+            await Assert.That(read.VInt).IsEqualTo(sample.VInt);
+            await Assert.That(read.VShort).IsEqualTo(sample.VShort);
+            await Assert.That(read.VByte).IsEqualTo(sample.VByte);
+            await Assert.That(read.VString).IsEqualTo(sample.VString);
+            await Assert.That(read.VChar).IsEqualTo(sample.VChar);
+            await Assert.That(read.VBool).IsEqualTo(sample.VBool);
+            await Assert.That(read.VDecimal).IsEqualTo(sample.VDecimal);
+            await Assert.That(read.VDouble).IsEqualTo(sample.VDouble);
+            await Assert.That(read.VFloat).IsEqualTo(sample.VFloat);
+            await Assert.That(read.VDateTime).IsEqualTo(sample.VDateTime);
+            await Assert.That(read.VGuid).IsEqualTo(sample.VGuid);
+            await Assert.That(read.VDto.UtcDateTime).IsEqualTo(sample.VDto.UtcDateTime);
+            await Assert.That(read.VDateOnly).IsEqualTo(sample.VDateOnly);
+            await Assert.That(read.VTimeOnly).IsEqualTo(sample.VTimeOnly);
+            await Assert.That(read.VBytes.SequenceEqual(sample.VBytes)).IsTrue();
+            await Assert.That(read.VNullableInt).IsNull();
+            await Assert.That(read.VNullableTimeOnly).IsEqualTo(sample.VNullableTimeOnly);
+            await Assert.That(read.VNullableBytes.SequenceEqual(sample.VNullableBytes)).IsTrue();
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS all_types_entities");
+        }
     }
 
     [Test]

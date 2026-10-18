@@ -117,24 +117,30 @@ internal sealed class BulkMergeSetBasedTests
         });
         await db.ExecuteAsync($"DROP TABLE IF EXISTS merge_entities");
         await db.MigrateAsync();
+        try
+        {
+            long first = await db.BulkMergeAsync(
+            [
+                new MergeEntity { Id = 1, Name = "pg-a", Qty = 1 },
+                new MergeEntity { Id = 2, Name = "pg-b", Qty = 2 },
+            ]);
+            await Assert.That(first).IsEqualTo(2);
 
-        long first = await db.BulkMergeAsync(
-        [
-            new MergeEntity { Id = 1, Name = "pg-a", Qty = 1 },
-            new MergeEntity { Id = 2, Name = "pg-b", Qty = 2 },
-        ]);
-        await Assert.That(first).IsEqualTo(2);
+            long second = await db.BulkMergeAsync(
+            [
+                new MergeEntity { Id = 1, Name = "pg-a-up", Qty = 11 },
+                new MergeEntity { Id = 3, Name = "pg-c", Qty = 3 },
+            ]);
+            await Assert.That(second).IsEqualTo(2);
 
-        long second = await db.BulkMergeAsync(
-        [
-            new MergeEntity { Id = 1, Name = "pg-a-up", Qty = 11 },
-            new MergeEntity { Id = 3, Name = "pg-c", Qty = 3 },
-        ]);
-        await Assert.That(second).IsEqualTo(2);
-
-        var rows = (await db.GetAllAsync<MergeEntity>()).OrderBy(static r => r.Id).ToList();
-        await Assert.That(rows.Count).IsEqualTo(3);
-        await Assert.That(rows[0].Name).IsEqualTo("pg-a-up");
+            var rows = (await db.GetAllAsync<MergeEntity>()).OrderBy(static r => r.Id).ToList();
+            await Assert.That(rows.Count).IsEqualTo(3);
+            await Assert.That(rows[0].Name).IsEqualTo("pg-a-up");
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS merge_entities");
+        }
     }
 
     [Test]
@@ -148,24 +154,30 @@ internal sealed class BulkMergeSetBasedTests
         });
         await db.ExecuteAsync($"DROP TABLE IF EXISTS merge_entities");
         await db.MigrateAsync();
+        try
+        {
+            long first = await db.BulkMergeAsync(
+            [
+                new MergeEntity { Id = 1, Name = "my-a", Qty = 1 },
+                new MergeEntity { Id = 2, Name = "my-b", Qty = 2 },
+            ]);
+            await Assert.That(first).IsEqualTo(2);
 
-        long first = await db.BulkMergeAsync(
-        [
-            new MergeEntity { Id = 1, Name = "my-a", Qty = 1 },
-            new MergeEntity { Id = 2, Name = "my-b", Qty = 2 },
-        ]);
-        await Assert.That(first).IsEqualTo(2);
+            long second = await db.BulkMergeAsync(
+            [
+                new MergeEntity { Id = 1, Name = "my-a-up", Qty = 11 },
+                new MergeEntity { Id = 3, Name = "my-c", Qty = 3 },
+            ]);
+            await Assert.That(second).IsEqualTo(2);
 
-        long second = await db.BulkMergeAsync(
-        [
-            new MergeEntity { Id = 1, Name = "my-a-up", Qty = 11 },
-            new MergeEntity { Id = 3, Name = "my-c", Qty = 3 },
-        ]);
-        await Assert.That(second).IsEqualTo(2);
-
-        var rows = (await db.GetAllAsync<MergeEntity>()).OrderBy(static r => r.Id).ToList();
-        await Assert.That(rows.Count).IsEqualTo(3);
-        await Assert.That(rows[0].Name).IsEqualTo("my-a-up");
+            var rows = (await db.GetAllAsync<MergeEntity>()).OrderBy(static r => r.Id).ToList();
+            await Assert.That(rows.Count).IsEqualTo(3);
+            await Assert.That(rows[0].Name).IsEqualTo("my-a-up");
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS merge_entities");
+        }
     }
 }
 

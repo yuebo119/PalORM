@@ -36,20 +36,26 @@ public sealed class MigrateOptimizeTests
     public async Task MigrateAsync_PostgreSql_AnalyzePopulatesPgStatistic()
     {
         await using var db = await TestDb.PostgreSqlAsync();
+        try
+        {
+            // 手工建带索引探针表 + 数据（全库 ANALYZE 覆盖它，含非 registry 表）
+            await db.ExecuteAsync(
+                $"DROP TABLE IF EXISTS mig_opt_probe_pg");
+            await db.ExecuteAsync(
+                $"CREATE TABLE mig_opt_probe_pg (Id BIGSERIAL PRIMARY KEY, Name TEXT NOT NULL)");
+            await db.ExecuteAsync(
+                $"CREATE INDEX ix_mig_opt_probe_pg_name ON mig_opt_probe_pg(Name)");
+            await db.ExecuteAsync($"INSERT INTO mig_opt_probe_pg(Name) VALUES ('a'), ('b')");
 
-        // 手工建带索引探针表 + 数据（全库 ANALYZE 覆盖它，含非 registry 表）
-        await db.ExecuteAsync(
-            $"DROP TABLE IF EXISTS mig_opt_probe_pg");
-        await db.ExecuteAsync(
-            $"CREATE TABLE mig_opt_probe_pg (Id BIGSERIAL PRIMARY KEY, Name TEXT NOT NULL)");
-        await db.ExecuteAsync(
-            $"CREATE INDEX ix_mig_opt_probe_pg_name ON mig_opt_probe_pg(Name)");
-        await db.ExecuteAsync($"INSERT INTO mig_opt_probe_pg(Name) VALUES ('a'), ('b')");
+            await db.MigrateAsync();
 
-        await db.MigrateAsync();
-
-        long statRows = await db.ScalarAsync<long>(
-            $"SELECT COUNT(*) FROM pg_statistic s JOIN pg_class c ON c.oid = s.starelid WHERE c.relname = 'mig_opt_probe_pg'");
-        await Assert.That(statRows).IsGreaterThanOrEqualTo(1);
+            long statRows = await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM pg_statistic s JOIN pg_class c ON c.oid = s.starelid WHERE c.relname = 'mig_opt_probe_pg'");
+            await Assert.That(statRows).IsGreaterThanOrEqualTo(1);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS mig_opt_probe_pg");
+        }
     }
 }

@@ -169,11 +169,14 @@ if (!FAST)
             ? $"run --file scripts/{name}.cs -- {latestLedger}"
             : $"run --file scripts/{name}.cs";
         if (name == "verify-action-items" && latestLedger is null) { continue; } // 无账本跳过（与 .sh 版一致）
-        var output = RunCapture("dotnet", arguments);
-        if (!Regex.IsMatch(output, mark)) deadScripts.Add(name);
+        var (code, output) = RunCaptureWithCode("dotnet", arguments);
+        // V14 语义（2026-10-18 审计修复）：只判"跑到完成标记"会把"检查红着但活着"算通过，
+        // 与 E5「防线无触发点」同型——完成标记与退出码必须同时满足；任一脚本红即 verify 红。
+        if (code != 0) deadScripts.Add($"{name}(exit={code})");
+        else if (!Regex.IsMatch(output, mark)) deadScripts.Add($"{name}(无完成标记)");
     }
-    if (deadScripts.Count == 0) Pass(14, "核心防线脚本全部可执行（10/10 跑到完成标记）");
-    else Fail(14, "防线脚本中途死亡", string.Join(' ', deadScripts));
+    if (deadScripts.Count == 0) Pass(14, "核心防线脚本全部可执行且全绿（10/10 退出码 0 + 完成标记）");
+    else Fail(14, "防线脚本失败（退出码非 0 或未跑到完成标记——结果未被消费的静默门禁）", string.Join(' ', deadScripts));
 }
 
 // V15 .ai/scripts 白名单哨兵（原 bash B30/B31 卫生随判定层 .sh 退役重登记）
@@ -455,6 +458,61 @@ else
     Fail(26, "pre-commit 段数声明漂移（钩子实际段数与 AGENTS.md/.ai/README/编码规范声明不一致——B103 族）",
         $"钩子实际 {v26Actual} 段；AGENTS.md {(v26Agents.Success ? v26Agents.Groups[1].Value : "未匹配")} 段，README 头注 {(v26Head.Success ? v26Head.Groups[1].Value : "未匹配")} 段，README 表行 {(v26Table.Success ? v26Table.Groups[1].Value : "未匹配")} 段，编码规范 {(v26Std.Success ? v26Std.Groups[1].Value : "未匹配")} 段");
 
+// V27 活文档引用与计数口径完整性（2026-10-18 审计轮，B103 族泛化面）
+// 背景：V2 只核对一个固定文件清单、V25/V26 只核对四处写入点，固定名单之外的活文档
+// （传感器台账「V1-V23」「四段」、test 提示词里已退役的 .sh 引用）无人核对，实测均漂移
+// 约 2 周至 2 个月。本项把判据从"列出所有写入点"改为"扫描全部活文档"：任何活文档中的
+// scripts/*.cs|sh|py|mjs 引用必须真实存在；任何 （V1-VN， 形式的 verify 总范围声明必须
+// 等于脚本实现最大编号；任何 "pre-commit N 段" 声明必须等于钩子实际段数。
+// 排除历史面（review/history、CHANGELOG、metrics、lessons）——历史记录按规则不可改写。
+var v27Missing = new List<string>();
+var v27CountBad = new List<string>();
+var v27Max = MaxNum(Regex.Matches(v25Src, @"(?:Pass|Fail|Warn)\(([0-9]+)"));
+var v27Docs = new List<string> { ".ai/README.md", "AGENTS.md", "CONTRIBUTING.md", "docs/编码规范.md" };
+if (Directory.Exists(".ai"))
+{
+    foreach (var f in Directory.GetFiles(".ai", "prompt.md", SearchOption.AllDirectories)) v27Docs.Add(f.Replace('\\', '/'));
+    foreach (var f in Directory.GetFiles(".ai/gate", "*.md", SearchOption.TopDirectoryOnly)) v27Docs.Add(f.Replace('\\', '/'));
+}
+var v27Seen = new HashSet<string>(StringComparer.Ordinal);
+foreach (var doc in v27Docs.Distinct().OrderBy(d => d, StringComparer.Ordinal))
+{
+    if (!v27Seen.Add(doc)) continue;
+    if (!File.Exists(doc)) { v27Missing.Add($"{doc}(文件缺失)"); continue; }
+    var docLines = File.ReadAllLines(doc);
+    for (var li = 0; li < docLines.Length; li++)
+    {
+        var line = docLines[li];
+        // 路径必须带可选 .ai/ 前缀整体匹配：裸匹配 scripts/ 会把 .ai/scripts/x.sh 截成
+        // scripts/x.sh，对主仓根做存在性判定必然失败（2026-10-18 实测）。
+        foreach (Match m in Regex.Matches(line, @"(?:\.ai/)?scripts/[A-Za-z0-9._-]+\.(?:cs|sh|py|mjs)"))
+        {
+            if (File.Exists(m.Value)) continue;
+            // 历史性提及豁免：行内明确标注已迁移/原形态/曾用/历史/退役/作废/旧版/淘汰/已删除
+            if (Regex.IsMatch(line, @"已迁移|原形态|曾用|历史|退役|作废|旧版|淘汰|已删除")) continue;
+            // 示例文件豁免：文档中的虚构示例名（example.*）不指向真实文件，属排版示范
+            if (Regex.IsMatch(m.Value, @"/example\.[a-z]+$")) continue;
+            v27Missing.Add($"{doc}:{li + 1} -> {m.Value}");
+        }
+        foreach (Match m in Regex.Matches(line, @"（V1[–-]V([0-9]+)[，）]"))
+        {
+            if (v27Max.Length > 0 && m.Groups[1].Value != v27Max)
+                v27CountBad.Add($"{doc}:{li + 1} V1-V{m.Groups[1].Value}≠V1-V{v27Max}");
+        }
+        foreach (Match m in Regex.Matches(line, @"pre-commit[^\n]{0,16}?([一二三四五六七八九十]+)段|提交前([一二三四五六七八九十]+)段"))
+        {
+            var cn = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+            var n = CnNum(cn);
+            if (n != v26Actual) v27CountBad.Add($"{doc}:{li + 1} {cn}段≠{v26Actual}段");
+        }
+    }
+}
+if (v27Missing.Count == 0 && v27CountBad.Count == 0)
+    Pass(27, $"活文档引用与计数完整性（{v27Seen.Count} 份活文档：脚本引用全部存在，V1-V{v27Max} / pre-commit {v26Actual} 段声明一致）");
+else
+    Fail(27, "活文档引用失实或计数声明漂移（固定名单之外的写入点）",
+        string.Join("；", v27Missing.Concat(v27CountBad)));
+
 Console.WriteLine();
 Console.WriteLine($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
 Console.WriteLine("═══════ 校验完成 ═══════");
@@ -526,9 +584,13 @@ void V17Batteries()
         foreach (var p in probes) File.Delete(p);
         probes.Clear();
         var missing = new List<string>();
+        // G10/G15/G16 文档登记为警告级（2026-10-18 与 gate-check 的 CheckWarn 对齐）——探针期望
+        // 输出为 WARN 而非 FAIL，其余注入项仍须 FAIL。
+        var warnLevelGates = new HashSet<string>(StringComparer.Ordinal) { "G10", "G15", "G16" };
         foreach (var g in new[] { "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G11", "G12", "G13", "G14", "G15", "G16", "G17", "G18", "G19", "G20", "G21", "G22", "G23", "G24", "G25", "G28", "G29" })
         {
-            if (!Regex.IsMatch(gateOut, $"FAIL {g}[^0-9]")) missing.Add(g);
+            var expected = warnLevelGates.Contains(g) ? "WARN" : "FAIL";
+            if (!Regex.IsMatch(gateOut, $"{expected} {g}[^0-9]")) missing.Add($"{g}({expected})");
         }
 
         // B 段：文件变异电池（变异→gate→还原）
@@ -659,6 +721,11 @@ void V17cBattery()
         if (!RunFastVerify().Contains("FAIL V26")) v17cFail.Add("V26");
         Git("checkout -- .githooks/pre-commit");
 
+        // V27：活文档引用失实（植入指向不存在脚本的活文档——固定名单外写入点的判别力实证）
+        File.WriteAllText(".ai/gate/zzv27_probe.md", "# probe\n`scripts/zzv27_missing_script.cs`\n", new UTF8Encoding(false));
+        if (!RunFastVerify().Contains("FAIL V27")) v17cFail.Add("V27");
+        File.Delete(".ai/gate/zzv27_probe.md");
+
         // D10：植入 [Test] 临时文件 → 实测计数漂移
         File.WriteAllText("test/PalORM.Core.Tests/ZZV17cD10Probe.cs", "[Test]\n", new UTF8Encoding(false));
         if (!RunDc().Contains("FAIL D10")) v17cFail.Add("D10");
@@ -723,6 +790,11 @@ static void GitInAi(string arguments) { RunCapture("git", $"-C .ai {arguments}")
 
 static string RunCapture(string fileName, string arguments)
 {
+    return RunCaptureWithCode(fileName, arguments).Output;
+}
+
+static (int Code, string Output) RunCaptureWithCode(string fileName, string arguments)
+{
     var psi = new ProcessStartInfo(fileName, arguments)
     {
         RedirectStandardOutput = true,
@@ -734,7 +806,7 @@ static string RunCapture(string fileName, string arguments)
     using var p = Process.Start(psi)!;
     var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
     p.WaitForExit();
-    return output;
+    return (p.ExitCode, output);
 }
 
 static string FindRepoRoot()
