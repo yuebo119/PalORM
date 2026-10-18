@@ -34,6 +34,7 @@ try
     FixtureStubCheck(tmp);
     FixtureParamCollectionReuseGate(tmp);
     FixtureComparePerfBatches(tmp);
+    FixtureSiblingMapAxisC(tmp);
 
     if (!skipAi)
     {
@@ -202,12 +203,14 @@ void FixtureComparePerfBatches(string tmpDir)
     var dir = Path.Combine(tmpDir, "perf");
     Directory.CreateDirectory(dir);
     // 两批：ADO_NET 1.0ms→2.0ms（摆动 2.00×），PalORM 500µs→500µs（摆动 1.00×）
-    File.WriteAllText(Path.Combine(dir, "history-20260101-000000.json"),
-        """{"Measurements":[{"Dialect":"SQLite","Implementation":"ADO_NET","Operation":"Fake","Rows":2000,"MedianNs":1000000},{"Dialect":"SQLite","Implementation":"PalORM","Operation":"Fake","Rows":2000,"MedianNs":500000}]}""",
-        new UTF8Encoding(false));
-    File.WriteAllText(Path.Combine(dir, "history-20260101-010000.json"),
-        """{"Measurements":[{"Dialect":"SQLite","Implementation":"ADO_NET","Operation":"Fake","Rows":2000,"MedianNs":2000000},{"Dialect":"SQLite","Implementation":"PalORM","Operation":"Fake","Rows":2000,"MedianNs":500000}]}""",
-        new UTF8Encoding(false));
+    var batch1 = """{"Measurements":["""
+        + """{"Dialect":"SQLite","Implementation":"ADO_NET","Operation":"Fake","Rows":2000,"MedianNs":1000000},"""
+        + """{"Dialect":"SQLite","Implementation":"PalORM","Operation":"Fake","Rows":2000,"MedianNs":500000}]}""";
+    var batch2 = """{"Measurements":["""
+        + """{"Dialect":"SQLite","Implementation":"ADO_NET","Operation":"Fake","Rows":2000,"MedianNs":2000000},"""
+        + """{"Dialect":"SQLite","Implementation":"PalORM","Operation":"Fake","Rows":2000,"MedianNs":500000}]}""";
+    File.WriteAllText(Path.Combine(dir, "history-20260101-000000.json"), batch1, new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(dir, "history-20260101-010000.json"), batch2, new UTF8Encoding(false));
 
     var ok = RunDotnetFileCapture("scripts/compare-perf-batches.cs",
         ["--dir", dir, "--date", "20260101", "--items", "SQLite/Fake/2000"], out var log);
@@ -240,6 +243,78 @@ void FixtureComparePerfBatches(string tmpDir)
         return;
     }
     Console.WriteLine("PASS compare-perf-batches");
+}
+
+// ─── sibling-map 轴 C（Core 共享文件方言分支族，2026-10-18 增）───
+// 正路径：合成三成员（3 方言 / 2 方言 / 1 方言）的 Core 文件，断言：
+//   ①成员名与行号被枚举；②三方言成员不打「双方言」标；③只覆盖 2/3 的成员必须打标；
+//   ④方言计数正确（同成员多次出现累加）。
+// 该夹具锁的正是轴 C 的判别力：只枚举不判缺项时，工具无法暴露"修一个分支漏其余"。
+void FixtureSiblingMapAxisC(string tmpDir)
+{
+    Console.WriteLine("\n─── sibling-map 轴 C ───");
+    var dir = Path.Combine(tmpDir, "core");
+    Directory.CreateDirectory(dir);
+    var file = Path.Combine(dir, "SharedCore.cs");
+    File.WriteAllText(file,
+        """
+        public sealed class SharedCore<TProvider>
+        {
+            public void ThreeWay()
+            {
+                if (TProvider.Dialect == SqlDialect.Sqlite) { }
+                if (TProvider.Dialect == SqlDialect.PostgreSql) { }
+                if (TProvider.Dialect == SqlDialect.MySql) { }
+            }
+
+            public void TwoWay()
+            {
+                if (TProvider.Dialect == SqlDialect.PostgreSql) { }
+                if (TProvider.Dialect == SqlDialect.MySql) { }
+                if (TProvider.Dialect == SqlDialect.MySql) { }
+            }
+
+            public void OnlyPg()
+            {
+                if (TProvider.Dialect != SqlDialect.PostgreSql) { }
+            }
+        }
+        """,
+        new UTF8Encoding(false));
+
+    var ok = RunDotnetFileCapture("scripts/sibling-map.cs", ["--file", file], out var log);
+    if (!ok)
+    {
+        Bail($"FAIL sibling-map 轴 C 未正常输出（{string.Join(' ', log.Split('\n').TakeLast(2))}）");
+        return;
+    }
+    foreach (var expected in new[] { "ThreeWay", "TwoWay", "OnlyPg" })
+    {
+        if (!log.Contains(expected, StringComparison.Ordinal))
+        {
+            Bail($"FAIL 轴 C 未枚举出合成文件的成员 {expected}");
+            return;
+        }
+    }
+    var threeWayLine = log.Split('\n').FirstOrDefault(l => l.Contains("ThreeWay", StringComparison.Ordinal)) ?? "";
+    if (threeWayLine.Contains("双方言", StringComparison.Ordinal))
+    {
+        Bail($"FAIL 三方言成员被误标双方言（{threeWayLine.Trim()}）");
+        return;
+    }
+    var twoWayLine = log.Split('\n').FirstOrDefault(l => l.Contains("TwoWay", StringComparison.Ordinal)) ?? "";
+    if (!twoWayLine.Contains("双方言", StringComparison.Ordinal) || !twoWayLine.Contains("MySql×2", StringComparison.Ordinal))
+    {
+        Bail($"FAIL 双方言成员未打标或计数错误（{twoWayLine.Trim()}）");
+        return;
+    }
+    var onlyPgLine = log.Split('\n').FirstOrDefault(l => l.Contains("OnlyPg", StringComparison.Ordinal)) ?? "";
+    if (onlyPgLine.Contains("双方言", StringComparison.Ordinal))
+    {
+        Bail($"FAIL 单方言成员被误标双方言（{onlyPgLine.Trim()}）");
+        return;
+    }
+    Console.WriteLine("PASS sibling-map 轴 C");
 }
 
 // 门禁在故障夹具上必须非零退出且输出含指定关键字

@@ -44,7 +44,7 @@
 | `refine-scan.cs` | 精炼扫描：27 项操作矩阵的机械命中数（可 grep 的 17 项出量级，7 项需 Roslyn 标 [人工]） | `/refine` 阶段 0 |
 | `review-scope.cs` | review 范围清单与覆盖度账本（分片 + 逐文件勾销） | `/review` 执行门禁 |
 | `review-snapshot.cs` | 仓库基线快照（可整段贴进评审报告；`--no-build` 跳过构建） | `/review` 执行门禁 |
-| `sibling-map.cs` | 三方言姊妹族枚举：轴 A 机械生成同名方法族，轴 B 语义种子表真源在 `.ai/review/sibling-map.md` | 修复 brief 前评估联动面 |
+| `sibling-map.cs` | 三方言姊妹族枚举：轴 A 机械生成同名方法族，轴 B 语义种子表真源在 `.ai/review/sibling-map.md`，轴 C 扫描 Core 共享文件的方言分支族（当前 `DataSession_Bulk.cs`）并对只覆盖 2/3 方言的成员打标；`--file` 可换文件列表 | 修复 brief 前评估联动面 |
 | `swing-analysis.cs` | 全键比值摆动分布（选择门禁「宽散布」阈值时重跑） | 门禁阈值调参 |
 | `probe-template.cs` | 探针骨架生成器（约 30 秒出最小工程，review probe-first 基建） | P0/P1 定级前的探针实证 |
 | `verify-action-items.cs` | 行动项账本中「文件路径引用」的真实性校验（只核可机械判真的路径，标识符跳过） | `/review` 事后验证回路 |
