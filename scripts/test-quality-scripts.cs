@@ -33,6 +33,7 @@ try
 
     FixtureStubCheck(tmp);
     FixtureParamCollectionReuseGate(tmp);
+    FixtureComparePerfBatches(tmp);
 
     if (!skipAi)
     {
@@ -189,6 +190,56 @@ void FixtureParamCollectionReuseGate(string tmpDir)
         return;
     }
     Console.WriteLine("PASS gate-param-collection-reuse");
+}
+
+// ─── compare-perf-batches（跨批次性能对照，2026-10-18 取代三个一次性 .mjs）───
+// 正路径：合成两批历史文件（MedianNs 已知），断言单位换算与摆动倍数正确。
+// 负路径：不存在的日期必须非零退出并给出可用日期。
+// 该夹具锁的正是 .mjs 版被废弃的原因：单位错标（µs 当 ms）与批次/标签错配。
+void FixtureComparePerfBatches(string tmpDir)
+{
+    Console.WriteLine("\n─── compare-perf-batches ───");
+    var dir = Path.Combine(tmpDir, "perf");
+    Directory.CreateDirectory(dir);
+    // 两批：ADO_NET 1.0ms→2.0ms（摆动 2.00×），PalORM 500µs→500µs（摆动 1.00×）
+    File.WriteAllText(Path.Combine(dir, "history-20260101-000000.json"),
+        """{"Measurements":[{"Dialect":"SQLite","Implementation":"ADO_NET","Operation":"Fake","Rows":2000,"MedianNs":1000000},{"Dialect":"SQLite","Implementation":"PalORM","Operation":"Fake","Rows":2000,"MedianNs":500000}]}""",
+        new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(dir, "history-20260101-010000.json"),
+        """{"Measurements":[{"Dialect":"SQLite","Implementation":"ADO_NET","Operation":"Fake","Rows":2000,"MedianNs":2000000},{"Dialect":"SQLite","Implementation":"PalORM","Operation":"Fake","Rows":2000,"MedianNs":500000}]}""",
+        new UTF8Encoding(false));
+
+    var ok = RunDotnetFileCapture("scripts/compare-perf-batches.cs",
+        ["--dir", dir, "--date", "20260101", "--items", "SQLite/Fake/2000"], out var log);
+    if (!ok)
+    {
+        Bail($"FAIL 合成批次未正常输出（{string.Join(' ', log.Split('\n').TakeLast(2))}）");
+        return;
+    }
+    if (!log.Contains("1.00 ms", StringComparison.Ordinal) || !log.Contains("2.00 ms", StringComparison.Ordinal))
+    {
+        Bail("FAIL 单位换算错误（1000000/2000000 ns 应显示为 1.00 ms / 2.00 ms）");
+        return;
+    }
+    if (!log.Contains("2.00×", StringComparison.Ordinal))
+    {
+        Bail("FAIL 摆动倍数计算错误（期望 2.00×）");
+        return;
+    }
+    if (!log.Contains("00:00:00", StringComparison.Ordinal) || !log.Contains("01:00:00", StringComparison.Ordinal))
+    {
+        Bail("FAIL 批次时间标签缺失（应由文件名生成，不得写死）");
+        return;
+    }
+
+    var badDate = RunDotnetFileCapture("scripts/compare-perf-batches.cs",
+        ["--dir", dir, "--date", "20990101"], out var badLog);
+    if (badDate || !badLog.Contains("可用日期", StringComparison.Ordinal))
+    {
+        Bail("FAIL 不存在的日期未非零退出或未给出可用日期");
+        return;
+    }
+    Console.WriteLine("PASS compare-perf-batches");
 }
 
 // 门禁在故障夹具上必须非零退出且输出含指定关键字
