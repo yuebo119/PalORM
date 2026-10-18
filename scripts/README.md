@@ -35,7 +35,7 @@
 | 脚本 | 用途 | 调用时机 |
 |------|------|:---:|
 | `backup-ai-system.cs` | `.ai` 知识层异地备份（69 个知识文件约 1 MB，排除约 600 MB 可再生实验产物；写 MANIFEST + SHA256 回读校验；`--verify` 只校验） | 手工 / 阶段收尾 |
-| `verify-ai-system.cs` | `.ai` 系统一致性校验 V1-V27（提示词引用可解析、口径数字对账、防线能失败、提交锚验存、活文档完整性）；`--fast` 跳过副作用项，`--public` 仅跑主仓可见子集 | pre-commit + 手工全量 |
+| `verify-ai-system.cs` | `.ai` 系统一致性校验 V1-V27（提示词引用可解析、口径数字对账、防线能失败、提交锚验存、活文档完整性）；`--fast` 跳过副作用项，`--public` 仅跑主仓可见子集，`--probes` 追加变异探针（V17 gate 34 项 + V17d public 面 7 项；CI 每周 `--public --probes`） | pre-commit + 手工全量 + CI 每周 |
 
 ## 四系统工具（按需调用，非门禁）
 
