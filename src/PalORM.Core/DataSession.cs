@@ -1052,7 +1052,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // S2077 报备（M1-5，与原调用点同）：插值成分全为 QuoteIdentifier 标识符、
         // CurrentTimestampExpression 与 const 参数名——用户值经 @p0 绑定
 #pragma warning disable S2077
-        return $"UPDATE {TProvider.QuoteIdentifier(tableName)} SET {TProvider.QuoteIdentifier("deleted_at")} = {TProvider.CurrentTimestampExpression} WHERE {TProvider.QuoteIdentifier(GetPkColumn<T>())} = @p0 AND {TProvider.QuoteIdentifier("deleted_at")} IS NULL{tenantFilter}";
+        var quotedTable = TProvider.QuoteIdentifier(tableName);
+        var quotedDeletedAt = TProvider.QuoteIdentifier("deleted_at");
+        var quotedPk = TProvider.QuoteIdentifier(GetPkColumn<T>());
+        return $"UPDATE {quotedTable} SET {quotedDeletedAt} = {TProvider.CurrentTimestampExpression} "
+            + $"WHERE {quotedPk} = @p0 AND {quotedDeletedAt} IS NULL{tenantFilter}";
 #pragma warning restore S2077
     }
 

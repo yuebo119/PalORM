@@ -272,7 +272,11 @@ public sealed partial class DataSession<TProvider>
     /// 用 <c>await foreach</c> 消费（自动释放）；手写 <c>GetAsyncEnumerator</c> 时必须 <c>await using</c>
     /// 或在 break/异常路径显式 DisposeAsync——否则租约永不归还，会话后续操作被门禁拒绝，
     /// 且 DataSession.DisposeAsync 会挂起至 DisposeWaitTimeout 后抛诊断异常。</para></summary>
-    public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(FormattableString sql, bool readFromReplica = false, [EnumeratorCancellation] CancellationToken ct = default) where T : class, new()
+    public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(
+        FormattableString sql,
+        bool readFromReplica = false,
+        [EnumeratorCancellation] CancellationToken ct = default)
+        where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
         // 刀1：工厂走每类型静态缓存（[Projection] 兼容——同 QueryEntryAsync）；刀2：事务单次取用。

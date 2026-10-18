@@ -1,5 +1,6 @@
 // test-gate.cs（自 .ai/scripts/test-gate.sh 迁移，脚本全面 C# 化轮）
-// PalORM 测试规范门禁——T4/T8/T9/T6/T-DEF-1/T-DEF-4/T11(SKIP)/T12。
+// PalORM 测试规范门禁：T4/T6/T8/T9/T11/T12 机械可判子集 + T-DEF-1/4 下沉。
+// 24 条铁律中其余项属评审/流程纪律，无廉价机械判据（定性见 test/prompt.md）。
 // 迁移修正：T-DEF-1 原扫 scripts/*.sh 的 set -euo pipefail——主仓 scripts/ 已全量 C# 化，
 // 按现形态改为"scripts/ 下出现未登记 .sh 即 FAIL"（语言政策残留哨兵，正主在 test-quality-scripts.cs）。
 // 契约：0=通过；1=有 FAIL；stdout 与 .sh 版对拍兼容。
@@ -15,7 +16,7 @@ _ = args.Length > 0 && args[0] == "--ci";
 var failCount = 0; var warnCount = 0;
 
 Console.WriteLine("═══════════════════════════════════════════════════════════════");
-Console.WriteLine(" PalORM 测试规范门禁（T1-T14）");
+Console.WriteLine(" PalORM 测试规范门禁（T1-T24 铁律中的机械可判子集）");
 Console.WriteLine($" 时间: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Console.WriteLine("═══════════════════════════════════════════════════════════════");
 
@@ -218,10 +219,41 @@ if (timeouts < totalJobs)
 }
 else Console.WriteLine($"PASS  T-DEF-4  所有 CI job 均有 timeout-minutes（{totalJobs} 个 job / {workflowFiles.Count} 个 workflow）");
 
-// ─── T11：远程 DB 环境变量命名分离（SKIP 登记）───
+// ─── T11：测试计数双口径（声明口径 / 执行口径）───
+// 2026-10-18 审计：原标签写「远程 DB 环境变量命名分离」，那是 v5.0 旧 T11 定义（已作废，
+// 编号冲突登记于 test/prompt.md 的历史留档段）。现行 T11 是计数口径双轨制，两轨各有
+// 独立机械化载体，本文只做归档陈述与交叉引用。
 Console.WriteLine();
-Console.WriteLine("─── T11: 远程 DB 环境变量命名分离 ───");
-Console.WriteLine("SKIP  T11  bench 与测试共用凭证源为 perf.sh 成文设计（作废定义不再执行；见 ITM-806 裁决）");
+Console.WriteLine("─── T11: 测试计数双口径（声明 / 执行）───");
+var declFloor = 0;
+var declActual = 0;
+if (File.Exists("bench/baselines/test-counts.json"))
+{
+    try
+    {
+        declFloor = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText("bench/baselines/test-counts.json"))?["sourceMarkers"]?.GetValue<int>() ?? 0;
+    }
+    catch (System.Text.Json.JsonException)
+    {
+        declFloor = 0;
+    }
+}
+foreach (var dir in new[] { "test/PalORM.Core.Tests", "test/PalORM.SourceGen.Tests", "test/PalORM.Integration.Tests" })
+{
+    if (!Directory.Exists(dir)) continue;
+    declActual += Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories)
+        .Where(f => !f.Replace('\\', '/').Contains("/obj/", StringComparison.Ordinal) && !f.Replace('\\', '/').Contains("/bin/", StringComparison.Ordinal))
+        .Sum(f => File.ReadLines(f).Count(l => l.Contains("[Test]", StringComparison.Ordinal)));
+}
+if (declFloor > 0 && declActual >= declFloor)
+{
+    Console.WriteLine($"PASS  T11  声明口径 [Test] 标记 {declActual} ≥ 地板 {declFloor}；执行口径由 CI assert-test-counts 断言（含 [Arguments] 展开）");
+}
+else
+{
+    Console.WriteLine($"WARN  T11  声明口径 [Test] 标记 {declActual} < 地板 {(declFloor > 0 ? declFloor.ToString() : "未读取")}（tech-debt #9 同源判据，此处仅交叉提示）");
+    warnCount++;
+}
 
 // ─── T12：三方一致——包版本号 ───
 // 2026-10-18 审计修复：原实现只比 Core 与 PostgreSql 两个 csproj，其余四个打包项目漏检。

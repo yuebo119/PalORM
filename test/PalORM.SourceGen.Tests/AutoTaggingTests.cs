@@ -171,7 +171,8 @@ public class AutoTaggingTests
             && generated.Contains("global::System.Func<T, global::System.Threading.CancellationToken, global::System.Threading.Tasks.ValueTask> action", StringComparison.Ordinal)
             && generated.Contains(".ForEachAsync(action, ct)", StringComparison.Ordinal)).IsTrue();
         await Assert.That(generated.Contains(
-            "<T, TKey>(this global::PalORM.QueryBuilder<T> builder, int pageSize, global::System.Linq.Expressions.Expression<global::System.Func<T, TKey>> orderBy", StringComparison.Ordinal)
+            "<T, TKey>(this global::PalORM.QueryBuilder<T> builder, int pageSize, "
+            + "global::System.Linq.Expressions.Expression<global::System.Func<T, TKey>> orderBy", StringComparison.Ordinal)
             && generated.Contains(".ToPageAsync(pageSize, orderBy, lastValue, descending, ct)", StringComparison.Ordinal)).IsTrue();
         await Assert.That(generated.Contains(
             "QueryMultipleAsync_AutoTag_", StringComparison.Ordinal)

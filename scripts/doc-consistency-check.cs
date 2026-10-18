@@ -133,6 +133,16 @@ foreach (Match m in Regex.Matches(gateSrc, @"Check(Zero|Warn)\(""G(\d+)"""))
 {
     scriptLevels[$"G{m.Groups[2].Value}"] = m.Groups[1].Value == "Zero" ? "阻断" : "警告";
 }
+// 手工实现的分支检查（G31-G33）无法从调用方式推断级别，由 gate-check 的
+// GATE-LEVELS 声明行登记；缺该行则这些项不参与对账（宁可少查，不可错判）。
+foreach (Match m in Regex.Matches(gateSrc, @"GATE-LEVELS:([^
+]+)"))
+{
+    foreach (Match kv in Regex.Matches(m.Groups[1].Value, @"(G\d+)=(WARN|BLOCK)"))
+    {
+        scriptLevels[kv.Groups[1].Value] = kv.Groups[2].Value == "WARN" ? "警告" : "阻断";
+    }
+}
 var docLevelBad = new List<string>();
 var docLevelChecked = 0;
 foreach (var doc in new[] { ".ai/gate/prompt.md", "docs/编码规范.md" })

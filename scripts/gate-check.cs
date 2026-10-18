@@ -214,6 +214,10 @@ if (File.Exists("src/PalORM.SourceGen/PalORMAnalyzer.cs"))
 }
 CheckZero("G30", "PalORMAnalyzer 基类链口径统一（用 EnumerateMappedProperties，ITM-607）", g30);
 
+// GATE-LEVELS: G31=WARN G32=BLOCK G33=BLOCK
+// ↑ 机器可读级别声明（D13 三方对账消费）：G31-G33 是手工实现的分支检查，级别无法从
+//   CheckZero/CheckWarn 调用推断，故显式登记。改动这三项的阻断性时必须同步本行，
+//   否则 doc-consistency 的 D13 会报文档与脚本级别不一致。
 // G31：方言感知验证（WARN 级）
 Console.WriteLine();
 Console.WriteLine("─── G31: 方言感知验证 ───");

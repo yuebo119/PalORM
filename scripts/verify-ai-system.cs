@@ -749,7 +749,7 @@ void V17cBattery()
         Git("checkout -- src/PalORM.SourceGen/GeneratedCodeMetadata.cs");
 
         var vdcTotal = Regex.Matches(File.ReadAllText("scripts/verify-ai-system.cs"), @"v17cFail\.Add\(").Count;
-        if (v17cFail.Count == 0) Pass(17, $"V/D 面防线变异探针 {vdcTotal}/{vdcTotal} 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22/V24/V25/V26 + D10/D11；T 面定性=提示词规则非机械防线）");
+        if (v17cFail.Count == 0) Pass(17, $"V/D 面防线变异探针 {vdcTotal}/{vdcTotal} 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22/V24/V25/V26/V27 + D10/D11；T 面定性=提示词规则非机械防线）");
         else Fail(17, "V/D 面探针有沉默项（变异真源后检查仍 PASS = 无声 no-op）", "未报 FAIL: " + string.Join(' ', v17cFail));
     }
     finally

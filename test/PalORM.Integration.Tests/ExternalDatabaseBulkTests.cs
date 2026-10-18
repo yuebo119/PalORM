@@ -386,8 +386,11 @@ public sealed class ExternalDatabaseBulkTests
                 $"SELECT COUNT(*) FROM ext_array_update")).IsEqualTo(total);
             // 逐位校验：值列与可空列（混合 null）都按位置对应
             await Assert.That(await db.ScalarAsync<long>(
-                $"SELECT COUNT(*) FROM ext_array_update WHERE \"name\" = 'u' || \"id\"::text AND \"qty\" = \"id\" * 7 AND ((\"marker\" IS NULL AND \"id\" % 4 = 0) OR (\"marker\" = \"id\" * 11 AND \"id\" % 4 <> 0))"
-            )).IsEqualTo(total);
+                $"""
+                SELECT COUNT(*) FROM ext_array_update
+                WHERE "name" = 'u' || "id"::text AND "qty" = "id" * 7
+                  AND (("marker" IS NULL AND "id" % 4 = 0) OR ("marker" = "id" * 11 AND "id" % 4 <> 0))
+                """)).IsEqualTo(total);
         }
         finally
         {
@@ -429,8 +432,11 @@ public sealed class ExternalDatabaseBulkTests
             await Assert.That(await db.ScalarAsync<long>(
                 $"SELECT COUNT(*) FROM ext_array_merge")).IsEqualTo(total);
             await Assert.That(await db.ScalarAsync<long>(
-                $"SELECT COUNT(*) FROM ext_array_merge WHERE \"name\" = 'second' || \"id\"::text AND \"qty\" = \"id\" * 3 AND ((\"marker\" IS NULL AND \"id\" % 2 = 0) OR (\"marker\" = \"id\" * 9 AND \"id\" % 2 <> 0))"
-            )).IsEqualTo(total);
+                $"""
+                SELECT COUNT(*) FROM ext_array_merge
+                WHERE "name" = 'second' || "id"::text AND "qty" = "id" * 3
+                  AND (("marker" IS NULL AND "id" % 2 = 0) OR ("marker" = "id" * 9 AND "id" % 2 <> 0))
+                """)).IsEqualTo(total);
         }
         finally
         {

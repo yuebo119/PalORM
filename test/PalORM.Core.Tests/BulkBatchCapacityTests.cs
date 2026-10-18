@@ -44,7 +44,15 @@ internal sealed class BulkBatchCapacityTests
 
         const int rowCount = 37; // 修复前恰好构成一批 37 行（999/27 的整除商）
         List<TenantWideProbe> rows = [.. Enumerable.Range(1, rowCount)
-            .Select(i => new TenantWideProbe { Id = i, TenantId = 7, F01 = i, F02 = i, F03 = i, F04 = i, F05 = i, F06 = i, F07 = i, F08 = i, F09 = i, F10 = i, F11 = i, F12 = i, F13 = i, F14 = i, F15 = i, F16 = i, F17 = i, F18 = i, F19 = i, F20 = i, F21 = i, F22 = i, F23 = i, F24 = i, F25 = i })];
+            .Select(i => new TenantWideProbe
+            {
+                Id = i, TenantId = 7,
+                F01 = i, F02 = i, F03 = i, F04 = i, F05 = i, F06 = i,
+                F07 = i, F08 = i, F09 = i, F10 = i, F11 = i, F12 = i,
+                F13 = i, F14 = i, F15 = i, F16 = i, F17 = i, F18 = i,
+                F19 = i, F20 = i, F21 = i, F22 = i, F23 = i, F24 = i,
+                F25 = i,
+            })];
         long merged = await session.BulkMergeAsync(rows);
         await Assert.That(merged).IsEqualTo(rowCount);
 
