@@ -1,5 +1,5 @@
 {
-  "_comment": "测试数地板双口径（T11 定义）。①声明口径 sourceMarkers = 源码 [Test] 标记数地板，tech-debt-scan #9 消费（当前实测 1099，地板取 -2.6%）；②执行口径 passed = TUnit 报告执行数地板（含 [Arguments] 展开），CI 的 assert-test-counts.cs 消费（2026-10-18 实测 Core 612 / SourceGen 236 / Integration 292，externalDb 76，地板各取 -2%）。两口径数值必然不等，勿互相替代。原地板 280/188/190 相对实测低 40%+，删掉 300 个 Core 测试仍能过 CI（B14 棘轮空转形态）。调整规则：新增用例无需上调地板；有意删除用例导致跌破地板时，必须在同提交下调本文件并注明理由。",
+  "_comment": "测试数地板双口径（T11 定义）。①声明口径 sourceMarkers = 源码 [Test] 标记数地板，tech-debt-scan #9 消费；②执行口径 passed = TUnit 报告执行数地板（含 [Arguments] 展开），CI 的 assert-test-counts.cs 消费。两口径数值必然不等，勿互相替代。地板按实测 -2~-4% 设定，实测值以检查输出为准、不在本文件复述（2026-10-18 实证：注释里复述的实测数在加用例后静默过期——B103 族）。调整规则：新增用例无需上调地板；有意删除用例导致跌破地板时，必须在同提交下调本文件并注明理由。",
   "sourceMarkers": 1070,
   "PalORM.Core.Tests": {
     "passed": 599
@@ -15,6 +15,6 @@
     "core": 74.0,
     "mysql": 67.0,
     "postgresql": 46.0,
-    "_comment": "覆盖率地板=防退化非达标。core 由 Core 测试收集（2026-10-18 实测 76.07%，地板 74）；mysql/postgresql 由 Integration 测试收集。2026-10-18 审计修正：MySql 实测由 26.0% 升至 69.4%——原 26% 是假读数（SET GLOBAL local_infile=OFF 用例把能力探测缓存污染成 False 达 60s TTL，全量跑所有批量写静默走多值回退，BulkCopy 路径从未被执行）；补 ResetLocalInfileProbeCache 测试钩子后 BulkCopy 真跑，地板按新实测 -2pp 定 67。PostgreSql 48.8%，地板 46 维持。Core 覆盖率测不到 Provider 代码，两套地板互不替代。"
+    "_comment": "覆盖率地板=防退化非达标。core 由 Core 测试收集；mysql/postgresql 由 Integration 测试收集。地板按实测 -2pp 设定，实测值以 assert-coverage 输出为准、不在本文件复述（B103 族）。2026-10-18 修正说明：MySql 曾报 26% 假读数——SET GLOBAL local_infile=OFF 用例把能力探测缓存污染成 False 达 60s TTL，全量跑所有批量写静默走多值回退，BulkCopy 路径从未被执行（B195）；补 ResetLocalInfileProbeCache 测试钩子后 BulkCopy 真跑，地板随实测重定。Core 覆盖率测不到 Provider 代码，两套地板互不替代。"
   }
 }
