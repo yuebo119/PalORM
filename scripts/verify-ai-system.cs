@@ -522,9 +522,10 @@ else
 
 Console.WriteLine();
 Console.WriteLine($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
-// 编号数与通过数不等是设计使然：V17 在非 fast 模式下分两段执行（gate 探针组 + V/D 面探针组），
-// 各记一次通过——编号最大值为 27，全量通过数为 28。V25 按编号最大值对账，此处显式说明防误读。
-Console.WriteLine("（注：V17 全量模式分两次记录——gate 探针组与 V/D 面探针组，故总数比最大编号多 1）");
+// 编号数与通过数不等是设计使然：V17 在非 fast 模式下分三段执行（gate 探针组 + V/D 面
+// 探针组 + public 面探针组），各记一次通过——编号最大值为 27，全量通过数为 29（public
+// 模式 --probes 无 .ai 时为 2 段）。V25 按编号最大值对账，此处显式说明防误读。
+Console.WriteLine("（注：V17 分段记录——gate 探针组 / V/D 面 / public 面，故总数比最大编号多 2）");
 Console.WriteLine("═══════ 校验完成 ═══════");
 return failed > 0 ? 1 : 0;
 
@@ -649,6 +650,9 @@ void V17Batteries()
         // CI 的 --public 场景没有 .ai，只能跑 gate/tech-debt 面电池。
         if (Directory.Exists(".ai")) V17cBattery();
         else Console.WriteLine("SKIP V17c: .ai 不在克隆中（--public 模式只跑 gate/tech-debt 面探针）");
+
+        // V17d 只变异主仓文件，任何模式都跑（CI 每周 --public --probes 也执行）
+        V17dPublicBattery();
     }
     finally
     {
@@ -773,6 +777,84 @@ void V17cBattery()
             if (File.Exists(f)) File.Delete(f);
         }
         if (Directory.Exists("test/PalORM.SourceGen.Tests/Snapshots.bak")) Directory.Move("test/PalORM.SourceGen.Tests/Snapshots.bak", "test/PalORM.SourceGen.Tests/Snapshots");
+    }
+}
+
+// ═══ V17d：public 面变异探针电池（2026-10-18 第三轮审计）═══
+// 第二轮审计发现检查项自身的负向测试覆盖不均：D4/D12/D13、全部 T 项、tech-debt #15
+// 都没有探针——检查静默失效时无人发现（与 E5/V17 立项同因）。本电池只变异主仓文件，
+// 不依赖 .ai，故可在 CI 的 `--public --probes` 模式按周执行；与 V17c 的分工是
+// 「V17c 变异 .ai 知识文件，V17d 变异主仓文件」。
+void V17dPublicBattery()
+{
+    var silent = new List<string>();
+    var touched = new List<string>();
+    string RunDc() => RunCapture("dotnet", "run --file scripts/doc-consistency-check.cs");
+    string RunTg() => RunCapture("dotnet", "run --file scripts/test-gate.cs");
+    string RunTd() => RunCapture("dotnet", "run --file scripts/tech-debt-scan.cs");
+    try
+    {
+        // D12：文档表格声明一个源码不存在的调用式 API
+        MutateFile("docs/API参考.md", t => t + "\n| `.ZzV17dMissingApi(` | 探针行 |\n", touch: touched);
+        if (!RunDc().Contains("FAIL D12")) silent.Add("D12");
+        Git("checkout -- docs/API参考.md");
+
+        // D13：把 G1 的级别从阻断改成警告（文档与 gate-check 判定不一致）
+        MutateFile("docs/编码规范.md",
+            t => new Regex(@"(\| G1 \|[^\n]*\| )✅( \|)").Replace(t, "$1⚠️ 警告级$2", 1), touch: touched);
+        if (!RunDc().Contains("FAIL D13")) silent.Add("D13");
+        Git("checkout -- docs/编码规范.md");
+
+        // tech-debt #15：索引里抹掉一个真实脚本名（全部出现处替换，防残留同名通过）
+        MutateFile("scripts/README.md", t => t.Replace("stub-check.cs", "stub-chek.cs", StringComparison.Ordinal), touch: touched);
+        if (!RunTd().Contains("FAIL  15.")) silent.Add("tech-debt#15");
+        Git("checkout -- scripts/README.md");
+
+        // T4：多行体例的测试方法名不含下划线
+        var t4 = "test/PalORM.Core.Tests/ZZV17dT4Probe.cs";
+        File.WriteAllText(t4,
+            "using TUnit.Core;\npublic sealed class ZZV17dT4Probe\n{\n    [Test]\n    public async Task BadName()\n    {\n        await Assert.That(1).IsEqualTo(1);\n    }\n}\n",
+            new UTF8Encoding(false));
+        if (!RunTg().Contains("WARN  T4")) silent.Add("T4");
+        File.Delete(t4);
+
+        // T6：外部库 DDL 测试体内无 finally
+        var t6 = "test/PalORM.Integration.Tests/ZZV17dT6Probe.cs";
+        File.WriteAllText(t6,
+            "using PalORM.MySql;\npublic sealed class ZZV17dT6Probe\n{\n    [Test]\n    public async Task Probe_Cleanup()\n    {\n        await using var db = await DataSession<MySqlProvider>.CreateAsync(new DbOptions());\n        await db.ExecuteAsync($\"DROP TABLE IF EXISTS zz_v17d\");\n    }\n}\n",
+            new UTF8Encoding(false));
+        if (!RunTg().Contains("FAIL  T6")) silent.Add("T6");
+        File.Delete(t6);
+
+        // T9：同一概念混用两个 BenchmarkCategory 标签
+        var t9 = "bench/PalORM.Benchmarks/ZZV17dT9Probe.cs";
+        File.WriteAllText(t9,
+            "internal static class ZZV17dT9Probe\n{\n    [BenchmarkCategory(\"Bulk\")]\n    internal static void A() { }\n\n    [BenchmarkCategory(\"BulkInsert\")]\n    internal static void B() { }\n}\n",
+            new UTF8Encoding(false));
+        if (!RunTg().Contains("WARN  T9")) silent.Add("T9");
+        File.Delete(t9);
+
+        // T11：声明口径地板被抬到不可能通过的数值
+        MutateFile("bench/baselines/test-counts.json",
+            t => Regex.Replace(t, @"""sourceMarkers"": \d+", "\"sourceMarkers\": 99999"), touch: touched);
+        if (!RunTg().Contains("FAIL  T11")) silent.Add("T11");
+        Git("checkout -- bench/baselines/test-counts.json");
+
+        if (silent.Count == 0) Pass(17, "public 面变异探针 7/7 如期报红（D12/D13/tech-debt#15/T4/T6/T9/T11；CI 每周 --public --probes 执行）");
+        else Fail(17, "public 面探针有沉默项（变异主仓真源后检查仍不报红 = 无声 no-op）", string.Join(' ', silent));
+    }
+    finally
+    {
+        foreach (var f in touched) Git($"checkout -- {f}");
+        foreach (var f in new[]
+        {
+            "test/PalORM.Core.Tests/ZZV17dT4Probe.cs",
+            "test/PalORM.Integration.Tests/ZZV17dT6Probe.cs",
+            "bench/PalORM.Benchmarks/ZZV17dT9Probe.cs",
+        })
+        {
+            if (File.Exists(f)) File.Delete(f);
+        }
     }
 }
 
