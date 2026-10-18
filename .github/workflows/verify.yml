@@ -266,10 +266,10 @@ jobs:
             - name: Doc consistency (D4/D10-D14)
               run: dotnet run --file scripts/doc-consistency-check.cs
 
-            - name: Tech debt scan (14 checks)
+            - name: Tech debt scan (15 checks)
               run: dotnet run --file scripts/tech-debt-scan.cs -- --ci
 
-            - name: Test spec gate (T4/T6/T8/T9/T12/T-DEF-4)
+            - name: Test spec gate (T4/T6/T8/T9/T11 + T-DEF-1/4 + 版本三方一致)
               run: dotnet run --file scripts/test-gate.cs -- --ci
 
             - name: Assertion strength ratchet
