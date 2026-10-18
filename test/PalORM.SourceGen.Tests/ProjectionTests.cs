@@ -36,7 +36,13 @@ public sealed class ProjectionTests
             using System.Text.Json.Serialization;
             public sealed class Payload { public string Value { get; set; } = ""; }
             [JsonSerializable(typeof(Payload))]
-            public class Ctx : JsonSerializerContext { public static Ctx Default { get; } = new(null); public Ctx(System.Text.Json.JsonSerializerOptions? o) : base(o) { } public override System.Text.Json.Serialization.Metadata.JsonTypeInfo? GetTypeInfo(System.Type t) => null; protected override System.Text.Json.JsonSerializerOptions? GeneratedSerializerOptions => null; }
+            public class Ctx : JsonSerializerContext
+            {
+                public static Ctx Default { get; } = new(null);
+                public Ctx(System.Text.Json.JsonSerializerOptions? o) : base(o) { }
+                public override System.Text.Json.Serialization.Metadata.JsonTypeInfo? GetTypeInfo(System.Type t) => null;
+                protected override System.Text.Json.JsonSerializerOptions? GeneratedSerializerOptions => null;
+            }
             [Projection]
             public sealed class P
             {

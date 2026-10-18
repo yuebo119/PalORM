@@ -157,7 +157,9 @@ public sealed class ComputedAttribute(string expression) : Attribute
     public string Expression { get; } = expression;
 }
 
-/// <summary>配置编译期值转换器；不得与 <see cref="OwnedJsonAttribute"/> 同用。转换器须为顶级非泛型类型，具有无参构造，并实现 Provider 类型非 nullable 的匹配 <see cref="IValueConverter{TModel, TProvider}"/>；跨程序集使用时类型和构造函数必须为 public。</summary>
+/// <summary>配置编译期值转换器；不得与 <see cref="OwnedJsonAttribute"/> 同用。
+/// 转换器须为顶级非泛型类型，具有无参构造，并实现 Provider 类型非 nullable 的匹配
+/// <see cref="IValueConverter{TModel, TProvider}"/>；跨程序集使用时类型和构造函数必须为 public。</summary>
 /// <param name="converterType">实现 <see cref="IValueConverter{TModel, TProvider}"/> 的转换器类型。</param>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class ConverterAttribute(Type converterType) : Attribute

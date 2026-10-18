@@ -21,7 +21,8 @@ public sealed class SqliteProvider : IDbProvider
     // 必须在任何连接创建前完成，且必须是库侧而非应用侧行为（应用引用 PalORM.Sqlite 时
     // 不可能知道要 Init SQLitePCL）。
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2255",
-        Justification = "SQLite3MC bundle must be initialized by the provider assembly before any connection is created (ITM-317); ModuleInitializer gives once-only semantics without the per-static-access type-init check of an explicit static ctor.")]
+        Justification = "SQLite3MC bundle must be initialized by the provider assembly before any connection is created (ITM-317); "
+            + "ModuleInitializer gives once-only semantics without the per-static-access type-init check of an explicit static ctor.")]
     [ModuleInitializer]
     internal static void InitializeSqliteNativeBundle()
     {

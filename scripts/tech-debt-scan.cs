@@ -23,7 +23,10 @@ Console.WriteLine();
 
 // ─── 1. [Obsolete] 残留（WARN 级，有明确移除计划的允许）───
 // ITM-681：锚定行首——注释行（/// [Obsolete...）不算真实特性（B13 同型）
-var obsolete = GrepLines(Rx(@"^\s*\[Obsolete"), null, "src", "test", "tools", "bench");
+// 2026-10-18 审计：补 vendored 排除（与检查 2 对齐）——此处原先扫 bench/ 全树，命中的
+// 3 处全是 bench/BenchmarkDotNet/ 上游 fork 自带的 BDN 代码，本仓无从处置，属纯噪音
+// 假阳性（ci.slnf 已把该子树登记为豁免）。
+var obsolete = GrepLines(Rx(@"^\s*\[Obsolete"), "bench/BenchmarkDotNet/", "src", "test", "tools", "bench");
 if (obsolete.Count == 0)
 {
     Console.WriteLine("PASS  1. [Obsolete] 残留 (0 处)");
@@ -61,18 +64,33 @@ foreach (var f in EnumerateCs("src"))
 Check("8. SuppressMessage 无 Justification", noJust, strict: true);
 
 // ─── 9. 测试用例数对照（grep [Test] 标记数，不跑测试；B14 口径）───
+// 2026-10-18 审计：阈值原为硬编码 400（实测 1099，余量 63%）——删掉 700 个测试仍 PASS。
+// 改为读 bench/baselines/test-counts.json 的 sourceMarkers 地板（声明口径，与执行口径
+// 的 passed 地板分列，T11 双口径定义）；文件缺失时退回 400 保底不放行。
 var coreCount = CountTestMarkers("test/PalORM.Core.Tests");
 var sgCount = CountTestMarkers("test/PalORM.SourceGen.Tests");
 var intCount = CountTestMarkers("test/PalORM.Integration.Tests");
 var actual = coreCount + sgCount + intCount;
-if (actual >= 400)
+var markerFloor = 400;
+if (File.Exists("bench/baselines/test-counts.json"))
 {
-    Console.WriteLine($"PASS  9. 测试用例数充足（[Test] 标记 {actual} 个：Core={coreCount} SourceGen={sgCount} Integration={intCount}）");
+    try
+    {
+        markerFloor = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText("bench/baselines/test-counts.json"))?["sourceMarkers"]?.GetValue<int>() ?? 400;
+    }
+    catch (System.Text.Json.JsonException)
+    {
+        // 基线文件损坏时退回保底值，并由 D10/D12 的对账面暴露问题
+    }
+}
+if (actual >= markerFloor)
+{
+    Console.WriteLine($"PASS  9. 测试用例数达标（[Test] 标记 {actual} 个 ≥ 地板 {markerFloor}：Core={coreCount} SourceGen={sgCount} Integration={intCount}）");
     passCount++;
 }
 else
 {
-    Console.WriteLine($"FAIL  9. 测试用例数不足（[Test] 标记 {actual} 个）");
+    Console.WriteLine($"FAIL  9. 测试用例数跌破地板（[Test] 标记 {actual} 个 < 地板 {markerFloor}——用例被删或未同步？）");
     failCount++;
 }
 

@@ -39,8 +39,11 @@ public static class IdentifierSafety
                 // r19/R-P3-03：M5 string.format → 插值（string.Create 保持文化安全，S6618）。
                 // ITM-901（r24）：消息改英文对齐全库异常口径（原中文消息是全库唯一，
                 // 影响英文关键词检索与日志聚合一致性）。
+                // 前缀走 string.Create（插值处理器要求单一插值字面量），静态说明段在外拼接
                 string message = string.Create(CultureInfo.InvariantCulture,
-                    $"Identifier contains control character U+{(int)ch:X4} — driver/server C-layer parsing is unstable around control characters (NUL truncation, newline escaping quote delimiters, etc.). Rejected for safety.");
+                        $"Identifier contains control character U+{(int)ch:X4}")
+                    + " — driver/server C-layer parsing is unstable around control characters "
+                    + "(NUL truncation, newline escaping quote delimiters, etc.). Rejected for safety.";
                 throw new ArgumentException(message, nameof(identifier));
             }
         }

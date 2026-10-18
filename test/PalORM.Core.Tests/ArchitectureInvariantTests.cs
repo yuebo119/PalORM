@@ -198,7 +198,8 @@ public sealed class ArchitectureInvariantTests
         var violations = new List<string>();
         // Enter 族调用模式（调用点，非定义处）
         var callPattern = new Regex(
-            @"(EnterOperation\(|EnterReadOnly\(|EnterBatchOperation\(|_operationState\.Enter\(|_operationState\.EnterTransactionFlow\(|_operationState\.EnterTransactionOperation\()");
+            @"(EnterOperation\(|EnterReadOnly\(|EnterBatchOperation\(|_operationState\.Enter\(|"
+            + @"_operationState\.EnterTransactionFlow\(|_operationState\.EnterTransactionOperation\()");
         // 方法签名（4 空格缩进，含修饰符与返回类型；lambda/局部函数不匹配——调用点在语句层）
         var signaturePattern = new Regex(
             @"^[ \t]{4}(?:public|private|internal|protected)[^\n=;]*?\s(\w+)(?:<[^>(]+>)?\s*\(",
