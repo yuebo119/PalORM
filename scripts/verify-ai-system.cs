@@ -156,7 +156,9 @@ if (!FAST)
         ["probe-template"] = ("用法", ""),
         ["verify-action-items"] = ("验证完成", ""),
         // 以下为第二轮审计补齐：均可无副作用运行（不写库、不建备份、不跑基准）
-        ["secret-guard"] = ("敏感信息检查通过", ""),
+        // 注意 secret-guard 在无暂存文件时走「✓ 无 staged 文件」分支（exit 0），
+        // 标记必须覆盖该分支，否则干净树上会被误判为无完成标记（实测于 2026-10-18）。
+        ["secret-guard"] = (@"敏感信息检查通过|无 staged 文件", ""),
         ["stub-check"] = (@"无明确空壳|发现 \d+ 个", ""),
         ["gate-param-collection-reuse"] = (@"全部参数集合变更|未声明 \d+ 处", ""),
         ["precommit-build-check"] = (@"无需构建|受影响项目构建通过", ""),
