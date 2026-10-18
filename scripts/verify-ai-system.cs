@@ -858,8 +858,10 @@ void V17dPublicBattery()
             new UTF8Encoding(false));
         var tdef1 = "scripts/zzv17d_residue.sh";
         File.WriteAllText(tdef1, "#!/bin/sh\n", new UTF8Encoding(false));
+        // 行尾容忍 \r?：Windows 检出为 CRLF，无 \r? 的 $/\n 锚永不匹配（V17Batteries
+        // 的 CRLF 坑同源，2026-10-17 已登记；此处首次实跑即复现）
         MutateFile(".github/workflows/verify.yml",
-            t => new Regex(@"\n\s+timeout-minutes: \d+\n").Replace(t, "\n", 1), touch: touched);
+            t => new Regex(@"\r?\n[ \t]+timeout-minutes: \d+[ \t]*\r?\n").Replace(t, "\n", 1), touch: touched);
         var tg = RunTg();
         if (!tg.Contains("WARN  T8")) silent.Add("T8");
         if (!tg.Contains("FAIL  T-DEF-1")) silent.Add("T-DEF-1");
