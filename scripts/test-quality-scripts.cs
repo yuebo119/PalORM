@@ -413,9 +413,13 @@ void FixtureScriptLanguagePolicy(string root)
             || rel.StartsWith("data/", StringComparison.Ordinal) || rel.StartsWith(".ai/", StringComparison.Ordinal)
             || rel.StartsWith("docs/", StringComparison.Ordinal) || rel.StartsWith("BenchmarkDotNet.Artifacts/", StringComparison.Ordinal)
             || rel.StartsWith("bench/reports/", StringComparison.Ordinal)
-            || rel.StartsWith(".playwright-mcp/", StringComparison.Ordinal) || rel.StartsWith("StrykerOutput/", StringComparison.Ordinal))
+            || rel.StartsWith(".playwright-mcp/", StringComparison.Ordinal) || rel.StartsWith("StrykerOutput/", StringComparison.Ordinal)
+            // tmp/ = 会话级临时区（跑测日志/审计输出/一次性探针），与 artifacts/ 同族：
+            // 2026-10-18 审计补登——历史会话遗留的三个对比 .mjs 曾使本项在本地假红（CI 干净
+            // 克隆无此目录，从未暴露）。政策约束的是入库脚本，scratch 不在管辖面。
+            || rel.StartsWith("tmp/", StringComparison.Ordinal))
         {
-            continue; // 依赖树/vendored 子树/本地工具(.ai 不入仓库)/历史文档不在政策范围
+            continue; // 依赖树/vendored 子树/本地工具(.ai 不入仓库)/历史文档/scratch 不在政策范围
         }
         if (extensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase) && !whitelist.Contains(rel, StringComparer.OrdinalIgnoreCase))
         {
