@@ -1,6 +1,7 @@
 // test-gate.cs（自 .ai/scripts/test-gate.sh 迁移，脚本全面 C# 化轮）
-// PalORM 测试规范门禁：T4/T6/T8/T9/T11/T12 机械可判子集 + T-DEF-1/4 下沉。
+// PalORM 测试规范门禁：T4/T6/T8/T9/T11 机械可判子集 + T-DEF-1/4 下沉 + 版本三方一致（工程纪律）。
 // 24 条铁律中其余项属评审/流程纪律，无廉价机械判据（定性见 test/prompt.md）。
+// 级别契约（D14 对账）：本文件输出的 FAIL/WARN 必须与 test/prompt.md 的 T 表级别列一致。
 // 迁移修正：T-DEF-1 原扫 scripts/*.sh 的 set -euo pipefail——主仓 scripts/ 已全量 C# 化，
 // 按现形态改为"scripts/ 下出现未登记 .sh 即 FAIL"（语言政策残留哨兵，正主在 test-quality-scripts.cs）。
 // 契约：0=通过；1=有 FAIL；stdout 与 .sh 版对拍兼容。
@@ -96,8 +97,9 @@ if (benchFiles.Length > 0)
     }
     if (hasBulk > 0 && hasBulkInsert > 0)
     {
-        Console.WriteLine("FAIL  T9  Bulk 和 BulkInsert 混用（应统一）");
-        failCount++;
+        // 级别对齐（D14）：test/prompt.md 的 T9 声明为「警告」，此处不得升级为 FAIL
+        Console.WriteLine("WARN  T9  Bulk 和 BulkInsert 混用（应统一）");
+        warnCount++;
     }
     else Console.WriteLine("PASS  T9  BenchmarkCategory 无同义词混用");
 }
@@ -149,9 +151,10 @@ foreach (var f in EnumerateTestCs().Where(f => f.Contains("PalORM.Integration.Te
 }
 if (leakingCleanup.Count > 0)
 {
-    Console.WriteLine($"WARN  T6  以下测试触碰 DDL 但方法体内无 finally 清理（T6 要求 try/finally）:");
+    // 级别对齐（D14）：test/prompt.md 的 T6 声明为「阻断」（外部库表残留会污染后续用例）
+    Console.WriteLine($"FAIL  T6  以下测试触碰 DDL 但方法体内无 finally 清理（T6 要求 try/finally）:");
     foreach (var l in leakingCleanup.Take(10)) Console.WriteLine($"      - {l}");
-    warnCount++;
+    failCount++;
 }
 else Console.WriteLine("PASS  T6  外部 DB 测试清理检查通过（块级：全部 DDL 测试有 finally 或委托含 finally 的 helper）");
 
@@ -251,15 +254,19 @@ if (declFloor > 0 && declActual >= declFloor)
 }
 else
 {
-    Console.WriteLine($"WARN  T11  声明口径 [Test] 标记 {declActual} < 地板 {(declFloor > 0 ? declFloor.ToString() : "未读取")}（tech-debt #9 同源判据，此处仅交叉提示）");
-    warnCount++;
+    // 级别对齐（D14）：test/prompt.md 的 T11 声明为「阻断」
+    Console.WriteLine($"FAIL  T11  声明口径 [Test] 标记 {declActual} < 地板 {(declFloor > 0 ? declFloor.ToString() : "未读取")}（tech-debt #9 同源判据）");
+    failCount++;
 }
 
-// ─── T12：三方一致——包版本号 ───
-// 2026-10-18 审计修复：原实现只比 Core 与 PostgreSql 两个 csproj，其余四个打包项目漏检。
-// 改为全量 src/*/*.csproj + README 安装示例 + PackageConsumer 引用，任一处漂移即 FAIL。
+// ─── 版本三方一致（工程纪律）───
+// 2026-10-18 审计修复：①原实现只比 Core 与 PostgreSql 两个 csproj，其余四个打包项目漏检，
+// 改为全量 src/*/*.csproj + README 安装示例 + PackageConsumer 引用；
+// ②本项原先占用 T12 编号，而 test/prompt.md 的 T12 是「断言基线提升需标注理由」（评审纪律，
+// 无机械判据），两者语义不同、级别不同（脚本 FAIL / 文档警告）——属编号冲突而非级别漂移，
+// 故改为不带 T 编号的工程纪律项，避免 D14 对账误判。
 Console.WriteLine();
-Console.WriteLine("─── T12: 三方一致——包版本号 + 连接串参数同步 ───");
+Console.WriteLine("─── 版本三方一致（包版本号，工程纪律）───");
 var centralVer = FirstVersion("Directory.Build.props");
 var t12Bad = new List<string>();
 foreach (var csproj in Directory.Exists("src")
@@ -283,10 +290,10 @@ foreach (var (doc, pattern) in new[]
 }
 if (t12Bad.Count > 0)
 {
-    Console.WriteLine($"FAIL  T12  包版本号漂移（中央 {centralVer}）: {string.Join(" ", t12Bad.Take(10))}");
+    Console.WriteLine($"FAIL  版本三方一致  包版本号漂移（中央 {centralVer}）: {string.Join(" ", t12Bad.Take(10))}");
     failCount++;
 }
-else Console.WriteLine($"PASS  T12  包版本号一致（{centralVer}，src 全部 csproj + README + 消费者）");
+else Console.WriteLine($"PASS  版本三方一致  包版本号一致（{centralVer}，src 全部 csproj + README + 消费者）");
 
 Console.WriteLine();
 Console.WriteLine("═══════════════════════════════════════════════════════════════");

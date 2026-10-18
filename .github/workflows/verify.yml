@@ -170,14 +170,28 @@ jobs:
             - name: Build integration tests
               run: dotnet build test/PalORM.Integration.Tests -c Release
 
-            - name: Run complete integration suite
-              run: dotnet run --project test/PalORM.Integration.Tests -c Release --no-build
+            - name: Install dotnet-coverage (provider coverage floors)
+              run: dotnet tool install -g dotnet-coverage
+
+            - name: Run complete integration suite (with coverage)
+              # 2026-10-18 第二轮审计：provider 覆盖率此前完全空白（Core 覆盖率门禁测不到
+              # provider 代码，集成测试跑真库但不收集覆盖率）。此处收集后再对 MySql/PostgreSql
+              # 设地板，地板值 = 实测 -2pp（见 bench/baselines/test-counts.json）。
+              run: >-
+                  dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --
+                  --coverage --coverage-output-format xml
+                  --coverage-output "$(pwd)/cov-integration.xml"
 
             - name: Assert Integration test counts + real-db floor (M0-3)
               run: >-
                   dotnet run --file scripts/assert-test-counts.cs --
                   PalORM.Integration.Tests
                   "$(find test/PalORM.Integration.Tests/bin -name '*.tunit-report.json' | head -1)"
+
+            - name: Assert provider coverage floors
+              run: |
+                  dotnet run --file scripts/assert-coverage.cs -- PalORM.MySql cov-integration.xml mysql
+                  dotnet run --file scripts/assert-coverage.cs -- PalORM.PostgreSql cov-integration.xml postgresql
 
     gate:
         name: Quality Gates
@@ -237,7 +251,19 @@ jobs:
             - name: Storefront gates (G1-G33)
               run: dotnet run --file scripts/gate-check.cs -- --allow-dirty
 
-            - name: Doc consistency (D4/D10-D13)
+            # 2026-10-18 第二轮审计补接：--public 只跑依赖主仓文件的校验
+            # （V2/V6/V10/V12/V20），.ai 本地知识层相关项不参与。此前这些项在 CI 零覆盖，
+            # 其中 V12 是 PALORM 诊断计数的双向对账（分析器实测 vs API参考声明）。
+            - name: Consistency checks (public surface, V2/V6/V10/V12/V20)
+              run: dotnet run --file scripts/verify-ai-system.cs -- --public
+
+            # 每周定时/手动触发时追加变异探针电池（47 项）：证明各门禁仍能报红。
+            # 探针会临时改写 src/ 下的文件，只在干净 checkout 上运行，故不在每次 push 执行。
+            - name: Mutation probe battery (weekly/manual only)
+              if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+              run: dotnet run --file scripts/verify-ai-system.cs -- --public --probes
+
+            - name: Doc consistency (D4/D10-D14)
               run: dotnet run --file scripts/doc-consistency-check.cs
 
             - name: Tech debt scan (14 checks)

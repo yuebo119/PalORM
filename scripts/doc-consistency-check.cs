@@ -1,5 +1,8 @@
 // doc-consistency-check.cs（自 .ai/scripts/doc-consistency-check.sh 迁移，脚本全面 C# 化轮）
-// PalORM 文档一致性机械校验 D1-D12。所有 checks 独立运行，单一事实来源原则。
+// PalORM 文档一致性机械校验 D4/D10-D14。所有 checks 独立运行，单一事实来源原则。
+// （2026-10-18 两轮审计后的有效编号：D4 过期计数、D10 [Test] 计数、D11 版本三方、
+//  D12 文档 API 存在性、D13 G 级级别对账、D14 T 级严重度对账；D1/D2/D5/D6/D7/D9 已删除，
+//  D3/D8 字样检查随 D13 取代。）
 // --fix：D10 三处计数自动同步（ITM-735 的 awk 精确重写语义保真——只替换含 [Test]+声明+计数的行）。
 // 契约：0=全过；1=有 FAIL；--fix 模式 0=同步完成；stdout 与 .sh 版对拍兼容（含 ANSI 色码）。
 using System.Text;
@@ -169,6 +172,38 @@ if (docLevelBad.Count == 0)
     Pass($"D13 门禁级别三方对账一致（{docLevelChecked} 处 G 项声明与 gate-check 判定方式对齐）");
 else
     Fail($"D13 门禁级别文档与脚本不一致（{string.Join("；", docLevelBad)}）——改文档级别或改脚本 CheckZero/CheckWarn");
+
+// ── D14: T 级严重度对账（文档 T 表 ⊗ test-gate 实际判定方式）──
+// 2026-10-18 第二轮审计新增。实例：T6（外部库清理）文档标阻断而脚本只 WARN，T9 文档标
+// 警告而脚本 FAIL，T11 文档标阻断而脚本只 WARN——与 D13 修的 G10/G15/G16 完全同型，但
+// D13 只覆盖 G 面，T 面留了同样的洞。判据来源：test-gate.cs 中 WARN/FAIL 输出行（PASS 为
+// 中性不参与对账），与 test/prompt.md 的 T 表「违反后果」列逐项比对。
+// 注意：本项依赖 .ai/test/prompt.md（本地知识层），CI 无 .ai 时自动跳过，仅本地生效。
+var tLevelBad = new List<string>();
+var tLevelChecked = 0;
+if (File.Exists(".ai/test/prompt.md") && File.Exists("scripts/test-gate.cs"))
+{
+    var testGateSrc = File.ReadAllText("scripts/test-gate.cs");
+    var scriptT = new Dictionary<string, string>(StringComparer.Ordinal);
+    foreach (Match m in Regex.Matches(testGateSrc, @"(FAIL|WARN)\s{2}(T\d+)\s"))
+    {
+        scriptT[m.Groups[2].Value] = m.Groups[1].Value == "FAIL" ? "阻断" : "警告";
+    }
+    foreach (var line in File.ReadLines(".ai/test/prompt.md"))
+    {
+        if (!line.StartsWith('|')) continue;
+        var m = Regex.Match(line, @"^\|\s*(T\d+)\s*\|.*\|\s*(阻断|警告)\s*\|\s*$");
+        if (!m.Success) continue;
+        var id = m.Groups[1].Value;
+        if (!scriptT.TryGetValue(id, out var actual)) continue;
+        tLevelChecked++;
+        if (m.Groups[2].Value != actual) tLevelBad.Add($"T{id[1..]} 文档={m.Groups[2].Value} 脚本={actual}");
+    }
+}
+if (tLevelBad.Count == 0)
+    Pass($"D14 T 级严重度对账一致（{tLevelChecked} 处 T 项声明与 test-gate 判定方式对齐）");
+else
+    Fail($"D14 T 级严重度文档与脚本不一致（{string.Join("；", tLevelBad)}）——改文档级别或改脚本 FAIL/WARN");
 
 Console.WriteLine();
 Console.WriteLine($"通过: {passed}  失败: {failed}");

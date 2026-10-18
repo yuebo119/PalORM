@@ -24,6 +24,32 @@ Console.WriteLine("═══════ .ai 系统一致性校验 ════�
 Console.WriteLine($"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Console.WriteLine();
 
+// --public：只跑「主仓可见」的校验（不读 .ai 本地知识层）。用途：CI 镜像里 .ai 不在克隆中，
+// 但 V2/V6/V10/V12/V20 只依赖 docs/scripts/test/bench，完全可以在 CI 运行；此前这五项
+// 在 CI 零覆盖（V12 的 PALORM 诊断计数对账尤其关键）。--probes 追加 V17 gate/tech-debt
+// 变异探针电池（V17c 的 V/D 面依赖 .ai 文件，public 模式下自动跳过）。
+var PUBLIC = args.Contains("--public", StringComparer.Ordinal);
+var PROBES = args.Contains("--probes", StringComparer.Ordinal);
+if (PUBLIC)
+{
+    Console.WriteLine("模式：--public（只跑主仓可见校验；.ai 本地知识层相关项不参与）");
+    Console.WriteLine();
+    CheckV2();
+    CheckV6();
+    CheckV10();
+    CheckV12();
+    CheckV20();
+    if (PROBES)
+    {
+        Console.WriteLine();
+        V17Batteries();
+    }
+    Console.WriteLine();
+    Console.WriteLine($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
+    Console.WriteLine("═══════ 校验完成（public 子集）═══════");
+    return failed > 0 ? 1 : 0;
+}
+
 // V1 引擎 + 双 profile + 工具提示词与模板齐全
 var v1Missing = new List<string>();
 foreach (var f in new[]
@@ -39,18 +65,7 @@ if (v1Missing.Count == 0) Pass(1, "引擎/双profile/工具提示词与模板齐
 else Fail(1, "提示词/模板缺失", string.Join(' ', v1Missing));
 
 // V2 提示词引用的权威文档与脚本存在（切换后形态：判定层真源在主仓 scripts/*.cs）
-var v2Missing = new List<string>();
-foreach (var f in new[]
-{
-    "docs/编码规范.md", "docs/踩坑目录.md", "docs/API参考.md", "docs/架构设计.md",
-    "scripts/review-snapshot.cs", "scripts/verify-action-items.cs", "scripts/gate-check.cs",
-    "scripts/refine-scan.cs", "scripts/stub-check.cs", "scripts/assertion-strength-check.cs",
-})
-{
-    if (!File.Exists(f)) v2Missing.Add(f);
-}
-if (v2Missing.Count == 0) Pass(2, "提示词引用的文档与脚本全部存在");
-else Fail(2, "被引用文件缺失", string.Join(' ', v2Missing));
+CheckV2();
 
 // V3 STD 规则数：提示词口径 = 编码规范实际去重计数
 var stdActual = Regex.Matches(File.ReadAllText("docs/编码规范.md"), @"STD-[A-Z]+-[0-9]+")
@@ -80,9 +95,7 @@ if (gPrompt == gScript && gScript == gDoc && gDoc == gReadme) Pass(5, $"门禁�
 else Fail(5, "门禁编号不同步", $"提示词 G{gPrompt}，脚本 G{gScript}，编码规范 G{gDoc}，README G{gReadme}");
 
 // V6 API 参考存在且非空
-var apiLines = File.Exists("docs/API参考.md") ? File.ReadLines("docs/API参考.md").Count() : 0;
-if (apiLines > 50) Pass(6, $"API 参考完整（{apiLines} 行）");
-else Fail(6, "API 参考异常", $"docs/API参考.md 行数 {apiLines}（预期 >50）");
+CheckV6();
 
 // V7 误判知识库双源口径
 var kb = File.ReadAllText(".ai/review/known-false-positives.md");
@@ -109,12 +122,7 @@ if (v9Missing.Count == 0) Pass(9, "README 文件地图与实际一致");
 else Fail(9, "README 文件地图指向不存在的文件", string.Join(' ', v9Missing));
 
 // V10 机械防线存在
-var snapCount = Directory.Exists("test/PalORM.SourceGen.Tests/Snapshots")
-    ? Directory.GetFiles("test/PalORM.SourceGen.Tests/Snapshots", "*.snap").Length : 0;
-if (File.Exists("test/PalORM.SourceGen.Tests/SnapshotTests.cs")
-    && File.Exists("test/PalORM.SourceGen.Tests/DialectSymmetryTests.cs") && snapCount >= 10)
-    Pass(10, $"机械防线齐全（快照基线 {snapCount} 份 + 对称性测试 + 断言强度门禁）");
-else Fail(10, "机械防线缺失", $"SnapshotTests/DialectSymmetryTests/Snapshots（{snapCount} 份，需 ≥10）");
+CheckV10();
 
 // V11 metrics 账本
 var metrics = File.Exists(".ai/review/metrics.md") ? File.ReadAllText(".ai/review/metrics.md") : "";
@@ -122,21 +130,7 @@ if (metrics.Contains("## 缺陷逃逸账本") && metrics.Contains("## 轮次记�
 else Fail(11, "metrics 账本缺失或结构不完整", ".ai/review/metrics.md 需含「轮次记录」与「缺陷逃逸账本」");
 
 // V12 PALORM 诊断编号双向对账
-var analyzerCount = Regex.Matches(File.ReadAllText("src/PalORM.SourceGen/PalORMAnalyzer.cs"),
-    @"public static readonly DiagnosticDescriptor", RegexOptions.Multiline).Count;
-var declM = Regex.Match(File.ReadAllText("docs/API参考.md"),
-    @"^### 编译时验证 — ([0-9]+) 条 PALORM 诊断（([0-9]+) 条分析器 \+ ([0-9]+) 条生成器", RegexOptions.Multiline);
-var declTotal = declM.Groups[1].Value; var declAnalyzer = declM.Groups[2].Value; var declGen = declM.Groups[3].Value;
-var v12Fail = "";
-if (analyzerCount < 30) v12Fail += $" 实测{analyzerCount}<30";
-if (!declM.Success) v12Fail += " API参考标题不可解析";
-else
-{
-    if (declAnalyzer.Length > 0 && declAnalyzer != analyzerCount.ToString()) v12Fail += $" API参考声明分析器{declAnalyzer}≠实测{analyzerCount}";
-    if (declTotal.Length > 0 && declGen.Length > 0 && declTotal != (int.Parse(declAnalyzer) + int.Parse(declGen)).ToString()) v12Fail += $" 声明总数{declTotal}≠{declAnalyzer}+{declGen}";
-}
-if (v12Fail.Length == 0) Pass(12, $"PALORM 诊断实测与文档对账一致（分析器 {analyzerCount}；总数 {declTotal} = {declAnalyzer} 分析器 + {declGen} 生成器）");
-else Fail(12, "PALORM 诊断计数漂移（Analyzer 实测 vs API参考.md 声明）", v12Fail.Trim());
+CheckV12();
 
 // V12b lessons 含 B24-B27
 var lessonsText = File.ReadAllText(".ai/lessons.md");
@@ -146,28 +140,39 @@ else Fail(13, "lessons.md 缺诊断工程化教训", "需登记 B24(RS1032)/B25(
 if (!FAST)
 {
     // V14 核心防线脚本可执行性：完成标记判活（区分"检查失败但活着"与"中途死亡"）
-    var finishMark = new Dictionary<string, string>
+    // 2026-10-18 第二轮审计扩面：原注册表固定 10 项而 scripts/ 实有 28 个，新增工具
+    // （backup-ai-system / compare-perf-batches 等）不在存活监测面。现补齐可无副作用运行
+    // 的防线与工具，并在结果行报告「未注册」数量，避免"10/10"被误读为全部脚本。
+    var finishMark = new Dictionary<string, (string Mark, string Args)>
     {
-        ["gate-check"] = "扫描完成",
-        ["test-gate"] = "门禁(未)?通过",
-        ["tech-debt-scan"] = "结果: ",
-        ["doc-consistency-check"] = "通过: ",
-        ["assertion-strength-check"] = "扫描完成",
-        ["refine-scan"] = "纪律补充",
-        ["review-scope"] = "账本规则",
-        ["review-snapshot"] = "评审基线快照",
-        ["probe-template"] = "用法",
-        ["verify-action-items"] = "验证完成",
+        ["gate-check"] = ("扫描完成", ""),
+        ["test-gate"] = (@"门禁(未)?通过", ""),
+        ["tech-debt-scan"] = ("结果: ", ""),
+        ["doc-consistency-check"] = ("通过: ", ""),
+        ["assertion-strength-check"] = ("扫描完成", ""),
+        ["refine-scan"] = ("纪律补充", ""),
+        ["review-scope"] = ("账本规则", ""),
+        ["review-snapshot"] = ("评审基线快照", ""),
+        ["probe-template"] = ("用法", ""),
+        ["verify-action-items"] = ("验证完成", ""),
+        // 以下为第二轮审计补齐：均可无副作用运行（不写库、不建备份、不跑基准）
+        ["secret-guard"] = ("敏感信息检查通过", ""),
+        ["stub-check"] = (@"无明确空壳|发现 \d+ 个", ""),
+        ["gate-param-collection-reuse"] = (@"全部参数集合变更|未声明 \d+ 处", ""),
+        ["precommit-build-check"] = (@"无需构建|受影响项目构建通过", ""),
+        ["compare-perf-batches"] = ("用法:", "--help"),
     };
     var deadScripts = new List<string>();
     var latestLedger = Directory.Exists(".ai/review/history/action-items")
         ? Directory.GetFiles(".ai/review/history/action-items", "*.md").OrderByDescending(f => f).FirstOrDefault()
         : null;
-    foreach (var (name, mark) in finishMark)
+    foreach (var (name, entry) in finishMark)
     {
-        var arguments = name == "verify-action-items" && latestLedger is not null
-            ? $"run --file scripts/{name}.cs -- {latestLedger}"
-            : $"run --file scripts/{name}.cs";
+        var arguments = name switch
+        {
+            "verify-action-items" when latestLedger is not null => $"run --file scripts/{name}.cs -- {latestLedger}",
+            _ => $"run --file scripts/{name}.cs{(entry.Args.Length > 0 ? " -- " + entry.Args : "")}",
+        };
         if (name == "verify-action-items" && latestLedger is null) { continue; } // 无账本跳过（与 .sh 版一致）
         var (code, output) = RunCaptureWithCode("dotnet", arguments);
         // V14 语义（2026-10-18 审计修复）：只判"跑到完成标记"会把"检查红着但活着"算通过，
@@ -181,9 +186,15 @@ if (!FAST)
             continue;
         }
         if (code != 0) deadScripts.Add($"{name}(exit={code})");
-        else if (!Regex.IsMatch(output, mark)) deadScripts.Add($"{name}(无完成标记)");
+        else if (!Regex.IsMatch(output, entry.Mark)) deadScripts.Add($"{name}(无完成标记)");
     }
-    if (deadScripts.Count == 0) Pass(14, "核心防线脚本全部可执行且全绿（10/10 退出码 0 + 完成标记）");
+    var allScripts = Directory.Exists("scripts") ? Directory.GetFiles("scripts", "*.cs").Length : 0;
+    var unregistered = allScripts - finishMark.Count;
+    var unregisteredNote = unregistered > 0
+        ? $"；另有 {unregistered} 个脚本未注册（需入参/耗时/有副作用，见 scripts/README 人工工具）"
+        : "";
+    if (deadScripts.Count == 0)
+        Pass(14, $"已注册防线脚本全部可执行且全绿（{finishMark.Count}/{finishMark.Count} 退出码 0 + 完成标记{unregisteredNote}）");
     else Fail(14, "防线脚本失败（退出码非 0 或未跑到完成标记——结果未被消费的静默门禁）", string.Join(' ', deadScripts));
 }
 
@@ -279,21 +290,7 @@ if (bomHits.Count == 0) Pass(19, ".ai 文本无 UTF-8 BOM（^ 锚定的正则不
 else Fail(19, ".ai 文本带 UTF-8 BOM（B84 的脚本回写副作用）", string.Join(' ', bomHits));
 
 // V20 结果库基线纳管（告警型）
-if (File.Exists("bench/PalORM.PerfHub/Program.cs") && File.Exists("bench/baselines/perfhub-index-baseline.json"))
-{
-    var opsSrc = Regex.Match(File.ReadAllText("bench/PalORM.PerfHub/Program.cs"),
-        @"private static readonly string\[\] OperationNames.*?\];", RegexOptions.Singleline).Value;
-    var ops = Regex.Matches(opsSrc, @"""([A-Za-z]+)""").Select(m => m.Groups[1].Value).ToList();
-    var baseline = File.ReadAllText("bench/baselines/perfhub-index-baseline.json");
-    var ungated = ops.Where(op => !baseline.Contains($"\"Name\": \"{op}\"")).ToList();
-    if (ungated.Count == 0) Pass(20, "PerfHub 全部测量项已纳管结果库基线（OperationNames 与基线 Name 逐名对上）");
-    else
-    {
-        Warn(20, $"新测量项未纳管结果库基线（裸奔中，见 lessons B128）:{string.Join(' ', ungated)}");
-        Pass(20, $"PerfHub 测量项纳管检查完成（含告警:{string.Join(' ', ungated)} —— 不拦截，重录后消警）");
-    }
-}
-else Pass(20, "PerfHub 源/基线缺一，跳过（非本仓形态）");
+CheckV20();
 
 // V21 复发阈值对账（告警型）
 var v21Warn = new List<string>();
@@ -541,8 +538,12 @@ void V17Batteries()
     var v17Dirty = new List<string>();
     foreach (var line in RunCapture("git", "status --porcelain").Split('\n'))
         if (line.Trim().Length > 0 && !line.TrimStart().StartsWith("??")) v17Dirty.Add(line.Trim());
-    foreach (var line in RunCapture("git", "-C .ai status --porcelain").Split('\n'))
-        if (line.Trim().Length > 0 && !line.TrimStart().StartsWith("??")) v17Dirty.Add(".ai: " + line.Trim());
+    // --public（CI）场景没有 .ai 仓，跳过其脏树检查（V17c 同时被跳过）
+    if (Directory.Exists(".ai"))
+    {
+        foreach (var line in RunCapture("git", "-C .ai status --porcelain").Split('\n'))
+            if (line.Trim().Length > 0 && !line.TrimStart().StartsWith("??")) v17Dirty.Add(".ai: " + line.Trim());
+    }
     if (v17Dirty.Count > 0)
     {
         Fail(17, "全量 verify 前双仓存在未提交改动——变异探针将以 git checkout 还原目标文件，先提交或 stash 再跑（B190）", string.Join(' ', v17Dirty));
@@ -642,7 +643,10 @@ void V17Batteries()
         else if (!tdOk) Fail(17, "防线沉默（植入已知坏样本仍报 PASS = 静默 no-op 门禁）", "tech-debt-scan 检查 8 未报 FAIL");
         else Fail(17, "gate 变异探针组有沉默项（植入违规样本未报 FAIL）", "未报 FAIL: " + string.Join(' ', missing));
 
-        V17cBattery();
+        // V17c 的变异目标全是 .ai 知识文件（lessons/README/perf-ledger/prompt），
+        // CI 的 --public 场景没有 .ai，只能跑 gate/tech-debt 面电池。
+        if (Directory.Exists(".ai")) V17cBattery();
+        else Console.WriteLine("SKIP V17c: .ai 不在克隆中（--public 模式只跑 gate/tech-debt 面探针）");
     }
     finally
     {
@@ -742,6 +746,12 @@ void V17cBattery()
         if (!RunDc().Contains("FAIL D10")) v17cFail.Add("D10");
         File.Delete("test/PalORM.Core.Tests/ZZV17cD10Probe.cs");
 
+        // D14：T 级严重度漂移（把 test/prompt.md 的 T6 从「阻断」改成「警告」）——
+        // 证明 D14 对账真的能抓到文档与 test-gate 的级别不一致（第二轮审计的实弹场景）
+        MutateFile(".ai/test/prompt.md", t => new Regex(@"(\| T6 \|[^\n]*\| )阻断( \|)").Replace(t, "$1警告$2", 1));
+        if (!RunDc().Contains("FAIL D14")) v17cFail.Add("D14");
+        GitInAi("checkout -- test/prompt.md");
+
         // D11：生成物工具版本漂移（动态取包版本——原 .sh 硬编码 6.3.0，升版即失效的存量假绿）
         var pkgVer = Regex.Match(File.ReadAllText("Directory.Build.props"), @"<Version>([^<]+)").Groups[1].Value.Trim();
         MutateFile("src/PalORM.SourceGen/GeneratedCodeMetadata.cs", t => t.Replace($"\"{pkgVer}\"", "\"9.9.9\""), touch: touched);
@@ -749,7 +759,7 @@ void V17cBattery()
         Git("checkout -- src/PalORM.SourceGen/GeneratedCodeMetadata.cs");
 
         var vdcTotal = Regex.Matches(File.ReadAllText("scripts/verify-ai-system.cs"), @"v17cFail\.Add\(").Count;
-        if (v17cFail.Count == 0) Pass(17, $"V/D 面防线变异探针 {vdcTotal}/{vdcTotal} 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22/V24/V25/V26/V27 + D10/D11；T 面定性=提示词规则非机械防线）");
+        if (v17cFail.Count == 0) Pass(17, $"V/D 面防线变异探针 {vdcTotal}/{vdcTotal} 如期 FAIL（V10/V12/V15/V16/V18/V19/V20/V22/V24/V25/V26/V27 + D10/D11/D14；T 面定性=提示词规则非机械防线）");
         else Fail(17, "V/D 面探针有沉默项（变异真源后检查仍 PASS = 无声 no-op）", "未报 FAIL: " + string.Join(' ', v17cFail));
     }
     finally
@@ -765,6 +775,78 @@ void V17cBattery()
 }
 
 // ── 辅助 ──
+
+// 以下五项同时被全量流程与 --public 子集调用：抽成函数避免两条路径逻辑漂移
+void CheckV2()
+{
+    var missing = new List<string>();
+    foreach (var f in new[]
+    {
+        "docs/编码规范.md", "docs/踩坑目录.md", "docs/API参考.md", "docs/架构设计.md",
+        "scripts/review-snapshot.cs", "scripts/verify-action-items.cs", "scripts/gate-check.cs",
+        "scripts/refine-scan.cs", "scripts/stub-check.cs", "scripts/assertion-strength-check.cs",
+    })
+    {
+        if (!File.Exists(f)) missing.Add(f);
+    }
+    if (missing.Count == 0) Pass(2, "提示词引用的文档与脚本全部存在");
+    else Fail(2, "被引用文件缺失", string.Join(' ', missing));
+}
+
+void CheckV6()
+{
+    var apiLines = File.Exists("docs/API参考.md") ? File.ReadLines("docs/API参考.md").Count() : 0;
+    if (apiLines > 50) Pass(6, $"API 参考完整（{apiLines} 行）");
+    else Fail(6, "API 参考异常", $"docs/API参考.md 行数 {apiLines}（预期 >50）");
+}
+
+void CheckV10()
+{
+    var snapCount = Directory.Exists("test/PalORM.SourceGen.Tests/Snapshots")
+        ? Directory.GetFiles("test/PalORM.SourceGen.Tests/Snapshots", "*.snap").Length : 0;
+    if (File.Exists("test/PalORM.SourceGen.Tests/SnapshotTests.cs")
+        && File.Exists("test/PalORM.SourceGen.Tests/DialectSymmetryTests.cs") && snapCount >= 10)
+        Pass(10, $"机械防线齐全（快照基线 {snapCount} 份 + 对称性测试 + 断言强度门禁）");
+    else Fail(10, "机械防线缺失", $"SnapshotTests/DialectSymmetryTests/Snapshots（{snapCount} 份，需 ≥10）");
+}
+
+void CheckV12()
+{
+    var analyzerCount = Regex.Matches(File.ReadAllText("src/PalORM.SourceGen/PalORMAnalyzer.cs"),
+        @"public static readonly DiagnosticDescriptor", RegexOptions.Multiline).Count;
+    var declM = Regex.Match(File.ReadAllText("docs/API参考.md"),
+        @"^### 编译时验证 — ([0-9]+) 条 PALORM 诊断（([0-9]+) 条分析器 \+ ([0-9]+) 条生成器", RegexOptions.Multiline);
+    var declTotal = declM.Groups[1].Value; var declAnalyzer = declM.Groups[2].Value; var declGen = declM.Groups[3].Value;
+    var fail = "";
+    if (analyzerCount < 30) fail += $" 实测{analyzerCount}<30";
+    if (!declM.Success) fail += " API参考标题不可解析";
+    else
+    {
+        if (declAnalyzer.Length > 0 && declAnalyzer != analyzerCount.ToString()) fail += $" API参考声明分析器{declAnalyzer}≠实测{analyzerCount}";
+        if (declTotal.Length > 0 && declGen.Length > 0 && declTotal != (int.Parse(declAnalyzer) + int.Parse(declGen)).ToString()) fail += $" 声明总数{declTotal}≠{declAnalyzer}+{declGen}";
+    }
+    if (fail.Length == 0) Pass(12, $"PALORM 诊断实测与文档对账一致（分析器 {analyzerCount}；总数 {declTotal} = {declAnalyzer} 分析器 + {declGen} 生成器）");
+    else Fail(12, "PALORM 诊断计数漂移（Analyzer 实测 vs API参考.md 声明）", fail.Trim());
+}
+
+void CheckV20()
+{
+    if (File.Exists("bench/PalORM.PerfHub/Program.cs") && File.Exists("bench/baselines/perfhub-index-baseline.json"))
+    {
+        var opsSrc = Regex.Match(File.ReadAllText("bench/PalORM.PerfHub/Program.cs"),
+            @"private static readonly string\[\] OperationNames.*?\];", RegexOptions.Singleline).Value;
+        var ops = Regex.Matches(opsSrc, @"""([A-Za-z]+)""").Select(m => m.Groups[1].Value).ToList();
+        var baseline = File.ReadAllText("bench/baselines/perfhub-index-baseline.json");
+        var ungated = ops.Where(op => !baseline.Contains($"\"Name\": \"{op}\"")).ToList();
+        if (ungated.Count == 0) Pass(20, "PerfHub 全部测量项已纳管结果库基线（OperationNames 与基线 Name 逐名对上）");
+        else
+        {
+            Warn(20, $"新测量项未纳管结果库基线（裸奔中，见 lessons B128）:{string.Join(' ', ungated)}");
+            Pass(20, $"PerfHub 测量项纳管检查完成（含告警:{string.Join(' ', ungated)} —— 不拦截，重录后消警）");
+        }
+    }
+    else Pass(20, "PerfHub 源/基线缺一，跳过（非本仓形态）");
+}
 
 static void MutateFile(string path, Func<string, string> mutate, List<string>? touch = null)
 {
