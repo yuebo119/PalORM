@@ -131,6 +131,9 @@ public sealed class ExternalDatabaseBulkTests
     /// <c>EntityDataReaderTests</c> 确定性覆盖，不依赖服务端能力。</para></summary>
     [Test]
     [Property("Category", "ExternalDatabase")]
+    // 与 SET GLOBAL local_infile=OFF 的用例串行：否则全量跑时本用例可能落在 OFF 窗口内
+    // 被静默降级为多值回退，BulkCopy 路径覆盖率归零（2026-10-18 审计实测）
+    [NotInParallel("LocalInfileGlobal")]
     public async Task MySql_BulkCopy_AllWhitelistedTypes_RoundTripPreservesValues()
     {
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);

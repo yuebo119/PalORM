@@ -161,6 +161,12 @@ public sealed class MySqlProvider : IDbProvider
     /// <summary>MySQL 不支持 RETURNING 子句(自增主键回读走 LAST_INSERT_ID 路径)。</summary>
     public static bool SupportsReturningClause => false;
 
+    /// <summary>清空 local_infile 能力探测缓存（测试基础设施入口，经 InternalsVisibleTo 暴露给
+    /// Integration 测试）。真库用例在运行中 SET GLOBAL local_infile=OFF 再恢复 ON，恢复后
+    /// 缓存仍可能持有 OFF 结论至 60s TTL 到期，导致其余用例静默降级多值路径（BulkCopy 集成
+    /// 覆盖率长期 0%，2026-10-18 审计实测）。生产代码不调用本方法。</summary>
+    internal static void ResetLocalInfileProbeCache() => CapabilityProbeCache<LocalInfileProbe>.Clear();
+
     /// <summary>CURRENT_TIMESTAMP——注意 MySQL 返回会话时区时间(与 SQLite 的恒 UTC 语义不同,ITM-326)。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 

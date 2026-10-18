@@ -52,6 +52,15 @@ internal static class CapabilityProbeCache<T>
     /// <summary>强制失效单键（ITM-892 族：TTL 窗口内服务端状态变化，失败后重探测）。</summary>
     public static void Invalidate(string key) => Cache.TryRemove(key, out _);
 
+    /// <summary>清空全部缓存（测试基础设施用：真库用例会在运行中修改服务端全局变量，改回原值后
+    /// 缓存仍可能持有旧结论直到 TTL 到期，使后续用例静默走降级分支——2026-10-18 审计实测
+    /// <c>MySqlBulkCopyInserter</c> 集成覆盖率长期 0%，根因即此。</summary>
+    public static void Clear()
+    {
+        Cache.Clear();
+        NegativeUntil.Clear();
+    }
+
     /// <summary>R3（2026-10-12）：负结果短 TTL 标记表——探测持续失败形态（受限账号/网络分区）
     /// 下，原每次调用重付探测往返 + 超时（local_infile 探测 CommandTimeout=3s 是最坏延迟洞）。
     /// 窗口内调用方经 <see cref="IsNegativeFresh"/> 直接走降级路径；探测成功时由
