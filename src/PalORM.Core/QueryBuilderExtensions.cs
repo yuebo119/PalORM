@@ -20,39 +20,257 @@ public static class QueryBuilderExtensions
             ? $"{scope}:{builder._cacheKey}"
             : builder._cacheKey!;
 
-    /// <summary>S3b：查询管线的弹性编排。成功路径优先直发——会话未物化执行器、非进程级熔断、
-    /// 无总预算时，首次尝试不建执行器/CTS/委托；瞬时失败后才物化并从 attempt 1 续跑。
-    /// 事务内、显式配置过弹性、已有执行器（此前失败过）时走原执行器路径。</summary>
-    private static async ValueTask<TResult> ExecuteWithResilienceAsync<T, TResult>(
-        QueryBuilder<T> builder, Func<CancellationToken, Task<TResult>> core,
-        DbTransaction? boundTransaction, CancellationToken ct) where T : class, new()
+    /// <summary>S4：查询管线的显式执行状态——只携带真正需要的字段，避免整只 QueryBuilder
+    /// 被本地函数闭包与异步状态机捕获。连接归还在每次尝试的 finally 内完成（重试中间连接
+    /// 立即归还，不再等到操作结束）。</summary>
+    internal readonly record struct QueryExecutionState<T>(
+        DbConnection PrimaryConnection,
+        bool UseReadRoute,
+        SessionOperationState OperationState,
+        Func<CancellationToken, ValueTask<DbConnection>>? ReadConnProvider,
+        ReusableQuerySlot? QuerySlot,
+        Func<DbDataReader, T> Factory,
+        int? Take,
+        bool Prepared,
+        TimeSpan CommandTimeout,
+        IQueryCache QueryCache,
+        string? CacheKey,
+        TimeSpan? CacheTtl,
+        string? CacheTenantScope,
+        string Sql,
+        IReadOnlyList<DbParameter> Parameters,
+        QueryContext Context,
+        List<IQueryInterceptor> Interceptors,
+        long? SwStart,
+        DbTransaction? BoundTransaction,
+        Func<DbConnection, bool, ValueTask>? ReadConnReturner) where T : class, new();
+
+    /// <summary>S4：弹性编排的只读上下文（从 builder 一次投影，helper 状态机不再持有 builder）。</summary>
+    internal readonly record struct ResilienceContext(
+        bool Configured,
+        bool DirectFirst,
+        ResilienceExecutor? Existing,
+        IQuerySessionResilience? Session,
+        int Generation,
+        DbOptions? OptionsSnapshot,
+        Func<Exception, bool>? IsTransient,
+        Type? ProviderType)
     {
-        if (boundTransaction is not null || !builder.SessionResilienceConfigured)
-            return await core(ct).ConfigureAwait(false);
-        ResilienceExecutor? executor = builder._resilience;
-        if (executor is null && builder.SessionDirectFirstAllowed)
+        internal ResilienceExecutor Resolve()
+        {
+            if (Existing is not null) return Existing;
+            if (Session is { } session && session.ResilienceGeneration == Generation)
+                return session.GetResilienceExecutor();
+            if (OptionsSnapshot is not null && IsTransient is not null)
+                return new ResilienceExecutor(OptionsSnapshot, IsTransient, ProviderType);
+            return Session!.GetResilienceExecutor();
+        }
+
+        internal bool IsTransientException(Exception exception)
+            => IsTransient?.Invoke(exception) ?? Existing?.IsTransient(exception) ?? false;
+    }
+
+    /// <summary>S4：弹性编排（首发直路 + 失败后续跑）。core 是 static 方法组，状态按值传入，
+    /// 调用点不产生闭包；builder 不进入本方法的状态机。</summary>
+    private static async ValueTask<TResult> ExecuteWithResilienceAsync<TState, TResult>(
+        ResilienceContext context, Func<TState, CancellationToken, Task<TResult>> core,
+        TState state, DbTransaction? boundTransaction, CancellationToken ct)
+    {
+        if (boundTransaction is not null || !context.Configured)
+            return await core(state, ct).ConfigureAwait(false);
+        ResilienceExecutor? executor = context.Existing;
+        if (executor is null && context.DirectFirst)
         {
             try
             {
-                return await core(ct).ConfigureAwait(false);
+                return await core(state, ct).ConfigureAwait(false);
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested && builder.GetResilience().IsTransient(ex))
+            catch (Exception ex) when (!ct.IsCancellationRequested && context.IsTransientException(ex))
             {
-                executor = builder.GetResilience();
+                executor = context.Resolve();
                 if (executor.CanRetry)
                 {
-                    return await executor.ExecuteAfterFirstFailureAsync(
-                        static (c, token) => c(token), core, ct).ConfigureAwait(false);
+                    return await executor.ExecuteAfterFirstFailureAsync(core, state, ct)
+                        .ConfigureAwait(false);
                 }
                 executor.RecordDirectFailure(ex);
                 throw;
             }
         }
-        executor ??= builder.GetResilience();
+        executor ??= context.Resolve();
         if (executor.IsPassThrough)
-            return await core(ct).ConfigureAwait(false);
-        return await executor.ExecuteAsync(
-            static (c, token) => c(token), core, ct).ConfigureAwait(false);
+            return await core(state, ct).ConfigureAwait(false);
+        return await executor.ExecuteAsync(core, state, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>S4：连接获取（与 QueryBuilder.AcquireExecutionConnectionAsync 同语义，
+    /// 但只依赖状态字段，不捕获 builder）。</summary>
+    private static ValueTask<DbConnection> AcquireExecutionConnectionAsync<T>(
+        in QueryExecutionState<T> state, CancellationToken token) where T : class, new()
+        => state.BoundTransaction is not null
+            || (!state.UseReadRoute && !state.OperationState.ParallelReadsEnabled)
+            ? ValueTask.FromResult(state.PrimaryConnection)
+            : state.ReadConnProvider!(token);
+
+    /// <summary>S4：ToList 单次尝试内核——复用命令、物化、缓存写入、连接归还。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "单次尝试内核的复用/新建命令分支、参数绑定、物化、缓存与连接归还为顺序语义；"
+            + "拆分需跨方法传递命令所有权与连接健康标记，状态面更大。")]
+    private static async Task<List<T>> ExecuteListCoreAsync<T>(
+        QueryExecutionState<T> state, string? effectiveCacheKey, CancellationToken token)
+        where T : class, new()
+    {
+        DbConnection connection = await AcquireExecutionConnectionAsync(state, token).ConfigureAwait(false);
+        bool healthy = false;
+        DbCommand? ownedCommand = null;
+        try
+        {
+            DbCommand? reusable = state.QuerySlot is not null && !state.OperationState.ParallelReadsEnabled
+                ? state.QuerySlot.TryAcquire(connection, state.Sql)
+                : null;
+            DbCommand cmd;
+            bool parametersBound;
+            if (reusable is null
+                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, state.Parameters)))
+            {
+                cmd = connection.CreateCommand();
+                ownedCommand = cmd;
+                parametersBound = false;
+            }
+            else
+            {
+                cmd = reusable;
+                parametersBound = reusable.Parameters.Count > 0;
+            }
+
+            if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
+                cmd.CommandText = state.Sql;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
+            cmd.Transaction = state.BoundTransaction;
+            if (!parametersBound) AddParameters(cmd, state.Parameters);
+            NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
+            await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            List<T> list = await ResultListReader.ReadAllAsync(
+                reader, state.Factory,
+                state.Take.HasValue ? Math.Min(state.Take.Value, MaxPreallocatedCapacity) : 16,
+                token).ConfigureAwait(false);
+            NotifyInterceptorsOnAfter(state.Interceptors, state.Context, state.SwStart, list.Count);
+            string? key = effectiveCacheKey;
+            if (key is null && state.CacheKey is not null)
+            {
+                key = state.CacheTenantScope is { } scope
+                    ? $"{scope}:{state.CacheKey}"
+                    : state.CacheKey;
+            }
+            if (key is not null)
+                state.QueryCache.Set(key, new List<T>(list), state.CacheTtl);
+            healthy = true;
+            return list;
+        }
+        finally
+        {
+            if (ownedCommand is not null)
+                await ownedCommand.DisposeAsync().ConfigureAwait(false);
+            if (state.ReadConnReturner is not null)
+                await state.ReadConnReturner(connection, healthy).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>S4：ForEach 单次尝试内核——不物化列表，逐行回调。</summary>
+    private static async Task<long> ExecuteForEachCoreAsync<T>(
+        QueryExecutionState<T> state, Func<T, CancellationToken, ValueTask> action, CancellationToken token)
+        where T : class, new()
+    {
+        DbConnection connection = await AcquireExecutionConnectionAsync(state, token).ConfigureAwait(false);
+        bool healthy = false;
+        DbCommand? ownedCommand = null;
+        try
+        {
+            DbCommand cmd = connection.CreateCommand();
+            ownedCommand = cmd;
+            cmd.CommandText = state.Sql;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
+            cmd.Transaction = state.BoundTransaction;
+            AddParameters(cmd, state.Parameters);
+            NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
+            await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
+            long rowCount = 0;
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                await action(state.Factory(reader), token).ConfigureAwait(false);
+                rowCount++;
+            }
+            NotifyInterceptorsOnAfter(state.Interceptors, state.Context, state.SwStart, (int)rowCount);
+            healthy = true;
+            return rowCount;
+        }
+        finally
+        {
+            if (ownedCommand is not null)
+                await ownedCommand.DisposeAsync().ConfigureAwait(false);
+            if (state.ReadConnReturner is not null)
+                await state.ReadConnReturner(connection, healthy).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>S4：First/Single 单次尝试内核——最多 maxRows 行直读，不建 List。</summary>
+    private static async Task<(T? Row, int Rows)> ExecuteRowsCoreAsync<T>(
+        QueryExecutionState<T> state, int maxRows, CancellationToken token)
+        where T : class, new()
+    {
+        DbConnection connection = await AcquireExecutionConnectionAsync(state, token).ConfigureAwait(false);
+        bool healthy = false;
+        DbCommand? ownedCommand = null;
+        try
+        {
+            DbCommand? reusable = state.QuerySlot is not null && !state.OperationState.ParallelReadsEnabled
+                ? state.QuerySlot.TryAcquire(connection, state.Sql)
+                : null;
+            DbCommand cmd;
+            bool parametersBound;
+            if (reusable is null
+                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, state.Parameters)))
+            {
+                cmd = connection.CreateCommand();
+                ownedCommand = cmd;
+                parametersBound = false;
+            }
+            else
+            {
+                cmd = reusable;
+                parametersBound = reusable.Parameters.Count > 0;
+            }
+
+            if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
+                cmd.CommandText = state.Sql;
+            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
+            cmd.Transaction = state.BoundTransaction;
+            if (!parametersBound) AddParameters(cmd, state.Parameters);
+            NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
+            await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            T? first = null;
+            int rows = 0;
+            while (rows < maxRows && await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                if (rows == 0)
+                    first = state.Factory(reader);
+                rows++;
+            }
+            NotifyInterceptorsOnAfter(state.Interceptors, state.Context, state.SwStart, rows);
+            healthy = true;
+            return (first, rows);
+        }
+        finally
+        {
+            if (ownedCommand is not null)
+                await ownedCommand.DisposeAsync().ConfigureAwait(false);
+            if (state.ReadConnReturner is not null)
+                await state.ReadConnReturner(connection, healthy).ConfigureAwait(false);
+        }
     }
 
     /// <summary>执行查询并返回全部实体列表。
@@ -126,36 +344,21 @@ public static class QueryBuilderExtensions
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
-        // A7（2026-10-01 全 API 逐项轮）：时间戳替代 Stopwatch（每查询省 1 个 Stopwatch 分配）。
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
-        string outcome = "error";
+        SessionOperationState operationState = builder._operationState;
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
-
-        // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
-        DbConnection? lastReadConnection = null;
-        // 单次尝试内核——每行经回调消费，不物化列表；拦截器语义与 ToListAsync 一致
-        async Task<long> ExecuteCoreAsync(CancellationToken token)
-        {
-            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
-            lastReadConnection = connection;
-            await using DbCommand cmd = connection.CreateCommand();
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            cmd.Transaction = boundTransaction;
-            AddParameters(cmd, parameters);
-            NotifyInterceptorsOnBefore(interceptors, context);
-            await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
-            long rowCount = 0;
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false))
-            {
-                await action(builder._factory(reader), token).ConfigureAwait(false);
-                rowCount++;
-            }
-            NotifyInterceptorsOnAfter(interceptors, context, swStart, (int)rowCount);
-            return rowCount;
-        }
-
+        bool metrics = builder._metrics;
+        string? metricsName = builder._metricsName;
+        Func<ValueTask>? readConnInvalidator = builder._readConnInvalidator;
+        ResilienceContext resilience = builder.CreateResilienceContext();
+        var state = new QueryExecutionState<T>(
+            builder._conn, builder._useReadRoute, operationState,
+            builder._readConnProvider, builder._querySlot, builder._factory,
+            builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
+            builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
+            sql, parameters, context, interceptors, swStart, boundTransaction,
+            builder._readConnReturner);
+        string outcome = "error";
         try
         {
             // ITM-811（r22 登记，r23 实修）：内层租约与 ExecuteQueryAsync 同型走 EnterReadOnly
@@ -163,9 +366,13 @@ public static class QueryBuilderExtensions
             // 以独占 Enter(null) 击穿（原形态使 ForParallelReads 作用域内 ForEachAsync
             // 结构性必抛，AuditProbeTests.Probe1 锁定）。
             using SessionOperationState.SessionOperationLease operationStateLease =
-                builder._operationState.EnterReadOnly(operationOwner);
+                operationState.EnterReadOnly(operationOwner);
             long count = await ExecuteWithResilienceAsync(
-                builder, ExecuteCoreAsync, boundTransaction, ct).ConfigureAwait(false);
+                resilience,
+                static (s, token) => ExecuteForEachCoreAsync(s.State, s.Action, token),
+                (State: state, Action: action),
+                boundTransaction,
+                ct).ConfigureAwait(false);
             outcome = "success";
             return count;
         }
@@ -173,24 +380,17 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
-            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
-            // （NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
-            // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
-            if (builder.GetResilience().IsTransient(exception))
-                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
-            NotifyInterceptorsOnError(builder._interceptors, context, exception);
+            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接。
+            if (readConnInvalidator is not null && resilience.IsTransientException(exception))
+                await readConnInvalidator().ConfigureAwait(false);
+            NotifyInterceptorsOnError(interceptors, context, exception);
             throw;
         }
         finally
         {
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && swStart is { } metricStart)
-                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
-            // ITM-797①（r23）：与 ExecuteQueryAsync 同型——作用域内的池连接用完归还
-            // （作用域外归还器对主连接为空操作），否则作用域内每次 ForEachAsync 都
-            // 新建连接不复用。记录的是最后一次尝试的连接（重试中间尝试由作用域退出兜底）。
-            if (lastReadConnection is not null)
-                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
+            if (metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), metricsName);
         }
     }
 
@@ -214,123 +414,34 @@ public static class QueryBuilderExtensions
         string provider = builder._dialect.GetName();
         bool observed = builder._tracing || builder._metrics;
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
-        // v3.1：Stopwatch 延迟创建——仅当 Tracing/Metrics/拦截器任一启用时才分配（拦截器 OnAfter 需要 Elapsed）。
-        // 默认配置（无观测性 + 无拦截器）的热路径省一次 StartNew + Stop（~150ns）。
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
-        // A7（2026-10-01 全 API 逐项轮）：时间戳替代 Stopwatch（每查询省 1 个 Stopwatch 分配）。
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
-        string outcome = "error";
-        // v5.4 弹性接入（评审 P1-a）：WithRetry/WithCircuitBreaker 此前对内置管线无效。
-        // 只读 SELECT 管线现经会话弹性策略执行。接入条件：
-        // ① 命令不带事务——事务内重试会在语句失败后二次失败（如 PG aborted transaction）
-        //   并以次生异常掩盖根因，且跨尝试的快照语义不成立；
-        // ② 策略非直通（MaxRetries=0 且 CircuitBreakerThreshold=0，即 Testing 预设）。
-        //    注意：默认配置（MaxRetries=3 / 熔断阈值 5）**不是**直通——只读查询默认就走执行器，
-        //    此前这里"默认直通路径零开销"的说法不成立（v5.6 实测更正）。
-        //    实测常数开销 ≈272 B/查询，与结果行数无关（单行查询 +8% 分配，千行 +0.2%）。
-        //    三项独立测量之和与 in-situ A/B 之差逐字节吻合（168+56+48 = 272，实测 272~278）：
-        //      · 超时 CTS + CancelAfter 定时器 ≈168 B，每次尝试一份——这正是 CommandTimeout
-        //        语义本身，且覆盖连接获取与读取器迭代，不是驱动侧 CommandTimeout 的子集，不能省
-        //      · 调用点把单次尝试内核转成委托 1 次 = 56 B（内核是捕获 builder 的 async 局部函数，
-        //        目标实例每次不同，无法缓存委托）
-        //      · 执行器机械（熔断进出 + 异步状态机 ≈48 B），量级最小且与重试/熔断语义耦合
-        //    【step10 PoC 实测证伪（2026-10-01），裁决不做，勿重开】：struct 内核 + 泛型约束
-        //    （IResilienceKernel + 显式类型参数）方案全量实施后 BDN 实测 GetByKey 仅 -61B
-        //    （即 56B 委托一项；QueryAll -495B/1.5MB 噪声级），远低于 200B 放弃线——
-        //    原估算中"~250 B display class"是误读：该盒属外层 async 方法的状态机
-        //    （跨 await 持有管线局部变量），内核 struct 化不影响它；要消它须手写 awaiter
-        //    重构外层方法（T5 级深水区），104B 级收益不构成理由。耗时无变化（同前评估）。
-        //    直通配置下三项都不发生，但同时也失去超时包装：慢命令抛驱动自身异常，
-        //    不再是带 PalORM.InfrastructureTimeout 标记的 TimeoutException。
-        // 写入路径（ExecuteNonQueryAsync/Bulk/StoredProc/原始 SQL 家族）维持直连：
-        // 重试非幂等写有重复执行风险（ITM-310 契约），显式需求请用 ExecuteWithResilience 包裹。
+        SessionOperationState operationState = builder._operationState;
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
-
-        // 单次尝试内核——每次重试重建连接租约/命令/读取器；缓存写入仅在成功尝试发生；
-        // 拦截器 OnBefore/OnError 按尝试触发（失败的尝试确实发生了），OnAfter 仅成功尝试。
-        // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
-        DbConnection? lastReadConnection = null;
-        async Task<List<T>> ExecuteCoreAsync(CancellationToken token)
-        {
-            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
-            lastReadConnection = connection;
-            // A9（2026-10-01 全 API 逐项轮）：读查询命令的惰性晋升复用——命中返回会话所有的
-            // 晋升命令（ownsCommand=false：参数集合持久持有，逐位置就地写 Value）；未晋升走
-            // 新建 + 用后释放（现状形态）。守卫见 QueryBuilder.TryAcquireReusableSelectCommand
-            // （连接一致/并行读禁用/晋升阈值 3）。
-            // R-UNNESTB（2026-10-02）：PG 连接串的 auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，
-            // 「Clear 集合 + Add 新参数实例」会让驱动沿用 prepare 时的绑定值（探针 mergearray
-            // 变体 C 实测）。故复用命令的参数集合持久持有，命中时逐位置就地写 Value； DbType
-            // 形状变化保守回退新建命令（正确性优先，同型循环——晋升的主要受益场景——不受影响）。
-            DbCommand? reusable = builder.TryAcquireReusableSelectCommand(connection, sql);
-            bool ownsCommand;
-            bool parametersBound;
-            DbCommand cmd;
-            // 未晋升（新建）/ 形状漂移（保守回退新建）共用"新建命令"分支：
-            // 晋升后首次绑定（参数集合为空）也走 AddParameters，但不 owns——集合自此持久持有
-            if (reusable is null
-                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, parameters)))
-            {
-                cmd = connection.CreateCommand();
-                ownsCommand = true;
-                parametersBound = false;
-            }
-            else
-            {
-                cmd = reusable;
-                ownsCommand = false;
-                parametersBound = reusable.Parameters.Count > 0;
-            }
-            try
-            {
-                // 复用路径的 CommandText 与槽内恒等（TryAcquireReusableSelectCommand 以 SQL 文本
-                // 文本为命中键），同值重设无益且会让驱动重置语句状态——同 GetByKey 复用分支的
-                // string.Equals 守卫口径。[推断] Npgsql 同值 setter 短路未实测，此处仅消除
-                // 不必要的重设；收益待测（探针可扩展 KeyLookupCommandDiag 对照）。
-                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
-                    cmd.CommandText = sql;
-                cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-                cmd.Transaction = boundTransaction;
-                if (!parametersBound) AddParameters(cmd, parameters);
-                // v3.1：拦截器空列表跳过——默认会话无拦截器，foreach 迭代空 List 仍有方法调用开销。
-                NotifyInterceptorsOnBefore(interceptors, context);
-                await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
-                await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-                // ITM-712：Take 是"最多 N 行"的上界而非预期行数——直接作为容量会让 Take(1_000_000_000)
-                // 触发巨量分配/OOM（ToPageAsync 的 pageSize 经 paged._take 同源），故封顶。
-                // 无 Take 时 16 起步；超出初始容量的结果集由 ResultListReader 池化收集后一次精确分配。
-                List<T> list = await ResultListReader.ReadAllAsync(
-                    reader, builder._factory,
-                    builder._take.HasValue ? Math.Min(builder._take.Value, MaxPreallocatedCapacity) : 16,
-                    token).ConfigureAwait(false);
-                NotifyInterceptorsOnAfter(interceptors, context, swStart, list.Count);
-                // 缓存存入列表副本：列表结构隔离；实体实例与首个调用方共享（浅拷贝语义）。
-                // ADR-L：实际 key 经租户作用域前缀组装（与 TryGet 消费点同源）。
-                // A8（2026-10-01）：key 由 ToListAsync 单次组装传入（未命中路径避免 Set 侧
-                // 二次拼接）；其余调用点（First/Single 截断族与 ToPage 已清 _cacheKey）
-                // 经下方兜底保持原语义（非 null 时才拼）。
-                effectiveCacheKey ??= builder._cacheKey is not null ? EffectiveCacheKey(builder) : null;
-                if (effectiveCacheKey is not null)
-                    builder._queryCache.Set(effectiveCacheKey, new List<T>(list), builder._cacheTtl);
-                return list;
-            }
-            finally
-            {
-                // A9：新建命令用后释放；复用命令的参数集合持久持有（R-UNNESTB，见上），不清参
-                if (ownsCommand) await cmd.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-
+        bool metrics = builder._metrics;
+        string? metricsName = builder._metricsName;
+        Func<ValueTask>? readConnInvalidator = builder._readConnInvalidator;
+        ResilienceContext resilience = builder.CreateResilienceContext();
+        var state = new QueryExecutionState<T>(
+            builder._conn, builder._useReadRoute, operationState,
+            builder._readConnProvider, builder._querySlot, builder._factory,
+            builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
+            builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
+            sql, parameters, context, interceptors, swStart, boundTransaction,
+            builder._readConnReturner);
+        string outcome = "error";
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =
-                builder._operationState.EnterReadOnly(operationOwner);
-            // 操作门禁横跨全部重试尝试持有——一次用户操作仍是一次门禁占用，
-            // 与 SessionOperationState 的单活动操作契约一致。ARCH-001（2026-09-23）：
-            // 只读入口走 EnterReadOnly——并行读作用域内允许并发租约，作用域外行为逐位不变。
+                operationState.EnterReadOnly(operationOwner);
+            // 操作门禁横跨全部重试尝试持有——一次用户操作仍是一次门禁占用。
             List<T> list = await ExecuteWithResilienceAsync(
-                builder, ExecuteCoreAsync, boundTransaction, ct).ConfigureAwait(false);
+                resilience,
+                static (s, token) => ExecuteListCoreAsync(s.State, s.CacheKey, token),
+                (State: state, CacheKey: effectiveCacheKey),
+                boundTransaction,
+                ct).ConfigureAwait(false);
             outcome = "success";
             return list;
         }
@@ -338,24 +449,17 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
-            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
-            // （NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
-            // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
-            if (builder.GetResilience().IsTransient(exception))
-                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
-            NotifyInterceptorsOnError(builder._interceptors, context, exception);
+            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接。
+            if (readConnInvalidator is not null && resilience.IsTransientException(exception))
+                await readConnInvalidator().ConfigureAwait(false);
+            NotifyInterceptorsOnError(interceptors, context, exception);
             throw;
         }
         finally
         {
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && swStart is { } metricStart)
-                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
-            // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
-            // 记录的是最后一次尝试的连接——重试路径上中间尝试的连接由作用域退出时统一释放（有界：
-            // 每操作至多 MaxRetries+1 条），换取不改动内核主体缩进的低风险接线。
-            if (lastReadConnection is not null)
-                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
+            if (metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), metricsName);
         }
     }
 
@@ -486,67 +590,30 @@ public static class QueryBuilderExtensions
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
-        string outcome = "error";
+        SessionOperationState operationState = builder._operationState;
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
-
-        // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
-        DbConnection? lastReadConnection = null;
-        // 单次尝试内核——最多读 maxRows 行直进元组；A9 复用槽与新建命令的分支形态与
-        // ExecuteQueryAsync 逐位同源（R-UNNESTB：复用命令参数集合持久持有，就地写 Value）。
-        async Task<(T? Row, int Rows)> ExecuteCoreAsync(CancellationToken token)
-        {
-            DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, token).ConfigureAwait(false);
-            lastReadConnection = connection;
-            DbCommand? reusable = builder.TryAcquireReusableSelectCommand(connection, sql);
-            bool ownsCommand;
-            bool parametersBound;
-            DbCommand cmd;
-            if (reusable is null
-                || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, parameters)))
-            {
-                cmd = connection.CreateCommand();
-                ownsCommand = true;
-                parametersBound = false;
-            }
-            else
-            {
-                cmd = reusable;
-                ownsCommand = false;
-                parametersBound = reusable.Parameters.Count > 0;
-            }
-            try
-            {
-                if (!string.Equals(cmd.CommandText, sql, StringComparison.Ordinal))
-                    cmd.CommandText = sql;
-                cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-                cmd.Transaction = boundTransaction;
-                if (!parametersBound) AddParameters(cmd, parameters);
-                NotifyInterceptorsOnBefore(interceptors, context);
-                await PrepareCommandAsync(cmd, builder._prepared, token).ConfigureAwait(false);
-                await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-                T? first = null;
-                int rows = 0;
-                while (rows < maxRows && await reader.ReadAsync(token).ConfigureAwait(false))
-                {
-                    if (rows == 0)
-                        first = builder._factory(reader);
-                    rows++;
-                }
-                NotifyInterceptorsOnAfter(interceptors, context, swStart, rows);
-                return (first, rows);
-            }
-            finally
-            {
-                if (ownsCommand) await cmd.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-
+        bool metrics = builder._metrics;
+        string? metricsName = builder._metricsName;
+        Func<ValueTask>? readConnInvalidator = builder._readConnInvalidator;
+        ResilienceContext resilience = builder.CreateResilienceContext();
+        var state = new QueryExecutionState<T>(
+            builder._conn, builder._useReadRoute, operationState,
+            builder._readConnProvider, builder._querySlot, builder._factory,
+            builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
+            builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
+            sql, parameters, context, interceptors, swStart, boundTransaction,
+            builder._readConnReturner);
+        string outcome = "error";
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =
-                builder._operationState.EnterReadOnly(operationOwner);
+                operationState.EnterReadOnly(operationOwner);
             (T? row, int rows) result = await ExecuteWithResilienceAsync(
-                builder, ExecuteCoreAsync, boundTransaction, ct).ConfigureAwait(false);
+                resilience,
+                static (s, token) => ExecuteRowsCoreAsync(s.State, s.MaxRows, token),
+                (State: state, MaxRows: maxRows),
+                boundTransaction,
+                ct).ConfigureAwait(false);
             outcome = "success";
             return result;
         }
@@ -554,22 +621,17 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
-            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
-            //（NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
-            // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
-            if (builder.GetResilience().IsTransient(exception))
-                await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
-            NotifyInterceptorsOnError(builder._interceptors, context, exception);
+            // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接。
+            if (readConnInvalidator is not null && resilience.IsTransientException(exception))
+                await readConnInvalidator().ConfigureAwait(false);
+            NotifyInterceptorsOnError(interceptors, context, exception);
             throw;
         }
         finally
         {
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && swStart is { } metricStart)
-                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
-            // ARCH-001（2026-09-23）：并行读作用域内的池连接用完归还（作用域外与主连接为空操作）。
-            if (lastReadConnection is not null)
-                await builder.ReleaseReadConnectionAsync(lastReadConnection, healthy: outcome == "success").ConfigureAwait(false);
+            if (metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), metricsName);
         }
     }
 
