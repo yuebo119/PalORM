@@ -204,7 +204,7 @@ internal static partial class ReportGenerator
         md.AppendLine(hasWorkload
             ? "| 4 | 并发扩展 | ✅ 已测 | 线程档曲线见负载表 |"
             : "| 4 | 并发扩展 | ❌ 未采集 | 缺 --workload JSON |");
-        md.AppendLine("| 5 | 数据形状敏感性 | ⚠️ 部分 | S1 全档 + S2 宽表（PerfHub）；S3-S5 由 BDN 专项类覆盖，PerfHub 跨方言未覆盖 |");
+        md.AppendLine("| 5 | 数据形状敏感性 | ⚠️ 部分 | S1/S2 由 PerfHub 覆盖；S3/S5 仅有形状定义、尚未接入基准；S4 二进制由 08_Binary 派生形状覆盖（256B/64KB） |");
         md.AppendLine(PoolLine(pool));
         md.AppendLine(hasMemory
             ? "| 7 | 资源效率 | ✅ 部分 | 分配/存活曲线见内存表；流式对比仅在 PerfHub StreamAll |"
