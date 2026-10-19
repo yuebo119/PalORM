@@ -355,9 +355,15 @@ internal sealed class SessionOperationState
     /// <para><b>语义零变化</b>：IsCurrentOperationScope 是 <c>_isActive &amp;&amp; owner匹配</c>
     /// 的与逻辑——预热只影响槽值，操作未 Enter 时 _isActive=false 照样判 false；槽值与
     /// Enter 会写的值恒同（this）；Exit 本就不清槽（v4.5）。无锁调用：AsyncLocal 写本身
-    /// 线程/流安全，且不读任何共享字段。</para></summary>
+    /// 线程/流安全，且不读任何共享字段。</para>
+    /// <para><b>S2：同值守卫</b>——原实现每次公共入口调用都无条件写 AsyncLocal，长会话/
+    /// 事务循环即使值已是 this 仍付一次 EC COW。值与 this 相等时跳过写入；Enter 的同值
+    /// 守卫（<see cref="Enter"/> 内）是同一先例。per-op 会话仍受门槛保护，不预热。</para></summary>
     internal void PrewarmCurrentOperationOwner()
-        => _currentOperationOwner.Value = this;
+    {
+        if (!ReferenceEquals(_currentOperationOwner.Value, this))
+            _currentOperationOwner.Value = this;
+    }
 
     /// <summary>step16-P1（门槛 2 版，深挖轮 2026-10-14）：本会话已完成的操作数（Enter/
     /// EnterTransactionOperation 走到写槽段即递增，锁内）。公共入口据此决定是否预热
