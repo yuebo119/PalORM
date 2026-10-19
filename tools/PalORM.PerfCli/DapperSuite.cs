@@ -31,6 +31,11 @@ internal static class DapperSuite
                 : "--filter * --join";
             // 单方言失败不中断整批：一个库不可达（实测：托管库的虚拟机停机）不该让已跑方言的结果作废
             Environment.SetEnvironmentVariable("DAPPER_SUITE_DIALECT", dialect);
+            // 默认参数 --filter * 覆盖官方套件全部基准，是完整批次而非子集。若让 Program.cs
+            // 按"args 含 filter"自动打 +filtered 标记，latest-dappersuite.json 永不更新，
+            // 统一报告会一直显示旧哨兵（2026-10-19 全量实测：报告仍指 09-29 批次）。
+            // 自定义 extraArgs 仍交给 Program.cs 按 filtered 规则判定。
+            Environment.SetEnvironmentVariable("DAPPER_SUITE_LABEL", DefaultLabel(extraArgs, dialect));
             var code = Perf.RunTee("dotnet",
                 $"run --project \"{Path.Combine(root, "bench", "PalORM.DapperSuite")}\" -c Release -- {runArgs}", log);
             // BDN 在"全部基准 NA"（库不可达）时仍退 0 并打印 "Benchmarks with issues"；过滤串失配时
@@ -62,4 +67,8 @@ internal static class DapperSuite
         Perf.Out($"全部方言跑测完成。BDN 报告在 {Path.Combine(root, "BenchmarkDotNet.Artifacts", "results")}/");
         return 0;
     }
+
+    /// <summary>默认参数（--filter *）是完整套件，返回非子集标签；自定义参数返回 null 交给夹具判定。</summary>
+    private static string? DefaultLabel(string[] extraArgs, string dialect)
+        => extraArgs.Length == 0 ? dialect : null;
 }
