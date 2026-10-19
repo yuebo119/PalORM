@@ -492,7 +492,9 @@ foreach (var doc in v27Docs.Distinct().OrderBy(d => d, StringComparer.Ordinal))
         var line = docLines[li];
         // 路径必须带可选 .ai/ 前缀整体匹配：裸匹配 scripts/ 会把 .ai/scripts/x.sh 截成
         // scripts/x.sh，对主仓根做存在性判定必然失败（2026-10-18 实测）。
-        foreach (Match m in Regex.Matches(line, @"(?:\.ai/)?scripts/[A-Za-z0-9._-]+\.(?:cs|sh|py|mjs)"))
+        // 前缀还要排除"更长路径的尾段"：`~/.zcode/scripts/eps-perf-check.mjs` 这类**仓外**
+        // 全局工具引用会被截出一段假的仓内相对路径（2026-10-19 实测 AGENTS.md:108 假红）。
+        foreach (Match m in Regex.Matches(line, @"(?<![/\\A-Za-z0-9._-])(?:\.ai/)?scripts/[A-Za-z0-9._-]+\.(?:cs|sh|py|mjs)"))
         {
             if (File.Exists(m.Value)) continue;
             // 历史性提及豁免：行内明确标注已迁移/原形态/曾用/历史/退役/作废/旧版/淘汰/已删除

@@ -80,8 +80,10 @@ internal static class Program
         Console.WriteLine("           追加跨夹具批次登记/口径/健康度与关键项——一次跑测只产出一份报告）");
         Console.WriteLine("  index  --results <结果库目录> --out <md>");
         Console.WriteLine("         （扫三套夹具的信封 JSON，生成跨夹具索引报告；默认 bench/results → bench/reports/perf-index.md）");
-        Console.WriteLine("  record-index --out <基线路径> [--results <结果库目录>]");
-        Console.WriteLine("         （把结果库里 PerfHub 的 PalORM 比值录成基线；DapperSuite 只作哨兵不进基线）");
+        Console.WriteLine("  record-index --out <基线路径> [--results <结果库目录>] [--batches <N=3>]");
+        Console.WriteLine("         （把结果库里 PerfHub 的 PalORM 比值录成基线；逐键取最近 N 个非子集批次");
+        Console.WriteLine("           的中位数，抗单批噪声；--batches 1 复现旧的「取最新一批」行为）");
+        Console.WriteLine("           注：DapperSuite 只作哨兵不进基线）");
         Console.WriteLine("  check-index --baseline <基线路径> [--results <结果库目录>]");
         Console.WriteLine("         （比对最近一批的比值，恶化超阈值即失败；缺项不判失败，全缺项判失败）");
     }
@@ -103,7 +105,15 @@ internal static class Program
         string resultsDir = line.Optional("results") is { Length: > 0 } dir
             ? dir
             : Path.Combine(RepoRoot(), "bench", "results");
-        return IndexGate.Record(resultsDir, line.Require("out"));
+        string windowText = line.Optional("batches") ?? "";
+        int window = IndexGate.DefaultRecordWindow;
+        if (windowText.Length > 0
+            && !int.TryParse(windowText, NumberStyles.Integer, CultureInfo.InvariantCulture, out window))
+        {
+            return Fail($"--batches 需要整数（收到 '{windowText}'）");
+        }
+
+        return IndexGate.Record(resultsDir, line.Require("out"), window);
     }
 
     private static int CheckIndex(CommandLine line)

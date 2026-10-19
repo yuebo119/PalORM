@@ -9,11 +9,18 @@ internal static class PerfEntry
     private const string BaselineBdn = "bench/baselines/perf-baseline.json";
     private const string BaselineIndex = "bench/baselines/perfhub-index-baseline.json";
 
-    public static int Gate()
+    /// <param name="ownSession">true=独立命令（自己起时钟与会话日志）；false=被 full 编排调用
+    /// （沿用 full 的时钟与日志）。2026-10-19 实测缺陷：作为 full 的一步时无条件 StartClock 把
+    /// 总时钟重置到门禁步，导致汇总百分比出现 7640% 之类失真、累计时间从 3s 重新计；同时
+    /// Begin/EndSessionLog 嵌套创建 gate 日志并提前关闭 full 日志（full 日志缺 exit 尾行）。</param>
+    public static int Gate(bool ownSession = true)
     {
         var root = Perf.RepoRoot();
-        Perf.StartClock();
-        Perf.BeginSessionLog(root, "gate");
+        if (ownSession)
+        {
+            Perf.StartClock();
+            Perf.BeginSessionLog(root, "gate");
+        }
         Perf.Step("[门禁 1/2] 微基准 BDN 基线");
         if (File.Exists(Path.Combine(root, BaselineBdn)))
         {
@@ -23,7 +30,7 @@ internal static class PerfEntry
                 $"check --results \"{Path.Combine(root, BdnResults)}\" --baseline \"{Path.Combine(root, BaselineBdn)}\"");
             if (code != 0)
             {
-                Perf.EndSessionLog(code);
+                if (ownSession) Perf.EndSessionLog(code);
                 return code;
             }
         }
@@ -37,11 +44,11 @@ internal static class PerfEntry
         {
             var finalCode = Perf.Run("dotnet",
                 $"run --project \"{Path.Combine(root, GateProject)}\" -c Release -- check-index --baseline \"{Path.Combine(root, BaselineIndex)}\"");
-            Perf.EndSessionLog(finalCode);
+            if (ownSession) Perf.EndSessionLog(finalCode);
             return finalCode;
         }
         Perf.Out($"跳过：缺 {BaselineIndex}（先跑 record-index 录制）");
-        Perf.EndSessionLog(0);
+        if (ownSession) Perf.EndSessionLog(0);
         return 0;
     }
 
@@ -191,7 +198,7 @@ internal static class PerfEntry
         {
             RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
         }
-        RunStep("门禁（BDN 基线 + 结果库基线）", Gate);
+        RunStep("门禁（BDN 基线 + 结果库基线）", () => Gate(ownSession: false));
         RunStep("统一报告", Report);
 
         if (stepFailed.Count > 0)

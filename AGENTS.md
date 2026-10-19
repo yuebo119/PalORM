@@ -17,7 +17,7 @@
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
 | **最高** | `.editorconfig` | SonarAnalyzer 39 条规则（P0+P1 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
-| **高** | `.ai/lessons.md` | 规范系统手册 v7.38（201 缺陷：A1-A7 + B1-B194 + XI 性能测量纪律 SOP，本地工具，独立嵌套 git 仓库） |
+| **高** | `.ai/lessons.md` | 规范系统手册 v7.40（209 缺陷：A1-A7 + B1-B202 + XI 性能测量纪律 SOP，本地工具，独立嵌套 git 仓库） |
 | **高** | `.ai/perf-ledger.md` | 性能决策账本（EPSL §4.4 三表：已用/不做/勿重开；立项前必查勿重开表，B182） |
 | **高** | `.ai/test/prompt.md` | 测试规范系统 v1.3（24 铁律 + 19 缺陷，本地工具，不入仓库） |
 | **高** | `docs/发布规范.md` | NuGet 发布流程 SOP（v5.0.0 实测，含 8 条实践教训） |
@@ -104,6 +104,8 @@
 | 技术债扫描 | `dotnet run --file scripts/tech-debt-scan.cs`（判定层 C# 化迁主仓） |
 
 ## 性能测试结果输出规范（2026-09-24 用户指定 · 2026-10-17 七节结构改版 · 每次跑测汇报强制）
+
+> **EPSL v1.6 接入**：预算契约 `perf-budgets.md`（门禁阈值单一事实源）、决策账本 `.ai/perf-ledger.md`（已用/不做/勿重开三表）、测量与汇报口径即本节；对账 `node ~/.zcode/scripts/eps-perf-check.mjs`（版本/模板引用/基准类数）。
 
 性能跑测/对比结果一律以下列固定结构与表格呈现，数据源为 `bench/perfhub/results/history-*.json` 明细（非报告转述）。**触发场景**：任何性能测试后汇报——`PerfCli full`、PerfHub 批次、A/B 复测、单夹具运行。四组表由 `PerfGate tables`（`PerfCli report` 自动附带）生成。
 
