@@ -38,6 +38,16 @@ public static class Program
             PoolProbe.RunAsync(args.Length > 1 ? args[1] : "sqlite").GetAwaiter().GetResult();
             return;
         }
+        // 版本化（[ConcurrencyCheck]）批量更新探针（S6 决策量具，观测不卡阈值）
+        // ——--versioned-update [sqlite|pg|mysql] [rows]
+        if (args.Length > 0 && args[0] == "--versioned-update")
+        {
+            VersionedBulkUpdateProbe.RunAsync(
+                args.Length > 1 ? args[1] : "sqlite",
+                args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 1000)
+                .GetAwaiter().GetResult();
+            return;
+        }
         // 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md）——BDN 单线程测不了锁/池/调度
         if (args.Length > 0 && args[0] == "--workload")
         {

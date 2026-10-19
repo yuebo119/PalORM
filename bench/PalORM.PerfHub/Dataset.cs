@@ -628,26 +628,28 @@ internal static class BulkSql
             return sb.ToString();
         }
 
-        sb.Append("UPDATE ").Append(table).Append(" SET ");
+        // MySQL ≥ 8.0.19：UPDATE JOIN table value constructor（与产品同代形态，替代
+        // 逐行 CASE 分支比较；20000 行实测 CASE WHEN 随批宽超线性，JOIN 为等值连接）。
+        sb.Append("UPDATE ").Append(table).Append(" AS tgt JOIN (VALUES ");
+        for (int r = 0; r < rowCount; r++)
+        {
+            if (r > 0) sb.Append(", ROW(");
+            else sb.Append("ROW(");
+            int b = r * ParamsPerRow;
+            for (int c = 0; c < SetColumns.Length; c++)
+            {
+                if (c > 0) sb.Append(',');
+                sb.Append(Dataset.P(b + c));
+            }
+            sb.Append(',').Append(Dataset.P(b + PkOffsetInRow)).Append(')');
+        }
+        sb.Append(") AS v(c0, c1, c2, c3, pk) ON tgt.").Append(q("Id"))
+            .Append(" = v.pk SET ");
         for (int c = 0; c < SetColumns.Length; c++)
         {
             if (c > 0) sb.Append(", ");
-            sb.Append(q(SetColumns[c])).Append(" = CASE ").Append(q("Id"));
-            for (int r = 0; r < rowCount; r++)
-            {
-                int b = r * ParamsPerRow;
-                sb.Append(" WHEN ").Append(Dataset.P(b + PkOffsetInRow))
-                    .Append(" THEN ").Append(Dataset.P(b + c));
-            }
-            sb.Append(" END");
+            sb.Append("tgt.").Append(q(SetColumns[c])).Append(" = v.c").Append(c);
         }
-        sb.Append(" WHERE ").Append(q("Id")).Append(" IN (");
-        for (int r = 0; r < rowCount; r++)
-        {
-            if (r > 0) sb.Append(", ");
-            sb.Append(Dataset.P((r * ParamsPerRow) + PkOffsetInRow));
-        }
-        sb.Append(')');
         return sb.ToString();
     }
 
