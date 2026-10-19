@@ -4,7 +4,7 @@
 
 **面向 Native AOT 的 .NET 11 微 ORM：编译时生成一切，运行时零反射**
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--preview.6-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
@@ -235,7 +235,7 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 ## 📦 安装
 
 > 三个 Provider 包任选其一，每个都自动携带 `PalORM.Core`（运行时）与 `PalORM.SourceGen`（编译时源生成器）。
-> 环境要求：.NET SDK `11.0.100-preview.6` 或更高（`global.json` 已锁定 `rollForward: latestMinor`）；IDE 需支持 Roslyn 源生成器（SourceGen 以 Microsoft.CodeAnalysis 5.9.0 构建）。Native AOT 发布另需约 4 GB 内存（ILC 编译器），详见[开发](#-开发)。
+> 环境要求：.NET SDK `11.0.100-rc.2` 或更高（`global.json` 已锁定 `rollForward: disable`）；IDE 需支持 Roslyn 源生成器（SourceGen 以 Microsoft.CodeAnalysis 5.9.0 构建）。Native AOT 发布另需约 4 GB 内存（ILC 编译器），详见[开发](#-开发)。
 
 ```xml
 <!-- PostgreSQL -->
@@ -254,7 +254,7 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 | ---------- | -------------------------- | -------------------------------------- |:------------------------:|
 | PostgreSQL | 14+（推荐 18）                 | Npgsql 10.0.3                          | SSL/TLS                  |
 | MySQL      | 8.0+（推荐 8.4 LTS）           | MySqlConnector 2.6.2                   | SSL/TLS                  |
-| SQLite     | 3.54+（via SQLite3MC 2.6.1） | Microsoft.Data.Sqlite.Core 11.0.0-rc.1 | AES-256（驱动层，`Password=`） |
+| SQLite     | 3.54+（via SQLite3MC 2.6.1） | Microsoft.Data.Sqlite.Core 11.0.0-rc.2 | AES-256（驱动层，`Password=`） |
 
 ## 🚀 快速开始
 
@@ -884,7 +884,7 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | 内存     | 256 MB      | 4 GB（ILC 编译器；运行时仅需约 100 MB）                            |
 | 磁盘     | 50 MB       | 100 MB，SSD 推荐（ILC 大量临时文件，HDD 编译慢 5-10x）                |
 
-软件：.NET SDK 11.0.100-preview.6+（`global.json` 锁定）· C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code（需支持 Roslyn 源生成器）。
+软件：.NET SDK 11.0.100-rc.2+（`global.json` 锁定）· C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code（需支持 Roslyn 源生成器）。
 
 ### 项目结构
 
