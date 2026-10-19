@@ -106,13 +106,16 @@ jobs:
         # 三个维度：分配字节数、分配比（同轮 PalORM/手写对照）、耗时比（同轮中位数之比）。
         # 不设绝对耗时阈值：实测同机两次运行的 ADO.NET 地板可漂 43%，绝对时间做门禁必然误报；
         # 比值在同轮内计算，把机器差异约掉。
+        # 基线分平台：CI 跑 Linux，用 perf-baseline-linux.json（2026-10-19 由已绿 Linux 运行录制）。
+        # 2026-10-19 实测：用 Windows 基线（1.230）判 Linux 当前批（1.737）假 FAIL；PalORM 绝对值仅 +3.4%，
+        # ADO 地板 −6.5%，比值被地板漂移推高。Windows 本地仍用 perf-baseline.json。
         # 缺基准、缺对照、基线 schema 不符、或哨兵（PalORM_*/ADO_NET_*）缺失 → 一律 exit 1，
         # 不存在"不可判定即放行"的分支。
         run: |
           dotnet run --project tools/PalORM.PerfGate -c Release -- \
             check \
             --results BenchmarkDotNet.Artifacts/results \
-            --baseline bench/baselines/perf-baseline.json
+            --baseline bench/baselines/perf-baseline-linux.json
 
       - name: Connection/pool churn probe (SQLite, observation)
         run: |

@@ -98,10 +98,12 @@
 （本机无 Docker，无法本地复现）。判定工具因此新增一条提示：基线录制平台与当前平台不同族时
 先打印警告行（`Windows` / `Linux` / `macOS` 三族，按 `RuntimeInformation.OSDescription` 归一——
 注意 Ubuntu 上该字段是 `"Ubuntu 24.04.1 LTS"`，字面不含 `Linux`，只认关键词会漏判，
-且会把两个 Ubuntu 补丁版本判成不同族而误报）。**待办**：首次 CI 运行后核对分配字节数与
-基线是否一致；一致即可把分配阈值收紧到 +5%，并以 CI 平台重录基线。
+且会把两个 Ubuntu 补丁版本判成不同族而误报）。**2026-10-19 已核对**：CI Linux 与 Windows
+基线的 27 项分配字节数逐项一致（门禁表 Δ分配全部 0.0%）；已用 CI 平台重录
+`bench/baselines/perf-baseline-linux.json`，CI 门禁改用它。分配阈值是否从 +20% 收紧到 +5%
+仍待用户裁决（当前保留 +20%）。
 
-### 基线记录（2026-09-16，`bench/baselines/perf-baseline.json`）
+### 基线记录（2026-09-16，`bench/baselines/perf-baseline.json`；2026-10-19，`perf-baseline-linux.json`）
 
 分配比与耗时比一起看，能看出一个结构性事实：**分配差距远大于时间差距**。
 
@@ -125,6 +127,10 @@ bash scripts/run-benchmarks.sh sqlite          # 全组（约 30 分钟）
 dotnet run --project tools/PalORM.PerfGate -c Release --   record --results BenchmarkDotNet.Artifacts/results --out bench/baselines/perf-baseline.json          --version <v> --date <yyyy-MM-dd>
 dotnet run --project tools/PalORM.PerfGate -c Release --   check --results BenchmarkDotNet.Artifacts/results --baseline bench/baselines/perf-baseline.json
 ```
+
+CI 专用 Linux 基线（`perf-baseline-linux.json`）记录命令相同，只换 `--out`；该基线由
+2026-10-19 06:20 已绿的 Linux 运行录制（Ubuntu 24.04 / AMD EPYC 7763）。Windows 本地继续用
+`perf-baseline.json`，CI 的 `perf-gate.yml` 显式改用 Linux 基线。
 
 ---
 
