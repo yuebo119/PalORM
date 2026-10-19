@@ -277,7 +277,14 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         {
             p.Value = id;
             await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            if (await r.ReadAsync(ct).ConfigureAwait(false)) found++;
+            // 口径修正：PalORM 臂调用 GetAsync 会完整物化 S1Row，Dapper 臂 QueryFirstOrDefault
+            // 同样物化；地板此前只 ReadAsync 计数，省掉了实体分配与列读取，导致 GetByKeySession/
+            // PooledGetByKey 的 P/ADO 比值失真。地板按同一物化语义计算。
+            if (await r.ReadAsync(ct).ConfigureAwait(false))
+            {
+                _ = Map(r);
+                found++;
+            }
         }
         return found;
     }
