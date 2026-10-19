@@ -4,6 +4,17 @@
 
 ## [未发布]
 
+### 📦 依赖升级（2026-10-19）
+
+- 直接依赖：TUnit / TUnit.Assertions 1.74.0 → 1.75.0；Microsoft.Data.Sqlite.Core
+  11.0.0-rc.1 → 11.0.0-rc.2（与 `global.json` SDK rc.2 同轨）；
+  Microsoft.SourceLink.GitHub 10.0.401 → 10.0.402。
+- `dotnet list package` 的 outdated/transitive 模式清零：传递依赖固定到最新稳定版
+  （System.* 10.0.13、Microsoft.Extensions.* 10.0.13、OpenTelemetry 1.20.0、
+  ApplicationInsights 3.2.0 等）；预览线（Roslyn 5.13-preview、Testing 3.2-preview、
+  SourceLink 11-rc、System.IO.Hashing 11-rc）不采用。
+- CI PostgreSQL 服务镜像 17 → 18（本机集成测试已在 PG 18.6 验证）；MySQL 保持 8.4 LTS。
+
 ## [6.5.0] - 2026-10-14
 
 ### 🎉 主线：会话池 `DataSessionPool` + 全性能战役（W1~W3 / R1~R4 / P0~P2 / S4）+ 两项并发缺陷修复

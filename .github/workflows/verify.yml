@@ -135,7 +135,7 @@ jobs:
         timeout-minutes: 30
         services:
             postgres:
-                image: postgres:17
+                image: postgres:18
                 env:
                     POSTGRES_HOST_AUTH_METHOD: trust
                     POSTGRES_DB: palorm
@@ -380,7 +380,7 @@ jobs:
         timeout-minutes: 20
         services:
             postgres:
-                image: postgres:17
+                image: postgres:18
                 env:
                     POSTGRES_HOST_AUTH_METHOD: trust
                     POSTGRES_DB: palorm

@@ -6,12 +6,12 @@
 
   <!-- ADO.NET Providers -->
   <ItemGroup>
-    <!-- ITM-依赖升级(2026-09-10)：preview.7 → rc.1（与 SDK 11.0.100-rc.1 同轨对齐；.NET 11 GA 后切 stable）
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-preview.7.26381.103" /> -->
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.1.26425.128" />
+    <!-- 2026-10-19 依赖升级轮：rc.1.26425.128 → rc.2.26504.105，与 global.json SDK
+         11.0.100-rc.2.26504.105 同轨（NuGet 平面索引确认 rc.2 为当前最新 .NET 11 线）。 -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.2.26504.105" />
     <!-- 2026-10-14 依赖升级轮：SQLite3MC 2.4.0→2.6.1（引擎升 SQLite 3.54.0；chacha20/poly1305
          硬件加速、临时文件加密与新 pragma，与本仓使用面（Batteries_V2.Init + 标准 SQL）零交集，
-         无初始化 API 变更）。Sqlite.Core 侧经 NuGet 平面索引核实 rc.1 已是最新发布版，维持。 -->
+         无初始化 API 变更）。2026-10-19 复核：2.6.1 仍为最新稳定版。 -->
     <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.6.1" />
     <!-- v5.0 阶段 2.2：Npgsql 9.0.3→10.0.3。破坏性变更（date/time 默认映射 DateOnly/TimeOnly）
          仅影响 GetValue/ExecuteScalar 路径；RowFactoryEmitter 全部用 GetDateTime/GetFieldValue<T>，
@@ -33,6 +33,8 @@
          全量 -warnaserror 构建全绿。 -->
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
+    <!-- 2026-10-19 复核：5.9.0 为最新稳定版；NuGet 上 5.13.0-1.26516.101 为预览版，
+         分析器与 SDK 编译器版本兼容优先，不采用预览。 -->
   </ItemGroup>
 
   <!-- 测试 -->
@@ -40,9 +42,10 @@
     <!-- 2026-09-29 依赖升级轮：1.69.0→1.71.0（minor，测试框架）——升后三测试套全量验证。
          2026-10-08 依赖升级轮：1.71.0→1.73.5（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。
          2026-10-11 依赖升级轮：1.73.5→1.73.19（patch 流，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。
-         2026-10-14 依赖升级轮：1.73.19→1.74.0（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。 -->
-    <PackageVersion Include="TUnit" Version="1.74.0" />
-    <PackageVersion Include="TUnit.Assertions" Version="1.74.0" />
+         2026-10-14 依赖升级轮：1.73.19→1.74.0（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。
+         2026-10-19 依赖升级轮：1.74.0→1.75.0（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。 -->
+    <PackageVersion Include="TUnit" Version="1.75.0" />
+    <PackageVersion Include="TUnit.Assertions" Version="1.75.0" />
     <!-- v5.0 阶段 1.3：移除 Microsoft.NET.Test.Sdk——TUnit 1.x 走 MTP 模式，
          dotnet run 直接执行，不再需要 VSTest 桥接（dotnet test 入口）。 -->
   </ItemGroup>
@@ -80,6 +83,41 @@
   <!-- SourceLink（v5.0 发布管道：NuGet.org 包页源码链接 + F12 步入）。
        2026-08-15 升 8.0.0→10.0.400：源兼容性随本次全量升级验证（build 0 警告）。 -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.401" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.402" />
+    <!-- 2026-10-19 复核：10.0.402 为最新稳定版；11.0.100-rc.2 属 SDK 预览线，不采用。 -->
+  </ItemGroup>
+
+  <!-- 传递依赖稳定版固定（CentralPackageTransitivePinningEnabled）——2026-10-19 依赖升级轮：
+       `dotnet list package` 的 outdated/transitive 模式报出的可升稳定版；
+       System.* 10.0.x / SourceLink 依赖与 Roslyn 5.9 同线，ApplicationInsights 3.x 为 TUnit 测试依赖的
+       最新稳定版。预览线（System.IO.Hashing 11-rc、Roslyn 5.13-preview、Testing 3.2-preview、
+       DiaSymReader 12-alpha）不采用。 -->
+  <ItemGroup>
+    <PackageVersion Include="System.Collections.Immutable" Version="10.0.13" />
+    <PackageVersion Include="System.Reflection.Metadata" Version="10.0.13" />
+    <PackageVersion Include="System.Text.Encoding.CodePages" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.NETCore.Platforms" Version="7.0.4" />
+    <PackageVersion Include="Microsoft.DiaSymReader" Version="2.2.13" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.ApplicationInsights" Version="3.2.0" />
+    <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Identity.Client" Version="4.91.0" />
+    <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.91.0" />
+    <PackageVersion Include="Microsoft.IdentityModel.Abstractions" Version="8.23.0" />
+    <PackageVersion Include="OpenTelemetry" Version="1.20.0" />
+    <PackageVersion Include="OpenTelemetry.Api" Version="1.20.0" />
+    <PackageVersion Include="OpenTelemetry.Api.ProviderBuilderExtensions" Version="1.20.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.20.0" />
+    <PackageVersion Include="OpenTelemetry.PersistentStorage.Abstractions" Version="1.1.2" />
+    <PackageVersion Include="OpenTelemetry.PersistentStorage.FileSystem" Version="1.1.2" />
+    <PackageVersion Include="System.Memory.Data" Version="10.0.13" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
   </ItemGroup>
 </Project>
