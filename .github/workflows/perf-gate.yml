@@ -114,6 +114,22 @@ jobs:
             --results BenchmarkDotNet.Artifacts/results \
             --baseline bench/baselines/perf-baseline.json
 
+      - name: Connection/pool churn probe (SQLite, observation)
+        run: |
+          dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- --pool sqlite > pool-output.log 2>&1
+          cat pool-output.log
+
+      - name: Long-stability probe (180s, initial screening)
+        # 初筛阈值（与 StabilityHarness 一致）：吞吐衰减 >20% 或工作集增长 >30% 判失败。
+        # 180s 是规范 §5 的初筛档；30 分钟档留给手动/节点审计。
+        run: |
+          dotnet run --project bench/PalORM.Benchmarks -c Release --no-build -- --stability 180 > stability-output.log 2>&1
+          cat stability-output.log
+          if grep -q "判定：⚠" stability-output.log; then
+            echo "::error::长稳初筛失败（吞吐衰减 >20% 或工作集增长 >30%）"
+            exit 1
+          fi
+
       - name: Upload Benchmark Artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -121,5 +137,8 @@ jobs:
           name: benchmark-results
           path: |
             benchmark-output.log
+            stability-output.log
+            pool-output.log
+            bench/results/benchmarks-*.json
             BenchmarkDotNet.Artifacts/
           retention-days: 30

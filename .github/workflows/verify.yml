@@ -355,6 +355,24 @@ jobs:
             - name: Run native binary
               run: ./artifacts/aot/package-consumer/PalORM.PackageConsumer.Aot
 
+            - name: Cold start wall clock (5 runs)
+              # 冷启动墙钟观测（不作为门禁）：每轮新进程，记录进程启动到退出的毫秒数。
+              # 与启动量具（单方法 IL 上界）互补——后者测规模，前者测真实进程启动。
+              run: |
+                  {
+                    echo "### AOT consumer cold start"
+                    echo ""
+                    echo "| run | elapsed ms |"
+                    echo "|---:|---:|"
+                    for i in 1 2 3 4 5; do
+                      start=$(date +%s%N)
+                      ./artifacts/aot/package-consumer/PalORM.PackageConsumer.Aot > /dev/null
+                      end=$(date +%s%N)
+                      echo "| $i | $(( (end - start) / 1000000 )) |"
+                    done
+                  } | tee cold-start.log
+                  cat cold-start.log >> "$GITHUB_STEP_SUMMARY"
+
     aot-postgresql:
         name: PostgreSQL Native AOT
         runs-on: ubuntu-24.04
