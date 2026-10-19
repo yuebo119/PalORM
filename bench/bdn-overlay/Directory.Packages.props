@@ -1,0 +1,9 @@
+<Project>
+  <!-- v5.0 阶段 3.4：BDN fork 本地引用——禁用 PalORM 的中央包管理（CPM）。
+       CPM 由 Directory.Packages.props 控制（非 Directory.Build.props）。
+       BDN 子项目用自己的 PackageReference Version，不接受 PalORM 的 PackageVersion 约束。 -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+</Project>
