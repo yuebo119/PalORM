@@ -189,7 +189,7 @@ internal static class PerfResultWriter
     /// <item><c>ab/&lt;轮&gt;/&lt;方言&gt;/&lt;档位&gt;</c>：交替 A/B 的单个块（一次只跑一个方言的一个档位）。
     /// 它不带任何子集词，曾被当成完整矩阵——而 A/B 正是"块 = 方言 × 档位"的设计，
     /// 单块必然残缺（实测 2026-09-23：不登记时 `record-index` 会挑中 ab 批次而非全量批次）</item>
-    /// <item><c>workload</c>/<c>memory</c>/<c>stability</c>：微基准的三条旁路模式（各只覆盖一个维度）</item>
+    /// <item><c>workload</c>/<c>memory</c>/<c>stability</c>/<c>pool</c>：微基准的旁路模式（各只覆盖一个维度）</item>
     /// </list></summary>
     /// <summary>子集标记判据：带这些标记的批次是**单方言/单档/单臂**的定向跑测，只写批次文件，
     /// 不顶 <c>latest-*</c>（否则"当前状态"会变成只测到一个方言的读数）。
