@@ -1005,6 +1005,10 @@ public static class QueryBuilderExtensions
 
     /// <summary>构建并执行 UPDATE 语句，返回受影响行数。
     /// <para>要求至少一个 <c>Set</c> 子句；WHERE 段含默认过滤（软删/租户）。写操作恒走主连接，不受 ForRead 影响。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "UPDATE 管线的命令复用/新建分支与拦截器/观测性三段式是必然复杂度；"
+            + "拆分需跨方法传递命令所有权与参数绑定状态。")]
     public static async ValueTask<int> ExecuteNonQueryAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
     {
         const string operation = "update";
@@ -1022,22 +1026,56 @@ public static class QueryBuilderExtensions
         // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
         IReadOnlyList<DbParameter> updateParameters = builder.GetUpdateParameters();
         var context = new QueryContext(sql, updateParameters, builder._sensitiveMasks);
+        bool metrics = builder._metrics;
+        string? metricsName = builder._metricsName;
+        bool prepared = builder._prepared;
+        TimeSpan commandTimeout = builder._commandTimeout;
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =
                 builder._operationState.Enter();
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(true, ct).ConfigureAwait(false);
-            await using DbCommand command = connection.CreateCommand();
-            command.Transaction = builder.GetActiveTransaction();
-            command.CommandText = sql;
-            command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
-            AddParameters(command, updateParameters);
-            NotifyInterceptorsOnBefore(interceptors, context);
-            await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
-            int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            NotifyInterceptorsOnAfter(interceptors, context, swStart, affectedRows);
-            outcome = "success";
-            return affectedRows;
+            DbTransaction? transaction = builder.GetActiveTransaction();
+            // S5：写形态接查询槽复用。槽晋升时命令参数集合为空，本次 AddParameters 后
+            // 集合持久持有；后续同形状只就地写 Value（R-UNNESTB 同纪律）。
+            DbCommand? reusable = builder.TryAcquireReusableCommand(connection, sql);
+            DbCommand command;
+            bool ownsCommand;
+            bool parametersBound;
+            if (reusable is not null
+                && (reusable.Parameters.Count == 0 || TryCopyParameterValues(reusable, updateParameters)))
+            {
+                command = reusable;
+                ownsCommand = false;
+                parametersBound = reusable.Parameters.Count > 0;
+            }
+            else
+            {
+                command = connection.CreateCommand();
+                ownsCommand = true;
+                parametersBound = false;
+            }
+            try
+            {
+                if (!ReferenceEquals(command.Transaction, transaction))
+                    command.Transaction = transaction;
+                int timeoutSeconds = DbOptions.ToCommandTimeoutSeconds(commandTimeout);
+                if (command.CommandTimeout != timeoutSeconds)
+                    command.CommandTimeout = timeoutSeconds;
+                if (!string.Equals(command.CommandText, sql, StringComparison.Ordinal))
+                    command.CommandText = sql;
+                if (!parametersBound) AddParameters(command, updateParameters);
+                NotifyInterceptorsOnBefore(interceptors, context);
+                await PrepareCommandAsync(command, prepared, ct).ConfigureAwait(false);
+                int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                NotifyInterceptorsOnAfter(interceptors, context, swStart, affectedRows);
+                outcome = "success";
+                return affectedRows;
+            }
+            finally
+            {
+                if (ownsCommand) await command.DisposeAsync().ConfigureAwait(false);
+            }
         }
         catch (Exception exception)
         {
@@ -1050,8 +1088,8 @@ public static class QueryBuilderExtensions
         finally
         {
             PalORMMetrics.CompleteActivity(activity, outcome);
-            if (builder._metrics && swStart is { } metricStart)
-                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), builder._metricsName);
+            if (metrics && swStart is { } metricStart)
+                PalORMMetrics.Record(operation, provider, outcome, Stopwatch.GetElapsedTime(metricStart), metricsName);
         }
     }
 

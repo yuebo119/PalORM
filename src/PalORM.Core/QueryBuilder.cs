@@ -111,7 +111,7 @@ public struct QueryBuilder<T> where T : class, new()
     internal Dictionary<string, string>? _sensitiveMasks;
     internal readonly IQueryCache _queryCache;
     /// <summary>A9（2026-10-01）：读查询命令复用槽（会话所有，builder 仅持引用）——
-    /// 惰性晋升复用同 SQL 文本的命令，见 TryAcquireReusableSelectCommand。</summary>
+    /// 惰性晋升复用同 SQL 文本的命令，见 TryAcquireReusableCommand。</summary>
     internal readonly ReusableQuerySlot? _querySlot;
     /// <summary>P0-2（2026-10-12 全量重读）：数组参数委托（UNNEST 族同源的 Provider 能力面）
     /// ——WhereIn/WhereNotIn 的 PG 数组形态用；null（MySQL/SQLite 接口默认）时回退占位符。</summary>
@@ -789,7 +789,10 @@ public struct QueryBuilder<T> where T : class, new()
     /// 写 Value；形状漂移则保守回退新建命令。
     /// P1-1（2026-10-12）：命中/计数/晋升逻辑收敛至 ReusableQuerySlot.TryAcquire 单一真源
     ///（直查族命令复用共用同一段判据），本方法只保留 From&lt;T&gt; 管线的并行读守卫。</para></summary>
-    internal DbCommand? TryAcquireReusableSelectCommand(DbConnection connection, string sql)
+    /// <summary>读/写查询命令的惰性晋升复用（S5 起写形态共用同一槽）——同 SQL 文本 +
+    /// 同连接 + 非并行读作用域时返回晋升命令（调用方负责逐位置就地写参数值与"不 Dispose 归还"）；
+    /// 未晋升返回 null（调用方走新建路径）。</summary>
+    internal DbCommand? TryAcquireReusableCommand(DbConnection connection, string sql)
     {
         var slot = _querySlot;
         // 并行读作用域禁用：并发 reader 不能共用命令（各走新建 + 自持连接）
@@ -808,6 +811,11 @@ public struct QueryBuilder<T> where T : class, new()
         var (sql, parameters) = BindFormattableString(condition);
         AddClause(QueryClauseKind.DefaultFilter, sql, parameters);
     }
+
+    /// <summary>S5：租户过滤直绑——条件文本与单个参数对象由调用方给出，跳过
+    /// FormattableString 格式化与参数表分配。</summary>
+    internal void AddDefaultFilter(string sql, DbParameter parameter)
+        => AddClause(QueryClauseKind.DefaultFilter, sql, [parameter]);
 
     /// <summary>G3（2026-10-13 五轮全量重读微项包）：采用共享的无参默认过滤链头节点——
     /// From&lt;T&gt;() 对 SoftDelete 实体注入的默认过滤子句零参数、全部成分只由 TProvider 决定，
@@ -1189,6 +1197,16 @@ public struct QueryBuilder<T> where T : class, new()
     {
         int baseIndex = _parameterCount;
         string formatted = FormatFormattableSql(sql, baseIndex);
+        // S5：0 参复用共享空表；1 参用单元素数组（原 List 对象 + 背衬数组约 64B/查询）。
+        if (sql.ArgumentCount == 0)
+            return (formatted, QueryBuilderShared.EmptyParameters);
+        if (sql.ArgumentCount == 1)
+        {
+            return (formatted, new[]
+            {
+                _paramFactory(GetParameterName(baseIndex), sql.GetArgument(0)),
+            });
+        }
         var parameters = new List<DbParameter>(sql.ArgumentCount);
         for (int i = 0; i < sql.ArgumentCount; i++)
             parameters.Add(_paramFactory(GetParameterName(baseIndex + i), sql.GetArgument(i)));

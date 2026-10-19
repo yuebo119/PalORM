@@ -856,31 +856,36 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     private async Task DisposeReusableCrudCommandsAsync()
     {
         Exception? primary = null;
-        if (_reusableInsert is { } insert)
-        {
-            try { await insert.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
-        if (_reusableUpdate is { } update)
-        {
-            try { await update.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
-        if (_reusableGetByKey is { } getByKey)
-        {
-            // C3（2026-10-11）：keyProbe 探针命令退役（键值换算改经生成器 ConvertDeleteKey
-            // 委托）——槽内只剩命令本体，单 try 即可
-            try { await getByKey.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
-        if (_reusableDelete is { } delete)
-        {
-            // R3（2026-10-12）：Delete 槽同口径释放
-            try { await delete.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
+        // S5：六个槽同构释放收敛到单一助手（原逐槽 if/try 把方法复杂度推过 S3776 线）。
+        if (await DisposeReusableCommandAsync(_reusableInsert).ConfigureAwait(false) is { } insertError)
+            RecordCleanupException(ref primary, insertError);
+        if (await DisposeReusableCommandAsync(_reusableUpdate).ConfigureAwait(false) is { } updateError)
+            RecordCleanupException(ref primary, updateError);
+        if (await DisposeReusableCommandAsync(_reusableGetByKey).ConfigureAwait(false) is { } getError)
+            RecordCleanupException(ref primary, getError);
+        if (await DisposeReusableCommandAsync(_reusableDelete).ConfigureAwait(false) is { } deleteError)
+            RecordCleanupException(ref primary, deleteError);
+        if (await DisposeReusableCommandAsync(_reusableUpsert).ConfigureAwait(false) is { } upsertError)
+            RecordCleanupException(ref primary, upsertError);
+        if (await DisposeReusableCommandAsync(_reusableSoftDelete).ConfigureAwait(false) is { } softDeleteError)
+            RecordCleanupException(ref primary, softDeleteError);
         if (primary is not null)
             ExceptionDispatchInfo.Capture(primary).Throw();
+    }
+
+    /// <summary>S5：单槽释放，返回清理异常（无槽/无异常返回 null）。</summary>
+    private static async Task<Exception?> DisposeReusableCommandAsync(ReusableCrudCommand? slot)
+    {
+        if (slot is null) return null;
+        try
+        {
+            await slot.Command.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
     }
 
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()
