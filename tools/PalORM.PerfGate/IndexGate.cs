@@ -754,16 +754,25 @@ internal static class IndexGate
         // 序数比较即时间序）。触发路径验证：历史状态回放（哨兵 09-29 vs 批 10-01 时必触发）。
         // 子集批（filtered/recheck）不参与比较：它们只覆盖单方言或单档，本来就不要求
         // 哨兵跟着刷新；不排除时一次复测就会把哨兵报成"陈旧"（2026-10-19 实测）。
+        // 同提交复测免报（2026-10-19 实测）：全量后 14 分钟再跑一次 PerfHub，哨兵时间戳
+        // 必然早于该复测批，但登记步骤并未空跑。哨兵陈旧的真实语义是"跨版本/长期未刷新"，
+        // 故只在提交不同或超过 7 天时告警；同提交的几分钟差属于同一轮测量。
         PerfResultEnvelope? newestPerfHub = latest
             .Where(static r => r.Harness.Equals("perfhub", StringComparison.OrdinalIgnoreCase)
                 && !PerfResultWriter.IsSubsetLabel(r.Label))
             .OrderByDescending(static r => r.Timestamp, StringComparer.Ordinal)
             .FirstOrDefault();
-        if (newestPerfHub is not null
-            && string.CompareOrdinal(sentinel.Timestamp, newestPerfHub.Timestamp) < 0)
+        bool olderThanNewest = newestPerfHub is not null
+            && string.CompareOrdinal(sentinel.Timestamp, newestPerfHub.Timestamp) < 0;
+        bool sameCommit = newestPerfHub is not null
+            && string.Equals(sentinel.Commit, newestPerfHub.Commit, StringComparison.OrdinalIgnoreCase);
+        bool staleByAge = DateTimeOffset.TryParse(sentinel.Timestamp, CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out DateTimeOffset sentinelAt)
+            && DateTimeOffset.Now - sentinelAt > TimeSpan.FromDays(7);
+        if (olderThanNewest && (!sameCommit || staleByAge))
         {
             Console.WriteLine($"[PerfGate] ⚠ 哨兵批次陈旧：DapperSuite {sentinel.Timestamp} 早于本库最新 "
-                + $"PerfHub 批（{newestPerfHub.Timestamp}）——登记步骤可能静默空跑（B123-③），核对该步骤信封更新时间");
+                + $"PerfHub 批（{newestPerfHub!.Timestamp}）——登记步骤可能静默空跑（B123-③），核对该步骤信封更新时间");
         }
         List<PerfResultItem> palorm = [.. sentinel.Items.Where(static i =>
             i.Arm.Equals("PalORM", StringComparison.OrdinalIgnoreCase) && i.Ratio > 0)];

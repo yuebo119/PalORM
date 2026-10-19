@@ -105,7 +105,8 @@
 
 ## 性能测试结果输出规范（2026-09-24 用户指定 · 2026-10-17 七节结构改版 · 每次跑测汇报强制）
 
-> **EPSL v1.6 接入**：预算契约 `perf-budgets.md`（门禁阈值单一事实源）、决策账本 `.ai/perf-ledger.md`（已用/不做/勿重开三表）、测量与汇报口径即本节；对账 `node ~/.zcode/scripts/eps-perf-check.mjs`（版本/模板引用/基准类数）。
+> **EPSL v1.7 接入**：预算契约 `perf-budgets.md`（门禁阈值单一事实源）、决策账本 `.ai/perf-ledger.md`（已用/不做/勿重开三表）、测量与汇报口径即本节；对账 `node ~/.zcode/scripts/eps-perf-check.mjs`（版本/模板引用/基准类数/基准入口接入/结果登记 latest 新鲜度）。
+> **全量运行后置检查**：任何复测后执行 `PerfCli report` 重建统一报告；离群先分单臂尖峰与三臂同向，未复测不归因；容器重启后的首批为 transition，至少 3 个完整批再 `record-index`。
 
 性能跑测/对比结果一律以下列固定结构与表格呈现，数据源为 `bench/perfhub/results/history-*.json` 明细（非报告转述）。**触发场景**：任何性能测试后汇报——`PerfCli full`、PerfHub 批次、A/B 复测、单夹具运行。四组表由 `PerfGate tables`（`PerfCli report` 自动附带）生成。
 
