@@ -663,6 +663,10 @@ public static class QueryBuilderExtensions
         return ToPageEntryAsync(builder, pageSize, orderBy, lastValue, descending, ct);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "分页事务骨架（自开/复用、提交/回滚/还原/释放）叠加 PG 无事务批路径与 "
+            + "MySQL 事务内批路径分支；拆分需跨方法传递事务生命周期与提交标志，状态面更大。")]
     private static async ValueTask<(List<T> Rows, long Total)> ToPageEntryAsync<T, TKey>(QueryBuilder<T> builder,
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue, bool descending, CancellationToken ct) where T : class, new()
     {
@@ -714,30 +718,49 @@ public static class QueryBuilderExtensions
                 paged._operationState.PublishTransaction(transaction, operationLease.Owner);
             paged._transaction = transaction;
             string countSql = paged.BuildCountSql();
+            long total;
+            List<T> rows;
+            if (CanUseBatchedPageInTransaction(paged))
+            {
+                // S6：COUNT 与页 SELECT 打包为一个 DbBatch，单次协议往返；事务与隔离级别
+                // 沿用经典路径，MySQL 的快照一致性语义不变。
+                IReadOnlyList<DbParameter> countParameters = paged.GetCountParameters();
+                string pageOperation = descending ? "<" : ">";
+                string pageOrderByColumn = paged.ResolveColumn(orderBy);
+                if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
+                    paged.AddWhereComparison(pageOrderByColumn, pageOperation, lastValue);
+                paged.AddOrderBy(pageOrderByColumn, descending);
+                (rows, total) = await ExecuteBatchedPageCoreAsync(
+                    paged, pageSize, countSql, countParameters,
+                    paged.BuildSql(), paged.GetQueryParameters(), transaction, ct)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await using var countCommand = paged._conn.CreateCommand();
+                countCommand.Transaction = transaction;
+                countCommand.CommandText = countSql;
+                countCommand.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
+                AddParameters(countCommand, paged.GetCountParameters());
+                object? countResult = await ExecuteScalarObservedAsync(
+                    countCommand, paged, "count", ct).ConfigureAwait(false);
+                // ITM-637：COUNT 结果理论恒非 null——驱动异常形态下显式报错比 NRE 近根因
+                if (countResult is null)
+                    throw new InvalidOperationException(
+                        "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
+                total = countResult is long count ? count : Convert.ToInt64(countResult);
 
-            await using var countCommand = paged._conn.CreateCommand();
-            countCommand.Transaction = transaction;
-            countCommand.CommandText = countSql;
-            countCommand.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
-            AddParameters(countCommand, paged.GetCountParameters());
-            object? countResult = await ExecuteScalarObservedAsync(
-                countCommand, paged, "count", ct).ConfigureAwait(false);
-            // ITM-637：COUNT 结果理论恒非 null——驱动异常形态下显式报错比 NRE 近根因
-            if (countResult is null)
-                throw new InvalidOperationException(
-                    "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
-            long total = countResult is long count ? count : Convert.ToInt64(countResult);
-
-            string operation = descending ? "<" : ">";
-            // C16：orderBy 列解析一次复用（原 AddWhereComparison + AddOrderBy 各解析一次）
-            string orderByColumn = paged.ResolveColumn(orderBy);
-            if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
-                paged.AddWhereComparison(orderByColumn, operation, lastValue);
-            // review R3：如果 builder 已有 OrderBy，AddOrderBy 追加为次级排序键。
-            // keyset 续页条件始终锚定 orderBy 参数列——用户预设排序不影响续页正确性。
-            paged.AddOrderBy(orderByColumn, descending);
-            List<T> rows = await ExecuteQueryAsync(
-                paged, ct, operationLease.Owner).ConfigureAwait(false);
+                string operation = descending ? "<" : ">";
+                // C16：orderBy 列解析一次复用（原 AddWhereComparison + AddOrderBy 各解析一次）
+                string orderByColumn = paged.ResolveColumn(orderBy);
+                if (lastValue is not null && !EqualityComparer<TKey>.Default.Equals(lastValue, default))
+                    paged.AddWhereComparison(orderByColumn, operation, lastValue);
+                // review R3：如果 builder 已有 OrderBy，AddOrderBy 追加为次级排序键。
+                // keyset 续页条件始终锚定 orderBy 参数列——用户预设排序不影响续页正确性。
+                paged.AddOrderBy(orderByColumn, descending);
+                rows = await ExecuteQueryAsync(
+                    paged, ct, operationLease.Owner).ConfigureAwait(false);
+            }
             if (ownsTransaction)
             {
                 // T1（v5.6.0）：提交尝试标志——裁决依据见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
@@ -782,6 +805,16 @@ public static class QueryBuilderExtensions
         => existingTransaction is null
             && paged._dialect == SqlDialect.PostgreSql
             && paged._isolationLevel is null or System.Data.IsolationLevel.ReadCommitted
+            && paged._interceptors.Count == 0
+            && !paged._tracing && !paged._metrics && !paged._prepared
+            && BatchedPageConnectionCapable(paged._conn);
+
+    /// <summary>S6：MySQL 事务内单往返分页——COUNT 与页 SELECT 在同一个 DbBatch 里执行。
+    /// 事务与隔离级别沿用经典路径（RR/RC 快照语义不变），只把两次往返压成一次；拦截器/
+    /// 观测性/AsPrepared 在场时回退经典路径（三段式编排留在原处）。</summary>
+    private static bool CanUseBatchedPageInTransaction<T>(QueryBuilder<T> paged)
+        where T : class, new()
+        => paged._dialect == SqlDialect.MySql
             && paged._interceptors.Count == 0
             && !paged._tracing && !paged._metrics && !paged._prepared
             && BatchedPageConnectionCapable(paged._conn);
@@ -834,14 +867,15 @@ public static class QueryBuilderExtensions
         ResilienceExecutor resilience = paged.GetResilience();
         if (resilience.IsPassThrough)
             return await ExecuteBatchedPageCoreAsync<T>(
-                paged, pageSize, countSql, countParameters, pageSql, pageParameters, ct).ConfigureAwait(false);
+                paged, pageSize, countSql, countParameters, pageSql, pageParameters,
+                transaction: null, ct).ConfigureAwait(false);
         // F3（2026-10-13 全量重读微项包）：R4-λ 清扫的漏网点——原形态捕获 6 个局部变量的闭包
         // 在非直通（默认）配置下每分页查询分配一个 display class。static lambda 按调用点缓存，
         // 值元组状态按值传递，语义逐位一致。
         return await resilience.ExecuteAsync(
             static (state, token) => ExecuteBatchedPageCoreAsync<T>(
                 state.Paged, state.PageSize, state.CountSql, state.CountParameters,
-                state.PageSql, state.PageParameters, token),
+                state.PageSql, state.PageParameters, transaction: null, token),
             (Paged: paged, PageSize: pageSize, CountSql: countSql, CountParameters: countParameters,
              PageSql: pageSql, PageParameters: pageParameters),
             ct).ConfigureAwait(false);
@@ -852,14 +886,19 @@ public static class QueryBuilderExtensions
     ///（Where/DefaultFilter 的参数同时进两个语句），同一 DbParameter 实例不得挂进两个
     /// DbBatchCommand——COUNT 侧经 <see cref="AddBatchParameterCopies"/> 拷贝（参数数 ≤ 过滤
     /// 参数量，典型 0~2 个），页侧独占原始对象。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:MethodsShouldNotHaveTooManyParameters",
+        Justification = "批分页内核的输入是两条语句的 SQL/参数 + 事务 + 页大小 + 取消令牌；"
+            + "聚合对象会为每个调用点多一次分配，而本方法每次分页调用一次。")]
     private static async Task<(List<T> Rows, long Total)> ExecuteBatchedPageCoreAsync<T>(
         QueryBuilder<T> paged, int pageSize,
         string countSql, IReadOnlyList<DbParameter> countParameters,
         string pageSql, IReadOnlyList<DbParameter> pageParameters,
-        CancellationToken ct)
+        DbTransaction? transaction, CancellationToken ct)
         where T : class, new()
     {
         await using DbBatch batch = paged._conn.CreateBatch();
+        batch.Transaction = transaction;
         // DbBatch.Timeout 是 int 秒（SessionBatch 的 BATCH-001 口径；不设则驱动默认 30s，
         // 会话 WithTimeout 在此静默失效）
         batch.Timeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);

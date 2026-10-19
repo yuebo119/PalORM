@@ -641,6 +641,16 @@ var user = await db.GetAsync<User>(id);
 
 归还时瞬态状态（租户/超时/重试等 `With*` 覆写、拦截器加项）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在"一请求一会话"形态下不经池化永不激活（同形状第 3 次操作才晋升）。32 并发压测实测：P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B；池化形态单键直查 P/ADO 比值 MySQL 0.99 / PG 0.87（台账批），租还自身约 1 µs。
 
+DI 容器场景把 `IDataSessionFactory<TProvider>` 注册为单例即可，不依赖额外容器包：
+
+```csharp
+var factory = new DataSessionFactory<PostgreSqlProvider>(options, maxIdleSize: 16);
+services.AddSingleton<IDataSessionFactory<PostgreSqlProvider>>(factory);
+
+// 每请求（scoped 服务的构造/方法内）
+await using var db = await factory.RentAsync(ct);
+```
+
 **高吞吐逐行写换批量 API，不要在逐条循环里找损耗**。逐条 `UpdateAsync` 每行各付一次会话门禁与命令往返；合成单语句多行（`BulkUpdateBatchAsync`）或走批量路径（见上方速查表）后，这部分成本摊薄到 1/N。逐条循环里的每行开销是形态决定的，不是可挤的库内水分。
 
 **长会话顺序循环的对比数字要读连接态**。基准中"每操作新建会话"与"长会话复用"的表观差距主要来自连接/命令冷态与驱动侧成本：库侧单键执行成本已与 ADO 地板重合（见[性能](#-性能)），评估自身业务收益时以同形态对照为准。
