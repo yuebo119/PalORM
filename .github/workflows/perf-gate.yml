@@ -57,13 +57,15 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        # 只 restore 基准项目及其依赖链——restore 整个 slnx 会拖入全部测试项目（无谓耗时）
+        # 只 restore 基准项目及其依赖链——restore 整个 slnx 会拖入全部测试项目（无谓耗时）。
+        # WeaverVersionSuffix 钉到本地 feed 里那个 nupkg 的版本后缀：上游 BDN 会自行 bump
+        # （实测从 -6 到 -9），不钉就让 CI 随上游漂移而 NU1101。全局属性优先于项目内赋值。
         run: |
-          dotnet restore bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj
+          dotnet restore bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj -p:WeaverVersionSuffix=-6
           dotnet restore tools/PalORM.PerfGate/PalORM.PerfGate.csproj
 
       - name: Build Benchmarks (Release)
-        run: dotnet build bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj -c Release --no-restore
+        run: dotnet build bench/PalORM.Benchmarks/PalORM.Benchmarks.csproj -c Release --no-restore -p:WeaverVersionSuffix=-6
 
       - name: Run SQLite Benchmarks
         run: |
