@@ -21,19 +21,19 @@ env:
 jobs:
     security:
         name: Secret Scan (gitleaks + custom)
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         timeout-minutes: 5
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
               with:
                   fetch-depth: 0  # 全历史扫描
 
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
             - name: Gitleaks (全历史)
-              uses: gitleaks/gitleaks-action@v2
+              uses: gitleaks/gitleaks-action@v3
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -61,16 +61,16 @@ jobs:
 
     build:
         name: Build (.NET 11)
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         timeout-minutes: 10
         # workflow_call outputs 锚点：调用方（release.yml）断言验证的正是待发布提交
         outputs:
             sha: ${{ github.sha }}
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
 
             - name: Setup .NET
-              uses: actions/setup-dotnet@v4
+              uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -84,12 +84,12 @@ jobs:
 
     unit:
         name: Unit Tests
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 15
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -130,7 +130,7 @@ jobs:
 
     integration:
         name: Integration Tests
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 30
         services:
@@ -162,8 +162,8 @@ jobs:
             PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm
             PALORM_MYSQL_CONNECTION: Server=127.0.0.1;User=root;Database=palorm
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -195,14 +195,14 @@ jobs:
 
     gate:
         name: Quality Gates
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 10
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
               with:
                   fetch-depth: 0
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -303,12 +303,12 @@ jobs:
 
     aot-sqlite:
         name: SQLite Native AOT
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 20
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -323,12 +323,12 @@ jobs:
 
     aot-package-consumer:
         name: NuGet Consumer Native AOT
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 25
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -357,7 +357,7 @@ jobs:
 
     aot-postgresql:
         name: PostgreSQL Native AOT
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 20
         services:
@@ -376,8 +376,8 @@ jobs:
         env:
             PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -392,7 +392,7 @@ jobs:
 
     aot-mysql:
         name: MySQL Native AOT
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 20
         services:
@@ -411,8 +411,8 @@ jobs:
         env:
             PALORM_MYSQL_CONNECTION: Server=127.0.0.1;User=root;Database=palorm
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-dotnet@v4
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
