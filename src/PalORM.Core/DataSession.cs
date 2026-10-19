@@ -601,6 +601,21 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         }
     }
 
+    /// <summary>S3：会话是否配置了任何弹性语义。全零（MaxRetries=0 且熔断禁用且无总预算）
+    /// 时读路径完全不经执行器，连惰性创建都不发生。</summary>
+    private bool ResilienceConfigured
+        => _options.MaxRetries > 0
+            || _options.CircuitBreakerThreshold > 0
+            || _options.OverallDeadline > TimeSpan.Zero;
+
+    /// <summary>S3：首次尝试直接执行的可用条件——尚无执行器（会话级熔断器恒从 Closed 起步，
+    /// 首次失败前无需 Enter 检查）、非进程级熔断（进程级必须先查共享开闸状态）、且未设总预算
+    /// （总预算由执行器统一执法）。满足时成功路径零执行器、零超时 CTS、零重试委托。</summary>
+    private bool DirectFirstReadAllowed
+        => _resilience is null
+            && _options.CircuitBreakerScope != CircuitBreakerScope.Process
+            && _options.OverallDeadline <= TimeSpan.Zero;
+
     /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。
     /// <para><b>并发契约（OPS-001，2026-09-23）</b>：本入口<b>不占操作门禁</b>——它是给调用方
     /// 自带编排（并行扇出、自定义批处理）的逃生门，可被多线程并发调用，因此：(1) 不要与会话的

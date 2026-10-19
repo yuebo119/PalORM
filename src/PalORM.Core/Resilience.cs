@@ -118,7 +118,8 @@ public sealed class ResilienceExecutor
             + "瞬时重试 / 超时耗尽包装 / 外层熔断记账），每条过滤条件都必须与异常形态严格对应；"
             + "拆分会把重试语义打散到多处、降低可审性（与同方法 S2189/S1994 同因）。")]
     private async ValueTask<TResult> ExecuteAsyncCore<TState, TResult>(
-        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct)
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct,
+        int startAttempt = 0)
     {
         var (isHalfOpenProbe, generation, probeToken) = _circuitBreaker.Enter();
 
@@ -132,7 +133,7 @@ public sealed class ResilienceExecutor
 
         try
         {
-            for (int attempt = 0; ; attempt++)
+            for (int attempt = startAttempt; ; attempt++)
             {
                 CancellationTokenSource? timeout = null;
                 try
@@ -176,12 +177,12 @@ public sealed class ResilienceExecutor
                 {
                     // ITM-630：仅超时 token 触发的 OCE 可重试——operation 内部自取消
                     // （非调用方 ct、非超时）原样上抛：重试会放大已取消操作的副作用。
-                    await DelayBeforeRetryAsync(attempt, overall, attemptScope).ConfigureAwait(false);
+                    await DelayBeforeRetryAsync(attempt - startAttempt, overall, attemptScope).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException
                     && attempt < _maxRetries && _isTransient(exception))
                 {
-                    await DelayBeforeRetryAsync(attempt, overall, attemptScope).ConfigureAwait(false);
+                    await DelayBeforeRetryAsync(attempt - startAttempt, overall, attemptScope).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException timeoutException) when (timeout is not null
                     && timeout.IsCancellationRequested)
@@ -222,6 +223,25 @@ public sealed class ResilienceExecutor
                 isHalfOpenProbe, CountsTowardCircuit(exception), generation, probeToken);
             throw;
         }
+    }
+
+    /// <summary>S3：首次尝试已在执行器外直接执行并失败后，从此处继续剩余重试（attempt 从 1 起）。
+    /// 退避序号按"首次失败后的第 N 次重试"计算（attempt - startAttempt），与既有循环逐位一致；
+    /// 首次失败本身不计入熔断，最终结果由本循环的 RecordSuccess/RecordFinalFailure 记账。</summary>
+    internal ValueTask<TResult> ExecuteAfterFirstFailureAsync<TState, TResult>(
+        Func<TState, CancellationToken, Task<TResult>> operation, TState state, CancellationToken ct = default)
+        => ExecuteAsyncCore(operation, state, ct, startAttempt: 1);
+
+    /// <summary>S3：首次直接尝试失败且不再重试（MaxRetries=0）时，把最终失败计入熔断器。
+    /// 与 ExecuteAsyncCore 的尾段同口径：仅瞬时故障与基础设施超时计数。</summary>
+    internal void RecordDirectFailure(Exception exception)
+    {
+        if (!_circuitBreaker.IsEnabled) return;
+        _circuitBreaker.RecordFinalFailure(
+            isHalfOpenProbe: false,
+            CountsTowardCircuit(exception),
+            _circuitBreaker.CurrentGeneration,
+            probeToken: 0);
     }
 
     /// <summary>执行带重试和熔断的异步操作（无返回值）。</summary>

@@ -1062,8 +1062,34 @@ public sealed partial class DataSession<TProvider>
         // C10/C12（2026-10-12 审读重开落地）：直通分支免闭包直调（A2/ExecuteReadScalarAsync
         // 同型）——闭包捕获 + 异步状态机是每读固定成本，直通时弹性语义本就不参与，包装纯属
         // 浪费；非直通分支才构造捕获委托（重试需要）。
+        // S3：成功路径零弹性。无事务且会话尚未配置/物化弹性时，首次尝试直接执行；
+        // 只有失败才物化执行器并续跑剩余重试。会话级熔断器从 Closed 起步，首次失败前
+        // 无需 Enter 检查；进程级熔断与总预算仍走执行器（必须先查共享开闸状态/总预算）。
+        if (activeTransaction is not null || !ResilienceConfigured)
+            return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
+        if (DirectFirstReadAllowed)
+        {
+            try
+            {
+                return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
+            {
+                ResilienceExecutor executor = Resilience;
+                if (_options.MaxRetries > 0)
+                {
+                    return await executor.ExecuteAfterFirstFailureAsync(
+                        static (state, token) => state.Session.GetByKeyCoreAsync<T>(
+                            state.Info, state.Tx, state.Key, token).AsTask(),
+                        (Session: this, Info: info, Tx: activeTransaction, Key: key),
+                        ct).ConfigureAwait(false);
+                }
+                executor.RecordDirectFailure(ex);
+                throw;
+            }
+        }
         ResilienceExecutor getByKeyExecutor = Resilience;
-        if (getByKeyExecutor.IsPassThrough || activeTransaction is not null)
+        if (getByKeyExecutor.IsPassThrough)
             return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
         // R4-λ:static lambda + 值元组状态,闭包归零
         return await getByKeyExecutor.ExecuteAsync(
@@ -1156,9 +1182,33 @@ public sealed partial class DataSession<TProvider>
         EntityRuntimeInfo info = GetEntityInfo<T>();
         DbTransaction? activeTransaction = GetActiveTransaction();
 
-        // v5.4 弹性接入：全表查询为无事务只读路径时经会话弹性策略（C10 直通直调，同 GetAsync）。
+        // S3：成功路径零弹性（同 GetByKeyEntryAsync）：无事务且未物化弹性时首次直接执行，
+        // 失败后才进入执行器续跑剩余重试。进程级熔断/总预算仍走执行器。
+        if (activeTransaction is not null || !ResilienceConfigured)
+            return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
+        if (DirectFirstReadAllowed)
+        {
+            try
+            {
+                return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
+            {
+                ResilienceExecutor executor = Resilience;
+                if (_options.MaxRetries > 0)
+                {
+                    return await executor.ExecuteAfterFirstFailureAsync(
+                        static (state, token) => state.Session.GetAllCoreAsync<T>(
+                            state.Info, state.Tx, token).AsTask(),
+                        (Session: this, Info: info, Tx: activeTransaction),
+                        ct).ConfigureAwait(false);
+                }
+                executor.RecordDirectFailure(ex);
+                throw;
+            }
+        }
         ResilienceExecutor getAllExecutor = Resilience;
-        if (getAllExecutor.IsPassThrough || activeTransaction is not null)
+        if (getAllExecutor.IsPassThrough)
             return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
         // R4-λ:static lambda + 值元组状态,闭包归零
         return await getAllExecutor.ExecuteAsync(
