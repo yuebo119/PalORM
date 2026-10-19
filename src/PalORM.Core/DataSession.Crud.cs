@@ -13,11 +13,10 @@ public sealed partial class DataSession<TProvider>
     private static readonly string SoftDeleteFilterCondition =
         $"{TProvider.QuoteIdentifier("deleted_at")} IS NULL";
 
-    /// <summary>租户过滤格式串（PERF-002，2026-09-23）——引用词前缀 + 单洞占位，同理由静态缓存；
-    /// 值仍经 <see cref="System.Runtime.CompilerServices.FormattableStringFactory"/> 传入
-    /// （参数化需要携带值，这是 API 形状固有成本）。</summary>
-    private static readonly string TenantFilterFormat =
-        $"{TProvider.QuoteIdentifier("tenant_id")} = {{0}}";
+    /// <summary>租户过滤条件文本（S5）——条件与参数名都是 (TProvider) 常量，值经
+    /// TProvider.CreateParameter 单次绑定；不再走 FormattableString 格式化。</summary>
+    private static readonly string TenantFilterCondition =
+        $"{TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}";
 
     /// <summary>G3（2026-10-13 五轮全量重读微项包）：无参默认过滤子句的共享链头节点——
     /// SoftDelete 过滤的 QueryClause/ClauseNode 原先每次 From&lt;T&gt;() 分配一份，而其全部成分
@@ -105,9 +104,11 @@ public sealed partial class DataSession<TProvider>
             builder.AdoptSharedDefaultFilterNode(SoftDeleteFilterNode);
         if (tenantId is not null && !ignoreFilters && (features & EntityFeatures.TenantAware) != 0)
         {
-            // 列名 quote 与软删过滤对齐（quote 后不含 {}，可安全进入复合格式串文本段）
-            builder.AddDefaultFilter(System.Runtime.CompilerServices.FormattableStringFactory.Create(
-                TenantFilterFormat, tenantId));
+            // S5：条件文本静态、参数对象单次创建——原 FormattableStringFactory + 格式化
+            // 缓存查找 + 参数表每次租户查询都白付一遍。
+            builder.AddDefaultFilter(
+                TenantFilterCondition,
+                TProvider.CreateParameter(_tenantParameterName, tenantId));
         }
         // ADR-L：缓存租户作用域与过滤注入同点冻结——查询的租户可见性在此刻定型
         //（DefaultFilter 已上链），key 作用域同拍快照则二者永不漂移。租户过滤 → 每租户
@@ -250,7 +251,13 @@ public sealed partial class DataSession<TProvider>
     /// GetByKey 同型第四槽：删除密集负载的每操作命令/参数创建退役。</summary>
     private ReusableCrudCommand? _reusableDelete;
 
-    /// <summary>INSERT / UPDATE / GetByKey / Delete 各自已服务过的同形态操作数（惰性晋升的判据）。</summary>
+    /// <summary>S5：单行 UPSERT（SaveAsync 非默认键）的命令/参数复用槽。</summary>
+    private ReusableCrudCommand? _reusableUpsert;
+
+    /// <summary>S5：软删除（DeleteAsync [SoftDelete]）的命令/参数复用槽。</summary>
+    private ReusableCrudCommand? _reusableSoftDelete;
+
+    /// <summary>INSERT / UPDATE / GetByKey / Delete / UPSERT / SoftDelete 各自已服务过的同形态操作数（惰性晋升的判据）。</summary>
     private int _insertWriteOps;
 
     private int _updateWriteOps;
@@ -258,6 +265,10 @@ public sealed partial class DataSession<TProvider>
     private int _getByKeyReadOps;
 
     private int _deleteWriteOps;
+
+    private int _upsertWriteOps;
+
+    private int _softDeleteWriteOps;
 
     /// <summary>可复用写命令：命令本体 + 从首次绑定摘出的参数池（与命令参数集合持有同一批对象）。
     /// <para><see cref="KeyConverter"/> 仅 GetByKey 槽使用：生成器发射的单键转换委托
@@ -328,6 +339,51 @@ public sealed partial class DataSession<TProvider>
             throw;
         }
         _reusableInsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
+        return cmd;
+    }
+
+    /// <summary>S5：取可复用的单行 UPSERT 命令并重绑实体（SaveAsync 非默认键路径）。
+    /// 门禁与 INSERT 槽同口径：旧生成器（无 BindUpsertValues）与租户实体不晋升；
+    /// 命令归会话所有，会话释放时统一 Dispose。</summary>
+    private DbCommand? TryAcquireUpsertCommand<T>(
+        string commandText, CrudPlan plan, T entity, ref int servedOps, DbTransaction? activeTransaction)
+        where T : class, new()
+    {
+        if (plan.BindUpsertValues is not { } valuesBinder || HasTenantFilter<T>())
+            return null;
+
+        if (_reusableUpsert is { } reusable && reusable.EntityType == typeof(T))
+        {
+            ApplyReusableCommandState(reusable.Command, activeTransaction, commandText);
+            valuesBinder(reusable.Pool, entity, 0);
+            return reusable.Command;
+        }
+
+        servedOps++;
+        if (servedOps < CommandReusePromotionThreshold)
+            return null;
+
+        DbCommand cmd = CreateCommand(activeTransaction);
+        cmd.CommandText = commandText;
+        try
+        {
+            plan.BindUpsert(cmd, entity);
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        try
+        {
+            _reusableUpsert?.Command.Dispose();
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        _reusableUpsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
         return cmd;
     }
 
@@ -516,6 +572,55 @@ public sealed partial class DataSession<TProvider>
             throw;
         }
         _reusableDelete = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
+        return cmd;
+    }
+
+    /// <summary>S5：取可复用的软删除命令（[SoftDelete] 的 UPDATE deleted_at）。门禁与物理
+    /// 删除槽同口径：租户实体/复合主键/旧生成器不晋升；键值经 ConvertDeleteKey 就地写。</summary>
+    private DbCommand? TryAcquireSoftDeleteCommand<T>(
+        string commandText, object key, CrudPlan plan, DbTransaction? activeTransaction)
+        where T : class, new()
+    {
+        if (HasTenantFilter<T>())
+            return null;
+
+        if (_reusableSoftDelete is { } reusable && reusable.EntityType == typeof(T)
+            && reusable.KeyConverter is { } convertKey && reusable.Pool is [var pooledKey])
+        {
+            ApplyReusableCommandState(reusable.Command, activeTransaction, commandText);
+            pooledKey.Value = key is long ? key : convertKey(key);
+            return reusable.Command;
+        }
+
+        _softDeleteWriteOps++;
+        if (_softDeleteWriteOps < CommandReusePromotionThreshold)
+            return null;
+
+        if (plan.ConvertDeleteKey is not { } promotedConverter)
+            return null;
+
+        DbCommand cmd = CreateCommand(activeTransaction);
+        cmd.CommandText = commandText;
+        try
+        {
+            BindGeneratedKeyParameter<T>(cmd, key);
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        try
+        {
+            _reusableSoftDelete?.Command.Dispose();
+        }
+        catch
+        {
+            cmd.Dispose();
+            throw;
+        }
+        _reusableSoftDelete = new ReusableCrudCommand(
+            typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
         return cmd;
     }
 
@@ -799,10 +904,16 @@ public sealed partial class DataSession<TProvider>
         bool isSoftDelete = (deleteInfo.Features & EntityFeatures.SoftDelete) != 0;
         if (isSoftDelete)
         {
-            await using DbCommand cmd = CreateCommand(deleteTransaction);
             // AND deleted_at IS NULL：与 BulkDeleteAsync 幂等语义对齐——重复删除不刷新时间戳且返回 0
             // G4（五轮微项包）：全句走 2 槽静态缓存（含租户两形态），见 GetSoftDeleteUpdateSqlFast
-            cmd.CommandText = GetSoftDeleteUpdateSqlFast<T>(deleteInfo);
+            string softDeleteSql = GetSoftDeleteUpdateSqlFast<T>(deleteInfo);
+            if (!HasTenantFilter(deleteInfo.Features)
+                && TryAcquireSoftDeleteCommand<T>(softDeleteSql, key, deletePlan, deleteTransaction) is { } reusedSoftDelete)
+            {
+                return await ExecuteWriteRowsAsync(reusedSoftDelete, deleteTransaction, ct).ConfigureAwait(false);
+            }
+            await using DbCommand cmd = CreateCommand(deleteTransaction);
+            cmd.CommandText = softDeleteSql;
             cmd.CommandTimeout = _options.CommandTimeoutSeconds;
             BindGeneratedKeyParameter<T>(cmd, key);
             BindDefaultFilterParameters(cmd, deleteInfo.Features);
@@ -1311,19 +1422,41 @@ public sealed partial class DataSession<TProvider>
                 "UPSERT overwrites unconditionally and would bypass optimistic locking. " +
                 "Use InsertAsync for new rows or UpdateAsync (which enforces the version check) for updates.");
 
-        await using DbCommand cmd = CreateCommand();
+        // v4.1 性能优化：Upsert SQL 预构建为编译期 const，消除运行时 LINQ + string.Join 拼接。
+        CommandSqlSet sqls = GetCommandSqls<T>();
+        DbTransaction? upsertTransaction = GetActiveTransaction();
+        // 租户护栏（2026-10-06）：带租户会话的冲突更新只改本租户行——守卫 SQL 与 @__tenant0
+        // 绑定在此收口（UpdateCoreAsync 租户包装的对称面，10-05 审计 P2）。
+        bool tenantGuarded = HasTenantFilter<T>();
+        string commandText = TProvider.SupportsReturningClause
+            ? sqls.UpsertReturning
+            : sqls.UpsertMySql;
+
+        // S5：非租户形态接命令/参数复用槽（旧生成器无 BindUpsertValues 时返回 null）。
+        if (!tenantGuarded
+            && TryAcquireUpsertCommand(commandText, plan, entity, ref _upsertWriteOps, upsertTransaction) is { } reusedUpsert)
+        {
+            try
+            {
+                return TProvider.SupportsReturningClause
+                    ? await UpsertWithReturningAsync(
+                        reusedUpsert, sqls, plan, entity, tenantGuarded: false, ct).ConfigureAwait(false)
+                    : await UpsertWithMySqlAsync(
+                        reusedUpsert, sqls, info, entity, tenantGuarded: false, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
+            {
+                throw new UniqueConstraintViolationException(ex);
+            }
+        }
+
+        await using DbCommand cmd = CreateCommand(upsertTransaction);
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         plan.BindUpsert(cmd, entity);
         if (plan.UpsertColumns.Count != cmd.Parameters.Count)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' generated {plan.UpsertColumns.Count} upsert columns but " +
                 $"{cmd.Parameters.Count} parameters.");
-
-        // v4.1 性能优化：Upsert SQL 预构建为编译期 const，消除运行时 LINQ + string.Join 拼接
-        CommandSqlSet sqls = GetCommandSqls<T>();
-        // 租户护栏（2026-10-06）：带租户会话的冲突更新只改本租户行——守卫 SQL 与 @__tenant0
-        // 绑定在此收口（UpdateCoreAsync 租户包装的对称面，10-05 审计 P2）
-        bool tenantGuarded = HasTenantFilter<T>();
         if (tenantGuarded)
             BindDefaultFilterParameters<T>(cmd);
 

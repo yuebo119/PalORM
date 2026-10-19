@@ -23,8 +23,8 @@ public sealed class PoolResetCompletenessTests
     ];
 
     /// <summary>跨租期保留的字段（含理由）：
-    /// _reusableInsert/Update/GetByKey/Delete 与 _querySlot（复用槽：池化的核心收益）；
-    /// 四个 *_WriteOps/_getByKeyReadOps 计数器（晋升判据，保留使已晋升状态跨租期持续）；
+    /// _reusableInsert/Update/GetByKey/Delete/Upsert/SoftDelete 与 _querySlot（复用槽：池化的核心收益）；
+    /// 六个 *_WriteOps/_getByKeyReadOps 计数器（晋升判据，保留使已晋升状态跨租期持续）；
     /// _parallelReadConnections/_idleParallelReadConnections（并行池，作用域退出即空，
     /// Park 门禁保证归还时无作用域）；_materializedCapacity（容量启发，租期无关近似）；
     /// _readConnection（会话级读连接，AcquireReadConnectionAsync 自带死连接重建）；
@@ -37,8 +37,10 @@ public sealed class PoolResetCompletenessTests
     private static readonly HashSet<string> KeptAcrossRentals =
     [
         "_reusableInsert", "_reusableUpdate", "_reusableGetByKey", "_reusableDelete",
+        "_reusableUpsert", "_reusableSoftDelete",
         "_querySlot",
         "_insertWriteOps", "_updateWriteOps", "_getByKeyReadOps", "_deleteWriteOps",
+        "_upsertWriteOps", "_softDeleteWriteOps",
         "_parallelReadConnections", "_idleParallelReadConnections",
         "_materializedCapacity", "_readConnection",
         "_readConnProvider", "_readConnReturner",
