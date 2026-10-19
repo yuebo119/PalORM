@@ -19,6 +19,42 @@ public static class QueryBuilderExtensions
         => builder._cacheTenantScope is { } scope
             ? $"{scope}:{builder._cacheKey}"
             : builder._cacheKey!;
+
+    /// <summary>S3b：查询管线的弹性编排。成功路径优先直发——会话未物化执行器、非进程级熔断、
+    /// 无总预算时，首次尝试不建执行器/CTS/委托；瞬时失败后才物化并从 attempt 1 续跑。
+    /// 事务内、显式配置过弹性、已有执行器（此前失败过）时走原执行器路径。</summary>
+    private static async ValueTask<TResult> ExecuteWithResilienceAsync<T, TResult>(
+        QueryBuilder<T> builder, Func<CancellationToken, Task<TResult>> core,
+        DbTransaction? boundTransaction, CancellationToken ct) where T : class, new()
+    {
+        if (boundTransaction is not null || !builder.SessionResilienceConfigured)
+            return await core(ct).ConfigureAwait(false);
+        ResilienceExecutor? executor = builder._resilience;
+        if (executor is null && builder.SessionDirectFirstAllowed)
+        {
+            try
+            {
+                return await core(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested && builder.GetResilience().IsTransient(ex))
+            {
+                executor = builder.GetResilience();
+                if (executor.CanRetry)
+                {
+                    return await executor.ExecuteAfterFirstFailureAsync(
+                        static (c, token) => c(token), core, ct).ConfigureAwait(false);
+                }
+                executor.RecordDirectFailure(ex);
+                throw;
+            }
+        }
+        executor ??= builder.GetResilience();
+        if (executor.IsPassThrough)
+            return await core(ct).ConfigureAwait(false);
+        return await executor.ExecuteAsync(
+            static (c, token) => c(token), core, ct).ConfigureAwait(false);
+    }
+
     /// <summary>执行查询并返回全部实体列表。
     /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
     /// 未命中则执行查询并将副本写入缓存。</para></summary>
@@ -94,8 +130,6 @@ public static class QueryBuilderExtensions
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
-        ResilienceExecutor resilience = builder._resilience;
-        bool resilient = boundTransaction is null && !resilience.IsPassThrough;
 
         // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
         DbConnection? lastReadConnection = null;
@@ -130,9 +164,8 @@ public static class QueryBuilderExtensions
             // 结构性必抛，AuditProbeTests.Probe1 锁定）。
             using SessionOperationState.SessionOperationLease operationStateLease =
                 builder._operationState.EnterReadOnly(operationOwner);
-            long count = resilient
-                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
-                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
+            long count = await ExecuteWithResilienceAsync(
+                builder, ExecuteCoreAsync, boundTransaction, ct).ConfigureAwait(false);
             outcome = "success";
             return count;
         }
@@ -143,7 +176,7 @@ public static class QueryBuilderExtensions
             // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
             // （NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
             // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
-            if (builder._resilience.IsTransient(exception))
+            if (builder.GetResilience().IsTransient(exception))
                 await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
             NotifyInterceptorsOnError(builder._interceptors, context, exception);
             throw;
@@ -213,8 +246,6 @@ public static class QueryBuilderExtensions
         // 写入路径（ExecuteNonQueryAsync/Bulk/StoredProc/原始 SQL 家族）维持直连：
         // 重试非幂等写有重复执行风险（ITM-310 契约），显式需求请用 ExecuteWithResilience 包裹。
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
-        ResilienceExecutor resilience = builder._resilience;
-        bool resilient = boundTransaction is null && !resilience.IsPassThrough;
 
         // 单次尝试内核——每次重试重建连接租约/命令/读取器；缓存写入仅在成功尝试发生；
         // 拦截器 OnBefore/OnError 按尝试触发（失败的尝试确实发生了），OnAfter 仅成功尝试。
@@ -298,9 +329,8 @@ public static class QueryBuilderExtensions
             // 操作门禁横跨全部重试尝试持有——一次用户操作仍是一次门禁占用，
             // 与 SessionOperationState 的单活动操作契约一致。ARCH-001（2026-09-23）：
             // 只读入口走 EnterReadOnly——并行读作用域内允许并发租约，作用域外行为逐位不变。
-            List<T> list = resilient
-                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
-                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
+            List<T> list = await ExecuteWithResilienceAsync(
+                builder, ExecuteCoreAsync, boundTransaction, ct).ConfigureAwait(false);
             outcome = "success";
             return list;
         }
@@ -311,7 +341,7 @@ public static class QueryBuilderExtensions
             // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
             // （NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
             // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
-            if (builder._resilience.IsTransient(exception))
+            if (builder.GetResilience().IsTransient(exception))
                 await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
             NotifyInterceptorsOnError(builder._interceptors, context, exception);
             throw;
@@ -458,8 +488,6 @@ public static class QueryBuilderExtensions
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         DbTransaction? boundTransaction = builder.GetActiveTransaction();
-        ResilienceExecutor resilience = builder._resilience;
-        bool resilient = boundTransaction is null && !resilience.IsPassThrough;
 
         // ARCH-001：记录本次尝试的连接供 finally 归还（并行读作用域内的池连接）。
         DbConnection? lastReadConnection = null;
@@ -517,9 +545,8 @@ public static class QueryBuilderExtensions
         {
             using SessionOperationState.SessionOperationLease operationLease =
                 builder._operationState.EnterReadOnly(operationOwner);
-            (T? row, int rows) result = resilient
-                ? await resilience.ExecuteAsync(ExecuteCoreAsync, ct).ConfigureAwait(false)
-                : await ExecuteCoreAsync(ct).ConfigureAwait(false);
+            (T? row, int rows) result = await ExecuteWithResilienceAsync(
+                builder, ExecuteCoreAsync, boundTransaction, ct).ConfigureAwait(false);
             outcome = "success";
             return result;
         }
@@ -530,7 +557,7 @@ public static class QueryBuilderExtensions
             // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接——静默掐断
             //（NAT/LB，无 FIN/RST）后 State 仍为 Open，不丢弃则后续查询复用死连接。
             // 确定性失败不丢弃（连接是健康的，丢弃只会白付一次重建）。
-            if (builder._resilience.IsTransient(exception))
+            if (builder.GetResilience().IsTransient(exception))
                 await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
             NotifyInterceptorsOnError(builder._interceptors, context, exception);
             throw;
@@ -742,7 +769,7 @@ public static class QueryBuilderExtensions
         string pageSql = paged.BuildSql();
         IReadOnlyList<DbParameter> pageParameters = paged.GetQueryParameters();
 
-        ResilienceExecutor resilience = paged._resilience;
+        ResilienceExecutor resilience = paged.GetResilience();
         if (resilience.IsPassThrough)
             return await ExecuteBatchedPageCoreAsync<T>(
                 paged, pageSize, countSql, countParameters, pageSql, pageParameters, ct).ConfigureAwait(false);
@@ -870,7 +897,7 @@ public static class QueryBuilderExtensions
                 ? "cancelled"
                 : "error");
             // READ-001（2026-09-23）：同 SELECT 管线——读路由瞬时故障丢弃会话缓存的读连接
-            if (builder._resilience.IsTransient(exception))
+            if (builder.GetResilience().IsTransient(exception))
                 await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
             await CleanupQueryResourcesAsync(grid, command, exception).ConfigureAwait(false);
             throw;

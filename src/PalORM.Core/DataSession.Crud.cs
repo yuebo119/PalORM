@@ -77,9 +77,14 @@ public sealed partial class DataSession<TProvider>
             new QueryBuilderServices<T>(
                 TProvider.Dialect, (Func<DbDataReader, T>)factory, _interceptors,
                 TProvider.CreateParameter, TProvider.QuoteIdentifier,
-                _operationState, Resilience, _options.CommandTimeout,
+                _operationState, null, _options.CommandTimeout,
                 _isolationLevel,  // r5-S2：会话隔离级别透传（WithIsolationLevel 经门禁修改）
-                TProvider.CreateArrayParameter),  // P0-2：WhereIn 的数组形态（Provider 无数组能力时接口默认 null → 占位符回退）
+                TProvider.CreateArrayParameter,  // P0-2：WhereIn 的数组形态（Provider 无数组能力时接口默认 null → 占位符回退）
+                Session: this,  // S3b：执行期懒取弹性执行器，From<T> 不再提前物化
+                ResilienceGeneration: ResilienceGeneration,
+                OptionsSnapshot: _options,
+                IsTransient: ProviderDelegates.IsTransient,
+                ProviderType: typeof(TProvider)),
             tableName, columnNames, _readConnProvider,
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
             _readConnReturner, _querySlot));

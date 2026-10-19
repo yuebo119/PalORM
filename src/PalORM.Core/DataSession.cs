@@ -18,7 +18,7 @@ namespace PalORM;
 /// <c>DbOptions.ReadConnectionString</c> 的读路由。并发能力由"会话数 = 并发度"表达，
 /// 多个会话共享同一 <see cref="DbOptions"/> 实例即可。</para></summary>
 /// <typeparam name="TProvider">数据库 Provider 类型（PostgreSqlProvider / MySqlProvider / SqliteProvider）。</typeparam>
-public sealed partial class DataSession<TProvider> : IAsyncDisposable
+public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySessionResilience
     where TProvider : IDbProvider
 {
     private readonly DbConnection _conn;
@@ -30,6 +30,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 首个读/写弹性触点（<see cref="Resilience"/> getter）时 CAS 挂接；
     /// 池化会话在 <see cref="MarkPooled"/> 强制物化，池语义（基准实例跨租期存活）逐位不变。</summary>
     private ResilienceExecutor? _resilience;
+    /// <summary>S3b：弹性配置代际——每次 WithTimeout/WithRetry/WithCircuitBreaker 重建执行器时 +1。
+    /// QueryBuilder 捕获创建时的代际；执行时若代际未变才懒取会话执行器，变了则用捕获的
+    /// DbOptions 快照自建，保留“From 之后改配置不影响既有 builder”的原快照语义。</summary>
+    internal int ResilienceGeneration;
     private readonly List<IQueryInterceptor> _interceptors;
     private readonly ILogger _logger;
     private readonly SessionOperationState _operationState = new();
@@ -589,7 +593,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>W3：弹性执行器的惰性取用器——首个触点创建（CAS 良性竞态：并发首触只多建
     /// 一个实例，败者被 GC；单活动操作契约下实际不触发，同 _querySlot/_readConnProvider 先例）。
     /// 全部弹性读点经此取器，插入/批量/事务短路路径不再触发创建。</summary>
-    private ResilienceExecutor Resilience
+    internal ResilienceExecutor Resilience
     {
         get
         {
@@ -603,7 +607,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
 
     /// <summary>S3：会话是否配置了任何弹性语义。全零（MaxRetries=0 且熔断禁用且无总预算）
     /// 时读路径完全不经执行器，连惰性创建都不发生。</summary>
-    private bool ResilienceConfigured
+    internal bool ResilienceConfigured
         => _options.MaxRetries > 0
             || _options.CircuitBreakerThreshold > 0
             || _options.OverallDeadline > TimeSpan.Zero;
@@ -611,10 +615,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>S3：首次尝试直接执行的可用条件——尚无执行器（会话级熔断器恒从 Closed 起步，
     /// 首次失败前无需 Enter 检查）、非进程级熔断（进程级必须先查共享开闸状态）、且未设总预算
     /// （总预算由执行器统一执法）。满足时成功路径零执行器、零超时 CTS、零重试委托。</summary>
-    private bool DirectFirstReadAllowed
+    internal bool DirectFirstReadAllowed
         => _resilience is null
             && _options.CircuitBreakerScope != CircuitBreakerScope.Process
             && _options.OverallDeadline <= TimeSpan.Zero;
+
+    ResilienceExecutor IQuerySessionResilience.GetResilienceExecutor() => Resilience;
+    bool IQuerySessionResilience.SessionResilienceConfigured => ResilienceConfigured;
+    bool IQuerySessionResilience.SessionDirectFirstAllowed => DirectFirstReadAllowed;
+    int IQuerySessionResilience.ResilienceGeneration => ResilienceGeneration;
 
     /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。
     /// <para><b>并发契约（OPS-001，2026-09-23）</b>：本入口<b>不占操作门禁</b>——它是给调用方
@@ -648,6 +657,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // Volatile.Write 保留为跨线程发布的最低保障。
         Volatile.Write(ref _options, options);
         Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider)));
+        ResilienceGeneration++;
     }
 
     /// <summary>停止后台操作，释放连接。幂等。</summary>

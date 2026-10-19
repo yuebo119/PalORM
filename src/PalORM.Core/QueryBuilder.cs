@@ -4,6 +4,16 @@ using System.Runtime.CompilerServices;
 
 namespace PalORM;
 
+/// <summary>S3b：QueryBuilder 与具体会话之间的最小弹性契约（QueryBuilder 是顶层泛型类型，
+/// 不能直接命名 DataSession&lt;TProvider&gt;；会话实现此接口后 builder 只持一个引用）。</summary>
+internal interface IQuerySessionResilience
+{
+    ResilienceExecutor GetResilienceExecutor();
+    bool SessionResilienceConfigured { get; }
+    bool SessionDirectFirstAllowed { get; }
+    int ResilienceGeneration { get; }
+}
+
 /// <summary>类型安全链式查询构建器——struct（值类型）。
 /// <para><b>为什么是 struct</b>: class 方案每次 From&lt;T&gt;() 都会分配堆内存，高 QPS 下增加 GC 压力。</para>
 /// <para><b>为什么执行方法在扩展类</b>: struct 的 async 实例方法会装箱，静态扩展方法可避免该分配。</para>
@@ -46,9 +56,18 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly IReadOnlyList<string> _columnNames;
     internal readonly SessionOperationState _operationState;
     /// <summary>会话弹性策略快照（From&lt;T&gt;() 时捕获，与 _commandTimeout 同口径）——
-    /// 只读执行管线据此决定是否经重试/熔断。WithRetry 等在 From 之后调用不回灌已存在的
-    /// builder（门禁禁止与飞行查询并发变更，快照语义见 WithRetry 文档）。</summary>
-    internal readonly ResilienceExecutor _resilience;
+    /// 只读执行管线据此决定是否经重试/熔断。<b>S3b</b>：可为 null（From&lt;T&gt; 不再提前
+    /// 物化执行器），执行时经 <see cref="GetResilience"/> 懒取会话实例。</summary>
+    internal readonly ResilienceExecutor? _resilience;
+    /// <summary>S3b：创建本 builder 的会话引用（仅供执行期懒取弹性执行器；测试手工构造的
+    /// builder 可为 null，此时必须自带非空 _resilience）。</summary>
+    internal readonly IQuerySessionResilience? _session;
+    /// <summary>S3b：创建时捕获的弹性配置代际与 options 快照——配置在 From 之后被 With*
+    /// 重建时，builder 仍按旧配置自建执行器（原有快照语义）。</summary>
+    internal readonly int _resilienceGeneration;
+    internal readonly DbOptions? _optionsSnapshot;
+    internal readonly Func<Exception, bool>? _isTransient;
+    internal readonly Type? _providerType;
     internal TimeSpan _commandTimeout;
     // T5b：持久化链表（cons list）替代 List——AddClause 每次只分配一个节点、零复制。
     // struct 副本共享链引用且链不可变，副本隔离天然成立（List 版必须 COW 整表复制）。
@@ -116,6 +135,11 @@ public struct QueryBuilder<T> where T : class, new()
         _columnNames = ctx.ColumnNames;
         _operationState = ctx.Services.OperationState;
         _resilience = ctx.Services.Resilience;
+        _session = ctx.Services.Session as IQuerySessionResilience;
+        _resilienceGeneration = ctx.Services.ResilienceGeneration;
+        _optionsSnapshot = ctx.Services.OptionsSnapshot;
+        _isTransient = ctx.Services.IsTransient;
+        _providerType = ctx.Services.ProviderType;
         _commandTimeout = ctx.Services.CommandTimeout;
         // v5.6：初始容量 0——AddClause 的写时复制按 Count+4 预留（见 AddClause 注释），
         // 首次写入即拿到足够余量，故预先分配的空数组只会成为首个子句时被丢弃的垃圾
@@ -140,6 +164,36 @@ public struct QueryBuilder<T> where T : class, new()
         _querySlot = ctx.QuerySlot;
         _createArrayParameter = ctx.Services.CreateArrayParameter;
     }
+
+    /// <summary>S3b：执行期懒取弹性执行器——From&lt;T&gt;() 不再提前物化，成功的首次尝试
+    /// 零执行器；失败路径与显式配置路径在此取得会话实例。</summary>
+    internal ResilienceExecutor GetResilience()
+    {
+        if (_resilience is not null)
+            return _resilience;
+        // 代际未变：会话当前配置仍是创建时的配置，可共享会话执行器（CB 状态一致）。
+        if (_session is { } session && session.ResilienceGeneration == _resilienceGeneration)
+            return session.GetResilienceExecutor();
+        // 配置在 From 之后被 With* 重建：按创建时 options 快照自建执行器（原快照语义）。
+        if (_optionsSnapshot is not null && _isTransient is not null)
+            return new ResilienceExecutor(_optionsSnapshot, _isTransient, _providerType);
+        return _session!.GetResilienceExecutor();
+    }
+
+    /// <summary>会话是否配置了任何弹性语义。优先用创建时的 options 快照（保留 From 之后的
+    /// With* 不影响既有 builder 的原快照语义）；测试手工构造的 builder 走自带执行器。</summary>
+    internal bool SessionResilienceConfigured
+        => _optionsSnapshot is { } options
+            ? options.MaxRetries > 0
+                || options.CircuitBreakerThreshold > 0
+                || options.OverallDeadline > TimeSpan.Zero
+            : _session?.SessionResilienceConfigured ?? true;
+
+    /// <summary>首发直接执行是否可用（会话级熔断且尚未物化执行器）。</summary>
+    internal bool SessionDirectFirstAllowed => _session?.SessionDirectFirstAllowed ?? false;
+
+    /// <summary>是否已有物化执行器（会话级首发直路只在没有时启用）。</summary>
+    internal bool HasResilienceExecutor => _resilience is not null;
 
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
     /// 分组组合：WHERE defaults AND ((A) OR (B))——用户 OR 无法绕过默认过滤（ITM-401 根治）。</summary>
@@ -761,7 +815,11 @@ public struct QueryBuilder<T> where T : class, new()
             _conn,
             new QueryBuilderServices<T>(_dialect, _factory, _interceptors, _paramFactory,
                 _quoteIdentifier, _operationState, _resilience, _commandTimeout, _isolationLevel,
-                _createArrayParameter),  // r6-N1：克隆透传——r5-S2 曾在此断裂致条件分支死代码
+                _createArrayParameter, Session: _session,
+                ResilienceGeneration: _resilienceGeneration,
+                OptionsSnapshot: _optionsSnapshot,
+                IsTransient: _isTransient,
+                ProviderType: _providerType),  // S3b：克隆透传会话引用与配置快照
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
             _readConnInvalidator, _readConnReturner, _querySlot))
         {
@@ -1508,10 +1566,15 @@ internal readonly record struct QueryBuilderServices<T>(
     Func<string, object?, DbParameter> ParamFactory,
     Func<string, string> QuoteIdentifier,
     SessionOperationState OperationState,
-    ResilienceExecutor Resilience,
+    ResilienceExecutor? Resilience,
     TimeSpan CommandTimeout,
     System.Data.IsolationLevel? IsolationLevel = null,  // r5-S2：会话隔离级别透传（ToPageAsync 自开事务 honoring WithIsolationLevel）
-    Func<string, Array, DbParameter?>? CreateArrayParameter = null)  // P0-2：数组参数委托（Provider 无数组能力时为接口默认 null，WhereIn 回退占位符形态）
+    Func<string, Array, DbParameter?>? CreateArrayParameter = null,  // P0-2：数组参数委托（Provider 无数组能力时为接口默认 null，WhereIn 回退占位符形态）
+    object? Session = null,  // S3b：IQuerySessionResilience 引用（object 避免为 Services 增加 TProvider 泛型参数）
+    int ResilienceGeneration = 0,
+    DbOptions? OptionsSnapshot = null,
+    Func<Exception, bool>? IsTransient = null,
+    Type? ProviderType = null)
     where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。
