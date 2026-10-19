@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
@@ -45,16 +44,16 @@ internal static class WorkloadHarness
         Justification = "负载测试的表格输出是机器可读报告，固定文本。")]
     public static async Task RunAsync(WorkloadOptions options)
     {
-        switch (options.Dialect.ToLowerInvariant())
+        switch (options.Dialect.ToUpperInvariant())
         {
-            case "pg":
-            case "postgresql":
+            case "PG":
+            case "POSTGRESQL":
                 await RunDialectAsync<PostgreSqlProvider>(options,
                     Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
                         ?? throw new InvalidOperationException("PALORM_PG_CONNECTION 未设置（pg 负载档需远程库）"),
                     sqlite: false).ConfigureAwait(false);
                 return;
-            case "mysql":
+            case "MYSQL":
                 await RunDialectAsync<MySqlProvider>(options,
                     Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
                         ?? throw new InvalidOperationException("PALORM_MYSQL_CONNECTION 未设置（mysql 负载档需远程库）"),
@@ -147,7 +146,8 @@ internal static class WorkloadHarness
         try
         {
             // 预热 1.5 s（规范 §4：无预热的数字不得发布）
-            var warmup = RunWorkers<TProvider>(sessions, samplesByThread, workload, TimeSpan.FromSeconds(1.5));
+            using var warmupSignal = new CancellationTokenSource(TimeSpan.FromSeconds(1.5));
+            Task[] warmup = RunWorkers<TProvider>(sessions, samplesByThread, workload, warmupSignal.Token);
             await Task.WhenAll(warmup).ConfigureAwait(false);
             Array.Clear(samplesByThread);
 
@@ -179,13 +179,6 @@ internal static class WorkloadHarness
         DataSession<TProvider>[] sessions,
         ConcurrentQueue<long>[] samplesByThread,
         WorkloadOptions workload,
-        TimeSpan duration) where TProvider : IDbProvider
-        => RunWorkers(sessions, samplesByThread, workload, new CancellationTokenSource(duration).Token);
-
-    private static Task[] RunWorkers<TProvider>(
-        DataSession<TProvider>[] sessions,
-        ConcurrentQueue<long>[] samplesByThread,
-        WorkloadOptions workload,
         CancellationToken stop) where TProvider : IDbProvider
     {
         var tasks = new Task[sessions.Length];
@@ -193,8 +186,11 @@ internal static class WorkloadHarness
         {
             int threadIndex = t;
             samplesByThread[threadIndex] = new ConcurrentQueue<long>();
-            tasks[t] = Task.Run(() => WorkerLoop(
-                sessions[threadIndex], samplesByThread[threadIndex], threadIndex, workload, stop));
+            // 显式不传 stop：worker 必须启动后由循环顶部观察停止信号；
+            // 交给 Task.Run 时若 token 恰在排程前取消，任务从未执行，Task.WhenAll 会抛取消异常。
+            tasks[t] = Task.Run(
+                () => WorkerLoop(sessions[threadIndex], samplesByThread[threadIndex], threadIndex, workload, stop),
+                CancellationToken.None);
         }
         return tasks;
     }
@@ -208,12 +204,14 @@ internal static class WorkloadHarness
         WorkloadOptions workload,
         CancellationToken stop) where TProvider : IDbProvider
     {
+#pragma warning disable S2245, CA5394 // 可复现负载用确定性种子 Random；加密强度与基准目标无关
         var random = new Random(42 + threadIndex);
         long maxId = workload.Rows;
         var stopwatch = new Stopwatch();
         // 引用符按方言（PG/SQLite 双引号、MySQL 反引号）——"Id" 在 MySQL 是语法错误
         string quotedId = TProvider.QuoteIdentifier("Id");
         string quotedTable = TProvider.QuoteIdentifier("bench_s1_narrow");
+#pragma warning disable PALORM005 // 循环体就是"每操作一次数据库调用"的待测负载，不是可合并的 N+1
         while (!stop.IsCancellationRequested)
         {
             long id = random.NextInt64(1, maxId + 1);
@@ -223,18 +221,21 @@ internal static class WorkloadHarness
             {
                 await session.ExecuteAsync(
                     FormattableStringFactory.Create(
-                        $"UPDATE {quotedTable} SET qty = qty + 1 WHERE {quotedId} = {id}"))
+                        $"UPDATE {quotedTable} SET qty = qty + 1 WHERE {quotedId} = {id}"),
+                    CancellationToken.None) // 在飞操作完成后再观察停止信号，保证样本完整
                     .ConfigureAwait(false);
             }
             else
             {
                 // step12 形态复核：单键直查改用专用 GetAsync（同 StabilityHarness）
-                _ = await session.GetAsync<BenchNarrow>(id)
+                _ = await session.GetAsync<BenchNarrow>(id, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             stopwatch.Stop();
             samples.Enqueue(stopwatch.Elapsed.TotalMilliseconds switch { var ms => (long)(ms * 1000) });
         }
+#pragma warning restore PALORM005
+#pragma warning restore S2245, CA5394
     }
 
     /// <summary>近邻秩分位数（样本已排序，微秒）。</summary>
@@ -293,7 +294,7 @@ internal static class WorkloadHarness
             : $"[workload] 结果库信封已写入 {path}");
     }
 
-    private static string WorkloadJson(IReadOnlyList<WorkloadTierResult> tiers, WorkloadOptions options)
+    private static string WorkloadJson(List<WorkloadTierResult> tiers, WorkloadOptions options)
     {
         // schema 2 草案（规范 §6）——先落盘积累噪声底，门禁暂不卡分位数
         var sb = new System.Text.StringBuilder();
