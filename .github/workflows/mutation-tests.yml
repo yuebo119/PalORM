@@ -15,11 +15,11 @@ concurrency:
 jobs:
   core:
     name: Stryker (Core)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 
@@ -47,7 +47,7 @@ jobs:
       # 配置中的阈值自此真实生效（此前配置存在但无任何调度消费，评审 P1）
       - name: Upload Core mutation report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stryker-core-report
           path: test/PalORM.Core.Tests/StrykerOutput/**/reports/**
@@ -55,11 +55,11 @@ jobs:
 
   sourcegen:
     name: Stryker (SourceGen)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 
@@ -83,7 +83,7 @@ jobs:
       # SourceGen emitter 是本项目最大风险面（评审 P1：此前变异面完全未覆盖）
       - name: Upload SourceGen mutation report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stryker-sourcegen-report
           path: test/PalORM.SourceGen.Tests/StrykerOutput/**/reports/**
