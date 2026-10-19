@@ -881,6 +881,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return info;
     }
 
+    /// <summary>CRUD 入口的静态视图取用：保留旧入口的 "has no generated CRUD" 错误消息
+    /// （投影类型只有行工厂，没有 CRUD 元数据）。冷路径才查一次注册表，命中静态缓存后零查找。</summary>
+    private static EntityRuntimeInfo GetEntityInfoForCrud<T>() where T : class, new()
+    {
+        if (EntityInfoCache.Per<T>.Info is { } cached)
+            return cached;
+        if (!PalORM_Runtime.CurrentState._crudMetadatas.ContainsKey(typeof(T)))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        return GetEntityInfo<T>();
+    }
+
     /// <summary>刀1：行工厂的每类型静态缓存——直查族（QueryAsync/QueryAsyncEnumerable/
     /// QueryFirst/QuerySingle）专用。T 允许是 [Projection] 类型（只进 RowFactories 不进
     /// TableNames），故不走 EntityRuntimeInfo 视图而走 RowFactories 注册表。</summary>

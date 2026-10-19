@@ -99,6 +99,17 @@ public sealed class EntityRuntimeInfo
 
     /// <summary>聚合 CRUD 元数据（值拷贝，注册期一次）。</summary>
     public required CrudMetadata Crud { get; init; }
+
+    /// <summary>主键绑定委托（注册期快照）——GetByKey/Delete 热路径经静态视图直接取用，
+    /// 免去每操作一次 FrozenDictionary 查找。可选：投影类型缺省为 null，消费方按缺失报错。</summary>
+    public Action<System.Data.Common.DbCommand, object>? BindDelete { get; init; }
+
+    /// <summary>自增主键回填委托（注册期快照）——INSERT/LAST_INSERT_ID 路径免字典查找。
+    /// 无自增主键的实体为 null。</summary>
+    public Action<object, long>? SetId { get; init; }
+
+    /// <summary>主键列名（注册期快照）——INSERT ... RETURNING 回填与批量删除免字典查找。</summary>
+    public string? PkColumn { get; init; }
 }
 
 /// <summary>编译时注册表。各模型程序集的 ModuleInitializer 通过 <see cref="Register"/> 合并片段。</summary>
@@ -297,6 +308,9 @@ public static class PalORM_Runtime
                     ColumnNames = next._columnNames[pair.Key],
                     Features = next._entityFeatures.GetValueOrDefault(pair.Key),
                     Crud = next._crudMetadatas.GetValueOrDefault(pair.Key),
+                    BindDelete = next._bindDelete.GetValueOrDefault(pair.Key),
+                    SetId = next._setIdDelegates.GetValueOrDefault(pair.Key),
+                    PkColumn = next._pkColumns.GetValueOrDefault(pair.Key),
                 };
             }
             next._entityInfo = entityInfo.ToFrozenDictionary();

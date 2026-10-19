@@ -349,9 +349,7 @@ public sealed partial class DataSession<TProvider>
     private static void BindGeneratedKeyParameter<T>(DbCommand cmd, object key)
         where T : class, new()
     {
-        if (PalORM_Runtime.BindDelete.TryGetValue(
-                typeof(T),
-                out Action<DbCommand, object>? binder))
+        if (GetEntityInfo<T>().BindDelete is { } binder)
         {
             binder(cmd, key);
             return;

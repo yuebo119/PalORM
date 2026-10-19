@@ -17,11 +17,14 @@ public partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(entities);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
-        // r11.5-D3（ITM-637 同型第六处）：元数据检查先于空列表短路——会话层短路使
-        // Provider 层（r4 批次已修）的三方言一致性检查对空列表不可达
-        // R13：复用 BulkOperationFramework 的单一实现点（PG/MySQL/多值骨架共用同一守卫）
-        _ = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
-        if (entities.Count == 0) return 0;
+        // R13：元数据守卫的单一实现点在 Provider（BulkOperationFramework.EnsureInsertMetadata）。
+        // 空列表不会进入 Provider，故仅此分支在会话层补一次检查；非空列表由 Provider
+        // 在其空短路之前执行同一守卫，避免两次注册表查找。
+        if (entities.Count == 0)
+        {
+            _ = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
+            return 0;
+        }
         return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
             _options.CommandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
     }
@@ -38,29 +41,27 @@ public partial class DataSession<TProvider>
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         ArgumentNullException.ThrowIfNull(keys);
-        // v4.0 优化 B：CurrentState 单次快照——替代 3 次独立 Volatile.Read。
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._tableNames.TryGetValue(typeof(T), out string? tableName)
-            || !state._pkColumns.TryGetValue(typeof(T), out string? pkCol)
-            || !state._bindDelete.TryGetValue(
-                typeof(T), out Action<DbCommand, object>? bindKey))
+        // S1：表名/主键/键绑定器走每类型静态视图，免每调用一次注册表快照与三次字典查找。
+        EntityRuntimeInfo info = GetEntityInfoForCrud<T>();
+        if (info.PkColumn is not { } pkCol || info.BindDelete is not { } bindKey)
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
         // r13-S1（r12 声称未交付第四例——本批真交付）：空短路后置同族口径
         if (keys.Count == 0) return 0;
 
-        bool isSoftDelete =
-            (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
+        string tableName = info.TableName;
+        bool isSoftDelete = (info.Features & EntityFeatures.SoftDelete) != 0;
         string quotedTable = TProvider.QuoteIdentifier(tableName);
         string quotedPrimaryKey = TProvider.QuoteIdentifier(pkCol);
         // 租户过滤与单条 DeleteAsync 对齐（ITM-404）：跨租户主键命中 0 行
         // M1（v5.6.0）：后缀 per-Dialect 缓存（语句随批次占位符变化，仅后缀可缓存）
-        string tenantFilter = HasTenantFilter<T>() ? GetTenantAppendFragment() : "";
+        bool hasTenant = HasTenantFilter(info.Features);
+        string tenantFilter = hasTenant ? GetTenantAppendFragment() : "";
         // L5：标识符与时间表达式集合一次算好——原实现每批重算
         // （QuoteIdentifier("deleted_at") × 2 + CurrentTimestampExpression 取值）
         DeleteIdentifiers identifiers = new(
             quotedTable, quotedPrimaryKey, TProvider.QuoteIdentifier("deleted_at"),
             TProvider.CurrentTimestampExpression, tenantFilter);
-        int tenantParamCount = HasTenantFilter<T>() ? 1 : 0;
+        int tenantParamCount = hasTenant ? 1 : 0;
 
         // UNNEST-1（2026-10-02）：PG 数组形态——`pk = ANY(@ids)` 一条语句取代 N 个 IN 占位符。
         // 能力检测（生成物提供主键数组构造器 + Provider 接受该元素类型的数组参数）全真才走，
@@ -99,11 +100,7 @@ public partial class DataSession<TProvider>
         // 快照+旧模型回退）已被 C3 的委托基建整体沉没，此处零生成器改动消费既有委托，消除
         // 每键一次 scratch 参数创建 + 两次集合操作（20K 键约省 1.9 万个短命参数对象）。
         // 复合主键 / 旧生成器程序集为 null——保留 scratch 载体回退，行为不变。
-        InFormKeyBinding keyBinding = new(
-            bindKey,
-            state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata bulkMetadata)
-                ? bulkMetadata.ConvertDeleteKey
-                : null);
+        InFormKeyBinding keyBinding = new(bindKey, info.Crud.ConvertDeleteKey);
 
         return await RunInTransactionScopeAsync(
             operation.Owner,
@@ -153,18 +150,17 @@ public partial class DataSession<TProvider>
         where TKey : notnull
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._tableNames.TryGetValue(typeof(T), out string? typedTableName)
-            || !state._pkColumns.TryGetValue(typeof(T), out string? typedPkCol)
-            || !state._bindDelete.TryGetValue(typeof(T), out Action<DbCommand, object>? _))
+        EntityRuntimeInfo info = GetEntityInfoForCrud<T>();
+        if (info.PkColumn is not { } typedPkCol)
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        string typedTableName = info.TableName;
         // 调用方已保证 keys.Count >= 2（门控条件），无空列表路径
 
-        bool isSoftDelete = (GetEntityFeatures<T>() & EntityFeatures.SoftDelete) != 0;
+        bool isSoftDelete = (info.Features & EntityFeatures.SoftDelete) != 0;
         DeleteIdentifiers identifiers = new(
             TProvider.QuoteIdentifier(typedTableName), TProvider.QuoteIdentifier(typedPkCol),
             TProvider.QuoteIdentifier("deleted_at"), TProvider.CurrentTimestampExpression,
-            HasTenantFilter<T>() ? GetTenantAppendFragment() : "");
+            HasTenantFilter(info.Features) ? GetTenantAppendFragment() : "");
         // 深挖轮：数组形态批宽提升（见 UnnestArraysMaxRowsPerBatch 注释）
         int batchSize = UnnestArraysMaxRowsPerBatch;
         return await RunInTransactionScopeAsync(
@@ -362,14 +358,28 @@ public partial class DataSession<TProvider>
         where T : class, new()
     {
         buildKeyArray = null;
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        Func<IReadOnlyList<object>, int, int, Array?>? builder = info.Crud.BuildDeleteKeyArray;
+        if (builder is null)
+        {
+            SqlSlots<T>.DeleteArraySupported = false;
             return false;
-        Func<IReadOnlyList<object>, int, int, Array?>? builder = metadata.BuildDeleteKeyArray;
-        if (builder is null || builder([], 0, 0) is not { } probe)
+        }
+        // S1：能力只取决于 (TProvider, T) 与生成物元素类型，每类型探测一次。
+        if (SqlSlots<T>.DeleteArraySupported is { } known)
+        {
+            buildKeyArray = known ? builder : null;
+            return known;
+        }
+        if (builder([], 0, 0) is not { } probe)
+        {
+            SqlSlots<T>.DeleteArraySupported = false;
             return false;
-        buildKeyArray = builder;
-        return TProvider.CreateArrayParameter(ArrayParameterName, probe) is not null;
+        }
+        bool supported = TProvider.CreateArrayParameter(ArrayParameterName, probe) is not null;
+        SqlSlots<T>.DeleteArraySupported = supported;
+        buildKeyArray = supported ? builder : null;
+        return supported;
     }
 
     /// <summary>构造数组形态的数组参数——元素类型与值取自生成物（与 <c>BindDelete</c> 同一真源）。
@@ -619,7 +629,7 @@ public partial class DataSession<TProvider>
             BatchUpdateSqlBuilder.BatchUpdateForm form = await ResolveMySqlUpdateFormAsync(ct).ConfigureAwait(false);
             // UNNEST 阶段 B（2026-10-02）：PG 的数组形态——每列一个数组参数，语句文本与批宽无关；
             // 能力检测（生成物提供逐列填充器 + Provider 接受这些元素类型的数组）不全真时保持 VALUES 形态。
-            if (UseUnnestArraysForUpdate(routeMetadata, out IReadOnlyList<Type>? arrayElementTypes))
+            if (UseUnnestArraysForUpdate<T>(routeMetadata, out IReadOnlyList<Type>? arrayElementTypes))
             {
                 return await RunInTransactionScopeAsync(
                     operation.Owner,
@@ -662,17 +672,15 @@ public partial class DataSession<TProvider>
         IReadOnlyList<T> entities, object? operationOwner, CancellationToken ct)
         where T : class, new()
     {
-        // P0-1：单次注册表快照（与 BulkUpdateAsync 的 R8 同口径）
-        PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
-        if (!state._crudMetadatas.TryGetValue(typeof(T), out CrudMetadata metadata))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no generated CRUD.");
+        // P0-1：元数据走每类型静态视图（注册期单调不可变，与 BulkUpdateAsync 的 R8 同口径）
+        EntityRuntimeInfo info = GetEntityInfoForCrud<T>();
+        CrudMetadata metadata = info.Crud;
 
         var (total, deferredVersionIncrements) = await RunInTransactionScopeAsync(
             operationOwner,
             async (transaction, token) => metadata.BindUpdateValues is { } valuesBinder
                 ? await ExecuteBulkUpdatePooledAsync(
-                    entities, metadata, valuesBinder, state, transaction, token).ConfigureAwait(false)
+                    entities, metadata, valuesBinder, transaction, token).ConfigureAwait(false)
                 : await ExecuteBulkUpdateLegacyAsync(
                     entities, operationOwner, token).ConfigureAwait(false),
             ct).ConfigureAwait(false);
@@ -699,7 +707,6 @@ public partial class DataSession<TProvider>
     private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledAsync<T>(
         IReadOnlyList<T> entities, CrudMetadata metadata,
         Action<DbParameter[], object, int> valuesBinder,
-        PalORM_Runtime.RuntimeRegistryState state,
         DbTransaction tran, CancellationToken ct)
         where T : class, new()
     {
@@ -735,10 +742,9 @@ public partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        // 生成的 UPDATE 语句：复用 GetCommandSqls 的单一真源（含租户后缀的两形态由缓存提供）
-        // ITM-821（r23）：用外层传入快照——原二次读 CurrentState 违反 R8 单快照纪律
-        // （Register/热重载窗口内 SQL 与 metadata 可能跨版本混用，probe 哨兵只拦参数数量不拦列映射错位）
-        string updateSql = GetCommandSqls<T>(state).Update;
+        // 生成的 UPDATE 语句：复用 GetCommandSqls 的单一真源（含租户后缀的两形态由缓存提供）。
+        // S1：静态槽命中零注册表读取；未命中才走冷路径解析。
+        string updateSql = GetCommandSqls<T>().Update;
         if (updateSql.Length == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
@@ -995,7 +1001,7 @@ public partial class DataSession<TProvider>
         // （此前只有 BulkUpdateAsync 的自动路由走数组，本公开入口仍走 VALUES，形成
         // 「同操作两形态」的不对称：B120 族）。乐观锁实体已在上方拒绝，列序与批量 UPDATE
         // 的 SET 列 + 主键一致。
-        if (UseUnnestArraysForUpdate(metadata, out IReadOnlyList<Type>? arrayElementTypes))
+        if (UseUnnestArraysForUpdate<T>(metadata, out IReadOnlyList<Type>? arrayElementTypes))
         {
             return await RunInTransactionScopeAsync(
                 operation.Owner,
@@ -1166,8 +1172,9 @@ public partial class DataSession<TProvider>
     /// <para><b>能力检测而非方言枚举</b>：判据是 Provider 是否接受这些元素类型
     /// （与阶段 A 的 BulkDelete 同纪律）。探测数组由生成物的分配器给出（AOT 安全，不用
     /// <c>Array.CreateInstance(Type, …)</c>）。</para></summary>
-    private static bool UseUnnestArraysForUpdate(
+    private static bool UseUnnestArraysForUpdate<T>(
         CrudMetadata metadata, out IReadOnlyList<Type>? arrayElementTypes)
+        where T : class, new()
     {
         arrayElementTypes = null;
         // 方言前置（2026-10-06，10-05 审计 P3）：UNNEST 是 PG 专有语法（BatchUpdateSqlBuilder
@@ -1179,14 +1186,25 @@ public partial class DataSession<TProvider>
             || metadata.CreateUpdateColumnArrays is null
             || metadata.UpdateColumnArrayElementTypes is not { Count: > 0 } elementTypes)
         {
+            SqlSlots<T>.UpdateArraySupported = false;
             return false;
+        }
+        // S1：生成物与 Provider 能力恒定，每 (TProvider, T) 探测一次。
+        if (SqlSlots<T>.UpdateArraySupported is { } known)
+        {
+            arrayElementTypes = known ? elementTypes : null;
+            return known;
         }
         Array[] probes = metadata.CreateUpdateColumnArrays(1);
         for (int c = 0; c < elementTypes.Count; c++)
         {
             if (TProvider.CreateTypedArrayParameter("@probe", probes[c], elementTypes[c]) is null)
+            {
+                SqlSlots<T>.UpdateArraySupported = false;
                 return false;
+            }
         }
+        SqlSlots<T>.UpdateArraySupported = true;
         arrayElementTypes = elementTypes;
         return true;
     }
@@ -1511,9 +1529,9 @@ public partial class DataSession<TProvider>
 
                 if (insertBatch is not null)
                     affected += await BatchInsertReturningAsync(
-                        transaction, insertBatch, mergeMetadata, mergeState, token).ConfigureAwait(false);
+                        transaction, insertBatch, mergeMetadata, token).ConfigureAwait(false);
                 affected += await BatchUpsertAsync(
-                    transaction, upsertBatch ?? [], mergeMetadata, mergeState, token).ConfigureAwait(false);
+                    transaction, upsertBatch ?? [], mergeMetadata, token).ConfigureAwait(false);
                 return affected;
             },
             ct).ConfigureAwait(false);
@@ -1535,16 +1553,14 @@ public partial class DataSession<TProvider>
         DbTransaction transaction,
         List<T> entities,
         CrudMetadata metadata,
-        PalORM_Runtime.RuntimeRegistryState state,
         CancellationToken ct) where T : class, new()
     {
-        if (!state._tableNames.TryGetValue(typeof(T), out string? insertTableName))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no [Table] attribute.");
-        if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
+        EntityRuntimeInfo info = GetEntityInfoForCrud<T>();
+        if (info.PkColumn is not { } pkColumn)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based insert requires one.");
-        state._setIdDelegates.TryGetValue(typeof(T), out Action<object, long>? backfill);
+        string insertTableName = info.TableName;
+        Action<object, long>? backfill = info.SetId;
 
         int columnCount = metadata.InsertColumns.Count;
         int batchSize = Math.Max(1, Math.Min(
@@ -1552,8 +1568,8 @@ public partial class DataSession<TProvider>
             SqlLimits.MaxBindParametersFor(TProvider.Dialect) / columnCount));
         string quotedTable = TProvider.QuoteIdentifier(insertTableName);
         string quotedPk = TProvider.QuoteIdentifier(pkColumn);
-        string quotedColumns = string.Join(", ",
-            metadata.InsertColumns.Select(c => TProvider.QuoteIdentifier(c)));
+        // S1：引用列清单由 (TProvider, T) 唯一决定，每类型构建一次。
+        string quotedColumns = SqlSlots<T>.InsertReturningQuotedColumnsOrBuild(metadata.InsertColumns);
 
         // R3（2026-10-12）：参数池化——原每批 fresh 命令 + 每行 BindInsert 建参（PG 默认键
         // merge 20000 行约 20 万参数对象）。镜像 MultiValueBulkInsert 的 R-UNNESTB 安全池形态：
@@ -1713,7 +1729,6 @@ public partial class DataSession<TProvider>
         DbTransaction transaction,
         List<T> entities,
         CrudMetadata metadata,
-        PalORM_Runtime.RuntimeRegistryState state,
         CancellationToken ct) where T : class, new()
     {
         if (entities.Count == 0) return 0;
@@ -1744,14 +1759,10 @@ public partial class DataSession<TProvider>
             maxRowsPerBatch * columnCount);
         int batchSize = Math.Max(1, maxParametersPerStatement / columnCount);
 
-        // ITM-821（r23）：tableName/pkColumn 取外层传入快照（mergeState）——原二次读
-        // CurrentState 与 metadata（旧快照）混用，违反本文件 R8 单快照纪律。
-        // ITM-878（r23）：TryGetValue + 族内统一异常（同 BulkUpdateAsync 路径口径）
-        if (!state._tableNames.TryGetValue(typeof(T), out string? upsertTableName))
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no [Table] attribute.");
-        string tableName = upsertTableName;
-        if (!state._pkColumns.TryGetValue(typeof(T), out string? pkColumn) || pkColumn is null)
+        // S1：表名与主键列取每类型静态视图（注册期快照，单调不可变）。
+        EntityRuntimeInfo info = GetEntityInfoForCrud<T>();
+        string tableName = info.TableName;
+        if (info.PkColumn is not { } pkColumn)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
         UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn));
@@ -1760,7 +1771,7 @@ public partial class DataSession<TProvider>
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
         // 能力检测与 UPDATE 路径同纪律（生成物三件套 + Provider 接受全部列的元素类型）。
         // 批内重复主键语义与既有形态一致：PG 对同语句影响同一行两次明确报错（见方法级文档）。
-        if (UseUnnestArraysForUpsert(metadata, out IReadOnlyList<Type>? upsertElementTypes))
+        if (UseUnnestArraysForUpsert<T>(metadata, out IReadOnlyList<Type>? upsertElementTypes))
         {
             return await ExecuteUpsertArrayBatchesAsync(
                 entities, metadata, shape, upsertElementTypes!, transaction, tenantGuarded, ct).ConfigureAwait(false);
@@ -1769,8 +1780,9 @@ public partial class DataSession<TProvider>
         // 绑定策略：BindUpsert 每行从 @p0 起命名且 MySQL 参数集合在 Add 时校验重名——
         // 不能直接往批命令里逐行 Append。PL-3.2：生成器发射 BindUpsertValues 时直写参数池
         // （零 CreateParameter）；旧模型程序集回退 scratch 命令绑定 → 值拷贝进预建参数池。
-        await using DbCommand scratch = CreateCommand();
+        // S1：新生成器路径不需要 scratch 命令，惰性化后每调用省一个命令对象。
         Action<DbParameter[], object, int>? upsertValuesBinder = metadata.BindUpsertValues;
+        await using DbCommand? scratch = upsertValuesBinder is null ? CreateCommand() : null;
 
         // PERF-004（2026-09-23）：命令与参数池跨批复用——池按满批大小建一次（下标 0..N-1 逐批同义），
         // 批间只写 Value；末批缩短时经 AttachParameters 收敛命令参数集合（池对象零新增分配）。
@@ -1805,7 +1817,7 @@ public partial class DataSession<TProvider>
                     upsertValuesBinder(pool, entities[row], rowBase);
                     continue;
                 }
-                BindUpsertRowViaScratch(scratch, metadata, entities[row], pool, rowBase, columnCount);
+                BindUpsertRowViaScratch(scratch!, metadata, entities[row], pool, rowBase, columnCount);
             }
 
             if (rowCount != lastRowCount)
@@ -1831,11 +1843,11 @@ public partial class DataSession<TProvider>
         if (!HasTenantFilter<T>())
             return shape;
         string qualifiedTenantColumn = $"{shape.QuotedTable}.{TProvider.QuoteIdentifier("tenant_id")}";
+        // S1：守卫后的冲突子句由 (TProvider, T) 唯一决定；MySQL 的 IF(...) 正则包装只跑一次。
         return new UpsertSqlShape(
             shape.QuotedTable, shape.QuotedColumns,
-            TProvider.Dialect == SqlDialect.MySql
-                ? WrapMySqlUpsertAssignmentsWithTenantGuard(shape.ConflictClause, qualifiedTenantColumn, _tenantParameterName)
-                : shape.ConflictClause + GetUpsertTenantWhereFragment(qualifiedTenantColumn, _tenantParameterName));
+            SqlSlots<T>.UpsertTenantConflictOrBuild(
+                shape.ConflictClause, qualifiedTenantColumn, _tenantParameterName));
     }
 
     /// <summary>租户护栏参数槽数量（守卫开启时池尾 1 个 @__tenant0 槽）。</summary>
@@ -1863,8 +1875,9 @@ public partial class DataSession<TProvider>
     /// <summary>UNNEST 阶段 B：批量 UPSERT 的数组形态能力检测（与
     /// <see cref="UseUnnestArraysForUpdate"/> 同纪律——生成物三件套非空 + Provider 接受
     /// 全部列的元素类型；任一列不支持整体回退多值 VALUES 形态）。</summary>
-    private static bool UseUnnestArraysForUpsert(
+    private static bool UseUnnestArraysForUpsert<T>(
         CrudMetadata metadata, out IReadOnlyList<Type>? arrayElementTypes)
+        where T : class, new()
     {
         arrayElementTypes = null;
         // 方言前置（同 UseUnnestArraysForUpdate：UNNEST 语法 PG 专有，能力检测与 SQL 构造同源）
@@ -1874,14 +1887,25 @@ public partial class DataSession<TProvider>
             || metadata.CreateUpsertColumnArrays is null
             || metadata.UpsertColumnArrayElementTypes is not { Count: > 0 } elementTypes)
         {
+            SqlSlots<T>.UpsertArraySupported = false;
             return false;
+        }
+        // S1：同 Update 侧，能力每 (TProvider, T) 探测一次。
+        if (SqlSlots<T>.UpsertArraySupported is { } known)
+        {
+            arrayElementTypes = known ? elementTypes : null;
+            return known;
         }
         Array[] probes = metadata.CreateUpsertColumnArrays(1);
         for (int c = 0; c < elementTypes.Count; c++)
         {
             if (TProvider.CreateTypedArrayParameter("@probe", probes[c], elementTypes[c]) is null)
+            {
+                SqlSlots<T>.UpsertArraySupported = false;
                 return false;
+            }
         }
+        SqlSlots<T>.UpsertArraySupported = true;
         arrayElementTypes = elementTypes;
         return true;
     }
