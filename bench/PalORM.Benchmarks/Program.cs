@@ -32,6 +32,12 @@ public static class Program
         // 2026-09-23 精简：--boxing 与 BoxingMicroBenchmark.cs 已删——它是 v5.0 阶段 3.4 的
         // 一次性决策量具（判据写在代码里："装箱占总分配比 >20% 值得实施 / <5% 不值得"），
         // 决策已落地；同一问题已由 03_GcBenchmarks 以规范形式覆盖。
+        // 连接与池 churn（维度 6）——--pool [sqlite|pg|mysql]
+        if (args.Length > 0 && args[0] == "--pool")
+        {
+            PoolProbe.RunAsync(args.Length > 1 ? args[1] : "sqlite").GetAwaiter().GetResult();
+            return;
+        }
         // 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md）——BDN 单线程测不了锁/池/调度
         if (args.Length > 0 && args[0] == "--workload")
         {
