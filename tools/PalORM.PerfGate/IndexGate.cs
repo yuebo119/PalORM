@@ -665,9 +665,13 @@ internal static class IndexGate
             : (values[middle - 1] + values[middle]) / 2;
     }
 
-    /// <summary>录制窗口里实际贡献了数据的批次时间戳（新的在前，最多 <paramref name="window"/> 个）。</summary>
+    /// <summary>录制窗口里实际贡献了数据的批次时间戳（新的在前，最多 <paramref name="window"/> 个）。
+    /// <para>只统计 PerfHub：基线条目仅来自 PerfHub 的 PalORM 臂（见 <see cref="KeyItems"/>），
+    /// DapperSuite 只作哨兵；不加 harness 过滤会让更新的哨兵批占掉一个名额，把标注指到
+    /// 零贡献的批次上（2026-10-20 实测：02:07 DapperSuite 顶替了 01:33 PerfHub）。</para></summary>
     private static List<string> ContributingLabels(List<PerfResultEnvelope> batches, int window)
         => [.. batches
+            .Where(static r => r.Harness == "perfhub")
             .Where(static r => !PerfResultWriter.IsSubsetLabel(r.Label))
             .Take(window)
             .Select(static r => r.Timestamp)];
