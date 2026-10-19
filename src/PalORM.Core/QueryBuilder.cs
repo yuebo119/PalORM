@@ -195,6 +195,18 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>是否已有物化执行器（会话级首发直路只在没有时启用）。</summary>
     internal bool HasResilienceExecutor => _resilience is not null;
 
+    /// <summary>S4：把弹性相关字段一次投影为只读上下文，执行管线不再持有 builder。</summary>
+    internal QueryBuilderExtensions.ResilienceContext CreateResilienceContext()
+        => new(
+            SessionResilienceConfigured,
+            SessionDirectFirstAllowed,
+            _resilience,
+            _session,
+            _resilienceGeneration,
+            _optionsSnapshot,
+            _isTransient,
+            _providerType);
+
     /// <summary>链式追加 WHERE/AND 条件。用户条件整体括号包裹并与默认过滤（软删/租户）
     /// 分组组合：WHERE defaults AND ((A) OR (B))——用户 OR 无法绕过默认过滤（ITM-401 根治）。</summary>
     public QueryBuilder<T> Where(FormattableString clause)
