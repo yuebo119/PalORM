@@ -49,6 +49,10 @@ internal sealed class CircuitBreaker
 
     internal bool IsEnabled => _threshold > 0;
 
+    /// <summary>当前开闸代数（只读快照）——供直接首发失败路径在不经 Enter 的情况下
+    /// 记录终结结果（ResilienceExecutor.RecordDirectFailure）。</summary>
+    internal long CurrentGeneration => Volatile.Read(ref _generation);
+
     /// <summary>当前开闸截止时刻——仅在 Open 态有意义，供诊断查询（不参与判定）。</summary>
     internal DateTime OpenUntil
     {
