@@ -279,10 +279,10 @@ public sealed partial class DataSession<TProvider>
     /// 与新建路径同文本）；本方法只负责复用判定与绑定。</para>
     /// <para>返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放。</para></summary>
     private DbCommand? TryAcquireInsertCommand<T>(
-        string commandText, CrudMetadata metadata, T entity, ref int servedOps, DbTransaction? activeTransaction)
+        string commandText, CrudPlan plan, T entity, ref int servedOps, DbTransaction? activeTransaction)
         where T : class, new()
     {
-        if (metadata.BindInsertValues is not { } valuesBinder)
+        if (plan.BindInsertValues is not { } valuesBinder)
             return null;
 
         if (_reusableInsert is { } reusable && reusable.EntityType == typeof(T))
@@ -303,7 +303,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
         try
         {
-            metadata.BindInsert(cmd, entity, 0);
+            plan.BindInsert(cmd, entity, 0);
         }
         catch
         {
@@ -330,11 +330,11 @@ public sealed partial class DataSession<TProvider>
     /// <para>晋升阈值与租户/旧模型程序集的排除见 <see cref="TryAcquireInsertCommand"/> 与本节注释。</para>
     /// <para>返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放。</para></summary>
     private DbCommand? TryAcquireUpdateCommand<T>(
-        string updateSql, CrudMetadata metadata, T entity, ref int servedOps,
+        string updateSql, CrudPlan plan, T entity, ref int servedOps,
         DbTransaction? activeTransaction, EntityFeatures features)
         where T : class, new()
     {
-        if (metadata.BindUpdateValues is not { } valuesBinder || HasTenantFilter(features))
+        if (plan.BindUpdateValues is not { } valuesBinder || HasTenantFilter(features))
             return null;
 
         if (_reusableUpdate is { } reusable && reusable.EntityType == typeof(T))
@@ -353,7 +353,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = updateSql;
         try
         {
-            metadata.BindUpdate(cmd, entity);
+            plan.BindUpdate(cmd, entity);
         }
         catch
         {
@@ -389,7 +389,7 @@ public sealed partial class DataSession<TProvider>
     /// 负责复用判定与键值绑定。返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放；
     /// 读路径的 <see cref="DbDataReader"/> 由调用方 await using 释放——释放前不触碰本命令。</para></summary>
     private DbCommand? TryAcquireGetByKeyCommand<T>(
-        string commandText, object key, CrudMetadata metadata, DbTransaction? activeTransaction)
+        string commandText, object key, CrudPlan plan, DbTransaction? activeTransaction)
         where T : class, new()
     {
         if (HasTenantFilter<T>())
@@ -425,7 +425,7 @@ public sealed partial class DataSession<TProvider>
 
         // 晋升门禁：单键转换委托缺失（复合主键 / 旧生成器程序集）永不晋升——每次调用走
         // 下方外的新建路径。P1-2：元数据经合并视图由调用方传入（同一 state 快照，ITM-703 单快照纪律）。
-        if (metadata.ConvertDeleteKey is not { } promotedConverter)
+        if (plan.ConvertDeleteKey is not { } promotedConverter)
             return null;
 
         DbCommand cmd = CreateCommand();
@@ -463,7 +463,7 @@ public sealed partial class DataSession<TProvider>
     /// 同一真源）。租户实体/复合主键/旧生成器程序集不晋升（与 GetByKey 槽同门禁）；
     /// 返回的命令归会话所有，调用方不得释放。</summary>
     private DbCommand? TryAcquireDeleteCommand<T>(
-        string commandText, object key, CrudMetadata metadata, DbTransaction? activeTransaction)
+        string commandText, object key, CrudPlan plan, DbTransaction? activeTransaction)
         where T : class, new()
     {
         if (HasTenantFilter<T>())
@@ -485,7 +485,7 @@ public sealed partial class DataSession<TProvider>
             return null;
 
         // P1-2：元数据经调用方传入（合并视图，同一 state 快照）
-        if (metadata.ConvertDeleteKey is not { } promotedConverter)
+        if (plan.ConvertDeleteKey is not { } promotedConverter)
             return null;
 
         DbCommand cmd = CreateCommand();
@@ -517,10 +517,10 @@ public sealed partial class DataSession<TProvider>
     /// <summary>单行 UPDATE 的结果校验与乐观锁 version 回填（复用与非复用路径共用，PL-2 抽出）。
     /// 语义与抽出前 UpdateCoreAsync 内联实现逐位一致。</summary>
     private static int ApplyUpdateOutcome<T>(
-        CrudMetadata metadata, T entity, int affectedRows, List<Action>? deferredVersionIncrements)
+        CrudPlan plan, T entity, int affectedRows, List<Action>? deferredVersionIncrements)
         where T : class, new()
     {
-        if (metadata.IncrementVersion is null)
+        if (plan.IncrementVersion is null)
             return affectedRows;
 
         if (affectedRows == 0)
@@ -533,9 +533,9 @@ public sealed partial class DataSession<TProvider>
         // 与 DB 失同步（重试假 ConcurrencyConflictException）。批量调用方传入暂存清单，
         // 提交成功后统一回放；单条 UpdateAsync 保持原语义（语句成功即回填）。
         if (deferredVersionIncrements is null)
-            metadata.IncrementVersion(entity);
+            plan.IncrementVersion(entity);
         else
-            DeferVersionIncrement(metadata.IncrementVersion, entity, deferredVersionIncrements);
+            DeferVersionIncrement(plan.IncrementVersion, entity, deferredVersionIncrements);
         return affectedRows;
     }
 
@@ -562,8 +562,8 @@ public sealed partial class DataSession<TProvider>
         // FrozenDictionary 查找，事务内逐条插入循环（TxHundred/EnumInserts）每行白付。
         // S1：回填委托与主键列名并入同一静态视图，Insert 路径不再读 CurrentState 快照。
         EntityRuntimeInfo info = GetEntityInfo<T>();
-        CrudMetadata metadata = info.Crud;
-        if (metadata.InsertColumns.Count == 0)
+        CrudPlan plan = GetCrudPlan<T>(info);
+        if (plan.InsertColumns.Count == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no generated insert metadata.");
         // 刀2：事务单次取用贯穿槽路径与执行（原槽内每次重取，长事务写循环每行多一次锁）
@@ -576,7 +576,7 @@ public sealed partial class DataSession<TProvider>
         //（拆账 .ai/perf-probe/TxPathDiag.cs：该段约占 InsertAsync 路径 3.1 µs/条）。
         // 其余形态：PG/SQLite 走 RETURNING，MySQL 走 LAST_INSERT_ID。
         string commandText;
-        if (metadata.InsertNoReturning)
+        if (plan.InsertNoReturning)
             commandText = sqls.Insert;
         else if (TProvider.SupportsReturningClause)
             commandText = sqls.InsertReturning;
@@ -585,14 +585,14 @@ public sealed partial class DataSession<TProvider>
 
         // PL-2：命令/参数复用路径。未晋升（前两次或旧模型程序集）时返回 null，
         // 走下方新建路径——命令随操作释放，不泄漏。
-        if (TryAcquireInsertCommand(commandText, metadata, entity, ref _insertWriteOps, activeTransaction) is { } reused)
-            return await FinishInsertAsync(info, reused, metadata, entity, ct).ConfigureAwait(false);
+        if (TryAcquireInsertCommand(commandText, plan, entity, ref _insertWriteOps, activeTransaction) is { } reused)
+            return await FinishInsertAsync(info, reused, plan, entity, ct).ConfigureAwait(false);
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindInsert(cmd, entity, 0);
-        return await FinishInsertAsync(info, cmd, metadata, entity, ct).ConfigureAwait(false);
+        plan.BindInsert(cmd, entity, 0);
+        return await FinishInsertAsync(info, cmd, plan, entity, ct).ConfigureAwait(false);
     }
 
     /// <summary>INSERT 执行形态分派的单一真源（PL-3）：InsertNoReturning → 纯执行；
@@ -603,12 +603,12 @@ public sealed partial class DataSession<TProvider>
     /// 逐条插入循环省一个 async 状态机帧/行（探针 A：三层 async 链 144ns，本项约 1/3）。</summary>
     private async ValueTask<T> FinishInsertAsync<T>(
         EntityRuntimeInfo info,
-        DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
+        DbCommand cmd, CrudPlan plan, T entity, CancellationToken ct)
         where T : class, new()
     {
         try
         {
-            if (metadata.InsertNoReturning)
+            if (plan.InsertNoReturning)
             {
                 int affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 if (affected != 1)
@@ -617,7 +617,7 @@ public sealed partial class DataSession<TProvider>
                 return entity;
             }
             return TProvider.SupportsReturningClause
-                ? await InsertWithReturningAsync(info, cmd, metadata, entity, ct).ConfigureAwait(false)
+                ? await InsertWithReturningAsync(info, cmd, plan, entity, ct).ConfigureAwait(false)
                 : await InsertWithLastInsertIdAsync(info, cmd, entity, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
@@ -633,13 +633,13 @@ public sealed partial class DataSession<TProvider>
     /// 否则参数池的参数集合会逐次增长。</para></summary>
     private async ValueTask<T> InsertWithReturningAsync<T>(
         EntityRuntimeInfo info,
-        DbCommand cmd, CrudMetadata metadata, T entity, CancellationToken ct)
+        DbCommand cmd, CrudPlan plan, T entity, CancellationToken ct)
         where T : class, new()
     {
         // v5.6.0 收窄路径：RETURNING 只回主键（生成器保守判定，见 CrudBindings.InsertReturningKeyOnly）。
         // 结果集与插入值恒等——整行物化等价于返回调用方实体 + 回填 ID；
         // 标量读取省去 reader 行缓冲与整行物化（宽表实体分配 −1 实体 −N 列读取）。
-        if (metadata.InsertReturningKeyOnly)
+        if (plan.InsertReturningKeyOnly)
         {
             long? narrowId = NormalizeGeneratedId(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
             if (narrowId is null)
@@ -652,7 +652,7 @@ public sealed partial class DataSession<TProvider>
         if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
 
-        T materialized = ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
+        T materialized = ((Func<DbDataReader, T>)plan.RowFactory)(reader);
         // 回填对齐 MySQL 路径（ITM-325）；S1：回填委托与主键列名来自同一注册期静态视图。
         if (info.SetId is { } backfill && info.PkColumn is { } pkColumn)
         {
@@ -745,7 +745,7 @@ public sealed partial class DataSession<TProvider>
         // r19/ITM-703：单快照贯穿（与 InsertCoreAsync 同口径）
         // 刀1：元数据/features 走合并视图静态缓存（省 2 次字典查找）；刀2：事务单次取用。
         EntityRuntimeInfo info = GetEntityInfo<T>();
-        CrudMetadata metadata = info.Crud;
+        CrudPlan plan = GetCrudPlan<T>(info);
         DbTransaction? activeTransaction = GetActiveTransaction();
 
         string updateSql = GetCommandSqls<T>().Update;
@@ -759,21 +759,21 @@ public sealed partial class DataSession<TProvider>
 
         // PL-2：命令/参数复用路径。未晋升（前两次、租户实体或旧模型程序集）时返回 null，
         // 走下方新建路径——命令随操作释放，不泄漏。
-        if (TryAcquireUpdateCommand(updateSql, metadata, entity, ref _updateWriteOps, activeTransaction, info.Features) is { } reusedUpdate)
+        if (TryAcquireUpdateCommand(updateSql, plan, entity, ref _updateWriteOps, activeTransaction, info.Features) is { } reusedUpdate)
         {
             int reusedRows = await ExecuteWriteRowsAsync(reusedUpdate, activeTransaction, ct).ConfigureAwait(false);
-            return ApplyUpdateOutcome(metadata, entity, reusedRows, deferredVersionIncrements);
+            return ApplyUpdateOutcome(plan, entity, reusedRows, deferredVersionIncrements);
         }
 
         await using DbCommand cmd = CreateCommand(activeTransaction);
         cmd.CommandText = updateSql;
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindUpdate(cmd, entity);
+        plan.BindUpdate(cmd, entity);
         BindDefaultFilterParameters(cmd, info.Features);
 
         // P2-1：直调重载——省掉 async lambda 的委托与 display class（实测约 208 B/行）
         int affectedRows = await ExecuteWriteRowsAsync(cmd, activeTransaction, ct).ConfigureAwait(false);
-        return ApplyUpdateOutcome(metadata, entity, affectedRows, deferredVersionIncrements);
+        return ApplyUpdateOutcome(plan, entity, affectedRows, deferredVersionIncrements);
     }
 
     /// <summary>按主键删除。[SoftDelete] 实体执行 UPDATE deleted_at，否则物理 DELETE。</summary>
@@ -786,7 +786,7 @@ public sealed partial class DataSession<TProvider>
         // CrudMetadatas——legacy 无方言 CommandSqls 已从生成物移除，不再作存在性代理。
         // 刀1：features/表名走合并视图；刀2：事务单次取用贯穿软删/槽/执行三路径。
         EntityRuntimeInfo deleteInfo = GetEntityInfo<T>();
-        CrudMetadata deleteMetadata = deleteInfo.Crud;
+        CrudPlan deletePlan = GetCrudPlan<T>(deleteInfo);
         DbTransaction? deleteTransaction = GetActiveTransaction();
         CommandSqlSet sqls = GetCommandSqls<T>();
 
@@ -810,7 +810,7 @@ public sealed partial class DataSession<TProvider>
             ? GetDeleteWithTenantSqlFast<T>(sqls.Delete)
             : sqls.Delete;
         if (!deleteHasTenant
-            && TryAcquireDeleteCommand<T>(deleteCommandText, key, deleteMetadata, deleteTransaction) is { } reusedDelete)
+            && TryAcquireDeleteCommand<T>(deleteCommandText, key, deletePlan, deleteTransaction) is { } reusedDelete)
             return await ExecuteWriteRowsAsync(reusedDelete, deleteTransaction, ct).ConfigureAwait(false);
 
         await using DbCommand delCmd = CreateCommand(deleteTransaction);
@@ -1143,7 +1143,8 @@ public sealed partial class DataSession<TProvider>
         // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
         // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
         // 按命令实例生效，换命令即重编译）。
-        DbCommand? reused = TryAcquireGetByKeyCommand<T>(commandText, key, info.Crud, activeTransaction);
+        DbCommand? reused = TryAcquireGetByKeyCommand<T>(
+            commandText, key, GetCrudPlan<T>(info), activeTransaction);
         if (reused is not null)
         {
             await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -1287,9 +1288,9 @@ public sealed partial class DataSession<TProvider>
         object? effectiveOperationOwner = operationOwner ?? operation.Owner;
         // v4.0 优化 B 对齐：元数据走每类型静态视图（注册期单调不可变，ITM-758 同源论证）。
         EntityRuntimeInfo info = GetEntityInfoForCrud<T>();
-        CrudMetadata metadata = info.Crud;
+        CrudPlan plan = GetCrudPlan<T>(info);
 
-        if (metadata.HasDefaultKey(entity))
+        if (plan.HasDefaultKey(entity))
         {
             return await InsertCoreAsync(
                 entity, effectiveOperationOwner, ct).ConfigureAwait(false);
@@ -1299,7 +1300,7 @@ public sealed partial class DataSession<TProvider>
         // 无法表达 "仅当 version 匹配才更新"。带 [ConcurrencyCheck] 的实体若走 UPSERT
         // 会静默 last-write-wins，绕过 UpdateAsync 强制的并发保护——明确失败，引导用
         // InsertAsync（新增）或 UpdateAsync（带乐观锁的更新）。
-        if (metadata.IncrementVersion is not null)
+        if (plan.IncrementVersion is not null)
             throw new NotSupportedException(
                 $"SaveAsync (UPSERT) cannot honor [ConcurrencyCheck] on '{typeof(T).Name}'; " +
                 "UPSERT overwrites unconditionally and would bypass optimistic locking. " +
@@ -1307,10 +1308,10 @@ public sealed partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        metadata.BindUpsert(cmd, entity);
-        if (metadata.UpsertColumns.Count != cmd.Parameters.Count)
+        plan.BindUpsert(cmd, entity);
+        if (plan.UpsertColumns.Count != cmd.Parameters.Count)
             throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' generated {metadata.UpsertColumns.Count} upsert columns but " +
+                $"Type '{typeof(T).Name}' generated {plan.UpsertColumns.Count} upsert columns but " +
                 $"{cmd.Parameters.Count} parameters.");
 
         // v4.1 性能优化：Upsert SQL 预构建为编译期 const，消除运行时 LINQ + string.Join 拼接
@@ -1327,7 +1328,7 @@ public sealed partial class DataSession<TProvider>
         try
         {
             return TProvider.SupportsReturningClause
-                ? await UpsertWithReturningAsync(cmd, sqls, metadata, entity, tenantGuarded, ct).ConfigureAwait(false)
+                ? await UpsertWithReturningAsync(cmd, sqls, plan, entity, tenantGuarded, ct).ConfigureAwait(false)
                 : await UpsertWithMySqlAsync(cmd, sqls, info, entity, tenantGuarded, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
@@ -1341,7 +1342,7 @@ public sealed partial class DataSession<TProvider>
     /// 租户护栏（2026-10-06）：tenantGuarded 时经 <see cref="DataSession{TProvider}.UpsertTenantGuardedSql"/>
     /// 在 RETURNING 前插 WHERE 租户条件（冲突不命中=0 行=静默跳过，返回实体回显）。</summary>
     private static async ValueTask<T> UpsertWithReturningAsync<T>(
-        DbCommand cmd, CommandSqlSet sqls, CrudMetadata metadata, T entity, bool tenantGuarded, CancellationToken ct)
+        DbCommand cmd, CommandSqlSet sqls, CrudPlan plan, T entity, bool tenantGuarded, CancellationToken ct)
         where T : class, new()
     {
         cmd.CommandText = tenantGuarded
@@ -1349,7 +1350,7 @@ public sealed partial class DataSession<TProvider>
             : sqls.UpsertReturning;
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
-            return ((Func<DbDataReader, T>)metadata.RowFactory)(reader);
+            return ((Func<DbDataReader, T>)plan.RowFactory)(reader);
         return entity;
     }
 

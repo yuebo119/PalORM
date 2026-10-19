@@ -907,6 +907,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         return GetEntityInfo<T>();
     }
 
+    /// <summary>S1：取注册期投影的 CRUD 引用视图（热路径只持有 8B 引用）。</summary>
+    private static CrudPlan GetCrudPlan<T>(EntityRuntimeInfo info) where T : class, new()
+        => info.Plan
+            ?? throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+
     /// <summary>刀1：行工厂的每类型静态缓存——直查族（QueryAsync/QueryAsyncEnumerable/
     /// QueryFirst/QuerySingle）专用。T 允许是 [Projection] 类型（只进 RowFactories 不进
     /// TableNames），故不走 EntityRuntimeInfo 视图而走 RowFactories 注册表。</summary>

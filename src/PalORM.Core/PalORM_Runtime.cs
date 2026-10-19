@@ -100,6 +100,10 @@ public sealed class EntityRuntimeInfo
     /// <summary>聚合 CRUD 元数据（值拷贝，注册期一次）。</summary>
     public required CrudMetadata Crud { get; init; }
 
+    /// <summary>S1：CRUD 热路径的引用型视图（注册期由 <see cref="Crud"/> 投影一次）。
+    /// 异步方法只持有本引用，避免把 230B 级值类型复制进每个操作的状态机。</summary>
+    internal CrudPlan? Plan { get; init; }
+
     /// <summary>主键绑定委托（注册期快照）——GetByKey/Delete 热路径经静态视图直接取用，
     /// 免去每操作一次 FrozenDictionary 查找。可选：投影类型缺省为 null，消费方按缺失报错。</summary>
     public Action<System.Data.Common.DbCommand, object>? BindDelete { get; init; }
@@ -308,6 +312,9 @@ public static class PalORM_Runtime
                     ColumnNames = next._columnNames[pair.Key],
                     Features = next._entityFeatures.GetValueOrDefault(pair.Key),
                     Crud = next._crudMetadatas.GetValueOrDefault(pair.Key),
+                    Plan = next._crudMetadatas.TryGetValue(pair.Key, out CrudMetadata crudPlanSource)
+                        ? new CrudPlan(crudPlanSource)
+                        : null,
                     BindDelete = next._bindDelete.GetValueOrDefault(pair.Key),
                     SetId = next._setIdDelegates.GetValueOrDefault(pair.Key),
                     PkColumn = next._pkColumns.GetValueOrDefault(pair.Key),
