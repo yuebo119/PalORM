@@ -788,8 +788,11 @@ internal static class IndexGate
         // d855b65 修引号过滤缺陷时，唯一旁证就是哨兵停在 09-29 旧批；人工核对时间戳不可靠，
         // 在门禁输出面机械化为每次必打印的告警（时间戳为 "yyyy-MM-dd HH:mm:ss zzz" 定长格式，
         // 序数比较即时间序）。触发路径验证：历史状态回放（哨兵 09-29 vs 批 10-01 时必触发）。
+        // 子集批（filtered/recheck）不参与比较：它们只覆盖单方言或单档，本来就不要求
+        // 哨兵跟着刷新；不排除时一次复测就会把哨兵报成"陈旧"（2026-10-19 实测）。
         PerfResultEnvelope? newestPerfHub = latest
-            .Where(static r => r.Harness.Equals("perfhub", StringComparison.OrdinalIgnoreCase))
+            .Where(static r => r.Harness.Equals("perfhub", StringComparison.OrdinalIgnoreCase)
+                && !PerfResultWriter.IsSubsetLabel(r.Label))
             .OrderByDescending(static r => r.Timestamp, StringComparer.Ordinal)
             .FirstOrDefault();
         if (newestPerfHub is not null
