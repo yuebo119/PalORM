@@ -85,13 +85,16 @@ internal static class TransactionCleanup
         CancellationToken ct = default)
     {
         CancellationTokenSource? timeoutCts = null;
+        bool linked = false;
         CancellationToken effectiveCt = ct;
         if (rollbackTimeoutSeconds > 0)
         {
             // D6（2026-10-01 全 API 逐项轮）：ct 不可取消时单构 CTS（与 CommitWithTimeoutAsync 同款）。
-            timeoutCts = ct.CanBeCanceled
+            // S1：非链接形态改经 PooledCts 租借，消除每事务一个 CTS 与定时器分配。
+            linked = ct.CanBeCanceled;
+            timeoutCts = linked
                 ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-                : new CancellationTokenSource();
+                : PooledCts.Rent();
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(rollbackTimeoutSeconds));
             effectiveCt = timeoutCts.Token;
         }
@@ -121,7 +124,11 @@ internal static class TransactionCleanup
         }
         finally
         {
-            timeoutCts?.Dispose();
+            if (timeoutCts is not null)
+            {
+                if (linked) timeoutCts.Dispose();
+                else PooledCts.Return(timeoutCts);
+            }
         }
     }
 
@@ -144,25 +151,36 @@ internal static class TransactionCleanup
             return;
         }
 
-        using var timeoutCts = ct.CanBeCanceled
+        // S1：非链接形态走 PooledCts 租借（未取消时 TryReset 复用，约省一次 CTS+CancelAfter
+        // 定时器的每事务分配）；链接形态源 token 注册不可跨次复用，恒新建并 Dispose。
+        bool linked = ct.CanBeCanceled;
+        CancellationTokenSource timeoutCts = linked
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-            : new CancellationTokenSource();  // D6（2026-10-01 全 API 逐项轮）：ct 不可取消时单构，省 linked registration
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
+            : PooledCts.Rent();
         try
         {
-            await transaction.CommitAsync(timeoutCts.Token).ConfigureAwait(false);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(commandTimeoutSeconds));
+            try
+            {
+                await transaction.CommitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException timeoutException) when (timeoutCts.IsCancellationRequested)
+            {
+                var wrappedTimeout = new TimeoutException(
+                    $"Commit timed out after {commandTimeoutSeconds}s; the server-side transaction state is unknown.",
+                    timeoutException);
+                wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+                throw wrappedTimeout;
+            }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        finally
         {
-            throw;
-        }
-        catch (OperationCanceledException timeoutException) when (timeoutCts.IsCancellationRequested)
-        {
-            var wrappedTimeout = new TimeoutException(
-                $"Commit timed out after {commandTimeoutSeconds}s; the server-side transaction state is unknown.",
-                timeoutException);
-            wrappedTimeout.Data["PalORM.InfrastructureTimeout"] = true;
-            throw wrappedTimeout;
+            if (linked) timeoutCts.Dispose();
+            else PooledCts.Return(timeoutCts);
         }
     }
 
