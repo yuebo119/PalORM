@@ -618,6 +618,16 @@ dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqli
 
 同一 API 在不同使用形态下的表观开销构成不同，按形态选对入口的收益大于任何库内微优化。
 
+| 场景 | 入口 | 关键收益 |
+|---|---|---|
+| 一请求一会话（Web/API） | `DataSessionPool.RentAsync` | 复用槽跨租期激活；租还约 1 µs |
+| 高吞吐逐行写 | `BulkInsertAsync` / `BulkUpdateBatchAsync` | 会话/命令成本摊到 1/N |
+| 大结果集 / 无界流 | `QueryAsyncEnumerable<T>` | 恒定内存，每行分配更低 |
+| 单键查询 | `GetAsync` | 直查槽 + 单行物化 |
+| 分页 | `ToPageAsync` | 单往返分页（PG COUNT+页 SELECT 打包） |
+
+下面按场景展开；批量选型见上方“批量 API 选型速查”。
+
 **一请求一会话（Web/API 服务）用会话池**（v6.5 `DataSessionPool`，API 细节见[API 参考 · 会话池](docs/API参考.md)）：
 
 ```csharp

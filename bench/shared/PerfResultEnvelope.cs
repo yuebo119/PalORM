@@ -201,7 +201,7 @@ internal static class PerfResultWriter
         || label.Contains("filtered", StringComparison.OrdinalIgnoreCase)
         || label.StartsWith("ab/", StringComparison.OrdinalIgnoreCase)
         || label.StartsWith("verify-", StringComparison.OrdinalIgnoreCase)
-        || label is "gate-set" or "workload" or "memory" or "stability";
+        || label is "gate-set" or "workload" or "memory" or "stability" or "pool";
 
     /// <summary>覆盖面回退检测（信封侧）：本批次的方言集是否为上一个可引用信封的**真子集**。
     /// <para>与 PerfHub 原始侧的 <c>DetectCoverageRegression</c> 同一判据、同一动机——

@@ -52,6 +52,8 @@ PalORM 的"热路径" = 物化器（QueryAll/StreamAll 按序号取列）与 SQL
 | 回归自动归因 | perf-bisect（EPSL perf-template/audit/bisect-design.md，设计稿） | 门禁红且复测确认非环境态 |
 | 趋势曲线 | `python curve.py bench/perfhub/results`（EPSL T0.6，已对本仓 268 批跑通） | 节点审计 |
 | 结果登记 latest 新鲜度 | `node ~/.zcode/scripts/eps-perf-check.mjs` + `PerfCli report` 重建 | 每次全量跑测后 |
+| 连接/池 churn | `bench/PalORM.Benchmarks --pool sqlite`（观测，不卡阈值） | 周度 PerfGate / 节点审计 |
+| 长时稳定 | `bench/PalORM.Benchmarks --stability 180`（初筛 20%/30%） | 周度 PerfGate |
 
 ## 7. 修订触发
 
