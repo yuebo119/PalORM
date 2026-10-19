@@ -32,7 +32,8 @@ public sealed class PoolResetCompletenessTests
     /// 幂等无状态，保留使第二租期起 From&lt;T&gt; 免重建）；
     /// _lastMigrationSkippedIndexes（DDL 幂等跳过缓存：类型级事实，与租期无关——守卫测试
     /// 首跑即抓到该遗漏，登记实证）；_pool/_poolBaseOptions/_poolBaseResilience（池标记与
-    /// 复位基准，永不复位）。</summary>
+    /// 复位基准，永不复位）；ResilienceGeneration（单调代际，仅用于 builder 的弹性配置
+    /// 快照判定；builder 不跨租期存活，代际无需随池基准复位）。</summary>
     private static readonly HashSet<string> KeptAcrossRentals =
     [
         "_reusableInsert", "_reusableUpdate", "_reusableGetByKey", "_reusableDelete",
@@ -43,6 +44,7 @@ public sealed class PoolResetCompletenessTests
         "_readConnProvider", "_readConnReturner",
         "_lastMigrationSkippedIndexes",
         "_pool", "_poolBaseOptions", "_poolBaseResilience",
+        "ResilienceGeneration",
     ];
 
     /// <summary>SessionOperationState 可变字段的跨租期归属全集（按复位机制分组，全部显式登记）：

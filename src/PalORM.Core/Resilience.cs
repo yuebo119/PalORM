@@ -20,6 +20,9 @@ public sealed class ResilienceExecutor
     /// 显式调用方已声明要弹性语义（含命令超时包装），即使配置为零也保持行为一致。</para></summary>
     internal bool IsPassThrough => _maxRetries == 0 && !_circuitBreaker.IsEnabled;
 
+    /// <summary>S3：是否还有重试预算（直发失败后决定续跑还是直接记账）。</summary>
+    internal bool CanRetry => _maxRetries > 0;
+
     /// <summary>按配置创建执行器——重试/超时/熔断参数取自 <paramref name="options"/>，
     /// 瞬时异常判定默认为 <see cref="System.Data.Common.DbException.IsTransient"/>。</summary>
     public ResilienceExecutor(DbOptions options)
