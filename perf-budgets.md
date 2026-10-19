@@ -7,6 +7,7 @@
 
 | 维度 | 当前档位 | 说明 |
 | --- | --- | --- |
+| 基准覆盖 | 13 类 | bench/PalORM.Benchmarks 10 + bench/PalORM.DapperSuite 3；vendored bench/BenchmarkDotNet 子树（第三方 fork 的测试夹具）不计。EPSL 对账件按此口径核对 |
 | 行档 | 2,000 / 20,000 | 测试矩阵固定双档 |
 | 方言 | SQLite（进程内）/ MySQL / PostgreSQL（远程） | 三方言全量为一轮 |
 | 并发 | 混合读写 80/20，t1/t4/t8 | 并发项单独组 |

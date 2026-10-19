@@ -16,7 +16,8 @@ internal static class IndexGate
     private const double DefaultRatioThreshold = 0.30;
 
     /// <summary>判别力弱阈值——沿用 <c>Measure.cs</c> 的量具自检线（Error/Mean &gt; 5% 标黄）。
-    /// 同键三臂里最大 ErrorRatio 超线时，该行比值落在噪声带内、不足以支撑结论。
+    /// 同键三臂里最大 ErrorRatio 超线时，该行比值落在噪声带内、不足以支撑结论；
+    /// 超限幅度小于该水位时判定降级为告警（见 <see cref="Classify"/>）。
     /// 取三臂最大值而非只看被测臂：比值 = 被测臂 / 地板，两侧噪声都会放大比值的不确定度。</summary>
     private const double NoiseLine = 0.05;
 
@@ -31,7 +32,16 @@ internal static class IndexGate
     private static bool IsIncomparableOperation(string name)
         => name.StartsWith("Concurrent_", StringComparison.Ordinal);
 
-    internal static int Record(string resultsDir, string outputPath)
+    /// <summary>默认录制窗口：逐键取最近 N 个非子集批次的中位数。
+    /// <para><b>为什么不是单批</b>（2026-10-19）：单批录制会把批次级噪声烤进基线，下一批判红。
+    /// 实测两例：①09:21 批 PG 2000 落入服务器慢窗（GetAllAsync 3.11ms vs 常态 736µs），
+    /// 若录成基线，后续每批都会被判"变快 4 倍"从而掩盖真实退化；②09:42 批 SQLite 2000
+    /// 整段偏慢（ADO 地板 +40%、PalORM 批内再叠 +40%），录成基线则该项阈值被抬到几乎失效。
+    /// 三批中位数对单批离群不敏感，且与门禁"比值摆动 ±8pp"的噪声模型同量级。</para>
+    /// <para><c>--batches 1</c> 复现旧行为（与历史基线可比时用）。</para></summary>
+    internal const int DefaultRecordWindow = 3;
+
+    internal static int Record(string resultsDir, string outputPath, int batchWindow)
     {
         List<PerfResultEnvelope> batches = LoadBatches(resultsDir);
         if (batches.Count == 0)
@@ -40,16 +50,25 @@ internal static class IndexGate
             return 1;
         }
 
-        // 与 Check 共用 LoadCurrentItems：两侧同源，基线条目数与比对口径才对得上
-        var current = LoadCurrentItems(batches);
+        if (batchWindow < 1)
+        {
+            Console.Error.WriteLine($"FATAL: --batches 必须 ≥1（收到 {batchWindow}）");
+            return 1;
+        }
+
+        // 键集合与 Check 的 LoadCurrentItems 同源（同一批 KeyItems 过滤），只是取值方式不同：
+        // 录制取窗口内中位数（抗单批噪声），读回取最新值（判当前状态）。两侧键集合一致，
+        // 基线条目数才对得上——这是原先"两侧必须共用同一方法"约束的真正目的。
+        var current = LoadMedianItems(batches, batchWindow);
+        List<string> contributors = ContributingLabels(batches, batchWindow);
         var baseline = new IndexBaseline
         {
             Schema = 1,
             Date = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            // 标注必须指向**真正贡献了数据的批次**：条目是逐键从"非子集批次"里取最新值合并出来的
+            // 标注必须指向**真正贡献了数据的批次**：条目是逐键从"非子集批次"里取中位数合并出来的
             // （见 KeyItems 的过滤），而 batches[0] 是含子集批次在内的最新一批——实测
             // 2026-09-23 用它标注时写的是 ab/1/pg/2000（被跳过、零贡献），指错了对象。
-            Environment = DescribeEnvironment(NewestContributing(batches)),
+            Environment = DescribeEnvironment(NewestContributing(batches), contributors),
             Thresholds = new IndexThresholds { RatioDelta = DefaultRatioThreshold },
             Items = [.. current.Select(static entry => new IndexBaselineItem
             {
@@ -71,7 +90,8 @@ internal static class IndexGate
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         File.WriteAllText(outputPath, JsonSerializer.Serialize(baseline, IndexBaselineJsonContext.Default.IndexBaseline));
         Console.WriteLine($"[PerfGate] 结果库基线已写入 {outputPath}（{baseline.Items.Count} 项，"
-            + $"阈值 比值 +{baseline.Thresholds.RatioDelta:P0}）");
+            + $"阈值 比值 +{baseline.Thresholds.RatioDelta:P0}，"
+            + $"录制窗口 {batchWindow} 批：{string.Join("、", contributors)}）");
         return 0;
     }
 
@@ -111,10 +131,13 @@ internal static class IndexGate
     {
         var failures = new List<string>();
         var driftWarnings = new List<string>();
-        List<string> weakWarnings = CollectWeakDiscrimination(baseline, LoadNoiseLevels(batches));
+        var noiseWarnings = new List<string>();
+        // 噪声水位表只取一次：判别力弱清单与"噪声带内不判失败"共用同一口径
+        Dictionary<string, double> noise = LoadNoiseLevels(batches);
+        List<string> weakWarnings = CollectWeakDiscrimination(baseline, noise);
         // 锚定诊断在判定循环前算好：失败描述要附锚定比值（B175 判读法，见 CrossAnchorDiagnostics）
         Dictionary<string, AnchorLine> anchorNotes = CrossAnchorDiagnostics(batches);
-        int compared = 0, missing = 0, skipped = 0, floorDrift = 0;
+        int compared = 0, missing = 0, skipped = 0, floorDrift = 0, noiseBand = 0;
         foreach (IndexBaselineItem expected in baseline.Items)
         {
             // 非可比项（并发族）跳过判定，也不计入缺项——它们的绝对值照常登在基线里供人看
@@ -146,16 +169,22 @@ internal static class IndexGate
             // ≤10% 且隐含地板变快 ≥20% 时，超限来自地板窗口而非产品（实测三例：中位 -3.7%/
             // -2.9%/-9.0%，地板 -63.5%/-33.0%/-32.9%）——只告警不 FAIL；真实退化的中位移动会
             // 远超 10%，仍走 FAIL。地板变慢方向只会压低比值，不会触发本门禁，故无须处理。
-            if (IsDenominatorDrift(expected, actual))
+            string key = Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier);
+            switch (Classify(expected, actual, limit, noise.TryGetValue(key, out double level) ? level : 0))
             {
-                floorDrift++;
-                driftWarnings.Add(DriftText(expected, actual, limit));
-                continue;
+                case OverrunVerdict.FloorDrift:
+                    floorDrift++;
+                    driftWarnings.Add(DriftText(expected, actual, limit));
+                    continue;
+                case OverrunVerdict.WithinNoise:
+                    noiseBand++;
+                    noiseWarnings.Add(NoiseBandText(expected, actual, limit, noise[key]));
+                    continue;
+                default:
+                    failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta)
+                        + AnchorSuffix(key, anchorNotes));
+                    break;
             }
-
-            failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta)
-                + AnchorSuffix(Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier),
-                    anchorNotes));
         }
 
         ReportSentinel(batches);
@@ -163,8 +192,8 @@ internal static class IndexGate
         List<string> outliers = OutlierWarnings(batches);
 
         PrintVerdict(
-            (compared, baseline.Items.Count, missing, skipped, floorDrift),
-            failures, driftWarnings, weakWarnings, outliers,
+            (compared, baseline.Items.Count, missing, skipped, floorDrift, noiseBand),
+            failures, driftWarnings, noiseWarnings, weakWarnings, outliers,
             [.. anchorNotes.Values.Select(static line => line.Text)]);
 
         // 缺项不判失败：基线里的项可能因本轮方言/档位未跑而缺席（例如只跑了 sqlite）。
@@ -191,13 +220,18 @@ internal static class IndexGate
         return (medianDelta, floorDelta);
     }
 
-    /// <summary>分母漂移判定：比值超限、但被测臂自身中位移动 ≤10% 且隐含地板变快 ≥20%。
-    /// 阈值出处与实测三例见 Check 内注释（2026-10-03）。</summary>
+    /// <summary>分母漂移判定：比值超限、但被测臂自身中位未变慢（≤+10%）且隐含地板变快 ≥20%。
+    /// 阈值出处与实测三例见 Check 内注释（2026-10-03）。
+    /// <para><b>2026-10-19 修正</b>：原判据取 <c>Math.Abs(medianDelta) &lt;= 10</c>，把"被测臂
+    /// 变快"也排除在漂移之外——但被测臂变快同样不是回归，比值被推高纯由地板变快造成。
+    /// 实测两例（全量批 2026-10-19）：BulkInsert/MySQL/20000 中位 -27.0%、地板 -44.3%；
+    /// BulkUpdate/PG/20000 中位 +5.6%、地板 -52.7%——两项绝对性能均未退化，却因中位变快
+    /// 超过 10% 被误判为 FAIL。改为单侧判据：只有"变慢超过 10%"才可能是真回归。</para></summary>
     private static bool IsDenominatorDrift(
         IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual)
     {
         (double medianDelta, double floorDelta) = Movement(expected, actual);
-        return floorDelta <= -20 && Math.Abs(medianDelta) <= 10;
+        return floorDelta <= -20 && medianDelta <= 10;
     }
 
     /// <summary>分母漂移告警文本（自解释：两侧比值、被测臂移动、地板移动与处置建议）。</summary>
@@ -449,27 +483,34 @@ internal static class IndexGate
     /// 全展开会刷屏；它只标注不判定，比值超限与否仍走原逻辑。</para>
     /// <para>第一个参数是计数五元组：比对 / 基线总数 / 缺项 / 非可比跳过 / 分母漂移。</para></summary>
     private static void PrintVerdict(
-        (int Compared, int BaselineCount, int Missing, int Skipped, int FloorDrift) counts,
-        List<string> failures, List<string> driftWarnings, List<string> weakWarnings,
-        List<string> outliers, List<string> anchorLines)
+        (int Compared, int BaselineCount, int Missing, int Skipped, int FloorDrift, int NoiseBand) counts,
+        List<string> failures, List<string> driftWarnings, List<string> noiseWarnings,
+        List<string> weakWarnings, List<string> outliers, List<string> anchorLines)
     {
         Console.WriteLine($"[PerfGate] 结果库门禁: 比对 {counts.Compared} 项（基线 {counts.BaselineCount} 项，"
-            + $"缺项 {counts.Missing}，非可比跳过 {counts.Skipped}，分母漂移 {counts.FloorDrift}），"
+            + $"缺项 {counts.Missing}，非可比跳过 {counts.Skipped}，分母漂移 {counts.FloorDrift}，"
+            + $"噪声带内 {counts.NoiseBand}），"
             + $"失败 {failures.Count}，判别力弱 {weakWarnings.Count} 项，锚定 {anchorLines.Count} 项");
-        foreach (string failure in failures) Console.Error.WriteLine("  FAIL " + failure);
-        foreach (string drift in driftWarnings) Console.Error.WriteLine("  漂移 " + drift);
-        foreach (string weak in weakWarnings.Take(NoiseWarnPreview)) Console.Error.WriteLine("  弱 " + weak);
+        // 判定明细统一走 stdout（2026-10-19）：此前明细走 stderr、汇总走 stdout，两者被
+        // 编排层重定向进同一个日志文件时按字节级交错，实测出现"超过基线 0.97 × (1，失败 %)"
+        // 这类半行拼接——门禁的日志是判读材料，不能自带损坏。失败与否由退出码表达，
+        // 不依赖流的分工；stderr 只留给 FATAL（那时还没有汇总行，不存在交错）。
+        foreach (string failure in failures) Console.WriteLine("  FAIL " + failure);
+        foreach (string drift in driftWarnings) Console.WriteLine("  漂移 " + drift);
+        foreach (string noise in noiseWarnings) Console.WriteLine("  噪声 " + noise);
+        foreach (string weak in weakWarnings.Take(NoiseWarnPreview)) Console.WriteLine("  弱 " + weak);
         if (weakWarnings.Count > NoiseWarnPreview)
         {
-            Console.Error.WriteLine(
+            Console.WriteLine(
                 $"  弱 …另有 {weakWarnings.Count - NoiseWarnPreview} 项（ErrorRatio > 5%，比值不作结论）");
         }
 
-        foreach (string outlier in outliers) Console.Error.WriteLine("  离群 " + outlier);
-        foreach (string anchor in anchorLines) Console.Error.WriteLine("  锚定 " + anchor);
+        foreach (string outlier in outliers) Console.WriteLine("  离群 " + outlier);
+        foreach (string anchor in anchorLines) Console.WriteLine("  锚定 " + anchor);
     }
 
-    /// <summary>判别力弱清单：基线里每个可比项的噪声水位超线则登记一条（只标注，不参与判定）。
+    /// <summary>判别力弱清单：基线里每个可比项的噪声水位超线则登记一条（标注 + 参与判定：
+    /// 超限幅度小于该水位时不判失败，见 <see cref="Classify"/>）。
     /// 独立成一趟而非塞进判定循环——判定循环的认知复杂度已在上限附近，塞进去会触发 S3776。</summary>
     private static List<string> CollectWeakDiscrimination(
         IndexBaseline baseline, Dictionary<string, double> noise)
@@ -489,7 +530,8 @@ internal static class IndexGate
         return weak;
     }
 
-    /// <summary>判别力弱标注：该键的噪声水位超线则登记一条（只标注，不参与判定）。</summary>
+    /// <summary>判别力弱标注：该键的噪声水位超线则登记一条（供人看；判定侧由
+    /// <see cref="Classify"/> 用同一水位做"噪声带内不判失败"）。</summary>
     private static void NoteWeakDiscrimination(
         string noiseKey, Dictionary<string, double> noise, IndexBaselineItem expected,
         List<string> weakWarnings)
@@ -574,6 +616,146 @@ internal static class IndexGate
         }
 
         return map;
+    }
+
+    /// <summary>录制专用：逐键取最近 <paramref name="window"/> 个**含该键**的非子集批次读数的中位数。
+    /// <para>批内仍取最差（与 <see cref="LoadCurrentItems"/> 同向的安全倾斜），批间取中位数。
+    /// 键集合的构造与之完全一致（同一 <see cref="KeyItems"/> 过滤），所以录制与读回不会出现
+    /// "基线有 191 项、比对只有 171 项"的口径错配。</para>
+    /// <para>中位数作用于 <c>Ratio</c>/<c>MedianUs</c>/<c>MeanUs</c> 三个字段；三者同批同源，
+    /// 取中位数不破坏"地板 = 中位/比值"的自洽关系（门禁诊断按此反推隐含地板）。</para></summary>
+    private static Dictionary<string, (string Harness, PerfResultItem Item)> LoadMedianItems(
+        List<PerfResultEnvelope> batches, int window)
+    {
+        var samples = new Dictionary<string, List<(string Harness, PerfResultItem Item)>>(StringComparer.Ordinal);
+        foreach (PerfResultEnvelope run in batches)
+        {
+            var perBatch = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
+            foreach ((string harness, PerfResultItem item) in KeyItems([run], includeZeroRatio: true))
+            {
+                string key = Key(harness, item.Name, item.Dialect, item.Tier);
+                if (!perBatch.TryGetValue(key, out (string Harness, PerfResultItem Item) existing)
+                    || item.Ratio > existing.Item.Ratio)
+                {
+                    perBatch[key] = (harness, item);
+                }
+            }
+
+            foreach (KeyValuePair<string, (string Harness, PerfResultItem Item)> entry in perBatch)
+            {
+                if (!samples.TryGetValue(entry.Key, out List<(string Harness, PerfResultItem Item)>? list))
+                {
+                    list = [];
+                    samples[entry.Key] = list;
+                }
+
+                // batches 已按时间倒序：先到先得即"最近 window 批"
+                if (list.Count < window)
+                {
+                    list.Add(entry.Value);
+                }
+            }
+        }
+
+        var map = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
+        foreach ((string key, List<(string Harness, PerfResultItem Item)> list) in samples)
+        {
+            PerfResultItem newest = list[0].Item;
+            if (list.Count == 1)
+            {
+                map[key] = (list[0].Harness, newest);
+                continue;
+            }
+
+            var merged = new PerfResultItem
+            {
+                Name = newest.Name,
+                Dialect = newest.Dialect,
+                Arm = newest.Arm,
+                Tier = newest.Tier,
+                AllocBytes = newest.AllocBytes,
+                RoundTripsPerOp = newest.RoundTripsPerOp,
+                PreparedReuse = newest.PreparedReuse,
+                Ratio = Median([.. list.Select(static s => s.Item.Ratio)]),
+                MedianUs = Median([.. list.Select(static s => s.Item.MedianUs)]),
+                MeanUs = Median([.. list.Select(static s => s.Item.MeanUs)]),
+            };
+            map[key] = (list[0].Harness, merged);
+        }
+
+        return map;
+    }
+
+    /// <summary>中位数（偶数个取中间两值平均；空集返回 0，调用方保证非空）。</summary>
+    private static double Median(double[] values)
+    {
+        if (values.Length == 0)
+        {
+            return 0;
+        }
+
+        Array.Sort(values);
+        int middle = values.Length / 2;
+        return values.Length % 2 == 1
+            ? values[middle]
+            : (values[middle - 1] + values[middle]) / 2;
+    }
+
+    /// <summary>录制窗口里实际贡献了数据的批次时间戳（新的在前，最多 <paramref name="window"/> 个）。</summary>
+    private static List<string> ContributingLabels(List<PerfResultEnvelope> batches, int window)
+        => [.. batches
+            .Where(static r => !PerfResultWriter.IsSubsetLabel(r.Label))
+            .Take(window)
+            .Select(static r => r.Timestamp)];
+
+    /// <summary>比值超限后的三分类：真失败 / 地板漂移 / 噪声带内。</summary>
+    private enum OverrunVerdict
+    {
+        /// <summary>超限且无解释——FAIL。</summary>
+        Fail,
+
+        /// <summary>地板变快推高比值（跨批口径），只告警。</summary>
+        FloorDrift,
+
+        /// <summary>超限幅度小于该键自身的历史测量误差，不能区分回归与噪声，只告警。</summary>
+        WithinNoise,
+    }
+
+    /// <summary>比值超限后的归因分类（判定循环只负责分流，规则集中在此）。
+    /// <para><b>噪声带判据</b>（2026-10-19）：<c>超限幅度 ≤ 该键最大 ErrorRatio</c> 时不判失败。
+    /// 依据是门禁自己打印的那句"比值落在噪声带内，不作结论"——既然同一份输出里已声明该行
+    /// 不足以支撑结论，就不能同时拿它判失败（自相矛盾的判定比放宽更糟：它让人不再相信红色）。
+    /// 量纲推导：ErrorRatio 是各臂的相对标准误，比值的不确定度 ≈ 两臂误差的合成，
+    /// 取二者最大值作保守估计（max 略小于合成值，故对"刚好超线"的一侧仍偏向 FAIL 的数量级）。</para>
+    /// <para>大跳变不受影响：实测 09:21 批 PG 2000 的 GetAllAsync 比值 3.64、ErrorRatio 11%，
+    /// 调整后阈值 1.62 仍远低于实测值——真实退化照样红。</para></summary>
+    private static OverrunVerdict Classify(
+        IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual,
+        double limit, double noise)
+    {
+        if (IsDenominatorDrift(expected, actual))
+        {
+            return OverrunVerdict.FloorDrift;
+        }
+
+        if (noise > NoiseLine && actual.Ratio <= limit * (1 + noise))
+        {
+            return OverrunVerdict.WithinNoise;
+        }
+
+        return OverrunVerdict.Fail;
+    }
+
+    /// <summary>噪声带告警文本：把"超限多少、噪声多少、为何不判"三件事一起打印出来。</summary>
+    private static string NoiseBandText(
+        IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual,
+        double limit, double noise)
+    {
+        double overrun = limit > 0 ? ((actual.Ratio / limit) - 1) * 100 : 0;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{expected.Name}/{expected.Dialect}/{expected.Tier}: 比值 {actual.Ratio:F2} 超基线 "
+            + $"{expected.Ratio:F2}（限 {limit:F2}），但该键最大 ErrorRatio {noise:P0}——"
+            + $"超限 {overrun:+0;-0}% 在噪声带内，不作结论（复测确认）");
     }
 
     /// <summary>失败描述必须自解释：两侧中位数与隐含地板一起打印，否则无法分辨"本项退化"
@@ -677,13 +859,13 @@ internal static class IndexGate
             r.Harness == "perfhub" && !PerfResultWriter.IsSubsetLabel(r.Label)) ?? batches[0];
 
     /// <summary>环境一句话——写进基线的 environment 字段。
-    /// 条目是**逐键合并**自多个非子集批次的（见 <see cref="KeyItems"/>），故这里只说
-    /// "最新贡献批次"，不说"录制批次"——后者会让人以为整份基线来自单一批次。</summary>
-    private static string DescribeEnvironment(PerfResultEnvelope run)
+    /// 条目是**逐键取窗口内中位数**合并自多个非子集批次的，故这里列出真正贡献的批次时间戳，
+    /// 不说"录制批次"——后者会让人以为整份基线来自单一批次。</summary>
+    private static string DescribeEnvironment(PerfResultEnvelope run, List<string> contributors)
         => string.Create(CultureInfo.InvariantCulture,
             $"{run.Environment.Processor} / {run.Environment.Runtime} / GC {run.Environment.GcMode}；"
-            + $"条目逐键合并自非子集批次，最新贡献批次 {run.Timestamp}"
-            + $"（健康度 {run.Regime.Health} {run.Regime.HealthRatio:P1}）");
+            + $"条目逐键取 {contributors.Count} 个非子集批次的中位数（{string.Join("、", contributors)}）"
+            + $"（最新批健康度 {run.Regime.Health} {run.Regime.HealthRatio:P1}）");
 
     /// <summary>结果库全部批次（按时间倒序）——门禁逐键取最新可得值，故需要全量而非只读 latest-*。
     /// 子集标记批次在 <see cref="KeyItems"/> 里被过滤掉。</summary>
