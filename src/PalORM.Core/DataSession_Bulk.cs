@@ -7,11 +7,26 @@ namespace PalORM;
 public partial class DataSession<TProvider>
 {
 
-    /// <summary>批量插入——委托 Provider 使用源生成 InsertColumns 与 binder，并复用会话事务。</summary>
+    /// <summary>S6：批量插入的方言推荐批宽——PG 的 <c>batchSize</c> 是每次 COPY 会话的行数
+    /// （COPY 无参数上限），默认 1000 会让 2 万行付 20 次 BeginBinaryImport/Complete 往返；
+    /// 本重载 PG 取整段行数（单次 COPY），MySQL/SQLite 沿用 1000。需要限制单次 COPY/事务
+    /// 持锁行数时用带 <c>batchSize</c> 的重载。</summary>
+    public ValueTask<long> BulkInsertAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(entities);
+        int recommended = TProvider.Dialect == SqlDialect.PostgreSql
+            ? Math.Max(1, entities.Count)
+            : 1000;
+        return BulkInsertAsync(entities, recommended, ct);
+    }
+
+    /// <summary>批量插入——委托 Provider 使用源生成 InsertColumns 与 binder，并复用会话事务。
+    /// <paramref name="batchSize"/> 为显式批宽（PG 为每次 COPY 行数，其余为每批多值 INSERT/LOAD 行数）。</summary>
     /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径）——与本家族
     /// BulkUpdate/BulkDelete 同口径；BulkMerge 例外（返回处理实体数，跨方言可预测，见其
     /// returns 说明）。</returns>
-    public async ValueTask<long> BulkInsertAsync<T>(IReadOnlyList<T> entities, int batchSize = 1000, CancellationToken ct = default)
+    public async ValueTask<long> BulkInsertAsync<T>(IReadOnlyList<T> entities, int batchSize, CancellationToken ct = default)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
