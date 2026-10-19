@@ -41,6 +41,16 @@ jobs:
         run: |
           git clone --depth 1 "$BDN_FORK_URL" bench/BenchmarkDotNet
 
+      - name: Apply vendored overlay (CPM isolation + local Weaver feed)
+        # 上游 clone 不含 fork 的本地化改动，缺了它们 restore 必然失败（实测 2026-09-13 起
+        # 每周排程连续 7 次在 28 秒内退 1）：
+        #   ① Directory.Build.props / Directory.Packages.props —— 禁用 PalORM 的中央包管理与
+        #      严格分析器（否则 BDN 自己的 PackageReference Version 触发 NU1008）；
+        #   ② NuGet.Config —— 定义本地 Weaver feed（公共源上没有 BenchmarkDotNet.Weaver）；
+        #   ③ src/BenchmarkDotNet.Weaver/packages/*.nupkg —— 上述 feed 的内容。
+        # overlay 目录按 BDN 树的路径镜像存放，直接覆盖；文件与本地 vendored 树逐字节一致。
+        run: cp -r bench/bdn-overlay/. bench/BenchmarkDotNet/
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:

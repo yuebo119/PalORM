@@ -12,6 +12,9 @@ obj/
 ## NuGet
 *.nupkg
 **/packages/*
+## 例外：CI overlay 的本地 Weaver feed（B191/B204：perf-gate 排程任务靠它还原 vendored fork，
+## 公共源上没有这个本地 pack 产物；2026-09-13 起该 job 因此连续失败）
+!bench/bdn-overlay/src/BenchmarkDotNet.Weaver/packages/*.nupkg
 
 ## Test results
 TestResults/
@@ -92,6 +95,9 @@ id_ecdsa*
 nuget.config
 NuGet.Config.user
 *.nuget.credentials
+## 例外：CI overlay 的 BDN 配置（只含公共 feed 与仓内相对路径的本地 Weaver feed，
+## 无任何凭据；G9 的凭据扫描照常覆盖它）
+!bench/bdn-overlay/NuGet.Config
 
 # 云平台凭据
 .aws/credentials
