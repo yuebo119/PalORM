@@ -52,6 +52,7 @@ internal static class MemoryProbe
                 $"[memory] 种子 S1 Narrow × {options.SeedRows:N0} 完成"));
 
             // ── 查询构建分配 ──
+#pragma warning disable PALORM005 // 构建分配测量循环：From<T>()/Where+ToSql 是纯构建路径，不触库
             build.FromBytes = Alloc(() =>
             {
                 for (int i = 0; i < options.BuildIterations; i++)
@@ -66,10 +67,14 @@ internal static class MemoryProbe
                     _ = setup.From<BenchNarrow>().Where($"\"Id\" = {1L}").ToSql();
                 }
             }) / (double)options.BuildIterations;
+#pragma warning restore PALORM005
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"[memory] From<T>()={build.FromBytes:F1} B/次 · Where+ToSql={build.WhereToSqlBytes:F1} B/次"));
 
             // ── 大结果集内存曲线 ──
+            // S1215：GC.Collect/GetTotalMemory(true) 是规范 §4 定义的存活内存测量步骤，非性能反模式
+#pragma warning disable S1215
+#pragma warning disable PALORM005 // 每个档位执行一次全表读——循环体是档位而非行
             foreach (long rows in options.Tiers)
             {
                 GC.Collect();
@@ -92,6 +97,8 @@ internal static class MemoryProbe
                     $"[memory] {rows,7:N0} 行: 分配 {allocTotal / 1048576.0,6:F1} MB · " +
                     $"存活 {liveAfter / 1048576.0,6:F1} MB · {stopwatch.Elapsed.TotalMilliseconds,5:F0} ms · 行数={count}"));
             }
+#pragma warning restore PALORM005
+#pragma warning restore S1215
         }
         finally
         {
@@ -166,10 +173,12 @@ internal static class MemoryProbe
     private static long Alloc(Action body)
     {
         body();
+#pragma warning disable S1215 // 分配测量前强制回收是规范 §4 定义步骤
         GC.Collect();
         long before = GC.GetTotalAllocatedBytes(precise: true);
         body();
         return GC.GetTotalAllocatedBytes(precise: true) - before;
+#pragma warning restore S1215
     }
 
     private static string MemoryJson(MemoryOptions options, BuildAllocs build, List<MemoryTierResult> tiers)

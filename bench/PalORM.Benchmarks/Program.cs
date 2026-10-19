@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
@@ -40,7 +41,7 @@ public static class Program
             {
                 Dialect = args.Length > 1 ? args[1] : "sqlite",
                 ThreadTiers = args.Length > 2
-                    ? [.. args[2].Split(',').Select(static tier => int.Parse(tier.Trim()))]
+                    ? [.. args[2].Split(',').Select(static tier => int.Parse(tier.Trim(), CultureInfo.InvariantCulture))]
                     : [1, 2, 4, 8]
             }).GetAwaiter().GetResult();
             return;
@@ -49,7 +50,7 @@ public static class Program
         if (args.Length > 0 && args[0] == "--stability")
         {
             StabilityHarness.RunAsync(
-                seconds: args.Length > 1 ? int.Parse(args[1]) : 180,
+                seconds: args.Length > 1 ? int.Parse(args[1], CultureInfo.InvariantCulture) : 180,
                 dialect: args.Length > 2 ? args[2] : "sqlite").GetAwaiter().GetResult();
             return;
         }
@@ -74,7 +75,15 @@ public static class Program
         // 默认 bdn。显式声明让"可复现的操作性子集"（门禁同参集）与"临时单基准跑"在结果库里有区别。
         string? declared = Environment.GetEnvironmentVariable("PALORM_BENCH_LABEL");
         bool filtered = Array.Exists(args, static a => a.Contains("filter", StringComparison.OrdinalIgnoreCase));
-        string label = !string.IsNullOrWhiteSpace(declared) ? declared : filtered ? "filtered" : "bdn";
+        string label;
+        if (!string.IsNullOrWhiteSpace(declared))
+        {
+            label = declared;
+        }
+        else
+        {
+            label = filtered ? "filtered" : "bdn";
+        }
         WriteEnvelope(summaries, label);
     }
 
