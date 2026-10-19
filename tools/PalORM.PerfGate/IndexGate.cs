@@ -56,10 +56,9 @@ internal static class IndexGate
             return 1;
         }
 
-        // 键集合与 Check 的 LoadCurrentItems 同源（同一批 KeyItems 过滤），只是取值方式不同：
-        // 录制取窗口内中位数（抗单批噪声），读回取最新值（判当前状态）。两侧键集合一致，
-        // 基线条目数才对得上——这是原先"两侧必须共用同一方法"约束的真正目的。
-        var current = LoadMedianItems(batches, batchWindow);
+        // 与 Check 共用 LoadWindowItems：两侧同源同窗口（录制取窗口中位数进基线，
+        // 判定取窗口中位数作当前值），基线条目数与比对口径才对得上。
+        var current = LoadWindowItems(batches, batchWindow);
         List<string> contributors = ContributingLabels(batches, batchWindow);
         var baseline = new IndexBaseline
         {
@@ -95,7 +94,7 @@ internal static class IndexGate
         return 0;
     }
 
-    internal static int Check(string resultsDir, string baselinePath)
+    internal static int Check(string resultsDir, string baselinePath, int batchWindow)
     {
         if (!File.Exists(baselinePath))
         {
@@ -118,7 +117,7 @@ internal static class IndexGate
             return 1;
         }
 
-        return JudgeBaseline(baseline, batches, LoadCurrentItems(batches));
+        return JudgeBaseline(baseline, batches, LoadWindowItems(batches, batchWindow));
     }
 
     /// <summary>逐键判定（Check 的主体）：比值超限且非分母漂移 → FAIL；分母漂移 → 告警；
@@ -241,7 +240,7 @@ internal static class IndexGate
         (double medianDelta, double floorDelta) = Movement(expected, actual);
         return string.Create(CultureInfo.InvariantCulture,
             $"{expected.Name}/{expected.Dialect}/{expected.Tier}: 比值 {actual.Ratio:F2} 超基线 "
-            + $"{expected.Ratio:F2}（限 {limit:F2}），但被测臂中位仅 {medianDelta:+0.0;-0.0}%、"
+            + $"{expected.Ratio:F2}（限 {limit:F2}），但被测臂窗口中位仅 {medianDelta:+0.0;-0.0}%、"
             + $"隐含地板 {floorDelta:+0.0;-0.0}%（地板变快推高比值）——判分母漂移，建议复测确认");
     }
 
@@ -546,9 +545,9 @@ internal static class IndexGate
     }
 
     /// <summary>逐键的噪声水位：同键三臂里最大的 <c>ErrorRatio</c>（标准误/均值）。
-    /// <para>与 <see cref="LoadCurrentItems"/> 不同，这里遍历**全部臂**——比值的噪声来自分子与
+    /// <para>与 <see cref="LoadWindowItems"/> 不同，这里遍历**全部臂**——比值的噪声来自分子与
     /// 分母两侧，只看被测臂会漏掉"地板很噪"的行（实测 SQLite/ADO_NET/Insert/2000 达 54.3%）。
-    /// 取各批次的最大值（噪声水位是上界性质，与"最新优先"的取值口径不同，故独立成表）。</para>
+    /// 取各批次的最大值（噪声水位是上界性质，与"窗口取中位数"的取值口径不同，故独立成表）。</para>
     /// <para>子集批次跳过，与其它取数口径一致。未采集该指标的夹具（Benchmarks/DapperSuite）
     /// 其 ErrorRatio 恒 0，不会触发标注。</para></summary>
     private static Dictionary<string, double> LoadNoiseLevels(List<PerfResultEnvelope> batches)
@@ -574,62 +573,27 @@ internal static class IndexGate
         return map;
     }
 
-    /// <summary>当前比值表：**逐键取最新可得值**（批次按时间倒序，先到先得），同名键取最差比值。
-    /// <para>为什么不是"只看最近一批"：最近一批可能只覆盖某个方言（实测：一次 MySQL 单方言跑测
-    /// 让 50 项 SQLite 基线全部"缺项"，门禁误报 FATAL）。逐键取最新值后，只有"某个键在所有批次里
-    /// 都没有"才算缺项。</para>
-    /// <para>同名键取最差：结果库里同一键出现多次（历史遗留的同名并发行，或实现侧漏了唯一化标识）时，
-    /// 取最差才是安全方向——门禁宁可提示也不该因重复键直接崩。</para></summary>
-    /// <summary>当前项表：**逐键取最新可得项**（批次按时间倒序，先到先得），同名键取最差比值。
-    /// <para>为什么不是"只看最近一批"：最近一批可能只覆盖某个方言（实测：一次 MySQL 单方言跑测
-    /// 让 50 项 SQLite 基线全部"缺项"，门禁误报 FATAL）。逐键取最新值后，只有"某个键在所有批次里
-    /// 都没有"才算缺项。</para>
-    /// <para><b>录制与读回必须共用本方法</b>：两侧若用不同口径（例如录制遍历全部批次、读回取最新），
-    /// 基线条目数与比对口径就对不上，门禁会因口径错配而红——本方法的存在就是为了让两者同源。</para>
-    /// <para>同名键取最差：结果库里同一键出现多次（历史遗留的同名并发行，或实现侧漏了唯一化标识）时，
-    /// 取最差才是安全方向——门禁宁可提示也不该因重复键直接崩。</para></summary>
-    private static Dictionary<string, (string Harness, PerfResultItem Item)> LoadCurrentItems(
-        List<PerfResultEnvelope> batches)
-    {
-        var map = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
-        foreach (PerfResultEnvelope run in batches)
-        {
-            // 批内：同名键取最差（安全方向）。includeZeroRatio：比值 0 的键也要占位，
-            // 否则"最新批次已判定该项不可比"无法表达，旧批次会把它复活（见 KeyItems 文档）。
-            var perBatch = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
-            foreach ((string harness, PerfResultItem item) in KeyItems([run], includeZeroRatio: true))
-            {
-                string key = Key(harness, item.Name, item.Dialect, item.Tier);
-                if (!perBatch.TryGetValue(key, out (string Harness, PerfResultItem Item) existing)
-                    || item.Ratio > existing.Item.Ratio)
-                {
-                    perBatch[key] = (harness, item);
-                }
-            }
-
-            // 跨批次：**新的优先**（batches 已按时间倒序，先到先得），旧批次只补新批次缺的键。
-            // 若这里改成"比值大者胜"，旧批次的高比值会盖掉最新值——那测的是历史最差而不是当前状态
-            foreach (KeyValuePair<string, (string Harness, PerfResultItem Item)> entry in perBatch)
-            {
-                map.TryAdd(entry.Key, entry.Value);
-            }
-        }
-
-        return map;
-    }
-
-    /// <summary>录制专用：逐键取最近 <paramref name="window"/> 个**含该键**的非子集批次读数的中位数。
-    /// <para>批内仍取最差（与 <see cref="LoadCurrentItems"/> 同向的安全倾斜），批间取中位数。
-    /// 键集合的构造与之完全一致（同一 <see cref="KeyItems"/> 过滤），所以录制与读回不会出现
-    /// "基线有 191 项、比对只有 171 项"的口径错配。</para>
+    /// <summary>窗口读数：逐键取最近 <paramref name="window"/> 个**含该键**的非子集批次的**中位数**。
+    /// <para><b>录制与判定共用本方法</b>（2026-10-19 起两侧对称取窗）：录制取窗口中位数进基线，
+    /// 判定取窗口中位数作当前值，两边是同一种估计量、同一个窗口长度，比较才有意义。此前判定取
+    /// "最新一批"、录制取"中位数"，一侧抗噪一侧不抗噪，结果是每个含停顿的批次都产出一批假 FAIL
+    /// （2026-10-19 实测：129 个可比键里 68 个的跨批比值摆动 &gt;1.30×，单批判定的噪声底已超过
+    /// 门禁 30% 的判定带）。</para>
+    /// <para><b>代价是检测延迟</b>：持续回归需要连续 2 个批次才把窗口中位推过阈值（3 批窗口里
+    /// 2 个新样本）。单批的大跳变仍由 <see cref="OutlierWarnings"/> 逐条打印"疑似离群读数"，
+    /// 不会静默。这个取舍与门禁的用途一致：它拦的是"代码改动导致的持续回归"，不是单次抖动。</para>
+    /// <para>批内仍取最差（同名键重复出现时的安全倾斜，见 <see cref="KeyItems"/> 的 includeZeroRatio）；
+    /// 键集合的构造与判定循环完全一致，所以录制与读回不会出现"基线 191 项、比对 171 项"的口径错配。</para>
     /// <para>中位数作用于 <c>Ratio</c>/<c>MedianUs</c>/<c>MeanUs</c> 三个字段；三者同批同源，
     /// 取中位数不破坏"地板 = 中位/比值"的自洽关系（门禁诊断按此反推隐含地板）。</para></summary>
-    private static Dictionary<string, (string Harness, PerfResultItem Item)> LoadMedianItems(
+    private static Dictionary<string, (string Harness, PerfResultItem Item)> LoadWindowItems(
         List<PerfResultEnvelope> batches, int window)
     {
         var samples = new Dictionary<string, List<(string Harness, PerfResultItem Item)>>(StringComparer.Ordinal);
         foreach (PerfResultEnvelope run in batches)
         {
+            // 批内：同名键取最差（安全方向）。includeZeroRatio：比值 0 的键也要占位，
+            // 否则"最新批次已判定该项不可比"无法表达，旧批次会把它复活（见 KeyItems 文档）。
             var perBatch = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
             foreach ((string harness, PerfResultItem item) in KeyItems([run], includeZeroRatio: true))
             {
@@ -773,9 +737,9 @@ internal static class IndexGate
         return string.Create(CultureInfo.InvariantCulture,
             $"{expected.Harness}/{expected.Name}/{expected.Dialect}/{expected.Tier}: "
             + $"比值 {actual.Ratio:F2} 超过基线 {expected.Ratio:F2} × (1+{ratioDelta:P0}) = {limit:F2}"
-            + $"｜本项中位 {expected.MedianUs:F2} → {actual.MedianUs:F2} µs（{medianDelta:+0.0;-0.0}%）"
+            + $"｜本项窗口中位 {expected.MedianUs:F2} → {actual.MedianUs:F2} µs（{medianDelta:+0.0;-0.0}%）"
             + $"｜隐含地板 {floorBase:F2} → {floorNow:F2} µs（{floorDelta:+0.0;-0.0}%）"
-            + $"｜均值 {expected.MeanUs:F2} → {actual.MeanUs:F2} µs");
+            + $"｜窗口均值 {expected.MeanUs:F2} → {actual.MeanUs:F2} µs");
     }
 
     /// <summary>哨兵报告：DapperSuite 不卡阈值，但它的健康度与地板比值要打印出来供人工判读。</summary>
@@ -821,7 +785,7 @@ internal static class IndexGate
     /// <summary>取进基线/速览的条目：PerfHub 的 PalORM 臂。
     /// <para><b><paramref name="includeZeroRatio"/> 是防复活开关</b>：比值记为 0 的项
     /// （PL-4 起 <c>Build*</c> 这类"地板不干活、对比不成立"的项就是 0）在
-    /// <see cref="LoadCurrentItems"/> 里也必须占位——否则最新批次"知道这个键不可比"这件事
+    /// <see cref="LoadWindowItems"/> 里也必须占位——否则最近批次"知道这个键不可比"这件事
     /// 无法表达，旧批次里该项的高比值会把键复活，基线又被灌进一个已知无判别力的比值
     /// （2026-09-24 实测：PL-4 之后录出的 152 项基线里仍有 12 个 Build 项）。</para>
     /// <para>速览/哨兵这类只给人看的路径传 false——比值 0 的项没有可比信息，列出来是噪声。</para></summary>

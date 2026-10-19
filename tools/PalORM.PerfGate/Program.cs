@@ -84,8 +84,9 @@ internal static class Program
         Console.WriteLine("         （把结果库里 PerfHub 的 PalORM 比值录成基线；逐键取最近 N 个非子集批次");
         Console.WriteLine("           的中位数，抗单批噪声；--batches 1 复现旧的「取最新一批」行为）");
         Console.WriteLine("           注：DapperSuite 只作哨兵不进基线）");
-        Console.WriteLine("  check-index --baseline <基线路径> [--results <结果库目录>]");
-        Console.WriteLine("         （比对最近一批的比值，恶化超阈值即失败；缺项不判失败，全缺项判失败）");
+        Console.WriteLine("  check-index --baseline <基线路径> [--results <结果库目录>] [--batches <N=3>]");
+        Console.WriteLine("         （比对最近 N 个非子集批次的窗口中位数比值，恶化超阈值即失败；");
+        Console.WriteLine("           缺项不判失败，全缺项判失败。窗口与 record-index 对称，单批停顿不进判定）");
     }
 
     /// <summary>结果库索引（规范 v2 §6）：默认目录与默认输出都可被命令行覆盖。</summary>
@@ -121,7 +122,15 @@ internal static class Program
         string resultsDir = line.Optional("results") is { Length: > 0 } dir
             ? dir
             : Path.Combine(RepoRoot(), "bench", "results");
-        return IndexGate.Check(resultsDir, line.Require("baseline"));
+        string windowText = line.Optional("batches") ?? "";
+        int window = IndexGate.DefaultRecordWindow;
+        if (windowText.Length > 0
+            && !int.TryParse(windowText, NumberStyles.Integer, CultureInfo.InvariantCulture, out window))
+        {
+            return Fail($"--batches 需要整数（收到 '{windowText}'）");
+        }
+
+        return IndexGate.Check(resultsDir, line.Require("baseline"), window);
     }
 
     /// <summary>仓库根：向上找 PalORM.slnx（与 run-full-perf.sh 的定位方式一致）。</summary>
