@@ -232,8 +232,11 @@ internal static class PerfResultWriter
 
             if (newDialects.Count < prevDialects.Count && newDialects.IsSubsetOf(prevDialects))
             {
+                string suffix = IsSubsetLabel(envelope.Label)
+                    ? $"（本批 label={envelope.Label} 已带子集标记）"
+                    : "，请给跑测加子集 label 或补跑其余方言";
                 return $"方言覆盖面缩水（本批 {string.Join('/', newDialects)} ⊂ 上一批 {string.Join('/', prevDialects)}）"
-                    + "，请给跑测加子集 label 或补跑其余方言";
+                    + suffix;
             }
 
             return null;
