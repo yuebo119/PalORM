@@ -11,7 +11,9 @@ namespace PalORM;
 /// <para><c>UPDATE t AS tgt JOIN (VALUES ROW(...), ROW(...)) AS v(c0, c1, pk) ON tgt."id" = v.pk SET tgt.c0 = v.c0</c></para>
 /// <para><b>参数顺序</b>（每行 setColumnCount+1 个，对应 BindUpdate 的输出顺序）：
 /// [setCol1, setCol2, ..., pk]。与 BindUpdate 参数序一致——SET 列先，PK 在末尾。
-/// 不含租户参数（租户参数由调用方在 SQL 末尾追加）。</para>
+/// 不含租户参数（租户参数由调用方在 SQL 末尾追加）。版本化形态（PG UNNEST / MySQL
+/// JoinValuesRow）在 pk 之后追加并发令牌，SET 追加 <c>version = version + 1</c>，
+/// WHERE/ON 追加逐行版本谓词。</para>
 /// </summary>
 internal static class BatchUpdateSqlBuilder
 {
@@ -46,8 +48,14 @@ internal static class BatchUpdateSqlBuilder
     /// <param name="hasTenantFilter">是否追加租户过滤。</param>
     /// <param name="tenantParameterName">租户参数占位符（仅在 hasTenantFilter 时使用）。</param>
     /// <param name="form">MySQL 方言的形态选择（非 MySQL 方言忽略，恒走方言既有形态）。</param>
+    /// <param name="quotedConcurrencyColumn">版本化批量更新时引号包裹的并发令牌列名；null 表示
+    /// 非版本化形态。仅 PostgreSQL UNNEST 与 MySQL JoinValuesRow 支持非 null。</param>
     /// <exception cref="ArgumentException">SET 列集为空，或 hasTenantFilter 为 true 而租户参数名为空。</exception>
     /// <exception cref="ArgumentOutOfRangeException">rowCount 小于 1。</exception>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "方言 × 形态 × 版本化三维修正项：分派、参数序与租户谓词落位共享同一组"
+            + "布尔；拆分会把占位符与 WHERE/ON 结构的单一真源分散到多个方法。")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:MethodsShouldNotHaveTooManyParameters",
         Justification = "MySQL-7：form 是方言内形态参数（MySQL ≥ 8.0.19 走 JoinValuesRow），"
@@ -56,7 +64,8 @@ internal static class BatchUpdateSqlBuilder
     public static string Build(
         SqlDialect dialect, string quotedTable, string quotedPk, string[] setColumns,
         int rowCount, bool hasTenantFilter, string tenantParameterName,
-        BatchUpdateForm form = BatchUpdateForm.CaseWhen)
+        BatchUpdateForm form = BatchUpdateForm.CaseWhen,
+        string? quotedConcurrencyColumn = null)
     {
         ArgumentNullException.ThrowIfNull(setColumns);
         // R9：空 SET 集会生成 "UPDATE t AS tgt SET  FROM ..." / "UPDATE t SET  WHEN ..."，
@@ -74,7 +83,8 @@ internal static class BatchUpdateSqlBuilder
                 nameof(tenantParameterName));
 
         int setColCount = setColumns.Length;
-        int paramsPerRow = setColCount + 1;  // pk + set cols
+        bool versioned = quotedConcurrencyColumn is not null;
+        int paramsPerRow = setColCount + (versioned ? 2 : 1);  // SET 列 + 主键（+ 版本令牌）
         // A′（2026-10-01 充分论证轮）：形态判定单一真源——分派与租户谓词落位共用同一布尔。
         // 原两处条件不一致（分派用 `MySQL && form`，追加只用 `form`）：非 MySQL 方言忽略
         // form（既定契约，见 Build_NonMySqlDialects_IgnoreJoinValuesRowForm），届时实际形态
@@ -89,13 +99,27 @@ internal static class BatchUpdateSqlBuilder
         try
         {
             if (usesUnnestArrays)
-                BuildPostgreSqlUnnest(ref sb, quotedTable, quotedPk, setColumns, setColCount);
+                BuildPostgreSqlUnnest(ref sb, quotedTable, quotedPk, setColumns, setColCount,
+                    quotedConcurrencyColumn);
             else if (dialect == SqlDialect.PostgreSql)
+            {
+                // 版本化形态只支持 UNNEST 数组（逐行版本谓词与数组参数同源）；VALUES 形态
+                // 需多一个逐行参数，未纳入 v1 支持面，调用方须先回退逐条。
+                if (versioned)
+                    throw new NotSupportedException(
+                        "Versioned bulk UPDATE is supported only for PostgreSQL UNNEST arrays.");
                 BuildPostgreSql(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
+            }
             else if (usesJoinValuesRow)
-                BuildJoinValuesRow(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow);
+                BuildJoinValuesRow(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow,
+                    quotedConcurrencyColumn);
             else
+            {
+                if (versioned)
+                    throw new NotSupportedException(
+                        "Versioned bulk UPDATE is supported only for MySQL JoinValuesRow.");
                 BuildCaseWhen(ref sb, quotedTable, quotedPk, setColumns, rowCount, paramsPerRow, setColCount);
+            }
 
             if (hasTenantFilter)
             {
@@ -134,11 +158,12 @@ internal static class BatchUpdateSqlBuilder
     /// <summary>PG 的数组形态（UNNEST 阶段 B）：<c>UPDATE t AS tgt SET c = v.colN … FROM
     /// UNNEST(@c0, @c1, …, @pk) AS v(col0, …, col_pk) WHERE tgt.pk = v.col_pk</c>。
     /// <para>参数个数恒为列数（每列一个数组参数），与批宽无关——故 <c>rowCount</c> 不参与文本，
-    /// 语句文本在整个批循环中恒定（调用方只需建一次）。参数名按列序：SET 列在前、主键末位，
-    /// 与 <c>FillUpdateColumnArrays</c> 的填充序同源（<c>GetUpdateColumnOrder</c>）。</para></summary>
+    /// 语句文本在整个批循环中恒定（调用方只需建一次）。参数名按列序：SET 列在前、主键次之、
+    /// 版本令牌末位，与 <c>FillUpdateColumnArrays</c>/<c>FillVersionArray</c> 的填充序同源。</para></summary>
     private static void BuildPostgreSqlUnnest(ref ValueStringBuilder sb, string quotedTable,
-        string quotedPk, string[] setColumns, int setColCount)
+        string quotedPk, string[] setColumns, int setColCount, string? quotedConcurrencyColumn)
     {
+        bool versioned = quotedConcurrencyColumn is not null;
         sb.Append("UPDATE ");
         sb.Append(quotedTable);
         sb.Append(" AS tgt SET ");
@@ -149,8 +174,17 @@ internal static class BatchUpdateSqlBuilder
             sb.Append(" = v.col");
             sb.Append(c);
         }
+        if (versioned)
+        {
+            sb.Append(", ");
+            sb.Append(quotedConcurrencyColumn);
+            sb.Append(" = tgt.");
+            sb.Append(quotedConcurrencyColumn);
+            sb.Append(" + 1");
+        }
         sb.Append(" FROM UNNEST(");
-        for (int c = 0; c <= setColCount; c++)
+        int arrayCount = setColCount + (versioned ? 2 : 1);
+        for (int c = 0; c < arrayCount; c++)
         {
             if (c > 0) sb.Append(", ");
             sb.Append(UnnestColumnParameterName(c));
@@ -161,9 +195,17 @@ internal static class BatchUpdateSqlBuilder
             sb.Append(", col");
             sb.Append(c);
         }
-        sb.Append(", col_pk) WHERE tgt.");
+        sb.Append(", col_pk");
+        if (versioned) sb.Append(", col_ver");
+        sb.Append(") WHERE tgt.");
         sb.Append(quotedPk);
         sb.Append(" = v.col_pk");
+        if (versioned)
+        {
+            sb.Append(" AND tgt.");
+            sb.Append(quotedConcurrencyColumn);
+            sb.Append(" = v.col_ver");
+        }
     }
 
     /// <summary>UNNEST 形态的列参数名：<c>@u0…@u{列数}</c>。与 <c>@pN</c> 命名空间分离，
@@ -282,15 +324,22 @@ internal static class BatchUpdateSqlBuilder
     /// <summary>MySQL ≥ 8.0.19 形态：UPDATE JOIN table value constructor。
     /// <para><c>UPDATE t AS tgt JOIN (VALUES ROW(@p0,@p1,@p2), ROW(@p3,@p4,@p5)) AS v(c0, c1, pk)
     /// ON tgt.pk = v.pk SET tgt.c0 = v.c0, tgt.c1 = v.c1</c></para>
-    /// <para><b>与 CASE WHEN 的语义差异（输入重复主键时）</b>：CASE WHEN 对同一 pk 的多个
-    /// WHEN 分支按序求值取末值（行只更新一次）；JOIN 形态下重复 pk 的匹配是一对多，
-    /// 同一行按匹配次数更新（值相同则最终状态一致，但驱动 affected rows 计数膨胀）。
-    /// 上游契约（IReadOnlyList 按主键唯一）不变，此处仅注释说明差异。</para>
-    /// <para><b>参数序</b>：与 CASE WHEN 逐位一致——每行 ROW(setCol0..setColN, pk)，
-    /// 调用方参数池布局零改动。</para></summary>
+    /// <para><b>重复主键（2026-10-20 真库复核）</b>：MySQL 8.4 多表 UPDATE 对同一目标行只更新一次
+    /// （官方语法页：“Each matching row is updated once, even if it matches the conditions multiple
+    /// times”），因此重复 pk 的受影响数小于输入数。版本化路径据此按冲突抛出，与逐条路径第二次
+    /// 撞版本同型。旧注释“按匹配次数更新、affected rows 膨胀”与 8.4 实测不符（ROW_COUNT()=1）。
+    /// 上游契约（IReadOnlyList 按主键唯一）不变。</para>
+    /// <para><b>版本化形态</b>：每行 ROW(setCol0..setColN, pk, ver)，ON 追加
+    /// <c>AND tgt.version = v.ver</c>，SET 追加 <c>tgt.version = tgt.version + 1</c>。</para>
+    /// <para><b>参数序</b>：非版本化与 CASE WHEN 逐位一致；版本化在 pk 之后追加 ver。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "版本化与非版本化的 ROW 布局、ON 谓词与 SET 追加在同一构造器内逐字对应；"
+            + "拆分会让占位符序号在多个方法间传递，错位后果是错误数据写入。")]
     private static void BuildJoinValuesRow(ref ValueStringBuilder sb, string quotedTable, string quotedPk,
-        string[] setColumns, int rowCount, int paramsPerRow)
+        string[] setColumns, int rowCount, int paramsPerRow, string? quotedConcurrencyColumn)
     {
+        bool versioned = quotedConcurrencyColumn is not null;
         int setColCount = setColumns.Length;
         sb.Append("UPDATE ");
         sb.Append(quotedTable);
@@ -306,19 +355,33 @@ internal static class BatchUpdateSqlBuilder
                 AppendParameterName(ref sb, baseIdx + c);
             }
             sb.Append(',');
-            AppendParameterName(ref sb, baseIdx + setColCount);  // pk（每行最后）
+            AppendParameterName(ref sb, baseIdx + setColCount);  // pk（每行末尾）
+            if (versioned)
+            {
+                sb.Append(',');
+                AppendParameterName(ref sb, baseIdx + setColCount + 1);  // ver
+            }
             sb.Append(')');
         }
-        // 派生表列名：c0..cN + pk（SET 子句引用名）
+        // 派生表列名：c0..cN + pk（+ ver）
         sb.Append(") AS v(c0");
         for (int c = 1; c < setColCount; c++)
         {
             sb.Append(", c");
             sb.Append(c);
         }
-        sb.Append(", pk) ON tgt.");
+        sb.Append(", pk");
+        if (versioned) sb.Append(", ver");
+        sb.Append(") ON tgt.");
         sb.Append(quotedPk);
-        sb.Append(" = v.pk SET ");
+        sb.Append(" = v.pk");
+        if (versioned)
+        {
+            sb.Append(" AND tgt.");
+            sb.Append(quotedConcurrencyColumn);
+            sb.Append(" = v.ver");
+        }
+        sb.Append(" SET ");
         for (int c = 0; c < setColCount; c++)
         {
             if (c > 0) sb.Append(", ");
@@ -327,6 +390,14 @@ internal static class BatchUpdateSqlBuilder
             sb.Append(setColumns[c]);
             sb.Append(" = v.c");
             sb.Append(c);
+        }
+        if (versioned)
+        {
+            sb.Append(", tgt.");
+            sb.Append(quotedConcurrencyColumn);
+            sb.Append(" = tgt.");
+            sb.Append(quotedConcurrencyColumn);
+            sb.Append(" + 1");
         }
     }
 

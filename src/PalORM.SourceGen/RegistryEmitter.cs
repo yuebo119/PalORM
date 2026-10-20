@@ -327,6 +327,28 @@ internal static class RegistryEmitter
             $"Entity '{m.EntityTypeName}' reached RegistryEmitter without a primary key column; " +
             "CanGenerateEntity should have rejected it.");
         sb.AppendLine($"        draft.PkColumns[typeof({m.EntityTypeName})] = {MigrationEmitter.ToCSharpLiteral(pkName)};");
+        // 版本化单语句批量更新（S6 后续）：并发令牌列名 + 版本参数/数组三件套。
+        // 仅 SupportedConcurrencyColumn 判定的形态发射；其余运行时按缺失回退逐条。
+        ColumnModel? versionColumn = CommandFactoryEmitter.SupportedConcurrencyColumn(m);
+        if (versionColumn is not null)
+        {
+            sb.AppendLine($"        draft.ConcurrencyColumns[typeof({m.EntityTypeName})] = "
+                + $"{MigrationEmitter.ToCSharpLiteral(versionColumn.ColumnName)};");
+            sb.AppendLine($"        draft.BindVersionValues[typeof({m.EntityTypeName})] = "
+                + $"(parameters, obj, index) => CommandFactory_{m.GeneratedTypeSuffix}.BindVersionValue("
+                + $"parameters, ({m.EntityTypeName})obj, index);");
+            if (dialects.PostgreSql)
+            {
+                string versionElementType = versionColumn.ClrTypeName;
+                sb.AppendLine($"        draft.VersionArrayElementTypes[typeof({m.EntityTypeName})] = "
+                    + $"typeof({versionElementType});");
+                sb.AppendLine($"        draft.CreateVersionArrays[typeof({m.EntityTypeName})] = "
+                    + $"CommandFactory_{m.GeneratedTypeSuffix}.CreateVersionArray;");
+                sb.AppendLine($"        draft.FillVersionArrays[typeof({m.EntityTypeName})] = "
+                    + $"(entities, start, count, array) => CommandFactory_{m.GeneratedTypeSuffix}"
+                    + $".FillVersionArray(entities, start, count, array);");
+            }
+        }
 
         string names = BuildStringArrayLiteral(columns.Select(static column => column.ColumnName));
         sb.AppendLine($"        draft.ColumnNames[typeof({m.EntityTypeName})] = {names};");
@@ -390,6 +412,11 @@ internal static class RegistryEmitter
         sb.AppendLine("            CrudMetadatas = draft.CrudMetadatas,");
         sb.AppendLine("            EntityFeatures = draft.EntityFeatures,");
         sb.AppendLine("            PkColumns = draft.PkColumns,");
+        sb.AppendLine("            ConcurrencyColumns = draft.ConcurrencyColumns,");
+        sb.AppendLine("            BindVersionValues = draft.BindVersionValues,");
+        sb.AppendLine("            VersionArrayElementTypes = draft.VersionArrayElementTypes,");
+        sb.AppendLine("            CreateVersionArrays = draft.CreateVersionArrays,");
+        sb.AppendLine("            FillVersionArrays = draft.FillVersionArrays,");
         sb.AppendLine("            ColumnNames = draft.ColumnNames,");
         sb.AppendLine("            PropertyToColumn = draft.PropertyToColumn,");
         sb.AppendLine("            CreateTableSqlByDialect = draft.CreateTableSqlByDialect,");
@@ -418,6 +445,11 @@ internal static class RegistryEmitter
         sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CrudMetadata> CrudMetadatas = new();");
         sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.EntityFeatures> EntityFeatures = new();");
         sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, string> PkColumns = new();");
+        sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, string> ConcurrencyColumns = new();");
+        sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Data.Common.DbParameter[], object, int>> BindVersionValues = new();");
+        sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Type> VersionArrayElementTypes = new();");
+        sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Func<int, global::System.Array>> CreateVersionArrays = new();");
+        sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Action<global::System.Collections.Generic.IReadOnlyList<object>, int, int, global::System.Array>> FillVersionArrays = new();");
         sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, string[]> ColumnNames = new();");
         sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Collections.Generic.IReadOnlyDictionary<string, string>> PropertyToColumn = new();");
         sb.AppendLine("        internal readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::PalORM.CreateTableSqlSet> CreateTableSqlByDialect = new();");

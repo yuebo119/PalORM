@@ -3,15 +3,14 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-/// <summary>PG-7（2026-09-27）：MySQL-8 DbBatch 打包平移到 PG 的真库覆盖。
-/// <para><b>背景</b>：乐观锁（[ConcurrencyCheck]）实体的 BulkUpdateAsync 走逐条路径
-/// （N 行 = N 次协议往返）。MySQL-8 起 MySQL dialect 改用 DbBatch 打包（100 命令/批
-/// 一次往返，探针十六 3.55×）；本轮按同一机制移植到 PG——探针二十八实测 PG 远程库
-/// 同族对照 = 7.85×（200 命令逐条 118.7ms vs DbBatch 15.1ms），远程 RTT 越高省得越多。
-/// SQLite 不移植（探针二十五：进程内无 RTT，DbBatch vs 逐条 = 1.02×，噪声）。</para>
-/// <para><b>本组锁三件事</b>：① 批路径跨批边界（250 行 = 3 批）写值全部正确；
-/// ② 批内 version 不匹配 → ConcurrencyConflictException（总和 &lt; 批大小）；
-/// ③ ITM-556 延迟回填语义（仅批成功后内存 version +1）。</para></summary>
+/// <summary>PG 版本化批量更新的真库覆盖（v6.5 单语句 UNNEST 路由）。
+/// <para><b>背景</b>：版本化实体的 BulkUpdateAsync 在生成物提供并发令牌数组能力时路由到
+/// <c>UPDATE ... FROM UNNEST(...) WHERE pk = ... AND version = ...</c> 单语句（S6 探针
+/// 1000 行 3.06×）；能力不全或 SQLite 时回退逐条 DbBatch。冲突检测为计数级，异常类型
+/// 与逐条路径一致。</para>
+/// <para><b>本组锁</b>：① 跨批边界（250 行）写值全部正确；② 批内 version 不匹配 →
+/// ConcurrencyConflictException 且整批回滚；③ ITM-556 延迟回填（成功后才 +1）；
+/// ④ 重复主键与缺失行按冲突处理；⑤ 单行输入仍走逐条路径且语义不变。</para></summary>
 [NotInParallel("ExtBulkTable")]
 public sealed class PgBatchedUpdatePathTests
 {
@@ -113,6 +112,81 @@ public sealed class PgBatchedUpdatePathTests
             await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_v");
         }
     }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_VersionedBulkUpdate_DuplicateKeys_ThrowConflictAndRollback()
+    {
+        await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_dup");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_pg_batched_dup (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+            await db.BulkInsertAsync([new PgBatchedRowDup { Id = 1, Name = "seed" }]);
+
+            List<PgBatchedRowDup> updated =
+            [
+                new() { Id = 1, Name = "a" },
+                new() { Id = 1, Name = "b" }
+            ];
+            // 目标行只更新一次（PG 官方文档），受影响 1 < 输入 2 → 按冲突抛出并回滚
+            await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
+                await db.BulkUpdateAsync(updated));
+
+            PgBatchedRowDup? row = await db.GetAsync<PgBatchedRowDup>(1);
+            await Assert.That(row).IsNotNull();
+            await Assert.That(row!.Name).IsEqualTo("seed");
+            await Assert.That(row.Version).IsEqualTo(0);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_dup");
+        }
+    }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_VersionedBulkUpdate_MissingRow_ThrowConflictAndRollback()
+    {
+        await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_miss");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_pg_batched_miss (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+
+            var seed = new List<PgBatchedRowMiss>
+            {
+                new() { Id = 1, Name = "s1" },
+                new() { Id = 2, Name = "s2" },
+                new() { Id = 3, Name = "s3" }
+            };
+            await db.BulkInsertAsync(seed);
+
+            List<PgBatchedRowMiss> updated =
+            [
+                new() { Id = 1, Name = "u1" },
+                new() { Id = 2, Name = "u2" },
+                new() { Id = 3, Name = "u3" },
+                new() { Id = 99, Name = "ghost" }
+            ];
+            await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
+                await db.BulkUpdateAsync(updated));
+
+            List<PgBatchedRowMiss> after = await db.From<PgBatchedRowMiss>().ToListAsync();
+            await Assert.That(after.Count).IsEqualTo(3);
+            foreach (PgBatchedRowMiss row in after)
+            {
+                await Assert.That(row.Name).IsEqualTo("s" + row.Id);
+                await Assert.That(row.Version).IsEqualTo(0);
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pg_batched_miss");
+        }
+    }
 }
 
 [Table("palorm_pg_batched")]
@@ -147,6 +221,36 @@ internal sealed partial class PgBatchedRowC
 
 [Table("palorm_pg_batched_v")]
 internal sealed partial class PgBatchedRowV
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public int Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("version")]
+    [ConcurrencyCheck]
+    public int Version { get; set; }
+}
+
+[Table("palorm_pg_batched_dup")]
+internal sealed partial class PgBatchedRowDup
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public int Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("version")]
+    [ConcurrencyCheck]
+    public int Version { get; set; }
+}
+
+[Table("palorm_pg_batched_miss")]
+internal sealed partial class PgBatchedRowMiss
 {
     [Key(AutoIncrement = false)]
     [Column("id")]

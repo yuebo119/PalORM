@@ -23,12 +23,13 @@ internal static class RowFactory_global__FullFeatureEntity_4964faa8
             Tier = r.GetString(7),
             Sku = r.GetString(8),
             Weight = r.GetDecimal(9),
-            RawKind = r.GetString(10),
-            RowUpdatedAt = r.GetDateTime(11),
-            TotalDisplay = r.GetString(12),
-            DeletedAt = r.IsDBNull(13) ? null : r.GetString(13),
-            TenantId = r.GetString(14),
-            SensitiveValue = r.GetString(15),
+            Version = r.GetInt32(10),
+            RawKind = r.GetString(11),
+            RowUpdatedAt = r.GetDateTime(12),
+            TotalDisplay = r.GetString(13),
+            DeletedAt = r.IsDBNull(14) ? null : r.GetString(14),
+            TenantId = r.GetString(15),
+            SensitiveValue = r.GetString(16),
         };
     };
 }

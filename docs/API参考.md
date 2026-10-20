@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1102 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1111 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -154,7 +154,7 @@
 | API | 实现 |
 |------|------|
 | `BulkInsertAsync<T>(items, batchSize)` | PG Binary COPY / SQLite+MySQL 多值 INSERT |
-| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁 |
+| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁；PG/MySQL 版本化实体走单语句（能力不全回退 DbBatch 逐条） |
 | `BulkMergeAsync<T>(items)` | 逐项 UPSERT |
 | `BulkDeleteAsync<T>(keys)` | 500/批 IN 子句 |
 
