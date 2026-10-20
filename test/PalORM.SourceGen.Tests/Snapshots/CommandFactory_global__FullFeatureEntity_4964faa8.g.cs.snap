@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.5.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.6.0")]
 internal static class CommandFactory_global__FullFeatureEntity_4964faa8
 {
     private static readonly global::PalORM.IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter();
@@ -22,10 +22,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 6); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Tier; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 7); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Sku; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 8); p.DbType = global::System.Data.DbType.Decimal; p.Value = (object)entity.Weight; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 9); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawKind; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 10); p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 11); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 12); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 9); p.DbType = global::System.Data.DbType.Int32; p.Value = (object)entity.Version; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 10); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawKind; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 11); p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 12); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(paramOffset + 13); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配参数的 Value（跨批复用路径，零 CreateParameter 分配）。</summary>
@@ -40,10 +41,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 6].Value = (object)entity.Tier;
         parameters[paramOffset + 7].Value = (object)entity.Sku;
         parameters[paramOffset + 8].Value = (object)entity.Weight;
-        parameters[paramOffset + 9].Value = (object)entity.RawKind;
-        parameters[paramOffset + 10].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 11].Value = (object)entity.TenantId;
-        parameters[paramOffset + 12].Value = (object)entity.SensitiveValue;
+        parameters[paramOffset + 9].Value = (object)entity.Version;
+        parameters[paramOffset + 10].Value = (object)entity.RawKind;
+        parameters[paramOffset + 11].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
+        parameters[paramOffset + 12].Value = (object)entity.TenantId;
+        parameters[paramOffset + 13].Value = (object)entity.SensitiveValue;
     }
 
     /// <summary>B21：建池后一次性写 INSERT 参数 DbType（配合 BindInsertValues 只写 Value 的分解形态）。</summary>
@@ -57,10 +59,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 6].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 7].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 8].DbType = global::System.Data.DbType.Decimal;
-        parameters[paramOffset + 9].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 9].DbType = global::System.Data.DbType.Int32;
         parameters[paramOffset + 10].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 11].DbType = global::System.Data.DbType.String;
         parameters[paramOffset + 12].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 13].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>绑定实体属性到 UPSERT 参数，包含主键。</summary>
@@ -76,10 +79,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p7"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Tier; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Sku; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.DbType = global::System.Data.DbType.Decimal; p.Value = (object)entity.Weight; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p10"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawKind; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p11"; p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p12"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p10"; p.DbType = global::System.Data.DbType.Int32; p.Value = (object)entity.Version; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p11"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawKind; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p12"; p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p14"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPSERT 参数的 Value（批量 UPSERT 参数池路径，零 CreateParameter 分配）。</summary>
@@ -95,16 +99,17 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 7].Value = (object)entity.Tier;
         parameters[paramOffset + 8].Value = (object)entity.Sku;
         parameters[paramOffset + 9].Value = (object)entity.Weight;
-        parameters[paramOffset + 10].Value = (object)entity.RawKind;
-        parameters[paramOffset + 11].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 12].Value = (object)entity.TenantId;
-        parameters[paramOffset + 13].Value = (object)entity.SensitiveValue;
+        parameters[paramOffset + 10].Value = (object)entity.Version;
+        parameters[paramOffset + 11].Value = (object)entity.RawKind;
+        parameters[paramOffset + 12].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
+        parameters[paramOffset + 13].Value = (object)entity.TenantId;
+        parameters[paramOffset + 14].Value = (object)entity.SensitiveValue;
     }
 
     /// <summary>N4：建池后一次性写 UPSERT 参数 DbType（配合 BindUpsertValues 只写 Value 的分解形态）。</summary>
     internal static void InitUpsertParameters(global::System.Data.Common.DbParameter[] parameters, int paramOffset)
     {
-        parameters[paramOffset + 11].DbType = global::System.Data.DbType.String;
+        parameters[paramOffset + 12].DbType = global::System.Data.DbType.String;
     }
 
     /// <summary>绑定实体属性到 UPDATE 参数。</summary>
@@ -124,6 +129,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p11"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p12"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p14"; p.Value = entity.Version; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
@@ -143,6 +149,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 11].Value = (object)entity.TenantId;
         parameters[paramOffset + 12].Value = (object)entity.SensitiveValue;
         parameters[paramOffset + 13].Value = (object)entity.Id;
+        parameters[paramOffset + 14].Value = entity.Version;
     }
 
     /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
@@ -253,10 +260,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
             string[] column7 = (string[])arrays[arrayOffset + 7];
             string[] column8 = (string[])arrays[arrayOffset + 8];
             decimal[] column9 = (decimal[])arrays[arrayOffset + 9];
-            string[] column10 = (string[])arrays[arrayOffset + 10];
+            int[] column10 = (int[])arrays[arrayOffset + 10];
             string[] column11 = (string[])arrays[arrayOffset + 11];
             string[] column12 = (string[])arrays[arrayOffset + 12];
             string[] column13 = (string[])arrays[arrayOffset + 13];
+            string[] column14 = (string[])arrays[arrayOffset + 14];
             for (int i = 0; i < count; i++)
             {
                 var entity = (global::FullFeatureEntity)entities[start + i];
@@ -270,10 +278,11 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
                 column7[i] = entity.Tier;
                 column8[i] = entity.Sku;
                 column9[i] = entity.Weight;
-                column10[i] = entity.RawKind;
-                column11[i] = entity.DeletedAt!;
-                column12[i] = entity.TenantId;
-                column13[i] = entity.SensitiveValue;
+                column10[i] = entity.Version;
+                column11[i] = entity.RawKind;
+                column12[i] = entity.DeletedAt!;
+                column13[i] = entity.TenantId;
+                column14[i] = entity.SensitiveValue;
             }
         }
     }
@@ -281,7 +290,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>UPSERT 列数组的元素类型（与 FillUpsertColumnArrays 同序同长度）。</summary>
     internal static global::System.Type[] UpsertColumnArrayElementTypes()
     {
-        return new global::System.Type[14]
+        return new global::System.Type[15]
         {
             typeof(long),
             typeof(string),
@@ -293,6 +302,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
             typeof(string),
             typeof(string),
             typeof(decimal),
+            typeof(int),
             typeof(string),
             typeof(string),
             typeof(string),
@@ -303,7 +313,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>分配 UPSERT 逐列类型化数组（长度 count）——AOT 安全。</summary>
     internal static global::System.Array[] CreateUpsertColumnArrays(int count)
     {
-        return new global::System.Array[14]
+        return new global::System.Array[15]
         {
             new long[count],
             new string[count],
@@ -315,6 +325,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
             new string[count],
             new string[count],
             new decimal[count],
+            new int[count],
             new string[count],
             new string[count],
             new string[count],
@@ -344,6 +355,24 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         };
     }
 
+    /// <summary>分配版本列数组（UNNEST 版本化批量 UPDATE 用）——AOT 安全。</summary>
+    internal static global::System.Array CreateVersionArray(int count)
+    {
+        return new int[count];
+    }
+
+    /// <summary>把实体区间的并发令牌值填入预建数组（UNNEST 版本化批量 UPDATE 用）。</summary>
+    internal static void FillVersionArray(
+        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,
+        global::System.Array array)
+    {
+        int[] target = (int[])array;
+        for (int i = 0; i < count; i++)
+        {
+            target[i] = ((global::FullFeatureEntity)entities[start + i]).Version;
+        }
+    }
+
     internal static void SetId(global::FullFeatureEntity entity, long id)
     {
         entity.Id = id;
@@ -351,6 +380,14 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
 
     internal static void IncrementVersion(global::FullFeatureEntity entity)
     {
+        entity.Version++;
+    }
+
+    /// <summary>只写版本参数 Value（版本化批量 UPDATE 参数池路径）。</summary>
+    internal static void BindVersionValue(
+        global::System.Data.Common.DbParameter[] parameters, object entity, int index)
+    {
+        parameters[index].Value = ((global::FullFeatureEntity)entity).Version;
     }
 
     internal static bool HasDefaultKey(global::FullFeatureEntity entity)

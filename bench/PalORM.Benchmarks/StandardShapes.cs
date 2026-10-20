@@ -160,7 +160,7 @@ public sealed partial class BenchText
         var body = new System.Text.StringBuilder(2000);
         for (int chunk = 0; chunk < 2000 / 50; chunk++)
         {
-            body.Append($"doc-{i}-seg-{chunk:0000} ");
+            body.Append(CultureInfo.InvariantCulture, $"doc-{i}-seg-{chunk:0000} ");
         }
         return new BenchText
         {

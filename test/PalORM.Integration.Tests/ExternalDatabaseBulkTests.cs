@@ -66,6 +66,50 @@ public sealed class ExternalDatabaseBulkTests
         }
     }
 
+    /// <summary>S6：1 参重载在 PG 上按整段行数走单次 COPY（≥1000 行也不再按 1000 分批）。
+    /// 锁定"推荐批宽"形态下大段 COPY 的完整性——行数、首尾值与计数三方对账，
+    /// 参数池跨 2000+ 行复用时任一行的类型/值错位都会让首尾断言失败。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_BulkInsert_DefaultOverload_LargeBatchPersistsEveryRow()
+    {
+        await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
+        await db.MigrateAsync();
+        try
+        {
+            const int rows = 2500;
+            var seed = new List<ExtBulkEntity>(rows);
+            for (int i = 1; i <= rows; i++)
+            {
+                seed.Add(new ExtBulkEntity
+                {
+                    Code = $"BULK{i:D4}",
+                    Note = i % 7 == 0 ? null : $"note-{i}",
+                    Amount = i * 0.25m,
+                    CreatedAt = new DateTime(2026, 7, 18, 0, 0, 0, DateTimeKind.Utc).AddSeconds(i),
+                    OptionalCount = i % 5 == 0 ? null : i,
+                    Payload = null
+                });
+            }
+
+            long inserted = await db.BulkInsertAsync(seed);
+            await Assert.That(inserted).IsEqualTo(rows);
+            await Assert.That(await db.CountAsync<ExtBulkEntity>()).IsEqualTo(rows);
+
+            List<ExtBulkEntity> read = [.. (await db.GetAllAsync<ExtBulkEntity>()).OrderBy(r => r.Code)];
+            await Assert.That(read[0].Code).IsEqualTo("BULK0001");
+            await Assert.That(read[0].Note).IsEqualTo("note-1");
+            await Assert.That(read[0].Amount).IsEqualTo(0.25m);
+            await Assert.That(read[^1].Code).IsEqualTo("BULK2500");
+            await Assert.That(read[^1].Amount).IsEqualTo(625m);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities CASCADE");
+        }
+    }
+
     /// <summary>可空列「首行为 null、后续行非 null」的 COPY 参数复用回归。
     /// <para><b>为什么单列一条</b>：v5.6 把 COPY 的参数对象改为每批建一次、逐行只写 Value，
     /// 参数类型由<b>首个</b>绑定行的值推断。现有 <c>PG_MigrateAndBinaryCopy_...</c> 的行序是

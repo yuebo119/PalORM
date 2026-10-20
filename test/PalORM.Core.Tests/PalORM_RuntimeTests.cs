@@ -1,7 +1,20 @@
 namespace PalORM.Core.Tests;
 
+[NotInParallel]
 public sealed class PalORM_RuntimeTests
 {
+    private PalORM_Runtime.RuntimeRegistryState? _stateSnapshot;
+
+    [Before(Test)]
+    public void CaptureRuntimeState() => _stateSnapshot = PalORM_Runtime.CurrentState;
+
+    [After(Test)]
+    public void RestoreRuntimeState()
+    {
+        if (_stateSnapshot is { } snapshot)
+            PalORM_Runtime.RestoreStateForTesting(snapshot);
+    }
+
     private sealed class FragmentEntityOne;
     private sealed class FragmentEntityTwo;
     private sealed class DuplicateFragmentEntity;

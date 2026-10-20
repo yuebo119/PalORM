@@ -30,7 +30,7 @@ public class FeatureBenchmarks : IAsyncDisposable
     public async Task Setup()
     {
         _keeper = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
-        await BenchmarkConfig.SeedSqliteAsync(_keeper!);
+        await BenchmarkConfig.SeedSqliteAsync(_keeper);
     }
 
     public async ValueTask DisposeAsync()

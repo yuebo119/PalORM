@@ -187,6 +187,7 @@ internal static partial class ReportGenerator
         PerfResultEnvelope? dappersuite = Latest(runs, "dappersuite");
         PerfResultEnvelope? stability = runs.FirstOrDefault(static r =>
             r.Label.Contains("stability", StringComparison.OrdinalIgnoreCase));
+        PerfResultSection? pool = FindPoolSection(runs);
         bool hasRoundTrips = perfhub?.Items.Any(static i => i.RoundTripsPerOp > 0) == true;
 
         md.AppendLine("## 12 维总览");
@@ -203,8 +204,8 @@ internal static partial class ReportGenerator
         md.AppendLine(hasWorkload
             ? "| 4 | 并发扩展 | ✅ 已测 | 线程档曲线见负载表 |"
             : "| 4 | 并发扩展 | ❌ 未采集 | 缺 --workload JSON |");
-        md.AppendLine("| 5 | 数据形状敏感性 | ⚠️ 部分 | S1 全档 + S2 宽表；S3/S4/S5 仅在 BDN 专项类覆盖 |");
-        md.AppendLine("| 6 | 连接与池 | ❌ 未测 | 建连/空闲回收/churn 专项探针（D3 先例） |");
+        md.AppendLine("| 5 | 数据形状敏感性 | ⚠️ 部分 | S1/S2 由 PerfHub 覆盖；S3/S5 仅有形状定义、尚未接入基准；S4 二进制由 08_Binary 派生形状覆盖（256B/64KB） |");
+        md.AppendLine(PoolLine(pool));
         md.AppendLine(hasMemory
             ? "| 7 | 资源效率 | ✅ 部分 | 分配/存活曲线见内存表；流式对比仅在 PerfHub StreamAll |"
             : "| 7 | 资源效率 | ❌ 未采集 | 缺 --memory JSON |");
@@ -214,16 +215,15 @@ internal static partial class ReportGenerator
         md.AppendLine(startupPassed
             ? "| 9 | 启动与冷路径 | ✅ 已测 | 规模量具全绿（单方法 IL ≤64KB 上界，两维） |"
             : "| 9 | 启动与冷路径 | ⚠️ 未采集 | 启动量具结果未传入（--startup ok） |");
-        md.AppendLine(stability is not null
-            ? $"| 10 | 长时稳定 | ⚠️ 见时间 | 量具已实现（规范 §5）；最近长稳批次 {stability.Timestamp}，"
-                + "早于本轮即视为本轮未采集 |"
-            : "| 10 | 长时稳定 | ❌ 未采集 | 本批未跑 --stability（量具已实现，见规范 §5） |");
+        md.AppendLine(StabilityLine(stability, perfhub));
         md.AppendLine(hasWorkload
             ? "| 11 | 混合负载 | ✅ 已测 | 80/20 读写混合（见负载表） |"
             : "| 11 | 混合负载 | ❌ 未采集 | 缺 --workload JSON |");
         md.AppendLine(dappersuite is not null
             ? "| 12 | 统计纪律 | ✅ | 阈值余量按实测噪声底标定（规范 §4）；官方形状哨兵批次已在结果库 |"
             : "| 12 | 统计纪律 | ✅ | 阈值余量按实测噪声底标定（规范 §4） |");
+        md.AppendLine();
+        md.AppendLine("> p50/p95/p99 仅展示，不参与门禁（共享服务器方差；B100 纪律）。");
         md.AppendLine();
     }
 
@@ -233,6 +233,38 @@ internal static partial class ReportGenerator
         => runs.FirstOrDefault(r =>
             r.Harness.Equals(harness, StringComparison.OrdinalIgnoreCase)
             && !r.Sections.Any(static s => s.Kind.Contains("failure", StringComparison.OrdinalIgnoreCase)));
+
+    private static string Metric(PerfResultSection section, string key)
+        => section.Metrics.TryGetValue(key, out double value)
+            ? value.ToString("F2", CultureInfo.InvariantCulture)
+            : "?";
+
+    private static PerfResultSection? FindPoolSection(List<PerfResultEnvelope> runs)
+        => runs.SelectMany(static r => r.Sections)
+            .FirstOrDefault(static s => s.Kind.Equals("pool", StringComparison.OrdinalIgnoreCase));
+
+    private static string PoolLine(PerfResultSection? pool)
+    {
+        if (pool is null)
+            return "| 6 | 连接与池 | ❌ 未测 | 建连/空闲回收/churn 专项探针（--pool） |";
+        return $"| 6 | 连接与池 | ✅ 已测 | {pool.Dialect}：会话池租还 {Metric(pool, "poolRentUs")} µs / 带查询 {Metric(pool, "poolRentQueryUs")} µs；新建会话 {Metric(pool, "newSessionUs")} µs；裸连接 {Metric(pool, "rawOpenUs")} µs |";
+    }
+
+    private static string StabilityLine(PerfResultEnvelope? stability, PerfResultEnvelope? perfhub)
+    {
+        if (stability is null)
+            return "| 10 | 长时稳定 | ❌ 未采集 | 本批未跑 --stability（量具已实现，见规范 §5） |";
+        bool current = perfhub is not null
+            && string.CompareOrdinal(stability.Timestamp, perfhub.Timestamp) >= 0;
+        string state = current ? "✅ 已补测" : "⚠️ 见时间";
+        string relation = current ? "，晚于本轮主批" : "，早于本轮主批";
+        PerfResultSection? section = stability.Sections.FirstOrDefault(static s =>
+            s.Kind.Equals("stability", StringComparison.OrdinalIgnoreCase));
+        string metrics = section is null
+            ? ""
+            : $"（Δ吞吐 {Metric(section, "throughputDeltaPercent")}% · ΔWS {Metric(section, "workingSetDeltaPercent")}%）";
+        return $"| 10 | 长时稳定 | {state} | 最近长稳批次 {stability.Timestamp}{relation}{metrics} |";
+    }
 
     private static void AppendHeader(StringBuilder md, PerfBaseline baseline)
     {

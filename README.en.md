@@ -4,7 +4,7 @@
 
 **A .NET 11 micro-ORM for Native AOT: everything generated at compile time, zero reflection at runtime**
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--preview.6-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
@@ -235,7 +235,7 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 ## 📦 Installation
 
 > Pick one of the three provider packages; each automatically brings `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time generator).
-> Requirements: .NET SDK `11.0.100-preview.6` or later (`global.json` pins `rollForward: latestMinor`); your IDE must support Roslyn source generators (SourceGen builds against Microsoft.CodeAnalysis 5.9.0). Native AOT publishes additionally need about 4 GB of memory (ILC compiler) — see [Development](#-development).
+> Requirements: .NET SDK `11.0.100-rc.2` or later (`global.json` pins `rollForward: disable`); your IDE must support Roslyn source generators (SourceGen builds against Microsoft.CodeAnalysis 5.9.0). Native AOT publishes additionally need about 4 GB of memory (ILC compiler) — see [Development](#-development).
 
 ```xml
 <!-- PostgreSQL -->
@@ -254,7 +254,7 @@ Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (c
 |----------|---------|--------|:---:|
 | PostgreSQL | 14+ (18 recommended) | Npgsql 10.0.3 | SSL/TLS |
 | MySQL | 8.0+ (8.4 LTS recommended) | MySqlConnector 2.6.2 | SSL/TLS |
-| SQLite | 3.47+ (via SQLite3MC 2.4.0) | Microsoft.Data.Sqlite.Core 11.0.0-rc.1 | AES-256 (driver level, `Password=`) |
+| SQLite | 3.54+ (via SQLite3MC 2.6.1) | Microsoft.Data.Sqlite.Core 11.0.0-rc.2 | AES-256 (driver level, `Password=`) |
 
 ## 🚀 Quick Start
 
@@ -822,7 +822,7 @@ Full version history: [CHANGELOG.md](CHANGELOG.md) (Chinese).
 | Memory | 256 MB | 4 GB (ILC compiler; runtime needs only ~100 MB) |
 | Disk | 50 MB | 100 MB, SSD recommended (ILC writes many temp files; HDD compiles 5-10x slower) |
 
-Software: .NET SDK 11.0.100-preview.6+ (pinned by `global.json`) · C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code (Roslyn source generator support required).
+Software: .NET SDK 11.0.100-rc.2+ (pinned by `global.json`) · C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code (Roslyn source generator support required).
 
 ### Project structure
 

@@ -3,14 +3,13 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-/// <summary>MySQL-8（2026-09-27）：MySQL dialect 的逐条 UPDATE DbBatch 打包路径真库覆盖。
-/// <para><b>背景</b>：乐观锁（[ConcurrencyCheck]）实体不能走单语句批量（无法表达"每行
-/// version 匹配"），BulkUpdateAsync 路由到 ExecuteBulkUpdatePooledAsync 逐条路径——
-/// N 行 = N 次协议往返。MySQL dialect 起该方法改用 DbBatch 打包（100 命令/批一次往返，
-/// 探针十六实测 3.55×）。批内受影响行数按<b>总和</b>判定乐观锁（单行 UPDATE 每行恰 1 行）。</para>
-/// <para><b>本组锁三件事</b>：① 批路径跨批边界（250 行 = 3 批）写值全部正确；
-/// ② 批内 version 不匹配 → ConcurrencyConflictException（总和 &lt; 批大小）；
-/// ③ ITM-556 延迟回填语义（仅批成功后内存 version +1）。</para></summary>
+/// <summary>MySQL 版本化批量更新的真库覆盖（v6.5 单语句 JoinValuesRow 路由）。
+/// <para><b>背景</b>：版本化实体的 BulkUpdateAsync 在 MySQL 8.0.19+ 且生成物提供版本
+/// 参数绑定时路由到 <c>UPDATE ... JOIN (VALUES ROW(...)) ON ... AND version = ...</c>
+/// 单语句（S6 探针 1000 行 4.73×）；低版本/能力不全回退逐条 DbBatch。冲突检测为计数级。</para>
+/// <para><b>本组锁</b>：① 跨批边界写值正确；② 版本不匹配 → ConcurrencyConflictException
+/// 且整批回滚；③ 延迟回填；④ 重复主键与缺失行按冲突处理；⑤ UseAffectedRows 两档计数
+/// 语义一致；⑥ 单行输入仍走逐条路径。</para></summary>
 [NotInParallel("ExtBulkTable")]
 public sealed class MySqlBatchedUpdatePathTests
 {
@@ -118,6 +117,136 @@ public sealed class MySqlBatchedUpdatePathTests
             await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_mysql_batched_v");
         }
     }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_VersionedBulkUpdate_DuplicateKeys_ThrowConflictAndRollback()
+    {
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_mysql_batched_dup");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_mysql_batched_dup (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+            await db.BulkInsertAsync([new MySqlBatchedRowDup { Id = 1, Name = "seed" }]);
+
+            List<MySqlBatchedRowDup> updated =
+            [
+                new() { Id = 1, Name = "a" },
+                new() { Id = 1, Name = "b" }
+            ];
+            // MySQL 8.4 多表 UPDATE 对同一目标行只更新一次（官方语法页），
+            // 受影响 1 < 输入 2 → 按冲突抛出并回滚
+            await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
+                await db.BulkUpdateAsync(updated));
+
+            MySqlBatchedRowDup? row = await db.GetAsync<MySqlBatchedRowDup>(1);
+            await Assert.That(row).IsNotNull();
+            await Assert.That(row!.Name).IsEqualTo("seed");
+            await Assert.That(row.Version).IsEqualTo(0);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_mysql_batched_dup");
+        }
+    }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_VersionedBulkUpdate_MissingRow_ThrowConflictAndRollback()
+    {
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_mysql_batched_miss");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_mysql_batched_miss (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+
+            var seed = new List<MySqlBatchedRowMiss>
+            {
+                new() { Id = 1, Name = "s1" },
+                new() { Id = 2, Name = "s2" },
+                new() { Id = 3, Name = "s3" }
+            };
+            await db.BulkInsertAsync(seed);
+
+            List<MySqlBatchedRowMiss> updated =
+            [
+                new() { Id = 1, Name = "u1" },
+                new() { Id = 2, Name = "u2" },
+                new() { Id = 3, Name = "u3" },
+                new() { Id = 99, Name = "ghost" }
+            ];
+            await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
+                await db.BulkUpdateAsync(updated));
+
+            List<MySqlBatchedRowMiss> after = await db.From<MySqlBatchedRowMiss>().ToListAsync();
+            await Assert.That(after.Count).IsEqualTo(3);
+            foreach (MySqlBatchedRowMiss row in after)
+            {
+                await Assert.That(row.Name).IsEqualTo("s" + row.Id);
+                await Assert.That(row.Version).IsEqualTo(0);
+            }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_mysql_batched_miss");
+        }
+    }
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_VersionedBulkUpdate_UseAffectedRowsTrue_SameCountSemantics()
+    {
+        await using (DataSession<MySqlProvider> setup = await TestDb.MySqlAsync())
+        {
+            await setup.ExecuteAsync($"DROP TABLE IF EXISTS palorm_mysql_batched_uar");
+            await setup.ExecuteAsync(
+                $"CREATE TABLE palorm_mysql_batched_uar (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL, version INT NOT NULL)");
+            var seed = new List<MySqlBatchedRowUar>
+            {
+                new() { Id = 1, Name = "s1" },
+                new() { Id = 2, Name = "s2" },
+                new() { Id = 3, Name = "s3" }
+            };
+            await setup.BulkInsertAsync(seed);
+        }
+
+        try
+        {
+            // UseAffectedRows=true 时驱动上报 changed rows；version 恒递增使 found/changed 同值，
+            // 计数级冲突判定必须与默认档一致。
+            string cs = TestEnvironment.ResolveMySqlConnectionString() + ";UseAffectedRows=true";
+            await using DataSession<MySqlProvider> db =
+                await DataSession<MySqlProvider>.CreateAsync(new DbOptions { ConnectionString = cs });
+
+            List<MySqlBatchedRowUar> updated =
+            [
+                new() { Id = 1, Name = "u1" },
+                new() { Id = 2, Name = "u2" },
+                new() { Id = 3, Name = "u3" }
+            ];
+            long affected = await db.BulkUpdateAsync(updated);
+            await Assert.That(affected).IsEqualTo(3);
+            await Assert.That(updated[0].Version).IsEqualTo(1);
+
+            updated[2].Version = 99;
+            await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
+                await db.BulkUpdateAsync(updated));
+
+            List<MySqlBatchedRowUar> after = await db.From<MySqlBatchedRowUar>().ToListAsync();
+            await Assert.That(after.Count).IsEqualTo(3);
+            foreach (MySqlBatchedRowUar row in after)
+            {
+                await Assert.That(row.Name).IsEqualTo("u" + row.Id);
+                await Assert.That(row.Version).IsEqualTo(1);
+            }
+        }
+        finally
+        {
+            await using DataSession<MySqlProvider> cleanup = await TestDb.MySqlAsync();
+            await cleanup.ExecuteAsync($"DROP TABLE IF EXISTS palorm_mysql_batched_uar");
+        }
+    }
 }
 
 [Table("palorm_mysql_batched")]
@@ -152,6 +281,51 @@ internal sealed partial class MySqlBatchedRowC
 
 [Table("palorm_mysql_batched_v")]
 internal sealed partial class MySqlBatchedRowV
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public int Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("version")]
+    [ConcurrencyCheck]
+    public int Version { get; set; }
+}
+
+[Table("palorm_mysql_batched_dup")]
+internal sealed partial class MySqlBatchedRowDup
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public int Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("version")]
+    [ConcurrencyCheck]
+    public int Version { get; set; }
+}
+
+[Table("palorm_mysql_batched_miss")]
+internal sealed partial class MySqlBatchedRowMiss
+{
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public int Id { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("version")]
+    [ConcurrencyCheck]
+    public int Version { get; set; }
+}
+
+[Table("palorm_mysql_batched_uar")]
+internal sealed partial class MySqlBatchedRowUar
 {
     [Key(AutoIncrement = false)]
     [Column("id")]

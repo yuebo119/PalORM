@@ -23,8 +23,8 @@ public sealed class PoolResetCompletenessTests
     ];
 
     /// <summary>跨租期保留的字段（含理由）：
-    /// _reusableInsert/Update/GetByKey/Delete 与 _querySlot（复用槽：池化的核心收益）；
-    /// 四个 *_WriteOps/_getByKeyReadOps 计数器（晋升判据，保留使已晋升状态跨租期持续）；
+    /// _reusableInsert/Update/GetByKey/Delete/Upsert/SoftDelete 与 _querySlot（复用槽：池化的核心收益）；
+    /// 六个 *_WriteOps/_getByKeyReadOps 计数器（晋升判据，保留使已晋升状态跨租期持续）；
     /// _parallelReadConnections/_idleParallelReadConnections（并行池，作用域退出即空，
     /// Park 门禁保证归还时无作用域）；_materializedCapacity（容量启发，租期无关近似）；
     /// _readConnection（会话级读连接，AcquireReadConnectionAsync 自带死连接重建）；
@@ -32,17 +32,21 @@ public sealed class PoolResetCompletenessTests
     /// 幂等无状态，保留使第二租期起 From&lt;T&gt; 免重建）；
     /// _lastMigrationSkippedIndexes（DDL 幂等跳过缓存：类型级事实，与租期无关——守卫测试
     /// 首跑即抓到该遗漏，登记实证）；_pool/_poolBaseOptions/_poolBaseResilience（池标记与
-    /// 复位基准，永不复位）。</summary>
+    /// 复位基准，永不复位）；ResilienceGeneration（单调代际，仅用于 builder 的弹性配置
+    /// 快照判定；builder 不跨租期存活，代际无需随池基准复位）。</summary>
     private static readonly HashSet<string> KeptAcrossRentals =
     [
         "_reusableInsert", "_reusableUpdate", "_reusableGetByKey", "_reusableDelete",
+        "_reusableUpsert", "_reusableSoftDelete",
         "_querySlot",
         "_insertWriteOps", "_updateWriteOps", "_getByKeyReadOps", "_deleteWriteOps",
+        "_upsertWriteOps", "_softDeleteWriteOps",
         "_parallelReadConnections", "_idleParallelReadConnections",
         "_materializedCapacity", "_readConnection",
         "_readConnProvider", "_readConnReturner",
         "_lastMigrationSkippedIndexes",
         "_pool", "_poolBaseOptions", "_poolBaseResilience",
+        "ResilienceGeneration",
     ];
 
     /// <summary>SessionOperationState 可变字段的跨租期归属全集（按复位机制分组，全部显式登记）：

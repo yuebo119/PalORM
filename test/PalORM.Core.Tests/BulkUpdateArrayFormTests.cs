@@ -255,11 +255,69 @@ internal sealed class BulkUpdateArrayFormTests
         AssertAllStatementsAreUnnestForm(expectedBatchCount: 1, expectedColumnCount: 3);
     }
 
+    /// <summary>版本化单语句路径（ADR-P）：PG 方言夹具上执行 UNNEST 版本化 UPDATE，
+    /// 覆盖路由、版本数组、逐行版本谓词与提交后回填；SQLite 底层由夹具改写为 json_each。
+    /// <para>同时锁定语句形状：数组参数 = SET 列 + 主键 + 版本列（3 个），WHERE 含
+    /// <c>version = v.col_ver</c>，SET 含 <c>version + 1</c>。</para></summary>
+    [Test]
+    public async Task BulkUpdate_VersionedEntity_SingleStatementPath_UpdatesAndChecksVersion()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await session.ExecuteAsync(
+            System.Runtime.CompilerServices.FormattableStringFactory.Create(
+                "CREATE TABLE unnest_concurrency_rows (id INTEGER PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL)"));
+        for (int i = 1; i <= 5; i++)
+            await session.ExecuteAsync($"INSERT INTO unnest_concurrency_rows (id, name, version) VALUES ({i}, {"n" + i}, 0)");
+
+        List<ConcurrencyRow> rows = await session.From<ConcurrencyRow>().OrderBy(r => r.Id).ToListAsync();
+        foreach (ConcurrencyRow row in rows)
+            row.Name = $"vc{row.Id}";
+        Shapes.Clear();
+
+        long affected = await session.BulkUpdateAsync(rows);
+
+        await Assert.That(affected).IsEqualTo(5);
+        List<ConcurrencyRow> updated = await session.From<ConcurrencyRow>().OrderBy(r => r.Id).ToListAsync();
+        await Assert.That(updated.All(r => r.Name == $"vc{r.Id}" && r.Version == 1)).IsTrue();
+        await Assert.That(rows.All(r => r.Version == 1)).IsTrue();
+        await Assert.That(Shapes.Count).IsEqualTo(1);
+        string sql = Shapes[0].Sql;
+        await Assert.That(sql).Contains("FROM UNNEST(");
+        await Assert.That(sql).Contains("col_ver");
+        await Assert.That(sql).Contains("\"version\" = v.col_ver");
+        await Assert.That(sql).Contains("\"version\" + 1");
+        await Assert.That(Shapes[0].ParameterCount).IsEqualTo(3);
+    }
+
+    /// <summary>版本化单语句路径的冲突分支：批内一行版本陈旧 → ConcurrencyConflictException，
+    /// 整批回滚（非冲突行也不落库），实体版本不回填。</summary>
+    [Test]
+    public async Task BulkUpdate_VersionedEntity_StaleVersion_ThrowsAndRollsBack()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        await session.ExecuteAsync(
+            System.Runtime.CompilerServices.FormattableStringFactory.Create(
+                "CREATE TABLE unnest_concurrency_rows (id INTEGER PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL)"));
+        for (int i = 1; i <= 5; i++)
+            await session.ExecuteAsync($"INSERT INTO unnest_concurrency_rows (id, name, version) VALUES ({i}, {"n" + i}, 0)");
+
+        List<ConcurrencyRow> rows = await session.From<ConcurrencyRow>().OrderBy(r => r.Id).ToListAsync();
+        foreach (ConcurrencyRow row in rows)
+            row.Name = $"cf{row.Id}";
+        rows[^1].Version = 99;
+
+        await Assert.ThrowsAsync<ConcurrencyConflictException>(
+            async () => await session.BulkUpdateAsync(rows));
+
+        List<ConcurrencyRow> after = await session.From<ConcurrencyRow>().OrderBy(r => r.Id).ToListAsync();
+        await Assert.That(after.All(r => r.Name == $"n{r.Id}" && r.Version == 0)).IsTrue();
+        await Assert.That(rows.Count(r => r.Version == 1)).IsEqualTo(0);
+    }
+
     /// <summary>生成器契约（含并发令牌实体也成立）：数组列数 == SET 列数 + 1（主键）。
-    /// <para><b>为什么这条必须独立存在</b>：带 <c>[ConcurrencyCheck]</c> 的实体走不到数组形态
-    /// （两条 UPDATE 入口都拒绝），所以执行路径测不到它的列数；而并发令牌列曾被发射进数组
-    /// （个数多 1），一旦前置条件放宽就会以驱动的「参数未被使用」异常暴露。这里直接读元数据
-    /// 断言契约，把漂移挡在编译后的第一次元数据加载上。</para></summary>
+    /// <para>版本化实体的执行路径使用独立的 <c>FillVersionArray</c> 数组，不进入
+    /// <c>UpdateColumnArrays</c>，因此本契约仍按 SET + PK 断言；版本数组由上面的
+    /// 版本化单语句用例锁定。</para></summary>
     [Test]
     public async Task UpdateArrayContract_ColumnCountMatchesSetColumnsPlusKey()
     {

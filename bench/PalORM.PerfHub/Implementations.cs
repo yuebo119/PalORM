@@ -4,6 +4,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Dapper;
+using Npgsql;
+using NpgsqlTypes;
 using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Sqlite;
@@ -277,7 +279,14 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         {
             p.Value = id;
             await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            if (await r.ReadAsync(ct).ConfigureAwait(false)) found++;
+            // 口径修正：PalORM 臂调用 GetAsync 会完整物化 S1Row，Dapper 臂 QueryFirstOrDefault
+            // 同样物化；地板此前只 ReadAsync 计数，省掉了实体分配与列读取，导致 GetByKeySession/
+            // PooledGetByKey 的 P/ADO 比值失真。地板按同一物化语义计算。
+            if (await r.ReadAsync(ct).ConfigureAwait(false))
+            {
+                _ = Map(r);
+                found++;
+            }
         }
         return found;
     }
@@ -551,9 +560,13 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     {
         if (D == Dialect.Sqlite)
             return await BulkUpdateRowByRowAsync(conn, rows, tran, ct).ConfigureAwait(false);
+        if (D == Dialect.PostgreSql)
+            return await BulkUpdatePgUnnestAsync(conn, rows, tran, ct).ConfigureAwait(false);
 
         long total = 0;
-        const int batch = BulkSql.BatchRows;
+        // MySQL 8.0.19+ 的 UPDATE JOIN VALUES ROW 形态在 2000 行/批附近最优（产品同档）；
+        // 5000 行批的 SQL 文本与参数集合更大，服务端解析成本上升。
+        int batch = D == Dialect.MySql ? 2000 : BulkSql.BatchRows;
         int lastBatchLength = -1;
         string sql = "";
         DbParameter[]? updatePool = null;
@@ -599,6 +612,45 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         }
 
         return total;
+    }
+
+    /// <summary>PG 地板：UPDATE ... FROM UNNEST(数组参数)，与产品 BatchUpdateSqlBuilder 的
+    /// UNNEST 形态同代。每列一个类型化数组参数，语句文本与批宽无关，整段单次往返。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell",
+        "S3265:Non-flags enums should not be used in bitwise operations",
+        Justification = "Npgsql 官方文档要求 NpgsqlDbType.Array 与元素类型按位或组合。")]
+    private async Task<long> BulkUpdatePgUnnestAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
+    {
+        if (rows.Count == 0) return 0;
+        string[] names = new string[rows.Count];
+        int[] qtys = new int[rows.Count];
+        decimal[] prices = new decimal[rows.Count];
+        long[] markers = new long[rows.Count];
+        long[] ids = new long[rows.Count];
+        for (int i = 0; i < rows.Count; i++)
+        {
+            S1Row row = rows[i];
+            names[i] = row.Name;
+            qtys[i] = row.Qty;
+            prices[i] = row.Price;
+            markers[i] = row.Marker;
+            ids[i] = row.Id;
+        }
+
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandText =
+            $"UPDATE {T} AS tgt SET {Q("Name")} = v.c0, {Q("Qty")} = v.c1, "
+            + $"{Q("Price")} = v.c2, {Q("Marker")} = v.c3 "
+            + "FROM UNNEST(@u0, @u1, @u2, @u3, @u4) AS v(c0, c1, c2, c3, pk) "
+            + $"WHERE tgt.{Q("Id")} = v.pk";
+        cmd.Parameters.Add(new NpgsqlParameter("@u0", NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = names });
+        cmd.Parameters.Add(new NpgsqlParameter("@u1", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = qtys });
+        cmd.Parameters.Add(new NpgsqlParameter("@u2", NpgsqlDbType.Array | NpgsqlDbType.Numeric) { Value = prices });
+        cmd.Parameters.Add(new NpgsqlParameter("@u3", NpgsqlDbType.Array | NpgsqlDbType.Bigint) { Value = markers });
+        cmd.Parameters.Add(new NpgsqlParameter("@u4", NpgsqlDbType.Array | NpgsqlDbType.Bigint) { Value = ids });
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>SQLite 批量更新——逐条裹单事务（该方言实测最优：CASE WHEN 慢 6.4×）。

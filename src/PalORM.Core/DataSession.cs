@@ -18,7 +18,7 @@ namespace PalORM;
 /// <c>DbOptions.ReadConnectionString</c> 的读路由。并发能力由"会话数 = 并发度"表达，
 /// 多个会话共享同一 <see cref="DbOptions"/> 实例即可。</para></summary>
 /// <typeparam name="TProvider">数据库 Provider 类型（PostgreSqlProvider / MySqlProvider / SqliteProvider）。</typeparam>
-public sealed partial class DataSession<TProvider> : IAsyncDisposable
+public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySessionResilience
     where TProvider : IDbProvider
 {
     private readonly DbConnection _conn;
@@ -30,6 +30,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// 首个读/写弹性触点（<see cref="Resilience"/> getter）时 CAS 挂接；
     /// 池化会话在 <see cref="MarkPooled"/> 强制物化，池语义（基准实例跨租期存活）逐位不变。</summary>
     private ResilienceExecutor? _resilience;
+    /// <summary>S3b：弹性配置代际——每次 WithTimeout/WithRetry/WithCircuitBreaker 重建执行器时 +1。
+    /// QueryBuilder 捕获创建时的代际；执行时若代际未变才懒取会话执行器，变了则用捕获的
+    /// DbOptions 快照自建，保留“From 之后改配置不影响既有 builder”的原快照语义。</summary>
+    internal int ResilienceGeneration;
     private readonly List<IQueryInterceptor> _interceptors;
     private readonly ILogger _logger;
     private readonly SessionOperationState _operationState = new();
@@ -589,7 +593,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     /// <summary>W3：弹性执行器的惰性取用器——首个触点创建（CAS 良性竞态：并发首触只多建
     /// 一个实例，败者被 GC；单活动操作契约下实际不触发，同 _querySlot/_readConnProvider 先例）。
     /// 全部弹性读点经此取器，插入/批量/事务短路路径不再触发创建。</summary>
-    private ResilienceExecutor Resilience
+    internal ResilienceExecutor Resilience
     {
         get
         {
@@ -600,6 +604,26 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
             return Interlocked.CompareExchange(ref _resilience, created, null) ?? created;
         }
     }
+
+    /// <summary>S3：会话是否配置了任何弹性语义。全零（MaxRetries=0 且熔断禁用且无总预算）
+    /// 时读路径完全不经执行器，连惰性创建都不发生。</summary>
+    internal bool ResilienceConfigured
+        => _options.MaxRetries > 0
+            || _options.CircuitBreakerThreshold > 0
+            || _options.OverallDeadline > TimeSpan.Zero;
+
+    /// <summary>S3：首次尝试直接执行的可用条件——尚无执行器（会话级熔断器恒从 Closed 起步，
+    /// 首次失败前无需 Enter 检查）、非进程级熔断（进程级必须先查共享开闸状态）、且未设总预算
+    /// （总预算由执行器统一执法）。满足时成功路径零执行器、零超时 CTS、零重试委托。</summary>
+    internal bool DirectFirstReadAllowed
+        => _resilience is null
+            && _options.CircuitBreakerScope != CircuitBreakerScope.Process
+            && _options.OverallDeadline <= TimeSpan.Zero;
+
+    ResilienceExecutor IQuerySessionResilience.GetResilienceExecutor() => Resilience;
+    bool IQuerySessionResilience.SessionResilienceConfigured => ResilienceConfigured;
+    bool IQuerySessionResilience.SessionDirectFirstAllowed => DirectFirstReadAllowed;
+    int IQuerySessionResilience.ResilienceGeneration => ResilienceGeneration;
 
     /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。
     /// <para><b>并发契约（OPS-001，2026-09-23）</b>：本入口<b>不占操作门禁</b>——它是给调用方
@@ -633,6 +657,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         // Volatile.Write 保留为跨线程发布的最低保障。
         Volatile.Write(ref _options, options);
         Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider)));
+        ResilienceGeneration++;
     }
 
     /// <summary>停止后台操作，释放连接。幂等。</summary>
@@ -831,31 +856,36 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
     private async Task DisposeReusableCrudCommandsAsync()
     {
         Exception? primary = null;
-        if (_reusableInsert is { } insert)
-        {
-            try { await insert.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
-        if (_reusableUpdate is { } update)
-        {
-            try { await update.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
-        if (_reusableGetByKey is { } getByKey)
-        {
-            // C3（2026-10-11）：keyProbe 探针命令退役（键值换算改经生成器 ConvertDeleteKey
-            // 委托）——槽内只剩命令本体，单 try 即可
-            try { await getByKey.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
-        if (_reusableDelete is { } delete)
-        {
-            // R3（2026-10-12）：Delete 槽同口径释放
-            try { await delete.Command.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { RecordCleanupException(ref primary, exception); }
-        }
+        // S5：六个槽同构释放收敛到单一助手（原逐槽 if/try 把方法复杂度推过 S3776 线）。
+        if (await DisposeReusableCommandAsync(_reusableInsert).ConfigureAwait(false) is { } insertError)
+            RecordCleanupException(ref primary, insertError);
+        if (await DisposeReusableCommandAsync(_reusableUpdate).ConfigureAwait(false) is { } updateError)
+            RecordCleanupException(ref primary, updateError);
+        if (await DisposeReusableCommandAsync(_reusableGetByKey).ConfigureAwait(false) is { } getError)
+            RecordCleanupException(ref primary, getError);
+        if (await DisposeReusableCommandAsync(_reusableDelete).ConfigureAwait(false) is { } deleteError)
+            RecordCleanupException(ref primary, deleteError);
+        if (await DisposeReusableCommandAsync(_reusableUpsert).ConfigureAwait(false) is { } upsertError)
+            RecordCleanupException(ref primary, upsertError);
+        if (await DisposeReusableCommandAsync(_reusableSoftDelete).ConfigureAwait(false) is { } softDeleteError)
+            RecordCleanupException(ref primary, softDeleteError);
         if (primary is not null)
             ExceptionDispatchInfo.Capture(primary).Throw();
+    }
+
+    /// <summary>S5：单槽释放，返回清理异常（无槽/无异常返回 null）。</summary>
+    private static async Task<Exception?> DisposeReusableCommandAsync(ReusableCrudCommand? slot)
+    {
+        if (slot is null) return null;
+        try
+        {
+            await slot.Command.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
     }
 
     private static EntityFeatures GetEntityFeatures<T>() where T : class, new()
@@ -880,6 +910,22 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable
         EntityInfoCache.Store<T>(info);
         return info;
     }
+
+    /// <summary>CRUD 入口的静态视图取用：保留旧入口的 "has no generated CRUD" 错误消息
+    /// （投影类型只有行工厂，没有 CRUD 元数据）。冷路径才查一次注册表，命中静态缓存后零查找。</summary>
+    private static EntityRuntimeInfo GetEntityInfoForCrud<T>() where T : class, new()
+    {
+        if (EntityInfoCache.Per<T>.Info is { } cached)
+            return cached;
+        if (!PalORM_Runtime.CurrentState._crudMetadatas.ContainsKey(typeof(T)))
+            throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
+        return GetEntityInfo<T>();
+    }
+
+    /// <summary>S1：取注册期投影的 CRUD 引用视图（热路径只持有 8B 引用）。</summary>
+    private static CrudPlan GetCrudPlan<T>(EntityRuntimeInfo info) where T : class, new()
+        => info.Plan
+            ?? throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
 
     /// <summary>刀1：行工厂的每类型静态缓存——直查族（QueryAsync/QueryAsyncEnumerable/
     /// QueryFirst/QuerySingle）专用。T 允许是 [Projection] 类型（只进 RowFactories 不进

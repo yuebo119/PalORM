@@ -228,17 +228,40 @@ public sealed partial class DataSession<TProvider>
     private ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, CancellationToken ct)
         => ExecuteReadScalarAsync(command, GetActiveTransaction(), ct);
 
-    /// <summary>刀2：事务由调用方单次取用后传入的重载。</summary>
-    private ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
+    /// <summary>刀2：事务由调用方单次取用后传入的重载。S3：首次尝试直接执行，失败后才
+    /// 物化执行器续跑剩余重试（成功路径零 CTS/零委托/零执行器）。</summary>
+    private async ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
-        ResilienceExecutor executor = Resilience;
-        if (executor.IsPassThrough || activeTransaction is not null)
-            return ExecuteScalarCoreAsync(command, ct);
+        if (activeTransaction is not null || !ResilienceConfigured)
+            return await ExecuteScalarCoreAsync(command, ct).ConfigureAwait(false);
+        if (DirectFirstReadAllowed)
+        {
+            try
+            {
+                return await ExecuteScalarCoreAsync(command, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
+            {
+                ResilienceExecutor executor = Resilience;
+                if (_options.MaxRetries > 0)
+                {
+                    return await executor.ExecuteAfterFirstFailureAsync(
+                        static (cmd, token) => ExecuteScalarCoreAsync(cmd, token).AsTask(),
+                        command,
+                        ct).ConfigureAwait(false);
+                }
+                executor.RecordDirectFailure(ex);
+                throw;
+            }
+        }
+        ResilienceExecutor fallback = Resilience;
+        if (fallback.IsPassThrough)
+            return await ExecuteScalarCoreAsync(command, ct).ConfigureAwait(false);
         // R4-λ:static lambda + 命令状态,闭包归零(原捕获 command 的 display class ~56B/读)
-        return executor.ExecuteAsync(
+        return await fallback.ExecuteAsync(
             static (cmd, token) => ExecuteScalarCoreAsync(cmd, token).AsTask(),
             command,
-            ct);
+            ct).ConfigureAwait(false);
     }
 
     private static ValueTask<object?> ExecuteScalarCoreAsync(DbCommand command, CancellationToken ct)
@@ -349,9 +372,7 @@ public sealed partial class DataSession<TProvider>
     private static void BindGeneratedKeyParameter<T>(DbCommand cmd, object key)
         where T : class, new()
     {
-        if (PalORM_Runtime.BindDelete.TryGetValue(
-                typeof(T),
-                out Action<DbCommand, object>? binder))
+        if (GetEntityInfo<T>().BindDelete is { } binder)
         {
             binder(cmd, key);
             return;

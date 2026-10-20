@@ -1052,7 +1052,7 @@ internal static class Program
         // verify-），每次都是"跑了单方言却没声明成子集"。判定不能只信 label：**新批次的方言集
         // 若是上一个可引用批次的真子集，说明覆盖面缩水，无论 label 写了什么都不得顶 latest**。
         // 只挡真子集（更少的方言），同方言重跑不受影响；上一个 latest 不存在/不可解析时放行。
-        string? coverageReason = DetectCoverageRegression(dir, json);
+        string? coverageReason = DetectCoverageRegression(dir, json, label);
         if (!PerfResultWriter.IsSubsetLabel(label) && hasRealMeasurement && coverageReason is null)
         {
             File.WriteAllText(Path.Combine(dir, "latest.json"), json);
@@ -1082,7 +1082,7 @@ internal static class Program
     /// 不可解析（历史文件格式漂移、被删）时返回 null 放行——该守卫是增量护栏，
     /// 不做"读不到就不许写"的失败关闭（那会让一次格式演进永久锁死 latest 更新）。</para>
     /// <para>返回 null 表示放行，否则返回人类可读的拦截原因。</para></summary>
-    private static string? DetectCoverageRegression(string dir, string newJson)
+    private static string? DetectCoverageRegression(string dir, string newJson, string label)
     {
         string latestPath = Path.Combine(dir, "latest.json");
         if (!File.Exists(latestPath))
@@ -1126,8 +1126,11 @@ internal static class Program
             // 真子集判定：新方言集被旧集合完全覆盖且严格更少
             if (newDialects.Count < prevDialects.Count && newDialects.IsSubsetOf(prevDialects))
             {
+                string suffix = PerfResultWriter.IsSubsetLabel(label)
+                    ? $"（本批 label={label} 已带子集标记）"
+                    : "，请给跑测加子集 label（如 --label verify-…）或补跑其余方言";
                 return $"方言覆盖面缩水（本批 {string.Join('/', newDialects)} ⊂ 上一批 {string.Join('/', prevDialects)}）"
-                    + "，请给跑测加子集 label（如 --label verify-…）或补跑其余方言";
+                    + suffix;
             }
 
             return null;
