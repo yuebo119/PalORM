@@ -85,7 +85,8 @@ found rows（匹配行），不是 changed rows。版本列恒递增使两者对
 - 探针：`bench/PalORM.Benchmarks --versioned-update pg|mysql 1000`，信封
   `bench/results/benchmarks-20261020-093154.json` / `-093155.json`。
 - 集成：`PgBatchedUpdatePathTests` / `MySqlBatchedUpdatePathTests`（跨批、冲突、重复键、
-  缺失行、延迟回填、`UseAffectedRows` 两档、单行回退）。
+  缺失行、延迟回填、`UseAffectedRows` 两档、单行回退）；`VersionedBulkUpdateBusinessShapeTests`
+  以订单行宽实体在 1000/5000 行上验证外部并发写入、调用方诊断合并重试、重复键去重重试。
 - 单元：`BatchUpdateSqlBuilderTests` 版本化 SQL 快照；SourceGen 快照新增
   `FullFeatureEntity.Version` 覆盖生成方法。
 
