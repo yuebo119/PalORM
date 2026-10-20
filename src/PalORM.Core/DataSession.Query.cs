@@ -26,7 +26,7 @@ public sealed partial class DataSession<TProvider>
         // CountBaseSqlCache/CountComposedSqlCache 元组键字典）；wherePrefix 保持惰性
         //（既有修正语义：无 where 的 Empty 形态直出基底，不付 " WHERE (" 拼接）。
         int filterSlot = FilterSlotBits(info.Features);
-        string baseSql = SqlSlots<T>.CountBaseOrBuilt(TProvider.QuoteIdentifier(info.TableName));
+        string baseSql = SqlSlots<T>.CountBaseOrBuilt(SqlSlots<T>.QuotedTableNameOrBuilt(info.TableName));
         string sql;
         if (where is null)
         {
@@ -120,10 +120,11 @@ public sealed partial class DataSession<TProvider>
         // AggregateSuffixCache/AggregateFilteredSuffixCache 元组键字典）——只剩 "SELECT {fn}("
         // 前缀与表达式文本每次拼（1 次 concat）。R3（2026-10-12）原纪律保持：过滤判别单次求值。
         int aggregateSlot = FilterSlotBits(info.Features);
+        string quotedTable = SqlSlots<T>.QuotedTableNameOrBuilt(info.TableName);
         string suffix = aggregateSlot == 0
-            ? SqlSlots<T>.AggregateSuffixOrBuilt(TProvider.QuoteIdentifier(info.TableName))
+            ? SqlSlots<T>.AggregateSuffixOrBuilt(quotedTable)
             : SqlSlots<T>.AggregateFilteredSuffixOrBuilt(
-                aggregateSlot, TProvider.QuoteIdentifier(info.TableName),
+                aggregateSlot, quotedTable,
                 GetDefaultFilterForms<T>(info.Features).WhereClause);
         return await ExecuteScalarAsync(
             $"SELECT {function}(" + FormatSqlWithParameters(expression) + suffix,

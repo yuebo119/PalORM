@@ -1176,7 +1176,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         int timeoutSeconds = _options.CommandTimeoutSeconds;
         if (command.CommandTimeout != timeoutSeconds)
             command.CommandTimeout = timeoutSeconds;
-        if (!string.Equals(command.CommandText, commandText, StringComparison.Ordinal))
+        // 2026-10-20 微项：CommandText 先走引用相等——文本来自静态槽，同一实例命中即零扫描；
+        // 未命中（外部命令/形状漂移）才落序数比较。
+        if (!ReferenceEquals(command.CommandText, commandText)
+            && !string.Equals(command.CommandText, commandText, StringComparison.Ordinal))
             command.CommandText = commandText;
     }
 

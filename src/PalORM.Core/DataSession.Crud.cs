@@ -763,10 +763,11 @@ public sealed partial class DataSession<TProvider>
             throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
 
         T materialized = ((Func<DbDataReader, T>)plan.RowFactory)(reader);
-        // 回填对齐 MySQL 路径（ITM-325）；S1：回填委托与主键列名来自同一注册期静态视图。
+        // 回填对齐 MySQL 路径（ITM-325）；S1：回填委托与主键列名来自同一注册期静态视图；
+        // 2026-10-20：ordinal 也在注册期算好（RowFactory 与 RETURNING 同列序），命中路径免名称查找。
         if (info.SetId is { } backfill && info.PkColumn is { } pkColumn)
         {
-            int pkOrdinal = reader.GetOrdinal(pkColumn);
+            int pkOrdinal = plan.PkOrdinal >= 0 ? plan.PkOrdinal : reader.GetOrdinal(pkColumn);
             if (!await reader.IsDBNullAsync(pkOrdinal, ct).ConfigureAwait(false))
                 BackfillGeneratedId(backfill, entity, reader.GetInt64(pkOrdinal));
         }
@@ -1056,6 +1057,16 @@ public sealed partial class DataSession<TProvider>
         /// <summary>S1：租户护栏后的 UPSERT 冲突子句（(TProvider, T) 恒定；MySQL 的
         /// IF(...) 包装含正则，缓存后消除每次批量 UPSERT 的 Regex.Replace）。</summary>
         public static string? UpsertTenantConflictClause;
+
+        /// <summary>2026-10-20 微项：引用后的表名按 (TProvider, T) 缓存一次——原调用点把
+        /// <c>TProvider.QuoteIdentifier(info.TableName)</c> 作为槽 getter 的实参，槽命中时
+        /// 实参仍先求值，Provider 实现每次返回新串（SQLite 无内嵌引号时走 string.Concat）。
+        /// 表名在类型级恒定，缓存后命中路径零分配；标识符校验在首次构建时执行一次。</summary>
+        public static string? QuotedTableName;
+
+        /// <summary>引用表名的静态取用器（首次构建后命中零分配）。</summary>
+        public static string QuotedTableNameOrBuilt(string tableName)
+            => QuotedTableName ??= TProvider.QuoteIdentifier(tableName);
 
         /// <summary>S2696 归位：静态槽的写入收敛到本类的静态取用器（构建入参由调用方传入，
         /// 命中路径零额外分配）——CountAsync 基底句。</summary>

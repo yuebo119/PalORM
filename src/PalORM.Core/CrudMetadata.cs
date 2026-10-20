@@ -210,6 +210,10 @@ internal sealed class CrudPlan
     internal readonly Func<object, bool> HasDefaultKey;
     internal readonly bool InsertReturningKeyOnly;
     internal readonly bool InsertNoReturning;
+    /// <summary>主键在 RowFactory / INSERT ... RETURNING 结果集中的序号（注册期由
+    /// ColumnNames 与 PkColumn 计算；-1 = 无主键或投影类型）。非 key-only RETURNING
+    /// 回填路径据此免去每行一次 <c>reader.GetOrdinal</c> 名称查找。</summary>
+    internal readonly int PkOrdinal;
     internal readonly Action<IBinaryRowSink, object>? CopyWriteRow;
     internal readonly Action<DbParameter[], int>? InitInsertParameters;
     internal readonly Func<IReadOnlyList<object>, int, int, Array?>? BuildDeleteKeyArray;
@@ -223,8 +227,9 @@ internal sealed class CrudPlan
     internal readonly Action<DbParameter[], int>? InitUpdateParameters;
     internal readonly Func<object, object?>? ConvertDeleteKey;
 
-    internal CrudPlan(CrudMetadata metadata)
+    internal CrudPlan(CrudMetadata metadata, int pkOrdinal = -1)
     {
+        PkOrdinal = pkOrdinal;
         InsertColumns = metadata.InsertColumns;
         UpsertColumns = metadata.UpsertColumns;
         UpdateColumns = metadata.UpdateColumns;
