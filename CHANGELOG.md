@@ -20,8 +20,9 @@
 - **实测**（`--versioned-update` 探针，1000 行，产品 `BulkUpdateAsync` 前后对比）：
   PG 18.6ms → 7.09ms（分配 1.60MB → 30KB）；MySQL 52.4ms → 19.0ms（1.84MB → 1.0MB）。
   单语句地板 PG 6.05ms / MySQL 14.15ms，产品与地板差距来自参数池与冲突校验。
-- **验证**：Core 616/616 · SourceGen 236/236 · Integration 真库 299/299（新增重复主键、
-  缺失行、`UseAffectedRows` 两档、单行回退用例）；SQL 形态快照 11/11。
+- **验证**：Core 616/616 · SourceGen 236/236 · Integration 真库 304/304（新增重复主键、
+  缺失行、`UseAffectedRows` 两档、单行回退，以及真实业务形状 1000/5000 行冲突与
+  调用方诊断重试用例）；SQL 形态快照 11/11。
 
 ### 📦 依赖升级（2026-10-19）
 
