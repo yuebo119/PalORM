@@ -35,6 +35,28 @@ public sealed class RegistryFragment
     /// <summary>类型 → 主键列名。</summary>
     public required IReadOnlyDictionary<Type, string> PkColumns { get; init; }
 
+    /// <summary>类型 → 并发令牌列名。可选键：仅生成器判定可走版本化单语句批量更新时存在
+    /// （[ConcurrencyCheck] 列、非空、无转换器、CLR 类型 int/long）。旧片段缺省为空集。</summary>
+    public IReadOnlyDictionary<Type, string> ConcurrencyColumns { get; init; }
+        = FrozenDictionary<Type, string>.Empty;
+
+    /// <summary>类型 → 版本值参数绑定委托（<c>(parameters, entity, index)</c> 只写 Value）。
+    /// 可选键，语义同 <see cref="ConcurrencyColumns"/>。</summary>
+    public IReadOnlyDictionary<Type, Action<DbParameter[], object, int>> BindVersionValues { get; init; }
+        = FrozenDictionary<Type, Action<DbParameter[], object, int>>.Empty;
+
+    /// <summary>类型 → 版本数组元素类型（PG UNNEST 形态用）。可选键。</summary>
+    public IReadOnlyDictionary<Type, Type> VersionArrayElementTypes { get; init; }
+        = FrozenDictionary<Type, Type>.Empty;
+
+    /// <summary>类型 → 版本数组分配器（PG UNNEST 形态用，AOT 安全）。可选键。</summary>
+    public IReadOnlyDictionary<Type, Func<int, Array>> CreateVersionArrays { get; init; }
+        = FrozenDictionary<Type, Func<int, Array>>.Empty;
+
+    /// <summary>类型 → 版本数组填充器（PG UNNEST 形态用）。可选键。</summary>
+    public IReadOnlyDictionary<Type, Action<IReadOnlyList<object>, int, int, Array>> FillVersionArrays { get; init; }
+        = FrozenDictionary<Type, Action<IReadOnlyList<object>, int, int, Array>>.Empty;
+
     /// <summary>类型 → 列名数组。注册时做只读快照，片段可安全复用生成代码的静态数组。</summary>
     public required IReadOnlyDictionary<Type, string[]> ColumnNames { get; init; }
 
@@ -114,6 +136,21 @@ public sealed class EntityRuntimeInfo
 
     /// <summary>主键列名（注册期快照）——INSERT ... RETURNING 回填与批量删除免字典查找。</summary>
     public string? PkColumn { get; init; }
+
+    /// <summary>并发令牌列名（注册期快照）——版本化单语句批量更新用；不可走该形态的实体为 null。</summary>
+    public string? ConcurrencyColumn { get; init; }
+
+    /// <summary>版本值参数绑定委托（MySQL VALUES ROW 形态用）；旧生成器或不可用形态为 null。</summary>
+    public Action<DbParameter[], object, int>? BindVersionValue { get; init; }
+
+    /// <summary>版本数组元素类型（PG UNNEST 形态用）；不可用形态为 null。</summary>
+    public Type? VersionArrayElementType { get; init; }
+
+    /// <summary>版本数组分配器（PG UNNEST 形态用）；不可用形态为 null。</summary>
+    public Func<int, Array>? CreateVersionArray { get; init; }
+
+    /// <summary>版本数组填充器（PG UNNEST 形态用）；不可用形态为 null。</summary>
+    public Action<IReadOnlyList<object>, int, int, Array>? FillVersionArray { get; init; }
 }
 
 /// <summary>编译时注册表。各模型程序集的 ModuleInitializer 通过 <see cref="Register"/> 合并片段。</summary>
@@ -286,6 +323,14 @@ public static class PalORM_Runtime
                 _bindUpdate = Merge(current._bindUpdate, fragment.BindUpdate),
                 _bindDelete = Merge(current._bindDelete, fragment.BindDelete),
                 _pkColumns = Merge(current._pkColumns, fragment.PkColumns),
+                _concurrencyColumns = Merge(current._concurrencyColumns, fragment.ConcurrencyColumns),
+                _bindVersionValues = Merge(current._bindVersionValues, fragment.BindVersionValues),
+                _versionArrayElementTypes = Merge(
+                    current._versionArrayElementTypes, fragment.VersionArrayElementTypes),
+                _createVersionArrays = Merge(
+                    current._createVersionArrays, fragment.CreateVersionArrays),
+                _fillVersionArrays = Merge(
+                    current._fillVersionArrays, fragment.FillVersionArrays),
                 _columnNames = columnNames.ToFrozenDictionary(),
                 _propertyToColumn = propertyMappings.ToFrozenDictionary(),
                 _createTableSql = Merge(current._createTableSql, fragment.CreateTableSql),
@@ -318,6 +363,11 @@ public static class PalORM_Runtime
                     BindDelete = next._bindDelete.GetValueOrDefault(pair.Key),
                     SetId = next._setIdDelegates.GetValueOrDefault(pair.Key),
                     PkColumn = next._pkColumns.GetValueOrDefault(pair.Key),
+                    ConcurrencyColumn = next._concurrencyColumns.GetValueOrDefault(pair.Key),
+                    BindVersionValue = next._bindVersionValues.GetValueOrDefault(pair.Key),
+                    VersionArrayElementType = next._versionArrayElementTypes.GetValueOrDefault(pair.Key),
+                    CreateVersionArray = next._createVersionArrays.GetValueOrDefault(pair.Key),
+                    FillVersionArray = next._fillVersionArrays.GetValueOrDefault(pair.Key),
                 };
             }
             next._entityInfo = entityInfo.ToFrozenDictionary();
@@ -387,6 +437,15 @@ public static class PalORM_Runtime
         internal FrozenDictionary<Type, Action<DbCommand, object>> _bindUpdate { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
         internal FrozenDictionary<Type, Action<DbCommand, object>> _bindDelete { get; init; } = FrozenDictionary<Type, Action<DbCommand, object>>.Empty;
         internal FrozenDictionary<Type, string> _pkColumns { get; init; } = FrozenDictionary<Type, string>.Empty;
+        internal FrozenDictionary<Type, string> _concurrencyColumns { get; init; } = FrozenDictionary<Type, string>.Empty;
+        internal FrozenDictionary<Type, Action<DbParameter[], object, int>> _bindVersionValues { get; init; }
+            = FrozenDictionary<Type, Action<DbParameter[], object, int>>.Empty;
+        internal FrozenDictionary<Type, Type> _versionArrayElementTypes { get; init; }
+            = FrozenDictionary<Type, Type>.Empty;
+        internal FrozenDictionary<Type, Func<int, Array>> _createVersionArrays { get; init; }
+            = FrozenDictionary<Type, Func<int, Array>>.Empty;
+        internal FrozenDictionary<Type, Action<IReadOnlyList<object>, int, int, Array>> _fillVersionArrays { get; init; }
+            = FrozenDictionary<Type, Action<IReadOnlyList<object>, int, int, Array>>.Empty;
         internal FrozenDictionary<Type, IReadOnlyList<string>> _columnNames { get; init; } = FrozenDictionary<Type, IReadOnlyList<string>>.Empty;
         internal FrozenDictionary<Type, FrozenDictionary<string, string>> _propertyToColumn { get; init; } = FrozenDictionary<Type, FrozenDictionary<string, string>>.Empty;
         internal FrozenDictionary<Type, string> _createTableSql { get; init; } = FrozenDictionary<Type, string>.Empty;

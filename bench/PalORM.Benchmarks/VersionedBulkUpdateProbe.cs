@@ -16,18 +16,17 @@ using PalORM.Sqlite;
 
 namespace PalORM.Benchmarks;
 
-/// <summary>S6 探针：版本化（[ConcurrencyCheck]）实体的单语句批量更新是否值得实现。
-/// <para><b>背景</b>：产品 <c>BulkUpdateAsync</c> 对带 <c>IncrementVersion</c> 的实体恒走逐条
-/// （每条 SQL 都带 <c>WHERE pk=@p AND version=@v</c>，批内共享单事务）。这是语义上最直接的
-/// 形态，但 N 行付 N 次协议往返。<b>探针只回答"上限差多少"</b>，不实现产品路径——单语句形态
-/// 要保住"逐行冲突可归因 + 整批回滚"的既有契约，还需要方言各自的冲突报告方案
-/// （PG 可 RETURNING 主键，MySQL 只有 affected rows 且默认是 changed rows 口径）。</para>
-/// <para><b>对照臂</b>：① 产品现行路径（逐条池化，单事务）；② 候选地板（PG UNNEST /
-/// MySQL UPDATE JOIN VALUES ROW，每行附带 version 谓词并 <c>version = version + 1</c>）。
-/// SQLite 无等值 JOIN 形态（CASE WHEN 在无版本列时已实测慢 6.4×），只报产品形态。</para>
+/// <summary>版本化（[ConcurrencyCheck]）实体批量更新的产品路径与单语句地板对照。
+/// <para><b>背景</b>：v6.5 起产品 <c>BulkUpdateAsync</c> 在 PG UNNEST 或 MySQL
+/// JoinValuesRow 能力可用时，对版本化实体自动路由到单语句（逐行 version 谓词 +
+/// <c>version = version + 1</c>），冲突按受影响计数判定；能力不全回退逐条 DbBatch。
+/// 本探针在实现前量化上限差（PG 3.06× / MySQL 4.73×，1000 行），实现后用于验证产品
+/// 自动路由与地板的距离。</para>
+/// <para><b>对照臂</b>：① 产品 <c>BulkUpdateAsync</c>（自动路由；不支持时逐条池化，单事务）；
+/// ② 单语句地板（PG UNNEST / MySQL UPDATE JOIN VALUES ROW，SQL 与参数对象测量外预建）。
+/// SQLite 无等值 JOIN 形态（CASE WHEN 已实测慢 6.4×），只报产品形态。</para>
 /// <para><b>口径</b>：两条臂各用独立 id 区间（产品 1..N，候选 N+1..2N），避免同表同行的
-/// 版本串扰；候选臂的 SQL 与参数对象在测量外预建，稳态只填值（与产品复用槽同口径）。
-/// 每操作包一个事务提交，与产品批内单事务语义对齐。</para></summary>
+/// 版本串扰；每操作包一个事务提交，与产品批内单事务语义对齐。</para></summary>
 internal static class VersionedBulkUpdateProbe
 {
     /// <summary>产品臂经生成元数据写实体表（与 <see cref="BenchVersioned"/> 的 [Table] 同名），
@@ -281,12 +280,12 @@ internal static class VersionedBulkUpdateProbe
     {
         string line = supportsCandidate
             ? string.Format(CultureInfo.InvariantCulture,
-                "[versioned-update] {0} rows={1}: product(逐条池化)={2:F1} µs（{3} B） · "
+                "[versioned-update] {0} rows={1}: product(自动路由)={2:F1} µs（{3} B） · "
                 + "candidate(单语句)={4:F1} µs（{5} B） · speedup={6:F2}×",
                 dialect, rows, productUs, productAlloc, candidateUs, candidateAlloc,
                 productUs / candidateUs)
             : string.Format(CultureInfo.InvariantCulture,
-                "[versioned-update] {0} rows={1}: product(逐条池化)={2:F1} µs（{3} B） · "
+                "[versioned-update] {0} rows={1}: product(自动路由)={2:F1} µs（{3} B） · "
                 + "candidate=N/A（SQLite 无等值 JOIN 形态）",
                 dialect, rows, productUs, productAlloc);
         Console.WriteLine(line);
@@ -303,7 +302,7 @@ internal static class VersionedBulkUpdateProbe
                 ConnectionConfig = dialect == "SQLite"
                     ? BenchmarkConfig.RegimeFileDb
                     : "pg/mysql: 驱动默认（探针；每条臂各一个专用 id 区间）",
-                SessionLifecycle = "产品逐条池化（单事务） vs 单语句候选（单事务）",
+                SessionLifecycle = "产品 BulkUpdateAsync（自动路由，单事务） vs 单语句候选（单事务）",
                 Health = "unknown"
             }
         };
@@ -325,7 +324,7 @@ internal static class VersionedBulkUpdateProbe
             Dialect = dialect,
             Label = $"rows={rows}",
             Note = supportsCandidate
-                ? "带 [ConcurrencyCheck] 的批量更新：产品逐条（每行 version 谓词）vs 单语句等值 JOIN 候选；仅观测，不卡阈值"
+                ? "带 [ConcurrencyCheck] 的批量更新：产品自动路由 vs 单语句地板；仅观测，不卡阈值"
                 : "带 [ConcurrencyCheck] 的批量更新：SQLite 产品形态（逐条裹单事务）；无单语句候选",
             Metrics = metrics
         });

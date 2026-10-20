@@ -48,7 +48,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 **全链路 Native AOT**。.NET 生态唯一完整支持全链路 Native AOT 的 ORM：SQLite / PostgreSQL / MySQL 三方言发布验证全部通过（运行输出 `PalORM AOT verification PASSED`），无反射、无 IL Emit、无运行时代码生成。部署细节见 [docs/AOT部署指南.md](docs/AOT部署指南.md)。
 
-**三方言批量策略**。同一套 API 按方言自动选择最快路径：PG Binary COPY、MySQL BulkCopy（LOAD DATA，服务端关闭时自动回退多值 INSERT）、SQLite 多值 INSERT。单语句批量 UPDATE（PG `UPDATE FROM VALUES` / MySQL `UPDATE JOIN VALUES ROW`，8.0.19+ 低版本回退 CASE WHEN）；乐观锁实体批量更新走 DbBatch 打包，PG 远程库实测 7.85×（v5.9 探针二十八，200 命令事务内 15.1ms vs 逐条 118.7ms）。
+**三方言批量策略**。同一套 API 按方言自动选择最快路径：PG Binary COPY、MySQL BulkCopy（LOAD DATA，服务端关闭时自动回退多值 INSERT）、SQLite 多值 INSERT。单语句批量 UPDATE（PG `UPDATE FROM VALUES` / `UPDATE FROM UNNEST` / MySQL `UPDATE JOIN VALUES ROW`，8.0.19+ 低版本回退 CASE WHEN）；版本化实体（`[ConcurrencyCheck]`）在 PG/MySQL 能力支持时同样走版本化单语句（逐行 version 谓词，S6 探针 1000 行 PG 3.06× / MySQL 4.73×），能力不全回退 DbBatch 逐条。
 
 **企业级横切开箱即用**。多租户列隔离（查询缓存 key 自动加租户前缀，跨租户命中不可能）、乐观锁、软删除、审计拦截器、读写分离（`ForRead`）、咨询锁、弹性重试 + 熔断（v5.4 起自动覆盖只读查询管线），无需样板代码。
 
@@ -79,7 +79,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **三方言批量策略**         | ✓ COPY / BulkCopy / 多值 / `= ANY` 数组                          | ❌ 手写多值 SQL              | △ Provider 各异                         | △ BulkInsert 仅 SQL Server  |
 | **单语句多行 UPDATE**    | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN           | ❌                       | ❌ ExecuteUpdate 仅按 WHERE 单值           | ❌                          |
 | **批量 UPSERT**       | ✓ `BulkMergeAsync`（ON CONFLICT / ON DUPLICATE KEY，冲突更新限定本租户） | ❌ 手写                    | ❌ 需 raw SQL                           | △ Merge 仅 SQL Server       |
-| **乐观锁**             | ✓ `[ConcurrencyCheck]` 自动；批量走 DbBatch 打包                     | ❌ 手写                    | ✓ `RowVersion` 自动                     | ❌ 手写                       |
+| **乐观锁**             | ✓ `[ConcurrencyCheck]` 自动；批量单语句（PG/MySQL，能力不全回退 DbBatch） | ❌ 手写                    | ✓ `RowVersion` 自动                     | ❌ 手写                       |
 | **软删除**             | ✓ `[SoftDelete]` 自动过滤（含批量删转 UPDATE）                          | ❌                       | ✓ 全局查询过滤器                             | ❌                          |
 | **多租户列隔离**          | ✓ `[TenantAware]` 编译时；批量写跨租户护栏                               | ❌                       | △ 需手动实现                               | ❌                          |
 | **值转换 + 枚举存储**      | ✓ `[Converter]` / 枚举三策略（int32/int64/文本）编译时发射                 | △ TypeHandler 手写        | ✓ ValueConverter / HasConversion（运行时） | △ TypeHandler              |
@@ -339,7 +339,7 @@ await db.DeleteAsync<User>(alice.Id);
 // 批量插入（PG: Binary COPY / MySQL: BulkCopy 或多值 INSERT / SQLite: 多值 INSERT）
 await db.BulkInsertAsync(users);
 
-// 批量更新（逐条 + 乐观锁；v5.9 起 MySQL/PG 并发实体走 DbBatch 打包）
+// 批量更新（乐观锁实体：PG/MySQL 自动走版本化单语句，能力不全回退 DbBatch）
 await db.BulkUpdateAsync(users);
 
 // 批量更新（v5.0 单语句批量）
@@ -357,7 +357,7 @@ await db.BulkMergeAsync(users);
 | 方法                     | PG                                 | MySQL                                             | SQLite                             |
 | ---------------------- | ---------------------------------- | ------------------------------------------------- | ---------------------------------- |
 | `BulkInsertAsync`      | Binary COPY                        | BulkCopy（local_infile）或多值 INSERT                  | 多值 INSERT                          |
-| `BulkUpdateAsync`      | 逐条 + 乐观锁（DbBatch 打包）               | 逐条 + 乐观锁（DbBatch 打包）                              | 逐条 + 乐观锁                           |
+| `BulkUpdateAsync`      | 版本化单语句 + 乐观锁（能力不全回退 DbBatch）         | 版本化单语句 + 乐观锁（能力不全回退 DbBatch）                   | 逐条 + 乐观锁                           |
 | `BulkUpdateBatchAsync` | `FROM VALUES`                      | `UPDATE JOIN VALUES ROW`（8.0.19+，低版本回退 CASE WHEN） | 自动回退逐条                             |
 | `BulkDeleteAsync`      | `= ANY(数组)` 单语句                    | `IN` 分批单语句                                        | `IN` 分批单语句                         |
 | `BulkMergeAsync`       | 多行 UPSERT（`ON CONFLICT DO UPDATE`） | 多行 UPSERT（`ON DUPLICATE KEY UPDATE`）              | 多行 UPSERT（`ON CONFLICT DO UPDATE`） |
@@ -610,7 +610,7 @@ dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqli
 | 批量插入且需逐行回填自增 ID  | `BulkMergeAsync`（默认键走逐条回填）或 `SessionBatch` | `BulkInsertAsync`      | COPY / LOAD DATA 不回填 ID                                 |
 | 混合语句或需逐条语义控制     | `SessionBatch`（DbBatch 打包）                 | 逐条往返                   | 单往返打包多语句，SQLite 20 条/批                                  |
 | 按非主键列批量更新（每行不同值） | `BulkUpdateBatchAsync`                     | 逐条                     | 单语句多行 SET（PG `FROM VALUES` / MySQL `JOIN VALUES ROW`）   |
-| 乐观锁实体批量更新        | `BulkUpdateAsync`                          | `BulkUpdateBatchAsync` | UPSERT/单语句形态无法逐行校验版本；DbBatch 打包保语义                      |
+| 乐观锁实体批量更新        | `BulkUpdateAsync`                          | `BulkUpdateBatchAsync` | 版本化单语句（PG UNNEST / MySQL JOIN VALUES ROW）逐行校验版本；能力不全回退 DbBatch |
 | 插入或更新（键存在则更新）    | `BulkMergeAsync`                           | 手写 ON CONFLICT         | 租户实体自动限定本租户（跨租户命中 0 行）                                  |
 | 大键集删除（万级以上）      | `BulkDeleteAsync`                          | 逐条 Delete              | 自动按方言参数上限分批（SQLite 999 / MySQL·PG 数千），整批单事务，满批命令与参数池化复用 |
 
@@ -683,7 +683,7 @@ await using var db = await factory.RentAsync(ct);
 
 - 批量 API 按上方选型速查表选择；不要在循环里逐条 `InsertAsync`（连接往返是数量级差异）
 - 唯一键冲突捕获 `UniqueConstraintViolationException`（跨方言统一翻译，不用记驱动错误码）；乐观锁冲突捕获 `ConcurrencyConflictException`（重读数据合并后重试）
-- `[ConcurrencyCheck]` 实体不要调 `BulkUpdateBatchAsync`（单语句形态无法逐行校验版本，PALORM031 编译期已拦），批量更新走 `BulkUpdateAsync`（DbBatch 打包保语义）
+- `[ConcurrencyCheck]` 实体不要调 `BulkUpdateBatchAsync`（显式单语句 API 不承载逐行版本谓词，PALORM031 编译期已拦），批量更新走 `BulkUpdateAsync`（自动路由到版本化单语句，能力不全回退 DbBatch）
 - `BulkInsertAsync` 不回填自增 ID（COPY / LOAD DATA 契约）；需逐行回填用 `BulkMergeAsync`（默认键走逐条）或 `SessionBatch`
 - 可能存 NULL 的列声明可空属性（`string?`），非可空遇 NULL 会响亮抛 `SqlNullValueException`（不出静默 null）
 - 敏感列标 `[SensitiveData]`（审计日志与拦截器自动掩码）；非幂等写不要指望自动重试（写入路径直连语义），确需弹性用 `ExecuteWithResilience` 包裹并自行评估重复执行风险

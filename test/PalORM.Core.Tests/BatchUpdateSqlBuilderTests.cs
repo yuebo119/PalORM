@@ -102,6 +102,68 @@ public sealed class BatchUpdateSqlBuilderTests
     }
 
     [Test]
+    public async Task BuildPostgreSqlUnnest_Versioned_AppendsVersionArrayAndPredicate()
+    {
+        string sql = BatchUpdateSqlBuilder.Build(
+            SqlDialect.PostgreSql, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: false, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.UnnestArrays,
+            quotedConcurrencyColumn: "\"version\"");
+
+        await Assert.That(sql).Contains(
+            "SET \"a\" = v.col0, \"version\" = tgt.\"version\" + 1");
+        await Assert.That(sql).Contains(
+            "FROM UNNEST(@u0, @u1, @u2) AS v(col0, col_pk, col_ver)");
+        await Assert.That(sql).Contains(
+            "WHERE tgt.\"id\" = v.col_pk AND tgt.\"version\" = v.col_ver");
+    }
+
+    [Test]
+    public async Task BuildJoinValuesRow_Versioned_AppendsVersionSlotAndIncrement()
+    {
+        string sql = BatchUpdateSqlBuilder.Build(
+            SqlDialect.MySql, "`t`", "`id`", ["`a`"], rowCount: 2,
+            hasTenantFilter: false, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow,
+            quotedConcurrencyColumn: "`version`");
+
+        await Assert.That(sql).Contains(
+            "JOIN (VALUES ROW(@p0,@p1,@p2), ROW(@p3,@p4,@p5)) AS v(c0, pk, ver)");
+        await Assert.That(sql).Contains(
+            "ON tgt.`id` = v.pk AND tgt.`version` = v.ver");
+        await Assert.That(sql).Contains(
+            "SET tgt.`a` = v.c0, tgt.`version` = tgt.`version` + 1");
+    }
+
+    [Test]
+    public async Task BuildJoinValuesRow_VersionedWithTenant_WhereAfterSet()
+    {
+        string sql = BatchUpdateSqlBuilder.Build(
+            SqlDialect.MySql, "`t`", "`id`", ["`a`"], rowCount: 1,
+            hasTenantFilter: true, tenantParameterName: "@__tenant0",
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow,
+            quotedConcurrencyColumn: "`version`");
+
+        await Assert.That(sql).Contains(
+            "tgt.`version` = tgt.`version` + 1 WHERE tgt.`tenant_id` = @__tenant0");
+    }
+
+    [Test]
+    public async Task Build_VersionedUnsupportedForm_ThrowsNotSupported()
+    {
+        await Assert.That(() => BatchUpdateSqlBuilder.Build(
+            SqlDialect.PostgreSql, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: false, tenantParameterName: "@__tenant0",
+            quotedConcurrencyColumn: "\"version\""))
+            .Throws<NotSupportedException>();
+        await Assert.That(() => BatchUpdateSqlBuilder.Build(
+            SqlDialect.Sqlite, "\"t\"", "\"id\"", ["\"a\""], rowCount: 1,
+            hasTenantFilter: false, tenantParameterName: "@__tenant0",
+            quotedConcurrencyColumn: "\"version\""))
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
     public async Task BuildPostgreSql_ValueRowsFollowRowMajorOrder()
     {
         string sql = BatchUpdateSqlBuilder.Build(

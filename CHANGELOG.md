@@ -4,6 +4,25 @@
 
 ## [未发布]
 
+### ⚡ 性能/功能：版本化实体单语句批量更新（`[ConcurrencyCheck]`）
+
+- `BulkUpdateAsync` 对版本化实体在 PG UNNEST 与 MySQL `UPDATE JOIN VALUES ROW`
+  （8.0.19+）能力可用时自动路由到单语句：SET 追加 `version = version + 1`，
+  WHERE/ON 追加逐行 `version = 输入值`。能力不全（SQLite、低版本 MySQL、旧生成器）
+  回退 DbBatch 逐条，语义与异常类型不变。
+- **冲突契约**：计数级（与既有 100 命令 DbBatch 路径一致）。受影响数小于本批输入数抛
+  `ConcurrencyConflictException` 并整批回滚；不提供冲突键列表。重复主键、缺失行、
+  租户不匹配均按冲突处理；v1 不使用 PG `RETURNING`。决策与被否方案见 ADR-P。
+- **生成物**：新增并发列名与版本值参数绑定/数组三件套（`ConcurrencyColumns` /
+  `BindVersionValues` / `VersionArrayElementTypes` / `CreateVersionArrays` /
+  `FillVersionArrays`），注册片段可选键，旧模型程序集缺失时回退逐条。版本列由
+  PALORM012 限定非空 int/long。
+- **实测**（`--versioned-update` 探针，1000 行，产品 `BulkUpdateAsync` 前后对比）：
+  PG 18.6ms → 7.09ms（分配 1.60MB → 30KB）；MySQL 52.4ms → 19.0ms（1.84MB → 1.0MB）。
+  单语句地板 PG 6.05ms / MySQL 14.15ms，产品与地板差距来自参数池与冲突校验。
+- **验证**：Core 616/616 · SourceGen 236/236 · Integration 真库 299/299（新增重复主键、
+  缺失行、`UseAffectedRows` 两档、单行回退用例）；SQL 形态快照 11/11。
+
 ### 📦 依赖升级（2026-10-19）
 
 - 直接依赖：TUnit / TUnit.Assertions 1.74.0 → 1.75.0；Microsoft.Data.Sqlite.Core

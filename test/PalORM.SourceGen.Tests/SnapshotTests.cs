@@ -91,6 +91,9 @@ internal sealed class SnapshotTests
             public string Sku { get; set; } = "";
             [Column("weight", Precision = 10, Scale = 3)]
             public decimal Weight { get; set; }
+            [Column("version")]
+            [ConcurrencyCheck]
+            public int Version { get; set; }
             [Column("raw_kind", TypeName = "JSONB")]
             public string RawKind { get; set; } = "";
             [Column("row_updated_at")]
