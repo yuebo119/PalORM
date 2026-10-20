@@ -2,38 +2,72 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布]
+## [6.6.0] - 2026-10-20 · 版本化批量更新单语句化 + 第二轮性能收敛
 
-### ⚡ 性能/功能：版本化实体单语句批量更新（`[ConcurrencyCheck]`）
+> 变更规模：74 个代码提交 · 260 个文件 · +9,625/−2,168 行（v6.5.0..87d25f5，不含本发布准备提交）
+> 背景：S1-S7 性能批次与 ADR-P 版本化批量更新冲突报告设计；全量三方言三批门禁与结果库基线重录。
 
-- `BulkUpdateAsync` 对版本化实体在 PG UNNEST 与 MySQL `UPDATE JOIN VALUES ROW`
-  （8.0.19+）能力可用时自动路由到单语句：SET 追加 `version = version + 1`，
-  WHERE/ON 追加逐行 `version = 输入值`。能力不全（SQLite、低版本 MySQL、旧生成器）
-  回退 DbBatch 逐条，语义与异常类型不变。
-- **冲突契约**：计数级（与既有 100 命令 DbBatch 路径一致）。受影响数小于本批输入数抛
-  `ConcurrencyConflictException` 并整批回滚；不提供冲突键列表。重复主键、缺失行、
-  租户不匹配均按冲突处理；v1 不使用 PG `RETURNING`。决策与被否方案见 ADR-P。
-- **生成物**：新增并发列名与版本值参数绑定/数组三件套（`ConcurrencyColumns` /
-  `BindVersionValues` / `VersionArrayElementTypes` / `CreateVersionArrays` /
-  `FillVersionArrays`），注册片段可选键，旧模型程序集缺失时回退逐条。版本列由
-  PALORM012 限定非空 int/long。
-- **实测**（`--versioned-update` 探针，1000 行，产品 `BulkUpdateAsync` 前后对比）：
-  PG 18.6ms → 7.09ms（分配 1.60MB → 30KB）；MySQL 52.4ms → 19.0ms（1.84MB → 1.0MB）。
-  单语句地板 PG 6.05ms / MySQL 14.15ms，产品与地板差距来自参数池与冲突校验。
-- **验证**：Core 616/616 · SourceGen 236/236 · Integration 真库 304/304（新增重复主键、
-  缺失行、`UseAffectedRows` 两档、单行回退，以及真实业务形状 1000/5000 行冲突与
-  调用方诊断重试用例）；SQL 形态快照 11/11。
+### 💔 破坏性变更
 
-### 📦 依赖升级（2026-10-19）
+- **无公共 API 破坏性变更**。以下为行为变化，契约保持：
+  - 版本化 `BulkUpdateAsync` 在 PG/MySQL 能力可用时自动路由到单语句；异常类型、整批回滚与提交后 version 回填不变，异常消息中的批次索引语义随语句批宽改变。
+  - `BulkInsertAsync(entities)` 在 PG 上默认单次 COPY（原 1000 行/批）；需要限制单次 COPY 行数时使用带 `batchSize` 的重载。
+  - 显式 `BulkUpdateBatchAsync` 仍拒绝 `[ConcurrencyCheck]` 实体；版本化能力仅经 `BulkUpdateAsync` 隐式路由提供。
 
-- 直接依赖：TUnit / TUnit.Assertions 1.74.0 → 1.75.0；Microsoft.Data.Sqlite.Core
-  11.0.0-rc.1 → 11.0.0-rc.2（与 `global.json` SDK rc.2 同轨）；
-  Microsoft.SourceLink.GitHub 10.0.401 → 10.0.402。
-- `dotnet list package` 的 outdated/transitive 模式清零：传递依赖固定到最新稳定版
-  （System.* 10.0.13、Microsoft.Extensions.* 10.0.13、OpenTelemetry 1.20.0、
-  ApplicationInsights 3.2.0 等）；预览线（Roslyn 5.13-preview、Testing 3.2-preview、
-  SourceLink 11-rc、System.IO.Hashing 11-rc）不采用。
-- CI PostgreSQL 服务镜像 17 → 18（本机集成测试已在 PG 18.6 验证）；MySQL 保持 8.4 LTS。
+### ✨ 新增
+
+- **版本化实体单语句批量更新（ADR-P）**：`[ConcurrencyCheck]` 实体在 PG UNNEST 与 MySQL `UPDATE JOIN VALUES ROW`（8.0.19+）能力可用时，`BulkUpdateAsync` 自动走单语句：SET 追加 `version = version + 1`，WHERE/ON 追加逐行版本谓词。能力不全（SQLite、低版本 MySQL、旧生成器）回退 DbBatch 逐条，语义与异常类型不变。
+  - 冲突契约为计数级：受影响数小于本批输入数抛 `ConcurrencyConflictException` 并整批回滚；重复主键、缺失行、租户不匹配按冲突处理；不引入 RETURNING 与冲突键列表。
+  - 生成物新增并发列名、版本值参数绑定、PG 版本数组三件套，注册片段为可选键；版本列由 PALORM012 限定非空 int/long。
+  - 锁定测试：`PgBatchedUpdatePathTests`、`MySqlBatchedUpdatePathTests`、`VersionedBulkUpdateBusinessShapeTests`（1000/5000 行、冲突、重复键、缺失行、`UseAffectedRows` 两档、调用方诊断重试）。
+- **`DataSessionFactory<TProvider>` / `IDataSessionFactory<TProvider>`**：会话池的 DI 友好封装，按单例注册即可，不引入额外容器包依赖。
+- **MySQL 事务内 DbBatch 分页**：`ToPageAsync` 在 MySQL 经典事务骨架内把 COUNT 与页 SELECT 打进一个 DbBatch（RR 快照语义不变，外部事务同样复用；拦截器/观测/AsPrepared 回退经典路径）。
+
+### ⚡ 性能
+
+- **S1-S7 热路径收敛**：静态元数据视图与 `CrudPlan` 引用视图；事务 Commit/Rollback CTS 池化；直查与标量读成功路径零弹性开销；`From<T>()` 延迟弹性执行器；查询管线移除 async 本地函数闭包；租户过滤直绑 `@__tenant0`；UPSERT/软删除/builder UPDATE 补齐复用槽。
+- **分配对比**（SQLite/2000，S1 前批 → 三批中位）：`GetByKey` 2773.5B → 2352.4B（−15.2%）；`Count` 2351.7B → 1855.7B（−21.1%）；`GetByKeySession` 35994.9B → 28396.2B（−21.1%）；`KeysetPage` 19893.8B → 19105.9B（−4.0%）；`WhereIn` 41997.6B → 41260.5B（−1.8%）。
+- **PG 批量插入整段 COPY**：1 参 `BulkInsertAsync` 在 PG 上按整段行数执行单次 COPY，2 万行不再付 20 次 BeginBinaryImport/Complete；MySQL/SQLite 维持 1000。
+- **版本化批量更新**（`--versioned-update` 探针，1000 行）：PG 18.6ms → 7.2ms（分配 1.60MB → 30KB）；MySQL 52.4ms → 20.9ms（1.84MB → 1.0MB）。产品与单语句地板的差距来自参数池与冲突校验。
+- **门禁**：BDN 27/27 阈值内；三方言三批（每批 416 项，health clean）；结果库窗口 1 项 FAIL 经定向复测定性为地板漂移；基线按 3 批窗口中位重录。
+
+### 🐛 修复
+
+- **PerfGate 贡献批次标注**：`record-index` 的 Environment 字段只统计 PerfHub，排除 DapperSuite 哨兵批占用名额，标注与真实样本来源一致。
+- **DapperSuite latest 陈旧**：默认全量跑不再被误标 filtered，latest 正常更新；覆盖面提示按子集标签区分。
+- **SDK 钉版 AOT 回归**：修复 MSB3030 发布回归，构建段多项目参数缺陷自修。**CI**：PostgreSQL 服务镜像 17 → 18；SDK rc.2 对齐；BDN vendored overlay 与 CPM 隔离修复，周度 Performance Gate 恢复。
+
+### 🧰 工程与质量
+
+- **EPSL v1.7**：全量运行前后置检查、结果登记 latest 新鲜度对账、`--pool` 连接/池 churn 探针、长稳 180s；`eps-perf-check.mjs` 全绿。
+- **质量系统**：CI 接入五段门禁、V17d 变异探针电池扩面、测试计数与文档口径机械对账；核心覆盖率地板 74%，本次补测后实测 74.94%（旧 72.67%）。
+- **InterpolatedStringHandler 定向 A/B**：缓存 handler 每次省 64~104B，但入口慢 75~160ns；节省低于 5% 行动线，定案不实施，保持 `FormattableString` + `FormatCached`。
+- **测试隔离**：`PalORM_RuntimeTests` 增加运行时状态快照恢复与串行隔离，消除 Release 并行下合成实体污染 `MigrateAsync` 的跨测试失败。
+
+### 📦 依赖升级
+
+| 包名 | 旧版本 | 新版本 |
+|------|--------|--------|
+| TUnit / TUnit.Assertions | 1.74.0 | 1.75.0 |
+| Microsoft.Data.Sqlite.Core | 11.0.0-rc.1 | 11.0.0-rc.2 |
+| Microsoft.SourceLink.GitHub | 10.0.401 | 10.0.402 |
+
+传递依赖固定到最新稳定版（System.* / Microsoft.Extensions.* 10.0.13、OpenTelemetry 1.20.0、ApplicationInsights 3.2.0 等）；预览线（Roslyn 5.13-preview、Testing 3.2-preview、SourceLink 11-rc、System.IO.Hashing 11-rc）不采用。
+
+### 🧪 验证
+
+- **Core 620/620 · SourceGen 236/236 · Integration 304/304**（含 PG/MySQL 真库）。
+- **覆盖率**：Core 行覆盖 74.94%（地板 74%）。
+- **BDN**：27/27 阈值内；**快照基线** 22 份一致。
+- **AOT**：CI run 39360143616（918291d）九 job 全绿，含 SQLite / PostgreSQL / MySQL / NuGet Consumer 四路 Native AOT；本次版本提交后由 release.yml 复跑。
+- **包预检**：`pre-release-check.cs 6.6.0` 五包本地源 + 消费者 restore + 包契约全绿。
+
+### 📚 参考
+
+- [ADR-P：版本化批量更新的单语句路由与冲突报告](docs/adr/ADR-P-版本化批量更新冲突报告.md)
+- [极致性能优化方案（重审版）](docs/性能优化方案-极致性能重审-2026-10-19.md)
+- 全量报告：`bench/reports/perf-report-20261020-085516.md`
+- 性能决策账本：`.ai/perf-ledger.md`
 
 ## [6.5.0] - 2026-10-14
 

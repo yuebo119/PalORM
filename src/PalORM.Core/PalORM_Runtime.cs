@@ -172,6 +172,15 @@ public static class PalORM_Runtime
     /// 避免每个属性各自触发 Volatile.Read 与 fence 开销（每次查询省 ~2 次内存屏障）。</para></summary>
     internal static RuntimeRegistryState CurrentState => Volatile.Read(ref _state);
 
+    /// <summary>测试专用状态恢复：全局注册表在进程内只增不减，测试注册合成实体后必须
+    /// 恢复到注册前快照，否则随后调用 <c>MigrateAsync</c> 的测试会看到无 DDL 的合成实体。
+    /// 仅 Core.Tests 经 IVT 使用；不构成产品契约。</summary>
+    internal static void RestoreStateForTesting(RuntimeRegistryState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        Volatile.Write(ref _state, state);
+    }
+
     /// <summary>类型 → 行读取工厂委托（装箱为 object，调用方按实体类型还原泛型）。</summary>
     public static FrozenDictionary<Type, object> RowFactories => Volatile.Read(ref _state)._rowFactories;
 
