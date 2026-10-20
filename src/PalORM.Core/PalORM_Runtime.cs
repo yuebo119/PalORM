@@ -359,19 +359,24 @@ public static class PalORM_Runtime
             var entityInfo = new Dictionary<Type, EntityRuntimeInfo>(next._tableNames.Count);
             foreach (KeyValuePair<Type, string> pair in next._tableNames)
             {
+                IReadOnlyList<string> entityColumnNames = next._columnNames[pair.Key];
+                string? pkColumn = next._pkColumns.GetValueOrDefault(pair.Key);
+                // 2026-10-20：主键 ordinal 与 RowFactory 同源同序（两者都按注册期
+                // ColumnNames 顺序读取），在注册期算一次；-1 表示无主键或投影类型。
+                int pkOrdinal = ResolvePkOrdinal(entityColumnNames, pkColumn);
                 entityInfo[pair.Key] = new EntityRuntimeInfo
                 {
                     RowFactory = next._rowFactories[pair.Key],
                     TableName = pair.Value,
-                    ColumnNames = next._columnNames[pair.Key],
+                    ColumnNames = entityColumnNames,
                     Features = next._entityFeatures.GetValueOrDefault(pair.Key),
                     Crud = next._crudMetadatas.GetValueOrDefault(pair.Key),
                     Plan = next._crudMetadatas.TryGetValue(pair.Key, out CrudMetadata crudPlanSource)
-                        ? new CrudPlan(crudPlanSource)
+                        ? new CrudPlan(crudPlanSource, pkOrdinal)
                         : null,
                     BindDelete = next._bindDelete.GetValueOrDefault(pair.Key),
                     SetId = next._setIdDelegates.GetValueOrDefault(pair.Key),
-                    PkColumn = next._pkColumns.GetValueOrDefault(pair.Key),
+                    PkColumn = pkColumn,
                     ConcurrencyColumn = next._concurrencyColumns.GetValueOrDefault(pair.Key),
                     BindVersionValue = next._bindVersionValues.GetValueOrDefault(pair.Key),
                     VersionArrayElementType = next._versionArrayElementTypes.GetValueOrDefault(pair.Key),
@@ -383,6 +388,20 @@ public static class PalORM_Runtime
 
             Volatile.Write(ref _state, next);
         }
+    }
+
+    /// <summary>2026-10-20：主键在 ColumnNames（= RowFactory / RETURNING 结果集）中的序号。
+    /// 注册期一次线性扫描，热路径免 reader.GetOrdinal；无主键或名称不在列集内返回 -1。</summary>
+    private static int ResolvePkOrdinal(IReadOnlyList<string> columnNames, string? pkColumn)
+    {
+        if (pkColumn is null)
+            return -1;
+        for (int i = 0; i < columnNames.Count; i++)
+        {
+            if (string.Equals(columnNames[i], pkColumn, StringComparison.Ordinal))
+                return i;
+        }
+        return -1;
     }
 
     /// <summary>建表拓扑序合并：按片段注册序拼接（每片段内部已生成期拓扑排序）。

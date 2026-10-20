@@ -57,11 +57,6 @@ internal static class SqlShapeCache
 
     internal sealed record SqlShapeEntry(string[] SqlSequence, ShapeFields Fields, string FullSql);
 
-    public static IEnumerable<SqlShapeEntry> GetBucket(int shapeHash)
-        => Buckets.TryGetValue(shapeHash, out SqlShapeEntry[]? bucket)
-            ? bucket
-            : System.Array.Empty<SqlShapeEntry>();
-
     /// <summary>查找与当前形状匹配的 SQL 文本——命中返回缓存的 string 实例（调用方直接复用）。
     /// R3：数组 foreach 走 span 枚举零分配（原 ConcurrentQueue 经接口每次分配枚举器）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
