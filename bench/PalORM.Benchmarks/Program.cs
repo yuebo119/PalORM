@@ -48,6 +48,12 @@ public static class Program
                 .GetAwaiter().GetResult();
             return;
         }
+        // InterpolatedStringHandler 定向 A/B（入口成本，不触库）
+        if (args.Length > 0 && args[0] == "--interp-ab")
+        {
+            InterpolatedStringAbProbe.Run();
+            return;
+        }
         // 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md）——BDN 单线程测不了锁/池/调度
         if (args.Length > 0 && args[0] == "--workload")
         {
