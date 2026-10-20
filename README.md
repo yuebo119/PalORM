@@ -4,7 +4,7 @@
 
 **面向 Native AOT 的 .NET 11 微 ORM：编译时生成一切，运行时零反射**
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--preview.6-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
@@ -48,7 +48,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 **全链路 Native AOT**。.NET 生态唯一完整支持全链路 Native AOT 的 ORM：SQLite / PostgreSQL / MySQL 三方言发布验证全部通过（运行输出 `PalORM AOT verification PASSED`），无反射、无 IL Emit、无运行时代码生成。部署细节见 [docs/AOT部署指南.md](docs/AOT部署指南.md)。
 
-**三方言批量策略**。同一套 API 按方言自动选择最快路径：PG Binary COPY、MySQL BulkCopy（LOAD DATA，服务端关闭时自动回退多值 INSERT）、SQLite 多值 INSERT。单语句批量 UPDATE（PG `UPDATE FROM VALUES` / MySQL `UPDATE JOIN VALUES ROW`，8.0.19+ 低版本回退 CASE WHEN）；乐观锁实体批量更新走 DbBatch 打包，PG 远程库实测 7.85×（v5.9 探针二十八，200 命令事务内 15.1ms vs 逐条 118.7ms）。
+**三方言批量策略**。同一套 API 按方言自动选择最快路径：PG Binary COPY、MySQL BulkCopy（LOAD DATA，服务端关闭时自动回退多值 INSERT）、SQLite 多值 INSERT。单语句批量 UPDATE（PG `UPDATE FROM VALUES` / `UPDATE FROM UNNEST` / MySQL `UPDATE JOIN VALUES ROW`，8.0.19+ 低版本回退 CASE WHEN）；版本化实体（`[ConcurrencyCheck]`）在 PG/MySQL 能力支持时同样走版本化单语句（逐行 version 谓词，S6 探针 1000 行 PG 3.06× / MySQL 4.73×），能力不全回退 DbBatch 逐条。
 
 **企业级横切开箱即用**。多租户列隔离（查询缓存 key 自动加租户前缀，跨租户命中不可能）、乐观锁、软删除、审计拦截器、读写分离（`ForRead`）、咨询锁、弹性重试 + 熔断（v5.4 起自动覆盖只读查询管线），无需样板代码。
 
@@ -68,7 +68,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ## 🆚 与主流 ORM 对比
 
-> 版本基准：PalORM 6.5.0 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
+> 版本基准：PalORM 6.6.0 / Dapper 2.1.89 / RepoDb 1.16.0（仓库基准套件实际引用版本）；EF Core 10.0.12（对比所引，NuGet 最新 10.x 稳定版）。单元格依据见下方注释。
 
 | 特性                  | **PalORM**                                                   | Dapper                  | EF Core                               | RepoDb                     |
 | ------------------- |:------------------------------------------------------------:|:-----------------------:|:-------------------------------------:|:--------------------------:|
@@ -79,7 +79,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **三方言批量策略**         | ✓ COPY / BulkCopy / 多值 / `= ANY` 数组                          | ❌ 手写多值 SQL              | △ Provider 各异                         | △ BulkInsert 仅 SQL Server  |
 | **单语句多行 UPDATE**    | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN           | ❌                       | ❌ ExecuteUpdate 仅按 WHERE 单值           | ❌                          |
 | **批量 UPSERT**       | ✓ `BulkMergeAsync`（ON CONFLICT / ON DUPLICATE KEY，冲突更新限定本租户） | ❌ 手写                    | ❌ 需 raw SQL                           | △ Merge 仅 SQL Server       |
-| **乐观锁**             | ✓ `[ConcurrencyCheck]` 自动；批量走 DbBatch 打包                     | ❌ 手写                    | ✓ `RowVersion` 自动                     | ❌ 手写                       |
+| **乐观锁**             | ✓ `[ConcurrencyCheck]` 自动；批量单语句（PG/MySQL，能力不全回退 DbBatch） | ❌ 手写                    | ✓ `RowVersion` 自动                     | ❌ 手写                       |
 | **软删除**             | ✓ `[SoftDelete]` 自动过滤（含批量删转 UPDATE）                          | ❌                       | ✓ 全局查询过滤器                             | ❌                          |
 | **多租户列隔离**          | ✓ `[TenantAware]` 编译时；批量写跨租户护栏                               | ❌                       | △ 需手动实现                               | ❌                          |
 | **值转换 + 枚举存储**      | ✓ `[Converter]` / 枚举三策略（int32/int64/文本）编译时发射                 | △ TypeHandler 手写        | ✓ ValueConverter / HasConversion（运行时） | △ TypeHandler              |
@@ -235,15 +235,15 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 ## 📦 安装
 
 > 三个 Provider 包任选其一，每个都自动携带 `PalORM.Core`（运行时）与 `PalORM.SourceGen`（编译时源生成器）。
-> 环境要求：.NET SDK `11.0.100-preview.6` 或更高（`global.json` 已锁定 `rollForward: latestMinor`）；IDE 需支持 Roslyn 源生成器（SourceGen 以 Microsoft.CodeAnalysis 5.9.0 构建）。Native AOT 发布另需约 4 GB 内存（ILC 编译器），详见[开发](#-开发)。
+> 环境要求：.NET SDK `11.0.100-rc.2` 或更高（`global.json` 已锁定 `rollForward: disable`）；IDE 需支持 Roslyn 源生成器（SourceGen 以 Microsoft.CodeAnalysis 5.9.0 构建）。Native AOT 发布另需约 4 GB 内存（ILC 编译器），详见[开发](#-开发)。
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.5.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.6.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.5.0" />
+<PackageReference Include="PalORM.MySql" Version="6.6.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.5.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.6.0" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。
@@ -254,7 +254,7 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 | ---------- | -------------------------- | -------------------------------------- |:------------------------:|
 | PostgreSQL | 14+（推荐 18）                 | Npgsql 10.0.3                          | SSL/TLS                  |
 | MySQL      | 8.0+（推荐 8.4 LTS）           | MySqlConnector 2.6.2                   | SSL/TLS                  |
-| SQLite     | 3.54+（via SQLite3MC 2.6.1） | Microsoft.Data.Sqlite.Core 11.0.0-rc.1 | AES-256（驱动层，`Password=`） |
+| SQLite     | 3.54+（via SQLite3MC 2.6.1） | Microsoft.Data.Sqlite.Core 11.0.0-rc.2 | AES-256（驱动层，`Password=`） |
 
 ## 🚀 快速开始
 
@@ -339,7 +339,7 @@ await db.DeleteAsync<User>(alice.Id);
 // 批量插入（PG: Binary COPY / MySQL: BulkCopy 或多值 INSERT / SQLite: 多值 INSERT）
 await db.BulkInsertAsync(users);
 
-// 批量更新（逐条 + 乐观锁；v5.9 起 MySQL/PG 并发实体走 DbBatch 打包）
+// 批量更新（乐观锁实体：PG/MySQL 自动走版本化单语句，能力不全回退 DbBatch）
 await db.BulkUpdateAsync(users);
 
 // 批量更新（v5.0 单语句批量）
@@ -357,7 +357,7 @@ await db.BulkMergeAsync(users);
 | 方法                     | PG                                 | MySQL                                             | SQLite                             |
 | ---------------------- | ---------------------------------- | ------------------------------------------------- | ---------------------------------- |
 | `BulkInsertAsync`      | Binary COPY                        | BulkCopy（local_infile）或多值 INSERT                  | 多值 INSERT                          |
-| `BulkUpdateAsync`      | 逐条 + 乐观锁（DbBatch 打包）               | 逐条 + 乐观锁（DbBatch 打包）                              | 逐条 + 乐观锁                           |
+| `BulkUpdateAsync`      | 版本化单语句 + 乐观锁（能力不全回退 DbBatch）         | 版本化单语句 + 乐观锁（能力不全回退 DbBatch）                   | 逐条 + 乐观锁                           |
 | `BulkUpdateBatchAsync` | `FROM VALUES`                      | `UPDATE JOIN VALUES ROW`（8.0.19+，低版本回退 CASE WHEN） | 自动回退逐条                             |
 | `BulkDeleteAsync`      | `= ANY(数组)` 单语句                    | `IN` 分批单语句                                        | `IN` 分批单语句                         |
 | `BulkMergeAsync`       | 多行 UPSERT（`ON CONFLICT DO UPDATE`） | 多行 UPSERT（`ON DUPLICATE KEY UPDATE`）              | 多行 UPSERT（`ON CONFLICT DO UPDATE`） |
@@ -610,13 +610,23 @@ dotnet run --project tools/PalORM.Scaffold -- <connection-string> --dialect sqli
 | 批量插入且需逐行回填自增 ID  | `BulkMergeAsync`（默认键走逐条回填）或 `SessionBatch` | `BulkInsertAsync`      | COPY / LOAD DATA 不回填 ID                                 |
 | 混合语句或需逐条语义控制     | `SessionBatch`（DbBatch 打包）                 | 逐条往返                   | 单往返打包多语句，SQLite 20 条/批                                  |
 | 按非主键列批量更新（每行不同值） | `BulkUpdateBatchAsync`                     | 逐条                     | 单语句多行 SET（PG `FROM VALUES` / MySQL `JOIN VALUES ROW`）   |
-| 乐观锁实体批量更新        | `BulkUpdateAsync`                          | `BulkUpdateBatchAsync` | UPSERT/单语句形态无法逐行校验版本；DbBatch 打包保语义                      |
+| 乐观锁实体批量更新        | `BulkUpdateAsync`                          | `BulkUpdateBatchAsync` | 版本化单语句（PG UNNEST / MySQL JOIN VALUES ROW）逐行校验版本；能力不全回退 DbBatch |
 | 插入或更新（键存在则更新）    | `BulkMergeAsync`                           | 手写 ON CONFLICT         | 租户实体自动限定本租户（跨租户命中 0 行）                                  |
 | 大键集删除（万级以上）      | `BulkDeleteAsync`                          | 逐条 Delete              | 自动按方言参数上限分批（SQLite 999 / MySQL·PG 数千），整批单事务，满批命令与参数池化复用 |
 
 ### 按形态选 API：会话池与批量路径
 
 同一 API 在不同使用形态下的表观开销构成不同，按形态选对入口的收益大于任何库内微优化。
+
+| 场景 | 入口 | 关键收益 |
+|---|---|---|
+| 一请求一会话（Web/API） | `DataSessionPool.RentAsync` | 复用槽跨租期激活；租还约 1 µs |
+| 高吞吐逐行写 | `BulkInsertAsync` / `BulkUpdateBatchAsync` | 会话/命令成本摊到 1/N |
+| 大结果集 / 无界流 | `QueryAsyncEnumerable<T>` | 恒定内存，每行分配更低 |
+| 单键查询 | `GetAsync` | 直查槽 + 单行物化 |
+| 分页 | `ToPageAsync` | 单往返分页（PG COUNT+页 SELECT 打包） |
+
+下面按场景展开；批量选型见上方“批量 API 选型速查”。
 
 **一请求一会话（Web/API 服务）用会话池**（v6.5 `DataSessionPool`，API 细节见[API 参考 · 会话池](docs/API参考.md)）：
 
@@ -630,6 +640,16 @@ var user = await db.GetAsync<User>(id);
 ```
 
 归还时瞬态状态（租户/超时/重试等 `With*` 覆写、拦截器加项）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在"一请求一会话"形态下不经池化永不激活（同形状第 3 次操作才晋升）。32 并发压测实测：P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B；池化形态单键直查 P/ADO 比值 MySQL 0.99 / PG 0.87（台账批），租还自身约 1 µs。
+
+DI 容器场景把 `IDataSessionFactory<TProvider>` 注册为单例即可，不依赖额外容器包：
+
+```csharp
+var factory = new DataSessionFactory<PostgreSqlProvider>(options, maxIdleSize: 16);
+services.AddSingleton<IDataSessionFactory<PostgreSqlProvider>>(factory);
+
+// 每请求（scoped 服务的构造/方法内）
+await using var db = await factory.RentAsync(ct);
+```
 
 **高吞吐逐行写换批量 API，不要在逐条循环里找损耗**。逐条 `UpdateAsync` 每行各付一次会话门禁与命令往返；合成单语句多行（`BulkUpdateBatchAsync`）或走批量路径（见上方速查表）后，这部分成本摊薄到 1/N。逐条循环里的每行开销是形态决定的，不是可挤的库内水分。
 
@@ -663,7 +683,7 @@ var user = await db.GetAsync<User>(id);
 
 - 批量 API 按上方选型速查表选择；不要在循环里逐条 `InsertAsync`（连接往返是数量级差异）
 - 唯一键冲突捕获 `UniqueConstraintViolationException`（跨方言统一翻译，不用记驱动错误码）；乐观锁冲突捕获 `ConcurrencyConflictException`（重读数据合并后重试）
-- `[ConcurrencyCheck]` 实体不要调 `BulkUpdateBatchAsync`（单语句形态无法逐行校验版本，PALORM031 编译期已拦），批量更新走 `BulkUpdateAsync`（DbBatch 打包保语义）
+- `[ConcurrencyCheck]` 实体不要调 `BulkUpdateBatchAsync`（显式单语句 API 不承载逐行版本谓词，PALORM031 编译期已拦），批量更新走 `BulkUpdateAsync`（自动路由到版本化单语句，能力不全回退 DbBatch）
 - `BulkInsertAsync` 不回填自增 ID（COPY / LOAD DATA 契约）；需逐行回填用 `BulkMergeAsync`（默认键走逐条）或 `SessionBatch`
 - 可能存 NULL 的列声明可空属性（`string?`），非可空遇 NULL 会响亮抛 `SqlNullValueException`（不出静默 null）
 - 敏感列标 `[SensitiveData]`（审计日志与拦截器自动掩码）；非幂等写不要指望自动重试（写入路径直连语义），确需弹性用 `ExecuteWithResilience` 包裹并自行评估重复执行风险
@@ -874,7 +894,7 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | 内存     | 256 MB      | 4 GB（ILC 编译器；运行时仅需约 100 MB）                            |
 | 磁盘     | 50 MB       | 100 MB，SSD 推荐（ILC 大量临时文件，HDD 编译慢 5-10x）                |
 
-软件：.NET SDK 11.0.100-preview.6+（`global.json` 锁定）· C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code（需支持 Roslyn 源生成器）。
+软件：.NET SDK 11.0.100-rc.2+（`global.json` 锁定）· C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code（需支持 Roslyn 源生成器）。
 
 ### 项目结构
 

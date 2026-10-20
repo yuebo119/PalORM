@@ -31,7 +31,7 @@ jobs:
     publish:
         name: Build + Test + Pack + Push
         needs: verify # 发布即证据：不经验证链不推送
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         timeout-minutes: 30
         # M1-2：发布审批门——需在 GitHub Settings → Environments 配置 production 的
         # required reviewers（仓库内不可声明审批人，这是仓库侧的接入点）。
@@ -40,7 +40,7 @@ jobs:
             contents: write # 用于创建 GitHub Release
         services:
             postgres:
-                image: postgres:17
+                image: postgres:18
                 env:
                     POSTGRES_HOST_AUTH_METHOD: trust
                     POSTGRES_DB: palorm
@@ -65,12 +65,12 @@ jobs:
                     --health-retries 20
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
               with:
                   fetch-depth: 0 # SourceLink 需要完整 git 历史
 
             - name: Setup .NET
-              uses: actions/setup-dotnet@v4
+              uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
 
@@ -276,7 +276,7 @@ jobs:
 
             - name: Create GitHub Release
               if: github.event_name == 'push'
-              uses: softprops/action-gh-release@v2
+              uses: softprops/action-gh-release@v3
               with:
                   tag_name: ${{ github.ref_name }}
                   name: PalORM ${{ github.ref_name }}

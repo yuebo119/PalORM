@@ -88,8 +88,10 @@ public class GcBenchmarks : IAsyncDisposable
     public async Task Insert_OneByOne()
     {
         await using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+#pragma warning disable PALORM005 // 基准本体：逐条插入是待测形态，非可合并的 N+1 查询
         foreach (var e in _entities)
             await db.InsertAsync(e);
+#pragma warning restore PALORM005
     }
 
     // ─── BulkInsertAsync：BindInsertValues 复用路径（仍装箱但省 CreateParameter）───

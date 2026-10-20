@@ -35,13 +35,13 @@ public class OrmComparisonBenchmarks : IAsyncDisposable
     public async Task Setup()
     {
         _keeper = BenchmarkConfig.OpenSqlite(BenchmarkConfig.CacheSqliteCs);
-        await BenchmarkConfig.ExecSqliteAsync(_keeper!,
+        await BenchmarkConfig.ExecSqliteAsync(_keeper,
             "CREATE TABLE bench_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, total REAL NOT NULL, created_at INTEGER NOT NULL)");
         for (int i = 0; i < BenchmarkConfig.SeedRows; i++)
-            await BenchmarkConfig.ExecSqliteAsync(_keeper!,
+            await BenchmarkConfig.ExecSqliteAsync(_keeper,
                 $"INSERT INTO bench_orders (status, total, created_at) VALUES ('S{i}', {i * 10m}, {i})");
         // 给 status 加索引——消除 VaryingShape 场景的全表扫描主导，分离 ORM cache miss 代价
-        await BenchmarkConfig.ExecSqliteAsync(_keeper!,
+        await BenchmarkConfig.ExecSqliteAsync(_keeper,
             "CREATE INDEX ix_bench_orders_status ON bench_orders(status)");
     }
 

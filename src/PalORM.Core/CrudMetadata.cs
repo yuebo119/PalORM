@@ -190,6 +190,70 @@ public readonly struct CrudColumns
             : Array.AsReadOnly(source.ToArray());
 }
 
+/// <summary>CRUD 热路径的引用型视图——把 <see cref="CrudMetadata"/>（约 230B 的 readonly struct）
+/// 在注册期一次性投影为引用类型。异步方法跨 await 持有值类型时，编译器把整个 struct 复制进
+/// 状态机；单行 Insert/Update/Delete/Save 每操作因此白付一份 230B 级复制。本视图让热路径
+/// 只持有 8B 引用，公开的 <see cref="CrudMetadata"/> 与注册链保持原样。</summary>
+internal sealed class CrudPlan
+{
+    internal readonly IReadOnlyList<string> InsertColumns;
+    internal readonly IReadOnlyList<string> UpsertColumns;
+    internal readonly IReadOnlyList<string> UpdateColumns;
+    internal readonly Action<DbCommand, object, int> BindInsert;
+    internal readonly Action<DbParameter[], object, int>? BindInsertValues;
+    internal readonly Action<DbCommand, object> BindUpsert;
+    internal readonly Action<DbCommand, object> BindUpdate;
+    internal readonly Action<DbParameter[], object, int>? BindUpdateValues;
+    internal readonly Action<DbParameter[], object, int>? BindUpsertValues;
+    internal readonly object RowFactory;
+    internal readonly Action<object>? IncrementVersion;
+    internal readonly Func<object, bool> HasDefaultKey;
+    internal readonly bool InsertReturningKeyOnly;
+    internal readonly bool InsertNoReturning;
+    internal readonly Action<IBinaryRowSink, object>? CopyWriteRow;
+    internal readonly Action<DbParameter[], int>? InitInsertParameters;
+    internal readonly Func<IReadOnlyList<object>, int, int, Array?>? BuildDeleteKeyArray;
+    internal readonly Action<IReadOnlyList<object>, int, int, Array[], int>? FillUpdateColumnArrays;
+    internal readonly IReadOnlyList<Type>? UpdateColumnArrayElementTypes;
+    internal readonly Func<int, Array[]>? CreateUpdateColumnArrays;
+    internal readonly Action<IReadOnlyList<object>, int, int, Array[], int>? FillUpsertColumnArrays;
+    internal readonly IReadOnlyList<Type>? UpsertColumnArrayElementTypes;
+    internal readonly Func<int, Array[]>? CreateUpsertColumnArrays;
+    internal readonly Action<DbParameter[], int>? InitUpsertParameters;
+    internal readonly Action<DbParameter[], int>? InitUpdateParameters;
+    internal readonly Func<object, object?>? ConvertDeleteKey;
+
+    internal CrudPlan(CrudMetadata metadata)
+    {
+        InsertColumns = metadata.InsertColumns;
+        UpsertColumns = metadata.UpsertColumns;
+        UpdateColumns = metadata.UpdateColumns;
+        BindInsert = metadata.BindInsert;
+        BindInsertValues = metadata.BindInsertValues;
+        BindUpsert = metadata.BindUpsert;
+        BindUpdate = metadata.BindUpdate;
+        BindUpdateValues = metadata.BindUpdateValues;
+        BindUpsertValues = metadata.BindUpsertValues;
+        RowFactory = metadata.RowFactory;
+        IncrementVersion = metadata.IncrementVersion;
+        HasDefaultKey = metadata.HasDefaultKey;
+        InsertReturningKeyOnly = metadata.InsertReturningKeyOnly;
+        InsertNoReturning = metadata.InsertNoReturning;
+        CopyWriteRow = metadata.CopyWriteRow;
+        InitInsertParameters = metadata.InitInsertParameters;
+        BuildDeleteKeyArray = metadata.BuildDeleteKeyArray;
+        FillUpdateColumnArrays = metadata.FillUpdateColumnArrays;
+        UpdateColumnArrayElementTypes = metadata.UpdateColumnArrayElementTypes;
+        CreateUpdateColumnArrays = metadata.CreateUpdateColumnArrays;
+        FillUpsertColumnArrays = metadata.FillUpsertColumnArrays;
+        UpsertColumnArrayElementTypes = metadata.UpsertColumnArrayElementTypes;
+        CreateUpsertColumnArrays = metadata.CreateUpsertColumnArrays;
+        InitUpsertParameters = metadata.InitUpsertParameters;
+        InitUpdateParameters = metadata.InitUpdateParameters;
+        ConvertDeleteKey = metadata.ConvertDeleteKey;
+    }
+}
+
 /// <summary>CRUD 元数据聚合——单次字典查找替代四次独立查找。</summary>
 public readonly struct CrudMetadata
 {

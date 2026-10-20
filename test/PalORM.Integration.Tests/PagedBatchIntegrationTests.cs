@@ -2,16 +2,18 @@
 // 非反模式
 #pragma warning disable PALORM005
 
+using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
-/// <summary>P0-1（2026-10-12 全量重读）：ToPageAsync 的 PG 单往返批路径（COUNT + 页 SELECT
-/// 一个 DbBatch）真库行为锁定。
-/// <para>覆盖面：① 键集翻页全程（lastValue 续页）与经典事务路径（WithIsolationLevel 强制）
-/// 结果逐位一致；② 空表零总数；③ 软删默认过滤同时作用于 COUNT 与页行；④ 拦截器在场时
-/// 回退经典路径且行为正确（门禁的反向验证）；⑤ MySQL 经典路径不受影响。</para>
+/// <summary>ToPageAsync 的单往返批路径（COUNT + 页 SELECT 一个 DbBatch）真库行为锁定。
+/// <para>PG：无外部事务且默认隔离时 <b>不建事务</b>直接批执行；MySQL：沿用经典事务骨架
+/// （RR 快照一致性不变），事务内把两次往返压成一次。</para>
+/// <para>覆盖面：① 键集翻页全程（lastValue 续页）与经典路径结果逐位一致（PG 用强隔离强制、
+/// MySQL 用拦截器强制）；② 空表零总数；③ 软删默认过滤同时作用于 COUNT 与页行；
+/// ④ 外部事务内分页走批量形态且遵守回滚。</para>
 /// <para><b>串行槽</b>：ExternalDatabase 用例统一挂 ExtBulkTable 守卫键（并发 CREATE TABLE
 /// 会撞 pg_type 系统表唯一索引，B63 家族——ExternalDbIsolationInvariantTests 门禁锁定）。</para></summary>
 [NotInParallel("ExtBulkTable")]
@@ -127,16 +129,61 @@ public sealed class PagedBatchIntegrationTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task MySql_ToPage_ClassicPath_Unaffected()
+    public async Task MySql_ToPage_BatchedInTransaction_MatchesClassicPath()
     {
-        await using DataSession<PalORM.MySql.MySqlProvider> db = await TestDb.MySqlAsync();
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
         try
         {
             await CreateRowsAsync(db, 8);
-            (List<PageBatchEntity> rows, long total) = await db.From<PageBatchEntity>()
-                .ToPageAsync(3, o => o.Seq, descending: true);
+            (List<List<long>> batchedPages, long total) = await WalkAllPagesAsync(db, 3);
             await Assert.That(total).IsEqualTo(8);
-            await Assert.That(rows.Count).IsEqualTo(3);
+            await Assert.That(batchedPages.Count).IsEqualTo(3);
+
+            // 拦截器在场 → 门禁回退经典事务路径；结果必须与批形态逐位一致
+            CountingTestInterceptor interceptor = new();
+            DbOptions options = new()
+            {
+                ConnectionString = TestEnvironment.ResolveMySqlConnectionString(),
+                Interceptors = [interceptor],
+            };
+            await using DataSession<MySqlProvider> classic =
+                await DataSession<MySqlProvider>.CreateAsync(options);
+            (List<List<long>> classicPages, long classicTotal) = await WalkAllPagesAsync(classic, 3);
+            await Assert.That(classicTotal).IsEqualTo(total);
+            for (int i = 0; i < batchedPages.Count; i++)
+                await Assert.That(string.Join(",", classicPages[i])).IsEqualTo(string.Join(",", batchedPages[i]));
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_page_batch");
+            await db.DisposeAsync();
+        }
+    }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_ToPage_WithinExternalTransaction_HonorsRollback()
+    {
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_page_batch");
+            await db.ExecuteAsync(
+                $"CREATE TABLE palorm_page_batch (id BIGINT PRIMARY KEY, seq BIGINT NOT NULL)");
+            await using (var transaction = await db.BeginTransactionAsync())
+            {
+                List<PageBatchEntity> seed = [];
+                for (int i = 1; i <= 8; i++)
+                    seed.Add(new PageBatchEntity { Id = i, Seq = i * 10L });
+                await db.BulkInsertAsync(seed);
+                // 外部事务在场地：两次往返打进该事务（DbBatch.Transaction = 外部事务）
+                (List<PageBatchEntity> rows, long total) = await db.From<PageBatchEntity>()
+                    .ToPageAsync(3, o => o.Seq, descending: true);
+                await Assert.That(total).IsEqualTo(8);
+                await Assert.That(rows.Count).IsEqualTo(3);
+                await transaction.RollbackAsync();
+            }
+            await Assert.That(await db.CountAsync<PageBatchEntity>()).IsEqualTo(0);
         }
         finally
         {

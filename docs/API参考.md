@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1100 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1117 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -154,7 +154,7 @@
 | API | 实现 |
 |------|------|
 | `BulkInsertAsync<T>(items, batchSize)` | PG Binary COPY / SQLite+MySQL 多值 INSERT |
-| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁 |
+| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁；PG/MySQL 版本化实体走单语句（能力不全回退 DbBatch 逐条） |
 | `BulkMergeAsync<T>(items)` | 逐项 UPSERT |
 | `BulkDeleteAsync<T>(keys)` | 500/批 IN 子句 |
 
@@ -186,6 +186,7 @@
 | `DataSessionPool<TProvider>.Create(options, maxIdleSize = 16)` | 创建会话池。`options` 为池基准配置（租期内的 With* 覆写在归还时复位回此形态；拦截器清单为池级共享） |
 | `RentAsync()` | 租出会话——空闲复用（连接不健康的闲置项丢弃重建），无空闲新建。`await using` 消费，`DisposeAsync` 即归还 |
 | `IdleCount` | 空闲会话数（诊断观测） |
+| `DataSessionFactory<TProvider>(options, maxIdleSize = 16)` / `IDataSessionFactory<TProvider>` | 池的 DI 友好封装：注册为单例，请求作用域内 `RentAsync` 租出、`DisposeAsync` 归还；不需要额外 DI 包依赖 |
 
 归还语义：瞬态状态（`WithTenant`/`IgnoreFilters`/`WithIsolationLevel`/`WithTimeout`/`WithRetry`/`WithCircuitBreaker` 覆写、`AddInterceptor` 加项）全部复位；**复用槽（命令/参数池）、读连接、物化容量启发保留**——跨租期存活是池化的核心收益（单行 CRUD/查询命令复用槽在"一请求一会话"形态下不经池化永不激活）。归还门禁：活动事务、未消费的流式枚举器、并行读作用域未收口时 `DisposeAsync` 抛出。空闲上限：满员归还的会话真实释放（不放大物理连接占用）。SQLite 本地实测（探针）：GetByKey per-op 会话 45.5µs → 池化 3.3µs（13.8×），与长会话（2.5µs）只差约 1µs 租还成本。
 

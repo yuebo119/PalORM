@@ -29,9 +29,12 @@ internal static class Program
         }
 
         IEnumerable<Summary> summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, new Config());
-        // 过滤批次带标记（规范 §6）：`perf.sh smoke` 走过滤跑，未标记的子集会顶掉 latest 并被当全量
+        // 过滤批次带标记（规范 §6）：`perf.sh smoke` 走过滤跑，未标记的子集会顶掉 latest 并被当全量。
+        // 默认 --filter * 是完整批次：PerfCli 通过 DAPPER_SUITE_LABEL 显式给出非子集标签
+        //（2026-10-19 全量实测：默认跑被误标 +filtered，latest 自 09-29 起未更新）。
+        string? explicitLabel = Environment.GetEnvironmentVariable("DAPPER_SUITE_LABEL");
         bool filtered = Array.Exists(args, static a => a.Contains("filter", StringComparison.OrdinalIgnoreCase));
-        WriteEnvelope(summaries, filtered ? Database.Dialect + "+filtered" : Database.Dialect);
+        WriteEnvelope(summaries, explicitLabel ?? (filtered ? Database.Dialect + "+filtered" : Database.Dialect));
         return 0;
     }
 

@@ -36,9 +36,9 @@ public class BinaryBenchmarks : IAsyncDisposable
     public async Task Setup()
     {
         _keeper = BenchmarkConfig.OpenSqlite(BenchmarkConfig.SqliteCs);
-        await BenchmarkConfig.ExecSqliteAsync(_keeper!,
+        await BenchmarkConfig.ExecSqliteAsync(_keeper,
             "CREATE TABLE IF NOT EXISTS bench_binary (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, payload BLOB NOT NULL)");
-        await BenchmarkConfig.ExecSqliteAsync(_keeper!,
+        await BenchmarkConfig.ExecSqliteAsync(_keeper,
             "CREATE TABLE IF NOT EXISTS bench_binary_text (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, payload TEXT NOT NULL)");
     }
 

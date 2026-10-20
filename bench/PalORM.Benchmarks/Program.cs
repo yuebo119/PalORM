@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
@@ -31,6 +32,28 @@ public static class Program
         // 2026-09-23 精简：--boxing 与 BoxingMicroBenchmark.cs 已删——它是 v5.0 阶段 3.4 的
         // 一次性决策量具（判据写在代码里："装箱占总分配比 >20% 值得实施 / <5% 不值得"），
         // 决策已落地；同一问题已由 03_GcBenchmarks 以规范形式覆盖。
+        // 连接与池 churn（维度 6）——--pool [sqlite|pg|mysql]
+        if (args.Length > 0 && args[0] == "--pool")
+        {
+            PoolProbe.RunAsync(args.Length > 1 ? args[1] : "sqlite").GetAwaiter().GetResult();
+            return;
+        }
+        // 版本化（[ConcurrencyCheck]）批量更新探针（S6 决策量具，观测不卡阈值）
+        // ——--versioned-update [sqlite|pg|mysql] [rows]
+        if (args.Length > 0 && args[0] == "--versioned-update")
+        {
+            VersionedBulkUpdateProbe.RunAsync(
+                args.Length > 1 ? args[1] : "sqlite",
+                args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 1000)
+                .GetAwaiter().GetResult();
+            return;
+        }
+        // InterpolatedStringHandler 定向 A/B（入口成本，不触库）
+        if (args.Length > 0 && args[0] == "--interp-ab")
+        {
+            InterpolatedStringAbProbe.Run();
+            return;
+        }
         // 并发负载测试（维度 3/4/11，规范 docs/性能基准规范.md）——BDN 单线程测不了锁/池/调度
         if (args.Length > 0 && args[0] == "--workload")
         {
@@ -40,7 +63,7 @@ public static class Program
             {
                 Dialect = args.Length > 1 ? args[1] : "sqlite",
                 ThreadTiers = args.Length > 2
-                    ? [.. args[2].Split(',').Select(static tier => int.Parse(tier.Trim()))]
+                    ? [.. args[2].Split(',').Select(static tier => int.Parse(tier.Trim(), CultureInfo.InvariantCulture))]
                     : [1, 2, 4, 8]
             }).GetAwaiter().GetResult();
             return;
@@ -49,7 +72,7 @@ public static class Program
         if (args.Length > 0 && args[0] == "--stability")
         {
             StabilityHarness.RunAsync(
-                seconds: args.Length > 1 ? int.Parse(args[1]) : 180,
+                seconds: args.Length > 1 ? int.Parse(args[1], CultureInfo.InvariantCulture) : 180,
                 dialect: args.Length > 2 ? args[2] : "sqlite").GetAwaiter().GetResult();
             return;
         }
@@ -74,7 +97,15 @@ public static class Program
         // 默认 bdn。显式声明让"可复现的操作性子集"（门禁同参集）与"临时单基准跑"在结果库里有区别。
         string? declared = Environment.GetEnvironmentVariable("PALORM_BENCH_LABEL");
         bool filtered = Array.Exists(args, static a => a.Contains("filter", StringComparison.OrdinalIgnoreCase));
-        string label = !string.IsNullOrWhiteSpace(declared) ? declared : filtered ? "filtered" : "bdn";
+        string label;
+        if (!string.IsNullOrWhiteSpace(declared))
+        {
+            label = declared;
+        }
+        else
+        {
+            label = filtered ? "filtered" : "bdn";
+        }
         WriteEnvelope(summaries, label);
     }
 

@@ -212,6 +212,31 @@ internal static class CommandFactoryEmitter
         GenerateUpdateColumnArrayElementTypesBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // 版本化单语句批量更新（PG UNNEST）：并发令牌列作为最后一个数组。
+        // 仅 SupportedConcurrencyColumn 判定的形态发射；其余形态运行时回退逐条。
+        ColumnModel? versionColumn = SupportedConcurrencyColumn(model);
+        if (versionColumn is not null)
+        {
+            string versionElementType = NormalizeClrType(versionColumn.ClrTypeName);
+            sb.AppendLine($"    /// <summary>分配版本列数组（UNNEST 版本化批量 UPDATE 用）——AOT 安全。</summary>");
+            sb.AppendLine($"    internal static global::System.Array CreateVersionArray(int count)");
+            sb.AppendLine("    {");
+            sb.AppendLine($"        return new {versionElementType}[count];");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+            sb.AppendLine($"    /// <summary>把实体区间的并发令牌值填入预建数组（UNNEST 版本化批量 UPDATE 用）。</summary>");
+            sb.AppendLine($"    internal static void FillVersionArray(");
+            sb.AppendLine("        global::System.Collections.Generic.IReadOnlyList<object> entities, int start, int count,");
+            sb.AppendLine("        global::System.Array array)");
+            sb.AppendLine("    {");
+            sb.AppendLine($"        {versionElementType}[] target = ({versionElementType}[])array;");
+            sb.AppendLine("        for (int i = 0; i < count; i++)");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            target[i] = (({model.EntityTypeName})entities[start + i]).{versionColumn.EscapedPropertyName};");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+        }
         }
         // SetId: 编译时安全设置自增主键（零反射，替代 MySQL LAST_INSERT_ID 后 Type.GetProperties()）
         sb.AppendLine($"    internal static void SetId({model.EntityTypeName} entity, long id)");
@@ -224,6 +249,17 @@ internal static class CommandFactoryEmitter
         GenerateIncrementVersionBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // 版本化单语句批量更新（MySQL VALUES ROW）：每行一个版本参数，只写 Value。
+        if (SupportedConcurrencyColumn(model) is { } bindVersionColumn)
+        {
+            sb.AppendLine($"    /// <summary>只写版本参数 Value（版本化批量 UPDATE 参数池路径）。</summary>");
+            sb.AppendLine($"    internal static void BindVersionValue(");
+            sb.AppendLine("        global::System.Data.Common.DbParameter[] parameters, object entity, int index)");
+            sb.AppendLine("    {");
+            sb.AppendLine($"        parameters[index].Value = (({model.EntityTypeName})entity).{bindVersionColumn.EscapedPropertyName};");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+        }
         sb.AppendLine($"    internal static bool HasDefaultKey({model.EntityTypeName} entity)");
         sb.AppendLine("    {");
         GenerateHasDefaultKeyBody(model, sb);
@@ -272,12 +308,10 @@ internal static class CommandFactoryEmitter
 
     /// <summary>UPDATE 数组形态的列序 = <b>SET 列 + 主键</b>（与数组形态 SQL 的参数列表同一契约：
     /// <c>ctx.SetColumns</c> + 主键，共 SetColumnCount + 1 个）。
-    /// <para><b>为什么不含并发令牌列</b>：批量 UPDATE 无法表达「每行 version 匹配」，两条入口
-    /// （<c>BulkUpdateAsync</c> 自动路由与 <c>BulkUpdateBatchAsync</c>）都对带 <c>[ConcurrencyCheck]</c>
-    /// 的实体拒绝走批量，该列在数组形态下永不参与绑定；发射它会让数组个数多于 SQL 占位符个数
-    /// （一旦将来放宽前置条件即抛「参数未被使用」类异常，错误信息不指向根因）。
-    /// 将来若要支持并发感知的批量 UPDATE，须同时扩展 SQL（<c>WHERE pk = v.col_pk AND version = v.col_cc</c>），
-    /// 届时应连本方法、SQL 构造器与 Core 侧断言一并改。</para>
+    /// <para><b>为什么不含并发令牌列</b>：UPDATE 数组形态的列序是 SET 列 + 主键；版本化
+    /// 单语句路径使用独立的 <c>FillVersionArray</c>/<c>CreateVersionArray</c>，由 SQL 构造器
+    /// 在 UNNEST 参数列表末尾追加版本数组。两套数组分开可以保持非版本化路径的参数个数
+    /// 契约不变（非版本化 SQL 的 UNNEST 参数恒为 SET+PK）。</para>
     /// <para>Core 侧 <c>ExecuteBulkUpdateArrayBatchesAsync</c> 断言本契约（个数不符即抛可读错误）。</para></summary>
     private static ColumnModel[] UpdateArrayColumns(TableModel model)
     {
@@ -288,6 +322,25 @@ internal static class CommandFactoryEmitter
     /// <summary>UPSERT 数组形态的列序（与 <c>BindUpsertValues</c> 共 IsUpsertable 谓词真源）。</summary>
     private static ColumnModel[] UpsertArrayColumns(TableModel model)
         => [.. model.Columns.AsSpan().ToArray().Where(static column => column.IsUpsertable)];
+
+    /// <summary>版本化单语句批量更新的可用并发令牌列；不支持时返回 null（运行时回退逐条）。
+    /// <para>限制来自 SQL 形态与数组/参数绑定能力：单列、非空、无转换器、非 OwnedJson、
+    /// CLR 类型限 int/long（生成物直接发射类型化数组与 <c>++</c>，其余数值类型不扩面）。</para></summary>
+    internal static ColumnModel? SupportedConcurrencyColumn(TableModel model)
+    {
+        ColumnModel? column = model.Columns.AsSpan().ToArray()
+            .FirstOrDefault(static candidate => candidate.IsConcurrencyToken);
+        if (column is null || column.IsNullable
+            || column.ConverterTypeName is not null || column.IsOwnedJson
+            || column.ComputedExpression is not null)
+        {
+            return null;
+        }
+        string clrType = NormalizeClrType(column.ClrTypeName);
+        return clrType is "int" or "long" or "global::System.Int32" or "global::System.Int64"
+            ? column
+            : null;
+    }
 
     /// <summary>逐列数组填充的共享发射体（UPDATE 与 UPSERT 同一实现，只有列序来源不同）。
     /// <para><b>为什么元素类型静态确定而非运行时推断</b>：生成期已知每列 provider CLR 类型，
