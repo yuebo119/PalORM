@@ -61,7 +61,7 @@
     <PackageVersion Include="Dapper" Version="2.1.89" />
     <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- 同类 micro-ORM 对照（Dapper 官方 benchmarks/ 同样多 ORM 对照）。
-         RepoDb 主包 1.15.1 / Sqlite 1.15.0 是各自最新稳定版（RepoDb 发布节奏差异）。 -->
+         RepoDb 主包与 Sqlite 包均为 1.16.0（2026-10-20 复核：两包同版本号，为当前最新稳定版）。 -->
     <PackageVersion Include="RepoDb" Version="1.16.0" />
     <PackageVersion Include="RepoDb.Sqlite.Microsoft" Version="1.16.0" />
   </ItemGroup>
@@ -108,8 +108,10 @@
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Identity.Client" Version="4.91.0" />
-    <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.91.0" />
+    <!-- 2026-10-20 依赖复核：4.91.0→4.91.1（patch）。上游=Azure.Core 1.63.0（经
+         Microsoft.ApplicationInsights 进入测试项目），仅测试图可见，产品包不受影响。 -->
+    <PackageVersion Include="Microsoft.Identity.Client" Version="4.91.1" />
+    <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.91.1" />
     <PackageVersion Include="Microsoft.IdentityModel.Abstractions" Version="8.23.0" />
     <PackageVersion Include="OpenTelemetry" Version="1.20.0" />
     <PackageVersion Include="OpenTelemetry.Api" Version="1.20.0" />
