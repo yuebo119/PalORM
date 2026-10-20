@@ -30,6 +30,9 @@
     <!-- 性能拆账探针（.ai/perf-probe，本地诊断工具不入库）：会话构造等内部形态的
          分段测量需与 PerfHub 同口径（internal ctor 包装共享连接）。 -->
     <InternalsVisibleTo Include="PerfProbe" />
+    <!-- InterpolatedStringHandler 定向 A/B：需复用内部 FormattableSqlFormatter 的现行基线，
+         避免在基准项目复制一份会漂移的格式化实现。 -->
+    <InternalsVisibleTo Include="PalORM.Benchmarks" />
   </ItemGroup>
   <!-- SourceLink：PrivateAssets=all 防止消费者拉到 -->
   <ItemGroup>
