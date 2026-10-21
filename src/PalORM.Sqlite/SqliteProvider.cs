@@ -113,6 +113,11 @@ public sealed class SqliteProvider : IDbProvider
     /// <summary>SQLite 3.35+ 支持 RETURNING 子句。</summary>
     public static bool SupportsReturningClause => true;
 
+    /// <summary>SQLite 是进程内引擎，Microsoft.Data.Sqlite 的异步 API 内部同样是同步执行；
+    /// 走异步形态只多付 Task/状态机脚手架，故叶子执行点优先同步调用（见
+    /// <see cref="IDbProvider.PreferSynchronousIo"/>）。取消令牌在调用前显式检查。</summary>
+    public static bool PreferSynchronousIo => true;
+
     /// <summary>SQLite 的 CURRENT_TIMESTAMP 恒为 UTC；MySQL/PG 为会话时区——
     /// 软删除 deleted_at 跨库混用时语义不同（ITM-326）。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";

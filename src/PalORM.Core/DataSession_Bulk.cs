@@ -41,7 +41,7 @@ public partial class DataSession<TProvider>
             return 0;
         }
         return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
-            _options.CommandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
+            _commandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
     }
 
     /// <summary>批量删除——数组形态单批 20000 行；IN 形态按方言参数上限与 5000 行/批取较小者
@@ -784,7 +784,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         // 生成的 UPDATE 语句：复用 GetCommandSqls 的单一真源（含租户后缀的两形态由缓存提供）。
         // S1：静态槽命中零注册表读取；未命中才走冷路径解析。
         string updateSql = GetCommandSqls<T>().Update;
@@ -902,7 +902,7 @@ public partial class DataSession<TProvider>
             batch.Transaction = input.Tran;
             // DbBatch.Timeout 是 int 秒（与 DbCommand.CommandTimeout 同口径）；
             // ≤ 0 = 全库 Zero 无限等待契约。
-            batch.Timeout = _options.CommandTimeoutSeconds;
+            batch.Timeout = _commandTimeoutSeconds;
 
             for (int i = start; i < end; i++)
             {
@@ -1168,7 +1168,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
 
         // 参数池与命令参数集合一次建好；末批缩短时只收敛集合、不新建参数对象
         DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
@@ -1306,7 +1306,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         cmd.CommandText = BatchUpdateSqlBuilder.Build(
             TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
             rowCount: 1, hasTenantFilter: ctx.HasTenantFilter,
@@ -1476,7 +1476,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         cmd.CommandText = BatchUpdateSqlBuilder.Build(
             TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
             rowCount: 1, hasTenantFilter: ctx.HasTenantFilter,
@@ -1554,7 +1554,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
 
         DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
             poolRowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
@@ -1908,7 +1908,7 @@ public partial class DataSession<TProvider>
                     {
                         pooledCmd = CreateCommand();
                         pooledCmd.Transaction = transaction;
-                        pooledCmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                        pooledCmd.CommandTimeout = _commandTimeoutSeconds;
                     }
                     cmd = pooledCmd;
                     if (pool is null)
@@ -1944,7 +1944,7 @@ public partial class DataSession<TProvider>
                     freshCmd = fresh;
                     cmd = fresh;
                     cmd.Transaction = transaction;
-                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                    cmd.CommandTimeout = _commandTimeoutSeconds;
                     cmd.CommandText = BuildInsertReturningBatchSql(
                         quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
                     for (int row = start; row < end; row++)
@@ -2131,7 +2131,7 @@ public partial class DataSession<TProvider>
         // AttachParameters 契约同构；守卫 SQL 已在 shape 层施加。
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         int fullRowCount = Math.Min(batchSize, entities.Count);
         int tenantParams = CountTenantParams(tenantGuarded);
         var pool = CreateUpsertParameterPool<T>(cmd, fullRowCount, columnCount, tenantGuarded);
@@ -2291,7 +2291,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         var sql = new System.Text.StringBuilder(96 + shape.QuotedColumns.Length + shape.ConflictClause.Length);
         sql.Append("INSERT INTO ").Append(shape.QuotedTable).Append(" (")
             .Append(shape.QuotedColumns).Append(") SELECT * FROM UNNEST(");

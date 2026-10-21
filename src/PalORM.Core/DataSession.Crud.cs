@@ -316,7 +316,7 @@ public sealed partial class DataSession<TProvider>
 
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         try
         {
             plan.BindInsert(cmd, entity, 0);
@@ -346,10 +346,11 @@ public sealed partial class DataSession<TProvider>
     /// 门禁与 INSERT 槽同口径：旧生成器（无 BindUpsertValues）与租户实体不晋升；
     /// 命令归会话所有，会话释放时统一 Dispose。</summary>
     private DbCommand? TryAcquireUpsertCommand<T>(
-        string commandText, CrudPlan plan, T entity, ref int servedOps, DbTransaction? activeTransaction)
+        string commandText, CrudPlan plan, T entity, ref int servedOps, EntityFeatures features,
+        DbTransaction? activeTransaction)
         where T : class, new()
     {
-        if (plan.BindUpsertValues is not { } valuesBinder || HasTenantFilter<T>())
+        if (plan.BindUpsertValues is not { } valuesBinder || HasTenantFilter(features))
             return null;
 
         if (_reusableUpsert is { } reusable && reusable.EntityType == typeof(T))
@@ -450,10 +451,10 @@ public sealed partial class DataSession<TProvider>
     /// 负责复用判定与键值绑定。返回的命令归会话所有（会话释放时统一 Dispose），调用方不得释放；
     /// 读路径的 <see cref="DbDataReader"/> 由调用方 await using 释放——释放前不触碰本命令。</para></summary>
     private DbCommand? TryAcquireGetByKeyCommand<T>(
-        string commandText, object key, CrudPlan plan, DbTransaction? activeTransaction)
+        string commandText, object key, CrudPlan plan, EntityRuntimeInfo info, DbTransaction? activeTransaction)
         where T : class, new()
     {
-        if (HasTenantFilter<T>())
+        if (HasTenantFilter(info.Features))
             return null;
 
         if (_reusableGetByKey is { } reusable && reusable.EntityType == typeof(T)
@@ -491,11 +492,11 @@ public sealed partial class DataSession<TProvider>
 
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         try
         {
-            BindGeneratedKeyParameter<T>(cmd, key);
-            BindDefaultFilterParameters<T>(cmd);
+            BindGeneratedKeyParameter<T>(info, cmd, key);
+            BindDefaultFilterParameters(cmd, info.Features);
         }
         catch
         {
@@ -524,10 +525,10 @@ public sealed partial class DataSession<TProvider>
     /// 同一真源）。租户实体/复合主键/旧生成器程序集不晋升（与 GetByKey 槽同门禁）；
     /// 返回的命令归会话所有，调用方不得释放。</summary>
     private DbCommand? TryAcquireDeleteCommand<T>(
-        string commandText, object key, CrudPlan plan, DbTransaction? activeTransaction)
+        string commandText, object key, CrudPlan plan, EntityRuntimeInfo info, DbTransaction? activeTransaction)
         where T : class, new()
     {
-        if (HasTenantFilter<T>())
+        if (HasTenantFilter(info.Features))
             return null;
 
         if (_reusableDelete is { } reusable && reusable.EntityType == typeof(T)
@@ -551,11 +552,11 @@ public sealed partial class DataSession<TProvider>
 
         DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         try
         {
-            BindGeneratedKeyParameter<T>(cmd, key);
-            BindDefaultFilterParameters<T>(cmd);
+            BindGeneratedKeyParameter<T>(info, cmd, key);
+            BindDefaultFilterParameters(cmd, info.Features);
         }
         catch
         {
@@ -578,10 +579,10 @@ public sealed partial class DataSession<TProvider>
     /// <summary>S5：取可复用的软删除命令（[SoftDelete] 的 UPDATE deleted_at）。门禁与物理
     /// 删除槽同口径：租户实体/复合主键/旧生成器不晋升；键值经 ConvertDeleteKey 就地写。</summary>
     private DbCommand? TryAcquireSoftDeleteCommand<T>(
-        string commandText, object key, CrudPlan plan, DbTransaction? activeTransaction)
+        string commandText, object key, CrudPlan plan, EntityRuntimeInfo info, DbTransaction? activeTransaction)
         where T : class, new()
     {
-        if (HasTenantFilter<T>())
+        if (HasTenantFilter(info.Features))
             return null;
 
         if (_reusableSoftDelete is { } reusable && reusable.EntityType == typeof(T)
@@ -603,7 +604,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = commandText;
         try
         {
-            BindGeneratedKeyParameter<T>(cmd, key);
+            BindGeneratedKeyParameter<T>(info, cmd, key);
         }
         catch
         {
@@ -700,7 +701,7 @@ public sealed partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = commandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         plan.BindInsert(cmd, entity, 0);
         return await FinishInsertAsync(info, cmd, plan, entity, ct).ConfigureAwait(false);
     }
@@ -720,7 +721,7 @@ public sealed partial class DataSession<TProvider>
         {
             if (plan.InsertNoReturning)
             {
-                int affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                int affected = await ExecuteRowsCoreAsync(cmd, ct).ConfigureAwait(false);
                 if (affected != 1)
                     throw new InvalidOperationException(
                         $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
@@ -751,15 +752,15 @@ public sealed partial class DataSession<TProvider>
         // 标量读取省去 reader 行缓冲与整行物化（宽表实体分配 −1 实体 −N 列读取）。
         if (plan.InsertReturningKeyOnly)
         {
-            long? narrowId = NormalizeGeneratedId(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
+            long? narrowId = NormalizeGeneratedId(await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false));
             if (narrowId is null)
                 throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
             if (info.SetId is { } narrowBackfill)
                 BackfillGeneratedId(narrowBackfill, entity, narrowId.Value);
             return entity;
         }
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+        await using DbDataReader reader = await ExecuteReaderAsync(cmd, ct).ConfigureAwait(false);
+        if (!await ReadAsync(reader, ct).ConfigureAwait(false))
             throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
 
         T materialized = ((Func<DbDataReader, T>)plan.RowFactory)(reader);
@@ -806,7 +807,7 @@ public sealed partial class DataSession<TProvider>
 
         // PL-2：语句文本、超时与参数绑定已由 TryAcquireInsertCommand 完成——本方法只执行
         long? generatedId = NormalizeGeneratedId(
-            await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
+            await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false));
         if (generatedId is long id && info.SetId is { } setId)
             setId(entity, id);
         return entity;
@@ -880,7 +881,7 @@ public sealed partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand(activeTransaction);
         cmd.CommandText = updateSql;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         plan.BindUpdate(cmd, entity);
         BindDefaultFilterParameters(cmd, info.Features);
 
@@ -911,14 +912,14 @@ public sealed partial class DataSession<TProvider>
             // G4（五轮微项包）：全句走 2 槽静态缓存（含租户两形态），见 GetSoftDeleteUpdateSqlFast
             string softDeleteSql = GetSoftDeleteUpdateSqlFast<T>(deleteInfo);
             if (!HasTenantFilter(deleteInfo.Features)
-                && TryAcquireSoftDeleteCommand<T>(softDeleteSql, key, deletePlan, deleteTransaction) is { } reusedSoftDelete)
+                && TryAcquireSoftDeleteCommand<T>(softDeleteSql, key, deletePlan, deleteInfo, deleteTransaction) is { } reusedSoftDelete)
             {
                 return await ExecuteWriteRowsAsync(reusedSoftDelete, deleteTransaction, ct).ConfigureAwait(false);
             }
             await using DbCommand cmd = CreateCommand(deleteTransaction);
             cmd.CommandText = softDeleteSql;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            BindGeneratedKeyParameter<T>(cmd, key);
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            BindGeneratedKeyParameter<T>(deleteInfo, cmd, key);
             BindDefaultFilterParameters(cmd, deleteInfo.Features);
             return await ExecuteWriteRowsAsync(cmd, deleteTransaction, ct).ConfigureAwait(false);
         }
@@ -929,14 +930,14 @@ public sealed partial class DataSession<TProvider>
             ? GetDeleteWithTenantSqlFast<T>(sqls.Delete)
             : sqls.Delete;
         if (!deleteHasTenant
-            && TryAcquireDeleteCommand<T>(deleteCommandText, key, deletePlan, deleteTransaction) is { } reusedDelete)
+            && TryAcquireDeleteCommand<T>(deleteCommandText, key, deletePlan, deleteInfo, deleteTransaction) is { } reusedDelete)
             return await ExecuteWriteRowsAsync(reusedDelete, deleteTransaction, ct).ConfigureAwait(false);
 
         await using DbCommand delCmd = CreateCommand(deleteTransaction);
         // M1（v5.6.0）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
         delCmd.CommandText = deleteCommandText;
-        delCmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindGeneratedKeyParameter<T>(delCmd, key);
+        delCmd.CommandTimeout = _commandTimeoutSeconds;
+        BindGeneratedKeyParameter<T>(deleteInfo, delCmd, key);
         BindDefaultFilterParameters(delCmd, deleteInfo.Features);
         return await ExecuteWriteRowsAsync(delCmd, deleteTransaction, ct).ConfigureAwait(false);
     }
@@ -1241,11 +1242,11 @@ public sealed partial class DataSession<TProvider>
         {
             await using DbCommand cmd = connection.CreateCommand();
             cmd.CommandText = commandText;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-            BindGeneratedKeyParameter<T>(cmd, key);
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            BindGeneratedKeyParameter<T>(info, cmd, key);
             BindDefaultFilterParameters(cmd, info.Features);
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            T? row = await reader.ReadAsync(token).ConfigureAwait(false)
+            await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
+            T? row = await ReadAsync(reader, token).ConfigureAwait(false)
                 ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
             healthy = true;
             return row;
@@ -1273,22 +1274,22 @@ public sealed partial class DataSession<TProvider>
         // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
         // 按命令实例生效，换命令即重编译）。
         DbCommand? reused = TryAcquireGetByKeyCommand<T>(
-            commandText, key, GetCrudPlan<T>(info), activeTransaction);
+            commandText, key, GetCrudPlan<T>(info), info, activeTransaction);
         if (reused is not null)
         {
-            await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(token).ConfigureAwait(false);
-            return await reusedReader.ReadAsync(token).ConfigureAwait(false)
+            await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, token).ConfigureAwait(false);
+            return await ReadAsync(reusedReader, token).ConfigureAwait(false)
                 ? ((Func<DbDataReader, T>)info.RowFactory)(reusedReader) : default;
         }
 
         await using DbCommand cmd = CreateCommand(activeTransaction);
         cmd.CommandText = commandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-        BindGeneratedKeyParameter<T>(cmd, key);
+        cmd.CommandTimeout = _commandTimeoutSeconds;
+        BindGeneratedKeyParameter<T>(info, cmd, key);
         BindDefaultFilterParameters(cmd, info.Features);
 
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-        return await reader.ReadAsync(token).ConfigureAwait(false)
+        await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
+        return await ReadAsync(reader, token).ConfigureAwait(false)
             ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
     }
 
@@ -1357,7 +1358,7 @@ public sealed partial class DataSession<TProvider>
         DbCommand cmd = lease.Command;
         // G4（五轮微项包）：完整 SQL 走 4 槽静态缓存（F6b 同型，原 per-(Type,Dialect,forms) 字典）。
         cmd.CommandText = GetGetAllSqlFast<T>(info);
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         BindDefaultFilterParameters(cmd, info.Features);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -1442,14 +1443,14 @@ public sealed partial class DataSession<TProvider>
         DbTransaction? upsertTransaction = GetActiveTransaction();
         // 租户护栏（2026-10-06）：带租户会话的冲突更新只改本租户行——守卫 SQL 与 @__tenant0
         // 绑定在此收口（UpdateCoreAsync 租户包装的对称面，10-05 审计 P2）。
-        bool tenantGuarded = HasTenantFilter<T>();
+        bool tenantGuarded = HasTenantFilter(info.Features);
         string commandText = TProvider.SupportsReturningClause
             ? sqls.UpsertReturning
             : sqls.UpsertMySql;
 
         // S5：非租户形态接命令/参数复用槽（旧生成器无 BindUpsertValues 时返回 null）。
         if (!tenantGuarded
-            && TryAcquireUpsertCommand(commandText, plan, entity, ref _upsertWriteOps, upsertTransaction) is { } reusedUpsert)
+            && TryAcquireUpsertCommand(commandText, plan, entity, ref _upsertWriteOps, info.Features, upsertTransaction) is { } reusedUpsert)
         {
             try
             {
@@ -1466,7 +1467,7 @@ public sealed partial class DataSession<TProvider>
         }
 
         await using DbCommand cmd = CreateCommand(upsertTransaction);
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         plan.BindUpsert(cmd, entity);
         if (plan.UpsertColumns.Count != cmd.Parameters.Count)
             throw new InvalidOperationException(
@@ -1532,7 +1533,7 @@ public sealed partial class DataSession<TProvider>
         }
 
         long? generatedId = NormalizeGeneratedId(
-            await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false));
+            await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false));
         if (generatedId is long id)
             setId(entity, id);
         return entity;

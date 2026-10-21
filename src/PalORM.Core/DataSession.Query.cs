@@ -53,7 +53,7 @@ public sealed partial class DataSession<TProvider>
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         if (where is not null) BindFormattableParameters(cmd, where);
         BindDefaultFilterParameters(cmd, info.Features);
         // v5.4 弹性接入：COUNT 为无事务只读路径时经会话弹性策略。
@@ -209,7 +209,7 @@ public sealed partial class DataSession<TProvider>
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = sql;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         BindFormattableParameters(cmd, original);
         BindDefaultFilterParameters(cmd, info.Features);
         // A2（2026-10-01 全 API 逐项轮）：直调重载覆盖 Sum/Max/Min/Avg 四个聚合入口
@@ -266,7 +266,15 @@ public sealed partial class DataSession<TProvider>
     }
 
     private static ValueTask<object?> ExecuteScalarCoreAsync(DbCommand command, CancellationToken ct)
-        => new(command.ExecuteScalarAsync(ct));
+        => TProvider.PreferSynchronousIo
+            ? new ValueTask<object?>(ExecuteScalarSync(command, ct))
+            : new ValueTask<object?>(command.ExecuteScalarAsync(ct));
+
+    private static object? ExecuteScalarSync(DbCommand command, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return command.ExecuteScalar();
+    }
 
     /// <summary>标量值到 CLR 类型的归一转换——解包可空泛型后统一走 Convert.ChangeType。
     /// ITM-533：InvariantCulture 避免线程区域性影响数值/日期解析。
@@ -330,7 +338,7 @@ public sealed partial class DataSession<TProvider>
                 lease = await CreateReadRoutedCommandAsync(readFromReplica, streamTransaction, ct).ConfigureAwait(false);
                 cmd = lease.Command;
                 cmd.CommandText = streamCommandText;
-                cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                cmd.CommandTimeout = _commandTimeoutSeconds;
                 BindFormattableParameters(cmd, sql);
             }
 
@@ -370,10 +378,13 @@ public sealed partial class DataSession<TProvider>
 
     // ─── 查询缓存 ────────────────────────────────────────
 
-    private static void BindGeneratedKeyParameter<T>(DbCommand cmd, object key)
+    /// <summary>键绑定直达入口——调用方已持有会话级合并视图（<see cref="EntityRuntimeInfo"/>），
+    /// 原实现每次操作再走一次 <see cref="GetEntityInfo{T}"/> 静态槽读取；热路径（GetByKey/Delete
+    /// 的复用槽晋升与新建路径）全部改经本重载，省一次泛型静态访问。</summary>
+    private static void BindGeneratedKeyParameter<T>(EntityRuntimeInfo info, DbCommand cmd, object key)
         where T : class, new()
     {
-        if (GetEntityInfo<T>().BindDelete is { } binder)
+        if (info.BindDelete is { } binder)
         {
             binder(cmd, key);
             return;
@@ -431,7 +442,7 @@ public sealed partial class DataSession<TProvider>
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, activeTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = queryCommandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
 
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -514,7 +525,7 @@ public sealed partial class DataSession<TProvider>
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, scalarTransaction, ct).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         cmd.CommandText = scalarCommandText;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
         object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         lease.MarkHealthy();
@@ -555,7 +566,7 @@ public sealed partial class DataSession<TProvider>
         {
             cmd = CreateCommand(executeTransaction);
             cmd.CommandText = executeCommandText;
-            cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+            cmd.CommandTimeout = _commandTimeoutSeconds;
             BindFormattableParameters(cmd, sql);
             ownsCommand = true;
         }
