@@ -141,6 +141,13 @@ public sealed class AnalyzerDiagnosticsTests
             await AnalyzeAsync(source);
 
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM004")).IsTrue();
+        Diagnostic palorm004 = diagnostics.First(d => d.Id == "PALORM004");
+        // 2026-10-22 审计 N2：FK DDL 已内联生成，诊断文案必须描述默认 NO ACTION，
+        // 不能再声称“FK DDL 不生成/无运行时效果”。
+        await Assert.That(palorm004.GetMessage(System.Globalization.CultureInfo.InvariantCulture))
+            .Contains("ON DELETE NO ACTION");
+        await Assert.That(palorm004.GetMessage(System.Globalization.CultureInfo.InvariantCulture))
+            .DoesNotContain("not generated");
         await Assert.That(compileErrors).IsEmpty();
     }
 

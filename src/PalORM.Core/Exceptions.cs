@@ -13,7 +13,7 @@ public class PalORMException : Exception
 /// <summary>熔断器打开异常。</summary>
 public sealed class CircuitBreakerOpenException : PalORMException
 {
-    /// <summary>以熔断状态描述（含恢复时间点）创建异常。</summary>
+    /// <summary>以熔断状态描述（含重置窗口）创建异常。</summary>
     public CircuitBreakerOpenException(string message) : base(message) { }
 }
 

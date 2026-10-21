@@ -389,6 +389,19 @@ internal sealed class BulkDeleteArrayFormTests
             => await session.BulkDeleteAsync<TypedGuardUnregisteredRow, long>([]));
     }
 
+    /// <summary>N7（2026-10-22 审计）：>=2 键的未注册类型走初始 CRUD 守卫，
+    /// 错误消息与对象重载一致（"has no generated CRUD"），不再先抛 "not registered"。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_UnregisteredType_ReportsGeneratedCrudMessage()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async ()
+            => await session.BulkDeleteAsync<TypedGuardUnregisteredRow, long>([1L, 2L]));
+
+        await Assert.That(ex!.Message).Contains("has no generated CRUD");
+    }
+
     /// <summary>多批边界：键数跨 <c>UnnestArraysMaxRowsPerBatch</c>（20000，深挖轮）时类型化
     /// 路径的批循环正确切批（批边界算错会留残行）。</summary>
     [Test]
