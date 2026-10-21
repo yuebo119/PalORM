@@ -47,6 +47,17 @@ internal sealed class SessionOperationState
     private bool _transactionCompleting;
     private int _state;
 
+    /// <summary>独占活动标志的无锁镜像（0 = 静默，1 = 有独占操作）。快速进入经
+    /// <see cref="Interlocked.CompareExchange(ref int, int, int)"/> 抢占；慢路径（锁内）
+    /// 进入时同样置 1。所有离开路径经 <see cref="Exit"/> 的锁内段复位。</summary>
+    private int _fastState;
+
+    /// <summary><c>_state != 0</c> 的 volatile 镜像（0 = 可进入，1 = 释放中/已释放/已驻留）。
+    /// <see cref="DisposeAsync"/> 与 <see cref="Park"/> 在取锁之前先置位，快速进入在 CAS
+    /// 前后各复读一次：这是"快速进入与 Dispose 快照"之间唯一的竞态窗口，协议说明见
+    /// <see cref="TryEnterFast"/>。</summary>
+    private int _disposing;
+
     // ─── 池化驻留（2026-10-13 二轮方案）：_state 第 4 态 ──
     // 0=活动 1=释放中 2=已释放 3=已驻留(归还池中,租出经 Unpark 复位回 0)。
     // Park 在锁内校验"无在飞操作/读租约/事务流/并行作用域"后置位——与 Enter 的互斥
@@ -68,6 +79,9 @@ internal sealed class SessionOperationState
 
     internal ParkResult Park()
     {
+        // 发布点先于锁：无锁进入在 CAS 后复读本标志，任一交错下至少一方看见对方
+        // （协议说明见 TryEnterFast）。
+        Volatile.Write(ref _disposing, 1);
         lock (_sync)
         {
             if (_state == 3)
@@ -103,7 +117,13 @@ internal sealed class SessionOperationState
         lock (_sync)
         {
             if (_state == 3)
+            {
                 _state = 0;
+                Volatile.Write(ref _disposing, 0);
+            }
+            // 池化会话跨租期：新租期可能在另一条异步流上开始，AsyncLocal 的原值不随本实例
+            // 迁移——必须让首次预热重新写槽（否则每次操作都要在 Enter 内回落到写入路径）。
+            _prewarmed = false;
         }
     }
 
@@ -114,43 +134,111 @@ internal sealed class SessionOperationState
         if (owner is not null && CanFastReenterOwner(owner))
             return default;
 
+        // 无事务流、无并行读、无读租约、未释放时的无锁快路径。绝大多数单行 CRUD 命中，
+        // 省掉 Enter 与 GetActiveTransaction 两处锁（Exit 仍持锁，见其注释）。
+        if (owner is null && TryEnterFast(out SessionOperationLease fastLease))
+            return fastLease;
+
         lock (_sync)
         {
-            bool ownedOperation = owner is not null
-                && ReferenceEquals(owner, _activeOperationOwner);
-            ThrowIfEnterBlocked(ownedOperation);
-            // ARCH-001（2026-09-23）：并行读作用域内只读租约在飞时，独占操作（写/事务/Bulk）
-            // 同样被拒绝——"只读并行、写与事务串行"的非对称语义由本检查兜住。
-            if (_isActive || _activeReadLeases > 0)
-            {
-                if (ownedOperation)
-                {
-                    return default;
-                }
-                throw new InvalidOperationException(
-                    "DataSession already has an active database operation.");
-            }
-
-            // v4.6：用 this 替代 new object() -- 常驻引用，第2次 AsyncLocal.Value=this 与旧值相等时 EC 短路不 COW
-            _activeOperationOwner = this;
-            // step16-P1：同值守卫——公共入口预热后（调用方 EC 值持久流动进来）命中即免写；
-            // 未预热的路径（内部互调/旧入口）miss 时照写，语义不变（见 PrewarmCurrentOperationOwner）
-            //
-            // ⚠ EC 包含绊线（2026-10-14 G2 证伪轮）：本 AsyncLocal 写只允许发生在 async 方法
-            // 体内（builder 同步完成路径会还原 EC）——非 async 调用使写逃逸调用方活 EC，
-            // per-op 会话 = 新 AsyncLocal 实例键 → EC map 无界增长 → O(N²)（SQLite 并发 20×
-            // 塌方实测）。同步上下文需要门禁时用 <see cref="EnterConfigGate"/>（无 AsyncLocal 写）；
-            // ArchitectureInvariantTests.EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment
-            // 机械守卫本纪律。
-            if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
-                _currentOperationOwner.Value = _activeOperationOwner;
-            CompletedOps++;
-            _isActive = true;
-            // v4.5：不创建 TCS -- 仅在 Dispose/WaitForActive 需要等待时才延迟创建
-            _activeOperation = null;
-            return new SessionOperationLease(
-                this, _activeOperationOwner);
+            return EnterLocked(owner);
         }
+    }
+
+    /// <summary>Enter 的锁内主体——<see cref="Enter"/> 慢路径与 <see cref="EnterReadOnly"/>
+    /// （作用域外）共用，后者借此避免"锁内再调 Enter"的嵌套取锁。</summary>
+    private SessionOperationLease EnterLocked(object? owner)
+    {
+        bool ownedOperation = owner is not null
+            && ReferenceEquals(owner, _activeOperationOwner);
+        ThrowIfEnterBlocked(ownedOperation);
+        // ARCH-001（2026-09-23）：并行读作用域内只读租约在飞时，独占操作（写/事务/Bulk）
+        // 同样被拒绝——"只读并行、写与事务串行"的非对称语义由本检查兜住。
+        if (_isActive || _activeReadLeases > 0)
+        {
+            if (ownedOperation)
+            {
+                return default;
+            }
+            throw new InvalidOperationException(
+                "DataSession already has an active database operation.");
+        }
+
+        // 无锁进入可能在本线程读完 _isActive 之后抢占 _fastState：以 CAS 作为唯一席位
+        // 认领（锁内不代表独占，快速进入不取锁）。认领失败即视为已有活动操作。
+        if (Interlocked.CompareExchange(ref _fastState, 1, 0) != 0)
+        {
+            throw new InvalidOperationException(
+                "DataSession already has an active database operation.");
+        }
+
+        // v4.6：用 this 替代 new object() -- 常驻引用，第2次 AsyncLocal.Value=this 与旧值相等时 EC 短路不 COW
+        _activeOperationOwner = this;
+        // step16-P1：同值守卫——公共入口预热后（调用方 EC 值持久流动进来）命中即免写；
+        // 未预热的路径（内部互调/旧入口）miss 时照写，语义不变（见 PrewarmCurrentOperationOwner）
+        //
+        // ⚠ EC 包含绊线（2026-10-14 G2 证伪轮）：本 AsyncLocal 写只允许发生在 async 方法
+        // 体内（builder 同步完成路径会还原 EC）——非 async 调用使写逃逸调用方活 EC，
+        // per-op 会话 = 新 AsyncLocal 实例键 → EC map 无界增长 → O(N²)（SQLite 并发 20×
+        // 塌方实测）。同步上下文需要门禁时用 <see cref="EnterConfigGate"/>（无 AsyncLocal 写）；
+        // ArchitectureInvariantTests.EnterLeaseCalls_MustBeInsideAsyncMethods_EcContainment
+        // 机械守卫本纪律。
+        if (!ReferenceEquals(_currentOperationOwner.Value, _activeOperationOwner))
+            _currentOperationOwner.Value = _activeOperationOwner;
+        CompletedOps++;
+        _isActive = true;
+        // v4.5：不创建 TCS -- 仅在 Dispose/WaitForActive 需要等待时才延迟创建
+        _activeOperation = null;
+        return new SessionOperationLease(
+            this, _activeOperationOwner);
+    }
+
+    /// <summary>无锁独占进入（owner 为 null 的常规 CRUD 路径）。
+    /// <para><b>竞态闭合协议</b>：进入端先读 <see cref="_disposing"/>，再 CAS
+    /// <see cref="_fastState"/> 0→1，随后置 <c>_isActive</c> 并复读全部互斥面
+    /// （<see cref="_disposing"/><see cref="_transactionOwner"/><see cref="_activeReadLeases"/>/
+    /// <see cref="_parallelReadScopes"/>）。Dispose/Park 端在取锁前先置 <see cref="_disposing"/>，
+    /// 再在锁内读 <c>_isActive</c>；读租约端在锁内先查 <see cref="_fastState"/> 再增计数。
+    /// 两侧都是"先写自己的标志再读对方"，任一交错下至少一方看见对方：进入端退让时在锁内
+    /// 清状态并唤醒可能已创建的 Dispose 等待信号，Dispose 端口若后到则看到 <c>_isActive=false</c>
+    /// 不创建等待。故不存在"进入成功但 Dispose 未等待"或"Dispose 等待但进入已退让"的窗口。</para></summary>
+    private bool TryEnterFast(out SessionOperationLease lease)
+    {
+        lease = default;
+        if (Volatile.Read(ref _disposing) != 0
+            || Volatile.Read(ref _transactionOwner) is not null
+            || Volatile.Read(ref _parallelReadScopes) != 0
+            || Volatile.Read(ref _activeReadLeases) != 0)
+        {
+            return false;
+        }
+        if (Interlocked.CompareExchange(ref _fastState, 1, 0) != 0)
+            return false;
+
+        Volatile.Write(ref _isActive, true);
+        // 复读：CAS 与首次读之间可能发生 Dispose/读租约/事务流。任一项成立即退让。
+        if (Volatile.Read(ref _disposing) != 0
+            || Volatile.Read(ref _transactionOwner) is not null
+            || Volatile.Read(ref _parallelReadScopes) != 0
+            || Volatile.Read(ref _activeReadLeases) != 0)
+        {
+            lock (_sync)
+            {
+                Volatile.Write(ref _isActive, false);
+                Volatile.Write(ref _fastState, 0);
+                TaskCompletionSource? waiter = _activeOperation;
+                _activeOperation = null;
+                waiter?.TrySetResult();
+            }
+            return false;
+        }
+
+        _activeOperationOwner = this;
+        if (!ReferenceEquals(_currentOperationOwner.Value, this))
+            _currentOperationOwner.Value = this;
+        CompletedOps++;
+        lease = new SessionOperationLease(this, this);
+        return true;
     }
 
     /// <summary>配置门（EC 包含绊线轮，2026-10-14）：同步配置方法（IgnoreFilters/WithTenant/
@@ -171,6 +259,7 @@ internal sealed class SessionOperationState
             }
             _activeOperationOwner = this;
             _isActive = true;
+            Volatile.Write(ref _fastState, 1);
             _activeOperation = null;
             return new SessionOperationLease(this, _activeOperationOwner);
         }
@@ -243,14 +332,14 @@ internal sealed class SessionOperationState
     /// <summary>进入并行读作用域（ARCH-001）——可嵌套，深度归零即恢复单活动门禁。</summary>
     internal void EnterParallelReadScope()
     {
-        lock (_sync) _parallelReadScopes++;
+        lock (_sync) Interlocked.Increment(ref _parallelReadScopes);
     }
 
     internal void ExitParallelReadScope()
     {
         lock (_sync)
         {
-            if (_parallelReadScopes > 0) _parallelReadScopes--;
+            if (_parallelReadScopes > 0) Interlocked.Decrement(ref _parallelReadScopes);
         }
     }
 
@@ -263,7 +352,7 @@ internal sealed class SessionOperationState
         lock (_sync)
         {
             if (_parallelReadScopes == 0)
-                return Enter(owner);
+                return EnterLocked(owner);
             // ITM-875（r23）：内层执行核心（带 owner）在同一异步流已持读租约时不双计——
             // 外层公共入口（无 owner）恒为真租约，租约上限检查对它保持有效。
             // 同时使 ForEachAsync 作用域内的内层租约与 ToListAsync 族同型（ITM-811 配套）。
@@ -272,7 +361,9 @@ internal sealed class SessionOperationState
             // ITM-863（r23）：disposing 中不放行新读租约（对照 Enter 的 _state==1 分支）；
             // 本流重入已在上方短路。
             ObjectDisposedException.ThrowIf(_state != 0, this);
-            if (_isActive || _transactionOwner is not null)
+            // 无锁独占进入可能与读租约交错：读侧在锁内先查 _fastState 再增计数（进入侧
+            // 先 CAS 再复读 _activeReadLeases，两侧先后写读，见 TryEnterFast 协议）。
+            if (_isActive || Volatile.Read(ref _fastState) != 0 || _transactionOwner is not null)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation.");
@@ -282,7 +373,7 @@ internal sealed class SessionOperationState
                 throw new InvalidOperationException(
                     $"Parallel read lease limit ({MaxParallelReads}) reached for this DataSession.");
             }
-            _activeReadLeases++;
+            Interlocked.Increment(ref _activeReadLeases);
             _readLeaseDepth.Value = 1;
             return new SessionOperationLease(this, owner: null, readOnly: true);
         }
@@ -294,7 +385,7 @@ internal sealed class SessionOperationState
         lock (_sync)
         {
             _readLeaseDepth.Value = 0;
-            if (_activeReadLeases > 0) _activeReadLeases--;
+            if (_activeReadLeases > 0) Interlocked.Decrement(ref _activeReadLeases);
             // ITM-863（r23）：归零时唤醒 Dispose 等待方（有等待者才创建过 TCS）
             drained = _activeReadLeases == 0 ? _readLeasesDrained : null;
             if (drained is not null) _readLeasesDrained = null;
@@ -316,6 +407,12 @@ internal sealed class SessionOperationState
                     "EnterTransactionOperation requires an active transaction flow owned by the current asynchronous flow.");
             }
             if (_isActive || _activeReadLeases > 0)
+            {
+                throw new InvalidOperationException(
+                    "DataSession already has an active database operation.");
+            }
+            // 与 EnterLocked 同宗：席位由 CAS 认领（快速进入不取锁）。
+            if (Interlocked.CompareExchange(ref _fastState, 1, 0) != 0)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation.");
@@ -361,9 +458,16 @@ internal sealed class SessionOperationState
     /// 守卫（<see cref="Enter"/> 内）是同一先例。per-op 会话仍受门槛保护，不预热。</para></summary>
     internal void PrewarmCurrentOperationOwner()
     {
+        // 会话级短路：预热成功后槽值在调用方 EC 中持久流动，后续操作无需再读 AsyncLocal
+        //（每次读也是 EC map 查询）。池化会话在 Unpark 复位，使新租期重新预热一次。
+        if (_prewarmed) return;
         if (!ReferenceEquals(_currentOperationOwner.Value, this))
             _currentOperationOwner.Value = this;
+        _prewarmed = true;
     }
+
+    /// <summary>本次租期/会话生命周期内是否已成功预热（见 <see cref="PrewarmCurrentOperationOwner"/>）。</summary>
+    private bool _prewarmed;
 
     /// <summary>step16-P1（门槛 2 版，深挖轮 2026-10-14）：本会话已完成的操作数（Enter/
     /// EnterTransactionOperation 走到写槽段即递增，锁内）。公共入口据此决定是否预热
@@ -404,7 +508,7 @@ internal sealed class SessionOperationState
             // 在锁内按需创建（与 _activeOperation/_readLeasesDrained 同模式），正常路径
             // 每事务省 1 个 TCS；③ 资源列表惰性化——无 RegisterTransactionResource 的
             // 事务（绝大多数）不再付 List 分配，_transactionCompleting 单独承担收口标志。
-            _transactionOwner = this;
+            Volatile.Write(ref _transactionOwner, this);
             _currentTransactionOwner.Value = _transactionOwner;
             _transactionCompleting = false;
             return _transactionOwner;
@@ -522,7 +626,7 @@ internal sealed class SessionOperationState
         {
             if (ReferenceEquals(_transactionOwner, owner))
             {
-                _transactionOwner = null;
+                Volatile.Write(ref _transactionOwner, null);
                 _transactionResources = null;
                 _transactionCompleting = false;
                 completion = _activeTransaction;
@@ -640,6 +744,13 @@ internal sealed class SessionOperationState
 
     internal DbTransaction? GetActiveTransaction()
     {
+        // 无事务热路径：两个字段都是 null（绝大多数单行 CRUD）时直接返回，不入锁。
+        // 事务存在时仍走锁路径——失效判定与静默清理的语义逐位保留。
+        if (Volatile.Read(ref _transaction) is null
+            && Volatile.Read(ref _transactionOperationOwner) is null)
+        {
+            return null;
+        }
         lock (_sync)
         {
             if (IsTransactionAlive(_transaction))
@@ -676,7 +787,8 @@ internal sealed class SessionOperationState
             // ITM-798（r23）：UseTransaction 同受在飞读租约门禁（与 Enter/事务流入口对称）
             // O4：WithTransaction 流活跃的真源是 _transactionOwner（TCS 已惰性化，
             // 原 "_activeTransaction is not null" 代理判定在正常路径恒 false 会放进飞行事务）。
-            if (_isActive || _transactionOwner is not null || _activeReadLeases > 0)
+            if (_isActive || _transactionOwner is not null || _activeReadLeases > 0
+                || Volatile.Read(ref _fastState) != 0)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation or transaction flow.");
@@ -747,6 +859,8 @@ internal sealed class SessionOperationState
         TaskCompletionSource? completion;
         Task activeOperation;
         Task activeTransaction;
+        // 发布点先于锁：无锁进入在 CAS 后复读本标志（同 Park / TryEnterFast 的协议）。
+        Volatile.Write(ref _disposing, 1);
         lock (_sync)
         {
             if (_disposeTask is not null)
@@ -872,7 +986,13 @@ internal sealed class SessionOperationState
             {
                 _activeOperationOwner = null;
                 _isActive = false;
+                // 快速进入的镜像与锁内状态必须同步复位；锁内写已具发布语义，
+                // 无锁进入在 CAS 前会读到 0（失败后转慢路径复核完整状态）。
+                Volatile.Write(ref _fastState, 0);
                 tcs = _activeOperation;
+                // 完成即摘除：无锁进入不再像旧 Enter 那样每操作清空该槽，残留的已完成 TCS
+                // 会让后续 Dispose 误判"已有等待信号"而跳过创建，从而不等在飞操作。
+                _activeOperation = null;
             }
             else
             {

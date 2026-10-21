@@ -99,6 +99,14 @@ public interface IDbProvider
     /// 默认 false；无 CREATE INDEX IF NOT EXISTS 语法的方言（MySQL）覆盖为真实判定。</summary>
     static virtual bool IsDuplicateSchemaObject(Exception exception) => false;
 
+    /// <summary>是否优先使用同步 ADO.NET I/O（默认 false）。
+    /// <para>仅对"异步 API 内部本身就是同步执行"的进程内驱动（SQLite）有意义：异步形态
+    /// 每命令/每行多付 Task 与状态机脚手架，真实 I/O 并未异步化。Provider 覆写为 true 后，
+    /// 会话在叶子执行点改用 <c>ExecuteNonQuery/ExecuteScalar/ExecuteReader/Read</c>，
+    /// 这些点仍先做 <c>ct.ThrowIfCancellationRequested()</c> 以保留取消前置检查。
+    /// 网络驱动的默认实现必须保持 false（同步调用会阻塞线程直到往返完成）。</para></summary>
+    static virtual bool PreferSynchronousIo => false;
+
     /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。
     /// <para>ITM-557: <paramref name="commandTimeoutSeconds"/> 为会话 CommandTimeout——
     /// 批量命令必须应用，否则慢库上按驱动默认（约 30s）超时，与配置意图相反。</para>

@@ -23,6 +23,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
 {
     private readonly DbConnection _conn;
     private DbOptions _options;
+    /// <summary>命令超时的 ADO.NET 秒值会话级快照——<see cref="DbOptions.ToCommandTimeoutSeconds"/>
+    /// 含 <c>Math.Ceiling(TotalSeconds)</c> 双精度除法，原实现在每条命令构造与每次复用槽重设时
+    /// 现算（单行 CRUD 每操作 1~2 次）。会话配置不可变（WithTimeout 经 UpdateResilienceCore
+    /// 整体重建），故在构造与配置发布点写入，热路径只读 int。</summary>
+    private int _commandTimeoutSeconds;
     /// <summary>W3（两轴清单轮 2026-10-14）：弹性执行器<b>惰性创建</b>——原构造器无条件
     /// new ResilienceExecutor（含熔断器与 Lock 共 ~228B/个，探针实测），而 Insert 家族
     /// （InsertCore/FinishInsert 直执）、纯事务会话与批量族从不读弹性（写入路径直连契约，
@@ -100,6 +105,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         ArgumentNullException.ThrowIfNull(options);
         _conn = conn;
         _options = options;
+        _commandTimeoutSeconds = options.CommandTimeoutSeconds;
         // W3（两轴清单轮 2026-10-14）：弹性执行器改惰性（见 _resilience 字段 doc）——
         // 原此处无条件 new ResilienceExecutor（228B/个）；首个弹性触点或 MarkPooled 时建。
         // MySQL-9/P1（2026-09-27）：空拦截器列表跳过 OrderBy LINQ——大多数会话不配拦截器，
@@ -134,7 +140,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                 await using DbCommand cmd = conn.CreateCommand();
                 // ITM-624：读 _options 字段而非捕获构造期 options——WithTimeout/WithRetry 经
                 // Volatile.Write 替换 _options 后，读连接初始化与主连接的超时口径保持一致。
-                cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                cmd.CommandTimeout = _commandTimeoutSeconds;
                 cmd.CommandText = _options.ReadSessionSetupSql;
                 await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             };
@@ -164,8 +170,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             {
                 connection = TProvider.CreateConnection(cs, options);
                 openScope = RentOpenScopeCts(ct);
-                openScope.CancelAfter(options.ConnectionTimeout);
-                await connection.OpenAsync(openScope.Token).ConfigureAwait(false);
+                // 条件武装：驱动池命中时 OpenAsync 同步完成（本地 SQLite/暖池），CancelAfter
+                // 会白建一个定时器并入队一次取消登记（实测每会话 ~100B 与百纳秒级开销）。
+                // 仅在打开未同步完成时才武装超时；已同步完成的路径不存在可超时的等待。
+                Task openTask = connection.OpenAsync(openScope.Token);
+                if (!openTask.IsCompleted)
+                    openScope.CancelAfter(options.ConnectionTimeout);
+                await openTask.ConfigureAwait(false);
 
                 // Provider 初始化钩子（SQLite: PRAGMA foreign_keys/WAL）。
                 // 与 OpenAsync 共享连接超时和调用方取消——初始化被锁阻塞时不再无限等待。
@@ -261,8 +272,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                 CancellationTokenSource cts = RentOpenScopeCts(ct);
                 try
                 {
-                    cts.CancelAfter(options.ConnectionTimeout);
-                    await connection.OpenAsync(cts.Token).ConfigureAwait(false);
+                    Task warmOpenTask = connection.OpenAsync(cts.Token);
+                    if (!warmOpenTask.IsCompleted)
+                        cts.CancelAfter(options.ConnectionTimeout);
+                    await warmOpenTask.ConfigureAwait(false);
                     // 与 CreateAsync 同口径：预热连接也过 Provider 初始化钩子（SQLite 无此路径，
                     // PG/MySQL 钩子为方言初始化），归还池后的首用行为与正常连接一致。
                     await TProvider.InitializeConnectionAsync(connection, cts.Token).ConfigureAwait(false);
@@ -342,8 +355,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             CancellationTokenSource cts = RentOpenScopeCts(cancellationToken);
             try
             {
-                cts.CancelAfter(_options.ConnectionTimeout);
-                await created.OpenAsync(cts.Token).ConfigureAwait(false);
+                Task readOpenTask = created.OpenAsync(cts.Token);
+                if (!readOpenTask.IsCompleted)
+                    cts.CancelAfter(_options.ConnectionTimeout);
+                await readOpenTask.ConfigureAwait(false);
                 if (_readConnInitializer is not null)
                     await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
             }
@@ -394,8 +409,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             CancellationTokenSource cts = RentOpenScopeCts(cancellationToken);
             try
             {
-                cts.CancelAfter(_options.ConnectionTimeout);
-                await created.OpenAsync(cts.Token).ConfigureAwait(false);
+                Task readOpenTask = created.OpenAsync(cts.Token);
+                if (!readOpenTask.IsCompleted)
+                    cts.CancelAfter(_options.ConnectionTimeout);
+                await readOpenTask.ConfigureAwait(false);
                 if (_readConnInitializer is not null)
                     await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
             }
@@ -658,6 +675,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         // 现一致性由 UpdateResilience 的操作门禁保证（配置变更与飞行查询互斥）；
         // Volatile.Write 保留为跨线程发布的最低保障。
         Volatile.Write(ref _options, options);
+        _commandTimeoutSeconds = options.CommandTimeoutSeconds;
         Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider)));
         ResilienceGeneration++;
     }
@@ -726,6 +744,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         _tenantScopeEntry = null;
         _isolationLevel = System.Data.IsolationLevel.ReadCommitted;
         Volatile.Write(ref _options, _poolBaseOptions!);
+        _commandTimeoutSeconds = _poolBaseOptions!.CommandTimeoutSeconds;
         Volatile.Write(ref _resilience, _poolBaseResilience!);
         _operationState.DiscardPostCommitBackfills();
         _operationState.DefersPostCommitActions = false;
@@ -1150,7 +1169,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
 
     internal DbTransaction? GetActiveBatchTransaction() => GetActiveTransaction();
 
-    internal int BatchCommandTimeoutSeconds => _options.CommandTimeoutSeconds;
+    internal int BatchCommandTimeoutSeconds => _commandTimeoutSeconds;
 
     private DbCommand CreateCommand()
         => CreateCommand(GetActiveTransaction());
@@ -1164,7 +1183,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         // ITM-597: 部分路径（HealthCheck/Scalar/Execute/Migrate/Bulk 等）显式重复赋同值——
         // 这是<b>防御冗余</b>而非死代码：万一未来 CreateCommand 被重构不再设超时，这些路径仍自洽。
         // 删除冗余会削弱回归防御；保留并在此声明 CreateCommand 是<b>权威源</b>。
-        command.CommandTimeout = _options.CommandTimeoutSeconds;
+        command.CommandTimeout = _commandTimeoutSeconds;
         return command;
     }
 
@@ -1175,7 +1194,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     {
         if (!ReferenceEquals(command.Transaction, transaction))
             command.Transaction = transaction;
-        int timeoutSeconds = _options.CommandTimeoutSeconds;
+        int timeoutSeconds = _commandTimeoutSeconds;
         if (command.CommandTimeout != timeoutSeconds)
             command.CommandTimeout = timeoutSeconds;
         // 2026-10-20 微项：CommandText 先走引用相等——文本来自静态槽，同一实例命中即零扫描；
@@ -1308,7 +1327,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         {
             DbConnection connection = await AcquireReadConnectionAsync(ct).ConfigureAwait(false);
             DbCommand command = connection.CreateCommand();
-            command.CommandTimeout = _options.CommandTimeoutSeconds;
+            command.CommandTimeout = _commandTimeoutSeconds;
             return new ReadCommandLease(this, command, connection);
         }
 
@@ -1318,7 +1337,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             // ??= 兜底首次直达；原构造器恒挂接使 is-not-null 判定恒真，此处语义等价。
             DbConnection connection = await (_readConnProvider ??= AcquireReadConnectionAsync)(ct).ConfigureAwait(false);
             DbCommand command = connection.CreateCommand();
-            command.CommandTimeout = _options.CommandTimeoutSeconds;
+            command.CommandTimeout = _commandTimeoutSeconds;
             return new ReadCommandLease(this, command, null);   // 会话级读连接：不归还（归会话持有）
         }
 
@@ -1416,9 +1435,43 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
 
     /// <summary>A2（2026-10-01 全 API 逐项轮）：`new ValueTask&lt;int&gt;(task)` 直包替代
     /// async 方法——写路径直通分支（每操作必经）省一个异步状态机；ConfigureAwait
-    /// 由消费端覆盖（ValueTask 包装 Task 的 awaiter 即 Task 的 awaiter）。</summary>
+    /// 由消费端覆盖（ValueTask 包装 Task 的 awaiter 即 Task 的 awaiter）。
+    /// <para>Provider 覆写 <see cref="IDbProvider.PreferSynchronousIo"/> 时走同步叶子
+    /// （进程内引擎的异步 API 本就是同步执行，异步形态只多付脚手架）。</para></summary>
     private static ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
-        => new(command.ExecuteNonQueryAsync(ct));
+        => TProvider.PreferSynchronousIo
+            ? new ValueTask<int>(ExecuteRowsSync(command, ct))
+            : new ValueTask<int>(command.ExecuteNonQueryAsync(ct));
+
+    private static int ExecuteRowsSync(DbCommand command, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return command.ExecuteNonQuery();
+    }
+
+    /// <summary>读命令执行叶子——同步/异步按 Provider 能力分流（同 <see cref="ExecuteRowsCoreAsync"/>）。</summary>
+    internal static ValueTask<DbDataReader> ExecuteReaderAsync(DbCommand command, CancellationToken ct)
+        => TProvider.PreferSynchronousIo
+            ? new ValueTask<DbDataReader>(ExecuteReaderSync(command, ct))
+            : new ValueTask<DbDataReader>(command.ExecuteReaderAsync(ct));
+
+    private static DbDataReader ExecuteReaderSync(DbCommand command, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return command.ExecuteReader();
+    }
+
+    /// <summary>逐行读取叶子——同步/异步按 Provider 能力分流。</summary>
+    internal static ValueTask<bool> ReadAsync(DbDataReader reader, CancellationToken ct)
+        => TProvider.PreferSynchronousIo
+            ? new ValueTask<bool>(ReadSync(reader, ct))
+            : new ValueTask<bool>(reader.ReadAsync(ct));
+
+    private static bool ReadSync(DbDataReader reader, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return reader.Read();
+    }
 
     /// <summary>将复合格式项映射为参数名，参数值保持原始对象。
     /// <para>A1（2026-10-01 全 API 逐项轮）：改走形状缓存（baseIndex 恒 0）——与 QueryBuilder
