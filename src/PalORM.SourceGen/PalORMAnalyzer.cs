@@ -39,11 +39,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM003", "Foreign key references unknown table",
         "[ForeignKey] references table '{0}' but no [Table] attribute is found in the current assembly; this can be a false positive if the entity lives in a referenced assembly", "PalORM", DiagnosticSeverity.Warning, true);
 
-    // ITM-525：FK 约束 DDL 当前不由 MigrateAsync 生成（ForeignKeys 收集为未来兼容保留），
-    // 故本诊断只提示 OnDelete 声明是为未来 FK DDL 预留，当前不产生任何运行时约束效果。
+    // ADR-B 补充实施：FK 约束 DDL 已随 CREATE TABLE 内联生成（MigrationEmitter.BuildForeignKeyClauses）。
+    // 本诊断只提示 OnDelete 未声明；缺省 NO ACTION 会写入 DDL，不再声称“无运行时效果”。
     public static readonly DiagnosticDescriptor MissingForeignKey = new(
         "PALORM004", "Foreign key does not declare OnDelete behavior",
-        "[ForeignKey] on '{0}' (type '{1}') does not set OnDelete; note FK constraint DDL is not generated in the current version, so OnDelete is recorded for future compatibility only and has no runtime effect yet", "PalORM", DiagnosticSeverity.Warning, true);
+        "[ForeignKey] on '{0}' (type '{1}') does not set OnDelete; the generated FOREIGN KEY DDL uses ON DELETE NO ACTION by default. Declare OnDelete explicitly (NO ACTION/CASCADE/SET NULL/RESTRICT) to make the delete behavior intentional.", "PalORM", DiagnosticSeverity.Warning, true);
 
     public static readonly DiagnosticDescriptor NPlusOneDetected = new(
         "PALORM005", "Potential N+1 query pattern detected",

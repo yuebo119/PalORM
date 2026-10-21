@@ -197,8 +197,9 @@ internal sealed record TableModel(
             if (fkAttr is not null && fkAttr.ConstructorArguments.Length >= 2)
             {
                 // ITM-602: ForeignKeyModel.OnDelete 此前恒写 0（NoAction），用户 [ForeignKey(OnDelete=...)]
-                // 设置完全丢弃——PALORM004 注释承认"FK 不生成 DDL"，但字段语义应与用户声明一致，
-                // 便于未来启用 FK DDL 时无需重新解析。从命名参数提取 OnDelete 整数值，默认 NoAction。
+                // 设置完全丢弃——PALORM004 曾称“FK 不生成 DDL”（ADR-B 补充实施后 FK 已随
+                // CREATE TABLE 内联生成），字段语义必须与用户声明一致，当前 DDL 才能正确落地。
+                // 从命名参数提取 OnDelete 整数值，默认 NoAction。
                 int onDelete = 0;  // DeleteAction.NoAction
                 var onDeleteArg = fkAttr.NamedArguments.FirstOrDefault(static na => na.Key == "OnDelete");
                 if (onDeleteArg.Value.Value is int value)

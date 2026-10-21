@@ -44,7 +44,8 @@ public partial class DataSession<TProvider>
             _options.CommandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
     }
 
-    /// <summary>批量删除——每 500 个生成主键 IN 批次；软删除实体更新 deleted_at，其他实体物理删除。</summary>
+    /// <summary>批量删除——数组形态单批 20000 行；IN 形态按方言参数上限与 5000 行/批取较小者
+    /// （SQLite 999，PG/MySQL 5000）；软删除实体更新 deleted_at，其他实体物理删除。</summary>
     /// <returns><b>数据库受影响行数</b>（各批次 ExecuteNonQuery 之和，驱动口径）。
     /// 软删除路径返回被标记删除的行数（UPDATE 计数），与物理删除的 DELETE 计数口径一致。</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -145,6 +146,10 @@ public partial class DataSession<TProvider>
         where TKey : notnull
     {
         ArgumentNullException.ThrowIfNull(keys);
+        // 2026-10-22 审计 N7：先做与对象重载同口径的 CRUD 元数据守卫，再走类型化探针。
+        // 否则未注册/投影类型且键数 >=2 时，IsArrayFormSupported 内的 GetEntityInfo<T>()
+        // 会先抛 "not registered"，与对象重载的 "has no generated CRUD" 不一致。
+        _ = GetEntityInfoForCrud<T>();
         if (keys.Count >= 2
             && CanUseTypedKeyArrayCopy<T, TKey>(keys))
         {
@@ -1743,8 +1748,9 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。
-    /// <para><b>默认键行 ID 回填</b>：RETURNING 方言（PG/SQLite）的多行插入按自增/identity
-    /// 分配顺序重建输入顺序后回填；触发器改写主键不在支持面内。</para>
+    /// <para><b>默认键行 ID 回填</b>：RETURNING 方言（PG/SQLite）的多行插入按主键升序重建
+    /// 输入顺序后回填，因此仅支持递增 identity/auto-increment 分配顺序；降序序列或触发器
+    /// 改写主键不在支持面内，需要这些形态时请逐行 InsertAsync。</para>
     /// <para>ITM-556 注记: 自增 ID 回填随每条 UPSERT 立即发生；中途失败整批回滚时，
     /// 已回填的内存 ID 对应的行不存在于 DB——异常路径下不要继续使用输入实体的 ID，
     /// 重试应重新走 BulkMergeAsync（UPSERT 幂等）。</para></summary>
@@ -1895,7 +1901,7 @@ public partial class DataSession<TProvider>
                 int end = Math.Min(start + batchSize, entities.Count);
                 int rowCount = end - start;
                 DbCommand cmd;
-                bool ownsCmd;
+                DbCommand? freshCmd = null;
                 if (valuesBinder is not null && (pool is not null || rowCount == batchSize))
                 {
                     if (pooledCmd is null)
@@ -1905,7 +1911,6 @@ public partial class DataSession<TProvider>
                         pooledCmd.CommandTimeout = _options.CommandTimeoutSeconds;
                     }
                     cmd = pooledCmd;
-                    ownsCmd = false;
                     if (pool is null)
                     {
                         pool = new DbParameter[fullBatchRows * columnCount];
@@ -1935,49 +1940,57 @@ public partial class DataSession<TProvider>
                 }
                 else
                 {
-                    cmd = CreateCommand();
+                    DbCommand fresh = CreateCommand();
+                    freshCmd = fresh;
+                    cmd = fresh;
                     cmd.Transaction = transaction;
                     cmd.CommandTimeout = _options.CommandTimeoutSeconds;
                     cmd.CommandText = BuildInsertReturningBatchSql(
                         quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
                     for (int row = start; row < end; row++)
                         metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
-                    ownsCmd = true;
                 }
 
-                await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-                int returned = 0;
-                List<long>? returnedIds = backfill is null ? null : new List<long>(rowCount);
-                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                try
                 {
-                    long? id = NormalizeGeneratedId(
-                        await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
+                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                    int returned = 0;
+                    List<long>? returnedIds = backfill is null ? null : new List<long>(rowCount);
+                    while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                    {
+                        long? id = NormalizeGeneratedId(
+                            await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
+                        if (returnedIds is not null)
+                        {
+                            if (id is not { } generatedId)
+                                throw new InvalidOperationException(
+                                    $"INSERT ... RETURNING returned a NULL primary key for '{typeof(T).Name}' "
+                                    + $"(row {returned + 1} of {rowCount}); refusing to backfill.");
+                            returnedIds.Add(generatedId);
+                        }
+                        returned++;
+                    }
+                    if (returned != rowCount)
+                        throw new InvalidOperationException(
+                            $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
+                            $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
                     if (returnedIds is not null)
                     {
-                        if (id is not { } generatedId)
-                            throw new InvalidOperationException(
-                                $"INSERT ... RETURNING returned a NULL primary key for '{typeof(T).Name}' "
-                                + $"(row {returned + 1} of {rowCount}); refusing to backfill.");
-                        returnedIds.Add(generatedId);
+                        // 仅支持递增 identity/auto-increment：按升序重建 VALUES 行序；
+                        // 降序序列/触发器改写主键不在支持面内（公开文档同口径）。
+                        returnedIds.Sort();
+                        for (int i = 0; i < rowCount; i++)
+                            BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);
                     }
-                    returned++;
+                    processed += rowCount;
                 }
-                if (returned != rowCount)
-                    throw new InvalidOperationException(
-                        $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
-                        $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
-                if (returnedIds is not null)
+                finally
                 {
-                    // RETURNING 输出行序任意（SQLite 官方文档明确；PG 未承诺 ORDER BY）。
-                    // 自增/identity 主键按 VALUES 行序分配，按升序重建输入顺序后再回填；
-                    // 触发器改写主键不在 [Key] 自增契约的支持面内。
-                    returnedIds.Sort();
-                    for (int i = 0; i < rowCount; i++)
-                        BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);
+                    // 2026-10-22 审计 N6：fresh 命令在 ExecuteReader/Read 异常时也必须释放；
+                    // pooledCmd 由外层 finally 统一释放。
+                    if (freshCmd is not null)
+                        await freshCmd.DisposeAsync().ConfigureAwait(false);
                 }
-                processed += rowCount;
-                if (ownsCmd)
-                    await cmd.DisposeAsync().ConfigureAwait(false);
             }
         }
         finally

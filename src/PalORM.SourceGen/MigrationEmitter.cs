@@ -114,7 +114,7 @@ internal static class MigrationEmitter
     /// <para>列名取该属性的 [Column] 映射名（ITM-512 家族同口径：错列引用在源头消除）；
     /// 引用表/列名已经 PALORM043 控制字符扫描与 PALORM003 存在性校验。ON DELETE 默认
     /// NO ACTION（G16：级联删除必须显式启用），CASCADE/SET NULL/RESTRICT 由用户显式
-    /// 声明（PALORM004 强制 OnDelete 必填）。SQLite 侧强制执行需连接级
+    /// 声明（PALORM004 对未声明 OnDelete 发警告，缺省值即 NO ACTION）。SQLite 侧强制执行需连接级
     /// <c>PRAGMA foreign_keys=ON</c>（引擎默认 OFF），由文档与测试载明。</para></summary>
     private static string BuildForeignKeyClauses(TableModel model, SqlGenerationDialect dialect)
     {
