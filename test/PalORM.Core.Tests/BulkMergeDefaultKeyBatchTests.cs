@@ -3,8 +3,8 @@ using PalORM.Sqlite;
 namespace PalORM.Core.Tests;
 
 /// <summary>B6 落地（2026-10-12 全量审读）：BulkMerge 默认键行集合化——RETURNING 方言多行
-/// INSERT..RETURNING 按行序回填，N 次往返收敛为 N/批（SQLite 2 列实体 = 499 行/批）。
-/// 锁定：跨批回填正确、ID 唯一、混合默认键/既有键行各自语义保持。</summary>
+/// INSERT..RETURNING 按自增主键升序重建输入顺序回填，N 次往返收敛为 N/批（SQLite 2 列实体
+/// = 499 行/批）。锁定：跨批回填对位（name→ID）、ID 唯一、混合默认键/既有键行各自语义保持。</summary>
 public sealed class BulkMergeDefaultKeyBatchTests
 {
     private static async Task<DataSession<SqliteProvider>> CreateSeededAsync(int seedRows)
@@ -40,6 +40,15 @@ public sealed class BulkMergeDefaultKeyBatchTests
         await Assert.That(rows.Select(r => r.Id).Distinct().Count()).IsEqualTo(600);
         List<BmMergeItem> all = await session.GetAllAsync<BmMergeItem>();
         await Assert.That(all.Count).IsEqualTo(600);
+
+        // 行序映射契约：ID 唯一还不够，每个实体的 Id 必须对应它自己插入的行。
+        // RETURNING 输出行序任意（SQLite 官方文档），只断唯一性无法发现 ID 置换。
+        Dictionary<long, BmMergeItem> byId = all.ToDictionary(row => row.Id);
+        foreach (BmMergeItem row in rows)
+        {
+            await Assert.That(byId[row.Id].Name).IsEqualTo(row.Name);
+            await Assert.That(byId[row.Id].Qty).IsEqualTo(row.Qty);
+        }
     }
 
     [Test]

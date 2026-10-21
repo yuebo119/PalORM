@@ -91,10 +91,11 @@ public partial class DataSession<TProvider>
         // ITM-809（r22 登记，r23 实修）：批大小扣减租户过滤参数——每批 BindDefaultFilterParameters
         // 追加 1 个租户参数，不扣则 SQLite+租户实体单语句 999+1=1000 越保守上限（同文件
         // BulkUpdateBatchAsync 的 (driverLimit - tenantParams) 同口径）。
-        // UNNEST-1：数组形态不受"语句内参数个数"约束（整批一个参数），批大小只为限制单语句
-        // 触及的行数与事务持锁时长——沿用同一档位，行为面不变。
+        // UNNEST-1/深挖轮：数组形态不受"语句内参数个数"约束（整批一个参数），批大小只为限制
+        // 单语句触及的行数与事务持锁时长——与 UPDATE/UPSERT/类型化 DELETE 统一用
+        // UnnestArraysMaxRowsPerBatch（20000），避免对象重载与类型化重载出现两档批宽。
         int batchSize = useArrayForm
-            ? SqlLimits.MaxRowsPerBatch
+            ? UnnestArraysMaxRowsPerBatch
             : Math.Min(
                 Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount),
                 SqlLimits.MaxRowsPerBatch);
@@ -1742,6 +1743,8 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。
+    /// <para><b>默认键行 ID 回填</b>：RETURNING 方言（PG/SQLite）的多行插入按自增/identity
+    /// 分配顺序重建输入顺序后回填；触发器改写主键不在支持面内。</para>
     /// <para>ITM-556 注记: 自增 ID 回填随每条 UPSERT 立即发生；中途失败整批回滚时，
     /// 已回填的内存 ID 对应的行不存在于 DB——异常路径下不要继续使用输入实体的 ID，
     /// 重试应重新走 BulkMergeAsync（UPSERT 幂等）。</para></summary>
@@ -1840,8 +1843,9 @@ public partial class DataSession<TProvider>
 
     /// <summary>B6 落地（2026-10-12）：BulkMerge 默认键行的集合化插入——RETURNING 方言
     /// （PG/SQLite）多行 INSERT ... RETURNING 主键，按行序回填实体，N 次往返收敛为 N/批。
-    /// <para><b>行序映射</b>：RETURNING 行序按 VALUES 顺序（EF Core Npgsql 多行
-    /// INSERT..RETURNING 的同构形态）；返回行数与批行数不符时明确失败，不静默错位回填。</para>
+    /// <para><b>行序映射</b>：RETURNING 的输出行序是任意的（SQLite 官方文档明确；PG 未承诺
+    /// ORDER BY 级顺序）。自增/identity 主键按 VALUES 行序分配，故本方法按主键升序重建输入
+    /// 顺序后再回填；返回行数不符或自增主键为 NULL 时明确失败，不静默错位回填。</para>
     /// <para><b>回填时点</b>：经 <see cref="BackfillGeneratedId"/>——自开事务延迟到提交后回放，
     /// 与单行 SaveCoreAsync 路径同语义（TX-004）。</para>
     /// <para><b>已知边界</b>：本路径每次批间重建参数（BindInsert 直绑）——相对原 N 次往返已是
@@ -1943,18 +1947,34 @@ public partial class DataSession<TProvider>
 
                 await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
                 int returned = 0;
+                List<long>? returnedIds = backfill is null ? null : new List<long>(rowCount);
                 while (await reader.ReadAsync(ct).ConfigureAwait(false))
                 {
                     long? id = NormalizeGeneratedId(
                         await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
-                    if (id is { } generatedId && backfill is not null)
-                        BackfillGeneratedId(backfill, entities[start + returned], generatedId);
+                    if (returnedIds is not null)
+                    {
+                        if (id is not { } generatedId)
+                            throw new InvalidOperationException(
+                                $"INSERT ... RETURNING returned a NULL primary key for '{typeof(T).Name}' "
+                                + $"(row {returned + 1} of {rowCount}); refusing to backfill.");
+                        returnedIds.Add(generatedId);
+                    }
                     returned++;
                 }
                 if (returned != rowCount)
                     throw new InvalidOperationException(
                         $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
                         $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
+                if (returnedIds is not null)
+                {
+                    // RETURNING 输出行序任意（SQLite 官方文档明确；PG 未承诺 ORDER BY）。
+                    // 自增/identity 主键按 VALUES 行序分配，按升序重建输入顺序后再回填；
+                    // 触发器改写主键不在 [Key] 自增契约的支持面内。
+                    returnedIds.Sort();
+                    for (int i = 0; i < rowCount; i++)
+                        BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);
+                }
                 processed += rowCount;
                 if (ownsCmd)
                     await cmd.DisposeAsync().ConfigureAwait(false);
@@ -2066,8 +2086,13 @@ public partial class DataSession<TProvider>
         if (info.PkColumn is not { } pkColumn)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
+        // 租户列排除按实体能力 [TenantAware] 判定，不按会话态（HasTenantFilter）判定：
+        // 会话态会随 WithTenant/IgnoreFilters 变化，而 shape 缓存的键是 (Type, Dialect)——
+        // 用会话态作输入会让同一类型的冲突子句依赖进程内预热顺序（2026-10-22 审计 C1）。
+        // 实体能力是 T 的编译期常量，缓存键因此完备。
+        bool excludeTenantColumn = (info.Features & EntityFeatures.TenantAware) != 0;
         UpsertSqlShape shape = ApplyTenantGuardToShape<T>(
-            BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn, HasTenantFilter<T>()));
+            BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn, excludeTenantColumn));
         bool tenantGuarded = HasTenantFilter<T>();
 
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
@@ -2300,10 +2325,13 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键与租户列
-    /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身；租户列是作用域键，更新它等于把行搬到
-    /// 别的租户）；MySQL 用 VALUES(c) 形态（与单行 upsert 的既有生成 SQL 一致）。</summary>
+    /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身；[TenantAware] 实体的租户列是作用域键，
+    /// 更新它等于把行搬到别的租户）。<paramref name="excludeTenantColumn"/> 取实体能力
+    /// （编译期常量），不是会话态；缓存键 (Type, Dialect) 因此完备。
+    /// MySQL 用 VALUES(c) 形态（与单行 upsert 的既有生成 SQL 一致）。</summary>
     private UpsertSqlShape BuildUpsertSqlShape(
-        Type entityType, string tableName, CrudMetadata metadata, string pkColumn, bool excludeTenant)
+        Type entityType, string tableName, CrudMetadata metadata, string pkColumn,
+        bool excludeTenantColumn)
     {
         // R3（2026-10-12）：形状字符串 per-(Type, Dialect) 缓存——原每次调用 1 LINQ 迭代器 +
         // 2 string.Join + 冲突子句插值（与 QuotedColumnsCache 同纪律；值由编译期元数据唯一决定，
@@ -2316,7 +2344,7 @@ public partial class DataSession<TProvider>
         List<string> updateColumns =
         [
             .. metadata.UpsertColumns.Where(c => !string.Equals(c, pkColumn, StringComparison.Ordinal)
-                && !(excludeTenant && string.Equals(c, "tenant_id", StringComparison.Ordinal)))
+                && !(excludeTenantColumn && string.Equals(c, "tenant_id", StringComparison.Ordinal)))
         ];
         if (updateColumns.Count == 0)
             throw new NotSupportedException(

@@ -145,12 +145,16 @@ public sealed record DbOptions
     public void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegative(CommandTimeout.Ticks, nameof(CommandTimeout));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            CommandTimeout.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(CommandTimeout));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
         // ITM-838（r23 实修）：上界补齐——env 覆盖入口可传入极大值，重试风暴的最坏墙钟
         // = (MaxRetries+1)×CommandTimeout+Σ退避，上界使该乘积可推理（10 次 = 11×超时）。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxRetries, 10, nameof(MaxRetries));
         ArgumentOutOfRangeException.ThrowIfNegative(OverallDeadline.Ticks, nameof(OverallDeadline));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            OverallDeadline.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(OverallDeadline));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
         // C4：MinPoolSize 负数非法；大于 MaxPoolSize 是配置矛盾（透传后驱动行为未定义），提前报错
         ArgumentOutOfRangeException.ThrowIfNegative(MinPoolSize, nameof(MinPoolSize));
@@ -168,13 +172,23 @@ public sealed record DbOptions
         // ITM-838：上界 10000——阈值高于此的熔断器形同虚设，配置意图应为禁用（Threshold=0）。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(CircuitBreakerThreshold, 10000, nameof(CircuitBreakerThreshold));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerResetAfter.Ticks, nameof(CircuitBreakerResetAfter));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            CircuitBreakerResetAfter.TotalMilliseconds, MaxCancelAfterMilliseconds,
+            nameof(CircuitBreakerResetAfter));
         // ITM-749(r21)：ConnectionTimeout 无上限——CreateAsync 用
         // CancellationTokenSource.CancelAfter(TimeSpan)，该 API 的 delay 上限是 uint.MaxValue-1
         // 毫秒（约 49.7 天），超出抛 ArgumentOutOfRangeException("delay") 且与配置项无关
         //（实测 49 天 OK、50/60 天均抛）。与 ITM-695 同族，此处补齐上限。
+        // 2026-10-22 审计 C5：同一上限现在覆盖 CommandTimeout/OverallDeadline（Resilience 的
+        // CancelAfter 消费者）与 CircuitBreakerResetAfter（开闸窗口诊断显示），见 Validate 开头
+        // 与熔断段；自定义 RetryBackoff 的 Task.Delay 上界由 ResilienceExecutor 构造期守卫承担。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
-            ConnectionTimeout.TotalMilliseconds, uint.MaxValue - 1, nameof(ConnectionTimeout));
+            ConnectionTimeout.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(ConnectionTimeout));
     }
+
+    /// <summary>CancellationTokenSource.CancelAfter / Task.Delay 的 delay 上限（uint.MaxValue-1 毫秒）。
+    /// ITM-749 起用于 ConnectionTimeout；2026-10-22 审计 C5 扩到 CommandTimeout/OverallDeadline。</summary>
+    internal const double MaxCancelAfterMilliseconds = uint.MaxValue - 1;
 
     /// <summary>连接池配置入口。<paramref name="maxSize"/> 与 <paramref name="lifetimeMinutes"/>
     /// 必须为正数；<paramref name="idleTimeoutSeconds"/> 可为 0（= 不覆盖驱动默认值，见属性文档）；
