@@ -439,6 +439,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     }
 
     /// <summary>忽略全局过滤器（[SoftDelete]/[TenantAware]）。设置后本次会话所有查询跳过自动过滤。
+    /// <para>该标志在当前会话内<b>没有公开复位 API</b>：跨租户管理查询结束后请换一个会话
+    /// （池化会话归还后重租即可），不要在同一会话继续做租户过滤查询。</para>
     /// <para>ITM-568: 与 AddInterceptor 同受门禁保护——有查询在飞时调用会明确失败，
     /// 防止飞行查询与过滤状态变更竞态产生跨租户/含软删数据。</para></summary>
     public DataSession<TProvider> IgnoreFilters()

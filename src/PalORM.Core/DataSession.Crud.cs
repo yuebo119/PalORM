@@ -834,6 +834,8 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>更新实体。WHERE 子句由源生成器从 [Key] 注解自动生成；无可更新列时在访问数据库前明确失败。
     /// <para>乐观锁: [ConcurrencyCheck] 注解的列自动加入 WHERE version=@old 条件, 防并发覆盖。</para>
+    /// <para>[TenantAware]：tenant_id 不在 SET 内（租户列只由 Insert 承载），更新无法把行搬到
+    /// 别的租户，部分实体未赋租户值也不会清空该列；确需迁移租户用原生 SQL。</para>
     /// <para>单次查找: 使用 CrudMetadatas 聚合字典, 一次 TryGetValue 替代三次独立查找。</para></summary>
     public ValueTask<int> UpdateAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
@@ -1394,7 +1396,9 @@ public sealed partial class DataSession<TProvider>
             dict[typeof(T)] = count;
     }
 
-    /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。</summary>
+    /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。
+    /// <para>[TenantAware]：冲突更新 SET 不包含 tenant_id（Insert 仍按实体值写入），
+    /// UPSERT 不能把已有行搬到别的租户。</para></summary>
     public ValueTask<T> SaveAsync<T>(T entity, CancellationToken ct = default)
         where T : class, new()
     {

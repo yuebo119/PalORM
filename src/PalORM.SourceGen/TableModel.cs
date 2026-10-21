@@ -49,6 +49,11 @@ internal sealed record TableModel(
         string tableName = tableAttr.ConstructorArguments.FirstOrDefault().Value as string
             ?? typeSymbol.Name;
 
+        // 租户列在实体模型中只读：INSERT 由实体承载（ITM-599），UPDATE/UPSERT 的 SET 不得写它，
+        // 否则租户会话可把行搬到别的租户（2026-10-21 审计修复）。
+        bool isTenantAware = typeSymbol.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));
+
         List<ColumnModel> columns = [];
         List<IndexModel> indexes = [];
         List<ForeignKeyModel> foreignKeys = [];
@@ -221,13 +226,13 @@ internal sealed record TableModel(
                 prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
                 defaultValueExpression,
                 columnLength, columnPrecision, columnScale, columnTypeName,
-                enumStorage, enumClrTypeName, enumParseSwitchBody, enumWriteSwitchBody));
+                enumStorage, enumClrTypeName, enumParseSwitchBody, enumWriteSwitchBody,
+                IsTenantColumn: isTenantAware
+                    && string.Equals(columnName, "tenant_id", StringComparison.Ordinal)));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "SoftDelete"));  // ITM-512
-        bool isTenantAware = typeSymbol.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));  // ITM-512
 
         // [Index("name", "col1", "col2", Unique = ...)] → 复合索引（ADR-B）
         // 无名/空列声明跳过生成——PALORM020 已在编译期报错，此处跳过防级联生成错误
@@ -436,7 +441,10 @@ internal sealed record ColumnModel(
     EnumStorageKind EnumStorage = EnumStorageKind.None,
     string? EnumClrTypeName = null,
     string? EnumParseSwitchBody = null,
-    string? EnumWriteSwitchBody = null)
+    string? EnumWriteSwitchBody = null,
+    // [TenantAware] 实体的 tenant_id 列（PALORM018 保证存在）。INSERT 由实体承载；
+    // UPDATE/UPSERT 的 SET 必须排除——否则租户会话可把行搬到别的租户。
+    bool IsTenantColumn = false)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

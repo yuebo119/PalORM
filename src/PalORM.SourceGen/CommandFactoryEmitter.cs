@@ -694,9 +694,12 @@ internal static class CommandFactoryEmitter
     // 曾各自内联复制此条件，二者必须逐字一致否则参数序与占位符错位。提取为单一真源防漂移。
     // ITM-642：RegistryEmitter 发射 CrudColumns.Update 亦消费本谓词——运行时 BulkUpdateBatchAsync
     // 直接读元数据列集，与生成 SQL/绑定序三处同源。
+    // 2026-10-21：租户列排除——租户会话的 UPDATE 可凭实体 TenantId 把行搬到别的租户；
+    // INSERT 仍由实体承载租户值（ITM-599），更新不得改写作用域键。
     internal static bool IsUpdatableColumn(ColumnModel col)
         => !col.IsPrimaryKey && !col.IsConcurrencyToken
-            && !col.IsTimestamp && col.ComputedExpression is null;
+            && !col.IsTimestamp && col.ComputedExpression is null
+            && !col.IsTenantColumn;
 
     internal static string BuildUpdateSql(TableModel model, SqlGenerationDialect dialect)
     {
@@ -810,7 +813,8 @@ internal static class CommandFactoryEmitter
 
         string pkColumnName = pkCols[0].ColumnName;
         string[] updateColumns = upsertColumns
-            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal))
+            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal)
+                && !column.IsTenantColumn)
             .Select(column => Quote(column.ColumnName))
             .ToArray();
 
@@ -844,7 +848,8 @@ internal static class CommandFactoryEmitter
 
         string pkColumnName = pkCols[0].ColumnName;
         string[] updateColumns = upsertColumns
-            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal))
+            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal)
+                && !column.IsTenantColumn)
             .Select(column => Quote(column.ColumnName))
             .ToArray();
 

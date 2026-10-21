@@ -599,7 +599,9 @@ public partial class DataSession<TProvider>
     /// <para>ITM-556: [ConcurrencyCheck] 实体的内存 version 回填延迟到事务提交成功后统一执行——
     /// 中途冲突整批回滚时，已成功条目的内存状态与 DB 保持一致，重试不产生假冲突。
     /// 复用外部事务时回填发生在本方法返回前；若调用方随后回滚该外部事务，
-    /// 内存 version 需重新查询同步（与单条 UpdateAsync 在外部事务中回滚的既有语义一致）。</para></summary>
+    /// 内存 version 需重新查询同步（与单条 UpdateAsync 在外部事务中回滚的既有语义一致）。</para>
+    /// <para>[TenantAware]：tenant_id 不在 SET 内（租户列只由 Insert 承载），跨租户主键命中
+    /// 0 行；部分实体未赋租户值也不会清空该列。</para></summary>
     /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径；单语句多行 UPDATE 形态
     /// 或逐条批次，均按驱动计数累加）。BulkMerge 的返回口径例外，见其 returns 说明。</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -2064,7 +2066,8 @@ public partial class DataSession<TProvider>
         if (info.PkColumn is not { } pkColumn)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
-        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn));
+        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(
+            BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn, HasTenantFilter<T>()));
         bool tenantGuarded = HasTenantFilter<T>();
 
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
@@ -2296,10 +2299,11 @@ public partial class DataSession<TProvider>
         return processed;
     }
 
-    /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键
-    /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身）；MySQL 用 VALUES(c) 形态
-    /// （与单行 upsert 的既有生成 SQL 一致）。</summary>
-    private UpsertSqlShape BuildUpsertSqlShape(Type entityType, string tableName, CrudMetadata metadata, string pkColumn)
+    /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键与租户列
+    /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身；租户列是作用域键，更新它等于把行搬到
+    /// 别的租户）；MySQL 用 VALUES(c) 形态（与单行 upsert 的既有生成 SQL 一致）。</summary>
+    private UpsertSqlShape BuildUpsertSqlShape(
+        Type entityType, string tableName, CrudMetadata metadata, string pkColumn, bool excludeTenant)
     {
         // R3（2026-10-12）：形状字符串 per-(Type, Dialect) 缓存——原每次调用 1 LINQ 迭代器 +
         // 2 string.Join + 冲突子句插值（与 QuotedColumnsCache 同纪律；值由编译期元数据唯一决定，
@@ -2311,12 +2315,13 @@ public partial class DataSession<TProvider>
         string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
         List<string> updateColumns =
         [
-            .. metadata.UpsertColumns.Where(c => !string.Equals(c, pkColumn, StringComparison.Ordinal))
+            .. metadata.UpsertColumns.Where(c => !string.Equals(c, pkColumn, StringComparison.Ordinal)
+                && !(excludeTenant && string.Equals(c, "tenant_id", StringComparison.Ordinal)))
         ];
         if (updateColumns.Count == 0)
             throw new NotSupportedException(
                 $"Set-based upsert on '{tableName}' has no updatable columns " +
-                "(upsert columns minus primary key is empty); use BulkInsertAsync instead.");
+                "(upsert columns minus primary key and tenant column is empty); use BulkInsertAsync instead.");
         // ITM-876（r23 裁决登记）：VALUES() 形态在 MySQL 8.0.20+ 处于弃用路线（推荐 row alias
         // 新语法），但真库探针（OdkuDeprecationProbeTests，MySQL 8.4.11）实测**零弃用警告**且
         // 行为正确——分派双形态（row alias 要求 8.0.19+）当前无收益信号，只引入 UpsertSqlShape

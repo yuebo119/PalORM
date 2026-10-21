@@ -22,7 +22,7 @@ A Roslyn source generator produces SQL construction, parameter binding, object m
 - **Compile-time safety net**: 45 Roslyn diagnostics move failures that would otherwise be runtime crashes or silently wrong data — a missing `[Key]`, a nullable tenant column bypassing isolation, an optimistic-lock baseline of 0, N+1 queries in loops — to compile time, with errors jumping to the declaration site
 - **Full-pipeline Native AOT**: the only ORM in the .NET ecosystem with publish verification passing on all three dialects — no reflection, no IL Emit, no runtime code generation; the SQLite publish exe is just 4.5 MB
 - **Floor-level performance**: single-row CRUD matches the hand-written ADO.NET floor (0.94~1.01×); bulk writes automatically take the fastest per-dialect path — PG Binary COPY, MySQL LOAD DATA, single-statement bulk UPDATE (measured 3.3× faster on MySQL); 20,000-row BulkInsert allocates ~19% of Dapper; Web-style request-per-session deployments get a built-in session pool (measured P99 −18%, Gen0 collections −58% at 32 concurrent)
-- **Enterprise cross-cutting out of the box**: multi-tenant column isolation (queries and all write paths), optimistic locking, soft delete, audit interceptor (sensitive columns auto-masked), read/write splitting, advisory locks, resilient retry + circuit breaker (zero Polly dependency)
+- **Enterprise cross-cutting out of the box**: multi-tenant column isolation (queries plus Update/Delete/Bulk get the tenant predicate automatically; the tenant column is immutable on update, while Insert carries it from the entity), optimistic locking, soft delete, audit interceptor (`Set()` values for sensitive columns are masked), read/write splitting, advisory locks, resilient retry + circuit breaker (zero Polly dependency)
 - **Zero-dependency core**: PalORM.Core references no third-party NuGet packages (BCL + ADO.NET abstractions only); SQLite supports at-rest AES-256 encryption via the SQLite3MC driver
 
 > Detailed docs (in Chinese) live under [docs/](docs/) — [API reference](docs/API参考.md), [architecture](docs/架构设计.md), [AOT deployment guide](docs/AOT部署指南.md), [benchmark methodology](docs/性能基准规范.md).
@@ -607,17 +607,17 @@ Grouped by frequency; detailed rationale at each linked section:
 - Pre-warm the connection pool at startup with `PreWarmAsync` (remote connection setup measured ~8.5 ms each), paired with `MinPoolSize` to stay warm
 - High-frequency single-key lookups use `GetAsync` (25~30% faster and 880 B cheaper than the chained equivalent); use `From<T>()` only with filter conditions
 - With `ReadConnectionString` configured, put report/list queries on `.ForRead()` explicitly; replication-lag-sensitive strong reads stay on the primary
-- Declare `await using (db.ForParallelReads())` before concurrent queries; do not call `GetAsync` inside the scope (the entry restriction fails loudly)
+- Declare `await using (db.ForParallelReads())` before concurrent queries; inside the scope `GetAsync` and the query family use the scope-local read pool (up to 8 connections); writes that overlap an in-flight read are rejected by the single-operation gate
 - A "not registered" error for cross-assembly models: each model assembly registers via `ModuleInitializer` on first touch, so make sure entity types are genuinely referenced (instantiation/member access both count as touching)
 
 **Queries and result sets**
 - Stream unbounded tables with `QueryAsyncEnumerable<T>` (peak memory O(1)) instead of `ToListAsync`
 - Deep paging uses `ToPageAsync` keyset cursors, not large OFFSETs (scan volume grows linearly with offset)
-- Filter large key sets with `WhereIn`/`WhereNotIn` (automatic 500-key batching, parameter-cap clamping, empty sets safely false)
+- Filter large key sets with `WhereIn`/`WhereNotIn` (automatic 500-key batching, empty sets safely false; the total bind-parameter count is still bounded by the dialect, SQLite 999 / general 65535, and exceeding it throws `ArgumentException` up front — use a temp-table JOIN for larger sets)
 - Hoist hot-path `OrderBy`/`Select` expressions to static fields (saves 512 B + 0.5~1.6 µs per call)
 - Preview SQL with `AsDryRun()`/`ToSql` (SQL + parameters, no execution) when troubleshooting; in production, enable AutoTagging (`PalORMAutoTagging` build switch) to auto-inject "file:line member" comments into SQL
 - `Include`/`ThenInclude` generate JOINs without navigation assembly (group by parent yourself); for column-trimmed materialization use `[Projection]` DTOs + `QueryAsync<T>` (`Select` projection only works with DryRun/ToSql)
-- `WithCache` is off by default; after enabling, use `db.EvictQueryCache()` for read-after-write consistency
+- `WithCache` is opt-in per query (off by default); without an injected `DbOptions.QueryCache` it uses the process-wide default instance (1024 entries, tenant-isolated by the `__t:` prefix); inject an independent instance to control capacity/TTL per tenant; TTL is eventually consistent, use `db.EvictQueryCache()` to narrow the read-after-write window
 
 **Writes and bulk operations**
 - Pick bulk APIs by the cheat sheet above; never loop `InsertAsync` (round trips are an order-of-magnitude difference)
@@ -625,7 +625,7 @@ Grouped by frequency; detailed rationale at each linked section:
 - Never call `BulkUpdateBatchAsync` on `[ConcurrencyCheck]` entities (single-statement shape cannot verify per-row versions; PALORM031 already blocks it at compile time); use `BulkUpdateAsync` (packed DbBatch preserves semantics)
 - `BulkInsertAsync` does not backfill auto-increment IDs (COPY / LOAD DATA contract); for per-row backfill use `BulkMergeAsync` (default keys go row-by-row) or `SessionBatch`
 - Declare nullable properties for columns that may hold NULL (`string?`); non-nullable properties fail loudly with `SqlNullValueException` on NULL (never silently null)
-- Mark sensitive columns with `[SensitiveData]` (auto-masked in audit logs and interceptors); do not rely on automatic retry for non-idempotent writes (write paths are direct), wrap with `ExecuteWithResilience` only after assessing duplication risk
+- Mark sensitive columns with `[SensitiveData]` (`Set()` values for those columns are masked in audit logs; values in hand-written Where SQL have no column mapping and are not masked); do not rely on automatic retry for non-idempotent writes (write paths are direct), wrap with `ExecuteWithResilience` only after assessing duplication risk
 
 **Transactions**
 - Inside a transaction prefer `BulkInsertAsync` over `SessionBatch` (100 rows: 5.4ms vs 16.8ms)
@@ -635,7 +635,8 @@ Grouped by frequency; detailed rationale at each linked section:
 
 **Multi-tenancy and cross-cutting concerns**
 - Call `WithTenant(id)` right after creating a session for `[TenantAware]` entities, before the first query (cache-key prefixes follow the tenant)
-- Use `IgnoreFilters()` narrowly for cross-tenant administrative queries and return to the tenant context immediately
+- `InsertAsync`/`BulkInsertAsync`/`BulkMergeAsync` add no tenant predicate: the caller must assign `tenant_id` (PALORM040 only catches nullable columns); the tenant column is immutable in Update/BulkUpdate and UPSERT conflict updates (prevents cross-tenant moves) — use raw SQL for a deliberate migration
+- Use `IgnoreFilters()` for cross-tenant administrative queries; it switches the session to the unfiltered view and there is no public reset API, so use a separate session afterwards (renting again from the pool is enough) rather than continuing tenant-scoped work on the same session
 - `AuditInterceptor` covers the entity SELECT pipeline / QueryBuilder UPDATE / `ExecuteAsync`; `InsertAsync`/`DeleteAsync`/the bulk family/stored procedures produce no audit records — use database-level auditing or OpenTelemetry for full write auditing
 - With the PG tuning `NoResetOnClose=true`, raw-SQL `SET`s/temp tables stay visible across pool tenants (ITM-652): use a dedicated connection (`Max Pool Size=1`) or an explicit `DISCARD` when isolation is needed
 

@@ -2,6 +2,21 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [Unreleased]
+
+### 🐛 修复
+
+- **[TenantAware] 租户列在更新中不可写**（安全修复）：`UpdateAsync`、`BulkUpdateAsync`、`BulkUpdateBatchAsync` 与 `SaveAsync`/`BulkMergeAsync` 的冲突更新 SET 不再包含 `tenant_id`。修复前租户会话可凭实体上的他租户值把行搬到别的租户（行从本租户视图消失、出现在对方视图），用未赋 `TenantId` 的部分实体更新还会把租户列清空。Insert 行为不变（租户值仍由实体承载，ITM-599）；确需迁移租户用原生 SQL。行为变更：依赖“更新可改 tenant_id”的调用方需改走原生 SQL。
+- 回归锁定：`BulkUpdatePoolingTests.TenantColumn_IsImmutableOnUpdateAndUpsert`（四条写路径）与 `TenantFilter_OnlyUpdatesOwnTenantRows`（补 `[TenantAware]`，跨租户主键 0 行）。
+
+### 📝 文档
+
+- 并行读作用域：`GetAsync` 与查询族都走作用域局部读连接池（原文写“作用域内调用会响亮拒绝”，与 2026-09-30 起的实现相反）。
+- 查询缓存：未注入 `DbOptions.QueryCache` 时 `WithCache` 使用进程级默认实例（原文写“注入才启用”）。
+- `IgnoreFilters()`：会话内无公开复位 API，管理查询后应换会话（原文写“查询结束立即回到租户上下文”）。
+- `WhereIn`/`WhereNotIn`：500 键分批不解除方言总参数上限（SQLite 999），超限提前抛 `ArgumentException`。
+- `[SensitiveData]`：掩码只覆盖 `Set()` 参数，Where 手写 SQL 的洞值无列映射。
+
 ## [6.6.0] - 2026-10-20 · 版本化批量更新单语句化 + 第二轮性能收敛
 
 > 变更规模：74 个代码提交 · 260 个文件 · +9,625/−2,168 行（v6.5.0..87d25f5，不含本发布准备提交）
