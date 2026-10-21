@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1117 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1118 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -144,9 +144,9 @@
 | `GetAsync<T>(object key)` | 按主键 |
 | `GetAllAsync<T>()` | 全表 |
 | `InsertAsync<T>(T)` → `T` | PG/SQLite RETURNING / MySQL LAST_INSERT_ID |
-| `UpdateAsync<T>(T)` | 乐观锁自动检查 |
+| `UpdateAsync<T>(T)` | 乐观锁自动检查；[TenantAware] 的 tenant_id 不在 SET 内 |
 | `DeleteAsync<T>(object key)` | SoftDelete 更新 deleted_at / 物理删除 |
-| `SaveAsync<T>(T)` | UPSERT（默认键 Insert / 非默认键 Upsert） |
+| `SaveAsync<T>(T)` | UPSERT（默认键 Insert / 非默认键 Upsert）；冲突更新不改 tenant_id |
 | `ExecuteAsync(FormattableString)` → `int` | DDL/DML 直执 |
 
 ### 写入 / 批量
@@ -154,7 +154,7 @@
 | API | 实现 |
 |------|------|
 | `BulkInsertAsync<T>(items, batchSize)` | PG Binary COPY / SQLite+MySQL 多值 INSERT |
-| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁；PG/MySQL 版本化实体走单语句（能力不全回退 DbBatch 逐条） |
+| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁；PG/MySQL 版本化实体走单语句（能力不全回退 DbBatch 逐条）；租户列不在 SET 内 |
 | `BulkMergeAsync<T>(items)` | 逐项 UPSERT |
 | `BulkDeleteAsync<T>(keys)` | 500/批 IN 子句 |
 
@@ -204,16 +204,16 @@
 | API | 说明 |
 |------|------|
 | `[SoftDelete]` + `deleted_at` | 查询自动过滤 |
-| `[TenantAware]` + `tenant_id` | 查询自动隔离 |
+| `[TenantAware]` + `tenant_id` | 查询自动隔离；Update/BulkUpdate/UPSERT 冲突更新不写 tenant_id（Insert 由实体承载） |
 | `[ConcurrencyCheck]` + Version | 乐观锁自动检查 |
-| `IgnoreFilters()` | 显式跳过全局过滤 |
+| `IgnoreFilters()` | 显式跳过全局过滤；会话内无复位 API，管理查询后换会话（池化归还重租即可） |
 | `WithTenant(id)` | 切换租户 |
 | `AddInterceptor(IQueryInterceptor)` | OnBefore/OnAfter/OnError + 优先级 |
 | `StoredProc("name").WithParam().WithOutputParam().ExecuteAsync()` | 存储过程 |
 | `QueryAsyncEnumerable<T>(sql)` → `IAsyncEnumerable<T>` | 流式读取 |
 | `HealthCheckAsync()` → `HealthResult` | SELECT 1 探活 |
 | `GetRawConnection()` → `DbConnection` | 逃生舱 |
-| `EvictQueryCache()` | 清空本会话生效的查询缓存（ADR-O C3：写后显式失效，注入实例优先/默认进程级，口径同查询路径） |
+| `EvictQueryCache()` | 清空本会话使用的缓存实例（未注入 `QueryCache` 时为进程级默认实例；ADR-O C3：写后显式失效，口径同查询路径） |
 
 ### 横切注解
 

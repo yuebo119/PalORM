@@ -177,7 +177,10 @@ public interface IValueConverter<TModel, TProvider>
     TModel FromProvider(TProvider value);
 }
 
-/// <summary>多租户感知标记。</summary>
+/// <summary>多租户感知标记。
+/// <para>查询与 Update/Delete/Bulk 路径自动附加 <c>tenant_id = @p</c>；Insert 由实体的
+/// <c>tenant_id</c> 值承载；Update/BulkUpdate 与 UPSERT 冲突更新的 SET 不写租户列，
+/// 防止租户会话把行搬到别的租户。</para></summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class TenantAwareAttribute : Attribute { }
 

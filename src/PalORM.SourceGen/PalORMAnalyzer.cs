@@ -839,14 +839,18 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM024：实体无可更新列——UpdateAsync/BulkUpdateAsync 运行期必崩。
-    /// 等价 CommandFactoryEmitter.IsUpdatableColumn 单一真源（r8-D-A 修正：!Key/!Concurrency/!Computed/!Timestamp）
+    /// 等价 CommandFactoryEmitter.IsUpdatableColumn 单一真源（r8-D-A 修正：!Key/!Concurrency/!Computed/!Timestamp；
+    /// 2026-10-21：!TenantColumn——租户列是作用域键，不进 UPDATE SET）
     /// 注：非主键属性——主键在 UPDATE 中是 WHERE 条件，不计入 SET 列。</summary>
     private static void CheckUpdatableColumns(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
+        bool isTenantAware = type.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));
         bool hasUpdatable = false;
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             if (IsPrimaryKey(property)) continue;  // PK 是 WHERE 条件非 SET
+            if (isTenantAware && HasColumnNamed(property, "tenant_id")) continue;  // 租户列只读
             if (IsPropertyUpdatable(property))
             {
                 hasUpdatable = true;

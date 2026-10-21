@@ -130,12 +130,70 @@ public sealed class BulkUpdatePoolingTests
             $"INSERT INTO pool_tenant (id, tenant_id, qty) VALUES ({(long)2}, {"t2"}, {0L})");
 
         session.WithTenant("t1");
-        long affected = await session.BulkUpdateAsync([new PoolTenant { Id = 1, Qty = 5 }]);
+        // 本租户行按主键更新成功；跨租户主键必须命中 0 行（[TenantAware] 的租户谓词是判别点）
+        long own = await session.BulkUpdateAsync([new PoolTenant { Id = 1, Qty = 5 }]);
+        long cross = await session.BulkUpdateAsync([new PoolTenant { Id = 2, Qty = 9 }]);
 
-        await Assert.That(affected).IsEqualTo(1L);
+        await Assert.That(own).IsEqualTo(1L);
+        await Assert.That(cross).IsEqualTo(0L);
+        await Assert.That((await session.GetAllAsync<PoolTenant>()).Count).IsEqualTo(1);
+
+        session.IgnoreFilters();
         var after = (await session.From<PoolTenant>().ToListAsync()).OrderBy(static r => r.Id).ToList();
+        await Assert.That(after.Count).IsEqualTo(2);
         await Assert.That(after[0].Qty).IsEqualTo(5L);
+        await Assert.That(after[0].TenantId).IsEqualTo("t1");  // 部分实体未赋租户值也不得清空租户列
         await Assert.That(after[1].Qty).IsEqualTo(0L);  // 他租户行未被触碰
+        await Assert.That(after[1].TenantId).IsEqualTo("t2");
+    }
+
+    [Test]
+    public async Task TenantColumn_IsImmutableOnUpdateAndUpsert()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await session.ExecuteAsync($"CREATE TABLE pool_tenant (id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, qty INTEGER NOT NULL)");
+        await session.ExecuteAsync($"INSERT INTO pool_tenant (id, tenant_id, qty) VALUES ({(long)1}, {"t1"}, {1L})");
+        session.WithTenant("t1");
+
+        // 单行 Update：实体携带他租户值，只能改数据列
+        await Assert.That(await session.UpdateAsync(new PoolTenant { Id = 1, Qty = 5, TenantId = "t2" }))
+            .IsEqualTo(1);
+        await AssertTenantRowAsync(session, tenant: "t1", qty: 5);
+
+        // BulkUpdate：部分实体（TenantId 未赋值）不得把租户列清空
+        await Assert.That(await session.BulkUpdateAsync([new PoolTenant { Id = 1, Qty = 6 }]))
+            .IsEqualTo(1L);
+        await AssertTenantRowAsync(session, tenant: "t1", qty: 6);
+
+        // BulkUpdate：显式他租户值同样不得搬移
+        await Assert.That(await session.BulkUpdateAsync([new PoolTenant { Id = 1, Qty = 7, TenantId = "t2" }]))
+            .IsEqualTo(1L);
+        await AssertTenantRowAsync(session, tenant: "t1", qty: 7);
+
+        // 显式批量 API（SQLite 走逐条回退路径）同样排除租户列
+        await Assert.That(await session.BulkUpdateBatchAsync([new PoolTenant { Id = 1, Qty = 10, TenantId = "t2" }]))
+            .IsEqualTo(1L);
+        await AssertTenantRowAsync(session, tenant: "t1", qty: 10);
+
+        // SaveAsync 与 BulkMergeAsync 的冲突更新 SET 同样排除租户列
+        await session.SaveAsync(new PoolTenant { Id = 1, Qty = 8, TenantId = "t2" });
+        await AssertTenantRowAsync(session, tenant: "t1", qty: 8);
+
+        await Assert.That(await session.BulkMergeAsync([new PoolTenant { Id = 1, Qty = 9, TenantId = "t2" }]))
+            .IsEqualTo(1L);
+        await AssertTenantRowAsync(session, tenant: "t1", qty: 9);
+    }
+
+    private static async Task AssertTenantRowAsync(
+        DataSession<SqliteProvider> session, string tenant, long qty)
+    {
+        // 原生读取：租户过滤会隐藏被错误搬移的行，断言必须绕过会话过滤
+        using SqliteCommand command = (SqliteCommand)session.GetRawConnection().CreateCommand();
+        command.CommandText = "SELECT tenant_id, qty FROM pool_tenant WHERE id = 1";
+        using SqliteDataReader reader = await command.ExecuteReaderAsync();
+        await Assert.That(await reader.ReadAsync()).IsTrue();
+        await Assert.That(reader.GetString(0)).IsEqualTo(tenant);
+        await Assert.That(reader.GetInt64(1)).IsEqualTo(qty);
     }
 
     [Test]
@@ -226,6 +284,7 @@ internal sealed partial class PoolVersioned2
     [Column("version")] [ConcurrencyCheck] public long Version { get; set; }
 }
 
+[TenantAware]
 [Table("pool_tenant")]
 internal sealed partial class PoolTenant
 {

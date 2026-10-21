@@ -22,7 +22,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 - **编译期安全网**：45 条 Roslyn 诊断把缺主键、租户列可空绕过隔离、乐观锁基线为 0、循环内 N+1 查询这类运行时崩溃或静默错数据拦截在编译期，错误可跳转声明位置
 - **全链路 Native AOT**：.NET 生态唯一三方言 AOT 发布验证全部通过的 ORM，无反射、无 IL Emit、无运行时代码生成，SQLite 发布 exe 仅 4.5 MB
 - **地板级性能**：单行 CRUD 与 ADO.NET 手写地板持平（0.94~1.01×），批量写自动走方言最快路径——PG Binary COPY、MySQL LOAD DATA、单语句批量 UPDATE（MySQL 实测快 3.3×）；20,000 行 BulkInsert 分配约为 Dapper 的 19%；Web 服务"一请求一会话"形态内置会话池（32 并发实测 P99 −18%、Gen0 回收 −58%）
-- **企业级横切开箱即用**：多租户列隔离（查询与全部写路径）、乐观锁、软删除、审计拦截器（敏感列自动脱敏）、读写分离、咨询锁、弹性重试 + 熔断（零 Polly 依赖）
+- **企业级横切开箱即用**：多租户列隔离（查询与 Update/Delete/Bulk 自动附加租户谓词；租户列在更新中不可写，Insert 由实体 `tenant_id` 承载）、乐观锁、软删除、审计拦截器（`Set()` 写入的敏感列参数掩码）、读写分离、咨询锁、弹性重试 + 熔断（零 Polly 依赖）
 - **零依赖核心**：PalORM.Core 不引用任何第三方 NuGet 包（仅 BCL + ADO.NET 抽象）；SQLite 经 SQLite3MC 驱动支持 AES-256 静态加密
 
 数据口径见[性能](#-性能)一节（2026-10-14 基准批次）。
@@ -381,12 +381,12 @@ await using (db.ForParallelReads())
 }
 ```
 
-> **作用域内入口限制**：`From<T>()` 查询族走读连接池（并发安全）；`GetAsync` 单行直查族走主连接，作用域内调用会响亮拒绝（`InvalidOperationException` 带指引）——在作用域外使用，或改用 `From<T>().Where(...).FirstOrDefaultAsync()`。流式消费大结果集用 `QueryAsyncEnumerable<T>`（`await foreach`），避免全量物化的内存峰值；`Include` 只生成 JOIN 不装配导航，需按父分组时自行配对或直接流式处理。
+> **并行读作用域**：`From<T>()` 查询族与 `GetAsync` 单行直查族在 `ForParallelReads()` 内都走作用域局部读连接池（各自独立连接，上限 8，查询结束归还）；与在飞只读操作并发的写/事务/Bulk 会被单活动门禁拒绝。流式消费大结果集用 `QueryAsyncEnumerable<T>`（`await foreach`），避免全量物化的内存峰值；`Include` 只生成 JOIN 不装配导航，需按父分组时自行配对或直接流式处理。
 
 ### 内存与 GC 选型
 
 - **结果集形态**：`ToListAsync` 全量物化（`List<T>` 初始容量按会话内上次行数自适应，重复查询同表零扩容拷贝）；行数不可控的大表用 `QueryAsyncEnumerable<T>` 流式（每行即时消费，峰值内存 O(1)）。
-- **查询缓存**：`WithCache` 的分配换时延取舍默认关（`DbOptions.QueryCache` 注入才启用）；TTL 最终一致，写后读一致用 `db.EvictQueryCache()` 显式收窄。
+- **查询缓存**：`WithCache` 按查询 opt-in（默认关）；未注入 `DbOptions.QueryCache` 时使用进程级共享默认实例（1024 条，多租户靠 `__t:` 前缀隔离），需要按租户控制容量/TTL 时注入独立实例；TTL 最终一致，写后读一致用 `db.EvictQueryCache()` 显式收窄。
 - **GC 模式**：高吞吐服务端（多核 + 大堆）建议 `<ServerGarbageCollection>true</ServerGarbageCollection>`（Gen0 分配缓冲更大、GC 频率降）；容器配 `GarbageCollectionHeapHardLimit`（如 75c00000=2GB）防OOM；客户端/小内存场景保持 Workstation 默认。基准口径为 Workstation（`docs/性能基准规范.md` §4.1），Server GC 下分配数字不变、GC 频率与暂停分布不同。
 
 ### Keyset 游标分页
@@ -666,14 +666,14 @@ await using var db = await factory.RentAsync(ct);
 - 启动期预热连接池 `PreWarmAsync`（远程建连实测约 8.5 ms/条），配合 `MinPoolSize` 保持暖态
 - 高频单键查询用 `GetAsync`（比链式等价写法快 25~30%、省 880 B）；带过滤条件才用 `From<T>()`
 - 只读副本配置 `ReadConnectionString` 后，报表/列表查询显式 `.ForRead()`，主从延迟敏感的强读留在主库
-- 并发查询先声明 `await using (db.ForParallelReads())`；作用域内不要调 `GetAsync`（入口限制会响亮拒绝）
+- 并发查询先声明 `await using (db.ForParallelReads())`；作用域内 `GetAsync` 与查询族走作用域局部读连接池（上限 8）；与在飞读并发的写操作会被门禁拒绝
 - 跨程序集模型报 "not registered"：各模型程序集经 `ModuleInitializer` 在首次被触达时注册，确保实体类型被真实引用（类型实例化/成员调用均算触达）
 
 **查询与结果集**
 
 - 行数不可控的大表用 `QueryAsyncEnumerable<T>` 流式消费（峰值内存 O(1)），不要 `ToListAsync` 全量物化
 - 深翻页用 `ToPageAsync` 游标（Keyset），不要大 OFFSET（扫描量随偏移线性增长）
-- 大键集过滤用 `WhereIn`/`WhereNotIn`（自动按 500 键分批、参数上限钳制，空集安全恒假）
+- 大键集过滤用 `WhereIn`/`WhereNotIn`（自动按 500 键分批、空集安全恒假；总绑定参数仍受方言上限约束，SQLite 999 / 通用 65535，超限会提前抛 `ArgumentException`，更大的键集用临时表 JOIN）
 - 热路径的 `OrderBy`/`Select` 表达式提到静态字段（每棵树 512 B + 0.5~1.6 µs 的调用点成本可消除）
 - 排查 SQL 用 `AsDryRun()`/`ToSql` 预览（SQL + 参数，不执行）；生产定位慢查询可开 AutoTagging（`PalORMAutoTagging` 编译开关，SQL 自动注入「文件:行号 成员」注释）
 - `Include`/`ThenInclude` 只生成 JOIN 不装配导航（按父分组自行配对）；列裁剪物化用 `[Projection]` DTO + `QueryAsync<T>`（`Select` 投影仅 DryRun/ToSql 支持）
@@ -686,7 +686,7 @@ await using var db = await factory.RentAsync(ct);
 - `[ConcurrencyCheck]` 实体不要调 `BulkUpdateBatchAsync`（显式单语句 API 不承载逐行版本谓词，PALORM031 编译期已拦），批量更新走 `BulkUpdateAsync`（自动路由到版本化单语句，能力不全回退 DbBatch）
 - `BulkInsertAsync` 不回填自增 ID（COPY / LOAD DATA 契约）；需逐行回填用 `BulkMergeAsync`（默认键走逐条）或 `SessionBatch`
 - 可能存 NULL 的列声明可空属性（`string?`），非可空遇 NULL 会响亮抛 `SqlNullValueException`（不出静默 null）
-- 敏感列标 `[SensitiveData]`（审计日志与拦截器自动掩码）；非幂等写不要指望自动重试（写入路径直连语义），确需弹性用 `ExecuteWithResilience` 包裹并自行评估重复执行风险
+- 敏感列标 `[SensitiveData]`（`Set()` 写入该列的参数值在审计日志中掩码；Where 手写 SQL 的洞值无列映射，不掩码）；非幂等写不要指望自动重试（写入路径直连语义），确需弹性用 `ExecuteWithResilience` 包裹并自行评估重复执行风险
 
 **事务**
 
@@ -698,7 +698,8 @@ await using var db = await factory.RentAsync(ct);
 **多租户与横切**
 
 - `[TenantAware]` 实体会话创建后立即 `WithTenant(id)`，不要延后到首个查询（缓存 key 前缀随租户切换失效）
-- 需要跨租户管理查询时用 `IgnoreFilters()` 短路，查询结束立即回到租户上下文
+- `InsertAsync`/`BulkInsertAsync`/`BulkMergeAsync` 不附加租户谓词，`tenant_id` 必须由调用方赋值（PALORM040 只拦可空列）；租户列在 Update/BulkUpdate 与 UPSERT 冲突更新中不可写（防跨租户搬移），确需迁移用原生 SQL
+- 需要跨租户管理查询时用 `IgnoreFilters()`；该调用把会话切到全量视图且当前无公开复位 API，管理查询结束请换一个会话（池化会话归还后重租即可），不要在同一个会话里继续做租户过滤查询
 - `AuditInterceptor` 覆盖面 = 实体 SELECT 管线 / QueryBuilder UPDATE / `ExecuteAsync`；`InsertAsync`/`DeleteAsync`/Bulk 族/存储过程不产生审计记录，完整写入审计用数据库层审计或 OpenTelemetry
 - PG 连接串调优 `NoResetOnClose=true` 下 raw SQL 的 `SET`/临时表跨池租客可见（ITM-652）：需要隔离时用独立连接（`Max Pool Size=1`）或显式 `DISCARD`
 
