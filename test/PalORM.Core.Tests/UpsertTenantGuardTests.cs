@@ -59,15 +59,71 @@ internal sealed class UpsertTenantGuardTests
         await Assert.That(value).IsEqualTo(150);
     }
 
-    private static async Task<(long TenantId, long Value)> ReadRow(SqliteConnection keeper, long id)
+    [Test]
+    public async Task BulkMerge_NonTenantSession_DoesNotMoveTenantId_RegardlessOfCacheWarmupOrder()
     {
+        using SqliteConnection keeper = await OpenKeeperAsync(Guid.NewGuid().ToString("N"));
+
+        // A：非租户会话首次调用，shape 缓存以 include-tenant_id 形态入缓存
+        await using (DataSession<SqliteProvider> plainA = await CreatePlainSessionAsync(keeper))
+        {
+            await plainA.BulkMergeAsync([new TenantUpsertNonTenantProbe { Id = 1, TenantId = 1, Value = 100 }]);
+            await plainA.BulkMergeAsync([new TenantUpsertNonTenantProbe { Id = 1, TenantId = 2, Value = 200 }]);
+        }
+        var (tenantA, valueA) = await ReadRowAsync(keeper, "tenant_upsert_non_tenant_probe", 1);
+
+        // B：租户会话先预热 shape 缓存，再由非租户会话执行同一调用
+        await using (DataSession<SqliteProvider> tenantB = await CreateSessionAsync(keeper, 1))
+        {
+            await tenantB.BulkMergeAsync([new TenantUpsertCacheProbe { Id = 1, TenantId = 1, Value = 100 }]);
+        }
+        await using (DataSession<SqliteProvider> plainB = await CreatePlainSessionAsync(keeper))
+        {
+            await plainB.BulkMergeAsync([new TenantUpsertCacheProbe { Id = 1, TenantId = 2, Value = 200 }]);
+        }
+        var (tenantBResult, valueB) = await ReadRowAsync(keeper, "tenant_upsert_cache_probe", 1);
+
+        // 修复前：A=2（include 形态改写 tenant_id），B=1（exclude 形态偶然一致）——
+        // 同一非租户操作的结果依赖进程内预热顺序。
+        await Assert.That(tenantA).IsEqualTo(1);
+        await Assert.That(valueA).IsEqualTo(200);
+        await Assert.That(tenantBResult).IsEqualTo(1);
+        await Assert.That(valueB).IsEqualTo(200);
+    }
+
+    private static async Task<(long TenantId, long Value)> ReadRowAsync(
+        SqliteConnection keeper, string table, long id)
+    {
+        // 白名单表名 + 参数化主键：测试专用，避免把表名当 SQL 注入面（S2077/CA2100）。
+        string sql = table switch
+        {
+            "tenant_upsert_probe" =>
+                "SELECT tenant_id, value FROM tenant_upsert_probe WHERE id = $id",
+            "tenant_upsert_non_tenant_probe" =>
+                "SELECT tenant_id, value FROM tenant_upsert_non_tenant_probe WHERE id = $id",
+            "tenant_upsert_cache_probe" =>
+                "SELECT tenant_id, value FROM tenant_upsert_cache_probe WHERE id = $id",
+            _ => throw new ArgumentOutOfRangeException(nameof(table), table, "unknown test table"),
+        };
         await using SqliteCommand cmd = keeper.CreateCommand();
-        cmd.CommandText = "SELECT tenant_id, value FROM tenant_upsert_probe WHERE id = 1";
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("$id", id);
         await using SqliteDataReader reader = await cmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
             throw new InvalidOperationException($"row {id} vanished (tenant guard bypassed via delete?).");
         return (reader.GetInt64(0), reader.GetInt64(1));
     }
+
+    private static async Task<DataSession<SqliteProvider>> CreatePlainSessionAsync(SqliteConnection keeper)
+        => await DataSession<SqliteProvider>.CreateAsync(new DbOptions
+        {
+            ConnectionString = keeper.ConnectionString,
+            MaxRetries = 0,
+            CircuitBreakerThreshold = 0,
+        });
+
+    private static async Task<(long TenantId, long Value)> ReadRow(SqliteConnection keeper, long id)
+        => await ReadRowAsync(keeper, "tenant_upsert_probe", id);
 
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync(SqliteConnection keeper, long tenantId)
     {
@@ -90,6 +146,14 @@ internal sealed class UpsertTenantGuardTests
             "CREATE TABLE tenant_upsert_probe " +
             "(id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, value INTEGER NOT NULL)";
         await cmd.ExecuteNonQueryAsync();
+        cmd.CommandText =
+            "CREATE TABLE tenant_upsert_non_tenant_probe " +
+            "(id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, value INTEGER NOT NULL)";
+        await cmd.ExecuteNonQueryAsync();
+        cmd.CommandText =
+            "CREATE TABLE tenant_upsert_cache_probe " +
+            "(id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, value INTEGER NOT NULL)";
+        await cmd.ExecuteNonQueryAsync();
         return keeper;
     }
 }
@@ -98,6 +162,24 @@ internal sealed class UpsertTenantGuardTests
 [TenantAware]
 [Table("tenant_upsert_probe")]
 internal sealed partial class TenantUpsertProbe
+{
+    [Key] public long Id { get; set; }
+    [Column("tenant_id")] public long TenantId { get; set; }
+    [Column("value")] public long Value { get; set; }
+}
+
+[TenantAware]
+[Table("tenant_upsert_non_tenant_probe")]
+internal sealed partial class TenantUpsertNonTenantProbe
+{
+    [Key] public long Id { get; set; }
+    [Column("tenant_id")] public long TenantId { get; set; }
+    [Column("value")] public long Value { get; set; }
+}
+
+[TenantAware]
+[Table("tenant_upsert_cache_probe")]
+internal sealed partial class TenantUpsertCacheProbe
 {
     [Key] public long Id { get; set; }
     [Column("tenant_id")] public long TenantId { get; set; }

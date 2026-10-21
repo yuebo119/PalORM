@@ -276,6 +276,46 @@ public sealed class ResilienceTests
     }
 
     [Test]
+    public async Task Constructor_OverflowTimeoutSettings_ThrowsAtConstruction()
+    {
+        // 2026-10-22 审计 C5：CancelAfter 的 delay 上限是 uint.MaxValue-1 ms，
+        // 与 ITM-749 的 ConnectionTimeout 同族；直接构造未 Validate 的 options 也要构造期拒绝。
+        await Assert.That(() => new ResilienceExecutor(new DbOptions
+        {
+            ConnectionString = "dummy",
+            CommandTimeout = TimeSpan.FromDays(50)
+        })).Throws<ArgumentOutOfRangeException>();
+
+        await Assert.That(() => new ResilienceExecutor(new DbOptions
+        {
+            ConnectionString = "dummy",
+            CircuitBreakerResetAfter = TimeSpan.FromDays(50)
+        })).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task ExecuteAsync_OverflowRetryBackoff_ReportsBackoffConfig()
+    {
+        // 2026-10-22 审计 C5：ITM-605 的守卫只查负值；超大退避仍会让 Task.Delay 抛
+        // AOORE("delay") 且不指向配置。构造期包装守卫应覆盖上界并带 attempt=N。
+        var opts = new DbOptions
+        {
+            ConnectionString = "dummy",
+            MaxRetries = 1,
+            RetryBackoff = _ => TimeSpan.FromDays(50),
+            CircuitBreakerThreshold = 0
+        };
+        var executor = new ResilienceExecutor(opts, static _ => true);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await executor.ExecuteAsync<int>(_ => throw new InvalidOperationException("trigger retry"));
+        });
+        await Assert.That(ex!.Message).Contains("RetryBackoff");
+        await Assert.That(ex.Message).Contains("attempt=0");
+    }
+
+    [Test]
     public async Task ExecuteAsync_CircuitBreaker_CountsEachFinalFailureOnce()
     {
         var opts = new DbOptions
