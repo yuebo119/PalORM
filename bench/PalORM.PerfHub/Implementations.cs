@@ -1980,9 +1980,9 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         => new($"方言 '{dialect}' 不在 PerfHub 覆盖范围内（仅 SQLite / MySQL / PostgreSQL）。");
 
     /// <summary>按操作新建会话——与 Dapper 无状态扩展方法对等的用法形态。</summary>
-    private static DataSession<TProvider> Session<TProvider>(DbConnection conn)
+    private static DataSession<TProvider> Session<TProvider>(DbConnection conn, bool ownsConnection = true)
         where TProvider : IDbProvider, new()
-        => new(conn, Opts(conn), [], null);
+        => new(conn, Opts(conn), [], null, ownsConnection);
 
     // ── 池化租借臂（2026-10-13 二轮方案）：每方言一个进程级池 ──
     // 连接串来源：Connections.Resolve（环境变量/.env.test，含真实凭据）——已打开连接的
@@ -2126,7 +2126,10 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
-        DataSession<TProvider> session = Session<TProvider>(conn);
+        // 会话拥有 32 次操作的生命周期，必须释放：否则晋升后的复用命令（原生语句句柄 +
+        // 参数）随每个被测操作泄漏，累积拖慢后续轮次（归因探针实测每会话约 25µs）。
+        // ownsConnection:false 让 Dispose 只释放会话资源，不关闭夹具共享的连接。
+        await using DataSession<TProvider> session = Session<TProvider>(conn, ownsConnection: false);
         int found = 0;
         foreach (long id in ids)
         {
@@ -2612,7 +2615,8 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
-        DataSession<TProvider> session = Session<TProvider>(conn);
+        // 100 次插入会晋升 INSERT 复用命令；会话必须释放，否则每个被测操作泄漏一条命令。
+        await using DataSession<TProvider> session = Session<TProvider>(conn, ownsConnection: false);
         await session.WithTransaction(async _ =>
         {
             foreach (EnumRow row in rows)
@@ -2668,7 +2672,8 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
-        DataSession<TProvider> session = Session<TProvider>(conn);
+        // 10 / 100 次插入会晋升 INSERT 复用命令；会话必须释放，否则每轮泄漏一条命令。
+        await using DataSession<TProvider> session = Session<TProvider>(conn, ownsConnection: false);
         await session.WithTransaction(async _ =>
         {
             foreach (S1Row row in rows)
@@ -2695,7 +2700,8 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
-        DataSession<TProvider> session = Session<TProvider>(conn);
+        // 逐行 Update 会晋升 UPDATE 复用命令；会话必须释放，否则每轮泄漏一条命令。
+        await using DataSession<TProvider> session = Session<TProvider>(conn, ownsConnection: false);
         await using DbTransaction tran = await session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
         foreach (S1Row row in rows)
         {
