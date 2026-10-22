@@ -61,9 +61,12 @@ public sealed partial class DataSession<TProvider>
                 $"Type '{typeof(T).Name}' has no updatable columns.");
 
         SortedSet<int> selected = ResolveUpdateColumnSelection<T>(plan, columns);
-        bool tenantFiltered = HasTenantFilter(info.Features);
 
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        // 2026-10-22 终审：租户判别式必须在操作租约内读取——HasTenantFilter 读 live 会话态，
+        // 若在 EnterOperation 之前读，并发 WithTenant 可在读后、进租约前完成，生成无租户谓词
+        // 的 UPDATE（与其余写入口"先租约后读判别式"对齐）。
+        bool tenantFiltered = HasTenantFilter(info.Features);
         DbTransaction? transaction = GetActiveTransaction();
         string sql = GetPartialUpdateSql<T>(info, plan, selected, tenantFiltered);
 

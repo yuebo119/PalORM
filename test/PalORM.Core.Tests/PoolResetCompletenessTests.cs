@@ -31,7 +31,9 @@ public sealed class PoolResetCompletenessTests
     /// _readConnProvider/_readConnReturner（W1 惰性读路由委托：绑定 this 的方法组，
     /// 幂等无状态，保留使第二租期起 From&lt;T&gt; 免重建）；
     /// _lastMigrationSkippedIndexes（DDL 幂等跳过缓存：类型级事实，与租期无关——守卫测试
-    /// 首跑即抓到该遗漏，登记实证）；_pool/_poolBaseOptions/_poolBaseResilience（池标记与
+    /// 首跑即抓到该遗漏，登记实证）；_connectionStateMayBeDirty（原生 SQL 脏标记：租期内置位，
+    /// 跨租期存活以触发下一次租出复位，PrepareForRentAsync 复位成功后清零）；
+    /// _pool/_poolBaseOptions/_poolBaseResilience（池标记与
     /// 复位基准，永不复位）；ResilienceGeneration（单调代际，仅用于 builder 的弹性配置
     /// 快照判定；builder 不跨租期存活，代际无需随池基准复位）。</summary>
     private static readonly HashSet<string> KeptAcrossRentals =
@@ -45,6 +47,7 @@ public sealed class PoolResetCompletenessTests
         "_materializedCapacity", "_readConnection",
         "_readConnProvider", "_readConnReturner",
         "_lastMigrationSkippedIndexes",
+        "_connectionStateMayBeDirty",
         "_pool", "_poolBaseOptions", "_poolBaseResilience",
         "ResilienceGeneration",
     ];

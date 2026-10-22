@@ -252,7 +252,10 @@ internal sealed class SessionOperationState
         lock (_sync)
         {
             ThrowIfEnterBlocked(false);
-            if (_isActive || _activeReadLeases > 0)
+            // 2026-10-22 终审：补 _fastState 读——TryEnterFast 的 CAS 与 _isActive=true 之间
+            // 存在窗口，旧条件看不到快速进入方；不查会让配置门与快速操作同时进入（配置变更
+            // 与查询启动重叠，租户/拦截器状态可错配）。
+            if (_isActive || _activeReadLeases > 0 || Volatile.Read(ref _fastState) != 0)
             {
                 throw new InvalidOperationException(
                     "DataSession already has an active database operation.");
