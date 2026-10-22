@@ -50,6 +50,15 @@ internal static class SqlFileEmitter
             || method.ContainingType?.ContainingType is not null)
             return null;
 
+        // P2-10 残余：生成侧的实现声明固定为 `public static partial string Name()`。
+        // 方法形状不匹配时该声明与用户定义冲突，错误落在 .g.cs（CS0759/CS0111）。
+        // 与泛型/嵌套同策略：跳过生成，让 CS8795 定位回用户方法（声明式 partial 缺实现）。
+        if (!method.IsStatic
+            || method.Parameters.Length != 0
+            || method.DeclaredAccessibility != Accessibility.Public
+            || method.ReturnType.SpecialType != SpecialType.System_String)
+            return null;
+
         var attr = method.GetAttributes().FirstOrDefault(a =>
             a.AttributeClass?.Name is "SqlFileAttribute" or "SqlFile"
             && a.AttributeClass?.ContainingNamespace?.ToDisplayString() is "PalORM");
