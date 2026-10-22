@@ -1398,41 +1398,85 @@ public struct QueryBuilder<T> where T : class, new()
     /// 本方法只在形状缓存未命中的组装路径执行，两遍扫描与中间集合不进命中热路径。</summary>
     private void AppendUserWhereClauses(ref ValueStringBuilder builder)
     {
+        List<QueryClause> userClauses = CollectUserWhereClauses();
+        if (userClauses.Count == 0) return;
+
+        // 2026-10-22 终审 P1-2：按 AND 分段、段内 OR 组合。每段是一个合取项；段内含 OR 且
+        // 存在其他段时整段加括号，避免 OR 与 AND 的 SQL 优先级把后续 AND 吞进最后一个 OR。
+        // 纯 AND/OR 链保持原文（段数 1 或段内无 OR 时不加外层括号）。
+        int groupStart = 0;
+        for (int i = 1; i <= userClauses.Count; i++)
+        {
+            if (!StartsNewWhereGroup(userClauses, i))
+                continue;
+
+            bool wrap = ShouldWrapWhereGroup(userClauses, groupStart, i);
+            AppendWhereGroup(ref builder, userClauses, groupStart, i, wrap);
+            groupStart = i;
+        }
+    }
+
+    private List<QueryClause> CollectUserWhereClauses()
+    {
         List<QueryClause> userClauses = [];
         foreach (QueryClause clause in MaterializeClauses())
         {
             if (clause.Kind == QueryClauseKind.Where)
                 userClauses.Add(clause);
         }
-        if (userClauses.Count == 0) return;
+        return userClauses;
+    }
 
-        // 第一遍：标记需要补的括号。openAtStart 只在首位开一次——后续再遇 AND-after-OR
-        // 时闭括号推进即可（外层括号已覆盖更早的段），避免逐层嵌套膨胀。
-        bool topHasOr = false;
-        bool openAtStart = false;
-        bool[] closeAfter = new bool[userClauses.Count];
-        for (int i = 0; i < userClauses.Count; i++)
+    private static bool StartsNewWhereGroup(List<QueryClause> clauses, int index)
+        => index == clauses.Count
+            || clauses[index].Sql.StartsWith("AND ", StringComparison.Ordinal);
+
+    private static bool ShouldWrapWhereGroup(List<QueryClause> clauses, int start, int end)
+    {
+        bool hasOr = false;
+        for (int i = start + 1; i < end; i++)
         {
-            string sql = userClauses[i].Sql;
-            if (sql.StartsWith("OR ", StringComparison.Ordinal))
+            if (clauses[i].Sql.StartsWith("OR ", StringComparison.Ordinal))
             {
-                topHasOr = true;
-            }
-            else if (topHasOr && sql.StartsWith("AND ", StringComparison.Ordinal))
-            {
-                openAtStart = true;
-                closeAfter[i - 1] = true;
-                topHasOr = false;
+                hasOr = true;
+                break;
             }
         }
+        return hasOr && (start > 0 || end < clauses.Count);
+    }
 
-        if (openAtStart) builder.Append('(');
-        for (int i = 0; i < userClauses.Count; i++)
+    private static void AppendWhereGroup(
+        ref ValueStringBuilder builder, List<QueryClause> clauses, int start, int end, bool wrap)
+    {
+        if (!wrap)
         {
-            builder.Append(userClauses[i].Sql);
-            if (closeAfter[i]) builder.Append(") ");
-            else builder.Append(' ');
+            for (int i = start; i < end; i++)
+            {
+                builder.Append(clauses[i].Sql);
+                builder.Append(' ');
+            }
+            return;
         }
+
+        string firstSql = clauses[start].Sql;
+        bool firstHasAnd = firstSql.StartsWith("AND ", StringComparison.Ordinal);
+        if (firstHasAnd) builder.Append("AND ");
+        builder.Append('(');
+        for (int i = start; i < end; i++)
+        {
+            if (i > start) builder.Append(" OR ");
+            builder.Append(GetWhereGroupBody(clauses[i].Sql, i == start, firstHasAnd));
+        }
+        builder.Append(") ");
+    }
+
+    private static string GetWhereGroupBody(string sql, bool first, bool firstHasAnd)
+    {
+        if (first)
+            return firstHasAnd ? sql[4..] : sql;
+        if (sql.StartsWith("OR ", StringComparison.Ordinal))
+            return sql[3..];
+        return sql;
     }
 
     /// <summary>追加指定类别的全部子句。separator 用于条目间分隔（如 "AND "）。
