@@ -55,7 +55,8 @@ internal static class SqlShapeCache
         int TakeLiteral,
         System.Type EntityType);
 
-    internal sealed record SqlShapeEntry(string[] SqlSequence, ShapeFields Fields, string FullSql);
+    internal sealed record SqlShapeEntry(
+        string[] SqlSequence, ShapeFields Fields, string FullSql, bool[] QualifySequence);
 
     /// <summary>查找与当前形状匹配的 SQL 文本——命中返回缓存的 string 实例（调用方直接复用）。
     /// R3：数组 foreach 走 span 枚举零分配（原 ConcurrentQueue 经接口每次分配枚举器）。</summary>
@@ -92,11 +93,13 @@ internal static class SqlShapeCache
         if (Volatile.Read(ref _totalEntries) >= MaxEntries) return;
 
         var sequence = new string[clauses.Count];
+        var qualifySequence = new bool[clauses.Count];
         for (int i = 0; i < clauses.Count; i++)
         {
             sequence[i] = clauses[i].Sql;
+            qualifySequence[i] = clauses[i].QualifyColumn;
         }
-        var entry = new SqlShapeEntry(sequence, fields, fullSql);
+        var entry = new SqlShapeEntry(sequence, fields, fullSql, qualifySequence);
 
         // R3（2026-10-12）：不可变数组快照 + CAS 换新——败者（并发同桶写入）重读快照重试，
         // 查重吸收并发等价条目（CACHE-001 语义保持：计数只在换新成功后递增）。
@@ -163,6 +166,10 @@ internal static class SqlShapeCacheExtensions
         for (int i = 0; i < clauses.Count; i++)
         {
             if (!string.Equals(entry.SqlSequence[i], clauses[i].Sql, System.StringComparison.Ordinal))
+                return false;
+            // P1-3：同一 SQL 文本的生成列子句与用户手写子句在 With(CTE) 下产物不同，
+            // 形状比较必须含 QualifyColumn 位，避免共享 FullSql。
+            if (entry.QualifySequence[i] != clauses[i].QualifyColumn)
                 return false;
         }
         return true;

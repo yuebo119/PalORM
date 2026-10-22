@@ -274,7 +274,7 @@ public struct QueryBuilder<T> where T : class, new()
         if (!HasClause(QueryClauseKind.OrderBy))
             throw new InvalidOperationException("ThenBy requires a preceding OrderBy.");
         AddClause(QueryClauseKind.OrderBy,
-            $", {GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}");
+            $", {GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}", qualifyColumn: true);
         return this;
     }
 
@@ -385,7 +385,7 @@ public struct QueryBuilder<T> where T : class, new()
             sb.Append('(');
             AppendInBatches(ref sb, items, parameters, column, operatorName, batchSeparator);
             sb.Append(')');
-            AddClause(QueryClauseKind.Where, sb.ToString(), parameters);
+            AddClause(QueryClauseKind.Where, sb.ToString(), parameters, qualifyColumn: true);
         }
         finally { sb.Dispose(); }
         return this;
@@ -421,7 +421,7 @@ public struct QueryBuilder<T> where T : class, new()
             sb.Append(negated ? " != ALL(" : " = ANY(");
             sb.Append(parameter.ParameterName);
             sb.Append("))");
-            AddClause(QueryClauseKind.Where, sb.ToString(), [new ParameterBinding(parameter)]);
+            AddClause(QueryClauseKind.Where, sb.ToString(), [new ParameterBinding(parameter)], qualifyColumn: true);
             return true;
         }
         finally { sb.Dispose(); }
@@ -467,7 +467,7 @@ public struct QueryBuilder<T> where T : class, new()
     {
         string prefix = HasClause(QueryClauseKind.GroupBy) ? ", " : "GROUP BY ";
         // 表限定与其余子句对齐（ITM-425）：JOIN 下裸列名产生 ambiguous column
-        AddClause(QueryClauseKind.GroupBy, prefix + GetQualifiedColumnName(member));
+        AddClause(QueryClauseKind.GroupBy, prefix + GetQualifiedColumnName(member), qualifyColumn: true);
         return this;
     }
 
@@ -509,7 +509,7 @@ public struct QueryBuilder<T> where T : class, new()
         AddClause(QueryClauseKind.Join,
             $"INNER JOIN {_quoteIdentifier(childTable)} ON " +
             $"({_quoteIdentifier(childTable)}.{_quoteIdentifier(GetColumnName(pk))} = " +
-            $"{_quoteIdentifier(leftSource)}.{_quoteIdentifier(GetColumnName(fk))})");
+            $"{_quoteIdentifier(leftSource)}.{_quoteIdentifier(GetColumnName(fk))})", qualifyColumn: true);
         return this;
     }
 
@@ -530,7 +530,7 @@ public struct QueryBuilder<T> where T : class, new()
         AddClause(QueryClauseKind.Join,
             $"INNER JOIN {_quoteIdentifier(grandChildTable)} ON " +
             $"({_quoteIdentifier(grandChildTable)}.{_quoteIdentifier(GetColumnName(grandChildKey))} = " +
-            $"{_quoteIdentifier(parentSource)}.{_quoteIdentifier(GetColumnName(parentKey))})");
+            $"{_quoteIdentifier(parentSource)}.{_quoteIdentifier(GetColumnName(parentKey))})", qualifyColumn: true);
         return this;
     }
 
@@ -892,7 +892,10 @@ public struct QueryBuilder<T> where T : class, new()
                     : parameter);
             }
             clone._parameterCount += parameters.Count;
-            chain = new ClauseNode(chain, new QueryClause(clause.Kind, clause.Sql, parameters));
+            // P1-3：克隆必须保留 QualifyColumn 位——否则 With(CTE) 下同文本子句的
+            // 形状比较失配，克隆体重复占用形状缓存条目。
+            chain = new ClauseNode(chain,
+                new QueryClause(clause.Kind, clause.Sql, parameters, clause.QualifyColumn));
         }
         clone._clauseChain = chain;
         clone._materializedClauses = null;
@@ -913,7 +916,7 @@ public struct QueryBuilder<T> where T : class, new()
         // 页间重复、分页不推进（ITM-401 括组根因的新入口，真库探针实测）。
         ParameterBinding parameter = CreateBinding(value);
         AddClause(QueryClauseKind.DefaultFilter,
-            $"{qualifiedColumn} {operation} {parameter.Name}", [parameter]);
+            $"{qualifiedColumn} {operation} {parameter.Name}", [parameter], qualifyColumn: true);
     }
 
     /// <summary>成员表达式 → 限定列名（C16：暴露给 ToPageAsync 单次解析复用）。</summary>
@@ -926,7 +929,7 @@ public struct QueryBuilder<T> where T : class, new()
     internal void AddOrderBy(string qualifiedColumn, bool descending)
         => AddClause(QueryClauseKind.OrderBy,
             $"{(HasClause(QueryClauseKind.OrderBy) ? ", " : "ORDER BY ")}" +
-            $"{qualifiedColumn}{(descending ? " DESC" : "")}");
+            $"{qualifiedColumn}{(descending ? " DESC" : "")}", qualifyColumn: true);
 
     /// <summary>查询参数绑定（延迟物化形态）——执行热路径消费；LIMIT/OFFSET 追加与子句参数
     /// 组合成新数组（子句参数表可能是单贡献者快路径的直引用，不得就地变异）。</summary>
@@ -1251,12 +1254,13 @@ public struct QueryBuilder<T> where T : class, new()
         => new(GetParameterName(_parameterCount + localOffset), value);
 
     private void AddClause(QueryClauseKind kind, string sql,
-        IReadOnlyList<ParameterBinding>? parameters = null)
+        IReadOnlyList<ParameterBinding>? parameters = null, bool qualifyColumn = false)
     {
         // T5b：链节点替代 List+COW——struct 副本共享的链不可变，副本隔离天然成立
         // （原 COW 注释：QUERY-001 副本隔离需求；v5.6 的 Count+4 预留容量优化随 COW 一并废弃）。
         IReadOnlyList<ParameterBinding> ownedParameters = parameters ?? Array.Empty<ParameterBinding>();
-        _clauseChain = new ClauseNode(_clauseChain, new QueryClause(kind, sql, ownedParameters));
+        _clauseChain = new ClauseNode(_clauseChain,
+            new QueryClause(kind, sql, ownedParameters, qualifyColumn));
         _materializedClauses = null;
         // v4.6：同步设置位掩码
         _clauseBitmask |= 1 << (int)kind;
@@ -1445,27 +1449,26 @@ public struct QueryBuilder<T> where T : class, new()
         return hasOr && (start > 0 || end < clauses.Count);
     }
 
-    private static void AppendWhereGroup(
+    private void AppendWhereGroup(
         ref ValueStringBuilder builder, List<QueryClause> clauses, int start, int end, bool wrap)
     {
         if (!wrap)
         {
             for (int i = start; i < end; i++)
             {
-                builder.Append(clauses[i].Sql);
+                builder.Append(QualifyClauseSql(clauses[i]));
                 builder.Append(' ');
             }
             return;
         }
 
-        string firstSql = clauses[start].Sql;
-        bool firstHasAnd = firstSql.StartsWith("AND ", StringComparison.Ordinal);
+        bool firstHasAnd = clauses[start].Sql.StartsWith("AND ", StringComparison.Ordinal);
         if (firstHasAnd) builder.Append("AND ");
         builder.Append('(');
         for (int i = start; i < end; i++)
         {
             if (i > start) builder.Append(" OR ");
-            builder.Append(GetWhereGroupBody(clauses[i].Sql, i == start, firstHasAnd));
+            builder.Append(GetWhereGroupBody(QualifyClauseSql(clauses[i]), i == start, firstHasAnd));
         }
         builder.Append(") ");
     }
@@ -1481,6 +1484,20 @@ public struct QueryBuilder<T> where T : class, new()
 
     /// <summary>追加指定类别的全部子句。separator 用于条目间分隔（如 "AND "）。
     /// 同一调用负责遍历 _clauses 内的全部目标类别子句，避免重复循环。</summary>
+    /// <summary>2026-10-22 终审 P1-3：生成的列引用在 With(CTE) 后按当前 FROM 源重限定。
+    /// 子句在调用时可能已固化为实体表名（OrderBy/GroupBy/WhereIn/Keyset/Include），
+    /// 构建时把该前缀替换为 CTE 名；用户手写 Where/Raw/Join 的 QualifyColumn 为 false，原样保留。</summary>
+    private string QualifyClauseSql(in QueryClause clause)
+    {
+        if (!clause.QualifyColumn || _cteName is not { } cteName)
+            return clause.Sql;
+        string from = _quoteIdentifier(_tableName) + ".";
+        string to = _quoteIdentifier(cteName) + ".";
+        return clause.Sql.Contains(from, StringComparison.Ordinal)
+            ? clause.Sql.Replace(from, to, StringComparison.Ordinal)
+            : clause.Sql;
+    }
+
     private void AppendClauseKind(
         ref ValueStringBuilder builder, QueryClauseKind kind, string? separator)
     {
@@ -1489,7 +1506,7 @@ public struct QueryBuilder<T> where T : class, new()
         {
             if (clause.Kind != kind) continue;
             if (!first && separator is not null) builder.Append(separator);
-            builder.Append(clause.Sql);
+            builder.Append(QualifyClauseSql(clause));
             builder.Append(' ');
             first = false;
         }
@@ -1500,7 +1517,7 @@ public struct QueryBuilder<T> where T : class, new()
         foreach (QueryClause clause in MaterializeClauses())
         {
             if (clause.Kind != kind) continue;
-            builder.Append(clause.Sql);
+            builder.Append(QualifyClauseSql(clause));
             builder.Append(' ');
         }
     }
