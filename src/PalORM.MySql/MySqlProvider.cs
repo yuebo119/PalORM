@@ -257,35 +257,39 @@ public sealed class MySqlProvider : IDbProvider
         if (entities.Count == 0) return 0;
 
         // local_infile 能力检测：开启走 BulkCopy（对齐 PG 永远 COPY），关闭走多值 INSERT。
-        if (conn is MySqlConnection mySqlConnection
-            && await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
+        if (conn is MySqlConnection mySqlConnection)
         {
-            try
+            LocalInfileProbeResult probe = await ProbeLocalInfileAsync(
+                mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false);
+            if (probe == LocalInfileProbeResult.Enabled)
             {
-                return await ExecuteBulkCopyAsync(
-                    mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                // ITM-892（r24，真库实证）：探测缓存 60s TTL 内服务端可被关闭——BulkCopy 抛
-                // "Loading local data is disabled"（协议握手阶段拒绝，零行写入）整批硬失败。
-                // 失败后强制失效缓存并重探测：仍 ON → 原样重抛（真故障，如数据/约束问题——
-                // 其失败可能发生在部分写入后，重试整批会重复，必须透传）；OFF → 回退多值
-                // 重试整批（OFF 的失败形态必然是握手拒绝，无部分写入，回退安全；自开事务
-                // 场景失败批已回滚）。重探测的额外 SHOW VARIABLES 往返只发生在失败路径。
-                CapabilityProbeCache<LocalInfileProbe>.Invalidate(mySqlConnection.ConnectionString);
-                if (!await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
+                try
                 {
-                    return await MultiValueBulkInsert.ExecuteAsync(
-                        conn, transaction, entities,
-                        new BulkContext(
-                            batchSize,
-                            MaxParametersPerStatement: SqlLimits.MaxBindParameters,
-                            QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
-                            IsolationLevel: isolationLevel),
-                        ct).ConfigureAwait(false);
+                    return await ExecuteBulkCopyAsync(
+                        mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
                 }
-                throw;
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // ITM-892（r24，真库实证）：探测缓存 60s TTL 内服务端可被关闭——BulkCopy 抛
+                    // "Loading local data is disabled"（协议握手阶段拒绝，零行写入）整批硬失败。
+                    // 2026-10-22 终审 P2-5：重探测只有明确 Disabled 才回退（握手拒绝零写入）；
+                    // Enabled（真故障，可能部分写入）与 ProbeFailed（能力未知）都透传，避免重插。
+                    CapabilityProbeCache<LocalInfileProbe>.Invalidate(mySqlConnection.ConnectionString);
+                    LocalInfileProbeResult reprobe = await ProbeLocalInfileAsync(
+                        mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false);
+                    if (reprobe == LocalInfileProbeResult.Disabled)
+                    {
+                        return await MultiValueBulkInsert.ExecuteAsync(
+                            conn, transaction, entities,
+                            new BulkContext(
+                                batchSize,
+                                MaxParametersPerStatement: SqlLimits.MaxBindParameters,
+                                QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
+                                IsolationLevel: isolationLevel),
+                            ct).ConfigureAwait(false);
+                    }
+                    throw;
+                }
             }
         }
 
@@ -327,14 +331,26 @@ public sealed class MySqlProvider : IDbProvider
     /// 重付探测往返 + 3s 超时封顶（最坏延迟洞），窗口内直接降级多值路径不再探测。</summary>
     private const int LocalInfileNegativeTtlMilliseconds = 10_000;
 
-    private static async ValueTask<bool> IsLocalInfileEnabledAsync(
+    private enum LocalInfileProbeResult
+    {
+        Enabled,
+        Disabled,
+        ProbeFailed,
+    }
+
+    /// <summary>检测服务端 local_infile 三态——键 = <see cref="MySqlConnection.ConnectionString"/>
+    /// （改写后串），命中未过期直接返回；未命中执行 SHOW VARIABLES 并写缓存。
+    /// <para><b>P2-5 三态</b>：负窗口是探测故障，不是能力关闭。启动路径 Enabled 之外的
+    /// Disabled/ProbeFailed 都回退多值（尚无写入，安全）；BulkCopy 失败后的重探测只有
+    /// Disabled（握手拒绝、零行写入）才回退，ProbeFailed 必须原样透传，避免整批重插。</para></summary>
+    private static async ValueTask<LocalInfileProbeResult> ProbeLocalInfileAsync(
         MySqlConnection conn, MySqlTransaction? transaction, CancellationToken ct)
     {
         if (CapabilityProbeCache<LocalInfileProbe>.IsNegativeFresh(conn.ConnectionString))
-            return false;   // 负结果窗口：直接降级，不重付探测往返/超时
+            return LocalInfileProbeResult.ProbeFailed;
         try
         {
-            return (await CapabilityProbeCache<LocalInfileProbe>.GetOrProbeAsync(
+            LocalInfileProbe probe = await CapabilityProbeCache<LocalInfileProbe>.GetOrProbeAsync(
                 conn.ConnectionString,
                 LocalInfileProbeTtlMilliseconds,
                 async token =>
@@ -356,7 +372,8 @@ public sealed class MySqlProvider : IDbProvider
                     bool enabled = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
                     return new LocalInfileProbe(enabled);
                 },
-                ct).ConfigureAwait(false)).Enabled;
+                ct).ConfigureAwait(false);
+            return probe.Enabled ? LocalInfileProbeResult.Enabled : LocalInfileProbeResult.Disabled;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -364,7 +381,7 @@ public sealed class MySqlProvider : IDbProvider
             BulkOperationFramework.RecordCapabilityProbeFailure();
             CapabilityProbeCache<LocalInfileProbe>.MarkNegative(
                 conn.ConnectionString, LocalInfileNegativeTtlMilliseconds);
-            return false;  // 探测故障降级多值路径（见 summary）；取消原样上抛
+            return LocalInfileProbeResult.ProbeFailed;
         }
     }
 
