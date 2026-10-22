@@ -59,6 +59,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     // 建连 26.3µs / 2209B 每次，是读副本查询总耗时（37.2µs）的 3.5 倍。
     private readonly string? _readConnectionString;
     private DbConnection? _readConnection;
+    /// <summary>2026-10-22 终审 P1-8：原生 SQL 可能改写连接级会话态；池化租出时据此
+    /// 对 PG/MySQL 执行 DISCARD ALL / RESET CONNECTION（SQLite 走 Provider 脏标记）。</summary>
+    private int _connectionStateMayBeDirty;
     // v5.0 阶段 5.2：读连接初始化器——包装 Provider 钩子 + ReadSessionSetupSql。
     // 仅当 ReadSessionSetupSql 非空时才捕获实例委托；否则用 static 委托（无闭包分配）。
     private readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
@@ -724,12 +727,34 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     internal async ValueTask PrepareForRentAsync(CancellationToken ct)
     {
         _operationState.Unpark();
+        // 2026-10-22 终审 P1-8：网络驱动的 InitializeConnectionAsync 是 no-op，上一租期
+        // 原生 SQL 改写的会话态（search_path/SET ROLE/sql_mode）会带入下一租期。脏会话
+        // 租出时先执行 Provider 复位，再重放池基准 SessionSetupSql。
+        bool connectionStateMayBeDirty = Volatile.Read(ref _connectionStateMayBeDirty) != 0;
+        if (connectionStateMayBeDirty)
+            await TProvider.ResetConnectionStateAsync(
+                _conn, _commandTimeoutSeconds, ct).ConfigureAwait(false);
         await TProvider.InitializeConnectionAsync(_conn, ct).ConfigureAwait(false);
+        if (connectionStateMayBeDirty)
+        {
+            if (!string.IsNullOrWhiteSpace(_options.SessionSetupSql))
+                await ExecuteSessionSetupSqlAsync(_options.SessionSetupSql, ct).ConfigureAwait(false);
+            Volatile.Write(ref _connectionStateMayBeDirty, 0);
+        }
         if (_readConnection is { State: ConnectionState.Open } readConnection
             && _readConnInitializer is not null)
         {
             await _readConnInitializer(readConnection, ct).ConfigureAwait(false);
         }
+    }
+
+    private async ValueTask ExecuteSessionSetupSqlAsync(string setupSql, CancellationToken ct)
+    {
+        TProvider.InvalidateConnectionInitialization(_conn);
+        await using DbCommand setup = _conn.CreateCommand();
+        setup.CommandTimeout = _commandTimeoutSeconds;
+        setup.CommandText = setupSql;
+        await setup.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>停止后台操作，释放连接。幂等。
@@ -1283,9 +1308,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     }
 
     /// <summary>原生 SQL / 存储过程 / DDL / 裸连接改写了连接态——通知 Provider 把该物理连接
-    /// 标记为"下次会话初始化需复位"（SQLite 实现只重设 foreign_keys；网络驱动默认 no-op）。</summary>
+    /// 标记为"下次会话初始化需复位"（SQLite 实现只重设 foreign_keys；网络驱动默认 no-op）。
+    /// 2026-10-22 终审 P1-8：会话层同时置脏标记，池化租出时对 PG/MySQL 执行方言复位。</summary>
     internal void MarkConnectionStateUnknownForRawSql()
-        => TProvider.MarkConnectionStateUnknown(_conn);
+    {
+        Volatile.Write(ref _connectionStateMayBeDirty, 1);
+        TProvider.MarkConnectionStateUnknown(_conn);
+    }
 
     /// <summary>全量物化的逐行读取是否走同步叶子——进程内引擎恒真；网络驱动需
     /// <see cref="DbOptions.UseSynchronousRowRead"/> 与 Provider 能力同时成立（MySQL 实测
