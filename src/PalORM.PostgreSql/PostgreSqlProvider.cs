@@ -59,7 +59,8 @@ public sealed class PostgreSqlProvider : IDbProvider
             RewrittenConnectionStringCache.Clear();
         string rewritten = RewrittenConnectionStringCache.GetOrAdd(
             (connectionString, options.MaxPoolSize, options.MinPoolSize,
-                options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
+                options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes,
+                options.PrepareCacheSize, options.PrepareThreshold),
             static (key, opts) => RewriteConnectionString(key.ConnectionString, opts),
             options);
         return new NpgsqlConnection(rewritten);
@@ -70,7 +71,8 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <see cref="QuotedInsertTargetCache"/> 同族的有限键集豁免。工厂失败（非法连接串）
     /// 不缓存，异常照旧传播。</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
+        (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds,
+            int PoolLifetimeMinutes, int PrepareCacheSize, int PrepareThreshold), string>
         RewrittenConnectionStringCache = new();
 
     /// <summary>PG-6/D21：改写缓存容量上限——多租户连接串变体数封顶（含凭据副本的常驻量随之封顶）。</summary>
@@ -115,9 +117,9 @@ public sealed class PostgreSqlProvider : IDbProvider
         // Npgsql 默认值（已通过 ConnectionStringBuilder 属性默认核实）：MaxAutoPrepare=0，
         // AutoPrepareMinUsages=5，NoResetOnClose=false，ReadBufferSize/WriteBufferSize=8192，Enlist=true。
         if (!HasExplicitKey(builder, "Max Auto Prepare") && builder.MaxAutoPrepare == 0)
-            builder.MaxAutoPrepare = 100;
+            builder.MaxAutoPrepare = options.PrepareCacheSize;
         if (!HasExplicitKey(builder, "Auto Prepare Min Usages") && builder.AutoPrepareMinUsages == 5)
-            builder.AutoPrepareMinUsages = 2;
+            builder.AutoPrepareMinUsages = options.PrepareThreshold;
         // ITM-652(r4) 登记：NoResetOnClose=true 使归池连接跳过 DISCARD ALL——经 raw SQL
         // 的 SET/临时表/会话状态会泄漏给下一个池租客（吞吐收益的既定取舍）。需要会话
         // 状态隔离的场景请用独立连接（连接串 Max Pool Size=1）或显式 DISCARD。

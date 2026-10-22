@@ -10,6 +10,7 @@
 - **MySQL 复用命令晋升自动预编译**：单行 CRUD 与直查族命令槽晋升（同形态第 3 次）时执行一次 `PrepareAsync`，此后走二进制协议；预编译失败静默退化为未预编译。实测重复单键读约 −10~18%。新 Provider 能力位 `PrepareReusedCommands`（PostgreSQL 由 AutoPrepare 代劳、SQLite 随命令缓存语句，均保持 false）。
 - **实体级列子集更新 `UpdateColumnsAsync<T>(entity, params columns)`**：只把选中属性写入 SET，未选列保持库内值；复用生成 `BindUpdate` 完成转换器/OwnedJson/枚举/类型提示，随后裁掉未选参数并重编号。主键与 `[ConcurrencyCheck]` 恒进 WHERE、版本列 `+1`、租户谓词自动追加。新生成器为选中列 + 主键/版本逐列建参（10 列 SQLite 每操作 A/B：4104 → 3216 B/op，约 −22%）；旧生成器程序集回退“整行建参后裁剪”的兼容路径。`UpdateAsync` 默认行为不变。
 - **`[Projection] readonly struct` + `QueryStructsAsync<T>`**：结构体投影获得源生成 RowFactory，直查物化为连续结构体数组（每行零堆对象），适合报表/聚合大结果集；投影仍不进表/CRUD/迁移元数据。`[Projection]` 的 AttributeUsage 扩展到 Struct，实体 `[Table]` 仍限 Class。
+- **PostgreSQL AutoPrepare 可配置 `PrepareCacheSize` / `PrepareThreshold`**：默认 100/2（与既有硬编码一致），形状多的应用可调高缓存容量或关闭（0）；连接串显式给出对应键时不覆盖。同步加入连接串改写缓存键，避免不同配置串用改写结果。
 - **MySQL 可选同步逐行读 `UseSynchronousRowRead`**：全量物化（GetAll/ToList/QueryAsync）的逐行读取改走同步 `Read()`；MySQL 5 轮交替实测约 998 ns/行 vs 异步 1846~2043 ns/行。默认关闭（流式行未缓冲时会阻塞线程）；流式 API（QueryAsyncEnumerable/ForEach）始终异步。
 - **`IDbProvider` 新能力位**：`MarkConnectionStateUnknown` / `PrepareReusedCommands` / `SupportsQueryPipeline` / `MaxPipelineCommands` / `SupportsSynchronousRowRead`——均有默认实现，旧第三方 Provider 源码兼容。
 
