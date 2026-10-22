@@ -1199,8 +1199,9 @@ public struct QueryBuilder<T> where T : class, new()
         }
     }
 
-    internal static string FormatFormattableSql(FormattableString sql, int baseIndex)
-        => FormattableSqlFormatter.FormatCached(sql.Format, baseIndex, sql.ArgumentCount);
+    internal static string FormatFormattableSql(
+        FormattableString sql, int baseIndex, SqlDialect dialect = SqlDialect.Sqlite)
+        => FormattableSqlFormatter.FormatCached(sql.Format, baseIndex, sql.ArgumentCount, dialect);
 
     private QueryBuilder<T> AddJoin<TJoin>(string joinType, FormattableString onClause)
         where TJoin : class, new()
@@ -1221,7 +1222,7 @@ public struct QueryBuilder<T> where T : class, new()
     private (string Sql, IReadOnlyList<ParameterBinding> Parameters) BindFormattableString(FormattableString sql)
     {
         int baseIndex = _parameterCount;
-        string formatted = FormatFormattableSql(sql, baseIndex);
+        string formatted = FormatFormattableSql(sql, baseIndex, _dialect);
         // S5：0 参复用共享空表；1 参用单元素数组（原 List 对象 + 背衬数组约 64B/查询）。
         // 参数延迟物化（2026-10-22）：这里只存（名, 值）——DbParameter 由执行期按需创建，
         // 命令复用槽命中时直接写值，不再每查询新建驱动参数对象。
