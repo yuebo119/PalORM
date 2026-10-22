@@ -535,7 +535,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     }
 
     /// <summary>T6：每会话租户过滤作用域的单条目缓存——命中同实体类型时零拼接
-    /// （消 <c>$"__t:{tenantId}"</c> 的 ~32 B/查询）。
+    /// （消租户命名空间拼接的每查询成本）。
     /// <para><b>为什么是类不是值元组</b>：(Type, Scope) 两字段的写法在并行读下有撕裂读风险
     /// （读到旧的 Type 配新的 Scope 即跨租户串数据）；单引用字段的赋值是原子的，
     /// 条目不可变，撕裂不可能。</para>
@@ -555,7 +555,16 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         /// 装箱值类型的 <c>Equals(object)</c> 是解箱值比较，零分配；比较语义见
         /// <see cref="DataSession{TProvider}.TenantValueEquals"/>。</summary>
         public object TenantId { get; } = tenantId;
-        public string Scope { get; } = $"__t:{tenantId}";
+        /// <summary>2026-10-22 终审 P0-1：租户值长度前缀化——原 <c>__t:{tenantId}</c> 与
+        /// 调用方 key 直接以 ':' 拼接，租户 "a" + key "b:c" 与租户 "a:b" + key "c" 同键
+        /// 跨租户命中。长度前缀使 (tenant,key) 到字符串的映射成为单射。</summary>
+        public string Scope { get; } = CreateScope(tenantId);
+
+        private static string CreateScope(object tenantId)
+        {
+            string value = tenantId.ToString() ?? string.Empty;
+            return $"__t:{value.Length}:{value}";
+        }
     }
     internal object? _tenantId;
 

@@ -12,9 +12,10 @@ public static class QueryBuilderExtensions
     private const int MaxPreallocatedCapacity = 4096;
 
     /// <summary>实际缓存 key 组装（ADR-L 结构性隔离）：租户作用域非空时前缀化——
-    /// <c>__t:{tenantId}:{userKey}</c>（租户过滤查询）或 <c>__all__:{userKey}</c>（多租户会话的
-    /// IgnoreFilters / 非 TenantAware 实体，全量数据独立命名空间）；单租户会话（作用域 null）
-    /// key 原样。调用方仍按自己的 userKey 推理缓存，前缀是框架内部命名空间。</summary>
+    /// <c>__t:{tenantIdLength}:{tenantId}:{userKey}</c>（租户过滤查询）或
+    /// <c>__all__:{userKey}</c>（IgnoreFilters 无论是否有租户 / 租户会话的非 TenantAware 实体，
+    /// 全量数据独立命名空间）；未 IgnoreFilters 且无租户的会话（作用域 null）key 原样。
+    /// 调用方仍按自己的 userKey 推理缓存，前缀是框架内部命名空间。</summary>
     private static string EffectiveCacheKey<T>(in QueryBuilder<T> builder) where T : class, new()
         => builder._cacheTenantScope is { } scope
             ? $"{scope}:{builder._cacheKey}"

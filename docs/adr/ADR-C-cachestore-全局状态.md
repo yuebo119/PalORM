@@ -2,7 +2,7 @@
 
 > **2026-09-19 修订（ADR-L）**：本 ADR 推荐段"`WithTenant` 场景文档要求 key 含租户段或注入
 > 独立实例"的<b>调用方 key 约定</b>部分已由 [ADR-L](ADR-L-多租户缓存结构性隔离.md) 取代——
-> 实际缓存 key 现由框架按租户作用域自动前缀化（`__t:{tenantId}:` / `__all__:`），跨租户命中
+> 实际缓存 key 现由框架按租户作用域自动前缀化（`__t:{tenantIdLength}:{tenantId}:` / `__all__:`），跨租户命中
 > 结构性不可能；per-tenant 实例注入仍是容量/TTL 控制的推荐路径。本 ADR 其余内容
 > （IQueryCache 抽象、容量治理）不受影响。
 
