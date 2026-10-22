@@ -139,5 +139,5 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
 public sealed partial class DataSession<TProvider>
 {
     internal async ValueTask TearDownFromPoolAsync()
-        => await _operationState.DisposeAsync(DisposeCoreAsync).ConfigureAwait(false);
+        => await _operationState.DisposeAsync(DisposeCoreAsync, _interceptors.Count == 0).ConfigureAwait(false);
 }
