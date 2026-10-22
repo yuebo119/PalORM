@@ -25,7 +25,8 @@ internal static class SqlFileEmitter
         string TypeName,
         string MethodName,
         string RelativePath,
-        string? TargetProvider);
+        string? TargetProvider,
+        bool IsRecord = false);
 
     /// <summary>AdditionalText 的内容快照——值相等进入增量缓存键（内容变更即管线失效）。</summary>
     internal readonly record struct SqlFileContent(string Path, string Content)
@@ -73,7 +74,7 @@ internal static class SqlFileEmitter
         return new SqlFileMethodModel(
             PalORMGenerator.CreateStableHintName(
                 "SqlFile", method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)),
-            ns, typeName, method.Name, relativePath, targetProvider);
+            ns, typeName, method.Name, relativePath, targetProvider, containingType!.IsRecord);
     }
 
     /// <summary>渲染阶段（RegisterSourceOutput）：路径安全校验 + AdditionalFiles 内容查找 +
@@ -181,7 +182,7 @@ internal static class SqlFileEmitter
         sb.AppendLine();
         if (model.Namespace is not null) sb.AppendLine($"namespace {model.Namespace};");
         sb.AppendLine();
-        sb.AppendLine($"partial class {model.TypeName}");
+        sb.AppendLine(TypeDeclaration(model));
         sb.AppendLine("{");
         // ITM-584: 路径含 &/< 时 XML doc 畸形（CS1570，TreatWarningsAsErrors 下变错误）——XML 实体转义
         sb.AppendLine($"    /// <summary>编译时嵌入 SQL (来源: {EscapeForXmlDoc(sourcePath)})</summary>");
@@ -192,6 +193,11 @@ internal static class SqlFileEmitter
 
         return sb.ToString();
     }
+
+    private static string TypeDeclaration(SqlFileMethodModel model)
+        => model.IsRecord
+            ? $"partial record {model.TypeName}"
+            : $"partial class {model.TypeName}";
 
     /// <summary>路径遍历检测——'..' 按路径段判定，避免误拒 my..file.sql 等合法文件名（ITM-584）。</summary>
     private static bool HasTraversalSegment(string relativePath)
@@ -208,7 +214,7 @@ internal static class SqlFileEmitter
         sb.AppendLine();
         if (model.Namespace is not null) sb.AppendLine($"namespace {model.Namespace};");
         sb.AppendLine();
-        sb.AppendLine($"partial class {model.TypeName}");
+        sb.AppendLine(TypeDeclaration(model));
         sb.AppendLine("{");
         sb.AppendLine($"    /// <summary>SqlFile 源生成失败。</summary>");
         sb.AppendLine($"    [global::System.Obsolete({errorLiteral}, error: true)]");

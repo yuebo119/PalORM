@@ -1472,6 +1472,35 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    public async Task SqlFile_RecordHost_GeneratesPartialRecord()
+    {
+        // 2026-10-22 终审 P2-10：record class 宿主的 TypeKind 仍是 Class，旧的硬编码
+        // partial class 会与 partial record 冲突（CS0261 落 .g.cs）。
+        const string source = """
+            using PalORM;
+            public partial record RecordQueries
+            {
+                [SqlFile("RecordQueries/get.sql")]
+                public static partial string Get();
+            }
+            """;
+        string projectDir = Path.Combine(Path.GetTempPath(), "palorm-sqlfile-record-tests");
+        string fullPath = Path.Combine(projectDir, "RecordQueries", "get.sql");
+        var options = new Dictionary<string, string> { ["build_property.ProjectDir"] = projectDir };
+        var texts = new AdditionalText[] { new TestAdditionalText(fullPath, "SELECT 1;") };
+
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(
+            source, "SqlFileRecordConsumer", options, texts);
+
+        string sqlFileKey = result.GeneratedSources.Keys
+            .Single(k => k.StartsWith("SqlFile", StringComparison.Ordinal));
+        string generated = result.GeneratedSources[sqlFileKey];
+        await Assert.That(generated).Contains("partial record RecordQueries");
+        await Assert.That(generated).DoesNotContain("partial class RecordQueries");
+        await Assert.That(FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
     public async Task DialectGating_NonPgTarget_OmitsPgFamily_AndRegistryPassesNull()
     {
         // R3-S4（2026-10-12）：PalORMTargetDialects=mysql 时——CommandFactory 不发射 PG 专属
