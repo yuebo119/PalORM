@@ -117,6 +117,12 @@ public interface IDbProvider
         DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
         => Task.CompletedTask;
 
+    /// <summary>2026-10-22 终审 P2-2：池化空闲会话租出前的轻量探活。默认无操作；
+    /// PG/MySQL 执行 SELECT 1（短命令超时）。失败即抛，池丢弃会话换新。</summary>
+    static virtual Task ValidateConnectionAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+        => Task.CompletedTask;
+
     /// <summary>复用命令晋升（同形态第 3 次操作）时是否执行一次 <c>PrepareAsync</c>。
     /// <para>MySQL 无自动预编译（文本协议逐次解析），开启后复用槽的长会话/池化会话拿到
     /// 预编译收益；PostgreSQL 由驱动 <c>MaxAutoPrepare</c> 自动完成，无需重复；

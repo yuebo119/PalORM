@@ -23,6 +23,17 @@ public sealed class MySqlProvider : IDbProvider
             await mySqlConnection.ResetConnectionAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>P2-2：池化空闲会话租出前的轻量探活。</summary>
+    public static async Task ValidateConnectionAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandTimeout = commandTimeoutSeconds;
+        command.CommandText = "SELECT 1";
+        await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+    }
+
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 MySqlConnector 连接串:
     /// MaximumPoolSize / ConnectionIdleTimeout(秒)/ ConnectionLifeTime(分钟换算为秒);
     /// MySqlConnector 池参数为 uint,checked 转换防负值/溢出静默截断。

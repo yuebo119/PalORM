@@ -81,22 +81,36 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
             }
         }
         if (rented is null)
-        {
-            rented = await DataSession<TProvider>.CreateAsync(_options, ct).ConfigureAwait(false);
-            rented.MarkPooled(this);
-        }
+            return await CreateFreshSessionAsync(ct).ConfigureAwait(false);
         try
         {
             await rented.PrepareForRentAsync(ct).ConfigureAwait(false);
+            return rented;
         }
         catch
         {
-            // 连接态复位失败（连接已死/会话 SQL 不可重放）——丢弃该会话，不让坏连接进入租期。
+            // P2-2：空闲复用会话在健康探活/复位失败时丢弃并换新，不把过期连接交给调用方。
+            try { await rented.TearDownFromPoolAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { _ = cleanupException; }
+            return await CreateFreshSessionAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<DataSession<TProvider>> CreateFreshSessionAsync(CancellationToken ct)
+    {
+        DataSession<TProvider> rented = await DataSession<TProvider>.CreateAsync(_options, ct).ConfigureAwait(false);
+        rented.MarkPooled(this);
+        try
+        {
+            await rented.PrepareForRentAsync(ct).ConfigureAwait(false);
+            return rented;
+        }
+        catch
+        {
             try { await rented.TearDownFromPoolAsync().ConfigureAwait(false); }
             catch (Exception cleanupException) { _ = cleanupException; }
             throw;
         }
-        return rented;
     }
 
     /// <summary>归还入口（仅由 <see cref="DataSession{TProvider}.DisposeAsync"/> 的池化分支调用，

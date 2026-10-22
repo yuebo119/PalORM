@@ -60,8 +60,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     private readonly string? _readConnectionString;
     private DbConnection? _readConnection;
     /// <summary>2026-10-22 终审 P1-8：原生 SQL 可能改写连接级会话态；池化租出时据此
-    /// 对 PG/MySQL 执行 DISCARD ALL / RESET CONNECTION（SQLite 走 Provider 脏标记）。</summary>
+    /// 对 PG/MySQL 执行 RESET ALL; RESET ROLE / COM_RESET_CONNECTION（SQLite 走 Provider 脏标记）。</summary>
     private int _connectionStateMayBeDirty;
+
+    /// <summary>2026-10-22 终审 P2-2：上次归还时刻（TickCount64）——空闲超过
+    /// PoolConnectionValidationInterval 的会话租出时做一次 SELECT 1 探活。</summary>
+    private long _lastReturnedTimestamp = Environment.TickCount64;
     // v5.0 阶段 5.2：读连接初始化器——包装 Provider 钩子 + ReadSessionSetupSql。
     // 仅当 ReadSessionSetupSql 非空时才捕获实例委托；否则用 static 委托（无闭包分配）。
     private readonly Func<DbConnection, CancellationToken, Task>? _readConnInitializer;
@@ -767,6 +771,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                 await ExecuteSessionSetupSqlAsync(_options.SessionSetupSql, ct).ConfigureAwait(false);
             Volatile.Write(ref _connectionStateMayBeDirty, 0);
         }
+        // P2-2：空闲超过阈值才探活——活跃池的租还间隔远小于默认 30s，不付 RTT。
+        TimeSpan validationInterval = _options.PoolConnectionValidationInterval;
+        if (validationInterval > TimeSpan.Zero
+            && Environment.TickCount64 - Volatile.Read(ref _lastReturnedTimestamp) >= validationInterval.TotalMilliseconds)
+        {
+            await TProvider.ValidateConnectionAsync(_conn, _commandTimeoutSeconds, ct).ConfigureAwait(false);
+        }
         if (_readConnection is { State: ConnectionState.Open } readConnection
             && _readConnInitializer is not null)
         {
@@ -828,6 +839,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         _operationState.DefersPostCommitActions = false;
         await DisposeSessionAddedInterceptorsAsync().ConfigureAwait(false);
         ResetInterceptorsToPoolBase();
+        Volatile.Write(ref _lastReturnedTimestamp, Environment.TickCount64);
         if (_pool!.TryReturn(this))
             return;
         // 池满/池已释放：Unpark 后走真实释放（连接关闭、槽释放——语义与非池化一致）

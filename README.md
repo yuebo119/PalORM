@@ -643,7 +643,7 @@ await using var db = await pool.RentAsync();
 var user = await db.GetAsync<User>(id);
 ```
 
-归还时瞬态状态（租户/超时/重试等 `With*` 覆写、拦截器加项）全部复位（租期加项一并释放；池基准拦截器由调用方持有）；租出时对脏会话复位连接级会话态（PG `RESET ALL; RESET ROLE` / MySQL `COM_RESET_CONNECTION`）并重放 `SessionSetupSql`，命令复用槽、读连接、物化容量跨租期保留——复用槽在"一请求一会话"形态下不经池化永不激活（同形状第 3 次操作才晋升）。32 并发压测实测：P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B；池化形态单键直查 P/ADO 比值 MySQL 0.99 / PG 0.87（台账批），租还自身约 1 µs。
+归还时瞬态状态（租户/超时/重试等 `With*` 覆写、拦截器加项）全部复位（租期加项一并释放；池基准拦截器由调用方持有）；租出时对脏会话复位连接级会话态（PG `RESET ALL; RESET ROLE` / MySQL `COM_RESET_CONNECTION`）并重放 `SessionSetupSql`；空闲超过 `PoolConnectionValidationInterval`（默认 30s）的会话先 `SELECT 1` 探活、失败换新，命令复用槽、读连接、物化容量跨租期保留——复用槽在"一请求一会话"形态下不经池化永不激活（同形状第 3 次操作才晋升）。32 并发压测实测：P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B；池化形态单键直查 P/ADO 比值 MySQL 0.99 / PG 0.87（台账批），租还自身约 1 µs。
 
 DI 容器场景把 `IDataSessionFactory<TProvider>` 注册为单例即可，不依赖额外容器包：
 
@@ -761,6 +761,7 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | `QueryCache`               | `IQueryCache?`                      | 1024 条        | 默认进程级共享；注入独立实例实现会话/租户级隔离（需线程安全）                                                                                                                           |
 | `SessionSetupSql`          | `string?`                           | null          | 主连接首次激活后执行的 SQL（`SET TIME ZONE` / `search_path` 等，分号分隔）                                                                                                   |
 | `ReadSessionSetupSql`      | `string?`                           | null          | 读副本连接的同类设置；读连接按会话复用，每会话执行一次                                                                                                                               |
+| `PoolConnectionValidationInterval` | `TimeSpan`                | 30s           | 池化空闲会话租出时的 `SELECT 1` 探活间隔（0=关闭；失败由池丢弃并换新）                                                                                                      |
 | `LoggerFactory`            | `ILoggerFactory?`                   | null          | 设置后 `DataSession` 创建 `ILogger`                                                                                                                            |
 
 > **SQLite 并发写扩展性**（2026-09-21 实测）：80/20 读写混合负载下，SQLite 从 1 到 8 线程吞吐下降 69%（WAL 单写者模型，裸 ADO.NET 对照同为 −69%，非 PalORM 引入的锁）；同期 PostgreSQL +7.2×、MySQL +4.6×。高并发写场景选 PG/MySQL，SQLite 适合读密集或低并发写的嵌入式场景。详见 [docs/架构设计.md](docs/架构设计.md)。
