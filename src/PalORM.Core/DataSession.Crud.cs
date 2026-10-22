@@ -28,7 +28,7 @@ public sealed partial class DataSession<TProvider>
     private static readonly ClauseNode SoftDeleteFilterNode = new(
         null,
         new QueryClause(QueryClauseKind.DefaultFilter, SoftDeleteFilterCondition,
-            System.Array.Empty<System.Data.Common.DbParameter>()));
+            System.Array.Empty<ParameterBinding>()));
 
     /// <summary>创建查询构建器——每次调用创建新的 struct QueryBuilder（值类型）。
     /// <para><b>为什么是 struct</b>: 避免每次查询的堆分配。高 QPS 场景(10K+)每秒省 ~2MB 堆分配。</para>
@@ -108,9 +108,7 @@ public sealed partial class DataSession<TProvider>
         {
             // S5：条件文本静态、参数对象单次创建——原 FormattableStringFactory + 格式化
             // 缓存查找 + 参数表每次租户查询都白付一遍。
-            builder.AddDefaultFilter(
-                TenantFilterCondition,
-                TProvider.CreateParameter(_tenantParameterName, tenantId));
+            builder.AddDefaultFilter(TenantFilterCondition, _tenantParameterName, tenantId);
         }
         // ADR-L：缓存租户作用域与过滤注入同点冻结——查询的租户可见性在此刻定型
         //（DefaultFilter 已上链），key 作用域同拍快照则二者永不漂移。租户过滤 → 每租户
