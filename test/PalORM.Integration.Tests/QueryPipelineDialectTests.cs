@@ -3,6 +3,9 @@ using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
 
+[Projection]
+internal readonly record struct PipelinePgStruct(long id, string name, long value);
+
 [Table("palorm_pipeline_probe")]
 internal sealed partial class PipelinePgRow
 {
@@ -16,6 +19,43 @@ internal sealed partial class PipelinePgRow
 [NotInParallel("ExtBulkTable")]
 internal sealed class QueryPipelineDialectTests
 {
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [NotInParallel("ExtBulkTable")]
+    public async Task PostgreSql_PipelineStruct_ReturnsRows()
+    {
+        await using var session = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
+        {
+            ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString()
+        });
+        await session.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pipeline_struct_probe");
+        await session.ExecuteAsync(
+            $"CREATE TABLE palorm_pipeline_struct_probe (id BIGINT PRIMARY KEY, name TEXT NOT NULL, value BIGINT NOT NULL)");
+        try
+        {
+            await session.ExecuteAsync(
+                $"INSERT INTO palorm_pipeline_struct_probe VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)");
+            var pipeline = session.CreatePipeline();
+            PipelineStructQuery<PipelinePgStruct, PostgreSqlProvider> filtered =
+                pipeline.QueryStructs<PipelinePgStruct>(
+                    $"SELECT id, name, value FROM palorm_pipeline_struct_probe WHERE id >= {2L} ORDER BY id");
+            PipelineStructQuery<PipelinePgStruct, PostgreSqlProvider> single =
+                pipeline.QueryStructs<PipelinePgStruct>(
+                    $"SELECT id, name, value FROM palorm_pipeline_struct_probe WHERE id = {1L}");
+            await pipeline.ExecuteAsync();
+            await Assert.That(filtered.Value.Count).IsEqualTo(2);
+            await Assert.That(filtered.Value[0]).IsEqualTo(new PipelinePgStruct(2, "b", 20));
+            await Assert.That(filtered.Value[1]).IsEqualTo(new PipelinePgStruct(3, "c", 30));
+            await Assert.That(single.Value.Count).IsEqualTo(1);
+            await Assert.That(single.Value[0]).IsEqualTo(new PipelinePgStruct(1, "a", 10));
+            pipeline.Dispose();
+        }
+        finally
+        {
+            await session.ExecuteAsync($"DROP TABLE IF EXISTS palorm_pipeline_struct_probe");
+        }
+    }
+
     [Test]
     [Property("Category", "ExternalDatabase")]
     [NotInParallel("ExtBulkTable")]

@@ -56,7 +56,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 **宽表列子集更新**。`UpdateColumnsAsync(entity, [x => x.A, x => x.B])` 只 SET 选中列：复用生成绑定器的值转换（转换器/OwnedJson/枚举），裁掉未选中参数并重编号；版本列照常 `+1` 与冲突检测，租户谓词自动追加。宽行大值时 SQL、服务端 SET 列数与网络负载同比例下降。
 
-**请求级查询管道**。`CreatePipeline()` 把多条彼此独立的只读查询合并成一次数据库往返：PostgreSQL 经 `NpgsqlBatch`（本机 4 条单键查询 249 µs → 72~79 µs/条，3.2~3.4×），MySQL 经 `MySqlBatch`（本机执行耗时时持平、WAN 省 RTT），结果按入队顺序类型化返回；SQLite 顺序回退。配套三项：MySQL 复用命令晋升时自动服务端预编译（重复单键读写 −10~18%，PostgreSQL 由驱动 AutoPrepare 自动完成）；SQLite 干净连接句柄跳过每会话 PRAGMA、原生 SQL 改写过连接态才重设 `foreign_keys`（CreateAsync+Dispose 1.71 → 0.50 µs，per-op 单键读 7.35 → 6.40 µs、2640 → 2176 B）；MySQL 可选的同步逐行读（`UseSynchronousRowRead`，全表物化约 998 vs 1846~2043 ns/行，流式 API 不受影响）。
+**请求级查询管道**。`CreatePipeline()` 把多条彼此独立的只读查询合并成一次数据库往返：PostgreSQL 经 `NpgsqlBatch`（本机 4 条单键查询 249 µs → 72~79 µs/条，3.2~3.4×），MySQL 经 `MySqlBatch`（本机执行耗时时持平、WAN 省 RTT），结果按入队顺序类型化返回；SQLite 顺序回退。`pipeline.QueryStructs<T>(sql)` 让结构体投影也走同一批处理（单往返 + 每行零堆对象）。配套三项：MySQL 复用命令晋升时自动服务端预编译（重复单键读写 −10~18%，PostgreSQL 由驱动 AutoPrepare 自动完成）；SQLite 干净连接句柄跳过每会话 PRAGMA、原生 SQL 改写过连接态才重设 `foreign_keys`（CreateAsync+Dispose 1.71 → 0.50 µs，per-op 单键读 7.35 → 6.40 µs、2640 → 2176 B）；MySQL 可选的同步逐行读（`UseSynchronousRowRead`，全表物化约 998 vs 1846~2043 ns/行，流式 API 不受影响）。
 
 **SQL 资产编译期管理**。`[SqlFile]` 把外部 .sql 文件嵌入为常量（支持 `-- @pg/@mysql/@sqlite/@all` 方言条件段，改 SQL 免 Rebuild，文件缺失编译期报错）；`[SqlTemplate]` 把方法体插值串提升为模板常量，配合 `.AsPrepared()` 走 `DbCommand.PrepareAsync` 预编译；AutoTagging（opt-in 编译开关）经 C# `[InterceptsLocation]` 拦截 9 个查询终态方法，SQL 自动注入「文件:行号 成员名」定位注释，排查零成本。
 

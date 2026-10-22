@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1150 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1152 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -202,6 +202,7 @@
 | `pipeline.Query(builder)` → `PipelineQuery<T, TProvider>` | 入队实体列表查询；执行后 `.Value` 为 `List<T>` |
 | `pipeline.QueryFirst(builder)` → `PipelineFirst<T, TProvider>` | 入队首行查询（自动 `Take(1)`）；执行后 `.Value` 为 `T?` |
 | `pipeline.Count(builder)` → `PipelineScalar<TProvider>` | 入队 COUNT；执行后 `.Value` 为 `long` |
+| `pipeline.QueryStructs<T>(sql)` → `PipelineStructQuery<T, TProvider>` | 入队原始 SQL 的结构体投影查询（`[Projection] struct`，每行零堆对象）；执行后 `.Value` 为 `List<T>` |
 | `pipeline.ExecuteAsync(ct)` | 执行整批。活动事务自动绑定；各结果按入队顺序存放 |
 | `pipeline.Dispose()` | 释放句柄（结果随之失效） |
 

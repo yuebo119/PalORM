@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Data.Common;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace PalORM;
@@ -64,7 +65,8 @@ internal static class ResultListReader
                 {
                     T[] larger = ArrayPool<T>.Shared.Rent(buffer.Length * 2);
                     Array.Copy(buffer, larger, count);
-                    Array.Clear(buffer, 0, count);
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+                        Array.Clear(buffer, 0, count);
                     ArrayPool<T>.Shared.Return(buffer);
                     buffer = larger;
                 }
@@ -80,7 +82,8 @@ internal static class ResultListReader
         finally
         {
             // 只清已写区间：池里的数组不得继续持有实体引用（尾部本就为 null）
-            Array.Clear(buffer, 0, count);
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+                Array.Clear(buffer, 0, count);
             ArrayPool<T>.Shared.Return(buffer);
         }
     }
