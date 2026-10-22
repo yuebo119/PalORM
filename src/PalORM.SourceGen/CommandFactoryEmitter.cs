@@ -890,8 +890,8 @@ internal static class CommandFactoryEmitter
 
         string sql = $"INSERT INTO {Quote(model.TableName)} ({columnList}) VALUES ({valueList})" +
             $" ON DUPLICATE KEY UPDATE {string.Join(", ", assignments)}";
-        // 仅自增键实体回填：消费端（UpsertWithMySqlAsync）只对有 SetIdDelegates 的实体走
-        // ExecuteScalarAsync，非自增键执行 ExecuteNonQueryAsync——后缀对它是多余结果集。
+        // 后缀仅为保持 SQL 形态稳定；2026-10-22 终审 P0-2 起消费端不再回填非默认键
+        //（租户护栏 IF 假分支下 LAST_INSERT_ID 是会话上一自增值，不能作为实体键）。
         return isAutoIncrement ? $"{sql}; SELECT LAST_INSERT_ID()" : sql;
     }
 
