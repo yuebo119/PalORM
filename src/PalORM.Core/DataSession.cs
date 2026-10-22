@@ -1138,9 +1138,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         // 手术锚点：生成器形态 "… DO UPDATE SET … RETURNING …"（BuildUpsertReturningSql），
         // RETURNING 关键字恰一次；列名经引号包裹，裸 RETURNING 只能是子句关键字。
         int returningIndex = sql.LastIndexOf(" RETURNING", StringComparison.Ordinal);
-        return returningIndex < 0
-            ? sql
-            : sql[..returningIndex] + " WHERE " + qualifiedTenantColumn + " = " + tenantParameterName + sql[returningIndex..];
+        if (returningIndex < 0)
+            return sql;
+        // 2026-10-22 终审 P1-1：DO NOTHING 冲突不更新任何行，租户守卫没有作用对象；
+        // 在 RETURNING 前插 WHERE 会生成 "DO NOTHING WHERE …" 语法错误。
+        if (sql.AsSpan(0, returningIndex).TrimEnd().EndsWith("DO NOTHING", StringComparison.Ordinal))
+            return sql;
+        return sql[..returningIndex] + " WHERE " + qualifiedTenantColumn + " = " + tenantParameterName + sql[returningIndex..];
     }
 
     /// <summary>G4（2026-10-13 五轮微项包）：带租户后缀的 UPDATE/DELETE 全句单值静态槽——
