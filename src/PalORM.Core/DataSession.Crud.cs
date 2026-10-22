@@ -1568,7 +1568,7 @@ public sealed partial class DataSession<TProvider>
                     ? await UpsertWithReturningAsync(
                         reusedUpsert, sqls, plan, entity, tenantGuarded: false, ct).ConfigureAwait(false)
                     : await UpsertWithMySqlAsync(
-                        reusedUpsert, sqls, info, entity, tenantGuarded: false, ct).ConfigureAwait(false);
+                        reusedUpsert, sqls, entity, tenantGuarded: false, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
             {
@@ -1593,7 +1593,7 @@ public sealed partial class DataSession<TProvider>
         {
             return TProvider.SupportsReturningClause
                 ? await UpsertWithReturningAsync(cmd, sqls, plan, entity, tenantGuarded, ct).ConfigureAwait(false)
-                : await UpsertWithMySqlAsync(cmd, sqls, info, entity, tenantGuarded, ct).ConfigureAwait(false);
+                : await UpsertWithMySqlAsync(cmd, sqls, entity, tenantGuarded, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
         {
@@ -1618,12 +1618,14 @@ public sealed partial class DataSession<TProvider>
         return entity;
     }
 
-    /// <summary>MySQL UPSERT--ON DUPLICATE KEY UPDATE，自增键用 LAST_INSERT_ID(expr) 回填。
+    /// <summary>MySQL UPSERT--ON DUPLICATE KEY UPDATE。非默认键路径不回填主键：
+    /// 主键由入参显式携带，实体键已是权威值；租户护栏 IF 假分支不执行 LAST_INSERT_ID(expr)，
+    /// SELECT 会返回会话上一自增值（2026-10-22 终审 P0-2，回填会把实体键改成无关行，
+    /// 并让后续 SaveAsync 覆盖该行）。
     /// v4.1：SQL 改用编译期预构建的 const（sqls.UpsertMySql）。
-    /// 租户护栏（2026-10-06）：tenantGuarded 时逐赋值项包 IF(tenant_id = @p, …)（ODKU 无 WHERE）。
-    /// S1：自增回填委托取自已注册类型的静态视图（注册期快照，单调不可变），不再读注册表快照。</summary>
+    /// 租户护栏（2026-10-06）：tenantGuarded 时逐赋值项包 IF(tenant_id = @p, …)（ODKU 无 WHERE）。</summary>
     private static async ValueTask<T> UpsertWithMySqlAsync<T>(
-        DbCommand cmd, CommandSqlSet sqls, EntityRuntimeInfo info,
+        DbCommand cmd, CommandSqlSet sqls,
         T entity, bool tenantGuarded, CancellationToken ct)
         where T : class, new()
     {
@@ -1636,16 +1638,9 @@ public sealed partial class DataSession<TProvider>
             ? UpsertTenantGuardedSql<T>(sqls.UpsertMySql)
             : sqls.UpsertMySql;
 
-        if (info.SetId is not { } setId)
-        {
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            return entity;
-        }
-
-        long? generatedId = NormalizeGeneratedId(
-            await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false));
-        if (generatedId is long id)
-            setId(entity, id);
+        // 消费结果集但不回填：非默认键 UPSERT 的实体键已由入参确定，LAST_INSERT_ID 在
+        // 租户护栏假分支下是会话陈旧值。ExecuteScalar 与既有 SQL 后缀保持兼容。
+        _ = await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false);
         return entity;
     }
 
