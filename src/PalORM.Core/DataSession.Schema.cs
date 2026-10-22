@@ -127,6 +127,11 @@ public sealed partial class DataSession<TProvider>
                 .ToList();
         }
 
+        // P2-12：生成期拓扑序只在单程序集内成立（PALORM003 扫描面同界）。多程序集注册按
+        // 注册序拼接后，引用方表可能排在被引用表之前——再按 DDL 的 REFERENCES 边做一次
+        // 稳定拓扑（旧片段无 TableMigrationOrder 时这条同样兜底）。
+        tableEntries = MigrationOrderSorter.SortByReferences(tableEntries, PalORM_Runtime.TableNames);
+
         var tableDdls = new List<string>(entityCount);
         var indexDdlGroups = new List<IReadOnlyList<string>>(entityCount);
         foreach (var (_, ddl, indexDdls) in tableEntries)
