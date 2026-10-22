@@ -44,7 +44,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ## ✨ 特性
 
-**编译时生成一切**。Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）；`[Projection]` 标记的 DTO 同样获得源生成的 RowFactory——join/报表结果直接映射到非表类型（v6.0）。45 条编译时诊断（42 分析器 + 3 生成器）把缺 `[Key]`、租户列可空绕过隔离、乐观锁基线为 0 这类运行时崩溃或静默错数据提前到编译期，错误列表可跳转到声明位置（PALORM041/045/046 带锚点）。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门 `Raw()`（原样字面量片段，拒绝控制字符）与 `SessionSetupSql` 由调用方负责内容。
+**编译时生成一切**。Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）；`[Projection]` 标记的 DTO 同样获得源生成的 RowFactory——join/报表结果直接映射到非表类型（v6.0）；`readonly struct` 投影配合 `QueryStructsAsync<T>` 可让大结果集每行零堆分配。45 条编译时诊断（42 分析器 + 3 生成器）把缺 `[Key]`、租户列可空绕过隔离、乐观锁基线为 0 这类运行时崩溃或静默错数据提前到编译期，错误列表可跳转到声明位置（PALORM041/045/046 带锚点）。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门 `Raw()`（原样字面量片段，拒绝控制字符）与 `SessionSetupSql` 由调用方负责内容。
 
 **全链路 Native AOT**。.NET 生态唯一完整支持全链路 Native AOT 的 ORM：SQLite / PostgreSQL / MySQL 三方言发布验证全部通过（运行输出 `PalORM AOT verification PASSED`），无反射、无 IL Emit、无运行时代码生成。部署细节见 [docs/AOT部署指南.md](docs/AOT部署指南.md)。
 
@@ -53,6 +53,8 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 **企业级横切开箱即用**。多租户列隔离（查询缓存 key 自动加租户前缀，跨租户命中不可能）、乐观锁、软删除、审计拦截器、读写分离（`ForRead`）、咨询锁、弹性重试 + 熔断（v5.4 起自动覆盖只读查询管线），无需样板代码。
 
 **会话池化**（v6.5 `DataSessionPool`）。Web 服务"一请求一会话"形态的固定成本消除器：租出的会话归还后瞬态状态（租户/超时/重试覆写）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在同会话第 3 次同形状操作才晋升，不池化则每请求形态下结构性永不激活。32 并发压测实测 P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B，租还自身约 1 µs。
+
+**宽表列子集更新**。`UpdateColumnsAsync(entity, [x => x.A, x => x.B])` 只 SET 选中列：复用生成绑定器的值转换（转换器/OwnedJson/枚举），裁掉未选中参数并重编号；版本列照常 `+1` 与冲突检测，租户谓词自动追加。宽行大值时 SQL、服务端 SET 列数与网络负载同比例下降。
 
 **请求级查询管道**。`CreatePipeline()` 把多条彼此独立的只读查询合并成一次数据库往返：PostgreSQL 经 `NpgsqlBatch`（本机 4 条单键查询 249 µs → 72~79 µs/条，3.2~3.4×），MySQL 经 `MySqlBatch`（本机执行耗时时持平、WAN 省 RTT），结果按入队顺序类型化返回；SQLite 顺序回退。配套三项：MySQL 复用命令晋升时自动服务端预编译（重复单键读写 −10~18%，PostgreSQL 由驱动 AutoPrepare 自动完成）；SQLite 干净连接句柄跳过每会话 PRAGMA、原生 SQL 改写过连接态才重设 `foreign_keys`（CreateAsync+Dispose 1.71 → 0.50 µs，per-op 单键读 7.35 → 6.40 µs、2640 → 2176 B）；MySQL 可选的同步逐行读（`UseSynchronousRowRead`，全表物化约 998 vs 1846~2043 ns/行，流式 API 不受影响）。
 
@@ -678,7 +680,7 @@ await using var db = await factory.RentAsync(ct);
 - 大键集过滤用 `WhereIn`/`WhereNotIn`（自动按 500 键分批、空集安全恒假；总绑定参数仍受方言上限约束，SQLite 999 / 通用 65535，超限会提前抛 `ArgumentException`，更大的键集用临时表 JOIN）
 - 热路径的 `OrderBy`/`Select` 表达式提到静态字段（每棵树 512 B + 0.5~1.6 µs 的调用点成本可消除）
 - 排查 SQL 用 `AsDryRun()`/`ToSql` 预览（SQL + 参数，不执行）；生产定位慢查询可开 AutoTagging（`PalORMAutoTagging` 编译开关，SQL 自动注入「文件:行号 成员」注释）
-- `Include`/`ThenInclude` 只生成 JOIN 不装配导航（按父分组自行配对）；列裁剪物化用 `[Projection]` DTO + `QueryAsync<T>`（`Select` 投影仅 DryRun/ToSql 支持）
+- `Include`/`ThenInclude` 只生成 JOIN 不装配导航（按父分组自行配对）；列裁剪物化用 `[Projection]` DTO + `QueryAsync<T>`（大结果集用 struct 投影 + `QueryStructsAsync<T>`；`Select` 投影仅 DryRun/ToSql 支持）
 - `WithCache` 默认关；启用后写后读一致用 `db.EvictQueryCache()` 显式收窄
 
 **写入与批量**

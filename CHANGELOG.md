@@ -8,6 +8,8 @@
 
 - **请求级查询管道 `CreatePipeline()`**：把多条独立只读查询合并为一次往返，结果按入队顺序类型化返回（`PipelineQuery<T, TProvider>` / `PipelineFirst<T, TProvider>` / `PipelineScalar<TProvider>`）。PostgreSQL 走 `NpgsqlBatch`，本机 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×）；MySQL 走 `MySqlBatch`（本机执行耗时时持平，WAN 省 RTT）；SQLite 回退顺序执行。契约：builder 入队即消费、只读、活动事务自动绑定、与并行读作用域互斥；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝。
 - **MySQL 复用命令晋升自动预编译**：单行 CRUD 与直查族命令槽晋升（同形态第 3 次）时执行一次 `PrepareAsync`，此后走二进制协议；预编译失败静默退化为未预编译。实测重复单键读约 −10~18%。新 Provider 能力位 `PrepareReusedCommands`（PostgreSQL 由 AutoPrepare 代劳、SQLite 随命令缓存语句，均保持 false）。
+- **实体级列子集更新 `UpdateColumnsAsync<T>(entity, params columns)`**：只把选中属性写入 SET，未选列保持库内值；复用生成 `BindUpdate` 完成转换器/OwnedJson/枚举/类型提示，随后裁掉未选参数并重编号。主键与 `[ConcurrencyCheck]` 恒进 WHERE、版本列 `+1`、租户谓词自动追加。客户端仍按整行建参后裁剪（分配与整行同量级），收益在 SQL 文本、服务端 SET 列数与网络值负载；`UpdateAsync` 默认行为不变。
+- **`[Projection] readonly struct` + `QueryStructsAsync<T>`**：结构体投影获得源生成 RowFactory，直查物化为连续结构体数组（每行零堆对象），适合报表/聚合大结果集；投影仍不进表/CRUD/迁移元数据。`[Projection]` 的 AttributeUsage 扩展到 Struct，实体 `[Table]` 仍限 Class。
 - **MySQL 可选同步逐行读 `UseSynchronousRowRead`**：全量物化（GetAll/ToList/QueryAsync）的逐行读取改走同步 `Read()`；MySQL 5 轮交替实测约 998 ns/行 vs 异步 1846~2043 ns/行。默认关闭（流式行未缓冲时会阻塞线程）；流式 API（QueryAsyncEnumerable/ForEach）始终异步。
 - **`IDbProvider` 新能力位**：`MarkConnectionStateUnknown` / `PrepareReusedCommands` / `SupportsQueryPipeline` / `MaxPipelineCommands` / `SupportsSynchronousRowRead`——均有默认实现，旧第三方 Provider 源码兼容。
 

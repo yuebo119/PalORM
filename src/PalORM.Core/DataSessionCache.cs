@@ -63,6 +63,12 @@ internal static class DataSessionCache
     /// 类型化直拷逐位等价"（双值探针，以生成物自身为真源）。键空间有限（实体 × 键类型组合），
     /// 每组合每进程探测一次后定态。</summary>
     internal static readonly ConcurrentDictionary<(Type EntityType, Type KeyType), bool> TypedKeyIdentityCache = new();
+
+    /// <summary>实体级列子集更新的 SQL 缓存——键 = (实体, 方言, 选中列索引串, 是否租户)。
+    /// 列子集数量有限（宽表也通常只有少数几种更新形状），SQL 构建含 WHERE 参数重编号，
+    /// 命中路径零字符串工作。</summary>
+    internal static readonly ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect, string Columns, bool Tenant), string> PartialUpdateSqlCache = new();
 }
 
 /// <summary>默认过滤（软删/租户）的三种拼接形态。空过滤时为 <see cref="Empty"/>（三项全空串），

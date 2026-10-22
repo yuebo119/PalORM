@@ -55,6 +55,23 @@ public sealed class ProjectionTests
     }
 
     [Test]
+    public async Task Projection_Struct_GeneratesCompilableRowFactory()
+    {
+        const string source = """
+            using PalORM;
+            [Projection]
+            public readonly record struct OrderSummaryStruct(long Id, string CustomerName, decimal Total);
+            """;
+        var result = GeneratorTestHost.RunGenerator(source, "ProjectionStructConsumer");
+
+        await Assert.That(GeneratorTestHost.FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(result.GeneratedSources.Keys
+            .Any(static k => k.StartsWith("RowFactory_", System.StringComparison.Ordinal))).IsTrue();
+        string projectionRegistry = result.GeneratedSources["PalORM_ProjectionRegistry.g.cs"];
+        await Assert.That(projectionRegistry).Contains("[typeof(global::OrderSummaryStruct)] = RowFactory_");
+    }
+
+    [Test]
     public async Task Projection_GeneratesRowFactoryAndRegistryOnly()
     {
         const string source = """
