@@ -9,7 +9,7 @@ public static class QueryBuilderExtensions
 {
     /// <summary>结果列表的预分配容量上限（ITM-712）。Take/分页大小是查询结果上界而非预期行数，
     /// 无上限的预分配可被单个超大值放大为进程级 OOM；超出部分由 <see cref="ResultListReader"/> 池化收集。</summary>
-    private const int MaxPreallocatedCapacity = 4096;
+    private const int MaxPreallocatedCapacity = SqlLimits.MaxMaterializedCapacityHint;
 
     /// <summary>实际缓存 key 组装（ADR-L 结构性隔离）：租户作用域非空时前缀化——
     /// <c>__t:{tenantIdLength}:{tenantId}:{userKey}</c>（租户过滤查询）或

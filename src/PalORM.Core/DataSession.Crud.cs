@@ -1491,7 +1491,9 @@ public sealed partial class DataSession<TProvider>
 
     private void RecordMaterializedCount<T>(int count) where T : class, new()
     {
-        if (count <= 16)
+        // P2-6：只存上界内 hint——一次 10 万行全表不应让后续小查询白分配约 800 KB。
+        int recorded = Math.Min(count, SqlLimits.MaxMaterializedCapacityHint);
+        if (recorded <= 16)
             return; // 小结果集：默认容量已覆盖，不值得一条记录
         System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
         if (dict is null)
@@ -1500,8 +1502,8 @@ public sealed partial class DataSession<TProvider>
             dict = Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
         }
         // S1：同值不写——重复读同规模结果集时避免每次一条 ConcurrentDictionary 写锁。
-        if (!dict.TryGetValue(typeof(T), out int previous) || previous != count)
-            dict[typeof(T)] = count;
+        if (!dict.TryGetValue(typeof(T), out int previous) || previous != recorded)
+            dict[typeof(T)] = recorded;
     }
 
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。
