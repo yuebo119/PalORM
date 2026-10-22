@@ -903,9 +903,20 @@ public sealed class AnalyzerDiagnosticsTests
         await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PALORM", System.StringComparison.Ordinal))).IsFalse();
     }
 
+    private static readonly Dictionary<string, string> PgDialects = new()
+    {
+        ["build_property.PalORMTargetDialects"] = "postgresql",
+    };
+
+    private static readonly Dictionary<string, string> MySqlDialects = new()
+    {
+        ["build_property.PalORMTargetDialects"] = "mysql",
+    };
+
     internal static async Task<(ImmutableArray<Diagnostic> AnalyzerDiagnostics, ImmutableArray<Diagnostic> CompileErrors)>
         AnalyzeAsync(string source,  // r17：internal 供 record 三支锁定测试复用
-            NullableContextOptions nullableContextOptions = NullableContextOptions.Disable)
+            NullableContextOptions nullableContextOptions = NullableContextOptions.Disable,
+            IReadOnlyDictionary<string, string>? analyzerConfigOptions = null)
     {
         string[] trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
@@ -920,8 +931,11 @@ public sealed class AnalyzerDiagnosticsTests
                 OutputKind.DynamicallyLinkedLibrary,
                 nullableContextOptions: nullableContextOptions));
 
+        var analyzerOptions = new AnalyzerOptions(
+            ImmutableArray<AdditionalText>.Empty,
+            TestConfigOptionsProvider.Create(analyzerConfigOptions ?? new Dictionary<string, string>()));
         ImmutableArray<Diagnostic> analyzerDiagnostics = await compilation
-            .WithAnalyzers([new PalORMAnalyzer()])
+            .WithAnalyzers([new PalORMAnalyzer()], analyzerOptions)
             .GetAnalyzerDiagnosticsAsync();
         ImmutableArray<Diagnostic> compileErrors = [.. compilation.GetDiagnostics()
             .Where(static d => d.Severity == DiagnosticSeverity.Error)];
@@ -1694,5 +1708,57 @@ public sealed class AnalyzerDiagnosticsTests
             """;
         (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
         await Assert.That(diagnostics.Any(d => d.Id == "PALORM044")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM020_PgTarget_IndexColumnCaseMismatch_Reports()
+    {
+        // P2-7：PG 引号标识符大小写敏感；同一输入在 MySQL 目标下不报
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            [Index("ix_name", "Name")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(
+            source, analyzerConfigOptions: PgDialects);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM020")).IsTrue();
+
+        (ImmutableArray<Diagnostic> mySqlDiagnostics, _) = await AnalyzeAsync(
+            source, analyzerConfigOptions: MySqlDialects);
+        await Assert.That(mySqlDiagnostics.Any(d => d.Id == "PALORM020")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM003_PgTarget_ForeignKeyTableCaseMismatch_Reports()
+    {
+        // P2-7：PG 表名大小写敏感；同一输入在 MySQL 目标下不报
+        const string source = """
+            using PalORM;
+            [Table("Users")]
+            public sealed class User
+            {
+                [Key] public long Id { get; set; }
+            }
+            [Table("orders")]
+            public sealed class Order
+            {
+                [Key] public long Id { get; set; }
+                [Column("user_id")]
+                [ForeignKey("users", "id", OnDelete = DeleteAction.Cascade)]
+                public long UserId { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(
+            source, analyzerConfigOptions: PgDialects);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM003")).IsTrue();
+
+        (ImmutableArray<Diagnostic> mySqlDiagnostics, _) = await AnalyzeAsync(
+            source, analyzerConfigOptions: MySqlDialects);
+        await Assert.That(mySqlDiagnostics.Any(d => d.Id == "PALORM003")).IsFalse();
     }
 }
