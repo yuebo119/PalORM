@@ -131,11 +131,13 @@ public sealed class QueryPipelineTests
     }
 
     [Test]
-    public async Task Pipeline_EmptyExecute_IsNoOp()
+    public async Task Pipeline_EmptyExecute_IsNoOp_AndRejectsSecondExecute()
     {
         await using Fixture fixture = await Fixture.CreateAsync("empty");
         var pipeline = fixture.Session.CreatePipeline();
+        // 空管道执行是合法空操作；管道单次使用，第二次执行必须响亮拒绝。
         await pipeline.ExecuteAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await pipeline.ExecuteAsync());
         pipeline.Dispose();
     }
 
