@@ -188,6 +188,9 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         if (builder._transaction is not null)
             throw new NotSupportedException(
                 "Builder-level WithTransaction is not supported inside a query pipeline; use the session transaction.");
+        if (builder._selectColumns is not null)
+            throw new NotSupportedException(
+                "Select projection is not supported inside a query pipeline; the pipeline materializes the full entity row factory.");
 
         string sql = kind == PipelineKind.Count ? builder.BuildCountSql() : builder.BuildSql();
         IReadOnlyList<DbParameter> parameters =

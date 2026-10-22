@@ -33,6 +33,11 @@ public static class SqlLimits
     /// 5000 行把单语句控制在数百 KB 量级，同时让 10 万行只需 20 次往返（旧口径 200 次）。</summary>
     public const int MaxRowsPerBatch = 5000;
 
+    /// <summary>物化容量启发上界（2026-10-22 终审 P2-6）：MaterializedCount 只作为 List 初始容量，
+    /// 曾把一次 10 万行全表的行数记给后续小查询（池化会话跨租期保留），每个小查询白分配
+    /// 约 800 KB。与 QueryBuilderExtensions 的预分配上界同口径。</summary>
+    public const int MaxMaterializedCapacityHint = 4096;
+
     /// <summary>MySQL 裸 OFFSET（无 LIMIT）的补位哨兵——<c>LIMIT offset, max</c> 惯用法。</summary>
     public const ulong MySqlOffsetOnlyLimit = ulong.MaxValue;
 }

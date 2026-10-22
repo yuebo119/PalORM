@@ -150,6 +150,10 @@ public sealed class QueryPipelineTests
             _ = pipeline.Query(fixture.Session.From<PipelineProbeRow>().WithCache("pipeline-key")));
         Assert.Throws<NotSupportedException>(() =>
             _ = pipeline.Query(fixture.Session.From<PipelineProbeRow>().WithTracing()));
+        // 2026-10-22 终审 P2-1：Select 少列 SQL 与完整实体 RowFactory 不匹配，常规路径
+        // 已拒绝；管道此前漏守卫，执行期抛 ArgumentOutOfRangeException。
+        Assert.Throws<NotSupportedException>(() =>
+            _ = pipeline.Query(fixture.Session.From<PipelineProbeRow>().Select(static x => x.id)));
         pipeline.Dispose();
     }
 
