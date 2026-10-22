@@ -22,6 +22,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     where TProvider : IDbProvider
 {
     private readonly DbConnection _conn;
+    /// <summary>是否拥有主连接（默认 true）。测试/基准的"共享已打开连接 + 每操作一个会话"形态
+    /// 传 false：会话 Dispose 释放复用槽与读侧资源，但不关闭/释放调用方的连接。</summary>
+    private readonly bool _ownsConnection;
     private DbOptions _options;
     /// <summary>命令超时的 ADO.NET 秒值会话级快照——<see cref="DbOptions.ToCommandTimeoutSeconds"/>
     /// 含 <c>Math.Ceiling(TotalSeconds)</c> 双精度除法，原实现在每条命令构造与每次复用槽重设时
@@ -99,11 +102,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     private Stack<DbConnection>? _idleParallelReadConnections;
     private readonly Lock _parallelReadPoolLock = new();
 
-    internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null)
+    internal DataSession(DbConnection conn, DbOptions options, List<IQueryInterceptor> interceptors, ILogger? logger = null, bool ownsConnection = true)
     {
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(options);
         _conn = conn;
+        _ownsConnection = ownsConnection;
         _options = options;
         _commandTimeoutSeconds = options.CommandTimeoutSeconds;
         // W3（两轴清单轮 2026-10-14）：弹性执行器改惰性（见 _resilience 字段 doc）——
@@ -797,8 +801,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         }
         catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
 
-        try { await _conn.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
+        if (await DisposeConnectionIfOwnedAsync().ConfigureAwait(false) is { } connectionException)
+            RecordCleanupException(ref cleanupException, connectionException);
 
         // v5.6：读连接由会话持有，在此统一释放（DisposeAsync 先等待全部活动操作结束，
         // 故不存在无飞行查询仍持有该连接的情形）。
@@ -813,6 +817,22 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             ExceptionDispatchInfo.Capture(cleanupException).Throw();
     }
 
+    /// <summary>主连接释放（所有者为 false 时为空操作）——返回清理异常（无异常返回 null），
+    /// 由 <see cref="DisposeCoreAsync"/> 按主异常保留约定挂链。</summary>
+    private async ValueTask<Exception?> DisposeConnectionIfOwnedAsync()
+    {
+        if (!_ownsConnection) return null;
+        try
+        {
+            await _conn.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+    }
+
     /// <summary>复用命令释放 + 主连接关闭（DisposeCoreAsync 的中段抽离，降 S3776）——
     /// 返回首个清理异常（无异常返回 null）。</summary>
     private async ValueTask<Exception?> DisposeReusableCommandsAndCloseAsync()
@@ -823,7 +843,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             // A9：晋升的读查询命令同口径释放
             if (await DisposeReusableQueryCommandAsync().ConfigureAwait(false) is { } queryCleanup)
                 return queryCleanup;
-            if (_conn.State == ConnectionState.Open)
+            if (_ownsConnection && _conn.State == ConnectionState.Open)
                 await _conn.CloseAsync().ConfigureAwait(false);
         }
         catch (Exception exception)
