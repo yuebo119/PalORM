@@ -21,16 +21,27 @@ internal static class ResultListReader
     /// <param name="initialCapacity">直写 List 的初始容量；行数不超过它时不进池化路径。</param>
     /// <param name="ct">取消令牌。</param>
     /// <param name="onFirstRow">仅在存在首行时、物化首行之前调用一次（直查族的首行列序校验）。</param>
+    /// <param name="syncRead">逐行走同步 <see cref="System.Data.Common.DbDataReader.Read"/>——仅由
+    /// <see cref="DbOptions.UseSynchronousRowRead"/> + Provider 能力同时成立时启用。实测 MySQL
+    /// 全表物化同步读约 998 ns/行 vs 异步 1846~2043 ns/行（5 轮 × 20 次中位），代价是流式行
+    /// 未缓冲时会阻塞线程；PostgreSQL 两者持平，不启用。</param>
     internal static async ValueTask<List<T>> ReadAllAsync<T>(
         DbDataReader reader, Func<DbDataReader, T> factory, int initialCapacity,
-        CancellationToken ct, Action<DbDataReader>? onFirstRow = null)
+        CancellationToken ct, Action<DbDataReader>? onFirstRow = null, bool syncRead = false)
         where T : class
     {
+        // 局部函数而非逐行分支复制：同步路径每次调用只多一次局部调用与分支（~3 ns/行），
+        // 远小于 async 路径在本机 MySQL 上的每行开销；两路径的物化/扩容逻辑保持单一真源。
+        ValueTask<bool> ReadNextAsync()
+            => syncRead
+                ? new ValueTask<bool>(ReadSync(reader, ct))
+                : new ValueTask<bool>(reader.ReadAsync(ct));
+
         initialCapacity = Math.Max(1, initialCapacity);
         var list = new List<T>(initialCapacity);
         while (list.Count < initialCapacity)
         {
-            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            if (!await ReadNextAsync().ConfigureAwait(false))
                 return list;
             if (list.Count == 0)
                 onFirstRow?.Invoke(reader);
@@ -38,7 +49,7 @@ internal static class ResultListReader
         }
 
         // List 恰好装满：先探下一行，没有更多行则原样返回（容量已精确，不租缓冲）
-        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+        if (!await ReadNextAsync().ConfigureAwait(false))
             return list;
 
         T[] buffer = ArrayPool<T>.Shared.Rent(Math.Max(initialCapacity * 4, MinOverflowBufferLength));
@@ -48,7 +59,7 @@ internal static class ResultListReader
             list.CopyTo(buffer);
             count = list.Count;
             buffer[count++] = factory(reader);
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            while (await ReadNextAsync().ConfigureAwait(false))
             {
                 if (count == buffer.Length)
                 {
@@ -73,5 +84,12 @@ internal static class ResultListReader
             Array.Clear(buffer, 0, count);
             ArrayPool<T>.Shared.Return(buffer);
         }
+    }
+
+    /// <summary>同步逐行读叶子（仅在 UseSynchronousRowRead 的显式快路径下调用）。</summary>
+    private static bool ReadSync(DbDataReader reader, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return reader.Read();
     }
 }

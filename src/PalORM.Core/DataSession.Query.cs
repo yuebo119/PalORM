@@ -460,7 +460,8 @@ public sealed partial class DataSession<TProvider>
             await using DbDataReader reusedReader = await reusedQuery.ExecuteReaderAsync(ct).ConfigureAwait(false);
             List<T> reusedList = await ResultListReader.ReadAllAsync(
                 reusedReader, rowFactory, GetMaterializedCapacity<T>(), ct,
-                _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
+                _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null,
+                PreferSynchronousRowRead)
                 .ConfigureAwait(false);
             RecordMaterializedCount<T>(reusedList.Count);
             return reusedList;
@@ -477,7 +478,8 @@ public sealed partial class DataSession<TProvider>
         //（Validate 关闭即空操作，省掉每次调用的委托判断）。static lambda 按泛型实例缓存，零分配。
         List<T> list = await ResultListReader.ReadAllAsync(
             reader, rowFactory, GetMaterializedCapacity<T>(), ct,
-            _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
+            _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null,
+            PreferSynchronousRowRead)
             .ConfigureAwait(false);
         RecordMaterializedCount<T>(list.Count);
         lease.MarkHealthy();

@@ -43,7 +43,8 @@ public static class QueryBuilderExtensions
         List<IQueryInterceptor> Interceptors,
         long? SwStart,
         DbTransaction? BoundTransaction,
-        Func<DbConnection, bool, ValueTask>? ReadConnReturner) where T : class, new();
+        Func<DbConnection, bool, ValueTask>? ReadConnReturner,
+        bool SyncRowRead) where T : class, new();
 
     /// <summary>S4：弹性编排的只读上下文（从 builder 一次投影，helper 状态机不再持有 builder）。</summary>
     internal readonly record struct ResilienceContext(
@@ -159,7 +160,7 @@ public static class QueryBuilderExtensions
             List<T> list = await ResultListReader.ReadAllAsync(
                 reader, state.Factory,
                 state.Take.HasValue ? Math.Min(state.Take.Value, MaxPreallocatedCapacity) : 16,
-                token).ConfigureAwait(false);
+                token, syncRead: state.SyncRowRead).ConfigureAwait(false);
             NotifyInterceptorsOnAfter(state.Interceptors, state.Context, state.SwStart, list.Count);
             string? key = effectiveCacheKey;
             if (key is null && state.CacheKey is not null)
@@ -262,7 +263,7 @@ public static class QueryBuilderExtensions
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
             T? first = null;
             int rows = 0;
-            while (rows < maxRows && await reader.ReadAsync(token).ConfigureAwait(false))
+            while (rows < maxRows && await ReadRow(reader, state.SyncRowRead, token).ConfigureAwait(false))
             {
                 if (rows == 0)
                     first = state.Factory(reader);
@@ -285,6 +286,19 @@ public static class QueryBuilderExtensions
     private static ValueTask EnsureReusablePreparedAsync(
         ReusableQuerySlot? slot, bool usingReusable, CancellationToken token)
         => usingReusable && slot is not null ? slot.EnsurePreparedAsync(token) : default;
+
+    /// <summary>首行族逐行读叶子——<paramref name="syncRead"/> 时走同步 <c>Read</c>
+    /// （MySQL/SQLite 全量物化快路径），否则异步。</summary>
+    private static ValueTask<bool> ReadRow(DbDataReader reader, bool syncRead, CancellationToken token)
+        => syncRead
+            ? new ValueTask<bool>(ReadRowSync(reader, token))
+            : new ValueTask<bool>(reader.ReadAsync(token));
+
+    private static bool ReadRowSync(DbDataReader reader, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return reader.Read();
+    }
 
     /// <summary>执行查询并返回全部实体列表。
     /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
@@ -370,7 +384,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner);
+            builder._readConnReturner, builder._syncRowRead);
         string outcome = "error";
         try
         {
@@ -442,7 +456,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner);
+            builder._readConnReturner, builder._syncRowRead);
         string outcome = "error";
         try
         {
@@ -615,7 +629,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner);
+            builder._readConnReturner, builder._syncRowRead);
         string outcome = "error";
         try
         {
@@ -943,7 +957,8 @@ public static class QueryBuilderExtensions
             throw new InvalidOperationException(
                 "Paged query result set is missing from the batch response.");
         List<T> rows = await ResultListReader.ReadAllAsync(
-            reader, paged._factory, Math.Min(pageSize, MaxPreallocatedCapacity), ct).ConfigureAwait(false);
+            reader, paged._factory, Math.Min(pageSize, MaxPreallocatedCapacity), ct,
+            syncRead: paged._syncRowRead).ConfigureAwait(false);
         return (rows, total);
     }
 

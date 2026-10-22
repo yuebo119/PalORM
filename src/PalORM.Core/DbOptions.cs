@@ -116,6 +116,16 @@ public sealed record DbOptions
     /// 使用列别名/表达式列的查询需关闭此项并自行保证列序。</summary>
     public bool ValidateQueryColumnOrder { get; init; } = true;
 
+    /// <summary>全量物化的逐行读取使用同步 <see cref="System.Data.Common.DbDataReader.Read"/>
+    /// （默认 false）。当前由 MySQL 消费（Provider 声明 <see cref="IDbProvider.SupportsSynchronousRowRead"/>）；
+    /// SQLite 因 <see cref="IDbProvider.PreferSynchronousIo"/> 恒走同步逐行读，无需本开关。
+    /// MySQL 本机 5 轮交替实测：同步约 998 ns/行 vs 异步 1846~2043 ns/行；
+    /// PostgreSQL 两者持平，因此不受本开关影响。
+    /// <para><b>代价</b>：结果集仍在流式输出时，同步读会阻塞调用线程直到下一行到达；高并发
+    /// 服务端请先做线程池压力验证。流式 API（<c>QueryAsyncEnumerable</c>/<c>ForEachAsync</c>）
+    /// 始终异步，不受本项影响。</para></summary>
+    public bool UseSynchronousRowRead { get; init; }
+
     /// <summary>查询缓存实现（ADR-C）。未设置时使用进程级共享的有界默认缓存（1024 条）。
     /// 注入独立实例可实现会话/租户级缓存隔离；实现需线程安全。</summary>
     public IQueryCache? QueryCache { get; init; }

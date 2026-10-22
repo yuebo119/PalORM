@@ -160,7 +160,7 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
         PipelineItem item = kind switch
         {
-            PipelineKind.List => new PipelineList<T>(builder._factory),
+            PipelineKind.List => new PipelineList<T>(builder._factory, _session.PreferSynchronousRowRead),
             PipelineKind.First => new PipelineFirst<T>(builder._factory),
             _ => new PipelineCount(),
         };
@@ -270,14 +270,14 @@ public sealed class QueryPipeline<TProvider> : IDisposable
             DbDataReader reader, CancellationToken ct);
     }
 
-    private sealed class PipelineList<T>(Func<DbDataReader, T> factory) : PipelineItem
+    private sealed class PipelineList<T>(Func<DbDataReader, T> factory, bool syncRead) : PipelineItem
         where T : class, new()
     {
         internal override async ValueTask<PipelineMaterialization> MaterializeAsync(
             DbDataReader reader, CancellationToken ct)
         {
-            List<T> list = await ResultListReader.ReadAllAsync(reader, factory, 16, ct)
-                .ConfigureAwait(false);
+            List<T> list = await ResultListReader.ReadAllAsync(
+                reader, factory, 16, ct, syncRead: syncRead).ConfigureAwait(false);
             return new PipelineMaterialization(list, list.Count);
         }
     }

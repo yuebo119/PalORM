@@ -126,6 +126,10 @@ public sealed class SqliteProvider : IDbProvider
     /// <see cref="IDbProvider.PreferSynchronousIo"/>）。取消令牌在调用前显式检查。</summary>
     public static bool PreferSynchronousIo => true;
 
+    /// <summary>SQLite 的异步 API 本来就是同步执行——逐行读同样走同步叶子（ResultListReader
+    /// 经 <see cref="IDbProvider.PreferSynchronousIo"/> 自动启用，无需额外配置）。</summary>
+    public static bool SupportsSynchronousRowRead => true;
+
     /// <summary>SQLite 的 CURRENT_TIMESTAMP 恒为 UTC；MySQL/PG 为会话时区——
     /// 软删除 deleted_at 跨库混用时语义不同（ITM-326）。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";

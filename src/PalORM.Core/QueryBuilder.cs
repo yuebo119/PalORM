@@ -118,6 +118,9 @@ public struct QueryBuilder<T> where T : class, new()
     internal readonly Func<string, Array, DbParameter?>? _createArrayParameter;
     /// <summary>原生/状态改写 SQL 的宿主通知器（Raw/Set/裸执行）——Provider 实现把连接标脏。</summary>
     internal readonly Action<DbConnection>? _markStateUnknown;
+    /// <summary>全量物化逐行读是否走同步叶子（会话 <see cref="DbOptions.UseSynchronousRowRead"/>
+    /// + Provider 能力的合并结果）。流式执行（ForEach/QueryAsyncEnumerable）不消费本字段。</summary>
+    internal readonly bool _syncRowRead;
 
     internal QueryBuilder(QueryBuilderContext<T> ctx)
     {
@@ -166,6 +169,7 @@ public struct QueryBuilder<T> where T : class, new()
         _querySlot = ctx.QuerySlot;
         _createArrayParameter = ctx.Services.CreateArrayParameter;
         _markStateUnknown = ctx.Services.MarkConnectionStateUnknown;
+        _syncRowRead = ctx.Services.SyncRowRead;
     }
 
     /// <summary>S3b：执行期懒取弹性执行器——From&lt;T&gt;() 不再提前物化，成功的首次尝试
@@ -845,7 +849,8 @@ public struct QueryBuilder<T> where T : class, new()
                 OptionsSnapshot: _optionsSnapshot,
                 IsTransient: _isTransient,
                 ProviderType: _providerType,
-                MarkConnectionStateUnknown: _markStateUnknown),  // S3b：克隆透传会话引用与配置快照
+                MarkConnectionStateUnknown: _markStateUnknown,
+                SyncRowRead: _syncRowRead),  // S3b：克隆透传会话引用与配置快照
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
             _readConnInvalidator, _readConnReturner, _querySlot))
         {
@@ -1614,7 +1619,8 @@ internal readonly record struct QueryBuilderServices<T>(
     DbOptions? OptionsSnapshot = null,
     Func<Exception, bool>? IsTransient = null,
     Type? ProviderType = null,
-    Action<DbConnection>? MarkConnectionStateUnknown = null)
+    Action<DbConnection>? MarkConnectionStateUnknown = null,
+    bool SyncRowRead = false)
     where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。

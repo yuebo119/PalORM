@@ -54,7 +54,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 **会话池化**（v6.5 `DataSessionPool`）。Web 服务"一请求一会话"形态的固定成本消除器：租出的会话归还后瞬态状态（租户/超时/重试覆写）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在同会话第 3 次同形状操作才晋升，不池化则每请求形态下结构性永不激活。32 并发压测实测 P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B，租还自身约 1 µs。
 
-**请求级查询管道**。`CreatePipeline()` 把多条彼此独立的只读查询合并成一次数据库往返：PostgreSQL 经 `NpgsqlBatch`，本机实测 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×），结果按入队顺序类型化返回；其余 Provider 顺序回退。配套两项：MySQL 复用命令晋升时自动服务端预编译（重复单键读写 −10~18%，PostgreSQL 由驱动 AutoPrepare 自动完成）；SQLite 干净连接句柄跳过每会话 PRAGMA、原生 SQL 改写过连接态才重设 `foreign_keys`（CreateAsync+Dispose 1.71 → 0.50 µs，per-op 单键读 7.35 → 6.40 µs、2640 → 2176 B）。
+**请求级查询管道**。`CreatePipeline()` 把多条彼此独立的只读查询合并成一次数据库往返：PostgreSQL 经 `NpgsqlBatch`（本机 4 条单键查询 249 µs → 72~79 µs/条，3.2~3.4×），MySQL 经 `MySqlBatch`（本机执行耗时时持平、WAN 省 RTT），结果按入队顺序类型化返回；SQLite 顺序回退。配套三项：MySQL 复用命令晋升时自动服务端预编译（重复单键读写 −10~18%，PostgreSQL 由驱动 AutoPrepare 自动完成）；SQLite 干净连接句柄跳过每会话 PRAGMA、原生 SQL 改写过连接态才重设 `foreign_keys`（CreateAsync+Dispose 1.71 → 0.50 µs，per-op 单键读 7.35 → 6.40 µs、2640 → 2176 B）；MySQL 可选的同步逐行读（`UseSynchronousRowRead`，全表物化约 998 vs 1846~2043 ns/行，流式 API 不受影响）。
 
 **SQL 资产编译期管理**。`[SqlFile]` 把外部 .sql 文件嵌入为常量（支持 `-- @pg/@mysql/@sqlite/@all` 方言条件段，改 SQL 免 Rebuild，文件缺失编译期报错）；`[SqlTemplate]` 把方法体插值串提升为模板常量，配合 `.AsPrepared()` 走 `DbCommand.PrepareAsync` 预编译；AutoTagging（opt-in 编译开关）经 C# `[InterceptsLocation]` 拦截 9 个查询终态方法，SQL 自动注入「文件:行号 成员名」定位注释，排查零成本。
 
@@ -755,6 +755,7 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | `CircuitBreakerScope`      | `CircuitBreakerScope`               | Session       | 熔断作用域：Session 的失败计数随会话销毁（长会话可用）；Process 按 (Provider, 连接串, 阈值, 冷却) 跨会话累计，一请求一会话的短会话部署必选，否则熔断形同虚设。`Production` 预设已默认 `Process`                              |
 | `Interceptors`             | `IReadOnlyList<IQueryInterceptor>?` | null          | 按 `Priority` 升序执行（`AuditInterceptor` 默认 200）                                                                                                              |
 | `ValidateQueryColumnOrder` | `bool`                              | true          | `QueryAsync` 首行列序与实体声明序比对，不匹配抛异常；用列别名/表达式列时需关闭                                                                                                            |
+| `UseSynchronousRowRead`    | `bool`                              | false         | 全量物化逐行读走同步 `Read()`（MySQL 需开启；SQLite 因进程内引擎恒同步）。MySQL 实测约 998 vs 1846~2043 ns/行；流式 API 始终异步。高并发服务端请先做线程池压力验证                                   |
 | `QueryCache`               | `IQueryCache?`                      | 1024 条        | 默认进程级共享；注入独立实例实现会话/租户级隔离（需线程安全）                                                                                                                           |
 | `SessionSetupSql`          | `string?`                           | null          | 主连接首次激活后执行的 SQL（`SET TIME ZONE` / `search_path` 等，分号分隔）                                                                                                   |
 | `ReadSessionSetupSql`      | `string?`                           | null          | 读副本连接的同类设置；读连接按会话复用，每会话执行一次                                                                                                                               |
