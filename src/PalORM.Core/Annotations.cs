@@ -269,7 +269,7 @@ public sealed class DatabaseAttribute : Attribute
 /// <para><b>互斥</b>（编译期拦截）：与 <see cref="TableAttribute"/> 同标报 PALORM049；
 /// 属性带 <see cref="OwnedJsonAttribute"/> 报 PALORM050（其读路径依赖实体 CommandFactory
 /// 的 JsonTypeInfo，投影不生成）。</para></summary>
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = false, Inherited = false)]
 public sealed class ProjectionAttribute : Attribute { }
 
 /// <summary>SQL 模板预编译标记。执行时在参数绑定后调用 DbCommand.PrepareAsync。</summary>

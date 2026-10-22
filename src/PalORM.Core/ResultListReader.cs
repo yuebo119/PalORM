@@ -28,7 +28,6 @@ internal static class ResultListReader
     internal static async ValueTask<List<T>> ReadAllAsync<T>(
         DbDataReader reader, Func<DbDataReader, T> factory, int initialCapacity,
         CancellationToken ct, Action<DbDataReader>? onFirstRow = null, bool syncRead = false)
-        where T : class
     {
         // 局部函数而非逐行分支复制：同步路径每次调用只多一次局部调用与分支（~3 ns/行），
         // 远小于 async 路径在本机 MySQL 上的每行开销；两路径的物化/扩容逻辑保持单一真源。

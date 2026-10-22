@@ -984,7 +984,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// <summary>刀1：行工厂的每类型静态缓存——直查族（QueryAsync/QueryAsyncEnumerable/
     /// QueryFirst/QuerySingle）专用。T 允许是 [Projection] 类型（只进 RowFactories 不进
     /// TableNames），故不走 EntityRuntimeInfo 视图而走 RowFactories 注册表。</summary>
-    private static Func<DbDataReader, T> GetRowFactory<T>() where T : class, new()
+    private static Func<DbDataReader, T> GetRowFactory<T>()
     {
         object? cached = EntityInfoCache.FactoryPer<T>.Factory;
         if (cached is not null)

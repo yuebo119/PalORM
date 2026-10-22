@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1140 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1149 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -85,7 +85,7 @@
 
 ### 基础注解 (23 个)
 
-`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]`（随 `CREATE TABLE` 内联生成三方言表级 FK 子句，`OnDelete` 显式必填、默认 NO ACTION；引用表/列名为字面 DDL 名，须与被引用实体实际映射列名逐字对齐——PG 引号标识符大小写敏感；SQLite 引擎强制需连接级 `PRAGMA foreign_keys=ON`，已建表不补齐属迁移幂等新建口径） `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Required]` `[DefaultValue]` `[Timestamp]` `[Computed]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[Schema]` `[Database]` `[SqlTemplate]` `[Projection]`（v6.0 R1：DTO 投影物化——`QueryAsync<T>`/`GridReader.Read<T>`/存储过程结果集直接映射到非表类型，ordinal 契约同 ADR-A；不生成写命令与迁移 DDL）
+`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]`（随 `CREATE TABLE` 内联生成三方言表级 FK 子句，`OnDelete` 显式必填、默认 NO ACTION；引用表/列名为字面 DDL 名，须与被引用实体实际映射列名逐字对齐——PG 引号标识符大小写敏感；SQLite 引擎强制需连接级 `PRAGMA foreign_keys=ON`，已建表不补齐属迁移幂等新建口径） `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Required]` `[DefaultValue]` `[Timestamp]` `[Computed]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[Schema]` `[Database]` `[SqlTemplate]` `[Projection]`（v6.0 R1：DTO 投影物化——`QueryAsync<T>`/`GridReader.Read<T>`/存储过程结果集直接映射到非表类型，ordinal 契约同 ADR-A；不生成写命令与迁移 DDL；当前开发线起支持 `readonly struct` 投影，配合 `QueryStructsAsync<T>` 零每行堆分配）
 
 ### 查询构建器 (struct QueryBuilder&lt;T&gt;)
 
@@ -145,6 +145,8 @@
 | `GetAllAsync<T>()` | 全表 |
 | `InsertAsync<T>(T)` → `T` | PG/SQLite RETURNING / MySQL LAST_INSERT_ID |
 | `UpdateAsync<T>(T)` | 乐观锁自动检查；[TenantAware] 的 tenant_id 不在 SET 内 |
+| `UpdateColumnsAsync<T>(T, [columns])` | 列子集更新：只 SET 选中列，未选列保持库内值；版本列照常 `+1`/冲突检测；租户谓词自动追加（宽表大值列只发被改列） |
+| `QueryStructsAsync<T>(FormattableString)` | `[Projection] struct` 直查——每行零堆对象、`List<T>` 连续结构体数组（报表/大结果集） |
 | `DeleteAsync<T>(object key)` | SoftDelete 更新 deleted_at / 物理删除 |
 | `SaveAsync<T>(T)` | UPSERT（默认键 Insert / 非默认键 Upsert）；冲突更新不改 tenant_id |
 | `ExecuteAsync(FormattableString)` → `int` | DDL/DML 直执 |

@@ -10,7 +10,7 @@ internal static class ColumnOrderValidator
     /// <summary>校验结果列序 = 实体声明列序。结果列数少于实体列数时同样明确失败
     /// （ITM-211：RowFactory 会对缺失列抛 IndexOutOfRange，此处提前给出可诊断的消息）；
     /// 多余列不校验（调用方可 SELECT 附加列，RowFactory 只读前 N 列）。</summary>
-    internal static void Validate<T>(DbDataReader reader, bool enabled) where T : class, new()
+    internal static void Validate<T>(DbDataReader reader, bool enabled)
     {
         if (!enabled) return;
         // ITM-543: ColumnNames 缺键时静默返回是安全的——所有调用点（DataSession/GridReader/StoredProcBuilder）

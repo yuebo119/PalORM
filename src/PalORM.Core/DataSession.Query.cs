@@ -486,6 +486,60 @@ public sealed partial class DataSession<TProvider>
         return list;
     }
 
+    /// <summary>直查结构体投影——把结果行物化为 <c>[Projection] struct</c>（每行零堆对象，
+    /// <see cref="List{T}"/> 背衬为连续结构体数组），适合报表/聚合大结果集。
+    /// <para><b>契约</b>：SQL 逐字执行，默认过滤（软删/租户）不适用（与 <see cref="QueryAsync{T}"/>
+    /// 同口径）；结果按序号映射到结构体属性声明序，列序由调用方保证。结构体投影只进
+    /// <c>RowFactories</c>、不进表/CRUD 元数据，因此不参与迁移与写路径。</para></summary>
+    public ValueTask<List<T>> QueryStructsAsync<T>(
+        FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
+        where T : struct
+    {
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            _operationState.PrewarmCurrentOperationOwner();
+        return QueryStructsEntryAsync<T>(sql, readFromReplica, ct);
+    }
+
+    private async ValueTask<List<T>> QueryStructsEntryAsync<T>(
+        FormattableString sql, bool readFromReplica, CancellationToken ct)
+        where T : struct
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        MarkConnectionStateUnknownForRawSql();
+        Func<DbDataReader, T> rowFactory = GetRowFactory<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
+        string commandText = FormatSqlWithParameters(sql);
+
+        DbCommand? reused = readFromReplica ? null : TryAcquireReusableDirectCommand(commandText);
+        if (reused is not null)
+            EnsureReusableDirectParameters(reused, sql);
+        if (reused is not null && TryBindFormattableValuesInPlace(reused, sql))
+        {
+            ApplyReusableCommandState(reused, activeTransaction, commandText);
+            if (_querySlot is { } structSlot)
+                await structSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
+            await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            return await ResultListReader.ReadAllAsync(
+                reusedReader, rowFactory, 16, ct,
+                _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null,
+                PreferSynchronousRowRead).ConfigureAwait(false);
+        }
+
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+            readFromReplica, activeTransaction, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
+        cmd.CommandText = commandText;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
+        BindFormattableParameters(cmd, sql);
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        List<T> list = await ResultListReader.ReadAllAsync(
+            reader, rowFactory, 16, ct,
+            _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null,
+            PreferSynchronousRowRead).ConfigureAwait(false);
+        lease.MarkHealthy();
+        return list;
+    }
+
     /// <summary>ADR-A 首行列名校验：结果列名与实体声明序列名不匹配即抛异常，
     /// 把"同型列静默交换数据"变为明确失败。仅首行执行，热路径零开销。</summary>
     private void ValidateColumnOrder<T>(DbDataReader reader) where T : class, new()
