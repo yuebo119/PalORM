@@ -1447,6 +1447,8 @@ internal sealed class GeneratorPhase2Tests
     [Arguments("public static partial string Get(int id);")]                 // 带参数
     [Arguments("public static partial int Get();")]                          // 非 string 返回
     [Arguments("internal static partial string Get();")]                     // 非 public
+    [Arguments("public static partial string Get<T>();")]                    // 泛型方法
+    [Arguments("public static partial ref string Get();")]                   // ref 返回
     public async Task SqlFile_InvalidMethodShape_SkipsGeneration_WithCs8795AtMethod(string member)
     {
         // P2-10 残余：生成实现固定 `public static partial string Name()`，形状不匹配时

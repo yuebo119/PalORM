@@ -53,8 +53,13 @@ internal static class SqlFileEmitter
         // P2-10 残余：生成侧的实现声明固定为 `public static partial string Name()`。
         // 方法形状不匹配时该声明与用户定义冲突，错误落在 .g.cs（CS0759/CS0111）。
         // 与泛型/嵌套同策略：跳过生成，让 CS8795 定位回用户方法（声明式 partial 缺实现）。
+        // 泛型方法/ref 返回同样不进生成面：前者会额外产出一个同名的非泛型方法，
+        // 后者与值返回声明签名不一致。
         if (!method.IsStatic
             || method.Parameters.Length != 0
+            || method.IsGenericMethod
+            || method.ReturnsByRef
+            || method.ReturnsByRefReadonly
             || method.DeclaredAccessibility != Accessibility.Public
             || method.ReturnType.SpecialType != SpecialType.System_String)
             return null;
