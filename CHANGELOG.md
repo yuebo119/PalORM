@@ -9,6 +9,7 @@
 - **请求级查询管道 `CreatePipeline()`**：把多条独立只读查询合并为一次往返，结果按入队顺序类型化返回（`PipelineQuery<T, TProvider>` / `PipelineFirst<T, TProvider>` / `PipelineScalar<TProvider>`）。PostgreSQL 走 `NpgsqlBatch`，本机 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×）；MySQL 走 `MySqlBatch`（本机执行耗时时持平，WAN 省 RTT）；SQLite 回退顺序执行。契约：builder 入队即消费、只读、活动事务自动绑定、与并行读作用域互斥；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝。
 - **MySQL 复用命令晋升自动预编译**：单行 CRUD 与直查族命令槽晋升（同形态第 3 次）时执行一次 `PrepareAsync`，此后走二进制协议；预编译失败静默退化为未预编译。实测重复单键读约 −10~18%。新 Provider 能力位 `PrepareReusedCommands`（PostgreSQL 由 AutoPrepare 代劳、SQLite 随命令缓存语句，均保持 false）。
 - **实体级列子集更新 `UpdateColumnsAsync<T>(entity, params columns)`**：只把选中属性写入 SET，未选列保持库内值；复用生成 `BindUpdate` 完成转换器/OwnedJson/枚举/类型提示，随后裁掉未选参数并重编号。主键与 `[ConcurrencyCheck]` 恒进 WHERE、版本列 `+1`、租户谓词自动追加。新生成器为选中列 + 主键/版本逐列建参（10 列 SQLite 每操作 A/B：4104 → 3216 B/op，约 −22%）；旧生成器程序集回退“整行建参后裁剪”的兼容路径。`UpdateAsync` 默认行为不变。
+- **管道结构体投影 `pipeline.QueryStructs<T>(sql)`**：原始 SQL + `[Projection] struct` 接入查询管道，单次往返承载多条大结果集且每行零堆对象；参数化 SQL 与活动事务照常生效。
 - **`[Projection] readonly struct` + `QueryStructsAsync<T>`**：结构体投影获得源生成 RowFactory，直查物化为连续结构体数组（每行零堆对象），适合报表/聚合大结果集；投影仍不进表/CRUD/迁移元数据。`[Projection]` 的 AttributeUsage 扩展到 Struct，实体 `[Table]` 仍限 Class。
 - **PostgreSQL AutoPrepare 可配置 `PrepareCacheSize` / `PrepareThreshold`**：默认 100/2（与既有硬编码一致），形状多的应用可调高缓存容量或关闭（0）；连接串显式给出对应键时不覆盖。同步加入连接串改写缓存键，避免不同配置串用改写结果。
 - **MySQL 可选同步逐行读 `UseSynchronousRowRead`**：全量物化（GetAll/ToList/QueryAsync）的逐行读取改走同步 `Read()`；MySQL 5 轮交替实测约 998 ns/行 vs 异步 1846~2043 ns/行。默认关闭（流式行未缓冲时会阻塞线程）；流式 API（QueryAsyncEnumerable/ForEach）始终异步。
@@ -21,6 +22,7 @@
 - **直接查询复用槽参数补建**：`QueryAsync`/`ScalarAsync`/`CountAsync`/`ExecuteAsync`/流式查询的复用槽此前晋升后参数集合为空、带参查询永远回退新建；现首次使用补建参数，参数化直查从第 3 次起真正复用。
 - **LIMIT/OFFSET 参数只创建一次**：SQL 文本侧只消费参数名，`GetQueryParameters` 单点创建，消除每次冷形状构建的“建完即弃”参数对象。
 - **`QueryAsync` 物化容量启发**：原始 SQL 直查改用会话内上次行数作为初始容量（原硬编码 16），重复大结果集查询免去 ArrayPool 扩容拷贝。
+- **大结果集物化削减无效清零**：`ResultListReader` 对不含引用的纯值 struct 数组跳过 `Array.Clear`（按 `RuntimeHelpers.IsReferenceOrContainsReferences<T>` 折叠），结构体投影大结果集不再为池数组付 O(n) 清零。
 - **INSERT 异步层扁平化**：`FinishInsertAsync` 内联回 `InsertCoreAsync`，事务内逐条插入少一个 async 状态机帧/行。
 - **查询参数延迟物化**：`QueryClause` 的标量参数改为 `ParameterBinding`（名/值，24B 结构），`DbParameter` 只在新建命令或拦截器上下文需要时创建；命令复用槽命中时就地写值，零驱动参数对象。长会话 2 参链式查询探针：1328 → 1200 B/op、8216 → 7899 ns/op（约 −10% / −4%）。租户默认过滤参数同步改为延迟绑定（`From<T>()` 不再预建 DbParameter）。
 

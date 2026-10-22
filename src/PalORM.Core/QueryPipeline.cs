@@ -65,6 +65,36 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         return new PipelineScalar<TProvider>(this, index);
     }
 
+    /// <summary>入队一条原始 SQL 的结构体投影查询——结果行物化为连续结构体数组（每行零堆对象），
+    /// 与实体查询共享同一条批处理管道（Provider 支持时一次往返）。
+    /// <para><b>契约</b>：SQL 逐字执行，默认过滤（软删/租户）不适用（与 <c>QueryStructsAsync</c>
+    /// 同口径）；结果按序号映射到结构体属性声明序。builder 级配置（缓存/追踪/事务）不参与本入口。</para></summary>
+    /// <typeparam name="T">`[Projection]` 结构体类型。</typeparam>
+    /// <param name="sql">原始查询 SQL（FormattableString 参数化）。</param>
+    /// <returns>执行完成前为未就绪状态的类型化结果句柄。</returns>
+    public PipelineStructQuery<T, TProvider> QueryStructs<T>(FormattableString sql)
+        where T : struct
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        ValidateAdd();
+        string text = FormattableSqlFormatter.FormatCached(sql.Format, 0, sql.ArgumentCount);
+        var parameters = new DbParameter[sql.ArgumentCount];
+        for (int i = 0; i < sql.ArgumentCount; i++)
+            parameters[i] = TProvider.CreateParameter(
+                ParameterNameCache.GetName(i), sql.GetArgument(i));
+        var item = new PipelineStructList<T>(
+            DataSession<TProvider>.GetRowFactory<T>(), _session.PreferSynchronousRowRead)
+        {
+            Sql = text,
+            Parameters = parameters,
+            Context = default,
+            Interceptors = [],
+            Timeout = _session.PipelineCommandTimeout,
+        };
+        _items.Add(item);
+        return new PipelineStructQuery<T, TProvider>(this, _items.Count - 1);
+    }
+
     /// <summary>执行全部已入队的查询。只能调用一次；未入队任何查询时为空操作。</summary>
     /// <param name="ct">取消令牌（整批生效）。</param>
     /// <exception cref="InvalidOperationException">重复执行、与并行读作用域重叠或 Provider
@@ -131,13 +161,21 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         return false;
     }
 
-    private int Add<T>(QueryBuilder<T> builder, PipelineKind kind)
-        where T : class, new()
+    private void ValidateAdd()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_executed)
             throw new InvalidOperationException(
                 "Queries cannot be added after ExecuteAsync has been called.");
+        if (TProvider.SupportsQueryPipeline && _items.Count >= TProvider.MaxPipelineCommands)
+            throw new InvalidOperationException(
+                $"A query pipeline supports at most {TProvider.MaxPipelineCommands} commands for this provider.");
+    }
+
+    private int Add<T>(QueryBuilder<T> builder, PipelineKind kind)
+        where T : class, new()
+    {
+        ValidateAdd();
         if (builder._cacheKey is not null)
             throw new NotSupportedException("WithCache is not supported inside a query pipeline.");
         if (builder._prepared)
@@ -150,9 +188,6 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         if (builder._transaction is not null)
             throw new NotSupportedException(
                 "Builder-level WithTransaction is not supported inside a query pipeline; use the session transaction.");
-        if (TProvider.SupportsQueryPipeline && _items.Count >= TProvider.MaxPipelineCommands)
-            throw new InvalidOperationException(
-                $"A query pipeline supports at most {TProvider.MaxPipelineCommands} commands for this provider.");
 
         string sql = kind == PipelineKind.Count ? builder.BuildCountSql() : builder.BuildSql();
         IReadOnlyList<DbParameter> parameters =
@@ -282,6 +317,18 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         }
     }
 
+    private sealed class PipelineStructList<T>(Func<DbDataReader, T> factory, bool syncRead) : PipelineItem
+        where T : struct
+    {
+        internal override async ValueTask<PipelineMaterialization> MaterializeAsync(
+            DbDataReader reader, CancellationToken ct)
+        {
+            List<T> list = await ResultListReader.ReadAllAsync(
+                reader, factory, 16, ct, syncRead: syncRead).ConfigureAwait(false);
+            return new PipelineMaterialization(list, list.Count);
+        }
+    }
+
     private sealed class PipelineFirst<T>(Func<DbDataReader, T> factory) : PipelineItem
         where T : class, new()
     {
@@ -329,6 +376,28 @@ public readonly struct PipelineQuery<T, TProvider>
     }
 
     /// <summary>查询结果列表（执行完成前访问会抛 <see cref="InvalidOperationException"/>）。</summary>
+    public List<T> Value => _pipeline is null
+        ? throw new InvalidOperationException("This pipeline result handle is uninitialized.")
+        : (List<T>)_pipeline.GetResult(_index)!;
+}
+
+/// <summary>管道中结构体投影查询的结果句柄——<c>ExecuteAsync</c> 完成后读 <see cref="Value"/>。</summary>
+/// <typeparam name="T">`[Projection]` 结构体类型。</typeparam>
+/// <typeparam name="TProvider">数据库 Provider 类型。</typeparam>
+public readonly struct PipelineStructQuery<T, TProvider>
+    where T : struct
+    where TProvider : IDbProvider
+{
+    private readonly QueryPipeline<TProvider>? _pipeline;
+    private readonly int _index;
+
+    internal PipelineStructQuery(QueryPipeline<TProvider> pipeline, int index)
+    {
+        _pipeline = pipeline;
+        _index = index;
+    }
+
+    /// <summary>结构体结果列表（执行完成前访问会抛 <see cref="InvalidOperationException"/>）。</summary>
     public List<T> Value => _pipeline is null
         ? throw new InvalidOperationException("This pipeline result handle is uninitialized.")
         : (List<T>)_pipeline.GetResult(_index)!;
