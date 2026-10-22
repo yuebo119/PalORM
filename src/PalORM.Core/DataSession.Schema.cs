@@ -76,6 +76,8 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        // DDL 与会话级 PRAGMA/ANALYZE 都可能改写连接态——标脏，下一次会话初始化统一复位。
+        MarkConnectionStateUnknownForRawSql();
         _lastMigrationSkippedIndexes = [];  // ITM-765：每次迁移重置跳过清单
         // 评审 2026-09-02 第二批（ADR-J）：实体全集以 TableNames 为键源——legacy CreateTableSql
         // 已从生成物移除，方言 DDL（CreateTableSqlByDialect）是唯一执行真源。
@@ -283,6 +285,8 @@ public sealed partial class DataSession<TProvider>
     public DbConnection GetRawConnection()
     {
         _operationState.EnsureAvailable();
+        // 逃生舱交出的是不受门禁约束的原生连接——连接态从此不可信，标脏交给下次初始化复位。
+        MarkConnectionStateUnknownForRawSql();
         return _conn;
     }
 }

@@ -91,6 +91,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     private static class ProviderDelegates
     {
         public static readonly Func<Exception, bool> IsTransient = TProvider.IsTransient;
+        public static readonly Action<DbConnection> MarkStateUnknown = TProvider.MarkConnectionStateUnknown;
     }
     /// <summary>并行读作用域的连接池（ARCH-001）——作用域内创建的读连接（全部）与其中空闲可复用的。
     /// ITM-796（r23）：并发读租约（最多 MaxParallelReads 路）可同时进入获取/归还路径，
@@ -707,7 +708,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     internal bool IsConnectionHealthyForRent
         => _conn.State == System.Data.ConnectionState.Open;
 
-    internal void PrepareForRent() => _operationState.Unpark();
+    /// <summary>租出准备：驻留态复位 + Provider 连接态复位。后者对干净 SQLite 句柄是零往返
+    /// （脏标记机制见 <see cref="IDbProvider.MarkConnectionStateUnknown"/>），网络驱动为 no-op；
+    /// 修复池化会话跨租期携带上一租期原生 SQL 改写的连接态。</summary>
+    internal async ValueTask PrepareForRentAsync(CancellationToken ct)
+    {
+        _operationState.Unpark();
+        await TProvider.InitializeConnectionAsync(_conn, ct).ConfigureAwait(false);
+        if (_readConnection is { State: ConnectionState.Open } readConnection
+            && _readConnInitializer is not null)
+        {
+            await _readConnInitializer(readConnection, ct).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>停止后台操作，释放连接。幂等。
     /// <para><b>池化会话</b>（经 <see cref="DataSessionPool{TProvider}.RentAsync"/> 租出）：
@@ -1177,7 +1190,12 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// MigrateAsync 的 ApplyTableDdlAsync 持租约调用本方法（Schema.cs），加租约会自撞
     /// "already active"（r23 修复实测坐实后回滚）。公共调用方应在无飞行操作时调用
     ///（会话常规使用形态天然满足）；构造期读取（CommandTimeout/事务）的门禁由调用方租约覆盖。</summary>
-    public SessionBatch<TProvider> CreateBatch() => new(this);
+    public SessionBatch<TProvider> CreateBatch()
+    {
+        // 批量脚本承载任意用户 SQL（含 DDL/PRAGMA）——入口即标脏，连接态复位交给 Provider。
+        MarkConnectionStateUnknownForRawSql();
+        return new SessionBatch<TProvider>(this);
+    }
 
     internal DbCommand CreateCommandForBatch() => CreateCommand();
 
@@ -1206,6 +1224,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         command.CommandTimeout = _commandTimeoutSeconds;
         return command;
     }
+
+    /// <summary>原生 SQL / 存储过程 / DDL / 裸连接改写了连接态——通知 Provider 把该物理连接
+    /// 标记为"下次会话初始化需复位"（SQLite 实现只重设 foreign_keys；网络驱动默认 no-op）。</summary>
+    internal void MarkConnectionStateUnknownForRawSql()
+        => TProvider.MarkConnectionStateUnknown(_conn);
 
     /// <summary>刀3（2026-10-13 二轮）：复用命令的状态守卫式重设——Transaction/CommandTimeout
     /// 同值不重设（SqliteCommand.Transaction setter 含连接归属验证，长会话循环里同值重设是
@@ -1537,6 +1560,27 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         }
     }
 
+    /// <summary>直接查询复用槽晋升后的首次使用：槽只预置命令文本，不预置参数——此处补建一次
+    /// 参数对象（后续命中只写 Value）。只在参数集合为空时动作；非空但数量不匹配说明形态/
+    /// 租户作用域已漂移，交由 <see cref="TryBindFormattableValuesInPlace"/> 返回 false 回退新建。</summary>
+    private void EnsureReusableDirectParameters(
+        DbCommand command, FormattableString? sql, EntityFeatures features)
+    {
+        if (command.Parameters.Count != 0)
+            return;
+        if (sql is not null)
+            BindFormattableParameters(command, sql);
+        BindDefaultFilterParameters(command, features);
+    }
+
+    /// <summary>无默认过滤形态的重载（原始 SQL 入口：QueryAsync/Scalar/Execute/流式）。</summary>
+    private static void EnsureReusableDirectParameters(DbCommand command, FormattableString? sql)
+    {
+        if (command.Parameters.Count != 0 || sql is null)
+            return;
+        BindFormattableParameters(command, sql);
+    }
+
     /// <summary>P1-1（2026-10-12 全量重读）：直查族（QueryAsync/Scalar/Count/聚合/
     /// QueryAsyncEnumerable/ExecuteAsync）的命令复用入口——From&lt;T&gt; 查询管线（A9）同槽
     /// 共用（C15 按形状计数使交替 SQL 形态永不互相淘汰）。守卫：非并行读作用域 + 主连接形态
@@ -1545,9 +1589,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// <see cref="TryBindFormattableValuesInPlace"/> 就地写参数值）。</summary>
     private DbCommand? TryAcquireReusableDirectCommand(string sql)
     {
-        ReusableQuerySlot? slot = _querySlot;
-        if (slot is null || _operationState.ParallelReadsEnabled)
+        if (_operationState.ParallelReadsEnabled)
             return null;
+        // 惰性创建（首个直查时）——纯直查会话此前从不建槽，晋升永不生效；与 From<T>() 的
+        // 惰性形态同源，并发竞态良性（引用写原子、败者被 GC）。
+        ReusableQuerySlot slot = _querySlot ??= new ReusableQuerySlot(TProvider.PrepareReusedCommands);
         return slot.TryAcquire(_conn, sql);
     }
 
@@ -1603,6 +1649,44 @@ internal sealed class ReusableQuerySlot
     /// 计数按形状后，交替形状永不晋升（原计数全体未命中使交替形态反复 Dispose+重建晋升命令）。</summary>
     public string? LastCountedSql;
 
+    /// <summary>晋升时是否请求服务端预编译（由 Provider 能力位决定）。</summary>
+    private readonly bool _prepareOnPromotion;
+
+    /// <summary>本次晋升尚待预编译——首次执行前由 <see cref="EnsurePreparedAsync"/> 消费一次。</summary>
+    private bool _needsPrepare;
+
+    /// <summary>预编译失败后本槽退化为未预编译形态，不再重试。</summary>
+    private bool _prepareFailed;
+
+    internal ReusableQuerySlot(bool prepareOnPromotion)
+        => _prepareOnPromotion = prepareOnPromotion;
+
+    /// <summary>晋升后的首次执行前调用一次：预编译是优化而非契约，失败静默退化，
+    /// 真正的连接/语句错误由执行路径原样上报。</summary>
+    internal async ValueTask EnsurePreparedAsync(CancellationToken ct)
+    {
+        if (!_needsPrepare)
+            return;
+        _needsPrepare = false;
+        if (_prepareFailed || Command is not { } command)
+            return;
+        try
+        {
+            await command.PrepareAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消不是预编译缺陷——恢复待预编译标记，下一次执行再试。
+            _needsPrepare = true;
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _prepareFailed = true;
+            _ = exception;
+        }
+    }
+
     /// <summary>同一 (实体类型, 操作) 的晋升阈值——低于此次数走新建路径（对齐 PL-2，
     /// 防"每操作一会话"的抛弃式用法泄漏命令）。</summary>
     internal const int PromotionThreshold = 3;
@@ -1641,6 +1725,7 @@ internal sealed class ReusableQuerySlot
         Sql = sql;
         Connection = connection;
         Command = promoted;
+        _needsPrepare = _prepareOnPromotion;
         return promoted;
     }
 }

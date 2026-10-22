@@ -131,17 +131,20 @@ public static class QueryBuilderExtensions
                 : null;
             DbCommand cmd;
             bool parametersBound;
+            bool usingReusable;
             if (reusable is null
                 || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, state.Parameters)))
             {
                 cmd = connection.CreateCommand();
                 ownedCommand = cmd;
                 parametersBound = false;
+                usingReusable = false;
             }
             else
             {
                 cmd = reusable;
                 parametersBound = reusable.Parameters.Count > 0;
+                usingReusable = true;
             }
 
             if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
@@ -149,6 +152,7 @@ public static class QueryBuilderExtensions
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
             cmd.Transaction = state.BoundTransaction;
             if (!parametersBound) AddParameters(cmd, state.Parameters);
+            await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -231,17 +235,20 @@ public static class QueryBuilderExtensions
                 : null;
             DbCommand cmd;
             bool parametersBound;
+            bool usingReusable;
             if (reusable is null
                 || (reusable.Parameters.Count > 0 && !TryCopyParameterValues(reusable, state.Parameters)))
             {
                 cmd = connection.CreateCommand();
                 ownedCommand = cmd;
                 parametersBound = false;
+                usingReusable = false;
             }
             else
             {
                 cmd = reusable;
                 parametersBound = reusable.Parameters.Count > 0;
+                usingReusable = true;
             }
 
             if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
@@ -249,6 +256,7 @@ public static class QueryBuilderExtensions
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
             cmd.Transaction = state.BoundTransaction;
             if (!parametersBound) AddParameters(cmd, state.Parameters);
+            await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
             await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -272,6 +280,11 @@ public static class QueryBuilderExtensions
                 await state.ReadConnReturner(connection, healthy).ConfigureAwait(false);
         }
     }
+
+    /// <summary>复用命令晋升后的首次执行前预编译（条件内聚到本助手，调用点不新增分支）。</summary>
+    private static ValueTask EnsureReusablePreparedAsync(
+        ReusableQuerySlot? slot, bool usingReusable, CancellationToken token)
+        => usingReusable && slot is not null ? slot.EnsurePreparedAsync(token) : default;
 
     /// <summary>执行查询并返回全部实体列表。
     /// <para>配置 <c>WithCache</c> 时先查缓存：命中返回新 List，但元素是共享实体实例（浅拷贝契约，见 WithCache 文档）；
@@ -977,6 +990,8 @@ public static class QueryBuilderExtensions
         try
         {
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, ct).ConfigureAwait(false);
+            // 调用方提供的完整 SQL——可能含多语句/状态改写，标脏交给 Provider 复位。
+            builder._markStateUnknown?.Invoke(connection);
             command = connection.CreateCommand();
             command.Transaction = builder.GetActiveTransaction();
             command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0);
@@ -1074,6 +1089,7 @@ public static class QueryBuilderExtensions
             using SessionOperationState.SessionOperationLease operationLease =
                 builder._operationState.Enter();
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(true, ct).ConfigureAwait(false);
+            builder._markStateUnknown?.Invoke(connection);
             DbTransaction? transaction = builder.GetActiveTransaction();
             // S5：写形态接查询槽复用。槽晋升时命令参数集合为空，本次 AddParameters 后
             // 集合持久持有；后续同形状只就地写 Value（R-UNNESTB 同纪律）。
@@ -1104,6 +1120,8 @@ public static class QueryBuilderExtensions
                 if (!string.Equals(command.CommandText, sql, StringComparison.Ordinal))
                     command.CommandText = sql;
                 if (!parametersBound) AddParameters(command, updateParameters);
+                await EnsureReusablePreparedAsync(builder._querySlot, reusable is not null, ct)
+                    .ConfigureAwait(false);
                 NotifyInterceptorsOnBefore(interceptors, context);
                 await PrepareCommandAsync(command, prepared, ct).ConfigureAwait(false);
                 int affectedRows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);

@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1126 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1138 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -188,7 +188,22 @@
 | `IdleCount` | 空闲会话数（诊断观测） |
 | `DataSessionFactory<TProvider>(options, maxIdleSize = 16)` / `IDataSessionFactory<TProvider>` | 池的 DI 友好封装：注册为单例，请求作用域内 `RentAsync` 租出、`DisposeAsync` 归还；不需要额外 DI 包依赖 |
 
-归还语义：瞬态状态（`WithTenant`/`IgnoreFilters`/`WithIsolationLevel`/`WithTimeout`/`WithRetry`/`WithCircuitBreaker` 覆写、`AddInterceptor` 加项）全部复位；**复用槽（命令/参数池）、读连接、物化容量启发保留**——跨租期存活是池化的核心收益（单行 CRUD/查询命令复用槽在"一请求一会话"形态下不经池化永不激活）。归还门禁：活动事务、未消费的流式枚举器、并行读作用域未收口时 `DisposeAsync` 抛出。空闲上限：满员归还的会话真实释放（不放大物理连接占用）。SQLite 本地实测（探针）：GetByKey per-op 会话 45.5µs → 池化 3.3µs（13.8×），与长会话（2.5µs）只差约 1µs 租还成本。
+归还语义：瞬态状态（`WithTenant`/`IgnoreFilters`/`WithIsolationLevel`/`WithTimeout`/`WithRetry`/`WithCircuitBreaker` 覆写、`AddInterceptor` 加项）全部复位；**复用槽（命令/参数池）、读连接、物化容量启发保留**——跨租期存活是池化的核心收益（单行 CRUD/查询命令复用槽在"一请求一会话"形态下不经池化永不激活）。归还门禁：活动事务、未消费的流式枚举器、并行读作用域未收口时 `DisposeAsync` 抛出。空闲上限：满员归还的会话真实释放（不放大物理连接占用）。SQLite 本地实测（探针）：GetByKey per-op 会话 45.5µs → 池化 3.3µs（13.8×），与长会话（2.5µs）只差约 1µs 租还成本。租出时重新执行 Provider 连接态复位：干净 SQLite 句柄零往返，脏句柄只重设 `foreign_keys`——修复上一租期原生 SQL 改写的连接态带入下一租期。
+
+### 查询管道（QueryPipeline，请求级单往返）
+
+把多条彼此独立的**只读**查询合并为一次数据库往返。PostgreSQL 走 `NpgsqlBatch`（本机实测 4 条单键查询 249µs → 72~79µs/条，约 3.2~3.4×）；其余 Provider 回退顺序执行（语义一致、无往返收益）。
+
+| API | 说明 |
+|------|------|
+| `session.CreatePipeline()` | 创建管道。单次使用；`ExecuteAsync` 前可继续入队 |
+| `pipeline.Query(builder)` → `PipelineQuery<T, TProvider>` | 入队实体列表查询；执行后 `.Value` 为 `List<T>` |
+| `pipeline.QueryFirst(builder)` → `PipelineFirst<T, TProvider>` | 入队首行查询（自动 `Take(1)`）；执行后 `.Value` 为 `T?` |
+| `pipeline.Count(builder)` → `PipelineScalar<TProvider>` | 入队 COUNT；执行后 `.Value` 为 `long` |
+| `pipeline.ExecuteAsync(ct)` | 执行整批。活动事务自动绑定；各结果按入队顺序存放 |
+| `pipeline.Dispose()` | 释放句柄（结果随之失效） |
+
+契约：builder 入队即视为被消费（参数对象挂到批命令上，不得再次执行）；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝；与并行读作用域互斥；拦截器按逻辑查询逐个 OnBefore/OnAfter，整批失败时 OnError 覆盖全部逻辑查询。
 
 ### 弹性配置
 
@@ -267,8 +282,11 @@
 | `SupportsReturningClause` | static abstract | PG/SQLite true / MySQL false |
 | `CurrentTimestampExpression` | static abstract | `CURRENT_TIMESTAMP` |
 | `IsTransient(exception)` | static virtual | 瞬时故障判定 |
-| `InitializeConnectionAsync(conn, ct)` | static virtual | SQLite PRAGMA FK+WAL（整组每物理连接一次，`foreign_keys` 每会话重设） |
-| `InvalidateConnectionInitialization(conn)` | static virtual | 会话 SQL 执行前作废物理连接的已初始化登记（默认无操作） |
+| `InitializeConnectionAsync(conn, ct)` | static virtual | SQLite PRAGMA 初始化：整组调优每物理连接一次；干净句柄后续会话零往返，脏句柄只重设 `foreign_keys` |
+| `InvalidateConnectionInitialization(conn)` | static virtual | 会话 SQL 执行前作废物理连接的已初始化登记（下次走完整初始化；默认无操作） |
+| `MarkConnectionStateUnknown(conn)` | static virtual | 原生 SQL/DDL/裸连接执行后通知连接态不可信（SQLite 标脏；网络驱动默认 no-op） |
+| `PrepareReusedCommands` | static virtual | 复用命令晋升时是否服务端预编译（MySQL true；PG 由 AutoPrepare 代劳；默认 false） |
+| `SupportsQueryPipeline` / `MaxPipelineCommands` | static virtual | 是否支持批查询管道及其语句上限（PG true/64；默认 false/0） |
 | `IsUniqueViolation(exception)` | static virtual | 唯一约束错误码 |
 | `IsDuplicateSchemaObject(exception)` | static virtual | 架构对象已存在 |
 | `BulkInsertAsync(...)` | static virtual | Provider 原生批量 |

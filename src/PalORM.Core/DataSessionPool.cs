@@ -84,7 +84,17 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
             rented = await DataSession<TProvider>.CreateAsync(_options, ct).ConfigureAwait(false);
             rented.MarkPooled(this);
         }
-        rented.PrepareForRent();
+        try
+        {
+            await rented.PrepareForRentAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // 连接态复位失败（连接已死/会话 SQL 不可重放）——丢弃该会话，不让坏连接进入租期。
+            try { await rented.TearDownFromPoolAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { _ = cleanupException; }
+            throw;
+        }
         return rented;
     }
 
