@@ -286,7 +286,11 @@ internal static class RegistryEmitter
             ? $"key => CommandFactory_{m.GeneratedTypeSuffix}.ConvertDeleteKey(key)"
             : "null";
         sb.AppendLine($"                    initUpdateParameters: (parameters, off) => CommandFactory_{m.GeneratedTypeSuffix}.InitUpdateParameters(parameters, off),");
-        sb.AppendLine($"                    convertDeleteKey: {convertKeyArg}),");
+        sb.AppendLine($"                    convertDeleteKey: {convertKeyArg},");
+        // 2026-10-22：列子集更新——逐 SET 列绑定 + WHERE（主键/版本）绑定；旧生成器程序集
+        // 无此二委托，运行时回退全量 BindUpdate + 裁剪参数的兼容路径。
+        sb.AppendLine($"                    bindUpdateColumn: (obj, parameter, columnIndex) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateColumn(obj, parameter, columnIndex),");
+        sb.AppendLine($"                    bindUpdateWhere: (obj, cmd, parameterOffset) => CommandFactory_{m.GeneratedTypeSuffix}.BindUpdateWhere(obj, cmd, parameterOffset)),");
         string insertColumns = BuildStringArrayLiteral(
             columns.Where(static column => column.IsInsertable)
                 .Select(static column => column.ColumnName));

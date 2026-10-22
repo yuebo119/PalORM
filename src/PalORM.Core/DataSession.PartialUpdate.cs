@@ -16,9 +16,9 @@ public sealed partial class DataSession<TProvider>
     /// <c>version = version + 1</c>，受影响 0/非 1 行抛 <see cref="ConcurrencyConflictException"/>，
     /// 成功后回填内存 version；租户会话自动追加 <c>tenant_id = @__tenant0</c>；活动事务照常绑定。
     /// 选择主键、并发令牌、租户列、计算列或非映射属性会在访问数据库前明确失败。</para>
-    /// <para><b>性能边界</b>：本实现仍由生成绑定器创建整行参数后裁掉未选中项（客户端分配
-    /// 与整行更新同量级），收益在 SQL 文本、服务端 SET 列数与网络值负载；宽行大值时是主要收益面。
-    /// 若需要连客户端参数创建也降到子集量级，需源生成器发射逐列绑定器（后续可按基准决定）。</para></summary>
+    /// <para><b>性能</b>：新生成器为选中列 + 主键/版本逐列建参，客户端参数分配随子集下降
+    /// （10 列 SQLite 每操作 A/B：4104 → 3216 B/op，约 −22%）；旧生成器程序集回退“整行建参后
+    /// 裁剪”的兼容路径。SQL 文本与服务端 SET 列数同样只含选中列。</para></summary>
     /// <typeparam name="T">实体类型。</typeparam>
     /// <param name="entity">携带新值与主键/版本值的实体。</param>
     /// <param name="columns">要更新的属性表达式（集合表达式，如 <c>[x =&gt; x.Name, x =&gt; x.Score]</c>），
@@ -70,17 +70,34 @@ public sealed partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand(transaction);
         cmd.CommandText = sql;
         cmd.CommandTimeout = _commandTimeoutSeconds;
-        // 生成绑定器按完整 SET 列序建参（转换器/OwnedJson/枚举/字节数组类型提示同源），
-        // 随后裁掉未选中的 SET 参数并把保留参数重编号为 @p0…。
-        bindUpdate(cmd, entity);
-        // PARAM-REUSE-OK[fresh] 本命令每次操作新建，参数集合仅本次绑定后裁剪一次，不跨执行复用
-        for (int index = plan.UpdateColumns.Count - 1; index >= 0; index--)
+        if (plan.BindUpdateColumn is { } bindColumn && plan.BindUpdateWhere is { } bindWhere)
         {
-            if (!selected.Contains(index))
-                cmd.Parameters.RemoveAt(index);
+            // 新生成器：只为选中 SET 列 + 主键/版本建参（客户端分配降到子集量级）；
+            // 值表达式与全量 BindUpdate 同一生成真源（转换器/OwnedJson/枚举/类型提示）。
+            int parameterIndex = 0;
+            foreach (int oldIndex in selected)
+            {
+                DbParameter parameter = TProvider.CreateParameter(
+                    ParameterNameCache.GetName(parameterIndex), DBNull.Value);
+                bindColumn(entity, parameter, oldIndex);
+                cmd.Parameters.Add(parameter);
+                parameterIndex++;
+            }
+            bindWhere(entity, cmd, parameterIndex);
         }
-        for (int index = 0; index < cmd.Parameters.Count; index++)
-            cmd.Parameters[index].ParameterName = ParameterNameCache.GetName(index);
+        else
+        {
+            // 旧生成器兼容：按完整 SET 列序建参后裁掉未选中项，再把保留参数重编号为 @p0…。
+            bindUpdate(cmd, entity);
+            // PARAM-REUSE-OK[fresh] 本命令每次操作新建，参数集合仅本次绑定后裁剪一次，不跨执行复用
+            for (int index = plan.UpdateColumns.Count - 1; index >= 0; index--)
+            {
+                if (!selected.Contains(index))
+                    cmd.Parameters.RemoveAt(index);
+            }
+            for (int index = 0; index < cmd.Parameters.Count; index++)
+                cmd.Parameters[index].ParameterName = ParameterNameCache.GetName(index);
+        }
         if (tenantFiltered)
             BindDefaultFilterParameters(cmd, info.Features);
 

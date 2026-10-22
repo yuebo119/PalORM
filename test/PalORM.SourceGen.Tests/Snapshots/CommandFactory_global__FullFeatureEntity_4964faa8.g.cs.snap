@@ -131,6 +131,36 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.Value = entity.Version; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>
+    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)
+    {
+        var entity = (global::FullFeatureEntity)entityObject;
+        switch (columnIndex)
+        {
+            case 0: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Code; break;
+            case 1: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Kind; break;
+            case 2: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); break;
+            case 3: parameter.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); break;
+            case 4: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.RawJson; break;
+            case 5: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.UniqueToken; break;
+            case 6: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Tier; break;
+            case 7: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Sku; break;
+            case 8: parameter.DbType = global::System.Data.DbType.Decimal; parameter.Value = (object)entity.Weight; break;
+            case 9: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.RawKind; break;
+            case 10: parameter.DbType = global::System.Data.DbType.String; parameter.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; break;
+            case 11: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.SensitiveValue; break;
+            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));
+        }
+    }
+
+    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>
+    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)
+    {
+        var entity = (global::FullFeatureEntity)entityObject;
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 0); p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 1); p.Value = entity.Version; cmd.Parameters.Add(p); }
+    }
+
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, global::FullFeatureEntity entity, int paramOffset)
     {

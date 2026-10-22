@@ -61,6 +61,24 @@ internal static class CommandFactory_global__ReservedWordEntity_c143a9c9
         { var p = cmd.CreateParameter(); p.ParameterName = "@p1"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>
+    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)
+    {
+        var entity = (global::ReservedWordEntity)entityObject;
+        switch (columnIndex)
+        {
+            case 0: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Value; break;
+            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));
+        }
+    }
+
+    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>
+    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)
+    {
+        var entity = (global::ReservedWordEntity)entityObject;
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 0); p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+    }
+
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, global::ReservedWordEntity entity, int paramOffset)
     {

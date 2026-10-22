@@ -71,6 +71,26 @@ internal static class CommandFactory_global__InheritedEntity_3f5411cb
         { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 
+    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>
+    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)
+    {
+        var entity = (global::InheritedEntity)entityObject;
+        switch (columnIndex)
+        {
+            case 0: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Name; break;
+            case 1: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.CreatedBy; break;
+            case 2: parameter.DbType = global::System.Data.DbType.DateTimeOffset; parameter.Value = (object)entity.CreatedAt; break;
+            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));
+        }
+    }
+
+    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>
+    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)
+    {
+        var entity = (global::InheritedEntity)entityObject;
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 0); p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+    }
+
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
     internal static void BindUpdateValues(global::System.Data.Common.DbParameter[] parameters, global::InheritedEntity entity, int paramOffset)
     {
