@@ -77,6 +77,9 @@ internal static class SqlTemplateEmitter
             return null;  // 未填有效名——保持原"不生成"语义（非用户误以为合法的形态）
         if (SyntaxFacts.GetKeywordKind(templateName) != SyntaxKind.None)
             return Invalid($"'{templateName}' is a C# keyword and cannot be used as a generated field name");
+        // 2026-10-22 终审 P2-10：Render 的宿主类名固定为 SqlTemplates，同名字段会 CS0542。
+        if (string.Equals(templateName, "SqlTemplates", StringComparison.Ordinal))
+            return Invalid("'SqlTemplates' conflicts with the generated host class name");
 
         // ITM-719(r20)：宿主形状——Render 硬编码 `public static partial class SqlTemplates`，
         // 方法须为无参非泛型且宿主支持 partial class（record/struct 宿主会 CS0261/CS0111，

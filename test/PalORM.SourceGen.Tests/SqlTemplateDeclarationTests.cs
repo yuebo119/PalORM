@@ -54,6 +54,27 @@ public sealed class SqlTemplateDeclarationTests
     }
 
     [Test]
+    public async Task HostClassNameTemplateName_ReportsPalorm046()
+    {
+        // 2026-10-22 终审 P2-10：Render 固定生成 partial class SqlTemplates，
+        // 同名字段 → CS0542 落 .g.cs。
+        const string source = """
+            using PalORM;
+            public static class C
+            {
+                [SqlTemplate("SqlTemplates")]
+                public static System.FormattableString Q() => $"SELECT 1";
+            }
+            """;
+
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(source, "SqlTemplateHostName");
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALORM046")).IsTrue();
+        await Assert.That(result.GeneratedSources.Any(pair =>
+            pair.Key.StartsWith("SqlTemplate", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
     public async Task ValidTemplate_GeneratesCompilableField()
     {
         // 对照组：合法声明正常生成、无 PALORM046、生成物可编译
