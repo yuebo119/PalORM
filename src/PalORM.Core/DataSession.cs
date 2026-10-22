@@ -1672,7 +1672,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// （FormatCached 注释口径：约 -40B/次 + 省扫描）。校验（裸 @pN 拒绝等）在首次
     /// 未命中构建时执行，纯函数性保证命中项已通过同一校验。</para></summary>
     private static string FormatSqlWithParameters(FormattableString sql)
-        => FormattableSqlFormatter.FormatCached(sql.Format, 0, sql.ArgumentCount);
+        => FormattableSqlFormatter.FormatCached(sql.Format, 0, sql.ArgumentCount, TProvider.Dialect);
 
     /// <summary>FormattableString → DbParameter 绑定。</summary>
     private static void BindFormattableParameters(DbCommand cmd, FormattableString sql)

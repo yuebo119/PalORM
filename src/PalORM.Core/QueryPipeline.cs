@@ -77,7 +77,7 @@ public sealed class QueryPipeline<TProvider> : IDisposable
     {
         ArgumentNullException.ThrowIfNull(sql);
         ValidateAdd();
-        string text = FormattableSqlFormatter.FormatCached(sql.Format, 0, sql.ArgumentCount);
+        string text = FormattableSqlFormatter.FormatCached(sql.Format, 0, sql.ArgumentCount, TProvider.Dialect);
         var parameters = new DbParameter[sql.ArgumentCount];
         for (int i = 0; i < sql.ArgumentCount; i++)
             parameters[i] = TProvider.CreateParameter(

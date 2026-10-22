@@ -29,24 +29,26 @@ internal static class FormattableSqlFormatter
     private const int MaxEntries = 4096;
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (string Format, int BaseIndex, int ArgumentCount), string> ShapeCache = new();
+        (string Format, int BaseIndex, int ArgumentCount, SqlDialect Dialect), string> ShapeCache = new();
 
-    /// <summary>带形状缓存的格式化入口——QueryBuilder 热路径经此调用。</summary>
-    internal static string FormatCached(string format, int baseIndex, int argumentCount)
+    /// <summary>带形状缓存的格式化入口——QueryBuilder 热路径经此调用。
+    /// P2-11：方言进键（MySQL 反斜杠转义改变引号状态机输出）。</summary>
+    internal static string FormatCached(string format, int baseIndex, int argumentCount, SqlDialect dialect)
     {
-        (string Format, int BaseIndex, int ArgumentCount) key = (format, baseIndex, argumentCount);
+        (string Format, int BaseIndex, int ArgumentCount, SqlDialect Dialect) key =
+            (format, baseIndex, argumentCount, dialect);
         // 命中路径零额外开销（与原先的 GetOrAdd 同为一次查表）
         if (ShapeCache.TryGetValue(key, out string? cached)) return cached;
         // 未命中才做容量治理：超限整体清空（自愈式重置）。格式化是纯函数，重建成本远低于
         // "拒写导致缓存冻结在早期形状"的永久失效（与 SqlShapeCache 的拒写纪律不同，
         // 那是因为形状缓存条目构建更贵且可观测计数被外部依赖）。
         if (ShapeCache.Count >= MaxEntries) ShapeCache.Clear();
-        return ShapeCache.GetOrAdd(key, static k => Format(k.Format, k.BaseIndex, k.ArgumentCount));
+        return ShapeCache.GetOrAdd(key, static k => Format(k.Format, k.BaseIndex, k.ArgumentCount, k.Dialect));
     }
 
     /// <summary>便捷重载——委托给纯字符串签名版本（保持既有调用点与契约测试不变）。</summary>
-    internal static string Format(FormattableString sql, int baseIndex = 0)
-        => Format(sql.Format, baseIndex, sql.ArgumentCount);
+    internal static string Format(FormattableString sql, int baseIndex = 0, SqlDialect dialect = SqlDialect.Sqlite)
+        => Format(sql.Format, baseIndex, sql.ArgumentCount, dialect);
 
     /// <summary>把复合格式串格式化为参数化 SQL——<b>纯函数</b>：输出仅由
     /// （<paramref name="format"/>，<paramref name="baseIndex"/>，<paramref name="argumentCount"/>）决定，
@@ -60,7 +62,7 @@ internal static class FormattableSqlFormatter
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
         Justification = "Single-pass composite format scan - three branches (escape/placeholder/literal) + validation.")]
-    internal static string Format(string format, int baseIndex, int argumentCount)
+    internal static string Format(string format, int baseIndex, int argumentCount, SqlDialect dialect = SqlDialect.Sqlite)
     {
         ArgumentNullException.ThrowIfNull(format);
         ArgumentOutOfRangeException.ThrowIfNegative(baseIndex);
@@ -82,6 +84,36 @@ internal static class FormattableSqlFormatter
             for (int index = 0; index < format.Length; index++)
             {
                 char current = format[index];
+
+                // P2-11：引号外的 SQL 注释原样透传——注释内的 {N}/@pN 不是可执行 token，
+                // 既不能参数化也不能触发保留名拦截。-- 与 /* */ 三方言；# 仅 MySQL。
+                if (activeQuote == '\0' && current == '-' && index + 1 < format.Length && format[index + 1] == '-')
+                {
+                    int end = format.IndexOf('\n', index);
+                    int commentEnd = end < 0 ? format.Length : end + 1;
+                    for (int c = index; c < commentEnd; c++)
+                        sb.Append(format[c]);
+                    index = commentEnd - 1;
+                    continue;
+                }
+                if (activeQuote == '\0' && current == '/' && index + 1 < format.Length && format[index + 1] == '*')
+                {
+                    int closeComment = format.IndexOf("*/", index + 2, StringComparison.Ordinal);
+                    int commentEnd = closeComment < 0 ? format.Length : closeComment + 2;
+                    for (int c = index; c < commentEnd; c++)
+                        sb.Append(format[c]);
+                    index = commentEnd - 1;
+                    continue;
+                }
+                if (activeQuote == '\0' && dialect == SqlDialect.MySql && current == '#')
+                {
+                    int end = format.IndexOf('\n', index);
+                    int commentEnd = end < 0 ? format.Length : end + 1;
+                    for (int c = index; c < commentEnd; c++)
+                        sb.Append(format[c]);
+                    index = commentEnd - 1;
+                    continue;
+                }
 
                 // {{ }} 转义全局生效（先于引号状态机——旧行为保持）
                 if (current == '{' && index + 1 < format.Length && format[index + 1] == '{')
@@ -122,6 +154,15 @@ internal static class FormattableSqlFormatter
                 // 引号内其余字符原样透传（含 @pN 与花括号——T9 拦截与占位符替换都不适用）
                 if (activeQuote != '\0')
                 {
+                    // P2-11：MySQL 默认 sql_mode 下反斜杠转义下一字符（\' 不闭合字符串）。
+                    // PG/SQLite 走标准引号语义，反斜杠不是转义，保持旧行为。
+                    if (dialect == SqlDialect.MySql && current == '\\' && index + 1 < format.Length)
+                    {
+                        sb.Append(current);
+                        sb.Append(format[index + 1]);
+                        index++;
+                        continue;
+                    }
                     sb.Append(current);
                     continue;
                 }

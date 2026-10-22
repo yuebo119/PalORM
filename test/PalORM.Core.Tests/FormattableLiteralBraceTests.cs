@@ -59,4 +59,47 @@ public sealed class FormattableLiteralBraceTests
         string formatted = FormattableSqlFormatter.Format("name = 'it''s' AND id = {0}", 0, 1);
         await Assert.That(formatted).IsEqualTo("name = 'it''s' AND id = @p0");
     }
+
+    [Test]
+    public async Task MySqlBackslashEscapedQuote_DoesNotBreakStringState()
+    {
+        // P2-11：MySQL 默认 sql_mode 下 \' 是转义，不闭合字符串
+        string formatted = FormattableSqlFormatter.Format(
+            "name = 'O\\'Brien' AND id = {0}", 0, 1, SqlDialect.MySql);
+        await Assert.That(formatted).IsEqualTo("name = 'O\\'Brien' AND id = @p0");
+    }
+
+    [Test]
+    public async Task Backslash_NonMySqlDialect_IsNotAnEscape()
+    {
+        // PG/SQLite 标准引号语义：\' 关闭字符串，Brien' 开启新串，{0} 在引号内透传
+        string formatted = FormattableSqlFormatter.Format(
+            "name = 'O\\'Brien' AND id = {0}", 0, 1, SqlDialect.Sqlite);
+        await Assert.That(formatted).IsEqualTo("name = 'O\\'Brien' AND id = {0}");
+    }
+
+    [Test]
+    public async Task HoleInsideLineComment_IsNotParameterized()
+    {
+        // P2-11：注释内的 {0}/@p9 不是可执行 token，原样保留；注释后的洞正常替换
+        string formatted = FormattableSqlFormatter.Format(
+            "SELECT 1 -- {0} @p9\nAND id = {1}", 0, 2, SqlDialect.Sqlite);
+        await Assert.That(formatted).IsEqualTo("SELECT 1 -- {0} @p9\nAND id = @p1");
+    }
+
+    [Test]
+    public async Task HoleInsideBlockComment_IsNotParameterized()
+    {
+        string formatted = FormattableSqlFormatter.Format(
+            "SELECT 1 /* {0} @p9 */ AND id = {1}", 0, 2, SqlDialect.Sqlite);
+        await Assert.That(formatted).IsEqualTo("SELECT 1 /* {0} @p9 */ AND id = @p1");
+    }
+
+    [Test]
+    public async Task MySqlHashComment_IsNotParameterized()
+    {
+        string formatted = FormattableSqlFormatter.Format(
+            "SELECT 1 # {0}\nAND id = {1}", 0, 2, SqlDialect.MySql);
+        await Assert.That(formatted).IsEqualTo("SELECT 1 # {0}\nAND id = @p1");
+    }
 }
