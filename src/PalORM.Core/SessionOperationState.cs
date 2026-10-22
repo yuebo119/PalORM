@@ -854,7 +854,7 @@ internal sealed class SessionOperationState
         }
     }
 
-    internal ValueTask DisposeAsync(Func<Task> disposeCore)
+    internal ValueTask DisposeAsync(Func<Task> disposeCore, bool allowFastPath = false)
     {
         TaskCompletionSource? completion;
         Task activeOperation;
@@ -882,6 +882,10 @@ internal sealed class SessionOperationState
             }
 
             _state = 1;
+            // P1 快速释放（2026-10-22）：无在飞操作/事务流/读租约且无拦截器回调时，
+            // 直接启动 disposeCore 并把它当作完成信号，省掉 TCS + 完成 Task 两次分配。
+            if (TryCompleteFastDispose(disposeCore, allowFastPath, out ValueTask fastDispose))
+                return fastDispose;
             // v4.5：TCS 延迟创建 -- 如果操作仍活动，创建 TCS 并等待 Exit 唤醒
             if (_isActive && _activeOperation is null)
             {
@@ -914,6 +918,44 @@ internal sealed class SessionOperationState
         }
 
         return new ValueTask(completion.Task);
+    }
+
+    /// <summary>P1：无可等待资源的释放快路（锁内调用）。成功返回 true 并给出完成信号；
+    /// false 表示应走 TCS 等待路径。拦截器存在时由调用方传 allowFastPath=false（其 Dispose
+    /// 可能回呼会话，保持锁外执行的原路径）。</summary>
+    private bool TryCompleteFastDispose(Func<Task> disposeCore, bool allowFastPath, out ValueTask result)
+    {
+        result = default;
+        if (!allowFastPath || _isActive || _transactionOwner is not null || _activeReadLeases != 0)
+            return false;
+        Task coreTask;
+        try
+        {
+            coreTask = disposeCore();
+        }
+        catch (Exception exception)
+        {
+            _state = 2;
+            result = ValueTask.FromException(exception);
+            return true;
+        }
+        _disposeTask = coreTask;
+        if (coreTask.IsCompleted)
+        {
+            _state = 2;
+            result = new ValueTask(coreTask);
+            return true;
+        }
+        _ = coreTask.ContinueWith(
+            static (_, state) =>
+            {
+                var operationState = (SessionOperationState)state!;
+                lock (operationState._sync) operationState._state = 2;
+            },
+            this, CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        result = new ValueTask(coreTask);
+        return true;
     }
 
     private async Task DisposeAndCompleteAsync(

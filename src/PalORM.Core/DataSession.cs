@@ -726,7 +726,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         // 调用方契约违反；池满或池已释放则降级真实释放）
         if (_pool is not null)
             return ReturnToPoolAsync();
-        return _operationState.DisposeAsync(DisposeCoreAsync);
+        return _operationState.DisposeAsync(DisposeCoreAsync, _interceptors.Count == 0);
     }
 
     /// <summary>池化归还：Park 门禁 → 瞬态复位 → 入队；未被接收（池满/池释放）则 Unpark
@@ -757,7 +757,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             return;
         // 池满/池已释放：Unpark 后走真实释放（连接关闭、槽释放——语义与非池化一致）
         _operationState.Unpark();
-        await _operationState.DisposeAsync(DisposeCoreAsync).ConfigureAwait(false);
+        await _operationState.DisposeAsync(DisposeCoreAsync, _interceptors.Count == 0).ConfigureAwait(false);
     }
 
     /// <summary>拦截器表复位为池基准清单（内容级：清空后按 Priority 重排回填；表实例保留
