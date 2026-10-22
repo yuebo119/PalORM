@@ -40,7 +40,12 @@ public sealed record DbOptions
     {
         if (timeout <= TimeSpan.Zero) return 0;
         double seconds = Math.Ceiling(timeout.TotalSeconds);
-        return seconds >= int.MaxValue ? int.MaxValue : (int)seconds;
+        if (seconds >= int.MaxValue) return int.MaxValue;
+        // P3-10：CancelAfter 上限 = uint.MaxValue-1 毫秒；向上取整的秒值乘 1000 可能越界
+        //（如 CommandTimeout 恰为 MaxCancelAfterMilliseconds），钳到秒级上限。
+        int maxSeconds = (int)(MaxCancelAfterMilliseconds / 1000);
+        int result = (int)seconds;
+        return result > maxSeconds ? maxSeconds : result;
     }
 
     /// <summary>命令超时的库级默认值（30 秒）——Provider 自带命令构造点在调用方未提供

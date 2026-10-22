@@ -1607,16 +1607,23 @@ public partial class DataSession<TProvider>
     /// 实例键控，per-op 会话形态每会话新包装永不命中，每次 BulkUpdate 重付 SELECT VERSION()
     /// 往返；与 local_infile 探测同轮迁 <see cref="CapabilityProbeCache{T}"/>——版本是
     /// 「同一连接串所指服务端」的事实，不是进程级可变状态）。
-    /// 探测异常保守回退 CaseWhen（不把瞬时故障固化为新形态），TTL 让服务端升级在一分钟内生效。</para></summary>
+    /// 探测异常保守回退 CaseWhen（不把瞬时故障固化为新形态），并写 10s 负结果窗口
+    /// 避免故障期每次 BulkUpdate 重付探测超时；TTL 让服务端升级在一分钟内生效。</para></summary>
     private async ValueTask<BatchUpdateSqlBuilder.BatchUpdateForm> ResolveMySqlUpdateFormAsync(CancellationToken ct)
     {
         if (TProvider.Dialect != SqlDialect.MySql)
             return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
 
+        string probeKey = _conn.ConnectionString;
+        // P3-4：负结果窗口内直接降级——探测失败（网络分区/受限账号）时 3s 命令超时
+        // 会在每次 BulkUpdate 重付；与 local_infile 同族纪律（R3/ITM-892）。
+        if (CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.IsNegativeFresh(probeKey))
+            return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
+
         try
         {
             return (await CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.GetOrProbeAsync(
-                _conn.ConnectionString,
+                probeKey,
                 MySqlUpdateFormProbeTtlMilliseconds,
                 async token =>
                 {
@@ -1635,7 +1642,10 @@ public partial class DataSession<TProvider>
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // 探测故障保守回退基线形态（与 local_infile 探测故障降级同族：能力探测不应
-            // 终止整批更新；故障不写缓存，下次重探）。取消原样上抛。
+            // 终止整批更新）。P3-4：故障写 10s 负结果窗口，避免每次 BulkUpdate 重付 3s
+            // 超时；窗口到期自动重探。取消原样上抛。
+            CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.MarkNegative(
+                probeKey, MySqlUpdateFormNegativeTtlMilliseconds);
             return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
         }
     }
@@ -1644,6 +1654,9 @@ public partial class DataSession<TProvider>
     private const long MySQL_8_0_19 = (8L << 40) | (0L << 24) | 19L;
 
     private const int MySqlUpdateFormProbeTtlMilliseconds = 60_000;
+
+    /// <summary>P3-4：版本探测失败后的负结果窗口——与 local_infile 同口径 10s。</summary>
+    private const int MySqlUpdateFormNegativeTtlMilliseconds = 10_000;
 
     /// <summary>解析 MySQL 版本串为可比较键：主版本×2^40 + 次版本×2^24 + 补丁。
     /// 兼容 <c>8.4.11</c>、<c>8.0.36-0ubuntu0.22.04.1</c>、<c>5.7.44-log</c> 等形态
@@ -1943,12 +1956,22 @@ public partial class DataSession<TProvider>
                     DbCommand fresh = CreateCommand();
                     freshCmd = fresh;
                     cmd = fresh;
-                    cmd.Transaction = transaction;
-                    cmd.CommandTimeout = _commandTimeoutSeconds;
-                    cmd.CommandText = BuildInsertReturningBatchSql(
-                        quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
-                    for (int row = start; row < end; row++)
-                        metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
+                    try
+                    {
+                        cmd.Transaction = transaction;
+                        cmd.CommandTimeout = _commandTimeoutSeconds;
+                        cmd.CommandText = BuildInsertReturningBatchSql(
+                            quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
+                        for (int row = start; row < end; row++)
+                            metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
+                    }
+                    catch
+                    {
+                        // P3-1：Create/Bind 阶段抛异常时命令同样必须释放（N6 只覆盖了
+                        // ExecuteReader/Read 窗口）。
+                        await fresh.DisposeAsync().ConfigureAwait(false);
+                        throw;
+                    }
                 }
 
                 try
@@ -1978,6 +2001,16 @@ public partial class DataSession<TProvider>
                     {
                         // 仅支持递增 identity/auto-increment：按升序重建 VALUES 行序；
                         // 降序序列/触发器改写主键不在支持面内（公开文档同口径）。
+                        // P3-2：降序返回值是"反向分配"的确证——排序后回填会把主键给错行。
+                        // 只拒绝严格递减的到达序（不受服务端结果集顺序未定义的干扰）。
+                        bool strictlyDescending = returnedIds.Count > 1;
+                        for (int i = 1; strictlyDescending && i < returnedIds.Count; i++)
+                            strictlyDescending = returnedIds[i - 1] > returnedIds[i];
+                        if (strictlyDescending)
+                            throw new InvalidOperationException(
+                                $"INSERT ... RETURNING for '{typeof(T).Name}' produced strictly descending " +
+                                $"primary keys ({returnedIds[0]} > {returnedIds[^1]}); backfill requires an " +
+                                "ascending identity/auto-increment sequence.");
                         returnedIds.Sort();
                         for (int i = 0; i < rowCount; i++)
                             BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);

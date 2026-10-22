@@ -7,7 +7,7 @@ namespace PalORM;
 /// 仍是 PalORM 内部 API（不写入公共文档/不保证兼容，同 <see cref="BulkOperationFramework"/> 口径）。</para></summary>
 public static class SqlLimits
 {
-    /// <summary>单条语句绑定参数上限——PostgreSQL 协议 int16 上限（三方言最严）。
+    /// <summary>单条语句绑定参数上限——PostgreSQL 协议无符号 16 位上限（65535，三方言最严）。
     /// 超限应分批或改临时表 JOIN；静默生成越界 SQL 会在运行期协议层才报错（ITM-514）。</summary>
     public const int MaxBindParameters = 65535;
 

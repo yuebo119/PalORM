@@ -172,6 +172,24 @@ public readonly struct CrudBindings
         BindUpdateColumn = bindUpdateColumn;
         BindUpdateWhere = bindUpdateWhere;
     }
+
+    /// <summary>P3-15：v4.6 之前的生成器模型程序集二进制兼容 overload——当时的 ctor 是
+    /// 4 参形态（bindInsert 无 paramOffset）。后续版本只在尾部追加可选参数，因此 ≥5 参的
+    /// 历史调用都能命中主 ctor；只有这一代需要显式重载。旧 binder 忽略 offset 是正确语义：
+    /// 该代生成器不发射批量偏移绑定。</summary>
+    public CrudBindings(
+        Action<DbCommand, object> bindInsert,
+        Action<DbCommand, object> bindUpsert,
+        Action<DbCommand, object> bindUpdate,
+        object rowFactory)
+        : this(
+            (cmd, entity, _) => bindInsert(cmd, entity),
+            bindInsertValues: null,
+            bindUpsert,
+            bindUpdate,
+            rowFactory)
+    {
+    }
 }
 
 /// <summary>INSERT/UPSERT/UPDATE 涉及的列名聚合——把三个 IReadOnlyList 打包为单参数。</summary>
@@ -282,6 +300,8 @@ public readonly struct CrudMetadata
     /// <summary>legacy 无方言 CRUD SQL 集（标识符未经引用转义，运行时从不消费）。
     /// 评审 2026-09-02 收敛：方言 SQL（<c>PalORM_Runtime.CommandSqlsByDialect</c>）是唯一真源；
     /// 本字段仅为旧版本生成器模型程序集的注册兼容而保留（经旧 ctor 写入），新代码勿读勿写。</summary>
+    [Obsolete("Legacy SQL payload retained only for pre-dialect generated model assemblies; "
+        + "dialect SQL (CommandSqlsByDialect) is the single source. Do not read or write.")]
     public readonly CommandSqlSet Sqls;
     /// <summary>Insert 参数绑定委托（支持批量 paramOffset 偏移）。</summary>
     public readonly Action<DbCommand, object, int> BindInsert;
@@ -396,7 +416,10 @@ public readonly struct CrudMetadata
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
     /// ModuleInitializer 经此 ctor 传入 legacy SQL 载荷）。新代码请用不含 <paramref name="sqls"/> 的 ctor；
-    /// <paramref name="sqls"/> 仅被存储、从不消费。</summary>
+    /// <paramref name="sqls"/> 仅被存储、从不消费。
+    /// <para>P3-15 边界：二进制兼容覆盖 ≤当前版本的生成器（参数只增不减；v4.6 前的 4 参
+    /// <see cref="CrudBindings"/> 由专用 overload 承接）。高于当前版本的新模型程序集不在
+    /// 兼容面内——升级 Core 后请重新生成。</para></summary>
     /// <param name="sqls">legacy CRUD SQL 集（仅兼容载荷，运行时不消费）。</param>
     /// <param name="bindings">CRUD 委托聚合（BindInsert/BindUpsert/BindUpdate/RowFactory）。</param>
     /// <param name="columns">列名聚合（Insert/Upsert/Update，注册时做只读快照）。</param>
@@ -412,14 +435,18 @@ public readonly struct CrudMetadata
         bool insertBinderValidated = true)
         : this(bindings, columns, incrementVersion, hasDefaultKey, insertBinderValidated)
     {
+#pragma warning disable CS0618 // P3-16：legacy 载荷唯一合法写入点
         Sqls = sqls;
+#pragma warning restore CS0618
     }
 
     /// <summary>深拷贝——<b>新增字段必须同步本方法</b>：漏传在快照层不可见（拷贝后的实例字段为
     /// default），会让优化静默失效或行为改变（PERF_MANAGED_DISCIPLINE 第九节的 Copy 路径检查单）。
     /// </summary>
     internal CrudMetadata Copy()
-        => new(Sqls,
+    {
+#pragma warning disable CS0618 // P3-16：Copy 需原样保留 legacy 载荷（旧模型程序集的读取面）
+        return new(Sqls,
             new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues,
                 InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters,
                 BuildDeleteKeyArray, FillUpdateColumnArrays, UpdateColumnArrayElementTypes,
@@ -428,6 +455,8 @@ public readonly struct CrudMetadata
                 BindUpdateColumn, BindUpdateWhere),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
+#pragma warning restore CS0618
+    }
 
     /// <summary>元素类型表只读快照幂等化（同 CrudColumns.Snapshot——注册期已快照的输入
     /// 在 Copy() 路径直接复用，不二次拷贝；2026-10-06，10-05 审计 P3）。</summary>

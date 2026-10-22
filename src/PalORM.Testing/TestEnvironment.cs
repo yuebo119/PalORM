@@ -90,7 +90,10 @@ public static class TestEnvironment
         => ResolveWithFullOverride(Settings.ConnectionStrings.MySql, _mySqlFullEnvVar);
 
     /// <summary>SQLite 连接串（无凭据，固定 <c>Data Source=:memory:</c>）。</summary>
-    public static string ResolveSqliteConnectionString() => Settings.ConnectionStrings.Sqlite;
+    public static string ResolveSqliteConnectionString()
+        => Settings.ConnectionStrings.Sqlite
+            ?? throw new InvalidDataException(
+                $"{_settingsFileName}: ConnectionStrings.Sqlite is null (explicit JSON null).");
 
     /// <summary>获取默认连接参数（超时/重试/池大小）。JSON 未配置时返回内置默认值。</summary>
     public static DefaultsSection Defaults => Settings.Defaults ?? new DefaultsSection();

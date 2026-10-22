@@ -13,8 +13,9 @@ namespace PalORM.MySql;
 /// <b>原实现在此填 DataTable</b>，并注明"MySqlBulkCopy 对 DataTable 路径有专门优化"——该判断
 /// 经实测证伪：同一批 10K 行 × 4 列，DataTable 每行 372.0/360.0 B、114.2/112.7 ms，
 /// 读取器每行 57.0 B、100.9/100.4 ms（分配 −84%、时间 −11%，两次采样）。</para>
-/// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时内部开新事务包整批。
-/// BulkCopy 失败整批回滚。</para></summary>
+/// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时本类<b>不开启</b>事务，
+/// 由 MySqlBulkCopy 在连接当前上下文执行（语句级原子）。跨批全有或全无语义必须由调用方
+/// 提供事务——P3-13 修正：旧文档称"未传时内部开新事务包整批"，实现从未 BeginTransaction。</para></summary>
 internal static class MySqlBulkCopyInserter
 {
     /// <summary>列映射缓存（PROV-002，2026-09-23）：键 = (目标表, 列集)，值 = 不可变映射数组。

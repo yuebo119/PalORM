@@ -97,6 +97,39 @@ internal sealed class SessionResilienceConfiguratorTests
     }
 
     [Test]
+    public async Task WithRetry_AboveOptionsUpperBound_Throws()
+    {
+        var (_, session) = CreateSession(ZeroResilienceOptions());
+        await using var _ = session;
+
+        // P3-9：With* 链式入口与 DbOptions.Validate 同口径——11 次重试的最坏墙钟
+        // 不可推理（ITM-838 上界 10），不允许绕过构造期校验。
+        await Assert.That(() => session.WithRetry(11)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task WithCircuitBreaker_AboveOptionsUpperBound_Throws()
+    {
+        var (_, session) = CreateSession(ZeroResilienceOptions());
+        await using var _ = session;
+
+        await Assert.That(() => session.WithCircuitBreaker(10_001, TimeSpan.FromSeconds(1)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task WithTimeout_AboveCancelAfterBound_Throws()
+    {
+        var (_, session) = CreateSession(ZeroResilienceOptions());
+        await using var _ = session;
+
+        // CancelAfter 的 delay 上限约 49.7 天；超界值此前会在使用期由 CTS 抛出
+        // 与配置项无关的 ArgumentOutOfRangeException("delay")。
+        await Assert.That(() => session.WithTimeout(TimeSpan.FromDays(60)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task TagWithCaller_EmbedsFileLineAndMemberIntoSqlComment()
     {
         DataSession<FlakyProvider> session = CreateSession(ZeroResilienceOptions()).Session;
