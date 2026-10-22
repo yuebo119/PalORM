@@ -78,9 +78,14 @@ public sealed partial class DataSession<TProvider>
     {
         int tenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
         DbCommand? reused = TryAcquireReusableDirectCommand(sql);
-        if (reused is null || !TryBindFormattableValuesInPlace(reused, where, tenantSlots))
+        if (reused is null)
+            return default;
+        EnsureReusableDirectParameters(reused, where, info.Features);
+        if (!TryBindFormattableValuesInPlace(reused, where, tenantSlots))
             return default;
         ApplyReusableCommandState(reused, activeTransaction, sql);
+        if (_querySlot is { } countSlot)
+            await countSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
         if (tenantSlots > 0)
             reused.Parameters[^1].Value = _tenantId;
         object? scalar = await ExecuteReadScalarAsync(reused, activeTransaction, ct).ConfigureAwait(false);
@@ -197,10 +202,14 @@ public sealed partial class DataSession<TProvider>
         // 租户槽随命令持久，值就地刷新。就地写失败回退下方新建路径。
         int aggregateTenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
         DbCommand? reusedAggregate = TryAcquireReusableDirectCommand(sql);
+        if (reusedAggregate is not null)
+            EnsureReusableDirectParameters(reusedAggregate, original, info.Features);
         if (reusedAggregate is not null
             && TryBindFormattableValuesInPlace(reusedAggregate, original, aggregateTenantSlots))
         {
             ApplyReusableCommandState(reusedAggregate, activeTransaction, sql);
+            if (_querySlot is { } aggregateSlot)
+                await aggregateSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
             if (aggregateTenantSlots > 0)
                 reusedAggregate.Parameters[^1].Value = _tenantId;
             return await ExecuteReadScalarAsync(reusedAggregate, activeTransaction, ct).ConfigureAwait(false);
@@ -292,9 +301,14 @@ public sealed partial class DataSession<TProvider>
     // ─── 存储过程 ──────────────────────────────────────
 
     /// <summary>存储过程入口。</summary>
-    public StoredProcBuilder StoredProc(string name) => new(
-        _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
-        _operationState, _options.ValidateQueryColumnOrder);
+    public StoredProcBuilder StoredProc(string name)
+    {
+        // 存储过程可任意改写连接态（会话设置/临时表）——入口即标脏，下次会话初始化统一复位。
+        MarkConnectionStateUnknownForRawSql();
+        return new StoredProcBuilder(
+            _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
+            _operationState, _options.ValidateQueryColumnOrder);
+    }
 
     /// <summary>流式查询——IAsyncEnumerable 恒定内存。
     /// <para><b>ITM-572/677 警告</b>：SQL 逐字执行，<b>默认过滤（[SoftDelete]/[TenantAware]）不适用</b>——
@@ -311,6 +325,8 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        // 原生 SQL 可能改写连接态（PRAGMA/会话设置）——通知 Provider 标脏，池化/下一会话复位。
+        MarkConnectionStateUnknownForRawSql();
         // 刀1：工厂走每类型静态缓存（[Projection] 兼容——同 QueryEntryAsync）；刀2：事务单次取用。
         Func<DbDataReader, T> streamRowFactory = GetRowFactory<T>();
         DbTransaction? streamTransaction = GetActiveTransaction();
@@ -320,6 +336,8 @@ public sealed partial class DataSession<TProvider>
         // 不被并发使用。就地写失败回退下方新建路径。
         string streamCommandText = FormatSqlWithParameters(sql);
         DbCommand? reusedStream = readFromReplica ? null : TryAcquireReusableDirectCommand(streamCommandText);
+        if (reusedStream is not null)
+            EnsureReusableDirectParameters(reusedStream, sql);
         bool streamInPlace = reusedStream is not null && TryBindFormattableValuesInPlace(reusedStream, sql);
         // F7：租约改 struct——default 形态（复用命令分支）的 MarkHealthy/MarkFailed/DisposeAsync
         // 均为空安全空操作，调用点保持无分支形态（Nullable<T>.Value 是只读属性，经它调用
@@ -332,6 +350,8 @@ public sealed partial class DataSession<TProvider>
             {
                 cmd = reusedStream!;
                 ApplyReusableCommandState(cmd, streamTransaction, streamCommandText);
+                if (_querySlot is { } streamSlot)
+                    await streamSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
             }
             else
             {
@@ -419,6 +439,8 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        // 原生 SQL 可能改写连接态——标脏由 Provider 在下次初始化时复位。
+        MarkConnectionStateUnknownForRawSql();
         // 刀1：工厂走每类型静态缓存（直查族允许 [Projection] 类型——走 RowFactories 视图，
         // 不走 EntityRuntimeInfo 实体视图）；刀2：事务单次取用。
         Func<DbDataReader, T> rowFactory = GetRowFactory<T>();
@@ -428,14 +450,19 @@ public sealed partial class DataSession<TProvider>
         // 命令归槽所有不释放（下一次同形状查询的就地写值前提）；就地写失败回退新建路径。
         string queryCommandText = FormatSqlWithParameters(sql);
         DbCommand? reusedQuery = readFromReplica ? null : TryAcquireReusableDirectCommand(queryCommandText);
+        if (reusedQuery is not null)
+            EnsureReusableDirectParameters(reusedQuery, sql);
         if (reusedQuery is not null && TryBindFormattableValuesInPlace(reusedQuery, sql))
         {
             ApplyReusableCommandState(reusedQuery, activeTransaction, queryCommandText);
+            if (_querySlot is { } querySlot)
+                await querySlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
             await using DbDataReader reusedReader = await reusedQuery.ExecuteReaderAsync(ct).ConfigureAwait(false);
             List<T> reusedList = await ResultListReader.ReadAllAsync(
-                reusedReader, rowFactory, 16, ct,
+                reusedReader, rowFactory, GetMaterializedCapacity<T>(), ct,
                 _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
                 .ConfigureAwait(false);
+            RecordMaterializedCount<T>(reusedList.Count);
             return reusedList;
         }
 
@@ -449,9 +476,10 @@ public sealed partial class DataSession<TProvider>
         // ADR-A 首行列序校验经 onFirstRow 保持"仅在有首行时执行一次"；关闭校验时传 null
         //（Validate 关闭即空操作，省掉每次调用的委托判断）。static lambda 按泛型实例缓存，零分配。
         List<T> list = await ResultListReader.ReadAllAsync(
-            reader, rowFactory, 16, ct,
+            reader, rowFactory, GetMaterializedCapacity<T>(), ct,
             _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null)
             .ConfigureAwait(false);
+        RecordMaterializedCount<T>(list.Count);
         lease.MarkHealthy();
         return list;
     }
@@ -510,14 +538,19 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        MarkConnectionStateUnknownForRawSql();
         // 刀2：事务单次取用（刀1 不适用：Scalar 的 T 是标量类型而非实体，无注册表查找）。
         DbTransaction? scalarTransaction = GetActiveTransaction();
         // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——就地写失败回退下方新建路径
         string scalarCommandText = FormatSqlWithParameters(sql);
         DbCommand? reusedScalar = readFromReplica ? null : TryAcquireReusableDirectCommand(scalarCommandText);
+        if (reusedScalar is not null)
+            EnsureReusableDirectParameters(reusedScalar, sql);
         if (reusedScalar is not null && TryBindFormattableValuesInPlace(reusedScalar, sql))
         {
             ApplyReusableCommandState(reusedScalar, scalarTransaction, scalarCommandText);
+            if (_querySlot is { } scalarSlot)
+                await scalarSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
             object? reusedResult = await reusedScalar.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return NormalizeScalarResult<T>(reusedResult);
         }
@@ -547,6 +580,7 @@ public sealed partial class DataSession<TProvider>
     public async ValueTask<int> ExecuteAsync(FormattableString sql, CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        MarkConnectionStateUnknownForRawSql();
         // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接形态）——重复执行的
         // DDL/DML（建表迁移循环、分批 DELETE 等同文本形态）省命令创建/释放；就地写失败回退
         // 新建路径。复用命令归槽所有（ownsCommand=false，不得释放），事务/超时每次重设。
@@ -556,9 +590,13 @@ public sealed partial class DataSession<TProvider>
         DbCommand? reusedExecute = TryAcquireReusableDirectCommand(executeCommandText);
         DbCommand cmd;
         bool ownsCommand;
+        if (reusedExecute is not null)
+            EnsureReusableDirectParameters(reusedExecute, sql);
         if (reusedExecute is not null && TryBindFormattableValuesInPlace(reusedExecute, sql))
         {
             ApplyReusableCommandState(reusedExecute, executeTransaction, executeCommandText);
+            if (_querySlot is { } executeSlot)
+                await executeSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
             cmd = reusedExecute;
             ownsCommand = false;
         }

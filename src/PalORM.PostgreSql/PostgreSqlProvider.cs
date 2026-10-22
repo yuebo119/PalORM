@@ -169,6 +169,13 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <summary>PostgreSQL 原生支持 RETURNING 子句。</summary>
     public static bool SupportsReturningClause => true;
 
+    /// <summary>多条独立只读查询可经 <see cref="NpgsqlBatch"/> 合并为一次往返。
+    /// 本机实测 4 条单键读从 232~340 µs/条降至 73~118 µs/条（约 3 倍）。</summary>
+    public static bool SupportsQueryPipeline => true;
+
+    /// <summary>管道单批语句上限——避免单次批过大时驱动缓冲与错误归因范围失控。</summary>
+    public static int MaxPipelineCommands => 64;
+
     /// <summary>CURRENT_TIMESTAMP——注意 PG 返回会话时区时间(与 SQLite 的恒 UTC 语义不同,ITM-326)。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
 

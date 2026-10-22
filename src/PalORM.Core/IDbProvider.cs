@@ -99,6 +99,29 @@ public interface IDbProvider
     /// 默认 false；无 CREATE INDEX IF NOT EXISTS 语法的方言（MySQL）覆盖为真实判定。</summary>
     static virtual bool IsDuplicateSchemaObject(Exception exception) => false;
 
+    /// <summary>会话层即将在连接上执行<b>可能改写连接态</b>的用户 SQL 时调用
+    /// （原生 SQL、存储过程、批量脚本、DDL、<c>GetRawConnection</c>）。
+    /// <para>与 <see cref="InvalidateConnectionInitialization"/> 的分工：后者表示"必须重新完整初始化"，
+    /// 本钩子表示"连接态不再可信，但只需重设会话级关键项"。SQLite 实现把已初始化句柄标记为脏，
+    /// 下一次会话初始化只重设 <c>foreign_keys</c> 而跳过整组 PRAGMA（干净句柄连这一步都跳过）。</para>
+    /// <para>默认无操作——网络驱动没有需要复位的连接级会话状态。</para></summary>
+    static virtual void MarkConnectionStateUnknown(DbConnection connection)
+    {
+    }
+
+    /// <summary>复用命令晋升（同形态第 3 次操作）时是否执行一次 <c>PrepareAsync</c>。
+    /// <para>MySQL 无自动预编译（文本协议逐次解析），开启后复用槽的长会话/池化会话拿到
+    /// 预编译收益；PostgreSQL 由驱动 <c>MaxAutoPrepare</c> 自动完成，无需重复；
+    /// SQLite 的语句随命令对象缓存，也无需。默认 false。</para></summary>
+    static virtual bool PrepareReusedCommands => false;
+
+    /// <summary>是否支持把多条独立只读查询合并为一次 <see cref="DbBatch"/> 往返
+    /// （会话级 <c>CreatePipeline()</c>）。默认 false；PostgreSQL 覆盖为 true。</summary>
+    static virtual bool SupportsQueryPipeline => false;
+
+    /// <summary>查询管道单次往返能承载的最大语句数。默认 0 = 不支持；Provider 覆盖。</summary>
+    static virtual int MaxPipelineCommands => 0;
+
     /// <summary>是否优先使用同步 ADO.NET I/O（默认 false）。
     /// <para>仅对"异步 API 内部本身就是同步执行"的进程内驱动（SQLite）有意义：异步形态
     /// 每命令/每行多付 Task 与状态机脚手架，真实 I/O 并未异步化。Provider 覆写为 true 后，

@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### ✨ 新增
+
+- **请求级查询管道 `CreatePipeline()`**：把多条独立只读查询合并为一次往返，结果按入队顺序类型化返回（`PipelineQuery<T, TProvider>` / `PipelineFirst<T, TProvider>` / `PipelineScalar<TProvider>`）。PostgreSQL 走 `NpgsqlBatch`，本机 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×）；其余 Provider 回退顺序执行。契约：builder 入队即消费、只读、活动事务自动绑定、与并行读作用域互斥；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝。
+- **MySQL 复用命令晋升自动预编译**：单行 CRUD 与直查族命令槽晋升（同形态第 3 次）时执行一次 `PrepareAsync`，此后走二进制协议；预编译失败静默退化为未预编译。实测重复单键读约 −10~18%。新 Provider 能力位 `PrepareReusedCommands`（PostgreSQL 由 AutoPrepare 代劳、SQLite 随命令缓存语句，均保持 false）。
+- **`IDbProvider` 新能力位**：`MarkConnectionStateUnknown` / `PrepareReusedCommands` / `SupportsQueryPipeline` / `MaxPipelineCommands`——均有默认实现，旧第三方 Provider 源码兼容。
+
+### ⚡ 性能
+
+- **SQLite 连接态脏标记**：`foreign_keys` 只在原生 SQL/存储过程/批量脚本/DDL/裸连接改写连接态后重设；干净句柄后续会话零往返。文件库探针中位：`CreateAsync+Dispose` 1.71 → 0.50 µs / 1416 → 896 B，per-op `GetAsync` 7.35 → 6.40 µs / 2640 → 2176 B。
+- **池化租出复位连接态**：`DataSessionPool.RentAsync` 重新执行 Provider 初始化（干净 SQLite 句柄零成本），修复上一租期原生 SQL 改写的连接态带入下一租期。
+- **直接查询复用槽参数补建**：`QueryAsync`/`ScalarAsync`/`CountAsync`/`ExecuteAsync`/流式查询的复用槽此前晋升后参数集合为空、带参查询永远回退新建；现首次使用补建参数，参数化直查从第 3 次起真正复用。
+- **LIMIT/OFFSET 参数只创建一次**：SQL 文本侧只消费参数名，`GetQueryParameters` 单点创建，消除每次冷形状构建的“建完即弃”参数对象。
+- **`QueryAsync` 物化容量启发**：原始 SQL 直查改用会话内上次行数作为初始容量（原硬编码 16），重复大结果集查询免去 ArrayPool 扩容拷贝。
+
 ### 🐛 修复
 
 - **[TenantAware] 租户列在更新中不可写**（安全修复）：`UpdateAsync`、`BulkUpdateAsync`、`BulkUpdateBatchAsync` 与 `SaveAsync`/`BulkMergeAsync` 的冲突更新 SET 不再包含 `tenant_id`。修复前租户会话可凭实体上的他租户值把行搬到别的租户（行从本租户视图消失、出现在对方视图），用未赋 `TenantId` 的部分实体更新还会把租户列清空。Insert 行为不变（租户值仍由实体承载，ITM-599）；确需迁移租户用原生 SQL。行为变更：依赖“更新可改 tenant_id”的调用方需改走原生 SQL。

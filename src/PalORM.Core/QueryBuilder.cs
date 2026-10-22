@@ -116,6 +116,8 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>P0-2（2026-10-12 全量重读）：数组参数委托（UNNEST 族同源的 Provider 能力面）
     /// ——WhereIn/WhereNotIn 的 PG 数组形态用；null（MySQL/SQLite 接口默认）时回退占位符。</summary>
     internal readonly Func<string, Array, DbParameter?>? _createArrayParameter;
+    /// <summary>原生/状态改写 SQL 的宿主通知器（Raw/Set/裸执行）——Provider 实现把连接标脏。</summary>
+    internal readonly Action<DbConnection>? _markStateUnknown;
 
     internal QueryBuilder(QueryBuilderContext<T> ctx)
     {
@@ -163,6 +165,7 @@ public struct QueryBuilder<T> where T : class, new()
         _sensitiveMasks = null;
         _querySlot = ctx.QuerySlot;
         _createArrayParameter = ctx.Services.CreateArrayParameter;
+        _markStateUnknown = ctx.Services.MarkConnectionStateUnknown;
     }
 
     /// <summary>S3b：执行期懒取弹性执行器——From&lt;T&gt;() 不再提前物化，成功的首次尝试
@@ -474,6 +477,7 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>追加 UPDATE 的 SET 赋值项，值参数化绑定。至少一个 Set 才能执行 ExecuteNonQueryAsync。</summary>
     public QueryBuilder<T> Set<TValue>(Expression<Func<T, TValue>> member, TValue value)
     {
+        _markStateUnknown?.Invoke(_conn);
         DbParameter parameter = CreateParameter(value);
         string columnName = GetColumnName(member);
         // ITM-763(r21)：敏感列掩码登记——执行管线经 QueryContext.SensitiveParameterMasks
@@ -610,6 +614,7 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Raw(string literal)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(literal);
+        _markStateUnknown?.Invoke(_conn);
         foreach (char ch in literal)
         {
             if (IdentifierSafety.IsControlChar(ch))
@@ -839,7 +844,8 @@ public struct QueryBuilder<T> where T : class, new()
                 ResilienceGeneration: _resilienceGeneration,
                 OptionsSnapshot: _optionsSnapshot,
                 IsTransient: _isTransient,
-                ProviderType: _providerType),  // S3b：克隆透传会话引用与配置快照
+                ProviderType: _providerType,
+                MarkConnectionStateUnknown: _markStateUnknown),  // S3b：克隆透传会话引用与配置快照
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
             _readConnInvalidator, _readConnReturner, _querySlot))
         {
@@ -1074,7 +1080,7 @@ public struct QueryBuilder<T> where T : class, new()
             // v4.4：直接写 VSB，消除中间 string 分配。
             // SHAPE-010 根解：LIMIT/OFFSET 值经 @pN 占位（BuildLimitClause），不再内联——
             // 文本进形状缓存后动态分页的 OFFSET 值回归有限形态集
-            sb.Append(BuildLimitClause().Text);
+            sb.Append(BuildLimitClause());
             sb.Append(' ');
             AppendClauses(ref sb, QueryClauseKind.Lock);
             // v4.4：先 TrimEnd 再 ToString，省 1 次 string 分配（TrimEnd 前已用 VSB 原地裁剪）
@@ -1459,10 +1465,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// 缓存参数对象会在 Take/Skip 改值后失真）。
     /// <para><b>例外：First/Single 族的字面量形态</b>（见 <see cref="LiteralTakeValue"/>）——
     /// SQLite 上该族发 <c>LIMIT 1</c> 字面量且不带 OFFSET，理由与实测数据记在 LiteralTakeValue。</para></summary>
-    private (string Text, DbParameter[] Parameters) BuildLimitClause()
+    private string BuildLimitClause()
     {
-        if (!_take.HasValue && !_skip.HasValue) return ("", System.Array.Empty<DbParameter>());
-        DbParameter[] parameters = CreateLimitParameters();
+        if (!_take.HasValue && !_skip.HasValue) return "";
         if (LiteralTakeValue != 0)
         {
             var literal = new ValueStringBuilder(stackalloc char[24]);
@@ -1470,63 +1475,67 @@ public struct QueryBuilder<T> where T : class, new()
             {
                 literal.Append("LIMIT ");
                 literal.Append(LiteralTakeValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                return (literal.ToString(), System.Array.Empty<DbParameter>());
+                return literal.ToString();
             }
             finally { literal.Dispose(); }
         }
         var sb = new ValueStringBuilder(stackalloc char[64]);
         try
         {
-            // R3（2026-10-12）：参数创建收敛到 CreateLimitParameters 单一真源（编号从
-            // _parameterCount 起，SHAPE-010 契约：BuildSql 文本与 GetQueryParameters 绑定恒一致），
-            // 文本只消费已建参数的 ParameterName——原两路径各自创建，漂移即错位绑定。
+            // SHAPE-010：文本只消费参数名（编号从 _parameterCount 起）——参数对象由
+            // GetQueryParameters 的 CreateLimitParameters 单点创建，本路径不再"建完即弃"。
+            // 编号与 CreateLimitParameters 逐位对齐：skip-only 单参数；take 在场时
+            // MySQL 序为 [skip, take]，其余为 [take, skip]。
             if (!_take.HasValue)
             {
+                string skipName = GetParameterName(_parameterCount);
                 switch (_dialect)
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        sb.Append(parameters[0].ParameterName);
+                        sb.Append(skipName);
                         sb.Append(", ");
                         sb.Append(SqlLimits.MySqlOffsetOnlyLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         break;
                     case SqlDialect.Sqlite:
                         sb.Append("LIMIT -1 OFFSET ");
-                        sb.Append(parameters[0].ParameterName);
+                        sb.Append(skipName);
                         break;
                     default:
                         sb.Append("OFFSET ");
-                        sb.Append(parameters[0].ParameterName);
+                        sb.Append(skipName);
                         break;
                 }
             }
             else
             {
+                // CreateLimitParameters 的编号：MySQL 序为 [skip, take]，其余为 [take, skip]。
+                string first = GetParameterName(_parameterCount);
+                string second = GetParameterName(_parameterCount + 1);
                 switch (_dialect)
                 {
                     case SqlDialect.MySql:
                         sb.Append("LIMIT ");
-                        sb.Append(parameters[0].ParameterName);
+                        sb.Append(first);
                         sb.Append(", ");
-                        sb.Append(parameters[1].ParameterName);
+                        sb.Append(second);
                         break;
                     default:
                         sb.Append("LIMIT ");
-                        sb.Append(parameters[0].ParameterName);
+                        sb.Append(first);
                         sb.Append(" OFFSET ");
-                        sb.Append(parameters[1].ParameterName);
+                        sb.Append(second);
                         break;
                 }
             }
-            return (sb.ToString(), parameters);
+            return sb.ToString();
         }
         finally { sb.Dispose(); }
     }
 
-    /// <summary>R3（2026-10-12）：LIMIT 参数创建单一真源——BuildLimitClause（文本+参数）与
-    /// GetQueryParameters（仅参数，免建即弃文本）共用。编号从 _parameterCount 起；形态：
-    /// skip-only 单参数；take 在场恒两参数（skip 缺省 0 占位，MySQL 序为 [skip, take]，
-    /// 其余 [take, skip]，与原 BuildLimitClause 内联创建逐位一致）。</summary>
+    /// <summary>R3（2026-10-12）：LIMIT 参数创建的单一真源——<see cref="GetQueryParameters"/> 专用
+    /// （文本侧只消费参数名，不再建参）。编号从 _parameterCount 起；形态：skip-only 单参数；
+    /// take 在场恒两参数（skip 缺省 0 占位，MySQL 序为 [skip, take]，其余 [take, skip]）。</summary>
     private DbParameter[] CreateLimitParameters()
     {
         if (!_take.HasValue && !_skip.HasValue) return System.Array.Empty<DbParameter>();
@@ -1604,7 +1613,8 @@ internal readonly record struct QueryBuilderServices<T>(
     int ResilienceGeneration = 0,
     DbOptions? OptionsSnapshot = null,
     Func<Exception, bool>? IsTransient = null,
-    Type? ProviderType = null)
+    Type? ProviderType = null,
+    Action<DbConnection>? MarkConnectionStateUnknown = null)
     where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。

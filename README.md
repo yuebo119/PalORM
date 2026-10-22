@@ -54,6 +54,8 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 **会话池化**（v6.5 `DataSessionPool`）。Web 服务"一请求一会话"形态的固定成本消除器：租出的会话归还后瞬态状态（租户/超时/重试覆写）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在同会话第 3 次同形状操作才晋升，不池化则每请求形态下结构性永不激活。32 并发压测实测 P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B，租还自身约 1 µs。
 
+**请求级查询管道**。`CreatePipeline()` 把多条彼此独立的只读查询合并成一次数据库往返：PostgreSQL 经 `NpgsqlBatch`，本机实测 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×），结果按入队顺序类型化返回；其余 Provider 顺序回退。配套两项：MySQL 复用命令晋升时自动服务端预编译（重复单键读写 −10~18%，PostgreSQL 由驱动 AutoPrepare 自动完成）；SQLite 干净连接句柄跳过每会话 PRAGMA、原生 SQL 改写过连接态才重设 `foreign_keys`（CreateAsync+Dispose 1.71 → 0.50 µs，per-op 单键读 7.35 → 6.40 µs、2640 → 2176 B）。
+
 **SQL 资产编译期管理**。`[SqlFile]` 把外部 .sql 文件嵌入为常量（支持 `-- @pg/@mysql/@sqlite/@all` 方言条件段，改 SQL 免 Rebuild，文件缺失编译期报错）；`[SqlTemplate]` 把方法体插值串提升为模板常量，配合 `.AsPrepared()` 走 `DbCommand.PrepareAsync` 预编译；AutoTagging（opt-in 编译开关）经 C# `[InterceptsLocation]` 拦截 9 个查询终态方法，SQL 自动注入「文件:行号 成员名」定位注释，排查零成本。
 
 **企业运维面**。`HealthCheckAsync` SELECT 1 探活（错误消息只透出异常类型名，防数据库拓扑泄露）；跨方言统一异常族——唯一键冲突统一翻译为 `UniqueConstraintViolationException`（不用记各驱动错误码）、乐观锁冲突 `ConcurrencyConflictException`、基础设施超时带 `PalORM.InfrastructureTimeout` 标记、瞬时故障带 `PalORM.IsTransient` 标记；OpenTelemetry 全套（`WithTracing` ActivitySource + `WithMetrics` 指标 `palorm.query.executions`/`palorm.query.duration`，查询缓存另有 `palorm.cache.*` 四指标）。
