@@ -722,9 +722,15 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         // CRUD 路径全部普通读、只有 ExecuteWithResilience 遵守该配对——声明与读方不符。
         // 现一致性由 UpdateResilience 的操作门禁保证（配置变更与飞行查询互斥）；
         // Volatile.Write 保留为跨线程发布的最低保障。
+        // P3-9：With* 链式入口同样走 DbOptions 全套不变量（MaxRetries≤10、超时上限等）——
+        // 原实现只做单项下界检查，绕过 Validate 的上界。
+        options.Validate();
+        // P3-9：先构造后发布——ResilienceExecutor 构造期的 RetryBackoff 上界守卫失败时，
+        // 旧实现已写入 _options/_commandTimeoutSeconds，留下"新超时+旧执行器"的部分提交。
+        var executor = new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider));
         Volatile.Write(ref _options, options);
         _commandTimeoutSeconds = options.CommandTimeoutSeconds;
-        Volatile.Write(ref _resilience, new ResilienceExecutor(options, TProvider.IsTransient, typeof(TProvider)));
+        Volatile.Write(ref _resilience, executor);
         ResilienceGeneration++;
     }
 

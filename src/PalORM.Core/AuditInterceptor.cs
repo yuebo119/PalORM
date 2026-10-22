@@ -5,10 +5,12 @@ using Microsoft.Extensions.Logging;
 namespace PalORM;
 
 /// <summary>v5.0 阶段 5.4：审计拦截器——记录每条查询的开始/结束/耗时/错误。
-/// <para><b>⚠ 覆盖面限制</b>（重要）：本拦截器仅覆盖实体 SELECT 执行管线
-/// （ToListAsync/FirstOrDefault）与 QueryBuilder UPDATE。<b>INSERT/DELETE/Bulk/存储过程不经过拦截器</b>——
-/// 如需全量审计（含写入操作），请用数据库层审计（PG log_statement / MySQL general_log）或 OpenTelemetry。
-/// 这是 <see cref="IQueryInterceptor"/> 接口的既有限制，非 AuditInterceptor 独有。</para>
+/// <para><b>⚠ 覆盖面限制</b>（重要，P3-14 修正）：本拦截器覆盖实体 SELECT 执行管线
+/// （ToListAsync/FirstOrDefault）、QueryBuilder UPDATE，以及 <c>ExecuteAsync</c> 原始
+/// DDL/DML 三段式（R3 起）。<b>实体 Insert/Delete/Save、Bulk 家族与存储过程仍然不经过
+/// 拦截器</b>——如需全量审计（含这些写入操作），请用数据库层审计
+/// （PG log_statement / MySQL general_log）或 OpenTelemetry。
+/// 这是 <see cref="IQueryInterceptor"/> 接口的覆盖边界，非 AuditInterceptor 独有。</para>
 /// <para><b>设计</b>：实现 <see cref="IQueryInterceptor"/>，把审计事件转发给 <see cref="ILogger"/>。
 /// 默认 Priority=200（让用户业务拦截器优先于审计执行，避免审计日志污染业务逻辑顺序）。</para>
 /// <para><b>敏感数据脱敏</b>（ITM-713/763）：参数值默认不写入日志（避免凭据/PII 泄露）。

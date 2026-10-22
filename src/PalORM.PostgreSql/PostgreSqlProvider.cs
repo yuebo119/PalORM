@@ -328,7 +328,7 @@ public sealed class PostgreSqlProvider : IDbProvider
     }
 
     /// <summary>数组元素 CLR 类型 → 驱动的元素 <see cref="NpgsqlDbType"/>。null = 不支持数组形态。
-    /// <para><b>映射面是封闭集合，且刻意收窄</b>（登记，2026-10-02）：恰好 13 类——int / long /
+    /// <para><b>映射面是封闭集合，且刻意收窄</b>（登记，2026-10-02）：恰好 15 类——int / long /
     /// short / byte / string / Guid / bool / decimal / double / float / DateTime / DateTimeOffset /
     /// DateOnly / TimeOnly / byte[]。**未列出的类型（含 <c>uint</c>/<c>ulong</c>/<c>sbyte</c>/
     /// <c>ushort</c>/<c>char</c>/<c>TimeSpan</c>/枚举等）返回 null**，调用方据此整体回退
@@ -407,6 +407,11 @@ public sealed class PostgreSqlProvider : IDbProvider
         if (conn is not NpgsqlConnection npgsqlConnection)
             throw new ArgumentException(
                 "PostgreSqlProvider.BulkInsertAsync requires an NpgsqlConnection.", nameof(conn));
+        // P3-12：事务必须属于同一连接——否则 COPY 在 conn 的环境事务里自动提交，
+        // 调用方误以为在外部事务中（静默非事务写）。
+        if (transaction is not null && !ReferenceEquals(transaction.Connection, conn))
+            throw new ArgumentException(
+                "The transaction must belong to the supplied connection.", nameof(transaction));
         if (entities.Count == 0) return 0;
 
         Action<DbCommand, object, int> binder = metadata.BindInsert;

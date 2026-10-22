@@ -115,13 +115,12 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         using SessionOperationState.SessionOperationLease lease = _session.EnterPipelineRead();
         DbTransaction? transaction = _session.PipelineTransaction;
         _results = new object?[_items.Count];
-        long? stopwatchStart = HasInterceptors() ? Stopwatch.GetTimestamp() : null;
         try
         {
             if (TProvider.SupportsQueryPipeline)
-                await ExecuteBatchedAsync(transaction, stopwatchStart, ct).ConfigureAwait(false);
+                await ExecuteBatchedAsync(transaction, ct).ConfigureAwait(false);
             else
-                await ExecuteSequentialAsync(transaction, stopwatchStart, ct).ConfigureAwait(false);
+                await ExecuteSequentialAsync(transaction, ct).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -149,16 +148,6 @@ public sealed class QueryPipeline<TProvider> : IDisposable
             throw new InvalidOperationException(
                 "ExecuteAsync must complete before reading pipeline results.");
         return _results[index];
-    }
-
-    private bool HasInterceptors()
-    {
-        foreach (PipelineItem item in _items)
-        {
-            if (item.Interceptors.Count > 0)
-                return true;
-        }
-        return false;
     }
 
     private void ValidateAdd()
@@ -212,7 +201,7 @@ public sealed class QueryPipeline<TProvider> : IDisposable
     }
 
     private async ValueTask ExecuteBatchedAsync(
-        DbTransaction? transaction, long? stopwatchStart, CancellationToken ct)
+        DbTransaction? transaction, CancellationToken ct)
     {
         DbConnection connection = _session.PipelineConnection;
         await using DbBatch batch = connection.CreateBatch();
@@ -227,29 +216,37 @@ public sealed class QueryPipeline<TProvider> : IDisposable
             QueryBuilderExtensions.NotifyInterceptorsOnBefore(item.Interceptors, item.Context);
         }
 
+        // P3-6：逐项计时——DbBatch 无单语句计时面，这里把每项从"开始等待本项结果"
+        // 到物化完成计为该项 Elapsed（首项含批派发，后续项含前一结果集读完后服务端
+        // 执行本语句的时间）。旧实现整批共用一个起点，OnAfter 报的是批累计。
+        long? firstStart = _items[0].Interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
         await using DbDataReader reader = await batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
         for (int index = 0; index < _items.Count; index++)
         {
+            PipelineItem item = _items[index];
+            long? itemStart = firstStart;
+            if (index > 0)
+                itemStart = item.Interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
             if (index > 0 && !await reader.NextResultAsync(ct).ConfigureAwait(false))
             {
                 throw new InvalidOperationException(
                     $"Query pipeline batch returned only {index} result set(s) for {_items.Count} command(s).");
             }
-            PipelineItem item = _items[index];
             PipelineMaterialization materialization =
                 await item.MaterializeAsync(reader, ct).ConfigureAwait(false);
             _results[index] = materialization.Payload;
             QueryBuilderExtensions.NotifyInterceptorsOnAfter(
-                item.Interceptors, item.Context, stopwatchStart, materialization.Rows);
+                item.Interceptors, item.Context, itemStart, materialization.Rows);
         }
     }
 
     private async ValueTask ExecuteSequentialAsync(
-        DbTransaction? transaction, long? stopwatchStart, CancellationToken ct)
+        DbTransaction? transaction, CancellationToken ct)
     {
         for (int index = 0; index < _items.Count; index++)
         {
             PipelineItem item = _items[index];
+            long? itemStart = item.Interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
             await using DbCommand command = _session.CreatePipelineCommand();
             command.CommandText = item.Sql;
             command.Transaction = transaction;
@@ -263,7 +260,7 @@ public sealed class QueryPipeline<TProvider> : IDisposable
                 await item.MaterializeAsync(reader, ct).ConfigureAwait(false);
             _results[index] = materialization.Payload;
             QueryBuilderExtensions.NotifyInterceptorsOnAfter(
-                item.Interceptors, item.Context, stopwatchStart, materialization.Rows);
+                item.Interceptors, item.Context, itemStart, materialization.Rows);
         }
     }
 

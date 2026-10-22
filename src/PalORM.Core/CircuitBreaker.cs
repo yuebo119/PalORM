@@ -260,10 +260,12 @@ internal sealed class CircuitBreaker
     /// 截止时刻用单调 tick（Environment.TickCount64），不受 NTP 跳变影响。</summary>
     private void Open(long openUntilTick)
     {
+        // P3-5：先推进代际再开闸——旧顺序在 ARM64 弱内存下可能让读者读到新代际+旧 flag，
+        // 携旧代际的成功记录在开闸后被误判为当前探测而提前关闸。
+        Volatile.Write(ref _generation, _generation + 1);
         _isOpen = true;
         _isOpenFlag = true;
         _openUntilTick = openUntilTick;
-        _generation += 1;
         _openMessage = FormatOpenMessage(_resetAfter);
     }
 

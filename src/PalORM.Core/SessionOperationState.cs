@@ -82,32 +82,42 @@ internal sealed class SessionOperationState
         // 发布点先于锁：无锁进入在 CAS 后复读本标志，任一交错下至少一方看见对方
         // （协议说明见 TryEnterFast）。
         Volatile.Write(ref _disposing, 1);
-        lock (_sync)
+        try
         {
-            if (_state == 3)
-                return ParkResult.AlreadyParked;
-            if (_state is 1 or 2)
-                return ParkResult.TornDown;
-            if (_isActive || _activeReadLeases > 0)
-                throw new InvalidOperationException(
-                    "Cannot return this DataSession to its pool while an operation is still in flight; " +
-                    "always consume enumerators with 'await foreach' and complete operations before disposing.");
-            if (_parallelReadScopes > 0)
-                throw new InvalidOperationException(
-                    "Cannot return this DataSession to its pool while a parallel-read scope is active; " +
-                    "dispose the scope first.");
-            if (_transactionOwner is not null)
-                throw new InvalidOperationException(
-                    "Cannot return this DataSession to its pool while a transaction flow is active.");
-            if (IsTransactionAlive(_transaction))
-                throw new InvalidOperationException(
-                    "Cannot return this DataSession to its pool with an active transaction; " +
-                    "commit or roll it back first.");
-            _transaction = null;
-            _transactionOperationOwner = null;
-            _externalTransaction = false;
-            _state = 3;
-            return ParkResult.Parked;
+            lock (_sync)
+            {
+                if (_state == 3)
+                    return ParkResult.AlreadyParked;
+                if (_state is 1 or 2)
+                    return ParkResult.TornDown;
+                if (_isActive || _activeReadLeases > 0)
+                    throw new InvalidOperationException(
+                        "Cannot return this DataSession to its pool while an operation is still in flight; " +
+                        "always consume enumerators with 'await foreach' and complete operations before disposing.");
+                if (_parallelReadScopes > 0)
+                    throw new InvalidOperationException(
+                        "Cannot return this DataSession to its pool while a parallel-read scope is active; " +
+                        "dispose the scope first.");
+                if (_transactionOwner is not null)
+                    throw new InvalidOperationException(
+                        "Cannot return this DataSession to its pool while a transaction flow is active.");
+                if (IsTransactionAlive(_transaction))
+                    throw new InvalidOperationException(
+                        "Cannot return this DataSession to its pool with an active transaction; " +
+                        "commit or roll it back first.");
+                _transaction = null;
+                _transactionOperationOwner = null;
+                _externalTransaction = false;
+                _state = 3;
+                return ParkResult.Parked;
+            }
+        }
+        catch
+        {
+            // P3-19：门禁拒绝时回滚预置的 _disposing——否则会话永久停留在"释放中"，
+            // 此后每次 TryEnterFast 都退化为锁路径（归还失败一次即全局降速）。
+            Volatile.Write(ref _disposing, 0);
+            throw;
         }
     }
 
