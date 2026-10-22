@@ -32,7 +32,8 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
 
     /// <summary>创建会话池。</summary>
     /// <param name="options">池基准配置——租期内 With* 覆写在归还时复位回此形态；
-    /// 拦截器清单（如有）为池级共享：租期内 AddInterceptor 的加项不带入下一租期。</param>
+    /// 拦截器清单（如有）为池级共享且由调用方持有（会话/池均不 Dispose），租期内
+    /// AddInterceptor 的加项在归还时释放、不带入下一租期。</param>
     /// <param name="maxIdleSize">空闲上限（默认 16）：归还时空闲数已达上限的会话被真实释放
     /// （不放大物理连接占用）；租出无上限并发（不足时新建）。</param>
     public static DataSessionPool<TProvider> Create(DbOptions options, int maxIdleSize = 16)

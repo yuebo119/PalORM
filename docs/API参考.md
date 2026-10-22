@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1164 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1166 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -185,7 +185,7 @@
 
 | API | 说明 |
 |------|------|
-| `DataSessionPool<TProvider>.Create(options, maxIdleSize = 16)` | 创建会话池。`options` 为池基准配置（租期内的 With* 覆写在归还时复位回此形态；拦截器清单为池级共享） |
+| `DataSessionPool<TProvider>.Create(options, maxIdleSize = 16)` | 创建会话池。`options` 为池基准配置（租期内的 With* 覆写在归还时复位回此形态；拦截器清单为池级共享且由调用方持有，会话归还释放租期加项） |
 | `RentAsync()` | 租出会话——空闲复用（连接不健康的闲置项丢弃重建），无空闲新建。`await using` 消费，`DisposeAsync` 即归还 |
 | `IdleCount` | 空闲会话数（诊断观测） |
 | `DataSessionFactory<TProvider>(options, maxIdleSize = 16)` / `IDataSessionFactory<TProvider>` | 池的 DI 友好封装：注册为单例，请求作用域内 `RentAsync` 租出、`DisposeAsync` 归还；不需要额外 DI 包依赖 |

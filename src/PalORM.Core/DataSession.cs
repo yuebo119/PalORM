@@ -475,7 +475,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     internal bool _ignoreFilters;
 
     /// <summary>动态添加查询拦截器（日志/缓存/审计），并按 <see cref="IQueryInterceptor.Priority"/> 执行。
-    /// 与其他会话操作一样受门禁保护：有查询在飞时调用会明确失败（拦截器列表被执行管线枚举，无锁修改是竞态）。</summary>
+    /// 与其他会话操作一样受门禁保护：有查询在飞时调用会明确失败（拦截器列表被执行管线枚举，无锁修改是竞态）。
+    /// <para><b>所有权</b>：池化会话归还时释放本次租期加项；池基准拦截器由调用方持有，会话与池均不 Dispose。</para></summary>
     public DataSession<TProvider> AddInterceptor(IQueryInterceptor interceptor)
     {
         ArgumentNullException.ThrowIfNull(interceptor);
@@ -751,7 +752,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         return _operationState.DisposeAsync(DisposeCoreAsync, _interceptors.Count == 0);
     }
 
-    /// <summary>池化归还：Park 门禁 → 瞬态复位 → 入队；未被接收（池满/池释放）则 Unpark
+    /// <summary>池化归还：Park 门禁 → 瞬态复位（含租期 AddInterceptor 加项释放；池基准拦截器由调用方持有）→ 入队；未被接收（池满/池释放）则 Unpark
     /// 后走真实释放。复用槽、读连接、物化容量启发<b>不复位</b>（跨租用存活即收益）。
     /// 幂等（加固 2026-10-13）：重复 Dispose 命中 AlreadyParked/TornDown 直接返回——
     /// 与非池化 DisposeAsync 的幂等语义对齐；并发双归还由 Park 的锁内状态判定互斥
@@ -774,6 +775,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         Volatile.Write(ref _resilience, _poolBaseResilience!);
         _operationState.DiscardPostCommitBackfills();
         _operationState.DefersPostCommitActions = false;
+        await DisposeSessionAddedInterceptorsAsync().ConfigureAwait(false);
         ResetInterceptorsToPoolBase();
         if (_pool!.TryReturn(this))
             return;
@@ -783,7 +785,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     }
 
     /// <summary>拦截器表复位为池基准清单（内容级：清空后按 Priority 重排回填；表实例保留
-    /// ——列表本身是会话私有的，无共享可变表风险，R3 教训不适用）。</summary>
+    /// ——列表本身是会话私有的，无共享可变表风险，R3 教训不适用）。调用方须先
+    /// <see cref="DisposeSessionAddedInterceptorsAsync"/> 释放租期加项。</summary>
     private void ResetInterceptorsToPoolBase()
     {
         _interceptors.Clear();
@@ -794,6 +797,53 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         }
     }
 
+    /// <summary>2026-10-22 终审 P1-5：释放本次租期 AddInterceptor 加项（池基准拦截器由调用方
+    /// 持有，会话与池均不 Dispose）。调用点在 Park 之后、Reset 之前，无并发加项；Dispose 失败
+    /// 只记日志，不阻断归还。</summary>
+    private async ValueTask DisposeSessionAddedInterceptorsAsync()
+    {
+        if (_pool is null) return;
+        for (int i = 0; i < _interceptors.Count; i++)
+        {
+            IQueryInterceptor interceptor = _interceptors[i];
+            if (IsPoolBaseInterceptor(interceptor)) continue;
+            if (await DisposeInterceptorCoreAsync(interceptor).ConfigureAwait(false) is { } exception)
+                _logger?.LogWarning(exception, "Interceptor Dispose failed during pool return.");
+        }
+    }
+
+    /// <summary>ITM-534：优先同步 Dispose；仅实现 IAsyncDisposable 的拦截器走异步释放，不再漏释放。
+    /// 返回清理异常（由调用方记录），不抛出。</summary>
+    private static async ValueTask<Exception?> DisposeInterceptorCoreAsync(IQueryInterceptor interceptor)
+    {
+        try
+        {
+            if (interceptor is IDisposable disposable)
+            {
+                disposable.Dispose();
+                return null;
+            }
+            if (interceptor is IAsyncDisposable asyncDisposable)
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+    }
+
+    private bool IsPoolBaseInterceptor(IQueryInterceptor interceptor)
+    {
+        IReadOnlyList<IQueryInterceptor>? baseInterceptors = _poolBaseOptions?.Interceptors;
+        if (baseInterceptors is null) return false;
+        for (int i = 0; i < baseInterceptors.Count; i++)
+        {
+            if (ReferenceEquals(baseInterceptors[i], interceptor)) return true;
+        }
+        return false;
+    }
+
     private async Task DisposeCoreAsync()
     {
         // 主异常保留模式：首个清理异常作为主异常抛出，后续异常挂 Exception.Data 不丢弃
@@ -801,17 +851,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         Exception? cleanupException = null;
         foreach (IQueryInterceptor interceptor in _interceptors)
         {
-            // ITM-534: 优先同步 Dispose；仅实现 IAsyncDisposable 的拦截器走异步释放，不再漏释放。
-            if (interceptor is IDisposable disposable)
-            {
-                try { disposable.Dispose(); }
-                catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
-            }
-            else if (interceptor is IAsyncDisposable asyncDisposable)
-            {
-                try { await asyncDisposable.DisposeAsync().ConfigureAwait(false); }
-                catch (Exception exception) { RecordCleanupException(ref cleanupException, exception); }
-            }
+            // 2026-10-22 终审 P1-5：池基准拦截器由调用方持有，会话真实释放时不 Dispose；
+            // 租期 AddInterceptor 加项已在 ReturnToPoolAsync 中释放。
+            if (_pool is not null && IsPoolBaseInterceptor(interceptor)) continue;
+            if (await DisposeInterceptorCoreAsync(interceptor).ConfigureAwait(false) is { } exception)
+                RecordCleanupException(ref cleanupException, exception);
         }
 
         try
