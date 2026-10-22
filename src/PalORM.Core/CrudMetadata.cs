@@ -98,6 +98,15 @@ public readonly struct CrudBindings
     /// <see cref="InitUpsertParameters"/>。</summary>
     public readonly Action<DbParameter[], int>? InitUpdateParameters;
 
+    /// <summary>2026-10-22：列子集更新——按 UpdateColumns 序号绑定单个 SET 列到调用方预建的
+    /// 参数（设置 DbType 提示与 Value）。旧版生成器程序集为 null，消费方回退全量 BindUpdate
+    /// + 裁剪参数的兼容路径。</summary>
+    public readonly Action<object, DbParameter, int>? BindUpdateColumn;
+
+    /// <summary>2026-10-22：列子集更新——绑定 UPDATE WHERE 的主键/并发令牌参数，参数名从
+    /// <c>parameterOffset</c> 起连续编号。旧版生成器程序集为 null（回退路径）。</summary>
+    public readonly Action<object, DbCommand, int>? BindUpdateWhere;
+
     /// <summary>C3（2026-10-11 执行流程复核）：单键标量转换委托 <c>ConvertDeleteKey(key)</c>——
     /// 主键值归一化产出，与 <c>BindDelete</c> 的 @p0 参数值同一生成真源（两条路径逐位一致，
     /// 契约由 KeyConversionTests 锁定）。消费方：GetByKey 复用槽（TryAcquireGetByKeyCommand）
@@ -135,7 +144,9 @@ public readonly struct CrudBindings
         Func<int, Array[]>? createUpsertColumnArrays = null,
         Action<DbParameter[], int>? initUpsertParameters = null,
         Action<DbParameter[], int>? initUpdateParameters = null,
-        Func<object, object?>? convertDeleteKey = null)
+        Func<object, object?>? convertDeleteKey = null,
+        Action<object, DbParameter, int>? bindUpdateColumn = null,
+        Action<object, DbCommand, int>? bindUpdateWhere = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -158,6 +169,8 @@ public readonly struct CrudBindings
         InitUpsertParameters = initUpsertParameters;
         InitUpdateParameters = initUpdateParameters;
         ConvertDeleteKey = convertDeleteKey;
+        BindUpdateColumn = bindUpdateColumn;
+        BindUpdateWhere = bindUpdateWhere;
     }
 }
 
@@ -226,6 +239,8 @@ internal sealed class CrudPlan
     internal readonly Action<DbParameter[], int>? InitUpsertParameters;
     internal readonly Action<DbParameter[], int>? InitUpdateParameters;
     internal readonly Func<object, object?>? ConvertDeleteKey;
+    internal readonly Action<object, DbParameter, int>? BindUpdateColumn;
+    internal readonly Action<object, DbCommand, int>? BindUpdateWhere;
 
     internal CrudPlan(CrudMetadata metadata, int pkOrdinal = -1)
     {
@@ -256,6 +271,8 @@ internal sealed class CrudPlan
         InitUpsertParameters = metadata.InitUpsertParameters;
         InitUpdateParameters = metadata.InitUpdateParameters;
         ConvertDeleteKey = metadata.ConvertDeleteKey;
+        BindUpdateColumn = metadata.BindUpdateColumn;
+        BindUpdateWhere = metadata.BindUpdateWhere;
     }
 }
 
@@ -323,6 +340,12 @@ public readonly struct CrudMetadata
     /// <summary>C3（2026-10-11）：单键标量转换委托（判定条件与消费路径见 CrudBindings.ConvertDeleteKey）。</summary>
     public readonly Func<object, object?>? ConvertDeleteKey;
 
+    /// <summary>2026-10-22：列子集更新的逐 SET 列绑定委托（见 CrudBindings.BindUpdateColumn）。</summary>
+    public readonly Action<object, DbParameter, int>? BindUpdateColumn;
+
+    /// <summary>2026-10-22：列子集更新的 WHERE 绑定委托（见 CrudBindings.BindUpdateWhere）。</summary>
+    public readonly Action<object, DbCommand, int>? BindUpdateWhere;
+
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
     /// <param name="bindings">CRUD 委托聚合（BindInsert/BindUpsert/BindUpdate/RowFactory）。</param>
@@ -367,6 +390,8 @@ public readonly struct CrudMetadata
         InitUpsertParameters = bindings.InitUpsertParameters;
         InitUpdateParameters = bindings.InitUpdateParameters;
         ConvertDeleteKey = bindings.ConvertDeleteKey;
+        BindUpdateColumn = bindings.BindUpdateColumn;
+        BindUpdateWhere = bindings.BindUpdateWhere;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
@@ -399,7 +424,8 @@ public readonly struct CrudMetadata
                 InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters,
                 BuildDeleteKeyArray, FillUpdateColumnArrays, UpdateColumnArrayElementTypes,
                 CreateUpdateColumnArrays, FillUpsertColumnArrays, UpsertColumnArrayElementTypes,
-                CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters, ConvertDeleteKey),
+                CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters, ConvertDeleteKey,
+                BindUpdateColumn, BindUpdateWhere),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
 

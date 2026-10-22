@@ -113,6 +113,21 @@ internal static class CommandFactoryEmitter
         GenerateBindUpdateBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // 2026-10-22：列子集更新——逐 SET 列绑定 + WHERE（主键/并发令牌）绑定。
+        // columnIndex = UpdateColumns（IsUpdatableColumn 声明序）序号；parameterOffset 从
+        // 选中 SET 列数起，使全句参数名连续（@p0..@p{k-1} 选中列，@p{k}.. 主键/版本）。
+        sb.AppendLine($"    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>");
+        sb.AppendLine($"    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)");
+        sb.AppendLine("    {");
+        GenerateBindUpdateColumnBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        sb.AppendLine($"    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>");
+        sb.AppendLine($"    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)");
+        sb.AppendLine("    {");
+        GenerateBindUpdateWhereBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
         // v5.6：参数复用路径——接收预分配的 DbParameter[]，只改 Value，不 CreateParameter/Add。
         // 与 BindInsertValues 同一机制。消费点是 BulkUpdateBatchAsync 的单语句批量 UPDATE：
         // 其 probe 命令原先逐行 BindUpdate 建参数（40000 行 × 4 列 = 16 万次创建），
@@ -1011,6 +1026,43 @@ internal static class CommandFactoryEmitter
         }
     }
 
+    /// <summary>列子集更新的单列绑定体：columnIndex 按 IsUpdatableColumn 声明序 switch；
+    /// 值表达式与 BindUpdate 同一 GetParameterValueExpression 真源（转换器/OwnedJson/枚举）。</summary>
+    private static void GenerateBindUpdateColumnBody(TableModel model, StringBuilder sb)
+    {
+        var (setCols, _, _) = GetUpdateColumnOrder(model);
+        sb.AppendLine($"        var entity = ({model.EntityTypeName})entityObject;");
+        sb.AppendLine("        switch (columnIndex)");
+        sb.AppendLine("        {");
+        int pi = 0;
+        foreach (var col in setCols)
+        {
+            string valueExpr = GetParameterValueExpression(col);
+            sb.AppendLine($"            case {pi++}: {DbTypeHint(col, "parameter")}parameter.Value = {valueExpr}; break;");
+        }
+        sb.AppendLine("            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));");
+        sb.AppendLine("        }");
+    }
+
+    /// <summary>列子集更新的 WHERE 绑定体：主键列（声明序）+ 并发令牌恒末位；参数名从
+    /// parameterOffset 起连续编号（与选中 SET 列数衔接）。</summary>
+    private static void GenerateBindUpdateWhereBody(TableModel model, StringBuilder sb)
+    {
+        var (_, pkCols, cc) = GetUpdateColumnOrder(model);
+        sb.AppendLine($"        var entity = ({model.EntityTypeName})entityObject;");
+        int pi = 0;
+        foreach (var col in pkCols)
+        {
+            string valueExpr = GetParameterValueExpression(col);
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + {pi}); {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            pi++;
+        }
+        if (cc is not null)
+        {
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + {pi}); p.Value = entity.{cc.EscapedPropertyName}; cmd.Parameters.Add(p); }}");
+        }
+    }
+
     /// <summary>BindUpdateValues 的发射体——列序与 <see cref="GenerateBindUpdateBody"/> 由
     /// <see cref="GetUpdateColumnOrder"/> 单一真源保证一致（GEN-012：原"逐字一致"注释契约
     /// 已被结构化收敛替代）。差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。
@@ -1062,10 +1114,10 @@ internal static class CommandFactoryEmitter
     /// 同时是 ITM-527（整列全 null 无值可推断）的根因。显式 DbType 后 getter 退化为 DbType
     /// 映射的字段读，null 列与全 null 列均获得确定类型。未列出的类型（char/TimeSpan/enum/
     /// 对象型 OwnedJson 等）保持原推断路径，行为不变。</para></summary>
-    private static string DbTypeHint(ColumnModel col)
+    private static string DbTypeHint(ColumnModel col, string variableName = "p")
     {
         var hint = DbTypeFor(col.ProviderClrTypeName);
-        return hint is null ? "" : $"p.DbType = global::System.Data.DbType.{hint}; ";
+        return hint is null ? "" : $"{variableName}.DbType = global::System.Data.DbType.{hint}; ";
     }
 
     /// <summary>Provider CLR 类型 → DbType 字面量（PG-3）。返回 null = 不显式设置，保持驱动推断。</summary>
