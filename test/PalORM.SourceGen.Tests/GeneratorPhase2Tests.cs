@@ -1443,6 +1443,33 @@ internal sealed class GeneratorPhase2Tests
     }
 
     [Test]
+    [Arguments("public partial string Get();")]                              // 实例方法
+    [Arguments("public static partial string Get(int id);")]                 // 带参数
+    [Arguments("public static partial int Get();")]                          // 非 string 返回
+    [Arguments("internal static partial string Get();")]                     // 非 public
+    public async Task SqlFile_InvalidMethodShape_SkipsGeneration_WithCs8795AtMethod(string member)
+    {
+        // P2-10 残余：生成实现固定 `public static partial string Name()`，形状不匹配时
+        // 冲突落在 .g.cs（CS0759/CS0111）。跳过生成后 CS8795 指向用户声明。
+        string source = $$"""
+            using PalORM;
+            public partial class Repo
+            {
+                [SqlFile("queries/get.sql")]
+                {{member}}
+            }
+            """;
+        GeneratorResult result = RunGenerator(source);
+        string errors = FormatErrors(result.OutputCompilation);
+
+        await Assert.That(result.GeneratedSources.Keys
+            .Any(k => k.StartsWith("SqlFile", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(errors).Contains("CS8795");
+        await Assert.That(errors).DoesNotContain("CS0111");
+        await Assert.That(errors).DoesNotContain("CS0759");
+    }
+
+    [Test]
     public async Task SqlFile_ContentFromAdditionalFiles_IsEmbedded()
     {
         // 评审 2026-09-02：.sql 内容经 AdditionalFiles 进管线（模拟 targets 注入 **/*.sql）——
