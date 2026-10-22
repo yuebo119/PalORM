@@ -1440,6 +1440,19 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         string? typeName = columnAttr.NamedArguments
             .FirstOrDefault(static na => na.Key == "TypeName").Value.Value as string;
 
+        // PALORM051（2026-10-22 终审 P1）：适用面按 provider 类型判定——可空 decimal/char
+        // 的 SpecialType 是 Nullable<T>，必须 UnwrapNullable；[Converter] 映射后的 provider
+        // 类型才是 DDL 类型（与 TableModel.FromContext 同口径）。
+        ITypeSymbol providerType = SourceGenerationValidation.UnwrapNullable(member.Type);
+        AttributeData? converterAttr = SourceGenerationValidation.GetConverterAttribute(member);
+        if (converterAttr is not null
+            && SourceGenerationValidation.TryGetConverterTypes(
+                member, converterAttr, out _, out ITypeSymbol? mappedProviderType)
+            && mappedProviderType is not null)
+        {
+            providerType = SourceGenerationValidation.UnwrapNullable(mappedProviderType);
+        }
+
         bool invalid =
             (length is not null && length < 0)
             || (precision is not null && precision < 0)
@@ -1448,9 +1461,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             || (typeName is not null && string.IsNullOrWhiteSpace(typeName))
             // 适用面：Length 仅 string/char（VARCHAR(n)），Precision/Scale 仅 decimal——
             // 其他列类型标注静默无效（如 byte[] + Length），一并拦截
-            || (length is not null && member.Type.SpecialType
+            || (length is not null && providerType.SpecialType
                 is not (SpecialType.System_String or SpecialType.System_Char))
-            || ((precision is not null || scale is not null) && member.Type.SpecialType
+            || ((precision is not null || scale is not null) && providerType.SpecialType
                 is not SpecialType.System_Decimal);
         if (!invalid) return;
 
