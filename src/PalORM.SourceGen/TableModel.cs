@@ -125,9 +125,11 @@ internal sealed record TableModel(
             // ITM-640 收口：原注释声称"PALORM015 兜底提示"系误指（015 不覆盖此形态，编译期
             // 零反馈直到运行期 not registered）——现由 PALORM044 定位报错，此处防御性跳过。
             if (computedExpression is not null
-                && (computedExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
+                && (string.IsNullOrWhiteSpace(computedExpression)
+                    || computedExpression.Contains('\0')
+                    || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
                 return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                    $"[Computed] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM044)");
+                    $"[Computed] expression on property '{prop.Name}' is empty, contains a NUL character, or has unbalanced parentheses (PALORM044)");
             // R2（v6.0）：[DefaultValue] 表达式——原样直通三方言 DDL 的 DEFAULT 子句（与 [Computed]
             // ITM-541 同契约：不经转义、不做方言翻译，合法性由调用方负责）。NUL/未配对括号快检
             // 与 [Computed]（ITM-584）同型：PALORM048 在编译期定位报错，此处防御性跳过。
@@ -136,9 +138,11 @@ internal sealed record TableModel(
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "DefaultValue"))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             if (defaultValueExpression is not null
-                && (defaultValueExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(defaultValueExpression)))
+                && (string.IsNullOrWhiteSpace(defaultValueExpression)
+                    || defaultValueExpression.Contains('\0')
+                    || !SourceGenerationValidation.IsBalancedParentheses(defaultValueExpression)))
                 return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                    $"[DefaultValue] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM048)");
+                    $"[DefaultValue] expression on property '{prop.Name}' is empty, contains a NUL character, or has unbalanced parentheses (PALORM048)");
             // R2：[DefaultValue] 互斥三态（PALORM047 定位报错，此处防御性跳过）：
             // ×[Computed]——GENERATED 列不得带 DEFAULT（与 ITM-626 Timestamp×Computed 同理）；
             // ×[Timestamp]——该注解内建 DEFAULT CURRENT_TIMESTAMP，双 DEFAULT 生成非法 DDL；
@@ -364,10 +368,15 @@ internal sealed record TableModel(
             }
             foreach (System.Collections.Generic.KeyValuePair<string, object> named in namedMembers)
             {
+                // P2-9：枚举成员名为 C# 关键字（如 @class）时，生成源的类型引用必须带 @；
+                // 数据库字符串/Parse 字面量仍用裸名（member.Name 已剥掉 @）。
+                string memberReference = SyntaxFacts.GetKeywordKind(named.Key) != SyntaxKind.None
+                    ? "@" + named.Key
+                    : named.Key;
                 parseArms.Append('"').Append(named.Key).Append('"').Append(" => ").Append(enumClrTypeName)
-                    .Append('.').Append(named.Key).Append(", ");
+                    .Append('.').Append(memberReference).Append(", ");
                 if (valueCounts[named.Value] == 1)
-                    writeArms.Append(enumClrTypeName).Append('.').Append(named.Key)
+                    writeArms.Append(enumClrTypeName).Append('.').Append(memberReference)
                         .Append(" => \"").Append(named.Key).Append("\", ");
             }
             parseSwitchBody = parseArms.ToString();

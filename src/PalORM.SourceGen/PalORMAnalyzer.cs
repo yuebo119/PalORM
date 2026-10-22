@@ -1100,7 +1100,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
         if (computedAttr is null) return;
         if (computedAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
-        if (!expression.Contains('\0') && SourceGenerationValidation.IsBalancedParentheses(expression))
+        // P2-8：空串/纯空白同时通过 NUL 与括号平衡检查，会生成 "GENERATED ALWAYS AS ()"
+        // 或 "DEFAULT " 到迁移期才失败。
+        if (!string.IsNullOrWhiteSpace(expression)
+            && !expression.Contains('\0')
+            && SourceGenerationValidation.IsBalancedParentheses(expression))
             return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(InvalidComputedExpression,
@@ -1150,7 +1154,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue"));
         if (defaultValueAttr is null) return;
         if (defaultValueAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
-        if (!expression.Contains('\0') && SourceGenerationValidation.IsBalancedParentheses(expression))
+        if (!string.IsNullOrWhiteSpace(expression)
+            && !expression.Contains('\0')
+            && SourceGenerationValidation.IsBalancedParentheses(expression))
             return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(InvalidDefaultValueExpression,
