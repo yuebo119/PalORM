@@ -186,6 +186,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                     openScope.CancelAfter(options.ConnectionTimeout);
                 await openTask.ConfigureAwait(false);
 
+                // P2-4：Open 同步完成时上面的 CancelAfter 从未武装；统一重新武装覆盖随后的
+                // Provider 初始化与会话 SQL（定时器 ~100B/会话，换 init/setup 的可取消边界）。
+                openScope.CancelAfter(options.ConnectionTimeout);
+
                 // Provider 初始化钩子（SQLite: PRAGMA foreign_keys/WAL）。
                 // 与 OpenAsync 共享连接超时和调用方取消——初始化被锁阻塞时不再无限等待。
                 await TProvider.InitializeConnectionAsync(connection, openScope.Token).ConfigureAwait(false);
@@ -367,8 +371,16 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                 if (!readOpenTask.IsCompleted)
                     cts.CancelAfter(_options.ConnectionTimeout);
                 await readOpenTask.ConfigureAwait(false);
+                // P2-4：同步 Open 时也为读初始化/ReadSessionSetupSql 武装超时。
+                cts.CancelAfter(_options.ConnectionTimeout);
                 if (_readConnInitializer is not null)
                     await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException timeoutException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // P2-3：与主连接 CreateAsync 同口径——超时以 TimeoutException 呈现，调用方
+                // 按 PalORM.InfrastructureTimeout 与自身取消区分。
+                throw WrapReadConnectionTimeout(timeoutException);
             }
             finally
             {
@@ -421,8 +433,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                 if (!readOpenTask.IsCompleted)
                     cts.CancelAfter(_options.ConnectionTimeout);
                 await readOpenTask.ConfigureAwait(false);
+                // P2-4：同步 Open 时也为读初始化/ReadSessionSetupSql 武装超时。
+                cts.CancelAfter(_options.ConnectionTimeout);
                 if (_readConnInitializer is not null)
                     await _readConnInitializer(created, cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException timeoutException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw WrapReadConnectionTimeout(timeoutException);
             }
             finally
             {
@@ -442,6 +460,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             (_parallelReadConnections ??= []).Add(created);
         }
         return created;
+    }
+
+    private TimeoutException WrapReadConnectionTimeout(OperationCanceledException exception)
+    {
+        var wrapped = new TimeoutException(
+            $"Read connection open timed out after {_options.ConnectionTimeout}.", exception);
+        wrapped.Data["PalORM.InfrastructureTimeout"] = true;
+        return wrapped;
     }
 
     /// <summary>释放并清空会话持有的读连接，返回释放异常（无异常返回 null）。
