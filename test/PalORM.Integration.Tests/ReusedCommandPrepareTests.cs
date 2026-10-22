@@ -1,4 +1,6 @@
 using PalORM.MySql;
+using Npgsql;
+using PalORM.PostgreSql;
 using PalORM.Testing;
 
 namespace PalORM.Integration.Tests;
@@ -55,6 +57,23 @@ internal sealed class ReusedCommandPrepareTests
         {
             await session.ExecuteAsync($"DROP TABLE IF EXISTS palorm_prepare_probe");
         }
+    }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [NotInParallel("ExtBulkTable")]
+    public async Task PostgreSql_PrepareOptions_AreMappedToConnectionString()
+    {
+        await using var session = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
+        {
+            ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString(),
+            PrepareCacheSize = 250,
+            PrepareThreshold = 3
+        });
+        // AutoPrepare 是 Npgsql 客户端参数（非服务端 GUC）——从会话连接串上核实改写结果。
+        var builder = new NpgsqlConnectionStringBuilder(session.GetRawConnection().ConnectionString);
+        await Assert.That(builder.MaxAutoPrepare).IsEqualTo(250);
+        await Assert.That(builder.AutoPrepareMinUsages).IsEqualTo(3);
     }
 
     /// <summary>当前连接累计的 COM_STMT_PREPARE 次数（SHOW GLOBAL STATUS 两列结果经投影读出；

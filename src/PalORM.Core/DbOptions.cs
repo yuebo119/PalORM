@@ -126,6 +126,17 @@ public sealed record DbOptions
     /// 始终异步，不受本项影响。</para></summary>
     public bool UseSynchronousRowRead { get; init; }
 
+    /// <summary>PostgreSQL 的 AutoPrepare 缓存容量（默认 100；0 = 禁用自动预编译）。
+    /// 映射到 Npgsql 连接串的 <c>Max Auto Prepare</c>；连接串显式给出该键时不覆盖。
+    /// 查询形状超过默认 100 的应用应调高，避免预编译缓存抖动（形状数 × 每连接常驻）。
+    /// 其余方言忽略本项。</summary>
+    public int PrepareCacheSize { get; init; } = 100;
+
+    /// <summary>PostgreSQL 同一 SQL 使用多少次后自动预编译（默认 2，最小 1）。
+    /// 映射到 Npgsql 的 <c>Auto Prepare Min Usages</c>；连接串显式给出时不覆盖。
+    /// 其余方言忽略本项。</summary>
+    public int PrepareThreshold { get; init; } = 2;
+
     /// <summary>查询缓存实现（ADR-C）。未设置时使用进程级共享的有界默认缓存（1024 条）。
     /// 注入独立实例可实现会话/租户级缓存隔离；实现需线程安全。</summary>
     public IQueryCache? QueryCache { get; init; }
@@ -165,6 +176,8 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfNegative(OverallDeadline.Ticks, nameof(OverallDeadline));
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
             OverallDeadline.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(OverallDeadline));
+        ArgumentOutOfRangeException.ThrowIfNegative(PrepareCacheSize, nameof(PrepareCacheSize));
+        ArgumentOutOfRangeException.ThrowIfLessThan(PrepareThreshold, 1, nameof(PrepareThreshold));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
         // C4：MinPoolSize 负数非法；大于 MaxPoolSize 是配置矛盾（透传后驱动行为未定义），提前报错
         ArgumentOutOfRangeException.ThrowIfNegative(MinPoolSize, nameof(MinPoolSize));
