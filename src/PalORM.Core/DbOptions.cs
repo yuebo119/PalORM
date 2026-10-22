@@ -18,6 +18,11 @@ public sealed record DbOptions
     /// <summary>连接超时（默认 15 秒）。</summary>
     public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
+    /// <summary>池化会话空闲超过该时长后，租出时做一次轻量探活（SELECT 1），默认 30 秒；
+    /// <see cref="TimeSpan.Zero"/> = 关闭。仅对空闲队列复用的会话生效，新建会话不探测。
+    /// 探活失败时 <c>DataSessionPool.RentAsync</c> 丢弃该会话并换新（P2-2）。</summary>
+    public TimeSpan PoolConnectionValidationInterval { get; init; } = TimeSpan.FromSeconds(30);
+
     /// <summary>命令默认超时（默认 30 秒）。</summary>
     public TimeSpan CommandTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
@@ -169,6 +174,8 @@ public sealed record DbOptions
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
             CommandTimeout.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(CommandTimeout));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            PoolConnectionValidationInterval.Ticks, nameof(PoolConnectionValidationInterval));
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
         // ITM-838（r23 实修）：上界补齐——env 覆盖入口可传入极大值，重试风暴的最坏墙钟
         // = (MaxRetries+1)×CommandTimeout+Σ退避，上界使该乘积可推理（10 次 = 11×超时）。
