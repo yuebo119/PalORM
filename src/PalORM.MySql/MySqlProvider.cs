@@ -166,6 +166,17 @@ public sealed class MySqlProvider : IDbProvider
     /// COM_STMT_PREPARE 的最佳时点。实测重复单键读约 −10~18%。</summary>
     public static bool PrepareReusedCommands => true;
 
+    /// <summary>全量物化支持同步逐行读（需 <see cref="DbOptions.UseSynchronousRowRead"/> 开启）。
+    /// 5 轮交替实测同步 998 ns/行 vs 异步 1846~2043 ns/行。</summary>
+    public static bool SupportsSynchronousRowRead => true;
+
+    /// <summary>多条独立只读查询可经 <see cref="MySqlBatch"/> 合并为一次调用（本机单库
+    /// 执行耗时时与顺序持平，WAN 下省 RTT；结果集迭代顺序与入队一致）。</summary>
+    public static bool SupportsQueryPipeline => true;
+
+    /// <summary>管道单批语句上限。</summary>
+    public static int MaxPipelineCommands => 64;
+
     /// <summary>清空 local_infile 能力探测缓存（测试基础设施入口，经 InternalsVisibleTo 暴露给
     /// Integration 测试）。真库用例在运行中 SET GLOBAL local_infile=OFF 再恢复 ON，恢复后
     /// 缓存仍可能持有 OFF 结论至 60s TTL 到期，导致其余用例静默降级多值路径（BulkCopy 集成

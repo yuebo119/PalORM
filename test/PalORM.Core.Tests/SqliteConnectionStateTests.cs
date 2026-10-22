@@ -13,9 +13,9 @@ public sealed class SqliteConnectionStateTests
     public async Task RawSql_DisablingForeignKeys_IsRestoredByNextSession()
     {
         string dbPath = Path.Combine(Path.GetTempPath(), $"palorm_state_{Guid.NewGuid():N}.db");
+        string connectionString = $"Data Source={dbPath}";
         try
         {
-            string connectionString = $"Data Source={dbPath}";
             var options = new DbOptions { ConnectionString = connectionString };
 
             await using (var first = await DataSession<SqliteProvider>.CreateAsync(options))
@@ -30,7 +30,10 @@ public sealed class SqliteConnectionStateTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            // 只清本用例连接串的池——ClearAllPools 会打断并行用例的句柄复用（实测污染
+            // SqlitePooledInitializationTests 的 cache_size 断言）。
+            using (var pooled = new SqliteConnection(connectionString))
+                SqliteConnection.ClearPool(pooled);
             foreach (string path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" }
                 .Where(File.Exists))
             {
@@ -43,9 +46,10 @@ public sealed class SqliteConnectionStateTests
     public async Task PooledRent_RestoresForeignKeysAfterRawSql()
     {
         string dbPath = Path.Combine(Path.GetTempPath(), $"palorm_state_pool_{Guid.NewGuid():N}.db");
+        string connectionString = $"Data Source={dbPath}";
         try
         {
-            var options = new DbOptions { ConnectionString = $"Data Source={dbPath}" };
+            var options = new DbOptions { ConnectionString = connectionString };
             await using var pool = DataSessionPool<SqliteProvider>.Create(options, maxIdleSize: 1);
 
             DataSession<SqliteProvider> first = await pool.RentAsync();
@@ -60,7 +64,8 @@ public sealed class SqliteConnectionStateTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            using (var pooled = new SqliteConnection(connectionString))
+                SqliteConnection.ClearPool(pooled);
             foreach (string path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" }
                 .Where(File.Exists))
             {

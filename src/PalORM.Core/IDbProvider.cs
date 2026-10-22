@@ -130,6 +130,14 @@ public interface IDbProvider
     /// 网络驱动的默认实现必须保持 false（同步调用会阻塞线程直到往返完成）。</para></summary>
     static virtual bool PreferSynchronousIo => false;
 
+    /// <summary>是否支持在<b>全量物化</b>（ToList/GetAll/QueryAsync）的逐行读取中使用同步
+    /// <see cref="System.Data.Common.DbDataReader.Read"/>——仅在
+    /// <see cref="DbOptions.UseSynchronousRowRead"/> 同时开启时生效。默认 false。
+    /// <para>MySQL 实测同步读约 998 ns/行 vs 异步 1846~2043 ns/行（5 轮 × 20 次中位）；
+    /// 代价是结果集仍在流式输出时会阻塞调用线程。流式 API（QueryAsyncEnumerable/ForEach）
+    /// 不使用本开关。</para></summary>
+    static virtual bool SupportsSynchronousRowRead => false;
+
     /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。
     /// <para>ITM-557: <paramref name="commandTimeoutSeconds"/> 为会话 CommandTimeout——
     /// 批量命令必须应用，否则慢库上按驱动默认（约 30s）超时，与配置意图相反。</para>

@@ -6,9 +6,10 @@
 
 ### ✨ 新增
 
-- **请求级查询管道 `CreatePipeline()`**：把多条独立只读查询合并为一次往返，结果按入队顺序类型化返回（`PipelineQuery<T, TProvider>` / `PipelineFirst<T, TProvider>` / `PipelineScalar<TProvider>`）。PostgreSQL 走 `NpgsqlBatch`，本机 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×）；其余 Provider 回退顺序执行。契约：builder 入队即消费、只读、活动事务自动绑定、与并行读作用域互斥；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝。
+- **请求级查询管道 `CreatePipeline()`**：把多条独立只读查询合并为一次往返，结果按入队顺序类型化返回（`PipelineQuery<T, TProvider>` / `PipelineFirst<T, TProvider>` / `PipelineScalar<TProvider>`）。PostgreSQL 走 `NpgsqlBatch`，本机 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×）；MySQL 走 `MySqlBatch`（本机执行耗时时持平，WAN 省 RTT）；SQLite 回退顺序执行。契约：builder 入队即消费、只读、活动事务自动绑定、与并行读作用域互斥；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝。
 - **MySQL 复用命令晋升自动预编译**：单行 CRUD 与直查族命令槽晋升（同形态第 3 次）时执行一次 `PrepareAsync`，此后走二进制协议；预编译失败静默退化为未预编译。实测重复单键读约 −10~18%。新 Provider 能力位 `PrepareReusedCommands`（PostgreSQL 由 AutoPrepare 代劳、SQLite 随命令缓存语句，均保持 false）。
-- **`IDbProvider` 新能力位**：`MarkConnectionStateUnknown` / `PrepareReusedCommands` / `SupportsQueryPipeline` / `MaxPipelineCommands`——均有默认实现，旧第三方 Provider 源码兼容。
+- **MySQL 可选同步逐行读 `UseSynchronousRowRead`**：全量物化（GetAll/ToList/QueryAsync）的逐行读取改走同步 `Read()`；MySQL 5 轮交替实测约 998 ns/行 vs 异步 1846~2043 ns/行。默认关闭（流式行未缓冲时会阻塞线程）；流式 API（QueryAsyncEnumerable/ForEach）始终异步。
+- **`IDbProvider` 新能力位**：`MarkConnectionStateUnknown` / `PrepareReusedCommands` / `SupportsQueryPipeline` / `MaxPipelineCommands` / `SupportsSynchronousRowRead`——均有默认实现，旧第三方 Provider 源码兼容。
 
 ### ⚡ 性能
 
@@ -17,6 +18,7 @@
 - **直接查询复用槽参数补建**：`QueryAsync`/`ScalarAsync`/`CountAsync`/`ExecuteAsync`/流式查询的复用槽此前晋升后参数集合为空、带参查询永远回退新建；现首次使用补建参数，参数化直查从第 3 次起真正复用。
 - **LIMIT/OFFSET 参数只创建一次**：SQL 文本侧只消费参数名，`GetQueryParameters` 单点创建，消除每次冷形状构建的“建完即弃”参数对象。
 - **`QueryAsync` 物化容量启发**：原始 SQL 直查改用会话内上次行数作为初始容量（原硬编码 16），重复大结果集查询免去 ArrayPool 扩容拷贝。
+- **INSERT 异步层扁平化**：`FinishInsertAsync` 内联回 `InsertCoreAsync`，事务内逐条插入少一个 async 状态机帧/行。
 
 ### 🐛 修复
 

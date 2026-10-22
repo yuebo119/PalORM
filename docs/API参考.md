@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1138 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1140 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -192,7 +192,7 @@
 
 ### 查询管道（QueryPipeline，请求级单往返）
 
-把多条彼此独立的**只读**查询合并为一次数据库往返。PostgreSQL 走 `NpgsqlBatch`（本机实测 4 条单键查询 249µs → 72~79µs/条，约 3.2~3.4×）；其余 Provider 回退顺序执行（语义一致、无往返收益）。
+把多条彼此独立的**只读**查询合并为一次数据库往返。PostgreSQL 走 `NpgsqlBatch`（本机实测 4 条单键查询 249µs → 72~79µs/条，约 3.2~3.4×），MySQL 走 `MySqlBatch`（本机执行耗时时与顺序持平，WAN 下省 RTT）；SQLite 回退顺序执行（语义一致、无往返收益）。
 
 | API | 说明 |
 |------|------|
@@ -257,6 +257,7 @@
 | `LoggerFactory` | `ILoggerFactory?` |
 | `QueryCache` | `IQueryCache?`——未注入时各会话共享进程级 `BoundedQueryCache` 默认实例（容量 1024）。`BoundedQueryCache` 自 .NET 11 起暴露 OTel 指标（对齐 MemoryCache 标准口径）：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions`、`palorm.cache.entries`、`palorm.cache.estimated_size`，经 `PalORM` Meter 上游 OTLP 导出。 |
 | `ValidateQueryColumnOrder` | ADR-A 列序契约 |
+| `UseSynchronousRowRead` | 全量物化逐行读走同步 `Read()`（MySQL 需开启；SQLite 恒同步；默认 false）。MySQL 实测约 998 vs 1846~2043 ns/行；流式 API 始终异步 |
 
 ---
 
@@ -285,8 +286,9 @@
 | `InitializeConnectionAsync(conn, ct)` | static virtual | SQLite PRAGMA 初始化：整组调优每物理连接一次；干净句柄后续会话零往返，脏句柄只重设 `foreign_keys` |
 | `InvalidateConnectionInitialization(conn)` | static virtual | 会话 SQL 执行前作废物理连接的已初始化登记（下次走完整初始化；默认无操作） |
 | `MarkConnectionStateUnknown(conn)` | static virtual | 原生 SQL/DDL/裸连接执行后通知连接态不可信（SQLite 标脏；网络驱动默认 no-op） |
+| `SupportsSynchronousRowRead` | static virtual | 全量物化是否可用同步逐行读（MySQL/SQLite true；默认 false） |
 | `PrepareReusedCommands` | static virtual | 复用命令晋升时是否服务端预编译（MySQL true；PG 由 AutoPrepare 代劳；默认 false） |
-| `SupportsQueryPipeline` / `MaxPipelineCommands` | static virtual | 是否支持批查询管道及其语句上限（PG true/64；默认 false/0） |
+| `SupportsQueryPipeline` / `MaxPipelineCommands` | static virtual | 是否支持批查询管道及其语句上限（PG/MySQL true/64；默认 false/0） |
 | `IsUniqueViolation(exception)` | static virtual | 唯一约束错误码 |
 | `IsDuplicateSchemaObject(exception)` | static virtual | 架构对象已存在 |
 | `BulkInsertAsync(...)` | static virtual | Provider 原生批量 |

@@ -84,7 +84,8 @@ public sealed partial class DataSession<TProvider>
                 OptionsSnapshot: _options,
                 IsTransient: ProviderDelegates.IsTransient,
                 ProviderType: typeof(TProvider),
-                MarkConnectionStateUnknown: ProviderDelegates.MarkStateUnknown),
+                MarkConnectionStateUnknown: ProviderDelegates.MarkStateUnknown,
+                SyncRowRead: PreferSynchronousRowRead),
             tableName, columnNames, _readConnProvider,
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
             _readConnReturner, _querySlot));
@@ -774,47 +775,58 @@ public sealed partial class DataSession<TProvider>
         // 走下方新建路径——命令随操作释放，不泄漏。
         DbCommand? reusedInsert = TryAcquireInsertCommand(
             commandText, plan, entity, ref _insertWriteOps, activeTransaction, out bool prepareInsert);
+        DbCommand cmd;
+        bool ownsCommand;
         if (reusedInsert is not null)
         {
             await PreparePromotedCommandAsync(reusedInsert, prepareInsert, ct).ConfigureAwait(false);
-            return await FinishInsertAsync(info, reusedInsert, plan, entity, ct).ConfigureAwait(false);
+            cmd = reusedInsert;
+            ownsCommand = false;
+        }
+        else
+        {
+            cmd = CreateCommand();
+            try
+            {
+                cmd.CommandText = commandText;
+                cmd.CommandTimeout = _commandTimeoutSeconds;
+                plan.BindInsert(cmd, entity, 0);
+                ownsCommand = true;
+            }
+            catch
+            {
+                await cmd.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
 
-        await using DbCommand cmd = CreateCommand();
-        cmd.CommandText = commandText;
-        cmd.CommandTimeout = _commandTimeoutSeconds;
-        plan.BindInsert(cmd, entity, 0);
-        return await FinishInsertAsync(info, cmd, plan, entity, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>INSERT 执行形态分派的单一真源（PL-3）：InsertNoReturning → 纯执行；
-    /// RETURNING 方言 → 标量/整行读；MySQL → LAST_INSERT_ID 合并。复用与新建路径共用。
-    /// <para>R4（v6.0）：唯一冲突翻译挂靠点——异常过滤器形态（when 不吞栈），覆盖全部
-    /// 插入形态与 SaveAsync 的新增分支；Bulk 家族各有冲突消费语义，不在此包装。</para>
-    /// 深挖轮（2026-10-14）：InsertNoReturning 分支内联原 InsertPlainAsync 体——事务内
-    /// 逐条插入循环省一个 async 状态机帧/行（探针 A：三层 async 链 144ns，本项约 1/3）。</summary>
-    private async ValueTask<T> FinishInsertAsync<T>(
-        EntityRuntimeInfo info,
-        DbCommand cmd, CrudPlan plan, T entity, CancellationToken ct)
-        where T : class, new()
-    {
+        // 深挖轮（2026-10-14）+ 2026-10-22：InsertNoReturning 分支与唯一冲突翻译内联到本方法——
+        // 事务内逐条插入循环少一个 async 状态机帧/行（原 FinishInsertAsync 三层 async 链）。
         try
         {
-            if (plan.InsertNoReturning)
+            try
             {
-                int affected = await ExecuteRowsCoreAsync(cmd, ct).ConfigureAwait(false);
-                if (affected != 1)
-                    throw new InvalidOperationException(
-                        $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
-                return entity;
+                if (plan.InsertNoReturning)
+                {
+                    int affected = await ExecuteRowsCoreAsync(cmd, ct).ConfigureAwait(false);
+                    if (affected != 1)
+                        throw new InvalidOperationException(
+                            $"INSERT failed for '{typeof(T).Name}' (affected {affected} rows).");
+                    return entity;
+                }
+                return TProvider.SupportsReturningClause
+                    ? await InsertWithReturningAsync(info, cmd, plan, entity, ct).ConfigureAwait(false)
+                    : await InsertWithLastInsertIdAsync(info, cmd, entity, ct).ConfigureAwait(false);
             }
-            return TProvider.SupportsReturningClause
-                ? await InsertWithReturningAsync(info, cmd, plan, entity, ct).ConfigureAwait(false)
-                : await InsertWithLastInsertIdAsync(info, cmd, entity, ct).ConfigureAwait(false);
+            catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
+            {
+                throw new UniqueConstraintViolationException(ex);
+            }
         }
-        catch (Exception ex) when (TProvider.IsUniqueViolation(ex))
+        finally
         {
-            throw new UniqueConstraintViolationException(ex);
+            if (ownsCommand)
+                await cmd.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -1336,7 +1348,7 @@ public sealed partial class DataSession<TProvider>
             BindGeneratedKeyParameter<T>(info, cmd, key);
             BindDefaultFilterParameters(cmd, info.Features);
             await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
-            T? row = await ReadAsync(reader, token).ConfigureAwait(false)
+            T? row = await ReadRowAsync(reader, token).ConfigureAwait(false)
                 ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
             healthy = true;
             return row;
@@ -1369,7 +1381,7 @@ public sealed partial class DataSession<TProvider>
         {
             await PreparePromotedCommandAsync(reused, prepareGetByKey, token).ConfigureAwait(false);
             await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, token).ConfigureAwait(false);
-            return await ReadAsync(reusedReader, token).ConfigureAwait(false)
+            return await ReadRowAsync(reusedReader, token).ConfigureAwait(false)
                 ? ((Func<DbDataReader, T>)info.RowFactory)(reusedReader) : default;
         }
 
@@ -1380,7 +1392,7 @@ public sealed partial class DataSession<TProvider>
         BindDefaultFilterParameters(cmd, info.Features);
 
         await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
-        return await ReadAsync(reader, token).ConfigureAwait(false)
+        return await ReadRowAsync(reader, token).ConfigureAwait(false)
             ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
     }
 
@@ -1455,7 +1467,8 @@ public sealed partial class DataSession<TProvider>
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
         // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
         List<T> list = await ResultListReader.ReadAllAsync(
-            reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token).ConfigureAwait(false);
+            reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token,
+            syncRead: PreferSynchronousRowRead).ConfigureAwait(false);
         RecordMaterializedCount<T>(list.Count);
         lease.MarkHealthy();
         return list;

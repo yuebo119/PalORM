@@ -1230,6 +1230,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     internal void MarkConnectionStateUnknownForRawSql()
         => TProvider.MarkConnectionStateUnknown(_conn);
 
+    /// <summary>全量物化的逐行读取是否走同步叶子——进程内引擎恒真；网络驱动需
+    /// <see cref="DbOptions.UseSynchronousRowRead"/> 与 Provider 能力同时成立（MySQL 实测
+    /// 同步读约为异步的一半耗时；PostgreSQL 不声明能力）。流式 API 不走本属性。</summary>
+    internal bool PreferSynchronousRowRead
+        => TProvider.PreferSynchronousIo
+            || (_options.UseSynchronousRowRead && TProvider.SupportsSynchronousRowRead);
+
+    /// <summary>单行读叶子（GetByKey/首行族）——按 <see cref="PreferSynchronousRowRead"/> 分流。</summary>
+    private ValueTask<bool> ReadRowAsync(DbDataReader reader, CancellationToken ct)
+        => PreferSynchronousRowRead
+            ? new ValueTask<bool>(ReadSync(reader, ct))
+            : ReadAsync(reader, ct);
+
     /// <summary>刀3（2026-10-13 二轮）：复用命令的状态守卫式重设——Transaction/CommandTimeout
     /// 同值不重设（SqliteCommand.Transaction setter 含连接归属验证，长会话循环里同值重设是
     /// 纯开销）；CommandText 保持既有同值守卫（驱动同值 setter 短路未证实，显式跳过）。</summary>
