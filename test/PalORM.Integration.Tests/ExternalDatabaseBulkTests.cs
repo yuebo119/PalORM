@@ -1,3 +1,4 @@
+using MySqlConnector;
 using Npgsql;
 using PalORM.MySql;
 using PalORM.PostgreSql;
@@ -234,6 +235,106 @@ public sealed class ExternalDatabaseBulkTests
         finally
         {
             await db.ExecuteAsync($"DROP TABLE IF EXISTS all_types_entities");
+        }
+    }
+
+    /// <summary>P2-5 复合故障探针：BulkCopy 已写完前几批后失败，且重探测明确 Disabled。
+    /// <para>构造：batchSize=1，三行中第二行触发 <c>SLEEP(3)</c>；写入期间另一连接把
+    /// <c>GLOBAL local_infile</c> 关闭。第一、二批已落库（在外部事务内），第三批 LOAD DATA
+    /// 被服务端拒绝，重探测读到 OFF。旧实现按 Disabled 回退多值 INSERT 重插整批（前两行重复）；
+    /// 现在 Inserter 携带已写行数，Provider 只在零行写入时才允许回退，本调用必须抛原始异常。</para>
+    /// <para>回滚后断言 0 行：既证明失败被透传，也证明没有发生静默回退成功。</para></summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_BulkCopy_PartialWriteThenDisabled_DoesNotReinsert()
+    {
+        await LocalInfileTestGate.Gate.WaitAsync();
+        try
+        {
+            await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+            long savedLocalInfile = await db.ScalarAsync<long>($"SELECT @@local_infile");
+            try
+            {
+                await db.ExecuteAsync($"SET GLOBAL local_infile=ON");
+#pragma warning disable S2077, CA2100 // 探针自建自清（B171 惯例）：DDL 全硬编码
+                await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_p25_gate");
+                await db.ExecuteAsync($"DROP TRIGGER IF EXISTS ext_p25_gate_bi");
+                await db.ExecuteAsync($"""
+                    CREATE TABLE ext_p25_gate (id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        marker VARCHAR(16) NOT NULL, payload INT NOT NULL)
+                    """);
+                await db.ExecuteAsync($"""
+                    CREATE TRIGGER ext_p25_gate_bi BEFORE INSERT ON ext_p25_gate FOR EACH ROW
+                    BEGIN IF NEW.marker = 'gate' THEN DO SLEEP(3); END IF; END
+                    """);
+#pragma warning restore S2077, CA2100
+
+                // 探测缓存预热为 Enabled，并清掉其它用例可能留下的 OFF 结论
+                MySqlProvider.ResetLocalInfileProbeCache();
+                await db.BulkInsertAsync([new P25GateRow { Marker = "warm", Payload = 0 }]);
+                await db.ExecuteAsync($"DELETE FROM ext_p25_gate");
+
+                await using DataSession<MySqlProvider> txSession = await TestDb.MySqlAsync();
+                await using var transaction = await txSession.BeginTransactionAsync();
+
+                Task flip = Task.Run(async () =>
+                {
+                    await Task.Delay(1000).ConfigureAwait(false);
+                    await using DataSession<MySqlProvider> admin = await TestDb.MySqlAsync();
+                    await admin.ExecuteAsync($"SET GLOBAL local_infile=OFF").ConfigureAwait(false);
+                });
+
+                Exception? failure = null;
+                try
+                {
+                    await txSession.BulkInsertAsync(
+                        [
+                            new P25GateRow { Marker = "first", Payload = 1 },
+                            new P25GateRow { Marker = "gate", Payload = 2 },
+                            new P25GateRow { Marker = "last", Payload = 3 }
+                        ],
+                        batchSize: 1);
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
+                }
+                finally
+                {
+                    await flip.ConfigureAwait(false);
+                }
+
+                await Assert.That(failure).IsNotNull();
+                await Assert.That(failure).IsTypeOf<MySqlException>();
+                // 前两批已写入事务（第三批才被拒绝）——这是"复合故障"成立的前提，
+                // 同时防止时序漂移时用例静默退化成"零行写入"形态。
+                await Assert.That(
+                    await txSession.ScalarAsync<long>($"SELECT COUNT(*) FROM ext_p25_gate")).IsEqualTo(2L);
+                await transaction.RollbackAsync();
+                await Assert.That(
+                    await txSession.ScalarAsync<long>($"SELECT COUNT(*) FROM ext_p25_gate")).IsEqualTo(0L);
+            }
+            finally
+            {
+                try
+                {
+                    await db.ExecuteAsync($"DROP TRIGGER IF EXISTS ext_p25_gate_bi");
+                    await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_p25_gate");
+                }
+                catch (Exception cleanupException)
+                {
+                    _ = cleanupException;
+                }
+                FormattableString restoreLocalInfile = savedLocalInfile == 0
+                    ? (FormattableString)$"SET GLOBAL local_infile=OFF"
+                    : (FormattableString)$"SET GLOBAL local_infile=ON";
+                await db.ExecuteAsync(restoreLocalInfile);
+                MySqlProvider.ResetLocalInfileProbeCache();
+            }
+        }
+        finally
+        {
+            LocalInfileTestGate.Gate.Release();
         }
     }
 
@@ -688,6 +789,15 @@ public partial class ExtBulkEntity
 #pragma warning disable CA1819
     [Column("payload")] public byte[]? Payload { get; set; }
 #pragma warning restore CA1819
+}
+
+/// <summary>P2-5 复合故障探针实体（表由测试自建，含 SLEEP 触发器）。</summary>
+[Table("ext_p25_gate")]
+public sealed partial class P25GateRow
+{
+    [Key] public long Id { get; set; }
+    [Column("marker")] public string Marker { get; set; } = "";
+    [Column("payload")] public int Payload { get; set; }
 }
 
 /// <summary>UNNEST-1 真库验证：长整型主键的数组形态（<c>NpgsqlDbType.Array | Bigint</c>）。</summary>

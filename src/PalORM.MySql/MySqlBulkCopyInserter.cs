@@ -77,12 +77,37 @@ internal static class MySqlBulkCopyInserter
             // C4：批间取消检查点——ct 已取消时不再进入下一批的建连/写盘
             ct.ThrowIfCancellationRequested();
             int end = Math.Min(start + batchSize, entities.Count);
-            totalInserted += await ExecuteBatchAsync(
-                conn, transaction, new BatchRange(start, end), ctx, batchLayout, ct)
-                .ConfigureAwait(false);
+            try
+            {
+                totalInserted += await ExecuteBatchAsync(
+                    conn, transaction, new BatchRange(start, end), ctx, batchLayout, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // P2-5：把"失败前已完成的批行数"带出去——调用方据此判定能否安全回退多值重插。
+                // 每个 LOAD DATA 批语句级原子，异常批自身零行，totalInserted 即服务端已写入行数
+                //（无外部事务时前几批已提交，有事务时在事务内待回滚）。取消原样上抛。
+                throw new BulkCopyPartialFailureException(totalInserted, exception);
+            }
         }
         return totalInserted;
     }
+
+    /// <summary>P2-5 复合故障载体：BulkCopy 在写入若干批后失败。
+    /// <see cref="RowsWritten"/> &gt; 0 时调用方不得回退多值重插（会重复已写入的行），
+    /// 只能透传 <see cref="Exception.InnerException"/> 由调用方回滚/上报。</summary>
+#pragma warning disable CA1032, CA1064, S3871 // 内部控制流载体：Provider 捕获后解包，从不对外暴露
+    internal sealed class BulkCopyPartialFailureException : Exception
+    {
+        internal BulkCopyPartialFailureException(long rowsWritten, Exception inner)
+            : base($"MySqlBulkCopy failed after {rowsWritten} row(s) had been written; "
+                + "a multi-value fallback would duplicate them.", inner)
+            => RowsWritten = rowsWritten;
+
+        internal long RowsWritten { get; }
+    }
+#pragma warning restore CA1032, CA1064, S3871
 
     /// <summary>本批实体的起止区间（左闭右开）。</summary>
     private readonly record struct BatchRange(int Start, int End);

@@ -283,23 +283,13 @@ public sealed class MySqlProvider : IDbProvider
                 {
                     // ITM-892（r24，真库实证）：探测缓存 60s TTL 内服务端可被关闭——BulkCopy 抛
                     // "Loading local data is disabled"（协议握手阶段拒绝，零行写入）整批硬失败。
-                    // 2026-10-22 终审 P2-5：重探测只有明确 Disabled 才回退（握手拒绝零写入）；
-                    // Enabled（真故障，可能部分写入）与 ProbeFailed（能力未知）都透传，避免重插。
-                    CapabilityProbeCache<LocalInfileProbe>.Invalidate(mySqlConnection.ConnectionString);
-                    LocalInfileProbeResult reprobe = await ProbeLocalInfileAsync(
-                        mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false);
-                    if (reprobe == LocalInfileProbeResult.Disabled)
-                    {
-                        return await MultiValueBulkInsert.ExecuteAsync(
-                            conn, transaction, entities,
-                            new BulkContext(
-                                batchSize,
-                                MaxParametersPerStatement: SqlLimits.MaxBindParameters,
-                                QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
-                                IsolationLevel: isolationLevel),
-                            ct).ConfigureAwait(false);
-                    }
-                    throw;
+                    // 2026-10-22 终审 P2-5：重探测只有明确 Disabled **且本次失败零行写入**才回退；
+                    // Enabled（真故障）、ProbeFailed（能力未知）与已写部分行（前几批已落库/入事务）
+                    // 都透传，避免整批重插制造重复。
+                    return await FallbackOrRethrowAsync(
+                        mySqlConnection, transaction, entities,
+                        new BulkFailureFallbackSettings(batchSize, commandTimeoutSeconds, isolationLevel),
+                        exception, ct).ConfigureAwait(false);
                 }
             }
         }
@@ -314,6 +304,43 @@ public sealed class MySqlProvider : IDbProvider
                 IsolationLevel: isolationLevel),  // r7-S1：回退分支同透传
             ct).ConfigureAwait(false);
     }
+
+    /// <summary>BulkCopy 失败后的回退判定（P2-5）——仅当本次失败<b>零行写入</b>且重探测明确
+    /// Disabled 时回退多值 INSERT；其余情况抛原始异常（包装层只承载行数，不对外暴露）。
+    /// <para>为什么要看已写行数：重探测 Disabled 只说明"现在服务端关了"，不说明失败发生在
+    /// 第一批。batchSize&gt;1 时前几批可能已写入（外部事务内待回滚，无事务时已提交），
+    /// 整批重插会重复已写行。</para></summary>
+    private static async Task<long> FallbackOrRethrowAsync<T>(
+        MySqlConnection conn, DbTransaction? transaction, IReadOnlyList<T> entities,
+        BulkFailureFallbackSettings settings, Exception exception, CancellationToken ct)
+        where T : class, new()
+    {
+        long rowsWritten = exception is MySqlBulkCopyInserter.BulkCopyPartialFailureException partial
+            ? partial.RowsWritten
+            : 0;
+        CapabilityProbeCache<LocalInfileProbe>.Invalidate(conn.ConnectionString);
+        LocalInfileProbeResult reprobe = await ProbeLocalInfileAsync(
+            conn, transaction as MySqlTransaction, ct).ConfigureAwait(false);
+        if (rowsWritten == 0 && reprobe == LocalInfileProbeResult.Disabled)
+        {
+            return await MultiValueBulkInsert.ExecuteAsync(
+                conn, transaction, entities,
+                new BulkContext(
+                    settings.BatchSize,
+                    MaxParametersPerStatement: SqlLimits.MaxBindParameters,
+                    QuoteIdentifier, CreateParameter, settings.CommandTimeoutSeconds,
+                    IsolationLevel: settings.IsolationLevel),
+                ct).ConfigureAwait(false);
+        }
+        Exception original = exception is MySqlBulkCopyInserter.BulkCopyPartialFailureException partialFailure
+            ? partialFailure.InnerException!
+            : exception;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(original).Throw();
+        throw new InvalidOperationException("unreachable: ExceptionDispatchInfo.Throw always throws.");
+    }
+
+    private readonly record struct BulkFailureFallbackSettings(
+        int BatchSize, int CommandTimeoutSeconds, System.Data.IsolationLevel IsolationLevel);
 
     /// <summary>检测服务端 local_infile 是否开启。
     /// <para><b>L1：按连接串缓存探测结果</b>（EPSL 2026-10-11 审计 B 批 #2 修订）——原实现每次
