@@ -19,6 +19,7 @@
 - **LIMIT/OFFSET 参数只创建一次**：SQL 文本侧只消费参数名，`GetQueryParameters` 单点创建，消除每次冷形状构建的“建完即弃”参数对象。
 - **`QueryAsync` 物化容量启发**：原始 SQL 直查改用会话内上次行数作为初始容量（原硬编码 16），重复大结果集查询免去 ArrayPool 扩容拷贝。
 - **INSERT 异步层扁平化**：`FinishInsertAsync` 内联回 `InsertCoreAsync`，事务内逐条插入少一个 async 状态机帧/行。
+- **查询参数延迟物化**：`QueryClause` 的标量参数改为 `ParameterBinding`（名/值，24B 结构），`DbParameter` 只在新建命令或拦截器上下文需要时创建；命令复用槽命中时就地写值，零驱动参数对象。长会话 2 参链式查询探针：1328 → 1200 B/op、8216 → 7899 ns/op（约 −10% / −4%）。租户默认过滤参数同步改为延迟绑定（`From<T>()` 不再预建 DbParameter）。
 
 ### 🐛 修复
 

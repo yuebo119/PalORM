@@ -375,7 +375,7 @@ public struct QueryBuilder<T> where T : class, new()
         string operatorName = negated ? " NOT IN (" : " IN (";
         string batchSeparator = negated ? " AND " : " OR ";
         // O2 预分配：参数总量在进循环前已知
-        var parameters = new List<DbParameter>(items.Count);
+        var parameters = new List<ParameterBinding>(items.Count);
         var sb = new ValueStringBuilder(stackalloc char[512]);
         try
         {
@@ -419,7 +419,7 @@ public struct QueryBuilder<T> where T : class, new()
             sb.Append(negated ? " != ALL(" : " = ANY(");
             sb.Append(parameter.ParameterName);
             sb.Append("))");
-            AddClause(QueryClauseKind.Where, sb.ToString(), [parameter]);
+            AddClause(QueryClauseKind.Where, sb.ToString(), [new ParameterBinding(parameter)]);
             return true;
         }
         finally { sb.Dispose(); }
@@ -428,7 +428,7 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>把 items 按 500 一批写成 <c>col IN (@p…)</c> 片段，批间以 <paramref name="batchSeparator"/>
     /// 连接。参数按写入顺序创建并追加到 <paramref name="parameters"/>，参数名序号与旧实现逐位一致。</summary>
     private void AppendInBatches<TValue>(ref ValueStringBuilder sb, IReadOnlyList<TValue> items,
-        List<DbParameter> parameters, string column, string operatorName, string batchSeparator)
+        List<ParameterBinding> parameters, string column, string operatorName, string batchSeparator)
     {
         const int maxBatch = SqlLimits.InClauseBatchSize;
         for (int start = 0; start < items.Count; start += maxBatch)
@@ -440,9 +440,9 @@ public struct QueryBuilder<T> where T : class, new()
             for (int index = start; index < end; index++)
             {
                 if (index > start) sb.Append(", ");
-                DbParameter parameter = CreateParameter(items[index], parameters.Count);
+                ParameterBinding parameter = CreateBinding(items[index], parameters.Count);
                 parameters.Add(parameter);
-                sb.Append(parameter.ParameterName);
+                sb.Append(parameter.Name);
             }
             sb.Append(')');
         }
@@ -482,17 +482,17 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Set<TValue>(Expression<Func<T, TValue>> member, TValue value)
     {
         _markStateUnknown?.Invoke(_conn);
-        DbParameter parameter = CreateParameter(value);
+        ParameterBinding parameter = CreateBinding(value);
         string columnName = GetColumnName(member);
         // ITM-763(r21)：敏感列掩码登记——执行管线经 QueryContext.SensitiveParameterMasks
         // 交给拦截器（AuditInterceptor 据此以掩码替代真实值）。注册表由生成器发射
         // （SensitiveColumnMasks），仅实体有敏感列时才产生分配。
         if (PalORM_Runtime.SensitiveColumnMasks.TryGetValue(typeof(T), out var columnMasks)
             && columnMasks.TryGetValue(columnName, out string? mask))
-            (_sensitiveMasks ??= new Dictionary<string, string>(4))[parameter.ParameterName] = mask;
+            (_sensitiveMasks ??= new Dictionary<string, string>(4))[parameter.Name] = mask;
         string prefix = HasClause(QueryClauseKind.Set) ? ", " : "SET ";
         AddClause(QueryClauseKind.Set,
-            $"{prefix}{_quoteIdentifier(columnName)} = {parameter.ParameterName}", [parameter]);
+            $"{prefix}{_quoteIdentifier(columnName)} = {parameter.Name}", [parameter]);
         return this;
     }
 
@@ -821,10 +821,10 @@ public struct QueryBuilder<T> where T : class, new()
         AddClause(QueryClauseKind.DefaultFilter, sql, parameters);
     }
 
-    /// <summary>S5：租户过滤直绑——条件文本与单个参数对象由调用方给出，跳过
-    /// FormattableString 格式化与参数表分配。</summary>
-    internal void AddDefaultFilter(string sql, DbParameter parameter)
-        => AddClause(QueryClauseKind.DefaultFilter, sql, [parameter]);
+    /// <summary>S5：租户过滤直绑——条件文本与单个参数（名/值）由调用方给出，跳过
+    /// FormattableString 格式化与参数对象创建（执行期才物化 DbParameter）。</summary>
+    internal void AddDefaultFilter(string sql, string parameterName, object? value)
+        => AddClause(QueryClauseKind.DefaultFilter, sql, [new ParameterBinding(parameterName, value)]);
 
     /// <summary>G3（2026-10-13 五轮全量重读微项包）：采用共享的无参默认过滤链头节点——
     /// From&lt;T&gt;() 对 SoftDelete 实体注入的默认过滤子句零参数、全部成分只由 TProvider 决定，
@@ -881,11 +881,12 @@ public struct QueryBuilder<T> where T : class, new()
         ClauseNode? chain = null;
         foreach (QueryClause clause in MaterializeClauses())
         {
-            var parameters = new List<DbParameter>(clause.Parameters.Count);
-            foreach (DbParameter parameter in clause.Parameters)
+            var parameters = new List<ParameterBinding>(clause.Parameters.Count);
+            foreach (ParameterBinding parameter in clause.Parameters)
             {
-                DbParameter copy = clone._paramFactory(parameter.ParameterName, parameter.Value);
-                parameters.Add(copy);
+                parameters.Add(parameter.Eager is { } eager
+                    ? new ParameterBinding(clone._paramFactory(eager.ParameterName, eager.Value))
+                    : parameter);
             }
             clone._parameterCount += parameters.Count;
             chain = new ClauseNode(chain, new QueryClause(clause.Kind, clause.Sql, parameters));
@@ -907,9 +908,9 @@ public struct QueryBuilder<T> where T : class, new()
         // DefaultFilter 恒以 AND 拼在用户子句组括号之外（WHERE keyset AND ((A) OR (B))）。
         // 若并入 Where 组，用户 OrWhere 的 OR 优先级会使续页条件仅约束末分支，
         // 页间重复、分页不推进（ITM-401 括组根因的新入口，真库探针实测）。
-        DbParameter parameter = CreateParameter(value);
+        ParameterBinding parameter = CreateBinding(value);
         AddClause(QueryClauseKind.DefaultFilter,
-            $"{qualifiedColumn} {operation} {parameter.ParameterName}", [parameter]);
+            $"{qualifiedColumn} {operation} {parameter.Name}", [parameter]);
     }
 
     /// <summary>成员表达式 → 限定列名（C16：暴露给 ToPageAsync 单次解析复用）。</summary>
@@ -924,31 +925,38 @@ public struct QueryBuilder<T> where T : class, new()
             $"{(HasClause(QueryClauseKind.OrderBy) ? ", " : "ORDER BY ")}" +
             $"{qualifiedColumn}{(descending ? " DESC" : "")}");
 
-    internal IReadOnlyList<DbParameter> GetQueryParameters()
+    /// <summary>查询参数绑定（延迟物化形态）——执行热路径消费；LIMIT/OFFSET 追加与子句参数
+    /// 组合成新数组（子句参数表可能是单贡献者快路径的直引用，不得就地变异）。</summary>
+    internal IReadOnlyList<ParameterBinding> GetQueryParameterBindings()
     {
-        IReadOnlyList<DbParameter> parameters = GetParametersForKinds(
+        IReadOnlyList<ParameterBinding> parameters = GetParametersForKinds(
             _splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
         if (!_take.HasValue && !_skip.HasValue) return parameters;
-        // SHAPE-010 根解：LIMIT/OFFSET 值参数化后必须随查询绑定。R3（2026-10-12）：
-        // 走 CreateLimitParameters 单一真源——免建即弃的 LIMIT 文本（原每次一个 ~60B 串）；
-        // 每次现建（builder 可变，缓存参数对象会在 Take/Skip 改值后失真）。
-        // R2-#2（2026-10-13）：parameters 可能是子句参数表的直引用（单贡献者快路径，
-        // 不得就地变异）——LIMIT 追加改组合拷贝。
-        DbParameter[] limitParameters = CreateLimitParameters();
-        if (limitParameters.Length == 0) return parameters;
-        if (parameters.Count == 0) return limitParameters;
-        var combined = new List<DbParameter>(parameters.Count + limitParameters.Length);
+        ParameterBinding[] limitBindings = CreateLimitBindings();
+        if (limitBindings.Length == 0) return parameters;
+        if (parameters.Count == 0) return limitBindings;
+        var combined = new ParameterBinding[parameters.Count + limitBindings.Length];
         for (int i = 0; i < parameters.Count; i++)
-            combined.Add(parameters[i]);
-        combined.AddRange(limitParameters);
+            combined[i] = parameters[i];
+        limitBindings.CopyTo(combined, parameters.Count);
         return combined;
     }
 
-    internal IReadOnlyList<DbParameter> GetCountParameters()
+    internal IReadOnlyList<ParameterBinding> GetCountParameterBindings()
         => GetParametersForKinds(_splitQuery ? QueryClauseKinds.CountSplit : QueryClauseKinds.Count);
 
-    internal IReadOnlyList<DbParameter> GetUpdateParameters()
+    internal IReadOnlyList<ParameterBinding> GetUpdateParameterBindings()
         => GetParametersForKinds(QueryClauseKinds.Update);
+
+    /// <summary>物化后的查询参数视图（DryRun/测试/管道等非热路径；执行热路径用 bindings）。</summary>
+    internal IReadOnlyList<DbParameter> GetQueryParameters()
+        => QueryBuilderShared.Materialize(GetQueryParameterBindings(), _paramFactory);
+
+    internal IReadOnlyList<DbParameter> GetCountParameters()
+        => QueryBuilderShared.Materialize(GetCountParameterBindings(), _paramFactory);
+
+    internal IReadOnlyList<DbParameter> GetUpdateParameters()
+        => QueryBuilderShared.Materialize(GetUpdateParameterBindings(), _paramFactory);
 
     internal string BuildCountSql()
     {
@@ -1204,23 +1212,25 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
-    private (string Sql, IReadOnlyList<DbParameter> Parameters) BindFormattableString(FormattableString sql)
+    private (string Sql, IReadOnlyList<ParameterBinding> Parameters) BindFormattableString(FormattableString sql)
     {
         int baseIndex = _parameterCount;
         string formatted = FormatFormattableSql(sql, baseIndex);
         // S5：0 参复用共享空表；1 参用单元素数组（原 List 对象 + 背衬数组约 64B/查询）。
+        // 参数延迟物化（2026-10-22）：这里只存（名, 值）——DbParameter 由执行期按需创建，
+        // 命令复用槽命中时直接写值，不再每查询新建驱动参数对象。
         if (sql.ArgumentCount == 0)
             return (formatted, QueryBuilderShared.EmptyParameters);
         if (sql.ArgumentCount == 1)
         {
             return (formatted, new[]
             {
-                _paramFactory(GetParameterName(baseIndex), sql.GetArgument(0)),
+                new ParameterBinding(GetParameterName(baseIndex), sql.GetArgument(0)),
             });
         }
-        var parameters = new List<DbParameter>(sql.ArgumentCount);
+        var parameters = new ParameterBinding[sql.ArgumentCount];
         for (int i = 0; i < sql.ArgumentCount; i++)
-            parameters.Add(_paramFactory(GetParameterName(baseIndex + i), sql.GetArgument(i)));
+            parameters[i] = new ParameterBinding(GetParameterName(baseIndex + i), sql.GetArgument(i));
         return (formatted, parameters);
     }
 
@@ -1234,15 +1244,15 @@ public struct QueryBuilder<T> where T : class, new()
         AddClause(kind, prefix + sql, parameters);
     }
 
-    private DbParameter CreateParameter(object? value, int localOffset = 0)
-        => _paramFactory(GetParameterName(_parameterCount + localOffset), value);
+    private ParameterBinding CreateBinding(object? value, int localOffset = 0)
+        => new(GetParameterName(_parameterCount + localOffset), value);
 
     private void AddClause(QueryClauseKind kind, string sql,
-        IReadOnlyList<DbParameter>? parameters = null)
+        IReadOnlyList<ParameterBinding>? parameters = null)
     {
         // T5b：链节点替代 List+COW——struct 副本共享的链不可变，副本隔离天然成立
         // （原 COW 注释：QUERY-001 副本隔离需求；v5.6 的 Count+4 预留容量优化随 COW 一并废弃）。
-        IReadOnlyList<DbParameter> ownedParameters = parameters ?? Array.Empty<DbParameter>();
+        IReadOnlyList<ParameterBinding> ownedParameters = parameters ?? Array.Empty<ParameterBinding>();
         _clauseChain = new ClauseNode(_clauseChain, new QueryClause(kind, sql, ownedParameters));
         _materializedClauses = null;
         // v4.6：同步设置位掩码
@@ -1295,7 +1305,7 @@ public struct QueryBuilder<T> where T : class, new()
         || _selectColumns is not null || _splitQuery || _cacheKey is not null;
 
     // v4.1：去 AsReadOnly 包装（省 1 次 ReadOnlyCollection 分配），改用 Array.IndexOf 去 LINQ 迭代器
-    private IReadOnlyList<DbParameter> GetParametersForKinds(QueryClauseKind[] kinds)
+    private IReadOnlyList<ParameterBinding> GetParametersForKinds(QueryClauseKind[] kinds)
     {
         // PERF-005 + R3（2026-10-12）：零参数查询返回共享空表（原 `[]` 每次新建 List ~32B）。
         // 不可变约定：返回共享空表的调用方不得向其 Add——GetQueryParameters 的 LIMIT 追加
@@ -1305,7 +1315,7 @@ public struct QueryBuilder<T> where T : class, new()
         // 返回的子句表被调用方只读消费（AddParameters/TryCopyParameterValues/QueryContext
         // 均不变异）；LIMIT 组合路径在 GetQueryParameters 里拷贝，不触碰本表。
         if (_parameterCount == 0) return QueryBuilderShared.EmptyParameters;
-        IReadOnlyList<DbParameter>? single = null;
+        IReadOnlyList<ParameterBinding>? single = null;
         foreach (QueryClause clause in MaterializeClauses())
         {
             if (Array.IndexOf(kinds, clause.Kind) < 0) continue;
@@ -1320,7 +1330,7 @@ public struct QueryBuilder<T> where T : class, new()
         if (single is not null)
             return single;   // 单贡献者：直引用，零分配
         // 预分配至全参数量上限--绝大多数查询全部子句类别都被选中，扩容为零
-        var parameters = new List<DbParameter>(_parameterCount);
+        var parameters = new List<ParameterBinding>(_parameterCount);
         foreach (QueryClause clause in MaterializeClauses())
         {
             if (Array.IndexOf(kinds, clause.Kind) < 0) continue;
@@ -1541,25 +1551,20 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>R3（2026-10-12）：LIMIT 参数创建的单一真源——<see cref="GetQueryParameters"/> 专用
     /// （文本侧只消费参数名，不再建参）。编号从 _parameterCount 起；形态：skip-only 单参数；
     /// take 在场恒两参数（skip 缺省 0 占位，MySQL 序为 [skip, take]，其余 [take, skip]）。</summary>
-    private DbParameter[] CreateLimitParameters()
+    private ParameterBinding[] CreateLimitBindings()
     {
-        if (!_take.HasValue && !_skip.HasValue) return System.Array.Empty<DbParameter>();
-        if (LiteralTakeValue != 0) return System.Array.Empty<DbParameter>();
+        if (!_take.HasValue && !_skip.HasValue) return System.Array.Empty<ParameterBinding>();
+        if (LiteralTakeValue != 0) return System.Array.Empty<ParameterBinding>();
         if (!_take.HasValue)
         {
-            DbParameter skipOnly = CreateParameter(_skip!.Value, 0);
-            return [skipOnly];
+            return [CreateBinding(_skip!.Value, 0)];
         }
         if (_dialect == SqlDialect.MySql)
         {
             // MySQL 裸 OFFSET 无 LIMIT 需补位哨兵：LIMIT skip, max（skip 在前）
-            DbParameter mysqlSkip = CreateParameter(_skip ?? 0, 0);
-            DbParameter mysqlTake = CreateParameter(_take.Value, 1);
-            return [mysqlSkip, mysqlTake];
+            return [CreateBinding(_skip ?? 0, 0), CreateBinding(_take.Value, 1)];
         }
-        DbParameter take = CreateParameter(_take.Value, 0);
-        DbParameter skip = CreateParameter(_skip ?? 0, 1);
-        return [take, skip];
+        return [CreateBinding(_take.Value, 0), CreateBinding(_skip ?? 0, 1)];
     }
 
     private static string GetRegisteredTableName(Type entityType)
@@ -1594,7 +1599,23 @@ internal static class QueryBuilderShared
 {
     /// <summary>零参数查询的共享空表（R3，2026-10-12）——只读共享；
     /// 不可变约定见 QueryBuilder&lt;T&gt;.GetParametersForKinds。</summary>
-    internal static readonly List<DbParameter> EmptyParameters = [];
+    internal static readonly List<ParameterBinding> EmptyParameters = [];
+
+    /// <summary>把延迟绑定物化为驱动参数——只由非热路径（DryRun/测试/管道/ToPage）与
+    /// 拦截器上下文消费；执行热路径直接使用绑定。</summary>
+    internal static IReadOnlyList<DbParameter> Materialize(
+        IReadOnlyList<ParameterBinding> bindings, Func<string, object?, DbParameter> factory)
+    {
+        if (bindings.Count == 0)
+            return System.Array.Empty<DbParameter>();
+        var parameters = new DbParameter[bindings.Count];
+        for (int index = 0; index < bindings.Count; index++)
+        {
+            ParameterBinding binding = bindings[index];
+            parameters[index] = binding.Eager ?? factory(binding.Name, binding.Value);
+        }
+        return parameters;
+    }
 }
 
 /// <summary>Provider 能力聚合——把 dialect/factory/interceptors/paramFactory/quoteIdentifier/

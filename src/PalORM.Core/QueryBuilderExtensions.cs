@@ -38,7 +38,8 @@ public static class QueryBuilderExtensions
         TimeSpan? CacheTtl,
         string? CacheTenantScope,
         string Sql,
-        IReadOnlyList<DbParameter> Parameters,
+        IReadOnlyList<ParameterBinding> Parameters,
+        Func<string, object?, DbParameter> ParamFactory,
         QueryContext Context,
         List<IQueryInterceptor> Interceptors,
         long? SwStart,
@@ -152,7 +153,7 @@ public static class QueryBuilderExtensions
                 cmd.CommandText = state.Sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
             cmd.Transaction = state.BoundTransaction;
-            if (!parametersBound) AddParameters(cmd, state.Parameters);
+            if (!parametersBound) AddParameters(cmd, state.Parameters, state.ParamFactory);
             await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
@@ -198,7 +199,7 @@ public static class QueryBuilderExtensions
             cmd.CommandText = state.Sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
             cmd.Transaction = state.BoundTransaction;
-            AddParameters(cmd, state.Parameters);
+            AddParameters(cmd, state.Parameters, state.ParamFactory);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
             long rowCount = 0;
@@ -256,7 +257,7 @@ public static class QueryBuilderExtensions
                 cmd.CommandText = state.Sql;
             cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
             cmd.Transaction = state.BoundTransaction;
-            if (!parametersBound) AddParameters(cmd, state.Parameters);
+            if (!parametersBound) AddParameters(cmd, state.Parameters, state.ParamFactory);
             await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
@@ -363,13 +364,15 @@ public static class QueryBuilderExtensions
             throw new NotSupportedException(
                 "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
         string sql = builder.BuildSql();
-        IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
-        var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
+        IReadOnlyList<ParameterBinding> parameters = builder.GetQueryParameterBindings();
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        QueryContext context = interceptors.Count > 0
+            ? new QueryContext(sql, QueryBuilderShared.Materialize(parameters, builder._paramFactory), builder._sensitiveMasks)
+            : default;
         const string operation = "select";
         string provider = builder._dialect.GetName();
         bool observed = builder._tracing || builder._metrics;
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
-        List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         SessionOperationState operationState = builder._operationState;
@@ -383,7 +386,7 @@ public static class QueryBuilderExtensions
             builder._readConnProvider, builder._querySlot, builder._factory,
             builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
-            sql, parameters, context, interceptors, swStart, boundTransaction,
+            sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
             builder._readConnReturner, builder._syncRowRead);
         string outcome = "error";
         try
@@ -435,13 +438,15 @@ public static class QueryBuilderExtensions
             throw new NotSupportedException(
                 "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
         string sql = builder.BuildSql();
-        IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
-        var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
+        IReadOnlyList<ParameterBinding> parameters = builder.GetQueryParameterBindings();
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        QueryContext context = interceptors.Count > 0
+            ? new QueryContext(sql, QueryBuilderShared.Materialize(parameters, builder._paramFactory), builder._sensitiveMasks)
+            : default;
         const string operation = "select";
         string provider = builder._dialect.GetName();
         bool observed = builder._tracing || builder._metrics;
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
-        List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         SessionOperationState operationState = builder._operationState;
@@ -455,7 +460,7 @@ public static class QueryBuilderExtensions
             builder._readConnProvider, builder._querySlot, builder._factory,
             builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
-            sql, parameters, context, interceptors, swStart, boundTransaction,
+            sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
             builder._readConnReturner, builder._syncRowRead);
         string outcome = "error";
         try
@@ -608,13 +613,15 @@ public static class QueryBuilderExtensions
             throw new NotSupportedException(
                 "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
         string sql = builder.BuildSql();
-        IReadOnlyList<DbParameter> parameters = builder.GetQueryParameters();
-        var context = new QueryContext(sql, parameters, builder._sensitiveMasks);
+        IReadOnlyList<ParameterBinding> parameters = builder.GetQueryParameterBindings();
+        List<IQueryInterceptor> interceptors = builder._interceptors;
+        QueryContext context = interceptors.Count > 0
+            ? new QueryContext(sql, QueryBuilderShared.Materialize(parameters, builder._paramFactory), builder._sensitiveMasks)
+            : default;
         const string operation = "select";
         string provider = builder._dialect.GetName();
         bool observed = builder._tracing || builder._metrics;
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
-        List<IQueryInterceptor> interceptors = builder._interceptors;
         bool needStopwatch = observed || interceptors.Count > 0;
         long? swStart = needStopwatch ? Stopwatch.GetTimestamp() : null;
         SessionOperationState operationState = builder._operationState;
@@ -628,7 +635,7 @@ public static class QueryBuilderExtensions
             builder._readConnProvider, builder._querySlot, builder._factory,
             builder._take, builder._prepared, builder._commandTimeout, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
-            sql, parameters, context, interceptors, swStart, boundTransaction,
+            sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
             builder._readConnReturner, builder._syncRowRead);
         string outcome = "error";
         try
@@ -768,7 +775,7 @@ public static class QueryBuilderExtensions
                 countCommand.Transaction = transaction;
                 countCommand.CommandText = countSql;
                 countCommand.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
-                AddParameters(countCommand, paged.GetCountParameters());
+                AddParameters(countCommand, paged.GetCountParameterBindings(), paged._paramFactory);
                 object? countResult = await ExecuteScalarObservedAsync(
                     countCommand, paged, "count", ct).ConfigureAwait(false);
                 // ITM-637：COUNT 结果理论恒非 null——驱动异常形态下显式报错比 NRE 近根因
@@ -1093,8 +1100,10 @@ public static class QueryBuilderExtensions
         long? swStart = observed || interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
         // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
-        IReadOnlyList<DbParameter> updateParameters = builder.GetUpdateParameters();
-        var context = new QueryContext(sql, updateParameters, builder._sensitiveMasks);
+        IReadOnlyList<ParameterBinding> updateParameters = builder.GetUpdateParameterBindings();
+        QueryContext context = interceptors.Count > 0
+            ? new QueryContext(sql, QueryBuilderShared.Materialize(updateParameters, builder._paramFactory), builder._sensitiveMasks)
+            : default;
         bool metrics = builder._metrics;
         string? metricsName = builder._metricsName;
         bool prepared = builder._prepared;
@@ -1134,7 +1143,7 @@ public static class QueryBuilderExtensions
                     command.CommandTimeout = timeoutSeconds;
                 if (!string.Equals(command.CommandText, sql, StringComparison.Ordinal))
                     command.CommandText = sql;
-                if (!parametersBound) AddParameters(command, updateParameters);
+                if (!parametersBound) AddParameters(command, updateParameters, builder._paramFactory);
                 await EnsureReusablePreparedAsync(builder._querySlot, reusable is not null, ct)
                     .ConfigureAwait(false);
                 NotifyInterceptorsOnBefore(interceptors, context);
@@ -1198,35 +1207,50 @@ public static class QueryBuilderExtensions
         CancellationToken cancellationToken)
         => prepared ? command.PrepareAsync(cancellationToken) : Task.CompletedTask;
 
-    // v4.1 极致降内存：直接复用 GetQueryParameters 已创建的 DbParameter，避免 _paramFactory 重建 N 个参数。
-    // r18：builder 参数自 v4.1 起未再使用——删除并消除 S1172 抑制（refine R-P2-01）。
+    // 参数延迟物化（2026-10-22）：绑定只存（名, 值），新建命令时在此物化 DbParameter；
+    // 命令复用命中时由 TryCopyParameterValues 就地写值，不再创建驱动参数对象。
     private static void AddParameters(DbCommand command,
-        IReadOnlyList<DbParameter> parameters)
+        IReadOnlyList<ParameterBinding> parameters,
+        Func<string, object?, DbParameter> factory)
     {
         // R3（2026-10-12）：for + 索引替代 foreach——经 IReadOnlyList 接口枚举 List 会
         // 装箱枚举器（每查询约 32B）；数组/自建 List 的索引访问零分配且同为 O(1)。
         for (int i = 0; i < parameters.Count; i++)
-            command.Parameters.Add(parameters[i]);
+        {
+            ParameterBinding binding = parameters[i];
+            command.Parameters.Add(binding.Eager ?? factory(binding.Name, binding.Value));
+        }
     }
 
     /// <summary>R-UNNESTB（2026-10-02）：复用命令的就地参数赋值——逐位置把本次查询的
     /// Value 写进持久持有的参数实例（<b>不 Clear、不 Add 新实例</b>：PG 连接的 auto-prepare
     /// 调优下「Clear + Add 新实例」会让驱动沿用 prepare 时的绑定值，探针 mergearray 实测）。
-    /// <para>形状守卫：个数不一致或任一位置的 DbType 与晋升时不同 → 返回 false，调用方回退
-    /// 新建命令。同型循环（同一查询形状、值不同——晋升的主要受益场景）恒走就地写。</para></summary>
+    /// <para>形状守卫：个数不一致、eager 参数 DbType 不同或标量运行时类型变化 → 返回 false，
+    /// 调用方回退新建命令。同型循环（同一查询形状、值不同——晋升的主要受益场景）恒走就地写。</para></summary>
     private static bool TryCopyParameterValues(DbCommand command,
-        IReadOnlyList<DbParameter> parameters)
+        IReadOnlyList<ParameterBinding> parameters)
     {
         if (command.Parameters.Count != parameters.Count)
             return false;
         // 先全量校验形状再写值——半写状态对中断的复用尝试无害但不整洁
         for (int i = 0; i < parameters.Count; i++)
         {
-            if (command.Parameters[i].DbType != parameters[i].DbType)
+            ParameterBinding binding = parameters[i];
+            DbParameter existing = command.Parameters[i];
+            if (binding.Eager is { } eager && existing.DbType != eager.DbType)
+                return false;
+            object? value = binding.Eager?.Value ?? binding.Value;
+            object? current = existing.Value;
+            if (value is null or DBNull || current is null or DBNull)
+                continue;
+            if (value.GetType() != current.GetType())
                 return false;
         }
         for (int i = 0; i < parameters.Count; i++)
-            command.Parameters[i].Value = parameters[i].Value;
+        {
+            ParameterBinding binding = parameters[i];
+            command.Parameters[i].Value = (binding.Eager?.Value ?? binding.Value) ?? DBNull.Value;
+        }
         return true;
     }
 }
