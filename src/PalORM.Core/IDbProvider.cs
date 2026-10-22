@@ -109,6 +109,14 @@ public interface IDbProvider
     {
     }
 
+    /// <summary>2026-10-22 终审 P1-8：池化会话租出且上一租期执行过可能改写连接态的 SQL 时，
+    /// 清除连接级会话状态（GUC/角色/会话变量）。默认无操作——SQLite 由
+    /// <see cref="InitializeConnectionAsync"/> 的脏标记复位。PG 实现用 RESET ALL; RESET ROLE
+    /// （不 deallocate prepared statements）；MySQL 用 COM_RESET_CONNECTION。</summary>
+    static virtual Task ResetConnectionStateAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+        => Task.CompletedTask;
+
     /// <summary>复用命令晋升（同形态第 3 次操作）时是否执行一次 <c>PrepareAsync</c>。
     /// <para>MySQL 无自动预编译（文本协议逐次解析），开启后复用槽的长会话/池化会话拿到
     /// 预编译收益；PostgreSQL 由驱动 <c>MaxAutoPrepare</c> 自动完成，无需重复；

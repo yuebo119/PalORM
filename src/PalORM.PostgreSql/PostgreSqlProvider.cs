@@ -11,8 +11,8 @@ namespace PalORM.PostgreSql;
 /// 属安全策略变更）；
 /// ③ 非关键表批量写在事务内首条 <c>SET LOCAL synchronous_commit TO off</c>（PG 官方 28.4，
 /// 风险窗 ≈600ms 崩溃丢提交，账务类不可）。
-/// <c>NoResetOnClose=true</c> 的会话状态泄漏取舍见 ITM-652（raw SQL 的 SET/临时表跨池租客
-/// 可见，需隔离时用独立连接或显式 <c>DISCARD</c>）。</para></summary>
+/// <c>NoResetOnClose=true</c> 的会话状态取舍见 ITM-652：raw SQL 的 SET/角色由池租出复位
+/// （P1-8），临时表仍跨池租客可见，需隔离时用独立连接。</para></summary>
 public sealed class PostgreSqlProvider : IDbProvider
 {
     /// <summary>Provider 名称:PostgreSql。</summary>
@@ -20,6 +20,18 @@ public sealed class PostgreSqlProvider : IDbProvider
 
     /// <summary>SQL 方言标识:<see cref="SqlDialect.PostgreSql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.PostgreSql;
+
+    /// <summary>2026-10-22 终审 P1-8：池化租出复位——RESET ALL 清 GUC、RESET ROLE 清角色。
+    /// 不用 DISCARD ALL：Npgsql auto-prepare 语句会被服务端销毁而客户端缓存仍持有。</summary>
+    public static async Task ResetConnectionStateAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandTimeout = commandTimeoutSeconds;
+        command.CommandText = "RESET ALL; RESET ROLE";
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
 
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 Npgsql 连接串:
     /// MaxPoolSize / ConnectionIdleLifetime(秒)/ ConnectionLifetime(分钟换算为秒,checked 防溢出)。
@@ -42,8 +54,7 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 脱离 ITM-643）。</para></summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        // PG-6（2026-09-27）：改写结果按全部输入缓存——本方法的输入只有 (连接串, 4 个
+        ArgumentNullException.ThrowIfNull(options);        // PG-6（2026-09-27）：改写结果按全部输入缓存——本方法的输入只有 (连接串, 4 个
         // options 池参数字段)（旋钮清单只读 options.MaxPoolSize/MinPoolSize/
         // PoolIdleTimeoutSeconds/PoolLifetimeMinutes，其余为常量）。实测（探针十二）
         // 单次 CreateConnection 的固定成本 = 连接串解析 9.44µs + 10× Keys.Contains

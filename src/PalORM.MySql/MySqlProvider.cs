@@ -13,6 +13,16 @@ public sealed class MySqlProvider : IDbProvider
     /// <summary>SQL 方言标识:<see cref="SqlDialect.MySql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.MySql;
 
+    /// <summary>2026-10-22 终审 P1-8：COM_RESET_CONNECTION 清会话变量（sql_mode/用户变量等）。
+    /// 连接串 ConnectionReset=false 只跳过自动归还复位，显式调用不受影响。</summary>
+    public static async Task ResetConnectionStateAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        _ = commandTimeoutSeconds;
+        if (connection is MySqlConnection mySqlConnection)
+            await mySqlConnection.ResetConnectionAsync(ct).ConfigureAwait(false);
+    }
+
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 MySqlConnector 连接串:
     /// MaximumPoolSize / ConnectionIdleTimeout(秒)/ ConnectionLifeTime(分钟换算为秒);
     /// MySqlConnector 池参数为 uint,checked 转换防负值/溢出静默截断。
