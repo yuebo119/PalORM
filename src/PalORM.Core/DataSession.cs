@@ -1190,6 +1190,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// <summary>刀3（2026-10-13 二轮）：复用命令的状态守卫式重设——Transaction/CommandTimeout
     /// 同值不重设（SqliteCommand.Transaction setter 含连接归属验证，长会话循环里同值重设是
     /// 纯开销）；CommandText 保持既有同值守卫（驱动同值 setter 短路未证实，显式跳过）。</summary>
+    /// <summary>直查族命令（<see cref="ReusableQuerySlot"/>）的状态重设——该槽无缓存字段，
+    /// 走驱动属性比较的单值形态（与单行 CRUD 槽的字段缓存相反）。</summary>
     private void ApplyReusableCommandState(DbCommand command, DbTransaction? transaction, string commandText)
     {
         if (!ReferenceEquals(command.Transaction, transaction))
@@ -1197,11 +1199,32 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         int timeoutSeconds = _commandTimeoutSeconds;
         if (command.CommandTimeout != timeoutSeconds)
             command.CommandTimeout = timeoutSeconds;
-        // 2026-10-20 微项：CommandText 先走引用相等——文本来自静态槽，同一实例命中即零扫描；
-        // 未命中（外部命令/形状漂移）才落序数比较。
         if (!ReferenceEquals(command.CommandText, commandText)
             && !string.Equals(command.CommandText, commandText, StringComparison.Ordinal))
             command.CommandText = commandText;
+    }
+
+    private void ApplyReusableCommandState(ReusableCrudCommand slot, DbTransaction? transaction, string commandText)
+    {
+        // 槽内缓存已应用状态，命中路径不再读驱动属性（Transaction/CommandTimeout/CommandText
+        // 三个 getter 每操作各一次）。缓存只在唯一写入口与晋升初始化处更新。
+        DbCommand command = slot.Command;
+        if (!ReferenceEquals(slot.AppliedTransaction, transaction))
+        {
+            command.Transaction = transaction;
+            slot.AppliedTransaction = transaction;
+        }
+        int timeoutSeconds = _commandTimeoutSeconds;
+        if (slot.AppliedTimeoutSeconds != timeoutSeconds)
+        {
+            command.CommandTimeout = timeoutSeconds;
+            slot.AppliedTimeoutSeconds = timeoutSeconds;
+        }
+        if (!ReferenceEquals(slot.AppliedCommandText, commandText))
+        {
+            command.CommandText = commandText;
+            slot.AppliedCommandText = commandText;
+        }
     }
 
     private DbTransaction? GetActiveTransaction()
