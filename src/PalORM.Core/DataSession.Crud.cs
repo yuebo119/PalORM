@@ -93,7 +93,7 @@ public sealed partial class DataSession<TProvider>
         // ITM-866（r23）：租户值与过滤开关单次快照贯穿——原实现三次读 live 字段
         //（过滤值捕获 63 行 / 作用域求值 73 行 / TenantScopeCached 91 行），并发
         // WithTenant 在读间穿插时过滤参数与缓存命名空间可能跨租户（QueryCache 开启时
-        // T1 的过滤结果缓存进 __t:T2 命名空间）。引用读原子，快照后过滤与作用域
+        // T1 的过滤结果缓存进 T2 的租户命名空间）。引用读原子，快照后过滤与作用域
         // 由同一定型值构成，builder 局部永不漂移。
         object? tenantId = _tenantId;
         bool ignoreFilters = _ignoreFilters;
@@ -112,13 +112,18 @@ public sealed partial class DataSession<TProvider>
         }
         // ADR-L：缓存租户作用域与过滤注入同点冻结——查询的租户可见性在此刻定型
         //（DefaultFilter 已上链），key 作用域同拍快照则二者永不漂移。租户过滤 → 每租户
-        // 命名空间；多租户会话的 IgnoreFilters / 非 TenantAware 实体（全量数据）→ __all__
-        // 独立命名空间（全量与过滤数据互不可见）；单租户（_tenantId null）→ key 原样。
-        if (tenantId is not null)
+        // 命名空间；IgnoreFilters（无论会话是否有租户）/ 非 TenantAware 实体（全量数据）→
+        // __all__ 独立命名空间（全量与过滤数据互不可见）；未 IgnoreFilters 且无租户的会话
+        // → key 原样。2026-10-22 终审 P1-6：IgnoreFilters 分支必须独立于 tenantId，否则
+        // 非租户会话的普通查询与 IgnoreFilters 查询同键互撞。
+        if (ignoreFilters)
+        {
+            builder._cacheTenantScope = "__all__";
+        }
+        else if (tenantId is not null)
         {
             // T6：租户过滤作用域走每会话单条目缓存（零拼接）；"__all__" 是 const 无需缓存。
-            // ADR-L 定型点不变——仍与过滤注入同点求值，缓存只消拼接不改变定型时点。
-            builder._cacheTenantScope = !ignoreFilters && (features & EntityFeatures.TenantAware) != 0
+            builder._cacheTenantScope = (features & EntityFeatures.TenantAware) != 0
                 ? TenantScopeCached(typeof(T), tenantId)
                 : "__all__";
         }

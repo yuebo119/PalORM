@@ -390,7 +390,7 @@ await using (db.ForParallelReads())
 ### 内存与 GC 选型
 
 - **结果集形态**：`ToListAsync` 全量物化（`List<T>` 初始容量按会话内上次行数自适应，重复查询同表零扩容拷贝）；行数不可控的大表用 `QueryAsyncEnumerable<T>` 流式（每行即时消费，峰值内存 O(1)）。
-- **查询缓存**：`WithCache` 按查询 opt-in（默认关）；未注入 `DbOptions.QueryCache` 时使用进程级共享默认实例（1024 条，多租户靠 `__t:` 前缀隔离），需要按租户控制容量/TTL 时注入独立实例；TTL 最终一致，写后读一致用 `db.EvictQueryCache()` 显式收窄。
+- **查询缓存**：`WithCache` 按查询 opt-in（默认关）；未注入 `DbOptions.QueryCache` 时使用进程级共享默认实例（1024 条，多租户靠 `__t:{tenantIdLength}:{tenantId}:` 前缀隔离，IgnoreFilters 走独立 `__all__:`），需要按租户控制容量/TTL 时注入独立实例；TTL 最终一致，写后读一致用 `db.EvictQueryCache()` 显式收窄。
 - **GC 模式**：高吞吐服务端（多核 + 大堆）建议 `<ServerGarbageCollection>true</ServerGarbageCollection>`（Gen0 分配缓冲更大、GC 频率降）；容器配 `GarbageCollectionHeapHardLimit`（如 75c00000=2GB）防OOM；客户端/小内存场景保持 Workstation 默认。基准口径为 Workstation（`docs/性能基准规范.md` §4.1），Server GC 下分配数字不变、GC 频率与暂停分布不同。
 
 ### Keyset 游标分页
@@ -528,7 +528,7 @@ var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 
 ⚠️ `AuditInterceptor` 覆盖面：实体 SELECT 管线、QueryBuilder UPDATE 与 `ExecuteAsync`（v5.6.0 接入）；`InsertAsync`/`DeleteAsync`/`SaveAsync`/Bulk 家族/存储过程/迁移不产生审计记录，完整写入审计请用数据库层审计或 OpenTelemetry。
 
-其余横切能力：`[SoftDelete]` 自动 WHERE 过滤、`[TenantAware]` + `WithTenant(id)` 单库列隔离（缓存 key 自动加 `__t:{tenantId}:` 前缀，`IgnoreFilters()` 走独立 `__all__:` 命名空间）、`[ConcurrencyCheck]` 乐观锁、`ForRead` 读写分离。全部注解（23 个）与执行方法明细见 [docs/API参考.md](docs/API参考.md)。
+其余横切能力：`[SoftDelete]` 自动 WHERE 过滤、`[TenantAware]` + `WithTenant(id)` 单库列隔离（缓存 key 自动加 `__t:{tenantIdLength}:{tenantId}:` 前缀，`IgnoreFilters()` 走独立 `__all__:` 命名空间）、`[ConcurrencyCheck]` 乐观锁、`ForRead` 读写分离。全部注解（23 个）与执行方法明细见 [docs/API参考.md](docs/API参考.md)。
 
 ### 原生 SQL 与 SQL 文件
 

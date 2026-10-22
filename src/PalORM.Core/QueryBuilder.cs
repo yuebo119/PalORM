@@ -90,9 +90,11 @@ public struct QueryBuilder<T> where T : class, new()
     internal string? _cacheKey;
     internal TimeSpan? _cacheTtl;
     /// <summary>缓存租户作用域（ADR-L 结构性隔离，From&lt;T&gt;() 时与租户过滤注入同点冻结）：
-    /// 租户过滤会话 = <c>__t:{tenantId}</c>；多租户会话 IgnoreFilters/非 TenantAware 实体（全量
-    /// 数据）= <c>__all__</c>；单租户会话 = null（key 原样）。执行管线据此组装实际缓存 key，
-    /// 跨租户命中结构性不可能——与 DefaultFilter 子句同时点冻结保证 key 作用域与查询过滤永不漂移。</summary>
+    /// 租户过滤会话 = <c>__t:{tenantIdLength}:{tenantId}</c>（长度前缀防止租户值含 ':' 时与
+    /// userKey 拼出同键）；IgnoreFilters（无论是否有租户）/ 租户会话的非 TenantAware 实体
+    ///（全量数据）= <c>__all__</c>；未 IgnoreFilters 且无租户的会话 = null（key 原样）。
+    /// 执行管线据此组装实际缓存 key，跨租户/跨过滤模式命中结构性不可能——与 DefaultFilter
+    /// 子句同时点冻结保证 key 作用域与查询过滤永不漂移。</summary>
     internal string? _cacheTenantScope;
     internal string? _cteName;
     internal bool _prepared;
@@ -663,8 +665,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>结果缓存。<b>浅拷贝契约</b>：命中返回新 List，但元素为共享实体实例——
     /// 命中实体应视为只读；需要修改时先自行深拷贝，否则会污染缓存与其他调用方（ITM-308）。
     /// <para><b>多租户结构性隔离（ADR-L）</b>：多租户会话（<see cref="DataSession{TProvider}.WithTenant"/>）
-    /// 下实际缓存 key 由框架自动前缀化——租户过滤查询用 <c>__t:{tenantId}:</c> 前缀，
-    /// <c>IgnoreFilters()</c> 的全量查询用 <c>__all__:</c> 独立命名空间，跨租户命中结构性不可能；
+    /// 下实际缓存 key 由框架自动前缀化——租户过滤查询用 <c>__t:{tenantIdLength}:{tenantId}:</c> 前缀，
+    /// <c>IgnoreFilters()</c> 的全量查询（无论会话是否有租户）用 <c>__all__:</c> 独立命名空间，
+    /// 跨租户/跨过滤模式命中结构性不可能；
     /// 调用方仍按传入的 <paramref name="cacheKey"/> 推理缓存（前缀是框架内部命名空间，缓存
     /// 诊断工具中可见）。单租户会话 key 原样。进程级默认实例（未注入
     /// <c>DbOptions.QueryCache</c>）仍为全局共享——需要按租户控制容量/TTL 时，为每租户注入
