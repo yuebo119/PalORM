@@ -274,7 +274,15 @@ public sealed partial class DataSession<TProvider>
     /// <para><see cref="KeyConverter"/> 仅 GetByKey 槽使用：生成器发射的单键转换委托
     /// （<c>ConvertDeleteKey</c>，与 BindDelete 的 @p0 值同一真源），命中时经它就地写键参数
     /// Value（C3，2026-10-11——原 keyProbe 探针命令形态退役，每调用省一次 CreateParameter）。</para></summary>
-    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool, Func<object, object?>? KeyConverter = null);
+    private sealed record ReusableCrudCommand(Type EntityType, DbCommand Command, DbParameter[] Pool, Func<object, object?>? KeyConverter = null)
+    {
+        /// <summary>该命令当前已应用的事务/超时/文本。命中路径据此跳过驱动属性读取；
+        /// 三者的唯一写入口是 <see cref="ApplyReusableCommandState(ReusableCrudCommand, DbTransaction?, string)"/>
+        /// 与晋升初始化。</summary>
+        internal DbTransaction? AppliedTransaction;
+        internal int AppliedTimeoutSeconds = int.MinValue;
+        internal string? AppliedCommandText;
+    }
 
     /// <summary>从已按原路径绑定的命令摘出参数对象池。</summary>
     private static DbParameter[] SnapshotParameterPool(DbCommand cmd)
@@ -305,7 +313,7 @@ public sealed partial class DataSession<TProvider>
         {
             DbCommand reused = reusable.Command;
             // 事务与超时可随 WithTransaction/WithTimeout 中途变更，守卫式重设（刀3）
-            ApplyReusableCommandState(reused, activeTransaction, commandText);
+            ApplyReusableCommandState(reusable, activeTransaction, commandText);
             valuesBinder(reusable.Pool, entity, 0);
             return reused;
         }
@@ -338,7 +346,12 @@ public sealed partial class DataSession<TProvider>
             cmd.Dispose();
             throw;
         }
-        _reusableInsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
+        _reusableInsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd))
+        {
+            AppliedTransaction = activeTransaction,
+            AppliedTimeoutSeconds = _commandTimeoutSeconds,
+            AppliedCommandText = commandText
+        };
         return cmd;
     }
 
@@ -355,7 +368,7 @@ public sealed partial class DataSession<TProvider>
 
         if (_reusableUpsert is { } reusable && reusable.EntityType == typeof(T))
         {
-            ApplyReusableCommandState(reusable.Command, activeTransaction, commandText);
+            ApplyReusableCommandState(reusable, activeTransaction, commandText);
             valuesBinder(reusable.Pool, entity, 0);
             return reusable.Command;
         }
@@ -384,7 +397,12 @@ public sealed partial class DataSession<TProvider>
             cmd.Dispose();
             throw;
         }
-        _reusableUpsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
+        _reusableUpsert = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd))
+        {
+            AppliedTransaction = activeTransaction,
+            AppliedTimeoutSeconds = _commandTimeoutSeconds,
+            AppliedCommandText = commandText
+        };
         return cmd;
     }
 
@@ -402,7 +420,7 @@ public sealed partial class DataSession<TProvider>
         if (_reusableUpdate is { } reusable && reusable.EntityType == typeof(T))
         {
             DbCommand reused = reusable.Command;
-            ApplyReusableCommandState(reused, activeTransaction, updateSql);
+            ApplyReusableCommandState(reusable, activeTransaction, updateSql);
             valuesBinder(reusable.Pool, entity, 0);
             return reused;
         }
@@ -433,7 +451,12 @@ public sealed partial class DataSession<TProvider>
             cmd.Dispose();
             throw;
         }
-        _reusableUpdate = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd));
+        _reusableUpdate = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd))
+        {
+            AppliedTransaction = activeTransaction,
+            AppliedTimeoutSeconds = _commandTimeoutSeconds,
+            AppliedCommandText = updateSql
+        };
         return cmd;
     }
 
@@ -466,7 +489,7 @@ public sealed partial class DataSession<TProvider>
             // 精确 pattern 使复用安全失效（走新建路径）而非静默用旧参数值执行（ITM-867 族防线缺口）。
             DbCommand reused = reusable.Command;
             // 事务与超时可随 WithTransaction/WithTimeout 中途变更，守卫式重设（刀3）
-            ApplyReusableCommandState(reused, activeTransaction, commandText);
+            ApplyReusableCommandState(reusable, activeTransaction, commandText);
             // R-UNNESTB（2026-10-02）：**绝不触碰复用命令的参数集合**——PG 连接串的
             // auto-prepare 调优（v5.0 阶段 3.1 默认开启）下，「Clear 集合 + Add 新参数实例」
             // 会让驱动沿用 prepare 时的绑定值（探针 mergearray 变体 C 实测：语句卡在
@@ -516,7 +539,12 @@ public sealed partial class DataSession<TProvider>
             cmd.Dispose();
             throw;
         }
-        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
+        _reusableGetByKey = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter)
+        {
+            AppliedTransaction = activeTransaction,
+            AppliedTimeoutSeconds = _commandTimeoutSeconds,
+            AppliedCommandText = commandText
+        };
         return cmd;
     }
 
@@ -535,7 +563,7 @@ public sealed partial class DataSession<TProvider>
             && reusable.KeyConverter is { } convertKey && reusable.Pool is [var pooledKey])
         {
             DbCommand reused = reusable.Command;
-            ApplyReusableCommandState(reused, activeTransaction, commandText);
+            ApplyReusableCommandState(reusable, activeTransaction, commandText);
             // R-UNNESTB：不触碰参数集合，就地写同一实例的 Value
             // P1-4：long 键 identity 快路径（同 GetByKey 槽——省换算的第二个装箱）
             pooledKey.Value = key is long ? key : convertKey(key);
@@ -572,7 +600,12 @@ public sealed partial class DataSession<TProvider>
             cmd.Dispose();
             throw;
         }
-        _reusableDelete = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
+        _reusableDelete = new ReusableCrudCommand(typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter)
+        {
+            AppliedTransaction = activeTransaction,
+            AppliedTimeoutSeconds = _commandTimeoutSeconds,
+            AppliedCommandText = commandText
+        };
         return cmd;
     }
 
@@ -588,7 +621,7 @@ public sealed partial class DataSession<TProvider>
         if (_reusableSoftDelete is { } reusable && reusable.EntityType == typeof(T)
             && reusable.KeyConverter is { } convertKey && reusable.Pool is [var pooledKey])
         {
-            ApplyReusableCommandState(reusable.Command, activeTransaction, commandText);
+            ApplyReusableCommandState(reusable, activeTransaction, commandText);
             pooledKey.Value = key is long ? key : convertKey(key);
             return reusable.Command;
         }
@@ -621,7 +654,12 @@ public sealed partial class DataSession<TProvider>
             throw;
         }
         _reusableSoftDelete = new ReusableCrudCommand(
-            typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter);
+            typeof(T), cmd, SnapshotParameterPool(cmd), promotedConverter)
+        {
+            AppliedTransaction = activeTransaction,
+            AppliedTimeoutSeconds = _commandTimeoutSeconds,
+            AppliedCommandText = commandText
+        };
         return cmd;
     }
 
