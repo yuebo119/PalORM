@@ -68,7 +68,7 @@ See [Performance](#-performance) for measurement details (2026-10-14 benchmark b
 
 ## 🆚 Comparison with mainstream ORMs
 
-> Version baseline: PalORM 6.6.0 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.13 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
+> Version baseline: PalORM 6.7.0 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.13 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -239,11 +239,11 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.6.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.7.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.6.0" />
+<PackageReference Include="PalORM.MySql" Version="6.7.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.6.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.7.0" />
 ```
 
 Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time source generator). After installing, verify with the minimal Quick Start example below: if you can create a session and complete one insert, the install works.
