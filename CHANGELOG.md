@@ -90,6 +90,7 @@
 | OpenTelemetry（四包） | 1.20.0 | 1.20.1 |
 | OpenTelemetry.PersistentStorage.*（两包） | 1.1.2 | 1.1.3 |
 | Microsoft.Identity.Client / Extensions.Msal | 4.91.0 | 4.91.1（仅测试图，产品包零变化） |
+| RepoDb / RepoDb.Sqlite.Microsoft | 1.16.0 | 1.17.0（bench 对照臂，产品包与三臂口径不变；BDN 历史批次的 RepoDb 列跨批不直接可比） |
 
 全仓 `dotnet list --outdated` 无剩余可升项；预览线（Roslyn 5.13-preview、Testing 3.2-preview、System.IO.Hashing 11-rc）按既定口径不采用。
 
