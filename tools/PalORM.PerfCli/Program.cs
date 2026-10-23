@@ -26,6 +26,7 @@ internal static class Program
             "gate" => PerfEntry.Gate(),
             "report" => PerfEntry.Report(),
             "index" => PerfEntry.Index(),
+            "l0" => PerfEntry.L0(),
             "timing-report" => TimingReport.Build(
                 rest.Length > 0 ? rest[0] : null,
                 rest.Length > 1 ? rest[1] : null),
