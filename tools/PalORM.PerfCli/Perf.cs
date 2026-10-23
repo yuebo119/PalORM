@@ -342,6 +342,9 @@ internal static class Perf
 
     public static void ClearSteps() => StepRows.Clear();
 
+    /// <summary>编排步骤行（name, status, 本步秒, 累计秒）——阶段 0 时间分解的输入。</summary>
+    public static IReadOnlyList<string[]> Steps => StepRows;
+
     /// <summary>取目录下按文件名排序最新的匹配文件（等价 ls -t | head -1；文件名含时间戳时与 mtime 排序一致）。</summary>
     public static string? NewestFile(string dir, string pattern)
     {
