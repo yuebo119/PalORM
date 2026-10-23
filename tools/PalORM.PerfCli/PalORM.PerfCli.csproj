@@ -15,4 +15,10 @@
     <NoWarn>$(NoWarn);CA1303;CA1849;S6966;IDE0028;IDE0061;CA1307;S1135;CA2000;S4036;S6561;CA2025;CA2007;S6444</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 阶段 0 计时旁车模型：与 PerfHub 共用同一份定义（同 PerfResultEnvelope 的共享方式），
+         避免 PerfHub 写 / PerfCli 读两侧字段各自漂移 -->
+    <Compile Include="..\..\bench\shared\PerfTiming.cs" Link="PerfTiming.cs" />
+  </ItemGroup>
+
 </Project>

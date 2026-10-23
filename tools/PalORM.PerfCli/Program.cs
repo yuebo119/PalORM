@@ -26,6 +26,9 @@ internal static class Program
             "gate" => PerfEntry.Gate(),
             "report" => PerfEntry.Report(),
             "index" => PerfEntry.Index(),
+            "timing-report" => TimingReport.Build(
+                rest.Length > 0 ? rest[0] : null,
+                rest.Length > 1 ? rest[1] : null),
             // 内部步骤子命令：保留独立触发能力（对齐原步骤脚本"单独跑用于调试"语义）
             "bench-matrix" => BenchMatrix.Run(rest),
             "full-perf" => FullPerf.Run(

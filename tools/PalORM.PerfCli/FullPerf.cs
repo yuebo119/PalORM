@@ -1,14 +1,24 @@
 // full-perf 子命令（自 run-full-perf.sh 迁移，T4-3）：微基准侧编排步骤。
 // 由 full 入口第 1 步以 SKIP_REPORT=1 调用；单独跑只在调试时用，报告只能含 BDN 明细。
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using PalORM.Bench.Shared;
 
 namespace PalORM.PerfCli;
 
 internal static class FullPerf
 {
+    /// <summary>本进程内的 [0/6]…[5/6] 步骤耗时（阶段 0 时间分解用）。
+    /// <para>与 PerfCli 的步骤表不同：这里拆的是"步骤 1"内部（构建/负载/内存/启动/BDN/门禁），
+    /// 因为步骤 1 占全量墙钟的约三分之一，不拆开就无法判断"5 分 48 秒"花在哪。</para></summary>
+    private static readonly List<PerfInnerStep> InnerSteps = [];
+
+    public static IReadOnlyList<PerfInnerStep> Steps => InnerSteps;
+
     public static int Run(bool skipReport, bool withRemote)
     {
+        InnerSteps.Clear();
         var root = Perf.RepoRoot();
         var benchDir = Path.Combine(root, "bench", "PalORM.Benchmarks");
         const string gate = "tools/PalORM.PerfGate";
@@ -21,28 +31,38 @@ internal static class FullPerf
         Directory.CreateDirectory(logDir);
 
         Perf.Step("[0/6] 构建（Release）");
+        var stepSw = System.Diagnostics.Stopwatch.StartNew();
         BuildTail(benchDir, "PalORM.Benchmarks.csproj");
         BuildTail(Path.Combine(root, gate), "PalORM.PerfGate.csproj");
         // 启动量具（[3/6]）以 --no-build 跑 SourceGen.Tests 的 Release 产物——不在此构建时，
         // 新机器/清理 bin 后该步恒 fail（exe 缺失，2026-09-26 基线重录实测）。
         BuildTail(Path.Combine(root, "test", "PalORM.SourceGen.Tests"), "PalORM.SourceGen.Tests.csproj");
+        RecordInner("构建（Release，三项目）", stepSw);
 
         Perf.Step("[1/6] 负载测试 第 1 轮（维度 3/4/11）");
+        stepSw = System.Diagnostics.Stopwatch.StartNew();
         _ = Perf.RunFiltered("dotnet", $"run --project \"{benchDir}\" -c Release --no-build -- --workload",
             Path.Combine(logDir, "workload-run1.log"), "threads|种子");
+        RecordInner("负载测试 run1", stepSw);
         Perf.Step("[1/6] 负载测试 第 2 轮（运行间方差对照）");
+        stepSw = System.Diagnostics.Stopwatch.StartNew();
         _ = Perf.RunFiltered("dotnet", $"run --project \"{benchDir}\" -c Release --no-build -- --workload",
             Path.Combine(logDir, "workload-run2.log"), "threads");
+        RecordInner("负载测试 run2", stepSw);
         var workloadJson = Perf.NewestFile(Path.Combine(benchDir, "bin", "Release", "net11.0"), "workload-sqlite-*.json");
 
         Perf.Step("[2/6] 大结果集内存 + 构建分配（维度 1/7）");
+        stepSw = System.Diagnostics.Stopwatch.StartNew();
         _ = Perf.RunFiltered("dotnet", $"run --project \"{benchDir}\" -c Release --no-build -- --memory",
             Path.Combine(logDir, "memory.log"), "memory");
+        RecordInner("大结果集内存 + 构建分配", stepSw);
         var memoryJson = Perf.NewestFile(Path.Combine(benchDir, "bin", "Release", "net11.0"), "memory-sqlite.json");
 
         Perf.Step("[3/6] 启动量具（维度 9：单方法 IL 上界，两维）");
+        stepSw = System.Diagnostics.Stopwatch.StartNew();
         var (startupCode, startupOutput) = Perf.RunCapture("dotnet",
             $"run --project \"{Path.Combine(root, "test", "PalORM.SourceGen.Tests")}\" -c Release --no-build -- --treenode-filter \"/*/*/RegistryScaleTests/*\"");
+        RecordInner("启动量具", stepSw);
         var startup = startupCode == 0 && startupOutput.Contains("成功: 2", StringComparison.Ordinal) ? "ok" : "fail";
         Perf.Out($"启动量具: {startup}");
         // 落盘供编排层（perf report）在生成统一报告时取用——统一报告在全部夹具之后才生成，
@@ -50,6 +70,7 @@ internal static class FullPerf
         File.WriteAllText(Path.Combine(reportDir, "last-startup-status.txt"), startup, new UTF8Encoding(false));
 
         Perf.Step("[4/6] BDN 微基准（维度 1，与门禁同参 1/3/5，约 5 分钟）");
+        stepSw = System.Diagnostics.Stopwatch.StartNew();
         // 先清结果目录——混入陈旧报告会让门禁读到截断/异构 JSON（实测先例）
         var bdnArtifacts = Path.Combine(root, "BenchmarkDotNet.Artifacts");
         if (Directory.Exists(bdnArtifacts))
@@ -82,13 +103,16 @@ internal static class FullPerf
             Perf.Err($"=== BDN 零执行（filter 失配/交互模式退出/job 构建失败，见 {Path.Combine(logDir, "bdn.log")}）===");
             bdnExit = 1;
         }
+        RecordInner("BDN 微基准（门禁同参 1/3/5）", stepSw);
 
         Perf.Step("[5/6] 门禁判定");
+        stepSw = System.Diagnostics.Stopwatch.StartNew();
         var gateLog = Path.Combine(logDir, "gate.log");
         var gateExit = Perf.RunTail("dotnet",
             $"run --project \"{Path.Combine(root, gate)}\" -c Release --no-build -- " +
             $"check --results \"{resultsDir}\" --baseline \"{Path.Combine(root, "bench", "baselines", "perf-baseline.json")}\"",
             gateLog, 3);
+        RecordInner("门禁判定（BDN 基线）", stepSw);
 
         Perf.Step("[6/6] 生成 markdown 报告");
         // SKIP_REPORT=1：由编排层（perf full）在全部夹具跑完后统一生成一份报告。
@@ -98,7 +122,9 @@ internal static class FullPerf
         }
         else
         {
+            stepSw = System.Diagnostics.Stopwatch.StartNew();
             RunReport(root, resultsDir, workloadJson, memoryJson, startup, reportMd);
+            RecordInner("生成 markdown 报告", stepSw);
         }
 
         if (withRemote && File.Exists(Path.Combine(root, ".env.test")))
@@ -122,8 +148,29 @@ internal static class FullPerf
         // 仍返回 0，编排层标 OK 继续跑 15 分钟 PerfHub 才在总门禁暴露；gate 非零（回归/FATAL
         // 同返 1）即就地失败，与 bdnExit 同族传播，不再让坏数据流到下一步。
         if (bdnExit != 0) return bdnExit;
+        WriteInnerSteps(root, stamp);
         return gateExit;
     }
+
+    /// <summary>内部步骤耗时落旁车（跨进程可读；同进程的 TimingReport 优先读内存列表）。
+    /// 写失败只告警不阻断——时间分解是诊断材料，不能因为它让全量跑测失败。</summary>
+    private static void WriteInnerSteps(string root, string stamp)
+    {
+        try
+        {
+            string dir = Path.Combine(root, "bench", "reports");
+            File.WriteAllText(
+                Path.Combine(dir, $"fullperf-steps-{stamp}.json"),
+                JsonSerializer.Serialize(InnerSteps, TimingCliJsonContext.Default.ListPerfInnerStep));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Perf.Err($"内部步骤计时落盘失败（不影响跑测）：{ex.Message}");
+        }
+    }
+
+    private static void RecordInner(string name, System.Diagnostics.Stopwatch sw)
+        => InnerSteps.Add(new PerfInnerStep { Name = name, Seconds = sw.Elapsed.TotalSeconds });
 
     /// <summary>统一报告生成（report 入口与 full-perf 第 6 步共用；失败不抛出——报告的价值恰在如实呈现回归）。</summary>
     public static void RunReport(string root, string resultsDir, string? workloadJson, string? memoryJson, string startup, string reportMd)
