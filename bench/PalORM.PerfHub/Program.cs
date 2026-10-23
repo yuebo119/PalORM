@@ -303,6 +303,11 @@ internal static class Program
             // 阶段 2 新表：每 (方言 × 档位) 播一次，臂无关——测量只读或自清理
             await SetupV2TablesAsync(info, conn, rows, ct).ConfigureAwait(false);
 
+            // 物化重的只读项先做三臂交错（同一操作内 ADO→Dapper→PalORM 连续测）：
+            // 消除按实现分阶段带来的早/晚段状态偏差，详见 RunInterleavedReadsAsync 注释。
+            await RunInterleavedReadsAsync(info, impls, rows, conn, results, scale, ct)
+                .ConfigureAwait(false);
+
             foreach (IPerfImplementation impl in impls)
             {
                 // 单项失败不杀方言：一个 (实现 × 操作 × 方言) 组合失败（实测 MySQL BulkDelete、
@@ -464,10 +469,69 @@ internal static class Program
         await childCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部 26 个单操作测量。
-    /// <para>顺序即状态依赖：Build/查询类先跑（要求表内恰好 <paramref name="rows"/> 行），
+    /// <summary>物化重的只读项三臂交错测量（2026-10-23 实测驱动）。
+    /// <para><b>为什么需要</b>：原编排按实现分阶段跑（ADO 全部 → Dapper 全部 → PalORM 全部）。
+    /// MySQL 20K 实测：同一段 ADO 代码（<c>GetAllAsync</c> 直接调用 <c>QueryAllAsync</c>）
+    /// 在批量写之前 7.73ms、之后 12.15ms（差 57%）；托管臂全部落在晚段，表观 P/ADO 1.55/1.76，
+    /// 而两托管臂彼此一致（P/D 0.99）。早段地板与晚段托管臂不可比，不是产品退化。</para>
+    /// <para><b>做法</b>：把只读且物化重的三项移到三臂阶段之前，同一操作内
+    /// ADO→Dapper→PalORM 连续测量；pass 开始前用中性播种复位到 <paramref name="rows"/> 行，
+    /// 三项只读，测量中不再复位。写类操作仍保留原分阶段编排（写会改表，逐臂交错需额外复位语义）。</para>
+    /// <para><b>口径变化</b>：这三项从"不同状态的三臂"变为"同状态三臂"，比值判别力恢复；
+    /// 与历史批次的绝对值仍可比（同一 SQL、同一表）。</para></summary>
+    private static async Task RunInterleavedReadsAsync(
+        DialectInfo info, IPerfImplementation[] impls, int rows, DbConnection conn,
+        List<Measurement> results, double scale, CancellationToken ct)
+    {
+        var neutralSeeder = new AdoNetImpl(info);
+        Task reset(DbConnection c) => neutralSeeder.SetupPerfS1Async(c, rows, ct);
+
+        // 三项只读，表在 pass 开始前播种一次；测量里不挂 reset（二次复位会打掉热态）。
+        await reset(conn).ConfigureAwait(false);
+
+        // 跑两遍：第一遍丢弃，第二遍记录。进程首个 Measure.SingleAsync 有固定暖机成本
+        //（采样线程 JIT、GC 计数首次调用、驱动首次读），实测让首个 ADO QueryAll/2K
+        // 在 1.5s 自预热后仍是 2.88ms，而同代码的 GetAllAsync 是 1.18ms（2026-10-23）。
+        // 丢弃第一遍把这份成本吃掉；两遍走同一组三项 × 三臂（只读，不改变表）。
+        await RunPassAsync(record: false).ConfigureAwait(false);
+        await RunPassAsync(record: true).ConfigureAwait(false);
+
+        async Task RunPassAsync(bool record)
+        {
+            foreach (IPerfImplementation impl in impls)
+            {
+                await MeasAsync(info, impl, "QueryAll", "CRUD", rows, conn, results, scale, null,
+                    async (im, c, i) => _ = await im.QueryAllAsync(c, ct).ConfigureAwait(false),
+                    ct, record).ConfigureAwait(false);
+            }
+
+            foreach (IPerfImplementation impl in impls)
+            {
+                await MeasAsync(info, impl, "StreamAll", "CRUD", rows, conn, results, scale, null,
+                    async (im, c, i) => _ = await im.StreamAllAsync(c, static row => default, ct)
+                        .ConfigureAwait(false),
+                    ct, record).ConfigureAwait(false);
+            }
+
+            foreach (IPerfImplementation impl in impls)
+            {
+                await MeasAsync(info, impl, "GetAllAsync", "CRUD", rows, conn, results, scale, null,
+                    async (im, c, i) =>
+                    {
+                        List<S1Row> list = await im.GetAllAsync(c, ct).ConfigureAwait(false);
+                        if (list.Count != rows)
+                            throw new InvalidOperationException(
+                                $"GetAllAsync 结果不等价：{list.Count} 行（期望 {rows}）");
+                    }, ct, record).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部单操作测量。
+    /// <para>顺序即状态依赖：Build/单行读先跑（要求表内恰好 <paramref name="rows"/> 行），
     /// 写类后跑（每轮用不同主键段，表会增长，但已不影响后续查询类——
-    /// 下一个实现进场时 <c>SetupAsync</c> 会重建表）。</para></summary>
+    /// 下一个实现进场时 <c>SetupAsync</c> 会重建表）。物化重的 QueryAll/StreamAll/GetAllAsync
+    /// 不在这里跑，见 <see cref="RunInterleavedReadsAsync"/>。</para></summary>
     private static async Task RunOneImplAsync(
         DialectInfo info, IPerfImplementation impl, int rows, DbConnection conn,
         List<Measurement> results, double scale, CancellationToken ct)
@@ -530,13 +594,9 @@ internal static class Program
                 _ = await im.GetByKeyAsync(c, id, ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "QueryAll", "CRUD", rows, conn, results, scale, null,
-            async (im, c, i) => _ = await im.QueryAllAsync(c, ct).ConfigureAwait(false),
-            ct).ConfigureAwait(false);
-
-        await MeasAsync(info, impl, "StreamAll", "CRUD", rows, conn, results, scale, null,
-            async (im, c, i) => _ = await im.StreamAllAsync(c, static row => default, ct).ConfigureAwait(false),
-            ct).ConfigureAwait(false);
+        // QueryAll/StreamAll/GetAllAsync 已移到三臂交错测量（RunInterleavedReadsAsync）：
+        // 按实现分阶段跑时，早段 ADO 地板与晚段托管臂不可比（2026-10-23 MySQL 20K 实测
+        // 同代码 7.73ms vs 12.15ms）。交错点在 RunDialectAsync 的每档开端，三臂同状态测量。
 
         await MeasAsync(info, impl, "Insert", "CRUD", rows, conn, results, scale, reset,
             async (im, c, i) => await im.InsertAsync(c, Dataset.Seed(rows + i), ct).ConfigureAwait(false),
@@ -741,16 +801,8 @@ internal static class Program
                     c, Dataset.SeedEnumRows(100, (long)i * 100), ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
-        // GetAllAsync 直查（N5 组合句缓存）：与 QueryAll 臂互为对照（直查 API vs From<T>()
-        // 管线），地板同形（SELECT 全列物化）；reset 恢复 perf_s1 恰好 rows 行。
-        await MeasAsync(info, impl, "GetAllAsync", "CRUD", rows, conn, results, scale, reset,
-            async (im, c, i) =>
-            {
-                List<S1Row> list = await im.GetAllAsync(c, ct).ConfigureAwait(false);
-                if (list.Count != rows)
-                    throw new InvalidOperationException(
-                        $"GetAllAsync 结果不等价：{list.Count} 行（期望 {rows}）");
-            }, ct).ConfigureAwait(false);
+        // GetAllAsync 直查（N5 组合句缓存）已移到三臂交错测量（RunInterleavedReadsAsync），
+        // 与 QueryAll/StreamAll 同状态对照（直查 API vs From<T>() 管线）。
 
         // 池化租借臂（2026-10-13 二轮方案）：PalORM 每键一完整租期（租出→GetByKey→归还，
         // 一请求一会话的真实形状,池在预热段稳定后测量段全命中复用）;ADO/Dapper 无会话税,
@@ -772,7 +824,8 @@ internal static class Program
         DialectInfo info, IPerfImplementation impl, string operation, string group, int rows,
         DbConnection conn, List<Measurement> results, double scale,
         Func<DbConnection, Task>? prepare,
-        Func<IPerfImplementation, DbConnection, int, Task> action, CancellationToken ct)
+        Func<IPerfImplementation, DbConnection, int, Task> action, CancellationToken ct,
+        bool record = true)
     {
         if (!RunsAtTier(operation, rows))
         {
@@ -789,8 +842,11 @@ internal static class Program
                 MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale,
                 _requireWarmupFloor).ConfigureAwait(false);
             sw.Stop();
-            results.Add(m);
-            PrintRow([m], sw.Elapsed);
+            if (record)
+            {
+                results.Add(m);
+                PrintRow([m], sw.Elapsed);
+            }
         }
         catch (Exception ex)
         {
