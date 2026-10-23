@@ -115,9 +115,13 @@ internal sealed class PeakSampler : IDisposable
 /// <summary>测量引擎——统一口径的三类指标采集。</summary>
 internal static class Measure
 {
-    /// <summary>预热的时间预算（秒）——与规范 §4「负载测试每档 ≥1.5 s 预热不计数」同值。
-    /// 慢操作在此收敛；快操作由 <see cref="MinWarmupSeconds"/> 兜底。</summary>
-    private const double WarmupBudgetSeconds = 1.5;
+    /// <summary>预热的时间预算（秒）——与规范 §4「负载测试每档 ≥1.5 s 预热不计数」同源。
+    /// 慢操作在此收敛；快操作由 <see cref="MinWarmupSeconds"/> 兜底。
+    /// <para><b>2026-10-24 由 1.5 s 降到 0.75 s</b>（阶段 2 T2）：同时段 A/B 证据为
+    /// 0.5 倍预算相对 1.0 倍的逐项中位偏差 7.6%、p95 28.8%，而 1.0 倍对照相对上一小时的
+    /// A/A 是 8.1%、34.4%（纯环境漂移）——减半没有让散布变宽；0.25 倍把 9 项推到 3 轮迭代
+    /// 下限且 p95 升到 31.4%，故停在 0.5 倍。首档 0.5 s 下限不变（JIT 分层偏置的既有证据）。</para></summary>
+    private const double WarmupBudgetSeconds = 0.75;
 
     /// <summary>预热次数达 maxIterations/5 后仍须满足的最短预热时长（秒，2026-10-02）。
     /// 原规则只有次数上限：微秒级操作 40 次预热不足 1 ms，JIT 分层（tier0 → 带插桩 tier0 → tier1，
@@ -144,12 +148,12 @@ internal static class Measure
         Func<IPerfImplementation, DbConnection, int, Task> action,
         DbConnection conn, int maxIterations, CancellationToken ct,
         Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0,
-        bool requireWarmupFloor = true, PerfStageTiming? timing = null)
+        bool requireWarmupFloor = true, PerfStageTiming? timing = null, double warmupScale = 1.0)
     {
         // 阶段 0 计时旁车（PALORM_PERFHUB_TIMING=1）：只读取单调时钟，不改任何测量语义——
         // 预算/迭代/预热规则与关闭时逐字相同，插桩开销是每阶段一次 GetTimestamp。
         long timingStart = Stopwatch.GetTimestamp();
-        double warmupSeconds = WarmupBudgetSeconds * scale;
+        double warmupSeconds = WarmupBudgetSeconds * scale * warmupScale;
         double minWarmupSeconds = requireWarmupFloor ? MinWarmupSeconds * scale : 0;
         double timedSeconds = budgetSeconds * scale;
 

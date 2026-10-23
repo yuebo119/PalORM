@@ -73,6 +73,11 @@ internal static class Program
               --warmup-floor all|first-tier 预热时间下限的作用范围（默认 first-tier；all 供交替 A/B 诊断）
               --version TEXT                被测版本标识（记入 JSON，用于版本对比）
               --label TEXT                  本次运行的标签（记入 JSON）
+              --result-dir PATH             结果目录覆盖（并行执行时每方言一个目录）
+              --no-report                   跳过 report.html 重建（并行时由合并步骤生成）
+              --no-envelope                 跳过结果库信封（并行时由合并步骤统一写）
+              --ops A,B                     只跑列出的操作（子集实验，自动打 verify- 标签）
+              --budget-scale X              计时/预热预算缩放（噪声曲线用，自动打 verify- 标签）
 
             环境变量（与集成测试同一口径，见 CONTRIBUTING.md）:
               PALORM_PG_CONNECTION      PostgreSQL 连接串
@@ -132,10 +137,45 @@ internal static class Program
                 case "--version":
                     version = args[++i];
                     break;
+                // ── 并行探针/并行执行隔离（阶段 4，作战卡 §6.2 前置条件 1/3）──
+                // 每方言一个进程时：结果目录必须独立（否则 history-<秒级时间戳> 会撞名）、
+                // 报告必须由合并步骤只生成一次（三进程同写 report.html 是竞态）、
+                // 信封同样交给合并步骤（单方言子集信封会把"完整矩阵"读成单方言）。
+                case "--result-dir":
+                    _resultDirOverride = args[++i];
+                    break;
+                case "--no-report":
+                    _skipReport = true;
+                    break;
+                case "--no-envelope":
+                    _skipEnvelope = true;
+                    break;
+                // ── T2 噪声曲线（阶段 2）：操作子集与预算缩放，只用于定向实验 ──
+                // 两者都会改变批次覆盖面/采样量，故下面的守卫强制把 label 归入子集，
+                // 保证这类批次不顶 latest、不进基线、不被读成"当前完整状态"（红线 #3/#5）。
+                case "--ops":
+                    _opFilter = new HashSet<string>(
+                        args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                        StringComparer.OrdinalIgnoreCase);
+                    break;
+                case "--budget-scale":
+                    _budgetScale = double.Parse(args[++i], CultureInfo.InvariantCulture);
+                    break;
                 default:
                     return Fail($"未知选项 '{args[i]}'");
             }
             i++;
+        }
+
+        // 子集守卫：操作过滤或预算缩放都不是完整矩阵，强制归入 verify- 子集标签，
+        // 否则会把"只测 6 项/只给 0.5 倍预算"的批次读成当前状态（B94/B106 同族）。
+        if (_opFilter is not null && !PerfResultWriter.IsSubsetLabel(label))
+        {
+            label = "verify-ops-" + label;
+        }
+        if (Math.Abs(_budgetScale - 1.0) > 1e-9 && !PerfResultWriter.IsSubsetLabel(label))
+        {
+            label = "verify-budget-" + label;
         }
 
         // 探测可用方言（PG/MySQL 需连接串）
@@ -232,10 +272,15 @@ internal static class Program
         var saveSw = System.Diagnostics.Stopwatch.StartNew();
         Save(results, label, version, swTotal.Elapsed, dialectFailures, itemFailures);
         saveSw.Stop();
-        var reportSw = System.Diagnostics.Stopwatch.StartNew();
-        Report.Build();
-        reportSw.Stop();
-        TimingSink.Flush(swTotal.Elapsed, saveSw.Elapsed.TotalSeconds, reportSw.Elapsed.TotalSeconds);
+        double reportSeconds = 0;
+        if (!_skipReport)
+        {
+            var reportSw = System.Diagnostics.Stopwatch.StartNew();
+            Report.Build();
+            reportSw.Stop();
+            reportSeconds = reportSw.Elapsed.TotalSeconds;
+        }
+        TimingSink.Flush(swTotal.Elapsed, saveSw.Elapsed.TotalSeconds, reportSeconds);
         return dialectFailures.Count == 0 ? 0 : 1;
     }
 
@@ -318,8 +363,12 @@ internal static class Program
 
             // 物化重的只读项先做三臂交错（同一操作内 ADO→Dapper→PalORM 连续测）：
             // 消除按实现分阶段带来的早/晚段状态偏差，详见 RunInterleavedReadsAsync 注释。
-            await RunInterleavedReadsAsync(info, impls, rows, conn, results, scale, ct)
-                .ConfigureAwait(false);
+            // --ops 子集未包含这三项时整段跳过（仍省下 reset 与两遍 pass 的时间）。
+            if (OperationSelected("QueryAll") || OperationSelected("StreamAll") || OperationSelected("GetAllAsync"))
+            {
+                await RunInterleavedReadsAsync(info, impls, rows, conn, results, scale, ct)
+                    .ConfigureAwait(false);
+            }
 
             foreach (IPerfImplementation impl in impls)
             {
@@ -356,7 +405,7 @@ internal static class Program
             //（80/20 GetByKey + Insert），与表规模无关，实测两档吞吐差 MySQL/PG 全部在 ±5% 内、
             // SQLite ±8~13%（夹具自身噪声带内），第二档属重复测量（省 1.47 分钟、27 个测量）。
             // 线程档位、时长与分批语义均不变。
-            if (concurrency && rows == maxTier)
+            if (concurrency && rows == maxTier && OperationSelected("Concurrent_Mixed80_20"))
             {
                 Console.WriteLine();
                 Console.WriteLine("  并发吞吐（80/20 读写混合，3s）");
@@ -368,7 +417,7 @@ internal static class Program
                     {
                         try
                         {
-                            Measurement m = await Measure.ConcurrentAsync(info, impl, rows, threads, 2.0, 0.20, ct)
+                            Measurement m = await Measure.ConcurrentAsync(info, impl, rows, threads, 1.5 * _budgetScale, 0.20, ct)
                                 .ConfigureAwait(false);
                             results.Add(m);
                             Console.WriteLine($"{ProgressPrefix()} {impl.Name,-9} {threads,2} 线程  "
@@ -855,7 +904,7 @@ internal static class Program
         Func<IPerfImplementation, DbConnection, int, Task> action, CancellationToken ct,
         bool record = true)
     {
-        if (!RunsAtTier(operation, rows))
+        if (!RunsAtTier(operation, rows) || !OperationSelected(operation))
         {
             return;
         }
@@ -878,8 +927,8 @@ internal static class Program
                 }
                 : null;
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
-                MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale,
-                _requireWarmupFloor, timing).ConfigureAwait(false);
+                MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation) * _budgetScale, scale,
+                _requireWarmupFloor, timing, _budgetScale).ConfigureAwait(false);
             sw.Stop();
             if (timing is null)
             {
@@ -914,6 +963,25 @@ internal static class Program
 
     /// <summary>本轮的最小档位——"行数不进测量"的项只在它上面跑一次（<see cref="RunAsync"/> 设置）。</summary>
     private static int _minTier = Dataset.Tiers[0];
+
+    /// <summary>操作子集（--ops）：null = 全量；非 null 时只跑列出的操作（T2 噪声曲线/L0 快线）。</summary>
+    private static HashSet<string>? _opFilter;
+
+    /// <summary>计时与预热预算的全局缩放（--budget-scale）：默认 1.0；仅用于噪声曲线。</summary>
+    private static double _budgetScale = 1.0;
+
+    /// <summary>该操作是否被 --ops 选中（未指定时全选）。</summary>
+    private static bool OperationSelected(string operation)
+        => _opFilter is null || _opFilter.Contains(operation);
+
+    /// <summary>并行执行（阶段 4）的结果目录覆盖；null = 默认 results 目录。</summary>
+    private static string? _resultDirOverride;
+
+    /// <summary>并行执行时跳过 <c>Report.Build()</c>（三进程同写 report.html 是竞态）。</summary>
+    private static bool _skipReport;
+
+    /// <summary>并行执行时跳过结果库信封（由合并步骤统一写）。</summary>
+    private static bool _skipEnvelope;
 
     /// <summary>本轮该档是否要求预热时间下限（JIT 分层偏置只在每方言首档存在，故默认只在那里要求；
     /// <c>--warmup-floor all</c> 强制全档，供交替 A/B 诊断）。由 <see cref="RunDialectAsync"/> 在每档开跑前设置。</summary>
@@ -990,8 +1058,8 @@ internal static class Program
     private static int PlannedMeasurements(
         List<DialectInfo> dialects, List<int> tiers, bool concurrency, List<int> threadTiers)
     {
-        int perDialect = tiers.Sum(rows => OperationNames.Count(op => RunsAtTier(op, rows)) * ImplCount);
-        if (concurrency)
+        int perDialect = tiers.Sum(rows => OperationNames.Count(op => RunsAtTier(op, rows) && OperationSelected(op)) * ImplCount);
+        if (concurrency && OperationSelected("Concurrent_Mixed80_20"))
         {
             // 并发只在最高档跑（见 RunDialectAsync 的门）——按 dialects 计一次，不乘 tiers.Count
             perDialect += threadTiers.Count * ImplCount;
@@ -1035,15 +1103,19 @@ internal static class Program
 
     /// <summary>测项的时间预算（秒）——阶段 3.1 的自适应迭代上限基准。
     /// 迭代数 = clamp(预算 ÷ 预热后单次耗时, 3, 上限)，单测量耗时结构性有界。
-    /// <c>--quick</c> 由调用方按 scale 收缩该预算（usage 声明的"迭代次数降到 30%"）。</summary>
+    /// <c>--quick</c> 由调用方按 scale 收缩该预算（usage 声明的"迭代次数降到 30%"）。
+    /// <para><b>2026-10-24 全面减半</b>（阶段 2 T2）：同时段 A/B 证据（0.5 倍 vs 1.0 倍
+    /// 逐项中位偏差 7.6% / p95 28.8%，环境漂移本身 8.1% / 34.4%；0.25 倍出现 9 项迭代下限）
+    /// 支持 0.5 倍作为默认。Build 不缩（亚微秒级、受 2000 次上限约束，缩预算无收益）；
+    /// 并发仍取 1.5 s（比探针的 1.0 s 保守一档，p95/p99 只记录不门禁但仍要样本量）。</para></summary>
     private static double BudgetSeconds(string operation) => operation switch
     {
-        // 纯 CPU 构建——亚微秒级，1s 预算自然收敛到数千次迭代
+        // 纯 CPU 构建——亚微秒级，1s 预算自然收敛到数千次迭代（上限 2000）
         "BuildGetByKeySql" or "BuildComplexQuerySql" => 1.0,
-        // 批量为档位行数——每次成本高，给足 4s 让中位数有足够样本
-        "BulkInsert" or "BulkUpdate" or "BulkDelete" or "TxBulkInsert" or "UpsertBatch" => 4.0,
-        "TxRollback" or "WideQueryAll" => 2.0,
-        _ => 1.5
+        // 批量为档位行数——每次成本高，给足 2s 让中位数有足够样本（原 4s）
+        "BulkInsert" or "BulkUpdate" or "BulkDelete" or "TxBulkInsert" or "UpsertBatch" => 2.0,
+        "TxRollback" or "WideQueryAll" => 1.0,
+        _ => 0.75
     };
 
     /// <summary>迭代数上限——防止极快操作（Build 类亚微秒）在 1s 预算内跑出
@@ -1128,7 +1200,9 @@ internal static class Program
         List<(string Dialect, string Reason)> dialectFailures,
         List<(string Dialect, int Rows, string Context, string Cause)> itemFailures)
     {
-        string dir = Path.Combine(FindRepoRoot(), "bench", "perfhub", "results");
+        string dir = _resultDirOverride is null
+            ? Path.Combine(FindRepoRoot(), "bench", "perfhub", "results")
+            : Path.GetFullPath(_resultDirOverride);
         Directory.CreateDirectory(dir);
 
         var run = new PerfRun
@@ -1181,6 +1255,12 @@ internal static class Program
         Console.WriteLine($"[PerfHub] 原始数据已写入 bench/perfhub/results/history-{stamp}.json");
 
         // 结果库信封（规范 v2 §6）：跨夹具可查询的最小集 + 口径登记 + 健康度
+        // 并行探针跳过：单方言子集信封会与"三进程合并后的完整矩阵"冲突，合并由编排层负责。
+        if (_skipEnvelope)
+        {
+            Console.WriteLine("[PerfHub] 跳过结果库信封（--no-envelope）");
+            return;
+        }
         WriteEnvelope(results, label, version, elapsed,
             Path.Combine("bench", "perfhub", "results", $"history-{stamp}.json"), dialectFailures, itemFailures);
     }
