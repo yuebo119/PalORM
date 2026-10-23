@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.6.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.7.0")]
 internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
 {
 
@@ -77,6 +77,27 @@ internal static class CommandFactory_global__EnumStorageEntity_425d6d2b
         { var p = cmd.CreateParameter(); p.ParameterName = "@p2"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)(long)entity.WideFlag; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p3"; p.DbType = global::System.Data.DbType.String; p.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus); cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p4"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>
+    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)
+    {
+        var entity = (global::EnumStorageEntity)entityObject;
+        switch (columnIndex)
+        {
+            case 0: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)EnumStr_Status(entity.Status); break;
+            case 1: parameter.DbType = global::System.Data.DbType.Int32; parameter.Value = (object)(int)entity.Level; break;
+            case 2: parameter.DbType = global::System.Data.DbType.Int64; parameter.Value = (object)(long)entity.WideFlag; break;
+            case 3: parameter.DbType = global::System.Data.DbType.String; parameter.Value = entity.FallbackStatus is null ? global::System.DBNull.Value : (object)EnumStr_FallbackStatus((global::SnapshotOrderStatus)entity.FallbackStatus); break;
+            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));
+        }
+    }
+
+    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>
+    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)
+    {
+        var entity = (global::EnumStorageEntity)entityObject;
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 0); p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>

@@ -98,6 +98,15 @@ public readonly struct CrudBindings
     /// <see cref="InitUpsertParameters"/>。</summary>
     public readonly Action<DbParameter[], int>? InitUpdateParameters;
 
+    /// <summary>2026-10-22：列子集更新——按 UpdateColumns 序号绑定单个 SET 列到调用方预建的
+    /// 参数（设置 DbType 提示与 Value）。旧版生成器程序集为 null，消费方回退全量 BindUpdate
+    /// + 裁剪参数的兼容路径。</summary>
+    public readonly Action<object, DbParameter, int>? BindUpdateColumn;
+
+    /// <summary>2026-10-22：列子集更新——绑定 UPDATE WHERE 的主键/并发令牌参数，参数名从
+    /// <c>parameterOffset</c> 起连续编号。旧版生成器程序集为 null（回退路径）。</summary>
+    public readonly Action<object, DbCommand, int>? BindUpdateWhere;
+
     /// <summary>C3（2026-10-11 执行流程复核）：单键标量转换委托 <c>ConvertDeleteKey(key)</c>——
     /// 主键值归一化产出，与 <c>BindDelete</c> 的 @p0 参数值同一生成真源（两条路径逐位一致，
     /// 契约由 KeyConversionTests 锁定）。消费方：GetByKey 复用槽（TryAcquireGetByKeyCommand）
@@ -135,7 +144,9 @@ public readonly struct CrudBindings
         Func<int, Array[]>? createUpsertColumnArrays = null,
         Action<DbParameter[], int>? initUpsertParameters = null,
         Action<DbParameter[], int>? initUpdateParameters = null,
-        Func<object, object?>? convertDeleteKey = null)
+        Func<object, object?>? convertDeleteKey = null,
+        Action<object, DbParameter, int>? bindUpdateColumn = null,
+        Action<object, DbCommand, int>? bindUpdateWhere = null)
     {
         BindInsert = bindInsert;
         BindInsertValues = bindInsertValues;
@@ -158,6 +169,26 @@ public readonly struct CrudBindings
         InitUpsertParameters = initUpsertParameters;
         InitUpdateParameters = initUpdateParameters;
         ConvertDeleteKey = convertDeleteKey;
+        BindUpdateColumn = bindUpdateColumn;
+        BindUpdateWhere = bindUpdateWhere;
+    }
+
+    /// <summary>P3-15：v4.6 之前的生成器模型程序集二进制兼容 overload——当时的 ctor 是
+    /// 4 参形态（bindInsert 无 paramOffset）。后续版本只在尾部追加可选参数，因此 ≥5 参的
+    /// 历史调用都能命中主 ctor；只有这一代需要显式重载。旧 binder 忽略 offset 是正确语义：
+    /// 该代生成器不发射批量偏移绑定。</summary>
+    public CrudBindings(
+        Action<DbCommand, object> bindInsert,
+        Action<DbCommand, object> bindUpsert,
+        Action<DbCommand, object> bindUpdate,
+        object rowFactory)
+        : this(
+            (cmd, entity, _) => bindInsert(cmd, entity),
+            bindInsertValues: null,
+            bindUpsert,
+            bindUpdate,
+            rowFactory)
+    {
     }
 }
 
@@ -210,6 +241,10 @@ internal sealed class CrudPlan
     internal readonly Func<object, bool> HasDefaultKey;
     internal readonly bool InsertReturningKeyOnly;
     internal readonly bool InsertNoReturning;
+    /// <summary>主键在 RowFactory / INSERT ... RETURNING 结果集中的序号（注册期由
+    /// ColumnNames 与 PkColumn 计算；-1 = 无主键或投影类型）。非 key-only RETURNING
+    /// 回填路径据此免去每行一次 <c>reader.GetOrdinal</c> 名称查找。</summary>
+    internal readonly int PkOrdinal;
     internal readonly Action<IBinaryRowSink, object>? CopyWriteRow;
     internal readonly Action<DbParameter[], int>? InitInsertParameters;
     internal readonly Func<IReadOnlyList<object>, int, int, Array?>? BuildDeleteKeyArray;
@@ -222,9 +257,12 @@ internal sealed class CrudPlan
     internal readonly Action<DbParameter[], int>? InitUpsertParameters;
     internal readonly Action<DbParameter[], int>? InitUpdateParameters;
     internal readonly Func<object, object?>? ConvertDeleteKey;
+    internal readonly Action<object, DbParameter, int>? BindUpdateColumn;
+    internal readonly Action<object, DbCommand, int>? BindUpdateWhere;
 
-    internal CrudPlan(CrudMetadata metadata)
+    internal CrudPlan(CrudMetadata metadata, int pkOrdinal = -1)
     {
+        PkOrdinal = pkOrdinal;
         InsertColumns = metadata.InsertColumns;
         UpsertColumns = metadata.UpsertColumns;
         UpdateColumns = metadata.UpdateColumns;
@@ -251,6 +289,8 @@ internal sealed class CrudPlan
         InitUpsertParameters = metadata.InitUpsertParameters;
         InitUpdateParameters = metadata.InitUpdateParameters;
         ConvertDeleteKey = metadata.ConvertDeleteKey;
+        BindUpdateColumn = metadata.BindUpdateColumn;
+        BindUpdateWhere = metadata.BindUpdateWhere;
     }
 }
 
@@ -260,6 +300,8 @@ public readonly struct CrudMetadata
     /// <summary>legacy 无方言 CRUD SQL 集（标识符未经引用转义，运行时从不消费）。
     /// 评审 2026-09-02 收敛：方言 SQL（<c>PalORM_Runtime.CommandSqlsByDialect</c>）是唯一真源；
     /// 本字段仅为旧版本生成器模型程序集的注册兼容而保留（经旧 ctor 写入），新代码勿读勿写。</summary>
+    [Obsolete("Legacy SQL payload retained only for pre-dialect generated model assemblies; "
+        + "dialect SQL (CommandSqlsByDialect) is the single source. Do not read or write.")]
     public readonly CommandSqlSet Sqls;
     /// <summary>Insert 参数绑定委托（支持批量 paramOffset 偏移）。</summary>
     public readonly Action<DbCommand, object, int> BindInsert;
@@ -318,6 +360,12 @@ public readonly struct CrudMetadata
     /// <summary>C3（2026-10-11）：单键标量转换委托（判定条件与消费路径见 CrudBindings.ConvertDeleteKey）。</summary>
     public readonly Func<object, object?>? ConvertDeleteKey;
 
+    /// <summary>2026-10-22：列子集更新的逐 SET 列绑定委托（见 CrudBindings.BindUpdateColumn）。</summary>
+    public readonly Action<object, DbParameter, int>? BindUpdateColumn;
+
+    /// <summary>2026-10-22：列子集更新的 WHERE 绑定委托（见 CrudBindings.BindUpdateWhere）。</summary>
+    public readonly Action<object, DbCommand, int>? BindUpdateWhere;
+
     /// <summary>推荐构造——接受聚合对象，避免参数列表过长（S107）。
     /// 评审 2026-09-02 收敛后的新形态：不含 legacy 无方言 SQL 载荷。</summary>
     /// <param name="bindings">CRUD 委托聚合（BindInsert/BindUpsert/BindUpdate/RowFactory）。</param>
@@ -362,11 +410,16 @@ public readonly struct CrudMetadata
         InitUpsertParameters = bindings.InitUpsertParameters;
         InitUpdateParameters = bindings.InitUpdateParameters;
         ConvertDeleteKey = bindings.ConvertDeleteKey;
+        BindUpdateColumn = bindings.BindUpdateColumn;
+        BindUpdateWhere = bindings.BindUpdateWhere;
     }
 
     /// <summary>旧版生成器兼容构造——与新版生成的注册代码保持二进制兼容（旧模型程序集的
     /// ModuleInitializer 经此 ctor 传入 legacy SQL 载荷）。新代码请用不含 <paramref name="sqls"/> 的 ctor；
-    /// <paramref name="sqls"/> 仅被存储、从不消费。</summary>
+    /// <paramref name="sqls"/> 仅被存储、从不消费。
+    /// <para>P3-15 边界：二进制兼容覆盖 ≤当前版本的生成器（参数只增不减；v4.6 前的 4 参
+    /// <see cref="CrudBindings"/> 由专用 overload 承接）。高于当前版本的新模型程序集不在
+    /// 兼容面内——升级 Core 后请重新生成。</para></summary>
     /// <param name="sqls">legacy CRUD SQL 集（仅兼容载荷，运行时不消费）。</param>
     /// <param name="bindings">CRUD 委托聚合（BindInsert/BindUpsert/BindUpdate/RowFactory）。</param>
     /// <param name="columns">列名聚合（Insert/Upsert/Update，注册时做只读快照）。</param>
@@ -382,21 +435,28 @@ public readonly struct CrudMetadata
         bool insertBinderValidated = true)
         : this(bindings, columns, incrementVersion, hasDefaultKey, insertBinderValidated)
     {
+#pragma warning disable CS0618 // P3-16：legacy 载荷唯一合法写入点
         Sqls = sqls;
+#pragma warning restore CS0618
     }
 
     /// <summary>深拷贝——<b>新增字段必须同步本方法</b>：漏传在快照层不可见（拷贝后的实例字段为
     /// default），会让优化静默失效或行为改变（PERF_MANAGED_DISCIPLINE 第九节的 Copy 路径检查单）。
     /// </summary>
     internal CrudMetadata Copy()
-        => new(Sqls,
+    {
+#pragma warning disable CS0618 // P3-16：Copy 需原样保留 legacy 载荷（旧模型程序集的读取面）
+        return new(Sqls,
             new CrudBindings(BindInsert, BindInsertValues, BindUpsert, BindUpdate, RowFactory, BindUpdateValues,
                 InsertReturningKeyOnly, InsertNoReturning, BindUpsertValues, CopyWriteRow, InitInsertParameters,
                 BuildDeleteKeyArray, FillUpdateColumnArrays, UpdateColumnArrayElementTypes,
                 CreateUpdateColumnArrays, FillUpsertColumnArrays, UpsertColumnArrayElementTypes,
-                CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters, ConvertDeleteKey),
+                CreateUpsertColumnArrays, InitUpsertParameters, InitUpdateParameters, ConvertDeleteKey,
+                BindUpdateColumn, BindUpdateWhere),
             new CrudColumns(InsertColumns, UpsertColumns, UpdateColumns),
             IncrementVersion, HasDefaultKey, InsertBinderValidated);
+#pragma warning restore CS0618
+    }
 
     /// <summary>元素类型表只读快照幂等化（同 CrudColumns.Snapshot——注册期已快照的输入
     /// 在 Copy() 路径直接复用，不二次拷贝；2026-10-06，10-05 审计 P3）。</summary>

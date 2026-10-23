@@ -25,7 +25,8 @@ internal static class SqlFileEmitter
         string TypeName,
         string MethodName,
         string RelativePath,
-        string? TargetProvider);
+        string? TargetProvider,
+        bool IsRecord = false);
 
     /// <summary>AdditionalText 的内容快照——值相等进入增量缓存键（内容变更即管线失效）。</summary>
     internal readonly record struct SqlFileContent(string Path, string Content)
@@ -47,6 +48,20 @@ internal static class SqlFileEmitter
         // 内难归因；跳过后由 PALORM010 家族的定位诊断兜底（与实体侧口径对齐）。
         if (method.ContainingType is not { TypeKind: TypeKind.Class, IsGenericType: false }
             || method.ContainingType?.ContainingType is not null)
+            return null;
+
+        // P2-10 残余：生成侧的实现声明固定为 `public static partial string Name()`。
+        // 方法形状不匹配时该声明与用户定义冲突，错误落在 .g.cs（CS0759/CS0111）。
+        // 与泛型/嵌套同策略：跳过生成，让 CS8795 定位回用户方法（声明式 partial 缺实现）。
+        // 泛型方法/ref 返回同样不进生成面：前者会额外产出一个同名的非泛型方法，
+        // 后者与值返回声明签名不一致。
+        if (!method.IsStatic
+            || method.Parameters.Length != 0
+            || method.IsGenericMethod
+            || method.ReturnsByRef
+            || method.ReturnsByRefReadonly
+            || method.DeclaredAccessibility != Accessibility.Public
+            || method.ReturnType.SpecialType != SpecialType.System_String)
             return null;
 
         var attr = method.GetAttributes().FirstOrDefault(a =>
@@ -73,7 +88,7 @@ internal static class SqlFileEmitter
         return new SqlFileMethodModel(
             PalORMGenerator.CreateStableHintName(
                 "SqlFile", method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)),
-            ns, typeName, method.Name, relativePath, targetProvider);
+            ns, typeName, method.Name, relativePath, targetProvider, containingType!.IsRecord);
     }
 
     /// <summary>渲染阶段（RegisterSourceOutput）：路径安全校验 + AdditionalFiles 内容查找 +
@@ -181,7 +196,7 @@ internal static class SqlFileEmitter
         sb.AppendLine();
         if (model.Namespace is not null) sb.AppendLine($"namespace {model.Namespace};");
         sb.AppendLine();
-        sb.AppendLine($"partial class {model.TypeName}");
+        sb.AppendLine(TypeDeclaration(model));
         sb.AppendLine("{");
         // ITM-584: 路径含 &/< 时 XML doc 畸形（CS1570，TreatWarningsAsErrors 下变错误）——XML 实体转义
         sb.AppendLine($"    /// <summary>编译时嵌入 SQL (来源: {EscapeForXmlDoc(sourcePath)})</summary>");
@@ -192,6 +207,11 @@ internal static class SqlFileEmitter
 
         return sb.ToString();
     }
+
+    private static string TypeDeclaration(SqlFileMethodModel model)
+        => model.IsRecord
+            ? $"partial record {model.TypeName}"
+            : $"partial class {model.TypeName}";
 
     /// <summary>路径遍历检测——'..' 按路径段判定，避免误拒 my..file.sql 等合法文件名（ITM-584）。</summary>
     private static bool HasTraversalSegment(string relativePath)
@@ -208,7 +228,7 @@ internal static class SqlFileEmitter
         sb.AppendLine();
         if (model.Namespace is not null) sb.AppendLine($"namespace {model.Namespace};");
         sb.AppendLine();
-        sb.AppendLine($"partial class {model.TypeName}");
+        sb.AppendLine(TypeDeclaration(model));
         sb.AppendLine("{");
         sb.AppendLine($"    /// <summary>SqlFile 源生成失败。</summary>");
         sb.AppendLine($"    [global::System.Obsolete({errorLiteral}, error: true)]");

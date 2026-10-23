@@ -10,7 +10,7 @@ internal static class SourceGenerationValidation
             || type.ContainingType is not null
             || type.IsAbstract
             || type.IsStatic
-            || !HasPublicParameterlessConstructor(type))
+            || (type.TypeKind != TypeKind.Struct && !HasPublicParameterlessConstructor(type)))
         {
             return false;
         }

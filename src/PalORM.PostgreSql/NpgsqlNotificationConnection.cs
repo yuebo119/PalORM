@@ -50,9 +50,20 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
             await DisposeSwallowingAsync().ConfigureAwait(false);
             throw WrapConnectionException(exception);
         }
+        catch (System.IO.IOException exception)
+        {
+            // 2026-10-22 审计 N1：ITM-840 的 IO 族 transient 包装同样适用于重连 Open。
+            await DisposeSwallowingAsync().ConfigureAwait(false);
+            throw WrapTransientIoException(exception);
+        }
+        catch (ObjectDisposedException exception)
+        {
+            await DisposeSwallowingAsync().ConfigureAwait(false);
+            throw WrapTransientIoException(exception);
+        }
         catch
         {
-            // 非 NpgsqlException 路径同 ITM-638：Open 失败自清理后重抛（保留原始异常，
+            // 非 NpgsqlException/IO/ODE 路径同 ITM-638：Open 失败自清理后重抛（保留原始异常，
             // 不吞不换型——与上方 catch 分支同一清理契约，仅异常类型过滤不同）。
             await DisposeSwallowingAsync().ConfigureAwait(false);
             throw;
@@ -95,6 +106,16 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
         {
             throw WrapConnectionException(exception);
         }
+        catch (System.IO.IOException exception)
+        {
+            // 2026-10-22 审计 N1：LISTEN 在重连路径上失败时，IO/ODE 也要带 transient 标记，
+            // 否则监听器的重连判定会把裸异常当终态（ITM-840 同族）。
+            throw WrapTransientIoException(exception);
+        }
+        catch (ObjectDisposedException exception)
+        {
+            throw WrapTransientIoException(exception);
+        }
     }
 
     /// <summary>A2：保活探测——<c>SELECT 1</c> 验证连接仍活着。LISTEN 连接绝大部分时间静默，
@@ -112,6 +133,16 @@ internal sealed class NpgsqlNotificationConnection(string connectionString) : IP
         catch (NpgsqlException exception)
         {
             throw WrapConnectionException(exception);
+        }
+        catch (System.IO.IOException exception)
+        {
+            // ProbeAsync 的调用方目前有 catch-all 兜底（P11），但连接层的异常面契约
+            // 与 WaitAsync 保持一致：IO/ODE 一律带 transient 标记。
+            throw WrapTransientIoException(exception);
+        }
+        catch (ObjectDisposedException exception)
+        {
+            throw WrapTransientIoException(exception);
         }
     }
 

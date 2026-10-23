@@ -21,13 +21,13 @@ A Roslyn source generator produces SQL construction, parameter binding, object m
 
 - **Compile-time safety net**: 45 Roslyn diagnostics move failures that would otherwise be runtime crashes or silently wrong data — a missing `[Key]`, a nullable tenant column bypassing isolation, an optimistic-lock baseline of 0, N+1 queries in loops — to compile time, with errors jumping to the declaration site
 - **Full-pipeline Native AOT**: the only ORM in the .NET ecosystem with publish verification passing on all three dialects — no reflection, no IL Emit, no runtime code generation; the SQLite publish exe is just 4.5 MB
-- **Floor-level performance**: single-row CRUD matches the hand-written ADO.NET floor (0.94~1.01×); bulk writes automatically take the fastest per-dialect path — PG Binary COPY, MySQL LOAD DATA, single-statement bulk UPDATE (measured 3.3× faster on MySQL); 20,000-row BulkInsert allocates ~19% of Dapper; Web-style request-per-session deployments get a built-in session pool (measured P99 −18%, Gen0 collections −58% at 32 concurrent)
-- **Enterprise cross-cutting out of the box**: multi-tenant column isolation (queries and all write paths), optimistic locking, soft delete, audit interceptor (sensitive columns auto-masked), read/write splitting, advisory locks, resilient retry + circuit breaker (zero Polly dependency)
+- **Floor-level performance**: single-row CRUD is in the same range as the hand-written ADO.NET floor (0.76~1.06×); bulk writes automatically take the fastest per-dialect path (PG Binary COPY, MySQL LOAD DATA, single-statement bulk UPDATE, SQLite multi-value VALUES); 20,000-row BulkInsert allocates ~19% of Dapper (SQLite; 5%~7% on remote dialects); the bulk family is generally faster than Dapper (0.10~0.87× at the 20,000 tier); Web-style request-per-session deployments get a built-in session pool (measured P99 −18%, Gen0 collections −58% at 32 concurrent)
+- **Enterprise cross-cutting out of the box**: multi-tenant column isolation (queries plus Update/Delete/Bulk get the tenant predicate automatically; the tenant column is immutable on update, while Insert carries it from the entity), optimistic locking, soft delete, audit interceptor (`Set()` values for sensitive columns are masked), read/write splitting, advisory locks, resilient retry + circuit breaker (zero Polly dependency)
 - **Zero-dependency core**: PalORM.Core references no third-party NuGet packages (BCL + ADO.NET abstractions only); SQLite supports at-rest AES-256 encryption via the SQLite3MC driver
 
 > Detailed docs (in Chinese) live under [docs/](docs/) — [API reference](docs/API参考.md), [architecture](docs/架构设计.md), [AOT deployment guide](docs/AOT部署指南.md), [benchmark methodology](docs/性能基准规范.md).
 
-See [Performance](#-performance) for measurement details (2026-10-14 benchmark batch).
+See [Performance](#-performance) for measurement details (2026-10-23 benchmark batch).
 
 ---
 
@@ -68,11 +68,11 @@ See [Performance](#-performance) for measurement details (2026-10-14 benchmark b
 
 ## 🆚 Comparison with mainstream ORMs
 
-> Version baseline: PalORM 6.5.0 / Dapper 2.1.89 / RepoDb 1.16.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.12 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
+> Version baseline: PalORM 6.7.0 / Dapper 2.1.89 / RepoDb 1.17.0 (versions actually referenced by this repo's benchmark suite); EF Core 10.0.13 (comparison reference, latest 10.x stable on NuGet). Cell evidence in the notes below.
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
-| **Full-pipeline Native AOT** | ✓ source-generated, verified | △ Dapper.Aot optional (experimental interceptors) | ❌ experimental, not production-ready | ❌ reflection + IL Emit |
+| **Full-pipeline Native AOT** | ✓ source-generated, verified | △ Dapper.Aot optional (experimental interceptors) | ❌ experimental, not production-ready | △ AOT-annotated since 1.17 (no source generation) |
 | **Compile-time type diagnostics** | ✓ 45 rules (42 analyzers + 3 generators), errors jump to declaration sites | ❌ fails at runtime | △ migration checks (design time) | ❌ fails at runtime |
 | **Compile-time SQL pre-building** | ✓ Roslyn source generation | ❌ runtime concatenation | △ precompiled queries (experimental) | ❌ runtime expression trees |
 | **Runtime reflection** | Zero | △ first-use reflection + IL Emit cache | △ expression-tree compilation | ❌ reflection + IL Emit |
@@ -123,16 +123,16 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 - **Dapper**: `Dapper.Aot` (separate package, [aot.dapperlib.dev](https://aot.dapperlib.dev)) generates AOT interceptors via Roslyn interceptors — an experimental C# feature, not enabled by default.
 - **EF Core 10**: LTS ([learn.microsoft.com](https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-10.0/whatsnew)). `ExecuteUpdateAsync` only supports a single value per WHERE clause and cannot set different values per row in one SQL statement; AOT is still experimental ([issue #35945](https://github.com/dotnet/efcore/issues/35945)); no built-in UPSERT API — `MERGE` semantics require raw SQL. Query cache requires a third-party interceptor ([EFCoreSecondLevelCacheInterceptor](https://github.com/VahidN/EFCoreSecondLevelCacheInterceptor)); OTel observability has no first-class built-in metrics, wired via [OpenTelemetry.Instrumentation.EntityFrameworkCore](https://www.nuget.org/packages/OpenTelemetry.Instrumentation.EntityFrameworkCore) (third-party, Experimental); pessimistic locking is not built into the core ([multiple sources](https://milanjovanovic.tech/blog/a-clever-way-to-implement-pessimistic-locking-in-ef-core)), PG scenarios rely on the Npgsql provider's `ForUpdate` extension with cross-dialect inconsistency; `ToQueryString` since EF Core 5+.
-- **RepoDb**: BulkOperation is SQL Server only ([repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert): *"It is only supporting the SQL Server RDBMS."*); other dialects use packed statements; `Merge` belongs to the same BulkOperation family and is subject to the same limit. Query cache is operation-level `cacheKey` + a shared `ICache` instance ([official blog](https://blogs.repodb.net/posts/2026/09/caching-in-repodb)); SQL preview only exists at the builder level via `QueryBuilder.GetString()` (aimed at `IStatementBuilder` implementers), with no first-class operation-level preview API. No navigation assembly: the [official README](https://github.com/mikependon/repodb) comparison table positions "Rich object graphs" as EF's territory while claiming "EF-like productivity without losing SQL control". JSON support is PropertyHandler-based mapping (`JsonToEntity/JsonDocument` etc., [core release notes](https://repodb.net/release/core)), with no path-query building.
+- **RepoDb**: since 1.17.0, Core and every provider/bulk package enable `IsAotCompatible` (net8+) and the expression compiler drops `MakeGenericMethod`/`MakeGenericType` with name-based reflection replaced by statically analysable lookups ([v1.17.0 release notes](https://github.com/mikependon/RepoDb/releases/tag/v1.17.0)); there is still no source generation, so the AOT verdict is upstream's annotation, not independently verified by this repo. BulkOperation is SQL Server only ([repodb.net/operation/bulkinsert](https://repodb.net/operation/bulkinsert): *"It is only supporting the SQL Server RDBMS."*); other dialects use packed statements; `Merge` belongs to the same BulkOperation family and is subject to the same limit. Query cache is operation-level `cacheKey` + a shared `ICache` instance ([official blog](https://blogs.repodb.net/posts/2026/09/caching-in-repodb)); SQL preview only exists at the builder level via `QueryBuilder.GetString()` (aimed at `IStatementBuilder` implementers), with no first-class operation-level preview API. No navigation assembly: the [official README](https://github.com/mikependon/repodb) comparison table positions "Rich object graphs" as EF's territory while claiming "EF-like productivity without losing SQL control". JSON support is PropertyHandler-based mapping (`JsonToEntity/JsonDocument` etc., [core release notes](https://repodb.net/release/core)), with no path-query building.
 - **PalORM**: diagnostic count 45 = 42 analyzers + 3 generators (`docs/API参考.md`, Chinese); bulk-UPSERT tenant guard = `BulkMergeAsync` conflict updates scoped to the current tenant (2026-10 audit closure); read-replica routing = `readFromReplica` parameter on the query family + `ParallelReadScope`; session pool = `DataSessionPool<TProvider>` (Create/RentAsync; returning resets transient state, reuse slots survive across rentals); whole-transaction retry = `WithTransactionRetry` replays the entire transaction on transient codes PG 40001/40P01, MySQL 1213/1205, SQLite BUSY/LOCKED; SQL assets = `[SqlFile]` enters the incremental pipeline via AdditionalFiles (SQL edits need no rebuild) + `[SqlTemplate]` paired with `AsPrepared()`; AutoTagging = C# `[InterceptsLocation]` intercepting 9 query terminal methods (opt-in build switch, off by default).
 
 </details>
 
 ## 📊 Performance
 
-> **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC1 · SQLite shared memory · PG 18.6 / MySQL 8.4.11 local containers · Dapper 2.1.89. Three arms (ADO.NET / Dapper / PalORM) collected in the same process and same round with identical connection settings; each arm uses its ecosystem's idiomatic best-practice code (ADO.NET is the hand-written performance floor).
+> **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC2 · SQLite temp-file DB (WAL + 64 MB cache + mmap) · PG 18.6 / MySQL 8.4.11 local containers · Dapper 2.1.89. Three arms (ADO.NET / Dapper / PalORM) collected in the same process and same round with identical connection settings; each arm uses its ecosystem's idiomatic best-practice code (ADO.NET is the hand-written performance floor).
 >
-> **Data batches**: 2026-10-14 `PerfCli full` batch (`history-20261014-191424.json`, medians + exact allocation counts). Latency = full-path median; allocation = exact counts (1024-based). Shared PG/MySQL servers swing ±30% between batches — cross-batch absolute values are not comparable; allocation is deterministic and stable across batches. Full methodology and reproduction commands: [benchmark methodology](docs/性能基准规范.md) (Chinese) and `bench/perfhub/report.html` (the same-day BDN gate matrix numbers are also in that report).
+> **Data batches**: 2026-10-23 19:24 `PerfCli full` batch (`history-20261023-192405.json`, 416 items, medians + exact allocation counts). Latency = full-path median; allocation = exact counts (1024-based). Since this batch, QueryAll/StreamAll/GetAllAsync are measured with the three arms interleaved (ADO→Dapper→PalORM back to back per operation, first pass discarded as warm-up), so their P/ADO ratios are free of implementation-phase ordering; the remaining items still run per-arm phases and the remote floor can swing 2~3× between batches, so cross-batch absolute ratios are not comparable. Allocation is deterministic and stable across batches. SQLite local-file-DB absolute latency is also affected by the OS page cache (this batch: GetByKey 20K 6.2~7.3 µs across the three arms, a cache state). Same-batch gate: BDN 27/27, index 171 items 0 FAIL (0 anchor diagnostics). Full methodology and reproduction commands: [benchmark methodology](docs/性能基准规范.md) (Chinese) and `bench/perfhub/report.html` (the same-day BDN gate matrix numbers are also in that report).
 
 **Legend** (shared by latency and allocation, baseline = hand-written ADO.NET floor; positive % = slower/more than baseline):
 🟢 strong win ≤−30% · 🟩 mid win −29%~−10% · 🔹 slight win −9%~−1% · 🔸 slight loss +1%~+9% · 🟧 mid loss +10%~+29% · 🟥 strong loss ≥+30% · **bold** = outside the 1.3×/0.7× significant band.
@@ -141,24 +141,24 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 | Operation | Tier | SQLite | PostgreSQL | MySQL |
 |------|---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.1 µs→6.2 µs **0.68** | 206 µs→199 µs 0.97 | 235 µs→225 µs 0.96 |
-| GetByKey | 20K | 22.2 µs→21.9 µs 0.99 | 204 µs→205 µs 1.00 | 176 µs→217 µs 1.23 |
-| QueryAll | 2K | 961 µs→955 µs 0.99 | 654 µs→646 µs 0.99 | 1.05 ms→1.33 ms 1.27 |
-| QueryAll | 20K | 9.58 ms→9.81 ms 1.02 | 4.90 ms→4.91 ms 1.00 | 7.72 ms→7.98 ms 1.03 |
-| StreamAll | 2K | 936 µs→1.00 ms 1.07 | 634 µs→636 µs 1.00 | 1.04 ms→1.40 ms **1.34** |
-| StreamAll | 20K | 9.41 ms→9.95 ms 1.06 | 4.85 ms→4.84 ms 1.00 | 7.34 ms→8.44 ms 1.15 |
-| Insert | 2K | 17.8 µs→17.2 µs 0.97 | 578 µs→543 µs 0.94 | 1.50 ms→1.64 ms 1.10 |
-| Update | 2K | 7.2 µs→7.3 µs 1.01 | 604 µs→557 µs 0.92 | 199 µs→228 µs 1.14 |
-| BulkInsert | 2K | 16.57 ms→16.26 ms 0.98 | 3.37 ms→3.43 ms 1.02 | 11.51 ms→10.92 ms 0.95 |
-| BulkInsert | 20K | 153.30 ms→152.23 ms 0.99 | 17.38 ms→17.31 ms 1.00 | 82.69 ms→87.62 ms 1.06 |
-| BulkUpdate | 2K | 2.29 ms→2.28 ms 1.00 | 10.41 ms→4.26 ms **0.41** | 28.07 ms→9.15 ms **0.33** |
-| BulkUpdate | 20K | 25.08 ms→25.38 ms 1.01 | 104.02 ms→68.59 ms **0.66** | 281.47 ms→84.18 ms **0.30** |
-| BulkDelete | 2K | 6.58 ms→5.12 ms 0.78 | 2.71 ms→1.55 ms **0.57** | 8.99 ms→8.30 ms 0.92 |
-| BulkDelete | 20K | 65.95 ms→35.50 ms **0.54** | 24.02 ms→9.80 ms **0.41** | 66.29 ms→64.08 ms 0.97 |
-| UpsertBatch | 2K | 15.96 ms→15.86 ms 0.99 | 11.18 ms→5.90 ms **0.53** | 7.87 ms→7.84 ms 1.00 |
-| UpsertBatch | 20K | 149.77 ms→148.63 ms 0.99 | 122.40 ms→71.64 ms **0.59** | 72.12 ms→76.57 ms 1.06 |
+| GetByKey | 2K | 5.9 µs→6.0 µs 1.02 | 211 µs→213 µs 1.01 | 267 µs→207 µs 0.78 |
+| GetByKey | 20K | 6.2 µs→6.6 µs 1.06 | 210 µs→217 µs 1.03 | 221 µs→194 µs 0.88 |
+| QueryAll | 2K | 969 µs→993 µs 1.02 | 683 µs→698 µs 1.02 | 1.19 ms→1.19 ms 1.00 |
+| QueryAll | 20K | 9.83 ms→10.19 ms 1.04 | 5.21 ms→5.23 ms 1.00 | 8.05 ms→8.38 ms 1.04 |
+| StreamAll | 2K | 963 µs→1.03 ms 1.07 | 681 µs→722 µs 1.06 | 1.15 ms→1.29 ms 1.11 |
+| StreamAll | 20K | 9.66 ms→10.66 ms 1.10 | 5.01 ms→5.23 ms 1.04 | 7.70 ms→8.70 ms 1.13 |
+| Insert | 2K | 17.6 µs→17.4 µs 0.99 | 1.42 ms→1.45 ms 1.02 | 4.27 ms→3.97 ms 0.93 |
+| Update | 2K | 7.3 µs→7.1 µs 0.97 | 1.46 ms→1.45 ms 0.99 | 276 µs→209 µs 0.76 |
+| BulkInsert | 2K | 17.01 ms→17.30 ms 1.02 | 4.93 ms→5.01 ms 1.02 | 12.74 ms→12.45 ms 0.98 |
+| BulkInsert | 20K | 158.48 ms→161.65 ms 1.02 | 22.04 ms→21.80 ms 0.99 | 57.88 ms→71.11 ms 1.23 |
+| BulkUpdate | 2K | 2.57 ms→2.47 ms 0.96 | 5.61 ms→5.84 ms 1.04 | 12.48 ms→10.60 ms 0.85 |
+| BulkUpdate | 20K | 26.32 ms→26.72 ms 1.02 | 69.02 ms→74.38 ms 1.08 | 94.97 ms→89.78 ms 0.95 |
+| BulkDelete | 2K | 7.14 ms→5.15 ms 0.72 | 3.82 ms→2.49 ms **0.65** | 12.94 ms→12.52 ms 0.97 |
+| BulkDelete | 20K | 68.81 ms→36.58 ms **0.53** | 27.63 ms→11.20 ms **0.41** | 78.63 ms→70.20 ms 0.89 |
+| UpsertBatch | 2K | 16.27 ms→16.83 ms 1.03 | 13.47 ms→7.84 ms **0.58** | 9.54 ms→8.30 ms 0.87 |
+| UpsertBatch | 20K | 153.15 ms→154.01 ms 1.01 | 131.75 ms→81.11 ms **0.62** | 80.67 ms→80.56 ms 1.00 |
 
-**How to read**: bulk write paths are on par with or better than the ADO.NET floor across all dialects (0.78~1.06), with three dialect-specific fast paths clearly ahead of the hand-written floor — MySQL bulk UPDATE via `UPDATE JOIN VALUES ROW` at 3~3.4×, the PG bulk family via array parameters (`= ANY`) and Binary COPY at 1.5~2.4×, and SQLite BulkDelete at 1.9× thanks to pooled command/parameter reuse; single-row reads sit at 0.68~1.00 of the floor on SQLite/PG and 0.96~1.23 on MySQL (ratios driven by ADO-floor bimodal swings between batches — judge by PalORM absolute values). The MySQL 2K-tier QueryAll 1.27 / StreamAll 1.34 gap has reproduced across multiple batches (stable ADO floor — a persistent gap, not batch noise, not yet attributed; awaiting a dedicated re-run). The MySQL 20K large-result-set slow state registered on 10-07 (once +51~62%) has returned to the normal band (1.03~1.15).
+**How to read**: bulk write paths are in the same range as the ADO.NET floor (0.41~1.23), with the dialect-specific fast paths still clear: PG BulkDelete 0.41~0.65, PG UpsertBatch 0.58~0.62, SQLite BulkDelete 0.53~0.72; MySQL BulkInsert 20K 1.23 is the only bulk item above 1.2 in this batch. Bulk items still run per-arm phases, and ADO's per-row floor state can make the same PalORM implementation read 0.30~1.25 across batches, so judge by PalORM's absolute time series. Single-row CRUD is in the same range as the floor (0.76~1.06). The three read items (QueryAll/StreamAll/GetAllAsync) are now interleaved same-state, with P/ADO 1.00~1.13; the MySQL 2K/20K gaps seen in earlier batches (1.23~1.76) came from the same-shape floor splitting between early and late phases, and this batch has zero anchor diagnostics.
 
 ### SQLite detail · Latency and allocation (three arms)
 
@@ -166,39 +166,39 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| GetByKey | 2K | 9.1 µs | 6.8 µs | 6.2 µs | **0.68🟢** | 0.91🔹 | 2.1/2.8/2.7 KB | +30% / +27% |
-| GetByKey | 20K | 22.2 µs | 15.8 µs | 21.9 µs | 0.99🔹 | **1.39🟥** | 2.1/2.8/2.8 KB | +32% / +30% |
-| QueryAll | 2K | 961 µs | 1.34 ms | 955 µs | 0.99🔹 | 0.71🟩 | 308/513/293 KB | +66% / −5% |
-| QueryAll | 20K | 9.58 ms | 13.51 ms | 9.81 ms | 1.02🔸 | 0.73🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
-| StreamAll | 2K | 936 µs | 1.37 ms | 1.00 ms | 1.07🔸 | 0.73🟩 | 276/481/278 KB | +74% / +1% |
-| StreamAll | 20K | 9.41 ms | 13.84 ms | 9.95 ms | 1.06🔸 | 0.72🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
-| Insert | 2K | 17.8 µs | 21.1 µs | 17.2 µs | 0.97🔹 | 0.82🟩 | 2.8/3.6/2.7 KB | +28% / −5% |
-| Update | 2K | 7.2 µs | 9.0 µs | 7.3 µs | 1.01🔸 | 0.81🟩 | 2.6/3.3/3.2 KB | +30% / +24% |
-| InsertReturningId | 2K | 26.7 µs | 26.6 µs | 26.5 µs | 0.99🔹 | 1.00⚪ | 1.9/2.3/2.3 KB | +24% / +22% |
+| GetByKey | 2K | 5.9 µs | 7.2 µs | 6.0 µs | 1.02🔸 | 0.83🟩 | 2.1/2.8/2.2 KB | +34% / +6% |
+| GetByKey | 20K | 6.2 µs | 7.3 µs | 6.6 µs | 1.06🔸 | 0.90🟩 | 2.1/2.8/2.2 KB | +34% / +6% |
+| QueryAll | 2K | 969 µs | 1.39 ms | 993 µs | 1.02🔸 | 0.71🟩 | 308/513/293 KB | +66% / −5% |
+| QueryAll | 20K | 9.83 ms | 14.39 ms | 10.19 ms | 1.04🔸 | 0.71🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
+| StreamAll | 2K | 963 µs | 1.43 ms | 1.03 ms | 1.07🔸 | 0.72🟩 | 276/481/278 KB | +74% / +1% |
+| StreamAll | 20K | 9.66 ms | 14.59 ms | 10.66 ms | 1.10🟧 | 0.73🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
+| Insert | 2K | 17.6 µs | 18.1 µs | 17.4 µs | 0.99🔹 | 0.96🔹 | 2.8/3.6/2.7 KB | +28% / −2% |
+| Update | 2K | 7.3 µs | 7.8 µs | 7.1 µs | 0.97🔹 | 0.91🔹 | 2.6/3.3/3.1 KB | +30% / +21% |
+| InsertReturningId | 2K | 27.5 µs | 28.2 µs | 27.5 µs | 1.00⚪ | 0.98🔹 | 1.9/2.3/2.3 KB | +24% / +22% |
 
 **Bulk operations**
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| BulkInsert | 2K | 16.57 ms | 103.54 ms | 16.26 ms | 0.98🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| BulkInsert | 20K | 153.30 ms | 1043.71 ms | 152.23 ms | 0.99🔹 | **0.15🟢** | 14.9/79.4/14.7 MB | +432% / −1% |
-| BulkUpdate | 2K | 2.29 ms | 8.45 ms | 2.28 ms | 1.00⚪ | **0.27🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
-| BulkUpdate | 20K | 25.08 ms | 249.50 ms | 25.38 ms | 1.01🔸 | **0.10🟢** | 17.0/64.9/17.6 MB | +282% / +4% |
-| BulkDelete | 2K | 6.58 ms | 21.47 ms | 5.12 ms | 0.78🟩 | **0.24🟢** | 628 KB/1.6 MB/368 KB | +155% / −41% |
-| BulkDelete | 20K | 65.95 ms | 213.55 ms | 35.50 ms | **0.54🟢** | **0.17🟢** | 6.1/15.6/2.6 MB | +155% / −57% |
-| UpsertBatch | 2K | 15.96 ms | 102.50 ms | 15.86 ms | 0.99🔹 | **0.15🟢** | 1.7/7.9/1.6 MB | +379% / −4% |
-| UpsertBatch | 20K | 149.77 ms | 1027.81 ms | 148.63 ms | 0.99🔹 | **0.14🟢** | 14.8/79.5/14.7 MB | +439% / −0% |
+| BulkInsert | 2K | 17.01 ms | 107.96 ms | 17.30 ms | 1.02🔸 | **0.16🟢** | 1.7/8.0/1.6 MB | +373% / −6% |
+| BulkInsert | 20K | 158.48 ms | 1090.59 ms | 161.65 ms | 1.02🔸 | **0.15🟢** | 14.9/79.5/14.8 MB | +433% / −1% |
+| BulkUpdate | 2K | 2.57 ms | 8.93 ms | 2.47 ms | 0.96🔹 | **0.28🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
+| BulkUpdate | 20K | 26.32 ms | 95.91 ms | 26.72 ms | 1.02🔸 | **0.28🟢** | 17.0/64.5/17.6 MB | +279% / +4% |
+| BulkDelete | 2K | 7.14 ms | 22.74 ms | 5.15 ms | 0.72🟩 | **0.23🟢** | 630 KB/1.6 MB/369 KB | +154% / −41% |
+| BulkDelete | 20K | 68.81 ms | 223.07 ms | 36.58 ms | **0.53🟢** | **0.16🟢** | 6.1/15.6/2.7 MB | +155% / −57% |
+| UpsertBatch | 2K | 16.27 ms | 105.80 ms | 16.83 ms | 1.03🔸 | **0.16🟢** | 1.7/8.0/1.6 MB | +379% / −4% |
+| UpsertBatch | 20K | 153.15 ms | 1074.10 ms | 154.01 ms | 1.01🔸 | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / −0% |
 
-The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.78~1.01); BulkDelete beats the floor via pooled command and parameter reuse (full batches only write `Value`; 0.54 at the 20K tier); Dapper's multi-value INSERT at the 20K tier is 6.8× slower with 5.3× allocations due to giant SQL string construction.
+The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.53~1.03); BulkDelete beats the floor via pooled command and parameter reuse (full batches only write `Value`; 0.53 at the 20K tier); Dapper's multi-value INSERT at the 20K tier is 6.7× slower with 5.4× allocations due to giant SQL string construction.
 
 **Transactions**
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| TxSingleInsert | 2K | 19.9 µs | 19.8 µs | 19.8 µs | 0.99🔹 | 1.00⚪ | 4.0/4.8/4.4 KB | +20% / +11% |
-| TxHundredInserts | 2K | 183 µs | 235 µs | 235 µs | 1.28🟧 | 1.00⚪ | 137/220/93.1 KB | +61% / −32% |
-| TxBulkInsert | 2K | 16.51 ms | 103.14 ms | 16.16 ms | 0.98🔹 | **0.16🟢** | 1.7/7.9/1.6 MB | +373% / −6% |
-| TxRollback | 2K | 572 µs | 2.10 ms | 816 µs | **1.43🟥** | **0.39🟢** | 435 KB/1.6 MB/437 KB | +279% / +1% |
+| TxSingleInsert | 2K | 19.4 µs | 20.4 µs | 19.9 µs | 1.03🔸 | 0.98🔹 | 4.0/4.8/4.6 KB | +20% / +15% |
+| TxHundredInserts | 2K | 196 µs | 250 µs | 184 µs | 0.94🔹 | 0.73🟩 | 137/220/93.0 KB | +61% / −32% |
+| TxBulkInsert | 2K | 16.83 ms | 108.38 ms | 16.87 ms | 1.00⚪ | **0.16🟢** | 1.7/8.0/1.6 MB | +373% / −6% |
+| TxRollback | 2K | 612 µs | 2.21 ms | 646 µs | 1.06🔸 | **0.29🟢** | 435 KB/1.6 MB/437 KB | +279% / +1% |
 
 ### Specialized measurements
 
@@ -239,11 +239,11 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.5.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.7.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.5.0" />
+<PackageReference Include="PalORM.MySql" Version="6.7.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.5.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.7.0" />
 ```
 
 Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time source generator). After installing, verify with the minimal Quick Start example below: if you can create a session and complete one insert, the install works.
@@ -607,17 +607,17 @@ Grouped by frequency; detailed rationale at each linked section:
 - Pre-warm the connection pool at startup with `PreWarmAsync` (remote connection setup measured ~8.5 ms each), paired with `MinPoolSize` to stay warm
 - High-frequency single-key lookups use `GetAsync` (25~30% faster and 880 B cheaper than the chained equivalent); use `From<T>()` only with filter conditions
 - With `ReadConnectionString` configured, put report/list queries on `.ForRead()` explicitly; replication-lag-sensitive strong reads stay on the primary
-- Declare `await using (db.ForParallelReads())` before concurrent queries; do not call `GetAsync` inside the scope (the entry restriction fails loudly)
+- Declare `await using (db.ForParallelReads())` before concurrent queries; inside the scope `GetAsync` and the query family use the scope-local read pool (up to 8 connections); writes that overlap an in-flight read are rejected by the single-operation gate
 - A "not registered" error for cross-assembly models: each model assembly registers via `ModuleInitializer` on first touch, so make sure entity types are genuinely referenced (instantiation/member access both count as touching)
 
 **Queries and result sets**
 - Stream unbounded tables with `QueryAsyncEnumerable<T>` (peak memory O(1)) instead of `ToListAsync`
 - Deep paging uses `ToPageAsync` keyset cursors, not large OFFSETs (scan volume grows linearly with offset)
-- Filter large key sets with `WhereIn`/`WhereNotIn` (automatic 500-key batching, parameter-cap clamping, empty sets safely false)
+- Filter large key sets with `WhereIn`/`WhereNotIn` (automatic 500-key batching, empty sets safely false; the total bind-parameter count is still bounded by the dialect, SQLite 999 / general 65535, and exceeding it throws `ArgumentException` up front — use a temp-table JOIN for larger sets)
 - Hoist hot-path `OrderBy`/`Select` expressions to static fields (saves 512 B + 0.5~1.6 µs per call)
 - Preview SQL with `AsDryRun()`/`ToSql` (SQL + parameters, no execution) when troubleshooting; in production, enable AutoTagging (`PalORMAutoTagging` build switch) to auto-inject "file:line member" comments into SQL
 - `Include`/`ThenInclude` generate JOINs without navigation assembly (group by parent yourself); for column-trimmed materialization use `[Projection]` DTOs + `QueryAsync<T>` (`Select` projection only works with DryRun/ToSql)
-- `WithCache` is off by default; after enabling, use `db.EvictQueryCache()` for read-after-write consistency
+- `WithCache` is opt-in per query (off by default); without an injected `DbOptions.QueryCache` it uses the process-wide default instance (1024 entries, tenant-isolated by the `__t:` prefix); inject an independent instance to control capacity/TTL per tenant; TTL is eventually consistent, use `db.EvictQueryCache()` to narrow the read-after-write window
 
 **Writes and bulk operations**
 - Pick bulk APIs by the cheat sheet above; never loop `InsertAsync` (round trips are an order-of-magnitude difference)
@@ -625,7 +625,7 @@ Grouped by frequency; detailed rationale at each linked section:
 - Never call `BulkUpdateBatchAsync` on `[ConcurrencyCheck]` entities (single-statement shape cannot verify per-row versions; PALORM031 already blocks it at compile time); use `BulkUpdateAsync` (packed DbBatch preserves semantics)
 - `BulkInsertAsync` does not backfill auto-increment IDs (COPY / LOAD DATA contract); for per-row backfill use `BulkMergeAsync` (default keys go row-by-row) or `SessionBatch`
 - Declare nullable properties for columns that may hold NULL (`string?`); non-nullable properties fail loudly with `SqlNullValueException` on NULL (never silently null)
-- Mark sensitive columns with `[SensitiveData]` (auto-masked in audit logs and interceptors); do not rely on automatic retry for non-idempotent writes (write paths are direct), wrap with `ExecuteWithResilience` only after assessing duplication risk
+- Mark sensitive columns with `[SensitiveData]` (`Set()` values for those columns are masked in audit logs; values in hand-written Where SQL have no column mapping and are not masked); do not rely on automatic retry for non-idempotent writes (write paths are direct), wrap with `ExecuteWithResilience` only after assessing duplication risk
 
 **Transactions**
 - Inside a transaction prefer `BulkInsertAsync` over `SessionBatch` (100 rows: 5.4ms vs 16.8ms)
@@ -635,7 +635,8 @@ Grouped by frequency; detailed rationale at each linked section:
 
 **Multi-tenancy and cross-cutting concerns**
 - Call `WithTenant(id)` right after creating a session for `[TenantAware]` entities, before the first query (cache-key prefixes follow the tenant)
-- Use `IgnoreFilters()` narrowly for cross-tenant administrative queries and return to the tenant context immediately
+- `InsertAsync`/`BulkInsertAsync`/`BulkMergeAsync` add no tenant predicate: the caller must assign `tenant_id` (PALORM040 only catches nullable columns); the tenant column is immutable in Update/BulkUpdate and UPSERT conflict updates (prevents cross-tenant moves) — use raw SQL for a deliberate migration
+- Use `IgnoreFilters()` for cross-tenant administrative queries; it switches the session to the unfiltered view and there is no public reset API, so use a separate session afterwards (renting again from the pool is enough) rather than continuing tenant-scoped work on the same session
 - `AuditInterceptor` covers the entity SELECT pipeline / QueryBuilder UPDATE / `ExecuteAsync`; `InsertAsync`/`DeleteAsync`/the bulk family/stored procedures produce no audit records — use database-level auditing or OpenTelemetry for full write auditing
 - With the PG tuning `NoResetOnClose=true`, raw-SQL `SET`s/temp tables stay visible across pool tenants (ITM-652): use a dedicated connection (`Max Pool Size=1`) or an explicit `DISCARD` when isolation is needed
 

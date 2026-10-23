@@ -99,6 +99,59 @@ public interface IDbProvider
     /// 默认 false；无 CREATE INDEX IF NOT EXISTS 语法的方言（MySQL）覆盖为真实判定。</summary>
     static virtual bool IsDuplicateSchemaObject(Exception exception) => false;
 
+    /// <summary>会话层即将在连接上执行<b>可能改写连接态</b>的用户 SQL 时调用
+    /// （原生 SQL、存储过程、批量脚本、DDL、<c>GetRawConnection</c>）。
+    /// <para>与 <see cref="InvalidateConnectionInitialization"/> 的分工：后者表示"必须重新完整初始化"，
+    /// 本钩子表示"连接态不再可信，但只需重设会话级关键项"。SQLite 实现把已初始化句柄标记为脏，
+    /// 下一次会话初始化只重设 <c>foreign_keys</c> 而跳过整组 PRAGMA（干净句柄连这一步都跳过）。</para>
+    /// <para>默认无操作——网络驱动没有需要复位的连接级会话状态。</para></summary>
+    static virtual void MarkConnectionStateUnknown(DbConnection connection)
+    {
+    }
+
+    /// <summary>2026-10-22 终审 P1-8：池化会话租出且上一租期执行过可能改写连接态的 SQL 时，
+    /// 清除连接级会话状态（GUC/角色/会话变量）。默认无操作——SQLite 由
+    /// <see cref="InitializeConnectionAsync"/> 的脏标记复位。PG 实现用 RESET ALL; RESET ROLE
+    /// （不 deallocate prepared statements）；MySQL 用 COM_RESET_CONNECTION。</summary>
+    static virtual Task ResetConnectionStateAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+        => Task.CompletedTask;
+
+    /// <summary>2026-10-22 终审 P2-2：池化空闲会话租出前的轻量探活。默认无操作；
+    /// PG/MySQL 执行 SELECT 1（短命令超时）。失败即抛，池丢弃会话换新。</summary>
+    static virtual Task ValidateConnectionAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+        => Task.CompletedTask;
+
+    /// <summary>复用命令晋升（同形态第 3 次操作）时是否执行一次 <c>PrepareAsync</c>。
+    /// <para>MySQL 无自动预编译（文本协议逐次解析），开启后复用槽的长会话/池化会话拿到
+    /// 预编译收益；PostgreSQL 由驱动 <c>MaxAutoPrepare</c> 自动完成，无需重复；
+    /// SQLite 的语句随命令对象缓存，也无需。默认 false。</para></summary>
+    static virtual bool PrepareReusedCommands => false;
+
+    /// <summary>是否支持把多条独立只读查询合并为一次 <see cref="DbBatch"/> 往返
+    /// （会话级 <c>CreatePipeline()</c>）。默认 false；PostgreSQL 覆盖为 true。</summary>
+    static virtual bool SupportsQueryPipeline => false;
+
+    /// <summary>查询管道单次往返能承载的最大语句数。默认 0 = 不支持；Provider 覆盖。</summary>
+    static virtual int MaxPipelineCommands => 0;
+
+    /// <summary>是否优先使用同步 ADO.NET I/O（默认 false）。
+    /// <para>仅对"异步 API 内部本身就是同步执行"的进程内驱动（SQLite）有意义：异步形态
+    /// 每命令/每行多付 Task 与状态机脚手架，真实 I/O 并未异步化。Provider 覆写为 true 后，
+    /// 会话在叶子执行点改用 <c>ExecuteNonQuery/ExecuteScalar/ExecuteReader/Read</c>，
+    /// 这些点仍先做 <c>ct.ThrowIfCancellationRequested()</c> 以保留取消前置检查。
+    /// 网络驱动的默认实现必须保持 false（同步调用会阻塞线程直到往返完成）。</para></summary>
+    static virtual bool PreferSynchronousIo => false;
+
+    /// <summary>是否支持在<b>全量物化</b>（ToList/GetAll/QueryAsync）的逐行读取中使用同步
+    /// <see cref="System.Data.Common.DbDataReader.Read"/>——仅在
+    /// <see cref="DbOptions.UseSynchronousRowRead"/> 同时开启时生效。默认 false。
+    /// <para>MySQL 实测同步读约 998 ns/行 vs 异步 1846~2043 ns/行（5 轮 × 20 次中位）；
+    /// 代价是结果集仍在流式输出时会阻塞调用线程。流式 API（QueryAsyncEnumerable/ForEach）
+    /// 不使用本开关。</para></summary>
+    static virtual bool SupportsSynchronousRowRead => false;
+
     /// <summary>批量插入默认实现。由 DataSession.BulkInsertAsync 直接处理，各 Provider 可覆盖为高效实现。
     /// <para>ITM-557: <paramref name="commandTimeoutSeconds"/> 为会话 CommandTimeout——
     /// 批量命令必须应用，否则慢库上按驱动默认（约 30s）超时，与配置意图相反。</para>

@@ -43,13 +43,13 @@ internal static class EntityInfoCache
         Justification = "静态字段按 T 分片正是本缓存的目的，非跨泛型实例共享事故。")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2223",
         Justification = "可变静态字段是惰性缓存的语义本体；写入只在注册表查找成功后发生一次。")]
-    internal static class FactoryPer<T> where T : class, new()
+    internal static class FactoryPer<T>
     {
         /// <summary>缓存槽：null = 未查过（下次走 RowFactories 并回填）。</summary>
         public static object? Factory;
     }
 
     /// <summary>行工厂缓存写入（同 <see cref="Store{T}"/> 口径）。</summary>
-    internal static void StoreFactory<T>(object factory) where T : class, new()
+    internal static void StoreFactory<T>(object factory)
         => FactoryPer<T>.Factory = factory;
 }

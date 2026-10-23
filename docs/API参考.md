@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1117 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1196 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -85,7 +85,7 @@
 
 ### 基础注解 (23 个)
 
-`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]`（随 `CREATE TABLE` 内联生成三方言表级 FK 子句，`OnDelete` 显式必填、默认 NO ACTION；引用表/列名为字面 DDL 名，须与被引用实体实际映射列名逐字对齐——PG 引号标识符大小写敏感；SQLite 引擎强制需连接级 `PRAGMA foreign_keys=ON`，已建表不补齐属迁移幂等新建口径） `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Required]` `[DefaultValue]` `[Timestamp]` `[Computed]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[Schema]` `[Database]` `[SqlTemplate]` `[Projection]`（v6.0 R1：DTO 投影物化——`QueryAsync<T>`/`GridReader.Read<T>`/存储过程结果集直接映射到非表类型，ordinal 契约同 ADR-A；不生成写命令与迁移 DDL）
+`[Table]` `[Column]` `[Key]` `[NotMapped]` `[ForeignKey]`（随 `CREATE TABLE` 内联生成三方言表级 FK 子句，`OnDelete` 显式必填、默认 NO ACTION；引用表/列名为字面 DDL 名，须与被引用实体实际映射列名逐字对齐——PG 引号标识符大小写敏感；SQLite 引擎强制需连接级 `PRAGMA foreign_keys=ON`，已建表不补齐属迁移幂等新建口径） `[ConcurrencyCheck]` `[IgnoreOnInsert]` `[Required]` `[DefaultValue]` `[Timestamp]` `[Computed]` `[SensitiveData]` `[Converter]` `[SoftDelete]` `[TenantAware]` `[OwnedJson]` `[Index]` `[Unique]` `[SqlFile]` `[Schema]` `[Database]` `[SqlTemplate]` `[Projection]`（v6.0 R1：DTO 投影物化——`QueryAsync<T>`/`GridReader.Read<T>`/存储过程结果集直接映射到非表类型，ordinal 契约同 ADR-A；不生成写命令与迁移 DDL；当前开发线起支持 `readonly struct` 投影，配合 `QueryStructsAsync<T>` 零每行堆分配）
 
 ### 查询构建器 (struct QueryBuilder&lt;T&gt;)
 
@@ -144,9 +144,11 @@
 | `GetAsync<T>(object key)` | 按主键 |
 | `GetAllAsync<T>()` | 全表 |
 | `InsertAsync<T>(T)` → `T` | PG/SQLite RETURNING / MySQL LAST_INSERT_ID |
-| `UpdateAsync<T>(T)` | 乐观锁自动检查 |
+| `UpdateAsync<T>(T)` | 乐观锁自动检查；[TenantAware] 的 tenant_id 不在 SET 内 |
+| `UpdateColumnsAsync<T>(T, [columns])` | 列子集更新：只 SET 选中列，未选列保持库内值；版本列照常 `+1`/冲突检测；租户谓词自动追加（宽表大值列只发被改列） |
+| `QueryStructsAsync<T>(FormattableString)` | `[Projection] struct` 直查——每行零堆对象、`List<T>` 连续结构体数组（报表/大结果集） |
 | `DeleteAsync<T>(object key)` | SoftDelete 更新 deleted_at / 物理删除 |
-| `SaveAsync<T>(T)` | UPSERT（默认键 Insert / 非默认键 Upsert） |
+| `SaveAsync<T>(T)` | UPSERT（默认键 Insert / 非默认键 Upsert）；冲突更新不改 tenant_id |
 | `ExecuteAsync(FormattableString)` → `int` | DDL/DML 直执 |
 
 ### 写入 / 批量
@@ -154,7 +156,7 @@
 | API | 实现 |
 |------|------|
 | `BulkInsertAsync<T>(items, batchSize)` | PG Binary COPY / SQLite+MySQL 多值 INSERT |
-| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁；PG/MySQL 版本化实体走单语句（能力不全回退 DbBatch 逐条） |
+| `BulkUpdateAsync<T>(items)` | 单事务 + 乐观锁；PG/MySQL 版本化实体走单语句（能力不全回退 DbBatch 逐条）；租户列不在 SET 内 |
 | `BulkMergeAsync<T>(items)` | 逐项 UPSERT |
 | `BulkDeleteAsync<T>(keys)` | 500/批 IN 子句 |
 
@@ -183,12 +185,28 @@
 
 | API | 说明 |
 |------|------|
-| `DataSessionPool<TProvider>.Create(options, maxIdleSize = 16)` | 创建会话池。`options` 为池基准配置（租期内的 With* 覆写在归还时复位回此形态；拦截器清单为池级共享） |
+| `DataSessionPool<TProvider>.Create(options, maxIdleSize = 16)` | 创建会话池。`options` 为池基准配置（租期内的 With* 覆写在归还时复位回此形态；拦截器清单为池级共享且由调用方持有，会话归还释放租期加项） |
 | `RentAsync()` | 租出会话——空闲复用（连接不健康的闲置项丢弃重建），无空闲新建。`await using` 消费，`DisposeAsync` 即归还 |
 | `IdleCount` | 空闲会话数（诊断观测） |
 | `DataSessionFactory<TProvider>(options, maxIdleSize = 16)` / `IDataSessionFactory<TProvider>` | 池的 DI 友好封装：注册为单例，请求作用域内 `RentAsync` 租出、`DisposeAsync` 归还；不需要额外 DI 包依赖 |
 
-归还语义：瞬态状态（`WithTenant`/`IgnoreFilters`/`WithIsolationLevel`/`WithTimeout`/`WithRetry`/`WithCircuitBreaker` 覆写、`AddInterceptor` 加项）全部复位；**复用槽（命令/参数池）、读连接、物化容量启发保留**——跨租期存活是池化的核心收益（单行 CRUD/查询命令复用槽在"一请求一会话"形态下不经池化永不激活）。归还门禁：活动事务、未消费的流式枚举器、并行读作用域未收口时 `DisposeAsync` 抛出。空闲上限：满员归还的会话真实释放（不放大物理连接占用）。SQLite 本地实测（探针）：GetByKey per-op 会话 45.5µs → 池化 3.3µs（13.8×），与长会话（2.5µs）只差约 1µs 租还成本。
+归还语义：瞬态状态（`WithTenant`/`IgnoreFilters`/`WithIsolationLevel`/`WithTimeout`/`WithRetry`/`WithCircuitBreaker` 覆写、`AddInterceptor` 加项）全部复位（租期加项释放）；**复用槽（命令/参数池）、读连接、物化容量启发保留**——跨租期存活是池化的核心收益（单行 CRUD/查询命令复用槽在"一请求一会话"形态下不经池化永不激活）。归还门禁：活动事务、未消费的流式枚举器、并行读作用域未收口时 `DisposeAsync` 抛出。空闲上限：满员归还的会话真实释放（不放大物理连接占用）。SQLite 本地实测（探针）：GetByKey per-op 会话 45.5µs → 池化 3.3µs（13.8×），与长会话（2.5µs）只差约 1µs 租还成本。租出时对脏会话执行连接态复位：SQLite 脏句柄只重设 `foreign_keys`；PostgreSQL 执行 `RESET ALL; RESET ROLE`、MySQL 执行 `COM_RESET_CONNECTION`（不清 prepared statements），随后重放池基准 `SessionSetupSql`——修复上一租期原生 SQL 改写的 GUC/角色/会话变量带入下一租期。空闲超过 `PoolConnectionValidationInterval`（默认 30s，0=关闭）的会话租出时先执行 `SELECT 1` 探活（PG/MySQL），失败由池丢弃并换新。
+
+### 查询管道（QueryPipeline，请求级单往返）
+
+把多条彼此独立的**只读**查询合并为一次数据库往返。PostgreSQL 走 `NpgsqlBatch`（本机实测 4 条单键查询 249µs → 72~79µs/条，约 3.2~3.4×），MySQL 走 `MySqlBatch`（本机执行耗时时与顺序持平，WAN 下省 RTT）；SQLite 回退顺序执行（语义一致、无往返收益）。
+
+| API | 说明 |
+|------|------|
+| `session.CreatePipeline()` | 创建管道。单次使用；`ExecuteAsync` 前可继续入队 |
+| `pipeline.Query(builder)` → `PipelineQuery<T, TProvider>` | 入队实体列表查询；执行后 `.Value` 为 `List<T>` |
+| `pipeline.QueryFirst(builder)` → `PipelineFirst<T, TProvider>` | 入队首行查询（自动 `Take(1)`）；执行后 `.Value` 为 `T?` |
+| `pipeline.Count(builder)` → `PipelineScalar<TProvider>` | 入队 COUNT；执行后 `.Value` 为 `long` |
+| `pipeline.QueryStructs<T>(sql)` → `PipelineStructQuery<T, TProvider>` | 入队原始 SQL 的结构体投影查询（`[Projection] struct`，每行零堆对象）；执行后 `.Value` 为 `List<T>` |
+| `pipeline.ExecuteAsync(ct)` | 执行整批。活动事务自动绑定；各结果按入队顺序存放 |
+| `pipeline.Dispose()` | 释放句柄（结果随之失效） |
+
+契约：builder 入队即视为被消费（参数对象挂到批命令上，不得再次执行）；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝；与并行读作用域互斥；拦截器按逻辑查询逐个 OnBefore/OnAfter，整批失败时 OnError 覆盖全部逻辑查询。
 
 ### 弹性配置
 
@@ -204,16 +222,16 @@
 | API | 说明 |
 |------|------|
 | `[SoftDelete]` + `deleted_at` | 查询自动过滤 |
-| `[TenantAware]` + `tenant_id` | 查询自动隔离 |
+| `[TenantAware]` + `tenant_id` | 查询自动隔离；Update/BulkUpdate/UPSERT 冲突更新不写 tenant_id（Insert 由实体承载） |
 | `[ConcurrencyCheck]` + Version | 乐观锁自动检查 |
-| `IgnoreFilters()` | 显式跳过全局过滤 |
+| `IgnoreFilters()` | 显式跳过全局过滤；会话内无复位 API，管理查询后换会话（池化归还重租即可） |
 | `WithTenant(id)` | 切换租户 |
 | `AddInterceptor(IQueryInterceptor)` | OnBefore/OnAfter/OnError + 优先级 |
 | `StoredProc("name").WithParam().WithOutputParam().ExecuteAsync()` | 存储过程 |
 | `QueryAsyncEnumerable<T>(sql)` → `IAsyncEnumerable<T>` | 流式读取 |
 | `HealthCheckAsync()` → `HealthResult` | SELECT 1 探活 |
 | `GetRawConnection()` → `DbConnection` | 逃生舱 |
-| `EvictQueryCache()` | 清空本会话生效的查询缓存（ADR-O C3：写后显式失效，注入实例优先/默认进程级，口径同查询路径） |
+| `EvictQueryCache()` | 清空本会话使用的缓存实例（未注入 `QueryCache` 时为进程级默认实例；ADR-O C3：写后显式失效，口径同查询路径） |
 
 ### 横切注解
 
@@ -242,6 +260,7 @@
 | `LoggerFactory` | `ILoggerFactory?` |
 | `QueryCache` | `IQueryCache?`——未注入时各会话共享进程级 `BoundedQueryCache` 默认实例（容量 1024）。`BoundedQueryCache` 自 .NET 11 起暴露 OTel 指标（对齐 MemoryCache 标准口径）：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions`、`palorm.cache.entries`、`palorm.cache.estimated_size`，经 `PalORM` Meter 上游 OTLP 导出。 |
 | `ValidateQueryColumnOrder` | ADR-A 列序契约 |
+| `UseSynchronousRowRead` | 全量物化逐行读走同步 `Read()`（MySQL 需开启；SQLite 恒同步；默认 false）。MySQL 实测约 998 vs 1846~2043 ns/行；流式 API 始终异步 |
 
 ---
 
@@ -267,8 +286,12 @@
 | `SupportsReturningClause` | static abstract | PG/SQLite true / MySQL false |
 | `CurrentTimestampExpression` | static abstract | `CURRENT_TIMESTAMP` |
 | `IsTransient(exception)` | static virtual | 瞬时故障判定 |
-| `InitializeConnectionAsync(conn, ct)` | static virtual | SQLite PRAGMA FK+WAL（整组每物理连接一次，`foreign_keys` 每会话重设） |
-| `InvalidateConnectionInitialization(conn)` | static virtual | 会话 SQL 执行前作废物理连接的已初始化登记（默认无操作） |
+| `InitializeConnectionAsync(conn, ct)` | static virtual | SQLite PRAGMA 初始化：整组调优每物理连接一次；干净句柄后续会话零往返，脏句柄只重设 `foreign_keys` |
+| `InvalidateConnectionInitialization(conn)` | static virtual | 会话 SQL 执行前作废物理连接的已初始化登记（下次走完整初始化；默认无操作） |
+| `MarkConnectionStateUnknown(conn)` | static virtual | 原生 SQL/DDL/裸连接执行后通知连接态不可信（SQLite 标脏；网络驱动默认 no-op） |
+| `SupportsSynchronousRowRead` | static virtual | 全量物化是否可用同步逐行读（MySQL/SQLite true；默认 false） |
+| `PrepareReusedCommands` | static virtual | 复用命令晋升时是否服务端预编译（MySQL true；PG 由 AutoPrepare 代劳；默认 false） |
+| `SupportsQueryPipeline` / `MaxPipelineCommands` | static virtual | 是否支持批查询管道及其语句上限（PG/MySQL true/64；默认 false/0） |
 | `IsUniqueViolation(exception)` | static virtual | 唯一约束错误码 |
 | `IsDuplicateSchemaObject(exception)` | static virtual | 架构对象已存在 |
 | `BulkInsertAsync(...)` | static virtual | Provider 原生批量 |

@@ -32,7 +32,8 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
 
     /// <summary>创建会话池。</summary>
     /// <param name="options">池基准配置——租期内 With* 覆写在归还时复位回此形态；
-    /// 拦截器清单（如有）为池级共享：租期内 AddInterceptor 的加项不带入下一租期。</param>
+    /// 拦截器清单（如有）为池级共享且由调用方持有（会话/池均不 Dispose），租期内
+    /// AddInterceptor 的加项在归还时释放、不带入下一租期。</param>
     /// <param name="maxIdleSize">空闲上限（默认 16）：归还时空闲数已达上限的会话被真实释放
     /// （不放大物理连接占用）；租出无上限并发（不足时新建）。</param>
     public static DataSessionPool<TProvider> Create(DbOptions options, int maxIdleSize = 16)
@@ -80,12 +81,36 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
             }
         }
         if (rented is null)
+            return await CreateFreshSessionAsync(ct).ConfigureAwait(false);
+        try
         {
-            rented = await DataSession<TProvider>.CreateAsync(_options, ct).ConfigureAwait(false);
-            rented.MarkPooled(this);
+            await rented.PrepareForRentAsync(ct).ConfigureAwait(false);
+            return rented;
         }
-        rented.PrepareForRent();
-        return rented;
+        catch
+        {
+            // P2-2：空闲复用会话在健康探活/复位失败时丢弃并换新，不把过期连接交给调用方。
+            try { await rented.TearDownFromPoolAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { _ = cleanupException; }
+            return await CreateFreshSessionAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<DataSession<TProvider>> CreateFreshSessionAsync(CancellationToken ct)
+    {
+        DataSession<TProvider> rented = await DataSession<TProvider>.CreateAsync(_options, ct).ConfigureAwait(false);
+        rented.MarkPooled(this);
+        try
+        {
+            await rented.PrepareForRentAsync(ct).ConfigureAwait(false);
+            return rented;
+        }
+        catch
+        {
+            try { await rented.TearDownFromPoolAsync().ConfigureAwait(false); }
+            catch (Exception cleanupException) { _ = cleanupException; }
+            throw;
+        }
     }
 
     /// <summary>归还入口（仅由 <see cref="DataSession{TProvider}.DisposeAsync"/> 的池化分支调用，
@@ -139,5 +164,5 @@ public sealed class DataSessionPool<TProvider> : IAsyncDisposable
 public sealed partial class DataSession<TProvider>
 {
     internal async ValueTask TearDownFromPoolAsync()
-        => await _operationState.DisposeAsync(DisposeCoreAsync).ConfigureAwait(false);
+        => await _operationState.DisposeAsync(DisposeCoreAsync, _interceptors.Count == 0).ConfigureAwait(false);
 }

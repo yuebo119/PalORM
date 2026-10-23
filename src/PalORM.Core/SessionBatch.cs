@@ -233,8 +233,18 @@ public sealed class SessionBatch<TProvider> : IDisposable
         try
         {
             DbBatch batch = connection.CreateBatch();
-            batch.Transaction = transaction;
-            return batch;
+            try
+            {
+                batch.Transaction = transaction;
+                return batch;
+            }
+            catch
+            {
+                // P3-18：Transaction setter 抛非 NotSupportedException（驱动校验/包装事务
+                // 形态被拒等）时 batch 必须释放，否则随异常逸出泄漏底层语句句柄。
+                batch.Dispose();
+                throw;
+            }
         }
         catch (NotSupportedException)
         {

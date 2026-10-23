@@ -117,7 +117,8 @@ internal static class InterpolatedStringAbProbe
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ConsumeFormattable(FormattableString sql)
     {
-        string text = FormattableSqlFormatter.FormatCached(sql.Format, 0, sql.ArgumentCount);
+        string text = FormattableSqlFormatter.FormatCached(
+            sql.Format, 0, sql.ArgumentCount, SqlDialect.Sqlite);
         int n = 0;
         for (int i = 0; i < sql.ArgumentCount; i++)
         {
@@ -197,7 +198,8 @@ internal static class InterpolatedStringAbProbe
         const string name = "alice";
         const decimal amount = 12.34m;
         FormattableString baseline = $"UPDATE t SET name = {name}, amount = {amount} WHERE id = {id}";
-        string expected = FormattableSqlFormatter.FormatCached(baseline.Format, 0, baseline.ArgumentCount);
+        string expected = FormattableSqlFormatter.FormatCached(
+            baseline.Format, 0, baseline.ArgumentCount, SqlDialect.Sqlite);
         string actual = GetSql3(id, name, amount);
         if (!string.Equals(expected, actual, StringComparison.Ordinal))
             throw new InvalidOperationException($"handler SQL 与基线不一致：\n{expected}\n{actual}");

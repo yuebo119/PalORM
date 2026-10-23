@@ -39,11 +39,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM003", "Foreign key references unknown table",
         "[ForeignKey] references table '{0}' but no [Table] attribute is found in the current assembly; this can be a false positive if the entity lives in a referenced assembly", "PalORM", DiagnosticSeverity.Warning, true);
 
-    // ITM-525：FK 约束 DDL 当前不由 MigrateAsync 生成（ForeignKeys 收集为未来兼容保留），
-    // 故本诊断只提示 OnDelete 声明是为未来 FK DDL 预留，当前不产生任何运行时约束效果。
+    // ADR-B 补充实施：FK 约束 DDL 已随 CREATE TABLE 内联生成（MigrationEmitter.BuildForeignKeyClauses）。
+    // 本诊断只提示 OnDelete 未声明；缺省 NO ACTION 会写入 DDL，不再声称“无运行时效果”。
     public static readonly DiagnosticDescriptor MissingForeignKey = new(
         "PALORM004", "Foreign key does not declare OnDelete behavior",
-        "[ForeignKey] on '{0}' (type '{1}') does not set OnDelete; note FK constraint DDL is not generated in the current version, so OnDelete is recorded for future compatibility only and has no runtime effect yet", "PalORM", DiagnosticSeverity.Warning, true);
+        "[ForeignKey] on '{0}' (type '{1}') does not set OnDelete; the generated FOREIGN KEY DDL uses ON DELETE NO ACTION by default. Declare OnDelete explicitly (NO ACTION/CASCADE/SET NULL/RESTRICT) to make the delete behavior intentional.", "PalORM", DiagnosticSeverity.Warning, true);
 
     public static readonly DiagnosticDescriptor NPlusOneDetected = new(
         "PALORM005", "Potential N+1 query pattern detected",
@@ -343,13 +343,22 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // （此前每类型 SymbolAction 各自 lazy 收集一次，O(N) 实体 × O(N) 扫描 = O(N²)）。
         context.RegisterCompilationStartAction(startContext =>
         {
+            // 2026-10-22 终审 P2-7：列/表引用的名字比较按目标方言——PG 引号标识符大小写敏感，
+            // 目标含 PG 时用 Ordinal；仅 MySQL/SQLite 时保持 OrdinalIgnoreCase（其标识符不敏感）。
+            DialectSelection dialects = DialectSelection.Parse(
+                startContext.Options.AnalyzerConfigOptionsProvider.GlobalOptions
+                    .TryGetValue("build_property.PalORMTargetDialects", out string? configuredDialects)
+                    ? configuredDialects : null);
+            StringComparer identifierComparer = dialects.PostgreSql
+                ? StringComparer.Ordinal
+                : StringComparer.OrdinalIgnoreCase;
             HashSet<string>? assemblyTables = null;
             startContext.RegisterSymbolAction(ctx =>
             {
                 if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type) return;
                 var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
                 if (tableAttribute is null) return;
-                AnalyzeEntityDiagnostics(ctx, type, ref assemblyTables);
+                AnalyzeEntityDiagnostics(ctx, type, ref assemblyTables, identifierComparer);
             }, SymbolKind.NamedType);
         });
 
@@ -673,7 +682,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// 子方法均为 static、各自处理一类诊断（PALORM002/003/004/014/017/018/019/020/021/022），
     /// 主方法只负责按"实体级 → 属性级"顺序调度。</summary>
     private static void AnalyzeEntityDiagnostics(
-        SymbolAnalysisContext ctx, INamedTypeSymbol type, ref HashSet<string>? assemblyTables)
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, ref HashSet<string>? assemblyTables,
+        StringComparer identifierComparer)
     {
         if (!SourceGenerationValidation.IsSupportedEntity(type))
         {
@@ -689,13 +699,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         CheckSoftDeleteColumn(ctx, type);     // PALORM014
         CheckTenantColumn(ctx, type);         // PALORM018
         CheckTenantColumnNullable(ctx, type); // PALORM040
-        ValidateIndexDeclarations(ctx, type); // PALORM020
+        ValidateIndexDeclarations(ctx, type, identifierComparer); // PALORM020
         CheckColumnUniqueness(ctx, type);     // PALORM021
         CheckConcurrencyTokens(ctx, type);    // PALORM013/012
         CheckInsertableColumns(ctx, type);    // PALORM023
         CheckUpdatableColumns(ctx, type);     // PALORM024
         CheckNullableContext(ctx, type);      // PALORM036
-        CheckPropertyLevelDiagnostics(ctx, type, ref assemblyTables); // PALORM002/003/004/017/019/025/026/027/034/035/037
+        CheckPropertyLevelDiagnostics(ctx, type, ref assemblyTables, identifierComparer); // PALORM002/003/004/017/019/025/026/027/034/035/037
     }
 
     /// <summary>PALORM011：带 Schema/Database 限定符的 [Table] 不被支持。</summary>
@@ -839,14 +849,18 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>PALORM024：实体无可更新列——UpdateAsync/BulkUpdateAsync 运行期必崩。
-    /// 等价 CommandFactoryEmitter.IsUpdatableColumn 单一真源（r8-D-A 修正：!Key/!Concurrency/!Computed/!Timestamp）
+    /// 等价 CommandFactoryEmitter.IsUpdatableColumn 单一真源（r8-D-A 修正：!Key/!Concurrency/!Computed/!Timestamp；
+    /// 2026-10-21：!TenantColumn——租户列是作用域键，不进 UPDATE SET）
     /// 注：非主键属性——主键在 UPDATE 中是 WHERE 条件，不计入 SET 列。</summary>
     private static void CheckUpdatableColumns(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
+        bool isTenantAware = type.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));
         bool hasUpdatable = false;
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             if (IsPrimaryKey(property)) continue;  // PK 是 WHERE 条件非 SET
+            if (isTenantAware && HasColumnNamed(property, "tenant_id")) continue;  // 租户列只读
             if (IsPropertyUpdatable(property))
             {
                 hasUpdatable = true;
@@ -975,7 +989,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// v5.0：PALORM025/026/027/034/035/037 同遍加入，PALORM026 用 type.GetMembers() 在
     /// EnumerateMappedProperties 过滤前扫一遍（否则 [NotMapped] 被滤掉检测不到）。</summary>
     private static void CheckPropertyLevelDiagnostics(
-        SymbolAnalysisContext ctx, INamedTypeSymbol type, ref HashSet<string>? assemblyTables)
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, ref HashSet<string>? assemblyTables,
+        StringComparer identifierComparer)
     {
         // PALORM026 必须用 type.GetMembers() 而非 EnumerateMappedProperties——
         // 后者跳过 [NotMapped]，检测不到 [NotMapped]+[Key] 冲突。
@@ -988,7 +1003,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             CheckOwnedJson(ctx, type, member);                                    // PALORM008/009/010（r11.5-D2 订正：019 是复合主键）
             CheckValueMapping(ctx, member);                                       // 值映射
             CheckColumnNameMismatch(ctx, member, type);                           // PALORM002
-            CheckForeignKey(ctx, member, type, memberLocation, ref assemblyTables); // PALORM003/004
+            CheckForeignKey(ctx, member, type, memberLocation, ref assemblyTables, identifierComparer); // PALORM003/004
             CheckTimestampType(ctx, type, member);                                // PALORM025
             CheckTimestampComputedConflict(ctx, type, member);                    // PALORM042（ITM-640 收口）
             CheckComputedExpressionValidity(ctx, type, member);                   // PALORM044（ITM-640 收口）
@@ -1096,7 +1111,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
         if (computedAttr is null) return;
         if (computedAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
-        if (!expression.Contains('\0') && SourceGenerationValidation.IsBalancedParentheses(expression))
+        // P2-8：空串/纯空白同时通过 NUL 与括号平衡检查，会生成 "GENERATED ALWAYS AS ()"
+        // 或 "DEFAULT " 到迁移期才失败。
+        if (!string.IsNullOrWhiteSpace(expression)
+            && !expression.Contains('\0')
+            && SourceGenerationValidation.IsBalancedParentheses(expression))
             return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(InvalidComputedExpression,
@@ -1146,7 +1165,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue"));
         if (defaultValueAttr is null) return;
         if (defaultValueAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
-        if (!expression.Contains('\0') && SourceGenerationValidation.IsBalancedParentheses(expression))
+        if (!string.IsNullOrWhiteSpace(expression)
+            && !expression.Contains('\0')
+            && SourceGenerationValidation.IsBalancedParentheses(expression))
             return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(InvalidDefaultValueExpression,
@@ -1436,6 +1457,19 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         string? typeName = columnAttr.NamedArguments
             .FirstOrDefault(static na => na.Key == "TypeName").Value.Value as string;
 
+        // PALORM051（2026-10-22 终审 P1）：适用面按 provider 类型判定——可空 decimal/char
+        // 的 SpecialType 是 Nullable<T>，必须 UnwrapNullable；[Converter] 映射后的 provider
+        // 类型才是 DDL 类型（与 TableModel.FromContext 同口径）。
+        ITypeSymbol providerType = SourceGenerationValidation.UnwrapNullable(member.Type);
+        AttributeData? converterAttr = SourceGenerationValidation.GetConverterAttribute(member);
+        if (converterAttr is not null
+            && SourceGenerationValidation.TryGetConverterTypes(
+                member, converterAttr, out _, out ITypeSymbol? mappedProviderType)
+            && mappedProviderType is not null)
+        {
+            providerType = SourceGenerationValidation.UnwrapNullable(mappedProviderType);
+        }
+
         bool invalid =
             (length is not null && length < 0)
             || (precision is not null && precision < 0)
@@ -1444,9 +1478,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             || (typeName is not null && string.IsNullOrWhiteSpace(typeName))
             // 适用面：Length 仅 string/char（VARCHAR(n)），Precision/Scale 仅 decimal——
             // 其他列类型标注静默无效（如 byte[] + Length），一并拦截
-            || (length is not null && member.Type.SpecialType
+            || (length is not null && providerType.SpecialType
                 is not (SpecialType.System_String or SpecialType.System_Char))
-            || ((precision is not null || scale is not null) && member.Type.SpecialType
+            || ((precision is not null || scale is not null) && providerType.SpecialType
                 is not SpecialType.System_Decimal);
         if (!invalid) return;
 
@@ -1522,7 +1556,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// 原注释"避免重复调用"的失实表述；扫描幂等无正确性影响，仅并发下重复计算）。</summary>
     private static void CheckForeignKey(
         SymbolAnalysisContext ctx, IPropertySymbol member, INamedTypeSymbol type,
-        Location memberLocation, ref HashSet<string>? assemblyTables)
+        Location memberLocation, ref HashSet<string>? assemblyTables, StringComparer identifierComparer)
     {
         var fkAttr = member.GetAttributes().FirstOrDefault(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
@@ -1535,7 +1569,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             if (assemblyTables is null)
                 Interlocked.CompareExchange(
                     ref assemblyTables,
-                    BuildAssemblyTableNames(type.ContainingAssembly),
+                    BuildAssemblyTableNames(type.ContainingAssembly, identifierComparer),
                     null);
             if (refTable is not null && !assemblyTables!.Contains(refTable))
             {
@@ -1557,7 +1591,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// 跨实体同名索引（SQLite/PG schema 级命名空间下 IF NOT EXISTS 静默跳过）由运行时
     /// MigrateAsync 的重复告警日志兜底——Analyzer 按类型增量执行，跨实体聚合不可靠。</summary>
     private static void ValidateIndexDeclarations(
-        SymbolAnalysisContext ctx, INamedTypeSymbol type)
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, StringComparer identifierComparer)
     {
         var tableAttr = type.GetAttributes().FirstOrDefault(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
@@ -1570,7 +1604,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
         // ITM-565：索引列必须存在于实体列集（含 [Column] 重命名与基类链）——列名拼错
         // 此前编译期静默，MigrateAsync 运行期才报"列不存在"（1170 类错误不被幂等兜底吞）。
-        var knownColumns = BuildKnownColumnNames(type);
+        var knownColumns = BuildKnownColumnNames(type, identifierComparer);
 
         // [Unique] 派生索引名先占位（与 TableModel 的 ux_{table}_{column} 命名一致）
         ReserveUniqueDerivedIndexNames(ctx, type, tableName, seenNames);
@@ -1579,9 +1613,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>构建实体已知列名集（含 [Column] 重命名与基类链，ITM-607）。</summary>
-    private static HashSet<string> BuildKnownColumnNames(INamedTypeSymbol type)
+    private static HashSet<string> BuildKnownColumnNames(INamedTypeSymbol type, StringComparer identifierComparer)
     {
-        var knownColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var knownColumns = new HashSet<string>(identifierComparer);
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             var propColumnAttr = property.GetAttributes().FirstOrDefault(a =>
@@ -1700,12 +1734,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     // ITM-590: 跨类型共享程序集表名缓存——此前 GetAssemblyTableNames 每类型独立扫描整个
     // 程序集（O(N×M)），大型项目编译期可感知。改为编译期内通过 CompilationStartAction
     // 注册的局部缓存（由 Roslyn 管理生命周期，符合 RS1008：不存储编译期符号到分析器字段）。
-    private static HashSet<string> BuildAssemblyTableNames(IAssemblySymbol assembly)
+    private static HashSet<string> BuildAssemblyTableNames(IAssemblySymbol assembly, StringComparer identifierComparer)
     {
-        // ITM-872（r23）：表名集合按 ITM-510"最严方言口径"用 OrdinalIgnoreCase——MySQL 表名
-        // 大小写不敏感（同文件 CheckColumnUniqueness/ValidateIndexDeclarations 同口径），
-        // Ordinal 集合会让 [Table("Users")] 被 [ForeignKey("users",…)] 引用时 PALORM003 误报。
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 2026-10-22 终审 P2-7：比较器按目标方言——PG 引号标识符大小写敏感（Ordinal），
+        // 仅 MySQL/SQLite 时保持 OrdinalIgnoreCase（其表名不敏感）。
+        var names = new HashSet<string>(identifierComparer);
         foreach (var module in assembly.Modules)
         {
             foreach (var type in GetAllTypes(module.GlobalNamespace))

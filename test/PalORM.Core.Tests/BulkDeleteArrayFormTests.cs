@@ -129,10 +129,10 @@ internal sealed class BulkDeleteArrayFormTests
     [Test]
     public async Task BulkDelete_ArrayForm_MultiBatch_DeletesEveryKey()
     {
-        // 批大小 = SqlLimits.MaxRowsPerBatch（数组形态不受语句参数个数约束）；
+        // 批大小 = UnnestArraysMaxRowsPerBatch（20000，数组形态不受语句参数个数约束）；
         // 键数远大于它 → 多批循环。批边界算错会在这里留下残行。
         await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
-        const int total = 12_000;
+        const int total = 42_000;
         await SeedAsync(session, total);
         Shapes.Clear();
 
@@ -142,7 +142,7 @@ internal sealed class BulkDeleteArrayFormTests
 
         await Assert.That(deleted).IsEqualTo(total);
         await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
-        // 12000 键 / 批大小 5000 → 3 批（5000+5000+2000）
+        // 42000 键 / 批大小 20000 → 3 批（20000+20000+2000）
         await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 3);
     }
 
@@ -164,9 +164,9 @@ internal sealed class BulkDeleteArrayFormTests
     [Test]
     public async Task BulkDelete_ArrayForm_LastBatchShorterThanFull_DeletesEveryKey()
     {
-        // 5001 键（SqlLimits.MaxRowsPerBatch = 5000）：末批只剩 1 个元素——数组构造器的
+        // 20001 键（UnnestArraysMaxRowsPerBatch = 20000）：末批只剩 1 个元素——数组构造器的
         // count 参数若误用批大小（而非实际批长度）会越界或多删，此用例专锁该边界。
-        const int total = 5_001;
+        const int total = 20_001;
         await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
         await SeedAsync(session, total);
         Shapes.Clear();
@@ -389,6 +389,19 @@ internal sealed class BulkDeleteArrayFormTests
             => await session.BulkDeleteAsync<TypedGuardUnregisteredRow, long>([]));
     }
 
+    /// <summary>N7（2026-10-22 审计）：>=2 键的未注册类型走初始 CRUD 守卫，
+    /// 错误消息与对象重载一致（"has no generated CRUD"），不再先抛 "not registered"。</summary>
+    [Test]
+    public async Task BulkDelete_TypedKeys_UnregisteredType_ReportsGeneratedCrudMessage()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async ()
+            => await session.BulkDeleteAsync<TypedGuardUnregisteredRow, long>([1L, 2L]));
+
+        await Assert.That(ex!.Message).Contains("has no generated CRUD");
+    }
+
     /// <summary>多批边界：键数跨 <c>UnnestArraysMaxRowsPerBatch</c>（20000，深挖轮）时类型化
     /// 路径的批循环正确切批（批边界算错会留残行）。</summary>
     [Test]
@@ -402,6 +415,25 @@ internal sealed class BulkDeleteArrayFormTests
         var keys = new long[count];
         for (int i = 0; i < count; i++) keys[i] = i + 1;
         long deleted = await session.BulkDeleteAsync<ArrayFormRow, long>(keys);
+
+        await Assert.That(deleted).IsEqualTo(count);
+        await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);
+        await AssertAllStatementsAreArrayFormAsync(Shapes, expectedBatchCount: 2);
+    }
+
+    /// <summary>对象重载的同一多批边界：批宽与类型化重载、UPDATE/UPSERT 共用
+    /// <c>UnnestArraysMaxRowsPerBatch</c>（20000）。修复前对象重载仍用 5000，20017 键会切 5 批。</summary>
+    [Test]
+    public async Task BulkDelete_ObjectKeys_MultiBatch_BoundariesCorrect()
+    {
+        await using DataSession<ArrayFormDialectProvider> session = await CreateSessionAsync();
+        const int count = 20_017;
+        await SeedAsync(session, count);
+        Shapes.Clear();
+
+        var keys = new object[count];
+        for (int i = 0; i < count; i++) keys[i] = (long)(i + 1);
+        long deleted = await session.BulkDeleteAsync<ArrayFormRow>(keys);
 
         await Assert.That(deleted).IsEqualTo(count);
         await Assert.That((await session.GetAllAsync<ArrayFormRow>()).Count).IsEqualTo(0);

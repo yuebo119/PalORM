@@ -36,6 +36,28 @@ public sealed class WhereOrPrecedenceTests
     }
 
     [Test]
+    public async Task TwoOrRuns_GroupsEachAndSegment_NoUnbalancedParens()
+    {
+        // 2026-10-22 终审 P1-2：两次「OR 后接 AND」——旧实现只开一次括号却闭两次，
+        // 产出多一个右括号的非法 SQL。
+        await using DataSession<SqliteProvider> session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = "Data Source=:memory:" });
+#pragma warning disable PALORM005
+        string sql = session.From<WhereOrProbeRow>()
+            .Where($"qty > {5}")
+            .OrWhere($"name = {"x"}")
+            .Where($"id < {100}")
+            .OrWhere($"name = {"y"}")
+            .Where($"id > {0}")
+            .ToSql();
+#pragma warning restore PALORM005
+
+        await Assert.That(sql).Contains(
+            "((qty > @p0) OR (name = @p1)) AND ((id < @p2) OR (name = @p3)) AND (id > @p4)");
+        await Assert.That(sql.Count(c => c == '(')).IsEqualTo(sql.Count(c => c == ')'));
+    }
+
+    [Test]
     public async Task OrThenAnd_ExecutedRowsFollowSequentialSemantics()
     {
         // 行为锁定：数据构造使两种读法返回不同行集——

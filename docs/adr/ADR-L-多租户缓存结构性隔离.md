@@ -27,9 +27,10 @@ key 无租户维度 ∧ 未注入 per-tenant 缓存）全中时，租户 A 的�
 
 | 会话/实体状态 | 作用域前缀 | 说明 |
 |---|---|---|
-| 多租户会话 + TenantAware 实体 + 未 IgnoreFilters | `__t:{tenantId}:` | 每租户独立命名空间 |
+| 多租户会话 + TenantAware 实体 + 未 IgnoreFilters | `__t:{tenantIdLength}:{tenantId}:` | 每租户独立命名空间（长度前缀防同键） |
 | 多租户会话 + IgnoreFilters（或非 TenantAware 实体） | `__all__:` | 全量数据独立命名空间，与租户命名空间互不可见 |
-| 单租户会话（未 `WithTenant`） | 无前缀 | key 原样，行为零变化 |
+| 单租户会话（未 `WithTenant`）+ 未 IgnoreFilters | 无前缀 | key 原样，行为零变化 |
+| 单租户会话 + IgnoreFilters | `__all__:` | 与普通查询隔离（2026-10-22 终审 P1-6） |
 
 同点冻结的意义：查询的租户可见性在 `From` 时定型（DefaultFilter 已上链、后续变更受
 `SessionOperationState` 门禁约束），key 作用域同拍快照则二者**永不漂移**——不存在
