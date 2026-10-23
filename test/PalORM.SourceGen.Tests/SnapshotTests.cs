@@ -144,7 +144,7 @@ internal sealed class SnapshotTests
         }
 
         // 实体 6：[ForeignKey] DDL 内联（ADR-B 补充实施）——表级子句三方言同构，
-        // OnDelete 显式声明（PALORM004 强制必填；G16 默认 NO ACTION 语义）。
+        // OnDelete 显式声明（PALORM004 对未声明发警告；缺省 NO ACTION，G16 语义）。
         // 引用列 "Id" 与被引用实体实际列名逐字对齐——PG 引号标识符大小写敏感
         [Table("fk_parent")]
         public sealed partial class FkParentEntity

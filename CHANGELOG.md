@@ -2,6 +2,125 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [6.7.0] - 2026-10-23 · 请求级查询管道 + 终审 P0/P1 收口
+
+> 变更规模：55 个提交（含 2 次发布准备提交）· 223 个文件 · +7,945/−1,392 行（v6.6.0..db9180e）
+> 背景：10-22 终审审计（P0/P1 10 项、并发硬化 2 项、P2 11 项、P3 20 项）与 10-19/20 性能方案落地；三方言两轮全量批验证（各 416 项 · 门禁 0 FAIL）。
+
+### 💔 破坏性变更
+
+- **无公共 API 签名移除或变更**。以下为行为变化，契约保持：
+  - `[TenantAware]` 实体在 `UpdateAsync`/`BulkUpdateAsync`/`BulkUpdateBatchAsync`/`SaveAsync`/`BulkMergeAsync` 的 SET 中不再写租户列（安全修复，见下）。
+  - 查询缓存租户命名空间由 `__t:{tenant}` 改为 `__t:{长度}:{tenant}`，`IgnoreFilters()` 查询改走独立 `__all__` 命名空间；`TenantScope.Scope` 的值随之变化。升级后旧进程内缓存条目自然失效（无持久化缓存）。
+  - 查询管道 `QueryPipeline.Add` 在入队时即拒绝 `Select` 投影，抛 `NotSupportedException`（原为执行期 `ArgumentOutOfRangeException`）。
+  - `CommandTimeout`/`OverallDeadline`/`CircuitBreakerResetAfter` 与自定义重试退避上限设为 49.7 天（`CancellationTokenSource.CancelAfter`/`Task.Delay` 的计时器上界），超限在配置期或构造期抛 `ArgumentOutOfRangeException`。
+  - MySQL `BulkCopy` 在已写入部分行后失败一律透传原始异常，不再回退多值 INSERT；仅零行写入且重探测明确 `Disabled` 时回退。
+  - `CrudMetadata.Sqls`（legacy 无方言 CRUD SQL 集，运行时从不消费）标记 `[Obsolete]`：新代码勿读勿写，方言 SQL（`PalORMRuntime.CommandSqlsByDialect`）是唯一真源；仅为旧版本生成器模型程序集保留注册兼容。
+
+### ✨ 新增
+
+- **请求级查询管道 `CreatePipeline()`**：把多条独立只读查询合并为一次往返，结果按入队顺序类型化返回（`PipelineQuery<T, TProvider>` / `PipelineFirst<T, TProvider>` / `PipelineScalar<TProvider>`）。PostgreSQL 走 `NpgsqlBatch`，本机 4 条单键查询 249 µs → 72~79 µs/条（3.2~3.4×）；MySQL 走 `MySqlBatch`（本机执行耗时持平，WAN 省 RTT）；SQLite 回退顺序执行。契约：builder 入队即消费、只读、活动事务自动绑定、与并行读作用域互斥；`WithCache`/`AsPrepared`/`WithTracing`/`WithMetrics`/`ForRead`/builder 级 `WithTransaction` 入队时明确拒绝。
+- **MySQL 复用命令晋升自动预编译**：单行 CRUD 与直查族命令槽晋升（同形态第 3 次）时执行一次 `PrepareAsync`，此后走二进制协议；预编译失败静默退化为未预编译。实测重复单键读约 −10~18%。新 Provider 能力位 `PrepareReusedCommands`（PostgreSQL 由 AutoPrepare 代劳、SQLite 随命令缓存语句，均保持 false）。
+- **实体级列子集更新 `UpdateColumnsAsync<T>(entity, params columns)`**：只把选中属性写入 SET，未选列保持库内值；复用生成 `BindUpdate` 完成转换器/OwnedJson/枚举/类型提示，随后裁掉未选参数并重编号。主键与 `[ConcurrencyCheck]` 恒进 WHERE、版本列 `+1`、租户谓词自动追加。新生成器为选中列 + 主键/版本逐列建参（10 列 SQLite 每操作 A/B：4104 → 3216 B/op，约 −22%）；旧生成器程序集回退“整行建参后裁剪”的兼容路径。`UpdateAsync` 默认行为不变。
+- **管道结构体投影 `pipeline.QueryStructs<T>(sql)`**：原始 SQL + `[Projection] struct` 接入查询管道，单次往返承载多条大结果集且每行零堆对象；参数化 SQL 与活动事务照常生效。
+- **`[Projection] readonly struct` + `QueryStructsAsync<T>`**：结构体投影获得源生成 RowFactory，直查物化为连续结构体数组（每行零堆对象），适合报表/聚合大结果集；投影仍不进表/CRUD/迁移元数据。`[Projection]` 的 AttributeUsage 扩展到 Struct，实体 `[Table]` 仍限 Class。
+- **PostgreSQL AutoPrepare 可配置 `PrepareCacheSize` / `PrepareThreshold`**：默认 100/2（与既有硬编码一致），形状多的应用可调高缓存容量或关闭（0）；连接串显式给出对应键时不覆盖。同步加入连接串改写缓存键，避免不同配置串用改写结果。
+- **MySQL 可选同步逐行读 `UseSynchronousRowRead`**：全量物化（GetAll/ToList/QueryAsync）的逐行读取改走同步 `Read()`；MySQL 5 轮交替实测约 998 ns/行 vs 异步 1846~2043 ns/行。默认关闭（流式行未缓冲时会阻塞线程）；流式 API（QueryAsyncEnumerable/ForEach）始终异步。
+- **池化空闲会话租出探活 `DbOptions.PoolConnectionValidationInterval`**：默认 30s，0 关闭；PG/MySQL 在租出前执行 `SELECT 1`（短命令超时），失败丢弃会话换新；SQLite 默认 no-op。锁定用例：PG `pg_terminate_backend` 后再租出得到可用新会话。
+- **`IDbProvider` 新能力位与钩子**：`MarkConnectionStateUnknown` / `ResetConnectionStateAsync` / `ValidateConnectionAsync` / `PrepareReusedCommands` / `SupportsQueryPipeline` / `MaxPipelineCommands` / `PreferSynchronousIo` / `SupportsSynchronousRowRead`——均为 `static virtual` 带默认实现，旧第三方 Provider 源码兼容。PG 连接态复位用 `RESET ALL; RESET ROLE`（不销毁 prepared statements），MySQL 用 `COM_RESET_CONNECTION`。
+
+### ⚡ 性能
+
+- **SQLite 连接态脏标记**：`foreign_keys` 只在原生 SQL/存储过程/批量脚本/DDL/裸连接改写连接态后重设；干净句柄后续会话零往返。文件库探针中位：`CreateAsync+Dispose` 1.71 → 0.50 µs / 1416 → 896 B，per-op `GetAsync` 7.35 → 6.40 µs / 2640 → 2176 B。
+- **池化租出复位连接态**：`DataSessionPool.RentAsync` 重新执行 Provider 初始化（干净 SQLite 句柄零成本），修复上一租期原生 SQL 改写的连接态带入下一租期。
+- **直接查询复用槽参数补建**：`QueryAsync`/`ScalarAsync`/`CountAsync`/`ExecuteAsync`/流式查询的复用槽此前晋升后参数集合为空、带参查询永远回退新建；现首次使用补建参数，参数化直查从第 3 次起真正复用。
+- **LIMIT/OFFSET 参数只创建一次**：SQL 文本侧只消费参数名，`GetQueryParameters` 单点创建，消除每次冷形状构建的“建完即弃”参数对象。
+- **`QueryAsync` 物化容量启发**：原始 SQL 直查改用会话内上次行数作为初始容量（原硬编码 16），重复大结果集查询免去 ArrayPool 扩容拷贝。
+- **大结果集物化削减无效清零**：`ResultListReader` 对不含引用的纯值 struct 数组跳过 `Array.Clear`（按 `RuntimeHelpers.IsReferenceOrContainsReferences<T>` 折叠），结构体投影大结果集不再为池数组付 O(n) 清零。
+- **INSERT 异步层扁平化**：`FinishInsertAsync` 内联回 `InsertCoreAsync`，事务内逐条插入少一个 async 状态机帧/行。
+- **查询参数延迟物化**：`QueryClause` 的标量参数改为 `ParameterBinding`（名/值，24B 结构），`DbParameter` 只在新建命令或拦截器上下文需要时创建；命令复用槽命中时就地写值，零驱动参数对象。长会话 2 参链式查询探针：1328 → 1200 B/op、8216 → 7899 ns/op（约 −10% / −4%）。租户默认过滤参数同步改为延迟绑定（`From<T>()` 不再预建 DbParameter）。
+- **会话门禁无锁快路径**：`SessionOperationState.Enter` 在无事务流/并行读/读租约时 CAS 直通不取锁；命令超时秒值、租户判定与主键绑定改用会话级快照；暖池命中不再创建取消定时器；SQLite 写/标量/读叶子走同步执行点（保留取消前置检查）。
+- **每操作会话释放快路**：无在飞操作、无事务流、无读租约且无拦截器时，`DisposeAsync` 省掉 `TaskCompletionSource` 与完成 `Task` 两次分配。
+- **复用槽缓存已应用命令状态**：命中路径只比较字段，不再每操作读驱动 `Transaction`/`CommandTimeout`/`CommandText` 三个 getter。
+- **缓存引用表名与主键 ordinal**：`QuotedTableName` 按（方言, 类型）缓存、`CrudPlan.PkOrdinal` 注册期计算；SQLite/2000 三方言对照 Count 族分配 0.969~0.978×、InsertReturningId 时延 0.966×（家族级 2.2%~3.1%，低于 5% 行动线，不宣称 5% 级收益）。
+- **PG `MemberResolver` 每类型映射缓存**：命中省一次全局 `FrozenDictionary` 查找；未注册类型的失败不缓存。
+
+### 🐛 修复
+
+**安全与数据正确性**
+
+- **[TenantAware] 租户列在更新中不可写**：`UpdateAsync`、`BulkUpdateAsync`、`BulkUpdateBatchAsync` 与 `SaveAsync`/`BulkMergeAsync` 的冲突更新 SET 不再包含 `tenant_id`。修复前租户会话可凭实体上的他租户值把行搬到别的租户（行从本租户视图消失、出现在对方视图），用未赋 `TenantId` 的部分实体更新还会把租户列清空。Insert 行为不变（租户值仍由实体承载，ITM-599）；确需迁移租户用原生 SQL。
+  - 回归锁定：`BulkUpdatePoolingTests.TenantColumn_IsImmutableOnUpdateAndUpsert`（四条写路径）与 `TenantFilter_OnlyUpdatesOwnTenantRows`（补 `[TenantAware]`，跨租户主键 0 行）。
+- **BulkMerge 租户列排除按实体能力判定**（C1 P0）：非租户会话不再改写 `tenant_id`，结果不再依赖预热顺序；`UpsertShapeCache` 键 (Type, Dialect) 因此完备。双预热顺序回归用例 + 反向验证。
+- **查询缓存租户键长度前缀 + IgnoreFilters 独立命名空间**（P0-1/P1-6）：租户 `"a"` + key `"b:c"` 与租户 `"a:b"` + key `"c"` 不再拼出同键跨租户命中；`IgnoreFilters()` 无论会话是否有租户一律走 `__all__`，普通/全量查询不共享缓存条目。3 个锁定用例。
+- **MySQL 非默认键 UPSERT 不再回填陈旧 LAST_INSERT_ID**（P0-2）：租户护栏 IF 假分支不执行 `LAST_INSERT_ID(pk)` 时，旧实现把会话上一自增值写回实体，第二次 `SaveAsync` 覆盖无关行。移除该回填（非默认键由入参显式携带）。
+- **OR→AND 链按 AND 分段加括号**（P1-2）：`Where(A).OrWhere(B).Where(C).OrWhere(D).Where(E)` 旧实现开一次括号却闭两次，产出非法 SQL；纯 AND/OR 链文本保持不变。
+- **CTE 后列引用按当前 FROM 源重限定**（P1-3）：`OrderBy`/`GroupBy`/`WhereIn`/`Keyset`/`Include` 在 `With(CTE)` 前调用时不再引用不在 FROM 中的实体表名；用户手写 `Where`/`Raw`/`Join` 不参与。
+- **DO NOTHING 冲突不再强插租户 WHERE**（P1-1）：insert-only 租户实体跨租户同主键静默跳过且原行租户不变（原生成 `near WHERE: syntax error`）。
+- **RETURNING 主键按输入顺序对位**（C2）：`BatchInsertReturning` 空主键显式失败，按自增主键升序重建输入顺序后回填；`BulkMergeAsync` 文档写明分配顺序假设。
+- **跨程序集 FK 建表序运行时拓扑兜底**（P2-12）：新增 `MigrationOrderSorter`，按各表 `CREATE TABLE` 文本的 `REFERENCES` 边稳定拓扑排序；环按输入序放行，多程序集注册与旧片段同受益。
+
+**稳定性与资源**
+
+- **池租出复位 PG/MySQL 连接级会话态**（P1-8）：`SET search_path`/`SET ROLE`/`sql_mode` 不再跨租期泄漏；PG 用 `RESET ALL; RESET ROLE`（不用 `DISCARD ALL`，避免销毁 prepared statements），MySQL 用 `COM_RESET_CONNECTION`，随后重放 `SessionSetupSql`。
+- **池基准拦截器所有权**（P1-5）：调用方注入的 `options.Interceptors` 不再被池归还/池释放销毁，下一租期不再抛 ODE；租期加项在归还时释放。
+- **读连接超时分类**（P2-3/P2-4）：主连接 Open 后统一重新武装 `ConnectionTimeout`，覆盖 Provider 初始化与 `SessionSetupSql`；读路由/并行读的 Open/初始化超时以 `TimeoutException` 呈现（`Data["PalORM.InfrastructureTimeout"]`）。
+- **MySQL BulkCopy 三态探测 + 部分写入不回退**（P2-5 及残余）：`local_infile` 探测区分 `Enabled`/`Disabled`/`ProbeFailed`，仅零行写入且明确 `Disabled` 时回退多值 INSERT；已写入部分行透传原始异常（`BulkCopyPartialFailureException` 只承载行数），避免整批重插产生重复行。
+- **会话批量与租约竞态收口**（P3）：`SessionBatch` 事务赋值失败释放 batch；`Park` 门禁拒绝回滚 `_disposing`；配置门补 `_fastState` 读；`UpdateColumnsEntryAsync` 的租户判别式移入租约。
+- **超时/熔断边界**（C5/C6）：`CommandTimeout`、`OverallDeadline`、`CircuitBreakerResetAfter` 与自定义退避补 49.7 天上界；熔断开闸窗口与半开槽改用 `Environment.TickCount64`；熔断注册表键改连接串指纹（不再驻留明文）并设 4096 上限。
+- **查询管道守卫与容量上界**（P2-1/P2-6）：`Add` 拒绝 `Select` 投影；物化计数上界 4096（`SqlLimits` 单点），10 万行全表不再让后续小查询白分配约 800 KB；`BatchInsertReturning` 命令每批 `try/finally` 释放；`BulkDelete` 类型化重载先走 CRUD 注册守卫。
+- **批宽与缓存计数**（C3/C4）：对象重载数组删除批宽对齐 `UnnestArraysMaxRowsPerBatch`（20000）；`BoundedQueryCache.Set` 改 `TryAdd`/`TryUpdate` 循环，消除并发下计数向下漂移。
+- **严格降序主键拒绝回填**：`BatchInsertReturning` 拒绝严格降序主键的 RETURNING 回填。
+
+**生成器与分析器**
+
+- **[Projection] plain `readonly struct` 进入生成管线**（P1-4）：predicate 增加 `StructDeclarationSyntax`，`QueryStructsAsync` 不再运行期抛 “not registered”。
+- **[SqlFile] 方法形状与宿主形态**（P2-10）：record 宿主按 `partial record` 发射（消除 CS0261）；实例方法/带参/非 `string` 返回/非 `public`/泛型方法/`ref` 返回跳过生成，由 CS8795 定位回用户声明；`SqlTemplate` 宿主类同名改报 PALORM046。
+- **[Computed]/[DefaultValue] 空表达式与枚举关键字成员**（P2-8/P2-9）：空串/纯空白在生成期报 PALORM044/048；枚举成员名为 C# 关键字时生成的类型引用带 `@`，数据库字符串字面量仍用裸名。
+- **PALORM051 按 provider 类型判定**：`decimal?`/`char?` 不再误报 Error；`[Converter]` 映射后的 provider 类型参与 Length/Precision/Scale 判定。
+- **分析器列/表引用大小写按目标方言**（P2-7）：目标含 PG 用 `Ordinal`，仅 MySQL/SQLite 用 `OrdinalIgnoreCase`；读 `PalORMTargetDialects`。
+- **FormattableSqlFormatter 方言感知**（P2-11）：方言进 `FormatCached` 键；MySQL 反斜杠转义与 `#` 行注释按方言处理，`--`/`/* */` 注释内不参数化。
+- **PALORM004 文案**（N2）：改为“生成的 FK DDL 默认 `ON DELETE NO ACTION`”，同步生成器注释与快照。
+
+### 📦 依赖升级
+
+| 包名 | 旧版本 | 新版本 |
+|------|--------|--------|
+| TUnit / TUnit.Assertions | 1.75.0 | 1.76.0 |
+| OpenTelemetry（四包） | 1.20.0 | 1.20.1 |
+| OpenTelemetry.PersistentStorage.*（两包） | 1.1.2 | 1.1.3 |
+| Microsoft.Identity.Client / Extensions.Msal | 4.91.0 | 4.91.1（仅测试图，产品包零变化） |
+| RepoDb / RepoDb.Sqlite.Microsoft | 1.16.0 | 1.17.0（bench 对照臂，产品包与三臂口径不变；BDN 历史批次的 RepoDb 列跨批不直接可比） |
+
+全仓 `dotnet list --outdated` 无剩余可升项；预览线（Roslyn 5.13-preview、Testing 3.2-preview、System.IO.Hashing 11-rc）按既定口径不采用。
+
+### 🧰 工程与质量
+
+- **10-22 终审审计收口**：P0/P1 10 项、并发硬化 2 项、P2 11 项、P3 20 项全部落地；误报清单新增 P11（N8：最小实体被 PALORM024 编译期拒绝，运行期空更新守卫不可达）与 P12 编号预留。
+- **全量性能批 20261023 两轮入库**：09:19 批 416 项 health clean（0.117 < 0.35），19:24 批 416 项、BDN 27/27、结果库门禁 171 项 0 FAIL（锚定 0）；mysql+pg 复测 260 项（`InsertReturningId` 分配异常不复现）；21:05 / 21:28 两轮全量同样 exit 0 且 BDN 27/27。
+- **PerfHub 阶段 0 计时插桩**：`PALORM_PERFHUB_TIMING=1` 时按项记录 prepare/预热/探针/计时/后处理，PerfHub 写 `perf-timing-*.json`，PerfCli 生成时间分解报告；默认关闭，实测开销 <1%（4 批 off/on/on/off 逐项墙钟 96.2/93.7/96.5/95.2s）。两轮全量（19m34s / 19m37s）分解为 PerfHub 834s（warmup 247s、timed 406s、reset 67s、交错读 discarded pass 76s）、BDN 290s；保守优化上限约省 4.1 分钟，距 ≤11 分钟目标仍需三方言并行或频率分层（待 ADR）。
+- **读类三臂测量编排修复**：`QueryAll`/`StreamAll`/`GetAllAsync` 改为同一操作内三臂连续测量并丢弃首遍暖机，消除按实现分阶段测量的早/晚段偏差（2026-10-23 MySQL 20K 同一段 ADO 代码早段 7.73ms、晚段 12.15ms，表观 P/ADO 1.55/1.76 属伪影）。交错后三方言读类 P/ADO 1.00~1.13，门禁锚定项 6→0；产品代码零改动，README 删除 MySQL 2K/20K「持续差距/慢态族」旧表述。
+- **README 性能表同步**：中英文总表与 SQLite 细表按 19:24 批逐格更新（37 行 ×2），环境口径 .NET 11 RC2 + SQLite 临时文件库；批量 P/ADO 读法修正为 0.44~1.25（原 0.78~1.06 与 3~3.4× 为旧批地板窗口读数）。
+- **报告口径**：表头拆「本轮实测环境」/「基线环境」；维度 2/8 判定改用最近非子集批次，修复复测批把 SQLite 往返计数顶掉导致的误报。
+- **基准与测试**：`InterpolatedStringAbProbe` 跟进 `FormatCached` 方言参数；空管道用例补行为断言（断言强度扫描 0 弱断言）。
+
+### 📝 文档
+
+- 并行读作用域：`GetAsync` 与查询族都走作用域局部读连接池（原文写“作用域内调用会响亮拒绝”，与 2026-09-30 起的实现相反）。
+- 查询缓存：未注入 `DbOptions.QueryCache` 时 `WithCache` 使用进程级默认实例（原文写“注入才启用”）。
+- `IgnoreFilters()`：会话内无公开复位 API，管理查询后应换会话（原文写“查询结束立即回到租户上下文”）。
+- `WhereIn`/`WhereNotIn`：500 键分批不解除方言总参数上限（SQLite 999），超限提前抛 `ArgumentException`。
+- `[SensitiveData]`：掩码只覆盖 `Set()` 参数，Where 手写 SQL 的洞值无列映射。
+
+### 🧪 验证
+
+- **测试全绿**：Core 669/669 · SourceGen 255/255 · Integration 320/320（含 PostgreSQL 18.6 / MySQL 8.4 真库），合计 1,244 项，0 失败 0 跳过。
+- **构建**：`dotnet build PalORM.ci.slnf -c Release --no-incremental -warnaserror` 0 警告 0 错误。
+- **生成器快照**：22 份按 6.7.0 版本头重录（逐文件 1 增 1 删，仅 `GeneratedCode` 版本行）。
+- **性能**：两轮全量批各 416 项 0 FAIL（19:24 批 BDN 27/27、结果库门禁 171 项 0 FAIL 锚定 0）；09:19 批 PalORM 分配较基线 GetByKey −11.4%、StableShape −13.1%、VaryingShape −13.9%（同批三臂，对照臂 0.0%）；读类交错测量后三方言 P/ADO 1.00~1.13。
+- **包预检**：`pre-release-check.cs 6.7.0` 五包本地源 + 消费者 restore + 包契约全绿。
+- **Native AOT**：由 release.yml 复跑四路（SQLite / PostgreSQL / MySQL / NuGet Consumer）。
+
 ## [6.6.0] - 2026-10-20 · 版本化批量更新单语句化 + 第二轮性能收敛
 
 > 变更规模：74 个代码提交 · 260 个文件 · +9,625/−2,168 行（v6.5.0..87d25f5，不含本发布准备提交）

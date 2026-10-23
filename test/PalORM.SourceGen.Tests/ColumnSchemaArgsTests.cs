@@ -125,6 +125,66 @@ public sealed class ColumnSchemaArgsTests
     }
 
     [Test]
+    public async Task PALORM051_NullableDecimalWithPrecision_DoesNotReport()
+    {
+        // 2026-10-22 终审 P1：decimal? 的 SpecialType 是 Nullable<T>，适用面必须 UnwrapNullable
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("amount", Precision = 10, Scale = 2)]
+                public decimal? Amount { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM051")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM051_NullableCharWithLength_DoesNotReport()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("code", Length = 8)]
+                public char? Code { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM051")).IsFalse();
+    }
+
+    [Test]
+    public async Task PALORM051_ConverterMappedStringWithLength_DoesNotReport()
+    {
+        // 值域按 provider 类型判定：模型类型不是 string，但 [Converter] 映射到 string 时 Length 合法
+        const string source = """
+            using PalORM;
+            public sealed class ModelId { public int Value { get; set; } }
+            public sealed class ModelIdConverter : IValueConverter<ModelId, string>
+            {
+                public string ToProvider(ModelId value) => value.Value.ToString();
+                public ModelId FromProvider(string value) => new ModelId { Value = int.Parse(value) };
+            }
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("model_id", Length = 32)]
+                [Converter(typeof(ModelIdConverter))]
+                public ModelId ModelId { get; set; } = new();
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM051")).IsFalse();
+    }
+
+    [Test]
     public async Task StoreAs_OnEnum_NoPalorm017_Or_053()
     {
         // ITM-553（v6.1）：StoreAs 参与读写双路径——PALORM017 停报（旧断言"仍告警"随之作废，

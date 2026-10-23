@@ -13,6 +13,27 @@ public sealed class MySqlProvider : IDbProvider
     /// <summary>SQL 方言标识:<see cref="SqlDialect.MySql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.MySql;
 
+    /// <summary>2026-10-22 终审 P1-8：COM_RESET_CONNECTION 清会话变量（sql_mode/用户变量等）。
+    /// 连接串 ConnectionReset=false 只跳过自动归还复位，显式调用不受影响。</summary>
+    public static async Task ResetConnectionStateAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        _ = commandTimeoutSeconds;
+        if (connection is MySqlConnection mySqlConnection)
+            await mySqlConnection.ResetConnectionAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>P2-2：池化空闲会话租出前的轻量探活。</summary>
+    public static async Task ValidateConnectionAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandTimeout = commandTimeoutSeconds;
+        command.CommandText = "SELECT 1";
+        await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+    }
+
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 MySqlConnector 连接串:
     /// MaximumPoolSize / ConnectionIdleTimeout(秒)/ ConnectionLifeTime(分钟换算为秒);
     /// MySqlConnector 池参数为 uint,checked 转换防负值/溢出静默截断。
@@ -161,6 +182,22 @@ public sealed class MySqlProvider : IDbProvider
     /// <summary>MySQL 不支持 RETURNING 子句(自增主键回读走 LAST_INSERT_ID 路径)。</summary>
     public static bool SupportsReturningClause => false;
 
+    /// <summary>复用命令晋升时执行一次服务端预编译——MySQL 驱动没有 PostgreSQL 的自动预编译
+    /// （逐次文本解析）；命令复用槽保证同 SQL、同参数形态，晋升点正是付一次
+    /// COM_STMT_PREPARE 的最佳时点。实测重复单键读约 −10~18%。</summary>
+    public static bool PrepareReusedCommands => true;
+
+    /// <summary>全量物化支持同步逐行读（需 <see cref="DbOptions.UseSynchronousRowRead"/> 开启）。
+    /// 5 轮交替实测同步 998 ns/行 vs 异步 1846~2043 ns/行。</summary>
+    public static bool SupportsSynchronousRowRead => true;
+
+    /// <summary>多条独立只读查询可经 <see cref="MySqlBatch"/> 合并为一次调用（本机单库
+    /// 执行耗时时与顺序持平，WAN 下省 RTT；结果集迭代顺序与入队一致）。</summary>
+    public static bool SupportsQueryPipeline => true;
+
+    /// <summary>管道单批语句上限。</summary>
+    public static int MaxPipelineCommands => 64;
+
     /// <summary>清空 local_infile 能力探测缓存（测试基础设施入口，经 InternalsVisibleTo 暴露给
     /// Integration 测试）。真库用例在运行中 SET GLOBAL local_infile=OFF 再恢复 ON，恢复后
     /// 缓存仍可能持有 OFF 结论至 60s TTL 到期，导致其余用例静默降级多值路径（BulkCopy 集成
@@ -231,35 +268,29 @@ public sealed class MySqlProvider : IDbProvider
         if (entities.Count == 0) return 0;
 
         // local_infile 能力检测：开启走 BulkCopy（对齐 PG 永远 COPY），关闭走多值 INSERT。
-        if (conn is MySqlConnection mySqlConnection
-            && await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
+        if (conn is MySqlConnection mySqlConnection)
         {
-            try
+            LocalInfileProbeResult probe = await ProbeLocalInfileAsync(
+                mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false);
+            if (probe == LocalInfileProbeResult.Enabled)
             {
-                return await ExecuteBulkCopyAsync(
-                    mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                // ITM-892（r24，真库实证）：探测缓存 60s TTL 内服务端可被关闭——BulkCopy 抛
-                // "Loading local data is disabled"（协议握手阶段拒绝，零行写入）整批硬失败。
-                // 失败后强制失效缓存并重探测：仍 ON → 原样重抛（真故障，如数据/约束问题——
-                // 其失败可能发生在部分写入后，重试整批会重复，必须透传）；OFF → 回退多值
-                // 重试整批（OFF 的失败形态必然是握手拒绝，无部分写入，回退安全；自开事务
-                // 场景失败批已回滚）。重探测的额外 SHOW VARIABLES 往返只发生在失败路径。
-                CapabilityProbeCache<LocalInfileProbe>.Invalidate(mySqlConnection.ConnectionString);
-                if (!await IsLocalInfileEnabledAsync(mySqlConnection, transaction as MySqlTransaction, ct).ConfigureAwait(false))
+                try
                 {
-                    return await MultiValueBulkInsert.ExecuteAsync(
-                        conn, transaction, entities,
-                        new BulkContext(
-                            batchSize,
-                            MaxParametersPerStatement: SqlLimits.MaxBindParameters,
-                            QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
-                            IsolationLevel: isolationLevel),
-                        ct).ConfigureAwait(false);
+                    return await ExecuteBulkCopyAsync(
+                        mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
                 }
-                throw;
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // ITM-892（r24，真库实证）：探测缓存 60s TTL 内服务端可被关闭——BulkCopy 抛
+                    // "Loading local data is disabled"（协议握手阶段拒绝，零行写入）整批硬失败。
+                    // 2026-10-22 终审 P2-5：重探测只有明确 Disabled **且本次失败零行写入**才回退；
+                    // Enabled（真故障）、ProbeFailed（能力未知）与已写部分行（前几批已落库/入事务）
+                    // 都透传，避免整批重插制造重复。
+                    return await FallbackOrRethrowAsync(
+                        mySqlConnection, transaction, entities,
+                        new BulkFailureFallbackSettings(batchSize, commandTimeoutSeconds, isolationLevel),
+                        exception, ct).ConfigureAwait(false);
+                }
             }
         }
 
@@ -273,6 +304,43 @@ public sealed class MySqlProvider : IDbProvider
                 IsolationLevel: isolationLevel),  // r7-S1：回退分支同透传
             ct).ConfigureAwait(false);
     }
+
+    /// <summary>BulkCopy 失败后的回退判定（P2-5）——仅当本次失败<b>零行写入</b>且重探测明确
+    /// Disabled 时回退多值 INSERT；其余情况抛原始异常（包装层只承载行数，不对外暴露）。
+    /// <para>为什么要看已写行数：重探测 Disabled 只说明"现在服务端关了"，不说明失败发生在
+    /// 第一批。batchSize&gt;1 时前几批可能已写入（外部事务内待回滚，无事务时已提交），
+    /// 整批重插会重复已写行。</para></summary>
+    private static async Task<long> FallbackOrRethrowAsync<T>(
+        MySqlConnection conn, DbTransaction? transaction, IReadOnlyList<T> entities,
+        BulkFailureFallbackSettings settings, Exception exception, CancellationToken ct)
+        where T : class, new()
+    {
+        long rowsWritten = exception is MySqlBulkCopyInserter.BulkCopyPartialFailureException partial
+            ? partial.RowsWritten
+            : 0;
+        CapabilityProbeCache<LocalInfileProbe>.Invalidate(conn.ConnectionString);
+        LocalInfileProbeResult reprobe = await ProbeLocalInfileAsync(
+            conn, transaction as MySqlTransaction, ct).ConfigureAwait(false);
+        if (rowsWritten == 0 && reprobe == LocalInfileProbeResult.Disabled)
+        {
+            return await MultiValueBulkInsert.ExecuteAsync(
+                conn, transaction, entities,
+                new BulkContext(
+                    settings.BatchSize,
+                    MaxParametersPerStatement: SqlLimits.MaxBindParameters,
+                    QuoteIdentifier, CreateParameter, settings.CommandTimeoutSeconds,
+                    IsolationLevel: settings.IsolationLevel),
+                ct).ConfigureAwait(false);
+        }
+        Exception original = exception is MySqlBulkCopyInserter.BulkCopyPartialFailureException partialFailure
+            ? partialFailure.InnerException!
+            : exception;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(original).Throw();
+        throw new InvalidOperationException("unreachable: ExceptionDispatchInfo.Throw always throws.");
+    }
+
+    private readonly record struct BulkFailureFallbackSettings(
+        int BatchSize, int CommandTimeoutSeconds, System.Data.IsolationLevel IsolationLevel);
 
     /// <summary>检测服务端 local_infile 是否开启。
     /// <para><b>L1：按连接串缓存探测结果</b>（EPSL 2026-10-11 审计 B 批 #2 修订）——原实现每次
@@ -301,14 +369,26 @@ public sealed class MySqlProvider : IDbProvider
     /// 重付探测往返 + 3s 超时封顶（最坏延迟洞），窗口内直接降级多值路径不再探测。</summary>
     private const int LocalInfileNegativeTtlMilliseconds = 10_000;
 
-    private static async ValueTask<bool> IsLocalInfileEnabledAsync(
+    private enum LocalInfileProbeResult
+    {
+        Enabled,
+        Disabled,
+        ProbeFailed,
+    }
+
+    /// <summary>检测服务端 local_infile 三态——键 = <see cref="MySqlConnection.ConnectionString"/>
+    /// （改写后串），命中未过期直接返回；未命中执行 SHOW VARIABLES 并写缓存。
+    /// <para><b>P2-5 三态</b>：负窗口是探测故障，不是能力关闭。启动路径 Enabled 之外的
+    /// Disabled/ProbeFailed 都回退多值（尚无写入，安全）；BulkCopy 失败后的重探测只有
+    /// Disabled（握手拒绝、零行写入）才回退，ProbeFailed 必须原样透传，避免整批重插。</para></summary>
+    private static async ValueTask<LocalInfileProbeResult> ProbeLocalInfileAsync(
         MySqlConnection conn, MySqlTransaction? transaction, CancellationToken ct)
     {
         if (CapabilityProbeCache<LocalInfileProbe>.IsNegativeFresh(conn.ConnectionString))
-            return false;   // 负结果窗口：直接降级，不重付探测往返/超时
+            return LocalInfileProbeResult.ProbeFailed;
         try
         {
-            return (await CapabilityProbeCache<LocalInfileProbe>.GetOrProbeAsync(
+            LocalInfileProbe probe = await CapabilityProbeCache<LocalInfileProbe>.GetOrProbeAsync(
                 conn.ConnectionString,
                 LocalInfileProbeTtlMilliseconds,
                 async token =>
@@ -330,7 +410,8 @@ public sealed class MySqlProvider : IDbProvider
                     bool enabled = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) || value == "1";
                     return new LocalInfileProbe(enabled);
                 },
-                ct).ConfigureAwait(false)).Enabled;
+                ct).ConfigureAwait(false);
+            return probe.Enabled ? LocalInfileProbeResult.Enabled : LocalInfileProbeResult.Disabled;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -338,12 +419,13 @@ public sealed class MySqlProvider : IDbProvider
             BulkOperationFramework.RecordCapabilityProbeFailure();
             CapabilityProbeCache<LocalInfileProbe>.MarkNegative(
                 conn.ConnectionString, LocalInfileNegativeTtlMilliseconds);
-            return false;  // 探测故障降级多值路径（见 summary）；取消原样上抛
+            return LocalInfileProbeResult.ProbeFailed;
         }
     }
 
     /// <summary>v5.0 阶段 4.2：MySqlBulkCopy 路径。从 BulkInsertAsync 抽出以降低认知复杂度（S3776）。
-    /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时内部开新事务包整批。</para>
+    /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时不开启事务
+    /// （语句级原子，跨批回滚由调用方事务提供）。</para>
     /// <para><b>分批</b>：ITM-710(r20)——<paramref name="batchSize"/> 透传到 Inserter 分块物化，
     /// 与回退多值路径同口径（此前整表一次性灌入 DataTable，契约静默失效 + 内存峰值）。</para></summary>
     private static async Task<long> ExecuteBulkCopyAsync<T>(

@@ -55,6 +55,46 @@ public sealed class ProjectionTests
     }
 
     [Test]
+    public async Task Projection_Struct_GeneratesCompilableRowFactory()
+    {
+        const string source = """
+            using PalORM;
+            [Projection]
+            public readonly record struct OrderSummaryStruct(long Id, string CustomerName, decimal Total);
+            """;
+        var result = GeneratorTestHost.RunGenerator(source, "ProjectionStructConsumer");
+
+        await Assert.That(GeneratorTestHost.FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(result.GeneratedSources.Keys
+            .Any(static k => k.StartsWith("RowFactory_", System.StringComparison.Ordinal))).IsTrue();
+        string projectionRegistry = result.GeneratedSources["PalORM_ProjectionRegistry.g.cs"];
+        await Assert.That(projectionRegistry).Contains("[typeof(global::OrderSummaryStruct)] = RowFactory_");
+    }
+
+    [Test]
+    public async Task Projection_PlainReadonlyStruct_GeneratesCompilableRowFactory()
+    {
+        // 2026-10-22 终审 P1-4：predicate 此前只收 Class/Record，plain readonly struct
+        // 不进管线；QueryStructsAsync 运行期抛 not registered（文档 README:47/API:149 承诺支持）。
+        const string source = """
+            using PalORM;
+            [Projection]
+            public readonly struct PlainSummary
+            {
+                public long Id { get; init; }
+                public string Name { get; init; }
+            }
+            """;
+        var result = GeneratorTestHost.RunGenerator(source, "PlainStructConsumer");
+
+        await Assert.That(GeneratorTestHost.FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(result.GeneratedSources.Keys
+            .Any(static k => k.StartsWith("RowFactory_", System.StringComparison.Ordinal))).IsTrue();
+        string projectionRegistry = result.GeneratedSources["PalORM_ProjectionRegistry.g.cs"];
+        await Assert.That(projectionRegistry).Contains("[typeof(global::PlainSummary)] = RowFactory_");
+    }
+
+    [Test]
     public async Task Projection_GeneratesRowFactoryAndRegistryOnly()
     {
         const string source = """

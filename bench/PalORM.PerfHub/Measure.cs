@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Diagnostics;
+using PalORM.Bench.Shared;
 
 namespace PalORM.PerfHub;
 
@@ -143,8 +144,11 @@ internal static class Measure
         Func<IPerfImplementation, DbConnection, int, Task> action,
         DbConnection conn, int maxIterations, CancellationToken ct,
         Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0,
-        bool requireWarmupFloor = true)
+        bool requireWarmupFloor = true, PerfStageTiming? timing = null)
     {
+        // 阶段 0 计时旁车（PALORM_PERFHUB_TIMING=1）：只读取单调时钟，不改任何测量语义——
+        // 预算/迭代/预热规则与关闭时逐字相同，插桩开销是每阶段一次 GetTimestamp。
+        long timingStart = Stopwatch.GetTimestamp();
         double warmupSeconds = WarmupBudgetSeconds * scale;
         double minWarmupSeconds = requireWarmupFloor ? MinWarmupSeconds * scale : 0;
         double timedSeconds = budgetSeconds * scale;
@@ -152,7 +156,12 @@ internal static class Measure
         // 预热（JIT + 驱动缓冲 + 缓存填充）——不计入样本
         if (prepare is not null)
         {
+            long prepareStart = Stopwatch.GetTimestamp();
             await prepare(conn).ConfigureAwait(false);
+            if (timing is not null)
+            {
+                timing.PrepareBeforeSeconds = Stopwatch.GetElapsedTime(prepareStart).TotalSeconds;
+            }
         }
 
         // 预热按**时间**收敛：累计耗时达 warmupSeconds 即停（至少 3 次）。固定次数对慢操作是
@@ -164,6 +173,7 @@ internal static class Measure
         // 200000 × 1µs = 200ms > 100ms 提升窗口，且仍 < 0.5s 预算不拖慢全量。
         int warmupCap = Math.Max(3, maxIterations / 5);
         int warmupHardCap = Math.Max(warmupCap, 200_000);
+        long warmupStart = Stopwatch.GetTimestamp();
         var warmupSw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < warmupHardCap; i++)
         {
@@ -179,11 +189,20 @@ internal static class Measure
                 break;
             }
         }
+        if (timing is not null)
+        {
+            timing.WarmupSeconds = Stopwatch.GetElapsedTime(warmupStart).TotalSeconds;
+        }
 
         // 预热已改变库状态（插入/删除），计时前再重置一次，保证每轮起点一致
         if (prepare is not null)
         {
+            long reprepareStart = Stopwatch.GetTimestamp();
             await prepare(conn).ConfigureAwait(false);
+            if (timing is not null)
+            {
+                timing.PrepareAfterSeconds = Stopwatch.GetElapsedTime(reprepareStart).TotalSeconds;
+            }
         }
 
         // 阶段 3.1 自适应迭代：重置后用一次探针（i=0）测单次耗时，迭代数收敛到时间预算。
@@ -192,6 +211,10 @@ internal static class Measure
         var probe = System.Diagnostics.Stopwatch.StartNew();
         await action(impl, conn, 0).ConfigureAwait(false);
         probe.Stop();
+        if (timing is not null)
+        {
+            timing.ProbeSeconds = probe.Elapsed.TotalSeconds;
+        }
         double perOpSeconds = Math.Max(probe.Elapsed.TotalSeconds, 1e-7);
         int iterations = Math.Clamp(
             (int)(timedSeconds / perOpSeconds), 3, Math.Max(3, maxIterations));
@@ -202,8 +225,13 @@ internal static class Measure
         long liveAfter;
 
         // 分配量用「整轮一次计数 / 轮数」——比每次前后计数更稳（避免单次测量被 GC 干扰）
+        long gcStart = Stopwatch.GetTimestamp();
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
         long allocBefore = GC.GetTotalAllocatedBytes(true);
+        if (timing is not null)
+        {
+            timing.PreGcSeconds = Stopwatch.GetElapsedTime(gcStart).TotalSeconds;
+        }
 
         // 维度 8：往返次数与 prepared 复用同样按「整轮一次计数 / 轮数」——连接被装饰时才计
         long execBefore = 0, prepareBefore = 0;
@@ -216,6 +244,7 @@ internal static class Measure
 
         using (var sampler = PeakSampler.Start())
         {
+            long timedStart = Stopwatch.GetTimestamp();
             var sw = new Stopwatch();
             for (int i = 1; i <= iterations; i++)
             {
@@ -226,7 +255,13 @@ internal static class Measure
             }
             peakSeen = sampler.Peak;
             liveAfter = GC.GetGCMemoryInfo().HeapSizeBytes;
+            if (timing is not null)
+            {
+                timing.TimedSeconds = Stopwatch.GetElapsedTime(timedStart).TotalSeconds;
+            }
         }
+
+        long postStart = Stopwatch.GetTimestamp();
 
         long allocAfter = GC.GetTotalAllocatedBytes(true);
         int gen0 = GC.CollectionCount(0) - gen0Before;
@@ -267,6 +302,12 @@ internal static class Measure
         if (rawSamples is not null)
         {
             SampleDump.Emit(dialect.DisplayName, impl.Name, operation, rows, iterations, median, mean, rawSamples);
+        }
+        if (timing is not null)
+        {
+            timing.PostSeconds = Stopwatch.GetElapsedTime(postStart).TotalSeconds;
+            timing.Iterations = iterations;
+            timing.TotalSeconds = Stopwatch.GetElapsedTime(timingStart).TotalSeconds;
         }
         return measurement;
     }

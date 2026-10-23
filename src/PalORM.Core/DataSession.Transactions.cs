@@ -36,7 +36,7 @@ public sealed partial class DataSession<TProvider>
                 "The transaction must belong to the DataSession's primary connection.", nameof(tran));
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         // S2077 报备（M1-5）：savepoint 名经 Provider QuoteIdentifier 标识符转义（标识符面，无值拼接）
 #pragma warning disable S2077
         cmd.CommandText = $"SAVEPOINT {TProvider.QuoteIdentifier(name)}";
@@ -60,7 +60,7 @@ public sealed partial class DataSession<TProvider>
                 "The transaction must belong to the DataSession's primary connection.", nameof(tran));
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         // S2077 报备（M1-5）：同 SavepointAsync——标识符面，无值拼接
 #pragma warning disable S2077
         cmd.CommandText = $"ROLLBACK TO SAVEPOINT {TProvider.QuoteIdentifier(name)}";
@@ -155,7 +155,7 @@ public sealed partial class DataSession<TProvider>
                     _operationState.EnterTransactionOperation();
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
-                    transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                    transaction, _commandTimeoutSeconds, ct).ConfigureAwait(false);
                 commitSucceeded = true;
                 ReplayPostCommitActions();
                 return result;
@@ -334,7 +334,7 @@ public sealed partial class DataSession<TProvider>
 
     /// <summary>R3：回滚的有界上限——沿用会话 CommandTimeout 口径；Zero（无限）透传为 0
     /// 表示调用方显式要求无界等待。</summary>
-    private int RollbackTimeoutSeconds => _options.CommandTimeoutSeconds;
+    private int RollbackTimeoutSeconds => _commandTimeoutSeconds;
 
     /// <summary>事务作用域内核（Bulk 家族共享，v5.4 精炼 L1）——复用会话活动事务或自开事务，
     /// 统一承载"commit / rollback-preserving / RestoreTransaction / 释放"四段骨架。
@@ -375,7 +375,7 @@ public sealed partial class DataSession<TProvider>
             {
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
-                    transaction, _options.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                    transaction, _commandTimeoutSeconds, ct).ConfigureAwait(false);
                 commitSucceeded = true;
                 ReplayPostCommitActions();
             }

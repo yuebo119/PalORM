@@ -177,7 +177,10 @@ public interface IValueConverter<TModel, TProvider>
     TModel FromProvider(TProvider value);
 }
 
-/// <summary>多租户感知标记。</summary>
+/// <summary>多租户感知标记。
+/// <para>查询与 Update/Delete/Bulk 路径自动附加 <c>tenant_id = @p</c>；Insert 由实体的
+/// <c>tenant_id</c> 值承载；Update/BulkUpdate 与 UPSERT 冲突更新的 SET 不写租户列，
+/// 防止租户会话把行搬到别的租户。</para></summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class TenantAwareAttribute : Attribute { }
 
@@ -266,7 +269,7 @@ public sealed class DatabaseAttribute : Attribute
 /// <para><b>互斥</b>（编译期拦截）：与 <see cref="TableAttribute"/> 同标报 PALORM049；
 /// 属性带 <see cref="OwnedJsonAttribute"/> 报 PALORM050（其读路径依赖实体 CommandFactory
 /// 的 JsonTypeInfo，投影不生成）。</para></summary>
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = false, Inherited = false)]
 public sealed class ProjectionAttribute : Attribute { }
 
 /// <summary>SQL 模板预编译标记。执行时在参数绑定后调用 DbCommand.PrepareAsync。</summary>

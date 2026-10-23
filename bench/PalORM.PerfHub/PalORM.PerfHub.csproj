@@ -21,6 +21,8 @@
   <ItemGroup>
     <!-- 结果库统一信封（规范 v2 §6）——三套夹具共用同一份定义，避免 schema 各自漂移 -->
     <Compile Include="..\shared\PerfResultEnvelope.cs" Link="PerfResultEnvelope.cs" />
+    <!-- 阶段 0 计时旁车模型——PerfHub 写、PerfCli 读，同一份定义避免两侧字段漂移 -->
+    <Compile Include="..\shared\PerfTiming.cs" Link="PerfTiming.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalORM.Core\PalORM.Core.csproj" />

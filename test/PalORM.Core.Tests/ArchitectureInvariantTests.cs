@@ -23,6 +23,7 @@ public sealed class ArchitectureInvariantTests
         "GetAsync",
         "GetAllAsync",
         "UpdateCoreAsync",   // UpdateAsync 的实现体
+        "UpdateColumnsEntryAsync", // 列子集更新内核：租户谓词经 HasTenantFilter + BindDefaultFilterParameters（写路径无软删过滤）
         "DeleteAsync",
         "CountAsync",
         "SumAsync",
@@ -50,6 +51,8 @@ public sealed class ArchitectureInvariantTests
         ["SeedAsync"] = "委托 BulkMergeAsync",
         // ITM-677：实体物化原始 SQL 流式入口——与 QueryAsync 同族，文档已声明过滤不适用
         ["QueryAsyncEnumerable"] = "原始 SQL 契约：用户 SQL 不可注入过滤（文档已声明，ITM-677）",
+        ["QueryStructsAsync"] = "同 QueryAsync：结构体投影直查，用户 SQL 自带过滤",
+        ["UpdateColumnsAsync"] = "薄包装：过滤路由在内核 UpdateColumnsEntryAsync",
         // C4（v5.6.0）：连接池预热——不触表（只建连/归还池，无 SQL 到任何实体表）
         ["PreWarmAsync"] = "连接池预热：仅建连 + Provider 初始化钩子，不触任何实体表",
     };

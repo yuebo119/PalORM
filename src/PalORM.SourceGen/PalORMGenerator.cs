@@ -96,7 +96,7 @@ public sealed class PalORMGenerator : IIncrementalGenerator
         var projectionModels = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 "PalORM.ProjectionAttribute",
-                predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
+                predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax or StructDeclarationSyntax,
                 transform: static (ctx, _) => ProjectionModel.FromContext(ctx))
             .WithComparer(EqualityComparer<ProjectionModelResult>.Default);
 

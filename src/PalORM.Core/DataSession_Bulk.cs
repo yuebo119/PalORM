@@ -41,10 +41,11 @@ public partial class DataSession<TProvider>
             return 0;
         }
         return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
-            _options.CommandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
+            _commandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
     }
 
-    /// <summary>批量删除——每 500 个生成主键 IN 批次；软删除实体更新 deleted_at，其他实体物理删除。</summary>
+    /// <summary>批量删除——数组形态单批 20000 行；IN 形态按方言参数上限与 5000 行/批取较小者
+    /// （SQLite 999，PG/MySQL 5000）；软删除实体更新 deleted_at，其他实体物理删除。</summary>
     /// <returns><b>数据库受影响行数</b>（各批次 ExecuteNonQuery 之和，驱动口径）。
     /// 软删除路径返回被标记删除的行数（UPDATE 计数），与物理删除的 DELETE 计数口径一致。</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -91,10 +92,11 @@ public partial class DataSession<TProvider>
         // ITM-809（r22 登记，r23 实修）：批大小扣减租户过滤参数——每批 BindDefaultFilterParameters
         // 追加 1 个租户参数，不扣则 SQLite+租户实体单语句 999+1=1000 越保守上限（同文件
         // BulkUpdateBatchAsync 的 (driverLimit - tenantParams) 同口径）。
-        // UNNEST-1：数组形态不受"语句内参数个数"约束（整批一个参数），批大小只为限制单语句
-        // 触及的行数与事务持锁时长——沿用同一档位，行为面不变。
+        // UNNEST-1/深挖轮：数组形态不受"语句内参数个数"约束（整批一个参数），批大小只为限制
+        // 单语句触及的行数与事务持锁时长——与 UPDATE/UPSERT/类型化 DELETE 统一用
+        // UnnestArraysMaxRowsPerBatch（20000），避免对象重载与类型化重载出现两档批宽。
         int batchSize = useArrayForm
-            ? SqlLimits.MaxRowsPerBatch
+            ? UnnestArraysMaxRowsPerBatch
             : Math.Min(
                 Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount),
                 SqlLimits.MaxRowsPerBatch);
@@ -144,6 +146,10 @@ public partial class DataSession<TProvider>
         where TKey : notnull
     {
         ArgumentNullException.ThrowIfNull(keys);
+        // 2026-10-22 审计 N7：先做与对象重载同口径的 CRUD 元数据守卫，再走类型化探针。
+        // 否则未注册/投影类型且键数 >=2 时，IsArrayFormSupported 内的 GetEntityInfo<T>()
+        // 会先抛 "not registered"，与对象重载的 "has no generated CRUD" 不一致。
+        _ = GetEntityInfoForCrud<T>();
         if (keys.Count >= 2
             && CanUseTypedKeyArrayCopy<T, TKey>(keys))
         {
@@ -599,7 +605,9 @@ public partial class DataSession<TProvider>
     /// <para>ITM-556: [ConcurrencyCheck] 实体的内存 version 回填延迟到事务提交成功后统一执行——
     /// 中途冲突整批回滚时，已成功条目的内存状态与 DB 保持一致，重试不产生假冲突。
     /// 复用外部事务时回填发生在本方法返回前；若调用方随后回滚该外部事务，
-    /// 内存 version 需重新查询同步（与单条 UpdateAsync 在外部事务中回滚的既有语义一致）。</para></summary>
+    /// 内存 version 需重新查询同步（与单条 UpdateAsync 在外部事务中回滚的既有语义一致）。</para>
+    /// <para>[TenantAware]：tenant_id 不在 SET 内（租户列只由 Insert 承载），跨租户主键命中
+    /// 0 行；部分实体未赋租户值也不会清空该列。</para></summary>
     /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径；单语句多行 UPDATE 形态
     /// 或逐条批次，均按驱动计数累加）。BulkMerge 的返回口径例外，见其 returns 说明。</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -776,7 +784,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         // 生成的 UPDATE 语句：复用 GetCommandSqls 的单一真源（含租户后缀的两形态由缓存提供）。
         // S1：静态槽命中零注册表读取；未命中才走冷路径解析。
         string updateSql = GetCommandSqls<T>().Update;
@@ -894,7 +902,7 @@ public partial class DataSession<TProvider>
             batch.Transaction = input.Tran;
             // DbBatch.Timeout 是 int 秒（与 DbCommand.CommandTimeout 同口径）；
             // ≤ 0 = 全库 Zero 无限等待契约。
-            batch.Timeout = _options.CommandTimeoutSeconds;
+            batch.Timeout = _commandTimeoutSeconds;
 
             for (int i = start; i < end; i++)
             {
@@ -1160,7 +1168,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
 
         // 参数池与命令参数集合一次建好；末批缩短时只收敛集合、不新建参数对象
         DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
@@ -1298,7 +1306,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         cmd.CommandText = BatchUpdateSqlBuilder.Build(
             TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
             rowCount: 1, hasTenantFilter: ctx.HasTenantFilter,
@@ -1468,7 +1476,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         cmd.CommandText = BatchUpdateSqlBuilder.Build(
             TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
             rowCount: 1, hasTenantFilter: ctx.HasTenantFilter,
@@ -1546,7 +1554,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
 
         DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
             poolRowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
@@ -1599,16 +1607,23 @@ public partial class DataSession<TProvider>
     /// 实例键控，per-op 会话形态每会话新包装永不命中，每次 BulkUpdate 重付 SELECT VERSION()
     /// 往返；与 local_infile 探测同轮迁 <see cref="CapabilityProbeCache{T}"/>——版本是
     /// 「同一连接串所指服务端」的事实，不是进程级可变状态）。
-    /// 探测异常保守回退 CaseWhen（不把瞬时故障固化为新形态），TTL 让服务端升级在一分钟内生效。</para></summary>
+    /// 探测异常保守回退 CaseWhen（不把瞬时故障固化为新形态），并写 10s 负结果窗口
+    /// 避免故障期每次 BulkUpdate 重付探测超时；TTL 让服务端升级在一分钟内生效。</para></summary>
     private async ValueTask<BatchUpdateSqlBuilder.BatchUpdateForm> ResolveMySqlUpdateFormAsync(CancellationToken ct)
     {
         if (TProvider.Dialect != SqlDialect.MySql)
             return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
 
+        string probeKey = _conn.ConnectionString;
+        // P3-4：负结果窗口内直接降级——探测失败（网络分区/受限账号）时 3s 命令超时
+        // 会在每次 BulkUpdate 重付；与 local_infile 同族纪律（R3/ITM-892）。
+        if (CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.IsNegativeFresh(probeKey))
+            return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
+
         try
         {
             return (await CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.GetOrProbeAsync(
-                _conn.ConnectionString,
+                probeKey,
                 MySqlUpdateFormProbeTtlMilliseconds,
                 async token =>
                 {
@@ -1627,7 +1642,10 @@ public partial class DataSession<TProvider>
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // 探测故障保守回退基线形态（与 local_infile 探测故障降级同族：能力探测不应
-            // 终止整批更新；故障不写缓存，下次重探）。取消原样上抛。
+            // 终止整批更新）。P3-4：故障写 10s 负结果窗口，避免每次 BulkUpdate 重付 3s
+            // 超时；窗口到期自动重探。取消原样上抛。
+            CapabilityProbeCache<MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe>.MarkNegative(
+                probeKey, MySqlUpdateFormNegativeTtlMilliseconds);
             return BatchUpdateSqlBuilder.BatchUpdateForm.CaseWhen;
         }
     }
@@ -1636,6 +1654,9 @@ public partial class DataSession<TProvider>
     private const long MySQL_8_0_19 = (8L << 40) | (0L << 24) | 19L;
 
     private const int MySqlUpdateFormProbeTtlMilliseconds = 60_000;
+
+    /// <summary>P3-4：版本探测失败后的负结果窗口——与 local_infile 同口径 10s。</summary>
+    private const int MySqlUpdateFormNegativeTtlMilliseconds = 10_000;
 
     /// <summary>解析 MySQL 版本串为可比较键：主版本×2^40 + 次版本×2^24 + 补丁。
     /// 兼容 <c>8.4.11</c>、<c>8.0.36-0ubuntu0.22.04.1</c>、<c>5.7.44-log</c> 等形态
@@ -1740,6 +1761,9 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。
+    /// <para><b>默认键行 ID 回填</b>：RETURNING 方言（PG/SQLite）的多行插入按主键升序重建
+    /// 输入顺序后回填，因此仅支持递增 identity/auto-increment 分配顺序；降序序列或触发器
+    /// 改写主键不在支持面内，需要这些形态时请逐行 InsertAsync。</para>
     /// <para>ITM-556 注记: 自增 ID 回填随每条 UPSERT 立即发生；中途失败整批回滚时，
     /// 已回填的内存 ID 对应的行不存在于 DB——异常路径下不要继续使用输入实体的 ID，
     /// 重试应重新走 BulkMergeAsync（UPSERT 幂等）。</para></summary>
@@ -1838,8 +1862,9 @@ public partial class DataSession<TProvider>
 
     /// <summary>B6 落地（2026-10-12）：BulkMerge 默认键行的集合化插入——RETURNING 方言
     /// （PG/SQLite）多行 INSERT ... RETURNING 主键，按行序回填实体，N 次往返收敛为 N/批。
-    /// <para><b>行序映射</b>：RETURNING 行序按 VALUES 顺序（EF Core Npgsql 多行
-    /// INSERT..RETURNING 的同构形态）；返回行数与批行数不符时明确失败，不静默错位回填。</para>
+    /// <para><b>行序映射</b>：RETURNING 的输出行序是任意的（SQLite 官方文档明确；PG 未承诺
+    /// ORDER BY 级顺序）。自增/identity 主键按 VALUES 行序分配，故本方法按主键升序重建输入
+    /// 顺序后再回填；返回行数不符或自增主键为 NULL 时明确失败，不静默错位回填。</para>
     /// <para><b>回填时点</b>：经 <see cref="BackfillGeneratedId"/>——自开事务延迟到提交后回放，
     /// 与单行 SaveCoreAsync 路径同语义（TX-004）。</para>
     /// <para><b>已知边界</b>：本路径每次批间重建参数（BindInsert 直绑）——相对原 N 次往返已是
@@ -1889,17 +1914,16 @@ public partial class DataSession<TProvider>
                 int end = Math.Min(start + batchSize, entities.Count);
                 int rowCount = end - start;
                 DbCommand cmd;
-                bool ownsCmd;
+                DbCommand? freshCmd = null;
                 if (valuesBinder is not null && (pool is not null || rowCount == batchSize))
                 {
                     if (pooledCmd is null)
                     {
                         pooledCmd = CreateCommand();
                         pooledCmd.Transaction = transaction;
-                        pooledCmd.CommandTimeout = _options.CommandTimeoutSeconds;
+                        pooledCmd.CommandTimeout = _commandTimeoutSeconds;
                     }
                     cmd = pooledCmd;
-                    ownsCmd = false;
                     if (pool is null)
                     {
                         pool = new DbParameter[fullBatchRows * columnCount];
@@ -1929,33 +1953,77 @@ public partial class DataSession<TProvider>
                 }
                 else
                 {
-                    cmd = CreateCommand();
-                    cmd.Transaction = transaction;
-                    cmd.CommandTimeout = _options.CommandTimeoutSeconds;
-                    cmd.CommandText = BuildInsertReturningBatchSql(
-                        quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
-                    for (int row = start; row < end; row++)
-                        metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
-                    ownsCmd = true;
+                    DbCommand fresh = CreateCommand();
+                    freshCmd = fresh;
+                    cmd = fresh;
+                    try
+                    {
+                        cmd.Transaction = transaction;
+                        cmd.CommandTimeout = _commandTimeoutSeconds;
+                        cmd.CommandText = BuildInsertReturningBatchSql(
+                            quotedTable, quotedColumns, quotedPk, rowCount, columnCount);
+                        for (int row = start; row < end; row++)
+                            metadata.BindInsert(cmd, entities[row], (row - start) * columnCount);
+                    }
+                    catch
+                    {
+                        // P3-1：Create/Bind 阶段抛异常时命令同样必须释放（N6 只覆盖了
+                        // ExecuteReader/Read 窗口）。
+                        await fresh.DisposeAsync().ConfigureAwait(false);
+                        throw;
+                    }
                 }
 
-                await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-                int returned = 0;
-                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                try
                 {
-                    long? id = NormalizeGeneratedId(
-                        await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
-                    if (id is { } generatedId && backfill is not null)
-                        BackfillGeneratedId(backfill, entities[start + returned], generatedId);
-                    returned++;
+                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                    int returned = 0;
+                    List<long>? returnedIds = backfill is null ? null : new List<long>(rowCount);
+                    while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                    {
+                        long? id = NormalizeGeneratedId(
+                            await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
+                        if (returnedIds is not null)
+                        {
+                            if (id is not { } generatedId)
+                                throw new InvalidOperationException(
+                                    $"INSERT ... RETURNING returned a NULL primary key for '{typeof(T).Name}' "
+                                    + $"(row {returned + 1} of {rowCount}); refusing to backfill.");
+                            returnedIds.Add(generatedId);
+                        }
+                        returned++;
+                    }
+                    if (returned != rowCount)
+                        throw new InvalidOperationException(
+                            $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
+                            $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
+                    if (returnedIds is not null)
+                    {
+                        // 仅支持递增 identity/auto-increment：按升序重建 VALUES 行序；
+                        // 降序序列/触发器改写主键不在支持面内（公开文档同口径）。
+                        // P3-2：降序返回值是"反向分配"的确证——排序后回填会把主键给错行。
+                        // 只拒绝严格递减的到达序（不受服务端结果集顺序未定义的干扰）。
+                        bool strictlyDescending = returnedIds.Count > 1;
+                        for (int i = 1; strictlyDescending && i < returnedIds.Count; i++)
+                            strictlyDescending = returnedIds[i - 1] > returnedIds[i];
+                        if (strictlyDescending)
+                            throw new InvalidOperationException(
+                                $"INSERT ... RETURNING for '{typeof(T).Name}' produced strictly descending " +
+                                $"primary keys ({returnedIds[0]} > {returnedIds[^1]}); backfill requires an " +
+                                "ascending identity/auto-increment sequence.");
+                        returnedIds.Sort();
+                        for (int i = 0; i < rowCount; i++)
+                            BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);
+                    }
+                    processed += rowCount;
                 }
-                if (returned != rowCount)
-                    throw new InvalidOperationException(
-                        $"INSERT ... RETURNING returned {returned} rows for {rowCount} inserted rows " +
-                        $"of '{typeof(T).Name}'; refusing to backfill possibly misaligned ids.");
-                processed += rowCount;
-                if (ownsCmd)
-                    await cmd.DisposeAsync().ConfigureAwait(false);
+                finally
+                {
+                    // 2026-10-22 审计 N6：fresh 命令在 ExecuteReader/Read 异常时也必须释放；
+                    // pooledCmd 由外层 finally 统一释放。
+                    if (freshCmd is not null)
+                        await freshCmd.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
         finally
@@ -2064,7 +2132,13 @@ public partial class DataSession<TProvider>
         if (info.PkColumn is not { } pkColumn)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no primary key column; set-based upsert requires one.");
-        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn));
+        // 租户列排除按实体能力 [TenantAware] 判定，不按会话态（HasTenantFilter）判定：
+        // 会话态会随 WithTenant/IgnoreFilters 变化，而 shape 缓存的键是 (Type, Dialect)——
+        // 用会话态作输入会让同一类型的冲突子句依赖进程内预热顺序（2026-10-22 审计 C1）。
+        // 实体能力是 T 的编译期常量，缓存键因此完备。
+        bool excludeTenantColumn = (info.Features & EntityFeatures.TenantAware) != 0;
+        UpsertSqlShape shape = ApplyTenantGuardToShape<T>(
+            BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn, excludeTenantColumn));
         bool tenantGuarded = HasTenantFilter<T>();
 
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
@@ -2090,7 +2164,7 @@ public partial class DataSession<TProvider>
         // AttachParameters 契约同构；守卫 SQL 已在 shape 层施加。
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         int fullRowCount = Math.Min(batchSize, entities.Count);
         int tenantParams = CountTenantParams(tenantGuarded);
         var pool = CreateUpsertParameterPool<T>(cmd, fullRowCount, columnCount, tenantGuarded);
@@ -2250,7 +2324,7 @@ public partial class DataSession<TProvider>
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandTimeout = _options.CommandTimeoutSeconds;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
         var sql = new System.Text.StringBuilder(96 + shape.QuotedColumns.Length + shape.ConflictClause.Length);
         sql.Append("INSERT INTO ").Append(shape.QuotedTable).Append(" (")
             .Append(shape.QuotedColumns).Append(") SELECT * FROM UNNEST(");
@@ -2296,10 +2370,14 @@ public partial class DataSession<TProvider>
         return processed;
     }
 
-    /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键
-    /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身）；MySQL 用 VALUES(c) 形态
-    /// （与单行 upsert 的既有生成 SQL 一致）。</summary>
-    private UpsertSqlShape BuildUpsertSqlShape(Type entityType, string tableName, CrudMetadata metadata, string pkColumn)
+    /// <summary>构建方言分派的 UPSERT 骨架片段。UPDATE 集 = UpsertColumns 去掉主键与租户列
+    /// （ON CONFLICT 的 DO UPDATE 不能更新冲突键本身；[TenantAware] 实体的租户列是作用域键，
+    /// 更新它等于把行搬到别的租户）。<paramref name="excludeTenantColumn"/> 取实体能力
+    /// （编译期常量），不是会话态；缓存键 (Type, Dialect) 因此完备。
+    /// MySQL 用 VALUES(c) 形态（与单行 upsert 的既有生成 SQL 一致）。</summary>
+    private UpsertSqlShape BuildUpsertSqlShape(
+        Type entityType, string tableName, CrudMetadata metadata, string pkColumn,
+        bool excludeTenantColumn)
     {
         // R3（2026-10-12）：形状字符串 per-(Type, Dialect) 缓存——原每次调用 1 LINQ 迭代器 +
         // 2 string.Join + 冲突子句插值（与 QuotedColumnsCache 同纪律；值由编译期元数据唯一决定，
@@ -2311,12 +2389,13 @@ public partial class DataSession<TProvider>
         string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
         List<string> updateColumns =
         [
-            .. metadata.UpsertColumns.Where(c => !string.Equals(c, pkColumn, StringComparison.Ordinal))
+            .. metadata.UpsertColumns.Where(c => !string.Equals(c, pkColumn, StringComparison.Ordinal)
+                && !(excludeTenantColumn && string.Equals(c, "tenant_id", StringComparison.Ordinal)))
         ];
         if (updateColumns.Count == 0)
             throw new NotSupportedException(
                 $"Set-based upsert on '{tableName}' has no updatable columns " +
-                "(upsert columns minus primary key is empty); use BulkInsertAsync instead.");
+                "(upsert columns minus primary key and tenant column is empty); use BulkInsertAsync instead.");
         // ITM-876（r23 裁决登记）：VALUES() 形态在 MySQL 8.0.20+ 处于弃用路线（推荐 row alias
         // 新语法），但真库探针（OdkuDeprecationProbeTests，MySQL 8.4.11）实测**零弃用警告**且
         // 行为正确——分派双形态（row alias 要求 8.0.19+）当前无收益信号，只引入 UpsertSqlShape

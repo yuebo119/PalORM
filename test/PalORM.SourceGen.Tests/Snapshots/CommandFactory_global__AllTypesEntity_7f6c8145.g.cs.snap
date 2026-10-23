@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.6.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.7.0")]
 internal static class CommandFactory_global__AllTypesEntity_7f6c8145
 {
 
@@ -193,6 +193,43 @@ internal static class CommandFactory_global__AllTypesEntity_7f6c8145
         { var p = cmd.CreateParameter(); p.ParameterName = "@p18"; p.DbType = global::System.Data.DbType.Time; p.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p19"; p.DbType = global::System.Data.DbType.Binary; p.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p20"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>
+    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)
+    {
+        var entity = (global::AllTypesEntity)entityObject;
+        switch (columnIndex)
+        {
+            case 0: parameter.DbType = global::System.Data.DbType.Int32; parameter.Value = (object)entity.IntValue; break;
+            case 1: parameter.DbType = global::System.Data.DbType.Int16; parameter.Value = (object)entity.ShortValue; break;
+            case 2: parameter.DbType = global::System.Data.DbType.Byte; parameter.Value = (object)entity.ByteValue; break;
+            case 3: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.StringValue; break;
+            case 4: parameter.Value = (object)entity.CharValue; break;
+            case 5: parameter.DbType = global::System.Data.DbType.Boolean; parameter.Value = (object)entity.BoolValue; break;
+            case 6: parameter.DbType = global::System.Data.DbType.Decimal; parameter.Value = (object)entity.DecimalValue; break;
+            case 7: parameter.DbType = global::System.Data.DbType.Double; parameter.Value = (object)entity.DoubleValue; break;
+            case 8: parameter.DbType = global::System.Data.DbType.Single; parameter.Value = (object)entity.FloatValue; break;
+            case 9: parameter.DbType = global::System.Data.DbType.DateTime; parameter.Value = (object)entity.DateTimeValue; break;
+            case 10: parameter.DbType = global::System.Data.DbType.Guid; parameter.Value = (object)entity.GuidValue; break;
+            case 11: parameter.DbType = global::System.Data.DbType.DateTimeOffset; parameter.Value = (object)entity.DateTimeOffsetValue; break;
+            case 12: parameter.DbType = global::System.Data.DbType.Date; parameter.Value = (object)entity.DateOnlyValue; break;
+            case 13: parameter.DbType = global::System.Data.DbType.Time; parameter.Value = (object)entity.TimeOnlyValue; break;
+            case 14: parameter.DbType = global::System.Data.DbType.Binary; parameter.Value = (object)entity.BytesValue; break;
+            case 15: parameter.DbType = global::System.Data.DbType.Int32; parameter.Value = entity.NullableInt is null ? global::System.DBNull.Value : (object)entity.NullableInt; break;
+            case 16: parameter.DbType = global::System.Data.DbType.String; parameter.Value = entity.NullableString is null ? global::System.DBNull.Value : (object)entity.NullableString; break;
+            case 17: parameter.DbType = global::System.Data.DbType.Guid; parameter.Value = entity.NullableGuid is null ? global::System.DBNull.Value : (object)entity.NullableGuid; break;
+            case 18: parameter.DbType = global::System.Data.DbType.Time; parameter.Value = entity.NullableTimeOnly is null ? global::System.DBNull.Value : (object)entity.NullableTimeOnly; break;
+            case 19: parameter.DbType = global::System.Data.DbType.Binary; parameter.Value = entity.NullableBytes is null ? global::System.DBNull.Value : (object)entity.NullableBytes; break;
+            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));
+        }
+    }
+
+    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>
+    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)
+    {
+        var entity = (global::AllTypesEntity)entityObject;
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 0); p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>

@@ -11,8 +11,8 @@ namespace PalORM.PostgreSql;
 /// 属安全策略变更）；
 /// ③ 非关键表批量写在事务内首条 <c>SET LOCAL synchronous_commit TO off</c>（PG 官方 28.4，
 /// 风险窗 ≈600ms 崩溃丢提交，账务类不可）。
-/// <c>NoResetOnClose=true</c> 的会话状态泄漏取舍见 ITM-652（raw SQL 的 SET/临时表跨池租客
-/// 可见，需隔离时用独立连接或显式 <c>DISCARD</c>）。</para></summary>
+/// <c>NoResetOnClose=true</c> 的会话状态取舍见 ITM-652：raw SQL 的 SET/角色由池租出复位
+/// （P1-8），临时表仍跨池租客可见，需隔离时用独立连接。</para></summary>
 public sealed class PostgreSqlProvider : IDbProvider
 {
     /// <summary>Provider 名称:PostgreSql。</summary>
@@ -20,6 +20,29 @@ public sealed class PostgreSqlProvider : IDbProvider
 
     /// <summary>SQL 方言标识:<see cref="SqlDialect.PostgreSql"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.PostgreSql;
+
+    /// <summary>2026-10-22 终审 P1-8：池化租出复位——RESET ALL 清 GUC、RESET ROLE 清角色。
+    /// 不用 DISCARD ALL：Npgsql auto-prepare 语句会被服务端销毁而客户端缓存仍持有。</summary>
+    public static async Task ResetConnectionStateAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandTimeout = commandTimeoutSeconds;
+        command.CommandText = "RESET ALL; RESET ROLE";
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>P2-2：池化空闲会话租出前的轻量探活。</summary>
+    public static async Task ValidateConnectionAsync(
+        DbConnection connection, int commandTimeoutSeconds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandTimeout = commandTimeoutSeconds;
+        command.CommandText = "SELECT 1";
+        await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+    }
 
     /// <summary>创建连接并把 <see cref="DbOptions"/> 池配置映射到 Npgsql 连接串:
     /// MaxPoolSize / ConnectionIdleLifetime(秒)/ ConnectionLifetime(分钟换算为秒,checked 防溢出)。
@@ -42,8 +65,7 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// 脱离 ITM-643）。</para></summary>
     public static DbConnection CreateConnection(string connectionString, DbOptions options)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        // PG-6（2026-09-27）：改写结果按全部输入缓存——本方法的输入只有 (连接串, 4 个
+        ArgumentNullException.ThrowIfNull(options);        // PG-6（2026-09-27）：改写结果按全部输入缓存——本方法的输入只有 (连接串, 4 个
         // options 池参数字段)（旋钮清单只读 options.MaxPoolSize/MinPoolSize/
         // PoolIdleTimeoutSeconds/PoolLifetimeMinutes，其余为常量）。实测（探针十二）
         // 单次 CreateConnection 的固定成本 = 连接串解析 9.44µs + 10× Keys.Contains
@@ -59,7 +81,8 @@ public sealed class PostgreSqlProvider : IDbProvider
             RewrittenConnectionStringCache.Clear();
         string rewritten = RewrittenConnectionStringCache.GetOrAdd(
             (connectionString, options.MaxPoolSize, options.MinPoolSize,
-                options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes),
+                options.PoolIdleTimeoutSeconds, options.PoolLifetimeMinutes,
+                options.PrepareCacheSize, options.PrepareThreshold),
             static (key, opts) => RewriteConnectionString(key.ConnectionString, opts),
             options);
         return new NpgsqlConnection(rewritten);
@@ -70,7 +93,8 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// <see cref="QuotedInsertTargetCache"/> 同族的有限键集豁免。工厂失败（非法连接串）
     /// 不缓存，异常照旧传播。</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds, int PoolLifetimeMinutes), string>
+        (string ConnectionString, int MaxPoolSize, int MinPoolSize, int PoolIdleTimeoutSeconds,
+            int PoolLifetimeMinutes, int PrepareCacheSize, int PrepareThreshold), string>
         RewrittenConnectionStringCache = new();
 
     /// <summary>PG-6/D21：改写缓存容量上限——多租户连接串变体数封顶（含凭据副本的常驻量随之封顶）。</summary>
@@ -115,9 +139,9 @@ public sealed class PostgreSqlProvider : IDbProvider
         // Npgsql 默认值（已通过 ConnectionStringBuilder 属性默认核实）：MaxAutoPrepare=0，
         // AutoPrepareMinUsages=5，NoResetOnClose=false，ReadBufferSize/WriteBufferSize=8192，Enlist=true。
         if (!HasExplicitKey(builder, "Max Auto Prepare") && builder.MaxAutoPrepare == 0)
-            builder.MaxAutoPrepare = 100;
+            builder.MaxAutoPrepare = options.PrepareCacheSize;
         if (!HasExplicitKey(builder, "Auto Prepare Min Usages") && builder.AutoPrepareMinUsages == 5)
-            builder.AutoPrepareMinUsages = 2;
+            builder.AutoPrepareMinUsages = options.PrepareThreshold;
         // ITM-652(r4) 登记：NoResetOnClose=true 使归池连接跳过 DISCARD ALL——经 raw SQL
         // 的 SET/临时表/会话状态会泄漏给下一个池租客（吞吐收益的既定取舍）。需要会话
         // 状态隔离的场景请用独立连接（连接串 Max Pool Size=1）或显式 DISCARD。
@@ -168,6 +192,13 @@ public sealed class PostgreSqlProvider : IDbProvider
 
     /// <summary>PostgreSQL 原生支持 RETURNING 子句。</summary>
     public static bool SupportsReturningClause => true;
+
+    /// <summary>多条独立只读查询可经 <see cref="NpgsqlBatch"/> 合并为一次往返。
+    /// 本机实测 4 条单键读从 232~340 µs/条降至 73~118 µs/条（约 3 倍）。</summary>
+    public static bool SupportsQueryPipeline => true;
+
+    /// <summary>管道单批语句上限——避免单次批过大时驱动缓冲与错误归因范围失控。</summary>
+    public static int MaxPipelineCommands => 64;
 
     /// <summary>CURRENT_TIMESTAMP——注意 PG 返回会话时区时间(与 SQLite 的恒 UTC 语义不同,ITM-326)。</summary>
     public static string CurrentTimestampExpression => "CURRENT_TIMESTAMP";
@@ -297,7 +328,7 @@ public sealed class PostgreSqlProvider : IDbProvider
     }
 
     /// <summary>数组元素 CLR 类型 → 驱动的元素 <see cref="NpgsqlDbType"/>。null = 不支持数组形态。
-    /// <para><b>映射面是封闭集合，且刻意收窄</b>（登记，2026-10-02）：恰好 13 类——int / long /
+    /// <para><b>映射面是封闭集合，且刻意收窄</b>（登记，2026-10-02）：恰好 15 类——int / long /
     /// short / byte / string / Guid / bool / decimal / double / float / DateTime / DateTimeOffset /
     /// DateOnly / TimeOnly / byte[]。**未列出的类型（含 <c>uint</c>/<c>ulong</c>/<c>sbyte</c>/
     /// <c>ushort</c>/<c>char</c>/<c>TimeSpan</c>/枚举等）返回 null**，调用方据此整体回退
@@ -376,6 +407,11 @@ public sealed class PostgreSqlProvider : IDbProvider
         if (conn is not NpgsqlConnection npgsqlConnection)
             throw new ArgumentException(
                 "PostgreSqlProvider.BulkInsertAsync requires an NpgsqlConnection.", nameof(conn));
+        // P3-12：事务必须属于同一连接——否则 COPY 在 conn 的环境事务里自动提交，
+        // 调用方误以为在外部事务中（静默非事务写）。
+        if (transaction is not null && !ReferenceEquals(transaction.Connection, conn))
+            throw new ArgumentException(
+                "The transaction must belong to the supplied connection.", nameof(transaction));
         if (entities.Count == 0) return 0;
 
         Action<DbCommand, object, int> binder = metadata.BindInsert;

@@ -12,7 +12,9 @@ internal sealed class CircuitBreaker
     private readonly TimeSpan _resetAfter;
 
     private int _failureCount;
-    private DateTime _openUntil;
+    /// <summary>开闸截止时刻（Environment.TickCount64 毫秒）——单调时钟，不受 NTP 跳变影响。
+    /// 与 CacheStore TTL 的 A5 修正同源（2026-10-22 审计 C6）。</summary>
+    private long _openUntilTick;
     private bool _isOpen;
     /// <summary>C1：<see cref="_isOpen"/> 的 volatile 镜像，供 Closed 态无锁快路径读。
     /// 全部写点都在锁内，因此快路径读到的值要么是 Closed（走完整锁路径复核后仍返回 Closed，
@@ -20,10 +22,10 @@ internal sealed class CircuitBreaker
     private volatile bool _isOpenFlag;
     private bool _halfOpenProbeActive;
     private long _generation;
-    /// <summary>R5：半开探针的获取时刻（UtcNow ticks）——探针占用超过 resetAfter 未终结时，
-    /// <see cref="Enter"/> 回收槽位，防止"调用方忘了调 ReleaseCancelledProbe → 熔断器永久 Open"。
-    /// 0 = 无占用探针。</summary>
-    private long _halfOpenProbeAcquiredAt;
+    /// <summary>R5：半开探针的获取时刻（Environment.TickCount64 毫秒）——探针占用超过
+    /// halfOpenSlotStaleAfter 未终结时，<see cref="Enter"/> 回收槽位，防止"调用方忘了调
+    /// ReleaseCancelledProbe → 熔断器永久 Open"。-1 = 无占用探针（0 是 TickCount64 的合法启动值）。</summary>
+    private long _halfOpenProbeAcquiredAt = -1;
     /// <summary>ITM-895（r24）：槽位归属 token——每次授予探针时 +1。stale 回收把槽位转给新探针时
     /// generation 不推进（回收不开闸），旧探针苏醒后仅凭 generation 无法区分"槽位还是自己的"与
     /// "槽位已被回收给新探针"——token 不匹配即旧探针，其任何终结记录（成功/失败/取消）都
@@ -53,12 +55,16 @@ internal sealed class CircuitBreaker
     /// 记录终结结果（ResilienceExecutor.RecordDirectFailure）。</summary>
     internal long CurrentGeneration => Volatile.Read(ref _generation);
 
-    /// <summary>当前开闸截止时刻——仅在 Open 态有意义，供诊断查询（不参与判定）。</summary>
+    /// <summary>当前开闸截止时刻（墙钟显示，仅供诊断；判定一律用单调 tick）。</summary>
     internal DateTime OpenUntil
     {
         get
         {
-            lock (_lock) { return _openUntil; }
+            lock (_lock)
+            {
+                long remaining = _openUntilTick - Environment.TickCount64;
+                return remaining > 0 ? DateTime.UtcNow.AddMilliseconds(remaining) : default;
+            }
         }
     }
 
@@ -84,7 +90,6 @@ internal sealed class CircuitBreaker
         // 熔断打开期间被拒请求不再因异常分发而串行化（进程级共享时尤甚）。
         bool rejected;
         string? openMessage;
-        DateTime openUntil;
         lock (_lock)
         {
             if (!IsEnabled || !_isOpen)
@@ -103,22 +108,21 @@ internal sealed class CircuitBreaker
                 }
                 else
                 {
-                    rejected = DateTime.UtcNow < _openUntil;
+                    rejected = Environment.TickCount64 < _openUntilTick;
                 }
             }
 
             if (!rejected)
             {
                 _halfOpenProbeActive = true;
-                _halfOpenProbeAcquiredAt = DateTime.UtcNow.Ticks;
+                _halfOpenProbeAcquiredAt = Environment.TickCount64;
                 _halfOpenProbeToken += 1;
                 return (true, _generation, _halfOpenProbeToken);
             }
 
             openMessage = _openMessage;
-            openUntil = _openUntil;
         }
-        throw new CircuitBreakerOpenException(openMessage ?? FormatOpenMessage(openUntil));
+        throw new CircuitBreakerOpenException(openMessage ?? "Circuit breaker is open.");
     }
 
     /// <summary>探针占用是否已超时可回收——R5 的槽位回收判据。
@@ -129,9 +133,9 @@ internal sealed class CircuitBreaker
     private bool IsHalfOpenSlotStale()
     {
         long acquiredAt = _halfOpenProbeAcquiredAt;
-        if (acquiredAt == 0) return true;
-        TimeSpan held = DateTime.UtcNow - new DateTime(acquiredAt, DateTimeKind.Utc);
-        return held > _halfOpenSlotStaleAfter;
+        if (acquiredAt < 0) return true;
+        long held = Environment.TickCount64 - acquiredAt;
+        return held > (long)_halfOpenSlotStaleAfter.TotalMilliseconds;
     }
 
     /// <summary>半开探针占用的可回收下限——触发即说明探针的终结路径没被调用
@@ -165,7 +169,7 @@ internal sealed class CircuitBreaker
             _failureCount = 0;
             _isOpen = false;
             _isOpenFlag = false;
-            _openUntil = default;
+            _openUntilTick = 0;
             _openMessage = null;
         }
     }
@@ -198,7 +202,7 @@ internal sealed class CircuitBreaker
             if (!countsTowardCircuit)
             {
                 // ITM-772(r21)：半开探针以"不计入熔断"的异常（确定性错误，如约束冲突/语法错）
-                // 失败时，原样保留 _isOpen=true/_openUntil 已过期——此后 Enter() 每次都走探针
+                // 失败时，原样保留 _isOpen=true/_openUntilTick 已过期——此后 Enter() 每次都走探针
                 // 分支放行，"Open"成为谎言状态（熔断语义失效）。确定性失败不是熔断的保护对象
                 // （熔断防瞬时故障风暴），显式复位为 Closed：状态诚实，瞬时故障再现时会重新计数开启。
                 if (isHalfOpenProbe)
@@ -209,7 +213,7 @@ internal sealed class CircuitBreaker
                     _isOpen = false;
                     _isOpenFlag = false;
                     _failureCount = 0;
-                    _openUntil = default;
+                    _openUntilTick = 0;
                     _openMessage = null;
                 }
                 return;
@@ -218,7 +222,7 @@ internal sealed class CircuitBreaker
             if (isHalfOpenProbe)
             {
                 _failureCount = _threshold;
-                Open(DateTime.UtcNow.Add(_resetAfter));
+                Open(Environment.TickCount64 + (long)_resetAfter.TotalMilliseconds);
                 return;
             }
 
@@ -229,13 +233,13 @@ internal sealed class CircuitBreaker
             _failureCount += 1;
 
             if (IsEnabled && _failureCount >= _threshold)
-                Open(DateTime.UtcNow.Add(_resetAfter));
+                Open(Environment.TickCount64 + (long)_resetAfter.TotalMilliseconds);
         }
     }
 
     /// <summary>调用方取消（非数据库失败）——释放探针占用，让熔断窗口立即到期进入半开态。
     /// <para><b>C2：带 generation</b>——原实现不带 generation，序列「探针 P 进入(gen N) →
-    /// 探针失败重开(gen N+1，新 _openUntil) → P 的调用方取消并调本方法」会把 _openUntil
+    /// 探针失败重开(gen N+1，新 _openUntilTick) → P 的调用方取消并调本方法」会把窗口
     /// 改写为"现在"，新窗口瞬间到期，实际冷却期被旧探针的取消单方面抹掉。</para>
     /// <para><b>ITM-895：带 probeToken</b>——stale 回收后 gen 未推进，旧探针的取消同样
     /// 不得释放新探针的槽位或改写其窗口。</para></summary>
@@ -248,27 +252,31 @@ internal sealed class CircuitBreaker
             if (generation != _generation) return;
             if (probeToken != _halfOpenProbeToken) return;  // ITM-895：槽位已易主（stale 回收）
             ReleaseProbeSlot();
-            _openUntil = DateTime.UtcNow;
+            _openUntilTick = Environment.TickCount64;
         }
     }
 
-    /// <summary>开闸——集中写 _isOpen / _isOpenFlag / 消息缓存，保证两者永不漂移。</summary>
-    private void Open(DateTime openUntil)
+    /// <summary>开闸——集中写 _isOpen / _isOpenFlag / _openUntilTick / 消息缓存，保证永不漂移。
+    /// 截止时刻用单调 tick（Environment.TickCount64），不受 NTP 跳变影响。</summary>
+    private void Open(long openUntilTick)
     {
+        // P3-5：先推进代际再开闸——旧顺序在 ARM64 弱内存下可能让读者读到新代际+旧 flag，
+        // 携旧代际的成功记录在开闸后被误判为当前探测而提前关闸。
+        Volatile.Write(ref _generation, _generation + 1);
         _isOpen = true;
         _isOpenFlag = true;
-        _openUntil = openUntil;
-        _generation += 1;
-        _openMessage = FormatOpenMessage(openUntil);
+        _openUntilTick = openUntilTick;
+        _openMessage = FormatOpenMessage(_resetAfter);
     }
 
     private void ReleaseProbeSlot()
     {
         _halfOpenProbeActive = false;
-        _halfOpenProbeAcquiredAt = 0;
+        _halfOpenProbeAcquiredAt = -1;
     }
 
-    /// <summary>M6：开闸时生成一次消息——Open 态下每次拒绝都格式化 DateTime 是纯垃圾。</summary>
-    private static string FormatOpenMessage(DateTime openUntil)
-        => $"Circuit breaker open until {openUntil:O}";
+    /// <summary>M6：开闸时生成一次策略描述消息——Open 态下每次拒绝都格式化时间是纯垃圾；
+    /// 2026-10-22 审计 C6 起消息描述重置窗口，不做会过期的倒计时。</summary>
+    private static string FormatOpenMessage(TimeSpan resetAfter)
+        => $"Circuit breaker open (reset after {resetAfter})";
 }

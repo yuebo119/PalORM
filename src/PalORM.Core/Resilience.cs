@@ -40,6 +40,11 @@ public sealed class ResilienceExecutor
         _maxRetries = options.MaxRetries;
         // RES-003（2026-09-23）：总预算默认 Zero = 不设（保持既有最坏墙钟语义不变）。
         _overallDeadline = options.OverallDeadline;
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            options.CircuitBreakerResetAfter.Ticks, nameof(options.CircuitBreakerResetAfter));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            options.CircuitBreakerResetAfter.TotalMilliseconds, DbOptions.MaxCancelAfterMilliseconds,
+            nameof(options.CircuitBreakerResetAfter));
         // ITM-605: 包装 _backoff 统一覆盖两路径（DataSession.CreateAsync 连接重试 +
         // ResilienceExecutor.ExecuteAsync 命令重试）——此前 ITM-603 只在 CreateAsync 调用点
         // 加守卫，命令路径 Task.Delay(_backoff(attempt)) 抛 AOORE("delay") 不指向 RetryBackoff 配置。
@@ -52,10 +57,11 @@ public sealed class ResilienceExecutor
             _backoff = attempt =>
             {
                 TimeSpan delay = customBackoff(attempt);
-                if (delay < TimeSpan.Zero)
+                if (delay < TimeSpan.Zero || delay.TotalMilliseconds > DbOptions.MaxCancelAfterMilliseconds)
                     throw new InvalidOperationException(
-                        $"DbOptions.RetryBackoff(attempt={attempt}) returned a negative TimeSpan ({delay}). "
-                        + "The delegate must return a non-negative delay.");
+                        $"DbOptions.RetryBackoff(attempt={attempt}) returned a delay of {delay}. "
+                        + $"The delegate must return a delay in [0, {DbOptions.MaxCancelAfterMilliseconds} ms] "
+                        + "(Task.Delay / CancellationTokenSource.CancelAfter limit).");
                 return delay;
             };
         }
@@ -69,6 +75,9 @@ public sealed class ResilienceExecutor
         // 抛 AOORE 且消息不指向配置——构造期拒绝（与 RetryBackoff 守卫同族）。
         ArgumentOutOfRangeException.ThrowIfNegative(
             options.CommandTimeout.Ticks, nameof(options.CommandTimeout));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            options.CommandTimeout.TotalMilliseconds, DbOptions.MaxCancelAfterMilliseconds,
+            nameof(options.CommandTimeout));
         _timeout = options.CommandTimeout == TimeSpan.Zero
             ? Timeout.InfiniteTimeSpan
             : options.CommandTimeout;

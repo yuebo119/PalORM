@@ -113,6 +113,21 @@ internal static class CommandFactoryEmitter
         GenerateBindUpdateBody(model, sb);
         sb.AppendLine("    }");
         sb.AppendLine();
+        // 2026-10-22：列子集更新——逐 SET 列绑定 + WHERE（主键/并发令牌）绑定。
+        // columnIndex = UpdateColumns（IsUpdatableColumn 声明序）序号；parameterOffset 从
+        // 选中 SET 列数起，使全句参数名连续（@p0..@p{k-1} 选中列，@p{k}.. 主键/版本）。
+        sb.AppendLine($"    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>");
+        sb.AppendLine($"    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)");
+        sb.AppendLine("    {");
+        GenerateBindUpdateColumnBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
+        sb.AppendLine($"    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>");
+        sb.AppendLine($"    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)");
+        sb.AppendLine("    {");
+        GenerateBindUpdateWhereBody(model, sb);
+        sb.AppendLine("    }");
+        sb.AppendLine();
         // v5.6：参数复用路径——接收预分配的 DbParameter[]，只改 Value，不 CreateParameter/Add。
         // 与 BindInsertValues 同一机制。消费点是 BulkUpdateBatchAsync 的单语句批量 UPDATE：
         // 其 probe 命令原先逐行 BindUpdate 建参数（40000 行 × 4 列 = 16 万次创建），
@@ -694,9 +709,12 @@ internal static class CommandFactoryEmitter
     // 曾各自内联复制此条件，二者必须逐字一致否则参数序与占位符错位。提取为单一真源防漂移。
     // ITM-642：RegistryEmitter 发射 CrudColumns.Update 亦消费本谓词——运行时 BulkUpdateBatchAsync
     // 直接读元数据列集，与生成 SQL/绑定序三处同源。
+    // 2026-10-21：租户列排除——租户会话的 UPDATE 可凭实体 TenantId 把行搬到别的租户；
+    // INSERT 仍由实体承载租户值（ITM-599），更新不得改写作用域键。
     internal static bool IsUpdatableColumn(ColumnModel col)
         => !col.IsPrimaryKey && !col.IsConcurrencyToken
-            && !col.IsTimestamp && col.ComputedExpression is null;
+            && !col.IsTimestamp && col.ComputedExpression is null
+            && !col.IsTenantColumn;
 
     internal static string BuildUpdateSql(TableModel model, SqlGenerationDialect dialect)
     {
@@ -810,7 +828,8 @@ internal static class CommandFactoryEmitter
 
         string pkColumnName = pkCols[0].ColumnName;
         string[] updateColumns = upsertColumns
-            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal))
+            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal)
+                && !column.IsTenantColumn)
             .Select(column => Quote(column.ColumnName))
             .ToArray();
 
@@ -844,7 +863,8 @@ internal static class CommandFactoryEmitter
 
         string pkColumnName = pkCols[0].ColumnName;
         string[] updateColumns = upsertColumns
-            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal))
+            .Where(column => !string.Equals(column.ColumnName, pkColumnName, StringComparison.Ordinal)
+                && !column.IsTenantColumn)
             .Select(column => Quote(column.ColumnName))
             .ToArray();
 
@@ -870,8 +890,8 @@ internal static class CommandFactoryEmitter
 
         string sql = $"INSERT INTO {Quote(model.TableName)} ({columnList}) VALUES ({valueList})" +
             $" ON DUPLICATE KEY UPDATE {string.Join(", ", assignments)}";
-        // 仅自增键实体回填：消费端（UpsertWithMySqlAsync）只对有 SetIdDelegates 的实体走
-        // ExecuteScalarAsync，非自增键执行 ExecuteNonQueryAsync——后缀对它是多余结果集。
+        // 后缀仅为保持 SQL 形态稳定；2026-10-22 终审 P0-2 起消费端不再回填非默认键
+        //（租户护栏 IF 假分支下 LAST_INSERT_ID 是会话上一自增值，不能作为实体键）。
         return isAutoIncrement ? $"{sql}; SELECT LAST_INSERT_ID()" : sql;
     }
 
@@ -1006,6 +1026,43 @@ internal static class CommandFactoryEmitter
         }
     }
 
+    /// <summary>列子集更新的单列绑定体：columnIndex 按 IsUpdatableColumn 声明序 switch；
+    /// 值表达式与 BindUpdate 同一 GetParameterValueExpression 真源（转换器/OwnedJson/枚举）。</summary>
+    private static void GenerateBindUpdateColumnBody(TableModel model, StringBuilder sb)
+    {
+        var (setCols, _, _) = GetUpdateColumnOrder(model);
+        sb.AppendLine($"        var entity = ({model.EntityTypeName})entityObject;");
+        sb.AppendLine("        switch (columnIndex)");
+        sb.AppendLine("        {");
+        int pi = 0;
+        foreach (var col in setCols)
+        {
+            string valueExpr = GetParameterValueExpression(col);
+            sb.AppendLine($"            case {pi++}: {DbTypeHint(col, "parameter")}parameter.Value = {valueExpr}; break;");
+        }
+        sb.AppendLine("            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));");
+        sb.AppendLine("        }");
+    }
+
+    /// <summary>列子集更新的 WHERE 绑定体：主键列（声明序）+ 并发令牌恒末位；参数名从
+    /// parameterOffset 起连续编号（与选中 SET 列数衔接）。</summary>
+    private static void GenerateBindUpdateWhereBody(TableModel model, StringBuilder sb)
+    {
+        var (_, pkCols, cc) = GetUpdateColumnOrder(model);
+        sb.AppendLine($"        var entity = ({model.EntityTypeName})entityObject;");
+        int pi = 0;
+        foreach (var col in pkCols)
+        {
+            string valueExpr = GetParameterValueExpression(col);
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + {pi}); {DbTypeHint(col)}p.Value = {valueExpr}; cmd.Parameters.Add(p); }}");
+            pi++;
+        }
+        if (cc is not null)
+        {
+            sb.AppendLine($"        {{ var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + {pi}); p.Value = entity.{cc.EscapedPropertyName}; cmd.Parameters.Add(p); }}");
+        }
+    }
+
     /// <summary>BindUpdateValues 的发射体——列序与 <see cref="GenerateBindUpdateBody"/> 由
     /// <see cref="GetUpdateColumnOrder"/> 单一真源保证一致（GEN-012：原"逐字一致"注释契约
     /// 已被结构化收敛替代）。差异仅在「写 Value」与「建参数+Add」：目标池由调用方预分配。
@@ -1057,10 +1114,10 @@ internal static class CommandFactoryEmitter
     /// 同时是 ITM-527（整列全 null 无值可推断）的根因。显式 DbType 后 getter 退化为 DbType
     /// 映射的字段读，null 列与全 null 列均获得确定类型。未列出的类型（char/TimeSpan/enum/
     /// 对象型 OwnedJson 等）保持原推断路径，行为不变。</para></summary>
-    private static string DbTypeHint(ColumnModel col)
+    private static string DbTypeHint(ColumnModel col, string variableName = "p")
     {
         var hint = DbTypeFor(col.ProviderClrTypeName);
-        return hint is null ? "" : $"p.DbType = global::System.Data.DbType.{hint}; ";
+        return hint is null ? "" : $"{variableName}.DbType = global::System.Data.DbType.{hint}; ";
     }
 
     /// <summary>Provider CLR 类型 → DbType 字面量（PG-3）。返回 null = 不显式设置，保持驱动推断。</summary>

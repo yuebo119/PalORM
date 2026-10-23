@@ -18,6 +18,11 @@ public sealed record DbOptions
     /// <summary>连接超时（默认 15 秒）。</summary>
     public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
+    /// <summary>池化会话空闲超过该时长后，租出时做一次轻量探活（SELECT 1），默认 30 秒；
+    /// <see cref="TimeSpan.Zero"/> = 关闭。仅对空闲队列复用的会话生效，新建会话不探测。
+    /// 探活失败时 <c>DataSessionPool.RentAsync</c> 丢弃该会话并换新（P2-2）。</summary>
+    public TimeSpan PoolConnectionValidationInterval { get; init; } = TimeSpan.FromSeconds(30);
+
     /// <summary>命令默认超时（默认 30 秒）。</summary>
     public TimeSpan CommandTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
@@ -35,7 +40,12 @@ public sealed record DbOptions
     {
         if (timeout <= TimeSpan.Zero) return 0;
         double seconds = Math.Ceiling(timeout.TotalSeconds);
-        return seconds >= int.MaxValue ? int.MaxValue : (int)seconds;
+        if (seconds >= int.MaxValue) return int.MaxValue;
+        // P3-10：CancelAfter 上限 = uint.MaxValue-1 毫秒；向上取整的秒值乘 1000 可能越界
+        //（如 CommandTimeout 恰为 MaxCancelAfterMilliseconds），钳到秒级上限。
+        int maxSeconds = (int)(MaxCancelAfterMilliseconds / 1000);
+        int result = (int)seconds;
+        return result > maxSeconds ? maxSeconds : result;
     }
 
     /// <summary>命令超时的库级默认值（30 秒）——Provider 自带命令构造点在调用方未提供
@@ -116,6 +126,27 @@ public sealed record DbOptions
     /// 使用列别名/表达式列的查询需关闭此项并自行保证列序。</summary>
     public bool ValidateQueryColumnOrder { get; init; } = true;
 
+    /// <summary>全量物化的逐行读取使用同步 <see cref="System.Data.Common.DbDataReader.Read"/>
+    /// （默认 false）。当前由 MySQL 消费（Provider 声明 <see cref="IDbProvider.SupportsSynchronousRowRead"/>）；
+    /// SQLite 因 <see cref="IDbProvider.PreferSynchronousIo"/> 恒走同步逐行读，无需本开关。
+    /// MySQL 本机 5 轮交替实测：同步约 998 ns/行 vs 异步 1846~2043 ns/行；
+    /// PostgreSQL 两者持平，因此不受本开关影响。
+    /// <para><b>代价</b>：结果集仍在流式输出时，同步读会阻塞调用线程直到下一行到达；高并发
+    /// 服务端请先做线程池压力验证。流式 API（<c>QueryAsyncEnumerable</c>/<c>ForEachAsync</c>）
+    /// 始终异步，不受本项影响。</para></summary>
+    public bool UseSynchronousRowRead { get; init; }
+
+    /// <summary>PostgreSQL 的 AutoPrepare 缓存容量（默认 100；0 = 禁用自动预编译）。
+    /// 映射到 Npgsql 连接串的 <c>Max Auto Prepare</c>；连接串显式给出该键时不覆盖。
+    /// 查询形状超过默认 100 的应用应调高，避免预编译缓存抖动（形状数 × 每连接常驻）。
+    /// 其余方言忽略本项。</summary>
+    public int PrepareCacheSize { get; init; } = 100;
+
+    /// <summary>PostgreSQL 同一 SQL 使用多少次后自动预编译（默认 2，最小 1）。
+    /// 映射到 Npgsql 的 <c>Auto Prepare Min Usages</c>；连接串显式给出时不覆盖。
+    /// 其余方言忽略本项。</summary>
+    public int PrepareThreshold { get; init; } = 2;
+
     /// <summary>查询缓存实现（ADR-C）。未设置时使用进程级共享的有界默认缓存（1024 条）。
     /// 注入独立实例可实现会话/租户级缓存隔离；实现需线程安全。</summary>
     public IQueryCache? QueryCache { get; init; }
@@ -145,12 +176,20 @@ public sealed record DbOptions
     public void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegative(CommandTimeout.Ticks, nameof(CommandTimeout));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            CommandTimeout.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(CommandTimeout));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConnectionTimeout.Ticks, nameof(ConnectionTimeout));
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            PoolConnectionValidationInterval.Ticks, nameof(PoolConnectionValidationInterval));
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries, nameof(MaxRetries));
         // ITM-838（r23 实修）：上界补齐——env 覆盖入口可传入极大值，重试风暴的最坏墙钟
         // = (MaxRetries+1)×CommandTimeout+Σ退避，上界使该乘积可推理（10 次 = 11×超时）。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxRetries, 10, nameof(MaxRetries));
         ArgumentOutOfRangeException.ThrowIfNegative(OverallDeadline.Ticks, nameof(OverallDeadline));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            OverallDeadline.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(OverallDeadline));
+        ArgumentOutOfRangeException.ThrowIfNegative(PrepareCacheSize, nameof(PrepareCacheSize));
+        ArgumentOutOfRangeException.ThrowIfLessThan(PrepareThreshold, 1, nameof(PrepareThreshold));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPoolSize, nameof(MaxPoolSize));
         // C4：MinPoolSize 负数非法；大于 MaxPoolSize 是配置矛盾（透传后驱动行为未定义），提前报错
         ArgumentOutOfRangeException.ThrowIfNegative(MinPoolSize, nameof(MinPoolSize));
@@ -168,13 +207,23 @@ public sealed record DbOptions
         // ITM-838：上界 10000——阈值高于此的熔断器形同虚设，配置意图应为禁用（Threshold=0）。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(CircuitBreakerThreshold, 10000, nameof(CircuitBreakerThreshold));
         ArgumentOutOfRangeException.ThrowIfNegative(CircuitBreakerResetAfter.Ticks, nameof(CircuitBreakerResetAfter));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            CircuitBreakerResetAfter.TotalMilliseconds, MaxCancelAfterMilliseconds,
+            nameof(CircuitBreakerResetAfter));
         // ITM-749(r21)：ConnectionTimeout 无上限——CreateAsync 用
         // CancellationTokenSource.CancelAfter(TimeSpan)，该 API 的 delay 上限是 uint.MaxValue-1
         // 毫秒（约 49.7 天），超出抛 ArgumentOutOfRangeException("delay") 且与配置项无关
         //（实测 49 天 OK、50/60 天均抛）。与 ITM-695 同族，此处补齐上限。
+        // 2026-10-22 审计 C5：同一上限现在覆盖 CommandTimeout/OverallDeadline（Resilience 的
+        // CancelAfter 消费者）与 CircuitBreakerResetAfter（开闸窗口诊断显示），见 Validate 开头
+        // 与熔断段；自定义 RetryBackoff 的 Task.Delay 上界由 ResilienceExecutor 构造期守卫承担。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
-            ConnectionTimeout.TotalMilliseconds, uint.MaxValue - 1, nameof(ConnectionTimeout));
+            ConnectionTimeout.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(ConnectionTimeout));
     }
+
+    /// <summary>CancellationTokenSource.CancelAfter / Task.Delay 的 delay 上限（uint.MaxValue-1 毫秒）。
+    /// ITM-749 起用于 ConnectionTimeout；2026-10-22 审计 C5 扩到 CommandTimeout/OverallDeadline。</summary>
+    internal const double MaxCancelAfterMilliseconds = uint.MaxValue - 1;
 
     /// <summary>连接池配置入口。<paramref name="maxSize"/> 与 <paramref name="lifetimeMinutes"/>
     /// 必须为正数；<paramref name="idleTimeoutSeconds"/> 可为 0（= 不覆盖驱动默认值，见属性文档）；

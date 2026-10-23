@@ -165,13 +165,22 @@ public sealed class BoundedQueryCache : IQueryCache
             if (Volatile.Read(ref _approximateCount) >= _maxEntries) return;
         }
         var entry = new CacheEntry(value, ttl ?? TimeSpan.FromMinutes(5));
-        if (_cache.TryAdd(key, entry))
+        // 计数只在"新键成功入表"时自增。不能用 TryAdd 失败后直接索引器覆盖：
+        // 失败与覆盖之间若另一线程移除该键（过期/类型不符），索引器会重新插入但不经过
+        // TryAdd 分支，计数漏一次 Increment 且单向向下漂移（2026-10-22 审计 C4）。
+        while (true)
         {
-            Interlocked.Increment(ref _approximateCount);
-            return;
+            if (_cache.TryAdd(key, entry))
+            {
+                Interlocked.Increment(ref _approximateCount);
+                return;
+            }
+            if (!_cache.TryGetValue(key, out CacheEntry? current))
+                continue;  // 键在两步之间被移除，重试 TryAdd
+            if (_cache.TryUpdate(key, entry, current))
+                return;  // 既有键覆盖，计数不变（满员时仍允许更新既有键）
+            // current 已被其他线程替换，重试
         }
-        // 已存在的键：覆盖更新，计数不变（原语义：满员时仍允许更新既有键）
-        _cache[key] = entry;
     }
 
     /// <inheritdoc />

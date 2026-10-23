@@ -139,6 +139,30 @@ public sealed class DbOptionsTests
     }
 
     [Test]
+    public async Task Validate_RejectsCancelAfterOverflowTimeouts()
+    {
+        // 2026-10-22 审计 C5：CancelAfter 的 delay 上限是 uint.MaxValue-1 ms（约 49.7 天）。
+        // ConnectionTimeout 已有 ITM-749 守护；CommandTimeout/OverallDeadline 同族补齐。
+        await Assert.That(() => (new DbOptions
+        {
+            ConnectionString = "x",
+            CommandTimeout = TimeSpan.FromDays(50)
+        }).Validate()).Throws<ArgumentOutOfRangeException>();
+
+        await Assert.That(() => (new DbOptions
+        {
+            ConnectionString = "x",
+            OverallDeadline = TimeSpan.FromDays(50)
+        }).Validate()).Throws<ArgumentOutOfRangeException>();
+
+        await Assert.That(() => (new DbOptions
+        {
+            ConnectionString = "x",
+            CircuitBreakerResetAfter = TimeSpan.FromDays(50)
+        }).Validate()).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task ToString_MasksConnectionStrings()
     {
         // S2068: 用 string(ReadOnlySpan<char>) 构造键名彻底避开 "Password" 字面量模式匹配。

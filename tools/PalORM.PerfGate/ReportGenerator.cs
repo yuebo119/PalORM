@@ -61,7 +61,7 @@ internal static partial class ReportGenerator
             : IndexGenerator.LoadAll(inputs.EnvelopesDirectory);
 
         var md = new StringBuilder(8_192);
-        AppendHeader(md, baseline);
+        AppendHeader(md, baseline, runs);
         AppendDimensionOverview(
             md,
             hasWorkload: File.Exists(inputs.WorkloadJsonPath ?? string.Empty),
@@ -183,8 +183,8 @@ internal static partial class ReportGenerator
         StringBuilder md, bool hasWorkload, bool hasMemory, bool startupPassed,
         List<PerfResultEnvelope> runs)
     {
-        PerfResultEnvelope? perfhub = Latest(runs, "perfhub");
-        PerfResultEnvelope? dappersuite = Latest(runs, "dappersuite");
+        PerfResultEnvelope? perfhub = LatestFull(runs, "perfhub");
+        PerfResultEnvelope? dappersuite = LatestFull(runs, "dappersuite");
         PerfResultEnvelope? stability = runs.FirstOrDefault(static r =>
             r.Label.Contains("stability", StringComparison.OrdinalIgnoreCase));
         PerfResultSection? pool = FindPoolSection(runs);
@@ -227,11 +227,13 @@ internal static partial class ReportGenerator
         md.AppendLine();
     }
 
-    /// <summary>结果库中某夹具最近一批（含子集标记——这里要的是"本轮有没有采到"，不是"能不能引用"）。
-    /// <para>跳过有失败登记的批次：方言全失败时批次只剩基线项，用它判定会把"没采到"读成"已采集"。</para></summary>
-    private static PerfResultEnvelope? Latest(List<PerfResultEnvelope> runs, string harness)
+    /// <summary>结果库中某夹具最近一批**非子集**批次（覆盖面完整，可代表"本轮采到了哪些维度"）。
+    /// 子集批会缺掉未跑方言/未跑档位的测量面：2026-10-23 实测 mysql+pg 复测批把维度 8 的
+    /// SQLite 往返计数顶掉，报告误报"未采集"。判定维度状态用它，引用数字仍走可引用批次。</summary>
+    private static PerfResultEnvelope? LatestFull(List<PerfResultEnvelope> runs, string harness)
         => runs.FirstOrDefault(r =>
             r.Harness.Equals(harness, StringComparison.OrdinalIgnoreCase)
+            && !PerfResultWriter.IsSubsetLabel(r.Label)
             && !r.Sections.Any(static s => s.Kind.Contains("failure", StringComparison.OrdinalIgnoreCase)));
 
     private static string Metric(PerfResultSection section, string key)
@@ -266,15 +268,40 @@ internal static partial class ReportGenerator
         return $"| 10 | 长时稳定 | {state} | 最近长稳批次 {stability.Timestamp}{relation}{metrics} |";
     }
 
-    private static void AppendHeader(StringBuilder md, PerfBaseline baseline)
+    private static void AppendHeader(StringBuilder md, PerfBaseline baseline, List<PerfResultEnvelope> runs)
     {
         md.AppendLine("# PalORM 性能全量报告");
         md.AppendLine();
         md.AppendLine(CultureInfo.InvariantCulture, $"- 生成时间：{DateTime.UtcNow:yyyy-MM-dd HH:mm} (UTC)");
         md.AppendLine(CultureInfo.InvariantCulture, $"- 基线：{baseline.Version} / {baseline.Date}（schema {baseline.Schema}）");
-        md.AppendLine(CultureInfo.InvariantCulture, $"- 环境：{baseline.Environment.Os} · {baseline.Environment.Processor} · {baseline.Environment.Runtime}");
+        // 环境两行分开写：基线环境是阈值的来源，本轮实测环境才是这批数据"在哪跑的"。
+        // 只写基线环境会让"报告声明的运行时"与"实际跑测的运行时"静默脱节（2026-10-23 实测 rc.1/rc.2 不一致）。
+        PerfResultEnvironment? current = CurrentEnvironment(runs);
+        if (current is null)
+        {
+            md.AppendLine(CultureInfo.InvariantCulture,
+                $"- 环境：{baseline.Environment.Os} · {baseline.Environment.Processor} · {baseline.Environment.Runtime}（取自基线；本轮无带环境的批次信封）");
+        }
+        else
+        {
+            md.AppendLine(CultureInfo.InvariantCulture,
+                $"- 环境（本轮实测）：{current.Os} · {current.Processor} · {current.Runtime}");
+            md.AppendLine(CultureInfo.InvariantCulture,
+                $"- 基线环境：{baseline.Environment.Os} · {baseline.Environment.Processor} · {baseline.Environment.Runtime}");
+        }
+
         md.AppendLine(CultureInfo.InvariantCulture, $"- 阈值：分配 +{baseline.Thresholds.AllocatedPct:F0}% · 分配比 +{baseline.Thresholds.AllocRatioPct:F0}% · 耗时比 +{baseline.Thresholds.TimeRatioPct:F0}%");
         md.AppendLine();
+    }
+
+    /// <summary>本轮实测环境：最近的非子集批次信封。子集批次覆盖面不完整，不作为环境代表；
+    /// 旧信封的 Environment 可能为空，逐条回退直到找到带 Runtime 的批次。</summary>
+    private static PerfResultEnvironment? CurrentEnvironment(List<PerfResultEnvelope> runs)
+    {
+        PerfResultEnvelope? full = runs.FirstOrDefault(static r =>
+            !PerfResultWriter.IsSubsetLabel(r.Label) && !string.IsNullOrEmpty(r.Environment.Runtime));
+        return full?.Environment
+            ?? runs.FirstOrDefault(static r => !string.IsNullOrEmpty(r.Environment.Runtime))?.Environment;
     }
 
     private static int AppendBdnSection(StringBuilder md, PerfBaseline baseline, ResultSet results)

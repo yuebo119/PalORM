@@ -3,7 +3,7 @@
 
 namespace PalORM.Generated;
 
-[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.6.0")]
+[global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.7.0")]
 internal static class CommandFactory_global__FullFeatureEntity_4964faa8
 {
     private static readonly global::PalORM.IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter();
@@ -126,10 +126,39 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         { var p = cmd.CreateParameter(); p.ParameterName = "@p8"; p.DbType = global::System.Data.DbType.Decimal; p.Value = (object)entity.Weight; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p9"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.RawKind; cmd.Parameters.Add(p); }
         { var p = cmd.CreateParameter(); p.ParameterName = "@p10"; p.DbType = global::System.Data.DbType.String; p.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p11"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.TenantId; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p12"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
-        { var p = cmd.CreateParameter(); p.ParameterName = "@p14"; p.Value = entity.Version; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p11"; p.DbType = global::System.Data.DbType.String; p.Value = (object)entity.SensitiveValue; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p12"; p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = "@p13"; p.Value = entity.Version; cmd.Parameters.Add(p); }
+    }
+
+    /// <summary>绑定单个 UPDATE SET 列（列子集更新用）。</summary>
+    internal static void BindUpdateColumn(object entityObject, global::System.Data.Common.DbParameter parameter, int columnIndex)
+    {
+        var entity = (global::FullFeatureEntity)entityObject;
+        switch (columnIndex)
+        {
+            case 0: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Code; break;
+            case 1: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Kind; break;
+            case 2: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)_conv_ExternalId.ToProvider(entity.ExternalId); break;
+            case 3: parameter.Value = (object)global::System.Text.Json.JsonSerializer.Serialize(entity.Payload, JsonTypeInfo_Payload); break;
+            case 4: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.RawJson; break;
+            case 5: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.UniqueToken; break;
+            case 6: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Tier; break;
+            case 7: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.Sku; break;
+            case 8: parameter.DbType = global::System.Data.DbType.Decimal; parameter.Value = (object)entity.Weight; break;
+            case 9: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.RawKind; break;
+            case 10: parameter.DbType = global::System.Data.DbType.String; parameter.Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt; break;
+            case 11: parameter.DbType = global::System.Data.DbType.String; parameter.Value = (object)entity.SensitiveValue; break;
+            default: throw new global::System.ArgumentOutOfRangeException(nameof(columnIndex));
+        }
+    }
+
+    /// <summary>绑定 UPDATE WHERE 的主键/并发令牌参数（列子集更新用）。</summary>
+    internal static void BindUpdateWhere(object entityObject, global::System.Data.Common.DbCommand cmd, int parameterOffset)
+    {
+        var entity = (global::FullFeatureEntity)entityObject;
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 0); p.DbType = global::System.Data.DbType.Int64; p.Value = (object)entity.Id; cmd.Parameters.Add(p); }
+        { var p = cmd.CreateParameter(); p.ParameterName = global::PalORM.ParameterNameCache.GetName(parameterOffset + 1); p.Value = entity.Version; cmd.Parameters.Add(p); }
     }
 
     /// <summary>仅设置预分配 UPDATE 参数的 Value（批量 UPDATE 参数池路径，零 CreateParameter 分配）。</summary>
@@ -146,10 +175,9 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
         parameters[paramOffset + 8].Value = (object)entity.Weight;
         parameters[paramOffset + 9].Value = (object)entity.RawKind;
         parameters[paramOffset + 10].Value = entity.DeletedAt is null ? global::System.DBNull.Value : (object)entity.DeletedAt;
-        parameters[paramOffset + 11].Value = (object)entity.TenantId;
-        parameters[paramOffset + 12].Value = (object)entity.SensitiveValue;
-        parameters[paramOffset + 13].Value = (object)entity.Id;
-        parameters[paramOffset + 14].Value = entity.Version;
+        parameters[paramOffset + 11].Value = (object)entity.SensitiveValue;
+        parameters[paramOffset + 12].Value = (object)entity.Id;
+        parameters[paramOffset + 13].Value = entity.Version;
     }
 
     /// <summary>N4：建池后一次性写 UPDATE 参数 DbType（配合 BindUpdateValues 只写 Value 的分解形态）。</summary>
@@ -199,8 +227,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
             string[] column9 = (string[])arrays[arrayOffset + 9];
             string[] column10 = (string[])arrays[arrayOffset + 10];
             string[] column11 = (string[])arrays[arrayOffset + 11];
-            string[] column12 = (string[])arrays[arrayOffset + 12];
-            long[] column13 = (long[])arrays[arrayOffset + 13];
+            long[] column12 = (long[])arrays[arrayOffset + 12];
             for (int i = 0; i < count; i++)
             {
                 var entity = (global::FullFeatureEntity)entities[start + i];
@@ -215,9 +242,8 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
                 column8[i] = entity.Weight;
                 column9[i] = entity.RawKind;
                 column10[i] = entity.DeletedAt!;
-                column11[i] = entity.TenantId;
-                column12[i] = entity.SensitiveValue;
-                column13[i] = entity.Id;
+                column11[i] = entity.SensitiveValue;
+                column12[i] = entity.Id;
             }
         }
     }
@@ -225,7 +251,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>分配逐列类型化数组（长度 count）——AOT 安全（静态类型 new）。</summary>
     internal static global::System.Array[] CreateUpdateColumnArrays(int count)
     {
-        return new global::System.Array[14]
+        return new global::System.Array[13]
         {
             new string[count],
             new string[count],
@@ -236,7 +262,6 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
             new string[count],
             new string[count],
             new decimal[count],
-            new string[count],
             new string[count],
             new string[count],
             new string[count],
@@ -336,7 +361,7 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
     /// <summary>逐列数组的元素类型与可空性（UNNEST 阶段 B：调用方据此建类型化数组）。</summary>
     internal static global::System.Type[] UpdateColumnArrayElementTypes()
     {
-        return new global::System.Type[14]
+        return new global::System.Type[13]
         {
             typeof(string),
             typeof(string),
@@ -347,7 +372,6 @@ internal static class CommandFactory_global__FullFeatureEntity_4964faa8
             typeof(string),
             typeof(string),
             typeof(decimal),
-            typeof(string),
             typeof(string),
             typeof(string),
             typeof(string),

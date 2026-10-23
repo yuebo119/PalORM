@@ -19,7 +19,7 @@ public sealed class PoolResetCompletenessTests
     private static readonly HashSet<string> ResetOnReturn =
     [
         "_ignoreFilters", "_tenantId", "_tenantScopeEntry", "_isolationLevel",
-        "_options", "_resilience",
+        "_options", "_resilience", "_commandTimeoutSeconds",
     ];
 
     /// <summary>跨租期保留的字段（含理由）：
@@ -31,7 +31,10 @@ public sealed class PoolResetCompletenessTests
     /// _readConnProvider/_readConnReturner（W1 惰性读路由委托：绑定 this 的方法组，
     /// 幂等无状态，保留使第二租期起 From&lt;T&gt; 免重建）；
     /// _lastMigrationSkippedIndexes（DDL 幂等跳过缓存：类型级事实，与租期无关——守卫测试
-    /// 首跑即抓到该遗漏，登记实证）；_pool/_poolBaseOptions/_poolBaseResilience（池标记与
+    /// 首跑即抓到该遗漏，登记实证）；_connectionStateMayBeDirty（原生 SQL 脏标记：租期内置位，
+    /// 跨租期存活以触发下一次租出复位，PrepareForRentAsync 复位成功后清零）；
+    /// _lastReturnedTimestamp（空闲探活时刻：归还时写 TickCount64，跨租期保留以判定空闲时长）；
+    /// _pool/_poolBaseOptions/_poolBaseResilience（池标记与
     /// 复位基准，永不复位）；ResilienceGeneration（单调代际，仅用于 builder 的弹性配置
     /// 快照判定；builder 不跨租期存活，代际无需随池基准复位）。</summary>
     private static readonly HashSet<string> KeptAcrossRentals =
@@ -45,6 +48,8 @@ public sealed class PoolResetCompletenessTests
         "_materializedCapacity", "_readConnection",
         "_readConnProvider", "_readConnReturner",
         "_lastMigrationSkippedIndexes",
+        "_connectionStateMayBeDirty",
+        "_lastReturnedTimestamp",
         "_pool", "_poolBaseOptions", "_poolBaseResilience",
         "ResilienceGeneration",
     ];
@@ -55,6 +60,9 @@ public sealed class PoolResetCompletenessTests
     /// _isActive/_activeOperation/_activeOperationOwner/_activeTransaction/_transactionOwner/
     /// _transactionResources/_transactionCompleting/_parallelReadScopes/_activeReadLeases/_readLeasesDrained；
     /// 归还复位（DataSession.ReturnToPoolAsync）：DefersPostCommitActions/_postCommitBackfills（Discard）；
+    /// 无锁门禁镜像：_fastState（Exit 锁内归零；Park 前置校验保证驻留时无活动操作）、
+    /// _disposing（Park 置 1 / Unpark 复位 0，终态保持 1）、_prewarmed（Unpark 复位 false，
+    /// 使新租期在另一异步流上重新预热）；
     /// 生命周期终态：_disposeTask（仅真实释放路径产生，驻留会话恒 null）；
     /// 跨租期保留：CompletedOps（原 OwnerPrewarmed，深挖轮改计数——AsyncLocal 槽值随异步流
     /// 不跨租期，保留计数使第二租期起免 EC 拷贝且立即达预热门槛）、
@@ -69,6 +77,8 @@ public sealed class PoolResetCompletenessTests
         "_parallelReadScopes", "_activeReadLeases", "_readLeasesDrained",
         // 归还复位（ReturnToPoolAsync）
         "DefersPostCommitActions", "_postCommitBackfills",
+        // 无锁门禁镜像（Park/Unpark/Exit 收口）
+        "_fastState", "_disposing", "_prewarmed",
         // 生命周期终态
         "_disposeTask",
         // 跨租期保留

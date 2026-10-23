@@ -55,6 +55,28 @@ public sealed class CacheStoreTests
         await Assert.That(value![0]).IsEqualTo("updated");
     }
 
+    [Test]
+    public async Task Set_AfterEviction_AdmitsNewKeyAndKeepsCapacityCountConsistent()
+    {
+        var cache = new BoundedQueryCache(maxEntries: 2);
+        cache.Set("a", new List<string> { "a" });
+        cache.Set("b", new List<string> { "b" });
+
+        // 类型不符触发 TryRemove + Decrement（ITM-558/ITM-808 的移除路径）
+        _ = cache.TryGet("a", out List<int>? wrongType);
+        await Assert.That(wrongType).IsNull();
+        cache.Set("c", new List<string> { "c" });
+
+        await Assert.That(cache.TryGet("c", out List<string>? c)).IsTrue();
+        await Assert.That(c![0]).IsEqualTo("c");
+
+        // 计数已回到上限 2（b、c）：d 必须被拒。Set 的 TryAdd/索引器竞态修复前，
+        // 计数可能少一次，导致 d 被错误接纳。
+        cache.Set("d", new List<string> { "d" });
+        await Assert.That(cache.TryGet("d", out List<string>? d)).IsFalse();
+        await Assert.That(d).IsNull();
+    }
+
     // ITM-558 下沉：同 key 不同类型按 miss 处理并移除旧条目——不抛 InvalidCastException
     [Test]
     public async Task TryGet_TypeMismatch_TreatedAsMissAndEvicts()

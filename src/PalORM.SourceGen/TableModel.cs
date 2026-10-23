@@ -49,6 +49,11 @@ internal sealed record TableModel(
         string tableName = tableAttr.ConstructorArguments.FirstOrDefault().Value as string
             ?? typeSymbol.Name;
 
+        // 租户列在实体模型中只读：INSERT 由实体承载（ITM-599），UPDATE/UPSERT 的 SET 不得写它，
+        // 否则租户会话可把行搬到别的租户（2026-10-21 审计修复）。
+        bool isTenantAware = typeSymbol.GetAttributes().Any(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));
+
         List<ColumnModel> columns = [];
         List<IndexModel> indexes = [];
         List<ForeignKeyModel> foreignKeys = [];
@@ -120,9 +125,11 @@ internal sealed record TableModel(
             // ITM-640 收口：原注释声称"PALORM015 兜底提示"系误指（015 不覆盖此形态，编译期
             // 零反馈直到运行期 not registered）——现由 PALORM044 定位报错，此处防御性跳过。
             if (computedExpression is not null
-                && (computedExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
+                && (string.IsNullOrWhiteSpace(computedExpression)
+                    || computedExpression.Contains('\0')
+                    || !SourceGenerationValidation.IsBalancedParentheses(computedExpression)))
                 return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                    $"[Computed] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM044)");
+                    $"[Computed] expression on property '{prop.Name}' is empty, contains a NUL character, or has unbalanced parentheses (PALORM044)");
             // R2（v6.0）：[DefaultValue] 表达式——原样直通三方言 DDL 的 DEFAULT 子句（与 [Computed]
             // ITM-541 同契约：不经转义、不做方言翻译，合法性由调用方负责）。NUL/未配对括号快检
             // 与 [Computed]（ITM-584）同型：PALORM048 在编译期定位报错，此处防御性跳过。
@@ -131,9 +138,11 @@ internal sealed record TableModel(
                     SourceGenerationValidation.IsPalORMAttribute(attribute, "DefaultValue"))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             if (defaultValueExpression is not null
-                && (defaultValueExpression.Contains('\0') || !SourceGenerationValidation.IsBalancedParentheses(defaultValueExpression)))
+                && (string.IsNullOrWhiteSpace(defaultValueExpression)
+                    || defaultValueExpression.Contains('\0')
+                    || !SourceGenerationValidation.IsBalancedParentheses(defaultValueExpression)))
                 return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                    $"[DefaultValue] expression on property '{prop.Name}' contains a NUL character or has unbalanced parentheses (PALORM048)");
+                    $"[DefaultValue] expression on property '{prop.Name}' is empty, contains a NUL character, or has unbalanced parentheses (PALORM048)");
             // R2：[DefaultValue] 互斥三态（PALORM047 定位报错，此处防御性跳过）：
             // ×[Computed]——GENERATED 列不得带 DEFAULT（与 ITM-626 Timestamp×Computed 同理）；
             // ×[Timestamp]——该注解内建 DEFAULT CURRENT_TIMESTAMP，双 DEFAULT 生成非法 DDL；
@@ -192,8 +201,9 @@ internal sealed record TableModel(
             if (fkAttr is not null && fkAttr.ConstructorArguments.Length >= 2)
             {
                 // ITM-602: ForeignKeyModel.OnDelete 此前恒写 0（NoAction），用户 [ForeignKey(OnDelete=...)]
-                // 设置完全丢弃——PALORM004 注释承认"FK 不生成 DDL"，但字段语义应与用户声明一致，
-                // 便于未来启用 FK DDL 时无需重新解析。从命名参数提取 OnDelete 整数值，默认 NoAction。
+                // 设置完全丢弃——PALORM004 曾称“FK 不生成 DDL”（ADR-B 补充实施后 FK 已随
+                // CREATE TABLE 内联生成），字段语义必须与用户声明一致，当前 DDL 才能正确落地。
+                // 从命名参数提取 OnDelete 整数值，默认 NoAction。
                 int onDelete = 0;  // DeleteAction.NoAction
                 var onDeleteArg = fkAttr.NamedArguments.FirstOrDefault(static na => na.Key == "OnDelete");
                 if (onDeleteArg.Value.Value is int value)
@@ -221,13 +231,13 @@ internal sealed record TableModel(
                 prop.Type.IsReferenceType && prop.NullableAnnotation == NullableAnnotation.None,
                 defaultValueExpression,
                 columnLength, columnPrecision, columnScale, columnTypeName,
-                enumStorage, enumClrTypeName, enumParseSwitchBody, enumWriteSwitchBody));
+                enumStorage, enumClrTypeName, enumParseSwitchBody, enumWriteSwitchBody,
+                IsTenantColumn: isTenantAware
+                    && string.Equals(columnName, "tenant_id", StringComparison.Ordinal)));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
             SourceGenerationValidation.IsPalORMAttribute(a, "SoftDelete"));  // ITM-512
-        bool isTenantAware = typeSymbol.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));  // ITM-512
 
         // [Index("name", "col1", "col2", Unique = ...)] → 复合索引（ADR-B）
         // 无名/空列声明跳过生成——PALORM020 已在编译期报错，此处跳过防级联生成错误
@@ -358,10 +368,15 @@ internal sealed record TableModel(
             }
             foreach (System.Collections.Generic.KeyValuePair<string, object> named in namedMembers)
             {
+                // P2-9：枚举成员名为 C# 关键字（如 @class）时，生成源的类型引用必须带 @；
+                // 数据库字符串/Parse 字面量仍用裸名（member.Name 已剥掉 @）。
+                string memberReference = SyntaxFacts.GetKeywordKind(named.Key) != SyntaxKind.None
+                    ? "@" + named.Key
+                    : named.Key;
                 parseArms.Append('"').Append(named.Key).Append('"').Append(" => ").Append(enumClrTypeName)
-                    .Append('.').Append(named.Key).Append(", ");
+                    .Append('.').Append(memberReference).Append(", ");
                 if (valueCounts[named.Value] == 1)
-                    writeArms.Append(enumClrTypeName).Append('.').Append(named.Key)
+                    writeArms.Append(enumClrTypeName).Append('.').Append(memberReference)
                         .Append(" => \"").Append(named.Key).Append("\", ");
             }
             parseSwitchBody = parseArms.ToString();
@@ -436,7 +451,10 @@ internal sealed record ColumnModel(
     EnumStorageKind EnumStorage = EnumStorageKind.None,
     string? EnumClrTypeName = null,
     string? EnumParseSwitchBody = null,
-    string? EnumWriteSwitchBody = null)
+    string? EnumWriteSwitchBody = null,
+    // [TenantAware] 实体的 tenant_id 列（PALORM018 保证存在）。INSERT 由实体承载；
+    // UPDATE/UPSERT 的 SET 必须排除——否则租户会话可把行搬到别的租户。
+    bool IsTenantColumn = false)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

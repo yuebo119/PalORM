@@ -525,20 +525,25 @@ public sealed partial class PgNotificationListener : IAsyncDisposable
             cancellation = owner.CancelAsync();
         }
 
-        await cancellation.ConfigureAwait(false);
-        if (runTask is not null)
+        try
         {
-            try { await runTask.ConfigureAwait(false); }
-            catch (OperationCanceledException)
+            await cancellation.ConfigureAwait(false);
+            if (runTask is not null)
             {
-                // 正常的取消路径，记录以便诊断但不抛出
-                if (Logger is { } logger1)
-                    LogRunTaskCanceled(logger1);
+                try { await runTask.ConfigureAwait(false); }
+                catch (OperationCanceledException)
+                {
+                    // 正常的取消路径，记录以便诊断但不抛出
+                    if (Logger is { } logger1)
+                        LogRunTaskCanceled(logger1);
+                }
             }
         }
-
-        // CancelAsync 已完成、runTask 已结束——此刻 Dispose 无并发窗口。
-        owner.Dispose();
+        finally
+        {
+            // P3-11：CancelAsync/runTask 非 OCE 异常时也必须释放 CTS。
+            owner.Dispose();
+        }
     }
 
     /// <summary>发送 NOTIFY（参数化 pg_notify()，零 SQL 注入风险）。</summary>

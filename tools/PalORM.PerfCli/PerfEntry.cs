@@ -136,24 +136,20 @@ internal static class PerfEntry
         // B135（2026-10-04 实录）：full 是 20 分钟级的昂贵动作，曾把 `full --help` 的 --help
         // 当未知参数静默忽略直接开跑全量。未知参数一律响亮拒绝（含 -h/--help 输出用法），
         // 防拼错参数名（如 --with-dappersuit）被静默降级成默认全量。
-        string[] known = ["--with-dappersuite", "-h", "--help"];
-        string[] unknown = options is null
-            ? []
-            : [.. options.Where(o => !known.Contains(o, StringComparer.Ordinal))];
-        if (unknown.Length > 0)
+        if (RejectUnknownOptions(options))
         {
-            Perf.Out("full：未知参数 " + string.Join(' ', unknown));
             return Usage();
         }
-        if (options is not null && (Array.IndexOf(options, "-h") >= 0 || Array.IndexOf(options, "--help") >= 0))
-            return Usage();
 
         bool withDapperSuite = options is not null && Array.IndexOf(options, "--with-dappersuite") >= 0;
+        // 阶段 0 时间分解（作战卡 §4）：仅在 PALORM_PERFHUB_TIMING=1 时多跑一步，
+        // 默认流程的步骤数与行为保持不变（红线：不改变既有输出格式与判定）。
+        bool timingReport = Environment.GetEnvironmentVariable("PALORM_PERFHUB_TIMING") == "1";
         var root = Perf.RepoRoot();
         Perf.ClearSteps();
         Perf.StartClock();
         Perf.BeginSessionLog(root, "full");
-        int stepTotal = withDapperSuite ? 5 : 4;
+        int stepTotal = (withDapperSuite ? 5 : 4) + (timingReport ? 1 : 0);
         var stepIdx = 0;
         List<string> stepFailed = [];
 
@@ -171,6 +167,15 @@ internal static class PerfEntry
                 stepFailed.Add(name);
             }
             Perf.RecordStep($"[{stepIdx}/{stepTotal}] {name}", status, Perf.ElapsedSince(t0), Perf.ElapsedSince(Perf.TotalStart));
+        }
+
+        // 时间分解作为可选步骤：默认关闭时步骤数/行为与改造前一致（阶段 0 不改默认流程）。
+        void RunTimingReportStep()
+        {
+            if (timingReport)
+            {
+                RunStep("时间分解（阶段 0 旁车）", () => TimingReport.Build());
+            }
         }
 
         // 步骤 1 跳过其内部报告：统一报告必须等三套夹具都写完结果库信封后再生成
@@ -200,6 +205,7 @@ internal static class PerfEntry
         }
         RunStep("门禁（BDN 基线 + 结果库基线）", () => Gate(ownSession: false));
         RunStep("统一报告", Report);
+        RunTimingReportStep();
 
         if (stepFailed.Count > 0)
         {
@@ -211,11 +217,36 @@ internal static class PerfEntry
             return failCode;
         }
         Perf.Out("");
-        Perf.Out($"全量跑测完成：{(withDapperSuite ? "五" : "四")}步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
+        Perf.Out($"全量跑测完成：{Numeral(stepTotal)}步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
         Perf.PrintFinalTable();
         var okCode = 0;
         Perf.EndSessionLog(okCode);
         return okCode;
+    }
+
+    /// <summary>步骤数的中文数字（默认四步；--with-dappersuite 五步；开计时旁车再加一步）。</summary>
+    private static string Numeral(int stepTotal) => stepTotal switch
+    {
+        4 => "四",
+        5 => "五",
+        _ => stepTotal.ToString(System.Globalization.CultureInfo.InvariantCulture)
+    };
+
+    /// <summary>full 的参数白名单校验（B135）：未知参数或 -h/--help 一律打印用法并拒绝执行。
+    /// 返回 true 表示"不要开跑"。</summary>
+    private static bool RejectUnknownOptions(string[] options)
+    {
+        string[] known = ["--with-dappersuite", "-h", "--help"];
+        string[] unknown = options is null
+            ? []
+            : [.. options.Where(o => !known.Contains(o, StringComparer.Ordinal))];
+        if (unknown.Length > 0)
+        {
+            Perf.Out("full：未知参数 " + string.Join(' ', unknown));
+            return true;
+        }
+        return options is not null
+            && (Array.IndexOf(options, "-h") >= 0 || Array.IndexOf(options, "--help") >= 0);
     }
 
     public static int Usage()
@@ -229,6 +260,7 @@ internal static class PerfEntry
               PerfCli gate                                     # 只跑门禁（BDN 基线 + 结果库基线）
               PerfCli report                                   # 只重建统一报告（不重跑夹具）
               PerfCli index                                    # 只重建跨夹具索引（单独查看用）
+              PerfCli timing-report [旁车路径] [输出路径]       # 阶段 0：时间分解（读 perf-timing-*.json）
               PerfCli bench-matrix|full-perf|dappersuite ...   # 内部步骤子命令（可独立调试）
 
             设计：本入口只做编排，不改任何夹具的口径——每步都调用该夹具自己的既有入口，

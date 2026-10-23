@@ -179,7 +179,9 @@ internal static class Program
         // 回答「测试数据自身的真实内存占用峰值」——不含 ORM、不含数据库。
         foreach (int rows in tiers)
         {
+            var genSw = System.Diagnostics.Stopwatch.StartNew();
             Measurement gen = Measure.MeasureDataGeneration(rows);
+            TimingSink.Phase("data-generation", "—", rows, genSw.Elapsed.TotalSeconds);
             results.Add(gen);
             _done++;
             Console.WriteLine($"[PerfHub] 数据生成基线 {rows:N0} 行: "
@@ -195,8 +197,10 @@ internal static class Program
             // 继续跑其余方言——失败进信封的 sections（kind=dialect-failure），退出码在末尾汇总。
             try
             {
+                var dialectSw = System.Diagnostics.Stopwatch.StartNew();
                 await RunDialectAsync(info, tiers, concurrency, threadTiers, scale, results, itemFailures, warmupFloorAll, cts.Token)
                     .ConfigureAwait(false);
+                TimingSink.Phase("dialect-total", info.DisplayName, 0, dialectSw.Elapsed.TotalSeconds);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cts.IsCancellationRequested)
             {
@@ -225,8 +229,13 @@ internal static class Program
         Console.WriteLine($"[PerfHub] 完成，共 {results.Count} 项测量，耗时 {Fmt.Duration(swTotal.Elapsed)}"
             + $"（{swTotal.Elapsed.TotalMinutes:F1} 分钟）");
 
+        var saveSw = System.Diagnostics.Stopwatch.StartNew();
         Save(results, label, version, swTotal.Elapsed, dialectFailures, itemFailures);
+        saveSw.Stop();
+        var reportSw = System.Diagnostics.Stopwatch.StartNew();
         Report.Build();
+        reportSw.Stop();
+        TimingSink.Flush(swTotal.Elapsed, saveSw.Elapsed.TotalSeconds, reportSw.Elapsed.TotalSeconds);
         return dialectFailures.Count == 0 ? 0 : 1;
     }
 
@@ -252,6 +261,7 @@ internal static class Program
         List<Measurement> results, List<(string Dialect, int Rows, string Context, string Cause)> itemFailures,
         bool warmupFloorAll, CancellationToken ct)
     {
+        var connectSw = System.Diagnostics.Stopwatch.StartNew();
         string cs = Connections.Resolve(info);
         await using DbConnection rawConn = info.OpenConnection(cs);
         await rawConn.OpenAsync(ct).ConfigureAwait(false);
@@ -266,6 +276,7 @@ internal static class Program
             pragma.CommandText = SqliteGovernancePragma;
             await pragma.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+        TimingSink.Phase("connect", info.DisplayName, 0, connectSw.Elapsed.TotalSeconds);
 
         // 维度 8（往返与语句效率）：包一层计数装饰器。包在连接上而不是各臂内部，
         // 三臂（ADO 自建命令 / Dapper 在传入连接上建 / PalORM 会话在调用方连接上建）
@@ -301,13 +312,21 @@ internal static class Program
             _requireWarmupFloor = warmupFloorAll || rows == tiers[0];
 
             // 阶段 2 新表：每 (方言 × 档位) 播一次，臂无关——测量只读或自清理
+            var setupSw = System.Diagnostics.Stopwatch.StartNew();
             await SetupV2TablesAsync(info, conn, rows, ct).ConfigureAwait(false);
+            TimingSink.Phase("setup-tables", info.DisplayName, rows, setupSw.Elapsed.TotalSeconds);
+
+            // 物化重的只读项先做三臂交错（同一操作内 ADO→Dapper→PalORM 连续测）：
+            // 消除按实现分阶段带来的早/晚段状态偏差，详见 RunInterleavedReadsAsync 注释。
+            await RunInterleavedReadsAsync(info, impls, rows, conn, results, scale, ct)
+                .ConfigureAwait(false);
 
             foreach (IPerfImplementation impl in impls)
             {
                 // 单项失败不杀方言：一个 (实现 × 操作 × 方言) 组合失败（实测 MySQL BulkDelete、
                 // PG BulkInsert）时，若整段中断，该方言其余 20 项全部丢失。改为记录失败项、继续下一臂，
                 // 并把内因（包装异常里的 InnerException）打出来——否则只剩"某某失败"无法定位。
+                var armSw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     await RunOneImplAsync(info, impl, rows, conn, results, scale, ct).ConfigureAwait(false);
@@ -318,7 +337,7 @@ internal static class Program
                     Console.Error.WriteLine($"    {impl.Name,-9} 跳过 — {ex.Message}｜内因：{cause}");
                     itemFailures.Add((info.DisplayName, rows, $"{impl.Name}: {ex.Message}", cause));
                     // 坏连接会吃掉后续全部项（实测 MySQL：ADO BulkDelete 抛 SocketException 后
-                    // 连接变 Broken，Dapper/PalORM 的同档项全被跳过）。重开一次连接继续——
+                    // 连接变 Broken，Dapper/PALORM 的同档项全被跳过）。重开一次连接继续——
                     // 表在服务端，重连不丢数据；重连失败才算方言级失败（交给外层 catch）。
                     if (conn.State != System.Data.ConnectionState.Open)
                     {
@@ -326,6 +345,10 @@ internal static class Program
                         await conn.CloseAsync().ConfigureAwait(false);
                         await conn.OpenAsync(ct).ConfigureAwait(false);
                     }
+                }
+                finally
+                {
+                    TimingSink.Phase("arm-block:" + impl.Name, info.DisplayName, rows, armSw.Elapsed.TotalSeconds);
                 }
             }
 
@@ -337,6 +360,7 @@ internal static class Program
             {
                 Console.WriteLine();
                 Console.WriteLine("  并发吞吐（80/20 读写混合，3s）");
+                var concurrencySw = System.Diagnostics.Stopwatch.StartNew();
                 foreach (IPerfImplementation impl in impls)
                 {
                     await impl.SetupAsync(conn, rows, ct).ConfigureAwait(false);
@@ -362,10 +386,13 @@ internal static class Program
                         }
                     }
                 }
+                TimingSink.Phase("concurrency", info.DisplayName, rows, concurrencySw.Elapsed.TotalSeconds);
             }
         }
 
+        var closeSw = System.Diagnostics.Stopwatch.StartNew();
         await conn.CloseAsync().ConfigureAwait(false);
+        TimingSink.Phase("close", info.DisplayName, rows: 0, closeSw.Elapsed.TotalSeconds);
     }
 
     /// <summary>阶段 2 新表播种——每 (方言 × 档位) 一次：宽表全量、子表前 500 父 × 3 子、
@@ -464,10 +491,75 @@ internal static class Program
         await childCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部 26 个单操作测量。
-    /// <para>顺序即状态依赖：Build/查询类先跑（要求表内恰好 <paramref name="rows"/> 行），
+    /// <summary>物化重的只读项三臂交错测量（2026-10-23 实测驱动）。
+    /// <para><b>为什么需要</b>：原编排按实现分阶段跑（ADO 全部 → Dapper 全部 → PalORM 全部）。
+    /// MySQL 20K 实测：同一段 ADO 代码（<c>GetAllAsync</c> 直接调用 <c>QueryAllAsync</c>）
+    /// 在批量写之前 7.73ms、之后 12.15ms（差 57%）；托管臂全部落在晚段，表观 P/ADO 1.55/1.76，
+    /// 而两托管臂彼此一致（P/D 0.99）。早段地板与晚段托管臂不可比，不是产品退化。</para>
+    /// <para><b>做法</b>：把只读且物化重的三项移到三臂阶段之前，同一操作内
+    /// ADO→Dapper→PalORM 连续测量；pass 开始前用中性播种复位到 <paramref name="rows"/> 行，
+    /// 三项只读，测量中不再复位。写类操作仍保留原分阶段编排（写会改表，逐臂交错需额外复位语义）。</para>
+    /// <para><b>口径变化</b>：这三项从"不同状态的三臂"变为"同状态三臂"，比值判别力恢复；
+    /// 与历史批次的绝对值仍可比（同一 SQL、同一表）。</para></summary>
+    private static async Task RunInterleavedReadsAsync(
+        DialectInfo info, IPerfImplementation[] impls, int rows, DbConnection conn,
+        List<Measurement> results, double scale, CancellationToken ct)
+    {
+        var neutralSeeder = new AdoNetImpl(info);
+        Task reset(DbConnection c) => neutralSeeder.SetupPerfS1Async(c, rows, ct);
+
+        // 三项只读，表在 pass 开始前播种一次；测量里不挂 reset（二次复位会打掉热态）。
+        var resetSw = System.Diagnostics.Stopwatch.StartNew();
+        await reset(conn).ConfigureAwait(false);
+        TimingSink.Phase("interleaved-reset", info.DisplayName, rows, resetSw.Elapsed.TotalSeconds);
+
+        // 跑两遍：第一遍丢弃，第二遍记录。进程首个 Measure.SingleAsync 有固定暖机成本
+        //（采样线程 JIT、GC 计数首次调用、驱动首次读），实测让首个 ADO QueryAll/2K
+        // 在 1.5s 自预热后仍是 2.88ms，而同代码的 GetAllAsync 是 1.18ms（2026-10-23）。
+        // 丢弃第一遍把这份成本吃掉；两遍走同一组三项 × 三臂（只读，不改变表）。
+        var discardSw = System.Diagnostics.Stopwatch.StartNew();
+        await RunPassAsync(record: false).ConfigureAwait(false);
+        TimingSink.Phase("interleaved-discard-pass", info.DisplayName, rows, discardSw.Elapsed.TotalSeconds);
+        var recordSw = System.Diagnostics.Stopwatch.StartNew();
+        await RunPassAsync(record: true).ConfigureAwait(false);
+        TimingSink.Phase("interleaved-record-pass", info.DisplayName, rows, recordSw.Elapsed.TotalSeconds);
+
+        async Task RunPassAsync(bool record)
+        {
+            foreach (IPerfImplementation impl in impls)
+            {
+                await MeasAsync(info, impl, "QueryAll", "CRUD", rows, conn, results, scale, null,
+                    async (im, c, i) => _ = await im.QueryAllAsync(c, ct).ConfigureAwait(false),
+                    ct, record).ConfigureAwait(false);
+            }
+
+            foreach (IPerfImplementation impl in impls)
+            {
+                await MeasAsync(info, impl, "StreamAll", "CRUD", rows, conn, results, scale, null,
+                    async (im, c, i) => _ = await im.StreamAllAsync(c, static row => default, ct)
+                        .ConfigureAwait(false),
+                    ct, record).ConfigureAwait(false);
+            }
+
+            foreach (IPerfImplementation impl in impls)
+            {
+                await MeasAsync(info, impl, "GetAllAsync", "CRUD", rows, conn, results, scale, null,
+                    async (im, c, i) =>
+                    {
+                        List<S1Row> list = await im.GetAllAsync(c, ct).ConfigureAwait(false);
+                        if (list.Count != rows)
+                            throw new InvalidOperationException(
+                                $"GetAllAsync 结果不等价：{list.Count} 行（期望 {rows}）");
+                    }, ct, record).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>对一个 (方言, 实现, 行数) 组合跑全部单操作测量。
+    /// <para>顺序即状态依赖：Build/单行读先跑（要求表内恰好 <paramref name="rows"/> 行），
     /// 写类后跑（每轮用不同主键段，表会增长，但已不影响后续查询类——
-    /// 下一个实现进场时 <c>SetupAsync</c> 会重建表）。</para></summary>
+    /// 下一个实现进场时 <c>SetupAsync</c> 会重建表）。物化重的 QueryAll/StreamAll/GetAllAsync
+    /// 不在这里跑，见 <see cref="RunInterleavedReadsAsync"/>。</para></summary>
     private static async Task RunOneImplAsync(
         DialectInfo info, IPerfImplementation impl, int rows, DbConnection conn,
         List<Measurement> results, double scale, CancellationToken ct)
@@ -530,13 +622,9 @@ internal static class Program
                 _ = await im.GetByKeyAsync(c, id, ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
-        await MeasAsync(info, impl, "QueryAll", "CRUD", rows, conn, results, scale, null,
-            async (im, c, i) => _ = await im.QueryAllAsync(c, ct).ConfigureAwait(false),
-            ct).ConfigureAwait(false);
-
-        await MeasAsync(info, impl, "StreamAll", "CRUD", rows, conn, results, scale, null,
-            async (im, c, i) => _ = await im.StreamAllAsync(c, static row => default, ct).ConfigureAwait(false),
-            ct).ConfigureAwait(false);
+        // QueryAll/StreamAll/GetAllAsync 已移到三臂交错测量（RunInterleavedReadsAsync）：
+        // 按实现分阶段跑时，早段 ADO 地板与晚段托管臂不可比（2026-10-23 MySQL 20K 实测
+        // 同代码 7.73ms vs 12.15ms）。交错点在 RunDialectAsync 的每档开端，三臂同状态测量。
 
         await MeasAsync(info, impl, "Insert", "CRUD", rows, conn, results, scale, reset,
             async (im, c, i) => await im.InsertAsync(c, Dataset.Seed(rows + i), ct).ConfigureAwait(false),
@@ -741,16 +829,8 @@ internal static class Program
                     c, Dataset.SeedEnumRows(100, (long)i * 100), ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
-        // GetAllAsync 直查（N5 组合句缓存）：与 QueryAll 臂互为对照（直查 API vs From<T>()
-        // 管线），地板同形（SELECT 全列物化）；reset 恢复 perf_s1 恰好 rows 行。
-        await MeasAsync(info, impl, "GetAllAsync", "CRUD", rows, conn, results, scale, reset,
-            async (im, c, i) =>
-            {
-                List<S1Row> list = await im.GetAllAsync(c, ct).ConfigureAwait(false);
-                if (list.Count != rows)
-                    throw new InvalidOperationException(
-                        $"GetAllAsync 结果不等价：{list.Count} 行（期望 {rows}）");
-            }, ct).ConfigureAwait(false);
+        // GetAllAsync 直查（N5 组合句缓存）已移到三臂交错测量（RunInterleavedReadsAsync），
+        // 与 QueryAll/StreamAll 同状态对照（直查 API vs From<T>() 管线）。
 
         // 池化租借臂（2026-10-13 二轮方案）：PalORM 每键一完整租期（租出→GetByKey→归还，
         // 一请求一会话的真实形状,池在预热段稳定后测量段全命中复用）;ADO/Dapper 无会话税,
@@ -772,7 +852,8 @@ internal static class Program
         DialectInfo info, IPerfImplementation impl, string operation, string group, int rows,
         DbConnection conn, List<Measurement> results, double scale,
         Func<DbConnection, Task>? prepare,
-        Func<IPerfImplementation, DbConnection, int, Task> action, CancellationToken ct)
+        Func<IPerfImplementation, DbConnection, int, Task> action, CancellationToken ct,
+        bool record = true)
     {
         if (!RunsAtTier(operation, rows))
         {
@@ -781,16 +862,47 @@ internal static class Program
 
         try
         {
-            // 单测量墙钟耗时——只进控制台，不进结果信封（信封 schema 与门禁都读不到它）。
+            // 单测量墙钟耗时——只进控制台与计时旁车，不进结果信封（信封 schema 与门禁都读不到它）。
             // 它回答"哪一项吃掉了跑测时间"，是调预算/砍项的唯一依据：只报指标不报耗时，
             // 优化就只能靠猜。
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            PerfStageTiming? timing = TimingSink.Enabled
+                ? new PerfStageTiming
+                {
+                    Dialect = info.DisplayName,
+                    Rows = rows,
+                    Arm = impl.Name,
+                    Operation = operation,
+                    Group = group,
+                    Recorded = record
+                }
+                : null;
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
                 MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation), scale,
-                _requireWarmupFloor).ConfigureAwait(false);
+                _requireWarmupFloor, timing).ConfigureAwait(false);
             sw.Stop();
-            results.Add(m);
-            PrintRow([m], sw.Elapsed);
+            if (timing is null)
+            {
+                if (record)
+                {
+                    results.Add(m);
+                    PrintRow([m], sw.Elapsed);
+                }
+            }
+            else
+            {
+                // 结果登记与进度行属测量外层（进度行还含 ETA 计算），单列一段：
+                // 它在 416 项的规模上会被放大成可观测成本。
+                var writeSw = System.Diagnostics.Stopwatch.StartNew();
+                if (record)
+                {
+                    results.Add(m);
+                    PrintRow([m], sw.Elapsed);
+                }
+                writeSw.Stop();
+                timing.WriteResultSeconds = writeSw.Elapsed.TotalSeconds;
+                TimingSink.Stage(timing);
+            }
         }
         catch (Exception ex)
         {
@@ -1272,7 +1384,8 @@ internal static class Program
         + "analysis_limit=400 / optimize=0x10002）；"
         + "pg/mysql: 驱动默认 + MySQL 追加 AllowLoadLocalInfile=true（三臂同值）";
 
-    private static string FindRepoRoot()
+    /// <summary>仓库根定位（结果文件与计时旁车共用）。</summary>
+    internal static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "PalORM.slnx")))
@@ -1281,6 +1394,31 @@ internal static class Program
         }
 
         return dir?.FullName ?? AppContext.BaseDirectory;
+    }
+
+    /// <summary>计时旁车里的提交标识——`git rev-parse --short HEAD`；失败返回空串（不阻断跑测）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "S4036:Use an absolute path for this command",
+        Justification = "git 依赖 PATH 解析是本仓多数工具链的既有契约（同 PerfCli 的 S4036 豁免）；"
+            + "此处只读 HEAD，无写入与破坏面。")]
+    internal static string CurrentCommit()
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("git", "rev-parse --short HEAD")
+            {
+                WorkingDirectory = FindRepoRoot(),
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            string output = p.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit();
+            return p.ExitCode == 0 ? output : "";
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return "";
+        }
     }
 }
 

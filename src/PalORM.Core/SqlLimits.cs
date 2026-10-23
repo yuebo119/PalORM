@@ -7,7 +7,7 @@ namespace PalORM;
 /// 仍是 PalORM 内部 API（不写入公共文档/不保证兼容，同 <see cref="BulkOperationFramework"/> 口径）。</para></summary>
 public static class SqlLimits
 {
-    /// <summary>单条语句绑定参数上限——PostgreSQL 协议 int16 上限（三方言最严）。
+    /// <summary>单条语句绑定参数上限——PostgreSQL 协议无符号 16 位上限（65535，三方言最严）。
     /// 超限应分批或改临时表 JOIN；静默生成越界 SQL 会在运行期协议层才报错（ITM-514）。</summary>
     public const int MaxBindParameters = 65535;
 
@@ -32,6 +32,11 @@ public static class SqlLimits
     /// 16383 行 × 3 列的批可生成 MB 级单语句，客户端构建、驱动解析、服务端解析全线性膨胀。
     /// 5000 行把单语句控制在数百 KB 量级，同时让 10 万行只需 20 次往返（旧口径 200 次）。</summary>
     public const int MaxRowsPerBatch = 5000;
+
+    /// <summary>物化容量启发上界（2026-10-22 终审 P2-6）：MaterializedCount 只作为 List 初始容量，
+    /// 曾把一次 10 万行全表的行数记给后续小查询（池化会话跨租期保留），每个小查询白分配
+    /// 约 800 KB。与 QueryBuilderExtensions 的预分配上界同口径。</summary>
+    public const int MaxMaterializedCapacityHint = 4096;
 
     /// <summary>MySQL 裸 OFFSET（无 LIMIT）的补位哨兵——<c>LIMIT offset, max</c> 惯用法。</summary>
     public const ulong MySqlOffsetOnlyLimit = ulong.MaxValue;

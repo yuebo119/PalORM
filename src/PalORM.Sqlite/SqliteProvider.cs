@@ -55,16 +55,24 @@ public sealed class SqliteProvider : IDbProvider
     /// <para>Microsoft.Data.Sqlite 默认池化：连接归还后原生句柄留在池中，下次 Open 取回同一句柄，
     /// 句柄上的连接级 PRAGMA 全部保留（探针实测五项设值经归还/复用读回不变）。整组 PRAGMA 每会话
     /// 重跑是纯冗余——文件库 8.6µs / 3KB，占"每请求一会话"单键直查与手写 ADO 差距的八成以上。</para>
+    /// <para><b>脏标记（2026-10-22）</b>：会话经原生 SQL / 存储过程 / 批量脚本 / DDL 改过连接态后，
+    /// 经 <see cref="MarkConnectionStateUnknown"/> 把句柄标脏——下一次初始化只重设
+    /// <c>foreign_keys</c>（会话级完整性约束），干净句柄连这一步都跳过（实测每会话省 1.05µs / 520B）。
+    /// 需要完整重跑的入口（<see cref="DbOptions.SessionSetupSql"/> 等）仍走
+    /// <see cref="InvalidateConnectionInitialization"/> 摘除登记。</para>
     /// <para>弱键表：句柄被池释放后条目随 GC 消失；不池化（Pooling=False）时每次 Open 都是新句柄，
     /// 自然每次完整初始化。形态约束同 <see cref="ConnectionModeCache"/>（ModuleInitializer 内赋值）。</para></summary>
-    private static ConditionalWeakTable<object, object>? InitializedHandles;
+    private static ConditionalWeakTable<object, HandleState>? InitializedHandles;
+
+    /// <summary>原生句柄的连接态是否被会话 SQL 改写过（会话间可见的弱表值）。</summary>
+    private sealed class HandleState
+    {
+        internal volatile bool Dirty;
+    }
 
     /// <summary>复用已初始化句柄时仍须每会话执行的 PRAGMA——外键约束是完整性约束而非调优项
     /// （STD-CONC-008：每次连接开启），会话内被关掉也不得经池化句柄带入下一个会话。</summary>
     private const string PragmaPerSession = "PRAGMA foreign_keys = ON";
-
-    /// <summary><see cref="InitializedHandles"/> 的值占位（只用键）。</summary>
-    private const string InitializedMarker = "initialized";
 
     /// <summary>SQL 方言标识:<see cref="SqlDialect.Sqlite"/>。</summary>
     public static SqlDialect Dialect => SqlDialect.Sqlite;
@@ -112,6 +120,15 @@ public sealed class SqliteProvider : IDbProvider
 
     /// <summary>SQLite 3.35+ 支持 RETURNING 子句。</summary>
     public static bool SupportsReturningClause => true;
+
+    /// <summary>SQLite 是进程内引擎，Microsoft.Data.Sqlite 的异步 API 内部同样是同步执行；
+    /// 走异步形态只多付 Task/状态机脚手架，故叶子执行点优先同步调用（见
+    /// <see cref="IDbProvider.PreferSynchronousIo"/>）。取消令牌在调用前显式检查。</summary>
+    public static bool PreferSynchronousIo => true;
+
+    /// <summary>SQLite 的异步 API 本来就是同步执行——逐行读同样走同步叶子（ResultListReader
+    /// 经 <see cref="IDbProvider.PreferSynchronousIo"/> 自动启用，无需额外配置）。</summary>
+    public static bool SupportsSynchronousRowRead => true;
 
     /// <summary>SQLite 的 CURRENT_TIMESTAMP 恒为 UTC；MySQL/PG 为会话时区——
     /// 软删除 deleted_at 跨库混用时语义不同（ITM-326）。</summary>
@@ -180,11 +197,16 @@ public sealed class SqliteProvider : IDbProvider
         // 只有池化文件库会复用原生句柄（探针实测：共享内存库与 Pooling=False 每次 Open 都是新句柄）——
         // 其余形态不登记，免去每会话一次弱表写入（BDN 共享内存库形态实测 +25~33B/会话）
         object? handle = isPooled ? (connection as SqliteConnection)?.Handle : null;
-        if (handle is not null && InitializedHandles!.TryGetValue(handle, out _))
+        if (handle is not null && InitializedHandles!.TryGetValue(handle, out HandleState? state))
         {
+            // 干净句柄：调优 PRAGMA 与 foreign_keys 都仍是上次初始化后的形态，零往返直接返回。
+            if (!state.Dirty)
+                return;
+            // 脏句柄：只重设会话级关键项；调优项与既有契约一致（整组只在首开执行）。
             await using DbCommand perSession = connection.CreateCommand();
             perSession.CommandText = PragmaPerSession;
             await perSession.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            state.Dirty = false;
             return;
         }
 
@@ -198,7 +220,19 @@ public sealed class SqliteProvider : IDbProvider
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         // 只在整组成功后登记——中途失败的句柄下次仍走完整路径
         if (handle is not null)
-            InitializedHandles!.AddOrUpdate(handle, InitializedMarker);
+            InitializedHandles!.AddOrUpdate(handle, new HandleState());
+    }
+
+    /// <summary>会话执行过可能改写连接态的原生 SQL（含存储过程/批量脚本/DDL/裸连接）——
+    /// 把已初始化句柄标脏：下一次初始化走 <see cref="PragmaPerSession"/> 的精简复位而非零操作。
+    /// 未登记句柄（内存库 / Pooling=False）为空操作，其生命周期本就是一次 Open 一次完整初始化。</summary>
+    public static void MarkConnectionStateUnknown(DbConnection connection)
+    {
+        if ((connection as SqliteConnection)?.Handle is { } handle
+            && InitializedHandles!.TryGetValue(handle, out HandleState? state))
+        {
+            state.Dirty = true;
+        }
     }
 
     /// <summary>连接串 → (内存库, 只读, 池化文件库)，按连接串缓存。
