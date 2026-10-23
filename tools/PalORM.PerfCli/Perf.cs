@@ -278,10 +278,15 @@ internal static class Perf
         }
     }
 
-    /// <summary>日志保留最近 keep 份（全量批约 2~4 MB/份，防目录无限膨胀）。</summary>
+    /// <summary>日志保留最近 keep 份（全量批约 2~4 MB/份，防目录无限膨胀）。
+    /// <para>按写入时间排序，不能按文件名字典序：`perfcli-full-*` 与 `perfcli-gate-*` 混存时
+    /// 'f' &lt; 'g'，字典序会把最新的全量日志排在门禁日志之后，保留 20 份时先删掉的正是
+    /// 最需要回看的全量会话日志（2026-10-24 实测：两轮全量的会话日志被同目录 gate 日志挤出）。</para></summary>
     private static void PruneLogs(string dir, string pattern, int keep)
     {
-        var logs = Directory.GetFiles(dir, pattern).OrderByDescending(f => f, StringComparer.Ordinal).ToList();
+        var logs = Directory.GetFiles(dir, pattern)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .ToList();
         for (var i = keep; i < logs.Count; i++)
         {
             File.Delete(logs[i]);
