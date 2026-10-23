@@ -1,5 +1,7 @@
-// perf 入口子命令（自 perf.sh 迁移，T4-6）：smoke/full/gate/report/index。
+// perf 入口子命令（自 perf.sh 迁移，T4-6）：smoke/full/gate/report/index/l0。
 // 设计原则沿用原编排器：本层只做编排，不改任何夹具的口径——每步调用该夹具自己的既有入口。
+using PalORM.Bench.Shared;
+
 namespace PalORM.PerfCli;
 
 internal static class PerfEntry
@@ -57,6 +59,47 @@ internal static class PerfEntry
         var root = Perf.RepoRoot();
         Perf.Step("[索引] 从结果库重建 bench/reports/perf-index.md");
         return Perf.Run("dotnet", $"run --project \"{Path.Combine(root, GateProject)}\" -c Release -- index");
+    }
+
+    /// <summary>L0 快线（作战卡 §6.3）：门禁关键项 5 分钟反馈通道。
+    /// <para>覆盖 = 批量族四形态 + GetAllAsync + GetByKey 延迟哨兵，三方言、20000 档。
+    /// 判定 = L0 专用基线（比值 +30% / 分配 +20%），三方言缺一即失败；判定窗口是最近 3 个
+    /// L0 批次的窗口中位数（单批离群被吸收，持续回归需连续 2 批才越线，B203 同源口径）。
+    /// BDN 不进 L0（单独约 5 分钟），微基准回归仍由全量轮覆盖。</para></summary>
+    public static int L0()
+    {
+        var root = Perf.RepoRoot();
+        Perf.ClearSteps();
+        Perf.StartClock();
+        Perf.BeginSessionLog(root, "l0");
+        string baseline = Path.Combine(root, "bench", "baselines", "perfhub-l0-baseline.json");
+
+        Perf.Step($"[1/2] PerfHub L0 子集（{PerfL0.Operations.Length} 操作 × 三方言 × {PerfL0.Tier} 档）");
+        var t0 = DateTime.Now;
+        int code = Perf.Run("dotnet",
+            $"run --project \"{Path.Combine(root, "bench", "PalORM.PerfHub")}\" -c Release -- run "
+            + $"--dialects sqlite,mysql,pg --tiers {PerfL0.Tier} --ops {PerfL0.OpsArgument} "
+            + $"--label {PerfL0.Label} --no-report");
+        Perf.RecordStep("[1/2] PerfHub L0 子集", code == 0 ? "OK" : "FAIL",
+            Perf.ElapsedSince(t0), Perf.ElapsedSince(Perf.TotalStart));
+        if (code != 0)
+        {
+            Perf.Err("L0 子集测量失败——检查方言连接或夹具状态");
+            Perf.PrintFinalTable();
+            Perf.EndSessionLog(code);
+            return code;
+        }
+
+        Perf.Step("[2/2] L0 判定（3 批窗口，比值 +30% / 分配 +20%，三方言覆盖）");
+        t0 = DateTime.Now;
+        code = Perf.Run("dotnet",
+            $"run --project \"{Path.Combine(root, GateProject)}\" -c Release -- "
+            + $"check-l0 --baseline \"{baseline}\"");
+        Perf.RecordStep("[2/2] L0 判定", code == 0 ? "OK" : "FAIL",
+            Perf.ElapsedSince(t0), Perf.ElapsedSince(Perf.TotalStart));
+        Perf.PrintFinalTable();
+        Perf.EndSessionLog(code);
+        return code;
     }
 
     public static int Report()
@@ -260,6 +303,7 @@ internal static class PerfEntry
               PerfCli gate                                     # 只跑门禁（BDN 基线 + 结果库基线）
               PerfCli report                                   # 只重建统一报告（不重跑夹具）
               PerfCli index                                    # 只重建跨夹具索引（单独查看用）
+              PerfCli l0                                       # L0 快线（关键项快速反馈，目标 ≤5 分钟）
               PerfCli timing-report [旁车路径] [输出路径]       # 阶段 0：时间分解（读 perf-timing-*.json）
               PerfCli bench-matrix|full-perf|dappersuite ...   # 内部步骤子命令（可独立调试）
 

@@ -55,6 +55,8 @@ internal static class Program
                 "index" => Index(CommandLine.Parse(args[1..])),
                 "record-index" => RecordIndex(CommandLine.Parse(args[1..])),
                 "check-index" => CheckIndex(CommandLine.Parse(args[1..])),
+                "record-l0" => RecordL0(CommandLine.Parse(args[1..])),
+                "check-l0" => CheckL0(CommandLine.Parse(args[1..])),
                 "tables" => TableGen.Run(
                     CommandLine.Parse(args[1..]).Optional("results")
                         ?? Path.Combine(RepoRoot(), "bench", "results"),
@@ -87,6 +89,10 @@ internal static class Program
         Console.WriteLine("  check-index --baseline <基线路径> [--results <结果库目录>] [--batches <N=3>]");
         Console.WriteLine("         （比对最近 N 个非子集批次的窗口中位数比值，恶化超阈值即失败；");
         Console.WriteLine("           缺项不判失败，全缺项判失败。窗口与 record-index 对称，单批停顿不进判定）");
+        Console.WriteLine("  record-l0 --out <基线路径> [--results <结果库目录>] [--batches <N=3>]");
+        Console.WriteLine("         （L0 快线基线：只取 verify-l0 子集批次，记录比值与 PalORM 分配）");
+        Console.WriteLine("  check-l0 --baseline <基线路径> [--results <结果库目录>]");
+        Console.WriteLine("         （判定最新 verify-l0 批次：比值 +30% / 分配 +20% 超限即失败；三方言缺一即失败）");
     }
 
     /// <summary>结果库索引（规范 v2 §6）：默认目录与默认输出都可被命令行覆盖。</summary>
@@ -131,6 +137,41 @@ internal static class Program
         }
 
         return IndexGate.Check(resultsDir, line.Require("baseline"), window);
+    }
+
+    /// <summary>L0 基线录制：只取 verify-l0 批次，逐键取最近 N 批中位数（比值 + 分配）。</summary>
+    private static int RecordL0(CommandLine line)
+    {
+        string resultsDir = line.Optional("results") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(RepoRoot(), "bench", "results");
+        return IndexGate.RecordL0(resultsDir, line.Require("out"), ParseWindow(line));
+    }
+
+    /// <summary>L0 判定：最新 verify-l0 批次的比值与分配对照 L0 基线。</summary>
+    private static int CheckL0(CommandLine line)
+    {
+        string resultsDir = line.Optional("results") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(RepoRoot(), "bench", "results");
+        return IndexGate.CheckL0(resultsDir, line.Require("baseline"));
+    }
+
+    /// <summary>--batches 解析（缺省取默认窗口；非整数由 <see cref="Fail"/> 转成退出码 1）。</summary>
+    private static int ParseWindow(CommandLine line) => ParseWindow(line, IndexGate.DefaultRecordWindow);
+
+    private static int ParseWindow(CommandLine line, int fallback)
+    {
+        string text = line.Optional("batches") ?? "";
+        if (text.Length == 0)
+        {
+            return fallback;
+        }
+        if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int window))
+        {
+            throw new InvalidOperationException($"--batches 需要整数（收到 '{text}'）");
+        }
+        return window;
     }
 
     /// <summary>仓库根：向上找 PalORM.slnx（与 run-full-perf.sh 的定位方式一致）。</summary>

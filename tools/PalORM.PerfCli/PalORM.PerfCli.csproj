@@ -19,6 +19,8 @@
     <!-- 阶段 0 计时旁车模型：与 PerfHub 共用同一份定义（同 PerfResultEnvelope 的共享方式），
          避免 PerfHub 写 / PerfCli 读两侧字段各自漂移 -->
     <Compile Include="..\..\bench\shared\PerfTiming.cs" Link="PerfTiming.cs" />
+    <!-- L0 快线覆盖定义——与 PerfGate 共用同一份清单 -->
+    <Compile Include="..\..\bench\shared\PerfL0.cs" Link="PerfL0.cs" />
   </ItemGroup>
 
 </Project>

@@ -11,6 +11,8 @@
   <ItemGroup>
     <!-- 结果库信封模型（规范 v2 §6）——与三套夹具共用同一份定义，避免 schema 漂移 -->
     <Compile Include="..\..\bench\shared\PerfResultEnvelope.cs" Link="PerfResultEnvelope.cs" />
+    <!-- L0 快线覆盖定义——PerfCli 跑什么、PerfGate 判什么，同一份清单 -->
+    <Compile Include="..\..\bench\shared\PerfL0.cs" Link="PerfL0.cs" />
   </ItemGroup>
 
 </Project>

@@ -24,6 +24,9 @@
 | 分配相对 ADO | 记录带内波动（P/D 两列）；单行族带 ~+26~45%（已知分配税），批量族收敛至 ±10% 内 | AllocatedBytesPerOp | 报告四组表 |
 | 地板稳定度 | 地板自身同轮漂移 >18% → 该轮 P/F 作废，判环境态 | 三层判据：分配 > 绝对耗时 > 同轮比值 > 跨轮比值 | B100 纪律 |
 | BDN 微基准 | 27 项阈值内绿（MemoryDiagnoser 受控进程） | 单独套件 | bench 阈值文件 |
+| L0 快线比值 | PalORM/ADO 相对 L0 基线 ≤ +30%（判定窗口为最近 3 个 L0 批次中位数；单批离群被吸收，持续回归需连续 2 批） | 6 操作 × 三方言 × 20000 档，18 键 | `PerfGate check-l0`（`PerfCli l0` 调用） |
+| L0 快线分配 | PalORM AllocBytes 相对 L0 基线 ≤ +20%（确定性指标，不设噪声带） | 同上 | 同上 |
+| L0 覆盖 | 三方言缺一即 FAIL（单方言批次不得被读成通过） | 同上 | 同上 |
 
 ## 3. 复杂度契约（库形态）
 
@@ -53,6 +56,8 @@ PalORM 的"热路径" = 物化器（QueryAll/StreamAll 按序号取列）与 SQL
 | 趋势曲线 | `python curve.py bench/perfhub/results`（EPSL T0.6，已对本仓 268 批跑通） | 节点审计 |
 | 结果登记 latest 新鲜度 | `node ~/.zcode/scripts/eps-perf-check.mjs` + `PerfCli report` 重建 | 每次全量跑测后 |
 | 连接/池 churn | `bench/PalORM.Benchmarks --pool sqlite`（观测，不卡阈值） | 周度 PerfGate / 节点审计 |
+| L0 快线 | `dotnet run --project tools/PalORM.PerfCli -- l0`（约 3.5 分钟；比值 +30% / 分配 +20% / 三方言覆盖） | 每次提交或 PR |
+| L0 基线录制 | `PerfGate record-l0 --out bench/baselines/perfhub-l0-baseline.json --batches 3` | L0 覆盖或预算变更后 |
 | 版本化批量更新形态 | `bench/PalORM.Benchmarks --versioned-update pg`（观测，不卡阈值；决定单语句实现是否立项） | 节点审计 |
 | 长时稳定 | `bench/PalORM.Benchmarks --stability 180`（初筛 20%/30%） | 周度 PerfGate |
 

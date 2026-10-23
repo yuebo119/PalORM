@@ -78,6 +78,7 @@ internal static class IndexGate
                 Ratio = entry.Value.Item.Ratio,
                 MedianUs = entry.Value.Item.MedianUs,
                 MeanUs = entry.Value.Item.MeanUs,
+                AllocBytes = entry.Value.Item.AllocBytes,
                 Incomparable = IsIncomparableOperation(entry.Value.Item.Name),
                 Note = IsIncomparableOperation(entry.Value.Item.Name)
                     ? "并发项：比值受线程调度与服务器时段支配，单点跳变可达 9×，不参与比值门禁（绝对值照登）"
@@ -120,19 +121,196 @@ internal static class IndexGate
         return JudgeBaseline(baseline, batches, LoadWindowItems(batches, batchWindow));
     }
 
+    /// <summary>L0 基线录制：只取 <c>verify-l0</c> 子集批次，逐键取最近 N 批中位数。
+    /// <para>与全量索引基线分开的原因是上下文不同：L0 只跑 6 个操作、单档位，它在夹具里的
+    /// 进场顺序与表状态与全量批不同（2026-10-24 探针实测子集与全量的逐项偏差可达 100%），
+    /// 拿全量基线判 L0 会引入口径差。L0 基线只与 L0 批次比，自洽。</para></summary>
+    internal static int RecordL0(string resultsDir, string outputPath, int batchWindow)
+    {
+        List<PerfResultEnvelope> batches = [.. LoadBatches(resultsDir)
+            .Where(static b => b.Label == PerfL0.Label)];
+        if (batches.Count == 0)
+        {
+            Console.Error.WriteLine($"FATAL: 结果库里没有 label={PerfL0.Label} 的批次（先跑 PerfCli l0 若干轮）");
+            return 1;
+        }
+        if (batchWindow < 1)
+        {
+            Console.Error.WriteLine($"FATAL: --batches 必须 ≥1（收到 {batchWindow}）");
+            return 1;
+        }
+
+        var current = LoadWindowItems(batches, batchWindow, includeSubsets: true);
+        List<IndexBaselineItem> items = [.. current
+            .Where(static entry => PerfL0.Contains(entry.Value.Item.Name)
+                && entry.Value.Item.Tier == PerfL0.Tier)
+            .Select(static entry => new IndexBaselineItem
+            {
+                Harness = entry.Value.Harness,
+                Name = entry.Value.Item.Name,
+                Dialect = entry.Value.Item.Dialect,
+                Tier = entry.Value.Item.Tier,
+                Ratio = entry.Value.Item.Ratio,
+                MedianUs = entry.Value.Item.MedianUs,
+                MeanUs = entry.Value.Item.MeanUs,
+                AllocBytes = entry.Value.Item.AllocBytes
+            })];
+        if (items.Count == 0)
+        {
+            Console.Error.WriteLine($"FATAL: 最近 {batchWindow} 个 L0 批次里没有覆盖项（检查 --ops 与档位）");
+            return 1;
+        }
+
+        var baseline = new IndexBaseline
+        {
+            Schema = 1,
+            Date = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            Environment = $"L0 快线基线：逐键取最近 {batchWindow} 个 {PerfL0.Label} 批次的中位数"
+                + $"（{string.Join("、", batches.Take(batchWindow).Select(static b => b.Timestamp))}）",
+            Thresholds = new IndexThresholds(),
+            Items = items
+        };
+        string? dir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        File.WriteAllText(outputPath, JsonSerializer.Serialize(baseline, IndexBaselineJsonContext.Default.IndexBaseline));
+        Console.WriteLine($"[PerfGate] L0 基线已写入 {outputPath}（{items.Count} 项，"
+            + $"阈值 比值 +{baseline.Thresholds.RatioDelta:P0} / 分配 +{baseline.Thresholds.AllocDelta:P0}，"
+            + $"窗口 {batchWindow} 个 L0 批次）");
+        return 0;
+    }
+
+    /// <summary>L0 判定：取最新一个 <c>verify-l0</c> 批次，比 L0 基线的比值与分配。
+    /// <para>覆盖度是硬门禁：三方言缺一即 FAIL——L0 的价值是"关键项在三个方言上的快速反馈"，
+    /// 单方言批次被读成通过等于静默缩水（红线 #3）。</para></summary>
+    internal static int CheckL0(string resultsDir, string baselinePath)
+    {
+        if (!File.Exists(baselinePath))
+        {
+            Console.Error.WriteLine($"FATAL: L0 基线不存在: {baselinePath}（先跑 PerfGate record-l0）");
+            return 1;
+        }
+
+        IndexBaseline? baseline = JsonSerializer.Deserialize(
+            File.ReadAllText(baselinePath), IndexBaselineJsonContext.Default.IndexBaseline);
+        if (baseline is null || baseline.Schema != 1)
+        {
+            Console.Error.WriteLine($"FATAL: L0 基线 schema 不符（要求 1）: {baselinePath}");
+            return 1;
+        }
+
+        List<IndexBaselineItem> l0Items = [.. baseline.Items
+            .Where(static i => PerfL0.Contains(i.Name) && i.Tier == PerfL0.Tier)];
+        if (l0Items.Count == 0)
+        {
+            Console.Error.WriteLine($"FATAL: L0 基线里没有覆盖项（先跑 PerfGate record-l0）");
+            return 1;
+        }
+
+        List<PerfResultEnvelope> batches = LoadBatches(resultsDir);
+        List<PerfResultEnvelope> l0Batches = [.. batches
+            .Where(static b => b.Label == PerfL0.Label)
+            .Take(IndexGate.DefaultRecordWindow)];
+        if (l0Batches.Count == 0)
+        {
+            Console.Error.WriteLine($"FATAL: 结果库里没有 label={PerfL0.Label} 的批次（先跑 PerfCli l0）");
+            return 1;
+        }
+
+        PerfResultEnvelope batch = l0Batches[0];
+        string[] required = ["SQLite", "MySQL", "PostgreSQL"];
+        List<string> present = [.. batch.Items
+            .Where(static i => i.Arm.Equals("PalORM", StringComparison.OrdinalIgnoreCase)
+                && PerfL0.Contains(i.Name) && i.Tier == PerfL0.Tier && i.Ratio > 0)
+            .Select(static i => i.Dialect)
+            .Distinct(StringComparer.Ordinal)];
+        List<string> missingDialects = [.. required.Where(d => !present.Contains(d, StringComparer.Ordinal))];
+        if (missingDialects.Count > 0)
+        {
+            Console.Error.WriteLine($"[PerfGate] FAIL L0 覆盖不完整：缺方言 {string.Join('/', missingDialects)}"
+                + $"（本批 {string.Join('/', present)}）——L0 必须三方言齐跑");
+            return 1;
+        }
+
+        var l0Baseline = new IndexBaseline
+        {
+            Schema = 1,
+            Date = baseline.Date,
+            Environment = baseline.Environment,
+            Thresholds = baseline.Thresholds,
+            Items = l0Items
+        };
+        // 判定与全量门禁同源：取最近 3 个 L0 批次的窗口中位数（单批离群被吸收，持续回归需
+        // 连续 2 批才越线，B203）。单批尖峰不判失败是有意的——L0 的目标是持续回归，不是抖动。
+        var current = LoadWindowItems(l0Batches, IndexGate.DefaultRecordWindow, includeSubsets: true);
+        // L0 严格口径：不做"噪声带内不判失败"降级（B202 的降级是为全量批避免单批假 FAIL；
+        // L0 已是 3 批窗口，剩下的超限按失败处理；分母漂移保护仍保留）。
+        Dictionary<string, double> noise = [];
+
+        Console.WriteLine($"[PerfGate] L0 判定：窗口 {l0Batches.Count} 批"
+            + $"（最新 {batch.Timestamp} label={batch.Label}），方言 {string.Join('/', present)}，覆盖 {l0Items.Count} 键");
+        return JudgeBaseline(l0Baseline, l0Batches, current, checkAllocation: true, noiseOverride: noise);
+    }
+
+    /// <summary>比值超限的三分类判定与文案（从判定主循环抽出，控制主循环复杂度）。
+    /// <para>返回 <see cref="OverrunVerdict.FloorDrift"/>/<see cref="OverrunVerdict.WithinNoise"/> 时
+    /// 调用方只告警；返回 <see cref="OverrunVerdict.Fail"/> 时 message 是完整失败描述（含锚定后缀）。</para></summary>
+    private static OverrunVerdict JudgeRatio(
+        IndexBaselineItem expected, (double Ratio, double MedianUs, double MeanUs) actual,
+        double limit, double ratioDelta, double noiseLevel, string anchorSuffix, out string message)
+    {
+        switch (Classify(expected, actual, limit, noiseLevel))
+        {
+            case OverrunVerdict.FloorDrift:
+                message = DriftText(expected, actual, limit);
+                return OverrunVerdict.FloorDrift;
+            case OverrunVerdict.WithinNoise:
+                message = NoiseBandText(expected, actual, limit, noiseLevel);
+                return OverrunVerdict.WithinNoise;
+            default:
+                message = DescribeFailure(expected, actual, limit, ratioDelta) + anchorSuffix;
+                return OverrunVerdict.Fail;
+        }
+    }
+
+    /// <summary>L0 分配判定：PalORM 每操作分配超基线 <see cref="IndexThresholds.AllocDelta"/> 记 FAIL。
+    /// 单项缺失（旧基线 AllocBytes=0）跳过，保证向后兼容。</summary>
+    private static void JudgeAllocation(
+        IndexBaseline baseline, IndexBaselineItem expected, PerfResultItem actual, List<string> failures)
+    {
+        if (expected.AllocBytes <= 0 || actual.AllocBytes <= 0)
+        {
+            return;
+        }
+        double limit = expected.AllocBytes * (1 + baseline.Thresholds.AllocDelta);
+        if (actual.AllocBytes <= limit)
+        {
+            return;
+        }
+        double over = (double)actual.AllocBytes / expected.AllocBytes - 1;
+        failures.Add(string.Create(CultureInfo.InvariantCulture,
+            $"分配 {expected.Name}/{expected.Dialect}/{expected.Tier}: "
+            + $"{actual.AllocBytes} B vs 基线 {expected.AllocBytes} B"
+            + $"（+{over:P1}，阈值 +{baseline.Thresholds.AllocDelta:P0}）"));
+    }
+
     /// <summary>逐键判定（Check 的主体）：比值超限且非分母漂移 → FAIL；分母漂移 → 告警；
     /// 末尾对"全部缺项"单独判失败（只跑冒烟/过滤批次时的防呆）。
     /// <para>判别力弱标注（2026-10-04）：同键三臂最大 ErrorRatio &gt; 5% 的项在末尾汇总——
     /// 只标注不判定，比值超限与否仍走原逻辑。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S3776:CognitiveComplexity",
+        Justification = "逐键判定是顺序分派形态（不可比/缺项/比值三分类/分配检查），无嵌套业务逻辑；"
+            + "2026-10-24 加入 L0 分配判定后超过 15，继续拆分会把计数与文案状态拆散到多个方法。")]
     private static int JudgeBaseline(
         IndexBaseline baseline, List<PerfResultEnvelope> batches,
-        Dictionary<string, (string Harness, PerfResultItem Item)> current)
+        Dictionary<string, (string Harness, PerfResultItem Item)> current,
+        bool checkAllocation = false, Dictionary<string, double>? noiseOverride = null)
     {
         var failures = new List<string>();
         var driftWarnings = new List<string>();
         var noiseWarnings = new List<string>();
         // 噪声水位表只取一次：判别力弱清单与"噪声带内不判失败"共用同一口径
-        Dictionary<string, double> noise = LoadNoiseLevels(batches);
+        // L0 传入的是"仅本批"的水位（子集批次默认被跳过，L0 判定要靠自身 ErrorRatio 划噪声带）。
+        Dictionary<string, double> noise = noiseOverride ?? LoadNoiseLevels(batches);
         List<string> weakWarnings = CollectWeakDiscrimination(baseline, noise);
         // 锚定诊断在判定循环前算好：失败描述要附锚定比值（B175 判读法，见 CrossAnchorDiagnostics）
         Dictionary<string, AnchorLine> anchorNotes = CrossAnchorDiagnostics(batches);
@@ -158,31 +336,36 @@ internal static class IndexGate
                 (found.Item.Ratio, found.Item.MedianUs, found.Item.MeanUs);
 
             compared++;
+            string key = Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier);
             double limit = expected.Ratio * (1 + baseline.Thresholds.RatioDelta);
-            if (actual.Ratio <= limit)
+            if (actual.Ratio > limit)
             {
-                continue;
+                // 分母漂移判定（2026-10-03 把人工定性协议机械化）：比值超限、但被测臂自身中位移动
+                // ≤10% 且隐含地板变快 ≥20% 时，超限来自地板窗口而非产品（实测三例：中位 -3.7%/
+                // -2.9%/-9.0%，地板 -63.5%/-33.0%/-32.9%）——只告警不 FAIL；真实退化的中位移动会
+                // 远超 10%，仍走 FAIL。地板变慢方向只会压低比值，不会触发本门禁，故无须处理。
+                switch (JudgeRatio(expected, actual, limit, baseline.Thresholds.RatioDelta,
+                    noise.TryGetValue(key, out double level) ? level : 0,
+                    AnchorSuffix(key, anchorNotes), out string message))
+                {
+                    case OverrunVerdict.FloorDrift:
+                        floorDrift++;
+                        driftWarnings.Add(message);
+                        break;
+                    case OverrunVerdict.WithinNoise:
+                        noiseBand++;
+                        noiseWarnings.Add(message);
+                        break;
+                    default:
+                        failures.Add(message);
+                        break;
+                }
             }
 
-            // 分母漂移判定（2026-10-03 把人工定性协议机械化）：比值超限、但被测臂自身中位移动
-            // ≤10% 且隐含地板变快 ≥20% 时，超限来自地板窗口而非产品（实测三例：中位 -3.7%/
-            // -2.9%/-9.0%，地板 -63.5%/-33.0%/-32.9%）——只告警不 FAIL；真实退化的中位移动会
-            // 远超 10%，仍走 FAIL。地板变慢方向只会压低比值，不会触发本门禁，故无须处理。
-            string key = Key(expected.Harness, expected.Name, expected.Dialect, expected.Tier);
-            switch (Classify(expected, actual, limit, noise.TryGetValue(key, out double level) ? level : 0))
+            // 分配判定（仅 L0）：确定性指标，不设噪声带——分配上升 20% 就是回归。
+            if (checkAllocation)
             {
-                case OverrunVerdict.FloorDrift:
-                    floorDrift++;
-                    driftWarnings.Add(DriftText(expected, actual, limit));
-                    continue;
-                case OverrunVerdict.WithinNoise:
-                    noiseBand++;
-                    noiseWarnings.Add(NoiseBandText(expected, actual, limit, noise[key]));
-                    continue;
-                default:
-                    failures.Add(DescribeFailure(expected, actual, limit, baseline.Thresholds.RatioDelta)
-                        + AnchorSuffix(key, anchorNotes));
-                    break;
+                JudgeAllocation(baseline, expected, found.Item, failures);
             }
         }
 
@@ -550,12 +733,13 @@ internal static class IndexGate
     /// 取各批次的最大值（噪声水位是上界性质，与"窗口取中位数"的取值口径不同，故独立成表）。</para>
     /// <para>子集批次跳过，与其它取数口径一致。未采集该指标的夹具（Benchmarks/DapperSuite）
     /// 其 ErrorRatio 恒 0，不会触发标注。</para></summary>
-    private static Dictionary<string, double> LoadNoiseLevels(List<PerfResultEnvelope> batches)
+    private static Dictionary<string, double> LoadNoiseLevels(
+        List<PerfResultEnvelope> batches, bool includeSubsets = false)
     {
         var map = new Dictionary<string, double>(StringComparer.Ordinal);
         foreach (PerfResultEnvelope run in batches)
         {
-            if (PerfResultWriter.IsSubsetLabel(run.Label))
+            if (!includeSubsets && PerfResultWriter.IsSubsetLabel(run.Label))
             {
                 continue;
             }
@@ -587,7 +771,7 @@ internal static class IndexGate
     /// <para>中位数作用于 <c>Ratio</c>/<c>MedianUs</c>/<c>MeanUs</c> 三个字段；三者同批同源，
     /// 取中位数不破坏"地板 = 中位/比值"的自洽关系（门禁诊断按此反推隐含地板）。</para></summary>
     private static Dictionary<string, (string Harness, PerfResultItem Item)> LoadWindowItems(
-        List<PerfResultEnvelope> batches, int window)
+        List<PerfResultEnvelope> batches, int window, bool includeSubsets = false)
     {
         var samples = new Dictionary<string, List<(string Harness, PerfResultItem Item)>>(StringComparer.Ordinal);
         foreach (PerfResultEnvelope run in batches)
@@ -595,7 +779,7 @@ internal static class IndexGate
             // 批内：同名键取最差（安全方向）。includeZeroRatio：比值 0 的键也要占位，
             // 否则"最新批次已判定该项不可比"无法表达，旧批次会把它复活（见 KeyItems 文档）。
             var perBatch = new Dictionary<string, (string Harness, PerfResultItem Item)>(StringComparer.Ordinal);
-            foreach ((string harness, PerfResultItem item) in KeyItems([run], includeZeroRatio: true))
+            foreach ((string harness, PerfResultItem item) in KeyItems([run], includeZeroRatio: true, includeSubsets))
             {
                 string key = Key(harness, item.Name, item.Dialect, item.Tier);
                 if (!perBatch.TryGetValue(key, out (string Harness, PerfResultItem Item) existing)
@@ -803,14 +987,14 @@ internal static class IndexGate
     /// （2026-09-24 实测：PL-4 之后录出的 152 项基线里仍有 12 个 Build 项）。</para>
     /// <para>速览/哨兵这类只给人看的路径传 false——比值 0 的项没有可比信息，列出来是噪声。</para></summary>
     private static List<(string Harness, PerfResultItem Item)> KeyItems(
-        List<PerfResultEnvelope> latest, bool includeZeroRatio = false)
+        List<PerfResultEnvelope> latest, bool includeZeroRatio = false, bool includeSubsets = false)
     {
         var items = new List<(string, PerfResultItem)>();
         foreach (PerfResultEnvelope run in latest)
         {
             // 只有 PerfHub 的 PalORM 臂进基线：微基准由 BDN 门禁覆盖，DapperSuite 只作哨兵
             if (run.Harness != "perfhub") continue;
-            if (PerfResultWriter.IsSubsetLabel(run.Label))
+            if (!includeSubsets && PerfResultWriter.IsSubsetLabel(run.Label))
             {
                 Console.Error.WriteLine($"[PerfGate] 跳过子集批次（label={run.Label}）: {run.Timestamp}");
                 continue;
@@ -895,6 +1079,11 @@ internal sealed class IndexThresholds
 {
     /// <summary>比值恶化容忍度（相对基线的比例）。</summary>
     public double RatioDelta { get; set; } = 0.30;
+
+    /// <summary>分配恶化容忍度（PalORM 臂 AllocBytes 相对基线的比例）——只用于 L0 快线判定。
+    /// 20% 与 BDN 微基准的分配阈值同源（<c>perf-baseline.json</c> 的分配 ±20%）；分配是
+    /// <c>GC.GetTotalAllocatedBytes</c> 精确计数，正常复现性远优于该阈值。</summary>
+    public double AllocDelta { get; set; } = 0.20;
 }
 
 internal sealed class IndexBaselineItem
@@ -924,6 +1113,12 @@ internal sealed class IndexBaselineItem
     /// <summary>本项的绝对均值（µs）——仅供判读"是否只是计时离群"，不参与比值。
     /// 与中位数大幅背离说明该批次的该项不可信。</summary>
     public double MeanUs { get; set; }
+
+    /// <summary>PalORM 臂的每操作分配字节数（确定性指标）。0 = 旧基线未采集（跳过分配判定）。
+    /// <para>2026-10-24 加入：L0 快线要求"分配与比值"两个判定面（作战卡 §6.3），
+    /// 而原基线只记比值与中位，分配只在 BDN 门禁里卡。full 判定不启用分配检查，
+    /// 只有 L0 用它；旧基线文件缺该字段时按 0 跳过，向后兼容。</para></summary>
+    public long AllocBytes { get; set; }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true)]

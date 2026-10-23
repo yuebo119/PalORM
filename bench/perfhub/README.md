@@ -18,6 +18,12 @@ bash scripts/perfhub-ab.sh /c/v551 3 --dialects pg,mysql --tiers 2000,20000
 
 # 从历史 JSON 重新生成报告（不重跑）
 dotnet run --project bench/PalORM.PerfHub -- report
+
+# L0 快线（经 PerfCli：批量族 + GetAllAsync + GetByKey，约 3.5 分钟，含判定）
+dotnet run --project tools/PalORM.PerfCli -- l0
+
+# 定向操作子集（--ops 会自动打 verify- 子集标签，不顶 latest）
+dotnet run --project bench/PalORM.PerfHub -- run --dialects sqlite,mysql,pg --tiers 20000 --ops BulkInsert,GetAllAsync
 ```
 
 `--version` 记入 JSON，是版本对比与增长曲线的横轴；语义化版本号升序在前当基线，
@@ -114,6 +120,17 @@ bench/perfhub/
   report.html                              ①按组总览 ②ORM vs 地板（含门禁）③并发
                                            ④版本对比+地板归一化 ⑤b A/B 配对 ⑤增长曲线 ⑥口径声明
 ```
+
+## L0 快线（2026-10-24）
+
+覆盖批量族四形态 + GetAllAsync + GetByKey 延迟哨兵，三方言、20000 档，每次约 3.5 分钟（55 项测量、18 个判定键）。入口是 `PerfCli l0`，它串起 PerfHub 子集与 `PerfGate check-l0`。
+
+- 批次 label 固定 `verify-l0`：子集标记，不顶 `latest`、不进全量基线。
+- 判定基线是独立的 `bench/baselines/perfhub-l0-baseline.json`，由 3 个 L0 批次逐键取中位数录制（子集上下文与全量不同，不能拿全量基线判 L0）。基线含 PalORM 的 `AllocBytes`。
+- 判定：比值相对基线 +30%、分配 +20% 超限即失败；三方言缺一即失败；不做"噪声带内不判失败"降级（L0 是判据面，假 FAIL 复测一次，漏报不可接受）。
+- 单批噪声：判定窗口是最近 3 个 L0 批次的窗口中位数（与全量门禁同源，B203）。单批离群被吸收，持续回归需连续 2 个 L0 批次才越线；单批尖峰由窗口吸收是有意的。
+- 预算：沿用 2026-10-24 的全量默认（预热 0.75s / 普通 0.75s / 批量 2s），基线与该预算同源。
+- 重新录制：`dotnet run --project tools/PalORM.PerfGate -- record-l0 --out bench/baselines/perfhub-l0-baseline.json --batches 3`（覆盖或预算变更后）。
 
 ## 未覆盖维度（如实声明）
 
