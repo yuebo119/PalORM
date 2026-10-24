@@ -70,6 +70,16 @@ internal sealed class AotSummary
     public string Value { get; set; } = "";
 }
 
+// 租户直绑（S5）的 AOT 载体：插入自动绑定 WithTenant 值，读取自动按租户过滤
+[TenantAware]
+[Table("aot_tenant_test")]
+internal sealed partial class AotTenantEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("tenant_id")] public long TenantId { get; set; }
+}
+
 internal static class Program
 {
     internal static async Task Main()
@@ -177,6 +187,11 @@ internal static class Program
                 throw new InvalidOperationException("Bulk soft DELETE metadata failed");
 
             await VerifyExpressionBuildersAsync(db).ConfigureAwait(false);
+
+            await VerifyAggregatePagingStreamingAsync(db).ConfigureAwait(false);
+            await VerifyExplicitTransactionAsync(db).ConfigureAwait(false);
+            await VerifyTenantIsolationAsync(options).ConfigureAwait(false);
+            await VerifyPoolAndInterceptorAsync(db, options).ConfigureAwait(false);
 
             int deleted = await db.DeleteAsync<AotEntity>(inserted.Id).ConfigureAwait(false);
             if (deleted != 1 || await db.GetAsync<AotEntity>(inserted.Id).ConfigureAwait(false) is not null)
@@ -308,6 +323,158 @@ internal static class Program
             throw new InvalidOperationException("AsSplitQuery failed");
     }
 
+    /// <summary>聚合、键集分页、流式物化、多结果集 GridReader、部分更新、更新形态 DryRun 的
+    /// 原生 AOT 执行验证——此前这些族的 AOT 兼容性是未验证声明（对账缺口 r25）。</summary>
+    private static async Task VerifyAggregatePagingStreamingAsync(DataSession<SqliteProvider> db)
+    {
+        // aot_child 此时有 3 行（c0/c1/renamed）——表达式构建器验证已铺好数据
+        if (await db.CountAsync<AotChildEntity>().ConfigureAwait(false) != 3)
+            throw new InvalidOperationException("CountAsync failed");
+
+        (List<AotChildEntity> firstPage, long total) = await db.From<AotChildEntity>()
+            .ToPageAsync(2, static c => c.Id, descending: true).ConfigureAwait(false);
+        if (total != 3 || firstPage.Count != 2)
+            throw new InvalidOperationException("ToPageAsync first page failed");
+        // 键集续页锚点是上一页**末行**的 orderBy 键值（ToPageAsync 契约），不是首行
+        List<AotChildEntity> secondPage = (await db.From<AotChildEntity>()
+                .ToPageAsync(2, static c => c.Id, firstPage[^1].Id, descending: true).ConfigureAwait(false))
+            .Rows;
+        if (secondPage.Count != 1 || secondPage[0].Id >= firstPage[^1].Id)
+            throw new InvalidOperationException("ToPageAsync keyset continuation failed");
+
+        int streamed = 0;
+        await foreach (AotChildEntity _ in db.QueryAsyncEnumerable<AotChildEntity>(
+                           $"SELECT * FROM aot_child").ConfigureAwait(false))
+            streamed++;
+        if (streamed != 3)
+            throw new InvalidOperationException("QueryAsyncEnumerable failed");
+
+        // CA2007：await using 的隐式 Dispose await 无法挂 ConfigureAwait，改 try/finally 显式释放
+        GridReader grid = await db.From<AotChildEntity>()
+            .QueryMultipleAsync($"SELECT * FROM aot_child; SELECT * FROM aot_child WHERE label = {"c0"}")
+            .ConfigureAwait(false);
+        try
+        {
+            List<AotChildEntity> all = await grid.ReadAsync<AotChildEntity>().ConfigureAwait(false);
+            AotChildEntity? single = await grid.ReadFirstAsync<AotChildEntity>().ConfigureAwait(false);
+            if (all.Count != 3 || single?.Label != "c0")
+                throw new InvalidOperationException("QueryMultipleAsync/GridReader failed");
+        }
+        finally
+        {
+            await grid.DisposeAsync().ConfigureAwait(false);
+        }
+
+        AotEntity partial = await db.InsertAsync(new AotEntity { Value = "before" }).ConfigureAwait(false);
+        partial.Value = "after";
+        if (await db.UpdateColumnsAsync(partial, static e => e.Value).ConfigureAwait(false) != 1
+            || await db.ScalarAsync<long>(
+                   $"SELECT COUNT(*) FROM aot_test WHERE id = {partial.Id:N0} AND value = {"after"}")
+               .ConfigureAwait(false) != 1)
+            throw new InvalidOperationException("UpdateColumnsAsync failed");
+
+        string dryRunUpdate = db.From<AotChildEntity>()
+            .Set(static c => c.Label, "dry").Where($"label = {"renamed"}").AsDryRun().Sql;
+        if (!dryRunUpdate.Contains("SET", StringComparison.Ordinal))
+            throw new InvalidOperationException("update-shaped DryRun failed");
+    }
+
+    /// <summary>显式事务（Begin/Commit）+ savepoint 回滚的原生 AOT 执行验证。
+    /// <para>lambda 式 <c>WithTransaction</c> 已由 PG 臂覆盖；SQLite 臂补显式形态与
+    /// savepoint 分支（RollbackToAsync 路径在 JIT 侧由集成测试锁定，AOT 侧此前无锚点）。</para></summary>
+    private static async Task VerifyExplicitTransactionAsync(DataSession<SqliteProvider> db)
+    {
+        // CA2007：await using 的隐式 Dispose await 无法挂 ConfigureAwait，改 try/finally 显式释放
+        System.Data.Common.DbTransaction tx = await db.BeginTransactionAsync().ConfigureAwait(false);
+        try
+        {
+            await db.InsertAsync(new AotEntity { Value = "tx-kept" }).ConfigureAwait(false);
+            await db.SavepointAsync(tx, "sp1").ConfigureAwait(false);
+            await db.InsertAsync(new AotEntity { Value = "tx-rolled-back" }).ConfigureAwait(false);
+            await db.RollbackToAsync(tx, "sp1").ConfigureAwait(false);
+            await tx.CommitAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            await tx.DisposeAsync().ConfigureAwait(false);
+        }
+        if (await db.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM aot_test WHERE value = {"tx-kept"}").ConfigureAwait(false) != 1
+            || await db.ScalarAsync<long>(
+                   $"SELECT COUNT(*) FROM aot_test WHERE value = {"tx-rolled-back"}").ConfigureAwait(false) != 0)
+            throw new InvalidOperationException("explicit transaction + savepoint failed");
+    }
+
+    /// <summary>租户过滤的原生 AOT 执行验证：WithTenant 是**读取侧**过滤器
+    /// （[TenantAware] 实体自动附加 WHERE tenant_id = @value，写入值来自实体属性——
+    /// 与集成测试同口径）；租户作用域拼装是源生成物化路径的一部分。
+    /// <para>独立会话：<see cref="DataSession{TProvider}.IgnoreFilters"/> 是会话粘性
+    /// 标志且无公开复位 API（既定契约）——主冒烟流的软删断言已调用过，在同一会话上
+    /// 做租户过滤验证会被静默跳过；独立会话同时覆盖同库多会话形态。方法末尾的
+    /// IgnoreFilters 断言必须在会话的最后一个操作位（之后本会话不再做过滤查询）。</para></summary>
+    private static async Task VerifyTenantIsolationAsync(DbOptions options)
+    {
+        DataSession<SqliteProvider> db = await DataSession<SqliteProvider>.CreateAsync(options)
+            .ConfigureAwait(false);
+        await using (db.ConfigureAwait(false))
+        {
+            db.WithTenant(1L);
+            await db.InsertAsync(new AotTenantEntity { Name = "t1-a", TenantId = 1 }).ConfigureAwait(false);
+            await db.InsertAsync(new AotTenantEntity { Name = "t1-b", TenantId = 1 }).ConfigureAwait(false);
+            await db.InsertAsync(new AotTenantEntity { Name = "t2-a", TenantId = 2 }).ConfigureAwait(false);
+
+            List<AotTenantEntity> mine = await db.GetAllAsync<AotTenantEntity>().ConfigureAwait(false);
+            List<AotTenantEntity> builderView = await db.From<AotTenantEntity>().ToListAsync().ConfigureAwait(false);
+            if (mine.Count != 2 || builderView.Count != 2
+                || mine.Any(static row => row.TenantId != 1L))
+                throw new InvalidOperationException(
+                    $"tenant filter failed: GetAll={mine.Count}, builder={builderView.Count}, "
+                    + $"ids=[{string.Join(",", mine.Select(static r => r.TenantId))}]");
+
+            db.WithTenant(2L);
+            if ((await db.GetAllAsync<AotTenantEntity>().ConfigureAwait(false)).Count != 1)
+                throw new InvalidOperationException("tenant isolation failed");
+
+            // 必须是本会话最后一个过滤相关断言（粘性标志，见方法注释）
+            if ((await db.IgnoreFilters().GetAllAsync<AotTenantEntity>().ConfigureAwait(false)).Count != 3)
+                throw new InvalidOperationException("IgnoreFilters cross-tenant view failed");
+        }
+    }
+
+    /// <summary>会话池（S7）与查询拦截器的原生 AOT 执行验证：池租还/复用与
+    /// 拦截器委托分派此前均无 AOT 锚点（对账缺口 r25）。</summary>
+    private static async Task VerifyPoolAndInterceptorAsync(
+        DataSession<SqliteProvider> db, DbOptions options)
+    {
+        var interceptor = new CountingInterceptor();
+        db.AddInterceptor(interceptor);
+        // 拦截面在 builder 执行管线（ITM-582：COUNT 族不经过 IQueryInterceptor）
+        _ = await db.From<AotChildEntity>().ToListAsync().ConfigureAwait(false);
+        if (interceptor.BeforeCount == 0 || interceptor.AfterCount == 0)
+            throw new InvalidOperationException("interceptor callbacks not dispatched");
+
+        DataSessionPool<SqliteProvider> pool = DataSessionPool<SqliteProvider>.Create(options, maxIdleSize: 1);
+        try
+        {
+            DataSession<SqliteProvider> rented = await pool.RentAsync().ConfigureAwait(false);
+            AotEntity pooled = await rented.InsertAsync(new AotEntity { Value = "pooled" })
+                .ConfigureAwait(false);
+            if (pooled.Id <= 0)
+                throw new InvalidOperationException("pooled session INSERT failed");
+            // 租约会话 Dispose 即归还池（MarkPooled 机制，TryReturn 是 internal 通道）
+            await rented.DisposeAsync().ConfigureAwait(false);
+
+            DataSession<SqliteProvider> reused = await pool.RentAsync().ConfigureAwait(false);
+            if (await reused.CountAsync<AotEntity>().ConfigureAwait(false) < 1)
+                throw new InvalidOperationException("pooled session reuse failed");
+            await reused.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            await pool.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
     /// <summary>byte[] 列的 AOT 全链验证：参数化等值过滤（含 0x00 字节）+ 物化往返 + 可空列 NULL 守卫。</summary>
     private static async Task VerifyBinaryColumnAsync(
         DataSession<SqliteProvider> db, AotEntity inserted, AotEntity fetched)
@@ -331,5 +498,20 @@ internal static class Program
             .ConfigureAwait(false);
         if (rows.Count != 1 || rows[0].Id != id || rows[0].Value != "AOT works!")
             throw new InvalidOperationException("[Projection] materialization failed");
+    }
+
+    // 拦截器委托分派的 AOT 载体：OnError 契约为不抛（本冒烟无错误路径，空体即契约）
+    private sealed class CountingInterceptor : IQueryInterceptor
+    {
+        internal int BeforeCount;
+        internal int AfterCount;
+
+        public void OnBefore(QueryContext context) => BeforeCount++;
+
+        public void OnAfter(QueryContext context, TimeSpan elapsed, int rowCount) => AfterCount++;
+
+        public void OnError(QueryContext context, Exception exception)
+        {
+        }
     }
 }
