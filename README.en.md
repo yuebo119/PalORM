@@ -21,13 +21,13 @@ A Roslyn source generator produces SQL construction, parameter binding, object m
 
 - **Compile-time safety net**: 45 Roslyn diagnostics move failures that would otherwise be runtime crashes or silently wrong data — a missing `[Key]`, a nullable tenant column bypassing isolation, an optimistic-lock baseline of 0, N+1 queries in loops — to compile time, with errors jumping to the declaration site
 - **Full-pipeline Native AOT**: the only ORM in the .NET ecosystem with publish verification passing on all three dialects — no reflection, no IL Emit, no runtime code generation; the SQLite publish exe is just 4.5 MB
-- **Floor-level performance**: single-row CRUD is in the same range as the hand-written ADO.NET floor (0.76~1.06×); bulk writes automatically take the fastest per-dialect path (PG Binary COPY, MySQL LOAD DATA, single-statement bulk UPDATE, SQLite multi-value VALUES); 20,000-row BulkInsert allocates ~19% of Dapper (SQLite; 5%~7% on remote dialects); the bulk family is generally faster than Dapper (0.10~0.87× at the 20,000 tier); Web-style request-per-session deployments get a built-in session pool (measured P99 −18%, Gen0 collections −58% at 32 concurrent)
+- **Floor-level performance**: single-row CRUD is in the same range as the hand-written ADO.NET floor (0.73~1.12×); bulk writes automatically take the fastest per-dialect path (PG Binary COPY, MySQL LOAD DATA, single-statement bulk UPDATE, SQLite multi-value VALUES); 20,000-row BulkInsert allocates ~19% of Dapper (SQLite; 5%~7% on remote dialects); the bulk family is generally faster than Dapper (0.10~0.93× at the 20,000 tier); Web-style request-per-session deployments get a built-in session pool (measured P99 −18%, Gen0 collections −58% at 32 concurrent)
 - **Enterprise cross-cutting out of the box**: multi-tenant column isolation (queries plus Update/Delete/Bulk get the tenant predicate automatically; the tenant column is immutable on update, while Insert carries it from the entity), optimistic locking, soft delete, audit interceptor (`Set()` values for sensitive columns are masked), read/write splitting, advisory locks, resilient retry + circuit breaker (zero Polly dependency)
 - **Zero-dependency core**: PalORM.Core references no third-party NuGet packages (BCL + ADO.NET abstractions only); SQLite supports at-rest AES-256 encryption via the SQLite3MC driver
 
 > Detailed docs (in Chinese) live under [docs/](docs/) — [API reference](docs/API参考.md), [architecture](docs/架构设计.md), [AOT deployment guide](docs/AOT部署指南.md), [benchmark methodology](docs/性能基准规范.md).
 
-See [Performance](#-performance) for measurement details (2026-10-23 benchmark batch).
+See [Performance](#-performance) for measurement details (2026-10-24 benchmark batch).
 
 ---
 
@@ -132,7 +132,7 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 > **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC2 · SQLite temp-file DB (WAL + 64 MB cache + mmap) · PG 18.6 / MySQL 8.4.11 local containers · Dapper 2.1.89. Three arms (ADO.NET / Dapper / PalORM) collected in the same process and same round with identical connection settings; each arm uses its ecosystem's idiomatic best-practice code (ADO.NET is the hand-written performance floor).
 >
-> **Data batches**: 2026-10-23 19:24 `PerfCli full` batch (`history-20261023-192405.json`, 416 items, medians + exact allocation counts). Latency = full-path median; allocation = exact counts (1024-based). Since this batch, QueryAll/StreamAll/GetAllAsync are measured with the three arms interleaved (ADO→Dapper→PalORM back to back per operation, first pass discarded as warm-up), so their P/ADO ratios are free of implementation-phase ordering; the remaining items still run per-arm phases and the remote floor can swing 2~3× between batches, so cross-batch absolute ratios are not comparable. Allocation is deterministic and stable across batches. SQLite local-file-DB absolute latency is also affected by the OS page cache (this batch: GetByKey 20K 6.2~7.3 µs across the three arms, a cache state). Same-batch gate: BDN 27/27, index 171 items 0 FAIL (0 anchor diagnostics). Full methodology and reproduction commands: [benchmark methodology](docs/性能基准规范.md) (Chinese) and `bench/perfhub/report.html` (the same-day BDN gate matrix numbers are also in that report).
+> **Data batch**: 2026-10-24 11:59 `PerfCli full` batch (`history-20261024-115921.json`, 416 items, medians + exact allocation counts). Same-batch gate: BDN 27/27, index 171 items 0 FAIL.
 
 **Legend** (shared by latency and allocation, baseline = hand-written ADO.NET floor; positive % = slower/more than baseline):
 🟢 strong win ≤−30% · 🟩 mid win −29%~−10% · 🔹 slight win −9%~−1% · 🔸 slight loss +1%~+9% · 🟧 mid loss +10%~+29% · 🟥 strong loss ≥+30% · **bold** = outside the 1.3×/0.7× significant band.
@@ -141,24 +141,22 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 | Operation | Tier | SQLite | PostgreSQL | MySQL |
 |------|---:|:---:|:---:|:---:|
-| GetByKey | 2K | 5.9 µs→6.0 µs 1.02 | 211 µs→213 µs 1.01 | 267 µs→207 µs 0.78 |
-| GetByKey | 20K | 6.2 µs→6.6 µs 1.06 | 210 µs→217 µs 1.03 | 221 µs→194 µs 0.88 |
-| QueryAll | 2K | 969 µs→993 µs 1.02 | 683 µs→698 µs 1.02 | 1.19 ms→1.19 ms 1.00 |
-| QueryAll | 20K | 9.83 ms→10.19 ms 1.04 | 5.21 ms→5.23 ms 1.00 | 8.05 ms→8.38 ms 1.04 |
-| StreamAll | 2K | 963 µs→1.03 ms 1.07 | 681 µs→722 µs 1.06 | 1.15 ms→1.29 ms 1.11 |
-| StreamAll | 20K | 9.66 ms→10.66 ms 1.10 | 5.01 ms→5.23 ms 1.04 | 7.70 ms→8.70 ms 1.13 |
-| Insert | 2K | 17.6 µs→17.4 µs 0.99 | 1.42 ms→1.45 ms 1.02 | 4.27 ms→3.97 ms 0.93 |
-| Update | 2K | 7.3 µs→7.1 µs 0.97 | 1.46 ms→1.45 ms 0.99 | 276 µs→209 µs 0.76 |
-| BulkInsert | 2K | 17.01 ms→17.30 ms 1.02 | 4.93 ms→5.01 ms 1.02 | 12.74 ms→12.45 ms 0.98 |
-| BulkInsert | 20K | 158.48 ms→161.65 ms 1.02 | 22.04 ms→21.80 ms 0.99 | 57.88 ms→71.11 ms 1.23 |
-| BulkUpdate | 2K | 2.57 ms→2.47 ms 0.96 | 5.61 ms→5.84 ms 1.04 | 12.48 ms→10.60 ms 0.85 |
-| BulkUpdate | 20K | 26.32 ms→26.72 ms 1.02 | 69.02 ms→74.38 ms 1.08 | 94.97 ms→89.78 ms 0.95 |
-| BulkDelete | 2K | 7.14 ms→5.15 ms 0.72 | 3.82 ms→2.49 ms **0.65** | 12.94 ms→12.52 ms 0.97 |
-| BulkDelete | 20K | 68.81 ms→36.58 ms **0.53** | 27.63 ms→11.20 ms **0.41** | 78.63 ms→70.20 ms 0.89 |
-| UpsertBatch | 2K | 16.27 ms→16.83 ms 1.03 | 13.47 ms→7.84 ms **0.58** | 9.54 ms→8.30 ms 0.87 |
-| UpsertBatch | 20K | 153.15 ms→154.01 ms 1.01 | 131.75 ms→81.11 ms **0.62** | 80.67 ms→80.56 ms 1.00 |
-
-**How to read**: bulk write paths are in the same range as the ADO.NET floor (0.41~1.23), with the dialect-specific fast paths still clear: PG BulkDelete 0.41~0.65, PG UpsertBatch 0.58~0.62, SQLite BulkDelete 0.53~0.72; MySQL BulkInsert 20K 1.23 is the only bulk item above 1.2 in this batch. Bulk items still run per-arm phases, and ADO's per-row floor state can make the same PalORM implementation read 0.30~1.25 across batches, so judge by PalORM's absolute time series. Single-row CRUD is in the same range as the floor (0.76~1.06). The three read items (QueryAll/StreamAll/GetAllAsync) are now interleaved same-state, with P/ADO 1.00~1.13; the MySQL 2K/20K gaps seen in earlier batches (1.23~1.76) came from the same-shape floor splitting between early and late phases, and this batch has zero anchor diagnostics.
+| GetByKey | 2K | 5.7 µs→5.9 µs 1.04 | 200 µs→200 µs 1.00 | 275 µs→210 µs 0.76 |
+| GetByKey | 20K | 6.1 µs→6.3 µs 1.03 | 203 µs→216 µs 1.06 | 183 µs→205 µs 1.12 |
+| QueryAll | 2K | 969 µs→952 µs 0.98 | 656 µs→661 µs 1.01 | 1.29 ms→1.20 ms 0.93 |
+| QueryAll | 20K | 9.77 ms→9.56 ms 0.98 | 4.98 ms→5.08 ms 1.02 | 7.77 ms→7.49 ms 0.96 |
+| StreamAll | 2K | 943 µs→992 µs 1.05 | 667 µs→673 µs 1.01 | 1.21 ms→1.33 ms 1.10 |
+| StreamAll | 20K | 9.74 ms→9.99 ms 1.03 | 4.85 ms→5.01 ms 1.03 | 7.57 ms→8.15 ms 1.08 |
+| Insert | 2K | 17.5 µs→17.8 µs 1.02 | 1.34 ms→1.33 ms 1.00 | 4.86 ms→3.93 ms 0.81 |
+| Update | 2K | 7.0 µs→7.1 µs 1.01 | 1.35 ms→1.38 ms 1.02 | 281 µs→205 µs 0.73 |
+| BulkInsert | 2K | 15.88 ms→16.63 ms 1.05 | 4.89 ms→4.64 ms 0.95 | 13.71 ms→10.97 ms 0.80 |
+| BulkInsert | 20K | 159.81 ms→159.05 ms 1.00 | 19.64 ms→20.47 ms 1.04 | 55.72 ms→53.56 ms 0.96 |
+| BulkUpdate | 2K | 2.38 ms→2.43 ms 1.02 | 5.41 ms→5.33 ms 0.99 | 12.19 ms→8.82 ms 0.72 |
+| BulkUpdate | 20K | 26.72 ms→26.57 ms 0.99 | 66.32 ms→68.26 ms 1.03 | 79.00 ms→80.09 ms 1.01 |
+| BulkDelete | 2K | 6.36 ms→5.04 ms 0.79 | 3.54 ms→2.53 ms 0.72 | 13.92 ms→11.85 ms 0.85 |
+| BulkDelete | 20K | 67.69 ms→35.50 ms **0.52** | 27.83 ms→10.65 ms **0.38** | 75.84 ms→69.53 ms 0.92 |
+| UpsertBatch | 2K | 16.01 ms→16.41 ms 1.03 | 12.56 ms→7.62 ms **0.61** | 9.15 ms→7.97 ms 0.87 |
+| UpsertBatch | 20K | 154.46 ms→151.45 ms 0.98 | 128.15 ms→78.95 ms **0.62** | 73.55 ms→75.61 ms 1.03 |
 
 ### SQLite detail · Latency and allocation (three arms)
 
@@ -166,39 +164,37 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| GetByKey | 2K | 5.9 µs | 7.2 µs | 6.0 µs | 1.02🔸 | 0.83🟩 | 2.1/2.8/2.2 KB | +34% / +6% |
-| GetByKey | 20K | 6.2 µs | 7.3 µs | 6.6 µs | 1.06🔸 | 0.90🟩 | 2.1/2.8/2.2 KB | +34% / +6% |
-| QueryAll | 2K | 969 µs | 1.39 ms | 993 µs | 1.02🔸 | 0.71🟩 | 308/513/293 KB | +66% / −5% |
-| QueryAll | 20K | 9.83 ms | 14.39 ms | 10.19 ms | 1.04🔸 | 0.71🟩 | 3.3/5.3/2.9 MB | +61% / −11% |
-| StreamAll | 2K | 963 µs | 1.43 ms | 1.03 ms | 1.07🔸 | 0.72🟩 | 276/481/278 KB | +74% / +1% |
-| StreamAll | 20K | 9.66 ms | 14.59 ms | 10.66 ms | 1.10🟧 | 0.73🟩 | 2.8/4.8/2.8 MB | +72% / +0% |
-| Insert | 2K | 17.6 µs | 18.1 µs | 17.4 µs | 0.99🔹 | 0.96🔹 | 2.8/3.6/2.7 KB | +28% / −2% |
-| Update | 2K | 7.3 µs | 7.8 µs | 7.1 µs | 0.97🔹 | 0.91🔹 | 2.6/3.3/3.1 KB | +30% / +21% |
-| InsertReturningId | 2K | 27.5 µs | 28.2 µs | 27.5 µs | 1.00⚪ | 0.98🔹 | 1.9/2.3/2.3 KB | +24% / +22% |
+| GetByKey          | 2K  | 5.7 µs  | 6.8 µs   | 5.9 µs  | 1.04🔸     | 0.87🟩     | 2.1/2.8/2.2 KB | +34% / +6%   |
+| GetByKey          | 20K | 6.1 µs  | 7.1 µs   | 6.3 µs  | 1.03🔸     | 0.89🟩     | 2.1/2.8/2.2 KB | +33% / +6%   |
+| QueryAll          | 2K  | 969 µs  | 1.36 ms  | 952 µs  | 0.98🔹     | 0.70🟩     | 308/513/292 KB | +66% / -5%   |
+| QueryAll          | 20K | 9.77 ms | 13.84 ms | 9.56 ms | 0.98🔹     | **0.69**🟢 | 3.3/5.3/2.9 MB | +61% / -11%  |
+| StreamAll         | 2K  | 943 µs  | 1.37 ms  | 992 µs  | 1.05🔸     | 0.72🟩     | 276/481/278 KB | +74% / +1%   |
+| StreamAll         | 20K | 9.74 ms | 13.87 ms | 9.99 ms | 1.03🔸     | 0.72🟩     | 2.8/4.8/2.8 MB | +72% / 0%    |
+| Insert            | 2K  | 17.5 µs | 18.1 µs  | 17.8 µs | 1.02🔸     | 0.98🔹     | 2.8/3.6/2.7 KB | +27% / -2%   |
+| Update            | 2K  | 7.0 µs  | 7.7 µs   | 7.1 µs  | 1.01🔸     | 0.92🔹     | 2.6/3.3/3.1 KB | +30% / +21%  |
+| InsertReturningId | 2K  | 26.3 µs | 27.5 µs  | 27.4 µs | 1.04🔸     | 1.00⚪      | 1.9/2.3/2.3 KB | +24% / +23%  |
 
 **Bulk operations**
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| BulkInsert | 2K | 17.01 ms | 107.96 ms | 17.30 ms | 1.02🔸 | **0.16🟢** | 1.7/8.0/1.6 MB | +373% / −6% |
-| BulkInsert | 20K | 158.48 ms | 1090.59 ms | 161.65 ms | 1.02🔸 | **0.15🟢** | 14.9/79.5/14.8 MB | +433% / −1% |
-| BulkUpdate | 2K | 2.57 ms | 8.93 ms | 2.47 ms | 0.96🔹 | **0.28🟢** | 1.7/6.4/1.8 MB | +280% / +4% |
-| BulkUpdate | 20K | 26.32 ms | 95.91 ms | 26.72 ms | 1.02🔸 | **0.28🟢** | 17.0/64.5/17.6 MB | +279% / +4% |
-| BulkDelete | 2K | 7.14 ms | 22.74 ms | 5.15 ms | 0.72🟩 | **0.23🟢** | 630 KB/1.6 MB/369 KB | +154% / −41% |
-| BulkDelete | 20K | 68.81 ms | 223.07 ms | 36.58 ms | **0.53🟢** | **0.16🟢** | 6.1/15.6/2.7 MB | +155% / −57% |
-| UpsertBatch | 2K | 16.27 ms | 105.80 ms | 16.83 ms | 1.03🔸 | **0.16🟢** | 1.7/8.0/1.6 MB | +379% / −4% |
-| UpsertBatch | 20K | 153.15 ms | 1074.10 ms | 154.01 ms | 1.01🔸 | **0.14🟢** | 14.8/79.6/14.8 MB | +439% / −0% |
-
-The four bulk shapes match the ADO.NET floor line by line (P/ADO 0.53~1.03); BulkDelete beats the floor via pooled command and parameter reuse (full batches only write `Value`; 0.53 at the 20K tier); Dapper's multi-value INSERT at the 20K tier is 6.7× slower with 5.4× allocations due to giant SQL string construction.
+| BulkInsert  | 2K  | 15.88 ms  | 105.64 ms  | 16.63 ms  | 1.05🔸     | **0.16**🟢 | 1.7/7.9/1.6 MB       | +374% / -6%  |
+| BulkInsert  | 20K | 159.81 ms | 1083.79 ms | 159.05 ms | 1.00⚪      | **0.15**🟢 | 14.9/79.5/14.7 MB    | +433% / -1%  |
+| BulkUpdate  | 2K  | 2.38 ms   | 8.76 ms    | 2.43 ms   | 1.02🔸     | **0.28**🟢 | 1.7/6.4/1.8 MB       | +280% / +4%  |
+| BulkUpdate  | 20K | 26.72 ms  | 93.63 ms   | 26.57 ms  | 0.99🔹     | **0.28**🟢 | 17.0/64.5/17.6 MB    | +279% / +4%  |
+| BulkDelete  | 2K  | 6.36 ms   | 22.10 ms   | 5.04 ms   | 0.79🟩     | **0.23**🟢 | 627 KB/1.6 MB/368 KB | +155% / -41% |
+| BulkDelete  | 20K | 67.69 ms  | 219.37 ms  | 35.50 ms  | **0.52**🟢 | **0.16**🟢 | 6.1/15.6/2.6 MB      | +155% / -57% |
+| UpsertBatch | 2K  | 16.01 ms  | 106.00 ms  | 16.41 ms  | 1.03🔸     | **0.15**🟢 | 1.7/8.0/1.6 MB       | +379% / -4%  |
+| UpsertBatch | 20K | 154.46 ms | 1064.20 ms | 151.45 ms | 0.98🔹     | **0.14**🟢 | 14.8/79.6/14.7 MB    | +439% / 0%   |
 
 **Transactions**
 
 | Operation | Tier | ADO.NET | Dapper | PalORM | P/ADO | P/Dapper | Alloc A/D/P | Alloc ΔADO (D/P) |
 |------|---:|---:|---:|---:|:---:|:---:|:---:|:---:|
-| TxSingleInsert | 2K | 19.4 µs | 20.4 µs | 19.9 µs | 1.03🔸 | 0.98🔹 | 4.0/4.8/4.6 KB | +20% / +15% |
-| TxHundredInserts | 2K | 196 µs | 250 µs | 184 µs | 0.94🔹 | 0.73🟩 | 137/220/93.0 KB | +61% / −32% |
-| TxBulkInsert | 2K | 16.83 ms | 108.38 ms | 16.87 ms | 1.00⚪ | **0.16🟢** | 1.7/8.0/1.6 MB | +373% / −6% |
-| TxRollback | 2K | 612 µs | 2.21 ms | 646 µs | 1.06🔸 | **0.29🟢** | 435 KB/1.6 MB/437 KB | +279% / +1% |
+| TxSingleInsert   | 2K  | 19.7 µs  | 20.6 µs   | 19.8 µs  | 1.01🔸     | 0.96🔹     | 4.1/4.8/4.5 KB       | +16% / +9%   |
+| TxHundredInserts | 2K  | 192 µs   | 249 µs    | 184 µs   | 0.95🔹     | 0.74🟩     | 137/220/93.0 KB      | +61% / -32%  |
+| TxBulkInsert     | 2K  | 16.15 ms | 107.83 ms | 16.47 ms | 1.02🔸     | **0.15**🟢 | 1.7/8.0/1.6 MB       | +375% / -6%  |
+| TxRollback       | 2K  | 587 µs   | 2.15 ms   | 639 µs   | 1.09🔸     | **0.30**🟢 | 435 KB/1.6 MB/437 KB | +279% / +1%  |
 
 ### Specialized measurements
 
