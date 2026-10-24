@@ -446,13 +446,21 @@ void FixtureVerifyPhase(string aiScripts, string tmpDir)
 void FixtureSdkPin(string root)
 {
     Console.WriteLine("\n─── SDK pin ───");
-    // rollForward: latestMinor 语义——global.json 是下限锚点，实跑 SDK 允许同 band 更高版本
+    // rollForward: latestFeature 语义——global.json 是 band 锚点，实跑 SDK 允许同 feature band
+    // 更高 patch（CI runner 装 10.0.402 而钉版 10.0.401 属预期合法态，2026-10-24 CI 实测）。
+    // 故比较 feature band（major.minor.bandDigit，如 10.0.4xx 的 "10.0.4"）而非完整三位。
+    string BandOf(string v)
+    {
+        var m = Regex.Match(v, "^(\\d+\\.\\d+\\.\\d)\\d*");
+        return m.Success ? m.Groups[1].Value : "";
+    }
     var pinMatch = Regex.Match(File.ReadAllText(Path.Combine(root, "global.json")), "\"version\"\\s*:\\s*\"(\\d+\\.\\d+\\.\\d+)");
     var sdkVersion = RunCapture("dotnet", "--version").Trim();
-    var sdkMatch = Regex.Match(sdkVersion, "^(\\d+\\.\\d+\\.\\d+)");
-    if (!pinMatch.Success || !sdkMatch.Success || pinMatch.Groups[1].Value != sdkMatch.Groups[1].Value)
+    var pinBand = BandOf(pinMatch.Groups[1].Value);
+    var sdkBand = BandOf(sdkVersion);
+    if (pinBand.Length == 0 || sdkBand.Length == 0 || pinBand != sdkBand)
     {
-        Bail($"FAIL 当前 SDK band({sdkMatch.Groups[1].Value}) 与 global.json band({pinMatch.Groups[1].Value}) 不一致");
+        Bail($"FAIL 当前 SDK band({sdkVersion}) 与 global.json band({pinMatch.Groups[1].Value}) 不一致");
         return;
     }
     // ci.yml 已收敛为调用 verify.yml 的 14 行空壳（job 全部在 verify.yml）——SDK 断言改查 verify.yml（真源）
