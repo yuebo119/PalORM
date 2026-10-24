@@ -32,7 +32,7 @@
     <!-- NuGet -->
     <Authors>PalDDD</Authors>
     <Copyright>© 2026 PalDDD</Copyright>
-    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
     <!-- NuGet 包版本（中央管理，避免 6 个 src csproj 各自硬编码漂移）。

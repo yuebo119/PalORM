@@ -117,4 +117,4 @@ scripts/                — 通用脚本（基准/测试环境/包验证）
 
 ## 许可证
 
-AGPL v3 — 见 [LICENSE](LICENSE)
+Apache-2.0 — 见 [LICENSE](LICENSE)

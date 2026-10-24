@@ -7,7 +7,7 @@
 [![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [![Native AOT](https://img.shields.io/badge/Native_AOT-3_dialects_verified-512BD4)](docs/AOT部署指南.md)
 [![Diagnostics](https://img.shields.io/badge/Compile--time_diagnostics-45_rules-512BD4)](docs/API参考.md)
@@ -114,7 +114,7 @@ See [Performance](#-performance) for measurement details (2026-10-24 benchmark b
 | **BulkInsert memory** | ≈ 19% of Dapper | baseline | highest (ChangeTracker) | medium |
 | **Core NuGet dependencies** | zero | zero | high (multi-package) | medium |
 | **Target frameworks** | net11.0 (single target) | multi-target (netstandard2.0+) | multi-target (net8+) | multi-target (netstandard2.0+) |
-| **License** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
+| **License** | Apache-2.0 | Apache-2.0 | MIT | Apache-2.0 |
 
 Core differentiators: compile-time generation + full-pipeline AOT compatibility + per-dialect bulk strategies (COPY / BulkCopy / multi-value / arrays). Dapper is fast but reflects at runtime; EF Core is feature-complete but heavy at runtime with AOT still experimental; RepoDb is also a micro-ORM but has no source generation, and its bulk support is SQL Server only.
 
@@ -844,7 +844,7 @@ Issues and PRs are welcome. Before submitting, run the relevant test suites and 
 
 ## 📄 License
 
-[AGPL-3.0-only](LICENSE)
+[Apache-2.0](LICENSE)
 
 <div align="right">
 
