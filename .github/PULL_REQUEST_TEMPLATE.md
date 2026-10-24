@@ -4,6 +4,7 @@
 - [ ] `dotnet build -c Debug` 0 警告 0 错误
 - [ ] 全量重建（`--no-incremental`）通过
 - [ ] AOT 项目（`AotTest.Pg` / `AotTest.MySql`）单独验证
+- [ ] 新增/变更公开 API 时同步扩展 AotTest 覆盖（AOT 兼容是运行时验证属性，未进 AotTest 的 API 均为未验证声明）
 - [ ] CI 干净环境 `dotnet restore` 通过（NuGet.Config packageSourceMapping 约束的包在 CI 源可用）
 
 ## 测试验证

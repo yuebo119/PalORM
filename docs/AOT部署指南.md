@@ -138,13 +138,23 @@ AOT 部署前逐项确认：
 
 如需聚合这些类型，建议先 `MaxAsync<T, long>` 取基础类型，再在应用层显式构造目标类型。
 
+## 消费方须知（2026-10 补录）
+
+三条部署级事实，避免常见的错误预期：
+
+**零 rooting 配置**。PalORM 不需要 `TrimmerRootAssembly`、`DynamicDependency` 或任何裁剪保留配置：实体元数据全部由源生成器在编译期展开，裁剪器对每条引用都静态可见。消费方为 PalORM 追加 rooting 配置属画蛇添足，还可能掩盖同应用内其他库的真实裁剪问题。
+
+**运行时安全工具会失明**。基于 CLR Profiling API + IL 改写的运行时安全探针（IAST/RASP 类）在 NativeAOT 进程内整条链路失效，且失效是静默的：应用正常、探针不报错，零告警与"应用干净"在安全平台侧无法区分。该行为源自 Native AOT 的运行时模型（无 JIT 即无 IL 改写时机），与具体 ORM 无关。有安全合规要求的消费方建议：动态扫描在 JIT 发布的测试环境执行；AOT 产物依赖编译期防线，PalORM 分析器族在编译期拦截非法标识符与模板形状等注入面，查询参数化默认开启。
+
+**性能口径**。README 与基准文档的性能数据以常规 JIT 发布形态采集。Native AOT 无分层编译与动态 PGO，稳态吞吐与 JIT 形态存在差异，属部署形态属性而非库缺陷；跨形态比较只看同批同形态比值，不直接套用绝对值。
+
 ## CI 集成
 
 仓库的 `.github/workflows/ci.yml` 包含四条独立原生验证路径：
 
 - SQLite Native AOT 发布与原生运行
-- PostgreSQL 17 服务容器中的 Native AOT 发布与原生运行
+- PostgreSQL 18 服务容器中的 Native AOT 发布与原生运行
 - MySQL 8.4 服务容器中的 Native AOT 发布与原生运行
 - 本地打包 SourceGen analyzer 后的 NuGet consumer Native AOT 发布与原生运行
 
-PostgreSQL/MySQL job 未在 GitHub Actions 实际成功前，文档状态保持“CI 运行待验证”。
+四条路径均已在 GitHub Actions 实测通过（dev 分支 run #40066346754，2026-10-24，含全部嵌套 AOT job；SQLite 臂另在 win-x64 本地复跑验证）。
