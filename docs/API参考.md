@@ -1,6 +1,6 @@
 # PalORM API 参考
 
-> v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
+> v5.5.1 · .NET 10 · C# 14 · 源生成器驱动 · 零运行时反射
 > 测试: 全仓库 1196 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
@@ -258,7 +258,7 @@
 | `MaxPoolSize` / `PoolIdleTimeoutSeconds` / `PoolLifetimeMinutes` | 连接池（PG/MySQL） |
 | `Interceptors` | `List<IQueryInterceptor>` |
 | `LoggerFactory` | `ILoggerFactory?` |
-| `QueryCache` | `IQueryCache?`——未注入时各会话共享进程级 `BoundedQueryCache` 默认实例（容量 1024）。`BoundedQueryCache` 自 .NET 11 起暴露 OTel 指标（对齐 MemoryCache 标准口径）：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions`、`palorm.cache.entries`、`palorm.cache.estimated_size`，经 `PalORM` Meter 上游 OTLP 导出。 |
+| `QueryCache` | `IQueryCache?`——未注入时各会话共享进程级 `BoundedQueryCache` 默认实例（容量 1024）。`BoundedQueryCache` 暴露 OTel 指标（对齐 MemoryCache 标准口径，经自带 `PalORM` Meter 实现，不依赖运行时版本）：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions`、`palorm.cache.entries`、`palorm.cache.estimated_size`，上游 OTLP 导出。 |
 | `ValidateQueryColumnOrder` | ADR-A 列序契约 |
 | `UseSynchronousRowRead` | 全量物化逐行读走同步 `Read()`（MySQL 需开启；SQLite 恒同步；默认 false）。MySQL 实测约 998 vs 1846~2043 ns/行；流式 API 始终异步 |
 

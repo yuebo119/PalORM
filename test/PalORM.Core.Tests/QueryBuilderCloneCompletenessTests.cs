@@ -43,11 +43,11 @@ public sealed class QueryBuilderCloneCompletenessTests
             if ((trimmed.StartsWith("internal ", StringComparison.Ordinal) || trimmed.StartsWith("private ", StringComparison.Ordinal)) &&
                 !trimmed.Contains("static", StringComparison.Ordinal) && !trimmed.Contains('(', StringComparison.Ordinal))
             {
-                int lastSpace = trimmed.LastIndexOf(' ', StringComparison.Ordinal);
+                int lastSpace = trimmed.LastIndexOf(' ');
                 if (lastSpace > 0)
                 {
                     string name = trimmed[(lastSpace + 1)..].TrimEnd(';', ' ', '=');
-                    if (name.StartsWith('_', StringComparison.Ordinal))
+                    if (name.StartsWith('_'))
                         fields.Add(name);
                 }
             }
@@ -66,11 +66,15 @@ public sealed class QueryBuilderCloneCompletenessTests
         {
             string t = line.Trim();
             // ctor 里 "_field = xxx;" 形态
-            int eq = t.IndexOf('=', StringComparison.Ordinal);
-            if (eq > 0 && t.StartsWith('_', StringComparison.Ordinal))
+            // net10 无 IndexOf(char, StringComparison) 重载：char 形态触发 CA1307、
+            // 单字符 string 形态触发 CA1865，两条规则互斥，局部抑制 CA1307（char 查找天然序数）。
+#pragma warning disable CA1307
+            int eq = t.IndexOf('=');
+#pragma warning restore CA1307
+            if (eq > 0 && t.StartsWith('_'))
             {
                 string name = t[..eq].Trim();
-                if (name.StartsWith('_', StringComparison.Ordinal))
+                if (name.StartsWith('_'))
                     assigned.Add(name);
             }
         }
@@ -86,11 +90,15 @@ public sealed class QueryBuilderCloneCompletenessTests
         foreach (string line in cloneBody.Split('\n'))
         {
             string t = line.Trim().TrimEnd(',');
-            int eq = t.IndexOf('=', StringComparison.Ordinal);
-            if (eq > 0 && t.StartsWith('_', StringComparison.Ordinal))
+            // net10 无 IndexOf(char, StringComparison) 重载：char 形态触发 CA1307、
+            // 单字符 string 形态触发 CA1865，两条规则互斥，局部抑制 CA1307（char 查找天然序数）。
+#pragma warning disable CA1307
+            int eq = t.IndexOf('=');
+#pragma warning restore CA1307
+            if (eq > 0 && t.StartsWith('_'))
             {
                 string name = t[..eq].Trim();
-                if (name.StartsWith('_', StringComparison.Ordinal))
+                if (name.StartsWith('_'))
                     assigned.Add(name);
             }
             // 克隆尾部的显式重置（_materializedClauses = null 等）也是赋值形态，同上已覆盖
@@ -102,7 +110,7 @@ public sealed class QueryBuilderCloneCompletenessTests
     {
         int start = source.IndexOf(signature, StringComparison.Ordinal);
         if (start < 0) return null;
-        int braceStart = source.IndexOf('{', start, StringComparison.Ordinal);
+        int braceStart = source.IndexOf('{', start);
         int depth = 0;
         for (int i = braceStart; i < source.Length; i++)
         {

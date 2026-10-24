@@ -37,5 +37,8 @@
   <!-- SourceLink：PrivateAssets=all 防止消费者拉到 -->
   <ItemGroup>
     <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
+    <!-- ILogger/ILoggerFactory：net11 起由共享框架提供；net10.0 目标须显式引用 Abstractions
+         （非 PrivateAssets——它是 Core 公共 API 面的一部分，消费者需要传递依赖）。 -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 </Project>

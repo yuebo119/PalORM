@@ -58,7 +58,7 @@ internal static class TypeMapper
         // 去掉长度/精度后缀（如 'varchar(255)' → 'varchar'，'numeric(10,2)' → 'numeric'）
         string baseType = dbType.AsSpan().SliceUntil('(').ToString().Trim().ToLowerInvariant();
         // PG 数组类型（如 '_int4'、'text[]'）——fallback 数组暂用 string
-        if (baseType.StartsWith('_', StringComparison.Ordinal) || baseType.EndsWith("[]", StringComparison.Ordinal))
+        if (baseType.StartsWith('_') || baseType.EndsWith("[]", StringComparison.Ordinal))
             return ("string", true);
 
         // bit(1) → bool（惯例），bit(n>1) → string（位串非布尔，避免数据丢失）

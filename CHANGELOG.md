@@ -2,6 +2,18 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [Unreleased]
+
+### 🏗️ net10 分支（.NET 10 LTS 版本线）
+
+> 本节仅存在于 `net10` 分支：主线（dev/main）仍为 `net11.0` + runtime-async。分支从 6.7.0（d8499e1）切出。
+
+- **目标框架 net11.0 → net10.0**（全仓单目标，SDK 钉 `10.0.401` stable）。动机：net11.0 单目标包无法被 .NET 10/8（LTS）应用消费，本分支恢复 LTS 消费面；包发布后 net10/net11 应用均可安装（net10.0 目标对更高运行时向上兼容）。
+- **移除 `runtime-async=on` 编译特性**（.NET 11 编译器/运行时专属：把 `await` 重写为实验性 `AsyncHelpers`，net10.0 下 SYSLIB5007/CA2252 编译报错），退回经典编译器状态机。
+- **Core 补 `Microsoft.Extensions.Logging.Abstractions` 显式依赖**：`ILogger`/`ILoggerFactory` 在 net11.0 由共享框架提供（已并入 `Microsoft.NETCore.App`），net10.0 须包引用。
+- **.NET 11 专属 API 形态适配**（语义等价替换，行为零变化）：`Type.GetNullableUnderlyingType()` ×3 → `Nullable.GetUnderlyingType()`；`IndexOf`/`LastIndexOf`/`StartsWith`/`EndsWith` 的 char+StringComparison 重载 → char 重载（序数语义等价）；一处分析器死锁（CA1307 与 CA1865 在 net10 互斥）局部 pragma 抑制并注释。
+- 验证（全部本轮实测）：`PalORM.ci.slnf` 0 警告 0 错误（10.0.401 SDK）· Core 669/669 · SourceGen 255/255 · Integration 真库 320/320 · SQLite NativeAOT win-x64 publish + 原生运行 PASSED。
+
 ## [6.7.0] - 2026-10-23 · 请求级查询管道 + 终审 P0/P1 收口
 
 > 变更规模：55 个提交（含 2 次发布准备提交）· 223 个文件 · +7,945/−1,392 行（v6.6.0..db9180e）

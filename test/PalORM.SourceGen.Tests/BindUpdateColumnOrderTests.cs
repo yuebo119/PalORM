@@ -47,7 +47,7 @@ public sealed class BindUpdateColumnOrderTests
     {
         int methodStart = source.IndexOf(methodSignature, StringComparison.Ordinal);
         if (methodStart < 0) throw new InvalidOperationException($"生成物缺少方法 {methodSignature}");
-        int bodyStart = source.IndexOf('{', methodStart, StringComparison.Ordinal);
+        int bodyStart = source.IndexOf('{', methodStart);
         // 方法体到下一个 "internal static"（同文件下一方法）为止
         int next = source.IndexOf("internal static", bodyStart, StringComparison.Ordinal);
         string body = next < 0 ? source[bodyStart..] : source[bodyStart..next];

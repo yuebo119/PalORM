@@ -106,7 +106,7 @@ internal static class TableGen
         for (int i = 0; i < lines.Length; i++)
         {
             string line = lines[i].TrimEnd('\r');
-            if (line.StartsWith('|', StringComparison.Ordinal))
+            if (line.StartsWith('|'))
             {
                 OnTableLine(warnings, lines, i, line, state);
             }
@@ -142,7 +142,7 @@ internal static class TableGen
             string line = raw.TrimEnd('\r');
             if (line.StartsWith("**表 2", StringComparison.Ordinal)) inTable2 = true;
             else if (line.StartsWith("**表 3", StringComparison.Ordinal)) break;
-            else if (inTable2 && line.StartsWith('|', StringComparison.Ordinal) && !line.StartsWith("|---", StringComparison.Ordinal)
+            else if (inTable2 && line.StartsWith('|') && !line.StartsWith("|---", StringComparison.Ordinal)
                 && !line.StartsWith("| 操作", StringComparison.Ordinal))
             {
                 totalRows++;

@@ -111,6 +111,9 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.13" />
+    <!-- net10 分支：Extensions 抽象不在 net10.0 共享框架（net11 起才并入 NETCore.App），
+         Core 的 ILogger/ILoggerFactory 依赖须显式补 Abstractions 包（net11 主线无需）。 -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.13" />
     <!-- 2026-10-20 依赖复核：4.91.0→4.91.1（patch）。上游=Azure.Core 1.63.0（经

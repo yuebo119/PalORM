@@ -2,9 +2,9 @@
 
 # PalORM
 
-**A .NET 11 micro-ORM for Native AOT: everything generated at compile time, zero reflection at runtime**
+**A .NET 10 micro-ORM for Native AOT: everything generated at compile time, zero reflection at runtime**
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
@@ -113,7 +113,7 @@ See [Performance](#-performance) for measurement details (2026-10-24 benchmark b
 | **Seed data** | ✓ `SeedAsync` idempotent upsert in a transaction | ❌ | ✓ `HasData` (design time) | ❌ |
 | **BulkInsert memory** | ≈ 19% of Dapper | baseline | highest (ChangeTracker) | medium |
 | **Core NuGet dependencies** | zero | zero | high (multi-package) | medium |
-| **Target frameworks** | net11.0 (single target) | multi-target (netstandard2.0+) | multi-target (net8+) | multi-target (netstandard2.0+) |
+| **Target frameworks** | net10.0 (single target) | multi-target (netstandard2.0+) | multi-target (net8+) | multi-target (netstandard2.0+) |
 | **License** | AGPL-3.0-only | Apache-2.0 | MIT | Apache-2.0 |
 
 Core differentiators: compile-time generation + full-pipeline AOT compatibility + per-dialect bulk strategies (COPY / BulkCopy / multi-value / arrays). Dapper is fast but reflects at runtime; EF Core is feature-complete but heavy at runtime with AOT still experimental; RepoDb is also a micro-ORM but has no source generation, and its bulk support is SQL Server only.
@@ -131,6 +131,7 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 ## 📊 Performance
 
 > **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC2 · SQLite temp-file DB (WAL + 64 MB cache + mmap) · PG 18.6 / MySQL 8.4.11 local containers · Dapper 2.1.89. Three arms (ADO.NET / Dapper / PalORM) collected in the same process and same round with identical connection settings; each arm uses its ecosystem's idiomatic best-practice code (ADO.NET is the hand-written performance floor).
+> **net10 branch note**: the figures below are historical batches measured on the net11.0 build (with runtime-async); net10-branch baselines are pending re-measurement — compare across branches only within same-branch batches.
 >
 > **Data batch**: 2026-10-24 11:59 `PerfCli full` batch (`history-20261024-115921.json`, 416 items, medians + exact allocation counts). Same-batch gate: BDN 27/27, index 171 items 0 FAIL.
 
@@ -231,7 +232,7 @@ Worth doing when queries are frequent, rows per query are few, and builder metho
 ## 📦 Installation
 
 > Pick one of the three provider packages; each automatically brings `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time generator).
-> Requirements: .NET SDK `11.0.100-rc.2` or later (`global.json` pins `rollForward: disable`); your IDE must support Roslyn source generators (SourceGen builds against Microsoft.CodeAnalysis 5.9.0). Native AOT publishes additionally need about 4 GB of memory (ILC compiler) — see [Development](#-development).
+> Requirements: .NET SDK `10.0.401` or later (`global.json` pins `rollForward: latestFeature`); your IDE must support Roslyn source generators (SourceGen builds against Microsoft.CodeAnalysis 5.9.0). Native AOT publishes additionally need about 4 GB of memory (ILC compiler) — see [Development](#-development).
 
 ```xml
 <!-- PostgreSQL -->
@@ -819,7 +820,7 @@ Full version history: [CHANGELOG.md](CHANGELOG.md) (Chinese).
 | Memory | 256 MB | 4 GB (ILC compiler; runtime needs only ~100 MB) |
 | Disk | 50 MB | 100 MB, SSD recommended (ILC writes many temp files; HDD compiles 5-10x slower) |
 
-Software: .NET SDK 11.0.100-rc.2+ (pinned by `global.json`) · C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code (Roslyn source generator support required).
+Software: .NET SDK 10.0.401+ (pinned by `global.json`) · C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code (Roslyn source generator support required).
 
 ### Project structure
 

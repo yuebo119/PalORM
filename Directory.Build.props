@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <!-- 公共版本 -->
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -10,13 +10,9 @@
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
 
-    <!-- .NET 11 runtime-async：运行时原生异步（替换编译器状态机）。
-         BCL 自 .NET 11 起已用 runtime-async=on 编译。
-         net11.0 目标不再需要 EnablePreviewFeatures，但仍需显式开启此 Features 开关。
-         收益：① ExecutionContext 空捕获跳过（项目 AsyncLocal 仅 2 个，绝大多数 await 受益）
-              ② JIT 直接编译 runtime-async 版本（去掉 thunk 间接层）
-              ③ 更干净堆栈跟踪（无状态机帧）—— WithTransaction / Bulk 调试可读性改善 -->
-    <Features>runtime-async=on</Features>
+    <!-- net10 分支：runtime-async=on 仅 .NET 11 编译器/运行时支持（编译期把 await 重写为
+         实验性 AsyncHelpers 调用，net10.0 目标下 SYSLIB5007/CA2252 直接报 error），本分支
+         退回经典编译器状态机。net11 主线（dev/main）保留该开关及其收益。 -->
 
     <!-- 严格编译 -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

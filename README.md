@@ -2,9 +2,9 @@
 
 # PalORM
 
-**面向 Native AOT 的 .NET 11 微 ORM：编译时生成一切，运行时零反射**
+**面向 Native AOT 的 .NET 10 微 ORM：编译时生成一切，运行时零反射**
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
@@ -117,7 +117,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **种子数据**            | ✓ `SeedAsync` 事务内幂等 Upsert                                   | ❌                       | ✓ `HasData`（设计时）                      | ❌                          |
 | **BulkInsert 内存**   | ≈ Dapper 的 19%                                               | 基线                      | 最高（ChangeTracker）                     | 中等                         |
 | **核心包 NuGet 依赖**    | 零                                                            | 零                       | 高（多包拆分）                               | 中等                         |
-| **目标框架**            | net11.0（单目标）                                                 | 多目标（netstandard2.0+）    | 多目标（net8+）                            | 多目标（netstandard2.0+）       |
+| **目标框架**            | net10.0（单目标）                                                 | 多目标（netstandard2.0+）    | 多目标（net8+）                            | 多目标（netstandard2.0+）       |
 | **许可证**             | AGPL-3.0-only                                                | Apache-2.0              | MIT                                   | Apache-2.0                 |
 
 核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略（COPY / BulkCopy / 多值 / 数组）。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，且批量仅 SQL Server。
@@ -135,6 +135,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 ## 📊 性能
 
 > **测试环境**：AMD Ryzen 9 8945HX（32 逻辑核）· Windows 10 22H2 · .NET 11 RC2 · SQLite 临时文件库（WAL + 64 MB cache + mmap）· PG 18.6 / MySQL 8.4.11 本机容器 · Dapper 2.1.89。三臂（ADO.NET / Dapper / PalORM）同进程同轮采集、同连接口径，各臂使用其生态惯用的最优写法（ADO.NET 为手写性能地板）。
+> **net10 分支口径说明**：本节与下表数据为 net11.0 形态（含 runtime-async）的历史批次；net10 分支基准待重录，跨分支对比以同分支批为准。
 > 
 > **数据批次**：2026-10-24 11:59 `PerfCli full` 完整批（`history-20261024-115921.json`，416 项，中位数 + 精确分配计数）。同批门禁：BDN 27/27、结果库 171 项 0 FAIL。
 
@@ -235,7 +236,7 @@ await db.From<Order>().OrderBy(ByCreatedAt).ToListAsync();
 ## 📦 安装
 
 > 三个 Provider 包任选其一，每个都自动携带 `PalORM.Core`（运行时）与 `PalORM.SourceGen`（编译时源生成器）。
-> 环境要求：.NET SDK `11.0.100-rc.2` 或更高（`global.json` 已锁定 `rollForward: disable`）；IDE 需支持 Roslyn 源生成器（SourceGen 以 Microsoft.CodeAnalysis 5.9.0 构建）。Native AOT 发布另需约 4 GB 内存（ILC 编译器），详见[开发](#-开发)。
+> 环境要求：.NET SDK `10.0.401` 或更高（`global.json` 已锁定 `rollForward: latestFeature`）；IDE 需支持 Roslyn 源生成器（SourceGen 以 Microsoft.CodeAnalysis 5.9.0 构建）。Native AOT 发布另需约 4 GB 内存（ILC 编译器），详见[开发](#-开发)。
 
 ```xml
 <!-- PostgreSQL -->
@@ -897,7 +898,7 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 | 内存     | 256 MB      | 4 GB（ILC 编译器；运行时仅需约 100 MB）                            |
 | 磁盘     | 50 MB       | 100 MB，SSD 推荐（ILC 大量临时文件，HDD 编译慢 5-10x）                |
 
-软件：.NET SDK 11.0.100-rc.2+（`global.json` 锁定）· C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code（需支持 Roslyn 源生成器）。
+软件：.NET SDK 10.0.401+（`global.json` 锁定）· C# `latest` · Windows 10+ / Linux / macOS · Visual Studio 2026 / Rider / VS Code（需支持 Roslyn 源生成器）。
 
 ### 项目结构
 
