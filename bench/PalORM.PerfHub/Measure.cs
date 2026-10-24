@@ -148,7 +148,8 @@ internal static class Measure
         Func<IPerfImplementation, DbConnection, int, Task> action,
         DbConnection conn, int maxIterations, CancellationToken ct,
         Func<DbConnection, Task>? prepare = null, double budgetSeconds = 1.5, double scale = 1.0,
-        bool requireWarmupFloor = true, PerfStageTiming? timing = null, double warmupScale = 1.0)
+        bool requireWarmupFloor = true, PerfStageTiming? timing = null, double warmupScale = 1.0,
+        bool estimateFromWarmup = false)
     {
         // 阶段 0 计时旁车（PALORM_PERFHUB_TIMING=1）：只读取单调时钟，不改任何测量语义——
         // 预算/迭代/预热规则与关闭时逐字相同，插桩开销是每阶段一次 GetTimestamp。
@@ -179,9 +180,22 @@ internal static class Measure
         int warmupHardCap = Math.Max(warmupCap, 200_000);
         long warmupStart = Stopwatch.GetTimestamp();
         var warmupSw = System.Diagnostics.Stopwatch.StartNew();
+        // 预热样本（最近 8 次）：--probe-mode warmup 时用其中位数替代单次探针估计单次耗时。
+        // 单次探针受首调用冷态/调度影响可摆 ±40%（实测 MySQL BulkInsert 70 轮对 42 轮），
+        // 迭代数随之摆动、样本量与墙钟都不稳；预热末段已进入稳态，中位数更可复现。
+        var warmupSamples = new List<double>(8);
         for (int i = 0; i < warmupHardCap; i++)
         {
+            long iterStart = Stopwatch.GetTimestamp();
             await action(impl, conn, i).ConfigureAwait(false);
+            if (estimateFromWarmup)
+            {
+                if (warmupSamples.Count == 8)
+                {
+                    warmupSamples.RemoveAt(0);
+                }
+                warmupSamples.Add(Stopwatch.GetElapsedTime(iterStart).TotalSeconds);
+            }
             double warmedSeconds = warmupSw.Elapsed.TotalSeconds;
             if (i >= 2 && warmedSeconds >= warmupSeconds)
             {
@@ -209,17 +223,30 @@ internal static class Measure
             }
         }
 
-        // 阶段 3.1 自适应迭代：重置后用一次探针（i=0）测单次耗时，迭代数收敛到时间预算。
-        // 探针占用 i=0 的主键段，计时轮从 i=1 起——写操作的每轮主键互不重叠
-        //（探针在重置前跑会与预热轮撞主键，实测 Insert 类 UNIQUE 冲突）。
-        var probe = System.Diagnostics.Stopwatch.StartNew();
-        await action(impl, conn, 0).ConfigureAwait(false);
-        probe.Stop();
-        if (timing is not null)
+        // 阶段 3.1 自适应迭代：重置后估计单次耗时，迭代数收敛到时间预算。
+        // 默认单次探针（i=0，计时轮从 i=1 起，写操作主键互不重叠）；--probe-mode warmup
+        // 改用预热末段样本中位数并跳过探针——两者都不进计时窗口。
+        double perOpSeconds;
+        if (estimateFromWarmup && warmupSamples.Count > 0)
         {
-            timing.ProbeSeconds = probe.Elapsed.TotalSeconds;
+            warmupSamples.Sort();
+            perOpSeconds = Math.Max(warmupSamples[warmupSamples.Count / 2], 1e-7);
+            if (timing is not null)
+            {
+                timing.ProbeSeconds = 0;
+            }
         }
-        double perOpSeconds = Math.Max(probe.Elapsed.TotalSeconds, 1e-7);
+        else
+        {
+            var probe = System.Diagnostics.Stopwatch.StartNew();
+            await action(impl, conn, 0).ConfigureAwait(false);
+            probe.Stop();
+            if (timing is not null)
+            {
+                timing.ProbeSeconds = probe.Elapsed.TotalSeconds;
+            }
+            perOpSeconds = Math.Max(probe.Elapsed.TotalSeconds, 1e-7);
+        }
         int iterations = Math.Clamp(
             (int)(timedSeconds / perOpSeconds), 3, Math.Max(3, maxIterations));
 

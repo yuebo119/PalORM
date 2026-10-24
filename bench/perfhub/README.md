@@ -43,6 +43,8 @@ dotnet run --project bench/PalORM.PerfHub -- run --dialects sqlite,mysql,pg --ti
 | 维度 8 计数 | 三臂共用 `CountingConnection` 装饰器，实测**往返次数/op** 与 **prepared 复用率** | 抓 N+1：实测 ADO 臂 `BulkUpdate` = 2000 次往返/op、`BulkInsert` = 11 次/op；基础 67 项中 60 项有值（其余 7 项是 `GenerateRows` 与 6 个纯构建项，本就没有往返），并发模式 3 项也已接计数（三臂 1.46–1.51 往返/op，80/20 混合） |
 | 健康度 | 地板行散布中位数，阈值 0.35（本夹具自适应短跑实测 0.21/0.26/0.31） | `--quick` 批次在 label 里带 `quick` 标记，只作冒烟、不进基线 |
 | 结果登记 | 除自身 `results/history-*.json` 外，另写结果库信封 `bench/results/perfhub-*.json` | 统一登记处见 `bench/results/README.md`；跨夹具索引 `bash scripts/perf.sh index`（同一内容已含在 `perf.sh full` 的唯一报告里） |
+| 交错读丢弃 pass | 默认只在每方言首档执行（2026-10-24 A/B/A：20000 档三项读中位偏移 2.1%~3.0%，PerfHub 625→596s）；`--interleaved-discard all` 复现旧行为 |
+| 单次耗时估计 | 默认单次探针；`--probe-mode warmup` 用预热末段中位数（A/A 四批验证等价，弱判别项 34 对 31~36，无显著收益，保留为实验开关） |
 | 阶段计时旁车（诊断） | `PALORM_PERFHUB_TIMING=1` 时按项记录 prepare/预热/探针/计时/后处理秒数，写 `bench/reports/perf-timing-<stamp>.json`；`PerfCli full` 再合并编排步骤生成 `perf-time-breakdown-*.md/.json` | 只用于回答"时间花在哪"，不进结果库/信封/门禁；默认关闭（2026-10-23 实测开关开销 <1%） |
 
 ## 21 个测试项（v2 矩阵；2026-09-23 精简删 TxTenInserts）
