@@ -74,6 +74,12 @@ dotnet run --project bench/PalORM.PerfHub -- run --dialects sqlite,mysql,pg --ti
 | **Baseline** | `GenerateRows` | 不碰库，数据生成内存基线 |
 | **Concurrency** | `Concurrent_Mixed80_20` | 预热 1 s + 计时 2 s，池化连接每线程一条 |
 
+> **MySQL BulkInsert 的调用参数（2026-10-24 修正，B109 同源）**：服务端 `local_infile=ON` 时产品走
+> MySqlBulkCopy（LOAD DATA），该协议无参数上限，PalORM 臂传**整段单批** `rows.Count`；固定 1000 会让
+> 20k 行付 20 次 LOAD DATA，实测 P/ADO 1.34→1.01（76.48→55.36 ms）、分配 4.7→4.44 MB（与地板相同）。
+> 产品默认批宽 1000 是 ITM-710 的百万行内存保护，基准臂按实际路径选择最优调用参数，不改产品默认；
+> 多值回退受 MySQL 占位符上限约束，仍保持 1000。
+
 **规模**：26 项 × 3 库 × 2 档 × 3 臂 —— 其中 14 项（Build×2 / InsertReturningId / IncludeJoin /
 TxSingleInsert / TxHundredInserts / TxRollback / TxBulkInsert / OwnedJsonQuery / SessionBatchInserts /
 Insert / Update / KeysetPage / WhereIn）**只在最小档跑**（行数不进这些项的测量，两档是同一个测量的

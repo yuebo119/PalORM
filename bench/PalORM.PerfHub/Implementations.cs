@@ -1973,11 +1973,40 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
 
     private Dialect D => dialect.Dialect;
 
+    /// <summary>MySQL 服务器 <c>@@local_infile</c> 的能力缓存（每方言实例一次探测）。
+    /// <para>用途：B109 三臂契约的调用参数面——服务端允许 LOAD DATA 时产品走 MySqlBulkCopy，
+    /// 该协议无参数个数上限，最优调用是整段单批；20k 行按 1000 拆批会付 20 次协议往返，
+    /// 实测正是 MySQL BulkInsert/20000 长期 1.23~1.34× 的来源。多值回退受 MySQL 占位符
+    /// 上限约束，仍保留 1000。产品默认批宽保持 1000（ITM-710 的百万行内存保护），
+    /// 这里是基准臂按实际路径选择「行业最优调用参数」，不改产品默认。</para></summary>
+    private bool? _mySqlLocalInfile;
+
     /// <summary>方言分派的穷举兜底——正常不可达（<see cref="Dialect"/> 只有三个值）。
     /// 不带 paramName：<c>D</c> 是属性不是形参，用 <c>nameof(D)</c> 会触发
     /// CA2208/S3928（异常参数名必须对应真实形参）。</summary>
     private static NotSupportedException UnsupportedDialect(Dialect dialect)
         => new($"方言 '{dialect}' 不在 PerfHub 覆盖范围内（仅 SQLite / MySQL / PostgreSQL）。");
+
+    /// <summary>探测并缓存服务端 <c>@@local_infile</c>；非 MySQL 恒 false。
+    /// 首次调用发生在预热段，不进计时窗口。</summary>
+    private async Task<bool> EnsureMySqlLocalInfileAsync(DbConnection conn, CancellationToken ct)
+    {
+        if (D != Dialect.MySql)
+        {
+            return false;
+        }
+        if (_mySqlLocalInfile is { } cached)
+        {
+            return cached;
+        }
+
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT @@local_infile";
+        object? value = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        _mySqlLocalInfile = Convert.ToInt64(
+            value, System.Globalization.CultureInfo.InvariantCulture) == 1;
+        return _mySqlLocalInfile.Value;
+    }
 
     /// <summary>按操作新建会话——与 Dapper 无状态扩展方法对等的用法形态。</summary>
     private static DataSession<TProvider> Session<TProvider>(DbConnection conn, bool ownsConnection = true)
@@ -2047,12 +2076,17 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         return found;
     }
 
-    /// <summary>批量插入的批行数——PG Binary COPY 无参数上限，整段单批 = 单次协议往返，
-    /// 才是三臂契约的"行业最优调用"（此前固定 1000 是多值 VALUES 的变量上限思维：
-    /// 20000 行 = 20 次 BeginBinaryImport/Complete 往返，实测比值 3.3× 由此而来，
-    /// 2000 档 2 次 vs 1 次的 1.6× 与档位放大逐批吻合）；多值 VALUES 方言保持 1000。</summary>
-    private static int BulkBatchRows(SqlDialect dialect, int rowCount)
-        => dialect == SqlDialect.PostgreSql ? rowCount : 1000;
+    /// <summary>批量插入的批行数——PG Binary COPY 与 MySQL LOAD DATA 都无参数上限，
+    /// 整段单批 = 单次协议往返，才是三臂契约的「行业最优调用」（PG 于 2026-09-25、MySQL 于
+    /// 2026-10-24 两次踩到同一坑：固定 1000 是多值 VALUES 的变量上限思维，20k 行 = 20 次
+    /// 协议往返，实测比值 3.3× / 1.34× 由此而来）；多值 VALUES 方言保持 1000。</summary>
+    private static int BulkBatchRows(SqlDialect dialect, int rowCount, bool mySqlLocalInfile = false)
+        => dialect switch
+        {
+            SqlDialect.PostgreSql => rowCount,
+            SqlDialect.MySql when mySqlLocalInfile => rowCount,
+            _ => 1000
+        };
 
     private static DbOptions Opts(DbConnection conn)
         => new() { ConnectionString = conn.ConnectionString ?? "" };
@@ -2219,11 +2253,15 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             _ => throw UnsupportedDialect(D)
         };
 
-    private static Task<long> BulkInsertCoreAsync<TProvider>(
+    private async Task<long> BulkInsertCoreAsync<TProvider>(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
-        => Session<TProvider>(conn)
-            .BulkInsertAsync(rows, BulkBatchRows(TProvider.Dialect, rows.Count), ct).AsTask();
+    {
+        bool localInfile = await EnsureMySqlLocalInfileAsync(conn, ct).ConfigureAwait(false);
+        return await Session<TProvider>(conn)
+            .BulkInsertAsync(rows, BulkBatchRows(TProvider.Dialect, rows.Count, localInfile), ct)
+            .ConfigureAwait(false);
+    }
 
     public Task<int> UpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
         => D switch
@@ -2654,14 +2692,15 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     /// <summary>事务内批量提交——走产品的 BulkInsertAsync（PG COPY / MySQL 能力分流 /
     /// SQLite 多值），与 v2 三臂契约一致。此前误用逐行 InsertAsync（2000 行 = 2000 次往返，
     /// MySQL 实测 706 ms vs 地板 21.7 ms，门禁方向的对称暴露）。</summary>
-    private static async Task TxBulkCoreAsync<TProvider>(
+    private async Task TxBulkCoreAsync<TProvider>(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
         DataSession<TProvider> session = Session<TProvider>(conn);
+        bool localInfile = await EnsureMySqlLocalInfileAsync(conn, ct).ConfigureAwait(false);
+        int batchSize = BulkBatchRows(TProvider.Dialect, rows.Count, localInfile);
         await session.WithTransaction(
-            async _ => await session.BulkInsertAsync(
-                rows, BulkBatchRows(TProvider.Dialect, rows.Count), ct).ConfigureAwait(false), ct: ct)
+            async _ => await session.BulkInsertAsync(rows, batchSize, ct).ConfigureAwait(false), ct: ct)
             .ConfigureAwait(false);
     }
 
