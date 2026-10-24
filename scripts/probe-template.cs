@@ -42,7 +42,7 @@ File.WriteAllText(Path.Combine(dir, "probe.csproj"), $"""
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>

@@ -370,7 +370,7 @@ void FixtureGateCheckG12(string aiScripts, string tmpDir)
     Directory.CreateDirectory(gateDir);
     File.WriteAllText(Path.Combine(gateRoot, "PalORM.slnx"), "", new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(gateDir, "Fixture.csproj"),
-        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net11.0</TargetFramework><IsAotCompatible>true</IsAotCompatible></PropertyGroup></Project>\n",
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><IsAotCompatible>true</IsAotCompatible></PropertyGroup></Project>\n",
         new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(gateDir, "Clean.cs"),
         "using System.Collections.Generic; public static class Clean { public static List<int> Values() => []; }\n",
