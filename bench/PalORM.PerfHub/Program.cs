@@ -78,6 +78,8 @@ internal static class Program
               --no-envelope                 跳过结果库信封（并行时由合并步骤统一写）
               --ops A,B                     只跑列出的操作（子集实验，自动打 verify- 标签）
               --budget-scale X              计时/预热预算缩放（噪声曲线用，自动打 verify- 标签）
+              --probe-mode single|warmup    单次探针（默认）或预热末段中位数估计单次耗时
+              --interleaved-discard all|first-tier  交错读丢弃 pass 的档位范围（默认 first-tier）
 
             环境变量（与集成测试同一口径，见 CONTRIBUTING.md）:
               PALORM_PG_CONNECTION      PostgreSQL 连接串
@@ -161,6 +163,13 @@ internal static class Program
                 case "--budget-scale":
                     _budgetScale = double.Parse(args[++i], CultureInfo.InvariantCulture);
                     break;
+                // ── 测量形态开关（阶段 2 精度/墙钟实验）──
+                case "--probe-mode":
+                    _warmupEstimate = ParseProbeMode(args[++i]);
+                    break;
+                case "--interleaved-discard":
+                    _discardFirstTierOnly = ParseDiscardMode(args[++i]);
+                    break;
                 default:
                     return Fail($"未知选项 '{args[i]}'");
             }
@@ -176,6 +185,14 @@ internal static class Program
         if (Math.Abs(_budgetScale - 1.0) > 1e-9 && !PerfResultWriter.IsSubsetLabel(label))
         {
             label = "verify-budget-" + label;
+        }
+        if (_warmupEstimate && !PerfResultWriter.IsSubsetLabel(label))
+        {
+            label = "verify-warmup-" + label;
+        }
+        if (!_discardFirstTierOnly && !PerfResultWriter.IsSubsetLabel(label))
+        {
+            label = "verify-discard-all-" + label;
         }
 
         // 探测可用方言（PG/MySQL 需连接串）
@@ -366,7 +383,10 @@ internal static class Program
             // --ops 子集未包含这三项时整段跳过（仍省下 reset 与两遍 pass 的时间）。
             if (OperationSelected("QueryAll") || OperationSelected("StreamAll") || OperationSelected("GetAllAsync"))
             {
-                await RunInterleavedReadsAsync(info, impls, rows, conn, results, scale, ct)
+                // 丢弃 pass 的默认形态是每档一次；--interleaved-discard first-tier 只在每方言
+                // 首档丢弃（假设固定暖机成本是进程/方言级而非档级），由 A/A 探针验证。
+                bool runDiscardPass = !_discardFirstTierOnly || rows == tiers[0];
+                await RunInterleavedReadsAsync(info, impls, rows, conn, results, scale, runDiscardPass, ct)
                     .ConfigureAwait(false);
             }
 
@@ -552,7 +572,7 @@ internal static class Program
     /// 与历史批次的绝对值仍可比（同一 SQL、同一表）。</para></summary>
     private static async Task RunInterleavedReadsAsync(
         DialectInfo info, IPerfImplementation[] impls, int rows, DbConnection conn,
-        List<Measurement> results, double scale, CancellationToken ct)
+        List<Measurement> results, double scale, bool runDiscardPass, CancellationToken ct)
     {
         var neutralSeeder = new AdoNetImpl(info);
         Task reset(DbConnection c) => neutralSeeder.SetupPerfS1Async(c, rows, ct);
@@ -566,9 +586,13 @@ internal static class Program
         //（采样线程 JIT、GC 计数首次调用、驱动首次读），实测让首个 ADO QueryAll/2K
         // 在 1.5s 自预热后仍是 2.88ms，而同代码的 GetAllAsync 是 1.18ms（2026-10-23）。
         // 丢弃第一遍把这份成本吃掉；两遍走同一组三项 × 三臂（只读，不改变表）。
-        var discardSw = System.Diagnostics.Stopwatch.StartNew();
-        await RunPassAsync(record: false).ConfigureAwait(false);
-        TimingSink.Phase("interleaved-discard-pass", info.DisplayName, rows, discardSw.Elapsed.TotalSeconds);
+        // --interleaved-discard first-tier 时次档跳过丢弃（成本若为进程级则不必每档重付）。
+        if (runDiscardPass)
+        {
+            var discardSw = System.Diagnostics.Stopwatch.StartNew();
+            await RunPassAsync(record: false).ConfigureAwait(false);
+            TimingSink.Phase("interleaved-discard-pass", info.DisplayName, rows, discardSw.Elapsed.TotalSeconds);
+        }
         var recordSw = System.Diagnostics.Stopwatch.StartNew();
         await RunPassAsync(record: true).ConfigureAwait(false);
         TimingSink.Phase("interleaved-record-pass", info.DisplayName, rows, recordSw.Elapsed.TotalSeconds);
@@ -928,7 +952,7 @@ internal static class Program
                 : null;
             Measurement m = await Measure.SingleAsync(info, impl, operation, group, rows, action, conn,
                 MaxIterations(operation, rows), ct, prepare, BudgetSeconds(operation) * _budgetScale, scale,
-                _requireWarmupFloor, timing, _budgetScale).ConfigureAwait(false);
+                _requireWarmupFloor, timing, _budgetScale, _warmupEstimate).ConfigureAwait(false);
             sw.Stop();
             if (timing is null)
             {
@@ -969,6 +993,28 @@ internal static class Program
 
     /// <summary>计时与预热预算的全局缩放（--budget-scale）：默认 1.0；仅用于噪声曲线。</summary>
     private static double _budgetScale = 1.0;
+
+    /// <summary>单次耗时估计方式（--probe-mode）：false=单次探针（默认），true=预热末段中位数。</summary>
+    private static bool _warmupEstimate;
+
+    /// <summary>交错读丢弃 pass 只在每方言首档执行（默认；--interleaved-discard all 复现旧行为）。
+    /// 2026-10-24 A/B/A 四批验证：20000 档三项读操作中位偏移 2.1%~3.0%（阈值 5% 内），
+    /// PerfHub 墙钟 625→596s；固定暖机成本是进程/方言级，次档无需重付。</summary>
+    private static bool _discardFirstTierOnly = true;
+
+    private static bool ParseProbeMode(string value) => value.ToUpperInvariant() switch
+    {
+        "SINGLE" => false,
+        "WARMUP" => true,
+        _ => throw new ArgumentException($"--probe-mode 只接受 single|warmup（收到 '{value}'）")
+    };
+
+    private static bool ParseDiscardMode(string value) => value.ToUpperInvariant() switch
+    {
+        "ALL" => false,
+        "FIRST-TIER" => true,
+        _ => throw new ArgumentException($"--interleaved-discard 只接受 all|first-tier（收到 '{value}'）")
+    };
 
     /// <summary>该操作是否被 --ops 选中（未指定时全选）。</summary>
     private static bool OperationSelected(string operation)

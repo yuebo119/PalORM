@@ -428,11 +428,14 @@ internal static class IndexGate
     }
 
     /// <summary>跨批离群告警（只告警、不参与判定与退出码）：最新非子集 perfhub 批次里，某
-    /// (操作,方言,档,臂) 键的中位对照其**此前至多 6 批**的中位偏离超 2× 时列出。
+    /// (操作,方言,档,臂) 键的中位对照其**最近 3 个非子集批次**的中位偏离超 2× 时列出。
     /// <para><b>为什么需要</b>：健康度只看 ADO 臂散布中位数、err 只测批内散布，对参考臂的
     /// 系统性偏移都不敏感（实测：Dapper 臂 BulkDelete/SQLite/2000 120.77ms，历批 21~22ms，
     /// 7.6×，两者都没抓到）。并发族排除（散布由调度支配，同 <see cref="IsIncomparableOperation"/>）。
-    /// 合法优化落地的当批也会触发（如 UNNEST 的 −46~−74%），语义即"复测后再归因"。</para></summary>
+    /// 合法优化落地的当批也会触发（如 UNNEST 的 −46~−74%），语义即"复测后再归因"。</para>
+    /// <para><b>窗口 6→3（2026-10-24）</b>：与判定窗口同源；且历史序列是**时间倒序**追加的，
+    /// 原 <c>TakeLast(6)</c> 实际取到的是<b>最旧</b> 6 批，环境切换后会持续刷旧状态告警
+    /// （实测 PG 快状态下多项 0.15~0.46× 告警）。改 <c>Take(3)</c> 取最近 3 批。</para></summary>
     private static List<string> OutlierWarnings(List<PerfResultEnvelope> batchesDesc)
     {
         PerfResultEnvelope? newest = batchesDesc.FirstOrDefault(static b =>
@@ -479,13 +482,15 @@ internal static class IndexGate
         return history;
     }
 
-    /// <summary>单键离群判定：最新中位对照此前至多 6 批的中位，偏离超过 2 倍（两个方向）生成告警文本。</summary>
+    /// <summary>单键离群判定：最新中位对照最近 3 批的中位，偏离超过 2 倍（两个方向）生成告警文本。</summary>
     private static string? OutlierText(PerfResultItem item, Dictionary<string, List<double>> history)
     {
         if (item.MedianUs <= 0 || IsIncomparableOperation(item.Name)) return null;
         string key = item.Name + "|" + item.Dialect + "|" + item.Tier + "|" + item.Arm;
         if (!history.TryGetValue(key, out List<double>? list) || list.Count == 0) return null;
-        List<double> recent = [.. list.TakeLast(6).OrderBy(static x => x)];
+        // 历史列表按时间倒序追加（MedianHistory 从 batchesDesc.Skip(1) 依次 Add），
+        // 故"最近 N 批"用 Take(N)；TakeLast 会取到最旧的 N 批（2026-10-24 修正）。
+        List<double> recent = [.. list.Take(3).OrderBy(static x => x)];
         double reference = recent[recent.Count / 2];
         if (reference <= 0) return null;
         double factor = item.MedianUs / reference;
