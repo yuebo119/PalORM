@@ -1,0 +1,7 @@
+# 生成产物标记：移出 GitHub 语言统计，PR diff 默认折叠。
+# bench/perfhub/report.html 数据真源：bench/perfhub/results/history-*.json（已入库），
+# 视图可由 `dotnet run --project bench/PalORM.PerfHub -- report` 重新生成。
+# history JSON 本属数据类不进语言条，标 generated 的作用是 PR diff 折叠。
+bench/perfhub/report.html linguist-generated=true
+docs/perf-curve-v551-to-head.html linguist-generated=true
+bench/perfhub/results/history-*.json linguist-generated=true
