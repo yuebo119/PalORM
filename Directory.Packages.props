@@ -6,9 +6,10 @@
 
   <!-- ADO.NET Providers -->
   <ItemGroup>
-    <!-- 2026-10-19 依赖升级轮：rc.1.26425.128 → rc.2.26504.105，与 global.json SDK
-         11.0.100-rc.2.26504.105 同轨（NuGet 平面索引确认 rc.2 为当前最新 .NET 11 线）。 -->
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.2.26504.105" />
+    <!-- net10 分支（2026-10-24）：11.0.0-rc.2.26504.105 → 10 线 stable。LTS 分支不应依赖
+         net11 预览线驱动包；net10.0 目标下 10 线 stable 为同线正式版（主线 net11.0 目标
+         不适用 10 线 stable，故主线维持 rc.2 与 SDK 同轨）。 -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.13" />
     <!-- 2026-10-14 依赖升级轮：SQLite3MC 2.4.0→2.6.1（引擎升 SQLite 3.54.0；chacha20/poly1305
          硬件加速、临时文件加密与新 pragma，与本仓使用面（Batteries_V2.Init + 标准 SQL）零交集，
          无初始化 API 变更）。2026-10-19 复核：2.6.1 仍为最新稳定版。 -->
