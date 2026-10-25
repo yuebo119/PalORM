@@ -2,10 +2,10 @@
 //
 // 用法：
 //   dotnet run --file scripts/crossbench-report.cs -- <batch.json> [--out report.md]
-//     单批评级报告（四臂四组表，列/色标/📌 规则与 PerfHub 报告一致，Dapper 列换 FreeSql 的四臂版）
+//     单批评级报告（四臂四组表：ADO/PalORM/Dapper/FreeSql；列序/色标/📌 规则与 PerfHub 报告一致）
+//     模板已冻结（2026-10-25 用户指令）：所有倍数/计数/最值标签必须由当批数据推导，总览与说明禁止硬编码数字。
 //   dotnet run --file scripts/crossbench-report.cs -- --baseline <b1.json,b2.json,b3.json> [--out baseline.md]
-//     多批基线（B100 纪律）：每格取各批中位的中位数；地板批间散布 >20% 的格标 ⚠地板漂移；
-//     样本数不足 3 的格（形态断点）标 ⚠n=k 并注明。
+//     多批基线（B100 纪律）：每格取各批中位的中位数；地板批间散布 >20% 的格标 ⚠地板漂移。
 //
 // 输入 JSON 是 Runner 的 Measurement[] 序列（每批每格两遍，先按批内均值聚合成批中位）。
 using System.Text.Json;
@@ -48,20 +48,19 @@ double CellAlloc(string d, string o, int r, string i) =>
     Median(allocByCell[Key(d, o, r, i)]);
 bool HasCell(string d, string o, int r, string i) =>
     timeByCell.ContainsKey(Key(d, o, r, i));
-int CellN(string d, string o, int r, string i) =>
-    timeByCell.TryGetValue(Key(d, o, r, i), out var v) ? v.Count : 0;
 
 var sw = new StringWriter();
 sw.WriteLine($"# 交叉基准{(baselineMode ? $"基线（{batches.Count} 批窗口中位）" : "单批报告")}");
 sw.WriteLine();
 sw.WriteLine($"> 数据源：{string.Join(" · ", files.Select(Path.GetFileName))}");
-sw.WriteLine("> 四臂：ADO.NET（地板）/ Dapper / FreeSql / PalORM，同批同数据同量具（两遍反序中位）。");
-sw.WriteLine("> 口径与形态注记见 bench/crossbench/README.md 与 docs/adr/ADR-Q。");
+sw.WriteLine("> 四臂：ADO.NET（地板）/ PalORM / Dapper / FreeSql，同批同数据同量具（两遍反序中位）。");
+sw.WriteLine("> 读表：每格 = 时间 [对 ADO 倍数] / 内存 [对 ADO 倍数]；[1.00] = ±0.5% 持平带；≤0.67 或 ≥1.5 越线加粗；📌 = 越线待判读；⚠地板 = ADO 臂批间散布 >20%；🏆 = 该格最快臂。");
+sw.WriteLine("> 口径与形态注记见 bench/crossbench/README.md 与 docs/adr/ADR-Q/R。");
 sw.WriteLine();
 
 string[] dialects = ["SQLite", "MySQL", "PostgreSQL"];
 int[] tiers = [2000, 20000];
-string[] arms = ["ADO_NET", "Dapper", "FreeSql", "PalORM"];
+string[] arms = ["ADO_NET", "PalORM", "Dapper", "FreeSql"];
 
 (string[] Ops, string Title, bool MinTierOnly)[] groups =
 [
@@ -70,12 +69,227 @@ string[] arms = ["ADO_NET", "Dapper", "FreeSql", "PalORM"];
     (["TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback", "EnumInserts"], "表三：事务（三方言，仅最小档）", true),
 ];
 
-sw.WriteLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | FreeSql | PalORM | P/ADO | P/Dapper | P/FreeSql | 分配 A/D/F/P | n |");
-sw.WriteLine("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|");
+// ── 总览榜：全格胜场统计 + PalORM 视角关键数字 ──
+var allCells = new List<(string D, string O, int R)>();
+foreach (string d in dialects)
+foreach (int r in tiers)
+    foreach (var g in groups)
+    {
+        if (g.MinTierOnly && r != 2000) continue;
+        foreach (string o in g.Ops)
+            if (arms.All(a => HasCell(d, o, r, a)))
+                allCells.Add((d, o, r));
+    }
+
+var winCounts = arms.ToDictionary(a => a, a => 0);
+foreach (var (d, o, r) in allCells)
+    winCounts[arms.OrderBy(a => CellTime(d, o, r, a)).First()]++;
+
+var pAdoAll = allCells
+    .Select(c => CellTime(c.D, c.O, c.R, "PalORM") / CellTime(c.D, c.O, c.R, "ADO_NET"))
+    .OrderBy(x => x).ToList();
+
+// ── 总结数据提取：全部由本批数据推导；叙述标签（Qual）随数值生成，禁止硬编码倍数与"最快/最差"操作名 ──
+double PAdo(string d, string o, int r) => CellTime(d, o, r, "PalORM") / CellTime(d, o, r, "ADO_NET");
+double ArmT(string a, string d, string o, int r) => CellTime(d, o, r, a) / CellTime(d, o, r, "ADO_NET");
+double ArmA(string a, string d, string o, int r) => CellAlloc(d, o, r, a) / CellAlloc(d, o, r, "ADO_NET");
+string Qual(double r) => r switch
+{
+    >= 0.995 and < 1.005 => "持平",
+    < 0.995 => $"快 {(1 - r) * 100:F0}%",
+    _ => $"慢 {(r - 1) * 100:F0}%",
+};
+(string Cell, double V) ArmWorst(string a, string[] ops) => allCells
+    .Where(c => ops.Contains(c.O))
+    .Select(c => (Cell: $"{c.O} {c.D}", V: ArmT(a, c.D, c.O, c.R)))
+    .OrderByDescending(x => x.V).First();
+(string Cell, double V) PBest(string[] ops) => allCells
+    .Where(c => ops.Contains(c.O))
+    .Select(c => (Cell: $"{c.O} {c.D}", V: PAdo(c.D, c.O, c.R)))
+    .OrderBy(x => x.V).First();
+
+var pgDelT = PAdo("PostgreSQL", "BulkDelete", 20000);
+var pgDelA = ArmA("PalORM", "PostgreSQL", "BulkDelete", 20000);
+var pgUpsT = PAdo("PostgreSQL", "UpsertBatch", 20000);
+var pgUpsA = ArmA("PalORM", "PostgreSQL", "UpsertBatch", 20000);
+var crudGetT = PAdo("SQLite", "GetByKey", 2000);
+var crudGetFs = ArmT("FreeSql", "SQLite", "GetByKey", 2000);
+var fsGetMax = allCells.Where(c => c.O == "GetByKey").Max(c => ArmT("FreeSql", c.D, c.O, c.R));
+var crudQueryA = ArmA("PalORM", "MySQL", "QueryAll", 20000);
+var crudQueryDapA = ArmA("Dapper", "MySQL", "QueryAll", 20000);
+var crudInsP = PAdo("SQLite", "Insert", 2000);
+var crudInsFs = ArmT("FreeSql", "SQLite", "Insert", 2000);
+var sqlInsP = PAdo("SQLite", "BulkInsert", 20000);
+var sqlInsDap = ArmT("Dapper", "SQLite", "BulkInsert", 20000);
+var sqlInsFs = ArmT("FreeSql", "SQLite", "BulkInsert", 20000);
+var buP = allCells.Where(c => c.O == "BulkUpdate").Select(c => PAdo(c.D, c.O, c.R)).ToList();
+var buDapMax = allCells.Where(c => c.O == "BulkUpdate").Max(c => ArmT("Dapper", c.D, c.O, c.R));
+string[] txOps = groups[2].Ops;
+var txP = allCells.Where(c => txOps.Contains(c.O)).Select(c => PAdo(c.D, c.O, c.R)).ToList();
+var txBestCell = PBest(txOps);
+var txFsWorstCell = ArmWorst("FreeSql", txOps);
+var txDapWorstCell = ArmWorst("Dapper", txOps);
+var enumPAlloc = ArmA("PalORM", "SQLite", "EnumInserts", 2000);
+var enumFsAlloc = ArmA("FreeSql", "SQLite", "EnumInserts", 2000);
+
+// ── 总览（组亮点 + 胜场榜） ──
+sw.WriteLine("## 总览");
+sw.WriteLine();
+sw.WriteLine($"四臂 × 三方言 × {groups.Sum(g => g.Ops.Length)} 操作（CRUD 与批量各两档、事务仅 2000 档）= **{allCells.Count} 格**，{batches.Count} 批窗口中位。所有倍数均以 ADO.NET 手写 SQL 为基准 [1.00]。");
+sw.WriteLine();
+
+// CRUD 组突出项
+sw.WriteLine("### CRUD 单行与读（基准 = ADO [1.00]）");
+sw.WriteLine();
+sw.WriteLine($"- 🥇 GetByKey SQLite：PalORM **{crudGetT:F2}**（{Qual(crudGetT)}），FreeSql **{crudGetFs:F2}**（{Qual(crudGetFs)}，全方言最差 {fsGetMax:F2}）");
+sw.WriteLine($"- QueryAll MySQL 20000 分配：PalORM **{crudQueryA:F2}**（{Qual(crudQueryA)}），Dapper {crudQueryDapA:F2}（{Qual(crudQueryDapA)}）");
+sw.WriteLine($"- Insert SQLite：PalORM {crudInsP:F2}（{Qual(crudInsP)}），FreeSql **{crudInsFs:F2}**（{Qual(crudInsFs)}）");
+sw.WriteLine();
+
+// 批量组突出项
+sw.WriteLine("### 批量处理（基准 = ADO [1.00]）");
+sw.WriteLine();
+sw.WriteLine($"- 🥇 BulkDelete PG 20000：PalORM **{pgDelT:F2}**（{Qual(pgDelT)}），分配 **{pgDelA:F2}**（{Qual(pgDelA)}）");
+sw.WriteLine($"- 🥇 UpsertBatch PG 20000：PalORM **{pgUpsT:F2}**（{Qual(pgUpsT)}），分配 **{pgUpsA:F2}**（{Qual(pgUpsA)}）");
+sw.WriteLine($"- BulkInsert SQLite 20000：PalORM {sqlInsP:F2}（{Qual(sqlInsP)}），Dapper {sqlInsDap:F2}（{Qual(sqlInsDap)}），FreeSql **{sqlInsFs:F2}**（{Qual(sqlInsFs)}）");
+sw.WriteLine($"- BulkUpdate 三方言两档：PalORM {buP.Min():F2}~{buP.Max():F2}，Dapper 最差 **{buDapMax:F2}**（{Qual(buDapMax)}）");
+sw.WriteLine();
+
+// 事务组突出项
+sw.WriteLine("### 事务（基准 = ADO [1.00]）");
+sw.WriteLine();
+sw.WriteLine($"- PalORM 全项 {txP.Min():F2}~{txP.Max():F2}，最快 {txBestCell.Cell} **{txBestCell.V:F2}**");
+sw.WriteLine($"- FreeSql 最差 {txFsWorstCell.Cell} **{txFsWorstCell.V:F2}**，Dapper 最差 {txDapWorstCell.Cell} **{txDapWorstCell.V:F2}**");
+sw.WriteLine($"- EnumInserts SQLite 分配：PalORM {enumPAlloc:F2}（{Qual(enumPAlloc)}），FreeSql **{enumFsAlloc:F2}**（{Qual(enumFsAlloc)}）");
+sw.WriteLine();
+
+sw.WriteLine("### 最快胜场");
+sw.WriteLine();
+sw.WriteLine($"| 臂 | 最快 / {allCells.Count} 格 |");
+sw.WriteLine("|---|---:|");
+foreach (string a in arms.OrderByDescending(a => winCounts[a]))
+    sw.WriteLine($"| {a switch { "ADO_NET" => "ADO.NET（地板）", _ => a }} | **{winCounts[a]}**（{winCounts[a] * 100.0 / allCells.Count:F0}%） |");
+sw.WriteLine();
+sw.WriteLine($"> P/ADO 中位 **{pAdoAll[pAdoAll.Count / 2]:F2}**（1.00 = 贴平手写 SQL 地板），全距 {pAdoAll[0]:F2}~{pAdoAll[^1]:F2}。");
+sw.WriteLine();
+
+// ── 操作说明与总评：总评只写定性机制，不嵌倍数——嵌入的数字会随数据漂移变成假数据 ──
+var opDescriptions = new Dictionary<string, (string Desc, string Verdict)>
+{
+    ["GetByKey"] = ("主键单行点查", "PalORM 贴地板（SQLite 会话税被 SQL 常量缓存抵消）；FreeSql 全方言最慢（表达式每次求值）"),
+    ["GetAllAsync"] = ("全表直查 API（PalORM 专用 GetAllAsync，其余同 QueryAll）", "联网方言四臂接近；SQLite Dapper（反射物化）与 FreeSql（表达式管线）明显偏慢"),
+    ["QueryAll"] = ("全表物化查询（From<T>().ToListAsync / Select.ToList）", "同 GetAllAsync：PalORM ≈ ADO 地板，SQLite 两竞品明显偏慢"),
+    ["Insert"] = ("单行插入（自增主键）", "联网方言 fsync 主导四臂持平；SQLite PalORM 持平、FreeSql 明显偏慢（表达式管线）"),
+    ["Update"] = ("单行整行更新", "联网方言 fsync 主导持平；FreeSql 在 SQLite 与 MySQL 明显偏慢（表达式管线）"),
+    ["BulkInsert"] = ("批量插入（SQLite 行预编译 / PG COPY / MySQL BulkCopy）", "PalORM 与 ADO 同形态贴平；Dapper/FreeSql 批量路径全方言偏慢，PG/MySQL 大档差距最大"),
+    ["BulkUpdate"] = ("批量更新（SQLite 逐条裹事务 / PG UPDATE FROM VALUES / MySQL CASE WHEN）", "PalORM 三方言与 ADO 同形态贴平；Dapper/FreeSql 无集合式封装，明显偏慢"),
+    ["BulkDelete"] = ("批量删除（SQLite json_each 单参数 / PG = ANY 数组 / MySQL IN 分批）", "PG 数组形态快于 ADO 的 IN 占位符；SQLite json_each 与 MySQL 分批接近地板"),
+    ["UpsertBatch"] = ("批量 UPSERT（ON CONFLICT / ON DUPLICATE KEY）", "PG 数组形态快于 ADO 与其余臂；SQLite 四臂同形态贴平；MySQL Dapper/FreeSql 偏慢"),
+    ["TxSingleInsert"] = ("事务内单行插入", "四臂持平（事务开销主导）"),
+    ["TxHundredInserts"] = ("事务内 100 行逐条插入", "联网方言接近；FreeSql SQLite 明显偏慢（逐行表达式开销放大）"),
+    ["TxBulkInsert"] = ("事务内批量插入", "PalORM 贴地板；Dapper（multi-exec 无语句缓存复用）与 FreeSql 明显偏慢"),
+    ["TxRollback"] = ("事务回滚（更新后显式 Rollback）", "联网方言接近；SQLite FreeSql 明显偏慢"),
+    ["EnumInserts"] = ("枚举列事务内逐条插入（Status TEXT 列）", "PalORM 贴平（SQLite 略高为每调用会话契约成本，已探针定案）；FreeSql 全方言明显偏慢，Dapper SQLite 偏慢"),
+};
+
 foreach (var g in groups)
 {
+    var groupCells = allCells.Where(c => g.Ops.Contains(c.O)).ToList();
+    var gw = arms.ToDictionary(a => a, a => groupCells.Count(c => arms.OrderBy(x => CellTime(c.D, c.O, c.R, x)).First() == a));
+    sw.WriteLine($"## {g.Title}");
     sw.WriteLine();
-    sw.WriteLine($"**{g.Title}**");
+    var winLine = string.Join(" · ", arms.OrderByDescending(a => gw[a]).Select(a => ArmShort(a) + " " + gw[a]));
+    sw.WriteLine("> 胜场：" + winLine);
+    sw.WriteLine();
+
+    // 测试项说明表
+    sw.WriteLine("### 测试项说明");
+    sw.WriteLine();
+    sw.WriteLine("| 操作 | 测什么 | 总评 |");
+    sw.WriteLine("|---|---|---|");
+    foreach (string op in g.Ops)
+    {
+        if (opDescriptions.TryGetValue(op, out var info))
+            sw.WriteLine($"| {op} | {info.Desc} | {info.Verdict} |");
+    }
+    sw.WriteLine();
+
+    foreach (string d in dialects)
+    {
+        var dialectCells = new List<(int R, string O)>();
+        foreach (int r in tiers)
+        {
+            if (g.MinTierOnly && r != 2000) continue;
+            foreach (string o in g.Ops)
+                if (arms.All(a => HasCell(d, o, r, a)))
+                    dialectCells.Add((r, o));
+        }
+        if (dialectCells.Count == 0) continue;
+
+        sw.WriteLine($"**{d}**");
+        sw.WriteLine();
+        // 格式：时间 [对 ADO 倍数] / 内存 [对 ADO 倍数]，如 4.5ms [1.87] / 4.5MB [0.55]
+        sw.WriteLine("| 操作 | 档 | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |");
+        sw.WriteLine("|---|---:|:-:|---|---|---|---|");
+        foreach (int r in tiers)
+        {
+            if (g.MinTierOnly && r != 2000) continue;
+            foreach (string op in g.Ops)
+            {
+                if (!arms.All(a => HasCell(d, op, r, a))) continue;
+                double adoTime = CellTime(d, op, r, "ADO_NET");
+                double adoAlloc = CellAlloc(d, op, r, "ADO_NET");
+                string fastest = arms.OrderBy(a => CellTime(d, op, r, a)).First();
+                string pin = CellTime(d, op, r, "PalORM") / adoTime is >= 1.5 or <= 0.67 ? "📌" : "";
+                string floorFlag = "";
+                if (baselineMode)
+                {
+                    var f = timeByCell[Key(d, op, r, "ADO_NET")];
+                    if (f.Count >= 2 && (f.Max() / f.Min()) > 1.2) floorFlag = " ⚠地板";
+                }
+
+                string winnerLabel = fastest == "PalORM" ? "🏆 **PalORM**" : fastest switch { "ADO_NET" => "ADO", _ => fastest };
+
+                // 每格双指标：时间 [×] / 分配 [×]，倍数均以 ADO 为基准
+                string VsAdo(string a)
+                {
+                    double t = CellTime(d, op, r, a);
+                    double alloc = CellAlloc(d, op, r, a);
+                    double tRatio = t / adoTime;
+                    double aRatio = adoAlloc > 0 ? alloc / adoAlloc : 1.0;
+
+                    // 持平带 ±0.5% 显示 [1.00]（与色标 |p|<0.5% 记 0% 惯例一致）；
+                    // 越线倍数仅非冠军格加粗——冠军格整格加粗，嵌套 ** 破坏渲染
+                    string Mul(double ratio) => ratio is >= 0.995 and < 1.005 ? "[1.00]"
+                        : (ratio <= 0.67 || ratio >= 1.5) && a != fastest ? $"[**{ratio:F2}**]"
+                        : $"[{ratio:F2}]";
+
+                    string timePart = Fmt(t) + " " + Mul(tRatio);
+                    string allocPart = Bytes(alloc) + " " + Mul(aRatio);
+                    string cell = timePart + " / " + allocPart;
+                    return a == fastest ? $"**{cell}**" : cell;
+                }
+
+                sw.WriteLine($"| {pin}{op}{floorFlag} | {r} | {winnerLabel} "
+                    + string.Concat(arms.Select(VsAdo).Select(v => $"| {v} "))
+                    + $"|");
+            }
+        }
+        sw.WriteLine();
+    }
+}
+
+// ── 附表：绝对时间明细（完整数据供引用） ──
+sw.WriteLine("## 附表：绝对时间（全量）");
+sw.WriteLine();
+sw.WriteLine("> 主表倍数以 ADO 地板为基准；本附表为绝对时间与分配，供外部引用。分配为 AllocatedBytesPerOp。");
+sw.WriteLine();
+foreach (var g in groups)
+{
+    sw.WriteLine($"### {g.Title}");
+    sw.WriteLine();
+    sw.WriteLine("| 操作 | 方言 | 档 | ADO.NET | PalORM | Dapper | FreeSql | 分配 A/P/D/F |");
+    sw.WriteLine("|---|---|---:|---:|---:|---:|---:|---|");
     foreach (string d in dialects)
     foreach (int r in tiers)
     {
@@ -83,25 +297,12 @@ foreach (var g in groups)
         foreach (string op in g.Ops)
         {
             if (!arms.All(a => HasCell(d, op, r, a))) continue;
-            double p = CellTime(d, op, r, "PalORM");
-            double pAdo = p / CellTime(d, op, r, "ADO_NET");
-            double pDap = p / CellTime(d, op, r, "Dapper");
-            double pFs = p / CellTime(d, op, r, "FreeSql");
-            string pin = pAdo is >= 1.5 or <= 0.67 ? "📌" : "";
-            string n = baselineMode ? CellN(d, op, r, "PalORM").ToString() : "—";
-            string floorFlag = "";
-            if (baselineMode)
-            {
-                var f = timeByCell[Key(d, op, r, "ADO_NET")];
-                if (f.Count >= 2 && (f.Max() / f.Min()) > 1.2) floorFlag = " ⚠地板漂移";
-            }
-
-            sw.WriteLine($"| {pin}{op}{floorFlag} | {d} | {r} "
+            sw.WriteLine($"| {op} | {d} | {r} "
                 + string.Concat(arms.Select(a => $"| {Fmt(CellTime(d, op, r, a))} "))
-                + $"| {Ratio(pAdo)} | {Ratio(pDap)} | {Ratio(pFs)} "
-                + $"| {string.Join("/", arms.Select(a => Bytes(CellAlloc(d, op, r, a))))} | {n} |");
+                + $"| {string.Join("/", arms.Select(a => Bytes(CellAlloc(d, op, r, a))))} |");
         }
     }
+    sw.WriteLine();
 }
 
 sw.WriteLine();
@@ -129,6 +330,8 @@ static string? ParseOption(string[] args, string name)
     return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
 }
 
+static string ArmShort(string a) => a switch { "ADO_NET" => "ADO", _ => a };
+
 static string Key(string d, string o, int r, string i) => $"{d}|{o}|{r}|{i}";
 
 static double Median(List<double> v)
@@ -148,16 +351,6 @@ static string Bytes(double b)
     if (b < 1024) return $"{b:F0}B";
     double kb = b / 1024;
     return kb < 100 ? $"{kb:F1}KB" : kb < 1024 ? $"{kb:F0}KB" : $"{kb / 1024:F1}MB";
-}
-
-static string Ratio(double v)
-{
-    int p = (int)Math.Round((v - 1) * 100);
-    if (Math.Abs(p) < 1) p = 0;
-    string color = p <= -30 ? "🟢" : p <= -10 ? "🟩" : p <= -1 ? "🔹" : p == 0 ? "⚪"
-        : p <= 9 ? "🔸" : p <= 29 ? "🟧" : "🟥";
-    string cell = $"{v:F2} {color}{(p >= 0 ? "+" : "")}{p}%";
-    return v >= 1.3 || v <= 0.7 ? $"**{cell}**" : cell;
 }
 
 // Runner Measurement 的最小镜像（字段名与 bench/PalORM.PerfHub/Measure.cs 一致）
