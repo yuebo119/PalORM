@@ -63,6 +63,17 @@ internal static class Program
             opFilter = args[opsIndex + 1].Split(',', StringSplitOptions.RemoveEmptyEntries);
         }
 
+        // --arms ado,dapper,freesql,palorm：臂子集（快速复核路径；缺臂的批不进基线）
+        string[] armFilter = [];
+        int armsIndex = Array.IndexOf(args, "--arms");
+        if (armsIndex >= 0 && armsIndex + 1 < args.Length)
+        {
+            armFilter = args[armsIndex + 1].Split(',', StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        // --fast：全局预算缩放 0.4（冒烟专用——基线/主张必须全预算）
+        double globalScale = args.Contains("--fast") ? 0.4 : 1.0;
+
         SQLitePCL.Batteries_V2.Init();
 
         var results = new List<Measurement>();
@@ -79,8 +90,16 @@ internal static class Program
                 await ExecAsync(conn, Pragma).ConfigureAwait(false);
             }
 
-            IPerfImplementation[] impls =
+            IPerfImplementation[] allImpls =
                 [new AdoNetImpl(info), new DapperImpl(info), new FreeSqlImpl(info), new PalormImpl(info)];
+            IPerfImplementation[] impls = armFilter.Length == 0
+                ? allImpls
+                : [.. allImpls.Where(a => armFilter.Contains(ArmToken(a.Name), StringComparer.OrdinalIgnoreCase))];
+            if (impls.Length == 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    "--arms", string.Join(',', armFilter), "有效臂名：ado、dapper、freesql、palorm");
+            }
             try
             {
                 foreach (int rows in tiers)
@@ -105,11 +124,12 @@ internal static class Program
 
                         // 读正确性守卫（每方言一次，不计入测量）：Fluent 配置的 FreeSql 实体
                         // 映射必须与 ADO 同值——防列错位静默产生错误数据
-                        if (pass == 0 && rows == tiers[0])
+                        IPerfImplementation? freeSql = Array.Find(impls, static a => a.Name == "FreeSql");
+                        if (pass == 0 && rows == tiers[0] && freeSql is not null)
                         {
-                            S1Row? probe = await impls[2].GetByKeyAsync(conn, 1, CancellationToken.None)
+                            S1Row? probe = await freeSql.GetByKeyAsync(conn, 1, CancellationToken.None)
                                 .ConfigureAwait(false);
-                            List<S1Row> all = await impls[2].QueryAllAsync(conn, CancellationToken.None)
+                            List<S1Row> all = await freeSql.QueryAllAsync(conn, CancellationToken.None)
                                 .ConfigureAwait(false);
                             if (probe?.Name != "row-0" || probe.Price != 0m || probe.Marker != 0
                                 || all.Count != rows || all[^1].Id != rows)
@@ -137,8 +157,9 @@ internal static class Program
                                 Measurement m = await Measure.SingleAsync(
                                     info, impl, op.Name, op.Group, rows, op.Action, conn, op.MaxIterations,
                                     CancellationToken.None, op.Prepare,
-                                    budgetSeconds: 1.5,
-                                    scale: 1.0,
+                                    budgetSeconds: op.Budget,
+                                    scale: globalScale,
+                                    warmupScale: op.WarmupScale,
                                     requireWarmupFloor: rows == tiers[0]).ConfigureAwait(false);
                                 results.Add(m);
                                 Console.WriteLine(
@@ -173,6 +194,13 @@ internal static class Program
         "mysql" => Dialect.MySql,
         "pg" or "postgres" or "postgresql" => Dialect.PostgreSql,
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, "dialect 只支持 sqlite/mysql/pg")
+    };
+
+    /// <summary>--arms 令牌 → 实现名（ado 令牌对应实现名 ADO_NET）。</summary>
+    private static string ArmToken(string implementationName) => implementationName switch
+    {
+        "ADO_NET" => "ado",
+        _ => implementationName.ToLowerInvariant(),
     };
 
     private static List<Op> BuildOperations(
@@ -362,5 +390,24 @@ internal static class Program
         int MaxIterations,
         Func<IPerfImplementation, DbConnection, int, Task> Action,
         Func<DbConnection, Task>? Prepare = null,
-        bool MinTierOnly = false);
+        bool MinTierOnly = false)
+    {
+        /// <summary>计时窗预算（秒）。慢操作表（2026-10-25 时间优化轮）：事务族与
+        /// Bulk@20000 族的每操作中位在 8~104ms——1.5s 窗产出 14~190 次迭代，其中位数
+        /// 的批间稳定性由 fsync/服务端主导（批内 err 普遍 &lt;2%），0.6s 窗（≥5 次采样，
+        /// 引擎下限 3 次兜底）不损失判别力。快操作不受预算影响（迭代数在 maxIterations
+        /// 钳制处收敛，预算从不生效）。A/A 验证：与基线 v3 逐格噪声带比对（见 README）。</summary>
+        public double Budget => Group switch
+        {
+            "Transaction" => 0.6,
+            "Bulk" when Name is "BulkInsert" or "BulkUpdate" or "UpsertBatch" => 0.6,
+            // BulkDelete@20000 受预算轻度约束（8.8ms→170 次），但其 prepare 重播 200k 行
+            // 是本项时间大头，计时段省 0.9s 占比小——维持全预算保采样量
+            _ => 1.5,
+        };
+
+        /// <summary>慢操作族的预热缩放（0.75s × 0.4 = 0.3s，≥3 次预热下限由引擎兜底；
+        /// 首档 JIT 地板 0.5s 不受 warmupScale 影响，属正当成本）。</summary>
+        public double WarmupScale => Budget == 0.6 ? 0.4 : 1.0;
+    }
 }
