@@ -24,6 +24,8 @@
 | **中** | `docs/编码规范.md` §18-19 | SonarAnalyzer 守护层规则文档化 + 脚本语言规范（脚本一律 C#，白名单制与形态判据，2026-09-29 用户决策） |
 | **参考** | `.github/PULL_REQUEST_TEMPLATE.md` | PR 检查清单 |
 
+**版本与发布**：本项目遵循 [Semantic Versioning 2.0.0](https://semver.org/lang/zh-CN/)。MAJOR=破坏性变更，MINOR=向后兼容新增，PATCH=向后兼容修复，预发布用 `-preview.N`；版本真源 `Directory.Build.props`，发版前按 `docs/发布规范.md` §1.2 判定升级类型，并按 §4.1 完成预检与 §1.3 三方一致扫描。不按 SemVer 的版本号不得打 tag 或发布。
+
 ## 四系统（按需触发）
 
 | 命令 | 系统 | 用途 |

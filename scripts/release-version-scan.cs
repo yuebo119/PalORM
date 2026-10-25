@@ -33,6 +33,33 @@ var oldRe = Regex.Escape(oldVersion);
 
 var fail = 0;
 
+// SemVer 2.0.0 格式门禁（项目规范 2026-10-26）：版本号必须 MAJOR.MINOR.PATCH[-pre][+build]。
+var semVerPattern = new Regex(
+    @"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$");
+if (!semVerPattern.IsMatch(oldVersion))
+{
+    Console.Error.WriteLine($"::error::旧版本号不符合 SemVer 2.0.0：{oldVersion}");
+    fail = 1;
+}
+if (newVersion.Length > 0)
+{
+    if (!semVerPattern.IsMatch(newVersion))
+    {
+        Console.Error.WriteLine($"::error::新版本号不符合 SemVer 2.0.0：{newVersion}");
+        fail = 1;
+    }
+    else if (semVerPattern.IsMatch(oldVersion))
+    {
+        string[] oldCore = oldVersion.Split('-')[0].Split('+')[0].Split('.');
+        string[] newCore = newVersion.Split('-')[0].Split('+')[0].Split('.');
+        string bump = int.Parse(newCore[0]) != int.Parse(oldCore[0]) ? "MAJOR"
+            : int.Parse(newCore[1]) != int.Parse(oldCore[1]) ? "MINOR"
+            : int.Parse(newCore[2]) != int.Parse(oldCore[2]) ? "PATCH"
+            : "无核心版本变化";
+        Console.WriteLine($"版本升级类型：{bump}（{oldVersion} → {newVersion}）");
+    }
+}
+
 // report 与 .sh 同走 stdout（::error:: 注解从 stdout 也能被 GitHub 识别；流向一致性属 D8）
 void Report(string desc, string matches)
 {
