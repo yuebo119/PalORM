@@ -2,10 +2,11 @@ using System.Text.Json;
 
 namespace PalORM.Bench.Shared;
 
-/// <summary>CrossBench 四臂交叉批的读取层（<c>bench/crossbench/results/crossbench-*.json</c>）。
+/// <summary>CrossBench 五臂交叉批的读取层（<c>bench/crossbench/results/crossbench-*.json</c>）。
 /// <para><b>为什么共享</b>：PerfCli（crossbench 子命令 / 统一报告 FreeSql 节）与 PerfGate
 /// （四组表 FreeSql 列）都要"最近完整批"判别与测量装载——复制成两份会让完整批判据各自漂移。</para>
-/// <para><b>完整批判别</b>：四臂 × 三方言 × 两档 = 24 个 (Dialect,Rows,Implementation) 三元组；
+/// <para><b>完整批判别</b>：五臂 × 三方言 × 两档 = 30 个 (Dialect,Rows,Implementation) 三元组
+///（2026-10-26 起含 RepoDb 臂；此前的四臂批 24 三元组不再算完整批）；
 /// 子集批（--arms/--dialects/--fast）不作为统一报告与四组表的数据源。文件按名倒序（时间戳命名）
 /// 取第一个满足覆盖面的批；解析失败（半写文件）按不存在跳过继续找更早的批。</para>
 /// <para><b>解析形态</b>：crossbench JSON 是裸测量数组（无信封信封 schema），字段名与 PerfHub
@@ -13,8 +14,8 @@ namespace PalORM.Bench.Shared;
 /// 用 JsonDocument 手工取值而非反射反序列化——AOT 全链路纪律（P0 #3）。</para></summary>
 internal static class CrossBenchBatch
 {
-    /// <summary>完整批最低三元组数（四臂 × 三方言 × 两档 = 24；批内每三元组含多操作）。</summary>
-    private const int FullBatchMinTriples = 24;
+    /// <summary>完整批最低三元组数（五臂 × 三方言 × 两档 = 30；批内每三元组含多操作）。</summary>
+    private const int FullBatchMinTriples = 30;
 
     /// <summary>最近的完整 CrossBench 批文件路径；目录缺失或无完整批返回 null。</summary>
     public static string? LatestFullBatchPath(string crossBenchResultsDir)

@@ -29,7 +29,13 @@ internal static class Program
             ?? throw new InvalidOperationException("未找到仓库根（PalORM.slnx）——从仓内运行 dotnet run。");
     }
 
-    /// <summary>结果目录：仓内 bench/crossbench/results（基线与原始批 JSON 落此处入库）。</summary>
+    /// <summary>五臂交叉基准——ADO.NET/Dapper/RepoDB/FreeSql/PalORM（2026-10-26: RepoDB v1.17.0 新增）。
+    /// <para><b>RepoDB 集成教训吸收</b>：
+    /// ①实体映射走 DynamicMapping（零特性，FieldMapper 静态缓存预热）；
+    /// ②批量操作自动路由驱动级 API（MySQL LOAD DATA/PG COPY/SQLite 行预编译）；
+    /// ③事务传 DbTransaction 参数（无需 WithTransaction 包装，与 ADO 地板同形态）；
+    /// ④AOT 兼容需 TrimmerRootAssembly（与 FreeSql 同模式），本夹具显式预热映射表；
+    /// ⑤SQLite PRAGMA 独立连接（池连接无法注入 PRAGMA，与 FreeSql 同坑）。</para></summary>
     internal static string ResultsDir() => Path.Combine(FindRepoRoot(), "bench", "crossbench", "results");
 
     internal static string CurrentCommit() => "crossbench";
@@ -91,14 +97,14 @@ internal static class Program
             }
 
             IPerfImplementation[] allImpls =
-                [new AdoNetImpl(info), new DapperImpl(info), new FreeSqlImpl(info), new PalormImpl(info)];
+                [new AdoNetImpl(info), new DapperImpl(info), new RepoDbArm(info), new FreeSqlImpl(info), new PalormImpl(info)];
             IPerfImplementation[] impls = armFilter.Length == 0
                 ? allImpls
                 : [.. allImpls.Where(a => armFilter.Contains(ArmToken(a.Name), StringComparer.OrdinalIgnoreCase))];
             if (impls.Length == 0)
             {
                 throw new ArgumentOutOfRangeException(
-                    "--arms", string.Join(',', armFilter), "有效臂名：ado、dapper、freesql、palorm");
+                    "--arms", string.Join(',', armFilter), "有效臂名：ado、dapper、repodb、freesql、palorm");
             }
             try
             {
@@ -122,22 +128,52 @@ internal static class Program
 
                         IPerfImplementation[] order = pass == 0 ? impls : [.. impls.Reverse()];
 
-                        // 读正确性守卫（每方言一次，不计入测量）：Fluent 配置的 FreeSql 实体
-                        // 映射必须与 ADO 同值——防列错位静默产生错误数据
+                        // 读正确性守卫（每方言一次，不计入测量）：RepoDB/FreeSql 实体映射
+                        // 必须与 ADO 同值——防列错位静默产生错误数据
+                        IPerfImplementation? repoDb = Array.Find(impls, static a => a.Name == "RepoDb");
                         IPerfImplementation? freeSql = Array.Find(impls, static a => a.Name == "FreeSql");
-                        if (pass == 0 && rows == tiers[0] && freeSql is not null)
+                        if (pass == 0 && rows == tiers[0] && (repoDb is not null || freeSql is not null))
                         {
-                            S1Row? probe = await freeSql.GetByKeyAsync(conn, 1, CancellationToken.None)
-                                .ConfigureAwait(false);
-                            List<S1Row> all = await freeSql.QueryAllAsync(conn, CancellationToken.None)
-                                .ConfigureAwait(false);
-                            if (probe?.Name != "row-0" || probe.Price != 0m || probe.Marker != 0
-                                || all.Count != rows || all[^1].Id != rows)
+                            List<string> validationMessages = new();
+                            
+                            if (freeSql is not null)
                             {
-                                throw new InvalidOperationException(
-                                    $"FreeSql 读映射校验失败：probe={probe?.Name}/{probe?.Price}/{probe?.Marker} count={all.Count} last={all[^1].Id}");
+                                S1Row? probe = await freeSql.GetByKeyAsync(conn, 1, CancellationToken.None)
+                                    .ConfigureAwait(false);
+                                List<S1Row> all = await freeSql.QueryAllAsync(conn, CancellationToken.None)
+                                    .ConfigureAwait(false);
+                                if (probe?.Name != "row-0" || probe.Price != 0m || probe.Marker != 0
+                                    || all.Count != rows || all[^1].Id != rows)
+                                {
+                                    validationMessages.Add($"FreeSql: probe={probe?.Name}/{probe?.Price}/{probe?.Marker} count={all.Count} last={all[^1].Id}");
+                                }
+                                else
+                                {
+                                    Console.WriteLine("    FreeSql 读映射校验 OK");
+                                }
                             }
-                            Console.WriteLine("    FreeSql 读映射校验 OK");
+
+                            if (repoDb is not null)
+                            {
+                                S1Row? probe = await repoDb.GetByKeyAsync(conn, 1, CancellationToken.None)
+                                    .ConfigureAwait(false);
+                                List<S1Row> all = await repoDb.QueryAllAsync(conn, CancellationToken.None)
+                                    .ConfigureAwait(false);
+                                if (probe?.Name != "row-0" || probe.Price != 0m || probe.Marker != 0
+                                    || all.Count != rows || all[^1].Id != rows)
+                                {
+                                    validationMessages.Add($"RepoDB: probe={probe?.Name}/{probe?.Price}/{probe?.Marker} count={all.Count} last={all[^1].Id}");
+                                }
+                                else
+                                {
+                                    Console.WriteLine("    RepoDB 读映射校验 OK");
+                                }
+                            }
+
+                            if (validationMessages.Count > 0)
+                            {
+                                throw new InvalidOperationException(string.Join(" | ", validationMessages));
+                            }
                         }
 
                         foreach (Op op in BuildOperations(dialect, rows, keys, whereInIds, bulkDeleteRounds))

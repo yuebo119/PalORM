@@ -111,207 +111,181 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 ## 📊 Performance
 
-> **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC2 · SQLite temp-file DB (WAL + 64 MB cache + mmap) · PG 18.6 / MySQL 8.4.11 local containers. **Four arms, same process, same round, same data, same instrumentation**: ADO.NET (hand-written floor) / Dapper 2.1.89 / FreeSql 3.5.311 / PalORM — each arm uses its ecosystem's idiomatic best practice; every operation runs twice with reversed arm order and takes the median (removes arm-order phase bias).
+> **Test environment**: AMD Ryzen 9 8945HX (32 logical cores) · Windows 10 22H2 · .NET 11 RC2 · SQLite temp-file DB (WAL + 64 MB cache + mmap) · PG 18.6 / MySQL 8.4.11 local containers. **Five arms, same process, same round, same data, same instrumentation**: ADO.NET (hand-written floor) / Dapper 2.1.89 / FreeSql 3.5.311 / RepoDb 1.17.0 / PalORM — each arm uses its ecosystem's idiomatic best practice; every operation runs twice with reversed arm order and takes the median (removes arm-order phase bias).
 >
-> **Data batch**: night of 2026-10-25, code `3affd97`. CrossBench four-arm batch `crossbench-20261025-213235.json` + three full `PerfCli full` batches (416 items each); same-batch gates BDN 27/27 and index 171 items 0 FAIL. All numbers are derived from the batch JSON by the frozen template script (`scripts/crossbench-report.cs`); full reports in `bench/reports/`.
+> **Data batch**: 2026-10-26, code `dbff816`. CrossBench five-arm full batch `crossbench-20261026-055849.json` (3 dialects × 2 tiers × 17 operations × 5 arms, two reversed passes; 5 arms × 29 measurements × 2 passes × 3 dialects = 870 rows). All numbers are derived from the batch JSON by the frozen template script (`scripts/crossbench-report.cs`); full report at `bench/crossbench/results/fivearm-20261026.md`; PerfHub/PerfGate four-table caliber (incl. RepoDb columns) under `bench/reports/`.
 
 **Reading the tables**: each cell = time [ratio vs ADO] / memory [ratio vs ADO]; [1.00] = ±0.5% parity band; ≤0.67 or ≥1.5 bold = outside the line; 📌 = flagged for review; 🏆 = fastest arm in the cell. Color scale (positive % = slower/more than baseline): 🟢 strong win ≤−30% · 🟩 mid win −29%~−10% · 🔹 slight win −9%~−1% · 🔸 slight loss +1%~+9% · 🟧 mid loss +10%~+29% · 🟥 strong loss ≥+30%.
 
-### Overview (4 arms × 3 dialects × 14 operations = 69 cells)
+### Overview (5 arms × 3 dialects × 14 operations = 69 cells)
 
 **CRUD single-row and reads (baseline = ADO [1.00])**
 
-- 🥇 GetByKey SQLite: PalORM **0.78** (22% faster), FreeSql **4.70** (370% slower, worst in all dialects at 5.00)
+- 🥇 GetByKey SQLite: PalORM **0.80** (20% faster), FreeSql **4.98** (398% slower, worst across dialects at 5.45)
 - QueryAll MySQL 20000 allocation: PalORM **0.91** (9% faster), Dapper 1.11 (11% slower)
-- Insert SQLite: PalORM 1.00 (even), FreeSql **1.74** (74% slower)
+- Insert SQLite: PalORM 0.98 (2% faster), FreeSql **1.72** (72% slower)
+- RepoDb single-row and reads: worst cell **1.46** (46% slower) — expression-based materialization, same order of magnitude as hand-written SQL
 
 **Bulk processing (baseline = ADO [1.00])**
 
-- 🥇 BulkDelete PG 20000: PalORM **0.44** (56% faster), allocation **0.10** (90% faster)
-- 🥇 UpsertBatch PG 20000: PalORM **0.60** (40% faster), allocation **0.37** (63% faster)
-- BulkInsert SQLite 20000: PalORM 1.03 (3% slower), Dapper 1.68 (68% slower), FreeSql **3.99** (299% slower)
-- BulkUpdate three dialects both tiers: PalORM 0.89~1.03, Dapper worst **3.77** (277% slower)
+- 🥇 BulkDelete PG 20000: PalORM **0.40** (60% faster), allocation **0.10** (90% faster)
+- 🥇 UpsertBatch PG 20000: PalORM **0.67** (33% faster), allocation **0.37** (63% faster)
+- BulkInsert SQLite 20000: PalORM 1.03 (3% slower), Dapper 1.88 (88% slower), FreeSql **3.81** (281% slower)
+- BulkUpdate three dialects both tiers: PalORM 0.92~1.04, Dapper worst **3.70** (270% slower)
+- RepoDb bulk family: best BulkInsert MySQL **0.96** (4% faster), worst BulkDelete SQLite **24.05** (2305% slower)
 
 **Transactions (baseline = ADO [1.00])**
 
-- PalORM 0.95~1.15 across all items, fastest TxHundredInserts MySQL **0.95**
-- FreeSql worst TxRollback SQLite **13.26**, Dapper worst TxRollback SQLite **3.86**
+- PalORM 0.95~1.37 across all items, fastest EnumInserts PostgreSQL **0.95**
+- FreeSql worst TxRollback SQLite **12.79**, Dapper worst TxRollback SQLite **3.56**
 - EnumInserts SQLite allocation: PalORM 1.00 (even), FreeSql **8.42** (742% slower)
 
 **Fastest wins**
 
 | Arm | Fastest / 69 cells |
 |---|---:|
-| ADO.NET (floor) | **33** (48%) |
-| PalORM | **31** (45%) |
-| Dapper | **5** (7%) |
+| ADO.NET (floor) | **32** (46%) |
+| PalORM | **32** (46%) |
+| Dapper | **3** (4%) |
+| RepoDb | **2** (3%) |
 | FreeSql | **0** (0%) |
 
-> P/ADO median **1.00** (even with the hand-written SQL floor), range 0.44~1.15.
+> P/ADO median **1.00** (even with the hand-written SQL floor), range 0.40~1.37.
 
 ### Table 1: CRUD single-row and reads (three dialects, two tiers)
 
-> Wins: ADO 15 · PalORM 11 · Dapper 4 · FreeSql 0
-
-| Operation | What it measures | Verdict |
-|---|---|---|
-| GetByKey | Primary-key single-row lookup | PalORM ties the floor (SQLite session overhead offset by constant SQL cache); FreeSql slowest in all dialects (expression evaluated every call) |
-| GetAllAsync | Whole-table query API (PalORM-specific GetAllAsync; the others use QueryAll) | Close across four arms on network dialects; on SQLite Dapper (reflection materialization) and FreeSql (expression pipeline) are clearly slower |
-| QueryAll | Full materialized query (From<T>().ToListAsync / Select.ToList) | Same as GetAllAsync: PalORM ≈ ADO floor, both competitors clearly slower on SQLite |
-| Insert | Single-row insert (auto-increment key) | fsync-dominated, four arms even on network dialects; on SQLite PalORM even, FreeSql clearly slower (expression pipeline) |
-| Update | Single-row full-row update | fsync-dominated, even on network dialects; FreeSql clearly slower on SQLite and MySQL |
-
 **SQLite**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| GetByKey | 2000 | 🏆 **PalORM** | 7.4 µs [1.00] / 2.1KB [1.00] | **5.8 µs [0.78] / 2.1KB [1.02]** | 9.7 µs [1.30] / 2.8KB [1.34] | 34.8 µs [**4.70**] / 10.2KB [**4.86**] |
-| GetAllAsync | 2000 | 🏆 **PalORM** | 957.8 µs [1.00] / 308KB [1.00] | **949.0 µs [0.99] / 294KB [0.95]** | 1.36 ms [1.42] / 513KB [**1.66**] | 1.38 ms [1.44] / 314KB [1.02] |
-| QueryAll | 2000 | 🏆 **PalORM** | 956.6 µs [1.00] / 308KB [1.00] | **947.0 µs [0.99] / 292KB [0.95]** | 1.34 ms [1.40] / 513KB [**1.66**] | 1.37 ms [1.43] / 314KB [1.02] |
-| Insert | 2000 | ADO | **17.0 µs [1.00] / 2.8KB [1.00]** | 17.0 µs [1.00] / 2.7KB [0.97] | 17.8 µs [1.05] / 3.5KB [1.28] | 29.6 µs [**1.74**] / 5.7KB [**2.06**] |
-| Update | 2000 | ADO | **7.0 µs [1.00] / 2.5KB [1.00]** | 7.2 µs [1.01] / 2.9KB [1.15] | 7.8 µs [1.11] / 3.3KB [1.30] | 19.1 µs [**2.71**] / 7.4KB [**2.94**] |
-| GetByKey | 20000 | ADO | **6.0 µs [1.00] / 2.1KB [1.00]** | 6.2 µs [1.04] / 2.2KB [1.02] | 7.1 µs [1.18] / 2.8KB [1.33] | 30.0 µs [**5.00**] / 10.4KB [**4.93**] |
-| GetAllAsync | 20000 | ADO | **9.52 ms [1.00] / 3.3MB [1.00]** | 9.55 ms [1.00] / 2.9MB [0.89] | 13.72 ms [1.44] / 5.3MB [**1.61**] | 13.82 ms [1.45] / 3.3MB [1.01] |
-| QueryAll | 20000 | 🏆 **PalORM** | 9.54 ms [1.00] / 3.3MB [1.00] | **9.48 ms [0.99] / 2.9MB [0.89]** | 13.66 ms [1.43] / 5.3MB [**1.61**] | 13.78 ms [1.44] / 3.3MB [1.01] |
-| Insert | 20000 | 🏆 **PalORM** | 17.1 µs [1.00] / 2.8KB [1.00] | **16.9 µs [0.99] / 2.7KB [0.97]** | 18.0 µs [1.06] / 3.6KB [1.31] | 29.1 µs [**1.71**] / 5.7KB [**2.06**] |
-| Update | 20000 | ADO | **7.1 µs [1.00] / 2.5KB [1.00]** | 7.1 µs [1.00] / 2.9KB [1.15] | 8.0 µs [1.12] / 3.3KB [1.30] | 21.4 µs [**3.01**] / 7.4KB [**2.95**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| GetByKey | 2000 | 🏆 **PalORM** | 7.2 µs [1.00] / 2.1KB [1.00] | **5.8 µs [0.80] / 2.1KB [1.02]** | 10.2 µs [1.41] / 2.8KB [1.34] | 36.1 µs [**4.98**] / 10.2KB [**4.86**] | 10.6 µs [1.46] / 4.8KB [**2.30**] |
+| GetAllAsync | 2000 | 🏆 **PalORM** | 953.3 µs [1.00] / 308KB [1.00] | **933.4 µs [0.98] / 294KB [0.95]** | 1.38 ms [1.45] / 513KB [**1.66**] | 1.38 ms [1.44] / 314KB [1.02] | 1.15 ms [1.20] / 388KB [1.26] |
+| QueryAll | 2000 | ADO | **942.1 µs [1.00] / 308KB [1.00]** | 943.9 µs [1.00] / 292KB [0.95] | 1.38 ms [1.47] / 513KB [**1.66**] | 1.38 ms [1.46] / 314KB [1.02] | 1.15 ms [1.22] / 388KB [1.26] |
+| Insert | 2000 | 🏆 **PalORM** | 17.4 µs [1.00] / 2.8KB [1.00] | **17.0 µs [0.98] / 2.7KB [0.97]** | 17.9 µs [1.03] / 3.5KB [1.28] | 29.9 µs [**1.72**] / 5.7KB [**2.06**] | 19.1 µs [1.10] / 3.0KB [1.08] |
+| Update | 2000 | 🏆 **PalORM** | 7.1 µs [1.00] / 2.5KB [1.00] | **6.9 µs [0.97] / 2.9KB [1.15]** | 7.8 µs [1.09] / 3.3KB [1.30] | 19.6 µs [**2.75**] / 7.4KB [**2.95**] | 8.8 µs [1.25] / 4.0KB [**1.60**] |
+| GetByKey | 20000 | ADO | **6.0 µs [1.00] / 2.1KB [1.00]** | 6.0 µs [1.02] / 2.1KB [1.02] | 7.1 µs [1.19] / 2.8KB [1.33] | 32.5 µs [**5.45**] / 10.4KB [**4.94**] | 8.6 µs [1.44] / 4.8KB [**2.28**] |
+| GetAllAsync | 20000 | ADO | **9.51 ms [1.00] / 3.3MB [1.00]** | 9.66 ms [1.01] / 2.9MB [0.89] | 14.40 ms [**1.51**] / 5.3MB [**1.61**] | 13.93 ms [1.46] / 3.3MB [1.01] | 11.67 ms [1.23] / 4.0MB [1.24] |
+| QueryAll | 20000 | ADO | **9.49 ms [1.00] / 3.3MB [1.00]** | 9.57 ms [1.01] / 2.9MB [0.89] | 14.48 ms [**1.53**] / 5.3MB [**1.61**] | 13.78 ms [1.45] / 3.3MB [1.00] | 11.71 ms [1.23] / 4.0MB [1.24] |
+| Insert | 20000 | 🏆 **PalORM** | 17.1 µs [1.00] / 2.8KB [1.00] | **17.1 µs [1.00] / 2.8KB [1.00]** | 18.0 µs [1.05] / 3.6KB [1.30] | 30.1 µs [**1.76**] / 5.7KB [**2.07**] | 18.8 µs [1.10] / 3.0KB [1.08] |
+| Update | 20000 | ADO | **7.1 µs [1.00] / 2.5KB [1.00]** | 7.1 µs [1.00] / 2.9KB [1.15] | 7.7 µs [1.08] / 3.3KB [1.30] | 22.2 µs [**3.13**] / 7.4KB [**2.95**] | 8.8 µs [1.23] / 4.0KB [**1.60**] |
 
 **MySQL**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| GetByKey | 2000 | ADO | **190.0 µs [1.00] / 4.5KB [1.00]** | 190.8 µs [1.00] / 4.9KB [1.09] | 198.4 µs [1.04] / 5.8KB [1.30] | 414.6 µs [**2.18**] / 16.5KB [**3.68**] |
-| GetAllAsync | 2000 | ADO | **1.09 ms [1.00] / 398KB [1.00]** | 1.10 ms [1.00] / 384KB [0.96] | 1.13 ms [1.04] / 447KB [1.12] | 1.36 ms [1.24] / 407KB [1.02] |
-| QueryAll | 2000 | 🏆 **PalORM** | 1.11 ms [1.00] / 398KB [1.00] | **1.10 ms [0.99] / 384KB [0.96]** | 1.13 ms [1.02] / 447KB [1.12] | 1.36 ms [1.22] / 407KB [1.02] |
-| Insert | 2000 | 🏆 **PalORM** | 3.84 ms [1.00] / 16.3KB [1.00] | **3.66 ms [0.95] / 16.3KB [1.00]** | 3.79 ms [0.98] / 16.4KB [1.01] | 4.09 ms [1.06] / 22.1KB [1.35] |
-| Update | 2000 | 🏆 **PalORM** | 193.4 µs [1.00] / 5.3KB [1.00] | **189.7 µs [0.98] / 5.8KB [1.09]** | 198.6 µs [1.03] / 5.2KB [0.97] | 402.8 µs [**2.08**] / 13.2KB [**2.47**] |
-| GetByKey | 20000 | ADO | **194.3 µs [1.00] / 4.5KB [1.00]** | 194.7 µs [1.00] / 4.9KB [1.09] | 204.5 µs [1.05] / 5.9KB [1.30] | 421.9 µs [**2.17**] / 16.8KB [**3.72**] |
-| GetAllAsync | 20000 | Dapper | 9.95 ms [1.00] / 4.0MB [1.00] | 9.84 ms [0.99] / 3.7MB [0.91] | **9.84 ms [0.99] / 4.5MB [1.11]** | 10.50 ms [1.06] / 4.1MB [1.00] |
-| QueryAll | 20000 | ADO | **9.47 ms [1.00] / 4.0MB [1.00]** | 9.76 ms [1.03] / 3.7MB [0.91] | 9.82 ms [1.04] / 4.5MB [1.11] | 10.57 ms [1.12] / 4.1MB [1.00] |
-| Insert | 20000 | 🏆 **PalORM** | 3.90 ms [1.00] / 16.7KB [1.00] | **3.85 ms [0.99] / 16.7KB [0.99]** | 3.87 ms [0.99] / 16.4KB [0.98] | 4.27 ms [1.10] / 22.6KB [1.35] |
-| Update | 20000 | ADO | **167.3 µs [1.00] / 5.1KB [1.00]** | 176.8 µs [1.06] / 5.7KB [1.11] | 174.3 µs [1.04] / 5.1KB [1.00] | 400.3 µs [**2.39**] / 13.3KB [**2.59**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| GetByKey | 2000 | ADO | **197.9 µs [1.00] / 4.5KB [1.00]** | 199.4 µs [1.01] / 4.9KB [1.09] | 202.4 µs [1.02] / 5.8KB [1.29] | 424.6 µs [**2.14**] / 16.6KB [**3.67**] | 201.3 µs [1.02] / 9.0KB [**2.00**] |
+| GetAllAsync | 2000 | ADO | **1.08 ms [1.00] / 398KB [1.00]** | 1.10 ms [1.02] / 384KB [0.96] | 1.15 ms [1.06] / 447KB [1.12] | 1.39 ms [1.28] / 407KB [1.02] | 1.14 ms [1.06] / 416KB [1.05] |
+| QueryAll | 2000 | ADO | **1.09 ms [1.00] / 398KB [1.00]** | 1.10 ms [1.01] / 383KB [0.96] | 1.15 ms [1.05] / 447KB [1.12] | 1.39 ms [1.28] / 407KB [1.02] | 1.13 ms [1.04] / 416KB [1.05] |
+| Insert | 2000 | Dapper | 4.03 ms [1.00] / 16.9KB [1.00] | 3.88 ms [0.96] / 17.3KB [1.02] | **3.77 ms [0.94] / 16.4KB [0.97]** | 4.24 ms [1.05] / 23.0KB [1.36] | 3.83 ms [0.95] / 17.0KB [1.01] |
+| Update | 2000 | 🏆 **PalORM** | 200.1 µs [1.00] / 5.4KB [1.00] | **198.7 µs [0.99] / 5.9KB [1.10]** | 202.7 µs [1.01] / 5.2KB [0.97] | 404.8 µs [**2.02**] / 13.2KB [**2.47**] | 217.7 µs [1.09] / 7.6KB [1.42] |
+| GetByKey | 20000 | 🏆 **PalORM** | 198.9 µs [1.00] / 4.5KB [1.00] | **198.6 µs [1.00] / 4.9KB [1.09]** | 205.5 µs [1.03] / 5.8KB [1.29] | 433.1 µs [**2.18**] / 16.8KB [**3.72**] | 215.0 µs [1.08] / 9.1KB [**2.01**] |
+| GetAllAsync | 20000 | ADO | **9.38 ms [1.00] / 4.0MB [1.00]** | 9.54 ms [1.02] / 3.7MB [0.91] | 10.01 ms [1.07] / 4.5MB [1.11] | 10.87 ms [1.16] / 4.1MB [1.00] | 9.92 ms [1.06] / 4.2MB [1.04] |
+| QueryAll | 20000 | ADO | **9.44 ms [1.00] / 4.0MB [1.00]** | 9.58 ms [1.01] / 3.7MB [0.91] | 10.09 ms [1.07] / 4.5MB [1.11] | 10.87 ms [1.15] / 4.1MB [1.00] | 9.93 ms [1.05] / 4.2MB [1.04] |
+| Insert | 20000 | Dapper | 4.02 ms [1.00] / 16.8KB [1.00] | 3.85 ms [0.96] / 16.3KB [0.96] | **3.79 ms [0.94] / 16.3KB [0.97]** | 4.19 ms [1.04] / 22.4KB [1.33] | 3.86 ms [0.96] / 17.0KB [1.01] |
+| Update | 20000 | 🏆 **PalORM** | 192.8 µs [1.00] / 5.2KB [1.00] | **185.1 µs [0.96] / 5.7KB [1.09]** | 201.9 µs [1.05] / 5.2KB [1.00] | 386.9 µs [**2.01**] / 13.1KB [**2.53**] | 206.2 µs [1.07] / 7.5KB [1.45] |
 
 **PostgreSQL**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| GetByKey | 2000 | Dapper | 197.4 µs [1.00] / 3.0KB [1.00] | 198.2 µs [1.00] / 3.4KB [1.13] | **192.8 µs [0.98] / 3.2KB [1.09]** | 263.5 µs [1.33] / 12.0KB [**4.04**] |
-| GetAllAsync | 2000 | 🏆 **PalORM** | 665.7 µs [1.00] / 240KB [1.00] | **662.2 µs [0.99] / 225KB [0.94]** | 725.4 µs [1.09] / 442KB [**1.85**] | 742.8 µs [1.12] / 244KB [1.02] |
-| QueryAll | 2000 | ADO | **637.3 µs [1.00] / 239KB [1.00]** | 664.5 µs [1.04] / 225KB [0.94] | 668.5 µs [1.05] / 442KB [**1.85**] | 735.0 µs [1.15] / 244KB [1.02] |
-| Insert | 2000 | ADO | **1.36 ms [1.00] / 7.5KB [1.00]** | 1.40 ms [1.03] / 7.5KB [1.01] | 1.41 ms [1.03] / 7.3KB [0.98] | 1.42 ms [1.04] / 11.0KB [1.47] |
-| Update | 2000 | Dapper | 1.39 ms [1.00] / 7.3KB [1.00] | 1.40 ms [1.01] / 7.8KB [1.06] | **1.38 ms [1.00] / 7.2KB [0.97]** | 1.43 ms [1.03] / 13.0KB [**1.77**] |
-| GetByKey | 20000 | ADO | **199.5 µs [1.00] / 3.0KB [1.00]** | 199.6 µs [1.00] / 3.4KB [1.13] | 200.6 µs [1.01] / 3.3KB [1.09] | 271.3 µs [1.36] / 12.1KB [**4.06**] |
-| GetAllAsync | 20000 | ADO | **5.14 ms [1.00] / 2.5MB [1.00]** | 5.15 ms [1.00] / 2.2MB [0.86] | 5.34 ms [1.04] / 4.5MB [**1.79**] | 5.81 ms [1.13] / 2.5MB [1.00] |
-| QueryAll | 20000 | ADO | **5.12 ms [1.00] / 2.5MB [1.00]** | 5.20 ms [1.02] / 2.2MB [0.86] | 5.37 ms [1.05] / 4.5MB [**1.79**] | 5.92 ms [1.16] / 2.5MB [1.00] |
-| Insert | 20000 | 🏆 **PalORM** | 1.37 ms [1.00] / 7.5KB [1.00] | **1.36 ms [1.00] / 7.5KB [1.00]** | 1.38 ms [1.01] / 7.1KB [0.96] | 1.44 ms [1.05] / 11.0KB [1.47] |
-| Update | 20000 | Dapper | 1.44 ms [1.00] / 7.7KB [1.00] | 1.39 ms [0.96] / 7.8KB [1.01] | **1.39 ms [0.96] / 7.0KB [0.91]** | 1.48 ms [1.03] / 13.1KB [**1.70**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| GetByKey | 2000 | ADO | **201.1 µs [1.00] / 3.0KB [1.00]** | 202.3 µs [1.01] / 3.4KB [1.13] | 202.2 µs [1.01] / 3.3KB [1.10] | 270.8 µs [1.35] / 12.0KB [**4.06**] | 213.5 µs [1.06] / 6.3KB [**2.13**] |
+| GetAllAsync | 2000 | ADO | **657.6 µs [1.00] / 239KB [1.00]** | 727.4 µs [1.11] / 226KB [0.94] | 668.2 µs [1.02] / 442KB [**1.85**] | 751.1 µs [1.14] / 244KB [1.02] | 676.2 µs [1.03] / 256KB [1.07] |
+| QueryAll | 2000 | Dapper | 691.4 µs [1.00] / 240KB [1.00] | 670.5 µs [0.97] / 225KB [0.94] | **664.4 µs [0.96] / 442KB [1.84]** | 763.6 µs [1.10] / 244KB [1.02] | 670.1 µs [0.97] / 256KB [1.07] |
+| Insert | 2000 | ADO | **1.39 ms [1.00] / 7.5KB [1.00]** | 1.41 ms [1.01] / 7.7KB [1.02] | 1.42 ms [1.02] / 7.3KB [0.97] | 1.44 ms [1.04] / 11.0KB [1.46] | 1.43 ms [1.03] / 7.9KB [1.05] |
+| Update | 2000 | ADO | **1.38 ms [1.00] / 7.4KB [1.00]** | 1.38 ms [1.00] / 7.8KB [1.06] | 1.38 ms [1.00] / 7.0KB [0.95] | 1.44 ms [1.05] / 13.1KB [**1.78**] | 1.42 ms [1.03] / 9.4KB [1.28] |
+| GetByKey | 20000 | ADO | **203.8 µs [1.00] / 3.0KB [1.00]** | 204.0 µs [1.00] / 3.4KB [1.13] | 204.3 µs [1.00] / 3.3KB [1.09] | 272.1 µs [1.34] / 12.1KB [**4.05**] | 223.7 µs [1.10] / 6.4KB [**2.13**] |
+| GetAllAsync | 20000 | 🏆 **PalORM** | 5.05 ms [1.00] / 2.5MB [1.00] | **5.02 ms [0.99] / 2.2MB [0.86]** | 5.23 ms [1.03] / 4.5MB [**1.79**] | 5.54 ms [1.10] / 2.5MB [1.00] | 5.10 ms [1.01] / 2.7MB [1.06] |
+| QueryAll | 20000 | ADO | **4.93 ms [1.00] / 2.5MB [1.00]** | 5.00 ms [1.01] / 2.2MB [0.86] | 5.05 ms [1.03] / 4.5MB [**1.79**] | 5.82 ms [1.18] / 2.5MB [1.00] | 5.07 ms [1.03] / 2.7MB [1.06] |
+| Insert | 20000 | ADO | **1.38 ms [1.00] / 7.9KB [1.00]** | 1.47 ms [1.06] / 7.7KB [0.97] | 1.39 ms [1.00] / 7.2KB [0.92] | 1.44 ms [1.04] / 11.1KB [1.40] | 1.42 ms [1.03] / 8.2KB [1.04] |
+| Update | 20000 | ADO | **1.36 ms [1.00] / 7.4KB [1.00]** | 1.42 ms [1.05] / 8.7KB [1.18] | 1.41 ms [1.04] / 7.1KB [0.96] | 1.48 ms [1.09] / 14.2KB [**1.92**] | 1.43 ms [1.06] / 9.6KB [1.29] |
 
 ### Table 2: Bulk processing (three dialects, two tiers)
 
-> Wins: PalORM 14 · ADO 10 · Dapper 0 · FreeSql 0
-
-| Operation | What it measures | Verdict |
-|---|---|---|
-| BulkInsert | Bulk insert (SQLite row-prepared / PG COPY / MySQL BulkCopy) | PalORM ties ADO with the same form; Dapper/FreeSql bulk paths slower in all dialects, widest on PG/MySQL large tier |
-| BulkUpdate | Bulk update (SQLite per-row in tx / PG UPDATE FROM VALUES / MySQL CASE WHEN) | PalORM ties ADO in all three dialects; Dapper/FreeSql lack set-based wrappers, clearly slower |
-| BulkDelete | Bulk delete (SQLite json_each single-param / PG = ANY array / MySQL IN batches) | PG array form beats ADO's IN placeholders; SQLite json_each and MySQL batching near the floor |
-| UpsertBatch | Bulk UPSERT (ON CONFLICT / ON DUPLICATE KEY) | PG array form faster than ADO and the rest; SQLite all four arms same form; MySQL Dapper/FreeSql slower |
-
 **SQLite**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| BulkInsert | 2000 | ADO | **2.52 ms [1.00] / 1.7MB [1.00]** | 2.54 ms [1.01] / 1.7MB [1.00] | 4.55 ms [**1.81**] / 4.3MB [**2.48**] | 10.61 ms [**4.21**] / 6.5MB [**3.79**] |
-| BulkUpdate | 2000 | 🏆 **PalORM** | 2.31 ms [1.00] / 1.7MB [1.00] | **2.30 ms [1.00] / 1.8MB [1.04]** | 8.69 ms [**3.77**] / 6.3MB [**3.75**] | 13.38 ms [**5.80**] / 7.0MB [**4.15**] |
-| BulkDelete | 2000 | 🏆 **PalORM** | 803.4 µs [1.00] / 197KB [1.00] | **797.3 µs [0.99] / 198KB [1.01]** | 21.65 ms [**26.95**] / 1.6MB [**8.12**] | 1.53 ms [**1.91**] / 568KB [**2.88**] |
-| UpsertBatch | 2000 | ADO | **2.38 ms [1.00] / 1.7MB [1.00]** | 2.41 ms [1.01] / 1.7MB [1.01] | 4.81 ms [**2.02**] / 4.2MB [**2.50**] | 3.59 ms [**1.51**] / 2.5MB [1.47] |
-| BulkInsert | 20000 | ADO | **28.19 ms [1.00] / 17.2MB [1.00]** | 29.04 ms [1.03] / 17.2MB [1.00] | 47.26 ms [**1.68**] / 42.5MB [**2.48**] | 112.42 ms [**3.99**] / 66.1MB [**3.85**] |
-| BulkUpdate | 20000 | 🏆 **PalORM** | 25.82 ms [1.00] / 17.0MB [1.00] | **25.52 ms [0.99] / 17.6MB [1.04]** | 90.97 ms [**3.52**] / 63.5MB [**3.74**] | 134.45 ms [**5.21**] / 73.4MB [**4.32**] |
-| BulkDelete | 20000 | 🏆 **PalORM** | 8.44 ms [1.00] / 2.0MB [1.00] | **8.18 ms [0.97] / 2.0MB [1.00]** | 218.58 ms [**25.89**] / 15.6MB [**7.71**] | 15.87 ms [**1.88**] / 5.9MB [**2.94**] |
-| UpsertBatch | 20000 | ADO | **25.54 ms [1.00] / 17.0MB [1.00]** | 26.19 ms [1.03] / 17.1MB [1.01] | 59.79 ms [**2.34**] / 42.4MB [**2.50**] | 40.46 ms [**1.58**] / 25.8MB [**1.52**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| BulkInsert | 2000 | ADO | **2.58 ms [1.00] / 1.7MB [1.00]** | 2.60 ms [1.01] / 1.7MB [1.00] | 4.75 ms [**1.84**] / 4.3MB [**2.48**] | 10.10 ms [**3.91**] / 6.5MB [**3.79**] | 16.12 ms [**6.25**] / 2.6MB [**1.54**] |
+| BulkUpdate | 2000 | ADO | **2.33 ms [1.00] / 1.7MB [1.00]** | 2.35 ms [1.01] / 1.8MB [1.04] | 8.63 ms [**3.70**] / 6.3MB [**3.75**] | 13.21 ms [**5.67**] / 7.0MB [**4.15**] | 6.72 ms [**2.88**] / 5.2MB [**3.06**] |
+| BulkDelete | 2000 | ADO | **803.0 µs [1.00] / 198KB [1.00]** | 828.3 µs [1.03] / 198KB [1.00] | 21.85 ms [**27.22**] / 1.6MB [**8.08**] | 1.60 ms [**1.99**] / 569KB [**2.87**] | 19.31 ms [**24.05**] / 3.2MB [**16.66**] |
+| UpsertBatch | 2000 | 🏆 **PalORM** | 2.39 ms [1.00] / 1.7MB [1.00] | **2.36 ms [0.99] / 1.7MB [1.01]** | 4.08 ms [**1.71**] / 4.2MB [**2.50**] | 3.62 ms [**1.52**] / 2.5MB [1.47] | 17.90 ms [**7.50**] / 11.5MB [**6.78**] |
+| BulkInsert | 20000 | ADO | **28.64 ms [1.00] / 17.2MB [1.00]** | 29.55 ms [1.03] / 17.2MB [1.00] | 53.84 ms [**1.88**] / 42.6MB [**2.48**] | 109.10 ms [**3.81**] / 66.1MB [**3.85**] | 154.45 ms [**5.39**] / 26.2MB [**1.52**] |
+| BulkUpdate | 20000 | ADO | **25.29 ms [1.00] / 17.0MB [1.00]** | 25.71 ms [1.02] / 17.6MB [1.04] | 91.96 ms [**3.64**] / 63.5MB [**3.74**] | 136.10 ms [**5.38**] / 73.4MB [**4.32**] | 71.31 ms [**2.82**] / 51.8MB [**3.05**] |
+| BulkDelete | 20000 | 🏆 **PalORM** | 8.83 ms [1.00] / 2.0MB [1.00] | **8.21 ms [0.93] / 2.0MB [1.00]** | 219.25 ms [**24.82**] / 15.6MB [**7.71**] | 16.58 ms [**1.88**] / 6.0MB [**2.94**] | 193.40 ms [**21.89**] / 31.6MB [**15.63**] |
+| UpsertBatch | 20000 | 🏆 **PalORM** | 26.20 ms [1.00] / 17.0MB [1.00] | **25.88 ms [0.99] / 17.1MB [1.01]** | 51.78 ms [**1.98**] / 42.4MB [**2.49**] | 42.69 ms [**1.63**] / 25.8MB [**1.52**] | 177.45 ms [**6.77**] / 114.9MB [**6.76**] |
 
 **MySQL**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| BulkInsert | 2000 | 🏆 **PalORM** | 11.60 ms [1.00] / 476KB [1.00] | **11.41 ms [0.98] / 480KB [1.01]** | 24.56 ms [**2.12**] / 6.7MB [**14.30**] | 17.33 ms [1.49] / 3.2MB [**6.95**] |
-| BulkUpdate | 2000 | 🏆 **PalORM** | 10.87 ms [1.00] / 4.6MB [1.00] | **9.68 ms [0.89] / 3.7MB [0.80]** | 11.05 ms [1.02] / 6.5MB [1.41] | 9.83 ms [0.90] / 2.1MB [**0.45**] |
-| BulkDelete | 2000 | ADO | **12.07 ms [1.00] / 882KB [1.00]** | 12.10 ms [1.00] / 808KB [0.92] | 12.10 ms [1.00] / 1.3MB [**1.56**] | 17.46 ms [1.45] / 608KB [0.69] |
-| UpsertBatch | 2000 | 🏆 **PalORM** | 8.28 ms [1.00] / 2.9MB [1.00] | **8.03 ms [0.97] / 2.5MB [0.85]** | 10.62 ms [1.28] / 6.6MB [**2.28**] | 9.06 ms [1.09] / 2.5MB [0.86] |
-| BulkInsert | 20000 | ADO | **58.38 ms [1.00] / 4.4MB [1.00]** | 59.30 ms [1.02] / 4.4MB [1.00] | 257.38 ms [**4.41**] / 66.5MB [**14.95**] | 116.99 ms [**2.00**] / 33.2MB [**7.47**] |
-| BulkUpdate | 20000 | 🏆 **PalORM** | 88.98 ms [1.00] / 14.6MB [1.00] | **88.76 ms [1.00] / 13.7MB [0.94]** | 139.83 ms [**1.57**] / 64.5MB [**4.42**] | 92.33 ms [1.04] / 21.8MB [1.49] |
-| BulkDelete | 20000 | 🏆 **PalORM** | 75.24 ms [1.00] / 8.4MB [1.00] | **70.44 ms [0.94] / 3.5MB [0.42]** | 76.69 ms [1.02] / 13.2MB [**1.57**] | 182.86 ms [**2.43**] / 6.2MB [0.74] |
-| UpsertBatch | 20000 | ADO | **75.36 ms [1.00] / 12.9MB [1.00]** | 79.85 ms [1.06] / 12.6MB [0.98] | 131.34 ms [**1.74**] / 66.1MB [**5.15**] | 124.68 ms [**1.65**] / 25.8MB [**2.01**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| BulkInsert | 2000 | RepoDb | 11.09 ms [1.00] / 477KB [1.00] | 11.42 ms [1.03] / 480KB [1.01] | 24.84 ms [**2.24**] / 6.7MB [**14.28**] | 16.95 ms [**1.53**] / 3.2MB [**6.93**] | **10.61 ms [0.96] / 474KB [0.99]** |
+| BulkUpdate | 2000 | 🏆 **PalORM** | 10.11 ms [1.00] / 4.6MB [1.00] | **9.29 ms [0.92] / 3.7MB [0.80]** | 11.03 ms [1.09] / 6.5MB [1.41] | 9.84 ms [0.97] / 2.1MB [**0.45**] | 161.14 ms [**15.94**] / 927KB [**0.20**] |
+| BulkDelete | 2000 | ADO | **11.42 ms [1.00] / 880KB [1.00]** | 12.96 ms [1.13] / 814KB [0.92] | 11.91 ms [1.04] / 1.3MB [**1.56**] | 17.13 ms [1.50] / 610KB [0.69] | 26.65 ms [**2.33**] / 19.3MB [**22.44**] |
+| UpsertBatch | 2000 | 🏆 **PalORM** | 8.22 ms [1.00] / 2.9MB [1.00] | **7.97 ms [0.97] / 2.5MB [0.85]** | 10.45 ms [1.27] / 6.6MB [**2.28**] | 8.92 ms [1.09] / 2.5MB [0.86] | 164.17 ms [**19.98**] / 923KB [**0.31**] |
+| BulkInsert | 20000 | 🏆 **PalORM** | 56.99 ms [1.00] / 4.5MB [1.00] | **56.94 ms [1.00] / 4.4MB [1.00]** | 259.60 ms [**4.55**] / 66.5MB [**14.94**] | 121.32 ms [**2.13**] / 33.3MB [**7.47**] | 58.49 ms [1.03] / 4.4MB [1.00] |
+| BulkUpdate | 20000 | 🏆 **PalORM** | 88.55 ms [1.00] / 14.6MB [1.00] | **85.58 ms [0.97] / 13.7MB [0.94]** | 149.20 ms [**1.68**] / 64.6MB [**4.42**] | 94.08 ms [1.06] / 21.8MB [1.49] | 388.75 ms [**4.39**] / 5.5MB [**0.38**] |
+| BulkDelete | 20000 | 🏆 **PalORM** | 76.11 ms [1.00] / 8.5MB [1.00] | **70.35 ms [0.92] / 3.5MB [0.41]** | 74.28 ms [0.98] / 13.2MB [**1.57**] | 186.01 ms [**2.44**] / 6.2MB [0.74] | 232.73 ms [**3.06**] / 193.5MB [**22.90**] |
+| UpsertBatch | 20000 | ADO | **74.00 ms [1.00] / 12.9MB [1.00]** | 78.12 ms [1.06] / 12.6MB [0.98] | 141.30 ms [**1.91**] / 66.2MB [**5.15**] | 123.44 ms [**1.67**] / 25.8MB [**2.00**] | 404.37 ms [**5.46**] / 5.4MB [**0.42**] |
 
 **PostgreSQL**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| BulkInsert | 2000 | ADO | **4.72 ms [1.00] / 341KB [1.00]** | 4.90 ms [1.04] / 343KB [1.01] | 16.82 ms [**3.56**] / 6.7MB [**20.10**] | 12.95 ms [**2.74**] / 3.8MB [**11.56**] |
-| BulkUpdate | 2000 | ADO | **5.28 ms [1.00] / 418KB [1.00]** | 5.45 ms [1.03] / 422KB [1.01] | 19.04 ms [**3.61**] / 6.5MB [**15.99**] | 14.07 ms [**2.67**] / 2.7MB [**6.64**] |
-| 📌BulkDelete | 2000 | 🏆 **PalORM** | 3.49 ms [1.00] / 784KB [1.00] | **2.27 ms [0.65] / 89.2KB [0.11]** | 3.97 ms [1.14] / 1.3MB [**1.71**] | 5.88 ms [**1.68**] / 571KB [0.73] |
-| 📌UpsertBatch | 2000 | 🏆 **PalORM** | 14.90 ms [1.00] / 2.7MB [1.00] | **7.53 ms [0.51] / 445KB [0.16]** | 20.29 ms [1.36] / 6.7MB [**2.47**] | 16.17 ms [1.09] / 2.7MB [1.01] |
-| BulkInsert | 20000 | ADO | **19.89 ms [1.00] / 3.3MB [1.00]** | 20.29 ms [1.02] / 3.3MB [1.00] | 197.63 ms [**9.94**] / 66.9MB [**20.55**] | 110.04 ms [**5.53**] / 39.6MB [**12.15**] |
-| BulkUpdate | 20000 | 🏆 **PalORM** | 68.68 ms [1.00] / 4.1MB [1.00] | **61.05 ms [0.89] / 4.1MB [0.99]** | 224.10 ms [**3.26**] / 65.4MB [**16.00**] | 124.58 ms [**1.81**] / 28.3MB [**6.92**] |
-| 📌BulkDelete | 20000 | 🏆 **PalORM** | 25.03 ms [1.00] / 7.6MB [1.00] | **10.99 ms [0.44] / 815KB [0.10]** | 27.89 ms [1.11] / 13.0MB [**1.71**] | 59.11 ms [**2.36**] / 6.0MB [0.78] |
-| 📌UpsertBatch | 20000 | 🏆 **PalORM** | 137.91 ms [1.00] / 11.6MB [1.00] | **83.33 ms [0.60] / 4.3MB [0.37]** | 219.95 ms [**1.59**] / 66.9MB [**5.79**] | 151.51 ms [1.10] / 28.3MB [**2.45**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| BulkInsert | 2000 | ADO | **4.77 ms [1.00] / 341KB [1.00]** | 4.81 ms [1.01] / 343KB [1.00] | 16.92 ms [**3.55**] / 6.7MB [**20.09**] | 13.16 ms [**2.76**] / 3.8MB [**11.56**] | 5.40 ms [1.13] / 849KB [**2.49**] |
+| BulkUpdate | 2000 | ADO | **5.26 ms [1.00] / 418KB [1.00]** | 5.45 ms [1.04] / 422KB [1.01] | 17.00 ms [**3.23**] / 6.5MB [**16.00**] | 14.12 ms [**2.68**] / 2.7MB [**6.65**] | 52.82 ms [**10.04**] / 3.8MB [**9.29**] |
+| BulkDelete | 2000 | 🏆 **PalORM** | 3.61 ms [1.00] / 784KB [1.00] | **2.44 ms [0.68] / 89.5KB [0.11]** | 3.83 ms [1.06] / 1.3MB [**1.71**] | 5.95 ms [**1.65**] / 571KB [0.73] | 18.76 ms [**5.19**] / 19.2MB [**25.02**] |
+| 📌UpsertBatch | 2000 | 🏆 **PalORM** | 14.69 ms [1.00] / 2.7MB [1.00] | **7.77 ms [0.53] / 446KB [0.16]** | 20.24 ms [1.38] / 6.7MB [**2.47**] | 16.35 ms [1.11] / 2.7MB [1.01] | 24.39 ms [**1.66**] / 5.7MB [**2.12**] |
+| BulkInsert | 20000 | 🏆 **PalORM** | 20.14 ms [1.00] / 3.3MB [1.00] | **19.29 ms [0.96] / 3.3MB [1.00]** | 195.97 ms [**9.73**] / 66.9MB [**20.55**] | 108.88 ms [**5.41**] / 39.6MB [**12.15**] | 21.99 ms [1.09] / 8.0MB [**2.46**] |
+| BulkUpdate | 20000 | 🏆 **PalORM** | 67.40 ms [1.00] / 4.1MB [1.00] | **63.43 ms [0.94] / 4.1MB [1.00]** | 237.87 ms [**3.53**] / 65.4MB [**16.02**] | 126.22 ms [**1.87**] / 28.3MB [**6.93**] | 535.80 ms [**7.95**] / 37.9MB [**9.29**] |
+| 📌BulkDelete | 20000 | 🏆 **PalORM** | 24.75 ms [1.00] / 7.6MB [1.00] | **9.96 ms [0.40] / 812KB [0.10]** | 27.72 ms [1.12] / 13.0MB [**1.71**] | 62.61 ms [**2.53**] / 6.0MB [0.78] | 178.23 ms [**7.20**] / 192.4MB [**25.29**] |
+| 📌UpsertBatch | 20000 | 🏆 **PalORM** | 136.77 ms [1.00] / 11.6MB [1.00] | **91.17 ms [0.67] / 4.3MB [0.37]** | 222.41 ms [**1.63**] / 67.0MB [**5.79**] | 152.19 ms [1.11] / 28.3MB [**2.45**] | 248.94 ms [**1.82**] / 57.4MB [**4.96**] |
 
 ### Table 3: Transactions (three dialects, smallest tier only)
 
-> Wins: ADO 8 · PalORM 6 · Dapper 1 · FreeSql 0
-
-| Operation | What it measures | Verdict |
-|---|---|---|
-| TxSingleInsert | Single insert inside a transaction | Four arms even (transaction overhead dominates) |
-| TxHundredInserts | 100 per-row inserts inside a transaction | Close on network dialects; FreeSql clearly slower on SQLite (per-row expression overhead amplified) |
-| TxBulkInsert | Bulk insert inside a transaction | PalORM ties the floor; Dapper (multi-exec without statement-cache reuse) and FreeSql clearly slower |
-| TxRollback | Transaction rollback (update then explicit Rollback) | Close on network dialects; SQLite FreeSql clearly slower |
-| EnumInserts | Enum-column per-row inserts in a transaction (Status TEXT) | PalORM ties (SQLite slightly above = per-call session contract cost, probe-adjudicated); FreeSql clearly slower in all dialects, Dapper slower on SQLite |
-
 **SQLite**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| TxSingleInsert | 2000 | ADO | **18.9 µs [1.00] / 3.9KB [1.00]** | 19.6 µs [1.03] / 4.3KB [1.09] | 19.6 µs [1.04] / 4.7KB [1.20] | 32.4 µs [**1.71**] / 7.0KB [**1.78**] |
-| TxHundredInserts | 2000 | 🏆 **PalORM** | 185.7 µs [1.00] / 137KB [1.00] | **185.4 µs [1.00] / 92.7KB [0.68]** | 254.3 µs [1.37] / 220KB [**1.61**] | 1.51 ms [**8.11**] / 541KB [**3.96**] |
-| TxBulkInsert | 2000 | ADO | **2.54 ms [1.00] / 1.7MB [1.00]** | 2.56 ms [1.01] / 1.7MB [1.00] | 4.50 ms [**1.77**] / 4.3MB [**2.48**] | 7.51 ms [**2.96**] / 3.5MB [**2.02**] |
-| TxRollback | 2000 | ADO | **569.8 µs [1.00] / 435KB [1.00]** | 631.5 µs [1.11] / 437KB [1.01] | 2.20 ms [**3.86**] / 1.6MB [**3.74**] | 7.55 ms [**13.26**] / 3.5MB [**8.16**] |
-| EnumInserts | 2000 | ADO | **129.9 µs [1.00] / 59.0KB [1.00]** | 149.2 µs [1.15] / 59.1KB [1.00] | 365.1 µs [**2.81**] / 223KB [**3.77**] | 1.25 ms [**9.58**] / 497KB [**8.42**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| TxSingleInsert | 2000 | ADO | **19.1 µs [1.00] / 4.0KB [1.00]** | 19.9 µs [1.04] / 4.3KB [1.08] | 20.3 µs [1.06] / 4.7KB [1.18] | 33.2 µs [**1.73**] / 7.0KB [**1.76**] | 20.9 µs [1.09] / 4.2KB [1.04] |
+| TxHundredInserts | 2000 | 🏆 **PalORM** | 186.2 µs [1.00] / 137KB [1.00] | **180.6 µs [0.97] / 92.7KB [0.68]** | 248.4 µs [1.33] / 220KB [**1.61**] | 1.53 ms [**8.20**] / 541KB [**3.96**] | 558.5 µs [**3.00**] / 295KB [**2.16**] |
+| TxBulkInsert | 2000 | 🏆 **PalORM** | 2.56 ms [1.00] / 1.7MB [1.00] | **2.52 ms [0.98] / 1.7MB [1.00]** | 4.68 ms [**1.83**] / 4.3MB [**2.48**] | 7.62 ms [**2.97**] / 3.5MB [**2.02**] | 16.01 ms [**6.24**] / 2.6MB [**1.54**] |
+| TxRollback | 2000 | ADO | **596.8 µs [1.00] / 435KB [1.00]** | 636.9 µs [1.07] / 437KB [1.01] | 2.12 ms [**3.56**] / 1.6MB [**3.74**] | 7.63 ms [**12.79**] / 3.5MB [**8.16**] | 2.65 ms [**4.45**] / 2.0MB [**4.60**] |
+| EnumInserts | 2000 | ADO | **134.3 µs [1.00] / 59.1KB [1.00]** | 147.8 µs [1.10] / 59.1KB [1.00] | 357.4 µs [**2.66**] / 223KB [**3.77**] | 1.28 ms [**9.53**] / 497KB [**8.42**] | 477.1 µs [**3.55**] / 232KB [**3.92**] |
 
 **MySQL**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| TxSingleInsert | 2000 | Dapper | 4.48 ms [1.00] / 21.1KB [1.00] | 4.43 ms [0.99] / 22.2KB [1.05] | **4.42 ms [0.99] / 25.6KB [1.21]** | 4.54 ms [1.01] / 26.9KB [1.27] |
-| TxHundredInserts | 2000 | 🏆 **PalORM** | 25.70 ms [1.00] / 368KB [1.00] | **24.46 ms [0.95] / 301KB [0.82]** | 25.16 ms [0.98] / 348KB [0.94] | 27.74 ms [1.08] / 811KB [**2.20**] |
-| TxBulkInsert | 2000 | 🏆 **PalORM** | 11.64 ms [1.00] / 485KB [1.00] | **11.56 ms [0.99] / 490KB [1.01]** | 27.22 ms [**2.34**] / 6.7MB [**14.07**] | 20.97 ms [**1.80**] / 3.4MB [**7.22**] |
-| TxRollback | 2000 | ADO | **93.37 ms [1.00] / 1.3MB [1.00]** | 93.93 ms [1.01] / 1.4MB [1.02] | 99.58 ms [1.07] / 2.4MB [**1.78**] | 114.81 ms [1.23] / 4.9MB [**3.62**] |
-| EnumInserts | 2000 | 🏆 **PalORM** | 24.93 ms [1.00] / 286KB [1.00] | **24.48 ms [0.98] / 285KB [1.00]** | 25.80 ms [1.03] / 434KB [**1.52**] | 29.01 ms [1.16] / 772KB [**2.70**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| TxSingleInsert | 2000 | 🏆 **PalORM** | 4.44 ms [1.00] / 25.4KB [1.00] | **4.43 ms [1.00] / 22.3KB [0.88]** | 4.52 ms [1.02] / 21.8KB [0.86] | 4.60 ms [1.04] / 27.5KB [1.08] | 4.50 ms [1.01] / 22.2KB [0.87] |
+| TxHundredInserts | 2000 | 🏆 **PalORM** | 25.90 ms [1.00] / 377KB [1.00] | **25.45 ms [0.98] / 304KB [0.81]** | 26.88 ms [1.04] / 353KB [0.94] | 28.44 ms [1.10] / 811KB [**2.15**] | 27.50 ms [1.06] / 612KB [**1.63**] |
+| TxBulkInsert | 2000 | RepoDb | 11.84 ms [1.00] / 489KB [1.00] | 16.27 ms [1.37] / 508KB [1.04] | 20.00 ms [**1.69**] / 6.7MB [**13.93**] | 21.00 ms [**1.77**] / 3.4MB [**7.16**] | **11.80 ms [1.00] / 489KB [1.00]** |
+| TxRollback | 2000 | 🏆 **PalORM** | 96.38 ms [1.00] / 1.4MB [1.00] | **95.36 ms [0.99] / 1.4MB [1.02]** | 101.83 ms [1.06] / 2.4MB [**1.78**] | 118.15 ms [1.23] / 4.9MB [**3.61**] | 108.02 ms [1.12] / 3.6MB [**2.63**] |
+| EnumInserts | 2000 | 🏆 **PalORM** | 25.43 ms [1.00] / 277KB [1.00] | **25.04 ms [0.98] / 286KB [1.03]** | 25.95 ms [1.02] / 423KB [**1.53**] | 28.91 ms [1.14] / 772KB [**2.78**] | 26.88 ms [1.06] / 522KB [**1.88**] |
 
 **PostgreSQL**
 
-| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |
-|---|---:|:-:|---|---|---|---|
-| TxSingleInsert | 2000 | ADO | **1.52 ms [1.00] / 8.4KB [1.00]** | 1.53 ms [1.01] / 9.3KB [1.11] | 1.56 ms [1.03] / 8.2KB [0.98] | 1.60 ms [1.06] / 12.3KB [1.47] |
-| TxHundredInserts | 2000 | 🏆 **PalORM** | 20.60 ms [1.00] / 314KB [1.00] | **20.46 ms [0.99] / 212KB [0.67]** | 20.91 ms [1.01] / 283KB [0.90] | 23.98 ms [1.16] / 703KB [**2.24**] |
-| TxBulkInsert | 2000 | 🏆 **PalORM** | 4.77 ms [1.00] / 340KB [1.00] | **4.75 ms [1.00] / 341KB [1.00]** | 17.79 ms [**3.73**] / 6.7MB [**20.13**] | 21.38 ms [**4.48**] / 3.4MB [**10.24**] |
-| TxRollback | 2000 | ADO | **102.80 ms [1.00] / 934KB [1.00]** | 102.91 ms [1.00] / 1.0MB [1.11] | 105.76 ms [1.03] / 1.7MB [**1.88**] | 122.72 ms [1.19] / 4.4MB [**4.85**] |
-| EnumInserts | 2000 | ADO | **19.86 ms [1.00] / 163KB [1.00]** | 20.26 ms [1.02] / 184KB [1.13] | 20.51 ms [1.03] / 280KB [**1.72**] | 23.45 ms [1.18] / 660KB [**4.05**] |
+| Operation | Tier | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |
+|---|---:|:-:|---|---|---|---|---|
+| TxSingleInsert | 2000 | ADO | **1.52 ms [1.00] / 8.5KB [1.00]** | 1.55 ms [1.02] / 9.3KB [1.10] | 1.55 ms [1.02] / 8.2KB [0.97] | 1.57 ms [1.03] / 12.3KB [1.45] | 1.57 ms [1.03] / 8.8KB [1.04] |
+| TxHundredInserts | 2000 | 🏆 **PalORM** | 21.24 ms [1.00] / 316KB [1.00] | **20.98 ms [0.99] / 213KB [0.68]** | 21.43 ms [1.01] / 285KB [0.90] | 24.42 ms [1.15] / 704KB [**2.23**] | 22.91 ms [1.08] / 435KB [1.38] |
+| TxBulkInsert | 2000 | 🏆 **PalORM** | 4.97 ms [1.00] / 339KB [1.00] | **4.94 ms [0.99] / 340KB [1.00]** | 15.14 ms [**3.04**] / 6.7MB [**20.17**] | 21.32 ms [**4.29**] / 3.4MB [**10.28**] | 5.43 ms [1.09] / 843KB [**2.48**] |
+| TxRollback | 2000 | ADO | **104.60 ms [1.00] / 938KB [1.00]** | 105.77 ms [1.01] / 1.0MB [1.11] | 104.73 ms [1.00] / 1.7MB [**1.86**] | 120.15 ms [1.15] / 4.4MB [**4.82**] | 114.48 ms [1.09] / 2.9MB [**3.15**] |
+| EnumInserts | 2000 | 🏆 **PalORM** | 20.40 ms [1.00] / 165KB [1.00] | **19.42 ms [0.95] / 182KB [1.11]** | 21.03 ms [1.03] / 283KB [**1.72**] | 24.21 ms [1.19] / 662KB [**4.02**] | 22.31 ms [1.09] / 354KB [**2.15**] |
 
 ### Table 4: Cross-dialect PalORM/ADO ratio (bulk family + GetAllAsync; raw ratio, 📌 = outside the line)
 
 | Operation | Tier | SQLite | PostgreSQL | MySQL |
 |---|---:|---:|---:|---:|
-| BulkInsert | 2000 | 1.01 | 1.04 | 0.98 |
-| BulkInsert | 20000 | 1.03 | 1.02 | 1.02 |
-| BulkUpdate | 2000 | 1.00 | 1.03 | 0.89 |
-| BulkUpdate | 20000 | 0.99 | 0.89 | 1.00 |
-| BulkDelete | 2000 | 0.99 | 📌0.65 | 1.00 |
-| BulkDelete | 20000 | 0.97 | 📌0.44 | 0.94 |
-| UpsertBatch | 2000 | 1.01 | 📌0.51 | 0.97 |
-| UpsertBatch | 20000 | 1.03 | 📌0.60 | 1.06 |
-| GetAllAsync | 2000 | 0.99 | 0.99 | 1.00 |
-| GetAllAsync | 20000 | 1.00 | 1.00 | 0.99 |
+| BulkInsert | 2000 | 1.01 | 1.01 | 1.03 |
+| BulkInsert | 20000 | 1.03 | 0.96 | 1.00 |
+| BulkUpdate | 2000 | 1.01 | 1.04 | 0.92 |
+| BulkUpdate | 20000 | 1.02 | 0.94 | 0.97 |
+| BulkDelete | 2000 | 1.03 | 0.68 | 1.13 |
+| BulkDelete | 20000 | 0.93 | 📌0.40 | 0.92 |
+| UpsertBatch | 2000 | 0.99 | 📌0.53 | 0.97 |
+| UpsertBatch | 20000 | 0.99 | 📌0.67 | 1.06 |
+| GetAllAsync | 2000 | 0.98 | 1.11 | 1.02 |
+| GetAllAsync | 20000 | 1.01 | 0.99 | 1.02 |
 
 ## 📦 Installation
 

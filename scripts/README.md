@@ -67,7 +67,7 @@
 |------|------|:---:|
 | `PerfCli bench-matrix` | 基准运行器（sqlite/pg/mysql/scale/build/speed/all） | 5-30min |
 | `compare-perf-batches.cs` | 跨批次中位值对照：`--date yyyyMMdd` 选日、`--items csv` 选项（`方言/操作/行数`、`方言/操作`、`操作` 三形态）、`--list` 列当日全部项；缺省按摆动 `--swing`（默认 1.30×）自动挑动过的项。单位按项目口径（µs 一位/三位，≥1000 µs 转 ms） | 秒 |
-| `crossbench-report.cs` | CrossBench 四臂横评报告/基线：单批 `<batch.json>` 或 `--baseline b1,b2,b3` 多批中位；倍数/标签由当批数据推导，模板已冻结；输出 Markdown（默认 stdout，`--out` 写文件） | 秒 |
+| `crossbench-report.cs` | CrossBench 五臂横评报告/基线：单批 `<batch.json>` 或 `--baseline b1,b2,b3` 多批中位；倍数/标签由当批数据推导，模板已冻结；输出 Markdown（默认 stdout，`--out` 写文件） | 秒 |
 | `scripts/run-mutation-tests.cs` | 变异测试（Stryker.NET，验证测试有效性；CI 每周六自动跑 mutation-tests.yml，Core + SourceGen 双配置；`dotnet run --file` 调用） | 10-30min/项目 |
 
 ## 测试环境

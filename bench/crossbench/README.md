@@ -1,28 +1,34 @@
-# CrossBench — 四臂交叉基准（ADO.NET / Dapper / FreeSql / PalORM）
-
-> 定位：**事件驱动的 ORM 横向对比工具**（三层性能系统的第二层）。三方言 × 两档 × 17 操作
-> × 四臂，测量引擎、数据集、三臂实现与 [PalORM.PerfHub](../perfhub/README.md) 单一事实源
->（链接编译），本工程只新增 FreeSql 臂与 Runner。2026-10-25 起入库并纳入 CI（workflow_dispatch）。
->
-> **职责边界（2026-10-25 时间优化轮明文化；同日用户指令起纳入默认全量）**：PalORM 自身回归检测
-> **不用本工具**——PerfHub 与其共码三臂已覆盖；触发面：①四臂横评主张（发版/对比声明）②形态
-> 断点（ADR 级变更后基线重开）；③2026-10-25 用户指令起随 `PerfCli full` 默认执行（新步骤
-> "CrossBench 四臂交叉批"，统一报告自动追加 FreeSql 四臂节——数据源按完整批自动判别，
-> 四臂 × 三方言 × 两档 = 24 三元组；`PerfCli crossbench` 可独立触发），事件触发语义不变。
+1	# CrossBench — 五臂交叉基准（ADO.NET / Dapper / RepoDB / FreeSql / PalORM）
+2	
+3	> **定位**：**事件驱动的 ORM 横向对比工具**（三层性能系统的第二层）。三方言 × 两档 × 17 操作
+4	> × 五臂，测量引擎、数据集、三臂实现与 [PalORM.PerfHub](../perfhub/README.md) 单一事实源
+5	>（链接编译），本工程只新增 RepoDB 臂与 Runner。2026-10-26 起入库并纳入 CI（workflow_dispatch）。
+6	>
+7	> **职责边界**：PalORM 自身回归检测**不用本工具**——PerfHub 与其共码三臂已覆盖；触发面：①五臂横评主张（发版/对比声明）②形态断点（ADR 级变更后基线重开）；③2026-10-26 用户指令起随 `PerfCli full` 默认执行（新步骤"CrossBench 五臂交叉批"，统一报告自动追加 RepoDB 数据臂——数据源按完整批自动判别，五臂×三方言×两档 = 30 三元组；`PerfCli crossbench`可独立触发），事件触发语义不变。
+8	>
+9	> **RepoDB v1.17+ 集成教训（来自 FreeSql 经验）**：
+10	> - 实体映射走 DynamicMapping（零特性，FieldMapper 静态缓存预热）——避免运行时反射
+11	> - 批量操作自动路由驱动级 API（MySQL LOAD DATA/PG COPY/SQLite 行预编译）——与 ADO 地板同路径
+12	> - 事务传 DbTransaction 参数给 Repository 方法（无需 WithTransaction 包装）
+13	> - AOT 兼容需 TrimmerRootAssembly（用户需配置），本夹具显式预热映射表防首次访问锁竞争
+14	> - SQLite PRAGMA 独立连接（池连接无法注入 PRAGMA，与 FreeSql 同坑）
 
 ## 运行
 
 ```bash
-# 全量基线批（全臂全预算，~14 min，2026-10-25 实测；需 .env.test 的 PG/MySQL 凭据）
+# 全量基线批（全臂全预算，~20 min，2026-10-26 实测；需 .env.test 的 PG/MySQL 凭据）
 dotnet run --project bench/crossbench/PalormProtocol -c Release -- --dialects sqlite,mysql,pg 2000 20000
 
-# 臂子集（断点后快速复核，~7 min：两臂=一半测量点）
+# 臂子集（断点后快速复核，~12 min：两臂=一半测量点）
 dotnet run --project bench/crossbench/PalormProtocol -c Release -- --arms ado,palorm --dialects sqlite,mysql,pg 2000 20000
+
+# RepoDB 单独测试（冒烟模式）
+dotnet run --project bench/crossbench/PalormProtocol -c Release -- --fast --arms repodb --dialects sqlite,mysql,pg 2000 --ops GetByKey,GetAllAsync,BulkInsert,UpsertBatch
 
 # 冒烟（--fast 全局预算 ×0.4 + --ops 子集，分钟级；冒烟批不进基线）
 dotnet run --project bench/crossbench/PalormProtocol -c Release -- --fast --dialects sqlite 2000 --ops BulkInsert,UpsertBatch
 
-# 子集（--dialects / --ops / 档位数字均可缩窄；臂名：ado、dapper、freesql、palorm）
+# 子集（--dialects / --ops / 档位数字均可缩窄；臂名：ado、dapper、repodb、freesql、palorm）
 dotnet run --project bench/crossbench/PalormProtocol -c Release -- --dialects sqlite 2000 --ops BulkInsert,UpsertBatch
 
 # 报告 / 基线（脚本白名单制：文件式 C#）
@@ -37,11 +43,12 @@ dotnet run --file scripts/crossbench-report.cs -- --baseline <b1.json,b2.json,b3
 
 | 项 | 值 | 说明 |
 |---|---|---|
-| 臂序 | 每操作两遍反序（p0：A,D,F,P；p1 反序），聚合取两遍中位 | 消除臂顺序相位；**不可减为单遍**（MySQL 读族臂序相位 1.55× 事件在案） |
+| 臂序 | 每操作两遍反序（p0：A,D,R,F,P；p1 反序），聚合取两遍中位 | 消除臂顺序相位；**不可减为单遍**（MySQL 读族臂序相位 1.55× 事件在案） |
 | 慢操作预算表 | Transaction 族与 Bulk 三项（Insert/Update/Upsert）计时窗 1.5→0.6s、预热 ×0.4（2026-10-25 A/A 验证与基线 v3 逐格噪声带一致） | 快操作不受影响（迭代数在 maxIterations 钳制处收敛，预算从不生效）；中位稳定性由 fsync/服务端主导（批内 err 普遍 <2%） |
-| 批量形态 | SQLite 行预编译 / multi-exec / json_each（ADR-Q/R 断点 2026-10-25 起） | MySQL/PG 维持多值/加载器/IN |
-| FreeSql 臂 | Fluent `ConfigEntity` 原生实体、`UseNoneCommandParameter(true)`、provider 批量 API；读走 `Select<T>` 表达式管线（ORM 层口径） | 详见臂内注释与 ADR-Q/R |
-| 读正确性守卫 | 每方言一次非计时校验（值逐字段 + 计数）；`--arms` 缺 FreeSql 时自动跳过 | 防 Fluent 映射错位 |
+| RepoDB 臂 | FluentMapper 零特性映射 + 枚举 PropertyHandler；批量按操作取优：Insert/Update/Merge 走官方 `*.BulkOperations`（MySQL LOAD DATA / PG COPY，经 pseudo 暂存表），Delete 走 Core `DeleteAll`（IN），SQLite 全部走 Core | 详见 RepoDbArm.cs 注释与 ADR-S |
+| RepoDB 跨方言隔离 | 建臂时清空七个全局缓存（`CommandTextCache` + 六个 `ExecutionContextCache`）——RepoDB 缓存键不含 provider，同进程混用多方言会让后跑的方言命中先到方言的 SQL 与参数绑定委托（实测 MySQL 拿到 SQLite 的方括号 SQL 报语法错、`MySqlParameter` 强转 `SqliteParameter` 抛 InvalidCastException） | ADR-S D6；单方言冒烟不复现，**全量批必查** |
+| FreeSql 臂 | Fluent `ConfigEntity` 原生实体、`UseNoneCommandParameter(true)`、provider 批量 API；读走 `Select<T>` 表达式管线（ORM 层口径） | 详见 arm 内注释与 ADR-Q/R |
+| 读正确性守卫 | 每方言一次非计时校验（值逐字段 + 计数）；`--arms` 缺 FreeSql/RepoDb 时自动跳过 | 防映射错位 |
 
 ## 基线纪律
 
@@ -60,7 +67,7 @@ dotnet run --file scripts/crossbench-report.cs -- --baseline <b1.json,b2.json,b3
 
 | 路径 | 内容 |
 |---|---|
-| `PalormProtocol/` | Runner + FreeSql 臂（链接 PerfHub 引擎与三臂） |
+| `PalormProtocol/` | Runner + RepoDB/FreeSql 臂（链接 PerfHub 引擎与三臂） |
 | `UpsertProbe/` / `DeleteProbe/` / `EnumProbe/` | 形态每行成本与会话机械探针（独立小工程） |
 | `results/` | 批 JSON 与基线报告（入库） |
 | `scripts/crossbench-report.cs`（仓根） | 单批报告 / 多批基线生成 |

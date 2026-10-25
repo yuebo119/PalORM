@@ -129,8 +129,8 @@ internal static class PerfEntry
             Perf.Err("四组表生成失败（不影响报告主体）");
         }
 
-        // CrossBench 四臂横评（含 FreeSql）追加为独立节（2026-10-25 用户指令：统一报告默认带上
-        // FreeSql 数据）。数据源 = 最近完整批（四臂 × 三方言 × 两档自动判别），冻结模板生成
+        // CrossBench 五臂横评（含 FreeSql / RepoDb）追加为独立节（2026-10-25 用户指令：统一报告默认带上
+        // FreeSql 数据；2026-10-26 增 RepoDb）。数据源 = 最近完整批（五臂 × 三方言 × 两档自动判别），冻结模板生成
         //（bench/crossbench/README.md 基线纪律：性能数据一律经 crossbench-report.cs 输出）。
         // 无完整批时静默跳过，与四组表失败不影响报告主体同一处置。
         string? cbBatch = CrossBenchBatch.LatestFullBatchPath(Path.Combine(root, CrossBenchResultsDir));
@@ -142,7 +142,7 @@ internal static class PerfEntry
             if (cbCode == 0 && File.Exists(cbPath))
             {
                 File.AppendAllText(outPath,
-                    $"\n\n## CrossBench 四臂横评（ADO.NET / Dapper / FreeSql / PalORM）\n\n"
+                    $"\n\n## CrossBench 五臂横评（ADO.NET / Dapper / FreeSql / RepoDb / PalORM）\n\n"
                     + $"> 数据源 {Path.GetFileName(cbBatch)}（完整批自动判别），冻结模板生成；口径与形态注记见 bench/crossbench/README.md。\n\n"
                     + File.ReadAllText(cbPath));
                 File.Delete(cbPath);
@@ -156,8 +156,8 @@ internal static class PerfEntry
         return 0;
     }
 
-    /// <summary>CrossBench 四臂交叉批（ADO.NET / Dapper / FreeSql / PalORM）+ 冻结模板单批报告。
-    /// 2026-10-25 用户指令起为 full 默认步骤；也可独立触发。臂序两遍反序、慢操作预算表等
+    /// <summary>CrossBench 五臂交叉批（ADO.NET / Dapper / FreeSql / RepoDb / PalORM）+ 冻结模板单批报告。
+    /// 2026-10-25 用户指令起为 full 默认步骤；也可独立触发（2026-10-26 增 RepoDb 臂）。臂序两遍反序、慢操作预算表等
     /// 协议见 bench/crossbench/README.md；报告数据一律经 scripts/crossbench-report.cs 生成
     ///（模板冻结，禁手改生成物）。</summary>
     public static int CrossBench(bool ownSession = true)
@@ -170,13 +170,13 @@ internal static class PerfEntry
             Perf.BeginSessionLog(root, "crossbench");
         }
         var t0 = DateTime.Now;
-        Perf.Step("[1/2] CrossBench 四臂全量批（三方言 × 两档 × 17 操作 × 四臂，两遍反序）");
+        Perf.Step("[1/2] CrossBench 五臂全量批（三方言 × 两档 × 17 操作 × 五臂，两遍反序）");
         int code = Perf.Run("dotnet",
             $"run --project \"{Path.Combine(root, CrossBenchProject)}\" -c Release -- " +
             "--dialects sqlite,mysql,pg 2000 20000");
         if (ownSession)
         {
-            Perf.RecordStep("[1/2] CrossBench 四臂全量批", code == 0 ? "OK" : "FAIL",
+            Perf.RecordStep("[1/2] CrossBench 五臂全量批", code == 0 ? "OK" : "FAIL",
                 Perf.ElapsedSince(t0), Perf.ElapsedSince(Perf.TotalStart));
         }
         if (code != 0)

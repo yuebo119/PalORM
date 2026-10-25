@@ -2,7 +2,7 @@
 //
 // 用法：
 //   dotnet run --file scripts/crossbench-report.cs -- <batch.json> [--out report.md]
-//     单批评级报告（四臂四组表：ADO/PalORM/Dapper/FreeSql；列序/色标/📌 规则与 PerfHub 报告一致）
+//     单批评级报告（五臂四组表：ADO/PalORM/Dapper/FreeSql/RepoDb；列序/色标/📌 规则与 PerfHub 报告一致）
 //     模板已冻结（2026-10-25 用户指令）：所有倍数/计数/最值标签必须由当批数据推导，总览与说明禁止硬编码数字。
 //   dotnet run --file scripts/crossbench-report.cs -- --baseline <b1.json,b2.json,b3.json> [--out baseline.md]
 //     多批基线（B100 纪律）：每格取各批中位的中位数；地板批间散布 >20% 的格标 ⚠地板漂移。
@@ -53,14 +53,14 @@ var sw = new StringWriter();
 sw.WriteLine($"# 交叉基准{(baselineMode ? $"基线（{batches.Count} 批窗口中位）" : "单批报告")}");
 sw.WriteLine();
 sw.WriteLine($"> 数据源：{string.Join(" · ", files.Select(Path.GetFileName))}");
-sw.WriteLine("> 四臂：ADO.NET（地板）/ PalORM / Dapper / FreeSql，同批同数据同量具（两遍反序中位）。");
+sw.WriteLine("> 五臂：ADO.NET（地板）/ PalORM / Dapper / FreeSql / RepoDb，同批同数据同量具（两遍反序中位）。");
 sw.WriteLine("> 读表：每格 = 时间 [对 ADO 倍数] / 内存 [对 ADO 倍数]；[1.00] = ±0.5% 持平带；≤0.67 或 ≥1.5 越线加粗；📌 = 越线待判读；⚠地板 = ADO 臂批间散布 >20%；🏆 = 该格最快臂。");
 sw.WriteLine("> 口径与形态注记见 bench/crossbench/README.md 与 docs/adr/ADR-Q/R。");
 sw.WriteLine();
 
 string[] dialects = ["SQLite", "MySQL", "PostgreSQL"];
 int[] tiers = [2000, 20000];
-string[] arms = ["ADO_NET", "PalORM", "Dapper", "FreeSql"];
+string[] arms = ["ADO_NET", "PalORM", "Dapper", "FreeSql", "RepoDb"];
 
 (string[] Ops, string Title, bool MinTierOnly)[] groups =
 [
@@ -124,6 +124,15 @@ var sqlInsDap = ArmT("Dapper", "SQLite", "BulkInsert", 20000);
 var sqlInsFs = ArmT("FreeSql", "SQLite", "BulkInsert", 20000);
 var buP = allCells.Where(c => c.O == "BulkUpdate").Select(c => PAdo(c.D, c.O, c.R)).ToList();
 var buDapMax = allCells.Where(c => c.O == "BulkUpdate").Max(c => ArmT("Dapper", c.D, c.O, c.R));
+string[] bulkOps = groups[1].Ops;
+var rdBulkWorst = ArmWorst("RepoDb", bulkOps);
+var rdBulkBest = allCells
+    .Where(c => bulkOps.Contains(c.O))
+    .Select(c => (Cell: $"{c.O} {c.D}", V: ArmT("RepoDb", c.D, c.O, c.R)))
+    .OrderBy(x => x.V).First();
+var rdCrudMax = allCells
+    .Where(c => groups[0].Ops.Contains(c.O))
+    .Max(c => ArmT("RepoDb", c.D, c.O, c.R));
 string[] txOps = groups[2].Ops;
 var txP = allCells.Where(c => txOps.Contains(c.O)).Select(c => PAdo(c.D, c.O, c.R)).ToList();
 var txBestCell = PBest(txOps);
@@ -135,7 +144,7 @@ var enumFsAlloc = ArmA("FreeSql", "SQLite", "EnumInserts", 2000);
 // ── 总览（组亮点 + 胜场榜） ──
 sw.WriteLine("## 总览");
 sw.WriteLine();
-sw.WriteLine($"四臂 × 三方言 × {groups.Sum(g => g.Ops.Length)} 操作（CRUD 与批量各两档、事务仅 2000 档）= **{allCells.Count} 格**，{batches.Count} 批窗口中位。所有倍数均以 ADO.NET 手写 SQL 为基准 [1.00]。");
+sw.WriteLine($"五臂 × 三方言 × {groups.Sum(g => g.Ops.Length)} 操作（CRUD 与批量各两档、事务仅 2000 档）= **{allCells.Count} 格**，{batches.Count} 批窗口中位。所有倍数均以 ADO.NET 手写 SQL 为基准 [1.00]。");
 sw.WriteLine();
 
 // CRUD 组突出项
@@ -144,6 +153,7 @@ sw.WriteLine();
 sw.WriteLine($"- 🥇 GetByKey SQLite：PalORM **{crudGetT:F2}**（{Qual(crudGetT)}），FreeSql **{crudGetFs:F2}**（{Qual(crudGetFs)}，全方言最差 {fsGetMax:F2}）");
 sw.WriteLine($"- QueryAll MySQL 20000 分配：PalORM **{crudQueryA:F2}**（{Qual(crudQueryA)}），Dapper {crudQueryDapA:F2}（{Qual(crudQueryDapA)}）");
 sw.WriteLine($"- Insert SQLite：PalORM {crudInsP:F2}（{Qual(crudInsP)}），FreeSql **{crudInsFs:F2}**（{Qual(crudInsFs)}）");
+sw.WriteLine($"- RepoDb 单行与读：最差 {rdCrudMax:F2}（{Qual(rdCrudMax)}）——表达式物化与手写 SQL 同量级");
 sw.WriteLine();
 
 // 批量组突出项
@@ -153,6 +163,7 @@ sw.WriteLine($"- 🥇 BulkDelete PG 20000：PalORM **{pgDelT:F2}**（{Qual(pgDel
 sw.WriteLine($"- 🥇 UpsertBatch PG 20000：PalORM **{pgUpsT:F2}**（{Qual(pgUpsT)}），分配 **{pgUpsA:F2}**（{Qual(pgUpsA)}）");
 sw.WriteLine($"- BulkInsert SQLite 20000：PalORM {sqlInsP:F2}（{Qual(sqlInsP)}），Dapper {sqlInsDap:F2}（{Qual(sqlInsDap)}），FreeSql **{sqlInsFs:F2}**（{Qual(sqlInsFs)}）");
 sw.WriteLine($"- BulkUpdate 三方言两档：PalORM {buP.Min():F2}~{buP.Max():F2}，Dapper 最差 **{buDapMax:F2}**（{Qual(buDapMax)}）");
+sw.WriteLine($"- RepoDb 批量族：最好 {rdBulkBest.Cell} **{rdBulkBest.V:F2}**（{Qual(rdBulkBest.V)}），最差 {rdBulkWorst.Cell} **{rdBulkWorst.V:F2}**（{Qual(rdBulkWorst.V)}）");
 sw.WriteLine();
 
 // 事务组突出项
@@ -177,19 +188,19 @@ sw.WriteLine();
 var opDescriptions = new Dictionary<string, (string Desc, string Verdict)>
 {
     ["GetByKey"] = ("主键单行点查", "PalORM 贴地板（SQLite 会话税被 SQL 常量缓存抵消）；FreeSql 全方言最慢（表达式每次求值）"),
-    ["GetAllAsync"] = ("全表直查 API（PalORM 专用 GetAllAsync，其余同 QueryAll）", "联网方言四臂接近；SQLite Dapper（反射物化）与 FreeSql（表达式管线）明显偏慢"),
-    ["QueryAll"] = ("全表物化查询（From<T>().ToListAsync / Select.ToList）", "同 GetAllAsync：PalORM ≈ ADO 地板，SQLite 两竞品明显偏慢"),
-    ["Insert"] = ("单行插入（自增主键）", "联网方言 fsync 主导四臂持平；SQLite PalORM 持平、FreeSql 明显偏慢（表达式管线）"),
+    ["GetAllAsync"] = ("全表直查 API（PalORM 专用 GetAllAsync，其余同 QueryAll）", "联网方言各臂接近；SQLite Dapper（反射物化）与 FreeSql（表达式管线）明显偏慢"),
+    ["QueryAll"] = ("全表物化查询（From<T>().ToListAsync / Select.ToList）", "同 GetAllAsync：PalORM ≈ ADO 地板；SQLite 两竞品明显偏慢"),
+    ["Insert"] = ("单行插入（自增主键）", "联网方言 fsync 主导各臂持平；SQLite PalORM 持平、FreeSql 明显偏慢（表达式管线）"),
     ["Update"] = ("单行整行更新", "联网方言 fsync 主导持平；FreeSql 在 SQLite 与 MySQL 明显偏慢（表达式管线）"),
-    ["BulkInsert"] = ("批量插入（SQLite 行预编译 / PG COPY / MySQL BulkCopy）", "PalORM 与 ADO 同形态贴平；Dapper/FreeSql 批量路径全方言偏慢，PG/MySQL 大档差距最大"),
-    ["BulkUpdate"] = ("批量更新（SQLite 逐条裹事务 / PG UPDATE FROM VALUES / MySQL CASE WHEN）", "PalORM 三方言与 ADO 同形态贴平；Dapper/FreeSql 无集合式封装，明显偏慢"),
-    ["BulkDelete"] = ("批量删除（SQLite json_each 单参数 / PG = ANY 数组 / MySQL IN 分批）", "PG 数组形态快于 ADO 的 IN 占位符；SQLite json_each 与 MySQL 分批接近地板"),
-    ["UpsertBatch"] = ("批量 UPSERT（ON CONFLICT / ON DUPLICATE KEY）", "PG 数组形态快于 ADO 与其余臂；SQLite 四臂同形态贴平；MySQL Dapper/FreeSql 偏慢"),
-    ["TxSingleInsert"] = ("事务内单行插入", "四臂持平（事务开销主导）"),
+    ["BulkInsert"] = ("批量插入（SQLite 行预编译 / PG COPY / MySQL BulkCopy）", "PalORM 与 ADO 同形态贴平；RepoDb 走官方 BulkOperations（COPY/LOAD DATA 经 pseudo 表）接近地板；Dapper/FreeSql 批量路径全方言偏慢"),
+    ["BulkUpdate"] = ("批量更新（SQLite 逐条裹事务 / PG UPDATE FROM VALUES / MySQL CASE WHEN）", "PalORM 三方言与 ADO 同形态贴平；RepoDb 在 MySQL 用 BulkOperations 的 pseudo 表、PG/SQLite 用 Core UpdateAll 逐行，两条路径都明显偏慢；Dapper/FreeSql 无集合式封装"),
+    ["BulkDelete"] = ("批量删除（SQLite json_each 单参数 / PG = ANY 数组 / MySQL IN 分批）", "PG 数组形态快于 ADO 的 IN 占位符；SQLite json_each 与 MySQL 分批接近地板；RepoDb 的 DeleteAll 按主键逐个构造 QueryGroup，分配与时间都显著偏高"),
+    ["UpsertBatch"] = ("批量 UPSERT（ON CONFLICT / ON DUPLICATE KEY）", "PG 数组形态快于 ADO 与其余臂；SQLite 各臂同形态贴平；RepoDb 在 MySQL 用 BulkMerge（pseudo 表）、PG 因 BulkMerge 上游缺陷退回 MergeAll；Dapper/FreeSql 偏慢"),
+    ["TxSingleInsert"] = ("事务内单行插入", "各臂持平（事务开销主导）"),
     ["TxHundredInserts"] = ("事务内 100 行逐条插入", "联网方言接近；FreeSql SQLite 明显偏慢（逐行表达式开销放大）"),
-    ["TxBulkInsert"] = ("事务内批量插入", "PalORM 贴地板；Dapper（multi-exec 无语句缓存复用）与 FreeSql 明显偏慢"),
+    ["TxBulkInsert"] = ("事务内批量插入", "PalORM 贴地板；RepoDb 在 MySQL/PG 走 BulkOperations（事务内仍建 pseudo 表）接近地板；Dapper（multi-exec 无语句缓存复用）与 FreeSql 明显偏慢"),
     ["TxRollback"] = ("事务回滚（更新后显式 Rollback）", "联网方言接近；SQLite FreeSql 明显偏慢"),
-    ["EnumInserts"] = ("枚举列事务内逐条插入（Status TEXT 列）", "PalORM 贴平（SQLite 略高为每调用会话契约成本，已探针定案）；FreeSql 全方言明显偏慢，Dapper SQLite 偏慢"),
+    ["EnumInserts"] = ("枚举列事务内逐条插入（Status TEXT 列）", "PalORM 贴平（SQLite 略高为每调用会话契约成本，已探针定案）；RepoDb 走 PropertyHandler 显式 enum↔string；FreeSql 全方言明显偏慢，Dapper SQLite 偏慢"),
 };
 
 foreach (var g in groups)
@@ -229,8 +240,8 @@ foreach (var g in groups)
         sw.WriteLine($"**{d}**");
         sw.WriteLine();
         // 格式：时间 [对 ADO 倍数] / 内存 [对 ADO 倍数]，如 4.5ms [1.87] / 4.5MB [0.55]
-        sw.WriteLine("| 操作 | 档 | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql |");
-        sw.WriteLine("|---|---:|:-:|---|---|---|---|");
+        sw.WriteLine("| 操作 | 档 | 🏆 | ADO.NET | **PalORM** | Dapper | FreeSql | RepoDb |");
+        sw.WriteLine("|---|---:|:-:|---|---|---|---|---|");
         foreach (int r in tiers)
         {
             if (g.MinTierOnly && r != 2000) continue;
@@ -288,8 +299,8 @@ foreach (var g in groups)
 {
     sw.WriteLine($"### {g.Title}");
     sw.WriteLine();
-    sw.WriteLine("| 操作 | 方言 | 档 | ADO.NET | PalORM | Dapper | FreeSql | 分配 A/P/D/F |");
-    sw.WriteLine("|---|---|---:|---:|---:|---:|---:|---|");
+    sw.WriteLine("| 操作 | 方言 | 档 | ADO.NET | PalORM | Dapper | FreeSql | RepoDb | 分配 A/P/D/F/R |");
+    sw.WriteLine("|---|---|---:|---:|---:|---:|---:|---:|---|");
     foreach (string d in dialects)
     foreach (int r in tiers)
     {

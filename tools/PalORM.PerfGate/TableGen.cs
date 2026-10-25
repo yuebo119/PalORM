@@ -87,13 +87,13 @@ internal static class TableGen
         {
             // 纯文本脚注（无数字洞），无需 string.Create 的文化控制——内插字符串直接拼接即可。
             md.AppendLine(
-                $"FreeSql 列（时延 / P/FreeSql / 分配 F 段 / 分配相对 ADO（F））来自 CrossBench 四臂交叉批 {Path.GetFileName(crossFile)}"
-                + "（独立夹具：两遍反序中位、四臂同数据同量具；与 PerfHub 三臂同日不同夹具，数字不互换、比值结论互相印证）；无完整批时为 —。"
-                + "P/FreeSql 基准 = FreeSql（正 = 慢 = 劣）；分配相对 ADO（P/D/F）三列同分母 = PerfHub ADO 地板；📌 不因 P/FreeSql 触发（仍只看 P/ADO）。");
+                $"FreeSql / RepoDb 列（时延 / P/臂比值 / 分配段 / 分配相对 ADO）来自 CrossBench 五臂交叉批 {Path.GetFileName(crossFile)}"
+                + "（独立夹具：两遍反序中位、五臂同数据同量具；与 PerfHub 三臂同日不同夹具，数字不互换、比值结论互相印证）；无完整批时为 —。"
+                + "P/FreeSql、P/RepoDb 基准 = 对应臂（正 = 慢 = 劣）；分配相对 ADO（P/D/F/R）四列同分母 = PerfHub ADO 地板；📌 不因 P/FreeSql、P/RepoDb 触发（仍只看 P/ADO）。");
         }
         else
         {
-            md.AppendLine("FreeSql 列：本结果库窗口内无完整 CrossBench 批（四臂 × 三方言 × 两档），为 —；跑 `PerfCli crossbench` 后重建报告即填充。");
+            md.AppendLine("FreeSql / RepoDb 列：本结果库窗口内无完整 CrossBench 批（五臂 × 三方言 × 两档），为 —；跑 `PerfCli crossbench` 后重建报告即填充。");
         }
         md.AppendLine();
 
@@ -388,11 +388,11 @@ internal static class TableGen
 
     private static void Header(StringBuilder md)
     {
-        // FreeSql 列（2026-10-25 用户指令）：时延 + P/FreeSql + 分配 F 段 + 分配相对 ADO（F）并入
-        // 四组表——数据源是 CrossBench 最近完整批（独立夹具），脚注声明口径；14 列，末三列
-        // （分配相对 ADO 的 P/D/F）右对齐（2026-10-05 拆列定标不变，F 列 2026-10-25 用户补列）。
-        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | FreeSql | P/ADO（倍数±%） | P/Dapper（倍数±%） | P/FreeSql（倍数±%） | 分配（A/D/P/F） | 分配相对 ADO（P） | 分配相对 ADO（D） | 分配相对 ADO（F） |");
-        md.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|");
+        // FreeSql / RepoDb 列：时延 + P/臂比值 + 分配段 + 分配相对 ADO 并入四组表——数据源是
+        // CrossBench 最近完整批（独立夹具），脚注声明口径；17 列，末五列（分配相对 ADO 的
+        // P/D/F/R）右对齐（2026-10-05 拆列定标，F 列 2026-10-25 补列，RepoDb 组 2026-10-26 补列）。
+        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | FreeSql | RepoDb | P/ADO（倍数±%） | P/Dapper（倍数±%） | P/FreeSql（倍数±%） | P/RepoDb（倍数±%） | 分配（A/D/P/F/R） | 分配相对 ADO（P） | 分配相对 ADO（D） | 分配相对 ADO（F） | 分配相对 ADO（R） |");
+        md.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|");
     }
 
     private static void Row(
@@ -405,18 +405,23 @@ internal static class TableGen
         PerfResultItem? pal = Get(ix, dialect, op, tier, "PalORM");
         if (ado is null || pal is null) return;
         CrossBenchBatch.CrossBenchMeasurement? free = GetCross(cx, dialect, op, tier, "FreeSql");
+        CrossBenchBatch.CrossBenchMeasurement? repo = GetCross(cx, dialect, op, tier, "RepoDb");
 
         string pAdo = RatioCell(pal.MedianUs / ado.MedianUs) + WeakMark(ado, dap, pal);
         string pDap = dap is null || dap.MedianUs <= 0 ? "—" : RatioCell(pal.MedianUs / dap.MedianUs);
         string pFree = free is null || free.MedianUs <= 0
             ? "—"
             : RatioCell(pal.MedianUs / free.MedianUs) + WeakFree(pal, free);
+        string pRepo = repo is null || repo.MedianUs <= 0
+            ? "—"
+            : RatioCell(pal.MedianUs / repo.MedianUs) + WeakFree(pal, repo);
         string alloc = $"{FmtBytes(ado.AllocBytes)}/{FmtBytes(dap?.AllocBytes ?? 0)}/{FmtBytes(pal.AllocBytes)}"
-            + $"/{(free is null ? "—" : FmtBytes(free.AllocBytes))}";
+            + $"/{(free is null ? "—" : FmtBytes(free.AllocBytes))}"
+            + $"/{(repo is null ? "—" : FmtBytes(repo.AllocBytes))}";
         string flag = flaggable && ado.MedianUs > 0 && IsFlagged(pal.MedianUs / ado.MedianUs) ? $"{Flag} " : "";
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"| {flag}{op} | {dialect} | {tier} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} | {FmtUs(free?.MedianUs)} "
-            + $"| {pAdo} | {pDap} | {pFree} | {alloc} | {PalDeltaCell(pal, ado)} | {DapDeltaCell(dap, ado)} | {FreeDeltaCell(free, ado)} |"));
+            $"| {flag}{op} | {dialect} | {tier} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} | {FmtUs(free?.MedianUs)} | {FmtUs(repo?.MedianUs)} "
+            + $"| {pAdo} | {pDap} | {pFree} | {pRepo} | {alloc} | {PalDeltaCell(pal, ado)} | {DapDeltaCell(dap, ado)} | {FreeDeltaCell(free, ado)} | {RepoDeltaCell(repo, ado)} |"));
     }
 
     /// <summary>分配相对 ADO 的 F 列（FreeSql 对 ADO，右对齐）：分母 = 行内同一 ADO 地板
@@ -425,10 +430,14 @@ internal static class TableGen
     private static string FreeDeltaCell(CrossBenchBatch.CrossBenchMeasurement? free, PerfResultItem ado)
         => free is null || ado.AllocBytes <= 0 ? "—" : Delta((free.AllocBytes / (double)ado.AllocBytes) - 1);
 
-    /// <summary>FreeSql 单元格的判别力弱标注：比值两侧（PerfHub PalORM / CrossBench FreeSql）
-    /// 任一 ErrorRatio 超线即标——跨夹具比值的不确定度由两侧共同决定。</summary>
-    private static string WeakFree(PerfResultItem pal, CrossBenchBatch.CrossBenchMeasurement free)
-        => pal.ErrorRatio > NoiseLine || free.ErrorRatio > NoiseLine ? " ⚠" : "";
+    /// <summary>分配相对 ADO 的 R 列（RepoDb 对 ADO，右对齐）：分母与 P/D/F 三列同源。</summary>
+    private static string RepoDeltaCell(CrossBenchBatch.CrossBenchMeasurement? repo, PerfResultItem ado)
+        => repo is null || ado.AllocBytes <= 0 ? "—" : Delta((repo.AllocBytes / (double)ado.AllocBytes) - 1);
+
+    /// <summary>CrossBench 单元格（FreeSql / RepoDb）的判别力弱标注：比值两侧（PerfHub PalORM /
+    /// CrossBench 臂）任一 ErrorRatio 超线即标——跨夹具比值的不确定度由两侧共同决定。</summary>
+    private static string WeakFree(PerfResultItem pal, CrossBenchBatch.CrossBenchMeasurement cross)
+        => pal.ErrorRatio > NoiseLine || cross.ErrorRatio > NoiseLine ? " ⚠" : "";
 
     private static CrossBenchBatch.CrossBenchMeasurement? GetCross(
         Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx,
