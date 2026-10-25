@@ -2,11 +2,19 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] · SQLite 批量删除 json_each 键集合形态（E 方案）+ A+B 行预编译
+## [未发布] · SQLite 批量优化 + 许可证切换与历史重写收尾
 
 > 决策：[ADR-Q](docs/adr/ADR-Q-SQLite行预编译批量.md)（A+B）与
 > [ADR-R](docs/adr/ADR-R-SQLite批删json-each.md)（E，C 字面量内联否决）。
 > 依据：DeleteProbe 探针（json_each 0.21~0.25µs/键 vs IN 3.64~3.86 vs 字面量 0.34~0.40）。
+
+### 📄 许可证
+
+- **项目协议由 AGPL-3.0-only 切换为 Apache-2.0**（单版权人切换，无外部贡献者）。宽松协议附带显式专利授权，移除企业采用的合规障碍；≤6.7.0 的已发布历史版本仍为 AGPL-3.0-only，其后版本以 Apache-2.0 发布。
+
+### 🗃 仓库
+
+- **git 历史全量重写（署名归一）**：2026-07-17~19 间 45 个提交因另一台机器漏配 git 身份署名 `root@C202605291236847.local`，经 `git filter-repo --mailmap` 归一为 `SuperLee <57142635+yuebo119@users.noreply.github.com>`。该署名与 SuperLee 为同一自然人，重写仅改 author/committer 元数据，全部提交的 tree SHA 逐字节不变（代码内容零变化）。副作用：全部分支与 v5.0.0 起的 tag 指向新 commit SHA，GitHub 上重写前的 PR/CI 页面引用成为悬空链接；新增 `.mailmap` 防复发。
 
 ### ⚡ 性能
 

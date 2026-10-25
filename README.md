@@ -7,7 +7,7 @@
 [![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-AGPL--3.0--only-red)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [![Native AOT](https://img.shields.io/badge/Native_AOT-3_dialects_verified-512BD4)](docs/AOT部署指南.md)
 [![Diagnostics](https://img.shields.io/badge/Compile--time_diagnostics-45_rules-512BD4)](docs/API参考.md)
@@ -127,7 +127,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **数据库覆盖广度**         | 三方言（深度调优）                                                    | 任意 ADO.NET（方言自理）                                              | 官方 Provider 矩阵（SQL Server / SQLite / PG / MySQL / Cosmos…）            | 15+ Provider（1.16/1.17 大幅扩容）                                |
 | **核心包 NuGet 依赖**    | 零                                                            | 零                                                             | 高（多包拆分）                                                               | 中等                                                          |
 | **目标框架**            | net11.0（单目标）                                                 | 多目标（netstandard2.0+）                                          | 多目标（net8+）                                                            | 多目标（netstandard2.0+）                                        |
-| **许可证**             | AGPL-3.0-only                                                | Apache-2.0                                                    | MIT                                                                   | Apache-2.0                                                  |
+| **许可证**             | Apache-2.0                                                   | Apache-2.0                                                    | MIT                                                                   | Apache-2.0                                                  |
 
 核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略（COPY / BulkCopy / 行预编译 / 数组）。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，Bulk 族经扩展包扩展到 SQL Server/MySQL/Oracle 等 13+ 数据库。
 RepoDb 1.16/1.17 开始已经移除掉了IL Emit实现，现在已经兼容AOT，使用表达式路径实现。(RepoDb早点实现AOT，我就不做这个ORM了，没想到用AI还要搞四个月 ☹)。
@@ -1062,7 +1062,7 @@ QQ 内搜索群号或扫码加入。
 
 ## 📄 许可证
 
-[AGPL-3.0-only](LICENSE)
+[Apache-2.0](LICENSE)
 
 <div align="right">
 
