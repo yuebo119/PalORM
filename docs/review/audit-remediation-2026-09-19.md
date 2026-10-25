@@ -44,7 +44,7 @@
 | PROV-011 | P3 | Provider 布尔旋钮 XML doc 修正（L8，仅 doc） | 已完成 | PG/MySQL CreateConnection doc 补布尔旋钮边界段（被覆盖后果是正确性而非性能，须绕开工厂自建连接） | |
 
 > 开放问题裁决记录（2026-09-19 第三轮，仓库所有者拍板）：
-> - **AGPL 双许可**：暂时不处理（关闭）。
+> - **AGPL 双许可**：暂时不处理（关闭；v6.8.0 起已改为 Apache-2.0）。
 > - **BulkMergeAsync 3.0 语义**：论证后裁决**维持"处理实体数"**（MySQL affectedRows 依赖数据历史，改驱动口径比家族不一致更危险）；配套：BulkInsert/Update/Delete 各补 returns 口径声明，BulkMerge 的 returns 更新为含论证的终版。关闭。
 > - **多租户缓存默认**：论证后裁决采纳**结构性隔离（ADR-L）**并已实施——实际缓存 key 按租户作用域自动前缀化（`__t:{tenantId}:` / `__all__:`），与租户过滤注入同点冻结；三用例测试 + S3 反向验证（撤前缀化 → 串租用例确定性回红）闭环；ADR-L 新增、ADR-C 修订头、静态缓存清单与 README 同步（顺带修正 README 的 SetTenant→WithTenant API 名漂移）。
 > - **SDK GA 切轨**：等 .NET 11 正式版发布后执行（Directory.Build.props 注释已登记该计划）。挂起至外部事件。

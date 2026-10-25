@@ -29,7 +29,7 @@
 
 ## 二、仓库地图
 
-**项目类型**：已发布到 NuGet.org 的 .NET 类库（AGPL-3.0，`Directory.Build.props:35`），5 个包（Core / SourceGen / Sqlite / PostgreSql / MySql，见 `release.yml:113`）。
+**项目类型**：已发布到 NuGet.org 的 .NET 类库（当时为 AGPL-3.0，`Directory.Build.props:35`；自 v6.8.0 起为 Apache-2.0），5 个包（Core / SourceGen / Sqlite / PostgreSql / MySql，见 `release.yml:113`）。
 **成熟度**：生产级库（v5.x 迭代中，CHANGELOG 113 KB，12 份 ADR，登记缺陷编号 B8-B37 / ITM-xxx 共 62+ 条）。
 
 **技术栈**：.NET 11（`global.json:3` = `11.0.100-preview.6`，`allowPrerelease: true`）· C# `latest` · `Features=runtime-async=on`（`Directory.Build.props:19`）· Roslyn `IIncrementalGenerator`（`Microsoft.CodeAnalysis.CSharp` 5.9.0）· Npgsql 10.0.3 / MySqlConnector 2.6.2 / Microsoft.Data.Sqlite.Core 11.0.0-rc.1 · TUnit 1.66.27（MTP 模式，`dotnet run` 执行，无 VSTest）· SonarAnalyzer.CSharp 10.34 · BenchmarkDotNet（本地 fork ProjectReference）。
@@ -146,7 +146,7 @@ DataSession<TProvider>（6 个 partial 文件）──EnterOperation()──► 
 | O2 | **[事实]** `release.yml:137-144` 的 "Verify Release Accuracy" 在**已经 push 到 NuGet 之后**运行，且断言形如 `echo "Core 测试: $(dotnet run ... \| grep -oP '成功: \K\d+')"`——grep 空匹配时 `echo` 仍 exit 0；该步还为了抓计数把三套测试各**再跑一次** | `release.yml:130-144` | "验证"步骤结构上不可能让发布变红（唯一真断言是 `:148-153` 的 CHANGELOG 版本存在性）；同时浪费约 2× CI 分钟。若此处真发现问题，包已在 NuGet.org 上不可撤回 | **高** |
 | O3 | **[事实]** 分支保护是**手工清单**而非可验证配置：`.github/BRANCH_PROTECTION.md:19` 明确"需在仓库 Settings 中配置"，仓库内无任何 `gh api` 校验脚本 | 同左 | 发布由任意 `v*` tag 触发（`release.yml:4-6`）。若 GitHub 设置漂移/未配置，仓库内无人能发现 | 中 |
 | O4 | **[事实]** `perf-gate.yml:11-12` 无条件 `pull_request` 触发 + `:26-29` job 级 `if` 标签门控 → 非 `[perf]` PR 产生一个**零 job 且恒绿**的 "Performance Gate" 检查 | 同左 | 若它被设为必需状态检查，则性能门禁对普通 PR 是空壳。注释 `:9-12` 显示上一版是"每个 PR 白跑并必败"——修反了方向但没修到根 | 中 |
-| O5 | **[事实]** 无 NuGet 包签名、无 SBOM、无 provenance attestation（`release.yml:109-135`） | 同左 | 供应链留痕不足；对 AGPL 库的消费者合规审查不利 | 中 |
+| O5 | **[事实]** 无 NuGet 包签名、无 SBOM、无 provenance attestation（`release.yml:109-135`） | 同左 | 供应链留痕不足；对当时 AGPL 库的消费者合规审查不利（v6.8.0 起已改为 Apache-2.0） | 中 |
 
 ### 3.8 文档
 

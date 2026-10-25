@@ -318,11 +318,11 @@ RepoDb 1.16/1.17 开始已经移除掉了IL Emit实现，现在已经兼容AOT�
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.7.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.8.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.7.0" />
+<PackageReference Include="PalORM.MySql" Version="6.8.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.7.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.8.0" />
 ```
 
 每个 Provider 包含 `PalORM.Core`（运行时）和 `PalORM.SourceGen`（编译时源生成器）。安装后用下方快速开始的最小示例验证：能创建会话并完成一次插入即安装成功。

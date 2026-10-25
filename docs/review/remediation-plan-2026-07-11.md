@@ -62,11 +62,11 @@ Native AOT 能力只有在以下条件同时满足时才标记完成：
 | 7 | QueryBuilder 单一 Clause 模型 | AUD-007 至 AUD-010 | 已实施：QueryClause 原子持有类别/SQL/参数，JOIN 与 QueryMultiple 统一 binder，SplitQuery 根查询语义和 ThenInclude 双键契约已明确 |
 | 8 | 弹性、可观测性、Prepared、PG 重连 | AUD-011、AUD-018、提交评审项 | 已实施：会话级熔断、静态 Activity/Meter、参数绑定后 PrepareAsync、PG 新连接重连并重新 LISTEN；真实 PG 通知运行待 CI |
 | 9 | 三 Provider Native AOT 运行矩阵 | AUD-012、AUD-013、AUD-023 | 实现与 CI 配置已完成：三工程使用真实 Analyzer 并移除手工 `.g.cs`；SQLite 完整 CRUD、OwnedJson、并发和跨程序集原生运行通过；NuGet consumer 原生运行通过；PG/MySQL 原生 publish 通过，服务容器运行待证据 |
-| 10 | CI、零警告、许可证和三方一致 | AUD-022、AUD-024、评审基础设施项 | 实现与配置已完成，远端证据待产生：CI 已分离 build/unit/integration/gate/AOT；NuGet 元数据为 AGPL-3.0-only 并打包 README；全解决方案严格构建已从 1630 warning 收口为 0 warning / 0 error |
+| 10 | CI、零警告、许可证和三方一致 | AUD-022、AUD-024、评审基础设施项 | 实现与配置已完成，远端证据待产生：CI 已分离 build/unit/integration/gate/AOT；NuGet 元数据当时为 AGPL-3.0-only 并打包 README（v6.8.0 起改为 Apache-2.0）；全解决方案严格构建已从 1630 warning 收口为 0 warning / 0 error |
 
 ### NuGet 来源元数据
 
-当前检出没有 Git remote 或 upstream，GitHub CLI 也未认证；原 `RepositoryUrl` 无本地配置或公开仓库证据支持，原 `PackageProjectUrl` 无法完成 DNS 解析。为避免发布无法验证的来源链接，中央包属性已移除这两个 URL 及对应 `RepositoryType`，保留已验证的 AGPL-3.0-only 许可证和包内 README。配置可公开访问的真实 remote 后，再恢复项目页和仓库元数据。
+当前检出没有 Git remote 或 upstream，GitHub CLI 也未认证；原 `RepositoryUrl` 无本地配置或公开仓库证据支持，原 `PackageProjectUrl` 无法完成 DNS 解析。为避免发布无法验证的来源链接，中央包属性已移除这两个 URL 及对应 `RepositoryType`，保留已验证的 AGPL-3.0-only 许可证和包内 README（当时；v6.8.0 起改为 Apache-2.0）。配置可公开访问的真实 remote 后，再恢复项目页和仓库元数据。
 
 ## 缺陷到验收证据
 

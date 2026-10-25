@@ -320,11 +320,11 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 
 ```xml
 <!-- PostgreSQL -->
-<PackageReference Include="PalORM.PostgreSql" Version="6.7.0" />
+<PackageReference Include="PalORM.PostgreSql" Version="6.8.0" />
 <!-- MySQL -->
-<PackageReference Include="PalORM.MySql" Version="6.7.0" />
+<PackageReference Include="PalORM.MySql" Version="6.8.0" />
 <!-- SQLite -->
-<PackageReference Include="PalORM.Sqlite" Version="6.7.0" />
+<PackageReference Include="PalORM.Sqlite" Version="6.8.0" />
 ```
 
 Each provider package pulls in `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time source generator). After installing, verify with the minimal Quick Start example below: if you can create a session and complete one insert, the install works.

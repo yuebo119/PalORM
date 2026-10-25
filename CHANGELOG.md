@@ -2,19 +2,13 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] · SQLite 批量优化 + 许可证切换与历史重写收尾
+## [6.8.0] - 2026-10-26 · SQLite 批量优化 + 许可证切换
 
-> 决策：[ADR-Q](docs/adr/ADR-Q-SQLite行预编译批量.md)（A+B）与
-> [ADR-R](docs/adr/ADR-R-SQLite批删json-each.md)（E，C 字面量内联否决）。
-> 依据：DeleteProbe 探针（json_each 0.21~0.25µs/键 vs IN 3.64~3.86 vs 字面量 0.34~0.40）。
+> 变更规模：35 个提交 · 146 个文件 · +160,408/−1,861 行（含基准报告与历史数据）
 
 ### 📄 许可证
 
 - **项目协议由 AGPL-3.0-only 切换为 Apache-2.0**（单版权人切换，无外部贡献者）。宽松协议附带显式专利授权，移除企业采用的合规障碍；v6.7.0 及以前的已发布版本仍为 AGPL-3.0-only，v6.8.0 及以后的新版本统一变更为 Apache-2.0 发布。
-
-### 🗃 仓库
-
-- **git 历史全量重写（署名归一）**：2026-07-17~19 间 45 个提交因另一台机器漏配 git 身份署名 `root@C202605291236847.local`，经 `git filter-repo --mailmap` 归一为 `SuperLee <57142635+yuebo119@users.noreply.github.com>`。该署名与 SuperLee 为同一自然人，重写仅改 author/committer 元数据，全部提交的 tree SHA 逐字节不变（代码内容零变化）。副作用：全部分支与 v5.0.0 起的 tag 指向新 commit SHA，GitHub 上重写前的 PR/CI 页面引用成为悬空链接；新增 `.mailmap` 防复发。
 
 ### ⚡ 性能
 
@@ -40,12 +34,12 @@
   `FormatException`），与 IN 形态批内转换异常同语义（都在事务提交前，全有或全无）。
 - ulong 主键不进 json_each 形态（超 int64 域 JSON 数值语义分叉），回退 IN。
 
-### 🧪 测试
+### 🧪 验证
 
 - 新增 `BulkDeleteJsonEachTests` 10 项与 `RowPreparedBulkTests` 6 项；IN 形态池化
   夹具经 `ForceInFormDeleteForTests`（IVT 钩子）锁定回退路径；AotTest 覆盖
-  数值与字符串两条 json_each 路径（发布 0 IL 警告 + 原生运行 PASSED）；
-  Core 1216/1216、Integration 320/320。
+  数值与字符串两条 json_each 路径；
+  Core 684/684、SourceGen 255/255（本轮 Release 实测）；Integration 与 4 路 AOT 由发布流水线重跑。
 
 ## [6.7.0] - 2026-10-23 · 请求级查询管道 + 终审 P0/P1 收口
 
