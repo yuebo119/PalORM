@@ -1,0 +1,79 @@
+# 四臂交叉基准（CrossBench）——手动触发全量 + 工件上传
+# 定位：可复现性固化（bench/crossbench/README.md）。不在 PR/push 路径上（单跑 ~55min），
+# workflow_dispatch 手动触发；产物（批 JSON + 报告）以 artifact 留档。
+# 基线升格纪律（B100）：本地/CI 连续三个完整批 → 三批窗口中位 → 提交 results/。
+name: CrossBench
+
+on:
+    workflow_dispatch:
+        inputs:
+            dialects:
+                description: '方言子集（默认全部 sqlite,mysql,pg）'
+                required: false
+                default: 'sqlite,mysql,pg'
+
+env:
+    DOTNET_CLI_TELEMETRY_OPTOUT: true
+    DOTNET_NOLOGO: true
+
+jobs:
+    crossbench:
+        name: Four-arm cross benchmark
+        runs-on: ubuntu-24.04
+        timeout-minutes: 120
+        services:
+            postgres:
+                image: postgres:18
+                env:
+                    POSTGRES_HOST_AUTH_METHOD: trust
+                    POSTGRES_DB: palorm_bench
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U postgres -d palorm_bench"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
+            mysql:
+                image: mysql:8.4
+                env:
+                    MYSQL_ALLOW_EMPTY_PASSWORD: yes
+                    MYSQL_DATABASE: palorm_bench
+                ports:
+                    - 3306:3306
+                options: >-
+                    --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
+        env:
+            PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm_bench
+            PALORM_MYSQL_CONNECTION: Server=127.0.0.1;User=root;Database=palorm_bench
+        steps:
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
+              with:
+                  global-json-file: global.json
+
+            - name: Build
+              run: dotnet build bench/crossbench/PalormProtocol/PalORM.CrossBench.csproj -c Release
+
+            - name: Run benchmark
+              run: >-
+                  dotnet run --project bench/crossbench/PalormProtocol -c Release --no-build --
+                  --dialects ${{ github.event.inputs.dialects }} 2000 20000
+
+            - name: Generate report
+              run: >-
+                  dotnet run --file scripts/crossbench-report.cs --
+                  "$(ls -t bench/crossbench/results/crossbench-*.json | head -1)"
+                  --out bench/crossbench/results/ci-report.md
+
+            - name: Upload artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: crossbench-${{ github.run_number }}
+                  path: |
+                      bench/crossbench/results/crossbench-*.json
+                      bench/crossbench/results/ci-report.md
+                  retention-days: 90
