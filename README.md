@@ -15,21 +15,11 @@
 
 简体中文 | [English](README.en.md)
 
-
-
 *AOT 原生、编译期可验证、SQL 可控的微 ORM*
 
 </div>
 
 Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射与迁移 DDL，运行时零反射、零 IL Emit；支持 PostgreSQL / MySQL / SQLite 三方言，多租户、乐观锁、软删除、审计、咨询锁等企业级特性开箱即用。
-
-- **编译期安全网**：45 条 Roslyn 诊断把缺主键、租户列可空绕过隔离、乐观锁基线为 0、循环内 N+1 查询这类运行时崩溃或静默错数据拦截在编译期，错误可跳转声明位置
-- **全链路 Native AOT**：.NET 生态唯一三方言 AOT 发布验证全部通过的 ORM，无反射、无 IL Emit、无运行时代码生成，SQLite 发布 exe 仅 4.5 MB
-- **地板级性能**：单行 CRUD 与 ADO.NET 手写地板同量级（0.78~1.06×），批量写自动走方言最快路径（PG Binary COPY、MySQL LOAD DATA、单语句批量 UPDATE、SQLite 行预编译批量）；20,000 行 BulkInsert 分配约为 Dapper 的 40%（SQLite，远程方言 5%~7%）；批量族时延普遍低于 Dapper（20,000 档 0.04~0.92×）；Web 服务"一请求一会话"形态内置会话池（32 并发实测 P99 −18%、Gen0 回收 −58%）
-- **企业级横切开箱即用**：多租户列隔离（查询与 Update/Delete/Bulk 自动附加租户谓词；租户列在更新中不可写，Insert 由实体 `tenant_id` 承载）、乐观锁、软删除、审计拦截器（`Set()` 写入的敏感列参数掩码）、读写分离、咨询锁、弹性重试 + 熔断（零 Polly 依赖）
-- **零依赖核心**：PalORM.Core 不引用任何第三方 NuGet 包（仅 BCL + ADO.NET 抽象）；SQLite 经 SQLite3MC 驱动支持 AES-256 静态加密
-
-数据口径见[性能](#-性能)一节（2026-10-25 基准批次）。
 
 ---
 
@@ -48,31 +38,16 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 ## ✨ 特性
 
-**编译时生成一切**。Roslyn `IIncrementalGenerator` 为每个 `[Table]` 实体生成 RowFactory（物化委托）、CommandFactory（参数绑定）、Migration（三方言 DDL）；`[Projection]` 标记的 DTO 同样获得源生成的 RowFactory——join/报表结果直接映射到非表类型（v6.0）；`readonly struct` 投影配合 `QueryStructsAsync<T>` 可让大结果集每行零堆分配。45 条编译时诊断（42 分析器 + 3 生成器）把缺 `[Key]`、租户列可空绕过隔离、乐观锁基线为 0 这类运行时崩溃或静默错数据提前到编译期，错误列表可跳转到声明位置（PALORM041/045/046 带锚点）。`FormattableString` 路径的值只进 `@pN` 占位（编译期参数化，默认防注入）；显式逃生门 `Raw()`（原样字面量片段，拒绝控制字符）与 `SessionSetupSql` 由调用方负责内容。
-
-**全链路 Native AOT**。.NET 生态唯一完整支持全链路 Native AOT 的 ORM：SQLite / PostgreSQL / MySQL 三方言发布验证全部通过（运行输出 `PalORM AOT verification PASSED`），无反射、无 IL Emit、无运行时代码生成。部署细节见 [docs/AOT部署指南.md](docs/AOT部署指南.md)。
-
-**三方言批量策略**。同一套 API 按方言自动选择最快路径：PG Binary COPY、MySQL BulkCopy（LOAD DATA，服务端关闭时自动回退多值 INSERT）、SQLite 行预编译批量 INSERT 与批 UPSERT（单行语句缓存复用，实测对多值形态 5.2~6.9×）与 json_each 批删（键集合单参数服务端展开，实测 20000 键 8.2 ms、对原参数化 IN 分批形态约 4.3×，ADR-R）。单语句批量 UPDATE（PG `UPDATE FROM VALUES` / `UPDATE FROM UNNEST` / MySQL `UPDATE JOIN VALUES ROW`，8.0.19+ 低版本回退 CASE WHEN）；版本化实体（`[ConcurrencyCheck]`）在 PG/MySQL 能力支持时同样走版本化单语句（逐行 version 谓词，S6 探针 1000 行 PG 3.06× / MySQL 4.73×），能力不全回退 DbBatch 逐条。
-
-**企业级横切开箱即用**。多租户列隔离（查询缓存 key 自动加租户前缀，跨租户命中不可能）、乐观锁、软删除、审计拦截器、读写分离（`ForRead`）、咨询锁、弹性重试 + 熔断（v5.4 起自动覆盖只读查询管线），无需样板代码。
-
-**会话池化**（v6.5 `DataSessionPool`）。Web 服务"一请求一会话"形态的固定成本消除器：租出的会话归还后瞬态状态（租户/超时/重试覆写）全部复位，命令复用槽、读连接、物化容量跨租期保留——复用槽在同会话第 3 次同形状操作才晋升，不池化则每请求形态下结构性永不激活。32 并发压测实测 P99 −18%、Gen0 回收 −58%、每操作分配 −2576 B，租还自身约 1 µs。
-
-**宽表列子集更新**。`UpdateColumnsAsync(entity, [x => x.A, x => x.B])` 只 SET 选中列：复用生成绑定器的值转换（转换器/OwnedJson/枚举），裁掉未选中参数并重编号；版本列照常 `+1` 与冲突检测，租户谓词自动追加。宽行大值时 SQL、服务端 SET 列数与网络负载同比例下降。
-
-**请求级查询管道**。`CreatePipeline()` 把多条彼此独立的只读查询合并成一次数据库往返：PostgreSQL 经 `NpgsqlBatch`（本机 4 条单键查询 249 µs → 72~79 µs/条，3.2~3.4×），MySQL 经 `MySqlBatch`（本机执行耗时时持平、WAN 省 RTT），结果按入队顺序类型化返回；SQLite 顺序回退。`pipeline.QueryStructs<T>(sql)` 让结构体投影也走同一批处理（单往返 + 每行零堆对象）。配套三项：MySQL 复用命令晋升时自动服务端预编译（重复单键读写 −10~18%，PostgreSQL 由驱动 AutoPrepare 自动完成）；SQLite 干净连接句柄跳过每会话 PRAGMA、原生 SQL 改写过连接态才重设 `foreign_keys`（CreateAsync+Dispose 1.71 → 0.50 µs，per-op 单键读 7.35 → 6.40 µs、2640 → 2176 B）；MySQL 可选的同步逐行读（`UseSynchronousRowRead`，全表物化约 998 vs 1846~2043 ns/行，流式 API 不受影响）。
-
-**SQL 资产编译期管理**。`[SqlFile]` 把外部 .sql 文件嵌入为常量（支持 `-- @pg/@mysql/@sqlite/@all` 方言条件段，改 SQL 免 Rebuild，文件缺失编译期报错）；`[SqlTemplate]` 把方法体插值串提升为模板常量，配合 `.AsPrepared()` 走 `DbCommand.PrepareAsync` 预编译；AutoTagging（opt-in 编译开关）经 C# `[InterceptsLocation]` 拦截 9 个查询终态方法，SQL 自动注入「文件:行号 成员名」定位注释，排查零成本。
-
-**企业运维面**。`HealthCheckAsync` SELECT 1 探活（错误消息只透出异常类型名，防数据库拓扑泄露）；跨方言统一异常族——唯一键冲突统一翻译为 `UniqueConstraintViolationException`（不用记各驱动错误码）、乐观锁冲突 `ConcurrencyConflictException`、基础设施超时带 `PalORM.InfrastructureTimeout` 标记、瞬时故障带 `PalORM.IsTransient` 标记；OpenTelemetry 全套（`WithTracing` ActivitySource + `WithMetrics` 指标 `palorm.query.executions`/`palorm.query.duration`，查询缓存另有 `palorm.cache.*` 四指标）。
-
-**方言专属能力**。PG：UNNEST 数组参数批量写、事务级咨询锁（阻塞/非阻塞 × long 键/双 int 键四方法）、LISTEN/NOTIFY 后台监听（自动重连 + 30s 心跳 + 零分配事件分发）与 `NotifyAsync` 发送、pgvector 文本边界路线（`::vector` 写入/`::text` 解析，AOT 兼容）、JSONB 路径查询 `WhereJson`。MySQL：local_infile 三层降级（探测缓存 → 失败重探测 → 多值 INSERT 回退）、8.0.19+ `UPDATE JOIN VALUES ROW` 运行时版本探测。SQLite：AES-256 静态加密、9 项 PRAGMA 自动调优（WAL/mmap/optimize 统计优化）、BUSY/LOCKED 瞬时故障自动重试。
-
-**Schema 迁移与种子**。`MigrateAsync` 执行编译期三方言 DDL，FK 依赖按拓扑序建表、重复对象幂等跳过，迁移后自动刷新统计（SQLite `PRAGMA optimize` / PG `ANALYZE`）；`SeedAsync` 事务内幂等种子；`ValidateSchemaAsync` 对照实体声明返回缺失列清单。
-
-**零依赖核心**。PalORM.Core 不引用任何第三方 NuGet 包（仅 BCL + ADO.NET 抽象）。
-
-> 完整功能特性清单（逐项源码锚点，含能力边界）见 [docs/功能特性.md](docs/功能特性.md)。
+- **编译期生成**：Roslyn 源生成器为每个 `[Table]` 实体生成 RowFactory、CommandFactory 与三方言 Migration DDL，为 `[Projection]` DTO 生成物化委托，运行时零反射、零 IL Emit。
+- **编译期安全网**：45 条 Roslyn 诊断把缺主键、租户列可空绕过隔离、乐观锁基线为 0、循环内 N+1 等问题拦在构建期，错误可跳转声明位置。
+- **全链路 Native AOT**：SQLite / PostgreSQL / MySQL 三方言 AOT 发布与原生运行全部通过，消费方不需要 TrimmerRootAssembly。
+- **地板级性能**：单行 CRUD 与 ADO.NET 手写地板同量级，批量写按方言自动选择 PG Binary COPY、MySQL LOAD DATA、SQLite 行预编译与 json_each 批删，Web 一请求一会话形态内置会话池。
+- **企业级横切**：多租户列隔离、乐观锁、软删除、审计拦截器、读写分离、咨询锁、弹性重试与熔断开箱即用。
+- **SQL 资产编译期管理**：`[SqlFile]` 嵌入并校验 .sql，`[SqlTemplate]` 把插值 SQL 常量化，AutoTagging 自动注入“文件:行号 成员”定位注释。
+- **运维与可观测**：健康检查、跨方言统一异常族、OpenTelemetry tracing 与 metrics 内置。
+- **方言专属能力**：PG 的 UNNEST、咨询锁、LISTEN/NOTIFY、pgvector 与 JSONB 路径查询，MySQL 的 local_infile 降级与 UPDATE JOIN，SQLite 的 AES-256 加密与 PRAGMA 自动调优。
+- **Schema 与种子**：`MigrateAsync` 按外键拓扑序执行三方言 DDL，`SeedAsync` 事务内幂等种子，`ValidateSchemaAsync` 对照实体返回缺失列。
+- **零依赖核心**：PalORM.Core 不引用第三方 NuGet 包，仅 BCL 与 ADO.NET 抽象。
 
 ## 🆚 与主流 ORM 对比
 
@@ -1063,6 +1038,9 @@ QQ 内搜索群号或扫码加入。
 ## 📄 许可证
 
 [Apache-2.0](LICENSE)
+
+v6.7.0 及以前的已发布版本仍为 AGPL-3.0-only；<br>
+v6.8.0 及以后的新版本统一变更为 Apache-2.0 发布。
 
 <div align="right">
 

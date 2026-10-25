@@ -1,5 +1,7 @@
 # PalORM 严格 Native AOT 审计整改清单
 
+> 许可证注记（2026-10-26）：本文为历史快照；项目自 v6.8.0 起统一变更为 Apache-2.0 发布，v6.7.0 及以前版本仍为 AGPL-3.0-only。
+
 > 基线提交：`56e3cbcaa01c1e70aaf59bb8b764e523ffd31835`
 >
 > 基线 SDK：`.NET SDK 11.0.100-preview.5.26302.115`

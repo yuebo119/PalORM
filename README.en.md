@@ -21,15 +21,7 @@
 
 A Roslyn source generator produces SQL construction, parameter binding, object mapping, and migration DDL at compile time — zero reflection, zero IL Emit at runtime. PostgreSQL / MySQL / SQLite across three dialects, with enterprise features out of the box: multi-tenancy, optimistic locking, soft delete, auditing, advisory locks, and more.
 
-- **Compile-time safety net**: 45 Roslyn diagnostics move failures that would otherwise be runtime crashes or silently wrong data — a missing `[Key]`, a nullable tenant column bypassing isolation, an optimistic-lock baseline of 0, N+1 queries in loops — to compile time, with errors jumping to the declaration site
-- **Full-pipeline Native AOT**: the only ORM in the .NET ecosystem with publish verification passing on all three dialects — no reflection, no IL Emit, no runtime code generation; the SQLite publish exe is just 4.5 MB
-- **Floor-level performance**: single-row CRUD is in the same range as the hand-written ADO.NET floor (0.78~1.06×); bulk writes automatically take the fastest per-dialect path (PG Binary COPY, MySQL LOAD DATA, single-statement bulk UPDATE, SQLite row-prepared bulk); 20,000-row BulkInsert allocates ~40% of Dapper (SQLite; 5%~7% on remote dialects); the bulk family is generally faster than Dapper (0.04~0.92× at the 20,000 tier); Web-style request-per-session deployments get a built-in session pool (measured P99 −18%, Gen0 collections −58% at 32 concurrent)
-- **Enterprise cross-cutting out of the box**: multi-tenant column isolation (queries plus Update/Delete/Bulk get the tenant predicate automatically; the tenant column is immutable on update, while Insert carries it from the entity), optimistic locking, soft delete, audit interceptor (`Set()` values for sensitive columns are masked), read/write splitting, advisory locks, resilient retry + circuit breaker (zero Polly dependency)
-- **Zero-dependency core**: PalORM.Core references no third-party NuGet packages (BCL + ADO.NET abstractions only); SQLite supports at-rest AES-256 encryption via the SQLite3MC driver
-
 > Detailed docs (in Chinese) live under [docs/](docs/) — [API reference](docs/API参考.md), [architecture](docs/架构设计.md), [AOT deployment guide](docs/AOT部署指南.md), [benchmark methodology](docs/性能基准规范.md).
-
-See [Performance](#-performance) for measurement details (2026-10-25 benchmark batch).
 
 ---
 
@@ -48,25 +40,16 @@ See [Performance](#-performance) for measurement details (2026-10-25 benchmark b
 
 ## ✨ Features
 
-**Everything generated at compile time.** A Roslyn `IIncrementalGenerator` emits, for every `[Table]` entity, a RowFactory (materialization delegates), a CommandFactory (parameter binding), and Migration (DDL for all three dialects); DTOs marked `[Projection]` get a source-generated RowFactory too, so join/report results map straight onto non-table types (v6.0). 45 compile-time diagnostics (42 analyzers + 3 generator rules) move failures that would otherwise be runtime crashes or silently wrong data — a missing `[Key]`, a nullable tenant column bypassing isolation, an optimistic-lock baseline of 0 — to compile time, with errors jumping to the declaration site (PALORM041/045/046 carry anchors). On the `FormattableString` path, values only ever become `@pN` placeholders (compile-time parameterization, injection-safe by default); explicit escape hatches are `Raw()` (verbatim literal fragments, control characters rejected) and `SessionSetupSql`, where the caller owns the content.
-
-**Full-pipeline Native AOT.** The only ORM in the .NET ecosystem with full-pipeline Native AOT support: publish verification passes on all three dialects — SQLite / PostgreSQL / MySQL (output `PalORM AOT verification PASSED`) — with no reflection, no IL Emit, no runtime code generation. Deployment details: [AOT deployment guide](docs/AOT部署指南.md) (Chinese).
-
-**Per-dialect bulk strategies.** The same API picks the fastest path per dialect: PG Binary COPY, MySQL BulkCopy (LOAD DATA, automatic fallback to multi-value INSERT when disabled server-side), SQLite row-prepared bulk INSERT and bulk UPSERT (single-statement cache reuse, measured 5.2~6.9× vs the multi-value form) and json_each bulk delete (key set passed as one server-side-expanded parameter, measured 8.2 ms for 20,000 keys, ~4.3× vs the former parameterized IN batching, ADR-R). Single-statement bulk UPDATE (PG `UPDATE FROM VALUES` / MySQL `UPDATE JOIN VALUES ROW` on 8.0.19+, CASE WHEN fallback on older versions); optimistic-lock entities go through versioned single statements where supported (S6 probe: 1000 rows, PG 3.06× / MySQL 4.73×), falling back to a packed DbBatch.
-
-**Enterprise features out of the box.** Multi-tenant column isolation (query cache keys automatically get a tenant prefix — cross-tenant hits are impossible), optimistic locking, soft delete, audit interceptors, read/write splitting (`ForRead`), advisory locks, resilient retry + circuit breaker (covering the read-only query pipeline automatically since v5.4). No boilerplate required.
-
-**Session pooling** (v6.5 `DataSessionPool`). A fixed-cost eliminator for the request-per-session shape of Web services: when a rented session is returned, all transient state (tenant/timeout/retry overrides) resets, while command reuse slots, the read connection, and materialization capacity survive across rentals — reuse slots only promote on the 3rd same-shape operation within one session, so without pooling they never activate in a per-request lifetime. Measured at 32 concurrent: P99 −18%, Gen0 collections −58%, −2,576 B allocated per operation, with rent/return itself around 1 µs.
-
-**SQL assets managed at compile time.** `[SqlFile]` embeds external .sql files as constants (supports `-- @pg/@mysql/@sqlite/@all` dialect sections; editing SQL needs no rebuild; a missing file fails the build); `[SqlTemplate]` promotes an interpolated string into a template constant, paired with `.AsPrepared()` for `DbCommand.PrepareAsync` pre-compilation; AutoTagging (opt-in build switch) uses C# `[InterceptsLocation]` to intercept 9 query terminal methods, automatically injecting a "file:line member" locating comment into the SQL — zero-cost troubleshooting.
-
-**Enterprise operations surface.** `HealthCheckAsync` SELECT 1 probe (error messages expose only the exception type name, preventing database-topology leaks); a unified cross-dialect exception family — unique-key violations translate to `UniqueConstraintViolationException` (no driver error-code memorization), optimistic-lock conflicts to `ConcurrencyConflictException`, infrastructure timeouts carry the `PalORM.InfrastructureTimeout` marker, transient faults the `PalORM.IsTransient` marker; full OpenTelemetry (`WithTracing` ActivitySource + `WithMetrics` counters `palorm.query.executions`/`palorm.query.duration`; the query cache adds four `palorm.cache.*` metrics).
-
-**Dialect-specific capabilities.** PG: UNNEST array parameters for bulk writes, transaction-scoped advisory locks (blocking/non-blocking × long-key/dual-int-key), a LISTEN/NOTIFY background listener (auto-reconnect + 30s heartbeat + zero-allocation event dispatch) with `NotifyAsync` sending, a pgvector text-boundary route (`::vector` write / `::text` parse, AOT-compatible), and JSONB path queries via `WhereJson`. MySQL: three-tier local_infile degradation (probe cache → re-probe on failure → multi-value INSERT fallback) and runtime version probing for the 8.0.19+ `UPDATE JOIN VALUES ROW` shape. SQLite: AES-256 at-rest encryption, a 9-item automatic PRAGMA tuning set (WAL/mmap/optimize statistics), and automatic BUSY/LOCKED transient-fault retry.
-
-**Schema migration and seeding.** `MigrateAsync` runs the compile-time three-dialect DDL with FK dependencies topologically ordered and duplicate objects idempotently skipped, then refreshes statistics (SQLite `PRAGMA optimize` / PG `ANALYZE`); `SeedAsync` seeds idempotently inside a transaction; `ValidateSchemaAsync` diffs the database against entity declarations and returns missing columns.
-
-**Zero-dependency core.** PalORM.Core references no third-party NuGet packages (BCL + ADO.NET abstractions only).
+- **Compile-time generation**: A Roslyn source generator emits RowFactory, CommandFactory, and three-dialect Migration DDL for every `[Table]` entity, plus materializers for `[Projection]` DTOs, with zero runtime reflection and zero IL Emit.
+- **Compile-time safety net**: 45 Roslyn diagnostics catch missing keys, nullable tenant columns bypassing isolation, zero-value optimistic-lock baselines, and loop N+1 queries at build time, with errors jumping to the declaration site.
+- **Full-pipeline Native AOT**: Publish verification and native execution pass on SQLite, PostgreSQL, and MySQL, and consumers need no TrimmerRootAssembly.
+- **Floor-level performance**: Single-row CRUD matches hand-written ADO.NET, bulk writes automatically take the fastest per-dialect path (PG Binary COPY, MySQL LOAD DATA, SQLite row-prepared batches and json_each bulk delete), and a session pool is built in for request-per-session web services.
+- **Enterprise cross-cutting**: Multi-tenant column isolation, optimistic locking, soft delete, audit interception, read/write splitting, advisory locks, resilient retry, and circuit breaking work out of the box.
+- **SQL assets managed at compile time**: `[SqlFile]` embeds and validates .sql files, `[SqlTemplate]` turns interpolated SQL into constants, and AutoTagging injects "file:line member" locating comments automatically.
+- **Operations and observability**: Health checks, a cross-dialect unified exception family, and OpenTelemetry tracing and metrics are built in.
+- **Dialect-specific capabilities**: PostgreSQL gets UNNEST, advisory locks, LISTEN/NOTIFY, pgvector, and JSONB path queries; MySQL gets local_infile degradation and UPDATE JOIN; SQLite gets AES-256 encryption and automatic PRAGMA tuning.
+- **Schema and seeding**: `MigrateAsync` runs three-dialect DDL in foreign-key topological order, `SeedAsync` seeds idempotently inside a transaction, and `ValidateSchemaAsync` reports missing columns against entity declarations.
+- **Zero-dependency core**: PalORM.Core references no third-party NuGet packages, only BCL and ADO.NET abstractions.
 
 ## 🆚 Comparison with mainstream ORMs
 
@@ -971,6 +954,9 @@ Issues and PRs are welcome. Before submitting, run the relevant test suites and 
 ## 📄 License
 
 [Apache-2.0](LICENSE)
+
+Released versions up to and including v6.7.0 remain under AGPL-3.0-only;<br>
+versions from v6.8.0 onward are uniformly released under Apache-2.0.
 
 <div align="right">
 
