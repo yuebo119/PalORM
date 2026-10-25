@@ -821,9 +821,44 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         }
     }
 
+    /// <summary>E 方案地板形态：DELETE ... WHERE Id IN (SELECT value FROM json_each(@ids))，
+    /// 单参数（JSON 数组文本，手写不变文化构建）。</summary>
+    private async Task<long> ExecuteJsonEachDeleteAsync(
+        DbConnection conn, IReadOnlyList<object> keys, DbTransaction tx, CancellationToken ct)
+    {
+        var sb = new System.Text.StringBuilder(keys.Count * 8 + 2).Append('[');
+        for (int i = 0; i < keys.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append(Convert.ToInt64(keys[i], System.Globalization.CultureInfo.InvariantCulture)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText =
+            $"DELETE FROM {T} WHERE {Q("Id")} IN (SELECT value FROM json_each(@ids))";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = "@ids";
+        p.Value = sb.Append(']').ToString();
+        cmd.Parameters.Add(p);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     private async Task<long> ExecuteBulkDeleteCoreAsync(
         DbConnection conn, IReadOnlyList<object> keys, DbTransaction tx, CancellationToken ct)
     {
+        // E 方案（ADR-R，2026-10-25）：SQLite 切 json_each 单参数形态（与产品同路径，
+        // DeleteProbe 实测 0.21~0.25µs/键 vs 参数化 IN 3.64~3.86）；地板必须保持最紧形态。
+        if (D == Dialect.Sqlite)
+        {
+            return await ExecuteJsonEachDeleteAsync(conn, keys, tx, ct).ConfigureAwait(false);
+        }
+
         long total = 0;
         const int batch = BulkSql.BatchRows;
         for (int start = 0; start < keys.Count; start += batch)

@@ -2,36 +2,40 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] · SQLite 批量插入/UPSERT 行预编译路由（A+B 方案）
+## [未发布] · SQLite 批量删除 json_each 键集合形态（E 方案）+ A+B 行预编译
 
-> 决策：[ADR-Q](docs/adr/ADR-Q-SQLite行预编译批量.md)（2026-10-25 用户裁决 A+B 打包立项，字面量内联 C 单独裁决）。
-> 依据：FreeSql 交叉基准 SQLite 批量族 7 格胜出归因 + UpsertProbe 探针（预编译单行 2.2~2.6µs/行 vs 多值 8.6~9.4µs/行）。
+> 决策：[ADR-Q](docs/adr/ADR-Q-SQLite行预编译批量.md)（A+B）与
+> [ADR-R](docs/adr/ADR-R-SQLite批删json-each.md)（E，C 字面量内联否决）。
+> 依据：DeleteProbe 探针（json_each 0.21~0.25µs/键 vs IN 3.64~3.86 vs 字面量 0.34~0.40）。
 
 ### ⚡ 性能
 
-- **SQLite `BulkInsertAsync` 改行预编译形态**：单行 INSERT 语句 + 列数个参数一次建立挂命令，
-  事务内逐行只写 Value（命令文本恒定命中 Microsoft.Data.Sqlite 连接级语句缓存）。
-  探针实测每行 2.2~2.6µs，对原多值形态 3.5~3.9×；`TxBulkInsert` 场景同受益。
-- **SQLite `BulkMergeAsync`（BatchUpsert 路径）改行预编译形态**：单行 `INSERT … ON CONFLICT
-  DO UPDATE` 与多值形态同源 SQL（租户守卫同 shape 机器），探针实测 2.4~4.3µs/行，
-  对原多值形态 2.4~3.1×。
-- 联网方言不受影响：MySQL 维持多值/LOAD DATA、PG 维持 COPY/UNNEST（逐行执行在联网
-  方言是 RTT 灾难）。
+- **SQLite `BulkDeleteAsync` 改 json_each 单参数形态（E 方案）**：`WHERE pk IN
+  (SELECT value FROM json_each(@ids))`，键集合编码为 JSON 数组文本单参数，服务端
+  虚拟表展开。探针实测每键 0.21~0.25µs，对参数化 IN（3.64~3.86）快 15 倍以上，
+  且快于 FreeSql 的字面量内联（0.34~0.40）约 40%——全参数化立场零破口
+  （EF Core 8 在 SQLite 的同款选择）。三层能力门控（方言/首键整型/引擎探测缓存），
+  字符串、GUID 主键与旧引擎自动回退 IN 形态。软删与租户守卫同 shape。
+- **SQLite `BulkInsertAsync`/`BulkMergeAsync` 改行预编译形态（A+B 方案）**：单行
+  语句恒定命中连接级语句缓存，每行只付绑定+步进：批插 3.5~3.9×、批 upsert
+  2.4~3.1×（探针 UpsertProbe 2026-10-25）。联网方言不受影响。
+- PG 维持原生数组 `= ANY`、MySQL 维持多值/LOAD DATA 与 IN 分批：进程内库选绑定
+  成本最优，联网方言尊重服务端优化器信息（EF Core 8→10 三代往返的教训）。
 
 ### 📋 行为变化（契约保持）
 
 - `BulkInsertAsync` 的 `batchSize` 参数在 SQLite 上不再决定语句形状（兼容保留，≤0 仍拒绝）。
-- `BulkMergeAsync` 批内重复主键：SQLite 由"同批语句报错"改为"后行覆盖前行"（与逐条
-  SaveCore 语义一致，更宽容；多值批的同语句限制不再适用）。
-- 批插分配 +9%（772 vs 704 B/行，逐行执行的驱动层分配），登记为纯时延项的已知取舍。
+- `BulkMergeAsync` 批内重复主键（SQLite）：由"同批语句报错"改为"后行覆盖前行"（与
+  逐条 SaveCore 语义一致，更宽容）。
+- 批删混合类型键列表：JSON 构建期 fail-fast（`ConvertDeleteKey` 先抛
+  `FormatException`），与 IN 形态批内转换异常同语义（都在事务提交前，全有或全无）。
+- ulong 主键不进 json_each 形态（超 int64 域 JSON 数值语义分叉），回退 IN。
 
 ### 🧪 测试
 
-- 新增 `RowPreparedBulkTests` 6 项：2500 行往返、整批原子性（中途约束失败全回滚）、
-  外部事务回滚、batchSize 兼容语义、upsert 插入/更新双分支、批内重复主键宽容语义。
-- 既有批量族（BulkBatchLimitTests/UpsertTenantGuardTests/BulkMergeDefaultKeyBatchTests/
-  BulkCleanupTests sqlite 变体）全部经新路径执行：Core 675/675、Integration 320/320、
-  AotTest 发布 0 IL 警告 + 原生运行 PASSED。
+- 新增 `BulkDeleteJsonEachTests` 8 项与 `RowPreparedBulkTests` 6 项；IN 形态池化
+  夹具经 `ForceInFormDeleteForTests`（IVT 钩子）锁定回退路径；AotTest 覆盖两条
+  新路径（发布 0 IL 警告 + 原生运行 PASSED）；Core 1210/1210、Integration 320/320。
 
 ## [6.7.0] - 2026-10-23 · 请求级查询管道 + 终审 P0/P1 收口
 
