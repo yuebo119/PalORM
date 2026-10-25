@@ -1,4 +1,4 @@
-// perf 入口子命令（自 perf.sh 迁移，T4-6）：smoke/full/gate/report/index/l0。
+// perf 入口子命令（自 perf.sh 迁移，T4-6）：smoke/full/gate/report/index/l0/crossbench。
 // 设计原则沿用原编排器：本层只做编排，不改任何夹具的口径——每步调用该夹具自己的既有入口。
 using PalORM.Bench.Shared;
 
@@ -10,6 +10,9 @@ internal static class PerfEntry
     private const string BdnResults = "BenchmarkDotNet.Artifacts/results";
     private const string BaselineBdn = "bench/baselines/perf-baseline.json";
     private const string BaselineIndex = "bench/baselines/perfhub-index-baseline.json";
+    private const string CrossBenchProject = "bench/crossbench/PalormProtocol";
+    private const string CrossBenchReportScript = "scripts/crossbench-report.cs";
+    private const string CrossBenchResultsDir = "bench/crossbench/results";
 
     /// <param name="ownSession">true=独立命令（自己起时钟与会话日志）；false=被 full 编排调用
     /// （沿用 full 的时钟与日志）。2026-10-19 实测缺陷：作为 full 的一步时无条件 StartClock 把
@@ -126,9 +129,101 @@ internal static class PerfEntry
             Perf.Err("四组表生成失败（不影响报告主体）");
         }
 
+        // CrossBench 四臂横评（含 FreeSql）追加为独立节（2026-10-25 用户指令：统一报告默认带上
+        // FreeSql 数据）。数据源 = 最近完整批（四臂 × 三方言 × 两档自动判别），冻结模板生成
+        //（bench/crossbench/README.md 基线纪律：性能数据一律经 crossbench-report.cs 输出）。
+        // 无完整批时静默跳过，与四组表失败不影响报告主体同一处置。
+        string? cbBatch = CrossBenchBatch.LatestFullBatchPath(Path.Combine(root, CrossBenchResultsDir));
+        if (cbBatch != null)
+        {
+            string cbPath = outPath + ".crossbench.md";
+            int cbCode = Perf.Run("dotnet",
+                $"run --file \"{Path.Combine(root, CrossBenchReportScript)}\" -- \"{cbBatch}\" --out \"{cbPath}\"");
+            if (cbCode == 0 && File.Exists(cbPath))
+            {
+                File.AppendAllText(outPath,
+                    $"\n\n## CrossBench 四臂横评（ADO.NET / Dapper / FreeSql / PalORM）\n\n"
+                    + $"> 数据源 {Path.GetFileName(cbBatch)}（完整批自动判别），冻结模板生成；口径与形态注记见 bench/crossbench/README.md。\n\n"
+                    + File.ReadAllText(cbPath));
+                File.Delete(cbPath);
+            }
+            else
+            {
+                Perf.Err("CrossBench 节生成失败（不影响报告主体）");
+            }
+        }
+
         return 0;
     }
 
+    /// <summary>CrossBench 四臂交叉批（ADO.NET / Dapper / FreeSql / PalORM）+ 冻结模板单批报告。
+    /// 2026-10-25 用户指令起为 full 默认步骤；也可独立触发。臂序两遍反序、慢操作预算表等
+    /// 协议见 bench/crossbench/README.md；报告数据一律经 scripts/crossbench-report.cs 生成
+    ///（模板冻结，禁手改生成物）。</summary>
+    public static int CrossBench(bool ownSession = true)
+    {
+        var root = Perf.RepoRoot();
+        if (ownSession)
+        {
+            Perf.ClearSteps();
+            Perf.StartClock();
+            Perf.BeginSessionLog(root, "crossbench");
+        }
+        var t0 = DateTime.Now;
+        Perf.Step("[1/2] CrossBench 四臂全量批（三方言 × 两档 × 17 操作 × 四臂，两遍反序）");
+        int code = Perf.Run("dotnet",
+            $"run --project \"{Path.Combine(root, CrossBenchProject)}\" -c Release -- " +
+            "--dialects sqlite,mysql,pg 2000 20000");
+        if (ownSession)
+        {
+            Perf.RecordStep("[1/2] CrossBench 四臂全量批", code == 0 ? "OK" : "FAIL",
+                Perf.ElapsedSince(t0), Perf.ElapsedSince(Perf.TotalStart));
+        }
+        if (code != 0)
+        {
+            if (ownSession)
+            {
+                Perf.PrintFinalTable();
+                Perf.EndSessionLog(code);
+            }
+            return code;
+        }
+
+        Perf.Step("[2/2] 冻结模板单批报告（scripts/crossbench-report.cs）");
+        t0 = DateTime.Now;
+        code = CrossBenchReportLatest(root);
+        if (ownSession)
+        {
+            Perf.RecordStep("[2/2] 冻结模板单批报告", code == 0 ? "OK" : "FAIL",
+                Perf.ElapsedSince(t0), Perf.ElapsedSince(Perf.TotalStart));
+            Perf.PrintFinalTable();
+            Perf.EndSessionLog(code);
+        }
+        return code;
+    }
+
+    /// <summary>对最近完整 CrossBench 批生成冻结模板报告，落 bench/reports/crossbench-report-&lt;戳&gt;.md。
+    /// full 编排与独立 crossbench 子命令共用；无完整批时返回 0 并提示（不视为失败）。</summary>
+    private static int CrossBenchReportLatest(string root)
+    {
+        string? batch = CrossBenchBatch.LatestFullBatchPath(Path.Combine(root, CrossBenchResultsDir));
+        if (batch == null)
+        {
+            Perf.Out("跳过：无完整 CrossBench 批（四臂 × 三方言 × 两档）");
+            return 0;
+        }
+        string outPath = Path.Combine(root, "bench", "reports", $"crossbench-report-{Perf.Stamp()}.md");
+        int code = Perf.Run("dotnet",
+            $"run --file \"{Path.Combine(root, CrossBenchReportScript)}\" -- \"{batch}\" --out \"{outPath}\"");
+        if (code == 0)
+        {
+            Perf.Out($"CrossBench 报告: {outPath}");
+        }
+        return code;
+    }
+
+    /// <summary>最近的完整 CrossBench 批判别与装载走 <see cref="CrossBenchBatch"/>（与 PerfGate
+    /// 四组表 FreeSql 列共用同一份判据：四臂 × 三方言 × 两档 = 24 三元组）。</summary>
     public static int Smoke()
     {
         var root = Perf.RepoRoot();
@@ -192,7 +287,7 @@ internal static class PerfEntry
         Perf.ClearSteps();
         Perf.StartClock();
         Perf.BeginSessionLog(root, "full");
-        int stepTotal = (withDapperSuite ? 5 : 4) + (timingReport ? 1 : 0);
+        int stepTotal = (withDapperSuite ? 6 : 5) + (timingReport ? 1 : 0);
         var stepIdx = 0;
         List<string> stepFailed = [];
 
@@ -246,6 +341,7 @@ internal static class PerfEntry
         {
             RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
         }
+        RunStep("CrossBench 四臂交叉批（FreeSql 横评）", () => CrossBench(ownSession: false));
         RunStep("门禁（BDN 基线 + 结果库基线）", () => Gate(ownSession: false));
         RunStep("统一报告", Report);
         RunTimingReportStep();
@@ -297,8 +393,9 @@ internal static class PerfEntry
         Perf.Out("""
             用法:
               PerfCli smoke                                    # 三套夹具最小档冒烟（SQLite，约 5 分钟）
-              PerfCli full [--with-dappersuite]                # 全量（三方言）+ 门禁 + 唯一报告
+              PerfCli full [--with-dappersuite]                # 全量（三方言）+ CrossBench 四臂横评 + 门禁 + 唯一报告
                                                                # DapperSuite 默认降频，--with-dappersuite 并回
+              PerfCli crossbench                               # 只跑 CrossBench 四臂批 + 冻结模板报告（FreeSql 数据）
               PerfCli compare <基线worktree> <轮数> [选项]      # 交替 A/B（转发 compare 编排器）
               PerfCli gate                                     # 只跑门禁（BDN 基线 + 结果库基线）
               PerfCli report                                   # 只重建统一报告（不重跑夹具）

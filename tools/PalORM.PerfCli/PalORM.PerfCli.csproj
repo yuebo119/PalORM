@@ -21,6 +21,8 @@
     <Compile Include="..\..\bench\shared\PerfTiming.cs" Link="PerfTiming.cs" />
     <!-- L0 快线覆盖定义——与 PerfGate 共用同一份清单 -->
     <Compile Include="..\..\bench\shared\PerfL0.cs" Link="PerfL0.cs" />
+    <!-- CrossBench 四臂批读取——与 PerfGate 四组表共用同一份完整批判据 -->
+    <Compile Include="..\..\bench\shared\CrossBenchBatch.cs" Link="CrossBenchBatch.cs" />
   </ItemGroup>
 
 </Project>

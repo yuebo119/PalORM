@@ -36,6 +36,7 @@ internal static class Program
                 skipReport: Environment.GetEnvironmentVariable("SKIP_REPORT") == "1",
                 withRemote: Environment.GetEnvironmentVariable("WITH_REMOTE") == "1"),
             "dappersuite" => DapperSuite.Run(rest),
+            "crossbench" => PerfEntry.CrossBench(),
             _ => PerfEntry.Usage(),
         };
     }
