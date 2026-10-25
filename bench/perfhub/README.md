@@ -64,10 +64,10 @@ dotnet run --project bench/PalORM.PerfHub -- run --dialects sqlite,mysql,pg --ti
 > （固定开销占其总成本 <1%，换形态无实质收益）；`WhereIn`/`KeysetPage`/`IncludeJoin`
 > 的链式是过滤表达式的唯一自然形态。因该变更，GetByKey 组跨批数字在 2026-10-01 存在形态
 > 断点（基线随批重录吸收，比对此项需按批注日期分段）。
-| | `BulkInsert` | PG Binary COPY · MySQL MySqlBulkCopy（`local_infile=ON` 分流）· SQLite 多值 VALUES；Dapper 多值 VALUES |
+| | `BulkInsert` | PG Binary COPY · MySQL MySqlBulkCopy（`local_infile=ON` 分流）· SQLite 行预编译单行（ADR-Q 形态断点 2026-10-25：命令文本恒定命中语句缓存，探针 2.2~2.6µs/行 vs 多值 8.6~9.4，"多值即最快"证伪）；Dapper SQLite multi-exec / 其余多值 VALUES |
 | | `BulkUpdate` | PG `UPDATE FROM VALUES`/UNNEST · MySQL `CASE WHEN` · SQLite 逐条裹单事务；**排在 `BulkInsert` 之前**——否则它跑在后者撑大的表上，而后者迭代数逐臂不同，三臂表规模实测差 10 倍（规范 §5） |
 | | `BulkDelete` | `IN`/数组分批裹事务；播种走中性路径（只播 `perf_s1`，不再顺带把 `bench_tenant` 播到 rows×轮数 行） |
-| | `UpsertBatch` | PG/SQLite `ON CONFLICT excluded` · MySQL `ON DUPLICATE KEY VALUES(c)`；PalORM 走 `BulkMergeAsync` |
+| | `UpsertBatch` | PG `ON CONFLICT excluded` · SQLite 行预编译单行 ON CONFLICT（ADR-Q 2026-10-25 形态断点，三臂同日切换：PalORM/Dapper/地板）· MySQL `ON DUPLICATE KEY VALUES(c)`（Dapper SQLite 走 multi-exec）；PalORM 走 `BulkMergeAsync` |
 | | `InsertReturningId` | 三臂各 1 RTT：PG/SQLite `RETURNING`；MySQL `INSERT;SELECT LAST_INSERT_ID()` 合并 |
 | **Query** | `KeysetPage` / `WhereIn` / `Count` | seek 分页（OFFSET 是反模式不测）；IN 显式占位符分批 |
 | | `WideQueryAll` | 19 列宽表全物化进列表并持有到读完——物化器按列数伸缩（ADO/PalORM 按序号，Dapper 按列名）；2026-10-02 起 ADO 臂与另两臂一样建列表（原逐行丢弃，存活集 GC 成本只落在两臂） |
