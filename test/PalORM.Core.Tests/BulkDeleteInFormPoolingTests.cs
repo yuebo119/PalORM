@@ -24,6 +24,9 @@ internal sealed class BulkDeleteInFormPoolingTests
         Statements.Clear();
         InFormRecordingCommand.ResetCreateCounts();
         InFormRecordingCommand.SetRecorder((sql, parameters) => Statements.Add((sql, parameters)));
+        // E 方案（ADR-R）：json_each 形态默认抢占 SQLite 数值键批删——本夹具锁定的是 IN 形态
+        // 的池化纪律（回退路径：字符串键/旧引擎仍走它），强制走 IN（先例 ResetLocalInfileProbeCache）
+        DataSession<InFormSqliteProvider>.ForceInFormDeleteForTests<InFormPoolRow>();
         DataSession<InFormSqliteProvider> session =
             await DataSession<InFormSqliteProvider>.CreateAsync(
                 new DbOptions
@@ -142,6 +145,7 @@ internal sealed class BulkDeleteInFormPoolingTests
     {
         Statements.Clear();
         InFormRecordingCommand.SetRecorder((sql, parameters) => Statements.Add((sql, parameters)));
+        DataSession<InFormSqliteProvider>.ForceInFormDeleteForTests<InFormPoolTenantRow>();
         string cs = $"Data Source=inpool_tenant_{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
         await using DataSession<InFormSqliteProvider> tenantSession =
             await DataSession<InFormSqliteProvider>.CreateAsync(new DbOptions { ConnectionString = cs });

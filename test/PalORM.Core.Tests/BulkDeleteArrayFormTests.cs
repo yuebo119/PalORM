@@ -97,13 +97,16 @@ internal sealed class BulkDeleteArrayFormTests
 
     /// <summary>反向断言（对齐 S3 反向验证）：同一操作在<em>不支持数组</em>的 Provider 上
     /// 必须落到 IN 形态——形状与参数个数都要变。缺这条，"数组形态"与"永远走 IN"
-    /// 两种代码在同一批测试下都会绿。</summary>
+    /// 两种代码在同一批测试下都会绿。
+    /// <para>E 方案（ADR-R）后 IN 是回退路径（SQLite 数值键默认 json_each）：本测试强制
+    /// 走 IN 锁定回退路径的 SQL 形状（字符串键/旧引擎的生产消费方仍抵达此处）。</para></summary>
     [Test]
     public async Task BulkDelete_InForm_ProducesInPlaceholdersNotAny()
     {
         Shapes.Clear();
         ArrayAnySqliteCommand.SetStatementRecorder((sql, parameterCount)
             => Shapes.Add((sql, parameterCount)));
+        DataSession<NoArraySqliteProvider>.ForceInFormDeleteForTests<NoArrayRow>();
         await using DataSession<NoArraySqliteProvider> session =
             await DataSession<NoArraySqliteProvider>.CreateAsync(
                 new DbOptions

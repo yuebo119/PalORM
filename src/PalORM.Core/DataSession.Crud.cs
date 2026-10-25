@@ -1159,6 +1159,11 @@ public sealed partial class DataSession<TProvider>
         public static bool? UpdateArraySupported;
         public static bool? UpsertArraySupported;
 
+        /// <summary>E 方案（ADR-R 2026-10-25）：SQLite json_each 键集合形态的能力缓存
+        ///（每 (TProvider, T) 只探测一次）。false 含两类：首键非整型（形态不适用）与
+        /// 引擎探测失败（消费方自带旧 e_sqlite3 bundle，JSON1 未编译开启）——均回退 IN 形态。</summary>
+        public static bool? JsonEachDeleteSupported;
+
         /// <summary>S1：多行 INSERT ... RETURNING 的引用列清单（(TProvider, T) 恒定）。</summary>
         public static string? InsertReturningQuotedColumns;
 

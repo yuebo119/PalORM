@@ -176,6 +176,7 @@ internal static class Program
             if (softDeleted?.DeletedAt is null)
                 throw new InvalidOperationException("Bulk soft DELETE metadata failed");
 
+            await VerifyJsonEachBulkDeleteAsync(db).ConfigureAwait(false);
             await VerifyExpressionBuildersAsync(db).ConfigureAwait(false);
 
             int deleted = await db.DeleteAsync<AotEntity>(inserted.Id).ConfigureAwait(false);
@@ -319,6 +320,23 @@ internal static class Program
         if (!fetched.Blob.AsSpan().SequenceEqual((ReadOnlySpan<byte>)[0x00, 0x01, 0xFF, 0x00])
             || fetched.Preview is not null)
             throw new InvalidOperationException("byte[] round trip failed");
+    }
+
+    /// <summary>E 方案（ADR-R）：json_each 批删路径的 AOT 全链验证——数值主键 + 引擎探测 +
+    /// 手写 JSON 构建（零反射）。探针行删除命中 1，不存在键计 0。</summary>
+    private static async Task VerifyJsonEachBulkDeleteAsync(DataSession<SqliteProvider> db)
+    {
+        AotEntity probe = await db.InsertAsync(new AotEntity
+        {
+            Value = "json-each",
+            Version = 0,
+            Blob = [0x01],
+            Preview = null
+        }).ConfigureAwait(false);
+        long deleted = await db.BulkDeleteAsync<AotEntity>(
+            new object[] { probe.Id, 999_999L }).ConfigureAwait(false);
+        if (deleted != 1 || await db.GetAsync<AotEntity>(probe.Id).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("json_each bulk DELETE failed");
     }
 
     /// <summary>R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证——只读类型经源生成注册，
