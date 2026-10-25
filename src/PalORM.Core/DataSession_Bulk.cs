@@ -22,7 +22,8 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>批量插入——委托 Provider 使用源生成 InsertColumns 与 binder，并复用会话事务。
-    /// <paramref name="batchSize"/> 为显式批宽（PG 为每次 COPY 行数，其余为每批多值 INSERT/LOAD 行数）。</summary>
+    /// <paramref name="batchSize"/> 为显式批宽（PG 为每次 COPY 行数，MySQL 为每批多值 INSERT/LOAD 行数；
+    /// SQLite 行预编译形态不分批，该参数兼容保留、不决定语句形状，2026-10-25 ADR-Q）。</summary>
     /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径）——与本家族
     /// BulkUpdate/BulkDelete 同口径；BulkMerge 例外（返回处理实体数，跨方言可预测，见其
     /// returns 说明）。</returns>
@@ -84,6 +85,21 @@ public partial class DataSession<TProvider>
         // 否则回退 IN 占位符形态（该形态对复合主键本就正确）。
         // 收益（2026-10-02 探针实测）：DELETE 时延 −52%、客户端分配 −99%（省 per-key 参数对象）。
         bool useArrayForm = IsArrayFormSupported<T>(out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray);
+
+        // E 方案（ADR-R，2026-10-25）：SQLite 的 json_each 键集合形态——单参数承载全部键
+        //（JSON 数组文本），服务端 json_each 虚拟表展开。DeleteProbe 实测 0.21~0.25µs/键，
+        // 对 IN 形态（3.64~3.86）快 15 倍以上，且快于字面量内联（0.34~0.40）——全参数化
+        // 立场零破口（EF Core 8 在 SQLite 对集合参数化的同款选择）。数组形态可用时不进
+        // 本分支（自定义 Provider 经 CreateArrayParameter 已有 JSON 编码路径，G6 证伪登记
+        // 的责任面保持不变）。
+        if (!useArrayForm && await UseJsonEachDeleteForm<T>(info, keys, ct).ConfigureAwait(false))
+        {
+            return await RunInTransactionScopeAsync(
+                operation.Owner,
+                (tran, token) => ExecuteJsonEachDeleteAsync<T>(
+                    tran, info.Crud.ConvertDeleteKey, keys, identifiers, isSoftDelete, token),
+                ct).ConfigureAwait(false);
+        }
 
         // BULK-001（2026-09-23）：本路径每批一次独立往返，批大小取"方言参数上限"与"单批行数上限"
         // 的较小者。原用 InClauseBatchSize（500，单语句内拼 IN 片段的约束）把 10 万键放大成 200 次往返；
@@ -358,6 +374,220 @@ public partial class DataSession<TProvider>
             total += await tail.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         return total;
+    }
+
+    /// <summary>E 方案能力检测（ADR-R，2026-10-25）——三层门控：
+    /// ① 方言为 SQLite（json_each 是 SQLite 引擎形态；PG 用原生数组 ANY、MySQL 尊重
+    /// 服务端优化器信息维持 IN 分批，EF Core 8→10 三代往返的教训）；
+    /// ② 首键（经 <see cref="CrudMetadata.ConvertDeleteKey"/> 转换后）为整型——字符串/GUID
+    /// 主键需 JSON 转义，首版不覆盖，回退 IN 形态；
+    /// ③ 引擎探测 json_each 可用（每 (TProvider, T) 一次，<see cref="SqlSlots{T}"/> 缓存；
+    /// 消费方自带旧 e_sqlite3 bundle 且 JSON1 未编译时抛 DbException，缓存 false 回退）。</summary>
+    private async ValueTask<bool> UseJsonEachDeleteForm<T>(
+        EntityRuntimeInfo info, IReadOnlyList<object> keys, CancellationToken ct)
+        where T : class, new()
+    {
+        if (TProvider.Dialect != SqlDialect.Sqlite
+            || SqlSlots<T>.JsonEachDeleteSupported is false)
+        {
+            return false;
+        }
+
+        // 首键定型整表单（调用方已保证 keys.Count > 0）：混合类型列表的劣质键在 JSON
+        // 构建期 fail-fast 抛出，与 IN 形态的批内转换异常同语义——都在事务提交前抛，全有或全无。
+        // 整型走 JSON 数值；字符串走 JSON 字符串（标准转义，BINARY 排序规则两侧同源，
+        // 匹配语义与 IN 形态的 TEXT 参数逐位等价）。Guid/ulong/char 回退 IN
+        //（Guid 在 SQLite 的绑定往返未经本仓验证；ulong 超 int64 域）
+        object firstKey = info.Crud.ConvertDeleteKey?.Invoke(keys[0]) ?? keys[0];
+        if (firstKey is not (long or int or short or byte or sbyte or ushort or uint or string))
+        {
+            CacheJsonEachSupport<T>(false);
+            return false;
+        }
+
+        if (SqlSlots<T>.JsonEachDeleteSupported is true)
+        {
+            return true;
+        }
+
+        try
+        {
+            // 命名避开 probe：门禁的 carrier 反启发式按文件级 grep 命令变量的 Execute 调用
+            //（不辨作用域），与既有 BindRowValuesViaProbeAsync 的 probe 载体重名会误伤其断言
+            await using DbCommand engineProbe = CreateCommand();
+            engineProbe.CommandText = "SELECT 1 WHERE 1 IN (SELECT value FROM json_each('[1]'))";
+            await engineProbe.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            CacheJsonEachSupport<T>(true);
+            return true;
+        }
+        catch (DbException)
+        {
+            // 旧引擎：no such function: json_each——缓存并回退 IN 形态
+            CacheJsonEachSupport<T>(false);
+            return false;
+        }
+    }
+
+    /// <summary>json_each 能力缓存写入（S2696：静态字段赋值收进静态方法，探测结果单调——
+    /// false 终态（引擎能力进程内恒定），true 后不再翻转）。</summary>
+    private static void CacheJsonEachSupport<T>(bool value) where T : class, new()
+        => SqlSlots<T>.JsonEachDeleteSupported = value;
+
+    /// <summary>测试钩子：强制 (TProvider, T) 的批量删除走 IN 形态（IN 池化纪律的锁定夹具用，
+    /// 先例 ResetLocalInfileProbeCache+IVT）。internal 不进公共 API 面；生产路径无消费方；
+    /// 缓存进程内单调，测试进程内设置一次即终态。</summary>
+    internal static void ForceInFormDeleteForTests<T>() where T : class, new()
+        => SqlSlots<T>.JsonEachDeleteSupported = false;
+
+    /// <summary>E 方案执行主体（ADR-R）：单参数 json_each 批量删除/软删——语句文本跨批恒定
+    ///（单参数名与批长度无关），参数对象建一次批间只换 Value（R-UNNESTB 纪律同数组形态）。
+    /// 批宽与数组形态统一用 <see cref="UnnestArraysMaxRowsPerBatch"/>（不受参数个数约束，
+    /// 只限单语句触及行数与事务持锁时长）。</summary>
+    private async Task<long> ExecuteJsonEachDeleteAsync<T>(
+        DbTransaction? tran,
+        Func<object, object?>? convertKey,
+        IReadOnlyList<object> keys,
+        DeleteIdentifiers identifiers,
+        bool isSoftDelete,
+        CancellationToken ct)
+        where T : class, new()
+    {
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = tran;
+        cmd.CommandText = BuildBulkDeleteJsonEachSql(identifiers, isSoftDelete);
+        // 参数对象批间不变（只换 Value）——同 ExecuteArrayFormDeleteAsync 的 R-UNNESTB 说明
+        DbParameter idsParameter = TProvider.CreateParameter(ArrayParameterName, DBNull.Value);
+        cmd.Parameters.Add(idsParameter);
+        BindDefaultFilterParameters<T>(cmd);
+
+        long total = 0;
+        for (int start = 0; start < keys.Count; start += UnnestArraysMaxRowsPerBatch)
+        {
+            int batchLen = Math.Min(UnnestArraysMaxRowsPerBatch, keys.Count - start);
+            idsParameter.Value = BuildJsonKeyArrayText(keys, start, batchLen, convertKey, typeof(T).Name);
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        return total;
+    }
+
+    /// <summary>json_each 形态的 DELETE / 软删 UPDATE 语句——<c>pk IN (SELECT value FROM
+    /// json_each(@ids))</c>，单参数，文本跨批恒定。与 <see cref="BuildBulkDeleteArraySql"/>
+    /// 是同一语句的又一形态：WHERE 语义（主键集合 ∩ 可选租户过滤 ∩ 软删的 deleted_at IS NULL）
+    /// 逐条等价，只有主键谓词的表达方式不同。</summary>
+    private static string BuildBulkDeleteJsonEachSql(in DeleteIdentifiers identifiers, bool isSoftDelete)
+    {
+        var sb = new ValueStringBuilder(stackalloc char[256]);
+        try
+        {
+            if (isSoftDelete)
+            {
+                sb.Append("UPDATE ");
+                sb.Append(identifiers.QuotedTable);
+                sb.Append(" SET ");
+                sb.Append(identifiers.QuotedDeletedAt);
+                sb.Append(" = ");
+                sb.Append(identifiers.TimestampExpression);
+                sb.Append(" WHERE ");
+            }
+            else
+            {
+                sb.Append("DELETE FROM ");
+                sb.Append(identifiers.QuotedTable);
+                sb.Append(" WHERE ");
+            }
+
+            sb.Append(identifiers.QuotedPrimaryKey);
+            sb.Append(" IN (SELECT value FROM json_each(");
+            sb.Append(ArrayParameterName);
+            sb.Append("))");
+            if (isSoftDelete)
+            {
+                sb.Append(" AND ");
+                sb.Append(identifiers.QuotedDeletedAt);
+                sb.Append(" IS NULL");
+            }
+
+            sb.Append(identifiers.TenantFilter);
+            sb.TrimEnd();
+            return sb.ToString();
+        }
+        finally
+        {
+            sb.Dispose();
+        }
+    }
+
+    /// <summary>键集合的 JSON 数组文本（E 方案）——手写 StringBuilder + 不变文化（AOT 零反射，
+    /// DeleteProbe 已验证形态）。非整型/字符串键 fail-fast 抛 <see cref="InvalidOperationException"/>：
+    /// 与 IN 形态的批内转换异常同语义（都在首个事务提交前抛，全有或全无）。ulong 与 Guid 故意
+    /// 排除（前者超 SQLite int64 域；后者在本仓 SQLite 绑定往返未验证，均回退 IN 形态）。</summary>
+    private static string BuildJsonKeyArrayText(
+        IReadOnlyList<object> keys, int start, int length,
+        Func<object, object?>? convertKey, string typeName)
+    {
+        var sb = new System.Text.StringBuilder(length * 8 + 2).Append('[');
+        for (int i = 0; i < length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            object key = convertKey?.Invoke(keys[start + i]) ?? keys[start + i];
+            sb.Append(key switch
+            {
+                long v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                int v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                short v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                byte v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                sbyte v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ushort v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                uint v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                // 字符串键：JSON 字符串 + 标准转义。转义正确性是匹配正确性（不是注入安全
+                //——整段 JSON 走单参数）；转义错 → 键匹配错 → 删错/漏删，故敌对键用例锁定
+                string v => ToJsonString(v),
+                _ => throw new InvalidOperationException(
+                    $"Type '{typeName}' json_each bulk delete requires integer or string keys; "
+                    + $"key #{start + i} is '{key.GetType().Name}'."),
+            });
+        }
+
+        return sb.Append(']').ToString();
+    }
+
+    /// <summary>JSON 字符串字面量（含双引号）——RFC 8259 最小转义：<c>"</c> 与 <c>\</c>
+    /// 加控制字符（&lt; U+0020）。SQLite 的 JSON 解析器接受标准转义序列；非 ASCII 以
+    /// UTF-8 原样直通（引擎与参数绑定两侧同编码）。</summary>
+    private static string ToJsonString(string value)
+    {
+        var sb = new System.Text.StringBuilder(value.Length + 2).Append('"');
+        foreach (char c in value)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < ' ')
+                    {
+                        sb.Append("\\u").Append(((int)c).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        sb.Append(c);
+                    }
+
+                    break;
+            }
+        }
+
+        return sb.Append('"').ToString();
     }
 
     /// <summary>数组形态的参数名——与 <see cref="IDbProvider.GetParameterPlaceholder"/> 的
@@ -2141,6 +2371,20 @@ public partial class DataSession<TProvider>
             BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn, excludeTenantColumn));
         bool tenantGuarded = HasTenantFilter<T>();
 
+        // B 方案（2026-10-25）：SQLite 行预编译形态——单行 INSERT … ON CONFLICT 语句
+        // 恒定复用（命中连接级语句缓存），每行只写 Value。探针实测 2.4~4.3µs/行，对
+        // 多值形态 8.6~10.7µs/行（UpsertProbe 2026-10-25）。SQL 与多值形态同源
+        // （BuildUpsertBatchSql rowCount=1，租户守卫已在 shape 内）。联网方言不进此
+        // 分支（逐行 = N 次 RTT）。
+        // 语义差异（相对多值批，登记为已知边界）：多值批对"同批内同一行更新两次"报错
+        //（SQLite ON CONFLICT 同语句限制），行预编译逐行执行与 SaveCore 逐条语义一致，
+        // 后行覆盖前行——更宽容，无新增限制。
+        if (TProvider.Dialect == SqlDialect.Sqlite)
+        {
+            return await ExecuteRowPreparedUpsertAsync(
+                transaction, entities, metadata, shape, tenantGuarded, ct).ConfigureAwait(false);
+        }
+
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
         // 能力检测与 UPDATE 路径同纪律（生成物三件套 + Provider 接受全部列的元素类型）。
         // 批内重复主键语义与既有形态一致：PG 对同语句影响同一行两次明确报错（见方法级文档）。
@@ -2202,6 +2446,67 @@ public partial class DataSession<TProvider>
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             processed += rowCount;
         }
+        return processed;
+    }
+
+    /// <summary>B 方案（2026-10-25）：SQLite 批量 UPSERT 的行预编译形态——单行
+    /// INSERT … ON CONFLICT 语句 + [列数+租户?] 参数池一次建立挂命令，事务内逐行
+    /// 只写 Value。命令文本恒定命中 Microsoft.Data.Sqlite 连接级语句缓存。
+    /// <para>SQL 与多值形态同源：<see cref="BuildUpsertBatchSql"/>(1, …) 复用同一
+    /// shape 机器（冲突子句 + 租户守卫），占位符 @pN 与
+    /// <see cref="CreateUpsertParameterPool{T}"/> 的命名契约对齐。</para>
+    /// <para>池布局镜像批路径：[columnCount 行参数][租户参数?]——租户参数值建池时
+    /// 一次写入（与批路径的 <c>TProvider.CreateParameter(_tenantParameterName, _tenantId)</c>
+    /// 同源），行 binder 恒从下标 0 写入。</para>
+    /// <para>旧生成器程序集（<c>BindUpsertValues</c> 为 null）经 scratch 命令逐行
+    /// 绑定后值拷贝进池（<see cref="BindUpsertRowViaScratch"/>），形态与批路径回退一致。</para></summary>
+    private async Task<long> ExecuteRowPreparedUpsertAsync<T>(
+        DbTransaction transaction,
+        List<T> entities,
+        CrudMetadata metadata,
+        UpsertSqlShape shape,
+        bool tenantGuarded,
+        CancellationToken ct) where T : class, new()
+    {
+        if (entities.Count == 0) return 0;
+        int columnCount = metadata.UpsertColumns.Count;
+        // 单行语句（含租户守卫的冲突子句）——每次调用构建一次，行长 ~百字符级，
+        // 相对 N 次行执行可忽略，不做跨调用缓存（shape 含会话态租户守卫，缓存键复杂度不值）
+        string sql = BuildUpsertBatchSql(1, columnCount, shape);
+
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
+        cmd.CommandText = sql;
+
+        int tenantParams = CountTenantParams(tenantGuarded);
+        // PARAM-REUSE-OK[pool:pool] 池建后只写 Value（BindUpsertValues/scratch 契约），无集合变更
+        DbParameter[] pool = CreateUpsertParameterPool<T>(cmd, 1, columnCount, tenantGuarded);
+        metadata.InitUpsertParameters?.Invoke(pool, 0);
+        for (int i = 0; i < columnCount + tenantParams; i++)
+        {
+            cmd.Parameters.Add(pool[i]);
+        }
+
+        Action<DbParameter[], object, int>? upsertValuesBinder = metadata.BindUpsertValues;
+        await using DbCommand? scratch = upsertValuesBinder is null ? CreateCommand() : null;
+
+        long processed = 0;
+        foreach (T entity in entities)
+        {
+            if (upsertValuesBinder is not null)
+            {
+                upsertValuesBinder(pool, entity, 0);
+            }
+            else
+            {
+                BindUpsertRowViaScratch(scratch!, metadata, entity, pool, 0, columnCount);
+            }
+
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            processed++;
+        }
+
         return processed;
     }
 

@@ -346,17 +346,61 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
 
     /// <summary>批量插入——按方言走驱动最优（v2 三臂契约：地板必须是天花板）：
     /// PG 走 Npgsql Binary COPY，MySQL 走 MySqlBulkCopy（LOAD DATA LOCAL INFILE 协议），
-    /// SQLite 走多值 VALUES 单命令（进程内库无协议可省，多值即最快）。</summary>
+    /// SQLite 走行预编译单行语句（ADR-Q 形态断点，2026-10-25：命令文本恒定命中连接级
+    /// 语句缓存，探针 2.2~2.6µs/行 vs 多值 8.6~9.4——"多值即最快"的地板假设被证伪）。</summary>
     public async Task<long> BulkInsertAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
     {
         return D switch
         {
-            Dialect.Sqlite => await MultiValueInsertAsync(conn, rows, tran, ct).ConfigureAwait(false),
+            Dialect.Sqlite => await RowPreparedInsertAsync(conn, rows, tran, ct).ConfigureAwait(false),
             Dialect.MySql => await BulkInsertMySqlAsync(conn, rows, tran, ct).ConfigureAwait(false),
             Dialect.PostgreSql => await BulkInsertCopyAsync(conn, rows, ct).ConfigureAwait(false),
             _ => throw new NotSupportedException($"方言 '{D}' 不在 PerfHub 覆盖范围内。"),
         };
+    }
+
+    /// <summary>SQLite 行预编译批插（地板，ADR-Q）：单行 INSERT + 5 参数一次建立挂命令，
+    /// 事务内逐行只写 Value。未传事务时自开（与 MultiValueInsertAsync 同语义）。</summary>
+    private async Task<long> RowPreparedInsertAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
+    {
+        bool ownsTransaction = tran is null;
+        DbTransaction tx = tran ?? await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using DbCommand cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText =
+                $"INSERT INTO {T} ({Cols}) VALUES (@p0,@p1,@p2,@p3,@p4)";
+            DbParameter[] pool = new DbParameter[5];
+            for (int i = 0; i < 5; i++)
+            {
+                pool[i] = cmd.CreateParameter();
+                pool[i].ParameterName = $"@p{i}";
+                cmd.Parameters.Add(pool[i]);
+            }
+
+            long total = 0;
+            foreach (S1Row row in rows)
+            {
+                pool[0].Value = row.Id;
+                pool[1].Value = row.Name;
+                pool[2].Value = row.Qty;
+                pool[3].Value = row.Price;
+                pool[4].Value = row.Marker;
+                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            if (ownsTransaction)
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+            return total;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await tx.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>MySQL 批量插入路由——与产品 MySqlProvider 同分流：服务端 <c>@@local_infile</c>
@@ -461,6 +505,43 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     /// ① 命令与参数池一次建好，跨批只写 Value；② <b>整批裹一个事务</b>（未传事务时自开）
     /// ——每语句 autocommit 各一次 journal 同步，是量具早期实测被 PalORM 反超 6× 的直接原因
     /// （门禁抓出后修正）。</summary>
+    /// <summary>SQLite 行预编译批量 UPSERT（地板，ADR-Q）：单行 INSERT … ON CONFLICT DO
+    /// UPDATE + 5 参数一次建立挂命令，事务内逐行只写 Value。冲突子句与 BulkSql.UpsertBatch
+    /// 同谓词列集（ON CONFLICT("Id") DO UPDATE SET 全列 = excluded.列）。</summary>
+    private async Task<long> RowPreparedUpsertAsync(
+        DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+    {
+        await using DbTransaction tx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText =
+            $"INSERT INTO {T} ({Cols}) VALUES (@p0,@p1,@p2,@p3,@p4) "
+            + $"ON CONFLICT({Q("Id")}) DO UPDATE SET {Q("Name")}=excluded.{Q("Name")}, "
+            + $"{Q("Qty")}=excluded.{Q("Qty")}, {Q("Price")}=excluded.{Q("Price")}, "
+            + $"{Q("Marker")}=excluded.{Q("Marker")}";
+        DbParameter[] pool = new DbParameter[5];
+        for (int i = 0; i < 5; i++)
+        {
+            pool[i] = cmd.CreateParameter();
+            pool[i].ParameterName = $"@p{i}";
+            cmd.Parameters.Add(pool[i]);
+        }
+
+        long total = 0;
+        foreach (S1Row row in rows)
+        {
+            pool[0].Value = row.Id;
+            pool[1].Value = row.Name;
+            pool[2].Value = row.Qty;
+            pool[3].Value = row.Price;
+            pool[4].Value = row.Marker;
+            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return total;
+    }
+
     private async Task<long> MultiValueInsertAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
     {
@@ -740,9 +821,44 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         }
     }
 
+    /// <summary>E 方案地板形态：DELETE ... WHERE Id IN (SELECT value FROM json_each(@ids))，
+    /// 单参数（JSON 数组文本，手写不变文化构建）。</summary>
+    private async Task<long> ExecuteJsonEachDeleteAsync(
+        DbConnection conn, IReadOnlyList<object> keys, DbTransaction tx, CancellationToken ct)
+    {
+        var sb = new System.Text.StringBuilder(keys.Count * 8 + 2).Append('[');
+        for (int i = 0; i < keys.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append(Convert.ToInt64(keys[i], System.Globalization.CultureInfo.InvariantCulture)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText =
+            $"DELETE FROM {T} WHERE {Q("Id")} IN (SELECT value FROM json_each(@ids))";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = "@ids";
+        p.Value = sb.Append(']').ToString();
+        cmd.Parameters.Add(p);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     private async Task<long> ExecuteBulkDeleteCoreAsync(
         DbConnection conn, IReadOnlyList<object> keys, DbTransaction tx, CancellationToken ct)
     {
+        // E 方案（ADR-R，2026-10-25）：SQLite 切 json_each 单参数形态（与产品同路径，
+        // DeleteProbe 实测 0.21~0.25µs/键 vs 参数化 IN 3.64~3.86）；地板必须保持最紧形态。
+        if (D == Dialect.Sqlite)
+        {
+            return await ExecuteJsonEachDeleteAsync(conn, keys, tx, ct).ConfigureAwait(false);
+        }
+
         long total = 0;
         const int batch = BulkSql.BatchRows;
         for (int start = 0; start < keys.Count; start += batch)
@@ -1062,10 +1178,16 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
 
     // ── 阶段 2 新增 ──
 
-    /// <summary>批量 UPSERT——共用 BulkSql.UpsertBatch（与产品 BuildUpsertSqlShape 同形态），
+    /// <summary>批量 UPSERT——SQLite 走行预编译单行 ON CONFLICT（ADR-Q 形态断点，2026-10-25，
+    /// 探针 2.4~4.3µs/行 vs 多值 8.6~10.7）；PG/MySQL 维持共用 BulkSql.UpsertBatch 多值形态，
     /// 参数池数组直写，整批裹事务。</summary>
     public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
+        if (D == Dialect.Sqlite)
+        {
+            return await RowPreparedUpsertAsync(conn, rows, ct).ConfigureAwait(false);
+        }
+
         DbTransaction tx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         try
         {
@@ -1534,6 +1656,20 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     /// 的 Dapper 用户本来就直接写 ADO。</para></summary>
     public async Task<long> BulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
+        // SQLite（2026-10-25 口径修正）：Dapper 的单方言最快批量形态是 multi-exec——
+        // 集合重载内部复用一个命令对象逐行执行，命令文本恒定命中语句缓存（探针模拟
+        // 2.8~4.3µs/行 vs 多值 8.6+）。多值形态仍是联网方言的常规写法（multi-exec 在
+        // MySQL 是 N 次 RTT，PerfHub 备案 31s/20K 行）。
+        if (dialect.Dialect == Dialect.Sqlite)
+        {
+            await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            long inserted = await conn.ExecuteAsync(
+                $"INSERT INTO {T} ({Cols}) VALUES (@Id,@Name,@Qty,@Price,@Marker)",
+                rows, tran).ConfigureAwait(false);
+            await tran.CommitAsync(ct).ConfigureAwait(false);
+            return inserted;
+        }
+
         long total = 0;
         int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
         for (int start = 0; start < rows.Count; start += batch)
@@ -1788,11 +1924,24 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     // ── 阶段 2 新增 ──
 
     /// <summary>批量 UPSERT——共用 BulkSql.UpsertBatch，整批裹事务（Dapper 无 UPSERT 封装，
-    /// 真实 Dapper 用户同样手拼 ON CONFLICT / ON DUPLICATE KEY）。</summary>
+    /// 真实 Dapper 用户同样手拼 ON CONFLICT / ON DUPLICATE KEY）。SQLite 走 multi-exec
+    /// 单行形态（2026-10-25 口径修正，与 BulkInsert 同理由：单方言最快）。</summary>
     public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
-        long total = 0;
+        if (dialect.Dialect == Dialect.Sqlite)
+        {
+            string sql =
+                $"INSERT INTO {T} ({Cols}) VALUES (@Id,@Name,@Qty,@Price,@Marker) "
+                + $"ON CONFLICT({C("Id")}) DO UPDATE SET {C("Name")}=excluded.{C("Name")}, "
+                + $"{C("Qty")}=excluded.{C("Qty")}, {C("Price")}=excluded.{C("Price")}, "
+                + $"{C("Marker")}=excluded.{C("Marker")}";
+            long total = await conn.ExecuteAsync(sql, rows, tran).ConfigureAwait(false);
+            await tran.CommitAsync(ct).ConfigureAwait(false);
+            return total;
+        }
+
+        long batched = 0;
         int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
         for (int start = 0; start < rows.Count; start += batch)
         {
@@ -1800,11 +1949,11 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
             await conn.ExecuteAsync(
                 BulkSql.UpsertBatch(dialect.Dialect, end - start),
                 InsertParameters(rows, start, end), tran).ConfigureAwait(false);
-            total += end - start;
+            batched += end - start;
         }
 
         await tran.CommitAsync(ct).ConfigureAwait(false);
-        return total;
+        return batched;
     }
 
     /// <summary>自增插入并回填主键——与 ADO 地板同 SQL 同 1 RTT 形态。</summary>
@@ -1920,9 +2069,20 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     public async Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(rows);
-        // 事务内批量提交与无事务批量插入同构（多值 VALUES 分批），不再走 TxInsertManyAsync
-        // 的 multi-exec——那是逐条提交语义的路径，10/100 条档专用。
+        // SQLite（2026-10-25 口径修正，与 BulkInsert/UpsertBatch 同理由）：事务内 multi-exec
+        // 是其单方言真实最快形态——下方"逐条提交语义"的否决理由只针对无事务场景，
+        // 本方法持有显式事务，multi-exec 的每条语句都参与该事务，提交语义不变。
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        if (dialect.Dialect == Dialect.Sqlite)
+        {
+            await conn.ExecuteAsync(
+                $"INSERT INTO {T} ({Cols}) VALUES (@Id,@Name,@Qty,@Price,@Marker)",
+                rows, tran).ConfigureAwait(false);
+            await tran.CommitAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        // 事务内批量提交与无事务批量插入同构（多值 VALUES 分批）。
         int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
         for (int start = 0; start < rows.Count; start += batch)
         {

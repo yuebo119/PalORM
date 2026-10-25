@@ -21,7 +21,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 - **编译期安全网**：45 条 Roslyn 诊断把缺主键、租户列可空绕过隔离、乐观锁基线为 0、循环内 N+1 查询这类运行时崩溃或静默错数据拦截在编译期，错误可跳转声明位置
 - **全链路 Native AOT**：.NET 生态唯一三方言 AOT 发布验证全部通过的 ORM，无反射、无 IL Emit、无运行时代码生成，SQLite 发布 exe 仅 4.5 MB
-- **地板级性能**：单行 CRUD 与 ADO.NET 手写地板同量级（0.73~1.12×），批量写自动走方言最快路径（PG Binary COPY、MySQL LOAD DATA、单语句批量 UPDATE、SQLite 多值 VALUES）；20,000 行 BulkInsert 分配约为 Dapper 的 19%（SQLite，远程方言 5%~7%）；批量族时延普遍低于 Dapper（20,000 档 0.10~0.93×）；Web 服务"一请求一会话"形态内置会话池（32 并发实测 P99 −18%、Gen0 回收 −58%）
+- **地板级性能**：单行 CRUD 与 ADO.NET 手写地板同量级（0.73~1.12×），批量写自动走方言最快路径（PG Binary COPY、MySQL LOAD DATA、单语句批量 UPDATE、SQLite 行预编译批量）；20,000 行 BulkInsert 分配约为 Dapper 的 19%（SQLite，远程方言 5%~7%）；批量族时延普遍低于 Dapper（20,000 档 0.10~0.93×）；Web 服务"一请求一会话"形态内置会话池（32 并发实测 P99 −18%、Gen0 回收 −58%）
 - **企业级横切开箱即用**：多租户列隔离（查询与 Update/Delete/Bulk 自动附加租户谓词；租户列在更新中不可写，Insert 由实体 `tenant_id` 承载）、乐观锁、软删除、审计拦截器（`Set()` 写入的敏感列参数掩码）、读写分离、咨询锁、弹性重试 + 熔断（零 Polly 依赖）
 - **零依赖核心**：PalORM.Core 不引用任何第三方 NuGet 包（仅 BCL + ADO.NET 抽象）；SQLite 经 SQLite3MC 驱动支持 AES-256 静态加密
 
@@ -48,7 +48,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 **全链路 Native AOT**。.NET 生态唯一完整支持全链路 Native AOT 的 ORM：SQLite / PostgreSQL / MySQL 三方言发布验证全部通过（运行输出 `PalORM AOT verification PASSED`），无反射、无 IL Emit、无运行时代码生成。部署细节见 [docs/AOT部署指南.md](docs/AOT部署指南.md)。
 
-**三方言批量策略**。同一套 API 按方言自动选择最快路径：PG Binary COPY、MySQL BulkCopy（LOAD DATA，服务端关闭时自动回退多值 INSERT）、SQLite 多值 INSERT。单语句批量 UPDATE（PG `UPDATE FROM VALUES` / `UPDATE FROM UNNEST` / MySQL `UPDATE JOIN VALUES ROW`，8.0.19+ 低版本回退 CASE WHEN）；版本化实体（`[ConcurrencyCheck]`）在 PG/MySQL 能力支持时同样走版本化单语句（逐行 version 谓词，S6 探针 1000 行 PG 3.06× / MySQL 4.73×），能力不全回退 DbBatch 逐条。
+**三方言批量策略**。同一套 API 按方言自动选择最快路径：PG Binary COPY、MySQL BulkCopy（LOAD DATA，服务端关闭时自动回退多值 INSERT）、SQLite 行预编译 INSERT（单行语句缓存复用，探针实测对多值 3.5×）与 json_each 批删（键集合单参数服务端展开，探针实测对参数化 IN 15×、快于字面量内联 40%，ADR-R）。单语句批量 UPDATE（PG `UPDATE FROM VALUES` / `UPDATE FROM UNNEST` / MySQL `UPDATE JOIN VALUES ROW`，8.0.19+ 低版本回退 CASE WHEN）；版本化实体（`[ConcurrencyCheck]`）在 PG/MySQL 能力支持时同样走版本化单语句（逐行 version 谓词，S6 探针 1000 行 PG 3.06× / MySQL 4.73×），能力不全回退 DbBatch 逐条。
 
 **企业级横切开箱即用**。多租户列隔离（查询缓存 key 自动加租户前缀，跨租户命中不可能）、乐观锁、软删除、审计拦截器、读写分离（`ForRead`）、咨询锁、弹性重试 + 熔断（v5.4 起自动覆盖只读查询管线），无需样板代码。
 
@@ -80,7 +80,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **编译时类型诊断**         | ✓ 45 条（42 分析器 + 3 生成器），错误可跳转声明位置                             | ❌ 运行时失败                 | △ 迁移检查（设计时）                           | ❌ 运行时失败                    |
 | **编译时 SQL 预构建**     | ✓ Roslyn 源生成                                                 | ❌ 运行时拼接                 | △ 预编译查询（实验性）                          | ❌ 运行时表达式树                  |
 | **运行时反射**           | 零                                                            | △ 首次反射 + IL Emit 缓存     | △ 表达式树编译                              | ❌ 反射 + IL Emit             |
-| **三方言批量策略**         | ✓ COPY / BulkCopy / 多值 / `= ANY` 数组                          | ❌ 手写多值 SQL              | △ Provider 各异                         | △ BulkInsert 仅 SQL Server  |
+| **三方言批量策略**         | ✓ COPY / BulkCopy / 行预编译·多值 / `= ANY` 数组                | ❌ 手写多值 SQL              | △ Provider 各异                         | △ BulkInsert 仅 SQL Server  |
 | **单语句多行 UPDATE**    | ✓ FROM VALUES / UPDATE JOIN VALUES ROW / CASE WHEN           | ❌                       | ❌ ExecuteUpdate 仅按 WHERE 单值           | ❌                          |
 | **批量 UPSERT**       | ✓ `BulkMergeAsync`（ON CONFLICT / ON DUPLICATE KEY，冲突更新限定本租户） | ❌ 手写                    | ❌ 需 raw SQL                           | △ Merge 仅 SQL Server       |
 | **乐观锁**             | ✓ `[ConcurrencyCheck]` 自动；批量单语句（PG/MySQL，能力不全回退 DbBatch） | ❌ 手写                    | ✓ `RowVersion` 自动                     | ❌ 手写                       |
@@ -120,7 +120,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **目标框架**            | net11.0（单目标）                                                 | 多目标（netstandard2.0+）    | 多目标（net8+）                            | 多目标（netstandard2.0+）       |
 | **许可证**             | AGPL-3.0-only                                                | Apache-2.0              | MIT                                   | Apache-2.0                 |
 
-核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略（COPY / BulkCopy / 多值 / 数组）。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，且批量仅 SQL Server。
+核心差异：编译时生成 + 全链路 AOT 兼容 + 三方言批量策略（COPY / BulkCopy / 行预编译 / 数组）。Dapper 快但运行时反射；EF Core 功能完整但运行时重、AOT 仍实验性；RepoDb 同为微 ORM 但无源生成，且批量仅 SQL Server。
 
 <details>
 <summary><b>对比依据（各单元格出处）</b></summary>
@@ -336,7 +336,7 @@ await db.DeleteAsync<User>(alice.Id);
 ### 批量操作
 
 ```csharp
-// 批量插入（PG: Binary COPY / MySQL: BulkCopy 或多值 INSERT / SQLite: 多值 INSERT）
+// 批量插入（PG: Binary COPY / MySQL: BulkCopy 或多值 INSERT / SQLite: 行预编译批量）
 await db.BulkInsertAsync(users);
 
 // 批量更新（乐观锁实体：PG/MySQL 自动走版本化单语句，能力不全回退 DbBatch）

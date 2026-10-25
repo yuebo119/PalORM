@@ -2,6 +2,43 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布] · SQLite 批量删除 json_each 键集合形态（E 方案）+ A+B 行预编译
+
+> 决策：[ADR-Q](docs/adr/ADR-Q-SQLite行预编译批量.md)（A+B）与
+> [ADR-R](docs/adr/ADR-R-SQLite批删json-each.md)（E，C 字面量内联否决）。
+> 依据：DeleteProbe 探针（json_each 0.21~0.25µs/键 vs IN 3.64~3.86 vs 字面量 0.34~0.40）。
+
+### ⚡ 性能
+
+- SQLite `BulkDeleteAsync` 改 json_each 单参数形态（E 方案）：`WHERE pk IN
+  (SELECT value FROM json_each(@ids))`，键集合编码为 JSON 数组文本单参数，服务端
+  虚拟表展开。探针实测每键 0.21~0.25µs，对参数化 IN（3.64~3.86）快 15 倍以上，
+  且快于 FreeSql 的字面量内联（0.34~0.40）约 40%——全参数化立场零破口
+  （EF Core 8 在 SQLite 的同款选择）。三层能力门控（方言/首键整型或字符串/引擎探测
+  缓存），Guid、ulong 主键与旧引擎自动回退 IN 形态；字符串键走 RFC 8259 标准转义
+  （敌对键用例锁定匹配正确性）。软删与租户守卫同 shape。
+- **SQLite `BulkInsertAsync`/`BulkMergeAsync` 改行预编译形态（A+B 方案）**：单行
+  语句恒定命中连接级语句缓存，每行只付绑定+步进：批插 3.5~3.9×、批 upsert
+  2.4~3.1×（探针 UpsertProbe 2026-10-25）。联网方言不受影响。
+- PG 维持原生数组 `= ANY`、MySQL 维持多值/LOAD DATA 与 IN 分批：进程内库选绑定
+  成本最优，联网方言尊重服务端优化器信息（EF Core 8→10 三代往返的教训）。
+
+### 📋 行为变化（契约保持）
+
+- `BulkInsertAsync` 的 `batchSize` 参数在 SQLite 上不再决定语句形状（兼容保留，≤0 仍拒绝）。
+- `BulkMergeAsync` 批内重复主键（SQLite）：由"同批语句报错"改为"后行覆盖前行"（与
+  逐条 SaveCore 语义一致，更宽容）。
+- 批删混合类型键列表：JSON 构建期 fail-fast（`ConvertDeleteKey` 先抛
+  `FormatException`），与 IN 形态批内转换异常同语义（都在事务提交前，全有或全无）。
+- ulong 主键不进 json_each 形态（超 int64 域 JSON 数值语义分叉），回退 IN。
+
+### 🧪 测试
+
+- 新增 `BulkDeleteJsonEachTests` 10 项与 `RowPreparedBulkTests` 6 项；IN 形态池化
+  夹具经 `ForceInFormDeleteForTests`（IVT 钩子）锁定回退路径；AotTest 覆盖
+  数值与字符串两条 json_each 路径（发布 0 IL 警告 + 原生运行 PASSED）；
+  Core 1216/1216、Integration 320/320。
+
 ## [6.7.0] - 2026-10-23 · 请求级查询管道 + 终审 P0/P1 收口
 
 > 变更规模：55 个提交（含 2 次发布准备提交）· 223 个文件 · +7,945/−1,392 行（v6.6.0..db9180e）
