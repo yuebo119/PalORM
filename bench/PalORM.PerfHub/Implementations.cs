@@ -2034,9 +2034,20 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     public async Task TxBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(rows);
-        // 事务内批量提交与无事务批量插入同构（多值 VALUES 分批），不再走 TxInsertManyAsync
-        // 的 multi-exec——那是逐条提交语义的路径，10/100 条档专用。
+        // SQLite（2026-10-25 口径修正，与 BulkInsert/UpsertBatch 同理由）：事务内 multi-exec
+        // 是其单方言真实最快形态——下方"逐条提交语义"的否决理由只针对无事务场景，
+        // 本方法持有显式事务，multi-exec 的每条语句都参与该事务，提交语义不变。
         await using DbTransaction tran = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        if (dialect.Dialect == Dialect.Sqlite)
+        {
+            await conn.ExecuteAsync(
+                $"INSERT INTO {T} ({Cols}) VALUES (@Id,@Name,@Qty,@Price,@Marker)",
+                rows, tran).ConfigureAwait(false);
+            await tran.CommitAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        // 事务内批量提交与无事务批量插入同构（多值 VALUES 分批）。
         int batch = BulkSql.EffectiveBatchRows(dialect.Dialect);
         for (int start = 0; start < rows.Count; start += batch)
         {
