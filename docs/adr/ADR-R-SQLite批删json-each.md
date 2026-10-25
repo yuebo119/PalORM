@@ -40,15 +40,18 @@ opt-in；EF ≤7 的内联常量因计划缓存膨胀被废弃（#13617，当时
    语句文本跨批恒定、单参数批间只换 Value（R-UNNESTB 纪律同数组形态）。
 2. **C（否决）**：字面量内联不再保留为候选——慢于 E、破全参数化立场（注入面/
    语句文本膨胀/联网方言计划缓存污染）。账本表 2 关账。
-3. **三层能力门控**：方言 = SQLite + 首键（经 ConvertDeleteKey 转换后）整型 +
-   引擎探测（每 (TProvider, T) 缓存一次；旧 e_sqlite3 bundle 无 JSON1 时回退 IN）。
-   字符串/GUID 主键与复合主键回退 IN 形态（首版不覆盖，JSON 转义后续按需）。
+3. **三层能力门控**：方言 = SQLite + 首键（经 ConvertDeleteKey 转换后）整型或字符串
+   + 引擎探测（每 (TProvider, T) 缓存一次；旧 e_sqlite3 bundle 无 JSON1 时回退 IN）。
+   字符串键走 JSON 字符串 + RFC 8259 标准转义（转义正确性即匹配正确性，敌对键用例
+   锁定）；Guid/ulong/char/复合主键回退 IN 形态（Guid 在本仓 SQLite 绑定往返未验证；
+   ulong 超 int64 域）。
 4. **方言纪律（EF10 教训的适用面）**：PG 维持原生数组 ANY（优化器有数组统计）、
    MySQL 维持参数化 IN 分批（InnoDB 服务端计划交互）——进程内库选绑定成本最优，
    联网方言尊重服务端优化器信息，不全局跟风单一形态。
 5. **已知边界**：ulong 主键排除（超 int64 域 JSON 数值与引擎 INTEGER 语义分叉）；
-   混合类型键列表在 JSON 构建期 fail-fast（ConvertDeleteKey 先抛 FormatException），
-   与 IN 形态批内转换异常同语义（都在事务提交前，全有或全无）。
+   Guid 键回退 IN（SQLite 绑定往返未验证，验证后可纳入）；混合类型键列表在 JSON
+   构建期 fail-fast（ConvertDeleteKey 先抛 FormatException），与 IN 形态批内转换
+   异常同语义（都在事务提交前，全有或全无）。
 
 ## 后果
 

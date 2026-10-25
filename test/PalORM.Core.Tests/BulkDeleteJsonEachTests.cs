@@ -116,9 +116,47 @@ internal sealed class BulkDeleteJsonEachTests
     }
 
     [Test]
-    public async Task StringPk_FallsBackToInForm_StillCorrect()
+    public async Task StringPk_JsonEach_HostileKeys_RoundTripPrecisely()
     {
-        // 字符串主键不进 json_each（首键非整型），走 IN 形态——正确性不回退
+        // 字符串主键 v2 纳入 json_each：转义正确性是匹配正确性（JSON 走单参数，无注入面，
+        // 转义错 = 删错/漏删）。敌对键（引号/反斜杠/引号内嵌换行与制表/控制字符/中文）
+        // + 同形诱饵键（删除目标的转义近邻）不被误删
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        string[] hostile =
+        [
+            "he said \"hi\"",
+            "back\\slash",
+            "line\nbreak\ttab",
+            "ctrl\u0001char",
+            "换行中文键",
+            "plain",
+        ];
+        string[] decoys =
+        [
+            "he said \"hi\" x",
+            "back\\\\slash",
+            "line\nbreak\ttabX",
+            "plainx",
+        ];
+        var all = new List<JsonDelStringRow>(hostile.Length + decoys.Length);
+        int v = 1;
+        foreach (string id in hostile.Concat(decoys))
+            all.Add(new JsonDelStringRow { Id = id, V = v++ });
+        await session.BulkInsertAsync(all);
+
+        long deleted = await session.BulkDeleteAsync<JsonDelStringRow>(
+            hostile.Cast<object>().ToList());
+
+        await Assert.That(deleted).IsEqualTo(hostile.Length);
+        List<JsonDelStringRow> rest = await session.GetAllAsync<JsonDelStringRow>();
+        await Assert.That(rest.Count).IsEqualTo(decoys.Length);
+        await Assert.That(rest.Select(static r => r.Id).OrderBy(static s => s, StringComparer.Ordinal)
+            .SequenceEqual(decoys.OrderBy(static s => s, StringComparer.Ordinal))).IsTrue();
+    }
+
+    [Test]
+    public async Task StringPk_LargeList_JsonEachRoundTrip()
+    {
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
         var rows = new List<JsonDelStringRow>(2500);
         for (int i = 1; i <= 2500; i++) rows.Add(new JsonDelStringRow { Id = $"k{i}", V = i });
@@ -133,12 +171,13 @@ internal sealed class BulkDeleteJsonEachTests
     }
 
     [Test]
-    public async Task StringPk_MidBatchRogueKey_RollsBackAllBatches()
+    public async Task StringPk_ForcedInForm_MidBatchRogueKey_RollsBackAllBatches()
     {
         // IN 形态原子性锁定（关掉删除侧"中途失败整批回滚"无测试的缺口）：字符串主键
-        // 2500 键 = 999/批 ×3 批；第 1500 位（第 2 批内）混入 long → 批内绑定抛出
-        // → 事务回滚 → 首批已删的 999 行必须回来
+        // 默认已走 json_each，本测试经钩子强制 IN——2500 键 = 999/批 ×3 批；第 1500 位
+        //（第 2 批内）混入 long → 批内绑定抛出 → 事务回滚 → 首批已删的 999 行必须回来
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        DataSession<SqliteProvider>.ForceInFormDeleteForTests<JsonDelStringRow>();
         var rows = new List<JsonDelStringRow>(2500);
         for (int i = 1; i <= 2500; i++) rows.Add(new JsonDelStringRow { Id = $"k{i}", V = i });
         await session.BulkInsertAsync(rows);

@@ -394,9 +394,12 @@ public partial class DataSession<TProvider>
         }
 
         // 首键定型整表单（调用方已保证 keys.Count > 0）：混合类型列表的劣质键在 JSON
-        // 构建期 fail-fast 抛出，与 IN 形态的批内转换异常同语义——都在事务提交前抛，全有或全无
+        // 构建期 fail-fast 抛出，与 IN 形态的批内转换异常同语义——都在事务提交前抛，全有或全无。
+        // 整型走 JSON 数值；字符串走 JSON 字符串（标准转义，BINARY 排序规则两侧同源，
+        // 匹配语义与 IN 形态的 TEXT 参数逐位等价）。Guid/ulong/char 回退 IN
+        //（Guid 在 SQLite 的绑定往返未经本仓验证；ulong 超 int64 域）
         object firstKey = info.Crud.ConvertDeleteKey?.Invoke(keys[0]) ?? keys[0];
-        if (firstKey is not (long or int or short or byte or sbyte or ushort or uint))
+        if (firstKey is not (long or int or short or byte or sbyte or ushort or uint or string))
         {
             CacheJsonEachSupport<T>(false);
             return false;
@@ -516,9 +519,9 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>键集合的 JSON 数组文本（E 方案）——手写 StringBuilder + 不变文化（AOT 零反射，
-    /// DeleteProbe 已验证形态）。非整型键 fail-fast 抛 <see cref="InvalidOperationException"/>：
-    /// 与 IN 形态的批内转换异常同语义（都在首个事务提交前抛，全有或全无）。ulong 故意排除
-    ///（超出 SQLite int64 域时 JSON 数值与引擎 INTEGER 语义分叉）。</summary>
+    /// DeleteProbe 已验证形态）。非整型/字符串键 fail-fast 抛 <see cref="InvalidOperationException"/>：
+    /// 与 IN 形态的批内转换异常同语义（都在首个事务提交前抛，全有或全无）。ulong 与 Guid 故意
+    /// 排除（前者超 SQLite int64 域；后者在本仓 SQLite 绑定往返未验证，均回退 IN 形态）。</summary>
     private static string BuildJsonKeyArrayText(
         IReadOnlyList<object> keys, int start, int length,
         Func<object, object?>? convertKey, string typeName)
@@ -541,13 +544,50 @@ public partial class DataSession<TProvider>
                 sbyte v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ushort v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 uint v => v.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                // 字符串键：JSON 字符串 + 标准转义。转义正确性是匹配正确性（不是注入安全
+                //——整段 JSON 走单参数）；转义错 → 键匹配错 → 删错/漏删，故敌对键用例锁定
+                string v => ToJsonString(v),
                 _ => throw new InvalidOperationException(
-                    $"Type '{typeName}' json_each bulk delete requires integer keys; "
+                    $"Type '{typeName}' json_each bulk delete requires integer or string keys; "
                     + $"key #{start + i} is '{key.GetType().Name}'."),
             });
         }
 
         return sb.Append(']').ToString();
+    }
+
+    /// <summary>JSON 字符串字面量（含双引号）——RFC 8259 最小转义：<c>"</c> 与 <c>\</c>
+    /// 加控制字符（&lt; U+0020）。SQLite 的 JSON 解析器接受标准转义序列；非 ASCII 以
+    /// UTF-8 原样直通（引擎与参数绑定两侧同编码）。</summary>
+    private static string ToJsonString(string value)
+    {
+        var sb = new System.Text.StringBuilder(value.Length + 2).Append('"');
+        foreach (char c in value)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < ' ')
+                    {
+                        sb.Append("\\u").Append(((int)c).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        sb.Append(c);
+                    }
+
+                    break;
+            }
+        }
+
+        return sb.Append('"').ToString();
     }
 
     /// <summary>数组形态的参数名——与 <see cref="IDbProvider.GetParameterPlaceholder"/> 的
