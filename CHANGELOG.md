@@ -2,6 +2,37 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布] · SQLite 批量插入/UPSERT 行预编译路由（A+B 方案）
+
+> 决策：[ADR-Q](docs/adr/ADR-Q-SQLite行预编译批量.md)（2026-10-25 用户裁决 A+B 打包立项，字面量内联 C 单独裁决）。
+> 依据：FreeSql 交叉基准 SQLite 批量族 7 格胜出归因 + UpsertProbe 探针（预编译单行 2.2~2.6µs/行 vs 多值 8.6~9.4µs/行）。
+
+### ⚡ 性能
+
+- **SQLite `BulkInsertAsync` 改行预编译形态**：单行 INSERT 语句 + 列数个参数一次建立挂命令，
+  事务内逐行只写 Value（命令文本恒定命中 Microsoft.Data.Sqlite 连接级语句缓存）。
+  探针实测每行 2.2~2.6µs，对原多值形态 3.5~3.9×；`TxBulkInsert` 场景同受益。
+- **SQLite `BulkMergeAsync`（BatchUpsert 路径）改行预编译形态**：单行 `INSERT … ON CONFLICT
+  DO UPDATE` 与多值形态同源 SQL（租户守卫同 shape 机器），探针实测 2.4~4.3µs/行，
+  对原多值形态 2.4~3.1×。
+- 联网方言不受影响：MySQL 维持多值/LOAD DATA、PG 维持 COPY/UNNEST（逐行执行在联网
+  方言是 RTT 灾难）。
+
+### 📋 行为变化（契约保持）
+
+- `BulkInsertAsync` 的 `batchSize` 参数在 SQLite 上不再决定语句形状（兼容保留，≤0 仍拒绝）。
+- `BulkMergeAsync` 批内重复主键：SQLite 由"同批语句报错"改为"后行覆盖前行"（与逐条
+  SaveCore 语义一致，更宽容；多值批的同语句限制不再适用）。
+- 批插分配 +9%（772 vs 704 B/行，逐行执行的驱动层分配），登记为纯时延项的已知取舍。
+
+### 🧪 测试
+
+- 新增 `RowPreparedBulkTests` 6 项：2500 行往返、整批原子性（中途约束失败全回滚）、
+  外部事务回滚、batchSize 兼容语义、upsert 插入/更新双分支、批内重复主键宽容语义。
+- 既有批量族（BulkBatchLimitTests/UpsertTenantGuardTests/BulkMergeDefaultKeyBatchTests/
+  BulkCleanupTests sqlite 变体）全部经新路径执行：Core 675/675、Integration 320/320、
+  AotTest 发布 0 IL 警告 + 原生运行 PASSED。
+
 ## [6.7.0] - 2026-10-23 · 请求级查询管道 + 终审 P0/P1 收口
 
 > 变更规模：55 个提交（含 2 次发布准备提交）· 223 个文件 · +7,945/−1,392 行（v6.6.0..db9180e）

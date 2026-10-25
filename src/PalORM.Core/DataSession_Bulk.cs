@@ -22,7 +22,8 @@ public partial class DataSession<TProvider>
     }
 
     /// <summary>批量插入——委托 Provider 使用源生成 InsertColumns 与 binder，并复用会话事务。
-    /// <paramref name="batchSize"/> 为显式批宽（PG 为每次 COPY 行数，其余为每批多值 INSERT/LOAD 行数）。</summary>
+    /// <paramref name="batchSize"/> 为显式批宽（PG 为每次 COPY 行数，MySQL 为每批多值 INSERT/LOAD 行数；
+    /// SQLite 行预编译形态不分批，该参数兼容保留、不决定语句形状，2026-10-25 ADR-Q）。</summary>
     /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径）——与本家族
     /// BulkUpdate/BulkDelete 同口径；BulkMerge 例外（返回处理实体数，跨方言可预测，见其
     /// returns 说明）。</returns>
@@ -2141,6 +2142,20 @@ public partial class DataSession<TProvider>
             BuildUpsertSqlShape(typeof(T), tableName, metadata, pkColumn, excludeTenantColumn));
         bool tenantGuarded = HasTenantFilter<T>();
 
+        // B 方案（2026-10-25）：SQLite 行预编译形态——单行 INSERT … ON CONFLICT 语句
+        // 恒定复用（命中连接级语句缓存），每行只写 Value。探针实测 2.4~4.3µs/行，对
+        // 多值形态 8.6~10.7µs/行（UpsertProbe 2026-10-25）。SQL 与多值形态同源
+        // （BuildUpsertBatchSql rowCount=1，租户守卫已在 shape 内）。联网方言不进此
+        // 分支（逐行 = N 次 RTT）。
+        // 语义差异（相对多值批，登记为已知边界）：多值批对"同批内同一行更新两次"报错
+        //（SQLite ON CONFLICT 同语句限制），行预编译逐行执行与 SaveCore 逐条语义一致，
+        // 后行覆盖前行——更宽容，无新增限制。
+        if (TProvider.Dialect == SqlDialect.Sqlite)
+        {
+            return await ExecuteRowPreparedUpsertAsync(
+                transaction, entities, metadata, shape, tenantGuarded, ct).ConfigureAwait(false);
+        }
+
         // UNNEST 阶段 B（2026-10-02）：PG 数组形态——INSERT … SELECT * FROM UNNEST(@u0,…) + 冲突子句。
         // 能力检测与 UPDATE 路径同纪律（生成物三件套 + Provider 接受全部列的元素类型）。
         // 批内重复主键语义与既有形态一致：PG 对同语句影响同一行两次明确报错（见方法级文档）。
@@ -2202,6 +2217,67 @@ public partial class DataSession<TProvider>
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             processed += rowCount;
         }
+        return processed;
+    }
+
+    /// <summary>B 方案（2026-10-25）：SQLite 批量 UPSERT 的行预编译形态——单行
+    /// INSERT … ON CONFLICT 语句 + [列数+租户?] 参数池一次建立挂命令，事务内逐行
+    /// 只写 Value。命令文本恒定命中 Microsoft.Data.Sqlite 连接级语句缓存。
+    /// <para>SQL 与多值形态同源：<see cref="BuildUpsertBatchSql"/>(1, …) 复用同一
+    /// shape 机器（冲突子句 + 租户守卫），占位符 @pN 与
+    /// <see cref="CreateUpsertParameterPool{T}"/> 的命名契约对齐。</para>
+    /// <para>池布局镜像批路径：[columnCount 行参数][租户参数?]——租户参数值建池时
+    /// 一次写入（与批路径的 <c>TProvider.CreateParameter(_tenantParameterName, _tenantId)</c>
+    /// 同源），行 binder 恒从下标 0 写入。</para>
+    /// <para>旧生成器程序集（<c>BindUpsertValues</c> 为 null）经 scratch 命令逐行
+    /// 绑定后值拷贝进池（<see cref="BindUpsertRowViaScratch"/>），形态与批路径回退一致。</para></summary>
+    private async Task<long> ExecuteRowPreparedUpsertAsync<T>(
+        DbTransaction transaction,
+        List<T> entities,
+        CrudMetadata metadata,
+        UpsertSqlShape shape,
+        bool tenantGuarded,
+        CancellationToken ct) where T : class, new()
+    {
+        if (entities.Count == 0) return 0;
+        int columnCount = metadata.UpsertColumns.Count;
+        // 单行语句（含租户守卫的冲突子句）——每次调用构建一次，行长 ~百字符级，
+        // 相对 N 次行执行可忽略，不做跨调用缓存（shape 含会话态租户守卫，缓存键复杂度不值）
+        string sql = BuildUpsertBatchSql(1, columnCount, shape);
+
+        await using DbCommand cmd = CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
+        cmd.CommandText = sql;
+
+        int tenantParams = CountTenantParams(tenantGuarded);
+        // PARAM-REUSE-OK[pool:pool] 池建后只写 Value（BindUpsertValues/scratch 契约），无集合变更
+        DbParameter[] pool = CreateUpsertParameterPool<T>(cmd, 1, columnCount, tenantGuarded);
+        metadata.InitUpsertParameters?.Invoke(pool, 0);
+        for (int i = 0; i < columnCount + tenantParams; i++)
+        {
+            cmd.Parameters.Add(pool[i]);
+        }
+
+        Action<DbParameter[], object, int>? upsertValuesBinder = metadata.BindUpsertValues;
+        await using DbCommand? scratch = upsertValuesBinder is null ? CreateCommand() : null;
+
+        long processed = 0;
+        foreach (T entity in entities)
+        {
+            if (upsertValuesBinder is not null)
+            {
+                upsertValuesBinder(pool, entity, 0);
+            }
+            else
+            {
+                BindUpsertRowViaScratch(scratch!, metadata, entity, pool, 0, columnCount);
+            }
+
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            processed++;
+        }
+
         return processed;
     }
 

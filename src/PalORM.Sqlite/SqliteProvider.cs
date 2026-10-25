@@ -310,20 +310,26 @@ public sealed class SqliteProvider : IDbProvider
         => exception is UniqueConstraintViolationException
             or SqliteException { SqliteErrorCode: 19, SqliteExtendedErrorCode: 2067 or 1555 };
 
-    /// <summary>批量插入——委托共享多值 INSERT 骨架；SQLite 单语句参数上限 999（保守值：
-    /// 引擎支持 32766 但 PerfHub 同轮 A/B 实测大批参数使批量劣化 6~16×，见
-    /// <see cref="SqlLimits.MaxBindParametersFor"/> 的证伪记录）。</summary>
+    /// <summary>批量插入——A 方案（2026-10-25）：行预编译形态，单行 INSERT 语句 +
+    /// 列数个参数一次建立，事务内逐行只写 Value（命令文本恒定命中连接级语句缓存）。
+    /// 探针实测每行 2.2~2.6µs，对多值形态 8.6~9.4µs（UpsertProbe 2026-10-25）。
+    /// <para><b>batchSize 语义变更</b>：不再决定语句形状（兼容保留，≤0 仍拒绝）；
+    /// 整批一个事务，全有或全无。联网方言的多值/加载器形态不受影响（MySQL 走
+    /// <see cref="MultiValueBulkInsert"/>、PG 走 Binary COPY）。</para>
+    /// <para><b>999 参数上限的适用面</b>：行预编译语句参数数恒为列数，单语句上限
+    /// 不再约束批宽；<see cref="SqlLimits.MaxBindParametersFor"/> 的大值证伪结论
+    /// （大批参数使多值语句劣化 6~16×）针对多值形态，与本路径无冲突。</para></summary>
     /// <para>r6-N2：隔离级别参数仅为接口形态同步（SQLite 事务隔离单一 Serializable，
     /// BeginTransactionAsync 忽略隔离参数差异；r9-S4：本调用点走 BulkContext 默认值（ReadCommitted），非透传——行为中性，措辞订正）。</para>
     public static Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct,
         System.Data.IsolationLevel isolationLevel = System.Data.IsolationLevel.ReadCommitted)
         where T : class, new()
-        => MultiValueBulkInsert.ExecuteAsync(
+        => RowPreparedBulkInsert.ExecuteAsync(
             conn, transaction, entities,
             new BulkContext(
                 batchSize,
                 MaxParametersPerStatement: 999,
-                QuoteIdentifier, CreateParameter, commandTimeoutSeconds),
+                QuoteIdentifier, CreateParameter, commandTimeoutSeconds, isolationLevel),
             ct);
 }
