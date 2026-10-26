@@ -174,6 +174,14 @@ internal static class Program
                             {
                                 throw new InvalidOperationException(string.Join(" | ", validationMessages));
                             }
+
+                            // 写后映射校验（每方言一次，不计入测量）：改值 → 批量更新/UPSERT →
+                            // 读回比对 → 快照复原。读校验只覆盖 SELECT 路径；批量写的列序由
+                            // pseudo 表映射/语句构建决定，错位会静默写入错误数据（计时仍正常）。
+                            if (repoDb is not null)
+                            {
+                                await ValidateRepoDbWritesAsync(dialect, conn, repoDb, rows).ConfigureAwait(false);
+                            }
                         }
 
                         foreach (Op op in BuildOperations(dialect, rows, keys, whereInIds, bulkDeleteRounds))
@@ -222,6 +230,58 @@ internal static class Program
             .ConfigureAwait(false);
         Console.WriteLine($"WROTE {path}");
         return 0;
+    }
+
+    /// <summary>写后映射校验（RepoDb 臂，每方言一次，不计入测量）：用改过值的种子行走
+    /// BulkUpdate 与 UpsertBatch 两条写路径，读回逐字段比对后从快照复原。
+    /// <para>为什么需要：读校验只覆盖 SELECT；批量写的列序由 pseudo 表映射与语句构建决定，
+    /// 错位会静默写入错误数据而计时照常。BulkUpdate 与 UpsertBatch 走不同代码路径
+    ///（前者 UPDATE，后者 INSERT … ON CONFLICT / ON DUPLICATE KEY），两条都要验。</para>
+    /// <para>限定 RepoDb：其余臂（ADO/Dapper/FreeSql/PalORM）的写后校验是历史批次的已知缺口，
+    /// 见 ADR-S「已知边界」，不在此扩大改动面。</para></summary>
+    private static async Task ValidateRepoDbWritesAsync(
+        Dialect dialect, DbConnection conn, IPerfImplementation repoDb, int rows)
+    {
+        int count = Math.Min(rows, 200);
+        List<S1Row> modified = Dataset.SeedRows(count, 0);
+        foreach (S1Row row in modified)
+        {
+            row.Name = "audit-" + row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            row.Qty = (int)(row.Id % 97);
+            row.Marker = row.Id * 3;
+        }
+
+        static bool Same(S1Row? actual, S1Row expected)
+            => actual is not null && actual.Name == expected.Name && actual.Qty == expected.Qty
+                && actual.Price == expected.Price && actual.Marker == expected.Marker;
+
+        // 路径 1：BulkUpdate
+        await repoDb.BulkUpdateAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
+        S1Row? afterUpdate = await repoDb.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        bool updateOk = Same(afterUpdate, modified[0]);
+        await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
+
+        // 路径 2：UpsertBatch（对已存在主键段整批 UPSERT，值同样改成审计值）
+        await repoDb.UpsertBatchAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
+        S1Row? afterUpsert = await repoDb.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        bool upsertOk = Same(afterUpsert, modified[0]);
+        await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
+
+        if (!updateOk || !upsertOk)
+        {
+            throw new InvalidOperationException(
+                $"RepoDb 写映射校验失败：BulkUpdate={Describe(afterUpdate, modified[0])} "
+                + $"UpsertBatch={Describe(afterUpsert, modified[0])}");
+        }
+
+        Console.WriteLine("    RepoDb 写映射校验 OK（BulkUpdate + UpsertBatch）");
+
+        static string Describe(S1Row? actual, S1Row expected)
+            => actual is null
+                ? "null"
+                : $"{actual.Name}/{actual.Qty}/{actual.Price}/{actual.Marker}（期望 {expected.Name}/{expected.Qty}/{expected.Price}/{expected.Marker}）";
     }
 
     private static Dialect ParseDialect(string value) => value.ToLowerInvariant() switch

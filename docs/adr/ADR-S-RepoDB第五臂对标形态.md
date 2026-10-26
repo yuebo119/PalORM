@@ -20,29 +20,35 @@ S1Row/EnumRow 携带 PalORM 特性（`[Key]`/`[Column]`），RepoDB 不可见。
 接管映射。枚举列显式挂 `IPropertyHandler<string, OrderStatus>`：`perf_enum.Status` 三方言均为
 TEXT，而 RepoDB 的 `EnumDefaultDatabaseType`（默认 String）只设 DbType、不做值转换。
 
-### D2 连接：入口先解包 `CountingConnection`
+### D2 连接：用共享连接，`Unwrap` 只作防御
 
-RepoDB 的 DbSetting / DbHelper / StatementBuilder **按连接运行时类型查表**。Measure 传入的是
-`CountingConnection` 装饰器，直接使用会让 provider 注册全部落空（实测 PG BulkUpdate 因取不到
-主键字段抛 NRE）。故每个方法入口 `CountingConnection.Unwrap(conn)` 到驱动连接再用；BulkOperations
-本来也要求 `MySqlConnection` / `NpgsqlConnection` 具体类型，与 ADO 地板的 COPY/BulkCopy 同法。
+RepoDB 的 DbSetting/DbHelper/StatementBuilder 按连接运行时类型查表，因此本臂入口调用
+`CountingConnection.Unwrap`。**审计更正（2026-10-26 复核）**：CrossBench 的 `Measure.SingleAsync`
+传入的是裸驱动连接（包装只发生在 PerfHub 的并行测量路径），所以该调用在交叉批上是直通，不是
+任何问题的解。保留它的唯一理由是 BulkOperations 的 CAST（`MySqlConnection` / `NpgsqlConnection`）
+要求具体类型。**MySQL 方括号 SQL 与 `MySqlParameter` 强转的真实解因是 D6 的缓存清理，不是解包。**
 
 ### D3 批量：按操作取优，不统一押注扩展包
 
 RepoDB 的批量有两条互斥路径：Core 的多值语句（`InsertAll`/`UpdateAll`/`DeleteAll`/`MergeAll`）与
 官方 `*.BulkOperations` 扩展包（MySqlBulkCopy=LOAD DATA / NpgsqlBinaryImporter=COPY，均经 pseudo
-暂存表）。同批 A/B 实测（2000 行，MySQL，两遍）：
+暂存表）。同批 A/B 实测（2000 行，MySQL）：
 
 | 操作 | Core | BulkOperations | 取 |
 |---|---:|---:|---|
 | BulkInsert | 17.3~18.3 ms | **11.3~11.7 ms** | BulkOperations |
-| BulkUpdate | 368.9~370.1 ms | **160.9~168.1 ms** | BulkOperations |
-| BulkDelete | **26.2~33.1 ms** | 150.7~156.8 ms | Core |
-| UpsertBatch | 765.3~788.4 ms | **152.5~158.9 ms** | BulkOperations |
+| BulkUpdate | 368.9~387.3 ms | **153~160 ms** | BulkOperations |
+| BulkDelete | **26.7~42.6 ms** | 150.7~157.1 ms | Core |
+| UpsertBatch | 765.3~1087 ms | **152.5~159.1 ms** | BulkOperations |
 
-结论：删除用 IN 列不占暂存表便宜（pseudo 表三次往返 + DDL 是纯开销），其余三项扩展包明显更快。
+（异步 API 与同步探针两套口径并列，结论一致。）删除用 IN 列不占暂存表便宜（pseudo 表三次往返 +
+DDL 是纯开销），其余三项扩展包明显更快。MySQL 的 pseudo 表类型再实测：`Auto`（2000 行落到 Memory
+临时表）与 `Physical` 在 BulkUpdate 上是 158.0 对 152.9 ms（3% 差在噪声带内），BulkMerge 是
+199.4 对 159.1 ms（Auto 样本散布 151~252 更大）；保持官方默认 `Auto`。
+
 SQLite 无 BulkOperations 包，全部走 Core；批宽按 `SqLiteDbSetting.MaxParameterCount=999 ÷ 5 列 = 199`，
-与 ADO 地板 `BulkSql.EffectiveBatchRows` 同口径。MySQL/PG 的 Core 批宽用 `BulkSql.BatchRows=1000`。
+与 ADO 地板 `BulkSql.EffectiveBatchRows` 同口径。MySQL/PG 的 Core 批宽 1000 / 419（PG 的
+`MaxParameterCount=2098` ÷ 5，避免内部再拆）。
 
 ### D4 PG 的 BulkUpdate/BulkMerge 停用（上游缺陷，非度量选择）
 
@@ -50,8 +56,51 @@ RepoDB 1.17.0 的 PG BulkOperations 在**目标表的键列不是 identity** 时
 `GetUpdateCommandText` / `GetMergeCommandText` 内 `identityField.GetHashCode()` 未判空 →
 `NullReferenceException`（源码 `NpgsqlText.cs:938` / 对应 Merge 分支）。perf_s1 的 `Id` 是显式
 主键（`[Key(AutoIncrement=false)]`），映射层无法规避（标 Identity 会让 INSERT 跳过 Id 列）。
-故 PG 的 BulkUpdate / UpsertBatch 退回 Core（`UpdateAll` / `MergeAll`），并在臂内注释记录原因。
-这是被测库的真实能力边界，不构成对 RepoDB 的"手写 SQL 替代"。
+
+**已排除的替代解释（干净进程探针复核）**：新建 `perf_s1_probe` 表、裸 `NpgsqlConnection`、
+`DbFieldCache.GetPrimary()=Id` / `GetIdentity()=null`、先 `InsertAll` 2000 行成功，随后
+`BulkUpdate` 与 `BulkMerge` 仍各自 NRE；`BinaryBulkUpdate` / `BinaryBulkMerge` 在源码里已标
+`[Obsolete]` 且内部委托给同一 `BulkUpdate`/`BulkMerge`，无绕行路径。故 PG 这两项退回 Core
+（`UpdateAll` / `MergeAll`），并在臂内注释记录原因。
+
+### D7 读路径分配与形态对齐（审计修正，2026-10-26）
+
+初版读路径有三处与本臂最优形态有差，已修：
+
+| 位置 | 初版 | 修正 | 依据（同表同连接实测中位） |
+|---|---|---|---|
+| GetByKey | `QueryAsync<T,TWhat>` + `FirstOrDefault` | → `QueryFirstAsync<T,TWhat>`（去 List 聚合） | 前者内部先聚成 List 再取首元素；Dapper 臂用 `QueryFirstOrDefaultAsync` 直接返回 T |
+| GetByKey（进一步） | `QueryFirstAsync<T,TWhat>(id)` key 直传 | → `QueryFirstAsync<T>(new QueryField("Id", id))` | key 直传要先解析主键字段名（PrimaryCache + PropertyCache 查找 + 主键守卫）；显式 QueryField 跳过。**同批交替 A/B（1200 次、A/B 交替取中位，消除顺序效应）**：SQLite −7.7%，MySQL −0.6%，PG +0.8%——SQLite 稳定更优，联网方言等价 |
+| QueryAll / GetAllAsync | `[.. rows]` | `rows as List<S1Row> ?? [.. rows]` | RepoDB 的 `QueryAllAsync` 内部已是 List，再复制一遍纯浪费；Dapper 臂用 `AsList()` 零复制 |
+
+基准批实测（SQLite 2000）：QueryAll 分配 388KB → 381KB；GetByKey 5.15KB → 4.68KB、时延
+27.5µs → 25.8µs。`BuildGetByKeySql` / `BuildComplexQuerySql` 原返回空串（静默假值），一并改为
+显式 `NotSupportedException`——CrossBench 操作集不含 Build 组，与 FreeSql 臂的未覆盖项同口径。
+
+结果之外，基准确立一条判读纪律并据此复核：MySQL 的 `GetByKey` 在修正前后两批里从 201.3µs 抬到
+230.7µs（R/ADO 1.14），但同批其它四臂漂移只有 ±2.6%，复测（独立批）RepoDb 稳定 230µs 而 ADO
+地板本身摆 203→221µs——**属分母漂移，不是形态回归**；交替 A/B 进一步确认两形态在联网方言等价。
+判读顺序仍为「分母漂移 × 噪声带 × 真 FAIL」。
+
+已核对无需改的项：映射（FluentMapper + Primary，不设 Identity 正确——Id 是显式值）、
+`identityBehavior` 默认 `KeepIdentity`（显式 Id 得以保留）、异步 API 为真 async（非 Task.Run 包装）、
+`DeleteAll` 内部按 `MaxParameterCount` 分批且超限自动开事务（与 ADO 地板同形态）、
+MySQL 的 pseudo 表类型保持官方默认 `Auto`（Physical 在 BulkUpdate 上只快 3%，落在噪声带内）。
+
+### 已知边界
+
+- **单批尖峰须复测**：审计轮的第三个完整批（`crossbench-20261026-112047.json`）里 `PG Insert 2000`
+  出现 26.7ms（R/ADO 19.87），而同一操作 20000 档只有 1.42ms（大档反而快 19 倍即异常），该格
+  ErrorRatio 8.9% 也显著高于同批其它格（1~2%）。独立复测（`--ops Insert` 两档）得 1436~1500µs，
+  与地板 1416~1421 持平。判为单批尖峰，按 B100 以三批窗口中位吸收。
+- **写后映射校验只覆盖 RepoDb 臂**（BulkUpdate + UpsertBatch 两条写路径，改值 → 读回逐字段比对
+  → 快照复原）；其余四臂只有读校验，写后校验是历史批次遗留缺口。
+- **枚举 PropertyHandler** 每行读写各一次转换调用；RepoDB 无类型级 enum→string 的等价配置
+  （`EnumDefaultDatabaseType` 只给 DbType 不转值），当前形态与 FreeSql 的 `MapType(typeof(string))`
+  同为"逐行转换"，口径一致。
+- **跨方言缓存清理**（D6）是基准夹具的隔离措施，不是产品用法；真实应用一进程一方言，不会触发。
+- MySQL 的 `BulkInsert` 走 `MySqlBulkCopy`（LOAD DATA），连接串必须带 `AllowLoadLocalInfile`，
+  由 Runner 的 `MySqlConnString.WithLocalInfile` 统一追加，四臂同口径。
 
 ### D5 事务与读路径
 

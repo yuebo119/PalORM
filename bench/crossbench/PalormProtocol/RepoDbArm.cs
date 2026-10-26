@@ -15,7 +15,8 @@ namespace PalORM.PerfHub;
 /// （编译期构建行物化委托），传原生实体而非 DTO 投影。</item>
 /// <item><b>批量</b>：Insert/Update/Merge 走官方 <c>*.BulkOperations</c> 扩展包（MySqlBulkCopy = LOAD DATA /
 /// NpgsqlBinaryImporter = COPY BINARY，均经 pseudo 暂存表）；Delete 走 Core 的 <c>DeleteAll</c>（主键 IN）——
-/// 同批实测 pseudo 表形态在 2000 行档慢 5.9×（156.8ms vs 26.6ms，MySQL），故按操作取优而非统一用扩展包。
+/// 同批实测 pseudo 表形态在 2000 行档慢 3.7~5.9×（异步 API 26.6ms 对 156.8ms；同步探针 42.6 对 156.2，
+/// MySQL），故按操作取优而非统一用扩展包。
 /// SQLite 无 BulkOperations 包，全部走 Core（InsertAll 多值 / UpdateAll / MergeAll→Upsert / DeleteAll），
 /// 批宽按 <c>SqLiteDbSetting.MaxParameterCount=999</c> ÷ 5 列 = 199。</item>
 /// <item><b>UPSERT</b>：MySQL/PG 用 <c>BulkMerge</c>；SQLite 用 <c>MergeAll</c>——其 DbSetting
@@ -23,10 +24,12 @@ namespace PalORM.PerfHub;
 /// 由 MergeAll 的 IsUseUpsert 分支绕过）。</item>
 /// <item><b>事务</b>：扩展方法直接接 <c>IDbTransaction</c>（BulkOperations 要求 provider 具体事务类型），
 /// 与 ADO 地板同形态——无需 FreeSql 那样的 WithTransaction 绑定。</item>
-/// <item><b>连接解包（必须）</b>：RepoDB 的 DbSetting/DbHelper/StatementBuilder 按<b>连接运行时类型</b>查表，
-/// Measure 传入的 <see cref="CountingConnection"/> 装饰器会让 provider 注册全部落空（实测 PG BulkUpdate
-/// 因拿不到主键字段抛 NRE）。故每个入口先 <see cref="CountingConnection.Unwrap"/> 到驱动连接再用，
-/// 与 ADO 地板的 COPY/BulkCopy 同法（该路径往返数不进维度 8）。</item>
+/// <item><b>连接</b>：用传入的共享连接（Dapper 臂口径）。入口的 <see cref="CountingConnection.Unwrap"/>
+/// 是对 PerfHub 并行测量路径（会包装 CountingConnection）的防御——CrossBench 的 Measure 传的是裸驱动
+/// 连接，此处实为直通；BulkOperations 的 CAST 前必须先解包，故保留。</item>
+/// <item><b>读路径分配</b>（2026-10-26 审计修正）：主键直查用 <c>QueryFirstAsync&lt;T, TWhat&gt;</c>
+/// （QueryAsync + FirstOrDefault 会先聚成 List）；<c>QueryAllAsync</c> 返回的已是 List，
+/// 直接复用不复制——两条都对齐 Dapper 臂的 <c>QueryFirstOrDefaultAsync</c> / <c>AsList()</c> 口径。</item>
 /// </list></summary>
 internal sealed class RepoDbArm : IPerfImplementation
 {
@@ -37,8 +40,9 @@ internal sealed class RepoDbArm : IPerfImplementation
     /// 与 ADO 地板的 <c>BulkSql.EffectiveBatchRows</c> 同口径。</summary>
     private const int SqliteBatchRows = 199;
 
-    /// <summary>MySQL/PG 的 Core 多值批宽——与 ADO 地板的 <c>BulkSql.BatchRows</c> 同口径。</summary>
-    private const int RemoteBatchRows = 1000;
+    /// <summary>MySQL/PG 的 Core 批宽。PG 的 <c>MaxParameterCount=2098</c>（5 列 → 419 行/批），
+    /// 传 419 避免 RepoDB 内部再按上限拆；MySQL 的 65535 上限下 1000 行/批与 ADO 地板同档。</summary>
+    private static int RemoteBatchRows(Dialect d) => d == Dialect.PostgreSql ? 419 : 1000;
 
     private readonly Dialect _dialect;
 
@@ -91,13 +95,24 @@ internal sealed class RepoDbArm : IPerfImplementation
 
     // ── 读路径 ──
 
-    /// <summary>主键直查——RepoDB 的 key 直传形态（<c>QueryAsync&lt;T, TWhat&gt;</c>，
-    /// 内部 WhatToQueryGroup 生成参数化 <c>WHERE Id = @Id</c>）。</summary>
+    /// <summary>主键直查——用显式 <c>QueryField</c>，不用 key 直传 <c>QueryFirstAsync&lt;T, TWhat&gt;(id)</c>。
+    /// <para><b>为什么</b>：key 直传（RepoDB 文档的主键查询示例）内部先
+    /// <c>GetAndGuardPrimaryKeyOrIdentityKey</c> 解析主键字段名（PrimaryCache 与 PropertyCache 各一次
+    /// 查找 + 主键守卫）；显式 QueryField 直接给定 <c>WHERE Id = @Id</c>，跳过这一步。同表同连接
+    /// 600 次中位实测：SQLite 22.4µs 对 27.1µs（快 17%），MySQL 296 对 305µs，PG 297 对 298µs
+    /// （联网方言被往返掩盖）。语义等价，均为参数化主键等式。</para>
+    /// <para>未命中时 QueryFirst 抛 EmptyException，catch 后返回 null 与其他臂语义对齐。</para></summary>
     public async Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
     {
-        IEnumerable<S1Row> rows = await Db(conn).QueryAsync<S1Row, long>(id, cancellationToken: ct)
-            .ConfigureAwait(false);
-        return rows.FirstOrDefault();
+        try
+        {
+            return await Db(conn).QueryFirstAsync<S1Row>(new QueryField("Id", id), cancellationToken: ct)
+                .ConfigureAwait(false);
+        }
+        catch (RepoDb.Exceptions.EmptyException)
+        {
+            return null;
+        }
     }
 
     public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
@@ -107,11 +122,7 @@ internal sealed class RepoDbArm : IPerfImplementation
         => throw new NotSupportedException("GetByKeySession 不在本次子集内");
 
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
-    {
-        IEnumerable<S1Row> rows = await Db(conn).QueryAllAsync<S1Row>(cancellationToken: ct)
-            .ConfigureAwait(false);
-        return [.. rows];
-    }
+        => AsList(await Db(conn).QueryAllAsync<S1Row>(cancellationToken: ct).ConfigureAwait(false));
 
     public Task<long> StreamAllAsync(DbConnection conn, Func<S1Row, ValueTask> onRow, CancellationToken ct)
         => throw new NotSupportedException("StreamAll 不在本次子集内");
@@ -193,7 +204,7 @@ internal sealed class RepoDbArm : IPerfImplementation
                 return await ((MySqlConnection)db).BulkMergeAsync(rows, cancellationToken: ct).ConfigureAwait(false);
             case Dialect.PostgreSql:
                 // 同 BulkUpdate：BulkMerge 的 GetMergeCommandText 也在 identityField=null 时 NRE（1.17.0 上游缺陷）
-                return await db.MergeAllAsync(rows, batchSize: RemoteBatchRows, cancellationToken: ct)
+                return await db.MergeAllAsync(rows, batchSize: RemoteBatchRows(_dialect), cancellationToken: ct)
                     .ConfigureAwait(false);
             default:
                 throw new ArgumentOutOfRangeException(nameof(_dialect), _dialect, null);
@@ -202,9 +213,13 @@ internal sealed class RepoDbArm : IPerfImplementation
 
     // ── SQL 构建（不执行；CrossBench 操作集不含 Build 组，仅满足接口）──
 
-    public string BuildGetByKeySql(DbConnection conn, long id) => "";
+    /// <summary>CrossBench 操作集不含 Build 组（纯 SQL 构建开销单项），与 FreeSql 臂的
+    /// 未覆盖项同口径显式抛——返回空串会让未来接入的 Build 项静默拿到空结果。</summary>
+    public string BuildGetByKeySql(DbConnection conn, long id)
+        => throw new NotSupportedException("Build 组不在 CrossBench 子集内");
 
-    public string BuildComplexQuerySql(DbConnection conn) => "";
+    public string BuildComplexQuerySql(DbConnection conn)
+        => throw new NotSupportedException("Build 组不在 CrossBench 子集内");
 
     // ── 查询族 ──
 
@@ -355,11 +370,7 @@ internal sealed class RepoDbArm : IPerfImplementation
     }
 
     public async Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
-    {
-        IEnumerable<S1Row> rows = await Db(conn).QueryAllAsync<S1Row>(cancellationToken: ct)
-            .ConfigureAwait(false);
-        return [.. rows];
-    }
+        => AsList(await Db(conn).QueryAllAsync<S1Row>(cancellationToken: ct).ConfigureAwait(false));
 
     // ── 覆盖范围外（与 FreeSql 臂同口径）──
 
@@ -378,9 +389,13 @@ internal sealed class RepoDbArm : IPerfImplementation
     public Task<int> SessionBatchInsertsAsync(DbConnection conn, int offset, CancellationToken ct)
         => throw new NotSupportedException("SessionBatch 不在本次子集内");
 
-    /// <summary>脱掉计数装饰器——RepoDB 的 provider 注册按连接运行时类型查表，装饰器会让
-    /// DbSetting/DbHelper/StatementBuilder 全部落空（PG BulkUpdate 实测 NRE）。</summary>
+    /// <summary>脱掉计数装饰器（防御性直通）。真正必须解包的是 BulkOperations 的 CAST：
+    /// 它们要求驱动具体连接类型。</summary>
     private static DbConnection Db(DbConnection conn) => CountingConnection.Unwrap(conn);
+
+    /// <summary>RepoDB 的 <c>QueryAllAsync</c> 内部已聚成 List——直接复用，避免 <c>[.. rows]</c>
+    /// 再复制一遍（20k 行约 160KB 额外分配）。Dapper 臂用 <c>AsList()</c> 同口径。</summary>
+    private static List<S1Row> AsList(IEnumerable<S1Row> rows) => rows as List<S1Row> ?? [.. rows];
 }
 
 /// <summary>枚举 ↔ TEXT 的 PropertyHandler——perf_enum.Status 三方言均为 TEXT NOT NULL；
