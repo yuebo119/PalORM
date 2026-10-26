@@ -108,6 +108,12 @@ public sealed class SqlShapeCacheGrowthTests
     {
         // A5（2026-10-12 审读修复）：容量满后被拒写的新形状不得新建桶——桶表本身无上限，
         // 原实现先 GetOrAdd 建桶再判容量，满员后每个新形状都会在桶表留下一个空队列。
+        //
+        // 并发纪律（2026-10-26 修 CI flaky）：本缓存是进程级全局态，其他测试类的真实查询
+        // 经 QueryBuilder 并发 Add，计数可略超上限——MaxEntries 注释已声明"竞态窗口下可略超
+        // （并发同时通过上限检查），偏差量为并发 Add 数，无害"。故此处不对 TotalEntryCount
+        // 断言精确值，改为两条可确定判定的断言：①被拒形状不新建桶；②被拒形状查不到条目。
+        // （net10 CI run 40280783244 实测按精确值断言失败：期望 1024 实得 1025，与 TFM 无关。）
         try
         {
             SqlShapeCache.Clear();
@@ -116,14 +122,14 @@ public sealed class SqlShapeCacheGrowthTests
             for (int i = 0; i < SqlShapeCache.MaxEntries; i++)
                 SqlShapeCache.Add(100_000 + i, [], fields, $"SELECT fill-{i}");
 
-            await Assert.That(SqlShapeCache.TotalEntryCount).IsEqualTo(SqlShapeCache.MaxEntries);
+            await Assert.That(SqlShapeCache.TotalEntryCount).IsGreaterThanOrEqualTo(SqlShapeCache.MaxEntries);
             int bucketsBefore = SqlShapeCache.BucketCount;
 
             for (int i = 0; i < 100; i++)
                 SqlShapeCache.Add(900_000 + i, [], fields, $"SELECT rejected-{i}");
 
-            await Assert.That(SqlShapeCache.TotalEntryCount).IsEqualTo(SqlShapeCache.MaxEntries);
             await Assert.That(SqlShapeCache.BucketCount).IsEqualTo(bucketsBefore);
+            await Assert.That(SqlShapeCache.FindMatch(900_000, [], fields)).IsNull();
         }
         finally { SqlShapeCache.Clear(); }
     }
