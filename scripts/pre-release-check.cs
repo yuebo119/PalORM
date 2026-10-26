@@ -4,10 +4,11 @@
 // 用法: dotnet run --file scripts/pre-release-check.cs -- <新版本>
 // 步骤（与 verify.yml "NuGet Consumer Native AOT" job 同序同参）:
 //   0. 版本残留扫描（release-version-scan，含 placeholder 双判据）
-//   1. pack 五包到本地目录（= CI "Pack local packages"，多含 PG/MySQL 两包）
-//   2. 用消费者自己的 NuGet.config（clear + 本地源 PalORM.* 映射）做 dotnet restore
+//   1. CHANGELOG 版本段结构校验（changelog-check，发布变更日志规范 §四）
+//   2. pack 五包到本地目录（= CI "Pack local packages"，多含 PG/MySQL 两包）
+//   3. 用消费者自己的 NuGet.config（clear + 本地源 PalORM.* 映射）做 dotnet restore
 //      ——占位版本在这一步必然失败（本地源里没有该包），正是 CI 抓到的形态
-//   3. 包契约脚本
+//   4. 包契约脚本
 // 退出码: 任一步失败即 1。发布 tag 前必跑；全绿才允许 push tag（SOP §5.1 第 4 步前）。
 using System.Text;
 
@@ -30,7 +31,7 @@ const string pkgDir = "artifacts/packages"; // 消费者 NuGet.config 的本地�
 
 var fail = 0;
 
-Step("0/3 版本残留扫描（含 placeholder 双判据）");
+Step("0/4 版本残留扫描（含 placeholder 双判据）");
 // 旧版本号从 git tag 推导：语义 tag 里除本版本外最新的一个
 var tags = Git("tag --list \"v*\" --sort=-v:refname").Split('\n', StringSplitOptions.RemoveEmptyEntries);
 var oldVersion = tags.FirstOrDefault(t => t != $"v{version}") is { } tag && tag.StartsWith('v') ? tag[1..] : "";
@@ -48,7 +49,16 @@ else
     fail = 1;
 }
 
-Step($"1/3 pack 五包到本地目录（{pkgDir}）");
+Step($"1/4 CHANGELOG 版本段结构校验（发布变更日志规范 §四）");
+var changelogArgs = oldVersion.Length > 0
+    ? $"run --file scripts/changelog-check.cs -- \"{version}\" \"{oldVersion}\""
+    : $"run --file scripts/changelog-check.cs -- \"{version}\"";
+if (RunDotnet(changelogArgs, true) != 0)
+{
+    fail = 1;
+}
+
+Step($"2/4 pack 五包到本地目录（{pkgDir}）");
 if (Directory.Exists(pkgDir))
 {
     Directory.Delete(pkgDir, recursive: true);
@@ -70,14 +80,14 @@ if (pkgCount != 5)
     fail = 1;
 }
 
-Step("2/3 消费者 restore 走本地包源（复刻 CI Restore package consumer）");
+Step("3/4 消费者 restore 走本地包源（复刻 CI Restore package consumer）");
 if (RunDotnet($"restore {consumerDir} --configfile {consumerDir}/NuGet.config", true) != 0)
 {
     return 1;
 }
 Console.WriteLine("消费者 restore OK——占位版本/缺包形态已在此步排除");
 
-Step("3/3 包契约");
+Step("4/4 包契约");
 if (RunDotnet("run --file scripts/test-package-contract.cs", true) != 0)
 {
     return 1;

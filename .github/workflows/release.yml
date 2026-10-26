@@ -118,19 +118,15 @@ jobs:
               run: |
                   dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --no-restore
 
-            - name: Verify CHANGELOG entry exists (before pack)
+            - name: Verify CHANGELOG entry (before pack)
               # M1-3：唯一有真断言的发布校验前置到 pack/push 之前（原"Verify Release
               # Accuracy"位于 push 之后——其数字回显经 $(...) 捕获时 grep 空匹配 echo 恒
               # exit 0，结构上不可能让发布变红，还把三套测试重跑了一遍；数字口径由
               # verify.yml 的测试数地板断言（M0-3）接管）。
+              # 2026-10-26 起由 changelog-check 承接：裸 grep 只查存在性，现校验顶部版本
+              # 对账、标题格式、日期与 tag 提交日一致、条目非空、💔 段完整性（规范 §四）。
               run: |
-                  VERSION="${{ steps.ver.outputs.version }}"
-                  if grep -q "\[$VERSION\]" CHANGELOG.md; then
-                      echo "✓ CHANGELOG 含 [$VERSION] 条目"
-                  else
-                      echo "::error::CHANGELOG 缺少 [$VERSION] 条目——禁止发布"
-                      exit 1
-                  fi
+                  dotnet run --file scripts/changelog-check.cs -- "${{ steps.ver.outputs.version }}"
 
             - name: Pack all src projects
               run: |
