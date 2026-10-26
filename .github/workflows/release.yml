@@ -210,46 +210,6 @@ jobs:
                       echo -e "$PKG_TABLE" | head -n -1  # 去尾部空行
                       echo ""
 
-                      # ── 安装 ──
-                      echo "## 📥 安装"
-                      echo ""
-                      echo '```bash'
-                      echo "# 按需安装 Provider（Core 是必需的）"
-                      echo "dotnet add package PalORM.Core --version $VERSION"
-                      echo ""
-                      echo "# SQLite（零配置即装即用）"
-                      echo "dotnet add package PalORM.Sqlite --version $VERSION"
-                      echo ""
-                      echo "# MySQL / PostgreSQL"
-                      echo "dotnet add package PalORM.MySql --version $VERSION"
-                      echo "dotnet add package PalORM.PostgreSql --version $VERSION"
-                      echo ""
-                      echo "# 源生成器（自动随 Provider 引入，通常无需单独安装）"
-                      echo "# dotnet add package PalORM.SourceGen --version $VERSION"
-                      echo '```'
-                      echo ""
-
-                      # ── 快速上手 ──
-                      echo "## 🚀 30 秒上手"
-                      echo ""
-                      echo '```csharp'
-                      echo '// 1. 定义实体（record 也可）'
-                      echo '[Table("users")]'
-                      echo 'public sealed partial class User'
-                      echo '{'
-                      echo '    [Key] public long Id { get; set; }'
-                      echo '    [Column("name")] public string Name { get; set; } = "";'
-                      echo '}'
-                      echo ''
-                      echo '// 2. 连接 + 操作（编译期生成全部 SQL，零反射零装箱）'
-                      echo 'await using var db = await DataSession<SqliteProvider>.CreateAsync('
-                      echo '    new DbOptions { ConnectionString = "Data Source=:memory:" });'
-                      echo 'await db.MigrateAsync();'
-                      echo 'await db.InsertAsync(new User { Name = "Alice" });'
-                      echo 'var user = await db.GetAsync<User>(1);'
-                      echo '```'
-                      echo ""
-
                       # ── 变更明细（CHANGELOG 提取段） ──
                       if [ -s release-notes.md ]; then
                           echo "## 📋 变更明细"
