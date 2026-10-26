@@ -15,7 +15,7 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 
 ## 前提条件
 
-1. 本仓库使用 `global.json` 固定的 **.NET 11 preview SDK**；消费者使用与目标 `net11.0` 兼容的 SDK
+1. 本仓库使用 `global.json` 固定的 **.NET 10 SDK**；消费者使用与目标 `net10.0` 兼容的 SDK
 2. 项目文件中 `IsAotCompatible=true`
 3. 实体类是顶级非泛型 `partial class`；可使用 `public` 或 `internal` 可见性
 

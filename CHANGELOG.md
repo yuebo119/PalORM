@@ -2,6 +2,19 @@
 
 本项目遵循 [Semantic Versioning 2.0.0](https://semver.org/lang/zh-CN/) 规范。
 
+## [Unreleased]
+
+### 🏗️ net10 分支（.NET 10 LTS 版本线）
+
+> 本节仅存在于 `net10` 分支：主线（dev/main）仍为 `net11.0` + runtime-async。分支从 v6.8.0（`dbff816`）切出。
+
+- **目标框架 net11.0 → net10.0**（全仓单目标，SDK 钉 `10.0.401`，`rollForward: latestFeature`），恢复 .NET 10/8（LTS）应用可消费的面。
+- **移除 `runtime-async=on` 编译特性**（.NET 11 编译器/运行时专属，net10.0 下 SYSLIB5007 与 CA2252 编译报错），退回经典编译器状态机。
+- **Core 补 `Microsoft.Extensions.Logging.Abstractions` 显式依赖**（net11.0 由共享框架提供，net10.0 须包引用）。
+- **.NET 11 专属 API 形态适配**（语义等价，行为零变化）：`Type.GetNullableUnderlyingType()` ×3 → `Nullable.GetUnderlyingType()`；char + `StringComparison` 重载族 → char 重载（`IndexOf`/`LastIndexOf`/`StartsWith`/`EndsWith`，char 搜索天然序数）；`Microsoft.Data.Sqlite.Core` 11.0.0-rc.2 → 10.0.13。
+- **文档口径同步**：README 中英横幅与 badge、对比表目标框架、环境要求；CONTRIBUTING 的 SDK 钉版说明；AOT 部署指南、API 参考、架构设计的版本行。
+- 验证（本轮实测，SDK 10.0.401）：`PalORM.ci.slnf` Debug 0 警告 0 错误；Core 684/684 · SourceGen 255/255 · Integration 真库 320/320。
+
 ## [6.8.0] - 2026-10-26
 
 - 项目协议自本版起由 AGPL-3.0-only 改为 Apache-2.0（v6.7.0 及以前发布物仍为 AGPL-3.0-only）。

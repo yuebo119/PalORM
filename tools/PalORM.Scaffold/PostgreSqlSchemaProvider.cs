@@ -61,7 +61,7 @@ internal sealed class PostgreSqlSchemaProvider : ISchemaProvider
             bool isIdentity = reader.GetBoolean(7);
 
             // PG 数组类型（如 _int4）——用 udt_name 检测
-            string effectiveType = udtName.StartsWith('_', StringComparison.Ordinal)
+            string effectiveType = udtName.StartsWith('_')
                 ? udtName : dataType;
 
             string qualifiedName = $"{schema}.{tableName}";

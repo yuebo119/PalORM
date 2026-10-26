@@ -811,7 +811,7 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
         int cursor = rowsStart;
         while (cursor < sql.Length && sql[cursor] == '(')
         {
-            int rowEnd = sql.IndexOf(')', cursor, StringComparison.Ordinal);
+            int rowEnd = sql.IndexOf(')', cursor);
             if (rowEnd < 0) return sql;
             rows.Add([.. sql[(cursor + 1)..rowEnd]
                 .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)]);
@@ -824,7 +824,7 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
         int asAt = sql.IndexOf(asMarker, cursor, StringComparison.Ordinal);
         if (asAt < 0) return sql;
         int columnsStart = asAt + asMarker.Length;
-        int columnsEnd = sql.IndexOf(')', columnsStart, StringComparison.Ordinal);
+        int columnsEnd = sql.IndexOf(')', columnsStart);
         if (columnsEnd < 0) return sql;
         string[] columnNames = sql[columnsStart..columnsEnd]
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -895,7 +895,7 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
         int asAt = sql.IndexOf(asMarker, cursor + 1, StringComparison.Ordinal);
         if (asAt < 0) return sql;
         int columnsStart = asAt + asMarker.Length;
-        int columnsEnd = sql.IndexOf(')', columnsStart, StringComparison.Ordinal);
+        int columnsEnd = sql.IndexOf(')', columnsStart);
         if (columnsEnd < 0) return sql;
         string[] columnNames = sql[columnsStart..columnsEnd]
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);

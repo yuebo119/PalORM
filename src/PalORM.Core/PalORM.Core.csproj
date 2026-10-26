@@ -34,6 +34,12 @@
          避免在基准项目复制一份会漂移的格式化实现。 -->
     <InternalsVisibleTo Include="PalORM.Benchmarks" />
   </ItemGroup>
+  <!-- net10 分支：ILogger/ILoggerFactory 在 net10.0 不由共享框架提供，须显式包引用
+       （net11.0 主线已并入 Microsoft.NETCore.App，无需此项）。 -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
   <!-- SourceLink：PrivateAssets=all 防止消费者拉到 -->
   <ItemGroup>
     <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />

@@ -75,12 +75,12 @@ public sealed class ExternalDbIsolationInvariantTests
         internal void Line(string line)
         {
             if (line.Length == 0
-                || line.StartsWith('/', StringComparison.Ordinal))
+                || line.StartsWith('/'))
             {
                 return;
             }
 
-            if (line[0] == '[' && line.EndsWith(']', StringComparison.Ordinal))
+            if (line[0] == '[' && line.EndsWith(']'))
             {
                 _pending.Add(line);
                 return;

@@ -154,7 +154,7 @@ public static class TestEnvironment
             // 该形态此前静默原样输出，后续连接失败无格式错误提示。改为 i+1 判定，end<0 分支报错。
             if (i + 1 < template.Length && template[i] == dollar && template[i + 1] == '{')
             {
-                int end = template.IndexOf('}', i + 2, StringComparison.Ordinal);
+                int end = template.IndexOf('}', i + 2);
                 if (end < 0)
                     // ITM-746(r20)：模板含字面量密码时，整串回显会把凭据写进异常消息/日志（P0 红线）。
                     // 只报位置，不回显模板内容。

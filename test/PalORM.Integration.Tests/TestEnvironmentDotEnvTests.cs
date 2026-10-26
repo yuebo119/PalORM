@@ -34,7 +34,7 @@ public sealed class TestEnvironmentDotEnvTests
 
             // 带尾部分隔符的起点（与 AppContext.BaseDirectory 同形）
             string startWithSeparator = start + Path.DirectorySeparatorChar;
-            await Assert.That(startWithSeparator.EndsWith(Path.DirectorySeparatorChar, StringComparison.Ordinal)).IsTrue();
+            await Assert.That(startWithSeparator.EndsWith(Path.DirectorySeparatorChar)).IsTrue();
 
             const int exactDepth = 4;
             await Assert.That(TestEnvironment.FindFileUpwards(marker, exactDepth, startWithSeparator))

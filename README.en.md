@@ -2,11 +2,11 @@
 
 # PalORM
 
-**A .NET 11 micro-ORM for Native AOT: everything generated at compile time, zero reflection at runtime**
+**A .NET 10 micro-ORM for Native AOT: everything generated at compile time, zero reflection at runtime**
 
 *An AOT-native, compile-time-verifiable micro-ORM with SQL you control*
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -103,7 +103,7 @@ A Roslyn source generator produces SQL construction, parameter binding, object m
 | **BulkInsert memory** | SQLite ≈ 40% of Dapper (PG / MySQL 5%~7%) | baseline | highest (ChangeTracker) | medium |
 | **Database breadth** | three dialects (deeply tuned) | any ADO.NET (dialect handling manual) | official provider matrix (SQL Server / SQLite / PG / MySQL / Cosmos…) | 15+ providers (majorly expanded in 1.16/1.17) |
 | **Core NuGet dependencies** | zero | zero | high (multi-package) | medium |
-| **Target frameworks** | net11.0 (single target) | multi-target (netstandard2.0+) | multi-target (net8+) | multi-target (netstandard2.0+) |
+| **Target frameworks** | net10.0 (single target) | multi-target (netstandard2.0+) | multi-target (net8+) | multi-target (netstandard2.0+) |
 | **License** | Apache-2.0 | Apache-2.0 | MIT | Apache-2.0 |
 
 Core differentiators: compile-time generation + full-pipeline AOT compatibility + per-dialect bulk strategies (COPY / BulkCopy / row-prepared / arrays). Dapper is fast but reflects at runtime; EF Core is feature-complete but heavy at runtime with AOT still experimental; RepoDb is also a micro-ORM but has no source generation, with bulk support extended via companion packages to SQL Server/MySQL/Oracle and 13+ databases.
@@ -316,7 +316,7 @@ Core differentiators: compile-time generation + full-pipeline AOT compatibility 
 ## 📦 Installation
 
 > Pick one of the three provider packages; each automatically brings `PalORM.Core` (runtime) and `PalORM.SourceGen` (compile-time generator).
-> Requirements: .NET SDK `11.0.100-rc.2` or later (`global.json` pins `rollForward: disable`); your IDE must support Roslyn source generators (SourceGen builds against Microsoft.CodeAnalysis 5.9.0). Native AOT publishes additionally need about 4 GB of memory (ILC compiler) — see [Development](#-development).
+> Requirements: .NET SDK `10.0.401` or later (`global.json` pins `rollForward: latestFeature`); your IDE must support Roslyn source generators (SourceGen builds against Microsoft.CodeAnalysis 5.9.0). Native AOT publishes additionally need about 4 GB of memory (ILC compiler) — see [Development](#-development).
 
 ```xml
 <!-- PostgreSQL -->

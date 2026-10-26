@@ -43,11 +43,11 @@ public sealed class QueryBuilderCloneCompletenessTests
             if ((trimmed.StartsWith("internal ", StringComparison.Ordinal) || trimmed.StartsWith("private ", StringComparison.Ordinal)) &&
                 !trimmed.Contains("static", StringComparison.Ordinal) && !trimmed.Contains('(', StringComparison.Ordinal))
             {
-                int lastSpace = trimmed.LastIndexOf(' ', StringComparison.Ordinal);
+                int lastSpace = trimmed.LastIndexOf(' ');
                 if (lastSpace > 0)
                 {
                     string name = trimmed[(lastSpace + 1)..].TrimEnd(';', ' ', '=');
-                    if (name.StartsWith('_', StringComparison.Ordinal))
+                    if (name.StartsWith('_'))
                         fields.Add(name);
                 }
             }
@@ -67,10 +67,10 @@ public sealed class QueryBuilderCloneCompletenessTests
             string t = line.Trim();
             // ctor 里 "_field = xxx;" 形态
             int eq = t.IndexOf('=', StringComparison.Ordinal);
-            if (eq > 0 && t.StartsWith('_', StringComparison.Ordinal))
+            if (eq > 0 && t.StartsWith('_'))
             {
                 string name = t[..eq].Trim();
-                if (name.StartsWith('_', StringComparison.Ordinal))
+                if (name.StartsWith('_'))
                     assigned.Add(name);
             }
         }
@@ -87,10 +87,10 @@ public sealed class QueryBuilderCloneCompletenessTests
         {
             string t = line.Trim().TrimEnd(',');
             int eq = t.IndexOf('=', StringComparison.Ordinal);
-            if (eq > 0 && t.StartsWith('_', StringComparison.Ordinal))
+            if (eq > 0 && t.StartsWith('_'))
             {
                 string name = t[..eq].Trim();
-                if (name.StartsWith('_', StringComparison.Ordinal))
+                if (name.StartsWith('_'))
                     assigned.Add(name);
             }
             // 克隆尾部的显式重置（_materializedClauses = null 等）也是赋值形态，同上已覆盖
@@ -102,7 +102,7 @@ public sealed class QueryBuilderCloneCompletenessTests
     {
         int start = source.IndexOf(signature, StringComparison.Ordinal);
         if (start < 0) return null;
-        int braceStart = source.IndexOf('{', start, StringComparison.Ordinal);
+        int braceStart = source.IndexOf('{', start);
         int depth = 0;
         for (int i = braceStart; i < source.Length; i++)
         {

@@ -6,9 +6,9 @@
 
   <!-- ADO.NET Providers -->
   <ItemGroup>
-    <!-- 2026-10-19 依赖升级轮：rc.1.26425.128 → rc.2.26504.105，与 global.json SDK
-         11.0.100-rc.2.26504.105 同轨（NuGet 平面索引确认 rc.2 为当前最新 .NET 11 线）。 -->
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.2.26504.105" />
+    <!-- net10 分支：11.0.0-rc.2（.NET 11 线）→ 10.0.13（.NET 10 线 stable），与 global.json
+         SDK 10.0.401 同轨；主分支（dev/main）保持 11.0.0-rc.2。 -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.13" />
     <!-- 2026-10-14 依赖升级轮：SQLite3MC 2.4.0→2.6.1（引擎升 SQLite 3.54.0；chacha20/poly1305
          硬件加速、临时文件加密与新 pragma，与本仓使用面（Batteries_V2.Init + 标准 SQL）零交集，
          无初始化 API 变更）。2026-10-19 复核：2.6.1 仍为最新稳定版。 -->
@@ -20,10 +20,10 @@
     <!-- v5.0 阶段 2.1：MySqlConnector 2.4.0→2.6.1（含安全修复 GHSA-473q-m89c-ghf8）；
          现为 2.6.2（安全修复延续，README 驱动表同口径）。破坏性变更（State=Broken / DI 命名空间迁移）对本项目零影响（见调研报告）。 -->
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
+    <!-- net10 分支：ILogger/ILoggerFactory 在 net11.0 由共享框架提供（已并入
+         Microsoft.NETCore.App），net10.0 须显式包引用；主线 dev/main 不需要此项。 -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
   </ItemGroup>
-
-  <!-- 基础依赖 (BCL 自带，无需 NuGet 引用) -->
-  <!-- Microsoft.Extensions.Logging.Abstractions 已包含在 .NET 11 共享框架中 -->
 
   <!-- 源生成器 -->
   <ItemGroup>
