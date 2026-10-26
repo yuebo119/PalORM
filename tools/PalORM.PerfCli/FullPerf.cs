@@ -49,14 +49,14 @@ internal static class FullPerf
         _ = Perf.RunFiltered("dotnet", $"run --project \"{benchDir}\" -c Release --no-build -- --workload",
             Path.Combine(logDir, "workload-run2.log"), "threads");
         RecordInner("负载测试 run2", stepSw);
-        var workloadJson = Perf.NewestFile(Path.Combine(benchDir, "bin", "Release", "net11.0"), "workload-sqlite-*.json");
+        var workloadJson = Perf.NewestFile(Path.Combine(benchDir, "bin", "Release", "net10.0"), "workload-sqlite-*.json");
 
         Perf.Step("[2/6] 大结果集内存 + 构建分配（维度 1/7）");
         stepSw = System.Diagnostics.Stopwatch.StartNew();
         _ = Perf.RunFiltered("dotnet", $"run --project \"{benchDir}\" -c Release --no-build -- --memory",
             Path.Combine(logDir, "memory.log"), "memory");
         RecordInner("大结果集内存 + 构建分配", stepSw);
-        var memoryJson = Perf.NewestFile(Path.Combine(benchDir, "bin", "Release", "net11.0"), "memory-sqlite.json");
+        var memoryJson = Perf.NewestFile(Path.Combine(benchDir, "bin", "Release", "net10.0"), "memory-sqlite.json");
 
         Perf.Step("[3/6] 启动量具（维度 9：单方法 IL 上界，两维）");
         stepSw = System.Diagnostics.Stopwatch.StartNew();
@@ -175,7 +175,7 @@ internal static class FullPerf
     /// <summary>统一报告生成（report 入口与 full-perf 第 6 步共用；失败不抛出——报告的价值恰在如实呈现回归）。</summary>
     public static void RunReport(string root, string resultsDir, string? workloadJson, string? memoryJson, string startup, string reportMd)
     {
-        var benchBin = Path.Combine(root, "bench", "PalORM.Benchmarks", "bin", "Release", "net11.0");
+        var benchBin = Path.Combine(root, "bench", "PalORM.Benchmarks", "bin", "Release", "net10.0");
         workloadJson ??= Perf.NewestFile(benchBin, "workload-sqlite-*.json");
         memoryJson ??= Perf.NewestFile(benchBin, "memory-sqlite.json");
         var startupFile = Path.Combine(root, "bench", "reports", "last-startup-status.txt");

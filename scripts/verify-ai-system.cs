@@ -593,7 +593,7 @@ void V17Batteries()
         MkProbe("src/PalORM.Core/ZZV17G25.cs", "using System.Threading.Tasks;\ninternal static class P25 { public static async Task NoCt() { await Task.Delay(1); } }");
         MkProbe("src/PalORM.Core/ZZV17G28.cs", "internal static class P28 { static int M(System.TimeSpan _timeout) => (int)_timeout.TotalSeconds; }");
         MkProbe("src/PalORM.Core/ZZV17G29.cs", "internal static class P29 { static async System.Threading.Tasks.Task M(System.Data.Common.DbConnection conn) { var c = conn.CreateCommand(); await c.ExecuteReaderAsync(); } }");
-        MkProbe("src/ZZV17G19.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net11.0</TargetFramework>\n    <IsAotCompatible>false</IsAotCompatible>\n  </PropertyGroup>\n</Project>");
+        MkProbe("src/ZZV17G19.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <IsAotCompatible>false</IsAotCompatible>\n  </PropertyGroup>\n</Project>");
         MkProbe("test/PalORM.AotTest/ZZV17G23.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Compile Include=\"Zz.g.cs\" />\n  </ItemGroup>\n</Project>");
         Git($"add {string.Join(' ', probes)}");
         var gateOut = RunCapture("dotnet", "run --file scripts/gate-check.cs -- --allow-dirty");

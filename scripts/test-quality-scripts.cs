@@ -370,7 +370,7 @@ void FixtureGateCheckG12(string aiScripts, string tmpDir)
     Directory.CreateDirectory(gateDir);
     File.WriteAllText(Path.Combine(gateRoot, "PalORM.slnx"), "", new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(gateDir, "Fixture.csproj"),
-        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net11.0</TargetFramework><IsAotCompatible>true</IsAotCompatible></PropertyGroup></Project>\n",
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><IsAotCompatible>true</IsAotCompatible></PropertyGroup></Project>\n",
         new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(gateDir, "Clean.cs"),
         "using System.Collections.Generic; public static class Clean { public static List<int> Values() => []; }\n",
@@ -446,18 +446,26 @@ void FixtureVerifyPhase(string aiScripts, string tmpDir)
 void FixtureSdkPin(string root)
 {
     Console.WriteLine("\n─── SDK pin ───");
-    // rollForward: latestMinor 语义——global.json 是下限锚点，实跑 SDK 允许同 band 更高版本
+    // net10 分支：rollForward latestFeature 语义——global.json 是 band 锚点，实跑 SDK 允许同
+    // feature band 更高 patch（CI runner 装 10.0.403 而钉版 10.0.401 属预期合法态）。
+    // 故比较 feature band（major.minor.bandDigit，如 10.0.4xx 的 "10.0.4"）而非完整三位。
+    string BandOf(string v)
+    {
+        var m = Regex.Match(v, "^(\\d+\\.\\d+\\.\\d)\\d*");
+        return m.Success ? m.Groups[1].Value : "";
+    }
     var pinMatch = Regex.Match(File.ReadAllText(Path.Combine(root, "global.json")), "\"version\"\\s*:\\s*\"(\\d+\\.\\d+\\.\\d+)");
     var sdkVersion = RunCapture("dotnet", "--version").Trim();
-    var sdkMatch = Regex.Match(sdkVersion, "^(\\d+\\.\\d+\\.\\d+)");
-    if (!pinMatch.Success || !sdkMatch.Success || pinMatch.Groups[1].Value != sdkMatch.Groups[1].Value)
+    var pinBand = BandOf(pinMatch.Groups[1].Value);
+    var sdkBand = BandOf(sdkVersion);
+    if (pinBand.Length == 0 || sdkBand.Length == 0 || pinBand != sdkBand)
     {
-        Bail($"FAIL 当前 SDK band({sdkMatch.Groups[1].Value}) 与 global.json band({pinMatch.Groups[1].Value}) 不一致");
+        Bail($"FAIL 当前 SDK band({sdkVersion}) 与 global.json band({pinMatch.Groups[1].Value}) 不一致");
         return;
     }
     // ci.yml 已收敛为调用 verify.yml 的 14 行空壳（job 全部在 verify.yml）——SDK 断言改查 verify.yml（真源）
     var verifyYml = File.ReadAllText(Path.Combine(root, ".github", "workflows", "verify.yml"));
-    if (verifyYml.Contains("dotnet-version: \"11.0.x\"", StringComparison.Ordinal))
+    if (verifyYml.Contains("dotnet-version: \"10.0.x\"", StringComparison.Ordinal))
     {
         Bail("FAIL CI 仍使用浮动 .NET SDK");
         return;

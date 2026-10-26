@@ -46,7 +46,7 @@ try
     File.WriteAllText(Path.Combine(consumerDir, "AnalyzerConsumer.csproj"), $"""
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup>
-            <TargetFramework>net11.0</TargetFramework>
+            <TargetFramework>net10.0</TargetFramework>
             <OutputType>Exe</OutputType>
             <ImplicitUsings>disable</ImplicitUsings>
             <Nullable>enable</Nullable>
