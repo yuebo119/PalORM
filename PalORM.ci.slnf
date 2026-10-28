@@ -17,6 +17,7 @@
       "test/PalORM.Integration.Tests/PalORM.Integration.Tests.csproj",
       "test/PalORM.SourceGen.Tests/PalORM.SourceGen.Tests.csproj",
       "bench/PalORM.PerfHub/PalORM.PerfHub.csproj",
+      "tools/AotProbe/PalORM.AotProbe.csproj",
       "tools/PalORM.PerfGate/PalORM.PerfGate.csproj",
       "tools/PalORM.PerfCli/PalORM.PerfCli.csproj",
       "tools/PalORM.Scaffold/PalORM.Scaffold.csproj"

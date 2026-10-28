@@ -1,0 +1,635 @@
+{
+  "Schema": "aotprobe-facts/1",
+  "GeneratedAtUtc": "2026-10-28T11:30:11.0481354Z",
+  "RulesVersion": "v1-S0",
+  "CatalogVersion": "S0-P0.1",
+  "ManifestVersion": "2026-10-28.1",
+  "FixtureVersion": "S0.1",
+  "Sdk": "11.0.100-rc.2.26504.105",
+  "Rid": "win-x64",
+  "Os": "Microsoft Windows 10.0.19045",
+  "Runs": [
+    {
+      "Library": "palorm",
+      "Group": "A",
+      "Form": "jit",
+      "BuildOk": true,
+      "BuildError": null,
+      "PublishOk": true,
+      "PublishError": null,
+      "Warnings": [],
+      "Probes": [
+        {
+          "Probe": "P0Ddl",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "ddl.table.count",
+              "TypeName": "System.Int64",
+              "Value": "2"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 198
+        },
+        {
+          "Probe": "P0InsertExplicitPk",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "insert.id",
+              "TypeName": "System.Int64",
+              "Value": "42"
+            },
+            {
+              "Key": "orm.readback.label",
+              "TypeName": "System.String",
+              "Value": "\u660E\u793A\u4E3B\u952E-42"
+            },
+            {
+              "Key": "raw.stored.label",
+              "TypeName": "System.String",
+              "Value": "\u660E\u793A\u4E3B\u952E-42"
+            },
+            {
+              "Key": "materialized.type",
+              "TypeName": "AotProbe.Adapters.PalORM.CatalogRow",
+              "Value": "AotProbe.Adapters.PalORM.CatalogRow"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 179
+        },
+        {
+          "Probe": "P0InsertAutoPk",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "insert.id",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "orm.readback.name",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E"
+            },
+            {
+              "Key": "raw.stored.name",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E"
+            },
+            {
+              "Key": "orm.readback.amount",
+              "TypeName": "System.String",
+              "Value": "12345.67"
+            },
+            {
+              "Key": "orm.readback.amount.type",
+              "TypeName": "System.Decimal",
+              "Value": "System.Decimal"
+            },
+            {
+              "Key": "materialized.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 174
+        },
+        {
+          "Probe": "P0GetByKey",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "get.id",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "get.name",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E"
+            },
+            {
+              "Key": "get.category",
+              "TypeName": "System.String",
+              "Value": "cat-1"
+            },
+            {
+              "Key": "materialized.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 168
+        },
+        {
+          "Probe": "P0UpdateDelete",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "update.affected",
+              "TypeName": "System.Int32",
+              "Value": "1"
+            },
+            {
+              "Key": "orm.afterupdate.amount",
+              "TypeName": "System.String",
+              "Value": "999.99"
+            },
+            {
+              "Key": "delete.affected",
+              "TypeName": "System.Int32",
+              "Value": "1"
+            },
+            {
+              "Key": "orm.afterdelete.found",
+              "TypeName": "System.Boolean",
+              "Value": "False"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 173
+        },
+        {
+          "Probe": "P0QueryAll",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "list.count",
+              "TypeName": "System.Int32",
+              "Value": "3"
+            },
+            {
+              "Key": "item.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            },
+            {
+              "Key": "names.byid",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E|row-two-\u5E73\u5B89\u4EAC|row\u0027three \u0022quoted\u0022"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 186
+        },
+        {
+          "Probe": "P0Aggregate",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "count.total",
+              "TypeName": "System.Int64",
+              "Value": "3"
+            },
+            {
+              "Key": "group.cat-1",
+              "TypeName": "System.Int64",
+              "Value": "2"
+            },
+            {
+              "Key": "group.cat-2",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "group.row.type",
+              "TypeName": "AotProbe.Adapters.CategoryCount",
+              "Value": "AotProbe.Adapters.CategoryCount"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 174
+        },
+        {
+          "Probe": "P0Transaction",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "commit.visible",
+              "TypeName": "System.Boolean",
+              "Value": "True"
+            },
+            {
+              "Key": "rollback.visible",
+              "TypeName": "System.Boolean",
+              "Value": "False"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 171
+        }
+      ],
+      "BinaryReady": true,
+      "StartupOk": true
+    },
+    {
+      "Library": "palorm",
+      "Group": "A",
+      "Form": "aot",
+      "BuildOk": true,
+      "BuildError": null,
+      "PublishOk": true,
+      "PublishError": null,
+      "Warnings": [],
+      "Probes": [
+        {
+          "Probe": "P0Ddl",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "ddl.table.count",
+              "TypeName": "System.Int64",
+              "Value": "2"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 287
+        },
+        {
+          "Probe": "P0InsertExplicitPk",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "insert.id",
+              "TypeName": "System.Int64",
+              "Value": "42"
+            },
+            {
+              "Key": "orm.readback.label",
+              "TypeName": "System.String",
+              "Value": "\u660E\u793A\u4E3B\u952E-42"
+            },
+            {
+              "Key": "raw.stored.label",
+              "TypeName": "System.String",
+              "Value": "\u660E\u793A\u4E3B\u952E-42"
+            },
+            {
+              "Key": "materialized.type",
+              "TypeName": "AotProbe.Adapters.PalORM.CatalogRow",
+              "Value": "AotProbe.Adapters.PalORM.CatalogRow"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 32
+        },
+        {
+          "Probe": "P0InsertAutoPk",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "insert.id",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "orm.readback.name",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E"
+            },
+            {
+              "Key": "raw.stored.name",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E"
+            },
+            {
+              "Key": "orm.readback.amount",
+              "TypeName": "System.String",
+              "Value": "12345.67"
+            },
+            {
+              "Key": "orm.readback.amount.type",
+              "TypeName": "System.Decimal",
+              "Value": "System.Decimal"
+            },
+            {
+              "Key": "materialized.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 48
+        },
+        {
+          "Probe": "P0GetByKey",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "get.id",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "get.name",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E"
+            },
+            {
+              "Key": "get.category",
+              "TypeName": "System.String",
+              "Value": "cat-1"
+            },
+            {
+              "Key": "materialized.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 31
+        },
+        {
+          "Probe": "P0UpdateDelete",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "update.affected",
+              "TypeName": "System.Int32",
+              "Value": "1"
+            },
+            {
+              "Key": "orm.afterupdate.amount",
+              "TypeName": "System.String",
+              "Value": "999.99"
+            },
+            {
+              "Key": "delete.affected",
+              "TypeName": "System.Int32",
+              "Value": "1"
+            },
+            {
+              "Key": "orm.afterdelete.found",
+              "TypeName": "System.Boolean",
+              "Value": "False"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 31
+        },
+        {
+          "Probe": "P0QueryAll",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "list.count",
+              "TypeName": "System.Int32",
+              "Value": "3"
+            },
+            {
+              "Key": "item.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            },
+            {
+              "Key": "names.byid",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E|row-two-\u5E73\u5B89\u4EAC|row\u0027three \u0022quoted\u0022"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 31
+        },
+        {
+          "Probe": "P0Aggregate",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "count.total",
+              "TypeName": "System.Int64",
+              "Value": "3"
+            },
+            {
+              "Key": "group.cat-1",
+              "TypeName": "System.Int64",
+              "Value": "2"
+            },
+            {
+              "Key": "group.cat-2",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "group.row.type",
+              "TypeName": "AotProbe.Adapters.CategoryCount",
+              "Value": "AotProbe.Adapters.CategoryCount"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 29
+        },
+        {
+          "Probe": "P0Transaction",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "commit.visible",
+              "TypeName": "System.Boolean",
+              "Value": "True"
+            },
+            {
+              "Key": "rollback.visible",
+              "TypeName": "System.Boolean",
+              "Value": "False"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 32
+        }
+      ],
+      "BinaryReady": true,
+      "StartupOk": true
+    },
+    {
+      "Library": "palorm",
+      "Group": "B",
+      "Form": "aot",
+      "BuildOk": true,
+      "BuildError": null,
+      "PublishOk": true,
+      "PublishError": null,
+      "Warnings": [],
+      "Probes": [
+        {
+          "Probe": "P0Ddl",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "ddl.table.count",
+              "TypeName": "System.Int64",
+              "Value": "2"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 281
+        },
+        {
+          "Probe": "P0GetByKey",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "get.id",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "get.name",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E"
+            },
+            {
+              "Key": "get.category",
+              "TypeName": "System.String",
+              "Value": "cat-1"
+            },
+            {
+              "Key": "materialized.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 31
+        },
+        {
+          "Probe": "P0QueryAll",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "list.count",
+              "TypeName": "System.Int32",
+              "Value": "3"
+            },
+            {
+              "Key": "item.type",
+              "TypeName": "AotProbe.Adapters.PalORM.OrderRow",
+              "Value": "AotProbe.Adapters.PalORM.OrderRow"
+            },
+            {
+              "Key": "names.byid",
+              "TypeName": "System.String",
+              "Value": "\u8BA2\u5355\u0022A\u0022-\uD83D\uDE80-\u65E5\u672C\u8A9E|row-two-\u5E73\u5B89\u4EAC|row\u0027three \u0022quoted\u0022"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 35
+        },
+        {
+          "Probe": "P0Aggregate",
+          "Status": "pass",
+          "ExitCode": 0,
+          "MarkerSeen": true,
+          "ErrorType": null,
+          "ErrorMessage": null,
+          "Fields": [
+            {
+              "Key": "count.total",
+              "TypeName": "System.Int64",
+              "Value": "3"
+            },
+            {
+              "Key": "group.cat-1",
+              "TypeName": "System.Int64",
+              "Value": "2"
+            },
+            {
+              "Key": "group.cat-2",
+              "TypeName": "System.Int64",
+              "Value": "1"
+            },
+            {
+              "Key": "group.row.type",
+              "TypeName": "AotProbe.Adapters.CategoryCount",
+              "Value": "AotProbe.Adapters.CategoryCount"
+            }
+          ],
+          "Assertions": [],
+          "ElapsedMs": 34
+        }
+      ],
+      "BinaryReady": true,
+      "StartupOk": true
+    }
+  ]
+}

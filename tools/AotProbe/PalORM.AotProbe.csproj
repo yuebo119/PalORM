@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalORM.AotProbe</RootNamespace>
+    <AssemblyName>PalORM.AotProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- CLI 输出为非本地化英文标记/表格（PerfGate/PerfCli 同例：工具面不承载用户可见文案） -->
+    <NoWarn>$(NoWarn);CA1303</NoWarn>
+  </PropertyGroup>
+
+  <!-- adapters/ 与 templates/ 是"由生成变体编译的源资产"，不是本工具的编译面：
+       适配器引用的第三方 ORM 包只进变体（每库独立 publish 闭包，防 ILC 互染），
+       故必须显式移出 SDK 默认 glob，否则工具工程会因缺少这些包而编译失败。 -->
+  <ItemGroup>
+    <Compile Remove="adapters/**/*.cs" />
+    <Compile Remove="templates/**/*.cs" />
+  </ItemGroup>
+
+  <!-- 宿主模板作为内容资产随构建复制，Runner 运行期读取后注入变体。 -->
+  <ItemGroup>
+    <None Include="templates/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
