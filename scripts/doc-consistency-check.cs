@@ -1,8 +1,8 @@
 // doc-consistency-check.cs（自 .ai/scripts/doc-consistency-check.sh 迁移，脚本全面 C# 化轮）
-// PalORM 文档一致性机械校验 D4/D10-D14。所有 checks 独立运行，单一事实来源原则。
+// PalORM 文档一致性机械校验 D4/D10-D16。所有 checks 独立运行，单一事实来源原则。
 // （2026-10-18 两轮审计后的有效编号：D4 过期计数、D10 [Test] 计数、D11 版本三方、
 //  D12 文档 API 存在性、D13 G 级级别对账、D14 T 级严重度对账；D1/D2/D5/D6/D7/D9 已删除，
-//  D3/D8 字样检查随 D13 取代。）
+//  D3/D8 字样检查随 D13 取代。2026-10-26 README 精炼轮新增 D15 站内锚点可达、D16 性能倍数对账。）
 // --fix：D10 三处计数自动同步（ITM-735 的 awk 精确重写语义保真——只替换含 [Test]+声明+计数的行）。
 // 契约：0=全过；1=有 FAIL；--fix 模式 0=同步完成；stdout 与 .sh 版对拍兼容（含 ANSI 色码）。
 using System.Text;
@@ -204,6 +204,92 @@ if (tLevelBad.Count == 0)
     Pass($"D14 T 级严重度对账一致（{tLevelChecked} 处 T 项声明与 test-gate 判定方式对齐）");
 else
     Fail($"D14 T 级严重度文档与脚本不一致（{string.Join("；", tLevelBad)}）——改文档级别或改脚本 FAIL/WARN");
+
+// ── D15: README/README.en.md 站内锚点可达（2026-10-26 新增）──
+// 动因：README 重排后 4 处锚点静默失效（`#-数据库兼容性` 等 emoji 前缀未跟随标题生成规则），
+// 徽章与目录链接点了不动。GitHub 的 slug 规则：小写、去 emoji 与标点、空格转 -。
+// 判据=解析文档内全部 `](#xxx)`，逐个比对本文档标题 slug 集合；外部链接不在本检查范围。
+var anchorBad = new List<string>();
+var anchorChecked = 0;
+foreach (var doc in new[] { "README.md", "README.en.md" })
+{
+    if (!File.Exists(doc)) continue;
+    var docLines = File.ReadAllLines(doc);
+    var slugs = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var line in docLines)
+    {
+        var hm = Regex.Match(line, @"^#{1,6}\s+(.*)$");
+        if (!hm.Success) continue;
+        var sb = new StringBuilder();
+        foreach (var ch in hm.Groups[1].Value.Trim())
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_') sb.Append(char.ToLowerInvariant(ch));
+            else if (ch == ' ') sb.Append('-');
+        }
+        slugs.Add(sb.ToString());
+    }
+    var lineNo = 0;
+    foreach (var line in docLines)
+    {
+        lineNo++;
+        foreach (Match m in Regex.Matches(line, @"\]\(#([^)]+)\)"))
+        {
+            anchorChecked++;
+            if (!slugs.Contains(m.Groups[1].Value))
+                anchorBad.Add($"{doc}:{lineNo} #{m.Groups[1].Value}");
+        }
+    }
+}
+if (anchorBad.Count == 0)
+    Pass($"D15 站内锚点全部可达（{anchorChecked} 个）");
+else
+    Fail($"D15 站内锚点失效（{string.Join("；", anchorBad)}）——按标题 slug 修正（去 emoji、空格转 -）");
+
+// ── D16: README 性能总览数字与 CrossBench 生成报告对账（2026-10-26 新增）──
+// 动因：性能章曾长期手抄生成报告的表格，两处并存必然漂移——旧的「表四」在引入后从未更新，
+// 与明细表 9 个可比格全部矛盾（0 一致），且其中一个值在任何 PerfHub 历史批次里都复现不出来。
+// 现在 README 只留总览结论，数字必须能在最近一次 fivearm 报告里逐字找到。
+// 判据=README 性能章内形如 `**0.39**` 的加粗倍数，必须在 fivearm-*.md 中出现同样的小数串。
+var perfBad = new List<string>();
+var perfChecked = 0;
+var fivearmFiles = Directory.Exists("bench/crossbench/results")
+    ? Directory.EnumerateFiles("bench/crossbench/results", "fivearm-*.md").OrderByDescending(f => f).Take(1).ToArray()
+    : [];
+if (fivearmFiles.Length == 0)
+{
+    Console.WriteLine("  D16 跳过：未找到 bench/crossbench/results/fivearm-*.md");
+}
+else
+{
+    var reportText = File.ReadAllText(fivearmFiles[0]);
+    var readmeLines = File.ReadAllLines("README.md");
+    var perfStart = Array.FindIndex(readmeLines, l => l.StartsWith("## 📊", StringComparison.Ordinal));
+    // 边界取下一个二级标题而非固定章节名：2026-10-28 README 把「安装」并入「快速开始」后，
+    // 原「找 ## 📦」的写法让 perfEnd=-1、循环零次执行，D16 从 195 项变成 0 项仍 PASS（门禁静默空转）。
+    var perfEnd = perfStart >= 0 ? Array.FindIndex(readmeLines, perfStart + 1, l => l.StartsWith("## ", StringComparison.Ordinal)) : -1;
+    if (perfStart >= 0 && perfEnd > perfStart)
+    {
+        for (var i = perfStart; i < perfEnd; i++)
+        {
+            // 只核对加粗倍数（**0.39** 形态），跳过百分比与绝对耗时
+            foreach (Match m in Regex.Matches(readmeLines[i], @"\*\*(\d\.\d{2})\*\*"))
+            {
+                perfChecked++;
+                // 必须带边界匹配：裸 Contains 会被其他数字的子串骗过
+                // （实测注入 **0.11** 时，报告里 `20.11 ms` 与 `89.8KB [0.11]` 让裸 Contains 判为命中，门禁失效）
+                var bounded = new Regex($@"(?<![\d.]){Regex.Escape(m.Groups[1].Value)}(?![\d])", RegexOptions.Compiled);
+                if (!bounded.IsMatch(reportText))
+                    perfBad.Add($"README.md:{i + 1} {m.Groups[1].Value}");
+            }
+        }
+    }
+    if (perfBad.Count == 0 && perfChecked == 0)
+        Fail("D16 性能章未解析到任何加粗倍数——0 项核对等于门禁失效，先查章节边界是否失配");
+    else if (perfBad.Count == 0)
+        Pass($"D16 README 性能总览倍数均在 {Path.GetFileName(fivearmFiles[0])} 中可查（{perfChecked} 个）");
+    else
+        Fail($"D16 README 性能倍数在生成报告中查无此值（{string.Join("；", perfBad)}）——重跑 crossbench-report 后同步");
+}
 
 Console.WriteLine();
 Console.WriteLine($"通过: {passed}  失败: {failed}");
