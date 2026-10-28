@@ -118,10 +118,10 @@
 | `CreateBatch().Append(...).ExecuteNonQueryAsync()` | 显式批量——N 条非查询语句一次往返（PG 实测 3.4×/10 语句；MySQL 驱动批；SQLite 回退顺序执行）；自动绑定活跃事务 |
 
 > **性能提示（表达式类构建器）**：上表中标注 `expr` 的方法接收 `Expression<Func<T, ...>>`。
-> C# 在调用点构造表达式树，库无法缓存——每次调用都重建，实测每棵树 512 字节加 0.5~1.6 µs。
+> C# 在调用点构造表达式树，库无法缓存，每次调用都重建，实测每棵树 512 字节加 0.5~1.6 µs。
 > 热路径上把 lambda 提到 `static readonly` 字段即可消除（`UPDATE`+`Set` 分配 −18%，
 > 单行查询 + `OrderBy` 分配 −12%）。`Where` / `OrWhere` / `Having` 收 `FormattableString`，
-> 不受影响。详见 README「查询构建的性能提示」。
+> 不受影响。同一提示见 [最佳实践 · 边界与陷阱](最佳实践.md#10-边界与陷阱)。
 
 ### 执行方法 (QueryBuilderExtensions)
 
