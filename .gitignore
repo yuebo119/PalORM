@@ -126,3 +126,6 @@ cov-core.xml
 perf-curve.html
 # 迭代级采样诊断落盘（PALORM_PERFHUB_SAMPLE_DUMP=1 才生成；诊断证据按需 -f 显式提交）
 bench/perfhub/results/samples-*.jsonl
+# AOT 探针试跑快照（每次 run 落一份；S0 基线 aotprobe-20261028-113011.json 已入库并保持跟踪，
+# 后续重跑按需 -f 显式提交，不随试跑自动进历史）
+tools/AotProbe/results/*.json
