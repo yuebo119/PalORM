@@ -101,8 +101,11 @@ public sealed class DialectDifferenceTests
         await using var db = await TestDb.SqliteAsync();
         // 非默认主键 → SaveAsync 走 UPSERT 分支；UPSERT 无条件覆盖与乐观锁冲突 → 明确拒绝。
         // 异常在 CreateCommand 之前抛出，无需建表。
+        // 本用例的目的就是验证该调用被拒绝，PALORM054 在此属刻意触发
+#pragma warning disable PALORM054
         Exception? ex = await Assert.ThrowsAsync<NotSupportedException>(async () =>
             await db.SaveAsync(new VersionedEntity { Id = 1, Name = "init", Version = 0 }));
+#pragma warning restore PALORM054
 
         await Assert.That(ex!.Message).Contains("[ConcurrencyCheck]");
         await Assert.That(ex.Message).Contains("Use InsertAsync");

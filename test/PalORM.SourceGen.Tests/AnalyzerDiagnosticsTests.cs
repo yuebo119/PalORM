@@ -1250,6 +1250,65 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task PALORM054_SaveAsyncOnVersionedEntity_ReportsError()
+    {
+        // D5：UPSERT 无条件覆盖、无法遵守乐观锁，产品在所有方言上显式抛 NotSupportedException，
+        // 因此取 Error（与 PALORM031 的 Warning 区别：那条只在 PG/MySQL 批量路径上成立）。
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [ConcurrencyCheck] public long Version { get; set; }
+            }
+            public static class C
+            {
+                static void M<TProvider>(DataSession<TProvider> s, E entity)
+                    where TProvider : IDbProvider
+                {
+                    _ = s.SaveAsync(entity);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM054")).IsTrue();
+        await Assert.That(diagnostics.Single(d => d.Id == "PALORM054").Severity)
+            .IsEqualTo(DiagnosticSeverity.Error);
+        // Error 级诊断本身就是编译错误，只要求除它之外没有别的错误
+        await Assert.That(compileErrors.Count(d => d.Id != "PALORM054")).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task PALORM054_SaveAsyncOnPlainEntity_IsSilent()
+    {
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            public static class C
+            {
+                static void M<TProvider>(DataSession<TProvider> s, E entity)
+                    where TProvider : IDbProvider
+                {
+                    _ = s.SaveAsync(entity);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, ImmutableArray<Diagnostic> compileErrors) =
+            await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM054")).IsFalse();
+        await Assert.That(compileErrors).IsEmpty();
+    }
+
+    [Test]
     public async Task PALORM031_InferredGenericCall_Reports_VersionedEntity()
     {
         // ITM-752(r21)：严重级由 Error 降为 Warning——SQLite 方言回退逐条路径使

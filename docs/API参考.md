@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1416 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1418 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -19,7 +19,7 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 45 条 PALORM 诊断（42 条分析器 + 3 条生成器：PALORM041/045/046）
+### 编译时验证 — 46 条 PALORM 诊断（43 条分析器 + 3 条生成器：PALORM041/045/046）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > PALORM017 已删除（r24，ITM-899）：v6.1 起 StoreAs 参与读写双路径后停报，描述符与
 > 空方法为死残留——ID 永不复用（诊断编号历史保留记录）。
@@ -81,6 +81,7 @@
 | **PALORM050** | **[Projection] 属性带 [OwnedJson]（v6.0 R1——对象 OwnedJson 依赖实体 CommandFactory 的 JsonTypeInfo，投影不生成；字符串属性接收原始 JSON 是替代）** | **P0** |
 | **PALORM051** | **[Column] 架构参数值域（v6.0 R3——负 Length/Precision/Scale、Scale>Precision、空白 TypeName 拦截；0 视为未设置）** | **P0** |
 | **PALORM052** | **索引名超最严方言上限（v6.0.1，ITM-874——PG 63 / MySQL 64，超限则迁移期 CREATE INDEX 失败；Warning 提示改短名，不自动截断防撞名）** | **P2** |
+| **PALORM054** | **SaveAsync 对 `[ConcurrencyCheck]` 实体（D5，2026-10-29——UPSERT 无条件覆盖、无法遵守乐观锁，产品在所有方言上显式抛 `NotSupportedException`；改用 InsertAsync 或 UpdateAsync；Error）** | **P1** |
 | **PALORM053** | **[Column(StoreAs)] 适用面三态（v6.1，ITM-553——非枚举属性 / ×[Converter] 双通道 / AsInt32 对底层宽于 int 的枚举（uint/long/ulong 值截断即静默错数据）；Error）** | **P1** |
 
 ### 基础注解 (23 个)

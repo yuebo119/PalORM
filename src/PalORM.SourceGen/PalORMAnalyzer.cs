@@ -166,6 +166,16 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         "PALORM031", "BulkUpdateBatchAsync on [ConcurrencyCheck] entity throws on PostgreSQL/MySQL",
         "BulkUpdateBatchAsync<{0}> is called but {0} has [ConcurrencyCheck]; the PostgreSQL/MySQL batch path throws NotSupportedException at runtime (SQLite falls back to row-by-row and is unaffected)", "PalORM", DiagnosticSeverity.Warning, true);
 
+    // PALORM054（D5，2026-10-29）：SaveAsync<T> 对 [ConcurrencyCheck] 实体——UPSERT 会无条件覆盖、
+    // 无法遵守乐观锁，产品在所有方言上显式抛 NotSupportedException（DataSession.Crud.cs 的 SaveCoreAsync
+    // 守卫）。与 PALORM031 的区别：031 只在 PG/MySQL 的批量路径上抛（SQLite 回退），故为 Warning；
+    // 本条在所有方言上无条件抛，因此取 Error。
+    public static readonly DiagnosticDescriptor SaveWithConcurrencyToken = new(
+        "PALORM054", "SaveAsync on [ConcurrencyCheck] entity always throws",
+        "SaveAsync<{0}> is called but {0} has [ConcurrencyCheck]; UPSERT overwrites unconditionally and cannot honor "
+        + "optimistic locking, so this call throws NotSupportedException at runtime (use InsertAsync for new rows or "
+        + "UpdateAsync, which enforces the version check)", "PalORM", DiagnosticSeverity.Error, true);
+
     // PALORM032：Include/Join 引用未注册实体——QueryBuilder.cs GetRegisteredTableName 的未注册实体 throw（r9-S-E：原字面锚本就指错，语义锚修正）。
     // Warning 级：多程序集场景同 PALORM003 局限。
     public static readonly DiagnosticDescriptor JoinReferencesUnregisteredEntity = new(
@@ -296,6 +306,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          NoInsertableColumns, NoUpdatableColumns, UnsupportedTimestampType, NotMappedConflict,
          ConverterOwnedJsonConflict,
          BulkUpdateBatchOnVersionedEntity, JoinReferencesUnregisteredEntity, SelectProjectionWithToList,
+         SaveWithConcurrencyToken,
          KeyWithNonDefaultValue, ConcurrencyCheckWithIgnoreOnInsert, NullableContextDisabled,
          RequiredWithNullableAnnotation, TenantColumnNullable,
          TimestampComputedConflict, UnsafeIdentifierName, InvalidComputedExpression,
@@ -377,6 +388,11 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             // ITM-634：绝大多数调用不在循环内——纯语法的循环检查先于昂贵的语义确认。
             if (IsPalORMQueryMethod(methodName))
             {
+                // SaveAsync 同时属 N+1 白名单，而本分支末尾无条件 return——054 的检查必须放在这里，
+                // 否则永远走不到下面的 switch。
+                if (methodName == "SaveAsync")
+                    CheckSaveWithConcurrencyToken(ctx, ma, invocation);
+
                 if (TryFindEnclosingLoop(invocation) is { } loopLocation
                     && IsPalORMInvocation(ctx, invocation))
                 {
@@ -425,6 +441,28 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         {
             ctx.ReportDiagnostic(Diagnostic.Create(BulkUpdateBatchOnVersionedEntity,
                 invocation.GetLocation(), entityType.Name));
+        }
+    }
+
+    /// <summary>PALORM054：SaveAsync&lt;T&gt; 调用，T 含 [ConcurrencyCheck] 属性。
+    /// <para>与 <see cref="CheckBulkUpdateBatchConcurrency"/> 同构：PalORM 归属确认 + 语义层取泛型实参
+    /// （覆盖推断式调用）。差别在严重度——UPSERT 的乐观锁缺口在所有方言上都成立，取 Error。</para></summary>
+    private static void CheckSaveWithConcurrencyToken(
+        SyntaxNodeAnalysisContext ctx, MemberAccessExpressionSyntax ma, InvocationExpressionSyntax invocation)
+    {
+        if (!IsPalORMInvocation(ctx, invocation)) return;
+        if (ctx.SemanticModel.GetSymbolInfo(invocation, ctx.CancellationToken).Symbol
+            is not IMethodSymbol { IsGenericMethod: true } method)
+            return;
+        if (method.TypeArguments.Length < 1) return;
+        if (method.TypeArguments[0] is not INamedTypeSymbol entityType) return;
+
+        bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)
+            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck")));
+        if (hasConcurrency)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(
+                SaveWithConcurrencyToken, invocation.GetLocation(), entityType.Name));
         }
     }
 
