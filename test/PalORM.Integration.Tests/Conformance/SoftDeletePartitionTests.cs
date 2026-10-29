@@ -91,6 +91,24 @@ public sealed class SoftDeletePartitionTests
     }
 
     [Test]
+    public async Task IgnoreFilters_OnSecondInjectionPath_ReturnsDeletedRows()
+    {
+        // GetAllAsync/CountAsync 走 GetDefaultFilterForms 的第二注入路径（与 From 的静态 ClauseNode 不是同一处）。
+        // IgnoreFilters 必须对两条路径同样生效，否则过滤契约在两条路径间不一致。
+        await using SharedSqliteDb shared = await SeedAsync();
+        await using DataSession<PalORM.Sqlite.SqliteProvider> db = await shared.OpenSessionAsync();
+
+        (HashSet<long> expectedAlive, HashSet<long> expectedDead) = await shared.ReadSoftDeletePartitionAsync();
+        await Assert.That(expectedDead.Count).IsGreaterThan(0);
+
+        List<CfSoftDeleteEntity> all = await db.IgnoreFilters().GetAllAsync<CfSoftDeleteEntity>();
+        long allCount = await db.CountAsync<CfSoftDeleteEntity>();
+
+        await Assert.That(all.Count).IsEqualTo(expectedAlive.Count + expectedDead.Count);
+        await Assert.That(allCount).IsEqualTo((long)all.Count);
+    }
+
+    [Test]
     public async Task PlainQuery_AliveSetEqualsRawAdoExpectation()
     {
         await using SharedSqliteDb shared = await SeedAsync();
