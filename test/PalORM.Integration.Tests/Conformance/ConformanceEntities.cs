@@ -225,3 +225,14 @@ public partial class CfComboTypesEntity
     public CfJsonPayload Payload { get; set; } = new();
     [Column("status", StoreAs = StoreAs.AsString)] public CfOrderStatus Status { get; set; }
 }
+
+/// <summary>时间矩阵探针实体：三方言的列类型与 DateTimeKind 往返实测（方案 §4.7 阶段 0a 第 4 项）。</summary>
+[Table("cf_time_matrix")]
+public partial class CfTimeMatrixEntity
+{
+    [Key] public long Id { get; set; }
+    [Column("dt")] public DateTime Dt { get; set; }
+    [Column("dto")] public DateTimeOffset Dto { get; set; }
+    [Column("date_only")] public DateOnly DateOnly { get; set; }
+    [Column("time_only")] public TimeOnly TimeOnly { get; set; }
+}
