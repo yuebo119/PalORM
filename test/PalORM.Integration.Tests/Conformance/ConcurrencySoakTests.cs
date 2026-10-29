@@ -4,45 +4,72 @@ using PalORM.Sqlite;
 
 namespace PalORM.Integration.Tests.Conformance;
 
-/// <summary>C 层并发浸泡（方案 §6.4）。
-/// <para>8 个线程各做"租出、操作、归还"，持续 5 秒（方案上限 30 到 60 秒留给夜间长程；
-/// PR 门禁取短程，因为要抓的是串租与状态污染，不是压力上限）。四条断言：同一会话同一时刻
-/// 只在一个线程手里；租期写入的租户态不跨租期可见；IdleCount 回落到容量上界；无违规记录。</para></summary>
+/// <summary>C 层并发浸泡（方案 §6.4 / §6.5）。
+/// <para>八线程各做"租出、操作、归还"，连续 3 轮、每轮窗口 30 秒（方案 §6.4 的 30 到 60 秒下沿）。
+/// 每轮用独立库与会话池，轮间不共享状态；四条断言逐轮核对：同一会话同一时刻只在一个线程手里、
+/// 租期写入的租户态不跨租期可见、IdleCount 回落到容量上界、操作数不低于有效负载地板。</para>
+/// <para>长稳压测属 PerfHub 职责，本层只抓串租与状态污染，因此窗口取短并在三轮内保持同一形态。
+/// 调试时可用 <c>PALORM_SOAK_SECONDS</c> 缩短窗口，默认 30 秒。</para></summary>
 public sealed class ConcurrencySoakTests
 {
     private const int WorkerCount = 8;
-    private static readonly TimeSpan SoakWindow = TimeSpan.FromSeconds(5);
+    private const int Rounds = 3;
+    private const long MinimumOperationsPerRound = 100;
+
+    private static readonly TimeSpan RoundWindow = TimeSpan.FromSeconds(
+        int.TryParse(Environment.GetEnvironmentVariable("PALORM_SOAK_SECONDS"), out int seconds) && seconds > 0
+            ? seconds
+            : 30);
 
     [Test]
-    public async Task Soak_RentOperateReturn_PreservesFourInvariants()
+    public async Task Soak_ThreeConsecutiveRounds_ZeroInvariantViolations()
     {
-        await using SharedSqliteDb shared = await CreateSeededAsync();
+        var roundSummaries = new List<string>();
+        var violations = new List<string>();
+
+        for (int round = 1; round <= Rounds; round++)
+        {
+            (long operations, long idleAfterRound, IReadOnlyList<string> roundViolations) =
+                await RunRoundAsync(round);
+
+            roundSummaries.Add($"第 {round} 轮: 操作 {operations} 次，归还后 IdleCount={idleAfterRound}");
+            violations.AddRange(roundViolations.Select(v => $"[第 {round} 轮] {v}"));
+
+            if (operations < MinimumOperationsPerRound)
+                violations.Add($"[第 {round} 轮] 操作数 {operations} 低于有效负载地板 {MinimumOperationsPerRound}");
+            if (idleAfterRound != 4)
+                violations.Add($"[第 {round} 轮] 归还后 IdleCount={idleAfterRound}，期望容量上界 4");
+        }
+
+        // 先报三轮的违规明细，再核"确实跑满 3 轮"
+        await Assert.That(string.Join("\n", violations.Take(10))).IsEmpty();
+        await Assert.That(roundSummaries.Count).IsEqualTo(Rounds);
+    }
+
+    private static async Task<(long Operations, long IdleAfterRound, IReadOnlyList<string> Violations)>
+        RunRoundAsync(int round)
+    {
+        await using SharedSqliteDb shared = await CreateSeededAsync($"soak_round_{round}");
         await using DataSessionPool<SqliteProvider> pool = shared.CreatePool(maxIdleSize: 4);
 
         var holder = new ConcurrentDictionary<int, int>();
         var violations = new ConcurrentBag<string>();
-        int[] operations = [0];
+        long[] operations = [0];
 
-        using var window = new CancellationTokenSource(SoakWindow);
+        using var window = new CancellationTokenSource(RoundWindow);
         Task[] workers =
         [
             .. Enumerable.Range(0, WorkerCount).Select(workerId
                 => Task.Run(() => RunWorkerAsync(pool, holder, violations, operations, workerId, window.Token), window.Token))
         ];
-
         await Task.WhenAll(workers);
 
-        // 断言 3：归还全部完成，空闲数回落到容量上界（无泄漏）
-        await Assert.That(pool.IdleCount).IsEqualTo(4);
-        // 断言 1（串租）与断言 2（租期隔离）的汇总
-        await Assert.That(string.Join(" | ", violations.Take(10))).IsEmpty();
-        // 有效负载下限：确保浸泡真的跑了足够多轮，而不是被启动开销吞掉
-        await Assert.That(operations[0]).IsGreaterThan(50);
+        return (Interlocked.Read(ref operations[0]), pool.IdleCount, [.. violations]);
     }
 
-    private static async Task<SharedSqliteDb> CreateSeededAsync()
+    private static async Task<SharedSqliteDb> CreateSeededAsync(string name)
     {
-        SharedSqliteDb shared = await SharedSqliteDb.CreateAsync("soak_rent");
+        SharedSqliteDb shared = await SharedSqliteDb.CreateAsync(name);
         try
         {
             await using DataSession<SqliteProvider> seed = await shared.OpenSessionAsync();
@@ -66,7 +93,7 @@ public sealed class ConcurrencySoakTests
         DataSessionPool<SqliteProvider> pool,
         ConcurrentDictionary<int, int> holder,
         ConcurrentBag<string> violations,
-        int[] operations,
+        long[] operations,
         int workerId,
         CancellationToken ct)
     {
