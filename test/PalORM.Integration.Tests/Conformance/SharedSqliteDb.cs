@@ -42,6 +42,12 @@ internal sealed class SharedSqliteDb : IAsyncDisposable
         => await DataSession<SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = _connectionString }, ct).ConfigureAwait(false);
 
+    /// <summary>建一个连到同一共享库的会话池。容量取 1 时可保证重租的是同一个实例，
+    /// 用于观测"归还后瞬态状态复位"（<c>_idle</c> 是 FIFO 队列，容量大于 1 不保证同实例）。</summary>
+    public DataSessionPool<SqliteProvider> CreatePool(int maxIdleSize = 1)
+        => DataSessionPool<SqliteProvider>.Create(
+            new DbOptions { ConnectionString = _connectionString }, maxIdleSize);
+
     /// <summary>裸 ADO 读软删表，按 deleted_at 是否为空划分成两个主键集合。
     /// <para><b>表名与列名必须硬编码</b>（方案 §2 原则 1）：期望值不得复用 PalORM_Runtime
     /// 或 [Column] 注解的任何值，否则 IgnoreFilters 失效时两侧同错，判据失去判别力。</para>

@@ -102,36 +102,83 @@ internal static class RowComparer
         if (left is null || right is null) return left is null && right is null;
 
         if (left is byte[] || right is byte[]) return BytesEqual(left, right);
-        if (left is double || right is double) return DoubleEqual(left, right);
-        if (left is float || right is float) return FloatEqual(left, right);
+        if (left is bool || right is bool) return BoolEqual(left, right);
+        if (left is double || right is double || left is float || right is float
+            || left is decimal || right is decimal)
+            return NumericEqual(left, right);
         if (left is DateTime || right is DateTime) return DateTimeEqual(left, right);
         if (left is DateTimeOffset || right is DateTimeOffset) return OffsetEqual(left, right);
-        if (left is decimal || right is decimal) return DecimalEqual(left, right);
 
         return Equals(left, right);
+    }
+
+    /// <summary>布尔与整数判等：SQLite 的 BOOLEAN 是 INTEGER 亲和，读回 1/0 是方言事实。
+    /// 只接受 0 与 1，其余整数与布尔不判等（避免把类型映射错误洗成相等）。</summary>
+    private static bool BoolEqual(object? left, object? right)
+    {
+        if (left is bool leftBool && right is bool rightBool) return leftBool == rightBool;
+        if (left is bool flag && right is long or int or short or byte)
+            return (flag ? 1L : 0L) == Convert.ToInt64(right, CultureInfo.InvariantCulture);
+        if (right is bool rightFlag && left is long or int or short or byte)
+            return (rightFlag ? 1L : 0L) == Convert.ToInt64(left, CultureInfo.InvariantCulture);
+        return false;
+    }
+
+    /// <summary>数值判等。同类保持精确（浮点按位、decimal 按值）；跨表示只允许
+    /// decimal 与浮点之间按 decimal 换算比较：SQLite 无 DECIMAL 真实类型，读回 REAL 是方言事实。</summary>
+    private static bool NumericEqual(object? left, object? right)
+    {
+        if (left is double leftDouble && right is double rightDouble)
+        {
+            if (double.IsNaN(leftDouble) || double.IsNaN(rightDouble)) return false;
+            return BitConverter.DoubleToInt64Bits(leftDouble) == BitConverter.DoubleToInt64Bits(rightDouble);
+        }
+        if (left is float leftFloat && right is float rightFloat)
+        {
+            if (float.IsNaN(leftFloat) || float.IsNaN(rightFloat)) return false;
+            return BitConverter.SingleToInt32Bits(leftFloat) == BitConverter.SingleToInt32Bits(rightFloat);
+        }
+        if (left is decimal leftDecimal && right is decimal rightDecimal)
+            return leftDecimal == rightDecimal;
+
+        return TryAsDecimal(left, out decimal convertedLeft)
+            && TryAsDecimal(right, out decimal convertedRight)
+            && convertedLeft == convertedRight;
+    }
+
+    private static bool TryAsDecimal(object? value, out decimal result)
+    {
+        switch (value)
+        {
+            case decimal number:
+                result = number;
+                return true;
+            case double doubleNumber when !double.IsNaN(doubleNumber) && !double.IsInfinity(doubleNumber):
+                // (decimal) 强转会完整搬入 double 的二进制误差（(decimal)12.34d = 12.339999999999999858），
+                // 必须按最短往返十进制表示解析才能得到 12.34m；超出 decimal 范围时 TryParse 返回 false
+                return decimal.TryParse(
+                    doubleNumber.ToString("R", CultureInfo.InvariantCulture),
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+            case float floatNumber when !float.IsNaN(floatNumber) && !float.IsInfinity(floatNumber):
+                return decimal.TryParse(
+                    floatNumber.ToString("R", CultureInfo.InvariantCulture),
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+            case long or int or short or byte:
+                result = Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+                return true;
+            default:
+                result = 0m;
+                return false;
+        }
     }
 
     private static bool OffsetEqual(object? left, object? right)
         => left is DateTimeOffset leftOffset && right is DateTimeOffset rightOffset
             && leftOffset == rightOffset;
 
-    private static bool DecimalEqual(object? left, object? right)
-        => left is decimal leftDecimal && right is decimal rightDecimal
-            && leftDecimal == rightDecimal;
-
     private static bool BytesEqual(object? left, object? right)
         => left is byte[] leftBytes && right is byte[] rightBytes
             && leftBytes.AsSpan().SequenceEqual(rightBytes);
-
-    private static bool DoubleEqual(object? left, object? right)
-        => left is double leftDouble && right is double rightDouble
-            && !double.IsNaN(leftDouble) && !double.IsNaN(rightDouble)
-            && BitConverter.DoubleToInt64Bits(leftDouble) == BitConverter.DoubleToInt64Bits(rightDouble);
-
-    private static bool FloatEqual(object? left, object? right)
-        => left is float leftFloat && right is float rightFloat
-            && !float.IsNaN(leftFloat) && !float.IsNaN(rightFloat)
-            && BitConverter.SingleToInt32Bits(leftFloat) == BitConverter.SingleToInt32Bits(rightFloat);
 
     private static bool DateTimeEqual(object? left, object? right)
         => left is DateTime leftTime && right is DateTime rightTime
@@ -148,10 +195,13 @@ internal static class RowComparer
             null => "null",
             string text => "str:" + text,
             byte[] bytes => "bytes:" + Convert.ToBase64String(bytes),
-            bool flag => flag ? "bool:true" : "bool:false",
-            decimal number => "dec:" + number.ToString(CultureInfo.InvariantCulture),
-            double number => double.IsNaN(number) ? "dbl:NaN" : "dbl:" + number.ToString("R", CultureInfo.InvariantCulture),
-            float number => float.IsNaN(number) ? "flt:NaN" : "flt:" + number.ToString("R", CultureInfo.InvariantCulture),
+            // 数值与布尔统一 num: 前缀：SQLite 的 BOOLEAN/DECIMAL 读回 INTEGER/REAL，
+            // 排序键必须让 true 与 1、12.34m 与 12.34d 落在同一键位，否则行配对会错位
+            bool flag => flag ? "num:1" : "num:0",
+            long or int or short or byte => "num:" + Convert.ToInt64(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
+            decimal number => "num:" + number.ToString(CultureInfo.InvariantCulture),
+            double number => double.IsNaN(number) ? "nan" : "num:" + number.ToString("R", CultureInfo.InvariantCulture),
+            float number => float.IsNaN(number) ? "nan" : "num:" + number.ToString("R", CultureInfo.InvariantCulture),
             DateTime time => NormalizeDateTime(time),
             DateTimeOffset offset => "dto:" + offset.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             DateOnly date => "date:" + date.ToString("O", CultureInfo.InvariantCulture),

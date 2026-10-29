@@ -137,4 +137,43 @@ public sealed class ConformanceRowComparerTests
 
         await Assert.That(RowComparer.Compare(expected, actual).Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task Boolean_AndOne_AreEqual()
+    {
+        // SQLite 的 BOOLEAN 是 INTEGER 亲和，手写侧读回 1/0
+        var expected = Rows(Row(("flag", 1L)));
+        var actual = Rows(Row(("flag", true)));
+
+        await Assert.That(RowComparer.Compare(expected, actual).Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Boolean_AndNonBinaryInteger_AreNotEqual()
+    {
+        // 只接受 0/1；其余整数与布尔不判等，避免把类型映射错误洗成相等
+        var expected = Rows(Row(("flag", true)));
+        var actual = Rows(Row(("flag", 2L)));
+
+        await Assert.That(RowComparer.Compare(expected, actual).Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DecimalVersusDouble_SameValue_AreEqual()
+    {
+        // SQLite 无 DECIMAL 真实类型，同一列一侧读回 decimal、另一侧读回 REAL
+        var expected = Rows(Row(("ratio", 12.34d)));
+        var actual = Rows(Row(("ratio", 12.34m)));
+
+        await Assert.That(RowComparer.Compare(expected, actual).Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DecimalVersusDouble_DifferentValue_IsReported()
+    {
+        var expected = Rows(Row(("ratio", 12.34d)));
+        var actual = Rows(Row(("ratio", 12.35m)));
+
+        await Assert.That(RowComparer.Compare(expected, actual).Count).IsEqualTo(1);
+    }
 }

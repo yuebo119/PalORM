@@ -249,3 +249,16 @@ public partial class CfBulkPlainEntity
     [Column("name")] public string Name { get; set; } = "";
     [Column("amount")] public long Amount { get; set; }
 }
+
+/// <summary>SET 谓词与绑定漂移专用实体（事故族 1）：四列不同类型的列加一列可空文本。
+/// 列序或绑定若错位一格，字符串、整数、布尔、小数会跨列污染，断言立即报红。</summary>
+[Table("cf_set_drift")]
+public partial class CfSetDriftEntity
+{
+    [Key(AutoIncrement = false)] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("amount")] public long Amount { get; set; }
+    [Column("flag")] public bool Flag { get; set; }
+    [Column("ratio")] public decimal Ratio { get; set; }
+    [Column("note")] public string? Note { get; set; }
+}
