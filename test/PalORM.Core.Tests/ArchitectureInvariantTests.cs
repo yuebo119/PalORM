@@ -55,6 +55,9 @@ public sealed class ArchitectureInvariantTests
         ["UpdateColumnsAsync"] = "薄包装：过滤路由在内核 UpdateColumnsEntryAsync",
         // C4（v5.6.0）：连接池预热——不触表（只建连/归还池，无 SQL 到任何实体表）
         ["PreWarmAsync"] = "连接池预热：仅建连 + Provider 初始化钩子，不触任何实体表",
+        // D2（2026-10-29）：批量插入回填主键——INSERT 无过滤语义（租户列值由实体携带），
+        // RETURNING 只回读本次刚写入的行，不做范围读
+        ["BulkInsertReturningAsync"] = "同 BulkInsertAsync：INSERT 无过滤语义，RETURNING 只回读本批写入行",
     };
 
     [Test]
