@@ -154,10 +154,21 @@ public sealed class ErrorContractTests
         await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
         db.WithTimeout(TimeSpan.FromMilliseconds(100));
         // pg_sleep(2) 远超 100ms 超时窗口
-        // 实测（2026-10-29）：PG 上超时经 NpgsqlException 呈现，而非统一的 TimeoutException。
-        // 文档未约定具体异常类型，这里登记实测值；连接归还由后续查询可用性间接断言。
-        await Assert.That(async () => await db.ScalarAsync<long>($"SELECT 1 FROM pg_sleep(2)"))
-            .Throws<Npgsql.NpgsqlException>();
+        // 超时语义必须出现在异常链里。外层类型取决于实际走的路径：弹性执行器出口已解包为
+        // TimeoutException；直通路径（首次直接执行且失败未重试）仍抛驱动异常，超时在 InnerException。
+        Exception? captured = null;
+        try
+        {
+            await db.ScalarAsync<long>($"SELECT 1 FROM pg_sleep(2)");
+        }
+        catch (Exception ex)
+        {
+            captured = ex;
+        }
+        await Assert.That(captured).IsNotNull();
+        bool timeoutVisible = captured is TimeoutException || captured.InnerException is TimeoutException;
+        await Assert.That(timeoutVisible).IsTrue();
+        // 超时后连接仍可用
         await Assert.That(await db.ScalarAsync<long>($"SELECT 1")).IsEqualTo(1L);
     }
 

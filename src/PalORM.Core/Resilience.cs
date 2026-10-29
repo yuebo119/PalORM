@@ -233,6 +233,11 @@ public sealed class ResilienceExecutor
         {
             _circuitBreaker.RecordFinalFailure(
                 isHalfOpenProbe, CountsTowardCircuit(exception), generation, probeToken);
+            // 驱动把命令超时包在自身异常里：Npgsql 的 NpgsqlException 内层是超时异常。
+            // 在此解包，使调用方按超时类型捕获时能同时覆盖连接超时与命令超时两条路径。
+            // 熔断计数已按原异常算完，解包不影响判定。
+            if (exception is not TimeoutException && exception.InnerException is TimeoutException timeout)
+                throw new TimeoutException(timeout.Message, exception);
             throw;
         }
     }
