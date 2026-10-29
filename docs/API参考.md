@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1418 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1420 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -217,7 +217,7 @@
 |------|------|
 | `.WithRetry(max, backoff?)` | 指数退避重试瞬时故障。v5.4 起覆盖连接建立与只读查询内置管线（From\<T\>() SELECT 族/GetAsync/GetAllAsync/聚合）；写入与事务内查询不自动重试 |
 | `.WithCircuitBreaker(threshold, resetAfter)` | 熔断器（generation 防陈旧）。作用域同 WithRetry；写入路径不计入熔断；**只对瞬时故障计数**（连接类与超时类），SQL 语法错误、约束冲突等请求错误不计入，也不会触发重试 |
-| `.WithTimeout(TimeSpan)` | 命令超时 |
+| `.WithTimeout(TimeSpan)` | 命令超时。到期后统一以 `TimeoutException` 呈现（驱动形态各异，见「方言差异与注意事项」）；覆盖 `ScalarAsync` / `GetAsync` / `GetAllAsync` 与查询管线（`ToListAsync` / `FirstOrDefaultAsync` / `ForEachAsync` / `ToPageAsync`） |
 | `ExecuteWithResilience(operation)` | 手动弹性执行入口——任意操作（含非幂等写）的显式弹性通道 |
 
 ### 横切关注点
@@ -281,6 +281,7 @@
 | `DateTimeOffset` | SQLite 保留 offset（文本存储）；PostgreSQL 只接受 Utc；MySQL 的 `TIMESTAMP` 归一为 UTC 且 offset 丢失，`DATETIME(6)` 保留墙钟 | 需要 offset 语义时优先 SQLite 或 PostgreSQL；MySQL 上不要依赖 offset |
 | `decimal` 在 SQLite | 无真实 `DECIMAL` 类型，按 NUMERIC 亲和存为 REAL，精度可能在存储层损失 | 金额等精确小数用 PostgreSQL 或 MySQL；SQLite 只用于测试或非金额数据 |
 | 行锁 `ForUpdate` / `ForShare` | SQLite 无行级锁，构建期抛 `NotSupportedException` | 用 PostgreSQL / MySQL，或用写事务 `BEGIN IMMEDIATE` 做写串行化 |
+| 命令超时在 MySQL | 驱动不保证抛异常：标量路径中断查询后返回部分结果，列表路径抛 `MySqlException`（`ErrorCode=CommandTimeoutExpired`，内层 `QueryInterrupted` 1317） | 按 `TimeoutException` 捕获即可——PalORM 按耗时判定后归一，不要按驱动异常类型分支 |
 
 ## PostgreSQL 专有
 

@@ -178,6 +178,63 @@ public sealed class ErrorContractTests
         await Assert.That(await db.ScalarAsync<long>($"SELECT 1")).IsEqualTo(1L);
     }
 
+    /// <summary>D7：查询管线（QueryBuilder）与标量入口同一判定——驱动返回部分结果而非抛异常时，
+    /// 按耗时归一为 <see cref="TimeoutException"/>。裸 <c>ToListAsync</c> 若不接判定，这里会拿到
+    /// 空列表（查询被中断的"部分结果"）而静默成功。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [NotInParallel("CfTimeoutProbe")]
+    public async Task E4_MySql_QueryPipelineTimeout_ThrowsTimeoutException()
+    {
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+        await db.MigrateAsync();
+        await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
+        await db.InsertAsync(new CfTimeoutProbeEntity { Id = 1, Name = "probe" });
+        try
+        {
+            // 表内恰一行，SLEEP(5) 谓词每行求值一次 → 整条查询约 5 秒；
+            // 命令超时 1 秒，驱动到点中断并返回部分结果（0 行）。
+            await Assert.That(async () => await db.From<CfTimeoutProbeEntity>()
+                    .Where($"SLEEP(5) = 0")
+                    .WithCommandTimeout(1)
+                    .ToListAsync())
+                .Throws<TimeoutException>();
+            // 超时后会话仍可用：未被判定拦下的原始行为是返回空列表
+            await Assert.That(await db.From<CfTimeoutProbeEntity>().ToListAsync()).Count().IsEqualTo(1);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
+        }
+    }
+
+    /// <summary>D7：分页（<c>ToPageAsync</c>）在 MySQL 上走事务内 <c>DbBatch</c>（COUNT 与页查询
+    /// 单次往返），超时判定与单语句查询同口径；超时后事务回滚且会话仍可用。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [NotInParallel("CfTimeoutProbe")]
+    public async Task E4_MySql_PagedQueryTimeout_ThrowsTimeoutException()
+    {
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+        await db.MigrateAsync();
+        await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
+        await db.InsertAsync(new CfTimeoutProbeEntity { Id = 1, Name = "probe" });
+        try
+        {
+            await Assert.That(async () => await db.From<CfTimeoutProbeEntity>()
+                    .Where($"SLEEP(5) = 0")
+                    .WithCommandTimeout(1)
+                    .ToPageAsync(10, o => o.Id))
+                .Throws<TimeoutException>();
+            // 事务内超时后回滚完成，会话可继续使用
+            await Assert.That(await db.From<CfTimeoutProbeEntity>().ToListAsync()).Count().IsEqualTo(1);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
+        }
+    }
+
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task E7_PostgreSql_OverLengthValue_IsRejected()
