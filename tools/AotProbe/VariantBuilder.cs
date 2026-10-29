@@ -20,26 +20,30 @@ internal static class VariantBuilder
 
     internal static string VariantsRoot(string repoRoot) => Path.Combine(repoRoot, "tmp", "aotprobe", "variants");
 
-    /// <summary>落盘一个变体并返回二进制路径约定。group=B 时同时确保 bentities 工程存在。</summary>
-    internal static BuiltVariant Create(
-        string repoRoot, AotProbeManifest.Library lib, ProbeGroup group, ProbeForm form, string rid, string adapterFile)
+    /// <summary>中和文件：切断根 Directory.Build.props（Sonar/CPM/TreatWarningsAsErrors/版本号），
+    /// 变体完全自含——第三方告警是采集数据，不是构建失败。</summary>
+    private static void WriteNeutralProps(string repoRoot)
     {
-        string libDir = Path.Combine(VariantsRoot(repoRoot), lib.Id);
-        string variantDir = Path.Combine(libDir, $"{(group == ProbeGroup.A ? "a" : "b")}-{FormName(form)}");
-        Directory.CreateDirectory(variantDir);
-
-        // 中和文件：切断根 Directory.Build.props（Sonar/CPM/TreatWarningsAsErrors/版本号），
-        // 变体完全自含——第三方告警是采集数据，不是构建失败
         string probeRoot = Path.Combine(repoRoot, "tmp", "aotprobe");
         Directory.CreateDirectory(probeRoot);
         string neutral = Path.Combine(probeRoot, "Directory.Build.props");
         if (!File.Exists(neutral))
             File.WriteAllText(neutral, "<Project />\n");
+    }
 
-        string toolDir = Path.Combine(repoRoot, "tools", "AotProbe");
-        string sharedCatalog = Forward(Path.Combine(toolDir, "shared", "ProbeCatalog.cs"));
-        string adapterPath = Forward(Path.Combine(toolDir, "adapters", adapterFile));
-        string entitiesPath = Forward(Path.Combine(toolDir, "adapters", $"{lib.Id}.Entities.cs"));
+    /// <summary>落盘一个变体并返回二进制路径约定。group=B 时同时确保 bentities 工程存在。
+    /// extraDefines：efcore 的 AOT 形态在编译模型生成后二次重建时注入 EF_COMPILED。</summary>
+    internal static BuiltVariant Create(
+        string repoRoot, AotProbeManifest.Library lib, ProbeGroup group, ProbeForm form, string rid, string adapterFile,
+        string? extraDefines = null)
+    {
+        string libDir = Path.Combine(VariantsRoot(repoRoot), lib.Id);
+        string variantDir = Path.Combine(libDir, $"{(group == ProbeGroup.A ? "a" : "b")}-{FormName(form)}");
+        Directory.CreateDirectory(variantDir);
+        WriteNeutralProps(repoRoot);
+
+        (string sharedCatalog, string adapterCommon, string? rawChannel, string adapterPath, string entitiesPath) =
+            ResolveSources(repoRoot, lib, adapterFile);
         string hostFile = Path.Combine(variantDir, "Host.cs");
         File.Copy(Path.Combine(AppContext.BaseDirectory, "templates", "VariantHost.cs"), hostFile, overwrite: true);
 
@@ -63,6 +67,9 @@ internal static class VariantBuilder
         csproj.AppendLine("    <Features>runtime-async=on</Features>");
         if (group == ProbeGroup.B)
             csproj.AppendLine("    <DefineConstants>$(DefineConstants);AOTPROBE_B</DefineConstants>");
+        if (extraDefines is not null)
+            csproj.AppendLine(CultureInfo.InvariantCulture, $"    <DefineConstants>$(DefineConstants);{extraDefines}</DefineConstants>");
+        AppendLibSpecific(csproj, lib.Id);
         csproj.AppendLine("  </PropertyGroup>");
         csproj.AppendLine("  <ItemGroup>");
         foreach (var pkg in lib.Packages)
@@ -74,6 +81,9 @@ internal static class VariantBuilder
         csproj.AppendLine("  </ItemGroup>");
         csproj.AppendLine("  <ItemGroup>");
         csproj.AppendLine(CultureInfo.InvariantCulture, $"    <Compile Include=\"{sharedCatalog}\" Link=\"shared/ProbeCatalog.cs\" />");
+        csproj.AppendLine(CultureInfo.InvariantCulture, $"    <Compile Include=\"{adapterCommon}\" Link=\"adapter/common/AdapterValues.cs\" />");
+        if (rawChannel is not null)
+            csproj.AppendLine(CultureInfo.InvariantCulture, $"    <Compile Include=\"{rawChannel}\" Link=\"adapter/common/RawChannel.cs\" />");
         csproj.AppendLine(CultureInfo.InvariantCulture, $"    <Compile Include=\"{adapterPath}\" Link=\"adapter/LibAdapter.cs\" />");
         if (group == ProbeGroup.A)
             csproj.AppendLine(CultureInfo.InvariantCulture, $"    <Compile Include=\"{entitiesPath}\" Link=\"adapter/Entities.cs\" />");
@@ -85,13 +95,7 @@ internal static class VariantBuilder
             csproj.AppendLine("    <ProjectReference Include=\"../bentities/BEntities.csproj\" />");
             csproj.AppendLine("  </ItemGroup>");
         }
-        if (form == ProbeForm.Root)
-        {
-            // Root 对照臂：把实体程序集登记为裁剪根，区分"裁剪可救"与"机制不可救"
-            csproj.AppendLine("  <ItemGroup>");
-            csproj.AppendLine("    <TrimmerRootAssembly Include=\"BEntities\" />");
-            csproj.AppendLine("  </ItemGroup>");
-        }
+        AppendRootBlock(csproj, lib, group, form);
         csproj.AppendLine("</Project>");
 
         string projectPath = Path.Combine(variantDir, "AotProbeVariant.csproj");
@@ -143,6 +147,52 @@ internal static class VariantBuilder
         sb.AppendLine("  </ItemGroup>");
         sb.AppendLine("</Project>");
         File.WriteAllText(Path.Combine(dir, "BEntities.csproj"), sb.ToString());
+    }
+
+    /// <summary>解析变体需链接的源资产路径（与 Create 拆分以满足 S3776 认知复杂度预算）。</summary>
+    private static (string SharedCatalog, string AdapterCommon, string? RawChannel, string AdapterPath, string EntitiesPath)
+        ResolveSources(string repoRoot, AotProbeManifest.Library lib, string adapterFile)
+    {
+        string toolDir = Path.Combine(repoRoot, "tools", "AotProbe");
+        // raw 旁路（SQLite ADO）三类库不链接：litedb（无包）、postgres 库（自带 PG 旁路）、其余全链
+        string? rawChannel = lib.Id == "litedb" || lib.Provider != "sqlite" ? null
+            : Forward(Path.Combine(toolDir, "adapters", "common", "RawChannel.cs"));
+        return (Forward(Path.Combine(toolDir, "shared", "ProbeCatalog.cs")),
+            Forward(Path.Combine(toolDir, "adapters", "common", "AdapterValues.cs")),
+            rawChannel,
+            Forward(Path.Combine(toolDir, "adapters", adapterFile)),
+            Forward(Path.Combine(toolDir, "adapters", $"{lib.Id}.Entities.cs")));
+    }
+
+    /// <summary>库特定 csproj 注入（独立小方法，也为 Create 的认知复杂度预算减负）。</summary>
+    private static void AppendLibSpecific(StringBuilder csproj, string libId)
+    {
+        if (libId != "dapper-aot")
+            return;
+        // [assembly: DapperAot] 全量拦截走 C# 拦截器机制，须启用其命名空间（CS9137 提示，2026-10-28）
+        csproj.AppendLine("    <InterceptorsNamespaces>$(InterceptorsNamespaces);Dapper.AOT</InterceptorsNamespaces>");
+    }
+
+
+    /// <summary>Root 对照臂块：B 组 root 实体程序集；A 组 root 宿主 + 库包程序集
+    /// （TrimmerRootAssembly = 官方支持的保根形态，供判定模型 R5c"需配置"档）。</summary>
+    private static void AppendRootBlock(StringBuilder csproj, AotProbeManifest.Library lib, ProbeGroup group, ProbeForm form)
+    {
+        if (form != ProbeForm.Root)
+            return;
+        csproj.AppendLine("  <ItemGroup>");
+        if (group == ProbeGroup.B)
+        {
+            csproj.AppendLine("    <TrimmerRootAssembly Include=\"BEntities\" />");
+        }
+        else
+        {
+            csproj.AppendLine("    <TrimmerRootAssembly Include=\"AotProbeVariant\" />");
+            foreach (var pkg in lib.Packages)
+                csproj.AppendLine(CultureInfo.InvariantCulture,
+                    $"    <TrimmerRootAssembly Include=\"{pkg.Name}\" />");
+        }
+        csproj.AppendLine("  </ItemGroup>");
     }
 
     internal static string FormName(ProbeForm form) => form switch

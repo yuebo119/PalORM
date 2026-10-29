@@ -60,7 +60,24 @@ internal static class ProbeCatalog
 
     internal static ProbeDef Def(ProbeId id) => all.Single(d => d.Id == id);
 
-    /// <summary>item × lib 适用性（B28 参照系偏置防线）。S0 阶段 P0 八项对 palorm 全适用；
-    /// N/A 条目在 S1 各库接入时逐条登记（先例：#19 存储过程在 SQLite 方言全库 N/A）。</summary>
-    internal static bool IsApplicable(ProbeId probe, string libraryId) => true;
+    /// <summary>item × lib 适用性（B28 参照系偏置防线）。N/A 条目逐库登记，
+    /// 分母与 B 组计划自动排除（Runner 已接 IsApplicable 过滤）。</summary>
+    private static readonly (string Lib, ProbeId Probe, string Reason)[] NotApplicable =
+    [
+        ("litedb", ProbeId.P0Ddl, "feature-absent：文档库无 DDL（集合隐式创建）"),
+        ("litedb", ProbeId.P0Aggregate, "feature-absent：无数据库端分组聚合"),
+        ("repodb", ProbeId.P0Ddl, "feature-absent：RepoDb 无 DDL API（CRUD 库），bootstrap 走 RawChannel"),
+        ("mapdatareader", ProbeId.P0Ddl, "feature-absent：纯映射器，无 DDL/写面"),
+        ("mapdatareader", ProbeId.P0InsertExplicitPk, "feature-absent：纯映射器"),
+        ("mapdatareader", ProbeId.P0InsertAutoPk, "feature-absent：纯映射器"),
+        ("mapdatareader", ProbeId.P0UpdateDelete, "feature-absent：纯映射器"),
+        ("mapdatareader", ProbeId.P0Aggregate, "feature-absent：纯映射器"),
+        ("mapdatareader", ProbeId.P0Transaction, "feature-absent：纯映射器"),
+    ];
+
+    internal static bool IsApplicable(ProbeId probe, string libraryId) =>
+        !NotApplicable.Any(n => n.Lib == libraryId && n.Probe == probe);
+
+    internal static string? NotApplicableReason(ProbeId probe, string libraryId) =>
+        NotApplicable.FirstOrDefault(n => n.Lib == libraryId && n.Probe == probe).Reason;
 }

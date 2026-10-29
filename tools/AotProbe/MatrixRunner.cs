@@ -18,12 +18,12 @@ internal static partial class MatrixRunner
     internal static int Run(string[] args) => RunAsync(args).GetAwaiter().GetResult();
 
     internal sealed record Options(
-        string? LibId, string? Rid, List<string> Forms, HashSet<string> Groups, bool Diagnose);
+        string? LibId, string? Rid, List<string> Forms, HashSet<string> Groups, bool Diagnose, string? PgConn);
 
     /// <summary>while 手动步进而非 for 内 ++i：S127 禁止在 for 循环体改循环变量。</summary>
     private static Options ParseArgs(string[] args)
     {
-        string? libId = null, rid = null;
+        string? libId = null, rid = null, pgConn = null;
         var forms = new List<string>(["jit", "aot"]);
         var groups = new HashSet<string>(["A", "B"]);
         bool diagnose = false;
@@ -37,10 +37,11 @@ internal static partial class MatrixRunner
                 case "--forms": forms = [.. args[i + 1].Split(',', StringSplitOptions.TrimEntries)]; i += 2; break;
                 case "--groups": groups = [.. args[i + 1].Split(',', StringSplitOptions.TrimEntries)]; i += 2; break;
                 case "--diagnose": diagnose = true; i++; break;
+                case "--pg": pgConn = args[i + 1]; i += 2; break;
                 default: throw new ArgumentException($"unknown arg: {args[i]}");
             }
         }
-        return new Options(libId, rid, forms, groups, diagnose);
+        return new Options(libId, rid, forms, groups, diagnose, pgConn);
     }
 
     private static async Task<int> RunAsync(string[] args)
@@ -51,49 +52,67 @@ internal static partial class MatrixRunner
         catch (IndexOutOfRangeException) { Console.WriteLine("missing value for argument"); return 2; }
 
         var lib = AotProbeManifest.Libraries.FirstOrDefault(l => l.Id == opt.LibId);
-        if (lib is null)
+        // --lib all：全部适配器就绪库（S1 全矩阵入口，单份 facts 落盘）
+        if (opt.LibId == "all")
+            lib = null;
+        if (lib is null && opt.LibId != "all")
         {
-            Console.WriteLine("usage: aotprobe run --lib <id> [--forms jit,aot] [--groups A,B] [--rid win-x64] [--diagnose]");
+            Console.WriteLine("usage: aotprobe run --lib <id|all> [--forms jit,aot] [--groups A,B] [--rid win-x64] [--diagnose]");
             Console.WriteLine("libraries: " + string.Join(", ", AotProbeManifest.Libraries.Select(l => l.Id + (l.AdapterReady ? "" : "(S1)"))));
             return 2;
         }
-        if (!lib.AdapterReady)
+        var libs = lib is null
+            ? AotProbeManifest.Libraries.Where(l => l.AdapterReady).ToList()
+            : [lib];
+        if (libs.Count == 0)
         {
-            Console.WriteLine($"library '{lib.Id}' has no adapter yet (S1 scope)");
+            Console.WriteLine("no adapter-ready libraries in manifest");
             return 2;
         }
 
         string rid = opt.Rid ?? (OperatingSystem.IsWindows() ? "win-x64" : "linux-x64");
+        // PG 通道（Marten 等 postgres 库）：CLI --pg > 环境变量 PALORM_AOTPROBE_PG > 默认本机 pg186 容器
+        string pgConn = opt.PgConn
+            ?? Environment.GetEnvironmentVariable("PALORM_AOTPROBE_PG")
+            ?? "Host=127.0.0.1;Username=postgres;Database=postgres";
         string repoRoot = FindRepoRoot();
 
         var runs = new List<ArmRun>();
-        await RunPlannedArmsAsync(repoRoot, lib, rid, opt, runs).ConfigureAwait(false);
+        foreach (var target in libs)
+        {
+            await RunPlannedArmsAsync(repoRoot, target, rid, opt, runs, pgConn).ConfigureAwait(false);
+        }
         await WriteFactsAsync(repoRoot, rid, runs).ConfigureAwait(false);
         PrintSummary(runs);
         return 0;
     }
 
     private static async Task RunPlannedArmsAsync(
-        string repoRoot, AotProbeManifest.Library lib, string rid, Options opt, List<ArmRun> runs)
+        string repoRoot, AotProbeManifest.Library lib, string rid, Options opt, List<ArmRun> runs, string pgConn)
     {
         foreach (string formName in opt.Forms.Where(f => f is "jit" or "aot"))
         {
-            runs.Add(await RunArmAsync(repoRoot, lib, ProbeGroup.A, ParseForm(formName), rid).ConfigureAwait(false));
+            runs.Add(await RunArmAsync(repoRoot, lib, ProbeGroup.A, ParseForm(formName), rid, pgConn).ConfigureAwait(false));
         }
 
-        ArmRun? aAot = runs.FirstOrDefault(r => r is { Group: "A", Form: "aot" });
+        // 臂查找必须限定当前库：--lib all 模式下 runs 跨库累积，拿别的库的 A-aot 当门会让失败库误跑 B 臂
+        ArmRun? aAot = runs.FirstOrDefault(r => r.Library == lib.Id && r is { Group: "A", Form: "aot" });
         bool aAotP0Pass = aAot is not null && ArmP0Pass(aAot);
 
         if (aAotP0Pass && opt.Groups.Contains("B"))
         {
-            ArmRun bAot = await RunArmAsync(repoRoot, lib, ProbeGroup.B, ProbeForm.Aot, rid).ConfigureAwait(false);
+            ArmRun bAot = await RunArmAsync(repoRoot, lib, ProbeGroup.B, ProbeForm.Aot, rid, pgConn).ConfigureAwait(false);
             runs.Add(bAot);
             if (!ArmP0Pass(bAot))
-                runs.Add(await RunArmAsync(repoRoot, lib, ProbeGroup.B, ProbeForm.Root, rid).ConfigureAwait(false));
+                runs.Add(await RunArmAsync(repoRoot, lib, ProbeGroup.B, ProbeForm.Root, rid, pgConn).ConfigureAwait(false));
         }
-        else if (opt.Diagnose && aAot is not null && !aAotP0Pass && runs.All(r => r.Form != "trimjit"))
+        else if (opt.Diagnose && aAot is not null && !aAotP0Pass
+                 && runs.All(r => r.Library != lib.Id || r.Form != "trimjit"))
         {
-            runs.Add(await RunArmAsync(repoRoot, lib, ProbeGroup.A, ProbeForm.TrimJit, rid).ConfigureAwait(false));
+            // 诊断臂：trimjit（区分动态代码与裁剪）+ root（区分裁剪可救与否），按库判定避免跨库累积误跳过
+            // root 结果供判定模型 R5c"需配置"档使用
+            runs.Add(await RunArmAsync(repoRoot, lib, ProbeGroup.A, ProbeForm.TrimJit, rid, pgConn).ConfigureAwait(false));
+            runs.Add(await RunArmAsync(repoRoot, lib, ProbeGroup.A, ProbeForm.Root, rid, pgConn).ConfigureAwait(false));
         }
     }
 
@@ -125,10 +144,18 @@ internal static partial class MatrixRunner
     };
 
     internal static async Task<ArmRun> RunArmAsync(
-        string repoRoot, AotProbeManifest.Library lib, ProbeGroup group, ProbeForm form, string rid)
+        string repoRoot, AotProbeManifest.Library lib, ProbeGroup group, ProbeForm form, string rid,
+        string? pgConn = null)
     {
         Console.WriteLine($"== {lib.Id}/{group}-{VariantBuilder.FormName(form)} ==");
         VariantBuilder.BuiltVariant variant = VariantBuilder.Create(repoRoot, lib, group, form, rid, $"{lib.Id}.cs");
+
+        VariantBuilder.BuiltVariant? prepared = await PrepareLibAsync(repoRoot, lib, group, form, rid, variant)
+            .ConfigureAwait(false);
+        if (prepared is null)
+            return new ArmRun(lib.Id, group.ToString(), VariantBuilder.FormName(form),
+                BuildOk: false, EfCorePrepFailure, PublishOk: false, null, [], []);
+        variant = prepared;
 
         var sw = Stopwatch.StartNew();
         ProcResult build = await RunProcessAsync(
@@ -141,10 +168,11 @@ internal static partial class MatrixRunner
             var probes = new List<ProbeRunResult>();
             ProbeId[] plan = group == ProbeGroup.A
                 ? [.. ProbeCatalog.All.Where(p => ProbeCatalog.IsApplicable(p.Id, lib.Id)).Select(p => p.Id)]
-                : ProbeCatalog.GetGroupBSet();
+                : [.. ProbeCatalog.GetGroupBSet().Where(id => ProbeCatalog.IsApplicable(id, lib.Id))];
             foreach (ProbeId probe in plan)
             {
-                probes.Add(await RunProbeAsync(variant, probe.ToString(), lib.Id, group, form).ConfigureAwait(false));
+                probes.Add(await RunProbeAsync(variant, probe.ToString(), lib.Id, group, form,
+                    lib.Provider == "postgres" ? pgConn ?? throw new InvalidOperationException("postgres 库需要 PG 通道（--pg 或 PALORM_AOTPROBE_PG）") : null).ConfigureAwait(false));
             }
             return new ArmRun(lib.Id, group.ToString(), VariantBuilder.FormName(form), BuildOk: true, null,
                 PublishOk: true, null, warnings, probes);
@@ -157,6 +185,42 @@ internal static partial class MatrixRunner
             PublishOk: false, compileFail ? null : error, warnings, []);
     }
 
+
+    private const string EfCorePrepFailure = "efcore 编译模型编排失败（详见 facts BuildError 字段）";
+
+    /// <summary>库特定预备段（efcore 编译模型两阶段编排）；返回 null 表示编排失败。</summary>
+    private static async Task<VariantBuilder.BuiltVariant?> PrepareLibAsync(
+        string repoRoot, AotProbeManifest.Library lib, ProbeGroup group, ProbeForm form, string rid,
+        VariantBuilder.BuiltVariant variant)
+    {
+        if (lib.Id != "efcore" || form is not (ProbeForm.Aot or ProbeForm.Root))
+            return variant;
+        Console.WriteLine("  efcore: compiled-model orchestration");
+        string? prepError = await PrepareEfCoreCompiledAsync(variant).ConfigureAwait(false);
+        return prepError is null
+            ? VariantBuilder.Create(repoRoot, lib, group, form, rid, $"{lib.Id}.cs", "EF_COMPILED")
+            : null;
+    }
+
+    /// <summary>efcore 编译模型预备段：本地 dotnet-ef 工具 + dbcontext optimize。
+    /// 返回 null 表示成功（调用方随后注入 EF_COMPILED 重建 csproj），非 null 为失败说明。</summary>
+    private static async Task<string?> PrepareEfCoreCompiledAsync(VariantBuilder.BuiltVariant variant)
+    {
+        Directory.CreateDirectory(Path.Combine(variant.Directory, ".config"));
+        await File.WriteAllTextAsync(Path.Combine(variant.Directory, ".config", "dotnet-tools.json"),
+            "{\"version\":1,\"isRoot\":true,\"tools\":{\"dotnet-ef\":{\"version\":\"10.0.14\",\"commands\":[\"dotnet-ef\"]}}}\n").ConfigureAwait(false);
+
+        ProcResult toolRestore = await RunProcessAsync("dotnet", "tool restore", variant.Directory,
+            TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+        if (toolRestore.ExitCode != 0)
+            return "dotnet tool restore failed:\n" + Truncate(toolRestore.Output, 1500);
+
+        ProcResult optimize = await RunProcessAsync("dotnet",
+            $"ef dbcontext optimize --project \"{variant.ProjectPath}\" --output-dir CompiledModels --namespace AotProbe.Variant.CompiledModels",
+            variant.Directory, TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+        return optimize.ExitCode == 0 ? null : "ef dbcontext optimize failed:\n" + Truncate(optimize.Output, 1500);
+    }
+
     private static string BuildArguments(VariantBuilder.BuiltVariant v, ProbeForm form, string rid) => form switch
     {
         // JIT 基线：普通 build，不 publish——变体 csproj 刻意不静态设 PublishAot（特性开关陷阱）
@@ -167,17 +231,20 @@ internal static partial class MatrixRunner
     };
 
     private static async Task<ProbeRunResult> RunProbeAsync(
-        VariantBuilder.BuiltVariant variant, string probeName, string libId, ProbeGroup group, ProbeForm form)
+        VariantBuilder.BuiltVariant variant, string probeName, string libId, ProbeGroup group, ProbeForm form,
+        string? pgConn)
     {
+        // sqlite 库：每探针独立库文件；postgres 库：db 位实参传 PG 基连接串（适配器内自建/自删探针库）
         string dbDir = Path.Combine(FindRepoRoot(), "tmp", "aotprobe", "db");
         Directory.CreateDirectory(dbDir);
         string dbPath = Path.Combine(dbDir, $"{libId}-{group}-{VariantBuilder.FormName(form)}-{probeName}-{Environment.ProcessId}.db3");
         DeleteDbTrio(dbPath);
+        string dbArg = pgConn ?? dbPath;
 
         string fileName = variant.RunViaDotnet == "dotnet" ? "dotnet" : variant.BinaryPath;
         string arguments = variant.RunViaDotnet == "dotnet"
-            ? $"\"{variant.BinaryPath}\" --probe {probeName} --db \"{dbPath}\""
-            : $"--probe {probeName} --db \"{dbPath}\"";
+            ? $"\"{variant.BinaryPath}\" --probe {probeName} --db \"{dbArg}\""
+            : $"--probe {probeName} --db \"{dbArg}\"";
 
         var sw = Stopwatch.StartNew();
         ProcResult r = await RunProcessAsync(fileName, arguments, variant.Directory, ProbeTimeout).ConfigureAwait(false);
@@ -292,16 +359,31 @@ internal static partial class MatrixRunner
                 continue;
             Match origin = DllRegex().Match(line);
             string originName = origin.Success ? origin.Value : "";
-            string attribution = "host";
-            if (lib.Packages.Any(p => originName.StartsWith(p.Name, StringComparison.OrdinalIgnoreCase)))
-                attribution = "lib";
-            else if (originName.StartsWith("System.", StringComparison.Ordinal)
-                || originName.StartsWith("Microsoft.", StringComparison.Ordinal)
-                || originName.StartsWith("netstandard", StringComparison.Ordinal))
-                attribution = "framework";
+            // 归属判定含传递包（判定在 ClassifyOrigin）：origin 基名与包名互为前缀
+            string originBase = originName.EndsWith(".dll", StringComparison.Ordinal)
+                ? originName[..^4] : originName;
+            string attribution = ClassifyOrigin(originBase, line, lib);
             warnings.Add(new IlWarning(m.Value, attribution, originName, Truncate(line, 400)));
         }
         return warnings;
+    }
+
+    /// <summary>告警归属：lib（直接/传递包，或库 API 缺注解导致告警落在适配器调用点——
+    /// 手工审计同口径计数，repodb IL2026 实例 2026-10-28）/ framework（System./Microsoft.）/ host。</summary>
+    private static string ClassifyOrigin(string originBase, string line, AotProbeManifest.Library lib)
+    {
+        bool isLib = lib.Packages.Any(p =>
+            originBase == p.Name || p.Name.StartsWith(originBase + ".", StringComparison.Ordinal)
+            || originBase.StartsWith(p.Name + ".", StringComparison.Ordinal));
+        if (isLib)
+            return "lib";
+        if (originBase.Length == 0
+            && line.Contains(@"AotProbe\adapters\", StringComparison.Ordinal))
+            return "lib";
+        bool isFramework = originBase.StartsWith("System.", StringComparison.Ordinal)
+            || originBase.StartsWith("Microsoft.", StringComparison.Ordinal)
+            || originBase.StartsWith("netstandard", StringComparison.Ordinal);
+        return isFramework ? "framework" : "host";
     }
 
     [GeneratedRegex(@"\bIL[23]\d{3}\b")]

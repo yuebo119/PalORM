@@ -22,8 +22,9 @@ internal static class SelfTest
         Console.WriteLine("== selftest case 1: bad observation must FAIL ==");
         string repoRoot = MatrixRunner.FindRepoRoot();
         var fake = new AotProbeManifest.Library("selftest-bad", AotProbeManifest.Tier.Watch,
-            [], AdapterReady: true, OfficialAotPath: "selftest-only", VerifiedMaintained: "-",
-            Note: "变异注入用例，不在清单");
+            [new AotProbeManifest.PkgRef("Microsoft.Data.Sqlite", "10.0.14")], AdapterReady: true,
+            OfficialAotPath: "selftest-only", VerifiedMaintained: "-",
+            Note: "变异注入用例，不在清单（包引用仅为 RawChannel 的编译依赖）");
 
         ArmRun arm = await MatrixRunner.RunArmAsync(repoRoot, fake, ProbeGroup.A, ProbeForm.Jit, "unused-rid").ConfigureAwait(false);
         ProbeRunResult? probe = arm.Probes.FirstOrDefault(p => p.Probe == nameof(ProbeId.P0InsertAutoPk));
@@ -40,20 +41,45 @@ internal static class SelfTest
         Console.WriteLine("== selftest case 2: grading rules on synthetic facts ==");
         int bad = 0;
 
-        var dead1 = new GradeInput(false, true, true, new LayerStat(8, 8), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
+        // v2.2 判定（2026-10-29）：P0 用 AOT 特有通过率；告警只拦 ✅（裁剪得当不降档）
+        var dead1 = new GradeInput(false, true, true, new LayerStat(8, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
         bad += Check(GradingRules.Evaluate(dead1), Grade.Unsupported, "R1");
 
-        var dead2 = new GradeInput(true, true, true, new LayerStat(6, 8), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
+        var dead2 = new GradeInput(true, true, true, new LayerStat(1, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
         bad += Check(GradingRules.Evaluate(dead2), Grade.Unsupported, "R4");
 
-        var high = new GradeInput(true, true, true, new LayerStat(8, 8), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(2, 3), 0);
-        bad += Check(GradingRules.Evaluate(high), Grade.High, "R7");
+        var partial = new GradeInput(true, true, true, new LayerStat(2, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
+        bad += Check(GradingRules.Evaluate(partial), Grade.Partial, "R5");
 
-        var warn = new GradeInput(true, true, true, new LayerStat(8, 8), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 2);
-        bad += Check(GradingRules.Evaluate(warn), Grade.High, "R7");
+        var low = new GradeInput(true, true, true, new LayerStat(4, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
+        bad += Check(GradingRules.Evaluate(low), Grade.Low, "R6");
 
-        var full = new GradeInput(true, true, true, new LayerStat(8, 8), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
-        bad += Check(GradingRules.Evaluate(full), Grade.Full, "R8");
+        var mid = new GradeInput(true, true, true, new LayerStat(7, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
+        bad += Check(GradingRules.Evaluate(mid), Grade.Mid, "R7");
+
+        // v2.2 关键回归：P0 全过 + 告警 → 🟦（裁剪得当不降档，SQLite-net / RepoDb 实例）
+        var warnHigh = new GradeInput(true, true, true, new LayerStat(8, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 7);
+        bad += Check(GradingRules.Evaluate(warnHigh), Grade.High, "R8");
+
+        // v2.5 关键回归：告警 ≥10 条封顶 🟨（SQLite-net 12 条实例）
+        var warnMid = new GradeInput(true, true, true, new LayerStat(8, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(0, 0), new LayerStat(0, 0), new LayerStat(0, 0), 12);
+        bad += Check(GradingRules.Evaluate(warnMid), Grade.Mid, "R8b");
+
+        // P1-P3 缺口同样 🟦
+        var advHigh = new GradeInput(true, true, true, new LayerStat(8, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(2, 3), 0);
+        bad += Check(GradingRules.Evaluate(advHigh), Grade.High, "R8");
+
+        // 零告警全过 = 无条件支持
+        var full = new GradeInput(true, true, true, new LayerStat(8, 8), new LayerStat(8, 8), new LayerStat(0, 0), new LayerStat(6, 6), new LayerStat(6, 6), new LayerStat(3, 3), 0);
+        bad += Check(GradingRules.Evaluate(full), Grade.Full, "R9");
+
+        // JIT 同败剔除回归：P0 AOT 6/8、JIT 6/8 = AOT 特有 100% + 12 告警 → 按 v2.5 封顶 🟨
+        var jitExcluded = new GradeInput(true, true, true, new LayerStat(6, 8), new LayerStat(6, 8), new LayerStat(0, 0), new LayerStat(0, 0), new LayerStat(0, 0), new LayerStat(0, 0), 12);
+        bad += Check(GradingRules.Evaluate(jitExcluded), Grade.Mid, "R8b");
+
+        // v2.3 关键回归：默认形态不可用但 Root 后可救 → 部分实现（需配置）
+        var rootRescue = new GradeInput(true, true, true, new LayerStat(0, 8), new LayerStat(8, 8), new LayerStat(6, 6), new LayerStat(0, 0), new LayerStat(0, 0), new LayerStat(0, 0), 0);
+        bad += Check(GradingRules.Evaluate(rootRescue), Grade.Partial, "R5c");
 
         bad += CheckAttr(new ArmInput(null, null, null, null, null, null), Attribution.Unknown);
         bad += CheckAttr(new ArmInput(false, null, null, null, null, null), Attribution.EnvironmentFault);
@@ -65,7 +91,7 @@ internal static class SelfTest
         bad += CheckAttr(new ArmInput(true, true, null, null, false, true), Attribution.NeedsRoot);
         bad += CheckAttr(new ArmInput(true, true, null, null, false, false), Attribution.MechanismEdge);
 
-        Console.WriteLine(bad == 0 ? "PASS: 5 grade rules + 9 attribution branches" : $"FAIL: {bad} rule mismatches");
+        Console.WriteLine(bad == 0 ? "PASS: 9 grade rules (v2.5) + 9 attribution branches" : $"FAIL: {bad} rule mismatches");
         return bad;
     }
 

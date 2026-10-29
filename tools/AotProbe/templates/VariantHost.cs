@@ -41,7 +41,8 @@ internal static partial class Program
         }
         catch (Exception ex)
         {
-            observation = new ProbeObservation(probe, ProbeStatus.Error, ex.GetType().FullName, ex.Message, []);
+            // ToString() 捕获完整异常链（外层 GenericADO 之类会吞内层根因）
+            observation = new ProbeObservation(probe, ProbeStatus.Error, ex.GetType().FullName, ex.ToString(), []);
         }
 
         Console.WriteLine(MarkerPrefix + JsonSerializer.Serialize(observation, VariantJsonContext.Default.ProbeObservation));
