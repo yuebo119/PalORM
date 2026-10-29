@@ -10,7 +10,7 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <c>artifacts/time-kind-matrix-{dialect}.csv</c>，供 §4.7 的期望矩阵填表。</para>
 /// <para>硬断言只保留一条：写入的 UTC 时刻不得丢失（Kind 允许方言差异，时刻不允许）。
 /// 其余 Kind 差异属于矩阵取证范围，不用断言表达，避免把"当前实现"直接固化成契约。</para></summary>
-[NotInParallel("TimeKindMatrix")]
+[NotInParallel("ExtBulkTable")]
 public sealed class TimeKindMatrixTests
 {
     private static readonly DateTime UtcInput = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc);

@@ -10,7 +10,7 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <summary>多结果集族的三方言对照（方案 §10 阶段 3）。
 /// <para>QueryMultiple：PalORM 的 GridReader 逐段读，手写侧用裸 ADO 的 <c>NextResultAsync</c> 对齐；
 /// GetRawConnection：经裸连接写入，PalORM 侧必须读到同一行（证明逃生舱与原会话指向同一个库）。</para></summary>
-[NotInParallel("ConformanceRemoteTables")]
+[NotInParallel("ExtBulkTable")]
 public sealed class TriDialectMultiResultTests
 {
     private static readonly string[] BulkColumns = ["Id", "name", "amount"];

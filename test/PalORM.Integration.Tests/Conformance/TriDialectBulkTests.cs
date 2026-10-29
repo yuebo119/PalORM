@@ -10,7 +10,7 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <para>每个操作三个测试（SQLite / PostgreSQL / MySQL），共用同一份泛型核心：PalORM 侧走批量 API，
 /// 手写侧走 <see cref="DialectSql"/> 生成的方言 SQL，两侧各写一张同构表再按列名比对。</para>
 /// <para>远程方言标 <c>ExternalDatabase</c> 并串行执行：同一容器库上多测试并发会互相清表。</para></summary>
-[NotInParallel("ConformanceRemoteTables")]
+[NotInParallel("ExtBulkTable")]
 public sealed class TriDialectBulkTests
 {
     private static readonly string[] BulkColumns = ["Id", "name", "amount"];
