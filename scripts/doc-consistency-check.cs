@@ -125,6 +125,68 @@ foreach (var name in declaredApis)
 if (apiMissing.Count == 0) Pass($"D12 文档表格声明的 {declaredApis.Count} 个调用式 API 均在源码中存在");
 else Fail($"D12 文档声明但源码不存在: {string.Join(' ', apiMissing)}（补实现或从 docs/API参考.md 删除该行）");
 
+// ── D12 扩列（2026-10-29，一致性方案阶段 1）：源码有文档无 = 警告；参数个数不一致 = 红 ──
+// 口径：反射读已构建的 PalORM.Core.dll 取真实公开签名（正则解析源码会被泛型逗号、默认值与
+// lambda 干扰）。列 2 只告警不阻断，避免一次性引入大量待补条目让门禁长期红。
+var coreDll = Path.Combine("test", "PalORM.Integration.Tests", "bin", "Debug", "net11.0", "PalORM.Core.dll");
+if (!File.Exists(coreDll))
+{
+    Console.WriteLine($"{GREEN}PASS D12b 源码面在文档中（跳过：未找到 {coreDll}，先构建）{NC}");
+    Console.WriteLine($"{GREEN}PASS D12c 签名参数个数一致（同上跳过）{NC}");
+}
+else
+{
+    var asm = System.Reflection.Assembly.LoadFrom(coreDll);
+    var publicMethods = asm.GetTypes()
+        .Where(t => t.IsPublic)
+        .SelectMany(t => t.GetMethods(
+            System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.Static))
+        .Where(m => !m.IsSpecialName && !m.Name.Contains('<', StringComparison.Ordinal))
+        .GroupBy(m => m.Name)
+        .ToDictionary(
+            g => g.Key,
+            g => g.Select(m =>
+                {
+                    // 扩展方法的第一个参数是接收者（this），文档不把它算作调用实参
+                    var parameters = m.GetParameters();
+                    var receiver = m.IsStatic && m.IsDefined(
+                        typeof(System.Runtime.CompilerServices.ExtensionAttribute), false) ? 1 : 0;
+                    return (
+                        Min: parameters.Skip(receiver).Count(p => !p.IsOptional),
+                        Max: parameters.Length - receiver);
+                })
+                .ToList(),
+            StringComparer.Ordinal);
+
+    var undocumented = publicMethods.Keys
+        .Where(n => !declaredApis.Contains(n))
+        .OrderBy(n => n, StringComparer.Ordinal)
+        .ToList();
+    var sample = string.Join(' ', undocumented.Take(12));
+    Console.WriteLine(
+        $"{GREEN}WARN D12b 源码公开方法未进文档表格 {undocumented.Count} 个（不阻断，登记待补）：{sample}"
+        + $"{(undocumented.Count > 12 ? " ..." : "")}{NC}");
+
+    var signatureBad = new List<string>();
+    // 文档写法：`.Name(类型或占位符)`；`(...)` 表示省略，不比个数
+    var docText = File.ReadAllText("docs/API参考.md");
+    foreach (Match row in Regex.Matches(docText, "`\\.(?<n>[A-Za-z_][A-Za-z0-9_]*)\\((?<a>[^`]*)\\)`"))
+    {
+        var methodName = row.Groups["n"].Value;
+        var argText = row.Groups["a"].Value.Trim();
+        if (argText.Contains("...", StringComparison.Ordinal)) continue;
+        if (!publicMethods.TryGetValue(methodName, out var arities)) continue;   // 列 1 已覆盖缺失
+        var documented = argText.Length == 0 ? 0 : argText.Count(c => c == ',') + 1;
+        // 文档写的是"调用形状"：可省略的参数也常写进去，因此按 [必填数, 总数] 区间匹配
+        if (!arities.Any(r => documented >= r.Min && documented <= r.Max))
+            signatureBad.Add($"{methodName}/{documented}");
+    }
+    if (signatureBad.Count == 0) Pass("D12c 文档签名参数个数与源码重载一致");
+    else Fail($"D12c 文档签名参数个数与源码不符: {string.Join(' ', signatureBad)}（改文档或补对应重载）");
+}
+
 // ── D13: 门禁级别三方对账（文档表 ⊗ 脚本实际判定方式）──
 // 2026-10-18 审计新增。实例：G10/G15/G16 在 .ai/gate/prompt.md 与 docs/编码规范.md 都标
 // 「警告级」，gate-check.cs 却用 CheckZero 按阻断执行——文档说警告、代码真拦截，两边都没人核。

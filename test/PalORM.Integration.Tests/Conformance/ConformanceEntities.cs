@@ -250,6 +250,15 @@ public partial class CfBulkPlainEntity
     [Column("amount")] public long Amount { get; set; }
 }
 
+/// <summary>类型截断契约（E7）专用：短长度列。SQLite 的 TEXT 不强制长度，
+/// PG/MySQL 会按列声明拒绝超长值，因此该契约只在真库方言上验证。</summary>
+[Table("cf_short_column")]
+public partial class CfShortColumnEntity
+{
+    [Key(AutoIncrement = false)] public long Id { get; set; }
+    [Column("code", Length = 5)] public string Code { get; set; } = "";
+}
+
 /// <summary>SET 谓词与绑定漂移专用实体（事故族 1）：四列不同类型的列加一列可空文本。
 /// 列序或绑定若错位一格，字符串、整数、布尔、小数会跨列污染，断言立即报红。</summary>
 [Table("cf_set_drift")]
