@@ -150,6 +150,30 @@ public sealed class BoundaryContractTests
                     .Throws<Microsoft.Data.Sqlite.SqliteException>();
             }),
 
+        new("B9",
+            "Include 关联的子表无匹配行",
+            "Include 生成 INNER JOIN：无匹配的主表行被过滤（不是 LEFT JOIN 语义），只返回匹配行",
+            "QueryBuilder.cs:502（源码注明按外键/主键 INNER JOIN）+ 实测",
+            async name =>
+            {
+                (SharedSqliteDb shared, DataSession<SqliteProvider> db) = await OpenAsync(name);
+                await using SharedSqliteDb scope = shared;
+                await using DataSession<SqliteProvider> session = db;
+                // 主表两行（Id 1 与 3），子表只有 Id 1：Id 3 无匹配
+                await session.BulkInsertAsync([Plain(1, "matched", 1), Plain(3, "orphan", 3)]);
+                await session.BulkInsertAsync(
+                [
+                    new CfCompositeIndexEntity { Id = 1, Category = "c", Price = 1m, Sku = "sku-1" }
+                ]);
+
+                List<CfBulkPlainEntity> rows = await session.From<CfBulkPlainEntity>()
+                    .Include<CfCompositeIndexEntity>(b => b.Id, c => c.Id)
+                    .ToListAsync();
+
+                await Assert.That(rows.Count).IsEqualTo(1);
+                await Assert.That(rows[0].Id).IsEqualTo(1L);
+            }),
+
         new("B8",
             "SQLite 上写入 4000 字符到 TEXT 列",
             "不截断、不抛异常，读回长度与写入一致（SQLite 的 VARCHAR(n) 不强制长度；真库强制行为见 E7）",
