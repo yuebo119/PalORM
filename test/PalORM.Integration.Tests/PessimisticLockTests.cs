@@ -106,6 +106,22 @@ internal sealed class PessimisticLockTests
             await db.ExecuteAsync($"DROP TABLE IF EXISTS lock_probe");
         }
     }
+
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [NotInParallel("ExtBulkTable")]
+    public async Task PostgreSql_LockClause_AppearsAfterLimit()
+    {
+        // LOCK 子句必须位于 LIMIT 之后（SQL 语法要求）。SQLite 上该形态不可达（构建期拒绝），
+        // 因此这条位置语义只在支持行锁的方言上锁定。
+        await using DataSession<PostgreSqlProvider> db = await DataSession<PostgreSqlProvider>.CreateAsync(PgOpts);
+        string sql = db.From<LockProbe>().Take(1).ForUpdate().ToSql();
+        await Assert.That(sql.IndexOf("LIMIT", StringComparison.Ordinal))
+            .IsLessThan(sql.IndexOf("FOR UPDATE", StringComparison.Ordinal));
+        string shareSql = db.From<LockProbe>().Take(1).ForShare().ToSql();
+        await Assert.That(shareSql.IndexOf("LIMIT", StringComparison.Ordinal))
+            .IsLessThan(shareSql.IndexOf("FOR SHARE", StringComparison.Ordinal));
+    }
 }
 
 [Table("lock_probe")]

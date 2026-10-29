@@ -551,11 +551,13 @@ public sealed class QueryTests
     }
 
     [Test]
-    public async Task ForUpdate_AppearsAfterLimit()
+    public async Task ForUpdate_OnSqlite_ThrowsNotSupported()
     {
+        // SQLite 无行级锁：构建期即拒绝（ITM-639 终态）。LOCK 子句位于 LIMIT 之后的形态
+        // 由 PessimisticLockTests 在 PostgreSQL 上锁定。
         await using var db = await TestDb.SqliteAsync();
-        var sql = db.From<Order>().Take(1).ForUpdate().ToSql();
-        await Assert.That(sql.IndexOf("LIMIT", StringComparison.Ordinal)).IsLessThan(sql.IndexOf("FOR UPDATE", StringComparison.Ordinal));
+        await Assert.That(() => db.From<Order>().Take(1).ForUpdate()).Throws<NotSupportedException>();
+        await Assert.That(() => db.From<Order>().ForShare()).Throws<NotSupportedException>();
     }
 
     [Test]

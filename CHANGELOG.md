@@ -2,6 +2,16 @@
 
 本项目遵循 [Semantic Versioning 2.0.0](https://semver.org/lang/zh-CN/) 规范。
 
+## [Unreleased]
+
+### 💔 破坏性/行为变更
+
+- SQLite 上 `ForUpdate()` / `ForShare()` 改为构建期抛 `NotSupportedException`。原来构建期放过、执行期由数据库报 `near "UPDATE": syntax error`；SQLite 没有行级锁，这两个 API 在该方言上从来不可用，本次把失败提前到调用点（ITM-639 终态）。
+
+### 变更要点
+
+- 行锁子句位于 `LIMIT` 之后的形态断言移到 PostgreSQL（`PostgreSql_LockClause_AppearsAfterLimit`），SQLite 侧只断言构建期拒绝。
+
 ## [6.8.0] - 2026-10-26
 
 ### 💔 破坏性/行为变更

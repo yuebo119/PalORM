@@ -589,20 +589,32 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>追加 FOR UPDATE 行锁；skipLocked 为 true 时附加 SKIP LOCKED 跳过已锁行。需在事务内使用才有意义。
-    /// <para>ITM-639 登记：SQLite 不支持 FOR UPDATE——构建不拒绝（DryRun/ToSql 预览与
-    /// 测试用 SQLite 会话验证 SQL 形态是既定契约），执行期由 SQLite 报语法错误。</para></summary>
+    /// <para><b>SQLite 上构建期拒绝</b>（ITM-639 终态）：SQLite 没有行级锁，'FOR UPDATE'/'FOR SHARE'
+    /// 是非法语法。旧形态是构建期放过、执行期由数据库报语法错；现在改为调用即抛
+    /// <see cref="NotSupportedException"/>，错误定位到调用点而不是执行期。</para></summary>
     public QueryBuilder<T> ForUpdate(bool skipLocked = false)
     {
+        ThrowIfRowLockUnsupported(nameof(ForUpdate));
         AddClause(QueryClauseKind.Lock, $"FOR UPDATE{(skipLocked ? " SKIP LOCKED" : "")}");
         return this;
     }
 
     /// <summary>追加 FOR SHARE 共享锁——允许并发读、阻止并发写。需在事务内使用才有意义。
-    /// <para>ITM-639 登记：同 ForUpdate，SQLite 执行期报语法错误。</para></summary>
+    /// <para><b>SQLite 上构建期拒绝</b>：同 <see cref="ForUpdate"/>（ITM-639 终态）。</para></summary>
     public QueryBuilder<T> ForShare()
     {
+        ThrowIfRowLockUnsupported(nameof(ForShare));
         AddClause(QueryClauseKind.Lock, "FOR SHARE");
         return this;
+    }
+
+    private void ThrowIfRowLockUnsupported(string api)
+    {
+        if (_dialect != SqlDialect.Sqlite) return;
+        throw new NotSupportedException(
+            $"{api} is not supported on SQLite: the engine has no row-level locking and rejects "
+            + "'FOR UPDATE' / 'FOR SHARE' as a syntax error. Use PostgreSQL or MySQL when row locks are required, "
+            + "or rely on a write transaction (BEGIN IMMEDIATE) for serialization.");
     }
 
     /// <summary>追加调用方负责安全性的原始 SQL 片段。不得传入不可信内容。

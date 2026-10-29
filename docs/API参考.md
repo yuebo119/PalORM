@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1399 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1400 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -104,7 +104,7 @@
 | `.With("cte", subquery)` | CTE |
 | `.UnsafeWindowOver(func, over)` | 窗口函数 |
 | `.AsSplitQuery()` | 根查询模式（不执行导航装配） |
-| `.ForUpdate()` / `.ForShare()` | 悲观锁 |
+| `.ForUpdate()` / `.ForShare()` | 悲观锁（PostgreSQL / MySQL；SQLite 无行级锁，构建期抛 `NotSupportedException`） |
 | `.Raw(string)` | 原始 SQL 逃生舱 |
 | `.Tag("name")` / `.TagWithCaller()` | SQL 注释标签 |
 | `.ForRead()` / `.ForWrite()` | 读写路由意图 |
@@ -213,7 +213,7 @@
 | API | 说明 |
 |------|------|
 | `.WithRetry(max, backoff?)` | 指数退避重试瞬时故障。v5.4 起覆盖连接建立与只读查询内置管线（From\<T\>() SELECT 族/GetAsync/GetAllAsync/聚合）；写入与事务内查询不自动重试 |
-| `.WithCircuitBreaker(threshold, resetAfter)` | 熔断器（generation 防陈旧）。作用域同 WithRetry；写入路径不计入熔断 |
+| `.WithCircuitBreaker(threshold, resetAfter)` | 熔断器（generation 防陈旧）。作用域同 WithRetry；写入路径不计入熔断；**只对瞬时故障计数**（连接类与超时类），SQL 语法错误、约束冲突等请求错误不计入，也不会触发重试 |
 | `.WithTimeout(TimeSpan)` | 命令超时 |
 | `ExecuteWithResilience(operation)` | 手动弹性执行入口——任意操作（含非幂等写）的显式弹性通道 |
 

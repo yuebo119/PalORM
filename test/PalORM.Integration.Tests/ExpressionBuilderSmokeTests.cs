@@ -100,9 +100,11 @@ internal sealed class ExpressionBuilderSmokeTests
         // 既定契约是"SQLite 上可用 DryRun/ToSql 预览锁语句形态（面向 PG/MySQL 的生产 SQL），
         // 执行期由 SQLite 报语法错误"。故这里断言形态而非执行；执行会抛
         // SqliteException: near "FOR": syntax error（我第一版就是这么写的，撞上后核到该登记）。
-        await Assert.That(db.From<SmokeChild>().ForUpdate().AsDryRun().Sql).Contains("FOR UPDATE");
-        await Assert.That(db.From<SmokeChild>().ForUpdate(skipLocked: true).AsDryRun().Sql).Contains("SKIP LOCKED");
-        await Assert.That(db.From<SmokeChild>().ForShare().AsDryRun().Sql).Contains("FOR SHARE");
+        // SQLite 无行级锁：三个入口都在构建期拒绝（ITM-639 终态）；PG 上的形态与执行由
+        // PessimisticLockTests 覆盖
+        await Assert.That(() => db.From<SmokeChild>().ForUpdate()).Throws<NotSupportedException>();
+        await Assert.That(() => db.From<SmokeChild>().ForUpdate(skipLocked: true)).Throws<NotSupportedException>();
+        await Assert.That(() => db.From<SmokeChild>().ForShare()).Throws<NotSupportedException>();
 
         // ── 缓存 / 预编译 / 标签 ──
         var cached = db.From<SmokeChild>().WithCache("aot-smoke-cache", TimeSpan.FromSeconds(5)).Where($"label = {"c0"}");

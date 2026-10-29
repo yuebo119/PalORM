@@ -134,20 +134,24 @@ public sealed class BoundaryContractTests
             }),
 
         new("B10",
-            "ForUpdate 在 SQLite 上调用",
-            "构建期不拒绝；执行期抛 SqliteException 语法错误（ITM-639 已登记：SQLite 不支持 FOR UPDATE）",
-            "QueryBuilder.cs:592/601（ITM-639 源码登记）+ 实测",
+            "ForUpdate / ForShare 在 SQLite 上调用",
+            "构建期抛 NotSupportedException：SQLite 无行级锁，'FOR UPDATE'/'FOR SHARE' 是非法语法",
+            "QueryBuilder.cs（ITM-639 终态）+ 实测",
             async name =>
             {
                 (SharedSqliteDb shared, DataSession<SqliteProvider> db) = await OpenAsync(name);
                 await using SharedSqliteDb scope = shared;
                 await using DataSession<SqliteProvider> session = db;
                 await session.BulkInsertAsync([Plain(1), Plain(2)]);
-                // 构建期不拒绝（DryRun 可预览），执行期由数据库报错
-                await Assert.That(session.From<CfBulkPlainEntity>().ForUpdate().AsDryRun().Sql)
-                    .Contains("FOR UPDATE");
-                await Assert.That(async () => await session.From<CfBulkPlainEntity>().ForUpdate().ToListAsync())
-                    .Throws<Microsoft.Data.Sqlite.SqliteException>();
+                // 构建期即拒绝：错误与调用点同帧，不等到执行期由数据库报语法错
+                await Assert.That(() => session.From<CfBulkPlainEntity>().ForUpdate())
+                    .Throws<NotSupportedException>();
+                await Assert.That(() => session.From<CfBulkPlainEntity>().ForUpdate(skipLocked: true))
+                    .Throws<NotSupportedException>();
+                await Assert.That(() => session.From<CfBulkPlainEntity>().ForShare())
+                    .Throws<NotSupportedException>();
+                // 行集不受影响：拒绝发生在子句构建阶段
+                await Assert.That(await session.CountAsync<CfBulkPlainEntity>()).IsEqualTo(2L);
             }),
 
         new("B9",

@@ -291,14 +291,26 @@ internal static class Program
             throw new InvalidOperationException("UnsafeWindowOver failed");
     }
 
+    private static bool Throws<TException>(Action action) where TException : Exception
+    {
+        try
+        {
+            action();
+            return false;
+        }
+        catch (TException)
+        {
+            return true;
+        }
+    }
+
     private static async Task VerifyLocksCachingAndSplitQueryAsync(DataSession<SqliteProvider> db)
     {
-        // 锁语句：只验形态（ITM-639）——SQLite 执行期报语法错误是登记契约
-        if (!db.From<AotChildEntity>().ForUpdate().AsDryRun().Sql.Contains("FOR UPDATE", StringComparison.Ordinal)
-            || !db.From<AotChildEntity>().ForUpdate(skipLocked: true).AsDryRun().Sql
-                .Contains("SKIP LOCKED", StringComparison.Ordinal)
-            || !db.From<AotChildEntity>().ForShare().AsDryRun().Sql.Contains("FOR SHARE", StringComparison.Ordinal))
-            throw new InvalidOperationException("ForUpdate/ForShare SQL shape failed");
+        // 行锁：SQLite 无行级锁，ForUpdate/ForShare 必须在构建期拒绝（ITM-639 终态）
+        if (!Throws<NotSupportedException>(() => db.From<AotChildEntity>().ForUpdate())
+            || !Throws<NotSupportedException>(() => db.From<AotChildEntity>().ForUpdate(skipLocked: true))
+            || !Throws<NotSupportedException>(() => db.From<AotChildEntity>().ForShare()))
+            throw new InvalidOperationException("ForUpdate/ForShare should be rejected on SQLite at build time");
 
         var cached = db.From<AotChildEntity>()
             .WithCache("aot-cache", TimeSpan.FromSeconds(5)).Where($"label = {"c0"}");
