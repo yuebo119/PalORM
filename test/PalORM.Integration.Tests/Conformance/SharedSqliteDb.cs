@@ -42,6 +42,18 @@ internal sealed class SharedSqliteDb : IAsyncDisposable
         => await DataSession<SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = _connectionString }, ct).ConfigureAwait(false);
 
+    /// <summary>本库的连接串（只读）。供需要自定义 <see cref="DbOptions"/> 的用例使用（缓存注入、读路由等）。</summary>
+    public string ConnectionString => _connectionString;
+
+    /// <summary>按本库连接串构造 options，可选覆盖读副本连接串、查询缓存等字段。</summary>
+    public DbOptions CreateOptions(string? readConnectionString = null, IQueryCache? queryCache = null)
+        => new()
+        {
+            ConnectionString = _connectionString,
+            ReadConnectionString = readConnectionString,
+            QueryCache = queryCache,
+        };
+
     /// <summary>建一个连到同一共享库的会话池。容量取 1 时可保证重租的是同一个实例，
     /// 用于观测"归还后瞬态状态复位"（<c>_idle</c> 是 FIFO 队列，容量大于 1 不保证同实例）。</summary>
     public DataSessionPool<SqliteProvider> CreatePool(int maxIdleSize = 1)
