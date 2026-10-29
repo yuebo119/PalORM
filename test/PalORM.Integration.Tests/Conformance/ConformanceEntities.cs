@@ -236,3 +236,16 @@ public partial class CfTimeMatrixEntity
     [Column("date_only")] public DateOnly DateOnly { get; set; }
     [Column("time_only")] public TimeOnly TimeOnly { get; set; }
 }
+
+/// <summary>批量族专用实体：无默认过滤、无并发令牌、显式主键。
+/// <para><b>为什么无并发令牌</b>：<c>BulkUpdateBatchAsync</c> 对带 <c>[ConcurrencyCheck]</c> 的实体
+/// 在 PG/MySQL 上抛 <c>NotSupportedException</c>（分析器 PALORM031 在编译期就拦下），SQLite 才回退逐行。</para>
+/// <para><b>为什么显式主键</b>：实测 <c>BulkInsertAsync</c> 返回影响行数、不回填自增 Id（实体 Id 保持 0），
+/// 按 Id 匹配的 BulkUpdate/BulkDelete 会静默 0 行受影响。批量对照必须让主键由测试赋值。</para></summary>
+[Table("cf_bulk_plain")]
+public partial class CfBulkPlainEntity
+{
+    [Key(AutoIncrement = false)] public long Id { get; set; }
+    [Column("name")] public string Name { get; set; } = "";
+    [Column("amount")] public long Amount { get; set; }
+}
