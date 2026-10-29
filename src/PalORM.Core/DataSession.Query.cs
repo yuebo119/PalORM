@@ -263,6 +263,12 @@ public sealed partial class DataSession<TProvider>
                 executor.RecordDirectFailure(ex);
                 throw;
             }
+            catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+            {
+                // 直调路径不进执行器时，超时由驱动包在自身异常里；这里做与执行器出口相同的解包，
+                // 使调用方按超时类型捕获能覆盖弹性路径与直通路径两种情形（D4）。
+                throw new TimeoutException(timeout.Message, ex);
+            }
         }
         ResilienceExecutor fallback = Resilience;
         if (fallback.IsPassThrough)
@@ -588,7 +594,23 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
-        return ScalarEntryAsync<T>(sql, readFromReplica, ct);
+        return UnwrapDriverTimeoutAsync(ScalarEntryAsync<T>(sql, readFromReplica, ct));
+    }
+
+    /// <summary>把驱动包装的命令超时归一为 <see cref="TimeoutException"/>（D4）。
+    /// <para>驱动把超时包在自身异常里（Npgsql 的 NpgsqlException 内层是超时异常）；弹性执行器出口
+    /// 已解包，但未配置重试与熔断的会话走直接分支，异常原样上抛。在公开入口包一层可同时覆盖
+    /// 两条路径，且无超时时零分配（只在异常路径创建新异常）。</para></summary>
+    private static async ValueTask<T> UnwrapDriverTimeoutAsync<T>(ValueTask<T> operation)
+    {
+        try
+        {
+            return await operation.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+        {
+            throw new TimeoutException(timeout.Message, ex);
+        }
     }
 
     private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)

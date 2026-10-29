@@ -1272,6 +1272,8 @@ public sealed partial class DataSession<TProvider>
     // AsyncLocal.Value setter 的 O(N) map 拷贝使长循环总成本 O(N²)——PerfHub 并发臂（饱和循环）
     // 实测 20× 塌方（P50 6.6→133.7µs，8.65×于地板），短迭代批项不可见。入口回到 async 形态
     //（写落在 async 体内被包含），G2 的状态机盒收益（~72-96B，[推断]级）不构成重开理由。
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S3776",
+        Justification = "超时解包作为独立 catch 分支叠加在既有「直调、重试、熔断」编排上；把异常翻译抽走会把同一段控制流的两个关注点拆到两处，可读性反而下降")]
     private async ValueTask<T?> GetByKeyEntryAsync<T>(object key, CancellationToken ct)
         where T : class, new()
     {
@@ -1326,6 +1328,12 @@ public sealed partial class DataSession<TProvider>
                 }
                 executor.RecordDirectFailure(ex);
                 throw;
+            }
+            catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+            {
+                // 直调路径不进执行器时，超时由驱动包在自身异常里；这里做与执行器出口相同的解包，
+                // 使调用方按超时类型捕获能覆盖弹性路径与直通路径两种情形（D4）。
+                throw new TimeoutException(timeout.Message, ex);
             }
         }
         ResilienceExecutor getByKeyExecutor = Resilience;
@@ -1447,6 +1455,12 @@ public sealed partial class DataSession<TProvider>
                 }
                 executor.RecordDirectFailure(ex);
                 throw;
+            }
+            catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+            {
+                // 直调路径不进执行器时，超时由驱动包在自身异常里；这里做与执行器出口相同的解包，
+                // 使调用方按超时类型捕获能覆盖弹性路径与直通路径两种情形（D4）。
+                throw new TimeoutException(timeout.Message, ex);
             }
         }
         ResilienceExecutor getAllExecutor = Resilience;
