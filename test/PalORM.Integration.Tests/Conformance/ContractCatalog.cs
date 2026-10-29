@@ -331,7 +331,7 @@ internal static class ContractCatalog
 
         new("C-PAGE-01",
             "五行数据，pageSize 2",
-            "ToPageAsync 返回 (rows, total)；descending 默认 true（从最大值续页）；末键续页得到下一页",
+            "ToPageAsync 返回 (rows, total)；descending 默认 true（从最大值续页）；末键续页得到下一页；builder 上带 Skip() 时抛 InvalidOperationException（键集分页以 lastValue 续页，OFFSET 会被静默丢弃）",
             "API参考.md 执行方法（ToPageAsync）+ 实测 2026-10-29",
             async name =>
             {
@@ -351,6 +351,10 @@ internal static class ContractCatalog
                 await Assert.That(ascTotal).IsEqualTo(5L);
                 await Assert.That(string.Join(",", ascFirst.Select(e => e.Id))).IsEqualTo("1,2");
                 await Assert.That(string.Join(",", ascSecond.Select(e => e.Id))).IsEqualTo("3,4");
+
+                // Skip 会被键集分页静默丢弃，因此改为构建期拒绝（D6）
+                await Assert.That(async () => await session.From<CfBulkPlainEntity>()
+                    .Skip(1).ToPageAsync(2, e => e.Id)).Throws<InvalidOperationException>();
             }),
 
         new("C-BULKIN-01",

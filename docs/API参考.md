@@ -266,6 +266,21 @@
 
 ---
 
+## 方言差异与注意事项
+
+以下行为来自引擎或驱动的客观限制，PalORM 不做隐藏。跨方言迁移或选型前请对照。
+
+| 场景 | 行为 | 建议 |
+|---|---|---|
+| `ToPageAsync` 的默认排序 | `descending` 默认 **`true`**（从最大值续页，适合"最新在前"） | 需要升序时显式传 `descending: false`。builder 上带 `Skip()` 会抛 `InvalidOperationException`（键集分页以 `lastValue` 续页，OFFSET 会被丢弃）；`Take()` 被 `pageSize` 覆写 |
+| `Take(0)` | 抛 `ArgumentOutOfRangeException`（要求正数） | 需要空集时不要追加 `Take`，或写 `Where("1 = 0")` |
+| `FormattableString` 用于表名或列名 | 插值会被参数化，SQL 结构位置（表名、列名、DDL 片段）不能接受 | 结构片段用 `FormattableStringFactory.Create` 传纯文本，或走 `Raw()` 与原生 DDL 入口 |
+| `DateTime` 在 PostgreSQL | 列型 `timestamptz`，表示 UTC 时刻；写入非 `Utc` 抛 `ArgumentException`；读回 Kind=`Utc` | 用 `DateTime.UtcNow`；需要墙钟语义请用 `string` 或 `DateTimeOffset` |
+| `DateTime` 在 MySQL / SQLite | 按墙钟存取，读回 Kind=`Unspecified`，Kind 不参与存储 | 与 PG 语义不同，跨方言迁移时分别处理 |
+| `DateTimeOffset` | SQLite 保留 offset（文本存储）；PostgreSQL 只接受 Utc；MySQL 的 `TIMESTAMP` 归一为 UTC 且 offset 丢失，`DATETIME(6)` 保留墙钟 | 需要 offset 语义时优先 SQLite 或 PostgreSQL；MySQL 上不要依赖 offset |
+| `decimal` 在 SQLite | 无真实 `DECIMAL` 类型，按 NUMERIC 亲和存为 REAL，精度可能在存储层损失 | 金额等精确小数用 PostgreSQL 或 MySQL；SQLite 只用于测试或非金额数据 |
+| 行锁 `ForUpdate` / `ForShare` | SQLite 无行级锁，构建期抛 `NotSupportedException` | 用 PostgreSQL / MySQL，或用写事务 `BEGIN IMMEDIATE` 做写串行化 |
+
 ## PostgreSQL 专有
 
 | API | 说明 |

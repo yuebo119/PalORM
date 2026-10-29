@@ -687,9 +687,10 @@ public static class QueryBuilderExtensions
     /// <para>lastValue 为上一页末行的 orderBy 键值：非默认值时生成 <c>orderBy &lt; lastValue</c>（降序）
     /// 或 <c>&gt;</c>（升序）续页条件；首页传 default。键值为 default 的行无法作为续页锚点。</para>
     /// <para>ITM-582: ① COUNT 查询走 Tracing/Metrics 但<b>不经过</b> IQueryInterceptor（页查询经过）——
-    /// 审计型拦截器不会看到 COUNT SQL；② builder 上已设的 <c>Skip()</c> 被忽略（键集分页以
-    /// lastValue 锚点续页，OFFSET 语义不适用）；③ 用户先行的 <c>Take()</c> 同被
-    /// pageSize 覆写（r9-S-B/r10-N2 补交付——双覆写契约显式化）。</para>
+    /// 审计型拦截器不会看到 COUNT SQL；② builder 上已设的 <c>Skip()</c> 抛
+    /// <see cref="InvalidOperationException"/>（键集分页以 lastValue 锚点续页，OFFSET 语义不适用；
+    /// 静默丢弃用户显式设置的子句属危险行为，2026-10-29 由「忽略」改为「拒绝」）；③ 用户先行的
+    /// <c>Take()</c> 仍被 pageSize 覆写（r9-S-B/r10-N2 补交付）。</para>
     public static ValueTask<(List<T> Rows, long Total)> ToPageAsync<T, TKey>(this QueryBuilder<T> builder,
         int pageSize, Expression<Func<T, TKey>> orderBy, TKey? lastValue = default, bool descending = true, CancellationToken ct = default) where T : class, new()
     {
@@ -710,9 +711,12 @@ public static class QueryBuilderExtensions
         var paged = builder.CloneForExecution();
         paged._useReadRoute = false;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+        if (paged._skip.HasValue)
+            throw new InvalidOperationException(
+                "ToPageAsync uses keyset pagination with lastValue as the continuation anchor, so a Skip() on the builder "
+                + "would be silently ignored. Remove Skip(), or use ToListAsync with Skip/Take for OFFSET pagination.");
         paged._take = pageSize;
         paged._takeLiteral = false;   // pageSize 由调用方给、值域无界：必须参数化，保住 SHAPE-010 的有限形状集
-        paged._skip = null;
         // r9-S-A(P1)：页截断结果不得写入用户缓存键——同键 ToListAsync 将静默命中单页子集
         // （ITM-406 同型面唯一漏口，First/Single/SingleOrDefault 三入口均已清）
         paged._cacheKey = null;
