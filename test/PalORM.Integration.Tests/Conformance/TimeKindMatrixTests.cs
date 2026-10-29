@@ -81,6 +81,42 @@ public sealed class TimeKindMatrixTests
         }
     }
 
+    /// <summary>D1 回归：PG 的 DateTime 列已改为 timestamptz，读回 Kind=Utc，
+    /// 「读出、改字段、写回」必须成功。旧的 timestamp 列会让写回抛 ArgumentException。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds()
+    {
+        await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
+        await db.MigrateAsync();
+        // 旧库的 cf_time_matrix 是 timestamp 列（CREATE TABLE IF NOT EXISTS 不改列型）：
+        // 先删表再迁移，确保本用例验证的是 timestamptz 结构
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS cf_time_matrix");
+        await db.MigrateAsync();
+
+        DateTime utc = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc);
+        await db.InsertAsync(new CfTimeMatrixEntity
+        {
+            Dt = utc,
+            Dto = new DateTimeOffset(utc),
+            DateOnly = new DateOnly(2026, 7, 18),
+            TimeOnly = new TimeOnly(10, 30, 0)
+        });
+
+        CfTimeMatrixEntity readBack = (await db.GetAllAsync<CfTimeMatrixEntity>())[0];
+        await Assert.That(readBack.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+        await Assert.That(readBack.Dt.Ticks).IsEqualTo(utc.Ticks);
+
+        // 原样写回：旧列型（timestamp without time zone）在这里抛 ArgumentException
+        await db.UpdateAsync(readBack);
+
+        CfTimeMatrixEntity reloaded = (await db.GetAllAsync<CfTimeMatrixEntity>())[0];
+        await Assert.That(reloaded.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+        await Assert.That(reloaded.Dt.Ticks).IsEqualTo(utc.Ticks);
+
+        await db.ExecuteAsync($"DELETE FROM cf_time_matrix");
+    }
+
     private static void WriteMatrix(
         string dialect,
         List<CfTimeMatrixEntity> rows,

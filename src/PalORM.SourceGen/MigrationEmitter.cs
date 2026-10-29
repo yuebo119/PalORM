@@ -261,7 +261,16 @@ internal static class MigrationEmitter
         if (typeName is "global::System.TimeOnly")
             return dialect == SqlGenerationDialect.MySql ? "TIME(6)" : "TIME";
         if (typeName is "global::System.DateTime")
-            return dialect == SqlGenerationDialect.MySql ? "DATETIME(6)" : "TIMESTAMP";
+            return dialect switch
+            {
+                // PG 的 TIMESTAMP 是 timestamp without time zone，而参数侧 DbType.DateTime 被
+                // Npgsql 映射成 timestamptz：列与参数类型不匹配时，"读回再写回"会抛
+                // ArgumentException（Kind=Unspecified 写入 timestamptz 被驱动拒绝）。
+                // 统一到 timestamptz：DateTime 在 PG 上表示 UTC 时刻（Npgsql 官方立场）。
+                SqlGenerationDialect.PostgreSql => "TIMESTAMPTZ",
+                SqlGenerationDialect.MySql => "DATETIME(6)",
+                _ => "TIMESTAMP"
+            };
         if (typeName is "global::System.DateTimeOffset")
             return dialect switch
             {

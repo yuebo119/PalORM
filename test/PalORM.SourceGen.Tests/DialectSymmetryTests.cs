@@ -18,7 +18,7 @@ internal sealed class DialectSymmetryTests
     // │ CREATE INDEX 幂等 │ IF NOT EXISTS             │ IF NOT EXISTS             │ 无（运行时 1061 兜底）
     // │ 被索引 string 列  │ TEXT                      │ TEXT                      │ VARCHAR(255)（1170）
     // │ double 列型       │ DOUBLE                    │ DOUBLE PRECISION          │ DOUBLE
-    // │ DateTime 列型     │ TIMESTAMP                 │ TIMESTAMP                 │ DATETIME(6)
+    // │ DateTime 列型     │ TIMESTAMP                 │ TIMESTAMPTZ               │ DATETIME(6) │   ← PG 与参数 DbType.DateTime（Npgsql→timestamptz）对齐
     // │ DateTimeOffset    │ TEXT                      │ TIMESTAMPTZ               │ DATETIME(6)
     // │ Guid 列型         │ TEXT                      │ UUID                      │ CHAR(36)
     // │ TimeOnly 列型     │ TIME                      │ TIME                      │ TIME(6)
@@ -64,6 +64,8 @@ internal sealed class DialectSymmetryTests
         sql = sql
             .Replace("dto_value TEXT", "dto_value «DTO»", StringComparison.Ordinal)
             .Replace("dto_value «DIALECT-TEMPORAL»", "dto_value «DTO»", StringComparison.Ordinal)
+            // PG 的 DateTime 列已改用 TIMESTAMPTZ（与参数 DbType 对齐），按列名还原为时间占位符
+            .Replace("created_at «DTO»", "created_at «DIALECT-TEMPORAL»", StringComparison.Ordinal)
             .Replace("guid_value TEXT", "guid_value «GUID»", StringComparison.Ordinal)
             .Replace("sku TEXT", "sku «INDEXED-STRING»", StringComparison.Ordinal);
         return sql;
