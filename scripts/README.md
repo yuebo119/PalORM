@@ -81,3 +81,12 @@
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
 | `test-package-contract.cs` | NuGet 包契约验证（`dotnet run --file` 调用） | ✅ ci.yml aot |
+
+## 一致性套件（Conformance）
+
+> 对应 `docs/一致性测试方案-2026-10-29.md`。变异回放会改写产品源码、构建、跑目标测试再还原，
+> 因此要求工作树清洁（`git status --porcelain -uno` 为空），脏树会拒绝执行并打印差异。
+
+| 脚本 | 用途 | CI 调用 |
+|------|------|:---:|
+| `conformance-mutation-replay.cs` | 产品侧变异回放（R1a/R1b/R2/R4）：注入缺陷 → 期望目标测试报红 → `git checkout` 还原 → 期望转绿；任一不符 exit 1，原片段缺失记 skip | 手动 / 阶段 0b 验收 |

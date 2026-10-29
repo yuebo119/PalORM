@@ -164,7 +164,11 @@ public sealed class BulkOperationDualSideTests
         await db.BulkMergeAsync([existing, inserted]);
 
         await shared.ExecuteRawAsync(
-            """INSERT INTO cf_bulk_plain_mirror ("Id", "name", "amount") VALUES (@p0, @p1, @p2) ON CONFLICT("Id") DO UPDATE SET "name" = excluded."name", "amount" = excluded."amount" """,
+            """
+            INSERT INTO cf_bulk_plain_mirror ("Id", "name", "amount")
+            VALUES (@p0, @p1, @p2)
+            ON CONFLICT("Id") DO UPDATE SET "name" = excluded."name", "amount" = excluded."amount"
+            """,
             [("@p0", 1L), ("@p1", "existing-updated"), ("@p2", 11L)]);
         await shared.ExecuteRawAsync(
             """INSERT INTO cf_bulk_plain_mirror ("Id", "name", "amount") VALUES (@p0, @p1, @p2)""",

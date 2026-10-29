@@ -84,7 +84,11 @@ public sealed class SingleRowDualSideTests
         // 同主键的 SaveAsync 走冲突更新分支
         await db.SaveAsync(new CfBulkPlainEntity { Id = 20, Name = "after", Amount = 9 });
         await shared.ExecuteRawAsync(
-            """INSERT INTO cf_bulk_plain_mirror ("Id", "name", "amount") VALUES (@p0, @p1, @p2) ON CONFLICT("Id") DO UPDATE SET "name" = excluded."name", "amount" = excluded."amount" """,
+            """
+            INSERT INTO cf_bulk_plain_mirror ("Id", "name", "amount")
+            VALUES (@p0, @p1, @p2)
+            ON CONFLICT("Id") DO UPDATE SET "name" = excluded."name", "amount" = excluded."amount"
+            """,
             [("@p0", 20L), ("@p1", "after"), ("@p2", 9L)]);
 
         CfBulkPlainEntity? palormRow = await db.GetAsync<CfBulkPlainEntity>(20L);
