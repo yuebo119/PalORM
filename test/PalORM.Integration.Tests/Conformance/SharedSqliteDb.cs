@@ -94,6 +94,69 @@ internal sealed class SharedSqliteDb : IAsyncDisposable
         return byTenant;
     }
 
+    /// <summary>执行常量 SQL（手写侧专用）。
+    /// <para>SQL 只允许来自测试内部的编译期常量：手写侧必须绕过 PalORM 元数据与物化器，
+    /// 否则两侧同错时判据失去判别力（方案 §4.2 第三条硬约束）。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100",
+        Justification = "调用方只传本测试项目内的编译期常量 SQL，不接受外部或用户输入；绕过 PalORM 元数据是判据独立性的前提")]
+    public async ValueTask<int> ExecuteRawAsync(
+        string constantSql,
+        IReadOnlyList<(string Name, object? Value)>? parameters = null,
+        CancellationToken ct = default)
+    {
+        DbConnection connection = await OpenKeeperConnectionAsync(ct).ConfigureAwait(false);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = constantSql;
+        AddParameters(command, parameters);
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>读取常量 SQL 的结果为字典列表（手写侧专用）。DBNull 归一为 null。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100",
+        Justification = "调用方只传本测试项目内的编译期常量 SQL，不接受外部或用户输入；绕过 PalORM 元数据是判据独立性的前提")]
+    public async ValueTask<IReadOnlyList<IReadOnlyDictionary<string, object?>>> QueryRawAsync(
+        string constantSql,
+        IReadOnlyList<(string Name, object? Value)>? parameters = null,
+        CancellationToken ct = default)
+    {
+        DbConnection connection = await OpenKeeperConnectionAsync(ct).ConfigureAwait(false);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = constantSql;
+        AddParameters(command, parameters);
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        await using DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < reader.FieldCount; i++)
+                row[reader.GetName(i)] = reader.GetValue(i) is DBNull ? null : reader.GetValue(i);
+            rows.Add(row);
+        }
+        return rows;
+    }
+
+    private static void AddParameters(
+        DbCommand command, IReadOnlyList<(string Name, object? Value)>? parameters)
+    {
+        if (parameters is null) return;
+        foreach ((string name, object? value) in parameters)
+        {
+            DbParameter parameter = command.CreateParameter();
+            parameter.ParameterName = name;
+            parameter.Value = value ?? DBNull.Value;
+            command.Parameters.Add(parameter);
+        }
+    }
+
+    private async ValueTask<DbConnection> OpenKeeperConnectionAsync(CancellationToken ct)
+    {
+        DbConnection connection = _keeperSession.GetRawConnection();
+        if (connection.State != ConnectionState.Open)
+            await connection.OpenAsync(ct).ConfigureAwait(false);
+        return connection;
+    }
+
     public async ValueTask DisposeAsync()
     {
         // keeper 会话关闭即销毁共享库。调用方须保证所有派生会话已先释放。
