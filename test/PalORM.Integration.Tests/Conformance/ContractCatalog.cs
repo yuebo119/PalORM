@@ -14,6 +14,30 @@ internal sealed record ContractEntry(
     string Source,
     Func<string, Task> Verify);
 
+/// <summary>契约条目的「合理性依据」检查（方案 §5.2 纪律的机械化载体）。
+/// <para>每条契约的 <see cref="ContractEntry.Source"/> 必须指向三类依据之一：`API参考.md`（文档承诺）、
+/// `ADR`（架构决策）、`reviewed:`（实测后经人工评审确认合理，后接一句结论）。只在源码注释里出现、
+/// 或纯 `实测` 而无评审结论的，记为「仅实测」，进待评审清单。</para>
+/// <para>为什么需要这条：首轮的 13 条产品行为里有 3 条是缺陷，根因正是把「当前行为」记成「合理行为」。
+/// 这个检查把「交由评审」从口头纪律变成可核对字段。</para></summary>
+internal static class ContractRationale
+{
+    public static List<string> Validate(IEnumerable<ContractEntry> entries)
+    {
+        var problems = new List<string>();
+        foreach (ContractEntry entry in entries)
+        {
+            bool hasDocument = entry.Source.Contains("API参考.md", StringComparison.Ordinal);
+            bool hasAdr = entry.Source.Contains("ADR", StringComparison.Ordinal);
+            bool hasReview = entry.Source.StartsWith("reviewed:", StringComparison.Ordinal)
+                || entry.Source.Contains("reviewed:", StringComparison.Ordinal);
+            if (!hasDocument && !hasAdr && !hasReview)
+                problems.Add(entry.Id + " → " + entry.Source);
+        }
+        return problems;
+    }
+}
+
 internal static class ContractCatalog
 {
     /// <summary>在独立库上开场，供各契约验证使用。</summary>

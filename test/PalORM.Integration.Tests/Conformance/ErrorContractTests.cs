@@ -142,6 +142,9 @@ public sealed class ErrorContractTests
             if (string.IsNullOrWhiteSpace(contract.Postcondition)) problems.Add($"{contract.Id}: 后置为空");
             if (string.IsNullOrWhiteSpace(contract.Source)) problems.Add($"{contract.Id}: 来源为空");
         }
+        List<string> noRationale = ContractRationale.Validate(Errors);
+        if (noRationale.Count > 0)
+            problems.Add($"缺合理性依据 {noRationale.Count} 条：{string.Join(" | ", noRationale)}");
         await Assert.That(string.Join(" | ", problems)).IsEmpty();
     }
 

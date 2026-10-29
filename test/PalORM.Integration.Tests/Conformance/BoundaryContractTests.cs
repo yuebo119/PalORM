@@ -136,7 +136,7 @@ public sealed class BoundaryContractTests
         new("B10",
             "ForUpdate / ForShare 在 SQLite 上调用",
             "构建期抛 NotSupportedException：SQLite 无行级锁，'FOR UPDATE'/'FOR SHARE' 是非法语法",
-            "QueryBuilder.cs（ITM-639 终态）+ 实测",
+            "reviewed: 2026-10-29 确认 SQLite 无行级锁，构建期拒绝优于执行期语法错（ITM-639 终态）",
             async name =>
             {
                 (SharedSqliteDb shared, DataSession<SqliteProvider> db) = await OpenAsync(name);
@@ -157,7 +157,7 @@ public sealed class BoundaryContractTests
         new("B9",
             "Include 关联的子表无匹配行",
             "Include 生成 INNER JOIN：无匹配的主表行被过滤（不是 LEFT JOIN 语义），只返回匹配行",
-            "QueryBuilder.cs:502（源码注明按外键/主键 INNER JOIN）+ 实测",
+            "reviewed: 2026-10-29 源码注明 INNER JOIN 语义，实测确认无匹配子集时过滤主表行，与文档一致",
             async name =>
             {
                 (SharedSqliteDb shared, DataSession<SqliteProvider> db) = await OpenAsync(name);
@@ -242,6 +242,9 @@ public sealed class BoundaryContractTests
             if (string.IsNullOrWhiteSpace(contract.Source)) problems.Add($"{contract.Id}: 来源为空");
         }
         if (Boundaries.Count < 10) problems.Add($"边界契约条数为 {Boundaries.Count}，方案要求至少 10");
+        List<string> noRationale = ContractRationale.Validate(Boundaries);
+        if (noRationale.Count > 0)
+            problems.Add($"缺合理性依据 {noRationale.Count} 条：{string.Join(" | ", noRationale)}");
         await Assert.That(string.Join(" | ", problems)).IsEmpty();
     }
 }

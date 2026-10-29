@@ -48,6 +48,11 @@ public sealed class CapabilityContractTests
         if (ContractCatalog.Capabilities.Count != 30)
             problems.Add($"契约条数为 {ContractCatalog.Capabilities.Count}，方案要求 30");
 
+        // 合理性依据：Source 必须指向文档锚点、ADR 或 reviewed 结论（见 ContractRationale）
+        List<string> noRationale = ContractRationale.Validate(ContractCatalog.Capabilities);
+        if (noRationale.Count > 0)
+            problems.Add($"缺合理性依据 {noRationale.Count} 条：{string.Join(" | ", noRationale)}");
+
         await Assert.That(string.Join(" | ", problems)).IsEmpty();
     }
 }
