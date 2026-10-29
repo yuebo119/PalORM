@@ -1260,7 +1260,10 @@ public sealed partial class DataSession<TProvider>
         ArgumentNullException.ThrowIfNull(key);
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        return GetByKeyEntryAsync<T>(key, ct);
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        return CommandTimeoutNormalizer.RunAsync(
+            GetByKeyEntryAsync<T>(key, ct), startTimestamp, _commandTimeoutSeconds);
     }
 
     // ── G2 证伪回退（2026-10-14 并发塌方定位轮，勿重开此形态）──
@@ -1418,7 +1421,10 @@ public sealed partial class DataSession<TProvider>
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        return GetAllEntryAsync<T>(ct);
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        return CommandTimeoutNormalizer.RunAsync(
+            GetAllEntryAsync<T>(ct), startTimestamp, _commandTimeoutSeconds);
     }
 
     // G2 证伪回退（2026-10-14，勿重开非 async 租约入口）：理由见 GetByKeyEntryAsync 上方登记

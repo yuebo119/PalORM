@@ -1,3 +1,4 @@
+using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Sqlite;
 using PalORM.Testing;
@@ -159,6 +160,19 @@ public sealed class ErrorContractTests
         // pg_sleep(2) 远超 100ms 超时窗口
         // 命令超时统一以 TimeoutException 呈现：弹性执行器出口与直调分支都做了解包（D4 完整修复）。
         await Assert.That(async () => await db.ScalarAsync<long>($"SELECT 1 FROM pg_sleep(2)"))
+            .Throws<TimeoutException>();
+        // 超时后连接仍可用
+        await Assert.That(await db.ScalarAsync<long>($"SELECT 1")).IsEqualTo(1L);
+    }
+
+    /// <summary>D7：MySQL 驱动到点中断查询但不抛异常，PalORM 按耗时判定后归一为 TimeoutException。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task E4_MySql_CommandTimeout_ThrowsTimeoutException()
+    {
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+        db.WithTimeout(TimeSpan.FromSeconds(1));
+        await Assert.That(async () => await db.ScalarAsync<long>($"SELECT SLEEP(5)"))
             .Throws<TimeoutException>();
         // 超时后连接仍可用
         await Assert.That(await db.ScalarAsync<long>($"SELECT 1")).IsEqualTo(1L);

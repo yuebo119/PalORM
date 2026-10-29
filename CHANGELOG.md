@@ -12,6 +12,7 @@
 
 ### 变更要点
 
+- MySQL 的命令超时改为按耗时判定：该驱动到点中断查询但不抛异常、返回部分结果（实测 `SELECT SLEEP(5)` 在 1 秒后返回 1），因此 PalORM 在 MySQL 且设置了命令超时时，耗时达到超时即抛 `TimeoutException`（无分配计时）。已覆盖 `ScalarAsync` / `GetAsync` / `GetAllAsync`。
 - 命令超时统一以 `TimeoutException` 呈现：驱动把超时包在自身异常里（`NpgsqlException` 内层为超时异常），现在在三个位置解包——弹性执行器出口、三处直调分支的兜底 catch、`ScalarAsync` 公开入口（覆盖未配置弹性的直接分支）。熔断计数仍按原异常计算。
 - 新增 `BulkInsertReturningAsync`：PG 与 SQLite 走多行 `INSERT ... RETURNING` 并按行序回填自增主键；MySQL 因 `LAST_INSERT_ID` 只保证首值而明确抛 `NotSupportedException`。原 `BulkInsertAsync` 保持最快的写入形态（不回填），两者分工写进 API 参考。
 - PG 的 DateTime 往返回归测试 `PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds` 锁定列型修复；方言对称性差异表登记 PG 侧 `TIMESTAMPTZ`。
