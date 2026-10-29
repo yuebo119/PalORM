@@ -195,7 +195,7 @@ public sealed class BoundaryContractTests
 
         new("B11",
             "自增主键实体经 BulkInsertAsync 写入",
-            "不回填自增主键（实体 Id 保持 0），需要回填时改用 BulkMergeAsync",
+            "不回填自增主键（实体 Id 保持 0）；需要回填时用 BulkInsertReturningAsync（PG/SQLite）或逐行 InsertAsync 与 BulkMergeAsync",
             "API参考.md 写入 / 批量 + 实测 2026-10-29（B11 条）",
             async name =>
             {

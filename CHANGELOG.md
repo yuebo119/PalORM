@@ -11,6 +11,7 @@
 
 ### 变更要点
 
+- 新增 `BulkInsertReturningAsync`：PG 与 SQLite 走多行 `INSERT ... RETURNING` 并按行序回填自增主键；MySQL 因 `LAST_INSERT_ID` 只保证首值而明确抛 `NotSupportedException`。原 `BulkInsertAsync` 保持最快的写入形态（不回填），两者分工写进 API 参考。
 - PG 的 DateTime 往返回归测试 `PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds` 锁定列型修复；方言对称性差异表登记 PG 侧 `TIMESTAMPTZ`。
 - 行锁子句位于 `LIMIT` 之后的形态断言移到 PostgreSQL（`PostgreSql_LockClause_AppearsAfterLimit`），SQLite 侧只断言构建期拒绝。
 

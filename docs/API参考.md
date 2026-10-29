@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1401 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1405 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -104,6 +104,8 @@
 | `.With("cte", subquery)` | CTE |
 | `.UnsafeWindowOver(func, over)` | 窗口函数 |
 | `.AsSplitQuery()` | 根查询模式（不执行导航装配） |
+| `BulkInsertAsync(rows)` | 批量插入，走各方言最快形态（PG Binary COPY / MySQL LOAD DATA 或多值 INSERT / SQLite 行预编译）；**不回填自增主键** |
+| `BulkInsertReturningAsync(rows)` | 批量插入并**回填自增主键**：PG/SQLite 走多行 `INSERT ... RETURNING`；MySQL 不支持，调用即抛 `NotSupportedException` |
 | `.ForUpdate()` / `.ForShare()` | 悲观锁（PostgreSQL / MySQL；SQLite 无行级锁，构建期抛 `NotSupportedException`） |
 | `.Raw(string)` | 原始 SQL 逃生舱 |
 | `.Tag("name")` / `.TagWithCaller()` | SQL 注释标签 |

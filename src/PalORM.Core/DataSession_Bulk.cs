@@ -45,6 +45,32 @@ public partial class DataSession<TProvider>
             _commandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
     }
 
+    /// <summary>批量插入并回填自增主键（RETURNING 方言专用）。
+    /// <para><b>与 <see cref="BulkInsertAsync{T}(IReadOnlyList{T}, CancellationToken)"/> 的分工</b>：
+    /// 那个方法走各方言最快的写入形态（PG 是 Binary COPY、MySQL 是 LOAD DATA 或多值 INSERT、
+    /// SQLite 是行预编译），三者都拿不到生成的主键，因此不回填。需要回填时用本方法：PG 与 SQLite
+    /// 走多行 <c>INSERT ... RETURNING</c> 并按行序回填，代价是比 COPY 慢。</para>
+    /// <para><b>MySQL 不支持</b>：<c>LAST_INSERT_ID</c> 只保证多行插入的首值，批内自增连续性在
+    /// <c>auto_increment_increment</c> 与触发器下不成立，因此调用即抛 <see cref="NotSupportedException"/>。</para></summary>
+    /// <returns>数据库受影响行数（与 <see cref="BulkInsertAsync{T}(IReadOnlyList{T}, CancellationToken)"/> 同口径）。</returns>
+    public async ValueTask<long> BulkInsertReturningAsync<T>(
+        IReadOnlyList<T> entities, CancellationToken ct = default)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(entities);
+        if (!TProvider.SupportsReturningClause)
+            throw new NotSupportedException(
+                $"BulkInsertReturningAsync is not supported on {TProvider.Dialect.GetName()}: the provider cannot "
+                + "return generated keys for a multi-row insert (only the first LAST_INSERT_ID value is guaranteed, "
+                + "and batch-internal increments break under auto_increment_increment or triggers). "
+                + "Use InsertAsync per row when keys are required, or BulkInsertAsync when they are not.");
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        (CrudMetadata metadata, _) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
+        if (entities.Count == 0) return 0;
+        return await BatchInsertReturningAsync(
+            GetActiveTransaction(), [.. entities], metadata, ct).ConfigureAwait(false);
+    }
+
     /// <summary>批量删除——数组形态单批 20000 行；IN 形态按方言参数上限与 5000 行/批取较小者
     /// （SQLite 999，PG/MySQL 5000）；软删除实体更新 deleted_at，其他实体物理删除。</summary>
     /// <returns><b>数据库受影响行数</b>（各批次 ExecuteNonQuery 之和，驱动口径）。
@@ -2104,7 +2130,7 @@ public partial class DataSession<TProvider>
         Justification = "批循环（分批/绑行）+ RETURNING 读循环（行数核对、ID 回填双守卫）各为"
             + "不可拆的顺序语义；拆分需在方法间传递回填对位状态，正确性风险大于可读性收益。")]
     private async Task<long> BatchInsertReturningAsync<T>(
-        DbTransaction transaction,
+        DbTransaction? transaction,
         List<T> entities,
         CrudMetadata metadata,
         CancellationToken ct) where T : class, new()
