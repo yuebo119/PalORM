@@ -62,7 +62,7 @@ var rules = new Rule[]
     new("R-D1", "src/PalORM.SourceGen/MigrationEmitter.cs",
         "SqlGenerationDialect.PostgreSql => \"TIMESTAMPTZ\",",
         "SqlGenerationDialect.PostgreSql => \"TIMESTAMP\",",
-        "/*/*/TimeKindMatrixTests/*",
+        "/*/*/TimeKindMatrixTests/PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds",
         "D1 PG 时间列型 TIMESTAMPTZ→TIMESTAMP（两处映射同时命中）；"
         + "可观测量：DateTime 读回 Kind=Unspecified，写回抛 ArgumentException"),
     new("R-D2", "src/PalORM.Core/DataSession_Bulk.cs",
@@ -206,21 +206,44 @@ static RunOutcome RunTests(string dotnet, string workingDirectory, string filter
         $"run --project {project} -c Debug --no-build -- --treenode-filter \"{filter}\"",
         workingDirectory);
     (int failed, string names) = ParseFailures(output);
+    if (exit != 0 && failed == 0)
+    {
+        // 解析失败时把尾巴打出来，避免"红但数不出来"静默通过
+        Console.WriteLine("   诊断：退出码非零但未解析到失败摘要，输出尾部：");
+        string[] tail = output.Split('\n');
+        foreach (string line in tail[^Math.Min(20, tail.Length)..])
+            Console.WriteLine($"     {line.TrimEnd()}");
+    }
     return new RunOutcome(exit != 0, failed, names);
 }
 
-/// <summary>从 TUnit 控制台输出取失败项数与失败测试全名；摘要行形如 "失败: 3"。</summary>
+/// <summary>从 TUnit 控制台输出取失败项数与失败测试全名。失败块首行只给短名
+/// （"失败 E4_MySql_... (1s 163ms)"），全名在紧随其后的栈帧（"在 命名空间.类.方法()"）里取。
+/// 摘要行形如 "失败: 3"。输出按 UTF-8 解码（中文摘要与栈帧前缀依赖它）。</summary>
 static (int Failed, string Names) ParseFailures(string output)
 {
     string text = Regex.Replace(output, "\u001b\\[[0-9;]*m", string.Empty);
+    string[] lines = text.Split('\n');
     var names = new List<string>();
-    foreach (string line in text.Split('\n'))
+    for (int i = 0; i < lines.Length; i++)
     {
-        Match match = Regex.Match(
-            line,
-            @"^\s*(?:失败|failed)\s+(?:<[^>]*>\s*)?(?<name>\S+\.[A-Za-z0-9_+`<>.]+)",
+        Match header = Regex.Match(
+            lines[i],
+            @"^\s*(?:失败|failed)\s+(?<short>[^\s(]+)",
             RegexOptions.IgnoreCase);
-        if (match.Success) names.Add(match.Groups["name"].Value.Trim());
+        if (!header.Success) continue;
+        string shortName = header.Groups["short"].Value.Trim();
+        string fullName = shortName;
+        for (int j = i + 1; j < Math.Min(i + 40, lines.Length); j++)
+        {
+            Match frame = Regex.Match(lines[j], @"(?:在|at)\s+(?<fqn>[A-Za-z0-9_.+]+)\(");
+            if (frame.Success && frame.Groups["fqn"].Value.EndsWith("." + shortName, StringComparison.Ordinal))
+            {
+                fullName = frame.Groups["fqn"].Value;
+                break;
+            }
+        }
+        names.Add(fullName);
     }
     Match summary = Regex.Match(text, @"(?:失败|failed)\s*[:：]\s*(\d+)", RegexOptions.IgnoreCase);
     int failed = summary.Success
@@ -257,6 +280,8 @@ static (int Exit, string Output) Execute(string fileName, string arguments, stri
     {
         RedirectStandardOutput = true,
         RedirectStandardError = true,
+        StandardOutputEncoding = System.Text.Encoding.UTF8,
+        StandardErrorEncoding = System.Text.Encoding.UTF8,
         UseShellExecute = false,
         WorkingDirectory = workingDirectory,
     };
