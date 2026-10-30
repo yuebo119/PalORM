@@ -7,6 +7,9 @@
 7	> **职责边界**：PalORM 自身回归检测**不用本工具**——PerfHub 与其共码三臂已覆盖；触发面：①五臂横评主张（发版/对比声明）②形态断点（ADR 级变更后基线重开）；③2026-10-26 用户指令起随 `PerfCli full` 默认执行（新步骤"CrossBench 五臂交叉批"，统一报告自动追加 RepoDB 数据臂——数据源按完整批自动判别，五臂×三方言×两档 = 30 三元组；`PerfCli crossbench`可独立触发），事件触发语义不变。
 8	>
 9	> **RepoDB v1.17+ 集成教训（来自 FreeSql 经验）**：
+	> **12 库统一横评扩展（2026-10-30）**：清单 = AotProbe 终版 12 条（PalORM/Dapper.AOT/RepoDb/FreeSql/SmartSql/Insight/LiteDB/EF Core/linq2db/NHibernate/Marten/SqlSugar）+ ADO 地板。新增九臂见各 *Arm.cs（每臂头部注释含形态决策与方言边界）；--arms 令牌惰性构造（不测的臂不付静态初始化）；--dialects litedb 伪方言（快照机制跳过、臂自管状态、Prepare 重定向为重播种）。
+	> **N/A 账本（冒烟实证 2026-10-30）**：SmartSql 全方言（代码级初始化缺陷）；Insight 全方言（SQLite 物化崩 + MySQL/PG 身份列约定吞显式主键）；SqlSugar 仅 PG（小写引号硬编码 vs CamelCase 引号 DDL）；Marten 仅 PG（设计如此）。报告走 scripts/crossbench-12arm-report.cs（七节结构，数字全部当批推导）。
+	>
 10	> - 实体映射走 DynamicMapping（零特性，FieldMapper 静态缓存预热）——避免运行时反射
 11	> - 批量操作自动路由驱动级 API（MySQL LOAD DATA/PG COPY/SQLite 行预编译）——与 ADO 地板同路径
 12	> - 事务传 DbTransaction 参数给 Repository 方法（无需 WithTransaction 包装）

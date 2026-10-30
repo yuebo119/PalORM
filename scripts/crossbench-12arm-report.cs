@@ -43,6 +43,14 @@ foreach (string file in files)
     all.AddRange(loaded);
 }
 
+// LiteDB 伪方言拆分：Runner 以 SQLite 作载体方言（Dialect=Sqlite 落盘），但 LiteDB 是
+// 独立文件存储、无 SQL 同表位——改写到独立 "LiteDB" 方言，避免混入 SQLite 表位
+foreach (Measurement m in all.Where(m => m.Implementation == "LiteDB").ToList())
+{
+    int idx = all.IndexOf(m);
+    all[idx] = m with { Dialect = "LiteDB" };
+}
+
 // 两遍反序批内 Average 聚合（与 CrossBenchBatch.LoadAggregated 同口径）
 List<Measurement> agg =
 [
@@ -92,6 +100,9 @@ var naReasons = new Dictionary<(string Arm, string Dialect), string>
     [("SqlSugar", "PostgreSql")] = "N/A：PG 硬编码全小写引号标识符，与 CamelCase 引号 DDL 冲突",
     [("Marten", "Sqlite")] = "N/A：PG-only 文档库（清单钦定，仅 pg 注册）",
     [("Marten", "MySql")] = "N/A：PG-only 文档库",
+    [("LiteDB", "Sqlite")] = "—：嵌入式文件文档库，独立伪方言批（见 LiteDB 节）",
+    [("LiteDB", "MySql")] = "—：同 SQLite（独立伪方言批）",
+    [("LiteDB", "PostgreSql")] = "—：同 SQLite（独立伪方言批）",
 };
 
 // ── 胜场统计（每格最快者；ADO 是地板不是竞争者） ──
