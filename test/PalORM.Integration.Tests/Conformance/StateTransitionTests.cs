@@ -168,8 +168,12 @@ public sealed class StateTransitionTests
         await using SharedSqliteDb shared = await SharedSqliteDb.CreateAsync("state_begin");
         await using DataSession<SqliteProvider> db = await shared.OpenSessionAsync();
         using System.Data.Common.DbTransaction transaction = await db.BeginTransactionAsync();
-        await Assert.That(transaction).IsNotNull();
+        // 行为断言（不用 IsNotNull）：事务内写入对当前会话可见，回滚后不留下行。
+        // 这条同时验证 ITM-649 的事务登记——写入若未加入该事务，回滚后行仍在。
+        await db.InsertAsync(new CfBulkPlainEntity { Id = 1, Name = "tx", Amount = 1 });
+        await Assert.That(await db.CountAsync<CfBulkPlainEntity>()).IsEqualTo(1L);
         await transaction.RollbackAsync();
+        await Assert.That(await db.CountAsync<CfBulkPlainEntity>()).IsEqualTo(0L);
     }
 
     [Test]
