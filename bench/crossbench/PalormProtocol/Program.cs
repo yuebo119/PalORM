@@ -60,7 +60,17 @@ internal static class Program
 
         List<Dialect> dialects = dialectFilter.Length == 0
             ? [Dialect.Sqlite, Dialect.MySql, Dialect.PostgreSql]
-            : [.. dialectFilter.Select(ParseDialect)];
+            : [.. dialectFilter.Where(d => !d.Equals("litedb", StringComparison.OrdinalIgnoreCase))
+                .Select(ParseDialect)];
+
+        // --dialects litedb：伪方言模式（2026-10-30 12 库统一横评）——LiteDB 是嵌入式文件
+        // 文档库，无 SQL 方言；以 SQLite 方言作载体（快照/守卫机制跳过，臂集合只剩 LiteDB，
+        // 载体连接用 in-memory 且不被臂使用）
+        bool liteDbMode = dialectFilter.Contains("litedb", StringComparer.OrdinalIgnoreCase);
+        if (liteDbMode)
+        {
+            dialects = [Dialect.Sqlite];
+        }
 
         string[] opFilter = [];
         int opsIndex = Array.IndexOf(args, "--ops");
@@ -88,7 +98,7 @@ internal static class Program
         foreach (Dialect dialect in dialects)
         {
             DialectInfo info = DialectInfo.Of(dialect);
-            string cs = Connections.Resolve(info);
+            string cs = liteDbMode ? "Data Source=:memory:" : Connections.Resolve(info);
             await using DbConnection conn = info.OpenConnection(cs);
             await conn.OpenAsync().ConfigureAwait(false);
             if (dialect == Dialect.Sqlite)
@@ -96,23 +106,71 @@ internal static class Program
                 await ExecAsync(conn, Pragma).ConfigureAwait(false);
             }
 
-            IPerfImplementation[] allImpls =
-                [new AdoNetImpl(info), new DapperImpl(info), new RepoDbArm(info), new FreeSqlImpl(info), new PalormImpl(info)];
+            // 12 库统一横评（2026-10-30，清单 = AotProbe 终版 12 条）：五臂原班 +
+            // 九新臂。新臂构造可能因方言不支持而失败（如 SmartSql provider 注册名不符）——
+            // 安全构造后跳过并在控制台登记，不拖垮整批（该格 N/A 由报告呈现）。
+            // 臂按 --arms 令牌惰性构造（2026-10-30）：不测的臂不构造——跨库静态初始化
+            //（NHibernate 会话工厂、Marten DocumentStore 等）只应为参测臂付出
+            bool Want(string token) =>
+                armFilter.Length == 0 || armFilter.Contains(token, StringComparer.OrdinalIgnoreCase);
+
+            List<IPerfImplementation> armList = liteDbMode
+                ? [new LiteDbImpl()]
+                :
+                [
+                    .. When(Want("ado"), new AdoNetImpl(info)),
+                    .. When(Want("dapper"), new DapperImpl(info)),
+                    .. When(Want("repodb"), new RepoDbArm(info)),
+                    .. When(Want("freesql"), new FreeSqlImpl(info)),
+                    .. When(Want("palorm"), new PalormImpl(info)),
+                    .. When(Want("dapper-aot"), new DapperAotImpl(info)),
+                    .. When(Want("linq2db"), new Linq2DbImpl(info)),
+                    .. When(Want("efcore"), new EfCoreImpl(info)),
+                    .. When(Want("sqlsugar"), TryArm(() => new SqlSugarImpl(info), "sqlsugar")!),
+                    .. When(Want("nhibernate"), new NHibernateImpl(info)),
+                    .. When(Want("insight"), TryArm(() => new InsightImpl(info), "insight")!),
+                    .. When(Want("smartsql"), TryArm(() => new SmartSqlImpl(info), "smartsql")!),
+                ];
+            if (!liteDbMode && dialect == Dialect.PostgreSql && Want("marten"))
+            {
+                armList.Add(TryArm(() => new MartenImpl(info), "marten")!);
+            }
+
+            IPerfImplementation[] allImpls = [.. armList.OfType<IPerfImplementation>()];
             IPerfImplementation[] impls = armFilter.Length == 0
                 ? allImpls
                 : [.. allImpls.Where(a => armFilter.Contains(ArmToken(a.Name), StringComparer.OrdinalIgnoreCase))];
             if (impls.Length == 0)
             {
                 throw new ArgumentOutOfRangeException(
-                    "--arms", string.Join(',', armFilter), "有效臂名：ado、dapper、repodb、freesql、palorm");
+                    "--arms", string.Join(',', armFilter),
+                    "有效臂名：ado、dapper、dapper-aot、repodb、freesql、palorm、linq2db、efcore、sqlsugar、nhibernate、insight、smartsql、litedb、marten");
             }
             try
             {
                 foreach (int rows in tiers)
                 {
                     int bulkDeleteRounds = Math.Clamp(BulkDeleteSeedRowBudget / rows, 3, BulkDeleteMaxRounds);
-                    // 每档开始：重建 perf_s1 + 两张快照（rows 档 / BulkDelete 的 rows×rounds 档）
-                    await BuildSnapshotsAsync(conn, dialect, rows, bulkDeleteRounds).ConfigureAwait(false);
+                    // 每档开始：重建 perf_s1 + 两张快照（rows 档 / BulkDelete 的 rows×rounds 档）；
+                    // litedb 伪方言跳过（臂自管状态，载体 in-memory 不承载快照）——改为对臂
+                    // 显式 SetupAsync（等价语义：档位种子就绪，守卫在首个 op 前可验）
+                    if (!liteDbMode)
+                    {
+                        await BuildSnapshotsAsync(conn, dialect, rows, bulkDeleteRounds).ConfigureAwait(false);
+
+                        // Marten 文档库自管状态：守卫在首个 op 前可验，需档位开始时显式播种
+                        foreach (IPerfImplementation marten in impls.OfType<MartenImpl>())
+                        {
+                            await marten.SetupAsync(conn, rows, CancellationToken.None).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        foreach (IPerfImplementation impl in impls)
+                        {
+                            await impl.SetupAsync(conn, rows, CancellationToken.None).ConfigureAwait(false);
+                        }
+                    }
 
                     long[] whereInIds = BuildWhereInIds(rows);
                     long[] keys = Dataset.KeySet(rows);
@@ -123,50 +181,37 @@ internal static class Program
                     for (int pass = 0; pass < 2; pass++)
                     {
                         // 读不变量：每个读 perf_s1 的测量都从「表内恰好 rows 行」开始——
-                        // 两遍的读操作前各重置一次（PerfHub 的交错读同语义）
-                        await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
+                        // 两遍的读操作前各重置一次（PerfHub 的交错读同语义）；litedb 伪方言
+                        // 跳过（臂自管状态）
+                        if (!liteDbMode)
+                        {
+                            await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
+                        }
 
                         IPerfImplementation[] order = pass == 0 ? impls : [.. impls.Reverse()];
 
-                        // 读正确性守卫（每方言一次，不计入测量）：RepoDB/FreeSql 实体映射
-                        // 必须与 ADO 同值——防列错位静默产生错误数据
-                        IPerfImplementation? repoDb = Array.Find(impls, static a => a.Name == "RepoDb");
-                        IPerfImplementation? freeSql = Array.Find(impls, static a => a.Name == "FreeSql");
-                        if (pass == 0 && rows == tiers[0] && (repoDb is not null || freeSql is not null))
+                        // 读正确性守卫（每方言一次，不计入测量）：除 ADO/Dapper/PalORM 三个
+                        // 历史已知臂外全部参与（RepoDB/FreeSql 原名单 + 12 库横评新臂）——
+                        // 实体映射必须与 ADO 同值，防列错位静默产生错误数据
+                        if (pass == 0 && rows == tiers[0] && impls.Any(a => a.Name is not ("ADO_NET" or "Dapper" or "PalORM")))
                         {
                             List<string> validationMessages = new();
-                            
-                            if (freeSql is not null)
+                            foreach (IPerfImplementation arm in impls.Where(
+                                         a => a.Name is not ("ADO_NET" or "Dapper" or "PalORM")))
                             {
-                                S1Row? probe = await freeSql.GetByKeyAsync(conn, 1, CancellationToken.None)
+                                S1Row? probe = await arm.GetByKeyAsync(conn, 1, CancellationToken.None)
                                     .ConfigureAwait(false);
-                                List<S1Row> all = await freeSql.QueryAllAsync(conn, CancellationToken.None)
+                                List<S1Row> all = await arm.QueryAllAsync(conn, CancellationToken.None)
                                     .ConfigureAwait(false);
                                 if (probe?.Name != "row-0" || probe.Price != 0m || probe.Marker != 0
                                     || all.Count != rows || all[^1].Id != rows)
                                 {
-                                    validationMessages.Add($"FreeSql: probe={probe?.Name}/{probe?.Price}/{probe?.Marker} count={all.Count} last={all[^1].Id}");
+                                    validationMessages.Add(
+                                        $"{arm.Name}: probe={probe?.Name}/{probe?.Price}/{probe?.Marker} count={all.Count} last={(all.Count > 0 ? all[^1].Id : 0)}");
                                 }
                                 else
                                 {
-                                    Console.WriteLine("    FreeSql 读映射校验 OK");
-                                }
-                            }
-
-                            if (repoDb is not null)
-                            {
-                                S1Row? probe = await repoDb.GetByKeyAsync(conn, 1, CancellationToken.None)
-                                    .ConfigureAwait(false);
-                                List<S1Row> all = await repoDb.QueryAllAsync(conn, CancellationToken.None)
-                                    .ConfigureAwait(false);
-                                if (probe?.Name != "row-0" || probe.Price != 0m || probe.Marker != 0
-                                    || all.Count != rows || all[^1].Id != rows)
-                                {
-                                    validationMessages.Add($"RepoDB: probe={probe?.Name}/{probe?.Price}/{probe?.Marker} count={all.Count} last={all[^1].Id}");
-                                }
-                                else
-                                {
-                                    Console.WriteLine("    RepoDB 读映射校验 OK");
+                                    Console.WriteLine($"    {arm.Name} 读映射校验 OK");
                                 }
                             }
 
@@ -175,16 +220,18 @@ internal static class Program
                                 throw new InvalidOperationException(string.Join(" | ", validationMessages));
                             }
 
-                            // 写后映射校验（每方言一次，不计入测量）：改值 → 批量更新/UPSERT →
-                            // 读回比对 → 快照复原。读校验只覆盖 SELECT 路径；批量写的列序由
-                            // pseudo 表映射/语句构建决定，错位会静默写入错误数据（计时仍正常）。
-                            if (repoDb is not null)
+                            // 写后映射校验（每方言一次，不计入测量，全部参与守卫的臂）：改值 →
+                            // 批量更新/UPSERT → 读回比对 → 复原。读校验只覆盖 SELECT 路径；
+                            // 批量写的列序/文档序由各臂映射与语句构建决定，错位会静默写入
+                            // 错误数据（计时仍正常）。
+                            foreach (IPerfImplementation arm in impls.Where(
+                                         a => a.Name is not ("ADO_NET" or "Dapper" or "PalORM")))
                             {
-                                await ValidateRepoDbWritesAsync(dialect, conn, repoDb, rows).ConfigureAwait(false);
+                                await ValidateArmWritesAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
                             }
                         }
 
-                        foreach (Op op in BuildOperations(dialect, rows, keys, whereInIds, bulkDeleteRounds))
+                        foreach (Op op in BuildOperations(dialect, rows, keys, whereInIds, bulkDeleteRounds, liteDbMode, liteDbMode ? impls[0] : null))
                         {
                             if (op.MinTierOnly && rows != tiers.Min())
                             {
@@ -232,15 +279,75 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>写后映射校验（RepoDb 臂，每方言一次，不计入测量）：用改过值的种子行走
-    /// BulkUpdate 与 UpsertBatch 两条写路径，读回逐字段比对后从快照复原。
-    /// <para>为什么需要：读校验只覆盖 SELECT；批量写的列序由 pseudo 表映射与语句构建决定，
+    /// <summary>条件展开助手——want 为真时展开臂数组，否则空（配合 --arms 令牌惰性构造）。</summary>
+    private static IEnumerable<IPerfImplementation> When(bool want, params IPerfImplementation?[] arms)
+        => want ? arms.OfType<IPerfImplementation>() : [];
+
+    /// <summary>臂安全构造——方言不支持/初始化失败时返回 null 并在控制台登记
+    ///（2026-10-30 12 库横评：SmartSql provider 注册名、Marten PG-only 等方言级失败
+    /// 不拖垮整批，该臂 N/A 进报告）。</summary>
+    private static IPerfImplementation? TryArm(Func<IPerfImplementation> factory, string armName)
+    {
+        try
+        {
+            return factory();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"    [WARN] {armName} 臂构造失败（该方言 N/A）：{ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>写后映射校验（每方言每臂一次，不计入测量）：用改过值的种子行走
+    /// BulkUpdate 与 UpsertBatch 两条写路径，读回逐字段比对后复原。
+    /// <para>为什么需要：读校验只覆盖 SELECT；批量写的列序/文档序由各臂映射与语句构建决定，
     /// 错位会静默写入错误数据而计时照常。BulkUpdate 与 UpsertBatch 走不同代码路径
-    ///（前者 UPDATE，后者 INSERT … ON CONFLICT / ON DUPLICATE KEY），两条都要验。</para>
-    /// <para>限定 RepoDb：其余臂（ADO/Dapper/FreeSql/PalORM）的写后校验是历史批次的已知缺口，
-    /// 见 ADR-S「已知边界」，不在此扩大改动面。</para></summary>
-    private static async Task ValidateRepoDbWritesAsync(
-        Dialect dialect, DbConnection conn, IPerfImplementation repoDb, int rows)
+    ///（前者 UPDATE，后者 INSERT … ON CONFLICT / ON DUPLICATE KEY / 文档覆写），两条都要验。</para>
+    /// <para>2026-10-30 从 RepoDb 专用泛化为全部参与守卫的臂（读守卫名单同源）；
+    /// ADO/Dapper/PalORM 的写后校验仍是历史批次的已知缺口（ADR-S「已知边界」）。</para></summary>
+    /// <summary>校验间复原——SQL 方言走快照 Restore；litedb 伪方言走臂重播种（同语义）。</summary>
+    private static Task RestoreForValidationAsync(
+        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows, bool liteDbMode)
+        => liteDbMode
+            ? arm.SetupAsync(conn, rows, CancellationToken.None)
+            : RestoreAsync(conn, dialect, "perf_s1_seed");
+
+    private static async Task ValidateArmWritesAsync(
+        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows, bool liteDbMode = false)
+    {
+        // 自管状态臂（LiteDB/Marten）在校验期抑制脏复位：BulkUpdate→读回是方法间序列，
+        // SQL 方言同序列直读不复位，状态语义对齐（测量路径不受影响）
+        if (arm is LiteDbImpl liteDb)
+        {
+            liteDb.SuppressResetForValidation = true;
+        }
+
+        if (arm is MartenImpl marten)
+        {
+            marten.SuppressResetForValidation = true;
+        }
+
+        try
+        {
+            await ValidateArmWritesCoreAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (arm is LiteDbImpl liteDb2)
+            {
+                liteDb2.SuppressResetForValidation = false;
+            }
+
+            if (arm is MartenImpl marten2)
+            {
+                marten2.SuppressResetForValidation = false;
+            }
+        }
+    }
+
+    private static async Task ValidateArmWritesCoreAsync(
+        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows, bool liteDbMode)
     {
         int count = Math.Min(rows, 200);
         List<S1Row> modified = Dataset.SeedRows(count, 0);
@@ -256,27 +363,27 @@ internal static class Program
                 && actual.Price == expected.Price && actual.Marker == expected.Marker;
 
         // 路径 1：BulkUpdate
-        await repoDb.BulkUpdateAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
-        S1Row? afterUpdate = await repoDb.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
+        await arm.BulkUpdateAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
+        S1Row? afterUpdate = await arm.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
             .ConfigureAwait(false);
         bool updateOk = Same(afterUpdate, modified[0]);
-        await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
+        await RestoreForValidationAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
 
         // 路径 2：UpsertBatch（对已存在主键段整批 UPSERT，值同样改成审计值）
-        await repoDb.UpsertBatchAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
-        S1Row? afterUpsert = await repoDb.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
+        await arm.UpsertBatchAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
+        S1Row? afterUpsert = await arm.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
             .ConfigureAwait(false);
         bool upsertOk = Same(afterUpsert, modified[0]);
-        await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
+        await RestoreForValidationAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
 
         if (!updateOk || !upsertOk)
         {
             throw new InvalidOperationException(
-                $"RepoDb 写映射校验失败：BulkUpdate={Describe(afterUpdate, modified[0])} "
+                $"{arm.Name} 写映射校验失败：BulkUpdate={Describe(afterUpdate, modified[0])} "
                 + $"UpsertBatch={Describe(afterUpsert, modified[0])}");
         }
 
-        Console.WriteLine("    RepoDb 写映射校验 OK（BulkUpdate + UpsertBatch）");
+        Console.WriteLine($"    {arm.Name} 写映射校验 OK（BulkUpdate + UpsertBatch）");
 
         static string Describe(S1Row? actual, S1Row expected)
             => actual is null
@@ -289,39 +396,52 @@ internal static class Program
         "sqlite" => Dialect.Sqlite,
         "mysql" => Dialect.MySql,
         "pg" or "postgres" or "postgresql" => Dialect.PostgreSql,
-        _ => throw new ArgumentOutOfRangeException(nameof(value), value, "dialect 只支持 sqlite/mysql/pg")
+        _ => throw new ArgumentOutOfRangeException(nameof(value), value, "dialect 只支持 sqlite/mysql/pg/litedb")
     };
 
-    /// <summary>--arms 令牌 → 实现名（ado 令牌对应实现名 ADO_NET）。</summary>
+    /// <summary>--arms 令牌 → 实现名（ado 令牌对应实现名 ADO_NET；复合名臂显式映射）。</summary>
     private static string ArmToken(string implementationName) => implementationName switch
     {
         "ADO_NET" => "ado",
+        "DapperAot" => "dapper-aot",
+        "EfCore" => "efcore",
+        "Linq2Db" => "linq2db",
         _ => implementationName.ToLowerInvariant(),
     };
 
     private static List<Op> BuildOperations(
-        Dialect dialect, int rows, long[] keys, long[] whereInIds, int bulkDeleteRounds) =>
-    [
-        // ── 读（pass 开始时表恰好 rows 行，三臂同状态）──
-        new("GetByKey", "CRUD", 200,
-            (impl, c, i) => impl.GetByKeyAsync(c, keys[i * 7919 % keys.Length], CancellationToken.None)),
-        new("GetAllAsync", "CRUD", 200,
-            (impl, c, _) => impl.GetAllAsync(c, CancellationToken.None)),
-        new("QueryAll", "CRUD", 200,
-            (impl, c, _) => impl.QueryAllAsync(c, CancellationToken.None)),
+        Dialect dialect, int rows, long[] keys, long[] whereInIds, int bulkDeleteRounds,
+        bool liteDbMode = false, IPerfImplementation? liteArm = null)
+    {
+        // litedb 伪方言：臂自管状态——SQL 快照 Prepare 重定向为臂重播种（同一语义：
+        // 计时前状态复位；EnumInserts 的 perf_enum 建表也由重播种覆盖——SetupAsync 清枚举集合）
+        Func<DbConnection, Task>? Prep(string snapshot) =>
+            liteDbMode
+                ? c => liteArm!.SetupAsync(c, rows, CancellationToken.None)
+                : c => RestoreAsync(c, dialect, snapshot);
 
-        // ── 写（PerfHub 顺序：Insert → Update → BulkUpdate → BulkInsert → BulkDelete）──
-        new("Insert", "CRUD", 200,
-            (impl, c, i) => impl.InsertAsync(c, Dataset.Seed(rows + i), CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed")),
-        new("Update", "CRUD", 200,
-            (impl, c, i) => impl.UpdateAsync(c, Dataset.Seed(i * 7919 % rows), CancellationToken.None)),
-        new("BulkUpdate", "CRUD", 200,
-            (impl, c, _) => impl.BulkUpdateAsync(c, Dataset.SeedRows(rows, 0), CancellationToken.None)),
-        new("BulkInsert", "CRUD", 200,
-            (impl, c, i) => impl.BulkInsertAsync(
-                c, Dataset.SeedRows(rows, (long)rows * (i + 1)), CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed")),
+        List<Op> ops =
+        [
+            // ── 读（pass 开始时表恰好 rows 行，三臂同状态）──
+            new("GetByKey", "CRUD", 200,
+                (impl, c, i) => impl.GetByKeyAsync(c, keys[i * 7919 % keys.Length], CancellationToken.None)),
+            new("GetAllAsync", "CRUD", 200,
+                (impl, c, _) => impl.GetAllAsync(c, CancellationToken.None)),
+            new("QueryAll", "CRUD", 200,
+                (impl, c, _) => impl.QueryAllAsync(c, CancellationToken.None)),
+
+            // ── 写（PerfHub 顺序：Insert → Update → BulkUpdate → BulkInsert → BulkDelete）──
+            new("Insert", "CRUD", 200,
+                (impl, c, i) => impl.InsertAsync(c, Dataset.Seed(rows + i), CancellationToken.None),
+                Prep("perf_s1_seed")),
+            new("Update", "CRUD", 200,
+                (impl, c, i) => impl.UpdateAsync(c, Dataset.Seed(i * 7919 % rows), CancellationToken.None)),
+            new("BulkUpdate", "CRUD", 200,
+                (impl, c, _) => impl.BulkUpdateAsync(c, Dataset.SeedRows(rows, 0), CancellationToken.None)),
+            new("BulkInsert", "CRUD", 200,
+                (impl, c, i) => impl.BulkInsertAsync(
+                    c, Dataset.SeedRows(rows, (long)rows * (i + 1)), CancellationToken.None),
+                Prep("perf_s1_seed")),
         new("BulkDelete", "CRUD", bulkDeleteRounds,
             (impl, c, i) =>
             {
@@ -333,50 +453,53 @@ internal static class Program
 
                 return impl.BulkDeleteAsync(c, batch, CancellationToken.None);
             },
-            c => RestoreAsync(c, dialect, "perf_s1_seed_bd")),
+            Prep("perf_s1_seed_bd")),
 
-        // ── Query（BulkDelete 之后都带 reset，恢复「恰好 rows 行」）──
-        new("KeysetPage", "Query", 200,
-            (impl, c, i) => impl.KeysetPageAsync(c, i % 20 * 100, 100, CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed")),
-        new("WhereIn", "Query", 200,
-            (impl, c, _) => impl.WhereInAsync(c, whereInIds, CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed")),
-        new("Count", "Query", 200,
-            (impl, c, _) => impl.CountAsync(c, CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed")),
+            // ── Query（BulkDelete 之后都带 reset，恢复「恰好 rows 行」）──
+            new("KeysetPage", "Query", 200,
+                (impl, c, i) => impl.KeysetPageAsync(c, i % 20 * 100, 100, CancellationToken.None),
+                Prep("perf_s1_seed")),
+            new("WhereIn", "Query", 200,
+                (impl, c, _) => impl.WhereInAsync(c, whereInIds, CancellationToken.None),
+                Prep("perf_s1_seed")),
+            new("Count", "Query", 200,
+                (impl, c, _) => impl.CountAsync(c, CancellationToken.None),
+                Prep("perf_s1_seed")),
 
-        // ── Upsert（对已存在主键段整批 UPSERT）──
-        new("UpsertBatch", "CRUD", 200,
-            (impl, c, _) => impl.UpsertBatchAsync(c, Dataset.SeedRows(rows, 0), CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed")),
+            // ── Upsert（对已存在主键段整批 UPSERT）──
+            new("UpsertBatch", "CRUD", 200,
+                (impl, c, _) => impl.UpsertBatchAsync(c, Dataset.SeedRows(rows, 0), CancellationToken.None),
+                Prep("perf_s1_seed")),
 
-        // ── 事务族（仅最小档，PerfHub RunsAtTier 语义）──
-        new("TxSingleInsert", "Transaction", 200,
-            (impl, c, i) => impl.TxSingleInsertAsync(c, Dataset.Seed(rows + i), CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed"),
-            MinTierOnly: true),
-        new("TxHundredInserts", "Transaction", 200,
-            (impl, c, i) => impl.TxHundredInsertsAsync(
-                c, Dataset.SeedRows(100, rows + ((long)i * 100)), CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed"),
-            MinTierOnly: true),
-        new("TxBulkInsert", "Transaction", 200,
-            (impl, c, i) => impl.TxBulkInsertAsync(
-                c, Dataset.SeedRows(rows, (long)rows * (i + 1)), CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed"),
-            MinTierOnly: true),
-        new("TxRollback", "Transaction", 200,
-            (impl, c, i) => impl.TxRollbackAsync(
-                c, Dataset.SeedRows(Math.Min(rows, 500), 0), CancellationToken.None),
-            c => RestoreAsync(c, dialect, "perf_s1_seed"),
-            MinTierOnly: true),
-        new("EnumInserts", "Transaction", 200,
-            (impl, c, i) => impl.EnumInsertsAsync(
-                c, Dataset.SeedEnumRows(100, (long)i * 100), CancellationToken.None),
-            c => AdoNetImpl.SetupPerfEnumTableAsync(dialect, c, CancellationToken.None),
-            MinTierOnly: true),
-    ];
+            // ── 事务族（仅最小档，PerfHub RunsAtTier 语义）──
+            new("TxSingleInsert", "Transaction", 200,
+                (impl, c, i) => impl.TxSingleInsertAsync(c, Dataset.Seed(rows + i), CancellationToken.None),
+                Prep("perf_s1_seed"),
+                MinTierOnly: true),
+            new("TxHundredInserts", "Transaction", 200,
+                (impl, c, i) => impl.TxHundredInsertsAsync(
+                    c, Dataset.SeedRows(100, rows + ((long)i * 100)), CancellationToken.None),
+                Prep("perf_s1_seed"),
+                MinTierOnly: true),
+            new("TxBulkInsert", "Transaction", 200,
+                (impl, c, i) => impl.TxBulkInsertAsync(
+                    c, Dataset.SeedRows(rows, (long)rows * (i + 1)), CancellationToken.None),
+                Prep("perf_s1_seed"),
+                MinTierOnly: true),
+            new("TxRollback", "Transaction", 200,
+                (impl, c, i) => impl.TxRollbackAsync(
+                    c, Dataset.SeedRows(Math.Min(rows, 500), 0), CancellationToken.None),
+                Prep("perf_s1_seed"),
+                MinTierOnly: true),
+            new("EnumInserts", "Transaction", 200,
+                (impl, c, i) => impl.EnumInsertsAsync(
+                    c, Dataset.SeedEnumRows(100, (long)i * 100), CancellationToken.None),
+                liteDbMode ? Prep("perf_enum") : c => AdoNetImpl.SetupPerfEnumTableAsync(dialect, c, CancellationToken.None),
+                MinTierOnly: true),
+        ];
+
+        return ops;
+    }
 
     private static long[] BuildWhereInIds(int rows)
     {

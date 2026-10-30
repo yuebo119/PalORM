@@ -68,4 +68,40 @@
     <PackageReference Include="Npgsql" Version="10.0.3" />
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- 12 库统一横评扩展（2026-10-30，清单 = AotProbe 终版 12 条，版本与
+         tools/AotProbe/shared/AotProbeManifest.cs 单源对齐；palorm/repodb/freesql/dapper-aot
+         已在上面引用组） -->
+    <!-- linq2db 6.5.1：SQLite/PG 走原生 provider；MySQL 走 linq2db.Mysql（MySql.Data 驱动）——
+         nuget.org 对本区域 302 到 azure.cn 半量镜像，linq2db.MySqlConnector 在镜像 BlobNotFound
+         （2026-10-30 实测），驱动差异在报告注记 -->
+    <PackageReference Include="linq2db" Version="6.5.1" />
+    <PackageReference Include="linq2db.SQLite" Version="6.5.1" />
+    <PackageReference Include="linq2db.Mysql" Version="6.5.1" />
+    <PackageReference Include="linq2db.PostgreSQL" Version="6.5.1" />
+
+    <!-- EF Core 10 线（EF 11 未发布）：SQLite/Npgsql 已缓存；MySQL 用 Oracle 官方
+         MySql.EntityFrameworkCore（镜像无 Pomelo EF10 线，2026-10-30 实测） -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.14" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="MySql.EntityFrameworkCore" Version="10.0.12" />
+
+    <PackageReference Include="SqlSugarCore" Version="5.1.4.221" />
+
+    <!-- NHibernate 5.6：SQLite 官方驱动载体 System.Data.SQLite.Core（SQLite20Driver）；
+         MySQL/PG 驱动复用 MySqlConnector/Npgsql -->
+    <PackageReference Include="NHibernate" Version="5.6.0" />
+    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />
+
+    <!-- Marten 9.14.1：PG-only 文档库（清单钦定，仅 pg 方言注册） -->
+    <PackageReference Include="Marten" Version="9.14.1" />
+
+    <!-- LiteDB 5：嵌入式文件文档库（方言无关，独立注册一次） -->
+    <PackageReference Include="LiteDB" Version="5.0.21" />
+
+    <PackageReference Include="SmartSql" Version="4.2.0" />
+    <PackageReference Include="Insight.Database" Version="8.0.6" />
+    <PackageReference Include="Insight.Database.Providers.MySqlConnector" Version="8.0.6" />
+  </ItemGroup>
 </Project>
