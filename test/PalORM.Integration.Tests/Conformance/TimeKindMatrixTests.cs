@@ -94,27 +94,34 @@ public sealed class TimeKindMatrixTests
         await db.ExecuteAsync($"DROP TABLE IF EXISTS cf_time_matrix");
         await db.MigrateAsync();
 
-        DateTime utc = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc);
-        await db.InsertAsync(new CfTimeMatrixEntity
+        try
         {
-            Dt = utc,
-            Dto = new DateTimeOffset(utc),
-            DateOnly = new DateOnly(2026, 7, 18),
-            TimeOnly = new TimeOnly(10, 30, 0)
-        });
+            DateTime utc = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc);
+            await db.InsertAsync(new CfTimeMatrixEntity
+            {
+                Dt = utc,
+                Dto = new DateTimeOffset(utc),
+                DateOnly = new DateOnly(2026, 7, 18),
+                TimeOnly = new TimeOnly(10, 30, 0)
+            });
 
-        CfTimeMatrixEntity readBack = (await db.GetAllAsync<CfTimeMatrixEntity>())[0];
-        await Assert.That(readBack.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
-        await Assert.That(readBack.Dt.Ticks).IsEqualTo(utc.Ticks);
+            CfTimeMatrixEntity readBack = (await db.GetAllAsync<CfTimeMatrixEntity>())[0];
+            await Assert.That(readBack.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+            await Assert.That(readBack.Dt.Ticks).IsEqualTo(utc.Ticks);
 
-        // 原样写回：旧列型（timestamp without time zone）在这里抛 ArgumentException
-        await db.UpdateAsync(readBack);
+            // 原样写回：旧列型（timestamp without time zone）在这里抛 ArgumentException
+            await db.UpdateAsync(readBack);
 
-        CfTimeMatrixEntity reloaded = (await db.GetAllAsync<CfTimeMatrixEntity>())[0];
-        await Assert.That(reloaded.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
-        await Assert.That(reloaded.Dt.Ticks).IsEqualTo(utc.Ticks);
-
-        await db.ExecuteAsync($"DELETE FROM cf_time_matrix");
+            CfTimeMatrixEntity reloaded = (await db.GetAllAsync<CfTimeMatrixEntity>())[0];
+            await Assert.That(reloaded.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+            await Assert.That(reloaded.Dt.Ticks).IsEqualTo(utc.Ticks);
+        }
+        finally
+        {
+            // T6：本用例触碰 DDL（DROP TABLE + 重建），清理必须在 finally 内执行，
+            // 断言失败或驱动异常时同样清掉行，避免残留污染同表其它用例
+            await db.ExecuteAsync($"DELETE FROM cf_time_matrix");
+        }
     }
 
     private static void WriteMatrix(
