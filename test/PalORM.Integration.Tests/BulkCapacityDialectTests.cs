@@ -103,8 +103,12 @@ public sealed class BulkCapacityDialectTests
             await using var session = await TestDb.MySqlAsync();
 #pragma warning disable S2077, CA2100
             await session.ExecuteAsync($"DROP TABLE IF EXISTS itm892_fallback_probe");
+            // IF NOT EXISTS 是并发防线：别的 MySQL 用例调 MigrateAsync 时会按 registry 建全量
+            // 探针表（含本表，CREATE TABLE IF NOT EXISTS），落在上面 DROP 与本句之间就会让
+            // 裸 CREATE 报 "already exists"（CI 2026-10-30 实测撞上）。两种结构对后续
+            // 插入与计数断言等价（name 为 TEXT 或 VARCHAR(100) 均可承 "first"/"second"）。
             await session.ExecuteAsync(
-                $"CREATE TABLE itm892_fallback_probe (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL)");
+                $"CREATE TABLE IF NOT EXISTS itm892_fallback_probe (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, value INT NOT NULL)");
 #pragma warning restore S2077, CA2100
             try
             {

@@ -187,7 +187,13 @@ public sealed class ErrorContractTests
     public async Task E4_MySql_QueryPipelineTimeout_ThrowsTimeoutException()
     {
         await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
-        await db.MigrateAsync();
+        // 不调 MigrateAsync：MySQL 上它会按 registry 建全量探针表（含 itm883/itm892），
+        // 与 BulkCapacityDialectTests 的 DROP→CREATE 窗口并发冲突（CI 已实测撞上）。
+        // 这里只建本用例需要的表，DDL 与生成物同构。
+#pragma warning disable S2077, CA2100
+        await db.ExecuteAsync(
+            $"CREATE TABLE IF NOT EXISTS cf_timeout_probe (Id BIGINT PRIMARY KEY NOT NULL, name TEXT NOT NULL)");
+#pragma warning restore S2077, CA2100
         await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
         await db.InsertAsync(new CfTimeoutProbeEntity { Id = 1, Name = "probe" });
         try
@@ -216,7 +222,13 @@ public sealed class ErrorContractTests
     public async Task E4_MySql_PagedQueryTimeout_ThrowsTimeoutException()
     {
         await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
-        await db.MigrateAsync();
+        // 不调 MigrateAsync：MySQL 上它会按 registry 建全量探针表（含 itm883/itm892），
+        // 与 BulkCapacityDialectTests 的 DROP→CREATE 窗口并发冲突（CI 已实测撞上）。
+        // 这里只建本用例需要的表，DDL 与生成物同构。
+#pragma warning disable S2077, CA2100
+        await db.ExecuteAsync(
+            $"CREATE TABLE IF NOT EXISTS cf_timeout_probe (Id BIGINT PRIMARY KEY NOT NULL, name TEXT NOT NULL)");
+#pragma warning restore S2077, CA2100
         await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
         await db.InsertAsync(new CfTimeoutProbeEntity { Id = 1, Name = "probe" });
         try
