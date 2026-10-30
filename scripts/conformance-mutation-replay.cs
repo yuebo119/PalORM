@@ -1,15 +1,21 @@
 // conformance-mutation-replay.cs
-// 一致性套件的产品侧变异回放（方案 §4.8 / 附录 B 第 6 项）。
+// 一致性套件的产品侧变异回放（方案 §4.8 / 附录 B 第 6 项；D1-D7 回放见《测试体系增强方案-2026-10-30》§5.1）。
 //
 // 对每条规则执行四步：注入缺陷 -> 构建 -> 跑目标测试（期望报红）-> git 还原 -> 构建 -> 跑同一组测试（期望转绿）。
 // 判定标准是"注入后红 且 还原后绿"，任一不符即 exit 1。注入内容均为硬替换，不用环境变量开关：
 // 源生成器读取环境变量会被 Roslyn RS1035 拦下（分析器禁止读环境变量）。
 //
+// 规则可指定自己的测试项目（R-D5 的 PALORM054 检测测试在 test/PalORM.SourceGen.Tests）；
+// 未指定时用默认项目 test/PalORM.Integration.Tests。多行片段按工作树实际行尾适配（仓库索引 LF，工作树受
+// core.autocrlf 影响可能是 CRLF）。
+//
 // 前置条件：工作树必须清洁（脚本会用 git checkout 还原被改文件，脏树会丢改动）。
 // 用法：dotnet run --file scripts/conformance-mutation-replay.cs [-- --keep-artifacts]
+// 输出末尾带 Markdown 台账（规则 / 注入点 / 报红测试数 / 报红测试名），供总报告登记。
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
-const string TestProject = "test/PalORM.Integration.Tests";
+const string DefaultTestProject = "test/PalORM.Integration.Tests";
 
 string repoRoot = FindRepoRoot();
 string dotnet = ResolveDotnet();
@@ -27,6 +33,8 @@ Console.WriteLine($"dotnet: {dotnet}");
 Console.WriteLine($"基线提交: {(Head.Count > 0 ? Head[0].Commit[..8] + " " + Head[0].Subject : "(none)")}");
 Console.WriteLine();
 
+// D1-D7 七条规则对应已修复的历史产品缺陷（《测试体系增强方案-2026-10-30》§4.2）：每条有真实缺陷背书，
+// 注入点一行可换、可观测量（哪个期望值会变）在 Note 里写明。
 var rules = new Rule[]
 {
     new("R1a", "src/PalORM.Core/DataSession.Crud.cs",
@@ -49,39 +57,107 @@ var rules = new Rule[]
         "return hasOr && (start > 0 || end < clauses.Count) && start < 0;",
         "/*/*/IncidentFilterPrecedenceTests/*",
         "AND 组补括号回退（C16 同源）"),
+
+    // ── D1-D7 历史缺陷回放（2026-10-30 补齐）──────────────────────────────
+    new("R-D1", "src/PalORM.SourceGen/MigrationEmitter.cs",
+        "SqlGenerationDialect.PostgreSql => \"TIMESTAMPTZ\",",
+        "SqlGenerationDialect.PostgreSql => \"TIMESTAMP\",",
+        "/*/*/TimeKindMatrixTests/*",
+        "D1 PG 时间列型 TIMESTAMPTZ→TIMESTAMP（两处映射同时命中）；"
+        + "可观测量：DateTime 读回 Kind=Unspecified，写回抛 ArgumentException"),
+    new("R-D2", "src/PalORM.Core/DataSession_Bulk.cs",
+        "BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);",
+        "BackfillGeneratedId(backfill!, entities[start + i], returnedIds[0]);",
+        "/*/*/BulkInsertReturningTests/*",
+        "D2 批量回填把首值写给所有行；可观测量：实体 Id 与库内 Id 逐行比对失败"),
+    new("R-D3", "src/PalORM.Core/QueryBuilder.cs",
+        "if (_dialect != SqlDialect.Sqlite) return;",
+        "if (_dialect == SqlDialect.Sqlite) return;",
+        "/*/*/BoundaryContractTests/*",
+        "D3 SQLite 行锁放行（条件反号）；可观测量：ForUpdate/ForShare 不再抛 NotSupportedException"),
+    new("R-D4", "src/PalORM.Core/CommandTimeoutNormalizer.cs",
+        "        catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)\n"
+        + "        {\n"
+        + "            throw new TimeoutException(timeout.Message, ex);\n"
+        + "        }\n",
+        "",
+        "/*/*/ErrorContractTests/*",
+        "D4 超时不解包（删内层 TimeoutException catch，保留 D7 耗时判定 catch）；"
+        + "可观测量：PG 命令超时异常类型不再是 TimeoutException"),
+    new("R-D5", "src/PalORM.SourceGen/PalORMAnalyzer.cs",
+        "        bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)\n"
+        + "            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, \"ConcurrencyCheck\")));\n"
+        + "        if (hasConcurrency)\n"
+        + "        {\n"
+        + "            ctx.ReportDiagnostic(Diagnostic.Create(\n"
+        + "                SaveWithConcurrencyToken, invocation.GetLocation(), entityType.Name));\n"
+        + "        }\n",
+        "        // 注入：PALORM054 检测停用（回放 R-D5）\n"
+        + "        _ = entityType;\n",
+        "/*/*/AnalyzerDiagnosticsTests/*",
+        "D5 SaveAsync 无编译期拒绝（PALORM054 不再报告）；"
+        + "可观测量：期望诊断 PALORM054 缺席",
+        "test/PalORM.SourceGen.Tests"),
+    new("R-D6", "src/PalORM.Core/QueryBuilderExtensions.cs",
+        "        if (paged._skip.HasValue)\n"
+        + "            throw new InvalidOperationException(\n"
+        + "                \"ToPageAsync uses keyset pagination with lastValue as the continuation anchor, so a Skip() on the builder \"\n"
+        + "                + \"would be silently ignored. Remove Skip(), or use ToListAsync with Skip/Take for OFFSET pagination.\");\n",
+        "",
+        "/*/*/CapabilityContractTests/*",
+        "D6 ToPageAsync 放行 Skip（删构建期拒绝）；可观测量：Skip()+ToPageAsync 不再抛 InvalidOperationException"),
+    new("R-D7", "src/PalORM.Core/CommandTimeoutNormalizer.cs",
+        "=> dialect == SqlDialect.MySql && timeoutSeconds > 0;",
+        "=> false;",
+        "/*/*/ErrorContractTests/*",
+        "D7 MySQL 超时未归一（耗时判定恒关）；可观测量：超时返回部分结果被当成功"),
 };
 
 var results = new List<RuleResult>();
 foreach (Rule rule in rules)
 {
+    string project = rule.TestProject ?? DefaultTestProject;
     Console.WriteLine($"── {rule.Id}: {rule.Note}");
     Console.WriteLine($"   文件 {rule.File}");
+    Console.WriteLine($"   项目 {project}");
 
     string absolutePath = Path.Combine(repoRoot, rule.File);
     string original = File.ReadAllText(absolutePath);
-    if (!original.Contains(rule.Original, StringComparison.Ordinal))
+    bool crlf = original.Contains("\r\n", StringComparison.Ordinal);
+    string matchText = crlf ? rule.Original.Replace("\n", "\r\n", StringComparison.Ordinal) : rule.Original;
+    string mutation = crlf ? rule.Mutated.Replace("\n", "\r\n", StringComparison.Ordinal) : rule.Mutated;
+    if (!original.Contains(matchText, StringComparison.Ordinal))
     {
         Console.WriteLine("   SKIP 原片段未找到（源码可能已改动），跳过该规则");
-        results.Add(new RuleResult(rule.Id, "skip", false, false, false, false));
+        results.Add(new RuleResult(
+            rule, project, "skip", false, false, new RunOutcome(false, 0, ""), false, new RunOutcome(false, 0, "")));
         continue;
     }
 
-    File.WriteAllText(absolutePath, original.Replace(rule.Original, rule.Mutated, StringComparison.Ordinal));
+    File.WriteAllText(absolutePath, original.Replace(matchText, mutation, StringComparison.Ordinal));
 
-    bool injectedBuild = Build(dotnet, repoRoot);
-    bool injectedRed = injectedBuild && RunTests(dotnet, repoRoot, rule.Filter);
+    bool injectedBuild = Build(dotnet, repoRoot, project);
+    RunOutcome injected = injectedBuild
+        ? RunTests(dotnet, repoRoot, rule.Filter, project)
+        : new RunOutcome(false, 0, "");
 
     Restore(repoRoot, rule.File);
-    bool restoredBuild = Build(dotnet, repoRoot);
-    bool restoredGreen = restoredBuild && !RunTests(dotnet, repoRoot, rule.Filter);
+    bool restoredBuild = Build(dotnet, repoRoot, project);
+    RunOutcome restored = restoredBuild
+        ? RunTests(dotnet, repoRoot, rule.Filter, project)
+        : new RunOutcome(false, 0, "");
 
+    bool injectedRed = injectedBuild && injected.Red;
+    bool restoredGreen = restoredBuild && !restored.Red;
     string verdict = injectedBuild && injectedRed && restoredBuild && restoredGreen ? "PASS" : "FAIL";
-    Console.WriteLine($"   注入: 构建={(injectedBuild ? "ok" : "fail")} 测试={(injectedRed ? "red" : "未红")}");
+    Console.WriteLine($"   注入: 构建={(injectedBuild ? "ok" : "fail")} 测试={(injectedRed ? "red" : "未红")} "
+        + $"(报红 {injected.Failed} 项)");
+    if (injected.FailedNames.Length > 0) Console.WriteLine($"   报红: {injected.FailedNames}");
     Console.WriteLine($"   还原: 构建={(restoredBuild ? "ok" : "fail")} 测试={(restoredGreen ? "green" : "未转绿")}");
     Console.WriteLine($"   判定 {verdict}");
     Console.WriteLine();
 
-    results.Add(new RuleResult(rule.Id, verdict, injectedBuild, injectedRed, restoredBuild, restoredGreen));
+    results.Add(new RuleResult(rule, project, verdict, injectedBuild, injectedRed, injected, restoredBuild, restored));
 }
 
 Console.WriteLine("汇总");
@@ -90,8 +166,22 @@ Console.WriteLine("|------|----------|----------|----------|----------|------|")
 foreach (RuleResult result in results)
 {
     Console.WriteLine(
-        $"| {result.Id} | {(result.InjectedBuild ? "ok" : "fail")} | {(result.InjectedRed ? "red" : "未红")} "
-        + $"| {(result.RestoredBuild ? "ok" : "fail")} | {(result.RestoredGreen ? "green" : "未绿")} | {result.Verdict} |");
+        $"| {result.Rule.Id} | {(result.InjectedBuild ? "ok" : "fail")} "
+        + $"| {(result.Injected.Red ? $"red({result.Injected.Failed})" : "未红")} "
+        + $"| {(result.RestoredBuild ? "ok" : "fail")} "
+        + $"| {(result.RestoredBuild && !result.Restored.Red ? "green" : "未绿")} | {result.Verdict} |");
+}
+
+Console.WriteLine();
+Console.WriteLine("回放台账（Markdown，供 docs/一致性测试总报告 \"未完成项\" 登记）");
+Console.WriteLine("| 规则 | 缺陷 | 注入点 | 目标过滤器 | 报红测试数 | 报红测试名 | 判定 |");
+Console.WriteLine("|------|------|--------|------------|------------|------------|------|");
+foreach (RuleResult result in results)
+{
+    Console.WriteLine(
+        $"| {result.Rule.Id} | {Escape(result.Rule.Note.Split('；')[0])} "
+        + $"| `{result.Rule.File}` | `{result.Rule.Filter}` "
+        + $"| {result.Injected.Failed} | {Escape(result.Injected.FailedNames)} | {result.Verdict} |");
 }
 
 int failed = results.Count(r => r.Verdict != "PASS");
@@ -99,19 +189,44 @@ Console.WriteLine();
 Console.WriteLine(failed == 0 ? "全部规则通过" : $"{failed} 条规则未通过");
 return failed == 0 ? 0 : 1;
 
-static bool Build(string dotnet, string workingDirectory)
+static string Escape(string text)
+    => text.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)
+        .Replace("|", "/", StringComparison.Ordinal);
+
+static bool Build(string dotnet, string workingDirectory, string project)
 {
-    var (exit, _) = Execute(dotnet, $"build {TestProject} -c Debug --nologo", workingDirectory);
+    var (exit, _) = Execute(dotnet, $"build {project} -c Debug --nologo", workingDirectory);
     return exit == 0;
 }
 
-static bool RunTests(string dotnet, string workingDirectory, string filter)
+static RunOutcome RunTests(string dotnet, string workingDirectory, string filter, string project)
 {
-    var (exit, _) = Execute(
+    var (exit, output) = Execute(
         dotnet,
-        $"run --project {TestProject} -c Debug --no-build -- --treenode-filter \"{filter}\"",
+        $"run --project {project} -c Debug --no-build -- --treenode-filter \"{filter}\"",
         workingDirectory);
-    return exit != 0;
+    (int failed, string names) = ParseFailures(output);
+    return new RunOutcome(exit != 0, failed, names);
+}
+
+/// <summary>从 TUnit 控制台输出取失败项数与失败测试全名；摘要行形如 "失败: 3"。</summary>
+static (int Failed, string Names) ParseFailures(string output)
+{
+    string text = Regex.Replace(output, "\u001b\\[[0-9;]*m", string.Empty);
+    var names = new List<string>();
+    foreach (string line in text.Split('\n'))
+    {
+        Match match = Regex.Match(
+            line,
+            @"^\s*(?:失败|failed)\s+(?:<[^>]*>\s*)?(?<name>\S+\.[A-Za-z0-9_+`<>.]+)",
+            RegexOptions.IgnoreCase);
+        if (match.Success) names.Add(match.Groups["name"].Value.Trim());
+    }
+    Match summary = Regex.Match(text, @"(?:失败|failed)\s*[:：]\s*(\d+)", RegexOptions.IgnoreCase);
+    int failed = summary.Success
+        ? int.Parse(summary.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)
+        : names.Count;
+    return (failed, string.Join(", ", names.Distinct(StringComparer.Ordinal)));
 }
 
 static void Restore(string repoRoot, string file)
@@ -171,7 +286,10 @@ static string ResolveDotnet()
 }
 
 internal sealed record Rule(
-    string Id, string File, string Original, string Mutated, string Filter, string Note);
+    string Id, string File, string Original, string Mutated, string Filter, string Note, string? TestProject = null);
+
+internal sealed record RunOutcome(bool Red, int Failed, string FailedNames);
 
 internal sealed record RuleResult(
-    string Id, string Verdict, bool InjectedBuild, bool InjectedRed, bool RestoredBuild, bool RestoredGreen);
+    Rule Rule, string Project, string Verdict, bool InjectedBuild, bool InjectedRed, RunOutcome Injected,
+    bool RestoredBuild, RunOutcome Restored);
