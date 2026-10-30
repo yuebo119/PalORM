@@ -116,7 +116,11 @@ internal sealed class NHibernateImpl : IPerfImplementation, IDisposable
         mapper.Class<NhEnumRow>(m =>
         {
             m.Table("`perf_enum`");
-            m.Id(x => x.Id, id => id.Generator(Generators.Assigned));
+            m.Id(x => x.Id, id =>
+            {
+                id.Generator(Generators.Assigned);
+                id.Column("`Id`");
+            });
             m.Property(x => x.Name, p => p.Column("`Name`"));
             m.Property(x => x.Status, p => p.Column("`Status`"));
         });
@@ -264,9 +268,12 @@ internal sealed class NHibernateImpl : IPerfImplementation, IDisposable
 
     public async Task<List<S1Row>> WhereInAsync(DbConnection conn, long[] ids, CancellationToken ct)
     {
+        // long[].Contains 的 LINQ 翻译失败（Evaluation failure on op_Implicit(Int64[])，
+        // 2026-10-30 全量批实证）——List<long> 是 NHibernate LINQ 的受支持集合形态
+        List<long> idList = [.. ids];
         using IStatelessSession session = _factory.OpenStatelessSession();
         List<NhS1Row> rows = await session.Query<NhS1Row>()
-            .Where(r => ids.Contains(r.Id))
+            .Where(r => idList.Contains(r.Id))
             .ToListAsync(ct)
             .ConfigureAwait(false);
         return rows.Select(static r => ToShared(r)).ToList();
