@@ -6,10 +6,11 @@ namespace PalORM.Core.Tests;
 /// <summary>语句类型与查询子句的坐标登记守卫（《测试体系增强方案-2026-10-30》§5.3）。
 /// <para><b>它挡什么</b>：新增语句类型（或查询子句）而无人给它写断言。不评估断言质量——
 /// 质量由 Stryker（恢复后）与历史缺陷回放规则承担，三者不可互相替代。</para>
-/// <para><b>两条断言轴</b>：① 正向——每个已登记坐标的证据文件存在、非空、含登记的证据片段
-/// （SQL 文本断言，或驱动级路径的行为断言，逐条在 Rationale 注明）；② 反向——查询子句以
-/// <see cref="QueryClauseKind"/> 枚举为准（新增枚举值即失败），语句类型以产品源码字符串字面量
-/// 中出现的动词为准（出现未登记的 MERGE/TRUNCATE/ALTER/DROP/EXEC/REPLACE 即失败）。</para>
+/// <para><b>两条断言轴</b>：① 正向——每个已登记坐标的证据文件存在、非空、含登记的证据片段；
+/// 证据形态默认必须为 SQL 文本断言，行为断言只对驱动级 / 内部合并路径开放，且必须在
+/// <see cref="_behaviorEvidenceAllowList"/> 登记（新增坐标拿"行为断言"绕开 SQL 文本要求会被拦下）。
+/// ② 反向——查询子句以 <see cref="QueryClauseKind"/> 枚举为准（新增枚举值即失败），语句类型以
+/// 产品源码字符串字面量中出现的动词为准（出现未登记的 MERGE/TRUNCATE/ALTER/DROP/EXEC/REPLACE 即失败）。</para>
 /// <para><b>反向守卫的已知边界</b>：动词级扫描识别"新语句族"，识别不了"同族新变体"
 /// （例如新增一种 CREATE 语句不会被拦）。这是文本扫描能给出的最强机械保证；
 /// 更强的形态需要产品侧提供语句枚举，属产品改动，不在本方案范围。</para>
@@ -20,10 +21,25 @@ internal sealed class StatementTypeCoverageTests
     private const int ExpectedClauseCount = 12;
 
     private sealed record StatementCoordinate(
-        string Id, string Statement, string File, string Marker, string Rationale);
+        string Id, string Statement, string File, string Marker, EvidenceKind Evidence, string Rationale);
+
+    /// <summary>证据形态。默认必须是 SQL 文本断言；只有驱动级协议等确实不产生 DbCommand 文本的
+    /// 路径才允许行为断言，并且必须登记进 <see cref="_behaviorEvidenceAllowList"/>。</summary>
+    private enum EvidenceKind
+    {
+        SqlText,
+        Behavior,
+    }
 
     private sealed record ClauseCoordinate(
         QueryClauseKind Kind, string File, string Marker, string Rationale);
+
+    /// <summary>行为断言白名单：这几条路径在产品内不产生可断言的 DbCommand SQL 文本
+    /// （PG Binary COPY 走 NpgsqlBinaryImporter、MySQL LOAD DATA 在 MySqlBulkCopy 内部、
+    /// 存储过程以 CommandType.StoredProcedure 执行、SessionBatch 的合并 SQL 在引擎内部）。
+    /// 新增坐标若想用行为断言，必须在此登记并写明理由，否则守卫按"缺 SQL 断言"失败。</summary>
+    private static readonly string[] _behaviorEvidenceAllowList =
+        ["PG-COPY", "MYSQL-LOAD-DATA", "STORED-PROC", "MULTI-STATEMENT"];
 
     /// <summary>14 个语句类型（方案 §5.3 手写清单）：CREATE TABLE / CREATE INDEX / DELETE /
     /// INSERT 单行 / INSERT 多值 / UPSERT ON CONFLICT / UPSERT ON DUPLICATE KEY / UPDATE /
@@ -31,50 +47,49 @@ internal sealed class StatementTypeCoverageTests
     private static readonly StatementCoordinate[] _statementTypes =
     [
         new("CREATE-TABLE", "CREATE TABLE", "test/PalORM.SourceGen.Tests/Snapshots/Migration_global__AllTypesEntity_7f6c8145.g.cs.snap",
-            "CREATE TABLE IF NOT EXISTS",
-            "证据形态：SQL 文本（快照逐字比对，SnapshotTests 断言生成物与基线一致；列型/主键/默认值都在快照内）"),
+            "CREATE TABLE IF NOT EXISTS", EvidenceKind.SqlText,
+            "快照逐字比对，SnapshotTests 断言生成物与基线一致；列型/主键/默认值都在快照内"),
         new("CREATE-INDEX", "CREATE INDEX", "test/PalORM.SourceGen.Tests/Snapshots/Migration_global__FullFeatureEntity_4964faa8.g.cs.snap",
-            "CREATE INDEX IF NOT EXISTS",
-            "证据形态：SQL 文本（同快照；索引名/列序/UNIQUE 形态在快照内，三方言各一份）"),
+            "CREATE INDEX IF NOT EXISTS", EvidenceKind.SqlText,
+            "同快照；索引名/列序/UNIQUE 形态在快照内，三方言各一份"),
         new("DELETE", "DELETE", "test/PalORM.Core.Tests/BulkDeleteArrayFormTests.cs",
-            "= ANY(@ids)",
-            "证据形态：SQL 文本（批删数组形态 SQL 断言；IN 形态同文件另有一条）"),
+            "= ANY(@ids)", EvidenceKind.SqlText,
+            "批删数组形态 SQL 断言；IN 形态同文件另有一条"),
         new("INSERT-SINGLE", "INSERT（单行）", "test/PalORM.Core.Tests/InsertNoReturningTests.cs",
-            "Contains(\"RETURNING\"",
-            "证据形态：SQL 文本（纯 INSERT 载荷不得携带 RETURNING，读返回变体必须有——正反两条）"),
+            "Contains(\"RETURNING\"", EvidenceKind.SqlText,
+            "纯 INSERT 载荷不得携带 RETURNING，读返回变体必须有，正反两条"),
         new("INSERT-MULTI", "INSERT（多值段）", "test/PalORM.Core.Tests/StatementSqlShapeTests.cs",
-            "MultiValueBulkInsert.AppendInsertStatement",
-            "证据形态：SQL 文本（两行 VALUES 段逐字断言：行内参数平铺、行间 \", \" 分隔）"),
+            "MultiValueBulkInsert.AppendInsertStatement", EvidenceKind.SqlText,
+            "两行 VALUES 段逐字断言：行内参数平铺、行间 \", \" 分隔"),
         new("UPSERT-ON-CONFLICT", "UPSERT（PG/SQLite ON CONFLICT）", "test/PalORM.Core.Tests/StatementSqlShapeTests.cs",
-            "UpsertReturning).Contains(\"ON CONFLICT",
-            "证据形态：SQL 文本（冲突列名 + DO UPDATE SET 赋值形态一并断言）"),
+            "UpsertReturning).Contains(\"ON CONFLICT", EvidenceKind.SqlText,
+            "冲突列名 + DO UPDATE SET 赋值形态一并断言"),
         new("UPSERT-ON-DUPLICATE-KEY", "UPSERT（MySQL ON DUPLICATE KEY）", "test/PalORM.Core.Tests/StatementSqlShapeTests.cs",
-            "UpsertMySql).Contains(\"ON DUPLICATE KEY UPDATE",
-            "证据形态：SQL 文本（VALUES(col) 赋值 + 自增键 LAST_INSERT_ID 回填）"),
+            "UpsertMySql).Contains(\"ON DUPLICATE KEY UPDATE", EvidenceKind.SqlText,
+            "VALUES(col) 赋值 + 自增键 LAST_INSERT_ID 回填"),
         new("UPDATE", "UPDATE", "test/PalORM.Core.Tests/BulkUpdateBatchReuseTests.cs",
-            "UPDATE `t` SET",
-            "证据形态：SQL 文本（批量 UPDATE 单语句形态：SET 段与表名引用）"),
+            "UPDATE `t` SET", EvidenceKind.SqlText,
+            "批量 UPDATE 单语句形态：SET 段与表名引用"),
         new("PG-COPY", "PG Binary COPY", "test/PalORM.Integration.Tests/PgCopyByteCharTests.cs",
-            "BulkInsertAsync(",
-            "证据形态：行为断言（Binary COPY 经 NpgsqlBinaryImporter，产品不经过 DbCommand，无 SQL 文本可断言；"
-            + "由 byte/char 列的值级往返锁定，含 0x00 字节）"),
+            "BulkInsertAsync(", EvidenceKind.Behavior,
+            "Binary COPY 经 NpgsqlBinaryImporter，产品不经过 DbCommand，无 SQL 文本可断言；"
+            + "由 byte/char 列的值级往返锁定，含 0x00 字节"),
         new("MYSQL-LOAD-DATA", "MySQL LOAD DATA", "test/PalORM.Integration.Tests/ExternalDatabaseBulkTests.cs",
-            "local_infile",
-            "证据形态：行为断言（MySqlBulkCopy 内部走 LOAD DATA LOCAL INFILE，无 SQL 文本可断言；"
-            + "由 local_infile 两态 + 行数/值对账锁定）"),
+            "local_infile", EvidenceKind.Behavior,
+            "MySqlBulkCopy 内部走 LOAD DATA LOCAL INFILE，无 SQL 文本可断言；"
+            + "由 local_infile 两态 + 行数/值对账锁定"),
         new("RETURNING", "RETURNING", "test/PalORM.Core.Tests/StatementSqlShapeTests.cs",
-            "InsertReturning).Contains(\"RETURNING\"",
-            "证据形态：SQL 文本（PG/SQLite 的 INSERT RETURNING 载荷；MySQL 侧对应 LAST_INSERT_ID 族）"),
+            "InsertReturning).Contains(\"RETURNING\"", EvidenceKind.SqlText,
+            "PG/SQLite 的 INSERT RETURNING 载荷；MySQL 侧对应 LAST_INSERT_ID 族"),
         new("SELECT", "SELECT", "test/PalORM.Core.Tests/WhereInArrayFormTests.cs",
-            "\" IN (\"",
-            "证据形态：SQL 文本（DryRun SELECT 的 IN 形态断言；IN 数组形态与参数编号一并锁住）"),
+            "\" IN (\"", EvidenceKind.SqlText,
+            "DryRun SELECT 的 IN 形态断言；IN 数组形态与参数编号一并锁住"),
         new("STORED-PROC", "存储过程调用", "test/PalORM.Integration.Tests/Conformance/TriDialectStoredProcTests.cs",
-            "StoredProc(",
-            "证据形态：行为断言（CommandType.StoredProcedure，CommandText 为过程名；"
-            + "三方言各一条：SQLite 显式失败、PG/MySQL 真写行）"),
+            "StoredProc(", EvidenceKind.Behavior,
+            "CommandType.StoredProcedure，CommandText 为过程名；三方言各一条：SQLite 显式失败、PG/MySQL 真写行"),
         new("MULTI-STATEMENT", "多语句批次", "test/PalORM.Core.Tests/SessionBatchTests.cs",
-            ".Append(",
-            "证据形态：行为断言（SessionBatch 合并多语句单批执行与整批回滚；合并 SQL 在引擎内部，无断言入口）"),
+            ".Append(", EvidenceKind.Behavior,
+            "SessionBatch 合并多语句单批执行与整批回滚；合并 SQL 在引擎内部，无断言入口"),
     ];
 
     /// <summary>12 个查询子句：以 <see cref="QueryClauseKind"/> 为准，逐项登记证据文件。</summary>
@@ -139,6 +154,27 @@ internal sealed class StatementTypeCoverageTests
 
         List<string> problems = await CollectEvidenceProblemsAsync(
             _statementTypes.Select(static c => (c.Id, c.File, c.Marker)));
+        await Assert.That(string.Join("\n", problems)).IsEmpty();
+    }
+
+    [Test]
+    public async Task BehaviorEvidence_IsLimitedToAllowList()
+    {
+        var declared = new HashSet<string>(
+            _statementTypes.Where(static c => c.Evidence == EvidenceKind.Behavior).Select(static c => c.Id),
+            StringComparer.Ordinal);
+        var allowed = new HashSet<string>(_behaviorEvidenceAllowList, StringComparer.Ordinal);
+
+        var problems = new List<string>();
+        foreach (string id in declared.Where(id => !allowed.Contains(id)))
+        {
+            problems.Add($"{id}: 以行为断言登记但不在白名单——新语句类型须先给 SQL 文本断言；"
+                + "确无 DbCommand 文本时在白名单登记并写明驱动级理由");
+        }
+        foreach (string id in allowed.Where(id => !declared.Contains(id)))
+        {
+            problems.Add($"{id}: 白名单有而登记表不是行为断言——删除或改登记时同步移除白名单");
+        }
         await Assert.That(string.Join("\n", problems)).IsEmpty();
     }
 
