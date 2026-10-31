@@ -256,7 +256,20 @@ public struct QueryBuilder<T> where T : class, new()
         if (string.IsNullOrWhiteSpace(sql))
             throw new ArgumentException(
                 "Query clause must not be empty or whitespace; an empty clause produces invalid SQL.", nameof(clause));
-        AddClause(QueryClauseKind.Where, $"{prefix}({sql})", parameters);
+        AddClause(QueryClauseKind.Where, GetClauseText(QueryClauseKind.Where, prefix, sql, parenthesized: true), parameters);
+    }
+
+    /// <summary>子句最终文本的进程级记忆化（M2.3，2026-10-31）：前缀 + 内层 SQL 都是
+    /// 缓存化的稳定串（FormatCached 返回同一实例），同输入恒同输出；命中路径省一次
+    /// 插值分配（Where 约 60~80B/子句）。键含方言与 Kind，避免跨方言/跨子句类别串用。</summary>
+    private string GetClauseText(QueryClauseKind kind, string prefix, string sql, bool parenthesized)
+    {
+        var key = new QueryBuilderShared.ClauseTextKey(_dialect, kind, prefix, sql, parenthesized);
+        if (QueryBuilderShared.ClauseText.TryGetValue(key, out string? text))
+            return text;
+        text = parenthesized ? $"{prefix}({sql})" : prefix + sql;
+        QueryBuilderShared.ClauseText.TryAdd(key, text);
+        return text;
     }
 
     /// <summary>排序。重复调用退化为多键续排（等价 ThenBy）——避免生成双 ORDER BY 非法 SQL（ITM-306）。</summary>
@@ -1391,7 +1404,7 @@ public struct QueryBuilder<T> where T : class, new()
         if (string.IsNullOrWhiteSpace(sql))
             throw new ArgumentException(
                 "Query clause must not be empty or whitespace; an empty clause produces invalid SQL.", nameof(formattable));
-        AddClause(kind, prefix + sql, parameters);
+        AddClause(kind, GetClauseText(kind, prefix, sql, parenthesized: false), parameters);
     }
 
     private ParameterBinding CreateBinding(object? value, int localOffset = 0)
@@ -1844,6 +1857,14 @@ internal static class QueryBuilderShared
     /// 无容量上限的理由同 FilterFormsCache 先例——键成分不含用户值（属性名来自编译期映射表，
     /// 值形参数经 @pN 绑定不进文本），无界放大源不存在。</summary>
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<OrderByClauseKey, string> OrderByClauseText = new();
+
+    /// <summary>Where/Having/With 等 FormattableString 子句的最终文本缓存（M2.3，2026-10-31）：
+    /// 键含方言、子句类别、前缀与内层 SQL（FormatCached 的稳定输出）；同输入恒同输出，
+    /// 命中路径省一次插值分配。键空间有限（内层 SQL 由 FormatCached 的有界缓存产出）。</summary>
+    internal readonly record struct ClauseTextKey(
+        SqlDialect Dialect, QueryClauseKind Kind, string Prefix, string Sql, bool Parenthesized);
+
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<ClauseTextKey, string> ClauseText = new();
 
     /// <summary>把延迟绑定物化为驱动参数——只由非热路径（DryRun/测试/管道/ToPage）与
     /// 拦截器上下文消费；执行热路径直接使用绑定。</summary>
