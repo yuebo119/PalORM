@@ -362,6 +362,14 @@ internal sealed class SessionOperationState
     /// （见其 <c>_activeReadLeases</c> 检查），即"只读并行、写与事务串行"的非对称语义。</para></summary>
     internal SessionOperationLease EnterReadOnly(object? owner = null)
     {
+        // owner 重入快路径（2026-10-31 极致性能轮，R2-#9 同型）：LINQ 管线外层已持租约，
+        // 内层（ExecuteQueryAsync/ExecuteQueryRowsAsync 带 owner）恒为重入——原实现先取锁
+        // 再在锁内判 owner 返回 default，每次查询白付两次锁。只读判定（CanFastReenterOwner）
+        // 漏读两方向安全：假阴性回落锁路径走完整判定；并行读作用域内的读租约重入由锁内
+        // _readLeaseDepth 分支处理，快路径不改变其语义。
+        if (owner is not null && CanFastReenterOwner(owner))
+            return default;
+
         lock (_sync)
         {
             if (_parallelReadScopes == 0)

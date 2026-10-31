@@ -261,6 +261,18 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    // ─── 属性名字符串重载（2026-10-31 极致性能轮）─────────────────
+    // 表达式树在调用点每次构造（实测 512B/次），固定形状的热路径可改用属性名字面量：
+    // 列名经 PropertyToColumn 静态映射解析，SQL 文本与表达式重载逐字节一致。
+    // 属性名不在映射内时在构建期抛 InvalidOperationException（与表达式重载同一错误消息）。
+
+    /// <summary>按属性名排序（字符串重载）——省略调用点表达式树，列名仍走 [Column] 映射校验。</summary>
+    public QueryBuilder<T> OrderBy(string propertyName, bool descending = false)
+    {
+        AddOrderBy(GetQualifiedColumnName(propertyName), descending);
+        return this;
+    }
+
     /// <summary>降序排序——<see cref="OrderBy{TKey}"/> 的 <c>descending: true</c> 便捷形态。
     /// <para>补此方法是因为 <c>docs/API参考.md</c> 一直把它和 <see cref="ThenByDescending{TKey}"/>
     /// 列为可用 API，而源码里从未存在：调用方写出 <c>.OrderByDescending(x =&gt; x.Id)</c> 时，
@@ -269,9 +281,9 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> member)
         => OrderBy(member, descending: true);
 
-    /// <summary>降序次级排序键——<see cref="ThenBy{TKey}"/> 的 <c>descending: true</c> 便捷形态。</summary>
-    public QueryBuilder<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> member)
-        => ThenBy(member, descending: true);
+    /// <summary>按属性名降序排序（字符串重载）。</summary>
+    public QueryBuilder<T> OrderByDescending(string propertyName)
+        => OrderBy(propertyName, descending: true);
 
     /// <summary>在既有排序上追加次级排序键。无前置 <see cref="OrderBy{TKey}"/> 时抛 <see cref="InvalidOperationException"/>。</summary>
     public QueryBuilder<T> ThenBy<TKey>(Expression<Func<T, TKey>> member, bool descending = false)
@@ -282,6 +294,24 @@ public struct QueryBuilder<T> where T : class, new()
             $", {GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}", qualifyColumn: true);
         return this;
     }
+
+    /// <summary>按属性名追加次级排序键（字符串重载）。</summary>
+    public QueryBuilder<T> ThenBy(string propertyName, bool descending = false)
+    {
+        if (!HasClause(QueryClauseKind.OrderBy))
+            throw new InvalidOperationException("ThenBy requires a preceding OrderBy.");
+        AddClause(QueryClauseKind.OrderBy,
+            $", {GetQualifiedColumnName(propertyName)}{(descending ? " DESC" : "")}", qualifyColumn: true);
+        return this;
+    }
+
+    /// <summary>降序次级排序键——<see cref="ThenBy{TKey}"/> 的 <c>descending: true</c> 便捷形态。</summary>
+    public QueryBuilder<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> member)
+        => ThenBy(member, descending: true);
+
+    /// <summary>按属性名降序追加次级排序键（字符串重载）。</summary>
+    public QueryBuilder<T> ThenByDescending(string propertyName)
+        => ThenBy(propertyName, descending: true);
 
     /// <summary>配置 SQL 投影。当前仅支持 DryRun/ToSql；实体执行需完整 RowFactory，部分投影会明确失败。</summary>
     public QueryBuilder<T> Select(params Expression<Func<T, object?>>[] members)
@@ -295,6 +325,20 @@ public struct QueryBuilder<T> where T : class, new()
         // 调用时点固化限定名会在 Select 先于 With(cte) 时投影指向旧表名
         // （与 OrderBy/GroupBy 的构建时动态求值不对称）。限定语义（ITM-537）不变。
         _selectColumns = members.Select(GetColumnName).ToArray();
+        return this;
+    }
+
+    /// <summary>按属性名配置 SQL 投影（字符串重载）——省略调用点表达式树，列名仍走 [Column] 映射校验。
+    /// 与表达式重载同一存储形态（裸列名），限定名在构建时按当前 FROM 源求值。</summary>
+    public QueryBuilder<T> Select(params string[] propertyNames)
+    {
+        ArgumentNullException.ThrowIfNull(propertyNames);
+        if (propertyNames.Length == 0)
+            throw new ArgumentException("Select requires at least one member.", nameof(propertyNames));
+        string[] columns = new string[propertyNames.Length];
+        for (int i = 0; i < propertyNames.Length; i++)
+            columns[i] = MemberResolver.GetColumnName<T>(propertyNames[i]);
+        _selectColumns = columns;
         return this;
     }
 
@@ -321,20 +365,33 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> WhereIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
         => AddInClause(member, values, negated: false, nameof(WhereIn));
 
+    /// <summary>按属性名追加参数化 IN 条件（字符串重载）——列名走 [Column] 映射校验，
+    /// 与表达式重载同一内核与同一 SQL 文本。</summary>
+    public QueryBuilder<T> WhereIn<TValue>(string propertyName, IEnumerable<TValue> values)
+        => AddInClause(GetQualifiedColumnName(propertyName), values, negated: false, nameof(WhereIn));
+
     /// <summary>追加参数化 NOT IN 条件，与既有条件 AND 组合。
-    /// <para>列名经表名/CTE 名限定（同 <see cref="WhereIn{TValue}"/>，ITM-641）。</para>
+    /// <para>列名经表名/CTE 名限定（同 <c>WhereIn</c>，ITM-641）。</para>
     /// <para>空集合为 no-op（排除空集等于不过滤）；超过 500 个值按批次切分为多个 NOT IN 片段 AND 组合。</para></summary>
     public QueryBuilder<T> WhereNotIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
         => AddInClause(member, values, negated: true, nameof(WhereNotIn));
+
+    /// <summary>按属性名追加参数化 NOT IN 条件（字符串重载）。</summary>
+    public QueryBuilder<T> WhereNotIn<TValue>(string propertyName, IEnumerable<TValue> values)
+        => AddInClause(GetQualifiedColumnName(propertyName), values, negated: true, nameof(WhereNotIn));
 
     /// <summary>WhereIn/WhereNotIn 共享内核：仅 IN/NOT IN 与 OR/AND 连接词不同。
     /// 单 <see cref="ValueStringBuilder"/> 顺序写出整条 IN 体；SQL 文本逐字节不变，
     /// 既有 WHERE 时前缀 <c>AND </c>。历史测量与替代方案见 ADR-T。</summary>
     private QueryBuilder<T> AddInClause<TValue>(Expression<Func<T, TValue>> member,
         IEnumerable<TValue> values, bool negated, string callerName)
+        => AddInClause(GetQualifiedColumnName(member), values, negated, callerName);
+
+    /// <summary>字符串形态的 IN 内核（与表达式重载共用）——<paramref name="column"/> 已是限定列名。</summary>
+    private QueryBuilder<T> AddInClause<TValue>(string column,
+        IEnumerable<TValue> values, bool negated, string callerName)
     {
         ArgumentNullException.ThrowIfNull(values);
-        string column = GetQualifiedColumnName(member);
         IReadOnlyList<TValue> items = values as IReadOnlyList<TValue> ?? values.ToList();
         if (items.Count == 0)
         {
@@ -473,6 +530,15 @@ public struct QueryBuilder<T> where T : class, new()
         return this;
     }
 
+    /// <summary>按属性名追加 GROUP BY 分组列（字符串重载）——列名走 [Column] 映射校验，
+    /// 与表达式重载同一表限定与拼接规则。</summary>
+    public QueryBuilder<T> GroupBy(string propertyName)
+    {
+        string prefix = HasClause(QueryClauseKind.GroupBy) ? ", " : "GROUP BY ";
+        AddClause(QueryClauseKind.GroupBy, prefix + GetQualifiedColumnName(propertyName), qualifyColumn: true);
+        return this;
+    }
+
     /// <summary>追加 HAVING 条件（作用于分组后），参数化绑定；重复调用以 AND 组合。</summary>
     public QueryBuilder<T> Having(FormattableString clause)
     {
@@ -485,9 +551,17 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>追加 UPDATE 的 SET 赋值项，值参数化绑定。至少一个 Set 才能执行 ExecuteNonQueryAsync。</summary>
     public QueryBuilder<T> Set<TValue>(Expression<Func<T, TValue>> member, TValue value)
     {
+        ArgumentNullException.ThrowIfNull(member);
+        return Set(MemberResolver.GetMemberName(member), value);
+    }
+
+    /// <summary>按属性名追加 UPDATE 的 SET 赋值项（字符串重载）——列名走 [Column] 映射校验，
+    /// 与表达式重载同一参数化与敏感列掩码登记。</summary>
+    public QueryBuilder<T> Set<TValue>(string propertyName, TValue value)
+    {
         _markStateUnknown?.Invoke(_conn);
         ParameterBinding parameter = CreateBinding(value);
-        string columnName = GetColumnName(member);
+        string columnName = MemberResolver.GetColumnName<T>(propertyName);
         // ITM-763(r21)：敏感列掩码登记——执行管线经 QueryContext.SensitiveParameterMasks
         // 交给拦截器（AuditInterceptor 据此以掩码替代真实值）。注册表由生成器发射
         // （SensitiveColumnMasks），仅实体有敏感列时才产生分配。
@@ -1081,9 +1155,11 @@ public struct QueryBuilder<T> where T : class, new()
         // 例外：字面量形状把值写进文本，故字面量值本身也必须进键（有界：仅 First/Single 族的 1/2）。
         // ITM-807①：typeof(T) 进哈希——与 ShapeFields.EntityType 同源（零子句查询的
         // SELECT 列清单判别；仅表名不够——同表名多实体是合法形态）
+        // 子句成分经 ClauseNode.ClausesHash 一次合并（2026-10-31 极致性能轮）：链不可变使
+        // 追加序哈希随节点构造算定，省去每次 BuildSql 的 O(Σ子句长度) 字符串哈希遍历；
+        // 链为 null（零子句）时并入 0，与原形态等价。
         int shapeHash = System.HashCode.Combine(17, _tableName, typeof(T));
-        foreach (QueryClause clause in MaterializeClauses())
-            shapeHash = System.HashCode.Combine(shapeHash, clause.Sql);
+        shapeHash = System.HashCode.Combine(shapeHash, _clauseChain?.ClausesHash ?? 0);
         if (_cteName is not null) shapeHash = System.HashCode.Combine(shapeHash, _cteName);
         if (_splitQuery) shapeHash = System.HashCode.Combine(shapeHash, true);
         if (_take.HasValue) shapeHash = System.HashCode.Combine(shapeHash, true);
@@ -1671,6 +1747,11 @@ public struct QueryBuilder<T> where T : class, new()
 
     private string GetQualifiedColumnName<TKey>(Expression<Func<T, TKey>> member)
         => MemberResolver.GetQualifiedColumnName(member, _cteName ?? _tableName, _quoteIdentifier);
+
+    /// <summary>属性名形态的限定列名（字符串重载共用）——列名走 PropertyToColumn 映射校验，
+    /// 限定源与表达式形态一致（With(CTE) 后取 CTE 名）。</summary>
+    private string GetQualifiedColumnName(string propertyName)
+        => $"{_quoteIdentifier(_cteName ?? _tableName)}.{_quoteIdentifier(MemberResolver.GetColumnName<T>(propertyName))}";
 
     private static string GetColumnName<TEntity, TKey>(Expression<Func<TEntity, TKey>> member)
         => MemberResolver.GetColumnName(member);

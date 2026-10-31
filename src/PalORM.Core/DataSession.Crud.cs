@@ -1271,10 +1271,14 @@ public sealed partial class DataSession<TProvider>
         ArgumentNullException.ThrowIfNull(key);
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        // 超时归一条件化（2026-10-31 极致性能轮）：非 MySQL（或未设超时）不包 RunAsync
+        // 状态机，原样返回内层 ValueTask——与 LINQ 路径 WithCommandTimeoutCheck 同口径；
+        // MySQL 语义（D7 耗时判定 + D4 解包）逐位保留。
+        if (!CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds))
+            return GetByKeyEntryAsync<T>(key, ct);
         return CommandTimeoutNormalizer.RunAsync(
-            GetByKeyEntryAsync<T>(key, ct), startTimestamp, _commandTimeoutSeconds);
+            GetByKeyEntryAsync<T>(key, ct),
+            CommandTimeoutNormalizer.Begin(enabled: true), _commandTimeoutSeconds);
     }
 
     // ── G2 证伪回退（2026-10-14 并发塌方定位轮，勿重开此形态）──
@@ -1432,10 +1436,12 @@ public sealed partial class DataSession<TProvider>
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        // 超时归一条件化（同 GetAsync）：非 MySQL 不包 RunAsync 状态机
+        if (!CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds))
+            return GetAllEntryAsync<T>(ct);
         return CommandTimeoutNormalizer.RunAsync(
-            GetAllEntryAsync<T>(ct), startTimestamp, _commandTimeoutSeconds);
+            GetAllEntryAsync<T>(ct),
+            CommandTimeoutNormalizer.Begin(enabled: true), _commandTimeoutSeconds);
     }
 
     // G2 证伪回退（2026-10-14，勿重开非 async 租约入口）：理由见 GetByKeyEntryAsync 上方登记

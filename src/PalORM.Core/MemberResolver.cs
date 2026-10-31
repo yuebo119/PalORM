@@ -40,8 +40,13 @@ internal static class MemberResolver
     /// 列名时该形态永不自查得出。调用面（QueryBuilder 的 GetColumnName/GetQualifiedColumnName）
     /// 恒以已注册实体 T 为约束（From&lt;T&gt; 入口已校验注册）。</summary>
     internal static string GetColumnName<TEntity, TKey>(Expression<Func<TEntity, TKey>> member)
+        => GetColumnName<TEntity>(GetMemberName(member));
+
+    /// <summary>属性名形态的列名解析（字符串重载共用真源）——与表达式形态同一映射与错误消息。
+    /// 属性名由调用方以编译期字面量给出，省略表达式树分配；解析失败在构建期响亮失败。</summary>
+    internal static string GetColumnName<TEntity>(string propertyName)
     {
-        string propertyName = GetMemberName(member);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
         IReadOnlyDictionary<string, string>? mapping = ColumnMapPer<TEntity>.Map;
         if (ColumnMapPer<TEntity>.Generation != PalORM_Runtime.RegistryGeneration)
             mapping = null;

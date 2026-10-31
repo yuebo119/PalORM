@@ -604,10 +604,12 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        // 超时归一条件化（同 GetAsync/GetAllAsync，2026-10-31）：非 MySQL 不包 RunAsync 状态机
+        if (!CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds))
+            return ScalarEntryAsync<T>(sql, readFromReplica, ct);
         return CommandTimeoutNormalizer.RunAsync(
-            ScalarEntryAsync<T>(sql, readFromReplica, ct), startTimestamp, _commandTimeoutSeconds);
+            ScalarEntryAsync<T>(sql, readFromReplica, ct),
+            CommandTimeoutNormalizer.Begin(enabled: true), _commandTimeoutSeconds);
     }
 
     private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)

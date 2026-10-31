@@ -33,7 +33,7 @@ public static class QueryBuilderExtensions
         Func<DbDataReader, T> Factory,
         int? Take,
         bool Prepared,
-        TimeSpan CommandTimeout,
+        int CommandTimeoutSeconds,
         SqlDialect Dialect,
         IQueryCache QueryCache,
         string? CacheKey,
@@ -76,12 +76,21 @@ public static class QueryBuilderExtensions
 
     /// <summary>S4：弹性编排（首发直路 + 失败后续跑）。core 是 static 方法组，状态按值传入，
     /// 调用点不产生闭包；builder 不进入本方法的状态机。</summary>
-    private static async ValueTask<TResult> ExecuteWithResilienceAsync<TState, TResult>(
+    private static ValueTask<TResult> ExecuteWithResilienceAsync<TState, TResult>(
         ResilienceContext context, Func<TState, CancellationToken, Task<TResult>> core,
         TState state, DbTransaction? boundTransaction, CancellationToken ct)
     {
+        // 健康直路零状态机（2026-10-31 极致性能轮）：事务内或未配置弹性直接包 Task 返回，
+        // 不进 async 方法——同步完成路径少一层状态机往返；需 try/catch 与重试编排才进内核。
         if (boundTransaction is not null || !context.Configured)
-            return await core(state, ct).ConfigureAwait(false);
+            return new ValueTask<TResult>(core(state, ct));
+        return ExecuteWithResilienceCoreAsync(context, core, state, ct);
+    }
+
+    private static async ValueTask<TResult> ExecuteWithResilienceCoreAsync<TState, TResult>(
+        ResilienceContext context, Func<TState, CancellationToken, Task<TResult>> core,
+        TState state, CancellationToken ct)
+    {
         ResilienceExecutor? executor = context.Existing;
         if (executor is null && context.DirectFirst)
         {
@@ -122,13 +131,10 @@ public static class QueryBuilderExtensions
     /// ScalarAsync）的计时宽度一致。</para>
     /// <para>非 MySQL（或未设命令超时）原样返回同一 Task：无状态机、无分配。</para></summary>
     private static Task<TResult> WithCommandTimeoutCheck<TResult>(
-        Task<TResult> attempt, SqlDialect dialect, TimeSpan commandTimeout)
-    {
-        int timeoutSeconds = DbOptions.ToCommandTimeoutSeconds(commandTimeout);
-        return CommandTimeoutNormalizer.RequiresElapsedCheck(dialect, timeoutSeconds)
+        Task<TResult> attempt, SqlDialect dialect, int timeoutSeconds)
+        => CommandTimeoutNormalizer.RequiresElapsedCheck(dialect, timeoutSeconds)
             ? CommandTimeoutNormalizer.RunAsync(attempt, timeoutSeconds)
             : attempt;
-    }
 
     /// <summary>S4：ToList 单次尝试内核——复用命令、物化、缓存写入、连接归还。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
@@ -167,7 +173,7 @@ public static class QueryBuilderExtensions
 
             if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
                 cmd.CommandText = state.Sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
+            cmd.CommandTimeout = state.CommandTimeoutSeconds;
             cmd.Transaction = state.BoundTransaction;
             if (!parametersBound) AddParameters(cmd, state.Parameters, state.ParamFactory);
             await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
@@ -213,7 +219,7 @@ public static class QueryBuilderExtensions
             DbCommand cmd = connection.CreateCommand();
             ownedCommand = cmd;
             cmd.CommandText = state.Sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
+            cmd.CommandTimeout = state.CommandTimeoutSeconds;
             cmd.Transaction = state.BoundTransaction;
             AddParameters(cmd, state.Parameters, state.ParamFactory);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
@@ -271,7 +277,7 @@ public static class QueryBuilderExtensions
 
             if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
                 cmd.CommandText = state.Sql;
-            cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(state.CommandTimeout);
+            cmd.CommandTimeout = state.CommandTimeoutSeconds;
             cmd.Transaction = state.BoundTransaction;
             if (!parametersBound) AddParameters(cmd, state.Parameters, state.ParamFactory);
             await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
@@ -400,7 +406,7 @@ public static class QueryBuilderExtensions
         var state = new QueryExecutionState<T>(
             builder._conn, builder._useReadRoute, operationState,
             builder._readConnProvider, builder._querySlot, builder._factory,
-            builder._take, builder._prepared, builder._commandTimeout, builder._dialect, builder._queryCache,
+            builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
             builder._readConnReturner, builder._syncRowRead);
@@ -417,7 +423,7 @@ public static class QueryBuilderExtensions
                 resilience,
                 static (s, token) => WithCommandTimeoutCheck(
                     ExecuteForEachCoreAsync(s.State, s.Action, token),
-                    s.State.Dialect, s.State.CommandTimeout),
+                    s.State.Dialect, s.State.CommandTimeoutSeconds),
                 (State: state, Action: action),
                 boundTransaction,
                 ct).ConfigureAwait(false);
@@ -476,7 +482,7 @@ public static class QueryBuilderExtensions
         var state = new QueryExecutionState<T>(
             builder._conn, builder._useReadRoute, operationState,
             builder._readConnProvider, builder._querySlot, builder._factory,
-            builder._take, builder._prepared, builder._commandTimeout, builder._dialect, builder._queryCache,
+            builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
             builder._readConnReturner, builder._syncRowRead);
@@ -490,7 +496,7 @@ public static class QueryBuilderExtensions
                 resilience,
                 static (s, token) => WithCommandTimeoutCheck(
                     ExecuteListCoreAsync(s.State, s.CacheKey, token),
-                    s.State.Dialect, s.State.CommandTimeout),
+                    s.State.Dialect, s.State.CommandTimeoutSeconds),
                 (State: state, CacheKey: effectiveCacheKey),
                 boundTransaction,
                 ct).ConfigureAwait(false);
@@ -653,7 +659,7 @@ public static class QueryBuilderExtensions
         var state = new QueryExecutionState<T>(
             builder._conn, builder._useReadRoute, operationState,
             builder._readConnProvider, builder._querySlot, builder._factory,
-            builder._take, builder._prepared, builder._commandTimeout, builder._dialect, builder._queryCache,
+            builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
             builder._readConnReturner, builder._syncRowRead);
@@ -666,7 +672,7 @@ public static class QueryBuilderExtensions
                 resilience,
                 static (s, token) => WithCommandTimeoutCheck(
                     ExecuteRowsCoreAsync(s.State, s.MaxRows, token),
-                    s.State.Dialect, s.State.CommandTimeout),
+                    s.State.Dialect, s.State.CommandTimeoutSeconds),
                 (State: state, MaxRows: maxRows),
                 boundTransaction,
                 ct).ConfigureAwait(false);
@@ -794,7 +800,7 @@ public static class QueryBuilderExtensions
                     ExecuteBatchedPageCoreAsync(
                         paged, pageSize, countSql, countParameters,
                         paged.BuildSql(), paged.GetQueryParameters(), transaction, ct),
-                    paged._dialect, paged._commandTimeout).ConfigureAwait(false);
+                    paged._dialect, DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout)).ConfigureAwait(false);
             }
             else
             {
@@ -931,7 +937,7 @@ public static class QueryBuilderExtensions
                 ExecuteBatchedPageCoreAsync<T>(
                     paged, pageSize, countSql, countParameters, pageSql, pageParameters,
                     transaction: null, ct),
-                paged._dialect, paged._commandTimeout).ConfigureAwait(false);
+                paged._dialect, DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout)).ConfigureAwait(false);
         // F3（2026-10-13 全量重读微项包）：R4-λ 清扫的漏网点——原形态捕获 6 个局部变量的闭包
         // 在非直通（默认）配置下每分页查询分配一个 display class。static lambda 按调用点缓存，
         // 值元组状态按值传递，语义逐位一致。
@@ -940,10 +946,10 @@ public static class QueryBuilderExtensions
                 ExecuteBatchedPageCoreAsync<T>(
                     state.Paged, state.PageSize, state.CountSql, state.CountParameters,
                     state.PageSql, state.PageParameters, transaction: null, token),
-                state.Dialect, state.CommandTimeout),
+                state.Dialect, state.TimeoutSeconds),
             (Paged: paged, PageSize: pageSize, CountSql: countSql, CountParameters: countParameters,
              PageSql: pageSql, PageParameters: pageParameters,
-             Dialect: paged._dialect, CommandTimeout: paged._commandTimeout),
+             Dialect: paged._dialect, TimeoutSeconds: DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout)),
             ct).ConfigureAwait(false);
     }
 
