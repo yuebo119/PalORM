@@ -269,7 +269,8 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>按属性名排序（字符串重载）——省略调用点表达式树，列名仍走 [Column] 映射校验。</summary>
     public QueryBuilder<T> OrderBy(string propertyName, bool descending = false)
     {
-        AddOrderBy(GetQualifiedColumnName(propertyName), descending);
+        MemberResolver.GetColumnName<T>(propertyName);   // 未映射属性构建期失败（与表达式重载同口径）
+        AddOrderByProperty(propertyName, descending);
         return this;
     }
 
@@ -288,10 +289,10 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>在既有排序上追加次级排序键。无前置 <see cref="OrderBy{TKey}"/> 时抛 <see cref="InvalidOperationException"/>。</summary>
     public QueryBuilder<T> ThenBy<TKey>(Expression<Func<T, TKey>> member, bool descending = false)
     {
+        ArgumentNullException.ThrowIfNull(member);
         if (!HasClause(QueryClauseKind.OrderBy))
             throw new InvalidOperationException("ThenBy requires a preceding OrderBy.");
-        AddClause(QueryClauseKind.OrderBy,
-            $", {GetQualifiedColumnName(member)}{(descending ? " DESC" : "")}", qualifyColumn: true);
+        AddOrderByProperty(MemberResolver.GetMemberName(member), descending);
         return this;
     }
 
@@ -300,8 +301,8 @@ public struct QueryBuilder<T> where T : class, new()
     {
         if (!HasClause(QueryClauseKind.OrderBy))
             throw new InvalidOperationException("ThenBy requires a preceding OrderBy.");
-        AddClause(QueryClauseKind.OrderBy,
-            $", {GetQualifiedColumnName(propertyName)}{(descending ? " DESC" : "")}", qualifyColumn: true);
+        MemberResolver.GetColumnName<T>(propertyName);
+        AddOrderByProperty(propertyName, descending);
         return this;
     }
 
@@ -524,19 +525,37 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>追加 GROUP BY 分组列。重复调用追加多列；列名带表限定，JOIN 下不产生 ambiguous column。</summary>
     public QueryBuilder<T> GroupBy(Expression<Func<T, object?>> member)
     {
-        string prefix = HasClause(QueryClauseKind.GroupBy) ? ", " : "GROUP BY ";
-        // 表限定与其余子句对齐（ITM-425）：JOIN 下裸列名产生 ambiguous column
-        AddClause(QueryClauseKind.GroupBy, prefix + GetQualifiedColumnName(member), qualifyColumn: true);
+        ArgumentNullException.ThrowIfNull(member);
+        AddGroupByProperty(MemberResolver.GetMemberName(member));
         return this;
     }
 
     /// <summary>按属性名追加 GROUP BY 分组列（字符串重载）——列名走 [Column] 映射校验，
-    /// 与表达式重载同一表限定与拼接规则。</summary>
+    /// 与表达式重载同一表限定与拼接规则。文本与 ORDER BY 同款按输入六元组记忆化。</summary>
     public QueryBuilder<T> GroupBy(string propertyName)
     {
-        string prefix = HasClause(QueryClauseKind.GroupBy) ? ", " : "GROUP BY ";
-        AddClause(QueryClauseKind.GroupBy, prefix + GetQualifiedColumnName(propertyName), qualifyColumn: true);
+        MemberResolver.GetColumnName<T>(propertyName);   // 未映射属性构建期失败
+        AddGroupByProperty(propertyName);
         return this;
+    }
+
+    /// <summary>属性名形态的 GROUP BY 子句——记忆化口径同 <see cref="AddOrderByProperty"/>
+    ///（键补 IsGroupBy 位，两族共用一张表；成分全部编译期确定，同输入恒同输出）。</summary>
+    private void AddGroupByProperty(string propertyName)
+    {
+        bool continueClause = HasClause(QueryClauseKind.GroupBy);
+        var key = new QueryBuilderShared.OrderByClauseKey(
+            typeof(T), _dialect, _cteName ?? _tableName, propertyName, Descending: false, Continue: continueClause)
+            with { IsGroupBy = true };
+        string? cached = QueryBuilderShared.OrderByClauseText.TryGetValue(key, out string? text) ? text : null;
+        if (cached is null)
+        {
+            string prefix = continueClause ? ", " : "GROUP BY ";
+            // 表限定与其余子句对齐（ITM-425）：JOIN 下裸列名产生 ambiguous column
+            cached = prefix + GetQualifiedColumnName(propertyName);
+            QueryBuilderShared.OrderByClauseText.TryAdd(key, cached);
+        }
+        AddClause(QueryClauseKind.GroupBy, cached, qualifyColumn: true);
     }
 
     /// <summary>追加 HAVING 条件（作用于分组后），参数化绑定；重复调用以 AND 组合。</summary>
@@ -1015,12 +1034,31 @@ public struct QueryBuilder<T> where T : class, new()
         => GetQualifiedColumnName(member);
 
     internal void AddOrderBy<TKey>(Expression<Func<T, TKey>> member, bool descending)
-        => AddOrderBy(ResolveColumn(member), descending);
+        => AddOrderByProperty(MemberResolver.GetMemberName(member), descending);
 
     internal void AddOrderBy(string qualifiedColumn, bool descending)
         => AddClause(QueryClauseKind.OrderBy,
             $"{(HasClause(QueryClauseKind.OrderBy) ? ", " : "ORDER BY ")}" +
             $"{qualifiedColumn}{(descending ? " DESC" : "")}", qualifyColumn: true);
+
+    /// <summary>属性名形态的 ORDER BY 子句——文本按 (实体, 方言, FROM 源, 属性, 方向, 续排位)
+    /// 记忆化（2026-10-31 极致性能轮）：排序键的成分全部来自编译期注册表与字面量，同输入恒同输出；
+    /// 命中路径零 QuoteIdentifier 扫描与零字符串拼接（实测每次 OrderBy 构建省约 240B 与 ~200ns）。
+    /// 未命中路径构建的文本与原内联形态逐字节一致（快照锁定）。</summary>
+    internal void AddOrderByProperty(string propertyName, bool descending)
+    {
+        bool continueClause = HasClause(QueryClauseKind.OrderBy);
+        var key = new QueryBuilderShared.OrderByClauseKey(
+            typeof(T), _dialect, _cteName ?? _tableName, propertyName, descending, continueClause);
+        string? cached = QueryBuilderShared.OrderByClauseText.TryGetValue(key, out string? text) ? text : null;
+        if (cached is null)
+        {
+            string prefix = continueClause ? ", " : "ORDER BY ";
+            cached = $"{prefix}{GetQualifiedColumnName(propertyName)}{(descending ? " DESC" : "")}";
+            QueryBuilderShared.OrderByClauseText.TryAdd(key, cached);
+        }
+        AddClause(QueryClauseKind.OrderBy, cached, qualifyColumn: true);
+    }
 
     /// <summary>查询参数绑定（延迟物化形态）——执行热路径消费；LIMIT/OFFSET 追加与子句参数
     /// 组合成新数组（子句参数表可能是单贡献者快路径的直引用，不得就地变异）。</summary>
@@ -1763,6 +1801,23 @@ internal static class QueryBuilderShared
     /// <summary>零参数查询的共享空表（R3，2026-10-12）——只读共享；
     /// 不可变约定见 QueryBuilder&lt;T&gt;.GetParametersForKinds。</summary>
     internal static readonly List<ParameterBinding> EmptyParameters = [];
+
+    /// <summary>ORDER BY / GROUP BY 子句文本记忆化的键（2026-10-31 极致性能轮）。
+    /// 成分全部编译期确定（实体注册表 + 方言 + FROM 源 + 属性名 + 方向/续排位），同输入恒同输出；
+    /// 放非泛型宿主类（S2743：泛型静态字典不跨 T 共享，键含 typeof(T) 已完备分片）。</summary>
+    internal readonly record struct OrderByClauseKey(
+        Type EntityType,
+        SqlDialect Dialect,
+        string SourceName,
+        string PropertyName,
+        bool Descending,
+        bool Continue,
+        bool IsGroupBy = false);
+
+    /// <summary>子句文本缓存（进程级，键空间有限：每 (实体, 方言, 属性, 形态) 一条）。
+    /// 无容量上限的理由同 FilterFormsCache 先例——键成分不含用户值（属性名来自编译期映射表，
+    /// 值形参数经 @pN 绑定不进文本），无界放大源不存在。</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<OrderByClauseKey, string> OrderByClauseText = new();
 
     /// <summary>把延迟绑定物化为驱动参数——只由非热路径（DryRun/测试/管道/ToPage）与
     /// 拦截器上下文消费；执行热路径直接使用绑定。</summary>
