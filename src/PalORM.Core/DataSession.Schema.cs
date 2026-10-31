@@ -244,10 +244,11 @@ public sealed partial class DataSession<TProvider>
         {
             await RunInTransactionScopeAsync(
                 operation.Owner,
-                async (_, token) =>
+                async (transaction, token) =>
                 {
-                    await ApplyTableDdlAsync(tableDdls, operation, token).ConfigureAwait(false);
-                    await ApplyIndexDdlGroupsAsync(indexDdlGroups, accumulator, token)
+                    await ApplyTableDdlAsync(tableDdls, operation, transaction, token)
+                        .ConfigureAwait(false);
+                    await ApplyIndexDdlGroupsAsync(indexDdlGroups, accumulator, transaction, token)
                         .ConfigureAwait(false);
                     return true;
                 },
@@ -255,19 +256,31 @@ public sealed partial class DataSession<TProvider>
             return;
         }
 
-        await ApplyTableDdlAsync(tableDdls, operation, ct).ConfigureAwait(false);
-        await ApplyIndexDdlGroupsAsync(indexDdlGroups, accumulator, ct).ConfigureAwait(false);
+        await ApplyTableDdlAsync(tableDdls, operation, null, ct).ConfigureAwait(false);
+        await ApplyIndexDdlGroupsAsync(indexDdlGroups, accumulator, null, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>迁移控制语句（SAVEPOINT / ROLLBACK TO SAVEPOINT / RELEASE SAVEPOINT）。
+    /// 事务路径专用：PG 在事务内任一语句失败后整事务进入 aborted 态（25P02），
+    /// 只有回滚到保存点才能继续执行后续 DDL。</summary>
+    private async ValueTask ExecuteMigrationControlAsync(
+        DbTransaction transaction, string sql, CancellationToken ct)
+    {
+        await using DbCommand command = CreateCommand(transaction);
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>逐组执行索引 DDL；组内逐条（MySQL 1061 幂等跳过需要逐条 catch）。</summary>
     private async ValueTask ApplyIndexDdlGroupsAsync(
         List<IReadOnlyList<string>> indexDdlGroups,
         MigrationAccumulator accumulator,
+        DbTransaction? transaction,
         CancellationToken ct)
     {
         foreach (IReadOnlyList<string> indexDdls in indexDdlGroups)
         {
-            await ApplyIndexDdlAsync(indexDdls, accumulator, ct).ConfigureAwait(false);
+            await ApplyIndexDdlAsync(indexDdls, accumulator, transaction, ct).ConfigureAwait(false);
         }
     }
 
@@ -286,10 +299,23 @@ public sealed partial class DataSession<TProvider>
     /// 与 pg_type 随行复合类型插入非原子——多会话并发 MigrateAsync 建同名表时，后到者撞
     /// <c>pg_type_typname_nsp_index</c>（由 <see cref="IDbProvider.IsDuplicateSchemaObject"/> 识别），
     /// 批内单条失败即整批报废。回退逐条执行：竞态过的表由 IF NOT EXISTS 自然跳过
-    ///（MySQL 1061 索引兜底同族；慢路径仅在竞态异常发生时进入，正常路径保持批单往返）。</para></summary>
+    ///（MySQL 1061 索引兜底同族；慢路径仅在竞态异常发生时进入，正常路径保持批单往返）。</para>
+    /// <para><b>事务内竞态恢复（2026-10-31）</b>：PG 在事务内任一语句失败后整事务进入 aborted
+    /// 态，后续语句统一报 25P02。事务路径因此为批执行与每条回退 DDL 各套一个保存点：
+    /// 重名异常只回滚到保存点，事务其余部分保持可用。</para></summary>
     private async ValueTask ApplyTableDdlAsync(
-        List<string> tableDdls, SessionOperationState.SessionOperationLease operation, CancellationToken ct)
+        List<string> tableDdls,
+        SessionOperationState.SessionOperationLease operation,
+        DbTransaction? transaction,
+        CancellationToken ct)
     {
+        if (transaction is not null && TProvider.Dialect is SqlDialect.Sqlite or SqlDialect.PostgreSql)
+        {
+            await ApplyTableDdlInTransactionAsync(tableDdls, operation, transaction, ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
         using SessionBatch<TProvider> batch = CreateBatch();
         foreach (string ddl in tableDdls)
             _ = batch.AppendRaw(ddl);
@@ -301,7 +327,7 @@ public sealed partial class DataSession<TProvider>
         {
             foreach (string ddl in tableDdls)
             {
-                await using DbCommand fallback = CreateCommand();
+                await using DbCommand fallback = CreateCommand(transaction);
                 fallback.CommandText = ddl;
                 fallback.CommandTimeout = _options.CommandTimeoutSeconds;
                 try
@@ -312,6 +338,58 @@ public sealed partial class DataSession<TProvider>
                 {
                     // 已存在 = IF NOT EXISTS 的期望结果（并发对方已建成）
                 }
+            }
+        }
+    }
+
+    /// <summary>事务内建表：批执行失败且判定为并发重名时回滚到保存点，再逐条带保存点执行。</summary>
+    private async ValueTask ApplyTableDdlInTransactionAsync(
+        List<string> tableDdls,
+        SessionOperationState.SessionOperationLease operation,
+        DbTransaction transaction,
+        CancellationToken ct)
+    {
+        const string batchSavepoint = "palorm_migration_tables";
+        await ExecuteMigrationControlAsync(transaction, $"SAVEPOINT {batchSavepoint}", ct)
+            .ConfigureAwait(false);
+        try
+        {
+            using SessionBatch<TProvider> batch = CreateBatch();
+            foreach (string ddl in tableDdls)
+                _ = batch.AppendRaw(ddl);
+            _ = await batch.ExecuteNonQueryAsync(operation.Owner, ct).ConfigureAwait(false);
+            await ExecuteMigrationControlAsync(
+                transaction, $"RELEASE SAVEPOINT {batchSavepoint}", ct).ConfigureAwait(false);
+            return;
+        }
+        catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
+        {
+            await ExecuteMigrationControlAsync(
+                transaction, $"ROLLBACK TO SAVEPOINT {batchSavepoint}", ct).ConfigureAwait(false);
+            await ExecuteMigrationControlAsync(
+                transaction, $"RELEASE SAVEPOINT {batchSavepoint}", ct).ConfigureAwait(false);
+        }
+
+        const string perTableSavepoint = "palorm_migration_table";
+        foreach (string ddl in tableDdls)
+        {
+            await ExecuteMigrationControlAsync(
+                transaction, $"SAVEPOINT {perTableSavepoint}", ct).ConfigureAwait(false);
+            try
+            {
+                await using DbCommand fallback = CreateCommand(transaction);
+                fallback.CommandText = ddl;
+                fallback.CommandTimeout = _options.CommandTimeoutSeconds;
+                await fallback.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                await ExecuteMigrationControlAsync(
+                    transaction, $"RELEASE SAVEPOINT {perTableSavepoint}", ct).ConfigureAwait(false);
+            }
+            catch (DbException duplicate) when (TProvider.IsDuplicateSchemaObject(duplicate))
+            {
+                await ExecuteMigrationControlAsync(
+                    transaction, $"ROLLBACK TO SAVEPOINT {perTableSavepoint}", ct).ConfigureAwait(false);
+                await ExecuteMigrationControlAsync(
+                    transaction, $"RELEASE SAVEPOINT {perTableSavepoint}", ct).ConfigureAwait(false);
             }
         }
     }
@@ -328,20 +406,32 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask ApplyIndexDdlAsync(
         IReadOnlyList<string> indexDdlStatements,
         MigrationAccumulator accumulator,
+        DbTransaction? transaction,
         CancellationToken ct)
     {
+        bool useSavepoint = transaction is not null
+            && TProvider.Dialect is SqlDialect.Sqlite or SqlDialect.PostgreSql;
+        const string savepoint = "palorm_migration_index";
         foreach (string indexDdl in indexDdlStatements)
         {
-            await using DbCommand indexCmd = CreateCommand();
+            await ExecuteIndexSavepointAsync(
+                transaction, useSavepoint, $"SAVEPOINT {savepoint}", ct).ConfigureAwait(false);
+
+            await using DbCommand indexCmd = CreateCommand(transaction);
             indexCmd.CommandText = indexDdl;
             indexCmd.CommandTimeout = _options.CommandTimeoutSeconds;  // ITM-769：同建表命令
             try
             {
                 await indexCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                await ExecuteIndexSavepointAsync(
+                    transaction, useSavepoint, $"RELEASE SAVEPOINT {savepoint}", ct)
+                    .ConfigureAwait(false);
                 accumulator.CreatedIndexes.Add(indexDdl);
             }
             catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
             {
+                await RollbackIndexSavepointAsync(transaction, useSavepoint, savepoint, ct)
+                    .ConfigureAwait(false);
                 // MySQL 重名索引（1061）= 已建过（幂等跳过）；同名异构也触发 1061，
                 // 记录警告以便配置了 LoggerFactory 的会话审计（ITM-203）。
                 // ITM-765(r21)：同时写入 LastMigrationSkippedIndexes——默认会话（NullLogger）
@@ -354,11 +444,31 @@ public sealed partial class DataSession<TProvider>
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                await RollbackIndexSavepointAsync(transaction, useSavepoint, savepoint, ct)
+                    .ConfigureAwait(false);
                 // 失败项进入结构化结果；异常照常抛出，事务路径由上层回滚。
                 accumulator.FailedIndexes.Add(new MigrationFailure(indexDdl, exception.GetType().Name));
                 throw;
             }
         }
+    }
+
+    /// <summary>索引 DDL 的保存点控制（仅 PG/SQLite 事务路径启用；MySQL 无事务保持原行为）。</summary>
+    private async ValueTask ExecuteIndexSavepointAsync(
+        DbTransaction? transaction, bool enabled, string sql, CancellationToken ct)
+    {
+        if (!enabled)
+            return;
+        await ExecuteMigrationControlAsync(transaction!, sql, ct).ConfigureAwait(false);
+    }
+
+    private async ValueTask RollbackIndexSavepointAsync(
+        DbTransaction? transaction, bool enabled, string savepoint, CancellationToken ct)
+    {
+        await ExecuteIndexSavepointAsync(
+            transaction, enabled, $"ROLLBACK TO SAVEPOINT {savepoint}", ct).ConfigureAwait(false);
+        await ExecuteIndexSavepointAsync(
+            transaction, enabled, $"RELEASE SAVEPOINT {savepoint}", ct).ConfigureAwait(false);
     }
 
     // ─── 健康检查 ────────────────────────────────────────
