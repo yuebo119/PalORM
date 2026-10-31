@@ -20,6 +20,7 @@ public static class BulkOperationFramework
     /// <returns>已验证的写入元数据与表名（InsertColumns 非空）。</returns>
     public static (CrudMetadata Metadata, string TableName) EnsureInsertMetadata(Type entityType)
     {
+        ArgumentNullException.ThrowIfNull(entityType);
         if (!PalORM_Runtime.CrudMetadatas.TryGetValue(entityType, out CrudMetadata metadata)
             || !PalORM_Runtime.TableNames.TryGetValue(entityType, out string? tableName)
             || metadata.InsertColumns.Count == 0)
@@ -47,6 +48,10 @@ public static class BulkOperationFramework
         string cleanupDataKey,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(conn);
+        ArgumentNullException.ThrowIfNull(binder);
+        ArgumentNullException.ThrowIfNull(typeName);
+        ArgumentNullException.ThrowIfNull(cleanupDataKey);
         DbCommand probeCommand = conn.CreateCommand();
         Exception? probeException = null;
         try
@@ -99,6 +104,8 @@ public static class BulkOperationFramework
         Exception? primaryException,
         string dataKey)
     {
+        ArgumentNullException.ThrowIfNull(resource);
+        ArgumentNullException.ThrowIfNull(dataKey);
         try { await resource.DisposeAsync().ConfigureAwait(false); }
         catch (Exception cleanupException) when (primaryException is not null)
         {
@@ -116,7 +123,10 @@ public static class BulkOperationFramework
     /// （无测试断言旧文案；InfrastructureTimeout 标记与调用方判定语义不变）。</para></summary>
     public static ValueTask CommitWithTimeoutAsync(
         DbTransaction transaction, int commandTimeoutSeconds, CancellationToken ct = default)
-        => TransactionCleanup.CommitWithTimeoutAsync(transaction, commandTimeoutSeconds, ct);
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        return TransactionCleanup.CommitWithTimeoutAsync(transaction, commandTimeoutSeconds, ct);
+    }
 
     /// <summary>有界回滚的跨程序集入口——Provider 批量路径（PG COPY / MySQL LOAD DATA）复用 Core 的
     /// 单一实现（<see cref="TransactionCleanup.RollbackPreservingAsync"/>），不各自复制。
@@ -132,7 +142,12 @@ public static class BulkOperationFramework
         DbTransaction transaction, Exception primaryException,
         int rollbackTimeoutSeconds = TransactionCleanup.DefaultRollbackTimeoutSeconds,
         CancellationToken ct = default)
-        => TransactionCleanup.RollbackPreservingAsync(transaction, primaryException, rollbackTimeoutSeconds, ct);
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(primaryException);
+        return TransactionCleanup.RollbackPreservingAsync(
+            transaction, primaryException, rollbackTimeoutSeconds, ct);
+    }
 
     /// <summary>失败提交后跳过回滚的裁决（ITM-870，r23）——Provider 批量路径（PG COPY / MySQL
     /// LOAD DATA）的跨程序集入口，与 Core 的 MultiValueBulkInsert 同一语义：<b>服务端返回错误</b>的
@@ -140,5 +155,8 @@ public static class BulkOperationFramework
     /// "transaction already completed" 噪音并多一次徒劳往返；连接类失败（取消/超时/IO）服务端状态
     /// 未知，照常回滚。返回 true = 已在主异常 Data 标记跳过（调用方不再回滚）。</summary>
     public static bool TrySkipRollbackAfterCommitFailure(Exception primaryException)
-        => TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(primaryException);
+    {
+        ArgumentNullException.ThrowIfNull(primaryException);
+        return TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(primaryException);
+    }
 }

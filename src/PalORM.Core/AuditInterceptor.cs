@@ -65,6 +65,7 @@ public sealed class AuditInterceptor : IQueryInterceptor
     /// 不记录 exception.Message，与参数脱敏承诺一致。</para></summary>
     public void OnError(QueryContext context, Exception exception)
     {
+        ArgumentNullException.ThrowIfNull(exception);
         if (!_logger.IsEnabled(LogLevel.Error)) return;
         if (_logParameters)
             _logger.LogError(exception, "PalORM Audit [Error]: {ExceptionType}: {Message} | {Sql}",

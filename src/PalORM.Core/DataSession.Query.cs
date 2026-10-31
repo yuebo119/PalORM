@@ -324,10 +324,20 @@ public sealed partial class DataSession<TProvider>
     /// 用 <c>await foreach</c> 消费（自动释放）；手写 <c>GetAsyncEnumerator</c> 时必须 <c>await using</c>
     /// 或在 break/异常路径显式 DisposeAsync——否则租约永不归还，会话后续操作被门禁拒绝，
     /// 且 DataSession.DisposeAsync 会挂起至 DisposeWaitTimeout 后抛诊断异常。</para></summary>
-    public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(
+    public IAsyncEnumerable<T> QueryAsyncEnumerable<T>(
         FormattableString sql,
         bool readFromReplica = false,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        return QueryAsyncEnumerableCore<T>(sql, readFromReplica, ct);
+    }
+
+    private async IAsyncEnumerable<T> QueryAsyncEnumerableCore<T>(
+        FormattableString sql,
+        bool readFromReplica,
+        [EnumeratorCancellation] CancellationToken ct)
         where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
@@ -644,6 +654,7 @@ public sealed partial class DataSession<TProvider>
     /// 与 ToListAsync 同语义；参数表仅在拦截器非空时物化，默认会话零开销。</para></summary>
     public async ValueTask<int> ExecuteAsync(FormattableString sql, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(sql);
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         MarkConnectionStateUnknownForRawSql();
         // P1-1（2026-10-12 全量重读）：直查族命令复用（A9 同型，主连接形态）——重复执行的

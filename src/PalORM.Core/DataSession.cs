@@ -1,6 +1,7 @@
 ﻿using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
@@ -58,6 +59,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     // 工厂 CreateConnection + Open + Provider 初始化（SQLite 为 7 条 PRAGMA）——实测
     // 建连 26.3µs / 2209B 每次，是读副本查询总耗时（37.2µs）的 3.5 倍。
     private readonly string? _readConnectionString;
+    [SuppressMessage("Usage", "CA2213:Disposable fields should be disposed",
+        Justification = "Read connection ownership is released by DisposeReadConnectionAsync; "
+            + "CA2213 cannot see the helper call because the field is nulled before disposal.")]
     private DbConnection? _readConnection;
     /// <summary>2026-10-22 终审 P1-8：原生 SQL 可能改写连接级会话态；池化租出时据此
     /// 对 PG/MySQL 执行 RESET ALL; RESET ROLE / COM_RESET_CONNECTION（SQLite 走 Provider 脏标记）。</summary>

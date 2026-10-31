@@ -1026,6 +1026,7 @@ public static class QueryBuilderExtensions
     /// 拦截器泄漏。可观测性用 WithTracing/WithMetrics（QueryObservation 随 GridReader.DisposeAsync 收尾）。</para></summary>
     public static async ValueTask<GridReader> QueryMultipleAsync<T>(this QueryBuilder<T> builder, FormattableString sql, CancellationToken ct = default) where T : class, new()
     {
+        ArgumentNullException.ThrowIfNull(sql);
         // ITM-523: 守卫只统计"用户实质子句"——Tag/TagWithCaller 产生的 Comment 类别与
         // From<T>() 注入的 DefaultFilter 均应豁免，否则加个 Tag 就误触误用异常。
         // ITM-715(r20)：Take/Skip/Select/AsSplitQuery/WithCache 是字段不是子句，
