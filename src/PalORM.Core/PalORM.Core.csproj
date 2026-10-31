@@ -16,9 +16,8 @@
     <AnalysisLevel>latest-minimum</AnalysisLevel>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Core 与 SourceGen 共享的枚举单一真源（2026-10-31）。 -->
-    <Compile Include="..\Shared\PalORMDeleteAction.cs" Link="Shared\PalORMDeleteAction.cs" />
-    <Compile Include="..\Shared\PalORMAttributeNames.cs" Link="Shared\PalORMAttributeNames.cs" />
+    <!-- Core 与 SourceGen 共享的注解契约单一真源（2026-10-31）。 -->
+    <Compile Include="..\Shared\PalORMAnnotations.cs" Link="Shared\PalORMAnnotations.cs" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PalORM.Core.Tests" />

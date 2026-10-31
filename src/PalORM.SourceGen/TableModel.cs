@@ -597,5 +597,5 @@ internal sealed record EntityModelResult(
         => new(null, entityDisplayName, failureReason);
 }
 
-// DeleteAction 定义在 src/Shared/PalORMDeleteAction.cs，与 Core 共享单一真源。
+// DeleteAction 定义在 src/Shared/PalORMAnnotations.cs，与 Core 共享单一真源。
 

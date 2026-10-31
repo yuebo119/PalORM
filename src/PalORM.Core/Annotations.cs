@@ -88,7 +88,7 @@ public sealed class ForeignKeyAttribute(string referencedTable, string reference
     public DeleteAction OnDelete { get; init; }
 }
 
-// DeleteAction 定义在 src/Shared/PalORMDeleteAction.cs，与 SourceGen 共享单一真源。
+// DeleteAction 定义在 src/Shared/PalORMAnnotations.cs，与 SourceGen 共享单一真源。
 
 /// <summary>乐观锁并发令牌。</summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
