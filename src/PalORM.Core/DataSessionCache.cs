@@ -18,6 +18,12 @@ internal static class DataSessionCache
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<
         (Type EntityType, SqlDialect Dialect), int> UpdateRowParamsCache = new();
 
+    /// <summary>M4.4（2026-10-31）：per-(Type, Dialect) 缓存引用后的表名——批量 UPSERT 形状
+    /// 缓存命中路径原每次调用一次 QuoteIdentifier（标识符校验 + 新串分配）。表名由注册表
+    /// 唯一决定，同 (Type, Dialect) 恒定。</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (Type EntityType, SqlDialect Dialect), string> QuotedTableNameCache = new();
+
     /// <summary>per-(Type, Dialect) 缓存 selectColumns 字符串，消除每次 QuoteIdentifier + string.Join。
     /// <para><b>注意形态</b>：本缓存存的是<b>不带表名限定</b>的裸列清单（<c>"id", "status"</c>），
     /// 供 GetAllAsync/GetAsync 的 FROM 单表查询使用。需要表名限定的调用点（QueryBuilder 的
@@ -78,6 +84,7 @@ internal static class DataSessionCache
     {
         UpsertShapeCache.Clear();
         UpdateRowParamsCache.Clear();
+        QuotedTableNameCache.Clear();
         SelectColumnsCache.Clear();
         QualifiedSelectColumnsCache.Clear();
         FilterFormsCache.Clear();

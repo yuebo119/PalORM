@@ -2013,8 +2013,10 @@ public partial class DataSession<TProvider>
             cmd.Parameters.Add(pool[poolRowParamCount]);
     }
 
-    /// <summary>批量 UPDATE 上下文（避免方法参数过多 S107）。</summary>
-    private sealed record BatchUpdateContext(
+    /// <summary>批量 UPDATE 上下文（避免方法参数过多 S107）。
+    /// M4.4（2026-10-31）：record class → readonly record struct——每调用一次零堆分配
+    /// （全部成分是编译期缓存的引用与一个会话态布尔，值语义足够）。</summary>
+    private readonly record struct BatchUpdateContext(
         string[] SetColumns, string QuotedTable, string QuotedPk, bool HasTenantFilter)
     {
         public int SetColumnCount => SetColumns.Length;
@@ -2740,8 +2742,14 @@ public partial class DataSession<TProvider>
         // 2 string.Join + 冲突子句插值（与 QuotedColumnsCache 同纪律；值由编译期元数据唯一决定，
         // UpsertColumns/pkColumn 同源于注册表）。record struct 包装零分配，缓存存字符串组件即可。
         (Type, SqlDialect) shapeKey = (entityType, TProvider.Dialect);
+        // M4.4：引用表名走 (Type, Dialect) 共享缓存——命中路径不再每次 QuoteIdentifier。
+        if (!DataSessionCache.QuotedTableNameCache.TryGetValue(shapeKey, out string? quotedTableName))
+        {
+            quotedTableName = TProvider.QuoteIdentifier(tableName);
+            DataSessionCache.QuotedTableNameCache.TryAdd(shapeKey, quotedTableName);
+        }
         if (DataSessionCache.UpsertShapeCache.TryGetValue(shapeKey, out (string QuotedColumns, string ConflictClause) cached))
-            return new UpsertSqlShape(TProvider.QuoteIdentifier(tableName), cached.QuotedColumns, cached.ConflictClause);
+            return new UpsertSqlShape(quotedTableName, cached.QuotedColumns, cached.ConflictClause);
 
         string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
         List<string> updateColumns =
@@ -2765,7 +2773,7 @@ public partial class DataSession<TProvider>
                 updateColumns.Select(c => $"{quote(c)} = excluded.{quote(c)}"));
         string quotedColumns = string.Join(", ", metadata.UpsertColumns.Select(quote));
         DataSessionCache.UpsertShapeCache.TryAdd(shapeKey, (quotedColumns, conflictClause));
-        return new UpsertSqlShape(quote(tableName), quotedColumns, conflictClause);
+        return new UpsertSqlShape(quotedTableName, quotedColumns, conflictClause);
     }
 
     /// <summary>构建单批的多值 UPSERT SQL——参数已由调用方按批内连续下标预建绑定，
