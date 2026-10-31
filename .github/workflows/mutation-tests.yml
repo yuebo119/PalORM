@@ -24,15 +24,18 @@ jobs:
           global-json-file: global.json
 
       - name: Build (Debug)
-        run: dotnet build PalORM.ci.slnf -c Debug --no-incremental
+        # MUT-1：变异 job 用与 Stryker 配置一致的 solution（只含 src/ 与 test/）。
+          # 原 PalORM.ci.slnf 含 bench/tools 与 vendored 子树，干净检出下 Stryker 初次构建失败。
+          run: dotnet build PalORM.mutation.slnx -c Debug --no-incremental
 
       - name: Install dotnet-stryker
         run: dotnet tool install --global dotnet-stryker
 
       # 退出码协议：0=达标；1=得分低或失败（真信号→红）；3=上游阻塞（stryker MTP 预览
-      # runner 已知缺陷 #3799 同族，修复 PR #3817 已合未发版）；4=变异面为空（0 个变异
-      # 被测，无信息）。3/4 → notice 不判红（防止每周六已知阻塞红污染信号，狼来了效应），
-      # 上游发版后自动恢复真实判定。
+      # runner 已知缺陷 #3799 同族，修复 PR #3817 已合未发版；2026-10-31 实测形态：
+      # 构建路径已修复，但初始测试运行被 MTP 预览 runner 判为 >50% 失败）；4=无有效变异
+      # （effectiveMutants=0，无信息）。3/4 → notice 不判红（防止已知阻塞红污染信号），
+      # 上游发版后自动恢复真实判定。健康指标（effectiveMutants 等）由脚本写入 job summary。
       - name: Run mutation suite (Core CRUD/Query/Bulk/SessionState)
         run: |
           dotnet run --file scripts/run-mutation-tests.cs -- core
@@ -64,7 +67,9 @@ jobs:
           global-json-file: global.json
 
       - name: Build (Debug)
-        run: dotnet build PalORM.ci.slnf -c Debug --no-incremental
+        # MUT-1：变异 job 用与 Stryker 配置一致的 solution（只含 src/ 与 test/）。
+          # 原 PalORM.ci.slnf 含 bench/tools 与 vendored 子树，干净检出下 Stryker 初次构建失败。
+          run: dotnet build PalORM.mutation.slnx -c Debug --no-incremental
 
       - name: Install dotnet-stryker
         run: dotnet tool install --global dotnet-stryker

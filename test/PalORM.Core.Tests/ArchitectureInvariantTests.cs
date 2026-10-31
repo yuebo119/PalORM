@@ -190,8 +190,7 @@ public sealed class ArchitectureInvariantTests
 
     /// <summary>定位 src/PalORM.Core（[CallerFilePath] 与既有 ReadAllDataSessionSources 同源手法）。</summary>
     private static string FindCoreDir([CallerFilePath] string testPath = "")
-        => Path.GetFullPath(Path.Combine(
-            Path.GetDirectoryName(testPath)!, "..", "..", "src", "PalORM.Core"));
+        => Path.Combine(RepoPaths.Root(testPath), "src", "PalORM.Core");
 
     /// <summary>检测非 async 方法体内的 Enter 族调用：对每个调用点向上找最近的方法签名行，
     /// 签名不含 async 即违规。转发包装（表达式体单行转发）自身豁免，但其调用点由同一规则覆盖。</summary>
@@ -271,8 +270,7 @@ public sealed class ArchitectureInvariantTests
     /// <summary>拼接全部 DataSession partial 文件（ITM-405：单文件扫描曾漏 Bulk 入口）。</summary>
     private static string ReadAllDataSessionSources([CallerFilePath] string testPath = "")
     {
-        string coreDir = Path.GetFullPath(Path.Combine(
-            Path.GetDirectoryName(testPath)!, "..", "..", "src", "PalORM.Core"));
+        string coreDir = Path.Combine(RepoPaths.Root(testPath), "src", "PalORM.Core");
         string[] files = Directory.GetFiles(coreDir, "DataSession*.cs");
         if (files.Length < 2)
             throw new InvalidOperationException(

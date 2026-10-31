@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-net/master/src/Stryker.Core/Stryker.Core/schema/stryker-schema.json",
   "stryker-config": {
-    "solution": "../../PalORM.slnx",
+    "solution": "../../PalORM.mutation.slnx",
     "project": "PalORM.SourceGen.csproj",
     "mutate": [
       "../../src/PalORM.SourceGen/**/*.cs",

@@ -84,7 +84,18 @@ foreach (var doc in d10Docs)
     foreach (Match m in Regex.Matches(File.ReadAllText(doc), @"(\d+) 项 `\[Test\]` 声明"))
         if (m.Groups[1].Value != markTotal) d10Bad.Add($"{doc} 声明 {m.Groups[1].Value}≠实测 {markTotal}");
 }
-if (d10Bad.Count == 0) Pass($"D10 [Test] 计数声明一致（三文件全部写入点 = 实测 {markTotal}）");
+// D10 扩围（CONTRACT-4，2026-10-31）：.ai/test/prompt.md 与路线图也是计数写入点。
+// 两者不得写死测试总数（曾写死 1099 / Core 612 等），必须指向 test-counts.json 真源。
+foreach (var doc in (string[])[".ai/test/prompt.md", "docs/测试体系路线图.md"])
+{
+    if (!File.Exists(doc)) { d10Bad.Add($"{doc} 缺失"); continue; }
+    var text = File.ReadAllText(doc);
+    if (!text.Contains("test-counts.json", StringComparison.Ordinal))
+        d10Bad.Add($"{doc} 未指向 test-counts.json");
+    foreach (Match m in Regex.Matches(text, @"当前s*(d{3,})s*(?:/|项|$)"))
+        d10Bad.Add($"{doc} 写死计数 {m.Groups[1].Value}");
+}
+if (d10Bad.Count == 0) Pass($"D10 [Test] 计数声明一致（3 个声明文件 = 实测 {markTotal}；2 个指针文件未写死数字）");
 else Fail($"D10 [Test] 计数声明漂移（{string.Join("；", d10Bad)}）——用 --fix 同步");
 
 // ── D11: 生成物工具版本 = 包版本真源（含 OTel InstrumentationVersion）───

@@ -119,8 +119,8 @@ public sealed class QueryBuilderCloneCompletenessTests
 
     private static string ReadQueryBuilderSource([CallerFilePath] string testPath = "")
     {
-        // ArchitectureInvariantTests 同款定位：测试文件在 test/ 下，仓库根 = 上两级
-        string repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(testPath)!, "..", ".."));
+        // ArchitectureInvariantTests 同款定位：编译期路径失效时回退到 BaseDirectory 上溯
+        string repoRoot = RepoPaths.Root(testPath);
         string path = Path.Combine(repoRoot, "src", "PalORM.Core", "QueryBuilder.cs");
         if (!File.Exists(path))
             throw new InvalidOperationException($"未找到 {path}——仓库结构变化需同步本测试的源码定位");

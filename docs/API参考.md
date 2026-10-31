@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1444 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1501 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -107,6 +107,7 @@
 | `.AsSplitQuery()` | 根查询模式（不执行导航装配） |
 | `BulkInsertAsync(rows)` | 批量插入，走各方言最快形态（PG Binary COPY / MySQL LOAD DATA 或多值 INSERT / SQLite 行预编译）；**不回填自增主键** |
 | `BulkInsertReturningAsync(rows)` | 批量插入并**回填自增主键**：PG/SQLite 走多行 `INSERT ... RETURNING`；MySQL 不支持，调用即抛 `NotSupportedException` |
+| 批量原子性 | `BulkInsertAsync` 与 `BulkMergeAsync` 都包整段事务：任一批失败时已成功的批次同样回滚，**不留下已提交前缀**（2026-10-31 三方言实测，见 `BulkAtomicityTests`）。`BulkMergeAsync` 的重复主键是 UPSERT 合并语义（有则更新），不会报错；唯一约束冲突才会失败并整段回滚 |
 | `.ForUpdate()` / `.ForShare()` | 悲观锁（PostgreSQL / MySQL；SQLite 无行级锁，构建期抛 `NotSupportedException`） |
 | `.Raw(string)` | 原始 SQL 逃生舱 |
 | `.Tag("name")` / `.TagWithCaller()` | SQL 注释标签 |
@@ -278,10 +279,36 @@
 | `FormattableString` 用于表名或列名 | 插值会被参数化，SQL 结构位置（表名、列名、DDL 片段）不能接受 | 结构片段用 `FormattableStringFactory.Create` 传纯文本，或走 `Raw()` 与原生 DDL 入口 |
 | `DateTime` 在 PostgreSQL | 列型 `timestamptz`，表示 UTC 时刻；写入非 `Utc` 抛 `ArgumentException`；读回 Kind=`Utc` | 用 `DateTime.UtcNow`；需要墙钟语义请用 `string` 或 `DateTimeOffset` |
 | `DateTime` 在 MySQL / SQLite | 按墙钟存取，读回 Kind=`Unspecified`，Kind 不参与存储 | 与 PG 语义不同，跨方言迁移时分别处理 |
-| `DateTimeOffset` | SQLite 保留 offset（文本存储）；PostgreSQL 只接受 Utc；MySQL 的 `TIMESTAMP` 归一为 UTC 且 offset 丢失，`DATETIME(6)` 保留墙钟 | 需要 offset 语义时优先 SQLite 或 PostgreSQL；MySQL 上不要依赖 offset |
+| `DateTimeOffset` | SQLite 保留 offset（文本存储）；PostgreSQL 只接受 offset 0（UTC）；MySQL 归一为 UTC 后写 `DATETIME(6)`——瞬时保留、offset 丢失，读回恒为 `+00:00` | 需要 offset 语义时优先 SQLite；MySQL 上不要依赖 offset |
 | `decimal` 在 SQLite | 无真实 `DECIMAL` 类型，按 NUMERIC 亲和存为 REAL，精度可能在存储层损失 | 金额等精确小数用 PostgreSQL 或 MySQL；SQLite 只用于测试或非金额数据 |
 | 行锁 `ForUpdate` / `ForShare` | SQLite 无行级锁，构建期抛 `NotSupportedException` | 用 PostgreSQL / MySQL，或用写事务 `BEGIN IMMEDIATE` 做写串行化 |
 | 命令超时在 MySQL | 驱动不保证抛异常：标量路径中断查询后返回部分结果，列表路径抛 `MySqlException`（`ErrorCode=CommandTimeoutExpired`，内层 `QueryInterrupted` 1317） | 按 `TimeoutException` 捕获即可——PalORM 按耗时判定后归一，不要按驱动异常类型分支 |
+
+### 类型保真矩阵（2026-10-31 三方言实测）
+
+对应测试：`test/PalORM.Integration.Tests/TypeFidelityMatrixTests.cs`。每格两种合法结果：精确往返，或本表登记的方言损失（损失格由测试显式断言，不静默接受）。
+
+| 类型与边界 | SQLite | PostgreSQL | MySQL | 依据 |
+|---|---|---|---|---|
+| `DateTime` 亚微秒（`AddTicks(1)`、`AddTicks(1234567)`） | 精确（TEXT 存 7 位小数） | 截断到微秒 | 截断到微秒（`DATETIME(6)`） | 引擎列型精度 |
+| `DateTime` 的 `MinValue`/`MaxValue` | 精确 | 精确（Npgsql 映射为 `-infinity`/`infinity`，读回 Kind=`Unspecified`） | 精确 | 驱动哨兵语义 |
+| `DateTime` 的 Kind | 恒 `Unspecified` | 只接受 `Utc`，其余抛 `ArgumentException`；读回 `Utc` | 恒 `Unspecified` | 列型语义 |
+| `DateTimeOffset` 非零 offset | 保留（含 `+14:00`/`-08:00`） | 拒绝（`ArgumentException`，只收 UTC） | 归一到 UTC，offset 丢失 | 列型语义 |
+| `DateOnly` `0001-01-01`/`9999-12-31` | 精确 | 精确 | 精确 | 实测 |
+| `TimeOnly` 亚微秒 | 精确（7 位小数） | 截断到微秒 | 截断到微秒（`TIME(6)`） | 引擎列型精度 |
+| `decimal`（`DECIMAL(18,6)`） | 按 REAL 存读：最多 17 位有效数字，`decimal.MaxValue` 读回抛 `OverflowException` | 18 位内精确；scale 7 四舍五入；超 18 位报 `22003 numeric field overflow` | 同 PG（`Out of range value`） | 列型精度 |
+| `double` `NaN`/±`Infinity` | `NaN` 驱动拒绝；±`Infinity` 支持 | 全部支持 | 全部拒绝（驱动发未加引号字面量） | 驱动限制 |
+| `double` `-0.0` | 归一 `+0` | 保留 `-0` | 归一 `+0` | 实测 |
+| `float` `NaN`/`MaxValue` | `NaN` 拒绝；`MaxValue` 精确 | 精确 | `NaN` 拒绝；`MaxValue`/`MinValue` 读回抛 `InvalidCastException`（REAL=FLOAT 4 字节） | 驱动限制 |
+| `Guid`（含 `Empty`、全 `FF`） | 精确 | 精确（`UUID`） | 精确（`CHAR(36)`） | 实测 |
+| `byte[]`（空数组、`null`、含 `0x00`、1 MB） | 精确 | 精确（`BYTEA`） | 精确（`LONGBLOB`） | 实测 |
+| `char` `' '` | 精确 | 拒绝（UTF8 不含 0x00，`22021`） | 精确 | 列型语义 |
+| `char` 非 ASCII | 精确 | 精确 | 精确 | 实测 |
+| `string` 孤立代理项 | 静默替换为 U+FFFD | 编码器拒绝（`EncoderFallbackException`） | 静默替换为 U+FFFD | 驱动编码器 |
+| `string` 100k 字符 | 精确 | 精确（`TEXT`） | 拒绝（`TEXT` 上限 65535 字节，`Data too long`） | 列型上限 |
+| `string` 其余（`null`/空串/emoji/ZWJ/CJK/组合字符/尾随空格） | 精确 | 精确 | 精确 | 实测 |
+| 枚举（负值、`long` 底层、`[Flags]`） | 精确 | 精确 | 精确 | 实测 |
+| `ulong`（大于 `long.MaxValue`） | 不支持 | 不支持 | 不支持 | PALORM016 白名单不含 `ulong`；需 `[Converter]` 转受支持类型 |
 
 ## PostgreSQL 专有
 

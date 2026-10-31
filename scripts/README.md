@@ -17,6 +17,8 @@
 | `gate-param-collection-reuse.cs` | R-UNNESTB 参数集合复用理由码门禁 | ✅ pre-commit + verify.yml gate |
 | `assert-test-counts.cs` | 测试执行数地板断言（地板真源 `bench/baselines/test-counts.json`） | ✅ verify.yml unit/integration |
 | `assert-coverage.cs` | 覆盖率地板断言（同上文件 `coverage` 段） | ✅ verify.yml unit |
+| `public-api-snapshot.cs` | 公开 API 基线快照（`--check` PR 比对，`--update` 显式冻结；基线在 `bench/baselines/public-api/`） | ✅ verify.yml unit |
+| `flake-ledger.cs` | 每周 flake 台账（Core 3 次 / Integration 2 次独立进程；失败不自动重试；台账在 `artifacts/flake-ledger/`） | ✅ flake-ledger.yml 每周 |
 
 ## 提交前必检
 

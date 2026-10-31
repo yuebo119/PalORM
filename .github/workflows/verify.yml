@@ -119,6 +119,11 @@ jobs:
             - name: Assert Core coverage floor (M3-1)
               run: dotnet run --file scripts/assert-coverage.cs -- PalORM.Core cov-core.xml core
 
+            - name: Public API compatibility (CONTRACT-3)
+              # 公开 API 基线在 bench/baselines/public-api/；破坏性变更（新增/删除/改签名）在 PR 报红。
+              # 有意变更时运行 --update 重写基线，并在提交说明标注 SemVer 升级类型。
+              run: dotnet run --file scripts/public-api-snapshot.cs -- --check --configuration Release
+
             - name: Source generator tests
               run: dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build
 
@@ -192,6 +197,16 @@ jobs:
               run: |
                   dotnet run --file scripts/assert-coverage.cs -- PalORM.MySql cov-integration.xml mysql
                   dotnet run --file scripts/assert-coverage.cs -- PalORM.PostgreSql cov-integration.xml postgresql
+
+            - name: Assert per-class branch coverage floors (META-1)
+              # branch 读 block_coverage（dotnet-coverage 无独立 branch 属性，block 为分支代理）；
+              # 地板=2026-10-31 实测-2pp，防退化非达标。探针已验证可红（地板抬 90 时 exit 1）。
+              run: |
+                  dotnet run --file scripts/assert-coverage.cs -- --branch queryBuilder cov-integration.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch batchUpdateSqlBuilder cov-integration.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch mySqlProvider cov-integration.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch postgreSqlProvider cov-integration.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch sqliteProvider cov-integration.xml
 
     gate:
         name: Quality Gates

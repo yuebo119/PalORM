@@ -38,7 +38,7 @@ public sealed class RandomDiffTests
             foreach (DScenario scenario in DGenerator.Generate(seed, CasesPerSeed))
             {
                 executed++;
-                if (await RandomDiffRunner.HasDifferenceAsync(scenario, session, raw))
+                if (await RandomDiffRunner.HasDifferenceAsync(scenario, session, raw, SqlDialect.Sqlite))
                     differences.Add(scenario.ReplayKey);
             }
         }
@@ -70,13 +70,13 @@ public sealed class RandomDiffTests
         const int cases = 12;
         foreach (DScenario scenario in DGenerator.Generate(seed, cases))
         {
-            bool failed = await RandomDiffRunner.HasDifferenceAsync(scenario, session, raw);
+            bool failed = await RandomDiffRunner.HasDifferenceAsync(scenario, session, raw, SqlDialect.Sqlite);
             if (!failed) continue;
 
             // 收缩：失败谓词就是"同一场景重跑仍不一致"
             DScenario shrunk = await ScenarioShrinker.ShrinkAsync(
                 scenario,
-                candidate => RandomDiffRunner.HasDifferenceAsync(candidate, session, raw));
+                candidate => RandomDiffRunner.HasDifferenceAsync(candidate, session, raw, SqlDialect.Sqlite));
             persisted.Add($"seed={seed} original={scenario.ReplayKey} shrunk={shrunk.ReplayKey}");
         }
 

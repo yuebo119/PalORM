@@ -50,8 +50,7 @@ public sealed class ExternalDbIsolationInvariantTests
     }
 
     private static string IntegrationTestsDirectory([CallerFilePath] string testPath = "")
-        => Path.GetFullPath(Path.Combine(
-            Path.GetDirectoryName(testPath)!, "..", "PalORM.Integration.Tests"));
+        => Path.Combine(RepoPaths.Root(testPath), "test", "PalORM.Integration.Tests");
 
     /// <summary>单文件扫描器：累积连续属性行，遇声明行结算；类块记录"本类是否带守卫"，
     /// 方法块可由自身或所属类满足守卫。外部库标记命中时计数（供测试侧做覆盖下限断言）。</summary>
@@ -62,6 +61,7 @@ public sealed class ExternalDbIsolationInvariantTests
 
         private readonly string _name;
         private readonly List<string> _pending = [];
+        private System.Text.StringBuilder? _multiLineAttribute;
         private bool _classHasGuard;
 
         internal int Markers { get; private set; }
@@ -77,6 +77,25 @@ public sealed class ExternalDbIsolationInvariantTests
             if (line.Length == 0
                 || line.StartsWith('/', StringComparison.Ordinal))
             {
+                return;
+            }
+
+            // 跨行属性（如多行 SuppressMessage）：首行以 [ 开始但未以 ] 结束时持续累积，
+            // 直到闭合行——否则中间行（如 Justification 续行）会被误判为声明行，把类守卫块
+            // 提前结算掉。2026-10-31 实测：TypeFidelityMatrixTests/LargeDataTests 的多行
+            // SuppressMessage 让类级 [NotInParallel("ExtBulkTable")] 失效，B63 守卫误报方法级缺守卫。
+            if (_multiLineAttribute is not null)
+            {
+                _multiLineAttribute.Append(' ').Append(line.Trim());
+                if (!line.TrimEnd().EndsWith(']', StringComparison.Ordinal)) return;
+                _pending.Add(_multiLineAttribute.ToString());
+                _multiLineAttribute = null;
+                return;
+            }
+
+            if (line[0] == '[' && !line.TrimEnd().EndsWith(']', StringComparison.Ordinal))
+            {
+                _multiLineAttribute = new System.Text.StringBuilder(line.Trim());
                 return;
             }
 

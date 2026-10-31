@@ -279,5 +279,5 @@ internal sealed class StatementTypeCoverageTests
     }
 
     private static string RepositoryRoot([CallerFilePath] string testPath = "")
-        => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(testPath)!, "..", ".."));
+        => RepoPaths.Root(testPath);
 }

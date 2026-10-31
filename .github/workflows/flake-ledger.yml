@@ -1,0 +1,73 @@
+name: Weekly Flake Ledger
+
+# P2 / META-2（测试体系增强方案 2026-10-31）：每周 flake 台账。
+# Core 跑 3 次、Integration 跑 2 次；每次独立进程，失败不自动重试，
+# 台账写入 artifacts/flake-ledger/ 并作为 artifact 保留 90 天。
+# "首跑失败、后续通过"= flake 候选，必须分类后再关账（连续两周无未解释 flake 才达标）。
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: flake-ledger-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    name: Flake ledger (Core 3x, Integration 2x)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: palorm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d palorm"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: palorm
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries 30
+    env:
+      PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm
+      PALORM_MYSQL_CONNECTION: Server=127.0.0.1;User=root;Database=palorm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build PalORM.ci.slnf -c Release
+
+      - name: Run flake ledger
+        run: >-
+          dotnet run --file scripts/flake-ledger.cs --
+          --core-runs 3 --integration-runs 2 --configuration Release
+
+      - name: Upload ledger artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flake-ledger
+          path: artifacts/flake-ledger/
+          retention-days: 90

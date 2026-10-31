@@ -12,9 +12,37 @@
     "externalDatabase": 74
   },
   "coverage": {
-    "core": 74.0,
-    "mysql": 67.0,
-    "postgresql": 46.0,
-    "_comment": "覆盖率地板=防退化非达标。core 由 Core 测试收集；mysql/postgresql 由 Integration 测试收集。地板按实测 -2pp 设定，实测值以 assert-coverage 输出为准、不在本文件复述（B103 族）。2026-10-18 修正说明：MySql 曾报 26% 假读数——SET GLOBAL local_infile=OFF 用例把能力探测缓存污染成 False 达 60s TTL，全量跑所有批量写静默走多值回退，BulkCopy 路径从未被执行（B195）；补 ResetLocalInfileProbeCache 测试钩子后 BulkCopy 真跑，地板随实测重定。Core 覆盖率测不到 Provider 代码，两套地板互不替代。"
+    "core": 74,
+    "mysql": 67.9,
+    "postgresql": 48.4,
+    "_comment": "覆盖率地板=防退化非达标。core 由 Core 测试收集；mysql/postgresql 由 Integration 测试收集。地板按实测 -2pp 设定，实测值以 assert-coverage 输出为准、不在本文件复述（B103 族）。2026-10-31（DIALECT-5）重定：全量 Integration 574 用例实测 mysql 69.93 / postgresql 50.44，地板随之上调至 67.9 / 48.4；方案建议值（pg 55 / mysql 70）未达，差距如实登记，待 PG 侧用例继续补强后按实测再上调。2026-10-18 修正说明保留：MySql 曾报 26% 假读数——SET GLOBAL local_infile=OFF 用例把能力探测缓存污染成 False 达 60s TTL，全量跑所有批量写静默走多值回退，BulkCopy 路径从未被执行（B195）；补 ResetLocalInfileProbeCache 测试钩子后 BulkCopy 真跑，地板随实测重定。Core 覆盖率测不到 Provider 代码，两套地板互不替代。",
+    "branch": {
+      "_comment": "META-1 类级分支地板（防退化非达标）。branch 读 dotnet-coverage 的 block_coverage（该工具链无独立 branch 属性，block 是分支语义的可用代理）；按 function 的 namespace+type_name 聚合、行数加权。2026-10-31 Integration 全量实测：QueryBuilder 88.2 / BatchUpdateSqlBuilder 65.2 / MySqlProvider 78.1 / PostgreSqlProvider 60.9 / SqliteProvider 76.0（block%），地板=实测-2pp。",
+      "queryBuilder": {
+        "type": "QueryBuilder&lt;T&gt;",
+        "line": 81,
+        "branch": 86
+      },
+      "batchUpdateSqlBuilder": {
+        "type": "BatchUpdateSqlBuilder",
+        "line": 61,
+        "branch": 63
+      },
+      "mySqlProvider": {
+        "type": "MySqlProvider",
+        "line": 71,
+        "branch": 76
+      },
+      "postgreSqlProvider": {
+        "type": "PostgreSqlProvider",
+        "line": 58,
+        "branch": 58.9
+      },
+      "sqliteProvider": {
+        "type": "SqliteProvider",
+        "line": 65,
+        "branch": 74
+      }
+    }
   }
 }

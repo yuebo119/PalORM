@@ -93,8 +93,7 @@ internal sealed class TestInfraInvariantTests
     }
 
     private static string GetSourceDirectory([CallerFilePath] string path = "")
-        => Path.GetDirectoryName(path)
-           ?? throw new InvalidOperationException("无法定位测试源码目录（CallerFilePath 为空）");
+        => RepoPaths.CoreTestsDirectory(path);
 
     /// <summary>读被守卫文件源码（同步私有助手：与 ArchitectureInvariantTests.Read* 同形态，
     /// 读取点不落在 async 方法体直接调用面上）。</summary>
