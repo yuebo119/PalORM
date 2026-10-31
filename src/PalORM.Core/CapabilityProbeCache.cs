@@ -46,7 +46,7 @@ internal static class CapabilityProbeCache<T>
         CancellationToken ct)
     {
         if (Cache.TryGetValue(key, out ProbeEntry? cached)
-            && Environment.TickCount64 < cached.ExpiresAtTicks)
+            && PalORMClock.Now < cached.ExpiresAtTicks)
         {
             return cached.Value;
         }
@@ -54,7 +54,7 @@ internal static class CapabilityProbeCache<T>
         T value = await probe(ct).ConfigureAwait(false);
         if (Cache.Count >= MaxEntries)
             Cache.Clear();
-        Cache[key] = new ProbeEntry(value, Environment.TickCount64 + ttlMilliseconds);
+        Cache[key] = new ProbeEntry(value, PalORMClock.Now + ttlMilliseconds);
         NegativeUntil.TryRemove(key, out _);   // R3：探测成功清除负结果标记
         return value;
     }
@@ -81,9 +81,9 @@ internal static class CapabilityProbeCache<T>
 
     /// <summary>标记探测失败（负结果窗口开始）。</summary>
     public static void MarkNegative(string key, int negativeTtlMilliseconds)
-        => NegativeUntil[key] = Environment.TickCount64 + negativeTtlMilliseconds;
+        => NegativeUntil[key] = PalORMClock.Now + negativeTtlMilliseconds;
 
     /// <summary>负结果窗口是否仍在生效（窗口内调用方应跳过探测直接降级）。</summary>
     public static bool IsNegativeFresh(string key)
-        => NegativeUntil.TryGetValue(key, out long until) && Environment.TickCount64 < until;
+        => NegativeUntil.TryGetValue(key, out long until) && PalORMClock.Now < until;
 }

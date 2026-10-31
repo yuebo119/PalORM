@@ -1236,17 +1236,20 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         return $"{TProvider.QuoteIdentifier(tableName)}.{TProvider.QuoteIdentifier("tenant_id")}";
     }
 
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"((?:`[^`]+`|\w+)) = (VALUES|LAST_INSERT_ID)\(\1\)",
+        System.Text.RegularExpressions.RegexOptions.None,
+        matchTimeoutMilliseconds: 2000)]
+    private static partial System.Text.RegularExpressions.Regex MySqlUpsertAssignmentRegex();
+
     /// <summary>MySQL ODKU 赋值项守卫：`col` = VALUES(`col`) / `pk` = LAST_INSERT_ID(`pk`)
     /// 逐项包 IF(tenant_id = @p, 原表达式, col)。已知局限：列名内含 " RETURNING " 形态的
     /// 病态标识符不在本手术假设内（与 UpdateWithTenant 的 WHERE 结尾假设同量级）。</summary>
     private static string WrapMySqlUpsertAssignmentsWithTenantGuard(
         string sql, string qualifiedTenantColumn, string tenantParameterName)
-        => System.Text.RegularExpressions.Regex.Replace(
+        => MySqlUpsertAssignmentRegex().Replace(
             sql,
-            @"((?:`[^`]+`|\w+)) = (VALUES|LAST_INSERT_ID)\(\1\)",
-            "$1 = IF(" + qualifiedTenantColumn + " = " + tenantParameterName + ", $2($1), $1)",
-            System.Text.RegularExpressions.RegexOptions.None,
-            TimeSpan.FromSeconds(2));
+            "$1 = IF(" + qualifiedTenantColumn + " = " + tenantParameterName + ", $2($1), $1)");
 
     private static string InsertTenantGuardBeforeReturning(
         string sql, string qualifiedTenantColumn, string tenantParameterName)

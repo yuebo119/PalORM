@@ -37,7 +37,7 @@ internal static class SourceGenerationValidation
         // 只查声明成员会让基类 [Key] 实体被跳过且 PALORM001 误报"无 [Key]"。
         List<IPropertySymbol> keyProperties = EnumerateMappedProperties(type)
             .Where(static property => property.GetAttributes().Any(static attribute =>
-                IsPalORMAttribute(attribute, "Key")))  // ITM-512
+                IsPalORMAttribute(attribute, PalORMAttributeNames.Key)))  // ITM-512
             .ToList();
         if (keyProperties.Count != 1)
             return false;
@@ -59,7 +59,7 @@ internal static class SourceGenerationValidation
         // CS0019/CS8852（ITM-640 家族要消灭的形态），多令牌则 FirstOrDefault 静默只递增其一。
         List<IPropertySymbol> concurrencyTokens = EnumerateMappedProperties(type)
             .Where(static property => property.GetAttributes().Any(static attribute =>
-                IsPalORMAttribute(attribute, "ConcurrencyCheck")))  // ITM-512
+                IsPalORMAttribute(attribute, PalORMAttributeNames.ConcurrencyCheck)))  // ITM-512
             .ToList();
         if (concurrencyTokens.Count > 1)
             return false;
@@ -201,7 +201,7 @@ internal static class SourceGenerationValidation
 
     internal static bool IsNotMapped(IPropertySymbol property)
         => property.GetAttributes().Any(static attribute =>
-            IsPalORMAttribute(attribute, "NotMapped"));
+            IsPalORMAttribute(attribute, PalORMAttributeNames.NotMapped));
 
     /// <summary>SQL 标识符安全快检（编译期镜像运行时 <c>PalORM.IdentifierSafety</c> 拒绝范围）：
     /// 空/空白，或含 C0 控制字符（U+0000-U+001F）、DEL（U+007F）、C1 控制字符（U+0080-U+009F）。

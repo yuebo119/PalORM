@@ -91,9 +91,9 @@ else Fail($"D10 [Test] 计数声明漂移（{string.Join("；", d10Bad)}）—�
 var propsText = File.Exists("Directory.Build.props") ? File.ReadAllText("Directory.Build.props") : "";
 var pkgVersion = FirstMatch(propsText, @"<Version>([^<]+)")?.Group1?.Trim() ?? "";
 var metaText = File.Exists("src/PalORM.SourceGen/GeneratedCodeMetadata.cs") ? File.ReadAllText("src/PalORM.SourceGen/GeneratedCodeMetadata.cs") : "";
-var toolVersion = FirstMatch(metaText, "ToolVersion = \"([^\"]+)")?.Group1 ?? "";
+var toolVersion = ResolveVersion(metaText, "ToolVersion = \"([^\"]+)", pkgVersion);
 var metricsText = File.Exists("src/PalORM.Core/PalORMMetrics.cs") ? File.ReadAllText("src/PalORM.Core/PalORMMetrics.cs") : "";
-var otelVersion = FirstMatch(metricsText, "InstrumentationVersion = \"([^\"]+)")?.Group1 ?? "";
+var otelVersion = ResolveVersion(metricsText, "InstrumentationVersion = \"([^\"]+)", pkgVersion);
 if (pkgVersion.Length == 0 || toolVersion.Length == 0 || otelVersion.Length == 0)
     Fail("D11 未找到包版本（Directory.Build.props <Version>）、生成物工具版本（GeneratedCodeMetadata.ToolVersion）或 OTel 版本（PalORMMetrics.InstrumentationVersion）");
 else if (pkgVersion == toolVersion && pkgVersion == otelVersion) Pass($"D11 生成物工具版本与 OTel 版本 = 包版本（{pkgVersion}）");
@@ -353,6 +353,45 @@ else
         Fail($"D16 README 性能倍数在生成报告中查无此值（{string.Join("；", perfBad)}）——重跑 crossbench-report 后同步");
 }
 
+// ── D17: 诊断计数声明 = SourceGen 实际描述符（2026-10-31 新增）──
+// 动因：README 长期写 45 条（42+3），实际已有 46 条（43+3）；计数是手写的，必然漂移。
+// 判据：从 PalORMAnalyzer.cs 提取分析器 ID、从其余 SourceGen 文件提取生成器 ID，
+// 与 README 中文/英文声明逐项对账。
+var analyzerIds = new HashSet<string>(StringComparer.Ordinal);
+var generatorIds = new HashSet<string>(StringComparer.Ordinal);
+if (Directory.Exists("src/PalORM.SourceGen"))
+{
+    foreach (var file in Directory.EnumerateFiles("src/PalORM.SourceGen", "*.cs", SearchOption.AllDirectories))
+    {
+        var rel = file.Replace('\\', '/');
+        if (rel.Contains("/obj/", StringComparison.Ordinal) || rel.Contains("/bin/", StringComparison.Ordinal)) continue;
+        foreach (Match m in Regex.Matches(File.ReadAllText(file), @"""PALORM(\d{3})"""))
+        {
+            var id = $"PALORM{m.Groups[1].Value}";
+            if (Path.GetFileName(file) == "PalORMAnalyzer.cs") analyzerIds.Add(id);
+            else generatorIds.Add(id);
+        }
+    }
+}
+var diagnosticTotal = analyzerIds.Count + generatorIds.Count;
+var d17Bad = new List<string>();
+var readmeZh = File.Exists("README.md") ? File.ReadAllText("README.md") : "";
+var readmeEn = File.Exists("README.en.md") ? File.ReadAllText("README.en.md") : "";
+if (!readmeZh.Contains($"{diagnosticTotal} 条", StringComparison.Ordinal))
+    d17Bad.Add($"README.md 未声明 {diagnosticTotal} 条");
+if (!readmeZh.Contains($"{analyzerIds.Count} 分析器 + {generatorIds.Count} 生成器", StringComparison.Ordinal))
+    d17Bad.Add($"README.md 未声明 {analyzerIds.Count} 分析器 + {generatorIds.Count} 生成器");
+if (!readmeEn.Contains($"{diagnosticTotal} Roslyn diagnostics", StringComparison.Ordinal))
+    d17Bad.Add($"README.en.md 未声明 {diagnosticTotal} Roslyn diagnostics");
+if (d17Bad.Count == 0)
+{
+    Pass($"D17 诊断计数声明一致（{diagnosticTotal} = {analyzerIds.Count} 分析器 + {generatorIds.Count} 生成器）");
+}
+else
+{
+    Fail($"D17 诊断计数漂移（{string.Join("；", d17Bad)}）——改 README 中文/英文或补源生成器描述符");
+}
+
 Console.WriteLine();
 Console.WriteLine($"通过: {passed}  失败: {failed}");
 return failed > 0 ? 1 : 0;
@@ -363,6 +402,22 @@ static (string Group1, string Group2)? FirstMatch(string content, string pattern
 {
     var m = Regex.Match(content, pattern);
     return m.Success ? (m.Groups[1].Value, m.Groups.Count > 2 ? m.Groups[2].Value : "") : null;
+}
+
+/// <summary>D11 版本解析（2026-10-31）：源码写死字面量时直接取值；改为
+/// <c>PalORMVersionInfo.Version</c> 时验证生成目标存在且使用 <c>$(Version)</c>，
+/// 再按包版本处理。生成目标缺失或未接线时返回空，D11 照常失败。</summary>
+static string ResolveVersion(string source, string pattern, string pkgVersion)
+{
+    string literal = FirstMatch(source, pattern)?.Group1 ?? "";
+    if (literal.Length > 0) return literal;
+    if (!source.Contains("PalORMVersionInfo.Version", StringComparison.Ordinal)) return "";
+    if (!File.Exists("Directory.Build.targets")) return "";
+    string targets = File.ReadAllText("Directory.Build.targets");
+    return targets.Contains("PalORMVersionInfo", StringComparison.Ordinal)
+        && targets.Contains("$(Version)", StringComparison.Ordinal)
+        ? pkgVersion
+        : "";
 }
 
 static int CountTestMarkers()

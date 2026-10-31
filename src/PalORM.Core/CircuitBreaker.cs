@@ -12,7 +12,7 @@ internal sealed class CircuitBreaker
     private readonly TimeSpan _resetAfter;
 
     private int _failureCount;
-    /// <summary>开闸截止时刻（Environment.TickCount64 毫秒）——单调时钟，不受 NTP 跳变影响。
+    /// <summary>开闸截止时刻（PalORMClock.Now 毫秒）——单调时钟，不受 NTP 跳变影响。
     /// 与 CacheStore TTL 的 A5 修正同源（2026-10-22 审计 C6）。</summary>
     private long _openUntilTick;
     private bool _isOpen;
@@ -22,7 +22,7 @@ internal sealed class CircuitBreaker
     private volatile bool _isOpenFlag;
     private bool _halfOpenProbeActive;
     private long _generation;
-    /// <summary>R5：半开探针的获取时刻（Environment.TickCount64 毫秒）——探针占用超过
+    /// <summary>R5：半开探针的获取时刻（PalORMClock.Now 毫秒）——探针占用超过
     /// halfOpenSlotStaleAfter 未终结时，<see cref="Enter"/> 回收槽位，防止"调用方忘了调
     /// ReleaseCancelledProbe → 熔断器永久 Open"。-1 = 无占用探针（0 是 TickCount64 的合法启动值）。</summary>
     private long _halfOpenProbeAcquiredAt = -1;
@@ -62,7 +62,7 @@ internal sealed class CircuitBreaker
         {
             lock (_lock)
             {
-                long remaining = _openUntilTick - Environment.TickCount64;
+                long remaining = _openUntilTick - PalORMClock.Now;
                 return remaining > 0 ? DateTime.UtcNow.AddMilliseconds(remaining) : default;
             }
         }
@@ -108,14 +108,14 @@ internal sealed class CircuitBreaker
                 }
                 else
                 {
-                    rejected = Environment.TickCount64 < _openUntilTick;
+                    rejected = PalORMClock.Now < _openUntilTick;
                 }
             }
 
             if (!rejected)
             {
                 _halfOpenProbeActive = true;
-                _halfOpenProbeAcquiredAt = Environment.TickCount64;
+                _halfOpenProbeAcquiredAt = PalORMClock.Now;
                 _halfOpenProbeToken += 1;
                 return (true, _generation, _halfOpenProbeToken);
             }
@@ -134,7 +134,7 @@ internal sealed class CircuitBreaker
     {
         long acquiredAt = _halfOpenProbeAcquiredAt;
         if (acquiredAt < 0) return true;
-        long held = Environment.TickCount64 - acquiredAt;
+        long held = PalORMClock.Now - acquiredAt;
         return held > (long)_halfOpenSlotStaleAfter.TotalMilliseconds;
     }
 
@@ -222,7 +222,7 @@ internal sealed class CircuitBreaker
             if (isHalfOpenProbe)
             {
                 _failureCount = _threshold;
-                Open(Environment.TickCount64 + (long)_resetAfter.TotalMilliseconds);
+                Open(PalORMClock.Now + (long)_resetAfter.TotalMilliseconds);
                 return;
             }
 
@@ -233,7 +233,7 @@ internal sealed class CircuitBreaker
             _failureCount += 1;
 
             if (IsEnabled && _failureCount >= _threshold)
-                Open(Environment.TickCount64 + (long)_resetAfter.TotalMilliseconds);
+                Open(PalORMClock.Now + (long)_resetAfter.TotalMilliseconds);
         }
     }
 
@@ -252,12 +252,12 @@ internal sealed class CircuitBreaker
             if (generation != _generation) return;
             if (probeToken != _halfOpenProbeToken) return;  // ITM-895：槽位已易主（stale 回收）
             ReleaseProbeSlot();
-            _openUntilTick = Environment.TickCount64;
+            _openUntilTick = PalORMClock.Now;
         }
     }
 
     /// <summary>开闸——集中写 _isOpen / _isOpenFlag / _openUntilTick / 消息缓存，保证永不漂移。
-    /// 截止时刻用单调 tick（Environment.TickCount64），不受 NTP 跳变影响。</summary>
+    /// 截止时刻用单调 tick（PalORMClock.Now），不受 NTP 跳变影响。</summary>
     private void Open(long openUntilTick)
     {
         // P3-5：先推进代际再开闸——旧顺序在 ARM64 弱内存下可能让读者读到新代际+旧 flag，

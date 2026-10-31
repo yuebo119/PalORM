@@ -108,6 +108,10 @@ public sealed partial class DataSession<TProvider>
         return ApplyUpdateOutcome(plan, entity, affectedRows, deferredVersionIncrements: null);
     }
 
+    /// <summary>WHERE 参数重编号的正则（GeneratedRegex，AOT 安全）。</summary>
+    [GeneratedRegex(@"@p(\d+)", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
+    private static partial Regex PartialUpdateParameterRegex();
+
     /// <summary>解析列选择：属性表达式 → 列名 → <see cref="CrudPlan.UpdateColumns"/> 索引；
     /// 去重后按原列序返回（参数顺序 = SET 子句顺序）。</summary>
     private static SortedSet<int> ResolveUpdateColumnSelection<T>(
@@ -185,18 +189,15 @@ public sealed partial class DataSession<TProvider>
 
         // WHERE 只引用主键/并发参数（旧编号 >= SET 列数）；保留参数中的新编号 =
         // 选中 SET 数 + (旧编号 - SET 列数)。
-        string rewrittenWhere = Regex.Replace(
+        string rewrittenWhere = PartialUpdateParameterRegex().Replace(
             whereClause,
-            "@p(\\d+)",
             match =>
             {
                 int oldIndex = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
                 return oldIndex >= setColumnCount
                     ? ParameterNameCache.GetName(selected.Count + (oldIndex - setColumnCount))
                     : match.Value;
-            },
-            RegexOptions.None,
-            TimeSpan.FromSeconds(1));
+            });
         string tenantSuffix = tenantFiltered
             ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
             : "";

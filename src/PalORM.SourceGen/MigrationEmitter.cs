@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.CodeAnalysis.CSharp;
+using DeleteAction = PalORM.SourceGenDeleteAction;
 
 namespace PalORM.SourceGen;
 

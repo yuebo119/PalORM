@@ -1,0 +1,20 @@
+<Project>
+  <!-- 版本常量生成（2026-10-31）：把 Directory.Build.props 的 Version 生成为编译期常量，
+       消除 PalORMMetrics.InstrumentationVersion 与 GeneratedCodeMetadata.ToolVersion 的手工同步。
+       只对 Core 与 SourceGen 生效；生成物落在 obj，不进入包内容。 -->
+  <Target Name="GeneratePalORMVersion"
+          BeforeTargets="CoreCompile"
+          Condition="'$(MSBuildProjectName)' == 'PalORM.Core' or '$(MSBuildProjectName)' == 'PalORM.SourceGen'"
+          Inputs="$(MSBuildThisFileFullPath);$(MSBuildThisFileDirectory)Directory.Build.props"
+          Outputs="$(IntermediateOutputPath)PalORMVersion.g.cs">
+    <PropertyGroup>
+      <_PalORMVersionFile>$(IntermediateOutputPath)PalORMVersion.g.cs</_PalORMVersionFile>
+      <_PalORMVersionSource>// &lt;auto-generated/&gt;%0Anamespace PalORM%3B%0Ainternal static class PalORMVersionInfo%0A{%0A    internal const string Version = &quot;$(Version)&quot;%3B%0A}</_PalORMVersionSource>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_PalORMVersionFile)" Lines="$(_PalORMVersionSource)" Overwrite="true" />
+    <ItemGroup>
+      <Compile Include="$(_PalORMVersionFile)" />
+      <FileWrites Include="$(_PalORMVersionFile)" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -327,12 +327,9 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> WhereNotIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values)
         => AddInClause(member, values, negated: true, nameof(WhereNotIn));
 
-    /// <summary>WhereIn/WhereNotIn 共享内核——两者此前逐字重复，仅 IN/NOT IN 与 OR/AND 连接词不同。
-    /// <para><b>v5.6 单缓冲</b>：原实现每批一个 <c>string[]</c> + <c>string.Join</c> + 插值，
-    /// 最后再对批次集合 <c>string.Join</c> 一次；改为单个 <see cref="ValueStringBuilder"/>
-    /// 顺序写出整条 IN 体。实测 500 值省 21.8KB（76%）、2000 值省 122.3KB（64%）
-    /// 的字符串与列表 churn（参数对象是驱动固有的，不在收益内）。</para>
-    /// <para>SQL 文本逐字节不变：<c>(col IN (@p0, @p1) OR col IN (@p2))</c>，既有 WHERE 时前缀 <c>AND </c>。</para></summary>
+    /// <summary>WhereIn/WhereNotIn 共享内核：仅 IN/NOT IN 与 OR/AND 连接词不同。
+    /// 单 <see cref="ValueStringBuilder"/> 顺序写出整条 IN 体；SQL 文本逐字节不变，
+    /// 既有 WHERE 时前缀 <c>AND </c>。历史测量与替代方案见 ADR-T。</summary>
     private QueryBuilder<T> AddInClause<TValue>(Expression<Func<T, TValue>> member,
         IEnumerable<TValue> values, bool negated, string callerName)
     {

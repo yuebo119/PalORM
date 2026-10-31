@@ -44,6 +44,10 @@ csharp_style_prefer_tuple_swap = true:suggestion
 dotnet_diagnostic.CA2007.severity = warning    # ConfigureAwait
 dotnet_diagnostic.CA1849.severity = error       # async void
 dotnet_diagnostic.IDE0058.severity = silent     # 未使用的表达式值
+# Core 分析器逐条启用轮（2026-10-31）：先启用 CA2012（ValueTask 多次消费）。
+# CA1062 需逐公开方法补空检查，CA1849 与 SQLite 同步叶子冲突，CA2213 需逐可释放字段核对，
+# 三者留待后续批次，逐条启用而不是整体放开 latest-all。
+dotnet_diagnostic.CA2012.severity = error       # ValueTask 只能消费一次
 
 # 文件范围命名空间 (C# 10+)
 csharp_style_namespace_declarations = file_scoped:warning

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using DeleteAction = PalORM.SourceGenDeleteAction;
 
 namespace PalORM.SourceGen;
 
@@ -41,7 +42,7 @@ internal sealed record TableModel(
         // ITM-512：注解匹配全程校验命名空间为 PalORM（IsPalORMAttribute），
         // 避免混挂 EF Core/System.ComponentModel.DataAnnotations 同名注解时误判。
         var tableAttr = typeSymbol.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));
         if (tableAttr is null)
             return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 "no PalORM [Table] attribute found (unexpected: the pipeline filters by it)");
@@ -52,7 +53,7 @@ internal sealed record TableModel(
         // 租户列在实体模型中只读：INSERT 由实体承载（ITM-599），UPDATE/UPSERT 的 SET 不得写它，
         // 否则租户会话可把行搬到别的租户（2026-10-21 审计修复）。
         bool isTenantAware = typeSymbol.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.TenantAware));
 
         List<ColumnModel> columns = [];
         List<IndexModel> indexes = [];
@@ -61,11 +62,11 @@ internal sealed record TableModel(
         foreach (var member in GetMappableProperties(typeSymbol))
         {
             if (member is not IPropertySymbol prop) continue;
-            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "NotMapped")))
+            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.NotMapped)))
                 continue;
 
             var columnAttr = prop.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? prop.Name;
             // R3（v6.0）：[Column] 架构参数（Length/Precision/Scale/TypeName）——参与 DDL 类型细化
@@ -82,7 +83,7 @@ internal sealed record TableModel(
             // （provider 类型选择 + 读/写表达式 + DDL 列类型）面较大，留待专门迭代，此处仅记录限制。
 
             // [Unique] → 单列唯一索引（ADR-B：属性级 Unique 升为唯一索引）
-            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Unique")))
+            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Unique)))
             {
                 indexes.Add(new IndexModel(
                     $"ux_{tableName}_{columnName}",
@@ -90,24 +91,24 @@ internal sealed record TableModel(
                     Unique: true));
             }
 
-            bool isKey = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+            bool isKey = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key));
             // [Key(AutoIncrement = false)] 关闭数值主键的自增推断（雪花 ID 等应用侧赋值主键）
             bool autoIncrementEnabled = prop.GetAttributes()
-                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"))?
+                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key))?
                 .NamedArguments.FirstOrDefault(na => na.Key == "AutoIncrement").Value.Value is not false;
             bool isAutoIncrement = isKey && autoIncrementEnabled
                 && prop.Type.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32;
-            bool ignoreOnInsert = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "IgnoreOnInsert"));
-            bool isConcurrencyToken = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck"));
-            bool isTimestamp = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
-            bool isRequired = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
+            bool ignoreOnInsert = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.IgnoreOnInsert));
+            bool isConcurrencyToken = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck));
+            bool isTimestamp = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Timestamp));
+            bool isRequired = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Required));
             // ITM-713(r20)：[SensitiveData] 的掩码随生成物携带，标注在参数的 SourceColumn 上供
             // 审计拦截器脱敏——无需运行时解析 SQL 文本反查列（与 ITM-642 同一取向）。
             // ITM-751(r21)：空/空白 Mask 归一为默认值——若放行 `Mask = ""`，生成物写出
             // `p.SourceColumn = "";`，而读侧用 IsNullOrEmpty 判"无掩码"→ 回落输出真实值，
             // 把脱敏静默关成明文（安全洞）。此处收敛：空白即视为未指定，取默认掩码。
             var sensitiveAttr = prop.GetAttributes()
-                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "SensitiveData"));
+                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.SensitiveData));
             string? sensitiveMask = null;
             if (sensitiveAttr is not null)
             {
@@ -118,7 +119,7 @@ internal sealed record TableModel(
             // ITM-554：改用本文件 helper（ITM-512 引入），与其余注解判定一致，避免裸串命名空间比对
             string? computedExpression = prop.GetAttributes()
                 .FirstOrDefault(static attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "Computed"))?
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.Computed))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             // ITM-584：[Computed] 表达式是编译期常量（Raw 同级信任），但 NUL/未配对括号会生成
             // 非法 DDL 延迟到 MigrateAsync 才炸——快检拒绝，实体整体跳过。
@@ -135,7 +136,7 @@ internal sealed record TableModel(
             // 与 [Computed]（ITM-584）同型：PALORM048 在编译期定位报错，此处防御性跳过。
             string? defaultValueExpression = prop.GetAttributes()
                 .FirstOrDefault(static attribute =>
-                    SourceGenerationValidation.IsPalORMAttribute(attribute, "DefaultValue"))?
+                    SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.DefaultValue))?
                 .ConstructorArguments.FirstOrDefault().Value as string;
             if (defaultValueExpression is not null
                 && (string.IsNullOrWhiteSpace(defaultValueExpression)
@@ -153,7 +154,7 @@ internal sealed record TableModel(
                 return EntityModelResult.Skipped(typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                     $"[DefaultValue] on property '{prop.Name}' conflicts with [Computed]/[Timestamp]/auto-increment [Key] (PALORM047)");
             var ownedJsonAttr = prop.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.OwnedJson));
             bool isOwnedJson = ownedJsonAttr is not null;
             string? ownedJsonContextTypeName = ownedJsonAttr?.ConstructorArguments.FirstOrDefault().Value is INamedTypeSymbol contextType
                 ? contextType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) : null;
@@ -197,7 +198,7 @@ internal sealed record TableModel(
                     $"[Timestamp] and [Computed] conflict on property '{prop.Name}' (PALORM042)");
 
             var fkAttr = prop.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ForeignKey));  // ITM-512
             if (fkAttr is not null && fkAttr.ConstructorArguments.Length >= 2)
             {
                 // ITM-602: ForeignKeyModel.OnDelete 此前恒写 0（NoAction），用户 [ForeignKey(OnDelete=...)]
@@ -237,12 +238,12 @@ internal sealed record TableModel(
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "SoftDelete"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.SoftDelete));  // ITM-512
 
         // [Index("name", "col1", "col2", Unique = ...)] → 复合索引（ADR-B）
         // 无名/空列声明跳过生成——PALORM020 已在编译期报错，此处跳过防级联生成错误
         foreach (var indexAttr in typeSymbol.GetAttributes().Where(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Index")))  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Index)))  // ITM-512
         {
             if (indexAttr.ConstructorArguments.Length < 2) continue;
             if (indexAttr.ConstructorArguments[0].Value is not string indexName) continue;
@@ -497,7 +498,7 @@ internal sealed record ProjectionModel(
                 "projection declaration is not supported (generic/nested/abstract/static type, "
                 + "missing public parameterless constructor, or non-writable properties)");
         // PALORM049 定位报错（分析器），此处防御性跳过——双管线同类型会生成重复 hint 源文件。
-        if (typeSymbol.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))
+        if (typeSymbol.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table)))
             return ProjectionModelResult.Skipped(displayName,
                 "type has both [Projection] and [Table] (PALORM049)");
 
@@ -506,7 +507,7 @@ internal sealed record ProjectionModel(
         {
             // PALORM050 定位报错（分析器），此处防御性跳过——OwnedJson 对象读路径引用实体
             // CommandFactory 的 JsonTypeInfo，投影不生成 CommandFactory（生成物 CS0104）。
-            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson")))
+            if (prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.OwnedJson)))
                 return ProjectionModelResult.Skipped(displayName,
                     $"property '{prop.Name}' has [OwnedJson] which is not supported on [Projection] types (PALORM050)");
             if (!SourceGenerationValidation.HasValidValueMapping(prop))
@@ -514,7 +515,7 @@ internal sealed record ProjectionModel(
                     $"property '{prop.Name}' has no valid value mapping");
 
             var columnAttr = prop.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? prop.Name;
 
@@ -596,10 +597,5 @@ internal sealed record EntityModelResult(
         => new(null, entityDisplayName, failureReason);
 }
 
-/// <summary>外键删除行为（与 Core 中 DeleteAction 枚举值对齐）。
-/// ITM-613: SourceGen 是 netstandard2.0 不能引用 Core，故两侧数值靠约定对齐——
-/// 任一侧改顺序必须同步另一侧：<c>src/PalORM.Core/Annotations.cs</c> 的
-/// <c>DeleteAction</c> 与本枚举。当前 FK 不生成 DDL（ITM-525），运行时无影响；
-/// 3.0 启用 FK DDL 前必须改为强约束（如代码生成器直接消费 Core enum 类型符号）。</summary>
-internal enum DeleteAction { NoAction = 0, Cascade = 1, SetNull = 2, Restrict = 3 }
+// DeleteAction 定义在 src/Shared/PalORMDeleteAction.cs，与 Core 共享单一真源。
 

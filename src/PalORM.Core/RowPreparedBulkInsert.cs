@@ -17,7 +17,9 @@ namespace PalORM;
 /// 单行 SQL 构建缓存 → 事务生命周期（R1 提交裁决/T3 异常保留清理）→ 逐行执行。
 /// 参数池形态复用 v4.6 契约：<c>InitInsertParameters</c> 一次建立 DbType，
 /// <c>BindInsertValues</c> 每行只写 Value；旧生成器程序集（无值 binder）回退
-/// 每行 Clear + <c>BindInsert</c> 的整建形态。</para></summary>
+/// 每行 Clear + <c>BindInsert</c> 的整建形态。</para>
+/// <para><b>可见性</b>：Provider 内部 API。当前 public 仅为跨程序集访问；7.0 改 internal，
+/// 消费方不要依赖本类型。</para></summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
 public static class RowPreparedBulkInsert
 {

@@ -88,18 +88,7 @@ public sealed class ForeignKeyAttribute(string referencedTable, string reference
     public DeleteAction OnDelete { get; init; }
 }
 
-/// <summary>外键删除行为。</summary>
-public enum DeleteAction
-{
-    /// <summary>不做处理（NO ACTION）。</summary>
-    NoAction,
-    /// <summary>级联删除引用行（CASCADE）。</summary>
-    Cascade,
-    /// <summary>将引用列置为 NULL（SET NULL）。</summary>
-    SetNull,
-    /// <summary>存在引用时禁止删除（RESTRICT）。</summary>
-    Restrict
-}
+// DeleteAction 定义在 src/Shared/PalORMDeleteAction.cs，与 SourceGen 共享单一真源。
 
 /// <summary>乐观锁并发令牌。</summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]

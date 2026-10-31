@@ -332,7 +332,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         context.RegisterSymbolAction(ctx =>
         {
             if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
-                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"))  // ITM-512
+                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table))  // ITM-512
                 || !SourceGenerationValidation.IsSupportedEntity(type))
                 return;
             AnalyzePrimaryKey(ctx, type);
@@ -344,7 +344,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         context.RegisterSymbolAction(ctx =>
         {
             if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
-                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Projection")))
+                || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Projection)))
                 return;
             CheckProjectionDiagnostics(ctx, type);
         }, SymbolKind.NamedType);
@@ -367,7 +367,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             startContext.RegisterSymbolAction(ctx =>
             {
                 if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type) return;
-                var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
+                var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));
                 if (tableAttribute is null) return;
                 AnalyzeEntityDiagnostics(ctx, type, ref assemblyTables, identifierComparer);
             }, SymbolKind.NamedType);
@@ -436,7 +436,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (method.TypeArguments[0] is not INamedTypeSymbol entityType) return;
 
         bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)
-            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck")));
+            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck)));
         if (hasConcurrency)
         {
             ctx.ReportDiagnostic(Diagnostic.Create(BulkUpdateBatchOnVersionedEntity,
@@ -458,7 +458,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (method.TypeArguments[0] is not INamedTypeSymbol entityType) return;
 
         bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)
-            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck")));
+            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck)));
         if (hasConcurrency)
         {
             ctx.ReportDiagnostic(Diagnostic.Create(
@@ -483,7 +483,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (method.TypeArguments[0] is not INamedTypeSymbol entityType) return;
 
         bool hasTable = entityType.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));
         if (!hasTable)
         {
             ctx.ReportDiagnostic(Diagnostic.Create(JoinReferencesUnregisteredEntity,
@@ -686,7 +686,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         List<IPropertySymbol> keyProperties = SourceGenerationValidation
             .EnumerateMappedProperties(type)
             .Where(static property => property.GetAttributes().Any(attribute =>
-                SourceGenerationValidation.IsPalORMAttribute(attribute, "Key")))  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.Key)))  // ITM-512
             .ToList();
 
         if (keyProperties.Count == 0)
@@ -708,7 +708,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // TableModel.isAutoIncrement 仅识别 Int64/Int32（TableModel.cs:74），用户意图被静默
         // 忽略——编译期无诊断，运行时 InsertAsync 会失败或抛奇怪错误。在此显式拒绝。
         bool autoIncrementEnabled = key.GetAttributes()
-            .FirstOrDefault(static a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"))?
+            .FirstOrDefault(static a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key))?
             .NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is not false;
         string? reason = ClassifyKeyValidity(key, autoIncrementEnabled);
         if (reason is not null)
@@ -749,12 +749,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     /// <summary>PALORM011：带 Schema/Database 限定符的 [Table] 不被支持。</summary>
     private static void CheckQualifiedTable(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
-        var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table"));
+        var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));
         bool hasQualifiedTable = tableAttribute!.NamedArguments.Any(argument =>
                 argument.Key is "Schema" or "Database" && argument.Value.Value is string)
             || type.GetAttributes().Any(attribute =>
-                SourceGenerationValidation.IsPalORMAttribute(attribute, "Schema")
-                || SourceGenerationValidation.IsPalORMAttribute(attribute, "Database"));  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.Schema)
+                || SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.Database));  // ITM-512
         if (hasQualifiedTable)
             ctx.ReportDiagnostic(Diagnostic.Create(UnsupportedQualifiedTable, type.Locations[0], type.Name));
     }
@@ -767,7 +767,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckSoftDeleteColumn(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool isSoftDelete = type.GetAttributes().Any(attribute =>
-            SourceGenerationValidation.IsPalORMAttribute(attribute, "SoftDelete"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.SoftDelete));  // ITM-512
         if (!isSoftDelete) return;
 
         bool hasSoftDeleteColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
@@ -782,7 +782,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckTenantColumn(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool isTenantAware = type.GetAttributes().Any(attribute =>
-            SourceGenerationValidation.IsPalORMAttribute(attribute, "TenantAware"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.TenantAware));  // ITM-512
         if (!isTenantAware) return;
 
         bool hasTenantColumn = SourceGenerationValidation.EnumerateMappedProperties(type)
@@ -797,7 +797,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static bool HasColumnNamed(IPropertySymbol property, string expected)
     {
         var columnAttr = property.GetAttributes().FirstOrDefault(attribute =>
-            SourceGenerationValidation.IsPalORMAttribute(attribute, "Column"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.Column));  // ITM-512
         string effectiveColumnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
             ?? property.Name;
         return string.Equals(effectiveColumnName, expected, StringComparison.Ordinal);
@@ -814,7 +814,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckTenantColumnNullable(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool isTenantAware = type.GetAttributes().Any(attribute =>
-            SourceGenerationValidation.IsPalORMAttribute(attribute, "TenantAware"));
+            SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.TenantAware));
         if (!isTenantAware) return;
 
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
@@ -827,7 +827,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             bool isNullableAnnotation = property.NullableAnnotation == NullableAnnotation.Annotated
                 || property.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
             bool hasRequired = property.GetAttributes().Any(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Required));
 
             // 仅当列真的可为 NULL（可空注解且无 [Required]）才报
             if (isNullableAnnotation && !hasRequired)
@@ -893,7 +893,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckUpdatableColumns(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         bool isTenantAware = type.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "TenantAware"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.TenantAware));
         bool hasUpdatable = false;
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
@@ -913,15 +913,15 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     }
 
     private static bool IsPrimaryKey(IPropertySymbol property)
-        => property.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+        => property.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key));
 
     private static bool IsPropertyInsertable(IPropertySymbol property)
     {
         bool ignoreOnInsert = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "IgnoreOnInsert"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.IgnoreOnInsert));
         // Key 的 AutoIncrement 默认 true（Annotations.cs:60）——未显式设置时也视为 true
         var keyAttr = property.GetAttributes()
-            .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+            .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key));
         bool isAutoIncrement = keyAttr is null
             ? false
             // ITM-782(r21)：补 int/long 类型限定（对齐 TableModel.FromContext 真源）——
@@ -932,9 +932,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 : !keyAttr.NamedArguments.Any(na => na.Key == "AutoIncrement")  // 未显式设置→默认 true
                     || keyAttr.NamedArguments.Any(na => na.Key == "AutoIncrement" && na.Value.Value is true);
         bool hasComputed = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Computed));
         bool isTimestamp = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Timestamp));
         return !ignoreOnInsert && !isAutoIncrement && !hasComputed && !isTimestamp;
     }
 
@@ -945,13 +945,13 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static bool IsPropertyUpdatable(IPropertySymbol property)
     {
         bool isKey = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key));
         bool isConcurrency = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck));
         bool hasComputed = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Computed));
         bool isTimestamp = property.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Timestamp));
         return !isKey && !isConcurrency && !hasComputed && !isTimestamp;
     }
 
@@ -965,7 +965,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             var colAttr = member.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));  // ITM-512
             string columnName = colAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
             if (columnOwners.TryGetValue(columnName, out string? firstOwner))
             {
@@ -987,7 +987,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     {
         var concurrencyTokens = SourceGenerationValidation.EnumerateMappedProperties(type)
             .Where(member => member.GetAttributes().Any(attribute =>
-                SourceGenerationValidation.IsPalORMAttribute(attribute, "ConcurrencyCheck")))  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(attribute, PalORMAttributeNames.ConcurrencyCheck)))  // ITM-512
             .ToArray();
         if (concurrencyTokens.Length > 1)
             ctx.ReportDiagnostic(Diagnostic.Create(MultipleConcurrencyTokens, type.Locations[0], type.Name));
@@ -1079,7 +1079,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 if (!seen.Add(property.Name)) continue;
 
                 bool isNotMapped = property.GetAttributes().Any(a =>
-                    SourceGenerationValidation.IsPalORMAttribute(a, "NotMapped"));
+                    SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.NotMapped));
                 if (!isNotMapped) continue;
 
                 // 扫描 14 个互斥特性，命中第一个即报。
@@ -1107,7 +1107,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         bool isTimestamp = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Timestamp));
         if (!isTimestamp) return;
 
         // r14-S7：Nullable 时间类型（DateTime?/DateTimeOffset?）经 UnwrapNullable 判定——
@@ -1128,10 +1128,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         bool hasTimestamp = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Timestamp));
         if (!hasTimestamp) return;
         bool hasComputed = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Computed));
         if (!hasComputed) return;
 
         ctx.ReportDiagnostic(Diagnostic.Create(TimestampComputedConflict,
@@ -1146,7 +1146,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         var computedAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Computed"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Computed));
         if (computedAttr is null) return;
         if (computedAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
         // P2-8：空串/纯空白同时通过 NUL 与括号平衡检查，会生成 "GENERATED ALWAYS AS ()"
@@ -1169,12 +1169,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         var defaultValueAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.DefaultValue));
         if (defaultValueAttr is null) return;
 
         string? conflict =
-            member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Computed")) ? "[Computed]"
-            : member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Timestamp")) ? "[Timestamp]"
+            member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Computed)) ? "[Computed]"
+            : member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Timestamp)) ? "[Timestamp]"
             : IsAutoIncrementKey(member) ? "an auto-increment [Key]"
             : null;
         if (conflict is null) return;
@@ -1188,7 +1188,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static bool IsAutoIncrementKey(IPropertySymbol member)
     {
         var keyAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key));
         if (keyAttr is null) return false;
         if (keyAttr.NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is false)
             return false;
@@ -1200,7 +1200,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         var defaultValueAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "DefaultValue"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.DefaultValue));
         if (defaultValueAttr is null) return;
         if (defaultValueAttr.ConstructorArguments.FirstOrDefault().Value is not string expression) return;
         if (!string.IsNullOrWhiteSpace(expression)
@@ -1220,14 +1220,14 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         Location location = type.Locations.FirstOrDefault() ?? Location.None;
-        if (type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Table")))
+        if (type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table)))
         {
             ctx.ReportDiagnostic(Diagnostic.Create(ProjectionTableConflict,
                 location, type.Name));
         }
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
-            if (!property.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson")))
+            if (!property.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.OwnedJson)))
                 continue;
             ctx.ReportDiagnostic(Diagnostic.Create(ProjectionOwnedJsonUnsupported,
                 property.Locations.FirstOrDefault() ?? location,
@@ -1243,7 +1243,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckIdentifierSafety(SymbolAnalysisContext ctx, INamedTypeSymbol type)
     {
         var tableAttr = type.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));  // ITM-512
         string tableName = tableAttr?.ConstructorArguments.FirstOrDefault().Value as string
             ?? type.Name;
         // 表名兜底为类型名时不可能命中（C# 标识符无控制字符），统一扫描保持口径简单
@@ -1256,7 +1256,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             var columnAttr = property.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));  // ITM-512
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? property.Name;
             if (SourceGenerationValidation.HasUnsafeSqlIdentifier(columnName))
@@ -1268,7 +1268,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         }
 
         foreach (var indexAttr in type.GetAttributes().Where(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Index")))  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Index)))  // ITM-512
         {
             Location indexLocation = indexAttr.ApplicationSyntaxReference?.GetSyntax(ctx.CancellationToken).GetLocation()
                 ?? type.Locations[0];
@@ -1294,7 +1294,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             var fkAttr = property.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ForeignKey));  // ITM-512
             // 可空比较陷阱：fkAttr?.X < 2 在 fkAttr=null 时结果为 null、null<2=false——守卫失效致 NRE
             if (fkAttr is null || fkAttr.ConstructorArguments.Length < 2) continue;
             Location propertyLocation = property.Locations.FirstOrDefault() ?? type.Locations[0];
@@ -1318,9 +1318,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         bool hasConverter = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Converter"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Converter));
         bool hasOwnedJson = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.OwnedJson));
         if (hasConverter && hasOwnedJson)
         {
             ctx.ReportDiagnostic(Diagnostic.Create(ConverterOwnedJsonConflict,
@@ -1334,7 +1334,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         var keyAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Key"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key));
         if (keyAttr is null) return;
 
         // AutoIncrement=false 表示用户自定义 ID 生成策略，初值合法
@@ -1409,9 +1409,9 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         bool hasConcurrency = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "ConcurrencyCheck"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck));
         bool hasIgnoreOnInsert = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "IgnoreOnInsert"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.IgnoreOnInsert));
         if (hasConcurrency && hasIgnoreOnInsert)
         {
             ctx.ReportDiagnostic(Diagnostic.Create(ConcurrencyCheckWithIgnoreOnInsert,
@@ -1424,7 +1424,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         bool hasRequired = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Required"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Required));
         if (!hasRequired) return;
 
         bool isNullable = member.NullableAnnotation == NullableAnnotation.Annotated
@@ -1444,7 +1444,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         AttributeData? columnAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));
         if (columnAttr is null
             || !columnAttr.NamedArguments.Any(static na => na.Key == "StoreAs"))
             return;
@@ -1483,7 +1483,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         var columnAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Column"));
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));
         if (columnAttr is null) return;
 
         int? length = columnAttr.NamedArguments
@@ -1532,7 +1532,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckOwnedJson(SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
     {
         var ownedJsonAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "OwnedJson"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.OwnedJson));  // ITM-512
         if (ownedJsonAttr is null || member.Type.SpecialType == SpecialType.System_String) return;
 
         var location = member.Locations.FirstOrDefault() ?? type.Locations[0];
@@ -1577,7 +1577,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     private static void CheckColumnNameMismatch(SymbolAnalysisContext ctx, IPropertySymbol member, INamedTypeSymbol type)
     {
         bool hasColumn = member.GetAttributes().Any(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));  // ITM-512
         if (!hasColumn && member.Name != "Id")
         {
             var loc = member.Locations.FirstOrDefault() ?? type.Locations[0];
@@ -1597,7 +1597,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         Location memberLocation, ref HashSet<string>? assemblyTables, StringComparer identifierComparer)
     {
         var fkAttr = member.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "ForeignKey"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ForeignKey));  // ITM-512
         if (fkAttr is null) return;
 
         // PALORM003：引用不存在的表
@@ -1632,7 +1632,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext ctx, INamedTypeSymbol type, StringComparer identifierComparer)
     {
         var tableAttr = type.GetAttributes().FirstOrDefault(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));  // ITM-512
         string tableName = tableAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? type.Name;
 
         // 索引名冲突按大小写不敏感判定（ITM-510）：MySQL 索引名大小写不敏感，
@@ -1657,7 +1657,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         foreach (IPropertySymbol property in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
             var propColumnAttr = property.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));  // ITM-512
             knownColumns.Add(propColumnAttr?.ConstructorArguments.FirstOrDefault().Value as string
                 ?? property.Name);
         }
@@ -1671,10 +1671,10 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
     {
         foreach (var member in SourceGenerationValidation.EnumerateMappedProperties(type))
         {
-            if (!member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, "Unique")))  // ITM-512
+            if (!member.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Unique)))  // ITM-512
                 continue;
             var columnAttr = member.GetAttributes().FirstOrDefault(a =>
-                SourceGenerationValidation.IsPalORMAttribute(a, "Column"));  // ITM-512
+                SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Column));  // ITM-512
             string columnName = columnAttr?.ConstructorArguments.FirstOrDefault().Value as string ?? member.Name;
             string derivedName = $"ux_{tableName}_{columnName}";
             // ITM-874（r23）：派生名超长——编译期提示（不自动截断，防撞名）
@@ -1700,7 +1700,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         HashSet<string> seenNames, HashSet<string> knownColumns)
     {
         foreach (var indexAttr in type.GetAttributes().Where(a =>
-            SourceGenerationValidation.IsPalORMAttribute(a, "Index")))  // ITM-512
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Index)))  // ITM-512
         {
             var location = indexAttr.ApplicationSyntaxReference?.GetSyntax(ctx.CancellationToken).GetLocation()
                 ?? type.Locations[0];
@@ -1782,7 +1782,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             foreach (var type in GetAllTypes(module.GlobalNamespace))
             {
                 var tableAttr = type.GetAttributes().FirstOrDefault(a =>
-                    SourceGenerationValidation.IsPalORMAttribute(a, "Table"));  // ITM-512
+                    SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));  // ITM-512
                 // r19/ITM-685：无显式表名时默认表名 = 类型名（与 TableModel.cs:38-39、
                 // ValidateIndexDeclarations L1061 同口径）——此前只登记显式名，
                 // [ForeignKey("TypeName",…)] 指向裸 [Table] 实体时 PALORM003 误报。

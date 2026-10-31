@@ -120,7 +120,7 @@ public sealed class BoundedQueryCache : IQueryCache
             // S1066: 内层 if 不能与外层合并——TryRemove 必须在"条目存在但过期/类型不符"时执行，
             // 合并到外层条件会跳过 TryRemove。
 #pragma warning disable S1066
-            if (!entry.IsExpired())
+            if (!entry.IsExpired(PalORMClock.Now))
             {
                 // ITM-558：两个实体类型误用同一 WithCache key 时，硬强转会抛不含 key 的
                 // InvalidCastException。类型不匹配按 miss 处理并移除旧条目——后写者胜，
@@ -164,7 +164,8 @@ public sealed class BoundedQueryCache : IQueryCache
             EvictExpired();
             if (Volatile.Read(ref _approximateCount) >= _maxEntries) return;
         }
-        var entry = new CacheEntry(value, ttl ?? TimeSpan.FromMinutes(5));
+        TimeSpan effectiveTtl = ttl ?? TimeSpan.FromMinutes(5);
+        var entry = new CacheEntry(value, PalORMClock.Now + (long)effectiveTtl.TotalMilliseconds);
         // 计数只在"新键成功入表"时自增。不能用 TryAdd 失败后直接索引器覆盖：
         // 失败与覆盖之间若另一线程移除该键（过期/类型不符），索引器会重新插入但不经过
         // TryAdd 分支，计数漏一次 Increment 且单向向下漂移（2026-10-22 审计 C4）。
@@ -193,7 +194,8 @@ public sealed class BoundedQueryCache : IQueryCache
     private void EvictExpired()
     {
         // 物化到 List 后再 TryRemove——避免迭代中修改 ConcurrentDictionary 引发枚举器失效。
-        var expired = _cache.Where(static p => p.Value.IsExpired()).ToList();
+        long now = PalORMClock.Now;
+        var expired = _cache.Where(p => p.Value.IsExpired(now)).ToList();
         if (expired.Count > 0)
         {
             _evictions.Add(expired.Count);
@@ -205,16 +207,15 @@ public sealed class BoundedQueryCache : IQueryCache
         }
     }
 
-    private sealed class CacheEntry(object value, TimeSpan ttl)
+    private sealed class CacheEntry(object value, long expiresAtTicks)
     {
         public object Value { get; } = value;
         // A5（2026-10-01 全 API 逐项轮）：TTL 改单调时钟 Environment.TickCount64——原注释
         // "需处理 49.7 天回绕"只对 int TickCount 成立；TickCount64 为 64 位毫秒、不回绕，
         // 且消除 NTP 回拨下条目超期存活（墙钟回退时旧实现 IsExpired 读到更小 Now）。
-        // 命中路径同时省一次墙钟读取。ttl 为负时到期时刻落在过去、立即过期——与
-        // UtcNow.Add(负) 旧行为一致；TimeSpan.MaxValue 量级（约 9.2e14 ms）不溢出 long。
-        private long ExpiresAtTicks { get; } = Environment.TickCount64 + (long)ttl.TotalMilliseconds;
-        public bool IsExpired() => Environment.TickCount64 > ExpiresAtTicks;
+        // 2026-10-31：时钟经 PalORMClock 注入，测试可推进时间而不真实等待。
+        private long ExpiresAtTicks { get; } = expiresAtTicks;
+        public bool IsExpired(long now) => now > ExpiresAtTicks;
     }
 }
 

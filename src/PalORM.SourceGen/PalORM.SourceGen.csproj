@@ -23,8 +23,15 @@
     <DevelopmentDependency>true</DevelopmentDependency>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageTags>ORM;AOT;source-generator;analyzer;sqlfile</PackageTags>
+    <DefineConstants>$(DefineConstants);PALORM_SOURCEGEN</DefineConstants>
     <!-- Version 由 Directory.Build.props 集中管理 -->
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core 与 SourceGen 共享的枚举单一真源（2026-10-31）。 -->
+    <Compile Include="..\Shared\PalORMDeleteAction.cs" Link="Shared\PalORMDeleteAction.cs" />
+    <Compile Include="..\Shared\PalORMAttributeNames.cs" Link="Shared\PalORMAttributeNames.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="PalORM.SourceGen.Tests" />
