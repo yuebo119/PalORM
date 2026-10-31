@@ -172,7 +172,8 @@ public static class QueryBuilderExtensions
                 usingReusable = true;
             }
 
-            if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
+            if (!ReferenceEquals(cmd.CommandText, state.Sql)
+                && !string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
                 cmd.CommandText = state.Sql;
             cmd.CommandTimeout = state.CommandTimeoutSeconds;
             cmd.Transaction = state.BoundTransaction;
@@ -183,8 +184,11 @@ public static class QueryBuilderExtensions
             await using DbDataReader reader = await OpenReaderAsync(cmd, state.SyncIo, token).ConfigureAwait(false);
             List<T> list = await ResultListReader.ReadAllAsync(
                 reader, state.Factory,
-                state.Take.HasValue ? Math.Min(state.Take.Value, MaxPreallocatedCapacity) : 16,
+                state.Take.HasValue
+                    ? Math.Min(state.Take.Value, MaxPreallocatedCapacity)
+                    : state.OperationState.GetMaterializedCapacity<T>(),
                 token, syncRead: state.SyncRowRead).ConfigureAwait(false);
+            state.OperationState.RecordMaterializedCount<T>(list.Count);
             NotifyInterceptorsOnAfter(state.Interceptors, state.Context, state.SwStart, list.Count);
             string? key = effectiveCacheKey;
             if (key is null && state.CacheKey is not null)
@@ -276,7 +280,8 @@ public static class QueryBuilderExtensions
                 usingReusable = true;
             }
 
-            if (!string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
+            if (!ReferenceEquals(cmd.CommandText, state.Sql)
+                && !string.Equals(cmd.CommandText, state.Sql, StringComparison.Ordinal))
                 cmd.CommandText = state.Sql;
             cmd.CommandTimeout = state.CommandTimeoutSeconds;
             cmd.Transaction = state.BoundTransaction;

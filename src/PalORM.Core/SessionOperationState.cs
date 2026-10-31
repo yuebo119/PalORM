@@ -501,6 +501,32 @@ internal sealed class SessionOperationState
     /// 依据与二次型签名见 <see cref="PrewarmCurrentOperationOwner"/> 的门槛 1→2 段。</summary>
     internal const int PrewarmThreshold = 2;
 
+    // ─── 物化容量启发（M4.6，2026-10-31：从 DataSession 移入，LINQ 与直查族共享）──
+    private System.Collections.Concurrent.ConcurrentDictionary<Type, int>? _materializedCapacity;
+
+    /// <summary>取会话内上次同实体物化行数（无记录 16）。</summary>
+    internal int GetMaterializedCapacity<T>() where T : class, new()
+        => _materializedCapacity is not null && _materializedCapacity.TryGetValue(typeof(T), out int cap)
+            ? cap
+            : 16;
+
+    /// <summary>记录物化行数（上界内 hint；小结果集不记）。同值不写，避免重复读同规模
+    /// 结果集时每次一条 ConcurrentDictionary 写锁。</summary>
+    internal void RecordMaterializedCount<T>(int count) where T : class, new()
+    {
+        int recorded = Math.Min(count, SqlLimits.MaxMaterializedCapacityHint);
+        if (recorded <= 16)
+            return;
+        System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
+        if (dict is null)
+        {
+            System.Collections.Concurrent.ConcurrentDictionary<Type, int> created = new();
+            dict = Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
+        }
+        if (!dict.TryGetValue(typeof(T), out int previous) || previous != recorded)
+            dict[typeof(T)] = recorded;
+    }
+
     internal object EnterTransactionFlow()
     {
         lock (_sync)

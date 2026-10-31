@@ -39,12 +39,16 @@ internal static class ResultListReader
 
         initialCapacity = Math.Max(1, initialCapacity);
         var list = new List<T>(initialCapacity);
+        // M4.6（2026-10-31）：首行读与 onFirstRow 提到循环外——原实现在循环体内每行判
+        // list.Count == 0，热路径白付一次分支；语义不变（仅首行触发一次）。
+        if (!await ReadNextAsync().ConfigureAwait(false))
+            return list;
+        onFirstRow?.Invoke(reader);
+        list.Add(factory(reader));
         while (list.Count < initialCapacity)
         {
             if (!await ReadNextAsync().ConfigureAwait(false))
                 return list;
-            if (list.Count == 0)
-                onFirstRow?.Invoke(reader);
             list.Add(factory(reader));
         }
 

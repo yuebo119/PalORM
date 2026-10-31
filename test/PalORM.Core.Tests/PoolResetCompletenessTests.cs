@@ -46,7 +46,7 @@ public sealed class PoolResetCompletenessTests
         "_insertWriteOps", "_updateWriteOps", "_getByKeyReadOps", "_deleteWriteOps",
         "_upsertWriteOps", "_softDeleteWriteOps",
         "_parallelReadConnections", "_idleParallelReadConnections",
-        "_materializedCapacity", "_readConnection",
+        "_readConnection",
         "_readConnProvider", "_readConnReturner",
         "_lastMigrationSkippedIndexes",
         "_connectionStateMayBeDirty",
@@ -84,6 +84,8 @@ public sealed class PoolResetCompletenessTests
         "_disposeTask",
         // 跨租期保留
         "CompletedOps", "DisposeWaitTimeout",
+        // 跨租期保留（M4.6：物化容量启发是"上次行数"近似量，不随租期复位）
+        "_materializedCapacity",
     ];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "S3011",

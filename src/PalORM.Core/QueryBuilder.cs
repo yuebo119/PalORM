@@ -1067,19 +1067,25 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     /// <summary>查询参数绑定（延迟物化形态）——执行热路径消费；LIMIT/OFFSET 追加与子句参数
-    /// 组合成新数组（子句参数表可能是单贡献者快路径的直引用，不得就地变异）。</summary>
+    /// 组合成新数组（子句参数表可能是单贡献者快路径的直引用，不得就地变异）。
+    /// M2.7（2026-10-31 极致性能轮）：LIMIT 片段直接写入组合数组，去掉中间 limitBindings
+    /// 小数组（每次带 Take/Skip 的查询省一次 32~48B 分配与一次拷贝）。</summary>
     internal IReadOnlyList<ParameterBinding> GetQueryParameterBindings()
     {
         IReadOnlyList<ParameterBinding> parameters = GetParametersForKinds(
             _splitQuery ? QueryClauseKinds.QuerySplit : QueryClauseKinds.Query);
-        if (!_take.HasValue && !_skip.HasValue) return parameters;
-        ParameterBinding[] limitBindings = CreateLimitBindings();
-        if (limitBindings.Length == 0) return parameters;
-        if (parameters.Count == 0) return limitBindings;
-        var combined = new ParameterBinding[parameters.Count + limitBindings.Length];
+        int limitCount = LimitBindingCount;
+        if (limitCount == 0) return parameters;
+        if (parameters.Count == 0)
+        {
+            var limitOnly = new ParameterBinding[limitCount];
+            FillLimitBindings(limitOnly);
+            return limitOnly;
+        }
+        var combined = new ParameterBinding[parameters.Count + limitCount];
         for (int i = 0; i < parameters.Count; i++)
             combined[i] = parameters[i];
-        limitBindings.CopyTo(combined, parameters.Count);
+        FillLimitBindings(combined.AsSpan(parameters.Count));
         return combined;
     }
 
@@ -1750,23 +1756,37 @@ public struct QueryBuilder<T> where T : class, new()
         finally { sb.Dispose(); }
     }
 
-    /// <summary>R3（2026-10-12）：LIMIT 参数创建的单一真源——<see cref="GetQueryParameters"/> 专用
-    /// （文本侧只消费参数名，不再建参）。编号从 _parameterCount 起；形态：skip-only 单参数；
-    /// take 在场恒两参数（skip 缺省 0 占位，MySQL 序为 [skip, take]，其余 [take, skip]）。</summary>
-    private ParameterBinding[] CreateLimitBindings()
+    /// <summary>R3（2026-10-12）：LIMIT 参数的单一真源——文本侧只消费参数名，值在
+    /// <see cref="GetQueryParameterBindings"/> 组装时写入。形态：skip-only 单参数；
+    /// take 在场恒两参数（skip 缺省 0 占位，MySQL 序为 [skip, take]，其余 [take, skip]）。
+    /// M2.7（2026-10-31）：数量与填充拆开，组合数组一次分配。</summary>
+    private int LimitBindingCount
     {
-        if (!_take.HasValue && !_skip.HasValue) return System.Array.Empty<ParameterBinding>();
-        if (LiteralTakeValue != 0) return System.Array.Empty<ParameterBinding>();
+        get
+        {
+            if (!_take.HasValue && !_skip.HasValue) return 0;
+            if (LiteralTakeValue != 0) return 0;
+            return _take.HasValue ? 2 : 1;
+        }
+    }
+
+    /// <summary>把 LIMIT 绑定写入目标区间（长度必须等于 <see cref="LimitBindingCount"/>）。</summary>
+    private void FillLimitBindings(Span<ParameterBinding> destination)
+    {
         if (!_take.HasValue)
         {
-            return [CreateBinding(_skip!.Value, 0)];
+            destination[0] = CreateBinding(_skip!.Value, 0);
+            return;
         }
         if (_dialect == SqlDialect.MySql)
         {
             // MySQL 裸 OFFSET 无 LIMIT 需补位哨兵：LIMIT skip, max（skip 在前）
-            return [CreateBinding(_skip ?? 0, 0), CreateBinding(_take.Value, 1)];
+            destination[0] = CreateBinding(_skip ?? 0, 0);
+            destination[1] = CreateBinding(_take.Value, 1);
+            return;
         }
-        return [CreateBinding(_take.Value, 0), CreateBinding(_skip ?? 0, 1)];
+        destination[0] = CreateBinding(_take.Value, 0);
+        destination[1] = CreateBinding(_skip ?? 0, 1);
     }
 
     private static string GetRegisteredTableName(Type entityType)

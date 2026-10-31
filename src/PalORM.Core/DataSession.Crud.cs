@@ -1549,31 +1549,14 @@ public sealed partial class DataSession<TProvider>
     /// <summary>物化容量启发（step8-T6/M3-2）：会话内记录 (实体类型 → 上次物化行数)，
     /// 全表/宽查询的 List 初始容量取它——重复查询同表（分页轮询/报表形态）零扩容拷贝；
     /// 首次查询无记录时 16（v4.0 优化 D 原值，行为兼容）。写路径不参与。
-    /// <para>并发：作用域内读并发（EnterReadOnly 放行后合法）下 ConcurrentDictionary 兜住
-    /// 同类型并发更新——值为"上次行数"近似量，竞争只影响容量精度不影响正确性。</para></summary>
-    private System.Collections.Concurrent.ConcurrentDictionary<Type, int>? _materializedCapacity;
-
+    /// <para>M4.6（2026-10-31）：记录宿主移到 <see cref="SessionOperationState"/>——LINQ 管线
+    /// 经 <c>QueryExecutionState.OperationState</c> 共享同一份记录，直查族与 LINQ 路径的
+    /// 容量启发从此同源。并发语义不变（作用域内读并发由 ConcurrentDictionary 兜住）。</para></summary>
     private int GetMaterializedCapacity<T>() where T : class, new()
-        => _materializedCapacity is not null && _materializedCapacity.TryGetValue(typeof(T), out int cap)
-            ? cap
-            : 16;
+        => _operationState.GetMaterializedCapacity<T>();
 
     private void RecordMaterializedCount<T>(int count) where T : class, new()
-    {
-        // P2-6：只存上界内 hint——一次 10 万行全表不应让后续小查询白分配约 800 KB。
-        int recorded = Math.Min(count, SqlLimits.MaxMaterializedCapacityHint);
-        if (recorded <= 16)
-            return; // 小结果集：默认容量已覆盖，不值得一条记录
-        System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
-        if (dict is null)
-        {
-            System.Collections.Concurrent.ConcurrentDictionary<Type, int> created = new();
-            dict = Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
-        }
-        // S1：同值不写——重复读同规模结果集时避免每次一条 ConcurrentDictionary 写锁。
-        if (!dict.TryGetValue(typeof(T), out int previous) || previous != recorded)
-            dict[typeof(T)] = recorded;
-    }
+        => _operationState.RecordMaterializedCount<T>(count);
 
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。
     /// <para>[TenantAware]：冲突更新 SET 不包含 tenant_id（Insert 仍按实体值写入），
