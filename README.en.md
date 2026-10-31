@@ -305,6 +305,14 @@ using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 
 Reuse one `db` per scope (the third same-shape operation promotes a command reuse slot); `PreWarmAsync(options, count: 10)` warms the pool at startup.
 
+For per-request sessions (web/API), prefer `DataSessionPool`: the session, connection, and command reuse slots survive across requests, and transient state is reset on return. In the local SQLite benchmark, `GetAsync` is about 3.8x faster and allocates about 45% less than creating a session per operation.
+
+```csharp
+var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
+
+await using var db = await pool.RentAsync();   // DisposeAsync returns it to the pool
+```
+
 ### Migrate and seed
 
 ```csharp

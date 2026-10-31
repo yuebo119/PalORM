@@ -301,6 +301,14 @@ using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 
 同一作用域复用一个 `db`（第 3 次同形状操作自动晋升命令复用槽）；启动期可 `PreWarmAsync(options, count: 10)` 预热连接池。
 
+按请求创建会话（Web / API）建议用 `DataSessionPool`：会话、连接、命令复用槽跨请求存活，归还时瞬态状态复位。本机 SQLite 基准中，`GetAsync` 比每操作新建会话快约 3.8 倍、分配低约 45%。
+
+```csharp
+var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
+
+await using var db = await pool.RentAsync();   // DisposeAsync 即归还，不关闭物理连接
+```
+
 ### 建表与种子
 
 ```csharp
