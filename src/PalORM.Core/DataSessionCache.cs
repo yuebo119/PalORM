@@ -69,6 +69,24 @@ internal static class DataSessionCache
     /// 命中路径零字符串工作。</summary>
     internal static readonly ConcurrentDictionary<
         (Type EntityType, SqlDialect Dialect, string Columns, bool Tenant), string> PartialUpdateSqlCache = new();
+
+    /// <summary>测试隔离（2026-10-31）：注册表恢复到测试前快照时清空全部跨类型缓存。
+    /// 键含实体类型，恢复后同一类型可能换表名/列集，旧条目会让热路径读到陈旧 SQL。
+    /// <c>DataSession&lt;TProvider&gt;.SqlSlots&lt;T&gt;</c> 的闭式泛型静态槽当前不在此清理范围内
+    ///（测试登记见 PoolResetCompletenessTests 与评审报告 P2-1 残余项）。</summary>
+    internal static void ClearForTesting()
+    {
+        UpsertShapeCache.Clear();
+        UpdateRowParamsCache.Clear();
+        SelectColumnsCache.Clear();
+        QualifiedSelectColumnsCache.Clear();
+        FilterFormsCache.Clear();
+        TenantAppendFragmentCache.Clear();
+        UpsertTenantGuardedSqlCache.Clear();
+        BatchUpdateContextCache.Clear();
+        TypedKeyIdentityCache.Clear();
+        PartialUpdateSqlCache.Clear();
+    }
 }
 
 /// <summary>默认过滤（软删/租户）的三种拼接形态。空过滤时为 <see cref="Empty"/>（三项全空串），

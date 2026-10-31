@@ -691,6 +691,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     bool IQuerySessionResilience.SessionResilienceConfigured => ResilienceConfigured;
     bool IQuerySessionResilience.SessionDirectFirstAllowed => DirectFirstReadAllowed;
     int IQuerySessionResilience.ResilienceGeneration => ResilienceGeneration;
+    void IQuerySessionResilience.MarkRawSqlStateUnknown(DbConnection connection)
+        => MarkConnectionStateUnknownForRawSql(connection);
 
     /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。
     /// <para><b>并发契约（OPS-001，2026-09-23）</b>：本入口<b>不占操作门禁</b>——它是给调用方
@@ -837,6 +839,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         _ignoreFilters = false;
         _tenantId = null;
         _tenantScopeEntry = null;
+        _lastMigrationResult = null;
         _isolationLevel = System.Data.IsolationLevel.ReadCommitted;
         Volatile.Write(ref _options, _poolBaseOptions!);
         _commandTimeoutSeconds = _poolBaseOptions!.CommandTimeoutSeconds;
@@ -1078,7 +1081,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     // 事故——见该类抑制理由）；写入经静态 Store 方法（S2696）。
     private static EntityRuntimeInfo GetEntityInfo<T>() where T : class, new()
     {
-        EntityRuntimeInfo? cached = EntityInfoCache.Per<T>.Info;
+        EntityRuntimeInfo? cached = EntityInfoCache.Get<T>();
         if (cached is not null)
             return cached;
         if (!PalORM_Runtime.CurrentState._entityInfo.TryGetValue(typeof(T), out EntityRuntimeInfo? info))
@@ -1091,7 +1094,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// （投影类型只有行工厂，没有 CRUD 元数据）。冷路径才查一次注册表，命中静态缓存后零查找。</summary>
     private static EntityRuntimeInfo GetEntityInfoForCrud<T>() where T : class, new()
     {
-        if (EntityInfoCache.Per<T>.Info is { } cached)
+        if (EntityInfoCache.Get<T>() is { } cached)
             return cached;
         if (!PalORM_Runtime.CurrentState._crudMetadatas.ContainsKey(typeof(T)))
             throw new InvalidOperationException($"Type '{typeof(T).Name}' has no generated CRUD.");
@@ -1108,7 +1111,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// TableNames），故不走 EntityRuntimeInfo 视图而走 RowFactories 注册表。</summary>
     internal static Func<DbDataReader, T> GetRowFactory<T>()
     {
-        object? cached = EntityInfoCache.FactoryPer<T>.Factory;
+        object? cached = EntityInfoCache.GetFactory<T>();
         if (cached is not null)
             return (Func<DbDataReader, T>)cached;
         if (!PalORM_Runtime.RowFactories.TryGetValue(typeof(T), out object? factory))
@@ -1353,12 +1356,18 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
 
     /// <summary>原生 SQL / 存储过程 / DDL / 裸连接改写了连接态——通知 Provider 把该物理连接
     /// 标记为"下次会话初始化需复位"（SQLite 实现只重设 foreign_keys；网络驱动默认 no-op）。
-    /// 2026-10-22 终审 P1-8：会话层同时置脏标记，池化租出时对 PG/MySQL 执行方言复位。</summary>
-    internal void MarkConnectionStateUnknownForRawSql()
+    /// 2026-10-22 终审 P1-8：会话层同时置脏标记，池化租出时对 PG/MySQL 执行方言复位。
+    /// <para><paramref name="connection"/> 为实际执行原始 SQL 的连接（读路由/并行读场景可能不是
+    /// 主连接）；省略时使用主连接。</para></summary>
+    internal void MarkConnectionStateUnknownForRawSql(DbConnection? connection = null)
     {
         Volatile.Write(ref _connectionStateMayBeDirty, 1);
-        TProvider.MarkConnectionStateUnknown(_conn);
+        TProvider.MarkConnectionStateUnknown(connection ?? _conn);
     }
+
+    /// <summary>测试观测点：会话级连接态脏标记（P1-3 回归用）。</summary>
+    internal bool ConnectionStateMayBeDirtyForTests
+        => Volatile.Read(ref _connectionStateMayBeDirty) != 0;
 
     /// <summary>全量物化的逐行读取是否走同步叶子——进程内引擎恒真；网络驱动需
     /// <see cref="DbOptions.UseSynchronousRowRead"/> 与 Provider 能力同时成立（MySQL 实测

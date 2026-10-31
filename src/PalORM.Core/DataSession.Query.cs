@@ -368,7 +368,7 @@ public sealed partial class DataSession<TProvider>
                 BindFormattableParameters(cmd, sql);
             }
 
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            await using DbDataReader reader = await ExecuteReaderAsync(cmd, ct).ConfigureAwait(false);
             // A1：reader 成功打开即证明连接本轮可用——先标记健康（早终止消费如 First/Single 族
             // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
             // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
@@ -463,7 +463,7 @@ public sealed partial class DataSession<TProvider>
             ApplyReusableCommandState(reusedQuery, activeTransaction, queryCommandText);
             if (_querySlot is { } querySlot)
                 await querySlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
-            await using DbDataReader reusedReader = await reusedQuery.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            await using DbDataReader reusedReader = await ExecuteReaderAsync(reusedQuery, ct).ConfigureAwait(false);
             List<T> reusedList = await ResultListReader.ReadAllAsync(
                 reusedReader, rowFactory, GetMaterializedCapacity<T>(), ct,
                 _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null,
@@ -479,7 +479,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _commandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
 
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using DbDataReader reader = await ExecuteReaderAsync(cmd, ct).ConfigureAwait(false);
         // ADR-A 首行列序校验经 onFirstRow 保持"仅在有首行时执行一次"；关闭校验时传 null
         //（Validate 关闭即空操作，省掉每次调用的委托判断）。static lambda 按泛型实例缓存，零分配。
         List<T> list = await ResultListReader.ReadAllAsync(
@@ -524,7 +524,7 @@ public sealed partial class DataSession<TProvider>
             ApplyReusableCommandState(reused, activeTransaction, commandText);
             if (_querySlot is { } structSlot)
                 await structSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
-            await using DbDataReader reusedReader = await reused.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, ct).ConfigureAwait(false);
             return await ResultListReader.ReadAllAsync(
                 reusedReader, rowFactory, 16, ct,
                 _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null,
@@ -537,7 +537,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = commandText;
         cmd.CommandTimeout = _commandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using DbDataReader reader = await ExecuteReaderAsync(cmd, ct).ConfigureAwait(false);
         List<T> list = await ResultListReader.ReadAllAsync(
             reader, rowFactory, 16, ct,
             _options.ValidateQueryColumnOrder ? static r => ColumnOrderValidator.Validate<T>(r, true) : null,
@@ -616,7 +616,7 @@ public sealed partial class DataSession<TProvider>
             ApplyReusableCommandState(reusedScalar, scalarTransaction, scalarCommandText);
             if (_querySlot is { } scalarSlot)
                 await scalarSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
-            object? reusedResult = await reusedScalar.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            object? reusedResult = await ExecuteScalarCoreAsync(reusedScalar, ct).ConfigureAwait(false);
             return NormalizeScalarResult<T>(reusedResult);
         }
 
@@ -625,7 +625,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = scalarCommandText;
         cmd.CommandTimeout = _commandTimeoutSeconds;
         BindFormattableParameters(cmd, sql);
-        object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        object? result = await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false);
         lease.MarkHealthy();
         return NormalizeScalarResult<T>(result);
     }

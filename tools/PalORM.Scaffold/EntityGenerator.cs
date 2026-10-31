@@ -45,16 +45,17 @@ internal static class EntityGenerator
             string fullType = needsNullableSuffix ? csharpType + "?" : csharpType;
 
             sb.Append("    ");
-            if (col.IsPrimaryKey && !hasKey)
+            bool isFirstKey = col.IsPrimaryKey && !hasKey;
+            if (isFirstKey)
             {
-                // 自增 PK 标记 AutoIncrement=true
-                sb.Append("[Key").Append(col.IsAutoIncrement ? "(AutoIncrement = true)" : "").Append("] ");
+                // KeyAttribute.AutoIncrement 默认 true：非自增主键必须显式 false，
+                // 否则字符串/Guid 主键触发 PALORM022，应用赋值的 int/long 主键被排除出 INSERT。
+                sb.Append(col.IsAutoIncrement ? "[Key(AutoIncrement = true)] " : "[Key(AutoIncrement = false)] ");
                 hasKey = true;
             }
-            else if (needsColumnAttr)
-            {
+            // [Column] 与 [Key] 独立：主键列名与属性名不同时同样需要列映射。
+            if (needsColumnAttr)
                 sb.Append("[Column(\"").Append(col.Name).Append("\")] ");
-            }
             sb.Append("public ").Append(fullType).Append(' ').Append(propertyName).Append(" { get; set; }");
             if (isReferenceType)
                 sb.Append(" = default!;");

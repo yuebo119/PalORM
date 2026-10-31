@@ -3,11 +3,17 @@ using System.Data.Common;
 namespace PalORM;
 
 /// <summary>查询拦截器接口——在查询执行前后注入自定义行为。
-/// <para><b>覆盖面（ITM-513/547；R3/v5.6.0 扩展）</b>: 作用于实体 SELECT 执行管线（ToListAsync/FirstOrDefault 族）、
-/// QueryBuilder UPDATE（ExecuteNonQueryAsync）与 <see cref="DataSession{TProvider}.ExecuteAsync"/>
-/// （原始 DDL/DML，R3 接入）——三者均三段式 OnBefore/OnAfter/OnError。
-/// INSERT/DELETE/Bulk/存储过程/QueryMultiple（流式多结果集）<b>不经过</b>拦截器——
-/// 完整审计请用数据库层审计或 OpenTelemetry（WithTracing）。</para></summary>
+/// <para><b>覆盖矩阵（ITM-513/547；R3/v5.6.0 扩展）</b>：</para>
+/// <list type="bullet">
+/// <item><b>覆盖</b>：实体 SELECT 执行管线（ToListAsync/First/Single 族）、QueryBuilder UPDATE
+/// （ExecuteNonQueryAsync）、<see cref="DataSession{TProvider}.ExecuteAsync"/>（原始 DDL/DML）与
+/// 查询管道（QueryPipeline）。</item>
+/// <item><b>不覆盖</b>：实体 Insert/Update/Delete/Save、Bulk 家族、StoredProc、
+/// QueryMultiple 流式多结果集。</item>
+/// </list>
+/// <para><b>定位</b>：本接口不是全量 SQL 审计机制。写入审计、存储过程审计与多结果集审计请使用
+/// 数据库层审计（如 PG log_statement / MySQL general_log）或 OpenTelemetry（WithTracing）。
+/// 各方法的异常契约见下方。</para></summary>
 public interface IQueryInterceptor
 {
     /// <summary>拦截器优先级——数值越小越先执行（默认 100）。</summary>

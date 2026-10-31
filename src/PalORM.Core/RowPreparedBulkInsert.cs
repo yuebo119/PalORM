@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Data.Common;
 
 namespace PalORM;
@@ -17,6 +18,7 @@ namespace PalORM;
 /// 参数池形态复用 v4.6 契约：<c>InitInsertParameters</c> 一次建立 DbType，
 /// <c>BindInsertValues</c> 每行只写 Value；旧生成器程序集（无值 binder）回退
 /// 每行 Clear + <c>BindInsert</c> 的整建形态。</para></summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public static class RowPreparedBulkInsert
 {
     /// <summary>单行 INSERT 文本缓存——键 (实体类型, quotedTable)，值恒定

@@ -54,7 +54,7 @@ public sealed class QueryExecutionTests
             "{{json}} {{{0:N1}}} = {0} AND value = {10}",
             arguments);
 
-        string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 3);
+        string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 3, SqlDialect.Sqlite);
 
         await Assert.That(formatted)
             .IsEqualTo("{json} {@p3} = @p3 AND value = @p13");
@@ -69,7 +69,7 @@ public sealed class QueryExecutionTests
     {
         FormattableString sql = FormattableStringFactory.Create(format);
 
-        string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 0);
+        string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 0, SqlDialect.Sqlite);
 
         // 无插值项 → 原样返回，字面 @pN 保留
         await Assert.That(formatted).IsEqualTo(format);
@@ -85,7 +85,7 @@ public sealed class QueryExecutionTests
     {
         FormattableString sql = FormattableStringFactory.Create(format, 1);
 
-        await Assert.That(() => QueryBuilder<object>.FormatFormattableSql(sql, 0))
+        await Assert.That(() => QueryBuilder<object>.FormatFormattableSql(sql, 0, SqlDialect.Sqlite))
             .Throws<FormatException>();
     }
 }

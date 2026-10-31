@@ -52,7 +52,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
         ArgumentNullException.ThrowIfNull(sql);
         ObjectDisposedException.ThrowIf(_disposed, this);
         // 每条语句参数从 @p0 起命名（批量内每条命令的参数集合独立），复用格式化纯函数缓存
-        string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 0);
+        string formatted = QueryBuilder<object>.FormatFormattableSql(sql, 0, TProvider.Dialect);
         if (string.IsNullOrWhiteSpace(formatted))
             throw new ArgumentException(
                 "Batch statement must not be empty or whitespace; an empty statement produces invalid SQL.",

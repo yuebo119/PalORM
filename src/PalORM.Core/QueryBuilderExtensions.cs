@@ -1044,11 +1044,15 @@ public static class QueryBuilderExtensions
         try
         {
             DbConnection connection = await builder.AcquireExecutionConnectionAsync(false, ct).ConfigureAwait(false);
-            // 调用方提供的完整 SQL——可能含多语句/状态改写，标脏交给 Provider 复位。
-            builder._markStateUnknown?.Invoke(connection);
+            // 调用方提供的完整 SQL——可能含多语句/状态改写。走会话级标脏：PG/MySQL 的
+            // Provider 钩子默认是空操作，只有会话标记能让池化租出路径复位连接态。
+            if (builder._session is { } session)
+                session.MarkRawSqlStateUnknown(connection);
+            else
+                builder._markStateUnknown?.Invoke(connection);
             command = connection.CreateCommand();
             command.Transaction = builder.GetActiveTransaction();
-            command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0);
+            command.CommandText = QueryBuilder<T>.FormatFormattableSql(sql, 0, builder._dialect);
             command.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout);
             for (int i = 0; i < sql.ArgumentCount; i++)
                 command.Parameters.Add(builder._paramFactory(QueryBuilder<T>.GetParameterName(i), sql.GetArgument(i)));

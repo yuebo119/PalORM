@@ -22,11 +22,19 @@ internal static class CapabilityProbeCache<T>
 {
     private sealed record ProbeEntry(T Value, long ExpiresAtTicks);
 
+    /// <summary>容量上限（2026-10-31）：探测结果键是连接串，多租户逐租户连接串时无界增长。
+    /// 满员整体清空（探测是幂等纯函数，重建成本远低于无界驻留；与 FormattableSqlFormatter
+    /// 的自愈式清空同纪律）。</summary>
+    private const int MaxEntries = 256;
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "S2743:StaticFieldInGenericType",
         Justification = "按 T 分字典正是本底座的设计语义（local_infile 与版本形态两类探测互不共享、"
         + "互不互撞，类文档第三段）；消费面封闭于本程序集与 Provider 程序集的两处探测点，"
         + "不存在需要跨闭合类型共享字典的场景。")]
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProbeEntry> Cache = new();
+
+    /// <summary>当前条目数（测试观测点，2026-10-31）。</summary>
+    internal static int CountForTests => Cache.Count;
 
     /// <summary>命中未过期条目直接返回；否则执行 <paramref name="probe"/> 并写入缓存后返回。
     /// 并发同键未命中时可能各探一次（幂等探测，与原 ConditionalWeakTable.AddOrUpdate 同
@@ -44,6 +52,8 @@ internal static class CapabilityProbeCache<T>
         }
 
         T value = await probe(ct).ConfigureAwait(false);
+        if (Cache.Count >= MaxEntries)
+            Cache.Clear();
         Cache[key] = new ProbeEntry(value, Environment.TickCount64 + ttlMilliseconds);
         NegativeUntil.TryRemove(key, out _);   // R3：探测成功清除负结果标记
         return value;

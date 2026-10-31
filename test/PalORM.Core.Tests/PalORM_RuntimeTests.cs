@@ -112,6 +112,21 @@ public sealed class PalORM_RuntimeTests
     }
 
     [Test]
+    public async Task EntityInfoCache_InvalidatesOnRestoreStateForTesting()
+    {
+        _ = new MergedViewEntity();
+        PalORM_Runtime.Register(CreateFragment<MergedViewEntity>("merged_view_gen", "merged_col"));
+        EntityRuntimeInfo info = PalORM_Runtime.CurrentState._entityInfo[typeof(MergedViewEntity)];
+        EntityInfoCache.Store<MergedViewEntity>(info);
+
+        await Assert.That(EntityInfoCache.Get<MergedViewEntity>()).IsNotNull();
+
+        PalORM_Runtime.RestoreStateForTesting(_stateSnapshot!);
+
+        await Assert.That(EntityInfoCache.Get<MergedViewEntity>()).IsNull();
+    }
+
+    [Test]
     public async Task Register_BuildsMergedEntityInfoView_ConsistentWithSourceDictionaries()
     {
         // P1-2（2026-10-12 全量重读）：合并视图 _entityInfo 的完整性与一致性锁定——

@@ -20,6 +20,7 @@ public sealed class PoolResetCompletenessTests
     [
         "_ignoreFilters", "_tenantId", "_tenantScopeEntry", "_isolationLevel",
         "_options", "_resilience", "_commandTimeoutSeconds",
+        "_lastMigrationResult",
     ];
 
     /// <summary>跨租期保留的字段（含理由）：

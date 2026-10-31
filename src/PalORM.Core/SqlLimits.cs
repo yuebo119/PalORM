@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace PalORM;
 
 /// <summary>SQL 协议与批量路径的共享上限——审计 2026-09-19 CORE-010：魔法数字单点化。
@@ -5,6 +7,7 @@ namespace PalORM;
 /// 变更需多点同步、漂移风险真实；收敛后单一实现点可 grep 验证。
 /// <para><b>可见性</b>：标 public 而非 internal——Provider 是独立程序集需跨程序集访问。
 /// 仍是 PalORM 内部 API（不写入公共文档/不保证兼容，同 <see cref="BulkOperationFramework"/> 口径）。</para></summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public static class SqlLimits
 {
     /// <summary>单条语句绑定参数上限——PostgreSQL 协议无符号 16 位上限（65535，三方言最严）。

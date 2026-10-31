@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Data.Common;
 
 namespace PalORM;
@@ -9,6 +10,7 @@ namespace PalORM;
 /// 调用方可通过 Data 键追溯清理链。</para>
 /// <para><b>可见性</b>：标 public 而非 internal——PalORM.PostgreSql / PalORM.MySql / PalORM.Sqlite
 /// 是独立程序集，需跨程序集访问。仍是 PalORM 内部 API（不写入公共文档/不保证兼容）。</para></summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public static class BulkOperationFramework
 {
     /// <summary>批量写入共用的插入元数据前置守卫——审计 2026-09-19 PROV-010：四处同型守卫

@@ -46,7 +46,7 @@ public sealed partial class DataSession<TProvider>
         // 刀1（2026-10-13）：命中每类型静态缓存后零字典查找（未注册首查不缓存，
         // 精确错误消息仍走 ThrowFromNotRegistered 兼容层）。
         EntityRuntimeInfo info;
-        if (EntityInfoCache.Per<T>.Info is not { } cachedInfo)
+        if (EntityInfoCache.Get<T>() is not { } cachedInfo)
         {
             PalORM_Runtime.RuntimeRegistryState state = PalORM_Runtime.CurrentState;
             if (!state._entityInfo.TryGetValue(typeof(T), out EntityRuntimeInfo? loaded))
@@ -370,7 +370,9 @@ public sealed partial class DataSession<TProvider>
         }
         catch
         {
-            // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面收口）——ITM-867 同哲学
+            // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面收口）——ITM-867 同哲学。
+            // 槽必须置空：否则后续操作会拿到已释放命令，形成持续失败。
+            _reusableInsert = null;
             cmd.Dispose();
             throw;
         }
@@ -424,6 +426,8 @@ public sealed partial class DataSession<TProvider>
         }
         catch
         {
+            // 同 insert/update 槽：槽置空，避免后续操作拿到已释放命令。
+            _reusableUpsert = null;
             cmd.Dispose();
             throw;
         }
@@ -479,7 +483,9 @@ public sealed partial class DataSession<TProvider>
         }
         catch
         {
-            // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面收口）——ITM-867 同哲学
+            // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面收口）——ITM-867 同哲学。
+            // 槽必须置空，避免后续操作拿到已释放命令。
+            _reusableUpdate = null;
             cmd.Dispose();
             throw;
         }
@@ -570,7 +576,8 @@ public sealed partial class DataSession<TProvider>
         catch
         {
             // 旧槽释放抛出时新命令未注册（10-05 审计 P3 同型面）——与 ITM-867 同哲学：
-            // 释放新建资源后再抛
+            // 释放新建资源后再抛。槽置空避免后续操作拿到已释放命令。
+            _reusableGetByKey = null;
             cmd.Dispose();
             throw;
         }
@@ -635,6 +642,8 @@ public sealed partial class DataSession<TProvider>
         }
         catch
         {
+            // 同 insert/update 槽：槽置空，避免后续操作拿到已释放命令。
+            _reusableDelete = null;
             cmd.Dispose();
             throw;
         }
@@ -691,6 +700,8 @@ public sealed partial class DataSession<TProvider>
         }
         catch
         {
+            // 同 insert/update 槽：槽置空，避免后续操作拿到已释放命令。
+            _reusableSoftDelete = null;
             cmd.Dispose();
             throw;
         }
@@ -1492,7 +1503,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandTimeout = _commandTimeoutSeconds;
         BindDefaultFilterParameters(cmd, info.Features);
 
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+        await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
         // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
         List<T> list = await ResultListReader.ReadAllAsync(
             reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token,
@@ -1639,7 +1650,7 @@ public sealed partial class DataSession<TProvider>
         cmd.CommandText = tenantGuarded
             ? UpsertTenantGuardedSql<T>(sqls.UpsertReturning)
             : sqls.UpsertReturning;
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using DbDataReader reader = await ExecuteReaderAsync(cmd, ct).ConfigureAwait(false);
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
             return ((Func<DbDataReader, T>)plan.RowFactory)(reader);
         return entity;

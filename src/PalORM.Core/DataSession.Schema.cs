@@ -24,6 +24,13 @@ public sealed partial class DataSession<TProvider>
 
     private List<string> _lastMigrationSkippedIndexes = [];
 
+    /// <summary>最近一次迁移的结构化结果（成功或失败）。失败时异常 Data 的
+    /// <c>PalORM.MigrationResult</c> 键携带同一对象；每次 <see cref="MigrateWithResultAsync"/>
+    /// 开头清空。</summary>
+    public MigrationResult? LastMigrationResult => _lastMigrationResult;
+
+    private MigrationResult? _lastMigrationResult;
+
     /// <summary>见 DataSession 主文档。</summary>
     public async ValueTask<List<string>> ValidateSchemaAsync<T>(CancellationToken ct = default) where T : class, new()
     {
@@ -69,16 +76,29 @@ public sealed partial class DataSession<TProvider>
     /// 现在缺键时零副作用。建表 DDL 经 <see cref="CreateBatch"/> 单次往返
     /// （PG 真 DbBatch / MySQL 驱动侧批处理 / SQLite 顺序回退），N 表 N 次往返 → 1 次；
     /// 索引 DDL 保持逐条——MySQL 1061 幂等跳过是逐条 catch 语义，批内单条失败无法定位跳过项。</para>
+    /// <para><b>原子性（2026-10-31）</b>：PG/SQLite 的表与索引 DDL 在单个事务内执行，
+    /// 失败即回滚；MySQL DDL 自动提交，无法整体回滚，失败时经
+    /// <see cref="MigrateWithResultAsync"/> 的结果对象报告已执行与失败项。
+    /// 兼容入口保留原签名，内部委托给 <see cref="MigrateWithResultAsync"/> 并丢弃结果。</para>
     /// <para><b>schema 变更后刷新计划器统计（2026-09-26）</b>：SQLite 跑 <c>PRAGMA optimize</c>、
     /// PostgreSQL 跑 <c>ANALYZE</c>（同构对应物，见 <c>docs/性能优化方案-step5.md</c> §九-E）；
     /// MySQL 不自动执行（InnoDB ANALYZE TABLE 是显式运维操作而非迁移副作用，经
     /// <see cref="DbOptions.SessionSetupSql"/> 按需执行）。</para></summary>
     public async ValueTask MigrateAsync(CancellationToken ct = default)
+        => _ = await MigrateWithResultAsync(ct).ConfigureAwait(false);
+
+    /// <summary>迁移并返回结构化结果（2026-10-31）：已执行表、已创建索引、重复跳过索引与失败索引。
+    /// <para>失败时原异常照常抛出，结果同时挂到 <see cref="Exception.Data"/> 的
+    /// <c>PalORM.MigrationResult</c> 键，并保存在 <see cref="LastMigrationResult"/>。
+    /// PG/SQLite 失败会回滚事务（<see cref="MigrationResult.RolledBack"/> 为 true）；
+    /// MySQL 的 DDL 自动提交，已执行部分不会回滚。</para></summary>
+    public async ValueTask<MigrationResult> MigrateWithResultAsync(CancellationToken ct = default)
     {
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         // DDL 与会话级 PRAGMA/ANALYZE 都可能改写连接态——标脏，下一次会话初始化统一复位。
         MarkConnectionStateUnknownForRawSql();
         _lastMigrationSkippedIndexes = [];  // ITM-765：每次迁移重置跳过清单
+        _lastMigrationResult = null;
         // 评审 2026-09-02 第二批（ADR-J）：实体全集以 TableNames 为键源——legacy CreateTableSql
         // 已从生成物移除，方言 DDL（CreateTableSqlByDialect）是唯一执行真源。
         int entityCount = PalORM_Runtime.TableNames.Count;
@@ -134,18 +154,41 @@ public sealed partial class DataSession<TProvider>
 
         var tableDdls = new List<string>(entityCount);
         var indexDdlGroups = new List<IReadOnlyList<string>>(entityCount);
-        foreach (var (_, ddl, indexDdls) in tableEntries)
+        var tableNames = new List<string>(entityCount);
+        foreach (var (type, ddl, indexDdls) in tableEntries)
         {
             tableDdls.Add(ddl);
             indexDdlGroups.Add(indexDdls);
+            tableNames.Add(PalORM_Runtime.TableNames[type]);
         }
 
-        // L4：建表 DDL 一次往返（owner 重入外层迁移租约）
-        if (tableDdls.Count > 0)
-            await ApplyTableDdlAsync(tableDdls, operation, ct).ConfigureAwait(false);
+        var accumulator = new MigrationAccumulator();
+        bool transactional = TProvider.Dialect is SqlDialect.Sqlite or SqlDialect.PostgreSql;
 
-        foreach (IReadOnlyList<string> indexDdls in indexDdlGroups)
-            await ApplyIndexDdlAsync(indexDdls, ct).ConfigureAwait(false);
+        MigrationResult Snapshot(bool rolledBack) => new(
+            tableNames.ToArray(),
+            accumulator.CreatedIndexes.ToArray(),
+            accumulator.SkippedIndexes.ToArray(),
+            accumulator.FailedIndexes.ToArray(),
+            transactional,
+            rolledBack);
+
+        try
+        {
+            await ExecuteMigrationDdlAsync(
+                operation, tableDdls, indexDdlGroups, accumulator, transactional, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            MigrationResult failedResult = Snapshot(rolledBack: transactional);
+            _lastMigrationResult = failedResult;
+            exception.Data["PalORM.MigrationResult"] = failedResult;
+            throw;
+        }
+
+        MigrationResult result = Snapshot(rolledBack: false);
+        _lastMigrationResult = result;
 
         // schema 变更后刷新计划器统计（各服务端/引擎的官方建议动作）：
         //   SQLite（2026-09-26）：PRAGMA optimize——官方对 schema 变更的建议；本引擎无 STAT4，
@@ -168,6 +211,7 @@ public sealed partial class DataSession<TProvider>
             analyzeCmd.CommandText = analyzeSql;
             await analyzeCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+        return result;
     }
 
     /// <summary>ITM-723：零超时配置（= ADO.NET 无限等待）下 DDL/探活的有限兜底上限。</summary>
@@ -185,6 +229,57 @@ public sealed partial class DataSession<TProvider>
     /// <c>await db.InsertAsync(e); db.EvictQueryCache();</c></para></summary>
     public void EvictQueryCache()
         => (_options.QueryCache ?? CacheStore.Default).Clear();
+
+    /// <summary>迁移 DDL 执行编排（2026-10-31）：PG/SQLite 走单事务，MySQL 走逐条执行。
+    /// 事务路径由 <see cref="RunInTransactionScopeAsync"/> 负责提交/回滚与登记还原。</summary>
+    private async ValueTask ExecuteMigrationDdlAsync(
+        SessionOperationState.SessionOperationLease operation,
+        List<string> tableDdls,
+        List<IReadOnlyList<string>> indexDdlGroups,
+        MigrationAccumulator accumulator,
+        bool transactional,
+        CancellationToken ct)
+    {
+        if (transactional)
+        {
+            await RunInTransactionScopeAsync(
+                operation.Owner,
+                async (_, token) =>
+                {
+                    await ApplyTableDdlAsync(tableDdls, operation, token).ConfigureAwait(false);
+                    await ApplyIndexDdlGroupsAsync(indexDdlGroups, accumulator, token)
+                        .ConfigureAwait(false);
+                    return true;
+                },
+                ct).ConfigureAwait(false);
+            return;
+        }
+
+        await ApplyTableDdlAsync(tableDdls, operation, ct).ConfigureAwait(false);
+        await ApplyIndexDdlGroupsAsync(indexDdlGroups, accumulator, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>逐组执行索引 DDL；组内逐条（MySQL 1061 幂等跳过需要逐条 catch）。</summary>
+    private async ValueTask ApplyIndexDdlGroupsAsync(
+        List<IReadOnlyList<string>> indexDdlGroups,
+        MigrationAccumulator accumulator,
+        CancellationToken ct)
+    {
+        foreach (IReadOnlyList<string> indexDdls in indexDdlGroups)
+        {
+            await ApplyIndexDdlAsync(indexDdls, accumulator, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>迁移结果累加器（2026-10-31）：把三个可变列表收敛为单参数，避免 S107。</summary>
+    private sealed class MigrationAccumulator
+    {
+        internal List<string> CreatedIndexes { get; } = [];
+
+        internal List<string> SkippedIndexes { get; } = [];
+
+        internal List<MigrationFailure> FailedIndexes { get; } = [];
+    }
 
     /// <summary>建表 DDL 批执行（L4 单次往返）+ 并发建表竞态兜底。
     /// <para><b>竞态兜底（2026-09-28，PG 实证）</b>：CREATE TABLE IF NOT EXISTS 的存在性检查
@@ -231,7 +326,9 @@ public sealed partial class DataSession<TProvider>
     /// 才可见（默认会话是 NullLogger，IsEnabled 恒 false）。此处<b>不得</b>因日志不可见而改为
     /// 抛异常——那会把正常幂等升级为硬失败（r20 曾如此修复并引入回归，r21 撤销）。</para></summary>
     private async ValueTask ApplyIndexDdlAsync(
-        IReadOnlyList<string> indexDdlStatements, CancellationToken ct)
+        IReadOnlyList<string> indexDdlStatements,
+        MigrationAccumulator accumulator,
+        CancellationToken ct)
     {
         foreach (string indexDdl in indexDdlStatements)
         {
@@ -241,6 +338,7 @@ public sealed partial class DataSession<TProvider>
             try
             {
                 await indexCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                accumulator.CreatedIndexes.Add(indexDdl);
             }
             catch (DbException exception) when (TProvider.IsDuplicateSchemaObject(exception))
             {
@@ -252,6 +350,13 @@ public sealed partial class DataSession<TProvider>
                     "Index DDL skipped as duplicate object; verify no cross-entity index name collision: {IndexDdl}",
                     indexDdl);
                 _lastMigrationSkippedIndexes.Add(indexDdl);
+                accumulator.SkippedIndexes.Add(indexDdl);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // 失败项进入结构化结果；异常照常抛出，事务路径由上层回滚。
+                accumulator.FailedIndexes.Add(new MigrationFailure(indexDdl, exception.GetType().Name));
+                throw;
             }
         }
     }
@@ -295,3 +400,21 @@ public sealed partial class DataSession<TProvider>
         return _conn;
     }
 }
+
+/// <summary>迁移结果（2026-10-31）——成功与失败共用的结构化报告。
+/// <para><see cref="Tables"/> 是本次迁移涉及的实体表名（DDL 已提交执行；MySQL 上可能部分已提交）。
+/// <see cref="CreatedIndexes"/> 是执行成功且未被幂等跳过的索引 DDL。
+/// <see cref="SkippedIndexes"/> 是重名对象幂等跳过的索引 DDL。
+/// <see cref="FailedIndexes"/> 是失败的索引 DDL 与异常类型名。
+/// <see cref="Transactional"/> 为 true 表示该方言走事务 DDL（PG/SQLite）；
+/// <see cref="RolledBack"/> 为 true 表示失败路径已回滚（MySQL 恒 false）。</para></summary>
+public sealed record MigrationResult(
+    IReadOnlyList<string> Tables,
+    IReadOnlyList<string> CreatedIndexes,
+    IReadOnlyList<string> SkippedIndexes,
+    IReadOnlyList<MigrationFailure> FailedIndexes,
+    bool Transactional,
+    bool RolledBack);
+
+/// <summary>迁移失败项——索引 DDL 原文与异常类型名（不含异常消息，避免拓扑信息泄露）。</summary>
+public sealed record MigrationFailure(string Statement, string ErrorType);

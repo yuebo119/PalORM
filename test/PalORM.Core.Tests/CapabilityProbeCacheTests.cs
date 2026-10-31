@@ -104,4 +104,22 @@ internal sealed class CapabilityProbeCacheTests
         await Assert.That(probes).IsEqualTo(2);
         await Assert.That(reprobed.N).IsEqualTo(2);
     }
+
+    [Test]
+    public async Task Cache_IsBounded_WhenManyKeysProbed()
+    {
+        CapabilityProbeCache<ProbeValue>.Clear();
+
+        for (int index = 0; index < 300; index++)
+        {
+            int captured = index;
+            _ = await CapabilityProbeCache<ProbeValue>.GetOrProbeAsync(
+                NewKey(),
+                60_000,
+                _ => ValueTask.FromResult(new ProbeValue(captured)),
+                default);
+        }
+
+        await Assert.That(CapabilityProbeCache<ProbeValue>.CountForTests).IsLessThanOrEqualTo(256);
+    }
 }

@@ -25,12 +25,24 @@ internal static class EntityInfoCache
     {
         /// <summary>缓存槽：null = 未查过（下次走注册表并回填）。</summary>
         public static EntityRuntimeInfo? Info;
+
+        /// <summary>写入时的注册代际——注册表恢复/热重载后旧条目自动失效。</summary>
+        public static int Generation = -1;
     }
 
-    /// <summary>静态写入入口（S2696：实例方法不直写静态字段）——仅在注册表查找成功后调用，
-    /// 每类型至多生效一次（竞态下后写覆盖，值同源等价，无害）。</summary>
+    /// <summary>读缓存：代际与当前注册表一致才命中（测试/热重载恢复后旧条目自动失效）。</summary>
+    internal static EntityRuntimeInfo? Get<T>() where T : class, new()
+        => Per<T>.Info is { } info && Per<T>.Generation == PalORM_Runtime.RegistryGeneration
+            ? info
+            : null;
+
+    /// <summary>静态写入入口（S2696：实例方法不直写静态字段）——仅在注册表查找成功后调用。
+    /// 代际随写入记录，注册表恢复后旧条目不会被读回。</summary>
     internal static void Store<T>(EntityRuntimeInfo info) where T : class, new()
-        => Per<T>.Info = info;
+    {
+        Per<T>.Info = info;
+        Per<T>.Generation = PalORM_Runtime.RegistryGeneration;
+    }
 
     /// <summary>每类型行工厂缓存槽（直查族专用）。与 <see cref="Per{T}"/> 分离：直查族
     ///（QueryAsync/QueryAsyncEnumerable/QueryFirst/QuerySingle）的 T 允许是 [Projection]
@@ -47,9 +59,22 @@ internal static class EntityInfoCache
     {
         /// <summary>缓存槽：null = 未查过（下次走 RowFactories 并回填）。</summary>
         public static object? Factory;
+
+        /// <summary>写入时的注册代际——注册表恢复/热重载后旧条目自动失效。</summary>
+        public static int Generation = -1;
     }
+
+    /// <summary>读行工厂缓存：代际一致才命中。</summary>
+    internal static object? GetFactory<T>()
+        => FactoryPer<T>.Factory is { } factory
+            && FactoryPer<T>.Generation == PalORM_Runtime.RegistryGeneration
+            ? factory
+            : null;
 
     /// <summary>行工厂缓存写入（同 <see cref="Store{T}"/> 口径）。</summary>
     internal static void StoreFactory<T>(object factory)
-        => FactoryPer<T>.Factory = factory;
+    {
+        FactoryPer<T>.Factory = factory;
+        FactoryPer<T>.Generation = PalORM_Runtime.RegistryGeneration;
+    }
 }

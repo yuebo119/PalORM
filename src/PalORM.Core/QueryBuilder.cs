@@ -12,6 +12,11 @@ internal interface IQuerySessionResilience
     bool SessionResilienceConfigured { get; }
     bool SessionDirectFirstAllowed { get; }
     int ResilienceGeneration { get; }
+
+    /// <summary>原始 SQL 入口的连接态标脏：同时设置会话级脏标记与 Provider 钩子。
+    /// <para>PG/MySQL 的 <see cref="IDbProvider.MarkConnectionStateUnknown"/> 默认是空操作，
+    /// 只有会话级标记才能让池化租出路径执行 <c>RESET ALL</c>/<c>COM_RESET_CONNECTION</c>。</para></summary>
+    void MarkRawSqlStateUnknown(DbConnection connection);
 }
 
 /// <summary>类型安全链式查询构建器——struct（值类型）。
@@ -632,7 +637,10 @@ public struct QueryBuilder<T> where T : class, new()
     public QueryBuilder<T> Raw(string literal)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(literal);
-        _markStateUnknown?.Invoke(_conn);
+        if (_session is { } session)
+            session.MarkRawSqlStateUnknown(_conn);
+        else
+            _markStateUnknown?.Invoke(_conn);
         foreach (char ch in literal)
         {
             if (IdentifierSafety.IsControlChar(ch))
@@ -1212,7 +1220,7 @@ public struct QueryBuilder<T> where T : class, new()
     }
 
     internal static string FormatFormattableSql(
-        FormattableString sql, int baseIndex, SqlDialect dialect = SqlDialect.Sqlite)
+        FormattableString sql, int baseIndex, SqlDialect dialect)
         => FormattableSqlFormatter.FormatCached(sql.Format, baseIndex, sql.ArgumentCount, dialect);
 
     private QueryBuilder<T> AddJoin<TJoin>(string joinType, FormattableString onClause)

@@ -81,6 +81,55 @@ internal sealed class ScaffoldReverseEngineeringTests
         await Assert.That(generated).Contains("BLOB NOT NULL");
     }
 
+    [Test]
+    public async Task ScaffoldedNonIdentityPrimaryKeys_DeclareAutoIncrementFalse_AndKeepColumnMapping()
+    {
+        SchemaTable table = new("accounts",
+        [
+            new SchemaColumn("user_id", "TEXT", IsPrimaryKey: true, IsAutoIncrement: false, IsNullable: false),
+            new SchemaColumn("display_name", "TEXT", IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: false),
+        ]);
+        string source = EntityGenerator.Generate(table, SchemaDialect.Sqlite, "Scaffolded");
+
+        // 非自增主键必须显式 AutoIncrement=false；主键列名与属性名不同时仍要保留 [Column]。
+        await Assert.That(source).Contains("[Key(AutoIncrement = false)]");
+        await Assert.That(source).Contains("[Column(\"user_id\")]");
+        await Assert.That(source).Contains("public string UserId { get; set; }");
+
+        // 旧形态 [Key] 默认 AutoIncrement=true，字符串主键会触发 PALORM022。
+        CSharpCompilation compilation = GeneratorTestHost.CreateCompilation(source, "ScaffoldConsumer");
+        ImmutableArray<Diagnostic> diagnostics = await compilation
+            .WithAnalyzers([new PalORMAnalyzer()])
+            .GetAnalyzerDiagnosticsAsync();
+        await Assert.That(diagnostics
+            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .Select(static diagnostic => diagnostic.Id)).IsEmpty();
+
+        // 源生成器同样应接受该实体（字符串主键 + 列映射）。
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(source);
+        await Assert.That(GeneratorTestHost.FormatErrors(result.OutputCompilation)).IsEmpty();
+    }
+
+    [Test]
+    public async Task ScaffoldedIdentityAndAssignedLongKeys_EmitCorrectAutoIncrementFlags()
+    {
+        SchemaTable identity = new("identity_rows",
+        [
+            new SchemaColumn("id", "INTEGER", IsPrimaryKey: true, IsAutoIncrement: true, IsNullable: false),
+            new SchemaColumn("name", "TEXT", IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: false),
+        ]);
+        string identitySource = EntityGenerator.Generate(identity, SchemaDialect.Sqlite, "Scaffolded");
+        await Assert.That(identitySource).Contains("[Key(AutoIncrement = true)]");
+
+        SchemaTable assigned = new("assigned_rows",
+        [
+            new SchemaColumn("id", "INTEGER", IsPrimaryKey: true, IsAutoIncrement: false, IsNullable: false),
+            new SchemaColumn("name", "TEXT", IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: false),
+        ]);
+        string assignedSource = EntityGenerator.Generate(assigned, SchemaDialect.Sqlite, "Scaffolded");
+        await Assert.That(assignedSource).Contains("[Key(AutoIncrement = false)]");
+    }
+
     private static async Task AssertBinaryAsync(string dbType, SchemaDialect dialect)
     {
         (string csharpType, bool isReferenceType) = TypeMapper.Map(dbType, dialect);

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Data.Common;
 
 namespace PalORM;
@@ -7,6 +8,7 @@ namespace PalORM;
 /// <para>职责：binder 参数数 probe 校验 → 按单语句参数上限钳制批次 →
 /// 多值 INSERT 分批执行 → 事务生命周期与异常保留清理。</para>
 /// <para>命令、回滚或事务释放失败附加到主异常，不替换原始执行失败。</para></summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public static class MultiValueBulkInsert
 {
     /// <summary>B13（2026-10-01 全 API 逐项轮）：(实体类型, quotedTable) → 引用列清单串缓存——
@@ -319,6 +321,7 @@ public static class MultiValueBulkInsert
 /// <para><b>ITM-785(r21) 说明</b>：<see cref="CreateParameter"/> 执行内核当前不消费
 /// （v4.6 参数复用路径改用 batchCmd.CreateParameter）——保留是公共契约（第三方
 /// Provider 传递参数工厂的既有形态），构造点仍要求非 null。</para></summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public readonly record struct BulkContext(
     int BatchSize,
     int MaxParametersPerStatement,

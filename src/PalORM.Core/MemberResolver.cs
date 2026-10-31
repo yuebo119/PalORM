@@ -18,6 +18,8 @@ internal static class MemberResolver
     private static class ColumnMapPer<TEntity>
     {
         internal static IReadOnlyDictionary<string, string>? Map;
+        /// <summary>写入时的注册代际——恢复/热重载后旧映射自动失效。</summary>
+        internal static int Generation = -1;
     }
 
     /// <summary>从表达式提取属性名（MemberExpression 或 UnaryExpression 包装的 MemberExpression）。
@@ -41,11 +43,14 @@ internal static class MemberResolver
     {
         string propertyName = GetMemberName(member);
         IReadOnlyDictionary<string, string>? mapping = ColumnMapPer<TEntity>.Map;
+        if (ColumnMapPer<TEntity>.Generation != PalORM_Runtime.RegistryGeneration)
+            mapping = null;
         if (mapping is null
             && PalORM_Runtime.PropertyToColumn.TryGetValue(typeof(TEntity), out var loaded))
         {
             mapping = loaded;
             ColumnMapPer<TEntity>.Map = loaded;
+            ColumnMapPer<TEntity>.Generation = PalORM_Runtime.RegistryGeneration;
         }
         if (mapping is null || !mapping.TryGetValue(propertyName, out string? columnName))
         {

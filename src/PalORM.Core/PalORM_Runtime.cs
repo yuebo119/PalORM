@@ -166,6 +166,12 @@ public static class PalORM_Runtime
 {
     private static readonly Lock _registrationLock = new();
     private static RuntimeRegistryState _state = RuntimeRegistryState.Empty;
+    private static int _registryGeneration;
+
+    /// <summary>注册代际（2026-10-31）：每次 Register 或测试状态恢复递增。
+    /// 每类型静态缓存（<see cref="EntityInfoCache"/>、<see cref="MemberResolver"/>）据此判定
+    /// 条目是否仍属于当前注册表，避免恢复/热重载后读到陈旧元数据。</summary>
+    internal static int RegistryGeneration => Volatile.Read(ref _registryGeneration);
 
     /// <summary>v3.1 性能优化：单次 Volatile.Read 取回完整不可变状态快照。
     /// <para>调用方在多个字典查找（RowFactories/TableNames/ColumnNames 等）场景应一次取快照复用，
@@ -179,6 +185,8 @@ public static class PalORM_Runtime
     {
         ArgumentNullException.ThrowIfNull(state);
         Volatile.Write(ref _state, state);
+        Volatile.Write(ref _registryGeneration, _registryGeneration + 1);
+        DataSessionCache.ClearForTesting();
     }
 
     /// <summary>类型 → 行读取工厂委托（装箱为 object，调用方按实体类型还原泛型）。</summary>
@@ -387,6 +395,7 @@ public static class PalORM_Runtime
             next._entityInfo = entityInfo.ToFrozenDictionary();
 
             Volatile.Write(ref _state, next);
+            Volatile.Write(ref _registryGeneration, _registryGeneration + 1);
         }
     }
 
