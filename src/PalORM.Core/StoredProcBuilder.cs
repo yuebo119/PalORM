@@ -21,13 +21,22 @@ public sealed class StoredProcBuilder
     private readonly List<DbParameter> _outputParams = [];
     private bool _executed;
     private readonly bool _validateColumnOrder;
+    /// <summary>M4.2（2026-10-31）：reader 打开与逐行读的同步叶子门——进程内引擎每查询/每行
+    /// 免驱动异步外壳（网络 Provider 保持真异步）。</summary>
+    private readonly bool _syncIo;
+    private readonly bool _syncRowRead;
 
     private readonly Func<string, object?, DbParameter> _paramFactory;
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:Constructor should not have more than 7 parameters",
+        Justification = "末位两个可选能力位（syncIo/syncRowRead）由 DataSession 注入；拆聚合会把参数列表问题转移回调用方。")]
     internal StoredProcBuilder(DbConnection conn, string name, TimeSpan timeout,
         Func<string, object?, DbParameter> paramFactory,
         SessionOperationState operationState,
-        bool validateColumnOrder = false)
+        bool validateColumnOrder = false,
+        bool syncIo = false,
+        bool syncRowRead = false)
     {
         _validateColumnOrder = validateColumnOrder;
         _conn = conn;
@@ -35,6 +44,8 @@ public sealed class StoredProcBuilder
         _timeout = timeout;
         _paramFactory = paramFactory;
         _operationState = operationState;
+        _syncIo = syncIo;
+        _syncRowRead = syncRowRead;
     }
 
     /// <summary>过程名白名单：字母/下划线开头，仅含字母数字、下划线和点分限定符。
@@ -158,10 +169,21 @@ public sealed class StoredProcBuilder
         cmd.Transaction = _operationState.GetActiveTransaction();
         foreach (var p in _parameters) cmd.Parameters.Add(p);
 
-        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        ColumnOrderValidator.Validate<T>(reader, _validateColumnOrder);
-        return await ResultListReader.ReadAllAsync(
-            reader, (Func<DbDataReader, T>)factory, 16, ct).ConfigureAwait(false);
+        DbDataReader reader;
+        if (_syncIo)
+        {
+            reader = OpenReaderSynchronously(cmd, ct);
+        }
+        else
+        {
+            reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        }
+        await using (reader)
+        {
+            ColumnOrderValidator.Validate<T>(reader, _validateColumnOrder);
+            return await ResultListReader.ReadAllAsync(
+                reader, (Func<DbDataReader, T>)factory, 16, ct, syncRead: _syncRowRead).ConfigureAwait(false);
+        }
     }
 
     /// <summary>执行不返回结果集。</summary>
@@ -178,6 +200,14 @@ public sealed class StoredProcBuilder
         foreach (var p in _parameters) cmd.Parameters.Add(p);
         int result = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return result;
+    }
+
+    /// <summary>同步 reader 打开叶子（M4.2）——独立非 async 方法承载，避免 CA1849/S6966；
+    /// 仅 Provider 声明 PreferSynchronousIo（进程内引擎）时进入。</summary>
+    private static DbDataReader OpenReaderSynchronously(DbCommand command, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return command.ExecuteReader();
     }
 
     /// <summary>builder 一次性契约：DbParameter 实例归属首个执行命令（provider 跟踪归属），

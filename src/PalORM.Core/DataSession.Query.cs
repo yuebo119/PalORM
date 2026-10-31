@@ -313,7 +313,8 @@ public sealed partial class DataSession<TProvider>
         MarkConnectionStateUnknownForRawSql();
         return new StoredProcBuilder(
             _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
-            _operationState, _options.ValidateQueryColumnOrder);
+            _operationState, _options.ValidateQueryColumnOrder,
+            syncIo: TProvider.PreferSynchronousIo, syncRowRead: PreferSynchronousRowRead);
     }
 
     /// <summary>流式查询——IAsyncEnumerable 恒定内存。
