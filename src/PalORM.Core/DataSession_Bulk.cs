@@ -990,7 +990,7 @@ public partial class DataSession<TProvider>
         // 已成功条目的内存状态与 DB 保持一致，重试不产生假冲突。置于内核之外：
         // 仅成功提交路径可达此处（复用外部事务时回填发生在本方法返回前，
         // 调用方随后回滚该外部事务的既有语义不变）。
-        foreach (Action increment in deferredVersionIncrements) increment();
+        foreach (DeferredVersionIncrement increment in deferredVersionIncrements) increment.Apply();
         return total;
     }
 
@@ -1005,13 +1005,13 @@ public partial class DataSession<TProvider>
         "S3776:CognitiveComplexity",
         Justification = "池化逐条 UPDATE 的分支构成：每行参数缓存命中/建池、版本实体 deferred 回填、"
             + "DbBatch/单命令两驱动形态——拆分需在方法间传参数池与回填列表，状态面更大。")]
-    private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledAsync<T>(
+    private async ValueTask<(long Total, List<DeferredVersionIncrement> Increments)> ExecuteBulkUpdatePooledAsync<T>(
         IReadOnlyList<T> entities, CrudMetadata metadata,
         Action<DbParameter[], object, int> valuesBinder,
         DbTransaction tran, CancellationToken ct)
         where T : class, new()
     {
-        List<Action> increments = [];
+        List<DeferredVersionIncrement> increments = [];
         if (entities.Count == 0) return (0, increments);
 
         // P0-1：参数数从 probe 提取而非硬算——BindUpdateValues 的参数序是
@@ -1049,12 +1049,14 @@ public partial class DataSession<TProvider>
         if (updateSql.Length == 0)
             throw new InvalidOperationException(
                 $"Type '{typeof(T).Name}' has no updatable columns.");
-        if (HasTenantFilter<T>())
+        // 参数池：一行 paramsPerRow 个 + 可选租户参数（固定名追加末尾）。
+        // M4.4（2026-10-31）：租户判定单次求值——原 SQL 包装与参数池各查一次
+        // FrozenDictionary（同一调用内单活动操作，会话态不变，两次结果恒同）。
+        bool hasTenant = HasTenantFilter<T>();
+        if (hasTenant)
             updateSql = GetUpdateWithTenantSqlFast<T>(updateSql);
         cmd.CommandText = updateSql;
 
-        // 参数池：一行 paramsPerRow 个 + 可选租户参数（固定名追加末尾）
-        bool hasTenant = HasTenantFilter<T>();
         DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
             paramsPerRow, hasTenant, _tenantParameterName, _tenantId,
             TProvider.CreateParameter);
@@ -1101,7 +1103,7 @@ public partial class DataSession<TProvider>
                 // 闭包必须捕获本次迭代的实体而非循环变量 i——lambda 在提交成功后统一执行，
                 // 届时 i 已越界（ITM-556 的延迟回放语义）
                 T entity = entities[i];
-                increments.Add(() => incrementVersion(entity));
+                increments.Add(new DeferredVersionIncrement(incrementVersion, entity));
             }
             total += affectedRows;
         }
@@ -1138,8 +1140,8 @@ public partial class DataSession<TProvider>
         int ParamsPerRow)
         where T : class, new();
 
-    private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdatePooledWithBatchAsync<T>(
-        PooledBatchUpdateInput<T> input, List<Action> increments, CancellationToken ct)
+    private async ValueTask<(long Total, List<DeferredVersionIncrement> Increments)> ExecuteBulkUpdatePooledWithBatchAsync<T>(
+        PooledBatchUpdateInput<T> input, List<DeferredVersionIncrement> increments, CancellationToken ct)
         where T : class, new()
     {
         long total = 0;
@@ -1183,7 +1185,7 @@ public partial class DataSession<TProvider>
                 for (int i = start; i < end; i++)
                 {
                     T entity = input.Entities[i];
-                    increments.Add(() => incrementVersion(entity));
+                    increments.Add(new DeferredVersionIncrement(incrementVersion, entity));
                 }
             }
         }
@@ -1241,12 +1243,12 @@ public partial class DataSession<TProvider>
     /// <summary>P0-1 的旧版模型程序集回退路径：无 <see cref="CrudMetadata.BindUpdateValues"/>
     /// 时逐行 <c>UpdateCoreAsync</c>（每行新建命令与参数）。语义与池化路径逐位一致，
     /// 参数创建量回到改前水平——这是旧程序集的既有成本，不是回归。</summary>
-    private async ValueTask<(long Total, List<Action> Increments)> ExecuteBulkUpdateLegacyAsync<T>(
+    private async ValueTask<(long Total, List<DeferredVersionIncrement> Increments)> ExecuteBulkUpdateLegacyAsync<T>(
         IReadOnlyList<T> entities, object? operationOwner, CancellationToken token)
         where T : class, new()
     {
         long total = 0;
-        List<Action> increments = [];
+        List<DeferredVersionIncrement> increments = [];
         foreach (T entity in entities)
         {
             total += await UpdateCoreAsync(

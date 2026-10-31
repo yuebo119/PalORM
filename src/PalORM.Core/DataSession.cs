@@ -1317,7 +1317,7 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// 纯读入口（GetAsync/GetAllAsync/CountAsync/QueryAsync/QueryAsyncEnumerable/ScalarAsync/
     /// 聚合族）统一走本入口——ITM-811 同型面的收口（该轮只修了 QueryBuilderExtensions 族，
     /// DataSession 直查族漏扫，并发 GetAsync 在作用域内必抛 "already active" 实测坐实）。</summary>
-    private SessionOperationState.SessionOperationLease EnterReadOnly()
+    internal SessionOperationState.SessionOperationLease EnterReadOnly()
         => _operationState.EnterReadOnly();
 
     /// <summary>创建批量执行器——把 N 条非查询语句压成一次往返（方言支持时，实测 PG 3.4×/10 语句）。

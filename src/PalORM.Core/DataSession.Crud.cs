@@ -720,7 +720,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>单行 UPDATE 的结果校验与乐观锁 version 回填（复用与非复用路径共用，PL-2 抽出）。
     /// 语义与抽出前 UpdateCoreAsync 内联实现逐位一致。</summary>
     private static int ApplyUpdateOutcome<T>(
-        CrudPlan plan, T entity, int affectedRows, List<Action>? deferredVersionIncrements)
+        CrudPlan plan, T entity, int affectedRows, List<DeferredVersionIncrement>? deferredVersionIncrements)
         where T : class, new()
     {
         if (plan.IncrementVersion is null)
@@ -747,11 +747,27 @@ public sealed partial class DataSession<TProvider>
     /// 无条件分配 display class——且 CrudMetadata 是 ~230B 的 struct，
     /// 按值拷入闭包使每次 UpdateAsync 白付 ~250B（分配采样 248B/行实证，TxRollback SQLite
     /// 356B/行差额的主项），<c>IncrementVersion is null</c> 的早退挡不住入口分配。
-    /// 拆出后：无并发令牌/单条路径零闭包；批量乐观锁路径的闭包只捕获委托引用 + entity
-    /// （~32B，降 87%）。</summary>
+    /// 拆出后：无并发令牌/单条路径零闭包；批量乐观锁路径的条目内联进列表背衬数组
+    /// （M4.4，2026-10-31：原 lambda 每行一个 display class + 委托，现为零堆分配的只读结构体）。</summary>
     private static void DeferVersionIncrement<T>(
-        Action<object> increment, T entity, List<Action> deferred) where T : class, new()
-        => deferred.Add(() => increment(entity));
+        Action<object> increment, T entity, List<DeferredVersionIncrement> deferred) where T : class, new()
+        => deferred.Add(new DeferredVersionIncrement(increment, entity));
+
+    /// <summary>延迟版本回填条目（M4.4）——只读结构体内联进 <see cref="List{T}"/> 背衬数组，
+    /// 每行零 display class 与零委托分配；提交成功后 <see cref="Apply"/> 按登记序回放。</summary>
+    private readonly struct DeferredVersionIncrement
+    {
+        private readonly Action<object> _increment;
+        private readonly object _entity;
+
+        internal DeferredVersionIncrement(Action<object> increment, object entity)
+        {
+            _increment = increment;
+            _entity = entity;
+        }
+
+        internal void Apply() => _increment(_entity);
+    }
 
     private async ValueTask<T> InsertCoreAsync<T>(
         T entity,
@@ -960,7 +976,7 @@ public sealed partial class DataSession<TProvider>
         T entity,
         object? operationOwner,
         CancellationToken ct,
-        List<Action>? deferredVersionIncrements = null) where T : class, new()
+        List<DeferredVersionIncrement>? deferredVersionIncrements = null) where T : class, new()
     {
         using SessionOperationState.SessionOperationLease operation =
             EnterOperation(operationOwner);

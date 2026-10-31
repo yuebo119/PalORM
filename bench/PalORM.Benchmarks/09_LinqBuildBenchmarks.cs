@@ -31,6 +31,8 @@ public class LinqBuildBenchmarks : IAsyncDisposable
     private SqliteConnection? _keeper;
     private DataSession<SqliteProvider>? _db;
     private DataSessionPool<SqliteProvider>? _pool;
+    private CompiledQuery<BenchOrder, SqliteProvider>? _plan;
+    private readonly object?[] _compiledArgs = [1L];
     private readonly DbOptions _options = new() { ConnectionString = BenchmarkConfig.SqliteCs };
 
     [GlobalSetup]
@@ -40,10 +42,13 @@ public class LinqBuildBenchmarks : IAsyncDisposable
         await BenchmarkConfig.SeedSqliteAsync(_keeper);
         _db = await DataSession<SqliteProvider>.CreateAsync(_options);
         _pool = DataSessionPool<SqliteProvider>.Create(_options, maxIdleSize: 2);
+        _plan = _db.Compile<BenchOrder>(
+            "SELECT id, status, total, created_at FROM bench_orders WHERE id = @p0", "@p0");
     }
 
     public async ValueTask DisposeAsync()
     {
+        _plan?.Dispose();
         if (_db is not null) await _db.DisposeAsync();
         if (_pool is not null) await _pool.DisposeAsync();
         if (_keeper is not null) await _keeper.DisposeAsync();
@@ -92,6 +97,10 @@ public class LinqBuildBenchmarks : IAsyncDisposable
     [Benchmark, BenchmarkCategory("Query")]
     public async Task<List<BenchOrder>> ToList_Where_OrderBy()
         => await _db!.From<BenchOrder>().Where($"id = {1}").OrderBy(o => o.id).Take(10).ToListAsync();
+
+    [Benchmark, BenchmarkCategory("Query")]
+    public async Task<List<BenchOrder>> Compiled_ToList_Where()
+        => await _plan!.ExecuteAsync(_compiledArgs);
 
     // ─── 会话生命周期（同一查询，两种会话形态）──────────────────
 
