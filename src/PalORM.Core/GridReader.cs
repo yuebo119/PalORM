@@ -22,6 +22,9 @@ public sealed class GridReader : IAsyncDisposable
     private Task? _disposeTask;
     private int _state;
     private readonly bool _validateColumnOrder;
+    /// <summary>M4.2（2026-10-31 极致性能轮）：逐行读同步叶子（会话 PreferSynchronousRowRead）——
+    /// 原 ReadAsync 未传 syncRead，进程内引擎每行多付驱动异步外壳的调用机制。</summary>
+    private readonly bool _syncRowRead;
     /// <summary>ITM-748(r20)：是否还有可用结果集。初始为 true（首个结果集就绪），
     /// 每次成功推进 <c>NextResultAsync</c> 后按其返回值更新——越界读取明确失败，
     /// 不再静默返回空列表（与"类型未注册即抛"的既有口径一致）。</summary>
@@ -31,7 +34,8 @@ public sealed class GridReader : IAsyncDisposable
         QueryObservation? observation = null,
         SessionOperationState.SessionOperationLease operation = default,
         bool validateColumnOrder = false,
-        SessionOperationState? operationState = null)
+        SessionOperationState? operationState = null,
+        bool syncRowRead = false)
     {
         _validateColumnOrder = validateColumnOrder;
         _reader = reader;
@@ -39,6 +43,7 @@ public sealed class GridReader : IAsyncDisposable
         _operation = operation;
         _operationState = operationState;
         _observation = observation;
+        _syncRowRead = syncRowRead;
     }
 
     /// <summary>读取当前结果集。</summary>
@@ -66,7 +71,7 @@ public sealed class GridReader : IAsyncDisposable
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             List<T> list = await ResultListReader.ReadAllAsync(
-                _reader, (Func<DbDataReader, T>)factory, 16, ct).ConfigureAwait(false);
+                _reader, (Func<DbDataReader, T>)factory, 16, ct, syncRead: _syncRowRead).ConfigureAwait(false);
 
             _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);
             return list;

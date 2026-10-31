@@ -128,6 +128,10 @@ public struct QueryBuilder<T> where T : class, new()
     /// <summary>全量物化逐行读是否走同步叶子（会话 <see cref="DbOptions.UseSynchronousRowRead"/>
     /// + Provider 能力的合并结果）。流式执行（ForEach/QueryAsyncEnumerable）不消费本字段。</summary>
     internal readonly bool _syncRowRead;
+    /// <summary>Provider 声明 <c>PreferSynchronousIo</c>（进程内引擎恒真）——reader 打开与
+    /// 逐行读的同步叶子门（M4.2，2026-10-31）：与 _syncRowRead 分离，MySQL 开
+    /// UseSynchronousRowRead 时行读同步而 reader 打开保持真异步。</summary>
+    internal readonly bool _syncIo;
 
     internal QueryBuilder(QueryBuilderContext<T> ctx)
     {
@@ -177,6 +181,7 @@ public struct QueryBuilder<T> where T : class, new()
         _createArrayParameter = ctx.Services.CreateArrayParameter;
         _markStateUnknown = ctx.Services.MarkConnectionStateUnknown;
         _syncRowRead = ctx.Services.SyncRowRead;
+        _syncIo = ctx.Services.SyncIo;
     }
 
     /// <summary>S3b：执行期懒取弹性执行器——From&lt;T&gt;() 不再提前物化，成功的首次尝试
@@ -963,7 +968,8 @@ public struct QueryBuilder<T> where T : class, new()
                 IsTransient: _isTransient,
                 ProviderType: _providerType,
                 MarkConnectionStateUnknown: _markStateUnknown,
-                SyncRowRead: _syncRowRead),  // S3b：克隆透传会话引用与配置快照
+                SyncRowRead: _syncRowRead,  // S3b：克隆透传会话引用与配置快照
+                SyncIo: _syncIo),
             _tableName, _columnNames, _readConnProvider, _queryCache, _validateColumnOrder,
             _readConnInvalidator, _readConnReturner, _querySlot))
         {
@@ -1859,7 +1865,8 @@ internal readonly record struct QueryBuilderServices<T>(
     Func<Exception, bool>? IsTransient = null,
     Type? ProviderType = null,
     Action<DbConnection>? MarkConnectionStateUnknown = null,
-    bool SyncRowRead = false)
+    bool SyncRowRead = false,
+    bool SyncIo = false)
     where T : class, new();
 
 /// <summary>QueryBuilder 构造上下文——把 Services + 连接 + 表元数据 + 读路由 + 缓存全部聚合。

@@ -67,8 +67,10 @@ public partial class DataSession<TProvider>
         using SessionOperationState.SessionOperationLease operation = EnterOperation();
         (CrudMetadata metadata, _) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
         if (entities.Count == 0) return 0;
+        // M4.3（2026-10-31 极致性能轮）：去掉 [.. entities] 整表复制——被调方只消费 Count 与
+        // 索引器，IReadOnlyList 直通（20K 行省约 160KB 拷贝）。
         return await BatchInsertReturningAsync(
-            GetActiveTransaction(), [.. entities], metadata, ct).ConfigureAwait(false);
+            GetActiveTransaction(), entities, metadata, ct).ConfigureAwait(false);
     }
 
     /// <summary>批量删除——数组形态单批 20000 行；IN 形态按方言参数上限与 5000 行/批取较小者
@@ -2131,7 +2133,7 @@ public partial class DataSession<TProvider>
             + "不可拆的顺序语义；拆分需在方法间传递回填对位状态，正确性风险大于可读性收益。")]
     private async Task<long> BatchInsertReturningAsync<T>(
         DbTransaction? transaction,
-        List<T> entities,
+        IReadOnlyList<T> entities,
         CrudMetadata metadata,
         CancellationToken ct) where T : class, new()
     {
@@ -2237,8 +2239,21 @@ public partial class DataSession<TProvider>
                     List<long>? returnedIds = backfill is null ? null : new List<long>(rowCount);
                     while (await reader.ReadAsync(ct).ConfigureAwait(false))
                     {
-                        long? id = NormalizeGeneratedId(
-                            await reader.IsDBNullAsync(0, ct).ConfigureAwait(false) ? null : reader.GetValue(0));
+                        // M4.3：主键读取按字段类型取 typed getter——long 形态（identity 绝对主流）
+                        // 免 GetValue 装箱（20K 行省约 480KB），非 long 形态走原 Normalize 全分支。
+                        long? id;
+                        if (await reader.IsDBNullAsync(0, ct).ConfigureAwait(false))
+                        {
+                            id = null;
+                        }
+                        else if (reader.GetFieldType(0) == typeof(long))
+                        {
+                            id = NormalizeGeneratedId(reader.GetInt64(0));
+                        }
+                        else
+                        {
+                            id = NormalizeGeneratedId(reader.GetValue(0));
+                        }
                         if (returnedIds is not null)
                         {
                             if (id is not { } generatedId)
@@ -2259,15 +2274,24 @@ public partial class DataSession<TProvider>
                         // 降序序列/触发器改写主键不在支持面内（公开文档同口径）。
                         // P3-2：降序返回值是"反向分配"的确证——排序后回填会把主键给错行。
                         // 只拒绝严格递减的到达序（不受服务端结果集顺序未定义的干扰）。
+                        // M4.3：单趟同时判升降序——升序（常态）跳过 Sort，
+                        // 严格递减照旧拒绝；等值对两标志都不触发（Sort 幂等）。
+                        bool ascending = true;
                         bool strictlyDescending = returnedIds.Count > 1;
-                        for (int i = 1; strictlyDescending && i < returnedIds.Count; i++)
-                            strictlyDescending = returnedIds[i - 1] > returnedIds[i];
+                        for (int i = 1; i < returnedIds.Count; i++)
+                        {
+                            if (returnedIds[i - 1] > returnedIds[i])
+                                ascending = false;
+                            else
+                                strictlyDescending = false;
+                        }
                         if (strictlyDescending)
                             throw new InvalidOperationException(
                                 $"INSERT ... RETURNING for '{typeof(T).Name}' produced strictly descending " +
                                 $"primary keys ({returnedIds[0]} > {returnedIds[^1]}); backfill requires an " +
                                 "ascending identity/auto-increment sequence.");
-                        returnedIds.Sort();
+                        if (!ascending)
+                            returnedIds.Sort();
                         for (int i = 0; i < rowCount; i++)
                             BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);
                     }

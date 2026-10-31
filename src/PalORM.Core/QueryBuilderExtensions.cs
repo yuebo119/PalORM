@@ -47,7 +47,8 @@ public static class QueryBuilderExtensions
         long? SwStart,
         DbTransaction? BoundTransaction,
         Func<DbConnection, bool, ValueTask>? ReadConnReturner,
-        bool SyncRowRead) where T : class, new();
+        bool SyncRowRead,
+        bool SyncIo) where T : class, new();
 
     /// <summary>S4：弹性编排的只读上下文（从 builder 一次投影，helper 状态机不再持有 builder）。</summary>
     internal readonly record struct ResilienceContext(
@@ -179,7 +180,7 @@ public static class QueryBuilderExtensions
             await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            await using DbDataReader reader = await OpenReaderAsync(cmd, state.SyncIo, token).ConfigureAwait(false);
             List<T> list = await ResultListReader.ReadAllAsync(
                 reader, state.Factory,
                 state.Take.HasValue ? Math.Min(state.Take.Value, MaxPreallocatedCapacity) : 16,
@@ -225,8 +226,8 @@ public static class QueryBuilderExtensions
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
             long rowCount = 0;
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            await using DbDataReader reader = await OpenReaderAsync(cmd, state.SyncIo, token).ConfigureAwait(false);
+            while (await ReadRow(reader, state.SyncRowRead, token).ConfigureAwait(false))
             {
                 await action(state.Factory(reader), token).ConfigureAwait(false);
                 rowCount++;
@@ -283,7 +284,7 @@ public static class QueryBuilderExtensions
             await EnsureReusablePreparedAsync(state.QuerySlot, usingReusable, token).ConfigureAwait(false);
             NotifyInterceptorsOnBefore(state.Interceptors, state.Context);
             await PrepareCommandAsync(cmd, state.Prepared, token).ConfigureAwait(false);
-            await using DbDataReader reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            await using DbDataReader reader = await OpenReaderAsync(cmd, state.SyncIo, token).ConfigureAwait(false);
             T? first = null;
             int rows = 0;
             while (rows < maxRows && await ReadRow(reader, state.SyncRowRead, token).ConfigureAwait(false))
@@ -309,6 +310,21 @@ public static class QueryBuilderExtensions
     private static ValueTask EnsureReusablePreparedAsync(
         ReusableQuerySlot? slot, bool usingReusable, CancellationToken token)
         => usingReusable && slot is not null ? slot.EnsurePreparedAsync(token) : default;
+
+    /// <summary>M4.2（2026-10-31 极致性能轮）：reader 打开的同步叶子——<paramref name="syncIo"/>
+    /// （Provider PreferSynchronousIo，进程内引擎恒真）时走同步 <c>ExecuteReader</c>，
+    /// 免除驱动异步外壳的每查询 Task 分配（实测 SQLite 每 reader 打开省 144B/147ns）；
+    /// 网络 Provider 保持真异步。</summary>
+    private static ValueTask<DbDataReader> OpenReaderAsync(DbCommand cmd, bool syncIo, CancellationToken token)
+        => syncIo
+            ? new ValueTask<DbDataReader>(OpenReaderSync(cmd, token))
+            : new ValueTask<DbDataReader>(cmd.ExecuteReaderAsync(token));
+
+    private static DbDataReader OpenReaderSync(DbCommand cmd, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return cmd.ExecuteReader();
+    }
 
     /// <summary>首行族逐行读叶子——<paramref name="syncRead"/> 时走同步 <c>Read</c>
     /// （MySQL/SQLite 全量物化快路径），否则异步。</summary>
@@ -409,7 +425,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner, builder._syncRowRead);
+            builder._readConnReturner, builder._syncRowRead, builder._syncIo);
         string outcome = "error";
         try
         {
@@ -485,7 +501,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner, builder._syncRowRead);
+            builder._readConnReturner, builder._syncRowRead, builder._syncIo);
         string outcome = "error";
         try
         {
@@ -662,7 +678,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner, builder._syncRowRead);
+            builder._readConnReturner, builder._syncRowRead, builder._syncIo);
         string outcome = "error";
         try
         {
@@ -1064,10 +1080,10 @@ public static class QueryBuilderExtensions
             for (int i = 0; i < sql.ArgumentCount; i++)
                 command.Parameters.Add(builder._paramFactory(QueryBuilder<T>.GetParameterName(i), sql.GetArgument(i)));
             await PrepareCommandAsync(command, builder._prepared, ct).ConfigureAwait(false);
-            DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            DbDataReader reader = await OpenReaderAsync(command, builder._syncIo, ct).ConfigureAwait(false);
             grid = new GridReader(
                 reader, command, observation, operationLease,
-                builder._validateColumnOrder, builder._operationState);
+                builder._validateColumnOrder, builder._operationState, builder._syncRowRead);
             operationTransferred = true;
             builder._operationState.RegisterTransactionResource(grid);
             return grid;

@@ -85,7 +85,8 @@ public sealed partial class DataSession<TProvider>
                 IsTransient: ProviderDelegates.IsTransient,
                 ProviderType: typeof(TProvider),
                 MarkConnectionStateUnknown: ProviderDelegates.MarkStateUnknown,
-                SyncRowRead: PreferSynchronousRowRead),
+                SyncRowRead: PreferSynchronousRowRead,
+                SyncIo: TProvider.PreferSynchronousIo),
             tableName, columnNames, _readConnProvider,
             _options.QueryCache, _options.ValidateQueryColumnOrder, _readConnInvalidator,
             _readConnReturner, _querySlot));
@@ -1497,15 +1498,41 @@ public sealed partial class DataSession<TProvider>
     }
 
     /// <summary>GetAllAsync 的执行核心（C10 抽出）：参数直传不捕获，直通直调与弹性重试共用。
-    /// 刀1：改携 EntityRuntimeInfo（forms/绑定经 features 省查找）；刀2：事务传入。</summary>
+    /// 刀1：改携 EntityRuntimeInfo（forms/绑定经 features 省查找）；刀2：事务传入。
+    /// M4.1（2026-10-31 极致性能轮）：主连接形态接直查复用槽——SQL 文本经 4 槽静态缓存恒稳定，
+    /// 晋升后每次全表查询省命令创建/释放与租户参数重建（P1-1 同型；实测 2000 行读省 ~300B/次）。</summary>
     private async ValueTask<List<T>> GetAllCoreAsync<T>(
         EntityRuntimeInfo info, DbTransaction? activeTransaction, CancellationToken token)
         where T : class, new()
     {
+        string commandText = GetGetAllSqlFast<T>(info);
+        int tenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
+        DbCommand? reused = TryAcquireReusableDirectCommand(commandText);
+        if (reused is not null)
+        {
+            if (reused.Parameters.Count == 0)
+                BindDefaultFilterParameters(reused, info.Features);
+            if (reused.Parameters.Count == tenantSlots)
+            {
+                ApplyReusableCommandState(reused, activeTransaction, commandText);
+                if (_querySlot is { } getAllSlot)
+                    await getAllSlot.EnsurePreparedAsync(token).ConfigureAwait(false);
+                if (tenantSlots > 0)
+                    reused.Parameters[^1].Value = _tenantId;
+                await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, token).ConfigureAwait(false);
+                List<T> reusedList = await ResultListReader.ReadAllAsync(
+                    reusedReader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token,
+                    syncRead: PreferSynchronousRowRead).ConfigureAwait(false);
+                RecordMaterializedCount<T>(reusedList.Count);
+                return reusedList;
+            }
+            // 参数形态漂移（理论不可达：同 SQL 恒同参数集）——回退新建路径，槽保留其命令
+        }
+
         await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
         DbCommand cmd = lease.Command;
         // G4（五轮微项包）：完整 SQL 走 4 槽静态缓存（F6b 同型，原 per-(Type,Dialect,forms) 字典）。
-        cmd.CommandText = GetGetAllSqlFast<T>(info);
+        cmd.CommandText = commandText;
         cmd.CommandTimeout = _commandTimeoutSeconds;
         BindDefaultFilterParameters(cmd, info.Features);
 
