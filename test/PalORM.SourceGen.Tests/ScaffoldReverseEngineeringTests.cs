@@ -130,6 +130,26 @@ internal sealed class ScaffoldReverseEngineeringTests
         await Assert.That(assignedSource).Contains("[Key(AutoIncrement = false)]");
     }
 
+    [Test]
+    public async Task ScaffoldedGuidPrimaryKey_DeclaresAutoIncrementFalse_AndCompiles()
+    {
+        SchemaTable table = new("guid_rows",
+        [
+            new SchemaColumn("id", "UUID", IsPrimaryKey: true, IsAutoIncrement: false, IsNullable: false),
+            new SchemaColumn("name", "TEXT", IsPrimaryKey: false, IsAutoIncrement: false, IsNullable: false),
+        ]);
+        string source = EntityGenerator.Generate(table, SchemaDialect.PostgreSql, "Scaffolded");
+
+        await Assert.That(source).Contains("[Key(AutoIncrement = false)]");
+        await Assert.That(source).Contains("public System.Guid Id { get; set; }");
+
+        CSharpCompilation compilation = GeneratorTestHost.CreateCompilation(source, "GuidScaffoldConsumer");
+        GeneratorTestHost.GeneratorResult result = GeneratorTestHost.RunGenerator(source);
+        await Assert.That(GeneratorTestHost.FormatErrors(result.OutputCompilation)).IsEmpty();
+        await Assert.That(compilation.GetDiagnostics()
+            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)).IsEmpty();
+    }
+
     private static async Task AssertBinaryAsync(string dbType, SchemaDialect dialect)
     {
         (string csharpType, bool isReferenceType) = TypeMapper.Map(dbType, dialect);

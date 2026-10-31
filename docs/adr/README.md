@@ -27,3 +27,6 @@
 | [ADR-Q](ADR-Q-SQLite行预编译批量.md) | SQLite 行预编译批量形态（A+B+E） | 已实施 | 2026-10-25 探针 A/B + 用户裁决 |
 | [ADR-R](ADR-R-SQLite批删json-each.md) | SQLite 批量删除的 json_each 键集合形态 | 已采纳 | 2026-10-25 用户裁决（DeleteProbe 三源互证） |
 | [ADR-S](ADR-S-RepoDB第五臂对标形态.md) | CrossBench 第五臂（RepoDB 1.17.0）的对标形态与路径选择 | 已采纳 | 2026-10-26 用户指令 + RepoDB 源码审读 + 同批 A/B |
+| [ADR-T](ADR-T-注释分层与历史决策迁移.md) | 注释分层与历史决策迁移 | 已采纳 | 2026-10-31 架构评审 Phase 2 |
+| [ADR-U](ADR-U-IQueryInterceptor覆盖边界.md) | IQueryInterceptor 覆盖边界与 ICommandInterceptor 窗口 | 已采纳 | 2026-10-31 架构评审 D1 裁决 |
+| [ADR-V](ADR-V-迁移原子性与方言差异.md) | 迁移原子性与方言差异 | 已实施 | 2026-10-31 架构评审 D2 裁决 |

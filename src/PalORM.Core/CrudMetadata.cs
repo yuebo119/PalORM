@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Data.Common;
 
 namespace PalORM;
@@ -294,7 +295,11 @@ internal sealed class CrudPlan
     }
 }
 
-/// <summary>CRUD 元数据聚合——单次字典查找替代四次独立查找。</summary>
+/// <summary>CRUD 元数据聚合——单次字典查找替代四次独立查找。
+/// <para><b>可见性（2026-10-31 D4）</b>：标 public 而非 internal——Provider 与生成代码是独立
+/// 程序集，需跨程序集访问；仍是 PalORM 生成代码契约，不写入公共文档、不保证兼容。
+/// 7.0 收敛窗口内改 internal。</para></summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public readonly struct CrudMetadata
 {
     /// <summary>legacy 无方言 CRUD SQL 集（标识符未经引用转义，运行时从不消费）。
