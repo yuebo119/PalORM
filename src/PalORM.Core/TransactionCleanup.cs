@@ -82,8 +82,33 @@ internal static class TransactionCleanup
     internal static async ValueTask RollbackPreservingAsync(
         DbTransaction transaction, Exception primaryException,
         int rollbackTimeoutSeconds = DefaultRollbackTimeoutSeconds,
+        bool preferSynchronousIo = false,
         CancellationToken ct = default)
     {
+        // M4.5（2026-10-31 极致性能轮）：进程内引擎（SQLite）的回滚是同步执行，CTS 定时器
+        // 无法中断阻塞中的调用，属纯固定成本——同步分支只保留调用方取消检查，异常分类
+        // 与异步分支逐位一致。网络 Provider 保持异步 + 有界超时。
+        if (preferSynchronousIo)
+        {
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                RollbackSynchronously(transaction);
+            }
+            catch (OperationCanceledException cancelledException) when (ct.IsCancellationRequested)
+            {
+                primaryException.Data["PalORM.RollbackCancelledException"] = new OperationCanceledException(
+                    "Rollback was interrupted by the caller's cancellation token; " +
+                    "the server-side transaction may still be open.",
+                    cancelledException, ct);
+            }
+            catch (Exception rollbackException)
+            {
+                primaryException.Data["PalORM.RollbackException"] = rollbackException;
+            }
+            return;
+        }
+
         CancellationTokenSource? timeoutCts = null;
         bool linked = false;
         CancellationToken effectiveCt = ct;
@@ -143,8 +168,18 @@ internal static class TransactionCleanup
     /// 原样上抛（OCE）；仅本方法引入的超时包装为带 <c>PalORM.InfrastructureTimeout</c> 标记的
     /// <see cref="TimeoutException"/>——调用方据此判定"服务端状态未知"并照常尝试回滚。</para></summary>
     internal static async ValueTask CommitWithTimeoutAsync(
-        DbTransaction transaction, int commandTimeoutSeconds, CancellationToken ct)
+        DbTransaction transaction, int commandTimeoutSeconds,
+        bool preferSynchronousIo = false, CancellationToken ct = default)
     {
+        // M4.5（2026-10-31 极致性能轮）：进程内引擎（SQLite）的提交是同步执行，CTS 定时器
+        // 无法中断，属纯固定成本——同步分支只保留调用方取消检查；网络 Provider 保持异步 +
+        // 有界超时（PalORM.InfrastructureTimeout 标记语义不变）。
+        if (preferSynchronousIo)
+        {
+            ct.ThrowIfCancellationRequested();
+            CommitSynchronously(transaction);
+            return;
+        }
         if (commandTimeoutSeconds <= 0)
         {
             await transaction.CommitAsync(ct).ConfigureAwait(false);
@@ -183,6 +218,15 @@ internal static class TransactionCleanup
             else PooledCts.Return(timeoutCts);
         }
     }
+
+    /// <summary>同步提交叶子（M4.5）——独立非 async 方法承载，避免 CA1849/S6966 对
+    /// async 方法内同步驱动调用的告警；调用方仅在 Provider 声明 PreferSynchronousIo 时进入。</summary>
+    private static void CommitSynchronously(DbTransaction transaction)
+        => transaction.Commit();
+
+    /// <summary>同步回滚叶子（M4.5）——口径同 <see cref="CommitSynchronously"/>。</summary>
+    private static void RollbackSynchronously(DbTransaction transaction)
+        => transaction.Rollback();
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "释放是清理路径；异常附加到主异常，不能替换原始执行失败。")]

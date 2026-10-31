@@ -113,7 +113,7 @@ public static class MultiValueBulkInsert
             if (ownsTransaction)
             {
                 commitAttempted = true;
-                await TransactionCleanup.CommitWithTimeoutAsync(tran, commandTimeoutSeconds, ct)
+                await TransactionCleanup.CommitWithTimeoutAsync(tran, commandTimeoutSeconds, ct: ct)
                     .ConfigureAwait(false);
             }
         }
@@ -129,7 +129,7 @@ public static class MultiValueBulkInsert
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(exception)))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
-                    tran, exception, commandTimeoutSeconds, ct).ConfigureAwait(false);
+                    tran, exception, commandTimeoutSeconds, ct: ct).ConfigureAwait(false);
             }
             throw;
         }

@@ -150,7 +150,7 @@ public sealed class TransactionCleanupTests
 
         Exception? thrown = await Assert.ThrowsAsync<TimeoutException>(async () =>
             await TransactionCleanup.CommitWithTimeoutAsync(
-                transaction, commandTimeoutSeconds: 1, CancellationToken.None));
+                transaction, commandTimeoutSeconds: 1, ct: CancellationToken.None));
 
         await Assert.That((bool)thrown!.Data["PalORM.InfrastructureTimeout"]!).IsTrue();
         await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(10));
@@ -165,7 +165,7 @@ public sealed class TransactionCleanupTests
         await using var transaction = new SlowCommitTransaction(delaySeconds: 0);
 
         await TransactionCleanup.CommitWithTimeoutAsync(
-            transaction, commandTimeoutSeconds: 0, CancellationToken.None);
+            transaction, commandTimeoutSeconds: 0, ct: CancellationToken.None);
         await Assert.That(transaction.CommitCalls).IsEqualTo(1);
     }
 
@@ -178,7 +178,7 @@ public sealed class TransactionCleanupTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await TransactionCleanup.CommitWithTimeoutAsync(
-                transaction, commandTimeoutSeconds: 30, cts.Token));
+                transaction, commandTimeoutSeconds: 30, ct: cts.Token));
     }
 }
 

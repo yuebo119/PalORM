@@ -849,7 +849,7 @@ public static class QueryBuilderExtensions
                 // T1（v5.6.0）：提交尝试标志——裁决依据见 TransactionCleanup.TrySkipRollbackAfterCommitFailure
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
-                    transaction, DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout), ct)
+                    transaction, DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout), paged._syncIo, ct)
                     .ConfigureAwait(false);
             }
             return (rows, total);
@@ -864,7 +864,7 @@ public static class QueryBuilderExtensions
             {
                 await TransactionCleanup.RollbackPreservingAsync(
                     transaction, exception,
-                    DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout), ct)
+                    DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout), paged._syncIo, ct)
                     .ConfigureAwait(false);
             }
             throw;

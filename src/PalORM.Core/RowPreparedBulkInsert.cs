@@ -108,7 +108,7 @@ public static class RowPreparedBulkInsert
             if (ownsTransaction)
             {
                 commitAttempted = true;
-                await TransactionCleanup.CommitWithTimeoutAsync(tran, ctx.CommandTimeoutSeconds, ct)
+                await TransactionCleanup.CommitWithTimeoutAsync(tran, ctx.CommandTimeoutSeconds, ct: ct)
                     .ConfigureAwait(false);
             }
         }
@@ -121,7 +121,7 @@ public static class RowPreparedBulkInsert
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(exception)))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
-                    tran, exception, ctx.CommandTimeoutSeconds, ct).ConfigureAwait(false);
+                    tran, exception, ctx.CommandTimeoutSeconds, ct: ct).ConfigureAwait(false);
             }
             throw;
         }

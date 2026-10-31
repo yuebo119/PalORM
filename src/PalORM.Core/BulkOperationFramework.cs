@@ -125,7 +125,7 @@ public static class BulkOperationFramework
         DbTransaction transaction, int commandTimeoutSeconds, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(transaction);
-        return TransactionCleanup.CommitWithTimeoutAsync(transaction, commandTimeoutSeconds, ct);
+        return TransactionCleanup.CommitWithTimeoutAsync(transaction, commandTimeoutSeconds, ct: ct);
     }
 
     /// <summary>有界回滚的跨程序集入口——Provider 批量路径（PG COPY / MySQL LOAD DATA）复用 Core 的
@@ -146,7 +146,7 @@ public static class BulkOperationFramework
         ArgumentNullException.ThrowIfNull(transaction);
         ArgumentNullException.ThrowIfNull(primaryException);
         return TransactionCleanup.RollbackPreservingAsync(
-            transaction, primaryException, rollbackTimeoutSeconds, ct);
+            transaction, primaryException, rollbackTimeoutSeconds, ct: ct);
     }
 
     /// <summary>失败提交后跳过回滚的裁决（ITM-870，r23）——Provider 批量路径（PG COPY / MySQL

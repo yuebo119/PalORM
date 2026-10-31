@@ -609,6 +609,12 @@ internal sealed class SessionOperationState
     /// 会让此等待永久挂起，事务收口死锁。</summary>
     private async ValueTask<Exception?> WaitForActiveOperationPreservingAsync(Exception? cleanupException)
     {
+        // M4.5（2026-10-31 极致性能轮）：无在飞操作时直接返回——原实现即使
+        // activeOperation == Task.CompletedTask 也付一次锁与 WaitAsync 包装。
+        // 竞态安全：事务收口置 _transactionCompleting 后，ownedOperation 之外的进入被拒绝；
+        // owner 正在本方法内收口，不会启动新操作。
+        if (!Volatile.Read(ref _isActive))
+            return cleanupException;
         // v4.5：TCS 延迟创建 -- 如果操作仍活动，创建 TCS 并等待 Exit 唤醒
         Task activeOperation;
         lock (_sync)

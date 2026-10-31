@@ -155,7 +155,7 @@ public sealed partial class DataSession<TProvider>
                     _operationState.EnterTransactionOperation();
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
-                    transaction, _commandTimeoutSeconds, ct).ConfigureAwait(false);
+                    transaction, _commandTimeoutSeconds, TProvider.PreferSynchronousIo, ct).ConfigureAwait(false);
                 commitSucceeded = true;
                 ReplayPostCommitActions();
                 return result;
@@ -313,7 +313,8 @@ public sealed partial class DataSession<TProvider>
             try
             {
                 await TransactionCleanup.RollbackPreservingAsync(
-                    transaction, primaryException, RollbackTimeoutSeconds).ConfigureAwait(false);
+                    transaction, primaryException, RollbackTimeoutSeconds,
+                    preferSynchronousIo: TProvider.PreferSynchronousIo).ConfigureAwait(false);
             }
             catch (Exception directRollbackException)
             {
@@ -328,7 +329,8 @@ public sealed partial class DataSession<TProvider>
         using (operation)
         {
             await TransactionCleanup.RollbackPreservingAsync(
-                transaction, primaryException, RollbackTimeoutSeconds).ConfigureAwait(false);
+                transaction, primaryException, RollbackTimeoutSeconds,
+                preferSynchronousIo: TProvider.PreferSynchronousIo).ConfigureAwait(false);
         }
     }
 
@@ -375,7 +377,7 @@ public sealed partial class DataSession<TProvider>
             {
                 commitAttempted = true;
                 await TransactionCleanup.CommitWithTimeoutAsync(
-                    transaction, _commandTimeoutSeconds, ct).ConfigureAwait(false);
+                    transaction, _commandTimeoutSeconds, TProvider.PreferSynchronousIo, ct).ConfigureAwait(false);
                 commitSucceeded = true;
                 ReplayPostCommitActions();
             }
@@ -401,7 +403,8 @@ public sealed partial class DataSession<TProvider>
                             TProvider.Dialect, exception))))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
-                    transaction, exception, RollbackTimeoutSeconds, ct).ConfigureAwait(false);
+                    transaction, exception, RollbackTimeoutSeconds, TProvider.PreferSynchronousIo, ct)
+                    .ConfigureAwait(false);
             }
             throw;
         }
