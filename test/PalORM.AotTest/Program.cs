@@ -133,6 +133,8 @@ internal static class Program
 
             AotEntity first = await db.GetAsync<AotEntity>(inserted.Id).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("GET failed");
+            await VerifyCompiledQueryAndStringOverloadAsync(db, inserted.Id, first.Value)
+                .ConfigureAwait(false);
             await VerifyBinaryColumnAsync(db, inserted, first).ConfigureAwait(false);
             await VerifyProjectionAsync(db, inserted.Id).ConfigureAwait(false);
             AotEntity stale = await db.GetAsync<AotEntity>(inserted.Id).ConfigureAwait(false)
@@ -486,6 +488,24 @@ internal static class Program
         {
             await pool.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>M3/M2.1（2026-10-31）：编译查询计划与字符串重载在 Native AOT 下可用——
+    /// 两者都不走反射/表达式编译（计划参数用 Provider 静态工厂，列名用注册期静态映射）。</summary>
+    private static async Task VerifyCompiledQueryAndStringOverloadAsync(
+        DataSession<SqliteProvider> db, long id, string expectedValue)
+    {
+        using (CompiledQuery<AotEntity, SqliteProvider> plan = db.Compile<AotEntity>(
+            "SELECT id, value, version, blob, preview FROM aot_test WHERE id = @p0", "@p0"))
+        {
+            List<AotEntity> planned = await plan.ExecuteAsync([id]).ConfigureAwait(false);
+            if (planned.Count != 1 || planned[0].Value != expectedValue)
+                throw new InvalidOperationException("Compiled query failed");
+        }
+        string orderedSql = db.From<AotEntity>()
+            .Where($"id = {id}").OrderBy("Id").ToSql();
+        if (!orderedSql.Contains("ORDER BY", StringComparison.Ordinal))
+            throw new InvalidOperationException("String OrderBy overload failed");
     }
 
     /// <summary>byte[] 列的 AOT 全链验证：参数化等值过滤（含 0x00 字节）+ 物化往返 + 可空列 NULL 守卫。</summary>

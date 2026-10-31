@@ -332,6 +332,16 @@ await db.DeleteAsync<User>(alice.Id);   // 软删实体自动转 UPDATE
 
 **单键直查用 `GetAsync`**：同口径比 `From<T>().Where(Id==x).FirstOrDefaultAsync()` 省约 880 B/操作、快 25~30%。
 
+### 编译查询（重复形状）
+
+```csharp
+using var plan = db.Compile<User>(
+    """SELECT "Id", "Email" FROM "Users" WHERE "Id" = @p0""", "@p0");
+var user = (await plan.ExecuteAsync([userId]))[0];
+```
+
+计划把 SQL 与参数模板固定为会话级对象，重复执行只写参数值并复用命令。本机 SQLite 基准中，单行查询比优化后的 Fluent 路径快 22.6%、分配低 29.8%。SQL 逐字执行，默认过滤不适用；参数运行时类型须稳定，计划须在会话释放前 `Dispose`。
+
 ### 批量操作
 
 ```csharp

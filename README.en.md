@@ -336,6 +336,16 @@ await db.DeleteAsync<User>(alice.Id);   // soft-delete entities become an UPDATE
 
 **Use `GetAsync` for single-key lookups**: ~880 B per operation less and 25~30% faster than the equivalent `From<T>().Where(Id==x).FirstOrDefaultAsync()`.
 
+### Compiled queries (repeated shapes)
+
+```csharp
+using var plan = db.Compile<User>(
+    """SELECT "Id", "Email" FROM "Users" WHERE "Id" = @p0""", "@p0");
+var user = (await plan.ExecuteAsync([userId]))[0];
+```
+
+A plan fixes the SQL text and parameter template to a session-scoped object; repeated executions only write values and reuse the command. In the local SQLite benchmark, a single-row query is 22.6% faster and allocates 29.8% less than the optimized fluent path. SQL is executed verbatim, default filters do not apply; runtime parameter types must stay stable, and the plan must be disposed before the session.
+
 ### Bulk operations
 
 ```csharp
