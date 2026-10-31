@@ -516,7 +516,8 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64
 - 迁移事务竞态修复 + 共享枚举测试：`0dcf6bc 修复：迁移事务内并发建表竞态改用保存点恢复`
 - ADR-U/ADR-V + CrudMetadata 可见性 + Guid 主键测试：`849e48f 重构：补 ADR-U/ADR-V 与 CrudMetadata 可见性标注`
 - 共享注解契约单文件收敛：`bd936f1 重构：合并共享注解契约到 PalORMAnnotations.cs`
-- 五个提交均在本地 `dev`，未推送
+- CA1062/CA2213 启用 + 方案归档：`ebf9c4e 重构：启用 CA1062/CA2213 分析器并归档架构评审方案`
+- 六个提交均在本地 `dev`，未推送；本方案文件归档于 `docs/review/architecture-review-action-plan-2026-10-31.md`
 
 ### 验证
 
