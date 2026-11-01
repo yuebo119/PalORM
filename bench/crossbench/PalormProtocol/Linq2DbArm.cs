@@ -123,9 +123,11 @@ internal sealed class Linq2DbImpl(DialectInfo dialect) : IPerfImplementation, ID
     public async Task<int> UpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
         => await Db.UpdateAsync(row, token: ct).ConfigureAwait(false);
 
-    /// <summary>批量更新——PG 官方 Merge；MySQL provider 无 MERGE 支持
-    ///（"MySql80 provider doesn't support SQL MERGE"，2026-10-30 冒烟实证）改走
-    /// BulkSql CASE WHEN 多值 raw SQL（DataParameter 绑定，库自身命令通道）；SQLite 逐行裹事务。</summary>
+    /// <summary>批量更新——PG 官方 Merge；MySQL 走 BulkSql CASE WHEN 多值 raw SQL；SQLite 逐行裹事务。
+    /// <para><b>2026-11-01 审计复核（S3 反向验证）</b>：曾疑手写 SQL 绕开被测能力，删除 MySQL 分支
+    /// 改走 Merge 后实跑即抛 <c>LinqToDBException: MySql80 provider doesn't support SQL MERGE
+    /// statement</c>（mysql 方言 2000 档，退出码 127），故兜底确为 provider 能力边界所致，
+    /// 非省事捷径，予以保留。SQLite 同理由 provider 明确不支持 MERGE。</para></summary>
     public async Task<long> BulkUpdateAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         if (_d == Dialect.Sqlite)
@@ -210,8 +212,9 @@ internal sealed class Linq2DbImpl(DialectInfo dialect) : IPerfImplementation, ID
     public Task<long> CountAsync(DbConnection conn, CancellationToken ct)
         => Task.FromResult(Db.GetTable<S1Row>().LongCount());
 
-    /// <summary>批量 UPSERT——PG/MySQL 官方 Merge（UpdateWhenMatched + InsertWhenNotMatched）；
-    /// SQLite 逐行 InsertOrReplace 裹事务（库无 SQLite Merge 语义）。</summary>
+    /// <summary>批量 UPSERT——PG 官方 Merge（UpdateWhenMatched + InsertWhenNotMatched）；
+    /// MySQL 多值 UPSERT raw SQL 通道；SQLite 逐行 InsertOrReplace 裹事务。
+    /// <para>MySQL/SQLite 的兜底理由同 BulkUpdate：provider 不支持 MERGE（2026-11-01 实跑复现）。</para></summary>
     public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
         if (_d == Dialect.Sqlite)

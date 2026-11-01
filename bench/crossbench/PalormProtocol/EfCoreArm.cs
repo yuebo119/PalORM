@@ -13,8 +13,8 @@ namespace PalORM.PerfHub;
 /// <item><b>批量</b>：EF 无原生 bulk API——BulkInsert = AddRange + SaveChanges（自动批处理，
 /// 官方路径）；BulkUpdate = UpdateRange + SaveChanges（逐行值官方唯一路径）；
 /// BulkDelete = ExecuteDeleteAsync（EF7+ 集合式，官方路径）。</item>
-/// <item><b>UpsertBatch</b>：EF 无官方 upsert API——走 Database.ExecuteSqlRawAsync
-/// 多值 UPSERT（SQL 真源 BulkSql.UpsertBatch，与 ADO/Dapper 同语句），报告注记"raw SQL 通道"。</item>
+/// <item><b>UpsertBatch</b>：EF Core 无 upsert API，用官方「查已有行 → 改属性/Add →
+/// SaveChanges」路径（2026-11-01 审计起，替换原 ExecuteSqlRaw 手写 SQL 通道）。</item>
 /// <item><b>MySQL provider</b>：Oracle 官方 MySql.EntityFrameworkCore 10.0.12（镜像无 Pomelo
 /// EF10 线）；连接串与连接池由 EF 管理。</item>
 /// <item><b>枚举列</b>：HasConversion&lt;string&gt; 官方形态；EnumInserts 为事务内
@@ -175,34 +175,43 @@ internal sealed class EfCoreImpl(DialectInfo dialect) : IPerfImplementation
         return await db.S1.AsNoTracking().LongCountAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>批量 UPSERT——EF 无官方 API，走 Database.ExecuteSqlRawAsync 多值 UPSERT
-    /// （BulkSql 真源，与 ADO/Dapper 同语句；报告注记 raw SQL 通道）。</summary>
+    /// <summary>批量 UPSERT——EF Core 没有 upsert API（无 Merge/OnConflict 对应物），
+    /// 官方唯一路径是「查出已存在行 → 改属性 → 新行 Add → SaveChanges」。
+    /// <para><b>2026-11-01 审计按「只用 ORM API」原则替换</b>：原实现走
+    /// <c>Database.ExecuteSqlRawAsync</c> + BulkSql 手写多值 UPSERT，等于用 ADO 通道测 EF，
+    /// 与本项目「测 ORM 不是测 SQL」的宗旨冲突，也与其余组（FreeSql/RepoDb/SqlSugar/PalORM
+    /// 均用各自 API）不可比。代价是这一项对 EF 天然包含一次 SELECT 往返（换成 API 形态的
+    /// 必然成本），报告说明列已注明。</para></summary>
     public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
     {
-        long total = 0;
-        int batch = BulkSql.EffectiveBatchRows(_d);
-        for (int start = 0; start < rows.Count; start += batch)
-        {
-            int end = Math.Min(start + batch, rows.Count);
-            int len = end - start;
-            List<object> parameters = new(len * BulkSql.ParamsPerRow);
-            for (int r = start; r < end; r++)
-            {
-                S1Row row = rows[r];
-                parameters.Add(row.Id);
-                parameters.Add(row.Name);
-                parameters.Add(row.Qty);
-                parameters.Add(row.Price);
-                parameters.Add(row.Marker);
-            }
+        long[] ids = [.. rows.Select(r => r.Id)];
+        await using BenchDbContext db = New();
+        Dictionary<long, S1Row> existing = (await db.S1
+                .Where(x => ids.Contains(x.Id))
+                .ToListAsync(ct)
+                .ConfigureAwait(false))
+            .ToDictionary(x => x.Id);
 
-            string sql = BulkSql.UpsertBatch(_d, len);
-            await using BenchDbContext db = New();
-            _ = await db.Database.ExecuteSqlRawAsync(sql, parameters, ct).ConfigureAwait(false);
-            total += len;
+        int affected = 0;
+        foreach (S1Row row in rows)
+        {
+            if (existing.TryGetValue(row.Id, out S1Row? tracked))
+            {
+                tracked.Name = row.Name;
+                tracked.Qty = row.Qty;
+                tracked.Price = row.Price;
+                tracked.Marker = row.Marker;
+                affected++;
+            }
+            else
+            {
+                _ = db.S1.Add(row);
+                affected++;
+            }
         }
 
-        return total;
+        _ = await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return affected;
     }
 
     public Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct)

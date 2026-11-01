@@ -155,28 +155,26 @@ internal static class Program
 
                         IPerfImplementation[] order = pass == 0 ? impls : [.. impls.Reverse()];
 
-                        // 读正确性守卫（每方言一次，不计入测量）：除 ADO/Dapper/PalORM 三个
-                        // 历史已知臂外全部参与（RepoDB/FreeSql 原名单 + 12 库横评新臂）——
-                        // 实体映射必须与 ADO 同值，防列错位静默产生错误数据
-                        if (pass == 0 && rows == tiers[0] && impls.Any(a => a.Name is not ("ADO_NET" or "Dapper" or "PalORM")))
+                        // 读一致性守卫（每方言一次，不计入测量，2026-11-01 扩面）：全组参与，
+                        // 期望值由 Dataset.Seed 公式确定性推导（不依赖任何一组当 oracle）——
+                        // 同一份种子数据、同一批逻辑操作，任何组返回不同结果都说明 SQL 或映射有错。
+                        // 覆盖 GetByKey / QueryAll（行数 + 主键集合 + 逐行字段）/ KeysetPage /
+                        // WhereIn / Count 五个读操作。
+                        if (pass == 0 && rows == tiers[0])
                         {
                             List<string> validationMessages = new();
-                            foreach (IPerfImplementation arm in impls.Where(
-                                         a => a.Name is not ("ADO_NET" or "Dapper" or "PalORM")))
+                            foreach (IPerfImplementation arm in impls)
                             {
-                                S1Row? probe = await arm.GetByKeyAsync(conn, 1, CancellationToken.None)
+                                List<string> problems = await ValidateArmReadsAsync(dialect, conn, arm, rows)
                                     .ConfigureAwait(false);
-                                List<S1Row> all = await arm.QueryAllAsync(conn, CancellationToken.None)
-                                    .ConfigureAwait(false);
-                                if (probe?.Name != "row-0" || probe.Price != 0m || probe.Marker != 0
-                                    || all.Count != rows || all[^1].Id != rows)
+                                if (problems.Count == 0)
                                 {
-                                    validationMessages.Add(
-                                        $"{arm.Name}: probe={probe?.Name}/{probe?.Price}/{probe?.Marker} count={all.Count} last={(all.Count > 0 ? all[^1].Id : 0)}");
+                                    Console.WriteLine(
+                                        $"    {arm.Name} 读一致校验 OK（GetByKey/QueryAll/KeysetPage/WhereIn/Count）");
                                 }
                                 else
                                 {
-                                    Console.WriteLine($"    {arm.Name} 读映射校验 OK");
+                                    validationMessages.Add($"{arm.Name}: {string.Join("; ", problems)}");
                                 }
                             }
 
@@ -185,7 +183,7 @@ internal static class Program
                                 throw new InvalidOperationException(string.Join(" | ", validationMessages));
                             }
 
-                            // 写后映射校验（每方言一次，不计入测量，全部参与守卫的臂）：改值 →
+                            // 写后映射校验（每方言一次，不计入测量）：改值 →
                             // 批量更新/UPSERT → 读回比对 → 复原。读校验只覆盖 SELECT 路径；
                             // 批量写的列序/文档序由各臂映射与语句构建决定，错位会静默写入
                             // 错误数据（计时仍正常）。
@@ -267,6 +265,107 @@ internal static class Program
             return null;
         }
     }
+
+    /// <summary>读一致性校验（每方言每臂一次，不计入测量）：以 <see cref="Dataset.Seed"/> 的
+    /// 确定性公式为期望值，逐组核对五个读操作。任一组返回不同结果都说明其 SQL 或映射与协议不符。
+    /// <para>QueryAll 做全量校验：行数、主键集合恰为 1..rows、逐行字段对公式。此前只校验
+    /// count 与末行 Id，中间行错位无法发现。</para></summary>
+    private static async Task<List<string>> ValidateArmReadsAsync(
+        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows)
+    {
+        List<string> problems = [];
+        CancellationToken ct = CancellationToken.None;
+
+        foreach (int id in new[] { 1, rows / 2, rows }.Distinct())
+        {
+            if (id <= 0)
+            {
+                continue;
+            }
+
+            S1Row? got = await arm.GetByKeyAsync(conn, id, ct).ConfigureAwait(false);
+            S1Row expected = Dataset.Seed(id - 1);
+            if (!SameRow(got, expected))
+            {
+                problems.Add($"GetByKey({id}) 得到 {DescribeRow(got)}，期望 {DescribeRow(expected)}");
+            }
+        }
+
+        List<S1Row> all = await arm.QueryAllAsync(conn, ct).ConfigureAwait(false);
+        if (all.Count != rows)
+        {
+            problems.Add($"QueryAll 返回 {all.Count} 行，期望 {rows}");
+        }
+        else
+        {
+            HashSet<long> seen = new(all.Count);
+            int mismatched = 0;
+            string? firstMismatch = null;
+            foreach (S1Row row in all)
+            {
+                if (!seen.Add(row.Id))
+                {
+                    problems.Add($"QueryAll 主键重复 {row.Id}");
+                    break;
+                }
+
+                S1Row expected = Dataset.Seed(row.Id - 1);
+                if (!SameRow(row, expected))
+                {
+                    mismatched++;
+                    firstMismatch ??= $"Id={row.Id} 得到 {DescribeRow(row)}，期望 {DescribeRow(expected)}";
+                }
+            }
+
+            if (seen.Count == rows && (seen.Min() != 1 || seen.Max() != rows))
+            {
+                problems.Add($"QueryAll 主键范围 {seen.Min()}..{seen.Max()}，期望 1..{rows}");
+            }
+
+            if (mismatched > 0)
+            {
+                problems.Add($"QueryAll 有 {mismatched} 行字段不符（首个：{firstMismatch}）");
+            }
+        }
+
+        List<S1Row> page = await arm.KeysetPageAsync(conn, 0, 100, ct).ConfigureAwait(false);
+        bool pageOk = page.Count == 100
+            && page[0].Id == 1
+            && page[^1].Id == 100
+            && page.Select(r => r.Id).SequenceEqual(Enumerable.Range(1, 100).Select(i => (long)i));
+        if (!pageOk)
+        {
+            problems.Add(
+                $"KeysetPage 返回 {page.Count} 行 "
+                + $"[{(page.Count > 0 ? page[0].Id : 0)}..{(page.Count > 0 ? page[^1].Id : 0)}]，期望 100 行 [1..100]");
+        }
+
+        long[] keys = new[] { 1L, 2L, rows / 2L, rows - 1L, rows }.Distinct().Order().ToArray();
+        List<S1Row> inRows = await arm.WhereInAsync(conn, keys, ct).ConfigureAwait(false);
+        long[] gotIds = [.. inRows.Select(r => r.Id).Order()];
+        if (!gotIds.SequenceEqual(keys))
+        {
+            problems.Add($"WhereIn 命中 [{string.Join(',', gotIds)}]，期望 [{string.Join(',', keys)}]");
+        }
+
+        long count = await arm.CountAsync(conn, ct).ConfigureAwait(false);
+        if (count != rows)
+        {
+            problems.Add($"Count={count}，期望 {rows}");
+        }
+
+        return problems;
+    }
+
+    private static bool SameRow(S1Row? actual, S1Row expected)
+        => actual is not null && actual.Id == expected.Id && actual.Name == expected.Name
+            && actual.Qty == expected.Qty && actual.Price == expected.Price
+            && actual.Marker == expected.Marker;
+
+    private static string DescribeRow(S1Row? row)
+        => row is null
+            ? "null"
+            : $"Id={row.Id}/{row.Name}/{row.Qty}/{row.Price}/{row.Marker}";
 
     /// <summary>写后映射校验（每方言每臂一次，不计入测量）：用改过值的种子行走
     /// BulkUpdate 与 UpsertBatch 两条写路径，读回逐字段比对后复原。
