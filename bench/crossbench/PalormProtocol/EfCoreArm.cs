@@ -68,12 +68,16 @@ internal sealed class EfCoreImpl(DialectInfo dialect) : IPerfImplementation
 
     public Task SetupAsync(DbConnection conn, int rows, CancellationToken ct) => Task.CompletedTask;
 
-    /// <summary>单键直查——AsNoTracking + FirstAsync（官方只读路径；FindAsync 走本地缓存，
-    /// 不适合无追踪基准）。</summary>
+    /// <summary>单键直查——AsNoTracking + FirstOrDefaultAsync（官方只读路径；FindAsync 走本地缓存，
+    /// 不适合无追踪基准）。
+    /// <para><b>2026-11-02 修</b>：原用 <c>FirstAsync</c>，缺行时抛
+    /// <c>InvalidOperationException: Sequence contains no elements</c>，违反
+    /// <see cref="IPerfImplementation.GetByKeyAsync"/> 的「缺行返回 null」契约。此前读守卫只查
+    /// 存在的键，接口行为从未被覆盖；写效果断言（删键后确认不可读）首次触发即暴露。</para></summary>
     public async Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
     {
         await using BenchDbContext db = New();
-        return await db.S1.AsNoTracking().FirstAsync(x => x.Id == id, ct).ConfigureAwait(false);
+        return await db.S1.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct).ConfigureAwait(false);
     }
 
     public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)

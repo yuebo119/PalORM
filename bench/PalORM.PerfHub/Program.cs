@@ -395,9 +395,11 @@ internal static class Program
 
             // 读一致性守卫（每方言首档一次，不计入测量，2026-11-02 与 CrossBench 同步）：
             // 期望值由 Dataset 公式推导，不依赖任一臂当参照系；覆盖 S1 族与宽表七个读操作。
+            // 写效果守卫同批执行：逐操作断言行数/键集/回滚/枚举列/自增表的净效果。
             if (rows == tiers[0])
             {
                 await ValidateReadsAsync(info, rows, conn, impls, ct).ConfigureAwait(false);
+                await ValidateWritesAsync(info, rows, conn, impls, ct).ConfigureAwait(false);
             }
 
             // 物化重的只读项先做三臂交错（同一操作内 ADO→Dapper→PalORM 连续测）：
@@ -799,6 +801,212 @@ internal static class Program
 
             return got.Length == expected.Length ? "无（长度相同）" : $"长度 {got.Length} vs {expected.Length}";
         }
+    }
+
+    /// <summary>写效果校验（每方言首档一次，不计入测量，2026-11-02 与 CrossBench 同步）：
+    /// 断言每个写操作对表状态的净效果——影响行数、键集增减、回滚不变、枚举列、自增回填、
+    /// 租户会话批入行数。仅值回读不够：写路径若生成错 SQL（多删、少插、回滚失效、键位错），
+    /// 读守卫看不见，测量照常出数。
+    /// <para>覆盖 Insert / Update / BulkInsert / BulkDelete / BulkUpdate / UpsertBatch /
+    /// TxSingleInsert / TxHundredInserts / TxBulkInsert / TxRollback / EnumInserts /
+    /// InsertReturningId / SessionBatchInserts 共十三个写操作。</para></summary>
+    private static async Task ValidateWritesAsync(
+        DialectInfo info, int rows, DbConnection conn, IPerfImplementation[] impls, CancellationToken ct)
+    {
+        Dialect dialect = info.Dialect;
+        int probeRows = Math.Min(rows, 200);
+        List<string> failures = [];
+
+        foreach (IPerfImplementation arm in impls)
+        {
+            List<string> problems = [];
+
+            // 各臂的 SetupAsync 播 perf_s1 与 bench_tenant（布局随臂），写前复位用它
+            async Task ResetAsync() => await arm.SetupAsync(conn, rows, ct).ConfigureAwait(false);
+            async Task<long> S1CountAsync() => await arm.CountAsync(conn, ct).ConfigureAwait(false);
+
+            async Task CheckCountAsync(string op, Task<long> actualTask, long expected)
+            {
+                long actual = await actualTask.ConfigureAwait(false);
+                if (actual != expected)
+                {
+                    problems.Add($"{op} 后 perf_s1 行数 {actual}，期望 {expected}");
+                }
+            }
+
+            async Task CheckRowAsync(string op, S1Row expected)
+            {
+                S1Row? actual = await arm.GetByKeyAsync(conn, expected.Id, ct).ConfigureAwait(false);
+                if (!SameRow(actual, expected))
+                {
+                    problems.Add($"{op} 值不符：得到 {DescribeRow(actual)}，期望 {DescribeRow(expected)}");
+                }
+            }
+
+            await ResetAsync().ConfigureAwait(false);
+            S1Row inserted = Dataset.Seed(rows);
+            await arm.InsertAsync(conn, inserted, ct).ConfigureAwait(false);
+            await CheckCountAsync("Insert", S1CountAsync(), rows + 1).ConfigureAwait(false);
+            await CheckRowAsync("Insert", inserted).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            S1Row updated = Dataset.Seed(rows / 2);
+            updated.Name = "audit-upd";
+            updated.Qty = 42;
+            updated.Price = 42.5m;
+            updated.Marker = 4242;
+            await arm.UpdateAsync(conn, updated, ct).ConfigureAwait(false);
+            await CheckCountAsync("Update", S1CountAsync(), rows).ConfigureAwait(false);
+            await CheckRowAsync("Update", updated).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            List<S1Row> bulkInserted = Dataset.SeedRows(probeRows, 1_000_000);
+            await arm.BulkInsertAsync(conn, bulkInserted, ct).ConfigureAwait(false);
+            await CheckCountAsync("BulkInsert", S1CountAsync(), rows + probeRows).ConfigureAwait(false);
+            await CheckRowAsync("BulkInsert 首行", bulkInserted[0]).ConfigureAwait(false);
+            await CheckRowAsync("BulkInsert 末行", bulkInserted[^1]).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            long[] victims = [.. new long[] { 1, 2, rows / 2, rows - 1, rows }.Distinct()];
+            long survivor = victims.Contains(3) ? 4 : 3;
+            await arm.BulkDeleteAsync(conn, [.. victims.Cast<object>()], ct).ConfigureAwait(false);
+            await CheckCountAsync("BulkDelete", S1CountAsync(), rows - victims.Length).ConfigureAwait(false);
+            foreach (long victim in victims)
+            {
+                if (await arm.GetByKeyAsync(conn, victim, ct).ConfigureAwait(false) is not null)
+                {
+                    problems.Add($"BulkDelete 未删除键 {victim}");
+                }
+            }
+
+            await CheckRowAsync($"BulkDelete 存活行 {survivor}", Dataset.Seed(survivor - 1)).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            List<S1Row> modified = AuditRows(probeRows);
+            await arm.BulkUpdateAsync(conn, modified, ct).ConfigureAwait(false);
+            await CheckCountAsync("BulkUpdate", S1CountAsync(), rows).ConfigureAwait(false);
+            await CheckRowAsync("BulkUpdate", modified[0]).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            await arm.UpsertBatchAsync(conn, modified, ct).ConfigureAwait(false);
+            await CheckCountAsync("UpsertBatch", S1CountAsync(), rows).ConfigureAwait(false);
+            await CheckRowAsync("UpsertBatch", modified[0]).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            await arm.TxSingleInsertAsync(conn, Dataset.Seed(rows), ct).ConfigureAwait(false);
+            await CheckCountAsync("TxSingleInsert", S1CountAsync(), rows + 1).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            await arm.TxHundredInsertsAsync(conn, Dataset.SeedRows(100, 1_000_000), ct).ConfigureAwait(false);
+            await CheckCountAsync("TxHundredInserts", S1CountAsync(), rows + 100).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            await arm.TxBulkInsertAsync(conn, Dataset.SeedRows(probeRows, 1_000_000), ct).ConfigureAwait(false);
+            await CheckCountAsync("TxBulkInsert", S1CountAsync(), rows + probeRows).ConfigureAwait(false);
+
+            await ResetAsync().ConfigureAwait(false);
+            await arm.TxRollbackAsync(conn, Dataset.SeedRows(Math.Min(rows, 500), 0), ct).ConfigureAwait(false);
+            await CheckCountAsync("TxRollback", S1CountAsync(), rows).ConfigureAwait(false);
+
+            // 枚举列：恰好 100 行且 Status 字符串多重集正确
+            await AdoNetImpl.SetupPerfEnumTableAsync(dialect, conn, ct).ConfigureAwait(false);
+            await arm.EnumInsertsAsync(conn, Dataset.SeedEnumRows(100, 0), ct).ConfigureAwait(false);
+            Dictionary<string, int> actualStatus = [];
+            await using (DbCommand enumCmd = conn.CreateCommand())
+            {
+                enumCmd.CommandText = $"SELECT {Dataset.Q(dialect, "Status")} FROM {Dataset.EnumTable(dialect)}";
+                await using DbDataReader reader = await enumCmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                {
+                    string status = reader.GetString(0);
+                    actualStatus[status] = actualStatus.GetValueOrDefault(status) + 1;
+                }
+            }
+
+            Dictionary<string, int> expectedStatus = [];
+            for (int i = 0; i < 100; i++)
+            {
+                string name = ((OrderStatus)(i % 6)).ToString();
+                expectedStatus[name] = expectedStatus.GetValueOrDefault(name) + 1;
+            }
+
+            if (actualStatus.Count != expectedStatus.Count
+                || expectedStatus.Any(kv => actualStatus.GetValueOrDefault(kv.Key) != kv.Value))
+            {
+                problems.Add(
+                    $"EnumInserts 枚举列不符：实得 [{string.Join(',', actualStatus.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}]，"
+                    + $"期望 [{string.Join(',', expectedStatus.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}]");
+            }
+
+            // 自增回填：清空后插一行 —— 断言「回填值 = 表内实际主键」且表内恰 1 行。
+            // 不能断言回填值等于 1：DELETE 不复位自增计数（SQLite sqlite_sequence / MySQL
+            // AUTO_INCREMENT / PG sequence 三库一致），同一批里 ADO→Dapper→PalORM 依次拿到 1/2/3。
+            await ResetAsync().ConfigureAwait(false);
+            await AdoNetImpl.ExecAsync(
+                conn, "DELETE FROM " + Dataset.AutoIncTable(dialect), ct).ConfigureAwait(false);
+            long newId = await arm.InsertReturningIdAsync(conn, "probe", 7, ct).ConfigureAwait(false);
+            long autoRows = await ScalarCountAsync(conn, Dataset.AutoIncTable(dialect), ct).ConfigureAwait(false);
+            long autoKey = await ScalarAsync(
+                conn, $"SELECT {Dataset.Q(dialect, "Id")} FROM {Dataset.AutoIncTable(dialect)}", ct)
+                .ConfigureAwait(false);
+            if (autoRows != 1 || newId != autoKey || newId <= 0)
+            {
+                problems.Add(
+                    $"InsertReturningId 回填 Id={newId}、自增表 {autoRows} 行且主键 {autoKey}，期望 1 行且两者相等");
+            }
+
+            // 租户会话批入：每轮插 SessionBatchRows 行
+            await ResetAsync().ConfigureAwait(false);
+            long tenantBefore = await ScalarCountAsync(conn, Dataset.TenantTable(dialect), ct).ConfigureAwait(false);
+            _ = await arm.SessionBatchInsertsAsync(conn, rows + 1, ct).ConfigureAwait(false);
+            long tenantAfter = await ScalarCountAsync(conn, Dataset.TenantTable(dialect), ct).ConfigureAwait(false);
+            if (tenantAfter - tenantBefore != Dataset.SessionBatchRows)
+            {
+                problems.Add(
+                    $"SessionBatchInserts 增行 {tenantAfter - tenantBefore}，期望 {Dataset.SessionBatchRows}");
+            }
+
+            if (problems.Count == 0)
+            {
+                Console.WriteLine(
+                    $"    {arm.Name,-9} 写效果校验 OK（13 个写操作：行数/键集/回滚/枚举列/自增/租户批入）");
+            }
+            else
+            {
+                failures.Add($"{arm.Name}: {string.Join("; ", problems)}");
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join(" | ", failures));
+        }
+    }
+
+    /// <summary>审计行——前 probeRows 行的值改成可识别的审计值（BulkUpdate 与 UpsertBatch 共用）。</summary>
+    private static List<S1Row> AuditRows(int probeRows)
+    {
+        List<S1Row> modified = Dataset.SeedRows(probeRows, 0);
+        foreach (S1Row row in modified)
+        {
+            row.Name = "audit-" + row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            row.Qty = (int)(row.Id % 97);
+            row.Price = row.Id * 0.75m;
+            row.Marker = row.Id * 3;
+        }
+
+        return modified;
+    }
+
+    private static async Task<long> ScalarCountAsync(DbConnection conn, string table, CancellationToken ct)
+        => await ScalarAsync(conn, $"SELECT COUNT(*) FROM {table}", ct).ConfigureAwait(false);
+
+    private static async Task<long> ScalarAsync(DbConnection conn, string sql, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        object? value = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static bool SameRow(S1Row? actual, S1Row expected)
