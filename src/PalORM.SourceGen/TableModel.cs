@@ -234,7 +234,12 @@ internal sealed record TableModel(
                 columnLength, columnPrecision, columnScale, columnTypeName,
                 enumStorage, enumClrTypeName, enumParseSwitchBody, enumWriteSwitchBody,
                 IsTenantColumn: isTenantAware
-                    && string.Equals(columnName, "tenant_id", StringComparison.Ordinal)));
+                    && string.Equals(columnName, "tenant_id", StringComparison.Ordinal),
+                ConverterConcreteCall: converterType is not null
+                    && converterType.GetMembers("FromProvider").OfType<IMethodSymbol>().Any(static m =>
+                        !m.IsStatic && m.DeclaredAccessibility == Accessibility.Public && m.Parameters.Length == 1)
+                    && converterType.GetMembers("ToProvider").OfType<IMethodSymbol>().Any(static m =>
+                        !m.IsStatic && m.DeclaredAccessibility == Accessibility.Public && m.Parameters.Length == 1)));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -455,7 +460,10 @@ internal sealed record ColumnModel(
     string? EnumWriteSwitchBody = null,
     // [TenantAware] 实体的 tenant_id 列（PALORM018 保证存在）。INSERT 由实体承载；
     // UPDATE/UPSERT 的 SET 必须排除——否则租户会话可把行搬到别的租户。
-    bool IsTenantColumn = false)
+    bool IsTenantColumn = false,
+    // M4.7（2026-10-31）：转换器是否以 public 实例方法隐式实现 FromProvider/ToProvider。
+    // 为 true 时 Emitter 用具体类型声明字段（可去虚化/内联）；显式接口实现保持接口字段。
+    bool ConverterConcreteCall = false)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

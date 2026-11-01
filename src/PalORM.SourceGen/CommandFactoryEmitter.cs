@@ -28,7 +28,11 @@ internal static class CommandFactoryEmitter
         foreach (var col in model.Columns)
         {
             if (col.ConverterTypeName is null) continue;
-            sb.AppendLine($"    private static readonly global::PalORM.IValueConverter<{col.ClrTypeName}, {col.ProviderClrTypeName}> _conv_{col.PropertyName} = new {col.ConverterTypeName}();");
+            // M4.7：同 RowFactoryEmitter——隐式实现用具体类型，显式接口实现保持接口字段。
+            string converterFieldType = col.ConverterConcreteCall
+                ? col.ConverterTypeName
+                : $"global::PalORM.IValueConverter<{col.ClrTypeName}, {col.ProviderClrTypeName}>";
+            sb.AppendLine($"    private static readonly {converterFieldType} _conv_{col.PropertyName} = new {col.ConverterTypeName}();");
             converterCount++;
         }
         if (converterCount > 0)

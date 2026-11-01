@@ -225,13 +225,13 @@ internal sealed class GeneratorPhase2Tests
         // v4.0 优化 A：CommandFactory emit 从 `new Converter()` 内联改为类级 static readonly 单例字段，
         // 与 RowFactory 模式对齐（百万行 BulkInsert 含 Converter 列省 ~N 万 Gen0 分配）。
         await Assert.That(commandFactory).Contains(
-            "IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter()");
+            "global::UlidConverter _conv_ExternalId = new global::UlidConverter()");
         await Assert.That(commandFactory).Contains("_conv_ExternalId.ToProvider(entity.ExternalId)");
         await Assert.That(commandFactory).DoesNotContain("new global::UlidConverter()).ToProvider(entity");
         // v3.1: RowFactory emit 从 `new Converter()` 内联改为类级 static readonly 单例字段。
         // 断言 emit 同时含：(1) 类级 _conv_<prop> 字段声明；(2) Read lambda 内引用字段调用 FromProvider。
         await Assert.That(rowFactory).Contains(
-            "IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter()");
+            "global::UlidConverter _conv_ExternalId = new global::UlidConverter()");
         await Assert.That(rowFactory).Contains("_conv_ExternalId!.FromProvider(r.GetString(1))");
         await Assert.That(rowFactory).DoesNotContain("new global::UlidConverter()).FromProvider");
         await Assert.That(migration).Contains("\\\"external_id\\\" TEXT");

@@ -6,7 +6,7 @@ namespace PalORM.Generated;
 [global::System.CodeDom.Compiler.GeneratedCode("PalORM.SourceGen", "6.8.0")]
 internal static class RowFactory_global__FullFeatureEntity_4964faa8
 {
-    private static readonly global::PalORM.IValueConverter<global::Ulid, string> _conv_ExternalId = new global::UlidConverter();
+    private static readonly global::UlidConverter _conv_ExternalId = new global::UlidConverter();
 
     internal static readonly global::System.Func<global::System.Data.Common.DbDataReader, global::FullFeatureEntity> Read
         = static (global::System.Data.Common.DbDataReader r) =>
