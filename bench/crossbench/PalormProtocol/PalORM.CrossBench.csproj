@@ -88,15 +88,5 @@
 
     <PackageReference Include="SqlSugarCore" Version="5.1.4.221" />
 
-    <!-- NHibernate 5.6：SQLite 官方驱动载体 System.Data.SQLite.Core（SQLite20Driver）；
-         MySQL/PG 驱动复用 MySqlConnector/Npgsql -->
-    <PackageReference Include="NHibernate" Version="5.6.0" />
-    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />
-
-    <!-- Marten 9.14.1：PG-only 文档库（清单钦定，仅 pg 方言注册） -->
-    <PackageReference Include="Marten" Version="9.14.1" />
-
-    <!-- LiteDB 5：嵌入式文件文档库（方言无关，独立注册一次） -->
-    <PackageReference Include="LiteDB" Version="5.0.21" />
   </ItemGroup>
 </Project>

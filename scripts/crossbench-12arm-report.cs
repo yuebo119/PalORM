@@ -44,14 +44,6 @@ foreach (string file in files)
     all.AddRange(loaded);
 }
 
-// LiteDB 伪方言拆分：Runner 以 SQLite 作载体方言（Dialect=Sqlite 落盘），但 LiteDB 是
-// 独立文件存储、无 SQL 同表位——改写到独立 "LiteDB" 方言，避免混入 SQLite 表位
-foreach (Measurement m in all.Where(m => m.Implementation == "LiteDB").ToList())
-{
-    int idx = all.IndexOf(m);
-    all[idx] = m with { Dialect = "LiteDB" };
-}
-
 // 两遍反序批内 Average 聚合（与 CrossBenchBatch.LoadAggregated 同口径）
 List<Measurement> agg =
 [
@@ -66,12 +58,12 @@ string[] dialects = [.. agg.Select(m => m.Dialect).Distinct().Order()];
 string[] armOrder =
 [
     "ADO_NET", "Dapper", "DapperAot", "Linq2Db", "EfCore", "SqlSugar",
-    "NHibernate", "FreeSql", "RepoDb", "PalORM", "Marten", "LiteDB"
+    "FreeSql", "RepoDb", "PalORM"
 ];
 string[] armDisplay =
 [
     "ADO(地板)", "Dapper", "Dapper.AOT", "linq2db", "EF Core", "SqlSugar",
-    "NHibernate", "FreeSql", "RepoDb", "PalORM", "Marten*", "LiteDB*"
+    "FreeSql", "RepoDb", "PalORM"
 ];
 var ops = new[]
 {
@@ -93,11 +85,6 @@ var opGroup = new Dictionary<string, string>
 var naReasons = new Dictionary<(string Arm, string Dialect), string>
 {
     [("SqlSugar", "PostgreSql")] = "N/A：PG 硬编码全小写引号标识符，与 CamelCase 引号 DDL 冲突",
-    [("Marten", "Sqlite")] = "N/A：PG-only 文档库（清单钦定，仅 pg 注册）",
-    [("Marten", "MySql")] = "N/A：PG-only 文档库",
-    [("LiteDB", "Sqlite")] = "—：嵌入式文件文档库，独立伪方言批（见 LiteDB 节）",
-    [("LiteDB", "MySql")] = "—：同 SQLite（独立伪方言批）",
-    [("LiteDB", "PostgreSql")] = "—：同 SQLite（独立伪方言批）",
 };
 
 // ── 胜场统计（每格最快者；ADO 是地板不是竞争者） ──
@@ -112,7 +99,7 @@ foreach (string dialect in dialects)
             double best = double.MaxValue;
             foreach (Measurement m in agg.Where(m =>
                          m.Dialect == dialect && m.Rows == rows && m.Operation == op
-                         && m.Implementation is not ("ADO_NET" or "Marten" or "LiteDB")))
+                         && armOrder.Contains(m.Implementation) && m.Implementation != "ADO_NET"))
             {
                 if (m.MedianUs < best)
                 {
@@ -132,12 +119,11 @@ foreach (string dialect in dialects)
 var sb = new StringBuilder(1 << 16);
 string stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
 
-sb.AppendLine("# 跨库横评（10 库 + ADO 地板）");
+sb.AppendLine("# 跨库横评（8 库 + ADO 地板）");
 sb.AppendLine();
 sb.AppendLine($"> 生成：{stamp} ｜ 数据源：{string.Join("、", files.Select(Path.GetFileName))}");
 sb.AppendLine(">");
 sb.AppendLine("> 口径：三方言（SQLite/MySQL/PG）× 两档（2000/20000）× 17 操作 × 两遍反序（批内 Average）；");
-sb.AppendLine("> LiteDB 与 Marten 为文档/嵌入式形态（* 标注），与 SQL 组无同表位可比性，单列呈现；");
 sb.AppendLine("> SQL 组比值分母 = 同方言同操作 ADO 地板；N/A 格原因见覆盖账本。");
 sb.AppendLine();
 
@@ -147,11 +133,11 @@ sb.AppendLine();
 int totalCells = 0;
 var palormWins = winners.TryGetValue("PalORM", out int pw) ? pw : 0;
 var dapperWins = winners.TryGetValue("Dapper", out int dw) ? dw : 0;
-var palormRatio = agg.Where(m => m.Implementation == "PalORM" && m.Dialect != "LiteDB")
+var palormRatio = agg.Where(m => m.Implementation == "PalORM")
     .Select(m => RatioVsAdo(agg, m)).Where(r => r > 0).Order().ToList();
 foreach (string d in dialects)
 {
-    foreach (int r in agg.Where(m => m.Dialect == d && m.Implementation != "LiteDB").Select(m => m.Rows).Distinct())
+    foreach (int r in agg.Where(m => m.Dialect == d).Select(m => m.Rows).Distinct())
     {
         foreach (string op in ops)
         {
@@ -163,7 +149,7 @@ foreach (string d in dialects)
     }
 }
 
-sb.AppendLine($"- **可比格总数（SQL 方言，不含 LiteDB/Marten）**：{totalCells}；胜场前三："
+sb.AppendLine($"- **可比格总数（SQL 方言）**：{totalCells}；胜场前三："
     + string.Join("、", winners.OrderByDescending(kv => kv.Value).Take(3)
         .Select(kv => $"{Arm(kv.Key)} {kv.Value}")));
 sb.AppendLine($"- **PalORM 中位比 ADO 地板**：{Fmt(palormRatio[palormRatio.Count / 2])}"
@@ -187,7 +173,7 @@ sb.AppendLine("## 3. 全量表（中位 µs [P/ADO] · 分配 B；快照 = 当�
 sb.AppendLine();
 foreach (string dialect in dialects)
 {
-    string dName = dialect == "LiteDB" ? "LiteDB（伪方言，嵌入式文件文档库）" : dialect;
+    string dName = dialect;
     foreach (int rows in agg.Where(m => m.Dialect == dialect).Select(m => m.Rows).Distinct().Order())
     {
         sb.AppendLine($"### {dName} rows={rows:N0}");
@@ -223,11 +209,11 @@ foreach (string dialect in dialects)
 }
 
 // ── 4. 覆盖账本 ──
-sb.AppendLine("## 4. 覆盖账本（10 库 × 方言）");
+sb.AppendLine("## 4. 覆盖账本（7 库 × 方言）");
 sb.AppendLine();
-sb.AppendLine("| 库 | SQLite | MySQL | PG | LiteDB 位 |");
+sb.AppendLine("| 库 | SQLite | MySQL | PG |");
 sb.AppendLine("|---|---|---|---|---|");
-string[] listArms = ["PalORM", "Dapper.AOT", "RepoDb", "FreeSql", "linq2db", "EF Core", "SqlSugar", "NHibernate", "Marten", "LiteDB"];
+string[] listArms = ["PalORM", "Dapper.AOT", "RepoDb", "FreeSql", "linq2db", "EF Core", "SqlSugar"];
 foreach (string lib in listArms)
 {
     string armKey = lib switch
@@ -240,8 +226,7 @@ foreach (string lib in listArms)
     string Mark(string dialect) => agg.Any(m => m.Implementation == armKey && m.Dialect == dialect)
         ? "✅"
         : naReasons.TryGetValue((armKey, dialect), out string? why) ? "❌" : "—";
-    string liteSlot = armKey == "LiteDB" ? "独立伪方言批" : armKey == "Marten" ? "—" : "—";
-    sb.AppendLine($"| {lib} | {Mark("Sqlite")} | {Mark("MySql")} | {Mark("PostgreSql")} | {liteSlot} |");
+    sb.AppendLine($"| {lib} | {Mark("Sqlite")} | {Mark("MySql")} | {Mark("PostgreSql")} |");
 }
 
 sb.AppendLine();
@@ -259,7 +244,7 @@ sb.AppendLine("## 5. 异常判读（当批推导，置信度标注）");
 sb.AppendLine();
 // 机械推导：P/ADO > 3 的显著离群格
 var outliers = new List<(string Dialect, int Rows, string Op, string Impl, double Ratio)>();
-foreach (Measurement m in agg.Where(m => m.Implementation is not ("ADO_NET" or "Marten" or "LiteDB")))
+foreach (Measurement m in agg.Where(m => armOrder.Contains(m.Implementation) && m.Implementation != "ADO_NET"))
 {
     double ratio = RatioVsAdo(agg, m);
     if (ratio >= 3.0)
@@ -284,10 +269,9 @@ sb.AppendLine();
 sb.AppendLine("## 6. 环境与形态注记");
 sb.AppendLine();
 sb.AppendLine("- Windows 10 x64；容器 MySQL 8.4.11@3306（local_infile=ON）/ PG 18.6@55432（pgbench 容器）；");
-sb.AppendLine("- MySQL 组驱动差异：linq2db/MySql.Data（镜像缺 linq2db.MySqlConnector）、NHibernate/MySqlDataDriver（5.6 无 MySqlConnectorDriver）——报告注记不剔除；");
+sb.AppendLine("- MySQL 组驱动差异：linq2db/MySql.Data（镜像缺 linq2db.MySqlConnector）——报告注记不剔除；");
 sb.AppendLine("- EF MySQL provider = Oracle 官方 MySql.EntityFrameworkCore 10.0.12（镜像无 Pomelo EF10 线）；");
-sb.AppendLine("- 文档组（Marten/LiteDB）为 jsonb/文件存储，无 SQL 同表位，读族数值量级不可与 SQL 组直接比；");
-sb.AppendLine("- NHibernate 实体=组内 virtual POCO + 每操作转换；EF=每操作 DbContext；均为官方推荐形态，成本含在测量内。");
+sb.AppendLine("- EF=每操作 DbContext；linq2db/SqlSugar 按各自官方推荐形态；成本含在测量内。");
 sb.AppendLine();
 
 // ── 7. 产物与复现 ──
@@ -331,7 +315,7 @@ string Emph(string why) => why.StartsWith("N/A") ? "" : "";
 
 static double RatioVsAdo(List<Measurement> agg, Measurement m)
 {
-    if (m.Implementation == "ADO_NET" || m.Dialect == "LiteDB")
+    if (m.Implementation == "ADO_NET")
     {
         return 0;
     }

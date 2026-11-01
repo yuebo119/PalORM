@@ -60,17 +60,7 @@ internal static class Program
 
         List<Dialect> dialects = dialectFilter.Length == 0
             ? [Dialect.Sqlite, Dialect.MySql, Dialect.PostgreSql]
-            : [.. dialectFilter.Where(d => !d.Equals("litedb", StringComparison.OrdinalIgnoreCase))
-                .Select(ParseDialect)];
-
-        // --dialects litedb：伪方言模式（2026-10-30 12 库统一横评）——LiteDB 是嵌入式文件
-        // 文档库，无 SQL 方言；以 SQLite 方言作载体（快照/守卫机制跳过，臂集合只剩 LiteDB，
-        // 载体连接用 in-memory 且不被臂使用）
-        bool liteDbMode = dialectFilter.Contains("litedb", StringComparer.OrdinalIgnoreCase);
-        if (liteDbMode)
-        {
-            dialects = [Dialect.Sqlite];
-        }
+            : [.. dialectFilter.Select(ParseDialect)];
 
         string[] opFilter = [];
         int opsIndex = Array.IndexOf(args, "--ops");
@@ -98,7 +88,7 @@ internal static class Program
         foreach (Dialect dialect in dialects)
         {
             DialectInfo info = DialectInfo.Of(dialect);
-            string cs = liteDbMode ? "Data Source=:memory:" : Connections.Resolve(info);
+            string cs = Connections.Resolve(info);
             await using DbConnection conn = info.OpenConnection(cs);
             await conn.OpenAsync().ConfigureAwait(false);
             if (dialect == Dialect.Sqlite)
@@ -111,13 +101,11 @@ internal static class Program
             // 新臂构造可能因方言不支持而失败（如 SqlSugar 缺 PG）——安全构造后跳过并在控制台
             // 登记，不拖垮整批（该格 N/A 由报告呈现）。
             // 臂按 --arms 令牌惰性构造（2026-10-30）：不测的臂不构造——跨库静态初始化
-            //（NHibernate 会话工厂、Marten DocumentStore 等）只应为参测臂付出
+            //（跨库静态初始化如 EF 模型、SqlSugar 客户端等）只应为参测组付出
             bool Want(string token) =>
                 armFilter.Length == 0 || armFilter.Contains(token, StringComparer.OrdinalIgnoreCase);
 
-            List<IPerfImplementation> armList = liteDbMode
-                ? [new LiteDbImpl()]
-                :
+            List<IPerfImplementation> armList =
                 [
                     .. When(Want("ado"), new AdoNetImpl(info)),
                     .. When(Want("dapper"), new DapperImpl(info)),
@@ -128,12 +116,7 @@ internal static class Program
                     .. When(Want("linq2db"), new Linq2DbImpl(info)),
                     .. When(Want("efcore"), new EfCoreImpl(info)),
                     .. When(Want("sqlsugar"), TryArm(() => new SqlSugarImpl(info), "sqlsugar")!),
-                    .. When(Want("nhibernate"), new NHibernateImpl(info)),
                 ];
-            if (!liteDbMode && dialect == Dialect.PostgreSql && Want("marten"))
-            {
-                armList.Add(TryArm(() => new MartenImpl(info), "marten")!);
-            }
 
             IPerfImplementation[] allImpls = [.. armList.OfType<IPerfImplementation>()];
             IPerfImplementation[] impls = armFilter.Length == 0
@@ -143,33 +126,15 @@ internal static class Program
             {
                 throw new ArgumentOutOfRangeException(
                     "--arms", string.Join(',', armFilter),
-                    "有效臂名：ado、dapper、dapper-aot、repodb、freesql、palorm、linq2db、efcore、sqlsugar、nhibernate、litedb、marten");
+                    "有效臂名：ado、dapper、dapper-aot、repodb、freesql、palorm、linq2db、efcore、sqlsugar");
             }
             try
             {
                 foreach (int rows in tiers)
                 {
                     int bulkDeleteRounds = Math.Clamp(BulkDeleteSeedRowBudget / rows, 3, BulkDeleteMaxRounds);
-                    // 每档开始：重建 perf_s1 + 两张快照（rows 档 / BulkDelete 的 rows×rounds 档）；
-                    // litedb 伪方言跳过（臂自管状态，载体 in-memory 不承载快照）——改为对臂
-                    // 显式 SetupAsync（等价语义：档位种子就绪，守卫在首个 op 前可验）
-                    if (!liteDbMode)
-                    {
-                        await BuildSnapshotsAsync(conn, dialect, rows, bulkDeleteRounds).ConfigureAwait(false);
-
-                        // Marten 文档库自管状态：守卫在首个 op 前可验，需档位开始时显式播种
-                        foreach (IPerfImplementation marten in impls.OfType<MartenImpl>())
-                        {
-                            await marten.SetupAsync(conn, rows, CancellationToken.None).ConfigureAwait(false);
-                        }
-                    }
-                    else
-                    {
-                        foreach (IPerfImplementation impl in impls)
-                        {
-                            await impl.SetupAsync(conn, rows, CancellationToken.None).ConfigureAwait(false);
-                        }
-                    }
+                    // 每档开始：重建 perf_s1 + 两张快照（rows 档 / BulkDelete 的 rows×rounds 档）
+                    await BuildSnapshotsAsync(conn, dialect, rows, bulkDeleteRounds).ConfigureAwait(false);
 
                     long[] whereInIds = BuildWhereInIds(rows);
                     long[] keys = Dataset.KeySet(rows);
@@ -180,12 +145,8 @@ internal static class Program
                     for (int pass = 0; pass < 2; pass++)
                     {
                         // 读不变量：每个读 perf_s1 的测量都从「表内恰好 rows 行」开始——
-                        // 两遍的读操作前各重置一次（PerfHub 的交错读同语义）；litedb 伪方言
-                        // 跳过（臂自管状态）
-                        if (!liteDbMode)
-                        {
-                            await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
-                        }
+                        // 两遍的读操作前各重置一次（PerfHub 的交错读同语义）
+                        await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
 
                         IPerfImplementation[] order = pass == 0 ? impls : [.. impls.Reverse()];
 
@@ -226,11 +187,11 @@ internal static class Program
                             foreach (IPerfImplementation arm in impls.Where(
                                          a => a.Name is not ("ADO_NET" or "Dapper" or "PalORM")))
                             {
-                                await ValidateArmWritesAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
+                                await ValidateArmWritesAsync(dialect, conn, arm, rows).ConfigureAwait(false);
                             }
                         }
 
-                        foreach (Op op in BuildOperations(dialect, rows, keys, whereInIds, bulkDeleteRounds, liteDbMode, liteDbMode ? impls[0] : null))
+                        foreach (Op op in BuildOperations(dialect, rows, keys, whereInIds, bulkDeleteRounds))
                         {
                             if (op.MinTierOnly && rows != tiers.Min())
                             {
@@ -283,7 +244,7 @@ internal static class Program
         => want ? arms.OfType<IPerfImplementation>() : [];
 
     /// <summary>臂安全构造——方言不支持/初始化失败时返回 null 并在控制台登记
-    ///（如 SqlSugar 缺 PG、Marten 仅 PG：方言级失败不拖垮整批，该臂 N/A 进报告）。</summary>
+    ///（如 SqlSugar 缺 PG：方言级失败不拖垮整批，该组 N/A 进报告）。</summary>
     private static IPerfImplementation? TryArm(Func<IPerfImplementation> factory, string armName)
     {
         try
@@ -304,48 +265,16 @@ internal static class Program
     ///（前者 UPDATE，后者 INSERT … ON CONFLICT / ON DUPLICATE KEY / 文档覆写），两条都要验。</para>
     /// <para>2026-10-30 从 RepoDb 专用泛化为全部参与守卫的臂（读守卫名单同源）；
     /// ADO/Dapper/PalORM 的写后校验仍是历史批次的已知缺口（ADR-S「已知边界」）。</para></summary>
-    /// <summary>校验间复原——SQL 方言走快照 Restore；litedb 伪方言走臂重播种（同语义）。</summary>
-    private static Task RestoreForValidationAsync(
-        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows, bool liteDbMode)
-        => liteDbMode
-            ? arm.SetupAsync(conn, rows, CancellationToken.None)
-            : RestoreAsync(conn, dialect, "perf_s1_seed");
+    /// <summary>校验间复原——按快照 Restore 回种子态。</summary>
+    private static Task RestoreForValidationAsync(Dialect dialect, DbConnection conn, int rows)
+        => RestoreAsync(conn, dialect, "perf_s1_seed");
 
-    private static async Task ValidateArmWritesAsync(
-        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows, bool liteDbMode = false)
-    {
-        // 自管状态臂（LiteDB/Marten）在校验期抑制脏复位：BulkUpdate→读回是方法间序列，
-        // SQL 方言同序列直读不复位，状态语义对齐（测量路径不受影响）
-        if (arm is LiteDbImpl liteDb)
-        {
-            liteDb.SuppressResetForValidation = true;
-        }
-
-        if (arm is MartenImpl marten)
-        {
-            marten.SuppressResetForValidation = true;
-        }
-
-        try
-        {
-            await ValidateArmWritesCoreAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (arm is LiteDbImpl liteDb2)
-            {
-                liteDb2.SuppressResetForValidation = false;
-            }
-
-            if (arm is MartenImpl marten2)
-            {
-                marten2.SuppressResetForValidation = false;
-            }
-        }
-    }
+    private static Task ValidateArmWritesAsync(
+        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows)
+        => ValidateArmWritesCoreAsync(dialect, conn, arm, rows);
 
     private static async Task ValidateArmWritesCoreAsync(
-        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows, bool liteDbMode)
+        Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows)
     {
         int count = Math.Min(rows, 200);
         List<S1Row> modified = Dataset.SeedRows(count, 0);
@@ -365,14 +294,14 @@ internal static class Program
         S1Row? afterUpdate = await arm.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
             .ConfigureAwait(false);
         bool updateOk = Same(afterUpdate, modified[0]);
-        await RestoreForValidationAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
+        await RestoreForValidationAsync(dialect, conn, rows).ConfigureAwait(false);
 
         // 路径 2：UpsertBatch（对已存在主键段整批 UPSERT，值同样改成审计值）
         await arm.UpsertBatchAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
         S1Row? afterUpsert = await arm.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
             .ConfigureAwait(false);
         bool upsertOk = Same(afterUpsert, modified[0]);
-        await RestoreForValidationAsync(dialect, conn, arm, rows, liteDbMode).ConfigureAwait(false);
+        await RestoreForValidationAsync(dialect, conn, rows).ConfigureAwait(false);
 
         if (!updateOk || !upsertOk)
         {
@@ -394,7 +323,7 @@ internal static class Program
         "sqlite" => Dialect.Sqlite,
         "mysql" => Dialect.MySql,
         "pg" or "postgres" or "postgresql" => Dialect.PostgreSql,
-        _ => throw new ArgumentOutOfRangeException(nameof(value), value, "dialect 只支持 sqlite/mysql/pg/litedb")
+        _ => throw new ArgumentOutOfRangeException(nameof(value), value, "dialect 只支持 sqlite/mysql/pg")
     };
 
     /// <summary>--arms 令牌 → 实现名（ado 令牌对应实现名 ADO_NET；复合名臂显式映射）。</summary>
@@ -408,15 +337,11 @@ internal static class Program
     };
 
     private static List<Op> BuildOperations(
-        Dialect dialect, int rows, long[] keys, long[] whereInIds, int bulkDeleteRounds,
-        bool liteDbMode = false, IPerfImplementation? liteArm = null)
+        Dialect dialect, int rows, long[] keys, long[] whereInIds, int bulkDeleteRounds)
     {
-        // litedb 伪方言：臂自管状态——SQL 快照 Prepare 重定向为臂重播种（同一语义：
-        // 计时前状态复位；EnumInserts 的 perf_enum 建表也由重播种覆盖——SetupAsync 清枚举集合）
-        Func<DbConnection, Task>? Prep(string snapshot) =>
-            liteDbMode
-                ? c => liteArm!.SetupAsync(c, rows, CancellationToken.None)
-                : c => RestoreAsync(c, dialect, snapshot);
+        // 计时前状态复位 = 按快照 Restore（各组同一份种子数据）
+        Func<DbConnection, Task> Prep(string snapshot)
+            => c => RestoreAsync(c, dialect, snapshot);
 
         List<Op> ops =
         [
@@ -492,7 +417,7 @@ internal static class Program
             new("EnumInserts", "Transaction", 200,
                 (impl, c, i) => impl.EnumInsertsAsync(
                     c, Dataset.SeedEnumRows(100, (long)i * 100), CancellationToken.None),
-                liteDbMode ? Prep("perf_enum") : c => AdoNetImpl.SetupPerfEnumTableAsync(dialect, c, CancellationToken.None),
+                c => AdoNetImpl.SetupPerfEnumTableAsync(dialect, c, CancellationToken.None),
                 MinTierOnly: true),
         ];
 
