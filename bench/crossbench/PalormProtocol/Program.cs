@@ -149,9 +149,8 @@ internal static class Program
                         if (dialect == Dialect.PostgreSql)
                         {
                             // 独立小写表组不在共享表上留状态，pass 起点同样要复位
-                            await RestoreFromAsync(
-                                conn, dialect, Dataset.S1LowercaseTableName + "_seed",
-                                Dataset.S1LowercaseTableName, lowercase: true).ConfigureAwait(false);
+                            await RestoreLowercaseAsync(
+                                conn, dialect, "perf_s1_seed", Dataset.S1LowercaseTableName).ConfigureAwait(false);
                         }
 
                         IPerfImplementation[] order = pass == 0 ? impls : [.. impls.Reverse()];
@@ -470,25 +469,18 @@ internal static class Program
         await InsertRowsAsync(
             conn, dialect, "perf_s1_seed_bd", Dataset.SeedRows(rows * bulkDeleteRounds)).ConfigureAwait(false);
 
-        // 独立小写表组（SqlSugar+PG）的快照：与共享快照同源同形，独立表组的复位只认这一套
+        // 2026-11-01 精简：独立小写表组改为从共享快照按列名映射复位，不再另建快照；
+        // 早期版本留下的 lc 快照表（每档 10~22 万行）在此幂等清理。
         if (dialect == Dialect.PostgreSql)
         {
-            foreach (string name in new[]
+            foreach (string stale in new[]
                      {
                          Dataset.S1LowercaseTableName + "_seed",
                          Dataset.S1LowercaseTableName + "_seed_bd",
                      })
             {
-                await ExecAsync(conn, $"DROP TABLE IF EXISTS {name}").ConfigureAwait(false);
-                await ExecAsync(conn, Dataset.CreateS1LowercaseTableSql(dialect, name)).ConfigureAwait(false);
+                await ExecAsync(conn, $"DROP TABLE IF EXISTS {stale}").ConfigureAwait(false);
             }
-
-            await InsertRowsAsync(
-                conn, dialect, Dataset.S1LowercaseTableName + "_seed", Dataset.SeedRows(rows), lowercase: true)
-                .ConfigureAwait(false);
-            await InsertRowsAsync(
-                conn, dialect, Dataset.S1LowercaseTableName + "_seed_bd",
-                Dataset.SeedRows(rows * bulkDeleteRounds), lowercase: true).ConfigureAwait(false);
         }
 
         await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
@@ -500,18 +492,27 @@ internal static class Program
     private static Task RestoreAsync(DbConnection conn, Dialect dialect, string snapshot)
         => RestoreFromAsync(conn, dialect, snapshot, Dataset.Table(dialect));
 
-    /// <summary>按组复位：独立表组（SqlSugar+PG）落到自己的小写表，其余落共享表。
-    /// <para>物理表隔离后，两套表的快照必须同源同形：名字由共享快照名派生
-    ///（perf_s1_seed → perf_s1_lc_seed），内容由同一次 <see cref="Dataset.SeedRows"/> 播种。</para></summary>
+    /// <summary>按组复位：独立表组（SqlSugar+PG）把共享快照按列名映射灌进自己的小写表，
+    /// 不另建一套快照表（2026-11-01 精简：省 BuildSnapshots 每档 10~22 万行重复插入，
+    /// 也少一套需与共享快照同步维护的数据面）。</summary>
     private static Task RestoreForArmAsync(
         DbConnection conn, Dialect dialect, string snapshot, IPerfImplementation arm)
         => arm is ISeparateTableArm separate && separate.S1TableFor(dialect) is { } table
-            ? RestoreFromAsync(conn, dialect, SnapshotForArm(snapshot, table), table, lowercase: true)
+            ? RestoreLowercaseAsync(conn, dialect, snapshot, table)
             : RestoreAsync(conn, dialect, snapshot);
 
-    /// <summary>共享快照名 → 独立表快照名（perf_s1_seed → perf_s1_lc_seed）。</summary>
-    private static string SnapshotForArm(string snapshot, string table)
-        => snapshot.Replace("perf_s1", table, StringComparison.Ordinal);
+    /// <summary>小写表复位：DDL 用不加引号的小写列，数据从共享快照按列名映射取。</summary>
+    private static async Task RestoreLowercaseAsync(
+        DbConnection conn, Dialect dialect, string snapshot, string target)
+    {
+        await ExecAsync(conn, $"DROP TABLE IF EXISTS {target}").ConfigureAwait(false);
+        await ExecAsync(conn, Dataset.CreateS1LowercaseTableSql(dialect, target)).ConfigureAwait(false);
+        await ExecAsync(
+            conn,
+            $"INSERT INTO {target} ({string.Join(", ", LowercaseColumns)}) "
+            + $"SELECT {string.Join(", ", LowercaseColumns.Select(c => Q(dialect, char.ToUpperInvariant(c[0]) + c[1..])))} "
+            + $"FROM {Q(dialect, snapshot)}").ConfigureAwait(false);
+    }
 
     /// <summary>枚举表复位：独立表组建自己的小写枚举表。</summary>
     private static Task SetupEnumTableAsync(Dialect dialect, DbConnection conn, IPerfImplementation arm)
@@ -520,35 +521,29 @@ internal static class Program
             : AdoNetImpl.SetupPerfEnumTableAsync(dialect, conn, CancellationToken.None);
 
     private static async Task RestoreFromAsync(
-        DbConnection conn, Dialect dialect, string snapshot, string target, bool lowercase = false)
+        DbConnection conn, Dialect dialect, string snapshot, string target)
     {
-        string ddl = lowercase
-            ? Dataset.CreateS1LowercaseTableSql(dialect, target)
-            : Dataset.CreateTableSql(dialect).Replace("perf_s1", target, StringComparison.Ordinal);
+        string ddl = Dataset.CreateTableSql(dialect).Replace("perf_s1", target, StringComparison.Ordinal);
 
         await ExecAsync(conn, $"DROP TABLE IF EXISTS {target}").ConfigureAwait(false);
         await ExecAsync(conn, ddl).ConfigureAwait(false);
-        string source = lowercase ? snapshot : Q(dialect, snapshot);
         await ExecAsync(
             conn,
-            $"INSERT INTO {target} SELECT * FROM {source}").ConfigureAwait(false);
+            $"INSERT INTO {target} SELECT * FROM {Q(dialect, snapshot)}").ConfigureAwait(false);
     }
 
     private static readonly string[] LowercaseColumns = ["id", "name", "qty", "price", "marker"];
 
     private static async Task InsertRowsAsync(
-        DbConnection conn, Dialect dialect, string table, IReadOnlyList<S1Row> rows, bool lowercase = false)
+        DbConnection conn, Dialect dialect, string table, IReadOnlyList<S1Row> rows)
     {
-        string[] columnNames = lowercase
-            ? LowercaseColumns
-            : [.. new[] { "Id", "Name", "Qty", "Price", "Marker" }.Select(c => Dataset.Q(dialect, c))];
-        string columns = string.Join(", ", columnNames);
+        string columns = string.Join(
+            ", ",
+            new[] { "Id", "Name", "Qty", "Price", "Marker" }.Select(c => Dataset.Q(dialect, c)));
         await using DbTransaction tran = await conn.BeginTransactionAsync().ConfigureAwait(false);
         await using DbCommand cmd = conn.CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandText = lowercase
-            ? $"INSERT INTO {table} ({columns}) VALUES (@Id,@Name,@Qty,@Price,@Marker)"
-            : $"INSERT INTO {Q(dialect, table)} ({columns}) VALUES (@Id,@Name,@Qty,@Price,@Marker)";
+        cmd.CommandText = $"INSERT INTO {Q(dialect, table)} ({columns}) VALUES (@Id,@Name,@Qty,@Price,@Marker)";
         DbParameter pId = AddParameter(cmd, "@Id");
         DbParameter pName = AddParameter(cmd, "@Name");
         DbParameter pQty = AddParameter(cmd, "@Qty");
