@@ -75,7 +75,7 @@ internal static class CommandTimeoutNormalizer
 
     /// <summary>异常归一的唯一真源：超时原样放行（返回 null，调用方重抛保留原栈），
     /// 内层超时解包（D4），越过截止线的一切异常归一时超（D7）。</summary>
-    private static TimeoutException? NormalizeOnce(Exception ex, long startTimestamp, int timeoutSeconds)
+    internal static TimeoutException? NormalizeOnce(Exception ex, long startTimestamp, int timeoutSeconds)
     {
         if (ex is TimeoutException)
             return null;
@@ -90,6 +90,13 @@ internal static class CommandTimeoutNormalizer
                 + $"surfaced {ex.GetType().Name} instead of a timeout exception (MySQL semantics).", ex);
         }
         return null;
+    }
+
+    /// <summary>成功返回前的耗时判定（进入方法内联形态用）：起点为 0（未启用）时只多一次分支。</summary>
+    internal static T Complete<T>(T result, long startTimestamp, int timeoutSeconds)
+    {
+        ThrowIfElapsed(startTimestamp, timeoutSeconds);
+        return result;
     }
 
     private static void ThrowIfElapsed(long startTimestamp, int timeoutSeconds)

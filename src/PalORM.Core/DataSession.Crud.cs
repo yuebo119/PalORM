@@ -1288,20 +1288,9 @@ public sealed partial class DataSession<TProvider>
         ArgumentNullException.ThrowIfNull(key);
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        // 超时归一条件化（2026-10-31 极致性能轮）：进程内引擎（PreferSynchronousIo，
-        // SQLite）不包 RunAsync 状态机；网络 Provider 保留包装——D4 内层超时解包对 PG
-        // 同样必要（E4_PostgreSql 实测），MySQL 另有 D7 耗时判定。
-        if (TProvider.PreferSynchronousIo)
-            return GetByKeyEntryAsync<T>(key, ct);
-        // 计时起点必须先取（2026-11-01 修 D7 边界漏判）：实参从左到右求值，写成
-        // RunAsync(Entry(...), Begin(...)) 会让 Begin 在进入方法的同步段之后才取值，
-        // 判定窗口被截短（同 ScalarAsync 注释的实测数据）。
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
-        return CommandTimeoutNormalizer.RunAsync(
-            GetByKeyEntryAsync<T>(key, ct),
-            startTimestamp,
-            _commandTimeoutSeconds);
+        // D4/D7 已内联进 GetByKeyEntryAsync 的状态机（2026-11-01），这里不再套包装层；
+        // 起点在进入方法首行取，判定窗口覆盖连接获取与租约进入。
+        return GetByKeyEntryAsync<T>(key, ct);
     }
 
     // ── G2 证伪回退（2026-10-14 并发塌方定位轮，勿重开此形态）──
@@ -1318,73 +1307,99 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<T?> GetByKeyEntryAsync<T>(object key, CancellationToken ct)
         where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
-        // P1-2：三查合一（From<T> 同型）。刀1：静态缓存命中零查找；刀2：事务单次取用贯穿
-        //（原 Entry 弹性检查与槽路径重设各取一次，各省一次 lock）。
-        EntityRuntimeInfo info = GetEntityInfo<T>();
-        DbTransaction? activeTransaction = GetActiveTransaction();
-
-        // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
-        // 主连接形态（复用槽有效）。
-        if (_operationState.ParallelReadsEnabled)
+        // D4/D7 内联（2026-11-01）：起点在方法首行取，耗时判定与异常归一都落在本状态机内，
+        // 不再外套 CommandTimeoutNormalizer.RunAsync（实测每命令省 264 B 的包装分配）。
+        // 起点必须早于 EnterReadOnly：判定窗口要覆盖连接获取与租约进入，与旧包装宽度一致。
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        try
         {
-            // R3（2026-10-12）：直通分支免闭包直调（主分支 C10 同型；作用域与事务互斥
-            // ITM-798，无需事务判定）。原闭包捕获 6 变量 + this，直通时约 250-300B/op 纯浪费。
-            ResilienceExecutor parallelExecutor = Resilience;
-            if (parallelExecutor.IsPassThrough)
-                return await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false);
-            // R4-λ:static lambda + 值元组状态,闭包归零(static 委托按调用点缓存)
-            return await parallelExecutor.ExecuteAsync(
-                static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(state.Info, state.Key, token).AsTask(),
-                (Session: this, Info: info, Key: key),
-                ct).ConfigureAwait(false);
-        }
+            using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+            // v4.0 优化 B：CurrentState 单次快照--与 From<T> 对齐，替代 3 次独立 Volatile.Read（每次省 ~2 次内存屏障）。
+            // P1-2：三查合一（From<T> 同型）。刀1：静态缓存命中零查找；刀2：事务单次取用贯穿
+            //（原 Entry 弹性检查与槽路径重设各取一次，各省一次 lock）。
+            EntityRuntimeInfo info = GetEntityInfo<T>();
+            DbTransaction? activeTransaction = GetActiveTransaction();
 
-        // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）。
-        // C10/C12（2026-10-12 审读重开落地）：直通分支免闭包直调（A2/ExecuteReadScalarAsync
-        // 同型）——闭包捕获 + 异步状态机是每读固定成本，直通时弹性语义本就不参与，包装纯属
-        // 浪费；非直通分支才构造捕获委托（重试需要）。
-        // S3：成功路径零弹性。无事务且会话尚未配置/物化弹性时，首次尝试直接执行；
-        // 只有失败才物化执行器并续跑剩余重试。会话级熔断器从 Closed 起步，首次失败前
-        // 无需 Enter 检查；进程级熔断与总预算仍走执行器（必须先查共享开闸状态/总预算）。
-        if (activeTransaction is not null || !ResilienceConfigured)
-            return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
-        if (DirectFirstReadAllowed)
-        {
-            try
+            // step8 连接治理：并行读作用域内走读池（每尝试独立获取/归还）；作用域外保持
+            // 主连接形态（复用槽有效）。
+            if (_operationState.ParallelReadsEnabled)
             {
-                return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
-            {
-                ResilienceExecutor executor = Resilience;
-                if (_options.MaxRetries > 0)
+                // R3（2026-10-12）：直通分支免闭包直调（主分支 C10 同型；作用域与事务互斥
+                // ITM-798，无需事务判定）。原闭包捕获 6 变量 + this，直通时约 250-300B/op 纯浪费。
+                ResilienceExecutor parallelExecutor = Resilience;
+                if (parallelExecutor.IsPassThrough)
                 {
-                    return await executor.ExecuteAfterFirstFailureAsync(
-                        static (state, token) => state.Session.GetByKeyCoreAsync<T>(
-                            state.Info, state.Tx, state.Key, token).AsTask(),
-                        (Session: this, Info: info, Tx: activeTransaction, Key: key),
-                        ct).ConfigureAwait(false);
+                    return CommandTimeoutNormalizer.Complete(
+                        await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false),
+                        startTimestamp, _commandTimeoutSeconds);
                 }
-                executor.RecordDirectFailure(ex);
-                throw;
+                // R4-λ:static lambda + 值元组状态,闭包归零(static 委托按调用点缓存)
+                return CommandTimeoutNormalizer.Complete(
+                    await parallelExecutor.ExecuteAsync(
+                        static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(state.Info, state.Key, token).AsTask(),
+                        (Session: this, Info: info, Key: key),
+                        ct).ConfigureAwait(false),
+                    startTimestamp, _commandTimeoutSeconds);
             }
-            catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+
+            // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）。
+            // C10/C12（2026-10-12 审读重开落地）：直通分支免闭包直调（A2/ExecuteReadScalarAsync
+            // 同型）——闭包捕获 + 异步状态机是每读固定成本，直通时弹性语义本就不参与，包装纯属
+            // 浪费；非直通分支才构造捕获委托（重试需要）。
+            // S3：成功路径零弹性。无事务且会话尚未配置/物化弹性时，首次尝试直接执行；
+            // 只有失败才物化执行器并续跑剩余重试。会话级熔断器从 Closed 起步，首次失败前
+            // 无需 Enter 检查；进程级熔断与总预算仍走执行器（必须先查共享开闸状态/总预算）。
+            if (activeTransaction is not null || !ResilienceConfigured)
             {
-                // 直调路径不进执行器时，超时由驱动包在自身异常里；这里做与执行器出口相同的解包，
-                // 使调用方按超时类型捕获能覆盖弹性路径与直通路径两种情形（D4）。
-                throw new TimeoutException(timeout.Message, ex);
+                return CommandTimeoutNormalizer.Complete(
+                    await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false),
+                    startTimestamp, _commandTimeoutSeconds);
             }
+            if (DirectFirstReadAllowed)
+            {
+                try
+                {
+                    return CommandTimeoutNormalizer.Complete(
+                        await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false),
+                        startTimestamp, _commandTimeoutSeconds);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
+                {
+                    ResilienceExecutor executor = Resilience;
+                    if (_options.MaxRetries > 0)
+                    {
+                        return CommandTimeoutNormalizer.Complete(
+                            await executor.ExecuteAfterFirstFailureAsync(
+                                static (state, token) => state.Session.GetByKeyCoreAsync<T>(
+                                    state.Info, state.Tx, state.Key, token).AsTask(),
+                                (Session: this, Info: info, Tx: activeTransaction, Key: key),
+                                ct).ConfigureAwait(false),
+                            startTimestamp, _commandTimeoutSeconds);
+                    }
+                    executor.RecordDirectFailure(ex);
+                    throw;
+                }
+            }
+            ResilienceExecutor getByKeyExecutor = Resilience;
+            if (getByKeyExecutor.IsPassThrough)
+            {
+                return CommandTimeoutNormalizer.Complete(
+                    await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false),
+                    startTimestamp, _commandTimeoutSeconds);
+            }
+            // R4-λ:static lambda + 值元组状态,闭包归零
+            return CommandTimeoutNormalizer.Complete(
+                await getByKeyExecutor.ExecuteAsync(
+                    static (state, token) => state.Session.GetByKeyCoreAsync<T>(state.Info, state.Tx, state.Key, token).AsTask(),
+                    (Session: this, Info: info, Tx: activeTransaction, Key: key),
+                    ct).ConfigureAwait(false),
+                startTimestamp, _commandTimeoutSeconds);
         }
-        ResilienceExecutor getByKeyExecutor = Resilience;
-        if (getByKeyExecutor.IsPassThrough)
-            return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
-        // R4-λ:static lambda + 值元组状态,闭包归零
-        return await getByKeyExecutor.ExecuteAsync(
-            static (state, token) => state.Session.GetByKeyCoreAsync<T>(state.Info, state.Tx, state.Key, token).AsTask(),
-            (Session: this, Info: info, Tx: activeTransaction, Key: key),
-            ct).ConfigureAwait(false);
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
+        {
+            throw mapped;
+        }
     }
 
     /// <summary>GetAsync 并行读作用域分支的执行核心（R3 抽出）：参数直传不捕获，
@@ -1459,68 +1474,78 @@ public sealed partial class DataSession<TProvider>
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        // 超时归一条件化（同 GetAsync）：进程内引擎跳过包装，网络 Provider 保留 D4/D7
-        if (TProvider.PreferSynchronousIo)
-            return GetAllEntryAsync<T>(ct);
-        // 计时起点必须先取（同 ScalarAsync/GetAsync，2026-11-01）
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
-        return CommandTimeoutNormalizer.RunAsync(
-            GetAllEntryAsync<T>(ct),
-            startTimestamp,
-            _commandTimeoutSeconds);
+        // D4/D7 已内联进 GetAllEntryAsync 的状态机（2026-11-01），这里不再套包装层。
+        return GetAllEntryAsync<T>(ct);
     }
 
     // G2 证伪回退（2026-10-14，勿重开非 async 租约入口）：理由见 GetByKeyEntryAsync 上方登记
     private async ValueTask<List<T>> GetAllEntryAsync<T>(CancellationToken ct)
         where T : class, new()
     {
-        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        // v4.0 优化 B：CurrentState 单次快照--与 GetAsync 和 From<T> 对齐。
-        // P1-2：三查合一（From<T>/GetByKey 同型，合并视图一次取全）。刀1：静态缓存零查找；
-        // 刀2：事务单次取用（原弹性检查与 lease 内 CreateCommand 各取一次）。
-        EntityRuntimeInfo info = GetEntityInfo<T>();
-        DbTransaction? activeTransaction = GetActiveTransaction();
-
-        // S3：成功路径零弹性（同 GetByKeyEntryAsync）：无事务且未物化弹性时首次直接执行，
-        // 失败后才进入执行器续跑剩余重试。进程级熔断/总预算仍走执行器。
-        if (activeTransaction is not null || !ResilienceConfigured)
-            return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
-        if (DirectFirstReadAllowed)
+        // D4/D7 内联（2026-11-01，同 GetByKeyEntryAsync）：起点早于 EnterReadOnly，判定覆盖整个操作。
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        try
         {
-            try
+            using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+            // v4.0 优化 B：CurrentState 单次快照--与 GetAsync 和 From<T> 对齐。
+            // P1-2：三查合一（From<T>/GetByKey 同型，合并视图一次取全）。刀1：静态缓存零查找；
+            // 刀2：事务单次取用（原弹性检查与 lease 内 CreateCommand 各取一次）。
+            EntityRuntimeInfo info = GetEntityInfo<T>();
+            DbTransaction? activeTransaction = GetActiveTransaction();
+
+            // S3：成功路径零弹性（同 GetByKeyEntryAsync）：无事务且未物化弹性时首次直接执行，
+            // 失败后才进入执行器续跑剩余重试。进程级熔断/总预算仍走执行器。
+            if (activeTransaction is not null || !ResilienceConfigured)
             {
-                return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
+                return CommandTimeoutNormalizer.Complete(
+                    await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false),
+                    startTimestamp, _commandTimeoutSeconds);
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
+            if (DirectFirstReadAllowed)
             {
-                ResilienceExecutor executor = Resilience;
-                if (_options.MaxRetries > 0)
+                try
                 {
-                    return await executor.ExecuteAfterFirstFailureAsync(
-                        static (state, token) => state.Session.GetAllCoreAsync<T>(
-                            state.Info, state.Tx, token).AsTask(),
-                        (Session: this, Info: info, Tx: activeTransaction),
-                        ct).ConfigureAwait(false);
+                    return CommandTimeoutNormalizer.Complete(
+                        await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false),
+                        startTimestamp, _commandTimeoutSeconds);
                 }
-                executor.RecordDirectFailure(ex);
-                throw;
+                catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
+                {
+                    ResilienceExecutor executor = Resilience;
+                    if (_options.MaxRetries > 0)
+                    {
+                        return CommandTimeoutNormalizer.Complete(
+                            await executor.ExecuteAfterFirstFailureAsync(
+                                static (state, token) => state.Session.GetAllCoreAsync<T>(
+                                    state.Info, state.Tx, token).AsTask(),
+                                (Session: this, Info: info, Tx: activeTransaction),
+                                ct).ConfigureAwait(false),
+                            startTimestamp, _commandTimeoutSeconds);
+                    }
+                    executor.RecordDirectFailure(ex);
+                    throw;
+                }
             }
-            catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+            ResilienceExecutor getAllExecutor = Resilience;
+            if (getAllExecutor.IsPassThrough)
             {
-                // 直调路径不进执行器时，超时由驱动包在自身异常里；这里做与执行器出口相同的解包，
-                // 使调用方按超时类型捕获能覆盖弹性路径与直通路径两种情形（D4）。
-                throw new TimeoutException(timeout.Message, ex);
+                return CommandTimeoutNormalizer.Complete(
+                    await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false),
+                    startTimestamp, _commandTimeoutSeconds);
             }
+            // R4-λ:static lambda + 值元组状态,闭包归零
+            return CommandTimeoutNormalizer.Complete(
+                await getAllExecutor.ExecuteAsync(
+                    static (state, token) => state.Session.GetAllCoreAsync<T>(state.Info, state.Tx, token).AsTask(),
+                    (Session: this, Info: info, Tx: activeTransaction),
+                    ct).ConfigureAwait(false),
+                startTimestamp, _commandTimeoutSeconds);
         }
-        ResilienceExecutor getAllExecutor = Resilience;
-        if (getAllExecutor.IsPassThrough)
-            return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
-        // R4-λ:static lambda + 值元组状态,闭包归零
-        return await getAllExecutor.ExecuteAsync(
-            static (state, token) => state.Session.GetAllCoreAsync<T>(state.Info, state.Tx, token).AsTask(),
-            (Session: this, Info: info, Tx: activeTransaction),
-            ct).ConfigureAwait(false);
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
+        {
+            throw mapped;
+        }
     }
 
     /// <summary>GetAllAsync 的执行核心（C10 抽出）：参数直传不捕获，直通直调与弹性重试共用。

@@ -605,50 +605,50 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
-        // 超时归一条件化（同 GetAsync/GetAllAsync，2026-10-31）：进程内引擎跳过包装，
-        // 网络 Provider 保留 D4 内层超时解包与 MySQL D7 耗时判定
-        if (TProvider.PreferSynchronousIo)
-            return ScalarEntryAsync<T>(sql, readFromReplica, ct);
-        // 计时起点必须先取（2026-11-01 修 D7 边界漏判）：实参从左到右求值，写成
-        // RunAsync(Entry(...), Begin(...)) 会让 Begin 在进入方法的同步段之后才取值，
-        // 判定窗口被截短（实测 MySQL SELECT SLEEP(5)/1s 在 1004~1021 ms 返回，窗口缩到
-        // 98x ms 后漏判，E4_MySql 契约用例偶发失败）。
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
-        return CommandTimeoutNormalizer.RunAsync(
-            ScalarEntryAsync<T>(sql, readFromReplica, ct),
-            startTimestamp,
-            _commandTimeoutSeconds);
+        // D4/D7 已内联进 ScalarEntryAsync 的状态机（2026-11-01），这里不再套包装层。
+        return ScalarEntryAsync<T>(sql, readFromReplica, ct);
     }
 
     private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)
     {
-        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
-        MarkConnectionStateUnknownForRawSql();
-        // 刀2：事务单次取用（刀1 不适用：Scalar 的 T 是标量类型而非实体，无注册表查找）。
-        DbTransaction? scalarTransaction = GetActiveTransaction();
-        // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——就地写失败回退下方新建路径
-        string scalarCommandText = FormatSqlWithParameters(sql);
-        DbCommand? reusedScalar = readFromReplica ? null : TryAcquireReusableDirectCommand(scalarCommandText);
-        if (reusedScalar is not null)
-            EnsureReusableDirectParameters(reusedScalar, sql);
-        if (reusedScalar is not null && TryBindFormattableValuesInPlace(reusedScalar, sql))
+        // D4/D7 内联（2026-11-01）：起点早于 EnterReadOnly，判定覆盖连接获取与执行全程。
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        try
         {
-            ApplyReusableCommandState(reusedScalar, scalarTransaction, scalarCommandText);
-            if (_querySlot is { } scalarSlot)
-                await scalarSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
-            object? reusedResult = await ExecuteScalarCoreAsync(reusedScalar, ct).ConfigureAwait(false);
-            return NormalizeScalarResult<T>(reusedResult);
-        }
+            using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+            MarkConnectionStateUnknownForRawSql();
+            // 刀2：事务单次取用（刀1 不适用：Scalar 的 T 是标量类型而非实体，无注册表查找）。
+            DbTransaction? scalarTransaction = GetActiveTransaction();
+            // P1-1：直查族命令复用（A9 同型，主连接 + 非读路由形态）——就地写失败回退下方新建路径
+            string scalarCommandText = FormatSqlWithParameters(sql);
+            DbCommand? reusedScalar = readFromReplica ? null : TryAcquireReusableDirectCommand(scalarCommandText);
+            if (reusedScalar is not null)
+                EnsureReusableDirectParameters(reusedScalar, sql);
+            if (reusedScalar is not null && TryBindFormattableValuesInPlace(reusedScalar, sql))
+            {
+                ApplyReusableCommandState(reusedScalar, scalarTransaction, scalarCommandText);
+                if (_querySlot is { } scalarSlot)
+                    await scalarSlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
+                object? reusedResult = await ExecuteScalarCoreAsync(reusedScalar, ct).ConfigureAwait(false);
+                return CommandTimeoutNormalizer.Complete(
+                    NormalizeScalarResult<T>(reusedResult), startTimestamp, _commandTimeoutSeconds);
+            }
 
-        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, scalarTransaction, ct).ConfigureAwait(false);
-        DbCommand cmd = lease.Command;
-        cmd.CommandText = scalarCommandText;
-        cmd.CommandTimeout = _commandTimeoutSeconds;
-        BindFormattableParameters(cmd, sql);
-        object? result = await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false);
-        lease.MarkHealthy();
-        return NormalizeScalarResult<T>(result);
+            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica, scalarTransaction, ct).ConfigureAwait(false);
+            DbCommand cmd = lease.Command;
+            cmd.CommandText = scalarCommandText;
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            BindFormattableParameters(cmd, sql);
+            object? result = await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false);
+            lease.MarkHealthy();
+            return CommandTimeoutNormalizer.Complete(
+                NormalizeScalarResult<T>(result), startTimestamp, _commandTimeoutSeconds);
+        }
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
+        {
+            throw mapped;
+        }
     }
 
     /// <summary>P1-1：ScalarEntryAsync 两分支共用的结果归一（原内联尾段逐位提取）。</summary>
