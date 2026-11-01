@@ -501,30 +501,66 @@ internal sealed class SessionOperationState
     /// 依据与二次型签名见 <see cref="PrewarmCurrentOperationOwner"/> 的门槛 1→2 段。</summary>
     internal const int PrewarmThreshold = 2;
 
-    // ─── 物化容量启发（M4.6，2026-10-31：从 DataSession 移入，LINQ 与直查族共享）──
+    // ─── 物化容量启发（M4.6，2026-10-31：从 DataSession 移入，LINQ 与直查族共享；
+    //     2026-11-01 改内联单槽 + 惰性字典）──
+    // 每操作一会话形态下字典建一次、用一次就随会话丢弃（实测每次物化 +1.5 KB，见
+    // docs/性能对照分析-优化前后-2026-11-01.md §3.1）。改为先只记一个内联槽：同类型
+    // 再次物化直接命中；出现第二种类型才升级为字典，复用会话的收益不变。
+    // 代价：会话对象多两个字段（Type 8B + int 4B，对齐后 +16B/会话，BDN 单行项实测 +0.7%），
+    // 与每次物化省下的 1.5 KB 相比是两个数量级。
+    private Type? _materializedType;
+    private int _materializedCount;
     private System.Collections.Concurrent.ConcurrentDictionary<Type, int>? _materializedCapacity;
 
     /// <summary>取会话内上次同实体物化行数（无记录 16）。</summary>
     internal int GetMaterializedCapacity<T>() where T : class, new()
-        => _materializedCapacity is not null && _materializedCapacity.TryGetValue(typeof(T), out int cap)
-            ? cap
-            : 16;
+    {
+        System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
+        if (dict is not null && dict.TryGetValue(typeof(T), out int cap))
+            return cap;
+        return ReferenceEquals(Volatile.Read(ref _materializedType), typeof(T)) ? _materializedCount : 16;
+    }
 
     /// <summary>记录物化行数（上界内 hint；小结果集不记）。同值不写，避免重复读同规模
-    /// 结果集时每次一条 ConcurrentDictionary 写锁。</summary>
+    /// 结果集时每次一条字典写锁。内联槽路径零分配：先写值再发布类型，读侧先读类型。</summary>
     internal void RecordMaterializedCount<T>(int count) where T : class, new()
     {
         int recorded = Math.Min(count, SqlLimits.MaxMaterializedCapacityHint);
         if (recorded <= 16)
             return;
+        Type type = typeof(T);
+
         System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
-        if (dict is null)
+        if (dict is not null)
         {
-            System.Collections.Concurrent.ConcurrentDictionary<Type, int> created = new();
-            dict = Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
+            if (!dict.TryGetValue(type, out int previous) || previous != recorded)
+                dict[type] = recorded;
+            return;
         }
-        if (!dict.TryGetValue(typeof(T), out int previous) || previous != recorded)
-            dict[typeof(T)] = recorded;
+
+        Type? inlineType = Volatile.Read(ref _materializedType);
+        if (inlineType is null || ReferenceEquals(inlineType, type))
+        {
+            _materializedCount = recorded;
+            Volatile.Write(ref _materializedType, type);
+            return;
+        }
+
+        // 第二种类型：升级为字典并把内联项迁入；并发升级时并入胜出的字典（丢提示无害）。
+        int inlineCount = _materializedCount;
+        var created = new System.Collections.Concurrent.ConcurrentDictionary<Type, int>
+        {
+            [type] = recorded,
+            [inlineType] = inlineCount
+        };
+        Interlocked.CompareExchange(ref _materializedType, null, inlineType);
+        System.Collections.Concurrent.ConcurrentDictionary<Type, int> live =
+            Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
+        if (!ReferenceEquals(live, created))
+        {
+            live[type] = recorded;
+            live.TryAdd(inlineType, inlineCount);
+        }
     }
 
     internal object EnterTransactionFlow()

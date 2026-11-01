@@ -84,8 +84,9 @@ public sealed class PoolResetCompletenessTests
         "_disposeTask",
         // 跨租期保留
         "CompletedOps", "DisposeWaitTimeout",
-        // 跨租期保留（M4.6：物化容量启发是"上次行数"近似量，不随租期复位）
-        "_materializedCapacity",
+        // 跨租期保留（M4.6：物化容量启发是"上次行数"近似量，不随租期复位；
+        // 2026-11-01 惰性晋升的内联单槽与字典同源，保留理由相同且行数有 4096 上界）
+        "_materializedCapacity", "_materializedType", "_materializedCount",
     ];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "S3011",

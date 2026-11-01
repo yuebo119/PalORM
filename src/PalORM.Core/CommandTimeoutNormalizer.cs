@@ -25,9 +25,40 @@ internal static class CommandTimeoutNormalizer
     /// <summary>执行操作：成功返回时做耗时判定；异常路径先按内层超时解包（D4），
     /// 再按"已越过截止线"归一（D7）。
     /// <para>计时起点由调用方给（<see cref="Begin"/>），使判定窗口覆盖调用方认为的整个操作，
-    /// 而不是从进入本方法才起算。</para></summary>
-    internal static async ValueTask<T> RunAsync<T>(
+    /// 而不是从进入本方法才起算。</para>
+    /// <para><b>分配纪律（2026-11-01）</b>：同步完成直接返回原 ValueTask；挂起路径走
+    /// <see cref="RunCoreAsync{T}"/>（async Task 内核，状态机盒本身即 Task）。实测每条
+    /// 挂起命令的包装成本由 329 B 降到 264 B（GetByKeySession 每操作 32 条命令约 8.4 KB）。
+    /// 剩余部分是"事后判定"绕不开的一层异步：彻底归零要把 D4/D7 判定内联进各进入方法
+    /// 的状态机，属独立改造，本次不做。</para></summary>
+    internal static ValueTask<T> RunAsync<T>(
         ValueTask<T> operation, long startTimestamp, int timeoutSeconds)
+    {
+        if (operation.IsCompletedSuccessfully)
+        {
+            ThrowIfElapsed(startTimestamp, timeoutSeconds);
+            return operation;
+        }
+        return new ValueTask<T>(RunCoreAsync(operation, startTimestamp, timeoutSeconds));
+    }
+
+    /// <summary>同上，<see cref="Task{TResult}"/> 形态（查询管线用）。
+    /// <para><b>只在需要判定时调用</b>：调用方先用 <see cref="RequiresElapsedCheck"/> 判方言，
+    /// 非 MySQL 直接返回原 Task，不进本方法的状态机。</para></summary>
+    internal static Task<T> RunAsync<T>(Task<T> operation, int timeoutSeconds)
+    {
+        long startTimestamp = Stopwatch.GetTimestamp();
+        if (operation.IsCompletedSuccessfully)
+        {
+            ThrowIfElapsed(startTimestamp, timeoutSeconds);
+            return operation;
+        }
+        return RunCoreAsync<T>(new ValueTask<T>(operation), startTimestamp, timeoutSeconds);
+    }
+
+    /// <summary>挂起路径的归一内核（唯一的异步状态机）：async Task 的盒本身即 Task，
+    /// 比 "async ValueTask 加 AsTask" 少一次 Task 包装分配。</summary>
+    private static async Task<T> RunCoreAsync<T>(ValueTask<T> operation, long startTimestamp, int timeoutSeconds)
     {
         try
         {
@@ -35,25 +66,30 @@ internal static class CommandTimeoutNormalizer
             ThrowIfElapsed(startTimestamp, timeoutSeconds);
             return result;
         }
-        catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+        catch (Exception ex) when (NormalizeOnce(ex, startTimestamp, timeoutSeconds) is { } mapped)
         {
-            throw new TimeoutException(timeout.Message, ex);
-        }
-        catch (Exception ex) when (ex is not TimeoutException && IsPastDeadline(startTimestamp, timeoutSeconds))
-        {
-            // 越过截止线后驱动抛出任何类型都视为超时的表现：截止线已过，命令不可能正常完成。
-            // 未越线时原样上抛——真正的 SQL 错误（语法、约束）不会等到超时才返回。
-            throw new TimeoutException(
-                $"Command exceeded its {timeoutSeconds}s timeout: the provider interrupted the query and "
-                + $"surfaced {ex.GetType().Name} instead of a timeout exception (MySQL semantics).", ex);
+            throw mapped;
         }
     }
 
-    /// <summary>同上，<see cref="Task{TResult}"/> 形态（查询管线用）。
-    /// <para><b>只在需要判定时调用</b>：调用方先用 <see cref="RequiresElapsedCheck"/> 判方言，
-    /// 非 MySQL 直接返回原 Task，不进本方法的状态机。</para></summary>
-    internal static Task<T> RunAsync<T>(Task<T> operation, int timeoutSeconds)
-        => RunAsync(new ValueTask<T>(operation), Stopwatch.GetTimestamp(), timeoutSeconds).AsTask();
+    /// <summary>异常归一的唯一真源：超时原样放行（返回 null，调用方重抛保留原栈），
+    /// 内层超时解包（D4），越过截止线的一切异常归一时超（D7）。</summary>
+    private static TimeoutException? NormalizeOnce(Exception ex, long startTimestamp, int timeoutSeconds)
+    {
+        if (ex is TimeoutException)
+            return null;
+        if (ex.InnerException is TimeoutException timeout)
+            return new TimeoutException(timeout.Message, ex);
+        if (IsPastDeadline(startTimestamp, timeoutSeconds))
+        {
+            // 越过截止线后驱动抛出任何类型都视为超时的表现：截止线已过，命令不可能正常完成。
+            // 未越线时原样上抛——真正的 SQL 错误（语法、约束）不会等到超时才返回。
+            return new TimeoutException(
+                $"Command exceeded its {timeoutSeconds}s timeout: the provider interrupted the query and "
+                + $"surfaced {ex.GetType().Name} instead of a timeout exception (MySQL semantics).", ex);
+        }
+        return null;
+    }
 
     private static void ThrowIfElapsed(long startTimestamp, int timeoutSeconds)
     {
