@@ -1425,8 +1425,12 @@ internal static class Program
 
         foreach (Measurement m in results)
         {
+            // 地板必须同线程档（2026-11-01）：并发项在同一 (操作, 方言, 档位) 下有 1/4/8 三行，
+            // 漏掉 ConcurrencyThreads 会让 Find 取到首个匹配即 t1 行，t4/t8 全部除以 t1 地板
+            // （实测 MySQL t8 速览报 1.73，按同档地板实际 1.05）。
             Measurement? floor = results.Find(b => b.Implementation == "ADO_NET"
-                && b.Dialect == m.Dialect && b.Operation == m.Operation && b.Rows == m.Rows);
+                && b.Dialect == m.Dialect && b.Operation == m.Operation && b.Rows == m.Rows
+                && b.ConcurrencyThreads == m.ConcurrencyThreads);
             // PL-4：Build* 两项的比值记 0（"不计比"）——地板实现（Implementations.cs:588-593）
             // 直接 return 插值字面量，不构造任何 SQL；拿它当分母量的是"生成一条 SQL 文本"
             // 这件事本身，而那是产品相对裸 ADO.NET 的价值而不是税。绝对值与分配仍照登。
@@ -1480,6 +1484,19 @@ internal static class Program
                     ["rows"] = rows
                 }
             });
+        }
+
+        // 地板唯一性自检（2026-11-01）：ADO 臂的比值除以的就是它自己，必须恒为 1——
+        // 任何偏离都说明地板查找用错了行（实测缺陷：并发地板键漏掉线程档，t4/t8 除以 t1 地板，
+        // ADO t4 比值 0.983、MySQL t8 报 1.73 而实际 1.05）。宁可本批失败，也不产出错比值的信封。
+        foreach (PerfResultItem item in envelope.Items)
+        {
+            if (item.Arm == "ADO_NET" && item.Ratio > 0 && Math.Abs(item.Ratio - 1) > 1e-9)
+            {
+                throw new InvalidOperationException(
+                    $"地板唯一性自检失败：{item.Name}/{item.Dialect}/{item.Tier} ADO 臂比值 {item.Ratio:R}（应恒为 1）"
+                    + "——地板查找键未唯一确定一行");
+            }
         }
 
         string? path = PerfResultWriter.Write(envelope);
