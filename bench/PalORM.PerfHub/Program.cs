@@ -393,6 +393,13 @@ internal static class Program
             await SetupV2TablesAsync(info, conn, rows, ct).ConfigureAwait(false);
             TimingSink.Phase("setup-tables", info.DisplayName, rows, setupSw.Elapsed.TotalSeconds);
 
+            // 读一致性守卫（每方言首档一次，不计入测量，2026-11-02 与 CrossBench 同步）：
+            // 期望值由 Dataset 公式推导，不依赖任一臂当参照系；覆盖 S1 族与宽表七个读操作。
+            if (rows == tiers[0])
+            {
+                await ValidateReadsAsync(info, rows, conn, impls, ct).ConfigureAwait(false);
+            }
+
             // 物化重的只读项先做三臂交错（同一操作内 ADO→Dapper→PalORM 连续测）：
             // 消除按实现分阶段带来的早/晚段状态偏差，详见 RunInterleavedReadsAsync 注释。
             // --ops 子集未包含这三项时整段跳过（仍省下 reset 与两遍 pass 的时间）。
@@ -642,6 +649,165 @@ internal static class Program
             }
         }
     }
+
+    /// <summary>读一致性守卫（每方言首档一次，不计入测量）：期望值由 <see cref="Dataset"/> 的
+    /// 确定性公式推导，不依赖任一臂当参照系——同一份种子数据、同一批逻辑操作，任何臂返回不同
+    /// 结果都说明它的 SQL 或映射与协议不符。
+    /// <para>覆盖 GetByKey（3 键逐字段）/ QueryAll（行数 + 主键集合 1..rows + 逐行五字段）/
+    /// StreamAll（推流行数）/ KeysetPage（1..100 逐位）/ WhereIn（100 键精确）/ Count /
+    /// WideQueryAll（19 列宽表行数）。租户族与 IncludeJoin 的等价断言已在各自 MeasAsync 内
+    /// （期望值同样在测量窗口外算一次），此处不重复。</para></summary>
+    private static async Task ValidateReadsAsync(
+        DialectInfo info, int rows, DbConnection conn, IPerfImplementation[] impls, CancellationToken ct)
+    {
+        // S1 表复位到种子态（各读项都要求「恰好 rows 行」）
+        await new AdoNetImpl(info).SetupPerfS1Async(conn, rows, ct).ConfigureAwait(false);
+
+        long[] whereInIds = BuildWhereInIds(rows);
+        long[] expectedWhereIn = [.. whereInIds.Order()];
+        List<string> failures = [];
+
+        foreach (IPerfImplementation impl in impls)
+        {
+            List<string> problems = [];
+
+            foreach (int id in new[] { 1, rows / 2, rows }.Distinct())
+            {
+                if (id <= 0)
+                {
+                    continue;
+                }
+
+                S1Row? got = await impl.GetByKeyAsync(conn, id, ct).ConfigureAwait(false);
+                S1Row expected = Dataset.Seed(id - 1);
+                if (!SameRow(got, expected))
+                {
+                    problems.Add($"GetByKey({id}) 得到 {DescribeRow(got)}，期望 {DescribeRow(expected)}");
+                }
+            }
+
+            List<S1Row> all = await impl.QueryAllAsync(conn, ct).ConfigureAwait(false);
+            if (all.Count != rows)
+            {
+                problems.Add($"QueryAll 返回 {all.Count} 行，期望 {rows}");
+            }
+            else
+            {
+                HashSet<long> seen = new(all.Count);
+                int mismatched = 0;
+                string? firstMismatch = null;
+                foreach (S1Row row in all)
+                {
+                    if (!seen.Add(row.Id))
+                    {
+                        problems.Add($"QueryAll 主键重复 {row.Id}");
+                        break;
+                    }
+
+                    S1Row expected = Dataset.Seed(row.Id - 1);
+                    if (!SameRow(row, expected))
+                    {
+                        mismatched++;
+                        firstMismatch ??= $"Id={row.Id} 得到 {DescribeRow(row)}，期望 {DescribeRow(expected)}";
+                    }
+                }
+
+                if (seen.Count == rows && (seen.Min() != 1 || seen.Max() != rows))
+                {
+                    problems.Add($"QueryAll 主键范围 {seen.Min()}..{seen.Max()}，期望 1..{rows}");
+                }
+
+                if (mismatched > 0)
+                {
+                    problems.Add($"QueryAll 有 {mismatched} 行字段不符（首个：{firstMismatch}）");
+                }
+            }
+
+            int streamed = 0;
+            _ = await impl.StreamAllAsync(
+                conn,
+                _ =>
+                {
+                    streamed++;
+                    return default;
+                },
+                ct).ConfigureAwait(false);
+            if (streamed != rows)
+            {
+                problems.Add($"StreamAll 推出 {streamed} 行，期望 {rows}");
+            }
+
+            List<S1Row> page = await impl.KeysetPageAsync(conn, 0, 100, ct).ConfigureAwait(false);
+            bool pageOk = page.Count == 100
+                && page[0].Id == 1
+                && page[^1].Id == 100
+                && page.Select(r => r.Id).SequenceEqual(Enumerable.Range(1, 100).Select(i => (long)i));
+            if (!pageOk)
+            {
+                problems.Add(
+                    $"KeysetPage 返回 {page.Count} 行 "
+                    + $"[{(page.Count > 0 ? page[0].Id : 0)}..{(page.Count > 0 ? page[^1].Id : 0)}]，期望 100 行 [1..100]");
+            }
+
+            List<S1Row> inRows = await impl.WhereInAsync(conn, whereInIds, ct).ConfigureAwait(false);
+            long[] gotIds = [.. inRows.Select(r => r.Id).Order()];
+            if (!gotIds.SequenceEqual(expectedWhereIn))
+            {
+                problems.Add(
+                    $"WhereIn 命中 {gotIds.Length} 键（期望 {expectedWhereIn.Length}）；"
+                    + $"首差 {FirstDiff(gotIds, expectedWhereIn)}");
+            }
+
+            long count = await impl.CountAsync(conn, ct).ConfigureAwait(false);
+            if (count != rows)
+            {
+                problems.Add($"Count={count}，期望 {rows}");
+            }
+
+            int wide = await impl.WideQueryAllAsync(conn, ct).ConfigureAwait(false);
+            if (wide != rows)
+            {
+                problems.Add($"WideQueryAll 返回 {wide} 行，期望 {rows}");
+            }
+
+            if (problems.Count == 0)
+            {
+                Console.WriteLine(
+                    $"    {impl.Name,-9} 读一致校验 OK（GetByKey/QueryAll/StreamAll/KeysetPage/WhereIn/Count/WideQueryAll）");
+            }
+            else
+            {
+                failures.Add($"{impl.Name}: {string.Join("; ", problems)}");
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join(" | ", failures));
+        }
+
+        static string FirstDiff(long[] got, long[] expected)
+        {
+            int n = Math.Min(got.Length, expected.Length);
+            for (int i = 0; i < n; i++)
+            {
+                if (got[i] != expected[i])
+                {
+                    return $"位置 {i}：{got[i]} vs {expected[i]}";
+                }
+            }
+
+            return got.Length == expected.Length ? "无（长度相同）" : $"长度 {got.Length} vs {expected.Length}";
+        }
+    }
+
+    private static bool SameRow(S1Row? actual, S1Row expected)
+        => actual is not null && actual.Id == expected.Id && actual.Name == expected.Name
+            && actual.Qty == expected.Qty && actual.Price == expected.Price
+            && actual.Marker == expected.Marker;
+
+    private static string DescribeRow(S1Row? row)
+        => row is null ? "null" : $"Id={row.Id}/{row.Name}/{row.Qty}/{row.Price}/{row.Marker}";
 
     /// <summary>对一个 (方言, 实现, 行数) 组合跑全部单操作测量。
     /// <para>顺序即状态依赖：Build/单行读先跑（要求表内恰好 <paramref name="rows"/> 行），
