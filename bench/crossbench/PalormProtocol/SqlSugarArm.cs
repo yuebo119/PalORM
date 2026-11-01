@@ -35,7 +35,8 @@ internal interface ISeparateTableArm
 /// <item><b>批量</b>：db.Fastest&lt;T&gt;()（官方最快路径——MySQL LOAD DATA / PG COPY /
 /// SQLite 批量）；Fastest 运行时不支持的场景一次性回退官方集合 API（Insertable/Updateable
 /// 列表重载）并保持该方言后续走回退路径。</item>
-/// <item><b>UpsertBatch</b>：db.Storageable（SqlSugar 官方 upsert API）。</item>
+/// <item><b>UpsertBatch</b>：db.Storageable + PageSize(2000)（SqlSugar 官方 upsert API；
+/// 分页是必需的，整表调用在 update 分支呈二次方分配，见该方法注释）。</item>
 /// <item><b>SQLite PRAGMA</b>：SqlSugar 自管连接无打开钩子——SetupAsync 一次性注入，
 /// 文件级 WAL 持久；逐连接 PRAGMA 差异在报告环境节注记。</item>
 /// </list></para></summary>
@@ -43,16 +44,17 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparate
 {
     private readonly Dialect _d;
     private readonly SqlSugarClient _db;
-    private readonly string _tableSuffix;
     private bool _fastestInsertOk = true;
     private bool _fastestUpdateOk = true;
+
+    /// <summary>Storageable 分页行数（SqlSugar 建议值；见 UpsertBatchAsync 的探针数据）。</summary>
+    private const int UpsertPageRows = 2_000;
 
     public string Name => "SqlSugar";
 
     public SqlSugarImpl(DialectInfo dialect)
     {
         _d = dialect.Dialect;
-        _tableSuffix = _d == Dialect.PostgreSql ? "_lc" : "";
         string cs = Connections.Resolve(dialect);
         if (_d == Dialect.MySql)
         {
@@ -254,9 +256,17 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparate
     public async Task<long> CountAsync(DbConnection conn, CancellationToken ct)
         => await _db.Queryable<S1Row>().AS(S1Table).CountAsync().ConfigureAwait(false);
 
-    /// <summary>批量 UPSERT——Storageable（SqlSugar 官方 upsert API：按主键分派 insert/update）。</summary>
+    /// <summary>批量 UPSERT——Storageable 分页形态（SqlSugar 官方 upsert API）。
+    /// <para><b>为什么必须分页</b>（2026-11-01 探针实证）：整表一次 <c>Storageable</c> 在
+    /// 「目标行全部已存在」时走 update 分支，该分支把整表交给批量按主键 UPDATE，
+    /// 分配随行数<b>二次方</b>增长——2000 行 0.23GB / 4000 行 0.86GB / 8000 行 3.44GB
+    ///（缩放指数 1.99），外推 20000 行 21.2GB，与批次实测 22.5GB 吻合；8000 行耗时 37s。
+    /// 按 2000 行分页后指数降到 1.04、8000 行 0.93GB / 1.1s（约 35 倍）。insert 分支本来
+    /// 线性（8.7KB/行），所以问题只在 update 分支。SqlSugar 自身对整表保存也给出分页建议
+    ///（源码 Check.ExceptionEasy：合理分页数约 2000，上限 10000）。</para></summary>
     public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
-        => await _db.Storageable(rows.ToList()).As(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
+        => await _db.Storageable(rows.ToList()).As(S1Table).PageSize(UpsertPageRows)
+            .ExecuteCommandAsync(ct).ConfigureAwait(false);
 
     public Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct)
         => throw new NotSupportedException("InsertReturningId 不在本次子集内");

@@ -195,7 +195,7 @@ var opDescriptions = new Dictionary<string, (string Desc, string Verdict)>
     ["BulkInsert"] = ("批量插入（SQLite 行预编译 / PG COPY / MySQL BulkCopy）", "PalORM 与 ADO 同形态贴平；RepoDb 走官方 BulkOperations（COPY/LOAD DATA 经 pseudo 表）接近地板；Dapper/FreeSql 批量路径全方言偏慢"),
     ["BulkUpdate"] = ("批量更新（SQLite 逐条裹事务 / PG UPDATE FROM VALUES / MySQL CASE WHEN）", "PalORM 三方言与 ADO 同形态贴平；RepoDb 在 MySQL 用 BulkOperations 的 pseudo 表、PG/SQLite 用 Core UpdateAll 逐行，两条路径都明显偏慢；Dapper/FreeSql 无集合式封装"),
     ["BulkDelete"] = ("批量删除（SQLite json_each 单参数 / PG = ANY 数组 / MySQL IN 分批）", "PG 数组形态快于 ADO 的 IN 占位符；SQLite json_each 与 MySQL 分批接近地板；RepoDb 的 DeleteAll 按主键逐个构造 QueryGroup，分配与时间都显著偏高"),
-    ["UpsertBatch"] = ("批量 UPSERT（ON CONFLICT / ON DUPLICATE KEY）", "PG 数组形态快于 ADO 与其余臂；SQLite 各臂同形态贴平；RepoDb 在 MySQL 用 BulkMerge（pseudo 表）、PG 因 BulkMerge 上游缺陷退回 MergeAll；Dapper/FreeSql 偏慢"),
+    ["UpsertBatch"] = ("批量 UPSERT（ON CONFLICT / ON DUPLICATE KEY）", "PG 数组形态快于 ADO 与其余臂；SQLite 各臂同形态贴平；RepoDb 在 MySQL 用 BulkMerge（pseudo 表）、PG 因 BulkMerge 上游缺陷退回 MergeAll；SqlSugar 用 Storageable 按 2000 行分页（整表调用在 update 分支呈二次方分配，2026-11-01 探针实证后弃用）；Dapper/FreeSql 偏慢"),
     ["TxSingleInsert"] = ("事务内单行插入", "各臂持平（事务开销主导）"),
     ["TxHundredInserts"] = ("事务内 100 行逐条插入", "联网方言接近；FreeSql SQLite 明显偏慢（逐行表达式开销放大）"),
     ["TxBulkInsert"] = ("事务内批量插入", "PalORM 贴地板；RepoDb 在 MySQL/PG 走 BulkOperations（事务内仍建 pseudo 表）接近地板；Dapper（multi-exec 无语句缓存复用）与 FreeSql 明显偏慢"),
