@@ -35,25 +35,40 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
-        if (args.Length == 0 || args[0] is "help" or "--help" or "-h")
-        {
-            PrintUsage();
-            return 0;
-        }
-
         try
         {
-            return args[0].ToUpperInvariant() switch
+            // 崩溃残留兜底（2026-11-01）：删掉超过 3 天的临时库；并发进程的库是新建的，不受影响。
+            int swept = Connections.SweepStaleSqliteDatabases(TimeSpan.FromDays(3));
+            if (swept > 0)
             {
-                "RUN" => await RunAsync(args[1..]).ConfigureAwait(false),
-                "REPORT" => Report.Build(),
-                _ => Fail($"未知命令 '{args[0]}'")
-            };
+                Console.WriteLine($"[PerfHub] 清理陈旧临时库 {swept} 个（超过 3 天）");
+            }
+
+            if (args.Length == 0 || args[0] is "help" or "--help" or "-h")
+            {
+                PrintUsage();
+                return 0;
+            }
+
+            try
+            {
+                return args[0].ToUpperInvariant() switch
+                {
+                    "RUN" => await RunAsync(args[1..]).ConfigureAwait(false),
+                    "REPORT" => Report.Build(),
+                    _ => Fail($"未知命令 '{args[0]}'")
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"PerfHub 失败: {ex}");
+                return 1;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            Console.Error.WriteLine($"PerfHub 失败: {ex}");
-            return 1;
+            // 正常结束即删本进程的库（异常路径也走到这里）；删不掉时留给启动扫描。
+            Connections.DeleteCurrentSqliteDatabase();
         }
     }
 

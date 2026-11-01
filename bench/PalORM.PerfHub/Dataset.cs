@@ -747,11 +747,84 @@ internal static class Connections
         _ => throw new ArgumentOutOfRangeException(nameof(info), info, null)
     };
 
+    /// <summary>临时库目录（%TEMP%/palorm-perfhub）。每次进程一个库，正常结束删除，崩溃残留按年龄回收。</summary>
+    internal static string SqliteDirectory => Path.Combine(Path.GetTempPath(), "palorm-perfhub");
+
+    /// <summary>本进程的临时库路径（供退出清理）。</summary>
+    private static string? _sqlitePath;
+
     private static string SqlitePath()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "palorm-perfhub");
+        string dir = SqliteDirectory;
         Directory.CreateDirectory(dir);
-        return $"Data Source={Path.Combine(dir, $"perf-{Environment.ProcessId}.db")}";
+        string path = Path.Combine(dir, $"perf-{Environment.ProcessId}.db");
+        _sqlitePath = path;
+        return $"Data Source={path}";
+    }
+
+    /// <summary>删除本进程的临时库（含 -wal/-shm）。正常结束调用；崩溃残留由
+    /// <see cref="SweepStaleSqliteDatabases"/> 按年龄兜底。
+    /// <para><b>必须先清连接池</b>：Microsoft.Data.Sqlite 默认池化连接，池里未归还的连接持有文件句柄，
+    /// 直接删会抛 IOException（2026-11-01 实测：75 个库 1.2 GB 从未清理，见
+    /// docs/性能测试耗时分析与优化方案-2026-11-01.md 同批发现）。</para></summary>
+    internal static void DeleteCurrentSqliteDatabase()
+    {
+        string? path = _sqlitePath;
+        if (path is null)
+        {
+            return;
+        }
+        _sqlitePath = null;
+        try
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            DeleteWithSiblings(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"[PerfHub] 临时库清理跳过（{Path.GetFileName(path)}）：{ex.Message}");
+        }
+    }
+
+    /// <summary>启动扫描：删除超过 <paramref name="maxAge"/> 的 perf-*.db（崩溃或强杀残留）。
+    /// 并发进程的库是新建的，不受影响。返回删除个数。</summary>
+    internal static int SweepStaleSqliteDatabases(TimeSpan maxAge)
+    {
+        string dir = SqliteDirectory;
+        if (!Directory.Exists(dir))
+        {
+            return 0;
+        }
+        DateTime cutoff = DateTime.UtcNow - maxAge;
+        int removed = 0;
+        foreach (string file in Directory.EnumerateFiles(dir, "perf-*.db"))
+        {
+            try
+            {
+                if (File.GetLastWriteTimeUtc(file) >= cutoff)
+                {
+                    continue;
+                }
+                DeleteWithSiblings(file);
+                removed++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"[PerfHub] 陈旧库删除跳过（{Path.GetFileName(file)}）：{ex.Message}");
+            }
+        }
+        return removed;
+    }
+
+    private static void DeleteWithSiblings(string path)
+    {
+        foreach (string file in new[] { path, path + "-wal", path + "-shm" })
+        {
+            if (File.Exists(file))
+            {
+                File.Delete(file);
+            }
+        }
     }
 }
 
