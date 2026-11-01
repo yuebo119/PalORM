@@ -132,13 +132,13 @@ foreach (string dialect in dialects)
 var sb = new StringBuilder(1 << 16);
 string stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
 
-sb.AppendLine("# 12 库统一横评（清单 = AotProbe 终版 12 条 + ADO 地板）");
+sb.AppendLine("# 跨库横评（10 库 + ADO 地板）");
 sb.AppendLine();
 sb.AppendLine($"> 生成：{stamp} ｜ 数据源：{string.Join("、", files.Select(Path.GetFileName))}");
 sb.AppendLine(">");
 sb.AppendLine("> 口径：三方言（SQLite/MySQL/PG）× 两档（2000/20000）× 17 操作 × 两遍反序（批内 Average）；");
-sb.AppendLine("> LiteDB 与 Marten 为文档/嵌入式形态（* 标注），与 SQL 臂无同表位可比性，单列呈现；");
-sb.AppendLine("> SQL 臂比值分母 = 同方言同操作 ADO 地板；N/A 格原因见覆盖账本。");
+sb.AppendLine("> LiteDB 与 Marten 为文档/嵌入式形态（* 标注），与 SQL 组无同表位可比性，单列呈现；");
+sb.AppendLine("> SQL 组比值分母 = 同方言同操作 ADO 地板；N/A 格原因见覆盖账本。");
 sb.AppendLine();
 
 // ── 1. 结论面板（从数据推导） ──
@@ -171,9 +171,9 @@ sb.AppendLine($"- **PalORM 中位比 ADO 地板**：{Fmt(palormRatio[palormRatio
 sb.AppendLine();
 
 // ── 2. 胜场榜 ──
-sb.AppendLine("## 2. 胜场榜（每格最快臂；ADO 地板与文档臂不参与）");
+sb.AppendLine("## 2. 胜场榜（每格最快组；ADO 地板与文档组不参与）");
 sb.AppendLine();
-sb.AppendLine("| 臂 | 胜场 |");
+sb.AppendLine("| 组 | 胜场 |");
 sb.AppendLine("|---|---:|");
 foreach (KeyValuePair<string, int> kv in winners.OrderByDescending(kv => kv.Value))
 {
@@ -182,7 +182,7 @@ foreach (KeyValuePair<string, int> kv in winners.OrderByDescending(kv => kv.Valu
 
 sb.AppendLine();
 
-// ── 3. 全量表（每方言每档：op × 臂 = 中位 µs [P/ADO] / 分配 B） ──
+// ── 3. 全量表（每方言每档：op × 组 = 中位 µs [P/ADO] / 分配 B） ──
 sb.AppendLine("## 3. 全量表（中位 µs [P/ADO] · 分配 B；快照 = 当批推导）");
 sb.AppendLine();
 foreach (string dialect in dialects)
@@ -284,10 +284,10 @@ sb.AppendLine();
 sb.AppendLine("## 6. 环境与形态注记");
 sb.AppendLine();
 sb.AppendLine("- Windows 10 x64；容器 MySQL 8.4.11@3306（local_infile=ON）/ PG 18.6@55432（pgbench 容器）；");
-sb.AppendLine("- MySQL 臂驱动差异：linq2db/MySql.Data（镜像缺 linq2db.MySqlConnector）、NHibernate/MySqlDataDriver（5.6 无 MySqlConnectorDriver）——报告注记不剔除；");
+sb.AppendLine("- MySQL 组驱动差异：linq2db/MySql.Data（镜像缺 linq2db.MySqlConnector）、NHibernate/MySqlDataDriver（5.6 无 MySqlConnectorDriver）——报告注记不剔除；");
 sb.AppendLine("- EF MySQL provider = Oracle 官方 MySql.EntityFrameworkCore 10.0.12（镜像无 Pomelo EF10 线）；");
-sb.AppendLine("- 文档臂（Marten/LiteDB）为 jsonb/文件存储，无 SQL 同表位，读族数值量级不可与 SQL 臂直接比；");
-sb.AppendLine("- NHibernate 实体=臂内 virtual POCO + 每操作转换；EF=每操作 DbContext；均为官方推荐形态，成本含在测量内。");
+sb.AppendLine("- 文档组（Marten/LiteDB）为 jsonb/文件存储，无 SQL 同表位，读族数值量级不可与 SQL 组直接比；");
+sb.AppendLine("- NHibernate 实体=组内 virtual POCO + 每操作转换；EF=每操作 DbContext；均为官方推荐形态，成本含在测量内。");
 sb.AppendLine();
 
 // ── 7. 产物与复现 ──
