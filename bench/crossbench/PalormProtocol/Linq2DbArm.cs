@@ -25,7 +25,7 @@ namespace PalORM.PerfHub;
 /// SQLite 无 Merge 语义——BulkUpdate 逐行裹事务（与 Dapper 家族 SQLite 路径同形）、
 /// UpsertBatch 逐行 InsertOrReplace 裹事务。</item>
 /// </list></para></summary>
-internal sealed class Linq2DbImpl(DialectInfo dialect) : IPerfImplementation, IDisposable
+internal sealed class Linq2DbImpl(DialectInfo dialect) : IPerfImplementation, IDisposable, ISqlAuditArm
 {
     private readonly Dialect _d = dialect.Dialect;
     private readonly MappingSchema _schema = BuildSchema();
@@ -74,6 +74,24 @@ internal sealed class Linq2DbImpl(DialectInfo dialect) : IPerfImplementation, ID
             }
 
             return _db;
+        }
+    }
+
+    /// <summary>SQL 文本审计补交（<see cref="ISqlAuditArm"/>）：linq2db 6.5.1 的官方捕获面是
+    /// <c>LastQuery</c>（2026-11-02 探针实测：<c>OnTraceConnection</c> 在该版本对 BeforeExecute 不触发；探针未随批入库）
+    /// <c>ICommandInterceptor</c> 的十个成员均无默认实现，接入成本与收益不成比例）。
+    /// <para><b>口径限制</b>：<c>LastQuery</c> 只保留最后一条语句——多语句操作（分块批删/批改）
+    /// 在报告里只呈现末块形态；操作抛异常时不补交（此时它可能是上一条操作的残留）。</para></summary>
+    public void OnSqlAuditFlush(bool opFailed)
+    {
+        if (!SqlAuditCapture.Enabled || opFailed || SqlAuditCapture.Count > 0)
+        {
+            return;
+        }
+
+        if (_db?.LastQuery is { Length: > 0 } last)
+        {
+            SqlAuditCapture.Add(last, "linq2db:LastQuery");
         }
     }
 

@@ -9,7 +9,7 @@ namespace PalORM.PerfHub;
 /// PerfHub 的 RunOneImplAsync（PalORM 原测试协议），仅把 Dapper 臂换成 FreeSql 臂。
 /// 测量引擎（Measure.SingleAsync：预热时间预算 + 自适应迭代 + 分配/堆采样）与 PerfHub 同源。
 /// 每方言每档两遍反序（pass 0 正序、pass 1 反序），取两遍中位数聚合，消除臂顺序相位差。</summary>
-internal static class Program
+internal static partial class Program
 {
     internal const string Pragma =
         "PRAGMA foreign_keys = ON; PRAGMA journal_mode=WAL; PRAGMA synchronous = NORMAL; "
@@ -82,6 +82,15 @@ internal static class Program
 
         SQLitePCL.Batteries_V2.Init();
 
+        // --sql-audit：SQL 文本审计（方案 B，2026-11-02）——只执行不计量，
+        // 逐 (方言 × 操作 × 组) 记录实际执行的 SQL 文本并产出对照报告。
+        // 必须早于臂构造设置 Enabled：各臂在构造时按该位决定装不装捕获钩子。
+        if (args.Contains("--sql-audit"))
+        {
+            SqlAuditCapture.Enabled = true;
+            return await RunSqlAuditAsync(dialects, armFilter, opFilter, tiers.Min()).ConfigureAwait(false);
+        }
+
         var results = new List<Measurement>();
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
 
@@ -100,27 +109,9 @@ internal static class Program
             // 两者在性能测试里长期构造失败，只产出 N/A 行，不再参测）。
             // 新臂构造失败（驱动缺依赖等）仍走安全构造跳过并登记，不拖垮整批。
             // 臂按 --arms 令牌惰性构造（2026-10-30）：不测的臂不构造——跨库静态初始化
-            //（跨库静态初始化如 EF 模型、SqlSugar 客户端等）只应为参测组付出
-            bool Want(string token) =>
-                armFilter.Length == 0 || armFilter.Contains(token, StringComparer.OrdinalIgnoreCase);
-
-            List<IPerfImplementation> armList =
-                [
-                    .. When(Want("ado"), new AdoNetImpl(info)),
-                    .. When(Want("dapper"), new DapperImpl(info)),
-                    .. When(Want("repodb"), new RepoDbArm(info)),
-                    .. When(Want("freesql"), new FreeSqlImpl(info)),
-                    .. When(Want("palorm"), new PalormImpl(info)),
-                    .. When(Want("dapper-aot"), new DapperAotImpl(info)),
-                    .. When(Want("linq2db"), new Linq2DbImpl(info)),
-                    .. When(Want("efcore"), new EfCoreImpl(info)),
-                    .. When(Want("sqlsugar"), TryArm(() => new SqlSugarImpl(info), "sqlsugar")!),
-                ];
-
-            IPerfImplementation[] allImpls = [.. armList.OfType<IPerfImplementation>()];
-            IPerfImplementation[] impls = armFilter.Length == 0
-                ? allImpls
-                : [.. allImpls.Where(a => armFilter.Contains(ArmToken(a.Name), StringComparer.OrdinalIgnoreCase))];
+            //（跨库静态初始化如 EF 模型、SqlSugar 客户端等）只应为参测组付出。
+            // 构造与 SQL 审计共用（BuildArms，见 SqlAudit.cs）。
+            IPerfImplementation[] impls = [.. BuildArms(info, armFilter)];
             if (impls.Length == 0)
             {
                 throw new ArgumentOutOfRangeException(

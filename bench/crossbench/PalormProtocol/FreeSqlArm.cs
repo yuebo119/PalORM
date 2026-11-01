@@ -48,6 +48,13 @@ internal sealed class FreeSqlImpl : IPerfImplementation, IDisposable
             .UseAutoSyncStructure(false)
             .Build();
 
+        // SQL 文本审计（--sql-audit）：FreeSql 的命令级 AOP 是官方捕获点。
+        // 计时模式不挂（SqlAuditCapture.Enabled=false），回调零成本。
+        if (SqlAuditCapture.Enabled)
+        {
+            _fsql.Aop.CommandAfter += (_, e) => SqlAuditCapture.Add(e.Command?.CommandText, "FreeSql");
+        }
+
         // Fluent 实体配置——属性名即列名（Id/Name/Qty/Price/Marker），只需表名 + 主键 +
         // 枚举列 MapType。S1Row/EnumRow 上的 PalORM 特性对 FreeSql 不可见，由这里接管映射。
         _fsql.CodeFirst.ConfigEntity<S1Row>(a =>

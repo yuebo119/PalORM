@@ -1,5 +1,6 @@
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace PalORM.PerfHub;
 
@@ -38,7 +39,40 @@ internal sealed class EfCoreImpl(DialectInfo dialect) : IPerfImplementation
             Dialect.PostgreSql => builder.UseNpgsql(cs),
             _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect.Dialect, null)
         };
+
+        // SQL 文本审计（--sql-audit）：EF 没有命令级钩子，官方可观测面是 LogTo。
+        // EF Core 10 的 LogTo 只提供 Action<string> 形态（三参数消息重载已移除），
+        // 用事件过滤只留 CommandExecuted（20101）；消息解析见 ExtractCommandText。
+        if (SqlAuditCapture.Enabled)
+        {
+            builder.LogTo(
+                message => SqlAuditCapture.Add(ExtractCommandText(message), "EfCore"),
+                new[] { (Microsoft.Extensions.Logging.EventId)RelationalEventId.CommandExecuted },
+                Microsoft.Extensions.Logging.LogLevel.Information);
+        }
+
         return builder.Options;
+    }
+
+    /// <summary>从 EF 的 CommandExecuted 日志条目里取 SQL 文本。
+    /// <para><b>实测格式</b>（EF Core 10 + `LogTo(Action&lt;string&gt;)`）：回调拿到的是整条格式化日志——
+    /// 首行是 <c>info: &lt;时间戳&gt; RelationalEventId.CommandExecuted[20101] (…)</c>，第二行是
+    /// <c>Executed DbCommand (…ms) [Parameters=…]</c>，第三行起才是 SQL。故先定位第二行再取其后文本。</para></summary>
+    private static string? ExtractCommandText(string? message)
+    {
+        if (message is null)
+        {
+            return null;
+        }
+
+        int marker = message.IndexOf("Executed DbCommand", StringComparison.Ordinal);
+        if (marker < 0)
+        {
+            return null;
+        }
+
+        int newline = message.IndexOf('\n', marker);
+        return newline < 0 ? null : message[(newline + 1)..].Trim();
     }
 
     internal sealed class BenchDbContext(DbContextOptions<BenchDbContext> options) : DbContext(options)

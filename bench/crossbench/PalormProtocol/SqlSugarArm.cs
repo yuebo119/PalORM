@@ -40,7 +40,7 @@ internal interface ISeparateTableArm
 /// <item><b>SQLite PRAGMA</b>：SqlSugar 自管连接无打开钩子——SetupAsync 一次性注入，
 /// 文件级 WAL 持久；逐连接 PRAGMA 差异在报告环境节注记。</item>
 /// </list></para></summary>
-internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparateTableArm
+internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparateTableArm, ISqlAuditArm
 {
     private readonly Dialect _d;
     private readonly SqlSugarClient _db;
@@ -101,6 +101,18 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparate
                 },
             },
         });
+    }
+
+    /// <summary>SQL 文本审计钩子（<see cref="ISqlAuditArm"/>）——SqlSugar 的官方命令钩子是
+    /// <c>Aop.OnLogExecuting</c>（执行前回调 SQL 原文与参数）。
+    /// <para><b>每次操作前重装</b>：Aop 挂在当前 provider 实例上，长批次里 provider 被内部重建后
+    /// 旧委托失效（2026-11-02 首轮审计实测：PG 段从 BulkDelete 起连续 0 条，同一操作单独跑正常；重装后 51/51 全部捕获）。</para></summary>
+    public void OnSqlAuditBegin()
+    {
+        if (SqlAuditCapture.Enabled)
+        {
+            _db.Aop.OnLogExecuting = (sql, _) => SqlAuditCapture.Add(sql, "SqlSugar");
+        }
     }
 
     /// <summary>本方言的 S1 表物理名（PG=perf_s1_lc，其余=共享 perf_s1）——AS 覆写目标。</summary>

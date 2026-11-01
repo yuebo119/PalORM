@@ -42,6 +42,32 @@ dotnet run --file scripts/crossbench-report.cs -- --baseline <b1.json,b2.json,b3
 结果 JSON 落 `bench/crossbench/results/crossbench-*.json`（入库）；环境变量与 PerfHub
 同口径（`PALORM_PG_CONNECTION` / `PALORM_MYSQL_CONNECTION`，`.env.test` 兜底）。
 
+## SQL 文本审计（`--sql-audit`，不参与计时）
+
+审计对象是「每组是否用自身 ORM API 生成 SQL」：逐 (方言 × 操作 × 组) 只执行一次，记录**实际执行过的
+SQL 文本**，同方言内做归一化比较（标识符引号剥离、字符串/数字字面量与参数占位统一为 `?`、空白折叠；
+标识符整体保留，`perf_s1`/`INT8` 不被数字规则拆开）。归一化后文本相同，要么是共用同一 SQL 真源
+（手写模板或同一驱动路径），要么是各自生成了同形 SQL——报告把同文本簇并列展示供判读；单组独有 +
+形态符合该库惯用写法，则是「确实在用自身 API」的直接证据。审计不改写 SQL、不动参数与事务；但连接包装层
+会与「按 provider 具体类型强转」的路径冲突，这类路径登记为通道限制（见下表），不当作操作失败。
+审计批不写 `crossbench-*.json`，不进基线。
+
+```bash
+dotnet run --project bench/crossbench/PalormProtocol -c Release -- --sql-audit --dialects sqlite,mysql,pg 2000
+# 产物（均入库）：results/sql-audit-<stamp>.json（原始语句）+ results/sql-audit-<stamp>.md（方法/矩阵+变体/未捕获）
+```
+
+捕获通道与已知边界（2026-11-02 审计批实测，报告第一节逐条列明）：
+
+| 组 | 通道 | 边界 |
+|---|---|---|
+| ADO / Dapper / Dapper.AOT / PalORM | 宿主连接包装层（`DbCommand.CommandText` 赋值即记录） | Dapper.AOT 的三条事务内操作（upstream `Command<T>` 校验 `transaction.Connection == connection`）不可包装；ADO 的 PG/MySQL 批量插入与 PalORM 的 PG 批量插入按具体驱动连接强转，也不可包装（PalORM 的 MySQL 批量在 `local_infile` 关闭时回退多值 INSERT，可捕获） |
+| FreeSql | `Aop.CommandAfter` | 批量插入走 provider 私有通道（`ExecuteSqliteBulkInsert` / `ExecuteMySqlBulkCopy` / `ExecutePgCopy`），无语句文本 |
+| SqlSugar | `Aop.OnLogExecuting`（**每次操作前重装**——Aop 挂在 provider 实例上，长批次里会被内部重建） | `Fastest`/BulkCopy 路径只留库自有日志（`Begin BulkCopy…` / `Begin BulkUpdate…`，矩阵标「非 SQL 日志」） |
+| EF Core | `LogTo` 过滤 `CommandExecuted` 事件 | 回调消息含 `info:` 日志头与参数行，SQL 取 `Executed DbCommand` 行之后 |
+| linq2db | `LastQuery` | 只保留最后一条语句（分块批删/批改只呈现末块形态） |
+| RepoDB | 无可用通道 | 连接包装层被 provider 类型解析拒绝（MissingMappingException）；全局 `ITrace` 对异步 API 在 1.17.0 上对 null Task 执行 await，必抛 NRE |
+
 ## 测量协议（与 PerfHub 对齐部分不再重复，此处只列交叉特有）
 
 | 项 | 值 | 说明 |
