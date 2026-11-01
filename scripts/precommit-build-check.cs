@@ -172,7 +172,13 @@ static string SlnPath() => File.Exists("PalORM.ci.slnf") ? "PalORM.ci.slnf" : "P
 
 static string? FindProject(string startPath)
 {
-    var dir = File.Exists(startPath) ? Path.GetDirectoryName(startPath) : startPath;
+    // 已删除的暂存文件（git status D）在磁盘上不存在，File.Exists 为 false；若按目录处理
+    // 会对一个文件路径调用 Directory.GetFiles 并抛 DirectoryNotFoundException
+    // （2026-11-01 实测：删除两个 *Arm.cs 时 pre-commit 整体中断）。带扩展名的路径一律
+    // 按文件处理，取其父目录。
+    var dir = File.Exists(startPath) || Path.HasExtension(startPath)
+        ? Path.GetDirectoryName(startPath)
+        : startPath;
     while (dir is not null)
     {
         var found = Directory.GetFiles(dir, "*.csproj");

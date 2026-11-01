@@ -106,9 +106,10 @@ internal static class Program
                 await ExecAsync(conn, Pragma).ConfigureAwait(false);
             }
 
-            // 12 库统一横评（2026-10-30，清单 = AotProbe 终版 12 条）：五臂原班 +
-            // 九新臂。新臂构造可能因方言不支持而失败（如 SmartSql provider 注册名不符）——
-            // 安全构造后跳过并在控制台登记，不拖垮整批（该格 N/A 由报告呈现）。
+            // 跨库横评（2026-10-30 立项；2026-11-01 按用户指令移除 Insight.Database 与 SmartSql——
+            // 两者在性能测试里长期构造失败，只产出 N/A 行，不再参测）。
+            // 新臂构造可能因方言不支持而失败（如 SqlSugar 缺 PG）——安全构造后跳过并在控制台
+            // 登记，不拖垮整批（该格 N/A 由报告呈现）。
             // 臂按 --arms 令牌惰性构造（2026-10-30）：不测的臂不构造——跨库静态初始化
             //（NHibernate 会话工厂、Marten DocumentStore 等）只应为参测臂付出
             bool Want(string token) =>
@@ -128,8 +129,6 @@ internal static class Program
                     .. When(Want("efcore"), new EfCoreImpl(info)),
                     .. When(Want("sqlsugar"), TryArm(() => new SqlSugarImpl(info), "sqlsugar")!),
                     .. When(Want("nhibernate"), new NHibernateImpl(info)),
-                    .. When(Want("insight"), TryArm(() => new InsightImpl(info), "insight")!),
-                    .. When(Want("smartsql"), TryArm(() => new SmartSqlImpl(info), "smartsql")!),
                 ];
             if (!liteDbMode && dialect == Dialect.PostgreSql && Want("marten"))
             {
@@ -144,7 +143,7 @@ internal static class Program
             {
                 throw new ArgumentOutOfRangeException(
                     "--arms", string.Join(',', armFilter),
-                    "有效臂名：ado、dapper、dapper-aot、repodb、freesql、palorm、linq2db、efcore、sqlsugar、nhibernate、insight、smartsql、litedb、marten");
+                    "有效臂名：ado、dapper、dapper-aot、repodb、freesql、palorm、linq2db、efcore、sqlsugar、nhibernate、litedb、marten");
             }
             try
             {
@@ -284,8 +283,7 @@ internal static class Program
         => want ? arms.OfType<IPerfImplementation>() : [];
 
     /// <summary>臂安全构造——方言不支持/初始化失败时返回 null 并在控制台登记
-    ///（2026-10-30 12 库横评：SmartSql provider 注册名、Marten PG-only 等方言级失败
-    /// 不拖垮整批，该臂 N/A 进报告）。</summary>
+    ///（如 SqlSugar 缺 PG、Marten 仅 PG：方言级失败不拖垮整批，该臂 N/A 进报告）。</summary>
     private static IPerfImplementation? TryArm(Func<IPerfImplementation> factory, string armName)
     {
         try

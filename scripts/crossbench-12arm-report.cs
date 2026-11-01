@@ -1,5 +1,6 @@
 #:property Nullable=enable
-// 12 库统一横评报告生成器（2026-10-30，清单 = AotProbe 终版 12 条 + ADO 地板）。
+// 跨库横评报告生成器（2026-10-30 立项，清单 10 条 + ADO 地板；2026-11-01 按用户指令移除
+// Insight.Database 与 SmartSql，两者长期构造失败只产出 N/A 行）。
 // 纪律与 scripts/crossbench-report.cs 冻结模板同源：所有倍数/计数/"最快/最差"标签
 // 从当批 JSON 推导，叙述列只写定性机制与 N/A 原因（静态事实，不含数字）。
 //
@@ -91,12 +92,6 @@ var opGroup = new Dictionary<string, string>
 // N/A 原因账本（静态定性事实，2026-10-30 冒烟定案；数字不在此出现）
 var naReasons = new Dictionary<(string Arm, string Dialect), string>
 {
-    [("SmartSql", "Sqlite")] = "N/A：代码级初始化缺陷（UseDatabase 路径 NRE，XML 路径未接入）",
-    [("SmartSql", "MySql")] = "N/A：同 SQLite",
-    [("SmartSql", "PostgreSql")] = "N/A：同 SQLite",
-    [("Insight", "Sqlite")] = "N/A：无 SQLite provider，批量物化对 TEXT 列 decimal 失败",
-    [("Insight", "MySql")] = "N/A：身份列约定吞显式主键绑定（Column 'Id' cannot be null）",
-    [("Insight", "PostgreSql")] = "N/A：身份列约定吞显式主键绑定（Parameter 'p0' must have Value）",
     [("SqlSugar", "PostgreSql")] = "N/A：PG 硬编码全小写引号标识符，与 CamelCase 引号 DDL 冲突",
     [("Marten", "Sqlite")] = "N/A：PG-only 文档库（清单钦定，仅 pg 注册）",
     [("Marten", "MySql")] = "N/A：PG-only 文档库",
@@ -228,11 +223,11 @@ foreach (string dialect in dialects)
 }
 
 // ── 4. 覆盖账本 ──
-sb.AppendLine("## 4. 覆盖账本（12 库 × 方言）");
+sb.AppendLine("## 4. 覆盖账本（10 库 × 方言）");
 sb.AppendLine();
 sb.AppendLine("| 库 | SQLite | MySQL | PG | LiteDB 位 |");
 sb.AppendLine("|---|---|---|---|---|");
-string[] listArms = ["PalORM", "Dapper.AOT", "RepoDb", "FreeSql", "linq2db", "EF Core", "SqlSugar", "NHibernate", "Marten", "LiteDB", "SmartSql", "Insight"];
+string[] listArms = ["PalORM", "Dapper.AOT", "RepoDb", "FreeSql", "linq2db", "EF Core", "SqlSugar", "NHibernate", "Marten", "LiteDB"];
 foreach (string lib in listArms)
 {
     string armKey = lib switch
