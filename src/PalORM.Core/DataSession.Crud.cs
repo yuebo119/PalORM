@@ -1293,10 +1293,14 @@ public sealed partial class DataSession<TProvider>
         // 同样必要（E4_PostgreSql 实测），MySQL 另有 D7 耗时判定。
         if (TProvider.PreferSynchronousIo)
             return GetByKeyEntryAsync<T>(key, ct);
+        // 计时起点必须先取（2026-11-01 修 D7 边界漏判）：实参从左到右求值，写成
+        // RunAsync(Entry(...), Begin(...)) 会让 Begin 在进入方法的同步段之后才取值，
+        // 判定窗口被截短（同 ScalarAsync 注释的实测数据）。
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
         return CommandTimeoutNormalizer.RunAsync(
             GetByKeyEntryAsync<T>(key, ct),
-            CommandTimeoutNormalizer.Begin(
-                CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds)),
+            startTimestamp,
             _commandTimeoutSeconds);
     }
 
@@ -1458,10 +1462,12 @@ public sealed partial class DataSession<TProvider>
         // 超时归一条件化（同 GetAsync）：进程内引擎跳过包装，网络 Provider 保留 D4/D7
         if (TProvider.PreferSynchronousIo)
             return GetAllEntryAsync<T>(ct);
+        // 计时起点必须先取（同 ScalarAsync/GetAsync，2026-11-01）
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
         return CommandTimeoutNormalizer.RunAsync(
             GetAllEntryAsync<T>(ct),
-            CommandTimeoutNormalizer.Begin(
-                CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds)),
+            startTimestamp,
             _commandTimeoutSeconds);
     }
 

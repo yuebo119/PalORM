@@ -609,10 +609,15 @@ public sealed partial class DataSession<TProvider>
         // 网络 Provider 保留 D4 内层超时解包与 MySQL D7 耗时判定
         if (TProvider.PreferSynchronousIo)
             return ScalarEntryAsync<T>(sql, readFromReplica, ct);
+        // 计时起点必须先取（2026-11-01 修 D7 边界漏判）：实参从左到右求值，写成
+        // RunAsync(Entry(...), Begin(...)) 会让 Begin 在进入方法的同步段之后才取值，
+        // 判定窗口被截短（实测 MySQL SELECT SLEEP(5)/1s 在 1004~1021 ms 返回，窗口缩到
+        // 98x ms 后漏判，E4_MySql 契约用例偶发失败）。
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
         return CommandTimeoutNormalizer.RunAsync(
             ScalarEntryAsync<T>(sql, readFromReplica, ct),
-            CommandTimeoutNormalizer.Begin(
-                CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds)),
+            startTimestamp,
             _commandTimeoutSeconds);
     }
 

@@ -44,10 +44,11 @@ internal static class CommandTimeoutNormalizer
 
     /// <summary>同上，<see cref="Task{TResult}"/> 形态（查询管线用）。
     /// <para><b>只在需要判定时调用</b>：调用方先用 <see cref="RequiresElapsedCheck"/> 判方言，
-    /// 非 MySQL 直接返回原 Task，不进本方法的状态机。</para></summary>
-    internal static Task<T> RunAsync<T>(Task<T> operation, int timeoutSeconds)
+    /// 非 MySQL 直接返回原 Task，不进本方法的状态机。</para>
+    /// <para><b>计时起点必须由调用方在启动操作之前取</b>（2026-11-01）：本方法内部再取会把
+    /// 进入方法的同步段排除在窗口外，判定宽度短于真实耗时。</para></summary>
+    internal static Task<T> RunAsync<T>(Task<T> operation, long startTimestamp, int timeoutSeconds)
     {
-        long startTimestamp = Stopwatch.GetTimestamp();
         if (operation.IsCompletedSuccessfully)
         {
             ThrowIfElapsed(startTimestamp, timeoutSeconds);
