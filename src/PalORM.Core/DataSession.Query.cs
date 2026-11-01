@@ -605,12 +605,15 @@ public sealed partial class DataSession<TProvider>
     public ValueTask<T?> ScalarAsync<T>(FormattableString sql, bool readFromReplica = false, CancellationToken ct = default)
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold) _operationState.PrewarmCurrentOperationOwner();
-        // 超时归一条件化（同 GetAsync/GetAllAsync，2026-10-31）：非 MySQL 不包 RunAsync 状态机
-        if (!CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds))
+        // 超时归一条件化（同 GetAsync/GetAllAsync，2026-10-31）：进程内引擎跳过包装，
+        // 网络 Provider 保留 D4 内层超时解包与 MySQL D7 耗时判定
+        if (TProvider.PreferSynchronousIo)
             return ScalarEntryAsync<T>(sql, readFromReplica, ct);
         return CommandTimeoutNormalizer.RunAsync(
             ScalarEntryAsync<T>(sql, readFromReplica, ct),
-            CommandTimeoutNormalizer.Begin(enabled: true), _commandTimeoutSeconds);
+            CommandTimeoutNormalizer.Begin(
+                CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds)),
+            _commandTimeoutSeconds);
     }
 
     private async ValueTask<T?> ScalarEntryAsync<T>(FormattableString sql, bool readFromReplica, CancellationToken ct)

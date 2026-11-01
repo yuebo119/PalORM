@@ -1288,14 +1288,16 @@ public sealed partial class DataSession<TProvider>
         ArgumentNullException.ThrowIfNull(key);
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        // 超时归一条件化（2026-10-31 极致性能轮）：非 MySQL（或未设超时）不包 RunAsync
-        // 状态机，原样返回内层 ValueTask——与 LINQ 路径 WithCommandTimeoutCheck 同口径；
-        // MySQL 语义（D7 耗时判定 + D4 解包）逐位保留。
-        if (!CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds))
+        // 超时归一条件化（2026-10-31 极致性能轮）：进程内引擎（PreferSynchronousIo，
+        // SQLite）不包 RunAsync 状态机；网络 Provider 保留包装——D4 内层超时解包对 PG
+        // 同样必要（E4_PostgreSql 实测），MySQL 另有 D7 耗时判定。
+        if (TProvider.PreferSynchronousIo)
             return GetByKeyEntryAsync<T>(key, ct);
         return CommandTimeoutNormalizer.RunAsync(
             GetByKeyEntryAsync<T>(key, ct),
-            CommandTimeoutNormalizer.Begin(enabled: true), _commandTimeoutSeconds);
+            CommandTimeoutNormalizer.Begin(
+                CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds)),
+            _commandTimeoutSeconds);
     }
 
     // ── G2 证伪回退（2026-10-14 并发塌方定位轮，勿重开此形态）──
@@ -1453,12 +1455,14 @@ public sealed partial class DataSession<TProvider>
     {
         if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
             _operationState.PrewarmCurrentOperationOwner();
-        // 超时归一条件化（同 GetAsync）：非 MySQL 不包 RunAsync 状态机
-        if (!CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds))
+        // 超时归一条件化（同 GetAsync）：进程内引擎跳过包装，网络 Provider 保留 D4/D7
+        if (TProvider.PreferSynchronousIo)
             return GetAllEntryAsync<T>(ct);
         return CommandTimeoutNormalizer.RunAsync(
             GetAllEntryAsync<T>(ct),
-            CommandTimeoutNormalizer.Begin(enabled: true), _commandTimeoutSeconds);
+            CommandTimeoutNormalizer.Begin(
+                CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds)),
+            _commandTimeoutSeconds);
     }
 
     // G2 证伪回退（2026-10-14，勿重开非 async 租约入口）：理由见 GetByKeyEntryAsync 上方登记
