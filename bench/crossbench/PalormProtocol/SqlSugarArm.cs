@@ -3,13 +3,33 @@ using SqlSugar;
 
 namespace PalORM.PerfHub;
 
+/// <summary>独立物理表声明：共享表的列名约定与该组驱动不兼容时，用一组专属表隔离。
+/// <para>目前只有 SqlSugar + PG 使用（该组硬编码小写引号标识符，与 CamelCase 引号 DDL 冲突）；
+/// 其余组返回 null，走共享表，快照与复位逻辑不变。</para></summary>
+internal interface ISeparateTableArm
+{
+    /// <summary>该方言下 S1 表的物理名；null = 用共享 perf_s1。</summary>
+    string? S1TableFor(Dialect dialect);
+
+    /// <summary>该方言下枚举表的物理名；null = 用共享 perf_enum。</summary>
+    string? EnumTableFor(Dialect dialect);
+}
+
 /// <summary>SqlSugar 臂（清单条目 sqlsugar，SqlSugarCore 5.1.4.221）。
 /// <para>形态决策：
 /// <list type="bullet">
 /// <item><b>映射</b>：ConfigureExternalServices 的 EntityNameService/EntityService 零特性
-/// Fluent 配置（SqlSugar 文档对"无法加特性的 POCO"的标准做法）——S1Row 直接映射 perf_s1
-///（属性名即列名，Id 主键非自增）；枚举行用臂内 SsEnumRow（Status 为 string 列，
-/// 每行 ToString 转换——SqlSugar 无官方枚举→字符串列开关，ADO/Dapper 地板同形）。</item>
+/// Fluent 配置（SqlSugar 文档对"无法加特性的 POCO"的标准做法）——S1Row 固定映射共享名
+/// perf_s1（属性名即列名，Id 主键非自增）；枚举行用臂内 SsEnumRow（Status 为 string 列，
+/// 每行 ToString 转换——SqlSugar 无官方枚举→字符串列开关，ADO/Dapper 地板同形）。
+/// <b>映射名必须固定</b>：SqlSugar 实体映射按类型做进程级静态缓存（探针实证：第二个
+/// client 复用第一个 client 的表名），映射随方言变化会把前一方言的名字泄漏给后一方言。
+/// 表名差异用查询/写入期的 <c>.AS()</c>/<c>.As()</c> 覆写表达（五条写路径 + 查询全支持，
+/// 逐路径探针实证）。</item>
+/// <item><b>PG 独立小写表</b>（2026-11-01，探针 16/16 实证）：SqlSugar 的 PG 通道把标识符
+/// 折叠小写后再加引号，共享表的 CamelCase 引号列名必然 42703；该方言全部操作经
+/// <see cref="TableSuffix"/> 指向 perf_s1_lc / perf_enum_lc（列名不加引号的小写 DDL，
+/// 由夹具同步维护快照与复位），MySQL/SQLite 列名大小写不敏感，后缀为空走共享表。</item>
 /// <item><b>MySQL 驱动</b>：DbType.MySqlConnector（SqlSugar 原生 MySqlConnector 通道，
 /// 与其他臂驱动对齐；连接串附加 AllowLoadLocalInfile 供 Fastest 的 LOAD DATA 路径）。</item>
 /// <item><b>批量</b>：db.Fastest&lt;T&gt;()（官方最快路径——MySQL LOAD DATA / PG COPY /
@@ -19,10 +39,11 @@ namespace PalORM.PerfHub;
 /// <item><b>SQLite PRAGMA</b>：SqlSugar 自管连接无打开钩子——SetupAsync 一次性注入，
 /// 文件级 WAL 持久；逐连接 PRAGMA 差异在报告环境节注记。</item>
 /// </list></para></summary>
-internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
+internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparateTableArm
 {
     private readonly Dialect _d;
     private readonly SqlSugarClient _db;
+    private readonly string _tableSuffix;
     private bool _fastestInsertOk = true;
     private bool _fastestUpdateOk = true;
 
@@ -31,13 +52,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
     public SqlSugarImpl(DialectInfo dialect)
     {
         _d = dialect.Dialect;
-        if (_d == Dialect.PostgreSql)
-        {
-            throw new NotSupportedException(
-                "SqlSugar PG 硬编码全小写引号标识符（探针实证 SELECT \"id\",\"name\" FROM \"ssrow\"，"
-                + "2026-10-30）——与协议 CamelCase 引号 DDL 结构性冲突，PG 方言 N/A；MySQL/SQLite 大小写不敏感无冲突");
-        }
-
+        _tableSuffix = _d == Dialect.PostgreSql ? "_lc" : "";
         string cs = Connections.Resolve(dialect);
         if (_d == Dialect.MySql)
         {
@@ -48,10 +63,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
                 : ";AllowLoadLocalInfile=true";
         }
 
-        // PG 大小写敏感折叠（42703 column "id" does not exist，2026-10-30 冒烟实证）：
-        // SqlSugar 未加引号的标识符被 PG 折叠小写，而表列是引号 DDL 的 "Id"——预引号列/表名
-        string Qn(string identifier) => _d == Dialect.PostgreSql ? $"\"{identifier}\"" : identifier;
-
+        // 映射固定共享名（静态缓存钉名，探针实证跨 client 泄漏）；目标表经 AS 覆写指向
         _db = new SqlSugarClient(new ConnectionConfig
         {
             ConnectionString = cs,
@@ -63,11 +75,11 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
                 {
                     if (type == typeof(S1Row))
                     {
-                        entity.DbTableName = Qn("perf_s1");
+                        entity.DbTableName = "perf_s1";
                     }
                     else if (type == typeof(SsEnumRow))
                     {
-                        entity.DbTableName = Qn("perf_enum");
+                        entity.DbTableName = "perf_enum";
                     }
                 },
                 EntityService = (property, column) =>
@@ -81,12 +93,26 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
 
                     if (_d == Dialect.PostgreSql)
                     {
-                        column.DbColumnName = Qn(property.Name);
+                        // 小写列不加引号：PG 未加引号标识符折叠小写（perf_s1_lc 的列名约定）
+                        column.DbColumnName = property.Name.ToLowerInvariant();
                     }
                 },
             },
         });
     }
+
+    /// <summary>本方言的 S1 表物理名（PG=perf_s1_lc，其余=共享 perf_s1）——AS 覆写目标。</summary>
+    private string S1Table => _d == Dialect.PostgreSql ? Dataset.S1LowercaseTableName : "perf_s1";
+
+    /// <summary>本方言的枚举表物理名。</summary>
+    private string EnumTable => _d == Dialect.PostgreSql ? Dataset.EnumLowercaseTableName : "perf_enum";
+
+    /// <summary>PG 用独立小写表：夹具据此把该组的快照/复位落到 perf_s1_lc，其余组仍走 perf_s1。</summary>
+    public string? S1TableFor(Dialect dialect)
+        => dialect == Dialect.PostgreSql ? Dataset.S1LowercaseTableName : null;
+
+    public string? EnumTableFor(Dialect dialect)
+        => dialect == Dialect.PostgreSql ? Dataset.EnumLowercaseTableName : null;
 
     private static DbType MapDbType(Dialect d) => d switch
     {
@@ -123,7 +149,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
     }
 
     public async Task<S1Row?> GetByKeyAsync(DbConnection conn, long id, CancellationToken ct)
-        => await _db.Queryable<S1Row>().FirstAsync(x => x.Id == id).ConfigureAwait(false);
+        => await _db.Queryable<S1Row>().AS(S1Table).FirstAsync(x => x.Id == id).ConfigureAwait(false);
 
     public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
         => throw new NotSupportedException("PooledGetByKey 不在本次子集内");
@@ -132,14 +158,14 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
         => throw new NotSupportedException("GetByKeySession 不在本次子集内");
 
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
-        => await _db.Queryable<S1Row>().ToListAsync().ConfigureAwait(false);
+        => await _db.Queryable<S1Row>().AS(S1Table).ToListAsync().ConfigureAwait(false);
 
     public Task<long> StreamAllAsync(DbConnection conn, Func<S1Row, ValueTask> onRow, CancellationToken ct)
         => throw new NotSupportedException("StreamAll 不在本次子集内");
 
     public async Task InsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
     {
-        int affected = await _db.Insertable(row).ExecuteCommandAsync().ConfigureAwait(false);
+        int affected = await _db.Insertable(row).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
         if (affected != 1)
         {
             throw new InvalidOperationException($"SqlSugar Insert affected {affected}");
@@ -153,7 +179,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
         {
             try
             {
-                _ = await _db.Fastest<S1Row>().BulkCopyAsync(rows.ToList()).ConfigureAwait(false);
+                _ = await _db.Fastest<S1Row>().AS(S1Table).BulkCopyAsync(rows.ToList()).ConfigureAwait(false);
                 return rows.Count;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -162,12 +188,12 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
             }
         }
 
-        return await _db.Insertable(rows.ToList()).ExecuteCommandAsync().ConfigureAwait(false);
+        return await _db.Insertable(rows.ToList()).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
     }
 
     public async Task<int> UpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
     {
-        int affected = await _db.Updateable(row).ExecuteCommandAsync().ConfigureAwait(false);
+        int affected = await _db.Updateable(row).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
         if (affected != 1)
         {
             throw new InvalidOperationException($"SqlSugar Update affected {affected} for Id={row.Id}");
@@ -184,7 +210,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
         {
             try
             {
-                _ = await _db.Fastest<S1Row>().BulkUpdateAsync(rows.ToList()).ConfigureAwait(false);
+                _ = await _db.Fastest<S1Row>().AS(S1Table).BulkUpdateAsync(rows.ToList()).ConfigureAwait(false);
                 return rows.Count;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -193,7 +219,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
             }
         }
 
-        return await _db.Updateable(rows.ToList()).ExecuteCommandAsync().ConfigureAwait(false);
+        return await _db.Updateable(rows.ToList()).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
     }
 
     /// <summary>批量删除——Deleteable.In（官方集合式 IN 删除，SqlSugar 自动按参数上限分批）。</summary>
@@ -205,7 +231,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
             ids[i] = Convert.ToInt64(keys[i], System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        return await _db.Deleteable<S1Row>().In(ids).ExecuteCommandAsync().ConfigureAwait(false);
+        return await _db.Deleteable<S1Row>().AS(S1Table).In(ids).ExecuteCommandAsync().ConfigureAwait(false);
     }
 
     public string BuildGetByKeySql(DbConnection conn, long id)
@@ -215,7 +241,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
         => "SqlSugar Queryable 翻译（Where/OrderBy/Take 组合）";
 
     public async Task<List<S1Row>> KeysetPageAsync(DbConnection conn, long lastId, int pageSize, CancellationToken ct)
-        => await _db.Queryable<S1Row>()
+        => await _db.Queryable<S1Row>().AS(S1Table)
             .Where(x => x.Id > lastId)
             .OrderBy(x => x.Id, OrderByType.Asc)
             .Take(pageSize)
@@ -223,14 +249,14 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
             .ConfigureAwait(false);
 
     public async Task<List<S1Row>> WhereInAsync(DbConnection conn, long[] ids, CancellationToken ct)
-        => await _db.Queryable<S1Row>().Where(x => ids.Contains(x.Id)).ToListAsync().ConfigureAwait(false);
+        => await _db.Queryable<S1Row>().AS(S1Table).Where(x => ids.Contains(x.Id)).ToListAsync().ConfigureAwait(false);
 
     public async Task<long> CountAsync(DbConnection conn, CancellationToken ct)
-        => await _db.Queryable<S1Row>().CountAsync().ConfigureAwait(false);
+        => await _db.Queryable<S1Row>().AS(S1Table).CountAsync().ConfigureAwait(false);
 
     /// <summary>批量 UPSERT——Storageable（SqlSugar 官方 upsert API：按主键分派 insert/update）。</summary>
     public async Task<long> UpsertBatchAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
-        => await _db.Storageable(rows.ToList()).ExecuteCommandAsync().ConfigureAwait(false);
+        => await _db.Storageable(rows.ToList()).As(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
 
     public Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct)
         => throw new NotSupportedException("InsertReturningId 不在本次子集内");
@@ -246,7 +272,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
         try
         {
             await _db.Ado.BeginTranAsync().ConfigureAwait(false);
-            _ = await _db.Insertable(row).ExecuteCommandAsync().ConfigureAwait(false);
+            _ = await _db.Insertable(row).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
             await _db.Ado.CommitTranAsync().ConfigureAwait(false);
         }
         catch
@@ -267,7 +293,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
             await _db.Ado.BeginTranAsync().ConfigureAwait(false);
             foreach (S1Row row in rows)
             {
-                _ = await _db.Insertable(row).ExecuteCommandAsync().ConfigureAwait(false);
+                _ = await _db.Insertable(row).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
             }
 
             await _db.Ado.CommitTranAsync().ConfigureAwait(false);
@@ -284,7 +310,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
         try
         {
             await _db.Ado.BeginTranAsync().ConfigureAwait(false);
-            _ = await _db.Insertable(rows.ToList()).ExecuteCommandAsync().ConfigureAwait(false);
+            _ = await _db.Insertable(rows.ToList()).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
             await _db.Ado.CommitTranAsync().ConfigureAwait(false);
         }
         catch
@@ -301,7 +327,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
             await _db.Ado.BeginTranAsync().ConfigureAwait(false);
             foreach (S1Row row in rows)
             {
-                _ = await _db.Updateable(row).ExecuteCommandAsync().ConfigureAwait(false);
+                _ = await _db.Updateable(row).AS(S1Table).ExecuteCommandAsync().ConfigureAwait(false);
             }
 
             await _db.Ado.RollbackTranAsync().ConfigureAwait(false);
@@ -337,7 +363,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable
             await _db.Ado.BeginTranAsync().ConfigureAwait(false);
             foreach (EnumRow row in rows)
             {
-                _ = await _db.Insertable(SsEnumRow.From(row)).ExecuteCommandAsync().ConfigureAwait(false);
+                _ = await _db.Insertable(SsEnumRow.From(row)).AS(EnumTable).ExecuteCommandAsync().ConfigureAwait(false);
             }
 
             await _db.Ado.CommitTranAsync().ConfigureAwait(false);

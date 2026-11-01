@@ -79,6 +79,32 @@ internal static class Dataset
     public static string DropTableSql(Dialect dialect)
         => $"DROP TABLE IF EXISTS {(dialect == Dialect.MySql ? "`perf_s1`" : "\"perf_s1\"")}";
 
+    /// <summary>小写列变体表名（SqlSugar PG 专用，2026-11-01）。
+    /// <para><b>为什么需要独立表</b>：SqlSugar 的 PG 通道把标识符折叠小写后再加引号
+    ///（探针实证 SELECT "id","name" FROM "ssrow"），而共享表是 CamelCase 引号 DDL；
+    /// 两者结构性冲突。给该组一张列名不加引号的小写表即可，其余 8 组仍用 <see cref="Table"/>，
+    /// 快照、复位与判据全部不变。MySQL/SQLite 列名大小写不敏感，不需要变体。</para></summary>
+    public const string S1LowercaseTableName = "perf_s1_lc";
+
+    /// <summary>小写列变体表 DDL（列名不加引号，PG 折叠为小写；与共享表列序/类型逐位一致）。</summary>
+    public static string CreateS1LowercaseTableSql(Dialect dialect, string table = S1LowercaseTableName)
+        => dialect switch
+        {
+            Dialect.PostgreSql => $"CREATE TABLE {table} (id BIGINT PRIMARY KEY, name TEXT NOT NULL, "
+                + "qty INTEGER NOT NULL, price NUMERIC(18,4) NOT NULL, marker BIGINT NOT NULL)",
+            _ => throw new NotSupportedException($"小写列变体表只用于 PostgreSQL（收到 {dialect}）")
+        };
+
+    /// <summary>小写列枚举表名（与 <see cref="S1LowercaseTableName"/> 同源理由）。</summary>
+    public const string EnumLowercaseTableName = "perf_enum_lc";
+
+    public static string CreateEnumLowercaseTableSql(Dialect dialect, string table = EnumLowercaseTableName)
+        => dialect switch
+        {
+            Dialect.PostgreSql => $"CREATE TABLE {table} (id BIGINT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL)",
+            _ => throw new NotSupportedException($"小写列变体表只用于 PostgreSQL（收到 {dialect}）")
+        };
+
     /// <summary>引用标识符——三方言各自规则。</summary>
     public static string Q(Dialect dialect, string identifier)
         => dialect == Dialect.MySql ? $"`{identifier}`" : $"\"{identifier}\"";

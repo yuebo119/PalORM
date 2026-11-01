@@ -168,10 +168,19 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     }
 
     /// <summary>枚举列形态表的重置（EnumInserts 项）——写专用表：DROP + CREATE 空表即可
-    /// （无读取项，无需播种；prepare 语义为预热前/计时前各一次，不进测量）。</summary>
+    /// （无读取项，无需播种；prepare 语义为预热前/计时前各一次，不进测量）。
+    /// <para>lowercaseTable 非空时建独立小写表（SqlSugar+PG 组），列序与类型同共享表。</para></summary>
     internal static async Task SetupPerfEnumTableAsync(
-        Dialect dialect, DbConnection conn, CancellationToken ct)
+        Dialect dialect, DbConnection conn, CancellationToken ct, string? lowercaseTable = null)
     {
+        if (lowercaseTable is not null)
+        {
+            await ExecSetupAsync(conn, $"DROP TABLE IF EXISTS {lowercaseTable}", ct).ConfigureAwait(false);
+            await ExecSetupAsync(conn, Dataset.CreateEnumLowercaseTableSql(dialect, lowercaseTable), ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
         await ExecSetupAsync(conn, Dataset.DropEnumTableSql(dialect), ct).ConfigureAwait(false);
         await ExecSetupAsync(conn, Dataset.CreateEnumTableSql(dialect), ct).ConfigureAwait(false);
     }

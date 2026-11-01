@@ -98,8 +98,7 @@ internal static class Program
 
             // 跨库横评（2026-10-30 立项；2026-11-01 按用户指令移除 Insight.Database 与 SmartSql——
             // 两者在性能测试里长期构造失败，只产出 N/A 行，不再参测）。
-            // 新臂构造可能因方言不支持而失败（如 SqlSugar 缺 PG）——安全构造后跳过并在控制台
-            // 登记，不拖垮整批（该格 N/A 由报告呈现）。
+            // 新臂构造失败（驱动缺依赖等）仍走安全构造跳过并登记，不拖垮整批。
             // 臂按 --arms 令牌惰性构造（2026-10-30）：不测的臂不构造——跨库静态初始化
             //（跨库静态初始化如 EF 模型、SqlSugar 客户端等）只应为参测组付出
             bool Want(string token) =>
@@ -147,6 +146,13 @@ internal static class Program
                         // 读不变量：每个读 perf_s1 的测量都从「表内恰好 rows 行」开始——
                         // 两遍的读操作前各重置一次（PerfHub 的交错读同语义）
                         await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
+                        if (dialect == Dialect.PostgreSql)
+                        {
+                            // 独立小写表组不在共享表上留状态，pass 起点同样要复位
+                            await RestoreFromAsync(
+                                conn, dialect, Dataset.S1LowercaseTableName + "_seed",
+                                Dataset.S1LowercaseTableName, lowercase: true).ConfigureAwait(false);
+                        }
 
                         IPerfImplementation[] order = pass == 0 ? impls : [.. impls.Reverse()];
 
@@ -205,9 +211,14 @@ internal static class Program
 
                             foreach (IPerfImplementation impl in order)
                             {
+                                // prepare 随臂适配：独立表组的复位目标是它自己的物理表，
+                                // 其余组仍是共享表（测量语义不变，仅换委托签名）
+                                Func<DbConnection, Task>? prepare = op.Prepare is null
+                                    ? null
+                                    : c => op.Prepare!(c, impl);
                                 Measurement m = await Measure.SingleAsync(
                                     info, impl, op.Name, op.Group, rows, op.Action, conn, op.MaxIterations,
-                                    CancellationToken.None, op.Prepare,
+                                    CancellationToken.None, prepare,
                                     budgetSeconds: op.Budget,
                                     scale: globalScale,
                                     warmupScale: op.WarmupScale,
@@ -243,8 +254,8 @@ internal static class Program
     private static IEnumerable<IPerfImplementation> When(bool want, params IPerfImplementation?[] arms)
         => want ? arms.OfType<IPerfImplementation>() : [];
 
-    /// <summary>臂安全构造——方言不支持/初始化失败时返回 null 并在控制台登记
-    ///（如 SqlSugar 缺 PG：方言级失败不拖垮整批，该组 N/A 进报告）。</summary>
+    /// <summary>臂安全构造——初始化失败（驱动缺依赖等）时返回 null 并在控制台登记，
+    /// 方言级失败不拖垮整批，该组 N/A 进报告。</summary>
     private static IPerfImplementation? TryArm(Func<IPerfImplementation> factory, string armName)
     {
         try
@@ -265,9 +276,10 @@ internal static class Program
     ///（前者 UPDATE，后者 INSERT … ON CONFLICT / ON DUPLICATE KEY / 文档覆写），两条都要验。</para>
     /// <para>2026-10-30 从 RepoDb 专用泛化为全部参与守卫的臂（读守卫名单同源）；
     /// ADO/Dapper/PalORM 的写后校验仍是历史批次的已知缺口（ADR-S「已知边界」）。</para></summary>
-    /// <summary>校验间复原——按快照 Restore 回种子态。</summary>
-    private static Task RestoreForValidationAsync(Dialect dialect, DbConnection conn, int rows)
-        => RestoreAsync(conn, dialect, "perf_s1_seed");
+    /// <summary>校验间复原——按组目标的快照 Restore 回种子态。</summary>
+    private static Task RestoreForValidationAsync(
+        Dialect dialect, DbConnection conn, int rows, IPerfImplementation arm)
+        => RestoreForArmAsync(conn, dialect, "perf_s1_seed", arm);
 
     private static Task ValidateArmWritesAsync(
         Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows)
@@ -294,14 +306,14 @@ internal static class Program
         S1Row? afterUpdate = await arm.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
             .ConfigureAwait(false);
         bool updateOk = Same(afterUpdate, modified[0]);
-        await RestoreForValidationAsync(dialect, conn, rows).ConfigureAwait(false);
+        await RestoreForValidationAsync(dialect, conn, rows, arm).ConfigureAwait(false);
 
         // 路径 2：UpsertBatch（对已存在主键段整批 UPSERT，值同样改成审计值）
         await arm.UpsertBatchAsync(conn, modified, CancellationToken.None).ConfigureAwait(false);
         S1Row? afterUpsert = await arm.GetByKeyAsync(conn, modified[0].Id, CancellationToken.None)
             .ConfigureAwait(false);
         bool upsertOk = Same(afterUpsert, modified[0]);
-        await RestoreForValidationAsync(dialect, conn, rows).ConfigureAwait(false);
+        await RestoreForValidationAsync(dialect, conn, rows, arm).ConfigureAwait(false);
 
         if (!updateOk || !upsertOk)
         {
@@ -339,9 +351,10 @@ internal static class Program
     private static List<Op> BuildOperations(
         Dialect dialect, int rows, long[] keys, long[] whereInIds, int bulkDeleteRounds)
     {
-        // 计时前状态复位 = 按快照 Restore（各组同一份种子数据）
-        Func<DbConnection, Task> Prep(string snapshot)
-            => c => RestoreAsync(c, dialect, snapshot);
+        // 计时前状态复位 = 按快照 Restore（各组同一份种子数据）；
+        // 独立表组（SqlSugar+PG）由 RestoreForArmAsync 落到自己的小写表
+        Func<DbConnection, IPerfImplementation, Task> Prep(string snapshot)
+            => (c, arm) => RestoreForArmAsync(c, dialect, snapshot, arm);
 
         List<Op> ops =
         [
@@ -417,7 +430,7 @@ internal static class Program
             new("EnumInserts", "Transaction", 200,
                 (impl, c, i) => impl.EnumInsertsAsync(
                     c, Dataset.SeedEnumRows(100, (long)i * 100), CancellationToken.None),
-                c => AdoNetImpl.SetupPerfEnumTableAsync(dialect, c, CancellationToken.None),
+                (c, arm) => SetupEnumTableAsync(dialect, c, arm),
                 MinTierOnly: true),
         ];
 
@@ -457,6 +470,27 @@ internal static class Program
         await InsertRowsAsync(
             conn, dialect, "perf_s1_seed_bd", Dataset.SeedRows(rows * bulkDeleteRounds)).ConfigureAwait(false);
 
+        // 独立小写表组（SqlSugar+PG）的快照：与共享快照同源同形，独立表组的复位只认这一套
+        if (dialect == Dialect.PostgreSql)
+        {
+            foreach (string name in new[]
+                     {
+                         Dataset.S1LowercaseTableName + "_seed",
+                         Dataset.S1LowercaseTableName + "_seed_bd",
+                     })
+            {
+                await ExecAsync(conn, $"DROP TABLE IF EXISTS {name}").ConfigureAwait(false);
+                await ExecAsync(conn, Dataset.CreateS1LowercaseTableSql(dialect, name)).ConfigureAwait(false);
+            }
+
+            await InsertRowsAsync(
+                conn, dialect, Dataset.S1LowercaseTableName + "_seed", Dataset.SeedRows(rows), lowercase: true)
+                .ConfigureAwait(false);
+            await InsertRowsAsync(
+                conn, dialect, Dataset.S1LowercaseTableName + "_seed_bd",
+                Dataset.SeedRows(rows * bulkDeleteRounds), lowercase: true).ConfigureAwait(false);
+        }
+
         await RestoreAsync(conn, dialect, "perf_s1_seed").ConfigureAwait(false);
     }
 
@@ -466,31 +500,55 @@ internal static class Program
     private static Task RestoreAsync(DbConnection conn, Dialect dialect, string snapshot)
         => RestoreFromAsync(conn, dialect, snapshot, Dataset.Table(dialect));
 
-    private static async Task RestoreFromAsync(DbConnection conn, Dialect dialect, string snapshot, string target)
+    /// <summary>按组复位：独立表组（SqlSugar+PG）落到自己的小写表，其余落共享表。
+    /// <para>物理表隔离后，两套表的快照必须同源同形：名字由共享快照名派生
+    ///（perf_s1_seed → perf_s1_lc_seed），内容由同一次 <see cref="Dataset.SeedRows"/> 播种。</para></summary>
+    private static Task RestoreForArmAsync(
+        DbConnection conn, Dialect dialect, string snapshot, IPerfImplementation arm)
+        => arm is ISeparateTableArm separate && separate.S1TableFor(dialect) is { } table
+            ? RestoreFromAsync(conn, dialect, SnapshotForArm(snapshot, table), table, lowercase: true)
+            : RestoreAsync(conn, dialect, snapshot);
+
+    /// <summary>共享快照名 → 独立表快照名（perf_s1_seed → perf_s1_lc_seed）。</summary>
+    private static string SnapshotForArm(string snapshot, string table)
+        => snapshot.Replace("perf_s1", table, StringComparison.Ordinal);
+
+    /// <summary>枚举表复位：独立表组建自己的小写枚举表。</summary>
+    private static Task SetupEnumTableAsync(Dialect dialect, DbConnection conn, IPerfImplementation arm)
+        => arm is ISeparateTableArm separate && separate.EnumTableFor(dialect) is { } table
+            ? AdoNetImpl.SetupPerfEnumTableAsync(dialect, conn, CancellationToken.None, table)
+            : AdoNetImpl.SetupPerfEnumTableAsync(dialect, conn, CancellationToken.None);
+
+    private static async Task RestoreFromAsync(
+        DbConnection conn, Dialect dialect, string snapshot, string target, bool lowercase = false)
     {
-        string ddl = Dataset.CreateTableSql(dialect);
-        if (target != Dataset.Table(dialect))
-        {
-            ddl = ddl.Replace("perf_s1", target);
-        }
+        string ddl = lowercase
+            ? Dataset.CreateS1LowercaseTableSql(dialect, target)
+            : Dataset.CreateTableSql(dialect).Replace("perf_s1", target, StringComparison.Ordinal);
 
         await ExecAsync(conn, $"DROP TABLE IF EXISTS {target}").ConfigureAwait(false);
         await ExecAsync(conn, ddl).ConfigureAwait(false);
+        string source = lowercase ? snapshot : Q(dialect, snapshot);
         await ExecAsync(
             conn,
-            $"INSERT INTO {target} SELECT * FROM {Q(dialect, snapshot)}").ConfigureAwait(false);
+            $"INSERT INTO {target} SELECT * FROM {source}").ConfigureAwait(false);
     }
 
+    private static readonly string[] LowercaseColumns = ["id", "name", "qty", "price", "marker"];
+
     private static async Task InsertRowsAsync(
-        DbConnection conn, Dialect dialect, string table, IReadOnlyList<S1Row> rows)
+        DbConnection conn, Dialect dialect, string table, IReadOnlyList<S1Row> rows, bool lowercase = false)
     {
-        string columns = string.Join(
-            ", ",
-            new[] { "Id", "Name", "Qty", "Price", "Marker" }.Select(c => Dataset.Q(dialect, c)));
+        string[] columnNames = lowercase
+            ? LowercaseColumns
+            : [.. new[] { "Id", "Name", "Qty", "Price", "Marker" }.Select(c => Dataset.Q(dialect, c))];
+        string columns = string.Join(", ", columnNames);
         await using DbTransaction tran = await conn.BeginTransactionAsync().ConfigureAwait(false);
         await using DbCommand cmd = conn.CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandText = $"INSERT INTO {Q(dialect, table)} ({columns}) VALUES (@Id,@Name,@Qty,@Price,@Marker)";
+        cmd.CommandText = lowercase
+            ? $"INSERT INTO {table} ({columns}) VALUES (@Id,@Name,@Qty,@Price,@Marker)"
+            : $"INSERT INTO {Q(dialect, table)} ({columns}) VALUES (@Id,@Name,@Qty,@Price,@Marker)";
         DbParameter pId = AddParameter(cmd, "@Id");
         DbParameter pName = AddParameter(cmd, "@Name");
         DbParameter pQty = AddParameter(cmd, "@Qty");
@@ -531,7 +589,7 @@ internal static class Program
         string Group,
         int MaxIterations,
         Func<IPerfImplementation, DbConnection, int, Task> Action,
-        Func<DbConnection, Task>? Prepare = null,
+        Func<DbConnection, IPerfImplementation, Task>? Prepare = null,
         bool MinTierOnly = false)
     {
         /// <summary>计时窗预算（秒）。慢操作表（2026-10-25 时间优化轮）：事务族与

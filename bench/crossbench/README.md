@@ -8,7 +8,7 @@
 8	>
 9	> **RepoDB v1.17+ 集成教训（来自 FreeSql 经验）**：
 	> **跨库横评扩展（2026-10-30 立项；2026-11-01 按用户指令移除 Insight.Database 与 SmartSql——两者长期构造失败只产出 N/A 行）**：清单 = PalORM/Dapper.AOT/RepoDb/FreeSql/EF Core/linq2db/SqlSugar（7 库）+ Dapper + ADO 地板。各臂见 *Arm.cs（每臂头部注释含形态决策与方言边界）；--arms 令牌惰性构造（不测的臂不付静态初始化）；--dialects litedb 伪方言（快照机制跳过、臂自管状态、Prepare 重定向为重播种）。
-	> **N/A 账本**：SqlSugar 仅 PG（小写引号硬编码 vs CamelCase 引号 DDL）。报告走 scripts/crossbench-12arm-report.cs（七节结构，数字全部当批推导）。
+	> **N/A 账本**：2026-11-01 起清零——SqlSugar PG 曾因「小写引号标识符 vs CamelCase 引号 DDL」N/A，改走独立小写表 perf_s1_lc（列名不加引号，PG 折叠后命中），映射固定共享名防静态缓存跨方言泄漏（SqlSugar 实体映射按类型进程级缓存，探针实证），每操作经 .AS()/As() 覆写指向组目标表（五条写路径 + 查询逐路径探针实证）。报告走 scripts/crossbench-12arm-report.cs（七节结构，数字全部当批推导）。
 	>
 10	> - 实体映射走 DynamicMapping（零特性，FieldMapper 静态缓存预热）——避免运行时反射
 11	> - 批量操作自动路由驱动级 API（MySQL LOAD DATA/PG COPY/SQLite 行预编译）——与 ADO 地板同路径

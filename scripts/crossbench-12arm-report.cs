@@ -82,9 +82,9 @@ var opGroup = new Dictionary<string, string>
 };
 
 // N/A 原因账本（静态定性事实，2026-10-30 冒烟定案；数字不在此出现）
+// 2026-11-01 清零：SqlSugar PG 改走独立小写表 perf_s1_lc + 逐操作 AS 覆写，不再是 N/A。
 var naReasons = new Dictionary<(string Arm, string Dialect), string>
 {
-    [("SqlSugar", "PostgreSql")] = "N/A：PG 硬编码全小写引号标识符，与 CamelCase 引号 DDL 冲突",
 };
 
 // ── 胜场统计（每格最快者；ADO 是地板不是竞争者） ──
