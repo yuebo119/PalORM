@@ -4,7 +4,7 @@
 > × 9 组，测量引擎、数据集、基础组实现与 [PalORM.PerfHub](../perfhub/README.md) 单一事实源
 >（链接编译），本工程只新增扩展组与 Runner。2026-10-26 起入库并纳入 CI（workflow_dispatch）。
 >
-> **职责边界**：PalORM 自身回归检测**不用本工具**，PerfHub 与其共码三组已覆盖；触发面：①8 库横评主张（发版/对比声明）②形态断点（ADR 级变更后基线重开）；③2026-10-26 用户指令起随 `PerfCli full` 默认执行（步骤"CrossBench 8+1 组交叉批"，统一报告自动追加横评节：数据源按完整批自动判别，9 组 × 三方言 × 两档 = 54 三元组；`PerfCli crossbench` 可独立触发），事件触发语义不变。
+> **职责边界**：PalORM 自身回归检测**不用本工具**，PerfHub 与其共码三组已覆盖；触发面：①8 库横评主张（发版/对比声明）②形态断点（ADR 级变更后基线重开）；③周度刷新（2026-11-02 用户定标：横评改周度，`PerfCli full` 默认跳过该步，`full --with-crossbench` 开启；跳过时统一报告仍从最近完整批取 8+1 表并打印该批文件名与天数，9 组 × 三方言 × 两档 = 54 三元组判据不变；`PerfCli crossbench` 可独立触发），事件触发语义不变。
 >
 > **RepoDB v1.17+ 集成教训（来自 FreeSql 经验）**：
 	> **跨库横评扩展（2026-10-30 立项；2026-11-01 按用户指令移除 Insight.Database 与 SmartSql——两者长期构造失败只产出 N/A 行）**：清单 = PalORM/Dapper.AOT/RepoDb/FreeSql/EF Core/linq2db/SqlSugar（7 库）+ Dapper + ADO 基准。各臂见 *Arm.cs（每臂头部注释含形态决策与方言边界）；--arms 令牌惰性构造（不测的臂不付静态初始化）；--dialects litedb 伪方言（快照机制跳过、臂自管状态、Prepare 重定向为重播种）。

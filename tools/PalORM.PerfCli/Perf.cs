@@ -341,7 +341,7 @@ internal static class Perf
             Perf.Out($"│ {row[1],-4} {FmtDur(secs),-9} {pct,-5} 累计 {FmtDur(cum),-9} {row[0]}");
         }
         Perf.Out("│");
-        Perf.Out($"│ 总计 {FmtDur(total)}（OK=通过 FAIL=失败；报告：bench/reports/perf-report-<时间戳>.md）");
+        Perf.Out($"│ 总计 {FmtDur(total)}（OK=通过 FAIL=失败 SKIP=按频率跳过；报告：bench/reports/perf-report-<时间戳>.md）");
         Perf.Out("╰──────────────────────────────────────────────────────────────────────");
     }
 

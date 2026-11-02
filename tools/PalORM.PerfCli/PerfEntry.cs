@@ -234,6 +234,30 @@ internal static class PerfEntry
         return code;
     }
 
+    /// <summary>跳过横评时说明报告取数来源与陈旧程度：比值在同一批内推导，陈旧不影响自洽性，
+    /// 但读报告的人必须知道 8+1 节是哪一天的数据。</summary>
+    private static string DescribeCrossBenchSource(string root)
+    {
+        const string hint = "周度任务（full --with-crossbench 开启）";
+        string? batch = CrossBenchBatch.LatestFullBatchPath(Path.Combine(root, CrossBenchResultsDir));
+        if (batch is null)
+        {
+            return $"{hint}；本机尚无完整横评批，报告的 8+1 节会缺失";
+        }
+
+        string name = Path.GetFileName(batch);
+        string date = name.Length >= 19 ? name.Substring(11, 8) : string.Empty;
+        if (!DateTime.TryParseExact(
+                date, "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out DateTime day))
+        {
+            return $"{hint}；报告取最近完整批 {name}";
+        }
+
+        int ageDays = (DateTime.Today - day.Date).Days;
+        return $"{hint}；报告取最近完整批 {name}（{ageDays} 天前）";
+    }
+
     /// <summary>最近的完整 CrossBench 批判别与装载走 <see cref="CrossBenchBatch"/>（与 PerfGate
     /// 8+1 组横评表共用同一份判据：9 组 × 三方言 × 两档 = 54 三元组）。</summary>
     public static int Smoke()
@@ -278,9 +302,11 @@ internal static class PerfEntry
         return finalCode;
     }
 
-    /// <param name="options">--with-dappersuite：把 DapperSuite 哨兵并回本轮。默认**移出**（2026-10-03
-    /// 降频裁决：连续多轮 9 项零发现，信息增量低）：哨兵改按周或驱动/大版本变更时手动并回，
-    /// 统一报告的跨夹具登记会显示其最后批次时间，超期即可见。</param>
+    /// <param name="options">--with-crossbench：把横评并回本轮。默认**跳过**（2026-11-02 用户定标：
+    /// 横评改周度，日常只跑 PerfHub 与微基准）：跳过时报告仍从最近完整批取 8+1 表并打印该批
+    /// 文件名与天数，超过一周即在日志里可见。--with-dappersuite：把 DapperSuite 哨兵并回本轮。
+    /// 默认移出（2026-10-03 降频裁决：连续多轮 9 项零发现，信息增量低）：哨兵改按周或驱动/大版本
+    /// 变更时手动并回，统一报告的跨夹具登记会显示其最后批次时间，超期即可见。</param>
     public static int Full(string[] options)
     {
         // B135（2026-10-04 实录）：full 是 20 分钟级的昂贵动作，曾把 `full --help` 的 --help
@@ -292,6 +318,9 @@ internal static class PerfEntry
         }
 
         bool withDapperSuite = options is not null && Array.IndexOf(options, "--with-dappersuite") >= 0;
+        // 2026-11-02 用户定标：横评（CrossBench）改为周度任务，日常 full 默认跳过。
+        // 报告取数不变——仍从"最近完整批"读，跳过只是不刷新它；跳过时会打印该批文件名。
+        bool withCrossBench = options is not null && Array.IndexOf(options, "--with-crossbench") >= 0;
         // 阶段 0 时间分解（作战卡 §4）：仅在 PALORM_PERFHUB_TIMING=1 时多跑一步，
         // 默认流程的步骤数与行为保持不变（红线：不改变既有输出格式与判定）。
         bool timingReport = Environment.GetEnvironmentVariable("PALORM_PERFHUB_TIMING") == "1";
@@ -328,6 +357,16 @@ internal static class PerfEntry
             }
         }
 
+        // 跳过也占一个步骤位：否则步骤总数在周度与日常之间变化，日志与最终表的编号对不上，
+        // 读日志的人无法判断"少的那步"是跳过还是没跑到。
+        void RunSkipped(string name, string reason)
+        {
+            stepIdx++;
+            Perf.Step($"[{stepIdx}/{stepTotal}] {name}");
+            Perf.Out($"跳过：{reason}");
+            Perf.RecordStep($"[{stepIdx}/{stepTotal}] {name}", "SKIP", 0, Perf.ElapsedSince(Perf.TotalStart));
+        }
+
         // 步骤 1 跳过其内部报告：统一报告必须等三套夹具都写完结果库信封后再生成
         //（否则报告里的跨夹具节只含上一轮的批次——顺序错了就会得出"PerfHub 未采集"的假缺口）。
         RunStep("微基准全量 + 负载 + 内存 + 启动 + BDN 门禁", () =>
@@ -353,7 +392,14 @@ internal static class PerfEntry
         {
             RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
         }
-        RunStep("CrossBench 8+1 组交叉批（横评）", () => CrossBench(ownSession: false));
+        if (withCrossBench)
+        {
+            RunStep("CrossBench 8+1 组交叉批（横评）", () => CrossBench(ownSession: false));
+        }
+        else
+        {
+            RunSkipped("CrossBench 8+1 组交叉批（横评）", DescribeCrossBenchSource(root));
+        }
         RunStep("门禁（BDN 基线 + 结果库基线）", () => Gate(ownSession: false));
         RunStep("统一报告", Report);
         RunTimingReportStep();
@@ -368,14 +414,14 @@ internal static class PerfEntry
             return failCode;
         }
         Perf.Out("");
-        Perf.Out($"全量跑测完成：{Numeral(stepTotal)}步全通过，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
+        Perf.Out($"全量跑测完成：{Numeral(stepTotal)}步无失败，总耗时 {Perf.FmtDur(Perf.ElapsedSince(Perf.TotalStart))}。");
         Perf.PrintFinalTable();
         var okCode = 0;
         Perf.EndSessionLog(okCode);
         return okCode;
     }
 
-    /// <summary>步骤数的中文数字（默认四步；--with-dappersuite 五步；开计时旁车再加一步）。</summary>
+    /// <summary>步骤数的中文数字（默认五步，含被跳过的横评；--with-dappersuite 六步；开计时旁车再加一步）。</summary>
     private static string Numeral(int stepTotal) => stepTotal switch
     {
         4 => "四",
@@ -387,7 +433,7 @@ internal static class PerfEntry
     /// 返回 true 表示"不要开跑"。</summary>
     private static bool RejectUnknownOptions(string[] options)
     {
-        string[] known = ["--with-dappersuite", "-h", "--help"];
+        string[] known = ["--with-dappersuite", "--with-crossbench", "-h", "--help"];
         string[] unknown = options is null
             ? []
             : [.. options.Where(o => !known.Contains(o, StringComparer.Ordinal))];
@@ -405,7 +451,10 @@ internal static class PerfEntry
         Perf.Out("""
             用法:
               PerfCli smoke                                    # 三套夹具最小档冒烟（SQLite，约 5 分钟）
-              PerfCli full [--with-dappersuite]                # 全量（三方言）+ CrossBench 8+1 组横评 + 门禁 + 唯一报告
+              PerfCli full [--with-crossbench] [--with-dappersuite]
+                                                               # 日常：微基准 + 负载 + 内存 + 启动 + BDN + PerfHub + 门禁 + 唯一报告
+                                                               # 横评（CrossBench）改为周度，默认跳过；--with-crossbench 开启
+                                                               # 跳过时报告仍从最近完整批取 8+1 表，并打印该批文件名与天数
                                                                # DapperSuite 默认降频，--with-dappersuite 并回
               PerfCli crossbench                               # 只跑 CrossBench 8+1 组批 + 横评报告（表一~表八）
               PerfCli compare <基线worktree> <轮数> [选项]      # 交替 A/B（转发 compare 编排器）
