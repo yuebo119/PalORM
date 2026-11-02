@@ -321,6 +321,9 @@ internal static class PerfEntry
         // 2026-11-02 用户定标：横评（CrossBench）改为周度任务，日常 full 默认跳过。
         // 报告取数不变——仍从"最近完整批"读，跳过只是不刷新它；跳过时会打印该批文件名。
         bool withCrossBench = options is not null && Array.IndexOf(options, "--with-crossbench") >= 0;
+        // --rebuild-baselines[=N]：跑完本轮后补齐 PerfHub 与 L0 的 N 批窗口并重录三项基线。
+        // 一次命令覆盖「全量 + 补批 + 录基线 + 门禁 + 报告」，避免手工连发七八次夹具命令。
+        int rebuildBatches = ParseRebuildBatches(options);
         // 阶段 0 时间分解（作战卡 §4）：仅在 PALORM_PERFHUB_TIMING=1 时多跑一步，
         // 默认流程的步骤数与行为保持不变（红线：不改变既有输出格式与判定）。
         bool timingReport = Environment.GetEnvironmentVariable("PALORM_PERFHUB_TIMING") == "1";
@@ -328,7 +331,9 @@ internal static class PerfEntry
         Perf.ClearSteps();
         Perf.StartClock();
         Perf.BeginSessionLog(root, "full");
-        int stepTotal = (withDapperSuite ? 6 : 5) + (timingReport ? 1 : 0);
+        // 基线重建会追加 2~3 步（PerfHub 补批 / L0 批 / 录基线），步骤总数要一并算进来，
+        // 否则日志里会出现 [6/5] 这类越界编号。
+        int stepTotal = (withDapperSuite ? 6 : 5) + (timingReport ? 1 : 0) + RebuildStepCount(rebuildBatches);
         var stepIdx = 0;
         List<string> stepFailed = [];
 
@@ -398,6 +403,7 @@ internal static class PerfEntry
             RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
         }
         RunCrossBenchOrSkip(withCrossBench, root, RunStep, RunSkipped);
+        RunBaselineRebuildSteps(rebuildBatches, RunStep);
         RunStep("门禁（BDN 基线 + 结果库基线）", () => Gate(ownSession: false));
         RunStep("统一报告", Report);
         RunTimingReportStep();
@@ -446,6 +452,127 @@ internal static class PerfEntry
         }
     }
 
+    /// <summary>基线重建追加的步骤数：0 不重建；1 批只跑 L0 与录基线（2 步）；多批再加 PerfHub 补批（3 步）。</summary>
+    private static int RebuildStepCount(int batches) => batches switch
+    {
+        <= 0 => 0,
+        1 => 2,
+        _ => 3,
+    };
+
+    /// <summary>解析 --rebuild-baselines[=N]。缺省 N=3，与 record-index 的窗口一致；N=1 表示只录当前这批。</summary>
+    private static int ParseRebuildBatches(string[]? options)
+    {
+        string? token = options?.FirstOrDefault(
+            static o => o.StartsWith("--rebuild-baselines", StringComparison.Ordinal));
+        if (token is null)
+        {
+            return 0;
+        }
+
+        int eq = token.IndexOf('=', StringComparison.Ordinal);
+        return eq >= 0
+            && int.TryParse(
+                token[(eq + 1)..], System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out int n)
+            && n > 0
+            ? n
+            : 3;
+    }
+
+    /// <summary>基线重建的补批与录制（2026-11-02）。一次 full 之内完成 PerfHub 补批、L0 批、
+    /// 三项基线录制，取代此前手工连发七八条夹具命令的流程。
+    /// <para>为什么要补批：索引与 L0 基线都取最近 N 批的中位数（B100 纪律），单批容易把噪声
+    /// 录成基线；容器重启后的首批还会带 transition 偏向。</para></summary>
+    private static void RunBaselineRebuildSteps(int batches, Action<string, Func<int>> runStep)
+    {
+        if (batches <= 0)
+        {
+            return;
+        }
+
+        if (batches > 1)
+        {
+            runStep($"PerfHub 补批 ×{batches - 1}（补齐 {batches} 批窗口）", () => RunPerfHubBatches(batches - 1));
+        }
+
+        runStep($"L0 快线 ×{batches}（L0 基线窗口）", () => RunL0Batches(batches));
+        runStep("录制三项基线（BDN / 索引 / L0）", () => RecordAllBaselines(batches));
+    }
+
+    private static int RunPerfHubBatches(int count)
+    {
+        string project = Path.Combine(Perf.RepoRoot(), "bench", "PalORM.PerfHub");
+        for (int i = 1; i <= count; i++)
+        {
+            Perf.Out($"[PerfHub 补批 {i}/{count}]");
+            int code = Perf.Run("dotnet",
+                $"run --project \"{project}\" -c Release -- " +
+                "run --dialects sqlite,mysql,pg --tiers 2000,20000 --concurrency --threads 1,4,8");
+            if (code != 0)
+            {
+                return code;
+            }
+        }
+
+        return 0;
+    }
+
+    private static int RunL0Batches(int count)
+    {
+        string project = Path.Combine(Perf.RepoRoot(), "bench", "PalORM.PerfHub");
+        for (int i = 1; i <= count; i++)
+        {
+            Perf.Out($"[L0 批 {i}/{count}]");
+            int code = Perf.Run("dotnet",
+                $"run --project \"{project}\" -c Release -- run --dialects sqlite,mysql,pg " +
+                $"--tiers {PerfL0.Tier} --ops {PerfL0.OpsArgument} --label {PerfL0.Label} --no-report");
+            if (code != 0)
+            {
+                return code;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>三项基线一起录：BDN 用本轮产物，索引与 L0 取最近 N 批窗口中位数。
+    /// BDN 的版本号取 HEAD 短哈希，与历史基线的记法一致。</summary>
+    private static int RecordAllBaselines(int batches)
+    {
+        string root = Perf.RepoRoot();
+        string gate = Path.Combine(root, "tools", "PalORM.PerfGate");
+        string baselineDir = Path.Combine(root, "bench", "baselines");
+        string date = DateTime.Now.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        var (headCode, headText) = Perf.RunCapture("git", "rev-parse --short HEAD");
+        string version = headCode == 0 ? headText.Trim() : "unknown";
+        string scope = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"一次命令重建（{date}）：BDN 用本轮 1/2/3 同参产物；PerfHub 索引与 L0 取最近 {batches} 批窗口中位数");
+
+        int code = Perf.Run("dotnet",
+            $"run --project \"{gate}\" -c Release -- record " +
+            $"--results \"{Path.Combine(root, "BenchmarkDotNet.Artifacts", "results")}\" " +
+            $"--out \"{Path.Combine(baselineDir, "perf-baseline.json")}\" " +
+            $"--version {version} --date {date} --scope \"{scope}\"");
+        if (code != 0)
+        {
+            return code;
+        }
+
+        code = Perf.Run("dotnet",
+            $"run --project \"{gate}\" -c Release -- record-index " +
+            $"--out \"{Path.Combine(baselineDir, "perfhub-index-baseline.json")}\" --batches {batches}");
+        if (code != 0)
+        {
+            return code;
+        }
+
+        return Perf.Run("dotnet",
+            $"run --project \"{gate}\" -c Release -- record-l0 " +
+            $"--out \"{Path.Combine(baselineDir, "perfhub-l0-baseline.json")}\" --batches {batches}");
+    }
+
     /// <summary>环境预检（2026-11-02）：调 PerfHub 的 preflight 命令，覆盖三方言认证级连通、
     /// 容器自愈（wslc container start）与 MySQL local_infile。不过即中止 full。
     /// 独立一步而非并入既有步骤，是为了让"跑测没开始"与"跑测跑了一半"在日志上可区分。</summary>
@@ -475,7 +602,8 @@ internal static class PerfEntry
         string[] known = ["--with-dappersuite", "--with-crossbench", "-h", "--help"];
         string[] unknown = options is null
             ? []
-            : [.. options.Where(o => !known.Contains(o, StringComparer.Ordinal))];
+            : [.. options.Where(o => !known.Contains(o, StringComparer.Ordinal)
+                && !o.StartsWith("--rebuild-baselines", StringComparison.Ordinal))];
         if (unknown.Length > 0)
         {
             Perf.Out("full：未知参数 " + string.Join(' ', unknown));
@@ -490,10 +618,12 @@ internal static class PerfEntry
         Perf.Out("""
             用法:
               PerfCli smoke                                    # 三套夹具最小档冒烟（SQLite，约 5 分钟）
-              PerfCli full [--with-crossbench] [--with-dappersuite]
+              PerfCli full [--with-crossbench] [--rebuild-baselines[=N]] [--with-dappersuite]
                                                                # 日常：微基准 + 负载 + 内存 + 启动 + BDN + PerfHub + 门禁 + 唯一报告
                                                                # 横评（CrossBench）改为周度，默认跳过；--with-crossbench 开启
                                                                # 跳过时报告仍从最近完整批取 8+1 表，并打印该批文件名与天数
+                                                               # --rebuild-baselines 追加：PerfHub 补批至 N 批（默认 3）、
+                                                               #   L0 跑 N 批、重录 BDN/索引/L0 三项基线，再一次门禁确认
                                                                # DapperSuite 默认降频，--with-dappersuite 并回
               PerfCli crossbench                               # 只跑 CrossBench 8+1 组批 + 横评报告（表一~表八）
               PerfCli compare <基线worktree> <轮数> [选项]      # 交替 A/B（转发 compare 编排器）
