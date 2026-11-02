@@ -318,23 +318,36 @@ if (anchorBad.Count == 0)
 else
     Fail($"D15 站内锚点失效（{string.Join("；", anchorBad)}）——按标题 slug 修正（去 emoji、空格转 -）");
 
-// ── D16: README 性能总览数字与 CrossBench 生成报告对账（2026-10-26 新增）──
-// 动因：性能章曾长期手抄生成报告的表格，两处并存必然漂移——旧的「表四」在引入后从未更新，
-// 与明细表 9 个可比格全部矛盾（0 一致），且其中一个值在任何 PerfHub 历史批次里都复现不出来。
-// 现在 README 只留总览结论，数字必须能在最近一次 fivearm 报告里逐字找到。
-// 判据=README 性能章内形如 `**0.39**` 的加粗倍数，必须在 fivearm-*.md 中出现同样的小数串。
+// ── D16: README 性能表二与模板对账（2026-11-02 改版）──
+// 提取方括号倍数：`[🟩0.71]`、`**[🟥2.10]**`、`[1.00]`。方括号内允许色标与加粗标记，
+// 只取末尾两位小数；Markdown 链接的方括号是文字，不会被这条正则命中。
+List<string> ExtractBracketRatios(string text)
+{
+    var result = new List<string>();
+    foreach (Match m in Regex.Matches(text, @"\[[^\[\]\d]*?(\d\.\d{2})\]"))
+    {
+        result.Add(m.Groups[1].Value);
+    }
+
+    return result;
+}
+// 动因：性能章曾长期手抄生成报告的表格，两处并存必然漂移。2026-11-02 起 README 性能表
+// 改为「表二」形态（按方言分表、9 组倍数），旧 fivearm 报告只有 PalORM 视角的加粗倍数，
+// 覆盖不了全部组，故数据源改为 docs/README性能表模板.md（同一批数据的入库快照）。
+// 判据：README 性能章的方括号倍数（[🟩0.71] / **[🟥2.10]** / [1.00]）与模板正文逐值对账，
+// 双向比较计数，防单边修改。
 var perfBad = new List<string>();
 var perfChecked = 0;
-var fivearmFiles = Directory.Exists("bench/crossbench/results")
-    ? Directory.EnumerateFiles("bench/crossbench/results", "fivearm-*.md").OrderByDescending(f => f).Take(1).ToArray()
-    : [];
-if (fivearmFiles.Length == 0)
+const string perfTemplatePath = "docs/README性能表模板.md";
+if (!File.Exists(perfTemplatePath))
 {
-    Console.WriteLine("  D16 跳过：未找到 bench/crossbench/results/fivearm-*.md");
+    Console.WriteLine($"  D16 跳过：未找到 {perfTemplatePath}");
 }
 else
 {
-    var reportText = File.ReadAllText(fivearmFiles[0]);
+    var templateText = File.ReadAllText(perfTemplatePath);
+    var templateStart = templateText.IndexOf("## 📊", StringComparison.Ordinal);
+    templateText = templateStart >= 0 ? templateText[templateStart..] : templateText;
     var readmeLines = File.ReadAllLines("README.md");
     var perfStart = Array.FindIndex(readmeLines, l => l.StartsWith("## 📊", StringComparison.Ordinal));
     // 边界取下一个二级标题而非固定章节名：2026-10-28 README 把「安装」并入「快速开始」后，
@@ -342,26 +355,31 @@ else
     var perfEnd = perfStart >= 0 ? Array.FindIndex(readmeLines, perfStart + 1, l => l.StartsWith("## ", StringComparison.Ordinal)) : -1;
     if (perfStart >= 0 && perfEnd > perfStart)
     {
-        for (var i = perfStart; i < perfEnd; i++)
+        var section = string.Join("\n", readmeLines[perfStart..perfEnd]);
+        var readmeMult = ExtractBracketRatios(section);
+        var templateMult = ExtractBracketRatios(templateText);
+        perfChecked = readmeMult.Count;
+        var readmeCounts = readmeMult.GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
+        var templateCounts = templateMult.GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
+        foreach (var kv in readmeCounts)
         {
-            // 只核对加粗倍数（**0.39** 形态），跳过百分比与绝对耗时
-            foreach (Match m in Regex.Matches(readmeLines[i], @"\*\*(\d\.\d{2})\*\*"))
-            {
-                perfChecked++;
-                // 必须带边界匹配：裸 Contains 会被其他数字的子串骗过
-                // （实测注入 **0.11** 时，报告里 `20.11 ms` 与 `89.8KB [0.11]` 让裸 Contains 判为命中，门禁失效）
-                var bounded = new Regex($@"(?<![\d.]){Regex.Escape(m.Groups[1].Value)}(?![\d])", RegexOptions.Compiled);
-                if (!bounded.IsMatch(reportText))
-                    perfBad.Add($"README.md:{i + 1} {m.Groups[1].Value}");
-            }
+            templateCounts.TryGetValue(kv.Key, out var n);
+            if (n < kv.Value)
+                perfBad.Add($"README 多出 {kv.Key}（README {kv.Value} 次 / 模板 {n} 次）");
+        }
+        foreach (var kv in templateCounts)
+        {
+            readmeCounts.TryGetValue(kv.Key, out var n);
+            if (n < kv.Value)
+                perfBad.Add($"README 缺少 {kv.Key}（模板 {kv.Value} 次 / README {n} 次）");
         }
     }
     if (perfBad.Count == 0 && perfChecked == 0)
-        Fail("D16 性能章未解析到任何加粗倍数——0 项核对等于门禁失效，先查章节边界是否失配");
+        Fail("D16 性能章未解析到任何方括号倍数——0 项核对等于门禁失效，先查章节边界是否失配");
     else if (perfBad.Count == 0)
-        Pass($"D16 README 性能总览倍数均在 {Path.GetFileName(fivearmFiles[0])} 中可查（{perfChecked} 个）");
+        Pass($"D16 README 性能表二与 {perfTemplatePath} 逐值一致（{perfChecked} 个倍数）");
     else
-        Fail($"D16 README 性能倍数在生成报告中查无此值（{string.Join("；", perfBad)}）——重跑 crossbench-report 后同步");
+        Fail($"D16 README 性能表二与模板不一致（{string.Join("；", perfBad.Take(8))}）——按模板重生成或同步模板");
 }
 
 // ── D17: 诊断计数声明 = SourceGen 实际描述符（2026-10-31 新增）──

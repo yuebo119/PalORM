@@ -129,11 +129,42 @@ internal static class PerfEntry
             Perf.Err("8+1 组横评表生成失败（不影响报告主体）");
         }
 
-        // 8+1 组横评（2026-11-02 单源重组）：表一~表八与四组表合并为同一段产物，数据源 =
+        // 8+1 组横评（2026-11-02 单源重组）：表一~表七与回归节合并为同一份产物，数据源 =
         // 最近完整 CrossBench 批（9 组 × 三方言 × 两档，同批同轮），分母统一为同批 ADO 基准。
         // 旧的 CrossBench 五臂节（scripts/crossbench-report.cs 冻结模板）不再追加：它只覆盖
         // 5 组，与横评表重复且组数口径不一致。
+        VerifyReportSections(outPath);
         return 0;
+    }
+
+    /// <summary>报告章节齐全性校验（2026-11-02，模板 docs/性能报告模板.md 的机械载体）：
+    /// 模板定义的关键章节任一缺失即报错到 stderr。防的失效形态是横评表生成失败后报告静默
+    /// 缺整节（旧实现只打一行 Err 就返回 0），读者拿到的是"看起来完整"的半份报告。
+    /// 不阻断退出码：报告主体（BDN/回归）仍有价值，与既有容错口径一致。</summary>
+    private static void VerifyReportSections(string reportPath)
+    {
+        string[] required =
+        [
+            "## 数据源与新鲜度",
+            "## 12 维总览",
+            "## 8+1 组跨库横评",
+            "**一、CRUD 单行与读**",
+            "**七、异常判读**",
+            "**图例**",
+        ];
+        if (!File.Exists(reportPath))
+        {
+            Perf.Err($"[报告模板] 产物不存在：{reportPath}");
+            return;
+        }
+
+        string text = File.ReadAllText(reportPath);
+        string[] missing = [.. required.Where(s => !text.Contains(s, StringComparison.Ordinal))];
+        if (missing.Length > 0)
+        {
+            Perf.Err($"[报告模板] 章节缺失：{string.Join("、", missing)}"
+                + "（对照 docs/性能报告模板.md；横评表生成失败时先查 tables 步骤的退出码）");
+        }
     }
 
     /// <summary>CrossBench 8+1 组交叉批（ADO 基准 + 8 库）+ 横评报告（表一~表八）。
