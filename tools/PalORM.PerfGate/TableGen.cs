@@ -74,14 +74,14 @@ internal static class TableGen
         var md = new StringBuilder(1 << 15);
         AppendHeader(md, file, ix, twoTiers);
         AppendSummary(md, ix, twoTiers);
-        AppendLatencyTable(md, ix, "**一、CRUD 单行与读**（每格：时延 / P/ADO 百分比 / 内存；精确倍数见表四）", CrudOps, twoTiers);
-        AppendLatencyTable(md, ix, "**二、批量处理**（每格：时延 / P/ADO 百分比 / 内存；精确倍数见表四）", BulkOps, twoTiers);
+        AppendLatencyTable(md, ix, "**一、CRUD 单行与读**（每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", CrudOps, twoTiers);
+        AppendLatencyTable(md, ix, "**二、批量处理**（每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", BulkOps, twoTiers);
         AppendLatencyTable(md, ix, "**三、事务**（仅最小档；每格：时延 · P/ADO 百分比；精确倍数见表四）", TxOps, [tiers[0]]);
         AppendCrossDialectTable(md, ix, twoTiers);
         AppendAllocTable(md, ix, "**五、分配**（每格：B/op · 相对 ADO；ADO 行无百分比）",
             [.. CrudOps, .. BulkOps], twoTiers);
         AppendAllocTable(md, ix, "**五B、分配（事务，仅最小档）**", TxOps, [tiers[0]]);
-        AppendLatencyTable(md, ix, "**六、补充读**（每格：时延 / P/ADO 百分比 / 内存；精确倍数见表四）", ExtraReadOps, twoTiers);
+        AppendLatencyTable(md, ix, "**六、补充读**（每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", ExtraReadOps, twoTiers);
         AppendCoverageLedger(md, ix);
         AppendOutliers(md, ix, tiers);
 
@@ -94,7 +94,8 @@ internal static class TableGen
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- ⚠ = 判别力弱：该格任一侧 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论。"));
         md.AppendLine("- 分配相对 ADO = 该组 AllocatedBytesPerOp ÷ 同行 ADO 分配 − 1；ADO 分配为 0 或缺值时记 —。");
-        md.AppendLine("- 明细表第三行 = 分配绝对值（B/op，1024 进制）；表五/五B 给相对 ADO 百分比与排序视角。");
+        md.AppendLine("- 明细表第三行 = 分配绝对值（B/op，1024 进制），第四行 = 分配相对 ADO 百分比（与表五/五B 同公式）。");
+        md.AppendLine("- 地板格第二、四行为 —（基准相对自己没有百分比），四行占位保证各列逐行对齐。");
         md.AppendLine("- 两遍反序批内 Average（叉评协议）；比值同批推导，不跨批引用。");
         md.AppendLine();
 
@@ -141,7 +142,7 @@ internal static class TableGen
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- 数据源：`{Path.GetFileName(file)}`（批次 {stamp}，组数 {Arms.Length}）"));
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"- 口径：三方言 × 两档（{twoTiers[0]:N0}/{twoTiers[^1]:N0}）× 17 操作 × 两遍反序（批内 Average）；比值分母 = 同批 ADO 地板；明细表每格 = 时延 / P/ADO 百分比 / 内存，精确倍数见表四"));
+            $"- 口径：三方言 × 两档（{twoTiers[0]:N0}/{twoTiers[^1]:N0}）× 17 操作 × 两遍反序（批内 Average）；比值分母 = 同批 ADO 地板；明细表每格 = 时延 / 时延百分比 / 内存 / 内存百分比，精确倍数见表四"));
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- 覆盖：{cells} 格 × {Arms.Length} 组 = {points} 个测量点，实采 {points - missing}，缺 {missing}"));
         if (missing > 0)
@@ -408,19 +409,24 @@ internal static class TableGen
             string mem = FmtBytes(m.AllocBytes);
             if (arm == Floor || floor is null || floor.MedianUs <= 0)
             {
-                // 地板格两行：时延 / 内存；非地板三行：时延 / P/ADO 百分比 / 内存。
-                return $"{main}<br>{mem}";
+                // 地板格同样四行（第二/四行用 — 占位）：行数一致时渲染器的垂直居中
+                // 才能让时延对时延、内存对内存（2026-11-02 用户反馈两行格与四行格错位）。
+                return $"{main}<br>—<br>{mem}<br>—";
             }
 
-            // 2026-11-02：明细表同时给内存绝对值（第三行）。列宽上限仍由百分比行决定，
-            // 内存串（2.2KB / 49.8KB / 1.2MB）不超过时延串宽度，不撑宽表格。
-            return $"{main}<br>{PctCell((m.MedianUs / floor.MedianUs) - 1)}{Weak(floor, m)}<br>{mem}";
+            // 2026-11-02：明细表第三行内存绝对值、第四行内存相对 ADO 百分比（与表五同公式）。
+            // 百分比单独占行，列宽不随时延或内存数值变化而撑宽。
+            string memDelta = floor.AllocBytes > 0 && m.AllocBytes > 0
+                ? $"<br>{Delta((m.AllocBytes / floor.AllocBytes) - 1)}"
+                : "<br>—";
+            return $"{main}<br>{PctCell((m.MedianUs / floor.MedianUs) - 1)}{Weak(floor, m)}<br>{mem}{memDelta}";
         }
 
         string alloc = FmtBytes(m.AllocBytes);
         if (arm == Floor || floor is null || floor.AllocBytes <= 0)
         {
-            return alloc;
+            // 分配表地板同样两行（第二行 — 占位），与非地板格行数一致，避免垂直居中错位。
+            return $"{alloc}<br>—";
         }
 
         return $"{alloc}<br>{Delta((m.AllocBytes / floor.AllocBytes) - 1)}";
