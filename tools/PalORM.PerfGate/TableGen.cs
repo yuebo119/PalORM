@@ -76,12 +76,9 @@ internal static class TableGen
         AppendSummary(md, ix, twoTiers);
         AppendLatencyTable(md, ix, "**一、CRUD 单行与读**（每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", CrudOps, twoTiers);
         AppendLatencyTable(md, ix, "**二、批量处理**（每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", BulkOps, twoTiers);
-        AppendLatencyTable(md, ix, "**三、事务**（仅最小档；每格：时延 · P/ADO 百分比；精确倍数见表四）", TxOps, [tiers[0]]);
+        AppendLatencyTable(md, ix, "**三、事务**（仅最小档；每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", TxOps, [tiers[0]]);
         AppendCrossDialectTable(md, ix, twoTiers);
-        AppendAllocTable(md, ix, "**五、分配**（每格：B/op · 相对 ADO；ADO 行无百分比）",
-            [.. CrudOps, .. BulkOps], twoTiers);
-        AppendAllocTable(md, ix, "**五B、分配（事务，仅最小档）**", TxOps, [tiers[0]]);
-        AppendLatencyTable(md, ix, "**六、补充读**（每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", ExtraReadOps, twoTiers);
+        AppendLatencyTable(md, ix, "**五、补充读**（每格：时延 / 时延百分比 / 内存 / 内存百分比；精确倍数见表四）", ExtraReadOps, twoTiers);
         AppendCoverageLedger(md, ix);
         AppendOutliers(md, ix, tiers);
 
@@ -94,7 +91,7 @@ internal static class TableGen
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- ⚠ = 判别力弱：该格任一侧 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论。"));
         md.AppendLine("- 分配相对 ADO = 该组 AllocatedBytesPerOp ÷ 同行 ADO 分配 − 1；ADO 分配为 0 或缺值时记 —。");
-        md.AppendLine("- 明细表第三行 = 分配绝对值（B/op，1024 进制），第四行 = 分配相对 ADO 百分比（与表五/五B 同公式）。");
+        md.AppendLine("- 明细表第三行 = 内存绝对值（B/op，1024 进制），第四行 = 内存相对 ADO 百分比。");
         md.AppendLine("- 基准格第二、四行为 —（基准相对自己没有百分比），四行占位保证各列逐行对齐。");
         md.AppendLine("- 两遍反序批内 Average（叉评协议）；比值同批推导，不跨批引用。");
         md.AppendLine();
@@ -147,7 +144,7 @@ internal static class TableGen
             $"- 覆盖：{cells} 格 × {Arms.Length} 组 = {points} 个测量点，实采 {points - missing}，缺 {missing}"));
         if (missing > 0)
         {
-            md.AppendLine("- ⚠ 存在缺失测量点：相关格记 —，缺失清单见「七、覆盖账本」；缺格不参与胜场与中位比。");
+            md.AppendLine("- ⚠ 存在缺失测量点：相关格记 —，缺失清单见「六、覆盖账本」；缺格不参与胜场与中位比。");
         }
 
         md.AppendLine();
@@ -319,33 +316,6 @@ internal static class TableGen
         md.AppendLine();
     }
 
-    private static void AppendAllocTable(
-        StringBuilder md,
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
-        string? title, string[] ops, int[] tiers)
-    {
-        if (title is not null)
-        {
-            md.AppendLine();
-            md.AppendLine(title);
-            md.AppendLine();
-        }
-
-        Header(md);
-        foreach (string op in ops)
-        {
-            foreach (string dialect in Dialects)
-            {
-                foreach (int tier in tiers)
-                {
-                    Row(md, ix, dialect, op, tier, latency: false);
-                }
-            }
-        }
-
-        md.AppendLine();
-    }
-
     private static void Header(StringBuilder md)
     {
         md.Append("| 操作 | 方言 | 档 |");
@@ -495,7 +465,7 @@ internal static class TableGen
         StringBuilder md,
         Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix)
     {
-        md.AppendLine("**七、覆盖账本**（有值点数 / 理论点数；每方言理论 29 = 12 操作 × 两档 + 5 事务 × 最小档）");
+        md.AppendLine("**六、覆盖账本**（有值点数 / 理论点数；每方言理论 29 = 12 操作 × 两档 + 5 事务 × 最小档）");
         md.AppendLine();
         md.AppendLine("| 组 | SQLite | MySQL | PostgreSQL |");
         md.AppendLine("|---|---|---:|---:|");
@@ -642,7 +612,7 @@ internal static class TableGen
             }
         }
 
-        md.AppendLine("**八、异常判读**（当批推导；≥3.0× 或 ≤0.5× ADO）");
+        md.AppendLine("**七、异常判读**（当批推导；≥3.0× 或 ≤0.5× ADO）");
         md.AppendLine();
         if (slow.Count == 0 && fast.Count == 0)
         {
@@ -825,28 +795,16 @@ internal static class TableGen
     {
         var warnings = new List<string>();
         int deltaCells = 0, zeroDeltas = 0;
-        bool inAllocSection = false;
         foreach (string raw in md.Split('\n'))
         {
-            if (raw.StartsWith("**五、分配", StringComparison.Ordinal))
-            {
-                inAllocSection = true;
-                continue;
-            }
-
-            if (raw.StartsWith("**六、补充读", StringComparison.Ordinal))
-            {
-                break;
-            }
-
-            if (!inAllocSection
-                || !raw.StartsWith('|', StringComparison.Ordinal)
+            if (!raw.StartsWith('|', StringComparison.Ordinal)
                 || raw.StartsWith("|---", StringComparison.Ordinal)
                 || raw.StartsWith("| 操作", StringComparison.Ordinal))
             {
                 continue;
             }
 
+            // 明细表所有 <br> 百分比段（时延百分比与内存百分比）：正常批必然有非 0 值。
             foreach (string segment in raw.Split("<br>").Skip(1).Where(static s => s.Contains('%')))
             {
                 deltaCells++;
@@ -860,7 +818,7 @@ internal static class TableGen
         if (deltaCells >= 8 && zeroDeltas == deltaCells)
         {
             warnings.Add($"[TableGen] 数值哨兵：{deltaCells} 个相对 ADO 百分比全为 0%——"
-                + "分配逐位相同的概率可忽略，疑似比值算式坏了（B148：long/long 整数除法截断）");
+                + "各组与基准逐位相同的概率可忽略，疑似比值算式坏了（B148：long/long 整数除法截断）");
         }
 
         return warnings;

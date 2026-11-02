@@ -223,13 +223,16 @@ internal static class IndexGenerator
 
     private static void AppendAllRuns(StringBuilder md, List<PerfResultEnvelope> runs)
     {
-        md.AppendLine("## 全部批次（倒序）");
+        // 2026-11-02 用户反馈报告过长：默认只列最近 20 批（含失败批的规律在最近窗口内可见），
+        // 完整列表留在结果库目录；需要全量时用 `PerfCli index` 单独生成。
+        const int MaxBatchRows = 20;
+        md.AppendLine("## 最近批次（倒序，最多 20 条）");
         md.AppendLine();
-        md.AppendLine("> `失败登记` 列让**跨批次反复出现的失败**可见（上一节只展开最近一批）。");
+        md.AppendLine("> `失败登记` 列让**跨批次反复出现的失败**可见（上一节只展开最近一批）；完整批次列表见 `bench/results/`。");
         md.AppendLine();
         md.AppendLine("| 夹具 | 时间 | 提交 | 版本 | 标签 | 健康度 | 健康度依据(StdDev/Mean) | 项数 | 失败登记 | 耗时 s |");
         md.AppendLine("|---|---|---|---|---|---|---:|---:|---:|---:|");
-        foreach (PerfResultEnvelope r in runs)
+        foreach (PerfResultEnvelope r in runs.Take(MaxBatchRows))
         {
             int failures = FailureSections(r).Count;
             md.AppendLine(CultureInfo.InvariantCulture,
