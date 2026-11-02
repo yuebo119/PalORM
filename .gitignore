@@ -130,3 +130,4 @@ bench/perfhub/results/samples-*.jsonl
 # 后续重跑按需 -f 显式提交，不随试跑自动进历史）
 tools/AotProbe/results/*.json
 /.code-review-graph
+/architecture
