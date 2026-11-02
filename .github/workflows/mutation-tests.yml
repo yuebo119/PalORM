@@ -1,6 +1,6 @@
 name: Mutation Tests
 
-on:
+'on':
   # 每周六 03:00 UTC 自动运行（变异测试耗时长，不进 PR 门禁）
   schedule:
     - cron: '0 3 * * 6'
