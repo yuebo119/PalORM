@@ -179,7 +179,17 @@ internal static class Preflight
 
         try
         {
-            using var process = Process.Start(new ProcessStartInfo("wslc.exe", $"container start {container}")
+            // S4036（CI -warnaserror 阻断）：wslc.exe 位于系统 PATH（C:\Program Files\WSL），
+            // 用绝对路径定位，找不到时明确报告"本机没有 wslc"而不是抛 Win32Exception。
+            string wslc = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WSL", "wslc.exe");
+            if (!File.Exists(wslc))
+            {
+                output.WriteLine($"[预检] {displayName,-11} 未找到 wslc（{wslc}），跳过自愈");
+                return false;
+            }
+
+            using var process = Process.Start(new ProcessStartInfo(wslc, $"container start {container}")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
