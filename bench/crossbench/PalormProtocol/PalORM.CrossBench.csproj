@@ -26,6 +26,7 @@
     <Compile Include="..\..\PalORM.PerfHub\Dataset.cs" Link="PerfHub\Dataset.cs" />
     <Compile Include="..\..\PalORM.PerfHub\Implementations.cs" Link="PerfHub\Implementations.cs" />
     <Compile Include="..\..\PalORM.PerfHub\Measure.cs" Link="PerfHub\Measure.cs" />
+    <Compile Include="..\..\PalORM.PerfHub\Preflight.cs" Link="PerfHub\Preflight.cs" />
     <Compile Include="..\..\PalORM.PerfHub\Counting.cs" Link="PerfHub\Counting.cs" />
     <Compile Include="..\..\PalORM.PerfHub\StageTiming.cs" Link="PerfHub\StageTiming.cs" />
     <Compile Include="..\..\PalORM.PerfHub\SampleDump.cs" Link="PerfHub\SampleDump.cs" />

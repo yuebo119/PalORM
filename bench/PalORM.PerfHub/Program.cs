@@ -55,6 +55,7 @@ internal static class Program
                 return args[0].ToUpperInvariant() switch
                 {
                     "RUN" => await RunAsync(args[1..]).ConfigureAwait(false),
+                    "PREFLIGHT" => await PreflightCommandAsync(args[1..]).ConfigureAwait(false),
                     "REPORT" => Report.Build(),
                     _ => Fail($"未知命令 '{args[0]}'")
                 };
@@ -77,6 +78,7 @@ internal static class Program
 
             命令:
               run       执行测试（三方言 × 三实现 × 统一数据集）
+              preflight 环境预检（认证级连通 + 容器自愈 + MySQL local_infile），不可用即退出 1
               report    仅从历史数据重新生成报告
 
             run 选项:
@@ -110,6 +112,30 @@ internal static class Program
     {
         Console.Error.WriteLine($"PerfHub: {message}");
         return 1;
+    }
+
+    /// <summary>环境预检命令：跑测前验证三方言的认证级连通、容器自愈与 local_infile。
+    /// 任一方言不可用返回 1，调用方（PerfCli 的 full 第 0 步）据此在花掉 BDN 的时间之前中止。
+    /// <para><c>--no-fix</c> 关闭容器自愈与 local_infile 置位，只做只读检查。</para></summary>
+    private static async Task<int> PreflightCommandAsync(string[] args)
+    {
+        string[] dialectFilter = [];
+        int filterIndex = Array.IndexOf(args, "--dialects");
+        if (filterIndex >= 0 && filterIndex + 1 < args.Length)
+        {
+            dialectFilter = args[filterIndex + 1].Split(',', StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        bool autoFix = Array.IndexOf(args, "--no-fix") < 0;
+        List<DialectInfo> dialects = dialectFilter.Length == 0
+            ? [.. DialectInfo.All]
+            : [.. dialectFilter.Select(static d => DialectInfo.Of(ParseDialect(d)))];
+
+        bool ok = await Preflight.CheckAllAsync(dialects, autoFix, Console.Out).ConfigureAwait(false);
+        Console.WriteLine(ok
+            ? $"[预检] 全部 {dialects.Count} 个方言可用"
+            : "[预检] 存在不可用方言——先修环境再跑测");
+        return ok ? 0 : 1;
     }
 
     private static async Task<int> RunAsync(string[] args)
@@ -210,21 +236,16 @@ internal static class Program
             label = "verify-discard-all-" + label;
         }
 
-        // 探测可用方言（PG/MySQL 需连接串）
+        // 探测可用方言（PG/MySQL 需连接串）——认证级验证，失败时自愈容器并重试一次。
+        // 2026-11-02 修正：原实现只调 Connections.Resolve 解析连接串（不建连接），容器全掉时
+        // 仍打印"三方言可用"，跑完 4 分半 BDN 与 2 分半 SQLite 段才整段失败（B193 同族陷阱）。
         var available = new List<DialectInfo>();
         foreach (Dialect d in dialects)
         {
-            var info = DialectInfo.Of(d);
-            try
+            DialectInfo info = DialectInfo.Of(d);
+            if (await Preflight.CheckAsync(info, autoFix: true, Console.Out).ConfigureAwait(false))
             {
-                _ = Connections.Resolve(info);
                 available.Add(info);
-                Console.WriteLine($"[PerfHub] {info.DisplayName} 可用");
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException
-                or JsonException or ArgumentException)
-            {
-                Console.WriteLine($"[PerfHub] {info.DisplayName} 跳过 — {ex.Message}");
             }
         }
         if (available.Count == 0)

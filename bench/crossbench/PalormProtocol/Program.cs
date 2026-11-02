@@ -82,6 +82,18 @@ internal static partial class Program
 
         SQLitePCL.Batteries_V2.Init();
 
+        // 环境预检（2026-11-02）：三方言认证级连通 + 容器自愈 + MySQL local_infile。
+        // 必须在任何测量之前——此前容器掉线时会在跑到最后一个方言才连接失败，整批 20 分钟作废。
+        if (!args.Contains("--no-preflight"))
+        {
+            List<DialectInfo> preflightTargets = [.. dialects.Select(DialectInfo.Of)];
+            if (!await Preflight.CheckAllAsync(preflightTargets, autoFix: true, Console.Out).ConfigureAwait(false))
+            {
+                Console.Error.WriteLine("CrossBench: 环境预检未通过，未开始测量");
+                return 1;
+            }
+        }
+
         // --sql-audit：SQL 文本审计（方案 B，2026-11-02）——只执行不计量，
         // 逐 (方言 × 操作 × 组) 记录实际执行的 SQL 文本并产出对照报告。
         // 必须早于臂构造设置 Enabled：各臂在构造时按该位决定装不装捕获钩子。
@@ -94,9 +106,57 @@ internal static partial class Program
         var results = new List<Measurement>();
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
 
+        // 断点续跑（2026-11-02）：每完成一个方言就把已测数据落一份 .partial，并记一行 .partial.done。
+        // 容器掉线一类的环境故障会让整批 20 分钟作废；有断点后只需补跑未完成的方言
+        // （--resume <partial 路径>）。.partial 后缀不匹配 crossbench-*.json，不会被完整批扫描误收。
+        string outputDir = ResultsDir();
+        Directory.CreateDirectory(outputDir);
+        string outputPath = Path.Combine(outputDir, $"crossbench-{stamp}.json");
+        string? resumePath = OptionValue(args, "--resume");
+        string partialPath = resumePath ?? outputPath + ".partial";
+        string donePath = partialPath + ".done";
+        var completedDialects = new HashSet<string>(StringComparer.Ordinal);
+        if (resumePath is not null)
+        {
+            if (!File.Exists(resumePath))
+            {
+                Console.Error.WriteLine($"CrossBench: --resume 指定的断点文件不存在：{resumePath}");
+                return 1;
+            }
+
+            List<Measurement>? prior = JsonSerializer.Deserialize<List<Measurement>>(
+                await File.ReadAllTextAsync(resumePath).ConfigureAwait(false));
+            if (prior is null)
+            {
+                Console.Error.WriteLine($"CrossBench: 断点文件无法解析：{resumePath}");
+                return 1;
+            }
+
+            results.AddRange(prior);
+            if (File.Exists(donePath))
+            {
+                foreach (string line in await File.ReadAllLinesAsync(donePath).ConfigureAwait(false))
+                {
+                    if (line.Trim().Length > 0)
+                    {
+                        _ = completedDialects.Add(line.Trim());
+                    }
+                }
+            }
+
+            Console.WriteLine(
+                $"[CrossBench] 续跑：载入 {prior.Count} 条既有测量，已完成方言 [{string.Join(',', completedDialects)}]");
+        }
+
         foreach (Dialect dialect in dialects)
         {
             DialectInfo info = DialectInfo.Of(dialect);
+            if (completedDialects.Contains(info.DisplayName))
+            {
+                Console.WriteLine($"[CrossBench] 跳过 {info.DisplayName}（断点里已完成）");
+                continue;
+            }
+
             string cs = Connections.Resolve(info);
             await using DbConnection conn = info.OpenConnection(cs);
             await conn.OpenAsync().ConfigureAwait(false);
@@ -233,15 +293,42 @@ internal static partial class Program
                     (impl as IDisposable)?.Dispose();
                 }
             }
+
+            // 本方言全部测量写完，落一次断点（容器或进程在后续方言挂掉时不必从头再来）
+            _ = completedDialects.Add(info.DisplayName);
+            await WriteProgressAsync(partialPath, donePath, results, info.DisplayName).ConfigureAwait(false);
         }
 
-        string dir = ResultsDir();
-        Directory.CreateDirectory(dir);
-        string path = Path.Combine(dir, $"crossbench-{stamp}.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true }))
-            .ConfigureAwait(false);
-        Console.WriteLine($"WROTE {path}");
+        await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(results, JsonOptions)).ConfigureAwait(false);
+        foreach (string stale in new[] { partialPath, donePath })
+        {
+            if (File.Exists(stale))
+            {
+                File.Delete(stale);
+            }
+        }
+
+        Console.WriteLine($"WROTE {outputPath}");
         return 0;
+    }
+
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    /// <summary>断点落盘：整批结果先写 .partial，再追加一行完成方言名。放在每个方言跑完之后，
+    /// 所以进程中途被杀时 .partial 里只有已完成的方言，续跑不会混入半截数据。</summary>
+    private static async Task WriteProgressAsync(
+        string partialPath, string donePath, List<Measurement> results, string dialect)
+    {
+        await File.WriteAllTextAsync(partialPath, JsonSerializer.Serialize(results, JsonOptions)).ConfigureAwait(false);
+        await File.AppendAllTextAsync(donePath, dialect + Environment.NewLine).ConfigureAwait(false);
+        Console.WriteLine(
+            $"PARTIAL {partialPath}（{results.Count} 条，已完成 {dialect}；中断后可用 --resume \"{partialPath}\" 续跑）");
+    }
+
+    private static string? OptionValue(string[] args, string name)
+    {
+        int index = Array.IndexOf(args, name);
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
 
     /// <summary>条件展开助手——want 为真时展开臂数组，否则空（配合 --arms 令牌惰性构造）。</summary>

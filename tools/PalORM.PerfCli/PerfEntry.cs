@@ -369,6 +369,11 @@ internal static class PerfEntry
 
         // 步骤 1 跳过其内部报告：统一报告必须等三套夹具都写完结果库信封后再生成
         //（否则报告里的跨夹具节只含上一轮的批次——顺序错了就会得出"PerfHub 未采集"的假缺口）。
+        if (PreflightCheck(root) != 0)
+        {
+            return AbortOnEnvironment();
+        }
+
         RunStep("微基准全量 + 负载 + 内存 + 启动 + BDN 门禁", () =>
         {
             var prev = Environment.GetEnvironmentVariable("SKIP_REPORT");
@@ -392,14 +397,7 @@ internal static class PerfEntry
         {
             RunStep("DapperSuite SQLite（官方形状锚点）", () => DapperSuite.Run(["sqlite"]));
         }
-        if (withCrossBench)
-        {
-            RunStep("CrossBench 8+1 组交叉批（横评）", () => CrossBench(ownSession: false));
-        }
-        else
-        {
-            RunSkipped("CrossBench 8+1 组交叉批（横评）", DescribeCrossBenchSource(root));
-        }
+        RunCrossBenchOrSkip(withCrossBench, root, RunStep, RunSkipped);
         RunStep("门禁（BDN 基线 + 结果库基线）", () => Gate(ownSession: false));
         RunStep("统一报告", Report);
         RunTimingReportStep();
@@ -419,6 +417,47 @@ internal static class PerfEntry
         var okCode = 0;
         Perf.EndSessionLog(okCode);
         return okCode;
+    }
+
+    /// <summary>环境预检未通过时的统一收尾：报错、打印汇总表、结束会话日志。</summary>
+    private static int AbortOnEnvironment()
+    {
+        // 环境不可用时立即中止：此前容器掉线会让 full 先跑完 4 分半 BDN 与 2 分半 SQLite 段
+        // 才在 MySQL 连接处整段失败，整轮作废（2026-11-02 实测）。
+        Perf.Err("环境预检未通过，未开始测量。容器可用 wslc container start <name> 拉起后重跑");
+        Perf.PrintFinalTable();
+        Perf.EndSessionLog(1);
+        return 1;
+    }
+
+    /// <summary>横评步的开关：周度开启则跑批，日常跳过并打印报告取数来源。</summary>
+    private static void RunCrossBenchOrSkip(
+        bool withCrossBench, string root,
+        Action<string, Func<int>> runStep, Action<string, string> runSkipped)
+    {
+        const string StepName = "CrossBench 8+1 组交叉批（横评）";
+        if (withCrossBench)
+        {
+            runStep(StepName, () => CrossBench(ownSession: false));
+        }
+        else
+        {
+            runSkipped(StepName, DescribeCrossBenchSource(root));
+        }
+    }
+
+    /// <summary>环境预检（2026-11-02）：调 PerfHub 的 preflight 命令，覆盖三方言认证级连通、
+    /// 容器自愈（wslc container start）与 MySQL local_infile。不过即中止 full。
+    /// 独立一步而非并入既有步骤，是为了让"跑测没开始"与"跑测跑了一半"在日志上可区分。</summary>
+    private static int PreflightCheck(string root)
+    {
+        Perf.Step("[0/5] 环境预检（三方言认证级连通 + 容器自愈 + local_infile）");
+        var t0 = DateTime.Now;
+        int code = Perf.Run("dotnet",
+            $"run --project \"{Path.Combine(root, "bench", "PalORM.PerfHub")}\" -c Release -- preflight");
+        Perf.RecordStep("[0/5] 环境预检", code == 0 ? "OK" : "FAIL",
+            Perf.ElapsedSince(t0), Perf.ElapsedSince(Perf.TotalStart));
+        return code;
     }
 
     /// <summary>步骤数的中文数字（默认五步，含被跳过的横评；--with-dappersuite 六步；开计时旁车再加一步）。</summary>

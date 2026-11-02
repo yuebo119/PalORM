@@ -19,8 +19,18 @@
 ## 运行
 
 ```bash
-# 全量基线批（全臂全预算，~20 min，2026-10-26 实测；需 .env.test 的 PG/MySQL 凭据）
+# 全量基线批（全臂全预算，2026-11-02 实测 21~22 min；需 .env.test 的 PG/MySQL 凭据）
 dotnet run --project bench/crossbench/PalormProtocol -c Release -- --dialects sqlite,mysql,pg 2000 20000
+
+# 环境预检（2026-11-02 起每个 run 自动先跑；--no-preflight 关闭）
+# 认证级连通 + 容器自愈（wslc container start）+ MySQL local_infile 置 1
+dotnet run --project bench/PalORM.PerfHub -c Release -- preflight
+
+# 断点续跑：方言粒度。每完成一个方言落 <输出>.partial 与 .partial.done，
+# 容器或进程在后续方言挂掉时用它续跑，不必重测已完成的方言
+dotnet run --project bench/crossbench/PalormProtocol -c Release -- \
+  --dialects sqlite,mysql,pg 2000 20000 --resume "<上次打印的 .partial 路径>"
+
 
 # 臂子集（断点后快速复核，~12 min：两臂=一半测量点）
 dotnet run --project bench/crossbench/PalormProtocol -c Release -- --arms ado,palorm --dialects sqlite,mysql,pg 2000 20000
