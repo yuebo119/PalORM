@@ -1,114 +1,110 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using PalORM.Bench.Shared;
 
 namespace PalORM.PerfGate;
 
-/// <summary>四组表生成器（性能测试结果输出规范的固定表格组：CRUD 单行与读 / 批量 / 事务 /
-/// 跨方言比值）。数据源 = 最新非子集 perfhub 批次的信封（MedianUs/AllocBytes/Ratio 逐项）；
-/// FreeSql 对比列（2026-10-25 用户指令）来自 CrossBench 最近完整批（bench/shared/CrossBenchBatch，
-/// 独立夹具两遍反序中位），表 4B 为交叉批口径的 PalORM/FreeSql 跨方言比值。
-/// <para>格式口径与规范一致（2026-10-04 step23 用户改版）：明细表（一/二/三）每行展开
-/// 「方言」列覆盖三方言；时延数值自带单位（µs/ms，2026-10-05 用户定标）；比值列 = 裸倍数两位小数 +
-/// 空格 + 色标紧贴百分比（无括号）；分配相对 ADO 拆 P/D 两列右对齐；表四只列批量族 +
-/// GetAllAsync，列序 SQLite/PostgreSQL/MySQL，格值为裸比值。分配 1024 进制 KB/MB、
-/// 百分比取整（|p|&lt;0.5% 记 0%）、色标六档按显示值判定、倍数 ≥1.3 或 ≤0.7 加粗。</para>
-/// <para><b>行级标记 📌（2026-10-05 用户定标，历经 🚨 → 🔍 → 📌 → 复核回 📌）</b>：比值
-/// ≥1.50 或 ≤0.67 时操作名/格值前置 📌。语义 = 标记待看：远离基准需人工判读（劣化 =
-/// 回归风险；优于地板 &gt;33% = 地板健全性待核），<b>不是警告</b>——远优方向同样标 📌；
-/// 弃用 🚨（警示灯语义易误读为"出错"）与 🔍（用户复判不够清晰）。</para>
-/// <para>为什么做成工具而非汇报时手工贴：四组表曾是每次跑测后最大的人工步骤（.ai 本地脚本原型），
-/// 固化后统一报告自动携带，人工只写"看点"与"行读法"的归因。</para></summary>
+/// <summary>8+1 组跨库横评表生成器（2026-11-02 用户定标「单源 8+1 重组」）。
+/// <para><b>数据源唯一</b>：CrossBench 最近完整批（8 库 + ADO 地板 = 9 组，同批同轮、两遍反序平均）。
+/// 此前四组表从 PerfHub 信封取 ADO/Dapper/PalORM、从 CrossBench 批取 FreeSql/RepoDb，同一行
+/// 混两个批次与两套分母；本生成器删除该跨批拼装，所有比值的分母都是同批 ADO 地板。</para>
+/// <para><b>表格组</b>：表一 CRUD / 表二 批量 / 表三 事务 / 表四 跨方言比值 / 表五 分配 /
+/// 表六 补充读，外加覆盖账本与异常判读。每格两行：主值 + 派生值（时延表 = P/ADO 比值，
+/// 分配表 = 相对 ADO 百分比）。</para>
+/// <para><b>口径</b>沿用 2026-10-04/10-05 定标：色标六档、📌 = 比值 ≥1.50 或 ≤0.67（标记待看，
+/// 非警告）、⚠ = 任一侧 ErrorRatio &gt; 5%（判别力弱）。时延数值自带单位。</para>
+/// </summary>
 internal static class TableGen
 {
     private static readonly string[] CrudOps =
         ["GetByKey", "GetAllAsync", "QueryAll", "Insert", "Update"];
     private static readonly string[] BulkOps = ["BulkInsert", "BulkUpdate", "BulkDelete", "UpsertBatch"];
     private static readonly string[] TxOps = ["TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback", "EnumInserts"];
+    private static readonly string[] ExtraReadOps = ["KeysetPage", "WhereIn", "Count"];
     private static readonly string[] Dialects = ["SQLite", "MySQL", "PostgreSQL"];
     private static readonly string[] CrossOps = ["BulkInsert", "BulkUpdate", "BulkDelete", "UpsertBatch", "GetAllAsync"];
+    private static readonly (string Key, string Display)[] Arms =
+    [
+        ("ADO_NET", "ADO(地板)"),
+        ("Dapper", "Dapper"),
+        ("DapperAot", "Dapper.AOT"),
+        ("Linq2Db", "linq2db"),
+        ("EfCore", "EF Core"),
+        ("SqlSugar", "SqlSugar"),
+        ("FreeSql", "FreeSql"),
+        ("RepoDb", "RepoDb"),
+        ("PalORM", "PalORM"),
+    ];
     private const string Floor = "ADO_NET";
     /// <summary>行级 📌：比值 ≥1.50 或 ≤0.67（标记待看：远离基准需人工判读，非警告）。</summary>
     private const string Flag = "📌";
+    /// <summary>判别力弱阈值——沿用 Measure.cs 的量具自检线（Error/Mean &gt; 5% 标黄）。</summary>
+    private const double NoiseLine = 0.05;
 
     public static int Run(string resultsDir, string? outPath)
     {
-        PerfResultEnvelope? batch = NewestPerfHubBatch(resultsDir);
-        if (batch is null)
+        // 目录按约定从信封目录推导（<root>/bench/results → <root>/bench/crossbench/results），
+        // 与 PerfCli 的 CrossBenchResultsDir 同源；不新增 CLI 参数。
+        string crossDir = Path.GetFullPath(Path.Combine(resultsDir, "..", "crossbench", "results"));
+        string? file = CrossBenchBatch.LatestFullBatchPath(crossDir);
+        if (file is null)
         {
-            Console.Error.WriteLine("[PerfGate] tables: 结果库里没有非子集 perfhub 批次");
+            Console.Error.WriteLine("[PerfGate] tables: 结果库里没有完整 CrossBench 批（8 库 + ADO 地板 × 三方言 × 两档）");
             return 1;
         }
 
-        var index = new Dictionary<(string D, string O, int T, string A), PerfResultItem>();
-        foreach (PerfResultItem item in batch.Items)
+        List<CrossBenchBatch.CrossBenchMeasurement>? items = CrossBenchBatch.LoadAggregated(file);
+        if (items is null)
         {
-            index[(item.Dialect, item.Name, item.Tier, item.Arm)] = item;
+            Console.Error.WriteLine($"[PerfGate] tables: 无法解析 {file}");
+            return 1;
         }
 
-        // FreeSql 对比列（2026-10-25 用户指令：四组表默认带上 FreeSql 数据）：数据源 = CrossBench
-        // 最近完整批（独立夹具，两遍反序中位；操作集与表一/二/三完全同构）。目录按约定从 perfhub
-        // 信封目录推导（<root>/bench/results → <root>/bench/crossbench/results），不新增 CLI 参数。
-        string crossDir = Path.GetFullPath(Path.Combine(resultsDir, "..", "crossbench", "results"));
-        string? crossFile = CrossBenchBatch.LatestFullBatchPath(crossDir);
-        List<CrossBenchBatch.CrossBenchMeasurement>? crossItems = crossFile is null
-            ? null
-            : CrossBenchBatch.LoadAggregated(crossFile);
-        var crossIx = new Dictionary<(string D, string O, int T, string A), CrossBenchBatch.CrossBenchMeasurement>();
-        if (crossItems is not null)
+        var ix = new Dictionary<(string D, string O, int T, string A), CrossBenchBatch.CrossBenchMeasurement>();
+        foreach (CrossBenchBatch.CrossBenchMeasurement m in items)
         {
-            foreach (CrossBenchBatch.CrossBenchMeasurement m in crossItems)
-            {
-                crossIx[(m.Dialect, m.Operation, m.Rows, m.Implementation)] = m;
-            }
+            ix[(m.Dialect, m.Operation, m.Rows, m.Implementation)] = m;
         }
 
-        int minTier = batch.Items.Select(static i => i.Tier).Where(static t => t > 0).Min();
-        var md = new StringBuilder();
-        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"### 四组表（批次 {batch.Timestamp}，label `{(string.IsNullOrEmpty(batch.Label) ? "（无）" : batch.Label)}`）"));
-        md.AppendLine();
-        Table1(md, index, minTier, crossIx);
-        Table2(md, index, minTier, crossIx);
-        Table3(md, index, minTier, crossIx);
-        Table4(md, index, minTier);
-        if (crossItems is not null)
-        {
-            Table4B(md, crossIx, minTier);
-        }
+        int[] tiers = [.. items.Select(static m => m.Rows).Distinct().Order()];
+        int[] twoTiers = tiers.Length >= 2 ? [tiers[0], tiers[^1]] : [tiers[0]];
+
+        var md = new StringBuilder(1 << 15);
+        AppendHeader(md, file, ix, twoTiers);
+        AppendSummary(md, ix, twoTiers);
+        AppendLatencyTable(md, ix, "**一、CRUD 单行与读**（每格：时延 · P/ADO 比值）", CrudOps, twoTiers);
+        AppendLatencyTable(md, ix, "**二、批量处理**（每格：时延 · P/ADO 比值）", BulkOps, twoTiers);
+        AppendLatencyTable(md, ix, "**三、事务**（仅最小档；每格：时延 · P/ADO 比值）", TxOps, [tiers[0]]);
+        AppendCrossDialectTable(md, ix, twoTiers);
+        AppendAllocTable(md, ix, "**五、分配**（每格：B/op · 相对 ADO；ADO 行无百分比）",
+            [.. CrudOps, .. BulkOps], twoTiers);
+        AppendAllocTable(md, ix, "**五B、分配（事务，仅最小档）**", TxOps, [tiers[0]]);
+        AppendLatencyTable(md, ix, "**六、补充读**（每格：时延 · P/ADO 比值）", ExtraReadOps, twoTiers);
+        AppendCoverageLedger(md, ix);
+        AppendOutliers(md, ix, tiers);
 
         md.AppendLine();
+        md.AppendLine("**图例**");
+        md.AppendLine();
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"⚠ = 判别力弱：该行臂里最大 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论（阈值同 Measure 的量具自检线）。"));
+            $"- 比值 = 该组时延 ÷ 同方言同操作同档 ADO 地板；色标按百分比六档（🟢 ≤−30% · 🟩 −29%~−10% · 🔹 −9%~−1% · ⚪ 0% · 🔸 +1%~+9% · 🟧 +10%~+29% · 🟥 ≥+30%）。"));
+        md.AppendLine("- 📌 = 比值 ≥1.50 或 ≤0.67：劣化方向是回归风险，远优方向是地板健全性待核，两者都需人工判读，不等于告警。");
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"{Flag} = 远离基准需人工判读（P/ADO ≥1.50 或 ≤0.67）：劣化方向是回归风险，远优方向是地板健全性待核——两者都要过目，不等于告警。"));
-        if (crossFile is not null)
-        {
-            // 纯文本脚注（无数字洞），无需 string.Create 的文化控制——内插字符串直接拼接即可。
-            md.AppendLine(
-                $"FreeSql / RepoDb 列（时延 / P/臂比值 / 分配段 / 分配相对 ADO）来自 CrossBench 五臂交叉批 {Path.GetFileName(crossFile)}"
-                + "（独立夹具：两遍反序中位、五臂同数据同量具；与 PerfHub 三臂同日不同夹具，数字不互换、比值结论互相印证）；无完整批时为 —。"
-                + "P/FreeSql、P/RepoDb 基准 = 对应臂（正 = 慢 = 劣）；分配相对 ADO（P/D/F/R）四列同分母 = PerfHub ADO 地板；📌 不因 P/FreeSql、P/RepoDb 触发（仍只看 P/ADO）。");
-        }
-        else
-        {
-            md.AppendLine("FreeSql / RepoDb 列：本结果库窗口内无完整 CrossBench 批（五臂 × 三方言 × 两档），为 —；跑 `PerfCli crossbench` 后重建报告即填充。");
-        }
+            $"- ⚠ = 判别力弱：该格任一侧 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论。"));
+        md.AppendLine("- 分配相对 ADO = 该组 AllocatedBytesPerOp ÷ 同行 ADO 分配 − 1；ADO 分配为 0 或缺值时记 —。");
+        md.AppendLine("- 两遍反序批内 Average（叉评协议）；比值同批推导，不跨批引用。");
         md.AppendLine();
 
-        // 输出结构自检（2026-10-05 质量系统优化轮，B126 配套）：以分隔行锁定每表列数，
-        // 其后所有表格行必须同列数——机械化拦截"行首漏管道符/列漂移"类缺陷
-        // （本会话表四曾漏行首 | 生成断裂表，靠人工重生成核对才发现）。
+        // 结构自检（2026-10-05 质量系统优化轮，B126 配套）：以分隔行锁定每表列数，
+        // 其后所有表格行必须同列数——机械化拦截"行首漏管道符/列漂移"类缺陷。
         foreach (string warning in StructuralWarnings(md.ToString()))
         {
             md.AppendLine(warning);
             Console.Error.WriteLine(warning);
         }
 
-        // 数值哨兵（B148 配套，2026-10-03 教训：long/long 整数除法截断让分配百分比列全 0%，
-        // 三道防线全漏）：批量族各行对 ADO 分配差恒 0 时报错——ADO/PalORM 分配逐位相同的
-        // 概率可忽略，全 0 只可能是算式坏了（截断/漏算/取错字段）。
+        // 数值哨兵（B148 配套，改写适配 8+1 形态）：分配表的非地板格若整批全是 ⚪+0%，
+        // 说明"相对 ADO"算式坏了（截断/漏算/取错字段），而非真实数据态。
         foreach (string warning in NumericSentinelWarnings(md.ToString()))
         {
             md.AppendLine(warning);
@@ -122,256 +118,355 @@ internal static class TableGen
         else
         {
             File.WriteAllText(outPath, md.ToString());
-            Console.WriteLine($"[PerfGate] 四组表已写入 {outPath}");
+            Console.WriteLine($"[PerfGate] 8+1 组横评表已写入 {outPath}");
         }
 
         return 0;
     }
 
-    /// <summary>表格结构自检，两条判据（2026-10-05 质量系统优化轮，变异探针三轮定稿）：
-    /// ① 列数不变量：分隔行（|---|…）确定该表列数，其后表格行必须同列数，表头（下一行是
-    /// 分隔行）重置期望列数（表间列数不同不误报）；② 行首缺管道符：非表格行但含 ≥2 个
-    /// 管道符 = 数据行断裂形态（标题/图例/空行管道数为 0，天然免疫）。
-    /// 告警非致命——追加到输出尾部 + stderr（报告管线对四组表有容错，结构告警必须留在
-    /// 产物里可见，与 B123"零匹配假绿"同族：坏输出要能自己喊出来）。</summary>
-    private static List<string> StructuralWarnings(string md)
+    /// <summary>报告头：数据源、批次时间、覆盖统计、口径一句话。
+    /// 覆盖统计是"缺格可见"的机械落点：某组某方言整列缺失时，表头先亮数字，不靠读者逐表扫 —。</summary>
+    private static void AppendHeader(
+        StringBuilder md, string file,
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        int[] twoTiers)
     {
-        var warnings = new List<string>();
-        string[] lines = md.Split('\n');
-        var state = new TableScanState();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            string line = lines[i].TrimEnd('\r');
-            if (line.StartsWith('|', StringComparison.Ordinal))
-            {
-                OnTableLine(warnings, lines, i, line, state);
-            }
-            else if (state.Expected > 0 && line.Count('|') >= 2)
-            {
-                // 判据②：非表格行但含 ≥2 个管道符 = 数据行断裂形态（标题/图例/空行管道数为 0）
-                warnings.Add($"[TableGen] 结构告警：第 {i + 1} 行疑似行首缺管道符：{Truncate(line)}");
-            }
-        }
-
-        return warnings;
-    }
-
-    /// <summary>判据①（表格行）：分隔行设定该表期望列数；新表头（下一行是分隔行）重置期望
-    /// （表间列数不同是合法形态）；其余表格行列数必须等于期望；分隔行额外核对表头列数。</summary>
-    private sealed class TableScanState
-    {
-        public int Expected;
-        public int LastColumns;
-    }
-
-    /// <summary>数值哨兵（B148 配套）：表 2（批量处理）里"分配相对 ADO"末列全为 0% 即报错。
-    /// 该列由 long/long 相除得比值——若忘 `(double)` 转型，截断让商恒 0/1、delta 恒 0%，
-    /// 全列 `⚪ 0%`（实测：ADO 2.1KB/PalORM 3.0KB 明明差 +42% 却显示 0%）。ADO 与 PalORM
-    /// 的分配逐位相同的概率可忽略，全 0 只可能是算式坏（截断/漏算/取错字段），不是数据态。</summary>
-    private static List<string> NumericSentinelWarnings(string md)
-    {
-        var warnings = new List<string>();
-        bool inTable2 = false;
-        int zeroRows = 0, totalRows = 0;
-        foreach (string raw in md.Split('\n'))
-        {
-            string line = raw.TrimEnd('\r');
-            if (line.StartsWith("**表 2", StringComparison.Ordinal)) inTable2 = true;
-            else if (line.StartsWith("**表 3", StringComparison.Ordinal)) break;
-            else if (inTable2 && line.StartsWith('|', StringComparison.Ordinal) && !line.StartsWith("|---", StringComparison.Ordinal)
-                && !line.StartsWith("| 操作", StringComparison.Ordinal))
-            {
-                totalRows++;
-                if (line.Contains("⚪ 0%", StringComparison.Ordinal)) zeroRows++;
-            }
-        }
-
-        if (totalRows >= 4 && zeroRows == totalRows)
-        {
-            warnings.Add($"[TableGen] 数值哨兵：表 2 的 {totalRows} 行分配相对 ADO 全为 0%——"
-                + "ADO/PalORM 分配逐位相同的概率可忽略，疑似比值算式坏了（B148：long/long 整数除法截断）");
-        }
-
-        return warnings;
-    }
-
-    private static void OnTableLine(List<string> warnings, string[] lines, int i, string line, TableScanState state)
-    {
-        int columns = line.Count('|') - 1;
-        bool isSeparator = line.StartsWith("|---", StringComparison.Ordinal);
-        if (isSeparator)
-        {
-            if (state.LastColumns > 0 && state.LastColumns != columns)
-            {
-                warnings.Add($"[TableGen] 结构告警：第 {i} 行表头列数 {state.LastColumns} ≠ 分隔行 {columns}");
-            }
-
-            state.Expected = columns;
-        }
-        else if (FollowedBySeparator(lines, i))
-        {
-            state.Expected = 0;
-        }
-        else if (state.Expected > 0 && columns != state.Expected)
-        {
-            warnings.Add($"[TableGen] 结构告警：第 {i + 1} 行列数 {columns} ≠ 表头 {state.Expected}：{Truncate(line)}");
-        }
-
-        state.LastColumns = columns;
-    }
-
-    /// <summary>本行是否是"新表的表头"（下一行为分隔行）。</summary>
-    private static bool FollowedBySeparator(string[] lines, int i)
-        => i + 1 < lines.Length && lines[i + 1].TrimEnd('\r').StartsWith("|---", StringComparison.Ordinal);
-
-    private static string Truncate(string line)
-        => line.Length <= 60 ? line : line[..60];
-
-    private static void Table1(
-        StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier,
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx)
-    {
-        md.AppendLine("**一、CRUD 单行与读**");
+        (int cells, int points, int missing) = Coverage(ix, twoTiers);
+        string stamp = ParseBatchStamp(file);
+        md.AppendLine("## 8+1 组跨库横评（CrossBench 单批：ADO 地板 + 8 库）");
         md.AppendLine();
-        Header(md);
-        foreach (string op in CrudOps)
+        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+            $"- 数据源：`{Path.GetFileName(file)}`（批次 {stamp}，组数 {Arms.Length}）"));
+        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+            $"- 口径：三方言 × 两档（{twoTiers[0]:N0}/{twoTiers[^1]:N0}）× 17 操作 × 两遍反序（批内 Average）；比值分母 = 同批 ADO 地板"));
+        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+            $"- 覆盖：{cells} 格 × {Arms.Length} 组 = {points} 个测量点，实采 {points - missing}，缺 {missing}"));
+        if (missing > 0)
+        {
+            md.AppendLine("- ⚠ 存在缺失测量点：相关格记 —，缺失清单见「七、覆盖账本」；缺格不参与胜场与中位比。");
+        }
+
+        md.AppendLine();
+    }
+
+    /// <summary>结论面板（当批推导）：可比格数、胜场榜、PalORM 中位比 ADO 与区间。
+    /// 全部从同一批数据算，不引用历史结论；胜场只统计"至少两组有值"的格，缺格不虚增。</summary>
+    private static void AppendSummary(
+        StringBuilder md,
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        int[] twoTiers)
+    {
+        (int cells, Dictionary<string, int> wins, List<double> palormRatios) = Summarize(ix, twoTiers);
+        md.AppendLine("**结论面板**（当批推导）");
+        md.AppendLine();
+        if (cells == 0)
+        {
+            md.AppendLine("- 本批无可比格（数据不足）。");
+            md.AppendLine();
+            return;
+        }
+
+        string winLine = string.Join("、", wins.OrderByDescending(kv => kv.Value).Take(6)
+            .Select(kv => $"{Display(kv.Key)} {kv.Value}"));
+        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+            $"- 可比格 {cells}（至少两组有值）；胜场：{(winLine.Length > 0 ? winLine : "无")}"));
+        if (palormRatios.Count > 0)
+        {
+            palormRatios.Sort();
+            double median = palormRatios[palormRatios.Count / 2];
+            md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                $"- PalORM 中位比 ADO 地板：{median:F2}（区间 {palormRatios[0]:F2} ~ {palormRatios[^1]:F2}，{palormRatios.Count} 格）"));
+        }
+
+        md.AppendLine();
+    }
+
+    private static (int Cells, Dictionary<string, int> Wins, List<double> PalormRatios) Summarize(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        int[] tiers)
+    {
+        int cells = 0;
+        var wins = new Dictionary<string, int>();
+        var ratios = new List<double>();
+        foreach ((string op, int[] opTiers) in OpTiers(tiers.Length >= 2 ? [tiers[0], tiers[^1]] : tiers))
         {
             foreach (string dialect in Dialects)
             {
-                foreach (int tier in new[] { minTier, 20000 })
+                foreach (int tier in opTiers)
                 {
-                    Row(md, ix, dialect, op, tier, cx, flaggable: true);
+                    if (FastestArm(ix, dialect, op, tier) is { } fastest)
+                    {
+                        cells++;
+                        wins[fastest] = wins.TryGetValue(fastest, out int n) ? n + 1 : 1;
+                    }
+
+                    if (CrossRatio(ix, dialect, op, tier) is { } ratio)
+                    {
+                        ratios.Add(ratio);
+                    }
                 }
             }
         }
+
+        return (cells, wins, ratios);
     }
 
-    private static void Table2(
-        StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier,
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx)
+    /// <summary>该格最快组（排除地板；至少两组有值才算可比较）。</summary>
+    private static string? FastestArm(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string dialect, string op, int tier)
     {
-        md.AppendLine();
-        md.AppendLine("**二、批量处理**");
-        md.AppendLine();
-        Header(md);
-        foreach (string op in BulkOps)
+        string? fastest = null;
+        double best = double.MaxValue;
+        int present = 0;
+        foreach ((string arm, _) in Arms)
+        {
+            CrossBenchBatch.CrossBenchMeasurement? m = Get(ix, dialect, op, tier, arm);
+            if (m is null)
+            {
+                continue;
+            }
+
+            present++;
+            if (arm != Floor && m.MedianUs < best)
+            {
+                best = m.MedianUs;
+                fastest = arm;
+            }
+        }
+
+        return present >= 2 ? fastest : null;
+    }
+
+    internal static string ParseBatchStamp(string file)
+    {
+        // 文件名 crossbench-yyyyMMdd-HHmmss.json（Program 生成规则）；解析失败回退文件修改时间。
+        string name = Path.GetFileNameWithoutExtension(file);
+        const string Prefix = "crossbench-";
+        if (name.StartsWith(Prefix, StringComparison.Ordinal)
+            && DateTime.TryParseExact(
+                name[Prefix.Length..], "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out DateTime parsed))
+        {
+            return parsed.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        }
+
+        return File.GetLastWriteTime(file).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+    }
+
+    private static (int Cells, int Points, int Missing) Coverage(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix, int[] twoTiers)
+    {
+        int cells = 0, points = 0, missing = 0;
+        foreach ((string op, int[] tiers) in OpTiers(twoTiers))
         {
             foreach (string dialect in Dialects)
             {
-                foreach (int tier in new[] { minTier, 20000 })
+                foreach (int tier in tiers)
                 {
-                    Row(md, ix, dialect, op, tier, cx, flaggable: true);
+                    cells++;
+                    foreach ((string arm, _) in Arms)
+                    {
+                        points++;
+                        if (!ix.ContainsKey((dialect, op, tier, arm)))
+                        {
+                            missing++;
+                        }
+                    }
                 }
             }
         }
+
+        return (cells, points, missing);
     }
 
-    private static void Table3(
-        StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier,
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx)
+    private static IEnumerable<(string Op, int[] Tiers)> OpTiers(int[] twoTiers)
     {
-        md.AppendLine();
-        md.AppendLine("**三、事务（仅最小档）**");
-        md.AppendLine();
-        Header(md);
+        foreach (string op in CrudOps.Concat(BulkOps).Concat(ExtraReadOps))
+        {
+            yield return (op, twoTiers);
+        }
+
         foreach (string op in TxOps)
         {
+            yield return (op, [twoTiers[0]]);
+        }
+    }
+
+    private static void AppendLatencyTable(
+        StringBuilder md,
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string title, string[] ops, int[] tiers)
+    {
+        md.AppendLine(title);
+        md.AppendLine();
+        Header(md);
+        foreach (string op in ops)
+        {
             foreach (string dialect in Dialects)
             {
-                Row(md, ix, dialect, op, minTier, cx, flaggable: true);
+                foreach (int tier in tiers)
+                {
+                    Row(md, ix, dialect, op, tier, latency: true);
+                }
             }
         }
+
+        md.AppendLine();
     }
 
-    private static void Table4(StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix, int minTier)
-    {
-        md.AppendLine();
-        md.AppendLine("**四、跨方言 PalORM/ADO 比值（批量族 + GetAllAsync）**");
-        md.AppendLine();
-        md.AppendLine("| 操作 | 档 | SQLite | PostgreSQL | MySQL |");
-        md.AppendLine("|---|---|---|---|---|");
-        foreach (string op in CrossOps)
-        {
-            foreach (int tier in new[] { minTier, 20000 })
-            {
-                if (Get(ix, "SQLite", op, tier, "PalORM") is null && tier != minTier) continue;
-                md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-                    $"| {CrossFlag(ix, op, tier)}{op} | {tier} | {CrossCell(ix, "SQLite", op, tier)} | "
-                    + $"{CrossCell(ix, "PostgreSQL", op, tier)} | {CrossCell(ix, "MySQL", op, tier)} |"));
-            }
-        }
-    }
-
-    /// <summary>表 4B（2026-10-25 用户指令）：跨方言 PalORM/FreeSql 比值——与表 4 同形状，数据源
-    /// 与比值口径都取 CrossBench 批内 PalORM ÷ FreeSql（同夹具比值，无跨夹具噪声）；无数据跳过整表。</summary>
-    private static void Table4B(
+    private static void AppendAllocTable(
         StringBuilder md,
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx, int minTier)
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string? title, string[] ops, int[] tiers)
     {
-        md.AppendLine();
-        md.AppendLine("**四B、跨方言 PalORM/FreeSql 比值（批量族 + GetAllAsync，交叉批口径）**");
-        md.AppendLine();
-        md.AppendLine("| 操作 | 档 | SQLite | PostgreSQL | MySQL |");
-        md.AppendLine("|---|---|---|---|---|");
-        foreach (string op in CrossOps)
+        if (title is not null)
         {
-            foreach (int tier in new[] { minTier, 20000 })
+            md.AppendLine();
+            md.AppendLine(title);
+            md.AppendLine();
+        }
+
+        Header(md);
+        foreach (string op in ops)
+        {
+            foreach (string dialect in Dialects)
             {
-                if (GetCross(cx, "SQLite", op, tier, "PalORM") is null && tier != minTier) continue;
-                md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-                    $"| {CrossFlagB(cx, op, tier)}{op} | {tier} | {CrossCellB(cx, "SQLite", op, tier)} | "
-                    + $"{CrossCellB(cx, "PostgreSQL", op, tier)} | {CrossCellB(cx, "MySQL", op, tier)} |"));
+                foreach (int tier in tiers)
+                {
+                    Row(md, ix, dialect, op, tier, latency: false);
+                }
             }
         }
+
+        md.AppendLine();
     }
 
-    private static string CrossFlagB(
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx, string op, int tier)
+    private static void Header(StringBuilder md)
     {
-        foreach (string dialect in Dialects)
+        md.Append("| 操作 | 方言 | 档 |");
+        foreach ((_, string display) in Arms)
         {
-            if (CrossRatioB(cx, dialect, op, tier) is { } r && IsFlagged(r)) return $"{Flag} ";
+            md.Append(' ').Append(display).Append(" |");
         }
 
-        return "";
-    }
-
-    private static string CrossCellB(
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx,
-        string dialect, string op, int tier)
-    {
-        if (CrossRatioB(cx, dialect, op, tier) is not { } ratio) return "—";
-        string flag = IsFlagged(ratio) ? Flag : "";
-        string cell = $"{flag}{ratio.ToString("F2", CultureInfo.InvariantCulture)}";
-        double shown = Math.Round(ratio, 2);
-        return shown is >= 1.3 or <= 0.7 ? $"**{cell}**" : cell;
-    }
-
-    private static double? CrossRatioB(
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx,
-        string dialect, string op, int tier)
-    {
-        CrossBenchBatch.CrossBenchMeasurement? free = GetCross(cx, dialect, op, tier, "FreeSql");
-        CrossBenchBatch.CrossBenchMeasurement? pal = GetCross(cx, dialect, op, tier, "PalORM");
-        return free is null || pal is null || free.MedianUs <= 0 ? null : pal.MedianUs / free.MedianUs;
-    }
-
-    private static string CrossFlag(
-        Dictionary<(string, string, int, string), PerfResultItem> ix, string op, int tier)
-    {
-        foreach (string dialect in Dialects)
+        md.AppendLine();
+        md.Append("|---|---|---:|");
+        foreach ((_, _) in Arms)
         {
-            if (CrossRatio(ix, dialect, op, tier) is { } r && IsFlagged(r)) return $"{Flag} ";
+            md.Append("---:|");
         }
 
-        return "";
+        md.AppendLine();
+    }
+
+    /// <summary>数据行：跳过整行九组全缺的格（不产出全 — 行），否则输出 操作 × 方言 × 档 + 每臂两行。</summary>
+    private static void Row(
+        StringBuilder md,
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string dialect, string op, int tier, bool latency)
+    {
+        if (Arms.All(a => Get(ix, dialect, op, tier, a.Key) is null))
+        {
+            return;
+        }
+
+        CrossBenchBatch.CrossBenchMeasurement? floor = Get(ix, dialect, op, tier, Floor);
+        double palRatio = floor is null || floor.MedianUs <= 0
+            ? 0
+            : (Get(ix, dialect, op, tier, "PalORM")?.MedianUs ?? 0) / floor.MedianUs;
+        string flag = palRatio > 0 && IsFlagged(palRatio) ? $"{Flag} " : "";
+
+        md.Append("| ").Append(flag).Append(op)
+            .Append(" | ").Append(dialect)
+            .Append(" | ").Append(tier.ToString("N0", CultureInfo.InvariantCulture)).Append(" |");
+        foreach ((string arm, _) in Arms)
+        {
+            CrossBenchBatch.CrossBenchMeasurement? m = Get(ix, dialect, op, tier, arm);
+            md.Append(' ').Append(Cell(m, floor, arm, latency)).Append(" |");
+        }
+
+        md.AppendLine();
+    }
+
+    private static string Cell(
+        CrossBenchBatch.CrossBenchMeasurement? m,
+        CrossBenchBatch.CrossBenchMeasurement? floor,
+        string arm, bool latency)
+    {
+        if (m is null)
+        {
+            return "—";
+        }
+
+        if (latency)
+        {
+            string main = FmtUs(m.MedianUs);
+            if (arm == Floor || floor is null || floor.MedianUs <= 0)
+            {
+                return main;
+            }
+
+            double ratio = m.MedianUs / floor.MedianUs;
+            return $"{main}<br>{RatioCell(ratio)}{Weak(floor, m)}";
+        }
+
+        string alloc = FmtBytes(m.AllocBytes);
+        if (arm == Floor || floor is null || floor.AllocBytes <= 0)
+        {
+            return alloc;
+        }
+
+        return $"{alloc}<br>{Delta((m.AllocBytes / floor.AllocBytes) - 1)}";
+    }
+
+    /// <summary>表四：跨方言 PalORM/ADO 比值（批量族 + GetAllAsync）。格值 = 裸比值，越线加粗 + 📌。
+    /// 比值与表一/二同源同批，读者可横向核对，不再出现跨批口径差。</summary>
+    private static void AppendCrossDialectTable(
+        StringBuilder md,
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        int[] tiers)
+    {
+        md.AppendLine();
+        md.AppendLine("**四、跨方言 PalORM/ADO 比值**（批量族 + GetAllAsync；格值 = 裸比值，📌 = 需判读）");
+        md.AppendLine();
+        md.AppendLine("| 操作 | 档 | SQLite | PostgreSQL | MySQL |");
+        md.AppendLine("|---|---:|---|---|---|");
+        foreach (string op in CrossOps)
+        {
+            foreach (int tier in tiers)
+            {
+                if (Get(ix, "SQLite", op, tier, "PalORM") is null && tier != tiers[0])
+                {
+                    continue;
+                }
+
+                md.Append("| ");
+                if (CrossRatio(ix, "SQLite", op, tier) is { } sq && IsFlagged(sq))
+                {
+                    md.Append(Flag).Append(' ');
+                }
+
+                md.Append(op).Append(" | ").Append(tier.ToString("N0", CultureInfo.InvariantCulture)).Append(" | ");
+                md.Append(CrossCell(ix, "SQLite", op, tier)).Append(" | ");
+                md.Append(CrossCell(ix, "PostgreSQL", op, tier)).Append(" | ");
+                md.Append(CrossCell(ix, "MySQL", op, tier)).Append(" |");
+                md.AppendLine();
+            }
+        }
+
+        md.AppendLine();
     }
 
     private static string CrossCell(
-        Dictionary<(string, string, int, string), PerfResultItem> ix, string dialect, string op, int tier)
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string dialect, string op, int tier)
     {
-        if (CrossRatio(ix, dialect, op, tier) is not { } ratio) return "—";
-        // 裸比值（无 ×、无色标——三列全展开后逐格色标噪声大，越线格前缀 📌 已足够指向需判读的格）
+        if (CrossRatio(ix, dialect, op, tier) is not { } ratio)
+        {
+            return "—";
+        }
+
         string flag = IsFlagged(ratio) ? Flag : "";
         string cell = $"{flag}{ratio.ToString("F2", CultureInfo.InvariantCulture)}";
         double shown = Math.Round(ratio, 2);
@@ -379,95 +474,224 @@ internal static class TableGen
     }
 
     private static double? CrossRatio(
-        Dictionary<(string, string, int, string), PerfResultItem> ix, string dialect, string op, int tier)
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string dialect, string op, int tier)
     {
-        PerfResultItem? ado = Get(ix, dialect, op, tier, Floor);
-        PerfResultItem? orm = Get(ix, dialect, op, tier, "PalORM");
+        CrossBenchBatch.CrossBenchMeasurement? ado = Get(ix, dialect, op, tier, Floor);
+        CrossBenchBatch.CrossBenchMeasurement? orm = Get(ix, dialect, op, tier, "PalORM");
         return ado is null || orm is null || ado.MedianUs <= 0 ? null : orm.MedianUs / ado.MedianUs;
     }
 
-    private static void Header(StringBuilder md)
+    /// <summary>覆盖账本：每组每方言的有值点数 / 理论点数（每方言 29 = 12 操作 × 两档 + 5 事务 × 最小档）。
+    /// 缺失时列出具体操作与档位，供判读"整列缺"还是"零星缺"。</summary>
+    private static void AppendCoverageLedger(
+        StringBuilder md,
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix)
     {
-        // FreeSql / RepoDb 列：时延 + P/臂比值 + 分配段 + 分配相对 ADO 并入四组表——数据源是
-        // CrossBench 最近完整批（独立夹具），脚注声明口径；17 列，末五列（分配相对 ADO 的
-        // P/D/F/R）右对齐（2026-10-05 拆列定标，F 列 2026-10-25 补列，RepoDb 组 2026-10-26 补列）。
-        md.AppendLine("| 操作 | 方言 | 档 | ADO.NET | Dapper | PalORM | FreeSql | RepoDb | P/ADO（倍数±%） | P/Dapper（倍数±%） | P/FreeSql（倍数±%） | P/RepoDb（倍数±%） | 分配（A/D/P/F/R） | 分配相对 ADO（P） | 分配相对 ADO（D） | 分配相对 ADO（F） | 分配相对 ADO（R） |");
-        md.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|");
-    }
-
-    private static void Row(
-        StringBuilder md, Dictionary<(string, string, int, string), PerfResultItem> ix,
-        string dialect, string op, int tier,
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx, bool flaggable)
-    {
-        PerfResultItem? ado = Get(ix, dialect, op, tier, Floor);
-        PerfResultItem? dap = Get(ix, dialect, op, tier, "Dapper");
-        PerfResultItem? pal = Get(ix, dialect, op, tier, "PalORM");
-        if (ado is null || pal is null) return;
-        CrossBenchBatch.CrossBenchMeasurement? free = GetCross(cx, dialect, op, tier, "FreeSql");
-        CrossBenchBatch.CrossBenchMeasurement? repo = GetCross(cx, dialect, op, tier, "RepoDb");
-
-        string pAdo = RatioCell(pal.MedianUs / ado.MedianUs) + WeakMark(ado, dap, pal);
-        string pDap = dap is null || dap.MedianUs <= 0 ? "—" : RatioCell(pal.MedianUs / dap.MedianUs);
-        string pFree = free is null || free.MedianUs <= 0
-            ? "—"
-            : RatioCell(pal.MedianUs / free.MedianUs) + WeakFree(pal, free);
-        string pRepo = repo is null || repo.MedianUs <= 0
-            ? "—"
-            : RatioCell(pal.MedianUs / repo.MedianUs) + WeakFree(pal, repo);
-        string alloc = $"{FmtBytes(ado.AllocBytes)}/{FmtBytes(dap?.AllocBytes ?? 0)}/{FmtBytes(pal.AllocBytes)}"
-            + $"/{(free is null ? "—" : FmtBytes(free.AllocBytes))}"
-            + $"/{(repo is null ? "—" : FmtBytes(repo.AllocBytes))}";
-        string flag = flaggable && ado.MedianUs > 0 && IsFlagged(pal.MedianUs / ado.MedianUs) ? $"{Flag} " : "";
-        md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"| {flag}{op} | {dialect} | {tier} | {FmtUs(ado.MedianUs)} | {FmtUs(dap?.MedianUs)} | {FmtUs(pal.MedianUs)} | {FmtUs(free?.MedianUs)} | {FmtUs(repo?.MedianUs)} "
-            + $"| {pAdo} | {pDap} | {pFree} | {pRepo} | {alloc} | {PalDeltaCell(pal, ado)} | {DapDeltaCell(dap, ado)} | {FreeDeltaCell(free, ado)} | {RepoDeltaCell(repo, ado)} |"));
-    }
-
-    /// <summary>分配相对 ADO 的 F 列（FreeSql 对 ADO，右对齐）：分母 = 行内同一 ADO 地板
-    /// （与 P/D 列同分母；CrossBench 的 ADO 分配与 PerfHub 同夹具代码逐位同源）；FreeSql 缺失
-    /// 或 ADO 零分配为 —。</summary>
-    private static string FreeDeltaCell(CrossBenchBatch.CrossBenchMeasurement? free, PerfResultItem ado)
-        => free is null || ado.AllocBytes <= 0 ? "—" : Delta((free.AllocBytes / (double)ado.AllocBytes) - 1);
-
-    /// <summary>分配相对 ADO 的 R 列（RepoDb 对 ADO，右对齐）：分母与 P/D/F 三列同源。</summary>
-    private static string RepoDeltaCell(CrossBenchBatch.CrossBenchMeasurement? repo, PerfResultItem ado)
-        => repo is null || ado.AllocBytes <= 0 ? "—" : Delta((repo.AllocBytes / (double)ado.AllocBytes) - 1);
-
-    /// <summary>CrossBench 单元格（FreeSql / RepoDb）的判别力弱标注：比值两侧（PerfHub PalORM /
-    /// CrossBench 臂）任一 ErrorRatio 超线即标——跨夹具比值的不确定度由两侧共同决定。</summary>
-    private static string WeakFree(PerfResultItem pal, CrossBenchBatch.CrossBenchMeasurement cross)
-        => pal.ErrorRatio > NoiseLine || cross.ErrorRatio > NoiseLine ? " ⚠" : "";
-
-    private static CrossBenchBatch.CrossBenchMeasurement? GetCross(
-        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> cx,
-        string d, string o, int t, string a)
-        => cx.TryGetValue((d, o, t, a), out CrossBenchBatch.CrossBenchMeasurement? m) ? m : null;
-
-    private static PerfResultItem? Get(
-        Dictionary<(string, string, int, string), PerfResultItem> ix, string d, string o, int t, string a)
-        => ix.TryGetValue((d, o, t, a), out PerfResultItem? item) ? item : null;
-
-    private static bool IsFlagged(double ratio) => ratio is >= 1.5 or <= 0.67;
-
-    /// <summary>判别力弱阈值——沿用 <c>Measure.cs</c> 的量具自检线（Error/Mean &gt; 5% 标黄）。</summary>
-    private const double NoiseLine = 0.05;
-
-    /// <summary>判别力弱标注（2026-10-04）：该键三臂里最大 ErrorRatio 超线时，比值落在噪声带内、
-    /// 不足以支撑结论。取三臂最大值而非只看被测臂——比值 = 被测臂 / 地板，两侧噪声都会放大
-    /// 比值的不确定度。任一侧缺 ErrorRatio（未采集）按 0 处理，不据此标注。</summary>
-    private static string WeakMark(params PerfResultItem?[] arms)
-    {
-        foreach (PerfResultItem? arm in arms)
+        md.AppendLine("**七、覆盖账本**（有值点数 / 理论点数；每方言理论 29 = 12 操作 × 两档 + 5 事务 × 最小档）");
+        md.AppendLine();
+        md.AppendLine("| 组 | SQLite | MySQL | PostgreSQL |");
+        md.AppendLine("|---|---|---:|---:|");
+        var missingDetail = new List<string>();
+        foreach ((string arm, string display) in Arms)
         {
-            if (arm is not null && arm.ErrorRatio > NoiseLine)
+            md.Append("| ").Append(display).Append(" |");
+            foreach (string dialect in Dialects)
             {
-                return " ⚠";
+                (int have, int total, List<string> gaps) = ArmCoverage(ix, arm, dialect);
+                md.Append(' ').Append(have.ToString(CultureInfo.InvariantCulture)).Append('/')
+                    .Append(total.ToString(CultureInfo.InvariantCulture));
+                if (gaps.Count > 0)
+                {
+                    md.Append(" ⚠");
+                    missingDetail.Add($"{display}@{dialect}：{DescribeGaps(gaps, total)}");
+                }
+
+                md.Append(" |");
+            }
+
+            md.AppendLine();
+        }
+
+        md.AppendLine();
+        if (missingDetail.Count == 0)
+        {
+            md.AppendLine("本批 9 组 × 三方言全部齐备，无缺失测量点。");
+        }
+        else
+        {
+            md.AppendLine("缺失明细（该批未采到；不含推断原因）：");
+            md.AppendLine();
+            foreach (string detail in missingDetail)
+            {
+                md.Append("- ").AppendLine(detail);
             }
         }
 
-        return "";
+        md.AppendLine();
     }
+
+    /// <summary>缺失描述（覆盖账本用）：整列缺只报点数；零星缺列具体项，超过 6 项截断，
+    /// 防止一行 29 项把账本撑成正文（2026-11-02 旧批实测）。</summary>
+    private static string DescribeGaps(List<string> gaps, int total)
+    {
+        if (gaps.Count == total)
+        {
+            return $"整列缺（{total} 点）";
+        }
+
+        return gaps.Count > 6
+            ? $"缺 {gaps.Count} 点（{string.Join("、", gaps.Take(6))} 等）"
+            : $"缺 {gaps.Count} 点（{string.Join("、", gaps)}）";
+    }
+
+    private static (int Have, int Total, List<string> Gaps) ArmCoverage(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string arm, string dialect)
+    {
+        int have = 0, total = 0;
+        var gaps = new List<string>();
+        foreach (string op in CrudOps.Concat(BulkOps).Concat(ExtraReadOps))
+        {
+            foreach (int tier in AllTiers(ix, dialect))
+            {
+                total++;
+                if (ix.ContainsKey((dialect, op, tier, arm)))
+                {
+                    have++;
+                }
+                else
+                {
+                    gaps.Add($"{op}@{tier:N0}");
+                }
+            }
+        }
+
+        foreach (string op in TxOps)
+        {
+            int tier = MinTier(ix, dialect);
+            total++;
+            if (ix.ContainsKey((dialect, op, tier, arm)))
+            {
+                have++;
+            }
+            else
+            {
+                gaps.Add($"{op}@{tier:N0}");
+            }
+        }
+
+        return (have, total, gaps);
+    }
+
+    private static int[] AllTiers(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix, string dialect)
+        => [.. ix.Keys.Where(k => k.Item1 == dialect).Select(k => k.Item3).Distinct().Order()];
+
+    private static int MinTier(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix, string dialect)
+    {
+        int[] tiers = AllTiers(ix, dialect);
+        return tiers.Length > 0 ? tiers[0] : 0;
+    }
+
+    /// <summary>异常判读（当批推导）：P/ADO ≥ 3× 或 ≤ 0.5× 的格。两侧都列：远优同样要过目
+    /// （地板健全性待核）。不写归因，归因属人判读，报告只负责把格找出来。</summary>
+    private static void AppendOutliers(
+        StringBuilder md,
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        int[] tiers)
+    {
+        var slow = new List<(string Arm, string Dialect, string Op, int Tier, double Ratio)>();
+        var fast = new List<(string Arm, string Dialect, string Op, int Tier, double Ratio)>();
+        foreach ((string arm, string _) in Arms)
+        {
+            if (arm == Floor)
+            {
+                continue;
+            }
+
+            foreach ((string op, int[] opTiers) in OpTiers(tiers.Length >= 2 ? [tiers[0], tiers[^1]] : tiers))
+            {
+                foreach (string dialect in Dialects)
+                {
+                    foreach (int tier in opTiers)
+                    {
+                        if (CrossRatioArm(ix, dialect, op, tier, arm) is not { } ratio)
+                        {
+                            continue;
+                        }
+
+                        if (ratio >= 3.0)
+                        {
+                            slow.Add((Display(arm), dialect, op, tier, ratio));
+                        }
+                        else if (ratio <= 0.5)
+                        {
+                            fast.Add((Display(arm), dialect, op, tier, ratio));
+                        }
+                    }
+                }
+            }
+        }
+
+        md.AppendLine("**八、异常判读**（当批推导；≥3.0× 或 ≤0.5× ADO）");
+        md.AppendLine();
+        if (slow.Count == 0 && fast.Count == 0)
+        {
+            md.AppendLine("无 ≥3.0× 或 ≤0.5× ADO 的格。");
+            md.AppendLine();
+            return;
+        }
+
+        foreach ((string arm, string dialect, string op, int tier, double ratio) in slow.OrderByDescending(o => o.Ratio).Take(15))
+        {
+            md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                $"- 🟥 {arm} {dialect} {op}@{tier:N0}：{ratio:F1}× ADO（显著慢，见对应表）"));
+        }
+
+        foreach ((string arm, string dialect, string op, int tier, double ratio) in fast.OrderBy(o => o.Ratio).Take(15))
+        {
+            md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                $"- 🟢 {arm} {dialect} {op}@{tier:N0}：{ratio:F2}× ADO（显著快，地板健全性待核）"));
+        }
+
+        md.AppendLine();
+    }
+
+    private static double? CrossRatioArm(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string dialect, string op, int tier, string arm)
+    {
+        CrossBenchBatch.CrossBenchMeasurement? ado = Get(ix, dialect, op, tier, Floor);
+        CrossBenchBatch.CrossBenchMeasurement? value = Get(ix, dialect, op, tier, arm);
+        return ado is null || value is null || ado.MedianUs <= 0 ? null : value.MedianUs / ado.MedianUs;
+    }
+
+    private static string Display(string arm)
+    {
+        foreach ((string key, string display) in Arms)
+        {
+            if (key == arm)
+            {
+                return display;
+            }
+        }
+
+        return arm;
+    }
+
+    private static CrossBenchBatch.CrossBenchMeasurement? Get(
+        Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
+        string d, string o, int t, string a)
+        => ix.TryGetValue((d, o, t, a), out CrossBenchBatch.CrossBenchMeasurement? m) ? m : null;
+
+    private static bool IsFlagged(double ratio) => ratio is >= 1.5 or <= 0.67;
+
+    /// <summary>判别力弱标注：比值两侧（地板 / 被测臂）任一 ErrorRatio 超线即标——
+    /// 比值的不确定度由两侧共同决定。</summary>
+    private static string Weak(CrossBenchBatch.CrossBenchMeasurement? a, CrossBenchBatch.CrossBenchMeasurement? b)
+        => (a?.ErrorRatio ?? 0) > NoiseLine || (b?.ErrorRatio ?? 0) > NoiseLine ? " ⚠" : "";
 
     private static string RatioCell(double ratio)
     {
@@ -475,16 +699,6 @@ internal static class TableGen
         string cell = $"{shown.ToString("F2", CultureInfo.InvariantCulture)} {Emoji(ratio - 1)}{Pct(ratio - 1)}";
         return shown is >= 1.3 or <= 0.7 ? $"**{cell}**" : cell;
     }
-
-    /// <summary>分配相对 ADO 的 P 列（PalORM 对 ADO，右对齐）——拆两列形态（2026-10-05 用户定标）：
-    /// 列边框即竖向中线，渲染器保证对齐。单格内以分隔符对齐在 GFM 下不可行（空格折叠 +
-    /// 比例字体），故放弃单格 丨 形态。</summary>
-    private static string PalDeltaCell(PerfResultItem pal, PerfResultItem ado)
-        => ado.AllocBytes > 0 ? Delta((pal.AllocBytes / (double)ado.AllocBytes) - 1) : "—";
-
-    /// <summary>分配相对 ADO 的 D 列（Dapper 对 ADO，右对齐）；Dapper 缺失或 ADO 零分配为 —。</summary>
-    private static string DapDeltaCell(PerfResultItem? dap, PerfResultItem ado)
-        => dap is null || ado.AllocBytes <= 0 ? "—" : Delta((dap.AllocBytes / (double)ado.AllocBytes) - 1);
 
     private static string Delta(double p)
     {
@@ -513,9 +727,7 @@ internal static class TableGen
         };
     }
 
-    /// <summary>时延数值自带单位（2026-10-05 用户定标恢复带单位）：µs（≥1 一位小数，&lt;1 三位小数）
-    /// 或 ms（≥1000 换算两位小数）——与 AGENTS.md 口径"单元格数值自带单位"一致
-    /// （当前夹具面最小中位 ~6µs，子 1µs 为防御）。</summary>
+    /// <summary>时延数值自带单位：µs（≥1 一位小数，&lt;1 三位小数）或 ms（≥1000 换算两位小数）。</summary>
     private static string FmtUs(double? medianUs)
     {
         if (medianUs is null or <= 0) return "—";
@@ -536,24 +748,113 @@ internal static class TableGen
         return (kb / 1024).ToString("F1", CultureInfo.InvariantCulture) + "MB";
     }
 
-    private static PerfResultEnvelope? NewestPerfHubBatch(string resultsDir)
+    /// <summary>表格结构自检，两条判据（2026-10-05 质量系统优化轮定稿）：
+    /// ① 列数不变量：分隔行确定该表列数，其后表格行必须同列数；② 行首缺管道符：
+    /// 非表格行但含 ≥2 个管道符 = 数据行断裂形态。告警追加到输出尾部 + stderr。</summary>
+    private static List<string> StructuralWarnings(string md)
     {
-        if (!Directory.Exists(resultsDir)) return null;
-        foreach (string file in Directory.EnumerateFiles(resultsDir, "perfhub-*.json").OrderByDescending(static f => f))
+        var warnings = new List<string>();
+        string[] lines = md.Split('\n');
+        var state = new TableScanState();
+        for (int i = 0; i < lines.Length; i++)
         {
-            try
+            string line = lines[i].TrimEnd('\r');
+            if (line.StartsWith('|', StringComparison.Ordinal))
             {
-                PerfResultEnvelope? run = JsonSerializer.Deserialize(
-                    File.ReadAllText(file), PerfResultJsonContext.Default.PerfResultEnvelope);
-                if (run is null || PerfResultWriter.IsSubsetLabel(run.Label)) continue;
-                return run;
+                OnTableLine(warnings, lines, i, line, state);
             }
-            catch (JsonException)
+            else if (state.Expected > 0 && line.Count('|') >= 2)
             {
-                Console.Error.WriteLine($"[PerfGate] tables: 跳过无法解析的结果文件 {file}");
+                warnings.Add($"[TableGen] 结构告警：第 {i + 1} 行疑似行首缺管道符：{Truncate(line)}");
             }
         }
 
-        return null;
+        return warnings;
     }
+
+    /// <summary>判据①（表格行）：分隔行设定该表期望列数；新表头（下一行是分隔行）重置期望
+    /// （表间列数不同是合法形态）；其余表格行列数必须等于期望；分隔行额外核对表头列数。</summary>
+    private sealed class TableScanState
+    {
+        public int Expected;
+        public int LastColumns;
+    }
+
+    private static void OnTableLine(List<string> warnings, string[] lines, int i, string line, TableScanState state)
+    {
+        int columns = line.Count('|') - 1;
+        if (line.StartsWith("|---", StringComparison.Ordinal))
+        {
+            if (state.LastColumns > 0 && state.LastColumns != columns)
+            {
+                warnings.Add($"[TableGen] 结构告警：第 {i} 行表头列数 {state.LastColumns} ≠ 分隔行 {columns}");
+            }
+
+            state.Expected = columns;
+        }
+        else if (FollowedBySeparator(lines, i))
+        {
+            state.Expected = 0;
+        }
+        else if (state.Expected > 0 && columns != state.Expected)
+        {
+            warnings.Add($"[TableGen] 结构告警：第 {i + 1} 行列数 {columns} ≠ 表头 {state.Expected}：{Truncate(line)}");
+        }
+
+        state.LastColumns = columns;
+    }
+
+    /// <summary>本行是否是"新表的表头"（下一行为分隔行）。</summary>
+    private static bool FollowedBySeparator(string[] lines, int i)
+        => i + 1 < lines.Length && lines[i + 1].TrimEnd('\r').StartsWith("|---", StringComparison.Ordinal);
+
+    /// <summary>数值哨兵（B148 配套，适配 8+1 形态）：分配表里任一段内所有非地板格都是 ⚪+0%
+    /// 即报警。分配逐位相同的概率可忽略，全 0 只可能是算式坏了（截断/漏算/取错字段）。</summary>
+    private static List<string> NumericSentinelWarnings(string md)
+    {
+        var warnings = new List<string>();
+        int deltaCells = 0, zeroDeltas = 0;
+        bool inAllocSection = false;
+        foreach (string raw in md.Split('\n'))
+        {
+            if (raw.StartsWith("**五、分配", StringComparison.Ordinal))
+            {
+                inAllocSection = true;
+                continue;
+            }
+
+            if (raw.StartsWith("**六、补充读", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            if (!inAllocSection
+                || !raw.StartsWith('|', StringComparison.Ordinal)
+                || raw.StartsWith("|---", StringComparison.Ordinal)
+                || raw.StartsWith("| 操作", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (string segment in raw.Split("<br>").Skip(1).Where(static s => s.Contains('%')))
+            {
+                deltaCells++;
+                if (segment.Contains("⚪+0%", StringComparison.Ordinal))
+                {
+                    zeroDeltas++;
+                }
+            }
+        }
+
+        if (deltaCells >= 8 && zeroDeltas == deltaCells)
+        {
+            warnings.Add($"[TableGen] 数值哨兵：{deltaCells} 个相对 ADO 百分比全为 0%——"
+                + "分配逐位相同的概率可忽略，疑似比值算式坏了（B148：long/long 整数除法截断）");
+        }
+
+        return warnings;
+    }
+
+    private static string Truncate(string line)
+        => line.Length <= 60 ? line : line[..60];
 }

@@ -62,6 +62,7 @@ internal static partial class ReportGenerator
 
         var md = new StringBuilder(8_192);
         AppendHeader(md, baseline, runs);
+        AppendProvenance(md, resultsDirectory, runs);
         AppendDimensionOverview(
             md,
             hasWorkload: File.Exists(inputs.WorkloadJsonPath ?? string.Empty),
@@ -173,6 +174,69 @@ internal static partial class ReportGenerator
             md.AppendLine("判定命令 `tools/PalORM.PerfGate check-index --baseline <该文件>`"
                 + "（本报告不重复其退出码）。");
         }
+    }
+
+    /// <summary>数据源与新鲜度（2026-11-02 单源重组）：报告分两层，各用一份测量数据源——
+    /// 8+1 组横评（CrossBench 单批，9 组同批同轮）与 PalORM 回归（PerfHub 批，3 臂）。
+    /// 两者夹具与批次都不同，比值只在各自视图内可比。批次时间与覆盖状态顶到报告最前面，
+    /// 防止"读到的是最新数字"这类误读（旧报告曾把两批数据混进同一行）。</summary>
+    private static void AppendProvenance(
+        StringBuilder md, string resultsDirectory, List<PerfResultEnvelope> runs)
+    {
+        // 结果目录是 BDN 的 BenchmarkDotNet.Artifacts/results，不能直接指向 bench/results；
+        // 从该目录向上找含 bench/crossbench/results 的仓库根（2026-11-02 实测：直接 ..\crossbench
+        // 推导落在 BenchmarkDotNet.Artifacts 下，数据源表误报"无完整批"）。
+        string crossDir = Path.Combine(FindRepoRoot(resultsDirectory), "bench", "crossbench", "results");
+        string? crossFile = CrossBenchBatch.LatestFullBatchPath(crossDir);
+        PerfResultEnvelope? perfhub = LatestFull(runs, "perfhub");
+
+        md.AppendLine("## 数据源与新鲜度");
+        md.AppendLine();
+        md.AppendLine("| 视图 | 数据源 | 批次时间 | 状态 |");
+        md.AppendLine("|---|---|---|---|");
+        if (crossFile is null)
+        {
+            md.AppendLine("| 8+1 组横评 | （无完整 CrossBench 批） | — | ⚠ 本节未采集 |");
+        }
+        else
+        {
+            md.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                $"| 8+1 组横评 | `{Path.GetFileName(crossFile)}` | {TableGen.ParseBatchStamp(crossFile)} | ✅ 完整批（9 组 × 三方言 × 两档） |"));
+        }
+
+        string perfhubLabel = "";
+        if (perfhub is not null)
+        {
+            perfhubLabel = string.IsNullOrEmpty(perfhub.Label) ? perfhub.Harness : perfhub.Label;
+        }
+
+        md.AppendLine(perfhub is null
+            ? "| PalORM 回归 | （结果库无非子集 perfhub 批） | — | ⚠ 本节未采集 |"
+            : string.Create(CultureInfo.InvariantCulture,
+                $"| PalORM 回归 | `{perfhubLabel}` | {perfhub.Timestamp} | ✅ {perfhub.Items.Count} 项 |"));
+        md.AppendLine();
+        md.AppendLine("> 两层口径不同：横评 = 9 组同批同轮（两遍反序平均，分母 = 同批 ADO 地板）；"
+            + "回归 = PerfHub 三臂（per-operation 会话，分母 = 同批 PerfHub ADO）。"
+            + "比值只在各自视图内可比，禁止跨视图把数字放进同一行。");
+        md.AppendLine();
+    }
+
+    /// <summary>从任意起始目录向上找仓库根（判据 = 存在 bench/crossbench/results）；
+    /// 找不到回退起始目录，调用方按"无完整批"处理，不抛异常。</summary>
+    private static string FindRepoRoot(string start)
+    {
+        DirectoryInfo? dir = new(Path.GetFullPath(start));
+        while (dir is not null)
+        {
+            if (Directory.Exists(Path.Combine(dir.FullName, "bench", "crossbench", "results")))
+            {
+                return dir.FullName;
+            }
+
+            dir = dir.Parent;
+        }
+
+        return Path.GetFullPath(start);
     }
 
     /// <summary>12 维总览——每维一行：状态 + 本轮数据来源。未测维度如实列出，
