@@ -25,9 +25,10 @@ const cells = [...agg.values()].map((a) => ({
   alloc: a.reduce((s, x) => s + x.AllocatedBytesPerOp, 0) / a.length,
 }));
 
-// 列序：ADO 基准第一列，PalORM 第二列，其余组按批次数据出现序（不写死组名，
-// 新增/移除组时无需改本文件）。
-const ARMS = ['ADO_NET', 'PalORM', ...[...new Set(rows.map((x) => x.Implementation))].filter((a) => a !== 'ADO_NET' && a !== 'PalORM')];
+// 列序（2026-11-02 模板 v1.3 冻结序，AGENTS.md 列固定条）：基准 → PalORM → Dapper.AOT
+// → RepoDb → EF Core → Dapper → FreeSql → linq2db → SqlSugar。缺失的组整列省略，
+// 新增组需同步模板与 AGENTS.md 的列固定条。
+const ARMS = ['ADO_NET', 'PalORM', 'DapperAot', 'RepoDb', 'EfCore', 'Dapper', 'FreeSql', 'Linq2Db', 'SqlSugar'];
 const DISPLAY = { ADO_NET: 'ADO', DapperAot: 'Dapper.AOT', EfCore: 'EF Core', Linq2Db: 'linq2db' };
 const OPS = [
   ['GetByKey', 'crud'], ['GetAllAsync', 'crud'], ['QueryAll', 'crud'], ['Insert', 'crud'], ['Update', 'crud'],
@@ -40,17 +41,17 @@ const TIERS = [2000, 20000];
 const idx = (d, o, t, arm) => cells.find((x) => x.d === d && x.op === o && x.rows === t && x.arm === arm);
 const fmtT = (ns) => {
   const u = ns / 1000;
-  if (u >= 1e6) return `${(u / 1e6).toFixed(2)} s`;
-  if (u >= 1000) return `${(u / 1000).toFixed(2)} ms`;
-  if (u >= 1) return `${u.toFixed(1)} µs`;
-  return `${u.toFixed(3)} µs`;
+  if (u >= 1e6) return `${(u / 1e6).toFixed(2)}&nbsp;s`;
+  if (u >= 1000) return `${(u / 1000).toFixed(2)}&nbsp;ms`;
+  if (u >= 1) return `${u.toFixed(1)}&nbsp;µs`;
+  return `${u.toFixed(3)}&nbsp;µs`;
 };
 const fmtA = (b) => {
   b /= 1024;
-  if (b >= 1048576) return `${(b / 1024).toFixed(1)} MB`;
-  if (b >= 100) return `${Math.round(b)} KB`;
-  if (b >= 1) return `${b.toFixed(1)} KB`;
-  return `${b.toFixed(0)} B`;
+  if (b >= 1048576) return `${(b / 1024).toFixed(1)}MB`;
+  if (b >= 100) return `${Math.round(b)}KB`;
+  if (b >= 1) return `${b.toFixed(1)}KB`;
+  return `${b.toFixed(0)}B`;
 };
 // 六档色值（模板 v1.3）
 const COLOR = (v) => {
@@ -70,17 +71,17 @@ const PAINT = (arm, v) => {
   return bold ? `**${s}**` : s;
 };
 
-function buildRow(dialect, op, tier) {
+function buildRow(dialect, op, tier, present = ARMS) {
   const base = idx(dialect, op, tier, 'ADO_NET');
   let bestT = null, bestA = null;
-  for (const arm of ARMS) {
+  for (const arm of present) {
     const c = idx(dialect, op, tier, arm);
     if (!c) continue;
     if (!bestT || c.med < bestT.med) bestT = { arm, med: c.med };
     if (!bestA || c.alloc < bestA.alloc) bestA = { arm, alloc: c.alloc };
   }
   const mark = `${bestT ? `🏆&nbsp;${DISPLAY[bestT.arm] ?? bestT.arm}` : ''}${bestA ? `${bestT ? '<br>' : ''}💾&nbsp;${DISPLAY[bestA.arm] ?? bestA.arm}` : ''}`;
-  const tds = ARMS.map((arm) => {
+  const tds = present.map((arm) => {
     const c = idx(dialect, op, tier, arm);
     if (!c) return '—';
     const tag = `${bestT?.arm === arm ? '🏆&nbsp;' : ''}${bestA?.arm === arm ? '💾&nbsp;' : ''}`;
@@ -90,12 +91,13 @@ function buildRow(dialect, op, tier) {
 }
 
 function buildTable(dialect, ops, tiers) {
-  const header = `| 操作 | 档 | 🏆&nbsp;/&nbsp;💾 | ${ARMS.map((a) => DISPLAY[a] ?? a).join(' | ')} |`;
-  const sep = `|---|---:|---|${'---:|'.repeat(9)}`;
+  const present = ARMS.filter((a) => idx(dialect, ops[0][0], tiers[0], a));
+  const header = `| 操作 | 档 | 🏆&nbsp;/&nbsp;💾 | ${present.map((a) => DISPLAY[a] ?? a).join(' | ')} |`;
+  const sep = `|---|---:|---|${'---:|'.repeat(present.length)}`;
   const lines = [header, sep];
   for (const [op] of ops) {
     for (const t of tiers) {
-      if (idx(dialect, op, t, 'ADO_NET')) lines.push(buildRow(dialect, op, t));
+      if (idx(dialect, op, t, 'ADO_NET')) lines.push(buildRow(dialect, op, t, present));
     }
   }
   return lines.join('\n');
