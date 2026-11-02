@@ -25,8 +25,8 @@ jobs:
 
       - name: Build (Debug)
         # MUT-1：变异 job 用与 Stryker 配置一致的 solution（只含 src/ 与 test/）。
-          # 原 PalORM.ci.slnf 含 bench/tools 与 vendored 子树，干净检出下 Stryker 初次构建失败。
-          run: dotnet build PalORM.mutation.slnx -c Debug --no-incremental
+        # 原 PalORM.ci.slnf 含 bench/tools 与 vendored 子树，干净检出下 Stryker 初次构建失败。
+        run: dotnet build PalORM.mutation.slnx -c Debug --no-incremental
 
       - name: Install dotnet-stryker
         run: dotnet tool install --global dotnet-stryker
@@ -68,8 +68,8 @@ jobs:
 
       - name: Build (Debug)
         # MUT-1：变异 job 用与 Stryker 配置一致的 solution（只含 src/ 与 test/）。
-          # 原 PalORM.ci.slnf 含 bench/tools 与 vendored 子树，干净检出下 Stryker 初次构建失败。
-          run: dotnet build PalORM.mutation.slnx -c Debug --no-incremental
+        # 原 PalORM.ci.slnf 含 bench/tools 与 vendored 子树，干净检出下 Stryker 初次构建失败。
+        run: dotnet build PalORM.mutation.slnx -c Debug --no-incremental
 
       - name: Install dotnet-stryker
         run: dotnet tool install --global dotnet-stryker
