@@ -86,9 +86,17 @@ foreach (var doc in d10Docs)
 }
 // D10 扩围（CONTRACT-4，2026-10-31）：.ai/test/prompt.md 与路线图也是计数写入点。
 // 两者不得写死测试总数（曾写死 1099 / Core 612 等），必须指向 test-counts.json 真源。
+// .ai 是本地知识层（gitignored，CI 检出不存在）：缺失时跳过而非报红——与上方 T 对账
+// "CI 无 .ai 时自动跳过"同一口径；路线图是入库文件，缺失仍报红。
+// 2026-11-02 缺陷修正：扩围当初未加豁免，CI 的 Quality Gates 自此恒红（D10 假信号）。
 foreach (var doc in (string[])[".ai/test/prompt.md", "docs/测试体系路线图.md"])
 {
-    if (!File.Exists(doc)) { d10Bad.Add($"{doc} 缺失"); continue; }
+    if (!File.Exists(doc))
+    {
+        if (doc.StartsWith(".ai", StringComparison.Ordinal)) continue;
+        d10Bad.Add($"{doc} 缺失");
+        continue;
+    }
     var text = File.ReadAllText(doc);
     if (!text.Contains("test-counts.json", StringComparison.Ordinal))
         d10Bad.Add($"{doc} 未指向 test-counts.json");

@@ -93,6 +93,7 @@ I:PalORM.CircuitBreakerScope|System.IFormattable
 I:PalORM.CircuitBreakerScope|System.ISpanFormattable
 I:PalORM.CommandSqlByDialect|System.IEquatable`1[[PalORM.CommandSqlByDialect, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
 I:PalORM.CommandSqlSet|System.IEquatable`1[[PalORM.CommandSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.CompiledQuery`2|System.IDisposable
 I:PalORM.ConcurrencyConflictException|System.Runtime.Serialization.ISerializable
 I:PalORM.CreateIndexSqlSet|System.IEquatable`1[[PalORM.CreateIndexSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
 I:PalORM.CreateTableSqlSet|System.IEquatable`1[[PalORM.CreateTableSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
@@ -169,6 +170,8 @@ M:PalORM.CommandSqlSet|Equals(PalORM.CommandSqlSet)|System.Boolean|instance
 M:PalORM.CommandSqlSet|Equals(System.Object)|System.Boolean|instance
 M:PalORM.CommandSqlSet|GetHashCode()|System.Int32|instance
 M:PalORM.CommandSqlSet|ToString()|System.String|instance
+M:PalORM.CompiledQuery`2|Dispose()|System.Void|instance
+M:PalORM.CompiledQuery`2|ExecuteAsync(System.Object[], System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.ComputedAttribute|.ctor(System.String)
 M:PalORM.ConcurrencyCheckAttribute|.ctor()
 M:PalORM.ConcurrencyConflictException|.ctor(System.String)
@@ -211,6 +214,7 @@ M:PalORM.DataSession`1|BulkInsertReturningAsync<1>(IReadOnlyList`1, System.Threa
 M:PalORM.DataSession`1|BulkMergeAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
 M:PalORM.DataSession`1|BulkUpdateAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
 M:PalORM.DataSession`1|BulkUpdateBatchAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.DataSession`1|Compile<1>(System.String, System.String[])|CompiledQuery`2|instance
 M:PalORM.DataSession`1|CountAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
 M:PalORM.DataSession`1|CreateAsync(PalORM.DbOptions, System.Threading.CancellationToken)|Task`1|static
 M:PalORM.DataSession`1|CreateBatch()|SessionBatch`1|instance
@@ -380,29 +384,38 @@ M:PalORM.QueryBuilder`1|ForShare()|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|ForUpdate(System.Boolean)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|ForWrite()|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|GroupBy(Expression`1)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|GroupBy(System.String)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Having(System.FormattableString)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Include<1>(Expression`1, Expression`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|InnerJoin<1>(System.FormattableString)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|LeftJoin<1>(System.FormattableString)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|OrWhere(System.FormattableString)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|OrderBy(System.String, System.Boolean)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|OrderBy<1>(Expression`1, System.Boolean)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|OrderByDescending(System.String)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|OrderByDescending<1>(Expression`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Raw(System.String)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|RightJoin<1>(System.FormattableString)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Select(Expression`1[])|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|Select(System.String[])|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Set<1>(Expression`1, TValue)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|Set<1>(System.String, TValue)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Skip(System.Int32)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Tag(System.String)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|TagWithCaller(System.String, System.String, System.Int32)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Take(System.Int32)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|ThenBy(System.String, System.Boolean)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|ThenBy<1>(Expression`1, System.Boolean)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|ThenByDescending(System.String)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|ThenByDescending<1>(Expression`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|ThenInclude<2>(Expression`1, Expression`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|ToSql()|System.String|instance
 M:PalORM.QueryBuilder`1|UnsafeWindowOver(System.String, System.String)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|Where(System.FormattableString)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WhereIn<1>(Expression`1, IEnumerable`1)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|WhereIn<1>(System.String, IEnumerable`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WhereNotIn<1>(Expression`1, IEnumerable`1)|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|WhereNotIn<1>(System.String, IEnumerable`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|With(System.String, System.FormattableString)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WithCache(System.String, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WithCommandTimeout(System.Int32)|PalORM.QueryBuilder`1|instance
@@ -472,6 +485,7 @@ P:PalORM.CommandSqlSet|Insert|System.String
 P:PalORM.CommandSqlSet|Update|System.String
 P:PalORM.CommandSqlSet|UpsertMySql|System.String
 P:PalORM.CommandSqlSet|UpsertReturning|System.String
+P:PalORM.CompiledQuery`2|Sql|System.String
 P:PalORM.ComputedAttribute|Expression|System.String
 P:PalORM.ConverterAttribute|ConverterType|System.Type
 P:PalORM.CreateIndexSqlSet|MySql|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
@@ -623,6 +637,7 @@ T:PalORM.CircuitBreakerScope|base=System.Enum
 T:PalORM.ColumnAttribute|base=System.Attribute
 T:PalORM.CommandSqlByDialect|base=System.ValueType
 T:PalORM.CommandSqlSet|base=System.ValueType
+T:PalORM.CompiledQuery`2|base=System.Object
 T:PalORM.ComputedAttribute|base=System.Attribute
 T:PalORM.ConcurrencyCheckAttribute|base=System.Attribute
 T:PalORM.ConcurrencyConflictException|base=PalORM.PalORMException
