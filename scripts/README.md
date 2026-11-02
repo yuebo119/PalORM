@@ -72,6 +72,7 @@
 | `compare-perf-batches.cs` | 跨批次中位值对照：`--date yyyyMMdd` 选日、`--items csv` 选项（`方言/操作/行数`、`方言/操作`、`操作` 三形态）、`--list` 列当日全部项；缺省按摆动 `--swing`（默认 1.30×）自动挑动过的项。单位按项目口径（µs 一位/三位，≥1000 µs 转 ms） | 秒 |
 | `crossbench-report.cs` | CrossBench 五臂横评报告/基线：单批 `<batch.json>` 或 `--baseline b1,b2,b3` 多批中位；倍数/标签由当批数据推导，模板已冻结；输出 Markdown（默认 stdout，`--out` 写文件） | 秒 |
 | `crossbench-12arm-report.cs` | 12 库统一横评报告（AotProbe 终版清单 + ADO 地板）：多批 JSON 合并、两遍批内 Average 聚合、七节结构（结论面板/胜场榜/全量表/覆盖账本/异常判读/环境注记/复现）；纪律与冻结模板同源——全部数字从当批推导，N/A 原因走静态账本 | 秒 |
+| `table2-gen.cs` | 性能表-表二生成器（README 性能模块展示表）：从 CrossBench 完整批生成操作对照与事务对照，按方言分表、13 列、每格四行（时延/倍数/内存/倍数）；列序为模板 v1.3 冻结序，着色只落 PalORM 列，🏆/💾 由当批推导；用法 `<批次.json> [输出.md]` | 秒 |
 | `scripts/run-mutation-tests.cs` | 变异测试（Stryker.NET，验证测试有效性；CI 每周六自动跑 mutation-tests.yml，Core + SourceGen 双配置；`dotnet run --file` 调用） | 10-30min/项目 |
 
 ## 测试环境
