@@ -22,18 +22,20 @@ internal static class TableGen
     private static readonly string[] TxOps = ["TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback", "EnumInserts"];
     private static readonly string[] ExtraReadOps = ["KeysetPage", "WhereIn", "Count"];
     private static readonly string[] Dialects = ["SQLite", "MySQL", "PostgreSQL"];
-    private static readonly string[] CrossOps = ["BulkInsert", "BulkUpdate", "BulkDelete", "UpsertBatch", "GetAllAsync"];
+    /// <summary>列序（2026-11-02 用户定标）：地板 → PalORM → Dapper.AOT → RepoDb → EF Core
+    /// → Dapper → FreeSql → linq2db → SqlSugar。与旧报告（按字母序）不同，改序需同步 AGENTS.md
+    /// 列固定条与 docs/性能汇报样例。</summary>
     private static readonly (string Key, string Display)[] Arms =
     [
         ("ADO_NET", "ADO(地板)"),
-        ("Dapper", "Dapper"),
-        ("DapperAot", "Dapper.AOT"),
-        ("Linq2Db", "linq2db"),
-        ("EfCore", "EF Core"),
-        ("SqlSugar", "SqlSugar"),
-        ("FreeSql", "FreeSql"),
-        ("RepoDb", "RepoDb"),
         ("PalORM", "PalORM"),
+        ("DapperAot", "Dapper.AOT"),
+        ("RepoDb", "RepoDb"),
+        ("EfCore", "EF Core"),
+        ("Dapper", "Dapper"),
+        ("FreeSql", "FreeSql"),
+        ("Linq2Db", "linq2db"),
+        ("SqlSugar", "SqlSugar"),
     ];
     private const string Floor = "ADO_NET";
     /// <summary>行级 📌：比值 ≥1.50 或 ≤0.67（标记待看：远离基准需人工判读，非警告）。</summary>
@@ -72,14 +74,14 @@ internal static class TableGen
         var md = new StringBuilder(1 << 15);
         AppendHeader(md, file, ix, twoTiers);
         AppendSummary(md, ix, twoTiers);
-        AppendLatencyTable(md, ix, "**一、CRUD 单行与读**（每格：时延 · P/ADO 比值）", CrudOps, twoTiers);
-        AppendLatencyTable(md, ix, "**二、批量处理**（每格：时延 · P/ADO 比值）", BulkOps, twoTiers);
-        AppendLatencyTable(md, ix, "**三、事务**（仅最小档；每格：时延 · P/ADO 比值）", TxOps, [tiers[0]]);
+        AppendLatencyTable(md, ix, "**一、CRUD 单行与读**（每格：时延 · P/ADO 百分比；精确倍数见表四）", CrudOps, twoTiers);
+        AppendLatencyTable(md, ix, "**二、批量处理**（每格：时延 · P/ADO 百分比；精确倍数见表四）", BulkOps, twoTiers);
+        AppendLatencyTable(md, ix, "**三、事务**（仅最小档；每格：时延 · P/ADO 百分比；精确倍数见表四）", TxOps, [tiers[0]]);
         AppendCrossDialectTable(md, ix, twoTiers);
         AppendAllocTable(md, ix, "**五、分配**（每格：B/op · 相对 ADO；ADO 行无百分比）",
             [.. CrudOps, .. BulkOps], twoTiers);
         AppendAllocTable(md, ix, "**五B、分配（事务，仅最小档）**", TxOps, [tiers[0]]);
-        AppendLatencyTable(md, ix, "**六、补充读**（每格：时延 · P/ADO 比值）", ExtraReadOps, twoTiers);
+        AppendLatencyTable(md, ix, "**六、补充读**（每格：时延 · P/ADO 百分比；精确倍数见表四）", ExtraReadOps, twoTiers);
         AppendCoverageLedger(md, ix);
         AppendOutliers(md, ix, tiers);
 
@@ -87,7 +89,7 @@ internal static class TableGen
         md.AppendLine("**图例**");
         md.AppendLine();
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"- 比值 = 该组时延 ÷ 同方言同操作同档 ADO 地板；色标按百分比六档（🟢 ≤−30% · 🟩 −29%~−10% · 🔹 −9%~−1% · ⚪ 0% · 🔸 +1%~+9% · 🟧 +10%~+29% · 🟥 ≥+30%）。"));
+            $"- 百分比 = 该组时延 ÷ 同方言同操作同档 ADO 地板 − 1；色标六档（🟢 ≤−30% · 🟩 −29%~−10% · 🔹 −9%~−1% · ⚪ 0% · 🔸 +1%~+9% · 🟧 +10%~+29% · 🟥 ≥+30%）。精确倍数（两位小数）见表四。"));
         md.AppendLine("- 📌 = 比值 ≥1.50 或 ≤0.67：劣化方向是回归风险，远优方向是地板健全性待核，两者都需人工判读，不等于告警。");
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- ⚠ = 判别力弱：该格任一侧 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论。"));
@@ -138,7 +140,7 @@ internal static class TableGen
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- 数据源：`{Path.GetFileName(file)}`（批次 {stamp}，组数 {Arms.Length}）"));
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"- 口径：三方言 × 两档（{twoTiers[0]:N0}/{twoTiers[^1]:N0}）× 17 操作 × 两遍反序（批内 Average）；比值分母 = 同批 ADO 地板"));
+            $"- 口径：三方言 × 两档（{twoTiers[0]:N0}/{twoTiers[^1]:N0}）× 17 操作 × 两遍反序（批内 Average）；比值分母 = 同批 ADO 地板；明细表每格 = 时延 · P/ADO 百分比，精确倍数见表四"));
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- 覆盖：{cells} 格 × {Arms.Length} 组 = {points} 个测量点，实采 {points - missing}，缺 {missing}"));
         if (missing > 0)
@@ -407,8 +409,9 @@ internal static class TableGen
                 return main;
             }
 
-            double ratio = m.MedianUs / floor.MedianUs;
-            return $"{main}<br>{RatioCell(ratio)}{Weak(floor, m)}";
+            // 2026-11-02 用户反馈 12 列宽表被渲染器压窄：明细表第二行只保留色标 + 百分比，
+            // 精确倍数移到表四（全 17 操作），单格宽度从 36 字符压到 ~18。
+            return $"{main}<br>{PctCell((m.MedianUs / floor.MedianUs) - 1)}{Weak(floor, m)}";
         }
 
         string alloc = FmtBytes(m.AllocBytes);
@@ -420,27 +423,22 @@ internal static class TableGen
         return $"{alloc}<br>{Delta((m.AllocBytes / floor.AllocBytes) - 1)}";
     }
 
-    /// <summary>表四：跨方言 PalORM/ADO 比值（批量族 + GetAllAsync）。格值 = 裸比值，越线加粗 + 📌。
-    /// 比值与表一/二同源同批，读者可横向核对，不再出现跨批口径差。</summary>
+    /// <summary>表四：跨方言 PalORM/ADO 精确比值（全 17 操作）。明细表只给百分比，本表给裸倍数，
+    /// 精确值按需查；比值与表一/二/三/六同源同批，无跨批口径差。</summary>
     private static void AppendCrossDialectTable(
         StringBuilder md,
         Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
-        int[] tiers)
+        int[] twoTiers)
     {
         md.AppendLine();
-        md.AppendLine("**四、跨方言 PalORM/ADO 比值**（批量族 + GetAllAsync；格值 = 裸比值，📌 = 需判读）");
+        md.AppendLine("**四、跨方言 PalORM/ADO 精确比值**（全 17 操作；格值 = 裸倍数，📌 = 需判读）");
         md.AppendLine();
         md.AppendLine("| 操作 | 档 | SQLite | PostgreSQL | MySQL |");
         md.AppendLine("|---|---:|---|---|---|");
-        foreach (string op in CrossOps)
+        foreach ((string op, int[] opTiers) in OpTiers(twoTiers))
         {
-            foreach (int tier in tiers)
+            foreach (int tier in opTiers)
             {
-                if (Get(ix, "SQLite", op, tier, "PalORM") is null && tier != tiers[0])
-                {
-                    continue;
-                }
-
                 md.Append("| ");
                 if (CrossRatio(ix, "SQLite", op, tier) is { } sq && IsFlagged(sq))
                 {
@@ -693,11 +691,13 @@ internal static class TableGen
     private static string Weak(CrossBenchBatch.CrossBenchMeasurement? a, CrossBenchBatch.CrossBenchMeasurement? b)
         => (a?.ErrorRatio ?? 0) > NoiseLine || (b?.ErrorRatio ?? 0) > NoiseLine ? " ⚠" : "";
 
-    private static string RatioCell(double ratio)
+    /// <summary>紧凑比值格（列宽优先，2026-11-02 用户反馈后引入）：只显示色标 + 百分比，
+    /// 精确倍数见表四。加粗条件与旧比值列一致（|Δ| ≥30%，等价于倍数 ≥1.3 或 ≤0.7）。</summary>
+    private static string PctCell(double p)
     {
-        double shown = Math.Round(ratio, 2);
-        string cell = $"{shown.ToString("F2", CultureInfo.InvariantCulture)} {Emoji(ratio - 1)}{Pct(ratio - 1)}";
-        return shown is >= 1.3 or <= 0.7 ? $"**{cell}**" : cell;
+        int q = Math.Abs(p * 100) < 0.5 ? 0 : (int)Math.Round(p * 100, MidpointRounding.AwayFromZero);
+        string cell = $"{Emoji(p)}{Pct(p)}";
+        return q is >= 30 or <= -30 ? $"**{cell}**" : cell;
     }
 
     private static string Delta(double p)
@@ -732,6 +732,8 @@ internal static class TableGen
     {
         if (medianUs is null or <= 0) return "—";
         double us = medianUs.Value;
+        // s 档（2026-11-02 列宽优化）：极慢格原本 4012.41 ms 占 10 字符，换算 4.01 s 只占 6。
+        if (us >= 1_000_000) return (us / 1_000_000).ToString("F2", CultureInfo.InvariantCulture) + " s";
         if (us >= 1000) return (us / 1000).ToString("F2", CultureInfo.InvariantCulture) + " ms";
         return us < 1
             ? us.ToString("F3", CultureInfo.InvariantCulture) + " µs"
