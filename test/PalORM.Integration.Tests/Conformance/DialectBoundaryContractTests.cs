@@ -161,7 +161,7 @@ internal static class DialectBoundaryCatalog<TProvider>
 
 internal static class DialectBoundaryRunner
 {
-    public static async Task RunAsync(
+    public static async Task<int> RunAsync(
         IReadOnlyList<DialectBoundary> contracts,
         SqlDialect dialect,
         Func<string, CancellationToken, ValueTask<(DialectScope Scope, IAsyncDisposable Owner)>> openAsync,
@@ -196,6 +196,7 @@ internal static class DialectBoundaryRunner
 
         await Assert.That(string.Join("\n", failures)).IsEmpty();
         await Assert.That(executed + skipped).IsEqualTo(contracts.Count);
+        return executed;
     }
 }
 
@@ -220,9 +221,11 @@ public sealed class DialectBoundaryContractTests
     public async Task PostgreSql_BoundaryContracts_Hold()
     {
         await PrepareRemoteAsync();
-        await DialectBoundaryRunner.RunAsync(
+        int executed = await DialectBoundaryRunner.RunAsync(
             DialectBoundaryCatalog<PostgreSqlProvider>.Boundaries, SqlDialect.PostgreSql,
             DialectScopes.PostgreSqlAsync);
+        // 行为断言（2026-11-02）：断言在 helper 内，扫描器看不到；补一条"至少执行过 1 条边界契约"。
+        await Assert.That(executed).IsGreaterThan(0);
     }
 
     [Test]
@@ -230,8 +233,9 @@ public sealed class DialectBoundaryContractTests
     public async Task MySql_BoundaryContracts_Hold()
     {
         await PrepareRemoteAsync();
-        await DialectBoundaryRunner.RunAsync(
+        int executed = await DialectBoundaryRunner.RunAsync(
             DialectBoundaryCatalog<MySqlProvider>.Boundaries, SqlDialect.MySql, DialectScopes.MySqlAsync);
+        await Assert.That(executed).IsGreaterThan(0);
     }
 }
 

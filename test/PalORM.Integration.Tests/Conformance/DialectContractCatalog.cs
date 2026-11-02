@@ -375,7 +375,7 @@ internal static class DialectContractCatalog<TProvider>
 /// <summary>三方言执行器：20 条契约 × 3 方言，任何一条失败即报出 ID；显式不支持项跳过并记录。</summary>
 internal static class DialectContractRunner
 {
-    public static async Task RunAsync(
+    public static async Task<int> RunAsync(
         IReadOnlyList<DialectContract> contracts,
         SqlDialect dialect,
         Func<string, CancellationToken, ValueTask<(DialectScope Scope, IAsyncDisposable Owner)>> openAsync,
@@ -413,6 +413,7 @@ internal static class DialectContractRunner
         string report = failures.Count == 0 ? "" : string.Join("\n", failures);
         await Assert.That(report).IsEmpty();
         await Assert.That(executed).IsEqualTo(contracts.Count - skipped.Count);
+        return executed;
     }
 }
 
@@ -437,7 +438,10 @@ public sealed class DialectCapabilityContractTests
     public async Task PostgreSql_CapabilityContracts_Hold()
     {
         await PrepareRemoteAsync();
-        await RunAsync(SqlDialect.PostgreSql, DialectScopes.PostgreSqlAsync);
+        int executed = await RunAsync(SqlDialect.PostgreSql, DialectScopes.PostgreSqlAsync);
+        // 行为断言（2026-11-02）：断言在 helper 内，扫描器看不到；这里补一条"至少执行过 1 条契约"，
+        // 同时防 helper 静默空转（B189 无声 no-op 同族）。
+        await Assert.That(executed).IsGreaterThan(0);
     }
 
     [Test]
@@ -445,10 +449,11 @@ public sealed class DialectCapabilityContractTests
     public async Task MySql_CapabilityContracts_Hold()
     {
         await PrepareRemoteAsync();
-        await RunAsync(SqlDialect.MySql, DialectScopes.MySqlAsync);
+        int executed = await RunAsync(SqlDialect.MySql, DialectScopes.MySqlAsync);
+        await Assert.That(executed).IsGreaterThan(0);
     }
 
-    private static Task RunAsync(
+    private static Task<int> RunAsync(
         SqlDialect dialect,
         Func<string, CancellationToken, ValueTask<(DialectScope Scope, IAsyncDisposable Owner)>> openAsync)
     {
