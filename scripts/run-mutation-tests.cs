@@ -224,8 +224,7 @@ static void WriteHealthReport(string testsDir, string target, MutationHealth hea
     string? summaryPath = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
     if (!string.IsNullOrEmpty(summaryPath))
     {
-        File.AppendAllText(summaryPath, summary + "
-");
+        File.AppendAllText(summaryPath, summary + Environment.NewLine);
     }
 
     string root = Path.Combine(testsDir, "StrykerOutput");
