@@ -38,8 +38,8 @@ jobs:
       # 上游发版后自动恢复真实判定。健康指标（effectiveMutants 等）由脚本写入 job summary。
       - name: Run mutation suite (Core CRUD/Query/Bulk/SessionState)
         run: |
-          dotnet run --file scripts/run-mutation-tests.cs -- core
-          code=$?
+          code=0
+          dotnet run --file scripts/run-mutation-tests.cs -- core || code=$?
           if [ "$code" -eq 3 ] || [ "$code" -eq 4 ]; then
             echo "::notice::变异测试无可评信号（exit $code：上游阻塞/变异面为空）——等待 stryker 发版自动恢复"
             exit 0
@@ -77,8 +77,8 @@ jobs:
       # 退出码 3/4 → notice 不判红（同 Core job 注释）
       - name: Run mutation suite (SourceGen emitters + analyzer)
         run: |
-          dotnet run --file scripts/run-mutation-tests.cs -- sourcegen
-          code=$?
+          code=0
+          dotnet run --file scripts/run-mutation-tests.cs -- sourcegen || code=$?
           if [ "$code" -eq 3 ] || [ "$code" -eq 4 ]; then
             echo "::notice::变异测试无可评信号（exit $code：上游阻塞/变异面为空）——等待 stryker 发版自动恢复"
             exit 0
