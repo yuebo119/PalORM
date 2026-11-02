@@ -38,16 +38,16 @@ internal sealed partial class ProbeUpdRow
     public int Qty { get; set; }
 }
 
-/// <summary>定向探针（2026-10-25）：事务内逐行 InsertAsync 的每行会话机械对地板的差距
+/// <summary>定向探针（2026-10-25）：事务内逐行 InsertAsync 的每行会话机械对基准的差距
 /// 分解——四臂基准 SQLite EnumInserts x1.16 / BulkUpdate x1.08（边缘）的归因与收口。
 /// 形态矩阵（每轮一个事务）：
 ///   插入族（100 行/轮）：
-///     ins-ado-tostring  地板：单命令复用 + ToString 枚举转换（基准地板臂形态）
-///     ins-ado-switch    地板 + 6 臂 switch 常量（隔离 ToString 成本，EnumStr 等价形态）
+///     ins-ado-tostring  基准：单命令复用 + ToString 枚举转换（基准基准臂形态）
+///     ins-ado-switch    基准 + 6 臂 switch 常量（隔离 ToString 成本，EnumStr 等价形态）
 ///     ins-per-row       产品推荐用法：WithTransaction + 逐行 InsertAsync（PL-2 晋升后）
 ///     ins-session-batch 产品 CreateBatch + Append ×100 + ExecuteNonQueryAsync
 ///   更新族（2000 行/轮）：
-///     upd-ado           地板：单命令复用逐行 UPDATE
+///     upd-ado           基准：单命令复用逐行 UPDATE
 ///     upd-bulk          产品 BulkUpdateAsync（SQLite = 逐行裹事务的既定路径）
 /// 口径：warmup 50 轮 + timed 300 轮取中位（插入族）/ warmup 10 + timed 40（更新族），
 /// µs/行；分配 GC.GetTotalAllocatedBytes 差值。</summary>
@@ -128,10 +128,10 @@ internal static class Program
         double insAdo = results.First(r => r.Item1 == "ins-ado-switch").Item2;
         double insPerRow = results.First(r => r.Item1 == "ins-per-row").Item2;
         double insBatch = results.First(r => r.Item1 == "ins-session-batch").Item2;
-        Console.WriteLine($"插入分解：per-row − 地板(switch) = {(insPerRow - insAdo) * 1000:F0} ns/行；session-batch − 地板 = {(insBatch - insAdo) * 1000:F0} ns/行");
+        Console.WriteLine($"插入分解：per-row − 基准(switch) = {(insPerRow - insAdo) * 1000:F0} ns/行；session-batch − 基准 = {(insBatch - insAdo) * 1000:F0} ns/行");
         double updAdo = results.First(r => r.Item1 == "upd-ado").Item2;
         double updBulk = results.First(r => r.Item1 == "upd-bulk").Item2;
-        Console.WriteLine($"更新分解：bulk − 地板 = {(updBulk - updAdo) * 1000:F0} ns/行");
+        Console.WriteLine($"更新分解：bulk − 基准 = {(updBulk - updAdo) * 1000:F0} ns/行");
 
         await session.DisposeAsync();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

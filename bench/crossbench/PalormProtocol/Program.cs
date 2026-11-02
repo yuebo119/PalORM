@@ -33,7 +33,7 @@ internal static partial class Program
     /// <para><b>RepoDB 集成教训吸收</b>：
     /// ①实体映射走 DynamicMapping（零特性，FieldMapper 静态缓存预热）；
     /// ②批量操作自动路由驱动级 API（MySQL LOAD DATA/PG COPY/SQLite 行预编译）；
-    /// ③事务传 DbTransaction 参数（无需 WithTransaction 包装，与 ADO 地板同形态）；
+    /// ③事务传 DbTransaction 参数（无需 WithTransaction 包装，与 ADO 基准同形态）；
     /// ④AOT 兼容需 TrimmerRootAssembly（与 FreeSql 同模式），本夹具显式预热映射表；
     /// ⑤SQLite PRAGMA 独立连接（池连接无法注入 PRAGMA，与 FreeSql 同坑）。</para></summary>
     internal static string ResultsDir() => Path.Combine(FindRepoRoot(), "bench", "crossbench", "results");
@@ -176,7 +176,7 @@ internal static partial class Program
 
                             // 写效果校验（每方言一次，不计入测量，全组参与）：逐操作断言
                             // 行数/键集/回滚/枚举列的净效果，非仅值回读。全组都参与——
-                            // 地板与老臂的写语义同样必须与协议一致。
+                            // 基准与老臂的写语义同样必须与协议一致。
                             foreach (IPerfImplementation arm in impls)
                             {
                                 await ValidateArmWritesAsync(dialect, conn, arm, rows).ConfigureAwait(false);
@@ -379,7 +379,7 @@ internal static partial class Program
     /// Insert / Update / BulkInsert / BulkDelete / BulkUpdate / UpsertBatch /
     /// TxSingleInsert / TxHundredInserts / TxBulkInsert / TxRollback / EnumInserts。</para>
     /// <para><b>2026-11-02 起 ADO/Dapper/PalORM 也纳入</b>（原为「ADR-S 已知边界」），
-    /// 地板与老臂的写语义同样必须与协议一致，否则比值基线本身失真。</para></summary>
+    /// 基准与老臂的写语义同样必须与协议一致，否则比值基线本身失真。</para></summary>
     private static async Task ValidateArmWritesCoreAsync(
         Dialect dialect, DbConnection conn, IPerfImplementation arm, int rows)
     {
@@ -821,7 +821,7 @@ internal static partial class Program
         };
 
         /// <summary>慢操作族的预热缩放（0.75s × 0.4 = 0.3s，≥3 次预热下限由引擎兜底；
-        /// 首档 JIT 地板 0.5s 不受 warmupScale 影响，属正当成本）。</summary>
+        /// 首档 JIT 基准 0.5s 不受 warmupScale 影响，属正当成本）。</summary>
         public double WarmupScale => Budget == 0.6 ? 0.4 : 1.0;
     }
 }

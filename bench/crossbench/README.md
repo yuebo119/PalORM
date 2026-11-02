@@ -1,4 +1,4 @@
-# CrossBench — 8 库交叉基准（ADO 地板 + Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb / PalORM）
+# CrossBench — 8 库交叉基准（ADO 基准 + Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb / PalORM）
 
 > **定位**：**事件驱动的 ORM 横向对比工具**（三层性能系统的第二层）。三方言 × 两档 × 17 操作
 > × 9 组，测量引擎、数据集、基础组实现与 [PalORM.PerfHub](../perfhub/README.md) 单一事实源
@@ -7,11 +7,11 @@
 > **职责边界**：PalORM 自身回归检测**不用本工具**，PerfHub 与其共码三组已覆盖；触发面：①8 库横评主张（发版/对比声明）②形态断点（ADR 级变更后基线重开）；③2026-10-26 用户指令起随 `PerfCli full` 默认执行（步骤"CrossBench 8+1 组交叉批"，统一报告自动追加横评节：数据源按完整批自动判别，9 组 × 三方言 × 两档 = 54 三元组；`PerfCli crossbench` 可独立触发），事件触发语义不变。
 >
 > **RepoDB v1.17+ 集成教训（来自 FreeSql 经验）**：
-	> **跨库横评扩展（2026-10-30 立项；2026-11-01 按用户指令移除 Insight.Database 与 SmartSql——两者长期构造失败只产出 N/A 行）**：清单 = PalORM/Dapper.AOT/RepoDb/FreeSql/EF Core/linq2db/SqlSugar（7 库）+ Dapper + ADO 地板。各臂见 *Arm.cs（每臂头部注释含形态决策与方言边界）；--arms 令牌惰性构造（不测的臂不付静态初始化）；--dialects litedb 伪方言（快照机制跳过、臂自管状态、Prepare 重定向为重播种）。
+	> **跨库横评扩展（2026-10-30 立项；2026-11-01 按用户指令移除 Insight.Database 与 SmartSql——两者长期构造失败只产出 N/A 行）**：清单 = PalORM/Dapper.AOT/RepoDb/FreeSql/EF Core/linq2db/SqlSugar（7 库）+ Dapper + ADO 基准。各臂见 *Arm.cs（每臂头部注释含形态决策与方言边界）；--arms 令牌惰性构造（不测的臂不付静态初始化）；--dialects litedb 伪方言（快照机制跳过、臂自管状态、Prepare 重定向为重播种）。
 	> **N/A 账本**：2026-11-01 起清零——SqlSugar PG 曾因「小写引号标识符 vs CamelCase 引号 DDL」N/A，改走独立小写表 perf_s1_lc（列名不加引号，PG 折叠后命中），映射固定共享名防静态缓存跨方言泄漏（SqlSugar 实体映射按类型进程级缓存，探针实证），每操作经 .AS()/As() 覆写指向组目标表（五条写路径 + 查询逐路径探针实证）。报告由 `tools/PalORM.PerfGate tables` 生成（表一~表八，缺失点进覆盖账本，2026-11-02 起）。
 	>
 > - 实体映射走 DynamicMapping（零特性，FieldMapper 静态缓存预热）——避免运行时反射
-> - 批量操作自动路由驱动级 API（MySQL LOAD DATA/PG COPY/SQLite 行预编译）——与 ADO 地板同路径
+> - 批量操作自动路由驱动级 API（MySQL LOAD DATA/PG COPY/SQLite 行预编译）——与 ADO 基准同路径
 > - 事务传 DbTransaction 参数给 Repository 方法（无需 WithTransaction 包装）
 > - AOT 兼容需 TrimmerRootAssembly（用户需配置），本夹具显式预热映射表防首次访问锁竞争
 > - SQLite PRAGMA 独立连接（池连接无法注入 PRAGMA，与 FreeSql 同坑）
@@ -82,7 +82,7 @@ dotnet run --project bench/crossbench/PalormProtocol -c Release -- --sql-audit -
 
 ## 基线纪律
 
-- **B100**：升格基线需 ≥3 个完整批（全臂全预算，三批窗口中位数）；地板批间散布 >20% 的格标 ⚠。
+- **B100**：升格基线需 ≥3 个完整批（全臂全预算，三批窗口中位数）；基准批间散布 >20% 的格标 ⚠。
 - **例行 = 单批对冻结基线**（不重跑三批窗口）：断点或横评主张时跑一个全批，与冻结基线
   逐格噪声带（±8pp）比对；臂子集批与 `--fast` 批**不进基线**。
 - **报告模板已冻结**（2026-10-25 用户指令）：所有性能数据一律经 `scripts/crossbench-report.cs` 输出；

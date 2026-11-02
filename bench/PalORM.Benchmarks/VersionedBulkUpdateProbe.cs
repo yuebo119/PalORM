@@ -16,14 +16,14 @@ using PalORM.Sqlite;
 
 namespace PalORM.Benchmarks;
 
-/// <summary>版本化（[ConcurrencyCheck]）实体批量更新的产品路径与单语句地板对照。
+/// <summary>版本化（[ConcurrencyCheck]）实体批量更新的产品路径与单语句基准对照。
 /// <para><b>背景</b>：v6.5 起产品 <c>BulkUpdateAsync</c> 在 PG UNNEST 或 MySQL
 /// JoinValuesRow 能力可用时，对版本化实体自动路由到单语句（逐行 version 谓词 +
 /// <c>version = version + 1</c>），冲突按受影响计数判定；能力不全回退逐条 DbBatch。
 /// 本探针在实现前量化上限差（PG 3.06× / MySQL 4.73×，1000 行），实现后用于验证产品
-/// 自动路由与地板的距离。</para>
+/// 自动路由与基准的距离。</para>
 /// <para><b>对照臂</b>：① 产品 <c>BulkUpdateAsync</c>（自动路由；不支持时逐条池化，单事务）；
-/// ② 单语句地板（PG UNNEST / MySQL UPDATE JOIN VALUES ROW，SQL 与参数对象测量外预建）。
+/// ② 单语句基准（PG UNNEST / MySQL UPDATE JOIN VALUES ROW，SQL 与参数对象测量外预建）。
 /// SQLite 无等值 JOIN 形态（CASE WHEN 已实测慢 6.4×），只报产品形态。</para>
 /// <para><b>口径</b>：两条臂各用独立 id 区间（产品 1..N，候选 N+1..2N），避免同表同行的
 /// 版本串扰；每操作包一个事务提交，与产品批内单事务语义对齐。</para></summary>
@@ -324,7 +324,7 @@ internal static class VersionedBulkUpdateProbe
             Dialect = dialect,
             Label = $"rows={rows}",
             Note = supportsCandidate
-                ? "带 [ConcurrencyCheck] 的批量更新：产品自动路由 vs 单语句地板；仅观测，不卡阈值"
+                ? "带 [ConcurrencyCheck] 的批量更新：产品自动路由 vs 单语句基准；仅观测，不卡阈值"
                 : "带 [ConcurrencyCheck] 的批量更新：SQLite 产品形态（逐条裹单事务）；无单语句候选",
             Metrics = metrics
         });

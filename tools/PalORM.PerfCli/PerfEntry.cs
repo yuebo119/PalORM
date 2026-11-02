@@ -130,13 +130,13 @@ internal static class PerfEntry
         }
 
         // 8+1 组横评（2026-11-02 单源重组）：表一~表八与四组表合并为同一段产物，数据源 =
-        // 最近完整 CrossBench 批（9 组 × 三方言 × 两档，同批同轮），分母统一为同批 ADO 地板。
+        // 最近完整 CrossBench 批（9 组 × 三方言 × 两档，同批同轮），分母统一为同批 ADO 基准。
         // 旧的 CrossBench 五臂节（scripts/crossbench-report.cs 冻结模板）不再追加：它只覆盖
         // 5 组，与横评表重复且组数口径不一致。
         return 0;
     }
 
-    /// <summary>CrossBench 8+1 组交叉批（ADO 地板 + 8 库）+ 横评报告（表一~表八）。
+    /// <summary>CrossBench 8+1 组交叉批（ADO 基准 + 8 库）+ 横评报告（表一~表八）。
     /// 2026-10-25 用户指令起为 full 默认步骤；2026-11-02 单源重组：报告由 PerfGate tables 从
     /// 同一完整批生成，与统一报告里的横评节同源同模板（旧 crossbench-report.cs 冻结模板退役）。
     /// 臂序两遍反序、慢操作预算表等协议见 bench/crossbench/README.md。</summary>
@@ -189,7 +189,7 @@ internal static class PerfEntry
         string? batch = CrossBenchBatch.LatestFullBatchPath(Path.Combine(root, CrossBenchResultsDir));
         if (batch == null)
         {
-            Perf.Out("跳过：无完整 CrossBench 批（8 库 + ADO 地板 × 三方言 × 两档）");
+            Perf.Out("跳过：无完整 CrossBench 批（8 库 + ADO 基准 × 三方言 × 两档）");
             return 0;
         }
         string outPath = Path.Combine(root, "bench", "reports", $"crossbench-report-{Perf.Stamp()}.md");

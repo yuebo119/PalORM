@@ -16,7 +16,7 @@ namespace PalORM.PerfHub;
 /// 三实现测同一份数据、同一组 SQL 语义，只有"谁来生成 SQL/绑定参数/物化行"不同。</summary>
 internal interface IPerfImplementation
 {
-    /// <summary>实现标识：ADO_NET（地板基线）/ Dapper / PalORM。</summary>
+    /// <summary>实现标识：ADO_NET（基准基线）/ Dapper / PalORM。</summary>
     string Name { get; }
 
     Task SetupAsync(DbConnection conn, int rows, CancellationToken ct);
@@ -24,7 +24,7 @@ internal interface IPerfImplementation
 
     /// <summary>池化租借形态的逐键查询（2026-10-13 二轮方案臂）：每键一次完整租期
     ///（租出 → GetByKey → 归还）——"一请求一会话"的真实请求形状。PalORM 臂走
-    /// DataSessionPool；ADO/Dapper 无会话税，天然形态即地板（实现与 GetByKeySession 同）。</summary>
+    /// DataSessionPool；ADO/Dapper 无会话税，天然形态即基准（实现与 GetByKeySession 同）。</summary>
     Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct);
     /// <summary>长会话循环直查（GetByKeySession 项）——单会话内循环 N 次按键直查并返回命中数。
     /// N 固定 32（覆盖 A9 晋升阈值 3 且摊销会话构造）；三臂契约：ADO 命令复用、Dapper 无状态
@@ -71,7 +71,7 @@ internal interface IPerfImplementation
     /// <summary>租户会话 COUNT + Value 范围条件——阈值随档位走（rows / 2）。</summary>
     Task<long> TenantCountWhereAsync(DbConnection conn, int rows, CancellationToken ct);
     /// <summary>租户会话全表物化——含 OwnedJson 列反序列化（产品臂走 SourceGen 反序列化，
-    /// 地板/Dapper 臂手工 STJ 反序列化）。</summary>
+    /// 基准/Dapper 臂手工 STJ 反序列化）。</summary>
     Task<List<BenchTenantPost>> TenantGetAllAsync(DbConnection conn, CancellationToken ct);
     /// <summary>OwnedJson 列读路径——Take(50) 固定窗口（LIMIT 50 三方言同款）。</summary>
     Task<List<BenchTenantPost>> OwnedJsonQueryAsync(DbConnection conn, CancellationToken ct);
@@ -83,17 +83,17 @@ internal interface IPerfImplementation
     // ── 枚举列形态 + GetAllAsync 直查（2026-10-04 全量复读落地轮）──
     /// <summary>枚举列事务内逐条插入（EnumInserts 项）——事务内 N 次单行 INSERT 到 perf_enum，
     /// 三臂同一语句形态（单行参数化 INSERT），唯一差异是绑定机械与枚举→字符串转换：
-    /// ADO 地板 = 单命令复用 + 逐行 Status.ToString()（行业常规写法）；
+    /// ADO 基准 = 单命令复用 + 逐行 Status.ToString()（行业常规写法）；
     /// Dapper = 每行 ExecuteAsync + ToString()；PalORM = PL-2 复用命令 + EnumStr 生成式
     /// switch（N2 零分配化的量化面）。</summary>
     Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct);
     /// <summary>全表直查（GetAllAsync 项）——PalORM 的 GetAllAsync 公共 API 路径（N5 组合句缓存）；
-    /// 地板与 QueryAll 同形（SELECT 全列 + 手工物化），Dapper 走 QueryAsync。</summary>
+    /// 基准与 QueryAll 同形（SELECT 全列 + 手工物化），Dapper 走 QueryAsync。</summary>
     Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADO.NET 基线——性能地板。所有比值（Ratio）以它为分母。
+// ADO.NET 基线——性能基准。所有比值（Ratio）以它为分母。
 // 手写参数化 SQL + 手工物化，是"不靠任何 ORM 能做到的最好情况"。
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -103,7 +103,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
 
     /// <summary>local_infile 探测结果缓存——PerfHub 全程共用一条连接，实例级字段即等效于
     /// 产品的按连接缓存（ConditionalWeakTable + 60s TTL 的简化形态）。不缓存则每次批量
-    /// 插入都付一次额外 RTT，地板被 PalORM 反超（门禁抓出后修正）。</summary>
+    /// 插入都付一次额外 RTT，基准被 PalORM 反超（门禁抓出后修正）。</summary>
     private bool? _mysqlLocalInfile;
 
     private string T => Dataset.Table(dialect.Dialect);
@@ -289,8 +289,8 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
             p.Value = id;
             await using DbDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             // 口径修正：PalORM 臂调用 GetAsync 会完整物化 S1Row，Dapper 臂 QueryFirstOrDefault
-            // 同样物化；地板此前只 ReadAsync 计数，省掉了实体分配与列读取，导致 GetByKeySession/
-            // PooledGetByKey 的 P/ADO 比值失真。地板按同一物化语义计算。
+            // 同样物化；基准此前只 ReadAsync 计数，省掉了实体分配与列读取，导致 GetByKeySession/
+            // PooledGetByKey 的 P/ADO 比值失真。基准按同一物化语义计算。
             if (await r.ReadAsync(ct).ConfigureAwait(false))
             {
                 _ = Map(r);
@@ -300,7 +300,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         return found;
     }
 
-    /// <summary>池化臂的地板：ADO 无会话税，天然形态即行业最优（与 GetByKeySession 同体）。</summary>
+    /// <summary>池化臂的基准：ADO 无会话税，天然形态即行业最优（与 GetByKeySession 同体）。</summary>
     public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
         => GetByKeySessionAsync(conn, ids, ct);
 
@@ -353,10 +353,10 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     public async Task<long> BulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => await BulkInsertAsync(conn, rows, null, ct).ConfigureAwait(false);
 
-    /// <summary>批量插入——按方言走驱动最优（v2 三臂契约：地板必须是天花板）：
+    /// <summary>批量插入——按方言走驱动最优（v2 三臂契约：基准必须是天花板）：
     /// PG 走 Npgsql Binary COPY，MySQL 走 MySqlBulkCopy（LOAD DATA LOCAL INFILE 协议），
     /// SQLite 走行预编译单行语句（ADR-Q 形态断点，2026-10-25：命令文本恒定命中连接级
-    /// 语句缓存，探针 2.2~2.6µs/行 vs 多值 8.6~9.4——"多值即最快"的地板假设被证伪）。</summary>
+    /// 语句缓存，探针 2.2~2.6µs/行 vs 多值 8.6~9.4——"多值即最快"的基准假设被证伪）。</summary>
     public async Task<long> BulkInsertAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
     {
@@ -369,7 +369,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         };
     }
 
-    /// <summary>SQLite 行预编译批插（地板，ADR-Q）：单行 INSERT + 5 参数一次建立挂命令，
+    /// <summary>SQLite 行预编译批插（基准，ADR-Q）：单行 INSERT + 5 参数一次建立挂命令，
     /// 事务内逐行只写 Value。未传事务时自开（与 MultiValueInsertAsync 同语义）。</summary>
     private async Task<long> RowPreparedInsertAsync(
         DbConnection conn, IReadOnlyList<S1Row> rows, DbTransaction? tran, CancellationToken ct)
@@ -413,7 +413,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     }
 
     /// <summary>MySQL 批量插入路由——与产品 MySqlProvider 同分流：服务端 <c>@@local_infile</c>
-    /// 为 ON 走 MySqlBulkCopy（LOAD DATA 协议），否则回退多值 VALUES。地板与 PalORM 臂
+    /// 为 ON 走 MySqlBulkCopy（LOAD DATA 协议），否则回退多值 VALUES。基准与 PalORM 臂
     /// 走同一路径才可比——只开客户端 AllowLoadLocalInfile 而服务端关着时，
     /// 驱动直接抛 "Loading local data is disabled"（实测）。</summary>
     private async Task<long> BulkInsertMySqlAsync(
@@ -514,7 +514,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     /// ① 命令与参数池一次建好，跨批只写 Value；② <b>整批裹一个事务</b>（未传事务时自开）
     /// ——每语句 autocommit 各一次 journal 同步，是量具早期实测被 PalORM 反超 6× 的直接原因
     /// （门禁抓出后修正）。</summary>
-    /// <summary>SQLite 行预编译批量 UPSERT（地板，ADR-Q）：单行 INSERT … ON CONFLICT DO
+    /// <summary>SQLite 行预编译批量 UPSERT（基准，ADR-Q）：单行 INSERT … ON CONFLICT DO
     /// UPDATE + 5 参数一次建立挂命令，事务内逐行只写 Value。冲突子句与 BulkSql.UpsertBatch
     /// 同谓词列集（ON CONFLICT("Id") DO UPDATE SET 全列 = excluded.列）。</summary>
     private async Task<long> RowPreparedUpsertAsync(
@@ -704,7 +704,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         return total;
     }
 
-    /// <summary>PG 地板：UPDATE ... FROM UNNEST(数组参数)，与产品 BatchUpdateSqlBuilder 的
+    /// <summary>PG 基准：UPDATE ... FROM UNNEST(数组参数)，与产品 BatchUpdateSqlBuilder 的
     /// UNNEST 形态同代。每列一个类型化数组参数，语句文本与批宽无关，整段单次往返。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell",
         "S3265:Non-flags enums should not be used in bitwise operations",
@@ -830,7 +830,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         }
     }
 
-    /// <summary>E 方案地板形态：DELETE ... WHERE Id IN (SELECT value FROM json_each(@ids))，
+    /// <summary>E 方案基准形态：DELETE ... WHERE Id IN (SELECT value FROM json_each(@ids))，
     /// 单参数（JSON 数组文本，手写不变文化构建）。</summary>
     private async Task<long> ExecuteJsonEachDeleteAsync(
         DbConnection conn, IReadOnlyList<object> keys, DbTransaction tx, CancellationToken ct)
@@ -862,7 +862,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         DbConnection conn, IReadOnlyList<object> keys, DbTransaction tx, CancellationToken ct)
     {
         // E 方案（ADR-R，2026-10-25）：SQLite 切 json_each 单参数形态（与产品同路径，
-        // DeleteProbe 实测 0.21~0.25µs/键 vs 参数化 IN 3.64~3.86）；地板必须保持最紧形态。
+        // DeleteProbe 实测 0.21~0.25µs/键 vs 参数化 IN 3.64~3.86）；基准必须保持最紧形态。
         if (D == Dialect.Sqlite)
         {
             return await ExecuteJsonEachDeleteAsync(conn, keys, tx, ct).ConfigureAwait(false);
@@ -1048,7 +1048,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         => TenantQueryAsync(conn, " LIMIT 50", ct);
 
     /// <summary>租户会话读——产品臂在 WithTenant 下自动附加同款过滤（deleted_at IS NULL
-    /// AND tenant_id = @__tenant0），地板臂显式拼 <c>Dataset.WhereTenant</c> 同构 SQL；
+    /// AND tenant_id = @__tenant0），基准臂显式拼 <c>Dataset.WhereTenant</c> 同构 SQL；
     /// limit 段由调用方给（空 = 全表）。Payload 列读 string 后经 BenchTenantJsonContext
     /// 手工反序列化（STJ 源生成路径，与产品 OwnedJson emit 同形态）。</summary>
     private async Task<List<BenchTenantPost>> TenantQueryAsync(
@@ -1374,7 +1374,7 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     public Task TxHundredInsertsAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         => TxTenInsertsAsync(conn, rows, ct);
 
-    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——地板写法：单命令跨行复用，每行只写
+    /// <summary>枚举列事务内逐条插入（EnumInserts 项）——基准写法：单命令跨行复用，每行只写
     /// 参数 Value；Status 列是枚举→TEXT 的行业常规转换（逐行 ToString()，每行分配一个新串）。
     /// 这正是 N2 前产品臂的形态，作为对照面保留。</summary>
     public async Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
@@ -1401,8 +1401,8 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         await tran.CommitAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>全表直查（GetAllAsync 项）——地板与 QueryAll 同一写法（SELECT 全列 + 手工物化）：
-    /// 该臂的地板语义就是"全表 SELECT 物化"，API 形态差异只在 PalORM 侧（GetAllAsync vs 管线）。</summary>
+    /// <summary>全表直查（GetAllAsync 项）——基准与 QueryAll 同一写法（SELECT 全列 + 手工物化）：
+    /// 该臂的基准语义就是"全表 SELECT 物化"，API 形态差异只在 PalORM 侧（GetAllAsync vs 管线）。</summary>
     public Task<List<S1Row>> GetAllAsync(DbConnection conn, CancellationToken ct)
         => QueryAllAsync(conn, ct);
 
@@ -1735,7 +1735,7 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
             $"UPDATE {T} SET {C("Name")}=@Name, {C("Qty")}=@Qty, {C("Price")}=@Price, {C("Marker")}=@Marker WHERE {C("Id")}=@Id",
             row).ConfigureAwait(false);
 
-    /// <summary>批量更新——方言最优（v2 三臂契约，SQL 与 ADO 地板共用 BulkSql 真源）：
+    /// <summary>批量更新——方言最优（v2 三臂契约，SQL 与 ADO 基准共用 BulkSql 真源）：
     /// PG 发 UPDATE FROM VALUES、MySQL 发 CASE WHEN；SQLite 逐条裹单事务
     /// （Dapper 无集合式封装，真实 Dapper 用户同样手拼这两类 SQL）。</summary>
     public async Task<long> BulkUpdateAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
@@ -1872,7 +1872,7 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     public Task<List<BenchTenantPost>> TenantGetAllAsync(DbConnection conn, CancellationToken ct)
         => TenantQueryAsync(conn, "");
 
-    /// <summary>OwnedJson 读路径——LIMIT 50 固定窗口（三方言同款，与地板臂同 SQL 形态）。</summary>
+    /// <summary>OwnedJson 读路径——LIMIT 50 固定窗口（三方言同款，与基准臂同 SQL 形态）。</summary>
     public Task<List<BenchTenantPost>> OwnedJsonQueryAsync(DbConnection conn, CancellationToken ct)
         => TenantQueryAsync(conn, " LIMIT 50");
 
@@ -1965,7 +1965,7 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
         return batched;
     }
 
-    /// <summary>自增插入并回填主键——与 ADO 地板同 SQL 同 1 RTT 形态。</summary>
+    /// <summary>自增插入并回填主键——与 ADO 基准同 SQL 同 1 RTT 形态。</summary>
     public async Task<long> InsertReturningIdAsync(DbConnection conn, string name, int qty, CancellationToken ct)
     {
         string sql = dialect.Dialect == Dialect.MySql
@@ -2573,7 +2573,7 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
         };
 
     /// <summary>租户会话 COUNT——WithTenant 让产品自动附加"deleted_at IS NULL AND
-    /// tenant_id = @__tenant0"（与地板/Dapper 臂的同款 WHERE 段同源）。</summary>
+    /// tenant_id = @__tenant0"（与基准/Dapper 臂的同款 WHERE 段同源）。</summary>
     private static Task<long> TenantCountCoreAsync<TProvider>(DbConnection conn, CancellationToken ct)
         where TProvider : IDbProvider, new()
         => Session<TProvider>(conn).WithTenant(Dataset.TenantArmId)
@@ -2860,7 +2860,7 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
 
     /// <summary>事务内批量提交——走产品的 BulkInsertAsync（PG COPY / MySQL 能力分流 /
     /// SQLite 多值），与 v2 三臂契约一致。此前误用逐行 InsertAsync（2000 行 = 2000 次往返，
-    /// MySQL 实测 706 ms vs 地板 21.7 ms，门禁方向的对称暴露）。</summary>
+    /// MySQL 实测 706 ms vs 基准 21.7 ms，门禁方向的对称暴露）。</summary>
     private async Task TxBulkCoreAsync<TProvider>(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()

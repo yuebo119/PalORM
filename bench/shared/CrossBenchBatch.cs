@@ -5,7 +5,7 @@ namespace PalORM.Bench.Shared;
 /// <summary>CrossBench 交叉批的读取层（<c>bench/crossbench/results/crossbench-*.json</c>）。
 /// <para><b>为什么共享</b>：PerfCli（crossbench 子命令 / 统一报告横评节）与 PerfGate
 /// （8+1 组横评表）都要"最近完整批"判别与测量装载——复制成两份会让完整批判据各自漂移。</para>
-/// <para><b>完整批判别</b>：9 组（ADO 地板 + 8 库）× 三方言 × 两档 = 54 个
+/// <para><b>完整批判别</b>：9 组（ADO 基准 + 8 库）× 三方言 × 两档 = 54 个
 /// (Dialect,Rows,Implementation) 三元组（2026-11-02 起：移除 LiteDB / Marten / NHibernate，
 /// 性能对比只保留 SQL 关系型库）；子集批（--arms/--dialects/--fast）不作为统一报告与横评表
 /// 的数据源。文件按名倒序（时间戳命名）取第一个满足覆盖面的批；解析失败（半写文件）按不存在

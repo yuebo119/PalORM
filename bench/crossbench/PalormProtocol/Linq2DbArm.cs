@@ -381,7 +381,7 @@ internal sealed class Linq2DbImpl(DialectInfo dialect) : IPerfImplementation, ID
         => throw new NotSupportedException("SessionBatch 不在本次子集内");
 
     /// <summary>枚举列事务内逐条插入——每行一次 InsertAsync（枚举→字符串由映射转换器完成），
-    /// 事务形态与 ADO/Dapper 地板同构。</summary>
+    /// 事务形态与 ADO/Dapper 基准同构。</summary>
     public async Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
     {
         using DataConnectionTransaction tx = await Db.BeginTransactionAsync(ct).ConfigureAwait(false);

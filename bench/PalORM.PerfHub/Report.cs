@@ -9,7 +9,7 @@ namespace PalORM.PerfHub;
 /// 报告包含六个区块：
 ///  ① 单操作指标总览：按测试分组（Build/CRUD/Query/Transaction/Baseline）分表，
 ///     时延中位数/均值、Error/Mean、分配/op、采样堆峰、Gen0；
-///  ② ORM vs ADO.NET 地板比值（跨环境可比的核心口径）；
+///  ② ORM vs ADO.NET 基准比值（跨环境可比的核心口径）；
 ///  ③ 并发吞吐（ops/s + p50/p95/p99）；
 ///  ④ 版本对比（v5.5.1 vs 最新）——同项比值 + 提升幅度；
 ///  ⑤ 增长曲线（跨历史运行，SVG 折线，对数轴）；
@@ -163,7 +163,7 @@ internal static class Report
             + " · GC " + e.GcMode + " · " + e.Os + "<br>"
             + "<span class=\"badge\">数据集 S1 Narrow</span>"
             + "<span class=\"badge\">三方言同构</span>"
-            + "<span class=\"badge\">ADO.NET 地板基线</span>"
+            + "<span class=\"badge\">ADO.NET 基准基线</span>"
             + "</div>";
     }
 
@@ -280,7 +280,7 @@ internal static class Report
         IEnumerable<IGrouping<(int Rows, string Operation, string Dialect), Measurement>> groups = single.GroupBy(static m => (m.Rows, m.Operation, m.Dialect));
 
         var sb = new StringBuilder();
-        sb.Append("<h2>② ORM vs ADO.NET 地板（比值 = 实现 / 地板）</h2><div class=\"card\"><table>");
+        sb.Append("<h2>② ORM vs ADO.NET 基准（比值 = 实现 / 基准）</h2><div class=\"card\"><table>");
         sb.Append("<tr><th>行数</th><th>操作</th><th>方言</th>"
             + "<th class=\"n\">Dapper 时延比</th><th class=\"n\">PalORM 时延比</th>"
             + "<th class=\"n\">Dapper 分配比</th><th class=\"n\">PalORM 分配比</th></tr>");
@@ -317,11 +317,11 @@ internal static class Report
                 ? null : palorm.AllocatedBytesPerOp / floor.AllocatedBytesPerOp));
             sb.Append("</tr>");
         }
-        sb.Append("</table><div class=\"note\"><b>读法</b>：时延比 &lt; 1 表示比 ADO.NET 地板快；"
-            + "分配比 &lt; 1 表示比地板省。跨机器绝对值不可比（同机 ADO.NET 地板漂移可达 43%），"
+        sb.Append("</table><div class=\"note\"><b>读法</b>：时延比 &lt; 1 表示比 ADO.NET 基准快；"
+            + "分配比 &lt; 1 表示比基准省。跨机器绝对值不可比（同机 ADO.NET 基准漂移可达 43%），"
             + "<b>跨环境只比比值</b>（规范 §3）。"
-            + "<b>健全性门禁</b>：" + suspectFloors + " 组出现 ORM 快过地板 >10%（标 ⚠地板?）——"
-            + "物理上不成立，出现即该组地板实现有缺陷（低性能写法），须对照三臂契约修正地板后重测，"
+            + "<b>健全性门禁</b>：" + suspectFloors + " 组出现 ORM 快过基准 >10%（标 ⚠基准?）——"
+            + "物理上不成立，出现即该组基准实现有缺陷（低性能写法），须对照三臂契约修正基准后重测，"
             + "不得当 ORM 优势解读。</div></div>");
 
         Measurement[] conc = [.. run.Measurements.Where(static m => m.Operation == ConcurrentOp)];
@@ -368,10 +368,10 @@ internal static class Report
 
         double r = ratio.Value;
         // v2 健全性门禁：手写 ADO.NET 是天花板，ORM 比它快 10% 以上在物理上不成立——
-        // 出现即地板实现有缺陷（低性能写法），标 ⚠ 提示检查三臂契约，不再误标成"绿色优势"。
+        // 出现即基准实现有缺陷（低性能写法），标 ⚠ 提示检查三臂契约，不再误标成"绿色优势"。
         if (r < 0.90)
         {
-            return "<td class=\"n warn\">" + r.ToString("F2") + "× ⚠地板?</td>";
+            return "<td class=\"n warn\">" + r.ToString("F2") + "× ⚠基准?</td>";
         }
 
         string cls = RatioClass(r, 0.95, 1.10);
@@ -644,12 +644,12 @@ internal static class Report
         return sb.ToString();
     }
 
-    /// <summary>地板归一化对比——跨版本比较唯一可信的口径。
-    /// <para><b>为什么必须归一化</b>：两轮实测相隔数十分钟，同机 ADO.NET 地板本身会漂移
+    /// <summary>基准归一化对比——跨版本比较唯一可信的口径。
+    /// <para><b>为什么必须归一化</b>：两轮实测相隔数十分钟，同机 ADO.NET 基准本身会漂移
     /// （实测单项漂移可达 50%）。直接比绝对时延会把「机器那轮更快」误读成「ORM 那轮更快」。
-    /// 归一化算式 <c>(新_PalORM / 新_地板) ÷ (旧_PalORM / 旧_地板)</c> 对机器漂移取一阶抵消：
-    /// 只有 ORM 相对地板的变化被保留下来。</para>
-    /// <para><b>仍会残留噪声</b>：地板自身波动大的项（下表标 ⚠）归一化后被放大，
+    /// 归一化算式 <c>(新_PalORM / 新_基准) ÷ (旧_PalORM / 旧_基准)</c> 对机器漂移取一阶抵消：
+    /// 只有 ORM 相对基准的变化被保留下来。</para>
+    /// <para><b>仍会残留噪声</b>：基准自身波动大的项（下表标 ⚠）归一化后被放大，
     /// 这类行的结论只能当方向性参考。要拿硬结论需交替 A/B 重测。</para></summary>
     private static string NormalizedCompare(PerfRun baseRun, PerfRun headRun)
     {
@@ -661,7 +661,7 @@ internal static class Report
                 continue;
             }
 
-            // Build 组的 ADO.NET 臂只是返回预写字面量，不是同类地板；并发用 ops/s 单独看
+            // Build 组的 ADO.NET 臂只是返回预写字面量，不是同类基准；并发用 ops/s 单独看
             if (h.Operation.StartsWith("Build", StringComparison.Ordinal)
                 || h.Operation.StartsWith("Concurrent", StringComparison.Ordinal))
             {
@@ -700,9 +700,9 @@ internal static class Report
 
         var sb = new StringBuilder();
         sb.Append("<h3 style=\"font-size:13px;margin:18px 0 8px;color:#374151\">")
-            .Append("地板归一化对比（PalORM，跨版本唯一可信口径）</h3><div class=\"card\"><table>");
+            .Append("基准归一化对比（PalORM，跨版本唯一可信口径）</h3><div class=\"card\"><table>");
         sb.Append("<tr><th>方言</th><th>操作</th><th class=\"n\">行数</th>"
-            + "<th class=\"n\">归一化时延比</th><th class=\"n\">相对地板变化</th><th>量具健康</th></tr>");
+            + "<th class=\"n\">归一化时延比</th><th class=\"n\">相对基准变化</th><th>量具健康</th></tr>");
 
         foreach (var (dialect, operation, rowCount, ratio, floorMoved) in rows.OrderBy(static r => r.Ratio))
         {
@@ -712,17 +712,17 @@ internal static class Report
                 .Append("</td><td").Append(cls).Append("><b>").Append(ratio.ToString("F3"))
                 .Append("×</b></td><td class=\"n\">").Append(Fmt.Pct(ratio - 1))
                 .Append("</td><td class=\"").Append(floorMoved ? "warn" : "mut").Append("\">")
-                .Append(floorMoved ? "⚠ 地板漂移 >18%，结论仅方向性" : "地板稳定")
+                .Append(floorMoved ? "⚠ 基准漂移 >18%，结论仅方向性" : "基准稳定")
                 .Append("</td></tr>");
         }
 
         double geo = Math.Exp(rows.Average(static r => Math.Log(r.Ratio)));
         int moved = rows.Count(static r => r.FloorMoved);
         sb.Append("</table><div class=\"note\"><b>整体（几何平均）</b>：<b style=\"font-size:15px\">")
-            .Append(geo.ToString("F3")).Append("×</b>，即 PalORM 相对同机 ADO.NET 地板 ")
+            .Append(geo.ToString("F3")).Append("×</b>，即 PalORM 相对同机 ADO.NET 基准 ")
             .Append(geo < 1 ? "快 " : "慢 ").Append(Math.Abs(1 - geo).ToString("P1"))
             .Append("。<b>").Append(moved).Append('/').Append(rows.Count)
-            .Append("</b> 项的地板漂移超过 ±18%，这些行标 ⚠——归一化对大幅漂移的地板会放大噪声，"
+            .Append("</b> 项的基准漂移超过 ±18%，这些行标 ⚠——归一化对大幅漂移的基准会放大噪声，"
                 + "只能当方向性参考。要拿硬结论，需对关注项做交替 A/B 重测（两版轮流跑、多轮取中位）。</div></div>");
         return sb.ToString();
     }
@@ -790,7 +790,7 @@ internal static class Report
             sb.Append("</div>");
         }
         sb.Append("</div><div class=\"note\"><b>读法</b>：纵轴对数刻度（时延跨数量级）；"
-            + "曲线向下 = 优化生效。灰色为 ADO.NET 地板（应基本水平，若它大幅波动说明环境漂移，"
+            + "曲线向下 = 优化生效。灰色为 ADO.NET 基准（应基本水平，若它大幅波动说明环境漂移，"
             + "该轮数据需重测）。每点 = 一次 <code>run</code> 的历史记录。</div>");
         return sb.ToString();
     }

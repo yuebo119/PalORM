@@ -756,7 +756,7 @@ internal static partial class Program
         StringBuilder sb = new(1 << 18);
         _ = sb.AppendLine($"# SQL 文本审计（{DateTime.Now:yyyy-MM-dd HH:mm:ss}）");
         _ = sb.AppendLine();
-        _ = sb.AppendLine($"> 审计对象：CrossBench 九组（ADO.NET 地板 + 八个 ORM）× 方言 "
+        _ = sb.AppendLine($"> 审计对象：CrossBench 九组（ADO.NET 基准 + 八个 ORM）× 方言 "
             + $"{string.Join(" / ", entries.Select(e => e.DisplayName).Distinct(StringComparer.Ordinal))} × "
             + $"{entries.Select(e => e.Op).Distinct(StringComparer.Ordinal).Count()} 操作，行数档 {rows:N0}。");
         _ = sb.AppendLine("> 判据：测试对象是 ORM 的 SQL 生成能力。取「实际执行过的 SQL 文本」为证据——"
@@ -770,7 +770,7 @@ internal static partial class Program
         _ = sb.AppendLine("| 组 | 捕获通道 | 覆盖 |");
         _ = sb.AppendLine("|---|---|---|");
         _ = sb.AppendLine("| ADO_NET | 宿主连接包装层（`DbCommand.CommandText` 赋值即记录） | 除 MySQL/PostgreSQL"
-            + " 的批量插入外全部操作——该地板的批量走驱动级协议（`MySqlBulkCopy` / Npgsql binary COPY），"
+            + " 的批量插入外全部操作——该基准的批量走驱动级协议（`MySqlBulkCopy` / Npgsql binary COPY），"
             + "按 provider 具体类型强转，包装层不可用，见第二节 |");
         _ = sb.AppendLine("| Dapper | 同左 | 全部操作（批量走 `BulkSql` 多值 INSERT，不经驱动批量协议） |");
         _ = sb.AppendLine("| Dapper.AOT | 同左 | 非事务操作为主；事务内走 `Command<T>` 的三条操作"
@@ -954,7 +954,7 @@ internal static partial class Program
         _ = sb.AppendLine("- **手写三组（ADO_NET / Dapper / Dapper.AOT）同文本是设计如此**：单语句操作共用同一份字面 SQL，"
             + "批量操作共用 `BulkSql` 模板。它们等于同一个「手写 SQL」样本的三次测量，横评里不构成三个独立的"
             + " SQL 生成能力样本——报告说明列应按此注明（既知口径偏差）。");
-        _ = sb.AppendLine("- **ORM 组与地板同文本**（如 PalORM 的主键直查/更新与 ADO 同簇）说明该组生成的 SQL 与手写最优形态同形，"
+        _ = sb.AppendLine("- **ORM 组与基准同文本**（如 PalORM 的主键直查/更新与 ADO 同簇）说明该组生成的 SQL 与手写最优形态同形，"
             + "属正面证据；判据是「它的别名风格与参数命名是否也与手写组一致」——若一致到连别名都相同，才说明疑似抄模板。");
         _ = sb.AppendLine("- **单组独有文本 + 形态符合该库惯用写法**（EF 的 `INSERT … VALUES … RETURNING`、linq2db 的 `MERGE`、"
             + "FreeSql 的临时表 + UPDATE）是该组确实在用自身 API 生成 SQL 的直接证据。");

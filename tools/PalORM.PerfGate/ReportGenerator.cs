@@ -215,7 +215,7 @@ internal static partial class ReportGenerator
             : string.Create(CultureInfo.InvariantCulture,
                 $"| PalORM 回归 | `{perfhubLabel}` | {perfhub.Timestamp} | ✅ {perfhub.Items.Count} 项 |"));
         md.AppendLine();
-        md.AppendLine("> 两层口径不同：横评 = 9 组同批同轮（两遍反序平均，分母 = 同批 ADO 地板）；"
+        md.AppendLine("> 两层口径不同：横评 = 9 组同批同轮（两遍反序平均，分母 = 同批 ADO 基准）；"
             + "回归 = PerfHub 三臂（per-operation 会话，分母 = 同批 PerfHub ADO）。"
             + "比值只在各自视图内可比，禁止跨视图把数字放进同一行。");
         md.AppendLine();

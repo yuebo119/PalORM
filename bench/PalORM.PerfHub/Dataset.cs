@@ -385,7 +385,7 @@ internal static class Dataset
 
     /// <summary>OwnedJson 列的存储形态——经 BenchTenantJsonContext 的 STJ 源生成路径
     /// 序列化为 JSON 文本（与产品 SourceGen OwnedJson emit 的序列化形态同源，
-    /// 零反射形态；地板/Dapper 臂显式走同一 context）。</summary>
+    /// 零反射形态；基准/Dapper 臂显式走同一 context）。</summary>
     public static string? TenantPayloadJson(BenchTenantPost row)
         => row.Payload is null ? null : JsonSerializer.Serialize(
             row.Payload, BenchTenantJsonContext.Default.BenchTenantPayloadInfo);
@@ -549,7 +549,7 @@ internal sealed partial class S1Row
 
 /// <summary>枚举列形态的列值枚举——6 个成员，字符串（TEXT）存储（默认 StoreAs）。
 /// 测量的是写路径的枚举→字符串转换：PalORM 走 EnumStr 生成式 switch（驻留常量零分配），
-/// ADO/Dapper 地板走行业常规的逐行 ToString()。</summary>
+/// ADO/Dapper 基准走行业常规的逐行 ToString()。</summary>
 internal enum OrderStatus
 {
     Pending,
@@ -601,7 +601,7 @@ internal static class MySqlConnString
 }
 
 /// <summary>批量写路径的三臂共用 SQL 真源（PerfHub v2 三臂契约）。
-/// <para>ADO 地板与 Dapper 臂必须发与 PalORM 同构的方言最优 SQL，此处集中生成，
+/// <para>ADO 基准与 Dapper 臂必须发与 PalORM 同构的方言最优 SQL，此处集中生成，
 /// 杜绝两臂各拼各的漂移。参数顺序统一为 [Name, Qty, Price, Marker, Id]——Id 在行尾，
 /// 与产品 <c>BatchUpdateSqlBuilder</c> 的 BindUpdate 序一致。</para>
 /// <para><b>SQLite 不走集合式</b>：CASE WHEN 在 SQLite 实测比逐条慢 6.4×（产品既有结论），
@@ -744,7 +744,7 @@ internal sealed class DialectInfo
         new()
         {
             Dialect = Dialect.MySql, DisplayName = "MySQL",
-            // AllowLoadLocalInfile=true：MySqlBulkCopy（LOAD DATA 协议）的前提——地板与
+            // AllowLoadLocalInfile=true：MySqlBulkCopy（LOAD DATA 协议）的前提——基准与
             // PalORM 的 MySQL 批量天花板路径都依赖它。基准环境统一追加，三臂同等生效。
             OpenConnection = cs => new MySqlConnector.MySqlConnection(MySqlConnString.WithLocalInfile(cs))
         },

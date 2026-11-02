@@ -23,7 +23,7 @@ namespace PalORM.PerfHub;
 /// <c>IsUseUpsert=true</c>，内部自动切 Upsert 路径（SQLite 的 CreateMerge 本身抛 NotSupported，
 /// 由 MergeAll 的 IsUseUpsert 分支绕过）。</item>
 /// <item><b>事务</b>：扩展方法直接接 <c>IDbTransaction</c>（BulkOperations 要求 provider 具体事务类型），
-/// 与 ADO 地板同形态——无需 FreeSql 那样的 WithTransaction 绑定。</item>
+/// 与 ADO 基准同形态——无需 FreeSql 那样的 WithTransaction 绑定。</item>
 /// <item><b>连接</b>：用传入的共享连接（Dapper 臂口径）。入口的 <see cref="CountingConnection.Unwrap"/>
 /// 是对 PerfHub 并行测量路径（会包装 CountingConnection）的防御——CrossBench 的 Measure 传的是裸驱动
 /// 连接，此处实为直通；BulkOperations 的 CAST 前必须先解包，故保留。</item>
@@ -37,11 +37,11 @@ internal sealed class RepoDbArm : IPerfImplementation
     private const string EnumTable = "perf_enum";
 
     /// <summary>SQLite 单语句参数上限 999（<c>SqLiteDbSetting.MaxParameterCount</c>）× 5 列 = 199 行/批，
-    /// 与 ADO 地板的 <c>BulkSql.EffectiveBatchRows</c> 同口径。</summary>
+    /// 与 ADO 基准的 <c>BulkSql.EffectiveBatchRows</c> 同口径。</summary>
     private const int SqliteBatchRows = 199;
 
     /// <summary>MySQL/PG 的 Core 批宽。PG 的 <c>MaxParameterCount=2098</c>（5 列 → 419 行/批），
-    /// 传 419 避免 RepoDB 内部再按上限拆；MySQL 的 65535 上限下 1000 行/批与 ADO 地板同档。</summary>
+    /// 传 419 避免 RepoDB 内部再按上限拆；MySQL 的 65535 上限下 1000 行/批与 ADO 基准同档。</summary>
     private static int RemoteBatchRows(Dialect d) => d == Dialect.PostgreSql ? 419 : 1000;
 
     private readonly Dialect _dialect;

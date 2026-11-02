@@ -126,7 +126,7 @@ internal static class Measure
     /// <summary>预热次数达 maxIterations/5 后仍须满足的最短预热时长（秒，2026-10-02）。
     /// 原规则只有次数上限：微秒级操作 40 次预热不足 1 ms，JIT 分层（tier0 → 带插桩 tier0 → tier1，
     /// 每级有约 100 ms 静默延迟）在计时段里才完成——三批数据里 SQLite 首个进场的 ADO 臂单行操作
-    /// 在 2000 档比自身 20000 档慢 21~42%，PalORM 臂（第三个进场）0.87~0.98，首档地板被预热
+    /// 在 2000 档比自身 20000 档慢 21~42%，PalORM 臂（第三个进场）0.87~0.98，首档基准被预热
     /// 不足抬高，比值读成"PalORM 快 21~35%"。按时间兜底后各臂各项都在 tier1 代码上计时。</summary>
     private const double MinWarmupSeconds = 0.5;
 
@@ -174,7 +174,7 @@ internal static class Measure
         // （4 s 预算 → 3 次 ≈ 4.1 s）的 13 倍。快操作在次数上限 maxIterations/5 处还远不够
         // JIT 分层完成，故次数到顶后还须满 minWarmupSeconds。硬上限 200000 次
         // （原 maxIterations×100 = 20000，对 1µs 操作 = 20ms，不足以触发 tier-0→tier-1
-        // 提升窗口 ~100ms——实测 QueryAll/SQLite/2000 地板跨批摆 2.7× 由此而来）。
+        // 提升窗口 ~100ms——实测 QueryAll/SQLite/2000 基准跨批摆 2.7× 由此而来）。
         // 200000 × 1µs = 200ms > 100ms 提升窗口，且仍 < 0.5s 预算不拖慢全量。
         int warmupCap = Math.Max(3, maxIterations / 5);
         int warmupHardCap = Math.Max(warmupCap, 200_000);

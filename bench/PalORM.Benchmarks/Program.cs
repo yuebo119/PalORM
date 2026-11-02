@@ -114,7 +114,7 @@ public static class Program
     private const double HealthThreshold = 0.10;
 
     /// <summary>结果库信封（规范 v2 §6）。本夹具不测维度 8（往返计数在 PerfHub），
-    /// RoundTripsPerOp/PreparedReuse 留 0 表示未测；比值以同批次同操作的 ADO_NET 行为地板现算。</summary>
+    /// RoundTripsPerOp/PreparedReuse 留 0 表示未测；比值以同批次同操作的 ADO_NET 行为基准现算。</summary>
     private static void WriteEnvelope(IEnumerable<Summary> summaries, string label)
     {
         List<BenchmarkReport> reports = [.. summaries.SelectMany(static s => s.Reports)];

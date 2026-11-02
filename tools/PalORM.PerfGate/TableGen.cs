@@ -5,9 +5,9 @@ using PalORM.Bench.Shared;
 namespace PalORM.PerfGate;
 
 /// <summary>8+1 组跨库横评表生成器（2026-11-02 用户定标「单源 8+1 重组」）。
-/// <para><b>数据源唯一</b>：CrossBench 最近完整批（8 库 + ADO 地板 = 9 组，同批同轮、两遍反序平均）。
+/// <para><b>数据源唯一</b>：CrossBench 最近完整批（8 库 + ADO 基准 = 9 组，同批同轮、两遍反序平均）。
 /// 此前四组表从 PerfHub 信封取 ADO/Dapper/PalORM、从 CrossBench 批取 FreeSql/RepoDb，同一行
-/// 混两个批次与两套分母；本生成器删除该跨批拼装，所有比值的分母都是同批 ADO 地板。</para>
+/// 混两个批次与两套分母；本生成器删除该跨批拼装，所有比值的分母都是同批 ADO 基准。</para>
 /// <para><b>表格组</b>：表一 CRUD / 表二 批量 / 表三 事务 / 表四 跨方言比值 / 表五 分配 /
 /// 表六 补充读，外加覆盖账本与异常判读。每格两行：主值 + 派生值（时延表 = P/ADO 比值，
 /// 分配表 = 相对 ADO 百分比）。</para>
@@ -22,12 +22,12 @@ internal static class TableGen
     private static readonly string[] TxOps = ["TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback", "EnumInserts"];
     private static readonly string[] ExtraReadOps = ["KeysetPage", "WhereIn", "Count"];
     private static readonly string[] Dialects = ["SQLite", "MySQL", "PostgreSQL"];
-    /// <summary>列序（2026-11-02 用户定标）：地板 → PalORM → Dapper.AOT → RepoDb → EF Core
+    /// <summary>列序（2026-11-02 用户定标）：基准 → PalORM → Dapper.AOT → RepoDb → EF Core
     /// → Dapper → FreeSql → linq2db → SqlSugar。与旧报告（按字母序）不同，改序需同步 AGENTS.md
     /// 列固定条与 docs/性能汇报样例。</summary>
     private static readonly (string Key, string Display)[] Arms =
     [
-        ("ADO_NET", "ADO(地板)"),
+        ("ADO_NET", "ADO(基准)"),
         ("PalORM", "PalORM"),
         ("DapperAot", "Dapper.AOT"),
         ("RepoDb", "RepoDb"),
@@ -51,7 +51,7 @@ internal static class TableGen
         string? file = CrossBenchBatch.LatestFullBatchPath(crossDir);
         if (file is null)
         {
-            Console.Error.WriteLine("[PerfGate] tables: 结果库里没有完整 CrossBench 批（8 库 + ADO 地板 × 三方言 × 两档）");
+            Console.Error.WriteLine("[PerfGate] tables: 结果库里没有完整 CrossBench 批（8 库 + ADO 基准 × 三方言 × 两档）");
             return 1;
         }
 
@@ -89,13 +89,13 @@ internal static class TableGen
         md.AppendLine("**图例**");
         md.AppendLine();
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"- 百分比 = 该组时延 ÷ 同方言同操作同档 ADO 地板 − 1；色标六档（🟢 ≤−30% · 🟩 −29%~−10% · 🔹 −9%~−1% · ⚪ 0% · 🔸 +1%~+9% · 🟧 +10%~+29% · 🟥 ≥+30%）。精确倍数（两位小数）见表四。"));
-        md.AppendLine("- 📌 = 比值 ≥1.50 或 ≤0.67：劣化方向是回归风险，远优方向是地板健全性待核，两者都需人工判读，不等于告警。");
+            $"- 百分比 = 该组时延 ÷ 同方言同操作同档 ADO 基准 − 1；色标六档（🟢 ≤−30% · 🟩 −29%~−10% · 🔹 −9%~−1% · ⚪ 0% · 🔸 +1%~+9% · 🟧 +10%~+29% · 🟥 ≥+30%）。精确倍数（两位小数）见表四。"));
+        md.AppendLine("- 📌 = 比值 ≥1.50 或 ≤0.67：劣化方向是回归风险，远优方向是基准健全性待核，两者都需人工判读，不等于告警。");
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- ⚠ = 判别力弱：该格任一侧 ErrorRatio（标准误/均值）> {NoiseLine * 100:0}%，比值落在噪声带内、不足以支撑结论。"));
         md.AppendLine("- 分配相对 ADO = 该组 AllocatedBytesPerOp ÷ 同行 ADO 分配 − 1；ADO 分配为 0 或缺值时记 —。");
         md.AppendLine("- 明细表第三行 = 分配绝对值（B/op，1024 进制），第四行 = 分配相对 ADO 百分比（与表五/五B 同公式）。");
-        md.AppendLine("- 地板格第二、四行为 —（基准相对自己没有百分比），四行占位保证各列逐行对齐。");
+        md.AppendLine("- 基准格第二、四行为 —（基准相对自己没有百分比），四行占位保证各列逐行对齐。");
         md.AppendLine("- 两遍反序批内 Average（叉评协议）；比值同批推导，不跨批引用。");
         md.AppendLine();
 
@@ -107,7 +107,7 @@ internal static class TableGen
             Console.Error.WriteLine(warning);
         }
 
-        // 数值哨兵（B148 配套，改写适配 8+1 形态）：分配表的非地板格若整批全是 ⚪+0%，
+        // 数值哨兵（B148 配套，改写适配 8+1 形态）：分配表的非基准格若整批全是 ⚪+0%，
         // 说明"相对 ADO"算式坏了（截断/漏算/取错字段），而非真实数据态。
         foreach (string warning in NumericSentinelWarnings(md.ToString()))
         {
@@ -137,12 +137,12 @@ internal static class TableGen
     {
         (int cells, int points, int missing) = Coverage(ix, twoTiers);
         string stamp = ParseBatchStamp(file);
-        md.AppendLine("## 8+1 组跨库横评（CrossBench 单批：ADO 地板 + 8 库）");
+        md.AppendLine("## 8+1 组跨库横评（CrossBench 单批：ADO 基准 + 8 库）");
         md.AppendLine();
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- 数据源：`{Path.GetFileName(file)}`（批次 {stamp}，组数 {Arms.Length}）"));
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-            $"- 口径：三方言 × 两档（{twoTiers[0]:N0}/{twoTiers[^1]:N0}）× 17 操作 × 两遍反序（批内 Average）；比值分母 = 同批 ADO 地板；明细表每格 = 时延 / 时延百分比 / 内存 / 内存百分比，精确倍数见表四"));
+            $"- 口径：三方言 × 两档（{twoTiers[0]:N0}/{twoTiers[^1]:N0}）× 17 操作 × 两遍反序（批内 Average）；比值分母 = 同批 ADO 基准；明细表每格 = 时延 / 时延百分比 / 内存 / 内存百分比，精确倍数见表四"));
         md.AppendLine(string.Create(CultureInfo.InvariantCulture,
             $"- 覆盖：{cells} 格 × {Arms.Length} 组 = {points} 个测量点，实采 {points - missing}，缺 {missing}"));
         if (missing > 0)
@@ -179,7 +179,7 @@ internal static class TableGen
             palormRatios.Sort();
             double median = palormRatios[palormRatios.Count / 2];
             md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-                $"- PalORM 中位比 ADO 地板：{median:F2}（区间 {palormRatios[0]:F2} ~ {palormRatios[^1]:F2}，{palormRatios.Count} 格）"));
+                $"- PalORM 中位比 ADO 基准：{median:F2}（区间 {palormRatios[0]:F2} ~ {palormRatios[^1]:F2}，{palormRatios.Count} 格）"));
         }
 
         md.AppendLine();
@@ -215,7 +215,7 @@ internal static class TableGen
         return (cells, wins, ratios);
     }
 
-    /// <summary>该格最快组（排除地板；至少两组有值才算可比较）。</summary>
+    /// <summary>该格最快组（排除基准；至少两组有值才算可比较）。</summary>
     private static string? FastestArm(
         Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
         string dialect, string op, int tier)
@@ -409,9 +409,9 @@ internal static class TableGen
             string mem = FmtBytes(m.AllocBytes);
             if (arm == Floor || floor is null || floor.MedianUs <= 0)
             {
-                // 地板格同样四行（第二/四行用 — 占位）：行数一致时渲染器的垂直居中
-                // 才能让时延对时延、内存对内存（2026-11-02 用户反馈两行格与四行格错位）。
-                return $"{main}<br>—<br>{mem}<br>—";
+                // 基准格同样四行，第二/四行写 [1.00]（基准相对自己 = 1.00 倍，2026-11-02 用户定标）：
+                // 行数一致时渲染器的垂直居中才能让时延对时延、内存对内存。
+                return $"{main}<br>[1.00]<br>{mem}<br>[1.00]";
             }
 
             // 2026-11-02：明细表第三行内存绝对值、第四行内存相对 ADO 百分比（与表五同公式）。
@@ -425,8 +425,8 @@ internal static class TableGen
         string alloc = FmtBytes(m.AllocBytes);
         if (arm == Floor || floor is null || floor.AllocBytes <= 0)
         {
-            // 分配表地板同样两行（第二行 — 占位），与非地板格行数一致，避免垂直居中错位。
-            return $"{alloc}<br>—";
+            // 分配表基准同样两行，第二行 [1.00]，与非基准格行数一致，避免垂直居中错位。
+            return $"{alloc}<br>[1.00]";
         }
 
         return $"{alloc}<br>{Delta((m.AllocBytes / floor.AllocBytes) - 1)}";
@@ -603,7 +603,7 @@ internal static class TableGen
     }
 
     /// <summary>异常判读（当批推导）：P/ADO ≥ 3× 或 ≤ 0.5× 的格。两侧都列：远优同样要过目
-    /// （地板健全性待核）。不写归因，归因属人判读，报告只负责把格找出来。</summary>
+    /// （基准健全性待核）。不写归因，归因属人判读，报告只负责把格找出来。</summary>
     private static void AppendOutliers(
         StringBuilder md,
         Dictionary<(string, string, int, string), CrossBenchBatch.CrossBenchMeasurement> ix,
@@ -660,7 +660,7 @@ internal static class TableGen
         foreach ((string arm, string dialect, string op, int tier, double ratio) in fast.OrderBy(o => o.Ratio).Take(15))
         {
             md.AppendLine(string.Create(CultureInfo.InvariantCulture,
-                $"- 🟢 {arm} {dialect} {op}@{tier:N0}：{ratio:F2}× ADO（显著快，地板健全性待核）"));
+                $"- 🟢 {arm} {dialect} {op}@{tier:N0}：{ratio:F2}× ADO（显著快，基准健全性待核）"));
         }
 
         md.AppendLine();
@@ -695,7 +695,7 @@ internal static class TableGen
 
     private static bool IsFlagged(double ratio) => ratio is >= 1.5 or <= 0.67;
 
-    /// <summary>判别力弱标注：比值两侧（地板 / 被测臂）任一 ErrorRatio 超线即标——
+    /// <summary>判别力弱标注：比值两侧（基准 / 被测臂）任一 ErrorRatio 超线即标——
     /// 比值的不确定度由两侧共同决定。</summary>
     private static string Weak(CrossBenchBatch.CrossBenchMeasurement? a, CrossBenchBatch.CrossBenchMeasurement? b)
         => (a?.ErrorRatio ?? 0) > NoiseLine || (b?.ErrorRatio ?? 0) > NoiseLine ? " ⚠" : "";
@@ -819,7 +819,7 @@ internal static class TableGen
     private static bool FollowedBySeparator(string[] lines, int i)
         => i + 1 < lines.Length && lines[i + 1].TrimEnd('\r').StartsWith("|---", StringComparison.Ordinal);
 
-    /// <summary>数值哨兵（B148 配套，适配 8+1 形态）：分配表里任一段内所有非地板格都是 ⚪+0%
+    /// <summary>数值哨兵（B148 配套，适配 8+1 形态）：分配表里任一段内所有非基准格都是 ⚪+0%
     /// 即报警。分配逐位相同的概率可忽略，全 0 只可能是算式坏了（截断/漏算/取错字段）。</summary>
     private static List<string> NumericSentinelWarnings(string md)
     {

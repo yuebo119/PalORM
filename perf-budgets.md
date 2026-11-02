@@ -19,10 +19,10 @@
 | 指标 | 预算 | 口径 | 执行 |
 | --- | --- | --- | --- |
 | 批内 P/ADO 时延比 | ≤ 1.30（批量族 + GetAllAsync 为主门禁面） | 同批三臂，per-operation，中位数 | PerfGate tables 自动标色（🟥 ≥+30%） |
-| 偏离基准待看线 | P/ADO ≥ 1.50 或 ≤ 0.67 → 📌 待人工判读（两个方向都过目：劣化或地板缺陷） | 同上 | 同上 |
-| 地板健全性 | 任一 ORM 臂快过 ADO 地板 >10% → 判地板实现缺陷，该轮相关项作废 | 同批 | PerfHub ⚠地板? 门禁 |
+| 偏离基准待看线 | P/ADO ≥ 1.50 或 ≤ 0.67 → 📌 待人工判读（两个方向都过目：劣化或基准缺陷） | 同上 | 同上 |
+| 基准健全性 | 任一 ORM 臂快过 ADO 基准 >10% → 判基准实现缺陷，该轮相关项作废 | 同批 | PerfHub ⚠基准? 门禁 |
 | 分配相对 ADO | 记录带内波动（表五/五B 每格第二行）；单行族带 ~+26~45%（已知分配税），批量族收敛至 ±10% 内 | AllocatedBytesPerOp | 报告表五/五B（8+1 横评） |
-| 地板稳定度 | 地板自身同轮漂移 >18% → 该轮 P/F 作废，判环境态 | 三层判据：分配 > 绝对耗时 > 同轮比值 > 跨轮比值 | B100 纪律 |
+| 基准稳定度 | 基准自身同轮漂移 >18% → 该轮 P/F 作废，判环境态 | 三层判据：分配 > 绝对耗时 > 同轮比值 > 跨轮比值 | B100 纪律 |
 | BDN 微基准 | 27 项阈值内绿（MemoryDiagnoser 受控进程） | 单独套件 | bench 阈值文件 |
 | L0 快线比值 | PalORM/ADO 相对 L0 基线 ≤ +30%（判定窗口为最近 3 个 L0 批次中位数；单批离群被吸收，持续回归需连续 2 批） | 6 操作 × 三方言 × 20000 档，18 键 | `PerfGate check-l0`（`PerfCli l0` 调用） |
 | L0 快线分配 | PalORM AllocBytes 相对 L0 基线 ≤ +20%（确定性指标，不设噪声带） | 同上 | 同上 |
@@ -51,7 +51,7 @@ PalORM 的"热路径" = 物化器（QueryAll/StreamAll 按序号取列）与 SQL
 | 预算项 | 执行载体 | 触发 |
 | --- | --- | --- |
 | 比值/色标/📌 | PerfGate tables（PerfCli report 自动附带） | 每次跑测汇报 |
-| 地板健全性 | PerfHub 报告检查 | 每批 |
+| 基准健全性 | PerfHub 报告检查 | 每批 |
 | 回归自动归因 | perf-bisect（EPSL perf-template/audit/bisect-design.md，设计稿） | 门禁红且复测确认非环境态 |
 | 趋势曲线 | `python curve.py bench/perfhub/results`（EPSL T0.6，已对本仓 268 批跑通） | 节点审计 |
 | 结果登记 latest 新鲜度 | `node ~/.zcode/scripts/eps-perf-check.mjs` + `PerfCli report` 重建 | 每次全量跑测后 |

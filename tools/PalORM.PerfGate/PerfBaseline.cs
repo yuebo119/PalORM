@@ -4,7 +4,7 @@ namespace PalORM.PerfGate;
 
 /// <summary>基线文件模型（schema 1）。
 /// <para>阈值只覆盖**分配字节数**与**相对同轮手写对照的比值**，不含绝对耗时：
-/// 实测同机两次运行的 ADO.NET 地板可从 6.97ms 漂到 10.0ms（43%），绝对时间做门禁必然误报。
+/// 实测同机两次运行的 ADO.NET 基准可从 6.97ms 漂到 10.0ms（43%），绝对时间做门禁必然误报。
 /// 比值在同一次运行内计算，把机器与运行时差异约掉，因此跨机器可比。</para></summary>
 internal sealed class PerfBaseline
 {

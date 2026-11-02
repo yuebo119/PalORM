@@ -7,8 +7,8 @@ using Microsoft.Data.Sqlite;
 namespace UpsertProbe;
 
 /// <summary>B 探针——SQLite 批量形态每行成本实测（2026-10-25，v2 修正口径）。
-/// 形态矩阵（全部对齐 PerfHub 地板纪律「命令与参数池一次建好、跨批只写 Value」）：
-///   MV-Param-INSERT    参数化多值 INSERT（1000 行/批，PalORM/地板现形态）
+/// 形态矩阵（全部对齐 PerfHub 基准纪律「命令与参数池一次建好、跨批只写 Value」）：
+///   MV-Param-INSERT    参数化多值 INSERT（1000 行/批，PalORM/基准现形态）
 ///   Row-Prepared-INSERT 预编译单行 INSERT（一命令 5 参数循环改值，A 方案）
 ///   MV-Literal-INSERT  字面量多值 INSERT（FreeSql TxBulkInsert 参照形态，无参数）
 ///   MV-Param-Upsert-*  参数化多值 ON CONFLICT DO UPDATE（199 行/批，PalORM 现形态）
@@ -229,8 +229,8 @@ internal static class Program
         }
     }
 
-    /// <summary>PalORM/地板现形态：参数化多值。同宽批共享一个命令与参数池（建一次、
-    /// 跨批只写 Value）——对齐地板「命令与参数池一次建好」的纪律，宽批在前窄尾批在后。</summary>
+    /// <summary>PalORM/基准现形态：参数化多值。同宽批共享一个命令与参数池（建一次、
+    /// 跨批只写 Value）——对齐基准「命令与参数池一次建好」的纪律，宽批在前窄尾批在后。</summary>
     private static void RunMultiValueParam(SqliteConnection conn, DbTransaction tran, List<Row> rows, bool upsert)
     {
         int batch = 199; // SQLite 有效批宽：999 参数上限 ÷ 5 列（BulkSql.EffectiveBatchRows 同口径）

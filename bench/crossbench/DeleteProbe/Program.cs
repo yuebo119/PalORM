@@ -8,7 +8,7 @@ namespace DeleteProbe;
 
 /// <summary>C 方案裁决探针——SQLite 批量删除三形态每键成本（2026-10-25）。
 /// 形态矩阵（各形态独立键段，DeleteAsync 全键段，事务包裹）：
-///   Param-IN       参数化 IN 999 键/批（PalORM/地板现形态：每键一个参数对象+绑定）
+///   Param-IN       参数化 IN 999 键/批（PalORM/基准现形态：每键一个参数对象+绑定）
 ///   Literal-IN     字面量内联（FreeSql NoneParameter 真实形态：值拼进 SQL 文本）
 ///   JsonEach-1P    单参数 json_each：DELETE ... WHERE "Id" IN (SELECT value FROM
 ///                  json_each(@ids))，@ids 为 JSON 数组文本（全参数化 + 单绑定）
@@ -114,7 +114,7 @@ internal static class Program
         Console.WriteLine($"{form,-12} {ms,8:F2} ms  {ms * 1000.0 / Keys,6:F2} µs/key  {medianAlloc / Keys,8:F0} B/key");
     }
 
-    /// <summary>参数化 IN（PalORM/地板现形态）：999 键/批，命令与参数池每批建立后跨批复用值。</summary>
+    /// <summary>参数化 IN（PalORM/基准现形态）：999 键/批，命令与参数池每批建立后跨批复用值。</summary>
     private static void RunParamIn(SqliteConnection conn, DbTransaction tran, long keyBase)
     {
         const int batch = 999;

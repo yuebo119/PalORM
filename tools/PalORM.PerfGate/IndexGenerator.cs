@@ -241,7 +241,7 @@ internal static class IndexGenerator
         md.AppendLine();
     }
 
-    /// <summary>关键项速览：只列 PalORM 臂、且同批内有地板的项（比值可比）。
+    /// <summary>关键项速览：只列 PalORM 臂、且同批内有基准的项（比值可比）。
     /// 项名跨夹具不一致（GetByKey / FirstOrDefault&lt;T&gt; / ADO_NET_QueryAll 等），
     /// 故按夹具分组列出，不做跨夹具对齐——对齐是人的判断，不是脚本的。</summary>
     private static void AppendKeyItems(StringBuilder md, List<PerfResultEnvelope> runs)
@@ -265,7 +265,7 @@ internal static class IndexGenerator
                 $"### {r.Harness}（{r.Timestamp} · `{r.Commit}` · 健康度 {Health(r)}）");
             md.AppendLine();
             // 中位 µs 是比值基数（2026-10-02），必须与比值同列呈现；均值保留供判读计时离群。
-            md.AppendLine("| 项 | 方言 | 档位 | 中位 µs | 均值 µs | 比值(对地板) | 分配 B/op | 往返/op | prepared 复用 |");
+            md.AppendLine("| 项 | 方言 | 档位 | 中位 µs | 均值 µs | 比值(对基准) | 分配 B/op | 往返/op | prepared 复用 |");
             md.AppendLine("|---|---|---:|---:|---:|---:|---:|---:|---:|");
             foreach (PerfResultItem i in palorm
                 .OrderBy(static i => i.Dialect, StringComparer.Ordinal)

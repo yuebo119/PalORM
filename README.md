@@ -32,7 +32,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 - **编译期生成**：Roslyn 源生成器为每个 `[Table]` 实体生成 RowFactory、CommandFactory 与三方言 Migration DDL，为 `[Projection]` DTO 生成物化委托，运行时零反射、零 IL Emit。
 - **编译期安全网**：46 条 Roslyn 诊断把缺主键、租户列可空绕过隔离、乐观锁基线为 0、循环内 N+1 等问题拦在构建期，错误可跳转声明位置。
 - **全链路 Native AOT**：SQLite / PostgreSQL / MySQL 三方言 AOT 发布与原生运行全部通过，消费方不需要 TrimmerRootAssembly。
-- **地板级性能**：单行 CRUD 与 ADO.NET 手写地板同量级，批量写按方言自动选择 PG Binary COPY、MySQL LOAD DATA、SQLite 行预编译与 json_each 批删，Web 一请求一会话形态内置会话池。
+- **基准级性能**：单行 CRUD 与 ADO.NET 手写基准同量级，批量写按方言自动选择 PG Binary COPY、MySQL LOAD DATA、SQLite 行预编译与 json_each 批删，Web 一请求一会话形态内置会话池。
 - **企业级横切**：多租户列隔离、乐观锁、软删除、审计拦截器、读写分离、咨询锁、弹性重试与熔断开箱即用。
 - **SQL 资产编译期管理**：`[SqlFile]` 嵌入并校验 .sql，`[SqlTemplate]` 把插值 SQL 常量化，AutoTagging 自动注入“文件:行号 成员”定位注释。
 - **运维与可观测**：健康检查、跨方言统一异常族、OpenTelemetry tracing 与 metrics 内置。
@@ -116,12 +116,12 @@ AOT 选型的核心变量是各库对运行时反射的替代策略：**编译�
 | 臂              | 最快 / 69 格  |
 | --------------- | -------------:|
 | PalORM          | **32**（46%） |
-| ADO.NET（地板） | **31**（45%） |
+| ADO.NET（基准） | **31**（45%） |
 | Dapper          | **4**（6%）   |
 | RepoDb          | **2**（3%）   |
 | FreeSql         | **0**（0%）   |
 
-> P/ADO 中位 **1.00**（1.00 = 贴平手写 SQL 地板），全距 0.40~1.13。
+> P/ADO 中位 **1.00**（1.00 = 贴平手写 SQL 基准），全距 0.40~1.13。
 
 ### 表一：CRUD 单行与读（三方言，两档）
 

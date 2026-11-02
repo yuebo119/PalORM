@@ -250,7 +250,7 @@ internal static class WorkloadHarness
     }
 
     /// <summary>结果库信封（规范 v2 §6）：负载节的指标进 <c>sections</c>，与"项 × 臂"的 items 分开；
-    /// 健康度留 unknown——负载路径的判据是 p95/p99 与吞吐稳定性，不是地板行散布。</summary>
+    /// 健康度留 unknown——负载路径的判据是 p95/p99 与吞吐稳定性，不是基准行散布。</summary>
     private static void WriteEnvelope(IReadOnlyList<WorkloadTierResult> tiers, WorkloadOptions options)
     {
         var envelope = new PerfResultEnvelope

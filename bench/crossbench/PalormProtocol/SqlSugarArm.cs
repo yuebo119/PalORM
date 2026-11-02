@@ -21,7 +21,7 @@ internal interface ISeparateTableArm
 /// <item><b>映射</b>：ConfigureExternalServices 的 EntityNameService/EntityService 零特性
 /// Fluent 配置（SqlSugar 文档对"无法加特性的 POCO"的标准做法）——S1Row 固定映射共享名
 /// perf_s1（属性名即列名，Id 主键非自增）；枚举行用臂内 SsEnumRow（Status 为 string 列，
-/// 每行 ToString 转换——SqlSugar 无官方枚举→字符串列开关，ADO/Dapper 地板同形）。
+/// 每行 ToString 转换——SqlSugar 无官方枚举→字符串列开关，ADO/Dapper 基准同形）。
 /// <b>映射名必须固定</b>：SqlSugar 实体映射按类型做进程级静态缓存（探针实证：第二个
 /// client 复用第一个 client 的表名），映射随方言变化会把前一方言的名字泄漏给后一方言。
 /// 表名差异用查询/写入期的 <c>.AS()</c>/<c>.As()</c> 覆写表达（五条写路径 + 查询全支持，
@@ -137,7 +137,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparate
     };
 
     /// <summary>枚举行臂内实体——Status 落 TEXT（字符串存储），转换成本显式计入
-    ///（与 ADO 地板逐行 ToString 同形）。</summary>
+    ///（与 ADO 基准逐行 ToString 同形）。</summary>
     internal sealed class SsEnumRow
     {
         public long Id { get; set; }
@@ -377,7 +377,7 @@ internal sealed class SqlSugarImpl : IPerfImplementation, IDisposable, ISeparate
         => throw new NotSupportedException("SessionBatch 不在本次子集内");
 
     /// <summary>枚举列事务内逐条插入——SsEnumRow 每行 ToString 转换 + Insertable 单行
-    ///（与 ADO/Dapper 地板形态同构）。</summary>
+    ///（与 ADO/Dapper 基准形态同构）。</summary>
     public async Task EnumInsertsAsync(DbConnection conn, IReadOnlyList<EnumRow> rows, CancellationToken ct)
     {
         try
