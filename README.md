@@ -367,6 +367,12 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 
 </div>
 
+## 🤖 AI 代码声明
+
+本项目的全部代码均由 AI 生成。
+
+这是一个实验性质项目，不建议在生产环境使用。
+
 ## 📄 许可证
 
 [Apache-2.0](LICENSE)
