@@ -208,7 +208,15 @@ internal static partial class Program
                                     budgetSeconds: op.Budget,
                                     scale: globalScale,
                                     warmupScale: op.WarmupScale,
-                                    requireWarmupFloor: rows == tiers[0]).ConfigureAwait(false);
+                                    // JIT 分层下限只对「该方法的首次测量」有意义：它按 (方法, 实现)
+                                    // 只发生一次，即 pass 0 的最小档。pass 1 与 20000 档跑的是已在
+                                    // tier1 上的同一方法，再付 0.5s 纯属重复（2026-11-02 实测
+                                    // 每次 0.5s × 342 个格 ≈ 2.3 分钟）。
+                                    requireWarmupFloor: rows == tiers[0] && pass == 0,
+                                    // 探针用预热末段中位数替代：单次探针受首调用冷态影响可慢 40%
+                                    // （实测 QueryAll p0 迭代数 97 对 p1 的 148），既高估预算又
+                                    // 多付一次被测操作。PerfHub 侧同名参数的 A/B 见 Measure 文档。
+                                    estimateFromWarmup: true).ConfigureAwait(false);
                                 results.Add(m);
                                 Console.WriteLine(
                                     $"p{pass} {op.Name,-16} {impl.Name,-9} {m.MedianNs / 1000.0,10:F1} us  "
@@ -753,6 +761,18 @@ internal static partial class Program
 
     private static readonly string[] LowercaseColumns = ["id", "name", "qty", "price", "marker"];
 
+    /// <summary>快照播种的每语句行数：5 列 × 200 = 1000 个参数，低于 SQLite 3.32+ 的
+    /// 32766 上限，也远低于 MySQL/PG 的单语句参数上限。</summary>
+    private const int SeedRowsPerStatement = 200;
+
+    /// <summary>快照播种（计时区外）：按主键升序分块写多值 INSERT，整批同一事务。
+    /// <para><b>为什么分块</b>：32 万行逐行 = 32 万次往返，MySQL 与 PG 各约 50 秒，两档合计
+    /// 占每批约 2.4 分钟；分块后降到约 1600 次往返（2026-11-02 实测 0.24ms/行）。</para>
+    /// <para><b>必须保持的两个不变量</b>：行内容（Dataset.Seed 公式）与行序（主键升序）。
+    /// 快照的物理行序决定恢复时 INSERT..SELECT 的写入顺序，进而决定被测表 perf_s1 的页面
+    /// 布局与读缓存局部性；改顺序就是改测量条件。事务边界同样保持整批一个事务。</para>
+    /// <para>被测表本身不由本方法灌入：perf_s1 仍由 <see cref="RestoreFromAsync"/> 的
+    /// DROP+CREATE+INSERT..SELECT 重建，恢复路径未改动。</para></summary>
     private static async Task InsertRowsAsync(
         DbConnection conn, Dialect dialect, string table, IReadOnlyList<S1Row> rows)
     {
@@ -762,24 +782,49 @@ internal static partial class Program
         await using DbTransaction tran = await conn.BeginTransactionAsync().ConfigureAwait(false);
         await using DbCommand cmd = conn.CreateCommand();
         cmd.Transaction = tran;
-        cmd.CommandText = $"INSERT INTO {Q(dialect, table)} ({columns}) VALUES (@Id,@Name,@Qty,@Price,@Marker)";
-        DbParameter pId = AddParameter(cmd, "@Id");
-        DbParameter pName = AddParameter(cmd, "@Name");
-        DbParameter pQty = AddParameter(cmd, "@Qty");
-        DbParameter pPrice = AddParameter(cmd, "@Price");
-        DbParameter pMarker = AddParameter(cmd, "@Marker");
-        foreach (S1Row row in rows)
+        var sql = new System.Text.StringBuilder(SeedRowsPerStatement * 96);
+        for (int start = 0; start < rows.Count; start += SeedRowsPerStatement)
         {
-            pId.Value = row.Id;
-            pName.Value = row.Name;
-            pQty.Value = row.Qty;
-            pPrice.Value = row.Price;
-            pMarker.Value = row.Marker;
+            int count = Math.Min(SeedRowsPerStatement, rows.Count - start);
+            cmd.Parameters.Clear();
+            sql.Clear();
+            sql.Append("INSERT INTO ").Append(Q(dialect, table)).Append(" (").Append(columns).Append(") VALUES ");
+            for (int i = 0; i < count; i++)
+            {
+                if (i > 0)
+                {
+                    sql.Append(',');
+                }
+
+                string prefix = ParamPrefix(i);
+                sql.Append('(')
+                    .Append(prefix).Append("Id,")
+                    .Append(prefix).Append("Name,")
+                    .Append(prefix).Append("Qty,")
+                    .Append(prefix).Append("Price,")
+                    .Append(prefix).Append("Marker)");
+            }
+
+            cmd.CommandText = sql.ToString();
+            for (int i = 0; i < count; i++)
+            {
+                S1Row row = rows[start + i];
+                string prefix = ParamPrefix(i);
+                AddParameter(cmd, prefix + "Id").Value = row.Id;
+                AddParameter(cmd, prefix + "Name").Value = row.Name;
+                AddParameter(cmd, prefix + "Qty").Value = row.Qty;
+                AddParameter(cmd, prefix + "Price").Value = row.Price;
+                AddParameter(cmd, prefix + "Marker").Value = row.Marker;
+            }
+
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 
         await tran.CommitAsync().ConfigureAwait(false);
     }
+
+    private static string ParamPrefix(int index)
+        => "@p" + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + "_";
 
     private static DbParameter AddParameter(DbCommand cmd, string name)
     {
@@ -806,22 +851,26 @@ internal static partial class Program
         Func<DbConnection, IPerfImplementation, Task>? Prepare = null,
         bool MinTierOnly = false)
     {
-        /// <summary>计时窗预算（秒）。慢操作表（2026-10-25 时间优化轮）：事务族与
-        /// Bulk@20000 族的每操作中位在 8~104ms——1.5s 窗产出 14~190 次迭代，其中位数
-        /// 的批间稳定性由 fsync/服务端主导（批内 err 普遍 &lt;2%），0.6s 窗（≥5 次采样，
-        /// 引擎下限 3 次兜底）不损失判别力。快操作不受预算影响（迭代数在 maxIterations
-        /// 钳制处收敛，预算从不生效）。A/A 验证：与基线 v3 逐格噪声带比对（见 README）。</summary>
+        /// <summary>计时窗预算（秒）。慢操作表（2026-10-25 起）：事务族与三项批量
+        /// （BulkInsert/BulkUpdate/UpsertBatch）的每操作中位在 8~104ms，1.5s 窗产出 14~190 次
+        /// 迭代，其中位数的批间稳定性由 fsync/服务端主导（批内 err 普遍 &lt;2%），0.6s 窗
+        /// （≥5 次采样，引擎下限 3 次兜底）不损失判别力。快操作不受预算影响（迭代数在
+        /// maxIterations 钳制处收敛，预算从不生效）。
+        /// <para><b>2026-11-02 修正死分支</b>：原写法是 <c>Group switch { "Bulk" =&gt; 0.6 }</c>，
+        /// 但三项批量的 Group 自建文件起一直是 CRUD，该分支永不命中，0.6s 从未生效
+        /// （实测 20000 档隐含计时窗中位 1.46s）。改为按 Name 判定后回到文档与 A/A 验证的 0.6s。
+        /// 同轮把 QueryAll/GetAllAsync/BulkDelete 从 1.5s 收到 0.75s：三者中位 9~35ms，
+        /// 1.5s 窗产出 40~160 次迭代，0.75s 仍有 20~80 次。</para></summary>
         public double Budget => Group switch
         {
             "Transaction" => 0.6,
-            "Bulk" when Name is "BulkInsert" or "BulkUpdate" or "UpsertBatch" => 0.6,
-            // BulkDelete@20000 受预算轻度约束（8.8ms→170 次），但其 prepare 重播 200k 行
-            // 是本项时间大头，计时段省 0.9s 占比小——维持全预算保采样量
+            _ when Name is "BulkInsert" or "BulkUpdate" or "UpsertBatch" => 0.6,
+            _ when Name is "QueryAll" or "GetAllAsync" or "BulkDelete" => 0.75,
             _ => 1.5,
         };
 
-        /// <summary>慢操作族的预热缩放（0.75s × 0.4 = 0.3s，≥3 次预热下限由引擎兜底；
-        /// 首档 JIT 基准 0.5s 不受 warmupScale 影响，属正当成本）。</summary>
-        public double WarmupScale => Budget == 0.6 ? 0.4 : 1.0;
+        /// <summary>慢操作族的预热缩放：全局 0.375s × 0.8 = 0.3s，即 2026-10-25 A/A 已验证的时长。
+        /// 不跟着全局减半一起缩，避免在未验证的点上继续压低。首档 JIT 下限 0.5s 不受本系数影响。</summary>
+        public double WarmupScale => Budget <= 0.6 ? 0.8 : 1.0;
     }
 }

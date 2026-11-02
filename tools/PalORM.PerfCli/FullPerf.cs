@@ -82,10 +82,12 @@ internal static class FullPerf
         // 2026-09-30 全面性能轮实测（修复）：BDN filter 不能带 bash 单引号——ProcessStartInfo
         // 参数串不剥引号（bash 才剥），BDN 收到字面引号报 typo 且 filter 全空；退出码必须接住，
         // 否则 BDN 失败被吞、推迟到门禁 FATAL"结果目录不存在"才暴露（B104 家族）。
+        // 2026-11-02 降参 3/5 → 2/3：门禁三条阈值里，分配（+20%）与分配比（+10%）都是确定性量，
+        // 与迭代次数无关；耗时比（+30%）是同轮比值且容差宽。省约 40~60 秒。
         int bdnExit = Perf.RunFiltered("dotnet",
             $"run --project \"{benchDir}\" -c Release --no-build -- " +
             "--filter *CrudBenchmarks* *OrmComparisonBenchmarks* " +
-            "--launchCount 1 --warmupCount 3 --iterationCount 5 --exporters json",
+            "--launchCount 1 --warmupCount 2 --iterationCount 3 --exporters json",
             Path.Combine(logDir, "bdn.log"), "Global total");
         // B131（2026-10-04 实测）：BDN filter 失配（含 glob 展开形态）时进交互/打印清单后仍退 0——
         // RunFiltered 第四参是控制台过滤正则不是失败判据，只看退出码会把零执行报成 OK。

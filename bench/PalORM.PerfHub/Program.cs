@@ -1542,13 +1542,16 @@ internal static class Program
     /// <para><b>2026-10-24 全面减半</b>（阶段 2 T2）：同时段 A/B 证据（0.5 倍 vs 1.0 倍
     /// 逐项中位偏差 7.6% / p95 28.8%，环境漂移本身 8.1% / 34.4%；0.25 倍出现 9 项迭代下限）
     /// 支持 0.5 倍作为默认。Build 不缩（亚微秒级、受 2000 次上限约束，缩预算无收益）；
-    /// 并发仍取 1.5 s（比探针的 1.0 s 保守一档，p95/p99 只记录不门禁但仍要样本量）。</para></summary>
+    /// 并发仍取 1.5 s（比探针的 1.0 s 保守一档，p95/p99 只记录不门禁但仍要样本量）。</para>
+    /// <para><b>2026-11-02 批量族 2.0 → 0.75 s</b>：同一批操作在 CrossBench 侧用 0.6 s 且
+    /// 2026-10-25 的 A/A 通过逐格噪声带比对，2.0 s 是两套夹具之间遗留的不一致。
+    /// 该族每操作中位 8~104 ms，0.75 s 仍有 7~90 次采样，引擎下限 3 次兜底。</para></summary>
     private static double BudgetSeconds(string operation) => operation switch
     {
         // 纯 CPU 构建——亚微秒级，1s 预算自然收敛到数千次迭代（上限 2000）
         "BuildGetByKeySql" or "BuildComplexQuerySql" => 1.0,
-        // 批量为档位行数——每次成本高，给足 2s 让中位数有足够样本（原 4s）
-        "BulkInsert" or "BulkUpdate" or "BulkDelete" or "TxBulkInsert" or "UpsertBatch" => 2.0,
+        // 批量族为档位行数——每次成本高，0.75s 窗产出 7~90 次采样
+        "BulkInsert" or "BulkUpdate" or "BulkDelete" or "TxBulkInsert" or "UpsertBatch" => 0.75,
         "TxRollback" or "WideQueryAll" => 1.0,
         _ => 0.75
     };

@@ -74,7 +74,10 @@ dotnet run --project bench/crossbench/PalormProtocol -c Release -- --sql-audit -
 | 项 | 值 | 说明 |
 |---|---|---|
 | 臂序 | 每操作两遍反序（p0：A,D,R,F,P；p1 反序），聚合取两遍中位 | 消除臂顺序相位；**不可减为单遍**（MySQL 读族臂序相位 1.55× 事件在案） |
-| 慢操作预算表 | Transaction 族与 Bulk 三项（Insert/Update/Upsert）计时窗 1.5→0.6s、预热 ×0.4（2026-10-25 A/A 验证与基线 v3 逐格噪声带一致） | 快操作不受影响（迭代数在 maxIterations 钳制处收敛，预算从不生效）；中位稳定性由 fsync/服务端主导（批内 err 普遍 <2%） |
+| 时间预算 | 事务族与三项批量（BulkInsert/BulkUpdate/UpsertBatch）计时窗 0.6s、预热 0.3s；QueryAll/GetAllAsync/BulkDelete 0.75s；其余 1.5s、预热 0.375s | 快操作不受预算影响（迭代数在 maxIterations 钳制处收敛）。2026-11-02 修死分支：原 `Group switch { "Bulk" => 0.6 }` 永不命中（三项批量的 Group 一直是 CRUD），实测 20000 档隐含计时窗中位 1.46s |
+| JIT 预热下限 | 0.5s，只作用于最小档的 pass 0 | 该下限按（方法, 实现）只具有一次性意义；pass 1 与 20000 档跑的是已在 tier1 的同一方法，再付 0.5s 属重复（2026-11-02 起；此前 342 个格每次多付 0.5s） |
+| 迭代数估计 | 预热末段 8 次样本的中位数，不另跑探针 | 单次探针受首调用冷态影响可慢 40%，既高估单次耗时又压低迭代数（实测 QueryAll p0 97 对 p1 148）；PerfHub 侧同名参数已有 A/B |
+| 快照播种 | 多值 INSERT（200 行/语句），整批一个事务，主键升序 | 计时区外。行内容与行序不变，恢复后 `perf_s1` 的页面布局与读缓存局部性因此不变；逐行版在 MySQL/PG 各花约 50 秒/档 |
 | RepoDB 臂 | FluentMapper 零特性映射 + 枚举 PropertyHandler；批量按操作取优：Insert/Update/Merge 走官方 `*.BulkOperations`（MySQL LOAD DATA / PG COPY，经 pseudo 暂存表），Delete 走 Core `DeleteAll`（IN），SQLite 全部走 Core | 详见 RepoDbArm.cs 注释与 ADR-S |
 | RepoDB 跨方言隔离 | 建臂时清空七个全局缓存（`CommandTextCache` + 六个 `ExecutionContextCache`）——RepoDB 缓存键不含 provider，同进程混用多方言会让后跑的方言命中先到方言的 SQL 与参数绑定委托（实测 MySQL 拿到 SQLite 的方括号 SQL 报语法错、`MySqlParameter` 强转 `SqliteParameter` 抛 InvalidCastException） | ADR-S D6；单方言冒烟不复现，**全量批必查** |
 | FreeSql 臂 | Fluent `ConfigEntity` 原生实体、`UseNoneCommandParameter(true)`、provider 批量 API；读走 `Select<T>` 表达式管线（ORM 层口径） | 详见 arm 内注释与 ADR-Q/R |
