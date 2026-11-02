@@ -125,20 +125,6 @@ Console.WriteLine("   >80% = 高（绿）  60-80% = 中（黄）  <60% = 低（�
 Console.WriteLine("═══════════════════════════════════════════════════════════════");
 return strykerExit;
 
-/// <summary>变异健康指标（MUT-3）。EffectiveMutants = Killed+Survived+Timeout——
-/// 只有这三个状态代表"测试真正执行过该变异体"。</summary>
-sealed record MutationHealth(
-    int Killed,
-    int Survived,
-    int Timeout,
-    int NoCoverage,
-    int Ignored,
-    int CompileError,
-    int RuntimeError,
-    int Total)
-{
-    public int EffectiveMutants => Killed + Survived + Timeout;
-}
 
 static MutationHealth ReadLatestHealth(string testsDir)
 {
@@ -188,33 +174,21 @@ static MutationHealth ReadLatestHealth(string testsDir)
 /// <summary>写 job summary 与 health JSON。GITHUB_STEP_SUMMARY 缺失时只打印（本地运行）。</summary>
 static void WriteHealthReport(string testsDir, string target, MutationHealth health)
 {
-    string summary =
-        $"## 变异测试健康指标（{target}）
-"
-        + $"
-"
-        + $"| 指标 | 数量 |
-"
-        + $"|---|---:|
-"
-        + $"| **effectiveMutants**（Killed+Survived+Timeout） | **{health.EffectiveMutants}** |
-"
-        + $"| Killed | {health.Killed} |
-"
-        + $"| Survived | {health.Survived} |
-"
-        + $"| Timeout | {health.Timeout} |
-"
-        + $"| NoCoverage | {health.NoCoverage} |
-"
-        + $"| Ignored | {health.Ignored} |
-"
-        + $"| CompileError | {health.CompileError} |
-"
-        + $"| RuntimeError | {health.RuntimeError} |
-"
-        + $"| Total | {health.Total} |
-";
+    // 换行用 Environment.NewLine 拼接：字符串字面量内直接断行会 CS1010（2026-11-02 CI 实测）。
+    static string Row(string label, string value) => $"| {label} | {value} |" + Environment.NewLine;
+    string summary = "## 变异测试健康指标（" + target + "）" + Environment.NewLine
+        + Environment.NewLine
+        + "| 指标 | 数量 |" + Environment.NewLine
+        + "|---|---:|" + Environment.NewLine
+        + Row("**effectiveMutants**（Killed+Survived+Timeout）", $"**{health.EffectiveMutants}**")
+        + Row("Killed", $"{health.Killed}")
+        + Row("Survived", $"{health.Survived}")
+        + Row("Timeout", $"{health.Timeout}")
+        + Row("NoCoverage", $"{health.NoCoverage}")
+        + Row("Ignored", $"{health.Ignored}")
+        + Row("CompileError", $"{health.CompileError}")
+        + Row("RuntimeError", $"{health.RuntimeError}")
+        + Row("Total", $"{health.Total}");
 
     Console.WriteLine();
     Console.WriteLine($"effectiveMutants={health.EffectiveMutants} "
@@ -273,4 +247,19 @@ static string FindRepoRoot()
     Console.Error.WriteLine("::error::未找到仓库根（PalORM.slnx）——请在仓库内运行");
     Environment.Exit(2);
     return "";
+}
+
+/// <summary>变异健康指标（MUT-3）。EffectiveMutants = Killed+Survived+Timeout——
+/// 只有这三个状态代表"测试真正执行过该变异体"。</summary>
+sealed record MutationHealth(
+    int Killed,
+    int Survived,
+    int Timeout,
+    int NoCoverage,
+    int Ignored,
+    int CompileError,
+    int RuntimeError,
+    int Total)
+{
+    public int EffectiveMutants => Killed + Survived + Timeout;
 }
