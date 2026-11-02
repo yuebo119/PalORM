@@ -319,12 +319,13 @@ else
     Fail($"D15 站内锚点失效（{string.Join("；", anchorBad)}）——按标题 slug 修正（去 emoji、空格转 -）");
 
 // ── D16: README 性能表二与模板对账（2026-11-02 改版）──
-// 提取方括号倍数：`[🟩0.71]`、`**[🟥2.10]**`、`[1.00]`。方括号内允许色标与加粗标记，
-// 只取末尾两位小数；Markdown 链接的方括号是文字，不会被这条正则命中。
+// 提取 MathJax 着色倍数：`$\color{#65a30d}{0.71}$`。2026-11-02 用户定标：去掉 emoji 与方括号，
+// 倍数改用字体颜色表达档位（GitHub 会剥离 span/font 的样式，MathJax 的 \color 实测可渲染）。
+// 基准格写纯 `1.00`，不参与提取；两侧计数比较，防单边修改。
 List<string> ExtractBracketRatios(string text)
 {
     var result = new List<string>();
-    foreach (Match m in Regex.Matches(text, @"\[[^\[\]\d]*?(\d\.\d{2})\]"))
+    foreach (Match m in Regex.Matches(text, @"\\color\{#[0-9a-fA-F]{6}\}\{(\d+(?:\.\d{2}))\}"))
     {
         result.Add(m.Groups[1].Value);
     }
