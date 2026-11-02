@@ -69,7 +69,7 @@ internal static class FullPerf
         // 不能依赖本脚本的进程内变量
         File.WriteAllText(Path.Combine(reportDir, "last-startup-status.txt"), startup, new UTF8Encoding(false));
 
-        Perf.Step("[4/6] BDN 微基准（维度 1，与门禁同参 1/3/5，约 5 分钟）");
+        Perf.Step("[4/6] BDN 微基准（维度 1，与门禁同参 1/2/3）");
         stepSw = System.Diagnostics.Stopwatch.StartNew();
         // 先清结果目录——混入陈旧报告会让门禁读到截断/异构 JSON（实测先例）
         var bdnArtifacts = Path.Combine(root, "BenchmarkDotNet.Artifacts");
@@ -105,7 +105,7 @@ internal static class FullPerf
             Perf.Err($"=== BDN 零执行（filter 失配/交互模式退出/job 构建失败，见 {Path.Combine(logDir, "bdn.log")}）===");
             bdnExit = 1;
         }
-        RecordInner("BDN 微基准（门禁同参 1/3/5）", stepSw);
+        RecordInner("BDN 微基准（门禁同参 1/2/3）", stepSw);
 
         Perf.Step("[5/6] 门禁判定");
         stepSw = System.Diagnostics.Stopwatch.StartNew();

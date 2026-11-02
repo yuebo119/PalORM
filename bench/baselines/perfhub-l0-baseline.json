@@ -1,7 +1,7 @@
 {
   "Schema": 1,
-  "Date": "2026-10-24",
-  "Environment": "L0 \u5FEB\u7EBF\u57FA\u7EBF\uFF1A\u9010\u952E\u53D6\u6700\u8FD1 3 \u4E2A verify-l0 \u6279\u6B21\u7684\u4E2D\u4F4D\u6570\uFF082026-10-24 05:43:00 \u002B08:00\u30012026-10-24 05:39:22 \u002B08:00\u30012026-10-24 05:36:13 \u002B08:00\uFF09",
+  "Date": "2026-11-02",
+  "Environment": "L0 \u5FEB\u7EBF\u57FA\u7EBF\uFF1A\u9010\u952E\u53D6\u6700\u8FD1 3 \u4E2A verify-l0 \u6279\u6B21\u7684\u4E2D\u4F4D\u6570\uFF082026-11-02 18:24:49 \u002B08:00\u30012026-11-02 18:22:37 \u002B08:00\u30012026-11-02 18:20:24 \u002B08:00\uFF09",
   "Thresholds": {
     "RatioDelta": 0.3,
     "AllocDelta": 0.2
@@ -12,216 +12,216 @@
       "Name": "GetAllAsync",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 1.0604578218150849,
+      "Ratio": 1.0003052631578948,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 10233.7,
-      "MeanUs": 11614.201428571427,
-      "AllocBytes": 3119185
+      "MedianUs": 9553.2,
+      "MeanUs": 11019.698734177215,
+      "AllocBytes": 3052513
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9841269841269841,
+      "Ratio": 0.9833333333333333,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 6.4,
-      "MeanUs": 6.611999999999987,
-      "AllocBytes": 2255
+      "MedianUs": 6,
+      "MeanUs": 6.252999999999993,
+      "AllocBytes": 2275
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9694216031872968,
+      "Ratio": 1.0052785345908852,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 28992.9,
-      "MeanUs": 29462.11081081082,
-      "AllocBytes": 18475376
+      "MedianUs": 26623.9,
+      "MeanUs": 26957.937037037034,
+      "AllocBytes": 17818302
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9943281499945265,
+      "Ratio": 0.9748978925556511,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 173486.1,
-      "MeanUs": 175940.3727272727,
-      "AllocBytes": 15546665
+      "MedianUs": 29869.7,
+      "MeanUs": 32157.399999999998,
+      "AllocBytes": 17991742
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.533800194655451,
+      "Ratio": 1.0203023028577634,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 46774,
-      "MeanUs": 46229.06,
-      "AllocBytes": 2809168
+      "MedianUs": 8458,
+      "MeanUs": 9365.089999999998,
+      "AllocBytes": 2124917
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "SQLite",
       "Tier": 20000,
-      "Ratio": 0.9530785604514934,
+      "Ratio": 1.018122497404716,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 176305.5,
-      "MeanUs": 175321.76666666666,
-      "AllocBytes": 15609413
+      "MedianUs": 27506.2,
+      "MeanUs": 28124.31923076923,
+      "AllocBytes": 17982454
     },
     {
       "Harness": "perfhub",
       "Name": "GetAllAsync",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.004298554122704,
+      "Ratio": 0.9909338404824864,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 8884.9,
-      "MeanUs": 10598.80119047619,
-      "AllocBytes": 3890481
+      "MedianUs": 7418.6,
+      "MeanUs": 11289.537142857142,
+      "AllocBytes": 3874880
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9570815450643777,
+      "Ratio": 1.1704897706137631,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 263.9,
-      "MeanUs": 265.09550000000013,
-      "AllocBytes": 5774
+      "MedianUs": 192.4,
+      "MeanUs": 197.293,
+      "AllocBytes": 5385
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.1488679930350045,
+      "Ratio": 1.0345824499913987,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 117707.5,
-      "MeanUs": 116713.6882352941,
-      "AllocBytes": 14867302
+      "MedianUs": 83595.4,
+      "MeanUs": 84853.9,
+      "AllocBytes": 14346448
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 1.6763405955639676,
+      "Ratio": 1.007539182601497,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 148262.1,
-      "MeanUs": 171883.56666666665,
-      "AllocBytes": 5172709
+      "MedianUs": 56533.7,
+      "MeanUs": 57554.654545454556,
+      "AllocBytes": 4701119
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.8977163625191583,
+      "Ratio": 0.9518871786474538,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 102852.8,
-      "MeanUs": 150175.14999999997,
-      "AllocBytes": 3937932
+      "MedianUs": 69758.1,
+      "MeanUs": 64630.35999999999,
+      "AllocBytes": 3668833
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "MySQL",
       "Tier": 20000,
-      "Ratio": 0.9523771585526032,
+      "Ratio": 1.0572646547972062,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 346665,
-      "MeanUs": 364180.825,
-      "AllocBytes": 13983748
+      "MedianUs": 77975.7,
+      "MeanUs": 77396.16666666666,
+      "AllocBytes": 13177610
     },
     {
       "Harness": "perfhub",
       "Name": "GetAllAsync",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0051237951915153,
+      "Ratio": 1.0429114389635865,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 5701.7,
-      "MeanUs": 7374.123880597014,
-      "AllocBytes": 2270050
+      "MedianUs": 5103.8,
+      "MeanUs": 6466.678676470588,
+      "AllocBytes": 2262412
     },
     {
       "Harness": "perfhub",
       "Name": "GetByKey",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9585585585585585,
+      "Ratio": 0.9782718544719555,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 266,
-      "MeanUs": 269.4860000000001,
-      "AllocBytes": 4110
+      "MedianUs": 193.6,
+      "MeanUs": 199.82450000000014,
+      "AllocBytes": 3688
     },
     {
       "Harness": "perfhub",
       "Name": "BulkUpdate",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 1.0523023941702816,
+      "Ratio": 0.9568626995544729,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 84274.9,
-      "MeanUs": 85232.55999999998,
-      "AllocBytes": 4469963
+      "MedianUs": 67799.6,
+      "MeanUs": 68263.12999999999,
+      "AllocBytes": 4284308
     },
     {
       "Harness": "perfhub",
       "Name": "BulkInsert",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.9585891837420222,
+      "Ratio": 0.9983626562041428,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 29236.3,
-      "MeanUs": 30256.935555555563,
-      "AllocBytes": 3469751
+      "MedianUs": 19778.2,
+      "MeanUs": 22493.242857142857,
+      "AllocBytes": 3414362
     },
     {
       "Harness": "perfhub",
       "Name": "BulkDelete",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.373359284675646,
+      "Ratio": 0.45575516999577625,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 18864.1,
-      "MeanUs": 17846.86,
-      "AllocBytes": 856000
+      "MedianUs": 11114,
+      "MeanUs": 10552.55,
+      "AllocBytes": 835531
     },
     {
       "Harness": "perfhub",
       "Name": "UpsertBatch",
       "Dialect": "PostgreSQL",
       "Tier": 20000,
-      "Ratio": 0.7016466799564993,
+      "Ratio": 0.6584558605625435,
       "Incomparable": false,
       "Note": "",
-      "MedianUs": 166200.5,
-      "MeanUs": 159506.34999999998,
-      "AllocBytes": 4841344
+      "MedianUs": 94328.9,
+      "MeanUs": 93028.93,
+      "AllocBytes": 4517776
     }
   ]
 }

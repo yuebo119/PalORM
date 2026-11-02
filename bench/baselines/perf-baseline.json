@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "version": "3affd97",
-  "date": "2026-10-25",
-  "scope": "\u91CD\u542F\u540E\u57FA\u7EBF\u91CD\u5EFA\uFF1A\u5438\u6536 A\u002BB\u002BE\uFF08SQLite \u884C\u9884\u7F16\u8BD1\u6279\u63D2/\u6279 upsert \u002B json_each \u6279\u5220\uFF0C\u4E09\u81C2\u5951\u7EA6\u5BF9\u9F50\uFF09\u4E0E\u5BB9\u5668\u91CD\u542F\u73AF\u5883\u5F52\u4E00\uFF08MySQL \u5E76\u53D1\u6863\uFF09\uFF1BBDN \u4E24\u8F6E\u5206\u914D\u7B7E\u540D\u9010\u4F4D\u590D\u73B0\uFF08-11.4/-13.1/-13.9%\uFF09",
+  "version": "fad86d4",
+  "date": "2026-11-02",
+  "scope": "2026-11-02 \u5168\u91CF\u91CD\u5EFA\uFF1A\u6027\u80FD\u6D4B\u8BD5\u4E03\u9879\u538B\u7F29\u540E\u57FA\u7EBF\uFF08BDN \u540C\u53C2 1/2/3\uFF1BCrossBench/PerfHub \u9884\u70ED 0.375s\u3001\u6279\u91CF\u65CF\u9884\u7B97 0.75s\u3001JIT \u5730\u677F\u4EC5 pass 0\uFF09",
   "environment": {
     "os": "Windows 10 (10.0.19045.7725/22H2/2022Update)",
     "processor": "AMD Ryzen 9 8945HX with Radeon Graphics",
     "runtime": ".NET 11.0.0 (11.0.0-rc.2.26504.105, 11.0.26.50505)",
-    "benchmark_dot_net": "0.16.0-develop (2026-10-25)"
+    "benchmark_dot_net": "0.16.0-develop (2026-11-02)"
   },
   "thresholds": {
     "allocated_pct": 20,
@@ -19,7 +19,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_Delete",
       "allocated_bytes": 1784,
-      "median_ns": 26354.9,
+      "median_ns": 26676.8,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -27,7 +27,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_GetByKey",
       "allocated_bytes": 1584,
-      "median_ns": 21913,
+      "median_ns": 22122.1,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -35,7 +35,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_Insert",
       "allocated_bytes": 1384,
-      "median_ns": 24083.4,
+      "median_ns": 23312.2,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -43,7 +43,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_QueryAll",
       "allocated_bytes": 1360400,
-      "median_ns": 4105818.8,
+      "median_ns": 4069684.4,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -51,7 +51,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_Update",
       "allocated_bytes": 1616,
-      "median_ns": 20977.7,
+      "median_ns": 20718.6,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -59,7 +59,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_Upsert",
       "allocated_bytes": 1008,
-      "median_ns": 21653,
+      "median_ns": 21399.2,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -67,7 +67,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.Dapper_Delete",
       "allocated_bytes": 4768,
-      "median_ns": 29684.9,
+      "median_ns": 29421.9,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -75,7 +75,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.Dapper_GetByKey",
       "allocated_bytes": 2320,
-      "median_ns": 21768.5,
+      "median_ns": 23847.3,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -83,7 +83,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.Dapper_Insert",
       "allocated_bytes": 3744,
-      "median_ns": 24889.2,
+      "median_ns": 26763,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -91,7 +91,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.Dapper_QueryAll",
       "allocated_bytes": 1384302,
-      "median_ns": 3710200.4,
+      "median_ns": 3799822.7,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -99,7 +99,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.Dapper_Update",
       "allocated_bytes": 2328,
-      "median_ns": 21161.1,
+      "median_ns": 22358.1,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -107,71 +107,71 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.Dapper_Upsert",
       "allocated_bytes": 2888,
-      "median_ns": 23093.2,
+      "median_ns": 23166.9,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_Delete_Physical",
-      "allocated_bytes": 5088,
-      "median_ns": 34529.1,
+      "allocated_bytes": 5112,
+      "median_ns": 33777.7,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_Delete_SoftDelete",
-      "allocated_bytes": 4864,
-      "median_ns": 34910.6,
+      "allocated_bytes": 4888,
+      "median_ns": 35696.1,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_GetByKey",
-      "allocated_bytes": 3665,
-      "median_ns": 26312.6,
+      "allocated_bytes": 3688,
+      "median_ns": 26431.6,
       "ratio_vs": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_GetByKey",
-      "alloc_ratio": 2.3138,
-      "time_ratio": 1.2008
+      "alloc_ratio": 2.3283,
+      "time_ratio": 1.1948
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_Insert",
-      "allocated_bytes": 4016,
-      "median_ns": 30077.5,
+      "allocated_bytes": 4040,
+      "median_ns": 29298.5,
       "ratio_vs": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_Insert",
-      "alloc_ratio": 2.9017,
-      "time_ratio": 1.2489
+      "alloc_ratio": 2.9191,
+      "time_ratio": 1.2568
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_QueryAll",
-      "allocated_bytes": 1363096,
-      "median_ns": 4230638.3,
+      "allocated_bytes": 1362976,
+      "median_ns": 4177290.6,
       "ratio_vs": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_QueryAll",
-      "alloc_ratio": 1.002,
-      "time_ratio": 1.0304
+      "alloc_ratio": 1.0019,
+      "time_ratio": 1.0264
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_Save_Upsert",
-      "allocated_bytes": 4608,
-      "median_ns": 33083.7,
+      "allocated_bytes": 4488,
+      "median_ns": 33623.9,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_Update",
-      "allocated_bytes": 6232,
-      "median_ns": 27589.3,
+      "allocated_bytes": 6064,
+      "median_ns": 27391.2,
       "ratio_vs": "PalORM.Benchmarks.CrudBenchmarks.ADO_NET_Update",
-      "alloc_ratio": 3.8564,
-      "time_ratio": 1.3152
+      "alloc_ratio": 3.7525,
+      "time_ratio": 1.3221
     },
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.PalORM_Update_OptimisticLock",
-      "allocated_bytes": 5056,
-      "median_ns": 25733.2,
+      "allocated_bytes": 5032,
+      "median_ns": 27641.8,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -179,7 +179,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.RepoDb_GetByKey",
       "allocated_bytes": 5440,
-      "median_ns": 24651.3,
+      "median_ns": 25002.9,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -187,7 +187,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.RepoDb_Insert",
       "allocated_bytes": 3728,
-      "median_ns": 27059.6,
+      "median_ns": 25853,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -195,7 +195,7 @@
     {
       "name": "PalORM.Benchmarks.CrudBenchmarks.RepoDb_QueryAll",
       "allocated_bytes": 1145086,
-      "median_ns": 3561630.5,
+      "median_ns": 3644792.2,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -203,7 +203,7 @@
     {
       "name": "PalORM.Benchmarks.OrmComparisonBenchmarks.Dapper_StableShape",
       "allocated_bytes": 2296,
-      "median_ns": 21695.9,
+      "median_ns": 23978.2,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
@@ -211,26 +211,26 @@
     {
       "name": "PalORM.Benchmarks.OrmComparisonBenchmarks.Dapper_VaryingShape",
       "allocated_bytes": 1954,
-      "median_ns": 22872.9,
+      "median_ns": 21540.7,
       "ratio_vs": null,
       "alloc_ratio": null,
       "time_ratio": null
     },
     {
       "name": "PalORM.Benchmarks.OrmComparisonBenchmarks.PalORM_StableShape",
-      "allocated_bytes": 4512,
-      "median_ns": 27001.8,
+      "allocated_bytes": 4312,
+      "median_ns": 26827,
       "ratio_vs": "PalORM.Benchmarks.OrmComparisonBenchmarks.Dapper_StableShape",
-      "alloc_ratio": 1.9652,
-      "time_ratio": 1.2446
+      "alloc_ratio": 1.878,
+      "time_ratio": 1.1188
     },
     {
       "name": "PalORM.Benchmarks.OrmComparisonBenchmarks.PalORM_VaryingShape",
-      "allocated_bytes": 4322,
-      "median_ns": 27792.7,
+      "allocated_bytes": 4146,
+      "median_ns": 27975.6,
       "ratio_vs": "PalORM.Benchmarks.OrmComparisonBenchmarks.Dapper_VaryingShape",
-      "alloc_ratio": 2.2119,
-      "time_ratio": 1.2151
+      "alloc_ratio": 2.1218,
+      "time_ratio": 1.2987
     }
   ]
 }
