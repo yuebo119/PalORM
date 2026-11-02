@@ -12,7 +12,10 @@ namespace PalORM.PerfHub;
 /// <para><b>自愈</b>：连接失败时按端口映射到本机 wslc 容器并执行 <c>wslc container start</c>，
 /// 之后按 3 秒间隔重试最多 60 秒；MySQL 的 <c>local_infile</c> 为 0 时置 1（容器重启后归 0，
 /// 不设会让批量走多值 INSERT 慢路径，分配涨 2.7 倍）。</para>
-/// <para><b>口径</b>：预检不写任何测量数据，不产生信封；它只回答"这台机器现在能不能测"。</para></summary>
+/// <para><b>口径</b>：预检不写任何测量数据，不产生信封；它只回答"这台机器现在能不能测"。</para>
+/// <para><b>作用范围</b>：只处理本次请求的方言从连接串解析出的端口所映射的容器。没有用到的容器
+/// 既不启动也不停止——本项目只涉及 mysql84（3306）与 pgbench（55432），pg186（5432，Pal.DDD 的
+/// 真库验证环境）不在本次范围内。整个类没有 stop / rm 调用。</para></summary>
 internal static class Preflight
 {
     /// <summary>端口 → 本机容器名，与 ~/.zcode/scripts/wslc-start-containers.cmd 同源。</summary>
@@ -60,7 +63,7 @@ internal static class Preflight
         }
 
         bool ok = await TryOpenAsync(info, cs, ct).ConfigureAwait(false);
-        if (!ok && autoFix && TryStartContainerFor(cs, info.DisplayName, output))
+        if (!ok && autoFix && TryStartContainerFor(info.Dialect, cs, info.DisplayName, output))
         {
             ok = await WaitForOpenAsync(info, cs, output, ct).ConfigureAwait(false);
         }
@@ -86,12 +89,46 @@ internal static class Preflight
         IReadOnlyList<DialectInfo> dialects, bool autoFix, TextWriter output, CancellationToken ct = default)
     {
         bool all = true;
+        List<string> planned = [.. PlannedContainers(dialects)];
+        output.WriteLine(planned.Count == 0
+            ? "[预检] 本次不涉及容器（无外部方言）"
+            : $"[预检] 本次只涉及容器 {string.Join('、', planned)}；其余容器不启动也不停止");
         foreach (DialectInfo info in dialects)
         {
             all &= await CheckAsync(info, autoFix, output, ct).ConfigureAwait(false);
         }
 
         return all;
+    }
+
+    /// <summary>本批配置实际会用到的容器（按连接串端口映射）。只用于打印作用范围：
+    /// 预检只对这张表里的容器执行 start，从不 stop 或 rm 任何容器。</summary>
+    private static HashSet<string> PlannedContainers(IReadOnlyList<DialectInfo> dialects)
+    {
+        HashSet<string> names = new(StringComparer.Ordinal);
+        foreach (DialectInfo info in dialects)
+        {
+            if (info.Dialect == Dialect.Sqlite)
+            {
+                continue;
+            }
+
+            try
+            {
+                int port = ResolvePort(info.Dialect, Connections.Resolve(info));
+                if (PortToContainer.TryGetValue(port, out string? container))
+                {
+                    _ = names.Add(container);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException
+                or IOException or ArgumentException)
+            {
+                // 连接串不可用时无法判断，交给 CheckAsync 报原因
+            }
+        }
+
+        return names;
     }
 
     private static async Task<bool> TryOpenAsync(DialectInfo info, string cs, CancellationToken ct)
@@ -128,10 +165,12 @@ internal static class Preflight
         return false;
     }
 
-    /// <summary>按端口找容器并启动。端口无法映射到已知容器时返回 false（不做盲猜）。</summary>
-    private static bool TryStartContainerFor(string connectionString, string displayName, TextWriter output)
+    /// <summary>按端口找容器并启动。端口无法映射到已知容器时返回 false（不做盲猜，
+    /// 也不去碰任何未映射的容器）。</summary>
+    private static bool TryStartContainerFor(
+        Dialect dialect, string connectionString, string displayName, TextWriter output)
     {
-        int port = ResolvePort(connectionString);
+        int port = ResolvePort(dialect, connectionString);
         if (!PortToContainer.TryGetValue(port, out string? container))
         {
             output.WriteLine($"[预检] {displayName,-11} 端口 {port} 无对应容器映射，不自愈");
@@ -170,28 +209,29 @@ internal static class Preflight
         }
     }
 
-    private static int ResolvePort(string connectionString)
+    /// <summary>端口取连接串的 Port 键；缺省用 provider 默认值（MySQL 3306 / PG 5432）。
+    /// 不按字符串里是否出现 3306 猜——那会把主机名或密码里的数字误当端口。
+    /// <para>缺省值只会命中本机同端口容器；例如本项目 .env.test 指向 55432（pgbench），
+    /// 所以 pg186（5432，Pal.DDD 的真库验证环境）不在本次作用范围内。</para></summary>
+    private static int ResolvePort(Dialect dialect, string connectionString)
     {
         try
         {
             var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
-            foreach (string key in new[] { "Port", "port" })
+            if (builder.TryGetValue("Port", out object? value)
+                && int.TryParse(
+                    Convert.ToString(value, CultureInfo.InvariantCulture),
+                    NumberStyles.Integer, CultureInfo.InvariantCulture, out int port))
             {
-                if (builder.TryGetValue(key, out object? value)
-                    && int.TryParse(
-                        Convert.ToString(value, CultureInfo.InvariantCulture),
-                        NumberStyles.Integer, CultureInfo.InvariantCulture, out int port))
-                {
-                    return port;
-                }
+                return port;
             }
         }
         catch (ArgumentException)
         {
-            // 连接串形态异常时退回默认端口（MySQL 3306 / PG 5432）
+            // 连接串形态异常时退回 provider 默认端口
         }
 
-        return connectionString.Contains("3306", StringComparison.Ordinal) ? 3306 : 5432;
+        return dialect == Dialect.MySql ? 3306 : 5432;
     }
 
     /// <summary>MySQL 的 local_infile：为 0 时批量路径退回多值 INSERT（分配涨 2.7 倍）。
