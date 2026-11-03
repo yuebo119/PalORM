@@ -208,6 +208,18 @@ jobs:
                   dotnet run --file scripts/assert-coverage.cs -- --branch postgreSqlProvider cov-integration.xml
                   dotnet run --file scripts/assert-coverage.cs -- --branch sqliteProvider cov-integration.xml
 
+            - name: Assert diff coverage floor (T1-diff)
+              # 测试体系优化方案 2026-11-01 · T0-5：只统计本次改动涉及的行，阈值 80%。
+              # 与 assert-coverage 分工：全量地板防整体退化，本步防"新增未覆盖代码靠
+              # 分母增长溜过去"（2026-10-18 定 core 地板 74 后 src 新增 10 个文件把实测
+              # 摊薄到 74.33 的教训）。白名单：注释行 / .g.cs / test·tools·scripts·docs。
+              # 探针已验证双向可判（新增 12 行未覆盖 → exit 1；只改注释 → exit 0）。
+              run: |
+                  # 需要 base 提交的历史；浅克隆下 diff 拿不到 PR 基线
+                  git fetch --no-tags --prune --depth=200 origin "+refs/heads/*:refs/remotes/origin/*"
+                  base="${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}"
+                  dotnet run --file scripts/diff-coverage.cs -- "$base" HEAD cov-core.xml cov-integration.xml
+
     gate:
         name: Quality Gates
         runs-on: ubuntu-24.04
