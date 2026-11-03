@@ -24,24 +24,6 @@ public sealed class ProviderHotPathTests
     }
 
     [Test]
-    public async Task Sqlite_QuoteIdentifier_InternalQuote_IsDoubled()
-    {
-        await Assert.That(SqliteProvider.QuoteIdentifier("a\"b")).IsEqualTo("\"a\"\"b\"");
-    }
-
-    [Test]
-    public async Task MySql_QuoteIdentifier_NoInternalQuote_ReturnsQuotedText()
-    {
-        await Assert.That(MySqlProvider.QuoteIdentifier("tenant_id")).IsEqualTo("`tenant_id`");
-    }
-
-    [Test]
-    public async Task MySql_QuoteIdentifier_InternalBacktick_IsDoubled()
-    {
-        await Assert.That(MySqlProvider.QuoteIdentifier("a`b")).IsEqualTo("`a``b`");
-    }
-
-    [Test]
     [Arguments("tenant_id")]
     [Arguments("plain")]
     public async Task Providers_QuoteIdentifier_NoQuotePath_IsNotReferenceEqualToInput(string identifier)

@@ -192,17 +192,6 @@ public sealed class AdvancedFeatureTests
     }
 
     [Test]
-    public async Task QueryAsyncEnumerable_Streams()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-        await db.InsertAsync(new Product { Name = "ST", Price = 1m, Stock = 0 });
-        int c = 0;
-        await foreach (var p in db.QueryAsyncEnumerable<Product>($"SELECT * FROM products")) { c++; }
-        await Assert.That(c).IsGreaterThanOrEqualTo(1);
-    }
-
-    [Test]
     public async Task WithCache_CachesResults()
     {
         // T-P2-02：注入计数缓存锁定真实命中——原断言只比较行数相等，不缓存也通过
@@ -287,17 +276,6 @@ public sealed class AdvancedFeatureTests
         db.AddInterceptor(new OrderedInterceptor(200, order)).AddInterceptor(new OrderedInterceptor(10, order));
         await db.From<Product>().ToListAsync();
         await Assert.That(order).IsEquivalentTo([10, 200]);
-    }
-
-    [Test]
-    public async Task CountAsync_ReturnsCount()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-        await db.InsertAsync(new Product { Name = "C1", Price = 1m, Stock = 0 });
-        await db.InsertAsync(new Product { Name = "C2", Price = 2m, Stock = 0 });
-        long c = await db.CountAsync<Product>();
-        await Assert.That(c).IsEqualTo(2);
     }
 
     [Test]

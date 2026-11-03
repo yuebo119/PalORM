@@ -13,6 +13,10 @@ namespace PalORM.Core.Tests;
 public sealed class TransactionCleanupTests
 {
     // ─── R1：裁决只跳过"服务端已处理"的失败 ────────────────────
+    // 注：方言矩阵只有"SQLite / 非 SQLite"两态——产品 TransactionCleanup 的
+    // `if (dialect == SqlDialect.Sqlite) return false;` 之后无 MySQL 专属分支。
+    // 原 ServerSideCommitError_OnMySql_IsSkipped 与 OnPg 走完全相同路径且断言更弱
+    //（只断返回值，不断 Data 标记），已删除；MySQL 的服务端错误语义由本用例覆盖。
 
     [Test]
     public async Task ServerSideCommitError_OnPg_IsSkipped()
@@ -24,11 +28,6 @@ public sealed class TransactionCleanupTests
         await Assert.That(skipped).IsTrue();
         await Assert.That(primary.Data.Contains(TransactionCleanup.RollbackSkippedDataKey)).IsTrue();
     }
-
-    [Test]
-    public async Task ServerSideCommitError_OnMySql_IsSkipped()
-            => await Assert.That(TransactionCleanup.TrySkipRollbackAfterCommitFailure(
-                SqlDialect.MySql, new InvalidOperationException("server error"))).IsTrue();
 
     [Test]
     [Arguments(typeof(OperationCanceledException))]
@@ -128,13 +127,17 @@ public sealed class TransactionCleanupTests
     [Test]
     public async Task Rollback_ZeroTimeout_IsUnbounded()
     {
-        // Zero = 调用方显式要求无限等待（CommandTimeout Zero 契约同口径）
+        // Zero = 调用方显式要求无限等待（CommandTimeout Zero 契约同口径）。
+        // 夹具必须有非零延迟，否则「无界」与「有界」不可区分：SlowRollbackTransaction
+        // 在 delaySeconds <= 0 时直接 Task.CompletedTask，超时判定根本不会被触发，
+        // 断言恒绿。此处用 2 秒延迟 + rollbackTimeoutSeconds: 0，证明不施加超时。
         var primary = new InvalidOperationException("original failure");
-        await using var transaction = new SlowRollbackTransaction(delaySeconds: 0);
+        await using var transaction = new SlowRollbackTransaction(delaySeconds: 2);
 
         await TransactionCleanup.RollbackPreservingAsync(transaction, primary, rollbackTimeoutSeconds: 0);
 
         await Assert.That(primary.Data.Contains("PalORM.RollbackTimeoutException")).IsFalse();
+        await Assert.That(primary.Data.Contains("PalORM.RollbackException")).IsFalse();
     }
 
     // ─── TX-003：提交超时统一包装 ────────────────────────────

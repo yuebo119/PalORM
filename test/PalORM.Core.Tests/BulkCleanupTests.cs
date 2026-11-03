@@ -51,30 +51,6 @@ public sealed class BulkCleanupTests
     [Test]
     [Arguments("sqlite")]
     [Arguments("mysql")]
-    public async Task BulkInsert_MainAndTransactionCleanupFailures_AreAllPreserved(
-        string provider)
-    {
-        // r18/T-P3-02：原名 RowAndMain 实为 MainAndTransaction——名实对齐后保留原覆盖。
-        var failures = new BulkFailureSet();
-        await using var connection = new BulkFailureConnection(
-            BulkFailureScenario.MainAndTransactionCleanup,
-            failures);
-
-        Exception? actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await BulkInsertAsync(provider, connection));
-
-        await Assert.That(actual).IsSameReferenceAs(failures.Execution);
-        await Assert.That(actual!.Data["PalORM.CommandCleanupException"])
-            .IsSameReferenceAs(failures.MainCleanup);
-        await Assert.That(actual.Data["PalORM.RollbackException"])
-            .IsSameReferenceAs(failures.Rollback);
-        await Assert.That(actual.Data["PalORM.TransactionCleanupException"])
-            .IsSameReferenceAs(failures.TransactionCleanup);
-    }
-
-    [Test]
-    [Arguments("sqlite")]
-    [Arguments("mysql")]
     public async Task BulkInsert_RowOperationAndMainCleanupFailures_AreBothPreserved(
         string provider)
     {

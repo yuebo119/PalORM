@@ -118,23 +118,14 @@ public sealed class KeyConversionTests
     }
 
     [Test]
-    public async Task ConvertDeleteKey_IsWiredInRegistry_ForSingleColumnPrimaryKey()
-    {
-        // C3：注册表层契约——单列主键实体的聚合元数据必须携带转换委托（晋升门禁消费）。
-        // 复合主键/旧生成器程序集为 null 属设计回退，此处只锁真源形态不被未来发射变更静默丢弃。
-        // 2026-10-18 审计：空值断言升级为可调用性断言（T14）——委托存在但不可调用同为断链。
-        Func<object, object?>? convert = PalORM_Runtime.CrudMetadatas[typeof(KeyConversionEntity)].ConvertDeleteKey;
-        object? converted = convert?.Invoke(7L);
-        await Assert.That(converted).IsEqualTo(7L);
-    }
-
-    [Test]
     public async Task ConvertDeleteKey_SameTypeBoxedKey_ReusesCallerBox()
     {
         // R2-A2（2026-10-13 微项包）：生成器 identity 快路径——同型装箱键（long 主键实体收
         // long 键）复用调用方装箱实例（ReferenceEquals），异型键照走 Convert 归一（新箱）。
         // 锁定的是"非槽路径 −24B/绑定"的机制本体：Convert.ToInt64(object) 必解箱重箱，
         // identity 分支返回原始引用零新分配。
+        // 注册表层契约（单列主键元数据必须携带转换委托）由本用例的 IsNotNull 一并锁定
+        //（原 ConvertDeleteKey_IsWiredInRegistry 只断言 IsEqualTo(7L)，被本用例严格包含）。
         Func<object, object?>? convert = PalORM_Runtime.CrudMetadatas[typeof(KeyConversionEntity)].ConvertDeleteKey;
         await Assert.That(convert).IsNotNull();
 

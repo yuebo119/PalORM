@@ -52,20 +52,12 @@ public sealed class QueryCacheInjectionTests
         await Assert.That(fromB.Count).IsEqualTo(0);
     }
 
-    [Test]
-    public async Task BoundedCache_AtCapacity_RejectsNewEntriesInsteadOfGrowing()
-    {
-        var cache = new BoundedQueryCache(maxEntries: 2);
-        cache.Set("k1", new List<string> { "a" }, TimeSpan.FromMinutes(5));
-        cache.Set("k2", new List<string> { "b" }, TimeSpan.FromMinutes(5));
-
-        cache.Set("k3", new List<string> { "c" }, TimeSpan.FromMinutes(5));
-
-        await Assert.That(cache.TryGet("k1", out List<string>? _)).IsTrue();
-        await Assert.That(cache.TryGet("k2", out List<string>? _)).IsTrue();
-        // 容量满且无过期条目：拒绝写入（未命中是正确性中性的）
-        await Assert.That(cache.TryGet("k3", out List<string>? _)).IsFalse();
-    }
+    // 注：BoundedQueryCache 的容量契约（满员拒新键、满员允许更新既有键）由
+    // CacheStoreTests.Set_BeyondCapacity_StopsAtLimit 用 50 键打满 maxEntries:8 覆盖，
+    // 断言更强（hits == 8 精确计数 + 满员更新值校验）。原
+    // BoundedCache_AtCapacity_RejectsNewEntriesInsteadOfGrowing 与
+    // BoundedCache_ExistingKeyUpdate_BypassesCapacityCheck 是其弱化子集，已删除。
+    // 本文件保留注入/租户/驱逐三面（那些是会话级行为，CacheStoreTests 不覆盖）。
 
     [Test]
     public async Task BoundedCache_AtCapacity_EvictsExpiredThenAccepts()
@@ -79,18 +71,6 @@ public sealed class QueryCacheInjectionTests
 
         await Assert.That(cache.TryGet("fresh", out List<string>? _)).IsTrue();
         await Assert.That(cache.TryGet("live", out List<string>? _)).IsTrue();
-    }
-
-    [Test]
-    public async Task BoundedCache_ExistingKeyUpdate_BypassesCapacityCheck()
-    {
-        var cache = new BoundedQueryCache(maxEntries: 1);
-        cache.Set("k", new List<string> { "v1" }, TimeSpan.FromMinutes(5));
-
-        cache.Set("k", new List<string> { "v2", "v3" }, TimeSpan.FromMinutes(5));
-
-        await Assert.That(cache.TryGet("k", out List<string>? value)).IsTrue();
-        await Assert.That(value!.Count).IsEqualTo(2);
     }
 
     [Test]

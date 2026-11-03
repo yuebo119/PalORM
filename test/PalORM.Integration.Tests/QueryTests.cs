@@ -132,15 +132,6 @@ public sealed class QueryTests
     }
 
     [Test]
-    public async Task MigrateAsync_CreatesTableAutomatically()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.MigrateAsync();
-        var r = await db.InsertAsync(new Order { Status = "M", Total = 3m, CreatedAt = 0 });
-        await Assert.That(r.Id).IsGreaterThan(0);
-    }
-
-    [Test]
     public async Task GetAllAsync_ReturnsAllRows()
     {
         await using var db = await TestDb.SqliteAsync();

@@ -73,7 +73,9 @@ public sealed class StateTransitionTests
 
         // ── 已取消 ──
         new("已取消", "租出", null, "会话已在租期内"),
-        new("已取消", "查询", nameof(Query_AfterCancel_IsRejectedOrAllowed), null),
+        // 实现无独立的"已取消"状态：取消令牌只影响单次调用，会话本身回到租出空闲形态，
+        // 该格语义由"租出空闲/取消"格（Cancel_OnIdleSession_LeavesSessionUsable）覆盖
+        new("已取消", "查询", null, "实现无独立已取消状态——取消后会话等同租出空闲，由该行取消格覆盖"),
         new("已取消", "开启事务", null, "取消后的会话状态按文档取值，本方案取「会话可继续」一侧"),
         new("已取消", "提交", null, "无有效事务"),
         new("已取消", "回滚", null, "无有效事务"),
@@ -83,7 +85,9 @@ public sealed class StateTransitionTests
 
         // ── 故障 ──
         new("故障", "租出", null, "会话已在租期内"),
-        new("故障", "查询", nameof(Query_AfterFault_IsRejectedOrAllowed), null),
+        // 异常不改变会话状态（异常后会话仍可用），该格语义由"租出空闲/异常"格
+        //（Exception_OnIdleSession_KeepsSessionUsable）覆盖
+        new("故障", "查询", null, "异常不改变会话状态——由该行异常格 Exception_OnIdleSession_KeepsSessionUsable 覆盖"),
         new("故障", "开启事务", null, "故障态下开启事务无意义"),
         new("故障", "提交", null, "无有效事务"),
         new("故障", "回滚", null, "无有效事务"),
@@ -387,36 +391,5 @@ public sealed class StateTransitionTests
             await transaction.RollbackAsync();
         }
         await Assert.That(await db.CountAsync<CfBulkPlainEntity>()).IsEqualTo(0L);
-    }
-
-    [Test]
-    public async Task Query_AfterCancel_IsRejectedOrAllowed()
-    {
-        await using SharedSqliteDb shared = await SharedSqliteDb.CreateAsync("state_after_cancel");
-        await using DataSession<SqliteProvider> db = await shared.OpenSessionAsync();
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync();
-        try
-        {
-            await db.CountAsync<CfBulkPlainEntity>(ct: cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // 预期形态
-        }
-        await Assert.That(await db.CountAsync<CfBulkPlainEntity>(ct: CancellationToken.None)).IsEqualTo(0L);
-    }
-
-    [Test]
-    public async Task Query_AfterFault_IsRejectedOrAllowed()
-    {
-        await using SharedSqliteDb shared = await SharedSqliteDb.CreateAsync("state_after_fault");
-        await using DataSession<SqliteProvider> db = await shared.OpenSessionAsync();
-        await Assert.That(async () => await db.ExecuteAsync($"SELECT * FROM no_such_table"))
-            .Throws<Exception>();
-
-        // 按文档取一侧：会话要么明确拒绝，要么可继续；不允许静默返回错误数据
-        long count = await db.CountAsync<CfBulkPlainEntity>();
-        await Assert.That(count).IsEqualTo(0L);
     }
 }

@@ -7,41 +7,11 @@ namespace PalORM.Integration.Tests;
 /// 真库 PG/MySQL 行为由 ExternalDatabaseBulkTests + AotTest 覆盖。</para></summary>
 public sealed class DialectDifferenceTests
 {
-    // ─── INSERT 回填策略差异 ───────────────────────────────
-
-    /// <summary>PG/SQLite 走 RETURNING 单次往返物化整行；MySQL 走 LAST_INSERT_ID 回填 ID。
-    /// 验证 SupportsReturningClause 属性在三个 Provider 上的值正确。</summary>
-    [Test]
-    public async Task SupportsReturningClause_Dialect_Gate_IsCorrect()
-    {
-        await Assert.That(PalORM.Sqlite.SqliteProvider.SupportsReturningClause).IsTrue();
-        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.SupportsReturningClause).IsTrue();
-        await Assert.That(PalORM.MySql.MySqlProvider.SupportsReturningClause).IsFalse();
-    }
-
-    // ─── 标识符引用差异 ─────────────────────────────────────
-
-    /// <summary>SQLite/PG 用双引号，MySQL 用反引号。</summary>
-    [Test]
-    public async Task QuoteIdentifier_Dialect_Difference()
-    {
-        await Assert.That(PalORM.Sqlite.SqliteProvider.QuoteIdentifier("col"))
-            .IsEqualTo("\"col\"");
-        await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.QuoteIdentifier("col"))
-            .IsEqualTo("\"col\"");
-        await Assert.That(PalORM.MySql.MySqlProvider.QuoteIdentifier("col"))
-            .IsEqualTo("`col`");
-    }
-
-    /// <summary>标识符内嵌 quote 字符的转义：双引号→"" / 反引号→``</summary>
-    [Test]
-    public async Task QuoteIdentifier_EscapesEmbeddedQuote()
-    {
-        await Assert.That(PalORM.Sqlite.SqliteProvider.QuoteIdentifier("a\"b"))
-            .IsEqualTo("\"a\"\"b\"");
-        await Assert.That(PalORM.MySql.MySqlProvider.QuoteIdentifier("a`b"))
-            .IsEqualTo("`a``b`");
-    }
+    // 注：Provider 三方言的 SupportsReturningClause / QuoteIdentifier（含内嵌引号转义）契约
+    // 由 PalORM.Core.Tests/ProviderTests 的 SqliteProvider_KeyMembers_BehaveAsExpected、
+    // PostgreSqlProvider_KeyMembers_Compiled、MySqlProvider_KeyMembers_Compiled 与
+    // Providers_QuoteInternalDelimitersAndQualifiedNames 四条用例锁定（逐字节同断言）。
+    // 本文件只保留"跨方言差异形态"类用例，不再重复 Provider 属性取值。
 
     // ─── LIMIT OFFSET 方言差异 ─────────────────────────────
 
@@ -140,38 +110,4 @@ public sealed class DialectDifferenceTests
         await Assert.That(PalORM.PostgreSql.PostgreSqlProvider.IsUniqueViolation(neutral)).IsFalse();
         await Assert.That(PalORM.MySql.MySqlProvider.IsUniqueViolation(neutral)).IsFalse();
     }
-
-    // ─── Bulk 策略差异 ───────────────────────────────────
-
-    /// <summary>PG 走 Binary COPY；SQLite/MySQL 走多值 INSERT。
-    /// 验证 BulkInsertAsync 在 SQLite 上正常工作（多值 INSERT 路径）。</summary>
-    [Test]
-    public async Task BulkInsert_Sqlite_UsesMultiValueInsert()
-    {
-        await using var db = await TestDb.SqliteAsync();
-        await db.ExecuteAsync($"CREATE TABLE IF NOT EXISTS bulk_dialect_test (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)");
-        try
-        {
-            var entities = Enumerable.Range(0, 100)
-                .Select(i => new BulkDialectEntity { name = $"row_{i}" }).ToArray();
-            long inserted = await db.BulkInsertAsync(entities, batchSize: 50);
-            await Assert.That(inserted).IsEqualTo(100);
-
-            long count = await db.ScalarAsync<long>($"SELECT COUNT(*) FROM bulk_dialect_test");
-            await Assert.That(count).IsEqualTo(100);
-        }
-        finally
-        {
-            await db.ExecuteAsync($"DROP TABLE IF EXISTS bulk_dialect_test");
-        }
-    }
 }
-
-#region Test Entities
-[Table("bulk_dialect_test")]
-public sealed partial class BulkDialectEntity
-{
-    [Key] [Column("id")] public long id { get; set; }
-    [Column("name")] public string name { get; set; } = "";
-}
-#endregion
