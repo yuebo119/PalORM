@@ -75,18 +75,21 @@ var rules = new Rule[]
         "if (_dialect == SqlDialect.Sqlite) return;",
         "/*/*/BoundaryContractTests/*",
         "D3 SQLite 行锁放行（条件反号）；可观测量：ForUpdate/ForShare 不再抛 NotSupportedException"),
+    // 2026-11-03 重锚：产品把 `catch (Exception ex) when (...)` 重构为
+    // `NormalizeOnce(ex, ...) is { } mapped` 的单一真源形态（D4/D7 共用）。
+    // 注入点随之迁移到 NormalizeOnce 内的内层超时解包分支——删掉它，D4 语义失效而
+    // D7 的耗时判定分支保留（与原规则意图逐位一致）。
     new("R-D4", "src/PalORM.Core/CommandTimeoutNormalizer.cs",
-        "        catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)\n"
-        + "        {\n"
-        + "            throw new TimeoutException(timeout.Message, ex);\n"
-        + "        }\n",
+        "        if (ex.InnerException is TimeoutException timeout)\n"
+        + "            return new TimeoutException(timeout.Message, ex);\n",
         "",
         "/*/*/ErrorContractTests/*",
-        "D4 超时不解包（删内层 TimeoutException catch，保留 D7 耗时判定 catch）；"
+        "D4 超时不解包（删 NormalizeOnce 的内层 TimeoutException 解包，保留 D7 耗时判定）；"
         + "可观测量：PG 命令超时异常类型不再是 TimeoutException"),
+    // 2026-11-03 重锚：`"ConcurrencyCheck"` 字面量已改为 PalORMAttributeNames 常量。
     new("R-D5", "src/PalORM.SourceGen/PalORMAnalyzer.cs",
         "        bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)\n"
-        + "            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, \"ConcurrencyCheck\")));\n"
+        + "            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck)));\n"
         + "        if (hasConcurrency)\n"
         + "        {\n"
         + "            ctx.ReportDiagnostic(Diagnostic.Create(\n"
