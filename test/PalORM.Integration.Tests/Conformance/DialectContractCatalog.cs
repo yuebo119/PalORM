@@ -432,8 +432,8 @@ public sealed class DialectCapabilityContractTests
     [Test]
     public async Task Sqlite_CapabilityContracts_Hold()
     {
-        // S3 守卫（2026-11-03）：ContractCatalog 的 19 条 SQLite 重复条目删除后，
-        // D 层成为 SQLite 侧的唯一来源。若某条 D 契约在 SQLite 上被登记为不支持，
+        // S3 守卫（2026-11-03）：能力契约目录的 19 条 SQLite 重复条目删除后，
+        // 本目录成为这些契约在 SQLite 侧的唯一来源。若某条 D 契约在 SQLite 上被登记为不支持，
         // SQLite 侧就再无覆盖——本断言把"SQLite 必须全覆盖"钉成机械约束。
         // 形态与其他元数据自检一致（收集 + 拼接 + IsEmpty），报错一次列出全部违规项。
         // 反向验证：加一条 (D-AGG-01, Sqlite) 到 DialectUnsupported.Table → 本条红（2026-11-03 实测）。
