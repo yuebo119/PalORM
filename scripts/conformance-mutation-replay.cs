@@ -188,8 +188,20 @@ foreach (RuleResult result in results)
 }
 
 int failed = results.Count(r => r.Verdict != "PASS");
+int skipped = results.Count(r => r.Verdict == "skip");
 Console.WriteLine();
 Console.WriteLine(failed == 0 ? "全部规则通过" : $"{failed} 条规则未通过");
+if (skipped > 0)
+{
+    // B189 族（无声 no-op）的机械提示：skip 也是"未通过"，但根因是注入片段与源码失配，
+    // 修法是重锚片段而非改判定。不单列出来时，这两条规则会长期以"未通过"名义被当成
+    // 已知噪声忽略——D4/D5 就这样静默失效了数月（2026-11-03 重锚后转 PASS）。
+    Console.WriteLine($"其中 {skipped} 条为 SKIP（注入片段在源码中已失配，规则从未真正执行）：");
+    foreach (RuleResult result in results.Where(static r => r.Verdict == "skip"))
+    {
+        Console.WriteLine($"  {result.Rule.Id}: `{result.Rule.File}` — 需重锚 Original 片段");
+    }
+}
 return failed == 0 ? 0 : 1;
 
 static string Escape(string text)
