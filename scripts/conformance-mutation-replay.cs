@@ -9,8 +9,14 @@
 // 未指定时用默认项目 test/PalORM.Integration.Tests。多行片段按工作树实际行尾适配（仓库索引 LF，工作树受
 // core.autocrlf 影响可能是 CRLF）。
 //
+// R-C 系列（方案《测试机制重设计方案-2026-11-03》§6.2 降级路径）：变异分（Stryker）自 2026-10-03 起
+// 产出 0 个有效变异，"整体判别力"无基线可比；退一步只证明「契约这一族有判别力」——往产品代码注入
+// 已知缺陷，要求指定契约 ID 的用例报红。期望契约由 Rule.ExpectedContracts 声明：报红名单里没有它，
+// 即使退出码非零也判 FAIL（别的原因红了不构成本契约的判别力证据）。
+//
 // 前置条件：工作树必须清洁（脚本会用 git checkout 还原被改文件，脏树会丢改动）。
-// 用法：dotnet run --file scripts/conformance-mutation-replay.cs [-- --keep-artifacts]
+// 用法：dotnet run --file scripts/conformance-mutation-replay.cs [-- --rule <ID 前缀>]
+//   --rule R-C 只跑契约族规则（迭代时省去历史规则的重建）；省略则跑全部。
 // 输出末尾带 Markdown 台账（规则 / 注入点 / 报红测试数 / 报红测试名），供总报告登记。
 using System.Diagnostics;
 using System.Text.RegularExpressions;
@@ -32,6 +38,13 @@ Console.WriteLine($"仓库根: {repoRoot}");
 Console.WriteLine($"dotnet: {dotnet}");
 Console.WriteLine($"基线提交: {(Head.Count > 0 ? Head[0].Commit[..8] + " " + Head[0].Subject : "(none)")}");
 Console.WriteLine();
+
+// --rule <ID 前缀>：只跑指定前缀的规则（迭代契约族规则时不必重跑历史规则）
+string? rulePrefix = null;
+for (int i = 0; i + 1 < args.Length; i++)
+{
+    if (args[i] == "--rule") rulePrefix = args[i + 1];
+}
 
 // D1-D7 七条规则对应已修复的历史产品缺陷（《测试体系增强方案-2026-10-30》§4.2）：每条有真实缺陷背书，
 // 注入点一行可换、可观测量（哪个期望值会变）在 Note 里写明。
@@ -114,15 +127,106 @@ var rules = new Rule[]
         "=> false;",
         "/*/*/ErrorContractTests/*",
         "D7 MySQL 超时未归一（耗时判定恒关）；可观测量：超时返回部分结果被当成功"),
+
+    // ── R-C：契约族回放（方案 §6.2 降级路径，2026-11-03）──────────────────
+    // 每条规则注入一个产品缺陷，要求「方言契约目录」里指定 ID 的用例报红——证明该契约不是
+    // 恒真断言。过滤器覆盖 20 条 SQLite 契约（全部内存库，约 0.6 秒），期望契约由
+    // ExpectedContracts 声明：报红名单缺它即 FAIL（别的原因红了不构成本契约的判别力证据）。
+    new("R-C01", "src/PalORM.Core/DataSession_Bulk.cs",
+        "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n"
+        + "        }\n"
+        + "\n"
+        + "        return total;\n"
+        + "    }\n"
+        + "\n"
+        + "    /// <summary>json_each 形态的 DELETE",
+        "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n"
+        + "        }\n"
+        + "\n"
+        + "        return total - 1;\n"
+        + "    }\n"
+        + "\n"
+        + "    /// <summary>json_each 形态的 DELETE",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "SQLite 批量删除（json_each 形态）少删一行：返回数恒比实际少 1",
+        null, ["D-BULKDEL-01"]),
+    new("R-C02", "src/PalORM.Core/RowPreparedBulkInsert.cs",
+        "                    valuesBinder(pool, entity, 0);\n"
+        + "                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);",
+        "                    if (ReferenceEquals(entity, entities[entities.Count - 1])) break;\n"
+        + "                    valuesBinder(pool, entity, 0);\n"
+        + "                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "SQLite 行预编译批量插入漏掉末行（影响行数一并少 1）",
+        null, ["D-BULKIN-01"]),
+    new("R-C03", "src/PalORM.Core/DataSession.Crud.cs",
+        "            backfill(entity, id);",
+        "            backfill(entity, 0);",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "自增主键回填写入 0（实体 Id 保持默认值）",
+        null, ["D-INSERT-02"]),
+    new("R-C04", "src/PalORM.Core/DataSession.Crud.cs",
+        "        if (plan.IncrementVersion is null)\n"
+        + "            return affectedRows;",
+        "        if (plan.IncrementVersion is null)\n"
+        + "            return affectedRows == 0 ? 1 : affectedRows;",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "UpdateAsync 未命中行也报 1（受影响行数虚报）",
+        null, ["D-UPDATE-01"]),
+    new("R-C05", "src/PalORM.Core/DataSession.PartialUpdate.cs",
+        "        SortedSet<int> selected = ResolveUpdateColumnSelection<T>(plan, columns);",
+        "        SortedSet<int> selected = new(Enumerable.Range(0, plan.UpdateColumns.Count));",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "部分更新忽略列选择器，改写全部列",
+        null, ["D-UPDCOLS-01"]),
+    new("R-C06", "src/PalORM.Core/DataSession.Crud.cs",
+        "WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}\";",
+        "WHERE {TProvider.QuoteIdentifier(pkColumn)} <> @p0{filter}\";",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "GetAsync 主键谓词反号（命中行查不到、未命中行反而查出）",
+        null, ["D-GET-01"]),
+    new("R-C07", "src/PalORM.Core/QueryBuilder.cs",
+        "        builder.Append(\"WHERE \");",
+        "        builder.Append(\"WHERE 1 = 1 OR \");",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "用户 WHERE 谓词被恒真式短路（过滤不生效）",
+        null, ["D-QUERY-01"]),
+    new("R-C08", "src/PalORM.Core/QueryBuilderExtensions.cs",
+        "                string operation = descending ? \"<\" : \">\";",
+        "                string operation = descending ? \"<=\" : \">\";",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "keyset 续页锚点由「严格大于」改为「大于等于」（页间重复一行）",
+        null, ["D-PAGE-01"]),
+    new("R-C09", "src/PalORM.Core/DataSession.Query.cs",
+        "        object? r = await ExecuteAggregateScalarAsync<T>(\"MIN\", expression, ct).ConfigureAwait(false);",
+        "        object? r = await ExecuteAggregateScalarAsync<T>(\"MAX\", expression, ct).ConfigureAwait(false);",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "MinAsync 实际执行 MAX",
+        null, ["D-AGG-01"]),
+    new("R-C10", "src/PalORM.SourceGen/CommandFactoryEmitter.cs",
+        "                $\"{column} = excluded.{column}\"));",
+        "                $\"{column} = {column}\"));",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "UPSERT 冲突分支 SET 自赋值（已存在行不更新）",
+        null, ["D-SAVE-02"]),
 };
 
+var selected = rulePrefix is null
+    ? rules
+    : rules.Where(rule => rule.Id.StartsWith(rulePrefix, StringComparison.OrdinalIgnoreCase)).ToArray();
+if (rulePrefix is not null)
+    Console.WriteLine($"规则过滤 --rule {rulePrefix}：{selected.Length}/{rules.Length} 条\n");
+
+
 var results = new List<RuleResult>();
-foreach (Rule rule in rules)
+foreach (Rule rule in selected)
 {
     string project = rule.TestProject ?? DefaultTestProject;
+    string[] expected = rule.ExpectedContracts ?? [];
     Console.WriteLine($"── {rule.Id}: {rule.Note}");
     Console.WriteLine($"   文件 {rule.File}");
     Console.WriteLine($"   项目 {project}");
+    if (expected.Length > 0) Console.WriteLine($"   期望报红契约 {string.Join(", ", expected)}");
 
     string absolutePath = Path.Combine(repoRoot, rule.File);
     string original = File.ReadAllText(absolutePath);
@@ -133,7 +237,8 @@ foreach (Rule rule in rules)
     {
         Console.WriteLine("   SKIP 原片段未找到（源码可能已改动），跳过该规则");
         results.Add(new RuleResult(
-            rule, project, "skip", false, false, new RunOutcome(false, 0, ""), false, new RunOutcome(false, 0, "")));
+            rule, project, "skip", false, false, new RunOutcome(false, 0, "", ""), false,
+            new RunOutcome(false, 0, "", "")));
         continue;
     }
 
@@ -142,20 +247,28 @@ foreach (Rule rule in rules)
     bool injectedBuild = Build(dotnet, repoRoot, project);
     RunOutcome injected = injectedBuild
         ? RunTests(dotnet, repoRoot, rule.Filter, project)
-        : new RunOutcome(false, 0, "");
+        : new RunOutcome(false, 0, "", "");
 
     Restore(repoRoot, rule.File);
     bool restoredBuild = Build(dotnet, repoRoot, project);
     RunOutcome restored = restoredBuild
         ? RunTests(dotnet, repoRoot, rule.Filter, project)
-        : new RunOutcome(false, 0, "");
+        : new RunOutcome(false, 0, "", "");
 
     bool injectedRed = injectedBuild && injected.Red;
     bool restoredGreen = restoredBuild && !restored.Red;
-    string verdict = injectedBuild && injectedRed && restoredBuild && restoredGreen ? "PASS" : "FAIL";
+    // 契约族规则：报红名单里必须出现期望契约 ID，否则红的原因不是这条契约
+    string[] missing = [.. expected.Where(id => !injected.FailedArgs.Contains(id, StringComparison.Ordinal))];
+    bool expectedHit = injectedBuild && missing.Length == 0;
+    string verdict = injectedBuild && injectedRed && expectedHit && restoredBuild && restoredGreen ? "PASS" : "FAIL";
     Console.WriteLine($"   注入: 构建={(injectedBuild ? "ok" : "fail")} 测试={(injectedRed ? "red" : "未红")} "
         + $"(报红 {injected.Failed} 项)");
     if (injected.FailedNames.Length > 0) Console.WriteLine($"   报红: {injected.FailedNames}");
+    if (injected.FailedArgs.Length > 0) Console.WriteLine($"   报红契约: {injected.FailedArgs}");
+    if (expected.Length > 0)
+        Console.WriteLine(missing.Length == 0
+            ? "   期望契约: 命中"
+            : $"   期望契约: 未命中（缺 {string.Join(", ", missing)}）");
     Console.WriteLine($"   还原: 构建={(restoredBuild ? "ok" : "fail")} 测试={(restoredGreen ? "green" : "未转绿")}");
     Console.WriteLine($"   判定 {verdict}");
     Console.WriteLine();
@@ -177,12 +290,14 @@ foreach (RuleResult result in results)
 
 Console.WriteLine();
 Console.WriteLine("回放台账（Markdown，供 docs/一致性测试总报告 \"未完成项\" 登记）");
-Console.WriteLine("| 规则 | 缺陷 | 注入点 | 目标过滤器 | 报红测试数 | 报红测试名 | 判定 |");
-Console.WriteLine("|------|------|--------|------------|------------|------------|------|");
+Console.WriteLine("| 规则 | 缺陷 | 期望契约 | 注入点 | 目标过滤器 | 报红测试数 | 报红测试名 | 判定 |");
+Console.WriteLine("|------|------|----------|--------|------------|------------|------------|------|");
 foreach (RuleResult result in results)
 {
+    string expected = result.Rule.ExpectedContracts is { Length: > 0 } ids ? string.Join(", ", ids) : "—";
     Console.WriteLine(
         $"| {result.Rule.Id} | {Escape(result.Rule.Note.Split('；')[0])} "
+        + $"| {expected} "
         + $"| `{result.Rule.File}` | `{result.Rule.Filter}` "
         + $"| {result.Injected.Failed} | {Escape(result.Injected.FailedNames)} | {result.Verdict} |");
 }
@@ -220,7 +335,7 @@ static RunOutcome RunTests(string dotnet, string workingDirectory, string filter
         dotnet,
         $"run --project {project} -c Debug --no-build -- --treenode-filter \"{filter}\"",
         workingDirectory);
-    (int failed, string names) = ParseFailures(output);
+    (int failed, string names, string failedArgs) = ParseFailures(output);
     if (exit != 0 && failed == 0)
     {
         // 解析失败时把尾巴打出来，避免"红但数不出来"静默通过
@@ -229,25 +344,30 @@ static RunOutcome RunTests(string dotnet, string workingDirectory, string filter
         foreach (string line in tail[^Math.Min(20, tail.Length)..])
             Console.WriteLine($"     {line.TrimEnd()}");
     }
-    return new RunOutcome(exit != 0, failed, names);
+    return new RunOutcome(exit != 0, failed, names, failedArgs);
 }
 
 /// <summary>从 TUnit 控制台输出取失败项数与失败测试全名。失败块首行只给短名
 /// （"失败 E4_MySql_... (1s 163ms)"），全名在紧随其后的栈帧（"在 命名空间.类.方法()"）里取。
+/// 参数化用例的首行形如 "失败 Sqlite_Contract_Holds(D-BULKDEL-01) (19ms)"——括号里的实参是
+/// 契约 ID 的唯一来源（栈帧里的方法名不含实参），单独收集进 FailedArgs 供契约族规则判定。
 /// 摘要行形如 "失败: 3"。输出按 UTF-8 解码（中文摘要与栈帧前缀依赖它）。</summary>
-static (int Failed, string Names) ParseFailures(string output)
+static (int Failed, string Names, string Args) ParseFailures(string output)
 {
     string text = Regex.Replace(output, "\u001b\\[[0-9;]*m", string.Empty);
     string[] lines = text.Split('\n');
     var names = new List<string>();
+    var args = new List<string>();
     for (int i = 0; i < lines.Length; i++)
     {
         Match header = Regex.Match(
             lines[i],
-            @"^\s*(?:失败|failed)\s+(?<short>[^\s(]+)",
+            @"^\s*(?:失败|failed)\s+(?<short>[^\s(]+)(?:\((?<args>[^)]*)\))?",
             RegexOptions.IgnoreCase);
         if (!header.Success) continue;
         string shortName = header.Groups["short"].Value.Trim();
+        if (header.Groups["args"].Success)
+            args.Add(header.Groups["args"].Value.Trim());
         string fullName = shortName;
         for (int j = i + 1; j < Math.Min(i + 40, lines.Length); j++)
         {
@@ -264,7 +384,9 @@ static (int Failed, string Names) ParseFailures(string output)
     int failed = summary.Success
         ? int.Parse(summary.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)
         : names.Count;
-    return (failed, string.Join(", ", names.Distinct(StringComparer.Ordinal)));
+    return (failed,
+        string.Join(", ", names.Distinct(StringComparer.Ordinal)),
+        string.Join(", ", args.Distinct(StringComparer.Ordinal)));
 }
 
 static void Restore(string repoRoot, string file)
@@ -326,9 +448,10 @@ static string ResolveDotnet()
 }
 
 internal sealed record Rule(
-    string Id, string File, string Original, string Mutated, string Filter, string Note, string? TestProject = null);
+    string Id, string File, string Original, string Mutated, string Filter, string Note,
+    string? TestProject = null, string[]? ExpectedContracts = null);
 
-internal sealed record RunOutcome(bool Red, int Failed, string FailedNames);
+internal sealed record RunOutcome(bool Red, int Failed, string FailedNames, string FailedArgs);
 
 internal sealed record RuleResult(
     Rule Rule, string Project, string Verdict, bool InjectedBuild, bool InjectedRed, RunOutcome Injected,
