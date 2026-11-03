@@ -15,7 +15,7 @@ public sealed class MySqlBatchedUpdatePathTests
 {
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task MySql_BatchedPooledUpdate_CrossesBatchBoundaries_WritesCorrectValues()
+    public async Task MySql_VersionedBulkUpdate_CrossesBatchBoundaries_WritesCorrectValues()
     {
         await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
         try
@@ -54,7 +54,7 @@ public sealed class MySqlBatchedUpdatePathTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task MySql_BatchedPooledUpdate_StaleVersionInsideBatch_ThrowsConcurrencyConflict()
+    public async Task MySql_VersionedBulkUpdate_StaleVersionInsideBatch_ThrowsConcurrencyConflict()
     {
         await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
         try
@@ -94,7 +94,7 @@ public sealed class MySqlBatchedUpdatePathTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task MySql_BatchedPooledUpdate_InMemoryVersionIncrementOnlyOnSuccess()
+    public async Task MySql_VersionedBulkUpdate_InMemoryVersionIncrementOnlyOnSuccess()
     {
         await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
         try

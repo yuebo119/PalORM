@@ -95,13 +95,11 @@ internal sealed class ExpressionBuilderSmokeTests
             .ToListAsync();
         await Assert.That(window.Count).IsEqualTo(1);
 
-        // ── 悲观锁：只断言 SQL 形态，**不执行** ──
-        // ITM-639（5c47b69 登记）：SQLite 不支持 FOR UPDATE/SHARE，且**故意不在构建期拒绝**——
-        // 既定契约是"SQLite 上可用 DryRun/ToSql 预览锁语句形态（面向 PG/MySQL 的生产 SQL），
-        // 执行期由 SQLite 报语法错误"。故这里断言形态而非执行；执行会抛
-        // SqliteException: near "FOR": syntax error（我第一版就是这么写的，撞上后核到该登记）。
-        // SQLite 无行级锁：三个入口都在构建期拒绝（ITM-639 终态）；PG 上的形态与执行由
-        // PessimisticLockTests 覆盖
+        // ── 悲观锁：三个入口都在构建期拒绝（ITM-639 终态）──
+        // 早期形态（5c47b69 登记的"故意不在构建期拒绝"）已被推翻：SQLite 无行级锁，
+        // 让调用在 DryRun 阶段静默通过、执行期才由数据库报 "near FOR: syntax error" 属坏契约。
+        // 现行为：ForUpdate/ForUpdate(skipLocked)/ForShare 调用即抛 NotSupportedException，
+        // 错误与调用点同帧。PG/MySQL 上的真实执行由 PessimisticLockTests 覆盖。
         await Assert.That(() => db.From<SmokeChild>().ForUpdate()).Throws<NotSupportedException>();
         await Assert.That(() => db.From<SmokeChild>().ForUpdate(skipLocked: true)).Throws<NotSupportedException>();
         await Assert.That(() => db.From<SmokeChild>().ForShare()).Throws<NotSupportedException>();

@@ -7,8 +7,9 @@ using PalORM.Testing;
 namespace PalORM.Integration.Tests;
 
 // P1-B（方案 §6.5 / BULK-1..2）：批量剩余的跨批原子性。
-// BulkInsert 不包事务时第二批失败会留下首批已提交前缀——本类把该形态钉成实测断言；
-// BulkMerge 整段包在事务内，第二批重复主键必须整段回滚。
+// 实测（2026-10-31 复核）：BulkInsert 内部包事务，跨批失败时已成功批次同样回滚 → 零行残留；
+// 早期文档记作"留下首批已提交前缀"，那是包事务之前的形态，已不成立。
+// BulkMerge 整段包在事务内，第二批重复主键必须整段回滚——两者共用"全有或全无"判据。
 
 [NotInParallel("ExtBulkTable")]
 public sealed class BulkAtomicityTests
@@ -30,7 +31,7 @@ public sealed class BulkAtomicityTests
     }
 
     [Test]
-    public async Task Sqlite_BulkInsert_CrossBatchFailure_LeavesDocumentedPrefix()
+    public async Task Sqlite_BulkInsert_CrossBatchFailure_LeavesNoPrefix()
     {
         await using SharedSqliteDb shared = await SharedSqliteDb.CreateAsync("bulk_atomicity_sqlite");
         await using DataSession<SqliteProvider> db = await shared.OpenSessionAsync();
@@ -59,12 +60,12 @@ public sealed class BulkAtomicityTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task PostgreSql_BulkInsert_CrossBatchFailure_LeavesDocumentedPrefix()
+    public async Task PostgreSql_BulkInsert_CrossBatchFailure_LeavesNoPrefix()
         => await RemoteInsertPrefixAsync("postgresql", static () => TestDb.PostgreSqlAsync());
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task MySql_BulkInsert_CrossBatchFailure_LeavesDocumentedPrefix()
+    public async Task MySql_BulkInsert_CrossBatchFailure_LeavesNoPrefix()
         => await RemoteInsertPrefixAsync("mysql", static () => TestDb.MySqlAsync());
 
     private static async Task RemoteInsertPrefixAsync<TProvider>(

@@ -210,9 +210,10 @@ internal static class Program
     /// <c>UnsafeWindowOver</c>/<c>ForUpdate</c>/<c>ForShare</c>/<c>WithCache</c>/<c>AsPrepared</c>/<c>Tag</c>
     /// 从未被任何 AOT 程序调用——它们的 AOT 兼容性此前是**未验证的声明**。本方法在原生二进制里
     /// 执行这些路径并校验结果（与 JIT 侧 <c>ExpressionBuilderSmokeTests</c> 同一套断言）。</para>
-    /// <para>锁语句按 ITM-639 的登记契约**只验形态不执行**：SQLite 不支持 FOR UPDATE/SHARE，
-    /// 构建期故意不拒绝（既定契约允许在 SQLite 上预览面向 PG/MySQL 的锁语句形态），
-    /// 执行会报 <c>SQLite Error 1: near "FOR": syntax error</c>。</para></summary>
+    /// <para>锁语句按 ITM-639 的终态契约**在构建期拒绝**：SQLite 不支持 FOR UPDATE/SHARE，
+    /// 调用即抛 <c>NotSupportedException</c>（错误与调用点同帧，不等到执行期由数据库报
+    /// <c>SQLite Error 1: near "FOR": syntax error</c>）。PG/MySQL 上的真实执行由
+    /// <c>AotTest.Pg</c> / <c>AotTest.MySql</c> 的 <c>VerifyPessimisticLocksAsync</c> 覆盖。</para></summary>
     private static async Task VerifyExpressionBuildersAsync(DataSession<SqliteProvider> db)
     {
         AotParentEntity parent = await db.InsertAsync(new AotParentEntity { Name = "p0" }).ConfigureAwait(false);

@@ -57,9 +57,11 @@ public sealed class BulkDataTests
         await Assert.That(deleted.All(entity => entity.DeletedAt is not null)).IsTrue();
     }
 
-    // v5.0 阶段 4.3b：BulkUpdateBatchAsync 测试——验证批量 UPDATE 单次 RTT 完成多行更新。
+    // v5.0 阶段 4.3b：BulkUpdateBatchAsync 测试——验证批量 UPDATE 按主键逐行写正确。
+    // 注意：本用例跑在 SQLite 上，SQLite 按设计回退逐条路径（DataSession_Bulk 的方言排除），
+    // 单语句形态不会出现；单语句形态由 BulkUpdateBatchDialectTests 的 PG/MySQL 臂覆盖。
     [Test]
-    public async Task BulkUpdateBatch_UpdatesMultipleRowsInSingleStatement()
+    public async Task BulkUpdateBatch_UpdatesMultipleRowsCorrectly()
     {
         await using var db = await TestDb.SqliteAsync();
         await db.MigrateAsync();
