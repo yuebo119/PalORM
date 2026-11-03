@@ -256,8 +256,11 @@ public sealed class SessionPoolTests
             }));
         }
         int[] quantities = await Task.WhenAll(tasks);
-        foreach (int qty in quantities)
-            await Assert.That(qty).IsGreaterThan(0);
+        // 逐项对账：Task.WhenAll 保持 tasks 顺序，quantities[i] 对应 id = i + 1 的会话。
+        // 原写法 `qty > 0` 放过了 1..8 的错位（每个会话都读到别人的行也全为正数）——
+        // 池化串扰的可观测面正是"读回值等于自己写的值"。
+        for (int i = 0; i < quantities.Length; i++)
+            await Assert.That(quantities[i]).IsEqualTo(i + 1);
         await Assert.That(pool.IdleCount).IsEqualTo(8);
     }
 

@@ -227,7 +227,12 @@ public sealed class PairwiseMatrixTests
                     ? db.From<TEntity>().InnerJoin<CfBulkPlainEntity>(onClause)
                     : db.From<TEntity>().LeftJoin<CfBulkPlainEntity>(onClause);
                 List<TEntity> rows = await builder.ToListAsync(ct);
-                await Assert.That(rows.Count).IsGreaterThanOrEqualTo(0);
+                // 辅助表 cf_bulk_plain 在本文件从不写入（只由 MigrateAsync 建表），
+                // 且矩阵会话从不 WithTenant（租户过滤仅在 tenantId 非 null 时附加），
+                // 因此关联结果可确定性推导：INNER 无匹配行 → 0，LEFT 保留左表全部 → 1。
+                // 原断言 `>= 0` 对任何行数都成立，等于只证明"不抛异常"（T21 空转绿）。
+                int expected = op == MatrixOperation.InnerJoin ? 0 : 1;
+                await Assert.That(rows.Count).IsEqualTo(expected);
                 break;
             }
             case MatrixOperation.Cte:
@@ -278,16 +283,22 @@ public sealed class PairwiseMatrixTests
                 await db.BulkInsertAsync([spec.Create(), spec.Create()], ct);
                 // 自增形状的 BulkInsert 不回填 Id，必须先读回带主键的实体
                 List<TEntity> rows = await db.GetAllAsync<TEntity>(ct);
-                if (rows.Count == 0) break;
-                await db.BulkUpdateAsync(rows, ct);
+                // 原实现 `if (rows.Count == 0) break;` 让空表时整个格子无声通过（零断言），
+                // 且受影响行数从不校验——"批量 UPDATE 静默 0 行"正是本格要抓的缺陷形态。
+                await Assert.That(rows.Count).IsEqualTo(2);
+                long affected = await db.BulkUpdateAsync(rows, ct);
+                await Assert.That(affected).IsEqualTo(2L);
+                await Assert.That(await db.CountAsync<TEntity>(ct: ct)).IsEqualTo(2L);
                 break;
             }
             case MatrixOperation.BulkUpdateBatch:
             {
                 await db.BulkInsertAsync([spec.Create(), spec.Create()], ct);
                 List<TEntity> rows = await db.GetAllAsync<TEntity>(ct);
-                if (rows.Count == 0) break;
-                await db.BulkUpdateBatchAsync(rows, ct);
+                await Assert.That(rows.Count).IsEqualTo(2);
+                long affected = await db.BulkUpdateBatchAsync(rows, ct);
+                await Assert.That(affected).IsEqualTo(2L);
+                await Assert.That(await db.CountAsync<TEntity>(ct: ct)).IsEqualTo(2L);
                 break;
             }
             case MatrixOperation.BulkMerge:

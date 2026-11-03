@@ -74,11 +74,11 @@ public sealed class ProviderHotPathTests
     {
         // C5：显式静态构造器会使类型失去 beforefieldinit——CLR 每次静态访问都付初始化检查。
         // 用 ModuleInitializer 替代后该标记必须存在。
+        // 注：ModuleInitializer 属性本身不保留在反射元数据，GetCustomAttributes 恒返回 0 长度
+        //（任何实现都通过，无判别力）——不在此断言；bundle 是否真的初始化由下一个用例
+        // （静态成员可用性）行为验证。
         Type type = typeof(SqliteProvider);
         await Assert.That(type.TypeInitializer is null).IsTrue();
-        await Assert.That(
-            type.GetCustomAttributes(typeof(System.Runtime.CompilerServices.ModuleInitializerAttribute), false)
-                .Length).IsEqualTo(0);  // ModuleInitializer 属性本身不保留在反射元数据
     }
 
     [Test]

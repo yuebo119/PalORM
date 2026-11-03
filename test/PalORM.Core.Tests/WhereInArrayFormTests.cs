@@ -75,6 +75,11 @@ public sealed class WhereInArrayFormTests
 
         DryRunResult notInEmpty = session.From<WinArrayEntity>().WhereNotIn<int>(x => x.Qty, []).AsDryRun();
         await Assert.That(notInEmpty.Parameters.Count).IsEqualTo(0);
+        // 空 NOT IN 是 no-op（排除空集等于不过滤，QueryBuilder.AddInClause 的 negated 分支
+        // 直接 return this 不追加任何子句）——与空 IN 的恒假 1=0 方向相反。只断参数数为 0
+        // 无法区分这两种语义：若误生成 1=0（全行过滤），参数数同样是 0 而断言仍绿。
+        await Assert.That(notInEmpty.Sql.Contains("1=0", StringComparison.Ordinal)).IsFalse();
+        await Assert.That(notInEmpty.Sql.Contains("1=1", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]

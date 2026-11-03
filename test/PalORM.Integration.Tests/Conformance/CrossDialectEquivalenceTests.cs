@@ -157,10 +157,12 @@ public sealed class CrossDialectEquivalenceTests
         IReadOnlyList<IReadOnlyDictionary<string, object?>> myRows = await SeedBulkAndReadAsync(
             SqlDialect.MySql, my.Session, my.Raw);
 
+        // 场景级跳过量必须为 0（类注释的登记口径）：三方言各读回全部五行才算零跳过。
+        // 原写法 `skipped / (double)scenarios <= 0.2` 两个变量都是字面量常量，恒为 0 <= 0.2，
+        // 任何方言漏行都不红；改为逐方言断言行数，漏行/跳方言时本断言先红。
         await Assert.That(sqliteRows.Count).IsEqualTo(5);
-        int scenarios = 1;
-        int skipped = 0;
-        await Assert.That(skipped / (double)scenarios).IsLessThanOrEqualTo(0.2);
+        await Assert.That(pgRows.Count).IsEqualTo(5);
+        await Assert.That(myRows.Count).IsEqualTo(5);
 
         await AssertPairwiseEquivalentAsync("sqlite", sqliteRows, "postgresql", pgRows);
         await AssertPairwiseEquivalentAsync("sqlite", sqliteRows, "mysql", myRows);
