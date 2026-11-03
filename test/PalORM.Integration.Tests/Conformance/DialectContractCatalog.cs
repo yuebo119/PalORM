@@ -431,7 +431,21 @@ public sealed class DialectCapabilityContractTests
 
     [Test]
     public async Task Sqlite_CapabilityContracts_Hold()
-        => await RunAsync(SqlDialect.Sqlite, DialectScopes.SqliteAsync);
+    {
+        // S3 守卫（2026-11-03）：ContractCatalog 的 18 条 SQLite 重复条目删除后，
+        // D 层成为 SQLite 侧的唯一兜底。若某条 D 契约在 SQLite 上被登记为不支持，
+        // SQLite 侧就再无覆盖——本断言把"SQLite 必须全覆盖"钉成机械约束。
+        foreach ((string id, SqlDialect dialect) in DialectUnsupported.Table.Keys)
+        {
+            if (dialect != SqlDialect.Sqlite) continue;
+            await Assert.That(id)
+                .IsNull()
+                .Because($"契约 {id} 在 SQLite 上被登记为不支持，但 ContractCatalog 的 SQLite 兜底已移除——SQLite 侧将失去该契约覆盖");
+        }
+
+        int executed = await RunAsync(SqlDialect.Sqlite, DialectScopes.SqliteAsync);
+        await Assert.That(executed).IsEqualTo(DialectContractCatalog<SqliteProvider>.Capabilities.Count);
+    }
 
     [Test]
     [Property("Category", "ExternalDatabase")]

@@ -118,9 +118,14 @@ public sealed class ExternalDatabaseBulkTests
     /// 批宽，默认路径不在门禁覆盖内，2026-11-03 前产品默认停在 1000，与报告数字不一致。</para></summary>
     [Test]
     [Property("Category", "ExternalDatabase")]
-    // 与 SET GLOBAL local_infile=OFF 的用例串行：否则可能落在 OFF 窗口内（回退路径），
-    // 虽然断言两条路径都成立，但串行保证本用例每次都真实覆盖 BulkCopy 形态
-    [NotInParallel("LocalInfileGlobal")]
+    // 多键（TUnit 官方支持 NotInParallel(new[]{...})，方法级优先但不覆盖其他键）：
+    // ExtBulkTable 保住类级串行（否则本类的 DROP ext_bulk_entities 与
+    // BulkAtomicityTests 的 MigrateAsync 并行，撞"表不存在"——2026-11-03 实测）；
+    // LocalInfileGlobal 保住与 SET GLOBAL local_infile=OFF 用例互斥（否则落在 OFF 窗口
+    // 静默降级多值回退，BulkCopy 路径覆盖率归零）。
+    // 原写法只挂 LocalInfileGlobal，丢了 ExtBulkTable——LocalInfileTestGate 类注释称
+    // "只能挂一个键"是 TUnit 旧版限制，1.76 已支持多键。
+    [NotInParallel(new[] { "ExtBulkTable", "LocalInfileGlobal" })]
     public async Task MySql_BulkInsert_DefaultOverload_LargeBatchPersistsEveryRow()
     {
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
@@ -225,9 +230,8 @@ public sealed class ExternalDatabaseBulkTests
     /// <c>EntityDataReaderTests</c> 确定性覆盖，不依赖服务端能力。</para></summary>
     [Test]
     [Property("Category", "ExternalDatabase")]
-    // 与 SET GLOBAL local_infile=OFF 的用例串行：否则全量跑时本用例可能落在 OFF 窗口内
-    // 被静默降级为多值回退，BulkCopy 路径覆盖率归零（2026-10-18 审计实测）
-    [NotInParallel("LocalInfileGlobal")]
+    // 同上：多键保住类级 ExtBulkTable + 方法级 LocalInfileGlobal（原只挂后者会丢前者）
+    [NotInParallel(new[] { "ExtBulkTable", "LocalInfileGlobal" })]
     public async Task MySql_BulkCopy_AllWhitelistedTypes_RoundTripPreservesValues()
     {
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
