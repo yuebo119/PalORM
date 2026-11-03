@@ -8,14 +8,22 @@ public partial class DataSession<TProvider>
 {
 
     /// <summary>S6：批量插入的方言推荐批宽——PG 的 <c>batchSize</c> 是每次 COPY 会话的行数
-    /// （COPY 无参数上限），默认 1000 会让 2 万行付 20 次 BeginBinaryImport/Complete 往返；
-    /// 本重载 PG 取整段行数（单次 COPY），MySQL/SQLite 沿用 1000。需要限制单次 COPY/事务
-    /// 持锁行数时用带 <c>batchSize</c> 的重载。</summary>
+    /// （COPY 无参数上限），MySQL 的是每次 LOAD DATA / 多值 INSERT 的行数。两者都取
+    /// <b>整段行数</b>（单次 COPY / 单次 LOAD DATA）：分批只省内存不省时间——两条协议都是
+    /// 流式的（<c>MySqlBulkCopy</c> 按 1 MB 分片发送、读取器逐行绑定定长参数池，批宽不影响
+    /// 内存峰值），而每批要付一次协议建立、一次列 schema 查询（驱动 <c>WriteToServerAsync</c>
+    /// 内部执行）与一次隐式提交。SQLite 行预编译形态不分批，该参数兼容保留、不决定语句形状
+    /// （ADR-Q）。需要限制单次 COPY/LOAD DATA 的事务持锁行数时用带 <c>batchSize</c> 的重载。
+    /// <para><b>MySQL 回退路径</b>：服务端 <c>local_infile=OFF</c> 时改走多值 INSERT，该路径在
+    /// Provider 内钳制为 1000 行/语句（SQL 文本规模纪律，perf-ledger 表 1）。</para></summary>
     public ValueTask<long> BulkInsertAsync<T>(IReadOnlyList<T> entities, CancellationToken ct = default)
         where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(entities);
-        int recommended = TProvider.Dialect == SqlDialect.PostgreSql
+        // 2026-11-03：MySQL 并入整段单批——基准臂（BulkBatchRows）与 ADO 地板本就跑整段，
+        // 产品默认停在 1000 使"报告数字不能由默认 API 复现"（同批 P/ADO 1.34 vs 0.97）。
+        // ITM-710 的分批理由（DataTable 整表物化 OOM）随 v5.6 EntityDataReader 流式化失效。
+        int recommended = TProvider.Dialect is SqlDialect.PostgreSql or SqlDialect.MySql
             ? Math.Max(1, entities.Count)
             : 1000;
         return BulkInsertAsync(entities, recommended, ct);
@@ -23,6 +31,7 @@ public partial class DataSession<TProvider>
 
     /// <summary>批量插入——委托 Provider 使用源生成 InsertColumns 与 binder，并复用会话事务。
     /// <paramref name="batchSize"/> 为显式批宽（PG 为每次 COPY 行数，MySQL 为每批多值 INSERT/LOAD 行数；
+    /// MySQL 在 <c>local_infile=OFF</c> 的多值回退路径上进一步钳制为 1000 行/语句；
     /// SQLite 行预编译形态不分批，该参数兼容保留、不决定语句形状，2026-10-25 ADR-Q）。</summary>
     /// <returns><b>数据库受影响行数</b>（驱动 ExecuteNonQuery 口径）——与本家族
     /// BulkUpdate/BulkDelete 同口径；BulkMerge 例外（返回处理实体数，跨方言可预测，见其

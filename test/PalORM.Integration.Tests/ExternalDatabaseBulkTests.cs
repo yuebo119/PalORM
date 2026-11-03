@@ -111,6 +111,55 @@ public sealed class ExternalDatabaseBulkTests
         }
     }
 
+    /// <summary>S6 扩展（2026-11-03）：1 参重载在 MySQL 上也按整段行数走单次 LOAD DATA
+    /// （<c>local_infile=ON</c> 时）；服务端关闭时回退多值路径并按 1000 行/语句钳制。
+    /// 两条路径都必须完整落库——批宽只影响往返数，不影响行数、首尾值与计数。
+    /// <para>本用例锁定的是<b>默认重载</b>（不带 batchSize）的实际行为：基准臂长期显式传整段
+    /// 批宽，默认路径不在门禁覆盖内，2026-11-03 前产品默认停在 1000，与报告数字不一致。</para></summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    // 与 SET GLOBAL local_infile=OFF 的用例串行：否则可能落在 OFF 窗口内（回退路径），
+    // 虽然断言两条路径都成立，但串行保证本用例每次都真实覆盖 BulkCopy 形态
+    [NotInParallel("LocalInfileGlobal")]
+    public async Task MySql_BulkInsert_DefaultOverload_LargeBatchPersistsEveryRow()
+    {
+        await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+        await db.MigrateAsync();
+        try
+        {
+            const int rows = 2500;
+            var seed = new List<ExtBulkEntity>(rows);
+            for (int i = 1; i <= rows; i++)
+            {
+                seed.Add(new ExtBulkEntity
+                {
+                    Code = $"BULK{i:D4}",
+                    Note = i % 7 == 0 ? null : $"note-{i}",
+                    Amount = i * 0.25m,
+                    CreatedAt = new DateTime(2026, 7, 18, 0, 0, 0, DateTimeKind.Utc).AddSeconds(i),
+                    OptionalCount = i % 5 == 0 ? null : i,
+                    Payload = null
+                });
+            }
+
+            long inserted = await db.BulkInsertAsync(seed);
+            await Assert.That(inserted).IsEqualTo(rows);
+            await Assert.That(await db.CountAsync<ExtBulkEntity>()).IsEqualTo(rows);
+
+            List<ExtBulkEntity> read = [.. (await db.GetAllAsync<ExtBulkEntity>()).OrderBy(r => r.Code)];
+            await Assert.That(read[0].Code).IsEqualTo("BULK0001");
+            await Assert.That(read[0].Note).IsEqualTo("note-1");
+            await Assert.That(read[0].Amount).IsEqualTo(0.25m);
+            await Assert.That(read[^1].Code).IsEqualTo("BULK2500");
+            await Assert.That(read[^1].Amount).IsEqualTo(625m);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS ext_bulk_entities");
+        }
+    }
+
     /// <summary>可空列「首行为 null、后续行非 null」的 COPY 参数复用回归。
     /// <para><b>为什么单列一条</b>：v5.6 把 COPY 的参数对象改为每批建一次、逐行只写 Value，
     /// 参数类型由<b>首个</b>绑定行的值推断。现有 <c>PG_MigrateAndBinaryCopy_...</c> 的行序是

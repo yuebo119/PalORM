@@ -2422,14 +2422,15 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
             _ => throw UnsupportedDialect(D)
         };
 
-    private async Task<long> BulkInsertCoreAsync<TProvider>(
+    private static async Task<long> BulkInsertCoreAsync<TProvider>(
         DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
         where TProvider : IDbProvider, new()
     {
-        bool localInfile = await EnsureMySqlLocalInfileAsync(conn, ct).ConfigureAwait(false);
-        return await Session<TProvider>(conn)
-            .BulkInsertAsync(rows, BulkBatchRows(TProvider.Dialect, rows.Count, localInfile), ct)
-            .ConfigureAwait(false);
+        // 2026-11-03：改调默认重载——默认重载即产品默认路径（PG/MySQL 整段单批、SQLite 忽略
+        // 批宽）。此前显式传 BulkBatchRows 使基准测的不是默认路径：产品默认对 MySQL 停在 1000，
+        // 而报告数字来自整段配置（同批 P/ADO 1.34 vs 0.97），默认路径的退化在门禁里不可见。
+        // 默认重载落地后两条路径的批宽逐位一致，本项数值不变、覆盖面对齐。
+        return await Session<TProvider>(conn).BulkInsertAsync(rows, ct).ConfigureAwait(false);
     }
 
     public Task<int> UpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)

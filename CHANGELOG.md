@@ -6,6 +6,7 @@
 
 ### 💔 破坏性/行为变更
 
+- MySQL 上 `BulkInsertAsync(entities)`（不带 `batchSize` 的重载）的默认批宽由 1000 行/批改为整段单批，与 PostgreSQL 一致：单次 LOAD DATA、一次列 schema 查询与一次隐式提交取代 N 次。`local_infile=OFF` 的多值回退路径仍按 1000 行/语句钳制（SQL 文本规模纪律）。需要限制单次 LOAD DATA 持锁行数时用带 `batchSize` 的重载。依据：同批基准实测 P/ADO 1.34→0.97（基准臂原本即整段配置，产品默认停在 1000 使报告数字不能由默认 API 复现）。
 - PostgreSQL 上 `DateTime` 列的类型由 `timestamp`（无时区）改为 `timestamptz`。参数侧 `DbType.DateTime` 被 Npgsql 映射为 timestamptz，列与参数不匹配会让"读回再写回"抛 `ArgumentException`；统一后 DateTime 在 PG 上表示 UTC 时刻，往返可用。已有库需手工 `ALTER TABLE ... ALTER COLUMN ... TYPE timestamptz`（`MigrateAsync` 只建不改）。
 - `ToPageAsync` 对 builder 上已设的 `Skip()` 由「静默忽略」改为抛 `InvalidOperationException`。键集分页以 `lastValue` 锚点续页，OFFSET 语义不适用；静默丢弃用户显式设置的子句会让分页结果与预期不符。
 - SQLite 上 `ForUpdate()` / `ForShare()` 改为构建期抛 `NotSupportedException`。原来构建期放过、执行期由数据库报 `near "UPDATE": syntax error`；SQLite 没有行级锁，这两个 API 在该方言上从来不可用，本次把失败提前到调用点（ITM-639 终态）。

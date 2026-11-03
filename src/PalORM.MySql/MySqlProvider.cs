@@ -295,10 +295,13 @@ public sealed class MySqlProvider : IDbProvider
         }
 
         // 回退路径：local_infile=OFF 或非 MySqlConnection，走多值 INSERT。
+        // 批宽钳制：默认重载（2026-11-03 起）对 MySQL 传整段行数，多值形态不适用——语句文本
+        // 随行数×列数增长，整段会生成数百 KB 单语句。回退路径固定 1000 行/语句（perf-ledger 表 1
+        // "多值回退保持 1000"），显式批宽大于该值时同样收敛到此值。
         return await MultiValueBulkInsert.ExecuteAsync(
             conn, transaction, entities,
             new BulkContext(
-                batchSize,
+                Math.Min(batchSize, MySqlMultiValueMaxRowsPerBatch),
                 MaxParametersPerStatement: SqlLimits.MaxBindParameters,
                 QuoteIdentifier, CreateParameter, commandTimeoutSeconds,
                 IsolationLevel: isolationLevel),  // r7-S1：回退分支同透传
@@ -326,7 +329,7 @@ public sealed class MySqlProvider : IDbProvider
             return await MultiValueBulkInsert.ExecuteAsync(
                 conn, transaction, entities,
                 new BulkContext(
-                    settings.BatchSize,
+                    Math.Min(settings.BatchSize, MySqlMultiValueMaxRowsPerBatch),
                     MaxParametersPerStatement: SqlLimits.MaxBindParameters,
                     QuoteIdentifier, CreateParameter, settings.CommandTimeoutSeconds,
                     IsolationLevel: settings.IsolationLevel),
@@ -359,6 +362,12 @@ public sealed class MySqlProvider : IDbProvider
     /// 会抛 InvalidOperationException）；检测自身故障（网络抖动/超时）降级为 OFF 走多值
     /// INSERT——能力探测不应终止整批插入。</para></summary>
     private sealed record LocalInfileProbe(bool Enabled);
+
+    /// <summary>多值 INSERT 回退路径的单语句行数上限（2026-11-03）。<c>local_infile=OFF</c> 时
+    /// 批量插入降级为多值 VALUES，语句文本随「行数 × 列数」线性增长；默认重载对 MySQL 传整段
+    /// 行数（对齐 BulkCopy 形态），回退路径必须收敛到本值，否则 2 万行 × N 列会生成数百 KB
+    /// 单语句。与 perf-ledger 表 1「多值回退保持 1000」的既有裁决一致。</summary>
+    private const int MySqlMultiValueMaxRowsPerBatch = 1000;
 
     private const int LocalInfileProbeTtlMilliseconds = 60_000;
 
