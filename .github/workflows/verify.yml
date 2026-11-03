@@ -119,6 +119,19 @@ jobs:
             - name: Assert Core coverage floor (M3-1)
               run: dotnet run --file scripts/assert-coverage.cs -- PalORM.Core cov-core.xml core
 
+            # 2026-11-04：diff 覆盖率门禁（T1-diff）在 integration job 运行，需要 Core 侧
+            # 覆盖率 XML 取命中并集（Core 代码可能由 Integration 用例跑到）。首次 CI 实跑
+            # （run 41695120342）报「覆盖率文件不存在：cov-core.xml」——该文件只在 unit job
+            # 产出、从未跨 job 传递。此处上传，integration job 下载。
+            - name: Upload Core coverage XML (for T1-diff)
+              if: always()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: cov-core
+                  path: cov-core.xml
+                  retention-days: 7
+                  if-no-files-found: warn
+
             - name: Public API compatibility (CONTRACT-3)
               # 公开 API 基线在 bench/baselines/public-api/；破坏性变更（新增/删除/改签名）在 PR 报红。
               # 有意变更时运行 --update 重写基线，并在提交说明标注 SemVer 升级类型。
@@ -229,15 +242,42 @@ jobs:
                   dotnet run --file scripts/assert-coverage.cs -- --branch postgreSqlProvider cov-integration.xml
                   dotnet run --file scripts/assert-coverage.cs -- --branch sqliteProvider cov-integration.xml
 
+    # T1-diff 独立成 job（2026-11-04）：它需要 unit 与 integration 两侧的覆盖率 XML
+    # （Core 代码可能由 Integration 用例跑到，命中取并集），而两个 job 是 build 的并行下游，
+    # 任一 job 内都拿不到对方的产物。首次 CI 实跑（run 41695120342）在本步报
+    # 「覆盖率文件不存在：cov-core.xml」——即该文件从未跨 job 传递。放这里 needs 两者，
+    # 不改变两个测试 job 的并行度（只是把门禁挪到它们之后）。
+    diff-coverage:
+        name: Diff Coverage (T1-diff)
+        runs-on: ubuntu-24.04
+        needs: [unit, integration]
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  # 需要 base 提交的历史；浅克隆下 diff 拿不到基线
+                  fetch-depth: 200
+            - uses: actions/setup-dotnet@v6
+              with:
+                  global-json-file: global.json
+
+            - name: Download Core coverage XML
+              uses: actions/download-artifact@v8
+              with:
+                  name: cov-core
+
+            - name: Download Integration coverage XML
+              uses: actions/download-artifact@v8
+              with:
+                  name: coverage-xml
+
+            # 测试体系优化方案 2026-11-01 · T0-5：只统计本次改动涉及的行，阈值 80%。
+            # 与 assert-coverage 分工：全量地板防整体退化，本步防"新增未覆盖代码靠
+            # 分母增长溜过去"（2026-10-18 定 core 地板 74 后 src 新增 10 个文件把实测
+            # 摊薄到 74.33 的教训）。白名单：注释行 / .g.cs / test·tools·scripts·docs。
+            # 探针已验证双向可判（新增 12 行未覆盖 → exit 1；只改注释 → exit 0）。
             - name: Assert diff coverage floor (T1-diff)
-              # 测试体系优化方案 2026-11-01 · T0-5：只统计本次改动涉及的行，阈值 80%。
-              # 与 assert-coverage 分工：全量地板防整体退化，本步防"新增未覆盖代码靠
-              # 分母增长溜过去"（2026-10-18 定 core 地板 74 后 src 新增 10 个文件把实测
-              # 摊薄到 74.33 的教训）。白名单：注释行 / .g.cs / test·tools·scripts·docs。
-              # 探针已验证双向可判（新增 12 行未覆盖 → exit 1；只改注释 → exit 0）。
               run: |
-                  # 需要 base 提交的历史；浅克隆下 diff 拿不到 PR 基线
-                  git fetch --no-tags --prune --depth=200 origin "+refs/heads/*:refs/remotes/origin/*"
                   base="${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}"
                   dotnet run --file scripts/diff-coverage.cs -- "$base" HEAD cov-core.xml cov-integration.xml
 
