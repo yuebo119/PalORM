@@ -45,10 +45,11 @@ public sealed class CapabilityContractTests
             if (string.IsNullOrWhiteSpace(contract.Source)) problems.Add($"{contract.Id}: 来源为空");
         }
 
-        // 2026-11-03 去重后 30 → 11：18 条与 DialectContractCatalog 的 D-* 逐行相同，
-        // D 层三方言都跑故 SQLite 侧覆盖不降；保留 D 层没有的 10 条
+        // 2026-11-03 去重后 30 → 11：19 条的断言与 DialectContractCatalog 的 D-* 等价
+        //（SAVE-01 少一条 IsNotNull，但 null 时 row.Name 访问照样失败），D 层三方言都跑故
+        // SQLite 侧覆盖不降；保留 D 层没有的 10 条
         //（JOIN-01/02、CTE-01、GROUP-01、WINDOW-01、MULTI-01、RAW-01、SPROC-01、TX-03、
-        // BULKUP-02）+ 断言不同的 PAGE-01（descending 默认 true 只在 C 层断言）。
+        // BULKUP-02）+ 断言更全的 PAGE-01（descending 默认 true 只在 C 层断言）。
         if (ContractCatalog.Capabilities.Count != 11)
             problems.Add($"契约条数为 {ContractCatalog.Capabilities.Count}，方案要求 11");
 

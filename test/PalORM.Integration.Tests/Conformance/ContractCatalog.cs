@@ -70,13 +70,16 @@ internal static class ContractCatalog
 
     public static IReadOnlyList<ContractEntry> Capabilities { get; } =
     [
-        // 2026-11-03 去重（18 条）：INSERT-01/02、SAVE-01/02、UPDATE-01、UPDCOLS-01、
+        // 2026-11-03 去重（19 条）：INSERT-01/02、SAVE-01/02、UPDATE-01、UPDCOLS-01、
         // DELETE-01/02、GET-01、GETALL-01、QUERY-01、AGG-01、SCALAR-01、BULKIN-01、
-        // BULKUP-01、BULKMERGE-01、BULKDEL-01、TX-01/02 的断言体与 DialectContractCatalog
-        // 的 D-* 同名条目逐行相同，而 D 层在 SQLite/PG/MySQL 三方言都跑（C 层只在 SQLite）。
-        // 删除后 SQLite 侧仍由 D 层覆盖，覆盖率不降。保留的 12 条是 D 层没有的
+        // BULKUP-01、BULKMERGE-01、BULKDEL-01、TX-01/02 的断言与 DialectContractCatalog
+        // 的 D-* 同名条目等价（同断言谓词 + 同期望值；差别只在 session/db 命名与 C 层把
+        // 结果先存局部变量）。唯一例外 SAVE-01：D 版少一条 IsNotNull，但紧接着的
+        // row.Name 访问在 null 时照样失败，判别力未降。
+        // D 层在 SQLite/PG/MySQL 三方言都跑（C 层只在 SQLite），删除后 SQLite 侧仍由
+        // D 层覆盖，覆盖率不降。保留的 11 条是 D 层没有的 10 条
         //（JOIN-01/02、CTE-01、GROUP-01、WINDOW-01、MULTI-01、RAW-01、SPROC-01、
-        // TX-03、BULKUP-02）与断言不同的（PAGE-01：descending 默认 true 只在 C 层断言）。
+        // TX-03、BULKUP-02）与断言更全的 1 条（PAGE-01：descending 默认 true 只在 C 层断言）。
         // SQLite 兜底由 DialectCapabilityContractTests.Sqlite_CapabilityContracts_Hold 的
         // "SQLite 不得登记不支持"守卫保证。
 
