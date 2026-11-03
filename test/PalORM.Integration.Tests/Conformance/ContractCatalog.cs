@@ -26,8 +26,9 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <c>descending</c> 默认 true，方言契约目录只测显式 <c>descending: false</c>。</para>
 /// <para><b>不要"并进方言契约目录"</b>：本目录的 SQL 硬编码双引号（如 <c>SELECT "Id", "name"</c>），
 /// MySQL 上直接失败；迁移前须把每条改成 <c>scope.Q()</c> 参数化，工作量等同重写，而方言契约目录
-/// 已有对应覆盖，收益为零。SQLite 兜底由 <c>DialectCapabilityContractTests.Sqlite_CapabilityContracts_Hold</c>
-/// 的"SQLite 不得登记 DialectUnsupported"守卫保证。</para></summary>
+/// 已有对应覆盖，收益为零。SQLite 兜底由 <c>DialectCapabilityContractTests.DialectContractMatrix_IsConsistent</c>
+/// 的"SQLite 不得登记 DialectUnsupported"守卫保证（2026-11-03 参数化后原 <c>Sqlite_CapabilityContracts_Hold</c>
+/// 已拆为 <c>Sqlite_Contract_Holds(契约ID)</c>，守卫移入矩阵自检）。</para></summary>
 internal sealed record ContractEntry(
     string Id,
     string Precondition,
@@ -91,8 +92,8 @@ internal static class ContractCatalog
         // 仍由它覆盖，覆盖率不降。保留的 11 条是方言契约目录没有的 10 条
         //（JOIN-01/02、CTE-01、GROUP-01、WINDOW-01、MULTI-01、RAW-01、SPROC-01、
         // TX-03、BULKUP-02）与断言更全的 1 条（PAGE-01：descending 默认 true 只在本目录断言）。
-        // SQLite 兜底由 DialectCapabilityContractTests.Sqlite_CapabilityContracts_Hold 的
-        // "SQLite 不得登记不支持"守卫保证。
+        // SQLite 兜底由 DialectCapabilityContractTests.DialectContractMatrix_IsConsistent 的
+        // "SQLite 不得登记不支持"守卫保证（原 Sqlite_CapabilityContracts_Hold 已参数化）。
 
         new("C-JOIN-01",
             "左表三行、右表两行，按 Id 关联",
