@@ -165,6 +165,9 @@ public sealed class QueryPipelineTests
         _ = pipeline.Query(fixture.Session.From<PipelineProbeRow>());
         pipeline.Dispose();
         pipeline.Dispose();   // 第二次必须是 no-op，不抛
+        // 行为断言（2026-11-04 补）：幂等不能只是"没抛"——释放后的执行必须被响亮拒绝，
+        // 这是 _disposed 真的置位的唯一可观测量（ExecuteAsync 首行 ThrowIf）。
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await pipeline.ExecuteAsync());
     }
 
     [Test]

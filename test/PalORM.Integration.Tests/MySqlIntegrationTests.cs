@@ -103,6 +103,11 @@ public sealed class MySqlIntegrationTests
         {
             savedLocalInfile = await db.ScalarAsync<long>($"SELECT @@local_infile");
             await db.ExecuteAsync($"SET GLOBAL local_infile=ON");
+            // 2026-11-04：置 ON 之后、插入之前必须清探测缓存。原实现只在 finally 清，
+            // 缓存按连接串键控且 TTL 60s——前序 OFF 用例写入的结论若在本用例插入前命中，
+            // 整批静默回退多值，本用例要锁的 BulkCopy 分块路径一行不覆盖
+            //（CI mysql 行覆盖 66.85% vs 本地 68.80% 的 7 行差即此；同 B195）。
+            MySqlProvider.ResetLocalInfileProbeCache();
             await Assert.That(await db.ScalarAsync<long>($"SELECT @@local_infile")).IsEqualTo(1L);
 
             await db.ExecuteAsync($"DROP TABLE IF EXISTS mysql_bulk_chunks");

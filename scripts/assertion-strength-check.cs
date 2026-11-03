@@ -30,8 +30,13 @@ Console.WriteLine("═══════ 断言强度扫描 ══════�
 
 var behavioral = new Regex(@"\.(IsEqualTo|IsGreaterThan|IsGreaterThanOrEqualTo|IsLessThan|IsLessThanOrEqualTo|IsNotEmpty|IsTypeOf|Contains|StartsWith|EndsWith|Matches|IsEmpty|IsFalse|IsTrue|IsNull)\(", RegexOptions.Compiled);
 var assertRe = new Regex(@"\bAssert\w*[.(]|\bThrows(Async)?\s*[<(]|\.Verify\(", RegexOptions.Compiled);
-var testMethodRe = new Regex(@"\[Test\][^{]*?(?:async\s+)?(?:Task|void|ValueTask)\s+(\w+)\s*\([^)]*\)\s*(\{)", RegexOptions.Singleline | RegexOptions.Compiled);
-var helperMethodRe = new Regex(@"(?:async\s+)?(?:Task|void|ValueTask)\s+(\w+)(?:<[^>]*>)?\s*\([^)]*\)\s*(?:where[^{]*)?\{", RegexOptions.Singleline | RegexOptions.Compiled);
+var testAttrRe = new Regex(@"\[Test\]", RegexOptions.Compiled);
+// 方法签名头只匹配到 '(' 为止，参数表交给 FindCloseParen 按括号配平扫描。
+// 旧写法 `\([^)]*\)` 在含嵌套括号的参数上（如
+// Func<string, CancellationToken, ValueTask<(DialectScope Scope, IAsyncDisposable Owner)>>）
+// 会在第一个 ')' 处提前收口，`RunOneAsync` 这类 helper 因此漏登记，委托它的测试被误判零断言
+// （2026-11-04 CI 实测：PostgreSql/MySql_Contract_Holds 被误报）。
+var methodHeadRe = new Regex(@"(?:async\s+)?(?:Task|void|ValueTask)\s+(\w+)(?:<[^>]*>)?\s*(?=\()", RegexOptions.Compiled);
 var notnullRe = new Regex(@"\.IsNotNull\(\)", RegexOptions.Compiled);
 
 var weakNotnull = new List<string>();
@@ -52,12 +57,12 @@ foreach (var path in Directory.EnumerateFiles("test", "*.cs", SearchOption.AllDi
     }
     if (notnullLines.Count > 0)
     {
-        foreach (Match m in testMethodRe.Matches(text))
+        foreach (var (_, attrIndex, bodyIndex) in EnumerateTestMethods(text, testAttrRe, methodHeadRe))
         {
-            var end = BlockEnd(text, m.Groups[2].Index);
-            var block = text[m.Index..(end + 1)];
+            var end = BlockEnd(text, bodyIndex);
+            var block = text[attrIndex..(end + 1)];
             if (behavioral.IsMatch(block)) continue; // 方法体内有行为断言：IsNotNull 是前置判空
-            var startLine = CountNewlines(text, m.Index);
+            var startLine = CountNewlines(text, attrIndex);
             var endLine = CountNewlines(text, end);
             foreach (var ln in notnullLines.Where(l => startLine <= l && l <= endLine).OrderBy(l => l))
             {
@@ -68,20 +73,87 @@ foreach (var path in Directory.EnumerateFiles("test", "*.cs", SearchOption.AllDi
 
     // 模式 2：测试方法零 Assert（含 helper 断言跟随豁免——SavepointRoundTripAsync 形态）
     var assertingHelpers = new HashSet<string>(StringComparer.Ordinal);
-    foreach (Match m in helperMethodRe.Matches(text))
+    foreach (var (name, headIndex, bodyIndex) in EnumerateMethods(text, methodHeadRe))
     {
-        var end = BlockEnd(text, m.Index + m.Length - 1);
-        if (assertRe.IsMatch(text[m.Index..(end + 1)])) assertingHelpers.Add(m.Groups[1].Value);
+        var end = BlockEnd(text, bodyIndex);
+        if (assertRe.IsMatch(text[headIndex..(end + 1)])) assertingHelpers.Add(name);
     }
-    foreach (Match m in testMethodRe.Matches(text))
+    foreach (var (name, attrIndex, bodyIndex) in EnumerateTestMethods(text, testAttrRe, methodHeadRe))
     {
-        var end = BlockEnd(text, m.Groups[2].Index);
-        var block = text[m.Index..(end + 1)];
+        var end = BlockEnd(text, bodyIndex);
+        var block = text[attrIndex..(end + 1)];
         if (assertRe.IsMatch(block)) continue;
         // helper 跟随：调用了本文件内含断言的方法即视为有断言（LINQ Any，方法名逐个转义后匹配调用点）
         if (assertingHelpers.Any(h => Regex.IsMatch(block, $@"\b{Regex.Escape(h)}\s*\("))) continue;
-        zeroAssert.Add($"{rel}:{m.Groups[1].Value}");
+        zeroAssert.Add($"{rel}:{name}");
     }
+}
+
+// [Test] 与其后第一个方法声明配对；中间出现成员边界（'{' / '}' / ';'）即视为不配对。
+// 返回 (方法名, 属性起始下标, 方法体 '{' 下标)。
+static IEnumerable<(string Name, int AttrIndex, int BodyIndex)> EnumerateTestMethods(string text, Regex testAttr, Regex headRe)
+{
+    var heads = EnumerateMethods(text, headRe).ToList();
+    foreach (Match attr in testAttr.Matches(text))
+    {
+        int attrEnd = attr.Index + attr.Length;
+        foreach (var (name, headIndex, bodyIndex) in heads)
+        {
+            if (headIndex < attrEnd) continue;
+            var between = text[attrEnd..headIndex];
+            if (between.Contains('{') || between.Contains('}') || between.Contains(';')) break;
+            yield return (name, attr.Index, bodyIndex);
+            break;
+        }
+    }
+}
+
+// 全部方法声明 → (方法名, 签名起始下标, 方法体 '{' 下标)。参数表按括号配平扫描：
+// 正则 `\([^)]*\)` 在嵌套括号参数上会提前收口（见 methodHeadRe 注释）。
+// 表达式体（=>）与无体声明（抽象/接口）跳过——本门禁只审块体方法。
+static IEnumerable<(string Name, int HeadIndex, int BodyIndex)> EnumerateMethods(string text, Regex headRe)
+{
+    foreach (Match m in headRe.Matches(text))
+    {
+        int open = m.Index + m.Length;              // 签名头以 (?=\() 收尾，紧跟 '('
+        int close = FindCloseParen(text, open);
+        if (close < 0) continue;
+        int body = FindBodyBrace(text, close + 1);
+        if (body < 0) continue;
+        yield return (m.Groups[1].Value, m.Index, body);
+    }
+}
+
+// 从 '(' 起按括号配平找配对的 ')'。
+static int FindCloseParen(string text, int openIndex)
+{
+    var depth = 0;
+    for (var i = openIndex; i < text.Length; i++)
+    {
+        var c = text[i];
+        if (c == '(') depth++;
+        else if (c == ')')
+        {
+            depth--;
+            if (depth == 0) return i;
+        }
+        else if (c == ';' || c == '{') return -1;   // 未配平即越界到别的成员
+    }
+    return -1;
+}
+
+// 参数表之后找方法体 '{'；先遇到 ';'（声明）或 '=>'（表达式体）返回 -1。
+// where 约束里的泛型尖括号与括号不含花括号，直接线性扫描即可。
+static int FindBodyBrace(string text, int from)
+{
+    for (var i = from; i < text.Length; i++)
+    {
+        var c = text[i];
+        if (c == '{') return i;
+        if (c == ';') return -1;
+        if (c == '=' && i + 1 < text.Length && text[i + 1] == '>') return -1;
+    }
+    return -1;
 }
 
 if (weakNotnull.Count > 0)

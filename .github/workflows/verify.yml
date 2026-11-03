@@ -207,6 +207,18 @@ jobs:
                   dotnet run --file scripts/assert-coverage.cs -- PalORM.MySql cov-integration.xml mysql
                   dotnet run --file scripts/assert-coverage.cs -- PalORM.PostgreSql cov-integration.xml postgresql
 
+            # 覆盖率 XML 上传（2026-11-04 增）：provider 覆盖率读数在 CI 上曾出现双模态
+            # （mysql 66.85% 与 68.80%，同一提交不同 run），差分脚本只能拿到百分比、定位不到
+            # 具体行。上传 XML 后可直接对两个 run 做逐函数 diff，把"环境态"与"真退化"分开。
+            - name: Upload coverage XML (diagnostics)
+              if: always()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: coverage-xml
+                  path: cov-*.xml
+                  retention-days: 14
+                  if-no-files-found: warn
+
             - name: Assert per-class branch coverage floors (META-1)
               # branch 读 block_coverage（dotnet-coverage 无独立 branch 属性，block 为分支代理）；
               # 地板=2026-10-31 实测-2pp，防退化非达标。探针已验证可红（地板抬 90 时 exit 1）。

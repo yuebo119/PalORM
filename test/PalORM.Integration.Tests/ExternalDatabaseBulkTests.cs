@@ -225,9 +225,13 @@ public sealed class ExternalDatabaseBulkTests
     /// 但这是一条**新代码路径**：bool/Guid/DateTimeOffset/DateOnly/TimeOnly/float 等类型
     /// 一旦被驱动按错误格式写出，就是静默的数据损坏（列值看起来"有值"）。
     /// 既有 BulkCopy 用例只覆盖 string/decimal/DateTime/byte[]/可空。</para>
-    /// <para><b>覆盖率自述</b>：服务端 <c>local_infile=OFF</c> 时 provider 会静默回退多值 INSERT，
-    /// 本用例就不经过读取器（值往返仍被验证）。读取器自身的契约由 Core.Tests 的
-    /// <c>EntityDataReaderTests</c> 确定性覆盖，不依赖服务端能力。</para></summary>
+    /// <para><b>覆盖率自述（2026-11-04 收紧）</b>：原实现依赖服务端 ambient <c>local_infile</c> 状态——
+    /// OFF 时 provider 静默回退多值，本用例就不经过读取器（值往返仍被验证，但 BulkCopy 路径的
+    /// 覆盖率由调度决定）。CI 的 <c>mysql:8.4</c> 镜像该变量默认 OFF，串行键调整后本用例落入
+    /// OFF 窗口、MySql 模块行覆盖 68.80%→66.85%（run 41676178297 实测），故改为显式置 ON 并断言，
+    /// 走 <c>MySqlIntegrationTests.MySql_BulkCopy_MultiChunkBatch</c> 的「路径确定性三条件」同款写法：
+    /// 置 ON → 断言 <c>@@local_infile=1</c> → finally 还原 + 清探测缓存。服务端拒绝时直接失败，
+    /// 避免"以为在测 BulkCopy 实际走多值回退"的假覆盖。</para></summary>
     [Test]
     [Property("Category", "ExternalDatabase")]
     // 同上：多键保住类级 ExtBulkTable + 方法级 LocalInfileGlobal（原只挂后者会丢前者）
@@ -235,6 +239,17 @@ public sealed class ExternalDatabaseBulkTests
     public async Task MySql_BulkCopy_AllWhitelistedTypes_RoundTripPreservesValues()
     {
         await using var db = await DataSession<MySqlProvider>.CreateAsync(MySqlOpts);
+        await LocalInfileTestGate.Gate.WaitAsync();
+        long savedLocalInfile = 1;
+        try
+        {
+        savedLocalInfile = await db.ScalarAsync<long>($"SELECT @@local_infile");
+        await db.ExecuteAsync($"SET GLOBAL local_infile=ON");
+        // 置 ON 后必须清探测缓存：本用例的前序用例可能已把本连接串的 OFF 结论缓存到 TTL 到期，
+        // 缓存命中会让本次仍走多值回退（B195 同型），覆盖率又变成调度决定。
+        MySqlProvider.ResetLocalInfileProbeCache();
+        // 服务端拒绝时直接失败，避免"以为在测 BulkCopy 实际走多值回退"的假覆盖
+        await Assert.That(await db.ScalarAsync<long>($"SELECT @@local_infile")).IsEqualTo(1L);
         await db.ExecuteAsync($"DROP TABLE IF EXISTS all_types_entities");
         await db.MigrateAsync();
         try
@@ -288,6 +303,15 @@ public sealed class ExternalDatabaseBulkTests
         finally
         {
             await db.ExecuteAsync($"DROP TABLE IF EXISTS all_types_entities");
+        }
+        }
+        finally
+        {
+            await db.ExecuteAsync($"SET GLOBAL local_infile={(savedLocalInfile == 0 ? "OFF" : "ON")}");
+            // 恢复全局值后清探测缓存：否则本用例设的 ON 会按连接串键残留到 TTL 到期，
+            // 使期间运行的回退用例静默走 BulkCopy（2026-10-18 审计同源根因）。
+            MySqlProvider.ResetLocalInfileProbeCache();
+            LocalInfileTestGate.Gate.Release();
         }
     }
 
