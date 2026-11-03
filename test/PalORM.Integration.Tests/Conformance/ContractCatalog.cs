@@ -14,7 +14,7 @@ namespace PalORM.Integration.Tests.Conformance;
 /// 二者同为 B 层的 C 类条目，只是后者按 provider 参数化。</para>
 /// <para><b>2026-11-03 定位重述（去重后 30 → 11 条）</b>：现存的 11 条与方言契约目录
 /// <b>互补而非重复</b>：</para>
-/// <para>① <b>契约元数据登记册</b>（不可替代）：<see cref="ContractRationale.Validate"/> 强制每条的
+/// <para>① <b>契约元数据登记册</b>（不可替代）：<c>ContractRationale.Validate</c> 强制每条的
 /// <c>Source</c> 指向 <c>API参考.md</c> / <c>ADR</c> / <c>reviewed:</c> 之一，把"把当前行为记成
 /// 合理行为"从口头纪律变成可核对字段（首轮 13 条产品行为里 3 条其实是缺陷的教训）。删本目录即
 /// 失去这个机械检查的载体。</para>
@@ -36,24 +36,30 @@ internal sealed record ContractEntry(
     Func<string, Task> Verify);
 
 /// <summary>契约条目的「合理性依据」检查（方案 §5.2 纪律的机械化载体）。
-/// <para>每条契约的 <see cref="ContractEntry.Source"/> 必须指向三类依据之一：`API参考.md`（文档承诺）、
+/// <para>每条契约的 <c>Source</c>（能力契约目录的 <see cref="ContractEntry.Source"/> 与方言契约目录的
+/// <c>DialectContract.Source</c>）必须指向三类依据之一：`API参考.md`（文档承诺）、
 /// `ADR`（架构决策）、`reviewed:`（实测后经人工评审确认合理，后接一句结论）。只在源码注释里出现、
 /// 或纯 `实测` 而无评审结论的，记为「仅实测」，进待评审清单。</para>
 /// <para>为什么需要这条：首轮的 13 条产品行为里有 3 条是缺陷，根因正是把「当前行为」记成「合理行为」。
 /// 这个检查把「交由评审」从口头纪律变成可核对字段。</para></summary>
 internal static class ContractRationale
 {
+    /// <summary>能力契约目录的入口（原签名保留）。</summary>
     public static List<string> Validate(IEnumerable<ContractEntry> entries)
+        => Validate(entries.Select(static entry => (entry.Id, entry.Source)));
+
+    /// <summary>按 (ID, 来源) 校验，两个契约目录共用。
+    /// 2026-11-03：方言契约目录的 20 条 <c>Source</c> 此前只写不校验，本重载把它们纳入同一判据。</summary>
+    public static List<string> Validate(IEnumerable<(string Id, string Source)> entries)
     {
         var problems = new List<string>();
-        foreach (ContractEntry entry in entries)
+        foreach ((string id, string source) in entries)
         {
-            bool hasDocument = entry.Source.Contains("API参考.md", StringComparison.Ordinal);
-            bool hasAdr = entry.Source.Contains("ADR", StringComparison.Ordinal);
-            bool hasReview = entry.Source.StartsWith("reviewed:", StringComparison.Ordinal)
-                || entry.Source.Contains("reviewed:", StringComparison.Ordinal);
+            bool hasDocument = source.Contains("API参考.md", StringComparison.Ordinal);
+            bool hasAdr = source.Contains("ADR", StringComparison.Ordinal);
+            bool hasReview = source.Contains("reviewed:", StringComparison.Ordinal);
             if (!hasDocument && !hasAdr && !hasReview)
-                problems.Add(entry.Id + " → " + entry.Source);
+                problems.Add(id + " → " + source);
         }
         return problems;
     }
