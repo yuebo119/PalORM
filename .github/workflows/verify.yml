@@ -193,6 +193,15 @@ jobs:
                   PalORM.Integration.Tests
                   "$(find test/PalORM.Integration.Tests/bin -name '*.tunit-report.json' | head -1)"
 
+            # 2026-11-03：契约覆盖账本的报告侧。源码侧（pre-commit 第 8 段）只能证明
+            # 契约「声明存在」，证明不了「实际跑过」——方法被删、数据源变空、被过滤都
+            # 看不出来。这里按报告里的 displayName 数次数：能力契约每条 1 次，
+            # 方言契约每条 3 次（三方言）。
+            - name: Assert conformance contract coverage (report side)
+              run: >-
+                  dotnet run --file scripts/assert-conformance-contracts.cs --
+                  --report "$(find test/PalORM.Integration.Tests/bin -name '*.tunit-report.json' | head -1)"
+
             - name: Assert provider coverage floors
               run: |
                   dotnet run --file scripts/assert-coverage.cs -- PalORM.MySql cov-integration.xml mysql

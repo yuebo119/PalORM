@@ -1,11 +1,11 @@
 {
-  "_comment": "测试数地板双口径（T11 定义）。①声明口径 sourceMarkers = 源码 [Test] 标记数地板，tech-debt-scan #9 消费；②执行口径 passed = TUnit 报告执行数地板（含 [Arguments] 展开），CI 的 assert-test-counts.cs 消费。两口径数值必然不等，勿互相替代。地板策略（2026-11-03 修订）：Core/SourceGen 仍按实测 -2~-4%（容错）；Integration 收紧到实测精确值——原地板对实测只有 -50%，任何单条用例被删都无感（典型场景：把守卫方法整体删掉，守卫随之消失），改为精确值后成为单向棘轮，删一条即红、加用例不受影响。该地板只对全量调用成立，过滤调用（如 [Category!=ExternalDatabase] 的 SQLite-only 通道）不适用本断言。契约条目的覆盖另由 scripts/assert-conformance-contracts.cs 按账本钉住，与本地板互补。实测值以检查输出为准、不在本文件复述（2026-10-18 实证：注释里复述的实测数在加用例后静默过期——B103 族）。调整规则（2026-11-03 起改为精确匹配）：passed 与地板必须相等，增加或删除用例都要在同提交改地板，`--update` 可自动写入实测值；有意删除用例时须在提交信息写明理由。覆盖率三项另加自收紧上限：实测减地板不得超过 1pp（assert-coverage.cs）。",
+  "_comment": "测试数地板双口径（T11 定义）。①声明口径 sourceMarkers = 源码 [Test] 标记数地板，tech-debt-scan #9 消费；②执行口径 passed = TUnit 报告执行数地板（含 [Arguments] 展开），CI 的 assert-test-counts.cs 消费。两口径数值必然不等，勿互相替代。地板策略（2026-11-03 统一）：三套件的 passed 均与地板精确匹配，取代原 >= 形态——原形态下地板会相对实测单调变松（Integration 曾 286 对实测 574，即 -50%，删掉一半用例都无感；Core -17.5%、SourceGen -14.1% 同型），且「守卫写在方法体内、整方法被删」这类缺陷没有任何机制兜底。精确匹配把任何用例增减都变成显式改动，`--update` 负责取新值。该地板只对全量调用成立，过滤调用（如 [Category!=ExternalDatabase] 的 SQLite-only 通道）不适用本断言。契约条目的覆盖另由 scripts/assert-conformance-contracts.cs 按账本钉住，与本地板互补。实测值以检查输出为准、不在本文件复述（2026-10-18 实证：注释里复述的实测数在加用例后静默过期——B103 族）。调整规则（2026-11-03 起改为精确匹配）：passed 与地板必须相等，增加或删除用例都要在同提交改地板，`--update` 可自动写入实测值；有意删除用例时须在提交信息写明理由。覆盖率三项另加自收紧上限：实测减地板不得超过 1pp（assert-coverage.cs）。",
   "sourceMarkers": 1070,
   "PalORM.Core.Tests": {
-    "passed": 599
+    "passed": 726
   },
   "PalORM.SourceGen.Tests": {
-    "passed": 231
+    "passed": 269
   },
   "PalORM.Integration.Tests": {
     "passed": 641,
