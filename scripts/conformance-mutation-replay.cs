@@ -120,8 +120,10 @@ var rules = new Rule[]
         + "                \"ToPageAsync uses keyset pagination with lastValue as the continuation anchor, so a Skip() on the builder \"\n"
         + "                + \"would be silently ignored. Remove Skip(), or use ToListAsync with Skip/Take for OFFSET pagination.\");\n",
         "",
-        "/*/*/CapabilityContractTests/*",
-        "D6 ToPageAsync 放行 Skip（删构建期拒绝）；可观测量：Skip()+ToPageAsync 不再抛 InvalidOperationException"),
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "D6 ToPageAsync 放行 Skip（删构建期拒绝）；可观测量：Skip()+ToPageAsync 不再抛 InvalidOperationException。"
+        + "2026-11-03 重锚：C-PAGE-01 已并入 D-PAGE-01（方案 §5.2），原 CapabilityContractTests 过滤器下已无用例",
+        null, ["D-PAGE-01"]),
     new("R-D7", "src/PalORM.Core/CommandTimeoutNormalizer.cs",
         "=> dialect == SqlDialect.MySql && timeoutSeconds > 0;",
         "=> false;",

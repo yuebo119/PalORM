@@ -95,4 +95,4 @@
 
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
-| `conformance-mutation-replay.cs` | 产品侧变异回放（R1a/R1b/R2/R4）：注入缺陷 → 期望目标测试报红 → `git checkout` 还原 → 期望转绿；任一不符 exit 1，原片段缺失记 skip | 手动 / 阶段 0b 验收 |
+| `conformance-mutation-replay.cs` | 产品侧变异回放 21 条：R1a/R1b/R2/R4（事故族）、R-D1..D7（历史缺陷）、R-C01..C10（契约族，2026-11-03 起）。注入缺陷 → 期望目标测试报红 → `git checkout` 还原 → 期望转绿；契约族另要求报红名单含指定契约 ID（`--rule R-C` 只跑契约族）。任一不符 exit 1，原片段缺失记 skip | 手动 / 阶段 0b 验收 |
