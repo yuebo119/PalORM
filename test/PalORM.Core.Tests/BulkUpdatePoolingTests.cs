@@ -25,8 +25,12 @@ public sealed class BulkUpdatePoolingTests
     // ─── ① 池化路径真被走到 ────────────────────────────
 
     [Test]
-    public async Task PooledPath_WritesCorrectValues_AndUsesFewerAllocations()
+    public async Task PooledPath_WritesCorrectValuesFor200Rows()
     {
+        // 2026-11-03 名实对齐（原名 PooledPath_WritesCorrectValues_AndUsesFewerAllocations）：
+        // 本条**没有**任何分配断言（全文件无 GC.GetAllocatedBytes 调用），名字里的
+        // "UsesFewerAllocations" 从未被验证。分配侧由 bench 的 Gc 基准负责（同文件
+        // PooledPath_WritesEveryRowAndIsRepeatable 的注释已说明该分工）。
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
         await session.ExecuteAsync($"CREATE TABLE pool_basic (id INTEGER PRIMARY KEY, qty INTEGER NOT NULL, label TEXT NOT NULL)");
         var seed = new List<PoolBasic>();
@@ -52,11 +56,15 @@ public sealed class BulkUpdatePoolingTests
     }
 
     [Test]
-    public async Task PooledPath_ReusesCommandAndParameters_NoGrowthPerRow()
+    public async Task PooledPath_WritesEveryRowAndIsRepeatable()
     {
-        // 池化的不变量是「命令与参数对象建一次，逐行只写 Value」——用命令侧的可观测
-        // 代理量验证，而非全局分配计数（后者在并行套件里被其他用例污染，不可断言）。
-        // 真库每行成本的 A/B 由 bench/PalORM.Benchmarks 的 Gc 基准与跨方言探针负责。
+        // 2026-11-03 名实对齐（原名 PooledPath_ReusesCommandAndParameters_NoGrowthPerRow）：
+        // 本条**只验证池化路径的行为正确性**——50 行逐位写对 + 同批重复执行幂等。
+        // 它**不**验证"命令与参数对象建一次"这个实现不变量：那需要命令侧计数钩子
+        // （同类手法见 BulkDeleteInFormPoolingTests 的 InFormRecordingCommand，需包一层 Provider）。
+        // 缺口登记：池化退化到每行新建参数时本用例仍绿。接受为现状的理由——
+        // 真库每行成本的 A/B 由 bench/PalORM.Benchmarks 的 Gc 基准与跨方言探针负责，
+        // 那才是池化收益的权威判据；在单测里断言实现细节与 T2 有张力。
         await using DataSession<SqliteProvider> session = await CreateSessionAsync();
         await session.ExecuteAsync(
             $"CREATE TABLE pool_growth (id INTEGER PRIMARY KEY, qty INTEGER NOT NULL, label TEXT NOT NULL)");

@@ -77,7 +77,7 @@ public sealed class V601DiagnosisProbe
         // H-B（证据采集 + 不变量断言）：4 路并发 MigrateAsync 的异常形态收集。
         // 2026-10-06 CI 实测：PG 17 空库 + 跨类并行首跑即 42P07 relation already exists
         //（并发迁移竞态从[推断]升级为实验证实）。
-        var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
         try
         {
             await using (var setup = await TestDb.PostgreSqlAsync())
@@ -98,19 +98,47 @@ public sealed class V601DiagnosisProbe
                     }
                     catch (Exception ex)
                     {
-                        errors.Add($"{ex.GetType().Name}: {ex.Message.Split('\n')[0]}");
+                        errors.Add(ex);
                     }
                 }));
             }
             await Task.WhenAll(tasks);
 
-            // 证据入测试输出（CI 日志可检索）；竞态异常本身不阻断——修复轮（迁移互斥）落地时
-            // 转严格断言。此处断言的是竞态之后必须成立的不变量：库仍可正常查询。
-            Console.WriteLine($"[V601-H-B] 并发迁移异常 {errors.Count} 项：{string.Join(" | ", errors.Take(4))}");
+            // 2026-11-03 判别力修复：原断言 `count >= 0` 对 SELECT COUNT(*) 恒成立
+            //（除非查询抛异常），唯一能红的路径是"查询本身失败"，等于只证明库还活着。
+            // 核实产品现状（DataSession.Schema.cs:306-345）后确定可升级的判据：
+            //   产品**没有**迁移互斥（V601 的"修复轮"未落地互斥），落地的是"竞态兜底"——
+            //   批执行撞 IsDuplicateSchemaObject 时回滚保存点、改逐条重试，重名视为期望结果。
+            //   因此**不能**断言"零异常"（兜底路径本身就是设计的一部分），但可以断言：
+            //   ① 4 路并发后表必须仍在（迁移真的建成了，不是全部失败）；
+            //   ② 表可写（并发建表未把 schema 搞坏）；
+            //   ③ 收集到的异常必须都是可识别的重名族（42P07/23505 等），
+            //      出现其它类型说明兜底漏了或 schema 被破坏。
+            Console.WriteLine($"[V601-H-B] 并发迁移异常 {errors.Count} 项："
+                + string.Join(" | ", errors.Take(4).Select(static e => $"{e.GetType().Name}: {e.Message.Split('\n')[0]}")));
+
+            // 异常类型必须都是产品认得的重名族——出现其它类型说明兜底漏了或 schema 被破坏。
+            // 用产品自己的判定函数（PostgreSqlProvider.IsDuplicateSchemaObject，public static），
+            // 避免测试侧另写一套码表与产品漂移。
+            List<string> unexpected = [.. errors
+                .Where(static e => !PalORM.PostgreSql.PostgreSqlProvider.IsDuplicateSchemaObject(e))
+                .Select(static e => $"{e.GetType().Name}: {e.Message.Split('\n')[0]}")];
+            await Assert.That(string.Join(" | ", unexpected)).IsEmpty()
+                .Because("并发迁移出现了非重名族异常——竞态兜底只覆盖 IsDuplicateSchemaObject，其它类型属未预期失败");
 
             await using var verify = await TestDb.PostgreSqlAsync();
-            long count = await verify.ScalarAsync<long>($"SELECT COUNT(*) FROM v601_probe_hb");
-            await Assert.That(count).IsGreaterThanOrEqualTo(0);
+            long tableExists = await verify.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM pg_tables WHERE tablename = {"v601_probe_hb"}");
+            await Assert.That(tableExists).IsEqualTo(1L)
+                .Because("4 路并发迁移后表必须仍在——为 0 说明所有路都失败了，兜底没生效");
+
+            // 表可写：并发建表若把 schema 弄坏（例如索引/约束缺失），插入会失败
+            await verify.ExecuteAsync(
+                $"INSERT INTO v601_probe_hb (name) VALUES ({"post-race"})");
+            long rowCount = await verify.ScalarAsync<long>(
+                $"SELECT COUNT(*) FROM v601_probe_hb WHERE name = {"post-race"}");
+            await Assert.That(rowCount).IsEqualTo(1L)
+                .Because("并发迁移后表必须可写——写入失败说明 schema 被竞态破坏");
         }
         finally
         {
