@@ -243,7 +243,10 @@ public sealed class MySqlProvider : IDbProvider
     /// <para><b>无阈值</b>：不再用行数阈值（2000 是伪精确），改为环境能力检测——行为可预测。
     /// 检测开销：每次 BulkInsert 额外 1 次 SHOW VARIABLES RTT（&lt;1ms，批量场景占比可忽略）。</para>
     /// <para>MySQL 协议单语句占位符上限 65535（2 字节计数）；宽表大批次经骨架按列数钳制，
-    /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para></summary>
+    /// 避免超出 max_allowed_packet/预处理参数上限时的晚期运行时错误（ITM-304）。</para>
+    /// <para><b>多值回退的批宽</b>：<c>local_infile=OFF</c> 时改走多值 INSERT，该路径把批宽收敛到
+    /// 1000 行/语句（<c>MySqlMultiValueMaxRowsPerBatch</c>）。默认重载对 MySQL 传整段行数
+    /// （与 BulkCopy 形态对齐），而多值语句文本随「行数 × 列数」增长，整段会生成数百 KB 单语句。</para></summary>
     public static async Task<long> BulkInsertAsync<T>(DbConnection conn, DbTransaction? transaction,
         IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds, CancellationToken ct,
         System.Data.IsolationLevel isolationLevel = System.Data.IsolationLevel.ReadCommitted)
