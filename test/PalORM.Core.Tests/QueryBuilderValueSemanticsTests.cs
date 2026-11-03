@@ -73,6 +73,9 @@ public sealed class QueryBuilderValueSemanticsTests
     [Test]
     public async Task Parameters_ClonedOnBranch_DoNotAffectRoot()
     {
+        // 2026-11-03 修复：原实现在 `branch = root` 之后**没有任何变更**，只断言两侧各 1 个
+        // 参数——"参数列表共享引用"与"写时复制"两种实现下都通过（T21 空转绿）。
+        // 现在在 branch 上追加一个带参数的条件，再断言 root 的参数数不变。
         await using DataSession<SqliteProvider> session =
             await CreateSessionAsync();
 
@@ -81,11 +84,18 @@ public sealed class QueryBuilderValueSemanticsTests
         root.Where($"price > {10m}");
         QueryBuilder<ValueSemanticsEntity> branch = root;
 
+        branch.Where($"name = {"probe"}");
+
         IReadOnlyList<DbParameter> rootParams = root.GetQueryParameters();
         IReadOnlyList<DbParameter> branchParams = branch.GetQueryParameters();
 
+        // root 只有自己那一个参数；branch 两个。若参数列表被共享，root 会看到 2 个。
         await Assert.That(rootParams.Count).IsEqualTo(1);
-        await Assert.That(branchParams.Count).IsEqualTo(1);
+        await Assert.That(branchParams.Count).IsEqualTo(2);
+        // 值也逐位核对：root 的参数值不得被 branch 的追加覆盖
+        await Assert.That(rootParams[0].Value).IsEqualTo(10m);
+        await Assert.That(branchParams[0].Value).IsEqualTo(10m);
+        await Assert.That(branchParams[1].Value).IsEqualTo("probe");
     }
 
     [Test]

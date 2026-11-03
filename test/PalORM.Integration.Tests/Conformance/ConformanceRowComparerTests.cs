@@ -64,11 +64,25 @@ public sealed class ConformanceRowComparerTests
     [Test]
     public async Task DateTimeOffsetDifference_IsReported()
     {
-        // 同一时钟读数、不同偏移：实际时刻不同，必须报
-        var expected = Rows(Row(("at", new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Utc))));
-        var actual = Rows(Row(("at", new DateTime(2026, 7, 18, 18, 30, 0, DateTimeKind.Utc))));
+        // 同一时钟读数、不同偏移：实际时刻不同，必须报。
+        // 2026-11-03 修复：原实现用两个 DateTime 实例，走的是 DateTimeEqual 分支，
+        // RowComparer.OffsetEqual（:110 的 `left is DateTimeOffset || right is DateTimeOffset`）
+        // 从未被任何用例触达——名为 DateTimeOffset 的用例测的是 DateTime，分支裸奔。
+        var expected = Rows(Row(("at", new DateTimeOffset(2026, 7, 18, 10, 30, 0, TimeSpan.FromHours(8)))));
+        var actual = Rows(Row(("at", new DateTimeOffset(2026, 7, 18, 18, 30, 0, TimeSpan.Zero))));
 
         await Assert.That(RowComparer.Compare(expected, actual).Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DateTimeOffsetSameInstantDifferentOffset_IsNotReported()
+    {
+        // 同一时刻、不同偏移表示（+08:00 10:30 == UTC 02:30）：语义相等，不得报差异。
+        // 这条锁的是 OffsetEqual 的正向判据（leftOffset == rightOffset 比的是时刻而非字面量）。
+        var expected = Rows(Row(("at", new DateTimeOffset(2026, 7, 18, 10, 30, 0, TimeSpan.FromHours(8)))));
+        var actual = Rows(Row(("at", new DateTimeOffset(2026, 7, 18, 2, 30, 0, TimeSpan.Zero))));
+
+        await Assert.That(RowComparer.Compare(expected, actual).Count).IsEqualTo(0);
     }
 
     [Test]

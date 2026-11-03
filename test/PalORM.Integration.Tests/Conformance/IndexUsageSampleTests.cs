@@ -34,7 +34,7 @@ public sealed class IndexUsageSampleTests
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100",
         Justification = "语句由 BuildLookupSql 按方言常量模板拼装，值来自本文件的测试常量")]
-    private static async ValueTask<string> ReadPlanAsync(
+    private static async ValueTask<string?> ReadPlanAsync(
         DbConnection raw, string statement, bool mysqlStyle, CancellationToken ct = default)
     {
         if (raw.State != ConnectionState.Open) await raw.OpenAsync(ct);
@@ -42,7 +42,7 @@ public sealed class IndexUsageSampleTests
         command.CommandText = statement;
         await using DbDataReader reader = await command.ExecuteReaderAsync(ct);
         return mysqlStyle
-            ? await ReadMySqlPlanPartsAsync(reader, ct)
+            ? await ReadMySqlKeyColumnAsync(reader, ct)
             : await ReadTextPlanPartsAsync(reader, ct);
     }
 
@@ -61,20 +61,23 @@ public sealed class IndexUsageSampleTests
         return string.Join(" | ", parts);
     }
 
-    /// <summary>MySQL 的 EXPLAIN 是结果集：只取 key / possible_keys / type 三列。</summary>
-    private static async Task<string> ReadMySqlPlanPartsAsync(DbDataReader reader, CancellationToken ct)
+    /// <summary>MySQL 的 EXPLAIN 是结果集：取 <c>key</c> 列的值（命中索引名，未命中为 NULL）。
+    /// <para><b>2026-11-03 假绿修复</b>：原实现把三列拼成 <c>"key={v} | possible_keys={v} | type={v}"</c>
+    /// 再断言 <c>Contains("key=")</c> 与 <c>DoesNotContain("key= |")</c>。当 key 为 NULL 时拼出
+    /// <c>... | key=</c>（key 恒为末项、结尾无 " | "），三条断言全部通过——索引未命中仍绿。
+    /// 现改为直接返回 key 列的原值，由断言判空。</para></summary>
+    private static async Task<string?> ReadMySqlKeyColumnAsync(DbDataReader reader, CancellationToken ct)
     {
-        var parts = new List<string>();
         while (await reader.ReadAsync(ct))
         {
             for (int i = 0; i < reader.FieldCount; i++)
             {
-                string name = reader.GetName(i);
-                if (name is "key" or "possible_keys" or "type")
-                    parts.Add($"{name}={reader.GetValue(i)}");
+                if (!string.Equals(reader.GetName(i), "key", StringComparison.Ordinal)) continue;
+                object? value = reader.GetValue(i);
+                return value is null or DBNull ? null : value.ToString();
             }
         }
-        return string.Join(" | ", parts);
+        return null;
     }
 
     private static async Task<string> SqlitePlanAsync(string column, string value)
@@ -86,7 +89,8 @@ public sealed class IndexUsageSampleTests
         await db.ExecuteAsync($"ANALYZE");
         return await ReadPlanAsync(
             db.GetRawConnection(),
-            $"EXPLAIN QUERY PLAN {BuildLookupSql("sqlite", column, value)}", mysqlStyle: false);
+            $"EXPLAIN QUERY PLAN {BuildLookupSql("sqlite", column, value)}", mysqlStyle: false)
+            ?? string.Empty;
     }
 
     private static async Task<string> PostgreSqlPlanAsync(string column, string value)
@@ -100,10 +104,11 @@ public sealed class IndexUsageSampleTests
         // 规划器需要统计信息才会比较索引与全表：不 ANALYZE 时默认估算会选中 Seq Scan
         await MirrorTable.ExecuteAsync(fixture.Raw, SqlDialect.PostgreSql, "ANALYZE cf_composite_index");
         return await ReadPlanAsync(
-            fixture.Raw, $"EXPLAIN {BuildLookupSql("postgresql", column, value)}", mysqlStyle: false);
+            fixture.Raw, $"EXPLAIN {BuildLookupSql("postgresql", column, value)}", mysqlStyle: false)
+            ?? string.Empty;
     }
 
-    private static async Task<string> MySqlPlanAsync(string column, string value)
+    private static async Task<string?> MySqlPlanAsync(string column, string value)
     {
         await using RemoteConformanceFixture<MySqlProvider> fixture = await ConformanceDialects.MySqlAsync();
         await MirrorTable.ExecuteAsync(
@@ -150,20 +155,20 @@ public sealed class IndexUsageSampleTests
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_UniqueLookup_KeyColumnIsNotNull()
     {
-        string plan = await MySqlPlanAsync("sku", "sku-1");
-        await Assert.That(plan).Contains("key=");
-        await Assert.That(plan).DoesNotContain("key= |");
-        await Assert.That(plan).DoesNotContain("key=)");
+        string? key = await MySqlPlanAsync("sku", "sku-1");
+        // 直接判空：key 为 NULL 就是未命中索引。原写法拼串后 Contains("key=") 在
+        // key 为 NULL 时同样成立（拼出 "key="），属假绿（2026-11-03 修复）。
+        await Assert.That(key).IsNotNull();
+        await Assert.That(key).IsNotEmpty();
     }
 
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task MySql_CompositePrefix_KeyColumnIsNotNull()
     {
-        string plan = await MySqlPlanAsync("category", "cat-1");
-        // key 列为空表示未命中索引：断言它非空且指向一个索引名
-        await Assert.That(plan).Contains("key=");
-        await Assert.That(plan).DoesNotContain("key= |");
-        await Assert.That(plan).DoesNotContain("key=)");
+        string? key = await MySqlPlanAsync("category", "cat-1");
+        // 同上：key 为 NULL 表示未命中索引，直接判空
+        await Assert.That(key).IsNotNull();
+        await Assert.That(key).IsNotEmpty();
     }
 }

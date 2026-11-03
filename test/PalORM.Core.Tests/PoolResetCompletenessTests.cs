@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 
 namespace PalORM.Core.Tests;
 
@@ -133,15 +134,56 @@ public sealed class PoolResetCompletenessTests
     {
         // 对账第二面：ResetOnReturn 表里的每个字段，ReturnToPoolAsync 源码里必须有对应复位语句
         // （防"表里登记了、实现忘写"的假绿）。读源码文件做文本级核对——比反射拿方法体可靠。
+        // 2026-11-03 修复：原实现在**整个 DataSession.cs 全文**里找 `${name} = `，
+        // 而 ResetOnReturn 的 8 个字段在别处也有赋值（_tenantId 在 WithTenant、_options 在
+        // 构造函数与 UpdateResilience 等），把 ReturnToPoolAsync 里的复位语句删掉仍绿。
+        // 现在先截出 ReturnToPoolAsync 的方法体，只在方法体内核对。
         string sourcePath = FindSourceFile("DataSession.cs");
         string source = await File.ReadAllTextAsync(sourcePath).ConfigureAwait(false);
 
+        string methodBody = ExtractMethodBody(source, "ReturnToPoolAsync");
+        await Assert.That(methodBody.Length)
+            .IsGreaterThan(0)
+            .Because("未截出 ReturnToPoolAsync 方法体——方法名或文件结构已变，本对账需要重锚");
+
         string[] missing = [.. ResetOnReturn
-            .Where(name => !source.Contains($"Volatile.Write(ref {name}", StringComparison.Ordinal)
-                && !source.Contains($"{name} = ", StringComparison.Ordinal))];
+            .Where(name => !methodBody.Contains($"Volatile.Write(ref {name}", StringComparison.Ordinal)
+                && !methodBody.Contains($"{name} = ", StringComparison.Ordinal))];
         await Assert.That(string.Join(", ", missing))
             .IsEmpty()
             .Because("ResetOnReturn 表中的字段在 ReturnToPoolAsync 里没有复位语句——表与实现漂移。");
+    }
+
+    /// <summary>从源码文本截出指定方法的方法体（按大括号配平）。
+    /// <para>方法签名可能跨行（async ValueTask&lt;bool&gt; ReturnToPoolAsync(\n DataSession&lt;TProvider&gt; session, ...)），
+    /// 因此先定位签名所在行，再从其后第一个 <c>{</c> 开始配平到对应 <c>}</c>。</para>
+    /// <para><b>不能用 <c>IndexOf(methodName)</c> 定位</b>：方法名在注释里也会出现
+    /// （DataSession.cs:758 的注释就提到 ReturnToPoolAsync），从注释位置起截会把注释后面的
+    /// 任意代码块当方法体，导致全部字段误判缺失（2026-11-03 实测踩到）。
+    /// 改为匹配"访问修饰符 + ... + 方法名 + 左括号"的签名形态。</para></summary>
+    private static string ExtractMethodBody(string source, string methodName)
+    {
+        // 签名形态：private/internal/public/protected ... ReturnToPoolAsync(
+        Match signature = Regex.Match(
+            source,
+            $@"(?:private|internal|public|protected)[^\n]*\b{Regex.Escape(methodName)}\s*\(",
+            RegexOptions.CultureInvariant);
+        if (!signature.Success) return string.Empty;
+
+        int openBrace = source.IndexOf('{', signature.Index, StringComparison.Ordinal);
+        if (openBrace < 0) return string.Empty;
+
+        int depth = 0;
+        for (int i = openBrace; i < source.Length; i++)
+        {
+            if (source[i] == '{') depth++;
+            else if (source[i] == '}')
+            {
+                depth--;
+                if (depth == 0) return source[openBrace..(i + 1)];
+            }
+        }
+        return string.Empty;
     }
 
     private static string FindSourceFile(string fileName)

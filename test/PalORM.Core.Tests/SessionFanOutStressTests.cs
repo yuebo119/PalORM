@@ -10,7 +10,10 @@ namespace PalORM.Core.Tests;
 /// 本组补的高扇出面：64 个独立会话并发 × 16 操作/会话——最终态一致性断言（无静默串扰/丢行/死锁）。
 /// 纪律：确定性种子、零 sleep（轮询用 Task.WhenAll 自然汇合）、断言最终态而非时序。
 /// </summary>
-[NotInParallel("FanOutStress")]
+// 2026-11-03：原 [NotInParallel("FanOutStress")] 的键全仓无第二个使用者，等于未串行
+// （TUnit 的键只与同键用例互斥）。本用例一次建 64 个会话，与全套并行会挤占线程池、
+// 让同批其他用例的时序断言变脆。改为无键形态 = 与任何测试都不并行。
+[NotInParallel]
 public sealed class SessionFanOutStressTests
 {
     private const int SessionCount = 64;
@@ -20,9 +23,10 @@ public sealed class SessionFanOutStressTests
     public async Task SixtyFourSessions_SixteenOpsEach_FinalStateConsistent()
     {
         // 64 会话并发,每会话 16 操作:建表(竞争容忍)→ 插 8 行 → 读全表计数 ≥ 自己的 8 行
+        // 2026-11-03 清理：原 `using var barrier = new SemaphoreSlim(0, 1);` 零调用
+        // （Wait/Release 从未出现），是设计残留；一并删除从未被引用的 StressGate 实体。
         var results = new ConcurrentBag<int>();
         var sessions = new List<Task>();
-        using var barrier = new SemaphoreSlim(0, 1);
         for (int s = 0; s < SessionCount; s++)
         {
             int id = s;
@@ -49,15 +53,6 @@ public sealed class SessionFanOutStressTests
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
         => await DataSession<SqliteProvider>.CreateAsync(
             new DbOptions { ConnectionString = "Data Source=:memory:" });
-}
-
-[Table("stress_gate")]
-internal sealed partial class StressGate
-{
-    [Key]
-    public long Id { get; set; }
-    [Column("v")]
-    public long V { get; set; }
 }
 
 [Table("stress_rows")]

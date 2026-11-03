@@ -40,8 +40,11 @@ public sealed class ParallelReadFailureDiscardTests
             _ = await session.GetAsync<GkcrItem>(1L);
             await Assert.That(PooledCount(session)).IsEqualTo(1);
 
-            // 非法键类型：绑定阶段确定性失败（非瞬时，不重试）
-            await Assert.ThrowsAsync<Exception>(async () => await session.GetAsync<GkcrItem>("not-a-key"));
+            // 非法键类型：绑定阶段确定性失败（非瞬时，不重试）。
+            // 2026-11-03 实测确认抛 System.FormatException（Convert.ToInt64 对 "not-a-key" 失败）。
+            // 原写法 Assert.ThrowsAsync<Exception> 类型过宽——池实现自身的任何 bug（空引用、
+            // 连接失效）都会让它通过，失去"失败原因是否为目标缺陷"的判别力。
+            await Assert.ThrowsAsync<FormatException>(async () => await session.GetAsync<GkcrItem>("not-a-key"));
             await Assert.That(PooledCount(session)).IsEqualTo(0);
         }
     }
@@ -55,7 +58,9 @@ public sealed class ParallelReadFailureDiscardTests
             _ = await session.GetAsync<GkcrItem>(1L);
             await Assert.That(PooledCount(session)).IsEqualTo(1);
 
-            await Assert.ThrowsAsync<Exception>(async () =>
+            // 查询坏列：SQLite 报 "no such column: nope"。用 SqliteException 精确断言
+            // （原 Assert.ThrowsAsync<Exception> 类型过宽，同前一条的理由）。
+            await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(async () =>
                 await session.QueryAsync<GkcrItem>($"SELECT nope FROM gkcr_items"));
             await Assert.That(PooledCount(session)).IsEqualTo(0);
         }
