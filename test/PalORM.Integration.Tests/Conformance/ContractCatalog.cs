@@ -6,7 +6,23 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <para>每条带 ID、前置、后置与来源；<see cref="Verify"/> 在独立库上执行，失败即该条契约被违背。
 /// 断言消息必须带 ID（由执行器统一拼接）。</para>
 /// <para><b>期望值来源</b>：能力契约的后置一律取自 `docs/API参考.md` 与 XML doc 的承诺；
-/// 代码里"实际如此"不作为契约依据。带"实测"字样的条目是 0a/0b 阶段发现文档未写明、经实测确认后登记的行为。</para></summary>
+/// 代码里"实际如此"不作为契约依据。带"实测"字样的条目是 0a/0b 阶段发现文档未写明、经实测确认后登记的行为。</para>
+/// <para><b>2026-11-03 定位重述（去重后 30 → 11 条）</b>：本目录现在的两层作用，与
+/// <see cref="DialectContractCatalog{TProvider}"/>（D 层，20 条 × 三方言）**互补而非重复**：</para>
+/// <para>① <b>契约元数据登记册</b>（不可替代）：<see cref="ContractRationale.Validate"/> 强制每条的
+/// <c>Source</c> 指向 <c>API参考.md</c> / <c>ADR</c> / <c>reviewed:</c> 之一，把"把当前行为记成
+/// 合理行为"从口头纪律变成可核对字段（首轮 13 条产品行为里 3 条其实是缺陷的教训）。删本目录即
+/// 失去这个机械检查的载体。</para>
+/// <para>② <b>SQLite 快速回归</b>：11 条跑在内存库上，比 D 层的三方言真库轮快得多，适合每次改动
+/// 即跑。<b>它不承担方言覆盖</b>——那 10 条 D 层没有的条目（JOIN-01/02、CTE-01、GROUP-01、
+/// WINDOW-01、MULTI-01、RAW-01、SPROC-01、TX-03、BULKUP-02）各自另有三方言或真库覆盖，
+/// 见 QueryShapeDualSideTests / TriDialectMultiResultTests / SavepointDialectTests /
+/// BulkUpdateBatchDialectTests / ExternalDatabaseFeatureTests。PAGE-01 保留是因为它断言
+/// <c>descending</c> 默认 true，D 层只测显式 <c>descending: false</c>。</para>
+/// <para><b>不要"并进 D 层"</b>：本目录的 SQL 硬编码双引号（如 <c>SELECT "Id", "name"</c>），
+/// MySQL 上直接失败；迁移前须把每条改成 <c>scope.Q()</c> 参数化，工作量等同重写，而 D 层已有
+/// 对应覆盖，收益为零。SQLite 兜底由 <c>DialectCapabilityContractTests.Sqlite_CapabilityContracts_Hold</c>
+/// 的"SQLite 不得登记 DialectUnsupported"守卫保证。</para></summary>
 internal sealed record ContractEntry(
     string Id,
     string Precondition,

@@ -142,6 +142,32 @@ public sealed class QueryPipelineTests
     }
 
     [Test]
+    public async Task Pipeline_InsideParallelReadScope_IsRejected()
+    {
+        // 2026-11-03 补：并行读作用域内创建管道必须响亮拒绝——管道自己会租一条读连接，
+        // 与作用域的租约模型冲突。该分支此前零覆盖（QueryPipeline.cs:111-113）。
+        await using Fixture fixture = await Fixture.CreateAsync("parallel");
+        await using (fixture.Session.ForParallelReads())
+        {
+            var pipeline = fixture.Session.CreatePipeline();
+            _ = pipeline.Query(fixture.Session.From<PipelineProbeRow>());
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await pipeline.ExecuteAsync());
+            pipeline.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Pipeline_DisposeTwice_IsIdempotent()
+    {
+        // Dispose 的幂等分支（QueryPipeline.cs:127-128 的 `if (_disposed) return;`）此前零覆盖
+        await using Fixture fixture = await Fixture.CreateAsync("dispose2");
+        var pipeline = fixture.Session.CreatePipeline();
+        _ = pipeline.Query(fixture.Session.From<PipelineProbeRow>());
+        pipeline.Dispose();
+        pipeline.Dispose();   // 第二次必须是 no-op，不抛
+    }
+
+    [Test]
     public async Task Pipeline_RejectsCacheAndTracing()
     {
         await using Fixture fixture = await Fixture.CreateAsync("reject");

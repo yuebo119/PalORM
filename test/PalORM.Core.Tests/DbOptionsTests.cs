@@ -28,6 +28,83 @@ public sealed class DbOptionsTests
     }
 
     [Test]
+    public async Task Development_Preset_FailsFastWithLooseTimeouts()
+    {
+        // 开发预设的契约：宽松超时 + 单次重试 + 禁用熔断（快速失败而非重试堆积）。
+        // 2026-11-03 补：三个预设里只有 Production 有断言，Development/Testing 零覆盖。
+        var opts = DbOptions.Development("Host=dev");
+        await Assert.That(opts.ConnectionString).IsEqualTo("Host=dev");
+        await Assert.That(opts.CommandTimeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(opts.ConnectionTimeout).IsEqualTo(TimeSpan.FromSeconds(30));
+        await Assert.That(opts.MaxRetries).IsEqualTo(1);
+        await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Testing_Preset_IsDeterministicAndValidatesColumnOrder()
+    {
+        // 测试预设的契约：短超时 + 零重试 + 禁用熔断 + 开启列序校验
+        //（测试确定性优先，瞬时故障应立即暴露而非被重试掩盖）。
+        var opts = DbOptions.Testing("Data Source=:memory:");
+        await Assert.That(opts.CommandTimeout).IsEqualTo(TimeSpan.FromSeconds(5));
+        await Assert.That(opts.ConnectionTimeout).IsEqualTo(TimeSpan.FromSeconds(5));
+        await Assert.That(opts.MaxRetries).IsEqualTo(0);
+        await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(0);
+        await Assert.That(opts.ValidateQueryColumnOrder).IsTrue();
+    }
+
+    [Test]
+    // 环境变量是进程级状态：与任何测试并行都会互相污染（B57 族）。
+    [NotInParallel]
+    public async Task FromEnvironment_ReadsAllSupportedVariables()
+    {
+        // 环境变量配置是部署面（Docker/K8s），各变量解析分支此前零覆盖。
+        // 用独立变量名避免与真实环境串扰；finally 清理（T5 无状态依赖）。
+        const string connVar = "PALORM_TEST_FROMENV_CONN";
+        Environment.SetEnvironmentVariable(connVar, "Host=fromenv");
+        try
+        {
+            Environment.SetEnvironmentVariable("PALORM_READ_CONNECTION", "Host=replica");
+            Environment.SetEnvironmentVariable("PALORM_COMMAND_TIMEOUT", "7");
+            Environment.SetEnvironmentVariable("PALORM_CONNECTION_TIMEOUT", "9");
+            Environment.SetEnvironmentVariable("PALORM_MAX_RETRIES", "2");
+            Environment.SetEnvironmentVariable("PALORM_CIRCUIT_BREAKER_THRESHOLD", "11");
+            Environment.SetEnvironmentVariable("PALORM_MAX_POOL_SIZE", "13");
+
+            DbOptions opts = DbOptions.FromEnvironment(connVar);
+
+            await Assert.That(opts.ConnectionString).IsEqualTo("Host=fromenv");
+            await Assert.That(opts.ReadConnectionString).IsEqualTo("Host=replica");
+            await Assert.That(opts.CommandTimeout).IsEqualTo(TimeSpan.FromSeconds(7));
+            await Assert.That(opts.ConnectionTimeout).IsEqualTo(TimeSpan.FromSeconds(9));
+            await Assert.That(opts.MaxRetries).IsEqualTo(2);
+            await Assert.That(opts.CircuitBreakerThreshold).IsEqualTo(11);
+            await Assert.That(opts.MaxPoolSize).IsEqualTo(13);
+        }
+        finally
+        {
+            foreach (string name in (string[])
+                [
+                    connVar, "PALORM_READ_CONNECTION", "PALORM_COMMAND_TIMEOUT",
+                    "PALORM_CONNECTION_TIMEOUT", "PALORM_MAX_RETRIES",
+                    "PALORM_CIRCUIT_BREAKER_THRESHOLD", "PALORM_MAX_POOL_SIZE"
+                ])
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
+        }
+    }
+
+    [Test]
+    public async Task FromEnvironment_MissingRequiredVariable_Throws()
+    {
+        const string connVar = "PALORM_TEST_FROMENV_MISSING";
+        Environment.SetEnvironmentVariable(connVar, null);
+        await Assert.That(() => DbOptions.FromEnvironment(connVar))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task WithPool_ReturnsUpdatedCopy()
     {
         var opts = new DbOptions { ConnectionString = "Data Source=:memory:" };

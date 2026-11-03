@@ -3,6 +3,7 @@ using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using PalORM.Sqlite;
 
 namespace PalORM.Core.Tests;
 
@@ -147,6 +148,55 @@ public sealed class GridReaderLifecycleTests
             resources.Reader.AllowRead.TrySetResult();
         }
         await Assert.That((await first).Count).IsEqualTo(0);
+    }
+
+    // ─── 真 SQLite 路径：越界读取与空结果集（2026-11-03 补，此前零覆盖）───
+
+    [Test]
+    public async Task ReadAsync_BeyondResultSetCount_ThrowsExplicitly()
+    {
+        // ITM-748 的行为面：SQL 只返回 1 个结果集，读第 2 次必须响亮失败，
+        // 不能静默返回空列表（那会让调用方把"没有更多结果集"当成"该集合为空"）。
+        await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
+        await using GridReader grid = await session.From<GridLifecycleEntity>()
+            .QueryMultipleAsync($"SELECT \"Id\" FROM grid_lifecycle");
+        _ = await grid.ReadAsync<GridLifecycleEntity>();
+        Exception? beyond = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => grid.ReadAsync<GridLifecycleEntity>().AsTask());
+        await Assert.That(beyond!.Message).Contains("No more result sets");
+    }
+
+    [Test]
+    public async Task ReadFirstAsync_EmptyResultSet_ReturnsNull()
+    {
+        // 空结果集时 ReadFirstAsync 返回 null 而不是抛异常（"没有行"是合法结果）。
+        await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
+        await using GridReader grid = await session.From<GridLifecycleEntity>()
+            .QueryMultipleAsync($"SELECT \"Id\" FROM grid_lifecycle WHERE 1 = 0");
+        GridLifecycleEntity? first = await grid.ReadFirstAsync<GridLifecycleEntity>();
+        await Assert.That(first).IsNull();
+    }
+
+    [Test]
+    public async Task ReadFirstAsync_BeyondResultSetCount_ThrowsExplicitly()
+    {
+        // 与 ReadAsync 的同款守卫（ITM-748 在 ReadFirstAsync 的对应分支）
+        await using DataSession<SqliteProvider> session = await CreateSqliteSessionAsync();
+        await using GridReader grid = await session.From<GridLifecycleEntity>()
+            .QueryMultipleAsync($"SELECT \"Id\" FROM grid_lifecycle");
+        _ = await grid.ReadFirstAsync<GridLifecycleEntity>();
+        Exception? beyond = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => grid.ReadFirstAsync<GridLifecycleEntity>().AsTask());
+        await Assert.That(beyond!.Message).Contains("No more result sets");
+    }
+
+    private static async Task<DataSession<SqliteProvider>> CreateSqliteSessionAsync()
+    {
+        DataSession<SqliteProvider> session = await DataSession<SqliteProvider>.CreateAsync(
+            new DbOptions { ConnectionString = $"Data Source=grid_{Guid.NewGuid():N};Mode=Memory;Cache=Shared" });
+        await session.ExecuteAsync(
+            $"CREATE TABLE grid_lifecycle (\"Id\" INTEGER PRIMARY KEY NOT NULL)");
+        return session;
     }
 }
 
