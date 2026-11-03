@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using PalORM;
 using PalORM.PostgreSql;
 
 namespace PalORM.AotTest.Pg;
@@ -149,9 +150,9 @@ internal static class Program
                 throw new InvalidOperationException("PostgreSQL DELETE failed");
             await db.DeleteAsync<AotPgJsonEntity>(json.Id).ConfigureAwait(false);
 
-            // ITM-419：源生成 PG DDL（表 + 索引）经 MigrateAsync 真库执行 + CRUD 往返
-            await db.MigrateAsync().ConfigureAwait(false);
-            await db.MigrateAsync().ConfigureAwait(false); // 幂等：IF NOT EXISTS 第二次不抛
+            // ITM-419：源生成 PG DDL（表 + 索引）经 MigrateAsync 真库执行 + CRUD 往返。
+            // 内容断言与幂等断言抽到 VerifyMigrationIdempotencyAsync（S3776 复杂度预算）。
+            await VerifyMigrationIdempotencyAsync(db).ConfigureAwait(false);
             AotPgMigratedEntity migrated = await db.InsertAsync(new AotPgMigratedEntity
             {
                 Label = "migrated",
@@ -247,6 +248,55 @@ internal static class Program
                 throw new InvalidOperationException("PostgreSQL pessimistic lock execution failed");
             return true;
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>ITM-419 源生成 PG DDL 的内容与幂等验证。
+    /// <para><b>2026-11-03 判别力修复</b>：原实现是 <c>await MigrateAsync(); await MigrateAsync();</c>
+    /// 加一句注释"幂等：IF NOT EXISTS 第二次不抛"——只断言"不抛异常"。若 MigrateAsync
+    /// 整体退化成 no-op（什么都不建），两次都不抛，用例仍绿（T21 空转绿）。</para>
+    /// <para><b>为什么不用 MigrationResult.Tables</b>：该字段是本次迁移涉及的<b>表名全集</b>
+    /// （取自 <c>PalORM_Runtime.TableNames</c>，见 DataSession.Schema.cs:157-169），与是否真的
+    /// 建表无关；no-op 时照样列出全部表名。内容面必须直接查库。</para>
+    /// <para><b>幂等面判据（PG 专用语义）</b>：PG 的索引 DDL 带 <c>IF NOT EXISTS</c>
+    /// （MigrationEmitter.BuildCreateIndex 的方言分支），第二次执行由数据库静默跳过、命令成功返回，
+    /// 因此走 <c>CreatedIndexes</c> 而<b>不是</b> <c>SkippedIndexes</c>——后者只在 MySQL 的
+    /// 1061 重复对象异常路径填充。PG 的幂等可观测面是：第二次不抛、FailedIndexes 为空、
+    /// 库里索引计数仍为 1（没有重复创建）。</para>
+    /// <para><b>CreatedIndexes / SkippedIndexes 存的是完整 DDL 语句</b>（见 DataSession.Schema.cs:429
+    /// 与 :443 的 <c>accumulator.CreatedIndexes.Add(indexDdl)</c>），不是索引名——因此匹配要用
+    /// <c>Contains("ix_aot_pg_migrated_label")</c> 的子串判定，不能直接比对元素相等。</para></summary>
+    private static async Task VerifyMigrationIdempotencyAsync(DataSession<PostgreSqlProvider> db)
+    {
+        MigrationResult firstMigration = await db.MigrateWithResultAsync().ConfigureAwait(false);
+
+        long tableCount = await db.ScalarAsync<long>(
+            $"SELECT COUNT(*) FROM pg_tables WHERE tablename = {"aot_pg_migrated"}").ConfigureAwait(false);
+        if (tableCount != 1)
+            throw new InvalidOperationException(
+                $"PostgreSQL MigrateAsync did not create aot_pg_migrated (pg_tables count={tableCount})");
+
+        long indexCount = await db.ScalarAsync<long>(
+            $"SELECT COUNT(*) FROM pg_indexes WHERE indexname = {"ix_aot_pg_migrated_label"}").ConfigureAwait(false);
+        if (indexCount != 1)
+            throw new InvalidOperationException(
+                $"PostgreSQL MigrateAsync did not create ix_aot_pg_migrated_label (pg_indexes count={indexCount})");
+
+        if (!firstMigration.CreatedIndexes.Any(
+                ddl => ddl.Contains("ix_aot_pg_migrated_label", StringComparison.Ordinal)))
+            throw new InvalidOperationException(
+                "PostgreSQL first MigrateAsync did not report ix_aot_pg_migrated_label as created "
+                + $"(created={firstMigration.CreatedIndexes.Count}, skipped={firstMigration.SkippedIndexes.Count})");
+
+        // 第二次：PG 的 IF NOT EXISTS 让 DDL 静默成功，判据是"不抛 + 无失败项 + 索引仍只有一份"。
+        MigrationResult secondMigration = await db.MigrateWithResultAsync().ConfigureAwait(false);
+        if (secondMigration.FailedIndexes.Count != 0)
+            throw new InvalidOperationException(
+                $"PostgreSQL second MigrateAsync reported {secondMigration.FailedIndexes.Count} failed index(es)");
+        long indexCountAfterSecond = await db.ScalarAsync<long>(
+            $"SELECT COUNT(*) FROM pg_indexes WHERE indexname = {"ix_aot_pg_migrated_label"}").ConfigureAwait(false);
+        if (indexCountAfterSecond != 1)
+            throw new InvalidOperationException(
+                $"PostgreSQL second MigrateAsync duplicated ix_aot_pg_migrated_label (pg_indexes count={indexCountAfterSecond})");
     }
 
     /// <summary>R1（v6.0）：[Projection] DTO 物化的 AOT 全链验证——只读类型经源生成注册，

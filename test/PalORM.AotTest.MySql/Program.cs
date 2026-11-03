@@ -167,10 +167,16 @@ internal static class Program
             if (migratedBack.Label != "migrated" || migratedBack.Amount != 12.5m)
                 throw new InvalidOperationException("MySQL migrated-table round trip failed");
 
-            // PoC Auto Tagging Interceptor 拦截目标——真库路径覆盖 ToListAsync（九终态的
-            // 完整覆盖面由 SourceGen.Tests 的 AutoTagging 哨兵锁定；ITM-909 修正原
-            // 「6 个终态全部覆盖」的双重失真——计数过期且实际仅覆盖 ToListAsync）。
-            // r19/T-P3-10：内容断言（此前"不抛即过"零行为验证）——插入探针行后验证物化结果
+            // PoC Auto Tagging Interceptor 拦截目标——真库路径覆盖 ToListAsync 与
+            // FirstOrDefaultAsync（ITM-909 修正原「6 个终态全部覆盖」的双重失真）。
+            // r19/T-P3-10：内容断言（此前"不抛即过"零行为验证）——插入探针行后验证物化结果。
+            // 2026-11-03 缺口对账（不虚报覆盖）：九终态在本臂只覆盖 2 个，其余分布如下——
+            //   SQLite 臂另覆盖 ExecuteNonQueryAsync / ToPageAsync / QueryMultipleAsync / ForEachAsync
+            //   （后者是唯一"委托跨 AOT 边界"形态，已在 SQLite 臂的真 AOT 二进制里跑通）；
+            //   FirstAsync / SingleAsync / SingleOrDefaultAsync 与 FirstOrDefaultAsync 同族
+            //   （单值物化，AOT 面相同），不另设锚点。
+            //   九终态的**生成面**（emitter 是否为每个终态生成拦截方法）由
+            //   SourceGen.Tests/AutoTaggingTests 的 9/9 哨兵锁定，与本臂的执行面互补。
             var probe = await db.InsertAsync(new AotMySqlEntity
             {
                 Name = "tag probe",

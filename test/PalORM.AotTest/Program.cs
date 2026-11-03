@@ -365,6 +365,22 @@ internal static class Program
         if (streamed != 3)
             throw new InvalidOperationException("QueryAsyncEnumerable failed");
 
+        // ForEachAsync：AutoTagging 九终态里唯一"委托跨 AOT 边界"的形态
+        // （TerminalMethod 的 Params 含 Func<T, CancellationToken, ValueTask>）。
+        // 其余未覆盖终态（FirstAsync/SingleAsync/SingleOrDefaultAsync）与已覆盖的
+        // FirstOrDefaultAsync 同族（单值物化），AOT 面相同，不另设锚点。
+        int forEachCount = 0;
+        long forEachTotal = await db.From<AotChildEntity>()
+            .Where($"parent_id > {0}")
+            .ForEachAsync((AotChildEntity _, CancellationToken _) =>
+            {
+                forEachCount++;
+                return default;
+            }).ConfigureAwait(false);
+        if (forEachTotal != 3 || forEachCount != 3)
+            throw new InvalidOperationException(
+                $"ForEachAsync failed: total={forEachTotal}, visited={forEachCount}");
+
         // CA2007：await using 的隐式 Dispose await 无法挂 ConfigureAwait，改 try/finally 显式释放
         GridReader grid = await db.From<AotChildEntity>()
             .QueryMultipleAsync($"SELECT * FROM aot_child; SELECT * FROM aot_child WHERE label = {"c0"}")
