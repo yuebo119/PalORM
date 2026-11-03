@@ -185,33 +185,8 @@ internal static class ContractCatalog
                 await Assert.That(rows.Count).IsEqualTo(5);
             }),
 
-        new("C-PAGE-01",
-            "五行数据，pageSize 2",
-            "ToPageAsync 返回 (rows, total)；descending 默认 true（从最大值续页）；末键续页得到下一页；builder 上带 Skip() 时抛 InvalidOperationException（键集分页以 lastValue 续页，OFFSET 会被静默丢弃）",
-            "API参考.md 执行方法（ToPageAsync）+ 实测 2026-10-29",
-            async name =>
-            {
-                (SharedSqliteDb shared, DataSession<SqliteProvider> db) = await OpenAsync(name);
-                await using SharedSqliteDb scope = shared;
-                await using DataSession<SqliteProvider> session = db;
-                await session.BulkInsertAsync([Plain(1), Plain(2), Plain(3), Plain(4), Plain(5)]);
-                (List<CfBulkPlainEntity> descPage, long descTotal) =
-                    await session.From<CfBulkPlainEntity>().ToPageAsync(2, e => e.Id);
-                await Assert.That(descTotal).IsEqualTo(5L);
-                await Assert.That(string.Join(",", descPage.Select(e => e.Id))).IsEqualTo("5,4");
-
-                (List<CfBulkPlainEntity> ascFirst, long ascTotal) =
-                    await session.From<CfBulkPlainEntity>().ToPageAsync(2, e => e.Id, descending: false);
-                (List<CfBulkPlainEntity> ascSecond, _) = await session.From<CfBulkPlainEntity>()
-                    .ToPageAsync(2, e => e.Id, lastValue: ascFirst[^1].Id, descending: false);
-                await Assert.That(ascTotal).IsEqualTo(5L);
-                await Assert.That(string.Join(",", ascFirst.Select(e => e.Id))).IsEqualTo("1,2");
-                await Assert.That(string.Join(",", ascSecond.Select(e => e.Id))).IsEqualTo("3,4");
-
-                // Skip 会被键集分页静默丢弃，因此改为构建期拒绝（D6）
-                await Assert.That(async () => await session.From<CfBulkPlainEntity>()
-                    .Skip(1).ToPageAsync(2, e => e.Id)).Throws<InvalidOperationException>();
-            }),
+        // 2026-11-03：C-PAGE-01 已并入方言契约目录的 D-PAGE-01（那条本来就有升序与 Skip 断言，
+        // 补上「descending 默认 true」后退化为严格更强的版本），两个目录的同名重叠归零。
 
         new("C-BULKUP-02",
             "两行已插入，实体无 [ConcurrencyCheck]",

@@ -15,8 +15,8 @@
 | `test-gate.cs` | 测试规范 T4/T6/T8/T9/T11/T12 + T-DEF-1/4（`--ci` 语义保留） | ✅ verify.yml gate |
 | `assertion-strength-check.cs` | 弱断言棘轮（基线见 `bench/baselines/assertion-baseline.json`，当前 0） | ✅ verify.yml gate |
 | `gate-param-collection-reuse.cs` | R-UNNESTB 参数集合复用理由码门禁 | ✅ pre-commit + verify.yml gate |
-| `assert-test-counts.cs` | 测试执行数地板断言（地板真源 `bench/baselines/test-counts.json`） | ✅ verify.yml unit/integration |
-| `assert-coverage.cs` | 覆盖率地板断言（同上文件 `coverage` 段） | ✅ verify.yml unit |
+| `assert-test-counts.cs` | 测试执行数地板断言（地板真源 `bench/baselines/test-counts.json`）。2026-11-03 起 `passed` 与地板**精确匹配**（原 `>=` 曾松弛到 286 对实测 574）；`--update <project> <report>` 按实测写回地板 | ✅ verify.yml unit/integration |
+| `assert-coverage.cs` | 覆盖率地板断言（同上文件 `coverage` 段）。双向：低于地板报退化，**高于地板 1pp 以上报地板过期**（自收紧上限，防止地板只降不升） | ✅ verify.yml unit |
 | `assert-conformance-contracts.cs` | 契约覆盖账本门禁：两个契约目录（能力 11 条 / 方言 20 条）的 ID 集合、`DialectUnsupported` 里的 SQLite 豁免数、每条目断言数，与 `bench/baselines/conformance-contracts.json` 双向对账。只读源文件、与测试方法是否存在无关，补「守卫写在方法体内、整方法被删即一起消失」的缺口 | ✅ pre-commit + verify.yml gate |
 | `diff-coverage.cs` | diff 覆盖率门禁（T1-diff，测试体系优化方案 T0-5）：只统计本次改动行、阈值 80%；白名单注释行/.g.cs/test·tools·scripts·docs。`-- <base> <head|""> <xml>...`，空 head 表示对工作树 | ✅ verify.yml unit |
 | `public-api-snapshot.cs` | 公开 API 基线快照（`--check` PR 比对，`--update` 显式冻结；基线在 `bench/baselines/public-api/`） | ✅ verify.yml unit |

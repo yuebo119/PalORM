@@ -2,32 +2,26 @@ using PalORM.Sqlite;
 
 namespace PalORM.Integration.Tests.Conformance;
 
-/// <summary>B 层能力契约执行器（方案 §5.6）。
-/// <para>11 条能力契约在独立库上逐条验证；失败收集后一次性报出，每条消息带契约 ID，
-/// 失败时能一步跳到 <see cref="ContractCatalog"/> 的条目。</para>
-/// <para>元数据自检单列一条：两个契约目录（能力 11 条 + 方言 20 条）合起来检查 ID 全局唯一、
+/// <summary>B 层能力契约执行（方案 §5.6）。
+/// <para>10 条能力契约每条一个独立用例（2026-11-03 参数化改造，见《测试机制重设计方案》P0）：
+/// 失败时报告里直接标出契约 ID，不再把多条失败拼成一个字符串；删掉一条契约即在报告里少一个
+/// 用例，稳定性判据可见。</para>
+/// <para>元数据自检单列一条：两个契约目录（能力 10 条 + 方言 20 条）合起来检查 ID 全局唯一、
 /// 前缀合规、前置/后置/来源非空、来源可追溯。它防的是"新加契约忘了填来源"或"复制粘贴后 ID 重复"
-/// 这类元数据退化。2026-11-03 起方言契约目录的 <c>Source</c> 也纳入校验（此前只写不验）。</para></summary>
+/// 这类元数据退化。</para></summary>
 public sealed class CapabilityContractTests
 {
+    private static readonly Dictionary<string, ContractEntry> ById =
+        ContractCatalog.Capabilities.ToDictionary(static contract => contract.Id, StringComparer.Ordinal);
+
+    /// <summary>数据源：每条契约一个用例。ID 作参数，报告里的 displayName 即含契约 ID。</summary>
+    public static IEnumerable<string> ContractIds() => ById.Keys;
+
     [Test]
-    public async Task AllCapabilityContracts_Hold()
+    [MethodDataSource(nameof(ContractIds))]
+    public async Task CapabilityContract_Holds(string contractId)
     {
-        List<string> failures = [];
-        int index = 0;
-        foreach (ContractEntry contract in ContractCatalog.Capabilities)
-        {
-            index++;
-            try
-            {
-                await contract.Verify($"capability_{index:D2}");
-            }
-            catch (Exception ex)
-            {
-                failures.Add($"{contract.Id}: {ex.GetType().Name}: {ex.Message}");
-            }
-        }
-        await Assert.That(string.Join("\n", failures)).IsEmpty();
+        await ById[contractId].Verify($"capability_{contractId}");
     }
 
     [Test]
@@ -42,13 +36,10 @@ public sealed class CapabilityContractTests
         CheckRationale(
             ContractCatalog.Capabilities.Select(static c => (c.Id, c.Source)), "能力契约", problems);
 
-        // 2026-11-03 去重后 30 → 11：19 条的断言与方言契约目录（DialectContractCatalog）
-        // 的 D-* 等价（SAVE-01 少一条 IsNotNull，但 null 时 row.Name 访问照样失败）。
-        // 方言契约目录三方言都跑故 SQLite 侧覆盖不降；保留它没有的 10 条
-        //（JOIN-01/02、CTE-01、GROUP-01、WINDOW-01、MULTI-01、RAW-01、SPROC-01、TX-03、
-        // BULKUP-02）+ 断言更全的 PAGE-01（descending 默认 true 只在本目录断言）。
-        if (ContractCatalog.Capabilities.Count != 11)
-            problems.Add($"能力契约条数为 {ContractCatalog.Capabilities.Count}，方案要求 11");
+        // 2026-11-03：C-PAGE-01 已并入方言契约目录的 D-PAGE-01，剩余 10 条都是方言契约目录没有的
+        //（JOIN-01/02、CTE-01、GROUP-01、WINDOW-01、MULTI-01、RAW-01、SPROC-01、TX-03、BULKUP-02）。
+        if (ContractCatalog.Capabilities.Count != 10)
+            problems.Add($"能力契约条数为 {ContractCatalog.Capabilities.Count}，方案要求 10");
 
         // 方言契约目录（20 条 × 三方言）过同一套元数据判据。ID 与能力契约目录共用同一个
         // 集合，两目录出现同名条目即报；Source 在此之前只写不验（2026-11-03 补）。

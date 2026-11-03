@@ -353,7 +353,8 @@ internal static class DialectContractCatalog<TProvider>
                 await Assert.That(await db.CountAsync<CfBulkPlainEntity>()).IsEqualTo(0L);
             }),
 
-        new("D-PAGE-01", "五行、pageSize 2", "ToPageAsync 升序续页无重无漏；Skip 构建期拒绝",
+        new("D-PAGE-01", "五行、pageSize 2",
+            "ToPageAsync 升序续页无重无漏；descending 默认 true（不传参时从最大值取）；Skip 构建期拒绝",
             "API参考.md 执行方法（ToPageAsync）+ 实测 2026-10-29",
             async scope =>
             {
@@ -366,120 +367,121 @@ internal static class DialectContractCatalog<TProvider>
                 await Assert.That(total).IsEqualTo(5L);
                 await Assert.That(string.Join(",", first.Select(e => e.Id))).IsEqualTo("1,2");
                 await Assert.That(string.Join(",", second.Select(e => e.Id))).IsEqualTo("3,4");
+
+                // 2026-11-03 并入能力契约目录的 C-PAGE-01：不传 descending 时默认 true，从最大值续页
+                (List<CfBulkPlainEntity> descFirst, long descTotal) =
+                    await db.From<CfBulkPlainEntity>().ToPageAsync(2, e => e.Id);
+                await Assert.That(descTotal).IsEqualTo(5L);
+                await Assert.That(string.Join(",", descFirst.Select(e => e.Id))).IsEqualTo("5,4");
+
                 await Assert.That(async () => await db.From<CfBulkPlainEntity>()
                     .Skip(1).ToPageAsync(2, e => e.Id)).Throws<InvalidOperationException>();
             }),
     ];
 }
 
-/// <summary>三方言执行器：20 条契约 × 3 方言，任何一条失败即报出 ID；显式不支持项跳过并记录。</summary>
-internal static class DialectContractRunner
-{
-    public static async Task<int> RunAsync(
-        IReadOnlyList<DialectContract> contracts,
-        SqlDialect dialect,
-        Func<string, CancellationToken, ValueTask<(DialectScope Scope, IAsyncDisposable Owner)>> openAsync,
-        CancellationToken ct = default)
-    {
-        List<string> failures = [];
-        List<string> skipped = [];
-        int executed = 0;
-
-        foreach (DialectContract contract in contracts)
-        {
-            if (DialectUnsupported.Table.TryGetValue((contract.Id, dialect), out string? reason))
-            {
-                skipped.Add($"{contract.Id}: {reason}");
-                continue;
-            }
-
-            (DialectScope scope, IAsyncDisposable owner) =
-                await openAsync($"dialect_{contract.Id}", ct);
-            await using (owner)
-            {
-                try
-                {
-                    await contract.Verify(scope);
-                    executed++;
-                }
-                catch (Exception ex)
-                {
-                    failures.Add($"{contract.Id}/{dialect}: {ex.GetType().Name}: {ex.Message}");
-                }
-            }
-        }
-
-        // 有效负载下限：20 条契约在三方言必须都执行（除非显式登记不支持）
-        string report = failures.Count == 0 ? "" : string.Join("\n", failures);
-        await Assert.That(report).IsEmpty();
-        await Assert.That(executed).IsEqualTo(contracts.Count - skipped.Count);
-        return executed;
-    }
-}
-
+/// <summary>三方言契约执行（2026-11-03 参数化改造，见《测试机制重设计方案》P0）。
+/// <para>20 条契约 × 3 方言，每条契约是一个独立用例：失败时报告直接标出契约 ID 与方言，
+/// 删掉一条契约即在报告里少一个用例。原「方法内循环 + 拼字符串报错」的形态已退役，
+/// 它的问题是一次失败掩盖同批其他失败，且整个方法可被删除而无人察觉。</para>
+/// <para>显式不支持项由数据源过滤（不产生用例）。因为测试数地板是精确匹配，任何一条
+/// 被过滤都会让 passed 少一个并报红，静默跳过这条路仍然关闭。</para></summary>
 [NotInParallel("ExtBulkTable")]
 public sealed class DialectCapabilityContractTests
 {
-    private static async ValueTask PrepareRemoteAsync()
+    private static readonly Dictionary<string, DialectContract> SqliteById =
+        Build<SqliteProvider>(SqlDialect.Sqlite);
+    private static readonly Dictionary<string, DialectContract> PostgreSqlById =
+        Build<PostgreSqlProvider>(SqlDialect.PostgreSql);
+    private static readonly Dictionary<string, DialectContract> MySqlById =
+        Build<MySqlProvider>(SqlDialect.MySql);
+
+    /// <summary>远程表迁移只做一次（20 条契约共用）。失败后保持已失败状态，不再重试。</summary>
+    private static readonly Lazy<Task> RemotePrepared = new(PrepareRemoteAsync);
+
+    public static IEnumerable<string> SqliteContractIds() => SqliteById.Keys;
+
+    public static IEnumerable<string> PostgreSqlContractIds() => PostgreSqlById.Keys;
+
+    public static IEnumerable<string> MySqlContractIds() => MySqlById.Keys;
+
+    internal static Dictionary<string, DialectContract> Build<TProvider>(SqlDialect dialect)
+        where TProvider : IDbProvider
+        => DialectContractCatalog<TProvider>.Capabilities
+            .Where(contract => !DialectUnsupported.Table.ContainsKey((contract.Id, dialect)))
+            .ToDictionary(static contract => contract.Id, StringComparer.Ordinal);
+
+    [Test]
+    public async Task DialectContractMatrix_IsConsistent()
+    {
+        List<string> problems = [];
+
+        // ① SQLite 侧必须全覆盖：能力契约目录的 SQLite 重复条目已删除，本目录是唯一来源。
+        List<string> sqliteExempt = [.. DialectUnsupported.Table.Keys
+            .Where(static key => key.Dialect == SqlDialect.Sqlite)
+            .Select(static key => key.Id)];
+        if (sqliteExempt.Count > 0)
+            problems.Add($"SQLite 侧登记了豁免：{string.Join(", ", sqliteExempt)}（SQLite 将失去这些契约的覆盖）");
+
+        // ② 三个方言必须是同一批契约 ID，任一方言多一条或少一条都说明目录被改坏了。
+        List<string> sqliteIds = [.. DialectContractCatalog<SqliteProvider>.Capabilities.Select(static c => c.Id)];
+        List<string> pgIds = [.. DialectContractCatalog<PostgreSqlProvider>.Capabilities.Select(static c => c.Id)];
+        List<string> myIds = [.. DialectContractCatalog<MySqlProvider>.Capabilities.Select(static c => c.Id)];
+        if (!sqliteIds.SequenceEqual(pgIds, StringComparer.Ordinal))
+            problems.Add("SQLite 与 PostgreSQL 的契约 ID 序列不一致");
+        if (!sqliteIds.SequenceEqual(myIds, StringComparer.Ordinal))
+            problems.Add("SQLite 与 MySQL 的契约 ID 序列不一致");
+
+        // ③ 数据源不得为空（空数据源会让参数化测试静默变成零用例）。
+        if (SqliteById.Count == 0) problems.Add("SQLite 数据源为空");
+        if (PostgreSqlById.Count == 0) problems.Add("PostgreSQL 数据源为空");
+        if (MySqlById.Count == 0) problems.Add("MySQL 数据源为空");
+
+        await Assert.That(string.Join(" | ", problems)).IsEmpty();
+    }
+
+    [Test]
+    [MethodDataSource(nameof(SqliteContractIds))]
+    public async Task Sqlite_Contract_Holds(string contractId)
+        => await RunOneAsync(SqliteById[contractId], SqlDialect.Sqlite, DialectScopes.SqliteAsync);
+
+    [Test]
+    [MethodDataSource(nameof(PostgreSqlContractIds))]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PostgreSql_Contract_Holds(string contractId)
+    {
+        await RemotePrepared.Value;
+        await RunOneAsync(PostgreSqlById[contractId], SqlDialect.PostgreSql, DialectScopes.PostgreSqlAsync);
+    }
+
+    [Test]
+    [MethodDataSource(nameof(MySqlContractIds))]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_Contract_Holds(string contractId)
+    {
+        await RemotePrepared.Value;
+        await RunOneAsync(MySqlById[contractId], SqlDialect.MySql, DialectScopes.MySqlAsync);
+    }
+
+    private static async Task RunOneAsync(
+        DialectContract contract,
+        SqlDialect dialect,
+        Func<string, CancellationToken, ValueTask<(DialectScope Scope, IAsyncDisposable Owner)>> openAsync)
+    {
+        (DialectScope scope, IAsyncDisposable owner) =
+            await openAsync($"dialect_{dialect}_{contract.Id}", CancellationToken.None);
+        await using (owner)
+        {
+            await contract.Verify(scope);
+        }
+    }
+
+    private static async Task PrepareRemoteAsync()
     {
         // 远程容器缺表时 Migrate 一次；SQLite 由每个 SharedSqliteDb 自带迁移。
         await using DataSession<PostgreSqlProvider> pg = await TestDb.PostgreSqlAsync();
         await pg.MigrateAsync();
         await using DataSession<MySqlProvider> my = await TestDb.MySqlAsync();
         await my.MigrateAsync();
-    }
-
-    [Test]
-    public async Task Sqlite_CapabilityContracts_Hold()
-    {
-        // S3 守卫（2026-11-03）：能力契约目录的 19 条 SQLite 重复条目删除后，
-        // 本目录成为这些契约在 SQLite 侧的唯一来源。若某条 D 契约在 SQLite 上被登记为不支持，
-        // SQLite 侧就再无覆盖——本断言把"SQLite 必须全覆盖"钉成机械约束。
-        // 形态与其他元数据自检一致（收集 + 拼接 + IsEmpty），报错一次列出全部违规项。
-        // 反向验证：加一条 (D-AGG-01, Sqlite) 到 DialectUnsupported.Table → 本条红（2026-11-03 实测）。
-        List<string> sqliteExempt = [.. DialectUnsupported.Table.Keys
-            .Where(static key => key.Dialect == SqlDialect.Sqlite)
-            .Select(static key => key.Id)];
-        await Assert.That(string.Join(", ", sqliteExempt))
-            .IsEmpty()
-            .Because("这些契约在 SQLite 上被登记为不支持，而 ContractCatalog 的 SQLite 重复条目已删除——SQLite 侧将失去它们的覆盖");
-
-        int executed = await RunAsync(SqlDialect.Sqlite, DialectScopes.SqliteAsync);
-        await Assert.That(executed).IsEqualTo(DialectContractCatalog<SqliteProvider>.Capabilities.Count);
-    }
-
-    [Test]
-    [Property("Category", "ExternalDatabase")]
-    public async Task PostgreSql_CapabilityContracts_Hold()
-    {
-        await PrepareRemoteAsync();
-        int executed = await RunAsync(SqlDialect.PostgreSql, DialectScopes.PostgreSqlAsync);
-        // 行为断言（2026-11-02）：断言在 helper 内，扫描器看不到；这里补一条"至少执行过 1 条契约"，
-        // 同时防 helper 静默空转（B189 无声 no-op 同族）。
-        await Assert.That(executed).IsGreaterThan(0);
-    }
-
-    [Test]
-    [Property("Category", "ExternalDatabase")]
-    public async Task MySql_CapabilityContracts_Hold()
-    {
-        await PrepareRemoteAsync();
-        int executed = await RunAsync(SqlDialect.MySql, DialectScopes.MySqlAsync);
-        await Assert.That(executed).IsGreaterThan(0);
-    }
-
-    private static Task<int> RunAsync(
-        SqlDialect dialect,
-        Func<string, CancellationToken, ValueTask<(DialectScope Scope, IAsyncDisposable Owner)>> openAsync)
-    {
-        return dialect switch
-        {
-            SqlDialect.Sqlite => DialectContractRunner.RunAsync(
-                DialectContractCatalog<SqliteProvider>.Capabilities, dialect, openAsync),
-            SqlDialect.PostgreSql => DialectContractRunner.RunAsync(
-                DialectContractCatalog<PostgreSqlProvider>.Capabilities, dialect, openAsync),
-            _ => DialectContractRunner.RunAsync(
-                DialectContractCatalog<MySqlProvider>.Capabilities, dialect, openAsync),
-        };
     }
 }

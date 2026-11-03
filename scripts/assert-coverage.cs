@@ -123,6 +123,20 @@ if (moduleCoverage < floor)
     Console.Error.WriteLine($"::error::覆盖率 {foundText}% < 地板 {floorText}%");
     return 1;
 }
+
+// 自收紧上限（2026-11-03，《测试机制重设计方案》P2-c 的覆盖率侧）：
+// 覆盖率随补测自然上升，地板若长期不抬就会变成"只降不升"的松地板。上限 1pp，
+// 超过即要求把地板抬到实测值。容差而非精确匹配，因为覆盖率会随代码增删小幅波动。
+const double MaxSlackPercentagePoints = 1.0;
+double slack = moduleCoverage.Value - floor;
+if (slack > MaxSlackPercentagePoints)
+{
+    string suggested = Math.Floor(moduleCoverage.Value).ToString(CultureInfo.InvariantCulture);
+    Console.Error.WriteLine(
+        $"::error::覆盖率 {foundText}% 比地板 {floorText}% 高 {slack.ToString("0.##", CultureInfo.InvariantCulture)}pp，"
+        + $"超过自收紧上限 {MaxSlackPercentagePoints.ToString(CultureInfo.InvariantCulture)}pp——请把 coverage.{key} 抬到 {suggested}");
+    return 1;
+}
 return 0;
 
 /// <summary>按 type_name 聚合 function 覆盖（行数加权）。

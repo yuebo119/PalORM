@@ -3,7 +3,7 @@
   "capabilityCatalog": {
     "file": "test/PalORM.Integration.Tests/Conformance/ContractCatalog.cs",
     "prefix": "C-",
-    "count": 11,
+    "count": 10,
     "minAssertionsPerEntry": 1,
     "ids": [
       "C-BULKUP-02",
@@ -12,7 +12,6 @@
       "C-JOIN-01",
       "C-JOIN-02",
       "C-MULTI-01",
-      "C-PAGE-01",
       "C-RAW-01",
       "C-SPROC-01",
       "C-TX-03",
