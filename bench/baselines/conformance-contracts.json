@@ -1,0 +1,56 @@
+{
+  "_comment": "契约覆盖账本（2026-11-03，门禁 scripts/assert-conformance-contracts.cs）。用途：把「两个契约目录里有哪些条目、SQLite 侧必须全跑」钉成静态数据，与测试方法是否存在无关——原守卫写在 Sqlite_CapabilityContracts_Hold 方法体内，整方法被删即一起消失，而测试数地板对单条删除无感。改条目（增删）必须在同一提交里同步本文件，否则门禁报红；这是刻意的，账本的价值就在『改动要显式』。",
+  "capabilityCatalog": {
+    "file": "test/PalORM.Integration.Tests/Conformance/ContractCatalog.cs",
+    "prefix": "C-",
+    "count": 11,
+    "minAssertionsPerEntry": 1,
+    "ids": [
+      "C-BULKUP-02",
+      "C-CTE-01",
+      "C-GROUP-01",
+      "C-JOIN-01",
+      "C-JOIN-02",
+      "C-MULTI-01",
+      "C-PAGE-01",
+      "C-RAW-01",
+      "C-SPROC-01",
+      "C-TX-03",
+      "C-WINDOW-01"
+    ]
+  },
+  "dialectCatalog": {
+    "file": "test/PalORM.Integration.Tests/Conformance/DialectContractCatalog.cs",
+    "prefix": "D-",
+    "count": 20,
+    "minAssertionsPerEntry": 1,
+    "ids": [
+      "D-AGG-01",
+      "D-BULKDEL-01",
+      "D-BULKIN-01",
+      "D-BULKMERGE-01",
+      "D-BULKUP-01",
+      "D-DELETE-01",
+      "D-DELETE-02",
+      "D-GET-01",
+      "D-GETALL-01",
+      "D-INSERT-01",
+      "D-INSERT-02",
+      "D-PAGE-01",
+      "D-QUERY-01",
+      "D-SAVE-01",
+      "D-SAVE-02",
+      "D-SCALAR-01",
+      "D-TX-01",
+      "D-TX-02",
+      "D-UPDATE-01",
+      "D-UPDCOLS-01"
+    ]
+  },
+  "sqliteExemptions": {
+    "file": "test/PalORM.Integration.Tests/Conformance/DialectContractCatalog.cs",
+    "className": "DialectUnsupported",
+    "allowed": 0,
+    "_comment": "SQLite 侧必须全跑：方言契约目录的 20 条在 SQLite 上一条都不许登记为不支持，否则 SQLite-only 通道会丢掉对应覆盖（能力契约目录的同名条目已删除，D 层是唯一来源）。要登记必须先改本行为允许值并在同一提交说明理由。"
+  }
+}

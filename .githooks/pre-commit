@@ -61,4 +61,12 @@ fi
 echo "── pre-commit: D4/D10-D14 文档口径 ──"
 dotnet run --file "$(git rev-parse --show-toplevel)/scripts/doc-consistency-check.cs" || exit 1
 
+# 契约覆盖账本（2026-11-03 起）：原「SQLite 必须全跑」的守卫写在
+# Sqlite_CapabilityContracts_Hold 方法体内，整方法被删即一起消失，而测试数地板当年对
+# 单条删除无感。本段不看测试方法，只把两个契约目录的 ID 集合、豁免表、每条目断言数
+# 与 bench/baselines/conformance-contracts.json 对账——删条目、加条目未登记、
+# 登记 SQLite 豁免、条目被掏空都报。纯文本解析，约 1 秒。
+echo "── pre-commit: 契约覆盖账本 ──"
+dotnet run --file "$(git rev-parse --show-toplevel)/scripts/assert-conformance-contracts.cs" || exit 1
+
 exit 0

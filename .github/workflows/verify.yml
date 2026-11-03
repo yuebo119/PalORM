@@ -302,6 +302,14 @@ jobs:
             - name: Assertion strength ratchet
               run: dotnet run --file scripts/assertion-strength-check.cs -- --ci
 
+            # 2026-11-03：契约覆盖账本。原「SQLite 必须全跑」的守卫写在
+            # Sqlite_CapabilityContracts_Hold 方法体内，整方法被删即一起消失，
+            # 测试数地板对单条删除也无感。本步不看测试方法，只把两个契约目录的
+            # ID 集合、豁免表、每条目断言数与 bench/baselines/conformance-contracts.json
+            # 对账——删条目、加条目未登记、登记 SQLite 豁免、条目被掏空都报。
+            - name: Conformance contract coverage ledger
+              run: dotnet run --file scripts/assert-conformance-contracts.cs
+
             # 独立审计 M0-4：依赖 CVE 信号（此前完全空白——4 个运行时第三方包 +
             # Roslyn 的新 CVE 只能靠人工升级轮发现，GHSA-473q 类事件已实际发生过）。
             # NuGetAudit 在还原期报 NU1903/NU1904，但中央包管理 + 显式钉版本下
