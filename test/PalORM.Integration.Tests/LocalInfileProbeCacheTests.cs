@@ -8,7 +8,13 @@ namespace PalORM.Integration.Tests;
 /// 本测试锁定命中路径下端到端行为正确（两批行数完整，探测→缓存→BulkCopy 全链路通过）。
 /// 探测次数断言（per-op 会话 40 次操作探测 40→1）由审计期一次性探针承载
 /// （SHOW GLOBAL STATUS 计数，独占数据库运行）；全局状态计数断言受 B57/B74 并行污染
-/// 禁令约束不入库（本套件并行执行 MySQL 批量测试会污染进程级/实例级计数）。</summary>
+/// 禁令约束不入库（本套件并行执行 MySQL 批量测试会污染进程级/实例级计数）。
+/// <para><b>2026-11-03 串行键</b>：本类自建自清 <c>epsl_probe_cache_guard</c>，而
+/// <c>GuardRow</c> 已注册进 Registry——任何并行类的 <c>MigrateAsync</c>（建全 Registry 表）
+/// 都会建同表，与本类的 <c>CREATE TABLE</c> 撞「already exists」（实测约 1/6 概率的
+/// 单用例失败）。挂 ExtBulkTable 与真库批量类同组串行；同时它读写 local_infile 探测缓存，
+/// 一并挂 LocalInfileGlobal 与 <c>SET GLOBAL local_infile=OFF</c> 的用例互斥。</para></summary>
+[NotInParallel(new[] { "ExtBulkTable", "LocalInfileGlobal" })]
 public sealed class LocalInfileProbeCacheTests
 {
     [Test]

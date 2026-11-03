@@ -7,7 +7,11 @@ namespace PalORM.Integration.Tests;
 /// UPSERT 租户护栏的三方言收口（2026-10-06，Core 侧 UpsertTenantGuardTests 的真库配套）。
 /// 覆盖两条方言手术路：PG RETURNING 前插 WHERE（单行 Save + BulkMerge 批路径）与
 /// MySQL ODKU 赋值项 IF 守卫。行为契约：跨租户同键冲突更新静默跳过，他租户行原样保留。
-/// </summary>
+/// <para><b>2026-11-03 串行键</b>：<c>TenantUpsertDialectProbe</c> 已注册进 Registry，
+/// 任何并行类的 <c>MigrateAsync</c> 会建 <c>tenant_upsert_dialect_probe</c>；本类虽然用
+/// <c>CREATE TABLE IF NOT EXISTS</c> 不撞建表错，但随后的 <c>DELETE FROM</c> 会清掉
+/// 别的类并发写入的行（同表数据竞争）。挂 ExtBulkTable 与真库类同组串行。</para></summary>
+[NotInParallel("ExtBulkTable")]
 public sealed class UpsertTenantGuardDialectTests
 {
     [Test]
