@@ -29,6 +29,10 @@
          已消除（2026-08-15 实验验证：去抑制强制还原 Core + Tests 依赖链均无 NU1507），
          抑制项已删除——若该警告复现说明 packageSourceMapping 失效，须修复而非再抑制。 -->
 
+    <!-- NuGetAuditSuppress：SDK rc.2 自带的 ILCompiler 已知高危（GHSA-p3jp-9v83-76w9），
+         global.json 锁 rc.2 导致版本不可升，GA 后移除。构建期工具漏洞，不影响运行时产物。
+         ItemGroup 在文件末尾（不能嵌套在 PropertyGroup 内）。 -->
+
     <!-- NuGet -->
     <Authors>PalDDD</Authors>
     <Copyright>© 2026 PalDDD</Copyright>
@@ -97,6 +101,13 @@
     <NoWarn>$(NoWarn);CA2007;CA1724;CA1822;IDE1006;IDE0060;CS1591;NETSDK1206</NoWarn>
     <Optimize>true</Optimize>
   </PropertyGroup>
+  <!-- NuGetAuditSuppress（GATE-5 追加，2026-11-04）：SDK rc.2 自带的 ILCompiler 已知高危
+       （GHSA-p3jp-9v83-76w9），global.json 锁 rc.2 导致版本不可升，GA 后移除。
+       构建期工具漏洞，不影响运行时产物。 -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-p3jp-9v83-76w9" />
+  </ItemGroup>
+
   <!-- 质量分析器（v3.0 引入）：
        SonarAnalyzer.CSharp 让 IDE SonarLint 报告与 CI 编译错误对齐。
        排除 SourceGen 项目——它运行在 netstandard2.0 + Roslyn 分析器上下文，SonarAnalyzer 不兼容。
