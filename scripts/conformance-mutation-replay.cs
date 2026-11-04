@@ -412,16 +412,15 @@ static bool Build(string dotnet, string workingDirectory, string project, bool r
     return exit == 0;
 }
 
-/// <summary>优先直接启动测试应用的 apphost（省掉 dotnet run 的宿主分发约 0.4~0.6 秒/次）；
-/// 找不到时回退 dotnet run。两者接受同一套 MTP 参数。</summary>
+/// <summary>跑目标测试。用 dotnet run 而非直接启动 apphost：实测（2026-11-04）在 Windows 上
+/// 直接启动 apphost 时子进程控制台编码退化为 OEM 代码页，中文失败摘要变 `???????`，
+/// 失败项数与契约 ID 全部解析不出来（判据静默失效）。省下的 0.5 秒不值这个风险。</summary>
 static RunOutcome RunTests(string dotnet, string workingDirectory, string filter, string project)
 {
-    string? host = FindTestAppHost(workingDirectory, project);
-    var (exit, output) = host is not null
-        ? Execute(host, $"--treenode-filter \"{filter}\"", workingDirectory)
-        : Execute(dotnet,
-            $"run --project {project} -c Debug --no-build -- --treenode-filter \"{filter}\"",
-            workingDirectory);
+    var (exit, output) = Execute(
+        dotnet,
+        $"run --project {project} -c Debug --no-build -- --treenode-filter \"{filter}\"",
+        workingDirectory);
     (int failed, string names, string failedArgs) = ParseFailures(output);
     if (exit != 0 && failed == 0)
     {
@@ -432,21 +431,6 @@ static RunOutcome RunTests(string dotnet, string workingDirectory, string filter
             Console.WriteLine($"     {line.TrimEnd()}");
     }
     return new RunOutcome(exit != 0, failed, names, failedArgs);
-}
-
-static string? FindTestAppHost(string repoRoot, string project)
-{
-    string projectDir = Path.Combine(repoRoot, project.Replace('/', Path.DirectorySeparatorChar));
-    string binDir = Path.Combine(projectDir, "bin", "Debug");
-    if (!Directory.Exists(binDir)) return null;
-    string name = Path.GetFileName(project);
-    string fileName = OperatingSystem.IsWindows() ? name + ".exe" : name;
-    foreach (string tfmDir in Directory.GetDirectories(binDir).OrderByDescending(d => d, StringComparer.Ordinal))
-    {
-        string candidate = Path.Combine(tfmDir, fileName);
-        if (File.Exists(candidate)) return candidate;
-    }
-    return null;
 }
 
 /// <summary>从 TUnit 控制台输出取失败项数与失败测试全名。失败块首行只给短名
