@@ -346,6 +346,13 @@ var rules = new Rule[]
         "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
         "HasDefaultKey 恒 true：SaveAsync 的 UPSERT 分支永远不进入",
         null, ["D-SAVE-02"]),
+
+    // R-C29/R-C30（登记不实施）：D-TX-01 / D-TX-02 断言「显式事务 Commit/Rollback 后的
+    // 行可见性」。两条契约的 CommitAsync/RollbackAsync 都由调用方直接驱动
+    // DbTransaction（contract 体里 transaction.CommitAsync()），产品代码中不存在
+    // 承载该语义的单行可注入点——BeginTransactionAsync 只创建事务，提交/回滚行为
+    // 由 ADO.NET 驱动保证。契约的判别力依赖真库行为，不是本回放机制的适用面
+    //（同族可注入的 Savepoint/RollbackTo 已由 R-C17（C-TX-03）覆盖）。
 };
 
 var selected = rulePrefix is null
