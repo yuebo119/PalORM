@@ -20,13 +20,21 @@
 // 已知缺陷，要求指定契约 ID 的用例报红。期望契约由规则里的 expectedContracts 声明：报红名单里没有它，
 // 即使退出码非零也判 FAIL（别的原因红了不构成本契约的判别力证据）。
 //
-// 前置条件（执行模式）：工作树必须清洁（脚本会用 git checkout 还原被改文件，脏树会丢改动）。
-// 用法：dotnet run --file scripts/conformance-mutation-replay.cs [-- --rule <ID 前缀>]
+// 前置条件（执行模式）：工作树必须清洁（脚本会写回文件，脏树会丢改动）。
+// 用法：dotnet run --file scripts/conformance-mutation-replay.cs [-- --rule <ID 前缀>] [--shard i/n]
 //       dotnet run --file scripts/conformance-mutation-replay.cs -- --verify-anchors
 //       dotnet run --file scripts/conformance-mutation-replay.cs -- --list
 //   --rule R-C        只跑契约族规则（迭代时省去历史规则的重建）
-//   --verify-anchors  只核对每条规则的 Original 片段能否在当前源码里解析（秒级，改源码后先跑这个）
+//   --shard i/n       规则按列表序取模分片（CI matrix 起 n 个 job 并行，各自 checkout 互不争用）
+//   --strict-restore  还原后再构建再复跑（旧形态，审计用；默认走下面的快形态）
+//   --verify-anchors  只核对每条规则的 Original 片段能否在当前源码里解析（秒级，改源码后先跑）
 //   --list            打印规则清单（ID / 文件 / 过滤器 / 期望契约）
+//
+// 判定成本（2026-11-04 实测优化）：旧形态每条做「注入构建+测试、还原构建+测试」两次往返，
+// 68 条 747.5 秒。默认形态把「还原后转绿」换成「基线绿一次 + 还原后逐字节比对」：
+// 循环前对每个 (项目,过滤器) 跑一次基线（红即中止，把「本来就红」与「注入导致红」分开），
+// 每条规则只做一次构建一次测试，还原写回原文后比对全文。证据链等价，成本约减半。
+// 构建在基线后一律 --no-restore，测试优先直接启动 apphost（省 dotnet run 宿主开销）。
 // 输出末尾带 Markdown 台账（规则 / 注入点 / 报红测试数 / 报红测试名），供总报告登记。
 using System.Diagnostics;
 using System.Text.Json.Nodes;
@@ -61,6 +69,9 @@ string? rulePrefix = null;
 string? reportPath = null;
 bool verifyAnchors = false;
 bool listOnly = false;
+bool strictRestore = false;
+int shardIndex = 1;
+int shardCount = 1;
 for (int i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -71,6 +82,27 @@ for (int i = 0; i < args.Length; i++)
         case "--report" when i + 1 < args.Length:
             reportPath = args[++i];
             break;
+        case "--shard" when i + 1 < args.Length:
+        {
+            // --shard i/n：规则按列表序取模分片。CI 用 matrix 起 n 个 job 并行，
+            // 每个 job 各自 checkout，互不共享 bin/obj——比脚本内开 worktree 简单得多。
+            string spec = args[++i];
+            string[] parts = spec.Split('/');
+            if (parts.Length != 2
+                || !int.TryParse(parts[0], out shardIndex)
+                || !int.TryParse(parts[1], out shardCount)
+                || shardCount < 1 || shardIndex < 1 || shardIndex > shardCount)
+            {
+                Console.Error.WriteLine($"::error::--shard 需要 i/n 形态且 1 ≤ i ≤ n（收到 {spec}）");
+                return 2;
+            }
+            break;
+        }
+        case "--strict-restore":
+            // 审计形态：还原后再构建再跑一次（原设计）。默认走「基线绿一次 + 字节还原校验」，
+            // 因为它把全量时间砍掉一半以上，且证据链等价（见文件头说明）。
+            strictRestore = true;
+            break;
         case "--verify-anchors":
             verifyAnchors = true;
             break;
@@ -78,7 +110,7 @@ for (int i = 0; i < args.Length; i++)
             listOnly = true;
             break;
         default:
-            Console.Error.WriteLine($"未知参数：{args[i]}（可用：--rule <前缀> / --report <json> / --verify-anchors / --list）");
+            Console.Error.WriteLine($"未知参数：{args[i]}（可用：--rule <前缀> / --report <json> / --shard i/n / --strict-restore / --verify-anchors / --list）");
             return 2;
     }
 }
@@ -122,9 +154,45 @@ var selected = rulePrefix is null
     : rules.Where(rule => rule.Id.StartsWith(rulePrefix, StringComparison.OrdinalIgnoreCase)).ToArray();
 if (rulePrefix is not null)
     Console.WriteLine($"规则过滤 --rule {rulePrefix}：{selected.Length}/{rules.Length} 条\n");
+if (shardCount > 1)
+{
+    // 分片按列表序取模（同输入同分片，便于失败重放时定位到 job）
+    selected = [.. selected.Where((_, index) => index % shardCount == shardIndex - 1)];
+    Console.WriteLine($"分片 {shardIndex}/{shardCount}：{selected.Length} 条\n");
+}
 
 var results = new List<RuleResult>();
 var replayClock = Stopwatch.StartNew();
+
+// 基线绿证明（非 strict 模式）：每条规则只证「注入后红」，「还原后绿」由字节还原校验承担。
+// 前提是「注入前的树是绿的」——这个前提在这里一次性证明：按 (项目, 过滤器) 去重后
+// 各跑一次，任一红即中止回放（把「本来就红」与「注入导致红」分开，否则回放结论全部失真）。
+if (!strictRestore)
+{
+    Console.WriteLine("基线绿检查（注入前）");
+    var pairs = selected.Select(r => (Project: r.TestProject ?? defaultProject, r.Filter))
+        .Distinct().ToList();
+    foreach (string project in pairs.Select(p => p.Project).Distinct(StringComparer.Ordinal))
+    {
+        if (!Build(dotnet, repoRoot, project, restore: true))
+        {
+            Console.Error.WriteLine($"::error::基线构建失败：{project}");
+            return 2;
+        }
+    }
+    foreach ((string project, string filter) in pairs)
+    {
+        RunOutcome baseline = RunTests(dotnet, repoRoot, filter, project);
+        Console.WriteLine($"  {(baseline.Red ? "RED " : "green")} {project} {filter}"
+            + (baseline.Red ? $"（{baseline.Failed} 项红）" : ""));
+        if (baseline.Red)
+        {
+            Console.Error.WriteLine("::error::基线不绿——先修基线再跑回放（否则无法区分「本来就红」与「注入导致红」）");
+            return 2;
+        }
+    }
+    Console.WriteLine();
+}
 foreach (Rule rule in selected)
 {
     string project = rule.TestProject ?? defaultProject;
@@ -149,19 +217,37 @@ foreach (Rule rule in selected)
 
     File.WriteAllText(absolutePath, original.Replace(matchText, mutation, StringComparison.Ordinal));
 
-    bool injectedBuild = Build(dotnet, repoRoot, project);
+    bool injectedBuild = Build(dotnet, repoRoot, project, restore: strictRestore);
     RunOutcome injected = injectedBuild
         ? RunTests(dotnet, repoRoot, rule.Filter, project)
         : new RunOutcome(false, 0, "", "");
 
-    Restore(repoRoot, rule.File);
-    bool restoredBuild = Build(dotnet, repoRoot, project);
-    RunOutcome restored = restoredBuild
-        ? RunTests(dotnet, repoRoot, rule.Filter, project)
-        : new RunOutcome(false, 0, "", "");
+    bool restoredBuild;
+    RunOutcome restored;
+    bool restoredGreen;
+    if (strictRestore)
+    {
+        Restore(repoRoot, rule.File);
+        restoredBuild = Build(dotnet, repoRoot, project, restore: true);
+        restored = restoredBuild
+            ? RunTests(dotnet, repoRoot, rule.Filter, project)
+            : new RunOutcome(false, 0, "", "");
+        restoredGreen = restoredBuild && !restored.Red;
+    }
+    else
+    {
+        // 字节还原（默认）：写回原文并逐字节比对，不重建、不重跑。证据链 =
+        // ①循环前基线绿（每 (项目,过滤器) 一次）②本规则只改这一个文件 ③还原后内容与原文
+        // 逐字节相同。三者合起来与「重建后测试转绿」等价，代价从「两次构建两次测试」
+        // 降到「一次构建一次测试」——这是把全量从 12.5 分钟压到预算内的主要来源。
+        // 需要旧形态（含还原后重建与复跑）时用 --strict-restore。
+        File.WriteAllText(absolutePath, original);
+        restoredBuild = true;
+        restored = new RunOutcome(false, 0, "", "");
+        restoredGreen = string.Equals(File.ReadAllText(absolutePath), original, StringComparison.Ordinal);
+    }
 
     bool injectedRed = injectedBuild && injected.Red;
-    bool restoredGreen = restoredBuild && !restored.Red;
     // 契约族规则：报红名单里必须出现期望契约 ID，否则红的原因不是这条契约
     string[] missing = [.. expected.Where(id => !injected.FailedArgs.Contains(id, StringComparison.Ordinal))];
     bool expectedHit = injectedBuild && missing.Length == 0;
@@ -174,7 +260,9 @@ foreach (Rule rule in selected)
         Console.WriteLine(missing.Length == 0
             ? "   期望契约: 命中"
             : $"   期望契约: 未命中（缺 {string.Join(", ", missing)}）");
-    Console.WriteLine($"   还原: 构建={(restoredBuild ? "ok" : "fail")} 测试={(restoredGreen ? "green" : "未转绿")}");
+    Console.WriteLine(strictRestore
+        ? $"   还原: 构建={(restoredBuild ? "ok" : "fail")} 测试={(restoredGreen ? "green" : "未转绿")}"
+        : $"   还原: 字节一致={(restoredGreen ? "是" : "否（写回失败！）")}");
     Console.WriteLine($"   判定 {verdict}");
     Console.WriteLine();
 
@@ -314,18 +402,26 @@ static string Escape(string text)
     => text.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)
         .Replace("|", "/", StringComparison.Ordinal);
 
-static bool Build(string dotnet, string workingDirectory, string project)
+static bool Build(string dotnet, string workingDirectory, string project, bool restore = true)
 {
-    var (exit, _) = Execute(dotnet, $"build {project} -c Debug --nologo", workingDirectory);
+    // 还原检查只在循环前做一次：之后逐条用 --no-restore，省掉每次约 1~1.5 秒的隐式 restore 检查。
+    string arguments = restore
+        ? $"build {project} -c Debug --nologo"
+        : $"build {project} -c Debug --nologo --no-restore";
+    var (exit, _) = Execute(dotnet, arguments, workingDirectory);
     return exit == 0;
 }
 
+/// <summary>优先直接启动测试应用的 apphost（省掉 dotnet run 的宿主分发约 0.4~0.6 秒/次）；
+/// 找不到时回退 dotnet run。两者接受同一套 MTP 参数。</summary>
 static RunOutcome RunTests(string dotnet, string workingDirectory, string filter, string project)
 {
-    var (exit, output) = Execute(
-        dotnet,
-        $"run --project {project} -c Debug --no-build -- --treenode-filter \"{filter}\"",
-        workingDirectory);
+    string? host = FindTestAppHost(workingDirectory, project);
+    var (exit, output) = host is not null
+        ? Execute(host, $"--treenode-filter \"{filter}\"", workingDirectory)
+        : Execute(dotnet,
+            $"run --project {project} -c Debug --no-build -- --treenode-filter \"{filter}\"",
+            workingDirectory);
     (int failed, string names, string failedArgs) = ParseFailures(output);
     if (exit != 0 && failed == 0)
     {
@@ -336,6 +432,21 @@ static RunOutcome RunTests(string dotnet, string workingDirectory, string filter
             Console.WriteLine($"     {line.TrimEnd()}");
     }
     return new RunOutcome(exit != 0, failed, names, failedArgs);
+}
+
+static string? FindTestAppHost(string repoRoot, string project)
+{
+    string projectDir = Path.Combine(repoRoot, project.Replace('/', Path.DirectorySeparatorChar));
+    string binDir = Path.Combine(projectDir, "bin", "Debug");
+    if (!Directory.Exists(binDir)) return null;
+    string name = Path.GetFileName(project);
+    string fileName = OperatingSystem.IsWindows() ? name + ".exe" : name;
+    foreach (string tfmDir in Directory.GetDirectories(binDir).OrderByDescending(d => d, StringComparer.Ordinal))
+    {
+        string candidate = Path.Combine(tfmDir, fileName);
+        if (File.Exists(candidate)) return candidate;
+    }
+    return null;
 }
 
 /// <summary>从 TUnit 控制台输出取失败项数与失败测试全名。失败块首行只给短名
