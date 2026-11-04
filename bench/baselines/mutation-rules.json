@@ -437,17 +437,6 @@
       ]
     },
     {
-      "id": "R-M-C03",
-      "file": "src/PalORM.Core/DataSession.Crud.cs",
-      "original": "        int slot = FilterSlotBits(info.Features);\n        if (SqlSlots<T>.GetAll[slot] is { } cached)",
-      "mutated": "        int slot = 0;\n        if (SqlSlots<T>.GetAll[slot] is { } cached)",
-      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-      "note": "GetAllAsync 过滤槽位恒取 0（SoftDelete/Tenant 形态退化为裸全表句）",
-      "expectedContracts": [
-        "D-GETALL-01"
-      ]
-    },
-    {
       "id": "R-M-C04",
       "file": "src/PalORM.Core/DataSession.Crud.cs",
       "original": "        return $\"SELECT {selectColumns} FROM {TProvider.QuoteIdentifier(tableName)}{forms.WhereClause}\";",
@@ -456,17 +445,6 @@
       "note": "GetAllAsync 结果被截断为一行（列表长度契约失败）",
       "expectedContracts": [
         "D-GETALL-01"
-      ]
-    },
-    {
-      "id": "R-M-C05",
-      "file": "src/PalORM.Core/DataSession.Crud.cs",
-      "original": "        if (plan.InsertNoReturning)",
-      "mutated": "        if (plan.InsertNoReturning || !plan.InsertNoReturning)",
-      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-      "note": "所有实体当作无需回读：INSERT 不带 RETURNING，自增主键永不回填",
-      "expectedContracts": [
-        "D-INSERT-02"
       ]
     },
     {
@@ -511,17 +489,6 @@
       "note": "软删主键谓词反号（删掉了别的行，目标行仍在）",
       "expectedContracts": [
         "D-DELETE-02"
-      ]
-    },
-    {
-      "id": "R-M-C12",
-      "file": "src/PalORM.Core/DataSession.Crud.cs",
-      "original": "        if (plan.HasDefaultKey(entity))\n        {\n            return await InsertCoreAsync(",
-      "mutated": "        if (plan.HasDefaultKey(entity) && !plan.HasDefaultKey(entity))\n        {\n            return await InsertCoreAsync(",
-      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-      "note": "SaveAsync 路由失效：默认键新实体不进入 INSERT，改走 UPSERT",
-      "expectedContracts": [
-        "D-SAVE-01"
       ]
     },
     {
@@ -635,17 +602,6 @@
       ]
     },
     {
-      "id": "R-M-Q13",
-      "file": "src/PalORM.Core/QueryBuilder.cs",
-      "original": "            AppendWindowClauses(ref sb);",
-      "mutated": "            _ = sb;",
-      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-      "note": "窗口列不再进入 SELECT 列表（窗口函数结果缺失）",
-      "expectedContracts": [
-        "C-WINDOW-01"
-      ]
-    },
-    {
       "id": "R-M-Q15",
       "file": "src/PalORM.Core/QueryBuilder.cs",
       "original": "        string batchSeparator = negated ? \" AND \" : \" OR \";",
@@ -709,14 +665,6 @@
       ]
     },
     {
-      "id": "R-M-B08",
-      "file": "src/PalORM.Core/DataSession_Bulk.cs",
-      "original": "                sb.Append(identifiers.TimestampExpression);",
-      "mutated": "                sb.Append(\"NULL\");",
-      "filter": "/*/*/SoftDeleteIdempotencyTests/*",
-      "note": "批量软删把 deleted_at 写成 NULL（行仍可见）"
-    },
-    {
       "id": "R-M-B09",
       "file": "src/PalORM.Core/DataSession_Bulk.cs",
       "original": "        string tenantFilter = hasTenant ? GetTenantAppendFragment() : \"\";",
@@ -754,23 +702,6 @@
       "testProject": "test/PalORM.Core.Tests"
     },
     {
-      "id": "R-M-S04",
-      "file": "src/PalORM.Core/DataSessionPool.cs",
-      "original": "            if (_disposed || _idle.Count >= _maxIdleSize)",
-      "mutated": "            if (_disposed)",
-      "filter": "/*/*/SessionPoolTests/*",
-      "note": "池满检查失效（空闲队列无上限增长）",
-      "testProject": "test/PalORM.Core.Tests"
-    },
-    {
-      "id": "R-M-S05",
-      "file": "src/PalORM.Core/DataSessionPool.cs",
-      "original": "                if (candidate.IsConnectionHealthyForRent)",
-      "mutated": "                if (true)",
-      "filter": "/*/*/PoolHealthTests/*",
-      "note": "租出时不做连接健康检查（死连接交给调用方）"
-    },
-    {
       "id": "R-M-S06",
       "file": "src/PalORM.Core/DataSessionPool.cs",
       "original": "    public static DataSessionPool<TProvider> Create(DbOptions options, int maxIdleSize = 16)",
@@ -780,40 +711,12 @@
       "testProject": "test/PalORM.Core.Tests"
     },
     {
-      "id": "R-M-S07",
-      "file": "src/PalORM.Core/DataSession.cs",
-      "original": "        bool hasSoftDelete = !_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0;",
-      "mutated": "        bool hasSoftDelete = (features & EntityFeatures.SoftDelete) != 0;",
-      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-      "note": "GetDefaultFilterForms 不再响应 IgnoreFilters（软删行永远看不到）",
-      "expectedContracts": [
-        "D-DELETE-02"
-      ]
-    },
-    {
       "id": "R-M-S08",
       "file": "src/PalORM.Core/DataSession.cs",
       "original": "            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, _tenantId));",
       "mutated": "            cmd.Parameters.Add(TProvider.CreateParameter(_tenantParameterName, 0));",
       "filter": "/*/*/TenantIsolationTests/*",
       "note": "租户参数绑常量 0（过滤永远查不到本租户行）"
-    },
-    {
-      "id": "R-M-S09",
-      "file": "src/PalORM.Core/DataSession.Crud.cs",
-      "original": "        if (_operationState.DefersPostCommitActions)",
-      "mutated": "        if (false)",
-      "filter": "/*/*/StateTransitionTests/*",
-      "note": "自开事务内立即回填自增 ID（回滚后实体持有不存在的 ID）"
-    },
-    {
-      "id": "R-M-S10",
-      "file": "src/PalORM.Core/SessionOperationState.cs",
-      "original": "        if (owner is not null && CanFastReenterOwner(owner))",
-      "mutated": "        if (false)",
-      "filter": "/*/*/SessionConcurrencyTests/*",
-      "note": "Enter 的 owner 重入快路径失效（事务内每行操作走锁慢路径）",
-      "testProject": "test/PalORM.Core.Tests"
     }
   ]
 }

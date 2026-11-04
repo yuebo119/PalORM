@@ -95,4 +95,5 @@
 
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
-| `conformance-mutation-replay.cs` | 产品侧变异回放 21 条：R1a/R1b/R2/R4（事故族）、R-D1..D7（历史缺陷）、R-C01..C10（契约族，2026-11-03 起）。注入缺陷 → 期望目标测试报红 → `git checkout` 还原 → 期望转绿；契约族另要求报红名单含指定契约 ID（`--rule R-C` 只跑契约族）。任一不符 exit 1，原片段缺失记 skip | 手动 / 阶段 0b 验收 |
+| `conformance-mutation-replay.cs` | 产品侧变异回放，规则数据化（`bench/baselines/mutation-rules.json`，68 条：R- 族 64 = 契约族 28 + 历史缺陷 7 + 四条主路径扩面 29，另 4 条历史 R1a/R1b/R2/R4）。注入缺陷 → 期望目标测试报红 → `git checkout` 还原 → 期望转绿；契约族另要求报红名单含指定契约 ID。`--rule <前缀>` 取子集、`--verify-anchors` 秒级核对注入片段是否失配、`--report <json>` 出机器可读报告；子进程 3 分钟挂死守卫 | nightly `mutation-replay` lane + 手动 |
+| `mutation-score.cs` | 判别力分数：读回放报告，输出单行 `score=通过率 coverage=契约覆盖/30 duration`；`--min` 默认 60、`--previous` 断崖检查（分数较上轮下降即红） | nightly `mutation-replay` lane |

@@ -58,6 +58,7 @@ if (duplicateIds.Count > 0)
 }
 
 string? rulePrefix = null;
+string? reportPath = null;
 bool verifyAnchors = false;
 bool listOnly = false;
 for (int i = 0; i < args.Length; i++)
@@ -67,6 +68,9 @@ for (int i = 0; i < args.Length; i++)
         case "--rule" when i + 1 < args.Length:
             rulePrefix = args[++i];
             break;
+        case "--report" when i + 1 < args.Length:
+            reportPath = args[++i];
+            break;
         case "--verify-anchors":
             verifyAnchors = true;
             break;
@@ -74,7 +78,7 @@ for (int i = 0; i < args.Length; i++)
             listOnly = true;
             break;
         default:
-            Console.Error.WriteLine($"未知参数：{args[i]}（可用：--rule <前缀> / --verify-anchors / --list）");
+            Console.Error.WriteLine($"未知参数：{args[i]}（可用：--rule <前缀> / --report <json> / --verify-anchors / --list）");
             return 2;
     }
 }
@@ -120,6 +124,7 @@ if (rulePrefix is not null)
     Console.WriteLine($"规则过滤 --rule {rulePrefix}：{selected.Length}/{rules.Length} 条\n");
 
 var results = new List<RuleResult>();
+var replayClock = Stopwatch.StartNew();
 foreach (Rule rule in selected)
 {
     string project = rule.TestProject ?? defaultProject;
@@ -217,6 +222,42 @@ if (skipped > 0)
         Console.WriteLine($"  {result.Rule.Id}: `{result.Rule.File}` — 需重锚 Original 片段");
     }
 }
+if (reportPath is not null)
+{
+    // 机器可读报告：供 scripts/mutation-score.cs 与夜间趋势消费。契约覆盖按「判定 PASS 的
+    // 规则所声明的期望契约」去重——未通过的规则不贡献覆盖（它没有证明该契约有判别力）。
+    string fullReport = Path.IsPathRooted(reportPath) ? reportPath : Path.Combine(repoRoot, reportPath);
+    string? reportDir = Path.GetDirectoryName(fullReport);
+    if (!string.IsNullOrEmpty(reportDir)) Directory.CreateDirectory(reportDir);
+    var covered = results.Where(r => r.Verdict == "PASS")
+        .SelectMany(r => r.Rule.ExpectedContracts ?? [])
+        .Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal).ToList();
+    var report = new System.Text.Json.Nodes.JsonObject
+    {
+        ["generatedAt"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+        ["baselineCommit"] = Head.Count > 0 ? Head[0].Commit : "",
+        ["total"] = results.Count,
+        ["passed"] = results.Count(r => r.Verdict == "PASS"),
+        ["failed"] = failed,
+        ["skipped"] = skipped,
+        ["durationSeconds"] = Math.Round(replayClock.Elapsed.TotalSeconds, 1),
+        ["contractsCovered"] = new System.Text.Json.Nodes.JsonArray([.. covered.Select(c => System.Text.Json.Nodes.JsonValue.Create(c))]),
+        ["results"] = new System.Text.Json.Nodes.JsonArray([.. results.Select(r => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+        {
+            ["id"] = r.Rule.Id,
+            ["verdict"] = r.Verdict,
+            ["expectedContracts"] = new System.Text.Json.Nodes.JsonArray([.. (r.Rule.ExpectedContracts ?? []).Select(c => System.Text.Json.Nodes.JsonValue.Create(c))]),
+            ["injectedRed"] = r.InjectedRed,
+            ["restoredGreen"] = r.RestoredBuild && !r.Restored.Red,
+            ["failedTests"] = r.Injected.FailedNames,
+        })]),
+    };
+    File.WriteAllText(fullReport,
+        report.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) + "\n",
+        new System.Text.UTF8Encoding(false));
+    Console.WriteLine($"报告已写入：{fullReport}");
+}
+
 return failed == 0 ? 0 : 1;
 
 // ── 锚点自查（MUT-1）：不注入、不构建，只核对 Original 片段能否解析 ──

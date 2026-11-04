@@ -174,6 +174,58 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
 
+  # ── MUT-6/MUT-7：产品侧变异回放 + 判别力分数（2026-11-04）─────
+  # 变异分本体（Stryker）自 2026-10-03 起 effectiveMutants=0，整体判别力无基线；
+  # 本 lane 跑自建回放：每条规则注入一个已知缺陷，要求指定测试报红、还原后转绿。
+  # 分数与契约覆盖写进 job summary，报告留 90 天 artifact 供趋势对比。
+  mutation-replay:
+    name: Mutation replay and discrimination score
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 回放逐条注入后靠 git checkout 还原，浅克隆下还原失败会污染工作树
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Replay mutation rules
+        run: |
+          dotnet run --file scripts/conformance-mutation-replay.cs -- --report artifacts/mutation-report.json 2>&1 | tee mutation-replay.log
+          exit ${PIPESTATUS[0]}
+      - name: Score and write job summary
+        # 回放红也要出分数与台账：判据（分数）与执行（回放）解耦，否则失败现场只剩一行退出码
+        if: always()
+        run: |
+          if [ ! -f artifacts/mutation-report.json ]; then
+            echo "::error::回放报告缺失（回放中途中止，未跑到写报告点）"
+            exit 1
+          fi
+          dotnet run --file scripts/mutation-score.cs -- --report artifacts/mutation-report.json
+          {
+            echo "## 变异回放与判别力分数"
+            echo ""
+            echo '```'
+            grep -E "^(score=|上一轮|判别力分数)" <(dotnet run --file scripts/mutation-score.cs -- --report artifacts/mutation-report.json 2>&1) || true
+            echo '```'
+            echo ""
+            echo "### 规则台账"
+            echo '```'
+            grep -E "^\| R-|^全部规则通过|规则未通过" mutation-replay.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report
+          path: |
+            artifacts/mutation-report.json
+            mutation-replay.log
+          retention-days: 90
+          if-no-files-found: warn
+
   # ── COMPAT-3：Windows 平台 lane ────────────────────────────
   windows-core-sourcegen:
     name: Windows Core + SourceGen
