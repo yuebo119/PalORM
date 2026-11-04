@@ -13,12 +13,20 @@ internal static class RandomDiffRunner
 {
     private static readonly string[] Columns = ["Id", "name", "amount"];
 
+    // FUZ-1：宽表列（6 种列类型：long / string / int / short / double / bool）
+    private static readonly string[] WideColumns = ["Id", "name", "amount", "qty", "score", "ratio", "flag"];
+
     private static string SelectAll(SqlDialect dialect)
         => DialectSql.SelectAll(dialect, MirrorTable.BulkMirror, Columns);
+
+    private static string WideSelectAll(SqlDialect dialect)
+        => DialectSql.SelectAll(dialect, MirrorTable.WideMirror, WideColumns);
 
     private static string Amount(SqlDialect dialect) => DialectSql.Quote(dialect, "amount");
 
     private static string Name(SqlDialect dialect) => DialectSql.Quote(dialect, "name");
+
+    private static string WideColumn(SqlDialect dialect, string column) => DialectSql.Quote(dialect, column);
 
     private static Dictionary<string, object?>[] Project(List<CfBulkPlainEntity> rows)
         => [.. rows.Select(entity => new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
@@ -26,6 +34,18 @@ internal static class RandomDiffRunner
             ["Id"] = entity.Id,
             ["name"] = entity.Name,
             ["amount"] = entity.Amount
+        })];
+
+    private static Dictionary<string, object?>[] ProjectWide(List<CfFuzzWideEntity> rows)
+        => [.. rows.Select(entity => new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Id"] = entity.Id,
+            ["name"] = entity.Name,
+            ["amount"] = entity.Amount,
+            ["qty"] = (long)entity.Qty,
+            ["score"] = (long)entity.Score,
+            ["ratio"] = entity.Ratio,
+            ["flag"] = entity.Flag
         })];
 
     /// <summary>执行一个场景；返回 true 表示两侧结果不一致（收缩器谓词用）。</summary>
@@ -48,6 +68,13 @@ internal static class RandomDiffRunner
         where TProvider : IDbProvider
     {
         await MirrorTable.CleanAsync(raw, dialect, ct);
+
+        // FUZ-1：先跑宽表（6 种列类型），再跑三列表。宽表的类型往返与三列表的批量/条件形态
+        // 互不掩盖：任一路径不一致都直接作为该场景的差异返回。
+        CfFuzzWideEntity[] wideRows = BuildWideRows(scenario);
+        await InsertWideBothSidesAsync(db, raw, wideRows, dialect, ct);
+        IReadOnlyList<RowComparer.Difference> wide = await CompareWideAsync(scenario, db, raw, dialect, ct);
+        if (wide.Count > 0) return wide;
 
         CfBulkPlainEntity[] rows =
         [
@@ -135,6 +162,80 @@ internal static class RandomDiffRunner
                 DialectSql.UpdateColumn(dialect, MirrorTable.BulkMirror, "name", "Id"),
                 [("@p0", row.Name), ("@p1", row.Id)], ct);
         }
+    }
+
+    // ── FUZ-1：宽表（6 种列类型）流程 ──────────────────────────────────
+
+    private static CfFuzzWideEntity[] BuildWideRows(DScenario scenario)
+        => [.. scenario.Values.Select((value, index) => new CfFuzzWideEntity
+        {
+            Id = index + 1,
+            Name = scenario.Names[index],
+            Amount = value,
+            Qty = scenario.Quantities[index],
+            Score = scenario.Scores[index],
+            Ratio = scenario.Ratios[index],
+            Flag = scenario.Flags[index],
+        })];
+
+    private static async Task InsertWideBothSidesAsync<TProvider>(
+        DataSession<TProvider> db, DbConnection raw, CfFuzzWideEntity[] rows,
+        SqlDialect dialect, CancellationToken ct)
+        where TProvider : IDbProvider
+    {
+        if (rows.Length == 0) return;
+        await db.BulkInsertAsync(rows, ct);
+
+        string sql = DialectSql.Insert(dialect, MirrorTable.WideMirror, WideColumns, rows.Length);
+        var parameters = new List<(string Name, object? Value)>(rows.Length * WideColumns.Length);
+        for (int i = 0; i < rows.Length; i++)
+        {
+            int b = i * WideColumns.Length;
+            parameters.Add(($"@p{b}", rows[i].Id));
+            parameters.Add(($"@p{b + 1}", rows[i].Name));
+            parameters.Add(($"@p{b + 2}", rows[i].Amount));
+            parameters.Add(($"@p{b + 3}", rows[i].Qty));
+            parameters.Add(($"@p{b + 4}", rows[i].Score));
+            parameters.Add(($"@p{b + 5}", rows[i].Ratio));
+            parameters.Add(($"@p{b + 6}", rows[i].Flag));
+        }
+        await MirrorTable.ExecuteAsync(raw, dialect, sql, parameters, ct);
+    }
+
+    private static async Task<IReadOnlyList<RowComparer.Difference>> CompareWideAsync<TProvider>(
+        DScenario scenario, DataSession<TProvider> db, DbConnection raw,
+        SqlDialect dialect, CancellationToken ct)
+        where TProvider : IDbProvider
+    {
+        // 条件落在四种新列类型上：整数两列（>、<）、浮点（<>）、布尔（=）
+        int quantity = scenario.Quantities.Length > 0 ? scenario.Quantities[0] : 0;
+        short score = scenario.Scores.Length > 1 ? scenario.Scores[1] : (short)0;
+        double ratio = scenario.Ratios.Length > 0 ? scenario.Ratios[0] : 0d;
+        bool flag = scenario.Flags.Length > 0 && scenario.Flags[0];
+
+        List<CfFuzzWideEntity> palormRows = await db.From<CfFuzzWideEntity>()
+            .Where($"qty > {quantity}")
+            .Where($"score < {score}")
+            .Where($"ratio <> {ratio}")
+            .Where($"flag = {flag}")
+            .ToListAsync(ct);
+
+        string handwrittenSql =
+            $"{WideSelectAll(dialect)} WHERE {WideColumn(dialect, "qty")} > @p0 "
+            + $"AND {WideColumn(dialect, "score")} < @p1 "
+            + $"AND {WideColumn(dialect, "ratio")} <> @p2 "
+            + $"AND {WideColumn(dialect, "flag")} = @p3";
+        var parameters = new List<(string Name, object? Value)>
+        {
+            ("@p0", quantity),
+            ("@p1", score),
+            ("@p2", ratio),
+            ("@p3", flag),
+        };
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> handwrittenRows =
+            await MirrorTable.QueryAsync(raw, dialect, handwrittenSql, parameters, ct);
+
+        return RowComparer.Compare(handwrittenRows, ProjectWide(palormRows));
     }
 
     private static async Task<IReadOnlyList<RowComparer.Difference>> CompareAsync<TProvider>(

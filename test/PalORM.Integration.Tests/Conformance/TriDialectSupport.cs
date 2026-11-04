@@ -79,6 +79,41 @@ internal static class DialectSql
             + $"{name} TEXT NOT NULL, "
             + $"{amount} BIGINT NOT NULL)";
     }
+
+    /// <summary>FUZ-1 宽表镜像：7 列 6 类型，与被测实体 <c>CfFuzzWideEntity</c> 生成的 DDL 同构。
+    /// 镜像与 PalORM 侧分表，否则手写侧插入会撞主键（实测 SQLite Error 19）。</summary>
+    public static string CreateWideMirror(SqlDialect dialect, string table)
+    {
+        string id = Quote(dialect, "Id");
+        string name = Quote(dialect, "name");
+        string amount = Quote(dialect, "amount");
+        string qty = Quote(dialect, "qty");
+        string score = Quote(dialect, "score");
+        string ratio = Quote(dialect, "ratio");
+        string flag = Quote(dialect, "flag");
+        string idType = dialect == SqlDialect.Sqlite ? "INTEGER" : "BIGINT";
+        string shortType = dialect == SqlDialect.Sqlite ? "INTEGER" : "SMALLINT";
+        string realType = dialect switch
+        {
+            SqlDialect.Sqlite => "REAL",
+            SqlDialect.PostgreSql => "DOUBLE PRECISION",
+            _ => "DOUBLE"
+        };
+        string boolType = dialect switch
+        {
+            SqlDialect.Sqlite => "INTEGER",
+            SqlDialect.PostgreSql => "BOOLEAN",
+            _ => "TINYINT(1)"
+        };
+        return $"CREATE TABLE IF NOT EXISTS {Quote(dialect, table)} ("
+            + $"{id} {idType} PRIMARY KEY NOT NULL, "
+            + $"{name} TEXT NOT NULL, "
+            + $"{amount} BIGINT NOT NULL, "
+            + $"{qty} INTEGER NOT NULL, "
+            + $"{score} {shortType} NOT NULL, "
+            + $"{ratio} {realType} NOT NULL, "
+            + $"{flag} {boolType} NOT NULL)";
+    }
 }
 
 /// <summary>能力键测试专用镜像表的清理与建表（三方言共用）。</summary>
@@ -87,6 +122,8 @@ internal static class MirrorTable
 {
     public const string BulkTable = "cf_bulk_plain";
     public const string BulkMirror = "cf_bulk_plain_mirror";
+    public const string WideTable = "cf_fuzz_wide";   // FUZ-1 宽表（6 种列类型）
+    public const string WideMirror = "cf_fuzz_wide_mirror";   // 手写侧镜像（与 PalORM 侧分表，避免主键撞车）
     public const string SoftDeleteTable = "cf_soft_delete";
     public const string SoftDeleteMirror = "cf_soft_delete_mirror";
 
@@ -98,6 +135,7 @@ internal static class MirrorTable
         await db.MigrateAsync(ct);
         System.Data.Common.DbConnection raw = db.GetRawConnection();
         await ExecuteAsync(raw, dialect, DialectSql.CreateMirror(dialect, BulkMirror), ct: ct);
+        await ExecuteAsync(raw, dialect, DialectSql.CreateWideMirror(dialect, WideMirror), ct: ct);
         await CleanAsync(raw, dialect, ct);
     }
 
@@ -108,7 +146,7 @@ internal static class MirrorTable
     public static async ValueTask CleanAsync(
         DbConnection raw, SqlDialect dialect, CancellationToken ct = default)
     {
-        foreach (string table in (string[])[BulkTable, BulkMirror, SoftDeleteTable, SoftDeleteMirror])
+        foreach (string table in (string[])[BulkTable, BulkMirror, WideTable, WideMirror, SoftDeleteTable, SoftDeleteMirror])
         {
             await using DbCommand command = raw.CreateCommand();
             command.CommandText = $"DELETE FROM {DialectSql.Quote(dialect, table)}";

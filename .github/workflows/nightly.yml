@@ -135,7 +135,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      PALORM_FUZZ_SEED: ${{ github.run_number }}
+      # FUZ-3：种子基数 + 轮数循环，20 轮 × 50 案例 = 1,000 场景（run_number 递增，失败可按基数重放）
+      PALORM_FUZZ_SEED_BASE: ${{ github.run_number }}
+      PALORM_FUZZ_ROUNDS: '20'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6

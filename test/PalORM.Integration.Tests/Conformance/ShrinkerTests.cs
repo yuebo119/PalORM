@@ -8,7 +8,11 @@ public sealed class ShrinkerTests
     private static DScenario Scenario(
         long[] values, ConditionKind condition = ConditionKind.None,
         int batchSize = 5, OperationSequence sequence = OperationSequence.InsertThenQuery)
-        => new(1, 0, values, [.. values.Select(v => $"n{v}")], condition, batchSize, sequence);
+        => new(
+            1, 0, values, [.. values.Select(v => $"n{v}")],
+            [.. values.Select(v => (int)v)], [.. values.Select(v => (short)v)],
+            [.. values.Select(v => (double)v)], [.. values.Select(v => v != 0)],
+            condition, batchSize, sequence);
 
     [Test]
     public async Task Shrink_ReducesValuesToTheOneThatTriggers()

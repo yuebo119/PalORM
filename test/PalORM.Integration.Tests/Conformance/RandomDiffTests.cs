@@ -15,7 +15,9 @@ namespace PalORM.Integration.Tests.Conformance;
 public sealed class RandomDiffTests
 {
     private static readonly int[] FixedSeeds = [1, 7, 42, 100, 2026, 20261029];
-    private const int CasesPerSeed = 8;
+    // FUZ-4：固定集 6 种子 × 84 案例 = 504（原 48）。PR 路径要求 30 秒内完成，
+    // 案例数按实测耗时调整（2026-11-04 实测：见任务清单执行记录）。
+    private const int CasesPerSeed = 84;
 
     private static async ValueTask<(SharedSqliteDb Shared, DataSession<SqliteProvider> Db, DbConnection Raw)>
         OpenAsync(string name, CancellationToken ct = default)
@@ -55,51 +57,86 @@ public sealed class RandomDiffTests
     }
 
     [Test]
-    public async Task ExploreSeed_ShrinksAndPersistsFailures()
+    public async Task ExploreSeeds_ShrinksAndPersistsFailures()
     {
-        string? seedText = Environment.GetEnvironmentVariable("PALORM_FUZZ_SEED");
-        if (string.IsNullOrWhiteSpace(seedText) || !int.TryParse(seedText, out int seed))
+        string? seedBaseText = Environment.GetEnvironmentVariable("PALORM_FUZZ_SEED_BASE");
+
+        // FUZ-3：夜间按「种子基数 + 轮数」循环，单轮 50 案例（20 轮 = 1,000 场景）。
+        // 循环而非把单种子案例数调到 1,000：单场景超时会被整体放大，失败样本也难定位到具体种子。
+        if (!string.IsNullOrWhiteSpace(seedBaseText) && int.TryParse(seedBaseText, out int seedBase))
         {
-            // 未启用探索：CI 的固定种子回归已覆盖"网格内"，网格外由夜间任务传 PALORM_FUZZ_SEED 触发
+            int rounds = ReadEnvInt("PALORM_FUZZ_ROUNDS") ?? 20;
+            const int casesPerSeed = 50;
+            await RunExplorationAsync(seedBase, rounds, casesPerSeed);
             return;
         }
 
+        // 兼容 FIX-7 的单种子形态（手动触发或旧配置）
+        string? seedText = Environment.GetEnvironmentVariable("PALORM_FUZZ_SEED");
+        if (string.IsNullOrWhiteSpace(seedText) || !int.TryParse(seedText, out int seed))
+        {
+            // 未启用探索：CI 的固定种子回归已覆盖"网格内"，网格外由夜间任务传环境变量触发
+            return;
+        }
+        await RunExplorationAsync(seed, 1, casesPerSeed: 200);
+    }
+
+    private static int? ReadEnvInt(string name)
+    {
+        string? text = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(text, out int value) ? value : null;
+    }
+
+    /// <summary>跑一段探索：逐种子生成场景、差分、失败收缩并落盘；语料按种子归档。</summary>
+    private static async Task RunExplorationAsync(int seedBase, int rounds, int casesPerSeed)
+    {
         (SharedSqliteDb shared, DataSession<SqliteProvider> db, DbConnection raw) = await OpenAsync("fuzz_explore");
         await using SharedSqliteDb scope = shared;
         await using DataSession<SqliteProvider> session = db;
 
         List<string> persisted = [];
-        const int cases = 200;   // FIX-7：12 → 200（方案 §5.1 验收口径）
         int executed = 0;
-        foreach (DScenario scenario in DGenerator.Generate(seed, cases))
-        {
-            executed++;
-            bool failed = await RandomDiffRunner.HasDifferenceAsync(scenario, session, raw, SqlDialect.Sqlite);
-            if (!failed) continue;
+        string corpusDir = Path.Combine(ArtifactDirectory(), "fuzz-corpus");
+        Directory.CreateDirectory(corpusDir);
 
-            // 收缩：失败谓词就是"同一场景重跑仍不一致"
-            DScenario shrunk = await ScenarioShrinker.ShrinkAsync(
-                scenario,
-                candidate => RandomDiffRunner.HasDifferenceAsync(candidate, session, raw, SqlDialect.Sqlite));
-            persisted.Add($"seed={seed} original={scenario.ReplayKey} shrunk={shrunk.ReplayKey}");
+        for (int round = 0; round < rounds; round++)
+        {
+            int seed = seedBase + round;
+            List<string> corpus = [];
+            foreach (DScenario scenario in DGenerator.Generate(seed, casesPerSeed))
+            {
+                executed++;
+                corpus.Add(scenario.ReplayKey);
+                bool failed = await RandomDiffRunner.HasDifferenceAsync(scenario, session, raw, SqlDialect.Sqlite);
+                if (!failed) continue;
+
+                // 收缩：失败谓词就是"同一场景重跑仍不一致"
+                DScenario shrunk = await ScenarioShrinker.ShrinkAsync(
+                    scenario,
+                    candidate => RandomDiffRunner.HasDifferenceAsync(candidate, session, raw, SqlDialect.Sqlite));
+                persisted.Add($"seed={seed} original={scenario.ReplayKey} shrunk={shrunk.ReplayKey}");
+            }
+
+            // 语料归档：随轮次增长，供 FUZ-6 的失败固化脚本消费
+            await File.WriteAllLinesAsync(Path.Combine(corpusDir, $"seed-{seed}.txt"), corpus);
         }
 
         // 执行标记（夜间 lane 的存活判据）：MTP 在 Linux 上不把测试进程的 Console.WriteLine
         // 转发到 stdout，标记实际落在 tunit-report.json 的 output 字段，故两处都算。
-        Console.WriteLine($"FUZZ-EXPLORE-RAN seed={seed} cases={executed} differences={persisted.Count}");
+        Console.WriteLine($"FUZZ-EXPLORE-RAN seedBase={seedBase} rounds={rounds} cases={executed} differences={persisted.Count}");
 
         if (persisted.Count > 0)
         {
             // 失败样本落盘先于断言：断言失败时文件必须已经存在，否则产物随失败一起消失。
             string path = Path.Combine(ArtifactDirectory(),
-                $"fuzz-failures-{seed}-{DateTime.UtcNow:yyyyMMddTHHmmss}.txt");
+                $"fuzz-failures-{seedBase}-{DateTime.UtcNow:yyyyMMddTHHmmss}.txt");
             await File.WriteAllLinesAsync(path, persisted);
             Console.WriteLine($"FUZZ-EXPLORE-PERSISTED {path}");
         }
 
         await Assert.That(string.Join(Environment.NewLine, persisted.Take(10)))
             .IsEmpty()
-            .Because($"探索种子 {seed} 共 {executed} 个场景，发现 {persisted.Count} 例差异；"
+            .Because($"探索种子基数 {seedBase} 共 {rounds} 轮 {executed} 个场景，发现 {persisted.Count} 例差异；"
                 + "按方案 §7.4 必须固化成 A 层固定用例后才能关闭");
     }
 
