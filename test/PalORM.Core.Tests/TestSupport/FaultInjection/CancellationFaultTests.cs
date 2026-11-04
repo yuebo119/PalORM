@@ -6,6 +6,7 @@ namespace PalORM.Core.Tests.TestSupport.FaultInjection;
 /// <para>取消后的三件事：抛的是 <see cref="OperationCanceledException"/>（不是被包装成
 /// 别的异常）、连接仍 Open（没被取消打脏）、下一条命令成功（会话回到可用态）。
 /// 第三种形态在事务内：取消命令后回滚，行数归零。</para></summary>
+[Property("Category", "FaultInjection")]
 public sealed class CancellationFaultTests
 {
     [Test]

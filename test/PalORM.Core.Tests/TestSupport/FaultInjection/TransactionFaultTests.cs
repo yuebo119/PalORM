@@ -6,6 +6,7 @@ namespace PalORM.Core.Tests.TestSupport.FaultInjection;
 /// <para>每条用例都压三件事：行没有残留（回滚生效）、连接仍然 Open（会话没被失败打脏）、
 /// 失败之后下一条命令能成功（状态机走回可用态）。只断言「抛异常」的测试证明不了这三件；
 /// 2026-11-03 修掉的串行键丢失（1/4 偶发）属于第四问：失败后的下一次自增键不能错位。</para></summary>
+[Property("Category", "FaultInjection")]
 public sealed class TransactionFaultTests
 {
     [Test]

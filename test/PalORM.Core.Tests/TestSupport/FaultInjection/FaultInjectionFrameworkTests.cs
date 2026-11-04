@@ -9,6 +9,7 @@ namespace PalORM.Core.Tests.TestSupport.FaultInjection;
 /// <para>为什么先测框架：阶段 2 的事务/批量/连接故障用例全部建立在「故障确实只发生在
 /// 我指定的那一条命令、那一行」之上。框架漏一格，后面每条用例的结论都不可信，
 /// 而且失效形态是假绿（没注入成功 = 什么都没测到）。</para></summary>
+[Property("Category", "FaultInjection")]
 public sealed class FaultInjectionFrameworkTests
 {
     private static async Task<SqliteConnection> OpenAsync()

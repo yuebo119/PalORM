@@ -8,6 +8,7 @@ namespace PalORM.Core.Tests.TestSupport.FaultInjection;
 /// <para>两条工程细节决定注入点能不能命中，写进注释：①SQLite 参数上限把 2500 行的多值
 /// INSERT 切成多条语句（每块 500 行），行号 600 落在第二条语句的 reader 上，所以断点放在
 /// 第一条语句的中间行；②取键的 SELECT 若走会话会白占一个命令序号，因此直接走底层连接。</para></summary>
+[Property("Category", "FaultInjection")]
 public sealed class BulkFaultTests
 {
     private const int TotalRows = 2500;

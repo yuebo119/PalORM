@@ -6,6 +6,7 @@ namespace PalORM.Core.Tests.TestSupport.FaultInjection;
 /// <para>池的语义边界由三条守住：容量上限（多还的会话被真实释放，不占位）、
 /// 池释放后租用被拒、已租出的会话在池释放后归还时不入队（真实释放）。
 /// 每条都断言空闲计数回到基线——只断言「没抛异常」证明不了池计数没漂。</para></summary>
+[Property("Category", "FaultInjection")]
 public sealed class PoolFaultTests
 {
     private static DbOptions Options(string name)
