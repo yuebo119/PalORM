@@ -49,12 +49,21 @@ foreach (var (doc, di) in new[] { ("docs", 0), ("README.md", 1) })
 if (!staleFound) Pass("D4 无过期当前计数陈述");
 else Fail("D4 存在过期当前计数（见上）");
 
-// ── D10: [Test] 计数声明（三文件全部写入点）= 实测标记数（含 --fix 自动同步）──
-// 写入点台账（2026-10-16 v7.37 轮补全）：docs/架构设计.md ×2（首行总验证 + 状态表行）、
-// docs/API参考.md ×1（首行测试口径）、docs/测试体系规范.md ×1（§验证指针行）。原校验只查
+// ── D10: [Test] 计数声明（四个写入点）= 实测标记数（含 --fix 自动同步）──
+// 写入点台账（2026-10-16 v7.37 轮补全；2026-11-04 增第 4 处）：docs/架构设计.md ×2
+// （首行总验证 + 状态表行）、docs/API参考.md ×1（首行测试口径）、docs/测试体系规范.md ×1
+// （§验证指针行）、bench/baselines/test-counts.json ×1（sourceMarkers 地板）。原校验只查
 // 架构设计.md 的加粗行一处：API参考.md 的声明曾被 V12 探针 git checkout 连带打回（lessons
 // B190）、测试体系规范.md 的声明是 533 化石值（少实测 566），两个写入点均无校验面（B103 族）。
+//
+// 第 4 处（2026-11-04）为什么并入本项而不是单开任务：sourceMarkers 是 tech-debt #9 与
+// test-gate T11 的地板，它的精确性本来只靠人工跟随。实测 1525 时地板仍是 1070（2026-10-18
+// 定值），删掉 455 个标记（29.8%）才报警——快照式常数随用例增长单调变松（B103 族同因）。
+// 曾考虑把两处判据从 >= 改 !=，但那与 D10 重复：D10 已要求任何增删都显式改三处声明，
+// 精确匹配只是把同一件事做第二遍并增加一步人工。故改为让地板与声明同源，由 --fix 一起
+// 写回，判据保留 >=（防退化即可，增长由本项记录）。
 var d10Docs = new[] { "docs/架构设计.md", "docs/API参考.md", "docs/测试体系规范.md" };
+const string MarkerBaseline = "bench/baselines/test-counts.json";
 if (args.Length > 0 && args[0] == "--fix")
 {
     var fixCount = CountTestMarkers();
@@ -73,7 +82,22 @@ if (args.Length > 0 && args[0] == "--fix")
         }
         File.WriteAllLines(doc, lines, new UTF8Encoding(false));
     }
-    Console.WriteLine($"D10 --fix: {fixPlaces} 处计数已同步为 {fixCount}");
+    var baselineFixed = "未变";
+    if (File.Exists(MarkerBaseline))
+    {
+        var raw = File.ReadAllText(MarkerBaseline);
+        var updated = Regex.Replace(raw, @"""sourceMarkers"":\s*\d+", $"\"sourceMarkers\": {fixCount}");
+        if (updated == raw)
+        {
+            baselineFixed = "已是实测值";
+        }
+        else
+        {
+            File.WriteAllText(MarkerBaseline, updated, new UTF8Encoding(false));
+            baselineFixed = "已同步";
+        }
+    }
+    Console.WriteLine($"D10 --fix: {fixPlaces} 处计数已同步为 {fixCount}；sourceMarkers {baselineFixed}");
     return 0;
 }
 var markTotal = CountTestMarkers().ToString();
@@ -83,6 +107,14 @@ foreach (var doc in d10Docs)
     if (!File.Exists(doc)) { d10Bad.Add($"{doc} 缺失"); continue; }
     foreach (Match m in Regex.Matches(File.ReadAllText(doc), @"(\d+) 项 `\[Test\]` 声明"))
         if (m.Groups[1].Value != markTotal) d10Bad.Add($"{doc} 声明 {m.Groups[1].Value}≠实测 {markTotal}");
+}
+// 第 4 写入点：地板与实测必须同源，否则地板相对实测变松（判据本身仍留 >=，见上方说明）。
+if (!File.Exists(MarkerBaseline)) d10Bad.Add($"{MarkerBaseline} 缺失");
+else
+{
+    var floorMatch = Regex.Match(File.ReadAllText(MarkerBaseline), @"""sourceMarkers"":\s*(\d+)");
+    if (!floorMatch.Success) d10Bad.Add($"{MarkerBaseline} 缺 sourceMarkers 字段");
+    else if (floorMatch.Groups[1].Value != markTotal) d10Bad.Add($"{MarkerBaseline} sourceMarkers {floorMatch.Groups[1].Value}≠实测 {markTotal}");
 }
 // D10 扩围（CONTRACT-4，2026-10-31）：.ai/test/prompt.md 与路线图也是计数写入点。
 // 两者不得写死测试总数（曾写死 1099 / Core 612 等），必须指向 test-counts.json 真源。
@@ -103,7 +135,7 @@ foreach (var doc in (string[])[".ai/test/prompt.md", "docs/测试体系路线图
     foreach (Match m in Regex.Matches(text, @"当前s*(d{3,})s*(?:/|项|$)"))
         d10Bad.Add($"{doc} 写死计数 {m.Groups[1].Value}");
 }
-if (d10Bad.Count == 0) Pass($"D10 [Test] 计数声明一致（3 个声明文件 = 实测 {markTotal}；2 个指针文件未写死数字）");
+if (d10Bad.Count == 0) Pass($"D10 [Test] 计数声明一致（3 个声明文件 + sourceMarkers 地板 = 实测 {markTotal}；2 个指针文件未写死数字）");
 else Fail($"D10 [Test] 计数声明漂移（{string.Join("；", d10Bad)}）——用 --fix 同步");
 
 // ── D11: 生成物工具版本 = 包版本真源（含 OTel InstrumentationVersion）───

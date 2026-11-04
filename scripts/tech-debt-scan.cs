@@ -70,6 +70,10 @@ Check("8. SuppressMessage 无 Justification", noJust, strict: true);
 // 2026-10-18 审计：阈值原为硬编码 400（实测 1099，余量 63%）——删掉 700 个测试仍 PASS。
 // 改为读 bench/baselines/test-counts.json 的 sourceMarkers 地板（声明口径，与执行口径
 // 的 passed 地板分列，T11 双口径定义）；文件缺失时退回 400 保底不放行。
+// 判据为什么保留 >=（2026-11-04 复核，勿再改 !=）：本项只防「标记被删」；增标记必须显式改
+// 三处文档声明，由 D10 硬等值记录（doc-consistency-check），改 != 只是把同一件事做第二遍。
+// 该地板 2026-11-04 起与声明同源，由 D10 --fix 一并写回（原 1070 是 10-18 定值，实测 1525
+// 时已松 29.8%，即删 455 个标记才报警——地板本身不能靠人工跟随用例增长）。
 var coreCount = CountTestMarkers("test/PalORM.Core.Tests");
 var sgCount = CountTestMarkers("test/PalORM.SourceGen.Tests");
 var intCount = CountTestMarkers("test/PalORM.Integration.Tests");

@@ -10,7 +10,7 @@
 | 脚本 | 用途 | CI 调用 |
 |------|------|:---:|
 | `gate-check.cs` | G1-G33 规范门禁（G10/G15/G16 为警告级） | ✅ pre-commit + verify.yml gate |
-| `doc-consistency-check.cs` | D4/D10-D14 文档口径（`--fix` 同步 [Test] 计数；D13 G 级对账 / D14 T 级严重度对账） | ✅ pre-commit + verify.yml gate |
+| `doc-consistency-check.cs` | D4/D10-D17 文档口径（`--fix` 同步 [Test] 计数与 sourceMarkers 地板；D13 G 级对账 / D14 T 级严重度对账） | ✅ pre-commit + verify.yml gate |
 | `tech-debt-scan.cs` | 技术债 15 类（`--ci` 跳过领先远端与 tag 对账；#15 脚本索引完整性） | ✅ verify.yml gate |
 | `test-gate.cs` | 测试规范 T4/T6/T8/T9/T11/T12 + T-DEF-1/4（`--ci` 语义保留） | ✅ verify.yml gate |
 | `assertion-strength-check.cs` | 弱断言棘轮（基线见 `bench/baselines/assertion-baseline.json`，当前 0） | ✅ verify.yml gate |
