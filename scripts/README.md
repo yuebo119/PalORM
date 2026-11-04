@@ -15,10 +15,10 @@
 | `test-gate.cs` | 测试规范 T4/T6/T8/T9/T11/T12 + T-DEF-1/4（`--ci` 语义保留） | ✅ verify.yml gate |
 | `assertion-strength-check.cs` | 弱断言棘轮（基线见 `bench/baselines/assertion-baseline.json`，当前 0） | ✅ verify.yml gate |
 | `gate-param-collection-reuse.cs` | R-UNNESTB 参数集合复用理由码门禁 | ✅ pre-commit + verify.yml gate |
-| `assert-test-counts.cs` | 测试执行数地板断言（地板真源 `bench/baselines/test-counts.json`）。2026-11-03 起 `passed` 与地板**精确匹配**（原 `>=` 曾松弛到 286 对实测 574）；`--update <project> <report>` 按实测写回地板 | ✅ verify.yml unit/integration |
-| `assert-coverage.cs` | 覆盖率地板断言（同上文件 `coverage` 段）。双向：低于地板报退化，**高于地板 1pp 以上报地板过期**（自收紧上限，防止地板只降不升） | ✅ verify.yml unit |
+| `assert-test-counts.cs` | 测试执行数地板断言（地板真源 `bench/baselines/test-counts.json`）。2026-11-03 起 `passed` 与地板**精确匹配**（原 `>=` 曾松弛到 286 对实测 574）；`--update <project> <report>` 按实测写回地板；`--self-check` 内嵌好/坏夹具自证判据（V14 存活监测入口，2026-11-04） | ✅ verify.yml unit/integration |
+| `assert-coverage.cs` | 覆盖率地板断言（同上文件 `coverage` 段）。双向：低于地板报退化，**高于地板 1pp 以上报地板过期**（自收紧上限，防止地板只降不升）；`--self-check` 内嵌夹具自证（含分支模式） | ✅ verify.yml unit |
 | `assert-conformance-contracts.cs` | 契约覆盖账本门禁，双模式。源码侧（无参）：能力契约目录 10 条与方言契约目录 20 条的 ID 集合、`DialectUnsupported` 的 SQLite 豁免数、每条目断言数，与 `bench/baselines/conformance-contracts.json` 双向对账；只读源文件，与测试方法是否存在无关。报告侧（`--report <json>`）：按报告 `displayName` 数每条契约的执行次数（能力 1 次、方言 3 次），补「条目还在源码里但没跑」。两模式互补：源码侧证明声明存在，报告侧证明实际执行 | 源码侧 ✅ pre-commit + verify.yml gate；报告侧 ✅ verify.yml integration |
-| `diff-coverage.cs` | diff 覆盖率门禁（T1-diff，测试体系优化方案 T0-5）：只统计本次改动行、阈值 80%；白名单注释行/.g.cs/test·tools·scripts·docs。`-- <base> <head|""> <xml>...`，空 head 表示对工作树 | ✅ verify.yml unit |
+| `diff-coverage.cs` | diff 覆盖率门禁（T1-diff，测试体系优化方案 T0-5）：只统计本次改动行、阈值 80%；白名单注释行/.g.cs/test·tools·scripts·docs。`-- <base> <head|""> <xml>...`，空 head 表示对工作树；`--self-check` 内嵌夹具自证（Linux/Windows 两种 XML 路径形态） | ✅ verify.yml unit |
 | `public-api-snapshot.cs` | 公开 API 基线快照（`--check` PR 比对，`--update` 显式冻结；基线在 `bench/baselines/public-api/`） | ✅ verify.yml unit |
 | `flake-ledger.cs` | 每周 flake 台账（Core 3 次 / Integration 2 次独立进程；失败不自动重试；台账在 `artifacts/flake-ledger/`） | ✅ flake-ledger.yml 每周 |
 

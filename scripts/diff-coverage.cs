@@ -9,7 +9,12 @@
 //
 // 白名单只允许三类（与方案 §6.4 一致）：纯注释行、#if 条件编译块、生成物 .g.cs。
 //
+// --self-check（2026-11-04，测试系统全面优化方案 FIX-3）：内嵌夹具跑比对判据，不调 git、
+// 不读 XML。夹具覆盖 Linux 与 Windows 两种 coverage XML 路径形态（FIX-1 修的就是这条：
+// 单向反斜杠转换使 Linux runner 上改动行全记未覆盖）、半覆盖报红、无该文件报红。
+//
 // usage: dotnet run --file scripts/diff-coverage.cs -- <base> <head> <xml>...
+//        dotnet run --file scripts/diff-coverage.cs -- --self-check
 //   base/head：git ref（如 origin/main、HEAD）
 //   xml：一份或多份 dotnet-coverage XML（Core 侧与 Integration 侧都传，
 //        命中取并集——Core 路径可能由 Integration 跑到）
@@ -25,9 +30,15 @@ Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(
 
 const double ThresholdPercent = 80.0;
 
+if (args.Length == 1 && args[0] == "--self-check")
+{
+    return SelfCheck(ThresholdPercent);
+}
+
 if (args.Length < 3 || args.Contains("--help") || args.Contains("-h"))
 {
     Console.Error.WriteLine("usage: dotnet run --file scripts/diff-coverage.cs -- <base> <head> <coverage.xml>...");
+    Console.Error.WriteLine("       dotnet run --file scripts/diff-coverage.cs -- --self-check");
     Console.Error.WriteLine("  例：dotnet run --file scripts/diff-coverage.cs -- origin/dev HEAD cov-core.xml cov-integration.xml");
     return 2;
 }
@@ -136,53 +147,7 @@ foreach (string xmlPath in xmlPaths)
 }
 
 // ── 第三步：比对 ─────────────────────────────────────────────────────
-int totalRelevant = 0, totalCovered = 0;
-var uncoveredDetail = new List<string>();
-foreach ((string file, HashSet<int> lines) in diffLines)
-{
-    // 统一按 POSIX 分隔比较：git 输出正斜杠；coverage XML 在 Linux runner 上是
-    // /home/runner/work/... 正斜杠，在 Windows 上是 C:\... 反斜杠。此前单向往
-    // 反斜杠转换，Linux CI 上 XML 路径永不以 src\A\B.cs 结尾，改动行全部记为
-    // 未覆盖（假红）；改动集为空时又走上面的空集 PASS（假绿）。两处都已实测。
-    string normalized = file.Replace('\\', '/').TrimStart('.', '/');
-    HashSet<int>? covered = null;
-    foreach (string xmlPath in coveredByFile.Keys)
-    {
-        string xmlNormalized = xmlPath.Replace('\\', '/');
-        if (xmlNormalized.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase))
-        {
-            covered = coveredByFile[xmlPath];
-            break;
-        }
-    }
-    int fileRelevant = lines.Count;
-    int fileCovered = 0;
-    if (covered is not null)
-    {
-        foreach (int ln in lines)
-        {
-            if (covered.Contains(ln)) fileCovered++;
-        }
-    }
-    totalRelevant += fileRelevant;
-    totalCovered += fileCovered;
-    if (fileCovered < fileRelevant)
-    {
-        var missed = new List<int>();
-        if (covered is not null)
-        {
-            foreach (int ln in lines)
-            {
-                if (!covered.Contains(ln)) missed.Add(ln);
-            }
-        }
-        else
-        {
-            missed.AddRange(lines);
-        }
-        uncoveredDetail.Add($"  {file}: {fileCovered}/{fileRelevant} 命中，未覆盖行 {string.Join(",", missed.Take(10))}{(missed.Count > 10 ? "…" : "")}");
-    }
-}
+(int totalRelevant, int totalCovered, List<string> uncoveredDetail) = Compare(diffLines, coveredByFile);
 
 double percent = totalRelevant == 0 ? 100.0 : (double)totalCovered / totalRelevant * 100;
 string percentText = percent.ToString("F1", CultureInfo.InvariantCulture);
@@ -203,6 +168,117 @@ if (percent < ThresholdPercent)
 }
 Console.WriteLine("diff-coverage: PASS");
 return 0;
+
+// ── 比对判据（自检与正式路径共用）──
+// 统一按 POSIX 分隔比较：git 输出正斜杠；coverage XML 在 Linux runner 上是
+// /home/runner/work/... 正斜杠，在 Windows 上是 C:\... 反斜杠。此前单向往
+// 反斜杠转换，Linux CI 上 XML 路径永不以 src\A\B.cs 结尾，改动行全部记为
+// 未覆盖（假红）；改动集为空时又走上面的空集 PASS（假绿）。两处都已实测。
+static (int Total, int Covered, List<string> Detail) Compare(
+    Dictionary<string, HashSet<int>> diffLines,
+    Dictionary<string, HashSet<int>> coveredByFile)
+{
+    int totalRelevant = 0, totalCovered = 0;
+    var uncoveredDetail = new List<string>();
+    foreach ((string file, HashSet<int> lines) in diffLines)
+    {
+        string normalized = file.Replace('\\', '/').TrimStart('.', '/');
+        HashSet<int>? covered = null;
+        foreach ((string xmlPath, HashSet<int> set) in coveredByFile)
+        {
+            string xmlNormalized = xmlPath.Replace('\\', '/');
+            if (xmlNormalized.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                covered = set;
+                break;
+            }
+        }
+        int fileRelevant = lines.Count;
+        int fileCovered = 0;
+        if (covered is not null)
+        {
+            foreach (int ln in lines)
+            {
+                if (covered.Contains(ln)) fileCovered++;
+            }
+        }
+        totalRelevant += fileRelevant;
+        totalCovered += fileCovered;
+        if (fileCovered < fileRelevant)
+        {
+            var missed = new List<int>();
+            if (covered is not null)
+            {
+                foreach (int ln in lines)
+                {
+                    if (!covered.Contains(ln)) missed.Add(ln);
+                }
+            }
+            else
+            {
+                missed.AddRange(lines);
+            }
+            uncoveredDetail.Add($"  {file}: {fileCovered}/{fileRelevant} 命中，未覆盖行 {string.Join(",", missed.Take(10))}{(missed.Count > 10 ? "…" : "")}");
+        }
+    }
+    return (totalRelevant, totalCovered, uncoveredDetail);
+}
+
+// ── 自检夹具 ──
+static int SelfCheck(double thresholdPercent)
+{
+    HashSet<int> changed = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+    var diffLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal)
+    {
+        ["src/PalORM.Core/A.cs"] = changed,
+    };
+    var fullLinux = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/home/runner/work/Pal.ORM/src/PalORM.Core/A.cs"] = [.. changed],
+    };
+    var fullWindows = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase)
+    {
+        [@"C:\agent\_work\Pal.ORM\src\PalORM.Core\A.cs"] = [.. changed],
+    };
+    var half = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/home/runner/work/Pal.ORM/src/PalORM.Core/A.cs"] = [10, 11, 12, 13, 14],
+    };
+    var none = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+
+    var cases = new List<(string Name, int Expected, int Actual)>
+    {
+        ("好夹具（Linux 形态路径 10/10 命中）", 0, Judge(diffLines, fullLinux, thresholdPercent)),
+        ("好夹具②（Windows 形态路径 10/10 命中）", 0, Judge(diffLines, fullWindows, thresholdPercent)),
+        ("坏夹具①（5/10 命中 = 50% < 阈值）", 1, Judge(diffLines, half, thresholdPercent)),
+        ("坏夹具②（XML 无该文件，全未覆盖）", 1, Judge(diffLines, none, thresholdPercent)),
+    };
+
+    bool ok = true;
+    foreach ((string name, int expected, int actual) in cases)
+    {
+        bool behaved = expected == actual;
+        ok &= behaved;
+        Console.WriteLine($"  {(behaved ? "PASS" : "FAIL")} {name}：期望 exit {expected}，实际 exit {actual}");
+    }
+    if (ok)
+    {
+        Console.WriteLine("diff-coverage self-check: PASS（好夹具 exit 0 / 坏夹具如期 exit 1）");
+        return 0;
+    }
+    Console.Error.WriteLine("::error::diff-coverage self-check: FAIL（判据行为与夹具期望不符）");
+    return 1;
+}
+
+static int Judge(
+    Dictionary<string, HashSet<int>> diffLines,
+    Dictionary<string, HashSet<int>> coveredByFile,
+    double thresholdPercent)
+{
+    (int total, int covered, _) = Compare(diffLines, coveredByFile);
+    double percent = total == 0 ? 100.0 : (double)covered / total * 100;
+    return percent < thresholdPercent ? 1 : 0;
+}
 
 static bool IsExcluded(string file)
     => file.Contains("/obj/", StringComparison.OrdinalIgnoreCase)

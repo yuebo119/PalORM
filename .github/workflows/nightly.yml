@@ -126,6 +126,54 @@ jobs:
           fi
           exit $code
 
+  # ── FIX-7：SQLite 随机探索（PALORM_FUZZ_SEED 接线，2026-11-04）────
+  # 探索模式在 PR 路径恒空转（未设环境变量即直接返回），此前 PALORM_FUZZ_SEED 在
+  # .github/ 下零引用，D 层的「网格外」覆盖从未启用。本 lane 每晚推进一个种子
+  # （run_number 递增，失败时按 run 号可重放），并以 FUZZ-EXPLORE-RAN 标记自证执行过。
+  fuzz-explore:
+    name: SQLite random exploration (PALORM_FUZZ_SEED)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PALORM_FUZZ_SEED: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Build integration tests
+        run: dotnet build test/PalORM.Integration.Tests -c Release
+      - name: Run exploration seed
+        # marker 自证：环境变量未传入或过滤器失效时用例会静默返回（无标记），
+        # 此时即使退出码 0 也判红。MTP 在 Linux 上不转发测试进程 stdout，
+        # 标记优先从 tunit-report.json 的 tests[].output 统计（与方言 lane 同因）。
+        run: |
+          dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --             --treenode-filter "/*/*/RandomDiffTests/*" > fuzz.log 2>&1
+          code=$?
+          cat fuzz.log
+          report=$(find test/PalORM.Integration.Tests/bin -name '*.tunit-report.json' | head -1)
+          stdout_count=$(grep -c "FUZZ-EXPLORE-RAN" fuzz.log || true)
+          report_count=0
+          if [ -n "$report" ]; then
+            report_count=$(grep -o "FUZZ-EXPLORE-RAN" "$report" | wc -l || true)
+          else
+            echo "::warning::tunit-report.json 未找到，marker 只按 stdout 统计"
+          fi
+          count=$((stdout_count > report_count ? stdout_count : report_count))
+          if [ "$count" -lt 1 ]; then
+            echo "::error::探索种子未执行（PALORM_FUZZ_SEED=$PALORM_FUZZ_SEED 未传入或过滤器失效）"
+            exit 1
+          fi
+          exit $code
+      - name: Upload fuzz failure samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures
+          path: artifacts/fuzz-failures-*.txt
+          retention-days: 90
+          if-no-files-found: ignore
+
   # ── COMPAT-3：Windows 平台 lane ────────────────────────────
   windows-core-sourcegen:
     name: Windows Core + SourceGen

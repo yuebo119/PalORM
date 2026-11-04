@@ -30,6 +30,47 @@ Console.WriteLine();
 // 变异探针电池（V17c 的 V/D 面依赖 .ai 文件，public 模式下自动跳过）。
 var PUBLIC = args.Contains("--public", StringComparer.Ordinal);
 var PROBES = args.Contains("--probes", StringComparer.Ordinal);
+
+// V14 注册表（2026-11-04 FIX-4）。提升到顶层的原因：--only-v14 单点自证路径要与正式 V14
+// 循环读同一份清单——若清单留在 V14 的非 fast 守卫块内，探针就只能复制一份判据，两套迟早漂移。
+// 新增四项（assert-test-counts / assert-coverage / diff-coverage / assert-conformance-contracts）
+// 的载体是 --self-check：它们都需要报告或 XML 入参，在 pre-commit 环境跑不出完成标记，
+// 从设计上进不了存活监测面（方案 §3.2）。没有自检模式就不许登记，否则等于登记一条永远
+// 不会红的门禁。
+var v14FinishMark = new Dictionary<string, (string Mark, string Args)>
+{
+    ["gate-check"] = ("扫描完成", ""),
+    ["test-gate"] = (@"门禁(未)?通过", ""),
+    ["tech-debt-scan"] = ("结果: ", ""),
+    ["doc-consistency-check"] = ("通过: ", ""),
+    ["assertion-strength-check"] = ("扫描完成", ""),
+    ["refine-scan"] = ("纪律补充", ""),
+    ["review-scope"] = ("账本规则", ""),
+    ["review-snapshot"] = ("评审基线快照", ""),
+    ["probe-template"] = ("用法", ""),
+    ["verify-action-items"] = ("验证完成", ""),
+    // 以下为第二轮审计补齐：均可无副作用运行（不写库、不建备份、不跑基准）
+    // 注意 secret-guard 在无暂存文件时走「✓ 无 staged 文件」分支（exit 0），
+    // 标记必须覆盖该分支，否则干净树上会被误判为无完成标记（实测于 2026-10-18）。
+    ["secret-guard"] = (@"敏感信息检查通过|无 staged 文件", ""),
+    ["stub-check"] = (@"无明确空壳|发现 \d+ 个", ""),
+    ["gate-param-collection-reuse"] = (@"全部参数集合变更|未声明 \d+ 处", ""),
+    ["precommit-build-check"] = (@"无需构建|受影响项目构建通过", ""),
+    ["compare-perf-batches"] = ("用法:", "--help"),
+    // 2026-11-04 FIX-4：数据门禁（自检模式）
+    ["assert-test-counts"] = (@"self-check: PASS", "--self-check"),
+    ["assert-coverage"] = (@"self-check: PASS", "--self-check"),
+    ["diff-coverage"] = (@"self-check: PASS", "--self-check"),
+    ["assert-conformance-contracts"] = ("契约覆盖账本一致", ""),
+};
+
+// --only-v14 <script>：只跑 V14 中一条注册项的存活判定。V17d 的「脚本改成恒 return 0」
+// 探针用它，避免每条探针都重跑整份 V14（15+ 脚本）。
+if (args.Length >= 2 && args[0] == "--only-v14")
+{
+    return RunSingleV14(args[1]);
+}
+
 if (PUBLIC)
 {
     Console.WriteLine("模式：--public（只跑主仓可见校验；.ai 本地知识层相关项不参与）");
@@ -143,32 +184,11 @@ if (!FAST)
     // 2026-10-18 第二轮审计扩面：原注册表固定 10 项而 scripts/ 实有 28 个，新增工具
     // （backup-ai-system / compare-perf-batches 等）不在存活监测面。现补齐可无副作用运行
     // 的防线与工具，并在结果行报告「未注册」数量，避免"10/10"被误读为全部脚本。
-    var finishMark = new Dictionary<string, (string Mark, string Args)>
-    {
-        ["gate-check"] = ("扫描完成", ""),
-        ["test-gate"] = (@"门禁(未)?通过", ""),
-        ["tech-debt-scan"] = ("结果: ", ""),
-        ["doc-consistency-check"] = ("通过: ", ""),
-        ["assertion-strength-check"] = ("扫描完成", ""),
-        ["refine-scan"] = ("纪律补充", ""),
-        ["review-scope"] = ("账本规则", ""),
-        ["review-snapshot"] = ("评审基线快照", ""),
-        ["probe-template"] = ("用法", ""),
-        ["verify-action-items"] = ("验证完成", ""),
-        // 以下为第二轮审计补齐：均可无副作用运行（不写库、不建备份、不跑基准）
-        // 注意 secret-guard 在无暂存文件时走「✓ 无 staged 文件」分支（exit 0），
-        // 标记必须覆盖该分支，否则干净树上会被误判为无完成标记（实测于 2026-10-18）。
-        ["secret-guard"] = (@"敏感信息检查通过|无 staged 文件", ""),
-        ["stub-check"] = (@"无明确空壳|发现 \d+ 个", ""),
-        ["gate-param-collection-reuse"] = (@"全部参数集合变更|未声明 \d+ 处", ""),
-        ["precommit-build-check"] = (@"无需构建|受影响项目构建通过", ""),
-        ["compare-perf-batches"] = ("用法:", "--help"),
-    };
     var deadScripts = new List<string>();
     var latestLedger = Directory.Exists(".ai/review/history/action-items")
         ? Directory.GetFiles(".ai/review/history/action-items", "*.md").OrderByDescending(f => f).FirstOrDefault()
         : null;
-    foreach (var (name, entry) in finishMark)
+    foreach (var (name, entry) in v14FinishMark)
     {
         var arguments = name switch
         {
@@ -191,12 +211,12 @@ if (!FAST)
         else if (!Regex.IsMatch(output, entry.Mark)) deadScripts.Add($"{name}(无完成标记)");
     }
     var allScripts = Directory.Exists("scripts") ? Directory.GetFiles("scripts", "*.cs").Length : 0;
-    var unregistered = allScripts - finishMark.Count;
+    var unregistered = allScripts - v14FinishMark.Count;
     var unregisteredNote = unregistered > 0
         ? $"；另有 {unregistered} 个脚本未注册（需入参/耗时/有副作用，见 scripts/README 人工工具）"
         : "";
     if (deadScripts.Count == 0)
-        Pass(14, $"已注册防线脚本全部可执行且全绿（{finishMark.Count}/{finishMark.Count} 退出码 0 + 完成标记{unregisteredNote}）");
+        Pass(14, $"已注册防线脚本全部可执行且全绿（{v14FinishMark.Count}/{v14FinishMark.Count} 退出码 0 + 完成标记{unregisteredNote}）");
     else Fail(14, "防线脚本失败（退出码非 0 或未跑到完成标记——结果未被消费的静默门禁）", string.Join(' ', deadScripts));
 }
 
@@ -886,9 +906,35 @@ void V17dPublicBattery()
         Git("checkout -- src/PalORM.Core/Annotations.cs");
         Git("checkout -- test/PalORM.Core.Tests/KeyConversionTests.cs");
 
+        // FIX-5（2026-11-04）：数据门禁存活探针。五项各注入一次「脚本改成恒 return 0」：
+        // 在第一条语句前插提前返回，脚本退化为静默 exit 0、无完成标记。V14 必须由「退出码 0」
+        // 翻成「无完成标记」报红——这是「门禁被掏空」在这条监测面上唯一能抓的形态。
+        // 用 --only-v14 单点跑（5 条探针 × 注入/还原两向），避免每条都重跑整份 V14。
+        foreach (string gateScript in new[]
+        {
+            "assert-test-counts", "assert-coverage", "diff-coverage",
+            "assert-conformance-contracts", "assertion-strength-check",
+        })
+        {
+            string gatePath = $"scripts/{gateScript}.cs";
+            MutateFile(gatePath,
+                t => ReplaceFirst(t, @"Console\.OutputEncoding = new UTF8Encoding\(false\);",
+                    "if (args.Length >= 0) return 0;\nConsole.OutputEncoding = new UTF8Encoding(false);"),
+                touch: touched);
+            bool caught = RunCapture("dotnet",
+                    $"run --no-build --file scripts/verify-ai-system.cs -- --only-v14 {gateScript}")
+                .Contains("FAIL V14", StringComparison.Ordinal);
+            if (!caught) silent.Add($"V14/{gateScript}");
+            Git($"checkout -- {gatePath}");
+            bool recovered = RunCapture("dotnet",
+                    $"run --no-build --file scripts/verify-ai-system.cs -- --only-v14 {gateScript}")
+                .Contains("PASS V14", StringComparison.Ordinal);
+            if (!recovered) silent.Add($"V14/{gateScript}(还原后未转绿)");
+        }
+
         if (silent.Count == 0)
         {
-            Pass(17, "public 面变异探针 14/14 如期报红（D4/D12/D13/tech-debt#6/#7/#9/#15/T4/T6/T8/T9/T11/T-DEF-1/T-DEF-4；CI 每周 --public --probes 执行）");
+            Pass(17, "public 面变异探针 19/19 如期报红（D4/D12/D13/tech-debt#6/#7/#9/#15/T4/T6/T8/T9/T11/T-DEF-1/T-DEF-4 + V14 注册项 5 条存活探针；CI 每周 --public --probes 执行）");
         }
         else
         {
@@ -913,6 +959,41 @@ void V17dPublicBattery()
 }
 
 // ── 辅助 ──
+
+// V14 单条存活判定。与正式循环同义（退出码 0 + 完成标记；probe-template 的 exit=2 例外），
+// 差异只在跑一条而非全部——供 V17d 的「改脚本为恒 return 0」探针使用（FIX-5）。
+int RunSingleV14(string name)
+{
+    if (!v14FinishMark.TryGetValue(name, out var entry))
+    {
+        Console.WriteLine($"FAIL V14: 脚本 {name} 未在注册表内（新增脚本必须先登记 v14FinishMark）");
+        return 1;
+    }
+    var ledger = Directory.Exists(".ai/review/history/action-items")
+        ? Directory.GetFiles(".ai/review/history/action-items", "*.md").OrderByDescending(f => f).FirstOrDefault()
+        : null;
+    if (name == "verify-action-items" && ledger is null)
+    {
+        Console.WriteLine("SKIP V14: verify-action-items（无账本）");
+        return 0;
+    }
+    string arguments = name switch
+    {
+        "verify-action-items" => $"run --file scripts/{name}.cs -- {ledger}",
+        _ => $"run --file scripts/{name}.cs{(entry.Args.Length > 0 ? " -- " + entry.Args : "")}",
+    };
+    var (code, output) = RunCaptureWithCode("dotnet", arguments);
+    bool hasMark = Regex.IsMatch(output, entry.Mark);
+    if (code == 2 && name == "probe-template")
+    {
+        bool usageOk = output.Contains("用法", StringComparison.Ordinal);
+        Console.WriteLine($"{(usageOk ? "PASS" : "FAIL")} V14: probe-template（用法标记）");
+        return usageOk ? 0 : 1;
+    }
+    bool ok = code == 0 && hasMark;
+    Console.WriteLine($"{(ok ? "PASS" : "FAIL")} V14: {name}（exit={code}，完成标记 {(hasMark ? "有" : "无")}）");
+    return ok ? 0 : 1;
+}
 
 // 以下五项同时被全量流程与 --public 子集调用：抽成函数避免两条路径逻辑漂移
 void CheckV2()

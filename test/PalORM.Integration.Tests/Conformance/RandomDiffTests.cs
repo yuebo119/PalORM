@@ -7,8 +7,10 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <para>固定种子集做回归（进 PR 门禁），新种子集做探索（由 <c>PALORM_FUZZ_SEED</c> 环境变量启用，
 /// 夜间或手动触发）。失败场景先收缩再落盘到 <c>artifacts/fuzz-failures-*.txt</c>，收缩结果附
 /// 完整重放三元组，供固化成 A 层固定用例。</para>
-/// <para>预算：每方言 60 到 120 秒的探索量级对应约 8 到 16 个场景；本类的固定种子回归取 6 种子 × 8 场景，
-/// 实测约 2 秒。</para></summary>
+/// <para>预算：固定种子回归取 6 种子 × 8 场景，实测约 2 秒；探索模式单种子 200 场景
+/// （2026-11-04 FIX-7 由 12 提到 200），跑完打印 <c>FUZZ-EXPLORE-RAN</c> 标记。</para>
+/// <para>标记为何必须打印：夜间 lane 以标记数自证「探索真的跑了」。环境变量缺失时本用例直接
+/// 返回且不打标记——静默跳过会被夜间判红，而不是被当成通过。</para></summary>
 [NotInParallel("ConformanceFuzz")]
 public sealed class RandomDiffTests
 {
@@ -67,9 +69,11 @@ public sealed class RandomDiffTests
         await using DataSession<SqliteProvider> session = db;
 
         List<string> persisted = [];
-        const int cases = 12;
+        const int cases = 200;   // FIX-7：12 → 200（方案 §5.1 验收口径）
+        int executed = 0;
         foreach (DScenario scenario in DGenerator.Generate(seed, cases))
         {
+            executed++;
             bool failed = await RandomDiffRunner.HasDifferenceAsync(scenario, session, raw, SqlDialect.Sqlite);
             if (!failed) continue;
 
@@ -80,9 +84,35 @@ public sealed class RandomDiffTests
             persisted.Add($"seed={seed} original={scenario.ReplayKey} shrunk={shrunk.ReplayKey}");
         }
 
+        // 执行标记（夜间 lane 的存活判据）：MTP 在 Linux 上不把测试进程的 Console.WriteLine
+        // 转发到 stdout，标记实际落在 tunit-report.json 的 output 字段，故两处都算。
+        Console.WriteLine($"FUZZ-EXPLORE-RAN seed={seed} cases={executed} differences={persisted.Count}");
+
+        if (persisted.Count > 0)
+        {
+            // 失败样本落盘先于断言：断言失败时文件必须已经存在，否则产物随失败一起消失。
+            string path = Path.Combine(ArtifactDirectory(),
+                $"fuzz-failures-{seed}-{DateTime.UtcNow:yyyyMMddTHHmmss}.txt");
+            await File.WriteAllLinesAsync(path, persisted);
+            Console.WriteLine($"FUZZ-EXPLORE-PERSISTED {path}");
+        }
+
         await Assert.That(string.Join(Environment.NewLine, persisted.Take(10)))
             .IsEmpty()
-            .Because($"探索种子 {seed} 共 {cases} 个场景，发现 {persisted.Count} 例差异；"
+            .Because($"探索种子 {seed} 共 {executed} 个场景，发现 {persisted.Count} 例差异；"
                 + "按方案 §7.4 必须固化成 A 层固定用例后才能关闭");
+    }
+
+    /// <summary>产物目录解析到仓库根（测试可能从任意 CWD 启动）；artifacts/ 已被 .gitignore 忽略。</summary>
+    private static string ArtifactDirectory()
+    {
+        var dir = new DirectoryInfo(Environment.CurrentDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "PalORM.slnx")))
+        {
+            dir = dir.Parent;
+        }
+        string artifacts = Path.Combine(dir?.FullName ?? Environment.CurrentDirectory, "artifacts");
+        Directory.CreateDirectory(artifacts);
+        return artifacts;
     }
 }
