@@ -64,6 +64,9 @@ mydatabase.db
 .depwire/
 artifacts/
 
+## 覆盖率产物（本地/CI 采集后即弃，按需上传 artifact）
+cov-*.xml
+
 ## 会话级临时区（跑测日志/审计输出/一次性探针，本地产物不入库）。
 ## 2026-10-18 质量审计补登：此目录长期以未跟踪状态出现在每次 git status，
 ## 且 script 语言政策扫描器会因其中的历史 .mjs 判 FAIL——补登为忽略项。

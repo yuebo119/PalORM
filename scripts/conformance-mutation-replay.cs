@@ -203,7 +203,11 @@ foreach (Rule rule in selected)
     if (expected.Length > 0) Console.WriteLine($"   期望报红契约 {string.Join(", ", expected)}");
 
     string absolutePath = Path.Combine(repoRoot, rule.File);
-    string original = File.ReadAllText(absolutePath);
+    // 还原必须按**原始字节**写回：仓库里部分源文件带 UTF-8 BOM，用 WriteAllText 还原会静默
+    // 去掉 BOM（实测 DataSession.cs 被改成无 BOM 且校验看不出来——ReadAllText 两侧都吞 BOM）。
+    // 所以原文按字节留存、按字节写回、按字节比对。
+    byte[] originalBytes = File.ReadAllBytes(absolutePath);
+    string original = DecodeText(originalBytes);
     string matchText = AdaptLineEndings(rule.Original, original);
     string mutation = AdaptLineEndings(rule.Mutated, original);
     if (!original.Contains(matchText, StringComparison.Ordinal))
@@ -215,7 +219,7 @@ foreach (Rule rule in selected)
         continue;
     }
 
-    File.WriteAllText(absolutePath, original.Replace(matchText, mutation, StringComparison.Ordinal));
+    File.WriteAllBytes(absolutePath, EncodeText(original.Replace(matchText, mutation, StringComparison.Ordinal), originalBytes));
 
     bool verbose = Environment.GetEnvironmentVariable("PALORM_REPLAY_VERBOSE") == "1";
     var phaseClock = Stopwatch.StartNew();
@@ -242,15 +246,14 @@ foreach (Rule rule in selected)
     }
     else
     {
-        // 字节还原（默认）：写回原文并逐字节比对，不重建、不重跑。证据链 =
-        // ①循环前基线绿（每 (项目,过滤器) 一次）②本规则只改这一个文件 ③还原后内容与原文
-        // 逐字节相同。三者合起来与「重建后测试转绿」等价，代价从「两次构建两次测试」
-        // 降到「一次构建一次测试」——这是把全量从 12.5 分钟压到预算内的主要来源。
+        // 字节还原（默认）：按原始字节写回并逐字节比对，不重建、不重跑。证据链 =
+        // ①循环前基线绿（每 (项目,过滤器) 一次）②本规则只改这一个文件 ③还原后与原文逐字节相同。
+        // 三者合起来与「重建后测试转绿」等价，代价从「两次构建两次测试」降到「一次构建一次测试」。
         // 需要旧形态（含还原后重建与复跑）时用 --strict-restore。
-        File.WriteAllText(absolutePath, original);
+        File.WriteAllBytes(absolutePath, originalBytes);
         restoredBuild = true;
         restored = new RunOutcome(false, 0, "", "");
-        restoredGreen = string.Equals(File.ReadAllText(absolutePath), original, StringComparison.Ordinal);
+        restoredGreen = File.ReadAllBytes(absolutePath).AsSpan().SequenceEqual(originalBytes);
     }
 
     bool injectedRed = injectedBuild && injected.Red;
@@ -389,6 +392,25 @@ static int VerifyAnchors(string repoRoot, Rule[] rules)
 
 static string AdaptLineEndings(string text, string sample)
     => sample.Contains("\r\n", StringComparison.Ordinal) ? text.Replace("\n", "\r\n", StringComparison.Ordinal) : text;
+
+/// <summary>仓库部分源文件带 UTF-8 BOM：解码/编码必须按原样保留，否则「还原」会静默改写文件。</summary>
+static bool HasUtf8Bom(byte[] bytes)
+    => bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+
+static string DecodeText(byte[] bytes)
+    => new System.Text.UTF8Encoding(false).GetString(HasUtf8Bom(bytes) ? bytes.AsSpan(3) : bytes);
+
+static byte[] EncodeText(string text, byte[] template)
+{
+    byte[] body = new System.Text.UTF8Encoding(false).GetBytes(text);
+    if (!HasUtf8Bom(template)) return body;
+    var withBom = new byte[body.Length + 3];
+    withBom[0] = 0xEF;
+    withBom[1] = 0xBB;
+    withBom[2] = 0xBF;
+    body.CopyTo(withBom, 3);
+    return withBom;
+}
 
 static Rule ParseRule(JsonNode? node)
 {

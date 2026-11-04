@@ -1,0 +1,56 @@
+{
+  "_comment": "覆盖率矩阵单一真源（测试系统全面优化方案 2026-11-04 · COV-1）。回答三个问题：仓里每个 src 模块由哪个测试通道采集、落在哪份 XML、地板值从哪来。地板数值不在这里复制——`floorRef` 指向 test-counts.json 的 coverage 键（单一定义点，避免两处数字漂移；本文件只做视图）。`pending` 非空表示该模块还没有可执行地板，scripts/assert-coverage-matrix.cs 会以 WARN 列出（不静默），清掉 pending 的唯一方式是采到实测并在 test-counts.json 落定地板。新增 src 模块而未在此登记时，校验脚本报红。",
+  "channels": {
+    "unit": {
+      "workflow": "verify.yml",
+      "job": "unit",
+      "xml": "cov-core.xml",
+      "note": "Core 与 SourceGen 测试；SourceGen 的覆盖率来自 unit job 同一次运行（COV-3）"
+    },
+    "integration": {
+      "workflow": "verify.yml",
+      "job": "integration",
+      "xml": "cov-integration.xml",
+      "note": "三方言 Integration 全量；SQLite 模块读数来自同一份 XML（COV-4）"
+    }
+  },
+  "modules": [
+    {
+      "key": "core",
+      "assembly": "PalORM.Core",
+      "channel": "unit",
+      "floorRef": "coverage.core"
+    },
+    {
+      "key": "sourceGen",
+      "assembly": "PalORM.SourceGen",
+      "channel": "unit",
+      "floorRef": "coverage.sourceGen"
+    },
+    {
+      "key": "sqlite",
+      "assembly": "PalORM.Sqlite",
+      "channel": "integration",
+      "floorRef": "coverage.sqlite"
+    },
+    {
+      "key": "mysql",
+      "assembly": "PalORM.MySql",
+      "channel": "integration",
+      "floorRef": "coverage.mysql"
+    },
+    {
+      "key": "postgresql",
+      "assembly": "PalORM.PostgreSql",
+      "channel": "integration",
+      "floorRef": "coverage.postgresql"
+    },
+    {
+      "key": "testing",
+      "assembly": "PalORM.Testing",
+      "channel": "integration",
+      "floorRef": "",
+      "pending": "PalORM.Testing 是测试辅助库（断言/夹具），本身不承载产品逻辑；暂不设地板，若要设需先定『哪些分支必须被执行』的口径"
+    }
+  ]
+}

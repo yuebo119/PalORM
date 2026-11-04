@@ -137,8 +137,17 @@ jobs:
               # 有意变更时运行 --update 重写基线，并在提交说明标注 SemVer 升级类型。
               run: dotnet run --file scripts/public-api-snapshot.cs -- --check --configuration Release
 
-            - name: Source generator tests
-              run: dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build
+            # COV-3（2026-11-04）：SourceGen 此前完全无覆盖率采集，生成器发射体的回归
+            # 只能靠快照与断言间接判断。SourceGen.Tests 直接引用生成器工程（进程内调用
+            # emit API），因此 dotnet-coverage 能采到该模块的行/块覆盖。
+            - name: Source generator tests (with coverage, COV-3)
+              run: >-
+                  dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build --
+                  --coverage --coverage-output-format xml
+                  --coverage-output "$(pwd)/cov-sourcegen.xml"
+
+            - name: Assert SourceGen coverage floor (COV-3)
+              run: dotnet run --file scripts/assert-coverage.cs -- PalORM.SourceGen cov-sourcegen.xml sourceGen
 
             - name: Assert SourceGen test counts (M0-3)
               run: >-
@@ -219,6 +228,10 @@ jobs:
               run: |
                   dotnet run --file scripts/assert-coverage.cs -- PalORM.MySql cov-integration.xml mysql
                   dotnet run --file scripts/assert-coverage.cs -- PalORM.PostgreSql cov-integration.xml postgresql
+                  # COV-4（2026-11-04）：SQLite 此前无模块地板（coverage 段只有 core/mysql/postgresql），
+                  # SQLite Provider 的回归只能靠断言间接发现。地板 = 本地实测 67.11%（Integration 的
+                  # SQLite-only 通道）向下取整，满足 assert-coverage 的 1pp 自收紧上限。
+                  dotnet run --file scripts/assert-coverage.cs -- PalORM.Sqlite cov-integration.xml sqlite
 
             # 覆盖率 XML 上传（2026-11-04 增）：provider 覆盖率读数在 CI 上曾出现双模态
             # （mysql 66.85% 与 68.80%，同一提交不同 run），差分脚本只能拿到百分比、定位不到
@@ -372,6 +385,11 @@ jobs:
             # 测试数地板对单条删除也无感。本步不看测试方法，只把两个契约目录的
             # ID 集合、豁免表、每条目断言数与 bench/baselines/conformance-contracts.json
             # 对账——删条目、加条目未登记、登记 SQLite 豁免、条目被掏空都报。
+            - name: Coverage matrix consistency (COV-2)
+              # 未登记模块 = 分母少一整个模块而全量地板照样绿；孤儿地板 = 有值没人用。
+              # 只读两个基线文件，秒级。
+              run: dotnet run --file scripts/assert-coverage-matrix.cs
+
             - name: Conformance contract coverage ledger
               run: dotnet run --file scripts/assert-conformance-contracts.cs
 

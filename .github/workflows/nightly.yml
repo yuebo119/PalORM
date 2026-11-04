@@ -179,9 +179,15 @@ jobs:
   # 本 lane 跑自建回放：每条规则注入一个已知缺陷，要求指定测试报红、还原后转绿。
   # 分数与契约覆盖写进 job summary，报告留 90 天 artifact 供趋势对比。
   mutation-replay:
-    name: Mutation replay and discrimination score
+    name: Mutation replay and discrimination score (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # 分片：单进程全量实测 456.9 秒（2026-11-04，68 条 × 一次构建一次测试 4.7 秒），
+    # 超出 5 分钟预算；两片各自 checkout、互不争用 bin/obj，单片约 3.8 分钟。
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -192,37 +198,40 @@ jobs:
           global-json-file: global.json
       - name: Replay mutation rules
         run: |
-          dotnet run --file scripts/conformance-mutation-replay.cs -- --report artifacts/mutation-report.json 2>&1 | tee mutation-replay.log
+          dotnet run --file scripts/conformance-mutation-replay.cs -- \
+            --shard ${{ matrix.shard }}/2 --report artifacts/mutation-report-${{ matrix.shard }}.json 2>&1 \
+            | tee mutation-replay-${{ matrix.shard }}.log
           exit ${PIPESTATUS[0]}
       - name: Score and write job summary
         # 回放红也要出分数与台账：判据（分数）与执行（回放）解耦，否则失败现场只剩一行退出码
         if: always()
         run: |
-          if [ ! -f artifacts/mutation-report.json ]; then
+          report="artifacts/mutation-report-${{ matrix.shard }}.json"
+          if [ ! -f "$report" ]; then
             echo "::error::回放报告缺失（回放中途中止，未跑到写报告点）"
             exit 1
           fi
-          dotnet run --file scripts/mutation-score.cs -- --report artifacts/mutation-report.json
+          dotnet run --file scripts/mutation-score.cs -- --report "$report"
           {
-            echo "## 变异回放与判别力分数"
+            echo "## 变异回放与判别力分数（分片 ${{ matrix.shard }}/2）"
             echo ""
             echo '```'
-            grep -E "^(score=|上一轮|判别力分数)" <(dotnet run --file scripts/mutation-score.cs -- --report artifacts/mutation-report.json 2>&1) || true
+            dotnet run --file scripts/mutation-score.cs -- --report "$report" 2>&1 || true
             echo '```'
             echo ""
             echo "### 规则台账"
             echo '```'
-            grep -E "^\| R-|^全部规则通过|规则未通过" mutation-replay.log || true
+            grep -E "^\| R-|^全部规则通过|规则未通过" mutation-replay-${{ matrix.shard }}.log || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutation-report
+          name: mutation-report-${{ matrix.shard }}
           path: |
-            artifacts/mutation-report.json
-            mutation-replay.log
+            artifacts/mutation-report-${{ matrix.shard }}.json
+            mutation-replay-${{ matrix.shard }}.log
           retention-days: 90
           if-no-files-found: warn
 
