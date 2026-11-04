@@ -140,12 +140,16 @@ int totalRelevant = 0, totalCovered = 0;
 var uncoveredDetail = new List<string>();
 foreach ((string file, HashSet<int> lines) in diffLines)
 {
-    // git 输出的是相对路径（POSIX 分隔），XML 是绝对路径（Windows 分隔）——归一化比对
-    string normalized = file.Replace('/', '\\');
+    // 统一按 POSIX 分隔比较：git 输出正斜杠；coverage XML 在 Linux runner 上是
+    // /home/runner/work/... 正斜杠，在 Windows 上是 C:\... 反斜杠。此前单向往
+    // 反斜杠转换，Linux CI 上 XML 路径永不以 src\A\B.cs 结尾，改动行全部记为
+    // 未覆盖（假红）；改动集为空时又走上面的空集 PASS（假绿）。两处都已实测。
+    string normalized = file.Replace('\\', '/').TrimStart('.', '/');
     HashSet<int>? covered = null;
     foreach (string xmlPath in coveredByFile.Keys)
     {
-        if (xmlPath.EndsWith(normalized, StringComparison.OrdinalIgnoreCase))
+        string xmlNormalized = xmlPath.Replace('\\', '/');
+        if (xmlNormalized.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase))
         {
             covered = coveredByFile[xmlPath];
             break;

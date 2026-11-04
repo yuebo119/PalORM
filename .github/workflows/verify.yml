@@ -251,6 +251,10 @@ jobs:
         name: Diff Coverage (T1-diff)
         runs-on: ubuntu-24.04
         needs: [unit, integration]
+        # 判据与执行解耦（2026-11-04）：测试 job 红时本步不得静默 skipped。
+        # 实测 run 41778965168：Unit 因 NU1903 失败，diff 门禁变 skipped，证据链消失。
+        # always() 保证运行；产物缺失时 download-artifact 直接失败并暴露原因。
+        if: always() && !cancelled()
         timeout-minutes: 10
         steps:
             - uses: actions/checkout@v7
