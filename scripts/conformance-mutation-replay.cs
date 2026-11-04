@@ -217,10 +217,16 @@ foreach (Rule rule in selected)
 
     File.WriteAllText(absolutePath, original.Replace(matchText, mutation, StringComparison.Ordinal));
 
+    bool verbose = Environment.GetEnvironmentVariable("PALORM_REPLAY_VERBOSE") == "1";
+    var phaseClock = Stopwatch.StartNew();
     bool injectedBuild = Build(dotnet, repoRoot, project, restore: strictRestore);
+    long buildMs = phaseClock.ElapsedMilliseconds;
+    phaseClock.Restart();
     RunOutcome injected = injectedBuild
         ? RunTests(dotnet, repoRoot, rule.Filter, project)
         : new RunOutcome(false, 0, "", "");
+    long testMs = phaseClock.ElapsedMilliseconds;
+    if (verbose) Console.WriteLine($"   [计时] 构建 {buildMs}ms / 测试 {testMs}ms");
 
     bool restoredBuild;
     RunOutcome restored;
