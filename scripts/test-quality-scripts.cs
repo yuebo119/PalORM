@@ -46,6 +46,7 @@ try
     FixtureSdkPin(repoRoot);
     FixtureNoPcreGrep(repoRoot);
     FixtureSecretGuardSelfTest();
+    FixtureGateRegistrySelfChecks(repoRoot, tmp);
     FixtureScriptLanguagePolicy(repoRoot);
 
     if (fail == 0)
@@ -53,6 +54,8 @@ try
         Console.WriteLine("\n质量脚本回归夹具全部通过。");
     }
 }
+
+
 finally
 {
     try
@@ -448,7 +451,7 @@ void FixtureSdkPin(string root)
     Console.WriteLine("\n─── SDK pin ───");
     // rollForward: latestMinor 语义——global.json 是下限锚点，实跑 SDK 允许同 band 更高版本
     var pinMatch = Regex.Match(File.ReadAllText(Path.Combine(root, "global.json")), "\"version\"\\s*:\\s*\"(\\d+\\.\\d+\\.\\d+)");
-    var sdkVersion = RunCapture("dotnet", "--version").Trim();
+    var sdkVersion = RunGateCapture("dotnet", "--version").Trim();
     var sdkMatch = Regex.Match(sdkVersion, "^(\\d+\\.\\d+\\.\\d+)");
     if (!pinMatch.Success || !sdkMatch.Success || pinMatch.Groups[1].Value != sdkMatch.Groups[1].Value)
     {
@@ -596,7 +599,7 @@ bool RunDotnetFileCapture(string scriptFile, string[] args, out string output, s
     return p.ExitCode == 0;
 }
 
-static string RunCapture(string command, string arguments)
+static string RunGateCapture(string command, string arguments)
 {
     var psi = new System.Diagnostics.ProcessStartInfo(command, arguments)
     {
@@ -641,4 +644,113 @@ static string FindRepoRoot()
     Console.Error.WriteLine("::error::未找到仓库根（PalORM.slnx）——请在仓库内运行");
     Environment.Exit(2);
     return "";
+}
+
+/// <summary>GATE-1/GATE-2（2026-11-04）：七脚本 --self-check 归一 + 门禁判据变异。
+/// 从 gate-registry.json 的 selfCheck 段逐个调用 --self-check（好夹具 exit 0），
+/// 再对 3 个脚本做 6 条判据变异（方向反/删判据/阈值偏移），断言自检夹具全部抓到（exit 1）。
+/// 读取 bench/baselines/gate-registry.json 单一真源。</summary>
+void FixtureGateRegistrySelfChecks(string repoRoot, string tmp)
+{
+    var registryPath = Path.Combine(repoRoot, "bench", "baselines", "gate-registry.json");
+    if (!File.Exists(registryPath))
+    {
+        Console.WriteLine("SKIP: gate-registry.json not found — GATE-1/GATE-2 跳过");
+        return;
+    }
+    var registry = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(registryPath))!;
+    var selfCheckScripts = registry["selfCheck"]?.AsArray()
+        ?.Select(n => n?.GetValue<string>() ?? "").Where(x => x.Length > 0).ToList()
+        ?? [];
+
+    // GATE-1：七脚本逐个 --self-check（好夹具 exit 0）
+    foreach (var script in selfCheckScripts)
+    {
+        var (code, _) = RunGateScriptCapture("dotnet", $"run --file scripts/{script}.cs -- --self-check", repoRoot);
+        if (code != 0)
+        {
+            Console.WriteLine($"FAIL GATE-1: {script} --self-check exit {code}（自检判据失效）");
+            fail++;
+        }
+        else
+        {
+            Console.WriteLine($"PASS GATE-1: {script} --self-check exit 0");
+        }
+    }
+
+    // GATE-2：6 条判据变异——改反方向 / 删判据 / 偏移阈值，自检必须抓到（exit != 0）
+    var mutations = new (string Script, string Old, string New, string Description)[]
+    {
+        ("assert-test-counts",
+            "if (passed != floorPassed)",
+            "if (passed == floorPassed)",
+            "方向反：passed != floor → passed == floor"),
+        ("assert-test-counts",
+            "if (skipped != 0)",
+            "if (false)",
+            "删判据：skipped 校验恒不触发"),
+        ("assert-coverage",
+            "if (moduleCoverage < floor)",
+            "if (moduleCoverage > floor)",
+            "方向反：低于地板 → 高于地板"),
+        ("assert-coverage",
+            "if (slack > maxSlackPercentagePoints)",
+            "if (slack > 999)",
+            "偏移阈值：自收紧上限失效"),
+        ("mutation-score",
+            "if (score < minScore)",
+            "if (score > minScore)",
+            "方向反：低于阈值 → 高于阈值"),
+        ("assertion-strength-check",
+            "if (behavioral.IsMatch(block)) continue;",
+            "if (false) continue;",
+            "删判据：行为断言检查恒不触发"),
+    };
+    foreach (var (script, oldText, newText, description) in mutations)
+    {
+        var scriptPath = Path.Combine(repoRoot, "scripts", $"{script}.cs");
+        var original = File.ReadAllText(scriptPath);
+        if (!original.Contains(oldText))
+        {
+            Console.WriteLine($"SKIP GATE-2: {script} 的判据 {description} 已不在源中（重锚变异模板）");
+            continue;
+        }
+        File.WriteAllText(scriptPath, original.Replace(oldText, newText), new UTF8Encoding(false));
+        System.Threading.Thread.Sleep(100);   // 确保文件时间戳变化触发重编译
+        try
+        {
+            var (code, _) = RunGateScriptCapture("dotnet", $"run --file scripts/{script}.cs -- --self-check", repoRoot);
+            if (code == 0)
+            {
+                Console.WriteLine($"FAIL GATE-2: {script} {description}——变异后自检未抓到（判据失效）");
+                fail++;
+            }
+            else
+            {
+                Console.WriteLine($"PASS GATE-2: {script} {description}——变异被夹具抓到");
+            }
+        }
+        finally
+        {
+            File.WriteAllText(scriptPath, original, new UTF8Encoding(false));
+        System.Threading.Thread.Sleep(100);
+        }
+    }
+}
+
+static (int Code, string Output) RunGateScriptCapture(string fileName, string arguments, string workingDirectory)
+{
+    var startInfo = new System.Diagnostics.ProcessStartInfo(fileName, arguments)
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        StandardOutputEncoding = Encoding.UTF8,
+        StandardErrorEncoding = Encoding.UTF8,
+        UseShellExecute = false,
+        WorkingDirectory = workingDirectory,
+    };
+    using var p = System.Diagnostics.Process.Start(startInfo)!;
+    var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+    p.WaitForExit();
+    return (p.ExitCode, output);
 }

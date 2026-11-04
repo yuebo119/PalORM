@@ -16,17 +16,29 @@ Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(f
 Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" });
 
 string? reportPath = null;
+bool selfCheck = false;
 for (int i = 0; i < args.Length; i++)
 {
     if (args[i] == "--report" && i + 1 < args.Length)
     {
         reportPath = args[++i];
     }
+    else if (args[i] == "--self-check")
+    {
+        selfCheck = true;
+    }
     else
     {
-        Console.Error.WriteLine("usage: assert-conformance-contracts.cs [--report <report.json>]");
+        Console.Error.WriteLine("usage: assert-conformance-contracts.cs [--report <report.json>] | --self-check");
         return 2;
     }
+}
+
+// --self-check（2026-11-04，GATE-1）：内嵌夹具自证 ID 提取与断言计数判据——
+// 含两条正确条目的合成源必须提取 2 条 ID 且断言数 ≥1；空断言的条目必须被计数逻辑捕获。
+if (selfCheck)
+{
+    return SelfCheck();
 }
 
 string repoRoot = FindRepoRoot();
@@ -150,6 +162,50 @@ if (failures.Count > 0)
 
 Console.WriteLine("契约覆盖账本一致");
 return 0;
+
+static int SelfCheck()
+{
+    const string goodSource = """
+        var catalog = new[]
+        {
+            new("C-TEST-01", "description", () =>
+            {
+                await Assert.That(1).IsEqualTo(1);
+            }),
+            new("C-TEST-02", "description", () =>
+            {
+                await Assert.That(2).IsEqualTo(2);
+            }),
+        };
+        """;
+    const string emptyAssertSource = """
+        var catalog = new[]
+        {
+            new("C-TEST-01", "description", () => { }),
+        };
+        """;
+
+    var goodIds = ExtractIds(goodSource, "C-");
+    int goodCount = goodIds.Count;
+    bool goodExtracted = goodCount == 2 && goodIds[0] == "C-TEST-01" && goodIds[1] == "C-TEST-02";
+
+    var goodAssertions = CountAssertions(goodSource, "C-").ToList();
+    bool goodAssertionsOk = goodAssertions.All(a => a.Assertions >= 1);
+
+    var emptyAssertions = CountAssertions(emptyAssertSource, "C-").ToList();
+    bool emptyCaught = emptyAssertions.Any(a => a.Assertions < 1);
+
+    Console.WriteLine($"  {(goodExtracted ? "PASS" : "FAIL")} 好源提取 2 条 ID（C-TEST-01/02）");
+    Console.WriteLine($"  {(goodAssertionsOk ? "PASS" : "FAIL")} 好源每条断言数 ≥1");
+    Console.WriteLine($"  {(emptyCaught ? "PASS" : "FAIL")} 空断言条目被捕获（坏夹具）");
+    if (goodExtracted && goodAssertionsOk && emptyCaught)
+    {
+        Console.WriteLine("assert-conformance-contracts self-check: PASS（ID 提取与断言计数判据可失败、不误报）");
+        return 0;
+    }
+    Console.Error.WriteLine("::error::assert-conformance-contracts self-check: FAIL");
+    return 1;
+}
 
 static List<string> ExtractIds(string source, string prefix)
 {
