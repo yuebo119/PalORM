@@ -5,26 +5,99 @@
 // 判定标准是"注入后红 且 还原后绿"，任一不符即 exit 1。注入内容均为硬替换，不用环境变量开关：
 // 源生成器读取环境变量会被 Roslyn RS1035 拦下（分析器禁止读环境变量）。
 //
+// 规则是数据，不是代码（2026-11-04 MUT-1，《测试系统全面优化方案》）：注入点、原片段、
+// 替换片段、目标过滤器、期望契约全部在 bench/baselines/mutation-rules.json。本脚本只做
+// 注入/构建/判定。加规则的流程因此变成「往 JSON 加一条 + 跑 --verify-anchors + 跑该条」，
+// 不需要改脚本。登记了但不能实施的条目（如 D-TX-01/02）落在 registeredNotImplemented，
+// 显式留在表内而不是从表里消失。
+//
 // 规则可指定自己的测试项目（R-D5 的 PALORM054 检测测试在 test/PalORM.SourceGen.Tests）；
-// 未指定时用默认项目 test/PalORM.Integration.Tests。多行片段按工作树实际行尾适配（仓库索引 LF，工作树受
+// 未指定时用 defaultTestProject。多行片段按工作树实际行尾适配（仓库索引 LF，工作树受
 // core.autocrlf 影响可能是 CRLF）。
 //
 // R-C 系列（方案《测试机制重设计方案-2026-11-03》§6.2 降级路径）：变异分（Stryker）自 2026-10-03 起
 // 产出 0 个有效变异，"整体判别力"无基线可比；退一步只证明「契约这一族有判别力」——往产品代码注入
-// 已知缺陷，要求指定契约 ID 的用例报红。期望契约由 Rule.ExpectedContracts 声明：报红名单里没有它，
+// 已知缺陷，要求指定契约 ID 的用例报红。期望契约由规则里的 expectedContracts 声明：报红名单里没有它，
 // 即使退出码非零也判 FAIL（别的原因红了不构成本契约的判别力证据）。
 //
-// 前置条件：工作树必须清洁（脚本会用 git checkout 还原被改文件，脏树会丢改动）。
+// 前置条件（执行模式）：工作树必须清洁（脚本会用 git checkout 还原被改文件，脏树会丢改动）。
 // 用法：dotnet run --file scripts/conformance-mutation-replay.cs [-- --rule <ID 前缀>]
-//   --rule R-C 只跑契约族规则（迭代时省去历史规则的重建）；省略则跑全部。
+//       dotnet run --file scripts/conformance-mutation-replay.cs -- --verify-anchors
+//       dotnet run --file scripts/conformance-mutation-replay.cs -- --list
+//   --rule R-C        只跑契约族规则（迭代时省去历史规则的重建）
+//   --verify-anchors  只核对每条规则的 Original 片段能否在当前源码里解析（秒级，改源码后先跑这个）
+//   --list            打印规则清单（ID / 文件 / 过滤器 / 期望契约）
 // 输出末尾带 Markdown 台账（规则 / 注入点 / 报红测试数 / 报红测试名），供总报告登记。
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-
-const string DefaultTestProject = "test/PalORM.Integration.Tests";
 
 string repoRoot = FindRepoRoot();
 string dotnet = ResolveDotnet();
+
+string rulesPath = Path.Combine(repoRoot, "bench", "baselines", "mutation-rules.json");
+if (!File.Exists(rulesPath))
+{
+    Console.Error.WriteLine($"::error::规则表不存在：{rulesPath}");
+    return 2;
+}
+
+JsonNode document = JsonNode.Parse(File.ReadAllText(rulesPath))!;
+string defaultProject = document["defaultTestProject"]?.GetValue<string>() ?? "test/PalORM.Integration.Tests";
+Rule[] rules = [.. document["rules"]!.AsArray().Select(ParseRule)];
+JsonArray? registered = document["registeredNotImplemented"] as JsonArray;
+int registeredCount = registered?.Count ?? 0;
+
+// 规则 ID 唯一性是数据表的基本约束：重复 ID 会让 --rule 前缀与台账都失去指向
+var duplicateIds = rules.GroupBy(r => r.Id, StringComparer.OrdinalIgnoreCase)
+    .Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+if (duplicateIds.Count > 0)
+{
+    Console.Error.WriteLine($"::error::规则表存在重复 ID：{string.Join(", ", duplicateIds)}");
+    return 2;
+}
+
+string? rulePrefix = null;
+bool verifyAnchors = false;
+bool listOnly = false;
+for (int i = 0; i < args.Length; i++)
+{
+    switch (args[i])
+    {
+        case "--rule" when i + 1 < args.Length:
+            rulePrefix = args[++i];
+            break;
+        case "--verify-anchors":
+            verifyAnchors = true;
+            break;
+        case "--list":
+            listOnly = true;
+            break;
+        default:
+            Console.Error.WriteLine($"未知参数：{args[i]}（可用：--rule <前缀> / --verify-anchors / --list）");
+            return 2;
+    }
+}
+
+if (listOnly)
+{
+    Console.WriteLine($"规则表：{rulesPath}");
+    Console.WriteLine($"共 {rules.Length} 条（R- 族 {rules.Count(r => r.Id.StartsWith("R-", StringComparison.Ordinal))} 条）；登记不实施 {registeredCount} 条");
+    Console.WriteLine();
+    Console.WriteLine("| 规则 | 文件 | 目标过滤器 | 期望契约 |");
+    Console.WriteLine("|------|------|------------|----------|");
+    foreach (Rule rule in rules)
+    {
+        string expected = rule.ExpectedContracts is { Length: > 0 } ids ? string.Join(", ", ids) : "—";
+        Console.WriteLine($"| {rule.Id} | `{rule.File}` | `{rule.Filter}` | {expected} |");
+    }
+    return 0;
+}
+
+if (verifyAnchors)
+{
+    return VerifyAnchors(repoRoot, rules);
+}
 
 (List<(string Commit, string Subject)> Head, string Dirty) = (GitLog(repoRoot), GitStatus(repoRoot));
 if (Dirty.Length > 0)
@@ -36,324 +109,9 @@ if (Dirty.Length > 0)
 
 Console.WriteLine($"仓库根: {repoRoot}");
 Console.WriteLine($"dotnet: {dotnet}");
+Console.WriteLine($"规则表: {rulesPath}（{rules.Length} 条，登记不实施 {registeredCount} 条）");
 Console.WriteLine($"基线提交: {(Head.Count > 0 ? Head[0].Commit[..8] + " " + Head[0].Subject : "(none)")}");
 Console.WriteLine();
-
-// --rule <ID 前缀>：只跑指定前缀的规则（迭代契约族规则时不必重跑历史规则）
-string? rulePrefix = null;
-for (int i = 0; i + 1 < args.Length; i++)
-{
-    if (args[i] == "--rule") rulePrefix = args[i + 1];
-}
-
-// D1-D7 七条规则对应已修复的历史产品缺陷（《测试体系增强方案-2026-10-30》§4.2）：每条有真实缺陷背书，
-// 注入点一行可换、可观测量（哪个期望值会变）在 Note 里写明。
-var rules = new Rule[]
-{
-    new("R1a", "src/PalORM.Core/DataSession.Crud.cs",
-        "if (!ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)",
-        "if ((features & EntityFeatures.SoftDelete) != 0)",
-        "/*/*/SoftDeletePartitionTests/*",
-        "From<T> 的软删过滤不再响应 IgnoreFilters"),
-    new("R1b", "src/PalORM.Core/DataSession.cs",
-        "bool hasSoftDelete = !_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0;",
-        "bool hasSoftDelete = (features & EntityFeatures.SoftDelete) != 0;",
-        "/*/*/SoftDeletePartitionTests/*",
-        "GetAll/Count 的第二注入路径同样失效"),
-    new("R2", "src/PalORM.SourceGen/RowFactoryEmitter.cs",
-        "string readCall = GetReadExpression(col, ordinal, model.GeneratedTypeSuffix);",
-        "string readCall = GetReadExpression(col, ordinal < 2 ? 1 - ordinal : ordinal, model.GeneratedTypeSuffix);",
-        "/*/*/DualSideComparisonTests/*",
-        "物化列序前两位互换（RowFactory 序号漂移）"),
-    new("R4", "src/PalORM.Core/QueryBuilder.cs",
-        "return hasOr && (start > 0 || end < clauses.Count);",
-        "return hasOr && (start > 0 || end < clauses.Count) && start < 0;",
-        "/*/*/IncidentFilterPrecedenceTests/*",
-        "AND 组补括号回退（C16 同源）"),
-
-    // ── D1-D7 历史缺陷回放（2026-10-30 补齐）──────────────────────────────
-    new("R-D1", "src/PalORM.SourceGen/MigrationEmitter.cs",
-        "SqlGenerationDialect.PostgreSql => \"TIMESTAMPTZ\",",
-        "SqlGenerationDialect.PostgreSql => \"TIMESTAMP\",",
-        "/*/*/TimeKindMatrixTests/PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds",
-        "D1 PG 时间列型 TIMESTAMPTZ→TIMESTAMP（两处映射同时命中）；"
-        + "可观测量：DateTime 读回 Kind=Unspecified，写回抛 ArgumentException"),
-    new("R-D2", "src/PalORM.Core/DataSession_Bulk.cs",
-        "BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);",
-        "BackfillGeneratedId(backfill!, entities[start + i], returnedIds[0]);",
-        "/*/*/BulkInsertReturningTests/*",
-        "D2 批量回填把首值写给所有行；可观测量：实体 Id 与库内 Id 逐行比对失败"),
-    new("R-D3", "src/PalORM.Core/QueryBuilder.cs",
-        "if (_dialect != SqlDialect.Sqlite) return;",
-        "if (_dialect == SqlDialect.Sqlite) return;",
-        "/*/*/BoundaryContractTests/*",
-        "D3 SQLite 行锁放行（条件反号）；可观测量：ForUpdate/ForShare 不再抛 NotSupportedException"),
-    // 2026-11-03 重锚：产品把 `catch (Exception ex) when (...)` 重构为
-    // `NormalizeOnce(ex, ...) is { } mapped` 的单一真源形态（D4/D7 共用）。
-    // 注入点随之迁移到 NormalizeOnce 内的内层超时解包分支——删掉它，D4 语义失效而
-    // D7 的耗时判定分支保留（与原规则意图逐位一致）。
-    new("R-D4", "src/PalORM.Core/CommandTimeoutNormalizer.cs",
-        "        if (ex.InnerException is TimeoutException timeout)\n"
-        + "            return new TimeoutException(timeout.Message, ex);\n",
-        "",
-        "/*/*/ErrorContractTests/*",
-        "D4 超时不解包（删 NormalizeOnce 的内层 TimeoutException 解包，保留 D7 耗时判定）；"
-        + "可观测量：PG 命令超时异常类型不再是 TimeoutException"),
-    // 2026-11-03 重锚：`"ConcurrencyCheck"` 字面量已改为 PalORMAttributeNames 常量。
-    new("R-D5", "src/PalORM.SourceGen/PalORMAnalyzer.cs",
-        "        bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)\n"
-        + "            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck)));\n"
-        + "        if (hasConcurrency)\n"
-        + "        {\n"
-        + "            ctx.ReportDiagnostic(Diagnostic.Create(\n"
-        + "                SaveWithConcurrencyToken, invocation.GetLocation(), entityType.Name));\n"
-        + "        }\n",
-        "        // 注入：PALORM054 检测停用（回放 R-D5）\n"
-        + "        _ = entityType;\n",
-        "/*/*/AnalyzerDiagnosticsTests/*",
-        "D5 SaveAsync 无编译期拒绝（PALORM054 不再报告）；"
-        + "可观测量：期望诊断 PALORM054 缺席",
-        "test/PalORM.SourceGen.Tests"),
-    new("R-D6", "src/PalORM.Core/QueryBuilderExtensions.cs",
-        "        if (paged._skip.HasValue)\n"
-        + "            throw new InvalidOperationException(\n"
-        + "                \"ToPageAsync uses keyset pagination with lastValue as the continuation anchor, so a Skip() on the builder \"\n"
-        + "                + \"would be silently ignored. Remove Skip(), or use ToListAsync with Skip/Take for OFFSET pagination.\");\n",
-        "",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "D6 ToPageAsync 放行 Skip（删构建期拒绝）；可观测量：Skip()+ToPageAsync 不再抛 InvalidOperationException。"
-        + "2026-11-03 重锚：C-PAGE-01 已并入 D-PAGE-01（方案 §5.2），原 CapabilityContractTests 过滤器下已无用例",
-        null, ["D-PAGE-01"]),
-    new("R-D7", "src/PalORM.Core/CommandTimeoutNormalizer.cs",
-        "=> dialect == SqlDialect.MySql && timeoutSeconds > 0;",
-        "=> false;",
-        "/*/*/ErrorContractTests/*",
-        "D7 MySQL 超时未归一（耗时判定恒关）；可观测量：超时返回部分结果被当成功"),
-
-    // ── R-C：契约族回放（方案 §6.2 降级路径，2026-11-03）──────────────────
-    // 每条规则注入一个产品缺陷，要求「方言契约目录」里指定 ID 的用例报红——证明该契约不是
-    // 恒真断言。过滤器覆盖 20 条 SQLite 契约（全部内存库，约 0.6 秒），期望契约由
-    // ExpectedContracts 声明：报红名单缺它即 FAIL（别的原因红了不构成本契约的判别力证据）。
-    new("R-C01", "src/PalORM.Core/DataSession_Bulk.cs",
-        "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n"
-        + "        }\n"
-        + "\n"
-        + "        return total;\n"
-        + "    }\n"
-        + "\n"
-        + "    /// <summary>json_each 形态的 DELETE",
-        "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n"
-        + "        }\n"
-        + "\n"
-        + "        return total - 1;\n"
-        + "    }\n"
-        + "\n"
-        + "    /// <summary>json_each 形态的 DELETE",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "SQLite 批量删除（json_each 形态）少删一行：返回数恒比实际少 1",
-        null, ["D-BULKDEL-01"]),
-    new("R-C02", "src/PalORM.Core/RowPreparedBulkInsert.cs",
-        "                    valuesBinder(pool, entity, 0);\n"
-        + "                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);",
-        "                    if (ReferenceEquals(entity, entities[entities.Count - 1])) break;\n"
-        + "                    valuesBinder(pool, entity, 0);\n"
-        + "                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "SQLite 行预编译批量插入漏掉末行（影响行数一并少 1）",
-        null, ["D-BULKIN-01"]),
-    new("R-C03", "src/PalORM.Core/DataSession.Crud.cs",
-        "            backfill(entity, id);",
-        "            backfill(entity, 0);",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "自增主键回填写入 0（实体 Id 保持默认值）",
-        null, ["D-INSERT-02"]),
-    new("R-C04", "src/PalORM.Core/DataSession.Crud.cs",
-        "        if (plan.IncrementVersion is null)\n"
-        + "            return affectedRows;",
-        "        if (plan.IncrementVersion is null)\n"
-        + "            return affectedRows == 0 ? 1 : affectedRows;",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "UpdateAsync 未命中行也报 1（受影响行数虚报）",
-        null, ["D-UPDATE-01"]),
-    new("R-C05", "src/PalORM.Core/DataSession.PartialUpdate.cs",
-        "            selected.Add(index);",
-        "            for (int all = 0; all < plan.UpdateColumns.Count; all++) selected.Add(all);",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "部分更新忽略列选择器，改写全部列",
-        null, ["D-UPDCOLS-01"]),
-    new("R-C06", "src/PalORM.Core/DataSession.Crud.cs",
-        "WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}\";",
-        "WHERE {TProvider.QuoteIdentifier(pkColumn)} <> @p0{filter}\";",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "GetAsync 主键谓词反号（命中行查不到、未命中行反而查出）",
-        null, ["D-GET-01"]),
-    new("R-C07", "src/PalORM.Core/QueryBuilder.cs",
-        "        builder.Append(\"WHERE \");",
-        "        builder.Append(\"WHERE 1 = 1 OR \");",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "用户 WHERE 谓词被恒真式短路（过滤不生效）",
-        null, ["D-QUERY-01"]),
-    new("R-C08", "src/PalORM.Core/QueryBuilderExtensions.cs",
-        "                string operation = descending ? \"<\" : \">\";",
-        "                string operation = descending ? \"<\" : \">=\";",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "keyset 续页锚点由「严格大于」改为「大于等于」（升序页间重复一行）",
-        null, ["D-PAGE-01"]),
-    new("R-C09", "src/PalORM.Core/DataSession.Query.cs",
-        "        object? r = await ExecuteAggregateScalarAsync<T>(\"AVG\", expression, ct).ConfigureAwait(false);",
-        "        object? r = await ExecuteAggregateScalarAsync<T>(\"SUM\", expression, ct).ConfigureAwait(false);",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "AvgAsync 实际执行 SUM（未按行数取平均）",
-        null, ["D-AGG-01"]),
-    new("R-C10", "src/PalORM.SourceGen/CommandFactoryEmitter.cs",
-        "                $\"{column} = excluded.{column}\"));",
-        "                $\"{column} = {column}\"));",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "UPSERT 冲突分支 SET 自赋值（已存在行不更新）",
-        null, ["D-SAVE-02"]),
-
-    // ── R-C11..C20：能力契约目录（C-*，SQLite-only 目录）─────────────────
-    // 与 R-C01..C10 同判定口径（期望契约 ID 必须出现在报红名单里）。此前该目录 10 条
-    // 一条判别力证据都没有——方言契约目录覆盖了 CRUD/批量/分页/聚合，能力契约目录覆盖的
-    // 是 JOIN / CTE / GROUP BY+HAVING / 窗口 / 多结果集 / Savepoint / 存储过程校验 /
-    // 逃生舱这些**只此一处**的产品面，缺口比方言目录更大。
-    new("R-C11", "src/PalORM.Core/QueryBuilder.cs",
-        "        => AddJoin<TJoin>(\"INNER\", onClause);",
-        "        => AddJoin<TJoin>(\"LEFT\", onClause);",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "InnerJoin 发出 LEFT JOIN（不匹配行也被保留）",
-        null, ["C-JOIN-01"]),
-    new("R-C12", "src/PalORM.Core/QueryBuilder.cs",
-        "        => AddJoin<TJoin>(\"LEFT\", onClause);",
-        "        => AddJoin<TJoin>(\"INNER\", onClause);",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "LeftJoin 发出 INNER JOIN（左表未匹配行丢失）",
-        null, ["C-JOIN-02"]),
-    new("R-C13", "src/PalORM.Core/QueryBuilder.cs",
-        "        _cteName = cteName;",
-        "        _cteName = null;",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "With 登记 CTE 后不切换 FROM 源（查询仍读基表，CTE 过滤失效）",
-        null, ["C-CTE-01"]),
-    new("R-C14", "src/PalORM.Core/QueryBuilder.cs",
-        "            HasClause(QueryClauseKind.Having) ? \"AND \" : \"HAVING \", clause);",
-        "            HasClause(QueryClauseKind.Having) ? \"AND \" : \"HAVING 1 = 1 OR \", clause);",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "Having 前缀掺入恒真项（聚合过滤不再收窄分组）",
-        null, ["C-GROUP-01"]),
-    new("R-C15", "src/PalORM.Core/QueryBuilder.cs",
-        "        AddClause(QueryClauseKind.Window, $\"{func} OVER ({over})\");",
-        "        AddClause(QueryClauseKind.DefaultFilter, $\"{func} OVER ({over})\");",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "窗口子句被误当过滤条件（进 WHERE 而非 SELECT 列表）",
-        null, ["C-WINDOW-01"]),
-    new("R-C16", "src/PalORM.Core/DataSession_Bulk.cs",
-        "            valuesBinder(pool, entities[i], 0);",
-        "            valuesBinder(pool, entities[0], 0);",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "批量更新每行都写首行的值（R-D2 同族，命中逐条池化路径）",
-        null, ["C-BULKUP-02"]),
-    new("R-C17", "src/PalORM.Core/DataSession.Transactions.cs",
-        "        cmd.CommandText = $\"ROLLBACK TO SAVEPOINT {TProvider.QuoteIdentifier(name)}\";",
-        "        cmd.CommandText = $\"RELEASE SAVEPOINT {TProvider.QuoteIdentifier(name)}\";",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "回滚到保存点被实现成释放保存点（保存点后的写入未撤销）",
-        null, ["C-TX-03"]),
-    new("R-C18", "src/PalORM.Core/GridReader.cs",
-        "            _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);\n"
-        + "            return list;",
-        "            _hasResultSet = false;\n"
-        + "            return list;",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "读完第一个结果集后不推进到下一个（第二个结果集读不到）",
-        null, ["C-MULTI-01"]),
-    new("R-C19", "src/PalORM.Core/StoredProcBuilder.cs",
-        "                if (!char.IsLetterOrDigit(segment[c]) && segment[c] != '_')",
-        "                if (!char.IsLetterOrDigit(segment[c]) && segment[c] != '_' && segment[c] != ' ' && segment[c] != ';')",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "存储过程名白名单掺入空格与分号（`bad name; DROP` 放行）",
-        null, ["C-SPROC-01"]),
-    new("R-C20", "src/PalORM.Core/DataSession.Schema.cs",
-        "        MarkConnectionStateUnknownForRawSql();\n        return _conn;",
-        "        MarkConnectionStateUnknownForRawSql();\n        return null!;",
-        "/*/*/CapabilityContractTests/CapabilityContract_Holds",
-        "逃生舱返回 null 连接",
-        null, ["C-RAW-01"]),
-
-    // ── R-C21..C27：方言契约目录剩余 10 条 ─────────────────────────────
-    // 只挑有"单行可换、可观测量明确"的 7 条；D-TX-01/D-TX-02（显式事务提交/回滚可见性）
-    // 与 D-DELETE-01（物理删除）需要改动事务骨架，单行注入会连带打红同族多条契约，
-    // 达不到"定位到该契约"的判别力要求，故留空并在 6.2 登记。
-    new("R-C21", "src/PalORM.Core/DataSession.Crud.cs",
-        "                    return entity;\n"
-        + "                }\n"
-        + "                return TProvider.SupportsReturningClause",
-        "                    return new T();\n"
-        + "                }\n"
-        + "                return TProvider.SupportsReturningClause",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "显式主键插入不再返回调用方实例（返回新物化对象）",
-        null, ["D-INSERT-01"]),
-    new("R-C22", "src/PalORM.Core/DataSession.Crud.cs",
-        "        delCmd.CommandText = deleteCommandText;",
-        "        delCmd.CommandText = \"SELECT 1\";",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "物理删除语句退化为查询（DELETE 未执行，行仍在）",
-        null, ["D-DELETE-01"]),
-    new("R-C23", "src/PalORM.Core/DataSession.Crud.cs",
-        "        bool isSoftDelete = (deleteInfo.Features & EntityFeatures.SoftDelete) != 0;",
-        "        bool isSoftDelete = (deleteInfo.Features & EntityFeatures.TenantAware) != 0;",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "软删判定看错特性位（[SoftDelete] 实体走物理删除）",
-        null, ["D-DELETE-02"]),
-    new("R-C24", "src/PalORM.Core/DataSession.cs",
-        "        string softDelete = hasSoftDelete ? $\"{TProvider.QuoteIdentifier(\"deleted_at\")} IS NULL\" : \"\";",
-        "        string softDelete = hasSoftDelete ? $\"{TProvider.QuoteIdentifier(\"deleted_at\")} IS NOT NULL\" : \"\";",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "软删默认过滤条件反号（只查出已删行）",
-        null, ["D-GETALL-01"]),
-    new("R-C25", "src/PalORM.Core/DataSession.Query.cs",
-        "        if (result is T typed) return typed;",
-        "        if (result is T) return default;",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "标量归一丢弃实际值（恒返回 default）",
-        null, ["D-SCALAR-01"]),
-    new("R-C26", "src/PalORM.Core/DataSession_Bulk.cs",
-        "        for (int i = 0; i < entities.Count; i++)\n"
-        + "        {\n"
-        + "            // 只写 Value——零 CreateParameter（P0-1 的核心）",
-        "        for (int i = 0; i < entities.Count - 1; i++)\n"
-        + "        {\n"
-        + "            // 只写 Value——零 CreateParameter（P0-1 的核心）",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "逐条池化批量更新漏掉末行（R-C02 的 UPDATE 侧同型）",
-        null, ["D-BULKUP-01"]),
-    new("R-C27", "src/PalORM.Core/DataSession_Bulk.cs",
-        "                    if (mergeMetadata.HasDefaultKey(entity))",
-        "                    if (!mergeMetadata.HasDefaultKey(entity))",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "BulkMerge 把已存在键当新增插入（主键冲突 / 不更新）",
-        null, ["D-BULKMERGE-01"]),
-
-    // R-C28：SaveAsync 的路由判据 HasDefaultKey（生成器发射体）。SaveCoreAsync 以
-    // HasDefaultKey(entity) 分流「默认键→InsertCoreAsync / 非默认键→UPSERT」——判据恒
-    // true 时 UPSERT 分支永远不进入。D-SAVE-01（主键 1 不存在，走 UPSERT 冲突插入）
-    // 与 D-SAVE-02（主键已存在走 UPSERT 更新）双双失去载体；此处声明 D-SAVE-02 为
-    // 期望红（它断言"不新增行"，改走 Insert 分支会插入失败或重复行，报错最直接）。
-    new("R-C28", "src/PalORM.SourceGen/CommandFactoryEmitter.cs",
-        "        sb.AppendLine($\"        return global::System.Collections.Generic.EqualityComparer<{pkColumn.ClrTypeName}>.Default.Equals(entity.{pkColumn.EscapedPropertyName}, default);\");",
-        "        sb.AppendLine(\"        return true;\");",
-        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "HasDefaultKey 恒 true：SaveAsync 的 UPSERT 分支永远不进入",
-        null, ["D-SAVE-02"]),
-
-    // R-C29/R-C30（登记不实施）：D-TX-01 / D-TX-02 断言「显式事务 Commit/Rollback 后的
-    // 行可见性」。两条契约的 CommitAsync/RollbackAsync 都由调用方直接驱动
-    // DbTransaction（contract 体里 transaction.CommitAsync()），产品代码中不存在
-    // 承载该语义的单行可注入点——BeginTransactionAsync 只创建事务，提交/回滚行为
-    // 由 ADO.NET 驱动保证。契约的判别力依赖真库行为，不是本回放机制的适用面
-    //（同族可注入的 Savepoint/RollbackTo 已由 R-C17（C-TX-03）覆盖）。
-};
 
 var selected = rulePrefix is null
     ? rules
@@ -361,11 +119,10 @@ var selected = rulePrefix is null
 if (rulePrefix is not null)
     Console.WriteLine($"规则过滤 --rule {rulePrefix}：{selected.Length}/{rules.Length} 条\n");
 
-
 var results = new List<RuleResult>();
 foreach (Rule rule in selected)
 {
-    string project = rule.TestProject ?? DefaultTestProject;
+    string project = rule.TestProject ?? defaultProject;
     string[] expected = rule.ExpectedContracts ?? [];
     Console.WriteLine($"── {rule.Id}: {rule.Note}");
     Console.WriteLine($"   文件 {rule.File}");
@@ -374,9 +131,8 @@ foreach (Rule rule in selected)
 
     string absolutePath = Path.Combine(repoRoot, rule.File);
     string original = File.ReadAllText(absolutePath);
-    bool crlf = original.Contains("\r\n", StringComparison.Ordinal);
-    string matchText = crlf ? rule.Original.Replace("\n", "\r\n", StringComparison.Ordinal) : rule.Original;
-    string mutation = crlf ? rule.Mutated.Replace("\n", "\r\n", StringComparison.Ordinal) : rule.Mutated;
+    string matchText = AdaptLineEndings(rule.Original, original);
+    string mutation = AdaptLineEndings(rule.Mutated, original);
     if (!original.Contains(matchText, StringComparison.Ordinal))
     {
         Console.WriteLine("   SKIP 原片段未找到（源码可能已改动），跳过该规则");
@@ -462,6 +218,56 @@ if (skipped > 0)
     }
 }
 return failed == 0 ? 0 : 1;
+
+// ── 锚点自查（MUT-1）：不注入、不构建，只核对 Original 片段能否解析 ──
+// 存在的理由：规则数据化后，源码重构会让片段失配，而全量回放要跑几十分钟才暴露出来。
+// 这个模式把"规则是否还有效"的成本压到秒级，改产品代码后先跑它。
+static int VerifyAnchors(string repoRoot, Rule[] rules)
+{
+    var missing = new List<string>();
+    foreach (Rule rule in rules)
+    {
+        string absolute = Path.Combine(repoRoot, rule.File);
+        if (!File.Exists(absolute))
+        {
+            missing.Add($"{rule.Id}: 文件不存在 {rule.File}");
+            continue;
+        }
+        string original = File.ReadAllText(absolute);
+        if (!original.Contains(AdaptLineEndings(rule.Original, original), StringComparison.Ordinal))
+        {
+            missing.Add($"{rule.Id}: 原片段未找到 {rule.File}");
+        }
+    }
+
+    int rFamily = rules.Count(r => r.Id.StartsWith("R-", StringComparison.Ordinal));
+    Console.WriteLine($"变异规则锚点自查：{rules.Length} 条（R- 族 {rFamily} 条 + 历史 {rules.Length - rFamily} 条）");
+    if (missing.Count == 0)
+    {
+        Console.WriteLine($"锚点就绪 {rules.Length}/{rules.Length}");
+        return 0;
+    }
+    foreach (string item in missing) Console.Error.WriteLine($"::error::{item}");
+    Console.Error.WriteLine($"锚点失配 {missing.Count}/{rules.Length}——按上面的文件与规则 ID 重锚 Original 片段");
+    return 1;
+}
+
+static string AdaptLineEndings(string text, string sample)
+    => sample.Contains("\r\n", StringComparison.Ordinal) ? text.Replace("\n", "\r\n", StringComparison.Ordinal) : text;
+
+static Rule ParseRule(JsonNode? node)
+{
+    JsonArray? expected = node?["expectedContracts"] as JsonArray;
+    return new Rule(
+        node?["id"]!.GetValue<string>() ?? "",
+        node?["file"]!.GetValue<string>() ?? "",
+        node?["original"]!.GetValue<string>() ?? "",
+        node?["mutated"]!.GetValue<string>() ?? "",
+        node?["filter"]!.GetValue<string>() ?? "",
+        node?["note"]!.GetValue<string>() ?? "",
+        node?["testProject"]?.GetValue<string>(),
+        expected is null ? null : [.. expected.Select(x => x!.GetValue<string>())]);
+}
 
 static string Escape(string text)
     => text.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)

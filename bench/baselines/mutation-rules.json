@@ -1,0 +1,360 @@
+{
+  "_comment": "一致性套件产品侧变异回放规则表（测试系统全面优化方案 2026-11-04 · MUT-1）。脚本 scripts/conformance-mutation-replay.cs 只负责注入/构建/判定，规则内容全部在本文件。字段：id / file / original / mutated / filter / note / testProject（可选，缺省用 defaultTestProject）/ expectedContracts（可选，报红名单必须命中这些契约 ID）。改写规则只改本文件，不改脚本。条目增删必须有对应的判别力理由：orphan 条目（注入片段失配）会以 SKIP 形式长期挂着，用 --verify-anchors 在改动源码后先自查。",
+  "defaultTestProject": "test/PalORM.Integration.Tests",
+  "registeredNotImplemented": [
+    {
+      "id": "R-C29",
+      "contract": "D-TX-01",
+      "reason": "D-TX-01 断言显式事务 Commit 后的行可见性。CommitAsync 由调用方直接驱动 DbTransaction（契约体内 transaction.CommitAsync()），产品代码中不存在承载该语义的单行可注入点；契约判别力依赖真库 ADO.NET 行为。"
+    },
+    {
+      "id": "R-C30",
+      "contract": "D-TX-02",
+      "reason": "D-TX-02 断言显式事务 Rollback 后的行不可见。同 R-C29：回滚由调用方直驱，无产品注入点。同族可注入的保存点回滚已由 R-C17（C-TX-03）覆盖。"
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1a",
+      "file": "src/PalORM.Core/DataSession.Crud.cs",
+      "original": "if (!ignoreFilters && (features & EntityFeatures.SoftDelete) != 0)",
+      "mutated": "if ((features & EntityFeatures.SoftDelete) != 0)",
+      "filter": "/*/*/SoftDeletePartitionTests/*",
+      "note": "From<T> 的软删过滤不再响应 IgnoreFilters"
+    },
+    {
+      "id": "R1b",
+      "file": "src/PalORM.Core/DataSession.cs",
+      "original": "bool hasSoftDelete = !_ignoreFilters && (features & EntityFeatures.SoftDelete) != 0;",
+      "mutated": "bool hasSoftDelete = (features & EntityFeatures.SoftDelete) != 0;",
+      "filter": "/*/*/SoftDeletePartitionTests/*",
+      "note": "GetAll/Count 的第二注入路径同样失效"
+    },
+    {
+      "id": "R2",
+      "file": "src/PalORM.SourceGen/RowFactoryEmitter.cs",
+      "original": "string readCall = GetReadExpression(col, ordinal, model.GeneratedTypeSuffix);",
+      "mutated": "string readCall = GetReadExpression(col, ordinal < 2 ? 1 - ordinal : ordinal, model.GeneratedTypeSuffix);",
+      "filter": "/*/*/DualSideComparisonTests/*",
+      "note": "物化列序前两位互换（RowFactory 序号漂移）"
+    },
+    {
+      "id": "R4",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "return hasOr && (start > 0 || end < clauses.Count);",
+      "mutated": "return hasOr && (start > 0 || end < clauses.Count) && start < 0;",
+      "filter": "/*/*/IncidentFilterPrecedenceTests/*",
+      "note": "AND 组补括号回退（C16 同源）"
+    },
+    {
+      "id": "R-D1",
+      "file": "src/PalORM.SourceGen/MigrationEmitter.cs",
+      "original": "SqlGenerationDialect.PostgreSql => \"TIMESTAMPTZ\",",
+      "mutated": "SqlGenerationDialect.PostgreSql => \"TIMESTAMP\",",
+      "filter": "/*/*/TimeKindMatrixTests/PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds",
+      "note": "D1 PG 时间列型 TIMESTAMPTZ→TIMESTAMP（两处映射同时命中）；可观测量：DateTime 读回 Kind=Unspecified，写回抛 ArgumentException"
+    },
+    {
+      "id": "R-D2",
+      "file": "src/PalORM.Core/DataSession_Bulk.cs",
+      "original": "BackfillGeneratedId(backfill!, entities[start + i], returnedIds[i]);",
+      "mutated": "BackfillGeneratedId(backfill!, entities[start + i], returnedIds[0]);",
+      "filter": "/*/*/BulkInsertReturningTests/*",
+      "note": "D2 批量回填把首值写给所有行；可观测量：实体 Id 与库内 Id 逐行比对失败"
+    },
+    {
+      "id": "R-D3",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "if (_dialect != SqlDialect.Sqlite) return;",
+      "mutated": "if (_dialect == SqlDialect.Sqlite) return;",
+      "filter": "/*/*/BoundaryContractTests/*",
+      "note": "D3 SQLite 行锁放行（条件反号）；可观测量：ForUpdate/ForShare 不再抛 NotSupportedException"
+    },
+    {
+      "id": "R-D4",
+      "file": "src/PalORM.Core/CommandTimeoutNormalizer.cs",
+      "original": "        if (ex.InnerException is TimeoutException timeout)\n            return new TimeoutException(timeout.Message, ex);\n",
+      "mutated": "",
+      "filter": "/*/*/ErrorContractTests/*",
+      "note": "D4 超时不解包（删 NormalizeOnce 的内层 TimeoutException 解包，保留 D7 耗时判定）；可观测量：PG 命令超时异常类型不再是 TimeoutException"
+    },
+    {
+      "id": "R-D5",
+      "file": "src/PalORM.SourceGen/PalORMAnalyzer.cs",
+      "original": "        bool hasConcurrency = SourceGenerationValidation.EnumerateMappedProperties(entityType)\n            .Any(p => p.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck)));\n        if (hasConcurrency)\n        {\n            ctx.ReportDiagnostic(Diagnostic.Create(\n                SaveWithConcurrencyToken, invocation.GetLocation(), entityType.Name));\n        }\n",
+      "mutated": "        // 注入：PALORM054 检测停用（回放 R-D5）\n        _ = entityType;\n",
+      "filter": "/*/*/AnalyzerDiagnosticsTests/*",
+      "note": "D5 SaveAsync 无编译期拒绝（PALORM054 不再报告）；可观测量：期望诊断 PALORM054 缺席",
+      "testProject": "test/PalORM.SourceGen.Tests"
+    },
+    {
+      "id": "R-D6",
+      "file": "src/PalORM.Core/QueryBuilderExtensions.cs",
+      "original": "        if (paged._skip.HasValue)\n            throw new InvalidOperationException(\n                \"ToPageAsync uses keyset pagination with lastValue as the continuation anchor, so a Skip() on the builder \"\n                + \"would be silently ignored. Remove Skip(), or use ToListAsync with Skip/Take for OFFSET pagination.\");\n",
+      "mutated": "",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "D6 ToPageAsync 放行 Skip（删构建期拒绝）；可观测量：Skip()+ToPageAsync 不再抛 InvalidOperationException。2026-11-03 重锚：C-PAGE-01 已并入 D-PAGE-01（方案 §5.2），原 CapabilityContractTests 过滤器下已无用例",
+      "expectedContracts": ["D-PAGE-01"]
+    },
+    {
+      "id": "R-D7",
+      "file": "src/PalORM.Core/CommandTimeoutNormalizer.cs",
+      "original": "=> dialect == SqlDialect.MySql && timeoutSeconds > 0;",
+      "mutated": "=> false;",
+      "filter": "/*/*/ErrorContractTests/*",
+      "note": "D7 MySQL 超时未归一（耗时判定恒关）；可观测量：超时返回部分结果被当成功"
+    },
+    {
+      "id": "R-C01",
+      "file": "src/PalORM.Core/DataSession_Bulk.cs",
+      "original": "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n        }\n\n        return total;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
+      "mutated": "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n        }\n\n        return total - 1;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "SQLite 批量删除（json_each 形态）少删一行：返回数恒比实际少 1",
+      "expectedContracts": ["D-BULKDEL-01"]
+    },
+    {
+      "id": "R-C02",
+      "file": "src/PalORM.Core/RowPreparedBulkInsert.cs",
+      "original": "                    valuesBinder(pool, entity, 0);\n                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);",
+      "mutated": "                    if (ReferenceEquals(entity, entities[entities.Count - 1])) break;\n                    valuesBinder(pool, entity, 0);\n                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "SQLite 行预编译批量插入漏掉末行（影响行数一并少 1）",
+      "expectedContracts": ["D-BULKIN-01"]
+    },
+    {
+      "id": "R-C03",
+      "file": "src/PalORM.Core/DataSession.Crud.cs",
+      "original": "            backfill(entity, id);",
+      "mutated": "            backfill(entity, 0);",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "自增主键回填写入 0（实体 Id 保持默认值）",
+      "expectedContracts": ["D-INSERT-02"]
+    },
+    {
+      "id": "R-C04",
+      "file": "src/PalORM.Core/DataSession.Crud.cs",
+      "original": "        if (plan.IncrementVersion is null)\n            return affectedRows;",
+      "mutated": "        if (plan.IncrementVersion is null)\n            return affectedRows == 0 ? 1 : affectedRows;",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "UpdateAsync 未命中行也报 1（受影响行数虚报）",
+      "expectedContracts": ["D-UPDATE-01"]
+    },
+    {
+      "id": "R-C05",
+      "file": "src/PalORM.Core/DataSession.PartialUpdate.cs",
+      "original": "            selected.Add(index);",
+      "mutated": "            for (int all = 0; all < plan.UpdateColumns.Count; all++) selected.Add(all);",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "部分更新忽略列选择器，改写全部列",
+      "expectedContracts": ["D-UPDCOLS-01"]
+    },
+    {
+      "id": "R-C06",
+      "file": "src/PalORM.Core/DataSession.Crud.cs",
+      "original": "WHERE {TProvider.QuoteIdentifier(pkColumn)} = @p0{filter}\";",
+      "mutated": "WHERE {TProvider.QuoteIdentifier(pkColumn)} <> @p0{filter}\";",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "GetAsync 主键谓词反号（命中行查不到、未命中行反而查出）",
+      "expectedContracts": ["D-GET-01"]
+    },
+    {
+      "id": "R-C07",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "        builder.Append(\"WHERE \");",
+      "mutated": "        builder.Append(\"WHERE 1 = 1 OR \");",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "用户 WHERE 谓词被恒真式短路（过滤不生效）",
+      "expectedContracts": ["D-QUERY-01"]
+    },
+    {
+      "id": "R-C08",
+      "file": "src/PalORM.Core/QueryBuilderExtensions.cs",
+      "original": "                string operation = descending ? \"<\" : \">\";",
+      "mutated": "                string operation = descending ? \"<\" : \">=\";",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "keyset 续页锚点由「严格大于」改为「大于等于」（升序页间重复一行）",
+      "expectedContracts": ["D-PAGE-01"]
+    },
+    {
+      "id": "R-C09",
+      "file": "src/PalORM.Core/DataSession.Query.cs",
+      "original": "        object? r = await ExecuteAggregateScalarAsync<T>(\"AVG\", expression, ct).ConfigureAwait(false);",
+      "mutated": "        object? r = await ExecuteAggregateScalarAsync<T>(\"SUM\", expression, ct).ConfigureAwait(false);",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "AvgAsync 实际执行 SUM（未按行数取平均）",
+      "expectedContracts": ["D-AGG-01"]
+    },
+    {
+      "id": "R-C10",
+      "file": "src/PalORM.SourceGen/CommandFactoryEmitter.cs",
+      "original": "                $\"{column} = excluded.{column}\"));",
+      "mutated": "                $\"{column} = {column}\"));",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "UPSERT 冲突分支 SET 自赋值（已存在行不更新）",
+      "expectedContracts": ["D-SAVE-02"]
+    },
+    {
+      "id": "R-C11",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "        => AddJoin<TJoin>(\"INNER\", onClause);",
+      "mutated": "        => AddJoin<TJoin>(\"LEFT\", onClause);",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "InnerJoin 发出 LEFT JOIN（不匹配行也被保留）",
+      "expectedContracts": ["C-JOIN-01"]
+    },
+    {
+      "id": "R-C12",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "        => AddJoin<TJoin>(\"LEFT\", onClause);",
+      "mutated": "        => AddJoin<TJoin>(\"INNER\", onClause);",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "LeftJoin 发出 INNER JOIN（左表未匹配行丢失）",
+      "expectedContracts": ["C-JOIN-02"]
+    },
+    {
+      "id": "R-C13",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "        _cteName = cteName;",
+      "mutated": "        _cteName = null;",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "With 登记 CTE 后不切换 FROM 源（查询仍读基表，CTE 过滤失效）",
+      "expectedContracts": ["C-CTE-01"]
+    },
+    {
+      "id": "R-C14",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "            HasClause(QueryClauseKind.Having) ? \"AND \" : \"HAVING \", clause);",
+      "mutated": "            HasClause(QueryClauseKind.Having) ? \"AND \" : \"HAVING 1 = 1 OR \", clause);",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "Having 前缀掺入恒真项（聚合过滤不再收窄分组）",
+      "expectedContracts": ["C-GROUP-01"]
+    },
+    {
+      "id": "R-C15",
+      "file": "src/PalORM.Core/QueryBuilder.cs",
+      "original": "        AddClause(QueryClauseKind.Window, $\"{func} OVER ({over})\");",
+      "mutated": "        AddClause(QueryClauseKind.DefaultFilter, $\"{func} OVER ({over})\");",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "窗口子句被误当过滤条件（进 WHERE 而非 SELECT 列表）",
+      "expectedContracts": ["C-WINDOW-01"]
+    },
+    {
+      "id": "R-C16",
+      "file": "src/PalORM.Core/DataSession_Bulk.cs",
+      "original": "            valuesBinder(pool, entities[i], 0);",
+      "mutated": "            valuesBinder(pool, entities[0], 0);",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "批量更新每行都写首行的值（R-D2 同族，命中逐条池化路径）",
+      "expectedContracts": ["C-BULKUP-02"]
+    },
+    {
+      "id": "R-C17",
+      "file": "src/PalORM.Core/DataSession.Transactions.cs",
+      "original": "        cmd.CommandText = $\"ROLLBACK TO SAVEPOINT {TProvider.QuoteIdentifier(name)}\";",
+      "mutated": "        cmd.CommandText = $\"RELEASE SAVEPOINT {TProvider.QuoteIdentifier(name)}\";",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "回滚到保存点被实现成释放保存点（保存点后的写入未撤销）",
+      "expectedContracts": ["C-TX-03"]
+    },
+    {
+      "id": "R-C18",
+      "file": "src/PalORM.Core/GridReader.cs",
+      "original": "            _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);\n            return list;",
+      "mutated": "            _hasResultSet = false;\n            return list;",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "读完第一个结果集后不推进到下一个（第二个结果集读不到）",
+      "expectedContracts": ["C-MULTI-01"]
+    },
+    {
+      "id": "R-C19",
+      "file": "src/PalORM.Core/StoredProcBuilder.cs",
+      "original": "                if (!char.IsLetterOrDigit(segment[c]) && segment[c] != '_')",
+      "mutated": "                if (!char.IsLetterOrDigit(segment[c]) && segment[c] != '_' && segment[c] != ' ' && segment[c] != ';')",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "存储过程名白名单掺入空格与分号（`bad name; DROP` 放行）",
+      "expectedContracts": ["C-SPROC-01"]
+    },
+    {
+      "id": "R-C20",
+      "file": "src/PalORM.Core/DataSession.Schema.cs",
+      "original": "        MarkConnectionStateUnknownForRawSql();\n        return _conn;",
+      "mutated": "        MarkConnectionStateUnknownForRawSql();\n        return null!;",
+      "filter": "/*/*/CapabilityContractTests/CapabilityContract_Holds",
+      "note": "逃生舱返回 null 连接",
+      "expectedContracts": ["C-RAW-01"]
+    },
+    {
+      "id": "R-C21",
+      "file": "src/PalORM.Core/DataSession.Crud.cs",
+      "original": "                    return entity;\n                }\n                return TProvider.SupportsReturningClause",
+      "mutated": "                    return new T();\n                }\n                return TProvider.SupportsReturningClause",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "显式主键插入不再返回调用方实例（返回新物化对象）",
+      "expectedContracts": ["D-INSERT-01"]
+    },
+    {
+      "id": "R-C22",
+      "file": "src/PalORM.Core/DataSession.Crud.cs",
+      "original": "        delCmd.CommandText = deleteCommandText;",
+      "mutated": "        delCmd.CommandText = \"SELECT 1\";",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "物理删除语句退化为查询（DELETE 未执行，行仍在）",
+      "expectedContracts": ["D-DELETE-01"]
+    },
+    {
+      "id": "R-C23",
+      "file": "src/PalORM.Core/DataSession.Crud.cs",
+      "original": "        bool isSoftDelete = (deleteInfo.Features & EntityFeatures.SoftDelete) != 0;",
+      "mutated": "        bool isSoftDelete = (deleteInfo.Features & EntityFeatures.TenantAware) != 0;",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "软删判定看错特性位（[SoftDelete] 实体走物理删除）",
+      "expectedContracts": ["D-DELETE-02"]
+    },
+    {
+      "id": "R-C24",
+      "file": "src/PalORM.Core/DataSession.cs",
+      "original": "        string softDelete = hasSoftDelete ? $\"{TProvider.QuoteIdentifier(\"deleted_at\")} IS NULL\" : \"\";",
+      "mutated": "        string softDelete = hasSoftDelete ? $\"{TProvider.QuoteIdentifier(\"deleted_at\")} IS NOT NULL\" : \"\";",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "软删默认过滤条件反号（只查出已删行）",
+      "expectedContracts": ["D-GETALL-01"]
+    },
+    {
+      "id": "R-C25",
+      "file": "src/PalORM.Core/DataSession.Query.cs",
+      "original": "        if (result is T typed) return typed;",
+      "mutated": "        if (result is T) return default;",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "标量归一丢弃实际值（恒返回 default）",
+      "expectedContracts": ["D-SCALAR-01"]
+    },
+    {
+      "id": "R-C26",
+      "file": "src/PalORM.Core/DataSession_Bulk.cs",
+      "original": "        for (int i = 0; i < entities.Count; i++)\n        {\n            // 只写 Value——零 CreateParameter（P0-1 的核心）",
+      "mutated": "        for (int i = 0; i < entities.Count - 1; i++)\n        {\n            // 只写 Value——零 CreateParameter（P0-1 的核心）",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "逐条池化批量更新漏掉末行（R-C02 的 UPDATE 侧同型）",
+      "expectedContracts": ["D-BULKUP-01"]
+    },
+    {
+      "id": "R-C27",
+      "file": "src/PalORM.Core/DataSession_Bulk.cs",
+      "original": "                    if (mergeMetadata.HasDefaultKey(entity))",
+      "mutated": "                    if (!mergeMetadata.HasDefaultKey(entity))",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "BulkMerge 把已存在键当新增插入（主键冲突 / 不更新）",
+      "expectedContracts": ["D-BULKMERGE-01"]
+    },
+    {
+      "id": "R-C28",
+      "file": "src/PalORM.SourceGen/CommandFactoryEmitter.cs",
+      "original": "        sb.AppendLine($\"        return global::System.Collections.Generic.EqualityComparer<{pkColumn.ClrTypeName}>.Default.Equals(entity.{pkColumn.EscapedPropertyName}, default);\");",
+      "mutated": "        sb.AppendLine(\"        return true;\");",
+      "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+      "note": "HasDefaultKey 恒 true：SaveAsync 的 UPSERT 分支永远不进入",
+      "expectedContracts": ["D-SAVE-02"]
+    }
+  ]
+}
