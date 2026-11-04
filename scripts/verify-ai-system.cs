@@ -760,9 +760,12 @@ void V17cBattery()
         if (!RunDc().Contains("FAIL D14")) v17cFail.Add("D14");
         GitInAi("checkout -- test/prompt.md");
 
-        // D11：生成物工具版本漂移（动态取包版本——原 .sh 硬编码 6.3.0，升版即失效的存量假绿）
-        var pkgVer = Regex.Match(File.ReadAllText("Directory.Build.props"), @"<Version>([^<]+)").Groups[1].Value.Trim();
-        MutateFile("src/PalORM.SourceGen/GeneratedCodeMetadata.cs", t => t.Replace($"\"{pkgVer}\"", "\"9.9.9\""), touch: touched);
+        // D11：生成物工具版本漂移。2026-11-04 修正：ToolVersion 已改为引用生成常量
+        // （PalORMVersionInfo.Version），旧探针替换包版本字面量成了空操作，探针恒「沉默」
+        // （V17c 实测报未报 FAIL: D11）。改按真实失效形态注入：把派生关系改成硬编码错误
+        // 版本，D11 必须报与包版本不一致。
+        MutateFile("src/PalORM.SourceGen/GeneratedCodeMetadata.cs",
+            t => ReplaceFirst(t, @"ToolVersion\s*=\s*PalORMVersionInfo\.Version", "ToolVersion = \"9.9.9\""), touch: touched);
         if (!RunDc().Contains("FAIL D11")) v17cFail.Add("D11");
         Git("checkout -- src/PalORM.SourceGen/GeneratedCodeMetadata.cs");
 

@@ -34,6 +34,9 @@ var renamed = new Dictionary<string, string>
 {
     ["scripts/test-quality-scripts.sh"] = "scripts/test-quality-scripts.cs",
     ["scripts/test-package-contract.sh"] = "scripts/test-package-contract.cs",
+    // 2026-11-04：2026-10-24 历史重写把报告文件名里的提交短哈希从 0e1c6cb 换成 fa38a7d，
+    // 账本按规则不可回改，报告本体已在 history/reports 下（新名存在即豁免）。
+    ["../reports/review-2026-10-06-r24-full-0e1c6cb.md"] = ".ai/review/history/reports/review-2026-10-06-r24-full-fa38a7d.md",
 };
 
 var text = File.ReadAllText(actionFile);
