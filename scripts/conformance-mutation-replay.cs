@@ -334,6 +334,16 @@ var rules = new Rule[]
         "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
         "BulkMerge 把已存在键当新增插入（主键冲突 / 不更新）",
         null, ["D-BULKMERGE-01"]),
+
+    // R-C28：SaveAsync 的路由判据 HasDefaultKey（生成器发射体）。SaveCoreAsync 以
+    // HasDefaultKey(entity) 分流「默认键→插入 / 非默认键→UPSERT」——把判据反号，
+    // D-SAVE-01（主键不存在→插入新行）会走 UPSERT 而打向不存在的主键。
+    new("R-C28", "src/PalORM.SourceGen/CommandFactoryEmitter.cs",
+        "        sb.AppendLine($\"        return global::System.Collections.Generic.EqualityComparer<{pkColumn.ClrTypeName}>.Default.Equals(entity.{pkColumn.EscapedPropertyName}, default);\");",
+        "        sb.AppendLine(\"        return false;\");",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "HasDefaultKey 恒 false：SaveAsync 对默认键实体也走 UPSERT 分支",
+        null, ["D-SAVE-01"]),
 };
 
 var selected = rulePrefix is null
