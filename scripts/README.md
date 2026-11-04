@@ -54,6 +54,7 @@
 | `probe-template.cs` | 探针骨架生成器（约 30 秒出最小工程，review probe-first 基建） | P0/P1 定级前的探针实证 |
 | `verify-action-items.cs` | 行动项账本中「文件路径引用」的真实性校验（只核可机械判真的路径，标识符跳过） | `/review` 事后验证回路 |
 | `verify-phase.cs` | 阶段完成验证（S1 构建 / S2 空壳 / S3 测试 / S4 阶段特定） | 阶段收尾 |
+| `platform-diff.cs` | CFG-3 平台差异对账：比对 Windows 与 Linux 两份 TUnit 报告的用例 ID 集合；非空差异列方向与 ID、附原因字段 | nightly windows lane |
 | `fuzz-promote.cs` | FUZ-6 失败固化：把 fuzz 语料（`artifacts/fuzz-corpus/*.txt`）或失败样本（`artifacts/fuzz-failures-*.txt`）转成可粘贴的 `[Test]` 草稿（含去重种子集与零差异断言），人工确认后并入固定集 | 夜间 fuzz 发现差异后 |
 | `probe-pgvector.cs` | pgvector 向量门核对清单（在有扩展的 PG 库上验证 Raw 配方六项形态；无扩展时退出 2） | 向量场景变更 |
 
