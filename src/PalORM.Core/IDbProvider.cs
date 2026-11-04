@@ -73,6 +73,18 @@ public interface IDbProvider
     static virtual bool IsTransient(Exception exception)
         => exception is DbException { IsTransient: true };
 
+    /// <summary>连接被判死的判定（外部终止、socket 断开）。<b>与 <see cref="IsTransient"/> 分开</b>：
+    /// 瞬时故障重试原操作即可，连接判死必须先重建物理连接——重试一条注定失败的命令没有意义。
+    /// 命中后会话在下次建命令前重建连接，配合 <c>WithRetry()</c> 即为调用方透明的自愈。
+    /// 默认只认传输层异常；各 Provider 按自己的驱动异常补全。</summary>
+    static virtual bool IsConnectionFailure(Exception exception)
+        => exception is IOException or System.Net.Sockets.SocketException;
+
+    /// <summary>连接打开后的<b>同步</b>初始化钩子；默认无操作。
+    /// 与 <see cref="InitializeConnectionAsync"/> 内容等价，供「连接判死重建」的同步路径使用
+    /// （FLT-4，2026-11-04）：重建发生在建命令之前，无法 await。<b>两处必须同步维护。</b></summary>
+    static virtual void InitializeConnection(DbConnection connection) { }
+
     /// <summary>连接打开后的初始化钩子（如 SQLite 的 PRAGMA 配置）。默认无操作。
     /// 主连接由 DataSession.CreateAsync 在连接打开后、会话可用前调用；
     /// 读路由连接与并行读作用域连接由会话在打开后调用——

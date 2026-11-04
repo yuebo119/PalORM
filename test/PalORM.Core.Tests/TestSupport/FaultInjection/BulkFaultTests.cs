@@ -14,11 +14,10 @@ public sealed class BulkFaultTests
     private const int TotalRows = 2500;
 
     [Test]
-    public async Task BulkInsertReturning_MidMaterializationFailure_LeavesPartialRows_KnownGap()
+    public async Task BulkInsertReturning_MidMaterializationFailure_LeavesNoPartialRows()
     {
-        // 已知缺口（2026-11-04 FLT-3 实测）：BulkInsertReturningAsync 的分块语句不在事务内，
-        // 读侧故障中断后前面若干块已提交（实测残留 499 行，总 2500）。产品文档没有声明该路径
-        // 的全有全无语义，是否修待裁决。这里先钉住「会留残留」，产品修好后本断言必须改成 0。
+        // 分块整体包事务（2026-11-04 修复，FLT-3 实测缺口）：读侧故障中断后前面若干块
+        // 一并回滚，不留残留（修复前实测残留 499 行，总 2500）。
         var boom = new IOException("注入：结果集读到第一条语句的第 100 行断开");
         var created = await FaultInjectionFixtures.CreateAsync(
             keeper => new FaultyConnection(keeper).FailReaderAtRow(commandOrdinal: 1, row: 100, boom));
@@ -29,9 +28,8 @@ public sealed class BulkFaultTests
         await Assert.That(thrown).IsSameReferenceAs(boom);
 
         long leftover = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM fault_row");
-        await Assert.That(leftover).IsGreaterThan(0)
-            .Because($"读侧故障后残留 {leftover} 行（分块未包事务，已提交的块不撤销）");
-        await Assert.That(leftover).IsLessThan(TotalRows);
+        await Assert.That(leftover).IsEqualTo(0)
+            .Because($"分块插入未整体回滚，残留 {leftover} 行");
         await Assert.That(created.Wrapper.State).IsEqualTo(System.Data.ConnectionState.Open);
 
         await session.InsertAsync(FaultInjectionFixtures.Row("after", 1));

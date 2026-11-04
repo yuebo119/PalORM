@@ -78,8 +78,21 @@ public partial class DataSession<TProvider>
         if (entities.Count == 0) return 0;
         // M4.3（2026-10-31 极致性能轮）：去掉 [.. entities] 整表复制——被调方只消费 Count 与
         // 索引器，IReadOnlyList 直通（20K 行省约 160KB 拷贝）。
-        return await BatchInsertReturningAsync(
-            GetActiveTransaction(), entities, metadata, ct).ConfigureAwait(false);
+        //
+        // 分块整体包事务（2026-11-04 修 FLT-3 实测缺口）：本方法按参数上限把输入切成多条
+        // INSERT ... RETURNING，此前各块在自动提交下执行——任何一块失败都会留下前面若干块
+        // 已提交的行（实测 SQLite 残留 499/2500）。有外部事务时沿用外部事务（提交权在调用方），
+        // 无事务时自开一个，与 BulkInsertAsync / BulkDeleteAsync 对齐。
+        DbTransaction? activeTransaction = GetActiveTransaction();
+        if (activeTransaction is not null)
+        {
+            return await BatchInsertReturningAsync(activeTransaction, entities, metadata, ct)
+                .ConfigureAwait(false);
+        }
+        return await RunInTransactionScopeAsync(
+            operation.Owner,
+            (tran, token) => BatchInsertReturningAsync(tran, entities, metadata, token),
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>批量删除——数组形态单批 20000 行；IN 形态按方言参数上限与 5000 行/批取较小者

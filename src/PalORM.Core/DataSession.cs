@@ -22,10 +22,17 @@ namespace PalORM;
 public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySessionResilience
     where TProvider : IDbProvider
 {
-    private readonly DbConnection _conn;
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2213:Dispose objects before losing scope",
+        Justification = "字段在 DisposeAsync 的 DisposeCoreAsync 中释放（_conn.DisposeAsync()）；"
+            + "因连接判死后会整体替换字段（RebuildConnectionIfNeeded），分析器无法跟踪该赋值，故显式说明")]
+    private DbConnection _conn;
     /// <summary>是否拥有主连接（默认 true）。测试/基准的"共享已打开连接 + 每操作一个会话"形态
     /// 传 false：会话 Dispose 释放复用槽与读侧资源，但不关闭/释放调用方的连接。</summary>
     private readonly bool _ownsConnection;
+    /// <summary>连接判死标记（2026-11-04，FLT-4）：外部终止连接后驱动 <c>State</c> 可能仍报 Open，
+    /// 旧连接不可复用。命中 <see cref="IDbProvider.IsConnectionFailure"/> 后置位，
+    /// 下次建命令前重建物理连接——单条命令失败一次，后续自动恢复。</summary>
+    private int _connectionPoisoned;
     private DbOptions _options;
     /// <summary>命令超时的 ADO.NET 秒值会话级快照——<see cref="DbOptions.ToCommandTimeoutSeconds"/>
     /// 含 <c>Math.Ceiling(TotalSeconds)</c> 双精度除法，原实现在每条命令构造与每次复用槽重设时
@@ -1351,6 +1358,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// <summary>刀2：事务由调用方单次取用后传入（每操作省一次 GetActiveTransaction 的锁往返）。</summary>
     private DbCommand CreateCommand(DbTransaction? transaction)
     {
+        // 连接判死重建：所有建命令路径都经过这里，重建必须在建命令之前
+        //（命令一旦从旧连接创建，后续再换连接也救不回来）
+        RebuildConnectionIfNeeded();
         DbCommand command = _conn.CreateCommand();
         command.Transaction = transaction;
         // ITM-557 根治：超时在工厂集中设置——新调用点在结构上不可能漏（ValidateSchemaAsync 即漏网实例）。
@@ -1359,6 +1369,55 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         // 删除冗余会削弱回归防御；保留并在此声明 CreateCommand 是<b>权威源</b>。
         command.CommandTimeout = _commandTimeoutSeconds;
         return command;
+    }
+
+    /// <summary>连接判死后重建（2026-11-04，FLT-4）：外部终止连接（<c>pg_terminate_backend</c> /
+    /// <c>KILL</c>）或 socket 断开旧连接后，驱动的 <c>State</c> 可能仍报 Open，旧连接不可复用。
+    /// 命中 <see cref="IDbProvider.IsConnectionFailure"/> 的执行路径会置位 <see cref="_connectionPoisoned"/>，
+    /// 这里在下次建命令前按会话既有配方重建物理连接：CreateConnection → Open → Provider 初始化
+    /// （SQLite PRAGMA）→ 会话级 SQL。重建失败时保留判死标记并抛出，不静默无限重建。
+    /// <para><b>覆盖范围</b>：置位发生在标量读（<c>ExecuteReadScalarAsync</c> 与 <c>ScalarEntryAsync</c>
+    /// 的兜底 catch）与写路径（<c>ExecuteWriteRowsAsync</c>）；重建挂在 <see cref="CreateCommand(System.Data.Common.DbTransaction?)"/> 上，
+    /// 而所有建命令路径（读/写/批量/DDL/原始 SQL）都经过它，命令因此总是拿到重建后的连接。
+    /// 重建走 <see cref="IDbProvider.InitializeConnection"/>（同步初始化钩子，与异步版内容等价，
+    /// 两处必须同步维护）——同步路径由 G20/G24 把守，不允许在库里阻塞异步调用。</para></summary>
+    private void RebuildConnectionIfNeeded()
+    {
+        if (Volatile.Read(ref _connectionPoisoned) == 0) return;
+
+        DbConnection old = _conn;
+        DbConnection created = TProvider.CreateConnection(_options.ResolveConnectionString(), _options);
+        try
+        {
+            created.Open();
+            TProvider.InitializeConnection(created);
+            if (!string.IsNullOrWhiteSpace(_options.SessionSetupSql))
+            {
+                TProvider.InvalidateConnectionInitialization(created);
+                using DbCommand setup = created.CreateCommand();
+                setup.CommandTimeout = _commandTimeoutSeconds;
+                setup.CommandText = _options.SessionSetupSql;
+                setup.ExecuteNonQuery();
+            }
+            _conn = created;
+            Volatile.Write(ref _connectionPoisoned, 0);
+        }
+        catch
+        {
+            created.Dispose();
+            throw;
+        }
+        old.Dispose();
+    }
+
+    /// <summary>执行失败时判定是否连接判死（<see cref="IDbProvider.IsConnectionFailure"/>）。
+    /// 命中即置位标记，下一次建命令会重建连接。</summary>
+    internal void MarkConnectionPoisoned(Exception exception)
+    {
+        if (TProvider.IsConnectionFailure(exception))
+        {
+            Volatile.Write(ref _connectionPoisoned, 1);
+        }
     }
 
     /// <summary>原生 SQL / 存储过程 / DDL / 裸连接改写了连接态——通知 Provider 把该物理连接
@@ -1640,6 +1699,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// 每次调用都过这里，是每操作固定成本；208 B 在 MySQL Insert 的 4241 B/行上约 5%，
     /// 在 BulkInsert 的 1222 B/行上约 17%。</para></summary>
     private ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
+    {
+        try
+        {
+            return ExecuteWriteRowsCoreAsync(command, activeTransaction, ct);
+        }
+        catch (Exception ex)
+        {
+            MarkConnectionPoisoned(ex);
+            throw;
+        }
+    }
+
+    private ValueTask<int> ExecuteWriteRowsCoreAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
         // W3（两轴清单轮 2026-10-14）：事务短路前置——原实现先读弹性再判事务，纯事务会话
         // （TxRollback 族逐行 Update）每行都先触发惰性执行器物化；事务内写入恒直连

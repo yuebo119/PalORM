@@ -15,6 +15,13 @@ namespace PalORM.PostgreSql;
 /// （P1-8），临时表仍跨池租客可见，需隔离时用独立连接。</para></summary>
 public sealed class PostgreSqlProvider : IDbProvider
 {
+    /// <summary>连接判死（2026-11-04，FLT-4）：57P01/57P02/57P03 = 管理命令终止、后端崩溃、
+    /// 无法连接。这些形态下旧连接不可复用，会话会在下次建命令前重建。</summary>
+    public static bool IsConnectionFailure(Exception exception)
+        => (exception is NpgsqlException { SqlState: "57P01" or "57P02" or "57P03" })
+            // 连接被外部终止后驱动抛的是普通 InvalidOperationException（非 NpgsqlException）
+            || (exception is InvalidOperationException invalid && invalid.Message.Contains("Connection is not open", System.StringComparison.Ordinal));
+
     /// <summary>Provider 名称:PostgreSql。</summary>
     public static string Name => "PostgreSql";
 

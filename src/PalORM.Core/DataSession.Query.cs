@@ -242,6 +242,19 @@ public sealed partial class DataSession<TProvider>
     /// 物化执行器续跑剩余重试（成功路径零 CTS/零委托/零执行器）。</summary>
     private async ValueTask<object?> ExecuteReadScalarAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
+        try
+        {
+            return await ExecuteReadScalarCoreAsync(command, activeTransaction, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            MarkConnectionPoisoned(ex);
+            throw;
+        }
+    }
+
+    private async ValueTask<object?> ExecuteReadScalarCoreAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
+    {
         if (activeTransaction is not null || !ResilienceConfigured)
             return await ExecuteScalarCoreAsync(command, ct).ConfigureAwait(false);
         if (DirectFirstReadAllowed)
@@ -648,6 +661,13 @@ public sealed partial class DataSession<TProvider>
         catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
         {
             throw mapped;
+        }
+        catch (Exception ex)
+        {
+            // 连接判死（FLT-4）：ScalarEntryAsync 直接调 ExecuteScalarCoreAsync，不经
+            // ExecuteReadScalarAsync 包装，所以在这里补一次判定
+            MarkConnectionPoisoned(ex);
+            throw;
         }
     }
 

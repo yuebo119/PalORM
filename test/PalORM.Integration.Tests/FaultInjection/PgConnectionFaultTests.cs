@@ -5,10 +5,8 @@ namespace PalORM.Integration.Tests.FaultInjection;
 
 /// <summary>FLT-4：连接被外部重置（真库 PG）。
 /// <para>从另一条连接 <c>pg_terminate_backend</c> 杀掉本会话的后端，压两段行为：
-/// ①会话级：在途命令失败可见，且同一条会话的后续命令继续失败（<c>InvalidOperationException:
-/// Connection is not open</c>）。原因是 <c>DbConnection.State</c> 在后端被终止后仍报 Open，
-/// PalORM 的健康检测（读连接的 <c>State == Open</c> 判据）看不到后端已死，因此不会自动重建，
-/// 调用方必须换会话。这是实测到的当前契约，改进方向（后端探活）待裁决。
+/// ①会话级：在途命令失败可见；失败被 <see cref="IDbProvider.IsConnectionFailure"/> 判定为连接判死后，
+/// 下一条命令建命令前重建物理连接（2026-11-04 修复），同一条会话自动恢复。
 /// ②池级：死会话归还后，池把它当不健康连接丢弃，下一次租用拿到可用连接。</para></summary>
 [Property("Category", "ExternalDatabase")]
 [Property("Category", "FaultInjection")]
@@ -18,7 +16,7 @@ public sealed class PgConnectionFaultTests
     private const long RowId = 9_200_001;
 
     [Test]
-    public async Task TerminatedBackend_SessionIsPoisoned_AndPoolDiscardsIt()
+    public async Task TerminatedBackend_SessionRebuildsAndPoolDiscardsIt()
     {
         var options = new DbOptions { ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString() };
 
@@ -45,18 +43,10 @@ public sealed class PgConnectionFaultTests
         }
         await Assert.That(first).IsNotNull();
 
-        // 同一条会话不会自愈：State 仍是 Open，PalORM 检测不到后端已死
-        Exception? second = null;
-        try
-        {
-            await session.ScalarAsync<long>($"SELECT amount FROM \"palorm_fault_row\" WHERE \"Id\" = {RowId}");
-        }
-        catch (Exception ex)
-        {
-            second = ex;
-        }
-        await Assert.That(second).IsNotNull();
-        await Assert.That(second!.Message).Contains("Connection is not open");
+        // 判死生效（2026-11-04 修复，FLT-4）：下一条命令在建命令前重建物理连接，
+        // 同一条会话自动恢复——调用方只需容忍一次失败
+        long amount = await session.ScalarAsync<long>($"SELECT amount FROM \"palorm_fault_row\" WHERE \"Id\" = {RowId}");
+        await Assert.That(amount).IsEqualTo(1);
 
         // ② 池级剔除：死会话归还后，下一次租用拿到可用连接
         await using var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 2);

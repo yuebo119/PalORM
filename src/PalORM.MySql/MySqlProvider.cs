@@ -7,6 +7,16 @@ namespace PalORM.MySql;
 /// <summary>MySQL Provider —— MySqlConnector 适配。</summary>
 public sealed class MySqlProvider : IDbProvider
 {
+    /// <summary>连接判死（2026-11-04，FLT-4）：2006 连接已断、2013 查询中丢失连接、
+    /// 2055 服务器端连接丢失。这些形态下旧连接不可复用，会话会在下次建命令前重建。</summary>
+    public static bool IsConnectionFailure(Exception exception)
+        => (exception is MySqlException { Number: 2006 or 2013 or 2055 })
+            // 连接被杀后驱动抛的是普通 InvalidOperationException（状态 Broken）
+            // 连接被杀后读结果集：驱动抛 Number=0 的 MySqlException（无服务端错误码）
+            || (exception is MySqlException mysql && mysql.Number == 0
+                && mysql.Message.Contains("Failed to read the result set", System.StringComparison.Ordinal))
+            || (exception is InvalidOperationException invalid && invalid.Message.Contains("current state is Broken", System.StringComparison.Ordinal));
+
     /// <summary>Provider 名称:MySql。</summary>
     public static string Name => "MySql";
 

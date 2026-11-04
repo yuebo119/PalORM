@@ -7,6 +7,12 @@ namespace PalORM.Sqlite;
 /// <summary>SQLite Provider —— Microsoft.Data.Sqlite 适配。</summary>
 public sealed class SqliteProvider : IDbProvider
 {
+    /// <summary>连接判死（2026-11-04，FLT-4）：外部关闭连接后 <c>DbConnection.State</c> 可能仍报 Open，
+    /// PalORM 靠这条判定把会话标脏并在下次建命令前重建连接。SQLite 的形态是驱动抛
+    /// <see cref="InvalidOperationException"/>（"Connection is not open"）。</summary>
+    public static bool IsConnectionFailure(Exception exception)
+        => exception is InvalidOperationException { Message: "Connection is not open" };
+
     /// <summary>C5：SQLitePCL bundle 初始化改走 <see cref="ModuleInitializerAttribute"/>。
     /// <para><b>为什么</b>：显式静态构造器使类型失去 <c>beforefieldinit</c>，CLR 在<b>每次</b>
     /// 静态成员访问前都要插入类型初始化检查——<see cref="Name"/>、<see cref="QuoteIdentifier"/>、
@@ -149,6 +155,37 @@ public sealed class SqliteProvider : IDbProvider
         + "PRAGMA journal_size_limit=67108864; "
         + "PRAGMA mmap_size=268435456; PRAGMA analysis_limit=400; "
         + "PRAGMA optimize=0x10002";
+
+    /// <summary>同步初始化（2026-11-04，FLT-4）：内容与 <see cref="InitializeConnectionAsync"/> 等价，
+    /// 供「连接判死重建」这条同步路径使用（重建发生在建命令之前，无法 await）。
+    /// 两处必须同步维护：改初始化内容时一起改，否则重建后的连接与新建连接行为不一致。</summary>
+    public static void InitializeConnection(DbConnection connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        (bool isInMemory, bool isReadOnly, bool isPooled) = ResolveConnectionMode(connection.ConnectionString);
+        object? handle = isPooled ? (connection as SqliteConnection)?.Handle : null;
+        if (handle is not null && InitializedHandles!.TryGetValue(handle, out HandleState? state))
+        {
+            if (!state.Dirty) return;
+            using (DbCommand perSession = connection.CreateCommand())
+            {
+                perSession.CommandText = PragmaPerSession;
+                perSession.ExecuteNonQuery();
+            }
+            state.Dirty = false;
+            return;
+        }
+
+        using (DbCommand command = connection.CreateCommand())
+        {
+            command.CommandText = isInMemory || isReadOnly ? PragmaNarrow : PragmaFileDb;
+            command.ExecuteNonQuery();
+        }
+        if (handle is not null)
+        {
+            InitializedHandles!.AddOrUpdate(handle, new HandleState());
+        }
+    }
 
     /// <summary>SQLite 连接初始化：开启 FK 约束 + WAL 模式 + 写入/读取 PRAGMA 调优。
     /// 数据库文件被其他进程锁定时受调用方取消/超时约束。

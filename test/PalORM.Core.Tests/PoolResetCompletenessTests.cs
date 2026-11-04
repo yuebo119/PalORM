@@ -51,6 +51,13 @@ public sealed class PoolResetCompletenessTests
         "_readConnProvider", "_readConnReturner",
         "_lastMigrationSkippedIndexes",
         "_connectionStateMayBeDirty",
+        // 连接判死标记（FLT-4，2026-11-04）：命中 IsConnectionFailure 后置位，
+        // 下次建命令前重建连接后清零；跨租期存活是刻意的——物理连接跨租期复用，
+        // 判死标记必须活到下一次建命令才能触发重建
+        "_connectionPoisoned",
+        // _conn（FLT-4，2026-11-04 起非 readonly）：连接判死后整体替换，
+        // 新连接跨租期保留；旧连接在替换时释放
+        "_conn",
         "_lastReturnedTimestamp",
         "_pool", "_poolBaseOptions", "_poolBaseResilience",
         "ResilienceGeneration",
