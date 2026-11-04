@@ -279,6 +279,70 @@ var rules = new Rule[]
         "/*/*/CapabilityContractTests/CapabilityContract_Holds",
         "逃生舱返回 null 连接",
         null, ["C-RAW-01"]),
+
+    // ── R-C21..C27：方言契约目录剩余 10 条 ─────────────────────────────
+    // 只挑有"单行可换、可观测量明确"的 7 条；D-TX-01/D-TX-02（显式事务提交/回滚可见性）
+    // 与 D-DELETE-01（物理删除）需要改动事务骨架，单行注入会连带打红同族多条契约，
+    // 达不到"定位到该契约"的判别力要求，故留空并在 6.2 登记。
+    new("R-C21", "src/PalORM.Core/DataSession.Crud.cs",
+        "            if (info.SetId is { } narrowBackfill)\n"
+        + "                BackfillGeneratedId(narrowBackfill, entity, narrowId.Value);\n"
+        + "            return entity;",
+        "            if (info.SetId is { } narrowBackfill)\n"
+        + "                BackfillGeneratedId(narrowBackfill, entity, narrowId.Value);\n"
+        + "            return new T();",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "InsertAsync 不再返回调用方实例（返回新物化对象）",
+        null, ["D-INSERT-01"]),
+    new("R-C22", "src/PalORM.Core/DataSession.Crud.cs",
+        "        delCmd.CommandText = deleteCommandText;",
+        "        delCmd.CommandText = $\"UPDATE {TProvider.QuoteIdentifier(deleteInfo.TableName)} SET \"\n"
+        + "            + $\"{TProvider.QuoteIdentifier(deleteInfo.PkColumn!)} = {TProvider.QuoteIdentifier(deleteInfo.PkColumn!)}\";",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "物理删除被实现成自赋值 UPDATE（行仍在）",
+        null, ["D-DELETE-01"]),
+    new("R-C23", "src/PalORM.Core/DataSession.Crud.cs",
+        "        bool isSoftDelete = (deleteInfo.Features & EntityFeatures.SoftDelete) != 0;\n"
+        + "        if (isSoftDelete)",
+        "        bool isSoftDelete = (deleteInfo.Features & EntityFeatures.SoftDelete) != 0;\n"
+        + "        if (false)",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "[SoftDelete] 实体走物理删除（deleted_at 不写，行直接消失）",
+        null, ["D-DELETE-02"]),
+    new("R-C24", "src/PalORM.Core/DataSession.Crud.cs",
+        "    private static readonly string SoftDeleteFilterCondition =\n"
+        + "        $\"{TProvider.QuoteIdentifier(\"deleted_at\")} IS NULL\";",
+        "    private static readonly string SoftDeleteFilterCondition =\n"
+        + "        \"1 = 1\";",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "软删默认过滤条件退化为恒真（已删行仍被查出）",
+        null, ["D-GETALL-01"]),
+    new("R-C25", "src/PalORM.Core/DataSession.Query.cs",
+        "        if (result is T typed) return typed;",
+        "        if (result is T typed) return default;",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "标量归一丢弃实际值（恒返回 default）",
+        null, ["D-SCALAR-01"]),
+    new("R-C26", "src/PalORM.Core/DataSession_Bulk.cs",
+        "        for (int i = 0; i < entities.Count; i++)\n"
+        + "        {\n"
+        + "            // 只写 Value——零 CreateParameter（P0-1 的核心）",
+        "        for (int i = 0; i < entities.Count - 1; i++)\n"
+        + "        {\n"
+        + "            // 只写 Value——零 CreateParameter（P0-1 的核心）",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "逐条池化批量更新漏掉末行（R-C02 的 UPDATE 侧同型）",
+        null, ["D-BULKUP-01"]),
+    new("R-C27", "src/PalORM.Core/DataSession_Bulk.cs",
+        "                foreach (T entity in entities)\n"
+        + "                {\n"
+        + "                    if (mergeMetadata.HasDefaultKey(entity))",
+        "                foreach (T entity in entities)\n"
+        + "                {\n"
+        + "                    if (true)",
+        "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
+        "BulkMerge 把所有行都当新增（已存在键不更新）",
+        null, ["D-BULKMERGE-01"]),
 };
 
 var selected = rulePrefix is null
