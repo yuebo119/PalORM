@@ -100,15 +100,28 @@ jobs:
         run: dotnet build test/PalORM.Integration.Tests -c Release
       - name: Run nightly dialect lanes
         # marker 自证：DialectRandomDiffTests 每个通过用例打印 NIGHTLY-DIALECT-RAN，
-        # 期望 4 条（2 方言 × 随机差分为与 pairwise）。少于 4 条说明 lane 未真正执行，
+        # 期望 4 条（2 方言 × 随机差分与 pairwise）。少于 4 条说明 lane 未真正执行，
         # 即使进程退出码为 0 也判红（防空跑被当成绿）。
+        # 2026-11-04 修：MTP v2.5.1 在 Linux 上不把测试进程的 Console.WriteLine 转发到
+        # 控制台（stdout 只有 MTP 自己的摘要），marker 实际落在 tunit-report.json 的
+        # tests[].output 字段——本 lane 创建以来从未绿过（run 41557623286/41740012207，
+        # 测试本体 4/4 通过、marker 0/4）。改为优先数报告 JSON，stdout grep 只作兜底。
         run: |
           dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --             --treenode-filter "/*/*/DialectRandomDiffTests/*" > nightly.log 2>&1
           code=$?
           cat nightly.log
-          count=$(grep -c "NIGHTLY-DIALECT-RAN" nightly.log || true)
+          report=$(find test/PalORM.Integration.Tests/bin -name '*.tunit-report.json' | head -1)
+          stdout_count=$(grep -c "NIGHTLY-DIALECT-RAN" nightly.log || true)
+          report_count=0
+          if [ -n "$report" ]; then
+            # 报告是单行 JSON：grep -c 数行恒 1，必须 -o 逐次出现计数
+            report_count=$(grep -o "NIGHTLY-DIALECT-RAN" "$report" | wc -l || true)
+          else
+            echo "::warning::tunit-report.json 未找到，marker 只按 stdout 统计"
+          fi
+          count=$((stdout_count > report_count ? stdout_count : report_count))
           if [ "$count" -lt 4 ]; then
-            echo "::error::夜间方言 lane 只记录到 $count/4 个执行 marker（开关或过滤器失效）"
+            echo "::error::夜间方言 lane 只记录到 $count/4 个执行 marker（stdout=$stdout_count 报告=$report_count；开关或过滤器失效）"
             exit 1
           fi
           exit $code
