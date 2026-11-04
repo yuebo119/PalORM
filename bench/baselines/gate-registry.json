@@ -1,0 +1,41 @@
+{
+  "_comment": "门禁清单单一真源（GATE-5，2026-11-04）。三个消费方读同一份文件：①verify-ai-system V14 注册表（v14 段）；②test-quality-scripts 自检夹具入口（selfCheck 段）；③verify-ai-system V17d 电池覆盖面（v17dProbes 段）。新增脚本必须在此登记；未登记的 self-check 脚本由一致性校验报红。mark 字段是脚本完成标记（V14 的判活正则）；args 为空串表示无参调用。",
+  "v14": [
+    { "script": "gate-check", "mark": "扫描完成", "args": "" },
+    { "script": "test-gate", "mark": "门禁(未)?通过", "args": "" },
+    { "script": "tech-debt-scan", "mark": "结果: ", "args": "" },
+    { "script": "doc-consistency-check", "mark": "通过: ", "args": "" },
+    { "script": "assertion-strength-check", "mark": "扫描完成", "args": "" },
+    { "script": "refine-scan", "mark": "纪律补充", "args": "" },
+    { "script": "review-scope", "mark": "账本规则", "args": "" },
+    { "script": "review-snapshot", "mark": "评审基线快照", "args": "" },
+    { "script": "probe-template", "mark": "用法", "args": "" },
+    { "script": "verify-action-items", "mark": "验证完成", "args": "ledger" },
+    { "script": "secret-guard", "mark": "敏感信息检查通过|无 staged 文件", "args": "" },
+    { "script": "stub-check", "mark": "无明确空壳|发现 \\d+ 个", "args": "" },
+    { "script": "gate-param-collection-reuse", "mark": "全部参数集合变更|未声明 \\d+ 处", "args": "" },
+    { "script": "precommit-build-check", "mark": "无需构建|受影响项目构建通过", "args": "" },
+    { "script": "compare-perf-batches", "mark": "用法:", "args": "--help" },
+    { "script": "assert-test-counts", "mark": "self-check: PASS", "args": "--self-check" },
+    { "script": "assert-coverage", "mark": "self-check: PASS", "args": "--self-check" },
+    { "script": "diff-coverage", "mark": "self-check: PASS", "args": "--self-check" },
+    { "script": "assert-conformance-contracts", "mark": "契约覆盖账本一致", "args": "" }
+  ],
+  "selfCheck": [
+    "assert-test-counts",
+    "assert-coverage",
+    "diff-coverage",
+    "assert-conformance-contracts",
+    "assert-coverage-matrix",
+    "assertion-strength-check",
+    "mutation-score"
+  ],
+  "v17dProbes": [
+    "D4", "D12", "D13",
+    "tech-debt#6", "tech-debt#7", "tech-debt#9", "tech-debt#15",
+    "T4", "T6", "T8", "T9", "T11",
+    "T-DEF-1", "T-DEF-4",
+    "assert-test-counts", "assert-coverage", "diff-coverage",
+    "assert-conformance-contracts", "assertion-strength-check"
+  ]
+}

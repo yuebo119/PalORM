@@ -10,6 +10,9 @@
 //   duration = 回放报告里的实际耗时
 // 阈值默认 60（方案 §9 里程碑 M1）。--previous 传入上一轮报告时，分数不得低于上一轮。
 //
+// --self-check（2026-11-04，GATE-1）：内嵌好/坏报告夹具自证打分与问题判定——
+// 好报告（68/68）必须 0 问题，低分报告（40/68）与较上轮下降的报告必须各判出问题。
+//
 // 用法：dotnet run --file scripts/mutation-score.cs -- --report <mutation-report.json>
 //                                                      [--previous <prev-report.json>] [--min 60]
 // 退出码：0 达标 / 1 低于阈值或较上轮下降 / 2 用法或输入错误。
@@ -20,6 +23,11 @@ using System.Text.Json.Nodes;
 Console.OutputEncoding = new UTF8Encoding(false);
 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" });
 Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" });
+
+if (args.Length == 1 && args[0] == "--self-check")
+{
+    return SelfCheck();
+}
 
 string? reportPath = null;
 string? previousPath = null;
@@ -95,6 +103,7 @@ if (previousPath is not null)
     if (File.Exists(prevResolved))
     {
         JsonNode previous = JsonNode.Parse(File.ReadAllText(prevResolved))!;
+        problems.AddRange(EvaluateRegression(report, previous));
         int prevTotal = previous["total"]!.GetValue<int>();
         int prevPassed = previous["passed"]!.GetValue<int>();
         if (prevTotal > 0)
@@ -102,10 +111,6 @@ if (previousPath is not null)
             int prevScore = (int)Math.Round(100.0 * prevPassed / prevTotal, MidpointRounding.AwayFromZero);
             Console.WriteLine($"上一轮：score={prevScore.ToString(CultureInfo.InvariantCulture)} "
                 + $"rules={prevPassed.ToString(CultureInfo.InvariantCulture)}/{prevTotal.ToString(CultureInfo.InvariantCulture)}");
-            if (score < prevScore)
-            {
-                problems.Add($"分数较上轮下降（{score} < {prevScore}）——规则通过率回退需先解释");
-            }
         }
     }
     else
@@ -136,6 +141,102 @@ if (problems.Count > 0)
 }
 Console.WriteLine("判别力分数达标");
 return 0;
+
+/// <summary>较上轮的回退判定：分数下降即问题（与阈值判定分离，供 --self-check 复用）。</summary>
+static List<string> EvaluateRegression(JsonNode current, JsonNode previous)
+{
+    var problems = new List<string>();
+    int prevTotal = previous["total"]!.GetValue<int>();
+    int prevPassed = previous["passed"]!.GetValue<int>();
+    int score = ComputeScore(current).Score;
+    if (prevTotal > 0)
+    {
+        int prevScore = (int)Math.Round(100.0 * prevPassed / prevTotal, MidpointRounding.AwayFromZero);
+        if (score < prevScore)
+        {
+            problems.Add($"分数较上轮下降（{score} < {prevScore}）——规则通过率回退需先解释");
+        }
+    }
+    return problems;
+}
+
+/// <summary>分数计算单一真源（主流程与 --self-check 共用）。</summary>
+static (int Score, int Total, int Passed) ComputeScore(JsonNode report)
+{
+    int total = report["total"]!.GetValue<int>();
+    int passed = report["passed"]!.GetValue<int>();
+    int score = total == 0
+        ? 0
+        : (int)Math.Round(100.0 * passed / total, MidpointRounding.AwayFromZero);
+    return (score, total, passed);
+}
+
+static int SelfCheck()
+{
+    // 好报告：68/68 全过 → 0 问题
+    JsonObject goodReport = new()
+    {
+        ["total"] = 68,
+        ["passed"] = 68,
+        ["failed"] = 0,
+        ["skipped"] = 0,
+        ["durationSeconds"] = 600.0,
+        ["results"] = new JsonArray(),
+    };
+    // 低分报告：40/68 → score 59 < 60 → 1 问题
+    JsonObject lowReport = new()
+    {
+        ["total"] = 68,
+        ["passed"] = 40,
+        ["failed"] = 28,
+        ["skipped"] = 0,
+        ["durationSeconds"] = 600.0,
+        ["contractsCovered"] = new JsonArray(),
+        ["results"] = new JsonArray(),
+    };
+
+    var good = EvaluateScore(goodReport, null, minScore: 60);
+    var low = EvaluateScore(lowReport, null, minScore: 60);
+    var dropped = EvaluateScore(lowReport, goodReport, minScore: 60);
+
+    var cases = new List<(string Name, int Expected, int Actual)>
+    {
+        ("好报告（68/68 → score 100，0 问题）", 0, good.Count),
+        ("坏报告①（40/68 → score 59 低于阈值）", 1, low.Count),
+        ("坏报告②（较上轮 100 下降到 59）", 2, dropped.Count),
+    };
+
+    bool ok = true;
+    foreach ((string name, int expected, int actual) in cases)
+    {
+        bool behaved = expected == actual;
+        ok &= behaved;
+        Console.WriteLine($"  {(behaved ? "PASS" : "FAIL")} {name}：期望问题数 {expected}，实际 {actual}");
+    }
+    if (ok)
+    {
+        Console.WriteLine("mutation-score self-check: PASS（好夹具 0 问题 / 坏夹具如期判出问题）");
+        return 0;
+    }
+    Console.Error.WriteLine("::error::mutation-score self-check: FAIL（打分或问题判定与夹具期望不符）");
+    return 1;
+}
+
+/// <summary>阈值 + 回退的问题判定（主流程与 --self-check 共用）。</summary>
+static List<string> EvaluateScore(JsonNode report, JsonNode? previous, int minScore)
+{
+    var problems = new List<string>();
+    (int score, _, _) = ComputeScore(report);
+    if (score < minScore)
+    {
+        problems.Add($"判别力分数 {score} < 阈值 {minScore}");
+    }
+    if (previous is not null)
+    {
+        problems.AddRange(EvaluateRegression(report, previous));
+    }
+    return problems;
+}
 
 static int CountContracts(string repoRoot)
 {
