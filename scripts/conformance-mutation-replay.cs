@@ -336,14 +336,16 @@ var rules = new Rule[]
         null, ["D-BULKMERGE-01"]),
 
     // R-C28：SaveAsync 的路由判据 HasDefaultKey（生成器发射体）。SaveCoreAsync 以
-    // HasDefaultKey(entity) 分流「默认键→插入 / 非默认键→UPSERT」——把判据反号，
-    // D-SAVE-01（主键不存在→插入新行）会走 UPSERT 而打向不存在的主键。
+    // HasDefaultKey(entity) 分流「默认键→InsertCoreAsync / 非默认键→UPSERT」——判据恒
+    // true 时 UPSERT 分支永远不进入。D-SAVE-01（主键 1 不存在，走 UPSERT 冲突插入）
+    // 与 D-SAVE-02（主键已存在走 UPSERT 更新）双双失去载体；此处声明 D-SAVE-02 为
+    // 期望红（它断言"不新增行"，改走 Insert 分支会插入失败或重复行，报错最直接）。
     new("R-C28", "src/PalORM.SourceGen/CommandFactoryEmitter.cs",
         "        sb.AppendLine($\"        return global::System.Collections.Generic.EqualityComparer<{pkColumn.ClrTypeName}>.Default.Equals(entity.{pkColumn.EscapedPropertyName}, default);\");",
-        "        sb.AppendLine(\"        return false;\");",
+        "        sb.AppendLine(\"        return true;\");",
         "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
-        "HasDefaultKey 恒 false：SaveAsync 对默认键实体也走 UPSERT 分支",
-        null, ["D-SAVE-01"]),
+        "HasDefaultKey 恒 true：SaveAsync 的 UPSERT 分支永远不进入",
+        null, ["D-SAVE-02"]),
 };
 
 var selected = rulePrefix is null
