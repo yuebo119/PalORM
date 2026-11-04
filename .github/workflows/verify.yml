@@ -126,6 +126,15 @@ jobs:
             - name: Assert Core coverage floor (M3-1)
               run: dotnet run --file scripts/assert-coverage.cs -- PalORM.Core cov-core.xml core
 
+            # COV-B1（2026-11-04）：Core 类级分支地板补到 12 类（此处只断言 Core 新增 5 类）
+            - name: Assert Core branch floors (COV-B1)
+              run: |
+                  dotnet run --file scripts/assert-coverage.cs -- --branch dataSession cov-core.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch sessionOperationState cov-core.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch dataSessionPool cov-core.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch bulkOperationFramework cov-core.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch crudPlan cov-core.xml
+
             # 2026-11-04：diff 覆盖率门禁（T1-diff）在 integration job 运行，需要 Core 侧
             # 覆盖率 XML 取命中并集（Core 代码可能由 Integration 用例跑到）。首次 CI 实跑
             # （run 41695120342）报「覆盖率文件不存在：cov-core.xml」——该文件只在 unit job
@@ -155,6 +164,12 @@ jobs:
 
             - name: Assert SourceGen coverage floor (COV-3)
               run: dotnet run --file scripts/assert-coverage.cs -- PalORM.SourceGen cov-sourcegen.xml sourceGen
+
+            # COV-B1（2026-11-04）：SourceGen 类级分支地板（block_coverage 代理）
+            - name: Assert SourceGen branch floors (COV-B1)
+              run: |
+                  dotnet run --file scripts/assert-coverage.cs -- --branch commandFactoryEmitter cov-sourcegen.xml
+                  dotnet run --file scripts/assert-coverage.cs -- --branch tableModel cov-sourcegen.xml
 
             - name: Assert SourceGen test counts (M0-3)
               run: >-

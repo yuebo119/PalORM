@@ -54,6 +54,34 @@
         "type": "SqliteProvider",
         "line": 65,
         "branch": 74
+      },
+      "dataSession": {
+        "type": "DataSession&lt;TProvider&gt;",
+        "branch": 71
+      },
+      "sessionOperationState": {
+        "type": "SessionOperationState",
+        "branch": 82
+      },
+      "dataSessionPool": {
+        "type": "DataSessionPool&lt;TProvider&gt;",
+        "branch": 76
+      },
+      "bulkOperationFramework": {
+        "type": "BulkOperationFramework",
+        "branch": 43
+      },
+      "crudPlan": {
+        "type": "CrudPlan",
+        "branch": 98
+      },
+      "commandFactoryEmitter": {
+        "type": "CommandFactoryEmitter",
+        "branch": 91
+      },
+      "tableModel": {
+        "type": "TableModel",
+        "branch": 91
       }
     }
   },
