@@ -57,6 +57,14 @@ var floorFile = Path.Combine(repoRoot, "bench", "baselines", "test-counts.json")
 var xml = File.ReadAllText(xmlPath);
 var coverage = JsonNode.Parse(File.ReadAllText(floorFile))!["coverage"]!;
 
+// GATE-3（2026-11-04）：空产物防线——无任何 range 记录的 XML 视为残缺，拒绝判过。
+// 上传产物截断/空文件这类事故不能落到"未找到模块"的笼统报错里，要有专属消息。
+if (!Regex.Matches(xml, "<range ").Any())
+{
+    Console.Error.WriteLine("::error::覆盖率 XML 为空或残缺（0 条 range 记录）——拒绝把空产物当成通过");
+    return 1;
+}
+
 if (branchMode)
 {
     JsonNode? entry = coverage["branch"]?[key];
@@ -205,6 +213,8 @@ static int SelfCheck(double maxSlackPercentagePoints)
         ("坏夹具⑤（分支达标但行覆盖 40% < 行地板 81%）", 1,
             JudgeBranch(FunctionXml("BatchUpdateSqlBuilder", line: 40.0, block: 90.0, lines: 10),
                 "BatchUpdateSqlBuilder", branchFloor: 80.0, lineFloor: 81.0, key: "batchUpdateSqlBuilder").Failures.Count == 0 ? 0 : 1),
+        ("坏夹具⑥（覆盖率 XML 残缺：0 条 range）", 1,
+            JudgeModule(RangelessModuleXml("PalORM.Core.dll", 80.0), "PalORM.Core", 50.0, "core", maxSlackPercentagePoints).Failures.Count == 0 ? 0 : 1),
     };
 
     bool ok = true;
@@ -224,6 +234,13 @@ static int SelfCheck(double maxSlackPercentagePoints)
 }
 
 static string ModuleXml(string name, double lineCoverage)
+    => "<coverage><module name=\"" + name + "\" block_coverage=\"0\" line_coverage=\""
+       + lineCoverage.ToString(CultureInfo.InvariantCulture) + "\">"
+       + "<range source_id=\"1\" start_line=\"1\" end_line=\"10\" covered=\"yes\" />"
+       + "</module></coverage>";
+
+// GATE-3 夹具：有 module 却零 range 的残缺产物（模拟上传截断/空文件）
+static string RangelessModuleXml(string name, double lineCoverage)
     => "<coverage><module name=\"" + name + "\" block_coverage=\"0\" line_coverage=\""
        + lineCoverage.ToString(CultureInfo.InvariantCulture) + "\" /></coverage>";
 
