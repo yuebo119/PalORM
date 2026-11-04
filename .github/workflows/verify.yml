@@ -123,6 +123,16 @@ jobs:
                   PalORM.Core.Tests
                   "$(find test/PalORM.Core.Tests/bin -name '*.tunit-report.json' | head -1)"
 
+            # CFG-3（2026-11-04）：上传 Linux 报告供 nightly windows lane 平台差异对账
+            - name: Upload Core TUnit report (CFG-3)
+              if: always()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: tunit-report-core
+                  path: test/PalORM.Core.Tests/bin/**/TestResults/*.tunit-report.json
+                  retention-days: 7
+                  if-no-files-found: ignore
+
             - name: Assert Core coverage floor (M3-1)
               run: dotnet run --file scripts/assert-coverage.cs -- PalORM.Core cov-core.xml core
 

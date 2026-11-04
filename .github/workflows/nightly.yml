@@ -63,7 +63,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: palorm
@@ -253,6 +253,14 @@ jobs:
         run: dotnet run --project test/PalORM.Core.Tests -c Debug --no-build
       - name: SourceGen tests
         run: dotnet run --project test/PalORM.SourceGen.Tests -c Debug --no-build
+      # CFG-3（2026-11-04）：上传 Windows 报告供平台差异脚本消费（与 Linux verify.yml 报告比对）
+      - name: Upload Windows test report
+        uses: actions/upload-artifact@v7
+        with:
+          name: tunit-report-windows
+          path: test/PalORM.Core.Tests/bin/Debug/**/TestResults/*.tunit-report.json
+          retention-days: 7
+          if-no-files-found: ignore
       # 可选：win-x64 NativeAOT 发布。失败不红（AOT 需要 VS C++ 工具链，runner 镜像未必齐备），
       # 但日志必须可读：失败时保留完整输出供人工判读。
       - name: Optional win-x64 NativeAOT publish
