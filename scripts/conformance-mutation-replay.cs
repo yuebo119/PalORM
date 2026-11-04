@@ -375,7 +375,14 @@ static (int Exit, string Output) Execute(string fileName, string arguments, stri
     using var process = Process.Start(startInfo)!;
     Task<string> stdout = process.StandardOutput.ReadToEndAsync();
     Task<string> stderr = process.StandardError.ReadToEndAsync();
-    process.WaitForExit();
+    // 单条预算守卫：注入可能让测试挂死（实测 R-M-S03 的租约计数泄漏使 Dispose 等待不返回）。
+    // 挂死的回放必须表现为一条 FAIL，不能把整轮门禁吊在那里。
+    if (!process.WaitForExit(TimeSpan.FromMinutes(3)))
+    {
+        try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+        return (-1, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult()
+            + "\n[超时] 子进程 3 分钟未结束，已终止（注入导致挂死）");
+    }
     return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
 }
 
