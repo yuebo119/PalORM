@@ -1327,6 +1327,23 @@ internal static class Program
                     throw new InvalidOperationException(
                         $"PooledGetByKey 结果不等价：命中 {found}（期望 {SessionLoopCount}）");
             }, ct).ConfigureAwait(false);
+
+        // ── 写路径池化租还组（PERF-5.2，2026-11-05）──
+        // 与上面三项读路径池化同段：全是"高吞吐逐行写"的真实形态（一请求一会话）。
+        // Insert/Update 的主键段策略与 per-op 版本一致（Insert 用 rows + i 错开、Update 打散
+        // 已有行）；PooledBulkInsert 用 reset + 独立偏移段，避免与 BulkInsert 的主键相撞。
+        await MeasAsync(info, impl, "PooledInsert", "CRUD", rows, conn, results, scale, reset,
+            async (im, c, i) => await im.PooledInsertAsync(c, Dataset.Seed(rows + i), ct)
+                .ConfigureAwait(false), ct).ConfigureAwait(false);
+
+        await MeasAsync(info, impl, "PooledUpdate", "CRUD", rows, conn, results, scale, null,
+            async (im, c, i) => await im.PooledUpdateAsync(c, Dataset.Seed(i * 7919 % rows), ct)
+                .ConfigureAwait(false), ct).ConfigureAwait(false);
+
+        await MeasAsync(info, impl, "PooledBulkInsert", "CRUD", rows, conn, results, scale, reset,
+            async (im, c, i) => _ = await im.PooledBulkInsertAsync(
+                c, Dataset.SeedRows(rows, rows * 1000L + (long)rows * (i + 1)), ct).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>带操作名上下文的测量包装——失败时报出是哪个操作，便于定位。
@@ -1473,6 +1490,8 @@ internal static class Program
         or "Insert" or "Update" or "KeysetPage" or "WhereIn" or "GetByKeySession"
         // PooledGetByKey：固定 32 键循环（同 GetByKeySession 判据——行数不进测量）
         or "PooledGetByKey"
+        // PooledInsert / PooledUpdate：每轮固定 1 行（同 Insert/Update 判据）
+        or "PooledInsert" or "PooledUpdate"
         // EnumInserts：事务内固定 100 行/轮（与 TxHundredInserts 同判据——行数不进测量）
         or "EnumInserts");
 
@@ -1492,7 +1511,8 @@ internal static class Program
         "UpsertBatch", "InsertReturningId", "WideQueryAll", "IncludeJoin",
         "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback",
         "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts",
-        "EnumInserts", "GetAllAsync", "PooledGetByKey"
+        "EnumInserts", "GetAllAsync", "PooledGetByKey",
+        "PooledInsert", "PooledUpdate", "PooledBulkInsert"
     ];
 
     /// <summary>PL-4：比值不计比的项。地板这两项直接返回插值字面量（见

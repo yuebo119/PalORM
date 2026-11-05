@@ -26,6 +26,16 @@ internal interface IPerfImplementation
     ///（租出 → GetByKey → 归还）——"一请求一会话"的真实请求形状。PalORM 臂走
     /// DataSessionPool；ADO/Dapper 无会话税，天然形态即基准（实现与 GetByKeySession 同）。</summary>
     Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct);
+
+    // ── 写路径池化租还组（PERF-5.2，2026-11-05）──
+    // 现矩阵的写路径只有 per-op 形态（每操作一个会话），而"高吞吐逐行写"的真实形态是
+    // 池化租还：一次租期写一行再归还。三项各测一条，三方言都跑。
+    /// <summary>池化单行 INSERT（租出 → 写 → 归还）。ADO/Dapper 无会话税，天然形态即基准。</summary>
+    Task PooledInsertAsync(DbConnection conn, S1Row row, CancellationToken ct);
+    /// <summary>池化单行 UPDATE（租出 → 写 → 归还）。</summary>
+    Task PooledUpdateAsync(DbConnection conn, S1Row row, CancellationToken ct);
+    /// <summary>池化批量插入（一次租期写整批）。</summary>
+    Task<long> PooledBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct);
     /// <summary>长会话循环直查（GetByKeySession 项）——单会话内循环 N 次按键直查并返回命中数。
     /// N 固定 32（覆盖 A9 晋升阈值 3 且摊销会话构造）；三臂契约：ADO 命令复用、Dapper 无状态
     /// 循环、PalORM 单 DataSession（A9 复用槽生效）——"推荐用法"的对照面（step13 §6.2 挂账）。</summary>
@@ -303,6 +313,16 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     /// <summary>池化臂的基准：ADO 无会话税，天然形态即行业最优（与 GetByKeySession 同体）。</summary>
     public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
         => GetByKeySessionAsync(conn, ids, ct);
+
+    // 写路径池化组：无会话可池化，天然形态即 per-op 实体（与 PooledGetByKey 同口径）。
+    public Task PooledInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => InsertAsync(conn, row, ct);
+
+    public Task PooledUpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => UpdateAsync(conn, row, ct);
+
+    public Task<long> PooledBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+        => BulkInsertAsync(conn, rows, ct);
 
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
     {
@@ -1637,6 +1657,16 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     public Task<int> PooledGetByKeyAsync(DbConnection conn, IReadOnlyList<long> ids, CancellationToken ct)
         => GetByKeySessionAsync(conn, ids, ct);
 
+    // 写路径池化组：无会话可池化，天然形态即 per-op 实体（与 PooledGetByKey 同口径）。
+    public Task PooledInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => InsertAsync(conn, row, ct);
+
+    public Task PooledUpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => UpdateAsync(conn, row, ct);
+
+    public Task<long> PooledBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+        => BulkInsertAsync(conn, rows, ct);
+
     public async Task<List<S1Row>> QueryAllAsync(DbConnection conn, CancellationToken ct)
     {
         IEnumerable<S1Row> rows = await conn.QueryAsync<S1Row>($"SELECT {Cols} FROM {T}").ConfigureAwait(false);
@@ -2221,6 +2251,90 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
                 return PooledLoopAsync(_pgPool, ids, ct);
             default:
                 throw UnsupportedDialect(D);
+        }
+    }
+
+    // ── 写路径池化租还组（PERF-5.2，2026-11-05）：每操作一次完整租期 ──
+    // 池按方言惰性建一次（与 PooledGetByKey 共用同一组实例字段，池在预热段稳定）。
+
+    public Task PooledInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => PooledInsertCoreAsync(
+                _sqlitePool ??= DataSessionPool<PalORM.Sqlite.SqliteProvider>.Create(PoolOptions()), row, ct),
+            Dialect.MySql => PooledInsertCoreAsync(
+                _mySqlPool ??= DataSessionPool<PalORM.MySql.MySqlProvider>.Create(PoolOptions()), row, ct),
+            Dialect.PostgreSql => PooledInsertCoreAsync(
+                _pgPool ??= DataSessionPool<PalORM.PostgreSql.PostgreSqlProvider>.Create(PoolOptions()), row, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    public Task PooledUpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => PooledUpdateCoreAsync(
+                _sqlitePool ??= DataSessionPool<PalORM.Sqlite.SqliteProvider>.Create(PoolOptions()), row, ct),
+            Dialect.MySql => PooledUpdateCoreAsync(
+                _mySqlPool ??= DataSessionPool<PalORM.MySql.MySqlProvider>.Create(PoolOptions()), row, ct),
+            Dialect.PostgreSql => PooledUpdateCoreAsync(
+                _pgPool ??= DataSessionPool<PalORM.PostgreSql.PostgreSqlProvider>.Create(PoolOptions()), row, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    public Task<long> PooledBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => PooledBulkInsertCoreAsync(
+                _sqlitePool ??= DataSessionPool<PalORM.Sqlite.SqliteProvider>.Create(PoolOptions()), rows, ct),
+            Dialect.MySql => PooledBulkInsertCoreAsync(
+                _mySqlPool ??= DataSessionPool<PalORM.MySql.MySqlProvider>.Create(PoolOptions()), rows, ct),
+            Dialect.PostgreSql => PooledBulkInsertCoreAsync(
+                _pgPool ??= DataSessionPool<PalORM.PostgreSql.PostgreSqlProvider>.Create(PoolOptions()), rows, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static async Task PooledInsertCoreAsync<TProvider>(
+        DataSessionPool<TProvider> pool, S1Row row, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = await pool.RentAsync(ct).ConfigureAwait(false);
+        try
+        {
+            _ = await session.InsertAsync(row, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static async Task PooledUpdateCoreAsync<TProvider>(
+        DataSessionPool<TProvider> pool, S1Row row, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = await pool.RentAsync(ct).ConfigureAwait(false);
+        try
+        {
+            _ = await session.UpdateAsync(row, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<long> PooledBulkInsertCoreAsync<TProvider>(
+        DataSessionPool<TProvider> pool, IReadOnlyList<S1Row> rows, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+    {
+        DataSession<TProvider> session = await pool.RentAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await session.BulkInsertAsync(rows, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
         }
     }
 
