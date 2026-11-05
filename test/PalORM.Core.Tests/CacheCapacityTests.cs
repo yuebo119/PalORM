@@ -6,7 +6,12 @@ namespace PalORM.Core.Tests;
 /// <c>PartialUpdateSqlCache</c> 的列子集位是 2^N——两者都随调用方可变。上限本身是防线，
 /// 没有用例时"上限被删掉"不会有任何红（B95 家族：数字对但没测到目标）。</para>
 /// <para>满员策略 = 拒写（照抄 <c>SqlShapeCache</c>）：既有条目继续命中，新键逐次重建，
-/// 行为等同缓存不存在，正确性不受影响。</para></summary>
+/// 行为等同缓存不存在，正确性不受影响。</para>
+/// <para><b>为什么整类串行</b>：三个用例都靠「先 Clear 再精确填满」构造满员态，而
+/// <c>QueryBuilderShared.OrderByClauseText</c> 与 <c>DataSessionCache.PartialUpdateSqlCache</c>
+/// 是进程级静态状态。并行执行时一个用例的 <c>Clear</c> 会插进另一个用例的填满循环，
+/// 满员态不成立即断言失败（CI run 42029682678 实测三个用例同时红）。</para></summary>
+[NotInParallel]
 internal sealed class CacheCapacityTests
 {
     [Test]
