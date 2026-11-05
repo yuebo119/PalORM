@@ -49,6 +49,18 @@
     <RepositoryType>git</RepositoryType>
     <PackageReleaseNotes>https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md</PackageReleaseNotes>
 
+    <!-- SemVer 2.0.0 规则 6/7/8 的机械化（2026-11-05 接入，发布规范 §1.4）：
+         Pack 任务尾部与上一版已发布包做元数据级 API 比对，任何二进制破坏（成员删除、
+         签名变更、TFM 支持被丢弃）直接失败（CP0002/CP0003 等）。有意破坏时用
+         dotnet pack /p:ApiCompatGenerateSuppressionFile=true 生成
+         CompatibilitySuppressions.xml 并提交：该文件存在与否是 semver-bump-check.cs
+         判定「要求 MAJOR」的机械依据。发版后删除该文件，并把基线版本推进到新版本。
+         限定 src/ 下的项目——tools/ 与 bench/ 不可发布，若也开校验会因找不到同名
+         基线包而 pack 失败（PalORM.Testing 虽在 src/ 但 IsPackable=false，pack 被跳过）。
+         离线逃生口：-p:EnablePackageValidation=false（仅本地排查，CI 不放行）。 -->
+    <EnablePackageValidation Condition="$(MSBuildProjectDirectory.Replace('\','/').Contains('/src/'))">true</EnablePackageValidation>
+    <PackageValidationBaselineVersion Condition="$(MSBuildProjectDirectory.Replace('\','/').Contains('/src/'))">6.8.0</PackageValidationBaselineVersion>
+
     <!-- SourceLink：NuGet.org 包页显示源码链接，F12 可步入源码（现代实践标准）。
          EmbedUntrackedSources 把未跟踪源文件嵌入 PDB；PublishRepositoryUrl 把仓库 URL 写入 PDB。
          ContinuousIntegrationBuild 只在 CI 设 true（启用确定性构建+deterministic PDB），

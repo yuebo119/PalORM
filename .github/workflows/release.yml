@@ -129,6 +129,7 @@ jobs:
               run: |
                   VERSION="${{ steps.ver.outputs.version }}"
                   dotnet run --file scripts/changelog-check.cs -- "$VERSION"
+                  dotnet run --file scripts/semver-bump-check.cs -- "$VERSION"
                   dotnet run --file scripts/release-notes.cs -- "$VERSION" --check
 
             - name: Pack all src projects
@@ -182,6 +183,9 @@ jobs:
               with:
                   tag_name: ${{ github.ref_name }}
                   name: PalORM ${{ github.ref_name }}
+                  # SemVer 规则 9：带先行版本号（如 v6.9.0-preview.1）的发布是预发布，
+                  # 不得在 GitHub 上被当作 Latest。2026-11-05 补（此前预览版也生成正式 Release）。
+                  prerelease: ${{ contains(github.ref_name, '-') }}
                   body_path: full-release-body.md
                   files: |
                       artifacts/packages/*.nupkg

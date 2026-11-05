@@ -76,7 +76,6 @@ if (headingIndexes.Count == 0)
 }
 
 var fail = 0;
-var warn = 0;
 
 // ── 1. 目标版本段定位（跳过可选的 [Unreleased] 前置段） ──
 if (versionHeadings.Count == 0)
@@ -157,7 +156,9 @@ if (breakIdx >= 0)
         fail = 1;
     }
 
-    // ── 6. PATCH 版本带 💔 警告（历史先例见发布变更日志规范 §二，不阻断） ──
+    // ── 6. PATCH 版本带 💔 判 FAIL（2026-11-05 由警告升级为阻断）──
+    // 依据：项目政策明文规定「行为变更走 MINOR + 💔 段 + 升级指南」（发布变更日志规范 §二），
+    // 那么 PATCH 段出现 💔 就是政策自相矛盾，警告等于没有约束。
     if (oldVersion.Length > 0 && semVer.IsMatch(oldVersion))
     {
         var o = oldVersion.Split('-')[0].Split('+')[0].Split('.');
@@ -168,8 +169,10 @@ if (breakIdx >= 0)
             : "无核心版本变化";
         if (bump == "PATCH")
         {
-            Console.Error.WriteLine("::warning::PATCH 版本段出现 💔 段——请确认这是修复而非新破坏（PATCH 不应含行为变更）");
-            warn = 1;
+            Console.Error.WriteLine(
+                "::error::PATCH 版本段出现 💔 段——行为变更按项目政策必须走 MINOR"
+                + "（见发布变更日志规范 §二）；若确为纯缺陷修复请删除 💔 段");
+            fail = 1;
         }
         else
         {
@@ -187,9 +190,7 @@ if (fail != 0)
     Console.Error.WriteLine("\nFAIL CHANGELOG 版本段校验未通过");
     return 1;
 }
-Console.WriteLine(warn != 0
-    ? "\nPASS（含 1 条警告，见上）CHANGELOG 版本段校验通过"
-    : "\nPASS CHANGELOG 版本段校验通过");
+Console.WriteLine("\nPASS CHANGELOG 版本段校验通过");
 return 0;
 
 static string FindRepoRoot()
