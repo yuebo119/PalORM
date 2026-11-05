@@ -4,21 +4,23 @@
 
 ## [Unreleased]
 
+批量写入与时间类型的默认行为向 PostgreSQL 对齐，两处静默失败改为调用期抛错；新增批量回填主键重载与一条编译期诊断。
+
 ### 💔 破坏性/行为变更
 
-- MySQL 上 `BulkInsertAsync(entities)`（不带 `batchSize` 的重载）的默认批宽由 1000 行/批改为整段单批，与 PostgreSQL 一致：单次 LOAD DATA、一次列 schema 查询与一次隐式提交取代 N 次。`local_infile=OFF` 的多值回退路径仍按 1000 行/语句钳制（SQL 文本规模纪律）。需要限制单次 LOAD DATA 持锁行数时用带 `batchSize` 的重载。依据：同批基准实测 P/ADO 1.34→0.97（基准臂原本即整段配置，产品默认停在 1000 使报告数字不能由默认 API 复现）。
-- PostgreSQL 上 `DateTime` 列的类型由 `timestamp`（无时区）改为 `timestamptz`。参数侧 `DbType.DateTime` 被 Npgsql 映射为 timestamptz，列与参数不匹配会让"读回再写回"抛 `ArgumentException`；统一后 DateTime 在 PG 上表示 UTC 时刻，往返可用。已有库需手工 `ALTER TABLE ... ALTER COLUMN ... TYPE timestamptz`（`MigrateAsync` 只建不改）。
-- `ToPageAsync` 对 builder 上已设的 `Skip()` 由「静默忽略」改为抛 `InvalidOperationException`。键集分页以 `lastValue` 锚点续页，OFFSET 语义不适用；静默丢弃用户显式设置的子句会让分页结果与预期不符。
-- SQLite 上 `ForUpdate()` / `ForShare()` 改为构建期抛 `NotSupportedException`。原来构建期放过、执行期由数据库报 `near "UPDATE": syntax error`；SQLite 没有行级锁，这两个 API 在该方言上从来不可用，本次把失败提前到调用点（ITM-639 终态）。
+- **MySQL 批插默认整段单批**：`BulkInsertAsync(entities)`（不带 `batchSize` 的重载）的默认批宽由 1000 行/批改为整段单批，与 PostgreSQL 一致，单次 LOAD DATA、一次列 schema 查询与一次隐式提交取代 N 次。需要限制单次 LOAD DATA 持锁行数时改用带 `batchSize` 的重载；`local_infile=OFF` 的多值回退路径仍按 1000 行/语句钳制。依据：同批基准实测 P/ADO 1.34→0.97（基准臂原本即整段配置，产品默认停在 1000 使报告数字不能由默认 API 复现）。
+- **PG `DateTime` 列改 `timestamptz`**：列类型由无时区的 `timestamp` 改为 `timestamptz`，与参数侧 `DbType.DateTime` 的 Npgsql 映射对齐，统一后 `DateTime` 在 PG 上表示 UTC 时刻。已有库需手工 `ALTER TABLE ... ALTER COLUMN ... TYPE timestamptz`（`MigrateAsync` 只建不改），否则「读回再写回」会抛 `ArgumentException`。
+- **`ToPageAsync` 遇 `Skip()` 抛异常**：builder 上已设的 `Skip()` 由静默忽略改为抛 `InvalidOperationException`。键集分页以 `lastValue` 锚点续页，OFFSET 语义不适用，静默丢弃用户显式设置的子句会让分页结果与预期不符。
+- **SQLite 行锁 API 构建期抛异常**：`ForUpdate()` / `ForShare()` 由执行期数据库报 `near "UPDATE": syntax error` 提前到构建期抛 `NotSupportedException`。SQLite 没有行级锁，这两个 API 在该方言上从来不可用，本次把失败提前到调用点。
 
 ### 变更要点
 
-- 新增编译期诊断 PALORM054：`SaveAsync<T>` 且 `T` 带 `[ConcurrencyCheck]` 时报错（UPSERT 无条件覆盖、无法遵守乐观锁，产品在所有方言上显式抛 `NotSupportedException`）。诊断总数 45 增至 46。
-- MySQL 的命令超时改为按耗时判定：该驱动对超时没有统一形态——标量路径中断查询后不抛异常、返回部分结果（实测 `SELECT SLEEP(5)` 在 1 秒后返回 1），列表路径抛 `MySqlException`（`ErrorCode=CommandTimeoutExpired`，内层 `QueryInterrupted` 1317）。因此 PalORM 在 MySQL 且设置了命令超时时，成功返回与抛出异常两条路都先看是否越过截止线，越过即抛 `TimeoutException`（无分配计时）。覆盖 `ScalarAsync` / `GetAsync` / `GetAllAsync` 与查询管线（`ToListAsync` / `FirstOrDefaultAsync` / `ForEachAsync`）。
-- 命令超时统一以 `TimeoutException` 呈现：驱动把超时包在自身异常里（`NpgsqlException` 内层为超时异常），现在在三个位置解包——弹性执行器出口、三处直调分支的兜底 catch、`ScalarAsync` 公开入口（覆盖未配置弹性的直接分支）。熔断计数仍按原异常计算。
-- 新增 `BulkInsertReturningAsync`：PG 与 SQLite 走多行 `INSERT ... RETURNING` 并按行序回填自增主键；MySQL 因 `LAST_INSERT_ID` 只保证首值而明确抛 `NotSupportedException`。原 `BulkInsertAsync` 保持最快的写入形态（不回填），两者分工写进 API 参考。
-- PG 的 DateTime 往返回归测试 `PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds` 锁定列型修复；方言对称性差异表登记 PG 侧 `TIMESTAMPTZ`。
-- 行锁子句位于 `LIMIT` 之后的形态断言移到 PostgreSQL（`PostgreSql_LockClause_AppearsAfterLimit`），SQLite 侧只断言构建期拒绝。
+- **新增诊断 PALORM054**：`SaveAsync<T>` 且 `T` 带 `[ConcurrencyCheck]` 时报错（UPSERT 无条件覆盖、无法遵守乐观锁，产品在所有方言上显式抛 `NotSupportedException`）。诊断总数 45 增至 46。
+- **MySQL 超时按耗时判定**：该驱动对超时没有统一形态，标量路径中断查询后不抛异常、返回部分结果（实测 `SELECT SLEEP(5)` 在 1 秒后返回 1），列表路径抛 `MySqlException`（`ErrorCode=CommandTimeoutExpired`，内层 `QueryInterrupted` 1317）。因此 PalORM 在 MySQL 且设置了命令超时时，成功返回与抛出异常两条路都先看是否越过截止线，越过即抛 `TimeoutException`（无分配计时），覆盖 `ScalarAsync` / `GetAsync` / `GetAllAsync` 与查询管线（`ToListAsync` / `FirstOrDefaultAsync` / `ForEachAsync`）。
+- **超时统一为 `TimeoutException`**：驱动把超时包在自身异常里（`NpgsqlException` 内层为超时异常），现在在三个位置解包：弹性执行器出口、三处直调分支的兜底 catch、`ScalarAsync` 公开入口（覆盖未配置弹性的直接分支）。熔断计数仍按原异常计算。
+- **新增 `BulkInsertReturningAsync`**：PG 与 SQLite 走多行 `INSERT ... RETURNING` 并按行序回填自增主键；MySQL 因 `LAST_INSERT_ID` 只保证首值而明确抛 `NotSupportedException`。原 `BulkInsertAsync` 保持最快的写入形态（不回填），两者分工写进 API 参考。
+- **PG DateTime 往返回归测试**：`PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds` 锁定列型修复；方言对称性差异表登记 PG 侧 `TIMESTAMPTZ`。〔内部〕
+- **行锁子句形态断言移到 PG**：`PostgreSql_LockClause_AppearsAfterLimit`，SQLite 侧只断言构建期拒绝。〔内部〕
 
 ## [6.8.0] - 2026-10-26
 

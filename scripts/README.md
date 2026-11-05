@@ -62,8 +62,9 @@
 
 | 脚本 | 用途 | 调用时机 |
 |------|------|:---:|
-| `pre-release-check.cs` | 发布前预检：版本残留扫描 + CHANGELOG 结构校验 + 模拟 CI 消费者路径（v6.1.0 发布事故后固化） | 打 tag 前 |
+| `pre-release-check.cs` | 发布前预检六步：版本残留扫描 + CHANGELOG 结构校验 + Release body 形态校验 + 模拟 CI 消费者路径（v6.1.0 发布事故后固化） | 打 tag 前 |
 | `changelog-check.cs` | CHANGELOG 版本段结构校验：顶部版本对账 / 标题格式 / 日期与 tag 提交日一致 / 条目非空 / 💔 段完整性（发布变更日志规范 §四） | 打 tag 前 + release.yml pack 前 |
+| `release-notes.cs` | Release body 单一实现：从 CHANGELOG 版本段派生「头条 + ⚠️ 升级须知 + 本版变更 + 包清单一行 + 页脚」，本地预览与 CI 共用；`--check` 校验头条、短标题形态与 1400 字符体量（规范 §七） | 打 tag 前预览 + release.yml 生成 |
 | `release-version-scan.cs` | 升版本旧号残留扫描 + SemVer 2.0.0 格式门禁（含 MAJOR/MINOR/PATCH 提示；版本字面量多处同步的机械兜底） | 升版本提交前 |
 
 ## 性能基准

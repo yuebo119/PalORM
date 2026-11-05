@@ -123,10 +123,13 @@ jobs:
               # Accuracy"位于 push 之后——其数字回显经 $(...) 捕获时 grep 空匹配 echo 恒
               # exit 0，结构上不可能让发布变红，还把三套测试重跑了一遍；数字口径由
               # verify.yml 的测试数地板断言（M0-3）接管）。
-              # 2026-10-26 起由 changelog-check 承接：裸 grep 只查存在性，现校验顶部版本
-              # 对账、标题格式、日期与 tag 提交日一致、条目非空、💔 段完整性（规范 §四）。
+              # 2026-10-26 起由 changelog-check 承接结构校验；2026-11-05 增 release-notes
+              # --check 承接 Release body 形态校验（头条存在、条目带短标题、体量上限），
+              # 两者都必须在 pack 之前过，否则包已推上 NuGet 才发现 body 不合格。
               run: |
-                  dotnet run --file scripts/changelog-check.cs -- "${{ steps.ver.outputs.version }}"
+                  VERSION="${{ steps.ver.outputs.version }}"
+                  dotnet run --file scripts/changelog-check.cs -- "$VERSION"
+                  dotnet run --file scripts/release-notes.cs -- "$VERSION" --check
 
             - name: Pack all src projects
               run: |
@@ -162,73 +165,16 @@ jobs:
                   --skip-duplicate
 
             - name: Extract Release Notes
+              # 2026-11-05 起 body 由 scripts/release-notes.cs 单一实现生成：本地预览与 CI
+              # 走同一段代码，不再维护 awk 与 C# 两套提取逻辑。派生规则见发布变更日志规范 §七。
               if: github.event_name == 'push'
               run: |
-                  VERSION="${GITHUB_REF_NAME#v}"
-
-                  # ── 1. 提取 CHANGELOG 当前版本段 ──
-                  awk -v ver="$VERSION" '
-                      /^## \[/ {
-                          if (found) exit
-                          if (index($0, "[" ver "]")) { found=1; next }
-                      }
-                      found { print }
-                  ' CHANGELOG.md > release-notes.md
-
-                  # ── 2. 动态生成包表格（从实际打包产物读取，增减包零维护） ──
-                  PKG_TABLE=""
-                  for nupkg in artifacts/packages/*.nupkg; do
-                      pkg=$(basename "$nupkg" | sed "s/\.$VERSION\.nupkg//")
-                      PKG_TABLE="$PKG_TABLE| $pkg | $VERSION |\n"
-                  done
-
-                  # ── 3. 获取上一版本号（CHANGELOG 中当前段的下一个 ## 行） ──
-                  PREV_VER=$(awk -v ver="$VERSION" '
-                      /^## \[/ {
-                          if (found) { gsub(/## \[|\].*/, "", $0); print $0; exit }
-                          if (index($0, "[" ver "]")) found=1
-                      }
-                  ' CHANGELOG.md)
-
-                  # ── 4. 组装 Release Body ──
-                  {
-                      echo "# PalORM $GITHUB_REF_NAME"
-                      echo ""
-                      # 上一版本对比链接
-                      if [ -n "$PREV_VER" ]; then
-                          echo "**[与 v$PREV_VER 对比](https://github.com/yuebo119/PalORM/compare/v$PREV_VER...$GITHUB_REF_NAME)** |"
-                      fi
-                      echo "[NuGet](https://www.nuget.org/packages/PalORM.Core) |"
-                      echo "[完整变更日志](https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md)"
-                      echo ""
-
-                      # ── 发布包 ──
-                      echo "## 📦 发布包"
-                      echo ""
-                      echo "| 包名 | 版本 |"
-                      echo "|------|------|"
-                      echo -e "$PKG_TABLE" | head -n -1  # 去尾部空行
-                      echo ""
-
-                      # ── 变更明细（CHANGELOG 提取段） ──
-                      if [ -s release-notes.md ]; then
-                          echo "## 📋 变更明细"
-                          echo ""
-                          cat release-notes.md
-                          echo ""
-                      fi
-
-                      # ── 底部链接 ──
-                      echo "---"
-                      echo ""
-                      echo "| 资源 | 链接 |"
-                      echo "|------|------|"
-                      echo "| 📖 文档 | [README](https://github.com/yuebo119/PalORM#readme) |"
-                      echo "| 📋 全部变更 | [CHANGELOG.md](https://github.com/yuebo119/PalORM/blob/main/CHANGELOG.md) |"
-                      echo "| 🏗️ 架构决策 | [ADR 目录](https://github.com/yuebo119/PalORM/tree/main/docs/adr) |"
-                      echo "| 🐛 报告问题 | [Issues](https://github.com/yuebo119/PalORM/issues) |"
-                      echo "| 💬 讨论 | [Discussions](https://github.com/yuebo119/PalORM/discussions) |"
-                  } > full-release-body.md
+                  dotnet run --file scripts/release-notes.cs -- \
+                      "${{ steps.ver.outputs.version }}" \
+                      --write full-release-body.md \
+                      --packages-dir artifacts/packages
+                  echo "──── full-release-body.md ($(wc -c < full-release-body.md) 字节) ────"
+                  cat full-release-body.md
 
             - name: Create GitHub Release
               if: github.event_name == 'push'
