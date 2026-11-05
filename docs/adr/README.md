@@ -30,3 +30,4 @@
 | [ADR-T](ADR-T-注释分层与历史决策迁移.md) | 注释分层与历史决策迁移 | 已采纳 | 2026-10-31 架构评审 Phase 2 |
 | [ADR-U](ADR-U-IQueryInterceptor覆盖边界.md) | IQueryInterceptor 覆盖边界与 ICommandInterceptor 窗口 | 已采纳 | 2026-10-31 架构评审 D1 裁决 |
 | [ADR-V](ADR-V-迁移原子性与方言差异.md) | 迁移原子性与方言差异 | 已实施 | 2026-10-31 架构评审 D2 裁决 |
+| [ADR-W](ADR-W-迁移漂移检测.md) | 迁移漂移检测的默认关闭与复用性取舍 | 已实施 | 2026-11-06 迁移假绿审计（SchemaDrift + ValidateMigrationDrift） |

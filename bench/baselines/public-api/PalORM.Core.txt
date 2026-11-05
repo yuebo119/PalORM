@@ -530,6 +530,7 @@ P:PalORM.DbOptions|ReadSessionSetupSql|System.String
 P:PalORM.DbOptions|RetryBackoff|System.Func`2[[System.Int32, System.Private.CoreLib],[System.TimeSpan, System.Private.CoreLib]]
 P:PalORM.DbOptions|SessionSetupSql|System.String
 P:PalORM.DbOptions|UseSynchronousRowRead|System.Boolean
+P:PalORM.DbOptions|ValidateMigrationDrift|System.Boolean
 P:PalORM.DbOptions|ValidateQueryColumnOrder|System.Boolean
 P:PalORM.DefaultValueAttribute|Expression|System.String
 P:PalORM.DryRunResult|Parameters|System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common]]
@@ -573,6 +574,7 @@ P:PalORM.MigrationFailure|Statement|System.String
 P:PalORM.MigrationResult|CreatedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.MigrationResult|FailedIndexes|System.Collections.Generic.IReadOnlyList`1[[PalORM.MigrationFailure, PalORM.Core]]
 P:PalORM.MigrationResult|RolledBack|System.Boolean
+P:PalORM.MigrationResult|SchemaDrift|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.MigrationResult|SkippedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.MigrationResult|Tables|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.MigrationResult|Transactional|System.Boolean

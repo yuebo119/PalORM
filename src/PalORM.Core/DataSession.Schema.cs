@@ -211,7 +211,61 @@ public sealed partial class DataSession<TProvider>
             analyzeCmd.CommandText = analyzeSql;
             await analyzeCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+        // 漂移检测（默认关闭）：只建不改的迁移成功返回不等于 schema 已跟上实体声明。
+        // 放在 ANALYZE 之后：列查询要读到最新 schema，且 ANALYZE 不改变列集合。
+        MigrationResult drifted = await ApplySchemaDriftAsync(result, ct).ConfigureAwait(false);
+        if (!ReferenceEquals(drifted, result))
+        {
+            result = drifted;
+            _lastMigrationResult = result;
+        }
         return result;
+    }
+
+    /// <summary>漂移检测的开关与结果合并（从 MigrateWithResultAsync 抽出，降 S3776）：
+    /// 关闭时原样返回同一实例（调用方以引用相等判定未变），开启且检出漂移时返回带
+    /// <see cref="MigrationResult.SchemaDrift"/> 的新实例。</summary>
+    private async ValueTask<MigrationResult> ApplySchemaDriftAsync(MigrationResult result, CancellationToken ct)
+    {
+        if (!_options.ValidateMigrationDrift) return result;
+        IReadOnlyList<string> drift = await CollectSchemaDriftAsync(ct).ConfigureAwait(false);
+        return drift.Count == 0 ? result : result with { SchemaDrift = drift };
+    }
+
+    /// <summary>迁移后漂移检测：逐表比对实体声明列与库内实际列。
+    /// <para>复用 <see cref="IDbProvider.ConfigureSchemaCommand"/>（三方言各自的列查询），
+    /// 不新增方言分支，也不引入表名拼接的注入面（MySQL/SQLite 走标识符转义，PG 走参数）。
+    /// 成本为每表一次查询，故只在 <see cref="DbOptions.ValidateMigrationDrift"/> 开启时执行。</para></summary>
+    private async ValueTask<IReadOnlyList<string>> CollectSchemaDriftAsync(CancellationToken ct)
+    {
+        List<string> drift = [];
+        foreach ((Type type, string tableName) in PalORM_Runtime.TableNames)
+        {
+            if (!PalORM_Runtime.ColumnNames.TryGetValue(type, out IReadOnlyList<string>? expected))
+                continue;
+            await using DbCommand cmd = CreateCommand();
+            // ITM-723 同口径：探活类命令在零超时配置下须有有限兜底
+            cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
+            int ordinal = TProvider.ConfigureSchemaCommand(cmd, tableName);
+            HashSet<string> actual = new(StringComparer.Ordinal);
+            try
+            {
+                await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                    actual.Add(reader.GetString(ordinal));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // 与 ValidateSchemaAsync 同口径：只透出异常类型名，防拓扑信息泄露
+                drift.Add($"Validation failed for table '{tableName}': {ex.GetType().Name}");
+                continue;
+            }
+            foreach (string column in expected.Where(column => !actual.Contains(column)))
+            {
+                drift.Add($"Column '{column}' not found in table '{tableName}'");
+            }
+        }
+        return drift;
     }
 
     /// <summary>ITM-723：零超时配置（= ADO.NET 无限等待）下 DDL/探活的有限兜底上限。</summary>
@@ -524,7 +578,15 @@ public sealed record MigrationResult(
     IReadOnlyList<string> SkippedIndexes,
     IReadOnlyList<MigrationFailure> FailedIndexes,
     bool Transactional,
-    bool RolledBack);
+    bool RolledBack)
+{
+    /// <summary>迁移后的 schema 漂移清单：实体声明了而库内不存在的列
+    /// （句式 <c>Column '{列}' not found in table '{表}'</c>，与 ValidateSchemaAsync 一致）。
+    /// <para>仅在 <see cref="DbOptions.ValidateMigrationDrift"/> 开启时填充，默认空集合。
+    /// 非空不代表迁移失败：<c>MigrateAsync</c> 只建不改，加列需外部迁移工具；本字段把
+    /// "迁移返回成功但 schema 没跟上"从运行期报错提前到调用点可见。</para></summary>
+    public IReadOnlyList<string> SchemaDrift { get; init; } = [];
+}
 
 /// <summary>迁移失败项——索引 DDL 原文与异常类型名（不含异常消息，避免拓扑信息泄露）。</summary>
 public sealed record MigrationFailure(string Statement, string ErrorType);
