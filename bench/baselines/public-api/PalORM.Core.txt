@@ -321,8 +321,10 @@ M:PalORM.IDbProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Da
 M:PalORM.IDbProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
 M:PalORM.IDbProvider|CreateTypedArrayParameter(System.String, System.Array, System.Type)|System.Data.Common.DbParameter|static
 M:PalORM.IDbProvider|GetParameterPlaceholder(System.Int32)|System.String|static
+M:PalORM.IDbProvider|InitializeConnection(System.Data.Common.DbConnection)|System.Void|static
 M:PalORM.IDbProvider|InitializeConnectionAsync(System.Data.Common.DbConnection, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
 M:PalORM.IDbProvider|InvalidateConnectionInitialization(System.Data.Common.DbConnection)|System.Void|static
+M:PalORM.IDbProvider|IsConnectionFailure(System.Exception)|System.Boolean|static
 M:PalORM.IDbProvider|IsDuplicateSchemaObject(System.Exception)|System.Boolean|static
 M:PalORM.IDbProvider|IsTransient(System.Exception)|System.Boolean|static
 M:PalORM.IDbProvider|IsUniqueViolation(System.Exception)|System.Boolean|static

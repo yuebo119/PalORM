@@ -21,6 +21,7 @@ M:PalORM.PostgreSql.PostgreSqlProvider|CreateArrayParameter(System.String, Syste
 M:PalORM.PostgreSql.PostgreSqlProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
 M:PalORM.PostgreSql.PostgreSqlProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
 M:PalORM.PostgreSql.PostgreSqlProvider|CreateTypedArrayParameter(System.String, System.Array, System.Type)|System.Data.Common.DbParameter|static
+M:PalORM.PostgreSql.PostgreSqlProvider|IsConnectionFailure(System.Exception)|System.Boolean|static
 M:PalORM.PostgreSql.PostgreSqlProvider|IsDuplicateSchemaObject(System.Exception)|System.Boolean|static
 M:PalORM.PostgreSql.PostgreSqlProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
 M:PalORM.PostgreSql.PostgreSqlProvider|QuoteIdentifier(System.String)|System.String|static

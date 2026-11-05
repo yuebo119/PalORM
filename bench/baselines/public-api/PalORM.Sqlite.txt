@@ -4,8 +4,10 @@ M:PalORM.Sqlite.SqliteProvider|BulkInsertAsync<1>(System.Data.Common.DbConnectio
 M:PalORM.Sqlite.SqliteProvider|ConfigureSchemaCommand(System.Data.Common.DbCommand, System.String, System.String)|System.Int32|static
 M:PalORM.Sqlite.SqliteProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
 M:PalORM.Sqlite.SqliteProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
+M:PalORM.Sqlite.SqliteProvider|InitializeConnection(System.Data.Common.DbConnection)|System.Void|static
 M:PalORM.Sqlite.SqliteProvider|InitializeConnectionAsync(System.Data.Common.DbConnection, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
 M:PalORM.Sqlite.SqliteProvider|InvalidateConnectionInitialization(System.Data.Common.DbConnection)|System.Void|static
+M:PalORM.Sqlite.SqliteProvider|IsConnectionFailure(System.Exception)|System.Boolean|static
 M:PalORM.Sqlite.SqliteProvider|IsTransient(System.Exception)|System.Boolean|static
 M:PalORM.Sqlite.SqliteProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
 M:PalORM.Sqlite.SqliteProvider|MarkConnectionStateUnknown(System.Data.Common.DbConnection)|System.Void|static

@@ -4,6 +4,7 @@ M:PalORM.MySql.MySqlProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection,
 M:PalORM.MySql.MySqlProvider|ConfigureSchemaCommand(System.Data.Common.DbCommand, System.String, System.String)|System.Int32|static
 M:PalORM.MySql.MySqlProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
 M:PalORM.MySql.MySqlProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
+M:PalORM.MySql.MySqlProvider|IsConnectionFailure(System.Exception)|System.Boolean|static
 M:PalORM.MySql.MySqlProvider|IsDuplicateSchemaObject(System.Exception)|System.Boolean|static
 M:PalORM.MySql.MySqlProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
 M:PalORM.MySql.MySqlProvider|QuoteIdentifier(System.String)|System.String|static

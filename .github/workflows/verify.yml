@@ -263,13 +263,15 @@ jobs:
                   --report "$(find test/PalORM.Integration.Tests/bin -name '*.tunit-report.json' | head -1)"
 
             - name: Assert provider coverage floors
+              # 三条断言独立执行（2026-11-05）：原单条 run 块里第一条失败即退出，
+              # 后续 Provider 的读数拿不到——回调地板时只能靠猜。分开后一次 CI 给出全部读数。
               run: |
-                  dotnet run --file scripts/assert-coverage.cs -- PalORM.MySql cov-integration.xml mysql
-                  dotnet run --file scripts/assert-coverage.cs -- PalORM.PostgreSql cov-integration.xml postgresql
-                  # COV-4（2026-11-04）：SQLite 此前无模块地板（coverage 段只有 core/mysql/postgresql），
-                  # SQLite Provider 的回归只能靠断言间接发现。地板 = 本地实测 67.11%（Integration 的
-                  # SQLite-only 通道）向下取整，满足 assert-coverage 的 1pp 自收紧上限。
-                  dotnet run --file scripts/assert-coverage.cs -- PalORM.Sqlite cov-integration.xml sqlite
+                  failed=0
+                  for spec in "PalORM.MySql mysql" "PalORM.PostgreSql postgresql" "PalORM.Sqlite sqlite"; do
+                      set -- $spec
+                      dotnet run --file scripts/assert-coverage.cs -- "$1" cov-integration.xml "$2" || failed=1
+                  done
+                  exit $failed
 
             # 覆盖率 XML 上传（2026-11-04 增）：provider 覆盖率读数在 CI 上曾出现双模态
             # （mysql 66.85% 与 68.80%，同一提交不同 run），差分脚本只能拿到百分比、定位不到
