@@ -246,7 +246,11 @@ static string[] Snapshot(string assemblyPath)
                 lines.Add($"E:{type.FullName}|{@event.Name}");
         }
         lines.Sort(StringComparer.Ordinal);
-        return [.. lines];
+        // 剥掉泛型实参里的程序集标识（Version / Culture / PublicKeyToken）：那是依赖的
+        // 发行版信息，不是 PalORM 的契约。实测同一份源码在开发者机与 CI 上解析出的
+        // Microsoft.CodeAnalysis 版本不同（5.12 vs 4.14），保留了它基线就会随环境漂移。
+        // 依赖版本变化由 Package Validation 在 pack 时按包依赖检查，不靠本快照。
+        return [.. lines.Select(Normalize)];
     }
     finally
     {
@@ -256,6 +260,13 @@ static string[] Snapshot(string assemblyPath)
 
 static bool IsVisible(MethodBase method)
     => method.IsPublic || method.IsFamily || method.IsFamilyOrAssembly;
+
+// 形如 ", Version=11.0.0.0, Culture=neutral, PublicKeyToken=null" 一律删除（可出现在任意嵌套层）
+static string Normalize(string line)
+{
+    const string Pattern = @", Version=\d+\.\d+\.\d+\.\d+(?:, Culture=[^,\]]+)?(?:, PublicKeyToken=[^,\]]+)?";
+    return System.Text.RegularExpressions.Regex.Replace(line, Pattern, "");
+}
 
 static string ParameterList(ParameterInfo[] parameters)
     => string.Join(", ", parameters.Select(static p => p.ParameterType.FullName ?? p.ParameterType.Name));

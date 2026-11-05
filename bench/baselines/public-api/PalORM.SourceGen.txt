@@ -46,6 +46,6 @@ M:PalORM.SourceGen.PalORMAnalyzer|.ctor()
 M:PalORM.SourceGen.PalORMAnalyzer|Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext)|System.Void|instance
 M:PalORM.SourceGen.PalORMGenerator|.ctor()
 M:PalORM.SourceGen.PalORMGenerator|Initialize(Microsoft.CodeAnalysis.IncrementalGeneratorInitializationContext)|System.Void|instance
-P:PalORM.SourceGen.PalORMAnalyzer|SupportedDiagnostics|System.Collections.Immutable.ImmutableArray`1[[Microsoft.CodeAnalysis.DiagnosticDescriptor, Microsoft.CodeAnalysis, Version=5.12.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35]]
+P:PalORM.SourceGen.PalORMAnalyzer|SupportedDiagnostics|System.Collections.Immutable.ImmutableArray`1[[Microsoft.CodeAnalysis.DiagnosticDescriptor, Microsoft.CodeAnalysis]]
 T:PalORM.SourceGen.PalORMAnalyzer|base=Microsoft.CodeAnalysis.Diagnostics.DiagnosticAnalyzer
 T:PalORM.SourceGen.PalORMGenerator|base=System.Object

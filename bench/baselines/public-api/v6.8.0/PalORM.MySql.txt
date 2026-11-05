@@ -1,6 +1,6 @@
 I:PalORM.MySql.MySqlProvider|PalORM.IDbProvider
 M:PalORM.MySql.MySqlProvider|.ctor()
-M:PalORM.MySql.MySqlProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, System.Int32, System.Int32, System.Threading.CancellationToken, System.Data.IsolationLevel)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|static
+M:PalORM.MySql.MySqlProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, System.Int32, System.Int32, System.Threading.CancellationToken, System.Data.IsolationLevel)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib]]|static
 M:PalORM.MySql.MySqlProvider|ConfigureSchemaCommand(System.Data.Common.DbCommand, System.String, System.String)|System.Int32|static
 M:PalORM.MySql.MySqlProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
 M:PalORM.MySql.MySqlProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
