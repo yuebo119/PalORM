@@ -265,6 +265,8 @@ jobs:
             - name: Assert provider coverage floors
               # 三条断言独立执行（2026-11-05）：原单条 run 块里第一条失败即退出，
               # 后续 Provider 的读数拿不到——回调地板时只能靠猜。分开后一次 CI 给出全部读数。
+              # 口径：本 job 跑 Integration 全量通道（不过滤 ExternalDatabase），
+              # 地板必须与这一通道的实测对齐；SQLite-only 过滤通道的读数不可拿来设地板。
               run: |
                   failed=0
                   for spec in "PalORM.MySql mysql" "PalORM.PostgreSql postgresql" "PalORM.Sqlite sqlite"; do
