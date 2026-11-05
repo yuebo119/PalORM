@@ -1,6 +1,6 @@
 {
   "Schema": 1,
-  "Date": "2026-11-02",
+  "Date": "2026-11-05",
   "Environment": "L0 \u5FEB\u7EBF\u57FA\u7EBF\uFF1A\u9010\u952E\u53D6\u6700\u8FD1 3 \u4E2A verify-l0 \u6279\u6B21\u7684\u4E2D\u4F4D\u6570\uFF082026-11-02 18:24:49 \u002B08:00\u30012026-11-02 18:22:37 \u002B08:00\u30012026-11-02 18:20:24 \u002B08:00\uFF09",
   "Thresholds": {
     "RatioDelta": 0.3,
