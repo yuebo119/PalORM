@@ -12,6 +12,13 @@ internal sealed class CapabilityProbeCacheTests
 {
     private sealed record ProbeValue(int N);
 
+    /// <summary>容量用例专用值类型：泛型静态类按 T 分字典（见 CapabilityProbeCache 类文档），
+    /// 用独立 T 后 <c>Clear()</c> 只清本用例的字典，不会把并行跑的
+    /// <c>CapabilityProbeCache&lt;ProbeValue&gt;</c> 缓存一起清掉——2026-11-05 CI run
+    /// 41967743210 实测：进程级 Clear 与同键用例交错时，第二次调用会重探（probes=2），
+    /// 本地串行跑不出来，属并行污染而非缓存语义缺陷。</summary>
+    private sealed record BoundedProbeValue(int N);
+
     private static string NewKey() => $"probe-cache-test/{Guid.NewGuid():N}";
 
     [Test]
@@ -108,18 +115,18 @@ internal sealed class CapabilityProbeCacheTests
     [Test]
     public async Task Cache_IsBounded_WhenManyKeysProbed()
     {
-        CapabilityProbeCache<ProbeValue>.Clear();
+        CapabilityProbeCache<BoundedProbeValue>.Clear();
 
         for (int index = 0; index < 300; index++)
         {
             int captured = index;
-            _ = await CapabilityProbeCache<ProbeValue>.GetOrProbeAsync(
+            _ = await CapabilityProbeCache<BoundedProbeValue>.GetOrProbeAsync(
                 NewKey(),
                 60_000,
-                _ => ValueTask.FromResult(new ProbeValue(captured)),
+                _ => ValueTask.FromResult(new BoundedProbeValue(captured)),
                 default);
         }
 
-        await Assert.That(CapabilityProbeCache<ProbeValue>.CountForTests).IsLessThanOrEqualTo(256);
+        await Assert.That(CapabilityProbeCache<BoundedProbeValue>.CountForTests).IsLessThanOrEqualTo(256);
     }
 }
