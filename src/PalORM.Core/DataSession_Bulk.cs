@@ -455,6 +455,22 @@ public partial class DataSession<TProvider>
             return false;
         }
 
+        return await EnsureJsonEachEngineSupportedAsync<T>(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>json_each 引擎能力探测（读侧与删侧共用同一缓存与探测）。方言门控后
+    /// 只做一次引擎探测：`SELECT 1 WHERE 1 IN (SELECT value FROM json_each('[1]'))`，
+    /// 成功缓存 true、抛 <see cref="DbException"/>（旧 e_sqlite3 bundle 未编译 JSON1）缓存
+    /// false。结果按 (TProvider, T) 分片单调恒定。调用方负责键形态门控（见
+    /// <see cref="UseJsonEachDeleteForm{T}"/> 与 <see cref="UseJsonEachReadForm{T}"/>）。</summary>
+    private async ValueTask<bool> EnsureJsonEachEngineSupportedAsync<T>(CancellationToken ct)
+        where T : class, new()
+    {
+        if (TProvider.Dialect != SqlDialect.Sqlite || SqlSlots<T>.JsonEachDeleteSupported is false)
+        {
+            return false;
+        }
+
         if (SqlSlots<T>.JsonEachDeleteSupported is true)
         {
             return true;

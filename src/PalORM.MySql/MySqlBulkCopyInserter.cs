@@ -18,10 +18,15 @@ namespace PalORM.MySql;
 /// 提供事务——P3-13 修正：旧文档称"未传时内部开新事务包整批"，实现从未 BeginTransaction。</para></summary>
 internal static class MySqlBulkCopyInserter
 {
-    /// <summary>列映射缓存（PROV-002，2026-09-23）：键 = (目标表, 列集)，值 = 不可变映射数组。
-    /// 键空间 = 实体 × 列集（有限，与 Provider 侧既有静态缓存同纪律）；映射对象跨批共享。</summary>
+    /// <summary>列映射缓存（PROV-002，2026-09-23）：值 = 不可变映射数组，跨批共享。
+    /// <para><b>PERF-2.3（2026-11-05）</b>：键由 <c>(表名, 列名 Join 串)</c> 降维为
+    /// <c>(实体类型, 注册代际)</c>——原实现每次调用做一次 <c>string.Join</c>（遍历列 + 拼串）
+    /// 再哈希；降维后命中路径零字符串工作。等价性依据：<see cref="ColumnLayout"/> 只由
+    /// <see cref="MySqlBulkCopyContext"/> 的 InsertColumns/PrimaryKeyColumns 推出，二者来自
+    /// 该类型的注册期元数据（单调不可变，代际变化即失效）。</para>
+    /// <para>键空间 = 实体数 × 代际，天然有限。</para></summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (string Table, string Columns), MySqlBulkCopyColumnMapping[]> ColumnMappingCache = new();
+        (Type EntityType, int Generation), MySqlBulkCopyColumnMapping[]> ColumnMappingCache = new();
 
     private static MySqlBulkCopyColumnMapping[] BuildColumnMappings(string[] columns)
     {
@@ -53,11 +58,13 @@ internal static class MySqlBulkCopyInserter
         // B1/L4：列布局只由 ctx 决定，原实现每批重算一次 LINQ + 两个集合分配
         // （千批 = 千次无谓分配，且 Contains 是 O(pk×cols) 线性扫描）。此处算一次，逐批复用。
         ColumnLayout layout = ColumnLayout.Build(ctx);
-        // B16（2026-10-01 全 API 逐项轮）：列映射解析从"每批"提升到"每次调用"——
-        // 原实现每批 1 个 string.Join 键串 + GetOrAdd 查找（千批 = 千次键串 + 千次哈希）；
-        // 映射数组跨批/跨 MySqlBulkCopy 实例共享安全（不可变值对象，PROV-002）。
+        // B16（2026-10-01 全 API 逐项轮）：列映射解析从"每批"提升到"每次调用"；
+        // PERF-2.3（2026-11-05）：键降维为 (实体类型, 注册代际)——原键含 string.Join 拼出的
+        // 列名串（每次调用一次遍历 + 拼串）。映射数组跨批/跨 MySqlBulkCopy 实例共享安全
+        //（不可变值对象，PROV-002）。
+        (Type EntityType, int Generation) mappingKey = (typeof(T), PalORM_Runtime.RegistryGeneration);
         MySqlBulkCopyColumnMapping[] mappings = ColumnMappingCache.GetOrAdd(
-            (ctx.QuotedTable, string.Join('\u0001', layout.AllColumns)),
+            mappingKey,
             static (_, columns) => BuildColumnMappings(columns),
             layout.AllColumns);
         // B15（2026-10-01 全 API 逐项轮）：参数池/行命令/probe 从"每批"提升到"每次调用"——
@@ -129,14 +136,37 @@ internal static class MySqlBulkCopyInserter
     /// （官方 issue #1375 确认）——故此处必须显式按列名映射，列序不再是契约。</para></summary>
     private readonly record struct ColumnLayout(int ParameterCount, string[] AllColumns, int PrimaryKeyPrefixLength)
     {
+        /// <summary>构建列布局。PERF-2.4（2026-11-05）：原实现用 LINQ 一次 <c>Count</c> + 一次
+        /// <c>Where</c>（两次遍历 + 两次委托/迭代器分配，且每次 <c>Contains</c> 为 O(pk×cols)
+        /// 线性扫描）；手写单循环一次遍历，先计数再按需填写——输出与旧实现逐位一致。</summary>
         public static ColumnLayout Build(MySqlBulkCopyContext ctx)
         {
-            int primaryKeyPrefixLength = ctx.PrimaryKeyColumns
-                .Count(pk => !ctx.InsertColumns.Contains(pk, StringComparer.Ordinal));
-            string[] allColumns = [.. ctx.PrimaryKeyColumns
-                .Where(pk => !ctx.InsertColumns.Contains(pk, StringComparer.Ordinal)),
-                .. ctx.InsertColumns];
-            return new ColumnLayout(ctx.InsertColumns.Count, allColumns, primaryKeyPrefixLength);
+            IReadOnlyList<string> insertColumns = ctx.InsertColumns;
+            IReadOnlyList<string> pkColumns = ctx.PrimaryKeyColumns;
+            // 第一遍：数出「不在 InsertColumns 里的主键列」个数（= 前缀长度）
+            int primaryKeyPrefixLength = 0;
+            for (int i = 0; i < pkColumns.Count; i++)
+            {
+                if (!ContainsOrdinal(insertColumns, pkColumns[i])) primaryKeyPrefixLength++;
+            }
+            string[] allColumns = new string[primaryKeyPrefixLength + insertColumns.Count];
+            int index = 0;
+            for (int i = 0; i < pkColumns.Count; i++)
+            {
+                if (!ContainsOrdinal(insertColumns, pkColumns[i])) allColumns[index++] = pkColumns[i];
+            }
+            for (int i = 0; i < insertColumns.Count; i++) allColumns[index++] = insertColumns[i];
+            return new ColumnLayout(insertColumns.Count, allColumns, primaryKeyPrefixLength);
+        }
+
+        /// <summary>序数比较的线性包含判定（手写循环——LINQ <c>Contains</c> 每次分配委托）。</summary>
+        private static bool ContainsOrdinal(IReadOnlyList<string> list, string value)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (string.Equals(list[i], value, StringComparison.Ordinal)) return true;
+            }
+            return false;
         }
     }
 

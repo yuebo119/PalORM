@@ -189,6 +189,43 @@ public sealed class MySqlProvider : IDbProvider
             ? QuoteIdentifier(identifier)
             : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(identifier)}";
 
+    /// <summary>PERF-2.2（2026-11-05）：BulkCopy 目标的引用表名与主键列缓存——键 = 实体类型，
+    /// 值附注册代际（注册表恢复/热重载后自动失效）。键空间 = 实体数，天然有限，与 PG 的
+    /// <c>QuotedInsertTargetCache</c> 同纪律。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Type, (int Generation, string QuotedTable, IReadOnlyList<string> PkColumns)> InsertTargetCache = new();
+
+    /// <summary>PERF-2.1（2026-11-05）：入口取值下传的载体——把 <c>(CrudMetadata, 表名)</c>
+    /// 包成单参，避免 <c>ExecuteBulkCopyAsync</c> 参数列表超长（S107）。</summary>
+    private readonly struct InsertMetadata(CrudMetadata crud, string tableName)
+    {
+        public readonly CrudMetadata Crud = crud;
+        public readonly string TableName = tableName;
+
+        public static InsertMetadata FromType(Type entityType)
+        {
+            (CrudMetadata crud, string tableName) = BulkOperationFramework.EnsureInsertMetadata(entityType);
+            return new InsertMetadata(crud, tableName);
+        }
+    }
+
+    /// <summary>取（或构建并缓存）BulkCopy 目标的引用表名与主键列。未注册主键 → 空列表
+    /// （AutoIncrement 缺省形态，读取器按无前缀列处理）。</summary>
+    private static (string QuotedTable, IReadOnlyList<string> PkColumns) GetInsertTarget(
+        Type entityType, string tableName)
+    {
+        int generation = PalORM_Runtime.RegistryGeneration;
+        if (InsertTargetCache.TryGetValue(entityType, out var cached) && cached.Generation == generation)
+        {
+            return (cached.QuotedTable, cached.PkColumns);
+        }
+        string quotedTable = QuoteIdentifier(tableName);
+        IReadOnlyList<string> pkColumns =
+            PalORM_Runtime.PkColumns.TryGetValue(entityType, out string? pk) ? [pk] : [];
+        InsertTargetCache[entityType] = (generation, quotedTable, pkColumns);
+        return (quotedTable, pkColumns);
+    }
+
     /// <summary>MySQL 不支持 RETURNING 子句(自增主键回读走 LAST_INSERT_ID 路径)。</summary>
     public static bool SupportsReturningClause => false;
 
@@ -268,7 +305,9 @@ public sealed class MySqlProvider : IDbProvider
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(batchSize, 0);
         // ITM-637 同型面：元数据检查先于空列表短路——未注册类型与空/非空列表一致抛
         //（BulkCopy 与多值 fallback 两分支共用此前置；PROV-010：守卫收敛至单一实现点）
-        _ = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
+        // PERF-2.1（2026-11-05）：取值一次并下传——原实现入口丢弃结果、ExecuteBulkCopyAsync
+        // 内再查一次（每调用两次 FrozenDictionary 查找 + 两次表名称查找）。
+        InsertMetadata entryMetadata = InsertMetadata.FromType(typeof(T));
         // ITM-740(r20)/778(r21)：包装/装饰事务（非 MySqlTransaction）在连接上挂起时，能力探测
         // 会因"命令未挂接事务"抛异常并被吞掉 → 静默降级多值路径。守卫置于**空列表短路之前**
         // （ITM-637 口径：契约校验先于短路）——原顺序下空列表+包装事务静默返 0、非空则抛，
@@ -290,7 +329,9 @@ public sealed class MySqlProvider : IDbProvider
                 try
                 {
                     return await ExecuteBulkCopyAsync(
-                        mySqlConnection, transaction, entities, batchSize, commandTimeoutSeconds, isolationLevel, ct).ConfigureAwait(false);
+                        mySqlConnection, transaction, entities,
+                        new BulkExecutionSettings(batchSize, commandTimeoutSeconds, isolationLevel),
+                        entryMetadata, ct).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -301,7 +342,7 @@ public sealed class MySqlProvider : IDbProvider
                     // 都透传，避免整批重插制造重复。
                     return await FallbackOrRethrowAsync(
                         mySqlConnection, transaction, entities,
-                        new BulkFailureFallbackSettings(batchSize, commandTimeoutSeconds, isolationLevel),
+                        new BulkExecutionSettings(batchSize, commandTimeoutSeconds, isolationLevel),
                         exception, ct).ConfigureAwait(false);
                 }
             }
@@ -328,7 +369,7 @@ public sealed class MySqlProvider : IDbProvider
     /// 整批重插会重复已写行。</para></summary>
     private static async Task<long> FallbackOrRethrowAsync<T>(
         MySqlConnection conn, DbTransaction? transaction, IReadOnlyList<T> entities,
-        BulkFailureFallbackSettings settings, Exception exception, CancellationToken ct)
+        BulkExecutionSettings settings, Exception exception, CancellationToken ct)
         where T : class, new()
     {
         long rowsWritten = exception is MySqlBulkCopyInserter.BulkCopyPartialFailureException partial
@@ -355,7 +396,9 @@ public sealed class MySqlProvider : IDbProvider
         throw new InvalidOperationException("unreachable: ExceptionDispatchInfo.Throw always throws.");
     }
 
-    private readonly record struct BulkFailureFallbackSettings(
+    /// <summary>PERF-2.1/C2（2026-11-05）：批量执行的三个参数打包——既是回退路径的入参载体，
+    /// 也让 BulkCopy 主路径的参数列表留在 S107 线内（原 8 参）。</summary>
+    private readonly record struct BulkExecutionSettings(
         int BatchSize, int CommandTimeoutSeconds, System.Data.IsolationLevel IsolationLevel);
 
     /// <summary>检测服务端 local_infile 是否开启。
@@ -448,25 +491,22 @@ public sealed class MySqlProvider : IDbProvider
     /// <summary>v5.0 阶段 4.2：MySqlBulkCopy 路径。从 BulkInsertAsync 抽出以降低认知复杂度（S3776）。
     /// <para><b>事务语义</b>：调用方传入的 transaction 一并使用；未传时不开启事务
     /// （语句级原子，跨批回滚由调用方事务提供）。</para>
-    /// <para><b>分批</b>：ITM-710(r20)——<paramref name="batchSize"/> 透传到 Inserter 分块物化，
-    /// 与回退多值路径同口径（此前整表一次性灌入 DataTable，契约静默失效 + 内存峰值）。</para></summary>
+    /// <para><b>分批</b>：ITM-710(r20)——<c>settings.BatchSize</c> 透传到 Inserter 分块物化，
+    /// 与回退多值路径同口径（此前整表一次性灌入 DataTable，契约静默失效 + 内存峰值）。</para>
+    /// <para>PERF-2.1/2.2（2026-11-05）：入口已取的元数据与表名下传（删重复查找）；
+    /// 引用表名与主键列走 <see cref="InsertTargetCache"/>（每类型一次，注册代际失效）。</para></summary>
     private static async Task<long> ExecuteBulkCopyAsync<T>(
         MySqlConnection conn, DbTransaction? transaction,
-        IReadOnlyList<T> entities, int batchSize, int commandTimeoutSeconds,
-        System.Data.IsolationLevel isolationLevel, CancellationToken ct)  // r6-N2（CA1068 ct 末位）
+        IReadOnlyList<T> entities, BulkExecutionSettings settings,
+        InsertMetadata entryMetadata,
+        CancellationToken ct)  // r6-N2（CA1068 ct 末位）
         where T : class, new()
     {
-        // PROV-010：守卫收敛至单一实现点（唯一调用方 BulkInsertAsync 入口已检，此处经
-        // helper 取值而非复制实现——防御语义保留，重复实现消除）
-        (CrudMetadata metadata, string tableName) = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
-
         // MySQL schema=database；当前会话已在连接串指定的库里，表名直接引用。
-        string quotedTable = QuoteIdentifier(tableName);
-        // 主键列——DataTable 中放首列填 NULL（AUTO_INCREMENT 自增）。
-        // L4：表名/主键列的引用只由 (Type, Provider) 决定，原实现每批重算一次
-        // （MySqlBulkCopyInserter 按 batchSize 分块调用本方法，千批 = 千次无谓分配）
-        string? pkColumn = PalORM_Runtime.PkColumns.TryGetValue(typeof(T), out string? pk) ? pk : null;
-        IReadOnlyList<string> pkColumns = pkColumn is not null ? [pkColumn] : [];
+        // PERF-2.2：引用形态与主键列每类型构建一次（原实现每调用一次 QuoteIdentifier +
+        // PkColumns 查找；批量重载会被分块调用，千批 = 千次无谓分配）。
+        (string quotedTable, IReadOnlyList<string> pkColumns) =
+            GetInsertTarget(typeof(T), entryMetadata.TableName);
 
         // 事务：BulkCopy 需在事务内执行；未传时内部开新事务保证原子性。
         MySqlTransaction? mySqlTransaction = transaction as MySqlTransaction;
@@ -475,7 +515,8 @@ public sealed class MySqlProvider : IDbProvider
         bool ownsTransaction = false;
         if (mySqlTransaction is null)
         {
-            mySqlTransaction = await conn.BeginTransactionAsync(isolationLevel, ct).ConfigureAwait(false);  // r6-N2
+            mySqlTransaction = await conn.BeginTransactionAsync(
+                settings.IsolationLevel, ct).ConfigureAwait(false);  // r6-N2
             ownsTransaction = true;
         }
         Exception? primaryException = null;
@@ -490,12 +531,12 @@ public sealed class MySqlProvider : IDbProvider
                 entities,
                 new MySqlBulkCopyContext(
                     quotedTable,
-                    metadata.InsertColumns,
+                    entryMetadata.Crud.InsertColumns,
                     pkColumns,
-                    metadata.BindInsert,
-                    commandTimeoutSeconds,
-                    batchSize,
-                    metadata.BindInsertValues),
+                    entryMetadata.Crud.BindInsert,
+                    settings.CommandTimeoutSeconds,
+                    settings.BatchSize,
+                    entryMetadata.Crud.BindInsertValues),
                 ct).ConfigureAwait(false);
             // R2/T2：自管事务的 COMMIT 纳入 commandTimeoutSeconds 超时窗口。
             // BulkCopyTimeout 只覆盖 LOAD DATA，不覆盖 COMMIT——此前 ct == default 时提交
@@ -505,7 +546,7 @@ public sealed class MySqlProvider : IDbProvider
             {
                 commitAttempted = true;
                 // ITM-910（r24）：收敛到 BulkOperationFramework 委派 Core 的单一实现
-                await BulkOperationFramework.CommitWithTimeoutAsync(mySqlTransaction, commandTimeoutSeconds, ct)
+                await BulkOperationFramework.CommitWithTimeoutAsync(mySqlTransaction, settings.CommandTimeoutSeconds, ct)
                     .ConfigureAwait(false);
             }
             return inserted;
@@ -524,7 +565,7 @@ public sealed class MySqlProvider : IDbProvider
                     || !BulkOperationFramework.TrySkipRollbackAfterCommitFailure(ex)))
             {
                 await BulkOperationFramework.RollbackPreservingAsync(
-                    mySqlTransaction, ex, commandTimeoutSeconds, ct).ConfigureAwait(false);
+                    mySqlTransaction, ex, settings.CommandTimeoutSeconds, ct).ConfigureAwait(false);
             }
             throw;
         }

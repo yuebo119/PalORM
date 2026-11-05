@@ -571,7 +571,7 @@ public struct QueryBuilder<T> where T : class, new()
             string prefix = continueClause ? ", " : "GROUP BY ";
             // 表限定与其余子句对齐（ITM-425）：JOIN 下裸列名产生 ambiguous column
             cached = prefix + GetQualifiedColumnName(propertyName);
-            QueryBuilderShared.OrderByClauseText.TryAdd(key, cached);
+            QueryBuilderShared.TryAddOrderByClauseText(key, cached);
         }
         AddClause(QueryClauseKind.GroupBy, cached, qualifyColumn: true);
     }
@@ -1074,7 +1074,7 @@ public struct QueryBuilder<T> where T : class, new()
         {
             string prefix = continueClause ? ", " : "ORDER BY ";
             cached = $"{prefix}{GetQualifiedColumnName(propertyName)}{(descending ? " DESC" : "")}";
-            QueryBuilderShared.OrderByClauseText.TryAdd(key, cached);
+            QueryBuilderShared.TryAddOrderByClauseText(key, cached);
         }
         AddClause(QueryClauseKind.OrderBy, cached, qualifyColumn: true);
     }
@@ -1853,10 +1853,33 @@ internal static class QueryBuilderShared
         bool Continue,
         bool IsGroupBy = false);
 
-    /// <summary>子句文本缓存（进程级，键空间有限：每 (实体, 方言, 属性, 形态) 一条）。
-    /// 无容量上限的理由同 FilterFormsCache 先例——键成分不含用户值（属性名来自编译期映射表，
-    /// 值形参数经 @pN 绑定不进文本），无界放大源不存在。</summary>
+    /// <summary>子句文本缓存（进程级）。<b>容量纪律（PERF-3.1，2026-11-05）</b>：总量上限
+    /// <see cref="OrderByClauseTextMaxEntries"/>，满则拒写（与 <c>SqlShapeCache</c> 同纪律）——
+    /// 原注释称"键成分不含用户值、无界放大源不存在"不成立：<c>SourceName</c> 取
+    /// <c>_cteName ?? _tableName</c>，而 <c>With(cteName, …)</c> 的 CTE 名由调用方提供
+    /// （<c>QueryBuilderExtensions</c> 的 With 重载），动态 CTE 名下键空间随调用方可变。
+    /// 被拒的形状此后逐次重建——行为等同缓存不存在，正确性不受影响。</summary>
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<OrderByClauseKey, string> OrderByClauseText = new();
+
+    /// <summary>ORDER BY / GROUP BY 文本缓存上限（1024，对齐 <c>SqlShapeCache.MaxEntries</c>）。</summary>
+    internal const int OrderByClauseTextMaxEntries = 1024;
+
+    private static int _orderByClauseTextCount;
+
+    /// <summary>满员拒写式写入：未满才登记并计数（并发窗口下可略超，偏差量 = 并发 Add 数，无害）。
+    /// 用计数器而非 <c>Dictionary.Count</c>——后者对 ConcurrentDictionary 是全表锁 O(n)。</summary>
+    internal static void TryAddOrderByClauseText(OrderByClauseKey key, string text)
+    {
+        if (Volatile.Read(ref _orderByClauseTextCount) >= OrderByClauseTextMaxEntries) return;
+        if (OrderByClauseText.TryAdd(key, text)) Interlocked.Increment(ref _orderByClauseTextCount);
+    }
+
+    /// <summary>清空 ORDER BY 文本缓存——测试隔离专用（注册表恢复后源名/列名可能变化）。</summary>
+    internal static void ClearOrderByClauseText()
+    {
+        OrderByClauseText.Clear();
+        Volatile.Write(ref _orderByClauseTextCount, 0);
+    }
 
     /// <summary>Where/Having/With 等 FormattableString 子句的最终文本缓存（M2.3，2026-10-31）：
     /// 键含方言、子句类别、前缀与内层 SQL（FormatCached 的稳定输出）；同输入恒同输出，

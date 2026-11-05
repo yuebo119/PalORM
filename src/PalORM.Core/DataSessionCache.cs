@@ -71,10 +71,25 @@ internal static class DataSessionCache
     internal static readonly ConcurrentDictionary<(Type EntityType, Type KeyType), bool> TypedKeyIdentityCache = new();
 
     /// <summary>实体级列子集更新的 SQL 缓存——键 = (实体, 方言, 选中列索引串, 是否租户)。
-    /// 列子集数量有限（宽表也通常只有少数几种更新形状），SQL 构建含 WHERE 参数重编号，
-    /// 命中路径零字符串工作。</summary>
+    /// <para><b>容量纪律（PERF-3.2，2026-11-05）</b>：总量上限 <see cref="PartialUpdateSqlCacheMaxEntries"/>，
+    /// 满则拒写（与 <c>SqlShapeCache</c> 同纪律）。原注释只按"宽表也通常只有少数几种更新形状"
+    /// 推断，但键的列子集位是 <b>2^N</b>（N = 可更新列数）——宽表 + 程序化列选择下形状空间是
+    /// 指数级，无上界。被拒的形状此后逐次重建，正确性不受影响。</para></summary>
     internal static readonly ConcurrentDictionary<
         (Type EntityType, SqlDialect Dialect, string Columns, bool Tenant), string> PartialUpdateSqlCache = new();
+
+    /// <summary>列子集更新 SQL 缓存上限（1024，对齐 <c>SqlShapeCache.MaxEntries</c>）。</summary>
+    internal const int PartialUpdateSqlCacheMaxEntries = 1024;
+
+    private static int _partialUpdateSqlCacheCount;
+
+    /// <summary>满员拒写式写入：未满才登记并计数（并发窗口下可略超，偏差量 = 并发 Add 数，无害）。</summary>
+    internal static void TryAddPartialUpdateSql(
+        (Type EntityType, SqlDialect Dialect, string Columns, bool Tenant) key, string sql)
+    {
+        if (Volatile.Read(ref _partialUpdateSqlCacheCount) >= PartialUpdateSqlCacheMaxEntries) return;
+        if (PartialUpdateSqlCache.TryAdd(key, sql)) Interlocked.Increment(ref _partialUpdateSqlCacheCount);
+    }
 
     /// <summary>测试隔离（2026-10-31）：注册表恢复到测试前快照时清空全部跨类型缓存。
     /// 键含实体类型，恢复后同一类型可能换表名/列集，旧条目会让热路径读到陈旧 SQL。
@@ -93,6 +108,8 @@ internal static class DataSessionCache
         BatchUpdateContextCache.Clear();
         TypedKeyIdentityCache.Clear();
         PartialUpdateSqlCache.Clear();
+        Interlocked.Exchange(ref _partialUpdateSqlCacheCount, 0);
+        QueryBuilderShared.ClearOrderByClauseText();
     }
 }
 

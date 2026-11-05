@@ -204,7 +204,7 @@ public sealed partial class DataSession<TProvider>
         string built =
             $"UPDATE {TProvider.QuoteIdentifier(info.TableName)} SET {string.Join(", ", setItems)}" +
             $"{versionSet}{rewrittenWhere}{tenantSuffix}";
-        DataSessionCache.PartialUpdateSqlCache.TryAdd(cacheKey, built);
+        DataSessionCache.TryAddPartialUpdateSql(cacheKey, built);
         return built;
     }
 }

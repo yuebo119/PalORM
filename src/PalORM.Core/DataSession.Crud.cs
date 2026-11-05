@@ -1189,7 +1189,9 @@ public sealed partial class DataSession<TProvider>
 
         /// <summary>E 方案（ADR-R 2026-10-25）：SQLite json_each 键集合形态的能力缓存
         ///（每 (TProvider, T) 只探测一次）。false 含两类：首键非整型（形态不适用）与
-        /// 引擎探测失败（消费方自带旧 e_sqlite3 bundle，JSON1 未编译开启）——均回退 IN 形态。</summary>
+        /// 引擎探测失败（消费方自带旧 e_sqlite3 bundle，JSON1 未编译开启）——均回退 IN 形态。
+        /// 2026-11-05：读侧多键读（<c>GetByKeyManyAsync</c>）复用同一能力位（引擎能力与
+        /// 读写方向无关）。</summary>
         public static bool? JsonEachDeleteSupported;
 
         /// <summary>S1：多行 INSERT ... RETURNING 的引用列清单（(TProvider, T) 恒定）。</summary>
@@ -1608,6 +1610,307 @@ public sealed partial class DataSession<TProvider>
 
     private void RecordMaterializedCount<T>(int count) where T : class, new()
         => _operationState.RecordMaterializedCount<T>(count);
+
+    // ─── 多键点读（GetByKeyManyAsync，2026-11-05 性能方案 Phase 1）──────
+
+    /// <summary>多键点读的语句成分集合——(Type, 方言) 缓存的引用列清单与引用标识符，
+    /// 加一次算好的过滤子句。打包为单参，避免各形态 SQL 构建器与执行器的参数列表超长（S107）。</summary>
+    private readonly record struct ReadManyIdentifiers(
+        string SelectColumns, string QuotedTable, string QuotedPk, string Filter);
+
+    /// <summary>按主键集合批量读取（多键点读）。方言分流：SQLite 走单参数
+    /// <c>json_each</c> 展开（ReadProbe 实测 0.85µs/键，对参数化 IN 快约 4.9 倍、
+    /// 分配省约 2.5 倍）；PostgreSQL 走原生 <c>= ANY(数组)</c>；MySQL 与其余回退形态走
+    /// 分批 <c>IN (…)</c>（方言感知，G31）。
+    /// <para><b>返回顺序</b>：不承诺与 <paramref name="keys"/> 同序——SQL 未加 ORDER BY
+    /// 时顺序由执行计划决定，调用方不得依赖输入序。</para>
+    /// <para><b>缺键</b>：静默跳过，不返回 null 占位——结果行数可能少于键数
+    ///（与 <see cref="GetAsync{T}"/> 单键缺键返回 null 的语义一致，批量形态以行数表达）。</para>
+    /// <para><b>空集合</b>：返回空列表，不发 SQL、不抛。</para>
+    /// <para><b>默认过滤</b>：<c>[SoftDelete]</c> / <c>[TenantAware]</c> 过滤照常适用
+    ///（与 <see cref="GetAsync{T}"/> 同语义——否则批量形态会成为越权或读已软删数据的缺口）。</para>
+    /// <para><b>复合主键</b>：不支持，抛 <see cref="InvalidOperationException"/>
+    ///（批量键集合需单一主键列；复合主键请逐键 GetAsync）。</para></summary>
+    /// <param name="keys">主键值集合（可装箱的整型/字符串等；<b>不得含 null</b>）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>命中实体的列表，行数 ≤ <paramref name="keys"/> 的数量；顺序不承诺。</returns>
+    public ValueTask<List<T>> GetByKeyManyAsync<T>(IReadOnlyList<object> keys, CancellationToken ct = default)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (keys.Count == 0)
+        {
+            return new ValueTask<List<T>>(new List<T>());
+        }
+        // null 键必须在入口拒绝：json_each 形态的键经 ConvertDeleteKey 归一，null 会被
+        // Convert.ToInt64 静默折成 0（读错行且无异常）；IN 形态则在绑定期才抛。统一前置。
+        for (int i = 0; i < keys.Count; i++)
+        {
+            if (keys[i] is null)
+            {
+                throw new ArgumentNullException(nameof(keys), $"Key collection contains null at index {i}.");
+            }
+        }
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            _operationState.PrewarmCurrentOperationOwner();
+        return GetByKeyManyEntryAsync<T>(keys, ct);
+    }
+
+    /// <summary>多键点读入口（GetAllEntryAsync 同型：租约 + 成功路径零弹性的弹性编排）。</summary>
+    private async ValueTask<List<T>> GetByKeyManyEntryAsync<T>(IReadOnlyList<object> keys, CancellationToken ct)
+        where T : class, new()
+    {
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        try
+        {
+            using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+            EntityRuntimeInfo info = GetEntityInfoForCrud<T>();
+            DbTransaction? activeTransaction = GetActiveTransaction();
+
+            if (activeTransaction is not null || !ResilienceConfigured)
+            {
+                return CommandTimeoutNormalizer.Complete(
+                    await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false),
+                    startTimestamp, _commandTimeoutSeconds);
+            }
+            if (DirectFirstReadAllowed)
+            {
+                try
+                {
+                    return CommandTimeoutNormalizer.Complete(
+                        await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false),
+                        startTimestamp, _commandTimeoutSeconds);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
+                {
+                    ResilienceExecutor executor = Resilience;
+                    if (_options.MaxRetries > 0)
+                    {
+                        return CommandTimeoutNormalizer.Complete(
+                            await executor.ExecuteAfterFirstFailureAsync(
+                                static (state, token) => state.Session.GetByKeyManyCoreAsync<T>(
+                                    state.Info, state.Tx, state.Keys, token).AsTask(),
+                                (Session: this, Info: info, Tx: activeTransaction, Keys: keys),
+                                ct).ConfigureAwait(false),
+                            startTimestamp, _commandTimeoutSeconds);
+                    }
+                    executor.RecordDirectFailure(ex);
+                    throw;
+                }
+            }
+            ResilienceExecutor manyExecutor = Resilience;
+            if (manyExecutor.IsPassThrough)
+            {
+                return CommandTimeoutNormalizer.Complete(
+                    await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false),
+                    startTimestamp, _commandTimeoutSeconds);
+            }
+            // R4-λ:static lambda + 值元组状态,闭包归零
+            return CommandTimeoutNormalizer.Complete(
+                await manyExecutor.ExecuteAsync(
+                    static (state, token) => state.Session.GetByKeyManyCoreAsync<T>(
+                        state.Info, state.Tx, state.Keys, token).AsTask(),
+                    (Session: this, Info: info, Tx: activeTransaction, Keys: keys),
+                    ct).ConfigureAwait(false),
+                startTimestamp, _commandTimeoutSeconds);
+        }
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
+        {
+            throw mapped;
+        }
+    }
+
+    /// <summary>多键点读执行核心：三条方言形态分流（json_each / = ANY / 分批 IN）。</summary>
+    private async ValueTask<List<T>> GetByKeyManyCoreAsync<T>(
+        EntityRuntimeInfo info, DbTransaction? activeTransaction, IReadOnlyList<object> keys, CancellationToken token)
+        where T : class, new()
+    {
+        if (info.PkColumn is not { } pkColumn)
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' has no single primary key for GetByKeyManyAsync; "
+                + "use GetAsync per key for composite primary keys.");
+        }
+
+        string selectColumns = GetSelectColumns<T>(info.ColumnNames);
+        string quotedTable = SqlSlots<T>.QuotedTableNameOrBuilt(info.TableName);
+        string quotedPk = TProvider.QuoteIdentifier(pkColumn);
+        string filter = GetDefaultFilterFragment<T>(info.Features);
+        Func<object, object?>? convertKey = info.Crud.ConvertDeleteKey;
+        ReadManyIdentifiers ids = new(selectColumns, quotedTable, quotedPk, filter);
+
+        // ① SQLite：json_each 单参数（键形态与引擎能力双门控，见 UseJsonEachReadForm）
+        if (await UseJsonEachReadForm<T>(info, keys, token).ConfigureAwait(false))
+        {
+            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+                readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+            DbCommand cmd = lease.Command;
+            cmd.CommandText = BuildJsonEachReadSql(ids);
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            cmd.Parameters.Add(TProvider.CreateParameter(
+                ArrayParameterName, BuildJsonKeyArrayText(keys, 0, keys.Count, convertKey, typeof(T).Name)));
+            BindDefaultFilterParameters(cmd, info.Features);
+            return await ReadManyRowsAsync<T>(info, cmd, keys.Count, lease, token).ConfigureAwait(false);
+        }
+
+        // ② PostgreSQL：原生数组 pk = ANY(@ids)（生成物提供主键数组构造器且 Provider 接受该元素类型）
+        if (TProvider.Dialect == SqlDialect.PostgreSql
+            && IsArrayFormSupported<T>(out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray)
+            && buildKeyArray is { } builder)
+        {
+            Array values = builder(keys, 0, keys.Count)
+                ?? throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' generated a null primary-key array for GetByKeyManyAsync.");
+            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+                readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+            DbCommand cmd = lease.Command;
+            cmd.CommandText = BuildArrayReadSql(ids);
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            DbParameter idsParameter = TProvider.CreateArrayParameter(ArrayParameterName, values)
+                ?? throw new InvalidOperationException(
+                    $"Provider '{TProvider.Name}' rejected the primary-key array for GetByKeyManyAsync.");
+            cmd.Parameters.Add(idsParameter);
+            BindDefaultFilterParameters(cmd, info.Features);
+            return await ReadManyRowsAsync<T>(info, cmd, keys.Count, lease, token).ConfigureAwait(false);
+        }
+
+        // ③ 回退：分批 IN 占位符（MySQL 与 SQLite/PG 的能力不足形态）
+        return await ExecuteInFormReadAsync<T>(info, activeTransaction, keys, convertKey, ids, token)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>读取并物化为列表（复用 ResultListReader 的池化内核；容量启发取键数上界）。</summary>
+    private async ValueTask<List<T>> ReadManyRowsAsync<T>(
+        EntityRuntimeInfo info, DbCommand cmd, int capacityHint, ReadCommandLease lease, CancellationToken token)
+        where T : class, new()
+    {
+        await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
+        List<T> rows = await ResultListReader.ReadAllAsync(
+            reader, (Func<DbDataReader, T>)info.RowFactory,
+            Math.Min(Math.Max(1, capacityHint), SqlLimits.MaxMaterializedCapacityHint), token,
+            syncRead: PreferSynchronousRowRead).ConfigureAwait(false);
+        lease.MarkHealthy();
+        return rows;
+    }
+
+    /// <summary>分批 IN 形态的多键读（MySQL 与能力不足回退）。每批一条命令、独立参数集合
+    /// ——牺牲少量命令创建，换取 PG auto-prepare 参数对象缓存窗口在源头不存在（R-UNNESTB 教训）。</summary>
+    private async ValueTask<List<T>> ExecuteInFormReadAsync<T>(
+        EntityRuntimeInfo info, DbTransaction? activeTransaction, IReadOnlyList<object> keys,
+        Func<object, object?>? convertKey, ReadManyIdentifiers ids, CancellationToken token)
+        where T : class, new()
+    {
+        int tenantParamCount = HasTenantFilter(info.Features) ? 1 : 0;
+        int batchSize = Math.Max(1, Math.Min(
+            SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount, SqlLimits.MaxRowsPerBatch));
+
+        if (keys.Count <= batchSize)
+        {
+            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+                readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+            DbCommand cmd = lease.Command;
+            cmd.CommandText = BuildInFormReadSql(keys.Count, ids);
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            BindInFormReadKeys(cmd, keys, 0, keys.Count, convertKey);
+            BindDefaultFilterParameters(cmd, info.Features);
+            return await ReadManyRowsAsync<T>(info, cmd, keys.Count, lease, token).ConfigureAwait(false);
+        }
+
+        var results = new List<T>(keys.Count);
+        for (int start = 0; start < keys.Count; start += batchSize)
+        {
+            int batchLen = Math.Min(batchSize, keys.Count - start);
+            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+                readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+            DbCommand cmd = lease.Command;
+            cmd.CommandText = BuildInFormReadSql(batchLen, ids);
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            BindInFormReadKeys(cmd, keys, start, batchLen, convertKey);
+            BindDefaultFilterParameters(cmd, info.Features);
+            List<T> batch = await ReadManyRowsAsync<T>(info, cmd, batchLen, lease, token).ConfigureAwait(false);
+            results.AddRange(batch);
+        }
+        return results;
+    }
+
+    /// <summary>IN 形态的键参数绑定——键值经生成物单键转换器归一（与 BindDelete 的 @p0 同真源）。</summary>
+    private static void BindInFormReadKeys(
+        DbCommand cmd, IReadOnlyList<object> keys, int start, int length, Func<object, object?>? convertKey)
+    {
+        for (int i = 0; i < length; i++)
+        {
+            object key = keys[start + i]
+                ?? throw new ArgumentNullException(nameof(keys), "Key collection must not contain null entries.");
+            cmd.Parameters.Add(TProvider.CreateParameter(
+                TProvider.GetParameterPlaceholder(i), convertKey?.Invoke(key) ?? key));
+        }
+    }
+
+    /// <summary>json_each 形态的多键读 SQL——单参数名与键数无关，语句文本恒定。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "S2077:Formatting SQL queries is security-sensitive",
+        Justification = "列清单与标识符是引用后的 (Type, 方言) 缓存，Filter 是内部生成模板，"
+            + "键值经单参数 @ids 绑定——无用户值拼入文本（与 GetGetAllSql 同口径）。")]
+    private static string BuildJsonEachReadSql(in ReadManyIdentifiers ids)
+        => $"SELECT {ids.SelectColumns} FROM {ids.QuotedTable} WHERE {ids.QuotedPk} "
+            + $"IN (SELECT value FROM json_each({ArrayParameterName})){ids.Filter}";
+
+    /// <summary>PostgreSQL <c>= ANY</c> 形态的多键读 SQL——单数组参数。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "S2077:Formatting SQL queries is security-sensitive",
+        Justification = "同 BuildJsonEachReadSql：列清单与标识符为引用缓存、Filter 为内部模板，键值走数组参数绑定。")]
+    private static string BuildArrayReadSql(in ReadManyIdentifiers ids)
+        => $"SELECT {ids.SelectColumns} FROM {ids.QuotedTable} WHERE {ids.QuotedPk} "
+            + $"= ANY({ArrayParameterName}){ids.Filter}";
+
+    /// <summary>分批 IN 形态的多键读 SQL——占位符按下标命名，主键列名与过滤子句为内部模板，
+    /// SelectColumns 为 (Type, 方言) 缓存的引用列清单（无用户值进入文本）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "S2077:Formatting SQL queries is security-sensitive",
+        Justification = "同 BuildJsonEachReadSql：列清单与标识符为引用缓存、Filter 为内部模板，键值一律经 @pN 参数绑定。")]
+    private static string BuildInFormReadSql(int batchLen, in ReadManyIdentifiers ids)
+    {
+        var sb = new ValueStringBuilder(stackalloc char[256]);
+        try
+        {
+            sb.Append("SELECT ");
+            sb.Append(ids.SelectColumns);
+            sb.Append(" FROM ");
+            sb.Append(ids.QuotedTable);
+            sb.Append(" WHERE ");
+            sb.Append(ids.QuotedPk);
+            sb.Append(" IN (");
+            for (int i = 0; i < batchLen; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append(TProvider.GetParameterPlaceholder(i));
+            }
+            sb.Append(')');
+            sb.Append(ids.Filter);
+            return sb.ToString();
+        }
+        finally
+        {
+            sb.Dispose();
+        }
+    }
+
+    /// <summary>多键读的 json_each 形态门控（读侧）：SQLite 方言 + 首键（经生成物转换器归一后）
+    /// 为整型或字符串 + 引擎支持 json_each。与删侧 <c>UseJsonEachDeleteForm</c> 共用同一引擎
+    /// 能力缓存；键形态不适用时回退 IN，不写能力缓存（键类型与引擎能力无关）。</summary>
+    private async ValueTask<bool> UseJsonEachReadForm<T>(
+        EntityRuntimeInfo info, IReadOnlyList<object> keys, CancellationToken ct)
+        where T : class, new()
+    {
+        if (TProvider.Dialect != SqlDialect.Sqlite || SqlSlots<T>.JsonEachDeleteSupported is false)
+        {
+            return false;
+        }
+        object firstKey = info.Crud.ConvertDeleteKey?.Invoke(keys[0]) ?? keys[0];
+        if (firstKey is not (long or int or short or byte or sbyte or ushort or uint or string))
+        {
+            return false;
+        }
+        return await EnsureJsonEachEngineSupportedAsync<T>(ct).ConfigureAwait(false);
+    }
 
     /// <summary>InsertOrUpdate —— 单次往返 UPSERT；key-only 实体使用幂等冲突分支，不生成空 SET。
     /// <para>[TenantAware]：冲突更新 SET 不包含 tenant_id（Insert 仍按实体值写入），

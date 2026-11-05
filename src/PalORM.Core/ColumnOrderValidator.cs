@@ -13,10 +13,8 @@ internal static class ColumnOrderValidator
     internal static void Validate<T>(DbDataReader reader, bool enabled)
     {
         if (!enabled) return;
-        // ITM-543: ColumnNames 缺键时静默返回是安全的——所有调用点（DataSession/GridReader/StoredProcBuilder）
-        // 均先经 RowFactories.TryGetValue 守卫，未注册类型在取 RowFactory 时已明确失败；而源生成器对
-        // 已注册实体同时产出 RowFactory 与 ColumnNames，故"有 RowFactory 却无 ColumnNames"不可达。
-        if (!PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? expected))
+        IReadOnlyList<string>? expected = ExpectedColumns<T>.Get();
+        if (expected is null)
             return;
         if (reader.FieldCount < expected.Count)
         {
@@ -37,6 +35,35 @@ internal static class ColumnOrderValidator
                     "misassign data. List columns explicitly in entity declaration order, or set " +
                     "DbOptions.ValidateQueryColumnOrder = false if you use aliases and guarantee order yourself.");
             }
+        }
+    }
+
+    /// <summary>PERF-2.6（2026-11-05）：每 (Provider, T) 的预期列名快照缓存——原实现每次校验
+    /// 一次 <c>PalORM_Runtime.ColumnNames</c> FrozenDictionary 查找。列集是注册期产物
+    ///（单调不可变），代际一致即命中。
+    /// <para><b>ITM-543</b>：ColumnNames 缺键时静默返回是安全的——所有调用点（DataSession/
+    /// GridReader/StoredProcBuilder）均先经 RowFactories 守卫，未注册类型在取 RowFactory 时
+    /// 已明确失败；而源生成器对已注册实体同时产出 RowFactory 与 ColumnNames，故"有
+    /// RowFactory 却无 ColumnNames"不可达。</para></summary>
+    private static class ExpectedColumns<T>
+    {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+            Justification = "静态槽按 T 分片正是本缓存的目的（每实体一份），非跨泛型实例共享事故。")]
+        private static IReadOnlyList<string>? _columns;
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+            Justification = "同 _columns：按 T 分片的代际戳。")]
+        private static int _generation = -1;
+
+        internal static IReadOnlyList<string>? Get()
+        {
+            if (_generation == PalORM_Runtime.RegistryGeneration)
+                return _columns;
+            _columns = PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? columns)
+                ? columns
+                : null;
+            _generation = PalORM_Runtime.RegistryGeneration;
+            return _columns;
         }
     }
 }

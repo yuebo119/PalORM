@@ -229,6 +229,7 @@ M:PalORM.DataSession`1|ForParallelReads()|ParallelReadScope|instance
 M:PalORM.DataSession`1|From<1>()|QueryBuilder`1|instance
 M:PalORM.DataSession`1|GetAllAsync<1>(System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|GetAsync<1>(System.Object, System.Threading.CancellationToken)|ValueTask`1|instance
+M:PalORM.DataSession`1|GetByKeyManyAsync<1>(System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|GetRawConnection()|System.Data.Common.DbConnection|instance
 M:PalORM.DataSession`1|HealthCheckAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.HealthResult, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]|instance
 M:PalORM.DataSession`1|IgnoreFilters()|PalORM.DataSession`1|instance

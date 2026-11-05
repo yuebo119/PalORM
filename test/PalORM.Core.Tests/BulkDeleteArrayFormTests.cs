@@ -592,6 +592,13 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
     internal static void SetStatementRecorder(Action<string, int> recorder)
         => _onStatement = recorder;
 
+    /// <summary>读路径（<c>ExecuteReader</c>）的采集钩子——与写路径分开，避免读侧断言
+    /// 污染既有写路径的语句计数（2026-11-05 多键点读用例）。</summary>
+    private static Action<string, int>? _onReader;
+
+    internal static void SetReaderRecorder(Action<string, int> recorder)
+        => _onReader = recorder;
+
     [System.Diagnostics.CodeAnalysis.AllowNull]
     public override string CommandText
     {
@@ -658,12 +665,18 @@ internal sealed class ArrayAnySqliteCommand(SqliteCommand inner) : DbCommand
     protected override DbParameter CreateDbParameter() => inner.CreateParameter();
 
     protected override DbDataReader ExecuteDbDataReader(System.Data.CommandBehavior behavior)
-        => inner.ExecuteReader(behavior);
+    {
+        _onReader?.Invoke(_originalSql, inner.Parameters.Count);
+        return inner.ExecuteReader(behavior);
+    }
 
     protected override Task<DbDataReader> ExecuteDbDataReaderAsync(
         System.Data.CommandBehavior behavior, CancellationToken cancellationToken)
+    {
+        _onReader?.Invoke(_originalSql, inner.Parameters.Count);
         // SqliteDataReader 是 DbDataReader 的子类，但 Task<T> 不变——需显式桥接。
-        => WrapAsync(inner.ExecuteReaderAsync(behavior, cancellationToken));
+        return WrapAsync(inner.ExecuteReaderAsync(behavior, cancellationToken));
+    }
 
     private static async Task<DbDataReader> WrapAsync(Task<SqliteDataReader> pending)
         => await pending.ConfigureAwait(false);

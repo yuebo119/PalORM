@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1551 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1571 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -146,6 +146,7 @@
 | `QueryFirstAsync<T>(...)` / `QuerySingleAsync<T>(...)` | 限制行数 |
 | `ScalarAsync<T>(FormattableString)` | 标量 |
 | `GetAsync<T>(object key)` | 按主键 |
+| `GetByKeyManyAsync<T>(IReadOnlyList<object> keys)` | 多键点读：SQLite 单参数 `json_each`、PostgreSQL `= ANY(数组)`、MySQL 分批 `IN`（方言感知）。软删/租户过滤照常适用；缺键静默跳过、空集合不发 SQL、返回顺序不承诺输入序。实测比逐键 `GetAsync` 快 5.0~7.8 倍、内存低 3.2~3.5 倍（`bench/crossbench/ReadManyProbe`，2026-11-05） |
 | `GetAllAsync<T>()` | 全表 |
 | `InsertAsync<T>(T)` → `T` | PG/SQLite RETURNING / MySQL LAST_INSERT_ID |
 | `UpdateAsync<T>(T)` | 乐观锁自动检查；[TenantAware] 的 tenant_id 不在 SET 内 |
@@ -195,6 +196,17 @@
 | `DataSessionFactory<TProvider>(options, maxIdleSize = 16)` / `IDataSessionFactory<TProvider>` | 池的 DI 友好封装：注册为单例，请求作用域内 `RentAsync` 租出、`DisposeAsync` 归还；不需要额外 DI 包依赖 |
 
 归还语义：瞬态状态（`WithTenant`/`IgnoreFilters`/`WithIsolationLevel`/`WithTimeout`/`WithRetry`/`WithCircuitBreaker` 覆写、`AddInterceptor` 加项）全部复位（租期加项释放）；**复用槽（命令/参数池）、读连接、物化容量启发保留**——跨租期存活是池化的核心收益（单行 CRUD/查询命令复用槽在"一请求一会话"形态下不经池化永不激活）。归还门禁：活动事务、未消费的流式枚举器、并行读作用域未收口时 `DisposeAsync` 抛出。空闲上限：满员归还的会话真实释放（不放大物理连接占用）。SQLite 本地实测（探针）：GetByKey per-op 会话 45.5µs → 池化 3.3µs（13.8×），与长会话（2.5µs）只差约 1µs 租还成本。租出时对脏会话执行连接态复位：SQLite 脏句柄只重设 `foreign_keys`；PostgreSQL 执行 `RESET ALL; RESET ROLE`、MySQL 执行 `COM_RESET_CONNECTION`（不清 prepared statements），随后重放池基准 `SessionSetupSql`——修复上一租期原生 SQL 改写的 GUC/角色/会话变量带入下一租期。空闲超过 `PoolConnectionValidationInterval`（默认 30s，0=关闭）的会话租出时先执行 `SELECT 1` 探活（PG/MySQL），失败由池丢弃并换新。
+
+### 调用形态选择判据
+
+| 场景 | 形态 | 依据（PerfHub 实测，2,000 档，2026-11-05） |
+|------|------|------|
+| 会话寿命跨多个操作（同一请求内多次读写、报表批次） | 长会话：单 `DataSession` 复用 | 逐键读比 per-op 省 41%（SQLite）时延与 67% 内存；写省 20%~31% 时延 |
+| 每请求一会话（Web/服务端典型形状） | `DataSessionPool` 租还 | 收益接近长会话（PG 读省 16%），且不必在业务代码里传会话对象 |
+| 一次性或低频调用 | per-op：`CreateAsync` | 池化只多一次租还 |
+| 单次大调用（整批批量插入） | per-op，不要池化 | 租还开销摊在单次调用上：SQLite/PostgreSQL 实测慢 7%~8%，MySQL 持平 |
+
+实际数字与复现命令见 README「调用形态对照」。
 
 ### 查询管道（QueryPipeline，请求级单往返）
 

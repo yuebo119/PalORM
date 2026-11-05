@@ -31,6 +31,9 @@ public sealed class ArchitectureInvariantTests
         "MinAsync",
         "AvgAsync",
         "BulkDeleteAsync",   // ITM-404：批量删除与单条同语义
+        // PERF-1.1（2026-11-05）：多键点读——主键集合读，软删/租户过滤经
+        // GetDefaultFilterFragment + BindDefaultFilterParameters 在内核 GetByKeyManyCoreAsync 内绑定
+        "GetByKeyManyAsync",
     ];
 
     /// <summary>豁免清单：触表但按契约不加默认过滤的入口（每项必须给依据）。</summary>
