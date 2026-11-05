@@ -73,8 +73,14 @@ public sealed class FaultInjectionFrameworkTests
         await command.ExecuteScalarAsync();
         TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
 
-        await Assert.That(elapsed >= delay).IsTrue()
-            .Because($"实际耗时 {elapsed.TotalMilliseconds:0}ms 应不小于注入的 {delay.TotalMilliseconds:0}ms");
+        // 容差 10ms：Task.Delay 的定时器刻度会向下取整到 OS 计时粒度，全量并发下实测可差
+        // 0.1~0.5ms（149.9ms 对 150ms），原断言 `elapsed >= delay` 因此在 3 次全量里失败 2 次。
+        // 10ms 远大于任何刻度取整偏差，又远小于注入值（延迟未生效时这里约 1ms 以内），
+        // 故「延迟确实被 await」仍被钉死，只是不再被计时精度误伤。
+        TimeSpan tolerance = TimeSpan.FromMilliseconds(10);
+        await Assert.That(elapsed >= delay - tolerance).IsTrue()
+            .Because($"实际耗时 {elapsed.TotalMilliseconds:0.0}ms 应不小于注入的 "
+                + $"{delay.TotalMilliseconds:0}ms 减 {tolerance.TotalMilliseconds:0}ms 容差");
     }
 
     [Test]
