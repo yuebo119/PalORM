@@ -230,7 +230,8 @@ internal sealed class GetByKeyManyTests
         Exception? thrown = await Assert.ThrowsAsync<ArgumentNullException>(async () =>
             await session.GetByKeyManyAsync<ReadManyRow>(new List<object> { 1L, null!, 3L }));
 
-        await Assert.That(thrown).IsNotNull();
+        // 行为断言：null 元素在入口逐个检查并报出下标，而不是笼统的非空判断
+        await Assert.That(thrown!.Message).Contains("index 1");
     }
 
     [Test]
