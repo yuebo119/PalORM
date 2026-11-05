@@ -39,4 +39,11 @@ internal static class QueryClauseKinds
     [
         QueryClauseKind.Set, QueryClauseKind.DefaultFilter, QueryClauseKind.Where, QueryClauseKind.Raw
     ];
+
+    /// <summary>DELETE 参数路由（Update 同构去 Set）：BuildDeleteSql 消费 DefaultFilter/Where/Raw。
+    /// Join/CTE/OrderBy/Lock/Window/GroupBy/Having/Take/Skip 在构建期显式拒绝，不入数组。</summary>
+    internal static readonly QueryClauseKind[] Delete =
+    [
+        QueryClauseKind.DefaultFilter, QueryClauseKind.Where, QueryClauseKind.Raw
+    ];
 }

@@ -20,6 +20,7 @@
 - **超时统一为 `TimeoutException`**：驱动把超时包在自身异常里（`NpgsqlException` 内层为超时异常），现在在三个位置解包：弹性执行器出口、三处直调分支的兜底 catch、`ScalarAsync` 公开入口（覆盖未配置弹性的直接分支）。熔断计数仍按原异常计算。
 - **新增 `BulkInsertReturningAsync`**：PG 与 SQLite 走多行 `INSERT ... RETURNING` 并按行序回填自增主键；MySQL 因 `LAST_INSERT_ID` 只保证首值而明确抛 `NotSupportedException`。原 `BulkInsertAsync` 保持最快的写入形态（不回填），两者分工写进 API 参考。
 - **PG DateTime 往返回归测试**：`PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds` 锁定列型修复；方言对称性差异表登记 PG 侧 `TIMESTAMPTZ`。〔内部〕
+- **新增四项生命周期与存在性 API**：`RestoreAsync`（软删行恢复，`WHERE deleted_at IS NOT NULL` 使重复恢复返回 0，与软删删除的幂等语义对称）、`HardDeleteAsync`（绕过软删改写的物理删除，与非软删实体的 `DeleteAsync` 走同一条路径）、`AnyAsync`（`SELECT 1 … LIMIT 1` 命中即短路，过滤与 `CountAsync` 同源，标量 null 视为无匹配行）、`ExecuteDeleteAsync`（条件删除：要求至少一个用户 `Where`，软删实体改写成 `UPDATE deleted_at` 以保持与 `DeleteAsync` 同语义，`Set`/`Take`/`Skip`/`Join`/`OrderBy`/`GroupBy`/`Having`/`Lock`/`Window`/CTE 构建期拒绝）。`ExecuteNonQueryAsync` 的语义收窄为 UPDATE 专用，与 DELETE 共用同一执行内核（复用槽、参数池、拦截器、观测性只实现一次）。
 - **行锁子句形态断言移到 PG**：`PostgreSql_LockClause_AppearsAfterLimit`，SQLite 侧只断言构建期拒绝。〔内部〕
 
 ## [6.8.0] - 2026-10-26

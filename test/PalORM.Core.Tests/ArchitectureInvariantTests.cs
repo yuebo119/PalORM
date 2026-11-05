@@ -34,6 +34,13 @@ public sealed class ArchitectureInvariantTests
         // PERF-1.1（2026-11-05）：多键点读——主键集合读，软删/租户过滤经
         // GetDefaultFilterFragment + BindDefaultFilterParameters 在内核 GetByKeyManyCoreAsync 内绑定
         "GetByKeyManyAsync",
+        // 2026-11-06：生命周期与存在性三入口
+        // HardDeleteAsync → DeletePhysicalAsync（租户绑定在内核内）
+        // RestoreAsync    → 体内 BindDefaultFilterParameters（租户条件与软删方向条件同句）
+        // AnyAsync        → AnyEntryAsync（与 CountAsync 同族模板）
+        "HardDeleteAsync",
+        "RestoreAsync",
+        "AnyAsync",
     ];
 
     /// <summary>豁免清单：触表但按契约不加默认过滤的入口（每项必须给依据）。</summary>
@@ -94,6 +101,9 @@ public sealed class ArchitectureInvariantTests
             // GetAllCoreAsync 内核，薄包装体以内核调用名为路由凭证（L3 同款先例）
             || body.Contains("GetByKeyCoreAsync", StringComparison.Ordinal)
             || body.Contains("GetAllCoreAsync", StringComparison.Ordinal)
+            // 2026-11-06：HardDeleteAsync 薄入口——租户绑定在 DeletePhysicalAsync 内核内
+            //（与 DeleteAsync 的物理分支同一实现，抽出后两入口共用）
+            || body.Contains("DeletePhysicalAsync", StringComparison.Ordinal)
             // R4（2026-10-12 读预热包装）：GetAsync/GetAllAsync/Count/聚合/Query/Scalar 改
             // 非 async 薄入口（预热 + 委托 *EntryAsync 内核），过滤路由在内核体内——
             // 委托调用名为路由凭证（与 C10/L3 同款口径）

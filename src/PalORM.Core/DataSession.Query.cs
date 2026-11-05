@@ -107,6 +107,91 @@ public sealed partial class DataSession<TProvider>
         return (baseSql + " WHERE " + filter, baseSql + " WHERE " + filter + " AND (");
     }
 
+    /// <summary>存在性判断：满足过滤条件的行是否存在。
+    /// <para><b>与 CountAsync 的分工</b>：过滤语义完全同源，但 SQL 为 <c>SELECT 1 … LIMIT 1</c>，
+    /// 引擎命中首行即短路，不做聚合计数与结果集读取。相比 <c>CountAsync(...) &gt; 0</c> 省一次
+    /// 聚合，相比 <c>FirstOrDefaultAsync</c> 不物化整行。</para>
+    /// <para><b>标量为 null 是合法结果</b>（无匹配行），与 COUNT 的 null 视为驱动异常相反。</para></summary>
+    public ValueTask<bool> AnyAsync<T>(FormattableString? where = null, CancellationToken ct = default) where T : class, new()
+    {
+        if (_operationState.CompletedOps >= SessionOperationState.PrewarmThreshold)
+            _operationState.PrewarmCurrentOperationOwner();
+        return AnyEntryAsync<T>(where, ct);
+    }
+
+    private async ValueTask<bool> AnyEntryAsync<T>(FormattableString? where, CancellationToken ct) where T : class, new()
+    {
+        using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        DbTransaction? activeTransaction = GetActiveTransaction();
+        int filterSlot = FilterSlotBits(info.Features);
+        string baseSql = SqlSlots<T>.AnyBaseOrBuilt(SqlSlots<T>.QuotedTableNameOrBuilt(info.TableName));
+        string sql;
+        if (where is null)
+        {
+            sql = filterSlot == 0
+                ? SqlSlots<T>.AnyBareLimitOrBuilt(baseSql)
+                : (SqlSlots<T>.AnyComposed[filterSlot] ??= BuildAnyComposed<T>(info, baseSql)).FilterOnlySql;
+        }
+        else
+        {
+            // 用户条件整体括号包裹：含 OR 时 AND 优先级会使默认过滤对 OR 分支失效（与 Count 同源）
+            string prefix = filterSlot == 0
+                ? baseSql + " WHERE ("
+                : (SqlSlots<T>.AnyComposed[filterSlot] ??= BuildAnyComposed<T>(info, baseSql)).WherePrefix;
+            sql = prefix + FormatSqlWithParameters(where) + ") LIMIT 1";
+        }
+        (bool anyHandled, bool reusedAny) = await TryAnyViaReusableCommandAsync(
+            sql, where, info, activeTransaction, ct).ConfigureAwait(false);
+        if (anyHandled)
+            return reusedAny;
+
+        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+            readFromReplica: false, activeTransaction, ct).ConfigureAwait(false);
+        DbCommand cmd = lease.Command;
+        cmd.CommandText = sql;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
+        if (where is not null) BindFormattableParameters(cmd, where);
+        BindDefaultFilterParameters(cmd, info.Features);
+        object? scalar = await ExecuteReadScalarAsync(cmd, ct).ConfigureAwait(false);
+        lease.MarkHealthy();
+        return scalar is not null;
+    }
+
+    /// <summary>AnyAsync 的复用分支（与 <see cref="TryCountViaReusableCommandAsync"/> 同构）——
+    /// 槽命中且就地绑定成功时执行并返回 (true, 是否存在)；未命中或绑定失败返回 default，
+    /// 调用方回退新建命令路径。租户槽值随 WithTenant 刷新。</summary>
+    private async ValueTask<(bool Handled, bool Exists)> TryAnyViaReusableCommandAsync(
+        string sql, FormattableString? where, EntityRuntimeInfo info,
+        DbTransaction? activeTransaction, CancellationToken ct)
+    {
+        int tenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
+        DbCommand? reused = TryAcquireReusableDirectCommand(sql);
+        if (reused is null)
+            return default;
+        EnsureReusableDirectParameters(reused, where, info.Features);
+        if (!TryBindFormattableValuesInPlace(reused, where, tenantSlots))
+            return default;
+        ApplyReusableCommandState(reused, activeTransaction, sql);
+        if (_querySlot is { } anySlot)
+            await anySlot.EnsurePreparedAsync(ct).ConfigureAwait(false);
+        if (tenantSlots > 0)
+            reused.Parameters[^1].Value = _tenantId;
+        object? scalar = await ExecuteReadScalarAsync(reused, activeTransaction, ct).ConfigureAwait(false);
+        return (true, scalar is not null);
+    }
+
+    /// <summary>Any 组合句的纯构建器（仅槽未命中时调用）——过滤文本经
+    /// <see cref="GetDefaultFilterForms{T}"/> 单一真源派生。FilterOnly 形态自带 LIMIT 1；
+    /// where 形态由 WherePrefix 拼用户条件后再补 LIMIT 1。</summary>
+    private (string FilterOnlySql, string WherePrefix) BuildAnyComposed<T>(
+        EntityRuntimeInfo info, string baseSql)
+        where T : class, new()
+    {
+        string filter = GetDefaultFilterForms<T>(info.Features).Condition;
+        return (baseSql + " WHERE " + filter + " LIMIT 1", baseSql + " WHERE " + filter + " AND (");
+    }
+
     /// <summary>聚合标量内核（Sum/Max/Min/Avg 共享，v5.4 精炼 L3）。
     /// ITM-613 门禁次序保持：先 EnterOperation 再拼 SQL——门禁外读过滤状态 + 门禁内
     /// 二次求值的窗口内，并发 IgnoreFilters()/WithTenant() 可致 SQL 片段与参数集错配。</summary>

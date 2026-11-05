@@ -204,6 +204,7 @@ M:PalORM.DataSessionPool`1|RentAsync(System.Threading.CancellationToken)|ValueTa
 M:PalORM.DataSession`1+ParallelReadScope|.ctor(DataSession`1)
 M:PalORM.DataSession`1+ParallelReadScope|DisposeAsync()|System.Threading.Tasks.ValueTask|instance
 M:PalORM.DataSession`1|AddInterceptor(PalORM.IQueryInterceptor)|PalORM.DataSession`1|instance
+M:PalORM.DataSession`1|AnyAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Boolean, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|AvgAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Double, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|BeginTransactionAsync(System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Data.Common.DbTransaction, System.Data.Common]]|instance
 M:PalORM.DataSession`1|BulkDeleteAsync<1>(System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
@@ -231,6 +232,7 @@ M:PalORM.DataSession`1|GetAllAsync<1>(System.Threading.CancellationToken)|ValueT
 M:PalORM.DataSession`1|GetAsync<1>(System.Object, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|GetByKeyManyAsync<1>(System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|GetRawConnection()|System.Data.Common.DbConnection|instance
+M:PalORM.DataSession`1|HardDeleteAsync<1>(System.Object, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|HealthCheckAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.HealthResult, PalORM.Core]]|instance
 M:PalORM.DataSession`1|IgnoreFilters()|PalORM.DataSession`1|instance
 M:PalORM.DataSession`1|InsertAsync<1>(T, System.Threading.CancellationToken)|ValueTask`1|instance
@@ -244,6 +246,7 @@ M:PalORM.DataSession`1|QueryAsyncEnumerable<1>(System.FormattableString, System.
 M:PalORM.DataSession`1|QueryFirstAsync<1>(System.FormattableString, System.Boolean, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|QuerySingleAsync<1>(System.FormattableString, System.Boolean, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|QueryStructsAsync<1>(System.FormattableString, System.Boolean, System.Threading.CancellationToken)|ValueTask`1|instance
+M:PalORM.DataSession`1|RestoreAsync<1>(System.Object, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|RollbackToAsync(System.Data.Common.DbTransaction, System.String, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
 M:PalORM.DataSession`1|SaveAsync<1>(T, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|SavepointAsync(System.Data.Common.DbTransaction, System.String, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
@@ -370,6 +373,7 @@ M:PalORM.PalORMException|.ctor(System.String, System.Exception)
 M:PalORM.PalORM_Runtime|Register(PalORM.RegistryFragment)|System.Void|static
 M:PalORM.ParameterNameCache|GetName(System.Int32)|System.String|static
 M:PalORM.ProjectionAttribute|.ctor()
+M:PalORM.QueryBuilderExtensions|ExecuteDeleteAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|static
 M:PalORM.QueryBuilderExtensions|ExecuteNonQueryAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|static
 M:PalORM.QueryBuilderExtensions|FirstAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|ValueTask`1|static
 M:PalORM.QueryBuilderExtensions|FirstOrDefaultAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|ValueTask`1|static
