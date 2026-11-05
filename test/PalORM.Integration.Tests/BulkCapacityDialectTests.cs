@@ -43,6 +43,11 @@ public sealed class BulkCapacityDialectTests
             await using var session = await TestDb.MySqlAsync();
             // 数据准备强制多值插入（见类注释）；finally 恢复实例默认
             await session.ExecuteAsync($"SET GLOBAL local_infile=OFF");
+            // 2026-11-05：探测结论按连接串缓存 60s，前序 BulkCopy 用例已把 ON 写进缓存——
+            // 不清则本次 BulkInsert 仍按 Enabled 走 BulkCopy（服务端已 OFF → 失败重探测 → 回退），
+            // 注释声明的"强制多值插入"不成立，多值回退执行段（MySqlProvider.BulkInsertAsync
+            // 直连回退分支）在 CI 长期 0%。清缓存后探测读到的就是 OFF。
+            MySqlProvider.ResetLocalInfileProbeCache();
             try
             {
             // 探针自建自清（B171 惯例）：DDL 硬编码（表名/列名进插值会成为绑定参数）；

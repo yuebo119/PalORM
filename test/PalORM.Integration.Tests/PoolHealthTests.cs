@@ -1,3 +1,4 @@
+using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Testing;
 
@@ -33,6 +34,37 @@ public sealed class PoolHealthTests
 
             // 连接未被杀，State 恒 Open → 本次租出必然经 ValidateConnectionAsync（SELECT 1）
             DataSession<PostgreSqlProvider> second = await pool.RentAsync();
+            await Assert.That(await second.ScalarAsync<int>($"SELECT 1")).IsEqualTo(1);
+            await second.DisposeAsync();
+        }
+        finally
+        {
+            await pool.DisposeAsync();
+        }
+    }
+
+    /// <summary>MySQL 同形覆盖（2026-11-05）：<c>MySqlProvider.ValidateConnectionAsync</c> 此前
+    /// 在 CI 读数恒为 0%——探活分支只在 PG 侧有用例。两条 Provider 的探活实现各自独立
+    /// （MySQL 走 <c>MySqlConnection</c> + 超时透传），PG 的用例证明不了 MySQL 的。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task MySql_IdleHealthyConnection_IsValidatedOnRent()
+    {
+        string cs = TestEnvironment.ResolveMySqlConnectionString();
+        var pool = DataSessionPool<MySqlProvider>.Create(new DbOptions
+        {
+            ConnectionString = cs,
+            PoolConnectionValidationInterval = TimeSpan.FromMilliseconds(1),
+        }, maxIdleSize: 1);
+        try
+        {
+            DataSession<MySqlProvider> first = await pool.RentAsync();
+            await Assert.That(await first.ScalarAsync<int>($"SELECT 1")).IsEqualTo(1);
+            await first.DisposeAsync();
+            await Task.Delay(20);   // 空闲超过 1ms 的探活阈值
+
+            // 连接未被杀，State 恒 Open → 本次租出必然经 ValidateConnectionAsync（SELECT 1）
+            DataSession<MySqlProvider> second = await pool.RentAsync();
             await Assert.That(await second.ScalarAsync<int>($"SELECT 1")).IsEqualTo(1);
             await second.DisposeAsync();
         }
