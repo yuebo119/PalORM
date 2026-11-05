@@ -290,12 +290,14 @@ jobs:
             - name: Assert per-class branch coverage floors (META-1)
               # branch 读 block_coverage（dotnet-coverage 无独立 branch 属性，block 为分支代理）；
               # 地板=2026-10-31 实测-2pp，防退化非达标。探针已验证可红（地板抬 90 时 exit 1）。
+              # 2026-11-05：五条断言改独立循环——原单块连续执行时第一条失败即退出，
+              # 后续读数拿不到，回调地板只能靠猜。
               run: |
-                  dotnet run --file scripts/assert-coverage.cs -- --branch queryBuilder cov-integration.xml
-                  dotnet run --file scripts/assert-coverage.cs -- --branch batchUpdateSqlBuilder cov-integration.xml
-                  dotnet run --file scripts/assert-coverage.cs -- --branch mySqlProvider cov-integration.xml
-                  dotnet run --file scripts/assert-coverage.cs -- --branch postgreSqlProvider cov-integration.xml
-                  dotnet run --file scripts/assert-coverage.cs -- --branch sqliteProvider cov-integration.xml
+                  failed=0
+                  for key in queryBuilder batchUpdateSqlBuilder mySqlProvider postgreSqlProvider sqliteProvider; do
+                      dotnet run --file scripts/assert-coverage.cs -- --branch "$key" cov-integration.xml || failed=1
+                  done
+                  exit $failed
 
     # T1-diff 独立成 job（2026-11-04）：它需要 unit 与 integration 两侧的覆盖率 XML
     # （Core 代码可能由 Integration 用例跑到，命中取并集），而两个 job 是 build 的并行下游，
