@@ -17,20 +17,33 @@ Console.OutputEncoding = new UTF8Encoding(false);
 
 string mode = args.Contains("--update", StringComparer.Ordinal) ? "--update" : "--check";
 string configuration = ReadOption("--configuration") ?? "Debug";
+// --root：从另一份检出（如 v6.8.0 worktree）读取已构建程序集，用于补历史归档基线
+string assemblyRoot = ReadOption("--root") is { Length: > 0 } rootArg
+    ? Path.GetFullPath(rootArg)
+    : FindRepoRoot();
+// --archive <ver>：把当前快照写入 bench/baselines/public-api/v<ver>/，供 semver-bump-check 跨版本比对
+string archiveVersion = ReadOption("--archive") ?? "";
 string repoRoot = FindRepoRoot();
 string baselineDir = Path.Combine(repoRoot, "bench", "baselines", "public-api");
+if (archiveVersion.Length > 0)
+{
+    mode = "--update";
+    baselineDir = Path.Combine(baselineDir, $"v{archiveVersion}");
+}
 Directory.CreateDirectory(baselineDir);
 
-string[] assemblies = ["PalORM.Core", "PalORM.MySql", "PalORM.PostgreSql", "PalORM.Sqlite"];
+// PalORM.SourceGen 2026-11-05 纳入（G5）：它确有 4 个公开类型（PalORMGenerator /
+// PalORMAnalyzer / SqlTemplates / InterceptionTarget），此前不在快照面内，破坏不可见。
+string[] assemblies = ["PalORM.Core", "PalORM.MySql", "PalORM.PostgreSql", "PalORM.Sqlite", "PalORM.SourceGen"];
 List<string> failures = [];
 int changedFiles = 0;
 
 foreach (string assemblyName in assemblies)
 {
-    string dll = Path.Combine(repoRoot, "src", assemblyName, "bin", configuration, "net11.0", $"{assemblyName}.dll");
-    if (!File.Exists(dll))
+    string dll = ResolveAssemblyPath(assemblyRoot, assemblyName, configuration);
+    if (dll.Length == 0)
     {
-        Console.Error.WriteLine($"::error::缺少程序集 {dll}——先构建（-c {configuration}）");
+        Console.Error.WriteLine($"::error::缺少程序集 {assemblyName}（{assemblyRoot}/src/{assemblyName}/bin/{configuration}/**/*.dll）——先构建（-c {configuration}）");
         return 1;
     }
 
@@ -40,7 +53,9 @@ foreach (string assemblyName in assemblies)
     if (mode == "--update")
     {
         File.WriteAllLines(baselinePath, current, new UTF8Encoding(false));
-        Console.WriteLine($"{assemblyName}: 基线已更新（{current.Length} 行）");
+        Console.WriteLine(archiveVersion.Length > 0
+            ? $"{assemblyName}: 归档 v{archiveVersion} 写入（{current.Length} 行）→ {baselinePath}"
+            : $"{assemblyName}: 基线已更新（{current.Length} 行）");
         continue;
     }
 
@@ -90,14 +105,95 @@ static (List<string> Added, List<string> Removed) Diff(string[] baseline, string
     return (added, removed);
 }
 
+// TFM 自适应：SourceGen 是 netstandard2.0，其余是 net11.0。多个命中时优先 net11.0。
+static string ResolveAssemblyPath(string root, string assemblyName, string configuration)
+{
+    string binDir = Path.Combine(root, "src", assemblyName, "bin", configuration);
+    if (!Directory.Exists(binDir))
+    {
+        return "";
+    }
+    var candidates = Directory.GetFiles(binDir, $"{assemblyName}.dll", SearchOption.AllDirectories)
+        .OrderByDescending(p => p.Contains($"{Path.DirectorySeparatorChar}net11.0{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        .ToList();
+    return candidates.Count > 0 ? candidates[0] : "";
+}
+
+// 依赖解析：先同目录（provider 的 Npgsql / MySqlConnector），再 SDK 的 Roslyn/bincore。
+// SourceGen 的公开类型继承 DiagnosticAnalyzer / IIncrementalGenerator，这些基类来自
+// Roslyn，而分析器包按惯例不把 Microsoft.CodeAnalysis 复制进构建输出（PrivateAssets），
+// 直接反射会 FileNotFoundException。SDK 自带的 Roslyn 版本与被引用版本同源，可直接加载。
+static string? ResolveDependencyPath(string directory, string name)
+{
+    string local = Path.Combine(directory, $"{name}.dll");
+    if (File.Exists(local))
+    {
+        return local;
+    }
+
+    if (!name.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal)
+        && !name.StartsWith("System.Collections.Immutable", StringComparison.Ordinal))
+    {
+        return null;
+    }
+
+    // dotnet 根：<root>/shared/Microsoft.NETCore.App/<ver>/ → 上三级
+    string runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()
+        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    string? dotnetRoot = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(runtimeDir)));
+    if (dotnetRoot is not null)
+    {
+        string sdkDir = Path.Combine(dotnetRoot, "sdk");
+        if (Directory.Exists(sdkDir))
+        {
+            foreach (string sdk in Directory.GetDirectories(sdkDir).OrderByDescending(p => p, StringComparer.Ordinal))
+            {
+                string candidate = Path.Combine(sdk, "Roslyn", "bincore", $"{name}.dll");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+    }
+
+    // 兜底：NuGet 缓存里的 Roslyn（离线或自建 SDK 时）
+    string nugetRoot = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+    string packageDir = name switch
+    {
+        "Microsoft.CodeAnalysis" => "microsoft.codeanalysis.common",
+        "Microsoft.CodeAnalysis.CSharp" => "microsoft.codeanalysis.csharp",
+        "System.Collections.Immutable" => "system.collections.immutable",
+        _ => "",
+    };
+    if (packageDir.Length > 0)
+    {
+        string dir = Path.Combine(nugetRoot, packageDir);
+        if (Directory.Exists(dir))
+        {
+            var hits = Directory.GetFiles(dir, $"{name}.dll", SearchOption.AllDirectories)
+                .OrderByDescending(p => p.Contains($"{Path.DirectorySeparatorChar}netstandard2.0{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                .ThenByDescending(p => p, StringComparer.Ordinal)
+                .ToList();
+            if (hits.Count > 0)
+            {
+                return hits[0];
+            }
+        }
+    }
+
+    return null;
+}
+
 static string[] Snapshot(string assemblyPath)
 {
     string directory = Path.GetDirectoryName(assemblyPath)!;
     var context = new AssemblyLoadContext("public-api-snapshot", isCollectible: true);
     context.Resolving += (loadContext, name) =>
     {
-        string candidate = Path.Combine(directory, $"{name.Name}.dll");
-        return File.Exists(candidate) ? loadContext.LoadFromAssemblyPath(candidate) : null;
+        string? candidate = ResolveDependencyPath(directory, name.Name ?? "");
+        return candidate is not null ? loadContext.LoadFromAssemblyPath(candidate) : null;
     };
 
     try
@@ -150,7 +246,11 @@ static string[] Snapshot(string assemblyPath)
                 lines.Add($"E:{type.FullName}|{@event.Name}");
         }
         lines.Sort(StringComparer.Ordinal);
-        return [.. lines];
+        // 剥掉泛型实参里的程序集标识（Version / Culture / PublicKeyToken）：那是依赖的
+        // 发行版信息，不是 PalORM 的契约。实测同一份源码在开发者机与 CI 上解析出的
+        // Microsoft.CodeAnalysis 版本不同（5.12 vs 4.14），保留了它基线就会随环境漂移。
+        // 依赖版本变化由 Package Validation 在 pack 时按包依赖检查，不靠本快照。
+        return [.. lines.Select(Normalize)];
     }
     finally
     {
@@ -160,6 +260,13 @@ static string[] Snapshot(string assemblyPath)
 
 static bool IsVisible(MethodBase method)
     => method.IsPublic || method.IsFamily || method.IsFamilyOrAssembly;
+
+// 形如 ", Version=11.0.0.0, Culture=neutral, PublicKeyToken=null" 一律删除（可出现在任意嵌套层）
+static string Normalize(string line)
+{
+    const string Pattern = @", Version=\d+\.\d+\.\d+\.\d+(?:, Culture=[^,\]]+)?(?:, PublicKeyToken=[^,\]]+)?";
+    return System.Text.RegularExpressions.Regex.Replace(line, Pattern, "");
+}
 
 static string ParameterList(ParameterInfo[] parameters)
     => string.Join(", ", parameters.Select(static p => p.ParameterType.FullName ?? p.ParameterType.Name));

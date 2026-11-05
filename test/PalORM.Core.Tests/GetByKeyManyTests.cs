@@ -42,7 +42,10 @@ internal sealed class GetByKeyManyTests
     /// 夹具不 override 被测路径的能力面，与 BulkDeleteInFormPoolingTests 播种纪律一致）。</summary>
     private static async Task SeedNumericAsync(DataSession<ReadManySqliteProvider> session, int count)
         => await session.ExecuteAsync(
-            $"WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < {count}) INSERT INTO read_many_rows (Id, name, qty) SELECT i, 'name-' || i, i % 100 FROM seq");
+            $"""
+            WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < {count})
+            INSERT INTO read_many_rows (Id, name, qty) SELECT i, 'name-' || i, i % 100 FROM seq
+            """);
 
     private static List<object> Keys(int from, int to)
     {
@@ -182,7 +185,10 @@ internal sealed class GetByKeyManyTests
         await using DataSession<ReadManySqliteProvider> session = await CreateSessionAsync();
         DataSession<ReadManySqliteProvider>.ForceInFormDeleteForTests<ReadManyInFormRow>();
         await session.ExecuteAsync(
-            $"WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < 2500) INSERT INTO read_many_inform (Id, name, qty) SELECT i, 'name-' || i, i % 100 FROM seq");
+            $"""
+            WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE i < 2500)
+            INSERT INTO read_many_inform (Id, name, qty) SELECT i, 'name-' || i, i % 100 FROM seq
+            """);
 
         Statements.Clear();
         List<ReadManyInFormRow> rows = await session.GetByKeyManyAsync<ReadManyInFormRow>(Keys(1, 2500));
@@ -224,7 +230,8 @@ internal sealed class GetByKeyManyTests
         Exception? thrown = await Assert.ThrowsAsync<ArgumentNullException>(async () =>
             await session.GetByKeyManyAsync<ReadManyRow>(new List<object> { 1L, null!, 3L }));
 
-        await Assert.That(thrown).IsNotNull();
+        // 行为断言：null 元素在入口逐个检查并报出下标，而不是笼统的非空判断
+        await Assert.That(thrown!.Message).Contains("index 1");
     }
 
     [Test]

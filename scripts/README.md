@@ -20,7 +20,7 @@
 | `assert-coverage-matrix.cs` | 覆盖率矩阵校验（`bench/baselines/coverage-matrix.json`）：src 模块未登记即红、登记了不存在的模块即红、`floorRef` 解析不到即红、孤儿地板即红；`pending` 记 WARN 不静默。`--self-check` 内嵌六条夹具 | ✅ verify.yml gate |
 | `assert-conformance-contracts.cs` | 契约覆盖账本门禁，双模式。源码侧（无参）：能力契约目录 10 条与方言契约目录 20 条的 ID 集合、`DialectUnsupported` 的 SQLite 豁免数、每条目断言数，与 `bench/baselines/conformance-contracts.json` 双向对账；只读源文件，与测试方法是否存在无关。报告侧（`--report <json>`）：按报告 `displayName` 数每条契约的执行次数（能力 1 次、方言 3 次），补「条目还在源码里但没跑」。两模式互补：源码侧证明声明存在，报告侧证明实际执行 | 源码侧 ✅ pre-commit + verify.yml gate；报告侧 ✅ verify.yml integration |
 | `diff-coverage.cs` | diff 覆盖率门禁（T1-diff，测试体系优化方案 T0-5）：只统计本次改动行、阈值 80%；白名单注释行/.g.cs/test·tools·scripts·docs。`-- <base> <head|""> <xml>...`，空 head 表示对工作树；`--self-check` 内嵌夹具自证（Linux/Windows 两种 XML 路径形态） | ✅ verify.yml unit |
-| `public-api-snapshot.cs` | 公开 API 基线快照（`--check` PR 比对，`--update` 显式冻结；基线在 `bench/baselines/public-api/`） | ✅ verify.yml unit |
+| `public-api-snapshot.cs` | 公开 API 基线快照（`--check` PR 比对，`--update` 显式冻结，`--archive <ver>` 归档到 `bench/baselines/public-api/v<ver>/` 供跨版本比对，`--root <path>` 读取另一份检出用于补历史基线；覆盖 5 个包含 SourceGen） | ✅ verify.yml unit |
 | `flake-ledger.cs` | 每周 flake 台账（Core 3 次 / Integration 2 次独立进程；失败不自动重试；台账在 `artifacts/flake-ledger/`） | ✅ flake-ledger.yml 每周 |
 
 ## 提交前必检
@@ -62,8 +62,10 @@
 
 | 脚本 | 用途 | 调用时机 |
 |------|------|:---:|
-| `pre-release-check.cs` | 发布前预检：版本残留扫描 + CHANGELOG 结构校验 + 模拟 CI 消费者路径（v6.1.0 发布事故后固化） | 打 tag 前 |
+| `pre-release-check.cs` | 发布前预检六步：版本残留扫描 + CHANGELOG 结构校验 + Release body 形态校验 + 模拟 CI 消费者路径（v6.1.0 发布事故后固化） | 打 tag 前 |
 | `changelog-check.cs` | CHANGELOG 版本段结构校验：顶部版本对账 / 标题格式 / 日期与 tag 提交日一致 / 条目非空 / 💔 段完整性（发布变更日志规范 §四） | 打 tag 前 + release.yml pack 前 |
+| `release-notes.cs` | Release body 单一实现：从 CHANGELOG 版本段派生「头条 + ⚠️ 升级须知 + 本版变更 + 包清单一行 + 页脚」，本地预览与 CI 共用；`--check` 校验头条、短标题形态与 1400 字符体量（规范 §七） | 打 tag 前预览 + release.yml 生成 |
+| `semver-bump-check.cs` | SemVer 2.0.0 规则 6/7/8 对账：声明升版段 vs 实际变化。破坏性证据取 Package Validation 的抑制文件，新增证据取归档 API 基线，声明不足即 FAIL（发布规范 §1.4） | 打 tag 前 + release.yml pack 前 |
 | `release-version-scan.cs` | 升版本旧号残留扫描 + SemVer 2.0.0 格式门禁（含 MAJOR/MINOR/PATCH 提示；版本字面量多处同步的机械兜底） | 升版本提交前 |
 
 ## 性能基准

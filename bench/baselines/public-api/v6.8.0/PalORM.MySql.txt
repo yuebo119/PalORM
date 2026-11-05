@@ -1,0 +1,21 @@
+I:PalORM.MySql.MySqlProvider|PalORM.IDbProvider
+M:PalORM.MySql.MySqlProvider|.ctor()
+M:PalORM.MySql.MySqlProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, System.Int32, System.Int32, System.Threading.CancellationToken, System.Data.IsolationLevel)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib]]|static
+M:PalORM.MySql.MySqlProvider|ConfigureSchemaCommand(System.Data.Common.DbCommand, System.String, System.String)|System.Int32|static
+M:PalORM.MySql.MySqlProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
+M:PalORM.MySql.MySqlProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
+M:PalORM.MySql.MySqlProvider|IsDuplicateSchemaObject(System.Exception)|System.Boolean|static
+M:PalORM.MySql.MySqlProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
+M:PalORM.MySql.MySqlProvider|QuoteIdentifier(System.String)|System.String|static
+M:PalORM.MySql.MySqlProvider|QuoteQualifiedIdentifier(System.String, System.String)|System.String|static
+M:PalORM.MySql.MySqlProvider|ResetConnectionStateAsync(System.Data.Common.DbConnection, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
+M:PalORM.MySql.MySqlProvider|ValidateConnectionAsync(System.Data.Common.DbConnection, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
+P:PalORM.MySql.MySqlProvider|CurrentTimestampExpression|System.String
+P:PalORM.MySql.MySqlProvider|Dialect|PalORM.SqlDialect
+P:PalORM.MySql.MySqlProvider|MaxPipelineCommands|System.Int32
+P:PalORM.MySql.MySqlProvider|Name|System.String
+P:PalORM.MySql.MySqlProvider|PrepareReusedCommands|System.Boolean
+P:PalORM.MySql.MySqlProvider|SupportsQueryPipeline|System.Boolean
+P:PalORM.MySql.MySqlProvider|SupportsReturningClause|System.Boolean
+P:PalORM.MySql.MySqlProvider|SupportsSynchronousRowRead|System.Boolean
+T:PalORM.MySql.MySqlProvider|base=System.Object

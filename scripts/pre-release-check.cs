@@ -5,10 +5,12 @@
 // 步骤（与 verify.yml "NuGet Consumer Native AOT" job 同序同参）:
 //   0. 版本残留扫描（release-version-scan，含 placeholder 双判据）
 //   1. CHANGELOG 版本段结构校验（changelog-check，发布变更日志规范 §四）
-//   2. pack 五包到本地目录（= CI "Pack local packages"，多含 PG/MySQL 两包）
-//   3. 用消费者自己的 NuGet.config（clear + 本地源 PalORM.* 映射）做 dotnet restore
+//   2. SemVer 升版类型对账（semver-bump-check，发布规范 §1.4）
+//   3. Release body 形态校验与本地预览（release-notes --check，规范 §七）
+//   4. pack 五包到本地目录（= CI "Pack local packages"，含 Package Validation）
+//   5. 用消费者自己的 NuGet.config（clear + 本地源 PalORM.* 映射）做 dotnet restore
 //      ——占位版本在这一步必然失败（本地源里没有该包），正是 CI 抓到的形态
-//   4. 包契约脚本
+//   6. 包契约脚本
 // 退出码: 任一步失败即 1。发布 tag 前必跑；全绿才允许 push tag（SOP §5.1 第 4 步前）。
 using System.Text;
 
@@ -31,7 +33,7 @@ const string pkgDir = "artifacts/packages"; // 消费者 NuGet.config 的本地�
 
 var fail = 0;
 
-Step("0/4 版本残留扫描（含 placeholder 双判据）");
+Step("0/7 版本残留扫描（含 placeholder 双判据）");
 // 旧版本号从 git tag 推导：语义 tag 里除本版本外最新的一个
 var tags = Git("tag --list \"v*\" --sort=-v:refname").Split('\n', StringSplitOptions.RemoveEmptyEntries);
 var oldVersion = tags.FirstOrDefault(t => t != $"v{version}") is { } tag && tag.StartsWith('v') ? tag[1..] : "";
@@ -49,7 +51,7 @@ else
     fail = 1;
 }
 
-Step($"1/4 CHANGELOG 版本段结构校验（发布变更日志规范 §四）");
+Step($"1/7 CHANGELOG 版本段结构校验（发布变更日志规范 §四）");
 var changelogArgs = oldVersion.Length > 0
     ? $"run --file scripts/changelog-check.cs -- \"{version}\" \"{oldVersion}\""
     : $"run --file scripts/changelog-check.cs -- \"{version}\"";
@@ -58,7 +60,24 @@ if (RunDotnet(changelogArgs, true) != 0)
     fail = 1;
 }
 
-Step($"2/4 pack 五包到本地目录（{pkgDir}）");
+// 2026-11-05 增（发布规范 §1.4）：声明升版段 vs 实际 API 变化对账。
+// 破坏性证据来自 Package Validation 的抑制文件，新增证据来自归档 API 基线。
+Step("2/7 SemVer 升版类型对账（发布规范 §1.4）");
+var bumpArgs = oldVersion.Length > 0
+    ? $"run --file scripts/semver-bump-check.cs -- \"{version}\" --prev \"{oldVersion}\""
+    : $"run --file scripts/semver-bump-check.cs -- \"{version}\"";
+if (RunDotnet(bumpArgs, true) != 0)
+{
+    fail = 1;
+}
+
+Step("3/7 Release body 形态校验与预览（发布变更日志规范 §七）");
+if (RunDotnet($"run --file scripts/release-notes.cs -- \"{version}\" --check", true) != 0)
+{
+    fail = 1;
+}
+
+Step($"4/7 pack 五包到本地目录（{pkgDir}，含 Package Validation 二进制兼容性检查）");
 if (Directory.Exists(pkgDir))
 {
     Directory.Delete(pkgDir, recursive: true);
@@ -80,14 +99,14 @@ if (pkgCount != 5)
     fail = 1;
 }
 
-Step("3/4 消费者 restore 走本地包源（复刻 CI Restore package consumer）");
+Step("5/7 消费者 restore 走本地包源（复刻 CI Restore package consumer）");
 if (RunDotnet($"restore {consumerDir} --configfile {consumerDir}/NuGet.config", true) != 0)
 {
     return 1;
 }
 Console.WriteLine("消费者 restore OK——占位版本/缺包形态已在此步排除");
 
-Step("4/4 包契约");
+Step("6/7 包契约");
 if (RunDotnet("run --file scripts/test-package-contract.cs", true) != 0)
 {
     return 1;

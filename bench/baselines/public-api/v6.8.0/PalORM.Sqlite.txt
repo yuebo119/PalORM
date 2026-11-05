@@ -1,0 +1,20 @@
+I:PalORM.Sqlite.SqliteProvider|PalORM.IDbProvider
+M:PalORM.Sqlite.SqliteProvider|.ctor()
+M:PalORM.Sqlite.SqliteProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, System.Int32, System.Int32, System.Threading.CancellationToken, System.Data.IsolationLevel)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib]]|static
+M:PalORM.Sqlite.SqliteProvider|ConfigureSchemaCommand(System.Data.Common.DbCommand, System.String, System.String)|System.Int32|static
+M:PalORM.Sqlite.SqliteProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
+M:PalORM.Sqlite.SqliteProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
+M:PalORM.Sqlite.SqliteProvider|InitializeConnectionAsync(System.Data.Common.DbConnection, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
+M:PalORM.Sqlite.SqliteProvider|InvalidateConnectionInitialization(System.Data.Common.DbConnection)|System.Void|static
+M:PalORM.Sqlite.SqliteProvider|IsTransient(System.Exception)|System.Boolean|static
+M:PalORM.Sqlite.SqliteProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
+M:PalORM.Sqlite.SqliteProvider|MarkConnectionStateUnknown(System.Data.Common.DbConnection)|System.Void|static
+M:PalORM.Sqlite.SqliteProvider|QuoteIdentifier(System.String)|System.String|static
+M:PalORM.Sqlite.SqliteProvider|QuoteQualifiedIdentifier(System.String, System.String)|System.String|static
+P:PalORM.Sqlite.SqliteProvider|CurrentTimestampExpression|System.String
+P:PalORM.Sqlite.SqliteProvider|Dialect|PalORM.SqlDialect
+P:PalORM.Sqlite.SqliteProvider|Name|System.String
+P:PalORM.Sqlite.SqliteProvider|PreferSynchronousIo|System.Boolean
+P:PalORM.Sqlite.SqliteProvider|SupportsReturningClause|System.Boolean
+P:PalORM.Sqlite.SqliteProvider|SupportsSynchronousRowRead|System.Boolean
+T:PalORM.Sqlite.SqliteProvider|base=System.Object

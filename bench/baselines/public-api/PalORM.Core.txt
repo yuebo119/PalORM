@@ -1,62 +1,62 @@
 F:PalORM.CircuitBreakerScope|Process|PalORM.CircuitBreakerScope
 F:PalORM.CircuitBreakerScope|Session|PalORM.CircuitBreakerScope
 F:PalORM.CircuitBreakerScope|value__|System.Int32
-F:PalORM.CrudBindings|BindInsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BindInsert|System.Action`3[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BindUpdateColumn|System.Action`3[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BindUpdateValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BindUpdateWhere|System.Action`3[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BindUpdate|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BindUpsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BindUpsert|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|BuildDeleteKeyArray|System.Func`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|ConvertDeleteKey|System.Func`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|CopyWriteRow|System.Action`2[[PalORM.IBinaryRowSink, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|CreateUpdateColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|CreateUpsertColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|FillUpdateColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|FillUpsertColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|InitInsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|InitUpdateParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|InitUpsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+F:PalORM.CrudBindings|BindInsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BindInsert|System.Action`3[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BindUpdateColumn|System.Action`3[[System.Object, System.Private.CoreLib],[System.Data.Common.DbParameter, System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BindUpdateValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BindUpdateWhere|System.Action`3[[System.Object, System.Private.CoreLib],[System.Data.Common.DbCommand, System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BindUpdate|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BindUpsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BindUpsert|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudBindings|BuildDeleteKeyArray|System.Func`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array, System.Private.CoreLib]]
+F:PalORM.CrudBindings|ConvertDeleteKey|System.Func`2[[System.Object, System.Private.CoreLib],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudBindings|CopyWriteRow|System.Action`2[[PalORM.IBinaryRowSink, PalORM.Core],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudBindings|CreateUpdateColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib]]
+F:PalORM.CrudBindings|CreateUpsertColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib]]
+F:PalORM.CrudBindings|FillUpdateColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|FillUpsertColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|InitInsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|InitUpdateParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudBindings|InitUpsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]]
 F:PalORM.CrudBindings|InsertNoReturning|System.Boolean
 F:PalORM.CrudBindings|InsertReturningKeyOnly|System.Boolean
 F:PalORM.CrudBindings|RowFactory|System.Object
-F:PalORM.CrudBindings|UpdateColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudBindings|UpsertColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudColumns|Insert|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudColumns|Update|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudColumns|Upsert|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindInsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindInsert|System.Action`3[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindUpdateColumn|System.Action`3[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindUpdateValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindUpdateWhere|System.Action`3[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindUpdate|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindUpsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BindUpsert|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|BuildDeleteKeyArray|System.Func`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|ConvertDeleteKey|System.Func`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|CopyWriteRow|System.Action`2[[PalORM.IBinaryRowSink, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|CreateUpdateColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|CreateUpsertColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|FillUpdateColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|FillUpsertColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|HasDefaultKey|System.Func`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Boolean, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|IncrementVersion|System.Action`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|InitInsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|InitUpdateParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|InitUpsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+F:PalORM.CrudBindings|UpdateColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]]
+F:PalORM.CrudBindings|UpsertColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]]
+F:PalORM.CrudColumns|Insert|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+F:PalORM.CrudColumns|Update|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+F:PalORM.CrudColumns|Upsert|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindInsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindInsert|System.Action`3[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindUpdateColumn|System.Action`3[[System.Object, System.Private.CoreLib],[System.Data.Common.DbParameter, System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindUpdateValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindUpdateWhere|System.Action`3[[System.Object, System.Private.CoreLib],[System.Data.Common.DbCommand, System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindUpdate|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindUpsertValues|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BindUpsert|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|BuildDeleteKeyArray|System.Func`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|ConvertDeleteKey|System.Func`2[[System.Object, System.Private.CoreLib],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|CopyWriteRow|System.Action`2[[PalORM.IBinaryRowSink, PalORM.Core],[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|CreateUpdateColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib]]
+F:PalORM.CrudMetadata|CreateUpsertColumnArrays|System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib]]
+F:PalORM.CrudMetadata|FillUpdateColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|FillUpsertColumnArrays|System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|HasDefaultKey|System.Func`2[[System.Object, System.Private.CoreLib],[System.Boolean, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|IncrementVersion|System.Action`1[[System.Object, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|InitInsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|InitUpdateParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|InitUpsertParameters|System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]]
 F:PalORM.CrudMetadata|InsertBinderValidated|System.Boolean
-F:PalORM.CrudMetadata|InsertColumns|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+F:PalORM.CrudMetadata|InsertColumns|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 F:PalORM.CrudMetadata|InsertNoReturning|System.Boolean
 F:PalORM.CrudMetadata|InsertReturningKeyOnly|System.Boolean
 F:PalORM.CrudMetadata|RowFactory|System.Object
 F:PalORM.CrudMetadata|Sqls|PalORM.CommandSqlSet
-F:PalORM.CrudMetadata|UpdateColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|UpdateColumns|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|UpsertColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-F:PalORM.CrudMetadata|UpsertColumns|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+F:PalORM.CrudMetadata|UpdateColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|UpdateColumns|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|UpsertColumnArrayElementTypes|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]]
+F:PalORM.CrudMetadata|UpsertColumns|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 F:PalORM.DbOptions|DefaultCommandTimeout|System.TimeSpan
 F:PalORM.DeleteAction|Cascade|PalORM.DeleteAction
 F:PalORM.DeleteAction|NoAction|PalORM.DeleteAction
@@ -85,40 +85,40 @@ F:PalORM.StoreAs|Default|PalORM.StoreAs
 F:PalORM.StoreAs|value__|System.Int32
 I:PalORM.AuditInterceptor|PalORM.IQueryInterceptor
 I:PalORM.BoundedQueryCache|PalORM.IQueryCache
-I:PalORM.BulkContext|System.IEquatable`1[[PalORM.BulkContext, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.BulkContext|System.IEquatable`1[[PalORM.BulkContext, PalORM.Core]]
 I:PalORM.CircuitBreakerOpenException|System.Runtime.Serialization.ISerializable
 I:PalORM.CircuitBreakerScope|System.IComparable
 I:PalORM.CircuitBreakerScope|System.IConvertible
 I:PalORM.CircuitBreakerScope|System.IFormattable
 I:PalORM.CircuitBreakerScope|System.ISpanFormattable
-I:PalORM.CommandSqlByDialect|System.IEquatable`1[[PalORM.CommandSqlByDialect, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-I:PalORM.CommandSqlSet|System.IEquatable`1[[PalORM.CommandSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.CommandSqlByDialect|System.IEquatable`1[[PalORM.CommandSqlByDialect, PalORM.Core]]
+I:PalORM.CommandSqlSet|System.IEquatable`1[[PalORM.CommandSqlSet, PalORM.Core]]
 I:PalORM.CompiledQuery`2|System.IDisposable
 I:PalORM.ConcurrencyConflictException|System.Runtime.Serialization.ISerializable
-I:PalORM.CreateIndexSqlSet|System.IEquatable`1[[PalORM.CreateIndexSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-I:PalORM.CreateTableSqlSet|System.IEquatable`1[[PalORM.CreateTableSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.CreateIndexSqlSet|System.IEquatable`1[[PalORM.CreateIndexSqlSet, PalORM.Core]]
+I:PalORM.CreateTableSqlSet|System.IEquatable`1[[PalORM.CreateTableSqlSet, PalORM.Core]]
 I:PalORM.DataSessionFactory`1|
 I:PalORM.DataSessionFactory`1|System.IAsyncDisposable
 I:PalORM.DataSessionPool`1|System.IAsyncDisposable
 I:PalORM.DataSession`1+ParallelReadScope|System.IAsyncDisposable
 I:PalORM.DataSession`1|PalORM.IQuerySessionResilience
 I:PalORM.DataSession`1|System.IAsyncDisposable
-I:PalORM.DbOptions|System.IEquatable`1[[PalORM.DbOptions, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.DbOptions|System.IEquatable`1[[PalORM.DbOptions, PalORM.Core]]
 I:PalORM.DeleteAction|System.IComparable
 I:PalORM.DeleteAction|System.IConvertible
 I:PalORM.DeleteAction|System.IFormattable
 I:PalORM.DeleteAction|System.ISpanFormattable
-I:PalORM.DryRunResult|System.IEquatable`1[[PalORM.DryRunResult, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.DryRunResult|System.IEquatable`1[[PalORM.DryRunResult, PalORM.Core]]
 I:PalORM.EntityFeatures|System.IComparable
 I:PalORM.EntityFeatures|System.IConvertible
 I:PalORM.EntityFeatures|System.IFormattable
 I:PalORM.EntityFeatures|System.ISpanFormattable
 I:PalORM.GridReader|System.IAsyncDisposable
-I:PalORM.HealthResult|System.IEquatable`1[[PalORM.HealthResult, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-I:PalORM.MigrationFailure|System.IEquatable`1[[PalORM.MigrationFailure, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-I:PalORM.MigrationResult|System.IEquatable`1[[PalORM.MigrationResult, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.HealthResult|System.IEquatable`1[[PalORM.HealthResult, PalORM.Core]]
+I:PalORM.MigrationFailure|System.IEquatable`1[[PalORM.MigrationFailure, PalORM.Core]]
+I:PalORM.MigrationResult|System.IEquatable`1[[PalORM.MigrationResult, PalORM.Core]]
 I:PalORM.PalORMException|System.Runtime.Serialization.ISerializable
-I:PalORM.QueryContext|System.IEquatable`1[[PalORM.QueryContext, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+I:PalORM.QueryContext|System.IEquatable`1[[PalORM.QueryContext, PalORM.Core]]
 I:PalORM.QueryPipeline`1|System.IDisposable
 I:PalORM.SessionBatch`1|System.IDisposable
 I:PalORM.SqlDialect|System.IComparable
@@ -131,29 +131,29 @@ I:PalORM.StoreAs|System.IFormattable
 I:PalORM.StoreAs|System.ISpanFormattable
 I:PalORM.UniqueConstraintViolationException|System.Runtime.Serialization.ISerializable
 M:PalORM.AuditInterceptor|.ctor(Microsoft.Extensions.Logging.ILogger, System.Boolean)
-M:PalORM.AuditInterceptor|GetLoggableValue(System.Data.Common.DbParameter, System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])|System.Object|static
+M:PalORM.AuditInterceptor|GetLoggableValue(System.Data.Common.DbParameter, System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]])|System.Object|static
 M:PalORM.AuditInterceptor|OnAfter(PalORM.QueryContext, System.TimeSpan, System.Int32)|System.Void|instance
 M:PalORM.AuditInterceptor|OnBefore(PalORM.QueryContext)|System.Void|instance
 M:PalORM.AuditInterceptor|OnError(PalORM.QueryContext, System.Exception)|System.Void|instance
 M:PalORM.BoundedQueryCache|.ctor(System.Int32)
 M:PalORM.BoundedQueryCache|Clear()|System.Void|instance
-M:PalORM.BoundedQueryCache|Set<1>(System.String, T, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])|System.Void|instance
+M:PalORM.BoundedQueryCache|Set<1>(System.String, T, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib]])|System.Void|instance
 M:PalORM.BoundedQueryCache|TryGet<1>(System.String, T&)|System.Boolean|instance
-M:PalORM.BulkContext|.ctor(System.Int32, System.Int32, System.Func`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Func`3[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]], System.Int32, System.Data.IsolationLevel)
-M:PalORM.BulkContext|Deconstruct(System.Int32&, System.Int32&, System.Func`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&, System.Func`3[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]&, System.Int32&, System.Data.IsolationLevel&)|System.Void|instance
+M:PalORM.BulkContext|.ctor(System.Int32, System.Int32, System.Func`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]], System.Func`3[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib],[System.Data.Common.DbParameter, System.Data.Common]], System.Int32, System.Data.IsolationLevel)
+M:PalORM.BulkContext|Deconstruct(System.Int32&, System.Int32&, System.Func`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]]&, System.Func`3[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib],[System.Data.Common.DbParameter, System.Data.Common]]&, System.Int32&, System.Data.IsolationLevel&)|System.Void|instance
 M:PalORM.BulkContext|Equals(PalORM.BulkContext)|System.Boolean|instance
 M:PalORM.BulkContext|Equals(System.Object)|System.Boolean|instance
 M:PalORM.BulkContext|GetHashCode()|System.Int32|instance
 M:PalORM.BulkContext|ToString()|System.String|instance
 M:PalORM.BulkOperationFramework|CommitWithTimeoutAsync(System.Data.Common.DbTransaction, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|static
 M:PalORM.BulkOperationFramework|DisposePreservingAsync(System.IAsyncDisposable, System.Exception, System.String)|System.Threading.Tasks.ValueTask|static
-M:PalORM.BulkOperationFramework|EnsureInsertMetadata(System.Type)|System.ValueTuple`2[[PalORM.CrudMetadata, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|static
-M:PalORM.BulkOperationFramework|ProbeBinderAsync(System.Data.Common.DbConnection, System.Action`3[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Object, System.Int32, System.String, System.String, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|static
+M:PalORM.BulkOperationFramework|EnsureInsertMetadata(System.Type)|System.ValueTuple`2[[PalORM.CrudMetadata, PalORM.Core],[System.String, System.Private.CoreLib]]|static
+M:PalORM.BulkOperationFramework|ProbeBinderAsync(System.Data.Common.DbConnection, System.Action`3[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Object, System.Int32, System.String, System.String, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|static
 M:PalORM.BulkOperationFramework|RecordCapabilityProbeFailure()|System.Void|static
 M:PalORM.BulkOperationFramework|RollbackPreservingAsync(System.Data.Common.DbTransaction, System.Exception, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|static
 M:PalORM.BulkOperationFramework|TrySkipRollbackAfterCommitFailure(System.Exception)|System.Boolean|static
 M:PalORM.CacheStore|Clear()|System.Void|static
-M:PalORM.CacheStore|Set<1>(System.String, T, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])|System.Void|static
+M:PalORM.CacheStore|Set<1>(System.String, T, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib]])|System.Void|static
 M:PalORM.CacheStore|TryGet<1>(System.String, T&)|System.Boolean|static
 M:PalORM.CircuitBreakerOpenException|.ctor(System.String)
 M:PalORM.ColumnAttribute|.ctor(System.String)
@@ -176,11 +176,11 @@ M:PalORM.ComputedAttribute|.ctor(System.String)
 M:PalORM.ConcurrencyCheckAttribute|.ctor()
 M:PalORM.ConcurrencyConflictException|.ctor(System.String)
 M:PalORM.ConverterAttribute|.ctor(System.Type)
-M:PalORM.CreateIndexSqlSet|.ctor(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])
-M:PalORM.CreateIndexSqlSet|Deconstruct(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&)|System.Void|instance
+M:PalORM.CreateIndexSqlSet|.ctor(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]])
+M:PalORM.CreateIndexSqlSet|Deconstruct(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]&)|System.Void|instance
 M:PalORM.CreateIndexSqlSet|Equals(PalORM.CreateIndexSqlSet)|System.Boolean|instance
 M:PalORM.CreateIndexSqlSet|Equals(System.Object)|System.Boolean|instance
-M:PalORM.CreateIndexSqlSet|Get(PalORM.SqlDialect)|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.CreateIndexSqlSet|Get(PalORM.SqlDialect)|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]|instance
 M:PalORM.CreateIndexSqlSet|GetHashCode()|System.Int32|instance
 M:PalORM.CreateIndexSqlSet|ToString()|System.String|instance
 M:PalORM.CreateTableSqlSet|.ctor(System.String, System.String, System.String)
@@ -190,11 +190,11 @@ M:PalORM.CreateTableSqlSet|Equals(System.Object)|System.Boolean|instance
 M:PalORM.CreateTableSqlSet|Get(PalORM.SqlDialect)|System.String|instance
 M:PalORM.CreateTableSqlSet|GetHashCode()|System.Int32|instance
 M:PalORM.CreateTableSqlSet|ToString()|System.String|instance
-M:PalORM.CrudBindings|.ctor(System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Object)
-M:PalORM.CrudBindings|.ctor(System.Action`3[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Object, System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Boolean, System.Boolean, System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[PalORM.IBinaryRowSink, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Func`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Func`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`3[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Action`3[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])
-M:PalORM.CrudColumns|.ctor(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])
-M:PalORM.CrudMetadata|.ctor(PalORM.CommandSqlSet, PalORM.CrudBindings, PalORM.CrudColumns, System.Action`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Func`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Boolean, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Boolean)
-M:PalORM.CrudMetadata|.ctor(PalORM.CrudBindings, PalORM.CrudColumns, System.Action`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Func`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Boolean, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Boolean)
+M:PalORM.CrudBindings|.ctor(System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Object)
+M:PalORM.CrudBindings|.ctor(System.Action`3[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Object, System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Boolean, System.Boolean, System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Action`2[[PalORM.IBinaryRowSink, PalORM.Core],[System.Object, System.Private.CoreLib]], System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]], System.Func`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array, System.Private.CoreLib]], System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]], System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib]], System.Action`5[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]], System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array[], System.Private.CoreLib]], System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]], System.Action`2[[System.Data.Common.DbParameter[], System.Data.Common],[System.Int32, System.Private.CoreLib]], System.Func`2[[System.Object, System.Private.CoreLib],[System.Object, System.Private.CoreLib]], System.Action`3[[System.Object, System.Private.CoreLib],[System.Data.Common.DbParameter, System.Data.Common],[System.Int32, System.Private.CoreLib]], System.Action`3[[System.Object, System.Private.CoreLib],[System.Data.Common.DbCommand, System.Data.Common],[System.Int32, System.Private.CoreLib]])
+M:PalORM.CrudColumns|.ctor(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]])
+M:PalORM.CrudMetadata|.ctor(PalORM.CommandSqlSet, PalORM.CrudBindings, PalORM.CrudColumns, System.Action`1[[System.Object, System.Private.CoreLib]], System.Func`2[[System.Object, System.Private.CoreLib],[System.Boolean, System.Private.CoreLib]], System.Boolean)
+M:PalORM.CrudMetadata|.ctor(PalORM.CrudBindings, PalORM.CrudColumns, System.Action`1[[System.Object, System.Private.CoreLib]], System.Func`2[[System.Object, System.Private.CoreLib],[System.Boolean, System.Private.CoreLib]], System.Boolean)
 M:PalORM.DataSessionFactory`1|.ctor(PalORM.DbOptions, System.Int32)
 M:PalORM.DataSessionFactory`1|DisposeAsync()|System.Threading.Tasks.ValueTask|instance
 M:PalORM.DataSessionFactory`1|RentAsync(System.Threading.CancellationToken)|ValueTask`1|instance
@@ -204,39 +204,39 @@ M:PalORM.DataSessionPool`1|RentAsync(System.Threading.CancellationToken)|ValueTa
 M:PalORM.DataSession`1+ParallelReadScope|.ctor(DataSession`1)
 M:PalORM.DataSession`1+ParallelReadScope|DisposeAsync()|System.Threading.Tasks.ValueTask|instance
 M:PalORM.DataSession`1|AddInterceptor(PalORM.IQueryInterceptor)|PalORM.DataSession`1|instance
-M:PalORM.DataSession`1|AvgAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Double, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BeginTransactionAsync(System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Data.Common.DbTransaction, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]|instance
-M:PalORM.DataSession`1|BulkDeleteAsync<1>(System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BulkDeleteAsync<2>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BulkInsertAsync<1>(IReadOnlyList`1, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BulkInsertAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BulkInsertReturningAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BulkMergeAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BulkUpdateAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|BulkUpdateBatchAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.DataSession`1|AvgAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Double, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BeginTransactionAsync(System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Data.Common.DbTransaction, System.Data.Common]]|instance
+M:PalORM.DataSession`1|BulkDeleteAsync<1>(System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BulkDeleteAsync<2>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BulkInsertAsync<1>(IReadOnlyList`1, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BulkInsertAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BulkInsertReturningAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BulkMergeAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BulkUpdateAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|BulkUpdateBatchAsync<1>(IReadOnlyList`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|Compile<1>(System.String, System.String[])|CompiledQuery`2|instance
-M:PalORM.DataSession`1|CountAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.DataSession`1|CountAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|CreateAsync(PalORM.DbOptions, System.Threading.CancellationToken)|Task`1|static
 M:PalORM.DataSession`1|CreateBatch()|SessionBatch`1|instance
 M:PalORM.DataSession`1|CreatePipeline()|QueryPipeline`1|instance
-M:PalORM.DataSession`1|DeleteAsync<1>(System.Object, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.DataSession`1|DeleteAsync<1>(System.Object, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|DisposeAsync()|System.Threading.Tasks.ValueTask|instance
 M:PalORM.DataSession`1|EvictQueryCache()|System.Void|instance
-M:PalORM.DataSession`1|ExecuteAsync(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|ExecuteWithResilience(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Threading.Tasks.Task, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
+M:PalORM.DataSession`1|ExecuteAsync(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|ExecuteWithResilience(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib],[System.Threading.Tasks.Task, System.Private.CoreLib]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
 M:PalORM.DataSession`1|ExecuteWithResilience<1>(Func`2, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|ForParallelReads()|ParallelReadScope|instance
 M:PalORM.DataSession`1|From<1>()|QueryBuilder`1|instance
 M:PalORM.DataSession`1|GetAllAsync<1>(System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|GetAsync<1>(System.Object, System.Threading.CancellationToken)|ValueTask`1|instance
-M:PalORM.DataSession`1|GetByKeyManyAsync<1>(System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Threading.CancellationToken)|ValueTask`1|instance
+M:PalORM.DataSession`1|GetByKeyManyAsync<1>(System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|GetRawConnection()|System.Data.Common.DbConnection|instance
-M:PalORM.DataSession`1|HealthCheckAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.HealthResult, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]|instance
+M:PalORM.DataSession`1|HealthCheckAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.HealthResult, PalORM.Core]]|instance
 M:PalORM.DataSession`1|IgnoreFilters()|PalORM.DataSession`1|instance
 M:PalORM.DataSession`1|InsertAsync<1>(T, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|MaxAsync<2>(System.FormattableString, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|MigrateAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
-M:PalORM.DataSession`1|MigrateWithResultAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.MigrationResult, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]|instance
+M:PalORM.DataSession`1|MigrateWithResultAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.MigrationResult, PalORM.Core]]|instance
 M:PalORM.DataSession`1|MinAsync<2>(System.FormattableString, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|PreWarmAsync(PalORM.DbOptions, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
 M:PalORM.DataSession`1|QueryAsync<1>(System.FormattableString, System.Boolean, System.Threading.CancellationToken)|ValueTask`1|instance
@@ -250,21 +250,21 @@ M:PalORM.DataSession`1|SavepointAsync(System.Data.Common.DbTransaction, System.S
 M:PalORM.DataSession`1|ScalarAsync<1>(System.FormattableString, System.Boolean, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DataSession`1|SeedAsync<1>(IEnumerable`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
 M:PalORM.DataSession`1|StoredProc(System.String)|PalORM.StoredProcBuilder|instance
-M:PalORM.DataSession`1|SumAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Decimal, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|UpdateAsync<1>(T, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|UpdateColumnsAsync<1>(T, Expression`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
-M:PalORM.DataSession`1|UpdateColumnsAsync<1>(T, ReadOnlySpan`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.DataSession`1|SumAsync<1>(System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Decimal, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|UpdateAsync<1>(T, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|UpdateColumnsAsync<1>(T, Expression`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
+M:PalORM.DataSession`1|UpdateColumnsAsync<1>(T, ReadOnlySpan`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|UseTransaction(System.Data.Common.DbTransaction)|PalORM.DataSession`1|instance
-M:PalORM.DataSession`1|ValidateSchemaAsync<1>(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Collections.Generic.List`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.DataSession`1|ValidateSchemaAsync<1>(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Collections.Generic.List`1[[System.String, System.Private.CoreLib]], System.Private.CoreLib]]|instance
 M:PalORM.DataSession`1|WithCircuitBreaker(System.Int32, System.TimeSpan)|PalORM.DataSession`1|instance
 M:PalORM.DataSession`1|WithIsolationLevel(System.Data.IsolationLevel)|PalORM.DataSession`1|instance
-M:PalORM.DataSession`1|WithRetry(System.Int32, System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])|PalORM.DataSession`1|instance
+M:PalORM.DataSession`1|WithRetry(System.Int32, System.Func`2[[System.Int32, System.Private.CoreLib],[System.TimeSpan, System.Private.CoreLib]])|PalORM.DataSession`1|instance
 M:PalORM.DataSession`1|WithTenant(System.Object)|PalORM.DataSession`1|instance
 M:PalORM.DataSession`1|WithTimeout(System.TimeSpan)|PalORM.DataSession`1|instance
-M:PalORM.DataSession`1|WithTransaction(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Threading.Tasks.Task, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
-M:PalORM.DataSession`1|WithTransaction<1>(Func`2, System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]], System.Threading.CancellationToken)|ValueTask`1|instance
-M:PalORM.DataSession`1|WithTransactionRetry(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Threading.Tasks.Task, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Int32, System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
-M:PalORM.DataSession`1|WithTransactionRetry<1>(Func`2, System.Int32, System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]], System.Threading.CancellationToken)|ValueTask`1|instance
+M:PalORM.DataSession`1|WithTransaction(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib],[System.Threading.Tasks.Task, System.Private.CoreLib]], System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
+M:PalORM.DataSession`1|WithTransaction<1>(Func`2, System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common]], System.Threading.CancellationToken)|ValueTask`1|instance
+M:PalORM.DataSession`1|WithTransactionRetry(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib],[System.Threading.Tasks.Task, System.Private.CoreLib]], System.Int32, System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
+M:PalORM.DataSession`1|WithTransactionRetry<1>(Func`2, System.Int32, System.Nullable`1[[System.Data.IsolationLevel, System.Data.Common]], System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.DatabaseAttribute|.ctor(System.String)
 M:PalORM.DbOptions|.ctor()
 M:PalORM.DbOptions|<Clone>$()|PalORM.DbOptions|instance
@@ -282,8 +282,8 @@ M:PalORM.DbOptions|ToString()|System.String|instance
 M:PalORM.DbOptions|Validate()|System.Void|instance
 M:PalORM.DbOptions|WithPool(System.Int32, System.Int32, System.Int32, System.Int32)|PalORM.DbOptions|instance
 M:PalORM.DefaultValueAttribute|.ctor(System.String)
-M:PalORM.DryRunResult|.ctor(System.String, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]])
-M:PalORM.DryRunResult|Deconstruct(System.String&, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]&)|System.Void|instance
+M:PalORM.DryRunResult|.ctor(System.String, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common]])
+M:PalORM.DryRunResult|Deconstruct(System.String&, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common]]&)|System.Void|instance
 M:PalORM.DryRunResult|Equals(PalORM.DryRunResult)|System.Boolean|instance
 M:PalORM.DryRunResult|Equals(System.Object)|System.Boolean|instance
 M:PalORM.DryRunResult|GetHashCode()|System.Int32|instance
@@ -315,7 +315,7 @@ M:PalORM.IBinaryRowSink|WriteSingle(System.Int32, System.Single)|System.Void|ins
 M:PalORM.IBinaryRowSink|WriteString(System.Int32, System.String)|System.Void|instance
 M:PalORM.IBinaryRowSink|WriteTimeOnly(System.Int32, System.TimeOnly)|System.Void|instance
 M:PalORM.IDataSessionFactory`1|RentAsync(System.Threading.CancellationToken)|ValueTask`1|instance
-M:PalORM.IDbProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, System.Int32, System.Int32, System.Threading.CancellationToken, System.Data.IsolationLevel)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|static
+M:PalORM.IDbProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, System.Int32, System.Int32, System.Threading.CancellationToken, System.Data.IsolationLevel)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib]]|static
 M:PalORM.IDbProvider|ConfigureSchemaCommand(System.Data.Common.DbCommand, System.String, System.String)|System.Int32|static
 M:PalORM.IDbProvider|CreateArrayParameter(System.String, System.Array)|System.Data.Common.DbParameter|static
 M:PalORM.IDbProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
@@ -335,7 +335,7 @@ M:PalORM.IDbProvider|QuoteQualifiedIdentifier(System.String, System.String)|Syst
 M:PalORM.IDbProvider|ResetConnectionStateAsync(System.Data.Common.DbConnection, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
 M:PalORM.IDbProvider|ValidateConnectionAsync(System.Data.Common.DbConnection, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
 M:PalORM.IQueryCache|Clear()|System.Void|instance
-M:PalORM.IQueryCache|Set<1>(System.String, T, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])|System.Void|instance
+M:PalORM.IQueryCache|Set<1>(System.String, T, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib]])|System.Void|instance
 M:PalORM.IQueryCache|TryGet<1>(System.String, T&)|System.Boolean|instance
 M:PalORM.IQueryInterceptor|OnAfter(PalORM.QueryContext, System.TimeSpan, System.Int32)|System.Void|instance
 M:PalORM.IQueryInterceptor|OnBefore(PalORM.QueryContext)|System.Void|instance
@@ -354,14 +354,14 @@ M:PalORM.MigrationFailure|Equals(PalORM.MigrationFailure)|System.Boolean|instanc
 M:PalORM.MigrationFailure|Equals(System.Object)|System.Boolean|instance
 M:PalORM.MigrationFailure|GetHashCode()|System.Int32|instance
 M:PalORM.MigrationFailure|ToString()|System.String|instance
-M:PalORM.MigrationResult|.ctor(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Generic.IReadOnlyList`1[[PalORM.MigrationFailure, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]], System.Boolean, System.Boolean)
+M:PalORM.MigrationResult|.ctor(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Collections.Generic.IReadOnlyList`1[[PalORM.MigrationFailure, PalORM.Core]], System.Boolean, System.Boolean)
 M:PalORM.MigrationResult|<Clone>$()|PalORM.MigrationResult|instance
-M:PalORM.MigrationResult|Deconstruct(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&, System.Collections.Generic.IReadOnlyList`1[[PalORM.MigrationFailure, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]&, System.Boolean&, System.Boolean&)|System.Void|instance
+M:PalORM.MigrationResult|Deconstruct(System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]&, System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]&, System.Collections.Generic.IReadOnlyList`1[[PalORM.MigrationFailure, PalORM.Core]]&, System.Boolean&, System.Boolean&)|System.Void|instance
 M:PalORM.MigrationResult|Equals(PalORM.MigrationResult)|System.Boolean|instance
 M:PalORM.MigrationResult|Equals(System.Object)|System.Boolean|instance
 M:PalORM.MigrationResult|GetHashCode()|System.Int32|instance
 M:PalORM.MigrationResult|ToString()|System.String|instance
-M:PalORM.MultiValueBulkInsert|ExecuteAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, PalORM.BulkContext, System.Threading.CancellationToken)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|static
+M:PalORM.MultiValueBulkInsert|ExecuteAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, PalORM.BulkContext, System.Threading.CancellationToken)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib]]|static
 M:PalORM.NotMappedAttribute|.ctor()
 M:PalORM.OwnedJsonAttribute|.ctor()
 M:PalORM.OwnedJsonAttribute|.ctor(System.Type)
@@ -370,11 +370,11 @@ M:PalORM.PalORMException|.ctor(System.String, System.Exception)
 M:PalORM.PalORM_Runtime|Register(PalORM.RegistryFragment)|System.Void|static
 M:PalORM.ParameterNameCache|GetName(System.Int32)|System.String|static
 M:PalORM.ProjectionAttribute|.ctor()
-M:PalORM.QueryBuilderExtensions|ExecuteNonQueryAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|static
+M:PalORM.QueryBuilderExtensions|ExecuteNonQueryAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|static
 M:PalORM.QueryBuilderExtensions|FirstAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|ValueTask`1|static
 M:PalORM.QueryBuilderExtensions|FirstOrDefaultAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|ValueTask`1|static
-M:PalORM.QueryBuilderExtensions|ForEachAsync<1>(QueryBuilder`1, Func`3, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|static
-M:PalORM.QueryBuilderExtensions|QueryMultipleAsync<1>(QueryBuilder`1, System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.GridReader, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]|static
+M:PalORM.QueryBuilderExtensions|ForEachAsync<1>(QueryBuilder`1, Func`3, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int64, System.Private.CoreLib]]|static
+M:PalORM.QueryBuilderExtensions|QueryMultipleAsync<1>(QueryBuilder`1, System.FormattableString, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[PalORM.GridReader, PalORM.Core]]|static
 M:PalORM.QueryBuilderExtensions|SingleAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|ValueTask`1|static
 M:PalORM.QueryBuilderExtensions|SingleOrDefaultAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|ValueTask`1|static
 M:PalORM.QueryBuilderExtensions|ToListAsync<1>(QueryBuilder`1, System.Threading.CancellationToken)|ValueTask`1|static
@@ -420,13 +420,13 @@ M:PalORM.QueryBuilder`1|WhereIn<1>(System.String, IEnumerable`1)|PalORM.QueryBui
 M:PalORM.QueryBuilder`1|WhereNotIn<1>(Expression`1, IEnumerable`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WhereNotIn<1>(System.String, IEnumerable`1)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|With(System.String, System.FormattableString)|PalORM.QueryBuilder`1|instance
-M:PalORM.QueryBuilder`1|WithCache(System.String, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])|PalORM.QueryBuilder`1|instance
+M:PalORM.QueryBuilder`1|WithCache(System.String, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib]])|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WithCommandTimeout(System.Int32)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WithMetrics(System.String)|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WithTracing()|PalORM.QueryBuilder`1|instance
 M:PalORM.QueryBuilder`1|WithTransaction(System.Data.Common.DbTransaction)|PalORM.QueryBuilder`1|instance
-M:PalORM.QueryContext|.ctor(System.String, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]], System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]])
-M:PalORM.QueryContext|Deconstruct(System.String&, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]&, System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]&)|System.Void|instance
+M:PalORM.QueryContext|.ctor(System.String, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common]], System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]])
+M:PalORM.QueryContext|Deconstruct(System.String&, System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common]]&, System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]]&)|System.Void|instance
 M:PalORM.QueryContext|Equals(PalORM.QueryContext)|System.Boolean|instance
 M:PalORM.QueryContext|Equals(System.Object)|System.Boolean|instance
 M:PalORM.QueryContext|GetHashCode()|System.Int32|instance
@@ -440,22 +440,22 @@ M:PalORM.QueryPipeline`1|QueryStructs<1>(System.FormattableString)|PipelineStruc
 M:PalORM.RegistryFragment|.ctor()
 M:PalORM.RequiredAttribute|.ctor()
 M:PalORM.ResilienceExecutor|.ctor(PalORM.DbOptions)
-M:PalORM.ResilienceExecutor|ExecuteAsync(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Threading.Tasks.Task, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
+M:PalORM.ResilienceExecutor|ExecuteAsync(System.Func`2[[System.Threading.CancellationToken, System.Private.CoreLib],[System.Threading.Tasks.Task, System.Private.CoreLib]], System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|instance
 M:PalORM.ResilienceExecutor|ExecuteAsync<1>(Func`2, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.ResilienceExecutor|ExecuteAsync<2>(Func`3, TState, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.ResilienceExecutor|ExecuteWithTimeoutAsync<1>(Func`2, System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.ResilienceExecutor|ExecuteWithTimeoutAsync<2>(Func`3, TState, System.Threading.CancellationToken)|ValueTask`1|instance
-M:PalORM.RowPreparedBulkInsert|ExecuteAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, PalORM.BulkContext, System.Threading.CancellationToken)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|static
+M:PalORM.RowPreparedBulkInsert|ExecuteAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, PalORM.BulkContext, System.Threading.CancellationToken)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib]]|static
 M:PalORM.SchemaAttribute|.ctor(System.String)
 M:PalORM.SensitiveDataAttribute|.ctor()
 M:PalORM.SessionBatch`1|Append(System.FormattableString)|PalORM.SessionBatch`1|instance
 M:PalORM.SessionBatch`1|Dispose()|System.Void|instance
-M:PalORM.SessionBatch`1|ExecuteNonQueryAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.SessionBatch`1|ExecuteNonQueryAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
 M:PalORM.SoftDeleteAttribute|.ctor()
 M:PalORM.SqlFileAttribute|.ctor(System.String)
 M:PalORM.SqlLimits|MaxBindParametersFor(PalORM.SqlDialect)|System.Int32|static
 M:PalORM.SqlTemplateAttribute|.ctor(System.String)
-M:PalORM.StoredProcBuilder|ExecuteAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]|instance
+M:PalORM.StoredProcBuilder|ExecuteAsync(System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Int32, System.Private.CoreLib]]|instance
 M:PalORM.StoredProcBuilder|GetOutputValue<1>(System.String)|T|instance
 M:PalORM.StoredProcBuilder|QueryAsync<1>(System.Threading.CancellationToken)|ValueTask`1|instance
 M:PalORM.StoredProcBuilder|WithOutputParam<1>(System.String)|PalORM.StoredProcBuilder|instance
@@ -467,10 +467,10 @@ M:PalORM.UniqueAttribute|.ctor()
 P:PalORM.AuditInterceptor|Priority|System.Int32
 P:PalORM.BulkContext|BatchSize|System.Int32
 P:PalORM.BulkContext|CommandTimeoutSeconds|System.Int32
-P:PalORM.BulkContext|CreateParameter|System.Func`3[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]
+P:PalORM.BulkContext|CreateParameter|System.Func`3[[System.String, System.Private.CoreLib],[System.Object, System.Private.CoreLib],[System.Data.Common.DbParameter, System.Data.Common]]
 P:PalORM.BulkContext|IsolationLevel|System.Data.IsolationLevel
 P:PalORM.BulkContext|MaxParametersPerStatement|System.Int32
-P:PalORM.BulkContext|QuoteIdentifier|System.Func`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.BulkContext|QuoteIdentifier|System.Func`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
 P:PalORM.BulkOperationFramework|CapabilityProbeFailures|System.Int64
 P:PalORM.ColumnAttribute|Length|System.Int32
 P:PalORM.ColumnAttribute|Name|System.String
@@ -491,9 +491,9 @@ P:PalORM.CommandSqlSet|UpsertReturning|System.String
 P:PalORM.CompiledQuery`2|Sql|System.String
 P:PalORM.ComputedAttribute|Expression|System.String
 P:PalORM.ConverterAttribute|ConverterType|System.Type
-P:PalORM.CreateIndexSqlSet|MySql|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.CreateIndexSqlSet|PostgreSql|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.CreateIndexSqlSet|Sqlite|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.CreateIndexSqlSet|MySql|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+P:PalORM.CreateIndexSqlSet|PostgreSql|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+P:PalORM.CreateIndexSqlSet|Sqlite|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.CreateTableSqlSet|MySql|System.String
 P:PalORM.CreateTableSqlSet|PostgreSql|System.String
 P:PalORM.CreateTableSqlSet|Sqlite|System.String
@@ -501,7 +501,7 @@ P:PalORM.DataSessionFactory`1|IdleCount|System.Int32
 P:PalORM.DataSessionPool`1|IdleCount|System.Int32
 P:PalORM.DataSession`1|IsInTransaction|System.Boolean
 P:PalORM.DataSession`1|LastMigrationResult|PalORM.MigrationResult
-P:PalORM.DataSession`1|LastMigrationSkippedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.DataSession`1|LastMigrationSkippedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.DatabaseAttribute|Name|System.String
 P:PalORM.DbOptions|CircuitBreakerResetAfter|System.TimeSpan
 P:PalORM.DbOptions|CircuitBreakerScope|PalORM.CircuitBreakerScope
@@ -509,7 +509,7 @@ P:PalORM.DbOptions|CircuitBreakerThreshold|System.Int32
 P:PalORM.DbOptions|CommandTimeout|System.TimeSpan
 P:PalORM.DbOptions|ConnectionString|System.String
 P:PalORM.DbOptions|ConnectionTimeout|System.TimeSpan
-P:PalORM.DbOptions|Interceptors|System.Collections.Generic.IReadOnlyList`1[[PalORM.IQueryInterceptor, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+P:PalORM.DbOptions|Interceptors|System.Collections.Generic.IReadOnlyList`1[[PalORM.IQueryInterceptor, PalORM.Core]]
 P:PalORM.DbOptions|LoggerFactory|Microsoft.Extensions.Logging.ILoggerFactory
 P:PalORM.DbOptions|MaxPoolSize|System.Int32
 P:PalORM.DbOptions|MaxRetries|System.Int32
@@ -523,24 +523,24 @@ P:PalORM.DbOptions|PrepareThreshold|System.Int32
 P:PalORM.DbOptions|QueryCache|PalORM.IQueryCache
 P:PalORM.DbOptions|ReadConnectionString|System.String
 P:PalORM.DbOptions|ReadSessionSetupSql|System.String
-P:PalORM.DbOptions|RetryBackoff|System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.DbOptions|RetryBackoff|System.Func`2[[System.Int32, System.Private.CoreLib],[System.TimeSpan, System.Private.CoreLib]]
 P:PalORM.DbOptions|SessionSetupSql|System.String
 P:PalORM.DbOptions|UseSynchronousRowRead|System.Boolean
 P:PalORM.DbOptions|ValidateQueryColumnOrder|System.Boolean
 P:PalORM.DefaultValueAttribute|Expression|System.String
-P:PalORM.DryRunResult|Parameters|System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]
+P:PalORM.DryRunResult|Parameters|System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common]]
 P:PalORM.DryRunResult|Sql|System.String
-P:PalORM.EntityRuntimeInfo|BindDelete|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.EntityRuntimeInfo|BindVersionValue|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.EntityRuntimeInfo|ColumnNames|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.EntityRuntimeInfo|BindDelete|System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]]
+P:PalORM.EntityRuntimeInfo|BindVersionValue|System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]]
+P:PalORM.EntityRuntimeInfo|ColumnNames|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.EntityRuntimeInfo|ConcurrencyColumn|System.String
-P:PalORM.EntityRuntimeInfo|CreateVersionArray|System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.EntityRuntimeInfo|CreateVersionArray|System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array, System.Private.CoreLib]]
 P:PalORM.EntityRuntimeInfo|Crud|PalORM.CrudMetadata
 P:PalORM.EntityRuntimeInfo|Features|PalORM.EntityFeatures
-P:PalORM.EntityRuntimeInfo|FillVersionArray|System.Action`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.EntityRuntimeInfo|FillVersionArray|System.Action`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array, System.Private.CoreLib]]
 P:PalORM.EntityRuntimeInfo|PkColumn|System.String
 P:PalORM.EntityRuntimeInfo|RowFactory|System.Object
-P:PalORM.EntityRuntimeInfo|SetId|System.Action`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.EntityRuntimeInfo|SetId|System.Action`2[[System.Object, System.Private.CoreLib],[System.Int64, System.Private.CoreLib]]
 P:PalORM.EntityRuntimeInfo|TableName|System.String
 P:PalORM.EntityRuntimeInfo|VersionArrayElementType|System.Type
 P:PalORM.ForeignKeyAttribute|OnDelete|PalORM.DeleteAction
@@ -566,62 +566,62 @@ P:PalORM.IndexAttribute|Unique|System.Boolean
 P:PalORM.KeyAttribute|AutoIncrement|System.Boolean
 P:PalORM.MigrationFailure|ErrorType|System.String
 P:PalORM.MigrationFailure|Statement|System.String
-P:PalORM.MigrationResult|CreatedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.MigrationResult|FailedIndexes|System.Collections.Generic.IReadOnlyList`1[[PalORM.MigrationFailure, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
+P:PalORM.MigrationResult|CreatedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+P:PalORM.MigrationResult|FailedIndexes|System.Collections.Generic.IReadOnlyList`1[[PalORM.MigrationFailure, PalORM.Core]]
 P:PalORM.MigrationResult|RolledBack|System.Boolean
-P:PalORM.MigrationResult|SkippedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.MigrationResult|Tables|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.MigrationResult|SkippedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
+P:PalORM.MigrationResult|Tables|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]
 P:PalORM.MigrationResult|Transactional|System.Boolean
 P:PalORM.OwnedJsonAttribute|ContextType|System.Type
-P:PalORM.PalORM_Runtime|BindDelete|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|BindInsert|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`3[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|BindUpdate|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|ColumnNames|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|CommandSqlsByDialect|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CommandSqlByDialect, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.PalORM_Runtime|CommandSqls|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CommandSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.PalORM_Runtime|CreateIndexSqlByDialect|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CreateIndexSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.PalORM_Runtime|CreateTableSqlByDialect|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CreateTableSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.PalORM_Runtime|CreateTableSql|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|CrudMetadatas|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CrudMetadata, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.PalORM_Runtime|EntityFeatures|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.EntityFeatures, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.PalORM_Runtime|PkColumns|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|PropertyToColumn|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Collections.Frozen.FrozenDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Collections.Immutable, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]
-P:PalORM.PalORM_Runtime|RowFactories|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|SensitiveColumnMasks|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|SetIdDelegates|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|TableMigrationOrder|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.PalORM_Runtime|TableNames|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.PalORM_Runtime|BindDelete|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|BindInsert|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`3[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|BindUpdate|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|ColumnNames|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|CommandSqlsByDialect|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CommandSqlByDialect, PalORM.Core]]
+P:PalORM.PalORM_Runtime|CommandSqls|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CommandSqlSet, PalORM.Core]]
+P:PalORM.PalORM_Runtime|CreateIndexSqlByDialect|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CreateIndexSqlSet, PalORM.Core]]
+P:PalORM.PalORM_Runtime|CreateTableSqlByDialect|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CreateTableSqlSet, PalORM.Core]]
+P:PalORM.PalORM_Runtime|CreateTableSql|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|CrudMetadatas|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CrudMetadata, PalORM.Core]]
+P:PalORM.PalORM_Runtime|EntityFeatures|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.EntityFeatures, PalORM.Core]]
+P:PalORM.PalORM_Runtime|PkColumns|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|PropertyToColumn|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Collections.Frozen.FrozenDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]], System.Collections.Immutable]]
+P:PalORM.PalORM_Runtime|RowFactories|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Object, System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|SensitiveColumnMasks|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|SetIdDelegates|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`2[[System.Object, System.Private.CoreLib],[System.Int64, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|TableMigrationOrder|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]]
+P:PalORM.PalORM_Runtime|TableNames|System.Collections.Frozen.FrozenDictionary`2[[System.Type, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
 P:PalORM.PipelineFirst`2|Value|T
 P:PalORM.PipelineQuery`2|Value|List`1
 P:PalORM.PipelineScalar`1|Value|System.Int64
 P:PalORM.PipelineStructQuery`2|Value|List`1
 P:PalORM.QueryBuilder`1|Dialect|PalORM.SqlDialect
-P:PalORM.QueryContext|Parameters|System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a]]
-P:PalORM.QueryContext|SensitiveParameterMasks|System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.QueryContext|Parameters|System.Collections.Generic.IReadOnlyList`1[[System.Data.Common.DbParameter, System.Data.Common]]
+P:PalORM.QueryContext|SensitiveParameterMasks|System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
 P:PalORM.QueryContext|Sql|System.String
-P:PalORM.RegistryFragment|BindDelete|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|BindInsert|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`3[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|BindUpdate|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|BindVersionValues|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|ColumnNames|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String[], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|CommandSqlsByDialect|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CommandSqlByDialect, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.RegistryFragment|CommandSqls|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CommandSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.RegistryFragment|ConcurrencyColumns|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|CreateIndexSqlByDialect|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CreateIndexSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.RegistryFragment|CreateTableSqlByDialect|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CreateTableSqlSet, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.RegistryFragment|CreateTableSql|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|CreateVersionArrays|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Func`2[[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|CrudMetadatas|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.CrudMetadata, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.RegistryFragment|EntityFeatures|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[PalORM.EntityFeatures, PalORM.Core, Version=6.8.0.0, Culture=neutral, PublicKeyToken=null]]
-P:PalORM.RegistryFragment|FillVersionArrays|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int32, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Array, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|PkColumns|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|PropertyToColumn|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|RowFactories|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|SensitiveColumnMasks|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|SetIdDelegates|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Action`2[[System.Object, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Int64, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]], System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|TableMigrationOrder|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|TableNames|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
-P:PalORM.RegistryFragment|VersionArrayElementTypes|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.Type, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]
+P:PalORM.RegistryFragment|BindDelete|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|BindInsert|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`3[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|BindUpdate|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`2[[System.Data.Common.DbCommand, System.Data.Common],[System.Object, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|BindVersionValues|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`3[[System.Data.Common.DbParameter[], System.Data.Common],[System.Object, System.Private.CoreLib],[System.Int32, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|ColumnNames|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.String[], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|CommandSqlsByDialect|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CommandSqlByDialect, PalORM.Core]]
+P:PalORM.RegistryFragment|CommandSqls|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CommandSqlSet, PalORM.Core]]
+P:PalORM.RegistryFragment|ConcurrencyColumns|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
+P:PalORM.RegistryFragment|CreateIndexSqlByDialect|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CreateIndexSqlSet, PalORM.Core]]
+P:PalORM.RegistryFragment|CreateTableSqlByDialect|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CreateTableSqlSet, PalORM.Core]]
+P:PalORM.RegistryFragment|CreateTableSql|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
+P:PalORM.RegistryFragment|CreateVersionArrays|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Func`2[[System.Int32, System.Private.CoreLib],[System.Array, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|CrudMetadatas|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.CrudMetadata, PalORM.Core]]
+P:PalORM.RegistryFragment|EntityFeatures|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[PalORM.EntityFeatures, PalORM.Core]]
+P:PalORM.RegistryFragment|FillVersionArrays|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`4[[System.Collections.Generic.IReadOnlyList`1[[System.Object, System.Private.CoreLib]], System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Int32, System.Private.CoreLib],[System.Array, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|PkColumns|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
+P:PalORM.RegistryFragment|PropertyToColumn|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|RowFactories|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Object, System.Private.CoreLib]]
+P:PalORM.RegistryFragment|SensitiveColumnMasks|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib],[System.String, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|SetIdDelegates|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Action`2[[System.Object, System.Private.CoreLib],[System.Int64, System.Private.CoreLib]], System.Private.CoreLib]]
+P:PalORM.RegistryFragment|TableMigrationOrder|System.Collections.Generic.IReadOnlyList`1[[System.Type, System.Private.CoreLib]]
+P:PalORM.RegistryFragment|TableNames|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.String, System.Private.CoreLib]]
+P:PalORM.RegistryFragment|VersionArrayElementTypes|System.Collections.Generic.IReadOnlyDictionary`2[[System.Type, System.Private.CoreLib],[System.Type, System.Private.CoreLib]]
 P:PalORM.SchemaAttribute|Name|System.String
 P:PalORM.SensitiveDataAttribute|Mask|System.String
 P:PalORM.SqlFileAttribute|Path|System.String

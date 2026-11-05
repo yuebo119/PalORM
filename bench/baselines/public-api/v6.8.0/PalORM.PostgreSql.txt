@@ -1,0 +1,49 @@
+E:PalORM.PostgreSql.PgNotificationListener|OnError
+E:PalORM.PostgreSql.PgNotificationListener|OnNotification
+I:PalORM.PostgreSql.PgNotificationListener|System.IAsyncDisposable
+I:PalORM.PostgreSql.PostgreSqlProvider|PalORM.IDbProvider
+M:PalORM.PostgreSql.AdvisoryLockExtensions|AcquireXactLockAsync(PalORM.DataSession`1[[PalORM.PostgreSql.PostgreSqlProvider, PalORM.PostgreSql]], System.Int32, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|static
+M:PalORM.PostgreSql.AdvisoryLockExtensions|AcquireXactLockAsync(PalORM.DataSession`1[[PalORM.PostgreSql.PostgreSqlProvider, PalORM.PostgreSql]], System.Int64, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask|static
+M:PalORM.PostgreSql.AdvisoryLockExtensions|TryAcquireXactLockAsync(PalORM.DataSession`1[[PalORM.PostgreSql.PostgreSqlProvider, PalORM.PostgreSql]], System.Int32, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Boolean, System.Private.CoreLib]]|static
+M:PalORM.PostgreSql.AdvisoryLockExtensions|TryAcquireXactLockAsync(PalORM.DataSession`1[[PalORM.PostgreSql.PostgreSqlProvider, PalORM.PostgreSql]], System.Int64, System.Threading.CancellationToken)|System.Threading.Tasks.ValueTask`1[[System.Boolean, System.Private.CoreLib]]|static
+M:PalORM.PostgreSql.PgNotificationErrorEventArgs|.ctor(System.Exception)
+M:PalORM.PostgreSql.PgNotificationEventArgs|.ctor(System.String, System.String)
+M:PalORM.PostgreSql.PgNotificationListener|.ctor(System.String, System.String[])
+M:PalORM.PostgreSql.PgNotificationListener|DisposeAsync()|System.Threading.Tasks.ValueTask|instance
+M:PalORM.PostgreSql.PgNotificationListener|NotifyAsync(System.String, System.String, System.String, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
+M:PalORM.PostgreSql.PgNotificationListener|StartAsync(System.Threading.CancellationToken)|System.Threading.Tasks.Task|instance
+M:PalORM.PostgreSql.PgNotificationListener|StopAsync()|System.Threading.Tasks.Task|instance
+M:PalORM.PostgreSql.PostgreSqlExtensions|WhereJson<1>(QueryBuilder`1, System.String, System.String, System.Object)|QueryBuilder`1|static
+M:PalORM.PostgreSql.PostgreSqlProvider|.ctor()
+M:PalORM.PostgreSql.PostgreSqlProvider|BulkInsertAsync<1>(System.Data.Common.DbConnection, System.Data.Common.DbTransaction, IReadOnlyList`1, System.Int32, System.Int32, System.Threading.CancellationToken, System.Data.IsolationLevel)|System.Threading.Tasks.Task`1[[System.Int64, System.Private.CoreLib]]|static
+M:PalORM.PostgreSql.PostgreSqlProvider|ConfigureSchemaCommand(System.Data.Common.DbCommand, System.String, System.String)|System.Int32|static
+M:PalORM.PostgreSql.PostgreSqlProvider|CreateArrayParameter(System.String, System.Array)|System.Data.Common.DbParameter|static
+M:PalORM.PostgreSql.PostgreSqlProvider|CreateConnection(System.String, PalORM.DbOptions)|System.Data.Common.DbConnection|static
+M:PalORM.PostgreSql.PostgreSqlProvider|CreateParameter(System.String, System.Object)|System.Data.Common.DbParameter|static
+M:PalORM.PostgreSql.PostgreSqlProvider|CreateTypedArrayParameter(System.String, System.Array, System.Type)|System.Data.Common.DbParameter|static
+M:PalORM.PostgreSql.PostgreSqlProvider|IsDuplicateSchemaObject(System.Exception)|System.Boolean|static
+M:PalORM.PostgreSql.PostgreSqlProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
+M:PalORM.PostgreSql.PostgreSqlProvider|QuoteIdentifier(System.String)|System.String|static
+M:PalORM.PostgreSql.PostgreSqlProvider|QuoteQualifiedIdentifier(System.String, System.String)|System.String|static
+M:PalORM.PostgreSql.PostgreSqlProvider|ResetConnectionStateAsync(System.Data.Common.DbConnection, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
+M:PalORM.PostgreSql.PostgreSqlProvider|ValidateConnectionAsync(System.Data.Common.DbConnection, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
+M:PalORM.PostgreSql.VectorText|Of(System.ReadOnlySpan`1[[System.Single, System.Private.CoreLib]], System.Int32)|System.String|static
+M:PalORM.PostgreSql.VectorText|TryParse(System.String, System.Int32, System.Single[]&)|System.Boolean|static
+P:PalORM.PostgreSql.PgNotificationErrorEventArgs|Exception|System.Exception
+P:PalORM.PostgreSql.PgNotificationEventArgs|Channel|System.String
+P:PalORM.PostgreSql.PgNotificationEventArgs|Payload|System.String
+P:PalORM.PostgreSql.PgNotificationListener|LastError|System.Exception
+P:PalORM.PostgreSql.PgNotificationListener|Logger|Microsoft.Extensions.Logging.ILogger
+P:PalORM.PostgreSql.PostgreSqlProvider|CurrentTimestampExpression|System.String
+P:PalORM.PostgreSql.PostgreSqlProvider|Dialect|PalORM.SqlDialect
+P:PalORM.PostgreSql.PostgreSqlProvider|MaxPipelineCommands|System.Int32
+P:PalORM.PostgreSql.PostgreSqlProvider|Name|System.String
+P:PalORM.PostgreSql.PostgreSqlProvider|SupportsQueryPipeline|System.Boolean
+P:PalORM.PostgreSql.PostgreSqlProvider|SupportsReturningClause|System.Boolean
+T:PalORM.PostgreSql.AdvisoryLockExtensions|base=System.Object
+T:PalORM.PostgreSql.PgNotificationErrorEventArgs|base=System.EventArgs
+T:PalORM.PostgreSql.PgNotificationEventArgs|base=System.EventArgs
+T:PalORM.PostgreSql.PgNotificationListener|base=System.Object
+T:PalORM.PostgreSql.PostgreSqlExtensions|base=System.Object
+T:PalORM.PostgreSql.PostgreSqlProvider|base=System.Object
+T:PalORM.PostgreSql.VectorText|base=System.Object
