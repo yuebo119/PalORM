@@ -8,7 +8,7 @@ namespace PalORM.Integration.Tests;
 /// <para><b>为什么放在 Integration 而不是 Core.Tests</b>：<c>QueryBuilder&lt;T&gt;</c> 的类级覆盖率
 /// 地板（META-1）只读 Integration 通道的覆盖率文件。DELETE 构建路径若只由 Core.Tests 覆盖，
 /// 该通道看不见，类级读数会被新增代码摊薄。</para></summary>
-[NotInParallel("ExecuteDeleteIntegration")]
+[NotInParallel("ExtBulkTable")]
 public sealed class ExecuteDeleteIntegrationTests
 {
     [Test]
