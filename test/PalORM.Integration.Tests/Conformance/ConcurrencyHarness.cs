@@ -6,12 +6,13 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <para><b>职责边界</b>：只提供编排、种子与进程级状态复位，不写产品断言。硬超时是防挂死兜底，
 /// 不是判据（.ai/test/prompt.md T15 禁止实际耗时类断言）；命中超时只记 violation，
 /// 用例仍须用具体值对账证明数据正确。</para>
-/// <para><b>进程级状态复位</b>：<c>CacheStore.Clear()</c> 是产品公开入口，清进程级默认查询缓存。
-/// 静态 SQL 槽与注册表的清理入口是 internal，Core 的 IVT 只授权 PalORM.Core.Tests，
+/// <para><b>进程级状态复位与其代价</b>：<c>CacheStore.Clear()</c> 是产品公开入口，清的是
+/// <b>进程级</b>默认查询缓存。产品侧对静态缓存有「非线程安全、仅测试单线程调用」的纪律，
+/// 故<b>凡调用本夹具的测试类必须标 <c>[NotInParallel]</c></b>，否则会与并行用例的缓存命中时序互踩
+/// （独立验收 2026-11-07 指出：本条不能声称「从构造上消除共享」）。
+/// 静态 SQL 槽与注册表代际的清理入口是 internal，Core 的 IVT 只授权 PalORM.Core.Tests，
 /// 不为测试改产品配置；涉缓存的用例改用 <c>DbOptions.QueryCache</c> 注入会话级实例（ADR-C 推荐形态），
-/// 使状态由用例自己持有，从构造上消除用例间共享（T5/T22）。
-/// <c>SqlSlots&lt;T&gt;</c> 闭式泛型静态槽连 <c>ClearForTesting()</c> 都不覆盖
-/// （DataSessionCache.cs:92-93 自承），故 CS-05 把它当实测事实记录而非缺陷。</para></summary>
+/// 让状态由用例自己持有。</para></summary>
 internal sealed class ConcurrencyHarness : IAsyncDisposable
 {
     private readonly CancellationTokenSource _hardTimeout;

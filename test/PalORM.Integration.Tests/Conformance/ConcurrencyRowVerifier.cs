@@ -124,4 +124,35 @@ internal static class ConcurrencyRowVerifier
             "INSERT INTO cs_shared_rows (Id, Owner, Seq, Marker) VALUES ($id, $owner, $seq, $marker)",
             [("id", id), ("owner", owner), ("seq", seq), ("marker", marker)],
             ct).ConfigureAwait(false);
+
+    /// <summary>写一行到指定连接（并发写专用）。
+    /// <para><b>为什么必须每 worker 一条连接</b>：<c>Microsoft.Data.Sqlite</c> 的单个
+    /// <c>SqliteConnection</c> 不支持并发命令；共用 keeper 连接并发写会在
+    /// <c>SqliteConnection.Close()</c> 触发 NRE（实测）。共享缓存内存库允许多连接同库，
+    /// 每条连接各自开命令才构成真实并发写。</para></summary>
+    internal static async ValueTask InsertRowAsync(
+        System.Data.Common.DbConnection connection,
+        long id,
+        int owner,
+        int seq,
+        string marker,
+        CancellationToken ct = default)
+    {
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(ct).ConfigureAwait(false);
+        await using System.Data.Common.DbCommand command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO cs_shared_rows (Id, Owner, Seq, Marker) VALUES ($id, $owner, $seq, $marker)";
+        foreach ((string name, object value) in new[]
+        {
+            ("$id", (object)id), ("$owner", owner), ("$seq", seq), ("$marker", marker),
+        })
+        {
+            System.Data.Common.DbParameter parameter = command.CreateParameter();
+            parameter.ParameterName = name;
+            parameter.Value = value;
+            command.Parameters.Add(parameter);
+        }
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
 }

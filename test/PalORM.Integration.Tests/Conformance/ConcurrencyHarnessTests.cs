@@ -1,7 +1,10 @@
 namespace PalORM.Integration.Tests.Conformance;
 
 /// <summary>M0 基建的「门禁能失败」验证（修订版方案 §4.2）。
-/// <para>每个坏输入都必须让对账器报红；只跑正常输入的全绿不构成判别力证据。</para></summary>
+/// <para>每个坏输入都必须让对账器报红；只跑正常输入的全绿不构成判别力证据。</para>
+/// <para><b>并行纪律</b>：<c>Harness_ResetProcessState_ClearsDefaultQueryCache</c> 读写进程级默认
+/// 查询缓存，故本类标 <c>[NotInParallel]</c>。</para></summary>
+[NotInParallel]
 public sealed class ConcurrencyHarnessTests
 {
     private const int Workers = 2;

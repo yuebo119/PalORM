@@ -8,7 +8,10 @@ namespace PalORM.Integration.Tests.Conformance;
 /// 产品侧并发行为由 CS-10 池租还、CS-18 租户过滤、CS-14 查询缓存三条覆盖。
 /// 不把「夹具自己并发写」写成「产品并发写已验证」。</para>
 /// <para><b>时间窗改造</b>：原 C-14 TTL 陈旧窗口撞 T15/T24，本组改成确定性交错：
-/// 用显式顺序控制「写前 / 写后 / 失效后」三次读，断言每次读到的具体值，不用耗时或 TTL 计时。</para></summary>
+/// 用显式顺序控制「写前 / 写后 / 失效后」三次读，断言每次读到的具体值，不用耗时或 TTL 计时。</para>
+/// <para><b>并行纪律</b>：本类用 <see cref="ConcurrencyHarness"/>（其 ResetProcessState 清进程级
+/// 查询缓存），故标 <c>[NotInParallel]</c>。</para></summary>
+[NotInParallel]
 public sealed class ConcurrencySharedStateTests
 {
     private const int Workers = 8;
@@ -110,8 +113,10 @@ public sealed class ConcurrencySharedStateTests
             .ConfigureAwait(false);
         string second = (await session.From<CfTenantEntity>().WithCache(key).ToListAsync()
             .ConfigureAwait(false)).Single().Value;
-        // 不判失败：ADR-O 已裁决 TTL 最终一致。把实际值作为基线事实记录。
-        await Assert.That(second is "before" or "after").IsTrue();
+        // ADR-O 裁决 TTL 最终一致：未显式失效时读到旧值。把期望写死成 before 而不是
+        // 「before 或 after」——后者判别力为零（独立验收 P1-7）。若产品改为写后自动失效，
+        // 本断言必须同步改成 after，变化会显式暴露而不是被放行。
+        await Assert.That(second).IsEqualTo("before");
 
         session.EvictQueryCache();
         string third = (await session.From<CfTenantEntity>().WithCache(key).ToListAsync()
