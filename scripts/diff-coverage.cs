@@ -118,10 +118,15 @@ if (diffLines.Count == 0)
     return 0;
 }
 
-// ── 第二步：XML 行命中映射（并集）────────────────────────────────────
+// ── 第二步：XML 行映射（并集）────────────────────────────────────────
 // source_file 的绝对 path → id；range 的 source_id + start/end/covered → 文件行集。
 // 同一行在多份 XML（Core 采集 + Integration 采集）任一命中即算覆盖。
+//
+// executableByFile 记录"编译器认为可执行的行"（所有 range，不论 covered）：方法签名、
+// 花括号、属性、using 等行不出现在任何 range 里。把它们算进分母会让大改动必然假红——
+// 2026-11-06 实测：320 行改动里约 135 行属于这类行，判出 57.8%，而其中可执行行几乎全覆盖。
 var coveredByFile = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+var executableByFile = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
 foreach (string xmlPath in xmlPaths)
 {
     string xml = File.ReadAllText(xmlPath);
@@ -133,21 +138,27 @@ foreach (string xmlPath in xmlPaths)
     foreach (Match rg in Regex.Matches(xml,
         "<range source_id=\"(\\d+)\" start_line=\"(\\d+)\" end_line=\"(\\d+)\"[^>]*covered=\"(yes|no)\""))
     {
-        if (rg.Groups[4].Value != "yes") continue;
         int id = int.Parse(rg.Groups[1].Value, CultureInfo.InvariantCulture);
         if (!idToPath.TryGetValue(id, out string? path)) continue;
-        if (!coveredByFile.TryGetValue(path, out var set))
-            coveredByFile[path] = set = [];
+        if (!executableByFile.TryGetValue(path, out var executable))
+            executableByFile[path] = executable = [];
+        HashSet<int>? coveredSet = null;
+        if (rg.Groups[4].Value == "yes")
+        {
+            if (!coveredByFile.TryGetValue(path, out coveredSet))
+                coveredByFile[path] = coveredSet = [];
+        }
         for (int ln = int.Parse(rg.Groups[2].Value, CultureInfo.InvariantCulture);
              ln <= int.Parse(rg.Groups[3].Value, CultureInfo.InvariantCulture); ln++)
         {
-            set.Add(ln);
+            executable.Add(ln);
+            coveredSet?.Add(ln);
         }
     }
 }
 
 // ── 第三步：比对 ─────────────────────────────────────────────────────
-(int totalRelevant, int totalCovered, List<string> uncoveredDetail) = Compare(diffLines, coveredByFile);
+(int totalRelevant, int totalCovered, List<string> uncoveredDetail) = Compare(diffLines, coveredByFile, executableByFile);
 
 double percent = totalRelevant == 0 ? 100.0 : (double)totalCovered / totalRelevant * 100;
 string percentText = percent.ToString("F1", CultureInfo.InvariantCulture);
@@ -176,52 +187,55 @@ return 0;
 // 未覆盖（假红）；改动集为空时又走上面的空集 PASS（假绿）。两处都已实测。
 static (int Total, int Covered, List<string> Detail) Compare(
     Dictionary<string, HashSet<int>> diffLines,
-    Dictionary<string, HashSet<int>> coveredByFile)
+    Dictionary<string, HashSet<int>> coveredByFile,
+    Dictionary<string, HashSet<int>> executableByFile)
 {
     int totalRelevant = 0, totalCovered = 0;
     var uncoveredDetail = new List<string>();
     foreach ((string file, HashSet<int> lines) in diffLines)
     {
         string normalized = file.Replace('\\', '/').TrimStart('.', '/');
-        HashSet<int>? covered = null;
-        foreach ((string xmlPath, HashSet<int> set) in coveredByFile)
+        HashSet<int>? covered = FindBySuffix(coveredByFile, normalized);
+        HashSet<int>? executable = FindBySuffix(executableByFile, normalized);
+        int fileRelevant = 0, fileCovered = 0;
+        var missed = new List<int>();
+        if (executable is null)
         {
-            string xmlNormalized = xmlPath.Replace('\\', '/');
-            if (xmlNormalized.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase))
-            {
-                covered = set;
-                break;
-            }
+            // 该文件从未出现在任何覆盖率 XML：失真方向只能从严，全部计未覆盖。
+            // 否则"新增源文件完全没有测试"会被静默放过。
+            fileRelevant = lines.Count;
+            missed.AddRange(lines);
         }
-        int fileRelevant = lines.Count;
-        int fileCovered = 0;
-        if (covered is not null)
+        else
         {
             foreach (int ln in lines)
             {
-                if (covered.Contains(ln)) fileCovered++;
+                // 签名、花括号、属性、using 等不出现在任何 range 里的行不进分母
+                if (!executable.Contains(ln)) continue;
+                fileRelevant++;
+                if (covered is not null && covered.Contains(ln)) fileCovered++;
+                else missed.Add(ln);
             }
         }
         totalRelevant += fileRelevant;
         totalCovered += fileCovered;
-        if (fileCovered < fileRelevant)
+        if (missed.Count > 0)
         {
-            var missed = new List<int>();
-            if (covered is not null)
-            {
-                foreach (int ln in lines)
-                {
-                    if (!covered.Contains(ln)) missed.Add(ln);
-                }
-            }
-            else
-            {
-                missed.AddRange(lines);
-            }
             uncoveredDetail.Add($"  {file}: {fileCovered}/{fileRelevant} 命中，未覆盖行 {string.Join(",", missed.Take(10))}{(missed.Count > 10 ? "…" : "")}");
         }
     }
     return (totalRelevant, totalCovered, uncoveredDetail);
+}
+
+/// <summary>按路径后缀匹配文件（git 给相对路径，覆盖率 XML 给绝对路径；两平台分隔符不同）。</summary>
+static HashSet<int>? FindBySuffix(Dictionary<string, HashSet<int>> byPath, string normalizedFile)
+{
+    foreach ((string path, HashSet<int> set) in byPath)
+    {
+        if (path.Replace('\\', '/').EndsWith("/" + normalizedFile, StringComparison.OrdinalIgnoreCase))
+            return set;
+    }
+    return null;
 }
 
 // ── 自检夹具 ──
@@ -246,12 +260,31 @@ static int SelfCheck(double thresholdPercent)
     };
     var none = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
 
+    // 前四项：所有改动行都可执行，保持原有语义
+    var allExecutable = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/home/runner/work/Pal.ORM/src/PalORM.Core/A.cs"] = [.. changed],
+    };
+    // 后两项：只有 10~14 可执行，15~19 模拟签名/花括号/属性行，必须被排除出分母
+    var halfExecutable = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/home/runner/work/Pal.ORM/src/PalORM.Core/A.cs"] = [10, 11, 12, 13, 14],
+    };
+    var threeOfFiveCovered = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/home/runner/work/Pal.ORM/src/PalORM.Core/A.cs"] = [10, 11, 12],
+    };
+
     var cases = new List<(string Name, int Expected, int Actual)>
     {
-        ("好夹具（Linux 形态路径 10/10 命中）", 0, Judge(diffLines, fullLinux, thresholdPercent)),
-        ("好夹具②（Windows 形态路径 10/10 命中）", 0, Judge(diffLines, fullWindows, thresholdPercent)),
-        ("坏夹具①（5/10 命中 = 50% < 阈值）", 1, Judge(diffLines, half, thresholdPercent)),
-        ("坏夹具②（XML 无该文件，全未覆盖）", 1, Judge(diffLines, none, thresholdPercent)),
+        ("好夹具（Linux 形态路径 10/10 命中）", 0, Judge(diffLines, fullLinux, allExecutable, thresholdPercent)),
+        ("好夹具②（Windows 形态路径 10/10 命中）", 0, Judge(diffLines, fullWindows, allExecutable, thresholdPercent)),
+        ("坏夹具①（5/10 命中 = 50% < 阈值）", 1, Judge(diffLines, half, allExecutable, thresholdPercent)),
+        ("坏夹具②（XML 无该文件，全未覆盖）", 1, Judge(diffLines, none, allExecutable, thresholdPercent)),
+        ("好夹具③（10 改动行中 5 行不可执行，可执行部分全命中）", 0,
+            Judge(diffLines, fullLinux, halfExecutable, thresholdPercent)),
+        ("坏夹具③（可执行部分 3/5 命中 = 60% < 阈值）", 1,
+            Judge(diffLines, threeOfFiveCovered, halfExecutable, thresholdPercent)),
     };
 
     bool ok = true;
@@ -273,9 +306,10 @@ static int SelfCheck(double thresholdPercent)
 static int Judge(
     Dictionary<string, HashSet<int>> diffLines,
     Dictionary<string, HashSet<int>> coveredByFile,
+    Dictionary<string, HashSet<int>> executableByFile,
     double thresholdPercent)
 {
-    (int total, int covered, _) = Compare(diffLines, coveredByFile);
+    (int total, int covered, _) = Compare(diffLines, coveredByFile, executableByFile);
     double percent = total == 0 ? 100.0 : (double)covered / total * 100;
     return percent < thresholdPercent ? 1 : 0;
 }
