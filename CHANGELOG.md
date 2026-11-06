@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-批量写入与时间类型的默认行为向 PostgreSQL 对齐，两处静默失败改为调用期抛错；新增批量回填主键重载与一条编译期诊断。
+批量写入与时间类型的默认行为向 PostgreSQL 对齐，两处静默失败改为调用期抛错；新增批量回填主键重载、四项生命周期与存在性 API、迁移漂移检测，以及一条编译期诊断。
 
 ### 💔 破坏性/行为变更
 
@@ -19,7 +19,9 @@
 - **MySQL 超时按耗时判定**：该驱动对超时没有统一形态，标量路径中断查询后不抛异常、返回部分结果（实测 `SELECT SLEEP(5)` 在 1 秒后返回 1），列表路径抛 `MySqlException`（`ErrorCode=CommandTimeoutExpired`，内层 `QueryInterrupted` 1317）。因此 PalORM 在 MySQL 且设置了命令超时时，成功返回与抛出异常两条路都先看是否越过截止线，越过即抛 `TimeoutException`（无分配计时），覆盖 `ScalarAsync` / `GetAsync` / `GetAllAsync` 与查询管线（`ToListAsync` / `FirstOrDefaultAsync` / `ForEachAsync`）。
 - **超时统一为 `TimeoutException`**：驱动把超时包在自身异常里（`NpgsqlException` 内层为超时异常），现在在三个位置解包：弹性执行器出口、三处直调分支的兜底 catch、`ScalarAsync` 公开入口（覆盖未配置弹性的直接分支）。熔断计数仍按原异常计算。
 - **新增 `BulkInsertReturningAsync`**：PG 与 SQLite 走多行 `INSERT ... RETURNING` 并按行序回填自增主键；MySQL 因 `LAST_INSERT_ID` 只保证首值而明确抛 `NotSupportedException`。原 `BulkInsertAsync` 保持最快的写入形态（不回填），两者分工写进 API 参考。
+- **新增迁移漂移检测（默认开启）**：`DbOptions.ValidateMigrationDrift` 默认 true，`MigrateWithResultAsync` 在 ANALYZE 之后比对实体声明列与库内实际列，检出项写入 `MigrationResult.SchemaDrift` 并记 Warning。动机是"只建不改"的迁移在实体加列后仍返回成功，错误推迟到首次写入。默认开启的成本被形态压到一次往返：PostgreSQL/MySQL 一次 `information_schema` 查询取回全部表列，SQLite 逐表 `PRAGMA table_xinfo`（本地无网络往返）；确认不需要的部署可显式关闭（ADR-W）。同批修复 SQLite 的 `ConfigureSchemaCommand`：`PRAGMA table_info` 改为 `table_xinfo`，前者不返回 `[Computed]` 生成的 STORED 列，导致 `ValidateSchemaAsync` 对计算列长期误报缺失。
 - **PG DateTime 往返回归测试**：`PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds` 锁定列型修复；方言对称性差异表登记 PG 侧 `TIMESTAMPTZ`。〔内部〕
+- **新增四项生命周期与存在性 API**：`RestoreAsync`（软删行恢复，`WHERE deleted_at IS NOT NULL` 使重复恢复返回 0，与软删删除的幂等语义对称）、`HardDeleteAsync`（绕过软删改写的物理删除，与非软删实体的 `DeleteAsync` 走同一条路径）、`AnyAsync`（`SELECT 1 … LIMIT 1` 命中即短路，过滤与 `CountAsync` 同源，标量 null 视为无匹配行）、`ExecuteDeleteAsync`（条件删除：要求至少一个用户 `Where`，软删实体改写成 `UPDATE deleted_at` 以保持与 `DeleteAsync` 同语义，`Set`/`Take`/`Skip`/`Join`/`OrderBy`/`GroupBy`/`Having`/`Lock`/`Window`/CTE 构建期拒绝）。`ExecuteNonQueryAsync` 的语义收窄为 UPDATE 专用，与 DELETE 共用同一执行内核（复用槽、参数池、拦截器、观测性只实现一次）。
 - **行锁子句形态断言移到 PG**：`PostgreSql_LockClause_AppearsAfterLimit`，SQLite 侧只断言构建期拒绝。〔内部〕
 
 ## [6.8.0] - 2026-10-26

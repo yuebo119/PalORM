@@ -1053,26 +1053,78 @@ public sealed partial class DataSession<TProvider>
             return await ExecuteWriteRowsAsync(cmd, deleteTransaction, ct).ConfigureAwait(false);
         }
 
-        // R3（2026-10-12）：物理删除接 PL-2 复用槽（GetByKey 同型）——软删/租户形态不进槽。
-        bool deleteHasTenant = HasTenantFilter(deleteInfo.Features);
-        string deleteCommandText = deleteHasTenant
+        return await DeletePhysicalAsync<T>(key, deleteInfo, deletePlan, sqls, deleteTransaction, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>物理删除单行（<see cref="DeleteAsync"/> 的非软删分支与 <see cref="HardDeleteAsync"/>
+    /// 共用，单一定义点）。R3（2026-10-12）：接 PL-2 复用槽（GetByKey 同型）——租户形态不进槽。</summary>
+    private async ValueTask<int> DeletePhysicalAsync<T>(
+        object key, EntityRuntimeInfo info, CrudPlan plan, CommandSqlSet sqls,
+        DbTransaction? activeTransaction, CancellationToken ct)
+        where T : class, new()
+    {
+        bool hasTenant = HasTenantFilter(info.Features);
+        string commandText = hasTenant
             ? GetDeleteWithTenantSqlFast<T>(sqls.Delete)
             : sqls.Delete;
-        if (!deleteHasTenant
+        if (!hasTenant
             && TryAcquireDeleteCommand<T>(
-                deleteCommandText, key, deletePlan, deleteInfo, deleteTransaction, out bool prepareDelete) is { } reusedDelete)
+                commandText, key, plan, info, activeTransaction, out bool prepareDelete) is { } reusedDelete)
         {
             await PreparePromotedCommandAsync(reusedDelete, prepareDelete, ct).ConfigureAwait(false);
-            return await ExecuteWriteRowsAsync(reusedDelete, deleteTransaction, ct).ConfigureAwait(false);
+            return await ExecuteWriteRowsAsync(reusedDelete, activeTransaction, ct).ConfigureAwait(false);
         }
 
-        await using DbCommand delCmd = CreateCommand(deleteTransaction);
+        await using DbCommand delCmd = CreateCommand(activeTransaction);
         // M1（v5.6.0）：带租户后缀的 DELETE per-(Type, Dialect) 缓存
-        delCmd.CommandText = deleteCommandText;
+        delCmd.CommandText = commandText;
         delCmd.CommandTimeout = _commandTimeoutSeconds;
-        BindGeneratedKeyParameter<T>(deleteInfo, delCmd, key);
-        BindDefaultFilterParameters(delCmd, deleteInfo.Features);
-        return await ExecuteWriteRowsAsync(delCmd, deleteTransaction, ct).ConfigureAwait(false);
+        BindGeneratedKeyParameter<T>(info, delCmd, key);
+        BindDefaultFilterParameters(delCmd, info.Features);
+        return await ExecuteWriteRowsAsync(delCmd, activeTransaction, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>物理删除单行，绕过 [SoftDelete] 的软删改写。
+    /// <para><b>与 DeleteAsync 的分工</b>：DeleteAsync 对软删实体执行逻辑删除；本方法执行真实
+    /// DELETE，用于数据清理与合规删除。不可恢复，故不设默认参数，调用即明示。</para>
+    /// <para>租户实体会追加租户条件，只能删除会话当前租户的行。性能与非软删实体的
+    /// DeleteAsync 逐指令等价（同一条物理删除路径）。</para></summary>
+    public async ValueTask<int> HardDeleteAsync<T>(object key, CancellationToken ct = default)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        return await DeletePhysicalAsync<T>(
+            key, info, GetCrudPlan<T>(info), GetCommandSqls<T>(), GetActiveTransaction(), ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>恢复软删行（UPDATE deleted_at = NULL）。
+    /// <para>仅对 [SoftDelete] 实体有效，非软删实体没有 deleted_at 列。重复恢复返回 0 行
+    /// （WHERE 要求 deleted_at IS NOT NULL），与软删 DeleteAsync 的幂等语义对称。</para>
+    /// <para>租户实体追加租户条件，只能恢复会话当前租户的行。稳态零托管分配：SQL 走 2 槽静态
+    /// 缓存；低频操作不建命令复用槽（Lessons B98：摊销不掉槽检查成本）。</para></summary>
+    public async ValueTask<int> RestoreAsync<T>(object key, CancellationToken ct = default)
+        where T : class, new()
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        using SessionOperationState.SessionOperationLease operation = EnterOperation();
+        EntityRuntimeInfo info = GetEntityInfo<T>();
+        if ((info.Features & EntityFeatures.SoftDelete) == 0)
+            throw new NotSupportedException(
+                $"RestoreAsync is only valid for [SoftDelete] entities; '{typeof(T).Name}' has no soft-delete column. "
+                + "Use UpdateAsync to modify the row instead.");
+        DbTransaction? activeTransaction = GetActiveTransaction();
+        bool hasTenant = HasTenantFilter(info.Features);
+        string sql = GetRestoreUpdateSqlFast<T>(info, hasTenant);
+        await using DbCommand cmd = CreateCommand(activeTransaction);
+        cmd.CommandText = sql;
+        cmd.CommandTimeout = _commandTimeoutSeconds;
+        BindGeneratedKeyParameter<T>(info, cmd, key);
+        BindDefaultFilterParameters(cmd, info.Features);
+        return await ExecuteWriteRowsAsync(cmd, activeTransaction, ct).ConfigureAwait(false);
     }
 
     // v4.1 极致降内存：per-(Type, Dialect) 缓存 selectColumns，消除每次 Get/GetAll 的 N 次 QuoteIdentifier + string.Join
@@ -1157,6 +1209,21 @@ public sealed partial class DataSession<TProvider>
         /// <summary>软删 UPDATE 全句：bit0=hasTenant。</summary>
         public static readonly string?[] SoftDeleteUpdate = new string?[2];
 
+        /// <summary>恢复软删行的 UPDATE 全句（SET deleted_at = NULL）：bit0=hasTenant。
+        /// 与 <see cref="SoftDeleteUpdate"/> 同族骨架，方向相反。</summary>
+        public static readonly string?[] RestoreUpdate = new string?[2];
+
+        /// <summary>AnyAsync 基底句（SELECT 1 FROM …；不带 LIMIT，作 where 前缀）。</summary>
+        public static string? AnyBase;
+
+        /// <summary>AnyAsync 无 where 无过滤形态（基底 + LIMIT 1 的完整句）。</summary>
+        public static string? AnyBareLimit;
+
+        /// <summary>Any 组合句：bit1=hasSoftDelete，bit0=hasTenant（slot 0 不缓存，理由同
+        /// <see cref="CountComposed"/>）。后缀含 LIMIT 1，让引擎在命中首行后短路。</summary>
+        public static readonly (string FilterOnlySql, string WherePrefix)?[] AnyComposed =
+            new (string, string)?[4];
+
         /// <summary>带租户后缀的 UPDATE 全句（单值——非租户形态不走本槽）。</summary>
         public static string? UpdateWithTenant;
 
@@ -1215,6 +1282,14 @@ public sealed partial class DataSession<TProvider>
         /// 命中路径零额外分配）——CountAsync 基底句。</summary>
         public static string CountBaseOrBuilt(string quotedTableName)
             => CountBase ??= $"SELECT COUNT(*) FROM {quotedTableName}";
+
+        /// <summary>S2696 同型：AnyAsync 基底句（不带 LIMIT，供 where 前缀拼接）。</summary>
+        public static string AnyBaseOrBuilt(string quotedTableName)
+            => AnyBase ??= $"SELECT 1 FROM {quotedTableName}";
+
+        /// <summary>S2696 同型：AnyAsync 无 where 无过滤形态（基底 + LIMIT 1）。</summary>
+        public static string AnyBareLimitOrBuilt(string baseSql)
+            => AnyBareLimit ??= baseSql + " LIMIT 1";
 
         /// <summary>S2696 归位：聚合后缀（无过滤形态）。</summary>
         public static string AggregateSuffixOrBuilt(string quotedTableName)

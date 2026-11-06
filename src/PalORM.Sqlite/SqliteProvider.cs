@@ -316,8 +316,13 @@ public sealed class SqliteProvider : IDbProvider
             InitializedHandles!.Remove(handle);
     }
 
-    /// <summary>用 PRAGMA table_info 查询列信息,列名位于结果集序号 1。
-    /// SQLite 不支持实体 Schema——schema 非空时抛 <see cref="NotSupportedException"/>。</summary>
+    /// <summary>用 PRAGMA table_xinfo 查询列信息，列名位于结果集序号 1。
+    /// SQLite 不支持实体 Schema——schema 非空时抛 <see cref="NotSupportedException"/>。
+    /// <para><b>为什么用 table_xinfo 而不是 table_info</b>：table_info 不返回 GENERATED 列，
+    /// <c>[Computed]</c> 映射的 <c>GENERATED ALWAYS AS (...) STORED</c> 列会被
+    /// <c>ValidateSchemaAsync</c> 与迁移漂移检测误报为"库内缺失"。table_xinfo 返回含
+    /// hidden 与 generated 列；对无虚拟列的普通表，列集与 table_info 完全一致（多出的只有
+    /// 虚拟表的 hidden 列，本项目不生成虚拟表）。最低引擎 3.26。</para></summary>
     public static int ConfigureSchemaCommand(DbCommand command, string tableName, string? schema = null)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -325,7 +330,7 @@ public sealed class SqliteProvider : IDbProvider
             throw new NotSupportedException("The SQLite provider does not support entity schema configuration.");
         // S2077 报备（M1-5）：PRAGMA 不支持参数占位——表名经 QuoteIdentifier 转义（标识符面）
 #pragma warning disable S2077
-        command.CommandText = $"PRAGMA table_info({QuoteIdentifier(tableName)})";
+        command.CommandText = $"PRAGMA table_xinfo({QuoteIdentifier(tableName)})";
 #pragma warning restore S2077
         return 1;
     }

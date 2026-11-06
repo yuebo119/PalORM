@@ -1108,6 +1108,11 @@ public struct QueryBuilder<T> where T : class, new()
     internal IReadOnlyList<ParameterBinding> GetUpdateParameterBindings()
         => GetParametersForKinds(QueryClauseKinds.Update);
 
+    /// <summary>DELETE 参数路由：DefaultFilter + Where + Raw（无 Set）。
+    /// 与 <see cref="GetUpdateParameterBindings"/> 同源，只在语句类型上不同。</summary>
+    internal IReadOnlyList<ParameterBinding> GetDeleteParameterBindings()
+        => GetParametersForKinds(QueryClauseKinds.Delete);
+
     /// <summary>物化后的查询参数视图（DryRun/测试/管道等非热路径；执行热路径用 bindings）。</summary>
     internal IReadOnlyList<DbParameter> GetQueryParameters()
         => QueryBuilderShared.Materialize(GetQueryParameterBindings(), _paramFactory);
@@ -1183,8 +1188,84 @@ public struct QueryBuilder<T> where T : class, new()
         finally { sb.Dispose(); }
     }
 
+    /// <summary>构建删除语句：物理实体为 <c>DELETE FROM</c>，[SoftDelete] 实体改写成
+    /// <c>UPDATE deleted_at = CURRENT_TIMESTAMP</c>（与 <c>DeleteAsync</c> 同语义，不产生物理删除）。
+    /// <para><b>Where 必填</b>：默认过滤（软删/租户）不计入用户子句，表级清空必须显式表达，
+    /// 与 Take/Skip 守卫同源——静默扩大影响面是本项目拒绝的失败形态。清表请用
+    /// <c>ExecuteAsync</c> 写显式语句。</para>
+    /// <para><b>子句守卫</b>：与 <see cref="BuildUpdateSql"/> 同构。CTE/Join/OrderBy/Lock/Window/
+    /// GroupBy/Having 在构建输出里不存在，静默丢弃会让调用方误以为过滤已生效。MySQL 的
+    /// <c>DELETE ... ORDER BY ... LIMIT</c> 不在支持面内：跨方言不一致，且"删前 N 行"需要
+    /// 调用方用 Where 显式表达。</para>
+    /// <para><b>默认过滤</b>：WHERE 段由 <see cref="AppendWhereSection"/> 注入，软删与租户条件
+    /// 自动前置，用户 OR 无法绕过（与 SELECT/UPDATE 同一机制）。</para></summary>
+    internal string BuildDeleteSql()
+    {
+        if (HasClause(QueryClauseKind.Set))
+            throw new InvalidOperationException(
+                "ExecuteDeleteAsync does not accept Set clauses; DELETE has no SET section. " +
+                "Use ExecuteNonQueryAsync for UPDATE, or remove Set() for DELETE.");
+        if (!HasClause(QueryClauseKind.Where))
+            throw new InvalidOperationException(
+                "ExecuteDeleteAsync requires at least one Where clause; deleting every row must be explicit. " +
+                "Add Where(), or use ExecuteAsync with an explicit statement to clear the table.");
+        if (HasClause(QueryClauseKind.CommonTableExpression))
+            throw new NotSupportedException("CTE is not supported by the current DELETE builder.");
+        if (HasClause(QueryClauseKind.Join) || HasClause(QueryClauseKind.OrderBy)
+            || HasClause(QueryClauseKind.Lock) || HasClause(QueryClauseKind.Window)
+            || HasClause(QueryClauseKind.GroupBy) || HasClause(QueryClauseKind.Having))
+            throw new NotSupportedException(
+                "DELETE does not support Join/OrderBy/Lock/Window/GroupBy/Having clauses; they would be silently dropped. " +
+                "Remove them, or express the filter via Where.");
+        if (_take > 0 || _skip > 0)
+            throw new NotSupportedException(
+                "DELETE does not support Take/Skip; the LIMIT would be silently dropped and widen the affected rows. " +
+                "Use Where() to bound the deletion, or BulkDeleteAsync for key lists.");
+        // [SoftDelete] 实体与 DataSession.DeleteAsync 同语义：改写成 UPDATE deleted_at。
+        // 默认过滤里的 "deleted_at IS NULL" 天然构成幂等条件（重复删除返回 0 行）。
+        bool isSoftDelete = PalORM_Runtime.EntityFeatures.TryGetValue(typeof(T), out EntityFeatures features)
+            && (features & EntityFeatures.SoftDelete) != 0;
+        var sb = new ValueStringBuilder(stackalloc char[128]);
+        try
+        {
+            AppendComments(ref sb);
+            if (isSoftDelete)
+            {
+                sb.Append("UPDATE ");
+                sb.Append(_quoteIdentifier(_tableName));
+                sb.Append(" SET ");
+                sb.Append(_quoteIdentifier("deleted_at"));
+                sb.Append(" = ");
+                sb.Append(CurrentTimestampExpressionFor(_dialect));
+                sb.Append(' ');
+            }
+            else
+            {
+                sb.Append("DELETE FROM ");
+                sb.Append(_quoteIdentifier(_tableName));
+                sb.Append(' ');
+            }
+            AppendWhereSection(ref sb);
+            AppendClauses(ref sb, QueryClauseKind.Raw);
+            sb.TrimEnd(); return sb.ToString();
+        }
+        finally { sb.Dispose(); }
+    }
+
+    /// <summary>软删改写使用的时间表达式。三方言当前同值，仍按方言分支以满足 G31
+    /// 方言感知门禁；未来某方言分化时只改这一处。</summary>
+    private static string CurrentTimestampExpressionFor(SqlDialect dialect) => dialect switch
+    {
+        SqlDialect.MySql => "CURRENT_TIMESTAMP",
+        SqlDialect.PostgreSql => "CURRENT_TIMESTAMP",
+        SqlDialect.Sqlite => "CURRENT_TIMESTAMP",
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, "Unsupported dialect."),
+    };
+
     /// <summary>构建 SQL 预览（含参数）。等同于 AsDryRun().Sql，但不创建 DryRunResult。
-    /// 含 Set 子句时返回 UPDATE 预览（ITM-563）。</summary>
+    /// 含 Set 子句时返回 UPDATE 预览（ITM-563）。DELETE 预览暂无等价入口——
+    /// <see cref="BuildDeleteSql"/> 为 internal，需要预览请用 <c>AsDryRun</c> 的 UPDATE 形态
+    /// 或直接在测试中反射调用。</summary>
     public string ToSql() => HasClause(QueryClauseKind.Set) ? BuildUpdateSql() : BuildSql();
 
     /// <summary>按 QueryClauseKind 构建完整 SQL，调用顺序不再决定 SQL 语法顺序。

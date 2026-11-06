@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v5.5.1 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1580 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1599 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -16,6 +16,7 @@
 | M1 | `MigrateAsync()` | `DataSession.Schema.cs` | 从 `CreateTableSqlByDialect` 选择方言 DDL；拒绝旧无方言片段 |
 | M2 | `SeedAsync<T>(IEnumerable<T>)` | `DataSession_Bulk.cs` | 非默认稳定主键，事务内 Upsert 幂等 |
 | M3 | `ValidateSchemaAsync<T>()` → `List<string>` | `DataSession.Schema.cs` | `ConfigureSchemaCommand()` 配置安全命令 |
+| M6 | `MigrationResult.SchemaDrift` + `DbOptions.ValidateMigrationDrift` | `DataSession.Schema.cs` / `DbOptions.cs` | 迁移后漂移检测（默认开启，ADR-W）：检出「实体声明了而库内不存在」的列与缺失表，写入结果对象并记 Warning。PostgreSQL/MySQL 一次 `information_schema` 查询取全部表列，SQLite 逐表 `PRAGMA table_xinfo`（含 `[Computed]` 生成列） |
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
@@ -135,7 +136,8 @@
 | `.FirstAsync(ct)` / `.FirstOrDefaultAsync(ct)` | LIMIT 1 |
 | `.SingleAsync(ct)` / `.SingleOrDefaultAsync(ct)` | LIMIT 2 + 行数断言 |
 | `.ToPageAsync(size, orderBy, lastValue?, descending?)` | Keyset 游标分页 → `(rows, total)` |
-| `.ExecuteNonQueryAsync(ct)` | UPDATE/DELETE 执行 |
+| `.ExecuteNonQueryAsync(ct)` | UPDATE 执行（要求 `Set` 子句） |
+| `.ExecuteDeleteAsync(ct)` | DELETE 执行（要求至少一个用户 `Where`；`[SoftDelete]` 实体改写成 `UPDATE deleted_at`；`Set`/`Take`/`Skip`/`Join`/`OrderBy`/`GroupBy`/`Having`/`Lock`/`Window`/CTE 构建期拒绝） |
 | `.QueryMultipleAsync(sql)` → `GridReader` | 多结果集（单活动读取） |
 
 ### 直查 / CRUD
@@ -153,6 +155,8 @@
 | `UpdateColumnsAsync<T>(T, [columns])` | 列子集更新：只 SET 选中列，未选列保持库内值；版本列照常 `+1`/冲突检测；租户谓词自动追加（宽表大值列只发被改列） |
 | `QueryStructsAsync<T>(FormattableString)` | `[Projection] struct` 直查——每行零堆对象、`List<T>` 连续结构体数组（报表/大结果集） |
 | `DeleteAsync<T>(object key)` | SoftDelete 更新 deleted_at / 物理删除 |
+| `HardDeleteAsync<T>(object key)` | 绕过 `[SoftDelete]` 的物理删除（数据清理与合规删除）；租户条件照常追加；与非软删实体的 `DeleteAsync` 逐指令等价 |
+| `RestoreAsync<T>(object key)` | 软删行恢复：`UPDATE deleted_at = NULL WHERE pk = @p0 AND deleted_at IS NOT NULL`；仅 `[SoftDelete]` 实体（否则抛 `NotSupportedException`）；重复恢复返回 0 |
 | `SaveAsync<T>(T)` | UPSERT（默认键 Insert / 非默认键 Upsert）；冲突更新不改 tenant_id |
 | `ExecuteAsync(FormattableString)` → `int` | DDL/DML 直执 |
 
@@ -170,6 +174,7 @@
 | API | 说明 |
 |------|------|
 | `CountAsync<T>(where?)` → `long` | 软删除自动过滤 |
+| `AnyAsync<T>(where?)` → `bool` | 存在性判断：`SELECT 1 … LIMIT 1`，命中首行即短路，不做聚合计数、不物化整行；过滤与 `CountAsync` 同源；标量为 null 是合法结果（无匹配行） |
 | `SumAsync<T>(expr)` → `decimal` | |
 | `MaxAsync<T,TValue>(expr)` → `TValue?` | |
 | `MinAsync<T,TValue>(expr)` → `TValue?` | |
@@ -276,6 +281,7 @@
 | `LoggerFactory` | `ILoggerFactory?` |
 | `QueryCache` | `IQueryCache?`——未注入时各会话共享进程级 `BoundedQueryCache` 默认实例（容量 1024）。`BoundedQueryCache` 自 .NET 11 起暴露 OTel 指标（对齐 MemoryCache 标准口径）：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions`、`palorm.cache.entries`、`palorm.cache.estimated_size`，经 `PalORM` Meter 上游 OTLP 导出。 |
 | `ValidateQueryColumnOrder` | ADR-A 列序契约 |
+| `ValidateMigrationDrift` | 迁移后 schema 漂移检测（默认 **true**，ADR-W）。`MigrateWithResultAsync` 比对实体声明列与库内实际列，结果写入 `MigrationResult.SchemaDrift` 并记 Warning。PostgreSQL/MySQL 一次 `information_schema` 查询，SQLite 逐表 `PRAGMA table_xinfo`；不需要的部署可显式关闭 |
 | `UseSynchronousRowRead` | 全量物化逐行读走同步 `Read()`（MySQL 需开启；SQLite 恒同步；默认 false）。MySQL 实测约 998 vs 1846~2043 ns/行；流式 API 始终异步 |
 
 ---

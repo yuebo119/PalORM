@@ -126,6 +126,15 @@ public sealed record DbOptions
     /// 使用列别名/表达式列的查询需关闭此项并自行保证列序。</summary>
     public bool ValidateQueryColumnOrder { get; init; } = true;
 
+    /// <summary>迁移后检测 schema 漂移（默认开启）。开启时
+    /// <c>MigrateWithResultAsync</c> 比对实体声明列与库内实际列，把"实体已加列、库里没有"的
+    /// 项填入 <see cref="MigrationResult.SchemaDrift"/> 并以 Warning 记录（配置了 LoggerFactory 时）。
+    /// <para><b>默认开启的成本</b>：PostgreSQL/MySQL 一次 <c>information_schema</c> 查询取全部表列
+    /// （常量 SQL、零参数），SQLite 逐表 <c>PRAGMA table_xinfo</c>（本地无网络往返）。
+    /// 一次往返对启动路径可忽略，换来"迁移返回成功但少列"在调用点暴露，而不是推迟到首次写入。
+    /// 确认不需要的部署（例如迁移只在离线 DBA 流程中执行）可显式关闭。</para></summary>
+    public bool ValidateMigrationDrift { get; init; } = true;
+
     /// <summary>全量物化的逐行读取使用同步 <see cref="System.Data.Common.DbDataReader.Read"/>
     /// （默认 false）。当前由 MySQL 消费（Provider 声明 <see cref="IDbProvider.SupportsSynchronousRowRead"/>）；
     /// SQLite 因 <see cref="IDbProvider.PreferSynchronousIo"/> 恒走同步逐行读，无需本开关。

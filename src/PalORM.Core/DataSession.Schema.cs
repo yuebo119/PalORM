@@ -211,7 +211,133 @@ public sealed partial class DataSession<TProvider>
             analyzeCmd.CommandText = analyzeSql;
             await analyzeCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+        // 漂移检测（默认关闭）：只建不改的迁移成功返回不等于 schema 已跟上实体声明。
+        // 放在 ANALYZE 之后：列查询要读到最新 schema，且 ANALYZE 不改变列集合。
+        MigrationResult drifted = await ApplySchemaDriftAsync(result, ct).ConfigureAwait(false);
+        if (!ReferenceEquals(drifted, result))
+        {
+            result = drifted;
+            _lastMigrationResult = result;
+        }
         return result;
+    }
+
+    /// <summary>漂移检测的开关与结果合并（从 MigrateWithResultAsync 抽出，降 S3776）：
+    /// 关闭时原样返回同一实例（调用方以引用相等判定未变），开启且检出漂移时返回带
+    /// <see cref="MigrationResult.SchemaDrift"/> 的新实例。</summary>
+    private async ValueTask<MigrationResult> ApplySchemaDriftAsync(MigrationResult result, CancellationToken ct)
+    {
+        if (!_options.ValidateMigrationDrift) return result;
+        IReadOnlyList<string> drift = await CollectSchemaDriftAsync(ct).ConfigureAwait(false);
+        if (drift.Count == 0) return result;
+        // 默认会话的 _logger 是 NullLogger（零分配、静默）；配了 LoggerFactory 的部署在此拿到审计线索。
+        // 有 logger 才有声音，是"默认开启"能真正生效的前提。
+        _logger.LogWarning(
+            "Schema drift detected after migration: {Count} issue(s). MigrateAsync only creates missing "
+            + "tables and indexes; apply column changes with an external migration tool. First issue: {First}",
+            drift.Count, drift[0]);
+        return result with { SchemaDrift = drift };
+    }
+
+    /// <summary>迁移后漂移检测：逐表比对实体声明列与库内实际列。
+    /// <para>复用 <see cref="IDbProvider.ConfigureSchemaCommand"/>（三方言各自的列查询），
+    /// 不新增方言分支，也不引入表名拼接的注入面（MySQL/SQLite 走标识符转义，PG 走参数）。
+    /// 成本为每表一次查询，故只在 <see cref="DbOptions.ValidateMigrationDrift"/> 开启时执行。</para></summary>
+    private async ValueTask<IReadOnlyList<string>> CollectSchemaDriftAsync(CancellationToken ct)
+    {
+        List<string> drift = [];
+        if (TProvider.Dialect == SqlDialect.Sqlite)
+        {
+            // SQLite 无法跨表聚合列信息，逐表 PRAGMA；本地库与内存库没有网络往返成本
+            foreach ((Type type, string tableName) in PalORM_Runtime.TableNames)
+            {
+                if (!PalORM_Runtime.ColumnNames.TryGetValue(type, out IReadOnlyList<string>? expected))
+                    continue;
+                HashSet<string> actual = await ReadSqliteColumnsAsync(tableName, ct).ConfigureAwait(false);
+                AppendDrift(drift, tableName, expected, actual);
+            }
+            return drift;
+        }
+
+        // PostgreSQL / MySQL：一次查询取回当前 schema 全部表列，内存里按注册表筛选
+        Dictionary<string, HashSet<string>> columnsByTable =
+            await ReadInformationSchemaColumnsAsync(ct).ConfigureAwait(false);
+        foreach ((Type type, string tableName) in PalORM_Runtime.TableNames)
+        {
+            if (!PalORM_Runtime.ColumnNames.TryGetValue(type, out IReadOnlyList<string>? expected))
+                continue;
+            if (!columnsByTable.TryGetValue(tableName, out HashSet<string>? actual))
+            {
+                drift.Add($"Table '{tableName}' not found in database");
+                continue;
+            }
+            AppendDrift(drift, tableName, expected, actual);
+        }
+        return drift;
+    }
+
+    /// <summary>逐表比对并把缺失项写入 <paramref name="drift"/>。表不存在与列缺失分开报：
+    /// 后者是"实体已加列而迁移只建不改"的主信号。</summary>
+    private static void AppendDrift(
+        List<string> drift, string tableName, IReadOnlyList<string> expected, HashSet<string> actual)
+    {
+        if (actual.Count == 0)
+        {
+            drift.Add($"Table '{tableName}' not found in database");
+            return;
+        }
+        foreach (string column in expected.Where(column => !actual.Contains(column)))
+        {
+            drift.Add($"Column '{column}' not found in table '{tableName}'");
+        }
+    }
+
+    /// <summary>SQLite：逐表 <c>PRAGMA table_xinfo</c>（<c>table_info</c> 不返回 <c>[Computed]</c>
+    /// 生成的 STORED 列）。表不存在时 PRAGMA 返回空结果集而非抛错。
+    /// 读失败按 ValidateSchemaAsync 口径只记异常类型名，不把驱动消息里的拓扑信息带出。</summary>
+    private async ValueTask<HashSet<string>> ReadSqliteColumnsAsync(string tableName, CancellationToken ct)
+    {
+        HashSet<string> columns = new(StringComparer.Ordinal);
+        await using DbCommand cmd = CreateCommand();
+        // ITM-723 同口径：探活类命令在零超时配置下须有有限兜底
+        cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
+        try
+        {
+            int ordinal = TProvider.ConfigureSchemaCommand(cmd, tableName);
+            await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                columns.Add(reader.GetString(ordinal));
+        }
+        catch (DbException)
+        {
+            // 连接/权限问题：当作"读不到列"，由 AppendDrift 报表缺失。
+            // 取消异常不在此捕获，自然向上传播。
+            columns.Clear();
+        }
+        return columns;
+    }
+
+    /// <summary>PostgreSQL / MySQL：一次查询取回当前 schema 的全部表列。
+    /// 常量 SQL、零参数，表名在内存里与注册表比对，不拼接任何外部输入。</summary>
+    private async ValueTask<Dictionary<string, HashSet<string>>> ReadInformationSchemaColumnsAsync(CancellationToken ct)
+    {
+        string sql = TProvider.Dialect == SqlDialect.MySql
+            ? "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()"
+            : "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()";
+        await using DbCommand cmd = CreateCommand();
+        cmd.CommandText = sql;
+        cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
+        Dictionary<string, HashSet<string>> byTable = new(StringComparer.Ordinal);
+        await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            string table = reader.GetString(0);
+            string column = reader.GetString(1);
+            if (!byTable.TryGetValue(table, out HashSet<string>? set))
+                byTable[table] = set = new HashSet<string>(StringComparer.Ordinal);
+            set.Add(column);
+        }
+        return byTable;
     }
 
     /// <summary>ITM-723：零超时配置（= ADO.NET 无限等待）下 DDL/探活的有限兜底上限。</summary>
@@ -524,7 +650,15 @@ public sealed record MigrationResult(
     IReadOnlyList<string> SkippedIndexes,
     IReadOnlyList<MigrationFailure> FailedIndexes,
     bool Transactional,
-    bool RolledBack);
+    bool RolledBack)
+{
+    /// <summary>迁移后的 schema 漂移清单：实体声明了而库内不存在的列
+    /// （句式 <c>Column '{列}' not found in table '{表}'</c>，与 ValidateSchemaAsync 一致）。
+    /// <para>仅在 <see cref="DbOptions.ValidateMigrationDrift"/> 开启时填充，默认空集合。
+    /// 非空不代表迁移失败：<c>MigrateAsync</c> 只建不改，加列需外部迁移工具；本字段把
+    /// "迁移返回成功但 schema 没跟上"从运行期报错提前到调用点可见。</para></summary>
+    public IReadOnlyList<string> SchemaDrift { get; init; } = [];
+}
 
 /// <summary>迁移失败项——索引 DDL 原文与异常类型名（不含异常消息，避免拓扑信息泄露）。</summary>
 public sealed record MigrationFailure(string Statement, string ErrorType);

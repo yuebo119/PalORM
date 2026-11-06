@@ -1174,26 +1174,39 @@ public static class QueryBuilderExtensions
 
     /// <summary>构建并执行 UPDATE 语句，返回受影响行数。
     /// <para>要求至少一个 <c>Set</c> 子句；WHERE 段含默认过滤（软删/租户）。写操作恒走主连接，不受 ForRead 影响。</para></summary>
+    public static ValueTask<int> ExecuteNonQueryAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+        => ExecuteWriteCoreAsync(builder, "update", builder.BuildUpdateSql(), builder.GetUpdateParameterBindings(), ct);
+
+    /// <summary>构建并执行 DELETE 语句，返回受影响行数。
+    /// <para>至少一个用户 <c>Where</c> 子句是硬要求：默认过滤不计入，表级清空必须显式表达
+    /// （守卫见 <c>QueryBuilder{T}.BuildDeleteSql</c>）。WHERE 段自动含软删与租户过滤。
+    /// 写操作恒走主连接，不受 ForRead 影响。</para></summary>
+    public static ValueTask<int> ExecuteDeleteAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+        => ExecuteWriteCoreAsync(builder, "delete", builder.BuildDeleteSql(), builder.GetDeleteParameterBindings(), ct);
+
+    /// <summary>UPDATE 与 DELETE 共用的写执行内核（单一定义点：复用槽、参数就地写、拦截器三段式、
+    /// tracing/metrics、超时与命令所有权只在这里实现一次）。语句类型由调用方经
+    /// <paramref name="operation"/>、<paramref name="sql"/> 与 <paramref name="updateParameters"/> 决定。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
-        Justification = "UPDATE 管线的命令复用/新建分支与拦截器/观测性三段式是必然复杂度；"
-            + "拆分需跨方法传递命令所有权与参数绑定状态。")]
-    public static async ValueTask<int> ExecuteNonQueryAsync<T>(this QueryBuilder<T> builder, CancellationToken ct = default) where T : class, new()
+        Justification = "写管线的命令复用/新建分支与拦截器/观测性三段式是必然复杂度；"
+            + "拆分需跨方法传递命令所有权与参数绑定状态。UPDATE 与 DELETE 共用本内核，避免两份热路径。")]
+    private static async ValueTask<int> ExecuteWriteCoreAsync<T>(
+        QueryBuilder<T> builder, string operation, string sql,
+        IReadOnlyList<ParameterBinding> updateParameters, CancellationToken ct) where T : class, new()
     {
-        const string operation = "update";
         string provider = builder._dialect.GetName();
         List<IQueryInterceptor> interceptors = builder._interceptors;
         bool observed = builder._tracing || builder._metrics;
-        // ITM-625：SQL 先行（同 ExecuteQueryAsync 顺序）——BuildUpdateSql 守卫抛异常时
-        // 已创建的 Activity 无人 Dispose，污染 Activity.Current 链。
-        string sql = builder.BuildUpdateSql();
+        // ITM-625：SQL 先行（同 ExecuteQueryAsync 顺序）——构建设守卫抛异常时
+        // 已创建的 Activity 无人 Dispose，污染 Activity.Current 链。调用方已保证 SQL 先于本方法求值。
         Activity? activity = builder._tracing ? PalORMMetrics.StartActivity(operation, provider) : null;
         // v3.1：Stopwatch 延迟创建——与 ExecuteQueryAsync 同构（拦截器 OnAfter 需要 Elapsed）。
         // A7（2026-10-01 全 API 逐项轮）：同改时间戳形态。
         long? swStart = observed || interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
         string outcome = "error";
-        // ITM-513: UPDATE 执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError
-        IReadOnlyList<ParameterBinding> updateParameters = builder.GetUpdateParameterBindings();
+        // ITM-513: 写执行管线补齐拦截器，与 SELECT 一致覆盖 OnBefore/OnAfter/OnError。
+        // 参数路由由调用方决定：UPDATE 为 Set+Where+Raw，DELETE 为 Where+Raw。
         QueryContext context = interceptors.Count > 0
             ? new QueryContext(sql, QueryBuilderShared.Materialize(updateParameters, builder._paramFactory), builder._sensitiveMasks)
             : default;

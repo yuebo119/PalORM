@@ -1315,6 +1315,36 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         return built;
     }
 
+    /// <summary>恢复软删行的 UPDATE 全句（SET deleted_at = NULL）——与
+    /// <see cref="GetSoftDeleteUpdateSql{T}"/> 同族骨架，方向相反。WHERE 要求当前已删除，
+    /// 重复恢复返回 0 行（幂等，不刷新时间戳）。</summary>
+    private static string GetRestoreUpdateSql<T>(string tableName, bool hasTenant) where T : class, new()
+    {
+        string tenantFilter = hasTenant ? GetTenantAppendFragment() : "";
+        // S2077 报备（同 GetSoftDeleteUpdateSql）：插值成分全为 QuoteIdentifier 标识符与
+        // const 参数名——用户值经 @p0 绑定
+#pragma warning disable S2077
+        var quotedTable = TProvider.QuoteIdentifier(tableName);
+        var quotedDeletedAt = TProvider.QuoteIdentifier("deleted_at");
+        var quotedPk = TProvider.QuoteIdentifier(GetPkColumn<T>());
+        return $"UPDATE {quotedTable} SET {quotedDeletedAt} = NULL "
+            + $"WHERE {quotedPk} = @p0 AND {quotedDeletedAt} IS NOT NULL{tenantFilter}";
+#pragma warning restore S2077
+    }
+
+    /// <summary>G4 同型：恢复 UPDATE 全句的 2 槽静态缓存取用（bit0=hasTenant）。
+    /// 租户形态由调用方显式传入（与 DeleteAsync 软删分支的 HasTenantFilter 判定同源），
+    /// 避免同一次调用内二次求值。</summary>
+    private static string GetRestoreUpdateSqlFast<T>(EntityRuntimeInfo info, bool hasTenant) where T : class, new()
+    {
+        int slot = hasTenant ? 1 : 0;
+        if (SqlSlots<T>.RestoreUpdate[slot] is { } cached)
+            return cached;
+        string built = GetRestoreUpdateSql<T>(info.TableName, slot == 1);
+        SqlSlots<T>.RestoreUpdate[slot] = built;
+        return built;
+    }
+
     private SessionOperationState.SessionOperationLease EnterOperation(
         object? operationOwner = null)
         => _operationState.Enter(operationOwner);
