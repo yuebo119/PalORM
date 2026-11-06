@@ -16,7 +16,7 @@
 | M1 | `MigrateAsync()` | `DataSession.Schema.cs` | 从 `CreateTableSqlByDialect` 选择方言 DDL；拒绝旧无方言片段 |
 | M2 | `SeedAsync<T>(IEnumerable<T>)` | `DataSession_Bulk.cs` | 非默认稳定主键，事务内 Upsert 幂等 |
 | M3 | `ValidateSchemaAsync<T>()` → `List<string>` | `DataSession.Schema.cs` | `ConfigureSchemaCommand()` 配置安全命令 |
-| M6 | `MigrationResult.SchemaDrift` + `DbOptions.ValidateMigrationDrift` | `DataSession.Schema.cs` / `DbOptions.cs` | 迁移后漂移检测（默认关闭，ADR-W）：逐表比对列集，检出「实体声明了而库内不存在」的列；开启即付每表一次列查询，复用 `ConfigureSchemaCommand`（SQLite 走 `PRAGMA table_xinfo`，含 `[Computed]` 生成列） |
+| M6 | `MigrationResult.SchemaDrift` + `DbOptions.ValidateMigrationDrift` | `DataSession.Schema.cs` / `DbOptions.cs` | 迁移后漂移检测（默认开启，ADR-W）：检出「实体声明了而库内不存在」的列与缺失表，写入结果对象并记 Warning。PostgreSQL/MySQL 一次 `information_schema` 查询取全部表列，SQLite 逐表 `PRAGMA table_xinfo`（含 `[Computed]` 生成列） |
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
@@ -281,7 +281,7 @@
 | `LoggerFactory` | `ILoggerFactory?` |
 | `QueryCache` | `IQueryCache?`——未注入时各会话共享进程级 `BoundedQueryCache` 默认实例（容量 1024）。`BoundedQueryCache` 自 .NET 11 起暴露 OTel 指标（对齐 MemoryCache 标准口径）：`palorm.cache.requests{outcome=hit\|miss}`、`palorm.cache.evictions`、`palorm.cache.entries`、`palorm.cache.estimated_size`，经 `PalORM` Meter 上游 OTLP 导出。 |
 | `ValidateQueryColumnOrder` | ADR-A 列序契约 |
-| `ValidateMigrationDrift` | 迁移后 schema 漂移检测（默认 false，ADR-W）。开启时 `MigrateWithResultAsync` 逐表比对实体声明列与库内实际列，结果写入 `MigrationResult.SchemaDrift`；迁移常在启动路径，默认关闭避免 N 次列查询 |
+| `ValidateMigrationDrift` | 迁移后 schema 漂移检测（默认 **true**，ADR-W）。`MigrateWithResultAsync` 比对实体声明列与库内实际列，结果写入 `MigrationResult.SchemaDrift` 并记 Warning。PostgreSQL/MySQL 一次 `information_schema` 查询，SQLite 逐表 `PRAGMA table_xinfo`；不需要的部署可显式关闭 |
 | `UseSynchronousRowRead` | 全量物化逐行读走同步 `Read()`（MySQL 需开启；SQLite 恒同步；默认 false）。MySQL 实测约 998 vs 1846~2043 ns/行；流式 API 始终异步 |
 
 ---

@@ -1,7 +1,7 @@
-# ADR-W：迁移漂移检测的默认关闭与复用性取舍
+# ADR-W：迁移漂移检测的默认开启与批量查询形态
 
 - 状态：已采纳（2026-11-06）
-- 适用范围：`src/PalORM.Core/DataSession.Schema.cs`、`src/PalORM.Core/DbOptions.cs`、`src/PalORM.Core/DataSession.Schema.cs` 的 `MigrationResult`
+- 适用范围：`src/PalORM.Core/DataSession.Schema.cs`、`src/PalORM.Core/DbOptions.cs`
 
 ## 背景
 
@@ -12,36 +12,42 @@
 但新列并不存在。错误要到第一次 `InsertAsync` 才以驱动错误的形式暴露，且现场与根因相隔一次部署。
 
 `ValidateSchemaAsync<T>` 能查这个问题，但它是显式调用的单实体入口，不是迁移的自然组成部分。
-调用方要在迁移之后额外记住调它，属于"文档约定"而非"机制保证"。
 
 ## 决策
 
-1. `MigrationResult` 增加 `SchemaDrift` 属性（`init`，默认空集合），承载"实体声明了而库内不存在"的列；
-2. `DbOptions` 增加 `ValidateMigrationDrift` 开关，**默认 false**；
-3. 开启时 `MigrateWithResultAsync` 在 ANALYZE 之后逐表比对，检出即写入 `SchemaDrift`；
-4. 检测复用 `IDbProvider.ConfigureSchemaCommand`，不新增 Provider 契约，也不新写方言分支；
+1. `MigrationResult` 增加 `SchemaDrift` 属性（`init`，默认空集合）；
+2. `DbOptions` 增加 `ValidateMigrationDrift`，**默认 true**；
+3. 检测形态按方言分层：PostgreSQL/MySQL 一次 `information_schema` 查询取回当前 schema 全部表列，
+   在内存里按注册表筛选；SQLite 逐表 `PRAGMA table_xinfo`（无法跨表聚合，但本地库与内存库没有网络往返）；
+4. 检出漂移时写 `SchemaDrift`，并调用 `_logger.LogWarning`（默认会话是 NullLogger，零分配静默）；
 5. 同期修复 SQLite 的 `ConfigureSchemaCommand`：`PRAGMA table_info` 改为 `table_xinfo`。
 
-## 为什么默认关闭
+## 为什么默认开启
 
-迁移常见于应用启动路径。逐表列查询是 N 次往返：50 表在本地 SQLite 约 5ms、本地 PG 约 50ms、
-远程 PG 可到 100ms 以上。把这个成本放进默认启动路径，会让"迁移"从一次 DDL 批量变成一次 schema 巡检。
+初版曾定为默认关闭，理由是"逐表列查询是 N 次往返，而迁移常在启动路径"。改判的依据是成本被
+形态变更抹掉了：
 
-需要"迁移即校验"的部署显式打开；只需一次性检查的场景直接调 `ValidateSchemaAsync`，两者语义同源。
+| 形态 | PostgreSQL/MySQL 往返 | SQLite 往返 | 是否值得默认开 |
+|---|---|---|---|
+| 逐表查询（初版） | N 次（50 表约 50~150ms） | N 次（本地，约 5~15ms） | 否 |
+| 一次 information_schema（本版） | 1 次（约 1~3ms） | N 次（本地，无网络成本） | 是 |
 
-## 为什么不用批量 information_schema 查询
+一次往返对启动路径可忽略，而"迁移返回成功但 schema 没跟上"是高代价静默失败。默认关闭时的
+真实风险是：没有人会记得打开开关，缺陷继续在生产写入时才暴露。
 
-方案阶段考虑过 PG/MySQL 各发一次 `information_schema.columns WHERE table_name = ANY(...)`、
-SQLite 逐表 `PRAGMA` 的分层形态。放弃的理由：
+默认开启同时配合日志：只填结果对象、无人读取，等于白付一次往返。检出时写 Warning，让配置了
+LoggerFactory 的部署在默认路径上就有声音。
 
-- `ConfigureSchemaCommand` 已在三方言就绪，表名在 MySQL/SQLite 走标识符转义、在 PG 走参数，
-  注入面为零；批量形态需要另写一套表名参数化逻辑；
-- 批量形态要为 PG/MySQL/SQLite 各写一条 SQL 与一个读取分支，约 80 行，且与 `ValidateSchemaAsync`
-  形成第二套 schema 查询真源；
-- 开关默认关闭，N 次往返不是默认成本。
+## 为什么批量查询不走 IDbProvider 契约
 
-若未来出现表数量级跃升（例如 200 表以上且迁移在每次启动执行），再评估批量形态。
-重开触发条件：单次 `MigrateAsync` 的漂移检测实际耗时超过 200ms 且该调用在启动路径。
+`ConfigureSchemaCommand` 是"按表取列名"的 Provider 方法，天然逐表。批量形态需要"一次取多表列"，
+若加进 `IDbProvider`（`static abstract` 接口）会让所有实现者承担新成员，属于破坏性契约变更。
+
+因此批量查询写在 `DataSession` 内，按 `SqlDialect` 分支（PostgreSQL 用 `current_schema()`，
+MySQL 用 `DATABASE()`）。两条 SQL 都是常量、零参数，表名在内存里与注册表比对，注入面为零。
+G31 方言感知门禁覆盖该分支。
+
+SQLite 仍复用 `ConfigureSchemaCommand`，保留单一真源；这也是为什么 `table_xinfo` 修复放在 Provider 层。
 
 ## SQLite 的 `table_info` → `table_xinfo` 修复
 
@@ -50,17 +56,24 @@ SQLite 逐表 `PRAGMA` 的分层形态。放弃的理由：
 根因是 `PRAGMA table_info` **不返回 GENERATED 列**。`[Computed]` 映射为
 `GENERATED ALWAYS AS (...) STORED`，因此列永远"查不到"。
 
-这个缺陷不止影响新开关：`ValidateSchemaAsync` 走同一个 Provider 方法，对含计算列的实体同样会
-误报缺失列，只是既有测试只有一条不含计算列的正向用例，从未覆盖。
+这个缺陷不止影响新特性：`ValidateSchemaAsync` 走同一个 Provider 方法，对含计算列的实体同样误报
+缺失列，只是既有测试只有一条不含计算列的正向用例，从未覆盖。
 
 改为 `PRAGMA table_xinfo` 后，返回列集包含 hidden 与 generated 列；普通表（本项目不生成虚拟表）
-的列集与 `table_info` 逐字一致，返回的列名序号仍为 1。最低引擎版本 3.26。
+的列集与 `table_info` 逐字一致，返回的列名序号仍为 1。最低引擎 3.26。
 
 ## 后果
 
 - 迁移返回对象首次能表达"迁移成功但 schema 未跟上"，错误从运行期提前到调用点；
-- 默认路径零成本，开关关闭时不构造漂移清单；
+- 默认路径成本为 PostgreSQL/MySQL 一次往返、SQLite N 次本地 PRAGMA；
+- 检出漂移不抛异常，只写结果与日志：迁移的成功/失败语义不变，避免把"配置漂移"升级为启动失败；
 - `ValidateSchemaAsync` 对计算列的既有误报一并修复；
 - `MigrationResult` 与 `DbOptions` 各新增一个成员，均向后兼容（SemVer MINOR）；
-- 未解决：只检列集合，不检列类型、多余列与索引缺失。这三项需要独立的类型比对机制，
-  留作后续议题，不在本 ADR 范围内。
+- 未解决：只检列集合，不检列类型、多余列与索引缺失，留作后续议题。
+
+## 修订记录
+
+- 初稿（同日）：默认关闭 + 逐表查询，理由是避免启动路径 N 次往返；
+- 修订（同日，用户要求按最优方案处理）：改为默认开启 + 一次 `information_schema` 查询。
+  改判依据是往返次数从 N 降到 1，初稿的成本前提不再成立；同时补日志出口，
+  解决"默认开启但无人读取"的空转风险。
