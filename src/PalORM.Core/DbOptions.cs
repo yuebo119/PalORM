@@ -9,6 +9,52 @@ namespace PalORM;
 /// 这些路径会输出 ConnectionString/ReadConnectionString 明文。日志请使用 <c>{Options}</c>（走 ToString）。</para></summary>
 public sealed record DbOptions
 {
+    /// <summary>F2b（2026-11-06）：本实例已通过 <see cref="Validate"/> 的标志。
+    /// <c>CreateAsync</c> 每会话调用一次 <see cref="Validate"/>（约 24 项纯数值比较），
+    /// 同一 <c>DbOptions</c> 实例反复建会话时短路跳过。<see cref="DbOptions"/> 是 init-only
+    /// record，实例属性构造后不可变，故一次通过即恒通过。</summary>
+    private bool _validated;
+
+    /// <summary>F2b：显式 copy constructor——<c>with</c> 表达式产生的新实例必须重新校验。
+    /// <para>C# 默认生成的 copy ctor 会复制<b>全部字段</b>（含 <see cref="_validated"/>），
+    /// 实测 <c>a with { ... }</c> 后新实例的 <c>_validated</c> 仍为 true——若沿用默认实现，
+    /// <c>WithPool</c> / 环境变量覆盖 / 用户 <c>with</c> 改出非法配置后会被静默跳过校验
+    ///（ITM-517 守护失效）。故显式定义副本构造：复制全部状态，唯独把标志归零。</para>
+    /// <para><b>维护契约</b>：本类新增 init 属性时必须同步在此复制一条，否则 <c>with</c>
+    /// 会静默丢值（编译器不报「漏复制」）。由 <c>test/PalORM.Core.Tests/DbOptionsTests.cs</c> 的
+    /// <c>ValidatedOptions_WithExpression_ResetsFlag_AndPreservesAllProperties</c> 逐属性锁定。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S1144",
+        Justification = "record 的 copy constructor 由 with 表达式隐式调用，不构成「未使用的私有构造器」；删除它会导致 _validated 被 with 复制、非法配置校验失效。")]
+    private DbOptions(DbOptions original)
+    {
+        ConnectionString = original.ConnectionString;
+        ReadConnectionString = original.ReadConnectionString;
+        ConnectionTimeout = original.ConnectionTimeout;
+        PoolConnectionValidationInterval = original.PoolConnectionValidationInterval;
+        CommandTimeout = original.CommandTimeout;
+        MaxRetries = original.MaxRetries;
+        RetryBackoff = original.RetryBackoff;
+        OverallDeadline = original.OverallDeadline;
+        MaxPoolSize = original.MaxPoolSize;
+        MinPoolSize = original.MinPoolSize;
+        PoolIdleTimeoutSeconds = original.PoolIdleTimeoutSeconds;
+        PoolLifetimeMinutes = original.PoolLifetimeMinutes;
+        CircuitBreakerThreshold = original.CircuitBreakerThreshold;
+        CircuitBreakerResetAfter = original.CircuitBreakerResetAfter;
+        CircuitBreakerScope = original.CircuitBreakerScope;
+        Interceptors = original.Interceptors;
+        ValidateQueryColumnOrder = original.ValidateQueryColumnOrder;
+        ValidateMigrationDrift = original.ValidateMigrationDrift;
+        UseSynchronousRowRead = original.UseSynchronousRowRead;
+        PrepareCacheSize = original.PrepareCacheSize;
+        PrepareThreshold = original.PrepareThreshold;
+        QueryCache = original.QueryCache;
+        SessionSetupSql = original.SessionSetupSql;
+        ReadSessionSetupSql = original.ReadSessionSetupSql;
+        LoggerFactory = original.LoggerFactory;
+        _validated = false;
+    }
+
     /// <summary>主库连接串（必需）。支持环境变量引用：$ENV:VAR_NAME。</summary>
     public required string ConnectionString { get; init; }
 
@@ -181,9 +227,12 @@ public sealed record DbOptions
 
     /// <summary>校验配置数值合法性（ITM-517）——init 属性可绕过 WithPool 的构造校验直接设非法值，
     /// 在会话创建入口统一兜底。CommandTimeout=Zero 是合法的"无限等待"，此处不拒绝。
-    /// <para><b>v4.6 公开化</b>：用户可在 CreateAsync 前主动调用，实现 fail-fast。</para></summary>
+    /// <para><b>v4.6 公开化</b>：用户可在 CreateAsync 前主动调用，实现 fail-fast。</para>
+    /// <para><b>F2b（2026-11-06）</b>：本实例已通过校验则短路（record 属性 init-only 不可变，
+    /// 一次通过即恒通过）。<c>with</c> 新实例经显式 copy ctor 把标志归零，非法配置仍会抛。</para></summary>
     public void Validate()
     {
+        if (_validated) return;
         ArgumentOutOfRangeException.ThrowIfNegative(CommandTimeout.Ticks, nameof(CommandTimeout));
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
             CommandTimeout.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(CommandTimeout));
@@ -228,6 +277,7 @@ public sealed record DbOptions
         // 与熔断段；自定义 RetryBackoff 的 Task.Delay 上界由 ResilienceExecutor 构造期守卫承担。
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
             ConnectionTimeout.TotalMilliseconds, MaxCancelAfterMilliseconds, nameof(ConnectionTimeout));
+        _validated = true;
     }
 
     /// <summary>CancellationTokenSource.CancelAfter / Task.Delay 的 delay 上限（uint.MaxValue-1 毫秒）。

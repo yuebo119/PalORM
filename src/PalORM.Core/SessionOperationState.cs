@@ -756,8 +756,21 @@ internal sealed class SessionOperationState
         }
     }
 
+    /// <summary>会话可用性门禁（F2c，2026-11-06）：活动态走免锁快路径。
+    /// <para><b>为什么可以免锁</b>：<see cref="_disposing"/> 是 <c>_state != 0</c> 的
+    /// volatile 镜像（0 = 活动，1 = 释放中/已释放/已驻留），由 Dispose/Park 在取锁前
+    /// 经 <c>Volatile.Write</c> 置位——与锁内 <c>_state</c> 写入构成 release/acquire 配对。
+    /// 原判据 <c>_state is 2 or 3 || (_state == 1 &amp;&amp; !currentTransaction)</c> 在
+    /// <c>_state == 0</c> 时恒不抛，与 currentTransaction 无关，故镜像为 0 可直接返回。</para>
+    /// <para><b>失败回落锁</b>：释放中且当前事务流的合法调用（_disposing=1）、以及
+    /// Dispose 抢先置位的竞态窗口，都回落原锁内路径逐位判定，语义不变。</para></summary>
     internal void EnsureAvailable()
     {
+        // 方案措辞为 Volatile.Read(_state)==0；这里改用既有的 _disposing 镜像——它是
+        // 专为无锁快路径设计、有完整置位协议的 volatile 字段（TryEnterFast 同款），
+        // 避免给普通字段 _state 引入半套 volatile 读写协议。
+        if (Volatile.Read(ref _disposing) == 0)
+            return;
         lock (_sync)
         {
             bool currentTransaction = _transactionOwner is not null
