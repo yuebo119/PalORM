@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -16,7 +17,14 @@ internal enum FaultKind
 /// <summary>一条注入计划：作用于第 <paramref name="CommandOrdinal"/> 条命令（1 起）。
 /// 序号是「命令被创建的顺序」而不是「执行成功的次数」——这样即使前一条命令失败，
 /// 后续规则的序号也不会漂移（按执行次数计的话，一次失败会让后面所有规则错位一格）。</summary>
-internal sealed record FaultPlan(int CommandOrdinal, FaultKind Kind, Exception? Exception, TimeSpan Delay);
+/// <param name="CommandOrdinal">作用的命令创建序号（1 起）。</param>
+/// <param name="Kind">故障类型。</param>
+/// <param name="Exception">Exception 类型要抛出的异常。</param>
+/// <param name="Delay">Delay 类型要等待的时长。</param>
+/// <param name="Once">仅在该命令的第一次执行注入。复用命令（PL-2 晋升槽）会被多次执行，
+/// 按序号注入若每次都抛，会把「夹具重复注入」误判成「产品持续失败」。连接判死类故障
+/// 必须模拟「那一次执行时连接真的死了、后续还原底层连接」，故需要一次性语义。</param>
+internal sealed record FaultPlan(int CommandOrdinal, FaultKind Kind, Exception? Exception, TimeSpan Delay, bool Once = false);
 
 /// <summary>按命令序号注入故障的 <see cref="DbConnection"/> 包装（FLT-1）。
 /// <para>设计取舍：包装而不替换——被测代码拿到的是真实的驱动连接，故障只在我们选的
@@ -25,8 +33,10 @@ internal sealed record FaultPlan(int CommandOrdinal, FaultKind Kind, Exception? 
 internal sealed class FaultyConnection : DbConnection
 {
     private readonly DbConnection _inner;
-    private readonly List<FaultPlan> _plans = [];
-    private readonly List<(int CommandOrdinal, int Row, Exception Exception)> _readerFaults = [];
+    // 并发化（高并发压测方案 M0）：注入计划按命令序号分区，允许多个 worker 并发登记计划。
+    // 序号是命令创建序号，同一序号只会有一条计划；重复登记视为夹具错误，直接拒绝而不是静默覆盖。
+    private readonly ConcurrentDictionary<int, FaultPlan> _plans = new();
+    private readonly ConcurrentDictionary<int, (int CommandOrdinal, int Row, Exception Exception)> _readerFaults = new();
     private int _commandOrdinal;
 
     internal FaultyConnection(DbConnection inner)
@@ -38,20 +48,22 @@ internal sealed class FaultyConnection : DbConnection
     internal int CommandsCreated => Volatile.Read(ref _commandOrdinal);
 
     internal FaultyConnection FailOnCommand(int ordinal, Exception exception)
-    {
-        _plans.Add(new FaultPlan(ordinal, FaultKind.Exception, exception, default));
-        return this;
-    }
+        => AddPlan(ordinal, new FaultPlan(ordinal, FaultKind.Exception, exception, default));
+
+    /// <summary>仅在该命令第一次执行时抛异常（连接判死类故障专用，见 <see cref="FaultPlan.Once"/>）。</summary>
+    internal FaultyConnection FailOnceOnCommand(int ordinal, Exception exception)
+        => AddPlan(ordinal, new FaultPlan(ordinal, FaultKind.Exception, exception, default, Once: true));
 
     internal FaultyConnection DelayOnCommand(int ordinal, TimeSpan delay)
-    {
-        _plans.Add(new FaultPlan(ordinal, FaultKind.Delay, null, delay));
-        return this;
-    }
+        => AddPlan(ordinal, new FaultPlan(ordinal, FaultKind.Delay, null, delay));
 
     internal FaultyConnection CancelOnCommand(int ordinal)
+        => AddPlan(ordinal, new FaultPlan(ordinal, FaultKind.Cancel, null, default));
+
+    private FaultyConnection AddPlan(int ordinal, FaultPlan plan)
     {
-        _plans.Add(new FaultPlan(ordinal, FaultKind.Cancel, null, default));
+        if (!_plans.TryAdd(ordinal, plan))
+            throw new InvalidOperationException($"命令序号 {ordinal} 已登记故障计划；同一序号只能有一条计划。");
         return this;
     }
 
@@ -59,20 +71,20 @@ internal sealed class FaultyConnection : DbConnection
     /// （1 起：1 = 第一次 Read 就失败）。</summary>
     internal FaultyConnection FailReaderAtRow(int commandOrdinal, int row, Exception exception)
     {
-        _readerFaults.Add((commandOrdinal, row, exception));
+        if (!_readerFaults.TryAdd(commandOrdinal, (commandOrdinal, row, exception)))
+            throw new InvalidOperationException($"命令序号 {commandOrdinal} 已登记 reader 故障；同一序号只能有一条计划。");
         return this;
     }
 
-    internal IReadOnlyList<FaultPlan> Plans => _plans;
+    // 既有 FLT 用例只读 Count，返回快照即可；命令侧走 TryGetValue 按序号查，不再线性扫描。
+    internal IReadOnlyList<FaultPlan> Plans => [.. _plans.Values];
 
     /// <summary>底层真实连接。命令包装把 <see cref="DbConnection"/> 属性回设时必须换成它——
     /// 驱动只认自己的连接实例，把包装层交给底层命令会让 Open/事务状态判定全部错位。</summary>
     internal DbConnection InnerConnection => _inner;
 
     internal (int CommandOrdinal, int Row, Exception Exception)? ReaderFaultFor(int ordinal)
-        => _readerFaults.FirstOrDefault(f => f.CommandOrdinal == ordinal) is var fault && fault.CommandOrdinal > 0
-            ? fault
-            : null;
+        => _readerFaults.TryGetValue(ordinal, out var fault) ? fault : null;
 
     protected override DbCommand CreateDbCommand()
         => new FaultyCommand(
@@ -126,9 +138,11 @@ internal sealed class FaultyCommand : DbCommand
     private readonly FaultyConnection _owner;
     private readonly DbCommand _inner;
     private readonly int _ordinal;
-    private readonly IReadOnlyList<FaultPlan> _plans;
+    private readonly IReadOnlyDictionary<int, FaultPlan> _plans;
+    private int _execCount;
 
-    internal FaultyCommand(FaultyConnection owner, DbCommand inner, int ordinal, IReadOnlyList<FaultPlan> plans)
+    internal FaultyCommand(
+        FaultyConnection owner, DbCommand inner, int ordinal, IReadOnlyDictionary<int, FaultPlan> plans)
     {
         _owner = owner;
         _inner = inner;
@@ -138,11 +152,14 @@ internal sealed class FaultyCommand : DbCommand
 
     internal int Ordinal => _ordinal;
 
-    private FaultPlan? Plan => _plans.FirstOrDefault(p => p.CommandOrdinal == _ordinal);
+    private FaultPlan? Plan => _plans.TryGetValue(_ordinal, out FaultPlan? plan) ? plan : null;
 
     private async ValueTask ApplyFaultAsync(CancellationToken cancellationToken)
     {
+        int execution = Interlocked.Increment(ref _execCount);
         if (Plan is not { } plan) return;
+        // Once：还原「只有那一次执行时连接死了」，后续执行照常透传底层连接。
+        if (plan.Once && execution > 1) return;
         switch (plan.Kind)
         {
             case FaultKind.Exception:
