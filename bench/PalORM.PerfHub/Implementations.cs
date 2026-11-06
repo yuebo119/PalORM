@@ -6,6 +6,7 @@ using System.Text.Json;
 using Dapper;
 using Npgsql;
 using NpgsqlTypes;
+using PalORM;
 using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Sqlite;
@@ -56,6 +57,22 @@ internal interface IPerfImplementation
     Task<List<S1Row>> KeysetPageAsync(DbConnection conn, long lastId, int pageSize, CancellationToken ct);
     Task<List<S1Row>> WhereInAsync(DbConnection conn, long[] ids, CancellationToken ct);
     Task<long> CountAsync(DbConnection conn, CancellationToken ct);
+
+    // ── 生命周期与存在性（2026-11-06 新增四项 API 的对照面）──
+    /// <summary>存在性判断。PalORM 走 <c>AnyAsync</c>（SELECT 1 … LIMIT 1 命中即短路），
+    /// 另外两臂写等价 SQL。</summary>
+    Task<bool> AnyAsync(DbConnection conn, CancellationToken ct);
+    /// <summary>条件删除单语句（DELETE … WHERE name = @p），返回受影响行数。
+    /// 与 PalORM 的 <c>ExecuteDeleteAsync</c> 同语义；两臂手写 SQL。条件列取 perf_soft 的
+    /// 小写 name（PG 标识符大小写敏感，全小写让三臂写同一段不带引号的 SQL）。</summary>
+    Task<int> DeleteWhereAsync(DbConnection conn, string name, CancellationToken ct);
+
+    /// <summary>单行软删（UPDATE deleted_at）——HardDelete 与 Restore 的对照基线。</summary>
+    Task<int> SoftDeleteAsync(DbConnection conn, long id, CancellationToken ct);
+    /// <summary>恢复软删行（UPDATE deleted_at = NULL）。</summary>
+    Task<int> RestoreAsync(DbConnection conn, long id, CancellationToken ct);
+    /// <summary>物理删除单行，绕过软删改写。</summary>
+    Task<int> HardDeleteAsync(DbConnection conn, long id, CancellationToken ct);
 
     // ── 阶段 2 新增（v2 方案 §2 #11/12/16/17）──
     /// <summary>批量 UPSERT（方言：ON CONFLICT / ON DUPLICATE KEY）。</summary>
@@ -117,6 +134,9 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
     private bool? _mysqlLocalInfile;
 
     private string T => Dataset.Table(dialect.Dialect);
+
+    /// <summary>软删生命周期表（perf_soft）的引用名——SoftDelete / Restore / HardDelete 三项专用。</summary>
+    private string ST => Dataset.SoftTable(dialect.Dialect);
     private string Q(string c) => Dataset.Q(dialect.Dialect, c);
     private string Cols => Dataset.SelectColumns(dialect.Dialect);
     private Dialect D => dialect.Dialect;
@@ -979,6 +999,60 @@ internal sealed class AdoNetImpl(DialectInfo dialect) : IPerfImplementation
         return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    public async Task<bool> AnyAsync(DbConnection conn, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT 1 FROM {T} LIMIT 1";
+        object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return result is not null and not DBNull;
+    }
+
+    public async Task<int> DeleteWhereAsync(DbConnection conn, string name, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"DELETE FROM {ST} WHERE name = {Dataset.P(0)}";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = $"{Dataset.P(0)}";
+        p.Value = name;
+        cmd.Parameters.Add(p);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task<int> SoftDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"UPDATE {ST} SET deleted_at = CURRENT_TIMESTAMP "
+            + $"WHERE id = {Dataset.P(0)} AND deleted_at IS NULL";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = $"{Dataset.P(0)}";
+        p.Value = id;
+        cmd.Parameters.Add(p);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task<int> RestoreAsync(DbConnection conn, long id, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"UPDATE {ST} SET deleted_at = NULL "
+            + $"WHERE id = {Dataset.P(0)} AND deleted_at IS NOT NULL";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = $"{Dataset.P(0)}";
+        p.Value = id;
+        cmd.Parameters.Add(p);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task<int> HardDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+    {
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"DELETE FROM {ST} WHERE id = {Dataset.P(0)}";
+        DbParameter p = cmd.CreateParameter();
+        p.ParameterName = $"{Dataset.P(0)}";
+        p.Value = id;
+        cmd.Parameters.Add(p);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     // ── 租户会话 / OwnedJson / SessionBatch ──
 
     /// <summary>bench_tenant 播种——首次全量（多值 INSERT 分批 + 建快照表），后续走
@@ -1626,6 +1700,9 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
     }
 
     private string T => Dataset.Table(dialect.Dialect);
+
+    /// <summary>软删生命周期表（perf_soft）的引用名——SoftDelete / Restore / HardDelete 三项专用。</summary>
+    private string ST => Dataset.SoftTable(dialect.Dialect);
     private string C(string c) => Dataset.Q(dialect.Dialect, c);
     private string Cols => Dataset.SelectColumns(dialect.Dialect);
     private string TT => Dataset.TenantTable(dialect.Dialect);
@@ -1863,6 +1940,25 @@ internal sealed class DapperImpl(DialectInfo dialect) : IPerfImplementation
 
     public async Task<long> CountAsync(DbConnection conn, CancellationToken ct)
         => await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {T}").ConfigureAwait(false);
+
+    public async Task<bool> AnyAsync(DbConnection conn, CancellationToken ct)
+        => await conn.ExecuteScalarAsync<long?>($"SELECT 1 FROM {T} LIMIT 1").ConfigureAwait(false) is not null;
+
+    public async Task<int> DeleteWhereAsync(DbConnection conn, string name, CancellationToken ct)
+        => await conn.ExecuteAsync($"DELETE FROM {ST} WHERE name = @name", new { name }).ConfigureAwait(false);
+
+    public async Task<int> SoftDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+        => await conn.ExecuteAsync(
+            $"UPDATE {ST} SET deleted_at = CURRENT_TIMESTAMP WHERE id = @id AND deleted_at IS NULL",
+            new { id }).ConfigureAwait(false);
+
+    public async Task<int> RestoreAsync(DbConnection conn, long id, CancellationToken ct)
+        => await conn.ExecuteAsync(
+            $"UPDATE {ST} SET deleted_at = NULL WHERE id = @id AND deleted_at IS NOT NULL",
+            new { id }).ConfigureAwait(false);
+
+    public async Task<int> HardDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+        => await conn.ExecuteAsync($"DELETE FROM {ST} WHERE id = @id", new { id }).ConfigureAwait(false);
 
     // ── 租户会话 / OwnedJson / SessionBatch ──
 
@@ -2675,6 +2771,71 @@ internal sealed class PalormImpl(DialectInfo dialect) : IPerfImplementation
     private static Task<long> CountCoreAsync<TProvider>(DbConnection conn, CancellationToken ct)
         where TProvider : IDbProvider, new()
         => Session<TProvider>(conn).CountAsync<S1Row>(ct: ct).AsTask();
+
+    public Task<bool> AnyAsync(DbConnection conn, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => AnyCoreAsync<SqliteProvider>(conn, ct),
+            Dialect.MySql => AnyCoreAsync<MySqlProvider>(conn, ct),
+            Dialect.PostgreSql => AnyCoreAsync<PostgreSqlProvider>(conn, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static Task<bool> AnyCoreAsync<TProvider>(DbConnection conn, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).AnyAsync<S1Row>(ct: ct).AsTask();
+
+    public Task<int> DeleteWhereAsync(DbConnection conn, string name, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => DeleteWhereCoreAsync<SqliteProvider>(conn, name, ct),
+            Dialect.MySql => DeleteWhereCoreAsync<MySqlProvider>(conn, name, ct),
+            Dialect.PostgreSql => DeleteWhereCoreAsync<PostgreSqlProvider>(conn, name, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static Task<int> DeleteWhereCoreAsync<TProvider>(DbConnection conn, string name, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).From<SoftRow>().Where($"name = {name}").ExecuteDeleteAsync(ct).AsTask();
+
+    public Task<int> SoftDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => SoftDeleteCoreAsync<SqliteProvider>(conn, id, ct),
+            Dialect.MySql => SoftDeleteCoreAsync<MySqlProvider>(conn, id, ct),
+            Dialect.PostgreSql => SoftDeleteCoreAsync<PostgreSqlProvider>(conn, id, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static Task<int> SoftDeleteCoreAsync<TProvider>(DbConnection conn, long id, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).DeleteAsync<SoftRow>(id, ct).AsTask();
+
+    public Task<int> RestoreAsync(DbConnection conn, long id, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => RestoreCoreAsync<SqliteProvider>(conn, id, ct),
+            Dialect.MySql => RestoreCoreAsync<MySqlProvider>(conn, id, ct),
+            Dialect.PostgreSql => RestoreCoreAsync<PostgreSqlProvider>(conn, id, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static Task<int> RestoreCoreAsync<TProvider>(DbConnection conn, long id, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).RestoreAsync<SoftRow>(id, ct).AsTask();
+
+    public Task<int> HardDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+        => D switch
+        {
+            Dialect.Sqlite => HardDeleteCoreAsync<SqliteProvider>(conn, id, ct),
+            Dialect.MySql => HardDeleteCoreAsync<MySqlProvider>(conn, id, ct),
+            Dialect.PostgreSql => HardDeleteCoreAsync<PostgreSqlProvider>(conn, id, ct),
+            _ => throw UnsupportedDialect(D)
+        };
+
+    private static Task<int> HardDeleteCoreAsync<TProvider>(DbConnection conn, long id, CancellationToken ct)
+        where TProvider : IDbProvider, new()
+        => Session<TProvider>(conn).HardDeleteAsync<SoftRow>(id, ct).AsTask();
 
     // ── 租户会话 / OwnedJson / SessionBatch ──
 

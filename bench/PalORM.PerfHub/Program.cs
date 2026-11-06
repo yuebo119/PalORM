@@ -1155,6 +1155,37 @@ internal static class Program
                 _ = await im.BulkDeleteAsync(c, batch, ct).ConfigureAwait(false);
             }, ct).ConfigureAwait(false);
 
+        // DeleteWhere：单语句条件删除（DELETE … WHERE name = @p），与 BulkDelete 的主键集合
+        // 形态互补（2026-11-06 新增 ExecuteDeleteAsync 的对照面）。每轮删一个不同 name，
+        // 避开"已删空再删"的空操作轮；条件列取 perf_soft 的小写 name。
+        await MeasAsync(info, impl, "DeleteWhere", "CRUD", rows, conn, results, scale, softDeleteReset,
+            async (im, c, i) => _ = await im.DeleteWhereAsync(c, $"soft-{i % rows}", ct).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
+
+        // ── 软删生命周期三项（2026-11-06）──
+        // 每轮处理一行（Id = (i % rows) + 1）；prepare 只在预热前与计时前各播种一次（不是每轮），
+        // 迭代上限 200 远小于最小档 2000 行，因此每轮都是真实命中，不会退化成空操作。
+        Task softDeleteReset(DbConnection c)
+            => Dataset.SeedSoftAsync(c, info.Dialect, rows, deleted: false, ct);
+        Task restoreReset(DbConnection c)
+            => Dataset.SeedSoftAsync(c, info.Dialect, rows, deleted: true, ct);
+        Task hardDeleteReset(DbConnection c)
+            => Dataset.SeedSoftAsync(c, info.Dialect, rows, deleted: false, ct);
+
+        await MeasAsync(info, impl, "SoftDelete", "CRUD", rows, conn, results, scale, softDeleteReset,
+            async (im, c, i) => _ = await im.SoftDeleteAsync(c, (i % rows) + 1, ct).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
+
+        // Restore 的对照面：同样的单行 UPDATE，方向相反（deleted_at 置 NULL）
+        await MeasAsync(info, impl, "Restore", "CRUD", rows, conn, results, scale, restoreReset,
+            async (im, c, i) => _ = await im.RestoreAsync(c, (i % rows) + 1, ct).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
+
+        // HardDelete：绕过软删改写的物理删除，与 SoftDelete 同表同行、只差语句形态
+        await MeasAsync(info, impl, "HardDelete", "CRUD", rows, conn, results, scale, hardDeleteReset,
+            async (im, c, i) => _ = await im.HardDeleteAsync(c, (i % rows) + 1, ct).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
+
         // ── Query ──（三项都带 reset：前一项 BulkDelete 会把 perf_s1 删到接近空表，
         // 不带 reset 就在空表上测分页/IN/计数，而空的程度取决于 BulkDelete 消费了多少轮）
         await MeasAsync(info, impl, "KeysetPage", "Query", rows, conn, results, scale, reset,
@@ -1167,6 +1198,12 @@ internal static class Program
 
         await MeasAsync(info, impl, "Count", "Query", rows, conn, results, scale, reset,
             async (im, c, i) => _ = await im.CountAsync(c, ct).ConfigureAwait(false),
+            ct).ConfigureAwait(false);
+
+        // Any：与 Count 同过滤语义，但 SELECT 1 … LIMIT 1 命中即短路，不做聚合计数
+        //（2026-11-06 新增 API 的对照面；判据：分配应低于 Count，时延不高于 Count）
+        await MeasAsync(info, impl, "Any", "Query", rows, conn, results, scale, reset,
+            async (im, c, i) => _ = await im.AnyAsync(c, ct).ConfigureAwait(false),
             ct).ConfigureAwait(false);
 
         // ── 阶段 2 新增测项 ──
@@ -1512,7 +1549,9 @@ internal static class Program
         "TxSingleInsert", "TxHundredInserts", "TxBulkInsert", "TxRollback",
         "TenantCount", "TenantCountWhere", "TenantGetAll", "OwnedJsonQuery", "SessionBatchInserts",
         "EnumInserts", "GetAllAsync", "PooledGetByKey",
-        "PooledInsert", "PooledUpdate", "PooledBulkInsert"
+        "PooledInsert", "PooledUpdate", "PooledBulkInsert",
+        // 2026-11-06：生命周期与存在性四项 API 的对照面
+        "Any", "DeleteWhere", "SoftDelete", "Restore", "HardDelete"
     ];
 
     /// <summary>PL-4：比值不计比的项。地板这两项直接返回插值字面量（见

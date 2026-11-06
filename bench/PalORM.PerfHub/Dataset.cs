@@ -1,5 +1,7 @@
+using System.Data.Common;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using PalORM.Testing;
 
@@ -119,6 +121,59 @@ internal static class Dataset
         => string.Join(", ", ColumnNames.Select(c => Q(dialect, c)));
 
     public static string Table(Dialect dialect) => Q(dialect, "perf_s1");
+
+    // ── 软删生命周期表（2026-11-06：SoftDelete / Restore / HardDelete 的对照表）──
+
+    /// <summary>软删基准表（perf_soft）——id / name / deleted_at 三列，全小写且无租户。
+    /// <para><b>为什么列名全小写</b>：PostgreSQL 的标识符引用后大小写敏感（"Qty" ≠ qty），
+    /// 三臂手写 SQL 若带 PascalCase 列名就必须按方言加引号，而 PalORM 的 Where 收
+    /// FormattableString、列名不能进插值。全小写列名让三臂写同一段不带引号的 SQL，
+    /// 测量差异只剩"谁生成 SQL/绑定参数"这一层。</para></summary>
+    public static string SoftTable(Dialect dialect) => Q(dialect, "perf_soft");
+
+    public static string CreateSoftTableSql(Dialect dialect) => dialect switch
+    {
+        Dialect.Sqlite => "CREATE TABLE IF NOT EXISTS perf_soft (\"id\" INTEGER PRIMARY KEY, \"name\" TEXT NOT NULL, \"deleted_at\" TEXT NULL)",
+        Dialect.MySql => "CREATE TABLE IF NOT EXISTS perf_soft (`id` BIGINT PRIMARY KEY, `name` TEXT NOT NULL, `deleted_at` TEXT NULL)",
+        Dialect.PostgreSql => "CREATE TABLE IF NOT EXISTS perf_soft (\"id\" BIGINT PRIMARY KEY, \"name\" TEXT NOT NULL, \"deleted_at\" TEXT NULL)",
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect))
+    };
+
+    /// <summary>中性播种（不依赖任何 ORM 臂）：建表（IF NOT EXISTS）后清表并按批多值 INSERT
+    /// 重建 rows 行。<paramref name="deleted"/> 决定 deleted_at 初值——Restore 需要"全部已删"的起点。</summary>
+    public static async Task SeedSoftAsync(
+        DbConnection conn, Dialect dialect, int rows, bool deleted, CancellationToken ct)
+    {
+        string table = SoftTable(dialect);
+        await using (DbCommand create = conn.CreateCommand())
+        {
+            create.CommandText = CreateSoftTableSql(dialect);
+            await create.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        await using (DbCommand clear = conn.CreateCommand())
+        {
+            clear.CommandText = $"DELETE FROM {table}";
+            await clear.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        const int batch = 500;
+        for (int start = 0; start < rows; start += batch)
+        {
+            int count = Math.Min(batch, rows - start);
+            var sb = new StringBuilder($"INSERT INTO {table} (id, name, deleted_at) VALUES ");
+            for (int k = 0; k < count; k++)
+            {
+                long i = start + k;
+                if (k > 0) sb.Append(',');
+                sb.Append('(').Append(i + 1).Append(",'soft-").Append(i).Append("',")
+                    .Append(deleted ? "'2026-01-01T00:00:00Z'" : "NULL").Append(')');
+            }
+
+            await using DbCommand ins = conn.CreateCommand();
+            ins.CommandText = sb.ToString();
+            await ins.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+    }
 
     // ── 枚举列形态（2026-10-04 全量复读落地轮：N2 枚举写路径零分配化的量化臂）──
 
@@ -545,6 +600,27 @@ internal sealed partial class S1Row
     /// <summary>顺序标记列——ORDER BY / 键集分页的排序列，值等于行号。</summary>
     [Column("Marker")]
     public long Marker { get; set; }
+}
+
+/// <summary>软删生命周期实体——<c>[SoftDelete]</c> 单特性，无租户，对应 perf_soft。
+/// 用于 SoftDelete / Restore / HardDelete 三项：只有这一层特性能把"逻辑删除改写"
+/// 与"物理清除"的差异隔离出来。</summary>
+[Table("perf_soft")]
+[SoftDelete]
+internal sealed partial class SoftRow
+{
+    /// <inheritdoc/>
+    [Key(AutoIncrement = false)]
+    [Column("id")]
+    public long Id { get; set; }
+
+    /// <summary>名称列——DeleteWhere 的等值条件列（小写，三方言手写 SQL 无需引号）。</summary>
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    /// <summary>软删列——[SoftDelete] 契约列（null = 未删）。</summary>
+    [Column("deleted_at")]
+    public string? DeletedAt { get; set; }
 }
 
 /// <summary>枚举列形态的列值枚举——6 个成员，字符串（TEXT）存储（默认 StoreAs）。
