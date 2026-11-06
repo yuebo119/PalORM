@@ -262,6 +262,51 @@ public sealed class LifecycleAndExistenceApiTests
         await Assert.That(affected).IsEqualTo(0);
         await Assert.That(await db.IgnoreFilters().CountAsync<LifecycleTenant>()).IsEqualTo(2);
     }
+
+    [Test]
+    public async Task ExecuteDeleteAsync_RejectsOrderGroupSkip()
+    {
+        await using DataSession<SqliteProvider> db = await CreateSessionAsync();
+        await SeedAsync(db);
+
+        // 这些子句在 DELETE 构建输出里不存在，静默丢弃会扩大影响面，故构建期拒绝
+        await Assert.That(async () => await db.From<LifecycleProbe>()
+                .Where($"Status = {1}").OrderBy("Status").ExecuteDeleteAsync())
+            .Throws<NotSupportedException>();
+        await Assert.That(async () => await db.From<LifecycleProbe>()
+                .Where($"Status = {1}").GroupBy("Status").ExecuteDeleteAsync())
+            .Throws<NotSupportedException>();
+        await Assert.That(async () => await db.From<LifecycleProbe>()
+                .Where($"Status = {1}").Skip(1).ExecuteDeleteAsync())
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
+    public async Task AnyAsync_WithWhereAndSoftDeleteFilter_UsesComposedSql()
+    {
+        await using DataSession<SqliteProvider> db = await CreateSessionAsync();
+        await SeedAsync(db);
+        await db.InsertAsync(new LifecycleSoft { Name = "a", Status = 1 });
+
+        // 软删实体 + 用户条件：SQL 走 "WHERE <软删过滤> AND (<用户条件>) LIMIT 1"
+        await Assert.That(await db.AnyAsync<LifecycleSoft>($"Status = {1}")).IsTrue();
+        await Assert.That(await db.AnyAsync<LifecycleSoft>($"Status = {2}")).IsFalse();
+
+        await db.DeleteAsync<LifecycleSoft>(1L);
+        await Assert.That(await db.AnyAsync<LifecycleSoft>($"Status = {1}")).IsFalse();
+    }
+
+    [Test]
+    public async Task AnyAsync_RepeatedCalls_ReuseCommandSlot()
+    {
+        await using DataSession<SqliteProvider> db = await CreateSessionAsync();
+        await SeedAsync(db);
+        await db.InsertAsync(new LifecycleProbe { Name = "a", Status = 1 });
+
+        // 第 3 次同形态操作触发复用槽晋升，稳态走就地写值路径（Lessons B98 的惰性晋升）
+        for (int i = 0; i < 5; i++)
+            await Assert.That(await db.AnyAsync<LifecycleProbe>($"Status = {1}")).IsTrue();
+    }
 }
 
 [Table("lifecycle_probe")]
