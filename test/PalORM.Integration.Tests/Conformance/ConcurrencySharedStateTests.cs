@@ -281,4 +281,151 @@ public sealed class ConcurrencySharedStateTests
             .IsEmpty();
         await Assert.That(idByValue.Count).IsEqualTo(workers * rowsPerWorker);
     }
+
+    /// <summary>CS-07：带 <c>[ConcurrencyCheck]</c> 时，落后版本的更新被拒、重试后成功，
+    /// 最终版本号与库中值可逐值核对。
+    /// <para><b>确定性而非随机压力</b>：两个会话先各读一次（都拿到 version=0），再按固定顺序写，
+    /// 结果是确定的：第一个成功升到 1，第二个拿 version=0 更新命中 0 行抛
+    /// <c>ConcurrencyConflictException</c>（产品在递增前抛出），重读后重试升到 2。
+    /// 不用「32 会话各自 +1」那种随机形态——冲突次数取决于调度，断言会飘（T15 的同类问题）。</para></summary>
+    [Test]
+    public async Task CS07_OptimisticLock_RejectsStaleUpdate_RetrySucceeds()
+    {
+        await using SharedSqliteDb shared = await SharedSqliteDb.CreateAsync("cs07").ConfigureAwait(false);
+        long id;
+        await using (DataSession<SqliteProvider> seed = await shared.OpenSessionAsync().ConfigureAwait(false))
+        {
+            CfVersionedEntity inserted = await seed.InsertAsync(
+                new CfVersionedEntity { Name = "v0", Version = 0 }).ConfigureAwait(false);
+            id = inserted.Id;
+        }
+
+        await using DataSession<SqliteProvider> writerA = await shared.OpenSessionAsync().ConfigureAwait(false);
+        await using DataSession<SqliteProvider> writerB = await shared.OpenSessionAsync().ConfigureAwait(false);
+
+        CfVersionedEntity rowA = (await writerA.GetAsync<CfVersionedEntity>(id).ConfigureAwait(false))!;
+        CfVersionedEntity rowB = (await writerB.GetAsync<CfVersionedEntity>(id).ConfigureAwait(false))!;
+        await Assert.That(rowA.Version).IsEqualTo(0L);
+        await Assert.That(rowB.Version).IsEqualTo(0L);
+
+        rowA.Name = "writer-a";
+        await writerA.UpdateAsync(rowA).ConfigureAwait(false);
+        await Assert.That(rowA.Version).IsEqualTo(1L);
+
+        rowB.Name = "writer-b";
+        await Assert.ThrowsAsync<ConcurrencyConflictException>(async () =>
+            await writerB.UpdateAsync(rowB).ConfigureAwait(false));
+
+        // 重读拿最新版本后重试，必须成功并升到 2。
+        CfVersionedEntity refreshed = (await writerB.GetAsync<CfVersionedEntity>(id).ConfigureAwait(false))!;
+        refreshed.Name = "writer-b-retry";
+        await writerB.UpdateAsync(refreshed).ConfigureAwait(false);
+        await Assert.That(refreshed.Version).IsEqualTo(2L);
+
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows = await shared.QueryRawAsync(
+            "SELECT name, version FROM cf_versioned WHERE id = $id", [("id", id)]).ConfigureAwait(false);
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(
+            Convert.ToString(rows[0]["name"], System.Globalization.CultureInfo.InvariantCulture))
+            .IsEqualTo("writer-b-retry");
+        await Assert.That(
+            Convert.ToInt64(rows[0]["version"], System.Globalization.CultureInfo.InvariantCulture))
+            .IsEqualTo(2L);
+    }
+
+    /// <summary>CS-07 对照组：无版本令牌时落后写入静默覆盖（last-writer-wins 基线事实，P2 不判缺陷）。
+    /// <para>这条不是缺陷报告，是「为什么需要 <c>[ConcurrencyCheck]</c>」的量化证据：
+    /// 同一交错下 writer-a 的写入丢失且无任何异常。断言最终值为 writer-b，即是丢失更新的直接证据。</para></summary>
+    [Test]
+    public async Task CS07_NoVersionToken_LostUpdateIsObservableBaseline()
+    {
+        await using SharedSqliteDb shared =
+            await SharedSqliteDb.CreateAsync("cs07_noversion").ConfigureAwait(false);
+        long id;
+        await using (DataSession<SqliteProvider> seed = await shared.OpenSessionAsync().ConfigureAwait(false))
+        {
+            CfCompositeIndexEntity inserted = await seed.InsertAsync(new CfCompositeIndexEntity
+            {
+                Category = "c0",
+                Price = 1m,
+                Sku = "sku-" + Guid.NewGuid().ToString("N"),
+            }).ConfigureAwait(false);
+            id = inserted.Id;
+        }
+
+        await using DataSession<SqliteProvider> writerA = await shared.OpenSessionAsync().ConfigureAwait(false);
+        await using DataSession<SqliteProvider> writerB = await shared.OpenSessionAsync().ConfigureAwait(false);
+        CfCompositeIndexEntity rowA = (await writerA.GetAsync<CfCompositeIndexEntity>(id).ConfigureAwait(false))!;
+        CfCompositeIndexEntity rowB = (await writerB.GetAsync<CfCompositeIndexEntity>(id).ConfigureAwait(false))!;
+
+        rowA.Category = "writer-a";
+        await writerA.UpdateAsync(rowA).ConfigureAwait(false);
+        rowB.Category = "writer-b";
+        await writerB.UpdateAsync(rowB).ConfigureAwait(false);
+
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows = await shared.QueryRawAsync(
+            "SELECT category FROM cf_composite_index WHERE id = $id", [("id", id)]).ConfigureAwait(false);
+        // 丢失更新：writer-a 的 category 已被覆盖且没有任何异常。
+        await Assert.That(
+            Convert.ToString(rows[0]["category"], System.Globalization.CultureInfo.InvariantCulture))
+            .IsEqualTo("writer-b");
+    }
+
+    /// <summary>CS-11（可达部分）：取消操作不泄漏池化租约。
+    /// <para>16 worker 各租一个会话、用已取消的令牌发起操作（产品在进入操作时即抛
+    /// <c>OperationCanceledException</c>，先例见 <c>SessionConcurrencyTests.CancelledOperation_*</c>），
+    /// 归还后核对：IdleCount 恰为容量上界、池仍可用且能读到正确值。
+    /// <b>未覆盖部分</b>：原方案的「32 在途操作同时取消 + 按命令序号注入连接断开/超时」需要往
+    /// <c>DataSessionPool</c> 注入自定义连接工厂，产品无该接口（池内部按 options 自建连接）；
+    /// 单会话的故障注入取消已由 <c>CancellationFaultTests</c> 覆盖。该子场景 deferred。</para></summary>
+    [Test]
+    public async Task CS11_CancelledOperations_DoNotLeakPooledLeases()
+    {
+        const int capacity = 4;
+        const int workers = 16;
+        await using SharedSqliteDb shared = await SharedSqliteDb.CreateAsync("cs11").ConfigureAwait(false);
+        await using DataSessionPool<SqliteProvider> pool = shared.CreatePool(maxIdleSize: capacity);
+        await using ConcurrencyHarness harness = ConcurrencyHarness.Create();
+
+        var cancelled = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
+        await harness.RunAsync(workers, async (worker, ct) =>
+        {
+            DataSession<SqliteProvider> session = await pool.RentAsync(ct).ConfigureAwait(false);
+            try
+            {
+                using var cts = new CancellationTokenSource();
+                await cts.CancelAsync().ConfigureAwait(false);
+                try
+                {
+                    await session.ExecuteAsync($"SELECT 1", cts.Token).ConfigureAwait(false);
+                    harness.Record(worker, 0, "已取消令牌的操作应抛 OperationCanceledException", "未抛出");
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled.TryAdd(worker, 0);
+                }
+            }
+            finally
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+        }).ConfigureAwait(false);
+
+        await Assert.That(cancelled.Count).IsEqualTo(workers);
+        await Assert.That(harness.Violations).IsEmpty();
+        await Assert.That(pool.IdleCount).IsEqualTo(capacity);
+
+        // 池仍可用：正常操作读到正确值，用后回落。
+        DataSession<SqliteProvider> probe = await pool.RentAsync().ConfigureAwait(false);
+        try
+        {
+            await Assert.That(await probe.ScalarAsync<long>($"SELECT 42").ConfigureAwait(false))
+                .IsEqualTo(42L);
+        }
+        finally
+        {
+            await probe.DisposeAsync().ConfigureAwait(false);
+        }
+        await Assert.That(pool.IdleCount).IsEqualTo(capacity);
+    }
 }
