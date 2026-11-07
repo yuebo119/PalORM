@@ -55,6 +55,29 @@ public sealed class CommandTimeoutNormalizerTests
             .Throws<TimeoutException>();
     }
 
+    /// <summary>驱动提前量容差（2026-11-07 全量实测）：MySqlConnector 在 1 秒超时下于
+    /// 0.988~0.993 秒抛 1317，比调用方观测的截止线早 7~12 ms；严格 <c>&gt;=</c> 会把中断
+    /// 当成真实 SQL 错误。容差内（约 0.96 s）必须归一时超。</summary>
+    [Test]
+    public async Task NonTimeoutException_JustBeforeDeadline_WithinTolerance_IsNormalized()
+    {
+        long start = TimestampAgo(TimeSpan.FromMilliseconds(960));
+        Task<int> failed = Task.FromException<int>(new InvalidOperationException("driver interrupt"));
+        await Assert.That(async () => await CommandTimeoutNormalizer.RunAsync(failed, start, 1))
+            .Throws<TimeoutException>();
+    }
+
+    /// <summary>容差外（约 0.90 s，距截止线 100 ms）仍是真实错误语义：原样上抛，
+    /// 防止容差把「早于超时返回的 SQL 错误」吞成超时。</summary>
+    [Test]
+    public async Task NonTimeoutException_ClearlyBeforeDeadline_PropagatesUnchanged()
+    {
+        long start = TimestampAgo(TimeSpan.FromMilliseconds(900));
+        Task<int> failed = Task.FromException<int>(new InvalidOperationException("boom"));
+        await Assert.That(async () => await CommandTimeoutNormalizer.RunAsync(failed, start, 1))
+            .Throws<InvalidOperationException>();
+    }
+
     [Test]
     public async Task ZeroTimestamp_DisablesElapsedCheck()
     {

@@ -12,6 +12,9 @@ internal enum FaultKind
     Exception,
     Delay,
     Cancel,
+    /// <summary>先真实执行命令、再抛异常——模拟「服务器已执行但客户端没等到响应」（超时/链路中断）。
+    /// 用于锁定 ITM-310 的语义：超时不代表未执行，调用方重试可能重复写入。</summary>
+    ExecuteThenThrow,
 }
 
 /// <summary>一条注入计划：作用于第 <paramref name="CommandOrdinal"/> 条命令（1 起）。
@@ -56,6 +59,12 @@ internal sealed class FaultyConnection : DbConnection
 
     internal FaultyConnection DelayOnCommand(int ordinal, TimeSpan delay)
         => AddPlan(ordinal, new FaultPlan(ordinal, FaultKind.Delay, null, delay));
+
+    /// <summary>先执行该命令、再抛异常（模拟「服务器已执行但响应丢失」）。
+    /// 与 <see cref="FailOnceOnCommand"/> 的区别是注入点在执行之后：行已写入库中，
+    /// 调用方却看到失败，于是重试就可能重复写入（ITM-310 的语义）。</summary>
+    internal FaultyConnection FailAfterExecutionOnCommand(int ordinal, Exception exception, bool once = false)
+        => AddPlan(ordinal, new FaultPlan(ordinal, FaultKind.ExecuteThenThrow, exception, default, once));
 
     internal FaultyConnection CancelOnCommand(int ordinal)
         => AddPlan(ordinal, new FaultPlan(ordinal, FaultKind.Cancel, null, default));
@@ -154,12 +163,20 @@ internal sealed class FaultyCommand : DbCommand
 
     private FaultPlan? Plan => _plans.TryGetValue(_ordinal, out FaultPlan? plan) ? plan : null;
 
-    private async ValueTask ApplyFaultAsync(CancellationToken cancellationToken)
+    /// <summary>解析本次执行的注入点。Plan=null 表示本次不注入；AfterExecution=true 表示
+    /// 「先执行再抛」，调用方须在执行完成后调 <see cref="ThrowAfterExecution"/>。</summary>
+    private (FaultPlan? Plan, bool AfterExecution) BeginExecution()
     {
         int execution = Interlocked.Increment(ref _execCount);
-        if (Plan is not { } plan) return;
+        FaultPlan? plan = Plan;
+        if (plan is null) return (null, false);
         // Once：还原「只有那一次执行时连接死了」，后续执行照常透传底层连接。
-        if (plan.Once && execution > 1) return;
+        if (plan.Once && execution > 1) return (null, false);
+        return plan.Kind == FaultKind.ExecuteThenThrow ? (plan, true) : (plan, false);
+    }
+
+    private static async ValueTask ApplyFaultAsync(FaultPlan plan, CancellationToken cancellationToken)
+    {
         switch (plan.Kind)
         {
             case FaultKind.Exception:
@@ -172,6 +189,21 @@ internal sealed class FaultyCommand : DbCommand
             default:
                 break;
         }
+    }
+
+    private static void ThrowAfterExecution(FaultPlan? plan, bool afterExecution)
+    {
+        if (afterExecution) throw plan!.Exception!;
+    }
+
+    /// <summary>执行前注入，并返回「执行后是否还要抛」。</summary>
+    private async ValueTask<(FaultPlan? Plan, bool AfterExecution)> BeforeExecutionAsync(
+        CancellationToken cancellationToken)
+    {
+        (FaultPlan? plan, bool afterExecution) = BeginExecution();
+        if (plan is not null && !afterExecution)
+            await ApplyFaultAsync(plan, cancellationToken).ConfigureAwait(false);
+        return (plan, afterExecution);
     }
 
     [AllowNull]
@@ -230,40 +262,59 @@ internal sealed class FaultyCommand : DbCommand
 
     public override int ExecuteNonQuery()
     {
-        ApplyFaultAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        return _inner.ExecuteNonQuery();
+        (FaultPlan? plan, bool afterExecution) = BeforeExecutionAsync(CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        int result = _inner.ExecuteNonQuery();
+        ThrowAfterExecution(plan, afterExecution);
+        return result;
     }
 
     public override async Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
     {
-        await ApplyFaultAsync(cancellationToken).ConfigureAwait(false);
-        return await _inner.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        (FaultPlan? plan, bool afterExecution) = await BeforeExecutionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        int result = await _inner.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        ThrowAfterExecution(plan, afterExecution);
+        return result;
     }
 
     public override object? ExecuteScalar()
     {
-        ApplyFaultAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        return _inner.ExecuteScalar();
+        (FaultPlan? plan, bool afterExecution) = BeforeExecutionAsync(CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        object? result = _inner.ExecuteScalar();
+        ThrowAfterExecution(plan, afterExecution);
+        return result;
     }
 
     public override async Task<object?> ExecuteScalarAsync(CancellationToken cancellationToken)
     {
-        await ApplyFaultAsync(cancellationToken).ConfigureAwait(false);
-        return await _inner.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        (FaultPlan? plan, bool afterExecution) = await BeforeExecutionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        object? result = await _inner.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        ThrowAfterExecution(plan, afterExecution);
+        return result;
     }
 
     protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
     {
-        ApplyFaultAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        return Wrap(_inner.ExecuteReader(behavior));
+        (FaultPlan? plan, bool afterExecution) = BeforeExecutionAsync(CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        DbDataReader reader = Wrap(_inner.ExecuteReader(behavior));
+        ThrowAfterExecution(plan, afterExecution);
+        return reader;
     }
 
     protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(
         CommandBehavior behavior, CancellationToken cancellationToken)
     {
-        await ApplyFaultAsync(cancellationToken).ConfigureAwait(false);
-        DbDataReader reader = await _inner.ExecuteReaderAsync(behavior, cancellationToken).ConfigureAwait(false);
-        return Wrap(reader);
+        (FaultPlan? plan, bool afterExecution) = await BeforeExecutionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        DbDataReader reader = await _inner.ExecuteReaderAsync(behavior, cancellationToken)
+            .ConfigureAwait(false);
+        DbDataReader wrapped = Wrap(reader);
+        ThrowAfterExecution(plan, afterExecution);
+        return wrapped;
     }
 
     private DbDataReader Wrap(DbDataReader reader)
