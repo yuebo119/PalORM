@@ -47,6 +47,10 @@ public sealed class RealNetworkLossTests
             Server = "127.0.0.1",
             Port = (uint)proxy.Port,
             Pooling = false,
+            // 代理按字节匹配 SQL 文本；连接默认 SslMode=Preferred 会协商 TLS，之后整条流是密文，
+            // 标记永远匹配不到（实测：30s 等待超时、客户端流量为二进制）。这条会话只测丢响应，
+            // 不测 TLS，故显式关闭（服务端未强制 require_secure_transport）。
+            SslMode = MySqlSslMode.None,
         };
         DataSession<MySqlProvider> session = await DataSession<MySqlProvider>.CreateAsync(
             new DbOptions { ConnectionString = proxied.ConnectionString });
@@ -74,7 +78,10 @@ public sealed class RealNetworkLossTests
         }
         catch (TimeoutException)
         {
-            return new TimeoutException($"代理未观察到标记 SQL；客户端流量片段：{proxy.LastClientTraffic}");
+            // 未真正丢弃响应时必须响亮失败：此前返回自造的 TimeoutException 会被
+            // 「客户端拿到失败」断言误判为通过（假绿），判据就失去判别力。
+            throw new InvalidOperationException(
+                $"代理未观察到标记 SQL，响应未被丢弃；客户端流量片段：{proxy.LastClientTraffic}");
         }
     }
 

@@ -84,18 +84,20 @@ internal sealed class DropResponseProxy : IAsyncDisposable
                     return;
                 }
 
-                await to.WriteAsync(buffer.AsMemory(0, read), _cts.Token).ConfigureAwait(false);
-                await to.FlushAsync(_cts.Token).ConfigureAwait(false);
-
                 if (watchMarker)
                 {
                     string chunk = Encoding.ASCII.GetString(buffer, 0, read);
                     seen.Append(chunk);
                     _clientTraffic.Append(chunk);
                     if (_clientTraffic.Length > 8192) _clientTraffic.Remove(0, _clientTraffic.Length - 4096);
+                    // 先武装再转发：若先转发，服务器可能在本线程 await Write 期间就把响应发回来，
+                    // 反向泵会在 armed 置位前把 OK 包正常转发，丢弃时机被错过（实测 30s 等待超时）。
                     if (seen.ToString().Contains(_marker, StringComparison.Ordinal))
                         Volatile.Write(ref _armed, 1);
                 }
+
+                await to.WriteAsync(buffer.AsMemory(0, read), _cts.Token).ConfigureAwait(false);
+                await to.FlushAsync(_cts.Token).ConfigureAwait(false);
             }
         }
         catch (Exception)
