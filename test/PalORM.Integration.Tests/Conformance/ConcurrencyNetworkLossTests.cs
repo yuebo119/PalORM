@@ -13,7 +13,7 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <para><b>触发确定性</b>：代理在「服务器响应已到达」时切断，而不是固定延迟，因此被丢弃的
 /// 一定是执行后的响应；用例用 <c>DropTriggered</c> 等它完成再断言，不靠 sleep 猜时序（T15）。</para></summary>
 [NotInParallel("ExtBulkTable")]
-public sealed class RealNetworkLossTests
+public sealed class ConcurrencyNetworkLossTests
 {
     private static MySqlConnectionStringBuilder DirectBuilder()
         => new(TestEnvironment.ResolveMySqlConnectionString());
