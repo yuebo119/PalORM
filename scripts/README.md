@@ -87,6 +87,13 @@
 > 原 `set-test-env.sh` 已淘汰：`.env.test` 的加载内置于 PerfCli 的 env loader
 > （进程内读取后由子进程继承，不回显值）；跑测试由 `TestEnvironment` 自动补变量。
 
+## 高并发压测（2026-11-07）
+
+| 脚本 | 用途 | 调用时机 |
+|------|------|:---:|
+| `concurrency-run.cs` | 压测 lane 入口：真库端口预检（3306/55432，缺失时给容器名后退出）→ 构建两套件 → `Concurren*` 通配跑 Core/Integration → 调报告脚本；`--full` 跑全量，`--rounds/--seed/--soak-seconds` 传运行参数，`--json` 落摘要 | 每次压测 |
+| `concurrency-report.cs` | 压测摘要：族分类与 `assert-test-counts --families` 同源（`Concurrency\|Parallel\|Pool\|Soak` / `Dialect` / `Fault`，先匹配先归属），输出套件/族分布/最慢类/失败明细，有失败时退出 1 | 压测后判读 / 台账归档 |
+
 ## 包验证
 
 | 脚本 | 用途 | CI 调用 |
