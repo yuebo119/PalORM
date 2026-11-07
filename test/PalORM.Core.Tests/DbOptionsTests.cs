@@ -272,4 +272,84 @@ public sealed class DbOptionsTests
         await Assert.That(text).DoesNotContain(fakeSecret);
         await Assert.That(text).Contains("ReadConnectionString = null");
     }
+
+    // F2b（2026-11-06）：_validated 短路 + 显式 copy ctor 的双面契约。
+    // ① 先验证一个合法实例（置位），with 改出非法值后仍须抛——若 copy ctor 被删/漏写，
+    //    with 会复制 _validated=true 而短路跳过校验，ITM-517 守护静默失效（本用例红）。
+    // ② with 新实例必须保留全部 init 属性——显式 copy ctor 漏复制任一属性都会静默丢值，
+    //    这里逐属性锁定（新增 init 属性时须同步 copy ctor 与本用例）。
+    [Test]
+    public async Task ValidatedOptions_WithExpression_ResetsFlag_AndPreservesAllProperties()
+    {
+        var interceptors = Array.Empty<IQueryInterceptor>();
+        Func<int, TimeSpan> backoff = static _ => TimeSpan.Zero;
+
+        var validated = new DbOptions
+        {
+            ConnectionString = "dsn-primary",
+            ReadConnectionString = "dsn-replica",
+            ConnectionTimeout = TimeSpan.FromSeconds(11),
+            PoolConnectionValidationInterval = TimeSpan.FromSeconds(12),
+            CommandTimeout = TimeSpan.FromSeconds(13),
+            MaxRetries = 4,
+            RetryBackoff = backoff,
+            OverallDeadline = TimeSpan.FromSeconds(14),
+            MaxPoolSize = 55,
+            MinPoolSize = 6,
+            PoolIdleTimeoutSeconds = 77,
+            PoolLifetimeMinutes = 88,
+            CircuitBreakerThreshold = 9,
+            CircuitBreakerResetAfter = TimeSpan.FromSeconds(15),
+            CircuitBreakerScope = CircuitBreakerScope.Process,
+            Interceptors = interceptors,
+            ValidateQueryColumnOrder = false,
+            ValidateMigrationDrift = false,
+            UseSynchronousRowRead = true,
+            PrepareCacheSize = 66,
+            PrepareThreshold = 7,
+            QueryCache = null,
+            SessionSetupSql = "SET x=1",
+            ReadSessionSetupSql = "SET y=2",
+            LoggerFactory = null
+        };
+        validated.Validate(); // F2b：置位，后续 with 的新实例必须重新校验
+
+        // ① 非法配置仍抛（copy ctor 把标志归零的证据）
+        await Assert.That(() => (validated with { MinPoolSize = -1 }).Validate())
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => (validated with { CommandTimeout = TimeSpan.FromSeconds(-1) }).Validate())
+            .Throws<ArgumentOutOfRangeException>();
+
+        // ② with 改一个属性，其余 24 个逐位保留（防 copy ctor 漏复制）
+        var copy = validated with { MaxRetries = 8 };
+        await Assert.That(copy.ConnectionString).IsEqualTo("dsn-primary");
+        await Assert.That(copy.ReadConnectionString).IsEqualTo("dsn-replica");
+        await Assert.That(copy.ConnectionTimeout).IsEqualTo(TimeSpan.FromSeconds(11));
+        await Assert.That(copy.PoolConnectionValidationInterval).IsEqualTo(TimeSpan.FromSeconds(12));
+        await Assert.That(copy.CommandTimeout).IsEqualTo(TimeSpan.FromSeconds(13));
+        await Assert.That(copy.MaxRetries).IsEqualTo(8);
+        await Assert.That(ReferenceEquals(copy.RetryBackoff, backoff)).IsTrue();
+        await Assert.That(copy.OverallDeadline).IsEqualTo(TimeSpan.FromSeconds(14));
+        await Assert.That(copy.MaxPoolSize).IsEqualTo(55);
+        await Assert.That(copy.MinPoolSize).IsEqualTo(6);
+        await Assert.That(copy.PoolIdleTimeoutSeconds).IsEqualTo(77);
+        await Assert.That(copy.PoolLifetimeMinutes).IsEqualTo(88);
+        await Assert.That(copy.CircuitBreakerThreshold).IsEqualTo(9);
+        await Assert.That(copy.CircuitBreakerResetAfter).IsEqualTo(TimeSpan.FromSeconds(15));
+        await Assert.That(copy.CircuitBreakerScope).IsEqualTo(CircuitBreakerScope.Process);
+        await Assert.That(ReferenceEquals(copy.Interceptors, interceptors)).IsTrue();
+        await Assert.That(copy.ValidateQueryColumnOrder).IsFalse();
+        await Assert.That(copy.ValidateMigrationDrift).IsFalse();
+        await Assert.That(copy.UseSynchronousRowRead).IsTrue();
+        await Assert.That(copy.PrepareCacheSize).IsEqualTo(66);
+        await Assert.That(copy.PrepareThreshold).IsEqualTo(7);
+        await Assert.That(copy.QueryCache).IsNull();
+        await Assert.That(copy.SessionSetupSql).IsEqualTo("SET x=1");
+        await Assert.That(copy.ReadSessionSetupSql).IsEqualTo("SET y=2");
+        await Assert.That(copy.LoggerFactory).IsNull();
+
+        // ③ 同一实例重复 Validate 不再抛（短路生效）；新实例仍可正常通过
+        validated.Validate();
+        copy.Validate();
+    }
 }

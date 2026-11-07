@@ -5,21 +5,39 @@ using PalORM.Sqlite;
 namespace PalORM.Integration.Tests.Conformance;
 
 /// <summary>C 层并发浸泡（方案 §6.4 / §6.5）。
-/// <para>八线程各做"租出、操作、归还"，连续 3 轮、每轮窗口 30 秒（方案 §6.4 的 30 到 60 秒下沿）。
-/// 每轮用独立库与会话池，轮间不共享状态；四条断言逐轮核对：同一会话同一时刻只在一个线程手里、
-/// 租期写入的租户态不跨租期可见、IdleCount 回落到容量上界、操作数不低于有效负载地板。</para>
-/// <para>长稳压测属 PerfHub 职责，本层只抓串租与状态污染，因此窗口取短并在三轮内保持同一形态。
-/// 调试时可用 <c>PALORM_SOAK_SECONDS</c> 缩短窗口，默认 30 秒。</para></summary>
+/// <para>八线程各做"租出、操作、归还"，连续 3 轮；四条断言逐轮核对：同一会话同一时刻只在一个
+/// 线程手里、租期写入的租户态不跨租期可见、IdleCount 回落到容量上界、操作数不低于有效负载地板。</para>
+/// <para><b>默认按迭代次数有界</b>（每 worker 每轮 100 次，3 轮共 2,400 次操作，约 2 秒）：
+/// 四条判据都按操作计而不依赖实际耗时，按时间跑没有额外判别力，却让 PR 全量跑付 90 秒
+/// （2026-11-07 实测占 Integration 总时长 64%）。需要时间维度长稳时用
+/// <c>PALORM_SOAK_SECONDS=&lt;秒&gt;</c> 切换回时间窗口（每次操作数下限 100），
+/// 混合读写长稳另见 <c>ConcurrencyMixedSoakTests</c>（<c>PALORM_CS22_ROUNDS</c>）。</para></summary>
 public sealed class ConcurrencySoakTests
 {
     private const int WorkerCount = 8;
     private const int Rounds = 3;
-    private const long MinimumOperationsPerRound = 100;
+    private const long TimeBoundedMinimumOperations = 100;
 
-    private static readonly TimeSpan RoundWindow = TimeSpan.FromSeconds(
-        int.TryParse(Environment.GetEnvironmentVariable("PALORM_SOAK_SECONDS"), out int seconds) && seconds > 0
-            ? seconds
-            : 30);
+    /// <summary>迭代模式下每 worker 每轮的次数；环境变量 <c>PALORM_SOAK_ITERATIONS</c> 可覆盖。</summary>
+    private static readonly int IterationsPerWorker = ResolveIterations();
+
+    /// <summary>时间模式窗口；null = 迭代模式（默认）。设置 <c>PALORM_SOAK_SECONDS</c> 即切换。</summary>
+    private static readonly TimeSpan? RoundWindow = ResolveWindow();
+
+    /// <summary>每轮操作数下限：迭代模式是确定值（worker × 迭代次数），时间模式保留经验地板。</summary>
+    private static long MinimumOperationsPerRound
+        => RoundWindow is null ? (long)WorkerCount * IterationsPerWorker : TimeBoundedMinimumOperations;
+
+    private static int ResolveIterations()
+        => int.TryParse(Environment.GetEnvironmentVariable("PALORM_SOAK_ITERATIONS"), out int configured)
+           && configured > 0
+            ? configured
+            : 100;
+
+    private static TimeSpan? ResolveWindow()
+        => int.TryParse(Environment.GetEnvironmentVariable("PALORM_SOAK_SECONDS"), out int seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : null;
 
     [Test]
     public async Task Soak_ThreeConsecutiveRounds_ZeroInvariantViolations()
@@ -56,11 +74,16 @@ public sealed class ConcurrencySoakTests
         var violations = new ConcurrentBag<string>();
         long[] operations = [0];
 
-        using var window = new CancellationTokenSource(RoundWindow);
+        using var window = RoundWindow is { } roundWindow
+            ? new CancellationTokenSource(roundWindow)
+            : new CancellationTokenSource();
+        int? maxIterations = RoundWindow is null ? IterationsPerWorker : null;
         Task[] workers =
         [
             .. Enumerable.Range(0, WorkerCount).Select(workerId
-                => Task.Run(() => RunWorkerAsync(pool, holder, violations, operations, workerId, window.Token), window.Token))
+                => Task.Run(
+                    () => RunWorkerAsync(pool, holder, violations, operations, workerId, maxIterations, window.Token),
+                    window.Token))
         ];
         await Task.WhenAll(workers);
 
@@ -95,10 +118,12 @@ public sealed class ConcurrencySoakTests
         ConcurrentBag<string> violations,
         long[] operations,
         int workerId,
+        int? maxIterations,
         CancellationToken ct)
     {
         long tenant = workerId + 1L;
-        while (!ct.IsCancellationRequested)
+        int executed = 0;
+        while (!ct.IsCancellationRequested && (maxIterations is null || executed < maxIterations))
         {
             DataSession<SqliteProvider> session;
             try
@@ -135,6 +160,7 @@ public sealed class ConcurrencySoakTests
                 holder.TryRemove(hashCode, out _);
                 await session.DisposeAsync();
             }
+            executed++;
         }
     }
 

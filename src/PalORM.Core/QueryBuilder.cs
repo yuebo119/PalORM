@@ -1356,9 +1356,9 @@ public struct QueryBuilder<T> where T : class, new()
     /// 编译期注册表，同一 (Type, Dialect) 恒产出同一字符串，故按 (Type, Dialect) 缓存。
     /// 命中路径为 O(1) 查找且零分配；未命中才逐列 QuoteIdentifier 构建
     /// （4 列实体实测省 5 次引用分配，约 280B）。</para>
-    /// <para>本路径需要<b>表名限定</b>（JOIN 下防 ambiguous column，ITM-641），故用
-    /// <see cref="DataSessionCache.QualifiedSelectColumnsCache"/>——它与 GetAllAsync 用的
-    /// 裸列清单缓存键相同但值不同，不可混用。</para>
+    /// <para>本路径需要<b>表名限定</b>（JOIN 下防 ambiguous column，ITM-641），故走
+    /// <see cref="QualifiedColumnSlots{T}"/>（F2a）——它与 GetAllAsync 用的
+    /// 裸列清单缓存值不同，不可混用。</para>
     /// <para>带 CTE 或显式投影时不走缓存：前者的限定名是 CTE 名而非表名，
     /// 后者的列集由调用方决定。</para></summary>
     private void AppendSelectColumns(ref ValueStringBuilder sb)
@@ -1392,18 +1392,20 @@ public struct QueryBuilder<T> where T : class, new()
         }
     }
 
-    /// <summary>取本实体本方言的表名限定列清单，走共享缓存。
-    /// <para>命中路径用 <c>TryGetValue</c>（无委托、无闭包）。未命中时先构建再发布——
-    /// QueryBuilder 是 struct，lambda 不能捕获 <c>this</c>（CS1673），且 <c>GetOrAdd</c>
-    /// 的值重载不构造委托。并发下同一 (Type, Dialect) 可能被构建多次，只有首个值进入缓存，
-    /// 冗余构建的代价是每键一次的少量分配，正确性无影响。</para></summary>
+    /// <summary>取本实体本方言的表名限定列清单，走闭式泛型静态槽（F2a，2026-11-06）。
+    /// <para>BuildSql 命中必走的一次 <c>(Type, SqlDialect)</c> ConcurrentDictionary 读迁为
+    /// 按 T 分片的定长数组槽：命中路径 = 一次数组读 + 一次不可变槽引用读，零哈希、零元组
+    /// 装箱、零 CD 同步。未命中时先构建再发布；QueryBuilder 是 struct，lambda 不能捕获
+    /// <c>this</c>（CS1673），故构建留在实例方法、发布走槽的 <c>Set</c>。</para>
+    /// <para>并发下同一 (T, Dialect) 可能被构建多次，只有首个值进入槽；冗余构建的代价是
+    /// 每键一次的少量分配，正确性无影响（与迁移前的字典口径一致）。</para></summary>
     private string GetQualifiedColumnList()
     {
-        (Type, SqlDialect) key = (typeof(T), _dialect);
-        if (DataSessionCache.QualifiedSelectColumnsCache.TryGetValue(key, out string? cached))
+        if (QualifiedColumnSlots<T>.TryGet(_dialect, out string cached))
             return cached;
         string built = BuildQualifiedColumnList();
-        return DataSessionCache.QualifiedSelectColumnsCache.GetOrAdd(key, built);
+        QualifiedColumnSlots<T>.Set(_dialect, built);
+        return built;
     }
 
     /// <summary>逐列构建限定列清单——仅缓存未命中时执行。</summary>
@@ -1962,6 +1964,19 @@ internal static class QueryBuilderShared
         Volatile.Write(ref _orderByClauseTextCount, 0);
     }
 
+    /// <summary>F2a（2026-11-06）：限定列清单静态槽的代际版本号。闭式泛型静态类
+    /// <see cref="QualifiedColumnSlots{T}"/> 无法被静态枚举（每个闭合 T 一份），测试隔离
+    /// 不能用「遍历全部槽清空」；改用全局代际标记——Clear 时递增版本，槽读取时版本不
+    /// 匹配即视为失效并重建，语义等价于清空且命中路径只多一次 Volatile.Read。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2223",
+        Justification = "代际版本号必须可变（Interlocked.Increment 作废旧槽）；仅缓存基础设施读写，无生产可写面。")]
+    internal static int QualifiedColumnVersion;
+
+    /// <summary>作废旧代际的全部限定列清单槽——测试隔离专用（注册表恢复后同一 T 可能换
+    /// 表名/列集，旧 SQL 会让 BuildSql 读到陈旧列清单）。</summary>
+    internal static void ClearQualifiedColumnSlots()
+        => Interlocked.Increment(ref QualifiedColumnVersion);
+
     /// <summary>Where/Having/With 等 FormattableString 子句的最终文本缓存（M2.3，2026-10-31）：
     /// 键含方言、子句类别、前缀与内层 SQL（FormatCached 的稳定输出）；同输入恒同输出，
     /// 命中路径省一次插值分配。键空间有限（内层 SQL 由 FormatCached 的有界缓存产出）。</summary>
@@ -2029,3 +2044,50 @@ internal readonly record struct QueryBuilderContext<T>(
     Func<ValueTask>? ReadConnInvalidator = null,
     Func<DbConnection, bool, ValueTask>? ReadConnReturner = null,
     ReusableQuerySlot? QuerySlot = null) where T : class, new();
+
+/// <summary>F2a（2026-11-06）：BuildSql 命中必走的「表名限定列清单」缓存，迁自
+/// <c>DataSessionCache.QualifiedSelectColumnsCache</c> 的 (Type, SqlDialect) 字典。
+/// <para><b>形态</b>：按 T 闭式分片的定长数组（3 方言值直接作索引），命中路径 =
+/// 一次数组读 + 一次不可变槽引用读 + 一次 Volatile.Read，零哈希、零键元组装箱、零
+/// ConcurrentDictionary 桶同步。泛型按 T 天然隔离不同实体，方言由数组下标隔离。</para>
+/// <para><b>并发</b>：槽用不可变 <see cref="Slot"/> 引用承载 (版本, 值)，
+/// <c>Volatile.Read/Write</c> 保证引用读写的原子性——避免值元组两字段在并发写下的撕裂。
+/// 未命中时允许多个线程各自构建，首个写入生效，与原字典「并发下可能构建多次」同口径。</para>
+/// <para><b>测试隔离</b>：版本取自非泛型宿主 <see cref="QueryBuilderShared.QualifiedColumnVersion"/>，
+/// <c>DataSessionCache.ClearForTesting</c> 递增版本即作废旧代际全部闭合类型的槽。</para></summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2326",
+    Justification = "闭式泛型按 T 分片正是本缓存的目的（每实体一份静态槽），与 SqlSlots<T> 同型。")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
+    Justification = "静态槽按 (T, Dialect) 分片正是本缓存的目的（每闭合类型一份），非跨泛型实例共享事故；与 SqlSlots<T> 同型。")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2223",
+    Justification = "缓存槽字段必须可变（null → 构建值的单次写入）；版本号须经 Interlocked 递增实现测试隔离。仅缓存基础设施读写，无生产可写面；与 SqlSlots<T> 同型。")]
+internal static class QualifiedColumnSlots<T> where T : class, new()
+{
+    private sealed class Slot(int version, string value)
+    {
+        internal readonly int Version = version;
+        internal readonly string Value = value;
+    }
+
+    // SqlDialect 三个值 PostgreSql=0 / MySql=1 / Sqlite=2 直接作下标。
+    private static readonly Slot?[] Slots = new Slot?[3];
+
+    internal static bool TryGet(SqlDialect dialect, out string value)
+    {
+        int version = Volatile.Read(ref QueryBuilderShared.QualifiedColumnVersion);
+        Slot? slot = Volatile.Read(ref Slots[(int)dialect]);
+        if (slot is not null && slot.Version == version)
+        {
+            value = slot.Value;
+            return true;
+        }
+        value = "";
+        return false;
+    }
+
+    internal static void Set(SqlDialect dialect, string value)
+    {
+        int version = Volatile.Read(ref QueryBuilderShared.QualifiedColumnVersion);
+        Volatile.Write(ref Slots[(int)dialect], new Slot(version, value));
+    }
+}

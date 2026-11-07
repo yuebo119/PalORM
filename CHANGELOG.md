@@ -17,6 +17,7 @@
 
 - **新增诊断 PALORM054**：`SaveAsync<T>` 且 `T` 带 `[ConcurrencyCheck]` 时报错（UPSERT 无条件覆盖、无法遵守乐观锁，产品在所有方言上显式抛 `NotSupportedException`）。诊断总数 45 增至 46。
 - **MySQL 超时按耗时判定**：该驱动对超时没有统一形态，标量路径中断查询后不抛异常、返回部分结果（实测 `SELECT SLEEP(5)` 在 1 秒后返回 1），列表路径抛 `MySqlException`（`ErrorCode=CommandTimeoutExpired`，内层 `QueryInterrupted` 1317）。因此 PalORM 在 MySQL 且设置了命令超时时，成功返回与抛出异常两条路都先看是否越过截止线，越过即抛 `TimeoutException`（无分配计时），覆盖 `ScalarAsync` / `GetAsync` / `GetAllAsync` 与查询管线（`ToListAsync` / `FirstOrDefaultAsync` / `ForEachAsync`）。
+- **MySQL 超时归一补 50ms 容差**：驱动侧取消定时器比调用方观测的截止线早 7~12 ms 触发（实测 1 秒超时下 0.988~0.993 秒抛 1317，`Stopwatch` 与驱动定时器无共同起点），严格 `>=` 判定会把「驱动已中断」当成真实 SQL 错误原样上抛，超时契约在边界上不可靠（单跑 3/3 绿、全量 2/2 红）。容差 50 ms 远小于任何有意义的超时值（最小单位 1 秒），全量跑恢复稳定。〔内部〕
 - **超时统一为 `TimeoutException`**：驱动把超时包在自身异常里（`NpgsqlException` 内层为超时异常），现在在三个位置解包：弹性执行器出口、三处直调分支的兜底 catch、`ScalarAsync` 公开入口（覆盖未配置弹性的直接分支）。熔断计数仍按原异常计算。
 - **新增 `BulkInsertReturningAsync`**：PG 与 SQLite 走多行 `INSERT ... RETURNING` 并按行序回填自增主键；MySQL 因 `LAST_INSERT_ID` 只保证首值而明确抛 `NotSupportedException`。原 `BulkInsertAsync` 保持最快的写入形态（不回填），两者分工写进 API 参考。
 - **新增迁移漂移检测（默认开启）**：`DbOptions.ValidateMigrationDrift` 默认 true，`MigrateWithResultAsync` 在 ANALYZE 之后比对实体声明列与库内实际列，检出项写入 `MigrationResult.SchemaDrift` 并记 Warning。动机是"只建不改"的迁移在实体加列后仍返回成功，错误推迟到首次写入。默认开启的成本被形态压到一次往返：PostgreSQL/MySQL 一次 `information_schema` 查询取回全部表列，SQLite 逐表 `PRAGMA table_xinfo`（本地无网络往返）；确认不需要的部署可显式关闭（ADR-W）。同批修复 SQLite 的 `ConfigureSchemaCommand`：`PRAGMA table_info` 改为 `table_xinfo`，前者不返回 `[Computed]` 生成的 STORED 列，导致 `ValidateSchemaAsync` 对计算列长期误报缺失。

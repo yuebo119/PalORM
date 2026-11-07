@@ -109,11 +109,21 @@ internal static class CommandTimeoutNormalizer
         }
     }
 
+    /// <summary>截止线判定的容差（秒）。
+    /// <para><b>为什么需要</b>（2026-11-07 全量跑实测）：驱动侧取消定时器会比调用方观测的
+    /// 截止线<b>略早</b>触发——MySqlConnector 在 1 秒超时下于 0.988~0.993 秒抛
+    /// <c>MySqlException 1317</c>（提前 7~12 ms），而本类的 <c>Stopwatch</c> 与驱动的定时器
+    /// 没有共同起点。严格 <c>&gt;=</c> 判定会把「驱动已中断」当成真实 SQL 错误原样上抛，
+    /// 使超时契约在边界上不可靠（实测单跑 3/3 绿、全量 2/2 红）。
+    /// 容差取 50 ms：远小于任何有意义的超时值（最小单位为 1 秒），又足以覆盖定时器粒度与
+    /// 驱动的提前量；未越线的真实 SQL 错误（语法/约束）不会在截止前 50 ms 才返回。</para></summary>
+    private const double DeadlineToleranceSeconds = 0.05;
+
     private static bool IsPastDeadline(long startTimestamp, int timeoutSeconds)
     {
         if (startTimestamp == 0L || timeoutSeconds <= 0) return false;
         double elapsedSeconds =
             (Stopwatch.GetTimestamp() - startTimestamp) / (double)Stopwatch.Frequency;
-        return elapsedSeconds >= timeoutSeconds;
+        return elapsedSeconds >= timeoutSeconds - DeadlineToleranceSeconds;
     }
 }
