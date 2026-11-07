@@ -10,13 +10,23 @@ namespace PalORM.Integration.Tests.Conformance;
 /// <para><b>为什么不用墙钟窗口</b>：T15 禁止实际耗时类断言。本轮用<b>固定轮数</b>而非固定时长：
 /// 每轮由屏障把 16 个 worker 对齐，checksum 只在屏障之间计算，因此期望值是确定值
 /// （<c>workers × round</c>），与调度快慢无关。真实 10~30 分钟长稳仍需独立 nightly，
-/// 本用例把它的<b>判据</b>先钉死，nightly 只换轮数。</para></summary>
+/// 本用例把它的<b>判据</b>先钉死，nightly 只换轮数：轮数由 <c>PALORM_CS22_ROUNDS</c> 覆盖
+/// （默认 20，本地约数秒），长稳 lane 传大值即可把同一判据拉到分钟级，不需要另写用例。</para></summary>
 [NotInParallel]
 public sealed class ConcurrencyMixedSoakTests
 {
     private const int Workers = 16;
-    private const int Rounds = 20;
     private const int ReadsPerRound = 4;
+
+    /// <summary>轮数：默认 20（PR 门禁秒级），长稳 lane 用 <c>PALORM_CS22_ROUNDS</c> 调大。
+    /// 轮数是唯一变量，判据（每轮 checksum 与终态逐行值）随轮数线性成立，不引入墙钟断言（T15）。</summary>
+    private static readonly int Rounds = ResolveRounds();
+
+    private static int ResolveRounds()
+        => int.TryParse(Environment.GetEnvironmentVariable("PALORM_CS22_ROUNDS"), out int configured)
+           && configured > 0
+            ? configured
+            : 20;
 
     /// <summary>CS-22：16 worker 各持一行（id/tenant 均按 worker 分区），每轮做 4 次跨 worker 读
     /// + 1 次本行写（80/20），屏障对齐后核 checksum。判据四件：每轮 checksum 恰为
