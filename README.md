@@ -267,7 +267,7 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 
 ## 🚀 快速开始
 
-> `.NET 11`（全部包单目标 `net11.0`）+ SDK `11.0.100-rc.2` 或更高，IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
+> `.NET 11`（全部包单目标 `net11.0`）+ SDK 版本由 `global.json` 精确钉住（当前 `11.0.100-rc.3.26522.148`），IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.8.0" />   <!-- 或 PalORM.MySql / PalORM.Sqlite -->

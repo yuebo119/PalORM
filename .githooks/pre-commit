@@ -3,6 +3,28 @@
 # 安装: git config core.hooksPath .githooks
 set -uo pipefail
 
+ROOT="$(git rev-parse --show-toplevel)"
+
+echo "── pre-commit: SDK 一致性前置校验 ──"
+# ── SDK 一致性前置校验（bash 层，必须先于任何 dotnet run）──
+# 2026-11-09（ENV-2）：global.json rollForward: disable 时钉版缺失会让 `dotnet run` 无法执行，
+# C# 门禁（scripts/check-sdk.cs）也就无法被调用，故前置一层不依赖 SDK 解析的校验。
+PINNED="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/global.json" | head -1)"
+if [ -n "$PINNED" ] && ! dotnet --list-sdks 2>/dev/null | awk '{print $1}' | grep -qxF "$PINNED"; then
+    echo "  ✗ SDK 校验失败（global.json 钉版未安装）"
+    echo "global.json 钉 $PINNED，本机未安装："
+    dotnet --list-sdks 2>/dev/null | sed 's/^/      /'
+    echo "安装命令（官方 dotnet-install）："
+    echo "  powershell -c \"iwr https://dot.net/v1/dotnet-install.ps1 -OutFile \$env:TEMP\\dotnet-install.ps1; & \$env:TEMP\\dotnet-install.ps1 -Version $PINNED\""
+    echo "或：winget install Microsoft.DotNet.SDK.11"
+    exit 1
+fi
+
+echo "── pre-commit: 锁定测试门禁 ──"
+# 2026-11-09（LOCK-1）：src/ 变更必须伴随 test/ 变更，例外须登记 .ai/src-only-registry.md。
+# 此前 3 个 src-only 提交（c0409c3/bcf373f/46e7cc9）声称修复但撤掉不会变红。
+dotnet run --file "$(git rev-parse --show-toplevel)/scripts/check-locked-tests.cs" || exit 1
+
 echo "── pre-commit: secret-guard ──"
 dotnet run --file "$(git rev-parse --show-toplevel)/scripts/secret-guard.cs" || exit 1
 
@@ -31,7 +53,6 @@ dotnet run --file "$(git rev-parse --show-toplevel)/scripts/gate-param-collectio
 # .ai/ 是 gitignored 本地工具，未克隆时无条件跳过（条件执行，不因缺文件报错）。
 # --fast 只跑纯文本检查：跳过 V14（跑 10 条防线脚本会与并发测量互斥）与
 # V17（变异探针会在 src/ 临时植入 .cs，与并发构建互斥）。
-ROOT="$(git rev-parse --show-toplevel)"
 if [ -d "$ROOT/.ai" ] && [ -f "$ROOT/scripts/verify-ai-system.cs" ]; then
     echo "── pre-commit: .ai 系统一致性（--fast）──"
     dotnet run --file "$ROOT/scripts/verify-ai-system.cs" -- --fast || exit 1

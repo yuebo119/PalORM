@@ -219,7 +219,7 @@ Notes: all 9 groups come from a single batch, so ratios are only comparable with
 
 ## 🚀 Quick Start
 
-> `.NET 11` (every package targets `net11.0` only) + SDK `11.0.100-rc.2` or later; the IDE must support Roslyn source generators. Native AOT publish additionally needs about 4 GB of memory (ILC compile time, not runtime).
+> `.NET 11` (every package targets `net11.0` only) + SDK version pinned by `global.json` (currently `11.0.100-rc.3.26522.148`); the IDE must support Roslyn source generators. Native AOT publish additionally needs about 4 GB of memory (ILC compile time, not runtime).
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.8.0" />   <!-- or PalORM.MySql / PalORM.Sqlite -->

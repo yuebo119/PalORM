@@ -226,38 +226,51 @@ var g31 = File.Exists("src/PalORM.Core/DataSession_Bulk.cs")
 if (g31 > 0) { Console.WriteLine($"{GREEN}PASS{NC}  G31  方言感知分支存在（{g31} 处 SqlDialect 检查）"); passed++; }
 else { Console.WriteLine($"{YELLOW}WARN{NC}  G31  未检测到方言感知分支——跨方言 API 需验证行为一致"); warned++; }
 
-// G32：NuGet.Config packageSourceMapping CI 兼容性
+// G32：NuGet.Config packageSourceMapping 完整性（每个 CPM 包至少被一个 source pattern 覆盖）
+// 2026-11-09 重写（综合根治方案 GATE-2）：原判据检查 "Microsoft.CodeAnalysis" 字样是否出现
+// 在 nuget.org 映射窗口内，而当前 NuGet.Config 根本不含该字样——一直走 else 分支空转 PASS，
+// 且删掉字样即静默 PASS（防线本身未被验证）。新判据不依赖任何特定包名字样：解析全部
+// packagePattern，逐个 CPM 包核对是否被覆盖，未覆盖即 FAIL（NU1103 风险）。
 Console.WriteLine();
-Console.WriteLine("─── G32: NuGet.Config packageSourceMapping CI 兼容性 ───");
+Console.WriteLine("─── G32: NuGet.Config packageSourceMapping 完整性 ───");
 if (!File.Exists("NuGet.Config"))
 {
     Console.WriteLine($"{GREEN}PASS{NC}  G32  NuGet.Config 不存在（非仓库根场景，跳过检查）");
     passed++;
 }
+else if (!File.Exists("Directory.Packages.props"))
+{
+    Console.WriteLine($"{GREEN}PASS{NC}  G32  无 CPM（Directory.Packages.props 缺失），跳过检查");
+    passed++;
+}
 else
 {
     var nugetConfig = File.ReadAllText("NuGet.Config");
-    var mappingIdx = nugetConfig.IndexOf("packageSourceMapping", StringComparison.Ordinal);
-    var afterMapping = mappingIdx >= 0 ? nugetConfig[mappingIdx..] : "";
-    if (nugetConfig.Contains("nuget.org") && afterMapping.Contains("Microsoft.CodeAnalysis"))
+    var patterns = new List<string>();
+    foreach (Match m in Regex.Matches(nugetConfig, @"<package\s+pattern=""([^""]+)"""))
+        patterns.Add(m.Groups[1].Value);
+    if (!nugetConfig.Contains("packageSourceMapping", StringComparison.Ordinal) || patterns.Count == 0)
     {
-        var nugetOrgIdx = afterMapping.IndexOf("key=\"nuget.org\"", StringComparison.Ordinal);
-        var window = nugetOrgIdx >= 0 ? afterMapping[nugetOrgIdx..Math.Min(nugetOrgIdx + 400, afterMapping.Length)] : "";
-        if (window.Contains("Microsoft.CodeAnalysis"))
+        Console.WriteLine($"{GREEN}PASS{NC}  G32  NuGet.Config 无 packageSourceMapping 或未声明 pattern（无限制，跳过检查）");
+        passed++;
+    }
+    else
+    {
+        var props = File.ReadAllText("Directory.Packages.props");
+        var packages = new List<string>();
+        foreach (Match m in Regex.Matches(props, @"<PackageVersion\s+Include=""([^""]+)"""))
+            packages.Add(m.Groups[1].Value);
+        var uncovered = packages.Where(p => !patterns.Any(pat => PatternCovers(pat, p))).ToList();
+        if (uncovered.Count == 0)
         {
-            Console.WriteLine($"{GREEN}PASS{NC}  G32  nuget.org 也映射了 Microsoft.CodeAnalysis.*（CI NU1103 防护）");
+            Console.WriteLine($"{GREEN}PASS{NC}  G32  {packages.Count} 个 CPM 包全部被 {patterns.Count} 条 packagePattern 覆盖");
             passed++;
         }
         else
         {
-            Console.WriteLine($"{RED}FAIL{NC}  G32  packageSourceMapping 限制 Microsoft.CodeAnalysis.* 只从 dotnet-tools 取（CI 会 NU1103）");
+            Console.WriteLine($"{RED}FAIL{NC}  G32  {uncovered.Count}/{packages.Count} 个 CPM 包未被任何 packagePattern 覆盖（NU1103 风险）：{string.Join(", ", uncovered.Take(10))}");
             failed++;
         }
-    }
-    else
-    {
-        Console.WriteLine($"{GREEN}PASS{NC}  G32  NuGet.Config 无限制性映射（跳过检查）");
-        passed++;
     }
 }
 
@@ -362,6 +375,16 @@ int CountPublicStaticState()
         count += branch1.Matches(File.ReadAllText(f)).Count;
     }
     return count;
+}
+
+// NuGet packageSourceMapping pattern 语义：`*` 匹配全部；`Prefix.*` 匹配该前缀（含点）；
+// 其余按包 ID 精确匹配（NuGet 包 ID 不区分大小写）。
+static bool PatternCovers(string pattern, string package)
+{
+    if (pattern == "*") return true;
+    if (pattern.EndsWith(".*", StringComparison.Ordinal))
+        return package.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase);
+    return package.Equals(pattern, StringComparison.OrdinalIgnoreCase);
 }
 
 static string RunCapture(string fileName, string arguments)

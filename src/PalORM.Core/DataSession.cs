@@ -1755,11 +1755,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// <para><b>为什么值得单独一个重载</b>：单条写路径（Update/Delete/ExecuteAsync）
     /// 每次调用都过这里，是每操作固定成本；208 B 在 MySQL Insert 的 4241 B/行上约 5%，
     /// 在 BulkInsert 的 1222 B/行上约 17%。</para></summary>
-    private ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
+    // FLT4-2（2026-11-09）：原实现只包 ValueTask 构造不 await，异步异常（如连接判死）
+    // 落在返回的 ValueTask 里、根本进不了 catch——写路径的连接判死标记从未置位。
+    // 改 async + await 后异步异常可被 MarkConnectionPoisoned 捕获。
+    private async ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
         try
         {
-            return ExecuteWriteRowsCoreAsync(command, activeTransaction, ct);
+            return await ExecuteWriteRowsCoreAsync(command, activeTransaction, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

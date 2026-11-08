@@ -854,6 +854,14 @@ public sealed partial class DataSession<TProvider>
                 throw new UniqueConstraintViolationException(ex);
             }
         }
+        catch (Exception ex)
+        {
+            // FLT4-2 扩面（2026-11-09）：Insert 走 RETURNING/LAST_INSERT_ID/ExecuteRowsCoreAsync，
+            // 不经 ExecuteWriteRowsAsync——判死标记在此缺失，外部关连接后 Insert 不自愈。
+            // MarkConnectionPoisoned 内置 IsConnectionFailure 过滤，唯一冲突不会误置位。
+            MarkConnectionPoisoned(ex);
+            throw;
+        }
         finally
         {
             if (ownsCommand)

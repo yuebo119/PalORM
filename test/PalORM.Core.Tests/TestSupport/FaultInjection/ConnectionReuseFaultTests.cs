@@ -14,9 +14,10 @@ namespace PalORM.Core.Tests.TestSupport.FaultInjection;
 [Property("Category", "FaultInjection")]
 public sealed class ConnectionReuseFaultTests
 {
-    /// <summary>SQLite Provider 认定的连接判死异常（消息必须逐字一致）。</summary>
+    /// <summary>SQLite Provider 认定的连接判死异常（与驱动真实消息同形态，2026-11-09 实测修正：
+    /// 原 "Connection is not open" 是死代码消息，真实形态为 "…can only be called when the connection is open."）。</summary>
     private static InvalidOperationException ConnectionFailure()
-        => new("Connection is not open");
+        => new("ExecuteNonQuery can only be called when the connection is open.");
 
     /// <summary>晋升阈值 3（DataSession.Crud.cs:245）：前 3 次同类 Update 养出复用槽。</summary>
     private const int PromotionThreshold = 3;
