@@ -1214,6 +1214,10 @@ public static class QueryBuilderExtensions
         string? metricsName = builder._metricsName;
         bool prepared = builder._prepared;
         TimeSpan commandTimeout = builder._commandTimeout;
+        int timeoutSeconds = DbOptions.ToCommandTimeoutSeconds(commandTimeout);
+        // L4：D7 耗时判定——超时后归一为 TimeoutException（MySQL ExecuteNonQuery 抛 MySqlException）
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(builder._dialect, timeoutSeconds));
         try
         {
             using SessionOperationState.SessionOperationLease operationLease =
@@ -1244,7 +1248,6 @@ public static class QueryBuilderExtensions
             {
                 if (!ReferenceEquals(command.Transaction, transaction))
                     command.Transaction = transaction;
-                int timeoutSeconds = DbOptions.ToCommandTimeoutSeconds(commandTimeout);
                 if (command.CommandTimeout != timeoutSeconds)
                     command.CommandTimeout = timeoutSeconds;
                 if (!string.Equals(command.CommandText, sql, StringComparison.Ordinal))
@@ -1270,6 +1273,9 @@ public static class QueryBuilderExtensions
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
             NotifyInterceptorsOnError(interceptors, context, exception);
+            // L4：超时归一——MySQL ExecuteNonQuery 超时抛 MySqlException，归一为 TimeoutException
+            if (CommandTimeoutNormalizer.NormalizeOnce(exception, startTimestamp, timeoutSeconds) is { } mapped)
+                throw mapped;
             throw;
         }
         finally
