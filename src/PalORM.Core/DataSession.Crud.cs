@@ -1384,11 +1384,7 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<T?> GetByKeyEntryAsync<T>(object key, CancellationToken ct)
         where T : class, new()
     {
-        // D4/D7 内联（2026-11-01）：起点在方法首行取，耗时判定与异常归一都落在本状态机内，
-        // 不再外套 CommandTimeoutNormalizer.RunAsync（实测每命令省 264 B 的包装分配）。
-        // 起点必须早于 EnterReadOnly：判定窗口要覆盖连接获取与租约进入，与旧包装宽度一致。
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        // M1：D4/D7 判定已移入 GetByKeyCoreAsync 执行内核（每次尝试独立，不覆盖重试累计耗时）
         try
         {
             using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
@@ -1407,17 +1403,13 @@ public sealed partial class DataSession<TProvider>
                 ResilienceExecutor parallelExecutor = Resilience;
                 if (parallelExecutor.IsPassThrough)
                 {
-                    return CommandTimeoutNormalizer.Complete(
-                        await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false),
-                        startTimestamp, _commandTimeoutSeconds);
+                    return await ParallelGetByKeyCoreAsync<T>(info, key, ct).ConfigureAwait(false);
                 }
                 // R4-λ:static lambda + 值元组状态,闭包归零(static 委托按调用点缓存)
-                return CommandTimeoutNormalizer.Complete(
-                    await parallelExecutor.ExecuteAsync(
-                        static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(state.Info, state.Key, token).AsTask(),
-                        (Session: this, Info: info, Key: key),
-                        ct).ConfigureAwait(false),
-                    startTimestamp, _commandTimeoutSeconds);
+                return await parallelExecutor.ExecuteAsync(
+                    static (state, token) => state.Session.ParallelGetByKeyCoreAsync<T>(state.Info, state.Key, token).AsTask(),
+                    (Session: this, Info: info, Key: key),
+                    ct).ConfigureAwait(false);
             }
 
             // v5.4 弹性接入：按主键查询为无事务只读路径时经会话弹性策略（重试/熔断）。
@@ -1429,30 +1421,24 @@ public sealed partial class DataSession<TProvider>
             // 无需 Enter 检查；进程级熔断与总预算仍走执行器（必须先查共享开闸状态/总预算）。
             if (activeTransaction is not null || !ResilienceConfigured)
             {
-                return CommandTimeoutNormalizer.Complete(
-                    await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false),
-                    startTimestamp, _commandTimeoutSeconds);
+                return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
             }
             if (DirectFirstReadAllowed)
             {
                 try
                 {
-                    return CommandTimeoutNormalizer.Complete(
-                        await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false),
-                        startTimestamp, _commandTimeoutSeconds);
+                    return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
                 {
                     ResilienceExecutor executor = Resilience;
                     if (_options.MaxRetries > 0)
                     {
-                        return CommandTimeoutNormalizer.Complete(
-                            await executor.ExecuteAfterFirstFailureAsync(
-                                static (state, token) => state.Session.GetByKeyCoreAsync<T>(
-                                    state.Info, state.Tx, state.Key, token).AsTask(),
-                                (Session: this, Info: info, Tx: activeTransaction, Key: key),
-                                ct).ConfigureAwait(false),
-                            startTimestamp, _commandTimeoutSeconds);
+                        return await executor.ExecuteAfterFirstFailureAsync(
+                            static (state, token) => state.Session.GetByKeyCoreAsync<T>(
+                                state.Info, state.Tx, state.Key, token).AsTask(),
+                            (Session: this, Info: info, Tx: activeTransaction, Key: key),
+                            ct).ConfigureAwait(false);
                     }
                     executor.RecordDirectFailure(ex);
                     throw;
@@ -1461,22 +1447,13 @@ public sealed partial class DataSession<TProvider>
             ResilienceExecutor getByKeyExecutor = Resilience;
             if (getByKeyExecutor.IsPassThrough)
             {
-                return CommandTimeoutNormalizer.Complete(
-                    await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false),
-                    startTimestamp, _commandTimeoutSeconds);
+                return await GetByKeyCoreAsync<T>(info, activeTransaction, key, ct).ConfigureAwait(false);
             }
             // R4-λ:static lambda + 值元组状态,闭包归零
-            return CommandTimeoutNormalizer.Complete(
-                await getByKeyExecutor.ExecuteAsync(
-                    static (state, token) => state.Session.GetByKeyCoreAsync<T>(state.Info, state.Tx, state.Key, token).AsTask(),
-                    (Session: this, Info: info, Tx: activeTransaction, Key: key),
-                    ct).ConfigureAwait(false),
-                startTimestamp, _commandTimeoutSeconds);
-        }
-        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
-        {
-            MarkConnectionPoisoned(ex);
-            throw mapped;
+            return await getByKeyExecutor.ExecuteAsync(
+                static (state, token) => state.Session.GetByKeyCoreAsync<T>(state.Info, state.Tx, state.Key, token).AsTask(),
+                (Session: this, Info: info, Tx: activeTransaction, Key: key),
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1493,6 +1470,9 @@ public sealed partial class DataSession<TProvider>
         EntityRuntimeInfo info, object key, CancellationToken token)
         where T : class, new()
     {
+        // M1：判定挂在本执行内核（每次尝试独立），不覆盖弹性重试的累计耗时
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
         string commandText = GetGetByKeySqlFast<T>(info);
         DbConnection connection = await AcquireReadConnectionAsync(token).ConfigureAwait(false);
         bool healthy = false;
@@ -1507,7 +1487,12 @@ public sealed partial class DataSession<TProvider>
             T? row = await ReadRowAsync(reader, token).ConfigureAwait(false)
                 ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
             healthy = true;
-            return row;
+            return CommandTimeoutNormalizer.Complete(row, startTimestamp, _commandTimeoutSeconds);
+        }
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
+        {
+            MarkConnectionPoisoned(ex);
+            throw mapped;
         }
         finally
         {
@@ -1524,32 +1509,45 @@ public sealed partial class DataSession<TProvider>
         EntityRuntimeInfo info, DbTransaction? activeTransaction, object key, CancellationToken token)
         where T : class, new()
     {
-        // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
-        // F6b：4 槽静态缓存零字典查找（原 FilterForms + GetByKeySql 两次元组键哈希/读）
-        string commandText = GetGetByKeySqlFast<T>(info);
-
-        // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
-        // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
-        // 按命令实例生效，换命令即重编译）。
-        DbCommand? reused = TryAcquireGetByKeyCommand<T>(
-            commandText, key, GetCrudPlan<T>(info), info, activeTransaction, out bool prepareGetByKey);
-        if (reused is not null)
+        // M1：判定挂在本执行内核（每次尝试独立），不覆盖弹性重试的累计耗时
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        try
         {
-            await PreparePromotedCommandAsync(reused, prepareGetByKey, token).ConfigureAwait(false);
-            await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, token).ConfigureAwait(false);
-            return await ReadRowAsync(reusedReader, token).ConfigureAwait(false)
-                ? ((Func<DbDataReader, T>)info.RowFactory)(reusedReader) : default;
+            // v4.6：缓存完整 GetAsync SQL（含表名/PK/过滤），消除每次插值 + QuoteIdentifier
+            // F6b：4 槽静态缓存零字典查找（原 FilterForms + GetByKeySql 两次元组键哈希/读）
+            string commandText = GetGetByKeySqlFast<T>(info);
+
+            // PL-2 扩展（2026-09-25）：单行读命令惰性晋升——与写路径同一模式。
+            // SQLite 本地 RTT≈0，读路径每操作成本即命令新建/释放 + prepare（驱动语句缓存
+            // 按命令实例生效，换命令即重编译）。
+            DbCommand? reused = TryAcquireGetByKeyCommand<T>(
+                commandText, key, GetCrudPlan<T>(info), info, activeTransaction, out bool prepareGetByKey);
+            if (reused is not null)
+            {
+                await PreparePromotedCommandAsync(reused, prepareGetByKey, token).ConfigureAwait(false);
+                await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, token).ConfigureAwait(false);
+                T? result = await ReadRowAsync(reusedReader, token).ConfigureAwait(false)
+                    ? ((Func<DbDataReader, T>)info.RowFactory)(reusedReader) : default;
+                return CommandTimeoutNormalizer.Complete(result, startTimestamp, _commandTimeoutSeconds);
+            }
+
+            await using DbCommand cmd = CreateCommand(activeTransaction);
+            cmd.CommandText = commandText;
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            BindGeneratedKeyParameter<T>(info, cmd, key);
+            BindDefaultFilterParameters(cmd, info.Features);
+
+            await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
+            T? result2 = await ReadRowAsync(reader, token).ConfigureAwait(false)
+                ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
+            return CommandTimeoutNormalizer.Complete(result2, startTimestamp, _commandTimeoutSeconds);
         }
-
-        await using DbCommand cmd = CreateCommand(activeTransaction);
-        cmd.CommandText = commandText;
-        cmd.CommandTimeout = _commandTimeoutSeconds;
-        BindGeneratedKeyParameter<T>(info, cmd, key);
-        BindDefaultFilterParameters(cmd, info.Features);
-
-        await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
-        return await ReadRowAsync(reader, token).ConfigureAwait(false)
-            ? ((Func<DbDataReader, T>)info.RowFactory)(reader) : default;
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
+        {
+            MarkConnectionPoisoned(ex);
+            throw mapped;
+        }
     }
 
     /// <summary>查询全表。（R4 预热包装同 <see cref="GetAsync{T}"/>。）</summary>
@@ -1566,9 +1564,7 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<List<T>> GetAllEntryAsync<T>(CancellationToken ct)
         where T : class, new()
     {
-        // D4/D7 内联（2026-11-01，同 GetByKeyEntryAsync）：起点早于 EnterReadOnly，判定覆盖整个操作。
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        // M1：D4/D7 判定已移入 GetAllCoreAsync 执行内核（每次尝试独立，不覆盖重试累计耗时）
         try
         {
             using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
@@ -1582,30 +1578,24 @@ public sealed partial class DataSession<TProvider>
             // 失败后才进入执行器续跑剩余重试。进程级熔断/总预算仍走执行器。
             if (activeTransaction is not null || !ResilienceConfigured)
             {
-                return CommandTimeoutNormalizer.Complete(
-                    await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false),
-                    startTimestamp, _commandTimeoutSeconds);
+                return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
             }
             if (DirectFirstReadAllowed)
             {
                 try
                 {
-                    return CommandTimeoutNormalizer.Complete(
-                        await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false),
-                        startTimestamp, _commandTimeoutSeconds);
+                    return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
                 {
                     ResilienceExecutor executor = Resilience;
                     if (_options.MaxRetries > 0)
                     {
-                        return CommandTimeoutNormalizer.Complete(
-                            await executor.ExecuteAfterFirstFailureAsync(
-                                static (state, token) => state.Session.GetAllCoreAsync<T>(
-                                    state.Info, state.Tx, token).AsTask(),
-                                (Session: this, Info: info, Tx: activeTransaction),
-                                ct).ConfigureAwait(false),
-                            startTimestamp, _commandTimeoutSeconds);
+                        return await executor.ExecuteAfterFirstFailureAsync(
+                            static (state, token) => state.Session.GetAllCoreAsync<T>(
+                                state.Info, state.Tx, token).AsTask(),
+                            (Session: this, Info: info, Tx: activeTransaction),
+                            ct).ConfigureAwait(false);
                     }
                     executor.RecordDirectFailure(ex);
                     throw;
@@ -1614,22 +1604,13 @@ public sealed partial class DataSession<TProvider>
             ResilienceExecutor getAllExecutor = Resilience;
             if (getAllExecutor.IsPassThrough)
             {
-                return CommandTimeoutNormalizer.Complete(
-                    await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false),
-                    startTimestamp, _commandTimeoutSeconds);
+                return await GetAllCoreAsync<T>(info, activeTransaction, ct).ConfigureAwait(false);
             }
             // R4-λ:static lambda + 值元组状态,闭包归零
-            return CommandTimeoutNormalizer.Complete(
-                await getAllExecutor.ExecuteAsync(
-                    static (state, token) => state.Session.GetAllCoreAsync<T>(state.Info, state.Tx, token).AsTask(),
-                    (Session: this, Info: info, Tx: activeTransaction),
-                    ct).ConfigureAwait(false),
-                startTimestamp, _commandTimeoutSeconds);
-        }
-        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
-        {
-            MarkConnectionPoisoned(ex);
-            throw mapped;
+            return await getAllExecutor.ExecuteAsync(
+                static (state, token) => state.Session.GetAllCoreAsync<T>(state.Info, state.Tx, token).AsTask(),
+                (Session: this, Info: info, Tx: activeTransaction),
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1647,45 +1628,56 @@ public sealed partial class DataSession<TProvider>
         EntityRuntimeInfo info, DbTransaction? activeTransaction, CancellationToken token)
         where T : class, new()
     {
-        string commandText = GetGetAllSqlFast<T>(info);
-        int tenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
-        DbCommand? reused = TryAcquireReusableDirectCommand(commandText);
-        if (reused is not null)
+        // M1：判定挂在本执行内核（每次尝试独立），不覆盖弹性重试的累计耗时
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        try
         {
-            if (reused.Parameters.Count == 0)
-                BindDefaultFilterParameters(reused, info.Features);
-            if (reused.Parameters.Count == tenantSlots)
+            string commandText = GetGetAllSqlFast<T>(info);
+            int tenantSlots = HasTenantFilter(info.Features) ? 1 : 0;
+            DbCommand? reused = TryAcquireReusableDirectCommand(commandText);
+            if (reused is not null)
             {
-                ApplyReusableCommandState(reused, activeTransaction, commandText);
-                if (_querySlot is { } getAllSlot)
-                    await getAllSlot.EnsurePreparedAsync(token).ConfigureAwait(false);
-                if (tenantSlots > 0)
-                    reused.Parameters[^1].Value = _tenantId;
-                await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, token).ConfigureAwait(false);
-                List<T> reusedList = await ResultListReader.ReadAllAsync(
-                    reusedReader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token,
-                    syncRead: PreferSynchronousRowRead).ConfigureAwait(false);
-                RecordMaterializedCount<T>(reusedList.Count);
-                return reusedList;
+                if (reused.Parameters.Count == 0)
+                    BindDefaultFilterParameters(reused, info.Features);
+                if (reused.Parameters.Count == tenantSlots)
+                {
+                    ApplyReusableCommandState(reused, activeTransaction, commandText);
+                    if (_querySlot is { } getAllSlot)
+                        await getAllSlot.EnsurePreparedAsync(token).ConfigureAwait(false);
+                    if (tenantSlots > 0)
+                        reused.Parameters[^1].Value = _tenantId;
+                    await using DbDataReader reusedReader = await ExecuteReaderAsync(reused, token).ConfigureAwait(false);
+                    List<T> reusedList = await ResultListReader.ReadAllAsync(
+                        reusedReader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token,
+                        syncRead: PreferSynchronousRowRead).ConfigureAwait(false);
+                    RecordMaterializedCount<T>(reusedList.Count);
+                    return CommandTimeoutNormalizer.Complete(reusedList, startTimestamp, _commandTimeoutSeconds);
+                }
+                // 参数形态漂移（理论不可达：同 SQL 恒同参数集）——回退新建路径，槽保留其命令
             }
-            // 参数形态漂移（理论不可达：同 SQL 恒同参数集）——回退新建路径，槽保留其命令
+
+            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+            DbCommand cmd = lease.Command;
+            // G4（五轮微项包）：完整 SQL 走 4 槽静态缓存（F6b 同型，原 per-(Type,Dialect,forms) 字典）。
+            cmd.CommandText = commandText;
+            cmd.CommandTimeout = _commandTimeoutSeconds;
+            BindDefaultFilterParameters(cmd, info.Features);
+
+            await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
+            // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
+            List<T> list = await ResultListReader.ReadAllAsync(
+                reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token,
+                syncRead: PreferSynchronousRowRead).ConfigureAwait(false);
+            RecordMaterializedCount<T>(list.Count);
+            lease.MarkHealthy();
+            return CommandTimeoutNormalizer.Complete(list, startTimestamp, _commandTimeoutSeconds);
         }
-
-        await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
-        DbCommand cmd = lease.Command;
-        // G4（五轮微项包）：完整 SQL 走 4 槽静态缓存（F6b 同型，原 per-(Type,Dialect,forms) 字典）。
-        cmd.CommandText = commandText;
-        cmd.CommandTimeout = _commandTimeoutSeconds;
-        BindDefaultFilterParameters(cmd, info.Features);
-
-        await using DbDataReader reader = await ExecuteReaderAsync(cmd, token).ConfigureAwait(false);
-        // 初始容量取会话内上次行数（无记录 16）；超出部分池化收集后一次精确分配
-        List<T> list = await ResultListReader.ReadAllAsync(
-            reader, (Func<DbDataReader, T>)info.RowFactory, GetMaterializedCapacity<T>(), token,
-            syncRead: PreferSynchronousRowRead).ConfigureAwait(false);
-        RecordMaterializedCount<T>(list.Count);
-        lease.MarkHealthy();
-        return list;
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
+        {
+            MarkConnectionPoisoned(ex);
+            throw mapped;
+        }
     }
 
     /// <summary>物化容量启发（step8-T6/M3-2）：会话内记录 (实体类型 → 上次物化行数)，
@@ -1749,8 +1741,7 @@ public sealed partial class DataSession<TProvider>
     private async ValueTask<List<T>> GetByKeyManyEntryAsync<T>(IReadOnlyList<object> keys, CancellationToken ct)
         where T : class, new()
     {
-        long startTimestamp = CommandTimeoutNormalizer.Begin(
-            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        // M1：D4/D7 判定已移入 GetByKeyManyCoreAsync 执行内核（每次尝试独立，不覆盖重试累计耗时）
         try
         {
             using SessionOperationState.SessionOperationLease operation = EnterReadOnly();
@@ -1759,30 +1750,24 @@ public sealed partial class DataSession<TProvider>
 
             if (activeTransaction is not null || !ResilienceConfigured)
             {
-                return CommandTimeoutNormalizer.Complete(
-                    await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false),
-                    startTimestamp, _commandTimeoutSeconds);
+                return await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false);
             }
             if (DirectFirstReadAllowed)
             {
                 try
                 {
-                    return CommandTimeoutNormalizer.Complete(
-                        await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false),
-                        startTimestamp, _commandTimeoutSeconds);
+                    return await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested && TProvider.IsTransient(ex))
                 {
                     ResilienceExecutor executor = Resilience;
                     if (_options.MaxRetries > 0)
                     {
-                        return CommandTimeoutNormalizer.Complete(
-                            await executor.ExecuteAfterFirstFailureAsync(
-                                static (state, token) => state.Session.GetByKeyManyCoreAsync<T>(
-                                    state.Info, state.Tx, state.Keys, token).AsTask(),
-                                (Session: this, Info: info, Tx: activeTransaction, Keys: keys),
-                                ct).ConfigureAwait(false),
-                            startTimestamp, _commandTimeoutSeconds);
+                        return await executor.ExecuteAfterFirstFailureAsync(
+                            static (state, token) => state.Session.GetByKeyManyCoreAsync<T>(
+                                state.Info, state.Tx, state.Keys, token).AsTask(),
+                            (Session: this, Info: info, Tx: activeTransaction, Keys: keys),
+                            ct).ConfigureAwait(false);
                     }
                     executor.RecordDirectFailure(ex);
                     throw;
@@ -1791,23 +1776,14 @@ public sealed partial class DataSession<TProvider>
             ResilienceExecutor manyExecutor = Resilience;
             if (manyExecutor.IsPassThrough)
             {
-                return CommandTimeoutNormalizer.Complete(
-                    await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false),
-                    startTimestamp, _commandTimeoutSeconds);
+                return await GetByKeyManyCoreAsync<T>(info, activeTransaction, keys, ct).ConfigureAwait(false);
             }
             // R4-λ:static lambda + 值元组状态,闭包归零
-            return CommandTimeoutNormalizer.Complete(
-                await manyExecutor.ExecuteAsync(
-                    static (state, token) => state.Session.GetByKeyManyCoreAsync<T>(
+            return await manyExecutor.ExecuteAsync(
+                static (state, token) => state.Session.GetByKeyManyCoreAsync<T>(
                         state.Info, state.Tx, state.Keys, token).AsTask(),
                     (Session: this, Info: info, Tx: activeTransaction, Keys: keys),
-                    ct).ConfigureAwait(false),
-                startTimestamp, _commandTimeoutSeconds);
-        }
-        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
-        {
-            MarkConnectionPoisoned(ex);
-            throw mapped;
+                    ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1822,58 +1798,72 @@ public sealed partial class DataSession<TProvider>
         EntityRuntimeInfo info, DbTransaction? activeTransaction, IReadOnlyList<object> keys, CancellationToken token)
         where T : class, new()
     {
-        if (info.PkColumn is not { } pkColumn)
+        // M1：判定挂在本执行内核（每次尝试独立），不覆盖弹性重试的累计耗时
+        long startTimestamp = CommandTimeoutNormalizer.Begin(
+            CommandTimeoutNormalizer.RequiresElapsedCheck(TProvider.Dialect, _commandTimeoutSeconds));
+        try
         {
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}' has no single primary key for GetByKeyManyAsync; "
-                + "use GetAsync per key for composite primary keys.");
+            if (info.PkColumn is not { } pkColumn)
+            {
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).Name}' has no single primary key for GetByKeyManyAsync; "
+                    + "use GetAsync per key for composite primary keys.");
+            }
+
+            string selectColumns = GetSelectColumns<T>(info.ColumnNames);
+            string quotedTable = SqlSlots<T>.QuotedTableNameOrBuilt(info.TableName);
+            string quotedPk = TProvider.QuoteIdentifier(pkColumn);
+            string filter = GetDefaultFilterFragment<T>(info.Features);
+            Func<object, object?>? convertKey = info.Crud.ConvertDeleteKey;
+            ReadManyIdentifiers ids = new(selectColumns, quotedTable, quotedPk, filter);
+
+            // ① SQLite：json_each 单参数（键形态与引擎能力双门控，见 UseJsonEachReadForm）
+            if (await UseJsonEachReadForm<T>(info, keys, token).ConfigureAwait(false))
+            {
+                await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+                    readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+                DbCommand cmd = lease.Command;
+                cmd.CommandText = BuildJsonEachReadSql(ids);
+                cmd.CommandTimeout = _commandTimeoutSeconds;
+                cmd.Parameters.Add(TProvider.CreateParameter(
+                    ArrayParameterName, BuildJsonKeyArrayText(keys, 0, keys.Count, convertKey, typeof(T).Name)));
+                BindDefaultFilterParameters(cmd, info.Features);
+                List<T> rows = await ReadManyRowsAsync<T>(info, cmd, keys.Count, lease, token).ConfigureAwait(false);
+                return CommandTimeoutNormalizer.Complete(rows, startTimestamp, _commandTimeoutSeconds);
+            }
+
+            // ② PostgreSQL：原生数组 pk = ANY(@ids)（生成物提供主键数组构造器且 Provider 接受该元素类型）
+            if (TProvider.Dialect == SqlDialect.PostgreSql
+                && IsArrayFormSupported<T>(out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray)
+                && buildKeyArray is { } builder)
+            {
+                Array values = builder(keys, 0, keys.Count)
+                    ?? throw new InvalidOperationException(
+                        $"Type '{typeof(T).Name}' generated a null primary-key array for GetByKeyManyAsync.");
+                await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
+                    readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
+                DbCommand cmd = lease.Command;
+                cmd.CommandText = BuildArrayReadSql(ids);
+                cmd.CommandTimeout = _commandTimeoutSeconds;
+                DbParameter idsParameter = TProvider.CreateArrayParameter(ArrayParameterName, values)
+                    ?? throw new InvalidOperationException(
+                        $"Provider '{TProvider.Name}' rejected the primary-key array for GetByKeyManyAsync.");
+                cmd.Parameters.Add(idsParameter);
+                BindDefaultFilterParameters(cmd, info.Features);
+                List<T> rows = await ReadManyRowsAsync<T>(info, cmd, keys.Count, lease, token).ConfigureAwait(false);
+                return CommandTimeoutNormalizer.Complete(rows, startTimestamp, _commandTimeoutSeconds);
+            }
+
+            // ③ 回退：分批 IN 占位符（MySQL 与 SQLite/PG 的能力不足形态）
+            List<T> list = await ExecuteInFormReadAsync<T>(info, activeTransaction, keys, convertKey, ids, token)
+                .ConfigureAwait(false);
+            return CommandTimeoutNormalizer.Complete(list, startTimestamp, _commandTimeoutSeconds);
         }
-
-        string selectColumns = GetSelectColumns<T>(info.ColumnNames);
-        string quotedTable = SqlSlots<T>.QuotedTableNameOrBuilt(info.TableName);
-        string quotedPk = TProvider.QuoteIdentifier(pkColumn);
-        string filter = GetDefaultFilterFragment<T>(info.Features);
-        Func<object, object?>? convertKey = info.Crud.ConvertDeleteKey;
-        ReadManyIdentifiers ids = new(selectColumns, quotedTable, quotedPk, filter);
-
-        // ① SQLite：json_each 单参数（键形态与引擎能力双门控，见 UseJsonEachReadForm）
-        if (await UseJsonEachReadForm<T>(info, keys, token).ConfigureAwait(false))
+        catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
         {
-            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
-                readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
-            DbCommand cmd = lease.Command;
-            cmd.CommandText = BuildJsonEachReadSql(ids);
-            cmd.CommandTimeout = _commandTimeoutSeconds;
-            cmd.Parameters.Add(TProvider.CreateParameter(
-                ArrayParameterName, BuildJsonKeyArrayText(keys, 0, keys.Count, convertKey, typeof(T).Name)));
-            BindDefaultFilterParameters(cmd, info.Features);
-            return await ReadManyRowsAsync<T>(info, cmd, keys.Count, lease, token).ConfigureAwait(false);
+            MarkConnectionPoisoned(ex);
+            throw mapped;
         }
-
-        // ② PostgreSQL：原生数组 pk = ANY(@ids)（生成物提供主键数组构造器且 Provider 接受该元素类型）
-        if (TProvider.Dialect == SqlDialect.PostgreSql
-            && IsArrayFormSupported<T>(out Func<IReadOnlyList<object>, int, int, Array?>? buildKeyArray)
-            && buildKeyArray is { } builder)
-        {
-            Array values = builder(keys, 0, keys.Count)
-                ?? throw new InvalidOperationException(
-                    $"Type '{typeof(T).Name}' generated a null primary-key array for GetByKeyManyAsync.");
-            await using ReadCommandLease lease = await CreateReadRoutedCommandAsync(
-                readFromReplica: false, activeTransaction, token).ConfigureAwait(false);
-            DbCommand cmd = lease.Command;
-            cmd.CommandText = BuildArrayReadSql(ids);
-            cmd.CommandTimeout = _commandTimeoutSeconds;
-            DbParameter idsParameter = TProvider.CreateArrayParameter(ArrayParameterName, values)
-                ?? throw new InvalidOperationException(
-                    $"Provider '{TProvider.Name}' rejected the primary-key array for GetByKeyManyAsync.");
-            cmd.Parameters.Add(idsParameter);
-            BindDefaultFilterParameters(cmd, info.Features);
-            return await ReadManyRowsAsync<T>(info, cmd, keys.Count, lease, token).ConfigureAwait(false);
-        }
-
-        // ③ 回退：分批 IN 占位符（MySQL 与 SQLite/PG 的能力不足形态）
-        return await ExecuteInFormReadAsync<T>(info, activeTransaction, keys, convertKey, ids, token)
-            .ConfigureAwait(false);
     }
 
     /// <summary>读取并物化为列表（复用 ResultListReader 的池化内核；容量启发取键数上界）。</summary>
