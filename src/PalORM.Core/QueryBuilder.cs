@@ -1245,7 +1245,26 @@ public struct QueryBuilder<T> where T : class, new()
                 sb.Append(_quoteIdentifier(_tableName));
                 sb.Append(' ');
             }
-            AppendWhereSection(ref sb);
+            // M6：软删条件恒保留（与 DeleteAsync 同语义），即使 IgnoreFilters 跳过了默认过滤注入。
+            // 默认过滤缺失时手动补 deleted_at IS NULL，保证幂等（重复删除返回 0 行）。
+            if (isSoftDelete && !HasClause(QueryClauseKind.DefaultFilter))
+            {
+                sb.Append("WHERE ");
+                sb.Append(_quoteIdentifier("deleted_at"));
+                sb.Append(" IS NULL");
+                if (HasClause(QueryClauseKind.Where))
+                {
+                    sb.Append(" AND (");
+                    AppendUserWhereClauses(ref sb);
+                    sb.TrimEnd();
+                    sb.Append(')');
+                }
+                sb.Append(' ');
+            }
+            else
+            {
+                AppendWhereSection(ref sb);
+            }
             AppendClauses(ref sb, QueryClauseKind.Raw);
             sb.TrimEnd(); return sb.ToString();
         }
