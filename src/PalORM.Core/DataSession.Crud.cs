@@ -1475,7 +1475,14 @@ public sealed partial class DataSession<TProvider>
         }
         catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
         {
+            MarkConnectionPoisoned(ex);
             throw mapped;
+        }
+        catch (Exception ex)
+        {
+            // C2：reader 路径的连接异常同样要标记判死，否则下一个读操作不会重建连接
+            MarkConnectionPoisoned(ex);
+            throw;
         }
     }
 
@@ -1621,7 +1628,14 @@ public sealed partial class DataSession<TProvider>
         }
         catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
         {
+            MarkConnectionPoisoned(ex);
             throw mapped;
+        }
+        catch (Exception ex)
+        {
+            // C2：reader 路径的连接异常同样要标记判死，否则下一个读操作不会重建连接
+            MarkConnectionPoisoned(ex);
+            throw;
         }
     }
 
@@ -1792,7 +1806,14 @@ public sealed partial class DataSession<TProvider>
         }
         catch (Exception ex) when (CommandTimeoutNormalizer.NormalizeOnce(ex, startTimestamp, _commandTimeoutSeconds) is { } mapped)
         {
+            MarkConnectionPoisoned(ex);
             throw mapped;
+        }
+        catch (Exception ex)
+        {
+            // C2：reader 路径的连接异常同样要标记判死，否则下一个读操作不会重建连接
+            MarkConnectionPoisoned(ex);
+            throw;
         }
     }
 

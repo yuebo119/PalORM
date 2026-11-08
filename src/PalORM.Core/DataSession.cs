@@ -1431,6 +1431,8 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             }
             _conn = created;
             Volatile.Write(ref _connectionPoisoned, 0);
+            // C1：连接已换，旧连接上的复用命令全部失效——清空避免后续操作复用旧命令
+            InvalidateReusableCommands();
         }
         catch
         {
@@ -1438,6 +1440,31 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             throw;
         }
         old.Dispose();
+    }
+
+    /// <summary>清空全部复用命令槽（连接重建后调用）：6 个 CRUD 槽与直查槽的命令都绑定在
+    /// 旧物理连接上，连接重建后必须一并失效，否则命中槽的操作会继续用旧连接命令执行。
+    /// 直查槽（<c>_querySlot</c>）已有连接引用校验，此处一并清空以保持一致。</summary>
+    private void InvalidateReusableCommands()
+    {
+        _reusableInsert?.Command.Dispose();
+        _reusableInsert = null;
+        _reusableUpdate?.Command.Dispose();
+        _reusableUpdate = null;
+        _reusableGetByKey?.Command.Dispose();
+        _reusableGetByKey = null;
+        _reusableDelete?.Command.Dispose();
+        _reusableDelete = null;
+        _reusableUpsert?.Command.Dispose();
+        _reusableUpsert = null;
+        _reusableSoftDelete?.Command.Dispose();
+        _reusableSoftDelete = null;
+        if (_querySlot?.Command is { } command)
+        {
+            command.Dispose();
+            _querySlot.Command = null;
+            _querySlot.Connection = null;
+        }
     }
 
     /// <summary>执行失败时判定是否连接判死（<see cref="IDbProvider.IsConnectionFailure"/>）。

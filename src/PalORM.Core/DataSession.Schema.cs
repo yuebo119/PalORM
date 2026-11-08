@@ -259,9 +259,19 @@ public sealed partial class DataSession<TProvider>
             return drift;
         }
 
-        // PostgreSQL / MySQL：一次查询取回当前 schema 全部表列，内存里按注册表筛选
-        Dictionary<string, HashSet<string>> columnsByTable =
-            await ReadInformationSchemaColumnsAsync(ct).ConfigureAwait(false);
+        // PostgreSQL / MySQL：一次查询取回当前 schema 全部表列，内存里按注册表筛选。
+        // H1：读失败不得让已成功的迁移抛异常（ADR-W：迁移成功/失败语义不变）——
+        // 记为 Validation failed，与 ValidateSchemaAsync / SQLite 分支口径一致。
+        Dictionary<string, HashSet<string>> columnsByTable;
+        try
+        {
+            columnsByTable = await ReadInformationSchemaColumnsAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            drift.Add($"Validation failed: {ex.GetType().Name}");
+            return drift;
+        }
         foreach ((Type type, string tableName) in PalORM_Runtime.TableNames)
         {
             if (!PalORM_Runtime.ColumnNames.TryGetValue(type, out IReadOnlyList<string>? expected))

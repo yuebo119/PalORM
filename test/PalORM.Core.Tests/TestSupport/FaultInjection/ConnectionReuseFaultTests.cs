@@ -5,17 +5,12 @@ using PalORM.Sqlite;
 namespace PalORM.Core.Tests.TestSupport.FaultInjection;
 
 /// <summary>连接判死自愈（FLT-4）与 PL-2 已晋升 CRUD 命令复用槽的交错。
-/// <para><b>坐实的缺口（2026-11-07 PoC 实测）</b>：<c>RebuildConnectionIfNeeded</c> 只挂在
+/// <para><b>已修复的缺口（C1，2026-11-08）</b>：原 <c>RebuildConnectionIfNeeded</c> 只挂在
 /// <c>CreateCommand</c> 上；<c>ReusableCrudCommand</c> 记录无 Connection 字段，命中分支
 /// 直接返回旧 <c>DbCommand</c> 而不新建命令。因此「读路径判死 → 复用槽绕过重建 →
 /// 后续新建命令路径重建并 Dispose 旧连接 → 复用槽仍绑在已释放连接上」这条链路会让
-/// 同类 CRUD 持续失败。</para>
-/// <para><b>可达前提（PoC 纠正）</b>：判死标记只在 <c>ExecuteReadScalarAsync</c> /
-/// <c>ScalarEntryAsync</c> 的 catch 置位（那两处是 async+await 包 try）；写路径
-/// <c>ExecuteWriteRowsAsync</c> 的 catch 包的是「返回 ValueTask」而非 await，执行期异常
-/// 捕获不到。故本用例把判死异常注入 Scalar 读路径，不走写路径。</para>
-/// <para><b>本用例锁定的是当前缺陷行为</b>：修复（重建时一并清空 6 个复用槽）后
-/// <c>PromotedReusableCrudSlot_FailsAfterConnectionRebuild</c> 会红，须同步改写为断言成功。</para></summary>
+/// 同类 CRUD 持续失败。修复：重建成功后一并清空 6 个复用槽与直查槽，命中路径失效。</para>
+/// <para><b>本用例断言修复后的恢复行为</b>：判死 → 重建清空槽 → 同类 Update 新建命令并成功。</para></summary>
 [Property("Category", "FaultInjection")]
 public sealed class ConnectionReuseFaultTests
 {
@@ -27,7 +22,7 @@ public sealed class ConnectionReuseFaultTests
     private const int PromotionThreshold = 3;
 
     [Test]
-    public async Task PromotedReusableCrudSlot_FailsAfterConnectionRebuild()
+    public async Task PromotedReusableCrudSlot_RecoversAfterConnectionRebuild()
     {
         var boom = ConnectionFailure();
         // 序号 5 = Insert(1) + Update×3(2/3/4) 之后的第一条 Scalar；一次性注入模拟
@@ -72,11 +67,13 @@ public sealed class ConnectionReuseFaultTests
         await Assert.That(created.Wrapper.CommandsCreated).IsEqualTo(5)
             .Because("重建出的新连接不经 wrapper");
 
-        // 缺口坐实：复用槽仍绑在已 Dispose 的旧连接上，同类 Update 持续失败。
-        InvalidOperationException? stale = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await session.UpdateAsync(new FaultRow { Id = row.Id, Name = "u5", Qty = 15 }));
-        await Assert.That(stale!.Message).Contains("connection is open")
-            .Because("驱动应报「连接已关闭」，而非让旧命令静默写向错误连接");
+        // C1 修复后：重建时已清空复用槽，第 5 次 Update 新建命令（绑定新连接），成功。
+        int affectedAfterRebuild = await session.UpdateAsync(
+            new FaultRow { Id = row.Id, Name = "u5", Qty = 15 });
+        await Assert.That(affectedAfterRebuild).IsEqualTo(1);
+        await Assert.That(await session.ScalarAsync<long>($"SELECT Qty FROM fault_row WHERE Id = {row.Id}"))
+            .IsEqualTo(15L)
+            .Because("重建清空复用槽后，同类 Update 应新建命令并成功写入");
     }
 
     /// <summary>对照臂（能失败验证）：不注入判死异常时，同一条复用槽链路全程可用。
