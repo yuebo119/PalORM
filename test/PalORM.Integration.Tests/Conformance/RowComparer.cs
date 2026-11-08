@@ -11,7 +11,9 @@ namespace PalORM.Integration.Tests.Conformance;
 /// 方言与列类型带来的 Kind 差异由期望矩阵（方案 §4.7）负责，不在这里归一化，
 /// 否则"Kind 被静默改写"这类缺陷会被洗成相等。</para>
 /// <para><b>decimal</b>：按数值比较。声明了 Precision/Scale 的列是否丢尾零由方言专项断言负责，
-/// 因为比较器拿不到列的精度声明。</para></summary>
+/// 因为比较器拿不到列的精度声明。</para>
+/// <para><b>整数</b>：跨类型按数值比较（int/short 写、long 读回是驱动方言事实，
+/// FUZ-1 扩维到 6 种列类型后暴露）；同类型仍走精确路径。</para></summary>
 internal static class RowComparer
 {
     internal sealed record Difference(string Kind, string Column, string Expected, string Actual);
@@ -103,6 +105,10 @@ internal static class RowComparer
 
         if (left is byte[] || right is byte[]) return BytesEqual(left, right);
         if (left is bool || right is bool) return BoolEqual(left, right);
+        // 整数跨类型按数值比较（FUZ-1 扩维后，生成器写 short/int，MySQL 驱动读回 long 是方言事实）
+        if (IsIntegerType(left) && IsIntegerType(right))
+            return Convert.ToDecimal(left, CultureInfo.InvariantCulture)
+                == Convert.ToDecimal(right, CultureInfo.InvariantCulture);
         if (left is double || right is double || left is float || right is float
             || left is decimal || right is decimal)
             return NumericEqual(left, right);
@@ -111,6 +117,11 @@ internal static class RowComparer
 
         return Equals(left, right);
     }
+
+    /// <summary>整数类型判定（含无符号）：MySQL 驱动读回 INT 列可能是 long，
+    /// 生成器写 int/short 时两侧 CLR 类型可能不同，按数值比较是方言事实而非映射错误。</summary>
+    private static bool IsIntegerType(object? value)
+        => value is sbyte or byte or short or ushort or int or uint or long or ulong;
 
     /// <summary>布尔与整数判等：SQLite 的 BOOLEAN 是 INTEGER 亲和，读回 1/0 是方言事实。
     /// 只接受 0 与 1，其余整数与布尔不判等（避免把类型映射错误洗成相等）。</summary>
