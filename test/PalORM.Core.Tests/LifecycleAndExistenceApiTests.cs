@@ -266,6 +266,25 @@ public sealed class LifecycleAndExistenceApiTests
     }
 
     [Test]
+    public async Task ExecuteDeleteAsync_WithSelectSplitQueryOrCache_Throws()
+    {
+        await using DataSession<SqliteProvider> db = await CreateSessionAsync();
+        await SeedAsync(db);
+
+        // L2 锁定（c0409c3）：DELETE 拒绝 Select/AsSplitQuery/WithCache——原守卫只查 Take/Skip，
+        // 这三个修饰符会被静默丢弃并扩大影响面。撤掉 HasIgnoredExecutionModifiers 复用即红。
+        await Assert.That(async () => await db.From<LifecycleProbe>()
+                .Where($"Status = {1}").Select(x => x.Status).ExecuteDeleteAsync())
+            .Throws<NotSupportedException>();
+        await Assert.That(async () => await db.From<LifecycleProbe>()
+                .Where($"Status = {1}").AsSplitQuery().ExecuteDeleteAsync())
+            .Throws<NotSupportedException>();
+        await Assert.That(async () => await db.From<LifecycleProbe>()
+                .Where($"Status = {1}").WithCache("probe").ExecuteDeleteAsync())
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
     public async Task ExecuteDeleteAsync_RespectsTenantScope()
     {
         await using DataSession<SqliteProvider> db = await CreateSessionAsync();
