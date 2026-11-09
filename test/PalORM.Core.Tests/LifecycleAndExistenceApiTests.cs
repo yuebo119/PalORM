@@ -300,6 +300,36 @@ public sealed class LifecycleAndExistenceApiTests
         await Assert.That(await db.IgnoreFilters().CountAsync<LifecycleTenant>()).IsEqualTo(2);
     }
 
+    /// <summary>DEC-1（ADR-X 裁决 A）锁定：IgnoreFilters 对写路径同样生效——写操作跳过租户条件。
+    /// 这是当前唯一能清空租户过滤的入口（<c>WithTenant(null)</c> 被 ITM-532 拒绝），跨租户批量运维依赖它。
+    /// 若改为「写侧恒租户过滤」，本用例会红，届时须同时提供跨租户写的显式出口。</summary>
+    [Test]
+    public async Task IgnoreFilters_WritePath_AlsoSkipsTenantFilter()
+    {
+        await using DataSession<SqliteProvider> db = await CreateSessionAsync();
+        await SeedAsync(db);
+        await db.InsertAsync(new LifecycleTenant { Name = "a-row", TenantId = "a" });
+        await db.InsertAsync(new LifecycleTenant { Name = "b-row", TenantId = "b" });
+
+        db.WithTenant("a");
+        // 正常：租户条件自动附加，删不到 b 的行（同 ExecuteDeleteAsync_RespectsTenantScope）
+        await Assert.That(
+            await db.From<LifecycleTenant>().Where($"name = {"b-row"}").ExecuteDeleteAsync())
+            .IsEqualTo(0);
+
+        // IgnoreFilters：写路径同样跳过租户条件 → 跨租户命中
+        await Assert.That(
+            await db.IgnoreFilters().From<LifecycleTenant>().Where($"name = {"b-row"}").ExecuteDeleteAsync())
+            .IsEqualTo(1);
+
+        // LifecycleTenant 是软删实体：ExecuteDeleteAsync 改写 deleted_at（行仍在）；
+        // IgnoreFilters 下读得到全部行，可验证跨租户写确实命中了 b 的行
+        List<LifecycleTenant> all = await db.IgnoreFilters().From<LifecycleTenant>().ToListAsync();
+        await Assert.That(all.Count).IsEqualTo(2);
+        await Assert.That(all.Single(r => r.Name == "b-row").DeletedAt).IsNotNull()
+            .Because("b 的行被跨租户软删（正常租户条件下这次删除应为 0 行）");
+    }
+
     [Test]
     public async Task ExecuteDeleteAsync_RejectsOrderGroupSkip()
     {
