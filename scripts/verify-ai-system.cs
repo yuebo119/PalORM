@@ -678,6 +678,8 @@ void V17cBattery()
         return output;
     }
     string RunDc() { return RunCapture("dotnet", "run --file scripts/doc-consistency-check.cs"); }
+    string RunGate() { return RunCapture("dotnet", "run --file scripts/gate-check.cs -- --allow-dirty"); }
+    string RunSemver() { return RunCapture("dotnet", "run --file scripts/semver-bump-check.cs -- 6.8.1 --prev 6.8.0 --allow-missing-baseline"); }
     var touched = new List<string>();
     try
     {
@@ -753,6 +755,26 @@ void V17cBattery()
         // 证明 D14 对账真的能抓到文档与 test-gate 的级别不一致（第二轮审计的实弹场景）
         MutateFile(".ai/test/prompt.md", t => new Regex(@"(\| T6 \|[^\n]*\| )阻断( \|)").Replace(t, "$1警告$2", 1));
         if (!RunDc().Contains("FAIL D14")) v17cFail.Add("D14");
+        GitInAi("checkout -- test/prompt.md");
+
+        // ── GATE-5 探针（2026-11-09）：GATE-1~4 修复的判据变异验证 ──
+        // GATE-1：D10 写死计数守卫（正则补反斜杠后应命中"当前 NNN 项"）
+        MutateFile(".ai/test/prompt.md", t => t + "\n当前 9999 项 [Test] 声明\n");
+        if (!RunDc().Contains("FAIL D10")) v17cFail.Add("GATE-1");
+        GitInAi("checkout -- test/prompt.md");
+
+        // GATE-2：G32 packageSourceMapping 覆盖（删 pattern 应 FAIL）
+        MutateFile("NuGet.Config", t => t.Replace("<package pattern=\"*\" />", "<package pattern=\"NothingMatches.*\" />"), touch: touched);
+        if (!RunGate().Contains("FAIL G32")) v17cFail.Add("GATE-2");
+        Git("checkout -- NuGet.Config");
+
+        // GATE-3：SemVer 行为变更（PATCH + 💔 段应判升版不足）
+        var semverOut = RunSemver();
+        if (!semverOut.Contains("升版类型不足") && !semverOut.Contains("::error::")) v17cFail.Add("GATE-3");
+
+        // GATE-4：D14 零项（.ai 在但无 T 条目应 FAIL）
+        MutateFile(".ai/test/prompt.md", t => new Regex(@"\| (T\d+) \|").Replace(t, "| X0 |"));
+        if (!RunDc().Contains("FAIL D14")) v17cFail.Add("GATE-4");
         GitInAi("checkout -- test/prompt.md");
 
         // D11：生成物工具版本漂移。2026-11-04 修正：ToolVersion 已改为引用生成常量
