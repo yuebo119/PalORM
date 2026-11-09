@@ -1429,17 +1429,19 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                 setup.CommandText = _options.SessionSetupSql;
                 setup.ExecuteNonQuery();
             }
-            _conn = created;
-            Volatile.Write(ref _connectionPoisoned, 0);
+            // FIX-5（2026-11-09）：先清空复用命令再换 _conn——清空失败时 _conn 仍指向 old
+            // （有效连接），不出现「_conn 已换但复用命令未清空」或「old 泄漏」的中间态。
             // C1：连接已换，旧连接上的复用命令全部失效——清空避免后续操作复用旧命令
             InvalidateReusableCommands();
+            _conn = created;
+            Volatile.Write(ref _connectionPoisoned, 0);
+            old.Dispose();
         }
         catch
         {
-            created.Dispose();
+            try { created.Dispose(); } catch { /* 重建失败，主异常优先，不掩盖 */ }
             throw;
         }
-        old.Dispose();
     }
 
     /// <summary>清空全部复用命令槽（连接重建后调用）：6 个 CRUD 槽与直查槽的命令都绑定在
@@ -1447,21 +1449,23 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// 直查槽（<c>_querySlot</c>）已有连接引用校验，此处一并清空以保持一致。</summary>
     private void InvalidateReusableCommands()
     {
-        _reusableInsert?.Command.Dispose();
+        // FIX-5（2026-11-09）：逐个 try/catch——一个槽的 Dispose 失败不得阻止其余槽清空
+        // （原实现首槽抛异常即中止，后续槽残留旧连接命令）。
+        try { _reusableInsert?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
         _reusableInsert = null;
-        _reusableUpdate?.Command.Dispose();
+        try { _reusableUpdate?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
         _reusableUpdate = null;
-        _reusableGetByKey?.Command.Dispose();
+        try { _reusableGetByKey?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
         _reusableGetByKey = null;
-        _reusableDelete?.Command.Dispose();
+        try { _reusableDelete?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
         _reusableDelete = null;
-        _reusableUpsert?.Command.Dispose();
+        try { _reusableUpsert?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
         _reusableUpsert = null;
-        _reusableSoftDelete?.Command.Dispose();
+        try { _reusableSoftDelete?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
         _reusableSoftDelete = null;
         if (_querySlot?.Command is { } command)
         {
-            command.Dispose();
+            try { command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
             _querySlot.Command = null;
             _querySlot.Connection = null;
         }

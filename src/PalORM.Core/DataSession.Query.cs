@@ -371,7 +371,7 @@ public sealed partial class DataSession<TProvider>
                 executor.RecordDirectFailure(ex);
                 throw;
             }
-            catch (Exception ex) when (ex is not TimeoutException && ex.InnerException is TimeoutException timeout)
+            catch (Exception ex) when (ex is not TimeoutException && ex is not OperationCanceledException && ex.InnerException is TimeoutException timeout)
             {
                 // 直调路径不进执行器时，超时由驱动包在自身异常里；这里做与执行器出口相同的解包，
                 // 使调用方按超时类型捕获能覆盖弹性路径与直通路径两种情形（D4）。
