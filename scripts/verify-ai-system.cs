@@ -629,8 +629,12 @@ void V17Batteries()
         Git("checkout -- src/PalORM.Core/DataSession_Bulk.cs");
 
         mutFiles.Add("NuGet.Config");
-        MutateFile("NuGet.Config", t => Regex.Replace(t, @"^  <packageSourceMapping>\r?$", "  <packageSourceMapping>\n    <packageSource key=\"dotnet-tools\">\n      <package pattern=\"Microsoft.CodeAnalysis.*\" />\n    </packageSource>", RegexOptions.Multiline));
-        if (!RunGate().Contains("限制 Microsoft.CodeAnalysis")) missing.Add("G32");
+        // G32 判据 2026-11-09 重写（覆盖完整性）：原探针注入"限制 Microsoft.CodeAnalysis 只从
+        // dotnet-tools 取"的旧形态，新判据不检查该字样（nuget.org 的 * 仍覆盖全部包 → PASS）。
+        // 改注入新判据的失效形态：删 nuget.org 的 * pattern → 包未被覆盖。
+        MutateFile("NuGet.Config", t => t.Replace("<package pattern=\"*\" />", "<package pattern=\"NothingMatches.*\" />"));
+        var gateG32 = RunGate();
+        if (!(gateG32.Contains("FAIL") && gateG32.Contains("G32"))) missing.Add("G32");
         Git("checkout -- NuGet.Config");
 
         // C 段：G33 脏树
